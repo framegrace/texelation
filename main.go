@@ -130,7 +130,7 @@ mainloop:
 
 func launchPTY(p *Pane, command string) {
 	// Initialize ANSI terminal emulator
-	cols := p.x1 - p.x0
+	cols := p.x1 - p.x0 - 1
 	rows := p.y1 - p.y0 - 1
 	cmd := exec.Command(command)
 	cmd.Env = append(os.Environ(),
@@ -183,7 +183,7 @@ func setupPanes(w, h int) []Pane {
 	cellH := h / 2
 	panes := []Pane{
 		{
-			x0: 0, y0: 0, x1: cellW, y1: cellH, title: "top", renderFn: renderAnsiTest, //appPTY, // renderAnsiTest,
+			x0: 0, y0: 0, x1: cellW, y1: cellH, title: "htop", renderFn: appPTY,
 		},
 		{
 			x0: cellW, y0: 0, x1: w, y1: cellH,
@@ -214,21 +214,18 @@ func appPTY(p *Pane, buf [][]Cell) {
 	maxRows := p.screen.Rows()
 	maxCols := p.screen.Cols()
 
-	for y := 0; y < maxRows && p.y0+1+y < p.y1; y++ {
-		for x := 0; x < maxCols && p.x0+x < p.x1; x++ {
+	for y := 0; y < maxRows && p.y0+1+y < p.y1-1; y++ {
+		for x := 0; x < maxCols && p.x0+1+x < p.x1-1; x++ {
 			cell := p.screen.CellAt(x, y)
 			runes := []rune(cell.Data)
 			if len(runes) > 0 {
-				fg := mapColor(cell.Fg)
-				bg := mapColor(cell.Bg)
-				if cell.Reverse {
-					fg, bg = bg, fg
-				}
-				buf[p.y0+y][p.x0+x] = Cell{
-					ch: runes[0],
-					fg: fg,
-					bg: bg,
-				}
+				fg, bg := applyStyle(cell.Fg, cell.Bg, cell.Bold, cell.Reverse)
+				drawRune(buf, p, x, y, runes[0], fg, bg)
+				//				buf[p.y0+y][p.x0+x] = Cell{
+				//					ch: runes[0],
+				//					fg: fg,
+				//					bg: bg,
+				//				}
 			}
 		}
 	}
@@ -333,12 +330,7 @@ func drawPaneBorders(buf [][]Cell, panes []Pane) {
 func renderAnsiTest(p *Pane, buf [][]Cell) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	output := "\033[2J\033[H" +
-		"\033[1;31mRed Text\033[0m " +
-		"\033[1;32mGreen Text\033[0m\n" +
-		"\033[1;34mBlue Text\033[0m " +
-		"\033[1;33mYellow Text\033[0m\n" +
-		"\033[7m\033[4;1HReverse Video on Line 4\033[0m\n"
+	output := "\x1b[7mThis is reversed\x1b[0m and this is not."
 
 	p.screen.Reset()
 	p.screen.SetMargins(0, p.y1-p.y0-1)
@@ -349,13 +341,7 @@ func renderAnsiTest(p *Pane, buf [][]Cell) {
 			cell := p.screen.CellAt(x, y)
 			runes := []rune(cell.Data)
 			if len(runes) > 0 {
-				fg := termboxColor(cell.Fg, true)
-				bg := termboxColor(cell.Bg, false)
-
-				//			if cell.Reverse {
-				fg, bg = bg, fg
-				//				}
-
+				fg, bg := applyStyle(cell.Fg, cell.Bg, cell.Bold, cell.Reverse)
 				buf[p.y0+y][p.x0+x] = Cell{
 					ch: runes[0],
 					fg: fg,
@@ -401,31 +387,73 @@ func makeBuffer(w, h int) [][]Cell {
 	return buf
 }
 
-func termboxColor(c string, isFg bool) termbox.Attribute {
-	switch c {
-	case "black":
-		return termbox.ColorBlack
-	case "red":
-		return termbox.ColorRed
-	case "green":
-		return termbox.ColorGreen
-	case "yellow":
-		return termbox.ColorYellow
-	case "blue":
-		return termbox.ColorBlue
-	case "magenta":
-		return termbox.ColorMagenta
-	case "cyan":
-		return termbox.ColorCyan
-	case "white":
-		return termbox.ColorWhite
-	case "default", "":
-		if isFg {
-			return termboxColor(defaultFg, isFg)
-		}
-		return termboxColor(defaultBg, isFg)
-	default:
-		// fallback — maybe later parse "ff00aa" into approximate 8-bit termbox colors
+func applyStyle(fgName, bgName string, bold, reverse bool) (termbox.Attribute, termbox.Attribute) {
+	fg := resolveColor(fgName, bold)
+	bg := resolveColor(bgName, false)
+
+	if reverse {
+		fg, bg = bg, fg
+	}
+	return fg, bg
+}
+
+func resolveColor(name string, bold bool) termbox.Attribute {
+	if name == "" || name == "default" {
 		return termbox.ColorDefault
 	}
+
+	switch name {
+	case "black":
+		if bold {
+			return termbox.ColorDarkGray
+		}
+		return termbox.ColorBlack
+	case "red":
+		if bold {
+			return termbox.ColorLightRed
+		}
+		return termbox.ColorRed
+	case "green":
+		if bold {
+			return termbox.ColorLightGreen
+		}
+		return termbox.ColorGreen
+	case "yellow":
+		if bold {
+			return termbox.ColorLightYellow
+		}
+		return termbox.ColorYellow
+	case "blue":
+		if bold {
+			return termbox.ColorLightBlue
+		}
+		return termbox.ColorBlue
+	case "magenta":
+		if bold {
+			return termbox.ColorLightMagenta
+		}
+		return termbox.ColorMagenta
+	case "cyan":
+		if bold {
+			return termbox.ColorLightCyan
+		}
+		return termbox.ColorCyan
+	case "white":
+		if bold {
+			return termbox.ColorWhite
+		}
+		return termbox.ColorLightGray
+	default:
+		return termbox.ColorDefault
+	}
+}
+
+func drawRune(buf [][]Cell, p *Pane, relX, relY int, ch rune, fg, bg termbox.Attribute) {
+	x := p.x0 + 1 + relX
+	y := p.y0 + 1 + relY // +1 to skip title line
+
+	//	if y >= p.y1 || x >= p.x1 {
+	//		return
+	//	}
+	buf[y][x] = Cell{ch: ch, fg: fg, bg: bg}
 }
