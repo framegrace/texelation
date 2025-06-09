@@ -5,11 +5,30 @@ import (
 	"github.com/creack/pty"
 	"github.com/nsf/termbox-go"
 	"github.com/veops/go-ansiterm"
+	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"time"
 )
+
+var defaultFg = "white"
+var defaultBg = "black"
+
+var (
+	logFile *os.File
+	logger  *log.Logger
+)
+
+func init() {
+	var err error
+	logFile, err = os.OpenFile("ansiterm.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		panic(err)
+	}
+	logger = log.New(logFile, "[ansiterm] ", log.LstdFlags)
+}
 
 type Cell struct {
 	ch rune
@@ -110,7 +129,16 @@ mainloop:
 }
 
 func launchPTY(p *Pane, command string) {
+	// Initialize ANSI terminal emulator
+	cols := p.x1 - p.x0
+	rows := p.y1 - p.y0 - 1
 	cmd := exec.Command(command)
+	cmd.Env = append(os.Environ(),
+		"TERM=xterm-256color",
+		"COLUMNS="+strconv.Itoa(cols),
+		"LINES="+strconv.Itoa(rows),
+	)
+
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		p.title = "ERROR"
@@ -119,13 +147,20 @@ func launchPTY(p *Pane, command string) {
 	p.cmd = cmd
 	p.pty = ptmx
 
-	// Initialize ANSI terminal emulator
-	cols := p.x1 - p.x0
-	rows := p.y1 - p.y0
+	pty.Setsize(ptmx, &pty.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
+
 	p.screen = ansiterm.NewScreen(cols, rows)
 	p.stream = ansiterm.InitByteStream(p.screen, false)
 	p.stream.Attach(p.screen)
 
+	p.screen.WriteProcessInput = func(data string) {
+		p.pty.Write([]byte(data))
+	}
+
+	p.screen.SetMargins(0, p.y1-p.y0-1)
 	// Start reading PTY output
 	go func() {
 		buf := make([]byte, 4096)
@@ -141,33 +176,6 @@ func launchPTY(p *Pane, command string) {
 			}
 		}
 	}()
-
-	// p.outputBuffer = make([][]rune, 1000) // scrollback
-	//
-	//	for i := range p.outputBuffer {
-	//		p.outputBuffer[i] = make([]rune, 0)
-	//	}
-	//
-	//	go func() {
-	//		buf := make([]byte, 4096)
-	//		line := []rune{}
-	//		for {
-	//			n, err := ptmx.Read(buf)
-	//			if err != nil {
-	//				return
-	//			}
-	//			p.mu.Lock()
-	//			for _, b := range buf[:n] {
-	//				if b == '\n' {
-	//					p.outputBuffer = append(p.outputBuffer[1:], line)
-	//					line = []rune{}
-	//				} else {
-	//					line = append(line, rune(b))
-	//				}
-	//			}
-	//			p.mu.Unlock()
-	//		}
-	//	}()
 }
 
 func setupPanes(w, h int) []Pane {
@@ -175,7 +183,7 @@ func setupPanes(w, h int) []Pane {
 	cellH := h / 2
 	panes := []Pane{
 		{
-			x0: 0, y0: 0, x1: cellW, y1: cellH, title: "htop", renderFn: appPTY,
+			x0: 0, y0: 0, x1: cellW, y1: cellH, title: "top", renderFn: renderAnsiTest, //appPTY, // renderAnsiTest,
 		},
 		{
 			x0: cellW, y0: 0, x1: w, y1: cellH,
@@ -190,7 +198,7 @@ func setupPanes(w, h int) []Pane {
 			title: "Pane D", renderFn: appD,
 		},
 	}
-	launchPTY(&panes[0], "htop")
+	launchPTY(&panes[0], "top")
 	return panes
 }
 
@@ -203,37 +211,56 @@ func appPTY(p *Pane, buf [][]Cell) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	screenLines := p.screen.Display() // []string
-	for y, line := range screenLines {
-		if y >= (p.y1 - p.y0) {
-			break
-		}
-		for x, r := range line {
-			if x >= (p.x1 - p.x0) {
-				break
+	maxRows := p.screen.Rows()
+	maxCols := p.screen.Cols()
+
+	for y := 0; y < maxRows && p.y0+1+y < p.y1; y++ {
+		for x := 0; x < maxCols && p.x0+x < p.x1; x++ {
+			cell := p.screen.CellAt(x, y)
+			runes := []rune(cell.Data)
+			if len(runes) > 0 {
+				fg := mapColor(cell.Fg)
+				bg := mapColor(cell.Bg)
+				if cell.Reverse {
+					fg, bg = bg, fg
+				}
+				buf[p.y0+y][p.x0+x] = Cell{
+					ch: runes[0],
+					fg: fg,
+					bg: bg,
+				}
 			}
-			buf[p.y0+y][p.x0+x] = Cell{ch: r, fg: termbox.ColorWhite}
 		}
 	}
 	writeTitle(buf, p, termbox.ColorWhite)
-	//	lines := p.outputBuffer
-	//	start := len(lines) - (p.y1 - p.y0 - 1)
-	//	if start < 0 {
-	//		start = 0
-	//	}
+}
 
-	// row := p.y0 + 1
-	//
-	//	for i := start; i < len(lines) && row < p.y1; i++ {
-	//		for col, r := range lines[i] {
-	//			if p.x0+col < p.x1 {
-	//				buf[row][p.x0+col] = Cell{ch: r, fg: termbox.ColorWhite}
-	//			}
-	//		}
-	//		row++
+func mapColor(name string) termbox.Attribute {
+	// if name != "default" && name != "" {
+	//		logger.Printf("mapColor called with: %s", name)
 	//	}
-	//
-	// writeTitle(buf, p, termbox.ColorWhite)
+	switch name {
+	case "black":
+		return termbox.ColorBlack
+	case "red":
+		return termbox.ColorRed
+	case "green":
+		return termbox.ColorGreen
+	case "yellow":
+		return termbox.ColorYellow
+	case "blue":
+		return termbox.ColorBlue
+	case "magenta":
+		return termbox.ColorMagenta
+	case "cyan":
+		return termbox.ColorCyan
+	case "white":
+		return termbox.ColorWhite
+	case "default":
+		fallthrough
+	default:
+		return termbox.ColorDefault
+	}
 }
 
 func appA(p *Pane, buf [][]Cell) {
@@ -303,6 +330,42 @@ func drawPaneBorders(buf [][]Cell, panes []Pane) {
 	}
 }
 
+func renderAnsiTest(p *Pane, buf [][]Cell) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	output := "\033[2J\033[H" +
+		"\033[1;31mRed Text\033[0m " +
+		"\033[1;32mGreen Text\033[0m\n" +
+		"\033[1;34mBlue Text\033[0m " +
+		"\033[1;33mYellow Text\033[0m\n" +
+		"\033[7m\033[4;1HReverse Video on Line 4\033[0m\n"
+
+	p.screen.Reset()
+	p.screen.SetMargins(0, p.y1-p.y0-1)
+	p.stream.Feed([]byte(output))
+
+	for y := 0; y < p.screen.Rows(); y++ {
+		for x := 0; x < p.screen.Cols(); x++ {
+			cell := p.screen.CellAt(x, y)
+			runes := []rune(cell.Data)
+			if len(runes) > 0 {
+				fg := termboxColor(cell.Fg, true)
+				bg := termboxColor(cell.Bg, false)
+
+				//			if cell.Reverse {
+				fg, bg = bg, fg
+				//				}
+
+				buf[p.y0+y][p.x0+x] = Cell{
+					ch: runes[0],
+					fg: fg,
+					bg: bg,
+				}
+			}
+		}
+	}
+}
+
 func pollEvents(ch chan termbox.Event) {
 	for {
 		ch <- termbox.PollEvent()
@@ -336,4 +399,33 @@ func makeBuffer(w, h int) [][]Cell {
 		buf[i] = make([]Cell, w)
 	}
 	return buf
+}
+
+func termboxColor(c string, isFg bool) termbox.Attribute {
+	switch c {
+	case "black":
+		return termbox.ColorBlack
+	case "red":
+		return termbox.ColorRed
+	case "green":
+		return termbox.ColorGreen
+	case "yellow":
+		return termbox.ColorYellow
+	case "blue":
+		return termbox.ColorBlue
+	case "magenta":
+		return termbox.ColorMagenta
+	case "cyan":
+		return termbox.ColorCyan
+	case "white":
+		return termbox.ColorWhite
+	case "default", "":
+		if isFg {
+			return termboxColor(defaultFg, isFg)
+		}
+		return termboxColor(defaultBg, isFg)
+	default:
+		// fallback — maybe later parse "ff00aa" into approximate 8-bit termbox colors
+		return termbox.ColorDefault
+	}
 }
