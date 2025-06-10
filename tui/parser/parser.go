@@ -1,6 +1,9 @@
 package parser
 
-import "bytes"
+import (
+	"bytes"
+	"unicode/utf8" // Import the utf8 package
+)
 
 type State int
 
@@ -12,17 +15,15 @@ const (
 	StateCharset
 )
 
-// Parser is a VT100/ANSI stream parser.
 type Parser struct {
 	state        State
 	vterm        *VTerm
 	params       []int
 	currentParam int
 	private      bool
-	oscBuffer    []byte // NEW: Buffer for OSC commands
+	oscBuffer    []byte
 }
 
-// NewParser creates a new parser associated with a virtual terminal.
 func NewParser(v *VTerm) *Parser {
 	return &Parser{
 		state:     StateGround,
@@ -34,22 +35,31 @@ func NewParser(v *VTerm) *Parser {
 
 // Parse processes a slice of bytes from the PTY.
 func (p *Parser) Parse(data []byte) {
-	for _, b := range data {
+	// Refactored loop to handle multi-byte UTF-8 characters correctly.
+	for i := 0; i < len(data); {
+		b := data[i]
+		var size int = 1 // Default to consuming 1 byte
+
 		switch p.state {
 		case StateGround:
-			switch b {
-			case '\x1b':
+			switch {
+			case b == '\x1b':
 				p.state = StateEscape
-			case '\n':
+			case b == '\n':
 				p.vterm.LineFeed()
-			case '\r':
+			case b == '\r':
 				p.vterm.CarriageReturn()
-			case '\b':
+			case b == '\b':
 				p.vterm.Backspace()
-			case '\t':
+			case b == '\t':
 				p.vterm.Tab()
+			case b < ' ':
+				// Ignore other control characters for now
 			default:
-				p.vterm.placeChar(rune(b))
+				// Decode a full rune and its size in bytes
+				var r rune
+				r, size = utf8.DecodeRune(data[i:])
+				p.vterm.placeChar(r)
 			}
 		case StateEscape:
 			switch b {
@@ -60,7 +70,7 @@ func (p *Parser) Parse(data []byte) {
 				p.private = false
 			case ']':
 				p.state = StateOSC
-				p.oscBuffer = p.oscBuffer[:0] // Clear buffer
+				p.oscBuffer = p.oscBuffer[:0]
 			case '(':
 				p.state = StateCharset
 			case '=', '>':
@@ -82,7 +92,7 @@ func (p *Parser) Parse(data []byte) {
 				p.state = StateGround
 			}
 		case StateOSC:
-			if b == '\x07' { // BEL character terminates the command
+			if b == '\x07' {
 				p.handleOSC()
 				p.state = StateGround
 			} else {
@@ -91,20 +101,18 @@ func (p *Parser) Parse(data []byte) {
 		case StateCharset:
 			p.state = StateGround
 		}
+		// Advance the loop by the number of bytes consumed
+		i += size
 	}
 }
 
-// handleOSC processes an Operating System Command.
 func (p *Parser) handleOSC() {
 	parts := bytes.SplitN(p.oscBuffer, []byte{';'}, 2)
 	if len(parts) != 2 {
-		return // Invalid OSC command
+		return
 	}
-
 	command := string(parts[0])
 	content := string(parts[1])
-
-	// ESC ] 0 ; <title> BEL  (sets window title)
 	if command == "0" {
 		p.vterm.SetTitle(content)
 	}

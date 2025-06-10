@@ -1,6 +1,94 @@
 package parser
 
-import "log"
+import (
+	"log"
+)
+
+// VTerm and other structs remain the same...
+type VTerm struct {
+	width, height    int
+	cursorX, cursorY int
+	grid             [][]Cell
+	currentFG        Color
+	currentBG        Color
+	currentAttr      Attribute
+	tabStops         map[int]bool
+	cursorVisible    bool
+	TitleChanged     func(string)
+}
+
+// ProcessCSI is the main entry point for handling a parsed CSI sequence.
+func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
+	if private {
+		v.processPrivateCSI(command, params)
+		return
+	}
+
+	mode := 0
+	if len(params) > 0 {
+		mode = params[0]
+	}
+
+	switch command {
+	case 'm': // Select Graphic Rendition (SGR)
+		if len(params) == 0 {
+			params = []int{0}
+		}
+		for _, param := range params {
+			switch {
+			case param == 0:
+				v.ResetAttributes()
+			case param == 1:
+				v.SetAttribute(AttrBold)
+			case param == 4:
+				v.SetAttribute(AttrUnderline)
+			case param == 7:
+				v.SetAttribute(AttrReverse)
+			// Standard foreground colors
+			case param >= 30 && param <= 37:
+				v.SetForegroundColor(Color(param - 30))
+			// Standard background colors
+			case param >= 40 && param <= 47:
+				v.SetBackgroundColor(Color(param - 40))
+			// High-intensity foreground colors
+			case param >= 90 && param <= 97:
+				v.SetAttribute(AttrBold) // Termbox simulates bright colors with bold
+				v.SetForegroundColor(Color(param - 90))
+			// High-intensity background colors
+			case param >= 100 && param <= 107:
+				v.SetBackgroundColor(Color(param - 100))
+			}
+		}
+	case 'H', 'f':
+		row, col := 1, 1
+		if len(params) > 0 && params[0] != 0 {
+			row = params[0]
+		}
+		if len(params) > 1 && params[1] != 0 {
+			col = params[1]
+		}
+		v.SetCursorPos(row-1, col-1)
+	case 'J': // Erase in Display
+		switch mode {
+		case 0:
+			v.ClearToEndOfScreen()
+		case 2:
+			v.ClearScreen()
+			v.SetCursorPos(0, 0)
+		}
+	case 'K': // Erase in Line
+		v.ClearLine(mode)
+	case 'g': // Tab Clear
+		if mode == 3 {
+			v.ClearAllTabStops()
+		}
+	case 'c': // Send Device Attributes
+		log.Println("Parser: Ignoring device attribute request (0c)")
+	}
+}
+
+// --- The rest of the file is unchanged. I've omitted it for brevity. ---
+// NewVTerm(), Grid(), Cursor(), placeChar(), etc. all remain the same.
 
 // Option is a functional option for configuring a VTerm.
 type Option func(*VTerm)
@@ -11,21 +99,6 @@ func WithTitleChangeHandler(handler func(string)) Option {
 		v.TitleChanged = handler
 	}
 }
-
-// VTerm holds the grid of cells, cursor position, and current style of a virtual terminal.
-type VTerm struct {
-	width, height    int
-	cursorX, cursorY int
-	grid             [][]Cell
-	currentFG        Color
-	currentBG        Color
-	currentAttr      Attribute
-	tabStops         map[int]bool
-	cursorVisible    bool
-	TitleChanged     func(string) // The callback function
-}
-
-// NewVTerm creates and initializes a new virtual terminal.
 func NewVTerm(width, height int, opts ...Option) *VTerm {
 	v := &VTerm{
 		width:         width,
@@ -36,12 +109,9 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		tabStops:      make(map[int]bool),
 		cursorVisible: true,
 	}
-
-	// Apply all functional options
 	for _, opt := range opts {
 		opt(v)
 	}
-
 	for i := range v.grid {
 		v.grid[i] = make([]Cell, width)
 	}
@@ -53,16 +123,11 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	}
 	return v
 }
-
-// SetTitle calls the TitleChanged handler if it exists.
 func (v *VTerm) SetTitle(title string) {
 	if v.TitleChanged != nil {
 		v.TitleChanged(title)
 	}
 }
-
-// --- The rest of the file is the same as before ---
-
 func (v *VTerm) Grid() [][]Cell                { return v.grid }
 func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool           { return v.cursorVisible }
@@ -153,63 +218,6 @@ func (v *VTerm) Tab() {
 	v.cursorX = v.width - 1
 }
 func (v *VTerm) ClearAllTabStops() { v.tabStops = make(map[int]bool) }
-func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
-	if private {
-		v.processPrivateCSI(command, params)
-		return
-	}
-	mode := 0
-	if len(params) > 0 {
-		mode = params[0]
-	}
-	switch command {
-	case 'm':
-		if len(params) == 0 {
-			params = []int{0}
-		}
-		for _, param := range params {
-			switch {
-			case param == 0:
-				v.ResetAttributes()
-			case param == 1:
-				v.SetAttribute(AttrBold)
-			case param == 4:
-				v.SetAttribute(AttrUnderline)
-			case param == 7:
-				v.SetAttribute(AttrReverse)
-			case param >= 30 && param <= 37:
-				v.SetForegroundColor(Color(param - 30))
-			case param >= 40 && param <= 47:
-				v.SetBackgroundColor(Color(param - 40))
-			}
-		}
-	case 'H', 'f':
-		row, col := 1, 1
-		if len(params) > 0 && params[0] != 0 {
-			row = params[0]
-		}
-		if len(params) > 1 && params[1] != 0 {
-			col = params[1]
-		}
-		v.SetCursorPos(row-1, col-1)
-	case 'J':
-		switch mode {
-		case 0:
-			v.ClearToEndOfScreen()
-		case 2:
-			v.ClearScreen()
-			v.SetCursorPos(0, 0)
-		}
-	case 'K':
-		v.ClearLine(mode)
-	case 'g':
-		if mode == 3 {
-			v.ClearAllTabStops()
-		}
-	case 'c':
-		log.Println("Parser: Ignoring device attribute request (0c)")
-	}
-}
 func (v *VTerm) processPrivateCSI(command byte, params []int) {
 	if len(params) == 0 {
 		return
