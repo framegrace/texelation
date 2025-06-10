@@ -6,6 +6,7 @@ const (
 	StateGround State = iota
 	StateEscape
 	StateCSI
+	StateCharset // NEW: For handling character set designations like ESC ( B
 )
 
 // Parser is a VT100/ANSI stream parser.
@@ -52,6 +53,8 @@ func (p *Parser) Parse(data []byte) {
 				p.params = p.params[:0]
 				p.currentParam = 0
 				p.private = false
+			case '(': // Designate G0 Character Set
+				p.state = StateCharset
 			case '=', '>': // Keypad modes
 				p.state = StateGround // Recognize but ignore
 			default:
@@ -70,6 +73,10 @@ func (p *Parser) Parse(data []byte) {
 				p.vterm.ProcessCSI(b, p.params, p.private)
 				p.state = StateGround
 			}
+		case StateCharset:
+			// After `ESC (`, we expect a character like 'B' for US-ASCII.
+			// We don't need to do anything with it, just consume it and return.
+			p.state = StateGround
 		}
 	}
 }

@@ -31,6 +31,7 @@ func NewVTerm(width, height int) *VTerm {
 	}
 	v.ClearScreen()
 
+	// Set default tab stops every 8 columns
 	for i := 0; i < width; i++ {
 		if i%8 == 0 {
 			v.tabStops[i] = true
@@ -39,26 +40,49 @@ func NewVTerm(width, height int) *VTerm {
 	return v
 }
 
-// --- Public Getters for Rendering ---
+// --- NEW METHOD ---
 
-func (v *VTerm) Grid() [][]Cell {
-	return v.grid
+// ClearAllTabStops removes all custom tab stops.
+func (v *VTerm) ClearAllTabStops() {
+	v.tabStops = make(map[int]bool)
 }
 
-func (v *VTerm) Cursor() (int, int) {
-	return v.cursorX, v.cursorY
+// --- UPDATED METHOD ---
+
+func (v *VTerm) processPrivateCSI(command byte, params []int) {
+	if len(params) == 0 {
+		return
+	}
+	mode := params[0]
+
+	switch command {
+	case 'h': // Set Mode
+		switch mode {
+		case 1:
+			log.Println("Parser: Ignoring set cursor key application mode (1h)")
+		case 25:
+			v.SetCursorVisible(true)
+		case 1049:
+			log.Println("Parser: Ignoring set alternate screen buffer (1049h)")
+		}
+	case 'l': // Reset Mode
+		switch mode {
+		case 1:
+			log.Println("Parser: Ignoring reset cursor key application mode (1l)")
+		case 25:
+			v.SetCursorVisible(false)
+		case 1049:
+			log.Println("Parser: Ignoring reset alternate screen buffer (1049l)")
+		}
+	}
 }
 
-func (v *VTerm) CursorVisible() bool {
-	return v.cursorVisible
-}
+// --- The rest of the file remains the same ---
 
-// --- Methods to Modify State (called by the parser) ---
-
-func (v *VTerm) SetCursorVisible(visible bool) {
-	v.cursorVisible = visible
-}
-
+func (v *VTerm) Grid() [][]Cell                { return v.grid }
+func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
+func (v *VTerm) CursorVisible() bool           { return v.cursorVisible }
+func (v *VTerm) SetCursorVisible(visible bool) { v.cursorVisible = visible }
 func (v *VTerm) placeChar(r rune) {
 	if v.cursorX >= v.width {
 		v.cursorX = 0
@@ -69,14 +93,10 @@ func (v *VTerm) placeChar(r rune) {
 	}
 
 	v.grid[v.cursorY][v.cursorX] = Cell{
-		Rune: r,
-		FG:   v.currentFG,
-		BG:   v.currentBG,
-		Attr: v.currentAttr,
+		Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr,
 	}
 	v.cursorX++
 }
-
 func (v *VTerm) scrollUp() {
 	copy(v.grid[0:], v.grid[1:])
 	newLine := make([]Cell, v.width)
@@ -85,25 +105,14 @@ func (v *VTerm) scrollUp() {
 	}
 	v.grid[v.height-1] = newLine
 }
-
-func (v *VTerm) SetForegroundColor(c Color) {
-	v.currentFG = c
-}
-
-func (v *VTerm) SetBackgroundColor(c Color) {
-	v.currentBG = c
-}
-
-func (v *VTerm) SetAttribute(a Attribute) {
-	v.currentAttr |= a
-}
-
+func (v *VTerm) SetForegroundColor(c Color) { v.currentFG = c }
+func (v *VTerm) SetBackgroundColor(c Color) { v.currentBG = c }
+func (v *VTerm) SetAttribute(a Attribute)   { v.currentAttr |= a }
 func (v *VTerm) ResetAttributes() {
 	v.currentFG = ColorDefault
 	v.currentBG = ColorDefault
 	v.currentAttr = 0
 }
-
 func (v *VTerm) SetCursorPos(row, col int) {
 	if row < 0 {
 		row = 0
@@ -119,7 +128,6 @@ func (v *VTerm) SetCursorPos(row, col int) {
 	}
 	v.cursorY, v.cursorX = row, col
 }
-
 func (v *VTerm) ClearScreen() {
 	for y := 0; y < v.height; y++ {
 		for x := 0; x < v.width; x++ {
@@ -127,7 +135,6 @@ func (v *VTerm) ClearScreen() {
 		}
 	}
 }
-
 func (v *VTerm) ClearLine(mode int) {
 	start, end := 0, 0
 	switch mode {
@@ -142,7 +149,6 @@ func (v *VTerm) ClearLine(mode int) {
 		v.grid[v.cursorY][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 	}
 }
-
 func (v *VTerm) LineFeed() {
 	v.cursorY++
 	if v.cursorY >= v.height {
@@ -150,17 +156,12 @@ func (v *VTerm) LineFeed() {
 		v.scrollUp()
 	}
 }
-
-func (v *VTerm) CarriageReturn() {
-	v.cursorX = 0
-}
-
+func (v *VTerm) CarriageReturn() { v.cursorX = 0 }
 func (v *VTerm) Backspace() {
 	if v.cursorX > 0 {
 		v.cursorX--
 	}
 }
-
 func (v *VTerm) Tab() {
 	for x := v.cursorX + 1; x < v.width; x++ {
 		if v.tabStops[x] {
@@ -170,16 +171,13 @@ func (v *VTerm) Tab() {
 	}
 	v.cursorX = v.width - 1
 }
-
-// ProcessCSI is the main entry point for handling a parsed CSI sequence.
 func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 	if private {
 		v.processPrivateCSI(command, params)
 		return
 	}
-
 	switch command {
-	case 'm': // Select Graphic Rendition (SGR)
+	case 'm':
 		if len(params) == 0 {
 			params = []int{0}
 		}
@@ -199,7 +197,7 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 				v.SetBackgroundColor(Color(param - 40))
 			}
 		}
-	case 'H', 'f': // Cursor Position
+	case 'H', 'f':
 		row, col := 1, 1
 		if len(params) > 0 && params[0] != 0 {
 			row = params[0]
@@ -208,40 +206,23 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 			col = params[1]
 		}
 		v.SetCursorPos(row-1, col-1)
-	case 'J': // Erase in Display
+	case 'J':
 		if len(params) > 0 && params[0] == 2 {
 			v.ClearScreen()
 			v.SetCursorPos(0, 0)
 		}
-	case 'K': // Erase in Line
+	case 'K':
 		mode := 0
 		if len(params) > 0 {
 			mode = params[0]
 		}
 		v.ClearLine(mode)
-	}
-}
-
-func (v *VTerm) processPrivateCSI(command byte, params []int) {
-	if len(params) == 0 {
-		return
-	}
-	mode := params[0]
-
-	switch command {
-	case 'h': // Set Mode
-		switch mode {
-		case 25:
-			v.SetCursorVisible(true)
-		case 1049:
-			log.Println("Parser: Ignoring set alternate screen buffer (1049h)")
+	// --- NEWLY HANDLED ---
+	case 'g': // Tab Clear
+		if len(params) > 0 && params[0] == 3 {
+			v.ClearAllTabStops()
 		}
-	case 'l': // Reset Mode
-		switch mode {
-		case 25:
-			v.SetCursorVisible(false)
-		case 1049:
-			log.Println("Parser: Ignoring reset alternate screen buffer (1049l)")
-		}
+	case 'c': // Send Device Attributes
+		log.Println("Parser: Ignoring device attribute request (0c)")
 	}
 }
