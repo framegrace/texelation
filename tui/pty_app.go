@@ -24,6 +24,47 @@ type PTYApp struct {
 	stop    chan struct{}
 }
 
+// mapParserColorToTermbox converts our rich Color type to a simple termbox attribute.
+func mapParserColorToTermbox(c parser.Color) termbox.Attribute {
+	switch c.Mode {
+	case parser.ColorModeDefault:
+		return termbox.ColorDefault
+	case parser.ColorModeStandard:
+		// Standard colors 0-7 are Black, Red, ... White
+		// Standard colors 8-15 are the bright versions
+		if c.Value < 8 {
+			return termbox.Attribute(c.Value + 1)
+		}
+		// Bright colors (8-15) are rendered as bold in termbox
+		return termbox.Attribute(c.Value-8+1) | termbox.AttrBold
+	case parser.ColorMode256:
+		// This is a simple approximation of 256 colors to the basic 16.
+		// A more complex mapping could be implemented here for better results.
+		val := c.Value
+		switch {
+		case val >= 232: // Grayscale
+			return termbox.ColorWhite // Approximate grayscale to white/black
+		case val >= 16: // 6x6x6 color cube
+			// Approximate to the nearest of the 6 standard colors
+			// This is a very rough approximation
+			r := (val - 16) / 36
+			g := ((val - 16) % 36) / 6
+			b := (val - 16) % 6
+			if r > 2 || g > 2 || b > 2 {
+				return termbox.ColorWhite | termbox.AttrBold
+			}
+			return termbox.ColorDefault
+		default: // Basic 16 colors
+			if val < 8 {
+				return termbox.Attribute(val + 1)
+			}
+			return termbox.Attribute(val-8+1) | termbox.AttrBold
+		}
+	default:
+		return termbox.ColorDefault
+	}
+}
+
 // Render translates our VTerm's state into the main application's buffer.
 func (a *PTYApp) Render() [][]Cell {
 	a.mu.Lock()
@@ -60,24 +101,18 @@ func (a *PTYApp) Render() [][]Cell {
 	return buffer
 }
 
-// applyParserStyle translates our parser.Cell into the main tui.Cell for rendering.
+// applyParserStyle translates our new parser.Cell into the main tui.Cell for rendering.
 func applyParserStyle(pCell parser.Cell) Cell {
-	fg := termbox.Attribute(pCell.FG)
-	bg := termbox.Attribute(pCell.BG)
+	// Translate colors, including approximating 256-color codes
+	fg := mapParserColorToTermbox(pCell.FG)
+	bg := mapParserColorToTermbox(pCell.BG)
 
-	// --- START: The Fix is here ---
+	// Translate attributes
 	if pCell.Attr&parser.AttrReverse != 0 {
-		// If colors are default, simulate standard reverse (black on white)
-		if pCell.FG == parser.ColorDefault && pCell.BG == parser.ColorDefault {
-			fg = termbox.ColorBlack
-			bg = termbox.ColorWhite
-		} else {
-			// Otherwise, just swap the existing colors
-			fg, bg = bg, fg
-		}
+		fg, bg = bg, fg
 	}
-	// --- END: The Fix is here ---
-
+	// Note: Bold is handled by the color mapping for bright colors now.
+	// We can still add the explicit bold attribute for non-colored bold text.
 	if pCell.Attr&parser.AttrBold != 0 {
 		fg |= termbox.AttrBold
 	}
@@ -180,8 +215,18 @@ func (a *PTYApp) Resize(cols, rows int) {
 		a.title = newTitle
 	}
 
-	// Create our virtual terminal, passing the handler as an option
-	a.vterm = parser.NewVTerm(cols, rows, parser.WithTitleChangeHandler(titleChangeHandler))
+	// NEW: Define the callback that writes back to the PTY
+	ptyWriter := func(b []byte) {
+		if a.pty != nil {
+			a.pty.Write(b)
+		}
+	}
+
+	// Create our virtual terminal, now with both handlers
+	a.vterm = parser.NewVTerm(cols, rows,
+		parser.WithTitleChangeHandler(titleChangeHandler),
+		parser.WithPtyWriter(ptyWriter),
+	)
 	a.parser = parser.NewParser(a.vterm)
 
 	// Inform the PTY of the size change

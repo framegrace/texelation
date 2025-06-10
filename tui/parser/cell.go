@@ -1,31 +1,28 @@
 package parser
 
-import "github.com/nsf/termbox-go"
-
-// Attribute defines a single text attribute.
 type Attribute uint16
-
-// Color defines a text color. For now, it maps directly to termbox colors.
-type Color termbox.Attribute
-
-const (
-	// Basic 8 ANSI colors
-	ColorDefault Color = Color(termbox.ColorDefault)
-	ColorBlack   Color = Color(termbox.ColorBlack)
-	ColorRed     Color = Color(termbox.ColorRed)
-	ColorGreen   Color = Color(termbox.ColorGreen)
-	ColorYellow  Color = Color(termbox.ColorYellow)
-	ColorBlue    Color = Color(termbox.ColorBlue)
-	ColorMagenta Color = Color(termbox.ColorMagenta)
-	ColorCyan    Color = Color(termbox.ColorCyan)
-	ColorWhite   Color = Color(termbox.ColorWhite)
-)
 
 const (
 	AttrBold Attribute = 1 << iota
 	AttrUnderline
 	AttrReverse
 )
+
+// ColorMode defines the type of color stored.
+type ColorMode int
+
+const (
+	ColorModeDefault  ColorMode = iota // Default terminal color
+	ColorModeStandard                  // The basic 8 ANSI colors
+	ColorMode256                       // 256-color palette
+	// We are not implementing RGB (true-color) for now, but it would go here.
+)
+
+// Color now represents a color in potentially different modes.
+type Color struct {
+	Mode  ColorMode
+	Value uint8 // Holds the color code for Standard (0-7) and 256-mode (0-255)
+}
 
 // Cell represents a single character cell on the screen.
 type Cell struct {
@@ -34,3 +31,9 @@ type Cell struct {
 	BG   Color
 	Attr Attribute
 }
+
+// --- Predefined default colors for convenience ---
+var (
+	DefaultFG = Color{Mode: ColorModeDefault}
+	DefaultBG = Color{Mode: ColorModeDefault}
+)

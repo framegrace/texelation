@@ -1,18 +1,24 @@
 package parser
 
-import "log"
+import (
+	"fmt"
+	"log"
+)
 
-// VTerm holds the grid of cells, cursor position, and current style of a virtual terminal.
+// WithPtyWriter returns an option that sets a callback for writing data back to the PTY.
+
+// VTerm holds the state of a virtual terminal.
 type VTerm struct {
-	width, height    int
-	cursorX, cursorY int
-	grid             [][]Cell
-	currentFG        Color
-	currentBG        Color
-	currentAttr      Attribute
-	tabStops         map[int]bool
-	cursorVisible    bool
-	TitleChanged     func(string)
+	width, height              int
+	cursorX, cursorY           int
+	savedCursorX, savedCursorY int
+	grid                       [][]Cell
+	currentFG, currentBG       Color
+	currentAttr                Attribute
+	tabStops                   map[int]bool
+	cursorVisible              bool
+	TitleChanged               func(string)
+	WriteToPty                 func([]byte) // NEW: Callback to write back to the PTY
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -21,8 +27,8 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		width:         width,
 		height:        height,
 		grid:          make([][]Cell, height),
-		currentFG:     ColorDefault,
-		currentBG:     ColorDefault,
+		currentFG:     DefaultFG,
+		currentBG:     DefaultBG,
 		tabStops:      make(map[int]bool),
 		cursorVisible: true,
 	}
@@ -41,38 +47,60 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	return v
 }
 
-// --- NEW METHOD ---
-func (v *VTerm) SetCursorColumn(col int) {
-	// Clamp values to be within the screen bounds
-	if col < 0 {
-		col = 0
-	}
-	if col >= v.width {
-		col = v.width - 1
-	}
-	v.cursorX = col
+// --- NEWLY ADDED METHOD ---
+// SetAttribute enables a text attribute (bold, underline, etc.).
+func (v *VTerm) SetAttribute(a Attribute) {
+	v.currentAttr |= a
 }
 
-// --- UPDATED METHOD ---
-// ProcessCSI is the main entry point for handling a parsed CSI sequence.
+// --- The rest of the file is unchanged ---
+
+func (v *VTerm) SaveCursor() {
+	v.savedCursorX, v.savedCursorY = v.cursorX, v.cursorY
+}
+func (v *VTerm) RestoreCursor() {
+	v.cursorX, v.cursorY = v.savedCursorX, v.savedCursorY
+}
 func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 	if private {
 		v.processPrivateCSI(command, params)
 		return
 	}
 
-	// Get the first parameter, or default to 0 (or 1 for some commands)
-	param := 0
-	if len(params) > 0 {
-		param = params[0]
+	param := func(i int, defaultVal int) int {
+		if i < len(params) && params[i] != 0 {
+			return params[i]
+		}
+		return defaultVal
 	}
 
 	switch command {
-	case 'm': // Select Graphic Rendition (SGR)
+	// ... other cases remain the same ...
+	case 'H', 'f':
+		v.SetCursorPos(param(0, 1)-1, param(1, 1)-1)
+	case 'G':
+		v.SetCursorColumn(param(0, 1) - 1)
+	case 'n': // Device Status Report (DSR)
+		if param(0, 0) == 6 {
+			// --- ADD THIS LINE ---
+			log.Println("Parser: Received cursor position request (6n). Responding.")
+			// --- END ---
+			// The application is asking for the cursor position.
+			// Format the response: ESC[<row>;<col>R (1-based)
+			response := fmt.Sprintf("\x1b[%d;%dR", v.cursorY+1, v.cursorX+1)
+			if v.WriteToPty != nil {
+				v.WriteToPty([]byte(response))
+			}
+		}
+
+	// ... other cases remain the same ...
+	case 'm':
+		i := 0
 		if len(params) == 0 {
 			params = []int{0}
 		}
-		for _, p := range params {
+		for i < len(params) {
+			p := params[i]
 			switch {
 			case p == 0:
 				v.ResetAttributes()
@@ -82,46 +110,37 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 				v.SetAttribute(AttrUnderline)
 			case p == 7:
 				v.SetAttribute(AttrReverse)
-			// CORRECTED: Map ANSI 30-37 to termbox 1-8 (Black-White)
 			case p >= 30 && p <= 37:
-				v.SetForegroundColor(Color(p - 30 + 1))
+				v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 30)}
+			case p == 38:
+				if i+2 < len(params) && params[i+1] == 5 {
+					v.currentFG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
+					i += 2
+				}
 			case p >= 40 && p <= 47:
-				v.SetBackgroundColor(Color(p - 40 + 1))
-			// CORRECTED: Map bright colors correctly
+				v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 40)}
+			case p == 48:
+				if i+2 < len(params) && params[i+1] == 5 {
+					v.currentBG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
+					i += 2
+				}
 			case p >= 90 && p <= 97:
-				v.SetAttribute(AttrBold)
-				v.SetForegroundColor(Color(p - 90 + 1))
+				v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 90 + 8)}
 			case p >= 100 && p <= 107:
-				v.SetBackgroundColor(Color(p - 100 + 1))
+				v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 100 + 8)}
 			}
+			i++
 		}
-	case 'H', 'f': // Cursor Position
-		row, col := 1, 1
-		if len(params) > 0 && params[0] != 0 {
-			row = params[0]
-		}
-		if len(params) > 1 && params[1] != 0 {
-			col = params[1]
-		}
-		v.SetCursorPos(row-1, col-1)
-	case 'G': // Cursor Horizontal Absolute
-		col := 1
-		if param != 0 {
-			col = param
-		}
-		v.SetCursorColumn(col - 1) // ANSI is 1-based
-	case 'J': // Erase in Display
-		switch param {
-		case 0:
-			v.ClearToEndOfScreen()
-		case 2:
-			v.ClearScreen()
-			v.SetCursorPos(0, 0)
-		}
-	case 'K': // Erase in Line
-		v.ClearLine(param)
-	case 'g': // Tab Clear
-		if param == 3 {
+	case 's':
+		v.SaveCursor()
+	case 'u':
+		v.RestoreCursor()
+	case 'J':
+		v.ClearScreenMode(param(0, 0))
+	case 'K':
+		v.ClearLine(param(0, 0))
+	case 'g':
+		if param(0, 0) == 3 {
 			v.ClearAllTabStops()
 		}
 	case 'c':
@@ -129,17 +148,19 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 	}
 }
 
-// --- The rest of the file is unchanged ---
-
-type Option func(*VTerm)
-
-func WithTitleChangeHandler(handler func(string)) Option {
-	return func(v *VTerm) { v.TitleChanged = handler }
-}
-func (v *VTerm) SetTitle(title string) {
-	if v.TitleChanged != nil {
-		v.TitleChanged(title)
+func (v *VTerm) ClearScreenMode(mode int) {
+	switch mode {
+	case 0:
+		v.ClearToEndOfScreen()
+	case 2:
+		v.ClearScreen()
+		v.SetCursorPos(0, 0)
 	}
+}
+func (v *VTerm) ResetAttributes() {
+	v.currentFG = DefaultFG
+	v.currentBG = DefaultBG
+	v.currentAttr = 0
 }
 func (v *VTerm) Grid() [][]Cell                { return v.grid }
 func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
@@ -160,17 +181,9 @@ func (v *VTerm) scrollUp() {
 	copy(v.grid[0:], v.grid[1:])
 	newLine := make([]Cell, v.width)
 	for i := range newLine {
-		newLine[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		newLine[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
 	}
 	v.grid[v.height-1] = newLine
-}
-func (v *VTerm) SetForegroundColor(c Color) { v.currentFG = c }
-func (v *VTerm) SetBackgroundColor(c Color) { v.currentBG = c }
-func (v *VTerm) SetAttribute(a Attribute)   { v.currentAttr |= a }
-func (v *VTerm) ResetAttributes() {
-	v.currentFG = ColorDefault
-	v.currentBG = ColorDefault
-	v.currentAttr = 0
 }
 func (v *VTerm) SetCursorPos(row, col int) {
 	if row < 0 {
@@ -187,10 +200,19 @@ func (v *VTerm) SetCursorPos(row, col int) {
 	}
 	v.cursorY, v.cursorX = row, col
 }
+func (v *VTerm) SetCursorColumn(col int) {
+	if col < 0 {
+		col = 0
+	}
+	if col >= v.width {
+		col = v.width - 1
+	}
+	v.cursorX = col
+}
 func (v *VTerm) ClearScreen() {
 	for y := 0; y < v.height; y++ {
 		for x := 0; x < v.width; x++ {
-			v.grid[y][x] = Cell{Rune: ' ', FG: ColorDefault, BG: ColorDefault}
+			v.grid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
 		}
 	}
 }
@@ -205,7 +227,7 @@ func (v *VTerm) ClearLine(mode int) {
 		start, end = 0, v.width-1
 	}
 	for x := start; x <= end && x < v.width; x++ {
-		v.grid[v.cursorY][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		v.grid[v.cursorY][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
 	}
 }
 func (v *VTerm) LineFeed() {
@@ -265,7 +287,24 @@ func (v *VTerm) ClearToEndOfScreen() {
 	v.ClearLine(0)
 	for y := v.cursorY + 1; y < v.height; y++ {
 		for x := 0; x < v.width; x++ {
-			v.grid[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			v.grid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
 		}
+	}
+}
+
+type Option func(*VTerm)
+
+func WithTitleChangeHandler(handler func(string)) Option {
+	return func(v *VTerm) { v.TitleChanged = handler }
+}
+func (v *VTerm) SetTitle(title string) {
+	if v.TitleChanged != nil {
+		v.TitleChanged(title)
+	}
+}
+
+func WithPtyWriter(writer func([]byte)) Option {
+	return func(v *VTerm) {
+		v.WriteToPty = writer
 	}
 }
