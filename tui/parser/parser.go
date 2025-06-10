@@ -1,12 +1,15 @@
 package parser
 
+import "bytes"
+
 type State int
 
 const (
 	StateGround State = iota
 	StateEscape
 	StateCSI
-	StateCharset // NEW: For handling character set designations like ESC ( B
+	StateOSC
+	StateCharset
 )
 
 // Parser is a VT100/ANSI stream parser.
@@ -16,14 +19,16 @@ type Parser struct {
 	params       []int
 	currentParam int
 	private      bool
+	oscBuffer    []byte // NEW: Buffer for OSC commands
 }
 
 // NewParser creates a new parser associated with a virtual terminal.
 func NewParser(v *VTerm) *Parser {
 	return &Parser{
-		state:  StateGround,
-		vterm:  v,
-		params: make([]int, 0, 16),
+		state:     StateGround,
+		vterm:     v,
+		params:    make([]int, 0, 16),
+		oscBuffer: make([]byte, 0, 128),
 	}
 }
 
@@ -48,15 +53,18 @@ func (p *Parser) Parse(data []byte) {
 			}
 		case StateEscape:
 			switch b {
-			case '[': // Control Sequence Introducer
+			case '[':
 				p.state = StateCSI
 				p.params = p.params[:0]
 				p.currentParam = 0
 				p.private = false
-			case '(': // Designate G0 Character Set
+			case ']':
+				p.state = StateOSC
+				p.oscBuffer = p.oscBuffer[:0] // Clear buffer
+			case '(':
 				p.state = StateCharset
-			case '=', '>': // Keypad modes
-				p.state = StateGround // Recognize but ignore
+			case '=', '>':
+				p.state = StateGround
 			default:
 				p.state = StateGround
 			}
@@ -73,10 +81,31 @@ func (p *Parser) Parse(data []byte) {
 				p.vterm.ProcessCSI(b, p.params, p.private)
 				p.state = StateGround
 			}
+		case StateOSC:
+			if b == '\x07' { // BEL character terminates the command
+				p.handleOSC()
+				p.state = StateGround
+			} else {
+				p.oscBuffer = append(p.oscBuffer, b)
+			}
 		case StateCharset:
-			// After `ESC (`, we expect a character like 'B' for US-ASCII.
-			// We don't need to do anything with it, just consume it and return.
 			p.state = StateGround
 		}
+	}
+}
+
+// handleOSC processes an Operating System Command.
+func (p *Parser) handleOSC() {
+	parts := bytes.SplitN(p.oscBuffer, []byte{';'}, 2)
+	if len(parts) != 2 {
+		return // Invalid OSC command
+	}
+
+	command := string(parts[0])
+	content := string(parts[1])
+
+	// ESC ] 0 ; <title> BEL  (sets window title)
+	if command == "0" {
+		p.vterm.SetTitle(content)
 	}
 }

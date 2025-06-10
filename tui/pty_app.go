@@ -12,7 +12,7 @@ import (
 	"github.com/nsf/termbox-go"
 )
 
-// PTYApp now uses our own custom parser.
+// PTYApp uses our own custom parser.
 type PTYApp struct {
 	title   string
 	command string
@@ -41,8 +41,6 @@ func (a *PTYApp) Render() [][]Cell {
 	cols := len(vtermGrid[0])
 
 	buffer := make([][]Cell, rows)
-
-	// Get cursor state from our VTerm
 	cursorX, cursorY := a.vterm.Cursor()
 	cursorVisible := a.vterm.CursorVisible()
 
@@ -52,7 +50,6 @@ func (a *PTYApp) Render() [][]Cell {
 			parserCell := vtermGrid[y][x]
 			buffer[y][x] = applyParserStyle(parserCell)
 
-			// Draw the cursor by reversing the cell's colors
 			if cursorVisible && x == cursorX && y == cursorY {
 				fg, bg := buffer[y][x].Fg, buffer[y][x].Bg
 				buffer[y][x].Fg = bg
@@ -63,9 +60,40 @@ func (a *PTYApp) Render() [][]Cell {
 	return buffer
 }
 
+// applyParserStyle translates our parser.Cell into the main tui.Cell for rendering.
+func applyParserStyle(pCell parser.Cell) Cell {
+	fg := termbox.Attribute(pCell.FG)
+	bg := termbox.Attribute(pCell.BG)
+
+	// --- START: The Fix is here ---
+	if pCell.Attr&parser.AttrReverse != 0 {
+		// If colors are default, simulate standard reverse (black on white)
+		if pCell.FG == parser.ColorDefault && pCell.BG == parser.ColorDefault {
+			fg = termbox.ColorBlack
+			bg = termbox.ColorWhite
+		} else {
+			// Otherwise, just swap the existing colors
+			fg, bg = bg, fg
+		}
+	}
+	// --- END: The Fix is here ---
+
+	if pCell.Attr&parser.AttrBold != 0 {
+		fg |= termbox.AttrBold
+	}
+	if pCell.Attr&parser.AttrUnderline != 0 {
+		fg |= termbox.AttrUnderline
+	}
+
+	return Cell{
+		Ch: pCell.Rune,
+		Fg: fg,
+		Bg: bg,
+	}
+}
+
 // --- Rest of file is unchanged ---
 
-// NewPTYApp creates an app that will run the given command.
 func NewPTYApp(title, command string) *PTYApp {
 	return &PTYApp{
 		title:   title,
@@ -74,7 +102,6 @@ func NewPTYApp(title, command string) *PTYApp {
 	}
 }
 
-// Run starts the command in a PTY and begins feeding its output to our parser.
 func (a *PTYApp) Run() error {
 	cols, rows := 80, 24
 	a.mu.Lock()
@@ -126,7 +153,6 @@ func (a *PTYApp) Run() error {
 	return nil
 }
 
-// Stop terminates the PTY process.
 func (a *PTYApp) Stop() {
 	close(a.stop)
 	if a.pty != nil {
@@ -137,7 +163,6 @@ func (a *PTYApp) Stop() {
 	}
 }
 
-// Resize creates our VTerm and Parser and informs the PTY of the size change.
 func (a *PTYApp) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
@@ -158,26 +183,4 @@ func (a *PTYApp) Resize(cols, rows int) {
 
 func (a *PTYApp) GetTitle() string {
 	return a.title
-}
-
-// applyParserStyle translates our parser.Cell into the main tui.Cell for rendering.
-func applyParserStyle(pCell parser.Cell) Cell {
-	fg := termbox.Attribute(pCell.FG)
-	bg := termbox.Attribute(pCell.BG)
-
-	if pCell.Attr&parser.AttrBold != 0 {
-		fg |= termbox.AttrBold
-	}
-	if pCell.Attr&parser.AttrUnderline != 0 {
-		fg |= termbox.AttrUnderline
-	}
-	if pCell.Attr&parser.AttrReverse != 0 {
-		fg, bg = bg, fg
-	}
-
-	return Cell{
-		Ch: pCell.Rune,
-		Fg: fg,
-		Bg: bg,
-	}
 }

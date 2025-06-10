@@ -2,6 +2,16 @@ package parser
 
 import "log"
 
+// Option is a functional option for configuring a VTerm.
+type Option func(*VTerm)
+
+// WithTitleChangeHandler returns an option that sets a callback for when the terminal title changes.
+func WithTitleChangeHandler(handler func(string)) Option {
+	return func(v *VTerm) {
+		v.TitleChanged = handler
+	}
+}
+
 // VTerm holds the grid of cells, cursor position, and current style of a virtual terminal.
 type VTerm struct {
 	width, height    int
@@ -12,10 +22,11 @@ type VTerm struct {
 	currentAttr      Attribute
 	tabStops         map[int]bool
 	cursorVisible    bool
+	TitleChanged     func(string) // The callback function
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
-func NewVTerm(width, height int) *VTerm {
+func NewVTerm(width, height int, opts ...Option) *VTerm {
 	v := &VTerm{
 		width:         width,
 		height:        height,
@@ -26,12 +37,15 @@ func NewVTerm(width, height int) *VTerm {
 		cursorVisible: true,
 	}
 
+	// Apply all functional options
+	for _, opt := range opts {
+		opt(v)
+	}
+
 	for i := range v.grid {
 		v.grid[i] = make([]Cell, width)
 	}
 	v.ClearScreen()
-
-	// Set default tab stops every 8 columns
 	for i := 0; i < width; i++ {
 		if i%8 == 0 {
 			v.tabStops[i] = true
@@ -40,44 +54,14 @@ func NewVTerm(width, height int) *VTerm {
 	return v
 }
 
-// --- NEW METHOD ---
-
-// ClearAllTabStops removes all custom tab stops.
-func (v *VTerm) ClearAllTabStops() {
-	v.tabStops = make(map[int]bool)
-}
-
-// --- UPDATED METHOD ---
-
-func (v *VTerm) processPrivateCSI(command byte, params []int) {
-	if len(params) == 0 {
-		return
-	}
-	mode := params[0]
-
-	switch command {
-	case 'h': // Set Mode
-		switch mode {
-		case 1:
-			log.Println("Parser: Ignoring set cursor key application mode (1h)")
-		case 25:
-			v.SetCursorVisible(true)
-		case 1049:
-			log.Println("Parser: Ignoring set alternate screen buffer (1049h)")
-		}
-	case 'l': // Reset Mode
-		switch mode {
-		case 1:
-			log.Println("Parser: Ignoring reset cursor key application mode (1l)")
-		case 25:
-			v.SetCursorVisible(false)
-		case 1049:
-			log.Println("Parser: Ignoring reset alternate screen buffer (1049l)")
-		}
+// SetTitle calls the TitleChanged handler if it exists.
+func (v *VTerm) SetTitle(title string) {
+	if v.TitleChanged != nil {
+		v.TitleChanged(title)
 	}
 }
 
-// --- The rest of the file remains the same ---
+// --- The rest of the file is the same as before ---
 
 func (v *VTerm) Grid() [][]Cell                { return v.grid }
 func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
@@ -91,10 +75,7 @@ func (v *VTerm) placeChar(r rune) {
 	if v.cursorY >= v.height {
 		v.cursorY = v.height - 1
 	}
-
-	v.grid[v.cursorY][v.cursorX] = Cell{
-		Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr,
-	}
+	v.grid[v.cursorY][v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
 	v.cursorX++
 }
 func (v *VTerm) scrollUp() {
@@ -171,10 +152,15 @@ func (v *VTerm) Tab() {
 	}
 	v.cursorX = v.width - 1
 }
+func (v *VTerm) ClearAllTabStops() { v.tabStops = make(map[int]bool) }
 func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 	if private {
 		v.processPrivateCSI(command, params)
 		return
+	}
+	mode := 0
+	if len(params) > 0 {
+		mode = params[0]
 	}
 	switch command {
 	case 'm':
@@ -207,22 +193,58 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 		}
 		v.SetCursorPos(row-1, col-1)
 	case 'J':
-		if len(params) > 0 && params[0] == 2 {
+		switch mode {
+		case 0:
+			v.ClearToEndOfScreen()
+		case 2:
 			v.ClearScreen()
 			v.SetCursorPos(0, 0)
 		}
 	case 'K':
-		mode := 0
-		if len(params) > 0 {
-			mode = params[0]
-		}
 		v.ClearLine(mode)
-	// --- NEWLY HANDLED ---
-	case 'g': // Tab Clear
-		if len(params) > 0 && params[0] == 3 {
+	case 'g':
+		if mode == 3 {
 			v.ClearAllTabStops()
 		}
-	case 'c': // Send Device Attributes
+	case 'c':
 		log.Println("Parser: Ignoring device attribute request (0c)")
+	}
+}
+func (v *VTerm) processPrivateCSI(command byte, params []int) {
+	if len(params) == 0 {
+		return
+	}
+	mode := params[0]
+	switch command {
+	case 'h':
+		switch mode {
+		case 1:
+			log.Println("Parser: Ignoring set cursor key application mode (1h)")
+		case 25:
+			v.SetCursorVisible(true)
+		case 1049:
+			log.Println("Parser: Ignoring set alternate screen buffer (1049h)")
+		case 2004:
+			log.Println("Parser: Ignoring set bracketed paste mode (2004h)")
+		}
+	case 'l':
+		switch mode {
+		case 1:
+			log.Println("Parser: Ignoring reset cursor key application mode (1l)")
+		case 25:
+			v.SetCursorVisible(false)
+		case 1049:
+			log.Println("Parser: Ignoring reset alternate screen buffer (1049l)")
+		case 2004:
+			log.Println("Parser: Ignoring reset bracketed paste mode (2004l)")
+		}
+	}
+}
+func (v *VTerm) ClearToEndOfScreen() {
+	v.ClearLine(0)
+	for y := v.cursorY + 1; y < v.height; y++ {
+		for x := 0; x < v.width; x++ {
+			v.grid[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		}
 	}
 }
