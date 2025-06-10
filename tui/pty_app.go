@@ -163,6 +163,7 @@ func (a *PTYApp) Stop() {
 	}
 }
 
+// Resize creates our VTerm and Parser and informs the PTY of the size change.
 func (a *PTYApp) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
@@ -170,9 +171,20 @@ func (a *PTYApp) Resize(cols, rows int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	a.vterm = parser.NewVTerm(cols, rows)
+	// --- NEW: Define the callback function ---
+	titleChangeHandler := func(newTitle string) {
+		// This function will be called by the VTerm when a title change occurs.
+		// We need to lock the mutex since this can be called from the parser's goroutine.
+		//a.mu.Lock()
+		//defer a.mu.Unlock()
+		a.title = newTitle
+	}
+
+	// Create our virtual terminal, passing the handler as an option
+	a.vterm = parser.NewVTerm(cols, rows, parser.WithTitleChangeHandler(titleChangeHandler))
 	a.parser = parser.NewParser(a.vterm)
 
+	// Inform the PTY of the size change
 	if a.pty != nil {
 		pty.Setsize(a.pty, &pty.Winsize{
 			Rows: uint16(rows),
@@ -182,5 +194,8 @@ func (a *PTYApp) Resize(cols, rows int) {
 }
 
 func (a *PTYApp) GetTitle() string {
+	// This method now returns the dynamically updated title!
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.title
 }
