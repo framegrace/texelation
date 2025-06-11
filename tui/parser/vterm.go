@@ -78,6 +78,10 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 	// ... other cases remain the same ...
 	case 'H', 'f':
 		v.SetCursorPos(param(0, 1)-1, param(1, 1)-1)
+	case 'C': // Cursor Forward
+		v.MoveCursorForward(param(0, 1))
+	case 'D': // Cursor Backward
+		v.MoveCursorBackward(param(0, 1))
 	case 'G':
 		v.SetCursorColumn(param(0, 1) - 1)
 	case 'n': // Device Status Report (DSR)
@@ -289,6 +293,22 @@ func (v *VTerm) ClearToEndOfScreen() {
 		for x := 0; x < v.width; x++ {
 			v.grid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
 		}
+	}
+}
+
+// MoveCursorForward moves the cursor n positions to the right.
+func (v *VTerm) MoveCursorForward(n int) {
+	v.cursorX += n
+	if v.cursorX >= v.width {
+		v.cursorX = v.width - 1
+	}
+}
+
+// MoveCursorBackward moves the cursor n positions to the left.
+func (v *VTerm) MoveCursorBackward(n int) {
+	v.cursorX -= n
+	if v.cursorX < 0 {
+		v.cursorX = 0
 	}
 }
 
