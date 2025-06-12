@@ -17,6 +17,7 @@ type VTerm struct {
 	currentAttr                Attribute
 	tabStops                   map[int]bool
 	cursorVisible              bool
+	wrapNext                   bool
 	TitleChanged               func(string)
 	WriteToPty                 func([]byte)
 	marginTop, marginBottom    int
@@ -31,6 +32,7 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		currentFG:     DefaultFG,
 		currentBG:     DefaultBG,
 		tabStops:      make(map[int]bool),
+		wrapNext:      false,
 		cursorVisible: true,
 		marginTop:     0,          // Default margin is top row
 		marginBottom:  height - 1, // Default margin is bottom row
@@ -71,6 +73,10 @@ func (v *VTerm) Resize(width, height int) {
 	v.grid = newGrid
 	v.width = width
 	v.height = height
+
+	if v.marginBottom >= v.height {
+		v.marginBottom = v.height - 1
+	}
 
 	// Reset margins and clamp cursor position
 	v.marginTop = 0
@@ -127,7 +133,15 @@ func (v *VTerm) DeleteCharacters(n int) {
 	}
 }
 
-// scrollDown scrolls the content within the margins down by N lines.
+func (v *VTerm) scrollUp() {
+	copy(v.grid[v.marginTop:], v.grid[v.marginTop+1:v.marginBottom+1])
+	newLine := make([]Cell, v.width)
+	for i := range newLine {
+		newLine[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+	}
+	v.grid[v.marginBottom] = newLine
+}
+
 func (v *VTerm) scrollDown(n int) {
 	// Shift lines down within the scrolling region
 	for i := 0; i < n; i++ {
@@ -291,14 +305,6 @@ func (v *VTerm) placeChar(r rune) {
 	}
 	v.grid[v.cursorY][v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
 	v.cursorX++
-}
-func (v *VTerm) scrollUp() {
-	copy(v.grid[v.marginTop:], v.grid[v.marginTop+1:v.marginBottom+1])
-	newLine := make([]Cell, v.width)
-	for i := range newLine {
-		newLine[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
-	}
-	v.grid[v.height-1] = newLine
 }
 func (v *VTerm) SetCursorPos(row, col int) {
 	if row < 0 {
