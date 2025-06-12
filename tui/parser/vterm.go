@@ -18,6 +18,7 @@ type VTerm struct {
 	tabStops                   map[int]bool
 	cursorVisible              bool
 	wrapNext                   bool
+	autoWrapMode               bool
 	TitleChanged               func(string)
 	WriteToPty                 func([]byte)
 	marginTop, marginBottom    int
@@ -34,6 +35,7 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		tabStops:      make(map[int]bool),
 		wrapNext:      false,
 		cursorVisible: true,
+		autoWrapMode:  true,
 		marginTop:     0,          // Default margin is top row
 		marginBottom:  height - 1, // Default margin is bottom row
 	}
@@ -54,15 +56,20 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 
 func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
-		return // No change
+		return
 	}
 
+	// Create a new grid of the correct size, filled with default cells
 	newGrid := make([][]Cell, height)
-	for i := range newGrid {
-		newGrid[i] = make([]Cell, width)
+	for y := range newGrid {
+		newGrid[y] = make([]Cell, width)
+		for x := range newGrid[y] {
+			// Initialize with the default background color, not the current one.
+			newGrid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
 	}
 
-	// Copy the old content to the new grid
+	// Copy the old content into the new grid
 	rowsToCopy := min(v.height, height)
 	colsToCopy := min(v.width, width)
 
@@ -74,13 +81,12 @@ func (v *VTerm) Resize(width, height int) {
 	v.width = width
 	v.height = height
 
+	// Clamp the bottom margin in case the screen has shrunk.
 	if v.marginBottom >= v.height {
 		v.marginBottom = v.height - 1
 	}
 
-	// Reset margins and clamp cursor position
-	v.marginTop = 0
-	v.marginBottom = v.height - 1
+	// Clamp cursor position to new bounds
 	v.SetCursorPos(v.cursorY, v.cursorX)
 }
 
@@ -137,7 +143,7 @@ func (v *VTerm) scrollUp() {
 	copy(v.grid[v.marginTop:], v.grid[v.marginTop+1:v.marginBottom+1])
 	newLine := make([]Cell, v.width)
 	for i := range newLine {
-		newLine[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		newLine[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 	}
 	v.grid[v.marginBottom] = newLine
 }
@@ -152,6 +158,26 @@ func (v *VTerm) scrollDown(n int) {
 			newLine[j] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
 		v.grid[v.marginTop] = newLine
+	}
+}
+
+// --- NEW METHODS ---
+
+// MoveCursorUp moves the cursor n positions up.
+func (v *VTerm) MoveCursorUp(n int) {
+	v.wrapNext = false
+	v.cursorY -= n
+	if v.cursorY < v.marginTop { // Respect top margin
+		v.cursorY = v.marginTop
+	}
+}
+
+// MoveCursorDown moves the cursor n positions down.
+func (v *VTerm) MoveCursorDown(n int) {
+	v.wrapNext = false
+	v.cursorY += n
+	if v.cursorY > v.marginBottom { // Respect bottom margin
+		v.cursorY = v.marginBottom
 	}
 }
 
@@ -189,6 +215,10 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 	}
 
 	switch command {
+	case 'A': // Cursor Up
+		v.MoveCursorUp(param(0, 1))
+	case 'B': // Cursor Down
+		v.MoveCursorDown(param(0, 1))
 	case 'H', 'f':
 		v.SetCursorPos(param(0, 1)-1, param(1, 1)-1)
 	case 'C': // Cursor Forward
@@ -237,22 +267,30 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 				v.SetAttribute(AttrReverse)
 			case p >= 30 && p <= 37:
 				v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 30)}
-			case p == 38:
-				if i+2 < len(params) && params[i+1] == 5 {
-					v.currentFG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
-					i += 2
-				}
 			case p >= 40 && p <= 47:
 				v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 40)}
-			case p == 48:
-				if i+2 < len(params) && params[i+1] == 5 {
-					v.currentBG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
-					i += 2
-				}
 			case p >= 90 && p <= 97:
 				v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 90 + 8)}
 			case p >= 100 && p <= 107:
 				v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 100 + 8)}
+
+			// --- NEW: Handle extended colors ---
+			case p == 38: // Set extended foreground color
+				if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
+					v.currentFG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
+					i += 2 // Consume the next 2 parameters
+				} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
+					v.currentFG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
+					i += 4 // Consume the next 4 parameters
+				}
+			case p == 48: // Set extended background color
+				if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
+					v.currentBG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
+					i += 2
+				} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
+					v.currentBG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
+					i += 4
+				}
 			}
 			i++
 		}
@@ -295,18 +333,30 @@ func (v *VTerm) Grid() [][]Cell                { return v.grid }
 func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool           { return v.cursorVisible }
 func (v *VTerm) SetCursorVisible(visible bool) { v.cursorVisible = visible }
+
 func (v *VTerm) placeChar(r rune) {
-	if v.cursorX >= v.width {
+	if v.wrapNext {
 		v.cursorX = 0
 		v.LineFeed()
+		v.wrapNext = false
 	}
-	if v.cursorY >= v.height {
-		v.cursorY = v.height - 1
+
+	if v.cursorY >= 0 && v.cursorY < v.height && v.cursorX >= 0 && v.cursorX < v.width {
+		v.grid[v.cursorY][v.cursorX] = Cell{
+			Rune: r,
+			FG:   v.currentFG,
+			BG:   v.currentBG,
+			Attr: v.currentAttr,
+		}
 	}
-	v.grid[v.cursorY][v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
-	v.cursorX++
+	if v.autoWrapMode && v.cursorX == v.width-1 {
+		v.wrapNext = true
+	} else if v.cursorX < v.width-1 {
+		v.cursorX++
+	}
 }
 func (v *VTerm) SetCursorPos(row, col int) {
+	v.wrapNext = false
 	if row < 0 {
 		row = 0
 	}
@@ -321,6 +371,7 @@ func (v *VTerm) SetCursorPos(row, col int) {
 	}
 	v.cursorY, v.cursorX = row, col
 }
+
 func (v *VTerm) SetCursorColumn(col int) {
 	if col < 0 {
 		col = 0
@@ -348,7 +399,7 @@ func (v *VTerm) ClearLine(mode int) {
 		start, end = 0, v.width-1
 	}
 	for x := start; x <= end && x < v.width; x++ {
-		v.grid[v.cursorY][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		v.grid[v.cursorY][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 	}
 }
 
@@ -360,13 +411,18 @@ func (v *VTerm) LineFeed() {
 	}
 }
 
-func (v *VTerm) CarriageReturn() { v.cursorX = 0 }
+func (v *VTerm) CarriageReturn() {
+	v.wrapNext = false
+	v.cursorX = 0
+}
 func (v *VTerm) Backspace() {
+	v.wrapNext = false
 	if v.cursorX > 0 {
 		v.cursorX--
 	}
 }
 func (v *VTerm) Tab() {
+	v.wrapNext = false
 	for x := v.cursorX + 1; x < v.width; x++ {
 		if v.tabStops[x] {
 			v.cursorX = x
@@ -386,6 +442,8 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 		switch mode {
 		case 1:
 			log.Println("Parser: Ignoring set cursor key application mode (1h)")
+		case 7:
+			v.autoWrapMode = true // DECAWM enable
 		case 25:
 			v.SetCursorVisible(true)
 		case 1049:
@@ -397,6 +455,8 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 		switch mode {
 		case 1:
 			log.Println("Parser: Ignoring reset cursor key application mode (1l)")
+		case 7:
+			v.autoWrapMode = false // DECAWM disable
 		case 25:
 			v.SetCursorVisible(false)
 		case 1049:
@@ -410,7 +470,7 @@ func (v *VTerm) ClearToEndOfScreen() {
 	v.ClearLine(0)
 	for y := v.cursorY + 1; y < v.height; y++ {
 		for x := 0; x < v.width; x++ {
-			v.grid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+			v.grid[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
 	}
 }

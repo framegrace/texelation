@@ -45,7 +45,7 @@ func setupPanes(screen *tui.Screen) {
 	appTop := tui.NewPTYApp("htop", "htop")
 	appClock := tui.NewClockApp()
 	appWelcome := tui.NewWelcomeApp()
-	appPTYShell := tui.NewPTYApp("shell", "/bin/bash")
+	appPTYShell := tui.NewPTYApp("neofetch", "neofetch")
 
 	// Create panes and add them to the screen
 	panes := []*tui.Pane{

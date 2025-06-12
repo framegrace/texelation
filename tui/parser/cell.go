@@ -15,13 +15,14 @@ const (
 	ColorModeDefault  ColorMode = iota // Default terminal color
 	ColorModeStandard                  // The basic 8 ANSI colors
 	ColorMode256                       // 256-color palette
-	// We are not implementing RGB (true-color) for now, but it would go here.
+	ColorModeRGB                       // 24-bit "true" color
 )
 
 // Color now represents a color in potentially different modes.
 type Color struct {
-	Mode  ColorMode
-	Value uint8 // Holds the color code for Standard (0-7) and 256-mode (0-255)
+	Mode    ColorMode
+	Value   uint8 // Holds the color code for Standard (0-7) and 256-mode (0-255)
+	R, G, B uint8 // Holds the values for RGB mode
 }
 
 // Cell represents a single character cell on the screen.

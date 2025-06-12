@@ -11,6 +11,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2" // Import tcell
+	"golang.org/x/term"           // NEW: Import the terminal package
 )
 
 // The PTYApp struct remains the same, but its Render method will produce tcell-compatible output.
@@ -83,11 +84,11 @@ func mapParserColorToTCell(c parser.Color) tcell.Color {
 	case parser.ColorModeDefault:
 		return tcell.ColorDefault
 	case parser.ColorModeStandard:
-		// CORRECTED: Cast uint8 to int
 		return tcell.PaletteColor(int(c.Value))
 	case parser.ColorMode256:
-		// CORRECTED: Cast uint8 to int
 		return tcell.PaletteColor(int(c.Value))
+	case parser.ColorModeRGB:
+		return tcell.NewRGBColor(int32(c.R), int32(c.G), int32(c.B))
 	default:
 		return tcell.ColorDefault
 	}
