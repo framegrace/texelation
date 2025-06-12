@@ -42,7 +42,7 @@ func setupPanes(screen *tui.Screen) {
 	cellH := h / 2
 
 	// Create the applications that will run in the panes
-	appTop := tui.NewPTYApp("htop", "htop")
+	appTop := tui.NewPTYApp("btop", "btop")
 	appClock := tui.NewClockApp()
 	appWelcome := tui.NewWelcomeApp()
 	appPTYShell := tui.NewPTYApp("shell", "/bin/bash")
