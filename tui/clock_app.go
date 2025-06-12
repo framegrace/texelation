@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nsf/termbox-go"
+	"github.com/gdamore/tcell/v2"
 )
 
 // ClockApp is a simple internal widget that displays the current time.
@@ -66,16 +66,17 @@ func (a *ClockApp) Render() [][]Cell {
 		return [][]Cell{}
 	}
 
-	// Create a buffer of the correct size
 	buffer := make([][]Cell, a.height)
 	for i := range buffer {
 		buffer[i] = make([]Cell, a.width)
 		for j := range buffer[i] {
-			buffer[i][j] = Cell{Ch: ' '}
+			buffer[i][j] = Cell{Ch: ' ', Style: tcell.StyleDefault}
 		}
 	}
 
-	// Center the text
+	// CORRECTED: Use tcell.PaletteColor(6) for Cyan.
+	style := tcell.StyleDefault.Foreground(tcell.PaletteColor(6))
+
 	str := fmt.Sprintf("Time: %s", a.currentTime)
 	y := a.height / 2
 	x := (a.width - len(str)) / 2
@@ -83,7 +84,7 @@ func (a *ClockApp) Render() [][]Cell {
 	if y < a.height && x >= 0 {
 		for i, ch := range str {
 			if x+i < a.width {
-				buffer[y][x+i] = Cell{Ch: ch, Fg: termbox.ColorCyan}
+				buffer[y][x+i] = Cell{Ch: ch, Style: style}
 			}
 		}
 	}

@@ -4,32 +4,34 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nsf/termbox-go"
+	"github.com/gdamore/tcell/v2"
 )
 
-// Screen manages the entire terminal display, including all panes and the main event loop.
+// Screen manages the entire terminal display using tcell as the backend.
 type Screen struct {
-	width, height int
-	curr, prev    [][]Cell
-	panes         []*Pane
-	quit          chan struct{}
+	tcellScreen tcell.Screen
+	panes       []*Pane
+	quit        chan struct{}
 }
 
-// NewScreen initializes the terminal and creates a new Screen object.
+// NewScreen initializes the terminal with tcell.
 func NewScreen() (*Screen, error) {
-	if err := termbox.Init(); err != nil {
+	tcellScreen, err := tcell.NewScreen()
+	if err != nil {
 		return nil, err
 	}
-	termbox.HideCursor()
+	if err := tcellScreen.Init(); err != nil {
+		return nil, err
+	}
 
-	w, h := termbox.Size()
+	defStyle := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
+	tcellScreen.SetStyle(defStyle)
+	tcellScreen.HideCursor()
+
 	return &Screen{
-		width:  w,
-		height: h,
-		curr:   makeBuffer(w, h),
-		prev:   makeBuffer(w, h),
-		panes:  make([]*Pane, 0),
-		quit:   make(chan struct{}),
+		tcellScreen: tcellScreen,
+		panes:       make([]*Pane, 0),
+		quit:        make(chan struct{}),
 	}, nil
 }
 
@@ -41,10 +43,10 @@ func (s *Screen) AddPane(p *Pane) {
 
 // Run starts the main event and rendering loop.
 func (s *Screen) Run() error {
-	eventChan := make(chan termbox.Event)
+	eventChan := make(chan tcell.Event)
 	go func() {
 		for {
-			eventChan <- termbox.PollEvent()
+			eventChan <- s.tcellScreen.PollEvent()
 		}
 	}()
 
@@ -52,19 +54,20 @@ func (s *Screen) Run() error {
 	defer ticker.Stop()
 
 	for {
+		s.draw() // Draw the initial state
+
 		select {
 		case ev := <-eventChan:
-			switch ev.Type {
-			case termbox.EventKey:
-				if ev.Key == termbox.KeyEsc || ev.Ch == 'q' {
+			switch ev := ev.(type) {
+			case *tcell.EventKey:
+				if ev.Key() == tcell.KeyEscape || ev.Rune() == 'q' {
 					return nil
 				}
-			case termbox.EventResize:
-				s.handleResize(ev.Width, ev.Height)
-			case termbox.EventError:
-				return ev.Err
+			case *tcell.EventResize:
+				s.handleResize()
 			}
 		case <-ticker.C:
+			// Continuous redraw for animations
 			s.draw()
 		case <-s.quit:
 			return nil
@@ -72,97 +75,74 @@ func (s *Screen) Run() error {
 	}
 }
 
-// Close shuts down termbox and stops all hosted apps.
+// Close shuts down tcell and stops all hosted apps.
 func (s *Screen) Close() {
 	for _, p := range s.panes {
 		p.app.Stop()
 	}
-	termbox.Close()
+	s.tcellScreen.Fini()
 }
 
-// draw clears the buffer, composites all panes, draws borders, and flushes to the terminal.
+// draw clears the screen, composites all panes, and shows the result.
 func (s *Screen) draw() {
-	clearBuffer(s.curr)
+	s.tcellScreen.Clear()
 	s.compositePanes()
 	s.drawBorders()
-	s.drawDiffs()
-	termbox.Flush()
+	s.tcellScreen.Show() // Replaces termbox.Flush()
 }
 
-// compositePanes gets the rendered buffer from each pane's app and blits it to the main buffer.
+// compositePanes gets the rendered buffer from each pane's app and draws it.
 func (s *Screen) compositePanes() {
 	for _, p := range s.panes {
-		// Get the app's own rendered buffer
 		appBuffer := p.app.Render()
-		// Blit (copy) the app's buffer to the main screen buffer at the pane's offset.
-		// We add 1 to the coordinates to account for the top-left border.
 		s.blit(p.X0+1, p.Y0+1, appBuffer)
 	}
 }
 
-// blit copies a source buffer onto the screen's main buffer at a given coordinate.
+// blit copies a source buffer onto the tcell screen.
 func (s *Screen) blit(x, y int, source [][]Cell) {
 	for r, row := range source {
 		for c, cell := range row {
-			absY, absX := y+r, x+c
-			if absY >= 0 && absY < s.height && absX >= 0 && absX < s.width {
-				s.curr[absY][absX] = cell
-			}
+			s.tcellScreen.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
 		}
 	}
 }
 
 // drawBorders draws the borders and titles for all panes.
 func (s *Screen) drawBorders() {
+	borderStyle := tcell.StyleDefault.Foreground(tcell.ColorWhite)
+	titleStyle := borderStyle.Bold(true)
+	w, h := s.tcellScreen.Size()
+
 	for _, p := range s.panes {
-		// Draw horizontal lines
-		for x := p.X0; x < p.X1 && x < s.width; x++ {
-			if p.Y0 < s.height {
-				s.curr[p.Y0][x] = Cell{Ch: '─', Fg: termbox.ColorWhite}
+		for x := p.X0; x < p.X1 && x < w; x++ {
+			if p.Y0 >= 0 && p.Y0 < h {
+				s.tcellScreen.SetContent(x, p.Y0, tcell.RuneHLine, nil, borderStyle)
 			}
 		}
-		// Draw vertical lines
-		for y := p.Y0; y < p.Y1 && y < s.height; y++ {
-			if p.X0 < s.width {
-				s.curr[y][p.X0] = Cell{Ch: '│', Fg: termbox.ColorWhite}
+		for y := p.Y0; y < p.Y1 && y < h; y++ {
+			if p.X0 >= 0 && p.X0 < w {
+				s.tcellScreen.SetContent(p.X0, y, tcell.RuneVLine, nil, borderStyle)
 			}
 		}
-		// Draw corner
-		if p.Y0 < s.height && p.X0 < s.width {
-			s.curr[p.Y0][p.X0] = Cell{Ch: '┌', Fg: termbox.ColorWhite}
+		if p.X0 >= 0 && p.X0 < w && p.Y0 >= 0 && p.Y0 < h {
+			s.tcellScreen.SetContent(p.X0, p.Y0, tcell.RuneULCorner, nil, borderStyle)
 		}
-		// Draw title
+
 		title := fmt.Sprintf(" %s ", p.app.GetTitle())
-		tx, ty := p.X0+1, p.Y0
 		for i, ch := range title {
-			if tx+i < p.X1 && tx+i < s.width {
-				s.curr[ty][tx+i] = Cell{Ch: ch, Fg: termbox.ColorWhite | termbox.AttrBold}
+			if p.X0+1+i < p.X1 {
+				s.tcellScreen.SetContent(p.X0+1+i, p.Y0, ch, nil, titleStyle)
 			}
 		}
 	}
 }
 
-// drawDiffs compares the current and previous buffers and updates only changed cells.
-func (s *Screen) drawDiffs() {
-	for y := 0; y < s.height; y++ {
-		for x := 0; x < s.width; x++ {
-			if s.curr[y][x] != s.prev[y][x] {
-				cell := s.curr[y][x]
-				termbox.SetCell(x, y, cell.Ch, cell.Fg, cell.Bg)
-				s.prev[y][x] = cell
-			}
-		}
-	}
-}
+// handleResize is called on a resize event.
+func (s *Screen) handleResize() {
+	w, h := s.tcellScreen.Size()
+	s.tcellScreen.Sync()
 
-// handleResize recalculates layout and resizes panes on terminal resize.
-func (s *Screen) handleResize(w, h int) {
-	s.width, s.height = w, h
-	s.curr = makeBuffer(w, h)
-	s.prev = makeBuffer(w, h)
-	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
-
-	// Recalculate layout (simple 2x2 grid for this example)
 	cellW := w / 2
 	cellH := h / 2
 	dims := [][4]int{
@@ -176,25 +156,6 @@ func (s *Screen) handleResize(w, h int) {
 		if i < len(dims) {
 			d := dims[i]
 			p.SetDimensions(d[0], d[1], d[2], d[3])
-		}
-	}
-	s.draw()
-}
-
-// makeBuffer is a helper to create a 2D Cell slice.
-func makeBuffer(w, h int) [][]Cell {
-	buf := make([][]Cell, h)
-	for i := range buf {
-		buf[i] = make([]Cell, w)
-	}
-	return buf
-}
-
-// clearBuffer resets a buffer to default empty cells.
-func clearBuffer(buf [][]Cell) {
-	for y := range buf {
-		for x := range buf[y] {
-			buf[y][x] = Cell{Ch: ' ', Fg: termbox.ColorDefault, Bg: termbox.ColorDefault}
 		}
 	}
 }

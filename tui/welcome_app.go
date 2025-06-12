@@ -3,7 +3,7 @@ package tui
 import (
 	"sync"
 
-	"github.com/nsf/termbox-go"
+	"github.com/gdamore/tcell/v2" // Import tcell
 )
 
 // WelcomeApp is a simple internal widget that displays a static welcome message.
@@ -33,6 +33,7 @@ func (a *WelcomeApp) Resize(cols, rows int) {
 }
 
 // Render draws the welcome message.
+// Render draws the welcome message.
 func (a *WelcomeApp) Render() [][]Cell {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -41,14 +42,16 @@ func (a *WelcomeApp) Render() [][]Cell {
 		return [][]Cell{}
 	}
 
-	// Create a buffer of the correct size
 	buffer := make([][]Cell, a.height)
 	for i := range buffer {
 		buffer[i] = make([]Cell, a.width)
 		for j := range buffer[i] {
-			buffer[i][j] = Cell{Ch: ' '}
+			buffer[i][j] = Cell{Ch: ' ', Style: tcell.StyleDefault}
 		}
 	}
+
+	// CORRECTED: Create a tcell.Style instead of using Fg/Bg
+	style := tcell.StyleDefault.Foreground(tcell.ColorGreen)
 
 	messages := []string{
 		"Welcome!",
@@ -62,7 +65,8 @@ func (a *WelcomeApp) Render() [][]Cell {
 		if y >= 0 && y < a.height && x >= 0 {
 			for j, ch := range msg {
 				if x+j < a.width {
-					buffer[y][x+j] = Cell{Ch: ch, Fg: termbox.ColorGreen}
+					// CORRECTED: Use the new Cell structure
+					buffer[y][x+j] = Cell{Ch: ch, Style: style}
 				}
 			}
 		}

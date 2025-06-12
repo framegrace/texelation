@@ -9,60 +9,21 @@ import (
 	"textmode-env/tui/parser"
 
 	"github.com/creack/pty"
-	"github.com/nsf/termbox-go"
+	"github.com/gdamore/tcell/v2" // Import tcell
 )
 
-// PTYApp uses our own custom parser.
+// The PTYApp struct remains the same, but its Render method will produce tcell-compatible output.
 type PTYApp struct {
 	title   string
 	command string
+	width   int
+	height  int
 	cmd     *exec.Cmd
 	pty     *os.File
 	vterm   *parser.VTerm
 	parser  *parser.Parser
 	mu      sync.Mutex
 	stop    chan struct{}
-}
-
-// mapParserColorToTermbox converts our rich Color type to a simple termbox attribute.
-func mapParserColorToTermbox(c parser.Color) termbox.Attribute {
-	switch c.Mode {
-	case parser.ColorModeDefault:
-		return termbox.ColorDefault
-	case parser.ColorModeStandard:
-		// Standard colors 0-7 are Black, Red, ... White
-		// Standard colors 8-15 are the bright versions
-		if c.Value < 8 {
-			return termbox.Attribute(c.Value + 1)
-		}
-		// Bright colors (8-15) are rendered as bold in termbox
-		return termbox.Attribute(c.Value-8+1) | termbox.AttrBold
-	case parser.ColorMode256:
-		// This is a simple approximation of 256 colors to the basic 16.
-		// A more complex mapping could be implemented here for better results.
-		val := c.Value
-		switch {
-		case val >= 232: // Grayscale
-			return termbox.ColorWhite // Approximate grayscale to white/black
-		case val >= 16: // 6x6x6 color cube
-			// Approximate to the nearest of the 6 standard colors
-			// This is a very rough approximation
-			r := (val - 16) / 36
-			g := ((val - 16) % 36) / 6
-			b := (val - 16) % 6
-			if r > 2 || g > 2 || b > 2 {
-				return termbox.ColorWhite | termbox.AttrBold
-			}
-			return termbox.ColorDefault
-		default: // Basic 16 colors
-			if val < 8 {
-				return termbox.Attribute(val + 1)
-			}
-			return termbox.Attribute(val-8+1) | termbox.AttrBold
-		}
-	default:
-		return termbox.ColorDefault
-	}
 }
 
 // Render translates our VTerm's state into the main application's buffer.
@@ -89,41 +50,45 @@ func (a *PTYApp) Render() [][]Cell {
 		buffer[y] = make([]Cell, cols)
 		for x := 0; x < cols; x++ {
 			parserCell := vtermGrid[y][x]
+			// The new apply function returns a tcell.Style
 			buffer[y][x] = applyParserStyle(parserCell)
 
 			if cursorVisible && x == cursorX && y == cursorY {
-				fg, bg := buffer[y][x].Fg, buffer[y][x].Bg
-				buffer[y][x].Fg = bg
-				buffer[y][x].Bg = fg
+				// To show the cursor, we just get the style and reverse it.
+				buffer[y][x].Style = buffer[y][x].Style.Reverse(true)
 			}
 		}
 	}
 	return buffer
 }
 
-// applyParserStyle translates our new parser.Cell into the main tui.Cell for rendering.
 func applyParserStyle(pCell parser.Cell) Cell {
-	// Translate colors, including approximating 256-color codes
-	fg := mapParserColorToTermbox(pCell.FG)
-	bg := mapParserColorToTermbox(pCell.BG)
-
-	// Translate attributes
-	if pCell.Attr&parser.AttrReverse != 0 {
-		fg, bg = bg, fg
-	}
-	// Note: Bold is handled by the color mapping for bright colors now.
-	// We can still add the explicit bold attribute for non-colored bold text.
-	if pCell.Attr&parser.AttrBold != 0 {
-		fg |= termbox.AttrBold
-	}
-	if pCell.Attr&parser.AttrUnderline != 0 {
-		fg |= termbox.AttrUnderline
-	}
-
+	style := tcell.StyleDefault
+	fg := mapParserColorToTCell(pCell.FG)
+	bg := mapParserColorToTCell(pCell.BG)
+	style = style.Foreground(fg).Background(bg)
+	style = style.Bold(pCell.Attr&parser.AttrBold != 0)
+	style = style.Underline(pCell.Attr&parser.AttrUnderline != 0)
+	style = style.Reverse(pCell.Attr&parser.AttrReverse != 0)
 	return Cell{
-		Ch: pCell.Rune,
-		Fg: fg,
-		Bg: bg,
+		Ch:    pCell.Rune,
+		Style: style,
+	}
+}
+
+// mapParserColorToTCell translates our custom Color type to a tcell.Color.
+func mapParserColorToTCell(c parser.Color) tcell.Color {
+	switch c.Mode {
+	case parser.ColorModeDefault:
+		return tcell.ColorDefault
+	case parser.ColorModeStandard:
+		// CORRECTED: Cast uint8 to int
+		return tcell.PaletteColor(int(c.Value))
+	case parser.ColorMode256:
+		// CORRECTED: Cast uint8 to int
+		return tcell.PaletteColor(int(c.Value))
+	default:
+		return tcell.ColorDefault
 	}
 }
 
@@ -133,6 +98,8 @@ func NewPTYApp(title, command string) *PTYApp {
 	return &PTYApp{
 		title:   title,
 		command: command,
+		width:   80, // Sensible defaults
+		height:  24,
 		stop:    make(chan struct{}),
 	}
 }

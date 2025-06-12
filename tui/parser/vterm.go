@@ -18,7 +18,8 @@ type VTerm struct {
 	tabStops                   map[int]bool
 	cursorVisible              bool
 	TitleChanged               func(string)
-	WriteToPty                 func([]byte) // NEW: Callback to write back to the PTY
+	WriteToPty                 func([]byte)
+	marginTop, marginBottom    int
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -31,6 +32,8 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		currentBG:     DefaultBG,
 		tabStops:      make(map[int]bool),
 		cursorVisible: true,
+		marginTop:     0,          // Default margin is top row
+		marginBottom:  height - 1, // Default margin is bottom row
 	}
 	for _, opt := range opts {
 		opt(v)
@@ -47,14 +50,83 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	return v
 }
 
-// --- NEWLY ADDED METHOD ---
-// SetAttribute enables a text attribute (bold, underline, etc.).
+// SetMargins defines the active scrolling region.
+func (v *VTerm) SetMargins(top, bottom int) {
+	// ANSI coordinates are 1-based.
+	if top == 0 {
+		top = 1
+	}
+	if bottom == 0 {
+		bottom = v.height
+	}
+
+	// Clamp to screen size
+	if top < 1 {
+		top = 1
+	}
+	if bottom > v.height {
+		bottom = v.height
+	}
+	if top >= bottom {
+		return
+	} // Invalid region
+
+	v.marginTop = top - 1
+	v.marginBottom = bottom - 1
+	v.SetCursorPos(0, 0) // Per spec, move cursor to home on change
+}
+
+// EraseCharacters overwrites N characters from the cursor with space.
+func (v *VTerm) EraseCharacters(n int) {
+	for i := 0; i < n; i++ {
+		if v.cursorX+i < v.width {
+			v.grid[v.cursorY][v.cursorX+i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		}
+	}
+}
+
+// DeleteCharacters deletes N characters, shifting the rest of the line left.
+func (v *VTerm) DeleteCharacters(n int) {
+	line := v.grid[v.cursorY]
+	end := v.width
+	start := v.cursorX
+
+	copy(line[start:], line[start+n:])
+
+	// Clear the newly empty space at the end of the line
+	for i := end - n; i < end; i++ {
+		line[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+	}
+}
+
+// scrollDown scrolls the content within the margins down by N lines.
+func (v *VTerm) scrollDown(n int) {
+	// Shift lines down within the scrolling region
+	for i := 0; i < n; i++ {
+		copy(v.grid[v.marginTop+1:v.marginBottom+1], v.grid[v.marginTop:v.marginBottom])
+		// Clear the new top line of the region
+		newLine := make([]Cell, v.width)
+		for j := range newLine {
+			newLine[j] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		}
+		v.grid[v.marginTop] = newLine
+	}
+}
+
+// SetCursorRow moves the cursor to a specific row without changing the column.
+func (v *VTerm) SetCursorRow(row int) {
+	if row < 0 {
+		row = 0
+	}
+	if row >= v.height {
+		row = v.height - 1
+	}
+	v.cursorY = row
+}
+
 func (v *VTerm) SetAttribute(a Attribute) {
 	v.currentAttr |= a
 }
-
-// --- The rest of the file is unchanged ---
-
 func (v *VTerm) SaveCursor() {
 	v.savedCursorX, v.savedCursorY = v.cursorX, v.cursorY
 }
@@ -75,7 +147,6 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 	}
 
 	switch command {
-	// ... other cases remain the same ...
 	case 'H', 'f':
 		v.SetCursorPos(param(0, 1)-1, param(1, 1)-1)
 	case 'C': // Cursor Forward
@@ -96,8 +167,16 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 				v.WriteToPty([]byte(response))
 			}
 		}
-
-	// ... other cases remain the same ...
+	case 'd': // Vertical Line Position Absolute (VPA)
+		v.SetCursorRow(param(0, 1) - 1)
+	case 'r': // Set Top and Bottom Margins (DECSTBM)
+		v.SetMargins(param(0, 1), param(1, v.height))
+	case 'P': // Delete Character (DCH)
+		v.DeleteCharacters(param(0, 1))
+	case 'T': // Scroll Down (SD)
+		v.scrollDown(param(0, 1))
+	case 'X': // Erase Character (ECH)
+		v.EraseCharacters(param(0, 1))
 	case 'm':
 		i := 0
 		if len(params) == 0 {
@@ -161,10 +240,14 @@ func (v *VTerm) ClearScreenMode(mode int) {
 		v.SetCursorPos(0, 0)
 	}
 }
+
+// ResetAttributes now also resets the margins.
 func (v *VTerm) ResetAttributes() {
 	v.currentFG = DefaultFG
 	v.currentBG = DefaultBG
 	v.currentAttr = 0
+	v.marginTop = 0
+	v.marginBottom = v.height - 1
 }
 func (v *VTerm) Grid() [][]Cell                { return v.grid }
 func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
@@ -182,7 +265,7 @@ func (v *VTerm) placeChar(r rune) {
 	v.cursorX++
 }
 func (v *VTerm) scrollUp() {
-	copy(v.grid[0:], v.grid[1:])
+	copy(v.grid[v.marginTop:], v.grid[v.marginTop+1:v.marginBottom+1])
 	newLine := make([]Cell, v.width)
 	for i := range newLine {
 		newLine[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
@@ -234,13 +317,15 @@ func (v *VTerm) ClearLine(mode int) {
 		v.grid[v.cursorY][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
 	}
 }
+
 func (v *VTerm) LineFeed() {
-	v.cursorY++
-	if v.cursorY >= v.height {
-		v.cursorY = v.height - 1
+	if v.cursorY == v.marginBottom {
 		v.scrollUp()
+	} else if v.cursorY < v.height-1 {
+		v.cursorY++
 	}
 }
+
 func (v *VTerm) CarriageReturn() { v.cursorX = 0 }
 func (v *VTerm) Backspace() {
 	if v.cursorX > 0 {
