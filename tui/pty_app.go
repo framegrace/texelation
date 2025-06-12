@@ -104,16 +104,12 @@ func NewPTYApp(title, command string) *PTYApp {
 	}
 }
 
+// Run starts the command in a PTY with the correct dimensions.
 func (a *PTYApp) Run() error {
-	cols, rows := 80, 24
 	a.mu.Lock()
-	if a.vterm != nil {
-		grid := a.vterm.Grid()
-		rows = len(grid)
-		if rows > 0 {
-			cols = len(grid[0])
-		}
-	}
+	// Read the correct, stored dimensions.
+	cols := a.width
+	rows := a.height
 	a.mu.Unlock()
 
 	cmd := exec.Command(a.command)
@@ -130,6 +126,10 @@ func (a *PTYApp) Run() error {
 		log.Printf("Failed to start pty for command '%s': %v", a.command, err)
 		return err
 	}
+
+	// After starting, immediately send a resize signal with the correct dimensions
+	// to handle any race conditions.
+	a.Resize(cols, rows)
 
 	go func() {
 		buf := make([]byte, 4096)
@@ -173,23 +173,20 @@ func (a *PTYApp) Resize(cols, rows int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// --- NEW: Define the callback function ---
+	// Store the new dimensions on the app itself.
+	a.width = cols
+	a.height = rows
+
 	titleChangeHandler := func(newTitle string) {
-		// This function will be called by the VTerm when a title change occurs.
-		// We need to lock the mutex since this can be called from the parser's goroutine.
-		//a.mu.Lock()
-		//defer a.mu.Unlock()
 		a.title = newTitle
 	}
 
-	// NEW: Define the callback that writes back to the PTY
 	ptyWriter := func(b []byte) {
 		if a.pty != nil {
 			a.pty.Write(b)
 		}
 	}
 
-	// Create our virtual terminal, now with both handlers
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(titleChangeHandler),
 		parser.WithPtyWriter(ptyWriter),
