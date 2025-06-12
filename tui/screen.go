@@ -2,6 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -43,6 +46,9 @@ func (s *Screen) AddPane(p *Pane) {
 
 // Run starts the main event and rendering loop.
 func (s *Screen) Run() error {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGWINCH)
+
 	eventChan := make(chan tcell.Event)
 	go func() {
 		for {
@@ -50,18 +56,27 @@ func (s *Screen) Run() error {
 		}
 	}()
 
-	ticker := time.NewTicker(16 * time.Millisecond) // ~60 FPS
+	ticker := time.NewTicker(32 * time.Millisecond) // ~60 FPS
 	defer ticker.Stop()
 
 	for {
 		s.draw() // Draw the initial state
 
 		select {
+		case <-sigChan:
+			s.tcellScreen.Sync()
 		case ev := <-eventChan:
 			switch ev := ev.(type) {
 			case *tcell.EventKey:
 				if ev.Key() == tcell.KeyEscape || ev.Rune() == 'q' {
+					// Global quit
+					// We can check if 'q' was meant for htop first later
 					return nil
+				}
+				// --- NEW: Forward other key presses to the active pane ---
+				if len(s.panes) > 0 {
+					// For now, let's assume the first pane is always active
+					s.panes[0].app.HandleKey(ev)
 				}
 			case *tcell.EventResize:
 				s.handleResize()

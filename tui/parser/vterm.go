@@ -50,6 +50,34 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	return v
 }
 
+func (v *VTerm) Resize(width, height int) {
+	if width == v.width && height == v.height {
+		return // No change
+	}
+
+	newGrid := make([][]Cell, height)
+	for i := range newGrid {
+		newGrid[i] = make([]Cell, width)
+	}
+
+	// Copy the old content to the new grid
+	rowsToCopy := min(v.height, height)
+	colsToCopy := min(v.width, width)
+
+	for y := 0; y < rowsToCopy; y++ {
+		copy(newGrid[y][:colsToCopy], v.grid[y][:colsToCopy])
+	}
+
+	v.grid = newGrid
+	v.width = width
+	v.height = height
+
+	// Reset margins and clamp cursor position
+	v.marginTop = 0
+	v.marginBottom = v.height - 1
+	v.SetCursorPos(v.cursorY, v.cursorX)
+}
+
 // SetMargins defines the active scrolling region.
 func (v *VTerm) SetMargins(top, bottom int) {
 	// ANSI coordinates are 1-based.

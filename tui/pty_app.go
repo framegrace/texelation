@@ -92,7 +92,21 @@ func mapParserColorToTCell(c parser.Color) tcell.Color {
 	}
 }
 
-// --- Rest of file is unchanged ---
+// HandleKey processes a key event and writes it to the PTY.
+func (a *PTYApp) HandleKey(ev *tcell.EventKey) {
+	if a.pty == nil {
+		return
+	}
+	// A key's rune is the character to write.
+	// For special keys like Ctrl-L, the rune is the control character itself.
+	a.pty.Write([]byte(string(ev.Rune())))
+
+	// This could be expanded to handle arrow keys, etc.
+	// switch ev.Key() {
+	// case tcell.KeyUp:
+	// 	a.pty.Write([]byte("\x1b[A"))
+	// }
+}
 
 func NewPTYApp(title, command string) *PTYApp {
 	return &PTYApp{
@@ -104,12 +118,25 @@ func NewPTYApp(title, command string) *PTYApp {
 	}
 }
 
-// Run starts the command in a PTY with the correct dimensions.
 func (a *PTYApp) Run() error {
 	a.mu.Lock()
-	// Read the correct, stored dimensions.
 	cols := a.width
 	rows := a.height
+
+	// --- ONE-TIME INITIALIZATION ---
+	titleChangeHandler := func(newTitle string) { a.title = newTitle }
+	ptyWriter := func(b []byte) {
+		if a.pty != nil {
+			a.pty.Write(b)
+		}
+	}
+	a.vterm = parser.NewVTerm(cols, rows,
+		parser.WithTitleChangeHandler(titleChangeHandler),
+		parser.WithPtyWriter(ptyWriter),
+	)
+	a.parser = parser.NewParser(a.vterm)
+	// --- END INITIALIZATION ---
+
 	a.mu.Unlock()
 
 	cmd := exec.Command(a.command)
@@ -126,10 +153,6 @@ func (a *PTYApp) Run() error {
 		log.Printf("Failed to start pty for command '%s': %v", a.command, err)
 		return err
 	}
-
-	// After starting, immediately send a resize signal with the correct dimensions
-	// to handle any race conditions.
-	a.Resize(cols, rows)
 
 	go func() {
 		buf := make([]byte, 4096)
@@ -165,7 +188,6 @@ func (a *PTYApp) Stop() {
 	}
 }
 
-// Resize creates our VTerm and Parser and informs the PTY of the size change.
 func (a *PTYApp) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
@@ -173,27 +195,13 @@ func (a *PTYApp) Resize(cols, rows int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Store the new dimensions on the app itself.
 	a.width = cols
 	a.height = rows
 
-	titleChangeHandler := func(newTitle string) {
-		a.title = newTitle
+	if a.vterm != nil {
+		a.vterm.Resize(cols, rows)
 	}
 
-	ptyWriter := func(b []byte) {
-		if a.pty != nil {
-			a.pty.Write(b)
-		}
-	}
-
-	a.vterm = parser.NewVTerm(cols, rows,
-		parser.WithTitleChangeHandler(titleChangeHandler),
-		parser.WithPtyWriter(ptyWriter),
-	)
-	a.parser = parser.NewParser(a.vterm)
-
-	// Inform the PTY of the size change
 	if a.pty != nil {
 		pty.Setsize(a.pty, &pty.Winsize{
 			Rows: uint16(rows),

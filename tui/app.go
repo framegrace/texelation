@@ -1,5 +1,7 @@
 package tui
 
+import "github.com/gdamore/tcell/v2"
+
 // App defines the interface for any application that can be rendered within a Pane.
 // It abstracts the content source, whether it's an external command (PTY)
 // or an internal widget (like a clock).
@@ -14,4 +16,5 @@ type App interface {
 	Render() [][]Cell
 	// GetTitle returns the title of the application.
 	GetTitle() string
+	HandleKey(ev *tcell.EventKey)
 }

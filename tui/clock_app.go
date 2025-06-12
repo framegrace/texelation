@@ -23,6 +23,9 @@ func NewClockApp() *ClockApp {
 	}
 }
 
+// HandleKey does nothing for the clock app.
+func (a *ClockApp) HandleKey(ev *tcell.EventKey) {}
+
 // Run starts a ticker to update the time every second.
 func (a *ClockApp) Run() error {
 	ticker := time.NewTicker(1 * time.Second)

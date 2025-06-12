@@ -12,6 +12,9 @@ type WelcomeApp struct {
 	mu            sync.RWMutex
 }
 
+// HandleKey does nothing for the welcome app.
+func (a *WelcomeApp) HandleKey(ev *tcell.EventKey) {}
+
 // NewWelcomeApp creates a new WelcomeApp.
 func NewWelcomeApp() *WelcomeApp {
 	return &WelcomeApp{}
