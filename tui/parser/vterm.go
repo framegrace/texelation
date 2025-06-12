@@ -19,6 +19,7 @@ type VTerm struct {
 	cursorVisible              bool
 	wrapNext                   bool
 	autoWrapMode               bool
+	insertMode                 bool
 	TitleChanged               func(string)
 	WriteToPty                 func([]byte)
 	marginTop, marginBottom    int
@@ -36,6 +37,7 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		wrapNext:      false,
 		cursorVisible: true,
 		autoWrapMode:  true,
+		insertMode:    false,
 		marginTop:     0,          // Default margin is top row
 		marginBottom:  height - 1, // Default margin is bottom row
 	}
@@ -249,6 +251,14 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 		v.scrollDown(param(0, 1))
 	case 'X': // Erase Character (ECH)
 		v.EraseCharacters(param(0, 1))
+	case 'h': // Set Mode
+		if param(0, 0) == 4 {
+			v.insertMode = true
+		} // IRM Insert Mode
+	case 'l': // Reset Mode
+		if param(0, 0) == 4 {
+			v.insertMode = false
+		} // IRM Replace Mode
 	case 'm':
 		i := 0
 		if len(params) == 0 {
@@ -265,8 +275,12 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 				v.SetAttribute(AttrUnderline)
 			case p == 7:
 				v.SetAttribute(AttrReverse)
+			case p == 22:
+				v.currentAttr &^= AttrBold
 			case p >= 30 && p <= 37:
 				v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 30)}
+			case p == 39:
+				v.currentFG = DefaultFG
 			case p >= 40 && p <= 47:
 				v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 40)}
 			case p >= 90 && p <= 97:
@@ -291,6 +305,8 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 					v.currentBG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
 					i += 4
 				}
+			case p == 49:
+				v.currentBG = DefaultBG
 			}
 			i++
 		}
@@ -339,6 +355,14 @@ func (v *VTerm) placeChar(r rune) {
 		v.cursorX = 0
 		v.LineFeed()
 		v.wrapNext = false
+	}
+
+	if v.insertMode {
+		// In insert mode, shift the rest of the line to the right
+		line := v.grid[v.cursorY]
+		if v.cursorX < v.width-1 {
+			copy(line[v.cursorX+1:], line[v.cursorX:])
+		}
 	}
 
 	if v.cursorY >= 0 && v.cursorY < v.height && v.cursorX >= 0 && v.cursorX < v.width {

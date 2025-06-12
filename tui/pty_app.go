@@ -4,14 +4,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"strconv"
+	//	"strconv"
 	"sync"
 	"textmode-env/tui/parser"
-	"time"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2" // Import tcell
-	"golang.org/x/term"           // NEW: Import the terminal package
 )
 
 // The PTYApp struct remains the same, but its Render method will produce tcell-compatible output.
@@ -120,28 +118,56 @@ func NewPTYApp(title, command string) *PTYApp {
 	}
 }
 
-// Run now only sets up the reading goroutine. The PTY is started by Resize.
 func (a *PTYApp) Run() error {
-	go func() {
-		// This goroutine waits until the PTY is ready
-		var ptyFile *os.File
-		for {
-			a.mu.Lock()
-			ptyFile = a.pty
-			a.mu.Unlock()
-			if ptyFile != nil {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+	a.mu.Lock()
+	cols := a.width
+	rows := a.height
+	a.mu.Unlock()
 
+	cmd := exec.Command(a.command)
+	cmd.Env = append(os.Environ(),
+		"TERM=xterm-256color",
+		//		"COLUMNS="+strconv.Itoa(cols),
+		//		"LINES="+strconv.Itoa(rows),
+	)
+
+	// Use pty.StartWithSize for a simpler, more reliable startup.
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
+	if err != nil {
+		log.Printf("Failed to start pty with size: %v", err)
+		return err
+	}
+	a.pty = ptmx
+	a.cmd = cmd
+
+	// Initialize our virtual terminal and parser
+	a.mu.Lock()
+	titleChangeHandler := func(newTitle string) { a.title = newTitle }
+	ptyWriter := func(b []byte) {
+		if a.pty != nil {
+			a.pty.Write(b)
+		}
+	}
+	a.vterm = parser.NewVTerm(cols, rows,
+		parser.WithTitleChangeHandler(titleChangeHandler),
+		parser.WithPtyWriter(ptyWriter),
+	)
+	a.parser = parser.NewParser(a.vterm)
+	a.mu.Unlock()
+
+	// Start the reading goroutine
+	go func() {
+		defer ptmx.Close()
 		buf := make([]byte, 4096)
 		for {
 			select {
 			case <-a.stop:
 				return
 			default:
-				n, err := ptyFile.Read(buf)
+				n, err := ptmx.Read(buf)
 				if n > 0 {
 					a.mu.Lock()
 					if a.parser != nil {
@@ -155,20 +181,11 @@ func (a *PTYApp) Run() error {
 			}
 		}
 	}()
-	return nil
+
+	return cmd.Wait()
 }
 
-func (a *PTYApp) Stop() {
-	close(a.stop)
-	if a.pty != nil {
-		a.pty.Close()
-	}
-	if a.cmd != nil && a.cmd.Process != nil {
-		a.cmd.Process.Kill()
-	}
-}
-
-// Resize now handles PTY creation on its first run.
+// Resize now includes the Ctrl-L workaround which is our best tool.
 func (a *PTYApp) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
@@ -179,50 +196,25 @@ func (a *PTYApp) Resize(cols, rows int) {
 	a.width = cols
 	a.height = rows
 
-	// If this is the first resize, create and launch the PTY.
-	if a.pty == nil {
-		log.Printf("PTYApp: First resize, creating PTY with size %dx%d", cols, rows)
-
-		cmd := exec.Command(a.command)
-		cmd.Env = append(os.Environ(),
-			"TERM=xterm-256color",
-			"COLUMNS="+strconv.Itoa(cols),
-			"LINES="+strconv.Itoa(rows),
-		)
-		a.cmd = cmd
-
-		var err error
-		// Use pty.StartWithSize to create the PTY with the correct size from the beginning.
-		a.pty, err = pty.StartWithSize(cmd, &pty.Winsize{
-			Rows: uint16(rows),
-			Cols: uint16(cols),
-		})
-		if err != nil {
-			log.Printf("Failed to start pty with size: %v", err)
-			return
-		}
-
-		// Now that the PTY exists, set up the VTerm and Parser
-		titleChangeHandler := func(newTitle string) { a.title = newTitle }
-		ptyWriter := func(b []byte) {
-			if a.pty != nil {
-				a.pty.Write(b)
-			}
-		}
-		a.vterm = parser.NewVTerm(cols, rows,
-			parser.WithTitleChangeHandler(titleChangeHandler),
-			parser.WithPtyWriter(ptyWriter),
-		)
-		a.parser = parser.NewParser(a.vterm)
-
-	} else {
-		// On subsequent resizes, just update the VTerm and PTY size.
-		log.Printf("PTYApp: Subsequent resize, setting PTY size to %dx%d", cols, rows)
+	if a.vterm != nil {
 		a.vterm.Resize(cols, rows)
+	}
+
+	if a.pty != nil {
 		pty.Setsize(a.pty, &pty.Winsize{
 			Rows: uint16(rows),
 			Cols: uint16(cols),
 		})
+	}
+}
+
+func (a *PTYApp) Stop() {
+	close(a.stop)
+	if a.pty != nil {
+		a.pty.Close()
+	}
+	if a.cmd != nil && a.cmd.Process != nil {
+		a.cmd.Process.Kill()
 	}
 }
 
