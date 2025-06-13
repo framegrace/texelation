@@ -14,7 +14,6 @@ import (
 type Screen struct {
 	tcellScreen     tcell.Screen
 	panes           []*Pane
-	controlMode     bool
 	activePaneIndex int
 	fadeEffect      Effect
 	quit            chan struct{}
@@ -39,7 +38,6 @@ func NewScreen() (*Screen, error) {
 		tcellScreen:     tcellScreen,
 		panes:           make([]*Pane, 0),
 		activePaneIndex: 0, // Default to the first pane
-		controlMode:     false,
 		fadeEffect:      NewFadeEffect(tcell.ColorBlack, 0.25),
 		quit:            make(chan struct{}),
 		refreshChan:     make(chan bool, 1),
@@ -64,8 +62,10 @@ func (s *Screen) AddPane(p *Pane) {
 
 // Run starts the main event and rendering loop.
 func (s *Screen) Run() error {
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGWINCH)
+
 	eventChan := make(chan tcell.Event)
 	go func() {
 		for {
@@ -77,44 +77,31 @@ func (s *Screen) Run() error {
 	//	defer ticker.Stop()
 
 	s.draw()
-	for {
 
+	for {
 		select {
 		case <-sigChan:
 			s.tcellScreen.Sync()
 		case ev := <-eventChan:
 			switch ev := ev.(type) {
 			case *tcell.EventKey:
-				// Ctrl-A is our toggle key
-				if ev.Key() == tcell.KeyCtrlA {
-					s.controlMode = !s.controlMode
-					continue
+				// Global Quit command
+				if ev.Key() == tcell.KeyCtrlQ {
+					return nil
 				}
 
-				if s.controlMode {
-					// --- CONTROL MODE ---
-					switch ev.Key() {
-					case tcell.KeyTab:
-						if len(s.panes) > 0 {
-							// Fade the old active pane
-							s.panes[s.activePaneIndex].AddEffect(s.fadeEffect)
-							// Cycle to the next pane
-							s.activePaneIndex = (s.activePaneIndex + 1) % len(s.panes)
-							// Un-fade the new active pane
-							s.panes[s.activePaneIndex].ClearEffects()
-							s.requestRefresh() // Request a refresh to show the new highlight
-						}
-					case tcell.KeyRune:
-						if ev.Rune() == 'q' {
-							return nil // Quit application
-						}
+				// Change active pane with Ctrl+W
+				if ev.Key() == tcell.KeyCtrlW {
+					if len(s.panes) > 0 {
+						s.panes[s.activePaneIndex].AddEffect(s.fadeEffect)
+						s.activePaneIndex = (s.activePaneIndex + 1) % len(s.panes)
+						s.panes[s.activePaneIndex].ClearEffects()
+						s.requestRefresh()
 					}
 				} else {
-					// --- NORMAL MODE ---
-					// Forward key presses to the active pane
+					// For ALL other keys, forward them directly to the active pane.
 					if len(s.panes) > 0 {
-						activePane := s.panes[s.activePaneIndex]
-						activePane.app.HandleKey(ev)
+						s.panes[s.activePaneIndex].app.HandleKey(ev)
 					}
 				}
 			case *tcell.EventResize:
@@ -156,15 +143,6 @@ func (s *Screen) drawBorders() {
 	w, h := s.tcellScreen.Size()
 	defaultBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorWhite)
 	activeBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorYellow)
-
-	// Draw Control Mode indicator
-	if s.controlMode {
-		modeStr := "-- CONTROL MODE --"
-		style := tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite)
-		for i, ch := range modeStr {
-			s.tcellScreen.SetContent(w-len(modeStr)+i, 0, ch, nil, style)
-		}
-	}
 
 	for i, p := range s.panes {
 		borderStyle := defaultBorderStyle
