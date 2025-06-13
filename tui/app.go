@@ -17,4 +17,5 @@ type App interface {
 	// GetTitle returns the title of the application.
 	GetTitle() string
 	HandleKey(ev *tcell.EventKey)
+	SetRefreshNotifier(refreshChan chan<- bool)
 }

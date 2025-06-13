@@ -14,6 +14,7 @@ type ClockApp struct {
 	currentTime   string
 	mu            sync.RWMutex
 	stop          chan struct{}
+	refreshChan   chan<- bool
 }
 
 // NewClockApp creates a new ClockApp.
@@ -25,6 +26,10 @@ func NewClockApp() *ClockApp {
 
 // HandleKey does nothing for the clock app.
 func (a *ClockApp) HandleKey(ev *tcell.EventKey) {}
+
+func (a *ClockApp) SetRefreshNotifier(refreshChan chan<- bool) {
+	a.refreshChan = refreshChan
+}
 
 // Run starts a ticker to update the time every second.
 func (a *ClockApp) Run() error {
@@ -42,6 +47,9 @@ func (a *ClockApp) Run() error {
 		select {
 		case <-ticker.C:
 			updateTime()
+			if a.refreshChan != nil {
+				a.refreshChan <- true
+			}
 		case <-a.stop:
 			return nil
 		}

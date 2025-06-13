@@ -14,16 +14,22 @@ import (
 
 // The PTYApp struct remains the same, but its Render method will produce tcell-compatible output.
 type PTYApp struct {
-	title   string
-	command string
-	width   int
-	height  int
-	cmd     *exec.Cmd
-	pty     *os.File
-	vterm   *parser.VTerm
-	parser  *parser.Parser
-	mu      sync.Mutex
-	stop    chan struct{}
+	title       string
+	command     string
+	width       int
+	height      int
+	cmd         *exec.Cmd
+	pty         *os.File
+	vterm       *parser.VTerm
+	parser      *parser.Parser
+	mu          sync.Mutex
+	stop        chan struct{}
+	refreshChan chan<- bool
+}
+
+// SetRefreshNotifier implements the new interface method.
+func (a *PTYApp) SetRefreshNotifier(refreshChan chan<- bool) {
+	a.refreshChan = refreshChan
 }
 
 // Render translates our VTerm's state into the main application's buffer.
@@ -239,6 +245,14 @@ func (a *PTYApp) Run() error {
 						a.parser.Parse(buf[:n])
 					}
 					a.mu.Unlock()
+					// --- NEW: Signal that the screen needs a redraw ---
+					if a.refreshChan != nil {
+						// Non-blocking send. If a redraw is already pending, we don't need to send another.
+						select {
+						case a.refreshChan <- true:
+						default:
+						}
+					}
 				}
 				if err != nil {
 					return

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -19,6 +18,7 @@ type Screen struct {
 	activePaneIndex int
 	fadeEffect      Effect
 	quit            chan struct{}
+	refreshChan     chan bool
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -42,6 +42,7 @@ func NewScreen() (*Screen, error) {
 		controlMode:     false,
 		fadeEffect:      NewFadeEffect(tcell.ColorBlack, 0.25),
 		quit:            make(chan struct{}),
+		refreshChan:     make(chan bool, 1),
 	}, nil
 }
 
@@ -51,6 +52,9 @@ func (s *Screen) AddPane(p *Pane) {
 	if len(s.panes) > 1 {
 		p.AddEffect(s.fadeEffect)
 	}
+
+	p.app.SetRefreshNotifier(s.refreshChan)
+
 	go func() {
 		if err := p.app.Run(); err != nil {
 			log.Printf("App '%s' exited with error: %v", p.app.GetTitle(), err)
@@ -62,7 +66,6 @@ func (s *Screen) AddPane(p *Pane) {
 func (s *Screen) Run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGWINCH)
-
 	eventChan := make(chan tcell.Event)
 	go func() {
 		for {
@@ -70,11 +73,11 @@ func (s *Screen) Run() error {
 		}
 	}()
 
-	ticker := time.NewTicker(16 * time.Millisecond)
-	defer ticker.Stop()
+	//	ticker := time.NewTicker(16 * time.Millisecond)
+	//	defer ticker.Stop()
 
+	s.draw()
 	for {
-		s.draw()
 
 		select {
 		case <-sigChan:
@@ -92,15 +95,14 @@ func (s *Screen) Run() error {
 					// --- CONTROL MODE ---
 					switch ev.Key() {
 					case tcell.KeyTab:
-						// Get the pane losing focus and fade it.
 						if len(s.panes) > 0 {
+							// Fade the old active pane
 							s.panes[s.activePaneIndex].AddEffect(s.fadeEffect)
-						}
-						// Cycle to the next pane.
-						s.activePaneIndex = (s.activePaneIndex + 1) % len(s.panes)
-						// Get the newly focused pane and remove its effects.
-						if len(s.panes) > 0 {
+							// Cycle to the next pane
+							s.activePaneIndex = (s.activePaneIndex + 1) % len(s.panes)
+							// Un-fade the new active pane
 							s.panes[s.activePaneIndex].ClearEffects()
+							s.requestRefresh() // Request a refresh to show the new highlight
 						}
 					case tcell.KeyRune:
 						if ev.Rune() == 'q' {
@@ -118,8 +120,10 @@ func (s *Screen) Run() error {
 			case *tcell.EventResize:
 				s.handleResize()
 			}
-		case <-ticker.C:
+		case <-s.refreshChan:
 			s.draw()
+			//		case <-ticker.C:
+			//			s.draw()
 		case <-s.quit:
 			return nil
 		}
@@ -137,6 +141,13 @@ func (s *Screen) compositePanes() {
 		}
 
 		s.blit(p.X0+1, p.Y0+1, appBuffer)
+	}
+}
+
+func (s *Screen) requestRefresh() {
+	select {
+	case s.refreshChan <- true:
+	default:
 	}
 }
 

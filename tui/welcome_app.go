@@ -3,7 +3,7 @@ package tui
 import (
 	"sync"
 
-	"github.com/gdamore/tcell/v2" // Import tcell
+	"github.com/gdamore/tcell/v2"
 )
 
 // WelcomeApp is a simple internal widget that displays a static welcome message.
@@ -12,31 +12,24 @@ type WelcomeApp struct {
 	mu            sync.RWMutex
 }
 
-// HandleKey does nothing for the welcome app.
-func (a *WelcomeApp) HandleKey(ev *tcell.EventKey) {}
-
-// NewWelcomeApp creates a new WelcomeApp.
-func NewWelcomeApp() *WelcomeApp {
+// NewWelcomeApp now returns the App interface for consistency.
+func NewWelcomeApp() App {
 	return &WelcomeApp{}
 }
 
-// Run does nothing as this app is static.
 func (a *WelcomeApp) Run() error {
-	return nil // No background process needed
+	// No background process needed for this static app.
+	return nil
 }
 
-// Stop does nothing.
 func (a *WelcomeApp) Stop() {}
 
-// Resize stores the new dimensions of the pane.
 func (a *WelcomeApp) Resize(cols, rows int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.width, a.height = cols, rows
 }
 
-// Render draws the welcome message.
-// Render draws the welcome message.
 func (a *WelcomeApp) Render() [][]Cell {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -53,13 +46,13 @@ func (a *WelcomeApp) Render() [][]Cell {
 		}
 	}
 
-	// CORRECTED: Create a tcell.Style instead of using Fg/Bg
 	style := tcell.StyleDefault.Foreground(tcell.ColorGreen)
 
 	messages := []string{
 		"Welcome!",
 		"This is a textmode DE.",
-		"Press 'q' or 'Esc' to quit.",
+		"Press 'Ctrl-A' to enter Control Mode.",
+		"Then 'Tab' to switch panes, 'q' to quit.",
 	}
 
 	for i, msg := range messages {
@@ -68,7 +61,6 @@ func (a *WelcomeApp) Render() [][]Cell {
 		if y >= 0 && y < a.height && x >= 0 {
 			for j, ch := range msg {
 				if x+j < a.width {
-					// CORRECTED: Use the new Cell structure
 					buffer[y][x+j] = Cell{Ch: ch, Style: style}
 				}
 			}
@@ -79,4 +71,13 @@ func (a *WelcomeApp) Render() [][]Cell {
 
 func (a *WelcomeApp) GetTitle() string {
 	return "Welcome"
+}
+
+func (a *WelcomeApp) HandleKey(ev *tcell.EventKey) {
+	// This app doesn't handle key presses.
+}
+
+// SetRefreshNotifier satisfies the interface, but this static app doesn't need to do anything with it.
+func (a *WelcomeApp) SetRefreshNotifier(refreshChan chan<- bool) {
+	// No-op
 }
