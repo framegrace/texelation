@@ -20,6 +20,7 @@ type VTerm struct {
 	wrapNext                   bool
 	autoWrapMode               bool
 	insertMode                 bool
+	appCursorKeys              bool
 	TitleChanged               func(string)
 	WriteToPty                 func([]byte)
 	marginTop, marginBottom    int
@@ -38,6 +39,7 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		cursorVisible: true,
 		autoWrapMode:  true,
 		insertMode:    false,
+		appCursorKeys: false,
 		marginTop:     0,          // Default margin is top row
 		marginBottom:  height - 1, // Default margin is bottom row
 	}
@@ -116,6 +118,9 @@ func (v *VTerm) SetMargins(top, bottom int) {
 	v.marginTop = top - 1
 	v.marginBottom = bottom - 1
 	v.SetCursorPos(0, 0) // Per spec, move cursor to home on change
+}
+func (v *VTerm) AppCursorKeys() bool {
+	return v.appCursorKeys
 }
 
 // EraseCharacters overwrites N characters from the cursor with space.
@@ -247,6 +252,10 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 		v.SetMargins(param(0, 1), param(1, v.height))
 	case 'P': // Delete Character (DCH)
 		v.DeleteCharacters(param(0, 1))
+	case 'S': // Scroll Up
+		for i := 0; i < param(0, 1); i++ {
+			v.scrollUp()
+		}
 	case 'T': // Scroll Down (SD)
 		v.scrollDown(param(0, 1))
 	case 'X': // Erase Character (ECH)
@@ -256,9 +265,14 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 			v.insertMode = true
 		} // IRM Insert Mode
 	case 'l': // Reset Mode
-		if param(0, 0) == 4 {
-			v.insertMode = false
-		} // IRM Replace Mode
+		switch param(0, 0) {
+		case 4:
+			v.insertMode = false // IRM Replace Mode
+		case 2:
+			log.Println("Parser: Ignoring unlock keyboard action mode (2l)")
+		}
+	case 'q': // Load LEDs
+		log.Println("Parser: Ignoring Load LEDs command (q)")
 	case 'm':
 		i := 0
 		if len(params) == 0 {
@@ -465,9 +479,13 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 	case 'h':
 		switch mode {
 		case 1:
-			log.Println("Parser: Ignoring set cursor key application mode (1h)")
+			v.appCursorKeys = true
+		case 4:
+			v.insertMode = true
 		case 7:
 			v.autoWrapMode = true // DECAWM enable
+		case 12:
+			log.Println("Parser: Ignoring set blinking cursor (12h)")
 		case 25:
 			v.SetCursorVisible(true)
 		case 1049:
@@ -478,9 +496,13 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 	case 'l':
 		switch mode {
 		case 1:
-			log.Println("Parser: Ignoring reset cursor key application mode (1l)")
+			v.appCursorKeys = false // DECCKM: Cursor Keys Normal Mode
+		case 4:
+			v.insertMode = false
 		case 7:
 			v.autoWrapMode = false // DECAWM disable
+		case 12:
+			log.Println("Parser: Ignoring reset steady cursor (12l)")
 		case 25:
 			v.SetCursorVisible(false)
 		case 1049:

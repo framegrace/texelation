@@ -4,6 +4,7 @@ package tui
 type Pane struct {
 	X0, Y0, X1, Y1 int // The absolute coordinates on the main screen
 	app            App
+	effects        []Effect // Slice to hold visual effects
 }
 
 // NewPane creates a new Pane with the given dimensions and hosts the provided App.
@@ -15,6 +16,17 @@ func NewPane(x0, y0, x1, y1 int, app App) *Pane {
 	// Inform the app of its initial size, accounting for borders.
 	app.Resize(p.Width(), p.Height())
 	return p
+}
+
+// AddEffect adds a visual effect to the pane's processing pipeline.
+func (p *Pane) AddEffect(e Effect) {
+	// To avoid duplicates, you could add a check here if needed.
+	p.effects = append(p.effects, e)
+}
+
+// ClearEffects removes all visual effects from the pane.
+func (p *Pane) ClearEffects() {
+	p.effects = make([]Effect, 0)
 }
 
 // Width returns the inner width of the pane (excluding borders).

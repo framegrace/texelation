@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,9 +13,12 @@ import (
 
 // Screen manages the entire terminal display using tcell as the backend.
 type Screen struct {
-	tcellScreen tcell.Screen
-	panes       []*Pane
-	quit        chan struct{}
+	tcellScreen     tcell.Screen
+	panes           []*Pane
+	controlMode     bool
+	activePaneIndex int
+	fadeEffect      Effect
+	quit            chan struct{}
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -29,19 +33,29 @@ func NewScreen() (*Screen, error) {
 
 	defStyle := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
 	tcellScreen.SetStyle(defStyle)
-	tcellScreen.HideCursor()
+	tcellScreen.HideCursor() // We let the VTerm in the PTYApp manage the cursor
 
 	return &Screen{
-		tcellScreen: tcellScreen,
-		panes:       make([]*Pane, 0),
-		quit:        make(chan struct{}),
+		tcellScreen:     tcellScreen,
+		panes:           make([]*Pane, 0),
+		activePaneIndex: 0, // Default to the first pane
+		controlMode:     false,
+		fadeEffect:      NewFadeEffect(tcell.ColorBlack, 0.25),
+		quit:            make(chan struct{}),
 	}, nil
 }
 
 // AddPane adds a pane to the screen and starts its associated app.
 func (s *Screen) AddPane(p *Pane) {
 	s.panes = append(s.panes, p)
-	go p.app.Run()
+	if len(s.panes) > 1 {
+		p.AddEffect(s.fadeEffect)
+	}
+	go func() {
+		if err := p.app.Run(); err != nil {
+			log.Printf("App '%s' exited with error: %v", p.app.GetTitle(), err)
+		}
+	}()
 }
 
 // Run starts the main event and rendering loop.
@@ -56,11 +70,11 @@ func (s *Screen) Run() error {
 		}
 	}()
 
-	ticker := time.NewTicker(32 * time.Millisecond) // ~60 FPS
+	ticker := time.NewTicker(16 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		s.draw() // Draw the initial state
+		s.draw()
 
 		select {
 		case <-sigChan:
@@ -68,24 +82,108 @@ func (s *Screen) Run() error {
 		case ev := <-eventChan:
 			switch ev := ev.(type) {
 			case *tcell.EventKey:
-				if ev.Key() == tcell.KeyEscape || ev.Rune() == 'q' {
-					// Global quit
-					// We can check if 'q' was meant for htop first later
-					return nil
+				// Ctrl-A is our toggle key
+				if ev.Key() == tcell.KeyCtrlA {
+					s.controlMode = !s.controlMode
+					continue
 				}
-				// --- NEW: Forward other key presses to the active pane ---
-				if len(s.panes) > 0 {
-					// For now, let's assume the first pane is always active
-					s.panes[0].app.HandleKey(ev)
+
+				if s.controlMode {
+					// --- CONTROL MODE ---
+					switch ev.Key() {
+					case tcell.KeyTab:
+						// Get the pane losing focus and fade it.
+						if len(s.panes) > 0 {
+							s.panes[s.activePaneIndex].AddEffect(s.fadeEffect)
+						}
+						// Cycle to the next pane.
+						s.activePaneIndex = (s.activePaneIndex + 1) % len(s.panes)
+						// Get the newly focused pane and remove its effects.
+						if len(s.panes) > 0 {
+							s.panes[s.activePaneIndex].ClearEffects()
+						}
+					case tcell.KeyRune:
+						if ev.Rune() == 'q' {
+							return nil // Quit application
+						}
+					}
+				} else {
+					// --- NORMAL MODE ---
+					// Forward key presses to the active pane
+					if len(s.panes) > 0 {
+						activePane := s.panes[s.activePaneIndex]
+						activePane.app.HandleKey(ev)
+					}
 				}
 			case *tcell.EventResize:
 				s.handleResize()
 			}
 		case <-ticker.C:
-			// Continuous redraw for animations
 			s.draw()
 		case <-s.quit:
 			return nil
+		}
+	}
+}
+
+// compositePanes now applies all effects on a pane before drawing it.
+func (s *Screen) compositePanes() {
+	for _, p := range s.panes {
+		appBuffer := p.app.Render()
+
+		// Apply all effects attached to the pane in order.
+		for _, effect := range p.effects {
+			appBuffer = effect.Apply(appBuffer)
+		}
+
+		s.blit(p.X0+1, p.Y0+1, appBuffer)
+	}
+}
+
+// drawBorders now highlights the active pane.
+func (s *Screen) drawBorders() {
+	w, h := s.tcellScreen.Size()
+	defaultBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorWhite)
+	activeBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorYellow)
+
+	// Draw Control Mode indicator
+	if s.controlMode {
+		modeStr := "-- CONTROL MODE --"
+		style := tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite)
+		for i, ch := range modeStr {
+			s.tcellScreen.SetContent(w-len(modeStr)+i, 0, ch, nil, style)
+		}
+	}
+
+	for i, p := range s.panes {
+		borderStyle := defaultBorderStyle
+		titleStyle := defaultBorderStyle.Bold(true)
+
+		// Highlight the active pane
+		if i == s.activePaneIndex {
+			borderStyle = activeBorderStyle
+			titleStyle = activeBorderStyle.Bold(true)
+		}
+
+		if p.Y0 >= 0 && p.Y0 < h {
+			for x := p.X0; x < p.X1 && x < w; x++ {
+				s.tcellScreen.SetContent(x, p.Y0, tcell.RuneHLine, nil, borderStyle)
+			}
+		}
+		if p.X0 >= 0 && p.X0 < w {
+			for y := p.Y0 + 1; y < p.Y1 && y < h; y++ {
+				s.tcellScreen.SetContent(p.X0, y, tcell.RuneVLine, nil, borderStyle)
+			}
+		}
+		if p.X0 >= 0 && p.X0 < w && p.Y0 >= 0 && p.Y0 < h {
+			s.tcellScreen.SetContent(p.X0, p.Y0, tcell.RuneULCorner, nil, borderStyle)
+		}
+
+		title := fmt.Sprintf(" %s ", p.app.GetTitle())
+		for i, ch := range title {
+			if p.X0+1+i < p.X1 {
+				s.tcellScreen.SetContent(p.X0+1+i, p.Y0, ch, nil, titleStyle)
+			}
 		}
 	}
 }
@@ -106,49 +204,11 @@ func (s *Screen) draw() {
 	s.tcellScreen.Show() // Replaces termbox.Flush()
 }
 
-// compositePanes gets the rendered buffer from each pane's app and draws it.
-func (s *Screen) compositePanes() {
-	for _, p := range s.panes {
-		appBuffer := p.app.Render()
-		s.blit(p.X0+1, p.Y0+1, appBuffer)
-	}
-}
-
 // blit copies a source buffer onto the tcell screen.
 func (s *Screen) blit(x, y int, source [][]Cell) {
 	for r, row := range source {
 		for c, cell := range row {
 			s.tcellScreen.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
-		}
-	}
-}
-
-// drawBorders draws the borders and titles for all panes.
-func (s *Screen) drawBorders() {
-	borderStyle := tcell.StyleDefault.Foreground(tcell.ColorWhite)
-	titleStyle := borderStyle.Bold(true)
-	w, h := s.tcellScreen.Size()
-
-	for _, p := range s.panes {
-		for x := p.X0; x < p.X1 && x < w; x++ {
-			if p.Y0 >= 0 && p.Y0 < h {
-				s.tcellScreen.SetContent(x, p.Y0, tcell.RuneHLine, nil, borderStyle)
-			}
-		}
-		for y := p.Y0; y < p.Y1 && y < h; y++ {
-			if p.X0 >= 0 && p.X0 < w {
-				s.tcellScreen.SetContent(p.X0, y, tcell.RuneVLine, nil, borderStyle)
-			}
-		}
-		if p.X0 >= 0 && p.X0 < w && p.Y0 >= 0 && p.Y0 < h {
-			s.tcellScreen.SetContent(p.X0, p.Y0, tcell.RuneULCorner, nil, borderStyle)
-		}
-
-		title := fmt.Sprintf(" %s ", p.app.GetTitle())
-		for i, ch := range title {
-			if p.X0+1+i < p.X1 {
-				s.tcellScreen.SetContent(p.X0+1+i, p.Y0, ch, nil, titleStyle)
-			}
 		}
 	}
 }

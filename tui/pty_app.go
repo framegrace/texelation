@@ -92,20 +92,85 @@ func mapParserColorToTCell(c parser.Color) tcell.Color {
 	}
 }
 
-// HandleKey processes a key event and writes it to the PTY.
 func (a *PTYApp) HandleKey(ev *tcell.EventKey) {
 	if a.pty == nil {
 		return
 	}
-	// A key's rune is the character to write.
-	// For special keys like Ctrl-L, the rune is the control character itself.
-	a.pty.Write([]byte(string(ev.Rune())))
 
-	// This could be expanded to handle arrow keys, etc.
-	// switch ev.Key() {
-	// case tcell.KeyUp:
-	// 	a.pty.Write([]byte("\x1b[A"))
-	// }
+	a.mu.Lock()
+	appMode := a.vterm.AppCursorKeys()
+	a.mu.Unlock()
+
+	key := ev.Key()
+	var keyBytes []byte
+
+	// Use a switch to handle special keys first.
+	switch key {
+	case tcell.KeyUp:
+		if appMode {
+			keyBytes = []byte("\x1bOA")
+		} else {
+			keyBytes = []byte("\x1b[A")
+		}
+	case tcell.KeyDown:
+		if appMode {
+			keyBytes = []byte("\x1bOB")
+		} else {
+			keyBytes = []byte("\x1b[B")
+		}
+	case tcell.KeyRight:
+		if appMode {
+			keyBytes = []byte("\x1bOC")
+		} else {
+			keyBytes = []byte("\x1b[C")
+		}
+	case tcell.KeyLeft:
+		if appMode {
+			keyBytes = []byte("\x1bOD")
+		} else {
+			keyBytes = []byte("\x1b[D")
+		}
+	case tcell.KeyHome:
+		keyBytes = []byte("\x1b[H")
+	case tcell.KeyEnd:
+		keyBytes = []byte("\x1b[F")
+	case tcell.KeyInsert:
+		keyBytes = []byte("\x1b[2~")
+	case tcell.KeyDelete:
+		keyBytes = []byte("\x1b[3~")
+	case tcell.KeyPgUp:
+		keyBytes = []byte("\x1b[5~")
+	case tcell.KeyPgDn:
+		keyBytes = []byte("\x1b[6~")
+	case tcell.KeyF1:
+		keyBytes = []byte("\x1bOP")
+	case tcell.KeyF2:
+		keyBytes = []byte("\x1bOQ")
+	case tcell.KeyF3:
+		keyBytes = []byte("\x1bOR")
+	case tcell.KeyF4:
+		keyBytes = []byte("\x1bOS")
+	// F5-F12 have more complex sequences, add as needed
+	// ...
+
+	case tcell.KeyEnter:
+		keyBytes = []byte("\r")
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		// KeyBackspace is Ctrl-H, KeyBackspace2 is the real backspace
+		keyBytes = []byte{'\b'}
+	case tcell.KeyTab:
+		keyBytes = []byte("\t")
+	case tcell.KeyEsc:
+		keyBytes = []byte("\x1b")
+
+	// If it's not a special key, it's a rune or a Ctrl-key combo
+	default:
+		keyBytes = []byte(string(ev.Rune()))
+	}
+
+	if keyBytes != nil {
+		a.pty.Write(keyBytes)
+	}
 }
 
 func NewPTYApp(title, command string) *PTYApp {
