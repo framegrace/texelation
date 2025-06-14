@@ -27,6 +27,7 @@ type texelTerm struct {
 	mu          sync.Mutex
 	stop        chan struct{}
 	refreshChan chan<- bool
+	wg          sync.WaitGroup
 }
 
 // SetRefreshNotifier implements the new interface method.
@@ -231,8 +232,11 @@ func (a *texelTerm) Run() error {
 	a.parser = parser.NewParser(a.vterm)
 	a.mu.Unlock()
 
+	a.wg.Add(1)
+
 	// Start the reading goroutine
 	go func() {
+		defer a.wg.Done()
 		defer ptmx.Close()
 		buf := make([]byte, 4096)
 		for {
@@ -285,17 +289,12 @@ func (a *texelTerm) Resize(cols, rows int) {
 			Rows: uint16(rows),
 			Cols: uint16(cols),
 		})
+		a.pty.Write([]byte{'\x0C'})
 	}
 }
 func (a *texelTerm) Stop() {
-	// --- MODIFIED: Added a detailed comment explaining shutdown logic ---
-	// NOTE on graceful shutdown:
-	// There is a potential race condition here. We signal the reading goroutine to stop
-	// via the 'stop' channel and immediately kill the process. The goroutine might not
-	// have finished processing the last of the output from the PTY.
-	// A more robust solution would involve using a sync.WaitGroup to wait for the
-	// reading goroutine to exit *before* killing the process, ensuring all I/O is handled.
 	close(a.stop)
+
 	if a.pty != nil {
 		a.pty.Close()
 	}
