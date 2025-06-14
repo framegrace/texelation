@@ -208,138 +208,6 @@ func (v *VTerm) SaveCursor() {
 func (v *VTerm) RestoreCursor() {
 	v.cursorX, v.cursorY = v.savedCursorX, v.savedCursorY
 }
-func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
-	if private {
-		v.processPrivateCSI(command, params)
-		return
-	}
-
-	param := func(i int, defaultVal int) int {
-		if i < len(params) && params[i] != 0 {
-			return params[i]
-		}
-		return defaultVal
-	}
-
-	switch command {
-	case 'A': // Cursor Up
-		v.MoveCursorUp(param(0, 1))
-	case 'B': // Cursor Down
-		v.MoveCursorDown(param(0, 1))
-	case 'H', 'f':
-		v.SetCursorPos(param(0, 1)-1, param(1, 1)-1)
-	case 'C': // Cursor Forward
-		v.MoveCursorForward(param(0, 1))
-	case 'D': // Cursor Backward
-		v.MoveCursorBackward(param(0, 1))
-	case 'G':
-		v.SetCursorColumn(param(0, 1) - 1)
-	case 'n': // Device Status Report (DSR)
-		if param(0, 0) == 6 {
-			// --- ADD THIS LINE ---
-			log.Println("Parser: Received cursor position request (6n). Responding.")
-			// --- END ---
-			// The application is asking for the cursor position.
-			// Format the response: ESC[<row>;<col>R (1-based)
-			response := fmt.Sprintf("\x1b[%d;%dR", v.cursorY+1, v.cursorX+1)
-			if v.WriteToPty != nil {
-				v.WriteToPty([]byte(response))
-			}
-		}
-	case 'd': // Vertical Line Position Absolute (VPA)
-		v.SetCursorRow(param(0, 1) - 1)
-	case 'r': // Set Top and Bottom Margins (DECSTBM)
-		v.SetMargins(param(0, 1), param(1, v.height))
-	case 'P': // Delete Character (DCH)
-		v.DeleteCharacters(param(0, 1))
-	case 'S': // Scroll Up
-		for i := 0; i < param(0, 1); i++ {
-			v.scrollUp()
-		}
-	case 'T': // Scroll Down (SD)
-		v.scrollDown(param(0, 1))
-	case 'X': // Erase Character (ECH)
-		v.EraseCharacters(param(0, 1))
-	case 'h': // Set Mode
-		if param(0, 0) == 4 {
-			v.insertMode = true
-		} // IRM Insert Mode
-	case 'l': // Reset Mode
-		switch param(0, 0) {
-		case 4:
-			v.insertMode = false // IRM Replace Mode
-		case 2:
-			log.Println("Parser: Ignoring unlock keyboard action mode (2l)")
-		}
-	case 'q': // Load LEDs
-		log.Println("Parser: Ignoring Load LEDs command (q)")
-	case 'm':
-		i := 0
-		if len(params) == 0 {
-			params = []int{0}
-		}
-		for i < len(params) {
-			p := params[i]
-			switch {
-			case p == 0:
-				v.ResetAttributes()
-			case p == 1:
-				v.SetAttribute(AttrBold)
-			case p == 4:
-				v.SetAttribute(AttrUnderline)
-			case p == 7:
-				v.SetAttribute(AttrReverse)
-			case p == 22:
-				v.currentAttr &^= AttrBold
-			case p >= 30 && p <= 37:
-				v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 30)}
-			case p == 39:
-				v.currentFG = DefaultFG
-			case p >= 40 && p <= 47:
-				v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 40)}
-			case p >= 90 && p <= 97:
-				v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 90 + 8)}
-			case p >= 100 && p <= 107:
-				v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 100 + 8)}
-
-			// --- NEW: Handle extended colors ---
-			case p == 38: // Set extended foreground color
-				if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
-					v.currentFG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
-					i += 2 // Consume the next 2 parameters
-				} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
-					v.currentFG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
-					i += 4 // Consume the next 4 parameters
-				}
-			case p == 48: // Set extended background color
-				if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
-					v.currentBG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
-					i += 2
-				} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
-					v.currentBG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
-					i += 4
-				}
-			case p == 49:
-				v.currentBG = DefaultBG
-			}
-			i++
-		}
-	case 's':
-		v.SaveCursor()
-	case 'u':
-		v.RestoreCursor()
-	case 'J':
-		v.ClearScreenMode(param(0, 0))
-	case 'K':
-		v.ClearLine(param(0, 0))
-	case 'g':
-		if param(0, 0) == 3 {
-			v.ClearAllTabStops()
-		}
-	case 'c':
-		log.Println("Parser: Ignoring device attribute request (0c)")
-	}
-}
 
 func (v *VTerm) ClearScreenMode(mode int) {
 	switch mode {
@@ -363,6 +231,201 @@ func (v *VTerm) Grid() [][]Cell                { return v.grid }
 func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool           { return v.cursorVisible }
 func (v *VTerm) SetCursorVisible(visible bool) { v.cursorVisible = visible }
+
+func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
+	if private {
+		v.processPrivateCSI(command, params)
+		return
+	}
+
+	switch command {
+	case 'A', 'B', 'C', 'D', 'G', 'H', 'f', 'd':
+		v.handleCursorMovement(command, params)
+	case 'J', 'K', 'P', 'X':
+		v.handleErase(command, params)
+	case 'S', 'T':
+		v.handleScroll(command, params)
+	case 'm':
+		v.handleSGR(params)
+	case 'n': // Device Status Report (DSR)
+		param := func(i int, defaultVal int) int {
+			if i < len(params) && params[i] != 0 {
+				return params[i]
+			}
+			return defaultVal
+		}
+		if param(0, 0) == 6 {
+			log.Println("Parser: Received cursor position request (6n). Responding.")
+			response := fmt.Sprintf("\x1b[%d;%dR", v.cursorY+1, v.cursorX+1)
+			if v.WriteToPty != nil {
+				v.WriteToPty([]byte(response))
+			}
+		}
+	case 'r': // Set Top and Bottom Margins (DECSTBM)
+		param := func(i int, defaultVal int) int {
+			if i < len(params) && params[i] != 0 {
+				return params[i]
+			}
+			return defaultVal
+		}
+		v.SetMargins(param(0, 1), param(1, v.height))
+	case 'h', 'l': // Set/Reset Mode
+		v.handleMode(command, params)
+	case 's':
+		v.SaveCursor()
+	case 'u':
+		v.RestoreCursor()
+	case 'g': // Tabulation Clear
+		param := func(i int, defaultVal int) int {
+			if i < len(params) && params[i] != 0 {
+				return params[i]
+			}
+			return defaultVal
+		}
+		if param(0, 0) == 3 {
+			v.ClearAllTabStops()
+		}
+	case 'c':
+		log.Println("Parser: Ignoring device attribute request (0c)")
+	case 'q': // Load LEDs
+		log.Println("Parser: Ignoring Load LEDs command (q)")
+	}
+}
+
+// --- NEW HELPER METHODS FOR ProcessCSI ---
+
+func (v *VTerm) handleCursorMovement(command byte, params []int) {
+	param := func(i int, defaultVal int) int {
+		if i < len(params) && params[i] != 0 {
+			return params[i]
+		}
+		return defaultVal
+	}
+	switch command {
+	case 'A': // Cursor Up
+		v.MoveCursorUp(param(0, 1))
+	case 'B': // Cursor Down
+		v.MoveCursorDown(param(0, 1))
+	case 'C': // Cursor Forward
+		v.MoveCursorForward(param(0, 1))
+	case 'D': // Cursor Backward
+		v.MoveCursorBackward(param(0, 1))
+	case 'G': // Cursor Character Absolute
+		v.SetCursorColumn(param(0, 1) - 1)
+	case 'H', 'f': // Cursor Position / Horizontal and Vertical Position
+		v.SetCursorPos(param(0, 1)-1, param(1, 1)-1)
+	case 'd': // Vertical Line Position Absolute (VPA)
+		v.SetCursorRow(param(0, 1) - 1)
+	}
+}
+
+func (v *VTerm) handleErase(command byte, params []int) {
+	param := func(i int, defaultVal int) int {
+		if i < len(params) && params[i] != 0 {
+			return params[i]
+		}
+		return defaultVal
+	}
+	switch command {
+	case 'J': // Erase in Display
+		v.ClearScreenMode(param(0, 0))
+	case 'K': // Erase in Line
+		v.ClearLine(param(0, 0))
+	case 'P': // Delete Character
+		v.DeleteCharacters(param(0, 1))
+	case 'X': // Erase Character
+		v.EraseCharacters(param(0, 1))
+	}
+}
+
+func (v *VTerm) handleScroll(command byte, params []int) {
+	param := func(i int, defaultVal int) int {
+		if i < len(params) && params[i] != 0 {
+			return params[i]
+		}
+		return defaultVal
+	}
+	switch command {
+	case 'S': // Scroll Up
+		for i := 0; i < param(0, 1); i++ {
+			v.scrollUp()
+		}
+	case 'T': // Scroll Down
+		v.scrollDown(param(0, 1))
+	}
+}
+
+func (v *VTerm) handleMode(command byte, params []int) {
+	param := func(i int, defaultVal int) int {
+		if i < len(params) && params[i] != 0 {
+			return params[i]
+		}
+		return defaultVal
+	}
+	switch command {
+	case 'h': // Set Mode
+		if param(0, 0) == 4 {
+			v.insertMode = true
+		}
+	case 'l': // Reset Mode
+		if param(0, 0) == 4 {
+			v.insertMode = false
+		} else if param(0, 0) == 2 {
+			log.Println("Parser: Ignoring unlock keyboard action mode (2l)")
+		}
+	}
+}
+
+func (v *VTerm) handleSGR(params []int) {
+	i := 0
+	if len(params) == 0 {
+		params = []int{0}
+	}
+	for i < len(params) {
+		p := params[i]
+		switch {
+		case p == 0:
+			v.ResetAttributes()
+		case p == 1:
+			v.SetAttribute(AttrBold)
+		case p == 4:
+			v.SetAttribute(AttrUnderline)
+		case p == 7:
+			v.SetAttribute(AttrReverse)
+		case p == 22:
+			v.currentAttr &^= AttrBold
+		case p >= 30 && p <= 37:
+			v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 30)}
+		case p == 39:
+			v.currentFG = DefaultFG
+		case p >= 40 && p <= 47:
+			v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 40)}
+		case p >= 90 && p <= 97:
+			v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 90 + 8)}
+		case p >= 100 && p <= 107:
+			v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 100 + 8)}
+		case p == 38: // Set extended foreground color
+			if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
+				v.currentFG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
+				i += 2 // Consume the next 2 parameters
+			} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
+				v.currentFG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
+				i += 4 // Consume the next 4 parameters
+			}
+		case p == 48: // Set extended background color
+			if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
+				v.currentBG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
+				i += 2
+			} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
+				v.currentBG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
+				i += 4
+			}
+		case p == 49:
+			v.currentBG = DefaultBG
+		}
+		i++
+	}
+}
 
 func (v *VTerm) placeChar(r rune) {
 	if v.wrapNext {

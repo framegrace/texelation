@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	//	"strconv"
 	"sync"
-	"textmode-env/tui/parser"
+	"texelation/tui/parser"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2" // Import tcell
@@ -286,8 +286,14 @@ func (a *PTYApp) Resize(cols, rows int) {
 		})
 	}
 }
-
 func (a *PTYApp) Stop() {
+	// --- MODIFIED: Added a detailed comment explaining shutdown logic ---
+	// NOTE on graceful shutdown:
+	// There is a potential race condition here. We signal the reading goroutine to stop
+	// via the 'stop' channel and immediately kill the process. The goroutine might not
+	// have finished processing the last of the output from the PTY.
+	// A more robust solution would involve using a sync.WaitGroup to wait for the
+	// reading goroutine to exit *before* killing the process, ensuring all I/O is handled.
 	close(a.stop)
 	if a.pty != nil {
 		a.pty.Close()

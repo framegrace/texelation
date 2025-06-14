@@ -2,12 +2,17 @@ package tui
 
 import (
 	"fmt"
+	"github.com/gdamore/tcell/v2"
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+)
 
-	"github.com/gdamore/tcell/v2"
+const (
+	keyQuit       = tcell.KeyCtrlQ
+	keySwitchPane = tcell.KeyCtrlA
 )
 
 // Screen manages the entire terminal display using tcell as the backend.
@@ -18,6 +23,7 @@ type Screen struct {
 	fadeEffect      Effect
 	quit            chan struct{}
 	refreshChan     chan bool
+	mu              sync.RWMutex
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -42,6 +48,10 @@ func NewScreen() (*Screen, error) {
 		quit:            make(chan struct{}),
 		refreshChan:     make(chan bool, 1),
 	}, nil
+}
+
+func (s *Screen) Size() (int, int) {
+	return s.tcellScreen.Size()
 }
 
 // AddPane adds a pane to the screen and starts its associated app.
@@ -85,17 +95,17 @@ func (s *Screen) Run() error {
 		case ev := <-eventChan:
 			switch ev := ev.(type) {
 			case *tcell.EventKey:
-				// Global Quit command
-				if ev.Key() == tcell.KeyCtrlQ {
+				if ev.Key() == keyQuit {
+					s.Close()
 					return nil
 				}
-
-				// Change active pane with Ctrl+W
-				if ev.Key() == tcell.KeyCtrlW {
+				if ev.Key() == keySwitchPane {
 					if len(s.panes) > 0 {
+						s.mu.Lock()
 						s.panes[s.activePaneIndex].AddEffect(s.fadeEffect)
 						s.activePaneIndex = (s.activePaneIndex + 1) % len(s.panes)
 						s.panes[s.activePaneIndex].ClearEffects()
+						s.mu.Unlock()
 						s.requestRefresh()
 					}
 				} else {

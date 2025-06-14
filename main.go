@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 	"os"
-	"textmode-env/tui"
+	"texelation/tui"
 
 	"github.com/nsf/termbox-go"
 )

@@ -1,4 +1,4 @@
-module textmode-env
+module texelation
 
 go 1.24.3
 
