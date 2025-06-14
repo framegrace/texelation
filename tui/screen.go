@@ -76,7 +76,8 @@ func (s *Screen) Run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGWINCH)
 
-	eventChan := make(chan tcell.Event)
+	eventChan := make(chan tcell.Event, 10)
+
 	go func() {
 		for {
 			eventChan <- s.tcellScreen.PollEvent()
