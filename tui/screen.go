@@ -77,54 +77,56 @@ func (s *Screen) Run() error {
 	signal.Notify(sigChan, syscall.SIGWINCH)
 
 	eventChan := make(chan tcell.Event, 10)
-
 	go func() {
 		for {
-			eventChan <- s.tcellScreen.PollEvent()
+			select {
+			case <-s.quit:
+				return
+			default:
+				eventChan <- s.tcellScreen.PollEvent()
+			}
 		}
 	}()
 
-	//	ticker := time.NewTicker(16 * time.Millisecond)
-	//	defer ticker.Stop()
-
 	s.draw()
-
 	for {
 		select {
 		case <-sigChan:
 			s.tcellScreen.Sync()
 		case ev := <-eventChan:
-			switch ev := ev.(type) {
-			case *tcell.EventKey:
-				if ev.Key() == keyQuit {
-					s.Close()
-					return nil
-				}
-				if ev.Key() == keySwitchPane {
-					if len(s.panes) > 0 {
-						s.mu.Lock()
-						s.panes[s.activePaneIndex].AddEffect(s.fadeEffect)
-						s.activePaneIndex = (s.activePaneIndex + 1) % len(s.panes)
-						s.panes[s.activePaneIndex].ClearEffects()
-						s.mu.Unlock()
-						s.requestRefresh()
-					}
-				} else {
-					// For ALL other keys, forward them directly to the active pane.
-					if len(s.panes) > 0 {
-						s.panes[s.activePaneIndex].app.HandleKey(ev)
-					}
-				}
-			case *tcell.EventResize:
-				s.handleResize()
-			}
+			s.handleEvent(ev)
 		case <-s.refreshChan:
 			s.draw()
-			//		case <-ticker.C:
-			//			s.draw()
 		case <-s.quit:
 			return nil
 		}
+	}
+}
+
+func (s *Screen) handleEvent(ev tcell.Event) {
+	switch ev := ev.(type) {
+	case *tcell.EventKey:
+		if ev.Key() == keyQuit {
+			s.Close()
+		}
+		if ev.Key() == keySwitchPane {
+			if len(s.panes) > 0 {
+				s.mu.Lock()
+				s.panes[s.activePaneIndex].AddEffect(s.fadeEffect)
+				s.activePaneIndex = (s.activePaneIndex + 1) % len(s.panes)
+				s.panes[s.activePaneIndex].ClearEffects()
+				s.mu.Unlock()
+				s.requestRefresh()
+			}
+		} else {
+			// For ALL other keys, forward them directly to the active pane.
+			if len(s.panes) > 0 {
+				s.panes[s.activePaneIndex].app.HandleKey(ev)
+			}
+		}
+	case *tcell.EventResize:
+		s.handleResize()
+
 	}
 }
 
