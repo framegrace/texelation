@@ -1,48 +1,49 @@
-package tui
+package welcome // Package name changed from tui
 
 import (
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
+	"texelation/texel" // Import the core DE package
 )
 
-// WelcomeApp is a simple internal widget that displays a static welcome message.
-type WelcomeApp struct {
+// welcomeApp is a simple internal widget that displays a static welcome message.
+type welcomeApp struct {
 	width, height int
 	mu            sync.RWMutex
 }
 
 // NewWelcomeApp now returns the App interface for consistency.
-func NewWelcomeApp() App {
-	return &WelcomeApp{}
+func NewWelcomeApp() texel.App {
+	return &welcomeApp{}
 }
 
-func (a *WelcomeApp) Run() error {
+func (a *welcomeApp) Run() error {
 	// No background process needed for this static app.
 	return nil
 }
 
-func (a *WelcomeApp) Stop() {}
+func (a *welcomeApp) Stop() {}
 
-func (a *WelcomeApp) Resize(cols, rows int) {
+func (a *welcomeApp) Resize(cols, rows int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.width, a.height = cols, rows
 }
 
-func (a *WelcomeApp) Render() [][]Cell {
+func (a *welcomeApp) Render() [][]texel.Cell {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
 	if a.width <= 0 || a.height <= 0 {
-		return [][]Cell{}
+		return [][]texel.Cell{}
 	}
 
-	buffer := make([][]Cell, a.height)
+	buffer := make([][]texel.Cell, a.height)
 	for i := range buffer {
-		buffer[i] = make([]Cell, a.width)
+		buffer[i] = make([]texel.Cell, a.width)
 		for j := range buffer[i] {
-			buffer[i][j] = Cell{Ch: ' ', Style: tcell.StyleDefault}
+			buffer[i][j] = texel.Cell{Ch: ' ', Style: tcell.StyleDefault}
 		}
 	}
 
@@ -61,7 +62,7 @@ func (a *WelcomeApp) Render() [][]Cell {
 		if y >= 0 && y < a.height && x >= 0 {
 			for j, ch := range msg {
 				if x+j < a.width {
-					buffer[y][x+j] = Cell{Ch: ch, Style: style}
+					buffer[y][x+j] = texel.Cell{Ch: ch, Style: style}
 				}
 			}
 		}
@@ -69,15 +70,15 @@ func (a *WelcomeApp) Render() [][]Cell {
 	return buffer
 }
 
-func (a *WelcomeApp) GetTitle() string {
+func (a *welcomeApp) GetTitle() string {
 	return "Welcome"
 }
 
-func (a *WelcomeApp) HandleKey(ev *tcell.EventKey) {
+func (a *welcomeApp) HandleKey(ev *tcell.EventKey) {
 	// This app doesn't handle key presses.
 }
 
 // SetRefreshNotifier satisfies the interface, but this static app doesn't need to do anything with it.
-func (a *WelcomeApp) SetRefreshNotifier(refreshChan chan<- bool) {
+func (a *welcomeApp) SetRefreshNotifier(refreshChan chan<- bool) {
 	// No-op
 }

@@ -3,7 +3,9 @@ package main
 import (
 	"log"
 	"os"
-	"texelation/tui"
+	"texelation/apps/clock"
+	"texelation/apps/welcome"
+	"texelation/texel"
 
 	"github.com/nsf/termbox-go"
 )
@@ -19,7 +21,7 @@ func main() {
 	log.Println("Application starting...")
 
 	// Initialize the main screen
-	screen, err := tui.NewScreen()
+	screen, err := texel.NewScreen()
 	if err != nil {
 		panic(err)
 	}
@@ -36,23 +38,23 @@ func main() {
 }
 
 // setupPanes defines the layout of the panes and the apps they contain.
-func setupPanes(screen *tui.Screen) {
+func setupPanes(screen *texel.Screen) {
 	w, h := termbox.Size()
 	cellW := w / 2
 	cellH := h / 2
 
 	// Create the applications that will run in the panes
-	appTop := tui.NewPTYApp("htop", "htop")
-	appClock := tui.NewClockApp()
-	appWelcome := tui.NewWelcomeApp()
-	appPTYShell := tui.NewPTYApp("shell", "/bin/bash")
+	appTop := texel.NewPTYApp("htop", "htop")
+	appClock := clock.NewClockApp()
+	appWelcome := welcome.NewWelcomeApp()
+	appPTYShell := texel.NewPTYApp("shell", "/bin/bash")
 
 	// Create panes and add them to the screen
-	panes := []*tui.Pane{
-		tui.NewPane(0, 0, cellW, cellH, appTop),
-		tui.NewPane(cellW, 0, w, cellH, appWelcome),
-		tui.NewPane(0, cellH, cellW, h, appClock),
-		tui.NewPane(cellW, cellH, w, h, appPTYShell),
+	panes := []*texel.Pane{
+		texel.NewPane(0, 0, cellW, cellH, appTop),
+		texel.NewPane(cellW, 0, w, cellH, appWelcome),
+		texel.NewPane(0, cellH, cellW, h, appClock),
+		texel.NewPane(cellW, cellH, w, h, appPTYShell),
 	}
 
 	for _, p := range panes {

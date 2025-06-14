@@ -1,4 +1,4 @@
-package tui
+package texel
 
 import (
 	"log"
@@ -6,7 +6,8 @@ import (
 	"os/exec"
 	//	"strconv"
 	"sync"
-	"texelation/tui/parser"
+	"syscall"
+	"texelation/texel/parser"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2" // Import tcell
@@ -264,7 +265,6 @@ func (a *PTYApp) Run() error {
 	return cmd.Wait()
 }
 
-// Resize now includes the Ctrl-L workaround which is our best tool.
 func (a *PTYApp) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
@@ -299,7 +299,10 @@ func (a *PTYApp) Stop() {
 		a.pty.Close()
 	}
 	if a.cmd != nil && a.cmd.Process != nil {
-		a.cmd.Process.Kill()
+		// --- CORRECTED LOGIC ---
+		// Send a SIGTERM signal for a graceful shutdown instead of SIGKILL.
+		a.cmd.Process.Signal(syscall.SIGTERM)
+		// --- END CORRECTION ---
 	}
 }
 

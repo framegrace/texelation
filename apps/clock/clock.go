@@ -1,15 +1,16 @@
-package tui
+package clock // Package name changed from tui
 
 import (
 	"fmt"
 	"sync"
+	"texelation/texel" // Import the core DE package
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
 
-// ClockApp is a simple internal widget that displays the current time.
-type ClockApp struct {
+// clockApp is now unexported to hide implementation details.
+type clockApp struct {
 	width, height int
 	currentTime   string
 	mu            sync.RWMutex
@@ -17,22 +18,22 @@ type ClockApp struct {
 	refreshChan   chan<- bool
 }
 
-// NewClockApp creates a new ClockApp.
-func NewClockApp() *ClockApp {
-	return &ClockApp{
+// NewClockApp creates a new ClockApp and returns it as a texel.App interface.
+func NewClockApp() texel.App {
+	return &clockApp{
 		stop: make(chan struct{}),
 	}
 }
 
 // HandleKey does nothing for the clock app.
-func (a *ClockApp) HandleKey(ev *tcell.EventKey) {}
+func (a *clockApp) HandleKey(ev *tcell.EventKey) {}
 
-func (a *ClockApp) SetRefreshNotifier(refreshChan chan<- bool) {
+func (a *clockApp) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 }
 
 // Run starts a ticker to update the time every second.
-func (a *ClockApp) Run() error {
+func (a *clockApp) Run() error {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -48,7 +49,11 @@ func (a *ClockApp) Run() error {
 		case <-ticker.C:
 			updateTime()
 			if a.refreshChan != nil {
-				a.refreshChan <- true
+				// Non-blocking send
+				select {
+				case a.refreshChan <- true:
+				default:
+				}
 			}
 		case <-a.stop:
 			return nil
@@ -57,35 +62,34 @@ func (a *ClockApp) Run() error {
 }
 
 // Stop signals the Run loop to terminate.
-func (a *ClockApp) Stop() {
+func (a *clockApp) Stop() {
 	close(a.stop)
 }
 
 // Resize stores the new dimensions of the pane.
-func (a *ClockApp) Resize(cols, rows int) {
+func (a *clockApp) Resize(cols, rows int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.width, a.height = cols, rows
 }
 
-// Render draws the current time centered in its buffer.
-func (a *ClockApp) Render() [][]Cell {
+// Render now returns a buffer of texel.Cell
+func (a *clockApp) Render() [][]texel.Cell {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
 	if a.width <= 0 || a.height <= 0 {
-		return [][]Cell{}
+		return [][]texel.Cell{}
 	}
 
-	buffer := make([][]Cell, a.height)
+	buffer := make([][]texel.Cell, a.height)
 	for i := range buffer {
-		buffer[i] = make([]Cell, a.width)
+		buffer[i] = make([]texel.Cell, a.width)
 		for j := range buffer[i] {
-			buffer[i][j] = Cell{Ch: ' ', Style: tcell.StyleDefault}
+			buffer[i][j] = texel.Cell{Ch: ' ', Style: tcell.StyleDefault}
 		}
 	}
 
-	// CORRECTED: Use tcell.PaletteColor(6) for Cyan.
 	style := tcell.StyleDefault.Foreground(tcell.PaletteColor(6))
 
 	str := fmt.Sprintf("Time: %s", a.currentTime)
@@ -95,7 +99,7 @@ func (a *ClockApp) Render() [][]Cell {
 	if y < a.height && x >= 0 {
 		for i, ch := range str {
 			if x+i < a.width {
-				buffer[y][x+i] = Cell{Ch: ch, Style: style}
+				buffer[y][x+i] = texel.Cell{Ch: ch, Style: style}
 			}
 		}
 	}
@@ -103,6 +107,6 @@ func (a *ClockApp) Render() [][]Cell {
 	return buffer
 }
 
-func (a *ClockApp) GetTitle() string {
+func (a *clockApp) GetTitle() string {
 	return "Clock"
 }

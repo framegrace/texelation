@@ -1,4 +1,4 @@
-package tui
+package texel
 
 import (
 	"fmt"
@@ -24,6 +24,7 @@ type Screen struct {
 	quit            chan struct{}
 	refreshChan     chan bool
 	mu              sync.RWMutex
+	closeOnce       sync.Once
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -192,10 +193,18 @@ func (s *Screen) drawBorders() {
 
 // Close shuts down tcell and stops all hosted apps.
 func (s *Screen) Close() {
-	for _, p := range s.panes {
-		p.app.Stop()
-	}
-	s.tcellScreen.Fini()
+	s.closeOnce.Do(func() {
+		// Signal the main event loop and event polling goroutine to stop.
+		close(s.quit)
+
+		// Stop all the application goroutines.
+		for _, p := range s.panes {
+			p.app.Stop()
+		}
+
+		// Finalize the tcell screen.
+		s.tcellScreen.Fini()
+	})
 }
 
 // draw clears the screen, composites all panes, and shows the result.

@@ -1,4 +1,4 @@
-package tui
+package texel
 
 // Pane represents a rectangular area on the screen that hosts an App.
 type Pane struct {
