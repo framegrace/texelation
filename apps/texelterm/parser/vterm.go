@@ -219,6 +219,7 @@ func (v *VTerm) SaveCursor() {
 	v.savedCursorX, v.savedCursorY = v.cursorX, v.cursorY
 }
 func (v *VTerm) RestoreCursor() {
+	v.wrapNext = false
 	v.cursorX, v.cursorY = v.savedCursorX, v.savedCursorY
 }
 

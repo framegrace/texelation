@@ -1,7 +1,7 @@
 package texel
 
 import (
-	"fmt"
+	//	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"log"
 	"os"
@@ -131,17 +131,15 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 	}
 }
 
-// compositePanes now applies all effects on a pane before drawing it.
 func (s *Screen) compositePanes() {
 	for _, p := range s.panes {
 		appBuffer := p.app.Render()
 
-		// Apply all effects attached to the pane in order.
 		for _, effect := range p.effects {
 			appBuffer = effect.Apply(appBuffer)
 		}
 
-		s.blit(p.X0+1, p.Y0+1, appBuffer)
+		s.blit(p.absX0, p.absY0, appBuffer)
 	}
 }
 
@@ -152,43 +150,68 @@ func (s *Screen) requestRefresh() {
 	}
 }
 
-// drawBorders now highlights the active pane.
 func (s *Screen) drawBorders() {
-	w, h := s.tcellScreen.Size()
-	defaultBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorWhite)
-	activeBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorYellow)
-
-	for i, p := range s.panes {
-		borderStyle := defaultBorderStyle
-		titleStyle := defaultBorderStyle.Bold(true)
-
-		// Highlight the active pane
-		if i == s.activePaneIndex {
-			borderStyle = activeBorderStyle
-			titleStyle = activeBorderStyle.Bold(true)
-		}
-
-		if p.Y0 >= 0 && p.Y0 < h {
-			for x := p.X0; x < p.X1 && x < w; x++ {
-				s.tcellScreen.SetContent(x, p.Y0, tcell.RuneHLine, nil, borderStyle)
-			}
-		}
-		if p.X0 >= 0 && p.X0 < w {
-			for y := p.Y0 + 1; y < p.Y1 && y < h; y++ {
-				s.tcellScreen.SetContent(p.X0, y, tcell.RuneVLine, nil, borderStyle)
-			}
-		}
-		if p.X0 >= 0 && p.X0 < w && p.Y0 >= 0 && p.Y0 < h {
-			s.tcellScreen.SetContent(p.X0, p.Y0, tcell.RuneULCorner, nil, borderStyle)
-		}
-
-		title := fmt.Sprintf(" %s ", p.app.GetTitle())
-		for i, ch := range title {
-			if p.X0+1+i < p.X1 {
-				s.tcellScreen.SetContent(p.X0+1+i, p.Y0, ch, nil, titleStyle)
-			}
-		}
-	}
+	// w, h := s.tcellScreen.Size()
+	// defaultBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorWhite)
+	// activeBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorYellow)
+	//
+	//	for i, p := range s.panes {
+	//		borderStyle := defaultBorderStyle
+	//		titleStyle := defaultBorderStyle.Bold(true)
+	//
+	//		if i == s.activePaneIndex {
+	//			borderStyle = activeBorderStyle
+	//			titleStyle = activeBorderStyle.Bold(true)
+	//		}
+	//
+	//		// Draw top and bottom borders
+	//		for x := p.absX0; x < p.absX1; x++ {
+	//			if x >= w {
+	//				continue
+	//			}
+	//			if p.absY0 >= 0 && p.absY0 < h {
+	//				s.tcellScreen.SetContent(x, p.absY0, tcell.RuneHLine, nil, borderStyle)
+	//			}
+	//			if p.absY1-1 >= 0 && p.absY1-1 < h {
+	//				s.tcellScreen.SetContent(x, p.absY1-1, tcell.RuneHLine, nil, borderStyle)
+	//			}
+	//		}
+	//
+	//		// Draw left and right borders
+	//		for y := p.absY0; y < p.absY1; y++ {
+	//			if y >= h {
+	//				continue
+	//			}
+	//			if p.absX0 >= 0 && p.absX0 < w {
+	//				s.tcellScreen.SetContent(p.absX0, y, tcell.RuneVLine, nil, borderStyle)
+	//			}
+	//			if p.absX1-1 >= 0 && p.absX1-1 < w {
+	//				s.tcellScreen.SetContent(p.absX1-1, y, tcell.RuneVLine, nil, borderStyle)
+	//			}
+	//		}
+	//
+	//		// Draw corners
+	//		if p.absX0 >= 0 && p.absX0 < w && p.absY0 >= 0 && p.absY0 < h {
+	//			s.tcellScreen.SetContent(p.absX0, p.absY0, tcell.RuneULCorner, nil, borderStyle)
+	//		}
+	//		if p.absX1-1 >= 0 && p.absX1-1 < w && p.absY0 >= 0 && p.absY0 < h {
+	//			s.tcellScreen.SetContent(p.absX1-1, p.absY0, tcell.RuneURCorner, nil, borderStyle)
+	//		}
+	//		if p.absX0 >= 0 && p.absX0 < w && p.absY1-1 >= 0 && p.absY1-1 < h {
+	//			s.tcellScreen.SetContent(p.absX0, p.absY1-1, tcell.RuneLLCorner, nil, borderStyle)
+	//		}
+	//		if p.absX1-1 >= 0 && p.absX1-1 < w && p.absY1-1 >= 0 && p.absY1-1 < h {
+	//			s.tcellScreen.SetContent(p.absX1-1, p.absY1-1, tcell.RuneLRCorner, nil, borderStyle)
+	//		}
+	//
+	//		// Draw title
+	//		title := fmt.Sprintf(" %s ", p.app.GetTitle())
+	//		for i, ch := range title {
+	//			if p.absX0+1+i < p.absX1-1 {
+	//				s.tcellScreen.SetContent(p.absX0+1+i, p.absY0, ch, nil, titleStyle)
+	//			}
+	//		}
+	//	}
 }
 
 // Close shuts down tcell and stops all hosted apps.
@@ -224,24 +247,29 @@ func (s *Screen) blit(x, y int, source [][]Cell) {
 	}
 }
 
-// handleResize is called on a resize event.
+func (s *Screen) ForceResize() {
+	s.handleResize()
+}
+
 func (s *Screen) handleResize() {
 	w, h := s.tcellScreen.Size()
 	s.tcellScreen.Sync()
 
-	cellW := w / 2
-	cellH := h / 2
-	dims := [][4]int{
-		{0, 0, cellW, cellH},
-		{cellW, 0, w, cellH},
-		{0, cellH, cellW, h},
-		{cellW, cellH, w, h},
-	}
+	for _, p := range s.panes {
+		x0 := int(p.Layout.X * float64(w))
+		y0 := int(p.Layout.Y * float64(h))
+		x1 := int((p.Layout.X + p.Layout.W) * float64(w))
+		y1 := int((p.Layout.Y + p.Layout.H) * float64(h))
 
-	for i, p := range s.panes {
-		if i < len(dims) {
-			d := dims[i]
-			p.SetDimensions(d[0], d[1], d[2], d[3])
+		// --- NEW: Prevent rounding gaps ---
+		// If a pane is meant to touch the right or bottom edge, force it
+		// to extend all the way to the screen's boundary.
+		if p.Layout.X+p.Layout.W >= 1.0 {
+			x1 = w
 		}
+		if p.Layout.Y+p.Layout.H >= 1.0 {
+			y1 = h
+		}
+		p.SetDimensions(x0, y0, x1, y1)
 	}
 }

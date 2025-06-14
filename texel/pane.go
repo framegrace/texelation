@@ -1,20 +1,25 @@
 package texel
 
+// Rect defines a rectangle using fractional coordinates (0.0 to 1.0).
+type Rect struct {
+	X, Y, W, H float64
+}
+
 // Pane represents a rectangular area on the screen that hosts an App.
 type Pane struct {
-	X0, Y0, X1, Y1 int // The absolute coordinates on the main screen
-	app            App
-	effects        []Effect // Slice to hold visual effects
+	absX0, absY0, absX1, absY1 int // These are now calculated from Layout
+	Layout                     Rect
+	app                        App
+	effects                    []Effect
 }
 
 // NewPane creates a new Pane with the given dimensions and hosts the provided App.
-func NewPane(x0, y0, x1, y1 int, app App) *Pane {
+func NewPane(layout Rect, app App) *Pane {
 	p := &Pane{
-		X0: x0, Y0: y0, X1: x1, Y1: y1,
-		app: app,
+		Layout: layout,
+		app:    app,
 	}
-	// Inform the app of its initial size, accounting for borders.
-	app.Resize(p.Width(), p.Height())
+	// The app will be resized properly by the first call to handleResize.
 	return p
 }
 
@@ -29,26 +34,23 @@ func (p *Pane) ClearEffects() {
 	p.effects = make([]Effect, 0)
 }
 
-// Width returns the inner width of the pane (excluding borders).
 func (p *Pane) Width() int {
-	w := p.X1 - p.X0 - 2
+	w := p.absX1 - p.absX0
 	if w < 0 {
 		return 0
 	}
 	return w
 }
 
-// Height returns the inner height of the pane (excluding borders).
 func (p *Pane) Height() int {
-	h := p.Y1 - p.Y0 - 2
+	h := p.absY1 - p.absY0
 	if h < 0 {
 		return 0
 	}
 	return h
 }
 
-// SetDimensions updates the pane's position and size and notifies the underlying app.
 func (p *Pane) SetDimensions(x0, y0, x1, y1 int) {
-	p.X0, p.Y0, p.X1, p.Y1 = x0, y0, x1, y1
+	p.absX0, p.absY0, p.absX1, p.absY1 = x0, y0, x1, y1
 	p.app.Resize(p.Width(), p.Height())
 }
