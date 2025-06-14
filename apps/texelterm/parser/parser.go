@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"log"
 	"unicode/utf8" // Import the utf8 package
 )
 
@@ -73,9 +74,13 @@ func (p *Parser) Parse(data []byte) {
 				p.oscBuffer = p.oscBuffer[:0]
 			case '(':
 				p.state = StateCharset
+			case 'M':
+				p.vterm.ReverseIndex()
+				p.state = StateGround
 			case '=', '>':
 				p.state = StateGround
 			default:
+				log.Printf("Parser: Unhandled ESC sequence: %q", b)
 				p.state = StateGround
 			}
 		case StateCSI:

@@ -1,4 +1,4 @@
-package texel
+package texelterm
 
 import (
 	"log"
@@ -7,14 +7,15 @@ import (
 	//	"strconv"
 	"sync"
 	"syscall"
-	"texelation/texel/parser"
+	"texelation/apps/texelterm/parser"
+	"texelation/texel"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2" // Import tcell
 )
 
-// The PTYApp struct remains the same, but its Render method will produce tcell-compatible output.
-type PTYApp struct {
+// The texelTerm struct remains the same, but its Render method will produce tcell-compatible output.
+type texelTerm struct {
 	title       string
 	command     string
 	width       int
@@ -29,32 +30,32 @@ type PTYApp struct {
 }
 
 // SetRefreshNotifier implements the new interface method.
-func (a *PTYApp) SetRefreshNotifier(refreshChan chan<- bool) {
+func (a *texelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 }
 
 // Render translates our VTerm's state into the main application's buffer.
-func (a *PTYApp) Render() [][]Cell {
+func (a *texelTerm) Render() [][]texel.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if a.vterm == nil {
-		return [][]Cell{}
+		return [][]texel.Cell{}
 	}
 
 	vtermGrid := a.vterm.Grid()
 	rows := len(vtermGrid)
 	if rows == 0 {
-		return [][]Cell{}
+		return [][]texel.Cell{}
 	}
 	cols := len(vtermGrid[0])
 
-	buffer := make([][]Cell, rows)
+	buffer := make([][]texel.Cell, rows)
 	cursorX, cursorY := a.vterm.Cursor()
 	cursorVisible := a.vterm.CursorVisible()
 
 	for y := 0; y < rows; y++ {
-		buffer[y] = make([]Cell, cols)
+		buffer[y] = make([]texel.Cell, cols)
 		for x := 0; x < cols; x++ {
 			parserCell := vtermGrid[y][x]
 			// The new apply function returns a tcell.Style
@@ -69,7 +70,7 @@ func (a *PTYApp) Render() [][]Cell {
 	return buffer
 }
 
-func applyParserStyle(pCell parser.Cell) Cell {
+func applyParserStyle(pCell parser.Cell) texel.Cell {
 	style := tcell.StyleDefault
 	fg := mapParserColorToTCell(pCell.FG)
 	bg := mapParserColorToTCell(pCell.BG)
@@ -77,7 +78,7 @@ func applyParserStyle(pCell parser.Cell) Cell {
 	style = style.Bold(pCell.Attr&parser.AttrBold != 0)
 	style = style.Underline(pCell.Attr&parser.AttrUnderline != 0)
 	style = style.Reverse(pCell.Attr&parser.AttrReverse != 0)
-	return Cell{
+	return texel.Cell{
 		Ch:    pCell.Rune,
 		Style: style,
 	}
@@ -99,7 +100,7 @@ func mapParserColorToTCell(c parser.Color) tcell.Color {
 	}
 }
 
-func (a *PTYApp) HandleKey(ev *tcell.EventKey) {
+func (a *texelTerm) HandleKey(ev *tcell.EventKey) {
 	if a.pty == nil {
 		return
 	}
@@ -180,8 +181,8 @@ func (a *PTYApp) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
-func NewPTYApp(title, command string) *PTYApp {
-	return &PTYApp{
+func New(title, command string) texel.App {
+	return &texelTerm{
 		title:   title,
 		command: command,
 		width:   80, // Sensible defaults
@@ -190,7 +191,7 @@ func NewPTYApp(title, command string) *PTYApp {
 	}
 }
 
-func (a *PTYApp) Run() error {
+func (a *texelTerm) Run() error {
 	a.mu.Lock()
 	cols := a.width
 	rows := a.height
@@ -265,7 +266,7 @@ func (a *PTYApp) Run() error {
 	return cmd.Wait()
 }
 
-func (a *PTYApp) Resize(cols, rows int) {
+func (a *texelTerm) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
 	}
@@ -286,7 +287,7 @@ func (a *PTYApp) Resize(cols, rows int) {
 		})
 	}
 }
-func (a *PTYApp) Stop() {
+func (a *texelTerm) Stop() {
 	// --- MODIFIED: Added a detailed comment explaining shutdown logic ---
 	// NOTE on graceful shutdown:
 	// There is a potential race condition here. We signal the reading goroutine to stop
@@ -306,7 +307,7 @@ func (a *PTYApp) Stop() {
 	}
 }
 
-func (a *PTYApp) GetTitle() string {
+func (a *texelTerm) GetTitle() string {
 	// This method now returns the dynamically updated title!
 	a.mu.Lock()
 	defer a.mu.Unlock()

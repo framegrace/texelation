@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"texelation/apps/clock"
+	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
 	"texelation/texel"
 
@@ -44,10 +45,10 @@ func setupPanes(screen *texel.Screen) {
 	cellH := h / 2
 
 	// Create the applications that will run in the panes
-	appTop := texel.NewPTYApp("htop", "htop")
+	appTop := texelterm.New("htop", "htop")
 	appClock := clock.NewClockApp()
 	appWelcome := welcome.NewWelcomeApp()
-	appPTYShell := texel.NewPTYApp("shell", "/bin/bash")
+	appPTYShell := texelterm.New("shell", "/bin/bash")
 
 	// Create panes and add them to the screen
 	panes := []*texel.Pane{

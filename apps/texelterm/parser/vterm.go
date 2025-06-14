@@ -147,7 +147,8 @@ func (v *VTerm) DeleteCharacters(n int) {
 }
 
 func (v *VTerm) scrollUp() {
-	copy(v.grid[v.marginTop:], v.grid[v.marginTop+1:v.marginBottom+1])
+	//	copy(v.grid[v.marginTop:], v.grid[v.marginTop+1:v.marginBottom+1])
+	copy(v.grid[v.marginTop:v.marginBottom], v.grid[v.marginTop+1:v.marginBottom+1])
 	newLine := make([]Cell, v.width)
 	for i := range newLine {
 		newLine[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
@@ -165,6 +166,18 @@ func (v *VTerm) scrollDown(n int) {
 			newLine[j] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
 		v.grid[v.marginTop] = newLine
+	}
+}
+
+// ReverseIndex handles the ESC M sequence. It moves the cursor up one line,
+// scrolling the content of the scrolling region down if the cursor is at the top margin.
+func (v *VTerm) ReverseIndex() {
+	if v.cursorY == v.marginTop {
+		// If at the top of the region, scroll the region down by one line.
+		v.scrollDown(1)
+	} else if v.cursorY > 0 {
+		// Otherwise, just move the cursor up.
+		v.cursorY--
 	}
 }
 
@@ -289,12 +302,15 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 		log.Println("Parser: Ignoring device attribute request (0c)")
 	case 'q': // Load LEDs
 		log.Println("Parser: Ignoring Load LEDs command (q)")
+	default:
+		log.Printf("Parser: Unhandled CSI sequence: %q, params: %v", command, params)
 	}
 }
 
 // --- NEW HELPER METHODS FOR ProcessCSI ---
 
 func (v *VTerm) handleCursorMovement(command byte, params []int) {
+	v.wrapNext = false
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
@@ -552,7 +568,11 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 		case 25:
 			v.SetCursorVisible(true)
 		case 1049:
-			log.Println("Parser: Ignoring set alternate screen buffer (1049h)")
+			// On switching to alternate buffer, we save the cursor,
+			// then clear the screen and home the cursor.
+			v.SaveCursor()
+			v.ClearScreen()
+			v.SetCursorPos(0, 0)
 		case 2004:
 			log.Println("Parser: Ignoring set bracketed paste mode (2004h)")
 		}
