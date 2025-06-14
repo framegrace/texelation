@@ -76,7 +76,7 @@ func (s *Screen) Run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGWINCH)
 
-	eventChan := make(chan tcell.Event)
+	eventChan := make(chan tcell.Event, 10)
 	go func() {
 		for {
 			select {
@@ -235,5 +235,4 @@ func (s *Screen) handleResize() {
 			p.SetDimensions(d[0], d[1], d[2], d[3])
 		}
 	}
-	s.requestRefresh()
 }
