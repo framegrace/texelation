@@ -261,9 +261,6 @@ func (s *Screen) handleResize() {
 		x1 := int((p.Layout.X + p.Layout.W) * float64(w))
 		y1 := int((p.Layout.Y + p.Layout.H) * float64(h))
 
-		// --- NEW: Prevent rounding gaps ---
-		// If a pane is meant to touch the right or bottom edge, force it
-		// to extend all the way to the screen's boundary.
 		if p.Layout.X+p.Layout.W >= 1.0 {
 			x1 = w
 		}
