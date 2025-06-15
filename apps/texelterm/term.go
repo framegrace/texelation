@@ -247,9 +247,7 @@ func (a *texelTerm) Run() error {
 						a.parser.Parse(buf[:n])
 					}
 					a.mu.Unlock()
-					// --- NEW: Signal that the screen needs a redraw ---
 					if a.refreshChan != nil {
-						// Non-blocking send. If a redraw is already pending, we don't need to send another.
 						select {
 						case a.refreshChan <- true:
 						default:
@@ -285,7 +283,7 @@ func (a *texelTerm) Resize(cols, rows int) {
 			Rows: uint16(rows),
 			Cols: uint16(cols),
 		})
-		a.pty.Write([]byte{'\x0C'})
+		//		a.pty.Write([]byte{'\x0C'})
 	}
 }
 func (a *texelTerm) Stop() {
@@ -295,15 +293,11 @@ func (a *texelTerm) Stop() {
 		a.pty.Close()
 	}
 	if a.cmd != nil && a.cmd.Process != nil {
-		// --- CORRECTED LOGIC ---
-		// Send a SIGTERM signal for a graceful shutdown instead of SIGKILL.
 		a.cmd.Process.Signal(syscall.SIGTERM)
-		// --- END CORRECTION ---
 	}
 }
 
 func (a *texelTerm) GetTitle() string {
-	// This method now returns the dynamically updated title!
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.title
