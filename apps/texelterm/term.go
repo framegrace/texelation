@@ -201,11 +201,8 @@ func (a *texelTerm) Run() error {
 	cmd := exec.Command(a.command)
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
-		//		"COLUMNS="+strconv.Itoa(cols),
-		//		"LINES="+strconv.Itoa(rows),
 	)
 
-	// Use pty.StartWithSize for a simpler, more reliable startup.
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
 		Rows: uint16(rows),
 		Cols: uint16(cols),
@@ -234,7 +231,6 @@ func (a *texelTerm) Run() error {
 
 	a.wg.Add(1)
 
-	// Start the reading goroutine
 	go func() {
 		defer a.wg.Done()
 		defer ptmx.Close()

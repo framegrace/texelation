@@ -23,7 +23,7 @@ type Screen struct {
 	fadeEffect      Effect
 	quit            chan struct{}
 	refreshChan     chan bool
-	mu              sync.RWMutex
+	mu              sync.Mutex
 	closeOnce       sync.Once
 }
 
