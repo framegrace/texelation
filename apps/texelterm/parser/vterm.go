@@ -9,21 +9,24 @@ import (
 
 // VTerm holds the state of a virtual terminal.
 type VTerm struct {
-	width, height              int
-	cursorX, cursorY           int
-	savedCursorX, savedCursorY int
-	grid                       [][]Cell
-	currentFG, currentBG       Color
-	currentAttr                Attribute
-	tabStops                   map[int]bool
-	cursorVisible              bool
-	wrapNext                   bool
-	autoWrapMode               bool
-	insertMode                 bool
-	appCursorKeys              bool
-	TitleChanged               func(string)
-	WriteToPty                 func([]byte)
-	marginTop, marginBottom    int
+	width, height                     int
+	cursorX, cursorY                  int
+	savedCursorX, savedCursorY        int
+	grid                              [][]Cell
+	currentFG, currentBG              Color
+	currentAttr                       Attribute
+	tabStops                          map[int]bool
+	cursorVisible                     bool
+	wrapNext                          bool
+	autoWrapMode                      bool
+	insertMode                        bool
+	appCursorKeys                     bool
+	TitleChanged                      func(string)
+	WriteToPty                        func([]byte)
+	marginTop, marginBottom           int
+	savedGrid                         [][]Cell
+	savedWidth, savedHeight           int
+	savedMarginTop, savedMarginBottom int
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -146,9 +149,69 @@ func (v *VTerm) DeleteCharacters(n int) {
 	}
 }
 
+// InsertLines inserts n blank lines at the cursor, pushing subsequent lines down.
+func (v *VTerm) InsertLines(n int) {
+	// This command is only active when the cursor is within the scrolling margins.
+	if v.cursorY < v.marginTop || v.cursorY > v.marginBottom {
+		return
+	}
+
+	// Clamp n to prevent inserting more lines than available in the region.
+	if v.cursorY+n > v.marginBottom+1 {
+		n = v.marginBottom - v.cursorY + 1
+	}
+
+	// Shift lines down within the scrolling region, starting from the bottom.
+	for y := v.marginBottom; y >= v.cursorY+n; y-- {
+		copy(v.grid[y], v.grid[y-n])
+	}
+
+	// Clear the n new lines at the cursor position.
+	for y := v.cursorY; y < v.cursorY+n && y <= v.marginBottom; y++ {
+		newLine := make([]Cell, v.width)
+		for x := range newLine {
+			newLine[x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+		v.grid[y] = newLine
+	}
+}
+
+// DeleteLines deletes n lines at the cursor, pulling subsequent lines up.
+func (v *VTerm) DeleteLines(n int) {
+	// This command is only active when the cursor is within the scrolling margins.
+	if v.cursorY < v.marginTop || v.cursorY > v.marginBottom {
+		return
+	}
+
+	// Clamp n to prevent deleting more lines than available in the region.
+	if v.cursorY+n > v.marginBottom+1 {
+		n = v.marginBottom - v.cursorY + 1
+	}
+
+	// Shift lines up within the scrolling region, starting from the cursor.
+	for y := v.cursorY; y <= v.marginBottom-n; y++ {
+		copy(v.grid[y], v.grid[y+n])
+	}
+
+	// Clear the n new lines at the bottom of the scrolling region.
+	for y := v.marginBottom - n + 1; y <= v.marginBottom; y++ {
+		newLine := make([]Cell, v.width)
+		for x := range newLine {
+			// Use default background color for cleared lines.
+			newLine[x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+		v.grid[y] = newLine
+	}
+}
+
 func (v *VTerm) scrollUp() {
-	//	copy(v.grid[v.marginTop:], v.grid[v.marginTop+1:v.marginBottom+1])
-	copy(v.grid[v.marginTop:v.marginBottom], v.grid[v.marginTop+1:v.marginBottom+1])
+	// By iterating and copying each row's content, we avoid the bug of
+	// copying slice headers and making rows point to the same memory.
+	for y := v.marginTop; y < v.marginBottom; y++ {
+		copy(v.grid[y], v.grid[y+1])
+	}
+
+	// Clear the last line of the scrolling region.
 	newLine := make([]Cell, v.width)
 	for i := range newLine {
 		newLine[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
@@ -157,10 +220,14 @@ func (v *VTerm) scrollUp() {
 }
 
 func (v *VTerm) scrollDown(n int) {
-	// Shift lines down within the scrolling region
 	for i := 0; i < n; i++ {
-		copy(v.grid[v.marginTop+1:v.marginBottom+1], v.grid[v.marginTop:v.marginBottom])
-		// Clear the new top line of the region
+		// To scroll down, we must copy rows backwards from the bottom of
+		// the region to avoid overwriting the source rows prematurely.
+		for y := v.marginBottom; y > v.marginTop; y-- {
+			copy(v.grid[y], v.grid[y-1])
+		}
+
+		// Clear the new top line of the region.
 		newLine := make([]Cell, v.width)
 		for j := range newLine {
 			newLine[j] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
@@ -180,8 +247,6 @@ func (v *VTerm) ReverseIndex() {
 		v.cursorY--
 	}
 }
-
-// --- NEW METHODS ---
 
 // MoveCursorUp moves the cursor n positions up.
 func (v *VTerm) MoveCursorUp(n int) {
@@ -227,9 +292,41 @@ func (v *VTerm) ClearScreenMode(mode int) {
 	switch mode {
 	case 0:
 		v.ClearToEndOfScreen()
+	case 1: // Erase from beginning of screen to cursor
+		v.ClearToBeginningOfScreen()
 	case 2:
 		v.ClearScreen()
 		v.SetCursorPos(0, 0)
+	}
+}
+func (v *VTerm) Reset() {
+	// Reset cursor position and saved state.
+	v.SetCursorPos(0, 0)
+	v.savedCursorX, v.savedCursorY = 0, 0
+	v.savedMarginTop, v.savedMarginBottom = 0, 0
+	v.savedGrid = nil
+
+	// Reset grid content.
+	v.ClearScreen()
+
+	// Reset graphical attributes and colors.
+	v.ResetAttributes()
+
+	// Reset margins to full screen size.
+	v.marginTop = 0
+	v.marginBottom = v.height - 1
+
+	// Reset modes to their defaults.
+	v.cursorVisible = true
+	v.wrapNext = false
+	v.autoWrapMode = true
+	v.insertMode = false
+	v.appCursorKeys = false
+	v.ClearAllTabStops()
+	for i := 0; i < v.width; i++ {
+		if i%8 == 0 {
+			v.tabStops[i] = true
+		}
 	}
 }
 
@@ -252,22 +349,27 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 		return
 	}
 
+	param := func(i int, defaultVal int) int {
+		if i < len(params) && params[i] != 0 {
+			return params[i]
+		}
+		return defaultVal
+	}
+
 	switch command {
 	case 'A', 'B', 'C', 'D', 'G', 'H', 'f', 'd':
 		v.handleCursorMovement(command, params)
 	case 'J', 'K', 'P', 'X':
 		v.handleErase(command, params)
+	case 'L': // Insert Lines (IL) is not implemented yet but we log it
+		v.InsertLines(param(0, 1))
+	case 'M': // Delete Lines (DL)
+		v.DeleteLines(param(0, 1))
 	case 'S', 'T':
 		v.handleScroll(command, params)
 	case 'm':
 		v.handleSGR(params)
 	case 'n': // Device Status Report (DSR)
-		param := func(i int, defaultVal int) int {
-			if i < len(params) && params[i] != 0 {
-				return params[i]
-			}
-			return defaultVal
-		}
 		if param(0, 0) == 6 {
 			log.Println("Parser: Received cursor position request (6n). Responding.")
 			response := fmt.Sprintf("\x1b[%d;%dR", v.cursorY+1, v.cursorX+1)
@@ -276,12 +378,6 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 			}
 		}
 	case 'r': // Set Top and Bottom Margins (DECSTBM)
-		param := func(i int, defaultVal int) int {
-			if i < len(params) && params[i] != 0 {
-				return params[i]
-			}
-			return defaultVal
-		}
 		v.SetMargins(param(0, 1), param(1, v.height))
 	case 'h', 'l': // Set/Reset Mode
 		v.handleMode(command, params)
@@ -290,17 +386,15 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 	case 'u':
 		v.RestoreCursor()
 	case 'g': // Tabulation Clear
-		param := func(i int, defaultVal int) int {
-			if i < len(params) && params[i] != 0 {
-				return params[i]
-			}
-			return defaultVal
-		}
 		if param(0, 0) == 3 {
 			v.ClearAllTabStops()
 		}
 	case 'c':
 		log.Println("Parser: Ignoring device attribute request (0c)")
+	case 'p':
+		// Ignore Soft Terminal Reset (DECSTR) and similar commands.
+	case 't':
+		// Ignore xterm window manipulation commands
 	case 'q': // Load LEDs
 		log.Println("Parser: Ignoring Load LEDs command (q)")
 	default:
@@ -569,11 +663,22 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 		case 25:
 			v.SetCursorVisible(true)
 		case 1049:
-			// On switching to alternate buffer, we save the cursor,
-			// then clear the screen and home the cursor.
+			// Save the current screen and cursor state.
+			v.savedWidth = v.width   // ADDED: Save original width
+			v.savedHeight = v.height // ADDED: Save original height
+			v.savedMarginTop = v.marginTop
+			v.savedMarginBottom = v.marginBottom
+			v.savedGrid = make([][]Cell, v.height)
+			for i := range v.grid {
+				v.savedGrid[i] = make([]Cell, v.width)
+				copy(v.savedGrid[i], v.grid[i])
+			}
 			v.SaveCursor()
+			// Then clear the screen for the alternate buffer.
 			v.ClearScreen()
 			v.SetCursorPos(0, 0)
+			v.marginTop = 0
+			v.marginBottom = v.height - 1
 		case 2004:
 			log.Println("Parser: Ignoring set bracketed paste mode (2004h)")
 		}
@@ -590,15 +695,34 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 		case 25:
 			v.SetCursorVisible(false)
 		case 1049:
-			log.Println("Parser: Ignoring reset alternate screen buffer (1049l)")
+			// Restore the saved screen and cursor state.
+			if v.savedGrid != nil {
+				v.grid = v.savedGrid
+				v.width = v.savedWidth // ADDED: Restore original width
+				v.height = v.savedHeight
+				v.marginTop = v.savedMarginTop
+				v.marginBottom = v.savedMarginBottom
+				v.savedGrid = nil
+			}
+			v.RestoreCursor()
 		case 2004:
 			log.Println("Parser: Ignoring reset bracketed paste mode (2004l)")
 		}
 	}
 }
+
 func (v *VTerm) ClearToEndOfScreen() {
-	v.ClearLine(0)
-	for y := v.cursorY + 1; y < v.height; y++ {
+	v.ClearLine(0) // Erase from cursor to end of the current line.
+	for y := v.cursorY + 1; y <= v.marginBottom; y++ {
+		for x := 0; x < v.width; x++ {
+			v.grid[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		}
+	}
+}
+
+func (v *VTerm) ClearToBeginningOfScreen() {
+	v.ClearLine(1) // Erase from beginning of the current line to the cursor.
+	for y := v.marginTop; y < v.cursorY; y++ {
 		for x := 0; x < v.width; x++ {
 			v.grid[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}

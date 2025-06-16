@@ -14,6 +14,8 @@ const (
 	StateCSI
 	StateOSC
 	StateCharset
+	StateDCS
+	StateDCSEscape
 )
 
 type Parser struct {
@@ -23,6 +25,7 @@ type Parser struct {
 	currentParam int
 	private      bool
 	oscBuffer    []byte
+	utf8Stash    []byte
 }
 
 func NewParser(v *VTerm) *Parser {
@@ -31,14 +34,45 @@ func NewParser(v *VTerm) *Parser {
 		vterm:     v,
 		params:    make([]int, 0, 16),
 		oscBuffer: make([]byte, 0, 128),
+		utf8Stash: make([]byte, 0, 4),
 	}
 }
 
 // Parse processes a slice of bytes from the PTY.
 func (p *Parser) Parse(data []byte) {
-	// Refactored loop to handle multi-byte UTF-8 characters correctly.
-	for i := 0; i < len(data); {
-		b := data[i]
+	// Prepend any stashed bytes from a previous partial read.
+	if len(p.utf8Stash) > 0 {
+		data = append(p.utf8Stash, data...)
+		p.utf8Stash = p.utf8Stash[:0]
+	}
+
+	// Find the boundary of the last valid UTF-8 character to avoid
+	// processing an incomplete sequence at the very end of the buffer.
+	end := len(data)
+	if end > 0 {
+		// We only need to check if the state is Ground, as escape sequences are single-byte characters.
+		if p.state == StateGround {
+			// Walk backwards from the end of the buffer to find the start of the last potential rune.
+			lastRuneStart := end
+			for i := 1; i <= 4 && lastRuneStart > 0; i++ {
+				lastRuneStart--
+				if utf8.RuneStart(data[lastRuneStart]) {
+					break
+				}
+			}
+
+			// If the last potential rune is incomplete, stash it for the next read.
+			if !utf8.FullRune(data[lastRuneStart:]) {
+				p.utf8Stash = append(p.utf8Stash, data[lastRuneStart:]...)
+				end = lastRuneStart // We will only parse the data before the stashed part.
+			}
+		}
+	}
+
+	dataToParse := data[:end]
+
+	for i := 0; i < len(dataToParse); {
+		b := dataToParse[i]
 		var size int = 1 // Default to consuming 1 byte
 
 		switch p.state {
@@ -59,7 +93,7 @@ func (p *Parser) Parse(data []byte) {
 			default:
 				// Decode a full rune and its size in bytes
 				var r rune
-				r, size = utf8.DecodeRune(data[i:])
+				r, size = utf8.DecodeRune(dataToParse[i:])
 				p.vterm.placeChar(r)
 			}
 		case StateEscape:
@@ -72,6 +106,11 @@ func (p *Parser) Parse(data []byte) {
 			case ']':
 				p.state = StateOSC
 				p.oscBuffer = p.oscBuffer[:0]
+			case 'P': // Device Control String
+				p.state = StateDCS
+			case 'c': // ADDED: Handle Full Reset (RIS)
+				p.vterm.Reset()
+				p.state = StateGround
 			case '(':
 				p.state = StateCharset
 			case 'M':
@@ -84,14 +123,16 @@ func (p *Parser) Parse(data []byte) {
 				p.state = StateGround
 			}
 		case StateCSI:
-			if b >= '0' && b <= '9' {
+			switch {
+			case b >= '0' && b <= '9':
 				p.currentParam = p.currentParam*10 + int(b-'0')
-			} else if b == ';' {
+			case b == ';':
 				p.params = append(p.params, p.currentParam)
 				p.currentParam = 0
-			} else if b == '?' {
+			case b >= '<' && b <= '?':
 				p.private = true
-			} else if b >= '@' && b <= '~' {
+			case b >= ' ' && b <= '/':
+			case b >= '@' && b <= '~':
 				p.params = append(p.params, p.currentParam)
 				p.vterm.ProcessCSI(b, p.params, p.private)
 				p.state = StateGround
@@ -102,6 +143,17 @@ func (p *Parser) Parse(data []byte) {
 				p.state = StateGround
 			} else {
 				p.oscBuffer = append(p.oscBuffer, b)
+			}
+		case StateDCS: // NEW STATE: Actively ignore bytes until we see an ESC for the terminator.
+			if b == '\x1b' {
+				p.state = StateDCSEscape
+			}
+		case StateDCSEscape: // NEW STATE: We saw an ESC, check if the next char is the terminator.
+			if b == '\\' {
+				p.state = StateGround
+			} else {
+				// It was a false alarm, go back to ignoring DCS bytes.
+				p.state = StateDCS
 			}
 		case StateCharset:
 			p.state = StateGround
