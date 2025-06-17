@@ -342,17 +342,32 @@ func (v *VTerm) ResetAttributes() {
 	v.currentAttr = 0
 }
 
+func (v *VTerm) SoftReset() {
+	v.ResetAttributes() // Reset graphical attributes
+	v.marginTop = 0     // Reset margins
+	v.marginBottom = v.height - 1
+	v.SetCursorVisible(true) // Cursor becomes visible
+	v.appCursorKeys = false  // Set normal cursor key mode
+	v.SaveCursor()           // Reset saved cursor position
+}
+
 func (v *VTerm) Grid() [][]Cell                { return v.grid }
 func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool           { return v.cursorVisible }
 func (v *VTerm) SetCursorVisible(visible bool) { v.cursorVisible = visible }
 
-func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
-	if private {
-		v.processPrivateCSI(command, params)
+func (v *VTerm) ProcessCSI(command byte, params []int, intermediate byte) {
+	if intermediate == '!' && command == 'p' {
+		v.SoftReset() // Handle DECSTR
 		return
 	}
 
+	if intermediate != 0 {
+		log.Printf("Parser: Unhandled CSI sequence with intermediate byte: %q %q, params: %v", intermediate, command, params)
+		return
+	}
+
+	// Private CSI (e.g. CSI ?1049h) has its own dispatcher
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
@@ -360,54 +375,43 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 		return defaultVal
 	}
 
+	// This is the private parameter for sequences like `CSI ?25l`.
+	// The `private` flag is set when the parser sees a `?`
+	if param(0, -1) > 0 && (command == 'h' || command == 'l') {
+		v.processPrivateCSI(command, params)
+		return
+	}
+
 	switch command {
 	case 'A', 'B', 'C', 'D', 'G', 'H', 'f', 'd':
 		v.handleCursorMovement(command, params)
-	case 'J', 'K', 'P', 'X':
+	case 'J', 'K', 'P', 'X', '@':
 		v.handleErase(command, params)
-	case 'L': // Insert Lines (IL) is not implemented yet but we log it
+	case 'L':
 		v.InsertLines(param(0, 1))
-	case 'M': // Delete Lines (DL)
+	case 'M':
 		v.DeleteLines(param(0, 1))
 	case 'S', 'T':
 		v.handleScroll(command, params)
 	case 'm':
 		v.handleSGR(params)
-	case 'n': // Device Status Report (DSR)
+	case 'n':
 		if param(0, 0) == 6 {
-			log.Println("Parser: Received cursor position request (6n). Responding.")
 			response := fmt.Sprintf("\x1b[%d;%dR", v.cursorY+1, v.cursorX+1)
 			if v.WriteToPty != nil {
 				v.WriteToPty([]byte(response))
 			}
 		}
-	case 'r': // Set Top and Bottom Margins (DECSTBM)
+	case 'r':
 		v.SetMargins(param(0, 1), param(1, v.height))
-	case 'h', 'l': // Set/Reset Mode
-		v.handleMode(command, params)
 	case 's':
 		v.SaveCursor()
 	case 'u':
 		v.RestoreCursor()
-	case 'g': // Tabulation Clear
+	case 'g':
 		if param(0, 0) == 3 {
 			v.ClearAllTabStops()
 		}
-	case 'c':
-		log.Println("Parser: Ignoring device attribute request (0c)")
-	case 'p':
-		// Implement DECSTR - Soft Terminal Reset.
-		// This resets margins, graphics, and other states without clearing the screen.
-		v.ResetAttributes() // Resets SGR
-		v.marginTop = 0
-		v.marginBottom = v.height - 1
-		v.SetCursorVisible(true)
-		v.appCursorKeys = false // Reset to normal cursor keys
-		v.SaveCursor()          // DECSTR resets the saved cursor state as well
-	case 't':
-		// Ignore xterm window manipulation commands
-	case 'q': // Load LEDs
-		log.Println("Parser: Ignoring Load LEDs command (q)")
 	default:
 		log.Printf("Parser: Unhandled CSI sequence: %q, params: %v", command, params)
 	}

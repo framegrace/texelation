@@ -26,6 +26,7 @@ type Parser struct {
 	private      bool
 	oscBuffer    []byte
 	utf8Stash    []byte
+	intermediate byte
 }
 
 func NewParser(v *VTerm) *Parser {
@@ -40,19 +41,14 @@ func NewParser(v *VTerm) *Parser {
 
 // Parse processes a slice of bytes from the PTY.
 func (p *Parser) Parse(data []byte) {
-	// Prepend any stashed bytes from a previous partial read.
 	if len(p.utf8Stash) > 0 {
 		data = append(p.utf8Stash, data...)
 		p.utf8Stash = p.utf8Stash[:0]
 	}
 
-	// Find the boundary of the last valid UTF-8 character to avoid
-	// processing an incomplete sequence at the very end of the buffer.
 	end := len(data)
 	if end > 0 {
-		// We only need to check if the state is Ground, as escape sequences are single-byte characters.
 		if p.state == StateGround {
-			// Walk backwards from the end of the buffer to find the start of the last potential rune.
 			lastRuneStart := end
 			for i := 1; i <= 4 && lastRuneStart > 0; i++ {
 				lastRuneStart--
@@ -61,26 +57,18 @@ func (p *Parser) Parse(data []byte) {
 				}
 			}
 
-			// If the last potential rune is incomplete, stash it for the next read.
 			if !utf8.FullRune(data[lastRuneStart:]) {
 				p.utf8Stash = append(p.utf8Stash, data[lastRuneStart:]...)
-				end = lastRuneStart // We will only parse the data before the stashed part.
+				end = lastRuneStart
 			}
 		}
 	}
-
 	dataToParse := data[:end]
 
 	for i := 0; i < len(dataToParse); {
 		b := dataToParse[i]
-		var size int = 1 // Default to consuming 1 byte
-		// --- MODIFICATION FOR VISUAL LOGGING ---
-		// If we are about to enter an escape sequence, dump the grid first.
-		if p.state == StateGround && b == '\x1b' {
-			p.vterm.DumpGrid("Before ESC sequence")
-			log.Printf("Parser: Processing sequence starting with ESC")
-		}
-		// --- END MODIFICATION ---
+		var size int = 1
+
 		switch p.state {
 		case StateGround:
 			switch {
@@ -95,9 +83,7 @@ func (p *Parser) Parse(data []byte) {
 			case b == '\t':
 				p.vterm.Tab()
 			case b < ' ':
-				// Ignore other control characters for now
 			default:
-				// Decode a full rune and its size in bytes
 				var r rune
 				r, size = utf8.DecodeRune(dataToParse[i:])
 				p.vterm.placeChar(r)
@@ -109,12 +95,13 @@ func (p *Parser) Parse(data []byte) {
 				p.params = p.params[:0]
 				p.currentParam = 0
 				p.private = false
+				p.intermediate = 0 // Reset intermediate byte
 			case ']':
 				p.state = StateOSC
 				p.oscBuffer = p.oscBuffer[:0]
-			case 'P': // Device Control String
+			case 'P':
 				p.state = StateDCS
-			case 'c': // ADDED: Handle Full Reset (RIS)
+			case 'c':
 				p.vterm.Reset()
 				p.state = StateGround
 			case '(':
@@ -135,17 +122,17 @@ func (p *Parser) Parse(data []byte) {
 			case b == ';':
 				p.params = append(p.params, p.currentParam)
 				p.currentParam = 0
+			case b >= ' ' && b <= '/':
+				// This range includes '!' for DECSTR
+				p.intermediate = b
 			case b >= '<' && b <= '?':
 				p.private = true
-			case b >= ' ' && b <= '/':
 			case b >= '@' && b <= '~':
 				p.params = append(p.params, p.currentParam)
-				p.vterm.ProcessCSI(b, p.params, p.private)
-				// --- MODIFICATION FOR VISUAL LOGGING ---
-				p.vterm.DumpGrid("After CSI sequence")
-				// --- END MODIFICATION ---
+				p.vterm.ProcessCSI(b, p.params, p.intermediate)
 				p.state = StateGround
 			}
+		// ... (rest of the cases remain the same) ...
 		case StateOSC:
 			if b == '\x07' {
 				p.handleOSC()
@@ -153,21 +140,19 @@ func (p *Parser) Parse(data []byte) {
 			} else {
 				p.oscBuffer = append(p.oscBuffer, b)
 			}
-		case StateDCS: // NEW STATE: Actively ignore bytes until we see an ESC for the terminator.
+		case StateDCS:
 			if b == '\x1b' {
 				p.state = StateDCSEscape
 			}
-		case StateDCSEscape: // NEW STATE: We saw an ESC, check if the next char is the terminator.
+		case StateDCSEscape:
 			if b == '\\' {
 				p.state = StateGround
 			} else {
-				// It was a false alarm, go back to ignoring DCS bytes.
 				p.state = StateDCS
 			}
 		case StateCharset:
 			p.state = StateGround
 		}
-		// Advance the loop by the number of bytes consumed
 		i += size
 	}
 }
