@@ -74,7 +74,13 @@ func (p *Parser) Parse(data []byte) {
 	for i := 0; i < len(dataToParse); {
 		b := dataToParse[i]
 		var size int = 1 // Default to consuming 1 byte
-
+		// --- MODIFICATION FOR VISUAL LOGGING ---
+		// If we are about to enter an escape sequence, dump the grid first.
+		if p.state == StateGround && b == '\x1b' {
+			p.vterm.DumpGrid("Before ESC sequence")
+			log.Printf("Parser: Processing sequence starting with ESC")
+		}
+		// --- END MODIFICATION ---
 		switch p.state {
 		case StateGround:
 			switch {
@@ -135,6 +141,9 @@ func (p *Parser) Parse(data []byte) {
 			case b >= '@' && b <= '~':
 				p.params = append(p.params, p.currentParam)
 				p.vterm.ProcessCSI(b, p.params, p.private)
+				// --- MODIFICATION FOR VISUAL LOGGING ---
+				p.vterm.DumpGrid("After CSI sequence")
+				// --- END MODIFICATION ---
 				p.state = StateGround
 			}
 		case StateOSC:

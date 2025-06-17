@@ -66,15 +66,11 @@ func (v *VTerm) Resize(width, height int) {
 		return
 	}
 
-	// Check if margins were set to the old full screen size before the resize.
-	marginsAtFullScreen := (v.marginTop == 0 && v.marginBottom == v.height-1)
-
 	// Create a new grid of the correct size, filled with default cells
 	newGrid := make([][]Cell, height)
 	for y := range newGrid {
 		newGrid[y] = make([]Cell, width)
 		for x := range newGrid[y] {
-			// Initialize with the default background color, not the current one.
 			newGrid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
 		}
 	}
@@ -91,19 +87,12 @@ func (v *VTerm) Resize(width, height int) {
 	v.width = width
 	v.height = height
 
-	// If margins were at full screen, update them to the new full screen.
-	// Otherwise, just clamp them if the screen shrank.
-	if marginsAtFullScreen {
-		v.marginTop = 0
-		v.marginBottom = v.height - 1
-	} else {
-		if v.marginTop >= v.height {
-			v.marginTop = v.height - 1
-		}
-		if v.marginBottom >= v.height {
-			v.marginBottom = v.height - 1
-		}
-	}
+	// --- THE FIX ---
+	// A terminal resize must always reset the scrolling region to the new
+	// full screen dimensions to ensure a clean state for applications.
+	v.marginTop = 0
+	v.marginBottom = v.height - 1
+	// --- END FIX ---
 
 	// Clamp cursor position to new bounds
 	v.SetCursorPos(v.cursorY, v.cursorX)
@@ -792,4 +781,21 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (v *VTerm) DumpGrid(label string) {
+	log.Printf("--- GRID DUMP: %s ---", label)
+	for y := 0; y < v.height; y++ {
+		line := ""
+		for x := 0; x < v.width; x++ {
+			r := v.grid[y][x].Rune
+			if r == ' ' {
+				line += "." // Use '.' for spaces to make them visible
+			} else {
+				line += string(r)
+			}
+		}
+		log.Printf("LINE %2d: %s", y, line)
+	}
+	log.Printf("--- END DUMP ---")
 }
