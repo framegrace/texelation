@@ -66,6 +66,9 @@ func (v *VTerm) Resize(width, height int) {
 		return
 	}
 
+	// Check if margins were set to the old full screen size before the resize.
+	marginsAtFullScreen := (v.marginTop == 0 && v.marginBottom == v.height-1)
+
 	// Create a new grid of the correct size, filled with default cells
 	newGrid := make([][]Cell, height)
 	for y := range newGrid {
@@ -88,9 +91,18 @@ func (v *VTerm) Resize(width, height int) {
 	v.width = width
 	v.height = height
 
-	// Clamp the bottom margin in case the screen has shrunk.
-	if v.marginBottom >= v.height {
+	// If margins were at full screen, update them to the new full screen.
+	// Otherwise, just clamp them if the screen shrank.
+	if marginsAtFullScreen {
+		v.marginTop = 0
 		v.marginBottom = v.height - 1
+	} else {
+		if v.marginTop >= v.height {
+			v.marginTop = v.height - 1
+		}
+		if v.marginBottom >= v.height {
+			v.marginBottom = v.height - 1
+		}
 	}
 
 	// Clamp cursor position to new bounds
@@ -330,14 +342,13 @@ func (v *VTerm) Reset() {
 	}
 }
 
-// ResetAttributes now also resets the margins.
+// ResetAttributes now correctly only resets graphical attributes, NOT scrolling margins.
 func (v *VTerm) ResetAttributes() {
 	v.currentFG = DefaultFG
 	v.currentBG = DefaultBG
 	v.currentAttr = 0
-	v.marginTop = 0
-	v.marginBottom = v.height - 1
 }
+
 func (v *VTerm) Grid() [][]Cell                { return v.grid }
 func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool           { return v.cursorVisible }
@@ -462,7 +473,9 @@ func (v *VTerm) handleScroll(command byte, params []int) {
 			v.scrollUp()
 		}
 	case 'T': // Scroll Down
-		v.scrollDown(param(0, 1))
+		for i := 0; i < param(0, 1); i++ {
+			v.scrollDown(param(0, 1))
+		}
 	}
 }
 
@@ -663,9 +676,9 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 		case 25:
 			v.SetCursorVisible(true)
 		case 1049:
-			// Save the current screen and cursor state.
-			v.savedWidth = v.width   // ADDED: Save original width
-			v.savedHeight = v.height // ADDED: Save original height
+			// Save the current screen state.
+			v.savedWidth = v.width
+			v.savedHeight = v.height
 			v.savedMarginTop = v.marginTop
 			v.savedMarginBottom = v.marginBottom
 			v.savedGrid = make([][]Cell, v.height)
@@ -695,10 +708,10 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 		case 25:
 			v.SetCursorVisible(false)
 		case 1049:
-			// Restore the saved screen and cursor state.
+			// Restore the saved screen state.
 			if v.savedGrid != nil {
 				v.grid = v.savedGrid
-				v.width = v.savedWidth // ADDED: Restore original width
+				v.width = v.savedWidth
 				v.height = v.savedHeight
 				v.marginTop = v.savedMarginTop
 				v.marginBottom = v.savedMarginBottom
@@ -713,7 +726,7 @@ func (v *VTerm) processPrivateCSI(command byte, params []int) {
 
 func (v *VTerm) ClearToEndOfScreen() {
 	v.ClearLine(0) // Erase from cursor to end of the current line.
-	for y := v.cursorY + 1; y <= v.marginBottom; y++ {
+	for y := v.cursorY + 1; y < v.height; y++ {
 		for x := 0; x < v.width; x++ {
 			v.grid[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
@@ -722,7 +735,7 @@ func (v *VTerm) ClearToEndOfScreen() {
 
 func (v *VTerm) ClearToBeginningOfScreen() {
 	v.ClearLine(1) // Erase from beginning of the current line to the cursor.
-	for y := v.marginTop; y < v.cursorY; y++ {
+	for y := 0; y < v.cursorY; y++ {
 		for x := 0; x < v.width; x++ {
 			v.grid[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
@@ -760,4 +773,12 @@ func WithPtyWriter(writer func([]byte)) Option {
 	return func(v *VTerm) {
 		v.WriteToPty = writer
 	}
+}
+
+// A helper function that was missing but implied by the code.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
