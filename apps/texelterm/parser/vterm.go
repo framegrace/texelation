@@ -407,7 +407,14 @@ func (v *VTerm) ProcessCSI(command byte, params []int, private bool) {
 	case 'c':
 		log.Println("Parser: Ignoring device attribute request (0c)")
 	case 'p':
-		// Ignore Soft Terminal Reset (DECSTR) and similar commands.
+		// Implement DECSTR - Soft Terminal Reset.
+		// This resets margins, graphics, and other states without clearing the screen.
+		v.ResetAttributes() // Resets SGR
+		v.marginTop = 0
+		v.marginBottom = v.height - 1
+		v.SetCursorVisible(true)
+		v.appCursorKeys = false // Reset to normal cursor keys
+		v.SaveCursor()          // DECSTR resets the saved cursor state as well
 	case 't':
 		// Ignore xterm window manipulation commands
 	case 'q': // Load LEDs
