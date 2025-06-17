@@ -43,13 +43,13 @@ func main() {
 func setupPanes(screen *texel.Screen) {
 	// Create the applications that will run in the panes
 	appHtop := texelterm.New("htop", "htop")
-	appPTYShell := texelterm.New("shell", "/bin/bash")
+	//	appPTYShell := texelterm.New("shell", "/bin/bash")
 	//	appPTYShell2 := texelterm.New("shell", "/bin/bash")
 
 	// Define a simple 50/50 vertical split layout
 	panes := []*texel.Pane{
-		texel.NewPane(texel.Rect{X: 0.0, Y: 0.0, W: 0.5, H: 1.0}, appPTYShell),
-		texel.NewPane(texel.Rect{X: 0.5, Y: 0.0, W: 0.5, H: 1.0}, appHtop),
+		//		texel.NewPane(texel.Rect{X: 0.0, Y: 0.0, W: 0.5, H: 1.0}, appPTYShell),
+		texel.NewPane(texel.Rect{X: 0.0, Y: 0.0, W: 1.0, H: 1.0}, appHtop),
 	}
 
 	for _, p := range panes {

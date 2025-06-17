@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const (
@@ -25,6 +26,7 @@ type Screen struct {
 	refreshChan     chan bool
 	mu              sync.Mutex
 	closeOnce       sync.Once
+	refreshTimer    *time.Timer
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -41,6 +43,11 @@ func NewScreen() (*Screen, error) {
 	tcellScreen.SetStyle(defStyle)
 	tcellScreen.HideCursor() // We let the VTerm in the PTYApp manage the cursor
 
+	refreshTimer := time.NewTimer(time.Hour) // Use a long duration initially
+	if !refreshTimer.Stop() {
+		<-refreshTimer.C
+	}
+
 	return &Screen{
 		tcellScreen:     tcellScreen,
 		panes:           make([]*Pane, 0),
@@ -48,6 +55,7 @@ func NewScreen() (*Screen, error) {
 		fadeEffect:      NewFadeEffect(tcell.ColorBlack, 0.25),
 		quit:            make(chan struct{}),
 		refreshChan:     make(chan bool, 1),
+		refreshTimer:    refreshTimer,
 	}, nil
 }
 
@@ -97,6 +105,8 @@ func (s *Screen) Run() error {
 		case ev := <-eventChan:
 			s.handleEvent(ev)
 		case <-s.refreshChan:
+			s.refreshTimer.Reset(16 * time.Millisecond)
+		case <-s.refreshTimer.C:
 			s.draw()
 		case <-s.quit:
 			return nil

@@ -217,18 +217,22 @@ func (v *VTerm) DeleteLines(n int) {
 }
 
 func (v *VTerm) scrollUp() {
-	// By iterating and copying each row's content, we avoid the bug of
-	// copying slice headers and making rows point to the same memory.
-	for y := v.marginTop; y < v.marginBottom; y++ {
-		copy(v.grid[y], v.grid[y+1])
+	// Keep a reference to the top line of the region, which will scroll out of view.
+	scrolledLine := v.grid[v.marginTop]
+
+	// Shift the line pointers up by one within the scrolling region.
+	// This is more efficient than copying cell data.
+	copy(v.grid[v.marginTop:v.marginBottom], v.grid[v.marginTop+1:v.marginBottom+1])
+
+	// Clear the content of the line that has now scrolled out.
+	for i := range scrolledLine {
+		// Use the default background color for the new line, not the current one,
+		// to avoid "smearing" colors during scrolling.
+		scrolledLine[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
 	}
 
-	// Clear the last line of the scrolling region.
-	newLine := make([]Cell, v.width)
-	for i := range newLine {
-		newLine[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-	}
-	v.grid[v.marginBottom] = newLine
+	// Place the now-cleared line at the bottom of the region.
+	v.grid[v.marginBottom] = scrolledLine
 }
 
 func (v *VTerm) scrollDown(n int) {
