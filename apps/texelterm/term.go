@@ -1,6 +1,8 @@
 package texelterm
 
 import (
+	"bufio"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -234,28 +236,38 @@ func (a *texelTerm) Run() error {
 	go func() {
 		defer a.wg.Done()
 		defer ptmx.Close()
-		buf := make([]byte, 4096)
+
+		// Create a buffered reader for robust rune-wise reading
+		reader := bufio.NewReader(ptmx)
+
 		for {
+			// Check for the stop signal before blocking on ReadRune
 			select {
 			case <-a.stop:
 				return
 			default:
-				n, err := ptmx.Read(buf)
-				if n > 0 {
-					a.mu.Lock()
-					if a.parser != nil {
-						a.parser.Parse(buf[:n])
-					}
-					a.mu.Unlock()
-					if a.refreshChan != nil {
-						select {
-						case a.refreshChan <- true:
-						default:
-						}
-					}
+			}
+
+			// Read a single, complete rune, handling UTF-8 boundaries automatically.
+			r, _, err := reader.ReadRune()
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("Error reading from PTY: %v", err)
 				}
-				if err != nil {
-					return
+				return
+			}
+
+			a.mu.Lock()
+			if a.parser != nil {
+				a.parser.Parse(r)
+			}
+			a.mu.Unlock()
+
+			// Request a refresh after processing a rune.
+			if a.refreshChan != nil {
+				select {
+				case a.refreshChan <- true:
+				default:
 				}
 			}
 		}

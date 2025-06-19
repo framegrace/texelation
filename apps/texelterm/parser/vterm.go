@@ -578,9 +578,14 @@ func (v *VTerm) placeChar(r rune) {
 			Attr: v.currentAttr,
 		}
 	}
-	if v.autoWrapMode && v.cursorX == v.width-1 {
-		v.wrapNext = true
-	} else if v.cursorX < v.width-1 {
+	if v.cursorX == v.width-1 { // We are in the last column.
+		if v.autoWrapMode {
+			// Set the wrapNext flag. The actual wrap will occur
+			// the next time a character is placed.
+			v.wrapNext = true
+		}
+	} else {
+		// If not in the last column, just advance the cursor.
 		v.cursorX++
 	}
 }
