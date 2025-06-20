@@ -1,7 +1,6 @@
 package texel
 
 import (
-	//	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"log"
 	"os"
@@ -9,6 +8,15 @@ import (
 	"sync"
 	"syscall"
 	"time"
+)
+
+type Direction int
+
+const (
+	DirUp Direction = iota
+	DirDown
+	DirLeft
+	DirRight
 )
 
 const (
@@ -30,6 +38,7 @@ type Screen struct {
 	fadeEffect      Effect
 	quit            chan struct{}
 	refreshChan     chan bool
+	neighbors       map[int]map[Direction]int
 	mu              sync.Mutex
 	closeOnce       sync.Once
 	styleCache      map[styleKey]tcell.Style
@@ -47,9 +56,9 @@ func NewScreen() (*Screen, error) {
 
 	defStyle := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
 	tcellScreen.SetStyle(defStyle)
-	tcellScreen.HideCursor() // We let the VTerm in the PTYApp manage the cursor
+	tcellScreen.HideCursor()
 
-	refreshTimer := time.NewTimer(time.Hour) // Use a long duration initially
+	refreshTimer := time.NewTimer(time.Hour)
 	if !refreshTimer.Stop() {
 		<-refreshTimer.C
 	}
@@ -57,6 +66,7 @@ func NewScreen() (*Screen, error) {
 	scr := &Screen{
 		tcellScreen:     tcellScreen,
 		panes:           make([]*Pane, 0),
+		neighbors:       make(map[int]map[Direction]int),
 		activePaneIndex: 0,
 		quit:            make(chan struct{}),
 		refreshChan:     make(chan bool, 1),
@@ -68,7 +78,118 @@ func NewScreen() (*Screen, error) {
 	return scr, nil
 }
 
-// getStyle looks up (or builds and caches) a tcell.Style
+// updateNeighbors recalculates the neighbor map for all panes.
+func (s *Screen) updateNeighbors() {
+	w, h := s.tcellScreen.Size()
+	// initialize empty neighbor entries
+	s.neighbors = make(map[int]map[Direction]int, len(s.panes))
+	for i := range s.panes {
+		s.neighbors[i] = map[Direction]int{DirUp: -1, DirDown: -1, DirLeft: -1, DirRight: -1}
+	}
+	// compare each pair
+	for i, p := range s.panes {
+		rl := p.Layout // fractional Rect
+		for j, q := range s.panes {
+			if i == j {
+				continue
+			}
+			ol := q.Layout
+			// compute absolute coords
+			x0 := int(rl.X * float64(w))
+			y0 := int(rl.Y * float64(h))
+			x1 := int((rl.X + rl.W) * float64(w))
+			y1 := int((rl.Y + rl.H) * float64(h))
+			x0o := int(ol.X * float64(w))
+			y0o := int(ol.Y * float64(h))
+			x1o := int((ol.X + ol.W) * float64(w))
+			y1o := int((ol.Y + ol.H) * float64(h))
+			// right neighbor: touches vertically and to right
+			if x1 == x0o && y0o < y1 && y1o > y0 {
+				// choose smallest Y offset (topmost)
+				curr := s.neighbors[i][DirRight]
+				if curr < 0 || y0o < int(s.panes[curr].Layout.Y*float64(h)) {
+					s.neighbors[i][DirRight] = j
+				}
+			}
+			// left neighbor
+			if x0 == x1o && y0o < y1 && y1o > y0 {
+				curr := s.neighbors[i][DirLeft]
+				if curr < 0 || y0o < int(s.panes[curr].Layout.Y*float64(h)) {
+					s.neighbors[i][DirLeft] = j
+				}
+			}
+			// down neighbor
+			if y1 == y0o && x0o < x1 && x1o > x0 {
+				curr := s.neighbors[i][DirDown]
+				if curr < 0 || x0o < int(s.panes[curr].Layout.X*float64(w)) {
+					s.neighbors[i][DirDown] = j
+				}
+			}
+			// up neighbor
+			if y0 == y1o && x0o < x1 && x1o > x0 {
+				curr := s.neighbors[i][DirUp]
+				if curr < 0 || x0o < int(s.panes[curr].Layout.X*float64(w)) {
+					s.neighbors[i][DirUp] = j
+				}
+			}
+		}
+	}
+}
+
+// splitActivePane splits the active pane in the given direction, adding a new pane.
+func (s *Screen) splitActivePane(d Direction) {
+	idx := s.activePaneIndex
+	orig := s.panes[idx]
+	layout := orig.Layout
+	var a, b Rect
+	// split the fractional Rect
+	switch d {
+	case DirLeft:
+		hw := layout.W / 2
+		a = Rect{X: layout.X, Y: layout.Y, W: hw, H: layout.H}
+		b = Rect{X: layout.X + hw, Y: layout.Y, W: hw, H: layout.H}
+	case DirRight:
+		hw := layout.W / 2
+		a = Rect{X: layout.X, Y: layout.Y, W: hw, H: layout.H}
+		b = Rect{X: layout.X + hw, Y: layout.Y, W: hw, H: layout.H}
+	case DirUp:
+		hh := layout.H / 2
+		a = Rect{X: layout.X, Y: layout.Y, W: layout.W, H: hh}
+		b = Rect{X: layout.X, Y: layout.Y + hh, W: layout.W, H: hh}
+	case DirDown:
+		hh := layout.H / 2
+		a = Rect{X: layout.X, Y: layout.Y, W: layout.W, H: hh}
+		b = Rect{X: layout.X, Y: layout.Y + hh, W: layout.W, H: hh}
+	}
+	// assign new layouts
+	orig.Layout = a
+	orig.prevBuf = nil
+	// create and insert new pane
+	newPane := NewPane(b, NewShellApp())
+	s.panes = append(s.panes[:idx+1], append([]*Pane{newPane}, s.panes[idx+1:]...)...)
+	// update neighbor relations
+	s.updateNeighbors()
+	// set focus to new pane
+	s.activePaneIndex = idx + 1
+}
+
+// moveActivePane moves focus to the neighbor in the given direction.
+func (s *Screen) moveActivePane(d Direction) {
+	if n, ok := s.neighbors[s.activePaneIndex][d]; ok && n >= 0 {
+		s.activePaneIndex = n
+	}
+}
+
+// swapActivePane swaps layouts of the active pane with its neighbor.
+func (s *Screen) swapActivePane(d Direction) {
+	if n, ok := s.neighbors[s.activePaneIndex][d]; ok && n >= 0 {
+		s.panes[s.activePaneIndex].Layout, s.panes[n].Layout = s.panes[n].Layout, s.panes[s.activePaneIndex].Layout
+		s.panes[s.activePaneIndex].prevBuf = nil
+		s.panes[n].prevBuf = nil
+		s.updateNeighbors()
+	}
+}
+
 func (s *Screen) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {
 	key := styleKey{fg: fg, bg: bg, bold: bold, underline: underline, reverse: reverse}
 	if st, ok := s.styleCache[key]; ok {
@@ -154,13 +275,58 @@ func (s *Screen) Run() error {
 	}
 }
 
+// handleEvent processes key and resize events, including our custom pane controls.
 func (s *Screen) handleEvent(ev tcell.Event) {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
-		if ev.Key() == keyQuit {
+		key := ev.Key()
+		mods := ev.Modifiers()
+
+		// Quit
+		if key == keyQuit {
 			s.Close()
+			return
 		}
-		if ev.Key() == keySwitchPane {
+
+		// Arrow + modifiers for pane operations
+		switch key {
+		case tcell.KeyUp, tcell.KeyDown, tcell.KeyLeft, tcell.KeyRight:
+			d := tcell.KeyUp
+			//sz := key // reuse variable for simplicity
+			var d Direction
+			switch key {
+			case tcell.KeyUp:
+				d = DirUp
+			case tcell.KeyDown:
+				d = DirDown
+			case tcell.KeyLeft:
+				d = DirLeft
+			case tcell.KeyRight:
+				d = DirRight
+			}
+
+			// Alt + arrows: move
+			if mods&tcell.ModAlt != 0 {
+				s.moveActivePane(d)
+				s.requestRefresh()
+				return
+			}
+			// Ctrl + arrows: split
+			if mods&tcell.ModCtrl != 0 {
+				s.splitActivePane(d)
+				s.requestRefresh()
+				return
+			}
+			// Shift + arrows: swap
+			if mods&tcell.ModShift != 0 {
+				s.swapActivePane(d)
+				s.requestRefresh()
+				return
+			}
+		}
+
+		// Switch pane (Ctrl+A)
+		if key == keySwitchPane {
 			if len(s.panes) > 0 {
 				s.mu.Lock()
 				s.panes[s.activePaneIndex].AddEffect(s.fadeEffect)
@@ -169,18 +335,21 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 				s.mu.Unlock()
 				s.requestRefresh()
 			}
-		} else {
-			// For ALL other keys, forward them directly to the active pane.
-			if len(s.panes) > 0 {
-				s.panes[s.activePaneIndex].app.HandleKey(ev)
-			}
+			return
 		}
+
+		// Delegate other keys to the active pane
+		if len(s.panes) > 0 {
+			s.panes[s.activePaneIndex].app.HandleKey(ev)
+		}
+
 	case *tcell.EventResize:
 		s.handleResize()
 		s.requestRefresh()
 	}
 }
 
+// compositePanes draws each pane’s buffer to the screen.
 func (s *Screen) compositePanes() {
 	for _, p := range s.panes {
 		appBuffer := p.app.Render()
@@ -197,6 +366,7 @@ func (s *Screen) compositePanes() {
 	}
 }
 
+// requestRefresh signals the main loop to redraw.
 func (s *Screen) requestRefresh() {
 	select {
 	case s.refreshChan <- true:
@@ -204,122 +374,37 @@ func (s *Screen) requestRefresh() {
 	}
 }
 
+// draw executes the final screen update.
+func (s *Screen) draw() {
+	s.compositePanes()
+	s.drawBorders()
+	s.tcellScreen.Show()
+}
+
 func (s *Screen) drawBorders() {
-	// w, h := s.tcellScreen.Size()
-	// defaultBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorWhite)
-	// activeBorderStyle := tcell.StyleDefault.Foreground(tcell.ColorYellow)
-	//
-	//	for i, p := range s.panes {
-	//		borderStyle := defaultBorderStyle
-	//		titleStyle := defaultBorderStyle.Bold(true)
-	//
-	//		if i == s.activePaneIndex {
-	//			borderStyle = activeBorderStyle
-	//			titleStyle = activeBorderStyle.Bold(true)
-	//		}
-	//
-	//		// Draw top and bottom borders
-	//		for x := p.absX0; x < p.absX1; x++ {
-	//			if x >= w {
-	//				continue
-	//			}
-	//			if p.absY0 >= 0 && p.absY0 < h {
-	//				s.tcellScreen.SetContent(x, p.absY0, tcell.RuneHLine, nil, borderStyle)
-	//			}
-	//			if p.absY1-1 >= 0 && p.absY1-1 < h {
-	//				s.tcellScreen.SetContent(x, p.absY1-1, tcell.RuneHLine, nil, borderStyle)
-	//			}
-	//		}
-	//
-	//		// Draw left and right borders
-	//		for y := p.absY0; y < p.absY1; y++ {
-	//			if y >= h {
-	//				continue
-	//			}
-	//			if p.absX0 >= 0 && p.absX0 < w {
-	//				s.tcellScreen.SetContent(p.absX0, y, tcell.RuneVLine, nil, borderStyle)
-	//			}
-	//			if p.absX1-1 >= 0 && p.absX1-1 < w {
-	//				s.tcellScreen.SetContent(p.absX1-1, y, tcell.RuneVLine, nil, borderStyle)
-	//			}
-	//		}
-	//
-	//		// Draw corners
-	//		if p.absX0 >= 0 && p.absX0 < w && p.absY0 >= 0 && p.absY0 < h {
-	//			s.tcellScreen.SetContent(p.absX0, p.absY0, tcell.RuneULCorner, nil, borderStyle)
-	//		}
-	//		if p.absX1-1 >= 0 && p.absX1-1 < w && p.absY0 >= 0 && p.absY0 < h {
-	//			s.tcellScreen.SetContent(p.absX1-1, p.absY0, tcell.RuneURCorner, nil, borderStyle)
-	//		}
-	//		if p.absX0 >= 0 && p.absX0 < w && p.absY1-1 >= 0 && p.absY1-1 < h {
-	//			s.tcellScreen.SetContent(p.absX0, p.absY1-1, tcell.RuneLLCorner, nil, borderStyle)
-	//		}
-	//		if p.absX1-1 >= 0 && p.absX1-1 < w && p.absY1-1 >= 0 && p.absY1-1 < h {
-	//			s.tcellScreen.SetContent(p.absX1-1, p.absY1-1, tcell.RuneLRCorner, nil, borderStyle)
-	//		}
-	//
-	//		// Draw title
-	//		title := fmt.Sprintf(" %s ", p.app.GetTitle())
-	//		for i, ch := range title {
-	//			if p.absX0+1+i < p.absX1-1 {
-	//				s.tcellScreen.SetContent(p.absX0+1+i, p.absY0, ch, nil, titleStyle)
-	//			}
-	//		}
-	//	}
 }
 
 // Close shuts down tcell and stops all hosted apps.
 func (s *Screen) Close() {
 	s.closeOnce.Do(func() {
-		// Signal the main event loop and event polling goroutine to stop.
 		close(s.quit)
 
-		// Stop all the application goroutines.
 		for _, p := range s.panes {
 			p.app.Stop()
 		}
 
-		// Finalize the tcell screen.
 		s.tcellScreen.Fini()
 	})
 }
 
-// draw clears the screen, composites all panes, and shows the result.
-func (s *Screen) draw() {
-	//	s.tcellScreen.Clear()
-	s.compositePanes()
-	s.drawBorders()
-	s.tcellScreen.Show() // Replaces termbox.Flush()
-}
-
-// blit copies a source buffer onto the tcell screen.
-func (s *Screen) blit(x, y int, source [][]Cell) {
-	for r, row := range source {
-		for c, cell := range row {
-			s.tcellScreen.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
-		}
-	}
-}
-
-func (s *Screen) blitDiff(x0, y0 int, oldBuf, buf [][]Cell) {
-	for y, row := range buf {
-		for x, cell := range row {
-			if y >= len(oldBuf) ||
-				x >= len(oldBuf[y]) ||
-				cell != oldBuf[y][x] {
-				s.tcellScreen.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
-			}
-		}
-	}
-}
-
+// ForceResize triggers a layout recalculation.
 func (s *Screen) ForceResize() {
 	s.handleResize()
 }
 
+// handleResize recalculates pane dimensions and notifies apps.
 func (s *Screen) handleResize() {
 	w, h := s.tcellScreen.Size()
-	//	s.tcellScreen.Sync()
 
 	for _, p := range s.panes {
 		x0 := int(p.Layout.X * float64(w))
@@ -333,11 +418,31 @@ func (s *Screen) handleResize() {
 		if p.Layout.Y+p.Layout.H >= 1.0 {
 			y1 = h
 		}
+
 		p.SetDimensions(x0, y0, x1, y1)
 
 		width, height := x1-x0, y1-y0
 		p.app.Resize(width, height)
-		// force next frame to draw full (not diff)
 		p.prevBuf = nil
+	}
+}
+
+// blit copies cells to the screen.
+func (s *Screen) blit(x, y int, buf [][]Cell) {
+	for r, row := range buf {
+		for c, cell := range row {
+			s.tcellScreen.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
+		}
+	}
+}
+
+// blitDiff only redraws changed cells.
+func (s *Screen) blitDiff(x0, y0 int, oldBuf, buf [][]Cell) {
+	for y, row := range buf {
+		for x, cell := range row {
+			if y >= len(oldBuf) || x >= len(oldBuf[y]) || cell != oldBuf[y][x] {
+				s.tcellScreen.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
+			}
+		}
 	}
 }

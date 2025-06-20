@@ -1,61 +1,37 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	"os"
-	"texelation/apps/clock"
-	"texelation/apps/texelterm"
-	//	"texelation/apps/welcome"
+	"texelation/apps/welcome"
 	"texelation/texel"
 )
 
 func main() {
+	// Initialize Texel screen
 	screen, err := texel.NewScreen()
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "Error creating Texel screen: %v\n", err)
+		os.Exit(1)
 	}
-	defer screen.Close()
+	// Ensure resources are released
+	defer func() {
+		if screen.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing screen\n")
+		}
+	}()
 
-	log.Println("Application starting...")
-	logFile, err := os.OpenFile("ansiterm.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		panic(err)
-	} else {
-		log.SetOutput(logFile)
-	}
-	defer logFile.Close()
+	// Start with a single fullscreen Welcome app (fractional positioning)
+	welcome := welcome.NewWelcomeApp()
+	pane := texel.NewPane(texel.Rect{X: 0.0, Y: 0.0, W: 1.0, H: 1.0}, welcome)
+	screen.AddPane(pane)
 
-	log.Println("Application starting...")
-
-	// This function now defines the desired layout proportionally
-	setupPanes(screen)
-
-	// Manually trigger a resize at the start to draw the initial layout
+	// Force initial layout
 	screen.ForceResize()
 
+	// Enter main event loop
 	if err := screen.Run(); err != nil {
-		log.Fatalf("Application exited with error: %v", err)
-	}
-	log.Println("Application stopped cleanly.")
-}
-
-// setupPanes defines the layout of the panes and the apps they contain.
-func setupPanes(screen *texel.Screen) {
-	// Create the applications that will run in the panes
-	appHtop := texelterm.New("htop", "htop")
-	appPTYShell := texelterm.New("shell", "/bin/bash")
-	btop := texelterm.New("btop", "btop")
-	appClock := clock.NewClockApp()
-
-	// Define a simple 50/50 vertical split layout
-	panes := []*texel.Pane{
-		texel.NewPane(texel.Rect{X: 0.0, Y: 0.0, W: 1.0, H: 0.1}, appClock),
-		texel.NewPane(texel.Rect{X: 0.0, Y: 0.1, W: 0.5, H: 0.5}, btop),
-		texel.NewPane(texel.Rect{X: 0.0, Y: 0.6, W: 0.5, H: 0.4}, appPTYShell),
-		texel.NewPane(texel.Rect{X: 0.5, Y: 0.1, W: 0.5, H: 0.9}, appHtop),
-	}
-
-	for _, p := range panes {
-		screen.AddPane(p)
+		fmt.Fprintf(os.Stderr, "Error running screen: %v\n", err)
+		os.Exit(1)
 	}
 }
