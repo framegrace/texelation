@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"bytes"
 	"log"
 )
 
@@ -23,8 +22,8 @@ type Parser struct {
 	params       []int
 	currentParam int
 	private      bool
-	oscBuffer    []byte
-	intermediate byte
+	oscBuffer    []rune
+	intermediate rune
 }
 
 func NewParser(v *VTerm) *Parser {
@@ -32,20 +31,23 @@ func NewParser(v *VTerm) *Parser {
 		state:     StateGround,
 		vterm:     v,
 		params:    make([]int, 0, 16),
-		oscBuffer: make([]byte, 0, 128),
+		oscBuffer: make([]rune, 0, 128),
 	}
 }
 
 // Parse processes a slice of bytes from the PTY.
 func (p *Parser) Parse(r rune) {
-	b := byte(r) // For convenience in the switch
-
+	//	if p.state == StateGround && r == '\x1b' {
+	//		p.vterm.DumpGrid("Before ESC sequence")
+	//		log.Printf("Parser: Processing sequence starting with ESC")
+	//	}
 	switch p.state {
 	case StateGround:
 		switch r {
 		case '\x1b':
 			p.state = StateEscape
 		case '\n':
+			p.vterm.CarriageReturn()
 			p.vterm.LineFeed()
 		case '\r':
 			p.vterm.CarriageReturn()
@@ -84,7 +86,7 @@ func (p *Parser) Parse(r rune) {
 		case '=', '>':
 			p.state = StateGround
 		default:
-			log.Printf("Parser: Unhandled ESC sequence: %q", b)
+			log.Printf("Parser: Unhandled ESC sequence: %q", r)
 			p.state = StateGround
 		}
 	case StateCSI:
@@ -99,22 +101,23 @@ func (p *Parser) Parse(r rune) {
 		case r >= ' ' && r <= '/':
 		case r >= '@' && r <= '~':
 			p.params = append(p.params, p.currentParam)
-			p.vterm.ProcessCSI(b, p.params, p.intermediate)
+			p.vterm.ProcessCSI(r, p.params, p.intermediate)
+			//			p.vterm.DumpGrid("After CSI sequence")
 			p.state = StateGround
 		}
 	case StateOSC:
-		if b == '\x07' {
+		if r == '\x07' {
 			p.handleOSC()
 			p.state = StateGround
 		} else {
-			p.oscBuffer = append(p.oscBuffer, b)
+			p.oscBuffer = append(p.oscBuffer, r)
 		}
 	case StateDCS:
-		if b == '\x1b' {
+		if r == '\x1b' {
 			p.state = StateDCSEscape
 		}
 	case StateDCSEscape:
-		if b == '\\' {
+		if r == '\\' {
 			p.state = StateGround
 		} else {
 			p.state = StateDCS
@@ -125,7 +128,7 @@ func (p *Parser) Parse(r rune) {
 }
 
 func (p *Parser) handleOSC() {
-	parts := bytes.SplitN(p.oscBuffer, []byte{';'}, 2)
+	parts := splitRunesN(p.oscBuffer, ';', 2)
 	if len(parts) != 2 {
 		return
 	}
@@ -134,4 +137,22 @@ func (p *Parser) handleOSC() {
 	if command == "0" {
 		p.vterm.SetTitle(content)
 	}
+}
+func splitRunesN(r []rune, sep rune, n int) [][]rune {
+	if n <= 1 {
+		return [][]rune{r}
+	}
+	res := make([][]rune, 0, n)
+	start := 0
+	count := 1
+	for i, ru := range r {
+		if ru == sep && count < n {
+			res = append(res, r[start:i])
+			start = i + 1
+			count++
+		}
+	}
+	// whatever remains is the last part
+	res = append(res, r[start:])
+	return res
 }

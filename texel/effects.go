@@ -14,10 +14,11 @@ type FadeEffect struct {
 	FadeColor tcell.Color
 	// The intensity of the blend, from 0.0 (no effect) to 1.0 (fully faded).
 	Intensity float32
+	screen    *Screen
 }
 
 // NewFadeEffect creates a new fade effect with a given color and intensity.
-func NewFadeEffect(color tcell.Color, intensity float32) *FadeEffect {
+func NewFadeEffect(scr *Screen, color tcell.Color, intensity float32) *FadeEffect {
 	if intensity < 0 {
 		intensity = 0
 	}
@@ -25,38 +26,36 @@ func NewFadeEffect(color tcell.Color, intensity float32) *FadeEffect {
 		intensity = 1
 	}
 	return &FadeEffect{
+		screen:    scr,
 		FadeColor: color,
 		Intensity: intensity,
 	}
 }
 
-// Apply iterates over each cell in the buffer and applies the fade effect.
+// Apply walks the buffer, blends fg/bg, then uses your screen.getStyle cache.
 func (f *FadeEffect) Apply(buffer [][]Cell) [][]Cell {
 	for y := range buffer {
 		for x := range buffer[y] {
 			cell := &buffer[y][x]
-			originalStyle := cell.Style
-			fg, bg, attrs := originalStyle.Decompose()
+			fg, bg, attrs := cell.Style.Decompose()
 
-			var blendedFg, blendedBg tcell.Color
-
-			// --- CORRECTED LOGIC ---
-
-			// If the original foreground is default, treat it as white for blending.
+			// treat “default” as white/black for blending
 			if !fg.Valid() {
 				fg = tcell.ColorWhite
 			}
-			blendedFg = f.blendColor(fg, f.FadeColor, f.Intensity)
-
-			// If the original background is default, treat it as black for blending.
 			if !bg.Valid() {
 				bg = tcell.ColorBlack
 			}
-			blendedBg = f.blendColor(bg, f.FadeColor, f.Intensity)
 
-			// --- END CORRECTION ---
+			// blend each channel
+			blendedFg := f.blendColor(fg, f.FadeColor, f.Intensity)
+			blendedBg := f.blendColor(bg, f.FadeColor, f.Intensity)
 
-			cell.Style = tcell.StyleDefault.Foreground(blendedFg).Background(blendedBg).Attributes(attrs)
+			// extract boolean flags from the AttrMask
+			bold := attrs&tcell.AttrBold != 0
+			underline := attrs&tcell.AttrUnderline != 0
+			reverse := attrs&tcell.AttrReverse != 0
+			cell.Style = f.screen.getStyle(blendedFg, blendedBg, bold, underline, reverse)
 		}
 	}
 	return buffer

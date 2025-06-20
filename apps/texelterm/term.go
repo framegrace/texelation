@@ -30,6 +30,7 @@ type texelTerm struct {
 	stop        chan struct{}
 	refreshChan chan<- bool
 	wg          sync.WaitGroup
+	buf         [][]texel.Cell
 }
 
 // SetRefreshNotifier implements the new interface method.
@@ -53,24 +54,30 @@ func (a *texelTerm) Render() [][]texel.Cell {
 	}
 	cols := len(vtermGrid[0])
 
-	buffer := make([][]texel.Cell, rows)
+	if len(a.buf) != rows || (rows > 0 && cap(a.buf[0]) != cols) {
+		a.buf = make([][]texel.Cell, rows)
+		for y := range a.buf {
+			a.buf[y] = make([]texel.Cell, cols)
+		}
+	}
+
 	cursorX, cursorY := a.vterm.Cursor()
 	cursorVisible := a.vterm.CursorVisible()
 
 	for y := 0; y < rows; y++ {
-		buffer[y] = make([]texel.Cell, cols)
+		a.buf[y] = make([]texel.Cell, cols)
 		for x := 0; x < cols; x++ {
 			parserCell := vtermGrid[y][x]
 			// The new apply function returns a tcell.Style
-			buffer[y][x] = applyParserStyle(parserCell)
+			a.buf[y][x] = applyParserStyle(parserCell)
 
 			if cursorVisible && x == cursorX && y == cursorY {
 				// To show the cursor, we just get the style and reverse it.
-				buffer[y][x].Style = buffer[y][x].Style.Reverse(true)
+				a.buf[y][x].Style = a.buf[y][x].Style.Reverse(true)
 			}
 		}
 	}
-	return buffer
+	return a.buf
 }
 
 func applyParserStyle(pCell parser.Cell) texel.Cell {

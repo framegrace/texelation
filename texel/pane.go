@@ -11,6 +11,7 @@ type Pane struct {
 	Layout                     Rect
 	app                        App
 	effects                    []Effect
+	prevBuf                    [][]Cell
 }
 
 // NewPane creates a new Pane with the given dimensions and hosts the provided App.

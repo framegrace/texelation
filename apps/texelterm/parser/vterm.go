@@ -205,23 +205,25 @@ func (v *VTerm) DeleteLines(n int) {
 	}
 }
 
-func (v *VTerm) scrollUp() {
-	// Keep a reference to the top line of the region, which will scroll out of view.
-	scrolledLine := v.grid[v.marginTop]
+func (v *VTerm) scrollUp(n int) {
+	for i := 0; i < n; i++ {
+		// Keep a reference to the top line of the region, which will scroll out of view.
+		scrolledLine := v.grid[v.marginTop]
 
-	// Shift the line pointers up by one within the scrolling region.
-	// This is more efficient than copying cell data.
-	copy(v.grid[v.marginTop:v.marginBottom], v.grid[v.marginTop+1:v.marginBottom+1])
+		// Shift the line pointers up by one within the scrolling region.
+		// This is more efficient than copying cell data.
+		copy(v.grid[v.marginTop:v.marginBottom], v.grid[v.marginTop+1:v.marginBottom+1])
 
-	// Clear the content of the line that has now scrolled out.
-	for i := range scrolledLine {
-		// Use the default background color for the new line, not the current one,
-		// to avoid "smearing" colors during scrolling.
-		scrolledLine[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		// Clear the content of the line that has now scrolled out.
+		for i := range scrolledLine {
+			// Use the default background color for the new line, not the current one,
+			// to avoid "smearing" colors during scrolling.
+			scrolledLine[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+
+		// Place the now-cleared line at the bottom of the region.
+		v.grid[v.marginBottom] = scrolledLine
 	}
-
-	// Place the now-cleared line at the bottom of the region.
-	v.grid[v.marginBottom] = scrolledLine
 }
 
 func (v *VTerm) scrollDown(n int) {
@@ -284,6 +286,9 @@ func (v *VTerm) SetCursorRow(row int) {
 
 func (v *VTerm) SetAttribute(a Attribute) {
 	v.currentAttr |= a
+}
+func (v *VTerm) ClearAttribute(a Attribute) {
+	v.currentAttr &^= a
 }
 func (v *VTerm) SaveCursor() {
 	v.savedCursorX, v.savedCursorY = v.cursorX, v.cursorY
@@ -356,14 +361,14 @@ func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool           { return v.cursorVisible }
 func (v *VTerm) SetCursorVisible(visible bool) { v.cursorVisible = visible }
 
-func (v *VTerm) ProcessCSI(command byte, params []int, intermediate byte) {
+func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 	if intermediate == '!' && command == 'p' {
 		v.SoftReset() // Handle DECSTR
 		return
 	}
 
 	if intermediate != 0 {
-		log.Printf("Parser: Unhandled CSI sequence with intermediate byte: %q %q, params: %v", intermediate, command, params)
+		log.Printf("Parser: Unhandled CSI sequence with intermediate %q and final %q, params: %v", intermediate, command, params)
 		return
 	}
 
@@ -385,8 +390,10 @@ func (v *VTerm) ProcessCSI(command byte, params []int, intermediate byte) {
 	switch command {
 	case 'A', 'B', 'C', 'D', 'G', 'H', 'f', 'd':
 		v.handleCursorMovement(command, params)
-	case 'J', 'K', 'P', 'X', '@':
+	case 'J', 'K', 'P', 'X':
 		v.handleErase(command, params)
+	case '@':
+		v.InsertCharacters(param(0, 1))
 	case 'L':
 		v.InsertLines(param(0, 1))
 	case 'M':
@@ -419,7 +426,7 @@ func (v *VTerm) ProcessCSI(command byte, params []int, intermediate byte) {
 
 // --- NEW HELPER METHODS FOR ProcessCSI ---
 
-func (v *VTerm) handleCursorMovement(command byte, params []int) {
+func (v *VTerm) handleCursorMovement(command rune, params []int) {
 	v.wrapNext = false
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
@@ -445,7 +452,29 @@ func (v *VTerm) handleCursorMovement(command byte, params []int) {
 	}
 }
 
-func (v *VTerm) handleErase(command byte, params []int) {
+func (v *VTerm) InsertCharacters(n int) {
+	line := v.grid[v.cursorY]
+	end := v.width
+	start := v.cursorX
+
+	// repeat n times
+	for rep := 0; rep < n; rep++ {
+		// shift cells one to the right
+		if start < end-1 {
+			for i := end - 2; i >= start; i-- {
+				line[i+1] = line[i]
+			}
+			// clear the newly opened slot
+			line[start] = Cell{
+				Rune: ' ',
+				FG:   v.currentFG,
+				BG:   v.currentBG,
+			}
+		}
+	}
+}
+
+func (v *VTerm) handleErase(command rune, params []int) {
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
@@ -464,7 +493,7 @@ func (v *VTerm) handleErase(command byte, params []int) {
 	}
 }
 
-func (v *VTerm) handleScroll(command byte, params []int) {
+func (v *VTerm) handleScroll(command rune, params []int) {
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
@@ -473,17 +502,15 @@ func (v *VTerm) handleScroll(command byte, params []int) {
 	}
 	switch command {
 	case 'S': // Scroll Up
-		for i := 0; i < param(0, 1); i++ {
-			v.scrollUp()
-		}
+		v.scrollUp(param(0, 1))
 	case 'T': // Scroll Down
-		for i := 0; i < param(0, 1); i++ {
-			v.scrollDown(param(0, 1))
-		}
+		//		for i := 0; i < param(0, 1); i++ {
+		v.scrollDown(param(0, 1))
+		//		}
 	}
 }
 
-func (v *VTerm) handleMode(command byte, params []int) {
+func (v *VTerm) handleMode(command rune, params []int) {
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
@@ -521,7 +548,11 @@ func (v *VTerm) handleSGR(params []int) {
 		case p == 7:
 			v.SetAttribute(AttrReverse)
 		case p == 22:
-			v.currentAttr &^= AttrBold
+			v.ClearAttribute(AttrBold)
+		case p == 24:
+			v.ClearAttribute(AttrUnderline)
+		case p == 27:
+			v.ClearAttribute(AttrReverse)
 		case p >= 30 && p <= 37:
 			v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 30)}
 		case p == 39:
@@ -561,15 +592,20 @@ func (v *VTerm) placeChar(r rune) {
 		v.LineFeed()
 		v.wrapNext = false
 	}
-
+	// In insert mode, we first make space by shifting the rest of the line.
 	if v.insertMode {
-		// In insert mode, shift the rest of the line to the right
 		line := v.grid[v.cursorY]
+		// This right-to-left loop correctly shifts all characters
+		// from the cursor to the end of the line one position to the right.
 		if v.cursorX < v.width-1 {
-			copy(line[v.cursorX+1:], line[v.cursorX:])
+			for i := v.width - 2; i >= v.cursorX; i-- {
+				line[i+1] = line[i]
+			}
 		}
 	}
 
+	// Now, ALWAYS place the character at the current cursor position (overwrite).
+	// In insert mode, we are writing into the blank space we just created.
 	if v.cursorY >= 0 && v.cursorY < v.height && v.cursorX >= 0 && v.cursorX < v.width {
 		v.grid[v.cursorY][v.cursorX] = Cell{
 			Rune: r,
@@ -578,14 +614,11 @@ func (v *VTerm) placeChar(r rune) {
 			Attr: v.currentAttr,
 		}
 	}
-	if v.cursorX == v.width-1 { // We are in the last column.
-		if v.autoWrapMode {
-			// Set the wrapNext flag. The actual wrap will occur
-			// the next time a character is placed.
-			v.wrapNext = true
-		}
-	} else {
-		// If not in the last column, just advance the cursor.
+
+	// Finally, handle cursor advancement and auto-wrapping.
+	if v.autoWrapMode && v.cursorX == v.width-1 {
+		v.wrapNext = true
+	} else if v.cursorX < v.width-1 {
 		v.cursorX++
 	}
 }
@@ -639,7 +672,7 @@ func (v *VTerm) ClearLine(mode int) {
 
 func (v *VTerm) LineFeed() {
 	if v.cursorY == v.marginBottom {
-		v.scrollUp()
+		v.scrollUp(1)
 	} else if v.cursorY < v.height-1 {
 		v.cursorY++
 	}
@@ -666,7 +699,7 @@ func (v *VTerm) Tab() {
 	v.cursorX = v.width - 1
 }
 func (v *VTerm) ClearAllTabStops() { v.tabStops = make(map[int]bool) }
-func (v *VTerm) processPrivateCSI(command byte, params []int) {
+func (v *VTerm) processPrivateCSI(command rune, params []int) {
 	if len(params) == 0 {
 		return
 	}

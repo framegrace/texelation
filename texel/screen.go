@@ -16,6 +16,12 @@ const (
 	keySwitchPane = tcell.KeyCtrlA
 )
 
+type styleKey struct {
+	fg, bg          tcell.Color
+	bold, underline bool
+	reverse         bool
+}
+
 // Screen manages the entire terminal display using tcell as the backend.
 type Screen struct {
 	tcellScreen     tcell.Screen
@@ -26,7 +32,7 @@ type Screen struct {
 	refreshChan     chan bool
 	mu              sync.Mutex
 	closeOnce       sync.Once
-	refreshTimer    *time.Timer
+	styleCache      map[styleKey]tcell.Style
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -48,15 +54,38 @@ func NewScreen() (*Screen, error) {
 		<-refreshTimer.C
 	}
 
-	return &Screen{
+	scr := &Screen{
 		tcellScreen:     tcellScreen,
 		panes:           make([]*Pane, 0),
-		activePaneIndex: 0, // Default to the first pane
-		fadeEffect:      NewFadeEffect(tcell.ColorBlack, 0.25),
+		activePaneIndex: 0,
 		quit:            make(chan struct{}),
 		refreshChan:     make(chan bool, 1),
-		refreshTimer:    refreshTimer,
-	}, nil
+		styleCache:      make(map[styleKey]tcell.Style),
+	}
+
+	scr.fadeEffect = NewFadeEffect(scr, tcell.ColorBlack, 0.25)
+
+	return scr, nil
+}
+
+// getStyle looks up (or builds and caches) a tcell.Style
+func (s *Screen) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {
+	key := styleKey{fg: fg, bg: bg, bold: bold, underline: underline, reverse: reverse}
+	if st, ok := s.styleCache[key]; ok {
+		return st
+	}
+	st := tcell.StyleDefault.Foreground(fg).Background(bg)
+	if bold {
+		st = st.Bold(true)
+	}
+	if underline {
+		st = st.Underline(true)
+	}
+	if reverse {
+		st = st.Reverse(true)
+	}
+	s.styleCache[key] = st
+	return st
 }
 
 func (s *Screen) Size() (int, int) {
@@ -97,17 +126,28 @@ func (s *Screen) Run() error {
 		}
 	}()
 
+	ticker := time.NewTicker(16 * time.Millisecond)
+	defer ticker.Stop()
+
+	dirty := true
+	s.handleResize()
 	s.draw()
 	for {
 		select {
 		case <-sigChan:
 			s.tcellScreen.Sync()
+			s.handleResize()
+			dirty = true
 		case ev := <-eventChan:
 			s.handleEvent(ev)
+			dirty = true
 		case <-s.refreshChan:
-			s.refreshTimer.Reset(16 * time.Millisecond)
-		case <-s.refreshTimer.C:
-			s.draw()
+			dirty = true
+		case <-ticker.C:
+			if dirty {
+				s.draw()
+				dirty = false
+			}
 		case <-s.quit:
 			return nil
 		}
@@ -137,7 +177,7 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 		}
 	case *tcell.EventResize:
 		s.handleResize()
-
+		s.requestRefresh()
 	}
 }
 
@@ -149,7 +189,11 @@ func (s *Screen) compositePanes() {
 			appBuffer = effect.Apply(appBuffer)
 		}
 
-		s.blit(p.absX0, p.absY0, appBuffer)
+		if p.prevBuf == nil {
+			s.blit(p.absX0, p.absY0, appBuffer)
+		} else {
+			s.blitDiff(p.absX0, p.absY0, p.prevBuf, appBuffer)
+		}
 	}
 }
 
@@ -242,7 +286,7 @@ func (s *Screen) Close() {
 
 // draw clears the screen, composites all panes, and shows the result.
 func (s *Screen) draw() {
-	s.tcellScreen.Clear()
+	//	s.tcellScreen.Clear()
 	s.compositePanes()
 	s.drawBorders()
 	s.tcellScreen.Show() // Replaces termbox.Flush()
@@ -257,13 +301,25 @@ func (s *Screen) blit(x, y int, source [][]Cell) {
 	}
 }
 
+func (s *Screen) blitDiff(x0, y0 int, oldBuf, buf [][]Cell) {
+	for y, row := range buf {
+		for x, cell := range row {
+			if y >= len(oldBuf) ||
+				x >= len(oldBuf[y]) ||
+				cell != oldBuf[y][x] {
+				s.tcellScreen.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
+			}
+		}
+	}
+}
+
 func (s *Screen) ForceResize() {
 	s.handleResize()
 }
 
 func (s *Screen) handleResize() {
 	w, h := s.tcellScreen.Size()
-	s.tcellScreen.Sync()
+	//	s.tcellScreen.Sync()
 
 	for _, p := range s.panes {
 		x0 := int(p.Layout.X * float64(w))
@@ -278,5 +334,10 @@ func (s *Screen) handleResize() {
 			y1 = h
 		}
 		p.SetDimensions(x0, y0, x1, y1)
+
+		width, height := x1-x0, y1-y0
+		p.app.Resize(width, height)
+		// force next frame to draw full (not diff)
+		p.prevBuf = nil
 	}
 }

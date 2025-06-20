@@ -16,6 +16,7 @@ type clockApp struct {
 	mu            sync.RWMutex
 	stop          chan struct{}
 	refreshChan   chan<- bool
+	buf           [][]texel.Cell
 }
 
 // NewClockApp creates a new ClockApp and returns it as a texel.App interface.
@@ -82,11 +83,16 @@ func (a *clockApp) Render() [][]texel.Cell {
 		return [][]texel.Cell{}
 	}
 
-	buffer := make([][]texel.Cell, a.height)
-	for i := range buffer {
-		buffer[i] = make([]texel.Cell, a.width)
-		for j := range buffer[i] {
-			buffer[i][j] = texel.Cell{Ch: ' ', Style: tcell.StyleDefault}
+	if len(a.buf) != a.width || (a.height > 0 && cap(a.buf[0]) != a.width) {
+		a.buf = make([][]texel.Cell, a.height)
+		for y := 0; y < a.height; y++ {
+			a.buf[y] = make([]texel.Cell, a.width)
+		}
+	}
+
+	for i := range a.buf {
+		for j := range a.buf[i] {
+			a.buf[i][j] = texel.Cell{Ch: ' ', Style: tcell.StyleDefault}
 		}
 	}
 
@@ -99,12 +105,12 @@ func (a *clockApp) Render() [][]texel.Cell {
 	if y < a.height && x >= 0 {
 		for i, ch := range str {
 			if x+i < a.width {
-				buffer[y][x+i] = texel.Cell{Ch: ch, Style: style}
+				a.buf[y][x+i] = texel.Cell{Ch: ch, Style: style}
 			}
 		}
 	}
 
-	return buffer
+	return a.buf
 }
 
 func (a *clockApp) GetTitle() string {
