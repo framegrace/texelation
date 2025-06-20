@@ -33,6 +33,11 @@ type Screen struct {
 	mu              sync.Mutex
 	closeOnce       sync.Once
 	styleCache      map[styleKey]tcell.Style
+	resizing        bool
+	resizeSnap      map[*Pane]struct {
+		buf          [][]Cell
+		prevW, prevH int
+	}
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -144,7 +149,7 @@ func (s *Screen) Run() error {
 		case <-s.refreshChan:
 			dirty = true
 		case <-ticker.C:
-			if dirty {
+			if dirty && !s.resizing {
 				s.draw()
 				dirty = false
 			}
@@ -290,6 +295,10 @@ func (s *Screen) draw() {
 	s.compositePanes()
 	s.drawBorders()
 	s.tcellScreen.Show() // Replaces termbox.Flush()
+	if s.resizing {
+		s.resizing = false
+		s.resizeSnap = nil
+	}
 }
 
 // blit copies a source buffer onto the tcell screen.
@@ -318,26 +327,88 @@ func (s *Screen) ForceResize() {
 }
 
 func (s *Screen) handleResize() {
-	w, h := s.tcellScreen.Size()
-	//	s.tcellScreen.Sync()
+	// 1) Get new terminal size
+	termW, termH := s.tcellScreen.Size()
+	//s.tcellScreen.HideCursor()
 
+	if !s.resizing {
+		s.resizing = true
+		s.resizeSnap = make(map[*Pane]struct {
+			buf          [][]Cell
+			prevW, prevH int
+		}, len(s.panes))
+		for _, p := range s.panes {
+			if p.prevBuf != nil {
+				s.resizeSnap[p] = struct {
+					buf          [][]Cell
+					prevW, prevH int
+				}{
+					buf:   cloneBuffer(p.prevBuf),
+					prevW: p.Width(),
+					prevH: p.Height(),
+				}
+			}
+		}
+	}
+
+	// layout & resize apps
 	for _, p := range s.panes {
-		x0 := int(p.Layout.X * float64(w))
-		y0 := int(p.Layout.Y * float64(h))
-		x1 := int((p.Layout.X + p.Layout.W) * float64(w))
-		y1 := int((p.Layout.Y + p.Layout.H) * float64(h))
-
+		x0 := int(p.Layout.X * float64(termW))
+		y0 := int(p.Layout.Y * float64(termH))
+		x1 := int((p.Layout.X + p.Layout.W) * float64(termW))
+		y1 := int((p.Layout.Y + p.Layout.H) * float64(termH))
 		if p.Layout.X+p.Layout.W >= 1.0 {
-			x1 = w
+			x1 = termW
 		}
 		if p.Layout.Y+p.Layout.H >= 1.0 {
-			y1 = h
+			y1 = termH
 		}
 		p.SetDimensions(x0, y0, x1, y1)
+		p.app.Resize(x1-x0, y1-y0)
+		// leave prevBuf for zoom
+	}
 
-		width, height := x1-x0, y1-y0
-		p.app.Resize(width, height)
-		// force next frame to draw full (not diff)
+	for _, p := range s.panes {
+		if snap, ok := s.resizeSnap[p]; ok && snap.prevW > 0 && snap.prevH > 0 {
+			scaled := scaleBuffer(snap.buf, snap.prevW, snap.prevH, p.Width(), p.Height())
+			s.blit(p.absX0, p.absY0, scaled)
+		}
+	}
+	s.drawBorders()
+	s.tcellScreen.Show()
+
+	for _, p := range s.panes {
 		p.prevBuf = nil
 	}
+}
+
+// cloneBuffer makes a deep copy of a [][]Cell:
+func cloneBuffer(src [][]Cell) [][]Cell {
+	dst := make([][]Cell, len(src))
+	for y := range src {
+		dst[y] = make([]Cell, len(src[y]))
+		copy(dst[y], src[y])
+	}
+	return dst
+}
+
+// scaleBuffer does nearest-neighbor text scaling from old→new dims:
+func scaleBuffer(src [][]Cell, oldW, oldH, newW, newH int) [][]Cell {
+	dst := make([][]Cell, newH)
+	for y := 0; y < newH; y++ {
+		// pick source row
+		sy := int(float64(y) * float64(oldH) / float64(newH))
+		if sy >= oldH {
+			sy = oldH - 1
+		}
+		dst[y] = make([]Cell, newW)
+		for x := 0; x < newW; x++ {
+			sx := int(float64(x) * float64(oldW) / float64(newW))
+			if sx >= oldW {
+				sx = oldW - 1
+			}
+			dst[y][x] = src[sy][sx]
+		}
+	}
+	return dst
 }
