@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"texelation/apps/clock"
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
 	"texelation/texel"
@@ -32,14 +33,18 @@ func main() {
 	}
 	defer logFile.Close()
 
-	screen.ShellPaneFactory = func(layout texel.Rect) *texel.Pane {
+	screen.ShellPaneFactory = func() *texel.Pane {
 		shellApp := texelterm.New("shell", "/bin/bash")
-		return texel.NewPane(layout, shellApp)
+		return texel.NewPane(shellApp)
 	}
+
+	// Add a clock as a status pane at the bottom
+	clockApp := clock.NewClockApp()
+	screen.AddStatusPane(clockApp, texel.SideTop, 1)
 
 	// Start with a single fullscreen Welcome app (fractional positioning)
 	welcome := welcome.NewWelcomeApp()
-	pane := texel.NewPane(texel.Rect{X: 0.0, Y: 0.0, W: 1.0, H: 1.0}, welcome)
+	pane := texel.NewPane(welcome)
 	screen.AddPane(pane)
 
 	// Force initial layout

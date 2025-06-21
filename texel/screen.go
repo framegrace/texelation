@@ -5,7 +5,6 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/term"
 	"log"
-	"math"
 	"os"
 	"os/signal"
 	"regexp"
@@ -23,9 +22,18 @@ const (
 	DirLeft
 	DirRight
 )
-const eps = 1e-9
 
-type PaneFactory func(layout Rect) *Pane
+// Side defines the placement of a StatusPane.
+type Side int
+
+const (
+	SideTop Side = iota
+	SideBottom
+	SideLeft
+	SideRight
+)
+
+type PaneFactory func() *Pane
 
 const (
 	keyQuit       = tcell.KeyCtrlQ
@@ -39,22 +47,32 @@ type styleKey struct {
 	reverse         bool
 }
 
+// StatusPane is a special pane with absolute sizing, placed on one side of the screen.
+type StatusPane struct {
+	app  App
+	side Side
+	size int // rows for Top/Bottom, cols for Left/Right
+}
+
 // Screen manages the entire terminal display using tcell as the backend.
 type Screen struct {
-	tcellScreen     tcell.Screen
-	panes           []*Pane
-	activePaneIndex int
-	fadeEffect      Effect
-	quit            chan struct{}
-	refreshChan     chan bool
-	neighbors       map[int]map[Direction][]int
-	mu              sync.Mutex
-	closeOnce       sync.Once
-	styleCache      map[styleKey]tcell.Style
-	DefaultFgColor  tcell.Color
-	DefaultBgColor  tcell.Color
+	tcellScreen    tcell.Screen
+	root           *Node
+	activeLeaf     *Node
+	statusPanes    []*StatusPane
+	fadeEffect     Effect
+	quit           chan struct{}
+	refreshChan    chan bool
+	mu             sync.Mutex
+	closeOnce      sync.Once
+	styleCache     map[styleKey]tcell.Style
+	DefaultFgColor tcell.Color
+	DefaultBgColor tcell.Color
 	// Factory to create a new shell pane (injected by main)
 	ShellPaneFactory PaneFactory
+
+	inControlMode  bool
+	subControlMode rune
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -77,15 +95,13 @@ func NewScreen() (*Screen, error) {
 	}
 
 	scr := &Screen{
-		tcellScreen:     tcellScreen,
-		panes:           make([]*Pane, 0),
-		neighbors:       make(map[int]map[Direction][]int),
-		activePaneIndex: 0,
-		quit:            make(chan struct{}),
-		refreshChan:     make(chan bool, 1),
-		styleCache:      make(map[styleKey]tcell.Style),
-		DefaultFgColor:  defaultFg,
-		DefaultBgColor:  defaultBg,
+		tcellScreen:    tcellScreen,
+		statusPanes:    make([]*StatusPane, 0),
+		quit:           make(chan struct{}),
+		refreshChan:    make(chan bool, 1),
+		styleCache:     make(map[styleKey]tcell.Style),
+		DefaultFgColor: defaultFg,
+		DefaultBgColor: defaultBg,
 	}
 
 	scr.fadeEffect = NewFadeEffect(scr, tcell.NewRGBColor(60, 60, 60), 0.25)
@@ -164,260 +180,211 @@ func queryDefaultColor(code int) (tcell.Color, error) {
 	return tcell.NewRGBColor(r, g, b), nil
 }
 
-// updateNeighbors recalculates the neighbor map for all panes.
-func (s *Screen) updateNeighbors() {
-	w, h := s.tcellScreen.Size()
-
-	// init map[int]map[Direction][]int
-	s.neighbors = make(map[int]map[Direction][]int, len(s.panes))
-	for i := range s.panes {
-		s.neighbors[i] = map[Direction][]int{
-			DirUp:    {},
-			DirDown:  {},
-			DirLeft:  {},
-			DirRight: {},
-		}
+// AddStatusPane adds a new status pane to the screen.
+func (s *Screen) AddStatusPane(app App, side Side, size int) {
+	sp := &StatusPane{
+		app:  app,
+		side: side,
+		size: size,
 	}
+	s.statusPanes = append(s.statusPanes, sp)
 
-	// compare every pair
-	for i, p := range s.panes {
-		rl := p.Layout
-		x0 := int(rl.X * float64(w))
-		y0 := int(rl.Y * float64(h))
-		x1 := int((rl.X + rl.W) * float64(w))
-		y1 := int((rl.Y + rl.H) * float64(h))
-
-		for j, q := range s.panes {
-			if i == j {
-				continue
-			}
-			ol := q.Layout
-			x0o := int(ol.X * float64(w))
-			y0o := int(ol.Y * float64(h))
-			x1o := int((ol.X + ol.W) * float64(w))
-			y1o := int((ol.Y + ol.H) * float64(h))
-
-			// right neighbor: touches vertically and to right
-			if x1 == x0o && y0o < y1 && y1o > y0 {
-				s.neighbors[i][DirRight] = append(s.neighbors[i][DirRight], j)
-			}
-			// left neighbor
-			if x0 == x1o && y0o < y1 && y1o > y0 {
-				s.neighbors[i][DirLeft] = append(s.neighbors[i][DirLeft], j)
-			}
-			// down neighbor
-			if y1 == y0o && x0o < x1 && x1o > x0 {
-				s.neighbors[i][DirDown] = append(s.neighbors[i][DirDown], j)
-			}
-			// up neighbor
-			if y0 == y1o && x0o < x1 && x1o > x0 {
-				s.neighbors[i][DirUp] = append(s.neighbors[i][DirUp], j)
-			}
+	app.SetRefreshNotifier(s.refreshChan)
+	go func() {
+		if err := app.Run(); err != nil {
+			log.Printf("Status pane app '%s' exited with error: %v", app.GetTitle(), err)
 		}
-	}
+	}()
+
+	s.ForceResize()
+	s.requestRefresh()
 }
 
 func (s *Screen) updateActiveEffects() {
 	// Clear previous buffer and effects, then reapply
-	for i, pane := range s.panes {
-		pane.prevBuf = nil
-		pane.ClearEffects()
-		if i != s.activePaneIndex {
-			pane.AddEffect(s.fadeEffect)
+	s.traverse(s.root, func(node *Node) {
+		if node.Pane != nil {
+			node.Pane.prevBuf = nil
+			node.Pane.ClearEffects()
+			if node != s.activeLeaf {
+				node.Pane.AddEffect(s.fadeEffect)
+			}
 		}
-	}
+	})
 }
 
 // splitActivePane splits the active pane in the given direction, adding a new pane.
 func (s *Screen) splitActivePane(d Direction) {
-	log.Printf("Split dir: %i", d)
 	if s.ShellPaneFactory == nil {
 		log.Panic("ShellPaneFactory not set")
 	}
-	idx := s.activePaneIndex
-	orig := s.panes[idx]
-	layout := orig.Layout
-	var a, b Rect
-	switch d {
-	case DirLeft, DirRight:
-		hw := layout.W / 2
-		a, b = Rect{layout.X, layout.Y, hw, layout.H}, Rect{layout.X + hw, layout.Y, hw, layout.H}
-	case DirUp, DirDown:
-		hh := layout.H / 2
-		a, b = Rect{layout.X, layout.Y, layout.W, hh}, Rect{layout.X, layout.Y + hh, layout.W, hh}
+
+	leaf := s.activeLeaf
+	if leaf == nil {
+		return
 	}
-	orig.Layout, orig.prevBuf = a, nil
-	newPane := s.ShellPaneFactory(b)
-	s.AddPane(newPane)
+
+	// Preserve the original pane
+	originalPane := leaf.Pane
+
+	// The current leaf becomes a split node
+	leaf.Pane = nil // No longer a leaf
+
+	// Create two new children
+	leaf.Left = &Node{Parent: leaf}
+	leaf.Right = &Node{Parent: leaf}
+
+	// The original pane goes into one child, a new pane goes into the other
+	newPane := s.ShellPaneFactory()
+
+	// Start the new pane's application
+	newPane.app.SetRefreshNotifier(s.refreshChan)
+	go func() {
+		if err := newPane.app.Run(); err != nil {
+			log.Printf("App '%s' exited with error: %v", newPane.app.GetTitle(), err)
+		}
+	}()
+
+	var newActiveLeaf *Node
+	switch d {
+	case DirLeft:
+		leaf.Split = Vertical
+		leaf.Left.Pane = newPane
+		leaf.Right.Pane = originalPane
+		newActiveLeaf = leaf.Left
+	case DirRight:
+		leaf.Split = Vertical
+		leaf.Left.Pane = originalPane
+		leaf.Right.Pane = newPane
+		newActiveLeaf = leaf.Right
+	case DirUp:
+		leaf.Split = Horizontal
+		leaf.Left.Pane = newPane
+		leaf.Right.Pane = originalPane
+		newActiveLeaf = leaf.Left
+	case DirDown:
+		leaf.Split = Horizontal
+		leaf.Left.Pane = originalPane
+		leaf.Right.Pane = newPane
+		newActiveLeaf = leaf.Right
+	}
+
+	// Set the new active pane, which handles resizing and effects
+	s.setActivePane(newActiveLeaf)
+	s.requestRefresh()
 }
 
 // moveActivePane moves focus to the neighbor in the given direction.
 func (s *Screen) moveActivePane(d Direction) {
-	log.Printf("Move dir: %d", d) // use %d, not %i
-	if nbrs, ok := s.neighbors[s.activePaneIndex][d]; ok && len(nbrs) > 0 {
-		// pick the first neighbour in the slice
-		s.setActivePane(nbrs[0])
+	target := findNeighbor(s.activeLeaf, d)
+	if target != nil {
+		s.setActivePane(target)
 	}
 }
 
-// contains reports whether sup fully contains sub (within eps).
-func contains(sup, sub Rect) bool {
-	return sub.X+eps >= sup.X &&
-		sub.Y+eps >= sup.Y &&
-		sub.X+sub.W <= sup.X+sup.W+eps &&
-		sub.Y+sub.H <= sup.Y+sup.H+eps
+func findNeighbor(leaf *Node, d Direction) *Node {
+	// Implementation to find a neighbor in the tree
+	// This can be complex, for now, we'll just traverse up and then down.
+	last := leaf
+	curr := leaf.Parent
+	for curr != nil {
+		var next *Node
+		if d == DirRight && last == curr.Left && curr.Split == Vertical {
+			next = curr.Right
+		} else if d == DirLeft && last == curr.Right && curr.Split == Vertical {
+			next = curr.Left
+		} else if d == DirDown && last == curr.Left && curr.Split == Horizontal {
+			next = curr.Right
+		} else if d == DirUp && last == curr.Right && curr.Split == Horizontal {
+			next = curr.Left
+		}
+
+		if next != nil {
+			// Found a sibling, now find the first leaf in that subtree
+			for next.Pane == nil {
+				// Descend to the appropriate child
+				switch d {
+				case DirLeft, DirUp:
+					next = next.Right
+				case DirRight, DirDown:
+					next = next.Left
+				}
+			}
+			return next
+		}
+
+		last = curr
+		curr = curr.Parent
+	}
+	return nil
 }
 
 func (s *Screen) closeActivePane() {
-	if len(s.panes) <= 1 {
+	leaf := s.activeLeaf
+	if leaf == nil || leaf.Parent == nil {
+		// Don't close the last pane
 		return
 	}
 
-	// 1) rebuild adjacency
-	s.updateNeighbors()
-
-	// 2) identify removal
-	idx := s.activePaneIndex
-	removed := s.panes[idx].Layout
-	oldNbrs := s.neighbors[idx] // map[Direction][]int
-
-	// 3) for each direction in priority, build per-neighbour fused rects and
-	//    check that none of them would engulf any other pane.
-	order := []Direction{DirUp, DirLeft, DirDown, DirRight}
-
-	// chosen neighbours + their fused layouts
-	var (
-		nbrsOnSide []int
-		fusedRects = make(map[int]Rect)
-	)
-	found := false
-
-	for _, d := range order {
-		list := oldNbrs[d]
-		if len(list) == 0 {
-			continue
-		}
-
-		// compute fused rect for each neighbour
-		tmp := make(map[int]Rect, len(list))
-		for _, oldIdx := range list {
-			tmp[oldIdx] = union(s.panes[oldIdx].Layout, removed)
-		}
-
-		// check conflict: no fused rect should fully contain any other pane
-		conflict := false
-		for k, p := range s.panes {
-			if k == idx {
-				continue
-			}
-			// skip those neighbours themselves
-			isNbr := false
-			for _, oldIdx := range list {
-				if k == oldIdx {
-					isNbr = true
-					break
-				}
-			}
-			if isNbr {
-				continue
-			}
-			// if any fused rect contains this third pane, direction d is unsafe
-			for _, fr := range tmp {
-				if contains(fr, p.Layout) {
-					conflict = true
-					break
-				}
-			}
-			if conflict {
-				break
-			}
-		}
-
-		if !conflict {
-			// we can use direction d and expand all of its neighbours
-			nbrsOnSide = list
-			fusedRects = tmp
-			found = true
-			break
-		}
-	}
-
-	// 4) fallback: no fully safe direction → just take every neighbour on first non-empty side
-	if !found {
-		for _, d := range order {
-			list := oldNbrs[d]
-			if len(list) == 0 {
-				continue
-			}
-			nbrsOnSide = list
-			for _, oldIdx := range list {
-				fusedRects[oldIdx] = union(s.panes[oldIdx].Layout, removed)
-			}
-			break
-		}
-	}
-
-	// 5) pick new active pane = first neighbour of that chosen side
-	if len(nbrsOnSide) > 0 {
-		newIdx := nbrsOnSide[0]
-		if newIdx > idx {
-			newIdx-- // shift index after removal
-		}
-		s.activePaneIndex = newIdx
+	parent := leaf.Parent
+	var sibling *Node
+	if leaf == parent.Left {
+		sibling = parent.Right
 	} else {
-		// should never happen—just pick 0
-		s.activePaneIndex = 0
+		sibling = parent.Left
 	}
 
-	// 6) remove the pane from the slice
-	s.panes[idx].Close()
-	s.panes = append(s.panes[:idx], s.panes[idx+1:]...)
+	// The parent's layout is given to the sibling
+	grandparent := parent.Parent
+	sibling.Layout = parent.Layout
+	sibling.Parent = grandparent
 
-	// 7) apply each fused layout to its neighbour
-	for oldIdx, fr := range fusedRects {
-		newI := oldIdx
-		if newI > idx {
-			newI-- // shift past removed
+	if grandparent == nil {
+		s.root = sibling
+	} else {
+		if parent == grandparent.Left {
+			grandparent.Left = sibling
+		} else {
+			grandparent.Right = sibling
 		}
-		s.panes[newI].Layout = fr
 	}
 
-	// 8) reflow & redraw
-	s.updateNeighbors()
+	s.setActivePane(findFirstLeaf(sibling))
+
 	s.ForceResize()
-	for _, p := range s.panes {
-		p.prevBuf = nil
-	}
 	s.requestRefresh()
 }
 
-func almostEqual(a, b float64) bool {
-	const eps = 1e-9
-	return math.Abs(a-b) < eps
+func findFirstLeaf(node *Node) *Node {
+	if node == nil {
+		return nil
+	}
+	curr := node
+	for curr.Pane == nil {
+		curr = curr.Left
+	}
+	return curr
 }
 
-func (s *Screen) setActivePane(n int) {
-	s.activePaneIndex = n
+func (s *Screen) setActivePane(n *Node) {
+	s.activeLeaf = n
 	s.updateActiveEffects()
 	s.ForceResize()
-	for _, p := range s.panes {
-		p.prevBuf = nil
-	}
 }
 
-// swapActivePane swaps layouts of the active pane with its neighbor.
+// swapActivePane swaps the pane of the active leaf with its neighbor and updates the active leaf.
 func (s *Screen) swapActivePane(d Direction) {
-	log.Printf("Swap dir: %i", d)
-	if nbrs, ok := s.neighbors[s.activePaneIndex][d]; ok && len(nbrs) >= 0 {
-		p, q := s.panes[s.activePaneIndex], s.panes[nbrs[0]]
-		p.Layout, q.Layout = q.Layout, p.Layout
-		p.prevBuf, q.prevBuf = nil, nil
-		s.updateNeighbors()
-		s.ForceResize()
-		for _, p := range s.panes {
-			p.prevBuf = nil
-		}
+	neighbor := findNeighbor(s.activeLeaf, d)
+	if neighbor == nil {
+		return
 	}
+
+	// Swap the panes within the leaves
+	s.activeLeaf.Pane, neighbor.Pane = neighbor.Pane, s.activeLeaf.Pane
+
+	// Set the new active pane and refresh the screen
+	s.setActivePane(neighbor)
+	s.requestRefresh()
 }
 
 func (s *Screen) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {
@@ -445,25 +412,35 @@ func (s *Screen) Size() (int, int) {
 
 // AddPane adds a pane to the screen and starts its associated app.
 func (s *Screen) AddPane(p *Pane) {
-	s.panes = append(s.panes, p)
+	leaf := &Node{
+		Pane:   p,
+		Layout: Rect{0, 0, 1, 1},
+	}
+
+	if s.root == nil {
+		s.root = leaf
+		s.activeLeaf = leaf
+	} else {
+		// For simplicity, we'll just replace the root for now.
+		// A more complete implementation would find a place to insert the new pane.
+		s.root = leaf
+		s.activeLeaf = leaf
+	}
+
 	p.app.SetRefreshNotifier(s.refreshChan)
 	go func() {
 		if err := p.app.Run(); err != nil {
 			log.Printf("App '%s' exited with error: %v", p.app.GetTitle(), err)
 		}
 	}()
-	s.updateNeighbors()
-	s.setActivePane(len(s.panes) - 1)
+
+	s.updateActiveEffects()
 	s.ForceResize()
-	for _, pane := range s.panes {
-		pane.prevBuf = nil
-	}
 	s.requestRefresh()
 }
 
 // Run starts the main event and rendering loop.
 func (s *Screen) Run() error {
-
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGWINCH)
 
@@ -565,8 +542,8 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 		}
 
 		// Delegate other keys to the active pane
-		if len(s.panes) > 0 {
-			s.panes[s.activePaneIndex].app.HandleKey(ev)
+		if s.activeLeaf != nil && s.activeLeaf.Pane != nil {
+			s.activeLeaf.Pane.app.HandleKey(ev)
 		}
 
 	case *tcell.EventResize:
@@ -577,19 +554,22 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 
 // compositePanes draws each pane’s buffer to the screen.
 func (s *Screen) compositePanes() {
-	for _, p := range s.panes {
-		appBuffer := p.app.Render()
+	s.traverse(s.root, func(node *Node) {
+		if node.Pane != nil {
+			p := node.Pane
+			appBuffer := p.app.Render()
 
-		for _, effect := range p.effects {
-			appBuffer = effect.Apply(appBuffer)
-		}
+			for _, effect := range p.effects {
+				appBuffer = effect.Apply(appBuffer)
+			}
 
-		if p.prevBuf == nil {
-			s.blit(p.absX0, p.absY0, appBuffer)
-		} else {
-			s.blitDiff(p.absX0, p.absY0, p.prevBuf, appBuffer)
+			if p.prevBuf == nil {
+				s.blit(p.absX0, p.absY0, appBuffer)
+			} else {
+				s.blitDiff(p.absX0, p.absY0, p.prevBuf, appBuffer)
+			}
 		}
-	}
+	})
 }
 
 // requestRefresh signals the main loop to redraw.
@@ -603,8 +583,35 @@ func (s *Screen) requestRefresh() {
 // draw executes the final screen update.
 func (s *Screen) draw() {
 	s.compositePanes()
+	s.drawStatusPanes()
 	s.drawBorders()
 	s.tcellScreen.Show()
+}
+
+func (s *Screen) drawStatusPanes() {
+	w, h := s.tcellScreen.Size()
+	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
+
+	for _, sp := range s.statusPanes {
+		switch sp.side {
+		case SideTop:
+			buf := sp.app.Render()
+			s.blit(leftOffset, topOffset, buf)
+			topOffset += sp.size
+		case SideBottom:
+			buf := sp.app.Render()
+			s.blit(leftOffset, h-bottomOffset-sp.size, buf)
+			bottomOffset += sp.size
+		case SideLeft:
+			buf := sp.app.Render()
+			s.blit(leftOffset, topOffset, buf)
+			leftOffset += sp.size
+		case SideRight:
+			buf := sp.app.Render()
+			s.blit(w-rightOffset-sp.size, topOffset, buf)
+			rightOffset += sp.size
+		}
+	}
 }
 
 func (s *Screen) drawBorders() {
@@ -615,8 +622,14 @@ func (s *Screen) Close() {
 	s.closeOnce.Do(func() {
 		close(s.quit)
 
-		for _, p := range s.panes {
-			p.app.Stop()
+		s.traverse(s.root, func(node *Node) {
+			if node.Pane != nil {
+				node.Pane.app.Stop()
+			}
+		})
+
+		for _, sp := range s.statusPanes {
+			sp.app.Stop()
 		}
 
 		s.tcellScreen.Fini()
@@ -631,26 +644,72 @@ func (s *Screen) ForceResize() {
 // handleResize recalculates pane dimensions and notifies apps.
 func (s *Screen) handleResize() {
 	w, h := s.tcellScreen.Size()
+	mainX, mainY := 0, 0
+	mainW, mainH := w, h
 
-	for _, p := range s.panes {
-		x0 := int(p.Layout.X * float64(w))
-		y0 := int(p.Layout.Y * float64(h))
-		x1 := int((p.Layout.X + p.Layout.W) * float64(w))
-		y1 := int((p.Layout.Y + p.Layout.H) * float64(h))
+	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
 
-		if p.Layout.X+p.Layout.W >= 1.0 {
-			x1 = w
+	for _, sp := range s.statusPanes {
+		switch sp.side {
+		case SideTop:
+			sp.app.Resize(w, sp.size)
+			topOffset += sp.size
+		case SideBottom:
+			sp.app.Resize(w, sp.size)
+			bottomOffset += sp.size
+		case SideLeft:
+			sp.app.Resize(sp.size, h)
+			leftOffset += sp.size
+		case SideRight:
+			sp.app.Resize(sp.size, h)
+			rightOffset += sp.size
 		}
-		if p.Layout.Y+p.Layout.H >= 1.0 {
-			y1 = h
-		}
-
-		p.SetDimensions(x0, y0, x1, y1)
-
-		width, height := x1-x0, y1-y0
-		p.app.Resize(width, height)
-		p.prevBuf = nil
 	}
+
+	mainX = leftOffset
+	mainY = topOffset
+	mainW = w - leftOffset - rightOffset
+	mainH = h - topOffset - bottomOffset
+
+	// Calculate proportional layout for the main content area
+	if s.root != nil {
+		s.resizeNode(s.root, Rect{0, 0, 1, 1}, mainX, mainY, mainW, mainH)
+	}
+}
+
+func (s *Screen) resizeNode(n *Node, r Rect, x, y, w, h int) {
+	if n == nil {
+		return
+	}
+
+	n.Layout = r
+
+	absX := x + int(r.X*float64(w))
+	absY := y + int(r.Y*float64(h))
+	absW := int(r.W * float64(w))
+	absH := int(r.H * float64(h))
+
+	if n.Pane != nil {
+		n.Pane.SetDimensions(absX, absY, absX+absW, absY+absH)
+		n.Pane.prevBuf = nil
+	} else {
+		if n.Split == Vertical {
+			s.resizeNode(n.Left, Rect{r.X, r.Y, r.W / 2, r.H}, x, y, w, h)
+			s.resizeNode(n.Right, Rect{r.X + r.W/2, r.Y, r.W / 2, r.H}, x, y, w, h)
+		} else { // Horizontal
+			s.resizeNode(n.Left, Rect{r.X, r.Y, r.W, r.H / 2}, x, y, w, h)
+			s.resizeNode(n.Right, Rect{r.X, r.Y + r.H/2, r.W, r.H / 2}, x, y, w, h)
+		}
+	}
+}
+
+func (s *Screen) traverse(n *Node, f func(*Node)) {
+	if n == nil {
+		return
+	}
+	f(n)
+	s.traverse(n.Left, f)
+	s.traverse(n.Right, f)
 }
 
 // blit copies cells to the screen.
@@ -671,35 +730,4 @@ func (s *Screen) blitDiff(x0, y0 int, oldBuf, buf [][]Cell) {
 			}
 		}
 	}
-}
-
-func adjacent(a, b Rect) bool {
-	vOverlap := a.Y < b.Y+b.H && b.Y < a.Y+a.H
-	hOverlap := a.X < b.X+b.W && b.X < a.X+a.W
-
-	// right edge of a touches left of b
-	if math.Abs(a.X+a.W-b.X) < 1e-9 && vOverlap {
-		return true
-	}
-	// left edge of a touches right of b
-	if math.Abs(b.X+b.W-a.X) < 1e-9 && vOverlap {
-		return true
-	}
-	// bottom edge of a touches top of b
-	if math.Abs(a.Y+a.H-b.Y) < 1e-9 && hOverlap {
-		return true
-	}
-	// top edge of a touches bottom of b
-	if math.Abs(b.Y+b.H-a.Y) < 1e-9 && hOverlap {
-		return true
-	}
-	return false
-}
-
-func union(a, b Rect) Rect {
-	minX := math.Min(a.X, b.X)
-	minY := math.Min(a.Y, b.Y)
-	maxX := math.Max(a.X+a.W, b.X+b.W)
-	maxY := math.Max(a.Y+a.H, b.Y+b.H)
-	return Rect{X: minX, Y: minY, W: maxX - minX, H: maxY - minY}
 }

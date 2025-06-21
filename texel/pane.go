@@ -5,20 +5,34 @@ type Rect struct {
 	X, Y, W, H float64
 }
 
+type SplitType int
+
+const (
+	Horizontal SplitType = iota
+	Vertical
+)
+
+type Node struct {
+	Parent *Node
+	Left   *Node
+	Right  *Node
+	Split  SplitType
+	Layout Rect
+	Pane   *Pane // A pane is only present in leaf nodes
+}
+
 // Pane represents a rectangular area on the screen that hosts an App.
 type Pane struct {
 	absX0, absY0, absX1, absY1 int // These are now calculated from Layout
-	Layout                     Rect
 	app                        App
 	effects                    []Effect
 	prevBuf                    [][]Cell
 }
 
 // NewPane creates a new Pane with the given dimensions and hosts the provided App.
-func NewPane(layout Rect, app App) *Pane {
+func NewPane(app App) *Pane {
 	p := &Pane{
-		Layout: layout,
-		app:    app,
+		app: app,
 	}
 	// The app will be resized properly by the first call to handleResize.
 	return p
