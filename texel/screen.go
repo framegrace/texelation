@@ -23,6 +23,7 @@ const (
 	DirLeft
 	DirRight
 )
+const eps = 1e-9
 
 type PaneFactory func(layout Rect) *Pane
 
@@ -166,56 +167,51 @@ func queryDefaultColor(code int) (tcell.Color, error) {
 // updateNeighbors recalculates the neighbor map for all panes.
 func (s *Screen) updateNeighbors() {
 	w, h := s.tcellScreen.Size()
-	// initialize empty neighbor entries
-	s.neighbors = make(map[int]map[Direction]int, len(s.panes))
+
+	// init map[int]map[Direction][]int
+	s.neighbors = make(map[int]map[Direction][]int, len(s.panes))
 	for i := range s.panes {
-		s.neighbors[i] = map[Direction]int{DirUp: -1, DirDown: -1, DirLeft: -1, DirRight: -1}
+		s.neighbors[i] = map[Direction][]int{
+			DirUp:    {},
+			DirDown:  {},
+			DirLeft:  {},
+			DirRight: {},
+		}
 	}
-	// compare each pair
+
+	// compare every pair
 	for i, p := range s.panes {
-		rl := p.Layout // fractional Rect
+		rl := p.Layout
+		x0 := int(rl.X * float64(w))
+		y0 := int(rl.Y * float64(h))
+		x1 := int((rl.X + rl.W) * float64(w))
+		y1 := int((rl.Y + rl.H) * float64(h))
+
 		for j, q := range s.panes {
 			if i == j {
 				continue
 			}
 			ol := q.Layout
-			// compute absolute coords
-			x0 := int(rl.X * float64(w))
-			y0 := int(rl.Y * float64(h))
-			x1 := int((rl.X + rl.W) * float64(w))
-			y1 := int((rl.Y + rl.H) * float64(h))
 			x0o := int(ol.X * float64(w))
 			y0o := int(ol.Y * float64(h))
 			x1o := int((ol.X + ol.W) * float64(w))
 			y1o := int((ol.Y + ol.H) * float64(h))
+
 			// right neighbor: touches vertically and to right
 			if x1 == x0o && y0o < y1 && y1o > y0 {
-				// choose smallest Y offset (topmost)
-				curr := s.neighbors[i][DirRight]
-				if curr < 0 || y0o < int(s.panes[curr].Layout.Y*float64(h)) {
-					s.neighbors[i][DirRight] = j
-				}
+				s.neighbors[i][DirRight] = append(s.neighbors[i][DirRight], j)
 			}
 			// left neighbor
 			if x0 == x1o && y0o < y1 && y1o > y0 {
-				curr := s.neighbors[i][DirLeft]
-				if curr < 0 || y0o < int(s.panes[curr].Layout.Y*float64(h)) {
-					s.neighbors[i][DirLeft] = j
-				}
+				s.neighbors[i][DirLeft] = append(s.neighbors[i][DirLeft], j)
 			}
 			// down neighbor
 			if y1 == y0o && x0o < x1 && x1o > x0 {
-				curr := s.neighbors[i][DirDown]
-				if curr < 0 || x0o < int(s.panes[curr].Layout.X*float64(w)) {
-					s.neighbors[i][DirDown] = j
-				}
+				s.neighbors[i][DirDown] = append(s.neighbors[i][DirDown], j)
 			}
 			// up neighbor
 			if y0 == y1o && x0o < x1 && x1o > x0 {
-				curr := s.neighbors[i][DirUp]
-				if curr < 0 || x0o < int(s.panes[curr].Layout.X*float64(w)) {
-					s.neighbors[i][DirUp] = j
-				}
+				s.neighbors[i][DirUp] = append(s.neighbors[i][DirUp], j)
 			}
 		}
 	}
@@ -257,71 +253,136 @@ func (s *Screen) splitActivePane(d Direction) {
 
 // moveActivePane moves focus to the neighbor in the given direction.
 func (s *Screen) moveActivePane(d Direction) {
-	log.Printf("Move dir: %i", d)
-	if n, ok := s.neighbors[s.activePaneIndex][d]; ok && n >= 0 {
-		s.setActivePane(n)
+	log.Printf("Move dir: %d", d) // use %d, not %i
+	if nbrs, ok := s.neighbors[s.activePaneIndex][d]; ok && len(nbrs) > 0 {
+		// pick the first neighbour in the slice
+		s.setActivePane(nbrs[0])
 	}
 }
+
+// contains reports whether sup fully contains sub (within eps).
+func contains(sup, sub Rect) bool {
+	return sub.X+eps >= sup.X &&
+		sub.Y+eps >= sup.Y &&
+		sub.X+sub.W <= sup.X+sup.W+eps &&
+		sub.Y+sub.H <= sup.Y+sup.H+eps
+}
+
 func (s *Screen) closeActivePane() {
 	if len(s.panes) <= 1 {
 		return
 	}
 
-	// 1) Make sure neighbors is up‐to‐date for the current state:
+	// 1) rebuild adjacency
 	s.updateNeighbors()
 
-	// 2) Remember index & layout of the pane we’re about to remove:
+	// 2) identify removal
 	idx := s.activePaneIndex
 	removed := s.panes[idx].Layout
+	oldNbrs := s.neighbors[idx] // map[Direction][]int
 
-	// 3) Grab its old neighbor map (map[Direction]int):
-	oldNbrs := s.neighbors[idx]
-
-	// 4) Now close & remove the pane from the slice:
-	s.panes[idx].Close()
-	s.panes = append(s.panes[:idx], s.panes[idx+1:]...)
-
-	// 5) In your preferred priority order, collect the old indices of
-	//    all neighbors on that side:
+	// 3) for each direction in priority, build per-neighbour fused rects and
+	//    check that none of them would engulf any other pane.
 	order := []Direction{DirUp, DirLeft, DirDown, DirRight}
-	var chosenDir Direction
-	var nbrList []int
+
+	// chosen neighbours + their fused layouts
+	var (
+		nbrsOnSide []int
+		fusedRects = make(map[int]Rect)
+	)
+	found := false
 
 	for _, d := range order {
-		if n, ok := oldNbrs[d]; ok && n >= 0 {
-			chosenDir = d
-			// (if you want _all_ neighbors on that side in oldNbrs,
-			// you could have oldNbrs map to a []int instead of a single int)
-			nbrList = append(nbrList, n)
-			// if you only want that one neighbor, you can break here
+		list := oldNbrs[d]
+		if len(list) == 0 {
+			continue
+		}
+
+		// compute fused rect for each neighbour
+		tmp := make(map[int]Rect, len(list))
+		for _, oldIdx := range list {
+			tmp[oldIdx] = union(s.panes[oldIdx].Layout, removed)
+		}
+
+		// check conflict: no fused rect should fully contain any other pane
+		conflict := false
+		for k, p := range s.panes {
+			if k == idx {
+				continue
+			}
+			// skip those neighbours themselves
+			isNbr := false
+			for _, oldIdx := range list {
+				if k == oldIdx {
+					isNbr = true
+					break
+				}
+			}
+			if isNbr {
+				continue
+			}
+			// if any fused rect contains this third pane, direction d is unsafe
+			for _, fr := range tmp {
+				if contains(fr, p.Layout) {
+					conflict = true
+					break
+				}
+			}
+			if conflict {
+				break
+			}
+		}
+
+		if !conflict {
+			// we can use direction d and expand all of its neighbours
+			nbrsOnSide = list
+			fusedRects = tmp
+			found = true
 			break
 		}
 	}
 
-	// 6) Adjust & expand each neighbor:
-	for _, oldIdx := range nbrList {
-		// shift down anything past the deleted index:
-		newIdx := oldIdx
-		if oldIdx > idx {
-			newIdx--
-		}
-		p := s.panes[newIdx]
-
-		switch chosenDir {
-		case DirUp:
-			p.Layout.H += removed.H
-		case DirDown:
-			p.Layout.Y = removed.Y
-			p.Layout.H += removed.H
-		case DirLeft:
-			p.Layout.W += removed.W
-		case DirRight:
-			p.Layout.X = removed.X
-			p.Layout.W += removed.W
+	// 4) fallback: no fully safe direction → just take every neighbour on first non-empty side
+	if !found {
+		for _, d := range order {
+			list := oldNbrs[d]
+			if len(list) == 0 {
+				continue
+			}
+			nbrsOnSide = list
+			for _, oldIdx := range list {
+				fusedRects[oldIdx] = union(s.panes[oldIdx].Layout, removed)
+			}
+			break
 		}
 	}
 
-	// 7) Recompute & redraw
+	// 5) pick new active pane = first neighbour of that chosen side
+	if len(nbrsOnSide) > 0 {
+		newIdx := nbrsOnSide[0]
+		if newIdx > idx {
+			newIdx-- // shift index after removal
+		}
+		s.activePaneIndex = newIdx
+	} else {
+		// should never happen—just pick 0
+		s.activePaneIndex = 0
+	}
+
+	// 6) remove the pane from the slice
+	s.panes[idx].Close()
+	s.panes = append(s.panes[:idx], s.panes[idx+1:]...)
+
+	// 7) apply each fused layout to its neighbour
+	for oldIdx, fr := range fusedRects {
+		newI := oldIdx
+		if newI > idx {
+			newI-- // shift past removed
+		}
+		s.panes[newI].Layout = fr
+	}
+
+	// 8) reflow & redraw
 	s.updateNeighbors()
 	s.ForceResize()
 	for _, p := range s.panes {
@@ -347,8 +408,8 @@ func (s *Screen) setActivePane(n int) {
 // swapActivePane swaps layouts of the active pane with its neighbor.
 func (s *Screen) swapActivePane(d Direction) {
 	log.Printf("Swap dir: %i", d)
-	if n, ok := s.neighbors[s.activePaneIndex][d]; ok && n >= 0 {
-		p, q := s.panes[s.activePaneIndex], s.panes[n]
+	if nbrs, ok := s.neighbors[s.activePaneIndex][d]; ok && len(nbrs) >= 0 {
+		p, q := s.panes[s.activePaneIndex], s.panes[nbrs[0]]
 		p.Layout, q.Layout = q.Layout, p.Layout
 		p.prevBuf, q.prevBuf = nil, nil
 		s.updateNeighbors()
