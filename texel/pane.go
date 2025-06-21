@@ -24,6 +24,12 @@ func NewPane(layout Rect, app App) *Pane {
 	return p
 }
 
+func (p *Pane) Close() {
+	if p.app != nil {
+		p.app.Stop()
+	}
+}
+
 // AddEffect adds a visual effect to the pane's processing pipeline.
 func (p *Pane) AddEffect(e Effect) {
 	// To avoid duplicates, you could add a check here if needed.

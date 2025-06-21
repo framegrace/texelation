@@ -1,10 +1,15 @@
 package texel
 
 import (
+	"fmt"
 	"github.com/gdamore/tcell/v2"
+	"golang.org/x/term"
 	"log"
+	"math"
 	"os"
 	"os/signal"
+	"regexp"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -19,8 +24,11 @@ const (
 	DirRight
 )
 
+type PaneFactory func(layout Rect) *Pane
+
 const (
 	keyQuit       = tcell.KeyCtrlQ
+	keyClose      = tcell.KeyCtrlX
 	keySwitchPane = tcell.KeyCtrlA
 )
 
@@ -38,14 +46,19 @@ type Screen struct {
 	fadeEffect      Effect
 	quit            chan struct{}
 	refreshChan     chan bool
-	neighbors       map[int]map[Direction]int
+	neighbors       map[int]map[Direction][]int
 	mu              sync.Mutex
 	closeOnce       sync.Once
 	styleCache      map[styleKey]tcell.Style
+	DefaultFgColor  tcell.Color
+	DefaultBgColor  tcell.Color
+	// Factory to create a new shell pane (injected by main)
+	ShellPaneFactory PaneFactory
 }
 
 // NewScreen initializes the terminal with tcell.
 func NewScreen() (*Screen, error) {
+	defaultFg, defaultBg, err := initDefaultColors()
 	tcellScreen, err := tcell.NewScreen()
 	if err != nil {
 		return nil, err
@@ -53,7 +66,6 @@ func NewScreen() (*Screen, error) {
 	if err := tcellScreen.Init(); err != nil {
 		return nil, err
 	}
-
 	defStyle := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
 	tcellScreen.SetStyle(defStyle)
 	tcellScreen.HideCursor()
@@ -66,16 +78,89 @@ func NewScreen() (*Screen, error) {
 	scr := &Screen{
 		tcellScreen:     tcellScreen,
 		panes:           make([]*Pane, 0),
-		neighbors:       make(map[int]map[Direction]int),
+		neighbors:       make(map[int]map[Direction][]int),
 		activePaneIndex: 0,
 		quit:            make(chan struct{}),
 		refreshChan:     make(chan bool, 1),
 		styleCache:      make(map[styleKey]tcell.Style),
+		DefaultFgColor:  defaultFg,
+		DefaultBgColor:  defaultBg,
 	}
 
-	scr.fadeEffect = NewFadeEffect(scr, tcell.ColorBlack, 0.25)
+	scr.fadeEffect = NewFadeEffect(scr, tcell.NewRGBColor(60, 60, 60), 0.25)
 
 	return scr, nil
+}
+
+func initDefaultColors() (tcell.Color, tcell.Color, error) {
+	fg, err := queryDefaultColor(10)
+	if err != nil {
+		fg = tcell.ColorRed
+	}
+	bg, err := queryDefaultColor(11)
+	if err != nil {
+		bg = tcell.ColorDarkRed
+	}
+	return fg, bg, err
+}
+
+func queryDefaultColor(code int) (tcell.Color, error) {
+	// 1) open the controlling terminal
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return tcell.ColorDefault, fmt.Errorf("open /dev/tty: %w", err)
+	}
+	defer tty.Close()
+
+	// 2) put it into raw mode (disable canonical + echo)
+	oldState, err := term.MakeRaw(int(tty.Fd()))
+	if err != nil {
+		return tcell.ColorDefault, fmt.Errorf("MakeRaw: %w", err)
+	}
+	defer term.Restore(int(tty.Fd()), oldState)
+
+	// 3) send the OSC query
+	seq := fmt.Sprintf("\x1b]%d;?\a", code)
+	if _, err := tty.WriteString(seq); err != nil {
+		return tcell.ColorDefault, err
+	}
+
+	// 4) read until BEL (\a) or timeout
+	resp := make([]byte, 0, 64)
+	buf := make([]byte, 1)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	if err := tty.SetReadDeadline(deadline); err != nil {
+		return tcell.ColorDefault, err
+	}
+
+	for {
+		n, err := tty.Read(buf)
+		if err != nil {
+			return tcell.ColorDefault, fmt.Errorf("read reply: %w", err)
+		}
+		resp = append(resp, buf[:n]...)
+		if buf[0] == '\a' {
+			break
+		}
+	}
+
+	// 5) parse ESC ] code ; rgb:RR/GG/BB BEL
+	pattern := fmt.Sprintf(`\x1b\]%d;rgb:([0-9A-Fa-f]{4})/([0-9A-Fa-f]{4})/([0-9A-Fa-f]{4})`, code)
+	re := regexp.MustCompile(pattern)
+	m := re.FindStringSubmatch(string(resp))
+	if len(m) != 4 {
+		return tcell.ColorDefault, fmt.Errorf("unexpected reply: %q", resp)
+	}
+
+	hex2int := func(s string) (int32, error) {
+		v, err := strconv.ParseInt(s, 16, 32)
+		return int32(v), err
+	}
+	r, _ := hex2int(m[1])
+	g, _ := hex2int(m[2])
+	b, _ := hex2int(m[3])
+	return tcell.NewRGBColor(r, g, b), nil
 }
 
 // updateNeighbors recalculates the neighbor map for all panes.
@@ -136,57 +221,141 @@ func (s *Screen) updateNeighbors() {
 	}
 }
 
+func (s *Screen) updateActiveEffects() {
+	// Clear previous buffer and effects, then reapply
+	for i, pane := range s.panes {
+		pane.prevBuf = nil
+		pane.ClearEffects()
+		if i != s.activePaneIndex {
+			pane.AddEffect(s.fadeEffect)
+		}
+	}
+}
+
 // splitActivePane splits the active pane in the given direction, adding a new pane.
 func (s *Screen) splitActivePane(d Direction) {
+	log.Printf("Split dir: %i", d)
+	if s.ShellPaneFactory == nil {
+		log.Panic("ShellPaneFactory not set")
+	}
 	idx := s.activePaneIndex
 	orig := s.panes[idx]
 	layout := orig.Layout
 	var a, b Rect
-	// split the fractional Rect
 	switch d {
-	case DirLeft:
+	case DirLeft, DirRight:
 		hw := layout.W / 2
-		a = Rect{X: layout.X, Y: layout.Y, W: hw, H: layout.H}
-		b = Rect{X: layout.X + hw, Y: layout.Y, W: hw, H: layout.H}
-	case DirRight:
-		hw := layout.W / 2
-		a = Rect{X: layout.X, Y: layout.Y, W: hw, H: layout.H}
-		b = Rect{X: layout.X + hw, Y: layout.Y, W: hw, H: layout.H}
-	case DirUp:
+		a, b = Rect{layout.X, layout.Y, hw, layout.H}, Rect{layout.X + hw, layout.Y, hw, layout.H}
+	case DirUp, DirDown:
 		hh := layout.H / 2
-		a = Rect{X: layout.X, Y: layout.Y, W: layout.W, H: hh}
-		b = Rect{X: layout.X, Y: layout.Y + hh, W: layout.W, H: hh}
-	case DirDown:
-		hh := layout.H / 2
-		a = Rect{X: layout.X, Y: layout.Y, W: layout.W, H: hh}
-		b = Rect{X: layout.X, Y: layout.Y + hh, W: layout.W, H: hh}
+		a, b = Rect{layout.X, layout.Y, layout.W, hh}, Rect{layout.X, layout.Y + hh, layout.W, hh}
 	}
-	// assign new layouts
-	orig.Layout = a
-	orig.prevBuf = nil
-	// create and insert new pane
-	newPane := NewPane(b, NewShellApp())
-	s.panes = append(s.panes[:idx+1], append([]*Pane{newPane}, s.panes[idx+1:]...)...)
-	// update neighbor relations
-	s.updateNeighbors()
-	// set focus to new pane
-	s.activePaneIndex = idx + 1
+	orig.Layout, orig.prevBuf = a, nil
+	newPane := s.ShellPaneFactory(b)
+	s.AddPane(newPane)
 }
 
 // moveActivePane moves focus to the neighbor in the given direction.
 func (s *Screen) moveActivePane(d Direction) {
+	log.Printf("Move dir: %i", d)
 	if n, ok := s.neighbors[s.activePaneIndex][d]; ok && n >= 0 {
-		s.activePaneIndex = n
+		s.setActivePane(n)
+	}
+}
+func (s *Screen) closeActivePane() {
+	if len(s.panes) <= 1 {
+		return
+	}
+
+	// 1) Make sure neighbors is up‐to‐date for the current state:
+	s.updateNeighbors()
+
+	// 2) Remember index & layout of the pane we’re about to remove:
+	idx := s.activePaneIndex
+	removed := s.panes[idx].Layout
+
+	// 3) Grab its old neighbor map (map[Direction]int):
+	oldNbrs := s.neighbors[idx]
+
+	// 4) Now close & remove the pane from the slice:
+	s.panes[idx].Close()
+	s.panes = append(s.panes[:idx], s.panes[idx+1:]...)
+
+	// 5) In your preferred priority order, collect the old indices of
+	//    all neighbors on that side:
+	order := []Direction{DirUp, DirLeft, DirDown, DirRight}
+	var chosenDir Direction
+	var nbrList []int
+
+	for _, d := range order {
+		if n, ok := oldNbrs[d]; ok && n >= 0 {
+			chosenDir = d
+			// (if you want _all_ neighbors on that side in oldNbrs,
+			// you could have oldNbrs map to a []int instead of a single int)
+			nbrList = append(nbrList, n)
+			// if you only want that one neighbor, you can break here
+			break
+		}
+	}
+
+	// 6) Adjust & expand each neighbor:
+	for _, oldIdx := range nbrList {
+		// shift down anything past the deleted index:
+		newIdx := oldIdx
+		if oldIdx > idx {
+			newIdx--
+		}
+		p := s.panes[newIdx]
+
+		switch chosenDir {
+		case DirUp:
+			p.Layout.H += removed.H
+		case DirDown:
+			p.Layout.Y = removed.Y
+			p.Layout.H += removed.H
+		case DirLeft:
+			p.Layout.W += removed.W
+		case DirRight:
+			p.Layout.X = removed.X
+			p.Layout.W += removed.W
+		}
+	}
+
+	// 7) Recompute & redraw
+	s.updateNeighbors()
+	s.ForceResize()
+	for _, p := range s.panes {
+		p.prevBuf = nil
+	}
+	s.requestRefresh()
+}
+
+func almostEqual(a, b float64) bool {
+	const eps = 1e-9
+	return math.Abs(a-b) < eps
+}
+
+func (s *Screen) setActivePane(n int) {
+	s.activePaneIndex = n
+	s.updateActiveEffects()
+	s.ForceResize()
+	for _, p := range s.panes {
+		p.prevBuf = nil
 	}
 }
 
 // swapActivePane swaps layouts of the active pane with its neighbor.
 func (s *Screen) swapActivePane(d Direction) {
+	log.Printf("Swap dir: %i", d)
 	if n, ok := s.neighbors[s.activePaneIndex][d]; ok && n >= 0 {
-		s.panes[s.activePaneIndex].Layout, s.panes[n].Layout = s.panes[n].Layout, s.panes[s.activePaneIndex].Layout
-		s.panes[s.activePaneIndex].prevBuf = nil
-		s.panes[n].prevBuf = nil
+		p, q := s.panes[s.activePaneIndex], s.panes[n]
+		p.Layout, q.Layout = q.Layout, p.Layout
+		p.prevBuf, q.prevBuf = nil, nil
 		s.updateNeighbors()
+		s.ForceResize()
+		for _, p := range s.panes {
+			p.prevBuf = nil
+		}
 	}
 }
 
@@ -216,17 +385,19 @@ func (s *Screen) Size() (int, int) {
 // AddPane adds a pane to the screen and starts its associated app.
 func (s *Screen) AddPane(p *Pane) {
 	s.panes = append(s.panes, p)
-	if len(s.panes) > 1 {
-		p.AddEffect(s.fadeEffect)
-	}
-
 	p.app.SetRefreshNotifier(s.refreshChan)
-
 	go func() {
 		if err := p.app.Run(); err != nil {
 			log.Printf("App '%s' exited with error: %v", p.app.GetTitle(), err)
 		}
 	}()
+	s.updateNeighbors()
+	s.setActivePane(len(s.panes) - 1)
+	s.ForceResize()
+	for _, pane := range s.panes {
+		pane.prevBuf = nil
+	}
+	s.requestRefresh()
 }
 
 // Run starts the main event and rendering loop.
@@ -280,7 +451,11 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
 		key := ev.Key()
+		r := ev.Rune()
 		mods := ev.Modifiers()
+
+		msg := fmt.Sprintf("Key=%v Rune=%q Mods=%b", key, r, mods)
+		log.Println(msg)
 
 		// Quit
 		if key == keyQuit {
@@ -288,11 +463,14 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 			return
 		}
 
+		if key == keyClose {
+			s.closeActivePane()
+			return
+		}
+
 		// Arrow + modifiers for pane operations
 		switch key {
 		case tcell.KeyUp, tcell.KeyDown, tcell.KeyLeft, tcell.KeyRight:
-			d := tcell.KeyUp
-			//sz := key // reuse variable for simplicity
 			var d Direction
 			switch key {
 			case tcell.KeyUp:
@@ -307,7 +485,7 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 
 			// Alt + arrows: move
 			if mods&tcell.ModAlt != 0 {
-				s.moveActivePane(d)
+				s.swapActivePane(d)
 				s.requestRefresh()
 				return
 			}
@@ -319,23 +497,10 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 			}
 			// Shift + arrows: swap
 			if mods&tcell.ModShift != 0 {
-				s.swapActivePane(d)
+				s.moveActivePane(d)
 				s.requestRefresh()
 				return
 			}
-		}
-
-		// Switch pane (Ctrl+A)
-		if key == keySwitchPane {
-			if len(s.panes) > 0 {
-				s.mu.Lock()
-				s.panes[s.activePaneIndex].AddEffect(s.fadeEffect)
-				s.activePaneIndex = (s.activePaneIndex + 1) % len(s.panes)
-				s.panes[s.activePaneIndex].ClearEffects()
-				s.mu.Unlock()
-				s.requestRefresh()
-			}
-			return
 		}
 
 		// Delegate other keys to the active pane
@@ -445,4 +610,35 @@ func (s *Screen) blitDiff(x0, y0 int, oldBuf, buf [][]Cell) {
 			}
 		}
 	}
+}
+
+func adjacent(a, b Rect) bool {
+	vOverlap := a.Y < b.Y+b.H && b.Y < a.Y+a.H
+	hOverlap := a.X < b.X+b.W && b.X < a.X+a.W
+
+	// right edge of a touches left of b
+	if math.Abs(a.X+a.W-b.X) < 1e-9 && vOverlap {
+		return true
+	}
+	// left edge of a touches right of b
+	if math.Abs(b.X+b.W-a.X) < 1e-9 && vOverlap {
+		return true
+	}
+	// bottom edge of a touches top of b
+	if math.Abs(a.Y+a.H-b.Y) < 1e-9 && hOverlap {
+		return true
+	}
+	// top edge of a touches bottom of b
+	if math.Abs(b.Y+b.H-a.Y) < 1e-9 && hOverlap {
+		return true
+	}
+	return false
+}
+
+func union(a, b Rect) Rect {
+	minX := math.Min(a.X, b.X)
+	minY := math.Min(a.Y, b.Y)
+	maxX := math.Max(a.X+a.W, b.X+b.W)
+	maxY := math.Max(a.Y+a.H, b.Y+b.H)
+	return Rect{X: minX, Y: minY, W: maxX - minX, H: maxY - minY}
 }

@@ -14,7 +14,8 @@ type FadeEffect struct {
 	FadeColor tcell.Color
 	// The intensity of the blend, from 0.0 (no effect) to 1.0 (fully faded).
 	Intensity float32
-	screen    *Screen
+	// Fallbacks for default (ColorDefault) fg/bg, captured from the screen's style.
+	screen *Screen
 }
 
 // NewFadeEffect creates a new fade effect with a given color and intensity.
@@ -41,10 +42,10 @@ func (f *FadeEffect) Apply(buffer [][]Cell) [][]Cell {
 
 			// treat “default” as white/black for blending
 			if !fg.Valid() {
-				fg = tcell.ColorWhite
+				fg = f.screen.DefaultFgColor
 			}
 			if !bg.Valid() {
-				bg = tcell.ColorBlack
+				bg = f.screen.DefaultBgColor
 			}
 
 			// blend each channel
@@ -55,6 +56,7 @@ func (f *FadeEffect) Apply(buffer [][]Cell) [][]Cell {
 			bold := attrs&tcell.AttrBold != 0
 			underline := attrs&tcell.AttrUnderline != 0
 			reverse := attrs&tcell.AttrReverse != 0
+
 			cell.Style = f.screen.getStyle(blendedFg, blendedBg, bold, underline, reverse)
 		}
 	}

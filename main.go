@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
 	"texelation/texel"
 )
@@ -20,6 +22,20 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error closing screen\n")
 		}
 	}()
+
+	log.Println("Application starting...")
+	logFile, err := os.OpenFile("ansiterm.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		panic(err)
+	} else {
+		log.SetOutput(logFile)
+	}
+	defer logFile.Close()
+
+	screen.ShellPaneFactory = func(layout texel.Rect) *texel.Pane {
+		shellApp := texelterm.New("shell", "/bin/bash")
+		return texel.NewPane(layout, shellApp)
+	}
 
 	// Start with a single fullscreen Welcome app (fractional positioning)
 	welcome := welcome.NewWelcomeApp()
