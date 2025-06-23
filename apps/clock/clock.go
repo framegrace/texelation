@@ -26,6 +26,10 @@ func NewClockApp() texel.App {
 	}
 }
 
+func (a *clockApp) HandleMessage(msg texel.Message) {
+	// This app doesn't handle messages.
+}
+
 // HandleKey does nothing for the clock app.
 func (a *clockApp) HandleKey(ev *tcell.EventKey) {}
 

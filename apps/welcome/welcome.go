@@ -18,6 +18,10 @@ func NewWelcomeApp() texel.App {
 	return &welcomeApp{}
 }
 
+func (a *welcomeApp) HandleMessage(msg texel.Message) {
+	// This app doesn't handle messages.
+}
+
 func (a *welcomeApp) Run() error {
 	// No background process needed for this static app.
 	return nil
@@ -50,10 +54,16 @@ func (a *welcomeApp) Render() [][]texel.Cell {
 	style := tcell.StyleDefault.Foreground(tcell.ColorGreen)
 
 	messages := []string{
-		"Welcome!",
-		"This is a textmode DE.",
-		"Press 'Ctrl-A' to enter Control Mode.",
-		"Then 'Tab' to switch panes, 'q' to quit.",
+		"Welcome to Texelation!",
+		"",
+		"Press 'Ctrl-A' to enter Control Mode, then:",
+		"  | or h  - Split horizontally",
+		"  - or v  - Split vertically",
+		"  x       - Close active pane",
+		"  w, arrow- Swap active pane with neighbor",
+		"",
+		"Press 'Shift-Arrow' to navigate panes anytime.",
+		"Press 'Ctrl-Q' to quit.",
 	}
 
 	for i, msg := range messages {

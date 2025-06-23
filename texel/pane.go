@@ -1,5 +1,9 @@
 package texel
 
+import (
+	"log"
+)
+
 // Rect defines a rectangle using fractional coordinates (0.0 to 1.0).
 type Rect struct {
 	X, Y, W, H float64
@@ -27,15 +31,36 @@ type Pane struct {
 	app                        App
 	effects                    []Effect
 	prevBuf                    [][]Cell
+	name                       string
 }
 
 // NewPane creates a new Pane with the given dimensions and hosts the provided App.
 func NewPane(app App) *Pane {
 	p := &Pane{
-		app: app,
+		app:  app,
+		name: app.GetTitle(),
 	}
 	// The app will be resized properly by the first call to handleResize.
 	return p
+}
+
+func (p *Pane) String() string {
+	return p.name
+}
+func (p *Pane) setTitle(t string) {
+	p.name = t
+}
+func (p *Pane) getTitle() string {
+	return p.name
+}
+func (p *Pane) HandleEvent(event Event) {
+	log.Printf("Panel %s received event %s", p, event)
+	for _, effect := range p.effects {
+		if listener, ok := effect.(EventListener); ok {
+			log.Printf("Sending to listener %s", effect)
+			listener.OnEvent(p, event)
+		}
+	}
 }
 
 func (p *Pane) Close() {

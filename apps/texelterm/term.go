@@ -18,24 +18,78 @@ import (
 
 // The texelTerm struct remains the same, but its Render method will produce tcell-compatible output.
 type texelTerm struct {
-	title       string
-	command     string
-	width       int
-	height      int
-	cmd         *exec.Cmd
-	pty         *os.File
-	vterm       *parser.VTerm
-	parser      *parser.Parser
-	mu          sync.Mutex
-	stop        chan struct{}
-	refreshChan chan<- bool
-	wg          sync.WaitGroup
-	buf         [][]texel.Cell
+	title        string
+	command      string
+	width        int
+	height       int
+	cmd          *exec.Cmd
+	pty          *os.File
+	vterm        *parser.VTerm
+	parser       *parser.Parser
+	mu           sync.Mutex
+	stop         chan struct{}
+	refreshChan  chan<- bool
+	wg           sync.WaitGroup
+	buf          [][]texel.Cell
+	colorPalette [258]tcell.Color // Local palette for this terminal instance
+}
+
+func New(title, command string) texel.App {
+	return &texelTerm{
+		title:        title,
+		command:      command,
+		width:        80, // Sensible defaults
+		height:       24,
+		stop:         make(chan struct{}),
+		colorPalette: newDefaultPalette(),
+	}
+}
+
+// mapParserColorToTCell translates our internal parser.Color to a true RGB tcell.Color using the local palette.
+func (a *texelTerm) mapParserColorToTCell(c parser.Color) tcell.Color {
+	switch c.Mode {
+	case parser.ColorModeDefault:
+		// Use the default foreground color from our local palette
+		return a.colorPalette[256]
+	case parser.ColorModeStandard:
+		return a.colorPalette[c.Value]
+	case parser.ColorMode256:
+		return a.colorPalette[c.Value]
+	case parser.ColorModeRGB:
+		return tcell.NewRGBColor(int32(c.R), int32(c.G), int32(c.B))
+	default:
+		return tcell.ColorDefault
+	}
+}
+
+func (a *texelTerm) applyParserStyle(pCell parser.Cell) texel.Cell {
+	// Note: For background, parser.DefaultBG is just the default index.
+	// We need to decide what that means. Here we'll map it to our palette's default bg.
+	bg := pCell.BG
+	if bg.Mode == parser.ColorModeDefault {
+		bg.Mode = parser.ColorModeStandard
+		bg.Value = 257 // Default BG index in our palette
+	}
+
+	style := tcell.StyleDefault
+	style = style.Foreground(a.mapParserColorToTCell(pCell.FG)).Background(a.mapParserColorToTCell(bg))
+	style = style.Bold(pCell.Attr&parser.AttrBold != 0)
+	style = style.Underline(pCell.Attr&parser.AttrUnderline != 0)
+	style = style.Reverse(pCell.Attr&parser.AttrReverse != 0)
+
+	return texel.Cell{
+		Ch:    pCell.Rune,
+		Style: style,
+	}
 }
 
 // SetRefreshNotifier implements the new interface method.
 func (a *texelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
+}
+
+func (a *texelTerm) HandleMessage(msg texel.Message) {
+	// This app doesn't handle messages.
 }
 
 // Render translates our VTerm's state into the main application's buffer.
@@ -191,16 +245,6 @@ func (a *texelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
-func New(title, command string) texel.App {
-	return &texelTerm{
-		title:   title,
-		command: command,
-		width:   80, // Sensible defaults
-		height:  24,
-		stop:    make(chan struct{}),
-	}
-}
-
 func (a *texelTerm) Run() error {
 	a.mu.Lock()
 	cols := a.width
@@ -225,7 +269,16 @@ func (a *texelTerm) Run() error {
 
 	// Initialize our virtual terminal and parser
 	a.mu.Lock()
-	titleChangeHandler := func(newTitle string) { a.title = newTitle }
+	titleChangeHandler := func(newTitle string) {
+		a.title = newTitle
+		if a.refreshChan != nil {
+			// Non-blocking send to avoid deadlocks if the channel is full
+			select {
+			case a.refreshChan <- true:
+			default:
+			}
+		}
+	}
 	ptyWriter := func(b []byte) {
 		if a.pty != nil {
 			a.pty.Write(b)
@@ -320,4 +373,51 @@ func (a *texelTerm) GetTitle() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.title
+}
+
+func newDefaultPalette() [258]tcell.Color {
+	// Based on the standard xterm 256 color palette.
+	var p [258]tcell.Color
+	// First 16 ANSI colors
+	p[0] = tcell.NewRGBColor(0, 0, 0)        // Black
+	p[1] = tcell.NewRGBColor(128, 0, 0)      // Maroon
+	p[2] = tcell.NewRGBColor(0, 128, 0)      // Green
+	p[3] = tcell.NewRGBColor(128, 128, 0)    // Olive
+	p[4] = tcell.NewRGBColor(0, 0, 128)      // Navy
+	p[5] = tcell.NewRGBColor(128, 0, 128)    // Purple
+	p[6] = tcell.NewRGBColor(0, 128, 128)    // Teal
+	p[7] = tcell.NewRGBColor(192, 192, 192)  // Silver
+	p[8] = tcell.NewRGBColor(128, 128, 128)  // Grey
+	p[9] = tcell.NewRGBColor(255, 0, 0)      // Red
+	p[10] = tcell.NewRGBColor(0, 255, 0)     // Lime
+	p[11] = tcell.NewRGBColor(255, 255, 0)   // Yellow
+	p[12] = tcell.NewRGBColor(0, 0, 255)     // Blue
+	p[13] = tcell.NewRGBColor(255, 0, 255)   // Fuchsia
+	p[14] = tcell.NewRGBColor(0, 255, 255)   // Aqua
+	p[15] = tcell.NewRGBColor(255, 255, 255) // White
+
+	// 6x6x6 color cube
+	levels := []int32{0, 95, 135, 175, 215, 255}
+	i := 16
+	for r := 0; r < 6; r++ {
+		for g := 0; g < 6; g++ {
+			for b := 0; b < 6; b++ {
+				p[i] = tcell.NewRGBColor(levels[r], levels[g], levels[b])
+				i++
+			}
+		}
+	}
+
+	// Grayscale ramp
+	for j := 0; j < 24; j++ {
+		gray := int32(8 + j*10)
+		p[i] = tcell.NewRGBColor(gray, gray, gray)
+		i++
+	}
+
+	// Default Foreground (White) and Background (Black)
+	p[256] = p[15]
+	p[257] = p[0]
+
+	return p
 }

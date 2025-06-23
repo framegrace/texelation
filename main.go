@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"texelation/apps/clock"
+	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
 	"texelation/texel"
@@ -39,8 +39,8 @@ func main() {
 	}
 
 	// Add a clock as a status pane at the bottom
-	clockApp := clock.NewClockApp()
-	screen.AddStatusPane(clockApp, texel.SideTop, 1)
+	statusBarApp := statusbar.New()
+	screen.AddStatusPane(statusBarApp, texel.SideBottom, 1)
 
 	// Start with a single fullscreen Welcome app (fractional positioning)
 	welcome := welcome.NewWelcomeApp()

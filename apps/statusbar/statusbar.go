@@ -1,0 +1,151 @@
+package statusbar
+
+import (
+	"fmt"
+	"strings"
+	"sync"
+	"texelation/apps/clock"
+	"texelation/texel"
+
+	"github.com/gdamore/tcell/v2"
+)
+
+// StatusBarApp displays screen state information.
+type StatusBarApp struct {
+	width, height int
+	mu            sync.RWMutex
+	refreshChan   chan<- bool
+
+	// State from Screen
+	inControlMode bool
+	subMode       rune
+	activeTitle   string
+
+	// Internal Clock
+	clockApp  texel.App
+	stopClock chan struct{}
+}
+
+// New creates a new StatusBarApp.
+func New() texel.App {
+	return &StatusBarApp{
+		clockApp:  clock.NewClockApp(),
+		stopClock: make(chan struct{}),
+	}
+}
+
+func (a *StatusBarApp) SetRefreshNotifier(refreshChan chan<- bool) {
+	a.refreshChan = refreshChan
+	// Pass it down to the internal clock
+	a.clockApp.SetRefreshNotifier(refreshChan)
+}
+
+func (a *StatusBarApp) Run() error {
+	// Run the internal clock
+	go a.clockApp.Run()
+	// Wait for the app to be stopped
+	<-a.stopClock
+	return nil
+}
+
+func (a *StatusBarApp) Stop() {
+	a.clockApp.Stop()
+	close(a.stopClock)
+}
+
+func (a *StatusBarApp) Resize(cols, rows int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.width, a.height = cols, rows
+	a.clockApp.Resize(cols, rows) // Let the clock know its size too
+}
+
+func (a *StatusBarApp) GetTitle() string {
+	return "Status Bar"
+}
+
+func (a *StatusBarApp) HandleKey(ev *tcell.EventKey) {}
+
+func (a *StatusBarApp) HandleMessage(msg texel.Message) {
+	if msg.Type == texel.MsgStateUpdate {
+		if payload, ok := msg.Payload.(texel.StatePayload); ok {
+			a.mu.Lock()
+			a.inControlMode = payload.InControlMode
+			a.subMode = payload.SubMode
+			a.activeTitle = payload.ActiveTitle
+			a.mu.Unlock()
+		}
+	}
+}
+
+func (a *StatusBarApp) Render() [][]texel.Cell {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	buf := make([][]texel.Cell, a.height)
+	for i := range buf {
+		buf[i] = make([]texel.Cell, a.width)
+	}
+	if a.height == 0 {
+		return buf
+	}
+
+	// Select style based on control mode
+	var style tcell.Style
+	if a.inControlMode {
+		style = tcell.StyleDefault.Background(tcell.ColorSaddleBrown).Foreground(tcell.ColorWhite)
+	} else {
+		style = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
+	}
+
+	// Left part: Mode and Title
+	var modeStr string
+	if a.inControlMode {
+		if a.subMode != 0 {
+			modeStr = fmt.Sprintf("[CTRL-A, %c, ?]", a.subMode)
+		} else {
+			modeStr = "[CONTROL]"
+		}
+	} else {
+		modeStr = "[INPUT]"
+	}
+
+	leftStr := fmt.Sprintf(" %s %s ", modeStr, a.activeTitle)
+
+	// Right part: Clock
+	clockCells := a.clockApp.Render()
+	clockStr := ""
+	if len(clockCells) > 0 && len(clockCells[0]) > 0 {
+		var sb strings.Builder
+		for _, cell := range clockCells[0] {
+			sb.WriteRune(cell.Ch)
+		}
+		clockStr = strings.TrimSpace(sb.String())
+	}
+	rightStr := fmt.Sprintf(" %s ", clockStr)
+
+	// Draw background
+	for i := 0; i < a.width; i++ {
+		buf[0][i] = texel.Cell{Ch: ' ', Style: style}
+	}
+
+	// Draw left string
+	col := 0
+	for _, r := range leftStr {
+		if col < a.width {
+			buf[0][col] = texel.Cell{Ch: r, Style: style}
+			col++
+		}
+	}
+
+	// Draw right string
+	col = a.width - len(rightStr)
+	for _, r := range rightStr {
+		if col >= 0 && col < a.width {
+			buf[0][col] = texel.Cell{Ch: r, Style: style}
+			col++
+		}
+	}
+
+	return buf
+}
