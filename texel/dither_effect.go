@@ -29,7 +29,7 @@ func (d *DitherEffect) IsContinuous() bool {
 }
 
 // OnEvent toggles the effect on or off.
-func (d *DitherEffect) OnEvent(owner *Pane, event Event) {
+func (d *DitherEffect) OnEvent(owner *pane, event Event) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	switch event.Type {

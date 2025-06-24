@@ -56,7 +56,7 @@ func (f *FadeEffect) IsContinuous() bool {
 	return false
 }
 
-func (f *FadeEffect) OnEvent(owner *Pane, event Event) {
+func (f *FadeEffect) OnEvent(owner *pane, event Event) {
 	if f.isControlModeEffect {
 		switch event.Type {
 		case EventControlOn:

@@ -42,7 +42,7 @@ func (f *PixelateEffect) IsContinuous() bool {
 	return false
 }
 
-func (d *PixelateEffect) OnEvent(owner *Pane, event Event) {
+func (d *PixelateEffect) OnEvent(owner *pane, event Event) {
 	// This effect only cares about Control On/Off events.
 	switch event.Type {
 	case EventControlOn:

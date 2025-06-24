@@ -22,11 +22,11 @@ type Node struct {
 	Right  *Node
 	Split  SplitType
 	Layout Rect
-	Pane   *Pane // A pane is only present in leaf nodes
+	Pane   *pane // A pane is only present in leaf nodes
 }
 
 // Pane represents a rectangular area on the screen that hosts an App.
-type Pane struct {
+type pane struct {
 	absX0, absY0, absX1, absY1 int // These are now calculated from Layout
 	app                        App
 	effects                    []Effect
@@ -35,8 +35,8 @@ type Pane struct {
 }
 
 // NewPane creates a new Pane with the given dimensions and hosts the provided App.
-func NewPane(app App) *Pane {
-	p := &Pane{
+func newPane(app App) *pane {
+	p := &pane{
 		app:  app,
 		name: app.GetTitle(),
 	}
@@ -44,16 +44,16 @@ func NewPane(app App) *Pane {
 	return p
 }
 
-func (p *Pane) String() string {
+func (p *pane) String() string {
 	return p.name
 }
-func (p *Pane) setTitle(t string) {
+func (p *pane) setTitle(t string) {
 	p.name = t
 }
-func (p *Pane) getTitle() string {
+func (p *pane) getTitle() string {
 	return p.name
 }
-func (p *Pane) HandleEvent(event Event) {
+func (p *pane) HandleEvent(event Event) {
 	log.Printf("Panel %s received event %s", p, event)
 	for _, effect := range p.effects {
 		if listener, ok := effect.(EventListener); ok {
@@ -63,24 +63,24 @@ func (p *Pane) HandleEvent(event Event) {
 	}
 }
 
-func (p *Pane) Close() {
+func (p *pane) Close() {
 	if p.app != nil {
 		p.app.Stop()
 	}
 }
 
 // AddEffect adds a visual effect to the pane's processing pipeline.
-func (p *Pane) AddEffect(e Effect) {
+func (p *pane) AddEffect(e Effect) {
 	// To avoid duplicates, you could add a check here if needed.
 	p.effects = append(p.effects, e)
 }
 
 // ClearEffects removes all visual effects from the pane.
-func (p *Pane) ClearEffects() {
+func (p *pane) ClearEffects() {
 	p.effects = make([]Effect, 0)
 }
 
-func (p *Pane) Width() int {
+func (p *pane) Width() int {
 	w := p.absX1 - p.absX0
 	if w < 0 {
 		return 0
@@ -88,7 +88,7 @@ func (p *Pane) Width() int {
 	return w
 }
 
-func (p *Pane) Height() int {
+func (p *pane) Height() int {
 	h := p.absY1 - p.absY0
 	if h < 0 {
 		return 0
@@ -96,7 +96,7 @@ func (p *Pane) Height() int {
 	return h
 }
 
-func (p *Pane) SetDimensions(x0, y0, x1, y1 int) {
+func (p *pane) SetDimensions(x0, y0, x1, y1 int) {
 	p.absX0, p.absY0, p.absX1, p.absY1 = x0, y0, x1, y1
 	p.app.Resize(p.Width(), p.Height())
 }

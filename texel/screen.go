@@ -34,7 +34,7 @@ const (
 	SideRight
 )
 
-type PaneFactory func() *Pane
+type AppFactory func() App
 
 const (
 	keyControlMode = tcell.KeyCtrlA
@@ -70,7 +70,7 @@ type Screen struct {
 	styleCache                     map[styleKey]tcell.Style
 	DefaultFgColor                 tcell.Color
 	DefaultBgColor                 tcell.Color
-	ShellPaneFactory               PaneFactory
+	ShellAppFactory                AppFactory
 
 	// Control Mode State
 	inControlMode   bool
@@ -128,7 +128,7 @@ func (s *Screen) broadcastEvent(event Event) {
 	})
 }
 
-func (s *Screen) addStandardEffects(p *Pane) {
+func (s *Screen) addStandardEffects(p *pane) {
 	p.AddEffect(s.inactiveFadePrototype.Clone())
 	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
 	//p.AddEffect(s.ditherEffectPrototype.Clone())
@@ -251,8 +251,8 @@ func (s *Screen) AddStatusPane(app App, side Side, size int) {
 
 // splitActivePane splits the active pane in the given direction, adding a new pane.
 func (s *Screen) splitActivePane(d Direction) {
-	if s.ShellPaneFactory == nil {
-		log.Panic("ShellPaneFactory not set")
+	if s.ShellAppFactory == nil {
+		log.Panic("ShellAppFractory not set")
 	}
 
 	leaf := s.activeLeaf
@@ -268,7 +268,8 @@ func (s *Screen) splitActivePane(d Direction) {
 	leaf.Left = &Node{Parent: leaf}
 	leaf.Right = &Node{Parent: leaf}
 
-	newPane := s.createAndRunPane()
+	newApp := s.ShellAppFactory()
+	newPane := s.createAndInitPane(newApp)
 
 	var newActiveLeaf *Node
 	switch d {
@@ -294,6 +295,7 @@ func (s *Screen) splitActivePane(d Direction) {
 		newActiveLeaf = leaf.Right
 	}
 	s.resizeNode(leaf, leaf.Layout, parentX, parentY, parentW, parentH)
+	go newPane.app.Run()
 	s.setActivePane(newActiveLeaf)
 }
 
@@ -437,24 +439,10 @@ func (s *Screen) Size() (int, int) {
 	return s.tcellScreen.Size()
 }
 
-func (s *Screen) createAndRunPane() *Pane {
-	if s.ShellPaneFactory == nil {
-		log.Panic("ShellPaneFactory not set")
-	}
-	newPane := s.ShellPaneFactory()
-	s.addStandardEffects(newPane)
-
-	newPane.app.SetRefreshNotifier(s.refreshChan)
-	go func() {
-		if err := newPane.app.Run(); err != nil {
-			log.Printf("App '%s' exited with error: %v", newPane.app.GetTitle(), err)
-		}
-	}()
-	return newPane
-}
-
 // AddPane adds a pane to the screen and starts its associated app.
-func (s *Screen) AddPane(p *Pane) {
+func (s *Screen) AddApp(app App) {
+	// Screen creates the internal pane wrapper.
+	p := newPane(app)
 	s.addStandardEffects(p)
 
 	leaf := &Node{
@@ -464,18 +452,24 @@ func (s *Screen) AddPane(p *Pane) {
 
 	if s.root == nil {
 		s.root = leaf
+	} else {
+		// A more sophisticated split would happen here in a real app
+		s.root = leaf
 	}
 
-	p.app.SetRefreshNotifier(s.refreshChan)
-	go func() {
-		if err := p.app.Run(); err != nil {
-			log.Printf("App '%s' exited with error: %v", p.app.GetTitle(), err)
-		}
-	}()
+	p.app.SetRefreshNotifier(s.refreshChan) // ?
 
-	// This is the ideal place to do the initial full-screen layout
+	// Enforce the "Resize -> Set Active -> Run" lifecycle.
 	s.ForceResize()
 	s.setActivePane(leaf)
+	go p.app.Run()
+}
+
+func (s *Screen) createAndInitPane(app App) *pane {
+	p := newPane(app)
+	s.addStandardEffects(p)
+	p.app.SetRefreshNotifier(s.refreshChan)
+	return p
 }
 
 // Run starts the main event and rendering loop.

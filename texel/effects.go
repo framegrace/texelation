@@ -28,7 +28,7 @@ type Effect interface {
 }
 
 type EventListener interface {
-	OnEvent(owner *Pane, event Event)
+	OnEvent(owner *pane, event Event)
 }
 
 type EffectState int
