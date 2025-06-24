@@ -60,8 +60,9 @@ type Screen struct {
 	root                           *Node
 	activeLeaf                     *Node
 	statusPanes                    []*StatusPane
-	inactiveFadePrototype          *FadeEffect
-	controlModeFadeEffectPrototype *FadeEffect
+	inactiveFadePrototype          Effect
+	controlModeFadeEffectPrototype Effect
+	ditherEffectPrototype          Effect
 	quit                           chan struct{}
 	refreshChan                    chan bool
 	mu                             sync.Mutex
@@ -101,9 +102,10 @@ func NewScreen() (*Screen, error) {
 		DefaultBgColor:  defaultBg,
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
 	}
-	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), WithIntensity(0.8))
+	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.8)
 	// The control mode effect applies to all panes
-	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), WithIsControl(true))
+	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), 0.2, WithIsControl(true))
+	scr.ditherEffectPrototype = NewDitherEffect('░')
 
 	return scr, nil
 }
@@ -128,6 +130,7 @@ func (s *Screen) broadcastEvent(event Event) {
 func (s *Screen) addStandardEffects(p *Pane) {
 	p.AddEffect(s.inactiveFadePrototype.Clone())
 	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
+	p.AddEffect(s.ditherEffectPrototype.Clone())
 }
 
 func initDefaultColors() (tcell.Color, tcell.Color, error) {
@@ -457,7 +460,6 @@ func (s *Screen) AddPane(p *Pane) {
 
 	if s.root == nil {
 		s.root = leaf
-		s.activeLeaf = leaf
 	} else {
 		// For simplicity, we'll just replace the root for now.
 		// A more complete implementation would find a place to insert the new pane.
@@ -513,6 +515,23 @@ func (s *Screen) Run() error {
 			s.broadcastStateUpdate()
 			dirty = true
 		case <-ticker.C:
+			// Check if any continuous effect is active, which forces a redraw.
+			var needsContinuousUpdate bool
+			s.traverse(s.root, func(node *Node) {
+				if node != nil && node.Pane != nil {
+					for _, effect := range node.Pane.effects {
+						if effect.IsContinuous() {
+							needsContinuousUpdate = true
+							break
+						}
+					}
+				}
+			})
+
+			if needsContinuousUpdate {
+				dirty = true
+			}
+
 			if dirty {
 				s.draw()
 				dirty = false
@@ -665,7 +684,7 @@ func (s *Screen) requestRefresh() {
 
 // draw executes the final screen update.
 func (s *Screen) draw() {
-	s.tcellScreen.Clear()
+	//s.tcellScreen.Clear()
 	s.compositePanes()
 	s.drawStatusPanes()
 	s.tcellScreen.Show()
