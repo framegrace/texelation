@@ -121,7 +121,7 @@ func (s *Screen) Refresh() {
 // broadcastEvent sends an event to all panes.
 func (s *Screen) broadcastEvent(event Event) {
 	s.traverse(s.root, func(node *Node) {
-		log.Printf("Broadcasting Event: %s to %s ", event, node.Pane)
+		//log.Printf("Broadcasting Event: %s to %s ", event, node.Pane)
 		if node.Pane != nil {
 			node.Pane.HandleEvent(event)
 		}
@@ -780,29 +780,34 @@ func (s *Screen) resizeNode(n *Node, r Rect, x, y, w, h int) {
 		return
 	}
 
-	// The proportional layout is always relative to the parent's container
 	n.Layout = r
 
-	// Calculate the absolute pixel dimensions for THIS node
+	// Calculate the absolute pixel dimensions for THIS node's container.
 	absX := x + int(r.X*float64(w))
 	absY := y + int(r.Y*float64(h))
 	absW := int(r.W * float64(w))
 	absH := int(r.H * float64(h))
 
 	if n.Pane != nil {
-		// If it's a leaf, set the final dimensions on the pane
-		n.Pane.SetDimensions(absX, absY, absX+absW, absY+absH)
+		// If it's a leaf, set the final dimensions on the pane.
+		n.Pane.setDimensions(absX, absY, absX+absW, absY+absH)
 		n.Pane.prevBuf = nil
 	} else {
-		// If it's a split, recurse into the children.
-		// CRUCIAL FIX: The children are laid out within the absolute
-		// dimensions we just calculated for THIS node (absX, absY, absW, absH).
 		if n.Split == Vertical {
-			s.resizeNode(n.Left, Rect{0, 0, 0.5, 1}, absX, absY, absW, absH)
-			s.resizeNode(n.Right, Rect{0.5, 0, 0.5, 1}, absX, absY, absW, absH)
+			leftW := absW / 2
+			rightW := absW - leftW
+
+			s.resizeNode(n.Left, Rect{0, 0, 1, 1}, absX, absY, leftW, absH)
+
+			s.resizeNode(n.Right, Rect{0, 0, 1, 1}, absX+leftW, absY, rightW, absH)
+
 		} else { // Horizontal
-			s.resizeNode(n.Left, Rect{0, 0, 1, 0.5}, absX, absY, absW, absH)
-			s.resizeNode(n.Right, Rect{0, 0.5, 1, 0.5}, absX, absY, absW, absH)
+			topH := absH / 2
+			bottomH := absH - topH
+
+			s.resizeNode(n.Left, Rect{0, 0, 1, 1}, absX, absY, absW, topH)
+
+			s.resizeNode(n.Right, Rect{0, 0, 1, 1}, absX, absY+topH, absW, bottomH)
 		}
 	}
 }

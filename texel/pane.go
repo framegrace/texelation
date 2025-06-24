@@ -1,7 +1,7 @@
 package texel
 
 import (
-	"log"
+// "log"
 )
 
 // Rect defines a rectangle using fractional coordinates (0.0 to 1.0).
@@ -54,10 +54,10 @@ func (p *pane) getTitle() string {
 	return p.name
 }
 func (p *pane) HandleEvent(event Event) {
-	log.Printf("Panel %s received event %s", p, event)
+	//log.Printf("Panel %s received event %s", p, event)
 	for _, effect := range p.effects {
 		if listener, ok := effect.(EventListener); ok {
-			log.Printf("Sending to listener %s", effect)
+			//log.Printf("Sending to listener %s", effect)
 			listener.OnEvent(p, event)
 		}
 	}
@@ -96,7 +96,7 @@ func (p *pane) Height() int {
 	return h
 }
 
-func (p *pane) SetDimensions(x0, y0, x1, y1 int) {
+func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 	p.absX0, p.absY0, p.absX1, p.absY1 = x0, y0, x1, y1
 	p.app.Resize(p.Width(), p.Height())
 }
