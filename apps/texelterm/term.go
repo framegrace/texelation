@@ -63,16 +63,21 @@ func (a *texelTerm) mapParserColorToTCell(c parser.Color) tcell.Color {
 }
 
 func (a *texelTerm) applyParserStyle(pCell parser.Cell) texel.Cell {
-	// Note: For background, parser.DefaultBG is just the default index.
-	// We need to decide what that means. Here we'll map it to our palette's default bg.
-	bg := pCell.BG
-	if bg.Mode == parser.ColorModeDefault {
-		bg.Mode = parser.ColorModeStandard
-		bg.Value = 257 // Default BG index in our palette
+	// Get the foreground color by mapping it through our local palette.
+	fgColor := a.mapParserColorToTCell(pCell.FG)
+
+	// Handle the background color explicitly.
+	var bgColor tcell.Color
+	if pCell.BG.Mode == parser.ColorModeDefault {
+		// If the cell's BG is the default, use our palette's default BG.
+		bgColor = a.colorPalette[257]
+	} else {
+		// Otherwise, map it normally.
+		bgColor = a.mapParserColorToTCell(pCell.BG)
 	}
 
 	style := tcell.StyleDefault
-	style = style.Foreground(a.mapParserColorToTCell(pCell.FG)).Background(a.mapParserColorToTCell(bg))
+	style = style.Foreground(fgColor).Background(bgColor)
 	style = style.Bold(pCell.Attr&parser.AttrBold != 0)
 	style = style.Underline(pCell.Attr&parser.AttrUnderline != 0)
 	style = style.Reverse(pCell.Attr&parser.AttrReverse != 0)
@@ -92,7 +97,6 @@ func (a *texelTerm) HandleMessage(msg texel.Message) {
 	// This app doesn't handle messages.
 }
 
-// Render translates our VTerm's state into the main application's buffer.
 func (a *texelTerm) Render() [][]texel.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -119,49 +123,16 @@ func (a *texelTerm) Render() [][]texel.Cell {
 	cursorVisible := a.vterm.CursorVisible()
 
 	for y := 0; y < rows; y++ {
-		a.buf[y] = make([]texel.Cell, cols)
 		for x := 0; x < cols; x++ {
 			parserCell := vtermGrid[y][x]
-			// The new apply function returns a tcell.Style
-			a.buf[y][x] = applyParserStyle(parserCell)
+			a.buf[y][x] = a.applyParserStyle(parserCell)
 
 			if cursorVisible && x == cursorX && y == cursorY {
-				// To show the cursor, we just get the style and reverse it.
 				a.buf[y][x].Style = a.buf[y][x].Style.Reverse(true)
 			}
 		}
 	}
 	return a.buf
-}
-
-func applyParserStyle(pCell parser.Cell) texel.Cell {
-	style := tcell.StyleDefault
-	fg := mapParserColorToTCell(pCell.FG)
-	bg := mapParserColorToTCell(pCell.BG)
-	style = style.Foreground(fg).Background(bg)
-	style = style.Bold(pCell.Attr&parser.AttrBold != 0)
-	style = style.Underline(pCell.Attr&parser.AttrUnderline != 0)
-	style = style.Reverse(pCell.Attr&parser.AttrReverse != 0)
-	return texel.Cell{
-		Ch:    pCell.Rune,
-		Style: style,
-	}
-}
-
-// mapParserColorToTCell translates our custom Color type to a tcell.Color.
-func mapParserColorToTCell(c parser.Color) tcell.Color {
-	switch c.Mode {
-	case parser.ColorModeDefault:
-		return tcell.ColorDefault
-	case parser.ColorModeStandard:
-		return tcell.PaletteColor(int(c.Value))
-	case parser.ColorMode256:
-		return tcell.PaletteColor(int(c.Value))
-	case parser.ColorModeRGB:
-		return tcell.NewRGBColor(int32(c.R), int32(c.G), int32(c.B))
-	default:
-		return tcell.ColorDefault
-	}
 }
 
 func (a *texelTerm) HandleKey(ev *tcell.EventKey) {

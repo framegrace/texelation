@@ -8,22 +8,13 @@ import (
 	"time"
 )
 
-// EffectState defines the possible states of an effect.
-type EffectState int
-
-const (
-	StateOff EffectState = iota
-	StateFadingIn
-	StateOn
-	StateFadingOut
-)
-
 type FadeEffect struct {
 	FadeColor           tcell.Color
 	targetIntensity     float32
 	currentIntensity    float32
 	state               EffectState
 	isControlModeEffect bool
+	duration            time.Duration
 
 	screen *Screen
 	mu     sync.Mutex
@@ -32,23 +23,54 @@ type FadeEffect struct {
 	animCancel context.CancelFunc
 }
 
-// NewFadeEffect creates a new fade effect.
-func NewFadeEffect(scr *Screen, color tcell.Color, intensity float32, isControlModeEffect bool) *FadeEffect {
-	return &FadeEffect{
-		screen:              scr,
-		FadeColor:           color,
-		targetIntensity:     intensity,
-		state:               StateOff,
-		isControlModeEffect: isControlModeEffect,
+type FadeEffectOption func(*FadeEffect)
+
+func WithDuration(d time.Duration) FadeEffectOption {
+	return func(f *FadeEffect) {
+		f.duration = d
 	}
 }
 
+func WithIsControl(b bool) FadeEffectOption {
+	return func(f *FadeEffect) {
+		f.isControlModeEffect = b
+	}
+}
+
+func WithIntensity(i float32) FadeEffectOption {
+	return func(f *FadeEffect) {
+		f.targetIntensity = i
+	}
+}
+
+// NewFadeEffect creates a new fade effect.
+func NewFadeEffect(scr *Screen, color tcell.Color, opts ...FadeEffectOption) *FadeEffect {
+	f := &FadeEffect{
+		screen:              scr,
+		FadeColor:           color,
+		targetIntensity:     0.5,
+		state:               StateOff,
+		isControlModeEffect: false,
+		duration:            200 * time.Millisecond,
+	}
+	for _, opt := range opts {
+		opt(f)
+	}
+	return f
+}
+
 func (f *FadeEffect) Clone() Effect {
-	return NewFadeEffect(f.screen, f.FadeColor, f.targetIntensity, f.isControlModeEffect)
+	return NewFadeEffect(
+		f.screen,
+		f.FadeColor,
+		WithDuration(f.duration),
+		WithIsControl(f.isControlModeEffect),
+		WithIntensity(f.targetIntensity),
+	)
 }
 
 func (f *FadeEffect) String() string {
-	return fmt.Sprintf("FadeEffect: %s,%i,%t", f.FadeColor, f.targetIntensity, f.isControlModeEffect)
+	return fmt.Sprintf("FadeEffect: %s,%i,%i,%t", f.FadeColor, f.targetIntensity, f.duration, f.isControlModeEffect)
 }
 
 func (f *FadeEffect) OnEvent(owner *Pane, event Event) {

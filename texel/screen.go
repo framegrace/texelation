@@ -101,9 +101,9 @@ func NewScreen() (*Screen, error) {
 		DefaultBgColor:  defaultBg,
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
 	}
-	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(60, 60, 60), 0.25, false)
+	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), WithIntensity(0.8))
 	// The control mode effect applies to all panes
-	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), 0.20, true)
+	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), WithIsControl(true))
 
 	return scr, nil
 }

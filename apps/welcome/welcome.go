@@ -51,7 +51,7 @@ func (a *welcomeApp) Render() [][]texel.Cell {
 		}
 	}
 
-	style := tcell.StyleDefault.Foreground(tcell.ColorGreen)
+	style := tcell.StyleDefault.Foreground(tcell.ColorGreen.TrueColor())
 
 	messages := []string{
 		"Welcome to Texelation!",

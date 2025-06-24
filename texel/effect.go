@@ -42,3 +42,12 @@ type Event struct {
 type EventListener interface {
 	OnEvent(owner *Pane, event Event)
 }
+
+type EffectState int
+
+const (
+	StateOff EffectState = iota
+	StateFadingIn
+	StateOn
+	StateFadingOut
+)
