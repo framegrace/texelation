@@ -102,7 +102,8 @@ func NewScreen() (*Screen, error) {
 		DefaultBgColor:  defaultBg,
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
 	}
-	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.8)
+	//scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.8)
+	scr.inactiveFadePrototype = NewVignetteEffect(scr, tcell.NewRGBColor(60, 60, 60), 0.5, WithFalloff(4.0))
 	// The control mode effect applies to all panes
 	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), 0.2, WithIsControl(true))
 	scr.ditherEffectPrototype = NewDitherEffect('░')
@@ -130,7 +131,7 @@ func (s *Screen) broadcastEvent(event Event) {
 func (s *Screen) addStandardEffects(p *Pane) {
 	p.AddEffect(s.inactiveFadePrototype.Clone())
 	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
-	p.AddEffect(s.ditherEffectPrototype.Clone())
+	//p.AddEffect(s.ditherEffectPrototype.Clone())
 }
 
 func initDefaultColors() (tcell.Color, tcell.Color, error) {
@@ -259,6 +260,8 @@ func (s *Screen) splitActivePane(d Direction) {
 		return
 	}
 
+	parentX, parentY, parentW, parentH := leaf.Pane.absX0, leaf.Pane.absY0, leaf.Pane.Width(), leaf.Pane.Height()
+
 	// Preserve the original pane
 	originalPane := leaf.Pane
 	leaf.Pane = nil // No longer a leaf
@@ -290,7 +293,7 @@ func (s *Screen) splitActivePane(d Direction) {
 		leaf.Right.Pane = newPane
 		newActiveLeaf = leaf.Right
 	}
-
+	s.resizeNode(leaf, leaf.Layout, parentX, parentY, parentW, parentH)
 	s.setActivePane(newActiveLeaf)
 }
 
@@ -453,6 +456,7 @@ func (s *Screen) createAndRunPane() *Pane {
 // AddPane adds a pane to the screen and starts its associated app.
 func (s *Screen) AddPane(p *Pane) {
 	s.addStandardEffects(p)
+
 	leaf := &Node{
 		Pane:   p,
 		Layout: Rect{0, 0, 1, 1},
@@ -460,11 +464,6 @@ func (s *Screen) AddPane(p *Pane) {
 
 	if s.root == nil {
 		s.root = leaf
-	} else {
-		// For simplicity, we'll just replace the root for now.
-		// A more complete implementation would find a place to insert the new pane.
-		s.root = leaf
-		s.activeLeaf = leaf
 	}
 
 	p.app.SetRefreshNotifier(s.refreshChan)
@@ -474,8 +473,9 @@ func (s *Screen) AddPane(p *Pane) {
 		}
 	}()
 
-	s.setActivePane(leaf)
+	// This is the ideal place to do the initial full-screen layout
 	s.ForceResize()
+	s.setActivePane(leaf)
 }
 
 // Run starts the main event and rendering loop.
