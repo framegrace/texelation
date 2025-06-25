@@ -21,7 +21,6 @@ type Node struct {
 	Left   *Node
 	Right  *Node
 	Split  SplitType
-	Layout Rect
 	Pane   *pane // A pane is only present in leaf nodes
 }
 

@@ -131,7 +131,7 @@ func (s *Screen) broadcastEvent(event Event) {
 func (s *Screen) addStandardEffects(p *pane) {
 	p.AddEffect(s.inactiveFadePrototype.Clone())
 	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
-	//p.AddEffect(s.ditherEffectPrototype.Clone())
+	p.AddEffect(s.ditherEffectPrototype.Clone())
 }
 
 func initDefaultColors() (tcell.Color, tcell.Color, error) {
@@ -294,7 +294,7 @@ func (s *Screen) splitActivePane(d Direction) {
 		leaf.Right.Pane = newPane
 		newActiveLeaf = leaf.Right
 	}
-	s.resizeNode(leaf, leaf.Layout, parentX, parentY, parentW, parentH)
+	s.resizeNode(leaf, parentX, parentY, parentW, parentH)
 	go newPane.app.Run()
 	s.setActivePane(newActiveLeaf)
 }
@@ -361,7 +361,6 @@ func (s *Screen) closeActivePane() {
 
 	// The parent's layout is given to the sibling
 	grandparent := parent.Parent
-	sibling.Layout = parent.Layout
 	sibling.Parent = grandparent
 
 	if grandparent == nil {
@@ -446,8 +445,7 @@ func (s *Screen) AddApp(app App) {
 	s.addStandardEffects(p)
 
 	leaf := &Node{
-		Pane:   p,
-		Layout: Rect{0, 0, 1, 1},
+		Pane: p,
 	}
 
 	if s.root == nil {
@@ -771,43 +769,36 @@ func (s *Screen) handleResize() {
 
 	// Calculate proportional layout for the main content area
 	if s.root != nil {
-		s.resizeNode(s.root, Rect{0, 0, 1, 1}, mainX, mainY, mainW, mainH)
+		s.resizeNode(s.root, mainX, mainY, mainW, mainH)
 	}
 }
 
-func (s *Screen) resizeNode(n *Node, r Rect, x, y, w, h int) {
+func (s *Screen) resizeNode(n *Node, x, y, w, h int) {
 	if n == nil {
 		return
 	}
 
-	n.Layout = r
-
-	// Calculate the absolute pixel dimensions for THIS node's container.
-	absX := x + int(r.X*float64(w))
-	absY := y + int(r.Y*float64(h))
-	absW := int(r.W * float64(w))
-	absH := int(r.H * float64(h))
-
 	if n.Pane != nil {
-		// If it's a leaf, set the final dimensions on the pane.
-		n.Pane.setDimensions(absX, absY, absX+absW, absY+absH)
+		// This is a leaf node. Its dimensions are exactly the rectangle we were given.
+		n.Pane.setDimensions(x, y, x+w, y+h)
 		n.Pane.prevBuf = nil
 	} else {
+		// This is a split node. We divide the given rectangle (x,y,w,h)
+		// for its children.
 		if n.Split == Vertical {
-			leftW := absW / 2
-			rightW := absW - leftW
+			leftW := w / 2
+			rightW := w - leftW
 
-			s.resizeNode(n.Left, Rect{0, 0, 1, 1}, absX, absY, leftW, absH)
-
-			s.resizeNode(n.Right, Rect{0, 0, 1, 1}, absX+leftW, absY, rightW, absH)
+			// Recurse with the new, simpler signature.
+			s.resizeNode(n.Left, x, y, leftW, h)
+			s.resizeNode(n.Right, x+leftW, y, rightW, h)
 
 		} else { // Horizontal
-			topH := absH / 2
-			bottomH := absH - topH
+			topH := h / 2
+			bottomH := h - topH
 
-			s.resizeNode(n.Left, Rect{0, 0, 1, 1}, absX, absY, absW, topH)
-
-			s.resizeNode(n.Right, Rect{0, 0, 1, 1}, absX, absY+topH, absW, bottomH)
+			s.resizeNode(n.Left, x, y, w, topH)
+			s.resizeNode(n.Right, x, y+topH, w, bottomH)
 		}
 	}
 }
