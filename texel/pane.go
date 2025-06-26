@@ -17,11 +17,10 @@ const (
 )
 
 type Node struct {
-	Parent *Node
-	Left   *Node
-	Right  *Node
-	Split  SplitType
-	Pane   *pane // A pane is only present in leaf nodes
+	Parent   *Node
+	Split    SplitType
+	Pane     *pane // A pane is only present in leaf nodes
+	Children []*Node
 }
 
 // Pane represents a rectangular area on the screen that hosts an App.

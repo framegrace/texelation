@@ -249,56 +249,6 @@ func (s *Screen) AddStatusPane(app App, side Side, size int) {
 	s.ForceResize()
 }
 
-// splitActivePane splits the active pane in the given direction, adding a new pane.
-func (s *Screen) splitActivePane(d Direction) {
-	if s.ShellAppFactory == nil {
-		log.Panic("ShellAppFractory not set")
-	}
-
-	leaf := s.activeLeaf
-	if leaf == nil {
-		return
-	}
-
-	parentX, parentY, parentW, parentH := leaf.Pane.absX0, leaf.Pane.absY0, leaf.Pane.Width(), leaf.Pane.Height()
-
-	// Preserve the original pane
-	originalPane := leaf.Pane
-	leaf.Pane = nil // No longer a leaf
-	leaf.Left = &Node{Parent: leaf}
-	leaf.Right = &Node{Parent: leaf}
-
-	newApp := s.ShellAppFactory()
-	newPane := s.createAndInitPane(newApp)
-
-	var newActiveLeaf *Node
-	switch d {
-	case DirLeft:
-		leaf.Split = Vertical
-		leaf.Left.Pane = newPane
-		leaf.Right.Pane = originalPane
-		newActiveLeaf = leaf.Left
-	case DirRight:
-		leaf.Split = Vertical
-		leaf.Left.Pane = originalPane
-		leaf.Right.Pane = newPane
-		newActiveLeaf = leaf.Right
-	case DirUp:
-		leaf.Split = Horizontal
-		leaf.Left.Pane = newPane
-		leaf.Right.Pane = originalPane
-		newActiveLeaf = leaf.Left
-	case DirDown:
-		leaf.Split = Horizontal
-		leaf.Left.Pane = originalPane
-		leaf.Right.Pane = newPane
-		newActiveLeaf = leaf.Right
-	}
-	s.resizeNode(leaf, parentX, parentY, parentW, parentH)
-	go newPane.app.Run()
-	s.setActivePane(newActiveLeaf)
-}
-
 // moveActivePane moves focus to the neighbor in the given direction.
 func (s *Screen) moveActivePane(d Direction) {
 	target := findNeighbor(s.activeLeaf, d)
@@ -308,38 +258,44 @@ func (s *Screen) moveActivePane(d Direction) {
 }
 
 func findNeighbor(leaf *Node, d Direction) *Node {
-	// Implementation to find a neighbor in the tree
-	// This can be complex, for now, we'll just traverse up and then down.
-	last := leaf
-	curr := leaf.Parent
-	for curr != nil {
-		var next *Node
-		if d == DirRight && last == curr.Left && curr.Split == Vertical {
-			next = curr.Right
-		} else if d == DirLeft && last == curr.Right && curr.Split == Vertical {
-			next = curr.Left
-		} else if d == DirDown && last == curr.Left && curr.Split == Horizontal {
-			next = curr.Right
-		} else if d == DirUp && last == curr.Right && curr.Split == Horizontal {
-			next = curr.Left
-		}
+	curr := leaf
+	for curr.Parent != nil {
+		parent := curr.Parent
 
-		if next != nil {
-			// Found a sibling, now find the first leaf in that subtree
-			for next.Pane == nil {
-				// Descend to the appropriate child
-				switch d {
-				case DirLeft, DirUp:
-					next = next.Right
-				case DirRight, DirDown:
-					next = next.Left
-				}
+		// Find our index in the parent's children list
+		myIndex := -1
+		for i, child := range parent.Children {
+			if child == curr {
+				myIndex = i
+				break
 			}
-			return next
+		}
+		if myIndex == -1 {
+			return nil
+		} // Should not happen
+
+		// Check for neighbors based on direction and parent's split type
+		switch d {
+		case DirRight:
+			if parent.Split == Vertical && myIndex+1 < len(parent.Children) {
+				return findFirstLeaf(parent.Children[myIndex+1])
+			}
+		case DirLeft:
+			if parent.Split == Vertical && myIndex-1 >= 0 {
+				return findFirstLeaf(parent.Children[myIndex-1])
+			}
+		case DirDown:
+			if parent.Split == Horizontal && myIndex+1 < len(parent.Children) {
+				return findFirstLeaf(parent.Children[myIndex+1])
+			}
+		case DirUp:
+			if parent.Split == Horizontal && myIndex-1 >= 0 {
+				return findFirstLeaf(parent.Children[myIndex-1])
+			}
 		}
 
-		last = curr
-		curr = curr.Parent
+		// If we couldn't find a direct neighbor, move up the tree
+		curr = parent
 	}
 	return nil
 }
@@ -347,35 +303,57 @@ func findNeighbor(leaf *Node, d Direction) *Node {
 func (s *Screen) closeActivePane() {
 	leaf := s.activeLeaf
 	if leaf == nil || leaf.Parent == nil {
-		// Don't close the last pane
+		// Don't close the root pane
 		return
 	}
 
 	parent := leaf.Parent
-	var sibling *Node
-	if leaf == parent.Left {
-		sibling = parent.Right
-	} else {
-		sibling = parent.Left
-	}
-
-	// The parent's layout is given to the sibling
-	grandparent := parent.Parent
-	sibling.Parent = grandparent
-
-	if grandparent == nil {
-		s.root = sibling
-	} else {
-		if parent == grandparent.Left {
-			grandparent.Left = sibling
-		} else {
-			grandparent.Right = sibling
+	// Find the index of the leaf being closed
+	childIndex := -1
+	for i, child := range parent.Children {
+		if child == leaf {
+			childIndex = i
+			break
 		}
 	}
+	if childIndex == -1 {
+		return
+	} // Should not happen
 
-	s.setActivePane(findFirstLeaf(sibling))
-	s.requestRefresh()
-	s.broadcastStateUpdate()
+	// Remove the child from the parent's slice
+	parent.Children = append(parent.Children[:childIndex], parent.Children[childIndex+1:]...)
+
+	// If the parent has only one child left, the split is no longer needed.
+	// Promote the remaining child to replace its parent.
+	var nextActiveNode *Node
+	if len(parent.Children) == 1 {
+		remainingChild := parent.Children[0]
+		grandparent := parent.Parent
+		remainingChild.Parent = grandparent
+
+		if grandparent == nil {
+			s.root = remainingChild
+		} else {
+			// Find parent's index in grandparent's children and replace it
+			for i, child := range grandparent.Children {
+				if child == parent {
+					grandparent.Children[i] = remainingChild
+					break
+				}
+			}
+		}
+		nextActiveNode = findFirstLeaf(remainingChild)
+	} else {
+		// Otherwise, set focus to the previous sibling, or the new last one if we closed the first.
+		newIndex := childIndex
+		if newIndex >= len(parent.Children) {
+			newIndex = len(parent.Children) - 1
+		}
+		nextActiveNode = findFirstLeaf(parent.Children[newIndex])
+	}
+
+	leaf.Pane.app.Stop() // Ensure the closed app is stopped
+	s.setActivePane(nextActiveNode)
 }
 
 func findFirstLeaf(node *Node) *Node {
@@ -383,8 +361,9 @@ func findFirstLeaf(node *Node) *Node {
 		return nil
 	}
 	curr := node
-	for curr.Pane == nil {
-		curr = curr.Left
+	// While the current node is not a leaf, descend to the first child.
+	for len(curr.Children) > 0 {
+		curr = curr.Children[0]
 	}
 	return curr
 }
@@ -632,9 +611,9 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 		s.requestRefresh()
 		return // Stay in control mode
 	case '|':
-		s.splitActivePane(DirRight) // Split vertically
+		s.performSplit(Vertical) // Split vertically
 	case '-':
-		s.splitActivePane(DirDown) // Split horizontally
+		s.performSplit(Horizontal) // Split horizontally
 	default:
 		// Any other key exits control mode
 	}
@@ -778,29 +757,124 @@ func (s *Screen) resizeNode(n *Node, x, y, w, h int) {
 		return
 	}
 
-	if n.Pane != nil {
-		// This is a leaf node. Its dimensions are exactly the rectangle we were given.
+	// Check if this is a leaf node
+	if len(n.Children) == 0 && n.Pane != nil {
 		n.Pane.setDimensions(x, y, x+w, y+h)
 		n.Pane.prevBuf = nil
-	} else {
-		// This is a split node. We divide the given rectangle (x,y,w,h)
-		// for its children.
-		if n.Split == Vertical {
-			leftW := w / 2
-			rightW := w - leftW
+		return
+	}
 
-			// Recurse with the new, simpler signature.
-			s.resizeNode(n.Left, x, y, leftW, h)
-			s.resizeNode(n.Right, x+leftW, y, rightW, h)
+	// This is an internal node, so we lay out its children
+	numChildren := len(n.Children)
+	if numChildren == 0 {
+		return // Nothing to do
+	}
 
-		} else { // Horizontal
-			topH := h / 2
-			bottomH := h - topH
-
-			s.resizeNode(n.Left, x, y, w, topH)
-			s.resizeNode(n.Right, x, y+topH, w, bottomH)
+	if n.Split == Vertical {
+		childW := w / numChildren
+		currentX := x
+		for i, child := range n.Children {
+			// Give the last child all the remaining space to avoid off-by-one errors
+			if i == numChildren-1 {
+				childW = w - (currentX - x)
+			}
+			s.resizeNode(child, currentX, y, childW, h)
+			currentX += childW
+		}
+	} else { // Horizontal
+		childH := h / numChildren
+		currentY := y
+		for i, child := range n.Children {
+			// Give the last child all the remaining space
+			if i == numChildren-1 {
+				childH = h - (currentY - y)
+			}
+			s.resizeNode(child, x, currentY, w, childH)
+			currentY += childH
 		}
 	}
+}
+
+func findNodeByPane(current *Node, target *pane) *Node {
+	if current == nil {
+		return nil
+	}
+	if current.Pane == target {
+		return current
+	}
+	for _, child := range current.Children {
+		if found := findNodeByPane(child, target); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func (s *Screen) performSplit(splitDir SplitType) {
+	if s.activeLeaf == nil || s.ShellAppFactory == nil {
+		return
+	}
+
+	// The node we are splitting is the one containing the active pane.
+	nodeToModify := s.activeLeaf
+
+	parent := findParentOf(s.root, nil, nodeToModify)
+
+	// CASE 1: The parent's split direction matches our desired split.
+	// This means we are adding another pane to an existing group.
+	if parent != nil && parent.Split == splitDir {
+		// Add a new leaf node to the parent's children
+		newPane := s.createAndInitPane(s.ShellAppFactory())
+		newNode := &Node{
+			Parent: parent,
+			Pane:   newPane,
+		}
+		parent.Children = append(parent.Children, newNode)
+
+		go newPane.app.Run()
+		s.setActivePane(newNode)
+
+	} else {
+		// CASE 2: The pane is a single leaf or part of a different-direction split.
+		// We transform the current activeNode into a new internal node with two children.
+
+		// 1. Keep a reference to the original pane and create a new one.
+		originalPane := nodeToModify.Pane
+		newPane := s.createAndInitPane(s.ShellAppFactory())
+
+		// 2. Convert the active node into an internal split node.
+		nodeToModify.Pane = nil       // No longer a leaf
+		nodeToModify.Split = splitDir // Set the split direction
+		nodeToModify.Children = nil   // Clear any previous children (should be nil anyway)
+
+		// 3. Create two new children for it.
+		child1 := &Node{Parent: nodeToModify, Pane: originalPane}
+		child2 := &Node{Parent: nodeToModify, Pane: newPane}
+		nodeToModify.Children = []*Node{child1, child2}
+
+		// 4. Start the new app and set the new second pane as the active one.
+		go newPane.app.Run()
+		s.setActivePane(child2)
+	}
+
+	s.ForceResize()
+	s.requestRefresh()
+}
+
+// You will need this helper function:
+func findParentOf(current, parent, target *Node) *Node {
+	if current == nil {
+		return nil
+	}
+	if current == target {
+		return parent
+	}
+	for _, child := range current.Children {
+		if found := findParentOf(child, current, target); found != nil {
+			return found
+		}
+	}
+	return nil
 }
 
 func (s *Screen) traverse(n *Node, f func(*Node)) {
@@ -808,8 +882,10 @@ func (s *Screen) traverse(n *Node, f func(*Node)) {
 		return
 	}
 	f(n)
-	s.traverse(n.Left, f)
-	s.traverse(n.Right, f)
+	// Loop over the children slice instead of Left/Right
+	for _, child := range n.Children {
+		s.traverse(child, f)
+	}
 }
 
 // blit copies cells to the screen.
