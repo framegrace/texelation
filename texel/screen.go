@@ -41,6 +41,11 @@ const (
 	keyQuit        = tcell.KeyCtrlQ
 )
 
+const (
+	ResizeStep float64 = 0.05 // Resize by 5%
+	MinRatio   float64 = 0.1  // Panes can't be smaller than 10%
+)
+
 type styleKey struct {
 	fg, bg          tcell.Color
 	bold, underline bool
@@ -52,6 +57,11 @@ type StatusPane struct {
 	app  App
 	side Side
 	size int // rows for Top/Bottom, cols for Left/Right
+}
+
+type selectedBorder struct {
+	node  *Node // The parent node whose children are being resized (the split node)
+	index int   // The index of the left/top pane of the border. The border is between child[index] and child[index+1].
 }
 
 // Screen manages the entire terminal display using tcell as the backend.
@@ -76,6 +86,8 @@ type Screen struct {
 	inControlMode   bool
 	subControlMode  rune
 	effectAnimators map[*FadeEffect]context.CancelFunc
+
+	resizeSelection *selectedBorder
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -101,9 +113,10 @@ func NewScreen() (*Screen, error) {
 		DefaultFgColor:  defaultFg,
 		DefaultBgColor:  defaultBg,
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
+		resizeSelection: nil,
 	}
-	//scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.8)
-	scr.inactiveFadePrototype = NewVignetteEffect(scr, tcell.NewRGBColor(60, 60, 60), 0.5, WithFalloff(4.0))
+	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.7)
+	//scr.inactiveFadePrototype = NewVignetteEffect(scr, tcell.NewRGBColor(60, 60, 60), 0.5, WithFalloff(4.0))
 	// The control mode effect applies to all panes
 	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), 0.2, WithIsControl(true))
 	scr.ditherEffectPrototype = NewDitherEffect('░')
@@ -131,7 +144,7 @@ func (s *Screen) broadcastEvent(event Event) {
 func (s *Screen) addStandardEffects(p *pane) {
 	p.AddEffect(s.inactiveFadePrototype.Clone())
 	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
-	p.AddEffect(s.ditherEffectPrototype.Clone())
+	//p.AddEffect(s.ditherEffectPrototype.Clone())
 }
 
 func initDefaultColors() (tcell.Color, tcell.Color, error) {
@@ -571,6 +584,37 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 }
 
 func (s *Screen) handleControlMode(ev *tcell.EventKey) {
+	if ev.Key() == tcell.KeyEsc {
+		s.inControlMode = false
+		s.subControlMode = 0
+		s.broadcastEvent(Event{Type: EventControlOff})
+		s.broadcastEvent(Event{Type: EventActivePaneChanged})
+		s.broadcastStateUpdate()
+		s.requestRefresh()
+		return
+	}
+
+	// NEW: Check for Ctrl+Arrow for resizing
+	if ev.Modifiers()&tcell.ModCtrl != 0 {
+		var d Direction
+		validDir := true
+		switch ev.Key() {
+		case tcell.KeyUp:
+			d = DirUp
+		case tcell.KeyDown:
+			d = DirDown
+		case tcell.KeyLeft:
+			d = DirLeft
+		case tcell.KeyRight:
+			d = DirRight
+		default:
+			validDir = false
+		}
+		if validDir {
+			s.handleResizeCommand(d)
+			return
+		}
+	}
 	// If we are in a sub-command mode (e.g., waiting for a direction)
 	if s.subControlMode != 0 {
 		switch s.subControlMode {
@@ -621,6 +665,7 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 	// Exit control mode after executing a command
 	s.inControlMode = false
 	s.broadcastEvent(Event{Type: EventControlOff})
+	s.broadcastEvent(Event{Type: EventActivePaneChanged})
 	s.broadcastStateUpdate()
 	s.requestRefresh()
 }
@@ -752,29 +797,118 @@ func (s *Screen) handleResize() {
 	}
 }
 
+func (s *Screen) handleResizeCommand(d Direction) {
+	if s.activeLeaf == nil || s.activeLeaf.Parent == nil {
+		return // Can't resize if there's no parent
+	}
+	parent := s.activeLeaf.Parent
+	if len(parent.Children) < 2 {
+		return // Can't resize if there are no siblings
+	}
+
+	// Find the active pane's index among its siblings
+	myIndex := -1
+	for i, child := range parent.Children {
+		if child == s.activeLeaf {
+			myIndex = i
+			break
+		}
+	}
+	if myIndex == -1 {
+		return
+	}
+
+	// Determine the desired action (grow/shrink) and orientation
+	var shouldGrow bool
+	var isHorizontal bool
+	switch d {
+	case DirRight:
+		shouldGrow, isHorizontal = true, true
+	case DirLeft:
+		shouldGrow, isHorizontal = false, true
+	case DirUp:
+		shouldGrow, isHorizontal = true, false
+	case DirDown:
+		shouldGrow, isHorizontal = false, false
+	}
+
+	// Check if the split orientation matches the action
+	if (isHorizontal && parent.Split != Vertical) || (!isHorizontal && parent.Split != Horizontal) {
+		return
+	}
+
+	// Now, find a neighbor to interact with.
+	// We prefer the neighbor to the right (index+1), but fall back to the left (index-1).
+	var neighborIndex = -1
+	if myIndex+1 < len(parent.Children) {
+		neighborIndex = myIndex + 1
+	} else if myIndex-1 >= 0 {
+		neighborIndex = myIndex - 1
+	}
+
+	if neighborIndex == -1 {
+		return // Still no neighbor found, should not happen if len > 1
+	}
+
+	// Assign grower and shrinker based on the desired action
+	var growerIndex, shrinkerIndex int
+	if shouldGrow {
+		growerIndex = myIndex
+		shrinkerIndex = neighborIndex
+	} else { // shouldShrink
+		growerIndex = neighborIndex
+		shrinkerIndex = myIndex
+	}
+
+	// If the pane we need to take space from is already at its minimum size, do nothing.
+	if parent.SplitRatios[shrinkerIndex] <= MinRatio {
+		return
+	}
+
+	// Determine how much space to transfer
+	transferAmount := ResizeStep
+	if parent.SplitRatios[shrinkerIndex]-transferAmount < MinRatio {
+		// Don't shrink past the minimum ratio
+		transferAmount = parent.SplitRatios[shrinkerIndex] - MinRatio
+	}
+
+	// If the transfer amount is effectively zero, do nothing
+	if transferAmount <= 0 {
+		return
+	}
+
+	// Apply the change
+	parent.SplitRatios[growerIndex] += transferAmount
+	parent.SplitRatios[shrinkerIndex] -= transferAmount
+
+	// Trigger a full screen recalculation and redraw
+	s.ForceResize()
+	s.requestRefresh()
+}
+
 func (s *Screen) resizeNode(n *Node, x, y, w, h int) {
 	if n == nil {
 		return
 	}
 
-	// Check if this is a leaf node
 	if len(n.Children) == 0 && n.Pane != nil {
 		n.Pane.setDimensions(x, y, x+w, y+h)
 		n.Pane.prevBuf = nil
 		return
 	}
 
-	// This is an internal node, so we lay out its children
 	numChildren := len(n.Children)
-	if numChildren == 0 {
-		return // Nothing to do
+	if numChildren == 0 || len(n.SplitRatios) != numChildren {
+		return // Not a valid internal node
 	}
 
 	if n.Split == Vertical {
-		childW := w / numChildren
 		currentX := x
 		for i, child := range n.Children {
-			// Give the last child all the remaining space to avoid off-by-one errors
+			// Use the ratio to calculate width
+			childW := int(float64(w) * n.SplitRatios[i])
+
+			// Give the last child all remaining space to prevent rounding errors
 			if i == numChildren-1 {
 				childW = w - (currentX - x)
 			}
@@ -782,10 +916,12 @@ func (s *Screen) resizeNode(n *Node, x, y, w, h int) {
 			currentX += childW
 		}
 	} else { // Horizontal
-		childH := h / numChildren
 		currentY := y
 		for i, child := range n.Children {
-			// Give the last child all the remaining space
+			// Use the ratio to calculate height
+			childH := int(float64(h) * n.SplitRatios[i])
+
+			// Give the last child all remaining space
 			if i == numChildren-1 {
 				childH = h - (currentY - y)
 			}
@@ -815,49 +951,46 @@ func (s *Screen) performSplit(splitDir SplitType) {
 		return
 	}
 
-	// The node we are splitting is the one containing the active pane.
 	nodeToModify := s.activeLeaf
-
 	parent := findParentOf(s.root, nil, nodeToModify)
 
-	// CASE 1: The parent's split direction matches our desired split.
-	// This means we are adding another pane to an existing group.
+	var newActiveNode *Node
+
+	// CASE 1: Adding another pane to an existing group.
 	if parent != nil && parent.Split == splitDir {
-		// Add a new leaf node to the parent's children
 		newPane := s.createAndInitPane(s.ShellAppFactory())
-		newNode := &Node{
-			Parent: parent,
-			Pane:   newPane,
-		}
+		newNode := &Node{Parent: parent, Pane: newPane}
 		parent.Children = append(parent.Children, newNode)
 
+		numChildren := len(parent.Children)
+		equalRatio := 1.0 / float64(numChildren)
+		parent.SplitRatios = make([]float64, numChildren)
+		for i := range parent.SplitRatios {
+			parent.SplitRatios[i] = equalRatio
+		}
+
 		go newPane.app.Run()
-		s.setActivePane(newNode)
+		newActiveNode = newNode
 
 	} else {
-		// CASE 2: The pane is a single leaf or part of a different-direction split.
-		// We transform the current activeNode into a new internal node with two children.
-
-		// 1. Keep a reference to the original pane and create a new one.
+		// CASE 2: Splitting a single pane for the first time.
 		originalPane := nodeToModify.Pane
 		newPane := s.createAndInitPane(s.ShellAppFactory())
 
-		// 2. Convert the active node into an internal split node.
-		nodeToModify.Pane = nil       // No longer a leaf
-		nodeToModify.Split = splitDir // Set the split direction
-		nodeToModify.Children = nil   // Clear any previous children (should be nil anyway)
+		nodeToModify.Pane = nil
+		nodeToModify.Split = splitDir
+		nodeToModify.SplitRatios = []float64{0.5, 0.5}
 
-		// 3. Create two new children for it.
 		child1 := &Node{Parent: nodeToModify, Pane: originalPane}
 		child2 := &Node{Parent: nodeToModify, Pane: newPane}
 		nodeToModify.Children = []*Node{child1, child2}
 
-		// 4. Start the new app and set the new second pane as the active one.
 		go newPane.app.Run()
-		s.setActivePane(child2)
+		newActiveNode = child2
 	}
 
-	s.ForceResize()
+	s.setActivePane(newActiveNode)
+
 	s.requestRefresh()
 }
 
