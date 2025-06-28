@@ -259,7 +259,7 @@ func (s *Screen) AddStatusPane(app App, side Side, size int) {
 		}
 	}()
 
-	s.ForceResize()
+	s.recalculateLayout()
 }
 
 // moveActivePane moves focus to the neighbor in the given direction.
@@ -386,7 +386,7 @@ func (s *Screen) setActivePane(n *Node) {
 		return
 	}
 	s.activeLeaf = n
-	s.ForceResize()
+	s.recalculateLayout()
 	// Broadcast a generic event. Effects will listen and decide if they need to change state.
 	s.broadcastEvent(Event{Type: EventActivePaneChanged})
 	s.broadcastStateUpdate()
@@ -450,7 +450,7 @@ func (s *Screen) AddApp(app App) {
 	p.app.SetRefreshNotifier(s.refreshChan) // ?
 
 	// Enforce the "Resize -> Set Active -> Run" lifecycle.
-	s.ForceResize()
+	s.recalculateLayout()
 	s.setActivePane(leaf)
 	go p.app.Run()
 }
@@ -483,14 +483,14 @@ func (s *Screen) Run() error {
 	defer ticker.Stop()
 
 	dirty := true
-	s.handleResize()
+	s.recalculateLayout()
 	s.broadcastStateUpdate()
 	s.draw()
 	for {
 		select {
 		case <-sigChan:
 			s.tcellScreen.Sync()
-			s.handleResize()
+			s.recalculateLayout()
 			dirty = true
 		case ev := <-eventChan:
 			s.handleEvent(ev)
@@ -578,13 +578,21 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 		}
 
 	case *tcell.EventResize:
-		s.handleResize()
+		s.recalculateLayout()
 		s.requestRefresh()
 	}
 }
 
 func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 	if ev.Key() == tcell.KeyEsc {
+		// If a border is selected, the first ESC deselects it.
+		if s.resizeSelection != nil {
+			s.resizeSelection = nil
+			s.requestRefresh() // Refresh to remove selection highlight
+			return             // Stay in control mode
+		}
+
+		// If no border is selected, the second ESC exits control mode.
 		s.inControlMode = false
 		s.subControlMode = 0
 		s.broadcastEvent(Event{Type: EventControlOff})
@@ -594,26 +602,17 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 		return
 	}
 
-	// NEW: Check for Ctrl+Arrow for resizing
+	// Check for Ctrl+Arrow to enter or perform a resize action
 	if ev.Modifiers()&tcell.ModCtrl != 0 {
-		var d Direction
-		validDir := true
-		switch ev.Key() {
-		case tcell.KeyUp:
-			d = DirUp
-		case tcell.KeyDown:
-			d = DirDown
-		case tcell.KeyLeft:
-			d = DirLeft
-		case tcell.KeyRight:
-			d = DirRight
-		default:
-			validDir = false
+		if keyToDirection(ev) != -1 {
+			s.handleInteractiveResize(ev)
+			return // Stay in control mode
 		}
-		if validDir {
-			s.handleResizeCommand(d)
-			return
-		}
+	}
+
+	// If a border is selected, ignore other keys until ESC is pressed
+	if s.resizeSelection != nil {
+		return
 	}
 	// If we are in a sub-command mode (e.g., waiting for a direction)
 	if s.subControlMode != 0 {
@@ -756,13 +755,7 @@ func (s *Screen) Close() {
 	})
 }
 
-// ForceResize triggers a layout recalculation.
-func (s *Screen) ForceResize() {
-	s.handleResize()
-}
-
-// handleResize recalculates pane dimensions and notifies apps.
-func (s *Screen) handleResize() {
+func (s *Screen) recalculateLayout() {
 	w, h := s.tcellScreen.Size()
 	mainX, mainY := 0, 0
 	mainW, mainH := w, h
@@ -797,93 +790,115 @@ func (s *Screen) handleResize() {
 	}
 }
 
-func (s *Screen) handleResizeCommand(d Direction) {
-	if s.activeLeaf == nil || s.activeLeaf.Parent == nil {
-		return // Can't resize if there's no parent
-	}
-	parent := s.activeLeaf.Parent
-	if len(parent.Children) < 2 {
-		return // Can't resize if there are no siblings
-	}
+// Add this new method to screen.go
+func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
+	// This function is only called when in control mode with a Ctrl+Arrow key press.
+	d := keyToDirection(ev) // We'll create this small helper below
 
-	// Find the active pane's index among its siblings
-	myIndex := -1
-	for i, child := range parent.Children {
-		if child == s.activeLeaf {
-			myIndex = i
-			break
+	// --- PHASE 1: BORDER SELECTION ---
+	if s.resizeSelection == nil {
+		var border *selectedBorder
+		// Start searching from the active pane's parent
+		curr := s.activeLeaf
+		for curr.Parent != nil {
+			parent := curr.Parent
+
+			// Check if the parent's split direction is what we're looking for
+			if (d == DirLeft || d == DirRight) && parent.Split == Vertical {
+				// Find 'curr' in the parent's children to get its index
+				for i, child := range parent.Children {
+					if child == curr {
+						// For DirRight, we select the border to our right (i)
+						// For DirLeft, we select the border to our left (i-1)
+						if d == DirRight && i < len(parent.Children)-1 {
+							border = &selectedBorder{node: parent, index: i}
+						} else if d == DirLeft && i > 0 {
+							border = &selectedBorder{node: parent, index: i - 1}
+						}
+						break
+					}
+				}
+			} else if (d == DirUp || d == DirDown) && parent.Split == Horizontal {
+				for i, child := range parent.Children {
+					if child == curr {
+						if d == DirDown && i < len(parent.Children)-1 {
+							border = &selectedBorder{node: parent, index: i}
+						} else if d == DirUp && i > 0 {
+							border = &selectedBorder{node: parent, index: i - 1}
+						}
+						break
+					}
+				}
+			}
+
+			if border != nil {
+				break // We found the closest matching border
+			}
+			curr = parent // Move up the tree
 		}
-	}
-	if myIndex == -1 {
+
+		s.resizeSelection = border
+		s.ForceResize()
+		s.requestRefresh() // Refresh to show visual feedback for selection (optional)
 		return
 	}
 
-	// Determine the desired action (grow/shrink) and orientation
-	var shouldGrow bool
-	var isHorizontal bool
-	switch d {
-	case DirRight:
-		shouldGrow, isHorizontal = true, true
-	case DirLeft:
-		shouldGrow, isHorizontal = false, true
-	case DirUp:
-		shouldGrow, isHorizontal = true, false
-	case DirDown:
-		shouldGrow, isHorizontal = false, false
-	}
+	// --- PHASE 2: BORDER ADJUSTMENT ---
+	border := s.resizeSelection
 
-	// Check if the split orientation matches the action
-	if (isHorizontal && parent.Split != Vertical) || (!isHorizontal && parent.Split != Horizontal) {
+	// Check if the adjustment direction is valid for the selected border
+	if !(((d == DirLeft || d == DirRight) && border.node.Split == Vertical) ||
+		((d == DirUp || d == DirDown) && border.node.Split == Horizontal)) {
 		return
 	}
 
-	// Now, find a neighbor to interact with.
-	// We prefer the neighbor to the right (index+1), but fall back to the left (index-1).
-	var neighborIndex = -1
-	if myIndex+1 < len(parent.Children) {
-		neighborIndex = myIndex + 1
-	} else if myIndex-1 >= 0 {
-		neighborIndex = myIndex - 1
-	}
+	// Define which pane grows and which shrinks
+	leftPaneIndex := border.index
+	rightPaneIndex := border.index + 1
 
-	if neighborIndex == -1 {
-		return // Still no neighbor found, should not happen if len > 1
-	}
-
-	// Assign grower and shrinker based on the desired action
 	var growerIndex, shrinkerIndex int
-	if shouldGrow {
-		growerIndex = myIndex
-		shrinkerIndex = neighborIndex
-	} else { // shouldShrink
-		growerIndex = neighborIndex
-		shrinkerIndex = myIndex
+	if d == DirRight || d == DirDown {
+		// Moving border right/down: left pane grows, right pane shrinks
+		growerIndex = leftPaneIndex
+		shrinkerIndex = rightPaneIndex
+	} else { // DirLeft or DirUp
+		// Moving border left/up: left pane shrinks, right pane grows
+		growerIndex = rightPaneIndex
+		shrinkerIndex = leftPaneIndex
 	}
 
-	// If the pane we need to take space from is already at its minimum size, do nothing.
-	if parent.SplitRatios[shrinkerIndex] <= MinRatio {
+	if border.node.SplitRatios[shrinkerIndex] <= MinRatio {
 		return
 	}
 
-	// Determine how much space to transfer
 	transferAmount := ResizeStep
-	if parent.SplitRatios[shrinkerIndex]-transferAmount < MinRatio {
-		// Don't shrink past the minimum ratio
-		transferAmount = parent.SplitRatios[shrinkerIndex] - MinRatio
+	if border.node.SplitRatios[shrinkerIndex]-transferAmount < MinRatio {
+		transferAmount = border.node.SplitRatios[shrinkerIndex] - MinRatio
 	}
-
-	// If the transfer amount is effectively zero, do nothing
 	if transferAmount <= 0 {
 		return
 	}
 
-	// Apply the change
-	parent.SplitRatios[growerIndex] += transferAmount
-	parent.SplitRatios[shrinkerIndex] -= transferAmount
+	border.node.SplitRatios[growerIndex] += transferAmount
+	border.node.SplitRatios[shrinkerIndex] -= transferAmount
 
-	// Trigger a full screen recalculation and redraw
-	s.ForceResize()
+	s.recalculateLayout()
 	s.requestRefresh()
+}
+
+// Add this small helper function to convert key presses to Direction
+func keyToDirection(ev *tcell.EventKey) Direction {
+	switch ev.Key() {
+	case tcell.KeyUp:
+		return DirUp
+	case tcell.KeyDown:
+		return DirDown
+	case tcell.KeyLeft:
+		return DirLeft
+	case tcell.KeyRight:
+		return DirRight
+	}
+	return -1 // Invalid
 }
 
 func (s *Screen) resizeNode(n *Node, x, y, w, h int) {
@@ -894,6 +909,9 @@ func (s *Screen) resizeNode(n *Node, x, y, w, h int) {
 	if len(n.Children) == 0 && n.Pane != nil {
 		n.Pane.setDimensions(x, y, x+w, y+h)
 		n.Pane.prevBuf = nil
+		if n.Pane.app != nil {
+			n.Pane.app.Resize(w, h)
+		}
 		return
 	}
 
@@ -992,6 +1010,10 @@ func (s *Screen) performSplit(splitDir SplitType) {
 	s.setActivePane(newActiveNode)
 
 	s.requestRefresh()
+}
+
+func (s *Screen) ForceResize() {
+	s.recalculateLayout()
 }
 
 // You will need this helper function:
