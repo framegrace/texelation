@@ -24,6 +24,12 @@ const (
 	DirRight
 )
 
+// DebuggableApp is an interface that apps can implement to provide
+// detailed state information for debugging purposes.
+type DebuggableApp interface {
+	DumpState(frameNum int)
+}
+
 // Side defines the placement of a StatusPane.
 type Side int
 
@@ -87,7 +93,8 @@ type Screen struct {
 	subControlMode  rune
 	effectAnimators map[*FadeEffect]context.CancelFunc
 
-	resizeSelection *selectedBorder
+	resizeSelection   *selectedBorder
+	debugFramesToDump int
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -489,7 +496,7 @@ func (s *Screen) Run() error {
 	for {
 		select {
 		case <-sigChan:
-			s.tcellScreen.Sync()
+			//s.tcellScreen.Sync()
 			s.recalculateLayout()
 			dirty = true
 		case ev := <-eventChan:
@@ -700,6 +707,12 @@ func (s *Screen) requestRefresh() {
 // draw executes the final screen update.
 func (s *Screen) draw() {
 	//s.tcellScreen.Clear()
+	if s.debugFramesToDump > 0 {
+		// The frame number is calculated to be human-readable (1 to 5)
+		s.dumpGridState(s.root, 6-s.debugFramesToDump)
+		s.debugFramesToDump--
+	}
+
 	s.compositePanes()
 	s.drawStatusPanes()
 	s.tcellScreen.Show()
@@ -840,6 +853,7 @@ func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
 		s.resizeSelection = border
 		s.ForceResize()
 		s.requestRefresh() // Refresh to show visual feedback for selection (optional)
+		s.debugFramesToDump = 5
 		return
 	}
 
@@ -1060,5 +1074,27 @@ func (s *Screen) blitDiff(x0, y0 int, oldBuf, buf [][]Cell) {
 				s.tcellScreen.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
 			}
 		}
+	}
+}
+
+// dumpGridState logs the complete state of a node's vterm grid for one frame.
+func (s *Screen) dumpGridState(node *Node, frameNum int) {
+	if node == nil {
+		return
+	}
+	if node.Pane != nil && node.Pane.app != nil {
+		// We need to get the VTerm instance. This requires a type assertion.
+		// We assume the app is a texelTerm.
+		// We check if the app IMPLEMENTS our new interface, instead of
+		// checking if it IS a specific type. This breaks the dependency.
+		if debuggable, ok := node.Pane.app.(DebuggableApp); ok {
+			log.Printf("--- FRAME DUMP #%d for Pane at [%d,%d] (Size: %dx%d) ---", frameNum, node.Pane.absX0, node.Pane.absY0, node.Pane.Width(), node.Pane.Height())
+			debuggable.DumpState(frameNum)
+		}
+
+	}
+
+	for _, child := range node.Children {
+		s.dumpGridState(child, frameNum)
 	}
 }

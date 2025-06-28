@@ -2,6 +2,8 @@ package parser
 
 import (
 	"log"
+	"strconv"
+	"strings"
 )
 
 type State int
@@ -107,7 +109,7 @@ func (p *Parser) Parse(r rune) {
 		}
 	case StateOSC:
 		if r == '\x07' {
-			p.handleOSC()
+			p.handleOSC(p.oscBuffer)
 			p.state = StateGround
 		} else {
 			p.oscBuffer = append(p.oscBuffer, r)
@@ -126,18 +128,85 @@ func (p *Parser) Parse(r rune) {
 		p.state = StateGround
 	}
 }
+func (p *Parser) handleOSC(sequence []rune) {
+	// Use your existing helper to split the sequence at the first semicolon.
+	parts := splitRunesN(sequence, ';', 2)
 
-func (p *Parser) handleOSC() {
-	parts := splitRunesN(p.oscBuffer, ';', 2)
-	if len(parts) != 2 {
+	// We must have at least a command part.
+	if len(parts) == 0 {
 		return
 	}
-	command := string(parts[0])
-	content := string(parts[1])
-	if command == "0" {
-		p.vterm.SetTitle(content)
+
+	commandPart := parts[0]
+	command, err := strconv.Atoi(string(commandPart))
+	if err != nil {
+		return // Not a valid integer command.
+	}
+
+	// For setting colors, we require a payload.
+	if len(parts) < 2 {
+		return
+	}
+
+	payload := string(parts[1])
+
+	switch command {
+	case 10: // Set/Query Default Foreground Color
+		log.Printf("set/query default fg")
+		if payload == "?" {
+			// --- TRIGGER QUERY CALLBACK ---
+			if p.vterm.QueryDefaultFg != nil {
+				p.vterm.QueryDefaultFg()
+			}
+			return
+		}
+		if color, ok := parseOSCColor(payload); ok {
+			log.Printf("Setting default fg")
+			p.vterm.defaultFG = color
+			if p.vterm.DefaultFgChanged != nil {
+				log.Printf(" default fg (Callback)")
+				p.vterm.DefaultFgChanged(color)
+			}
+		}
+	case 11: // Set/Query Default Background Color
+		log.Printf("set/query default bg")
+		if payload == "?" {
+			// --- TRIGGER QUERY CALLBACK ---
+			if p.vterm.QueryDefaultBg != nil {
+				p.vterm.QueryDefaultBg()
+			}
+			return
+		}
+		if color, ok := parseOSCColor(payload); ok {
+			log.Printf("Setting default bg")
+			p.vterm.defaultBG = color
+			if p.vterm.DefaultBgChanged != nil {
+				log.Printf(" default bg (Callback)")
+				p.vterm.DefaultBgChanged(color)
+			}
+		}
+	case 0:
+		p.vterm.SetTitle(string(payload))
 	}
 }
+
+func parseOSCColor(payload string) (Color, bool) {
+	if strings.HasPrefix(payload, "rgb:") {
+		parts := strings.Split(strings.TrimPrefix(payload, "rgb:"), "/")
+		if len(parts) == 3 {
+			r, errR := strconv.ParseInt(parts[0], 16, 32)
+			g, errG := strconv.ParseInt(parts[1], 16, 32)
+			b, errB := strconv.ParseInt(parts[2], 16, 32)
+			if errR == nil && errG == nil && errB == nil {
+				// OSC colors are often 16-bit (4 hex digits), so we scale down to 8-bit.
+				return Color{Mode: ColorModeRGB, R: uint8(r / 257), G: uint8(g / 257), B: uint8(b / 257)}, true
+			}
+		}
+	}
+	// Can add support for named colors like "red" here if needed
+	return Color{}, false
+}
+
 func splitRunesN(r []rune, sep rune, n int) [][]rune {
 	if n <= 1 {
 		return [][]rune{r}

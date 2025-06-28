@@ -2,6 +2,7 @@ package texelterm
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -16,8 +17,8 @@ import (
 	"github.com/gdamore/tcell/v2" // Import tcell
 )
 
-// The texelTerm struct remains the same, but its Render method will produce tcell-compatible output.
-type texelTerm struct {
+// The TexelTerm struct remains the same, but its Render method will produce tcell-compatible output.
+type TexelTerm struct {
 	title        string
 	command      string
 	width        int
@@ -35,7 +36,7 @@ type texelTerm struct {
 }
 
 func New(title, command string) texel.App {
-	return &texelTerm{
+	return &TexelTerm{
 		title:        title,
 		command:      command,
 		width:        80, // Sensible defaults
@@ -45,8 +46,12 @@ func New(title, command string) texel.App {
 	}
 }
 
+func (a *TexelTerm) Vterm() *parser.VTerm {
+	return a.vterm
+}
+
 // mapParserColorToTCell translates our internal parser.Color to a true RGB tcell.Color using the local palette.
-func (a *texelTerm) mapParserColorToTCell(c parser.Color) tcell.Color {
+func (a *TexelTerm) mapParserColorToTCell(c parser.Color) tcell.Color {
 	switch c.Mode {
 	case parser.ColorModeDefault:
 		// Use the default foreground color from our local palette
@@ -62,7 +67,7 @@ func (a *texelTerm) mapParserColorToTCell(c parser.Color) tcell.Color {
 	}
 }
 
-func (a *texelTerm) applyParserStyle(pCell parser.Cell) texel.Cell {
+func (a *TexelTerm) applyParserStyle(pCell parser.Cell) texel.Cell {
 	// Get the foreground color by mapping it through our local palette.
 	fgColor := a.mapParserColorToTCell(pCell.FG)
 
@@ -89,15 +94,15 @@ func (a *texelTerm) applyParserStyle(pCell parser.Cell) texel.Cell {
 }
 
 // SetRefreshNotifier implements the new interface method.
-func (a *texelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
+func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 }
 
-func (a *texelTerm) HandleMessage(msg texel.Message) {
+func (a *TexelTerm) HandleMessage(msg texel.Message) {
 	// This app doesn't handle messages.
 }
 
-func (a *texelTerm) Render() [][]texel.Cell {
+func (a *TexelTerm) Render() [][]texel.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -135,7 +140,7 @@ func (a *texelTerm) Render() [][]texel.Cell {
 	return a.buf
 }
 
-func (a *texelTerm) HandleKey(ev *tcell.EventKey) {
+func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	if a.pty == nil {
 		return
 	}
@@ -216,7 +221,7 @@ func (a *texelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
-func (a *texelTerm) Run() error {
+func (a *TexelTerm) Run() error {
 	a.mu.Lock()
 	cols := a.width
 	rows := a.height
@@ -240,6 +245,49 @@ func (a *texelTerm) Run() error {
 
 	// Initialize our virtual terminal and parser
 	a.mu.Lock()
+	fgChangeHandler := func(c parser.Color) {
+		// Update the palette's special slot for the default foreground
+		a.colorPalette[256] = a.mapParserColorToTCell(c)
+	}
+
+	bgChangeHandler := func(c parser.Color) {
+		// Update the palette's special slot for the default background
+		a.colorPalette[257] = a.mapParserColorToTCell(c)
+	}
+
+	queryFgHandler := func() {
+		if a.pty == nil {
+			return
+		}
+
+		// 1. Get the color from our palette's default slot
+		color := a.colorPalette[256]
+		r, g, b := color.RGB()
+
+		// 2. Format it as a 16-bit hex string (e.g., "rgb:rrrr/gggg/bbbb")
+		// We multiply by 257 to scale an 8-bit value (0-255) to 16-bit (0-65535)
+		log.Printf("Responding query with %d,%d,%d", r, g, b)
+		log.Printf("Response: \\x1b]10;rgb:%04x/%04x/%04x\a", r*257, g*257, b*257)
+		responseStr := fmt.Sprintf("\x1b]10;rgb:%04x/%04x/%04x\a", r*257, g*257, b*257)
+
+		// 3. Write the response back to the PTY for vi to read
+		a.pty.Write([]byte(responseStr))
+	}
+
+	// This handler will be called when the VTerm receives OSC 11;?
+	queryBgHandler := func() {
+		if a.pty == nil {
+			return
+		}
+
+		color := a.colorPalette[257]
+		r, g, b := color.RGB()
+		log.Printf("Responding query with %d,%d,%d", r, g, b)
+		log.Printf("Response: \\x1b]10;rgb:%04x/%04x/%04x\a", r*257, g*257, b*257)
+		responseStr := fmt.Sprintf("\x1b]11;rgb:%04x/%04x/%04x\a", r*257, g*257, b*257)
+		a.pty.Write([]byte(responseStr))
+	}
+
 	titleChangeHandler := func(newTitle string) {
 		a.title = newTitle
 		if a.refreshChan != nil {
@@ -258,6 +306,10 @@ func (a *texelTerm) Run() error {
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(titleChangeHandler),
 		parser.WithPtyWriter(ptyWriter),
+		parser.WithDefaultFgChangeHandler(fgChangeHandler),
+		parser.WithDefaultBgChangeHandler(bgChangeHandler),
+		parser.WithQueryDefaultFgHandler(queryFgHandler),
+		parser.WithQueryDefaultBgHandler(queryBgHandler),
 	)
 	a.parser = parser.NewParser(a.vterm)
 	a.mu.Unlock()
@@ -307,7 +359,7 @@ func (a *texelTerm) Run() error {
 	return cmd.Wait()
 }
 
-func (a *texelTerm) Resize(cols, rows int) {
+func (a *TexelTerm) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
 	}
@@ -326,10 +378,10 @@ func (a *texelTerm) Resize(cols, rows int) {
 			Rows: uint16(rows),
 			Cols: uint16(cols),
 		})
-		//		a.pty.Write([]byte{'\x0C'})
+		a.pty.Write([]byte{'\x0C'})
 	}
 }
-func (a *texelTerm) Stop() {
+func (a *TexelTerm) Stop() {
 	close(a.stop)
 
 	if a.pty != nil {
@@ -340,7 +392,7 @@ func (a *texelTerm) Stop() {
 	}
 }
 
-func (a *texelTerm) GetTitle() string {
+func (a *TexelTerm) GetTitle() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.title
@@ -388,7 +440,41 @@ func newDefaultPalette() [258]tcell.Color {
 
 	// Default Foreground (White) and Background (Black)
 	p[256] = p[15]
-	p[257] = p[0]
+	p[257] = p[5]
 
 	return p
+}
+
+// DumpState implements the texel.DebuggableApp interface.
+// It logs the critical color state and grid contents of the vterm.
+func (a *TexelTerm) DumpState(frameNum int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.vterm == nil {
+		log.Printf("    VTerm is nil.")
+		return
+	}
+
+	// Log the crucial VTerm color state at this exact moment.
+	log.Printf("    VTerm State: defaultBG=[%s], currentBG=[%s]", a.vterm.DefaultBG(), a.vterm.CurrentBG()) // We will add these getter methods next
+
+	grid := a.vterm.Grid()
+	if grid == nil {
+		log.Printf("    VTerm Grid is nil.")
+		return
+	}
+	// Log any cells that have a non-default background to see what vi has drawn
+	for r, row := range grid {
+		var line string
+		for c, cell := range row {
+			// Compare the cell's background to the VTerm's dynamic default
+			if cell.BG != a.vterm.DefaultBG() {
+				line += fmt.Sprintf(" | Col:%d Char:'%c' BG:[%s] ", c, cell.Rune, cell.BG)
+			}
+		}
+		if line != "" {
+			log.Printf("    Row %d:%s", r, line)
+		}
+	}
 }

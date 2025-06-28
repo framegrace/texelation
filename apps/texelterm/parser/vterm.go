@@ -27,6 +27,11 @@ type VTerm struct {
 	savedGrid                         [][]Cell
 	savedWidth, savedHeight           int
 	savedMarginTop, savedMarginBottom int
+	defaultFG, defaultBG              Color
+	DefaultFgChanged                  func(Color)
+	DefaultBgChanged                  func(Color)
+	QueryDefaultFg                    func()
+	QueryDefaultBg                    func()
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -45,6 +50,8 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		appCursorKeys: false,
 		marginTop:     0,          // Default margin is top row
 		marginBottom:  height - 1, // Default margin is bottom row
+		defaultFG:     DefaultFG,
+		defaultBG:     DefaultBG,
 	}
 	for _, opt := range opts {
 		opt(v)
@@ -61,40 +68,75 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	return v
 }
 
+// Add these two new Option functions at the end of the file
+func WithQueryDefaultFgHandler(handler func()) Option {
+	return func(v *VTerm) { v.QueryDefaultFg = handler }
+}
+
+func WithQueryDefaultBgHandler(handler func()) Option {
+	return func(v *VTerm) { v.QueryDefaultBg = handler }
+}
+
+// Add these two new Option functions at the end of the file
+func WithDefaultFgChangeHandler(handler func(Color)) Option {
+	return func(v *VTerm) { v.DefaultFgChanged = handler }
+}
+
+func WithDefaultBgChangeHandler(handler func(Color)) Option {
+	return func(v *VTerm) { v.DefaultBgChanged = handler }
+}
+
 func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
 		return
 	}
 
-	// Create a new grid of the correct size, filled with default cells
-	newGrid := make([][]Cell, height)
-	for y := range newGrid {
-		newGrid[y] = make([]Cell, width)
-		for x := range newGrid[y] {
-			newGrid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
-		}
+	// --- THE DEFINITIVE FIX ---
+
+	// 1. Create a template for any new cells based on the VTerm's CURRENT style.
+	// This preserves the background color set by the application (e.g., vi's colorscheme).
+	newCellTemplate := Cell{
+		Rune: ' ',
+		FG:   v.defaultFG, // Use current foreground
+		BG:   v.defaultBG, // Use current background
+		Attr: 0,           // Use current attributes
 	}
 
-	// Copy the old content into the new grid
+	// 2. Create the new grid.
+	newGrid := make([][]Cell, height)
+	for r := range newGrid {
+		newGrid[r] = make([]Cell, width)
+	}
+
+	// 3. Copy old content and fill new areas with our correctly-styled template.
 	rowsToCopy := min(v.height, height)
 	colsToCopy := min(v.width, width)
 
-	for y := 0; y < rowsToCopy; y++ {
-		copy(newGrid[y][:colsToCopy], v.grid[y][:colsToCopy])
+	for r := 0; r < rowsToCopy; r++ {
+		// Copy the slice of existing columns.
+		copy(newGrid[r][:colsToCopy], v.grid[r][:colsToCopy])
+		// Fill any newly added columns on existing rows.
+		for c := v.width; c < width; c++ {
+			newGrid[r][c] = newCellTemplate
+		}
+	}
+	// Fill any newly added rows.
+	for r := v.height; r < height; r++ {
+		for c := 0; c < width; c++ {
+			newGrid[r][c] = newCellTemplate
+		}
 	}
 
 	v.grid = newGrid
 	v.width = width
 	v.height = height
 
-	// --- THE FIX ---
-	// A terminal resize must always reset the scrolling region to the new
-	// full screen dimensions to ensure a clean state for applications.
+	// You already have this fix, which is excellent. A resize MUST reset the
+	// scrolling region to prevent visual artifacts in many applications.
 	v.marginTop = 0
 	v.marginBottom = v.height - 1
-	// --- END FIX ---
 
-	// Clamp cursor position to new bounds
+	// Clamp cursor position to new bounds.
 	v.SetCursorPos(v.cursorY, v.cursorX)
 }
 
@@ -342,8 +384,8 @@ func (v *VTerm) Reset() {
 
 // ResetAttributes now correctly only resets graphical attributes, NOT scrolling margins.
 func (v *VTerm) ResetAttributes() {
-	v.currentFG = DefaultFG
-	v.currentBG = DefaultBG
+	v.currentFG = v.defaultFG
+	v.currentBG = v.defaultBG
 	v.currentAttr = 0
 }
 
@@ -419,12 +461,22 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 		if param(0, 0) == 3 {
 			v.ClearAllTabStops()
 		}
+	case 'c': // Send Device Attributes (DA)
+		if param(0, 0) == 0 {
+			// This is the response to vi's "Who are you?" question.
+			// We will identify as a VT102, which is a common and safe identity
+			// that signals we support basic modern features.
+			// The response sequence is ESC [ ? 6 c
+			response := "\x1b[?6c"
+			if v.WriteToPty != nil {
+				v.WriteToPty([]byte(response))
+			}
+		}
+	// --- END NE
 	default:
 		log.Printf("Parser: Unhandled CSI sequence: %q, params: %v", command, params)
 	}
 }
-
-// --- NEW HELPER METHODS FOR ProcessCSI ---
 
 func (v *VTerm) handleCursorMovement(command rune, params []int) {
 	v.wrapNext = false
@@ -649,9 +701,11 @@ func (v *VTerm) SetCursorColumn(col int) {
 	v.cursorX = col
 }
 func (v *VTerm) ClearScreen() {
+	v.defaultFG = v.currentFG
+	v.defaultBG = v.currentBG
 	for y := 0; y < v.height; y++ {
 		for x := 0; x < v.width; x++ {
-			v.grid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+			v.grid[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
 		}
 	}
 }
@@ -770,7 +824,7 @@ func (v *VTerm) ClearToEndOfScreen() {
 	v.ClearLine(0) // Erase from cursor to end of the current line.
 	for y := v.cursorY + 1; y < v.height; y++ {
 		for x := 0; x < v.width; x++ {
-			v.grid[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			v.grid[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
 		}
 	}
 }
@@ -779,7 +833,7 @@ func (v *VTerm) ClearToBeginningOfScreen() {
 	v.ClearLine(1) // Erase from beginning of the current line to the cursor.
 	for y := 0; y < v.cursorY; y++ {
 		for x := 0; x < v.width; x++ {
-			v.grid[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			v.grid[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
 		}
 	}
 }
@@ -840,4 +894,48 @@ func (v *VTerm) DumpGrid(label string) {
 		log.Printf("LINE %2d: %s", y, line)
 	}
 	log.Printf("--- END DUMP ---")
+}
+
+func (v *VTerm) DumpState() {
+	log.Printf("    VTerm State: defaultBG=[%s], currentBG=[%s]", v.defaultBG, v.currentBG)
+	log.Printf("    Grid Dimensions: %d x %d", v.width, v.height)
+	for r := 0; r < v.height; r++ {
+		var line string
+		for c := 0; c < v.width; c++ {
+			cell := v.grid[r][c]
+			// To avoid spam, only log cells that don't have the expected default BG
+			if cell.BG.Mode != v.defaultBG.Mode || cell.BG.Value != v.defaultBG.Value {
+				line += fmt.Sprintf(" | C:%d BG:[%s] ", c, cell.BG)
+			}
+		}
+		if line != "" {
+			log.Printf("    Row %d:%s", r, line)
+		}
+	}
+}
+
+func (v *VTerm) DefaultBG() Color {
+	// v.mu.Lock() // Not needed if the caller holds the lock, which texelTerm.DumpState does
+	// defer v.mu.Unlock()
+	return v.defaultBG
+}
+
+func (v *VTerm) CurrentBG() Color {
+	// v.mu.Lock()
+	// defer v.mu.Unlock()
+	return v.currentBG
+}
+
+func (c Color) String() string {
+	switch c.Mode {
+	case ColorModeDefault:
+		return "Default"
+	case ColorModeStandard:
+		return fmt.Sprintf("Palette#%d", c.Value)
+	case ColorMode256:
+		return fmt.Sprintf("Palette#%d", c.Value)
+	case ColorModeRGB:
+		return fmt.Sprintf("rgb:%02x/%02x/%02x", c.R, c.G, c.B)
+	}
+	return "Invalid"
 }
