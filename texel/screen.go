@@ -437,7 +437,7 @@ func (s *Screen) performResize() {
 	defer s.mu.Unlock()
 	s.tcellScreen.Sync()
 	s.recalculateLayout()
-	s.requestRefresh()
+	// s.requestRefresh()
 }
 
 func (s *Screen) handleControlMode(ev *tcell.EventKey) {
@@ -522,17 +522,17 @@ func (s *Screen) compositePanes() {
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil {
 			p := node.Pane
-			appBuffer := p.app.Render()
+			isActive := (s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane == p)
 
-			for _, effect := range p.effects {
-				appBuffer = effect.Apply(appBuffer)
-			}
+			// The pane is now responsible for rendering itself, including decorations.
+			finalBuffer := p.Render(isActive)
 
-			if p.prevBuf == nil {
-				s.blit(p.absX0, p.absY0, appBuffer)
-			} else {
-				s.blitDiff(p.absX0, p.absY0, p.prevBuf, appBuffer)
-			}
+			//			if p.prevBuf == nil {
+			s.blit(p.absX0, p.absY0, finalBuffer)
+			//			} else {
+			//				s.blitDiff(p.absX0, p.absY0, p.prevBuf, finalBuffer)
+			//			}
+			p.prevBuf = finalBuffer
 		}
 	})
 }
