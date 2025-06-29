@@ -7,11 +7,9 @@ import (
 	"golang.org/x/term"
 	"log"
 	"os"
-	"os/signal"
 	"regexp"
 	"strconv"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -48,8 +46,9 @@ const (
 )
 
 const (
-	ResizeStep float64 = 0.05 // Resize by 5%
-	MinRatio   float64 = 0.1  // Panes can't be smaller than 10%
+	ResizeStep             float64       = 0.05 // Resize by 5%
+	MinRatio               float64       = 0.1  // Panes can't be smaller than 10%
+	resizeDebounceDuration time.Duration = 100 * time.Millisecond
 )
 
 type styleKey struct {
@@ -80,6 +79,7 @@ type Screen struct {
 	ditherEffectPrototype          Effect
 	quit                           chan struct{}
 	refreshChan                    chan bool
+	drawChan                       chan bool
 	mu                             sync.Mutex
 	closeOnce                      sync.Once
 	styleCache                     map[styleKey]tcell.Style
@@ -94,6 +94,10 @@ type Screen struct {
 
 	resizeSelection   *selectedBorder
 	debugFramesToDump int
+
+	// --- RESIZE DEBOUNCING ---
+	resizeTimer *time.Timer
+	resizeMutex sync.Mutex
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -116,15 +120,14 @@ func NewScreen() (*Screen, error) {
 		statusPanes:     make([]*StatusPane, 0),
 		quit:            make(chan struct{}),
 		refreshChan:     make(chan bool, 1),
+		drawChan:        make(chan bool, 1),
 		styleCache:      make(map[styleKey]tcell.Style),
 		DefaultFgColor:  defaultFg,
 		DefaultBgColor:  defaultBg,
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
 		resizeSelection: nil,
 	}
-	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.7)
-	//scr.inactiveFadePrototype = NewVignetteEffect(scr, tcell.NewRGBColor(60, 60, 60), 0.5, WithFalloff(4.0))
-	// The control mode effect applies to all panes
+	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.5)
 	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), 0.2, WithIsControl(true))
 	scr.ditherEffectPrototype = NewDitherEffect('░')
 
@@ -138,10 +141,16 @@ func (s *Screen) Refresh() {
 	}
 }
 
+func (s *Screen) RequestDraw() {
+	select {
+	case s.drawChan <- true:
+	default:
+	}
+}
+
 // broadcastEvent sends an event to all panes.
 func (s *Screen) broadcastEvent(event Event) {
 	s.tree.Traverse(func(node *Node) {
-		//log.Printf("Broadcasting Event: %s to %s ", event, node.Pane)
 		if node.Pane != nil {
 			node.Pane.HandleEvent(event)
 		}
@@ -151,7 +160,6 @@ func (s *Screen) broadcastEvent(event Event) {
 func (s *Screen) addStandardEffects(p *pane) {
 	p.AddEffect(s.inactiveFadePrototype.Clone())
 	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
-	//p.AddEffect(s.ditherEffectPrototype.Clone())
 }
 
 func initDefaultColors() (tcell.Color, tcell.Color, error) {
@@ -167,27 +175,23 @@ func initDefaultColors() (tcell.Color, tcell.Color, error) {
 }
 
 func queryDefaultColor(code int) (tcell.Color, error) {
-	// 1) open the controlling terminal
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return tcell.ColorDefault, fmt.Errorf("open /dev/tty: %w", err)
 	}
 	defer tty.Close()
 
-	// 2) put it into raw mode (disable canonical + echo)
 	oldState, err := term.MakeRaw(int(tty.Fd()))
 	if err != nil {
 		return tcell.ColorDefault, fmt.Errorf("MakeRaw: %w", err)
 	}
 	defer term.Restore(int(tty.Fd()), oldState)
 
-	// 3) send the OSC query
 	seq := fmt.Sprintf("\x1b]%d;?\a", code)
 	if _, err := tty.WriteString(seq); err != nil {
 		return tcell.ColorDefault, err
 	}
 
-	// 4) read until BEL (\a) or timeout
 	resp := make([]byte, 0, 64)
 	buf := make([]byte, 1)
 
@@ -207,7 +211,6 @@ func queryDefaultColor(code int) (tcell.Color, error) {
 		}
 	}
 
-	// 5) parse ESC ] code ; rgb:RR/GG/BB BEL
 	pattern := fmt.Sprintf(`\x1b\]%d;rgb:([0-9A-Fa-f]{4})/([0-9A-Fa-f]{4})/([0-9A-Fa-f]{4})`, code)
 	re := regexp.MustCompile(pattern)
 	m := re.FindStringSubmatch(string(resp))
@@ -299,15 +302,12 @@ func (s *Screen) Size() (int, int) {
 
 // AddPane adds a pane to the screen and starts its associated app.
 func (s *Screen) AddApp(app App) {
-	// Screen creates the internal pane wrapper.
 	p := newPane(app)
 	s.addStandardEffects(p)
 	p.app.SetRefreshNotifier(s.refreshChan)
 
-	// Add the pane to the tree
 	s.tree.AddApp(p)
 
-	// Enforce the "Resize -> Set Active -> Run" lifecycle.
 	s.recalculateLayout()
 	s.broadcastEvent(Event{Type: EventActivePaneChanged})
 	s.broadcastStateUpdate()
@@ -316,9 +316,6 @@ func (s *Screen) AddApp(app App) {
 
 // Run starts the main event and rendering loop.
 func (s *Screen) Run() error {
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGWINCH)
-
 	eventChan := make(chan tcell.Event, 10)
 	go func() {
 		for {
@@ -338,20 +335,18 @@ func (s *Screen) Run() error {
 	s.recalculateLayout()
 	s.broadcastStateUpdate()
 	s.draw()
+	dirty = false
+
 	for {
 		select {
-		case <-sigChan:
-			//s.tcellScreen.Sync()
-			s.recalculateLayout()
-			dirty = true
 		case ev := <-eventChan:
 			s.handleEvent(ev)
-			// handleEvent will set dirty=true if it causes a state change
 		case <-s.refreshChan:
 			s.broadcastStateUpdate()
 			dirty = true
+		case <-s.drawChan: // New case for visual-only updates
+			dirty = true
 		case <-ticker.C:
-			// Check if any continuous effect is active, which forces a redraw.
 			var needsContinuousUpdate bool
 			s.tree.Traverse(func(node *Node) {
 				if node != nil && node.Pane != nil {
@@ -363,17 +358,16 @@ func (s *Screen) Run() error {
 					}
 				}
 			})
-
 			if needsContinuousUpdate {
 				dirty = true
 			}
-
-			if dirty {
-				s.draw()
-				dirty = false
-			}
 		case <-s.quit:
 			return nil
+		}
+
+		if dirty {
+			s.draw()
+			dirty = false
 		}
 	}
 }
@@ -382,10 +376,9 @@ func (s *Screen) Run() error {
 func (s *Screen) handleEvent(ev tcell.Event) {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
-		// Ctrl-A toggles control mode
 		if ev.Key() == keyControlMode {
 			s.inControlMode = !s.inControlMode
-			s.subControlMode = 0 // Reset any sub-command
+			s.subControlMode = 0
 			if s.inControlMode {
 				s.broadcastEvent(Event{Type: EventControlOn})
 			} else {
@@ -396,19 +389,16 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 			return
 		}
 
-		// Handle events in control mode
 		if s.inControlMode {
 			s.handleControlMode(ev)
 			return
 		}
 
-		// Quit is always available
 		if ev.Key() == keyQuit {
 			s.Close()
 			return
 		}
 
-		// Fast navigation with Shift+arrow is always available
 		if ev.Modifiers()&tcell.ModShift != 0 {
 			switch ev.Key() {
 			case tcell.KeyUp:
@@ -424,27 +414,38 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 			return
 		}
 
-		// Delegate other keys to the active pane
 		if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
 			s.tree.ActiveLeaf.Pane.app.HandleKey(ev)
+			s.requestRefresh()
 		}
 
 	case *tcell.EventResize:
-		s.recalculateLayout()
-		s.requestRefresh()
+		s.resizeMutex.Lock()
+		if s.resizeTimer != nil {
+			s.resizeTimer.Stop()
+		}
+		s.resizeTimer = time.AfterFunc(resizeDebounceDuration, s.performResize)
+		s.resizeMutex.Unlock()
 	}
+}
+
+// performResize contains the actual resize logic, called by the debouncing timer.
+func (s *Screen) performResize() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcellScreen.Sync()
+	s.recalculateLayout()
+	s.requestRefresh()
 }
 
 func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 	if ev.Key() == tcell.KeyEsc {
-		// If a border is selected, the first ESC deselects it.
 		if s.resizeSelection != nil {
 			s.resizeSelection = nil
-			s.requestRefresh() // Refresh to remove selection highlight
-			return             // Stay in control mode
+			s.requestRefresh()
+			return
 		}
 
-		// If no border is selected, the second ESC exits control mode.
 		s.inControlMode = false
 		s.subControlMode = 0
 		s.broadcastEvent(Event{Type: EventControlOff})
@@ -454,22 +455,19 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 		return
 	}
 
-	// Check for Ctrl+Arrow to enter or perform a resize action
 	if ev.Modifiers()&tcell.ModCtrl != 0 {
 		if keyToDirection(ev) != -1 {
 			s.handleInteractiveResize(ev)
-			return // Stay in control mode
+			return
 		}
 	}
 
-	// If a border is selected, ignore other keys until ESC is pressed
 	if s.resizeSelection != nil {
 		return
 	}
-	// If we are in a sub-command mode (e.g., waiting for a direction)
 	if s.subControlMode != 0 {
 		switch s.subControlMode {
-		case 'w': // Waiting for direction to swap
+		case 'w':
 			var d Direction
 			validDir := true
 			switch ev.Key() {
@@ -482,7 +480,7 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 			case tcell.KeyRight:
 				d = DirRight
 			default:
-				validDir = false // Invalid key, cancel sub-mode
+				validDir = false
 			}
 			if validDir {
 				s.tree.SwapActivePane(d)
@@ -496,24 +494,20 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 		return
 	}
 
-	// Handle main control mode commands
 	switch ev.Rune() {
 	case 'x':
 		s.tree.CloseActiveLeaf()
 	case 'w':
-		s.subControlMode = 'w' // Enter 'w' sub-mode and wait for next key
+		s.subControlMode = 'w'
 		s.broadcastStateUpdate()
 		s.requestRefresh()
-		return // Stay in control mode
+		return
 	case '|':
-		s.performSplit(Vertical) // Split vertically
+		s.performSplit(Vertical)
 	case '-':
-		s.performSplit(Horizontal) // Split horizontally
-	default:
-		// Any other key exits control mode
+		s.performSplit(Horizontal)
 	}
 
-	// Exit control mode after executing a command
 	s.inControlMode = false
 	s.broadcastEvent(Event{Type: EventControlOff})
 	s.broadcastEvent(Event{Type: EventActivePaneChanged})
@@ -537,6 +531,13 @@ func (s *Screen) compositePanes() {
 			} else {
 				s.blitDiff(p.absX0, p.absY0, p.prevBuf, appBuffer)
 			}
+
+			newPrevBuf := make([][]Cell, len(appBuffer))
+			for i := range appBuffer {
+				newPrevBuf[i] = make([]Cell, len(appBuffer[i]))
+				copy(newPrevBuf[i], appBuffer[i])
+			}
+			p.prevBuf = newPrevBuf
 		}
 	})
 }
@@ -551,9 +552,7 @@ func (s *Screen) requestRefresh() {
 
 // draw executes the final screen update.
 func (s *Screen) draw() {
-	//s.tcellScreen.Clear()
 	if s.debugFramesToDump > 0 {
-		// The frame number is calculated to be human-readable (1 to 5)
 		s.dumpGridState(s.tree.Root, 6-s.debugFramesToDump)
 		s.debugFramesToDump--
 	}
@@ -594,7 +593,6 @@ func (s *Screen) Close() {
 	s.closeOnce.Do(func() {
 		close(s.quit)
 
-		// Cancel any running animations
 		for _, cancel := range s.effectAnimators {
 			cancel()
 		}
@@ -642,30 +640,21 @@ func (s *Screen) recalculateLayout() {
 	mainW = w - leftOffset - rightOffset
 	mainH = h - topOffset - bottomOffset
 
-	// Calculate proportional layout for the main content area
 	s.tree.Resize(mainX, mainY, mainW, mainH)
 }
 
-// Add this new method to screen.go
 func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
-	// This function is only called when in control mode with a Ctrl+Arrow key press.
-	d := keyToDirection(ev) // We'll create this small helper below
+	d := keyToDirection(ev)
 
-	// --- PHASE 1: BORDER SELECTION ---
 	if s.resizeSelection == nil {
 		var border *selectedBorder
-		// Start searching from the active pane's parent
 		curr := s.tree.ActiveLeaf
 		for curr.Parent != nil {
 			parent := curr.Parent
 
-			// Check if the parent's split direction is what we're looking for
 			if (d == DirLeft || d == DirRight) && parent.Split == Vertical {
-				// Find 'curr' in the parent's children to get its index
 				for i, child := range parent.Children {
 					if child == curr {
-						// For DirRight, we select the border to our right (i)
-						// For DirLeft, we select the border to our left (i-1)
 						if d == DirRight && i < len(parent.Children)-1 {
 							border = &selectedBorder{node: parent, index: i}
 						} else if d == DirLeft && i > 0 {
@@ -688,38 +677,32 @@ func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
 			}
 
 			if border != nil {
-				break // We found the closest matching border
+				break
 			}
-			curr = parent // Move up the tree
+			curr = parent
 		}
 
 		s.resizeSelection = border
 		s.ForceResize()
-		s.requestRefresh() // Refresh to show visual feedback for selection (optional)
-		//		s.debugFramesToDump = 5
+		s.requestRefresh()
 		return
 	}
 
-	// --- PHASE 2: BORDER ADJUSTMENT ---
 	border := s.resizeSelection
 
-	// Check if the adjustment direction is valid for the selected border
 	if !(((d == DirLeft || d == DirRight) && border.node.Split == Vertical) ||
 		((d == DirUp || d == DirDown) && border.node.Split == Horizontal)) {
 		return
 	}
 
-	// Define which pane grows and which shrinks
 	leftPaneIndex := border.index
 	rightPaneIndex := border.index + 1
 
 	var growerIndex, shrinkerIndex int
 	if d == DirRight || d == DirDown {
-		// Moving border right/down: left pane grows, right pane shrinks
 		growerIndex = leftPaneIndex
 		shrinkerIndex = rightPaneIndex
-	} else { // DirLeft or DirUp
-		// Moving border left/up: left pane shrinks, right pane grows
+	} else {
 		growerIndex = rightPaneIndex
 		shrinkerIndex = leftPaneIndex
 	}
@@ -743,7 +726,6 @@ func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
 	s.requestRefresh()
 }
 
-// Add this small helper function to convert key presses to Direction
 func keyToDirection(ev *tcell.EventKey) Direction {
 	switch ev.Key() {
 	case tcell.KeyUp:
@@ -755,7 +737,7 @@ func keyToDirection(ev *tcell.EventKey) Direction {
 	case tcell.KeyRight:
 		return DirRight
 	}
-	return -1 // Invalid
+	return -1
 }
 
 func (s *Screen) performSplit(splitDir SplitType) {
@@ -777,7 +759,6 @@ func (s *Screen) ForceResize() {
 	s.recalculateLayout()
 }
 
-// blit copies cells to the screen.
 func (s *Screen) blit(x, y int, buf [][]Cell) {
 	for r, row := range buf {
 		for c, cell := range row {
@@ -786,7 +767,6 @@ func (s *Screen) blit(x, y int, buf [][]Cell) {
 	}
 }
 
-// blitDiff only redraws changed cells.
 func (s *Screen) blitDiff(x0, y0 int, oldBuf, buf [][]Cell) {
 	for y, row := range buf {
 		for x, cell := range row {
@@ -797,18 +777,15 @@ func (s *Screen) blitDiff(x0, y0 int, oldBuf, buf [][]Cell) {
 	}
 }
 
-// dumpGridState logs the complete state of a node's vterm grid for one frame.
 func (s *Screen) dumpGridState(node *Node, frameNum int) {
 	if node == nil {
 		return
 	}
 	if node.Pane != nil && node.Pane.app != nil {
-
 		if debuggable, ok := node.Pane.app.(DebuggableApp); ok {
 			log.Printf("--- FRAME DUMP #%d for Pane at [%d,%d] (Size: %dx%d) ---", frameNum, node.Pane.absX0, node.Pane.absY0, node.Pane.Width(), node.Pane.Height())
 			debuggable.DumpState(frameNum)
 		}
-
 	}
 
 	for _, child := range node.Children {

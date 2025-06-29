@@ -440,7 +440,7 @@ func newDefaultPalette() [258]tcell.Color {
 
 	// Default Foreground (White) and Background (Black)
 	p[256] = p[15]
-	p[257] = p[5]
+	p[257] = p[0]
 
 	return p
 }
