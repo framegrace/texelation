@@ -533,9 +533,6 @@ func (s *Screen) compositePanes() {
 			} else {
 				s.blitDiff(p.absX0, p.absY0, p.prevBuf, appBuffer)
 			}
-			// This line is the critical fix. It ensures that the "previous" buffer
-			// is correctly updated for the next frame's diff.
-			p.prevBuf = appBuffer
 		}
 	})
 }

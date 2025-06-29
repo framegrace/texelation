@@ -378,7 +378,7 @@ func (a *TexelTerm) Resize(cols, rows int) {
 			Rows: uint16(rows),
 			Cols: uint16(cols),
 		})
-		a.pty.Write([]byte{'\x0C'})
+		//a.pty.Write([]byte{'\x0C'})
 	}
 }
 func (a *TexelTerm) Stop() {
