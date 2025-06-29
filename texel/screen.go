@@ -127,13 +127,14 @@ func NewScreen() (*Screen, error) {
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
 		resizeSelection: nil,
 	}
-	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.5)
+	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.7)
 	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), 0.2, WithIsControl(true))
 	scr.ditherEffectPrototype = NewDitherEffect('░')
 
 	return scr, nil
 }
 
+// Refresh is called by applications when their internal state changes.
 func (s *Screen) Refresh() {
 	select {
 	case s.refreshChan <- true:
@@ -141,6 +142,7 @@ func (s *Screen) Refresh() {
 	}
 }
 
+// RequestDraw is called by visual effects to trigger a redraw without a state update.
 func (s *Screen) RequestDraw() {
 	select {
 	case s.drawChan <- true:
@@ -344,7 +346,7 @@ func (s *Screen) Run() error {
 		case <-s.refreshChan:
 			s.broadcastStateUpdate()
 			dirty = true
-		case <-s.drawChan: // New case for visual-only updates
+		case <-s.drawChan:
 			dirty = true
 		case <-ticker.C:
 			var needsContinuousUpdate bool
@@ -531,13 +533,9 @@ func (s *Screen) compositePanes() {
 			} else {
 				s.blitDiff(p.absX0, p.absY0, p.prevBuf, appBuffer)
 			}
-
-			newPrevBuf := make([][]Cell, len(appBuffer))
-			for i := range appBuffer {
-				newPrevBuf[i] = make([]Cell, len(appBuffer[i]))
-				copy(newPrevBuf[i], appBuffer[i])
-			}
-			p.prevBuf = newPrevBuf
+			// This line is the critical fix. It ensures that the "previous" buffer
+			// is correctly updated for the next frame's diff.
+			p.prevBuf = appBuffer
 		}
 	})
 }
