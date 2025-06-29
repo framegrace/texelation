@@ -278,6 +278,7 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 
 	if len(n.Children) == 0 && n.Pane != nil {
 		n.Pane.setDimensions(x, y, x+w, y+h)
+		n.Pane.prevBuf = nil
 		if n.Pane.app != nil {
 			n.Pane.app.Resize(w, h)
 		}

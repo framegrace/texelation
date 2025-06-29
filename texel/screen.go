@@ -46,9 +46,8 @@ const (
 )
 
 const (
-	ResizeStep             float64       = 0.05 // Resize by 5%
-	MinRatio               float64       = 0.1  // Panes can't be smaller than 10%
-	resizeDebounceDuration time.Duration = 100 * time.Millisecond
+	ResizeStep float64 = 0.05 // Resize by 5%
+	MinRatio   float64 = 0.1  // Panes can't be smaller than 10%
 )
 
 type styleKey struct {
@@ -94,10 +93,6 @@ type Screen struct {
 
 	resizeSelection   *selectedBorder
 	debugFramesToDump int
-
-	// --- RESIZE DEBOUNCING ---
-	resizeTimer *time.Timer
-	resizeMutex sync.Mutex
 }
 
 // NewScreen initializes the terminal with tcell.
@@ -422,22 +417,9 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 		}
 
 	case *tcell.EventResize:
-		s.resizeMutex.Lock()
-		if s.resizeTimer != nil {
-			s.resizeTimer.Stop()
-		}
-		s.resizeTimer = time.AfterFunc(resizeDebounceDuration, s.performResize)
-		s.resizeMutex.Unlock()
+		s.recalculateLayout()
+		s.requestRefresh()
 	}
-}
-
-// performResize contains the actual resize logic, called by the debouncing timer.
-func (s *Screen) performResize() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.tcellScreen.Sync()
-	s.recalculateLayout()
-	// s.requestRefresh()
 }
 
 func (s *Screen) handleControlMode(ev *tcell.EventKey) {
@@ -520,18 +502,18 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 // compositePanes draws each pane’s buffer to the screen.
 func (s *Screen) compositePanes() {
 	s.tree.Traverse(func(node *Node) {
-		if node.Pane != nil {
+		if node.Pane != nil && node.Pane.app != nil {
 			p := node.Pane
 			isActive := (s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane == p)
 
 			// The pane is now responsible for rendering itself, including decorations.
 			finalBuffer := p.Render(isActive)
 
-			//			if p.prevBuf == nil {
-			s.blit(p.absX0, p.absY0, finalBuffer)
-			//			} else {
-			//				s.blitDiff(p.absX0, p.absY0, p.prevBuf, finalBuffer)
-			//			}
+			if p.prevBuf == nil {
+				s.blit(p.absX0, p.absY0, finalBuffer)
+			} else {
+				s.blitDiff(p.absX0, p.absY0, p.prevBuf, finalBuffer)
+			}
 			p.prevBuf = finalBuffer
 		}
 	})

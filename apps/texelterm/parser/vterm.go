@@ -32,6 +32,7 @@ type VTerm struct {
 	DefaultBgChanged                  func(Color)
 	QueryDefaultFg                    func()
 	QueryDefaultBg                    func()
+	ScreenRestored                    func()
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -66,6 +67,10 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		}
 	}
 	return v
+}
+
+func WithScreenRestoredHandler(handler func()) Option {
+	return func(v *VTerm) { v.ScreenRestored = handler }
 }
 
 // Add these two new Option functions at the end of the file
@@ -701,8 +706,8 @@ func (v *VTerm) SetCursorColumn(col int) {
 	v.cursorX = col
 }
 func (v *VTerm) ClearScreen() {
-	v.defaultFG = v.currentFG
-	v.defaultBG = v.currentBG
+	//	v.defaultFG = v.currentFG
+	//	v.defaultBG = v.currentBG
 	for y := 0; y < v.height; y++ {
 		for x := 0; x < v.width; x++ {
 			v.grid[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
@@ -814,6 +819,9 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 				v.savedGrid = nil
 			}
 			v.RestoreCursor()
+			if v.ScreenRestored != nil {
+				v.ScreenRestored()
+			}
 		case 2004:
 			log.Println("Parser: Ignoring reset bracketed paste mode (2004l)")
 		}

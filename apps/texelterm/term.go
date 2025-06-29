@@ -288,6 +288,11 @@ func (a *TexelTerm) Run() error {
 		a.pty.Write([]byte(responseStr))
 	}
 
+	screenRestoredHandler := func() {
+		log.Print("RESTORE HANDLER CALLED")
+		go a.Resize(a.width, a.height)
+	}
+
 	titleChangeHandler := func(newTitle string) {
 		a.title = newTitle
 		if a.refreshChan != nil {
@@ -310,6 +315,7 @@ func (a *TexelTerm) Run() error {
 		parser.WithDefaultBgChangeHandler(bgChangeHandler),
 		parser.WithQueryDefaultFgHandler(queryFgHandler),
 		parser.WithQueryDefaultBgHandler(queryBgHandler),
+		parser.WithScreenRestoredHandler(screenRestoredHandler),
 	)
 	a.parser = parser.NewParser(a.vterm)
 	a.mu.Unlock()
