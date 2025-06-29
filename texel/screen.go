@@ -127,7 +127,7 @@ func NewScreen() (*Screen, error) {
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
 		resizeSelection: nil,
 	}
-	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 20), 0.7)
+	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 0), 0.4)
 	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), 0.2, WithIsControl(true))
 	scr.ditherEffectPrototype = NewDitherEffect('░')
 
@@ -304,16 +304,16 @@ func (s *Screen) Size() (int, int) {
 
 // AddPane adds a pane to the screen and starts its associated app.
 func (s *Screen) AddApp(app App) {
-	p := newPane(app)
+	p := newPane()
 	s.addStandardEffects(p)
-	p.app.SetRefreshNotifier(s.refreshChan)
-
-	s.tree.AddApp(p)
+	s.tree.SetRoot(p)
 
 	s.recalculateLayout()
+
+	p.AttachApp(app, s.refreshChan)
+
 	s.broadcastEvent(Event{Type: EventActivePaneChanged})
 	s.broadcastStateUpdate()
-	go p.app.Run()
 }
 
 // Run starts the main event and rendering loop.
@@ -740,14 +740,11 @@ func (s *Screen) performSplit(splitDir SplitType) {
 		return
 	}
 
-	newApp := s.ShellAppFactory()
-	p := newPane(newApp)
-	s.addStandardEffects(p)
-	p.app.SetRefreshNotifier(s.refreshChan)
-	go newApp.Run()
-
-	s.tree.SplitActive(splitDir, p)
+	newNode := s.tree.SplitActive(splitDir)
 	s.recalculateLayout()
+	newApp := s.ShellAppFactory()
+	s.addStandardEffects(newNode.Pane)
+	newNode.Pane.AttachApp(newApp, s.refreshChan)
 }
 
 func (s *Screen) ForceResize() {

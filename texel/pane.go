@@ -6,21 +6,30 @@ import (
 
 // Pane represents a rectangular area on the screen that hosts an App.
 type pane struct {
-	absX0, absY0, absX1, absY1 int // These are now calculated from Layout
+	absX0, absY0, absX1, absY1 int
 	app                        App
 	effects                    []Effect
 	prevBuf                    [][]Cell
 	name                       string
+	frozenBuffer               [][]Cell
 }
 
-// NewPane creates a new Pane with the given dimensions and hosts the provided App.
-func newPane(app App) *pane {
-	p := &pane{
-		app:  app,
-		name: app.GetTitle(),
+// newPane creates a new, empty Pane. The App is attached later.
+func newPane() *pane {
+	return &pane{}
+}
+
+// AttachApp connects an application to the pane, gives it its initial size,
+// and starts its main run loop.
+func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
+	if p.app != nil {
+		p.app.Stop() // Stop any existing app
 	}
-	// The app will be resized properly by the first call to handleResize.
-	return p
+	p.app = app
+	p.name = app.GetTitle()
+	p.app.SetRefreshNotifier(refreshChan)
+	p.app.Resize(p.Width(), p.Height())
+	go p.app.Run()
 }
 
 func (p *pane) String() string {
@@ -29,6 +38,7 @@ func (p *pane) String() string {
 func (p *pane) setTitle(t string) {
 	p.name = t
 }
+
 func (p *pane) getTitle() string {
 	return p.name
 }
@@ -77,5 +87,7 @@ func (p *pane) Height() int {
 
 func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 	p.absX0, p.absY0, p.absX1, p.absY1 = x0, y0, x1, y1
-	p.app.Resize(p.Width(), p.Height())
+	if p.app != nil {
+		p.app.Resize(p.Width(), p.Height())
+	}
 }

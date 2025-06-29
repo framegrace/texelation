@@ -33,24 +33,18 @@ func NewTree() *Tree {
 	return &Tree{}
 }
 
-// AddApp adds a new application to the tree. If the tree is empty, it becomes
-// the root. Otherwise, it replaces the existing root.
-func (t *Tree) AddApp(p *pane) {
+// SetRoot sets the root of the tree to a single node containing the given pane.
+func (t *Tree) SetRoot(p *pane) {
 	leaf := &Node{
 		Pane: p,
 	}
-	if t.Root == nil {
-		t.Root = leaf
-	} else {
-		// A more sophisticated split would happen here in a real app
-		t.Root = leaf
-	}
+	t.Root = leaf
 	t.ActiveLeaf = leaf
 }
 
-// SplitActive splits the active leaf node, creating a new pane with the
-// provided app. It returns the new active node.
-func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
+// SplitActive splits the active leaf node, creating a new empty pane.
+// It returns the new node containing the empty pane.
+func (t *Tree) SplitActive(splitDir SplitType) *Node {
 	if t.ActiveLeaf == nil {
 		return nil
 	}
@@ -58,6 +52,8 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 	nodeToModify := t.ActiveLeaf
 	parent := t.findParentOf(t.Root, nil, nodeToModify)
 
+	// Create a new empty pane that will be attached later.
+	newPane := newPane()
 	var newActiveNode *Node
 
 	// CASE 1: Adding another pane to an existing group.
@@ -176,7 +172,7 @@ func (t *Tree) Traverse(f func(*Node)) {
 
 // GetActiveTitle returns the title of the active application.
 func (t *Tree) GetActiveTitle() string {
-	if t.ActiveLeaf != nil && t.ActiveLeaf.Pane != nil {
+	if t.ActiveLeaf != nil && t.ActiveLeaf.Pane != nil && t.ActiveLeaf.Pane.app != nil {
 		return t.ActiveLeaf.Pane.app.GetTitle()
 	}
 	return ""
@@ -242,7 +238,7 @@ func (t *Tree) findFirstLeaf(node *Node) *Node {
 // findParentOf finds the parent of the given node.
 func (t *Tree) findParentOf(current, parent, target *Node) *Node {
 	if current == nil {
-		current = t.Root
+		return nil
 	}
 	if current == target {
 		return parent
@@ -282,10 +278,6 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 
 	if len(n.Children) == 0 && n.Pane != nil {
 		n.Pane.setDimensions(x, y, x+w, y+h)
-		n.Pane.prevBuf = nil
-		if n.Pane.app != nil {
-			n.Pane.app.Resize(w, h)
-		}
 		return
 	}
 
@@ -297,10 +289,7 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 	if n.Split == Vertical {
 		currentX := x
 		for i, child := range n.Children {
-			// Use the ratio to calculate width
 			childW := int(float64(w) * n.SplitRatios[i])
-
-			// Give the last child all remaining space to prevent rounding errors
 			if i == numChildren-1 {
 				childW = w - (currentX - x)
 			}
@@ -310,10 +299,7 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 	} else { // Horizontal
 		currentY := y
 		for i, child := range n.Children {
-			// Use the ratio to calculate height
 			childH := int(float64(h) * n.SplitRatios[i])
-
-			// Give the last child all remaining space
 			if i == numChildren-1 {
 				childH = h - (currentY - y)
 			}
