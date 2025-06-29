@@ -4,26 +4,6 @@ import (
 // "log"
 )
 
-// Rect defines a rectangle using fractional coordinates (0.0 to 1.0).
-type Rect struct {
-	X, Y, W, H float64
-}
-
-type SplitType int
-
-const (
-	Horizontal SplitType = iota
-	Vertical
-)
-
-type Node struct {
-	Parent      *Node
-	Split       SplitType
-	Pane        *pane // A pane is only present in leaf nodes
-	SplitRatios []float64
-	Children    []*Node
-}
-
 // Pane represents a rectangular area on the screen that hosts an App.
 type pane struct {
 	absX0, absY0, absX1, absY1 int // These are now calculated from Layout

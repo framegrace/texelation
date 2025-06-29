@@ -67,7 +67,7 @@ func (f *FadeEffect) OnEvent(owner *pane, event Event) {
 	} else {
 		switch event.Type {
 		case EventActivePaneChanged:
-			if f.screen.activeLeaf != nil && f.screen.activeLeaf.Pane == owner {
+			if f.screen.tree.ActiveLeaf != nil && f.screen.tree.ActiveLeaf.Pane == owner {
 				f.inactivate()
 			} else {
 				f.activate()

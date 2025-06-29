@@ -73,8 +73,7 @@ type selectedBorder struct {
 // Screen manages the entire terminal display using tcell as the backend.
 type Screen struct {
 	tcellScreen                    tcell.Screen
-	root                           *Node
-	activeLeaf                     *Node
+	tree                           *Tree
 	statusPanes                    []*StatusPane
 	inactiveFadePrototype          Effect
 	controlModeFadeEffectPrototype Effect
@@ -113,6 +112,7 @@ func NewScreen() (*Screen, error) {
 
 	scr := &Screen{
 		tcellScreen:     tcellScreen,
+		tree:            NewTree(),
 		statusPanes:     make([]*StatusPane, 0),
 		quit:            make(chan struct{}),
 		refreshChan:     make(chan bool, 1),
@@ -140,7 +140,7 @@ func (s *Screen) Refresh() {
 
 // broadcastEvent sends an event to all panes.
 func (s *Screen) broadcastEvent(event Event) {
-	s.traverse(s.root, func(node *Node) {
+	s.tree.Traverse(func(node *Node) {
 		//log.Printf("Broadcasting Event: %s to %s ", event, node.Pane)
 		if node.Pane != nil {
 			node.Pane.HandleEvent(event)
@@ -226,10 +226,7 @@ func queryDefaultColor(code int) (tcell.Color, error) {
 }
 
 func (s *Screen) broadcastStateUpdate() {
-	title := ""
-	if s.activeLeaf != nil && s.activeLeaf.Pane != nil {
-		title = s.activeLeaf.Pane.app.GetTitle()
-	}
+	title := s.tree.GetActiveTitle()
 
 	msg := Message{
 		Type: MsgStateUpdate,
@@ -239,7 +236,7 @@ func (s *Screen) broadcastStateUpdate() {
 			ActiveTitle:   title,
 		},
 	}
-	s.traverse(s.root, func(node *Node) {
+	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil {
 			node.Pane.app.HandleMessage(msg)
 		}
@@ -271,147 +268,10 @@ func (s *Screen) AddStatusPane(app App, side Side, size int) {
 
 // moveActivePane moves focus to the neighbor in the given direction.
 func (s *Screen) moveActivePane(d Direction) {
-	target := findNeighbor(s.activeLeaf, d)
-	if target != nil {
-		s.setActivePane(target)
-	}
-}
-
-func findNeighbor(leaf *Node, d Direction) *Node {
-	curr := leaf
-	for curr.Parent != nil {
-		parent := curr.Parent
-
-		// Find our index in the parent's children list
-		myIndex := -1
-		for i, child := range parent.Children {
-			if child == curr {
-				myIndex = i
-				break
-			}
-		}
-		if myIndex == -1 {
-			return nil
-		} // Should not happen
-
-		// Check for neighbors based on direction and parent's split type
-		switch d {
-		case DirRight:
-			if parent.Split == Vertical && myIndex+1 < len(parent.Children) {
-				return findFirstLeaf(parent.Children[myIndex+1])
-			}
-		case DirLeft:
-			if parent.Split == Vertical && myIndex-1 >= 0 {
-				return findFirstLeaf(parent.Children[myIndex-1])
-			}
-		case DirDown:
-			if parent.Split == Horizontal && myIndex+1 < len(parent.Children) {
-				return findFirstLeaf(parent.Children[myIndex+1])
-			}
-		case DirUp:
-			if parent.Split == Horizontal && myIndex-1 >= 0 {
-				return findFirstLeaf(parent.Children[myIndex-1])
-			}
-		}
-
-		// If we couldn't find a direct neighbor, move up the tree
-		curr = parent
-	}
-	return nil
-}
-
-func (s *Screen) closeActivePane() {
-	leaf := s.activeLeaf
-	if leaf == nil || leaf.Parent == nil {
-		// Don't close the root pane
-		return
-	}
-
-	parent := leaf.Parent
-	// Find the index of the leaf being closed
-	childIndex := -1
-	for i, child := range parent.Children {
-		if child == leaf {
-			childIndex = i
-			break
-		}
-	}
-	if childIndex == -1 {
-		return
-	} // Should not happen
-
-	// Remove the child from the parent's slice
-	parent.Children = append(parent.Children[:childIndex], parent.Children[childIndex+1:]...)
-
-	// If the parent has only one child left, the split is no longer needed.
-	// Promote the remaining child to replace its parent.
-	var nextActiveNode *Node
-	if len(parent.Children) == 1 {
-		remainingChild := parent.Children[0]
-		grandparent := parent.Parent
-		remainingChild.Parent = grandparent
-
-		if grandparent == nil {
-			s.root = remainingChild
-		} else {
-			// Find parent's index in grandparent's children and replace it
-			for i, child := range grandparent.Children {
-				if child == parent {
-					grandparent.Children[i] = remainingChild
-					break
-				}
-			}
-		}
-		nextActiveNode = findFirstLeaf(remainingChild)
-	} else {
-		// Otherwise, set focus to the previous sibling, or the new last one if we closed the first.
-		newIndex := childIndex
-		if newIndex >= len(parent.Children) {
-			newIndex = len(parent.Children) - 1
-		}
-		nextActiveNode = findFirstLeaf(parent.Children[newIndex])
-	}
-
-	leaf.Pane.app.Stop() // Ensure the closed app is stopped
-	s.setActivePane(nextActiveNode)
-}
-
-func findFirstLeaf(node *Node) *Node {
-	if node == nil {
-		return nil
-	}
-	curr := node
-	// While the current node is not a leaf, descend to the first child.
-	for len(curr.Children) > 0 {
-		curr = curr.Children[0]
-	}
-	return curr
-}
-
-func (s *Screen) setActivePane(n *Node) {
-	if s.activeLeaf == n {
-		return
-	}
-	s.activeLeaf = n
+	s.tree.MoveActive(d)
 	s.recalculateLayout()
-	// Broadcast a generic event. Effects will listen and decide if they need to change state.
 	s.broadcastEvent(Event{Type: EventActivePaneChanged})
 	s.broadcastStateUpdate()
-}
-
-// swapActivePane swaps the pane of the active leaf with its neighbor and updates the active leaf.
-func (s *Screen) swapActivePane(d Direction) {
-	neighbor := findNeighbor(s.activeLeaf, d)
-	if neighbor == nil {
-		return
-	}
-
-	// Swap the panes within the leaves
-	s.activeLeaf.Pane, neighbor.Pane = neighbor.Pane, s.activeLeaf.Pane
-
-	// Set the new active pane and refresh the screen
-	s.setActivePane(neighbor)
-	s.requestRefresh()
 }
 
 func (s *Screen) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {
@@ -442,31 +302,16 @@ func (s *Screen) AddApp(app App) {
 	// Screen creates the internal pane wrapper.
 	p := newPane(app)
 	s.addStandardEffects(p)
+	p.app.SetRefreshNotifier(s.refreshChan)
 
-	leaf := &Node{
-		Pane: p,
-	}
-
-	if s.root == nil {
-		s.root = leaf
-	} else {
-		// A more sophisticated split would happen here in a real app
-		s.root = leaf
-	}
-
-	p.app.SetRefreshNotifier(s.refreshChan) // ?
+	// Add the pane to the tree
+	s.tree.AddApp(p)
 
 	// Enforce the "Resize -> Set Active -> Run" lifecycle.
 	s.recalculateLayout()
-	s.setActivePane(leaf)
+	s.broadcastEvent(Event{Type: EventActivePaneChanged})
+	s.broadcastStateUpdate()
 	go p.app.Run()
-}
-
-func (s *Screen) createAndInitPane(app App) *pane {
-	p := newPane(app)
-	s.addStandardEffects(p)
-	p.app.SetRefreshNotifier(s.refreshChan)
-	return p
 }
 
 // Run starts the main event and rendering loop.
@@ -508,7 +353,7 @@ func (s *Screen) Run() error {
 		case <-ticker.C:
 			// Check if any continuous effect is active, which forces a redraw.
 			var needsContinuousUpdate bool
-			s.traverse(s.root, func(node *Node) {
+			s.tree.Traverse(func(node *Node) {
 				if node != nil && node.Pane != nil {
 					for _, effect := range node.Pane.effects {
 						if effect.IsContinuous() {
@@ -580,8 +425,8 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 		}
 
 		// Delegate other keys to the active pane
-		if s.activeLeaf != nil && s.activeLeaf.Pane != nil {
-			s.activeLeaf.Pane.app.HandleKey(ev)
+		if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
+			s.tree.ActiveLeaf.Pane.app.HandleKey(ev)
 		}
 
 	case *tcell.EventResize:
@@ -640,7 +485,7 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 				validDir = false // Invalid key, cancel sub-mode
 			}
 			if validDir {
-				s.swapActivePane(d)
+				s.tree.SwapActivePane(d)
 			}
 		}
 		s.subControlMode = 0
@@ -654,7 +499,7 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 	// Handle main control mode commands
 	switch ev.Rune() {
 	case 'x':
-		s.closeActivePane()
+		s.tree.CloseActiveLeaf()
 	case 'w':
 		s.subControlMode = 'w' // Enter 'w' sub-mode and wait for next key
 		s.broadcastStateUpdate()
@@ -678,7 +523,7 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 
 // compositePanes draws each pane’s buffer to the screen.
 func (s *Screen) compositePanes() {
-	s.traverse(s.root, func(node *Node) {
+	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil {
 			p := node.Pane
 			appBuffer := p.app.Render()
@@ -709,7 +554,7 @@ func (s *Screen) draw() {
 	//s.tcellScreen.Clear()
 	if s.debugFramesToDump > 0 {
 		// The frame number is calculated to be human-readable (1 to 5)
-		s.dumpGridState(s.root, 6-s.debugFramesToDump)
+		s.dumpGridState(s.tree.Root, 6-s.debugFramesToDump)
 		s.debugFramesToDump--
 	}
 
@@ -754,7 +599,7 @@ func (s *Screen) Close() {
 			cancel()
 		}
 
-		s.traverse(s.root, func(node *Node) {
+		s.tree.Traverse(func(node *Node) {
 			if node.Pane != nil {
 				node.Pane.app.Stop()
 			}
@@ -798,9 +643,7 @@ func (s *Screen) recalculateLayout() {
 	mainH = h - topOffset - bottomOffset
 
 	// Calculate proportional layout for the main content area
-	if s.root != nil {
-		s.resizeNode(s.root, mainX, mainY, mainW, mainH)
-	}
+	s.tree.Resize(mainX, mainY, mainW, mainH)
 }
 
 // Add this new method to screen.go
@@ -812,7 +655,7 @@ func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
 	if s.resizeSelection == nil {
 		var border *selectedBorder
 		// Start searching from the active pane's parent
-		curr := s.activeLeaf
+		curr := s.tree.ActiveLeaf
 		for curr.Parent != nil {
 			parent := curr.Parent
 
@@ -853,7 +696,7 @@ func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
 		s.resizeSelection = border
 		s.ForceResize()
 		s.requestRefresh() // Refresh to show visual feedback for selection (optional)
-		s.debugFramesToDump = 5
+		//		s.debugFramesToDump = 5
 		return
 	}
 
@@ -915,146 +758,23 @@ func keyToDirection(ev *tcell.EventKey) Direction {
 	return -1 // Invalid
 }
 
-func (s *Screen) resizeNode(n *Node, x, y, w, h int) {
-	if n == nil {
-		return
-	}
-
-	if len(n.Children) == 0 && n.Pane != nil {
-		n.Pane.setDimensions(x, y, x+w, y+h)
-		n.Pane.prevBuf = nil
-		if n.Pane.app != nil {
-			n.Pane.app.Resize(w, h)
-		}
-		return
-	}
-
-	numChildren := len(n.Children)
-	if numChildren == 0 || len(n.SplitRatios) != numChildren {
-		return // Not a valid internal node
-	}
-
-	if n.Split == Vertical {
-		currentX := x
-		for i, child := range n.Children {
-			// Use the ratio to calculate width
-			childW := int(float64(w) * n.SplitRatios[i])
-
-			// Give the last child all remaining space to prevent rounding errors
-			if i == numChildren-1 {
-				childW = w - (currentX - x)
-			}
-			s.resizeNode(child, currentX, y, childW, h)
-			currentX += childW
-		}
-	} else { // Horizontal
-		currentY := y
-		for i, child := range n.Children {
-			// Use the ratio to calculate height
-			childH := int(float64(h) * n.SplitRatios[i])
-
-			// Give the last child all remaining space
-			if i == numChildren-1 {
-				childH = h - (currentY - y)
-			}
-			s.resizeNode(child, x, currentY, w, childH)
-			currentY += childH
-		}
-	}
-}
-
-func findNodeByPane(current *Node, target *pane) *Node {
-	if current == nil {
-		return nil
-	}
-	if current.Pane == target {
-		return current
-	}
-	for _, child := range current.Children {
-		if found := findNodeByPane(child, target); found != nil {
-			return found
-		}
-	}
-	return nil
-}
-
 func (s *Screen) performSplit(splitDir SplitType) {
-	if s.activeLeaf == nil || s.ShellAppFactory == nil {
+	if s.tree.ActiveLeaf == nil || s.ShellAppFactory == nil {
 		return
 	}
 
-	nodeToModify := s.activeLeaf
-	parent := findParentOf(s.root, nil, nodeToModify)
+	newApp := s.ShellAppFactory()
+	p := newPane(newApp)
+	s.addStandardEffects(p)
+	p.app.SetRefreshNotifier(s.refreshChan)
+	go newApp.Run()
 
-	var newActiveNode *Node
-
-	// CASE 1: Adding another pane to an existing group.
-	if parent != nil && parent.Split == splitDir {
-		newPane := s.createAndInitPane(s.ShellAppFactory())
-		newNode := &Node{Parent: parent, Pane: newPane}
-		parent.Children = append(parent.Children, newNode)
-
-		numChildren := len(parent.Children)
-		equalRatio := 1.0 / float64(numChildren)
-		parent.SplitRatios = make([]float64, numChildren)
-		for i := range parent.SplitRatios {
-			parent.SplitRatios[i] = equalRatio
-		}
-
-		go newPane.app.Run()
-		newActiveNode = newNode
-
-	} else {
-		// CASE 2: Splitting a single pane for the first time.
-		originalPane := nodeToModify.Pane
-		newPane := s.createAndInitPane(s.ShellAppFactory())
-
-		nodeToModify.Pane = nil
-		nodeToModify.Split = splitDir
-		nodeToModify.SplitRatios = []float64{0.5, 0.5}
-
-		child1 := &Node{Parent: nodeToModify, Pane: originalPane}
-		child2 := &Node{Parent: nodeToModify, Pane: newPane}
-		nodeToModify.Children = []*Node{child1, child2}
-
-		go newPane.app.Run()
-		newActiveNode = child2
-	}
-
-	s.setActivePane(newActiveNode)
-
-	s.requestRefresh()
+	s.tree.SplitActive(splitDir, p)
+	s.recalculateLayout()
 }
 
 func (s *Screen) ForceResize() {
 	s.recalculateLayout()
-}
-
-// You will need this helper function:
-func findParentOf(current, parent, target *Node) *Node {
-	if current == nil {
-		return nil
-	}
-	if current == target {
-		return parent
-	}
-	for _, child := range current.Children {
-		if found := findParentOf(child, current, target); found != nil {
-			return found
-		}
-	}
-	return nil
-}
-
-func (s *Screen) traverse(n *Node, f func(*Node)) {
-	if n == nil {
-		return
-	}
-	f(n)
-	// Loop over the children slice instead of Left/Right
-	for _, child := range n.Children {
-		s.traverse(child, f)
-	}
 }
 
 // blit copies cells to the screen.
@@ -1083,10 +803,7 @@ func (s *Screen) dumpGridState(node *Node, frameNum int) {
 		return
 	}
 	if node.Pane != nil && node.Pane.app != nil {
-		// We need to get the VTerm instance. This requires a type assertion.
-		// We assume the app is a texelTerm.
-		// We check if the app IMPLEMENTS our new interface, instead of
-		// checking if it IS a specific type. This breaks the dependency.
+
 		if debuggable, ok := node.Pane.app.(DebuggableApp); ok {
 			log.Printf("--- FRAME DUMP #%d for Pane at [%d,%d] (Size: %dx%d) ---", frameNum, node.Pane.absX0, node.Pane.absY0, node.Pane.Width(), node.Pane.Height())
 			debuggable.DumpState(frameNum)
