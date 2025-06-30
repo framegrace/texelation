@@ -33,6 +33,10 @@ type VTerm struct {
 	QueryDefaultFg                    func()
 	QueryDefaultBg                    func()
 	ScreenRestored                    func()
+
+	dirtyLines  map[int]bool
+	allDirty    bool
+	prevCursorY int
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -53,6 +57,8 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		marginBottom:  height - 1, // Default margin is bottom row
 		defaultFG:     DefaultFG,
 		defaultBG:     DefaultBG,
+		dirtyLines:    make(map[int]bool),
+		allDirty:      true, // Initial render should be a full one.
 	}
 	for _, opt := range opts {
 		opt(v)
@@ -91,10 +97,61 @@ func WithDefaultBgChangeHandler(handler func(Color)) Option {
 	return func(v *VTerm) { v.DefaultBgChanged = handler }
 }
 
+// MarkDirty flags a single line as needing a redraw.
+func (v *VTerm) MarkDirty(line int) {
+	if line >= 0 && line < v.height {
+		v.dirtyLines[line] = true
+	}
+}
+
+// MarkAllDirty flags the entire screen for a redraw.
+func (v *VTerm) MarkAllDirty() {
+	v.allDirty = true
+}
+
+// GetDirtyLines returns the set of dirty lines and the allDirty flag.
+func (v *VTerm) GetDirtyLines() (map[int]bool, bool) {
+	return v.dirtyLines, v.allDirty
+}
+
+// ClearDirty resets the dirty tracking state after a render.
+func (v *VTerm) ClearDirty() {
+	v.allDirty = false
+	v.dirtyLines = make(map[int]bool)
+	// Always mark the old and new cursor lines as dirty for the next frame
+	// to handle cursor movement and blinking correctly.
+	v.MarkDirty(v.prevCursorY)
+	v.MarkDirty(v.cursorY)
+}
+
+func (v *VTerm) updateCursor(y, x int) {
+	// Clamp to bounds
+	if y < 0 {
+		y = 0
+	}
+	if y >= v.height {
+		y = v.height - 1
+	}
+	if x < 0 {
+		x = 0
+	}
+	if x >= v.width {
+		x = v.width - 1
+	}
+
+	// Mark old and new lines as dirty before updating position
+	v.MarkDirty(v.cursorY)
+	v.MarkDirty(y)
+
+	v.prevCursorY = v.cursorY
+	v.cursorY, v.cursorX = y, x
+}
+
 func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
 		return
 	}
+	v.MarkAllDirty()
 
 	// --- THE DEFINITIVE FIX ---
 
@@ -176,6 +233,7 @@ func (v *VTerm) AppCursorKeys() bool {
 
 // EraseCharacters overwrites N characters from the cursor with space.
 func (v *VTerm) EraseCharacters(n int) {
+	v.MarkDirty(v.cursorY)
 	for i := 0; i < n; i++ {
 		if v.cursorX+i < v.width {
 			v.grid[v.cursorY][v.cursorX+i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
@@ -185,6 +243,7 @@ func (v *VTerm) EraseCharacters(n int) {
 
 // DeleteCharacters deletes N characters, shifting the rest of the line left.
 func (v *VTerm) DeleteCharacters(n int) {
+	v.MarkDirty(v.cursorY)
 	line := v.grid[v.cursorY]
 	end := v.width
 	start := v.cursorX
@@ -202,6 +261,10 @@ func (v *VTerm) InsertLines(n int) {
 	// This command is only active when the cursor is within the scrolling margins.
 	if v.cursorY < v.marginTop || v.cursorY > v.marginBottom {
 		return
+	}
+
+	for i := v.cursorY; i <= v.marginBottom; i++ {
+		v.MarkDirty(i)
 	}
 
 	// Clamp n to prevent inserting more lines than available in the region.
@@ -231,6 +294,10 @@ func (v *VTerm) DeleteLines(n int) {
 		return
 	}
 
+	for i := v.cursorY; i <= v.marginBottom; i++ {
+		v.MarkDirty(i)
+	}
+
 	// Clamp n to prevent deleting more lines than available in the region.
 	if v.cursorY+n > v.marginBottom+1 {
 		n = v.marginBottom - v.cursorY + 1
@@ -253,6 +320,9 @@ func (v *VTerm) DeleteLines(n int) {
 }
 
 func (v *VTerm) scrollUp(n int) {
+	for i := v.marginTop; i <= v.marginBottom; i++ {
+		v.MarkDirty(i)
+	}
 	for i := 0; i < n; i++ {
 		// Keep a reference to the top line of the region, which will scroll out of view.
 		scrolledLine := v.grid[v.marginTop]
@@ -274,6 +344,9 @@ func (v *VTerm) scrollUp(n int) {
 }
 
 func (v *VTerm) scrollDown(n int) {
+	for i := v.marginTop; i <= v.marginBottom; i++ {
+		v.MarkDirty(i)
+	}
 	for i := 0; i < n; i++ {
 		// To scroll down, we must copy rows backwards from the bottom of
 		// the region to avoid overwriting the source rows prematurely.
@@ -292,43 +365,44 @@ func (v *VTerm) scrollDown(n int) {
 
 // ReverseIndex handles the ESC M sequence. It moves the cursor up one line,
 // scrolling the content of the scrolling region down if the cursor is at the top margin.
+
 func (v *VTerm) ReverseIndex() {
 	if v.cursorY == v.marginTop {
-		// If at the top of the region, scroll the region down by one line.
 		v.scrollDown(1)
 	} else if v.cursorY > 0 {
-		// Otherwise, just move the cursor up.
-		v.cursorY--
+		v.updateCursor(v.cursorY-1, v.cursorX)
 	}
 }
 
-// MoveCursorUp moves the cursor n positions up.
 func (v *VTerm) MoveCursorUp(n int) {
 	v.wrapNext = false
-	v.cursorY -= n
-	if v.cursorY < v.marginTop { // Respect top margin
-		v.cursorY = v.marginTop
+	newY := v.cursorY - n
+	if newY < v.marginTop {
+		newY = v.marginTop
 	}
+	v.updateCursor(newY, v.cursorX)
 }
 
-// MoveCursorDown moves the cursor n positions down.
 func (v *VTerm) MoveCursorDown(n int) {
 	v.wrapNext = false
-	v.cursorY += n
-	if v.cursorY > v.marginBottom { // Respect bottom margin
-		v.cursorY = v.marginBottom
+	newY := v.cursorY + n
+	if newY > v.marginBottom {
+		newY = v.marginBottom
 	}
+	v.updateCursor(newY, v.cursorX)
 }
 
-// SetCursorRow moves the cursor to a specific row without changing the column.
 func (v *VTerm) SetCursorRow(row int) {
-	if row < 0 {
-		row = 0
-	}
-	if row >= v.height {
-		row = v.height - 1
-	}
-	v.cursorY = row
+	v.updateCursor(row, v.cursorX)
+}
+
+func (v *VTerm) SaveCursor() {
+	v.savedCursorX, v.savedCursorY = v.cursorX, v.cursorY
+}
+
+func (v *VTerm) RestoreCursor() {
+	v.wrapNext = false
+	v.updateCursor(v.savedCursorY, v.savedCursorX)
 }
 
 func (v *VTerm) SetAttribute(a Attribute) {
@@ -337,15 +411,9 @@ func (v *VTerm) SetAttribute(a Attribute) {
 func (v *VTerm) ClearAttribute(a Attribute) {
 	v.currentAttr &^= a
 }
-func (v *VTerm) SaveCursor() {
-	v.savedCursorX, v.savedCursorY = v.cursorX, v.cursorY
-}
-func (v *VTerm) RestoreCursor() {
-	v.wrapNext = false
-	v.cursorX, v.cursorY = v.savedCursorX, v.savedCursorY
-}
 
 func (v *VTerm) ClearScreenMode(mode int) {
+	v.MarkAllDirty()
 	switch mode {
 	case 0:
 		v.ClearToEndOfScreen()
@@ -357,6 +425,7 @@ func (v *VTerm) ClearScreenMode(mode int) {
 	}
 }
 func (v *VTerm) Reset() {
+	v.MarkAllDirty()
 	// Reset cursor position and saved state.
 	v.SetCursorPos(0, 0)
 	v.savedCursorX, v.savedCursorY = 0, 0
@@ -395,6 +464,7 @@ func (v *VTerm) ResetAttributes() {
 }
 
 func (v *VTerm) SoftReset() {
+	v.MarkAllDirty()
 	v.ResetAttributes() // Reset graphical attributes
 	v.marginTop = 0     // Reset margins
 	v.marginBottom = v.height - 1
@@ -644,6 +714,7 @@ func (v *VTerm) handleSGR(params []int) {
 }
 
 func (v *VTerm) placeChar(r rune) {
+	v.MarkDirty(v.cursorY)
 	if v.wrapNext {
 		v.cursorX = 0
 		v.LineFeed()
@@ -679,35 +750,20 @@ func (v *VTerm) placeChar(r rune) {
 		v.cursorX++
 	}
 }
+
 func (v *VTerm) SetCursorPos(row, col int) {
 	v.wrapNext = false
-	if row < 0 {
-		row = 0
-	}
-	if row >= v.height {
-		row = v.height - 1
-	}
-	if col < 0 {
-		col = 0
-	}
-	if col >= v.width {
-		col = v.width - 1
-	}
-	v.cursorY, v.cursorX = row, col
+	v.updateCursor(row, col)
 }
 
 func (v *VTerm) SetCursorColumn(col int) {
-	if col < 0 {
-		col = 0
-	}
-	if col >= v.width {
-		col = v.width - 1
-	}
-	v.cursorX = col
+	v.updateCursor(v.cursorY, col)
 }
+
 func (v *VTerm) ClearScreen() {
 	//	v.defaultFG = v.currentFG
 	//	v.defaultBG = v.currentBG
+	v.MarkAllDirty()
 	for y := 0; y < v.height; y++ {
 		for x := 0; x < v.width; x++ {
 			v.grid[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
@@ -715,6 +771,7 @@ func (v *VTerm) ClearScreen() {
 	}
 }
 func (v *VTerm) ClearLine(mode int) {
+	v.MarkDirty(v.cursorY)
 	start, end := 0, 0
 	switch mode {
 	case 0:
@@ -733,30 +790,49 @@ func (v *VTerm) LineFeed() {
 	if v.cursorY == v.marginBottom {
 		v.scrollUp(1)
 	} else if v.cursorY < v.height-1 {
-		v.cursorY++
+		v.updateCursor(v.cursorY+1, v.cursorX)
 	}
 }
 
 func (v *VTerm) CarriageReturn() {
 	v.wrapNext = false
-	v.cursorX = 0
+	v.updateCursor(v.cursorY, 0)
 }
+
 func (v *VTerm) Backspace() {
 	v.wrapNext = false
 	if v.cursorX > 0 {
-		v.cursorX--
+		v.updateCursor(v.cursorY, v.cursorX-1)
 	}
 }
+
 func (v *VTerm) Tab() {
 	v.wrapNext = false
 	for x := v.cursorX + 1; x < v.width; x++ {
 		if v.tabStops[x] {
-			v.cursorX = x
+			v.updateCursor(v.cursorY, x)
 			return
 		}
 	}
-	v.cursorX = v.width - 1
+	v.updateCursor(v.cursorY, v.width-1)
 }
+
+func (v *VTerm) MoveCursorForward(n int) {
+	newX := v.cursorX + n
+	if newX >= v.width {
+		newX = v.width - 1
+	}
+	v.updateCursor(v.cursorY, newX)
+}
+
+func (v *VTerm) MoveCursorBackward(n int) {
+	newX := v.cursorX - n
+	if newX < 0 {
+		newX = 0
+	}
+	v.updateCursor(v.cursorY, newX)
+}
+
 func (v *VTerm) ClearAllTabStops() { v.tabStops = make(map[int]bool) }
 func (v *VTerm) processPrivateCSI(command rune, params []int) {
 	if len(params) == 0 {
@@ -843,22 +919,6 @@ func (v *VTerm) ClearToBeginningOfScreen() {
 		for x := 0; x < v.width; x++ {
 			v.grid[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
 		}
-	}
-}
-
-// MoveCursorForward moves the cursor n positions to the right.
-func (v *VTerm) MoveCursorForward(n int) {
-	v.cursorX += n
-	if v.cursorX >= v.width {
-		v.cursorX = v.width - 1
-	}
-}
-
-// MoveCursorBackward moves the cursor n positions to the left.
-func (v *VTerm) MoveCursorBackward(n int) {
-	v.cursorX -= n
-	if v.cursorX < 0 {
-		v.cursorX = 0
 	}
 }
 

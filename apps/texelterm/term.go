@@ -117,26 +117,48 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 	}
 	cols := len(vtermGrid[0])
 
+	// Ensure our buffer is the correct size.
 	if len(a.buf) != rows || (rows > 0 && cap(a.buf[0]) != cols) {
 		a.buf = make([][]texel.Cell, rows)
 		for y := range a.buf {
 			a.buf[y] = make([]texel.Cell, cols)
 		}
+		a.vterm.MarkAllDirty() // New buffer requires a full render.
 	}
 
 	cursorX, cursorY := a.vterm.Cursor()
 	cursorVisible := a.vterm.CursorVisible()
+	dirtyLines, allDirty := a.vterm.GetDirtyLines()
 
-	for y := 0; y < rows; y++ {
+	// The render function for a single line.
+	renderLine := func(y int) {
 		for x := 0; x < cols; x++ {
 			parserCell := vtermGrid[y][x]
 			a.buf[y][x] = a.applyParserStyle(parserCell)
-
+			// Apply cursor style AFTER converting the cell.
 			if cursorVisible && x == cursorX && y == cursorY {
 				a.buf[y][x].Style = a.buf[y][x].Style.Reverse(true)
 			}
 		}
 	}
+
+	if allDirty {
+		// If everything is dirty, render all lines.
+		for y := 0; y < rows; y++ {
+			renderLine(y)
+		}
+	} else {
+		// Otherwise, just render the lines that have changed.
+		for y := range dirtyLines {
+			if y >= 0 && y < rows {
+				renderLine(y)
+			}
+		}
+	}
+
+	// Important: Clear the dirty state for the next frame.
+	a.vterm.ClearDirty()
+
 	return a.buf
 }
 
