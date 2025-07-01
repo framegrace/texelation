@@ -468,6 +468,7 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 			}
 			if validDir {
 				s.tree.SwapActivePane(d)
+				s.recalculateLayout()
 			}
 		}
 		s.subControlMode = 0
@@ -481,6 +482,7 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 	switch ev.Rune() {
 	case 'x':
 		s.tree.CloseActiveLeaf()
+		s.recalculateLayout()
 	case 'w':
 		s.subControlMode = 'w'
 		s.broadcastStateUpdate()
