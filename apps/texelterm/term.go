@@ -162,6 +162,7 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 	return a.buf
 }
 
+// --- MODIFIED HandleKey METHOD ---
 func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	if a.pty == nil {
 		return
@@ -172,9 +173,43 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	a.mu.Unlock()
 
 	key := ev.Key()
-	var keyBytes []byte
 
-	// Use a switch to handle special keys first.
+	// --- New Scrollback Handling Logic ---
+	if ev.Modifiers()&tcell.ModAlt != 0 {
+		handled := true
+		switch key {
+		case tcell.KeyPgUp:
+			a.mu.Lock()
+			a.vterm.Scroll(a.height) // Scroll up by one page
+			a.mu.Unlock()
+		case tcell.KeyPgDn:
+			a.mu.Lock()
+			a.vterm.Scroll(-a.height) // Scroll down by one page
+			a.mu.Unlock()
+		case tcell.KeyUp:
+			a.mu.Lock()
+			a.vterm.Scroll(1) // Scroll up by one line
+			a.mu.Unlock()
+		case tcell.KeyDown:
+			a.mu.Lock()
+			a.vterm.Scroll(-1) // Scroll down by one line
+			a.mu.Unlock()
+		default:
+			handled = false
+		}
+		if handled {
+			if a.refreshChan != nil {
+				select {
+				case a.refreshChan <- true:
+				default:
+				}
+			}
+			return
+		}
+	}
+
+	// --- Existing Key Handling Logic ---
+	var keyBytes []byte
 	switch key {
 	case tcell.KeyUp:
 		if appMode {
@@ -220,20 +255,14 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		keyBytes = []byte("\x1bOR")
 	case tcell.KeyF4:
 		keyBytes = []byte("\x1bOS")
-	// F5-F12 have more complex sequences, add as needed
-	// ...
-
 	case tcell.KeyEnter:
 		keyBytes = []byte("\r")
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		// KeyBackspace is Ctrl-H, KeyBackspace2 is the real backspace
 		keyBytes = []byte{'\b'}
 	case tcell.KeyTab:
 		keyBytes = []byte("\t")
 	case tcell.KeyEsc:
 		keyBytes = []byte("\x1b")
-
-	// If it's not a special key, it's a rune or a Ctrl-key combo
 	default:
 		keyBytes = []byte(string(ev.Rune()))
 	}

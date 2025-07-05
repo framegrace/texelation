@@ -5,450 +5,431 @@ import (
 	"log"
 )
 
-// WithPtyWriter returns an option that sets a callback for writing data back to the PTY.
+const (
+	defaultHistorySize = 2000
+)
 
-// VTerm holds the state of a virtual terminal.
 type VTerm struct {
-	width, height                     int
-	cursorX, cursorY                  int
-	savedCursorX, savedCursorY        int
-	grid                              [][]Cell
-	currentFG, currentBG              Color
-	currentAttr                       Attribute
-	tabStops                          map[int]bool
-	cursorVisible                     bool
-	wrapNext                          bool
-	autoWrapMode                      bool
-	insertMode                        bool
-	appCursorKeys                     bool
-	TitleChanged                      func(string)
-	WriteToPty                        func([]byte)
-	marginTop, marginBottom           int
-	savedGrid                         [][]Cell
-	savedWidth, savedHeight           int
-	savedMarginTop, savedMarginBottom int
-	defaultFG, defaultBG              Color
-	DefaultFgChanged                  func(Color)
-	DefaultBgChanged                  func(Color)
-	QueryDefaultFg                    func()
-	QueryDefaultBg                    func()
-	ScreenRestored                    func()
-
-	dirtyLines  map[int]bool
-	allDirty    bool
-	prevCursorY int
+	width, height                      int
+	cursorX, cursorY                   int
+	savedMainCursorX, savedMainCursorY int
+	savedAltCursorX, savedAltCursorY   int
+	historyBuffer                      [][]Cell
+	maxHistorySize                     int
+	historyHead                        int
+	historyLen                         int
+	viewOffset                         int
+	inAltScreen                        bool
+	altBuffer                          [][]Cell
+	currentFG, currentBG               Color
+	currentAttr                        Attribute
+	tabStops                           map[int]bool
+	cursorVisible                      bool
+	wrapNext                           bool
+	autoWrapMode                       bool
+	insertMode                         bool
+	appCursorKeys                      bool
+	TitleChanged                       func(string)
+	WriteToPty                         func([]byte)
+	marginTop, marginBottom            int
+	defaultFG, defaultBG               Color
+	DefaultFgChanged                   func(Color)
+	DefaultBgChanged                   func(Color)
+	QueryDefaultFg                     func()
+	QueryDefaultBg                     func()
+	ScreenRestored                     func()
+	dirtyLines                         map[int]bool
+	allDirty                           bool
+	prevCursorY                        int
 }
 
-// NewVTerm creates and initializes a new virtual terminal.
 func NewVTerm(width, height int, opts ...Option) *VTerm {
 	v := &VTerm{
-		width:         width,
-		height:        height,
-		grid:          make([][]Cell, height),
-		currentFG:     DefaultFG,
-		currentBG:     DefaultBG,
-		tabStops:      make(map[int]bool),
-		wrapNext:      false,
-		cursorVisible: true,
-		autoWrapMode:  true,
-		insertMode:    false,
-		appCursorKeys: false,
-		marginTop:     0,          // Default margin is top row
-		marginBottom:  height - 1, // Default margin is bottom row
-		defaultFG:     DefaultFG,
-		defaultBG:     DefaultBG,
-		dirtyLines:    make(map[int]bool),
-		allDirty:      true, // Initial render should be a full one.
+		width:          width,
+		height:         height,
+		maxHistorySize: defaultHistorySize,
+		historyBuffer:  make([][]Cell, defaultHistorySize),
+		viewOffset:     0,
+		currentFG:      DefaultFG,
+		currentBG:      DefaultBG,
+		tabStops:       make(map[int]bool),
+		wrapNext:       false,
+		cursorVisible:  true,
+		autoWrapMode:   true,
+		insertMode:     false,
+		appCursorKeys:  false,
+		inAltScreen:    false,
+		defaultFG:      DefaultFG,
+		defaultBG:      DefaultBG,
+		dirtyLines:     make(map[int]bool),
+		allDirty:       true,
 	}
 	for _, opt := range opts {
 		opt(v)
 	}
-	for i := range v.grid {
-		v.grid[i] = make([]Cell, width)
-	}
-	v.ClearScreen()
+	v.historyBuffer[0] = make([]Cell, 0, v.width)
+	v.historyLen = 1
 	for i := 0; i < width; i++ {
 		if i%8 == 0 {
 			v.tabStops[i] = true
 		}
 	}
+	v.ClearScreen()
 	return v
 }
 
-func WithScreenRestoredHandler(handler func()) Option {
-	return func(v *VTerm) { v.ScreenRestored = handler }
+func (v *VTerm) Grid() [][]Cell {
+	if v.inAltScreen {
+		return v.altBuffer
+	}
+	grid := make([][]Cell, v.height)
+	topHistoryLine := v.getTopHistoryLine()
+	for i := 0; i < v.height; i++ {
+		historyIdx := topHistoryLine + i
+		grid[i] = make([]Cell, v.width)
+		var logicalLine []Cell
+		if historyIdx >= 0 && historyIdx < v.historyLen {
+			logicalLine = v.getHistoryLine(historyIdx)
+		}
+		for x := 0; x < v.width; x++ {
+			if logicalLine != nil && x < len(logicalLine) {
+				grid[i][x] = logicalLine[x]
+			} else {
+				grid[i][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+			}
+		}
+	}
+	return grid
 }
 
-// Add these two new Option functions at the end of the file
-func WithQueryDefaultFgHandler(handler func()) Option {
-	return func(v *VTerm) { v.QueryDefaultFg = handler }
-}
-
-func WithQueryDefaultBgHandler(handler func()) Option {
-	return func(v *VTerm) { v.QueryDefaultBg = handler }
-}
-
-// Add these two new Option functions at the end of the file
-func WithDefaultFgChangeHandler(handler func(Color)) Option {
-	return func(v *VTerm) { v.DefaultFgChanged = handler }
-}
-
-func WithDefaultBgChangeHandler(handler func(Color)) Option {
-	return func(v *VTerm) { v.DefaultBgChanged = handler }
-}
-
-// MarkDirty flags a single line as needing a redraw.
-func (v *VTerm) MarkDirty(line int) {
-	if line >= 0 && line < v.height {
-		v.dirtyLines[line] = true
+func (v *VTerm) placeChar(r rune) {
+	if v.wrapNext {
+		v.cursorX = 0
+		v.LineFeed()
+		v.wrapNext = false
+	}
+	logicalY := v.cursorY + v.getTopHistoryLine()
+	if v.inAltScreen {
+		if v.cursorY >= 0 && v.cursorY < v.height && v.cursorX >= 0 && v.cursorX < v.width {
+			v.altBuffer[v.cursorY][v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
+			v.MarkDirty(v.cursorY)
+		}
+	} else {
+		if v.viewOffset > 0 {
+			v.viewOffset = 0
+			v.MarkAllDirty()
+			v.SetCursorPos(v.historyLen-1-v.getTopHistoryLine(), v.cursorX)
+		}
+		logicalY = v.cursorY + v.getTopHistoryLine()
+		line := v.getHistoryLine(logicalY)
+		for len(line) <= v.cursorX {
+			line = append(line, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
+		}
+		if v.insertMode {
+			line = append(line, Cell{})
+			copy(line[v.cursorX+1:], line[v.cursorX:])
+		}
+		line[v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
+		v.setHistoryLine(logicalY, line)
+		v.MarkDirty(v.cursorY)
+	}
+	if v.autoWrapMode && v.cursorX == v.width-1 {
+		v.wrapNext = true
+	} else if v.cursorX < v.width-1 {
+		v.SetCursorPos(v.cursorY, v.cursorX+1)
 	}
 }
 
-// MarkAllDirty flags the entire screen for a redraw.
-func (v *VTerm) MarkAllDirty() {
-	v.allDirty = true
-}
-
-// GetDirtyLines returns the set of dirty lines and the allDirty flag.
-func (v *VTerm) GetDirtyLines() (map[int]bool, bool) {
-	return v.dirtyLines, v.allDirty
-}
-
-// ClearDirty resets the dirty tracking state after a render.
-func (v *VTerm) ClearDirty() {
-	v.allDirty = false
-	v.dirtyLines = make(map[int]bool)
-	// Always mark the old and new cursor lines as dirty for the next frame
-	// to handle cursor movement and blinking correctly.
-	v.MarkDirty(v.prevCursorY)
-	v.MarkDirty(v.cursorY)
-}
-
-func (v *VTerm) updateCursor(y, x int) {
-	// Clamp to bounds
-	if y < 0 {
-		y = 0
-	}
-	if y >= v.height {
-		y = v.height - 1
-	}
+func (v *VTerm) SetCursorPos(y, x int) {
+	v.wrapNext = false
+	v.prevCursorY = v.cursorY
 	if x < 0 {
 		x = 0
 	}
 	if x >= v.width {
 		x = v.width - 1
 	}
-
-	// Mark old and new lines as dirty before updating position
+	v.cursorX = x
+	if y < 0 {
+		y = 0
+	}
+	if y >= v.height {
+		y = v.height - 1
+	}
+	v.cursorY = y
+	v.MarkDirty(v.prevCursorY)
 	v.MarkDirty(v.cursorY)
-	v.MarkDirty(y)
-
-	v.prevCursorY = v.cursorY
-	v.cursorY, v.cursorX = y, x
 }
 
-func (v *VTerm) Resize(width, height int) {
-	if width == v.width && height == v.height {
-		return
+func (v *VTerm) LineFeed() {
+	v.MarkDirty(v.cursorY)
+	if v.inAltScreen {
+		if v.cursorY >= v.marginBottom {
+			v.scrollRegion(1, v.marginTop, v.marginBottom, v.altBuffer)
+		} else if v.cursorY < v.height-1 {
+			v.SetCursorPos(v.cursorY+1, v.cursorX)
+		}
+	} else {
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		if logicalY+1 >= v.historyLen {
+			v.appendHistoryLine(make([]Cell, 0, v.width))
+		}
+		if v.cursorY >= v.height-1 {
+			if v.viewOffset == 0 {
+				v.MarkAllDirty()
+			}
+		} else {
+			v.SetCursorPos(v.cursorY+1, v.cursorX)
+		}
+	}
+}
+
+func (v *VTerm) scrollRegion(n int, top int, bottom int, buffer [][]Cell) {
+	if n > 0 {
+		for i := 0; i < n; i++ {
+			copy(buffer[top:bottom], buffer[top+1:bottom+1])
+			buffer[bottom] = make([]Cell, v.width)
+			for x := 0; x < v.width; x++ {
+				buffer[bottom][x] = Cell{Rune: ' '}
+			}
+		}
+	} else {
+		for i := 0; i < -n; i++ {
+			copy(buffer[top+1:bottom+1], buffer[top:bottom])
+			buffer[top] = make([]Cell, v.width)
+			for x := 0; x < v.width; x++ {
+				buffer[top][x] = Cell{Rune: ' '}
+			}
+		}
 	}
 	v.MarkAllDirty()
-
-	// --- THE DEFINITIVE FIX ---
-
-	// 1. Create a template for any new cells based on the VTerm's CURRENT style.
-	// This preserves the background color set by the application (e.g., vi's colorscheme).
-	newCellTemplate := Cell{
-		Rune: ' ',
-		FG:   v.defaultFG, // Use current foreground
-		BG:   v.defaultBG, // Use current background
-		Attr: 0,           // Use current attributes
-	}
-
-	// 2. Create the new grid.
-	newGrid := make([][]Cell, height)
-	for r := range newGrid {
-		newGrid[r] = make([]Cell, width)
-	}
-
-	// 3. Copy old content and fill new areas with our correctly-styled template.
-	rowsToCopy := min(v.height, height)
-	colsToCopy := min(v.width, width)
-
-	for r := 0; r < rowsToCopy; r++ {
-		// Copy the slice of existing columns.
-		copy(newGrid[r][:colsToCopy], v.grid[r][:colsToCopy])
-		// Fill any newly added columns on existing rows.
-		for c := v.width; c < width; c++ {
-			newGrid[r][c] = newCellTemplate
-		}
-	}
-	// Fill any newly added rows.
-	for r := v.height; r < height; r++ {
-		for c := 0; c < width; c++ {
-			newGrid[r][c] = newCellTemplate
-		}
-	}
-
-	v.grid = newGrid
-	v.width = width
-	v.height = height
-
-	// You already have this fix, which is excellent. A resize MUST reset the
-	// scrolling region to prevent visual artifacts in many applications.
-	v.marginTop = 0
-	v.marginBottom = v.height - 1
-
-	// Clamp cursor position to new bounds.
-	v.SetCursorPos(v.cursorY, v.cursorX)
 }
 
-// SetMargins defines the active scrolling region.
-func (v *VTerm) SetMargins(top, bottom int) {
-	// ANSI coordinates are 1-based.
-	if top == 0 {
-		top = 1
-	}
-	if bottom == 0 {
-		bottom = v.height
-	}
-
-	// Clamp to screen size
-	if top < 1 {
-		top = 1
-	}
-	if bottom > v.height {
-		bottom = v.height
-	}
-	if top >= bottom {
-		return
-	} // Invalid region
-
-	v.marginTop = top - 1
-	v.marginBottom = bottom - 1
-	v.SetCursorPos(0, 0) // Per spec, move cursor to home on change
-}
-func (v *VTerm) AppCursorKeys() bool {
-	return v.appCursorKeys
-}
-
-// EraseCharacters overwrites N characters from the cursor with space.
-func (v *VTerm) EraseCharacters(n int) {
-	v.MarkDirty(v.cursorY)
-	for i := 0; i < n; i++ {
-		if v.cursorX+i < v.width {
-			v.grid[v.cursorY][v.cursorX+i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-		}
-	}
-}
-
-// DeleteCharacters deletes N characters, shifting the rest of the line left.
-func (v *VTerm) DeleteCharacters(n int) {
-	v.MarkDirty(v.cursorY)
-	line := v.grid[v.cursorY]
-	end := v.width
-	start := v.cursorX
-
-	copy(line[start:], line[start+n:])
-
-	// Clear the newly empty space at the end of the line
-	for i := end - n; i < end; i++ {
-		line[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-	}
-}
-
-// InsertLines inserts n blank lines at the cursor, pushing subsequent lines down.
-func (v *VTerm) InsertLines(n int) {
-	// This command is only active when the cursor is within the scrolling margins.
-	if v.cursorY < v.marginTop || v.cursorY > v.marginBottom {
+func (v *VTerm) Scroll(delta int) {
+	if v.inAltScreen {
 		return
 	}
-
-	for i := v.cursorY; i <= v.marginBottom; i++ {
-		v.MarkDirty(i)
+	v.viewOffset -= delta
+	if v.viewOffset < 0 {
+		v.viewOffset = 0
 	}
-
-	// Clamp n to prevent inserting more lines than available in the region.
-	if v.cursorY+n > v.marginBottom+1 {
-		n = v.marginBottom - v.cursorY + 1
+	maxOffset := v.historyLen - v.height
+	if maxOffset < 0 {
+		maxOffset = 0
 	}
-
-	// Shift lines down within the scrolling region, starting from the bottom.
-	for y := v.marginBottom; y >= v.cursorY+n; y-- {
-		copy(v.grid[y], v.grid[y-n])
+	if v.viewOffset > maxOffset {
+		v.viewOffset = maxOffset
 	}
-
-	// Clear the n new lines at the cursor position.
-	for y := v.cursorY; y < v.cursorY+n && y <= v.marginBottom; y++ {
-		newLine := make([]Cell, v.width)
-		for x := range newLine {
-			newLine[x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
-		}
-		v.grid[y] = newLine
-	}
-}
-
-// DeleteLines deletes n lines at the cursor, pulling subsequent lines up.
-func (v *VTerm) DeleteLines(n int) {
-	// This command is only active when the cursor is within the scrolling margins.
-	if v.cursorY < v.marginTop || v.cursorY > v.marginBottom {
-		return
-	}
-
-	for i := v.cursorY; i <= v.marginBottom; i++ {
-		v.MarkDirty(i)
-	}
-
-	// Clamp n to prevent deleting more lines than available in the region.
-	if v.cursorY+n > v.marginBottom+1 {
-		n = v.marginBottom - v.cursorY + 1
-	}
-
-	// Shift lines up within the scrolling region, starting from the cursor.
-	for y := v.cursorY; y <= v.marginBottom-n; y++ {
-		copy(v.grid[y], v.grid[y+n])
-	}
-
-	// Clear the n new lines at the bottom of the scrolling region.
-	for y := v.marginBottom - n + 1; y <= v.marginBottom; y++ {
-		newLine := make([]Cell, v.width)
-		for x := range newLine {
-			// Use default background color for cleared lines.
-			newLine[x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
-		}
-		v.grid[y] = newLine
-	}
-}
-
-func (v *VTerm) scrollUp(n int) {
-	for i := v.marginTop; i <= v.marginBottom; i++ {
-		v.MarkDirty(i)
-	}
-	for i := 0; i < n; i++ {
-		// Keep a reference to the top line of the region, which will scroll out of view.
-		scrolledLine := v.grid[v.marginTop]
-
-		// Shift the line pointers up by one within the scrolling region.
-		// This is more efficient than copying cell data.
-		copy(v.grid[v.marginTop:v.marginBottom], v.grid[v.marginTop+1:v.marginBottom+1])
-
-		// Clear the content of the line that has now scrolled out.
-		for i := range scrolledLine {
-			// Use the default background color for the new line, not the current one,
-			// to avoid "smearing" colors during scrolling.
-			scrolledLine[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
-		}
-
-		// Place the now-cleared line at the bottom of the region.
-		v.grid[v.marginBottom] = scrolledLine
-	}
-}
-
-func (v *VTerm) scrollDown(n int) {
-	for i := v.marginTop; i <= v.marginBottom; i++ {
-		v.MarkDirty(i)
-	}
-	for i := 0; i < n; i++ {
-		// To scroll down, we must copy rows backwards from the bottom of
-		// the region to avoid overwriting the source rows prematurely.
-		for y := v.marginBottom; y > v.marginTop; y-- {
-			copy(v.grid[y], v.grid[y-1])
-		}
-
-		// Clear the new top line of the region.
-		newLine := make([]Cell, v.width)
-		for j := range newLine {
-			newLine[j] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-		}
-		v.grid[v.marginTop] = newLine
-	}
-}
-
-// ReverseIndex handles the ESC M sequence. It moves the cursor up one line,
-// scrolling the content of the scrolling region down if the cursor is at the top margin.
-
-func (v *VTerm) ReverseIndex() {
-	if v.cursorY == v.marginTop {
-		v.scrollDown(1)
-	} else if v.cursorY > 0 {
-		v.updateCursor(v.cursorY-1, v.cursorX)
-	}
-}
-
-func (v *VTerm) MoveCursorUp(n int) {
-	v.wrapNext = false
-	newY := v.cursorY - n
-	if newY < v.marginTop {
-		newY = v.marginTop
-	}
-	v.updateCursor(newY, v.cursorX)
-}
-
-func (v *VTerm) MoveCursorDown(n int) {
-	v.wrapNext = false
-	newY := v.cursorY + n
-	if newY > v.marginBottom {
-		newY = v.marginBottom
-	}
-	v.updateCursor(newY, v.cursorX)
-}
-
-func (v *VTerm) SetCursorRow(row int) {
-	v.updateCursor(row, v.cursorX)
-}
-
-func (v *VTerm) SaveCursor() {
-	v.savedCursorX, v.savedCursorY = v.cursorX, v.cursorY
-}
-
-func (v *VTerm) RestoreCursor() {
-	v.wrapNext = false
-	v.updateCursor(v.savedCursorY, v.savedCursorX)
-}
-
-func (v *VTerm) SetAttribute(a Attribute) {
-	v.currentAttr |= a
-}
-func (v *VTerm) ClearAttribute(a Attribute) {
-	v.currentAttr &^= a
-}
-
-func (v *VTerm) ClearScreenMode(mode int) {
 	v.MarkAllDirty()
-	switch mode {
-	case 0:
-		v.ClearToEndOfScreen()
-	case 1: // Erase from beginning of screen to cursor
-		v.ClearToBeginningOfScreen()
-	case 2:
-		v.ClearScreen()
+}
+
+func (v *VTerm) processPrivateCSI(command rune, params []int) {
+	if len(params) == 0 {
+		return
+	}
+	mode := params[0]
+	switch command {
+	case 'h':
+		switch mode {
+		case 1:
+			v.appCursorKeys = true
+		case 7:
+			v.autoWrapMode = true
+		case 25:
+			v.SetCursorVisible(true)
+		case 1049:
+			if v.inAltScreen {
+				return
+			}
+			v.inAltScreen = true
+			v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY+v.getTopHistoryLine()
+			v.altBuffer = make([][]Cell, v.height)
+			for i := 0; i < v.height; i++ {
+				v.altBuffer[i] = make([]Cell, v.width)
+			}
+			v.ClearScreen()
+		default:
+			log.Printf("Parser: Unhandled private CSI set mode: ?%d%c", mode, command)
+		}
+	case 'l':
+		switch mode {
+		case 1:
+			v.appCursorKeys = false
+		case 7:
+			v.autoWrapMode = false
+		case 25:
+			v.SetCursorVisible(false)
+		case 1049:
+			if !v.inAltScreen {
+				return
+			}
+			v.inAltScreen = false
+			v.altBuffer = nil
+			physicalY := v.savedMainCursorY - v.getTopHistoryLine()
+			v.SetCursorPos(physicalY, v.savedMainCursorX)
+			v.MarkAllDirty()
+		default:
+			log.Printf("Parser: Unhandled private CSI reset mode: ?%d%c", mode, command)
+		}
+	}
+}
+
+func (v *VTerm) ClearScreen() {
+	v.MarkAllDirty()
+	if v.inAltScreen {
+		for y := 0; y < v.height; y++ {
+			for x := 0; x < v.width; x++ {
+				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+			}
+		}
+		v.SetCursorPos(0, 0)
+	} else {
+		v.historyBuffer = make([][]Cell, v.maxHistorySize)
+		v.historyHead = 0
+		v.historyLen = 0
+		v.viewOffset = 0
+		v.appendHistoryLine(make([]Cell, 0, v.width))
 		v.SetCursorPos(0, 0)
 	}
 }
+
+func (v *VTerm) SaveCursor() {
+	if v.inAltScreen {
+		v.savedAltCursorX, v.savedAltCursorY = v.cursorX, v.cursorY
+	} else {
+		v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY+v.getTopHistoryLine()
+	}
+}
+
+func (v *VTerm) RestoreCursor() {
+	if v.inAltScreen {
+		v.SetCursorPos(v.savedAltCursorY, v.savedAltCursorX)
+	} else {
+		physicalY := v.savedMainCursorY - v.getTopHistoryLine()
+		v.SetCursorPos(physicalY, v.savedMainCursorX)
+	}
+}
+
+func (v *VTerm) getHistoryLine(index int) []Cell {
+	if index < 0 || index >= v.historyLen {
+		return nil
+	}
+	physicalIndex := (v.historyHead + index) % v.maxHistorySize
+	return v.historyBuffer[physicalIndex]
+}
+
+func (v *VTerm) setHistoryLine(index int, line []Cell) {
+	if index < 0 || index >= v.historyLen {
+		return
+	}
+	physicalIndex := (v.historyHead + index) % v.maxHistorySize
+	v.historyBuffer[physicalIndex] = line
+}
+
+func (v *VTerm) insertHistoryLine(index int, line []Cell) {
+	if index < 0 || index > v.historyLen {
+		return
+	}
+	if v.historyLen < v.maxHistorySize {
+		physicalInsertIndex := (v.historyHead + index) % v.maxHistorySize
+		for i := v.historyLen; i > index; i-- {
+			srcPhysical := (v.historyHead + i - 1) % v.maxHistorySize
+			dstPhysical := (v.historyHead + i) % v.maxHistorySize
+			v.historyBuffer[dstPhysical] = v.historyBuffer[srcPhysical]
+		}
+		v.historyBuffer[physicalInsertIndex] = line
+		v.historyLen++
+	} else {
+		v.setHistoryLine(index, line)
+	}
+}
+
+func (v *VTerm) deleteHistoryLine(index int) {
+	if index < 0 || index >= v.historyLen {
+		return
+	}
+	for i := index; i < v.historyLen-1; i++ {
+		srcPhysical := (v.historyHead + i + 1) % v.maxHistorySize
+		dstPhysical := (v.historyHead + i) % v.maxHistorySize
+		v.historyBuffer[dstPhysical] = v.historyBuffer[srcPhysical]
+	}
+	v.historyLen--
+}
+
+func (v *VTerm) appendHistoryLine(line []Cell) {
+	if v.historyLen < v.maxHistorySize {
+		physicalIndex := (v.historyHead + v.historyLen) % v.maxHistorySize
+		v.historyBuffer[physicalIndex] = line
+		v.historyLen++
+	} else {
+		v.historyHead = (v.historyHead + 1) % v.maxHistorySize
+		physicalIndex := (v.historyHead + v.historyLen - 1) % v.maxHistorySize
+		v.historyBuffer[physicalIndex] = line
+	}
+}
+
+func (v *VTerm) MarkDirty(line int) {
+	if line >= 0 && line < v.height {
+		v.dirtyLines[line] = true
+	}
+}
+
+func (v *VTerm) MarkAllDirty() { v.allDirty = true }
+
+func (v *VTerm) GetDirtyLines() (map[int]bool, bool) {
+	return v.dirtyLines, v.allDirty
+}
+
+func (v *VTerm) ClearDirty() {
+	v.allDirty = false
+	v.dirtyLines = make(map[int]bool)
+	v.MarkDirty(v.prevCursorY)
+	v.MarkDirty(v.cursorY)
+}
+
+func (v *VTerm) getTopHistoryLine() int {
+	if v.inAltScreen {
+		return 0
+	}
+	return v.historyLen - v.height
+}
+
+func (v *VTerm) CarriageReturn() {
+	v.wrapNext = false
+	v.SetCursorPos(v.cursorY, 0)
+}
+
+func (v *VTerm) Backspace() {
+	v.wrapNext = false
+	if v.cursorX > 0 {
+		v.SetCursorPos(v.cursorY, v.cursorX-1)
+	}
+}
+
+func (v *VTerm) Tab() {
+	v.wrapNext = false
+	for x := v.cursorX + 1; x < v.width; x++ {
+		if v.tabStops[x] {
+			v.SetCursorPos(v.cursorY, x)
+			return
+		}
+	}
+	v.SetCursorPos(v.cursorY, v.width-1)
+}
+
 func (v *VTerm) Reset() {
 	v.MarkAllDirty()
-	// Reset cursor position and saved state.
-	v.SetCursorPos(0, 0)
-	v.savedCursorX, v.savedCursorY = 0, 0
-	v.savedMarginTop, v.savedMarginBottom = 0, 0
-	v.savedGrid = nil
-
-	// Reset grid content.
+	v.savedMainCursorX, v.savedMainCursorY = 0, 0
+	v.savedAltCursorX, v.savedAltCursorY = 0, 0
 	v.ClearScreen()
-
-	// Reset graphical attributes and colors.
 	v.ResetAttributes()
-
-	// Reset margins to full screen size.
-	v.marginTop = 0
-	v.marginBottom = v.height - 1
-
-	// Reset modes to their defaults.
+	v.SetMargins(0, 0)
 	v.cursorVisible = true
 	v.wrapNext = false
 	v.autoWrapMode = true
 	v.insertMode = false
 	v.appCursorKeys = false
-	v.ClearAllTabStops()
+	v.tabStops = make(map[int]bool)
 	for i := 0; i < v.width; i++ {
 		if i%8 == 0 {
 			v.tabStops[i] = true
@@ -456,54 +437,29 @@ func (v *VTerm) Reset() {
 	}
 }
 
-// ResetAttributes now correctly only resets graphical attributes, NOT scrolling margins.
-func (v *VTerm) ResetAttributes() {
-	v.currentFG = v.defaultFG
-	v.currentBG = v.defaultBG
-	v.currentAttr = 0
+func (v *VTerm) ReverseIndex() {
+	if v.cursorY == v.marginTop {
+		v.scrollRegion(-1, v.marginTop, v.marginBottom, v.altBuffer)
+	} else {
+		v.SetCursorPos(v.cursorY-1, v.cursorX)
+	}
 }
-
-func (v *VTerm) SoftReset() {
-	v.MarkAllDirty()
-	v.ResetAttributes() // Reset graphical attributes
-	v.marginTop = 0     // Reset margins
-	v.marginBottom = v.height - 1
-	v.SetCursorVisible(true) // Cursor becomes visible
-	v.appCursorKeys = false  // Set normal cursor key mode
-	v.SaveCursor()           // Reset saved cursor position
-}
-
-func (v *VTerm) Grid() [][]Cell                { return v.grid }
-func (v *VTerm) Cursor() (int, int)            { return v.cursorX, v.cursorY }
-func (v *VTerm) CursorVisible() bool           { return v.cursorVisible }
-func (v *VTerm) SetCursorVisible(visible bool) { v.cursorVisible = visible }
 
 func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
-	if intermediate == '!' && command == 'p' {
-		v.SoftReset() // Handle DECSTR
-		return
-	}
-
 	if intermediate != 0 {
 		log.Printf("Parser: Unhandled CSI sequence with intermediate %q and final %q, params: %v", intermediate, command, params)
 		return
 	}
-
-	// Private CSI (e.g. CSI ?1049h) has its own dispatcher
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
 		}
 		return defaultVal
 	}
-
-	// This is the private parameter for sequences like `CSI ?25l`.
-	// The `private` flag is set when the parser sees a `?`
 	if param(0, -1) > 0 && (command == 'h' || command == 'l') {
 		v.processPrivateCSI(command, params)
 		return
 	}
-
 	switch command {
 	case 'A', 'B', 'C', 'D', 'G', 'H', 'f', 'd':
 		v.handleCursorMovement(command, params)
@@ -532,29 +488,12 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 		v.SaveCursor()
 	case 'u':
 		v.RestoreCursor()
-	case 'g':
-		if param(0, 0) == 3 {
-			v.ClearAllTabStops()
-		}
-	case 'c': // Send Device Attributes (DA)
-		if param(0, 0) == 0 {
-			// This is the response to vi's "Who are you?" question.
-			// We will identify as a VT102, which is a common and safe identity
-			// that signals we support basic modern features.
-			// The response sequence is ESC [ ? 6 c
-			response := "\x1b[?6c"
-			if v.WriteToPty != nil {
-				v.WriteToPty([]byte(response))
-			}
-		}
-	// --- END NE
 	default:
 		log.Printf("Parser: Unhandled CSI sequence: %q, params: %v", command, params)
 	}
 }
 
 func (v *VTerm) handleCursorMovement(command rune, params []int) {
-	v.wrapNext = false
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
@@ -562,42 +501,20 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 		return defaultVal
 	}
 	switch command {
-	case 'A': // Cursor Up
+	case 'A':
 		v.MoveCursorUp(param(0, 1))
-	case 'B': // Cursor Down
+	case 'B':
 		v.MoveCursorDown(param(0, 1))
-	case 'C': // Cursor Forward
+	case 'C':
 		v.MoveCursorForward(param(0, 1))
-	case 'D': // Cursor Backward
+	case 'D':
 		v.MoveCursorBackward(param(0, 1))
-	case 'G': // Cursor Character Absolute
-		v.SetCursorColumn(param(0, 1) - 1)
-	case 'H', 'f': // Cursor Position / Horizontal and Vertical Position
+	case 'G':
+		v.SetCursorPos(v.cursorY, param(0, 1)-1)
+	case 'H', 'f':
 		v.SetCursorPos(param(0, 1)-1, param(1, 1)-1)
-	case 'd': // Vertical Line Position Absolute (VPA)
-		v.SetCursorRow(param(0, 1) - 1)
-	}
-}
-
-func (v *VTerm) InsertCharacters(n int) {
-	line := v.grid[v.cursorY]
-	end := v.width
-	start := v.cursorX
-
-	// repeat n times
-	for rep := 0; rep < n; rep++ {
-		// shift cells one to the right
-		if start < end-1 {
-			for i := end - 2; i >= start; i-- {
-				line[i+1] = line[i]
-			}
-			// clear the newly opened slot
-			line[start] = Cell{
-				Rune: ' ',
-				FG:   v.currentFG,
-				BG:   v.currentBG,
-			}
-		}
+	case 'd':
+		v.SetCursorPos(param(0, 1)-1, v.cursorX)
 	}
 }
 
@@ -609,13 +526,13 @@ func (v *VTerm) handleErase(command rune, params []int) {
 		return defaultVal
 	}
 	switch command {
-	case 'J': // Erase in Display
+	case 'J':
 		v.ClearScreenMode(param(0, 0))
-	case 'K': // Erase in Line
+	case 'K':
 		v.ClearLine(param(0, 0))
-	case 'P': // Delete Character
+	case 'P':
 		v.DeleteCharacters(param(0, 1))
-	case 'X': // Erase Character
+	case 'X':
 		v.EraseCharacters(param(0, 1))
 	}
 }
@@ -628,34 +545,181 @@ func (v *VTerm) handleScroll(command rune, params []int) {
 		return defaultVal
 	}
 	switch command {
-	case 'S': // Scroll Up
-		v.scrollUp(param(0, 1))
-	case 'T': // Scroll Down
-		//		for i := 0; i < param(0, 1); i++ {
-		v.scrollDown(param(0, 1))
-		//		}
+	case 'S':
+		v.scrollRegion(param(0, 1), v.marginTop, v.marginBottom, v.altBuffer)
+	case 'T':
+		v.scrollRegion(-param(0, 1), v.marginTop, v.marginBottom, v.altBuffer)
 	}
 }
 
-func (v *VTerm) handleMode(command rune, params []int) {
-	param := func(i int, defaultVal int) int {
-		if i < len(params) && params[i] != 0 {
-			return params[i]
+func (v *VTerm) ClearScreenMode(mode int) {
+	v.MarkAllDirty()
+	logicalY := v.cursorY + v.getTopHistoryLine()
+	switch mode {
+	case 0:
+		v.ClearLine(0)
+		if v.inAltScreen {
+			for y := v.cursorY + 1; y < v.height; y++ {
+				for x := 0; x < v.width; x++ {
+					v.altBuffer[y][x] = Cell{Rune: ' '}
+				}
+			}
+		} else {
+			v.setHistoryLine(logicalY, v.getHistoryLine(logicalY)[:v.cursorX])
+			for i := logicalY + 1; i < v.historyLen; i++ {
+				v.setHistoryLine(i, make([]Cell, 0, v.width))
+			}
 		}
-		return defaultVal
+	case 1:
+		v.ClearLine(1)
+		if v.inAltScreen {
+			for y := 0; y < v.cursorY; y++ {
+				for x := 0; x < v.width; x++ {
+					v.altBuffer[y][x] = Cell{Rune: ' '}
+				}
+			}
+		} else {
+			for i := v.getTopHistoryLine(); i < logicalY; i++ {
+				v.setHistoryLine(i, make([]Cell, 0, v.width))
+			}
+		}
+	case 2, 3:
+		v.ClearScreen()
 	}
-	switch command {
-	case 'h': // Set Mode
-		if param(0, 0) == 4 {
-			v.insertMode = true
-		}
-	case 'l': // Reset Mode
-		if param(0, 0) == 4 {
-			v.insertMode = false
-		} else if param(0, 0) == 2 {
-			log.Println("Parser: Ignoring unlock keyboard action mode (2l)")
+}
+
+func (v *VTerm) ClearLine(mode int) {
+	v.MarkDirty(v.cursorY)
+	var line []Cell
+	if v.inAltScreen {
+		line = v.altBuffer[v.cursorY]
+	} else {
+		line = v.getHistoryLine(v.cursorY + v.getTopHistoryLine())
+	}
+	start, end := 0, v.width
+	switch mode {
+	case 0:
+		start = v.cursorX
+	case 1:
+		end = v.cursorX + 1
+	case 2:
+	}
+	for len(line) < v.width {
+		line = append(line, Cell{Rune: ' '})
+	}
+	for x := start; x < end; x++ {
+		if x < len(line) {
+			line[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
 	}
+	if !v.inAltScreen {
+		v.setHistoryLine(v.cursorY+v.getTopHistoryLine(), line)
+	}
+}
+
+func (v *VTerm) EraseCharacters(n int) {
+	v.MarkDirty(v.cursorY)
+	var line []Cell
+	if v.inAltScreen {
+		line = v.altBuffer[v.cursorY]
+	} else {
+		line = v.getHistoryLine(v.cursorY + v.getTopHistoryLine())
+	}
+	for i := 0; i < n; i++ {
+		if v.cursorX+i < len(line) {
+			line[v.cursorX+i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		}
+	}
+	if !v.inAltScreen {
+		v.setHistoryLine(v.cursorY+v.getTopHistoryLine(), line)
+	}
+}
+
+func (v *VTerm) InsertCharacters(n int) {
+	v.MarkDirty(v.cursorY)
+	var line []Cell
+	if v.inAltScreen {
+		line = v.altBuffer[v.cursorY]
+	} else {
+		line = v.getHistoryLine(v.cursorY + v.getTopHistoryLine())
+	}
+	blanks := make([]Cell, n)
+	for i := range blanks {
+		blanks[i] = Cell{Rune: ' '}
+	}
+	line = append(line[:v.cursorX], append(blanks, line[v.cursorX:]...)...)
+	if v.inAltScreen {
+		v.altBuffer[v.cursorY] = line
+	} else {
+		v.setHistoryLine(v.cursorY+v.getTopHistoryLine(), line)
+	}
+}
+
+func (v *VTerm) DeleteCharacters(n int) {
+	v.MarkDirty(v.cursorY)
+	var line []Cell
+	if v.inAltScreen {
+		line = v.altBuffer[v.cursorY]
+	} else {
+		line = v.getHistoryLine(v.cursorY + v.getTopHistoryLine())
+	}
+	if v.cursorX >= len(line) {
+		return
+	}
+	if v.cursorX+n > len(line) {
+		line = line[:v.cursorX]
+	} else {
+		line = append(line[:v.cursorX], line[v.cursorX+n:]...)
+	}
+	if v.inAltScreen {
+		v.altBuffer[v.cursorY] = line
+	} else {
+		v.setHistoryLine(v.cursorY+v.getTopHistoryLine(), line)
+	}
+}
+
+func (v *VTerm) InsertLines(n int) {
+	if v.cursorY < v.marginTop || v.cursorY > v.marginBottom {
+		return
+	}
+	if v.inAltScreen {
+		for i := 0; i < n; i++ {
+			copy(v.altBuffer[v.cursorY+1:v.marginBottom+1], v.altBuffer[v.cursorY:v.marginBottom])
+			v.altBuffer[v.cursorY] = make([]Cell, v.width)
+			for x := 0; x < v.width; x++ {
+				v.altBuffer[v.cursorY][x] = Cell{Rune: ' '}
+			}
+		}
+	} else {
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		for i := 0; i < n; i++ {
+			v.insertHistoryLine(logicalY, make([]Cell, 0, v.width))
+		}
+	}
+	v.MarkAllDirty()
+}
+
+func (v *VTerm) DeleteLines(n int) {
+	if v.cursorY < v.marginTop || v.cursorY > v.marginBottom {
+		return
+	}
+	if v.inAltScreen {
+		copy(v.altBuffer[v.cursorY:v.marginBottom], v.altBuffer[v.cursorY+n:v.marginBottom+1])
+		for y := v.marginBottom - n + 1; y <= v.marginBottom; y++ {
+			v.altBuffer[y] = make([]Cell, v.width)
+			for x := 0; x < v.width; x++ {
+				v.altBuffer[y][x] = Cell{Rune: ' '}
+			}
+		}
+	} else {
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		for i := 0; i < n; i++ {
+			if logicalY < v.historyLen {
+				v.deleteHistoryLine(logicalY)
+			}
+		}
+	}
+	v.MarkAllDirty()
 }
 
 func (v *VTerm) handleSGR(params []int) {
@@ -690,19 +754,19 @@ func (v *VTerm) handleSGR(params []int) {
 			v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 90 + 8)}
 		case p >= 100 && p <= 107:
 			v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 100 + 8)}
-		case p == 38: // Set extended foreground color
-			if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
+		case p == 38: // FG
+			if i+2 < len(params) && params[i+1] == 5 {
 				v.currentFG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
-				i += 2 // Consume the next 2 parameters
-			} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
+				i += 2
+			} else if i+4 < len(params) && params[i+1] == 2 {
 				v.currentFG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
-				i += 4 // Consume the next 4 parameters
+				i += 4
 			}
-		case p == 48: // Set extended background color
-			if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
+		case p == 48: // BG
+			if i+2 < len(params) && params[i+1] == 5 {
 				v.currentBG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
 				i += 2
-			} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
+			} else if i+4 < len(params) && params[i+1] == 2 {
 				v.currentBG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
 				i += 4
 			}
@@ -713,285 +777,62 @@ func (v *VTerm) handleSGR(params []int) {
 	}
 }
 
-func (v *VTerm) placeChar(r rune) {
-	v.MarkDirty(v.cursorY)
-	if v.wrapNext {
-		v.cursorX = 0
-		v.LineFeed()
-		v.wrapNext = false
+func (v *VTerm) SetMargins(top, bottom int) {
+	if top == 0 {
+		top = 1
 	}
-	// In insert mode, we first make space by shifting the rest of the line.
-	if v.insertMode {
-		line := v.grid[v.cursorY]
-		// This right-to-left loop correctly shifts all characters
-		// from the cursor to the end of the line one position to the right.
-		if v.cursorX < v.width-1 {
-			for i := v.width - 2; i >= v.cursorX; i-- {
-				line[i+1] = line[i]
-			}
-		}
+	if bottom == 0 || bottom > v.height {
+		bottom = v.height
 	}
-
-	// Now, ALWAYS place the character at the current cursor position (overwrite).
-	// In insert mode, we are writing into the blank space we just created.
-	if v.cursorY >= 0 && v.cursorY < v.height && v.cursorX >= 0 && v.cursorX < v.width {
-		v.grid[v.cursorY][v.cursorX] = Cell{
-			Rune: r,
-			FG:   v.currentFG,
-			BG:   v.currentBG,
-			Attr: v.currentAttr,
-		}
+	if top >= bottom {
+		v.marginTop = 0
+		v.marginBottom = v.height - 1
+		return
 	}
-
-	// Finally, handle cursor advancement and auto-wrapping.
-	if v.autoWrapMode && v.cursorX == v.width-1 {
-		v.wrapNext = true
-	} else if v.cursorX < v.width-1 {
-		v.cursorX++
-	}
-}
-
-func (v *VTerm) SetCursorPos(row, col int) {
-	v.wrapNext = false
-	v.updateCursor(row, col)
-}
-
-func (v *VTerm) SetCursorColumn(col int) {
-	v.updateCursor(v.cursorY, col)
-}
-
-func (v *VTerm) ClearScreen() {
-	//	v.defaultFG = v.currentFG
-	//	v.defaultBG = v.currentBG
-	v.MarkAllDirty()
-	for y := 0; y < v.height; y++ {
-		for x := 0; x < v.width; x++ {
-			v.grid[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
-		}
-	}
-}
-func (v *VTerm) ClearLine(mode int) {
-	v.MarkDirty(v.cursorY)
-	start, end := 0, 0
-	switch mode {
-	case 0:
-		start, end = v.cursorX, v.width-1
-	case 1:
-		start, end = 0, v.cursorX
-	case 2:
-		start, end = 0, v.width-1
-	}
-	for x := start; x <= end && x < v.width; x++ {
-		v.grid[v.cursorY][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-	}
-}
-
-func (v *VTerm) LineFeed() {
-	if v.cursorY == v.marginBottom {
-		v.scrollUp(1)
-	} else if v.cursorY < v.height-1 {
-		v.updateCursor(v.cursorY+1, v.cursorX)
-	}
-}
-
-func (v *VTerm) CarriageReturn() {
-	v.wrapNext = false
-	v.updateCursor(v.cursorY, 0)
-}
-
-func (v *VTerm) Backspace() {
-	v.wrapNext = false
-	if v.cursorX > 0 {
-		v.updateCursor(v.cursorY, v.cursorX-1)
-	}
-}
-
-func (v *VTerm) Tab() {
-	v.wrapNext = false
-	for x := v.cursorX + 1; x < v.width; x++ {
-		if v.tabStops[x] {
-			v.updateCursor(v.cursorY, x)
-			return
-		}
-	}
-	v.updateCursor(v.cursorY, v.width-1)
+	v.marginTop = top - 1
+	v.marginBottom = bottom - 1
+	v.SetCursorPos(v.marginTop, 0)
 }
 
 func (v *VTerm) MoveCursorForward(n int) {
-	newX := v.cursorX + n
-	if newX >= v.width {
-		newX = v.width - 1
-	}
-	v.updateCursor(v.cursorY, newX)
+	v.SetCursorPos(v.cursorY, v.cursorX+n)
 }
 
 func (v *VTerm) MoveCursorBackward(n int) {
-	newX := v.cursorX - n
-	if newX < 0 {
-		newX = 0
+	v.SetCursorPos(v.cursorY, v.cursorX-n)
+}
+
+func (v *VTerm) MoveCursorUp(n int) {
+	v.wrapNext = false
+	newY := v.cursorY - n
+	if newY < v.marginTop {
+		newY = v.marginTop
 	}
-	v.updateCursor(v.cursorY, newX)
+	v.SetCursorPos(newY, v.cursorX)
 }
 
-func (v *VTerm) ClearAllTabStops() { v.tabStops = make(map[int]bool) }
-func (v *VTerm) processPrivateCSI(command rune, params []int) {
-	if len(params) == 0 {
-		return
+func (v *VTerm) MoveCursorDown(n int) {
+	v.wrapNext = false
+	newY := v.cursorY + n
+	if newY > v.marginBottom {
+		newY = v.marginBottom
 	}
-	mode := params[0]
-	switch command {
-	case 'h':
-		switch mode {
-		case 1:
-			v.appCursorKeys = true
-		case 4:
-			v.insertMode = true
-		case 7:
-			v.autoWrapMode = true // DECAWM enable
-		case 12:
-			log.Println("Parser: Ignoring set blinking cursor (12h)")
-		case 25:
-			v.SetCursorVisible(true)
-		case 1049:
-			// Save the current screen state.
-			v.savedWidth = v.width
-			v.savedHeight = v.height
-			v.savedMarginTop = v.marginTop
-			v.savedMarginBottom = v.marginBottom
-			v.savedGrid = make([][]Cell, v.height)
-			for i := range v.grid {
-				v.savedGrid[i] = make([]Cell, v.width)
-				copy(v.savedGrid[i], v.grid[i])
-			}
-			v.SaveCursor()
-			// Then clear the screen for the alternate buffer.
-			v.ClearScreen()
-			v.SetCursorPos(0, 0)
-			v.marginTop = 0
-			v.marginBottom = v.height - 1
-		case 2004:
-			log.Println("Parser: Ignoring set bracketed paste mode (2004h)")
-		}
-	case 'l':
-		switch mode {
-		case 1:
-			v.appCursorKeys = false // DECCKM: Cursor Keys Normal Mode
-		case 4:
-			v.insertMode = false
-		case 7:
-			v.autoWrapMode = false // DECAWM disable
-		case 12:
-			log.Println("Parser: Ignoring reset steady cursor (12l)")
-		case 25:
-			v.SetCursorVisible(false)
-		case 1049:
-			// Restore the saved screen state.
-			if v.savedGrid != nil {
-				v.grid = v.savedGrid
-				v.width = v.savedWidth
-				v.height = v.savedHeight
-				v.marginTop = v.savedMarginTop
-				v.marginBottom = v.savedMarginBottom
-				v.savedGrid = nil
-			}
-			v.RestoreCursor()
-			if v.ScreenRestored != nil {
-				v.ScreenRestored()
-			}
-		case 2004:
-			log.Println("Parser: Ignoring reset bracketed paste mode (2004l)")
-		}
-	}
+	v.SetCursorPos(newY, v.cursorX)
 }
 
-func (v *VTerm) ClearToEndOfScreen() {
-	v.ClearLine(0) // Erase from cursor to end of the current line.
-	for y := v.cursorY + 1; y < v.height; y++ {
-		for x := 0; x < v.width; x++ {
-			v.grid[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
-		}
-	}
+func (v *VTerm) SetAttribute(a Attribute) { v.currentAttr |= a }
+
+func (v *VTerm) ClearAttribute(a Attribute) { v.currentAttr &^= a }
+
+func (v *VTerm) ResetAttributes() {
+	v.currentFG = v.defaultFG
+	v.currentBG = v.defaultBG
+	v.currentAttr = 0
 }
 
-func (v *VTerm) ClearToBeginningOfScreen() {
-	v.ClearLine(1) // Erase from beginning of the current line to the cursor.
-	for y := 0; y < v.cursorY; y++ {
-		for x := 0; x < v.width; x++ {
-			v.grid[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
-		}
-	}
-}
-
-type Option func(*VTerm)
-
-func WithTitleChangeHandler(handler func(string)) Option {
-	return func(v *VTerm) { v.TitleChanged = handler }
-}
-func (v *VTerm) SetTitle(title string) {
-	if v.TitleChanged != nil {
-		v.TitleChanged(title)
-	}
-}
-
-func WithPtyWriter(writer func([]byte)) Option {
-	return func(v *VTerm) {
-		v.WriteToPty = writer
-	}
-}
-
-// A helper function that was missing but implied by the code.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func (v *VTerm) DumpGrid(label string) {
-	log.Printf("--- GRID DUMP: %s ---", label)
-	for y := 0; y < v.height; y++ {
-		line := ""
-		for x := 0; x < v.width; x++ {
-			r := v.grid[y][x].Rune
-			if r == ' ' {
-				line += "." // Use '.' for spaces to make them visible
-			} else {
-				line += string(r)
-			}
-		}
-		log.Printf("LINE %2d: %s", y, line)
-	}
-	log.Printf("--- END DUMP ---")
-}
-
-func (v *VTerm) DumpState() {
-	log.Printf("    VTerm State: defaultBG=[%s], currentBG=[%s]", v.defaultBG, v.currentBG)
-	log.Printf("    Grid Dimensions: %d x %d", v.width, v.height)
-	for r := 0; r < v.height; r++ {
-		var line string
-		for c := 0; c < v.width; c++ {
-			cell := v.grid[r][c]
-			// To avoid spam, only log cells that don't have the expected default BG
-			if cell.BG.Mode != v.defaultBG.Mode || cell.BG.Value != v.defaultBG.Value {
-				line += fmt.Sprintf(" | C:%d BG:[%s] ", c, cell.BG)
-			}
-		}
-		if line != "" {
-			log.Printf("    Row %d:%s", r, line)
-		}
-	}
-}
-
-func (v *VTerm) DefaultBG() Color {
-	// v.mu.Lock() // Not needed if the caller holds the lock, which texelTerm.DumpState does
-	// defer v.mu.Unlock()
-	return v.defaultBG
-}
-
-func (v *VTerm) CurrentBG() Color {
-	// v.mu.Lock()
-	// defer v.mu.Unlock()
-	return v.currentBG
+func (v *VTerm) SetCursorVisible(visible bool) {
+	v.cursorVisible = visible
+	v.MarkDirty(v.cursorY)
 }
 
 func (c Color) String() string {
@@ -1007,3 +848,80 @@ func (c Color) String() string {
 	}
 	return "Invalid"
 }
+
+type Option func(*VTerm)
+
+func WithPtyWriter(writer func([]byte)) Option { return func(v *VTerm) { v.WriteToPty = writer } }
+
+func WithTitleChangeHandler(handler func(string)) Option {
+	return func(v *VTerm) { v.TitleChanged = handler }
+}
+
+func (v *VTerm) SetTitle(title string) {
+	if v.TitleChanged != nil {
+		v.TitleChanged(title)
+	}
+}
+
+func WithDefaultFgChangeHandler(handler func(Color)) Option {
+	return func(v *VTerm) { v.DefaultFgChanged = handler }
+}
+
+func WithDefaultBgChangeHandler(handler func(Color)) Option {
+	return func(v *VTerm) { v.DefaultBgChanged = handler }
+}
+
+func WithQueryDefaultFgHandler(handler func()) Option {
+	return func(v *VTerm) { v.QueryDefaultFg = handler }
+}
+
+func WithQueryDefaultBgHandler(handler func()) Option {
+	return func(v *VTerm) { v.QueryDefaultBg = handler }
+}
+
+func WithScreenRestoredHandler(handler func()) Option {
+	return func(v *VTerm) { v.ScreenRestored = handler }
+}
+
+func (v *VTerm) Resize(width, height int) {
+	if width == v.width && height == v.height {
+		return
+	}
+	v.width = width
+	v.height = height
+	if v.inAltScreen {
+		newAltBuffer := make([][]Cell, v.height)
+		for i := 0; i < v.height; i++ {
+			newAltBuffer[i] = make([]Cell, v.width)
+			oldLineLen := 0
+			if i < len(v.altBuffer) {
+				oldLineLen = len(v.altBuffer[i])
+			}
+			copy(newAltBuffer[i], v.altBuffer[i])
+			for j := oldLineLen; j < v.width; j++ {
+				newAltBuffer[i][j] = Cell{Rune: ' '}
+			}
+		}
+		v.altBuffer = newAltBuffer
+		v.MarkAllDirty()
+		return
+	}
+	v.MarkAllDirty()
+	v.SetMargins(0, 0)
+	physicalY := v.savedMainCursorY - v.getTopHistoryLine()
+	v.SetCursorPos(physicalY, v.savedMainCursorX)
+}
+
+func (v *VTerm) AppCursorKeys() bool { return v.appCursorKeys }
+
+func (v *VTerm) Cursor() (int, int) { return v.cursorX, v.cursorY }
+
+func (v *VTerm) CursorVisible() bool { return v.cursorVisible }
+
+func (v *VTerm) DefaultFG() Color { return v.defaultFG }
+
+func (v *VTerm) CurrentFG() Color { return v.currentFG }
+
+func (v *VTerm) DefaultBG() Color { return v.defaultBG }
+
+func (v *VTerm) CurrentBG() Color { return v.currentBG }

@@ -397,6 +397,7 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 		}
 
 		if ev.Modifiers()&tcell.ModShift != 0 {
+			isPaneNavKey := true
 			switch ev.Key() {
 			case tcell.KeyUp:
 				s.moveActivePane(DirUp)
@@ -406,9 +407,15 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 				s.moveActivePane(DirLeft)
 			case tcell.KeyRight:
 				s.moveActivePane(DirRight)
+			default:
+				isPaneNavKey = false
 			}
-			s.requestRefresh()
-			return
+
+			if isPaneNavKey {
+				// If we handled it as a pane navigation, refresh and we're done.
+				s.requestRefresh()
+				return
+			}
 		}
 
 		if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
