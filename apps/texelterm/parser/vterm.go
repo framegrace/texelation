@@ -174,13 +174,13 @@ func (v *VTerm) LineFeed() {
 		if logicalY+1 >= v.historyLen {
 			v.appendHistoryLine(make([]Cell, 0, v.width))
 		}
-		if v.cursorY >= v.height-1 {
-			if v.viewOffset == 0 {
-				v.MarkAllDirty()
-			}
-		} else {
+		if v.cursorY < v.height-1 {
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
 		}
+
+		// Ensure the viewport stays at the bottom when new lines are added.
+		v.viewOffset = 0
+		v.MarkAllDirty()
 	}
 }
 
@@ -242,7 +242,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 				return
 			}
 			v.inAltScreen = true
-			v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY+v.getTopHistoryLine()
+			v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY //+v.getTopHistoryLine()
 			v.altBuffer = make([][]Cell, v.height)
 			for i := 0; i < v.height; i++ {
 				v.altBuffer[i] = make([]Cell, v.width)
@@ -265,7 +265,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			}
 			v.inAltScreen = false
 			v.altBuffer = nil
-			physicalY := v.savedMainCursorY - v.getTopHistoryLine()
+			physicalY := v.savedMainCursorY //- v.getTopHistoryLine()
 			v.SetCursorPos(physicalY, v.savedMainCursorX)
 			v.MarkAllDirty()
 		default:
@@ -387,11 +387,27 @@ func (v *VTerm) ClearDirty() {
 	v.MarkDirty(v.cursorY)
 }
 
+//func (v *VTerm) getTopHistoryLine() int {
+//	if v.inAltScreen {
+//		return 0
+//	}
+//	return v.historyLen - v.height
+//}
+
 func (v *VTerm) getTopHistoryLine() int {
 	if v.inAltScreen {
-		return 0
+		return 0 // Alt screen doesn't scroll, so its top is always 0.
 	}
-	return v.historyLen - v.height
+
+	// For the normal screen, the top line is calculated from the total history length,
+	// minus the screen height, and crucially, minus the scroll offset.
+	top := v.historyLen - v.height - v.viewOffset
+
+	// The top line can't be negative.
+	if top < 0 {
+		top = 0
+	}
+	return top
 }
 
 func (v *VTerm) CarriageReturn() {
@@ -887,29 +903,49 @@ func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
 		return
 	}
+
+	// Before any dimensions change, capture the current cursor's
+	// logical line number in the history.
+	currentLogicalY := 0
+	if !v.inAltScreen {
+		currentLogicalY = v.cursorY + v.getTopHistoryLine()
+	}
+
+	// Now, update the dimensions.
+	oldHeight := v.height
 	v.width = width
 	v.height = height
+
+	// Handle alternate screen resizing separately.
 	if v.inAltScreen {
 		newAltBuffer := make([][]Cell, v.height)
 		for i := 0; i < v.height; i++ {
 			newAltBuffer[i] = make([]Cell, v.width)
-			oldLineLen := 0
-			if i < len(v.altBuffer) {
-				oldLineLen = len(v.altBuffer[i])
+			// Only try to copy from the old buffer if the line actually existed.
+			if i < oldHeight {
+				oldLine := v.altBuffer[i]
+				copy(newAltBuffer[i], oldLine)
 			}
-			copy(newAltBuffer[i], v.altBuffer[i])
-			for j := oldLineLen; j < v.width; j++ {
-				newAltBuffer[i][j] = Cell{Rune: ' '}
+			// Fill any new horizontal space with blanks.
+			for x := len(newAltBuffer[i]); x < v.width; x++ {
+				newAltBuffer[i] = append(newAltBuffer[i], Cell{Rune: ' '})
 			}
 		}
 		v.altBuffer = newAltBuffer
 		v.MarkAllDirty()
+		// Ensure the cursor is within the new bounds.
+		v.SetCursorPos(v.cursorY, v.cursorX)
 		return
 	}
+
+	// For the main buffer, mark everything as dirty for a redraw.
 	v.MarkAllDirty()
 	v.SetMargins(0, 0)
-	physicalY := v.savedMainCursorY - v.getTopHistoryLine()
-	v.SetCursorPos(physicalY, v.savedMainCursorX)
+
+	// After the resize, calculate the new physical cursor position based
+	// on the preserved logical line number and the new screen height.
+	newPhysicalY := currentLogicalY - v.getTopHistoryLine()
+	v.SetCursorPos(newPhysicalY, v.cursorX) // Use the current cursorX
 }
 
 func (v *VTerm) AppCursorKeys() bool { return v.appCursorKeys }
