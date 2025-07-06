@@ -8,13 +8,13 @@ import (
 	"os"
 	"os/exec"
 	//	"strconv"
+	"github.com/creack/pty"
+	"github.com/gdamore/tcell/v2" // Import tcell
 	"sync"
 	"syscall"
 	"texelation/apps/texelterm/parser"
 	"texelation/texel"
-
-	"github.com/creack/pty"
-	"github.com/gdamore/tcell/v2" // Import tcell
+	"time"
 )
 
 // The TexelTerm struct remains the same, but its Render method will produce tcell-compatible output.
@@ -178,19 +178,34 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	if ev.Modifiers()&tcell.ModAlt != 0 {
 		handled := true
 		switch key {
-		case tcell.KeyPgUp:
-			a.mu.Lock()
-			a.vterm.Scroll(a.height) // Scroll up by one page
-			a.mu.Unlock()
 		case tcell.KeyPgDn:
-			a.mu.Lock()
-			a.vterm.Scroll(-a.height) // Scroll down by one page
-			a.mu.Unlock()
-		case tcell.KeyUp:
+			go func() {
+				// You can adjust the sleep time to make the animation faster or slower.
+				scrollInterval := 2 * time.Millisecond
+				for i := 0; i < a.height; i++ {
+					a.mu.Lock()
+					a.vterm.Scroll(1)
+					a.mu.Unlock()
+					a.refreshChan <- true
+					time.Sleep(scrollInterval)
+				}
+			}()
+		case tcell.KeyPgUp:
+			go func() {
+				scrollInterval := 2 * time.Millisecond
+				for i := 0; i < a.height; i++ {
+					a.mu.Lock()
+					a.vterm.Scroll(-1)
+					a.mu.Unlock()
+					a.refreshChan <- true
+					time.Sleep(scrollInterval)
+				}
+			}()
+		case tcell.KeyDown:
 			a.mu.Lock()
 			a.vterm.Scroll(1) // Scroll up by one line
 			a.mu.Unlock()
-		case tcell.KeyDown:
+		case tcell.KeyUp:
 			a.mu.Lock()
 			a.vterm.Scroll(-1) // Scroll down by one line
 			a.mu.Unlock()

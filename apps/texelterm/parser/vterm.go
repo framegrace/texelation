@@ -190,7 +190,7 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int, buffer [][]Cell) {
 			copy(buffer[top:bottom], buffer[top+1:bottom+1])
 			buffer[bottom] = make([]Cell, v.width)
 			for x := 0; x < v.width; x++ {
-				buffer[bottom][x] = Cell{Rune: ' '}
+				buffer[bottom][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 			}
 		}
 	} else {
@@ -198,7 +198,8 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int, buffer [][]Cell) {
 			copy(buffer[top+1:bottom+1], buffer[top:bottom])
 			buffer[top] = make([]Cell, v.width)
 			for x := 0; x < v.width; x++ {
-				buffer[top][x] = Cell{Rune: ' '}
+				//buffer[top][x] = Cell{Rune: ' '}
+				buffer[top][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 			}
 		}
 	}
@@ -247,6 +248,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			for i := 0; i < v.height; i++ {
 				v.altBuffer[i] = make([]Cell, v.width)
 			}
+			v.ResetAttributes()
 			v.ClearScreen()
 		default:
 			log.Printf("Parser: Unhandled private CSI set mode: ?%d%c", mode, command)
