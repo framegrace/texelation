@@ -394,6 +394,7 @@ func (a *TexelTerm) Run() error {
 
 		// Create a buffered reader for robust rune-wise reading
 		reader := bufio.NewReader(ptmx)
+		wasInSync := false
 
 		for {
 			// Check for the stop signal before blocking on ReadRune
@@ -416,13 +417,21 @@ func (a *TexelTerm) Run() error {
 			if a.parser != nil {
 				a.parser.Parse(r)
 			}
+			inSync := a.vterm.InSynchronizedUpdate
 			a.mu.Unlock()
 
 			// Request a refresh after processing a rune.
-			if a.refreshChan != nil {
-				select {
-				case a.refreshChan <- true:
-				default:
+			if !inSync {
+				if wasInSync {
+					// We just finished a synchronized update, so draw the final frame.
+					a.vterm.MarkAllDirty() // Ensure a full redraw
+				}
+				// In normal operation or after a sync block, send a refresh.
+				if a.refreshChan != nil {
+					select {
+					case a.refreshChan <- true:
+					default:
+					}
 				}
 			}
 		}

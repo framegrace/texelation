@@ -25,6 +25,7 @@ type Parser struct {
 	currentParam int
 	private      bool
 	oscBuffer    []rune
+	dcsBuffer    []rune
 	intermediate rune
 }
 
@@ -34,6 +35,7 @@ func NewParser(v *VTerm) *Parser {
 		vterm:     v,
 		params:    make([]int, 0, 16),
 		oscBuffer: make([]rune, 0, 128),
+		dcsBuffer: make([]rune, 0, 128),
 	}
 }
 
@@ -58,9 +60,7 @@ func (p *Parser) Parse(r rune) {
 		case '\t':
 			p.vterm.Tab()
 		default:
-			if r < ' ' {
-				// Ignore other control characters for now
-			} else {
+			if r >= ' ' {
 				p.vterm.placeChar(r)
 			}
 		}
@@ -77,6 +77,7 @@ func (p *Parser) Parse(r rune) {
 			p.oscBuffer = p.oscBuffer[:0]
 		case 'P':
 			p.state = StateDCS
+			p.dcsBuffer = p.dcsBuffer[:0]
 		case 'c':
 			p.vterm.Reset()
 			p.state = StateGround
@@ -101,33 +102,55 @@ func (p *Parser) Parse(r rune) {
 		case r >= '<' && r <= '?':
 			p.private = true
 		case r >= ' ' && r <= '/':
+			p.intermediate = r
 		case r >= '@' && r <= '~':
 			p.params = append(p.params, p.currentParam)
 			p.vterm.ProcessCSI(r, p.params, p.intermediate)
-			//			p.vterm.DumpGrid("After CSI sequence")
 			p.state = StateGround
 		}
 	case StateOSC:
-		if r == '\x07' {
+		if r == '\x07' || r == '\x1b' { // Terminated by BEL or another ESC
 			p.handleOSC(p.oscBuffer)
 			p.state = StateGround
+			if r == '\x1b' {
+				p.Parse(r) // Re-parse the ESC
+			}
 		} else {
 			p.oscBuffer = append(p.oscBuffer, r)
 		}
 	case StateDCS:
 		if r == '\x1b' {
 			p.state = StateDCSEscape
+		} else {
+			p.dcsBuffer = append(p.dcsBuffer, r)
 		}
 	case StateDCSEscape:
 		if r == '\\' {
+			p.vterm.handleDCS(p.dcsBuffer)
 			p.state = StateGround
 		} else {
 			p.state = StateDCS
+			p.dcsBuffer = append(p.dcsBuffer, '\x1b', r)
 		}
 	case StateCharset:
 		p.state = StateGround
 	}
 }
+
+func (v *VTerm) handleDCS(payload []rune) {
+	payloadStr := string(payload)
+	log.Printf("DCS Payload: %s", payloadStr)
+
+	// A tmux payload is typically in the format "tmux;<escaped_command>"
+	// For now, we will just log it. In a full implementation, you would
+	// parse this further. For example, if you received a query, you
+	// would construct a response here and send it back via v.WriteToPty.
+	//
+	// The simple act of acknowledging these DCS sequences, even without
+	// a full response, is often enough to make applications like nvim
+	// use their more advanced rendering paths.
+}
+
 func (p *Parser) handleOSC(sequence []rune) {
 	// Use your existing helper to split the sequence at the first semicolon.
 	parts := splitRunesN(sequence, ';', 2)

@@ -36,28 +36,30 @@ type VTerm struct {
 	dirtyLines                         map[int]bool
 	allDirty                           bool
 	prevCursorY                        int
+	InSynchronizedUpdate               bool
 }
 
 func NewVTerm(width, height int, opts ...Option) *VTerm {
 	v := &VTerm{
-		width:          width,
-		height:         height,
-		maxHistorySize: defaultHistorySize,
-		historyBuffer:  make([][]Cell, defaultHistorySize),
-		viewOffset:     0,
-		currentFG:      DefaultFG,
-		currentBG:      DefaultBG,
-		tabStops:       make(map[int]bool),
-		wrapNext:       false,
-		cursorVisible:  true,
-		autoWrapMode:   true,
-		insertMode:     false,
-		appCursorKeys:  false,
-		inAltScreen:    false,
-		defaultFG:      DefaultFG,
-		defaultBG:      DefaultBG,
-		dirtyLines:     make(map[int]bool),
-		allDirty:       true,
+		width:                width,
+		height:               height,
+		maxHistorySize:       defaultHistorySize,
+		historyBuffer:        make([][]Cell, defaultHistorySize),
+		viewOffset:           0,
+		currentFG:            DefaultFG,
+		currentBG:            DefaultBG,
+		tabStops:             make(map[int]bool),
+		wrapNext:             false,
+		cursorVisible:        true,
+		autoWrapMode:         true,
+		insertMode:           false,
+		appCursorKeys:        false,
+		inAltScreen:          false,
+		InSynchronizedUpdate: false,
+		defaultFG:            DefaultFG,
+		defaultBG:            DefaultBG,
+		dirtyLines:           make(map[int]bool),
+		allDirty:             true,
 	}
 	for _, opt := range opts {
 		opt(v)
@@ -245,6 +247,9 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 				v.altBuffer[i] = make([]Cell, v.width)
 			}
 			v.ClearScreen()
+		case 2026: // <-- START Synchronized Update
+			//log.Printf("Parser: Synchronized output start: ?%d%c", mode, command)
+			v.InSynchronizedUpdate = true
 		default:
 			log.Printf("Parser: Unhandled private CSI set mode: ?%d%c", mode, command)
 		}
@@ -267,6 +272,9 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			physicalY := v.savedMainCursorY - v.getTopHistoryLine()
 			v.SetCursorPos(physicalY, v.savedMainCursorX)
 			v.MarkAllDirty()
+		case 2026: // <-- END Synchronized Update
+			//log.Printf("Parser: Synchronized output end: ?%d%c", mode, command)
+			v.InSynchronizedUpdate = false
 		default:
 			log.Printf("Parser: Unhandled private CSI reset mode: ?%d%c", mode, command)
 		}
@@ -450,16 +458,41 @@ func (v *VTerm) ReverseIndex() {
 }
 
 func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
-	if intermediate != 0 {
-		log.Printf("Parser: Unhandled CSI sequence with intermediate %q and final %q, params: %v", intermediate, command, params)
-		return
-	}
+	//	if intermediate != 0 {
+	//		log.Printf("Parser: Unhandled CSI sequence with intermediate %q and final %q, params: %v", intermediate, command, params)
+	//		return
+	//	}
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
 		}
 		return defaultVal
 	}
+
+	if intermediate == '$' && command == 'p' {
+		if len(params) > 0 {
+			mode := param(0, 0)
+			log.Printf("Parser: Handling DECRQM intermediate %d mode %d", intermediate, mode)
+			var response string
+			switch mode {
+			case 2026: // Synchronized Output
+				// Respond that we support this mode.
+				log.Printf("Parser: Enabling Synchronized output (2026) %d", mode)
+				response = "\x1b[?2026;1$y"
+			case 2027, 2031, 2048:
+				// Respond that we do not support these other modes.
+				log.Printf("Parser: Disabling the rest: %d", mode)
+				response = fmt.Sprintf("\x1b[?%d;0$y", mode)
+			default:
+				log.Printf("Parser: Unhandled DECRQM query for mode %d", mode)
+			}
+			if response != "" && v.WriteToPty != nil {
+				v.WriteToPty([]byte(response))
+			}
+		}
+		return
+	}
+
 	if param(0, -1) > 0 && (command == 'h' || command == 'l') {
 		v.processPrivateCSI(command, params)
 		return
@@ -493,7 +526,10 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 	case 'u':
 		v.RestoreCursor()
 	case 'c':
-		// Ignore device attributes requests for now
+		response := "\x1b[?6c"
+		if v.WriteToPty != nil {
+			v.WriteToPty([]byte(response))
+		}
 	case 'q':
 		// Ignore DECSCA (Select Character Protection Attribute)
 	case 't':
