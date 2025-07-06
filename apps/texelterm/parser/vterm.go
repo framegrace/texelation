@@ -194,6 +194,7 @@ func (v *VTerm) LineFeed() {
 
 // scrollRegion scrolls a portion of the alternate screen buffer up or down.
 func (v *VTerm) scrollRegion(n int, top int, bottom int) {
+	v.wrapNext = false
 	if !v.inAltScreen {
 		return
 	}
@@ -470,6 +471,7 @@ func (v *VTerm) ReverseIndex() {
 
 // ProcessCSI interprets a parsed CSI sequence and calls the appropriate handler.
 func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
+	v.wrapNext = false
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
