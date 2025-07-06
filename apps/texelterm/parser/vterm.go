@@ -672,49 +672,81 @@ func (v *VTerm) EraseCharacters(n int) {
 	}
 }
 
+// In texelterm/parser/vterm.go
 func (v *VTerm) InsertCharacters(n int) {
 	v.MarkDirty(v.cursorY)
-	var line []Cell
-	logicalY := v.cursorY + v.getTopHistoryLine()
-	if v.inAltScreen {
-		line = v.altBuffer[v.cursorY]
-	} else {
-		line = v.getHistoryLine(logicalY)
+	if v.cursorX >= v.width {
+		return
 	}
 
-	blanks := make([]Cell, n)
-	for i := range blanks {
-		blanks[i] = Cell{Rune: ' '}
-	}
-	line = append(line[:v.cursorX], append(blanks, line[v.cursorX:]...)...)
-
 	if v.inAltScreen {
-		v.altBuffer[v.cursorY] = line
+		line := v.altBuffer[v.cursorY]
+		// Create a copy of the segment that needs to be shifted
+		if v.cursorX < len(line) {
+			segment := make([]Cell, len(line[v.cursorX:]))
+			copy(segment, line[v.cursorX:])
+
+			// Insert blanks
+			for i := 0; i < n && v.cursorX+i < v.width; i++ {
+				line[v.cursorX+i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			}
+
+			// Copy the original segment back, shifted
+			if v.cursorX+n < v.width {
+				copy(line[v.cursorX+n:], segment)
+			}
+		}
 	} else {
+		// Existing logic for the history buffer (this is correct for the main screen)
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		line := v.getHistoryLine(logicalY)
+		blanks := make([]Cell, n)
+		for i := range blanks {
+			blanks[i] = Cell{Rune: ' '}
+		}
+		line = append(line[:v.cursorX], append(blanks, line[v.cursorX:]...)...)
 		v.setHistoryLine(logicalY, line)
 	}
 }
 
+// In texelterm/parser/vterm.go
 func (v *VTerm) DeleteCharacters(n int) {
 	v.MarkDirty(v.cursorY)
-	var line []Cell
-	logicalY := v.cursorY + v.getTopHistoryLine()
-	if v.inAltScreen {
-		line = v.altBuffer[v.cursorY]
-	} else {
-		line = v.getHistoryLine(logicalY)
-	}
-	if v.cursorX >= len(line) {
+	if v.cursorX >= v.width {
 		return
 	}
-	if v.cursorX+n > len(line) {
-		line = line[:v.cursorX]
-	} else {
-		line = append(line[:v.cursorX], line[v.cursorX+n:]...)
-	}
+
 	if v.inAltScreen {
-		v.altBuffer[v.cursorY] = line
+		line := v.altBuffer[v.cursorY]
+		if v.cursorX < len(line) {
+			// Determine how many characters to copy from the right
+			copySrcStart := v.cursorX + n
+			if copySrcStart < v.width {
+				// Shift characters from the right to the left
+				copy(line[v.cursorX:], line[copySrcStart:])
+			}
+
+			// Clear the now-empty cells at the end of the line
+			clearStart := v.width - n
+			if v.cursorX > clearStart {
+				clearStart = v.cursorX
+			}
+			for i := clearStart; i < v.width; i++ {
+				line[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			}
+		}
 	} else {
+		// Existing logic for the history buffer (this is correct for the main screen)
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		line := v.getHistoryLine(logicalY)
+		if v.cursorX >= len(line) {
+			return
+		}
+		if v.cursorX+n > len(line) {
+			line = line[:v.cursorX]
+		} else {
+			line = append(line[:v.cursorX], line[v.cursorX+n:]...)
+		}
 		v.setHistoryLine(logicalY, line)
 	}
 }
