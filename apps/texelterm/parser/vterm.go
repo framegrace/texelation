@@ -60,6 +60,8 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		defaultBG:            DefaultBG,
 		dirtyLines:           make(map[int]bool),
 		allDirty:             true,
+		marginTop:            0,
+		marginBottom:         height - 1,
 	}
 	for _, opt := range opts {
 		opt(v)
@@ -245,6 +247,9 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.altBuffer = make([][]Cell, v.height)
 			for i := 0; i < v.height; i++ {
 				v.altBuffer[i] = make([]Cell, v.width)
+				for x := 0; x < v.width; x++ {
+					v.altBuffer[i][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+				}
 			}
 			v.ClearScreen()
 		case 2026: // <-- START Synchronized Update
