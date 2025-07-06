@@ -16,8 +16,7 @@ type VTerm struct {
 	savedAltCursorX, savedAltCursorY   int
 	historyBuffer                      [][]Cell
 	maxHistorySize                     int
-	historyHead                        int
-	historyLen                         int
+	historyHead, historyLen            int
 	viewOffset                         int
 	inAltScreen                        bool
 	altBuffer                          [][]Cell
@@ -25,18 +24,14 @@ type VTerm struct {
 	currentAttr                        Attribute
 	tabStops                           map[int]bool
 	cursorVisible                      bool
-	wrapNext                           bool
-	autoWrapMode                       bool
-	insertMode                         bool
+	wrapNext, autoWrapMode, insertMode bool
 	appCursorKeys                      bool
 	TitleChanged                       func(string)
 	WriteToPty                         func([]byte)
 	marginTop, marginBottom            int
 	defaultFG, defaultBG               Color
-	DefaultFgChanged                   func(Color)
-	DefaultBgChanged                   func(Color)
-	QueryDefaultFg                     func()
-	QueryDefaultBg                     func()
+	DefaultFgChanged, DefaultBgChanged func(Color)
+	QueryDefaultFg, QueryDefaultBg     func()
 	ScreenRestored                     func()
 	dirtyLines                         map[int]bool
 	allDirty                           bool
@@ -67,8 +62,6 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	for _, opt := range opts {
 		opt(v)
 	}
-	v.historyBuffer[0] = make([]Cell, 0, v.width)
-	v.historyLen = 1
 	for i := 0; i < width; i++ {
 		if i%8 == 0 {
 			v.tabStops[i] = true
@@ -78,6 +71,7 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	return v
 }
 
+// --- Buffer & Grid Logic ---
 func (v *VTerm) Grid() [][]Cell {
 	if v.inAltScreen {
 		return v.altBuffer
@@ -140,6 +134,7 @@ func (v *VTerm) placeChar(r rune) {
 	}
 }
 
+// --- Cursor and Scrolling ---
 func (v *VTerm) SetCursorPos(y, x int) {
 	v.wrapNext = false
 	v.prevCursorY = v.cursorY
@@ -164,7 +159,7 @@ func (v *VTerm) SetCursorPos(y, x int) {
 func (v *VTerm) LineFeed() {
 	v.MarkDirty(v.cursorY)
 	if v.inAltScreen {
-		if v.cursorY >= v.marginBottom {
+		if v.cursorY == v.marginBottom {
 			v.scrollRegion(1, v.marginTop, v.marginBottom, v.altBuffer)
 		} else if v.cursorY < v.height-1 {
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
@@ -176,11 +171,10 @@ func (v *VTerm) LineFeed() {
 		}
 		if v.cursorY < v.height-1 {
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
+		} else {
+			v.viewOffset = 0
+			v.MarkAllDirty()
 		}
-
-		// Ensure the viewport stays at the bottom when new lines are added.
-		v.viewOffset = 0
-		v.MarkAllDirty()
 	}
 }
 
@@ -198,7 +192,6 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int, buffer [][]Cell) {
 			copy(buffer[top+1:bottom+1], buffer[top:bottom])
 			buffer[top] = make([]Cell, v.width)
 			for x := 0; x < v.width; x++ {
-				//buffer[top][x] = Cell{Rune: ' '}
 				buffer[top][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 			}
 		}
@@ -224,6 +217,7 @@ func (v *VTerm) Scroll(delta int) {
 	v.MarkAllDirty()
 }
 
+// --- CSI Handlers ---
 func (v *VTerm) processPrivateCSI(command rune, params []int) {
 	if len(params) == 0 {
 		return
@@ -238,17 +232,18 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.autoWrapMode = true
 		case 25:
 			v.SetCursorVisible(true)
+		case 1002, 1004, 1006, 2004:
+			// Ignore mouse and focus reporting for now
 		case 1049:
 			if v.inAltScreen {
 				return
 			}
 			v.inAltScreen = true
-			v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY //+v.getTopHistoryLine()
+			v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY+v.getTopHistoryLine()
 			v.altBuffer = make([][]Cell, v.height)
 			for i := 0; i < v.height; i++ {
 				v.altBuffer[i] = make([]Cell, v.width)
 			}
-			v.ResetAttributes()
 			v.ClearScreen()
 		default:
 			log.Printf("Parser: Unhandled private CSI set mode: ?%d%c", mode, command)
@@ -261,13 +256,15 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.autoWrapMode = false
 		case 25:
 			v.SetCursorVisible(false)
+		case 1002, 1004, 1006, 2004, 2031, 2048:
+			// Ignore mouse and focus reporting for now
 		case 1049:
 			if !v.inAltScreen {
 				return
 			}
 			v.inAltScreen = false
 			v.altBuffer = nil
-			physicalY := v.savedMainCursorY //- v.getTopHistoryLine()
+			physicalY := v.savedMainCursorY - v.getTopHistoryLine()
 			v.SetCursorPos(physicalY, v.savedMainCursorX)
 			v.MarkAllDirty()
 		default:
@@ -281,16 +278,16 @@ func (v *VTerm) ClearScreen() {
 	if v.inAltScreen {
 		for y := 0; y < v.height; y++ {
 			for x := 0; x < v.width; x++ {
-				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 			}
 		}
 		v.SetCursorPos(0, 0)
 	} else {
 		v.historyBuffer = make([][]Cell, v.maxHistorySize)
 		v.historyHead = 0
-		v.historyLen = 0
+		v.historyLen = 1
+		v.historyBuffer[0] = make([]Cell, 0, v.width)
 		v.viewOffset = 0
-		v.appendHistoryLine(make([]Cell, 0, v.width))
 		v.SetCursorPos(0, 0)
 	}
 }
@@ -312,6 +309,7 @@ func (v *VTerm) RestoreCursor() {
 	}
 }
 
+// --- History and Viewport Management ---
 func (v *VTerm) getHistoryLine(index int) []Cell {
 	if index < 0 || index >= v.historyLen {
 		return nil
@@ -389,23 +387,11 @@ func (v *VTerm) ClearDirty() {
 	v.MarkDirty(v.cursorY)
 }
 
-//func (v *VTerm) getTopHistoryLine() int {
-//	if v.inAltScreen {
-//		return 0
-//	}
-//	return v.historyLen - v.height
-//}
-
 func (v *VTerm) getTopHistoryLine() int {
 	if v.inAltScreen {
-		return 0 // Alt screen doesn't scroll, so its top is always 0.
+		return 0
 	}
-
-	// For the normal screen, the top line is calculated from the total history length,
-	// minus the screen height, and crucially, minus the scroll offset.
 	top := v.historyLen - v.height - v.viewOffset
-
-	// The top line can't be negative.
 	if top < 0 {
 		top = 0
 	}
@@ -506,6 +492,12 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 		v.SaveCursor()
 	case 'u':
 		v.RestoreCursor()
+	case 'c':
+		// Ignore device attributes requests for now
+	case 'q':
+		// Ignore DECSCA (Select Character Protection Attribute)
+	case 't':
+		// Ignore window manipulation commands
 	default:
 		log.Printf("Parser: Unhandled CSI sequence: %q, params: %v", command, params)
 	}
@@ -579,11 +571,14 @@ func (v *VTerm) ClearScreenMode(mode int) {
 		if v.inAltScreen {
 			for y := v.cursorY + 1; y < v.height; y++ {
 				for x := 0; x < v.width; x++ {
-					v.altBuffer[y][x] = Cell{Rune: ' '}
+					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 				}
 			}
 		} else {
-			v.setHistoryLine(logicalY, v.getHistoryLine(logicalY)[:v.cursorX])
+			line := v.getHistoryLine(logicalY)
+			if v.cursorX < len(line) {
+				v.setHistoryLine(logicalY, line[:v.cursorX])
+			}
 			for i := logicalY + 1; i < v.historyLen; i++ {
 				v.setHistoryLine(i, make([]Cell, 0, v.width))
 			}
@@ -593,7 +588,7 @@ func (v *VTerm) ClearScreenMode(mode int) {
 		if v.inAltScreen {
 			for y := 0; y < v.cursorY; y++ {
 				for x := 0; x < v.width; x++ {
-					v.altBuffer[y][x] = Cell{Rune: ' '}
+					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 				}
 			}
 		} else {
@@ -772,7 +767,7 @@ func (v *VTerm) handleSGR(params []int) {
 			v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 90 + 8)}
 		case p >= 100 && p <= 107:
 			v.currentBG = Color{Mode: ColorModeStandard, Value: uint8(p - 100 + 8)}
-		case p == 38: // FG
+		case p == 38:
 			if i+2 < len(params) && params[i+1] == 5 {
 				v.currentFG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
 				i += 2
@@ -780,7 +775,7 @@ func (v *VTerm) handleSGR(params []int) {
 				v.currentFG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
 				i += 4
 			}
-		case p == 48: // BG
+		case p == 48:
 			if i+2 < len(params) && params[i+1] == 5 {
 				v.currentBG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
 				i += 2
@@ -905,49 +900,33 @@ func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
 		return
 	}
-
-	// Before any dimensions change, capture the current cursor's
-	// logical line number in the history.
-	currentLogicalY := 0
+	savedLogicalY := v.savedMainCursorY
 	if !v.inAltScreen {
-		currentLogicalY = v.cursorY + v.getTopHistoryLine()
+		savedLogicalY = v.cursorY + v.getTopHistoryLine()
 	}
 
-	// Now, update the dimensions.
 	oldHeight := v.height
 	v.width = width
 	v.height = height
 
-	// Handle alternate screen resizing separately.
 	if v.inAltScreen {
 		newAltBuffer := make([][]Cell, v.height)
 		for i := 0; i < v.height; i++ {
 			newAltBuffer[i] = make([]Cell, v.width)
-			// Only try to copy from the old buffer if the line actually existed.
 			if i < oldHeight {
 				oldLine := v.altBuffer[i]
 				copy(newAltBuffer[i], oldLine)
 			}
-			// Fill any new horizontal space with blanks.
-			for x := len(newAltBuffer[i]); x < v.width; x++ {
-				newAltBuffer[i] = append(newAltBuffer[i], Cell{Rune: ' '})
-			}
 		}
 		v.altBuffer = newAltBuffer
 		v.MarkAllDirty()
-		// Ensure the cursor is within the new bounds.
 		v.SetCursorPos(v.cursorY, v.cursorX)
 		return
 	}
-
-	// For the main buffer, mark everything as dirty for a redraw.
 	v.MarkAllDirty()
 	v.SetMargins(0, 0)
-
-	// After the resize, calculate the new physical cursor position based
-	// on the preserved logical line number and the new screen height.
-	newPhysicalY := currentLogicalY - v.getTopHistoryLine()
-	v.SetCursorPos(newPhysicalY, v.cursorX) // Use the current cursorX
+	physicalY := savedLogicalY - v.getTopHistoryLine()
+	v.SetCursorPos(physicalY, v.savedMainCursorX)
 }
 
 func (v *VTerm) AppCursorKeys() bool { return v.appCursorKeys }
