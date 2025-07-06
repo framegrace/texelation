@@ -458,6 +458,7 @@ func (v *VTerm) Reset() {
 
 // ReverseIndex moves the cursor up one line, scrolling down if at the top margin.
 func (v *VTerm) ReverseIndex() {
+	v.wrapNext = false
 	if v.cursorY == v.marginTop {
 		v.scrollRegion(-1, v.marginTop, v.marginBottom)
 	} else if v.cursorY > 0 {
@@ -570,6 +571,7 @@ func (v *VTerm) handleErase(command rune, params []int) {
 		}
 		return defaultVal
 	}
+	v.wrapNext = false
 	switch command {
 	case 'J': // Erase in Display
 		v.ClearScreenMode(param(0, 0))
@@ -752,6 +754,7 @@ func (v *VTerm) DeleteCharacters(n int) {
 }
 
 func (v *VTerm) InsertLines(n int) {
+	v.wrapNext = false
 	if v.cursorY < v.marginTop || v.cursorY > v.marginBottom {
 		return
 	}
@@ -793,6 +796,7 @@ func (v *VTerm) insertHistoryLine(index int, line []Cell) {
 }
 
 func (v *VTerm) DeleteLines(n int) {
+	v.wrapNext = false
 	if v.cursorY < v.marginTop || v.cursorY > v.marginBottom {
 		return
 	}
