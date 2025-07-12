@@ -68,7 +68,6 @@ func (f *FadeEffect) OnEvent(event Event) {
 }
 
 func (f *FadeEffect) Apply(buffer [][]Cell, owner *pane) [][]Cell {
-	// Handle the active/inactive state change directly here.
 	if !f.isControlModeEffect {
 		if owner.IsActive {
 			f.inactivate()
@@ -88,18 +87,19 @@ func (f *FadeEffect) Apply(buffer [][]Cell, owner *pane) [][]Cell {
 		for x := range buffer[y] {
 			cell := &buffer[y][x]
 			fg, bg, attrs := cell.Style.Decompose()
+			// Access resources through the desktop now
 			if !fg.Valid() {
-				fg = f.screen.DefaultFgColor
+				fg = f.desktop.DefaultFgColor
 			}
 			if !bg.Valid() {
-				bg = f.screen.DefaultBgColor
+				bg = f.desktop.DefaultBgColor
 			}
 			blendedFg := blendColor(fg, f.FadeColor, intensity)
 			blendedBg := blendColor(bg, f.FadeColor, intensity)
 			bold := attrs&tcell.AttrBold != 0
 			underline := attrs&tcell.AttrUnderline != 0
 			reverse := attrs&tcell.AttrReverse != 0
-			cell.Style = f.screen.getStyle(blendedFg, blendedBg, bold, underline, reverse)
+			cell.Style = f.desktop.getStyle(blendedFg, blendedBg, bold, underline, reverse)
 		}
 	}
 	return buffer

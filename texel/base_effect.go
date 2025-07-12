@@ -14,6 +14,7 @@ type BaseEffect struct {
 	targetIntensity  float32
 	duration         time.Duration
 	animCancel       context.CancelFunc
+	desktop          *Desktop // Changed from screen to desktop
 	screen           *Screen
 }
 
@@ -21,6 +22,7 @@ type BaseEffect struct {
 func newBaseEffect(scr *Screen, targetIntensity float32) BaseEffect {
 	return BaseEffect{
 		screen:          scr,
+		desktop:         scr.desktop,
 		state:           StateOff,
 		targetIntensity: targetIntensity,
 		duration:        200 * time.Millisecond,

@@ -171,10 +171,10 @@ func (s *Screen) AddApp(app App) {
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.broadcastStateUpdate()
 }
-
 func (s *Screen) handleEvent(ev tcell.Event) {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
+		// Enter/Exit Control Mode
 		if ev.Key() == keyControlMode {
 			s.inControlMode = !s.inControlMode
 			s.subControlMode = 0
@@ -188,20 +188,46 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 			return
 		}
 
+		// Handle control mode commands
 		if s.inControlMode {
 			s.handleControlMode(ev)
 			return
 		}
 
+		// Handle pane navigation (This was missing)
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			isPaneNavKey := true
+			switch ev.Key() {
+			case tcell.KeyUp:
+				s.moveActivePane(DirUp)
+			case tcell.KeyDown:
+				s.moveActivePane(DirDown)
+			case tcell.KeyLeft:
+				s.moveActivePane(DirLeft)
+			case tcell.KeyRight:
+				s.moveActivePane(DirRight)
+			default:
+				isPaneNavKey = false
+			}
+			if isPaneNavKey {
+				s.Refresh()
+				return
+			}
+		}
+
+		// Pass all other keys to the active application
 		if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
 			s.tree.ActiveLeaf.Pane.app.HandleKey(ev)
 			s.Refresh()
 		}
-
-	case *tcell.EventResize:
-		s.recalculateLayout(ev.Size())
-		s.Refresh()
 	}
+}
+
+func (s *Screen) moveActivePane(d Direction) {
+	s.tree.MoveActive(d)
+	s.recalculateLayout(s.width, s.height)
+	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
+	s.broadcastStateUpdate()
 }
 
 func (s *Screen) handleControlMode(ev *tcell.EventKey) {

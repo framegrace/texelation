@@ -114,11 +114,21 @@ func (d *Desktop) handleEvent(ev tcell.Event) {
 		return
 	}
 
+	// Handle global quit command
+	if key, ok := ev.(*tcell.EventKey); ok {
+		if key.Key() == keyQuit {
+			d.Close()
+			return
+		}
+	}
+
+	// Let the active workspace handle its own events.
 	if d.activeWorkspace != nil {
 		d.activeWorkspace.handleEvent(ev)
 	}
 
-	if d.activeWorkspace.inControlMode && d.activeWorkspace.subControlMode == 0 {
+	// Intercept workspace switching keys if we're in the root control mode.
+	if d.activeWorkspace != nil && d.activeWorkspace.inControlMode && d.activeWorkspace.subControlMode == 0 {
 		if key, ok := ev.(*tcell.EventKey); ok {
 			wsID := -1
 			if key.Key() >= tcell.KeyF1 && key.Key() <= tcell.KeyF9 {
