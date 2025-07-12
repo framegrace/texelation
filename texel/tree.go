@@ -1,5 +1,7 @@
 package texel
 
+import "math"
+
 // Rect defines a rectangle using fractional coordinates (0.0 to 1.0).
 type Rect struct {
 	X, Y, W, H float64
@@ -45,8 +47,23 @@ func (t *Tree) SetRoot(p *pane) {
 	}
 }
 
+// ratiosAreEqual checks if all float values in a slice are effectively equal.
+func ratiosAreEqual(ratios []float64) bool {
+	if len(ratios) <= 1 {
+		return true
+	}
+	first := ratios[0]
+	for _, r := range ratios[1:] {
+		// Use a small epsilon for float comparison to handle potential precision issues.
+		if math.Abs(r-first) > 0.001 {
+			return false
+		}
+	}
+	return true
+}
+
 // SplitActive splits the active leaf node, attaching the provided new pane.
-// It returns the new node containing the new pane.
+// It now intelligently decides whether to add to the current group or create a new sub-group.
 func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 	if t.ActiveLeaf == nil {
 		return nil
@@ -59,11 +76,18 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 	parent := t.findParentOf(t.Root, nil, nodeToModify)
 	var newActiveNode *Node
 
-	// CASE 1: Adding another pane to an existing group.
-	if parent != nil && parent.Split == splitDir {
+	// Condition to add to the existing group:
+	// 1. The parent exists.
+	// 2. The parent's split direction matches the requested split direction.
+	// 3. The parent's children are all equally sized (i.e., not manually resized).
+	addToExistingGroup := parent != nil && parent.Split == splitDir && ratiosAreEqual(parent.SplitRatios)
+
+	if addToExistingGroup {
+		// CASE 1: Add to existing, equally-sized group.
 		newNode := &Node{Parent: parent, Pane: newPane}
 		parent.Children = append(parent.Children, newNode)
 
+		// Re-balance the ratios equally among all children.
 		numChildren := len(parent.Children)
 		equalRatio := 1.0 / float64(numChildren)
 		parent.SplitRatios = make([]float64, numChildren)
@@ -73,9 +97,11 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 		newActiveNode = newNode
 
 	} else {
-		// CASE 2: Splitting a single pane for the first time.
+		// CASE 2: Split the current pane into a new group of two.
+		// This happens when splitting for the first time, in a new direction,
+		// or when the existing group has been manually resized.
 		originalPane := nodeToModify.Pane
-		nodeToModify.Pane = nil
+		nodeToModify.Pane = nil // The leaf becomes an internal node.
 		nodeToModify.Split = splitDir
 		nodeToModify.SplitRatios = []float64{0.5, 0.5}
 
