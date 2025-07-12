@@ -251,8 +251,13 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 		switch mode {
 		case 1:
 			v.appCursorKeys = true
+		case 4: // SET Insert Mode
+			v.insertMode = true
 		case 7:
 			v.autoWrapMode = true
+		case 12: // SET Blinking Cursor
+			// We can just log this for now, as it's a visual preference.
+			log.Println("Parser: Ignoring set blinking cursor (12h)")
 		case 25:
 			v.SetCursorVisible(true)
 		case 1002, 1004, 1006, 2004:
@@ -277,8 +282,13 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 		switch mode {
 		case 1:
 			v.appCursorKeys = false
+		case 4: // RESET Insert Mode
+			v.insertMode = false
 		case 7:
 			v.autoWrapMode = false
+		case 12: // RESET Steady Cursor (Stop Blinking)
+			// We can just log this for now.
+			log.Println("Parser: Ignoring reset steady cursor (12l)")
 		case 25:
 			v.SetCursorVisible(false)
 		case 1002, 1004, 1006, 2004, 2031, 2048:
@@ -327,8 +337,9 @@ func (v *VTerm) ClearScreen() {
 func (v *VTerm) SaveCursor() {
 	if v.inAltScreen {
 		v.savedAltCursorX, v.savedAltCursorY = v.cursorX, v.cursorY
+		log.Printf("Saving cursor: %d,%d", v.savedAltCursorX, v.savedAltCursorY)
 	} else {
-		v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY+v.getTopHistoryLine()
+		v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY
 	}
 }
 
@@ -336,10 +347,10 @@ func (v *VTerm) SaveCursor() {
 func (v *VTerm) RestoreCursor() {
 	v.wrapNext = false
 	if v.inAltScreen {
+		log.Printf("Restoring cursor: %d,%d", v.savedAltCursorX, v.savedAltCursorY)
 		v.SetCursorPos(v.savedAltCursorY, v.savedAltCursorX)
 	} else {
-		physicalY := v.savedMainCursorY - v.getTopHistoryLine()
-		v.SetCursorPos(physicalY, v.savedMainCursorX)
+		v.SetCursorPos(v.savedMainCursorY, v.savedMainCursorX)
 	}
 }
 
@@ -902,7 +913,7 @@ func (v *VTerm) SetMargins(top, bottom int) {
 	v.marginTop = top - 1
 	v.marginBottom = bottom - 1
 	// Per spec, move cursor to home on change
-	v.SetCursorPos(v.marginTop, 0)
+	//v.SetCursorPos(v.marginTop, 0)
 }
 
 func (v *VTerm) MoveCursorForward(n int) {

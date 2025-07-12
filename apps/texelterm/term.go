@@ -234,6 +234,7 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 }
 
 func (a *TexelTerm) Run() error {
+
 	a.mu.Lock()
 	cols, rows := a.width, a.height
 	a.mu.Unlock()
