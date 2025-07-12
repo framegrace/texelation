@@ -1,34 +1,14 @@
 package texel
 
 import (
-	"fmt"
 	"time"
 )
 
-// --- Event System ---
-type EventType int
-
-const (
-	EventControlOn EventType = iota
-	EventControlOff
-	EventActivePaneChanged
-)
-
-type Event struct{ Type EventType }
-
-func (e Event) String() string {
-	return fmt.Sprintf("Event: %s", e.Type)
-}
-
 // --- Interfaces ---
 type Effect interface {
-	Apply(buffer [][]Cell) [][]Cell
+	Apply(buffer [][]Cell, owner *pane, isActive bool) [][]Cell
 	Clone() Effect
 	IsContinuous() bool
-}
-
-type EventListener interface {
-	OnEvent(owner *pane, event Event)
 }
 
 type EffectState int
@@ -39,8 +19,6 @@ const (
 	StateOn
 	StateFadingOut
 )
-
-// --- Generic Functional Options ---
 
 // animationConfigurer is a private interface used to make options generic.
 type animationConfigurer interface {

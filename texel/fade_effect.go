@@ -56,7 +56,7 @@ func (f *FadeEffect) IsContinuous() bool {
 	return false
 }
 
-func (f *FadeEffect) OnEvent(owner *pane, event Event) {
+func (f *FadeEffect) OnEvent(event Event) {
 	if f.isControlModeEffect {
 		switch event.Type {
 		case EventControlOn:
@@ -64,22 +64,19 @@ func (f *FadeEffect) OnEvent(owner *pane, event Event) {
 		case EventControlOff:
 			f.inactivate()
 		}
-	} else {
-		switch event.Type {
-		case EventActivePaneChanged:
-			if f.screen.tree.ActiveLeaf != nil && f.screen.tree.ActiveLeaf.Pane == owner {
-				f.inactivate()
-			} else {
-				f.activate()
-			}
-		case EventControlOn:
-			f.inactivate()
-		}
 	}
 }
 
-func (f *FadeEffect) Apply(buffer [][]Cell) [][]Cell {
-	// Now we use the methods from the embedded BaseEffect
+func (f *FadeEffect) Apply(buffer [][]Cell, owner *pane, isActive bool) [][]Cell {
+	// Handle the active/inactive state change directly here.
+	if !f.isControlModeEffect {
+		if isActive {
+			f.inactivate()
+		} else {
+			f.activate()
+		}
+	}
+
 	if f.getState() == StateOff {
 		return buffer
 	}

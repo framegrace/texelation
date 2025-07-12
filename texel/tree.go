@@ -44,7 +44,7 @@ func (t *Tree) SetRoot(p *pane) {
 
 // SplitActive splits the active leaf node, creating a new empty pane.
 // It returns the new node containing the empty pane.
-func (t *Tree) SplitActive(splitDir SplitType) *Node {
+func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 	if t.ActiveLeaf == nil {
 		return nil
 	}
@@ -53,7 +53,6 @@ func (t *Tree) SplitActive(splitDir SplitType) *Node {
 	parent := t.findParentOf(t.Root, nil, nodeToModify)
 
 	// Create a new empty pane that will be attached later.
-	newPane := newPane()
 	var newActiveNode *Node
 
 	// CASE 1: Adding another pane to an existing group.

@@ -39,6 +39,4 @@ type App interface {
 	GetTitle() string
 	HandleKey(ev *tcell.EventKey)
 	SetRefreshNotifier(refreshChan chan<- bool)
-	// HandleMessage handles a generic message from the screen.
-	HandleMessage(msg Message)
 }

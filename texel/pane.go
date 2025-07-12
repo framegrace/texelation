@@ -1,8 +1,9 @@
 package texel
 
 import (
-	"github.com/gdamore/tcell/v2"
 	"unicode/utf8"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 // Pane represents a rectangular area on the screen that hosts an App.
@@ -13,11 +14,14 @@ type pane struct {
 	prevBuf                    [][]Cell
 	name                       string
 	frozenBuffer               [][]Cell
+	screen                     *Screen
 }
 
 // newPane creates a new, empty Pane. The App is attached later.
-func newPane() *pane {
-	return &pane{}
+func newPane(s *Screen) *pane {
+	return &pane{
+		screen: s,
+	}
 }
 
 // AttachApp connects an application to the pane, gives it its initial size,
@@ -29,6 +33,9 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	p.app = app
 	p.name = app.GetTitle()
 	p.app.SetRefreshNotifier(refreshChan)
+	if listener, ok := app.(Listener); ok {
+		p.screen.Subscribe(listener)
+	}
 	// The app is resized considering the space for borders.
 	p.app.Resize(p.drawableWidth(), p.drawableHeight())
 	go p.app.Run()
@@ -102,7 +109,7 @@ func (p *pane) Render(isActive bool) [][]Cell {
 
 	// Apply visual effects to the entire pane buffer (borders included).
 	for _, effect := range p.effects {
-		buffer = effect.Apply(buffer)
+		buffer = effect.Apply(buffer, p, isActive)
 	}
 
 	return buffer
@@ -141,13 +148,21 @@ func (p *pane) getTitle() string {
 
 func (p *pane) HandleEvent(event Event) {
 	for _, effect := range p.effects {
-		if listener, ok := effect.(EventListener); ok {
-			listener.OnEvent(p, event)
+		if listener, ok := effect.(Listener); ok {
+			listener.OnEvent(event)
 		}
 	}
 }
 
 func (p *pane) Close() {
+	if listener, ok := p.app.(Listener); ok {
+		p.screen.Unsubscribe(listener)
+	}
+	for _, effect := range p.effects {
+		if listener, ok := effect.(Listener); ok {
+			p.screen.Unsubscribe(listener)
+		}
+	}
 	if p.app != nil {
 		p.app.Stop()
 	}
@@ -155,9 +170,17 @@ func (p *pane) Close() {
 
 func (p *pane) AddEffect(e Effect) {
 	p.effects = append(p.effects, e)
+	if listener, ok := e.(Listener); ok {
+		p.screen.Subscribe(listener)
+	}
 }
 
 func (p *pane) ClearEffects() {
+	for _, effect := range p.effects {
+		if listener, ok := effect.(Listener); ok {
+			p.screen.Unsubscribe(listener)
+		}
+	}
 	p.effects = make([]Effect, 0)
 }
 

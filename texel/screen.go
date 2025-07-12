@@ -85,6 +85,7 @@ type Screen struct {
 	DefaultFgColor                 tcell.Color
 	DefaultBgColor                 tcell.Color
 	ShellAppFactory                AppFactory
+	dispatcher                     *EventDispatcher
 
 	// Control Mode State
 	inControlMode   bool
@@ -119,6 +120,7 @@ func NewScreen() (*Screen, error) {
 		styleCache:      make(map[styleKey]tcell.Style),
 		DefaultFgColor:  defaultFg,
 		DefaultBgColor:  defaultBg,
+		dispatcher:      NewEventDispatcher(),
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
 		resizeSelection: nil,
 	}
@@ -145,13 +147,18 @@ func (s *Screen) RequestDraw() {
 	}
 }
 
-// broadcastEvent sends an event to all panes.
-func (s *Screen) broadcastEvent(event Event) {
-	s.tree.Traverse(func(node *Node) {
-		if node.Pane != nil {
-			node.Pane.HandleEvent(event)
-		}
-	})
+func (s *Screen) Broadcast(event Event) {
+	s.dispatcher.Broadcast(event)
+}
+
+// Subscribe registers a listener for screen-wide events.
+func (s *Screen) Subscribe(listener Listener) {
+	s.dispatcher.Subscribe(listener)
+}
+
+// Unsubscribe removes a listener.
+func (s *Screen) Unsubscribe(listener Listener) {
+	s.dispatcher.Unsubscribe(listener)
 }
 
 func (s *Screen) addStandardEffects(p *pane) {
@@ -228,23 +235,14 @@ func queryDefaultColor(code int) (tcell.Color, error) {
 func (s *Screen) broadcastStateUpdate() {
 	title := s.tree.GetActiveTitle()
 
-	msg := Message{
-		Type: MsgStateUpdate,
+	s.Broadcast(Event{
+		Type: EventStateUpdate,
 		Payload: StatePayload{
 			InControlMode: s.inControlMode,
 			SubMode:       s.subControlMode,
 			ActiveTitle:   title,
 		},
-	}
-	s.tree.Traverse(func(node *Node) {
-		if node.Pane != nil {
-			node.Pane.app.HandleMessage(msg)
-		}
 	})
-
-	for _, sp := range s.statusPanes {
-		sp.app.HandleMessage(msg)
-	}
 }
 
 // AddStatusPane adds a new status pane to the screen.
@@ -255,6 +253,11 @@ func (s *Screen) AddStatusPane(app App, side Side, size int) {
 		size: size,
 	}
 	s.statusPanes = append(s.statusPanes, sp)
+
+	// If the app is a listener, subscribe it to events.
+	if listener, ok := app.(Listener); ok {
+		s.Subscribe(listener)
+	}
 
 	app.SetRefreshNotifier(s.refreshChan)
 	go func() {
@@ -270,7 +273,7 @@ func (s *Screen) AddStatusPane(app App, side Side, size int) {
 func (s *Screen) moveActivePane(d Direction) {
 	s.tree.MoveActive(d)
 	s.recalculateLayout()
-	s.broadcastEvent(Event{Type: EventActivePaneChanged})
+	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.broadcastStateUpdate()
 }
 
@@ -299,7 +302,7 @@ func (s *Screen) Size() (int, int) {
 
 // AddPane adds a pane to the screen and starts its associated app.
 func (s *Screen) AddApp(app App) {
-	p := newPane()
+	p := newPane(s)
 	s.addStandardEffects(p)
 	s.tree.SetRoot(p)
 
@@ -307,7 +310,7 @@ func (s *Screen) AddApp(app App) {
 
 	p.AttachApp(app, s.refreshChan)
 
-	s.broadcastEvent(Event{Type: EventActivePaneChanged})
+	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.broadcastStateUpdate()
 }
 
@@ -377,9 +380,9 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 			s.inControlMode = !s.inControlMode
 			s.subControlMode = 0
 			if s.inControlMode {
-				s.broadcastEvent(Event{Type: EventControlOn})
+				s.Broadcast(Event{Type: EventControlOn})
 			} else {
-				s.broadcastEvent(Event{Type: EventControlOff})
+				s.Broadcast(Event{Type: EventControlOff})
 			}
 			s.broadcastStateUpdate()
 			s.requestRefresh()
@@ -439,8 +442,8 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 
 		s.inControlMode = false
 		s.subControlMode = 0
-		s.broadcastEvent(Event{Type: EventControlOff})
-		s.broadcastEvent(Event{Type: EventActivePaneChanged})
+		s.Broadcast(Event{Type: EventControlOff})
+		s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 		s.broadcastStateUpdate()
 		s.requestRefresh()
 		return
@@ -480,7 +483,7 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 		}
 		s.subControlMode = 0
 		s.inControlMode = false
-		s.broadcastEvent(Event{Type: EventControlOff})
+		s.Broadcast(Event{Type: EventControlOff})
 		s.broadcastStateUpdate()
 		s.requestRefresh()
 		return
@@ -488,8 +491,11 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 
 	switch ev.Rune() {
 	case 'x':
+		closedPane := s.tree.ActiveLeaf
 		s.tree.CloseActiveLeaf()
 		s.recalculateLayout()
+		s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPane})
+		s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	case 'w':
 		s.subControlMode = 'w'
 		s.broadcastStateUpdate()
@@ -502,8 +508,8 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 	}
 
 	s.inControlMode = false
-	s.broadcastEvent(Event{Type: EventControlOff})
-	s.broadcastEvent(Event{Type: EventActivePaneChanged})
+	s.Broadcast(Event{Type: EventControlOff})
+	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.broadcastStateUpdate()
 	s.requestRefresh()
 }
@@ -731,11 +737,15 @@ func (s *Screen) performSplit(splitDir SplitType) {
 		return
 	}
 
-	newNode := s.tree.SplitActive(splitDir)
+	newPane := newPane(s)
+	s.addStandardEffects(newPane)
+
+	s.tree.SplitActive(splitDir, newPane)
+
 	s.recalculateLayout()
+
 	newApp := s.ShellAppFactory()
-	s.addStandardEffects(newNode.Pane)
-	newNode.Pane.AttachApp(newApp, s.refreshChan)
+	newPane.AttachApp(newApp, s.refreshChan)
 }
 
 func (s *Screen) ForceResize() {

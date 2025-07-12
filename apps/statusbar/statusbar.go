@@ -66,9 +66,10 @@ func (a *StatusBarApp) GetTitle() string {
 
 func (a *StatusBarApp) HandleKey(ev *tcell.EventKey) {}
 
-func (a *StatusBarApp) HandleMessage(msg texel.Message) {
-	if msg.Type == texel.MsgStateUpdate {
-		if payload, ok := msg.Payload.(texel.StatePayload); ok {
+// OnEvent handles state updates from the screen's dispatcher.
+func (a *StatusBarApp) OnEvent(event texel.Event) {
+	if event.Type == texel.EventStateUpdate {
+		if payload, ok := event.Payload.(texel.StatePayload); ok {
 			a.mu.Lock()
 			a.inControlMode = payload.InControlMode
 			a.subMode = payload.SubMode
