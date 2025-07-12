@@ -52,7 +52,7 @@ func (d *PixelateEffect) OnEvent(owner *pane, event Event) {
 	}
 }
 
-func (d *PixelateEffect) Apply(buffer [][]Cell, owner *pane, isActive bool) [][]Cell {
+func (d *PixelateEffect) Apply(buffer [][]Cell, owner *pane) [][]Cell {
 	if d.getState() == StateOff {
 		return buffer
 	}

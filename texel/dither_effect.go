@@ -41,7 +41,7 @@ func (d *DitherEffect) OnEvent(owner *pane, event Event) {
 }
 
 // Apply flickers the buffer between its original state and the dither character.
-func (d *DitherEffect) Apply(buffer [][]Cell, owner *pane, isActive bool) [][]Cell {
+func (d *DitherEffect) Apply(buffer [][]Cell, owner *pane) [][]Cell {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 

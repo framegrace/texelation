@@ -15,6 +15,10 @@ type pane struct {
 	name                       string
 	frozenBuffer               [][]Cell
 	screen                     *Screen
+
+	// Public state fields
+	IsActive   bool
+	IsResizing bool
 }
 
 // newPane creates a new, empty Pane. The App is attached later.
@@ -42,7 +46,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 }
 
 // Render draws the pane's borders, title, and the hosted application's content.
-func (p *pane) Render(isActive bool) [][]Cell {
+func (p *pane) Render() [][]Cell {
 	w := p.Width()
 	h := p.Height()
 
@@ -62,8 +66,11 @@ func (p *pane) Render(isActive bool) [][]Cell {
 
 	// Determine border style based on active state.
 	borderStyle := tcell.StyleDefault.Foreground(tcell.ColorDarkSlateGray)
-	if isActive {
+	if p.IsActive {
 		borderStyle = tcell.StyleDefault.Foreground(tcell.ColorOrange)
+	}
+	if p.IsResizing {
+		borderStyle = tcell.StyleDefault.Foreground(tcell.ColorAqua)
 	}
 
 	// Draw borders
@@ -109,7 +116,7 @@ func (p *pane) Render(isActive bool) [][]Cell {
 
 	// Apply visual effects to the entire pane buffer (borders included).
 	for _, effect := range p.effects {
-		buffer = effect.Apply(buffer, p, isActive)
+		buffer = effect.Apply(buffer, p)
 	}
 
 	return buffer

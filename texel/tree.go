@@ -40,19 +40,23 @@ func (t *Tree) SetRoot(p *pane) {
 	}
 	t.Root = leaf
 	t.ActiveLeaf = leaf
+	if leaf.Pane != nil {
+		leaf.Pane.IsActive = true
+	}
 }
 
-// SplitActive splits the active leaf node, creating a new empty pane.
-// It returns the new node containing the empty pane.
+// SplitActive splits the active leaf node, attaching the provided new pane.
+// It returns the new node containing the new pane.
 func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 	if t.ActiveLeaf == nil {
 		return nil
 	}
+	if t.ActiveLeaf.Pane != nil {
+		t.ActiveLeaf.Pane.IsActive = false
+	}
 
 	nodeToModify := t.ActiveLeaf
 	parent := t.findParentOf(t.Root, nil, nodeToModify)
-
-	// Create a new empty pane that will be attached later.
 	var newActiveNode *Node
 
 	// CASE 1: Adding another pane to an existing group.
@@ -82,6 +86,9 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 	}
 
 	t.ActiveLeaf = newActiveNode
+	if t.ActiveLeaf.Pane != nil {
+		t.ActiveLeaf.Pane.IsActive = true
+	}
 	return newActiveNode
 }
 
@@ -92,6 +99,9 @@ func (t *Tree) CloseActiveLeaf() *Node {
 	if leaf == nil || leaf.Parent == nil {
 		// Don't close the root pane
 		return t.ActiveLeaf
+	}
+	if leaf.Pane != nil {
+		leaf.Pane.IsActive = false
 	}
 
 	parent := leaf.Parent
@@ -141,6 +151,9 @@ func (t *Tree) CloseActiveLeaf() *Node {
 
 	leaf.Pane.Close() // Ensure the closed app is stopped
 	t.ActiveLeaf = nextActiveNode
+	if t.ActiveLeaf.Pane != nil {
+		t.ActiveLeaf.Pane.IsActive = true
+	}
 	return t.ActiveLeaf
 }
 
@@ -152,15 +165,22 @@ func (t *Tree) SwapActivePane(d Direction) {
 	}
 	// Swap the panes within the leaves
 	t.ActiveLeaf.Pane, neighbor.Pane = neighbor.Pane, t.ActiveLeaf.Pane
-	// Set the new active pane
-	t.ActiveLeaf = neighbor
+	// The neighbor is now the active pane, but the active *leaf* is still the same.
+	// We need to move the active leaf pointer.
+	t.MoveActive(d)
 }
 
 // MoveActive moves the active pane in the given direction.
 func (t *Tree) MoveActive(d Direction) {
 	target := t.findNeighbor(d)
 	if target != nil {
+		if t.ActiveLeaf.Pane != nil {
+			t.ActiveLeaf.Pane.IsActive = false
+		}
 		t.ActiveLeaf = target
+		if t.ActiveLeaf.Pane != nil {
+			t.ActiveLeaf.Pane.IsActive = true
+		}
 	}
 }
 
@@ -277,10 +297,8 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 
 	if len(n.Children) == 0 && n.Pane != nil {
 		n.Pane.setDimensions(x, y, x+w, y+h)
+		// This is the crucial fix: invalidate the previous buffer to force a full redraw.
 		n.Pane.prevBuf = nil
-		//if n.Pane.app != nil {
-		//	n.Pane.app.Resize(w, h)
-		//	}
 		return
 	}
 

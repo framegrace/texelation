@@ -85,7 +85,7 @@ type Screen struct {
 	DefaultFgColor                 tcell.Color
 	DefaultBgColor                 tcell.Color
 	ShellAppFactory                AppFactory
-	dispatcher                     *EventDispatcher
+	dispatcher                     *EventDispatcher // New dispatcher
 
 	// Control Mode State
 	inControlMode   bool
@@ -120,7 +120,7 @@ func NewScreen() (*Screen, error) {
 		styleCache:      make(map[styleKey]tcell.Style),
 		DefaultFgColor:  defaultFg,
 		DefaultBgColor:  defaultBg,
-		dispatcher:      NewEventDispatcher(),
+		dispatcher:      NewEventDispatcher(), // Initialize dispatcher
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
 		resizeSelection: nil,
 	}
@@ -147,6 +147,7 @@ func (s *Screen) RequestDraw() {
 	}
 }
 
+// Broadcast sends an event to all registered listeners.
 func (s *Screen) Broadcast(event Event) {
 	s.dispatcher.Broadcast(event)
 }
@@ -162,6 +163,7 @@ func (s *Screen) Unsubscribe(listener Listener) {
 }
 
 func (s *Screen) addStandardEffects(p *pane) {
+	// The pane will now subscribe its own effects.
 	p.AddEffect(s.inactiveFadePrototype.Clone())
 	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
 }
@@ -302,9 +304,9 @@ func (s *Screen) Size() (int, int) {
 
 // AddPane adds a pane to the screen and starts its associated app.
 func (s *Screen) AddApp(app App) {
-	p := newPane(s)
+	p := newPane(s) // Pass screen reference to pane
 	s.addStandardEffects(p)
-	s.tree.SetRoot(p)
+	s.tree.SetRoot(p) // The tree will set the pane as active
 
 	s.recalculateLayout()
 
@@ -435,6 +437,12 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 	if ev.Key() == tcell.KeyEsc {
 		if s.resizeSelection != nil {
+			// Clear resize selection state from panes
+			for _, child := range s.resizeSelection.node.Children {
+				if child.Pane != nil {
+					child.Pane.IsResizing = false
+				}
+			}
 			s.resizeSelection = nil
 			s.requestRefresh()
 			return
@@ -491,10 +499,10 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 
 	switch ev.Rune() {
 	case 'x':
-		closedPane := s.tree.ActiveLeaf
-		s.tree.CloseActiveLeaf()
+		closedPaneNode := s.tree.ActiveLeaf
+		s.tree.CloseActiveLeaf() // Tree handles setting the next pane active
 		s.recalculateLayout()
-		s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPane})
+		s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
 		s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	case 'w':
 		s.subControlMode = 'w'
@@ -519,10 +527,8 @@ func (s *Screen) compositePanes() {
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node.Pane.app != nil {
 			p := node.Pane
-			isActive := (s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane == p)
-
 			// The pane is now responsible for rendering itself, including decorations.
-			finalBuffer := p.Render(isActive)
+			finalBuffer := p.Render()
 
 			if p.prevBuf == nil {
 				s.blit(p.absX0, p.absY0, finalBuffer)
@@ -591,7 +597,7 @@ func (s *Screen) Close() {
 
 		s.tree.Traverse(func(node *Node) {
 			if node.Pane != nil {
-				node.Pane.app.Stop()
+				node.Pane.Close()
 			}
 		})
 
@@ -673,6 +679,15 @@ func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
 			}
 			curr = parent
 		}
+		if border != nil {
+			// Set IsResizing on the two affected panes
+			if p1 := border.node.Children[border.index].Pane; p1 != nil {
+				p1.IsResizing = true
+			}
+			if p2 := border.node.Children[border.index+1].Pane; p2 != nil {
+				p2.IsResizing = true
+			}
+		}
 
 		s.resizeSelection = border
 		s.ForceResize()
@@ -737,13 +752,18 @@ func (s *Screen) performSplit(splitDir SplitType) {
 		return
 	}
 
+	// Create the new pane and add standard effects
 	newPane := newPane(s)
 	s.addStandardEffects(newPane)
 
+	// Ask the tree to perform the split. The tree will handle setting
+	// the old pane to inactive and the new one to active.
 	s.tree.SplitActive(splitDir, newPane)
 
+	// Recalculate layout to assign dimensions to the new pane
 	s.recalculateLayout()
 
+	// Create the app and attach it to the fully initialized pane
 	newApp := s.ShellAppFactory()
 	newPane.AttachApp(newApp, s.refreshChan)
 }

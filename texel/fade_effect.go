@@ -67,10 +67,10 @@ func (f *FadeEffect) OnEvent(event Event) {
 	}
 }
 
-func (f *FadeEffect) Apply(buffer [][]Cell, owner *pane, isActive bool) [][]Cell {
+func (f *FadeEffect) Apply(buffer [][]Cell, owner *pane) [][]Cell {
 	// Handle the active/inactive state change directly here.
 	if !f.isControlModeEffect {
-		if isActive {
+		if owner.IsActive {
 			f.inactivate()
 		} else {
 			f.activate()

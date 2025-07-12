@@ -6,7 +6,7 @@ import (
 
 // --- Interfaces ---
 type Effect interface {
-	Apply(buffer [][]Cell, owner *pane, isActive bool) [][]Cell
+	Apply(buffer [][]Cell, owner *pane) [][]Cell
 	Clone() Effect
 	IsContinuous() bool
 }
