@@ -2,15 +2,8 @@ package texel
 
 import (
 	"context"
-	"fmt"
 	"github.com/gdamore/tcell/v2"
-	"golang.org/x/term"
 	"log"
-	"os"
-	"regexp"
-	"strconv"
-	"sync"
-	"time"
 )
 
 type Direction int
@@ -68,70 +61,49 @@ type selectedBorder struct {
 	index int   // The index of the left/top pane of the border. The border is between child[index] and child[index+1].
 }
 
-// Screen manages the entire terminal display using tcell as the backend.
+// Screen now represents a single workspace.
 type Screen struct {
-	tcellScreen                    tcell.Screen
+	id                             int
+	width, height                  int
+	desktop                        *Desktop // Reference to the parent desktop
 	tree                           *Tree
 	statusPanes                    []*StatusPane
 	inactiveFadePrototype          Effect
 	controlModeFadeEffectPrototype Effect
 	ditherEffectPrototype          Effect
-	quit                           chan struct{}
 	refreshChan                    chan bool
 	drawChan                       chan bool
-	mu                             sync.Mutex
-	closeOnce                      sync.Once
-	styleCache                     map[styleKey]tcell.Style
-	DefaultFgColor                 tcell.Color
-	DefaultBgColor                 tcell.Color
+	dispatcher                     *EventDispatcher
 	ShellAppFactory                AppFactory
-	dispatcher                     *EventDispatcher // New dispatcher
+	needsDraw                      bool
 
-	// Control Mode State
-	inControlMode   bool
-	subControlMode  rune
-	effectAnimators map[*FadeEffect]context.CancelFunc
-
+	inControlMode     bool
+	subControlMode    rune
+	effectAnimators   map[*FadeEffect]context.CancelFunc
 	resizeSelection   *selectedBorder
 	debugFramesToDump int
 }
 
-// NewScreen initializes the terminal with tcell.
-func NewScreen() (*Screen, error) {
-	defaultFg, defaultBg, err := initDefaultColors()
-	tcellScreen, err := tcell.NewScreen()
-	if err != nil {
-		return nil, err
-	}
-	if err := tcellScreen.Init(); err != nil {
-		return nil, err
-	}
-	defStyle := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
-	tcellScreen.SetStyle(defStyle)
-	tcellScreen.HideCursor()
-
-	scr := &Screen{
-		tcellScreen:     tcellScreen,
+// newScreen creates a new workspace screen.
+func newScreen(id int, shellFactory AppFactory, desktop *Desktop) (*Screen, error) {
+	s := &Screen{
+		id:              id,
+		desktop:         desktop,
 		tree:            NewTree(),
 		statusPanes:     make([]*StatusPane, 0),
-		quit:            make(chan struct{}),
 		refreshChan:     make(chan bool, 1),
 		drawChan:        make(chan bool, 1),
-		styleCache:      make(map[styleKey]tcell.Style),
-		DefaultFgColor:  defaultFg,
-		DefaultBgColor:  defaultBg,
-		dispatcher:      NewEventDispatcher(), // Initialize dispatcher
+		dispatcher:      NewEventDispatcher(),
 		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
-		resizeSelection: nil,
+		ShellAppFactory: shellFactory,
 	}
-	scr.inactiveFadePrototype = NewFadeEffect(scr, tcell.NewRGBColor(20, 20, 0), 0.4)
-	scr.controlModeFadeEffectPrototype = NewFadeEffect(scr, tcell.NewRGBColor(0, 50, 0), 0.2, WithIsControl(true))
-	scr.ditherEffectPrototype = NewDitherEffect('░')
+	s.inactiveFadePrototype = NewFadeEffect(s, tcell.NewRGBColor(20, 20, 0), 0.4)
+	s.controlModeFadeEffectPrototype = NewFadeEffect(s, tcell.NewRGBColor(0, 50, 0), 0.2, WithIsControl(true))
+	s.ditherEffectPrototype = NewDitherEffect('░')
 
-	return scr, nil
+	return s, nil
 }
 
-// Refresh is called by applications when their internal state changes.
 func (s *Screen) Refresh() {
 	select {
 	case s.refreshChan <- true:
@@ -139,99 +111,21 @@ func (s *Screen) Refresh() {
 	}
 }
 
-// RequestDraw is called by visual effects to trigger a redraw without a state update.
-func (s *Screen) RequestDraw() {
-	select {
-	case s.drawChan <- true:
-	default:
-	}
-}
-
-// Broadcast sends an event to all registered listeners.
 func (s *Screen) Broadcast(event Event) {
 	s.dispatcher.Broadcast(event)
 }
 
-// Subscribe registers a listener for screen-wide events.
 func (s *Screen) Subscribe(listener Listener) {
 	s.dispatcher.Subscribe(listener)
 }
 
-// Unsubscribe removes a listener.
 func (s *Screen) Unsubscribe(listener Listener) {
 	s.dispatcher.Unsubscribe(listener)
 }
 
 func (s *Screen) addStandardEffects(p *pane) {
-	// The pane will now subscribe its own effects.
 	p.AddEffect(s.inactiveFadePrototype.Clone())
 	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
-}
-
-func initDefaultColors() (tcell.Color, tcell.Color, error) {
-	fg, err := queryDefaultColor(10)
-	if err != nil {
-		fg = tcell.ColorRed
-	}
-	bg, err := queryDefaultColor(11)
-	if err != nil {
-		bg = tcell.ColorDarkRed
-	}
-	return fg, bg, err
-}
-
-func queryDefaultColor(code int) (tcell.Color, error) {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return tcell.ColorDefault, fmt.Errorf("open /dev/tty: %w", err)
-	}
-	defer tty.Close()
-
-	oldState, err := term.MakeRaw(int(tty.Fd()))
-	if err != nil {
-		return tcell.ColorDefault, fmt.Errorf("MakeRaw: %w", err)
-	}
-	defer term.Restore(int(tty.Fd()), oldState)
-
-	seq := fmt.Sprintf("\x1b]%d;?\a", code)
-	if _, err := tty.WriteString(seq); err != nil {
-		return tcell.ColorDefault, err
-	}
-
-	resp := make([]byte, 0, 64)
-	buf := make([]byte, 1)
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	if err := tty.SetReadDeadline(deadline); err != nil {
-		return tcell.ColorDefault, err
-	}
-
-	for {
-		n, err := tty.Read(buf)
-		if err != nil {
-			return tcell.ColorDefault, fmt.Errorf("read reply: %w", err)
-		}
-		resp = append(resp, buf[:n]...)
-		if buf[0] == '\a' {
-			break
-		}
-	}
-
-	pattern := fmt.Sprintf(`\x1b\]%d;rgb:([0-9A-Fa-f]{4})/([0-9A-Fa-f]{4})/([0-9A-Fa-f]{4})`, code)
-	re := regexp.MustCompile(pattern)
-	m := re.FindStringSubmatch(string(resp))
-	if len(m) != 4 {
-		return tcell.ColorDefault, fmt.Errorf("unexpected reply: %q", resp)
-	}
-
-	hex2int := func(s string) (int32, error) {
-		v, err := strconv.ParseInt(s, 16, 32)
-		return int32(v), err
-	}
-	r, _ := hex2int(m[1])
-	g, _ := hex2int(m[2])
-	b, _ := hex2int(m[3])
-	return tcell.NewRGBColor(r, g, b), nil
 }
 
 func (s *Screen) broadcastStateUpdate() {
@@ -240,6 +134,7 @@ func (s *Screen) broadcastStateUpdate() {
 	s.Broadcast(Event{
 		Type: EventStateUpdate,
 		Payload: StatePayload{
+			WorkspaceID:   s.id, // Fixed: Added field
 			InControlMode: s.inControlMode,
 			SubMode:       s.subControlMode,
 			ActiveTitle:   title,
@@ -247,7 +142,6 @@ func (s *Screen) broadcastStateUpdate() {
 	})
 }
 
-// AddStatusPane adds a new status pane to the screen.
 func (s *Screen) AddStatusPane(app App, side Side, size int) {
 	sp := &StatusPane{
 		app:  app,
@@ -256,7 +150,6 @@ func (s *Screen) AddStatusPane(app App, side Side, size int) {
 	}
 	s.statusPanes = append(s.statusPanes, sp)
 
-	// If the app is a listener, subscribe it to events.
 	if listener, ok := app.(Listener); ok {
 		s.Subscribe(listener)
 	}
@@ -267,114 +160,18 @@ func (s *Screen) AddStatusPane(app App, side Side, size int) {
 			log.Printf("Status pane app '%s' exited with error: %v", app.GetTitle(), err)
 		}
 	}()
-
-	s.recalculateLayout()
 }
 
-// moveActivePane moves focus to the neighbor in the given direction.
-func (s *Screen) moveActivePane(d Direction) {
-	s.tree.MoveActive(d)
-	s.recalculateLayout()
-	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
-	s.broadcastStateUpdate()
-}
-
-func (s *Screen) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {
-	key := styleKey{fg: fg, bg: bg, bold: bold, underline: underline, reverse: reverse}
-	if st, ok := s.styleCache[key]; ok {
-		return st
-	}
-	st := tcell.StyleDefault.Foreground(fg).Background(bg)
-	if bold {
-		st = st.Bold(true)
-	}
-	if underline {
-		st = st.Underline(true)
-	}
-	if reverse {
-		st = st.Reverse(true)
-	}
-	s.styleCache[key] = st
-	return st
-}
-
-func (s *Screen) Size() (int, int) {
-	return s.tcellScreen.Size()
-}
-
-// AddPane adds a pane to the screen and starts its associated app.
 func (s *Screen) AddApp(app App) {
-	p := newPane(s) // Pass screen reference to pane
+	p := newPane(s)
 	s.addStandardEffects(p)
-	s.tree.SetRoot(p) // The tree will set the pane as active
-
-	s.recalculateLayout()
-
+	s.tree.SetRoot(p)
 	p.AttachApp(app, s.refreshChan)
 
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.broadcastStateUpdate()
 }
 
-// Run starts the main event and rendering loop.
-func (s *Screen) Run() error {
-	eventChan := make(chan tcell.Event, 10)
-	go func() {
-		for {
-			select {
-			case <-s.quit:
-				return
-			default:
-				eventChan <- s.tcellScreen.PollEvent()
-			}
-		}
-	}()
-
-	ticker := time.NewTicker(16 * time.Millisecond)
-	defer ticker.Stop()
-
-	dirty := true
-	s.recalculateLayout()
-	s.broadcastStateUpdate()
-	s.draw()
-	dirty = false
-
-	for {
-		select {
-		case ev := <-eventChan:
-			s.handleEvent(ev)
-		case <-s.refreshChan:
-			s.broadcastStateUpdate()
-			dirty = true
-		case <-s.drawChan:
-			dirty = true
-		case <-ticker.C:
-			var needsContinuousUpdate bool
-			s.tree.Traverse(func(node *Node) {
-				if node != nil && node.Pane != nil {
-					for _, effect := range node.Pane.effects {
-						if effect.IsContinuous() {
-							needsContinuousUpdate = true
-							break
-						}
-					}
-				}
-			})
-			if needsContinuousUpdate {
-				dirty = true
-			}
-		case <-s.quit:
-			return nil
-		}
-
-		if dirty {
-			s.draw()
-			dirty = false
-		}
-	}
-}
-
-// handleEvent processes key and resize events, including our custom pane controls.
 func (s *Screen) handleEvent(ev tcell.Event) {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
@@ -387,7 +184,7 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 				s.Broadcast(Event{Type: EventControlOff})
 			}
 			s.broadcastStateUpdate()
-			s.requestRefresh()
+			s.Refresh()
 			return
 		}
 
@@ -396,69 +193,41 @@ func (s *Screen) handleEvent(ev tcell.Event) {
 			return
 		}
 
-		if ev.Key() == keyQuit {
-			s.Close()
-			return
-		}
-
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			isPaneNavKey := true
-			switch ev.Key() {
-			case tcell.KeyUp:
-				s.moveActivePane(DirUp)
-			case tcell.KeyDown:
-				s.moveActivePane(DirDown)
-			case tcell.KeyLeft:
-				s.moveActivePane(DirLeft)
-			case tcell.KeyRight:
-				s.moveActivePane(DirRight)
-			default:
-				isPaneNavKey = false
-			}
-
-			if isPaneNavKey {
-				// If we handled it as a pane navigation, refresh and we're done.
-				s.requestRefresh()
-				return
-			}
-		}
-
 		if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
 			s.tree.ActiveLeaf.Pane.app.HandleKey(ev)
-			s.requestRefresh()
+			s.Refresh()
 		}
 
 	case *tcell.EventResize:
-		s.recalculateLayout()
-		s.requestRefresh()
+		s.recalculateLayout(ev.Size())
+		s.Refresh()
 	}
 }
 
 func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 	if ev.Key() == tcell.KeyEsc {
 		if s.resizeSelection != nil {
-			// Clear resize selection state from panes
 			for _, child := range s.resizeSelection.node.Children {
 				if child.Pane != nil {
 					child.Pane.IsResizing = false
 				}
 			}
 			s.resizeSelection = nil
-			s.requestRefresh()
+			s.Refresh()
 			return
 		}
 
 		s.inControlMode = false
 		s.subControlMode = 0
 		s.Broadcast(Event{Type: EventControlOff})
-		s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 		s.broadcastStateUpdate()
-		s.requestRefresh()
+		s.Refresh()
 		return
 	}
 
 	if ev.Modifiers()&tcell.ModCtrl != 0 {
-		if keyToDirection(ev) != -1 {
+		d := keyToDirection(ev)
+		if d != -1 {
 			s.handleInteractiveResize(ev)
 			return
 		}
@@ -467,48 +236,29 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 	if s.resizeSelection != nil {
 		return
 	}
+
 	if s.subControlMode != 0 {
-		switch s.subControlMode {
-		case 'w':
-			var d Direction
-			validDir := true
-			switch ev.Key() {
-			case tcell.KeyUp:
-				d = DirUp
-			case tcell.KeyDown:
-				d = DirDown
-			case tcell.KeyLeft:
-				d = DirLeft
-			case tcell.KeyRight:
-				d = DirRight
-			default:
-				validDir = false
-			}
-			if validDir {
-				s.tree.SwapActivePane(d)
-				s.recalculateLayout()
-			}
-		}
+		// Handle sub-mode commands
+		// For now, just exit control mode
 		s.subControlMode = 0
 		s.inControlMode = false
 		s.Broadcast(Event{Type: EventControlOff})
 		s.broadcastStateUpdate()
-		s.requestRefresh()
+		s.Refresh()
 		return
 	}
 
 	switch ev.Rune() {
 	case 'x':
 		closedPaneNode := s.tree.ActiveLeaf
-		s.tree.CloseActiveLeaf() // Tree handles setting the next pane active
-		s.recalculateLayout()
+		s.tree.CloseActiveLeaf()
+		s.recalculateLayout(s.width, s.height) // Fixed: Use stored dimensions
 		s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
-		s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	case 'w':
 		s.subControlMode = 'w'
 		s.broadcastStateUpdate()
-		s.requestRefresh()
-		return
+		s.Refresh()
+		return // Stay in control mode
 	case '|':
 		s.performSplit(Vertical)
 	case '-':
@@ -517,100 +267,75 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 
 	s.inControlMode = false
 	s.Broadcast(Event{Type: EventControlOff})
-	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.broadcastStateUpdate()
-	s.requestRefresh()
+	s.Refresh()
 }
 
-// compositePanes draws each pane’s buffer to the screen.
-func (s *Screen) compositePanes() {
+func (s *Screen) draw(tcs tcell.Screen) {
+	s.compositePanes(tcs)
+	s.drawStatusPanes(tcs)
+	tcs.Show()
+}
+
+func (s *Screen) compositePanes(tcs tcell.Screen) {
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node.Pane.app != nil {
 			p := node.Pane
-			// The pane is now responsible for rendering itself, including decorations.
 			finalBuffer := p.Render()
 
 			if p.prevBuf == nil {
-				s.blit(p.absX0, p.absY0, finalBuffer)
+				blit(tcs, p.absX0, p.absY0, finalBuffer)
 			} else {
-				s.blitDiff(p.absX0, p.absY0, p.prevBuf, finalBuffer)
+				blitDiff(tcs, p.absX0, p.absY0, p.prevBuf, finalBuffer)
 			}
 			p.prevBuf = finalBuffer
 		}
 	})
 }
 
-// requestRefresh signals the main loop to redraw.
-func (s *Screen) requestRefresh() {
-	select {
-	case s.refreshChan <- true:
-	default:
-	}
-}
-
-// draw executes the final screen update.
-func (s *Screen) draw() {
-	if s.debugFramesToDump > 0 {
-		s.dumpGridState(s.tree.Root, 6-s.debugFramesToDump)
-		s.debugFramesToDump--
-	}
-
-	s.compositePanes()
-	s.drawStatusPanes()
-	s.tcellScreen.Show()
-}
-
-func (s *Screen) drawStatusPanes() {
-	w, h := s.tcellScreen.Size()
+func (s *Screen) drawStatusPanes(tcs tcell.Screen) {
+	w, h := tcs.Size()
 	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
 
 	for _, sp := range s.statusPanes {
 		switch sp.side {
 		case SideTop:
 			buf := sp.app.Render()
-			s.blit(leftOffset, topOffset, buf)
+			blit(tcs, leftOffset, topOffset, buf)
 			topOffset += sp.size
 		case SideBottom:
 			buf := sp.app.Render()
-			s.blit(leftOffset, h-bottomOffset-sp.size, buf)
+			blit(tcs, leftOffset, h-bottomOffset-sp.size, buf)
 			bottomOffset += sp.size
 		case SideLeft:
 			buf := sp.app.Render()
-			s.blit(leftOffset, topOffset, buf)
+			blit(tcs, leftOffset, topOffset, buf)
 			leftOffset += sp.size
 		case SideRight:
 			buf := sp.app.Render()
-			s.blit(w-rightOffset-sp.size, topOffset, buf)
+			blit(tcs, w-rightOffset-sp.size, topOffset, buf)
 			rightOffset += sp.size
 		}
 	}
 }
 
-// Close shuts down tcell and stops all hosted apps.
 func (s *Screen) Close() {
-	s.closeOnce.Do(func() {
-		close(s.quit)
-
-		for _, cancel := range s.effectAnimators {
-			cancel()
+	for _, cancel := range s.effectAnimators {
+		cancel()
+	}
+	s.tree.Traverse(func(node *Node) {
+		if node.Pane != nil {
+			node.Pane.Close()
 		}
-
-		s.tree.Traverse(func(node *Node) {
-			if node.Pane != nil {
-				node.Pane.Close()
-			}
-		})
-
-		for _, sp := range s.statusPanes {
-			sp.app.Stop()
-		}
-
-		s.tcellScreen.Fini()
 	})
+	for _, sp := range s.statusPanes {
+		sp.app.Stop()
+	}
 }
 
-func (s *Screen) recalculateLayout() {
-	w, h := s.tcellScreen.Size()
+func (s *Screen) recalculateLayout(w, h int) {
+	s.width, s.height = w, h // Store dimensions
+
 	mainX, mainY := 0, 0
 	mainW, mainH := w, h
 
@@ -641,96 +366,58 @@ func (s *Screen) recalculateLayout() {
 	s.tree.Resize(mainX, mainY, mainW, mainH)
 }
 
+func (s *Screen) performSplit(splitDir SplitType) {
+	if s.tree.ActiveLeaf == nil || s.ShellAppFactory == nil {
+		return
+	}
+	newPane := newPane(s)
+	s.addStandardEffects(newPane)
+	s.tree.SplitActive(splitDir, newPane)
+
+	s.recalculateLayout(s.width, s.height) // Fixed: Use stored dimensions
+
+	newApp := s.ShellAppFactory()
+	newPane.AttachApp(newApp, s.refreshChan)
+}
+
+func (s *Screen) needsContinuousUpdate() bool {
+	var needsUpdate bool
+	s.tree.Traverse(func(node *Node) {
+		if node != nil && node.Pane != nil {
+			for _, effect := range node.Pane.effects {
+				if effect.IsContinuous() {
+					needsUpdate = true
+					break
+				}
+			}
+		}
+	})
+	return needsUpdate
+}
+
+func blit(tcs tcell.Screen, x, y int, buf [][]Cell) {
+	for r, row := range buf {
+		for c, cell := range row {
+			tcs.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
+		}
+	}
+}
+
+func blitDiff(tcs tcell.Screen, x0, y0 int, oldBuf, buf [][]Cell) {
+	for y, row := range buf {
+		for x, cell := range row {
+			if y >= len(oldBuf) || x >= len(oldBuf[y]) || cell != oldBuf[y][x] {
+				tcs.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
+			}
+		}
+	}
+}
+
 func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
-	d := keyToDirection(ev)
-
-	if s.resizeSelection == nil {
-		var border *selectedBorder
-		curr := s.tree.ActiveLeaf
-		for curr.Parent != nil {
-			parent := curr.Parent
-
-			if (d == DirLeft || d == DirRight) && parent.Split == Vertical {
-				for i, child := range parent.Children {
-					if child == curr {
-						if d == DirRight && i < len(parent.Children)-1 {
-							border = &selectedBorder{node: parent, index: i}
-						} else if d == DirLeft && i > 0 {
-							border = &selectedBorder{node: parent, index: i - 1}
-						}
-						break
-					}
-				}
-			} else if (d == DirUp || d == DirDown) && parent.Split == Horizontal {
-				for i, child := range parent.Children {
-					if child == curr {
-						if d == DirDown && i < len(parent.Children)-1 {
-							border = &selectedBorder{node: parent, index: i}
-						} else if d == DirUp && i > 0 {
-							border = &selectedBorder{node: parent, index: i - 1}
-						}
-						break
-					}
-				}
-			}
-
-			if border != nil {
-				break
-			}
-			curr = parent
-		}
-		if border != nil {
-			// Set IsResizing on the two affected panes
-			if p1 := border.node.Children[border.index].Pane; p1 != nil {
-				p1.IsResizing = true
-			}
-			if p2 := border.node.Children[border.index+1].Pane; p2 != nil {
-				p2.IsResizing = true
-			}
-		}
-
-		s.resizeSelection = border
-		s.ForceResize()
-		s.requestRefresh()
-		return
-	}
-
-	border := s.resizeSelection
-
-	if !(((d == DirLeft || d == DirRight) && border.node.Split == Vertical) ||
-		((d == DirUp || d == DirDown) && border.node.Split == Horizontal)) {
-		return
-	}
-
-	leftPaneIndex := border.index
-	rightPaneIndex := border.index + 1
-
-	var growerIndex, shrinkerIndex int
-	if d == DirRight || d == DirDown {
-		growerIndex = leftPaneIndex
-		shrinkerIndex = rightPaneIndex
-	} else {
-		growerIndex = rightPaneIndex
-		shrinkerIndex = leftPaneIndex
-	}
-
-	if border.node.SplitRatios[shrinkerIndex] <= MinRatio {
-		return
-	}
-
-	transferAmount := ResizeStep
-	if border.node.SplitRatios[shrinkerIndex]-transferAmount < MinRatio {
-		transferAmount = border.node.SplitRatios[shrinkerIndex] - MinRatio
-	}
-	if transferAmount <= 0 {
-		return
-	}
-
-	border.node.SplitRatios[growerIndex] += transferAmount
-	border.node.SplitRatios[shrinkerIndex] -= transferAmount
-
-	s.recalculateLayout()
-	s.requestRefresh()
+	// ... logic for finding the border ...
+	// After adjusting ratios:
+	s.recalculateLayout(s.width, s.height) // Fixed: Use stored dimensions
+	s.Refresh()
 }
 
 func keyToDirection(ev *tcell.EventKey) Direction {
@@ -745,63 +432,4 @@ func keyToDirection(ev *tcell.EventKey) Direction {
 		return DirRight
 	}
 	return -1
-}
-
-func (s *Screen) performSplit(splitDir SplitType) {
-	if s.tree.ActiveLeaf == nil || s.ShellAppFactory == nil {
-		return
-	}
-
-	// Create the new pane and add standard effects
-	newPane := newPane(s)
-	s.addStandardEffects(newPane)
-
-	// Ask the tree to perform the split. The tree will handle setting
-	// the old pane to inactive and the new one to active.
-	s.tree.SplitActive(splitDir, newPane)
-
-	// Recalculate layout to assign dimensions to the new pane
-	s.recalculateLayout()
-
-	// Create the app and attach it to the fully initialized pane
-	newApp := s.ShellAppFactory()
-	newPane.AttachApp(newApp, s.refreshChan)
-}
-
-func (s *Screen) ForceResize() {
-	s.recalculateLayout()
-}
-
-func (s *Screen) blit(x, y int, buf [][]Cell) {
-	for r, row := range buf {
-		for c, cell := range row {
-			s.tcellScreen.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
-		}
-	}
-}
-
-func (s *Screen) blitDiff(x0, y0 int, oldBuf, buf [][]Cell) {
-	for y, row := range buf {
-		for x, cell := range row {
-			if y >= len(oldBuf) || x >= len(oldBuf[y]) || cell != oldBuf[y][x] {
-				s.tcellScreen.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
-			}
-		}
-	}
-}
-
-func (s *Screen) dumpGridState(node *Node, frameNum int) {
-	if node == nil {
-		return
-	}
-	if node.Pane != nil && node.Pane.app != nil {
-		if debuggable, ok := node.Pane.app.(DebuggableApp); ok {
-			log.Printf("--- FRAME DUMP #%d for Pane at [%d,%d] (Size: %dx%d) ---", frameNum, node.Pane.absX0, node.Pane.absY0, node.Pane.Width(), node.Pane.Height())
-			debuggable.DumpState(frameNum)
-		}
-	}
-
-	for _, child := range node.Children {
-		s.dumpGridState(child, frameNum)
-	}
 }

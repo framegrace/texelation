@@ -4,53 +4,40 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
 	"texelation/texel"
 )
 
 func main() {
-	// Initialize Texel screen
-	screen, err := texel.NewScreen()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating Texel screen: %v\n", err)
-		os.Exit(1)
-	}
-	// Ensure resources are released
-	defer func() {
-		if screen.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error closing screen\n")
-		}
-	}()
-
-	log.Println("Application starting...")
 	logFile, err := os.OpenFile("ansiterm.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		panic(err)
-	} else {
-		log.SetOutput(logFile)
 	}
 	defer logFile.Close()
+	log.SetOutput(logFile)
 
-	screen.ShellAppFactory = func() texel.App {
+	log.Println("Application starting...")
+
+	// Define factories for the apps we want to use.
+	shellFactory := func() texel.App {
 		return texelterm.New("shell", "/bin/bash")
 	}
+	welcomeFactory := func() texel.App {
+		return welcome.NewWelcomeApp()
+	}
 
-	// Add a clock as a status pane at the bottom
-	statusBarApp := statusbar.New()
-	screen.AddStatusPane(statusBarApp, texel.SideBottom, 1)
+	// Initialize the Desktop Environment with the factories.
+	desktop, err := texel.NewDesktop(shellFactory, welcomeFactory)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating desktop: %v\n", err)
+		os.Exit(1)
+	}
+	defer desktop.Close()
 
-	// Start with a single fullscreen Welcome app (fractional positioning)
-	welcome := welcome.NewWelcomeApp()
-	screen.AddApp(welcome)
-
-	// Force initial layout
-	screen.ForceResize()
-
-	// Enter main event loop
-	if err := screen.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running screen: %v\n", err)
+	// Enter main event loop.
+	if err := desktop.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running desktop: %v\n", err)
 		os.Exit(1)
 	}
 }

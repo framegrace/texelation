@@ -17,6 +17,7 @@ type StatusBarApp struct {
 	refreshChan   chan<- bool
 
 	// State from Screen
+	workspaceID   int
 	inControlMode bool
 	subMode       rune
 	activeTitle   string
@@ -36,14 +37,11 @@ func New() texel.App {
 
 func (a *StatusBarApp) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
-	// Pass it down to the internal clock
 	a.clockApp.SetRefreshNotifier(refreshChan)
 }
 
 func (a *StatusBarApp) Run() error {
-	// Run the internal clock
 	go a.clockApp.Run()
-	// Wait for the app to be stopped
 	<-a.stopClock
 	return nil
 }
@@ -57,7 +55,7 @@ func (a *StatusBarApp) Resize(cols, rows int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.width, a.height = cols, rows
-	a.clockApp.Resize(cols, rows) // Let the clock know its size too
+	a.clockApp.Resize(cols, rows)
 }
 
 func (a *StatusBarApp) GetTitle() string {
@@ -71,6 +69,7 @@ func (a *StatusBarApp) OnEvent(event texel.Event) {
 	if event.Type == texel.EventStateUpdate {
 		if payload, ok := event.Payload.(texel.StatePayload); ok {
 			a.mu.Lock()
+			a.workspaceID = payload.WorkspaceID
 			a.inControlMode = payload.InControlMode
 			a.subMode = payload.SubMode
 			a.activeTitle = payload.ActiveTitle
@@ -91,7 +90,6 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 		return buf
 	}
 
-	// Select style based on control mode
 	var style tcell.Style
 	if a.inControlMode {
 		style = tcell.StyleDefault.Background(tcell.ColorSaddleBrown).Foreground(tcell.ColorWhite)
@@ -111,7 +109,8 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 		modeStr = "[INPUT]"
 	}
 
-	leftStr := fmt.Sprintf(" %s %s ", modeStr, a.activeTitle)
+	wsStr := fmt.Sprintf("[WS: %d]", a.workspaceID)
+	leftStr := fmt.Sprintf(" %s %s %s ", wsStr, modeStr, a.activeTitle)
 
 	// Right part: Clock
 	clockCells := a.clockApp.Render()

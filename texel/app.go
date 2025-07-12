@@ -12,6 +12,7 @@ const (
 
 // StatePayload is the data associated with a MsgStateUpdate.
 type StatePayload struct {
+	WorkspaceID   int // Fixed: Added field
 	InControlMode bool
 	SubMode       rune
 	ActiveTitle   string
