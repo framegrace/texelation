@@ -24,6 +24,14 @@ type Event struct {
 	Payload interface{}
 }
 
+// StatePayload is the data associated with a MsgStateUpdate.
+type StatePayload struct {
+	WorkspaceID   int // Fixed: Added field
+	InControlMode bool
+	SubMode       rune
+	ActiveTitle   string
+}
+
 // Listener is an interface that any component can implement to receive events.
 type Listener interface {
 	// OnEvent is the callback method for receiving events.

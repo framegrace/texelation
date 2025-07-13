@@ -23,6 +23,10 @@ type Desktop struct {
 	styleCache        map[styleKey]tcell.Style
 	DefaultFgColor    tcell.Color
 	DefaultBgColor    tcell.Color
+
+	// Global state now lives on the Desktop
+	inControlMode  bool
+	subControlMode rune
 }
 
 // NewDesktop creates and initializes a new desktop environment.
@@ -55,8 +59,13 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 	return d, nil
 }
 
-// Run starts the main event loop for the entire desktop.
 func (d *Desktop) Run() error {
+	// Perform the initial draw before starting the event loop
+	if d.activeWorkspace != nil && d.activeWorkspace.needsDraw {
+		d.draw()
+		d.activeWorkspace.needsDraw = false
+	}
+
 	eventChan := make(chan tcell.Event, 10)
 	go func() {
 		for {
@@ -69,7 +78,7 @@ func (d *Desktop) Run() error {
 		}
 	}()
 
-	ticker := time.NewTicker(16 * time.Millisecond)
+	ticker := time.NewTicker(1 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -79,11 +88,6 @@ func (d *Desktop) Run() error {
 		}
 		refreshChan := d.activeWorkspace.refreshChan
 		drawChan := d.activeWorkspace.drawChan
-
-		if d.activeWorkspace.needsDraw {
-			d.draw()
-			d.activeWorkspace.needsDraw = false
-		}
 
 		select {
 		case ev := <-eventChan:

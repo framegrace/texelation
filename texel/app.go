@@ -10,14 +10,6 @@ const (
 	MsgStateUpdate MessageType = iota
 )
 
-// StatePayload is the data associated with a MsgStateUpdate.
-type StatePayload struct {
-	WorkspaceID   int // Fixed: Added field
-	InControlMode bool
-	SubMode       rune
-	ActiveTitle   string
-}
-
 // Message is a generic message that can be sent to an app.
 type Message struct {
 	Type    MessageType

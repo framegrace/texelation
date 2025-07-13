@@ -231,6 +231,7 @@ func (s *Screen) moveActivePane(d Direction) {
 }
 
 func (s *Screen) handleControlMode(ev *tcell.EventKey) {
+	// Handle Esc to exit sub-modes or control mode
 	if ev.Key() == tcell.KeyEsc {
 		if s.resizeSelection != nil {
 			for _, child := range s.resizeSelection.node.Children {
@@ -251,9 +252,9 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 		return
 	}
 
+	// Handle interactive resize FIRST
 	if ev.Modifiers()&tcell.ModCtrl != 0 {
-		d := keyToDirection(ev)
-		if d != -1 {
+		if keyToDirection(ev) != -1 {
 			s.handleInteractiveResize(ev)
 			return
 		}
@@ -263,9 +264,17 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 		return
 	}
 
+	// Handle sub-commands (like 'w' -> arrow)
 	if s.subControlMode != 0 {
-		// Handle sub-mode commands
-		// For now, just exit control mode
+		switch s.subControlMode {
+		case 'w':
+			d := keyToDirection(ev)
+			if d != -1 {
+				s.tree.SwapActivePane(d)
+				s.recalculateLayout(s.width, s.height)
+			}
+		}
+		// After handling the sub-command, always exit control mode
 		s.subControlMode = 0
 		s.inControlMode = false
 		s.Broadcast(Event{Type: EventControlOff})
@@ -274,23 +283,27 @@ func (s *Screen) handleControlMode(ev *tcell.EventKey) {
 		return
 	}
 
+	// Handle initial commands that set a sub-mode or act immediately
 	switch ev.Rune() {
 	case 'x':
 		closedPaneNode := s.tree.ActiveLeaf
 		s.tree.CloseActiveLeaf()
-		s.recalculateLayout(s.width, s.height) // Fixed: Use stored dimensions
+		s.recalculateLayout(s.width, s.height)
 		s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
 	case 'w':
 		s.subControlMode = 'w'
 		s.broadcastStateUpdate()
 		s.Refresh()
-		return // Stay in control mode
+		return // Return and wait for the next key
 	case '|':
 		s.performSplit(Vertical)
 	case '-':
 		s.performSplit(Horizontal)
+	default:
+		// If an invalid key is pressed, just exit control mode
 	}
 
+	// If a command was executed (and didn't return), exit control mode
 	s.inControlMode = false
 	s.Broadcast(Event{Type: EventControlOff})
 	s.broadcastStateUpdate()
@@ -440,9 +453,88 @@ func blitDiff(tcs tcell.Screen, x0, y0 int, oldBuf, buf [][]Cell) {
 }
 
 func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
-	// ... logic for finding the border ...
-	// After adjusting ratios:
-	s.recalculateLayout(s.width, s.height) // Fixed: Use stored dimensions
+	d := keyToDirection(ev)
+
+	if s.resizeSelection == nil {
+		var border *selectedBorder
+		curr := s.tree.ActiveLeaf
+		for curr.Parent != nil {
+			parent := curr.Parent
+			if (d == DirLeft || d == DirRight) && parent.Split == Vertical {
+				for i, child := range parent.Children {
+					if child == curr {
+						if d == DirRight && i < len(parent.Children)-1 {
+							border = &selectedBorder{node: parent, index: i}
+						} else if d == DirLeft && i > 0 {
+							border = &selectedBorder{node: parent, index: i - 1}
+						}
+						break
+					}
+				}
+			} else if (d == DirUp || d == DirDown) && parent.Split == Horizontal {
+				for i, child := range parent.Children {
+					if child == curr {
+						if d == DirDown && i < len(parent.Children)-1 {
+							border = &selectedBorder{node: parent, index: i}
+						} else if d == DirUp && i > 0 {
+							border = &selectedBorder{node: parent, index: i - 1}
+						}
+						break
+					}
+				}
+			}
+			if border != nil {
+				break
+			}
+			curr = parent
+		}
+		if border != nil {
+			if p1 := border.node.Children[border.index].Pane; p1 != nil {
+				p1.IsResizing = true
+			}
+			if p2 := border.node.Children[border.index+1].Pane; p2 != nil {
+				p2.IsResizing = true
+			}
+		}
+		s.resizeSelection = border
+		s.Refresh()
+		return
+	}
+
+	border := s.resizeSelection
+	if !(((d == DirLeft || d == DirRight) && border.node.Split == Vertical) ||
+		((d == DirUp || d == DirDown) && border.node.Split == Horizontal)) {
+		return
+	}
+
+	leftPaneIndex := border.index
+	rightPaneIndex := border.index + 1
+	var growerIndex, shrinkerIndex int
+
+	if d == DirRight || d == DirDown {
+		growerIndex = leftPaneIndex
+		shrinkerIndex = rightPaneIndex
+	} else {
+		growerIndex = rightPaneIndex
+		shrinkerIndex = leftPaneIndex
+	}
+
+	if border.node.SplitRatios[shrinkerIndex] <= MinRatio {
+		return
+	}
+
+	transferAmount := ResizeStep
+	if border.node.SplitRatios[shrinkerIndex]-transferAmount < MinRatio {
+		transferAmount = border.node.SplitRatios[shrinkerIndex] - MinRatio
+	}
+	if transferAmount <= 0 {
+		return
+	}
+
+	border.node.SplitRatios[growerIndex] += transferAmount
+	border.node.SplitRatios[shrinkerIndex] -= transferAmount
+
+	s.recalculateLayout(s.width, s.height)
 	s.Refresh()
 }
 
