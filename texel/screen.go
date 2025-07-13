@@ -213,7 +213,6 @@ func (s *Screen) draw(tcs tcell.Screen) {
 			p.prevBuf = finalBuffer
 		}
 	})
-	tcs.Show()
 }
 
 func (s *Screen) Close() {

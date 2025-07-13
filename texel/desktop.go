@@ -154,7 +154,13 @@ func (d *Desktop) Run() error {
 	}()
 
 	d.recalculateLayout()
-	d.draw()
+
+	if d.activeWorkspace != nil {
+		go func() {
+			d.activeWorkspace.drawChan <- true
+		}()
+	}
+
 	for {
 		if d.activeWorkspace == nil {
 			<-time.After(100 * time.Millisecond)
@@ -369,6 +375,8 @@ func (d *Desktop) draw() {
 	if d.activeWorkspace != nil {
 		d.activeWorkspace.draw(d.tcellScreen)
 	}
+	d.drawStatusPanes(d.tcellScreen)
+	d.tcellScreen.Show()
 }
 
 func (d *Desktop) Close() {
