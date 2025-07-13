@@ -11,11 +11,29 @@ import (
 	"time"
 )
 
+// Side defines the placement of a StatusPane.
+type Side int
+
+const (
+	SideTop Side = iota
+	SideBottom
+	SideLeft
+	SideRight
+)
+
+// StatusPane is a special pane with absolute sizing, placed on one side of the screen.
+type StatusPane struct {
+	app  App
+	side Side
+	size int // rows for Top/Bottom, cols for Left/Right
+}
+
 // Desktop manages a collection of workspaces (Screens).
 type Desktop struct {
 	tcellScreen       tcell.Screen
 	workspaces        map[int]*Screen
 	activeWorkspace   *Screen
+	statusPanes       []*StatusPane
 	quit              chan struct{}
 	closeOnce         sync.Once
 	ShellAppFactory   AppFactory
@@ -48,6 +66,7 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 	d := &Desktop{
 		tcellScreen:       tcellScreen,
 		workspaces:        make(map[int]*Screen),
+		statusPanes:       make([]*StatusPane, 0),
 		quit:              make(chan struct{}),
 		ShellAppFactory:   shellFactory,
 		WelcomeAppFactory: welcomeFactory,
@@ -58,6 +77,67 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 
 	d.SwitchToWorkspace(1)
 	return d, nil
+}
+
+// AddStatusPane adds a new status pane to the desktop.
+func (d *Desktop) AddStatusPane(app App, side Side, size int) {
+	sp := &StatusPane{
+		app:  app,
+		side: side,
+		size: size,
+	}
+	d.statusPanes = append(d.statusPanes, sp)
+
+	if listener, ok := app.(Listener); ok {
+		// Status panes need to listen to events from all workspaces.
+		// A more advanced implementation might have a global dispatcher.
+		// For now, we subscribe it to the active workspace's dispatcher.
+		if d.activeWorkspace != nil {
+			d.activeWorkspace.Subscribe(listener)
+		}
+	}
+
+	app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+	go func() {
+		if err := app.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Status pane app exited with error: %v", err)
+		}
+	}()
+	d.recalculateLayout()
+}
+
+func (d *Desktop) recalculateLayout() {
+	w, h := d.tcellScreen.Size()
+	mainX, mainY := 0, 0
+	mainW, mainH := w, h
+
+	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
+
+	for _, sp := range d.statusPanes {
+		switch sp.side {
+		case SideTop:
+			sp.app.Resize(w, sp.size)
+			topOffset += sp.size
+		case SideBottom:
+			sp.app.Resize(w, sp.size)
+			bottomOffset += sp.size
+		case SideLeft:
+			sp.app.Resize(sp.size, h-topOffset-bottomOffset)
+			leftOffset += sp.size
+		case SideRight:
+			sp.app.Resize(sp.size, h-topOffset-bottomOffset)
+			rightOffset += sp.size
+		}
+	}
+
+	mainX = leftOffset
+	mainY = topOffset
+	mainW = w - leftOffset - rightOffset
+	mainH = h - topOffset - bottomOffset
+
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.setArea(mainX, mainY, mainW, mainH)
+	}
 }
 
 func (d *Desktop) Run() error {
@@ -73,35 +153,42 @@ func (d *Desktop) Run() error {
 		}
 	}()
 
+	d.recalculateLayout()
+	d.draw()
 	for {
 		if d.activeWorkspace == nil {
 			<-time.After(100 * time.Millisecond)
 			continue
 		}
+
 		refreshChan := d.activeWorkspace.refreshChan
 		drawChan := d.activeWorkspace.drawChan
 
 		select {
 		case ev := <-eventChan:
+
 			d.handleEvent(ev)
+
 		case <-refreshChan:
+
 			d.activeWorkspace.broadcastStateUpdate()
 			d.draw()
+
 		case <-drawChan:
+
 			d.draw()
+
 		case <-d.quit:
+
 			return nil
 		}
 	}
 }
 
 func (d *Desktop) handleEvent(ev tcell.Event) {
-	if resize, ok := ev.(*tcell.EventResize); ok {
-		w, h := resize.Size()
+	if _, ok := ev.(*tcell.EventResize); ok {
 		d.tcellScreen.Clear()
-		for _, ws := range d.workspaces {
-			ws.recalculateLayout(w, h)
-		}
+		d.recalculateLayout() // Correct: Call desktop's recalculate
 		d.draw()
 		return
 	}
@@ -128,6 +215,32 @@ func (d *Desktop) handleEvent(ev tcell.Event) {
 
 	if d.activeWorkspace != nil {
 		d.activeWorkspace.handleEvent(key)
+	}
+}
+
+func (d *Desktop) drawStatusPanes(tcs tcell.Screen) {
+	w, h := tcs.Size()
+	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
+
+	for _, sp := range d.statusPanes {
+		switch sp.side {
+		case SideTop:
+			buf := sp.app.Render()
+			blit(tcs, leftOffset, topOffset, buf)
+			topOffset += sp.size
+		case SideBottom:
+			buf := sp.app.Render()
+			blit(tcs, leftOffset, h-bottomOffset-sp.size, buf)
+			bottomOffset += sp.size
+		case SideLeft:
+			buf := sp.app.Render()
+			blit(tcs, leftOffset, topOffset, buf)
+			leftOffset += sp.size
+		case SideRight:
+			buf := sp.app.Render()
+			blit(tcs, w-rightOffset-sp.size, topOffset, buf)
+			rightOffset += sp.size
+		}
 	}
 }
 
@@ -249,8 +362,7 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 	}
 
 	d.tcellScreen.Clear()
-	w, h := d.tcellScreen.Size()
-	d.activeWorkspace.recalculateLayout(w, h)
+	d.recalculateLayout()
 }
 
 func (d *Desktop) draw() {
@@ -264,6 +376,9 @@ func (d *Desktop) Close() {
 		close(d.quit)
 		for _, ws := range d.workspaces {
 			ws.Close()
+		}
+		for _, sp := range d.statusPanes {
+			sp.app.Stop()
 		}
 		if d.tcellScreen != nil {
 			d.tcellScreen.Fini()

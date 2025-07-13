@@ -3,7 +3,6 @@ package texel
 import (
 	"context"
 	"github.com/gdamore/tcell/v2"
-	"log"
 )
 
 type Direction int
@@ -20,16 +19,6 @@ const (
 type DebuggableApp interface {
 	DumpState(frameNum int)
 }
-
-// Side defines the placement of a StatusPane.
-type Side int
-
-const (
-	SideTop Side = iota
-	SideBottom
-	SideLeft
-	SideRight
-)
 
 type AppFactory func() App
 
@@ -49,13 +38,6 @@ type styleKey struct {
 	reverse         bool
 }
 
-// StatusPane is a special pane with absolute sizing, placed on one side of the screen.
-type StatusPane struct {
-	app  App
-	side Side
-	size int // rows for Top/Bottom, cols for Left/Right
-}
-
 type selectedBorder struct {
 	node  *Node // The parent node whose children are being resized (the split node)
 	index int   // The index of the left/top pane of the border. The border is between child[index] and child[index+1].
@@ -64,10 +46,9 @@ type selectedBorder struct {
 // Screen now represents a single workspace.
 type Screen struct {
 	id                             int
-	width, height                  int
+	x, y, width, height            int
 	desktop                        *Desktop // Reference to the parent desktop
 	tree                           *Tree
-	statusPanes                    []*StatusPane
 	inactiveFadePrototype          Effect
 	controlModeFadeEffectPrototype Effect
 	ditherEffectPrototype          Effect
@@ -88,7 +69,6 @@ func newScreen(id int, shellFactory AppFactory, desktop *Desktop) (*Screen, erro
 		id:              id,
 		desktop:         desktop,
 		tree:            NewTree(),
-		statusPanes:     make([]*StatusPane, 0),
 		refreshChan:     make(chan bool, 1),
 		drawChan:        make(chan bool, 1),
 		dispatcher:      NewEventDispatcher(),
@@ -100,6 +80,11 @@ func newScreen(id int, shellFactory AppFactory, desktop *Desktop) (*Screen, erro
 	s.ditherEffectPrototype = NewDitherEffect('░')
 
 	return s, nil
+}
+
+func (s *Screen) setArea(x, y, w, h int) {
+	s.x, s.y, s.width, s.height = x, y, w, h
+	s.recalculateLayout()
 }
 
 func (s *Screen) Refresh() {
@@ -140,26 +125,6 @@ func (s *Screen) broadcastStateUpdate() {
 	})
 }
 
-func (s *Screen) AddStatusPane(app App, side Side, size int) {
-	sp := &StatusPane{
-		app:  app,
-		side: side,
-		size: size,
-	}
-	s.statusPanes = append(s.statusPanes, sp)
-
-	if listener, ok := app.(Listener); ok {
-		s.Subscribe(listener)
-	}
-
-	app.SetRefreshNotifier(s.refreshChan)
-	go func() {
-		if err := app.Run(); err != nil {
-			log.Printf("Status pane app '%s' exited with error: %v", app.GetTitle(), err)
-		}
-	}()
-}
-
 func (s *Screen) AddApp(app App) {
 	p := newPane(s)
 	s.addStandardEffects(p)
@@ -172,7 +137,7 @@ func (s *Screen) AddApp(app App) {
 
 func (s *Screen) moveActivePane(d Direction) {
 	s.tree.MoveActive(d)
-	s.recalculateLayout(s.width, s.height)
+	s.recalculateLayout()
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.broadcastStateUpdate()
 }
@@ -211,7 +176,7 @@ func (s *Screen) CloseActivePane() {
 	}
 	closedPaneNode := s.tree.ActiveLeaf
 	s.tree.CloseActiveLeaf()
-	s.recalculateLayout(s.width, s.height)
+	s.recalculateLayout()
 	s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
 }
 
@@ -222,7 +187,7 @@ func (s *Screen) PerformSplit(splitDir SplitType) {
 	newPane := newPane(s)
 	s.addStandardEffects(newPane)
 	s.tree.SplitActive(splitDir, newPane)
-	s.recalculateLayout(s.width, s.height)
+	s.recalculateLayout()
 	newApp := s.ShellAppFactory()
 	newPane.AttachApp(newApp, s.refreshChan)
 }
@@ -230,17 +195,11 @@ func (s *Screen) PerformSplit(splitDir SplitType) {
 func (s *Screen) SwapActivePane(d Direction) {
 	if d != -1 {
 		s.tree.SwapActivePane(d)
-		s.recalculateLayout(s.width, s.height)
+		s.recalculateLayout()
 	}
 }
 
 func (s *Screen) draw(tcs tcell.Screen) {
-	s.compositePanes(tcs)
-	s.drawStatusPanes(tcs)
-	tcs.Show()
-}
-
-func (s *Screen) compositePanes(tcs tcell.Screen) {
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node.Pane.app != nil {
 			p := node.Pane
@@ -254,32 +213,7 @@ func (s *Screen) compositePanes(tcs tcell.Screen) {
 			p.prevBuf = finalBuffer
 		}
 	})
-}
-
-func (s *Screen) drawStatusPanes(tcs tcell.Screen) {
-	w, h := tcs.Size()
-	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
-
-	for _, sp := range s.statusPanes {
-		switch sp.side {
-		case SideTop:
-			buf := sp.app.Render()
-			blit(tcs, leftOffset, topOffset, buf)
-			topOffset += sp.size
-		case SideBottom:
-			buf := sp.app.Render()
-			blit(tcs, leftOffset, h-bottomOffset-sp.size, buf)
-			bottomOffset += sp.size
-		case SideLeft:
-			buf := sp.app.Render()
-			blit(tcs, leftOffset, topOffset, buf)
-			leftOffset += sp.size
-		case SideRight:
-			buf := sp.app.Render()
-			blit(tcs, w-rightOffset-sp.size, topOffset, buf)
-			rightOffset += sp.size
-		}
-	}
+	tcs.Show()
 }
 
 func (s *Screen) Close() {
@@ -291,42 +225,10 @@ func (s *Screen) Close() {
 			node.Pane.Close()
 		}
 	})
-	for _, sp := range s.statusPanes {
-		sp.app.Stop()
-	}
 }
 
-func (s *Screen) recalculateLayout(w, h int) {
-	s.width, s.height = w, h // Store dimensions
-
-	mainX, mainY := 0, 0
-	mainW, mainH := w, h
-
-	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
-
-	for _, sp := range s.statusPanes {
-		switch sp.side {
-		case SideTop:
-			sp.app.Resize(w, sp.size)
-			topOffset += sp.size
-		case SideBottom:
-			sp.app.Resize(w, sp.size)
-			bottomOffset += sp.size
-		case SideLeft:
-			sp.app.Resize(sp.size, h-topOffset-bottomOffset)
-			leftOffset += sp.size
-		case SideRight:
-			sp.app.Resize(sp.size, h-topOffset-bottomOffset)
-			rightOffset += sp.size
-		}
-	}
-
-	mainX = leftOffset
-	mainY = topOffset
-	mainW = w - leftOffset - rightOffset
-	mainH = h - topOffset - bottomOffset
-
-	s.tree.Resize(mainX, mainY, mainW, mainH)
+func (s *Screen) recalculateLayout() {
+	s.tree.Resize(s.x, s.y, s.width, s.height)
 }
 
 func (s *Screen) performSplit(splitDir SplitType) {
@@ -337,7 +239,7 @@ func (s *Screen) performSplit(splitDir SplitType) {
 	s.addStandardEffects(newPane)
 	s.tree.SplitActive(splitDir, newPane)
 
-	s.recalculateLayout(s.width, s.height) // Fixed: Use stored dimensions
+	s.recalculateLayout() // Fixed: Use stored dimensions
 
 	newApp := s.ShellAppFactory()
 	newPane.AttachApp(newApp, s.refreshChan)
@@ -466,7 +368,7 @@ func (s *Screen) adjustBorder(border *selectedBorder, d Direction) {
 	border.node.SplitRatios[growerIndex] += transferAmount
 	border.node.SplitRatios[shrinkerIndex] -= transferAmount
 
-	s.recalculateLayout(s.width, s.height)
+	s.recalculateLayout()
 	s.Refresh()
 }
 

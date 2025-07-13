@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
 	"texelation/texel"
@@ -34,6 +35,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer desktop.Close()
+
+	statusBarApp := statusbar.New()
+	desktop.AddStatusPane(statusBarApp, texel.SideBottom, 1)
 
 	// Enter main event loop.
 	if err := desktop.Run(); err != nil {
