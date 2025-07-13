@@ -92,7 +92,7 @@ func (b *BaseEffect) animate(to float32, duringState, endState EffectState) {
 
 	go func() {
 		startTime := time.Now()
-		ticker := time.NewTicker(16 * time.Millisecond)
+		ticker := time.NewTicker(1 * time.Millisecond)
 		defer ticker.Stop()
 
 		for {

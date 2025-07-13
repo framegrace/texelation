@@ -75,9 +75,7 @@ type Screen struct {
 	drawChan                       chan bool
 	dispatcher                     *EventDispatcher
 	ShellAppFactory                AppFactory
-	needsDraw                      bool
 
-	inControlMode     bool
 	subControlMode    rune
 	effectAnimators   map[*FadeEffect]context.CancelFunc
 	resizeSelection   *selectedBorder
@@ -135,8 +133,8 @@ func (s *Screen) broadcastStateUpdate() {
 		Type: EventStateUpdate,
 		Payload: StatePayload{
 			WorkspaceID:   s.id, // Fixed: Added field
-			InControlMode: s.inControlMode,
-			SubMode:       s.subControlMode,
+			InControlMode: s.desktop.inControlMode,
+			SubMode:       s.desktop.subControlMode,
 			ActiveTitle:   title,
 		},
 	})
@@ -171,57 +169,6 @@ func (s *Screen) AddApp(app App) {
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.broadcastStateUpdate()
 }
-func (s *Screen) handleEvent(ev tcell.Event) {
-	switch ev := ev.(type) {
-	case *tcell.EventKey:
-		// Enter/Exit Control Mode
-		if ev.Key() == keyControlMode {
-			s.inControlMode = !s.inControlMode
-			s.subControlMode = 0
-			if s.inControlMode {
-				s.Broadcast(Event{Type: EventControlOn})
-			} else {
-				s.Broadcast(Event{Type: EventControlOff})
-			}
-			s.broadcastStateUpdate()
-			s.Refresh()
-			return
-		}
-
-		// Handle control mode commands
-		if s.inControlMode {
-			s.handleControlMode(ev)
-			return
-		}
-
-		// Handle pane navigation (This was missing)
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			isPaneNavKey := true
-			switch ev.Key() {
-			case tcell.KeyUp:
-				s.moveActivePane(DirUp)
-			case tcell.KeyDown:
-				s.moveActivePane(DirDown)
-			case tcell.KeyLeft:
-				s.moveActivePane(DirLeft)
-			case tcell.KeyRight:
-				s.moveActivePane(DirRight)
-			default:
-				isPaneNavKey = false
-			}
-			if isPaneNavKey {
-				s.Refresh()
-				return
-			}
-		}
-
-		// Pass all other keys to the active application
-		if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
-			s.tree.ActiveLeaf.Pane.app.HandleKey(ev)
-			s.Refresh()
-		}
-	}
-}
 
 func (s *Screen) moveActivePane(d Direction) {
 	s.tree.MoveActive(d)
@@ -230,84 +177,61 @@ func (s *Screen) moveActivePane(d Direction) {
 	s.broadcastStateUpdate()
 }
 
-func (s *Screen) handleControlMode(ev *tcell.EventKey) {
-	// Handle Esc to exit sub-modes or control mode
-	if ev.Key() == tcell.KeyEsc {
-		if s.resizeSelection != nil {
-			for _, child := range s.resizeSelection.node.Children {
-				if child.Pane != nil {
-					child.Pane.IsResizing = false
-				}
-			}
-			s.resizeSelection = nil
+func (s *Screen) handleEvent(ev *tcell.EventKey) {
+	// Handle pane navigation
+	if ev.Modifiers()&tcell.ModShift != 0 {
+		isPaneNavKey := true
+		switch ev.Key() {
+		case tcell.KeyUp:
+			s.moveActivePane(DirUp)
+		case tcell.KeyDown:
+			s.moveActivePane(DirDown)
+		case tcell.KeyLeft:
+			s.moveActivePane(DirLeft)
+		case tcell.KeyRight:
+			s.moveActivePane(DirRight)
+		default:
+			isPaneNavKey = false
+		}
+		if isPaneNavKey {
 			s.Refresh()
 			return
 		}
+	}
 
-		s.inControlMode = false
-		s.subControlMode = 0
-		s.Broadcast(Event{Type: EventControlOff})
-		s.broadcastStateUpdate()
-		s.Refresh()
+	// Pass all other keys to the active application
+	if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
+		s.tree.ActiveLeaf.Pane.app.HandleKey(ev)
+	}
+}
+
+func (s *Screen) CloseActivePane() {
+	if s.tree.ActiveLeaf == nil {
 		return
 	}
+	closedPaneNode := s.tree.ActiveLeaf
+	s.tree.CloseActiveLeaf()
+	s.recalculateLayout(s.width, s.height)
+	s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
+}
 
-	// Handle interactive resize FIRST
-	if ev.Modifiers()&tcell.ModCtrl != 0 {
-		if keyToDirection(ev) != -1 {
-			s.handleInteractiveResize(ev)
-			return
-		}
-	}
-
-	if s.resizeSelection != nil {
+func (s *Screen) PerformSplit(splitDir SplitType) {
+	if s.tree.ActiveLeaf == nil || s.ShellAppFactory == nil {
 		return
 	}
+	newPane := newPane(s)
+	s.addStandardEffects(newPane)
+	s.tree.SplitActive(splitDir, newPane)
+	s.recalculateLayout(s.width, s.height)
+	newApp := s.ShellAppFactory()
+	newPane.AttachApp(newApp, s.refreshChan)
+}
 
-	// Handle sub-commands (like 'w' -> arrow)
-	if s.subControlMode != 0 {
-		switch s.subControlMode {
-		case 'w':
-			d := keyToDirection(ev)
-			if d != -1 {
-				s.tree.SwapActivePane(d)
-				s.recalculateLayout(s.width, s.height)
-			}
-		}
-		// After handling the sub-command, always exit control mode
-		s.subControlMode = 0
-		s.inControlMode = false
-		s.Broadcast(Event{Type: EventControlOff})
-		s.broadcastStateUpdate()
-		s.Refresh()
-		return
-	}
-
-	// Handle initial commands that set a sub-mode or act immediately
-	switch ev.Rune() {
-	case 'x':
-		closedPaneNode := s.tree.ActiveLeaf
-		s.tree.CloseActiveLeaf()
+func (s *Screen) SwapActivePane(d Direction) {
+	if d != -1 {
+		s.tree.SwapActivePane(d)
 		s.recalculateLayout(s.width, s.height)
-		s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
-	case 'w':
-		s.subControlMode = 'w'
-		s.broadcastStateUpdate()
-		s.Refresh()
-		return // Return and wait for the next key
-	case '|':
-		s.performSplit(Vertical)
-	case '-':
-		s.performSplit(Horizontal)
-	default:
-		// If an invalid key is pressed, just exit control mode
 	}
-
-	// If a command was executed (and didn't return), exit control mode
-	s.inControlMode = false
-	s.Broadcast(Event{Type: EventControlOff})
-	s.broadcastStateUpdate()
-	s.Refresh()
 }
 
 func (s *Screen) draw(tcs tcell.Screen) {
@@ -452,56 +376,64 @@ func blitDiff(tcs tcell.Screen, x0, y0 int, oldBuf, buf [][]Cell) {
 	}
 }
 
-func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
-	d := keyToDirection(ev)
-
-	if s.resizeSelection == nil {
-		var border *selectedBorder
-		curr := s.tree.ActiveLeaf
-		for curr.Parent != nil {
-			parent := curr.Parent
-			if (d == DirLeft || d == DirRight) && parent.Split == Vertical {
-				for i, child := range parent.Children {
-					if child == curr {
-						if d == DirRight && i < len(parent.Children)-1 {
-							border = &selectedBorder{node: parent, index: i}
-						} else if d == DirLeft && i > 0 {
-							border = &selectedBorder{node: parent, index: i - 1}
-						}
-						break
+func (s *Screen) findBorderToResize(d Direction) *selectedBorder {
+	// (This logic is extracted from the old handleInteractiveResize)
+	var border *selectedBorder
+	curr := s.tree.ActiveLeaf
+	for curr.Parent != nil {
+		parent := curr.Parent
+		if (d == DirLeft || d == DirRight) && parent.Split == Vertical {
+			for i, child := range parent.Children {
+				if child == curr {
+					if d == DirRight && i < len(parent.Children)-1 {
+						border = &selectedBorder{node: parent, index: i}
+					} else if d == DirLeft && i > 0 {
+						border = &selectedBorder{node: parent, index: i - 1}
 					}
-				}
-			} else if (d == DirUp || d == DirDown) && parent.Split == Horizontal {
-				for i, child := range parent.Children {
-					if child == curr {
-						if d == DirDown && i < len(parent.Children)-1 {
-							border = &selectedBorder{node: parent, index: i}
-						} else if d == DirUp && i > 0 {
-							border = &selectedBorder{node: parent, index: i - 1}
-						}
-						break
-					}
+					break
 				}
 			}
-			if border != nil {
-				break
+		} else if (d == DirUp || d == DirDown) && parent.Split == Horizontal {
+			for i, child := range parent.Children {
+				if child == curr {
+					if d == DirDown && i < len(parent.Children)-1 {
+						border = &selectedBorder{node: parent, index: i}
+					} else if d == DirUp && i > 0 {
+						border = &selectedBorder{node: parent, index: i - 1}
+					}
+					break
+				}
 			}
-			curr = parent
 		}
 		if border != nil {
-			if p1 := border.node.Children[border.index].Pane; p1 != nil {
-				p1.IsResizing = true
-			}
-			if p2 := border.node.Children[border.index+1].Pane; p2 != nil {
-				p2.IsResizing = true
-			}
+			break
 		}
-		s.resizeSelection = border
-		s.Refresh()
-		return
+		curr = parent
+	}
+	if border != nil {
+		if p1 := border.node.Children[border.index].Pane; p1 != nil {
+			p1.IsResizing = true
+		}
+		if p2 := border.node.Children[border.index+1].Pane; p2 != nil {
+			p2.IsResizing = true
+		}
+	}
+	s.Refresh()
+	return border
+}
+
+func (s *Screen) handleInteractiveResize(ev *tcell.EventKey, currentSelection *selectedBorder) *selectedBorder {
+	d := keyToDirection(ev)
+	if currentSelection == nil {
+		return s.findBorderToResize(d)
 	}
 
-	border := s.resizeSelection
+	s.adjustBorder(currentSelection, d)
+	return currentSelection
+}
+
+func (s *Screen) adjustBorder(border *selectedBorder, d Direction) {
+
 	if !(((d == DirLeft || d == DirRight) && border.node.Split == Vertical) ||
 		((d == DirUp || d == DirDown) && border.node.Split == Horizontal)) {
 		return
@@ -535,6 +467,19 @@ func (s *Screen) handleInteractiveResize(ev *tcell.EventKey) {
 	border.node.SplitRatios[shrinkerIndex] -= transferAmount
 
 	s.recalculateLayout(s.width, s.height)
+	s.Refresh()
+}
+
+func (s *Screen) clearResizeSelection(selection *selectedBorder) {
+	if selection == nil {
+		return
+	}
+	if p1 := selection.node.Children[selection.index].Pane; p1 != nil {
+		p1.IsResizing = false
+	}
+	if p2 := selection.node.Children[selection.index+1].Pane; p2 != nil {
+		p2.IsResizing = false
+	}
 	s.Refresh()
 }
 

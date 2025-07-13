@@ -25,8 +25,9 @@ type Desktop struct {
 	DefaultBgColor    tcell.Color
 
 	// Global state now lives on the Desktop
-	inControlMode  bool
-	subControlMode rune
+	inControlMode   bool
+	subControlMode  rune
+	resizeSelection *selectedBorder
 }
 
 // NewDesktop creates and initializes a new desktop environment.
@@ -60,12 +61,6 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 }
 
 func (d *Desktop) Run() error {
-	// Perform the initial draw before starting the event loop
-	if d.activeWorkspace != nil && d.activeWorkspace.needsDraw {
-		d.draw()
-		d.activeWorkspace.needsDraw = false
-	}
-
 	eventChan := make(chan tcell.Event, 10)
 	go func() {
 		for {
@@ -77,9 +72,6 @@ func (d *Desktop) Run() error {
 			}
 		}
 	}()
-
-	ticker := time.NewTicker(1 * time.Millisecond)
-	defer ticker.Stop()
 
 	for {
 		if d.activeWorkspace == nil {
@@ -97,10 +89,6 @@ func (d *Desktop) Run() error {
 			d.draw()
 		case <-drawChan:
 			d.draw()
-		case <-ticker.C:
-			if d.activeWorkspace.needsContinuousUpdate() {
-				d.draw()
-			}
 		case <-d.quit:
 			return nil
 		}
@@ -111,41 +99,131 @@ func (d *Desktop) handleEvent(ev tcell.Event) {
 	if resize, ok := ev.(*tcell.EventResize); ok {
 		w, h := resize.Size()
 		d.tcellScreen.Clear()
-		if d.activeWorkspace != nil {
-			d.activeWorkspace.recalculateLayout(w, h)
-			d.draw()
+		for _, ws := range d.workspaces {
+			ws.recalculateLayout(w, h)
 		}
+		d.draw()
 		return
 	}
 
-	// Handle global quit command
-	if key, ok := ev.(*tcell.EventKey); ok {
-		if key.Key() == keyQuit {
-			d.Close()
-			return
-		}
+	key, ok := ev.(*tcell.EventKey)
+	if !ok {
+		return
 	}
 
-	// Let the active workspace handle its own events.
+	if key.Key() == keyQuit {
+		d.Close()
+		return
+	}
+
+	if key.Key() == keyControlMode {
+		d.toggleControlMode()
+		return
+	}
+
+	if d.inControlMode {
+		d.handleControlMode(key)
+		return
+	}
+
 	if d.activeWorkspace != nil {
-		d.activeWorkspace.handleEvent(ev)
+		d.activeWorkspace.handleEvent(key)
+	}
+}
+
+// toggleControlMode enters or exits control mode.
+func (d *Desktop) toggleControlMode() {
+	d.inControlMode = !d.inControlMode
+	d.subControlMode = 0
+	// If we are exiting control mode, ensure any resize selection is also cleared.
+	if !d.inControlMode && d.resizeSelection != nil {
+		d.activeWorkspace.clearResizeSelection(d.resizeSelection)
+		d.resizeSelection = nil
 	}
 
-	// Intercept workspace switching keys if we're in the root control mode.
-	if d.activeWorkspace != nil && d.activeWorkspace.inControlMode && d.activeWorkspace.subControlMode == 0 {
-		if key, ok := ev.(*tcell.EventKey); ok {
-			wsID := -1
-			if key.Key() >= tcell.KeyF1 && key.Key() <= tcell.KeyF9 {
-				wsID = int(key.Key()-tcell.KeyF1) + 1
-			} else if r := key.Rune(); r >= '1' && r <= '9' {
-				wsID, _ = strconv.Atoi(string(r))
-			}
+	var eventType EventType
+	if d.inControlMode {
+		eventType = EventControlOn
+	} else {
+		eventType = EventControlOff
+	}
 
-			if wsID != -1 {
-				d.SwitchToWorkspace(wsID)
-			}
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.Broadcast(Event{Type: eventType})
+		d.broadcastStateUpdate()
+		d.activeWorkspace.Refresh()
+	}
+}
+
+// handleControlMode processes all commands when the Desktop is in control mode.
+func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
+	// Highest priority: Esc always exits control mode, clearing any sub-modes.
+	if ev.Key() == tcell.KeyEsc {
+		d.toggleControlMode()
+		return
+	}
+
+	// If in a sub-mode, handle that first.
+	if d.subControlMode != 0 {
+		switch d.subControlMode {
+		case 'w':
+			d.activeWorkspace.SwapActivePane(keyToDirection(ev))
 		}
+		d.toggleControlMode() // Exit control mode after any sub-command
+		return
 	}
+
+	// If not in a sub-mode, check for a new command.
+	// Check for interactive resize
+	if ev.Modifiers()&tcell.ModCtrl != 0 {
+		d.resizeSelection = d.activeWorkspace.handleInteractiveResize(ev, d.resizeSelection)
+		// Stay in control mode to continue resizing
+		return
+	}
+
+	// Check for workspace switching
+	r := ev.Rune()
+	if r >= '1' && r <= '9' {
+		wsID, _ := strconv.Atoi(string(r))
+		d.SwitchToWorkspace(wsID)
+		d.toggleControlMode()
+		return
+	}
+
+	// Check for one-shot pane commands
+	switch r {
+	case 'x':
+		d.activeWorkspace.CloseActivePane()
+	case '|':
+		d.activeWorkspace.PerformSplit(Vertical)
+	case '-':
+		d.activeWorkspace.PerformSplit(Horizontal)
+	case 'w':
+		d.subControlMode = 'w' // Enter 'w' sub-mode
+		d.broadcastStateUpdate()
+		d.activeWorkspace.Refresh()
+		return // Stay in control mode and wait for next key
+	}
+
+	// Any other key exits control mode
+	d.toggleControlMode()
+}
+
+func (d *Desktop) broadcastStateUpdate() {
+	if d.activeWorkspace == nil {
+		return
+	}
+	title := d.activeWorkspace.tree.GetActiveTitle()
+	// All workspaces are subscribed to the desktop's dispatcher to receive state updates
+	d.activeWorkspace.Broadcast(Event{
+		Type: EventStateUpdate,
+		Payload: StatePayload{
+			WorkspaceID:   d.activeWorkspace.id,
+			InControlMode: d.inControlMode,
+			SubMode:       d.subControlMode,
+			ActiveTitle:   title,
+		},
+	})
 }
 
 func (d *Desktop) SwitchToWorkspace(id int) {
@@ -173,7 +251,6 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 	d.tcellScreen.Clear()
 	w, h := d.tcellScreen.Size()
 	d.activeWorkspace.recalculateLayout(w, h)
-	d.activeWorkspace.needsDraw = true
 }
 
 func (d *Desktop) draw() {
