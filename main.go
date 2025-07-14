@@ -37,7 +37,7 @@ func main() {
 	defer desktop.Close()
 
 	statusBarApp := statusbar.New()
-	desktop.AddStatusPane(statusBarApp, texel.SideBottom, 1)
+	desktop.AddStatusPane(statusBarApp, texel.SideTop, 1)
 
 	// Enter main event loop.
 	if err := desktop.Run(); err != nil {
