@@ -41,6 +41,7 @@ type Desktop struct {
 	styleCache        map[styleKey]tcell.Style
 	DefaultFgColor    tcell.Color
 	DefaultBgColor    tcell.Color
+	dispatcher        *EventDispatcher
 
 	// Global state now lives on the Desktop
 	inControlMode   bool
@@ -73,10 +74,20 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 		styleCache:        make(map[styleKey]tcell.Style),
 		DefaultFgColor:    defaultFg,
 		DefaultBgColor:    defaultBg,
+		dispatcher:        NewEventDispatcher(),
 	}
 
 	d.SwitchToWorkspace(1)
 	return d, nil
+}
+
+// Added: Methods to subscribe to the Desktop's dispatcher
+func (d *Desktop) Subscribe(listener Listener) {
+	d.dispatcher.Subscribe(listener)
+}
+
+func (d *Desktop) Unsubscribe(listener Listener) {
+	d.dispatcher.Unsubscribe(listener)
 }
 
 // AddStatusPane adds a new status pane to the desktop.
@@ -89,15 +100,13 @@ func (d *Desktop) AddStatusPane(app App, side Side, size int) {
 	d.statusPanes = append(d.statusPanes, sp)
 
 	if listener, ok := app.(Listener); ok {
-		// Status panes need to listen to events from all workspaces.
-		// A more advanced implementation might have a global dispatcher.
-		// For now, we subscribe it to the active workspace's dispatcher.
-		if d.activeWorkspace != nil {
-			d.activeWorkspace.Subscribe(listener)
-		}
+		d.Subscribe(listener)
 	}
 
-	app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+	if d.activeWorkspace != nil {
+		app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+	}
+
 	go func() {
 		if err := app.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "Status pane app exited with error: %v", err)
@@ -177,7 +186,7 @@ func (d *Desktop) Run() error {
 
 		case <-refreshChan:
 
-			d.activeWorkspace.broadcastStateUpdate()
+			d.broadcastStateUpdate()
 			d.draw()
 
 		case <-drawChan:
@@ -269,9 +278,8 @@ func (d *Desktop) toggleControlMode() {
 
 	if d.activeWorkspace != nil {
 		d.activeWorkspace.Broadcast(Event{Type: eventType})
-		d.broadcastStateUpdate()
-		d.activeWorkspace.Refresh()
 	}
+	d.broadcastStateUpdate()
 }
 
 // handleControlMode processes all commands when the Desktop is in control mode.
@@ -333,8 +341,8 @@ func (d *Desktop) broadcastStateUpdate() {
 		return
 	}
 	title := d.activeWorkspace.tree.GetActiveTitle()
-	// All workspaces are subscribed to the desktop's dispatcher to receive state updates
-	d.activeWorkspace.Broadcast(Event{
+	// Changed: Broadcast on the desktop's dispatcher
+	d.dispatcher.Broadcast(Event{
 		Type: EventStateUpdate,
 		Payload: StatePayload{
 			WorkspaceID:   d.activeWorkspace.id,
@@ -343,6 +351,10 @@ func (d *Desktop) broadcastStateUpdate() {
 			ActiveTitle:   title,
 		},
 	})
+	// We still need to trigger a refresh for pane effects
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.Refresh()
+	}
 }
 
 func (d *Desktop) SwitchToWorkspace(id int) {
@@ -369,6 +381,7 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 
 	d.tcellScreen.Clear()
 	d.recalculateLayout()
+	d.broadcastStateUpdate()
 }
 
 func (d *Desktop) draw() {

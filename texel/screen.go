@@ -111,20 +111,6 @@ func (s *Screen) addStandardEffects(p *pane) {
 	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
 }
 
-func (s *Screen) broadcastStateUpdate() {
-	title := s.tree.GetActiveTitle()
-
-	s.Broadcast(Event{
-		Type: EventStateUpdate,
-		Payload: StatePayload{
-			WorkspaceID:   s.id, // Fixed: Added field
-			InControlMode: s.desktop.inControlMode,
-			SubMode:       s.desktop.subControlMode,
-			ActiveTitle:   title,
-		},
-	})
-}
-
 func (s *Screen) AddApp(app App) {
 	p := newPane(s)
 	s.addStandardEffects(p)
@@ -132,14 +118,14 @@ func (s *Screen) AddApp(app App) {
 	p.AttachApp(app, s.refreshChan)
 
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
-	s.broadcastStateUpdate()
+	s.desktop.broadcastStateUpdate()
 }
 
 func (s *Screen) moveActivePane(d Direction) {
 	s.tree.MoveActive(d)
 	s.recalculateLayout()
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
-	s.broadcastStateUpdate()
+	s.desktop.broadcastStateUpdate()
 }
 
 func (s *Screen) handleEvent(ev *tcell.EventKey) {
