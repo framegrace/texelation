@@ -1,6 +1,7 @@
 package texel
 
 import "sync"
+import "github.com/gdamore/tcell/v2"
 
 // EventType defines the type of an event.
 type EventType int
@@ -26,10 +27,12 @@ type Event struct {
 
 // StatePayload is the data associated with a MsgStateUpdate.
 type StatePayload struct {
-	WorkspaceID   int // Fixed: Added field
-	InControlMode bool
-	SubMode       rune
-	ActiveTitle   string
+	AllWorkspaces  []int
+	WorkspaceID    int
+	InControlMode  bool
+	SubMode        rune
+	ActiveTitle    string
+	DesktopBgColor tcell.Color // Added: Desktop's default background color
 }
 
 // Listener is an interface that any component can implement to receive events.

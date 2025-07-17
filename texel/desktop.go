@@ -6,6 +6,7 @@ import (
 	"golang.org/x/term"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -81,7 +82,6 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 	return d, nil
 }
 
-// Added: Methods to subscribe to the Desktop's dispatcher
 func (d *Desktop) Subscribe(listener Listener) {
 	d.dispatcher.Subscribe(listener)
 }
@@ -181,20 +181,16 @@ func (d *Desktop) Run() error {
 
 		select {
 		case ev := <-eventChan:
-
 			d.handleEvent(ev)
 
 		case <-refreshChan:
-
 			d.broadcastStateUpdate()
 			d.draw()
 
 		case <-drawChan:
-
 			d.draw()
 
 		case <-d.quit:
-
 			return nil
 		}
 	}
@@ -203,7 +199,7 @@ func (d *Desktop) Run() error {
 func (d *Desktop) handleEvent(ev tcell.Event) {
 	if _, ok := ev.(*tcell.EventResize); ok {
 		d.tcellScreen.Clear()
-		d.recalculateLayout() // Correct: Call desktop's recalculate
+		d.recalculateLayout()
 		d.draw()
 		return
 	}
@@ -263,7 +259,6 @@ func (d *Desktop) drawStatusPanes(tcs tcell.Screen) {
 func (d *Desktop) toggleControlMode() {
 	d.inControlMode = !d.inControlMode
 	d.subControlMode = 0
-	// If we are exiting control mode, ensure any resize selection is also cleared.
 	if !d.inControlMode && d.resizeSelection != nil {
 		d.activeWorkspace.clearResizeSelection(d.resizeSelection)
 		d.resizeSelection = nil
@@ -284,31 +279,25 @@ func (d *Desktop) toggleControlMode() {
 
 // handleControlMode processes all commands when the Desktop is in control mode.
 func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
-	// Highest priority: Esc always exits control mode, clearing any sub-modes.
 	if ev.Key() == tcell.KeyEsc {
 		d.toggleControlMode()
 		return
 	}
 
-	// If in a sub-mode, handle that first.
 	if d.subControlMode != 0 {
 		switch d.subControlMode {
 		case 'w':
 			d.activeWorkspace.SwapActivePane(keyToDirection(ev))
 		}
-		d.toggleControlMode() // Exit control mode after any sub-command
+		d.toggleControlMode()
 		return
 	}
 
-	// If not in a sub-mode, check for a new command.
-	// Check for interactive resize
 	if ev.Modifiers()&tcell.ModCtrl != 0 {
 		d.resizeSelection = d.activeWorkspace.handleInteractiveResize(ev, d.resizeSelection)
-		// Stay in control mode to continue resizing
 		return
 	}
 
-	// Check for workspace switching
 	r := ev.Rune()
 	if r >= '1' && r <= '9' {
 		wsID, _ := strconv.Atoi(string(r))
@@ -317,7 +306,6 @@ func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
 		return
 	}
 
-	// Check for one-shot pane commands
 	switch r {
 	case 'x':
 		d.activeWorkspace.CloseActivePane()
@@ -326,32 +314,38 @@ func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
 	case '-':
 		d.activeWorkspace.PerformSplit(Horizontal)
 	case 'w':
-		d.subControlMode = 'w' // Enter 'w' sub-mode
+		d.subControlMode = 'w'
 		d.broadcastStateUpdate()
-		d.activeWorkspace.Refresh()
-		return // Stay in control mode and wait for next key
+		return
 	}
 
-	// Any other key exits control mode
 	d.toggleControlMode()
 }
 
+// broadcastStateUpdate now broadcasts on the Desktop's dispatcher
 func (d *Desktop) broadcastStateUpdate() {
 	if d.activeWorkspace == nil {
 		return
 	}
 	title := d.activeWorkspace.tree.GetActiveTitle()
-	// Changed: Broadcast on the desktop's dispatcher
+
+	allWsIDs := make([]int, 0, len(d.workspaces))
+	for id := range d.workspaces {
+		allWsIDs = append(allWsIDs, id)
+	}
+	sort.Ints(allWsIDs)
+
 	d.dispatcher.Broadcast(Event{
 		Type: EventStateUpdate,
 		Payload: StatePayload{
-			WorkspaceID:   d.activeWorkspace.id,
-			InControlMode: d.inControlMode,
-			SubMode:       d.subControlMode,
-			ActiveTitle:   title,
+			AllWorkspaces:  allWsIDs,
+			WorkspaceID:    d.activeWorkspace.id,
+			InControlMode:  d.inControlMode,
+			SubMode:        d.subControlMode,
+			ActiveTitle:    title,
+			DesktopBgColor: d.DefaultBgColor, // Provide the desktop's default background color
 		},
 	})
-	// We still need to trigger a refresh for pane effects
 	if d.activeWorkspace != nil {
 		d.activeWorkspace.Refresh()
 	}
@@ -377,6 +371,10 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 			welcomeApp := d.WelcomeAppFactory()
 			ws.AddApp(welcomeApp)
 		}
+	}
+
+	for _, sp := range d.statusPanes {
+		sp.app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
 	}
 
 	d.tcellScreen.Clear()
@@ -407,7 +405,6 @@ func (d *Desktop) Close() {
 	})
 }
 
-// getStyle centrally manages tcell.Style objects to avoid re-creation.
 func (d *Desktop) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {
 	key := styleKey{fg: fg, bg: bg, bold: bold, underline: underline, reverse: reverse}
 	if st, ok := d.styleCache[key]; ok {
@@ -427,7 +424,6 @@ func (d *Desktop) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tc
 	return st
 }
 
-// initDefaultColors queries the terminal for its default colors.
 func initDefaultColors() (tcell.Color, tcell.Color, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
