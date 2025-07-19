@@ -15,8 +15,8 @@ import (
 const (
 	rightTabSeparator     = '' // Left half circle thick separator
 	leftTabSeparator      = '' // Right half circle thick separator
-	leftTabLineSeparator  = ''
-	rightTabLineSeparator = ''
+	leftLineTabSeparator  = ''
+	rightLineTabSeparator = ''
 )
 
 // StatusBarApp displays screen state information.
@@ -106,10 +106,10 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 
 	// Define color schemes
 	styleBase := tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
-	// Active tab has desktop background, making it look "cut out"
 	styleActiveTab := tcell.StyleDefault.Background(a.desktopBgColor).Foreground(tcell.ColorWhite)
-	// Inactive tab is a darker gray
 	styleInactiveTab := tcell.StyleDefault.Background(tcell.ColorGray).Foreground(tcell.ColorBlack)
+	styleActiveTabStart := tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(a.desktopBgColor)
+	styleInactiveTabStart := tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorGray)
 	styleControlMode := tcell.StyleDefault.Background(tcell.ColorSaddleBrown).Foreground(tcell.ColorWhite)
 
 	// Fill the entire bar with the base style first
@@ -117,46 +117,85 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 		buf[0][i] = texel.Cell{Ch: ' ', Style: styleBase}
 	}
 
+	// Find the index of the active workspace
+	activeIndex := -1
+	for i, wsID := range a.allWorkspaces {
+		if wsID == a.workspaceID {
+			activeIndex = i
+			break
+		}
+	}
+
 	// --- Left-aligned content (Tabs) ---
-	col := 0
-	for _, wsID := range a.allWorkspaces {
-		isCurrentWs := (wsID == a.workspaceID)
-
-		var tabStyle tcell.Style
-		if isCurrentWs {
-			tabStyle = styleActiveTab
+	// Draw first char
+	if activeIndex == 0 {
+		buf[0][0] = texel.Cell{Ch: leftTabSeparator, Style: styleActiveTabStart}
+	} else {
+		buf[0][0] = texel.Cell{Ch: leftTabSeparator, Style: styleInactiveTabStart}
+	}
+	col := 1
+	for i, wsID := range a.allWorkspaces {
+		currentIsActive := (i == activeIndex)
+		var currentStyle tcell.Style
+		if currentIsActive {
+			currentStyle = styleActiveTab
 		} else {
-			tabStyle = styleInactiveTab
+			currentStyle = styleInactiveTab
 		}
-		// Corrected: Use Decompose to get colors from a style
-		_, tabBg, _ := tabStyle.Decompose()
-		_, baseBg, _ := styleBase.Decompose()
-		separatorStyle := tcell.StyleDefault.Foreground(tabBg).Background(baseBg)
-
-		// Draw left separator
-		if col < a.width {
-			buf[0][col] = texel.Cell{Ch: leftTabSeparator, Style: separatorStyle}
-			col++
-		}
+		_, currentBg, _ := currentStyle.Decompose()
 
 		// Draw tab text
 		wsName := fmt.Sprintf(" %d ", wsID)
 		for _, r := range wsName {
 			if col < a.width {
-				buf[0][col] = texel.Cell{Ch: r, Style: tabStyle}
+				buf[0][col] = texel.Cell{Ch: r, Style: currentStyle}
 				col++
 			}
 		}
 
-		// Draw right separator
-		if col < a.width && isCurrentWs {
-			buf[0][col] = texel.Cell{Ch: rightTabSeparator, Style: separatorStyle}
-			col++
-		}
-
-		// Add a space between tabs
+		// Draw the separator between this tab and the next one
 		if col < a.width {
-			buf[0][col] = texel.Cell{Ch: ' ', Style: styleBase}
+			var nextStyle tcell.Style
+			nextIsActive := (i+1 == activeIndex)
+
+			if i+1 < len(a.allWorkspaces) {
+				if nextIsActive {
+					nextStyle = styleActiveTab
+				} else {
+					nextStyle = styleInactiveTab
+				}
+			} else {
+				nextStyle = styleBase
+			}
+			_, nextBg, _ := nextStyle.Decompose()
+
+			var separatorChar rune
+			var separatorStyle tcell.Style
+
+			if currentIsActive {
+				// The active tab's right edge cuts into the next tab
+				separatorChar = rightTabSeparator
+				separatorStyle = tcell.StyleDefault.Foreground(currentBg).Background(nextBg)
+			} else if nextIsActive {
+				// The next tab (which is active) cuts into the current tab
+				separatorChar = leftTabSeparator
+				separatorStyle = tcell.StyleDefault.Foreground(nextBg).Background(currentBg)
+			} else {
+				// Inactive tabs just sit next to each other, separated by the base color
+				if i < activeIndex {
+					separatorChar = leftLineTabSeparator //' '
+					separatorStyle = styleInactiveTab    // styleBase
+				} else {
+					if i == len(a.allWorkspaces)-1 {
+						separatorChar = rightTabSeparator
+						separatorStyle = styleInactiveTabStart
+					} else {
+						separatorChar = rightLineTabSeparator
+						separatorStyle = styleInactiveTab // styleBase
+					}
+				}
+			}
+			buf[0][col] = texel.Cell{Ch: separatorChar, Style: separatorStyle}
 			col++
 		}
 	}
