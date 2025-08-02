@@ -269,13 +269,18 @@ func (d *Desktop) statusPaneBlit(tcs tcell.Screen, x, y int, buf [][]Cell) {
 	}
 }
 
-// toggleControlMode enters or exits control mode.
 func (d *Desktop) toggleControlMode() {
 	d.inControlMode = !d.inControlMode
 	d.subControlMode = 0
+
 	if !d.inControlMode && d.resizeSelection != nil {
 		d.activeWorkspace.clearResizeSelection(d.resizeSelection)
 		d.resizeSelection = nil
+	}
+
+	// Use the screen's new SetControlMode method
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.SetControlMode(d.inControlMode)
 	}
 
 	var eventType EventType
@@ -387,6 +392,11 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 		}
 	}
 
+	// Apply current control mode state to the new workspace
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.SetControlMode(d.inControlMode)
+	}
+
 	for _, sp := range d.statusPanes {
 		sp.app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
 	}
@@ -415,6 +425,21 @@ func (d *Desktop) Close() {
 			d.tcellScreen.Fini()
 		}
 	})
+}
+
+func (d *Desktop) AddCustomEffect(effect Effect) {
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.AddEffect(effect)
+	}
+}
+
+// AddCustomPaneEffect adds a custom effect to the active pane
+func (d *Desktop) AddCustomPaneEffect(effect Effect) {
+	if d.activeWorkspace != nil &&
+		d.activeWorkspace.tree.ActiveLeaf != nil &&
+		d.activeWorkspace.tree.ActiveLeaf.Pane != nil {
+		d.activeWorkspace.tree.ActiveLeaf.Pane.AddEffect(effect)
+	}
 }
 
 func (d *Desktop) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {

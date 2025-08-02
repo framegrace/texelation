@@ -3,16 +3,15 @@ package texel
 
 import (
 	"context"
-	"github.com/gdamore/tcell/v2"
 	"sync"
 	"time"
 )
 
 // Effect is now a pure rendering transformation
-// It receives a buffer and applies visual changes to it
+// It receives a buffer reference and applies visual changes in-place
 type Effect interface {
-	// Apply transforms the buffer in-place and returns it
-	Apply(buffer [][]Cell) [][]Cell
+	// Apply transforms the buffer in-place (no copying needed)
+	Apply(buffer *[][]Cell)
 	// Clone creates a new instance of this effect
 	Clone() Effect
 }
@@ -68,14 +67,13 @@ func (ep *EffectPipeline) Clear() {
 }
 
 // Apply runs all effects in the pipeline sequentially
-func (ep *EffectPipeline) Apply(buffer [][]Cell) [][]Cell {
+func (ep *EffectPipeline) Apply(buffer *[][]Cell) {
 	ep.mu.RLock()
 	defer ep.mu.RUnlock()
 
 	for _, effect := range ep.effects {
-		buffer = effect.Apply(buffer)
+		effect.Apply(buffer)
 	}
-	return buffer
 }
 
 // EffectAnimator handles animation of effects

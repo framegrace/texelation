@@ -1,8 +1,9 @@
+// texel/screen_v2.go
 package texel
 
 import (
-	"context"
 	"github.com/gdamore/tcell/v2"
+	"time"
 )
 
 type Direction int
@@ -43,22 +44,25 @@ type selectedBorder struct {
 	index int   // The index of the left/top pane of the border. The border is between child[index] and child[index+1].
 }
 
-// Screen now represents a single workspace.
+// Screen now represents a single workspace with its own effects pipeline
 type Screen struct {
-	id                             int
-	x, y, width, height            int
-	desktop                        *Desktop // Reference to the parent desktop
-	tree                           *Tree
-	inactiveFadePrototype          Effect
-	controlModeFadeEffectPrototype Effect
-	ditherEffectPrototype          Effect
-	refreshChan                    chan bool
-	drawChan                       chan bool
-	dispatcher                     *EventDispatcher
-	ShellAppFactory                AppFactory
+	id                  int
+	x, y, width, height int
+	desktop             *Desktop
+	tree                *Tree
+	refreshChan         chan bool
+	drawChan            chan bool
+	dispatcher          *EventDispatcher
+	ShellAppFactory     AppFactory
 
-	subControlMode    rune
-	effectAnimators   map[*FadeEffect]context.CancelFunc
+	// New effects system for screen-level effects
+	effects  *EffectPipeline
+	animator *EffectAnimator
+
+	// Pre-created effects for control mode
+	controlModeDither *DitherEffect
+	controlModeFade   *FadeEffect
+
 	resizeSelection   *selectedBorder
 	debugFramesToDump int
 }
@@ -72,14 +76,51 @@ func newScreen(id int, shellFactory AppFactory, desktop *Desktop) (*Screen, erro
 		refreshChan:     make(chan bool, 1),
 		drawChan:        make(chan bool, 1),
 		dispatcher:      NewEventDispatcher(),
-		effectAnimators: make(map[*FadeEffect]context.CancelFunc),
 		ShellAppFactory: shellFactory,
+		effects:         NewEffectPipeline(),
+		animator:        NewEffectAnimator(),
 	}
-	s.inactiveFadePrototype = NewFadeEffect(s, tcell.NewRGBColor(20, 20, 0), 0.4)
-	s.controlModeFadeEffectPrototype = NewFadeEffect(s, tcell.NewRGBColor(0, 50, 0), 0.2, WithIsControl(true))
-	s.ditherEffectPrototype = NewDitherEffect('░')
+
+	// Create control mode effects
+	s.controlModeDither = NewDitherEffect('░')
+	s.controlModeFade = NewFadeEffect(desktop, tcell.NewRGBColor(0, 50, 0))
+
+	// Add them to the screen's effect pipeline (start with 0 intensity)
+	s.effects.AddEffect(s.controlModeFade)
+	s.effects.AddEffect(s.controlModeDither)
 
 	return s, nil
+}
+
+// SetControlMode activates or deactivates control mode effects
+func (s *Screen) SetControlMode(active bool) {
+	if active {
+		// Fade in the control mode effects
+		s.animator.FadeIn(s.controlModeFade, 150*time.Millisecond, func() {
+			s.Refresh()
+		})
+		s.animator.FadeIn(s.controlModeDither, 150*time.Millisecond, func() {
+			s.Refresh()
+		})
+	} else {
+		// Fade out the control mode effects
+		s.animator.FadeOut(s.controlModeFade, 150*time.Millisecond, func() {
+			s.Refresh()
+		})
+		s.animator.FadeOut(s.controlModeDither, 150*time.Millisecond, func() {
+			s.Refresh()
+		})
+	}
+}
+
+// AddEffect adds a custom effect to the screen's pipeline
+func (s *Screen) AddEffect(effect Effect) {
+	s.effects.AddEffect(effect)
+}
+
+// RemoveEffect removes an effect from the screen's pipeline
+func (s *Screen) RemoveEffect(effect Effect) {
+	s.effects.RemoveEffect(effect)
 }
 
 func (s *Screen) getDefaultBackground() tcell.Color {
@@ -110,24 +151,32 @@ func (s *Screen) Unsubscribe(listener Listener) {
 	s.dispatcher.Unsubscribe(listener)
 }
 
-func (s *Screen) addStandardEffects(p *pane) {
-	p.AddEffect(s.inactiveFadePrototype.Clone())
-	p.AddEffect(s.controlModeFadeEffectPrototype.Clone())
-}
-
 func (s *Screen) AddApp(app App) {
 	p := newPane(s)
-	s.addStandardEffects(p)
 	s.tree.SetRoot(p)
 	p.AttachApp(app, s.refreshChan)
+
+	// Set initial active state
+	p.SetActive(true)
 
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.desktop.broadcastStateUpdate()
 }
 
 func (s *Screen) moveActivePane(d Direction) {
+	// Deactivate current pane
+	if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
+		s.tree.ActiveLeaf.Pane.SetActive(false)
+	}
+
 	s.tree.MoveActive(d)
 	s.recalculateLayout()
+
+	// Activate new pane
+	if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
+		s.tree.ActiveLeaf.Pane.SetActive(true)
+	}
+
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.desktop.broadcastStateUpdate()
 }
@@ -167,6 +216,12 @@ func (s *Screen) CloseActivePane() {
 	closedPaneNode := s.tree.ActiveLeaf
 	s.tree.CloseActiveLeaf()
 	s.recalculateLayout()
+
+	// Ensure the new active pane is properly activated
+	if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
+		s.tree.ActiveLeaf.Pane.SetActive(true)
+	}
+
 	s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
 }
 
@@ -174,12 +229,20 @@ func (s *Screen) PerformSplit(splitDir SplitType) {
 	if s.tree.ActiveLeaf == nil || s.ShellAppFactory == nil {
 		return
 	}
+
+	// Deactivate current pane
+	if s.tree.ActiveLeaf.Pane != nil {
+		s.tree.ActiveLeaf.Pane.SetActive(false)
+	}
+
 	newPane := newPane(s)
-	s.addStandardEffects(newPane)
 	s.tree.SplitActive(splitDir, newPane)
 	s.recalculateLayout()
 	newApp := s.ShellAppFactory()
 	newPane.AttachApp(newApp, s.refreshChan)
+
+	// Activate new pane
+	newPane.SetActive(true)
 }
 
 func (s *Screen) SwapActivePane(d Direction) {
@@ -190,6 +253,7 @@ func (s *Screen) SwapActivePane(d Direction) {
 }
 
 func (s *Screen) draw(tcs tcell.Screen) {
+	// First, render all panes normally
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node.Pane.app != nil {
 			p := node.Pane
@@ -203,12 +267,47 @@ func (s *Screen) draw(tcs tcell.Screen) {
 			p.prevBuf = finalBuffer
 		}
 	})
+
+	// Then apply screen-level effects if any are active
+	if s.hasActiveEffects() {
+		s.applyScreenEffects(tcs)
+	}
+}
+
+// hasActiveEffects checks if any screen-level effects are currently active
+func (s *Screen) hasActiveEffects() bool {
+	return s.controlModeFade.IsAnimating() || s.controlModeDither.IsAnimating()
+}
+
+// applyScreenEffects applies screen-level effects to the entire screen area
+func (s *Screen) applyScreenEffects(tcs tcell.Screen) {
+	// Create a buffer for the entire screen area
+	buffer := make([][]Cell, s.height)
+	for y := range buffer {
+		buffer[y] = make([]Cell, s.width)
+		for x := range buffer[y] {
+			// Read the current content from tcell screen
+			mainc, _, style, _ := tcs.GetContent(s.x+x, s.y+y)
+			buffer[y][x] = Cell{Ch: mainc, Style: style}
+		}
+	}
+
+	// Apply screen-level effects
+	s.effects.Apply(&buffer)
+
+	// Write the modified buffer back to the screen
+	for y, row := range buffer {
+		for x, cell := range row {
+			tcs.SetContent(s.x+x, s.y+y, cell.Ch, nil, cell.Style)
+		}
+	}
 }
 
 func (s *Screen) Close() {
-	for _, cancel := range s.effectAnimators {
-		cancel()
-	}
+	// Stop all screen-level animations
+	s.animator.StopAll()
+
+	// Close all panes
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil {
 			node.Pane.Close()
@@ -220,55 +319,7 @@ func (s *Screen) recalculateLayout() {
 	s.tree.Resize(s.x, s.y, s.width, s.height)
 }
 
-func (s *Screen) performSplit(splitDir SplitType) {
-	if s.tree.ActiveLeaf == nil || s.ShellAppFactory == nil {
-		return
-	}
-	newPane := newPane(s)
-	s.addStandardEffects(newPane)
-	s.tree.SplitActive(splitDir, newPane)
-
-	s.recalculateLayout() // Fixed: Use stored dimensions
-
-	newApp := s.ShellAppFactory()
-	newPane.AttachApp(newApp, s.refreshChan)
-}
-
-func (s *Screen) needsContinuousUpdate() bool {
-	var needsUpdate bool
-	s.tree.Traverse(func(node *Node) {
-		if node != nil && node.Pane != nil {
-			for _, effect := range node.Pane.effects {
-				if effect.IsContinuous() {
-					needsUpdate = true
-					break
-				}
-			}
-		}
-	})
-	return needsUpdate
-}
-
-func blit(tcs tcell.Screen, x, y int, buf [][]Cell) {
-	for r, row := range buf {
-		for c, cell := range row {
-			tcs.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
-		}
-	}
-}
-
-func blitDiff(tcs tcell.Screen, x0, y0 int, oldBuf, buf [][]Cell) {
-	for y, row := range buf {
-		for x, cell := range row {
-			if y >= len(oldBuf) || x >= len(oldBuf[y]) || cell != oldBuf[y][x] {
-				tcs.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
-			}
-		}
-	}
-}
-
 func (s *Screen) findBorderToResize(d Direction) *selectedBorder {
-	// (This logic is extracted from the old handleInteractiveResize)
 	var border *selectedBorder
 	curr := s.tree.ActiveLeaf
 	for curr.Parent != nil {
@@ -302,11 +353,12 @@ func (s *Screen) findBorderToResize(d Direction) *selectedBorder {
 		curr = parent
 	}
 	if border != nil {
+		// Use the new SetResizing method
 		if p1 := border.node.Children[border.index].Pane; p1 != nil {
-			p1.IsResizing = true
+			p1.SetResizing(true)
 		}
 		if p2 := border.node.Children[border.index+1].Pane; p2 != nil {
-			p2.IsResizing = true
+			p2.SetResizing(true)
 		}
 	}
 	s.Refresh()
@@ -324,7 +376,6 @@ func (s *Screen) handleInteractiveResize(ev *tcell.EventKey, currentSelection *s
 }
 
 func (s *Screen) adjustBorder(border *selectedBorder, d Direction) {
-
 	if !(((d == DirLeft || d == DirRight) && border.node.Split == Vertical) ||
 		((d == DirUp || d == DirDown) && border.node.Split == Horizontal)) {
 		return
@@ -365,11 +416,12 @@ func (s *Screen) clearResizeSelection(selection *selectedBorder) {
 	if selection == nil {
 		return
 	}
+	// Use the new SetResizing method
 	if p1 := selection.node.Children[selection.index].Pane; p1 != nil {
-		p1.IsResizing = false
+		p1.SetResizing(false)
 	}
 	if p2 := selection.node.Children[selection.index+1].Pane; p2 != nil {
-		p2.IsResizing = false
+		p2.SetResizing(false)
 	}
 	s.Refresh()
 }
@@ -386,4 +438,22 @@ func keyToDirection(ev *tcell.EventKey) Direction {
 		return DirRight
 	}
 	return -1
+}
+
+func blit(tcs tcell.Screen, x, y int, buf [][]Cell) {
+	for r, row := range buf {
+		for c, cell := range row {
+			tcs.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
+		}
+	}
+}
+
+func blitDiff(tcs tcell.Screen, x0, y0 int, oldBuf, buf [][]Cell) {
+	for y, row := range buf {
+		for x, cell := range row {
+			if y >= len(oldBuf) || x >= len(oldBuf[y]) || cell != oldBuf[y][x] {
+				tcs.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
+			}
+		}
+	}
 }

@@ -1,21 +1,28 @@
+// texel/pane_v2.go
 package texel
 
 import (
-	"texelation/texel/theme"
-	"unicode/utf8"
-
 	"github.com/gdamore/tcell/v2"
+	"texelation/texel/theme"
+	"time"
+	"unicode/utf8"
 )
 
 // Pane represents a rectangular area on the screen that hosts an App.
 type pane struct {
 	absX0, absY0, absX1, absY1 int
 	app                        App
-	effects                    []Effect
-	prevBuf                    [][]Cell
 	name                       string
-	frozenBuffer               [][]Cell
+	prevBuf                    [][]Cell
 	screen                     *Screen
+
+	// Effects system
+	effects  *EffectPipeline
+	animator *EffectAnimator
+
+	// Pre-created effects for common use cases
+	inactiveFade *FadeEffect
+	resizingFade *FadeEffect
 
 	// Public state fields
 	IsActive   bool
@@ -24,9 +31,21 @@ type pane struct {
 
 // newPane creates a new, empty Pane. The App is attached later.
 func newPane(s *Screen) *pane {
-	return &pane{
-		screen: s,
+	p := &pane{
+		screen:   s,
+		effects:  NewEffectPipeline(),
+		animator: NewEffectAnimator(),
 	}
+
+	// Create pre-made effects for common states
+	p.inactiveFade = NewFadeEffect(s.desktop, tcell.NewRGBColor(20, 20, 0))
+	p.resizingFade = NewFadeEffect(s.desktop, tcell.NewRGBColor(255, 184, 108)) // Orange
+
+	// Add them to the pipeline (they start with 0 intensity)
+	p.effects.AddEffect(p.inactiveFade)
+	p.effects.AddEffect(p.resizingFade)
+
+	return p
 }
 
 // AttachApp connects an application to the pane, gives it its initial size,
@@ -46,6 +65,58 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	go p.app.Run()
 }
 
+// SetActive changes the active state of the pane and animates the appropriate effects
+func (p *pane) SetActive(active bool) {
+	if p.IsActive == active {
+		return
+	}
+
+	p.IsActive = active
+
+	// Animate the inactive fade effect
+	if active {
+		// Fade out the inactive effect
+		p.animator.FadeOut(p.inactiveFade, 200*time.Millisecond, func() {
+			p.screen.Refresh() // Request a redraw when animation completes
+		})
+	} else {
+		// Fade in the inactive effect
+		p.animator.FadeIn(p.inactiveFade, 200*time.Millisecond, func() {
+			p.screen.Refresh()
+		})
+	}
+}
+
+// SetResizing changes the resizing state of the pane and animates the appropriate effects
+func (p *pane) SetResizing(resizing bool) {
+	if p.IsResizing == resizing {
+		return
+	}
+
+	p.IsResizing = resizing
+
+	// Animate the resizing fade effect
+	if resizing {
+		p.animator.FadeIn(p.resizingFade, 100*time.Millisecond, func() {
+			p.screen.Refresh()
+		})
+	} else {
+		p.animator.FadeOut(p.resizingFade, 100*time.Millisecond, func() {
+			p.screen.Refresh()
+		})
+	}
+}
+
+// AddEffect adds a custom effect to the pane's pipeline
+func (p *pane) AddEffect(effect Effect) {
+	p.effects.AddEffect(effect)
+}
+
+// RemoveEffect removes an effect from the pane's pipeline
+func (p *pane) RemoveEffect(effect Effect) {
+	p.effects.RemoveEffect(effect)
+}
+
 // Render draws the pane's borders, title, and the hosted application's content.
 func (p *pane) Render() [][]Cell {
 	w := p.Width()
@@ -53,6 +124,7 @@ func (p *pane) Render() [][]Cell {
 
 	tm := theme.Get()
 	defstyle := tcell.StyleDefault.Background(tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()).Foreground(tm.GetColor("desktop", "default_fg", tcell.ColorReset).TrueColor())
+
 	// Create the pane's buffer.
 	buffer := make([][]Cell, h)
 	for i := range buffer {
@@ -92,7 +164,6 @@ func (p *pane) Render() [][]Cell {
 	buffer[0][w-1] = Cell{Ch: tcell.RuneURCorner, Style: borderStyle}
 	buffer[h-1][0] = Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
 	buffer[h-1][w-1] = Cell{Ch: '╯', Style: borderStyle}
-	//buffer[h-1][w-1] = Cell{Ch: tcell.RuneLRCorner, Style: borderStyle}
 
 	// Draw Title
 	title := p.getTitle()
@@ -121,14 +192,13 @@ func (p *pane) Render() [][]Cell {
 		}
 	}
 
-	// Apply visual effects to the entire pane buffer (borders included).
-	for _, effect := range p.effects {
-		buffer = effect.Apply(buffer, p)
-	}
+	// Apply all effects in the pipeline to the entire pane buffer
+	p.effects.Apply(&buffer)
 
 	return buffer
 }
 
+// Rest of the methods remain the same...
 func (p *pane) drawableWidth() int {
 	w := p.Width() - 2
 	if w < 0 {
@@ -160,42 +230,17 @@ func (p *pane) getTitle() string {
 	return p.name
 }
 
-func (p *pane) HandleEvent(event Event) {
-	for _, effect := range p.effects {
-		if listener, ok := effect.(Listener); ok {
-			listener.OnEvent(event)
-		}
-	}
-}
-
 func (p *pane) Close() {
+	// Stop all animations
+	p.animator.StopAll()
+
+	// Clean up app
 	if listener, ok := p.app.(Listener); ok {
 		p.screen.Unsubscribe(listener)
-	}
-	for _, effect := range p.effects {
-		if listener, ok := effect.(Listener); ok {
-			p.screen.Unsubscribe(listener)
-		}
 	}
 	if p.app != nil {
 		p.app.Stop()
 	}
-}
-
-func (p *pane) AddEffect(e Effect) {
-	p.effects = append(p.effects, e)
-	if listener, ok := e.(Listener); ok {
-		p.screen.Subscribe(listener)
-	}
-}
-
-func (p *pane) ClearEffects() {
-	for _, effect := range p.effects {
-		if listener, ok := effect.(Listener); ok {
-			p.screen.Unsubscribe(listener)
-		}
-	}
-	p.effects = make([]Effect, 0)
 }
 
 func (p *pane) Width() int {
