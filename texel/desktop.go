@@ -1,6 +1,7 @@
 package texel
 
 import (
+	"context"
 	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/term"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"texelation/texel/theme"
 	"time"
 )
 
@@ -43,6 +45,7 @@ type Desktop struct {
 	DefaultFgColor    tcell.Color
 	DefaultBgColor    tcell.Color
 	dispatcher        *EventDispatcher
+	prevBuff          [][]Cell
 
 	// Global state now lives on the Desktop
 	inControlMode   bool
@@ -59,11 +62,15 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 	if err := tcellScreen.Init(); err != nil {
 		return nil, err
 	}
-	defStyle := tcell.StyleDefault.Background(tcell.ColorReset).Foreground(tcell.ColorReset)
+
+	tm := theme.Get()
+	defbg := tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()
+	deffg := tm.GetColor("desktop", "default_fg", tcell.ColorReset).TrueColor()
+	defStyle := tcell.StyleDefault.Background(defbg).Foreground(deffg)
 	tcellScreen.SetStyle(defStyle)
 	tcellScreen.HideCursor()
 
-	defaultFg, defaultBg, _ := initDefaultColors()
+	//defaultFg, defaultBg, _ := initDefaultColors()
 
 	d := &Desktop{
 		tcellScreen:       tcellScreen,
@@ -73,8 +80,8 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 		ShellAppFactory:   shellFactory,
 		WelcomeAppFactory: welcomeFactory,
 		styleCache:        make(map[styleKey]tcell.Style),
-		DefaultFgColor:    defaultFg,
-		DefaultBgColor:    defaultBg,
+		DefaultFgColor:    deffg,
+		DefaultBgColor:    defbg,
 		dispatcher:        NewEventDispatcher(),
 	}
 
@@ -198,7 +205,6 @@ func (d *Desktop) Run() error {
 
 func (d *Desktop) handleEvent(ev tcell.Event) {
 	if _, ok := ev.(*tcell.EventResize); ok {
-		d.tcellScreen.Clear()
 		d.recalculateLayout()
 		d.draw()
 		return
@@ -237,21 +243,29 @@ func (d *Desktop) drawStatusPanes(tcs tcell.Screen) {
 		switch sp.side {
 		case SideTop:
 			buf := sp.app.Render()
-			blit(tcs, leftOffset, topOffset, buf)
+			d.statusPaneBlit(tcs, leftOffset, topOffset, buf)
 			topOffset += sp.size
 		case SideBottom:
 			buf := sp.app.Render()
-			blit(tcs, leftOffset, h-bottomOffset-sp.size, buf)
+			d.statusPaneBlit(tcs, leftOffset, h-bottomOffset-sp.size, buf)
 			bottomOffset += sp.size
 		case SideLeft:
 			buf := sp.app.Render()
-			blit(tcs, leftOffset, topOffset, buf)
+			d.statusPaneBlit(tcs, leftOffset, topOffset, buf)
 			leftOffset += sp.size
 		case SideRight:
 			buf := sp.app.Render()
-			blit(tcs, w-rightOffset-sp.size, topOffset, buf)
+			d.statusPaneBlit(tcs, w-rightOffset-sp.size, topOffset, buf)
 			rightOffset += sp.size
 		}
+	}
+}
+func (d *Desktop) statusPaneBlit(tcs tcell.Screen, x, y int, buf [][]Cell) {
+	if d.prevBuff != nil {
+		blitDiff(tcs, x, y, d.prevBuff, buf)
+		d.prevBuff = buf
+	} else {
+		blit(tcs, x, y, buf)
 	}
 }
 
@@ -346,9 +360,9 @@ func (d *Desktop) broadcastStateUpdate() {
 			DesktopBgColor: d.DefaultBgColor, // Provide the desktop's default background color
 		},
 	})
-	if d.activeWorkspace != nil {
-		d.activeWorkspace.Refresh()
-	}
+	//	if d.activeWorkspace != nil {
+	//		d.activeWorkspace.Refresh()
+	//	}
 }
 
 func (d *Desktop) SwitchToWorkspace(id int) {
@@ -376,8 +390,6 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 	for _, sp := range d.statusPanes {
 		sp.app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
 	}
-
-	d.tcellScreen.Clear()
 	d.recalculateLayout()
 	d.broadcastStateUpdate()
 }
@@ -424,63 +436,126 @@ func (d *Desktop) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tc
 	return st
 }
 
-func initDefaultColors() (tcell.Color, tcell.Color, error) {
+// queryTerminalColors attempts to query the terminal for its default colors with a timeout.
+func queryTerminalColors(ctx context.Context) (fg tcell.Color, bg tcell.Color, err error) {
+	// Default to standard colors in case of any error
+	fg = tcell.ColorWhite
+	bg = tcell.ColorBlack
+
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return tcell.ColorDefault, tcell.ColorDefault, fmt.Errorf("open /dev/tty: %w", err)
+		return fg, bg, fmt.Errorf("could not open /dev/tty: %w", err)
 	}
 	defer tty.Close()
 
-	oldState, err := term.MakeRaw(int(tty.Fd()))
-	if err != nil {
-		return tcell.ColorDefault, tcell.ColorDefault, fmt.Errorf("MakeRaw: %w", err)
-	}
-	defer term.Restore(int(tty.Fd()), oldState)
+	// Use a context to make sure we don't block forever on raw mode or reads
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
 
-	query := func(code int) (tcell.Color, error) {
-		seq := fmt.Sprintf("\x1b]%d;?\a", code)
-		if _, err := tty.WriteString(seq); err != nil {
-			return tcell.ColorDefault, err
+		var state *term.State
+		state, err = term.MakeRaw(int(tty.Fd()))
+		if err != nil {
+			err = fmt.Errorf("failed to make raw terminal: %w", err)
+			return
 		}
-		resp := make([]byte, 0, 64)
-		buf := make([]byte, 1)
-		deadline := time.Now().Add(500 * time.Millisecond)
-		if err := tty.SetReadDeadline(deadline); err != nil {
-			return tcell.ColorDefault, err
-		}
-		for {
-			n, err := tty.Read(buf)
-			if err != nil {
-				return tcell.ColorDefault, fmt.Errorf("read reply: %w", err)
-			}
-			resp = append(resp, buf[:n]...)
-			if buf[0] == '\a' {
-				break
-			}
-		}
-		pattern := fmt.Sprintf(`\x1b\]%d;rgb:([0-9A-Fa-f]{4})/([0-9A-Fa-f]{4})/([0-9A-Fa-f]{4})`, code)
-		re := regexp.MustCompile(pattern)
-		m := re.FindStringSubmatch(string(resp))
-		if len(m) != 4 {
-			return tcell.ColorDefault, fmt.Errorf("unexpected reply: %q", resp)
-		}
-		hex2int := func(s string) (int32, error) {
-			v, err := strconv.ParseInt(s, 16, 32)
-			return int32(v), err
-		}
-		r, _ := hex2int(m[1])
-		g, _ := hex2int(m[2])
-		b, _ := hex2int(m[3])
-		return tcell.NewRGBColor(r, g, b), nil
-	}
+		defer term.Restore(int(tty.Fd()), state)
 
-	fg, err := query(10)
-	if err != nil {
-		fg = tcell.ColorWhite
+		query := func(code int) (tcell.Color, error) {
+			seq := fmt.Sprintf("\x1b]%d;?\a", code)
+			if _, writeErr := tty.WriteString(seq); writeErr != nil {
+				return tcell.ColorDefault, writeErr
+			}
+
+			resp := make([]byte, 0, 64)
+			buf := make([]byte, 1)
+
+			// Loop with context cancellation check
+			for {
+				select {
+				case <-ctx.Done():
+					return tcell.ColorDefault, ctx.Err()
+				default:
+				}
+
+				// Set a very short deadline on each read to make the loop responsive to cancellation
+				readDeadline := time.Now().Add(10 * time.Millisecond)
+				if deadline, ok := ctx.Deadline(); ok && deadline.Before(readDeadline) {
+					readDeadline = deadline
+				}
+				tty.SetReadDeadline(readDeadline)
+
+				n, readErr := tty.Read(buf)
+				if readErr != nil {
+					if os.IsTimeout(readErr) {
+						continue // Expected timeout, check context and loop again
+					}
+					return tcell.ColorDefault, fmt.Errorf("failed to read from tty: %w", readErr)
+				}
+				resp = append(resp, buf[:n]...)
+				// BEL or ST terminates the response
+				if buf[0] == '\a' || (len(resp) > 1 && resp[len(resp)-2] == '\x1b' && resp[len(resp)-1] == '\\') {
+					break
+				}
+			}
+
+			pattern := fmt.Sprintf(`\x1b\]%d;rgb:([0-9A-Fa-f]{1,4})/([0-9A-Fa-f]{1,4})/([0-9A-Fa-f]{1,4})`, code)
+			re := regexp.MustCompile(pattern)
+			m := re.FindStringSubmatch(string(resp))
+			if len(m) != 4 {
+				return tcell.ColorDefault, fmt.Errorf("unexpected response format: %q", resp)
+			}
+
+			hex2int := func(s string) (int32, error) {
+				// Pad to 4 characters for consistent parsing (e.g., "ff" -> "00ff")
+				if len(s) < 4 {
+					s = "00" + s
+					s = s[len(s)-4:]
+				}
+				v, err := strconv.ParseInt(s, 16, 32)
+				// Scale 16-bit color down to 8-bit for tcell
+				return int32(v / 257), err
+			}
+			r, _ := hex2int(m[1])
+			g, _ := hex2int(m[2])
+			b, _ := hex2int(m[3])
+
+			return tcell.NewRGBColor(r, g, b), nil
+		}
+
+		var queryErr error
+		fg, queryErr = query(10)
+		if queryErr != nil {
+			err = fmt.Errorf("failed to query foreground color: %w", queryErr)
+			// Don't return yet, try to get the background color
+		}
+
+		bg, queryErr = query(11)
+		if queryErr != nil {
+			err = fmt.Errorf("failed to query background color: %w", queryErr)
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return tcell.ColorWhite, tcell.ColorBlack, ctx.Err()
+	case <-done:
+		// The goroutine finished, return its results.
+		// If 'err' is not nil, the default fg/bg will be used.
+		return fg, bg, err
 	}
-	bg, err := query(11)
+}
+
+func initDefaultColors() (tcell.Color, tcell.Color, error) {
+	// Set a timeout for the entire color query operation.
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	fg, bg, err := queryTerminalColors(ctx)
 	if err != nil {
-		bg = tcell.ColorBlack
+		// If there's any error (including timeout), log it and return safe defaults.
+		// log.Printf("Could not query terminal colors, using defaults: %v", err)
+		return tcell.ColorWhite, tcell.ColorBlack, nil
 	}
 	return fg, bg, nil
 }

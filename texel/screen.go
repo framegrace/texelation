@@ -82,6 +82,10 @@ func newScreen(id int, shellFactory AppFactory, desktop *Desktop) (*Screen, erro
 	return s, nil
 }
 
+func (s *Screen) getDefaultBackground() tcell.Color {
+	return s.desktop.DefaultBgColor
+}
+
 func (s *Screen) setArea(x, y, w, h int) {
 	s.x, s.y, s.width, s.height = x, y, w, h
 	s.recalculateLayout()

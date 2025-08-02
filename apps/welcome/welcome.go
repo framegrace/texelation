@@ -1,10 +1,11 @@
-package welcome // Package name changed from tui
+package welcome
 
 import (
 	"sync"
+	"texelation/texel"
+	"texelation/texel/theme"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel" // Import the core DE package
 )
 
 // welcomeApp is a simple internal widget that displays a static welcome message.
@@ -16,10 +17,6 @@ type welcomeApp struct {
 // NewWelcomeApp now returns the App interface for consistency.
 func NewWelcomeApp() texel.App {
 	return &welcomeApp{}
-}
-
-func (a *welcomeApp) HandleMessage(msg texel.Message) {
-	// This app doesn't handle messages.
 }
 
 func (a *welcomeApp) Run() error {
@@ -43,26 +40,28 @@ func (a *welcomeApp) Render() [][]texel.Cell {
 		return [][]texel.Cell{}
 	}
 
+	tm := theme.Get()
+	textColor := tm.GetColor("welcome", "text_fg", tcell.ColorPurple)
+	style := tcell.StyleDefault.Background(tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()).Foreground(textColor)
+
 	buffer := make([][]texel.Cell, a.height)
 	for i := range buffer {
 		buffer[i] = make([]texel.Cell, a.width)
 		for j := range buffer[i] {
-			buffer[i][j] = texel.Cell{Ch: ' ', Style: tcell.StyleDefault}
+			buffer[i][j] = texel.Cell{Ch: ' ', Style: style}
 		}
 	}
-
-	style := tcell.StyleDefault.Foreground(tcell.ColorGreen.TrueColor())
 
 	messages := []string{
 		"Welcome to Texelation!",
 		"",
 		"Press 'Ctrl-A' to enter Control Mode, then:",
-		"  | or h  - Split horizontally",
-		"  - or v  - Split vertically",
+		"  | or -  - Split vertically or horizontally",
 		"  x       - Close active pane",
-		"  w, arrow- Swap active pane with neighbor",
+		"  w       - Enter swap mode (then use arrows)",
 		"",
 		"Press 'Shift-Arrow' to navigate panes anytime.",
+		"Press 'Ctrl-Arrow' to resize panes.",
 		"Press 'Ctrl-Q' to quit.",
 	}
 
@@ -88,7 +87,6 @@ func (a *welcomeApp) HandleKey(ev *tcell.EventKey) {
 	// This app doesn't handle key presses.
 }
 
-// SetRefreshNotifier satisfies the interface, but this static app doesn't need to do anything with it.
 func (a *welcomeApp) SetRefreshNotifier(refreshChan chan<- bool) {
 	// No-op
 }

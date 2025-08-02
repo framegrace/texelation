@@ -1,6 +1,7 @@
 package texel
 
 import (
+	"texelation/texel/theme"
 	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
@@ -50,12 +51,14 @@ func (p *pane) Render() [][]Cell {
 	w := p.Width()
 	h := p.Height()
 
+	tm := theme.Get()
+	defstyle := tcell.StyleDefault.Background(tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()).Foreground(tm.GetColor("desktop", "default_fg", tcell.ColorReset).TrueColor())
 	// Create the pane's buffer.
 	buffer := make([][]Cell, h)
 	for i := range buffer {
 		buffer[i] = make([]Cell, w)
 		for j := range buffer[i] {
-			buffer[i][j] = Cell{Ch: ' ', Style: tcell.StyleDefault}
+			buffer[i][j] = Cell{Ch: ' ', Style: defstyle}
 		}
 	}
 
@@ -65,12 +68,15 @@ func (p *pane) Render() [][]Cell {
 	}
 
 	// Determine border style based on active state.
-	borderStyle := tcell.StyleDefault.Foreground(tcell.ColorDarkSlateGray)
+	borderStyle := defstyle.Foreground(
+		tm.GetColor("pane", "inactive_border_fg", tcell.ColorPink).TrueColor())
 	if p.IsActive {
-		borderStyle = tcell.StyleDefault.Foreground(tcell.ColorOrange)
+		borderStyle = defstyle.Foreground(
+			tm.GetColor("pane", "active_border_fg", tcell.ColorPink).TrueColor())
 	}
 	if p.IsResizing {
-		borderStyle = tcell.StyleDefault.Foreground(tcell.ColorAqua)
+		borderStyle = defstyle.Foreground(
+			tm.GetColor("pane", "resizing_border_fg", tcell.ColorPink).TrueColor())
 	}
 
 	// Draw borders
@@ -85,7 +91,8 @@ func (p *pane) Render() [][]Cell {
 	buffer[0][0] = Cell{Ch: tcell.RuneULCorner, Style: borderStyle}
 	buffer[0][w-1] = Cell{Ch: tcell.RuneURCorner, Style: borderStyle}
 	buffer[h-1][0] = Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
-	buffer[h-1][w-1] = Cell{Ch: tcell.RuneLRCorner, Style: borderStyle}
+	buffer[h-1][w-1] = Cell{Ch: '╯', Style: borderStyle}
+	//buffer[h-1][w-1] = Cell{Ch: tcell.RuneLRCorner, Style: borderStyle}
 
 	// Draw Title
 	title := p.getTitle()

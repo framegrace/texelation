@@ -6,6 +6,7 @@ import (
 	"sync"
 	"texelation/apps/clock"
 	"texelation/texel"
+	"texelation/texel/theme"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -17,6 +18,8 @@ const (
 	leftTabSeparator      = '' // Right half circle thick separator
 	leftLineTabSeparator  = ''
 	rightLineTabSeparator = ''
+	keyboardIcon          = "  "
+	ctrlIcon              = "  "
 )
 
 // StatusBarApp displays screen state information.
@@ -105,12 +108,19 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 	}
 
 	// Define color schemes
-	styleBase := tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
-	styleActiveTab := tcell.StyleDefault.Background(a.desktopBgColor).Foreground(tcell.ColorWhite)
-	styleInactiveTab := tcell.StyleDefault.Background(tcell.ColorGray).Foreground(tcell.ColorBlack)
-	styleActiveTabStart := tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(a.desktopBgColor)
-	styleInactiveTabStart := tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorGray)
-	styleControlMode := tcell.StyleDefault.Background(tcell.ColorSaddleBrown).Foreground(tcell.ColorWhite)
+	tm := theme.Get()
+	defbgColor := tm.GetColor("statusbar", "base_bg", tcell.ColorPink).TrueColor()
+	deffgColor := tm.GetColor("statusbar", "base_fg", tcell.ColorPink).TrueColor()
+	if a.inControlMode {
+		defbgColor = tm.GetColor("statusbar", "control_mode_bg", tcell.ColorPink).TrueColor()
+		deffgColor = tm.GetColor("statusbar", "control_mode_fg", tcell.ColorPink).TrueColor()
+	}
+	styleBase := tcell.StyleDefault.Background(defbgColor).Foreground(deffgColor)
+	styleActiveTab := tcell.StyleDefault.Background(a.desktopBgColor.TrueColor()).Foreground(tm.GetColor("statusbar", "active_tab_fg", tcell.ColorPink).TrueColor())
+	styleInactiveTab := tcell.StyleDefault.Background(tm.GetColor("statusbar", "inactive_tab_bg", tcell.ColorPink).TrueColor()).Foreground(tm.GetColor("statusbar", "inactive_tab_fg", tcell.ColorPink).TrueColor())
+
+	styleActiveTabStart := tcell.StyleDefault.Background(defbgColor).Foreground(a.desktopBgColor)
+	styleInactiveTabStart := tcell.StyleDefault.Background(defbgColor).Foreground(tm.GetColor("statusbar", "inactive_tab_bg", tcell.ColorPink).TrueColor())
 
 	// Fill the entire bar with the base style first
 	for i := 0; i < a.width; i++ {
@@ -224,17 +234,15 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 
 	// --- Center-aligned content (Mode & Title) ---
 	var modeStr string
-	var modeStyle tcell.Style
+	modeStyle := styleBase
 	if a.inControlMode {
 		if a.subMode != 0 {
 			modeStr = fmt.Sprintf(" [CTRL-A, %c, ?] ", a.subMode)
 		} else {
-			modeStr = " [CONTROL] "
+			modeStr = ctrlIcon // " [CONTROL] "
 		}
-		modeStyle = styleControlMode
 	} else {
-		modeStr = " [INPUT] "
-		modeStyle = styleBase
+		modeStr = keyboardIcon //" [INPUT] "
 	}
 	titleStr := fmt.Sprintf(" %s ", a.activeTitle)
 

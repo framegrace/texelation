@@ -1,15 +1,20 @@
-package clock // Package name changed from tui
+package clock
 
 import (
 	"fmt"
 	"sync"
-	"texelation/texel" // Import the core DE package
+	"texelation/texel"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/mattn/go-runewidth" // Added for correct wide-character handling
 )
 
-// clockApp is now unexported to hide implementation details.
+const (
+	// Using the Nerd Font clock icon
+	timePrefix = ""
+)
+
 type clockApp struct {
 	width, height int
 	currentTime   string
@@ -19,25 +24,18 @@ type clockApp struct {
 	buf           [][]texel.Cell
 }
 
-// NewClockApp creates a new ClockApp and returns it as a texel.App interface.
 func NewClockApp() texel.App {
 	return &clockApp{
 		stop: make(chan struct{}),
 	}
 }
 
-func (a *clockApp) HandleMessage(msg texel.Message) {
-	// This app doesn't handle messages.
-}
-
-// HandleKey does nothing for the clock app.
 func (a *clockApp) HandleKey(ev *tcell.EventKey) {}
 
 func (a *clockApp) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 }
 
-// Run starts a ticker to update the time every second.
 func (a *clockApp) Run() error {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -54,7 +52,6 @@ func (a *clockApp) Run() error {
 		case <-ticker.C:
 			updateTime()
 			if a.refreshChan != nil {
-				// Non-blocking send
 				select {
 				case a.refreshChan <- true:
 				default:
@@ -66,19 +63,16 @@ func (a *clockApp) Run() error {
 	}
 }
 
-// Stop signals the Run loop to terminate.
 func (a *clockApp) Stop() {
 	close(a.stop)
 }
 
-// Resize stores the new dimensions of the pane.
 func (a *clockApp) Resize(cols, rows int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.width, a.height = cols, rows
 }
 
-// Render now returns a buffer of texel.Cell
 func (a *clockApp) Render() [][]texel.Cell {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -87,7 +81,7 @@ func (a *clockApp) Render() [][]texel.Cell {
 		return [][]texel.Cell{}
 	}
 
-	if len(a.buf) != a.width || (a.height > 0 && cap(a.buf[0]) != a.width) {
+	if len(a.buf) != a.height || (a.height > 0 && len(a.buf[0]) != a.width) {
 		a.buf = make([][]texel.Cell, a.height)
 		for y := 0; y < a.height; y++ {
 			a.buf[y] = make([]texel.Cell, a.width)
@@ -102,14 +96,20 @@ func (a *clockApp) Render() [][]texel.Cell {
 
 	style := tcell.StyleDefault.Foreground(tcell.PaletteColor(6))
 
-	str := fmt.Sprintf("Time: %s", a.currentTime)
+	str := fmt.Sprintf(timePrefix+"%s", a.currentTime)
 	y := a.height / 2
-	x := (a.width - len(str)) / 2
+
+	// Corrected: Use runewidth.StringWidth to get the correct visual width
+	stringVisualWidth := runewidth.StringWidth(str)
+	x := (a.width - stringVisualWidth) / 2
 
 	if y < a.height && x >= 0 {
-		for i, ch := range str {
-			if x+i < a.width {
-				a.buf[y][x+i] = texel.Cell{Ch: ch, Style: style}
+		// Corrected: Manually iterate and advance the column based on rune width
+		col := x
+		for _, ch := range str {
+			if col < a.width {
+				a.buf[y][col] = texel.Cell{Ch: ch, Style: style}
+				col += runewidth.RuneWidth(ch) // Advance by the character's actual width
 			}
 		}
 	}

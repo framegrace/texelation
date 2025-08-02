@@ -27,9 +27,8 @@ type FadeEffect struct {
 func NewFadeEffect(scr *Screen, color tcell.Color, intensity float32, opts ...interface{}) *FadeEffect {
 	// Start with default values for this specific effect type
 	f := &FadeEffect{
-		BaseEffect:          newBaseEffect(scr, intensity), // Default intensity for fade
-		FadeColor:           color,
-		isControlModeEffect: false, // Default behavior
+		BaseEffect: newBaseEffect(scr, intensity), // Default intensity for fade
+		FadeColor:  color,
 	}
 
 	// Loop through options and apply them based on their type
@@ -89,10 +88,10 @@ func (f *FadeEffect) Apply(buffer [][]Cell, owner *pane) [][]Cell {
 			fg, bg, attrs := cell.Style.Decompose()
 			// Access resources through the desktop now
 			if !fg.Valid() {
-				fg = f.desktop.DefaultFgColor
+				fg = f.desktop.DefaultFgColor.TrueColor()
 			}
 			if !bg.Valid() {
-				bg = f.desktop.DefaultBgColor
+				bg = f.desktop.DefaultBgColor.TrueColor()
 			}
 			blendedFg := blendColor(fg, f.FadeColor, intensity)
 			blendedBg := blendColor(bg, f.FadeColor, intensity)
