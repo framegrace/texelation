@@ -150,6 +150,9 @@ func (p *pane) Render() [][]Cell {
 	w := p.Width()
 	h := p.Height()
 
+	log.Printf("Render: Pane '%s' rendering %dx%d (abs: %d,%d-%d,%d)",
+		p.getTitle(), w, h, p.absX0, p.absY0, p.absX1, p.absY1)
+
 	tm := theme.Get()
 	defstyle := tcell.StyleDefault.Background(tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()).Foreground(tm.GetColor("desktop", "default_fg", tcell.ColorReset).TrueColor())
 
@@ -164,6 +167,7 @@ func (p *pane) Render() [][]Cell {
 
 	// Don't draw decorations if the pane is too small.
 	if w < 2 || h < 2 {
+		log.Printf("Render: Pane '%s' too small to draw decorations (%dx%d)", p.getTitle(), w, h)
 		return buffer
 	}
 
@@ -211,6 +215,9 @@ func (p *pane) Render() [][]Cell {
 	// Render the app's content inside the borders.
 	if p.app != nil {
 		appBuffer := p.app.Render()
+		log.Printf("Render: Pane '%s' app buffer size: %dx%d",
+			p.getTitle(), len(appBuffer), len(appBuffer[0]))
+
 		for y, row := range appBuffer {
 			for x, cell := range row {
 				if 1+x < w-1 && 1+y < h-1 {
@@ -218,11 +225,14 @@ func (p *pane) Render() [][]Cell {
 				}
 			}
 		}
+	} else {
+		log.Printf("Render: Pane '%s' has no app!", p.getTitle())
 	}
 
 	// Apply all effects in the pipeline to the entire pane buffer
 	p.effects.Apply(&buffer)
 
+	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
 	return buffer
 }
 

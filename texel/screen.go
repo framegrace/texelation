@@ -334,8 +334,9 @@ func (s *Screen) SwapActivePane(d Direction) {
 	}
 }
 
-// Fixed screen.go draw method
 func (s *Screen) draw(tcs tcell.Screen) {
+	log.Printf("Screen.draw: Drawing screen %d", s.id)
+
 	// Create a full screen buffer to collect all pane content
 	screenBuffer := make([][]Cell, s.height)
 	for y := range screenBuffer {
@@ -348,9 +349,12 @@ func (s *Screen) draw(tcs tcell.Screen) {
 	}
 
 	// Render all panes into the screen buffer
+	paneCount := 0
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node.Pane.app != nil {
+			paneCount++
 			p := node.Pane
+			log.Printf("Screen.draw: Rendering pane %d: '%s'", paneCount, p.getTitle())
 			paneBuffer := p.Render()
 
 			// Copy pane buffer into screen buffer at the correct position
@@ -370,8 +374,11 @@ func (s *Screen) draw(tcs tcell.Screen) {
 		}
 	})
 
+	log.Printf("Screen.draw: Rendered %d panes", paneCount)
+
 	// Apply screen-level effects to the collected buffer
 	if s.hasActiveEffects() {
+		log.Printf("Screen.draw: Applying screen effects")
 		s.effects.Apply(&screenBuffer)
 	}
 
@@ -381,6 +388,8 @@ func (s *Screen) draw(tcs tcell.Screen) {
 			tcs.SetContent(s.x+x, s.y+y, cell.Ch, nil, cell.Style)
 		}
 	}
+
+	log.Printf("Screen.draw: Screen draw completed")
 }
 
 // hasActiveEffects checks if any screen-level effects are currently active
