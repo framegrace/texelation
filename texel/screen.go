@@ -3,6 +3,7 @@ package texel
 
 import (
 	"github.com/gdamore/tcell/v2"
+	"log"
 	"time"
 )
 
@@ -60,8 +61,7 @@ type Screen struct {
 	animator *EffectAnimator
 
 	// Pre-created effects for control mode
-	controlModeDither *DitherEffect
-	controlModeFade   *FadeEffect
+	controlModeFade *FadeEffect
 
 	resizeSelection   *selectedBorder
 	debugFramesToDump int
@@ -81,33 +81,33 @@ func newScreen(id int, shellFactory AppFactory, desktop *Desktop) (*Screen, erro
 		animator:        NewEffectAnimator(),
 	}
 
-	// Create control mode effects
-	s.controlModeDither = NewDitherEffect('░')
-	s.controlModeFade = NewFadeEffect(desktop, tcell.NewRGBColor(0, 50, 0))
+	// Create control mode effects with more subtle colors
+	// Use a subtle green tint for control mode
+	s.controlModeFade = NewFadeEffect(desktop, tcell.NewRGBColor(0, 100, 0)) // Dark green
+	log.Printf("newScreen: Created controlModeFade with initial intensity=%.3f", s.controlModeFade.GetIntensity())
 
-	// Add them to the screen's effect pipeline (start with 0 intensity)
+	// Add the fade effect to the screen's effect pipeline
 	s.effects.AddEffect(s.controlModeFade)
-	s.effects.AddEffect(s.controlModeDither)
+	log.Printf("newScreen: Added controlModeFade to effects pipeline")
 
 	return s, nil
 }
 
-// SetControlMode activates or deactivates control mode effects
 func (s *Screen) SetControlMode(active bool) {
+	log.Printf("SetControlMode called: active=%v, current intensity=%.3f", active, s.controlModeFade.GetIntensity())
+
 	if active {
-		// Fade in the control mode effects
-		s.animator.FadeIn(s.controlModeFade, 150*time.Millisecond, func() {
-			s.Refresh()
-		})
-		s.animator.FadeIn(s.controlModeDither, 150*time.Millisecond, func() {
+		log.Printf("SetControlMode: Activating control mode, animating to 0.15")
+		// Fade in the control mode effects with subtle intensity
+		s.animator.AnimateTo(s.controlModeFade, 0.15, 150*time.Millisecond, func() {
+			log.Printf("SetControlMode: Control mode fade-in animation completed")
 			s.Refresh()
 		})
 	} else {
+		log.Printf("SetControlMode: Deactivating control mode, animating to 0.0")
 		// Fade out the control mode effects
 		s.animator.FadeOut(s.controlModeFade, 150*time.Millisecond, func() {
-			s.Refresh()
-		})
-		s.animator.FadeOut(s.controlModeDither, 150*time.Millisecond, func() {
+			log.Printf("SetControlMode: Control mode fade-out animation completed")
 			s.Refresh()
 		})
 	}
@@ -152,11 +152,14 @@ func (s *Screen) Unsubscribe(listener Listener) {
 }
 
 func (s *Screen) AddApp(app App) {
+	log.Printf("AddApp: Adding app '%s'", app.GetTitle())
+
 	p := newPane(s)
 	s.tree.SetRoot(p)
 	p.AttachApp(app, s.refreshChan)
 
-	// Set initial active state
+	// Set initial active state AFTER attaching the app
+	log.Printf("AddApp: Setting pane '%s' as active", p.getTitle())
 	p.SetActive(true)
 
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
@@ -164,18 +167,62 @@ func (s *Screen) AddApp(app App) {
 }
 
 func (s *Screen) moveActivePane(d Direction) {
-	// Deactivate current pane
+	log.Printf("moveActivePane: Moving in direction %v", d)
+
+	// Get current and target panes
+	var currentPane, targetPane *pane
+	var currentTitle, targetTitle string
+
 	if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
-		s.tree.ActiveLeaf.Pane.SetActive(false)
+		currentPane = s.tree.ActiveLeaf.Pane
+		currentTitle = currentPane.getTitle()
 	}
 
+	// We need to find the neighbor manually since findNeighbor is a method on Tree
+	// Let's just proceed with the move and get the result
+	oldActiveLeaf := s.tree.ActiveLeaf
+
+	// Move in tree first
 	s.tree.MoveActive(d)
+
+	// Check if we actually moved
+	if s.tree.ActiveLeaf == oldActiveLeaf {
+		log.Printf("moveActivePane: No movement occurred")
+		return
+	}
+
+	// Get the target pane after the move
+	if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
+		targetPane = s.tree.ActiveLeaf.Pane
+		targetTitle = targetPane.getTitle()
+	}
+
 	s.recalculateLayout()
 
-	// Activate new pane
-	if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
-		s.tree.ActiveLeaf.Pane.SetActive(true)
+	// Set states and handle animations properly
+	if currentPane != nil {
+		// Stop any existing animations
+		currentPane.animator.Stop(currentPane.inactiveFade)
+		// Set inactive state and animate
+		currentPane.IsActive = false
+		currentPane.animator.AnimateTo(currentPane.inactiveFade, 0.3, 200*time.Millisecond, func() {
+			log.Printf("moveActivePane: Deactivation of '%s' completed", currentTitle)
+			s.Refresh()
+		})
 	}
+
+	if targetPane != nil {
+		// Stop any existing animations
+		targetPane.animator.Stop(targetPane.inactiveFade)
+		// Set active state and animate
+		targetPane.IsActive = true
+		targetPane.animator.FadeOut(targetPane.inactiveFade, 200*time.Millisecond, func() {
+			log.Printf("moveActivePane: Activation of '%s' completed", targetTitle)
+			s.Refresh()
+		})
+	}
+
+	log.Printf("moveActivePane: Moved from '%s' to '%s'", currentTitle, targetTitle)
 
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.desktop.broadcastStateUpdate()
@@ -227,22 +274,57 @@ func (s *Screen) CloseActivePane() {
 
 func (s *Screen) PerformSplit(splitDir SplitType) {
 	if s.tree.ActiveLeaf == nil || s.ShellAppFactory == nil {
+		log.Printf("PerformSplit: Cannot split - no active leaf or shell factory")
 		return
 	}
 
-	// Deactivate current pane
+	log.Printf("PerformSplit: Splitting in direction %v", splitDir)
+
+	// Get current pane for logging
+	var currentTitle string
 	if s.tree.ActiveLeaf.Pane != nil {
-		s.tree.ActiveLeaf.Pane.SetActive(false)
+		currentTitle = s.tree.ActiveLeaf.Pane.getTitle()
+		log.Printf("PerformSplit: Current active pane: '%s'", currentTitle)
 	}
 
+	// Create new pane FIRST
 	newPane := newPane(s)
-	s.tree.SplitActive(splitDir, newPane)
+	log.Printf("PerformSplit: Created new pane")
+
+	// Perform the split in the tree
+	newNode := s.tree.SplitActive(splitDir, newPane)
+	if newNode == nil {
+		log.Printf("PerformSplit: Failed to split tree")
+		return
+	}
+	log.Printf("PerformSplit: Tree split completed")
+
+	// Recalculate layout BEFORE attaching app
 	s.recalculateLayout()
+	log.Printf("PerformSplit: Layout recalculated")
+
+	// Create and attach new app
 	newApp := s.ShellAppFactory()
 	newPane.AttachApp(newApp, s.refreshChan)
+	log.Printf("PerformSplit: Attached app '%s' to new pane", newApp.GetTitle())
 
-	// Activate new pane
+	// Set pane states
+	// The old pane should become inactive
+	if s.tree.ActiveLeaf != newNode {
+		// Find the old pane and deactivate it
+		s.tree.Traverse(func(node *Node) {
+			if node.Pane != nil && node != newNode && node != s.tree.ActiveLeaf {
+				log.Printf("PerformSplit: Deactivating old pane '%s'", node.Pane.getTitle())
+				node.Pane.SetActive(false)
+			}
+		})
+	}
+
+	// The new pane should be active
+	log.Printf("PerformSplit: Activating new pane '%s'", newPane.getTitle())
 	newPane.SetActive(true)
+
+	log.Printf("PerformSplit: Split completed successfully")
 }
 
 func (s *Screen) SwapActivePane(d Direction) {
@@ -252,31 +334,61 @@ func (s *Screen) SwapActivePane(d Direction) {
 	}
 }
 
+// Fixed screen.go draw method
 func (s *Screen) draw(tcs tcell.Screen) {
-	// First, render all panes normally
+	// Create a full screen buffer to collect all pane content
+	screenBuffer := make([][]Cell, s.height)
+	for y := range screenBuffer {
+		screenBuffer[y] = make([]Cell, s.width)
+		// Initialize with default background
+		defaultStyle := tcell.StyleDefault.Background(s.getDefaultBackground())
+		for x := range screenBuffer[y] {
+			screenBuffer[y][x] = Cell{Ch: ' ', Style: defaultStyle}
+		}
+	}
+
+	// Render all panes into the screen buffer
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node.Pane.app != nil {
 			p := node.Pane
-			finalBuffer := p.Render()
+			paneBuffer := p.Render()
 
-			if p.prevBuf == nil {
-				blit(tcs, p.absX0, p.absY0, finalBuffer)
-			} else {
-				blitDiff(tcs, p.absX0, p.absY0, p.prevBuf, finalBuffer)
+			// Copy pane buffer into screen buffer at the correct position
+			for y, row := range paneBuffer {
+				screenY := y
+				if screenY < 0 || screenY >= s.height {
+					continue
+				}
+				for x, cell := range row {
+					screenX := x + (p.absX0 - s.x)
+					if screenX < 0 || screenX >= s.width {
+						continue
+					}
+					screenBuffer[screenY][screenX] = cell
+				}
 			}
-			p.prevBuf = finalBuffer
 		}
 	})
 
-	// Then apply screen-level effects if any are active
+	// Apply screen-level effects to the collected buffer
 	if s.hasActiveEffects() {
-		s.applyScreenEffects(tcs)
+		s.effects.Apply(&screenBuffer)
+	}
+
+	// Now blit the final buffer to the screen
+	for y, row := range screenBuffer {
+		for x, cell := range row {
+			tcs.SetContent(s.x+x, s.y+y, cell.Ch, nil, cell.Style)
+		}
 	}
 }
 
 // hasActiveEffects checks if any screen-level effects are currently active
 func (s *Screen) hasActiveEffects() bool {
-	return s.controlModeFade.IsAnimating() || s.controlModeDither.IsAnimating()
+	isAnimating := s.controlModeFade.IsAnimating()
+	intensity := s.controlModeFade.GetIntensity()
+	log.Printf("hasActiveEffects: isAnimating=%v, intensity=%.3f", isAnimating, intensity)
+	return isAnimating
 }
 
 // applyScreenEffects applies screen-level effects to the entire screen area

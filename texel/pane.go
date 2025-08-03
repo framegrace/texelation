@@ -3,6 +3,7 @@ package texel
 
 import (
 	"github.com/gdamore/tcell/v2"
+	"log"
 	"texelation/texel/theme"
 	"time"
 	"unicode/utf8"
@@ -32,14 +33,21 @@ type pane struct {
 // newPane creates a new, empty Pane. The App is attached later.
 func newPane(s *Screen) *pane {
 	p := &pane{
-		screen:   s,
-		effects:  NewEffectPipeline(),
-		animator: NewEffectAnimator(),
+		screen:     s,
+		effects:    NewEffectPipeline(),
+		animator:   NewEffectAnimator(),
+		IsActive:   false, // Explicitly set to false initially
+		IsResizing: false, // Explicitly set to false initially
 	}
 
 	// Create pre-made effects for common states
-	p.inactiveFade = NewFadeEffect(s.desktop, tcell.NewRGBColor(20, 20, 0))
-	p.resizingFade = NewFadeEffect(s.desktop, tcell.NewRGBColor(255, 184, 108)) // Orange
+	// Use darker colors for inactive fade - this will darken the pane
+	p.inactiveFade = NewFadeEffect(s.desktop, tcell.NewRGBColor(20, 20, 0)) // Dark yellow for darkening
+	// Use orange tint for resizing
+	p.resizingFade = NewFadeEffect(s.desktop, tcell.NewRGBColor(255, 184, 108)) // Orange from your theme
+
+	log.Printf("newPane: Created pane with inactive fade intensity=%.3f, resizing fade intensity=%.3f",
+		p.inactiveFade.GetIntensity(), p.resizingFade.GetIntensity())
 
 	// Add them to the pipeline (they start with 0 intensity)
 	p.effects.AddEffect(p.inactiveFade)
@@ -67,21 +75,31 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 
 // SetActive changes the active state of the pane and animates the appropriate effects
 func (p *pane) SetActive(active bool) {
+	log.Printf("SetActive called on pane '%s': active=%v, current IsActive=%v", p.getTitle(), active, p.IsActive)
+
 	if p.IsActive == active {
+		log.Printf("SetActive: No change needed for pane '%s'", p.getTitle())
 		return
 	}
 
 	p.IsActive = active
 
+	// Stop any existing animations on the inactive fade effect to prevent conflicts
+	p.animator.Stop(p.inactiveFade)
+
 	// Animate the inactive fade effect
 	if active {
-		// Fade out the inactive effect
+		log.Printf("SetActive: Activating pane '%s' - fading out inactive effect", p.getTitle())
+		// Fade out the inactive effect (return to normal brightness)
 		p.animator.FadeOut(p.inactiveFade, 200*time.Millisecond, func() {
+			log.Printf("SetActive: Pane '%s' activation animation completed", p.getTitle())
 			p.screen.Refresh() // Request a redraw when animation completes
 		})
 	} else {
-		// Fade in the inactive effect
-		p.animator.FadeIn(p.inactiveFade, 200*time.Millisecond, func() {
+		log.Printf("SetActive: Deactivating pane '%s' - fading in inactive effect to 0.3", p.getTitle())
+		// Fade in the inactive effect (darken the pane) - FIXED: Use 0.3 instead of 1.0
+		p.animator.AnimateTo(p.inactiveFade, 0.3, 200*time.Millisecond, func() {
+			log.Printf("SetActive: Pane '%s' deactivation animation completed", p.getTitle())
 			p.screen.Refresh()
 		})
 	}
@@ -89,19 +107,29 @@ func (p *pane) SetActive(active bool) {
 
 // SetResizing changes the resizing state of the pane and animates the appropriate effects
 func (p *pane) SetResizing(resizing bool) {
+	log.Printf("SetResizing called on pane '%s': resizing=%v, current IsResizing=%v", p.getTitle(), resizing, p.IsResizing)
+
 	if p.IsResizing == resizing {
 		return
 	}
 
 	p.IsResizing = resizing
 
+	// Stop any existing animations on the resizing fade effect
+	p.animator.Stop(p.resizingFade)
+
 	// Animate the resizing fade effect
 	if resizing {
-		p.animator.FadeIn(p.resizingFade, 100*time.Millisecond, func() {
+		log.Printf("SetResizing: Pane '%s' entering resize mode", p.getTitle())
+		// Use moderate intensity for resize effect
+		p.animator.AnimateTo(p.resizingFade, 0.2, 100*time.Millisecond, func() {
+			log.Printf("SetResizing: Pane '%s' resize fade-in completed", p.getTitle())
 			p.screen.Refresh()
 		})
 	} else {
+		log.Printf("SetResizing: Pane '%s' exiting resize mode", p.getTitle())
 		p.animator.FadeOut(p.resizingFade, 100*time.Millisecond, func() {
+			log.Printf("SetResizing: Pane '%s' resize fade-out completed", p.getTitle())
 			p.screen.Refresh()
 		})
 	}
@@ -260,8 +288,16 @@ func (p *pane) Height() int {
 }
 
 func (p *pane) setDimensions(x0, y0, x1, y1 int) {
+	log.Printf("setDimensions: Pane '%s' set to (%d,%d)-(%d,%d), size %dx%d",
+		p.getTitle(), x0, y0, x1, y1, x1-x0, y1-y0)
+
 	p.absX0, p.absY0, p.absX1, p.absY1 = x0, y0, x1, y1
+
 	if p.app != nil {
-		p.app.Resize(p.drawableWidth(), p.drawableHeight())
+		drawableW := p.drawableWidth()
+		drawableH := p.drawableHeight()
+		log.Printf("setDimensions: Pane '%s' drawable area: %dx%d",
+			p.getTitle(), drawableW, drawableH)
+		p.app.Resize(drawableW, drawableH)
 	}
 }

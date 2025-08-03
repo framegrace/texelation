@@ -3,6 +3,7 @@ package texel
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 )
@@ -95,10 +96,13 @@ func (ea *EffectAnimator) AnimateTo(effect AnimatedEffect, targetIntensity float
 
 	// Cancel any existing animation for this effect
 	if cancel, exists := ea.animators[effect]; exists {
+		log.Printf("AnimateTo: Cancelling existing animation for effect")
 		cancel()
 	}
 
 	startIntensity := effect.GetIntensity()
+	log.Printf("AnimateTo: Starting animation from %.3f to %.3f over %v", startIntensity, targetIntensity, duration)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	ea.animators[effect] = cancel
 	ea.mu.Unlock()
@@ -108,6 +112,7 @@ func (ea *EffectAnimator) AnimateTo(effect AnimatedEffect, targetIntensity float
 			ea.mu.Lock()
 			delete(ea.animators, effect)
 			ea.mu.Unlock()
+			log.Printf("AnimateTo: Animation completed, final intensity: %.3f", effect.GetIntensity())
 			if onComplete != nil {
 				onComplete()
 			}
@@ -117,14 +122,17 @@ func (ea *EffectAnimator) AnimateTo(effect AnimatedEffect, targetIntensity float
 		ticker := time.NewTicker(16 * time.Millisecond) // ~60fps
 		defer ticker.Stop()
 
+		frameCount := 0
 		for {
 			select {
 			case <-ctx.Done():
+				log.Printf("AnimateTo: Animation cancelled after %d frames", frameCount)
 				return
 			case <-ticker.C:
 				elapsed := time.Since(startTime)
 				if elapsed >= duration {
 					effect.SetIntensity(targetIntensity)
+					log.Printf("AnimateTo: Animation finished, set final intensity to %.3f", targetIntensity)
 					return
 				}
 
@@ -134,9 +142,31 @@ func (ea *EffectAnimator) AnimateTo(effect AnimatedEffect, targetIntensity float
 
 				newIntensity := startIntensity + (targetIntensity-startIntensity)*progress
 				effect.SetIntensity(newIntensity)
+
+				frameCount++
+				if frameCount%30 == 0 { // Log every ~0.5 seconds
+					log.Printf("AnimateTo: Frame %d, progress=%.3f, intensity=%.3f", frameCount, progress, newIntensity)
+				}
 			}
 		}
 	}()
+}
+
+func (f *FadeEffect) SetIntensity(intensity float32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	oldIntensity := f.intensity
+
+	if intensity < 0.0 {
+		intensity = 0.0
+	} else if intensity > 1.0 {
+		intensity = 1.0
+	}
+	f.intensity = intensity
+
+	if oldIntensity != f.intensity {
+		log.Printf("FadeEffect.SetIntensity: Changed from %.3f to %.3f", oldIntensity, f.intensity)
+	}
 }
 
 // FadeIn animates an effect to full intensity

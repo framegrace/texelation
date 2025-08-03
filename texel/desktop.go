@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/term"
+	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -70,8 +71,6 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 	tcellScreen.SetStyle(defStyle)
 	tcellScreen.HideCursor()
 
-	//defaultFg, defaultBg, _ := initDefaultColors()
-
 	d := &Desktop{
 		tcellScreen:       tcellScreen,
 		workspaces:        make(map[int]*Screen),
@@ -83,8 +82,11 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 		DefaultFgColor:    deffg,
 		DefaultBgColor:    defbg,
 		dispatcher:        NewEventDispatcher(),
+		inControlMode:     false, // Explicitly set to false
+		subControlMode:    0,
 	}
 
+	log.Printf("NewDesktop: Created with inControlMode=%v", d.inControlMode)
 	d.SwitchToWorkspace(1)
 	return d, nil
 }
@@ -270,17 +272,23 @@ func (d *Desktop) statusPaneBlit(tcs tcell.Screen, x, y int, buf [][]Cell) {
 }
 
 func (d *Desktop) toggleControlMode() {
+	wasInControlMode := d.inControlMode
 	d.inControlMode = !d.inControlMode
 	d.subControlMode = 0
+
+	log.Printf("toggleControlMode: was=%v, now=%v", wasInControlMode, d.inControlMode)
 
 	if !d.inControlMode && d.resizeSelection != nil {
 		d.activeWorkspace.clearResizeSelection(d.resizeSelection)
 		d.resizeSelection = nil
 	}
 
-	// Use the screen's new SetControlMode method
-	if d.activeWorkspace != nil {
+	// IMPORTANT: Only call SetControlMode if the state actually changed
+	if d.activeWorkspace != nil && wasInControlMode != d.inControlMode {
+		log.Printf("toggleControlMode: State changed, calling SetControlMode(%v)", d.inControlMode)
 		d.activeWorkspace.SetControlMode(d.inControlMode)
+	} else {
+		log.Printf("toggleControlMode: State didn't change or no active workspace")
 	}
 
 	var eventType EventType
@@ -583,4 +591,39 @@ func initDefaultColors() (tcell.Color, tcell.Color, error) {
 		return tcell.ColorWhite, tcell.ColorBlack, nil
 	}
 	return fg, bg, nil
+}
+
+func (d *Desktop) TestEffectSystem() {
+	log.Printf("=== EFFECT SYSTEM TEST ===")
+
+	// Create a test effect
+	testEffect := NewFadeEffect(d, tcell.NewRGBColor(255, 0, 0))
+	log.Printf("Test effect created with intensity: %.3f", testEffect.GetIntensity())
+
+	// Test setting intensity directly
+	testEffect.SetIntensity(0.5)
+	log.Printf("After SetIntensity(0.5): %.3f", testEffect.GetIntensity())
+
+	testEffect.SetIntensity(0.0)
+	log.Printf("After SetIntensity(0.0): %.3f", testEffect.GetIntensity())
+
+	// Test animator
+	animator := NewEffectAnimator()
+	log.Printf("Starting animation test...")
+
+	animator.AnimateTo(testEffect, 0.75, 1*time.Second, func() {
+		log.Printf("Animation completed, final intensity: %.3f", testEffect.GetIntensity())
+	})
+
+	// Check intensity during animation
+	time.Sleep(100 * time.Millisecond)
+	log.Printf("After 100ms: %.3f", testEffect.GetIntensity())
+
+	time.Sleep(400 * time.Millisecond)
+	log.Printf("After 500ms: %.3f", testEffect.GetIntensity())
+
+	time.Sleep(600 * time.Millisecond)
+	log.Printf("After 1100ms: %.3f", testEffect.GetIntensity())
+
+	log.Printf("=== END EFFECT SYSTEM TEST ===")
 }
