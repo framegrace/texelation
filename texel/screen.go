@@ -359,7 +359,7 @@ func (s *Screen) draw(tcs tcell.Screen) {
 
 			// Copy pane buffer into screen buffer at the correct position
 			for y, row := range paneBuffer {
-				screenY := y
+				screenY := y + (p.absY0 - s.y)
 				if screenY < 0 || screenY >= s.height {
 					continue
 				}
