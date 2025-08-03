@@ -381,16 +381,9 @@ func (s *Screen) draw(tcs tcell.Screen) {
 	log.Printf("Screen.draw: Rendered %d panes", paneCount)
 
 	// Apply screen-level effects to the collected buffer
-	hasScreenEffects := s.hasActiveEffects()
-	hasPaneAnimations := s.hasActivePaneAnimations()
-
-	if hasScreenEffects {
-		log.Printf("Screen.draw: Applying screen effects")
+	if s.hasActiveEffects() {
+		log.Printf("Screen.draw: Applying screen effects (%d active)", s.effects.GetActiveAnimationCount())
 		s.effects.Apply(&screenBuffer)
-	}
-
-	if hasPaneAnimations {
-		log.Printf("Screen.draw: Pane animations detected (effects applied during pane rendering)")
 	}
 
 	// Now blit the final buffer to the screen
@@ -405,19 +398,7 @@ func (s *Screen) draw(tcs tcell.Screen) {
 
 // hasActiveEffects checks if any screen-level effects are currently active
 func (s *Screen) hasActiveEffects() bool {
-	// Check control mode fade
-	if s.controlModeFade.IsAnimating() {
-		intensity := s.controlModeFade.GetIntensity()
-		log.Printf("hasActiveEffects: controlModeFade isAnimating=true, intensity=%.3f", intensity)
-		return true
-	}
-
-	// Check for any other screen-level animated effects
-	// (This is extensible for future screen-level effects)
-
-	intensity := s.controlModeFade.GetIntensity()
-	log.Printf("hasActiveEffects: controlModeFade isAnimating=false, intensity=%.3f", intensity)
-	return false
+	return s.effects.IsAnimating()
 }
 
 // Add this method to check if any panes have active animations

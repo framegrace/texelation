@@ -235,28 +235,24 @@ func (d *Desktop) Run() error {
 }
 
 func (d *Desktop) hasActiveAnimations() bool {
-	// Check screen-level animations
-	if d.activeWorkspace != nil {
-		if d.activeWorkspace.hasActiveEffects() {
-			return true
-		}
-
-		// Check pane-level animations
-		hasActivePaneAnimations := false
-		d.activeWorkspace.tree.Traverse(func(node *Node) {
-			if node.Pane != nil {
-				if node.Pane.inactiveFade.IsAnimating() || node.Pane.resizingFade.IsAnimating() {
-					hasActivePaneAnimations = true
-				}
-			}
-		})
-
-		if hasActivePaneAnimations {
-			return true
-		}
+	if d.activeWorkspace == nil {
+		return false
 	}
 
-	return false
+	// Check screen-level effects
+	if d.activeWorkspace.effects.IsAnimating() {
+		return true
+	}
+
+	// Check all pane-level effects
+	hasActivePaneAnimations := false
+	d.activeWorkspace.tree.Traverse(func(node *Node) {
+		if node.Pane != nil && node.Pane.effects.IsAnimating() {
+			hasActivePaneAnimations = true
+		}
+	})
+
+	return hasActivePaneAnimations
 }
 
 func (d *Desktop) handleEvent(ev tcell.Event) {
@@ -688,4 +684,24 @@ func (d *Desktop) TestEffectSystem() {
 	log.Printf("After 1100ms: %.3f", testEffect.GetIntensity())
 
 	log.Printf("=== END EFFECT SYSTEM TEST ===")
+}
+
+func (d *Desktop) logActiveAnimations() {
+	if d.activeWorkspace == nil {
+		return
+	}
+
+	screenCount := d.activeWorkspace.effects.GetActiveAnimationCount()
+	if screenCount > 0 {
+		log.Printf("Active screen animations: %d", screenCount)
+	}
+
+	d.activeWorkspace.tree.Traverse(func(node *Node) {
+		if node.Pane != nil {
+			paneCount := node.Pane.effects.GetActiveAnimationCount()
+			if paneCount > 0 {
+				log.Printf("Active animations in pane '%s': %d", node.Pane.getTitle(), paneCount)
+			}
+		}
+	})
 }

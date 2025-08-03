@@ -198,3 +198,34 @@ func (ea *EffectAnimator) StopAll() {
 	}
 	ea.animators = make(map[AnimatedEffect]context.CancelFunc)
 }
+
+// Add this method to EffectPipeline in effects.go
+func (ep *EffectPipeline) IsAnimating() bool {
+	ep.mu.RLock()
+	defer ep.mu.RUnlock()
+
+	for _, effect := range ep.effects {
+		if animatedEffect, ok := effect.(AnimatedEffect); ok {
+			if animatedEffect.IsAnimating() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Also add a method to get count of active animations for debugging
+func (ep *EffectPipeline) GetActiveAnimationCount() int {
+	ep.mu.RLock()
+	defer ep.mu.RUnlock()
+
+	count := 0
+	for _, effect := range ep.effects {
+		if animatedEffect, ok := effect.(AnimatedEffect); ok {
+			if animatedEffect.IsAnimating() {
+				count++
+			}
+		}
+	}
+	return count
+}
