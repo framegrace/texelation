@@ -52,6 +52,10 @@ type Desktop struct {
 	inControlMode   bool
 	subControlMode  rune
 	resizeSelection *selectedBorder
+
+	// Animation system
+	animationTicker *time.Ticker
+	animationStop   chan struct{}
 }
 
 // NewDesktop creates and initializes a new desktop environment.
@@ -171,6 +175,31 @@ func (d *Desktop) Run() error {
 		}
 	}()
 
+	// Start animation timer for smooth effects
+	d.animationTicker = time.NewTicker(16 * time.Millisecond) // 60fps
+	d.animationStop = make(chan struct{})
+
+	go func() {
+		for {
+			select {
+			case <-d.animationTicker.C:
+				if d.hasActiveAnimations() {
+					log.Printf("Animation timer: Triggering redraw for active animations")
+					if d.activeWorkspace != nil {
+						select {
+						case d.activeWorkspace.drawChan <- true:
+						default:
+						}
+					}
+				}
+			case <-d.animationStop:
+				return
+			case <-d.quit:
+				return
+			}
+		}
+	}()
+
 	d.recalculateLayout()
 
 	if d.activeWorkspace != nil {
@@ -203,6 +232,31 @@ func (d *Desktop) Run() error {
 			return nil
 		}
 	}
+}
+
+func (d *Desktop) hasActiveAnimations() bool {
+	// Check screen-level animations
+	if d.activeWorkspace != nil {
+		if d.activeWorkspace.hasActiveEffects() {
+			return true
+		}
+
+		// Check pane-level animations
+		hasActivePaneAnimations := false
+		d.activeWorkspace.tree.Traverse(func(node *Node) {
+			if node.Pane != nil {
+				if node.Pane.inactiveFade.IsAnimating() || node.Pane.resizingFade.IsAnimating() {
+					hasActivePaneAnimations = true
+				}
+			}
+		})
+
+		if hasActivePaneAnimations {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (d *Desktop) handleEvent(ev tcell.Event) {
@@ -422,6 +476,14 @@ func (d *Desktop) draw() {
 
 func (d *Desktop) Close() {
 	d.closeOnce.Do(func() {
+		// Stop animation timer
+		if d.animationTicker != nil {
+			d.animationTicker.Stop()
+		}
+		if d.animationStop != nil {
+			close(d.animationStop)
+		}
+
 		close(d.quit)
 		for _, ws := range d.workspaces {
 			ws.Close()

@@ -61,7 +61,8 @@ type Screen struct {
 	animator *EffectAnimator
 
 	// Pre-created effects for control mode
-	controlModeFade *FadeEffect
+	//controlModeFade *FadeEffect
+	controlModeFade *RainbowEffect
 
 	resizeSelection   *selectedBorder
 	debugFramesToDump int
@@ -83,7 +84,8 @@ func newScreen(id int, shellFactory AppFactory, desktop *Desktop) (*Screen, erro
 
 	// Create control mode effects with more subtle colors
 	// Use a subtle green tint for control mode
-	s.controlModeFade = NewFadeEffect(desktop, tcell.NewRGBColor(0, 100, 0)) // Dark green
+	//s.controlModeFade = NewFadeEffect(desktop, tcell.NewRGBColor(0, 100, 0)) // Dark green
+	s.controlModeFade = NewRainbowEffect(desktop) // Dark green
 	log.Printf("newScreen: Created controlModeFade with initial intensity=%.3f", s.controlModeFade.GetIntensity())
 
 	// Add the fade effect to the screen's effect pipeline
@@ -334,6 +336,7 @@ func (s *Screen) SwapActivePane(d Direction) {
 	}
 }
 
+// Update the draw method to also log when pane animations are detected
 func (s *Screen) draw(tcs tcell.Screen) {
 	log.Printf("Screen.draw: Drawing screen %d", s.id)
 
@@ -354,12 +357,13 @@ func (s *Screen) draw(tcs tcell.Screen) {
 		if node.Pane != nil && node.Pane.app != nil {
 			paneCount++
 			p := node.Pane
-			log.Printf("Screen.draw: Rendering pane %d: '%s'", paneCount, p.getTitle())
+			log.Printf("Screen.draw: Rendering pane %d: '%s' at abs(%d,%d)-(%d,%d)",
+				paneCount, p.getTitle(), p.absX0, p.absY0, p.absX1, p.absY1)
 			paneBuffer := p.Render()
 
 			// Copy pane buffer into screen buffer at the correct position
 			for y, row := range paneBuffer {
-				screenY := y + (p.absY0 - s.y)
+				screenY := y + (p.absY0 - s.y) // Account for Y offset
 				if screenY < 0 || screenY >= s.height {
 					continue
 				}
@@ -377,9 +381,16 @@ func (s *Screen) draw(tcs tcell.Screen) {
 	log.Printf("Screen.draw: Rendered %d panes", paneCount)
 
 	// Apply screen-level effects to the collected buffer
-	if s.hasActiveEffects() {
+	hasScreenEffects := s.hasActiveEffects()
+	hasPaneAnimations := s.hasActivePaneAnimations()
+
+	if hasScreenEffects {
 		log.Printf("Screen.draw: Applying screen effects")
 		s.effects.Apply(&screenBuffer)
+	}
+
+	if hasPaneAnimations {
+		log.Printf("Screen.draw: Pane animations detected (effects applied during pane rendering)")
 	}
 
 	// Now blit the final buffer to the screen
@@ -394,10 +405,39 @@ func (s *Screen) draw(tcs tcell.Screen) {
 
 // hasActiveEffects checks if any screen-level effects are currently active
 func (s *Screen) hasActiveEffects() bool {
-	isAnimating := s.controlModeFade.IsAnimating()
+	// Check control mode fade
+	if s.controlModeFade.IsAnimating() {
+		intensity := s.controlModeFade.GetIntensity()
+		log.Printf("hasActiveEffects: controlModeFade isAnimating=true, intensity=%.3f", intensity)
+		return true
+	}
+
+	// Check for any other screen-level animated effects
+	// (This is extensible for future screen-level effects)
+
 	intensity := s.controlModeFade.GetIntensity()
-	log.Printf("hasActiveEffects: isAnimating=%v, intensity=%.3f", isAnimating, intensity)
-	return isAnimating
+	log.Printf("hasActiveEffects: controlModeFade isAnimating=false, intensity=%.3f", intensity)
+	return false
+}
+
+// Add this method to check if any panes have active animations
+func (s *Screen) hasActivePaneAnimations() bool {
+	hasAnimations := false
+	s.tree.Traverse(func(node *Node) {
+		if node.Pane != nil {
+			if node.Pane.inactiveFade.IsAnimating() {
+				log.Printf("hasActivePaneAnimations: Pane '%s' inactiveFade is animating (intensity=%.3f)",
+					node.Pane.getTitle(), node.Pane.inactiveFade.GetIntensity())
+				hasAnimations = true
+			}
+			if node.Pane.resizingFade.IsAnimating() {
+				log.Printf("hasActivePaneAnimations: Pane '%s' resizingFade is animating (intensity=%.3f)",
+					node.Pane.getTitle(), node.Pane.resizingFade.GetIntensity())
+				hasAnimations = true
+			}
+		}
+	})
+	return hasAnimations
 }
 
 // applyScreenEffects applies screen-level effects to the entire screen area

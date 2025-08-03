@@ -10,22 +10,24 @@ import (
 
 // RainbowEffect cycles through colors creating a rainbow effect
 type RainbowEffect struct {
+	desktop   *Desktop
 	mu        sync.RWMutex
 	intensity float32
 	hueOffset float32
 }
 
-func NewRainbowEffect() *RainbowEffect {
+func NewRainbowEffect(desktop *Desktop) *RainbowEffect {
 	return &RainbowEffect{
 		intensity: 0.0,
 		hueOffset: 0.0,
+		desktop:   desktop,
 	}
 }
 
 func (r *RainbowEffect) Apply(buffer *[][]Cell) {
 	r.mu.Lock()
 	intensity := r.intensity
-	r.hueOffset += 0.02 // Animate the rainbow
+	r.hueOffset += 0.09 // Animate the rainbow
 	if r.hueOffset > 2*math.Pi {
 		r.hueOffset = 0
 	}
@@ -42,25 +44,42 @@ func (r *RainbowEffect) Apply(buffer *[][]Cell) {
 				// Calculate hue based on position and time
 				hue := currentOffset + float32(x+y)*0.1
 				color := hsvToRGB(hue, 1.0, 1.0)
+				cell := &(*buffer)[y][x]
+				originalChar := cell.Ch
+				fg, bg, attrs := cell.Style.Decompose()
+				// Only process non-space characters or cells with background
+				if originalChar == ' ' && !bg.Valid() {
+					continue
+				}
+
+				// Use desktop defaults for invalid colors
+				if !fg.Valid() {
+					fg = r.desktop.DefaultFgColor
+				}
+				if !bg.Valid() {
+					bg = r.desktop.DefaultBgColor
+				}
+
+				// Blend colors
 
 				// Blend with original color
-				fg, bg, attrs := (*buffer)[y][x].Style.Decompose()
-				if fg.Valid() {
-					blendedFg := blendColor(fg, color, intensity)
-					(*buffer)[y][x].Style = tcell.StyleDefault.
-						Foreground(blendedFg).
-						Background(bg).
-						Bold(attrs&tcell.AttrBold != 0).
-						Underline(attrs&tcell.AttrUnderline != 0).
-						Reverse(attrs&tcell.AttrReverse != 0)
-				}
+				//				if fg.Valid() {
+				blendedFg := blendColor(fg, color, intensity)
+				cell.Style = tcell.StyleDefault.
+					Foreground(blendedFg).
+					Background(bg).
+					Bold(attrs&tcell.AttrBold != 0).
+					Underline(attrs&tcell.AttrUnderline != 0).
+					Reverse(attrs&tcell.AttrReverse != 0)
+					//				}
+				cell.Ch = originalChar
 			}
 		}
 	}
 }
 
 func (r *RainbowEffect) Clone() Effect {
-	return NewRainbowEffect()
+	return NewRainbowEffect(r.desktop)
 }
 
 func (r *RainbowEffect) GetIntensity() float32 {
@@ -288,7 +307,7 @@ func (d *Desktop) EnableRainbowMode() {
 		d.activeWorkspace.tree.ActiveLeaf != nil &&
 		d.activeWorkspace.tree.ActiveLeaf.Pane != nil {
 
-		rainbow := NewRainbowEffect()
+		rainbow := NewRainbowEffect(d)
 		d.activeWorkspace.tree.ActiveLeaf.Pane.AddEffect(rainbow)
 
 		// Animate it in
