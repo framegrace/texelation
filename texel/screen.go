@@ -266,18 +266,32 @@ func (s *Screen) AnimateGroupExpansion(groupNode *Node, newPaneIndex int, durati
 
 	log.Printf("AnimateGroupExpansion: Animating expansion of group with %d children", len(groupNode.Children))
 
-	// Start ratios: new pane has 0, others keep current ratios
-	startRatios := make([]float64, len(groupNode.SplitRatios))
-	copy(startRatios, groupNode.SplitRatios)
-	startRatios[newPaneIndex] = 0.0 // New pane starts at 0
+	// The SplitActive method already set the ratios to equal distribution
+	// We need to reconstruct what the ratios were BEFORE the new pane was added
+	numChildren := len(groupNode.Children)
+	numOldChildren := numChildren - 1
 
-	// Target ratios: equal distribution among all panes
-	targetRatios := make([]float64, len(groupNode.SplitRatios))
-	equalRatio := 1.0 / float64(len(groupNode.Children))
-	for i := range targetRatios {
-		targetRatios[i] = equalRatio
+	// Start ratios: simulate the state before the new pane was added
+	startRatios := make([]float64, numChildren)
+	oldEqualRatio := 1.0 / float64(numOldChildren) // What each pane had before
+
+	for i := 0; i < numChildren; i++ {
+		if i == newPaneIndex {
+			startRatios[i] = 0.0 // New pane starts at 0
+		} else {
+			startRatios[i] = oldEqualRatio // Existing panes start at their old equal size
+		}
 	}
 
+	// Target ratios: equal distribution among ALL panes (what SplitActive set)
+	targetRatios := make([]float64, numChildren)
+	newEqualRatio := 1.0 / float64(numChildren)
+	for i := range targetRatios {
+		targetRatios[i] = newEqualRatio
+	}
+
+	log.Printf("AnimateGroupExpansion: %d->%d children, old ratio=%.3f, new ratio=%.3f",
+		numOldChildren, numChildren, oldEqualRatio, newEqualRatio)
 	log.Printf("AnimateGroupExpansion: start=%v, target=%v", startRatios, targetRatios)
 
 	s.animateLayoutTransition(groupNode, startRatios, targetRatios, duration)
@@ -326,6 +340,7 @@ func (s *Screen) animateLayoutTransition(node *Node, startRatios, targetRatios [
 		s.Refresh()
 	})
 }
+
 func (s *Screen) CloseActivePane() {
 	if s.tree.ActiveLeaf == nil {
 		return
@@ -489,7 +504,7 @@ func (s *Screen) PerformSplit(splitDir SplitType) {
 		parent := newNode.Parent // parent is the group that got a new child
 		if parent != nil {
 			newPaneIndex := len(parent.Children) - 1 // New pane is always added at the end
-			s.AnimateGroupExpansion(parent, newPaneIndex, 100*time.Millisecond)
+			s.AnimateGroupExpansion(parent, newPaneIndex, 300*time.Millisecond)
 		} else {
 			s.recalculateLayout()
 		}
@@ -499,7 +514,7 @@ func (s *Screen) PerformSplit(splitDir SplitType) {
 		log.Printf("PerformSplit: Animating new split creation")
 		parent := newNode.Parent // parent is the newly created split node
 		if parent != nil && len(parent.Children) == 2 {
-			s.AnimatePaneSplit(parent, 100*time.Millisecond)
+			s.AnimatePaneSplit(parent, 300*time.Millisecond)
 		} else {
 			s.recalculateLayout()
 		}
