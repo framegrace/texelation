@@ -197,16 +197,23 @@ func (p *pane) Render() [][]Cell {
 	buffer[h-1][0] = Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
 	buffer[h-1][w-1] = Cell{Ch: '╯', Style: borderStyle}
 
-	// Draw Title
+	// Draw Title - with proper bounds checking
 	title := p.getTitle()
-	if title != "" {
+	if title != "" && w > 4 { // Only draw title if we have enough space
+		titleRuneCount := utf8.RuneCountInString(title)
+		maxTitleLength := w - 4 // Space for " " + title + " " + borders
+
 		// Truncate title if it's too long for the pane width.
-		if utf8.RuneCountInString(title)+4 > w {
-			title = string([]rune(title)[:w-4])
+		if titleRuneCount > maxTitleLength && maxTitleLength > 0 {
+			titleRunes := []rune(title)
+			if maxTitleLength <= len(titleRunes) {
+				title = string(titleRunes[:maxTitleLength])
+			}
 		}
+
 		titleStr := " " + title + " "
 		for i, ch := range titleStr {
-			if 1+i < w-1 {
+			if 1+i < w-1 { // Ensure we don't go beyond borders
 				buffer[0][1+i] = Cell{Ch: ch, Style: borderStyle}
 			}
 		}
@@ -215,13 +222,15 @@ func (p *pane) Render() [][]Cell {
 	// Render the app's content inside the borders.
 	if p.app != nil {
 		appBuffer := p.app.Render()
-		log.Printf("Render: Pane '%s' app buffer size: %dx%d",
-			p.getTitle(), len(appBuffer), len(appBuffer[0]))
+		if len(appBuffer) > 0 && len(appBuffer[0]) > 0 {
+			log.Printf("Render: Pane '%s' app buffer size: %dx%d",
+				p.getTitle(), len(appBuffer[0]), len(appBuffer))
 
-		for y, row := range appBuffer {
-			for x, cell := range row {
-				if 1+x < w-1 && 1+y < h-1 {
-					buffer[1+y][1+x] = cell
+			for y, row := range appBuffer {
+				for x, cell := range row {
+					if 1+x < w-1 && 1+y < h-1 {
+						buffer[1+y][1+x] = cell
+					}
 				}
 			}
 		}
