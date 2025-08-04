@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"texelation/apps/kittyimageapp"
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
@@ -34,7 +35,8 @@ func main() {
 		return texelterm.New("shell", "/bin/bash")
 	}
 	welcomeFactory := func() texel.App {
-		return welcome.NewWelcomeApp()
+		return apps.NewKittyClockApp()
+		//return welcome.NewWelcomeApp()
 	}
 
 	// Initialize the Desktop Environment with the factories.
