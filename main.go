@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"texelation/apps/kittyimageapp"
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
