@@ -35,8 +35,7 @@ func main() {
 		return texelterm.New("shell", "/bin/bash")
 	}
 	welcomeFactory := func() texel.App {
-		return apps.NewKittyClockApp()
-		//return welcome.NewWelcomeApp()
+		return welcome.NewWelcomeApp()
 	}
 
 	// Initialize the Desktop Environment with the factories.
