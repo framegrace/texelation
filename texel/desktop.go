@@ -52,6 +52,7 @@ type Desktop struct {
 	inControlMode   bool
 	subControlMode  rune
 	resizeSelection *selectedBorder
+	zoomedPane      *Node
 
 	// Animation system
 	animationTicker *time.Ticker
@@ -128,7 +129,7 @@ func (d *Desktop) AddStatusPane(app App, side Side, size int) {
 	d.recalculateLayout()
 }
 
-func (d *Desktop) recalculateLayout() {
+func (d *Desktop) getMainArea() (int, int, int, int) {
 	w, h := d.tcellScreen.Size()
 	mainX, mainY := 0, 0
 	mainW, mainH := w, h
@@ -138,16 +139,12 @@ func (d *Desktop) recalculateLayout() {
 	for _, sp := range d.statusPanes {
 		switch sp.side {
 		case SideTop:
-			sp.app.Resize(w, sp.size)
 			topOffset += sp.size
 		case SideBottom:
-			sp.app.Resize(w, sp.size)
 			bottomOffset += sp.size
 		case SideLeft:
-			sp.app.Resize(sp.size, h-topOffset-bottomOffset)
 			leftOffset += sp.size
 		case SideRight:
-			sp.app.Resize(sp.size, h-topOffset-bottomOffset)
 			rightOffset += sp.size
 		}
 	}
@@ -156,8 +153,31 @@ func (d *Desktop) recalculateLayout() {
 	mainY = topOffset
 	mainW = w - leftOffset - rightOffset
 	mainH = h - topOffset - bottomOffset
+	return mainX, mainY, mainW, mainH
+}
 
-	if d.activeWorkspace != nil {
+func (d *Desktop) recalculateLayout() {
+	w, h := d.tcellScreen.Size()
+	mainX, mainY, mainW, mainH := d.getMainArea()
+
+	for _, sp := range d.statusPanes {
+		switch sp.side {
+		case SideTop:
+			sp.app.Resize(w, sp.size)
+		case SideBottom:
+			sp.app.Resize(w, sp.size)
+		case SideLeft:
+			sp.app.Resize(sp.size, h-mainY-(h-mainY-mainH))
+		case SideRight:
+			sp.app.Resize(sp.size, h-mainY-(h-mainY-mainH))
+		}
+	}
+
+	if d.zoomedPane != nil {
+		if d.zoomedPane.Pane != nil {
+			d.zoomedPane.Pane.setDimensions(mainX, mainY, mainX+mainW, mainY+mainH)
+		}
+	} else if d.activeWorkspace != nil {
 		d.activeWorkspace.setArea(mainX, mainY, mainW, mainH)
 	}
 }
@@ -282,7 +302,11 @@ func (d *Desktop) handleEvent(ev tcell.Event) {
 		return
 	}
 
-	if d.activeWorkspace != nil {
+	if d.zoomedPane != nil {
+		if d.zoomedPane.Pane != nil {
+			d.zoomedPane.Pane.app.HandleKey(key)
+		}
+	} else if d.activeWorkspace != nil {
 		d.activeWorkspace.handleEvent(key)
 	}
 }
@@ -354,6 +378,20 @@ func (d *Desktop) toggleControlMode() {
 	d.broadcastStateUpdate()
 }
 
+func (d *Desktop) toggleZoom() {
+	if d.zoomedPane == nil {
+		if d.activeWorkspace != nil {
+			d.zoomedPane = d.activeWorkspace.tree.ActiveLeaf
+		}
+	} else {
+		d.zoomedPane = nil
+	}
+	d.recalculateLayout()
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.Refresh()
+	}
+}
+
 // handleControlMode processes all commands when the Desktop is in control mode.
 func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
 	if ev.Key() == tcell.KeyEsc {
@@ -385,18 +423,31 @@ func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
 
 	switch r {
 	case 'x':
-		d.activeWorkspace.CloseActivePane()
+		if d.zoomedPane != nil {
+			d.activeWorkspace.CloseActivePane()
+			d.zoomedPane = nil
+		} else {
+			d.activeWorkspace.CloseActivePane()
+		}
+		d.toggleControlMode()
 	case '|':
 		d.activeWorkspace.PerformSplit(Vertical)
+		d.toggleControlMode()
 	case '-':
 		d.activeWorkspace.PerformSplit(Horizontal)
+		d.toggleControlMode()
 	case 'w':
 		d.subControlMode = 'w'
 		d.broadcastStateUpdate()
 		return
-	}
+	case 'z':
+		d.toggleZoom()
+		d.broadcastStateUpdate()
+		return
+	default:
+		d.toggleControlMode()
 
-	d.toggleControlMode()
+	}
 }
 
 // broadcastStateUpdate now broadcasts on the Desktop's dispatcher
@@ -404,7 +455,14 @@ func (d *Desktop) broadcastStateUpdate() {
 	if d.activeWorkspace == nil {
 		return
 	}
-	title := d.activeWorkspace.tree.GetActiveTitle()
+	var title string
+	if d.zoomedPane != nil {
+		if d.zoomedPane.Pane != nil {
+			title = d.zoomedPane.Pane.getTitle()
+		}
+	} else {
+		title = d.activeWorkspace.tree.GetActiveTitle()
+	}
 
 	allWsIDs := make([]int, 0, len(d.workspaces))
 	for id := range d.workspaces {
@@ -431,6 +489,10 @@ func (d *Desktop) broadcastStateUpdate() {
 func (d *Desktop) SwitchToWorkspace(id int) {
 	if d.activeWorkspace != nil && d.activeWorkspace.id == id {
 		return
+	}
+
+	if d.zoomedPane != nil {
+		d.zoomedPane = nil
 	}
 
 	if ws, exists := d.workspaces[id]; exists {
@@ -463,7 +525,13 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 }
 
 func (d *Desktop) draw() {
-	if d.activeWorkspace != nil {
+	if d.zoomedPane != nil {
+		mainX, mainY, _, _ := d.getMainArea()
+		if d.zoomedPane.Pane != nil {
+			paneBuffer := d.zoomedPane.Pane.Render()
+			blit(d.tcellScreen, mainX, mainY, paneBuffer)
+		}
+	} else if d.activeWorkspace != nil {
 		d.activeWorkspace.draw(d.tcellScreen)
 	}
 	d.drawStatusPanes(d.tcellScreen)
@@ -705,3 +773,21 @@ func (d *Desktop) logActiveAnimations() {
 		}
 	})
 }
+
+//func blitDiff(tcs tcell.Screen, x0, y0 int, oldBuf, buf [][]Cell) {
+//	for y, row := range buf {
+//		for x, cell := range row {
+//			if y >= len(oldBuf) || x >= len(oldBuf[y]) || cell != oldBuf[y][x] {
+//				tcs.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
+//			}
+//		}
+//	}
+//}
+//
+//func blit(tcs tcell.Screen, x, y int, buf [][]Cell) {
+//	for r, row := range buf {
+//		for c, cell := range row {
+//			tcs.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
+//		}
+//	}
+//}
