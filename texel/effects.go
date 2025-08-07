@@ -4,6 +4,7 @@ package texel
 import (
 	"context"
 	"log"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -208,6 +209,24 @@ func (ep *EffectPipeline) IsAnimating() bool {
 		if animatedEffect, ok := effect.(AnimatedEffect); ok {
 			if animatedEffect.IsAnimating() {
 				return true
+			}
+		}
+	}
+	return false
+}
+
+func (ep *EffectPipeline) IsEffectAnimating(effectType Effect) bool {
+	ep.mu.RLock()
+	defer ep.mu.RUnlock()
+
+	targetType := reflect.TypeOf(effectType)
+
+	for _, effect := range ep.effects {
+		if reflect.TypeOf(effect) == targetType {
+			if animatedEffect, ok := effect.(AnimatedEffect); ok {
+				if animatedEffect.IsAnimating() {
+					return true
+				}
 			}
 		}
 	}

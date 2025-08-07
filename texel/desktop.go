@@ -32,6 +32,10 @@ type StatusPane struct {
 	size int // rows for Top/Bottom, cols for Left/Right
 }
 
+type PaneRect struct {
+	x, y, w, h int
+}
+
 // Desktop manages a collection of workspaces (Screens).
 type Desktop struct {
 	tcellScreen       tcell.Screen
@@ -379,16 +383,55 @@ func (d *Desktop) toggleControlMode() {
 }
 
 func (d *Desktop) toggleZoom() {
-	if d.zoomedPane == nil {
-		if d.activeWorkspace != nil {
-			d.zoomedPane = d.activeWorkspace.tree.ActiveLeaf
-		}
-	} else {
-		d.zoomedPane = nil
+	if d.activeWorkspace == nil {
+		return
 	}
-	d.recalculateLayout()
-	if d.activeWorkspace != nil {
-		d.activeWorkspace.Refresh()
+
+	mainX, mainY, mainW, mainH := d.getMainArea()
+
+	var effect *ZoomEffect
+	if d.zoomedPane == nil { // ZOOM IN
+		nodeToZoom := d.activeWorkspace.tree.ActiveLeaf
+		if nodeToZoom == nil || nodeToZoom.Pane == nil {
+			return
+		}
+
+		p := nodeToZoom.Pane
+		start := PaneRect{x: p.absX0, y: p.absY0, w: p.Width(), h: p.Height()}
+		end := PaneRect{x: mainX, y: mainY, w: mainW, h: mainH}
+
+		effect = NewZoomEffect(d.activeWorkspace, nodeToZoom, start, end, 250*time.Millisecond, func() {
+			d.zoomedPane = nodeToZoom
+			d.recalculateLayout()
+			d.broadcastStateUpdate()
+		})
+	} else { // ZOOM OUT
+		nodeToUnZoom := d.zoomedPane
+		d.zoomedPane = nil // Immediately set to nil to restore original layout for calculation
+
+		// Recalculate layout to find the target un-zoomed position
+		d.recalculateLayout()
+
+		p := nodeToUnZoom.Pane
+		end := PaneRect{x: p.absX0, y: p.absY0, w: p.Width(), h: p.Height()}
+		start := PaneRect{x: mainX, y: mainY, w: mainW, h: mainH}
+
+		p.setDimensions(start.x, start.y, start.x+start.w, start.y+start.h)
+
+		effect = NewZoomEffect(d.activeWorkspace, nodeToUnZoom, start, end, 250*time.Millisecond, func() {
+			d.recalculateLayout()
+			d.broadcastStateUpdate()
+		})
+	}
+
+	if effect != nil {
+		d.activeWorkspace.AddEffect(effect)
+		d.activeWorkspace.animator.AnimateTo(effect, 1.0, 250*time.Millisecond, func() {
+			d.activeWorkspace.RemoveEffect(effect)
+			if effect.onComplete != nil {
+				effect.onComplete()
+			}
+		})
 	}
 }
 
@@ -420,7 +463,8 @@ func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
 		d.toggleControlMode()
 		return
 	}
-
+	// Handle the command, then exit control mode (unless specified otherwise)
+	exitControlMode := true
 	switch r {
 	case 'x':
 		if d.zoomedPane != nil {
@@ -429,24 +473,19 @@ func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
 		} else {
 			d.activeWorkspace.CloseActivePane()
 		}
-		d.toggleControlMode()
 	case '|':
 		d.activeWorkspace.PerformSplit(Vertical)
-		d.toggleControlMode()
 	case '-':
 		d.activeWorkspace.PerformSplit(Horizontal)
-		d.toggleControlMode()
 	case 'w':
 		d.subControlMode = 'w'
 		d.broadcastStateUpdate()
-		return
+		exitControlMode = false // Stay in control mode for sub-mode
 	case 'z':
 		d.toggleZoom()
-		d.broadcastStateUpdate()
-		return
-	default:
+	}
+	if exitControlMode {
 		d.toggleControlMode()
-
 	}
 }
 
@@ -525,6 +564,7 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 }
 
 func (d *Desktop) draw() {
+
 	if d.zoomedPane != nil {
 		mainX, mainY, _, _ := d.getMainArea()
 		if d.zoomedPane.Pane != nil {
