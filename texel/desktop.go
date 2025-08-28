@@ -427,6 +427,8 @@ func (d *Desktop) toggleZoom() {
 	if effect != nil {
 		d.activeWorkspace.AddEffect(effect)
 		d.activeWorkspace.animator.AnimateTo(effect, 1.0, 250*time.Millisecond, func() {
+			// Call cleanup before removing effect to reset z-order
+			effect.Cleanup()
 			d.activeWorkspace.RemoveEffect(effect)
 			if effect.onComplete != nil {
 				effect.onComplete()

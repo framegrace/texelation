@@ -52,6 +52,26 @@ func (le *LayoutEffect) Apply(buffer *[][]Cell) {
 		currentRatios[i] = startRatios[i] + (targetRatios[i]-startRatios[i])*float64(intensity)
 	}
 
+	// Ensure ratios sum to exactly 1.0 to prevent rounding errors
+	// that could cause the bottom-right pane to shrink
+	ratioSum := 0.0
+	for _, ratio := range currentRatios {
+		ratioSum += ratio
+	}
+	
+	// Log if we need to normalize (for debugging)
+	needsNormalization := ratioSum != 1.0 && ratioSum > 0.0
+	if needsNormalization {
+		log.Printf("LayoutEffect.Apply: intensity=%.3f, sum=%.6f, normalizing ratios", intensity, ratioSum)
+	}
+	
+	if ratioSum > 0.0 && len(currentRatios) > 0 {
+		// Normalize ratios to sum to 1.0
+		for i := range currentRatios {
+			currentRatios[i] = currentRatios[i] / ratioSum
+		}
+	}
+
 	// Update the node's split ratios
 	node.SplitRatios = currentRatios
 
@@ -59,8 +79,6 @@ func (le *LayoutEffect) Apply(buffer *[][]Cell) {
 	if screen != nil {
 		screen.recalculateLayout()
 	}
-
-	log.Printf("LayoutEffect.Apply: intensity=%.3f, ratios=%v", intensity, currentRatios)
 }
 
 func (le *LayoutEffect) Clone() Effect {

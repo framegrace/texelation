@@ -22,7 +22,7 @@ type ZoomEffect struct {
 
 // NewZoomEffect creates a new zoom effect.
 func NewZoomEffect(screen *Screen, node *Node, start, end PaneRect, duration time.Duration, onComplete func()) *ZoomEffect {
-	return &ZoomEffect{
+	effect := &ZoomEffect{
 		screen:     screen,
 		node:       node,
 		startRect:  start,
@@ -31,6 +31,14 @@ func NewZoomEffect(screen *Screen, node *Node, start, end PaneRect, duration tim
 		duration:   duration,
 		onComplete: onComplete,
 	}
+	
+	// Set the pane to render on top during the zoom animation
+	if node != nil && node.Pane != nil {
+		node.Pane.SetZOrder(ZOrderAnimation) // High z-order to ensure it's on top
+		log.Printf("ZoomEffect: Set pane '%s' z-order to %d for zoom animation", node.Pane.getTitle(), ZOrderAnimation)
+	}
+	
+	return effect
 }
 
 // Apply calculates and applies the new dimensions for the pane being zoomed.
@@ -43,9 +51,12 @@ func (e *ZoomEffect) Apply(buffer *[][]Cell) {
 
 	if progress >= 1.0 {
 		progress = 1.0
-		if e.onComplete != nil && !e.isCompleting {
+		if !e.isCompleting {
 			e.isCompleting = true
-			e.onComplete()
+			if e.onComplete != nil {
+				e.onComplete()
+			}
+			// DON'T reset z-order here - it will be reset when effect is removed
 		}
 	}
 
@@ -93,3 +104,15 @@ func (e *ZoomEffect) SetIntensity(intensity float32) {
 func (e *ZoomEffect) IsAnimating() bool {
 	return time.Since(e.startTime) < e.duration
 }
+
+// Cleanup resets the z-order when the effect is removed
+func (e *ZoomEffect) Cleanup() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	
+	if e.node != nil && e.node.Pane != nil {
+		e.node.Pane.SetZOrder(ZOrderDefault) // Reset to default z-order
+		log.Printf("ZoomEffect.Cleanup: Reset pane '%s' z-order to %d", e.node.Pane.getTitle(), ZOrderDefault)
+	}
+}
+

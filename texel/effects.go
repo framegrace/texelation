@@ -248,3 +248,4 @@ func (ep *EffectPipeline) GetActiveAnimationCount() int {
 	}
 	return count
 }
+

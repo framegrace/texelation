@@ -9,6 +9,15 @@ import (
 	"unicode/utf8"
 )
 
+// Z-order constants for common layering scenarios
+const (
+	ZOrderDefault   = 0    // Normal panes
+	ZOrderFloating  = 100  // Floating windows
+	ZOrderDialog    = 500  // Modal dialogs
+	ZOrderAnimation = 1000 // During animations (zoom, etc.)
+	ZOrderTooltip   = 2000 // Tooltips and temporary overlays
+)
+
 // Pane represents a rectangular area on the screen that hosts an App.
 type pane struct {
 	absX0, absY0, absX1, absY1 int
@@ -28,6 +37,7 @@ type pane struct {
 	// Public state fields
 	IsActive   bool
 	IsResizing bool
+	ZOrder     int // Higher values render on top, default is 0
 }
 
 // newPane creates a new, empty Pane. The App is attached later.
@@ -143,6 +153,34 @@ func (p *pane) AddEffect(effect Effect) {
 // RemoveEffect removes an effect from the pane's pipeline
 func (p *pane) RemoveEffect(effect Effect) {
 	p.effects.RemoveEffect(effect)
+}
+
+// SetZOrder sets the z-order (layering) of the pane
+// Higher values render on top. Default is 0.
+func (p *pane) SetZOrder(zOrder int) {
+	p.ZOrder = zOrder
+	log.Printf("SetZOrder: Pane '%s' z-order set to %d", p.getTitle(), zOrder)
+	p.screen.Refresh() // Trigger redraw
+}
+
+// GetZOrder returns the current z-order of the pane
+func (p *pane) GetZOrder() int {
+	return p.ZOrder
+}
+
+// BringToFront sets the pane to render on top of other panes
+func (p *pane) BringToFront() {
+	p.SetZOrder(ZOrderFloating)
+}
+
+// SendToBack resets the pane to normal z-order
+func (p *pane) SendToBack() {
+	p.SetZOrder(ZOrderDefault)
+}
+
+// SetAsDialog configures the pane as a modal dialog
+func (p *pane) SetAsDialog() {
+	p.SetZOrder(ZOrderDialog)
 }
 
 // Render draws the pane's borders, title, and the hosted application's content.

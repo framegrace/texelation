@@ -2,8 +2,10 @@
 package texel
 
 import (
+	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"log"
+	"sort"
 	"time"
 )
 
@@ -545,32 +547,70 @@ func (s *Screen) draw(tcs tcell.Screen) {
 		}
 	}
 
-	// Render all panes into the screen buffer
-	paneCount := 0
+	// Collect all panes and sort them by z-order for proper layering
+	type paneWithOrder struct {
+		pane   *pane
+		zOrder int
+	}
+	
+	var allPanes []paneWithOrder
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node.Pane.app != nil {
-			paneCount++
-			p := node.Pane
-			log.Printf("Screen.draw: Rendering pane %d: '%s' at abs(%d,%d)-(%d,%d)",
-				paneCount, p.getTitle(), p.absX0, p.absY0, p.absX1, p.absY1)
-			paneBuffer := p.Render()
-
-			// Copy pane buffer into screen buffer at the correct position
-			for y, row := range paneBuffer {
-				screenY := y + (p.absY0 - s.y) // Account for Y offset
-				if screenY < 0 || screenY >= s.height {
-					continue
-				}
-				for x, cell := range row {
-					screenX := x + (p.absX0 - s.x)
-					if screenX < 0 || screenX >= s.width {
-						continue
-					}
-					screenBuffer[screenY][screenX] = cell
-				}
-			}
+			allPanes = append(allPanes, paneWithOrder{
+				pane:   node.Pane,
+				zOrder: node.Pane.GetZOrder(),
+			})
 		}
 	})
+
+	// Sort panes by z-order (lower values rendered first, higher values on top)
+	sort.Slice(allPanes, func(i, j int) bool {
+		return allPanes[i].zOrder < allPanes[j].zOrder
+	})
+
+	// Log z-orders for debugging (only if there are non-zero z-orders)
+	hasNonZeroZOrder := false
+	for _, paneInfo := range allPanes {
+		if paneInfo.zOrder != 0 {
+			hasNonZeroZOrder = true
+			break
+		}
+	}
+	if hasNonZeroZOrder {
+		log.Printf("Screen.draw: Rendering panes with z-order:")
+		for i, paneInfo := range allPanes {
+			log.Printf("  [%d] '%s' z-order=%d", i, paneInfo.pane.getTitle(), paneInfo.zOrder)
+		}
+	}
+
+	// Render all panes in z-order (lowest to highest)
+	paneCount := 0
+	for _, paneInfo := range allPanes {
+		paneCount++
+		p := paneInfo.pane
+		zOrderStr := ""
+		if p.GetZOrder() != 0 {
+			zOrderStr = fmt.Sprintf(" [Z:%d]", p.GetZOrder())
+		}
+		log.Printf("Screen.draw: Rendering pane %d: '%s' at abs(%d,%d)-(%d,%d)%s",
+			paneCount, p.getTitle(), p.absX0, p.absY0, p.absX1, p.absY1, zOrderStr)
+		paneBuffer := p.Render()
+
+		// Copy pane buffer into screen buffer at the correct position
+		for y, row := range paneBuffer {
+			screenY := y + (p.absY0 - s.y) // Account for Y offset
+			if screenY < 0 || screenY >= s.height {
+				continue
+			}
+			for x, cell := range row {
+				screenX := x + (p.absX0 - s.x)
+				if screenX < 0 || screenX >= s.width {
+					continue
+				}
+				screenBuffer[screenY][screenX] = cell
+			}
+		}
+	}
 
 	log.Printf("Screen.draw: Rendered %d panes", paneCount)
 
