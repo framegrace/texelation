@@ -63,13 +63,24 @@ func (e *ZoomEffect) Apply(buffer *[][]Cell) {
 	// Smooth easing
 	p := progress * progress * (3.0 - 2.0*progress)
 
-	currX := int(float64(e.startRect.x) + float64(e.endRect.x-e.startRect.x)*p)
-	currY := int(float64(e.startRect.y) + float64(e.endRect.y-e.startRect.y)*p)
-	currW := int(float64(e.startRect.w) + float64(e.endRect.w-e.startRect.w)*p)
-	currH := int(float64(e.startRect.h) + float64(e.endRect.h-e.startRect.h)*p)
+	// Use more precise calculations and explicit rounding to avoid sub-pixel errors
+	currX := int(float64(e.startRect.x) + float64(e.endRect.x-e.startRect.x)*p + 0.5)
+	currY := int(float64(e.startRect.y) + float64(e.endRect.y-e.startRect.y)*p + 0.5)
+	currW := int(float64(e.startRect.w) + float64(e.endRect.w-e.startRect.w)*p + 0.5)
+	currH := int(float64(e.startRect.h) + float64(e.endRect.h-e.startRect.h)*p + 0.5)
+
+	// Ensure minimum dimensions
+	if currW < 1 {
+		currW = 1
+	}
+	if currH < 1 {
+		currH = 1
+	}
 
 	if e.node != nil && e.node.Pane != nil {
 		e.node.Pane.setDimensions(currX, currY, currX+currW, currY+currH)
+		log.Printf("ZoomEffect.Apply: Pane '%s' animated to (%d,%d) size %dx%d", 
+			e.node.Pane.getTitle(), currX, currY, currW, currH)
 	}
 }
 

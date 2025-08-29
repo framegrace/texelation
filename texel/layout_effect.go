@@ -59,12 +59,6 @@ func (le *LayoutEffect) Apply(buffer *[][]Cell) {
 		ratioSum += ratio
 	}
 	
-	// Log if we need to normalize (for debugging)
-	needsNormalization := ratioSum != 1.0 && ratioSum > 0.0
-	if needsNormalization {
-		log.Printf("LayoutEffect.Apply: intensity=%.3f, sum=%.6f, normalizing ratios", intensity, ratioSum)
-	}
-	
 	if ratioSum > 0.0 && len(currentRatios) > 0 {
 		// Normalize ratios to sum to 1.0
 		for i := range currentRatios {

@@ -563,21 +563,23 @@ func (s *Screen) draw(tcs tcell.Screen) {
 		}
 	})
 
-	// Sort panes by z-order (lower values rendered first, higher values on top)
-	sort.Slice(allPanes, func(i, j int) bool {
-		return allPanes[i].zOrder < allPanes[j].zOrder
-	})
-
-	// Log z-orders for debugging (only if there are non-zero z-orders)
-	hasNonZeroZOrder := false
+	// Check if z-order sorting is needed (optimization for common case)
+	needsSorting := false
 	for _, paneInfo := range allPanes {
 		if paneInfo.zOrder != 0 {
-			hasNonZeroZOrder = true
+			needsSorting = true
 			break
 		}
 	}
-	if hasNonZeroZOrder {
-		log.Printf("Screen.draw: Rendering panes with z-order:")
+
+	// Only sort if z-order is actually being used
+	if needsSorting {
+		sort.Slice(allPanes, func(i, j int) bool {
+			return allPanes[i].zOrder < allPanes[j].zOrder
+		})
+		
+		// Log z-orders for debugging when sorting is performed
+		log.Printf("Screen.draw: Sorted panes by z-order:")
 		for i, paneInfo := range allPanes {
 			log.Printf("  [%d] '%s' z-order=%d", i, paneInfo.pane.getTitle(), paneInfo.zOrder)
 		}
