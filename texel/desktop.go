@@ -38,7 +38,7 @@ type PaneRect struct {
 
 // Desktop manages a collection of workspaces (Screens).
 type Desktop struct {
-	tcellScreen       tcell.Screen
+	display           ScreenDriver
 	workspaces        map[int]*Screen
 	activeWorkspace   *Screen
 	statusPanes       []*StatusPane
@@ -50,7 +50,8 @@ type Desktop struct {
 	DefaultFgColor    tcell.Color
 	DefaultBgColor    tcell.Color
 	dispatcher        *EventDispatcher
-	prevBuff          [][]Cell
+	statusBuffer      BufferStore
+	appLifecycle      AppLifecycleManager
 
 	// Global state now lives on the Desktop
 	inControlMode   bool
@@ -69,7 +70,24 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := tcellScreen.Init(); err != nil {
+
+	driver := NewTcellScreenDriver(tcellScreen)
+	lifecycle := &LocalAppLifecycle{}
+	return NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+}
+
+// NewDesktopWithDriver wires a Desktop using the provided screen driver and
+// lifecycle manager. It exists primarily to support tests and future remote
+// runtimes.
+func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppFactory, lifecycle AppLifecycleManager) (*Desktop, error) {
+	if driver == nil {
+		return nil, fmt.Errorf("screen driver is required")
+	}
+	if lifecycle == nil {
+		lifecycle = &LocalAppLifecycle{}
+	}
+
+	if err := driver.Init(); err != nil {
 		return nil, err
 	}
 
@@ -77,11 +95,11 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 	defbg := tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()
 	deffg := tm.GetColor("desktop", "default_fg", tcell.ColorReset).TrueColor()
 	defStyle := tcell.StyleDefault.Background(defbg).Foreground(deffg)
-	tcellScreen.SetStyle(defStyle)
-	tcellScreen.HideCursor()
+	driver.SetStyle(defStyle)
+	driver.HideCursor()
 
 	d := &Desktop{
-		tcellScreen:       tcellScreen,
+		display:           driver,
 		workspaces:        make(map[int]*Screen),
 		statusPanes:       make([]*StatusPane, 0),
 		quit:              make(chan struct{}),
@@ -91,7 +109,9 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 		DefaultFgColor:    deffg,
 		DefaultBgColor:    defbg,
 		dispatcher:        NewEventDispatcher(),
-		inControlMode:     false, // Explicitly set to false
+		statusBuffer:      NewInMemoryBufferStore(),
+		appLifecycle:      lifecycle,
+		inControlMode:     false,
 		subControlMode:    0,
 	}
 
@@ -125,16 +145,12 @@ func (d *Desktop) AddStatusPane(app App, side Side, size int) {
 		app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
 	}
 
-	go func() {
-		if err := app.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "Status pane app exited with error: %v", err)
-		}
-	}()
+	d.appLifecycle.StartApp(app)
 	d.recalculateLayout()
 }
 
 func (d *Desktop) getMainArea() (int, int, int, int) {
-	w, h := d.tcellScreen.Size()
+	w, h := d.display.Size()
 	mainX, mainY := 0, 0
 	mainW, mainH := w, h
 
@@ -161,7 +177,7 @@ func (d *Desktop) getMainArea() (int, int, int, int) {
 }
 
 func (d *Desktop) recalculateLayout() {
-	w, h := d.tcellScreen.Size()
+	w, h := d.display.Size()
 	mainX, mainY, mainW, mainH := d.getMainArea()
 
 	for _, sp := range d.statusPanes {
@@ -194,7 +210,7 @@ func (d *Desktop) Run() error {
 			case <-d.quit:
 				return
 			default:
-				eventChan <- d.tcellScreen.PollEvent()
+				eventChan <- d.display.PollEvent()
 			}
 		}
 	}()
@@ -315,38 +331,39 @@ func (d *Desktop) handleEvent(ev tcell.Event) {
 	}
 }
 
-func (d *Desktop) drawStatusPanes(tcs tcell.Screen) {
-	w, h := tcs.Size()
+func (d *Desktop) drawStatusPanes(display ScreenDriver) {
+	w, h := display.Size()
 	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
 
 	for _, sp := range d.statusPanes {
 		switch sp.side {
 		case SideTop:
 			buf := sp.app.Render()
-			d.statusPaneBlit(tcs, leftOffset, topOffset, buf)
+			d.statusPaneBlit(display, leftOffset, topOffset, buf)
 			topOffset += sp.size
 		case SideBottom:
 			buf := sp.app.Render()
-			d.statusPaneBlit(tcs, leftOffset, h-bottomOffset-sp.size, buf)
+			d.statusPaneBlit(display, leftOffset, h-bottomOffset-sp.size, buf)
 			bottomOffset += sp.size
 		case SideLeft:
 			buf := sp.app.Render()
-			d.statusPaneBlit(tcs, leftOffset, topOffset, buf)
+			d.statusPaneBlit(display, leftOffset, topOffset, buf)
 			leftOffset += sp.size
 		case SideRight:
 			buf := sp.app.Render()
-			d.statusPaneBlit(tcs, w-rightOffset-sp.size, topOffset, buf)
+			d.statusPaneBlit(display, w-rightOffset-sp.size, topOffset, buf)
 			rightOffset += sp.size
 		}
 	}
 }
-func (d *Desktop) statusPaneBlit(tcs tcell.Screen, x, y int, buf [][]Cell) {
-	if d.prevBuff != nil {
-		blitDiff(tcs, x, y, d.prevBuff, buf)
-		d.prevBuff = buf
+func (d *Desktop) statusPaneBlit(display ScreenDriver, x, y int, buf [][]Cell) {
+	prev := d.statusBuffer.Snapshot()
+	if prev != nil {
+		blitDiff(display, x, y, prev, buf)
 	} else {
-		blit(tcs, x, y, buf)
+		blit(display, x, y, buf)
 	}
+	d.statusBuffer.Save(buf)
 }
 
 func (d *Desktop) toggleControlMode() {
@@ -539,7 +556,7 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 	if ws, exists := d.workspaces[id]; exists {
 		d.activeWorkspace = ws
 	} else {
-		ws, err := newScreen(id, d.ShellAppFactory, d)
+		ws, err := newScreen(id, d.ShellAppFactory, d.appLifecycle, d)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating workspace: %v\n", err)
 			return
@@ -571,13 +588,13 @@ func (d *Desktop) draw() {
 		mainX, mainY, _, _ := d.getMainArea()
 		if d.zoomedPane.Pane != nil {
 			paneBuffer := d.zoomedPane.Pane.Render()
-			blit(d.tcellScreen, mainX, mainY, paneBuffer)
+			blit(d.display, mainX, mainY, paneBuffer)
 		}
 	} else if d.activeWorkspace != nil {
-		d.activeWorkspace.draw(d.tcellScreen)
+		d.activeWorkspace.draw(d.display)
 	}
-	d.drawStatusPanes(d.tcellScreen)
-	d.tcellScreen.Show()
+	d.drawStatusPanes(d.display)
+	d.display.Show()
 }
 
 func (d *Desktop) Close() {
@@ -595,10 +612,10 @@ func (d *Desktop) Close() {
 			ws.Close()
 		}
 		for _, sp := range d.statusPanes {
-			sp.app.Stop()
+			d.appLifecycle.StopApp(sp.app)
 		}
-		if d.tcellScreen != nil {
-			d.tcellScreen.Fini()
+		if d.display != nil {
+			d.display.Fini()
 		}
 	})
 }

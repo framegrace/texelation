@@ -70,7 +70,7 @@ func newPane(s *Screen) *pane {
 // and starts its main run loop.
 func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	if p.app != nil {
-		p.app.Stop() // Stop any existing app
+		p.screen.appLifecycle.StopApp(p.app)
 	}
 	p.app = app
 	p.name = app.GetTitle()
@@ -80,7 +80,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	}
 	// The app is resized considering the space for borders.
 	p.app.Resize(p.drawableWidth(), p.drawableHeight())
-	go p.app.Run()
+	p.screen.appLifecycle.StartApp(p.app)
 }
 
 // SetActive changes the active state of the pane and animates the appropriate effects
@@ -324,7 +324,7 @@ func (p *pane) Close() {
 		p.screen.Unsubscribe(listener)
 	}
 	if p.app != nil {
-		p.app.Stop()
+		p.screen.appLifecycle.StopApp(p.app)
 	}
 }
 

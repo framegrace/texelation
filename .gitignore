@@ -1,2 +1,4 @@
 ansiterm.log
 texelation
+bin/
+.cache/

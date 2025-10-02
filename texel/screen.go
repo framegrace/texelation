@@ -57,6 +57,7 @@ type Screen struct {
 	drawChan            chan bool
 	dispatcher          *EventDispatcher
 	ShellAppFactory     AppFactory
+	appLifecycle        AppLifecycleManager
 
 	// New effects system for screen-level effects
 	effects  *EffectPipeline
@@ -71,7 +72,7 @@ type Screen struct {
 }
 
 // newScreen creates a new workspace screen.
-func newScreen(id int, shellFactory AppFactory, desktop *Desktop) (*Screen, error) {
+func newScreen(id int, shellFactory AppFactory, lifecycle AppLifecycleManager, desktop *Desktop) (*Screen, error) {
 	s := &Screen{
 		id:              id,
 		desktop:         desktop,
@@ -80,6 +81,7 @@ func newScreen(id int, shellFactory AppFactory, desktop *Desktop) (*Screen, erro
 		drawChan:        make(chan bool, 1),
 		dispatcher:      NewEventDispatcher(),
 		ShellAppFactory: shellFactory,
+		appLifecycle:    lifecycle,
 		effects:         NewEffectPipeline(),
 		animator:        NewEffectAnimator(),
 	}
@@ -533,7 +535,7 @@ func (s *Screen) SwapActivePane(d Direction) {
 }
 
 // Update the draw method to also log when pane animations are detected
-func (s *Screen) draw(tcs tcell.Screen) {
+func (s *Screen) draw(tcs ScreenDriver) {
 	log.Printf("Screen.draw: Drawing screen %d", s.id)
 
 	// Create a full screen buffer to collect all pane content
@@ -552,7 +554,7 @@ func (s *Screen) draw(tcs tcell.Screen) {
 		pane   *pane
 		zOrder int
 	}
-	
+
 	var allPanes []paneWithOrder
 	s.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node.Pane.app != nil {
@@ -577,7 +579,7 @@ func (s *Screen) draw(tcs tcell.Screen) {
 		sort.Slice(allPanes, func(i, j int) bool {
 			return allPanes[i].zOrder < allPanes[j].zOrder
 		})
-		
+
 		// Log z-orders for debugging when sorting is performed
 		log.Printf("Screen.draw: Sorted panes by z-order:")
 		for i, paneInfo := range allPanes {
@@ -658,7 +660,7 @@ func (s *Screen) hasActivePaneAnimations() bool {
 }
 
 // applyScreenEffects applies screen-level effects to the entire screen area
-func (s *Screen) applyScreenEffects(tcs tcell.Screen) {
+func (s *Screen) applyScreenEffects(tcs ScreenDriver) {
 	// Create a buffer for the entire screen area
 	buffer := make([][]Cell, s.height)
 	for y := range buffer {
@@ -914,7 +916,7 @@ func keyToDirection(ev *tcell.EventKey) Direction {
 	return -1
 }
 
-func blit(tcs tcell.Screen, x, y int, buf [][]Cell) {
+func blit(tcs ScreenDriver, x, y int, buf [][]Cell) {
 	for r, row := range buf {
 		for c, cell := range row {
 			tcs.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
@@ -922,7 +924,7 @@ func blit(tcs tcell.Screen, x, y int, buf [][]Cell) {
 	}
 }
 
-func blitDiff(tcs tcell.Screen, x0, y0 int, oldBuf, buf [][]Cell) {
+func blitDiff(tcs ScreenDriver, x0, y0 int, oldBuf, buf [][]Cell) {
 	for y, row := range buf {
 		for x, cell := range row {
 			if y >= len(oldBuf) || x >= len(oldBuf[y]) || cell != oldBuf[y][x] {

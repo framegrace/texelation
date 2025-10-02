@@ -1,0 +1,8 @@
+texelation
+texelation/apps/clock
+texelation/apps/statusbar
+texelation/apps/texelterm
+texelation/apps/texelterm/parser
+texelation/apps/welcome
+texelation/texel
+texelation/texel/theme
