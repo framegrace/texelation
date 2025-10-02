@@ -1,13 +1,13 @@
 package main
 
 import (
-    "context"
-    "flag"
-    "fmt"
-    "os"
-    "os/signal"
-    "syscall"
-    "time"
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -58,10 +58,12 @@ func (a *textApp) HandleKey(ev *tcell.EventKey) {
 func (a *textApp) SetRefreshNotifier(ch chan<- bool) { a.notify = ch }
 
 func main() {
-    socketPath := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
-    title := flag.String("title", "Texel Server", "Title for the main pane")
-    snapshotPath := flag.String("snapshot", "", "Optional path to persist pane snapshots")
-    flag.Parse()
+	tcell.SetEncodingFallback(tcell.EncodingFallbackASCII)
+
+	socketPath := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
+	title := flag.String("title", "Texel Server", "Title for the main pane")
+	snapshotPath := flag.String("snapshot", "", "Optional path to persist pane snapshots")
+	flag.Parse()
 
 	manager := server.NewManager()
 
@@ -82,18 +84,18 @@ func main() {
 	status := statusbar.New()
 	desktop.AddStatusPane(status, texel.SideBottom, 1)
 
-    srv := server.NewServer(*socketPath, manager)
-    sink := server.NewDesktopSink(desktop)
-    srv.SetEventSink(sink)
-    srv.SetPublisherFactory(func(sess *server.Session) *server.DesktopPublisher {
-        publisher := server.NewDesktopPublisher(desktop, sess)
-        sink.SetPublisher(publisher)
-        return publisher
-    })
-    if *snapshotPath != "" {
-        store := server.NewSnapshotStore(*snapshotPath)
-        srv.SetSnapshotStore(store, 5*time.Second)
-    }
+	srv := server.NewServer(*socketPath, manager)
+	sink := server.NewDesktopSink(desktop)
+	srv.SetEventSink(sink)
+	srv.SetPublisherFactory(func(sess *server.Session) *server.DesktopPublisher {
+		publisher := server.NewDesktopPublisher(desktop, sess)
+		sink.SetPublisher(publisher)
+		return publisher
+	})
+	if *snapshotPath != "" {
+		store := server.NewSnapshotStore(*snapshotPath)
+		srv.SetSnapshotStore(store, 5*time.Second)
+	}
 
 	go func() {
 		if err := srv.Start(); err != nil {
