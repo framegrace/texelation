@@ -13,6 +13,7 @@ type PaneState struct {
 	Revision  uint32
 	UpdatedAt time.Time
 	rows      map[int][]rune
+	Title     string
 }
 
 // Rows returns the pane contents as a slice of strings in row order.
@@ -67,6 +68,8 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) *PaneState {
 		pane = &PaneState{ID: delta.PaneID, rows: make(map[int][]rune)}
 		c.panes[delta.PaneID] = pane
 	}
+	pane.Title = delta.Title
+
 	if delta.Revision < pane.Revision {
 		return pane
 	}

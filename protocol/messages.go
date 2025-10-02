@@ -487,6 +487,22 @@ func DecodeThemeUpdate(b []byte) (ThemeUpdate, error) {
     return update, nil
 }
 
+func EncodeTreeSnapshot(snapshot BufferSnapshot) ([]byte, error) {
+    buf := bytes.NewBuffer(nil)
+    if err := binary.Write(buf, binary.LittleEndian, uint16(len(snapshot.Panes))); err != nil {
+        return nil, err
+    }
+    for _, pane := range snapshot.Panes {
+        if err := binary.Write(buf, binary.LittleEndian, pane.ID); err != nil {
+            return nil, err
+        }
+        if err := encodeString(buf, pane.Title); err != nil {
+            return nil, err
+        }
+    }
+    return buf.Bytes(), nil
+}
+
 func EncodeKeyEvent(ev KeyEvent) ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 12))
 	if err := binary.Write(buf, binary.LittleEndian, ev.KeyCode); err != nil {
