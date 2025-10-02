@@ -10,14 +10,18 @@
    - Assertions: desktop initialisation, lifecycle wiring, and status pane attachment.
 
 2. **Desktop Headless Lifecycle**
-   - New tests in `texel/desktop_integration_test.go` cover workspace switching, pane splitting, and status-pane sizing using the stubbed screen driver.
+   - Tests in `texel/desktop_integration_test.go` cover workspace switching, pane splitting, status-pane sizing, and injected key events using the stubbed screen driver.
    - Ensures core desktop invariants (active workspace, tree structure, area calculations) remain stable when refactoring.
 
-3. **Session Persistence Check**
+3. **Server Harness (CLI)**
+   - `cmd/texel-server-sim` spins up the Unix-socket server with a simulation screen and deterministic apps.
+   - Run locally: `go run ./cmd/texel-server-sim --socket /tmp/texelation.sock` then connect with the protocol smoke client once implemented.
+
+4. **Session Persistence Check**
    - Unit tests for forthcoming persistence package once pane tree serialization exists; `go test ./server/persistence` will validate round-trips.
    - Include regression cases for empty tree, deep splits, and app-specific metadata.
 
-4. **Protocol Loopback (Future Phase)**
+5. **Protocol Loopback (Future Phase)**
    - Integration test that spins up server + client in-process over Unix sockets; asserts reconnection behaviour and diff replay.
 
 ## Tooling Hooks
