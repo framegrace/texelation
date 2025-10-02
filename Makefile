@@ -3,7 +3,7 @@
 APP_NAME := texelation
 BIN_DIR := bin
 CACHE_DIR := $(CURDIR)/.cache
-GO_ENV := GOCACHE=$(CACHE_DIR)
+GO_ENV := GOCACHE=$(CACHE_DIR) CGO_ENABLED=0
 
 .PHONY: build run test lint fmt tidy clean help
 
