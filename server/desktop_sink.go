@@ -29,6 +29,37 @@ func (d *DesktopSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) 
 	}
 }
 
+func (d *DesktopSink) HandleMouseEvent(session *Session, event protocol.MouseEvent) {
+	if d.desktop == nil {
+		return
+	}
+	d.desktop.InjectMouseEvent(int(event.X), int(event.Y), tcell.ButtonMask(event.ButtonMask), tcell.ModMask(event.Modifiers))
+	if d.publisher != nil {
+		_ = d.publisher.Publish()
+	}
+}
+
+func (d *DesktopSink) HandleClipboardSet(session *Session, event protocol.ClipboardSet) {
+	if d.desktop == nil {
+		return
+	}
+	d.desktop.HandleClipboardSet(event.MimeType, event.Data)
+}
+
+func (d *DesktopSink) HandleClipboardGet(session *Session, event protocol.ClipboardGet) {
+	if d.desktop == nil {
+		return
+	}
+	d.desktop.HandleClipboardGet(event.MimeType)
+}
+
+func (d *DesktopSink) HandleThemeUpdate(session *Session, event protocol.ThemeUpdate) {
+	if d.desktop == nil {
+		return
+	}
+	d.desktop.HandleThemeUpdate(event.Section, event.Key, event.Value)
+}
+
 func (d *DesktopSink) Desktop() *texel.Desktop {
 	return d.desktop
 }

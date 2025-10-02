@@ -62,6 +62,13 @@ type Desktop struct {
 	// Animation system
 	animationTicker *time.Ticker
 	animationStop   chan struct{}
+
+	lastMouseX        int
+	lastMouseY        int
+	lastMouseButtons  tcell.ButtonMask
+	lastMouseModifier tcell.ModMask
+	clipboard         map[string][]byte
+	lastClipboardMime string
 }
 
 // NewDesktop creates and initializes a new desktop environment.
@@ -113,6 +120,7 @@ func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppF
 		appLifecycle:      lifecycle,
 		inControlMode:     false,
 		subControlMode:    0,
+		clipboard:         make(map[string][]byte),
 	}
 
 	log.Printf("NewDesktop: Created with inControlMode=%v", d.inControlMode)
@@ -329,6 +337,55 @@ func (d *Desktop) handleEvent(ev tcell.Event) {
 	} else if d.activeWorkspace != nil {
 		d.activeWorkspace.handleEvent(key)
 	}
+}
+
+// InjectMouseEvent records the latest mouse event metadata from remote clients.
+func (d *Desktop) InjectMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	d.lastMouseX = x
+	d.lastMouseY = y
+	d.lastMouseButtons = buttons
+	d.lastMouseModifier = modifiers
+}
+
+// HandleClipboardSet stores clipboard contents using the provided MIME type.
+func (d *Desktop) HandleClipboardSet(mime string, data []byte) {
+	if d.clipboard == nil {
+		d.clipboard = make(map[string][]byte)
+	}
+	d.clipboard[mime] = append([]byte(nil), data...)
+}
+
+// HandleClipboardGet records the last clipboard lookup.
+func (d *Desktop) HandleClipboardGet(mime string) []byte {
+	d.lastClipboardMime = mime
+	if d.clipboard == nil {
+		return nil
+	}
+	return append([]byte(nil), d.clipboard[mime]...)
+}
+
+// HandleThemeUpdate applies runtime theme overrides.
+func (d *Desktop) HandleThemeUpdate(section, key, value string) {
+	config := theme.Get()
+	if _, ok := config[section]; !ok {
+		config[section] = theme.Section{}
+	}
+	config[section][key] = value
+}
+
+// LastMousePosition returns the most recently recorded mouse coordinates.
+func (d *Desktop) LastMousePosition() (int, int) {
+	return d.lastMouseX, d.lastMouseY
+}
+
+// LastMouseButtons exposes the last recorded button mask.
+func (d *Desktop) LastMouseButtons() tcell.ButtonMask {
+	return d.lastMouseButtons
+}
+
+// LastMouseModifiers exposes the last recorded modifier mask.
+func (d *Desktop) LastMouseModifiers() tcell.ModMask {
+	return d.lastMouseModifier
 }
 
 // InjectKeyEvent allows external callers (e.g., remote clients) to deliver key

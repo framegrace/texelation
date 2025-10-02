@@ -16,6 +16,14 @@ func (r *recordingSink) HandleKeyEvent(session *Session, event protocol.KeyEvent
 	r.events = append(r.events, event)
 }
 
+func (r *recordingSink) HandleMouseEvent(session *Session, event protocol.MouseEvent) {}
+
+func (r *recordingSink) HandleClipboardSet(session *Session, event protocol.ClipboardSet) {}
+
+func (r *recordingSink) HandleClipboardGet(session *Session, event protocol.ClipboardGet) {}
+
+func (r *recordingSink) HandleThemeUpdate(session *Session, event protocol.ThemeUpdate) {}
+
 func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 	mgr := NewManager()
 	client, srv := net.Pipe()

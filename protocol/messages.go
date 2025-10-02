@@ -71,14 +71,42 @@ type ErrorFrame struct {
 
 // BufferAck acknowledges receipt of buffer deltas up to the provided sequence.
 type BufferAck struct {
-	Sequence uint64
+    Sequence uint64
 }
 
 // KeyEvent carries keyboard input from client to server.
 type KeyEvent struct {
-	KeyCode   uint32
-	RuneValue rune
-	Modifiers uint16
+    KeyCode   uint32
+    RuneValue rune
+    Modifiers uint16
+}
+
+// MouseEvent carries mouse position and button data.
+type MouseEvent struct {
+    X          int16
+    Y          int16
+    ButtonMask uint32
+    WheelX     int16
+    WheelY     int16
+    Modifiers  uint16
+}
+
+// ClipboardSet transfers clipboard contents from client to server.
+type ClipboardSet struct {
+    MimeType string
+    Data     []byte
+}
+
+// ClipboardGet requests clipboard contents for a specific MIME type.
+type ClipboardGet struct {
+    MimeType string
+}
+
+// ThemeUpdate notifies about runtime theme adjustments.
+type ThemeUpdate struct {
+    Section string
+    Key     string
+    Value   string
 }
 
 func encodeString(buf *bytes.Buffer, value string) error {
@@ -324,12 +352,139 @@ func EncodeBufferAck(a BufferAck) ([]byte, error) {
 }
 
 func DecodeBufferAck(b []byte) (BufferAck, error) {
-	var ack BufferAck
-	if len(b) < 8 {
-		return ack, errPayloadShort
-	}
-	ack.Sequence = binary.LittleEndian.Uint64(b[:8])
-	return ack, nil
+    var ack BufferAck
+    if len(b) < 8 {
+        return ack, errPayloadShort
+    }
+    ack.Sequence = binary.LittleEndian.Uint64(b[:8])
+    return ack, nil
+}
+
+func EncodeMouseEvent(ev MouseEvent) ([]byte, error) {
+    buf := bytes.NewBuffer(make([]byte, 0, 16))
+    if err := binary.Write(buf, binary.LittleEndian, ev.X); err != nil {
+        return nil, err
+    }
+    if err := binary.Write(buf, binary.LittleEndian, ev.Y); err != nil {
+        return nil, err
+    }
+    if err := binary.Write(buf, binary.LittleEndian, ev.ButtonMask); err != nil {
+        return nil, err
+    }
+    if err := binary.Write(buf, binary.LittleEndian, ev.WheelX); err != nil {
+        return nil, err
+    }
+    if err := binary.Write(buf, binary.LittleEndian, ev.WheelY); err != nil {
+        return nil, err
+    }
+    if err := binary.Write(buf, binary.LittleEndian, ev.Modifiers); err != nil {
+        return nil, err
+    }
+    return buf.Bytes(), nil
+}
+
+func DecodeMouseEvent(b []byte) (MouseEvent, error) {
+    var ev MouseEvent
+    if len(b) < 14 {
+        return ev, errPayloadShort
+    }
+    ev.X = int16(binary.LittleEndian.Uint16(b[0:2]))
+    ev.Y = int16(binary.LittleEndian.Uint16(b[2:4]))
+    ev.ButtonMask = binary.LittleEndian.Uint32(b[4:8])
+    ev.WheelX = int16(binary.LittleEndian.Uint16(b[8:10]))
+    ev.WheelY = int16(binary.LittleEndian.Uint16(b[10:12]))
+    ev.Modifiers = binary.LittleEndian.Uint16(b[12:14])
+    return ev, nil
+}
+
+func EncodeClipboardSet(msg ClipboardSet) ([]byte, error) {
+    buf := bytes.NewBuffer(make([]byte, 0, 2+len(msg.MimeType)+len(msg.Data)))
+    if err := encodeString(buf, msg.MimeType); err != nil {
+        return nil, err
+    }
+    if len(msg.Data) > 0xFFFF {
+        return nil, errStringTooLong
+    }
+    if err := binary.Write(buf, binary.LittleEndian, uint16(len(msg.Data))); err != nil {
+        return nil, err
+    }
+    if len(msg.Data) > 0 {
+        if _, err := buf.Write(msg.Data); err != nil {
+            return nil, err
+        }
+    }
+    return buf.Bytes(), nil
+}
+
+func DecodeClipboardSet(b []byte) (ClipboardSet, error) {
+    var msg ClipboardSet
+    mime, rest, err := decodeString(b)
+    if err != nil {
+        return msg, err
+    }
+    if len(rest) < 2 {
+        return msg, errPayloadShort
+    }
+    dataLen := binary.LittleEndian.Uint16(rest[:2])
+    rest = rest[2:]
+    if len(rest) < int(dataLen) {
+        return msg, errPayloadShort
+    }
+    msg.MimeType = mime
+    msg.Data = append([]byte(nil), rest[:dataLen]...)
+    return msg, nil
+}
+
+func EncodeClipboardGet(req ClipboardGet) ([]byte, error) {
+    buf := bytes.NewBuffer(nil)
+    if err := encodeString(buf, req.MimeType); err != nil {
+        return nil, err
+    }
+    return buf.Bytes(), nil
+}
+
+func DecodeClipboardGet(b []byte) (ClipboardGet, error) {
+    var req ClipboardGet
+    mime, _, err := decodeString(b)
+    if err != nil {
+        return req, err
+    }
+    req.MimeType = mime
+    return req, nil
+}
+
+func EncodeThemeUpdate(update ThemeUpdate) ([]byte, error) {
+    buf := bytes.NewBuffer(nil)
+    if err := encodeString(buf, update.Section); err != nil {
+        return nil, err
+    }
+    if err := encodeString(buf, update.Key); err != nil {
+        return nil, err
+    }
+    if err := encodeString(buf, update.Value); err != nil {
+        return nil, err
+    }
+    return buf.Bytes(), nil
+}
+
+func DecodeThemeUpdate(b []byte) (ThemeUpdate, error) {
+    var update ThemeUpdate
+    section, rest, err := decodeString(b)
+    if err != nil {
+        return update, err
+    }
+    key, rest, err := decodeString(rest)
+    if err != nil {
+        return update, err
+    }
+    value, _, err := decodeString(rest)
+    if err != nil {
+        return update, err
+    }
+    update.Section = section
+    update.Key = key
+    update.Value = value
+    return update, nil
 }
 
 func EncodeKeyEvent(ev KeyEvent) ([]byte, error) {

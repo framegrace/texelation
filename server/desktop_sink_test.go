@@ -7,6 +7,7 @@ import (
 
 	"texelation/protocol"
 	"texelation/texel"
+	"texelation/texel/theme"
 )
 
 type sinkScreenDriver struct{}
@@ -82,5 +83,39 @@ func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 
 	if len(session.Pending(0)) == 0 {
 		t.Fatalf("expected diffs after key event")
+	}
+}
+
+func TestDesktopSinkHandlesAdditionalEvents(t *testing.T) {
+	driver := sinkScreenDriver{}
+	lifecycle := texel.NoopAppLifecycle{}
+	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+	welcomeFactory := func() texel.App { return &recordingApp{title: "welcome"} }
+
+	desktop, err := texel.NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+
+	sink := NewDesktopSink(desktop)
+	sink.HandleMouseEvent(nil, protocol.MouseEvent{X: 5, Y: 6, ButtonMask: 1, Modifiers: 2})
+	x, y := desktop.LastMousePosition()
+	if x != 5 || y != 6 {
+		t.Fatalf("mouse event not recorded")
+	}
+	if desktop.LastMouseButtons() != tcell.ButtonMask(1) {
+		t.Fatalf("mouse buttons not recorded")
+	}
+
+	sink.HandleClipboardSet(nil, protocol.ClipboardSet{MimeType: "text/plain", Data: []byte("data")})
+	data := desktop.HandleClipboardGet("text/plain")
+	if string(data) != "data" {
+		t.Fatalf("clipboard not stored")
+	}
+
+	sink.HandleThemeUpdate(nil, protocol.ThemeUpdate{Section: "pane", Key: "fg", Value: "#123456"})
+	cfg := theme.Get()
+	if section, ok := cfg["pane"]; !ok || section["fg"] != "#123456" {
+		t.Fatalf("theme update not applied")
 	}
 }

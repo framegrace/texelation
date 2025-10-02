@@ -76,6 +76,30 @@ func (c *connection) serve() error {
 				return err
 			}
 			c.sink.HandleKeyEvent(c.session, keyEvent)
+		case protocol.MsgMouseEvent:
+			mouseEvent, err := protocol.DecodeMouseEvent(payload)
+			if err != nil {
+				return err
+			}
+			c.sink.HandleMouseEvent(c.session, mouseEvent)
+		case protocol.MsgClipboardSet:
+			clipSet, err := protocol.DecodeClipboardSet(payload)
+			if err != nil {
+				return err
+			}
+			c.sink.HandleClipboardSet(c.session, clipSet)
+		case protocol.MsgClipboardGet:
+			clipGet, err := protocol.DecodeClipboardGet(payload)
+			if err != nil {
+				return err
+			}
+			c.sink.HandleClipboardGet(c.session, clipGet)
+		case protocol.MsgThemeUpdate:
+			themeUpdate, err := protocol.DecodeThemeUpdate(payload)
+			if err != nil {
+				return err
+			}
+			c.sink.HandleThemeUpdate(c.session, themeUpdate)
 		default:
 			// Unknown messages are ignored for now.
 		}

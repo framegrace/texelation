@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
+
+	"texelation/texel/theme"
 )
 
 func TestDesktopSplitCreatesNewPane(t *testing.T) {
@@ -138,5 +140,56 @@ func TestDesktopInjectKeyEvent(t *testing.T) {
 	}
 	if recorder.keys[0].Key() != tcell.KeyEnter {
 		t.Fatalf("unexpected key %v", recorder.keys[0].Key())
+	}
+}
+
+func TestDesktopInjectMouseEvent(t *testing.T) {
+	driver := &stubScreenDriver{}
+	lifecycle := NoopAppLifecycle{}
+	shellFactory := func() App { return newFakeApp("shell") }
+	welcomeFactory := func() App { return newFakeApp("welcome") }
+
+	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+
+	desktop.InjectMouseEvent(12, 34, tcell.Button1, tcell.ModMask(2))
+
+	if desktop.lastMouseX != 12 || desktop.lastMouseY != 34 {
+		t.Fatalf("unexpected mouse position %d,%d", desktop.lastMouseX, desktop.lastMouseY)
+	}
+	if desktop.lastMouseButtons != tcell.Button1 {
+		t.Fatalf("unexpected buttons %v", desktop.lastMouseButtons)
+	}
+	if desktop.lastMouseModifier != tcell.ModMask(2) {
+		t.Fatalf("unexpected modifiers %v", desktop.lastMouseModifier)
+	}
+}
+
+func TestDesktopClipboardAndThemeHandling(t *testing.T) {
+	driver := &stubScreenDriver{}
+	lifecycle := NoopAppLifecycle{}
+	shellFactory := func() App { return newFakeApp("shell") }
+	welcomeFactory := func() App { return newFakeApp("welcome") }
+
+	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+
+	desktop.HandleClipboardSet("text/plain", []byte("hello"))
+	data := desktop.HandleClipboardGet("text/plain")
+	if string(data) != "hello" {
+		t.Fatalf("unexpected clipboard data %q", string(data))
+	}
+	if desktop.lastClipboardMime != "text/plain" {
+		t.Fatalf("expected last clipboard mime recorded")
+	}
+
+	desktop.HandleThemeUpdate("pane", "fg", "#ffffff")
+	cfg := theme.Get()
+	if section, ok := cfg["pane"]; !ok || section["fg"] != "#ffffff" {
+		t.Fatalf("expected theme update to persist")
 	}
 }
