@@ -22,9 +22,9 @@
 - Implement encoder/decoder utilities with benchmarks targeting low allocation and high throughput.
 
 ## Phase 3 – Server Runtime Extraction
-- Create `server` package that instantiates the current desktop/app stack, accepts UDS connections, and handles session lifecycle.
-- Maintain authoritative pane tree and buffers server-side; broadcast diffs to connected clients and queue updates when none are attached.
-- Persist pane tree snapshots and per-pane metadata on interval (JSON or binary) with integrity checks to detect corruption.
+- Create `server` package that instantiates the current desktop/app stack, accepts UDS connections, and handles session lifecycle. *(done via `server` package + CLI harness)*
+- Maintain authoritative pane tree and buffers server-side; broadcast diffs to connected clients and queue updates when none are attached. *(realised with `DesktopPublisher` and integration tests)*
+- Persist pane tree snapshots and per-pane metadata on interval (JSON or binary) with integrity checks to detect corruption. *(implemented snapshot store & timer loop)*
 
 ## Phase 4 – Client Runtime
 - Implement `client` binary that connects via UDS, performs handshake, requests latest snapshot, and applies buffered diffs to local cache.
