@@ -1,10 +1,12 @@
 package server
 
 import (
-	"context"
-	"net"
-	"os"
-	"sync"
+    "context"
+    "log"
+    "net"
+    "os"
+    "sync"
+    "time"
 )
 
 // Server listens on a Unix domain socket and manages sessions.
@@ -16,6 +18,10 @@ type Server struct {
     wg       sync.WaitGroup
     sink     EventSink
     publisherFactory func(*Session) *DesktopPublisher
+    snapshotStore    *SnapshotStore
+    snapshotInterval time.Duration
+    snapshotQuit     chan struct{}
+    desktopSink      *DesktopSink
 }
 
 func NewServer(addr string, manager *Manager) *Server {
@@ -30,10 +36,20 @@ func (s *Server) SetEventSink(sink EventSink) {
         sink = nopSink{}
     }
     s.sink = sink
+    if ds, ok := sink.(*DesktopSink); ok {
+        s.desktopSink = ds
+    }
 }
 
 func (s *Server) SetPublisherFactory(factory func(*Session) *DesktopPublisher) {
     s.publisherFactory = factory
+}
+
+func (s *Server) SetSnapshotStore(store *SnapshotStore, interval time.Duration) {
+    s.snapshotStore = store
+    if interval > 0 {
+        s.snapshotInterval = interval
+    }
 }
 
 func (s *Server) Start() error {
@@ -44,10 +60,11 @@ func (s *Server) Start() error {
 	if err != nil {
 		return err
 	}
-	s.listener = l
-	s.wg.Add(1)
-	go s.acceptLoop()
-	return nil
+    s.listener = l
+    s.wg.Add(1)
+    go s.acceptLoop()
+    s.startSnapshotLoop()
+    return nil
 }
 
 func (s *Server) acceptLoop() {
@@ -75,8 +92,8 @@ func (s *Server) acceptLoop() {
             if s.publisherFactory != nil {
                 publisher = s.publisherFactory(session)
             }
-            if desktopSink, ok := s.sink.(*DesktopSink); ok {
-                desktopSink.SetPublisher(publisher)
+            if s.desktopSink != nil {
+                s.desktopSink.SetPublisher(publisher)
             }
             if publisher != nil {
                 _ = publisher.Publish()
@@ -88,10 +105,13 @@ func (s *Server) acceptLoop() {
 }
 
 func (s *Server) Stop(ctx context.Context) error {
-	close(s.quit)
-	if s.listener != nil {
-		_ = s.listener.Close()
-	}
+    close(s.quit)
+    if s.snapshotQuit != nil {
+        close(s.snapshotQuit)
+    }
+    if s.listener != nil {
+        _ = s.listener.Close()
+    }
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -111,5 +131,50 @@ func (s *Server) Manager() *Manager {
 }
 
 func (s *Server) EventSink() EventSink {
-	return s.sink
+    return s.sink
+}
+
+func (s *Server) startSnapshotLoop() {
+    if s.snapshotStore == nil || s.desktopSink == nil {
+        return
+    }
+    interval := s.snapshotInterval
+    if interval <= 0 {
+        interval = 5 * time.Second
+    }
+    s.snapshotQuit = make(chan struct{})
+    ticker := time.NewTicker(interval)
+    s.wg.Add(1)
+    go func() {
+        defer s.wg.Done()
+        defer ticker.Stop()
+        for {
+            select {
+            case <-ticker.C:
+                s.persistSnapshot()
+            case <-s.snapshotQuit:
+                return
+            case <-s.quit:
+                return
+            }
+        }
+    }()
+    s.persistSnapshot()
+}
+
+func (s *Server) persistSnapshot() {
+    if s.snapshotStore == nil || s.desktopSink == nil {
+        return
+    }
+    desktop := s.desktopSink.Desktop()
+    if desktop == nil {
+        return
+    }
+    panes := desktop.SnapshotBuffers()
+    if len(panes) == 0 {
+        return
+    }
+    if err := s.snapshotStore.Save(panes); err != nil {
+        log.Printf("snapshot save failed: %v", err)
+    }
 }

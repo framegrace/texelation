@@ -15,7 +15,7 @@
 
 3. **Server Harness (CLI)**
    - `cmd/texel-server-sim` spins up the Unix-socket server with a simulation screen and deterministic apps.
-   - Run locally: `go run ./cmd/texel-server-sim --socket /tmp/texelation.sock` then connect with the protocol smoke client once implemented.
+   - Run locally: `go run ./cmd/texel-server-sim --socket /tmp/texelation.sock [--snapshot ./snap.json]` then connect with the protocol smoke client once implemented.
 
 4. **Session Persistence Check**
    - Unit tests for forthcoming persistence package once pane tree serialization exists; `go test ./server/persistence` will validate round-trips.
