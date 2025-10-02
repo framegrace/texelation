@@ -9,9 +9,9 @@
    - Entry: `go test ./texel/...` with the `_test.go` harness that instantiates the desktop using the new `ScreenDriver` stub.
    - Assertions: desktop initialisation, lifecycle wiring, and status pane attachment.
 
-2. **Buffer Diff Harness**
-   - CLI under `cmd/texel-buffer-smoke` (reintroduced) that drives the desktop for a fixed script, dumps pane buffers, and exits.
-   - Output stored under `artifacts/snapshots/`, enabling `diff` against golden files checked into `testdata/`.
+2. **Desktop Headless Lifecycle**
+   - New tests in `texel/desktop_integration_test.go` cover workspace switching, pane splitting, and status-pane sizing using the stubbed screen driver.
+   - Ensures core desktop invariants (active workspace, tree structure, area calculations) remain stable when refactoring.
 
 3. **Session Persistence Check**
    - Unit tests for forthcoming persistence package once pane tree serialization exists; `go test ./server/persistence` will validate round-trips.

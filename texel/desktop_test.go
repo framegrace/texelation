@@ -7,11 +7,13 @@ import (
 )
 
 type stubScreenDriver struct {
-	width, height int
-	initCalled    bool
-	finiCalled    bool
-	hideCursor    bool
-	setStyle      bool
+    width, height int
+    initCalled    bool
+    finiCalled    bool
+    hideCursor    bool
+    setStyle      bool
+    showCount     int
+    content       map[[2]int]Cell
 }
 
 func (s *stubScreenDriver) Init() error {
@@ -38,17 +40,29 @@ func (s *stubScreenDriver) SetStyle(style tcell.Style) {
 }
 
 func (s *stubScreenDriver) HideCursor() {
-	s.hideCursor = true
+    s.hideCursor = true
 }
 
-func (s *stubScreenDriver) Show() {}
+func (s *stubScreenDriver) Show() {
+    s.showCount++
+}
 
 func (s *stubScreenDriver) PollEvent() tcell.Event { return nil }
 
-func (s *stubScreenDriver) SetContent(x, y int, mainc rune, combc []rune, style tcell.Style) {}
+func (s *stubScreenDriver) SetContent(x, y int, mainc rune, combc []rune, style tcell.Style) {
+    if s.content == nil {
+        s.content = make(map[[2]int]Cell)
+    }
+    s.content[[2]int{x, y}] = Cell{Ch: mainc, Style: style}
+}
 
 func (s *stubScreenDriver) GetContent(x, y int) (rune, []rune, tcell.Style, int) {
-	return ' ', nil, tcell.StyleDefault, 1
+    if s.content != nil {
+        if cell, ok := s.content[[2]int{x, y}]; ok {
+            return cell.Ch, nil, cell.Style, 1
+        }
+    }
+    return ' ', nil, tcell.StyleDefault, 1
 }
 
 type trackingLifecycle struct {
