@@ -49,3 +49,18 @@ func TestErrorFrameRoundTrip(t *testing.T) {
 		t.Fatalf("mismatch: %#v vs %#v", decoded, frame)
 	}
 }
+
+func TestBufferAckRoundTrip(t *testing.T) {
+	ack := BufferAck{Sequence: 1234}
+	payload, err := EncodeBufferAck(ack)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeBufferAck(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded.Sequence != ack.Sequence {
+		t.Fatalf("mismatch: got %d want %d", decoded.Sequence, ack.Sequence)
+	}
+}

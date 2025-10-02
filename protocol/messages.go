@@ -69,6 +69,11 @@ type ErrorFrame struct {
 	Message string
 }
 
+// BufferAck acknowledges receipt of buffer deltas up to the provided sequence.
+type BufferAck struct {
+	Sequence uint64
+}
+
 func encodeString(buf *bytes.Buffer, value string) error {
 	if len(value) > 0xFFFF {
 		return errStringTooLong
@@ -301,4 +306,21 @@ func DecodeErrorFrame(b []byte) (ErrorFrame, error) {
 	}
 	e.Message = msg
 	return e, nil
+}
+
+func EncodeBufferAck(a BufferAck) ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 8))
+	if err := binary.Write(buf, binary.LittleEndian, a.Sequence); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func DecodeBufferAck(b []byte) (BufferAck, error) {
+	var ack BufferAck
+	if len(b) < 8 {
+		return ack, errPayloadShort
+	}
+	ack.Sequence = binary.LittleEndian.Uint64(b[:8])
+	return ack, nil
 }
