@@ -1,10 +1,10 @@
 package server
 
 import (
-    "context"
-    "net"
-    "os"
-    "sync"
+	"context"
+	"net"
+	"os"
+	"sync"
 )
 
 // Server listens on a Unix domain socket and manages sessions.
@@ -14,13 +14,21 @@ type Server struct {
 	listener net.Listener
 	quit     chan struct{}
 	wg       sync.WaitGroup
+	sink     EventSink
 }
 
 func NewServer(addr string, manager *Manager) *Server {
 	if manager == nil {
 		manager = NewManager()
 	}
-	return &Server{addr: addr, manager: manager, quit: make(chan struct{})}
+	return &Server{addr: addr, manager: manager, quit: make(chan struct{}), sink: nopSink{}}
+}
+
+func (s *Server) SetEventSink(sink EventSink) {
+	if sink == nil {
+		sink = nopSink{}
+	}
+	s.sink = sink
 }
 
 func (s *Server) Start() error {
@@ -51,17 +59,17 @@ func (s *Server) acceptLoop() {
 		}
 
 		s.wg.Add(1)
-        go func(c net.Conn) {
-            defer s.wg.Done()
-            defer c.Close()
-            session, err := handleHandshake(c, s.manager)
-            if err != nil {
-                return
-            }
-            conn := newConnection(c, session)
-            _ = conn.serve()
-        }(conn)
-    }
+		go func(c net.Conn) {
+			defer s.wg.Done()
+			defer c.Close()
+			session, err := handleHandshake(c, s.manager)
+			if err != nil {
+				return
+			}
+			conn := newConnection(c, session, s.sink)
+			_ = conn.serve()
+		}(conn)
+	}
 }
 
 func (s *Server) Stop(ctx context.Context) error {
@@ -85,4 +93,8 @@ func (s *Server) Stop(ctx context.Context) error {
 
 func (s *Server) Manager() *Manager {
 	return s.manager
+}
+
+func (s *Server) EventSink() EventSink {
+	return s.sink
 }

@@ -3,15 +3,25 @@ package server
 import (
 	"net"
 	"testing"
+	"time"
 
 	"texelation/protocol"
 )
 
-func TestConnectionSendsDiffAndProcessesAck(t *testing.T) {
+type recordingSink struct {
+	events []protocol.KeyEvent
+}
+
+func (r *recordingSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) {
+	r.events = append(r.events, event)
+}
+
+func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 	mgr := NewManager()
 	client, srv := net.Pipe()
 	defer client.Close()
 
+	sink := &recordingSink{}
 	errCh := make(chan error, 1)
 	go func() {
 		defer srv.Close()
@@ -32,7 +42,7 @@ func TestConnectionSendsDiffAndProcessesAck(t *testing.T) {
 			return
 		}
 
-		conn := newConnection(srv, session)
+		conn := newConnection(srv, session, sink)
 		errCh <- conn.serve()
 	}()
 
@@ -97,6 +107,17 @@ func TestConnectionSendsDiffAndProcessesAck(t *testing.T) {
 		t.Fatalf("write ack: %v", err)
 	}
 
+	keyPayload, err := protocol.EncodeKeyEvent(protocol.KeyEvent{KeyCode: 13, RuneValue: '\n', Modifiers: 1})
+	if err != nil {
+		t.Fatalf("encode key: %v", err)
+	}
+	keyHeader := protocol.Header{Version: protocol.Version, Type: protocol.MsgKeyEvent, Flags: protocol.FlagChecksum, SessionID: accept.SessionID}
+	if err := protocol.WriteMessage(client, keyHeader, keyPayload); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
 	client.Close()
 
 	if err := <-errCh; err != nil && err != net.ErrClosed {
@@ -109,5 +130,12 @@ func TestConnectionSendsDiffAndProcessesAck(t *testing.T) {
 	}
 	if pending := session.Pending(0); len(pending) != 0 {
 		t.Fatalf("expected pending diffs to be cleared, got %d", len(pending))
+	}
+
+	if len(sink.events) != 1 {
+		t.Fatalf("expected 1 key event, got %d", len(sink.events))
+	}
+	if sink.events[0].KeyCode != 13 {
+		t.Fatalf("unexpected key event %+v", sink.events[0])
 	}
 }

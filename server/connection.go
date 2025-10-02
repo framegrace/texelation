@@ -13,10 +13,14 @@ type connection struct {
 	session   *Session
 	lastSent  uint64
 	lastAcked uint64
+	sink      EventSink
 }
 
-func newConnection(conn net.Conn, session *Session) *connection {
-	return &connection{conn: conn, session: session}
+func newConnection(conn net.Conn, session *Session, sink EventSink) *connection {
+	if sink == nil {
+		sink = nopSink{}
+	}
+	return &connection{conn: conn, session: session, sink: sink}
 }
 
 func (c *connection) serve() error {
@@ -66,6 +70,12 @@ func (c *connection) serve() error {
 			if err := protocol.WriteMessage(c.conn, pongHeader, pongPayload); err != nil {
 				return err
 			}
+		case protocol.MsgKeyEvent:
+			keyEvent, err := protocol.DecodeKeyEvent(payload)
+			if err != nil {
+				return err
+			}
+			c.sink.HandleKeyEvent(c.session, keyEvent)
 		default:
 			// Unknown messages are ignored for now.
 		}

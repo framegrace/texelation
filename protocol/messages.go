@@ -74,6 +74,13 @@ type BufferAck struct {
 	Sequence uint64
 }
 
+// KeyEvent carries keyboard input from client to server.
+type KeyEvent struct {
+	KeyCode   uint32
+	RuneValue rune
+	Modifiers uint16
+}
+
 func encodeString(buf *bytes.Buffer, value string) error {
 	if len(value) > 0xFFFF {
 		return errStringTooLong
@@ -323,4 +330,30 @@ func DecodeBufferAck(b []byte) (BufferAck, error) {
 	}
 	ack.Sequence = binary.LittleEndian.Uint64(b[:8])
 	return ack, nil
+}
+
+func EncodeKeyEvent(ev KeyEvent) ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 12))
+	if err := binary.Write(buf, binary.LittleEndian, ev.KeyCode); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint32(ev.RuneValue)); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, ev.Modifiers); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func DecodeKeyEvent(b []byte) (KeyEvent, error) {
+	var ev KeyEvent
+	if len(b) < 10 {
+		return ev, errPayloadShort
+	}
+	ev.KeyCode = binary.LittleEndian.Uint32(b[:4])
+	r := binary.LittleEndian.Uint32(b[4:8])
+	ev.RuneValue = rune(r)
+	ev.Modifiers = binary.LittleEndian.Uint16(b[8:10])
+	return ev, nil
 }

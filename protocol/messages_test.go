@@ -64,3 +64,18 @@ func TestBufferAckRoundTrip(t *testing.T) {
 		t.Fatalf("mismatch: got %d want %d", decoded.Sequence, ack.Sequence)
 	}
 }
+
+func TestKeyEventRoundTrip(t *testing.T) {
+	ev := KeyEvent{KeyCode: 42, RuneValue: 'a', Modifiers: 3}
+	payload, err := EncodeKeyEvent(ev)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeKeyEvent(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded.KeyCode != ev.KeyCode || decoded.RuneValue != ev.RuneValue || decoded.Modifiers != ev.Modifiers {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, ev)
+	}
+}
