@@ -3,6 +3,8 @@ package texel
 import (
 	"fmt"
 	"testing"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 func TestDesktopSplitCreatesNewPane(t *testing.T) {
@@ -94,5 +96,47 @@ func TestDesktopSwitchWorkspaceCreatesNewScreen(t *testing.T) {
 	ws := desktop.activeWorkspace
 	if ws.tree.Root == nil || ws.tree.Root.Pane == nil {
 		t.Fatalf("expected welcome pane in new workspace")
+	}
+}
+
+type keyRecordingApp struct {
+	title string
+	keys  []*tcell.EventKey
+}
+
+func (a *keyRecordingApp) Run() error                        { return nil }
+func (a *keyRecordingApp) Stop()                             {}
+func (a *keyRecordingApp) Resize(cols, rows int)             {}
+func (a *keyRecordingApp) Render() [][]Cell                  { return [][]Cell{{}} }
+func (a *keyRecordingApp) GetTitle() string                  { return a.title }
+func (a *keyRecordingApp) HandleKey(ev *tcell.EventKey)      { a.keys = append(a.keys, ev) }
+func (a *keyRecordingApp) SetRefreshNotifier(ch chan<- bool) {}
+
+func TestDesktopInjectKeyEvent(t *testing.T) {
+	driver := &stubScreenDriver{}
+	lifecycle := NoopAppLifecycle{}
+	recorder := &keyRecordingApp{title: "shell"}
+
+	shellFactory := func() App { return recorder }
+	welcomeFactory := func() App { return newFakeApp("welcome") }
+
+	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+
+	if desktop.activeWorkspace == nil {
+		t.Fatalf("expected active workspace")
+	}
+
+	desktop.activeWorkspace.PerformSplit(Vertical)
+
+	desktop.InjectKeyEvent(tcell.KeyEnter, '\n', tcell.ModMask(0))
+
+	if len(recorder.keys) != 1 {
+		t.Fatalf("expected 1 key event, got %d", len(recorder.keys))
+	}
+	if recorder.keys[0].Key() != tcell.KeyEnter {
+		t.Fatalf("unexpected key %v", recorder.keys[0].Key())
 	}
 }

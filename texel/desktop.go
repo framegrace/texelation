@@ -331,6 +331,13 @@ func (d *Desktop) handleEvent(ev tcell.Event) {
 	}
 }
 
+// InjectKeyEvent allows external callers (e.g., remote clients) to deliver key
+// input directly into the desktop event pipeline.
+func (d *Desktop) InjectKeyEvent(key tcell.Key, ch rune, modifiers tcell.ModMask) {
+	event := tcell.NewEventKey(key, ch, modifiers)
+	d.handleEvent(event)
+}
+
 func (d *Desktop) drawStatusPanes(display ScreenDriver) {
 	w, h := display.Size()
 	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0

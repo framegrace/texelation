@@ -1,0 +1,62 @@
+package server
+
+import (
+	"testing"
+
+	"github.com/gdamore/tcell/v2"
+
+	"texelation/protocol"
+	"texelation/texel"
+)
+
+type sinkScreenDriver struct{}
+
+func (sinkScreenDriver) Init() error            { return nil }
+func (sinkScreenDriver) Fini()                  {}
+func (sinkScreenDriver) Size() (int, int)       { return 80, 24 }
+func (sinkScreenDriver) SetStyle(tcell.Style)   {}
+func (sinkScreenDriver) HideCursor()            {}
+func (sinkScreenDriver) Show()                  {}
+func (sinkScreenDriver) PollEvent() tcell.Event { return nil }
+func (sinkScreenDriver) SetContent(x, y int, mainc rune, combc []rune, style tcell.Style) {
+}
+func (sinkScreenDriver) GetContent(x, y int) (rune, []rune, tcell.Style, int) {
+	return ' ', nil, tcell.StyleDefault, 1
+}
+
+type recordingApp struct {
+	title string
+	keys  []*tcell.EventKey
+}
+
+func (r *recordingApp) Run() error                        { return nil }
+func (r *recordingApp) Stop()                             {}
+func (r *recordingApp) Resize(cols, rows int)             {}
+func (r *recordingApp) Render() [][]texel.Cell            { return [][]texel.Cell{{}} }
+func (r *recordingApp) GetTitle() string                  { return r.title }
+func (r *recordingApp) HandleKey(ev *tcell.EventKey)      { r.keys = append(r.keys, ev) }
+func (r *recordingApp) SetRefreshNotifier(ch chan<- bool) {}
+
+func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
+	driver := sinkScreenDriver{}
+	recorder := &recordingApp{title: "welcome"}
+
+	lifecycle := texel.NoopAppLifecycle{}
+	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+	welcomeFactory := func() texel.App { return recorder }
+
+	desktop, err := texel.NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+
+	sink := NewDesktopSink(desktop)
+	sink.HandleKeyEvent(nil, protocol.KeyEvent{KeyCode: uint32(tcell.KeyEnter), RuneValue: '\n', Modifiers: 0})
+
+	if len(recorder.keys) != 1 {
+		t.Fatalf("expected key event forwarded, got %d", len(recorder.keys))
+	}
+	if recorder.keys[0].Key() != tcell.KeyEnter {
+		t.Fatalf("unexpected key received: %v", recorder.keys[0].Key())
+	}
+}
