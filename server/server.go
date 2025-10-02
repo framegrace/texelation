@@ -9,26 +9,31 @@ import (
 
 // Server listens on a Unix domain socket and manages sessions.
 type Server struct {
-	addr     string
-	manager  *Manager
-	listener net.Listener
-	quit     chan struct{}
-	wg       sync.WaitGroup
-	sink     EventSink
+    addr     string
+    manager  *Manager
+    listener net.Listener
+    quit     chan struct{}
+    wg       sync.WaitGroup
+    sink     EventSink
+    publisherFactory func(*Session) *DesktopPublisher
 }
 
 func NewServer(addr string, manager *Manager) *Server {
-	if manager == nil {
-		manager = NewManager()
+    if manager == nil {
+        manager = NewManager()
 	}
 	return &Server{addr: addr, manager: manager, quit: make(chan struct{}), sink: nopSink{}}
 }
 
 func (s *Server) SetEventSink(sink EventSink) {
-	if sink == nil {
-		sink = nopSink{}
-	}
-	s.sink = sink
+    if sink == nil {
+        sink = nopSink{}
+    }
+    s.sink = sink
+}
+
+func (s *Server) SetPublisherFactory(factory func(*Session) *DesktopPublisher) {
+    s.publisherFactory = factory
 }
 
 func (s *Server) Start() error {
@@ -66,10 +71,20 @@ func (s *Server) acceptLoop() {
 			if err != nil {
 				return
 			}
-			conn := newConnection(c, session, s.sink)
-			_ = conn.serve()
-		}(conn)
-	}
+            publisher := (*DesktopPublisher)(nil)
+            if s.publisherFactory != nil {
+                publisher = s.publisherFactory(session)
+            }
+            if desktopSink, ok := s.sink.(*DesktopSink); ok {
+                desktopSink.SetPublisher(publisher)
+            }
+            if publisher != nil {
+                _ = publisher.Publish()
+            }
+            conn := newConnection(c, session, s.sink)
+            _ = conn.serve()
+        }(conn)
+    }
 }
 
 func (s *Server) Stop(ctx context.Context) error {
