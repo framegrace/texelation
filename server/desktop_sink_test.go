@@ -60,3 +60,27 @@ func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 		t.Fatalf("unexpected key received: %v", recorder.keys[0].Key())
 	}
 }
+
+func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
+	driver := sinkScreenDriver{}
+	lifecycle := texel.NoopAppLifecycle{}
+	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+	welcomeFactory := func() texel.App { return &recordingApp{title: "welcome"} }
+
+	desktop, err := texel.NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+
+	session := NewSession([16]byte{2})
+	publisher := NewDesktopPublisher(desktop, session)
+
+	sink := NewDesktopSink(desktop)
+	sink.SetPublisher(publisher)
+
+	sink.HandleKeyEvent(session, protocol.KeyEvent{KeyCode: uint32(tcell.KeyRune), RuneValue: 'x', Modifiers: 0})
+
+	if len(session.Pending(0)) == 0 {
+		t.Fatalf("expected diffs after key event")
+	}
+}

@@ -9,7 +9,8 @@ import (
 
 // DesktopSink forwards key events to a local Desktop instance.
 type DesktopSink struct {
-	desktop *texel.Desktop
+	desktop   *texel.Desktop
+	publisher *DesktopPublisher
 }
 
 func NewDesktopSink(desktop *texel.Desktop) *DesktopSink {
@@ -23,8 +24,15 @@ func (d *DesktopSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) 
 	key := tcell.Key(event.KeyCode)
 	mod := tcell.ModMask(event.Modifiers)
 	d.desktop.InjectKeyEvent(key, event.RuneValue, mod)
+	if d.publisher != nil {
+		_ = d.publisher.Publish()
+	}
 }
 
 func (d *DesktopSink) Desktop() *texel.Desktop {
 	return d.desktop
+}
+
+func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
+	d.publisher = publisher
 }

@@ -26,12 +26,21 @@ const (
 // StyleEntry captures the styling information applied to spans. Values are raw
 // integers; it is up to higher layers to translate to tcell.Style.
 type StyleEntry struct {
-	AttrFlags uint16
-	FgModel   ColorModel
-	FgValue   uint32
-	BgModel   ColorModel
-	BgValue   uint32
+    AttrFlags uint16
+    FgModel   ColorModel
+    FgValue   uint32
+    BgModel   ColorModel
+    BgValue   uint32
 }
+
+const (
+    AttrBold uint16 = 1 << iota
+    AttrUnderline
+    AttrReverse
+    AttrBlink
+    AttrDim
+    AttrItalic
+)
 
 // CellSpan covers a contiguous set of cells on a row that share the same style.
 type CellSpan struct {
