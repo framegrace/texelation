@@ -45,6 +45,8 @@ const (
 	MsgThemeUpdate
 	MsgError
 	MsgMetricUpdate
+	MsgClipboardData
+	MsgThemeAck
 )
 
 // Header describes the fixed portion of every frame exchanged over the wire.

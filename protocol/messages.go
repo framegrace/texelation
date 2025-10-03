@@ -71,59 +71,72 @@ type ErrorFrame struct {
 
 // BufferAck acknowledges receipt of buffer deltas up to the provided sequence.
 type BufferAck struct {
-    Sequence uint64
+	Sequence uint64
 }
 
 // KeyEvent carries keyboard input from client to server.
 type KeyEvent struct {
-    KeyCode   uint32
-    RuneValue rune
-    Modifiers uint16
+	KeyCode   uint32
+	RuneValue rune
+	Modifiers uint16
 }
 
 // MouseEvent carries mouse position and button data.
 type MouseEvent struct {
-    X          int16
-    Y          int16
-    ButtonMask uint32
-    WheelX     int16
-    WheelY     int16
-    Modifiers  uint16
+	X          int16
+	Y          int16
+	ButtonMask uint32
+	WheelX     int16
+	WheelY     int16
+	Modifiers  uint16
 }
 
 // ClipboardSet transfers clipboard contents from client to server.
 type ClipboardSet struct {
-    MimeType string
-    Data     []byte
+	MimeType string
+	Data     []byte
 }
 
 // ClipboardGet requests clipboard contents for a specific MIME type.
 type ClipboardGet struct {
-    MimeType string
+	MimeType string
+}
+
+// ClipboardData delivers clipboard contents from server to client.
+type ClipboardData struct {
+	MimeType string
+	Data     []byte
 }
 
 // ThemeUpdate notifies about runtime theme adjustments.
 type ThemeUpdate struct {
-    Section string
-    Key     string
-    Value   string
+	Section string
+	Key     string
+	Value   string
+}
+
+// ThemeAck confirms that a theme update has been applied server-side.
+type ThemeAck struct {
+	Section string
+	Key     string
+	Value   string
 }
 
 // PaneSnapshot describes the full buffer content for a single pane.
 type PaneSnapshot struct {
-    PaneID   [16]byte
-    Revision uint32
-    Title    string
-    Rows     []string
-    X        int32
-    Y        int32
-    Width    int32
-    Height   int32
+	PaneID   [16]byte
+	Revision uint32
+	Title    string
+	Rows     []string
+	X        int32
+	Y        int32
+	Width    int32
+	Height   int32
 }
 
 // TreeSnapshot aggregates all pane snapshots.
 type TreeSnapshot struct {
-    Panes []PaneSnapshot
+	Panes []PaneSnapshot
 }
 
 func encodeString(buf *bytes.Buffer, value string) error {
@@ -369,228 +382,275 @@ func EncodeBufferAck(a BufferAck) ([]byte, error) {
 }
 
 func DecodeBufferAck(b []byte) (BufferAck, error) {
-    var ack BufferAck
-    if len(b) < 8 {
-        return ack, errPayloadShort
-    }
-    ack.Sequence = binary.LittleEndian.Uint64(b[:8])
-    return ack, nil
+	var ack BufferAck
+	if len(b) < 8 {
+		return ack, errPayloadShort
+	}
+	ack.Sequence = binary.LittleEndian.Uint64(b[:8])
+	return ack, nil
 }
 
 func EncodeMouseEvent(ev MouseEvent) ([]byte, error) {
-    buf := bytes.NewBuffer(make([]byte, 0, 16))
-    if err := binary.Write(buf, binary.LittleEndian, ev.X); err != nil {
-        return nil, err
-    }
-    if err := binary.Write(buf, binary.LittleEndian, ev.Y); err != nil {
-        return nil, err
-    }
-    if err := binary.Write(buf, binary.LittleEndian, ev.ButtonMask); err != nil {
-        return nil, err
-    }
-    if err := binary.Write(buf, binary.LittleEndian, ev.WheelX); err != nil {
-        return nil, err
-    }
-    if err := binary.Write(buf, binary.LittleEndian, ev.WheelY); err != nil {
-        return nil, err
-    }
-    if err := binary.Write(buf, binary.LittleEndian, ev.Modifiers); err != nil {
-        return nil, err
-    }
-    return buf.Bytes(), nil
+	buf := bytes.NewBuffer(make([]byte, 0, 16))
+	if err := binary.Write(buf, binary.LittleEndian, ev.X); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, ev.Y); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, ev.ButtonMask); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, ev.WheelX); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, ev.WheelY); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, ev.Modifiers); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func DecodeMouseEvent(b []byte) (MouseEvent, error) {
-    var ev MouseEvent
-    if len(b) < 14 {
-        return ev, errPayloadShort
-    }
-    ev.X = int16(binary.LittleEndian.Uint16(b[0:2]))
-    ev.Y = int16(binary.LittleEndian.Uint16(b[2:4]))
-    ev.ButtonMask = binary.LittleEndian.Uint32(b[4:8])
-    ev.WheelX = int16(binary.LittleEndian.Uint16(b[8:10]))
-    ev.WheelY = int16(binary.LittleEndian.Uint16(b[10:12]))
-    ev.Modifiers = binary.LittleEndian.Uint16(b[12:14])
-    return ev, nil
+	var ev MouseEvent
+	if len(b) < 14 {
+		return ev, errPayloadShort
+	}
+	ev.X = int16(binary.LittleEndian.Uint16(b[0:2]))
+	ev.Y = int16(binary.LittleEndian.Uint16(b[2:4]))
+	ev.ButtonMask = binary.LittleEndian.Uint32(b[4:8])
+	ev.WheelX = int16(binary.LittleEndian.Uint16(b[8:10]))
+	ev.WheelY = int16(binary.LittleEndian.Uint16(b[10:12]))
+	ev.Modifiers = binary.LittleEndian.Uint16(b[12:14])
+	return ev, nil
 }
 
 func EncodeClipboardSet(msg ClipboardSet) ([]byte, error) {
-    buf := bytes.NewBuffer(make([]byte, 0, 2+len(msg.MimeType)+len(msg.Data)))
-    if err := encodeString(buf, msg.MimeType); err != nil {
-        return nil, err
-    }
-    if len(msg.Data) > 0xFFFF {
-        return nil, errStringTooLong
-    }
-    if err := binary.Write(buf, binary.LittleEndian, uint16(len(msg.Data))); err != nil {
-        return nil, err
-    }
-    if len(msg.Data) > 0 {
-        if _, err := buf.Write(msg.Data); err != nil {
-            return nil, err
-        }
-    }
-    return buf.Bytes(), nil
+	buf := bytes.NewBuffer(make([]byte, 0, 2+len(msg.MimeType)+len(msg.Data)))
+	if err := encodeString(buf, msg.MimeType); err != nil {
+		return nil, err
+	}
+	if len(msg.Data) > 0xFFFF {
+		return nil, errStringTooLong
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint16(len(msg.Data))); err != nil {
+		return nil, err
+	}
+	if len(msg.Data) > 0 {
+		if _, err := buf.Write(msg.Data); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
 }
 
 func DecodeClipboardSet(b []byte) (ClipboardSet, error) {
-    var msg ClipboardSet
-    mime, rest, err := decodeString(b)
-    if err != nil {
-        return msg, err
-    }
-    if len(rest) < 2 {
-        return msg, errPayloadShort
-    }
-    dataLen := binary.LittleEndian.Uint16(rest[:2])
-    rest = rest[2:]
-    if len(rest) < int(dataLen) {
-        return msg, errPayloadShort
-    }
-    msg.MimeType = mime
-    msg.Data = append([]byte(nil), rest[:dataLen]...)
-    return msg, nil
+	var msg ClipboardSet
+	mime, rest, err := decodeString(b)
+	if err != nil {
+		return msg, err
+	}
+	if len(rest) < 2 {
+		return msg, errPayloadShort
+	}
+	dataLen := binary.LittleEndian.Uint16(rest[:2])
+	rest = rest[2:]
+	if len(rest) < int(dataLen) {
+		return msg, errPayloadShort
+	}
+	msg.MimeType = mime
+	msg.Data = append([]byte(nil), rest[:dataLen]...)
+	return msg, nil
+}
+
+func EncodeClipboardData(msg ClipboardData) ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 2+len(msg.MimeType)+len(msg.Data)))
+	if err := encodeString(buf, msg.MimeType); err != nil {
+		return nil, err
+	}
+	if len(msg.Data) > 0xFFFF {
+		return nil, errStringTooLong
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint16(len(msg.Data))); err != nil {
+		return nil, err
+	}
+	if len(msg.Data) > 0 {
+		if _, err := buf.Write(msg.Data); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func DecodeClipboardData(b []byte) (ClipboardData, error) {
+	var msg ClipboardData
+	mime, rest, err := decodeString(b)
+	if err != nil {
+		return msg, err
+	}
+	if len(rest) < 2 {
+		return msg, errPayloadShort
+	}
+	dataLen := binary.LittleEndian.Uint16(rest[:2])
+	rest = rest[2:]
+	if len(rest) < int(dataLen) {
+		return msg, errPayloadShort
+	}
+	msg.MimeType = mime
+	msg.Data = append([]byte(nil), rest[:dataLen]...)
+	return msg, nil
 }
 
 func EncodeClipboardGet(req ClipboardGet) ([]byte, error) {
-    buf := bytes.NewBuffer(nil)
-    if err := encodeString(buf, req.MimeType); err != nil {
-        return nil, err
-    }
-    return buf.Bytes(), nil
+	buf := bytes.NewBuffer(nil)
+	if err := encodeString(buf, req.MimeType); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func DecodeClipboardGet(b []byte) (ClipboardGet, error) {
-    var req ClipboardGet
-    mime, _, err := decodeString(b)
-    if err != nil {
-        return req, err
-    }
-    req.MimeType = mime
-    return req, nil
+	var req ClipboardGet
+	mime, _, err := decodeString(b)
+	if err != nil {
+		return req, err
+	}
+	req.MimeType = mime
+	return req, nil
 }
 
 func EncodeThemeUpdate(update ThemeUpdate) ([]byte, error) {
-    buf := bytes.NewBuffer(nil)
-    if err := encodeString(buf, update.Section); err != nil {
-        return nil, err
-    }
-    if err := encodeString(buf, update.Key); err != nil {
-        return nil, err
-    }
-    if err := encodeString(buf, update.Value); err != nil {
-        return nil, err
-    }
-    return buf.Bytes(), nil
+	buf := bytes.NewBuffer(nil)
+	if err := encodeString(buf, update.Section); err != nil {
+		return nil, err
+	}
+	if err := encodeString(buf, update.Key); err != nil {
+		return nil, err
+	}
+	if err := encodeString(buf, update.Value); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func DecodeThemeUpdate(b []byte) (ThemeUpdate, error) {
-    var update ThemeUpdate
-    section, rest, err := decodeString(b)
-    if err != nil {
-        return update, err
-    }
-    key, rest, err := decodeString(rest)
-    if err != nil {
-        return update, err
-    }
-    value, _, err := decodeString(rest)
-    if err != nil {
-        return update, err
-    }
-    update.Section = section
-    update.Key = key
-    update.Value = value
-    return update, nil
+	var update ThemeUpdate
+	section, rest, err := decodeString(b)
+	if err != nil {
+		return update, err
+	}
+	key, rest, err := decodeString(rest)
+	if err != nil {
+		return update, err
+	}
+	value, _, err := decodeString(rest)
+	if err != nil {
+		return update, err
+	}
+	update.Section = section
+	update.Key = key
+	update.Value = value
+	return update, nil
+}
+
+func EncodeThemeAck(msg ThemeAck) ([]byte, error) {
+	return EncodeThemeUpdate(ThemeUpdate(msg))
+}
+
+func DecodeThemeAck(b []byte) (ThemeAck, error) {
+	update, err := DecodeThemeUpdate(b)
+	return ThemeAck(update), err
 }
 
 // EncodeTreeSnapshot serialises the tree snapshot for transport.
 func EncodeTreeSnapshot(snapshot TreeSnapshot) ([]byte, error) {
-    buf := bytes.NewBuffer(nil)
-    if err := binary.Write(buf, binary.LittleEndian, uint16(len(snapshot.Panes))); err != nil {
-        return nil, err
-    }
-    for _, pane := range snapshot.Panes {
-        if err := binary.Write(buf, binary.LittleEndian, pane.PaneID); err != nil {
-            return nil, err
-        }
-        if err := binary.Write(buf, binary.LittleEndian, pane.Revision); err != nil {
-            return nil, err
-        }
-        if err := encodeString(buf, pane.Title); err != nil {
-            return nil, err
-        }
-        if err := binary.Write(buf, binary.LittleEndian, pane.X); err != nil {
-            return nil, err
-        }
-        if err := binary.Write(buf, binary.LittleEndian, pane.Y); err != nil {
-            return nil, err
-        }
-        if err := binary.Write(buf, binary.LittleEndian, pane.Width); err != nil {
-            return nil, err
-        }
-        if err := binary.Write(buf, binary.LittleEndian, pane.Height); err != nil {
-            return nil, err
-        }
-        if len(pane.Rows) > 0xFFFF {
-            return nil, errStringTooLong
-        }
-        if err := binary.Write(buf, binary.LittleEndian, uint16(len(pane.Rows))); err != nil {
-            return nil, err
-        }
-        for _, row := range pane.Rows {
-            if err := encodeString(buf, row); err != nil {
-                return nil, err
-            }
-        }
-    }
-    return buf.Bytes(), nil
+	buf := bytes.NewBuffer(nil)
+	if err := binary.Write(buf, binary.LittleEndian, uint16(len(snapshot.Panes))); err != nil {
+		return nil, err
+	}
+	for _, pane := range snapshot.Panes {
+		if err := binary.Write(buf, binary.LittleEndian, pane.PaneID); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(buf, binary.LittleEndian, pane.Revision); err != nil {
+			return nil, err
+		}
+		if err := encodeString(buf, pane.Title); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(buf, binary.LittleEndian, pane.X); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(buf, binary.LittleEndian, pane.Y); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(buf, binary.LittleEndian, pane.Width); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(buf, binary.LittleEndian, pane.Height); err != nil {
+			return nil, err
+		}
+		if len(pane.Rows) > 0xFFFF {
+			return nil, errStringTooLong
+		}
+		if err := binary.Write(buf, binary.LittleEndian, uint16(len(pane.Rows))); err != nil {
+			return nil, err
+		}
+		for _, row := range pane.Rows {
+			if err := encodeString(buf, row); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return buf.Bytes(), nil
 }
 
 // DecodeTreeSnapshot deserialises the tree snapshot payload.
 func DecodeTreeSnapshot(b []byte) (TreeSnapshot, error) {
-    var snapshot TreeSnapshot
-    if len(b) < 2 {
-        return snapshot, errPayloadShort
-    }
-    count := binary.LittleEndian.Uint16(b[:2])
-    b = b[2:]
-    snapshot.Panes = make([]PaneSnapshot, count)
-    for i := 0; i < int(count); i++ {
-        if len(b) < 20 {
-            return snapshot, errPayloadShort
-        }
-        var pane PaneSnapshot
-        copy(pane.PaneID[:], b[:16])
-        pane.Revision = binary.LittleEndian.Uint32(b[16:20])
-        b = b[20:]
-        title, rest, err := decodeString(b)
-        if err != nil {
-            return snapshot, err
-        }
-        pane.Title = title
-        if len(rest) < 18 {
-            return snapshot, errPayloadShort
-        }
-        pane.X = int32(binary.LittleEndian.Uint32(rest[0:4]))
-        pane.Y = int32(binary.LittleEndian.Uint32(rest[4:8]))
-        pane.Width = int32(binary.LittleEndian.Uint32(rest[8:12]))
-        pane.Height = int32(binary.LittleEndian.Uint32(rest[12:16]))
-        rowCount := binary.LittleEndian.Uint16(rest[16:18])
-        rest = rest[18:]
-        pane.Rows = make([]string, rowCount)
-        for r := 0; r < int(rowCount); r++ {
-            row, remaining, err := decodeString(rest)
-            if err != nil {
-                return snapshot, err
-            }
-            pane.Rows[r] = row
-            rest = remaining
-        }
-        snapshot.Panes[i] = pane
-        b = rest
-    }
-    return snapshot, nil
+	var snapshot TreeSnapshot
+	if len(b) < 2 {
+		return snapshot, errPayloadShort
+	}
+	count := binary.LittleEndian.Uint16(b[:2])
+	b = b[2:]
+	snapshot.Panes = make([]PaneSnapshot, count)
+	for i := 0; i < int(count); i++ {
+		if len(b) < 20 {
+			return snapshot, errPayloadShort
+		}
+		var pane PaneSnapshot
+		copy(pane.PaneID[:], b[:16])
+		pane.Revision = binary.LittleEndian.Uint32(b[16:20])
+		b = b[20:]
+		title, rest, err := decodeString(b)
+		if err != nil {
+			return snapshot, err
+		}
+		pane.Title = title
+		if len(rest) < 18 {
+			return snapshot, errPayloadShort
+		}
+		pane.X = int32(binary.LittleEndian.Uint32(rest[0:4]))
+		pane.Y = int32(binary.LittleEndian.Uint32(rest[4:8]))
+		pane.Width = int32(binary.LittleEndian.Uint32(rest[8:12]))
+		pane.Height = int32(binary.LittleEndian.Uint32(rest[12:16]))
+		rowCount := binary.LittleEndian.Uint16(rest[16:18])
+		rest = rest[18:]
+		pane.Rows = make([]string, rowCount)
+		for r := 0; r < int(rowCount); r++ {
+			row, remaining, err := decodeString(rest)
+			if err != nil {
+				return snapshot, err
+			}
+			pane.Rows[r] = row
+			rest = remaining
+		}
+		snapshot.Panes[i] = pane
+		b = rest
+	}
+	return snapshot, nil
 }
 
 func EncodeKeyEvent(ev KeyEvent) ([]byte, error) {

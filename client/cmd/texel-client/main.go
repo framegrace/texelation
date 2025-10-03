@@ -14,6 +14,14 @@ import (
 	"texelation/protocol"
 )
 
+type uiState struct {
+	cache        *client.BufferCache
+	clipboard    protocol.ClipboardData
+	hasClipboard bool
+	theme        protocol.ThemeAck
+	hasTheme     bool
+}
+
 func main() {
 	socket := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
 	reconnect := flag.Bool("reconnect", false, "Attempt to resume previous session")
@@ -33,19 +41,19 @@ func main() {
 
 	fmt.Printf("Connected to session %s\n", client.FormatUUID(accept.SessionID))
 
-	cache := client.NewBufferCache()
+	state := &uiState{cache: client.NewBufferCache()}
 	lastSequence := uint64(0)
 
 	if *reconnect {
 		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence); err != nil {
 			log.Fatalf("resume request failed: %v", err)
 		} else {
-			handleControlMessage(conn, hdr, payload, cache, sessionID, &lastSequence)
+			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence)
 		}
 	}
 
 	inbound := make(chan protocol.Header, 16)
-	go readLoop(conn, inbound, cache, sessionID, &lastSequence)
+	go readLoop(conn, inbound, state, sessionID, &lastSequence)
 
 	screen, err := tcell.NewScreen()
 	if err != nil {
@@ -56,7 +64,7 @@ func main() {
 	}
 	defer screen.Fini()
 
-	render(cache, screen)
+	render(state, screen)
 
 	for {
 		select {
@@ -65,8 +73,9 @@ func main() {
 				fmt.Println("Connection closed")
 				return
 			}
-			if hdr.Type == protocol.MsgTreeSnapshot || hdr.Type == protocol.MsgBufferDelta {
-				render(cache, screen)
+			switch hdr.Type {
+			case protocol.MsgTreeSnapshot, protocol.MsgBufferDelta, protocol.MsgClipboardData, protocol.MsgThemeAck, protocol.MsgClipboardSet, protocol.MsgThemeUpdate:
+				render(state, screen)
 			}
 		default:
 			ev := screen.PollEvent()
@@ -85,13 +94,13 @@ func main() {
 					log.Printf("send mouse failed: %v", err)
 				}
 			case *tcell.EventResize:
-				render(cache, screen)
+				render(state, screen)
 			}
 		}
 	}
 }
 
-func readLoop(conn net.Conn, headers chan<- protocol.Header, cache *client.BufferCache, sessionID [16]byte, lastSequence *uint64) {
+func readLoop(conn net.Conn, headers chan<- protocol.Header, state *uiState, sessionID [16]byte, lastSequence *uint64) {
 	for {
 		hdr, payload, err := protocol.ReadMessage(conn)
 		if err != nil {
@@ -101,12 +110,13 @@ func readLoop(conn net.Conn, headers chan<- protocol.Header, cache *client.Buffe
 			close(headers)
 			return
 		}
-		handleControlMessage(conn, hdr, payload, cache, sessionID, lastSequence)
+		handleControlMessage(state, conn, hdr, payload, sessionID, lastSequence)
 		headers <- hdr
 	}
 }
 
-func handleControlMessage(conn net.Conn, hdr protocol.Header, payload []byte, cache *client.BufferCache, sessionID [16]byte, lastSequence *uint64) {
+func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64) {
+	cache := state.cache
 	switch hdr.Type {
 	case protocol.MsgBufferDelta:
 		delta, err := protocol.DecodeBufferDelta(payload)
@@ -141,19 +151,37 @@ func handleControlMessage(conn net.Conn, hdr protocol.Header, payload []byte, ca
 			log.Printf("decode clipboard failed: %v", err)
 			return
 		}
-		fmt.Printf("Clipboard update (%s): %q\n", clip.MimeType, string(clip.Data))
+		state.clipboard = protocol.ClipboardData{MimeType: clip.MimeType, Data: clip.Data}
+		state.hasClipboard = true
+	case protocol.MsgClipboardData:
+		clip, err := protocol.DecodeClipboardData(payload)
+		if err != nil {
+			log.Printf("decode clipboard data failed: %v", err)
+			return
+		}
+		state.clipboard = clip
+		state.hasClipboard = true
 	case protocol.MsgThemeUpdate:
 		themeUpdate, err := protocol.DecodeThemeUpdate(payload)
 		if err != nil {
 			log.Printf("decode theme update failed: %v", err)
 			return
 		}
-		fmt.Printf("Theme update %s.%s = %s\n", themeUpdate.Section, themeUpdate.Key, themeUpdate.Value)
+		state.theme = protocol.ThemeAck(themeUpdate)
+		state.hasTheme = true
+	case protocol.MsgThemeAck:
+		ack, err := protocol.DecodeThemeAck(payload)
+		if err != nil {
+			log.Printf("decode theme ack failed: %v", err)
+			return
+		}
+		state.theme = ack
+		state.hasTheme = true
 	}
 }
 
-func render(cache *client.BufferCache, screen tcell.Screen) {
-	panes := cache.LayoutPanes()
+func render(state *uiState, screen tcell.Screen) {
+	panes := state.cache.LayoutPanes()
 	if len(panes) == 0 {
 		return
 	}
@@ -182,6 +210,16 @@ func render(cache *client.BufferCache, screen tcell.Screen) {
 			drawClippedText(screen, pane.Rect.X, baseY+rowIdx, pane.Rect.Width, line, tcell.StyleDefault)
 		}
 	}
+	width, height := screen.Size()
+	statusY := height - 2
+	if state.hasClipboard && statusY >= 0 {
+		text := fmt.Sprintf("Clipboard [%s]: %s", state.clipboard.MimeType, truncateForStatus(string(state.clipboard.Data), width-len(state.clipboard.MimeType)-14))
+		drawClippedText(screen, 0, statusY, width, text, tcell.StyleDefault)
+	}
+	if state.hasTheme && statusY+1 < height {
+		text := fmt.Sprintf("Theme %s.%s = %s", state.theme.Section, state.theme.Key, state.theme.Value)
+		drawClippedText(screen, 0, statusY+1, width, truncateForStatus(text, width), tcell.StyleDefault)
+	}
 	screen.Show()
 }
 
@@ -200,6 +238,20 @@ func drawClippedText(screen tcell.Screen, x, y, width int, text string, style tc
 		}
 		screen.SetContent(x+i, y, ch, nil, style)
 	}
+}
+
+func truncateForStatus(text string, max int) string {
+	runes := []rune(text)
+	if max <= 0 {
+		return ""
+	}
+	if len(runes) <= max {
+		return text
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
 }
 
 func isNetworkClosed(err error) bool {

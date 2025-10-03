@@ -46,11 +46,11 @@ func (d *DesktopSink) HandleClipboardSet(session *Session, event protocol.Clipbo
 	d.desktop.HandleClipboardSet(event.MimeType, event.Data)
 }
 
-func (d *DesktopSink) HandleClipboardGet(session *Session, event protocol.ClipboardGet) {
+func (d *DesktopSink) HandleClipboardGet(session *Session, event protocol.ClipboardGet) []byte {
 	if d.desktop == nil {
-		return
+		return nil
 	}
-	d.desktop.HandleClipboardGet(event.MimeType)
+	return d.desktop.HandleClipboardGet(event.MimeType)
 }
 
 func (d *DesktopSink) HandleThemeUpdate(session *Session, event protocol.ThemeUpdate) {

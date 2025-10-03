@@ -81,80 +81,110 @@ func TestKeyEventRoundTrip(t *testing.T) {
 }
 
 func TestMouseEventRoundTrip(t *testing.T) {
-    ev := MouseEvent{X: 10, Y: 20, ButtonMask: 3, WheelX: -1, WheelY: 2, Modifiers: 5}
-    payload, err := EncodeMouseEvent(ev)
-    if err != nil {
-        t.Fatalf("encode failed: %v", err)
-    }
-    decoded, err := DecodeMouseEvent(payload)
-    if err != nil {
-        t.Fatalf("decode failed: %v", err)
-    }
-    if decoded != ev {
-        t.Fatalf("mismatch: %#v vs %#v", decoded, ev)
-    }
+	ev := MouseEvent{X: 10, Y: 20, ButtonMask: 3, WheelX: -1, WheelY: 2, Modifiers: 5}
+	payload, err := EncodeMouseEvent(ev)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeMouseEvent(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded != ev {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, ev)
+	}
 }
 
 func TestClipboardSetRoundTrip(t *testing.T) {
-    set := ClipboardSet{MimeType: "text/plain", Data: []byte("hello")}
-    payload, err := EncodeClipboardSet(set)
-    if err != nil {
-        t.Fatalf("encode failed: %v", err)
-    }
-    decoded, err := DecodeClipboardSet(payload)
-    if err != nil {
-        t.Fatalf("decode failed: %v", err)
-    }
-    if decoded.MimeType != set.MimeType || string(decoded.Data) != string(set.Data) {
-        t.Fatalf("mismatch: %#v vs %#v", decoded, set)
-    }
+	set := ClipboardSet{MimeType: "text/plain", Data: []byte("hello")}
+	payload, err := EncodeClipboardSet(set)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeClipboardSet(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded.MimeType != set.MimeType || string(decoded.Data) != string(set.Data) {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, set)
+	}
 }
 
 func TestClipboardGetRoundTrip(t *testing.T) {
-    req := ClipboardGet{MimeType: "text/plain"}
-    payload, err := EncodeClipboardGet(req)
-    if err != nil {
-        t.Fatalf("encode failed: %v", err)
-    }
-    decoded, err := DecodeClipboardGet(payload)
-    if err != nil {
-        t.Fatalf("decode failed: %v", err)
-    }
-    if decoded.MimeType != req.MimeType {
-        t.Fatalf("mismatch: %#v vs %#v", decoded, req)
-    }
+	req := ClipboardGet{MimeType: "text/plain"}
+	payload, err := EncodeClipboardGet(req)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeClipboardGet(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded.MimeType != req.MimeType {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, req)
+	}
+}
+
+func TestClipboardDataRoundTrip(t *testing.T) {
+	msg := ClipboardData{MimeType: "text/plain", Data: []byte("world")}
+	payload, err := EncodeClipboardData(msg)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeClipboardData(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded.MimeType != msg.MimeType || string(decoded.Data) != string(msg.Data) {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, msg)
+	}
 }
 
 func TestThemeUpdateRoundTrip(t *testing.T) {
-    update := ThemeUpdate{Section: "pane", Key: "fg", Value: "#ffffff"}
-    payload, err := EncodeThemeUpdate(update)
-    if err != nil {
-        t.Fatalf("encode failed: %v", err)
-    }
-    decoded, err := DecodeThemeUpdate(payload)
-    if err != nil {
-        t.Fatalf("decode failed: %v", err)
-    }
-    if decoded != update {
-        t.Fatalf("mismatch: %#v vs %#v", decoded, update)
-    }
+	update := ThemeUpdate{Section: "pane", Key: "fg", Value: "#ffffff"}
+	payload, err := EncodeThemeUpdate(update)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeThemeUpdate(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded != update {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, update)
+	}
+}
+
+func TestThemeAckRoundTrip(t *testing.T) {
+	ack := ThemeAck{Section: "pane", Key: "bg", Value: "#000000"}
+	payload, err := EncodeThemeAck(ack)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeThemeAck(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded != ack {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, ack)
+	}
 }
 
 func TestTreeSnapshotRoundTrip(t *testing.T) {
-    snapshot := TreeSnapshot{
-        Panes: []PaneSnapshot{
-            {PaneID: [16]byte{1}, Revision: 1, Title: "pane", Rows: []string{"hello", "world"}, X: 5, Y: 6, Width: 80, Height: 24},
-        },
-    }
-    payload, err := EncodeTreeSnapshot(snapshot)
-    if err != nil {
-        t.Fatalf("encode failed: %v", err)
-    }
-    decoded, err := DecodeTreeSnapshot(payload)
-    if err != nil {
-        t.Fatalf("decode failed: %v", err)
-    }
-    if len(decoded.Panes) != 1 || decoded.Panes[0].Title != "pane" || decoded.Panes[0].Rows[1] != "world" || decoded.Panes[0].X != 5 {
-        t.Fatalf("unexpected snapshot: %#v", decoded)
-    }
+	snapshot := TreeSnapshot{
+		Panes: []PaneSnapshot{
+			{PaneID: [16]byte{1}, Revision: 1, Title: "pane", Rows: []string{"hello", "world"}, X: 5, Y: 6, Width: 80, Height: 24},
+		},
+	}
+	payload, err := EncodeTreeSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeTreeSnapshot(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if len(decoded.Panes) != 1 || decoded.Panes[0].Title != "pane" || decoded.Panes[0].Rows[1] != "world" || decoded.Panes[0].X != 5 {
+		t.Fatalf("unexpected snapshot: %#v", decoded)
+	}
 }

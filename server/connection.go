@@ -88,39 +88,62 @@ func (c *connection) serve() error {
 				return err
 			}
 			c.sink.HandleClipboardSet(c.session, clipSet)
-	case protocol.MsgClipboardGet:
-		clipGet, err := protocol.DecodeClipboardGet(payload)
-		if err != nil {
-			return err
-		}
-		c.sink.HandleClipboardGet(c.session, clipGet)
-	case protocol.MsgThemeUpdate:
-		themeUpdate, err := protocol.DecodeThemeUpdate(payload)
-		if err != nil {
-			return err
-		}
-		c.sink.HandleThemeUpdate(c.session, themeUpdate)
-	case protocol.MsgResumeRequest:
-		request, err := protocol.DecodeResumeRequest(payload)
-		if err != nil {
-			return err
-		}
-		c.lastAcked = request.LastSequence
-		if provider, ok := c.sink.(SnapshotProvider); ok {
-			snapshot, err := provider.Snapshot()
-			if err == nil {
-				if payload, err := protocol.EncodeTreeSnapshot(snapshot); err == nil {
-					header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
-					if err := protocol.WriteMessage(c.conn, header, payload); err != nil {
-						return err
+			if data := c.requestClipboardData(clipSet.MimeType); data != nil {
+				encoded, err := protocol.EncodeClipboardData(protocol.ClipboardData{MimeType: clipSet.MimeType, Data: data})
+				if err != nil {
+					return err
+				}
+				if err := c.writeControlMessage(protocol.MsgClipboardData, encoded); err != nil {
+					return err
+				}
+			}
+		case protocol.MsgClipboardGet:
+			clipGet, err := protocol.DecodeClipboardGet(payload)
+			if err != nil {
+				return err
+			}
+			data := c.sink.HandleClipboardGet(c.session, clipGet)
+			encoded, err := protocol.EncodeClipboardData(protocol.ClipboardData{MimeType: clipGet.MimeType, Data: data})
+			if err != nil {
+				return err
+			}
+			if err := c.writeControlMessage(protocol.MsgClipboardData, encoded); err != nil {
+				return err
+			}
+		case protocol.MsgThemeUpdate:
+			themeUpdate, err := protocol.DecodeThemeUpdate(payload)
+			if err != nil {
+				return err
+			}
+			c.sink.HandleThemeUpdate(c.session, themeUpdate)
+			encoded, err := protocol.EncodeThemeAck(protocol.ThemeAck(themeUpdate))
+			if err != nil {
+				return err
+			}
+			if err := c.writeControlMessage(protocol.MsgThemeAck, encoded); err != nil {
+				return err
+			}
+		case protocol.MsgResumeRequest:
+			request, err := protocol.DecodeResumeRequest(payload)
+			if err != nil {
+				return err
+			}
+			c.lastAcked = request.LastSequence
+			if provider, ok := c.sink.(SnapshotProvider); ok {
+				snapshot, err := provider.Snapshot()
+				if err == nil {
+					if payload, err := protocol.EncodeTreeSnapshot(snapshot); err == nil {
+						header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
+						if err := protocol.WriteMessage(c.conn, header, payload); err != nil {
+							return err
+						}
 					}
 				}
 			}
+		default:
+			// Unknown messages are ignored for now.
 		}
-	default:
-		// Unknown messages are ignored for now.
 	}
-}
 }
 
 func (c *connection) sendPending() error {
@@ -136,6 +159,25 @@ func (c *connection) sendPending() error {
 			return err
 		}
 		c.lastSent = diff.Sequence
+	}
+	return nil
+}
+
+func (c *connection) writeControlMessage(msgType protocol.MessageType, payload []byte) error {
+	header := protocol.Header{
+		Version:   protocol.Version,
+		Type:      msgType,
+		Flags:     protocol.FlagChecksum,
+		SessionID: c.session.ID(),
+	}
+	return protocol.WriteMessage(c.conn, header, payload)
+}
+
+func (c *connection) requestClipboardData(mime string) []byte {
+	if sink, ok := c.sink.(*DesktopSink); ok {
+		if desktop := sink.Desktop(); desktop != nil {
+			return desktop.HandleClipboardGet(mime)
+		}
 	}
 	return nil
 }

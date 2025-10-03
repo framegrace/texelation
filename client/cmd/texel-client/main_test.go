@@ -10,7 +10,7 @@ import (
 )
 
 func TestRenderRespectsPaneGeometry(t *testing.T) {
-	cache := client.NewBufferCache()
+	state := &uiState{cache: client.NewBufferCache()}
 	var leftID, rightID [16]byte
 	leftID[0] = 1
 	rightID[0] = 2
@@ -37,7 +37,7 @@ func TestRenderRespectsPaneGeometry(t *testing.T) {
 			Height:   4,
 		},
 	}}
-	cache.ApplySnapshot(snapshot)
+	state.cache.ApplySnapshot(snapshot)
 
 	screen := tcell.NewSimulationScreen("UTF-8")
 	if err := screen.Init(); err != nil {
@@ -45,7 +45,7 @@ func TestRenderRespectsPaneGeometry(t *testing.T) {
 	}
 	defer screen.Fini()
 
-	render(cache, screen)
+	render(state, screen)
 
 	leftTitle := readScreenLine(screen, 0, 0, 12)
 	if leftTitle != "[left rev 3]" {

@@ -9,18 +9,18 @@ import (
 )
 
 type recordingSink struct {
-	events []protocol.KeyEvent
+    events []protocol.KeyEvent
 }
 
 func (r *recordingSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) {
-	r.events = append(r.events, event)
+    r.events = append(r.events, event)
 }
 
 func (r *recordingSink) HandleMouseEvent(session *Session, event protocol.MouseEvent) {}
 
 func (r *recordingSink) HandleClipboardSet(session *Session, event protocol.ClipboardSet) {}
 
-func (r *recordingSink) HandleClipboardGet(session *Session, event protocol.ClipboardGet) {}
+func (r *recordingSink) HandleClipboardGet(session *Session, event protocol.ClipboardGet) []byte { return nil }
 
 func (r *recordingSink) HandleThemeUpdate(session *Session, event protocol.ThemeUpdate) {}
 
