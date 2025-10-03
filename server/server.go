@@ -137,6 +137,10 @@ func (s *Server) EventSink() EventSink {
 	return s.sink
 }
 
+func (s *Server) SetDiffRetentionLimit(limit int) {
+	s.manager.SetDiffRetentionLimit(limit)
+}
+
 func (s *Server) startSnapshotLoop() {
 	if s.snapshotStore == nil || s.desktopSink == nil {
 		return

@@ -27,10 +27,27 @@ type Session struct {
 	diffs        []DiffPacket
 	lastSnapshot time.Time
 	closed       bool
+	maxDiffs     int
 }
 
-func NewSession(id [16]byte) *Session {
-	return &Session{id: id, diffs: make([]DiffPacket, 0, 128)}
+func NewSession(id [16]byte, maxDiffs int) *Session {
+	if maxDiffs < 0 {
+		maxDiffs = 0
+	}
+	return &Session{id: id, diffs: make([]DiffPacket, 0, 128), maxDiffs: maxDiffs}
+}
+
+func (s *Session) setMaxDiffs(limit int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit < 0 {
+		limit = 0
+	}
+	s.maxDiffs = limit
+	if limit > 0 && len(s.diffs) > limit {
+		drop := len(s.diffs) - limit
+		s.diffs = append([]DiffPacket(nil), s.diffs[drop:]...)
+	}
 }
 
 func (s *Session) ID() [16]byte {
@@ -65,6 +82,11 @@ func (s *Session) EnqueueDiff(delta protocol.BufferDelta) error {
 		Message:  hdr,
 	})
 	s.nextSequence = seq
+
+	if s.maxDiffs > 0 && len(s.diffs) > s.maxDiffs {
+		drop := len(s.diffs) - s.maxDiffs
+		s.diffs = append([]DiffPacket(nil), s.diffs[drop:]...)
+	}
 	return nil
 }
 

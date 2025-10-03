@@ -49,7 +49,7 @@ func TestDesktopPublisherProducesDiffs(t *testing.T) {
 		t.Fatalf("desktop init failed: %v", err)
 	}
 
-	session := NewSession([16]byte{1})
+	session := NewSession([16]byte{1}, 512)
 	publisher := NewDesktopPublisher(desktop, session)
 	if err := publisher.Publish(); err != nil {
 		t.Fatalf("publish failed: %v", err)

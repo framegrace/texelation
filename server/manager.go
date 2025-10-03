@@ -14,10 +14,11 @@ var (
 type Manager struct {
 	mu       sync.RWMutex
 	sessions map[[16]byte]*Session
+	maxDiffs int
 }
 
 func NewManager() *Manager {
-	return &Manager{sessions: make(map[[16]byte]*Session)}
+	return &Manager{sessions: make(map[[16]byte]*Session), maxDiffs: 512}
 }
 
 func (m *Manager) NewSession() (*Session, error) {
@@ -25,7 +26,7 @@ func (m *Manager) NewSession() (*Session, error) {
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, err
 	}
-	session := NewSession(id)
+	session := NewSession(id, m.maxDiffs)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -41,6 +42,18 @@ func (m *Manager) Lookup(id [16]byte) (*Session, error) {
 		return nil, ErrSessionNotFound
 	}
 	return session, nil
+}
+
+func (m *Manager) SetDiffRetentionLimit(limit int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit < 0 {
+		limit = 0
+	}
+	m.maxDiffs = limit
+	for _, session := range m.sessions {
+		session.setMaxDiffs(limit)
+	}
 }
 
 func (m *Manager) Close(id [16]byte) {

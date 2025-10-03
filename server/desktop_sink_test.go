@@ -73,7 +73,7 @@ func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 		t.Fatalf("desktop init failed: %v", err)
 	}
 
-	session := NewSession([16]byte{2})
+	session := NewSession([16]byte{2}, 512)
 	publisher := NewDesktopPublisher(desktop, session)
 
 	sink := NewDesktopSink(desktop)
