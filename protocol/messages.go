@@ -109,6 +109,19 @@ type ThemeUpdate struct {
     Value   string
 }
 
+// PaneSnapshot describes the full buffer content for a single pane.
+type PaneSnapshot struct {
+    PaneID   [16]byte
+    Revision uint32
+    Title    string
+    Rows     []string
+}
+
+// TreeSnapshot aggregates all pane snapshots.
+type TreeSnapshot struct {
+    Panes []PaneSnapshot
+}
+
 func encodeString(buf *bytes.Buffer, value string) error {
 	if len(value) > 0xFFFF {
 		return errStringTooLong
@@ -487,20 +500,77 @@ func DecodeThemeUpdate(b []byte) (ThemeUpdate, error) {
     return update, nil
 }
 
-func EncodeTreeSnapshot(snapshot BufferSnapshot) ([]byte, error) {
+// EncodeTreeSnapshot serialises the tree snapshot for transport.
+func EncodeTreeSnapshot(snapshot TreeSnapshot) ([]byte, error) {
     buf := bytes.NewBuffer(nil)
     if err := binary.Write(buf, binary.LittleEndian, uint16(len(snapshot.Panes))); err != nil {
         return nil, err
     }
     for _, pane := range snapshot.Panes {
-        if err := binary.Write(buf, binary.LittleEndian, pane.ID); err != nil {
+        if err := binary.Write(buf, binary.LittleEndian, pane.PaneID); err != nil {
+            return nil, err
+        }
+        if err := binary.Write(buf, binary.LittleEndian, pane.Revision); err != nil {
             return nil, err
         }
         if err := encodeString(buf, pane.Title); err != nil {
             return nil, err
         }
+        if len(pane.Rows) > 0xFFFF {
+            return nil, errStringTooLong
+        }
+        if err := binary.Write(buf, binary.LittleEndian, uint16(len(pane.Rows))); err != nil {
+            return nil, err
+        }
+        for _, row := range pane.Rows {
+            if err := encodeString(buf, row); err != nil {
+                return nil, err
+            }
+        }
     }
     return buf.Bytes(), nil
+}
+
+// DecodeTreeSnapshot deserialises the tree snapshot payload.
+func DecodeTreeSnapshot(b []byte) (TreeSnapshot, error) {
+    var snapshot TreeSnapshot
+    if len(b) < 2 {
+        return snapshot, errPayloadShort
+    }
+    count := binary.LittleEndian.Uint16(b[:2])
+    b = b[2:]
+    snapshot.Panes = make([]PaneSnapshot, count)
+    for i := 0; i < int(count); i++ {
+        if len(b) < 20 {
+            return snapshot, errPayloadShort
+        }
+        var pane PaneSnapshot
+        copy(pane.PaneID[:], b[:16])
+        pane.Revision = binary.LittleEndian.Uint32(b[16:20])
+        b = b[20:]
+        title, rest, err := decodeString(b)
+        if err != nil {
+            return snapshot, err
+        }
+        pane.Title = title
+        if len(rest) < 2 {
+            return snapshot, errPayloadShort
+        }
+        rowCount := binary.LittleEndian.Uint16(rest[:2])
+        rest = rest[2:]
+        pane.Rows = make([]string, rowCount)
+        for r := 0; r < int(rowCount); r++ {
+            row, remaining, err := decodeString(rest)
+            if err != nil {
+                return snapshot, err
+            }
+            pane.Rows[r] = row
+            rest = remaining
+        }
+        snapshot.Panes[i] = pane
+        b = rest
+    }
+    return snapshot, nil
 }
 
 func EncodeKeyEvent(ev KeyEvent) ([]byte, error) {

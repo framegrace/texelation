@@ -88,22 +88,39 @@ func (c *connection) serve() error {
 				return err
 			}
 			c.sink.HandleClipboardSet(c.session, clipSet)
-		case protocol.MsgClipboardGet:
-			clipGet, err := protocol.DecodeClipboardGet(payload)
-			if err != nil {
-				return err
-			}
-			c.sink.HandleClipboardGet(c.session, clipGet)
-		case protocol.MsgThemeUpdate:
-			themeUpdate, err := protocol.DecodeThemeUpdate(payload)
-			if err != nil {
-				return err
-			}
-			c.sink.HandleThemeUpdate(c.session, themeUpdate)
-		default:
-			// Unknown messages are ignored for now.
+	case protocol.MsgClipboardGet:
+		clipGet, err := protocol.DecodeClipboardGet(payload)
+		if err != nil {
+			return err
 		}
+		c.sink.HandleClipboardGet(c.session, clipGet)
+	case protocol.MsgThemeUpdate:
+		themeUpdate, err := protocol.DecodeThemeUpdate(payload)
+		if err != nil {
+			return err
+		}
+		c.sink.HandleThemeUpdate(c.session, themeUpdate)
+	case protocol.MsgResumeRequest:
+		request, err := protocol.DecodeResumeRequest(payload)
+		if err != nil {
+			return err
+		}
+		c.lastAcked = request.LastSequence
+		if provider, ok := c.sink.(SnapshotProvider); ok {
+			snapshot, err := provider.Snapshot()
+			if err == nil {
+				if payload, err := protocol.EncodeTreeSnapshot(snapshot); err == nil {
+					header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
+					if err := protocol.WriteMessage(c.conn, header, payload); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	default:
+		// Unknown messages are ignored for now.
 	}
+}
 }
 
 func (c *connection) sendPending() error {

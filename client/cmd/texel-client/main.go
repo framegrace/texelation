@@ -34,8 +34,18 @@ func main() {
 	fmt.Printf("Connected to session %s\n", client.FormatUUID(accept.SessionID))
 
 	cache := client.NewBufferCache()
+	lastSequence := uint64(0)
+
+	if *reconnect {
+		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence); err != nil {
+			log.Fatalf("resume request failed: %v", err)
+		} else {
+			handleControlMessage(conn, hdr, payload, cache, sessionID, &lastSequence)
+		}
+	}
+
 	inbound := make(chan protocol.Header, 16)
-	go readLoop(conn, inbound, cache, sessionID)
+	go readLoop(conn, inbound, cache, sessionID, &lastSequence)
 
 	screen, err := tcell.NewScreen()
 	if err != nil {
@@ -46,10 +56,18 @@ func main() {
 	}
 	defer screen.Fini()
 
+	render(cache, screen)
+
 	for {
 		select {
-		case hdr := <-inbound:
-			fmt.Printf("Received %v seq=%d\n", hdr.Type, hdr.Sequence)
+		case hdr, ok := <-inbound:
+			if !ok {
+				fmt.Println("Connection closed")
+				return
+			}
+			if hdr.Type == protocol.MsgTreeSnapshot || hdr.Type == protocol.MsgBufferDelta {
+				render(cache, screen)
+			}
 		default:
 			ev := screen.PollEvent()
 			switch ev := ev.(type) {
@@ -73,7 +91,7 @@ func main() {
 	}
 }
 
-func readLoop(conn net.Conn, headers chan<- protocol.Header, cache *client.BufferCache, sessionID [16]byte) {
+func readLoop(conn net.Conn, headers chan<- protocol.Header, cache *client.BufferCache, sessionID [16]byte, lastSequence *uint64) {
 	for {
 		hdr, payload, err := protocol.ReadMessage(conn)
 		if err != nil {
@@ -83,40 +101,67 @@ func readLoop(conn net.Conn, headers chan<- protocol.Header, cache *client.Buffe
 			close(headers)
 			return
 		}
-		switch hdr.Type {
-		case protocol.MsgBufferDelta:
-			delta, err := protocol.DecodeBufferDelta(payload)
-			if err != nil {
-				log.Printf("decode delta failed: %v", err)
-				continue
-			}
-			state := cache.ApplyDelta(delta)
-			ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
-			if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgBufferAck, Flags: protocol.FlagChecksum, SessionID: sessionID}, ackPayload); err != nil {
-				log.Printf("ack failed: %v", err)
-			}
-			if state != nil {
-				fmt.Printf("Delta: pane=%x rev=%d rows=%d\n", delta.PaneID, delta.Revision, len(state.Rows()))
-			}
-		case protocol.MsgPing:
-			pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})
-			_ = protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgPong, Flags: protocol.FlagChecksum}, pong)
-		}
+		handleControlMessage(conn, hdr, payload, cache, sessionID, lastSequence)
 		headers <- hdr
 	}
 }
 
+func handleControlMessage(conn net.Conn, hdr protocol.Header, payload []byte, cache *client.BufferCache, sessionID [16]byte, lastSequence *uint64) {
+	switch hdr.Type {
+	case protocol.MsgBufferDelta:
+		delta, err := protocol.DecodeBufferDelta(payload)
+		if err != nil {
+			log.Printf("decode delta failed: %v", err)
+			return
+		}
+		state := cache.ApplyDelta(delta)
+		ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
+		if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgBufferAck, Flags: protocol.FlagChecksum, SessionID: sessionID}, ackPayload); err != nil {
+			log.Printf("ack failed: %v", err)
+		}
+		if state != nil {
+			fmt.Printf("Delta: pane=%x rev=%d rows=%d\n", delta.PaneID, delta.Revision, len(state.Rows()))
+		}
+		if lastSequence != nil && hdr.Sequence > *lastSequence {
+			*lastSequence = hdr.Sequence
+		}
+	case protocol.MsgTreeSnapshot:
+		snap, err := protocol.DecodeTreeSnapshot(payload)
+		if err != nil {
+			log.Printf("decode snapshot failed: %v", err)
+			return
+		}
+		cache.ApplySnapshot(snap)
+	case protocol.MsgPing:
+		pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})
+		_ = protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgPong, Flags: protocol.FlagChecksum, SessionID: sessionID}, pong)
+	}
+}
+
 func render(cache *client.BufferCache, screen tcell.Screen) {
-	state := cache.LatestPane()
-	if state == nil {
+	panes := cache.AllPanes()
+	if len(panes) == 0 {
 		return
 	}
 	screen.Clear()
-	rows := state.Rows()
-	for y, line := range rows {
-		for x, ch := range []rune(line) {
-			screen.SetContent(x, y, ch, nil, tcell.StyleDefault)
+	y := 0
+	for _, pane := range panes {
+		titleText := pane.Title
+		if titleText == "" {
+			titleText = fmt.Sprintf("%x", pane.ID[:4])
 		}
+		title := fmt.Sprintf("[%s rev %d]", titleText, pane.Revision)
+		for x, ch := range []rune(title) {
+			screen.SetContent(x, y, ch, nil, tcell.StyleDefault.Bold(true))
+		}
+		y++
+		for _, line := range pane.Rows() {
+			for x, ch := range []rune(line) {
+				screen.SetContent(x, y, ch, nil, tcell.StyleDefault)
+			}
+			y++
+		}
+		y++
 	}
 	screen.Show()
 }

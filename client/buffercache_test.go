@@ -46,3 +46,28 @@ func TestBufferCacheApplyDelta(t *testing.T) {
 		t.Fatalf("expected Hello!, got %q", rows[0])
 	}
 }
+
+func TestBufferCacheApplySnapshot(t *testing.T) {
+    cache := NewBufferCache()
+    var id [16]byte
+    id[0] = 2
+
+    snapshot := protocol.TreeSnapshot{
+        Panes: []protocol.PaneSnapshot{{
+            PaneID:   id,
+            Revision: 3,
+            Title:    "pane",
+            Rows:     []string{"abc", "def"},
+        }},
+    }
+
+    cache.ApplySnapshot(snapshot)
+    panes := cache.AllPanes()
+    if len(panes) != 1 {
+        t.Fatalf("expected 1 pane, got %d", len(panes))
+    }
+    rows := panes[0].Rows()
+    if rows[1] != "def" {
+        t.Fatalf("unexpected row %q", rows[1])
+    }
+}

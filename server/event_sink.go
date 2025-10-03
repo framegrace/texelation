@@ -11,6 +11,11 @@ type EventSink interface {
 	HandleThemeUpdate(session *Session, event protocol.ThemeUpdate)
 }
 
+// SnapshotProvider exposes a full tree snapshot for connected clients.
+type SnapshotProvider interface {
+	Snapshot() (protocol.TreeSnapshot, error)
+}
+
 // nopSink discards events when no sink is provided.
 type nopSink struct{}
 
@@ -19,3 +24,7 @@ func (nopSink) HandleMouseEvent(*Session, protocol.MouseEvent)     {}
 func (nopSink) HandleClipboardSet(*Session, protocol.ClipboardSet) {}
 func (nopSink) HandleClipboardGet(*Session, protocol.ClipboardGet) {}
 func (nopSink) HandleThemeUpdate(*Session, protocol.ThemeUpdate)   {}
+
+func (nopSink) Snapshot() (protocol.TreeSnapshot, error) {
+	return protocol.TreeSnapshot{}, nil
+}

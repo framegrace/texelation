@@ -139,3 +139,22 @@ func TestThemeUpdateRoundTrip(t *testing.T) {
         t.Fatalf("mismatch: %#v vs %#v", decoded, update)
     }
 }
+
+func TestTreeSnapshotRoundTrip(t *testing.T) {
+    snapshot := TreeSnapshot{
+        Panes: []PaneSnapshot{
+            {PaneID: [16]byte{1}, Revision: 1, Title: "pane", Rows: []string{"hello", "world"}},
+        },
+    }
+    payload, err := EncodeTreeSnapshot(snapshot)
+    if err != nil {
+        t.Fatalf("encode failed: %v", err)
+    }
+    decoded, err := DecodeTreeSnapshot(payload)
+    if err != nil {
+        t.Fatalf("decode failed: %v", err)
+    }
+    if len(decoded.Panes) != 1 || decoded.Panes[0].Title != "pane" || decoded.Panes[0].Rows[1] != "world" {
+        t.Fatalf("unexpected snapshot: %#v", decoded)
+    }
+}

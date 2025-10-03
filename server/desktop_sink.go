@@ -67,3 +67,32 @@ func (d *DesktopSink) Desktop() *texel.Desktop {
 func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
 	d.publisher = publisher
 }
+
+func (d *DesktopSink) Snapshot() (protocol.TreeSnapshot, error) {
+	if d.desktop == nil {
+		return protocol.TreeSnapshot{}, nil
+	}
+	panes := d.desktop.SnapshotBuffers()
+	snapshot := protocol.TreeSnapshot{Panes: make([]protocol.PaneSnapshot, len(panes))}
+	for i, pane := range panes {
+		rows := make([]string, len(pane.Buffer))
+		for y, row := range pane.Buffer {
+			runes := make([]rune, len(row))
+			for x, cell := range row {
+				if cell.Ch == 0 {
+					runes[x] = ' '
+				} else {
+					runes[x] = cell.Ch
+				}
+			}
+			rows[y] = string(runes)
+		}
+        snapshot.Panes[i] = protocol.PaneSnapshot{
+            PaneID:   pane.ID,
+            Revision: 0,
+            Title:    pane.Title,
+            Rows:     rows,
+        }
+	}
+	return snapshot, nil
+}
