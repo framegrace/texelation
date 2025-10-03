@@ -87,12 +87,16 @@ func (d *DesktopSink) Snapshot() (protocol.TreeSnapshot, error) {
 			}
 			rows[y] = string(runes)
 		}
-        snapshot.Panes[i] = protocol.PaneSnapshot{
-            PaneID:   pane.ID,
-            Revision: 0,
-            Title:    pane.Title,
-            Rows:     rows,
-        }
+		snapshot.Panes[i] = protocol.PaneSnapshot{
+			PaneID:   pane.ID,
+			Revision: 0,
+			Title:    pane.Title,
+			Rows:     rows,
+			X:        int32(pane.Rect.X),
+			Y:        int32(pane.Rect.Y),
+			Width:    int32(pane.Rect.Width),
+			Height:   int32(pane.Rect.Height),
+		}
 	}
 	return snapshot, nil
 }
