@@ -160,7 +160,7 @@ func (s *Session) recordDrop(drop int) {
 	}
 	s.droppedDiffs += uint64(drop)
 	s.lastDroppedSeq = s.diffs[drop-1].Sequence
-	log.Printf("session %x dropped %d diffs (last seq %d)", s.id[:4], drop, s.lastDroppedSeq)
+	log.Printf("session %x dropped %d diffs (last seq %d, pending %d)", s.id[:4], drop, s.lastDroppedSeq, len(s.diffs)-drop)
 }
 
 // Stats returns a snapshot of session diff queue metrics.
