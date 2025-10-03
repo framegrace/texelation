@@ -13,6 +13,11 @@
 - Potential approach: extend `Desktop` with a method that can accept `protocol.PaneSnapshot` data and rehydrate pane buffers (likely requires temporary app placeholders or app persistence metadata).
 - Ensure rehydration happens before the first `Publish()` so initial diffs reflect the restored layout, not a fresh welcome screen.
 - Prototype idea: add `desktop.ApplyTreeSnapshot(protocol.TreeSnapshot)` that seeds panes with lightweight placeholder apps rendering the stored buffers until the real apps reconnect; would require pane/app metadata in future phases.
+- Candidate steps for implementation:
+  1. Introduce a `snapshotApp` implementing `texel.App` that renders static buffer rows and ignores input.
+  2. Extend `texel/Desktop` with `ApplyTreeSnapshot(protocol.TreeSnapshot)` which creates panes using `snapshotApp` instances, populating geometry from the snapshot.
+  3. Modify `Server.Start()` to call `ApplyTreeSnapshot` immediately after loading boot snapshots, before accepting new connections.
+  4. Persist per-pane app metadata alongside snapshots in Phase 6+ so the server can spawn the correct app instead of placeholders.
 
 ## Open Questions
 - How to persist per-pane app metadata (commands, shells) alongside buffer snapshots for full recovery?
