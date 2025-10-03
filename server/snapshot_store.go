@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"texelation/protocol"
 	"texelation/texel"
 )
 
@@ -113,6 +114,14 @@ func (s *SnapshotStore) Load() (StoredSnapshot, error) {
 	return stored, nil
 }
 
+func (s StoredSnapshot) ToTreeSnapshot() protocol.TreeSnapshot {
+	panes := make([]protocol.PaneSnapshot, len(s.Panes))
+	for i, pane := range s.Panes {
+		panes[i] = pane.toProtocolPane()
+	}
+	return protocol.TreeSnapshot{Panes: panes}
+}
+
 func (sp StoredPane) ToPaneSnapshot() texel.PaneSnapshot {
 	var id [16]byte
 	decoded, err := hex.DecodeString(sp.ID)
@@ -129,4 +138,23 @@ func (sp StoredPane) ToPaneSnapshot() texel.PaneSnapshot {
 	}
 
 	return texel.PaneSnapshot{ID: id, Title: sp.Title, Buffer: buffer, Rect: texel.Rectangle{X: sp.X, Y: sp.Y, Width: sp.Width, Height: sp.Height}}
+}
+
+func (sp StoredPane) toProtocolPane() protocol.PaneSnapshot {
+	var id [16]byte
+	decoded, err := hex.DecodeString(sp.ID)
+	if err == nil && len(decoded) >= 16 {
+		copy(id[:], decoded[:16])
+	}
+	rows := make([]string, len(sp.Rows))
+	copy(rows, sp.Rows)
+	return protocol.PaneSnapshot{
+		PaneID: id,
+		Title:  sp.Title,
+		Rows:   rows,
+		X:      int32(sp.X),
+		Y:      int32(sp.Y),
+		Width:  int32(sp.Width),
+		Height: int32(sp.Height),
+	}
 }

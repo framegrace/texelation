@@ -24,6 +24,8 @@ type Server struct {
 	snapshotInterval time.Duration
 	snapshotQuit     chan struct{}
 	desktopSink      *DesktopSink
+	bootSnapshotMu   sync.RWMutex
+	bootSnapshot     *protocol.TreeSnapshot
 }
 
 func NewServer(addr string, manager *Manager) *Server {
@@ -63,6 +65,7 @@ func (s *Server) Start() error {
 		return err
 	}
 	s.listener = l
+	s.loadBootSnapshot()
 	s.wg.Add(1)
 	go s.acceptLoop()
 	s.startSnapshotLoop()
@@ -141,6 +144,44 @@ func (s *Server) SetDiffRetentionLimit(limit int) {
 	s.manager.SetDiffRetentionLimit(limit)
 }
 
+func (s *Server) loadBootSnapshot() {
+	if s.snapshotStore == nil {
+		return
+	}
+	stored, err := s.snapshotStore.Load()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		log.Printf("snapshot load failed: %v", err)
+		return
+	}
+	snapshot := stored.ToTreeSnapshot()
+	if len(snapshot.Panes) == 0 {
+		return
+	}
+	s.setBootSnapshot(snapshot)
+}
+
+func (s *Server) setBootSnapshot(snapshot protocol.TreeSnapshot) {
+	copySnapshot := protocol.TreeSnapshot{Panes: make([]protocol.PaneSnapshot, len(snapshot.Panes))}
+	copy(copySnapshot.Panes, snapshot.Panes)
+	s.bootSnapshotMu.Lock()
+	s.bootSnapshot = &copySnapshot
+	s.bootSnapshotMu.Unlock()
+}
+
+func (s *Server) bootSnapshotCopy() (protocol.TreeSnapshot, bool) {
+	s.bootSnapshotMu.RLock()
+	defer s.bootSnapshotMu.RUnlock()
+	if s.bootSnapshot == nil || len(s.bootSnapshot.Panes) == 0 {
+		return protocol.TreeSnapshot{}, false
+	}
+	copySnapshot := protocol.TreeSnapshot{Panes: make([]protocol.PaneSnapshot, len(s.bootSnapshot.Panes))}
+	copy(copySnapshot.Panes, s.bootSnapshot.Panes)
+	return copySnapshot, true
+}
+
 func (s *Server) startSnapshotLoop() {
 	if s.snapshotStore == nil || s.desktopSink == nil {
 		return
@@ -184,6 +225,31 @@ func (s *Server) persistSnapshot() {
 	if err := s.snapshotStore.Save(panes); err != nil {
 		log.Printf("snapshot save failed: %v", err)
 	}
+	protoPanes := make([]protocol.PaneSnapshot, len(panes))
+	for i, pane := range panes {
+		rows := make([]string, len(pane.Buffer))
+		for y, row := range pane.Buffer {
+			runes := make([]rune, len(row))
+			for x, cell := range row {
+				if cell.Ch == 0 {
+					runes[x] = ' '
+				} else {
+					runes[x] = cell.Ch
+				}
+			}
+			rows[y] = string(runes)
+		}
+		protoPanes[i] = protocol.PaneSnapshot{
+			PaneID: pane.ID,
+			Title:  pane.Title,
+			Rows:   rows,
+			X:      int32(pane.Rect.X),
+			Y:      int32(pane.Rect.Y),
+			Width:  int32(pane.Rect.Width),
+			Height: int32(pane.Rect.Height),
+		}
+	}
+	s.setBootSnapshot(protocol.TreeSnapshot{Panes: protoPanes})
 }
 
 func (s *Server) sendSnapshot(conn net.Conn, session *Session) {
@@ -193,7 +259,16 @@ func (s *Server) sendSnapshot(conn net.Conn, session *Session) {
 	}
 	snapshot, err := provider.Snapshot()
 	if err != nil || len(snapshot.Panes) == 0 {
-		return
+		if fallback, ok := s.bootSnapshotCopy(); ok {
+			snapshot = fallback
+		} else {
+			if err != nil {
+				log.Printf("snapshot capture failed: %v", err)
+			}
+			return
+		}
+	} else {
+		s.setBootSnapshot(snapshot)
 	}
 	payload, err := protocol.EncodeTreeSnapshot(snapshot)
 	if err != nil {
