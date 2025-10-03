@@ -131,6 +131,29 @@ func (c *BufferCache) AllPanes() []*PaneState {
 	return panes
 }
 
+// LayoutPanes returns panes sorted by their recorded geometry so renderers can
+// draw them deterministically.
+func (c *BufferCache) LayoutPanes() []*PaneState {
+	if len(c.panes) == 0 {
+		return nil
+	}
+	panes := make([]*PaneState, 0, len(c.panes))
+	for _, pane := range c.panes {
+		panes = append(panes, pane)
+	}
+	sort.Slice(panes, func(i, j int) bool {
+		pi, pj := panes[i], panes[j]
+		if pi.Rect.Y != pj.Rect.Y {
+			return pi.Rect.Y < pj.Rect.Y
+		}
+		if pi.Rect.X != pj.Rect.X {
+			return pi.Rect.X < pj.Rect.X
+		}
+		return compareBytes(pi.ID[:], pj.ID[:]) < 0
+	})
+	return panes
+}
+
 // LatestPane returns the most recently updated pane.
 func (c *BufferCache) LatestPane() *PaneState {
 	if len(c.order) == 0 {
@@ -175,4 +198,22 @@ func trimTrailingSpaces(row []rune) []rune {
 		last--
 	}
 	return row[:last+1]
+}
+
+func compareBytes(a, b []byte) int {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] < b[i] {
+			return -1
+		}
+		if a[i] > b[i] {
+			return 1
+		}
+	}
+	if len(a) < len(b) {
+		return -1
+	}
+	if len(a) > len(b) {
+		return 1
+	}
+	return 0
 }

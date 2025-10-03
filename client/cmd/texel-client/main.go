@@ -139,36 +139,50 @@ func handleControlMessage(conn net.Conn, hdr protocol.Header, payload []byte, ca
 }
 
 func render(cache *client.BufferCache, screen tcell.Screen) {
-	panes := cache.AllPanes()
+	panes := cache.LayoutPanes()
 	if len(panes) == 0 {
 		return
 	}
 	screen.Clear()
 	for _, pane := range panes {
+		if pane == nil || pane.Rect.Width <= 0 || pane.Rect.Height <= 0 {
+			continue
+		}
 		titleText := pane.Title
 		if titleText == "" {
 			titleText = fmt.Sprintf("%x", pane.ID[:4])
 		}
 		title := fmt.Sprintf("[%s rev %d]", titleText, pane.Revision)
-		drawText(screen, pane.Rect.X, pane.Rect.Y, title, tcell.StyleDefault.Bold(true))
+		drawClippedText(screen, pane.Rect.X, pane.Rect.Y, pane.Rect.Width, title, tcell.StyleDefault.Bold(true))
+		maxContentRows := pane.Rect.Height - 1
+		if maxContentRows <= 0 {
+			continue
+		}
+		rows := pane.Rows()
 		baseY := pane.Rect.Y + 1
-		for rowIdx, line := range pane.Rows() {
-			if rowIdx >= pane.Rect.Height {
-				continue
+		for rowIdx := 0; rowIdx < maxContentRows; rowIdx++ {
+			line := ""
+			if rowIdx < len(rows) {
+				line = rows[rowIdx]
 			}
-			drawText(screen, pane.Rect.X, baseY+rowIdx, line, tcell.StyleDefault)
+			drawClippedText(screen, pane.Rect.X, baseY+rowIdx, pane.Rect.Width, line, tcell.StyleDefault)
 		}
 	}
 	screen.Show()
 }
 
-func drawText(screen tcell.Screen, x, y int, text string, style tcell.Style) {
-	if y < 0 {
+func drawClippedText(screen tcell.Screen, x, y, width int, text string, style tcell.Style) {
+	if y < 0 || width <= 0 {
 		return
 	}
-	for i, ch := range []rune(text) {
+	runes := []rune(text)
+	for i := 0; i < width; i++ {
 		if x+i < 0 {
 			continue
+		}
+		ch := ' '
+		if i < len(runes) {
+			ch = runes[i]
 		}
 		screen.SetContent(x+i, y, ch, nil, style)
 	}

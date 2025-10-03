@@ -144,3 +144,33 @@ func TestBufferCacheResumeFlow(t *testing.T) {
 		t.Fatalf("expected merged resume delta, got %q", got)
 	}
 }
+
+func TestBufferCacheLayoutPanesOrdersByGeometry(t *testing.T) {
+	cache := NewBufferCache()
+
+	var id1, id2, id3 [16]byte
+	id1[0] = 1
+	id2[0] = 2
+	id3[0] = 3
+
+	snapshot := protocol.TreeSnapshot{Panes: []protocol.PaneSnapshot{
+		{PaneID: id2, X: 20, Y: 0, Width: 10, Height: 5},
+		{PaneID: id1, X: 0, Y: 0, Width: 10, Height: 5},
+		{PaneID: id3, X: 0, Y: 10, Width: 10, Height: 5},
+	}}
+	cache.ApplySnapshot(snapshot)
+
+	panes := cache.LayoutPanes()
+	if len(panes) != 3 {
+		t.Fatalf("expected 3 panes, got %d", len(panes))
+	}
+	if panes[0].ID != id1 {
+		t.Fatalf("expected pane id1 first, got %v", panes[0].ID)
+	}
+	if panes[1].ID != id2 {
+		t.Fatalf("expected pane id2 second, got %v", panes[1].ID)
+	}
+	if panes[2].ID != id3 {
+		t.Fatalf("expected pane id3 third, got %v", panes[2].ID)
+	}
+}
