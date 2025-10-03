@@ -117,9 +117,14 @@ type ThemeUpdate struct {
 
 // ThemeAck confirms that a theme update has been applied server-side.
 type ThemeAck struct {
-	Section string
-	Key     string
-	Value   string
+    Section string
+    Key     string
+    Value   string
+}
+
+// PaneFocus identifies the pane that is currently active/focused.
+type PaneFocus struct {
+    PaneID [16]byte
 }
 
 // PaneSnapshot describes the full buffer content for a single pane.
@@ -560,8 +565,25 @@ func EncodeThemeAck(msg ThemeAck) ([]byte, error) {
 }
 
 func DecodeThemeAck(b []byte) (ThemeAck, error) {
-	update, err := DecodeThemeUpdate(b)
-	return ThemeAck(update), err
+    update, err := DecodeThemeUpdate(b)
+    return ThemeAck(update), err
+}
+
+func EncodePaneFocus(focus PaneFocus) ([]byte, error) {
+    buf := bytes.NewBuffer(nil)
+    if err := binary.Write(buf, binary.LittleEndian, focus.PaneID); err != nil {
+        return nil, err
+    }
+    return buf.Bytes(), nil
+}
+
+func DecodePaneFocus(b []byte) (PaneFocus, error) {
+    var focus PaneFocus
+    if len(b) < len(focus.PaneID) {
+        return focus, errPayloadShort
+    }
+    copy(focus.PaneID[:], b[:len(focus.PaneID)])
+    return focus, nil
 }
 
 // EncodeTreeSnapshot serialises the tree snapshot for transport.

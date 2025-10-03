@@ -9,6 +9,7 @@ type EventSink interface {
 	HandleClipboardSet(session *Session, event protocol.ClipboardSet)
 	HandleClipboardGet(session *Session, event protocol.ClipboardGet) []byte
 	HandleThemeUpdate(session *Session, event protocol.ThemeUpdate)
+    HandlePaneFocus(session *Session, focus protocol.PaneFocus)
 }
 
 // SnapshotProvider exposes a full tree snapshot for connected clients.
@@ -24,6 +25,7 @@ func (nopSink) HandleMouseEvent(*Session, protocol.MouseEvent)            {}
 func (nopSink) HandleClipboardSet(*Session, protocol.ClipboardSet)        {}
 func (nopSink) HandleClipboardGet(*Session, protocol.ClipboardGet) []byte { return nil }
 func (nopSink) HandleThemeUpdate(*Session, protocol.ThemeUpdate)          {}
+func (nopSink) HandlePaneFocus(*Session, protocol.PaneFocus)              {}
 
 func (nopSink) Snapshot() (protocol.TreeSnapshot, error) {
 	return protocol.TreeSnapshot{}, nil

@@ -156,18 +156,35 @@ func TestThemeUpdateRoundTrip(t *testing.T) {
 }
 
 func TestThemeAckRoundTrip(t *testing.T) {
-	ack := ThemeAck{Section: "pane", Key: "bg", Value: "#000000"}
-	payload, err := EncodeThemeAck(ack)
-	if err != nil {
-		t.Fatalf("encode failed: %v", err)
-	}
-	decoded, err := DecodeThemeAck(payload)
-	if err != nil {
-		t.Fatalf("decode failed: %v", err)
-	}
-	if decoded != ack {
-		t.Fatalf("mismatch: %#v vs %#v", decoded, ack)
-	}
+    ack := ThemeAck{Section: "pane", Key: "bg", Value: "#000000"}
+    payload, err := EncodeThemeAck(ack)
+    if err != nil {
+        t.Fatalf("encode failed: %v", err)
+    }
+    decoded, err := DecodeThemeAck(payload)
+    if err != nil {
+        t.Fatalf("decode failed: %v", err)
+    }
+    if decoded != ack {
+        t.Fatalf("mismatch: %#v vs %#v", decoded, ack)
+    }
+}
+
+func TestPaneFocusRoundTrip(t *testing.T) {
+    var id [16]byte
+    copy(id[:], []byte("pane-focus-demo"))
+    focus := PaneFocus{PaneID: id}
+    payload, err := EncodePaneFocus(focus)
+    if err != nil {
+        t.Fatalf("encode failed: %v", err)
+    }
+    decoded, err := DecodePaneFocus(payload)
+    if err != nil {
+        t.Fatalf("decode failed: %v", err)
+    }
+    if decoded != focus {
+        t.Fatalf("mismatch: %#v vs %#v", decoded, focus)
+    }
 }
 
 func TestTreeSnapshotRoundTrip(t *testing.T) {

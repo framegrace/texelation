@@ -168,7 +168,9 @@ func (s *Screen) AddApp(app App) {
 	log.Printf("AddApp: Setting pane '%s' as active", p.getTitle())
 	p.SetActive(true)
 
-	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
+    if listener, ok := s.desktop.(FocusBroadcaster); ok {
+        listener.BroadcastFocus(s.tree.ActiveLeaf)
+    }
 	s.desktop.broadcastStateUpdate()
 }
 
