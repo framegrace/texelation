@@ -16,6 +16,7 @@ func TestSnapshotStoreSaveAndLoad(t *testing.T) {
 	pane := texel.PaneSnapshot{
 		Title:  "pane",
 		Buffer: [][]texel.Cell{{{Ch: 'A'}, {Ch: 'B'}}},
+		Rect:   texel.Rectangle{X: 1, Y: 2, Width: 10, Height: 5},
 	}
 
 	if err := store.Save([]texel.PaneSnapshot{pane}); err != nil {
@@ -39,6 +40,9 @@ func TestSnapshotStoreSaveAndLoad(t *testing.T) {
 	}
 	if loaded.Panes[0].Title != "pane" {
 		t.Fatalf("unexpected title %s", loaded.Panes[0].Title)
+	}
+	if loaded.Panes[0].X != 1 || loaded.Panes[0].Width != 10 {
+		t.Fatalf("unexpected geometry %+v", loaded.Panes[0])
 	}
 	if loaded.Hash == "" {
 		t.Fatalf("expected hash to be populated")

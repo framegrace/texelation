@@ -144,26 +144,34 @@ func render(cache *client.BufferCache, screen tcell.Screen) {
 		return
 	}
 	screen.Clear()
-	y := 0
 	for _, pane := range panes {
 		titleText := pane.Title
 		if titleText == "" {
 			titleText = fmt.Sprintf("%x", pane.ID[:4])
 		}
 		title := fmt.Sprintf("[%s rev %d]", titleText, pane.Revision)
-		for x, ch := range []rune(title) {
-			screen.SetContent(x, y, ch, nil, tcell.StyleDefault.Bold(true))
-		}
-		y++
-		for _, line := range pane.Rows() {
-			for x, ch := range []rune(line) {
-				screen.SetContent(x, y, ch, nil, tcell.StyleDefault)
+		drawText(screen, pane.Rect.X, pane.Rect.Y, title, tcell.StyleDefault.Bold(true))
+		baseY := pane.Rect.Y + 1
+		for rowIdx, line := range pane.Rows() {
+			if rowIdx >= pane.Rect.Height {
+				continue
 			}
-			y++
+			drawText(screen, pane.Rect.X, baseY+rowIdx, line, tcell.StyleDefault)
 		}
-		y++
 	}
 	screen.Show()
+}
+
+func drawText(screen tcell.Screen, x, y int, text string, style tcell.Style) {
+	if y < 0 {
+		return
+	}
+	for i, ch := range []rune(text) {
+		if x+i < 0 {
+			continue
+		}
+		screen.SetContent(x+i, y, ch, nil, style)
+	}
 }
 
 func isNetworkClosed(err error) bool {

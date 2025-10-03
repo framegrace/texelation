@@ -14,6 +14,14 @@ type PaneState struct {
 	UpdatedAt time.Time
 	rows      map[int][]rune
 	Title     string
+	Rect      clientRect
+}
+
+type clientRect struct {
+	X      int
+	Y      int
+	Width  int
+	Height int
 }
 
 // Rows returns the pane contents as a slice of strings in row order.
@@ -44,8 +52,8 @@ func (p *PaneState) Rows() []string {
 
 // BufferCache maintains pane states keyed by pane ID.
 type BufferCache struct {
-    panes map[[16]byte]*PaneState
-    order []paneOrder
+	panes map[[16]byte]*PaneState
+	order []paneOrder
 }
 
 type paneOrder struct {
@@ -60,19 +68,19 @@ func NewBufferCache() *BufferCache {
 
 // ApplyDelta merges the buffer delta into the cache and returns the updated pane.
 func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) *PaneState {
-    if c.panes == nil {
-        c.panes = make(map[[16]byte]*PaneState)
-    }
-    pane := c.panes[delta.PaneID]
+	if c.panes == nil {
+		c.panes = make(map[[16]byte]*PaneState)
+	}
+	pane := c.panes[delta.PaneID]
 	if pane == nil {
 		pane = &PaneState{ID: delta.PaneID, rows: make(map[int][]rune)}
 		c.panes[delta.PaneID] = pane
 	}
-    if delta.Revision < pane.Revision {
-        return pane
-    }
+	if delta.Revision < pane.Revision {
+		return pane
+	}
 
-    for _, rowDelta := range delta.Rows {
+	for _, rowDelta := range delta.Rows {
 		rowIdx := int(rowDelta.Row)
 		row := pane.rows[rowIdx]
 		for _, span := range rowDelta.Spans {
@@ -93,33 +101,34 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) *PaneState {
 
 // ApplySnapshot replaces local state with the provided snapshot.
 func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
-    if c.panes == nil {
-        c.panes = make(map[[16]byte]*PaneState)
-    }
-    for _, paneSnap := range snapshot.Panes {
-        pane := c.panes[paneSnap.PaneID]
-        if pane == nil {
-            pane = &PaneState{ID: paneSnap.PaneID, rows: make(map[int][]rune)}
-            c.panes[paneSnap.PaneID] = pane
-        }
-        pane.Title = paneSnap.Title
-        pane.Revision = paneSnap.Revision
-        pane.UpdatedAt = time.Now().UTC()
-        pane.rows = make(map[int][]rune, len(paneSnap.Rows))
-        for idx, row := range paneSnap.Rows {
-            pane.rows[idx] = []rune(row)
-        }
-        c.trackOrdering(paneSnap.PaneID, pane.UpdatedAt)
-    }
+	if c.panes == nil {
+		c.panes = make(map[[16]byte]*PaneState)
+	}
+	for _, paneSnap := range snapshot.Panes {
+		pane := c.panes[paneSnap.PaneID]
+		if pane == nil {
+			pane = &PaneState{ID: paneSnap.PaneID, rows: make(map[int][]rune)}
+			c.panes[paneSnap.PaneID] = pane
+		}
+		pane.Title = paneSnap.Title
+		pane.Revision = paneSnap.Revision
+		pane.UpdatedAt = time.Now().UTC()
+		pane.rows = make(map[int][]rune, len(paneSnap.Rows))
+		for idx, row := range paneSnap.Rows {
+			pane.rows[idx] = []rune(row)
+		}
+		pane.Rect = clientRect{X: int(paneSnap.X), Y: int(paneSnap.Y), Width: int(paneSnap.Width), Height: int(paneSnap.Height)}
+		c.trackOrdering(paneSnap.PaneID, pane.UpdatedAt)
+	}
 }
 
 // AllPanes returns panes in order of last update.
 func (c *BufferCache) AllPanes() []*PaneState {
-    panes := make([]*PaneState, len(c.order))
-    for i, ord := range c.order {
-        panes[i] = c.panes[ord.id]
-    }
-    return panes
+	panes := make([]*PaneState, len(c.order))
+	for i, ord := range c.order {
+		panes[i] = c.panes[ord.id]
+	}
+	return panes
 }
 
 // LatestPane returns the most recently updated pane.

@@ -143,7 +143,7 @@ func TestThemeUpdateRoundTrip(t *testing.T) {
 func TestTreeSnapshotRoundTrip(t *testing.T) {
     snapshot := TreeSnapshot{
         Panes: []PaneSnapshot{
-            {PaneID: [16]byte{1}, Revision: 1, Title: "pane", Rows: []string{"hello", "world"}},
+            {PaneID: [16]byte{1}, Revision: 1, Title: "pane", Rows: []string{"hello", "world"}, X: 5, Y: 6, Width: 80, Height: 24},
         },
     }
     payload, err := EncodeTreeSnapshot(snapshot)
@@ -154,7 +154,7 @@ func TestTreeSnapshotRoundTrip(t *testing.T) {
     if err != nil {
         t.Fatalf("decode failed: %v", err)
     }
-    if len(decoded.Panes) != 1 || decoded.Panes[0].Title != "pane" || decoded.Panes[0].Rows[1] != "world" {
+    if len(decoded.Panes) != 1 || decoded.Panes[0].Title != "pane" || decoded.Panes[0].Rows[1] != "world" || decoded.Panes[0].X != 5 {
         t.Fatalf("unexpected snapshot: %#v", decoded)
     }
 }

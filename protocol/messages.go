@@ -115,6 +115,10 @@ type PaneSnapshot struct {
     Revision uint32
     Title    string
     Rows     []string
+    X        int32
+    Y        int32
+    Width    int32
+    Height   int32
 }
 
 // TreeSnapshot aggregates all pane snapshots.
@@ -516,6 +520,18 @@ func EncodeTreeSnapshot(snapshot TreeSnapshot) ([]byte, error) {
         if err := encodeString(buf, pane.Title); err != nil {
             return nil, err
         }
+        if err := binary.Write(buf, binary.LittleEndian, pane.X); err != nil {
+            return nil, err
+        }
+        if err := binary.Write(buf, binary.LittleEndian, pane.Y); err != nil {
+            return nil, err
+        }
+        if err := binary.Write(buf, binary.LittleEndian, pane.Width); err != nil {
+            return nil, err
+        }
+        if err := binary.Write(buf, binary.LittleEndian, pane.Height); err != nil {
+            return nil, err
+        }
         if len(pane.Rows) > 0xFFFF {
             return nil, errStringTooLong
         }
@@ -553,11 +569,15 @@ func DecodeTreeSnapshot(b []byte) (TreeSnapshot, error) {
             return snapshot, err
         }
         pane.Title = title
-        if len(rest) < 2 {
+        if len(rest) < 18 {
             return snapshot, errPayloadShort
         }
-        rowCount := binary.LittleEndian.Uint16(rest[:2])
-        rest = rest[2:]
+        pane.X = int32(binary.LittleEndian.Uint32(rest[0:4]))
+        pane.Y = int32(binary.LittleEndian.Uint32(rest[4:8]))
+        pane.Width = int32(binary.LittleEndian.Uint32(rest[8:12]))
+        pane.Height = int32(binary.LittleEndian.Uint32(rest[12:16]))
+        rowCount := binary.LittleEndian.Uint16(rest[16:18])
+        rest = rest[18:]
         pane.Rows = make([]string, rowCount)
         for r := 0; r < int(rowCount); r++ {
             row, remaining, err := decodeString(rest)

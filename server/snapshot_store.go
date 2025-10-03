@@ -27,9 +27,13 @@ type StoredSnapshot struct {
 
 // StoredPane represents a single pane's textual content.
 type StoredPane struct {
-	ID    string   `json:"id"`
-	Title string   `json:"title"`
-	Rows  []string `json:"rows"`
+	ID     string   `json:"id"`
+	Title  string   `json:"title"`
+	Rows   []string `json:"rows"`
+	X      int      `json:"x"`
+	Y      int      `json:"y"`
+	Width  int      `json:"width"`
+	Height int      `json:"height"`
 }
 
 func NewSnapshotStore(path string) *SnapshotStore {
@@ -68,9 +72,13 @@ func (s *SnapshotStore) Save(panes []texel.PaneSnapshot) error {
 		hasher.Write([]byte(pane.Title))
 
 		stored.Panes[i] = StoredPane{
-			ID:    id,
-			Title: pane.Title,
-			Rows:  rows,
+			ID:     id,
+			Title:  pane.Title,
+			Rows:   rows,
+			X:      pane.Rect.X,
+			Y:      pane.Rect.Y,
+			Width:  pane.Rect.Width,
+			Height: pane.Rect.Height,
 		}
 	}
 
@@ -120,5 +128,5 @@ func (sp StoredPane) ToPaneSnapshot() texel.PaneSnapshot {
 		}
 	}
 
-	return texel.PaneSnapshot{ID: id, Title: sp.Title, Buffer: buffer}
+	return texel.PaneSnapshot{ID: id, Title: sp.Title, Buffer: buffer, Rect: texel.Rectangle{X: sp.X, Y: sp.Y, Width: sp.Width, Height: sp.Height}}
 }

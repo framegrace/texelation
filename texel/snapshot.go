@@ -10,6 +10,15 @@ type PaneSnapshot struct {
 	ID     [16]byte
 	Title  string
 	Buffer [][]Cell
+	Rect   Rectangle
+}
+
+// Rectangle stores pane position and size in screen coordinates.
+type Rectangle struct {
+	X      int
+	Y      int
+	Width  int
+	Height int
 }
 
 // SnapshotBuffers collects the current buffers for all panes in the active workspace.
@@ -31,6 +40,12 @@ func (d *Desktop) SnapshotBuffers() []PaneSnapshot {
 			ID:     id,
 			Title:  n.Pane.getTitle(),
 			Buffer: buf,
+			Rect: Rectangle{
+				X:      n.Pane.absX0,
+				Y:      n.Pane.absY0,
+				Width:  n.Pane.Width(),
+				Height: n.Pane.Height(),
+			},
 		})
 	})
 	return snapshots
