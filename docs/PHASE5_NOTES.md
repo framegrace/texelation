@@ -22,5 +22,7 @@
 ## Open Questions
 - How to persist per-pane app metadata (commands, shells) alongside buffer snapshots for full recovery?
 - Should resume acknowledgements emit structured logs for easier ingestion into metrics backends?
+- When structured logging/metrics are available, plug the session stats reporter into the actual logging framework (or metrics sink) and remove the noop printer used in tests.
+- Revisit placeholder `snapshotApp` once app persistence metadata exists so restored panes can resume their original programs automatically.
 
 _Last updated: 2025-10-03_
