@@ -70,3 +70,13 @@ func (m *Manager) ActiveSessions() int {
 	defer m.mu.RUnlock()
 	return len(m.sessions)
 }
+
+func (m *Manager) SessionStats() []SessionStats {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	stats := make([]SessionStats, 0, len(m.sessions))
+	for _, session := range m.sessions {
+		stats = append(stats, session.Stats())
+	}
+	return stats
+}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -21,13 +22,15 @@ type DiffPacket struct {
 
 // Session manages pane buffers and queued diffs for a single client connection.
 type Session struct {
-	id           [16]byte
-	mu           sync.Mutex
-	nextSequence uint64
-	diffs        []DiffPacket
-	lastSnapshot time.Time
-	closed       bool
-	maxDiffs     int
+	id             [16]byte
+	mu             sync.Mutex
+	nextSequence   uint64
+	diffs          []DiffPacket
+	lastSnapshot   time.Time
+	closed         bool
+	maxDiffs       int
+	droppedDiffs   uint64
+	lastDroppedSeq uint64
 }
 
 func NewSession(id [16]byte, maxDiffs int) *Session {
@@ -46,6 +49,7 @@ func (s *Session) setMaxDiffs(limit int) {
 	s.maxDiffs = limit
 	if limit > 0 && len(s.diffs) > limit {
 		drop := len(s.diffs) - limit
+		s.recordDrop(drop)
 		s.diffs = append([]DiffPacket(nil), s.diffs[drop:]...)
 	}
 }
@@ -85,6 +89,7 @@ func (s *Session) EnqueueDiff(delta protocol.BufferDelta) error {
 
 	if s.maxDiffs > 0 && len(s.diffs) > s.maxDiffs {
 		drop := len(s.diffs) - s.maxDiffs
+		s.recordDrop(drop)
 		s.diffs = append([]DiffPacket(nil), s.diffs[drop:]...)
 	}
 	return nil
@@ -147,4 +152,37 @@ func (s *Session) LastSnapshot() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastSnapshot
+}
+
+func (s *Session) recordDrop(drop int) {
+	if drop <= 0 || drop > len(s.diffs) {
+		return
+	}
+	s.droppedDiffs += uint64(drop)
+	s.lastDroppedSeq = s.diffs[drop-1].Sequence
+	log.Printf("session %x dropped %d diffs (last seq %d)", s.id[:4], drop, s.lastDroppedSeq)
+}
+
+// Stats returns a snapshot of session diff queue metrics.
+func (s *Session) Stats() SessionStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return SessionStats{
+		ID:               s.id,
+		PendingCount:     len(s.diffs),
+		NextSequence:     s.nextSequence,
+		DroppedDiffs:     s.droppedDiffs,
+		LastDroppedSeq:   s.lastDroppedSeq,
+		LastSnapshotTime: s.lastSnapshot,
+	}
+}
+
+// SessionStats summarises queued diff state for observability.
+type SessionStats struct {
+	ID               [16]byte
+	PendingCount     int
+	NextSequence     uint64
+	DroppedDiffs     uint64
+	LastDroppedSeq   uint64
+	LastSnapshotTime time.Time
 }

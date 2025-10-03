@@ -52,4 +52,9 @@ func TestManagerDiffRetentionUpdate(t *testing.T) {
 	if len(session.Pending(0)) != 1 {
 		t.Fatalf("retention limit not respected after manager update")
 	}
+
+	stats := m.SessionStats()
+	if len(stats) != 1 {
+		t.Fatalf("expected stats for 1 session, got %d", len(stats))
+	}
 }

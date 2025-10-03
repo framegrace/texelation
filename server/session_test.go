@@ -73,4 +73,8 @@ func TestSessionRetentionLimit(t *testing.T) {
 	if len(pending) != 1 || pending[0].Sequence != 4 {
 		t.Fatalf("expected retention update to keep only latest diff, got %v", pending)
 	}
+	stats := session.Stats()
+	if stats.DroppedDiffs == 0 || stats.LastDroppedSeq == 0 {
+		t.Fatalf("expected dropped diff metrics, got %+v", stats)
+	}
 }
