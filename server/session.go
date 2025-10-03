@@ -13,6 +13,13 @@ var (
 	ErrSessionClosed = errors.New("server: session closed")
 )
 
+var sessionStatsReporter func(SessionStats)
+
+// SetSessionStatsReporter wires a hook invoked whenever session stats change.
+func SetSessionStatsReporter(reporter func(SessionStats)) {
+	sessionStatsReporter = reporter
+}
+
 // DiffPacket holds a serialised buffer delta ready to be sent to clients.
 type DiffPacket struct {
 	Sequence uint64
@@ -161,12 +168,19 @@ func (s *Session) recordDrop(drop int) {
 	s.droppedDiffs += uint64(drop)
 	s.lastDroppedSeq = s.diffs[drop-1].Sequence
 	log.Printf("session %x dropped %d diffs (last seq %d, pending %d)", s.id[:4], drop, s.lastDroppedSeq, len(s.diffs)-drop)
+	if sessionStatsReporter != nil {
+		sessionStatsReporter(s.statsLocked())
+	}
 }
 
 // Stats returns a snapshot of session diff queue metrics.
 func (s *Session) Stats() SessionStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.statsLocked()
+}
+
+func (s *Session) statsLocked() SessionStats {
 	return SessionStats{
 		ID:               s.id,
 		PendingCount:     len(s.diffs),

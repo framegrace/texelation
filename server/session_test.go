@@ -78,3 +78,30 @@ func TestSessionRetentionLimit(t *testing.T) {
 		t.Fatalf("expected dropped diff metrics, got %+v", stats)
 	}
 }
+
+func TestSessionStatsReporter(t *testing.T) {
+	var id [16]byte
+	copy(id[:], []byte("session-report"))
+	session := NewSession(id, 1)
+
+	ch := make(chan SessionStats, 1)
+	SetSessionStatsReporter(func(stats SessionStats) {
+		ch <- stats
+	})
+	defer SetSessionStatsReporter(nil)
+
+	delta := protocol.BufferDelta{PaneID: id, Revision: 1}
+	if err := session.EnqueueDiff(delta); err != nil {
+		t.Fatalf("enqueue failed: %v", err)
+	}
+	_ = session.EnqueueDiff(protocol.BufferDelta{PaneID: id, Revision: 2})
+
+	select {
+	case stats := <-ch:
+		if stats.DroppedDiffs == 0 {
+			t.Fatalf("expected drop count in reporter")
+		}
+	default:
+		t.Fatalf("expected reporter to be invoked")
+	}
+}
