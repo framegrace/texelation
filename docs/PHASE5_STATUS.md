@@ -4,9 +4,10 @@
 - Configurable diff retention limits applied per session; trimmed history now logs drop counts and last sequence (`server/session.go`).
 - `Session.Stats` exposes pending diff counts, drop totals, and last snapshot timestamp for observability; unit tests cover retention behaviour (`server/session_test.go`).
 - Snapshot store load path feeds the server's cached boot snapshot so reconnecting clients receive layout even when the live desktop cannot publish (`server/server.go`, `server/snapshot_store.go`).
+- Plan updated to note future client mapping of local workspaces to arbitrary server workspaces (`CLIENT_SERVER_PLAN.md`).
 
 ## In Progress / Issues
-- Need a deterministic integration test that exercises "server runs headless, retains diffs, then client resumes"; initial `net.Pipe` harness still hangs.
+- Need a deterministic integration test that exercises "server runs headless, retains diffs, then client resumes"; `net.Pipe` harness hangs and spawning a real Unix listener is blocked in the sandbox.
 - Desktop restoration on boot currently only seeds outbound snapshots; applying stored panes back into the live desktop remains future work.
 
 ## Next Steps

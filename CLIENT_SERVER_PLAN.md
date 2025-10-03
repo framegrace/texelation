@@ -55,3 +55,4 @@
 - Abstract transport layer so TCP/WebSocket backends can be slotted in later.
 - Explore compression strategies (zstd delta, dictionary-based) if diffs grow large.
 - Plan for multi-client viewing (read-only observers) once single-client flow stabilizes.
+- Support mapping individual client workspaces to arbitrary server workspaces so a single client can follow multiple servers (or multiple server workspaces) concurrently.
