@@ -63,25 +63,25 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 	sessionCh := make(chan *Session, 1)
 	go func() {
 		defer srvConn.Close()
-	session, err := handleHandshake(srvConn, mgr)
-	if err != nil {
-		errCh <- err
-		return
-	}
-	sessionCh <- session
-
-	publisher := NewDesktopPublisher(desktop, session)
-	sink.SetPublisher(publisher)
-	snapshot, err := sink.Snapshot()
-	if err == nil && len(snapshot.Panes) > 0 {
-		if payload, err := protocol.EncodeTreeSnapshot(snapshot); err == nil {
-			header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: session.ID()}
-			_ = protocol.WriteMessage(srvConn, header, payload)
+		session, err := handleHandshake(srvConn, mgr)
+		if err != nil {
+			errCh <- err
+			return
 		}
-	}
-	_ = publisher.Publish()
+		sessionCh <- session
 
-	conn := newConnection(srvConn, session, sink)
+		publisher := NewDesktopPublisher(desktop, session)
+		sink.SetPublisher(publisher)
+		snapshot, err := sink.Snapshot()
+		if err == nil && len(snapshot.Panes) > 0 {
+			if payload, err := protocol.EncodeTreeSnapshot(snapshot); err == nil {
+				header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: session.ID()}
+				_ = protocol.WriteMessage(srvConn, header, payload)
+			}
+		}
+		_ = publisher.Publish()
+
+		conn := newConnection(srvConn, session, sink)
 		errCh <- conn.serve()
 	}()
 
@@ -118,26 +118,26 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 
 	session := <-sessionCh
 
-hdr, payload, err = protocol.ReadMessage(srvClient)
-if err != nil {
-    t.Fatalf("read tree snapshot: %v", err)
-}
-if hdr.Type != protocol.MsgTreeSnapshot {
-    t.Fatalf("expected tree snapshot, got %v", hdr.Type)
-}
-if _, err := protocol.DecodeTreeSnapshot(payload); err != nil {
-    t.Fatalf("decode snapshot: %v", err)
-}
+	hdr, payload, err = protocol.ReadMessage(srvClient)
+	if err != nil {
+		t.Fatalf("read tree snapshot: %v", err)
+	}
+	if hdr.Type != protocol.MsgTreeSnapshot {
+		t.Fatalf("expected tree snapshot, got %v", hdr.Type)
+	}
+	if _, err := protocol.DecodeTreeSnapshot(payload); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
 
-hdr, payload, err = protocol.ReadMessage(srvClient)
-if err != nil {
-    t.Fatalf("read initial delta: %v", err)
-}
-if hdr.Type != protocol.MsgBufferDelta {
-    t.Fatalf("expected buffer delta, got %v", hdr.Type)
-}
+	hdr, payload, err = protocol.ReadMessage(srvClient)
+	if err != nil {
+		t.Fatalf("read initial delta: %v", err)
+	}
+	if hdr.Type != protocol.MsgBufferDelta {
+		t.Fatalf("expected buffer delta, got %v", hdr.Type)
+	}
 
-ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
+	ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
 	ackHeader := protocol.Header{Version: protocol.Version, Type: protocol.MsgBufferAck, Flags: protocol.FlagChecksum, SessionID: accept.SessionID}
 	if err := protocol.WriteMessage(srvClient, ackHeader, ackPayload); err != nil {
 		t.Fatalf("write ack: %v", err)
