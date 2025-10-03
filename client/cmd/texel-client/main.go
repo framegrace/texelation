@@ -135,6 +135,20 @@ func handleControlMessage(conn net.Conn, hdr protocol.Header, payload []byte, ca
 	case protocol.MsgPing:
 		pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})
 		_ = protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgPong, Flags: protocol.FlagChecksum, SessionID: sessionID}, pong)
+	case protocol.MsgClipboardSet:
+		clip, err := protocol.DecodeClipboardSet(payload)
+		if err != nil {
+			log.Printf("decode clipboard failed: %v", err)
+			return
+		}
+		fmt.Printf("Clipboard update (%s): %q\n", clip.MimeType, string(clip.Data))
+	case protocol.MsgThemeUpdate:
+		themeUpdate, err := protocol.DecodeThemeUpdate(payload)
+		if err != nil {
+			log.Printf("decode theme update failed: %v", err)
+			return
+		}
+		fmt.Printf("Theme update %s.%s = %s\n", themeUpdate.Section, themeUpdate.Key, themeUpdate.Value)
 	}
 }
 
