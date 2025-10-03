@@ -8,7 +8,7 @@
 ## Current Assessment
 - Keyboard/mouse events travel end-to-end.
 - Clipboard/theme now round trip with explicit acknowledgements; memconn integration test covers the flow.
-- Remaining work: richer UI for theme state beyond last update, multi-client focus signalling, and structured telemetry.
+- Remaining work: focus/active-pane signalling for multi-client readiness and structured telemetry for clipboard/theme metrics.
 
 ## Next Steps
 1. Review focus/active pane change events to determine if additional protocol messages are needed before multi-client support.
