@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -85,6 +86,8 @@ func main() {
 	desktop.AddStatusPane(status, texel.SideBottom, 1)
 
 	srv := server.NewServer(*socketPath, manager)
+	metrics := server.NewFocusMetrics(log.Default())
+	srv.SetFocusMetrics(metrics)
 	sink := server.NewDesktopSink(desktop)
 	srv.SetEventSink(sink)
 	srv.SetPublisherFactory(func(sess *server.Session) *server.DesktopPublisher {

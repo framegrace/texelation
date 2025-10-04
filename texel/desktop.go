@@ -69,6 +69,8 @@ type Desktop struct {
 	lastMouseModifier tcell.ModMask
 	clipboard         map[string][]byte
 	lastClipboardMime string
+	focusMu           sync.RWMutex
+	focusListeners    []DesktopFocusListener
 }
 
 // NewDesktop creates and initializes a new desktop environment.
@@ -121,6 +123,7 @@ func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppF
 		inControlMode:     false,
 		subControlMode:    0,
 		clipboard:         make(map[string][]byte),
+		focusListeners:    make([]DesktopFocusListener, 0),
 	}
 
 	log.Printf("NewDesktop: Created with inControlMode=%v", d.inControlMode)
@@ -134,6 +137,31 @@ func (d *Desktop) Subscribe(listener Listener) {
 
 func (d *Desktop) Unsubscribe(listener Listener) {
 	d.dispatcher.Unsubscribe(listener)
+}
+
+func (d *Desktop) RegisterFocusListener(listener DesktopFocusListener) {
+	if listener == nil {
+		return
+	}
+	d.focusMu.Lock()
+	d.focusListeners = append(d.focusListeners, listener)
+	d.focusMu.Unlock()
+	d.notifyFocusActive()
+}
+
+// UnregisterFocusListener removes a previously registered focus listener.
+func (d *Desktop) UnregisterFocusListener(listener DesktopFocusListener) {
+	if listener == nil {
+		return
+	}
+	d.focusMu.Lock()
+	defer d.focusMu.Unlock()
+	for i, registered := range d.focusListeners {
+		if registered == listener {
+			d.focusListeners = append(d.focusListeners[:i], d.focusListeners[i+1:]...)
+			break
+		}
+	}
 }
 
 // AddStatusPane adds a new status pane to the desktop.
@@ -644,6 +672,30 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 	}
 	d.recalculateLayout()
 	d.broadcastStateUpdate()
+	d.notifyFocusActive()
+}
+
+func (d *Desktop) notifyFocusActive() {
+	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil {
+		return
+	}
+	d.notifyFocusNode(d.activeWorkspace.tree.ActiveLeaf)
+}
+
+func (d *Desktop) notifyFocusNode(node *Node) {
+	if node == nil || node.Pane == nil {
+		return
+	}
+	d.notifyFocus(node.Pane.ID())
+}
+
+func (d *Desktop) notifyFocus(paneID [16]byte) {
+	d.focusMu.RLock()
+	listeners := append([]DesktopFocusListener(nil), d.focusListeners...)
+	d.focusMu.RUnlock()
+	for _, listener := range listeners {
+		listener.PaneFocused(paneID)
+	}
 }
 
 func (d *Desktop) draw() {

@@ -60,6 +60,8 @@ func (d *DesktopSink) HandleThemeUpdate(session *Session, event protocol.ThemeUp
 	d.desktop.HandleThemeUpdate(event.Section, event.Key, event.Value)
 }
 
+func (d *DesktopSink) HandlePaneFocus(session *Session, focus protocol.PaneFocus) {}
+
 func (d *DesktopSink) Desktop() *texel.Desktop {
 	return d.desktop
 }
@@ -72,31 +74,6 @@ func (d *DesktopSink) Snapshot() (protocol.TreeSnapshot, error) {
 	if d.desktop == nil {
 		return protocol.TreeSnapshot{}, nil
 	}
-	panes := d.desktop.SnapshotBuffers()
-	snapshot := protocol.TreeSnapshot{Panes: make([]protocol.PaneSnapshot, len(panes))}
-	for i, pane := range panes {
-		rows := make([]string, len(pane.Buffer))
-		for y, row := range pane.Buffer {
-			runes := make([]rune, len(row))
-			for x, cell := range row {
-				if cell.Ch == 0 {
-					runes[x] = ' '
-				} else {
-					runes[x] = cell.Ch
-				}
-			}
-			rows[y] = string(runes)
-		}
-		snapshot.Panes[i] = protocol.PaneSnapshot{
-			PaneID:   pane.ID,
-			Revision: 0,
-			Title:    pane.Title,
-			Rows:     rows,
-			X:        int32(pane.Rect.X),
-			Y:        int32(pane.Rect.Y),
-			Width:    int32(pane.Rect.Width),
-			Height:   int32(pane.Rect.Height),
-		}
-	}
-	return snapshot, nil
+	capture := d.desktop.CaptureTree()
+	return treeCaptureToProtocol(capture), nil
 }

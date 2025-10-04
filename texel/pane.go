@@ -2,6 +2,9 @@
 package texel
 
 import (
+	"crypto/rand"
+	"crypto/sha1"
+	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"log"
 	"texelation/texel/theme"
@@ -25,6 +28,7 @@ type pane struct {
 	name                       string
 	prevBuf                    [][]Cell
 	screen                     *Screen
+	id                         [16]byte
 
 	// Effects system
 	effects  *EffectPipeline
@@ -48,6 +52,10 @@ func newPane(s *Screen) *pane {
 		animator:   NewEffectAnimator(),
 		IsActive:   false, // Explicitly set to false initially
 		IsResizing: false, // Explicitly set to false initially
+	}
+	if _, err := rand.Read(p.id[:]); err != nil {
+		sum := sha1.Sum([]byte(fmt.Sprintf("%p", p)))
+		copy(p.id[:], sum[:])
 	}
 
 	// Create pre-made effects for common states
@@ -281,6 +289,14 @@ func (p *pane) Render() [][]Cell {
 
 	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
 	return buffer
+}
+
+func (p *pane) ID() [16]byte {
+	return p.id
+}
+
+func (p *pane) setID(id [16]byte) {
+	p.id = id
 }
 
 // Rest of the methods remain the same...

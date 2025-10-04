@@ -30,6 +30,7 @@
 - Implement `client` binary that connects via UDS, performs handshake, requests latest snapshot, and applies buffered diffs to local cache.
 - Reuse existing `tcell` renderer but feed it from the local buffer cache; ensure resize events and input routing go through the protocol layer.
 - Handle reconnects with backoff; on reconnect, request snapshot + incremental diffs since last acknowledged sequence number.
+- Target UI parity with the local desktop so the standalone client becomes the primary renderer once Phase 6 completes (borders, splits, status panes).
 
 ## Phase 5 – Offline Operation Guarantees
 - Ensure server continues running apps with no clients: queue outbound diffs, compact history, enforce retention limits.

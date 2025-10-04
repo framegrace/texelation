@@ -101,7 +101,7 @@ func initialHandshake(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 
 	go func() {
 		defer serverConn.Close()
-		sess, err := handleHandshake(serverConn, srv.manager)
+		sess, resuming, err := handleHandshake(serverConn, srv.manager)
 		if err != nil {
 			errCh <- err
 			return
@@ -114,7 +114,7 @@ func initialHandshake(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 		_ = pub.Publish()
 		srv.sendSnapshot(serverConn, sess)
 		sessCh <- sess
-		conn := newConnection(serverConn, sess, sink)
+		conn := newConnection(serverConn, sess, sink, resuming)
 		errCh <- conn.serve()
 	}()
 
@@ -131,14 +131,35 @@ func initialHandshake(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 		t.Fatalf("write connect: %v", err)
 	}
 
-	if _, _, err := protocol.ReadMessage(clientConn); err != nil {
+	hdr, payload, err := readMessageSkippingFocus(clientConn)
+	if err != nil {
 		t.Fatalf("read connect accept: %v", err)
 	}
-	if _, _, err := protocol.ReadMessage(clientConn); err != nil {
+	if hdr.Type != protocol.MsgConnectAccept {
+		t.Fatalf("expected connect accept, got %v", hdr.Type)
+	}
+	if _, err := protocol.DecodeConnectAccept(payload); err != nil {
+		t.Fatalf("decode connect accept: %v", err)
+	}
+	hdr, payload, err = readMessageSkippingFocus(clientConn)
+	if err != nil {
 		t.Fatalf("read initial snapshot: %v", err)
 	}
-	if _, _, err := protocol.ReadMessage(clientConn); err != nil {
+	if hdr.Type != protocol.MsgTreeSnapshot {
+		t.Fatalf("expected snapshot, got %v", hdr.Type)
+	}
+	if _, err := protocol.DecodeTreeSnapshot(payload); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	hdr, payload, err = readMessageSkippingFocus(clientConn)
+	if err != nil {
 		t.Fatalf("read initial delta: %v", err)
+	}
+	if hdr.Type != protocol.MsgBufferDelta {
+		t.Fatalf("expected buffer delta, got %v", hdr.Type)
+	}
+	if _, err := protocol.DecodeBufferDelta(payload); err != nil {
+		t.Fatalf("decode delta: %v", err)
 	}
 
 	_ = clientConn.Close()
@@ -182,21 +203,21 @@ func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 
 	go func() {
 		defer serverConn.Close()
-		sess, err := handleHandshake(serverConn, srv.manager)
+		sess, resuming, err := handleHandshake(serverConn, srv.manager)
 		if err != nil {
 			errCh <- err
 			return
 		}
 		pub := NewDesktopPublisher(desktop, sess)
 		sink.SetPublisher(pub)
-		errCh <- newConnection(serverConn, sess, sink).serve()
+		errCh <- newConnection(serverConn, sess, sink, resuming).serve()
 	}()
 
 	helloPayload, _ := protocol.EncodeHello(protocol.Hello{ClientName: "client"})
 	if err := protocol.WriteMessage(clientConn, protocol.Header{Version: protocol.Version, Type: protocol.MsgHello, Flags: protocol.FlagChecksum}, helloPayload); err != nil {
 		t.Fatalf("resume write hello: %v", err)
 	}
-	if _, _, err := protocol.ReadMessage(clientConn); err != nil {
+	if _, _, err := readMessageSkippingFocus(clientConn); err != nil {
 		t.Fatalf("resume read welcome: %v", err)
 	}
 
@@ -205,7 +226,7 @@ func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 		t.Fatalf("resume write connect: %v", err)
 	}
 
-	if _, _, err := protocol.ReadMessage(clientConn); err != nil {
+	if _, _, err := readMessageSkippingFocus(clientConn); err != nil {
 		t.Fatalf("resume read accept: %v", err)
 	}
 
@@ -217,7 +238,7 @@ func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 	acked := 0
 	target := len(session.Pending(0))
 	for acked < target {
-		hdr, payload, err := protocol.ReadMessage(clientConn)
+		hdr, payload, err := readMessageSkippingFocus(clientConn)
 		if err != nil {
 			t.Fatalf("resume read message: %v", err)
 		}

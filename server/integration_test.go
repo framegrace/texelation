@@ -9,20 +9,24 @@ import (
 )
 
 type recordingSink struct {
-    events []protocol.KeyEvent
+	events []protocol.KeyEvent
 }
 
 func (r *recordingSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) {
-    r.events = append(r.events, event)
+	r.events = append(r.events, event)
 }
 
 func (r *recordingSink) HandleMouseEvent(session *Session, event protocol.MouseEvent) {}
 
 func (r *recordingSink) HandleClipboardSet(session *Session, event protocol.ClipboardSet) {}
 
-func (r *recordingSink) HandleClipboardGet(session *Session, event protocol.ClipboardGet) []byte { return nil }
+func (r *recordingSink) HandleClipboardGet(session *Session, event protocol.ClipboardGet) []byte {
+	return nil
+}
 
 func (r *recordingSink) HandleThemeUpdate(session *Session, event protocol.ThemeUpdate) {}
+
+func (r *recordingSink) HandlePaneFocus(session *Session, focus protocol.PaneFocus) {}
 
 func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 	mgr := NewManager()
@@ -33,7 +37,7 @@ func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		defer srv.Close()
-		session, err := handleHandshake(srv, mgr)
+		session, resuming, err := handleHandshake(srv, mgr)
 		if err != nil {
 			errCh <- err
 			return
@@ -50,7 +54,7 @@ func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 			return
 		}
 
-		conn := newConnection(srv, session, sink)
+		conn := newConnection(srv, session, sink, resuming)
 		errCh <- conn.serve()
 	}()
 
@@ -95,7 +99,7 @@ func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 		t.Fatalf("decode connect accept: %v", err)
 	}
 
-	hdr, payload, err = protocol.ReadMessage(client)
+	hdr, payload, err = readMessageSkippingFocus(client)
 	if err != nil {
 		t.Fatalf("read buffer delta: %v", err)
 	}

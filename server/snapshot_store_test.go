@@ -18,8 +18,12 @@ func TestSnapshotStoreSaveAndLoad(t *testing.T) {
 		Buffer: [][]texel.Cell{{{Ch: 'A'}, {Ch: 'B'}}},
 		Rect:   texel.Rectangle{X: 1, Y: 2, Width: 10, Height: 5},
 	}
+	capture := texel.TreeCapture{
+		Panes: []texel.PaneSnapshot{pane},
+		Root:  &texel.TreeNodeCapture{PaneIndex: 0},
+	}
 
-	if err := store.Save([]texel.PaneSnapshot{pane}); err != nil {
+	if err := store.Save(capture); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -43,6 +47,9 @@ func TestSnapshotStoreSaveAndLoad(t *testing.T) {
 	}
 	if loaded.Panes[0].X != 1 || loaded.Panes[0].Width != 10 {
 		t.Fatalf("unexpected geometry %+v", loaded.Panes[0])
+	}
+	if loaded.Tree.PaneIndex != 0 {
+		t.Fatalf("expected root pane index 0, got %d", loaded.Tree.PaneIndex)
 	}
 	if loaded.Hash == "" {
 		t.Fatalf("expected hash to be populated")

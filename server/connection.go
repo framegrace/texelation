@@ -2,28 +2,55 @@ package server
 
 import (
 	"io"
+	"log"
 	"net"
+	"sync"
 	"time"
 
 	"texelation/protocol"
 )
 
 type connection struct {
-	conn      net.Conn
-	session   *Session
-	lastSent  uint64
-	lastAcked uint64
-	sink      EventSink
+	conn            net.Conn
+	session         *Session
+	lastSent        uint64
+	lastAcked       uint64
+	sink            EventSink
+	writeMu         sync.Mutex
+	unregisterFocus func()
+	awaitResume     bool
+	focusAttach     func()
 }
 
-func newConnection(conn net.Conn, session *Session, sink EventSink) *connection {
+func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume bool) *connection {
 	if sink == nil {
 		sink = nopSink{}
 	}
-	return &connection{conn: conn, session: session, sink: sink}
+	c := &connection{conn: conn, session: session, sink: sink, awaitResume: awaitResume}
+	id := session.ID()
+	if awaitResume {
+		log.Printf("server: connection %x awaiting resume request", id[:4])
+	}
+	if ds, ok := sink.(*DesktopSink); ok {
+		if desktop := ds.Desktop(); desktop != nil {
+			if awaitResume {
+				c.focusAttach = func() {
+					desktop.RegisterFocusListener(c)
+					c.unregisterFocus = func() { desktop.UnregisterFocusListener(c) }
+				}
+			} else {
+				desktop.RegisterFocusListener(c)
+				c.unregisterFocus = func() { desktop.UnregisterFocusListener(c) }
+			}
+		}
+	}
+	return c
 }
 
 func (c *connection) serve() error {
+	if c.unregisterFocus != nil {
+		defer c.unregisterFocus()
+	}
 	defer c.session.MarkSnapshot(time.Now()) // placeholder for future persistence triggers
 	for {
 		if err := c.sendPending(); err != nil {
@@ -67,7 +94,7 @@ func (c *connection) serve() error {
 				SessionID: c.session.ID(),
 				Sequence:  c.lastSent,
 			}
-			if err := protocol.WriteMessage(c.conn, pongHeader, pongPayload); err != nil {
+			if err := c.writeMessage(pongHeader, pongPayload); err != nil {
 				return err
 			}
 		case protocol.MsgKeyEvent:
@@ -129,12 +156,21 @@ func (c *connection) serve() error {
 				return err
 			}
 			c.lastAcked = request.LastSequence
+			c.awaitResume = false
+			if c.focusAttach != nil {
+				c.focusAttach()
+				c.focusAttach = nil
+			}
 			if provider, ok := c.sink.(SnapshotProvider); ok {
 				snapshot, err := provider.Snapshot()
-				if err == nil {
-					if payload, err := protocol.EncodeTreeSnapshot(snapshot); err == nil {
+				if err != nil {
+					log.Printf("server: resume snapshot error: %v", err)
+				} else {
+					if payload, err := protocol.EncodeTreeSnapshot(snapshot); err != nil {
+						log.Printf("server: encode snapshot error: %v", err)
+					} else {
 						header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
-						if err := protocol.WriteMessage(c.conn, header, payload); err != nil {
+						if err := c.writeMessage(header, payload); err != nil {
 							return err
 						}
 					}
@@ -147,6 +183,9 @@ func (c *connection) serve() error {
 }
 
 func (c *connection) sendPending() error {
+	if c.awaitResume {
+		return nil
+	}
 	pending := c.session.Pending(c.lastAcked)
 	for _, diff := range pending {
 		if diff.Sequence <= c.lastSent {
@@ -155,7 +194,7 @@ func (c *connection) sendPending() error {
 		header := diff.Message
 		header.Sequence = diff.Sequence
 		header.SessionID = c.session.ID()
-		if err := protocol.WriteMessage(c.conn, header, diff.Payload); err != nil {
+		if err := c.writeMessage(header, diff.Payload); err != nil {
 			return err
 		}
 		c.lastSent = diff.Sequence
@@ -170,6 +209,12 @@ func (c *connection) writeControlMessage(msgType protocol.MessageType, payload [
 		Flags:     protocol.FlagChecksum,
 		SessionID: c.session.ID(),
 	}
+	return c.writeMessage(header, payload)
+}
+
+func (c *connection) writeMessage(header protocol.Header, payload []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return protocol.WriteMessage(c.conn, header, payload)
 }
 
@@ -180,4 +225,14 @@ func (c *connection) requestClipboardData(mime string) []byte {
 		}
 	}
 	return nil
+}
+
+func (c *connection) PaneFocused(paneID [16]byte) {
+	payload, err := protocol.EncodePaneFocus(protocol.PaneFocus{PaneID: paneID})
+	if err != nil {
+		return
+	}
+	if err := c.writeControlMessage(protocol.MsgPaneFocus, payload); err != nil {
+		// Ignore errors when the connection is closing.
+	}
 }

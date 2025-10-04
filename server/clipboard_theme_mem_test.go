@@ -61,7 +61,7 @@ func TestClipboardAndThemeRoundTrip(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		defer serverConn.Close()
-		sess, err := handleHandshake(serverConn, mgr)
+		sess, resuming, err := handleHandshake(serverConn, mgr)
 		if err != nil {
 			errCh <- err
 			return
@@ -71,7 +71,7 @@ func TestClipboardAndThemeRoundTrip(t *testing.T) {
 		_ = pub.Publish()
 		srv := &Server{manager: mgr, sink: sink, desktopSink: sink}
 		srv.sendSnapshot(serverConn, sess)
-		errCh <- newConnection(serverConn, sess, sink).serve()
+		errCh <- newConnection(serverConn, sess, sink, resuming).serve()
 	}()
 
 	// initial handshake
@@ -100,10 +100,10 @@ func TestClipboardAndThemeRoundTrip(t *testing.T) {
 		t.Fatalf("decode connect accept: %v", err)
 	}
 	sessionID := accept.SessionID
-	if _, _, err := protocol.ReadMessage(clientConn); err != nil {
+	if _, _, err := readMessageSkippingFocus(clientConn); err != nil {
 		t.Fatalf("read snapshot: %v", err)
 	}
-	hdr, payload, err = protocol.ReadMessage(clientConn)
+	hdr, payload, err = readMessageSkippingFocus(clientConn)
 	if err != nil {
 		t.Fatalf("read delta: %v", err)
 	}

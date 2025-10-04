@@ -15,9 +15,14 @@ func TestHandleHandshakeCreatesSession(t *testing.T) {
 	done := make(chan *Session, 1)
 	go func() {
 		defer srv.Close()
-		session, err := handleHandshake(srv, mgr)
+		session, resuming, err := handleHandshake(srv, mgr)
 		if err != nil {
 			t.Errorf("handshake failed: %v", err)
+			done <- nil
+			return
+		}
+		if resuming {
+			t.Errorf("expected new session, got resume flag")
 			done <- nil
 			return
 		}

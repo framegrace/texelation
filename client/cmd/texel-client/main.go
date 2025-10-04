@@ -20,6 +20,8 @@ type uiState struct {
 	hasClipboard bool
 	theme        protocol.ThemeAck
 	hasTheme     bool
+	focus        protocol.PaneFocus
+	hasFocus     bool
 }
 
 func main() {
@@ -177,6 +179,14 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		}
 		state.theme = ack
 		state.hasTheme = true
+	case protocol.MsgPaneFocus:
+		focus, err := protocol.DecodePaneFocus(payload)
+		if err != nil {
+			log.Printf("decode pane focus failed: %v", err)
+			return
+		}
+		state.focus = focus
+		state.hasFocus = true
 	}
 }
 
@@ -211,14 +221,23 @@ func render(state *uiState, screen tcell.Screen) {
 		}
 	}
 	width, height := screen.Size()
-	statusY := height - 2
-	if state.hasClipboard && statusY >= 0 {
-		text := fmt.Sprintf("Clipboard [%s]: %s", state.clipboard.MimeType, truncateForStatus(string(state.clipboard.Data), width-len(state.clipboard.MimeType)-14))
-		drawClippedText(screen, 0, statusY, width, text, tcell.StyleDefault)
+	var statusLines []string
+	if state.hasFocus {
+		statusLines = append(statusLines, fmt.Sprintf("Focus: %s", formatPaneID(state.focus.PaneID)))
 	}
-	if state.hasTheme && statusY+1 < height {
-		text := fmt.Sprintf("Theme %s.%s = %s", state.theme.Section, state.theme.Key, state.theme.Value)
-		drawClippedText(screen, 0, statusY+1, width, truncateForStatus(text, width), tcell.StyleDefault)
+	if state.hasClipboard {
+		statusLines = append(statusLines, fmt.Sprintf("Clipboard [%s]: %s", state.clipboard.MimeType, truncateForStatus(string(state.clipboard.Data), width-len(state.clipboard.MimeType)-14)))
+	}
+	if state.hasTheme {
+		statusLines = append(statusLines, fmt.Sprintf("Theme %s.%s = %s", state.theme.Section, state.theme.Key, state.theme.Value))
+	}
+	startY := height - len(statusLines)
+	for i, text := range statusLines {
+		y := startY + i
+		if y < 0 {
+			continue
+		}
+		drawClippedText(screen, 0, y, width, truncateForStatus(text, width), tcell.StyleDefault)
 	}
 	screen.Show()
 }
@@ -252,6 +271,10 @@ func truncateForStatus(text string, max int) string {
 		return string(runes[:max])
 	}
 	return string(runes[:max-3]) + "..."
+}
+
+func formatPaneID(id [16]byte) string {
+	return fmt.Sprintf("%x", id[:4])
 }
 
 func isNetworkClosed(err error) bool {

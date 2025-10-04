@@ -156,35 +156,35 @@ func TestThemeUpdateRoundTrip(t *testing.T) {
 }
 
 func TestThemeAckRoundTrip(t *testing.T) {
-    ack := ThemeAck{Section: "pane", Key: "bg", Value: "#000000"}
-    payload, err := EncodeThemeAck(ack)
-    if err != nil {
-        t.Fatalf("encode failed: %v", err)
-    }
-    decoded, err := DecodeThemeAck(payload)
-    if err != nil {
-        t.Fatalf("decode failed: %v", err)
-    }
-    if decoded != ack {
-        t.Fatalf("mismatch: %#v vs %#v", decoded, ack)
-    }
+	ack := ThemeAck{Section: "pane", Key: "bg", Value: "#000000"}
+	payload, err := EncodeThemeAck(ack)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeThemeAck(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded != ack {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, ack)
+	}
 }
 
 func TestPaneFocusRoundTrip(t *testing.T) {
-    var id [16]byte
-    copy(id[:], []byte("pane-focus-demo"))
-    focus := PaneFocus{PaneID: id}
-    payload, err := EncodePaneFocus(focus)
-    if err != nil {
-        t.Fatalf("encode failed: %v", err)
-    }
-    decoded, err := DecodePaneFocus(payload)
-    if err != nil {
-        t.Fatalf("decode failed: %v", err)
-    }
-    if decoded != focus {
-        t.Fatalf("mismatch: %#v vs %#v", decoded, focus)
-    }
+	var id [16]byte
+	copy(id[:], []byte("pane-focus-demo"))
+	focus := PaneFocus{PaneID: id}
+	payload, err := EncodePaneFocus(focus)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodePaneFocus(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded != focus {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, focus)
+	}
 }
 
 func TestTreeSnapshotRoundTrip(t *testing.T) {
@@ -192,6 +192,7 @@ func TestTreeSnapshotRoundTrip(t *testing.T) {
 		Panes: []PaneSnapshot{
 			{PaneID: [16]byte{1}, Revision: 1, Title: "pane", Rows: []string{"hello", "world"}, X: 5, Y: 6, Width: 80, Height: 24},
 		},
+		Root: TreeNodeSnapshot{PaneIndex: 0, Split: SplitNone},
 	}
 	payload, err := EncodeTreeSnapshot(snapshot)
 	if err != nil {
@@ -203,5 +204,8 @@ func TestTreeSnapshotRoundTrip(t *testing.T) {
 	}
 	if len(decoded.Panes) != 1 || decoded.Panes[0].Title != "pane" || decoded.Panes[0].Rows[1] != "world" || decoded.Panes[0].X != 5 {
 		t.Fatalf("unexpected snapshot: %#v", decoded)
+	}
+	if decoded.Root.PaneIndex != 0 || decoded.Root.Split != SplitNone {
+		t.Fatalf("unexpected root node: %#v", decoded.Root)
 	}
 }

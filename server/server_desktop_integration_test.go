@@ -63,7 +63,7 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 	sessionCh := make(chan *Session, 1)
 	go func() {
 		defer srvConn.Close()
-		session, err := handleHandshake(srvConn, mgr)
+		session, resuming, err := handleHandshake(srvConn, mgr)
 		if err != nil {
 			errCh <- err
 			return
@@ -81,7 +81,7 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 		}
 		_ = publisher.Publish()
 
-		conn := newConnection(srvConn, session, sink)
+		conn := newConnection(srvConn, session, sink, resuming)
 		errCh <- conn.serve()
 	}()
 
@@ -118,7 +118,7 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 
 	session := <-sessionCh
 
-	hdr, payload, err = protocol.ReadMessage(srvClient)
+	hdr, payload, err = readMessageSkippingFocus(srvClient)
 	if err != nil {
 		t.Fatalf("read tree snapshot: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 		t.Fatalf("decode snapshot: %v", err)
 	}
 
-	hdr, payload, err = protocol.ReadMessage(srvClient)
+	hdr, payload, err = readMessageSkippingFocus(srvClient)
 	if err != nil {
 		t.Fatalf("read initial delta: %v", err)
 	}

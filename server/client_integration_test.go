@@ -35,7 +35,7 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 	firstErr := make(chan error, 1)
 	go func() {
 		defer firstServer.Close()
-		session, err := handleHandshake(firstServer, mgr)
+		session, resuming, err := handleHandshake(firstServer, mgr)
 		if err != nil {
 			firstErr <- err
 			return
@@ -54,7 +54,7 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 			firstErr <- err
 			return
 		}
-		conn := newConnection(firstServer, session, sink)
+		conn := newConnection(firstServer, session, sink, resuming)
 		firstErr <- conn.serve()
 	}()
 
@@ -63,6 +63,7 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 		t.Fatalf("write hello failed: %v", err)
 	}
 
+	t.Log("client: waiting for welcome")
 	hdr, payload, err := protocol.ReadMessage(firstClient)
 	if err != nil {
 		t.Fatalf("read welcome failed: %v", err)
@@ -76,7 +77,8 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 		t.Fatalf("write connect failed: %v", err)
 	}
 
-	hdr, payload, err = protocol.ReadMessage(firstClient)
+	t.Log("client: waiting for connect accept")
+	hdr, payload, err = readMessageSkippingFocus(firstClient)
 	if err != nil {
 		t.Fatalf("read connect accept failed: %v", err)
 	}
@@ -88,7 +90,8 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 		t.Fatalf("decode connect accept failed: %v", err)
 	}
 
-	hdr, payload, err = protocol.ReadMessage(firstClient)
+	t.Log("client: waiting for snapshot")
+	hdr, payload, err = readMessageSkippingFocus(firstClient)
 	if err != nil {
 		t.Fatalf("read snapshot failed: %v", err)
 	}
@@ -99,7 +102,8 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 		t.Fatalf("decode tree snapshot failed: %v", err)
 	}
 
-	hdr, payload, err = protocol.ReadMessage(firstClient)
+	t.Log("client: waiting for buffer delta")
+	hdr, payload, err = readMessageSkippingFocus(firstClient)
 	if err != nil {
 		t.Fatalf("read buffer delta failed: %v", err)
 	}
@@ -116,6 +120,7 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 		t.Fatalf("write ack failed: %v", err)
 	}
 
+	t.Log("client: closing first session")
 	firstClient.Close()
 	<-firstErr
 
@@ -125,22 +130,24 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 	resumeErr := make(chan error, 1)
 	go func() {
 		defer resumeServer.Close()
-		session, err := handleHandshake(resumeServer, mgr)
+		session, resuming, err := handleHandshake(resumeServer, mgr)
 		if err != nil {
 			resumeErr <- err
 			return
 		}
 		publisher := NewDesktopPublisher(desktop, session)
 		sink.SetPublisher(publisher)
-		conn := newConnection(resumeServer, session, sink)
+		conn := newConnection(resumeServer, session, sink, resuming)
 		resumeErr <- conn.serve()
 	}()
 
+	t.Log("client: sending resume hello")
 	if err := protocol.WriteMessage(resumeClient, protocol.Header{Version: protocol.Version, Type: protocol.MsgHello, Flags: protocol.FlagChecksum}, helloPayload); err != nil {
 		t.Fatalf("write resume hello failed: %v", err)
 	}
 
-	hdr, payload, err = protocol.ReadMessage(resumeClient)
+	t.Log("client: waiting for resume welcome")
+	hdr, payload, err = readMessageSkippingFocus(resumeClient)
 	if err != nil {
 		t.Fatalf("read resume welcome failed: %v", err)
 	}
@@ -153,16 +160,19 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 		t.Fatalf("write resume connect failed: %v", err)
 	}
 
-	if _, _, err = protocol.ReadMessage(resumeClient); err != nil {
+	t.Log("client: waiting for resume accept")
+	if _, _, err = readMessageSkippingFocus(resumeClient); err != nil {
 		t.Fatalf("read resume accept failed: %v", err)
 	}
 
 	resumePayload, _ := protocol.EncodeResumeRequest(protocol.ResumeRequest{SessionID: accept.SessionID, LastSequence: lastSequence})
+	t.Log("client: sending resume request")
 	if err := protocol.WriteMessage(resumeClient, protocol.Header{Version: protocol.Version, Type: protocol.MsgResumeRequest, Flags: protocol.FlagChecksum, SessionID: accept.SessionID}, resumePayload); err != nil {
 		t.Fatalf("write resume request failed: %v", err)
 	}
 
-	hdr, payload, err = protocol.ReadMessage(resumeClient)
+	t.Log("client: waiting for resume snapshot")
+	hdr, payload, err = readMessageSkippingFocus(resumeClient)
 	if err != nil {
 		t.Fatalf("read resume snapshot failed: %v", err)
 	}

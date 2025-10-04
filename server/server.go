@@ -24,6 +24,7 @@ type Server struct {
 	snapshotInterval time.Duration
 	snapshotQuit     chan struct{}
 	desktopSink      *DesktopSink
+	focusMetrics     *FocusMetrics
 	bootSnapshotMu   sync.RWMutex
 	bootSnapshot     *protocol.TreeSnapshot
 }
@@ -42,6 +43,24 @@ func (s *Server) SetEventSink(sink EventSink) {
 	s.sink = sink
 	if ds, ok := sink.(*DesktopSink); ok {
 		s.desktopSink = ds
+		if s.focusMetrics != nil {
+			if desktop := ds.Desktop(); desktop != nil {
+				s.focusMetrics.Attach(desktop)
+			}
+		}
+		s.applyBootSnapshot()
+	}
+}
+
+func (s *Server) SetFocusMetrics(metrics *FocusMetrics) {
+	s.focusMetrics = metrics
+	if metrics == nil {
+		return
+	}
+	if s.desktopSink != nil {
+		if desktop := s.desktopSink.Desktop(); desktop != nil {
+			metrics.Attach(desktop)
+		}
 	}
 }
 
@@ -89,7 +108,7 @@ func (s *Server) acceptLoop() {
 		go func(c net.Conn) {
 			defer s.wg.Done()
 			defer c.Close()
-			session, err := handleHandshake(c, s.manager)
+			session, resuming, err := handleHandshake(c, s.manager)
 			if err != nil {
 				return
 			}
@@ -104,7 +123,7 @@ func (s *Server) acceptLoop() {
 				_ = publisher.Publish()
 			}
 			s.sendSnapshot(c, session)
-			conn := newConnection(c, session, s.sink)
+			conn := newConnection(c, session, s.sink, resuming)
 			_ = conn.serve()
 		}(conn)
 	}
@@ -161,11 +180,13 @@ func (s *Server) loadBootSnapshot() {
 		return
 	}
 	s.setBootSnapshot(snapshot)
+	s.applyBootSnapshot()
 }
 
 func (s *Server) setBootSnapshot(snapshot protocol.TreeSnapshot) {
 	copySnapshot := protocol.TreeSnapshot{Panes: make([]protocol.PaneSnapshot, len(snapshot.Panes))}
 	copy(copySnapshot.Panes, snapshot.Panes)
+	copySnapshot.Root = snapshot.Root
 	s.bootSnapshotMu.Lock()
 	s.bootSnapshot = &copySnapshot
 	s.bootSnapshotMu.Unlock()
@@ -179,7 +200,26 @@ func (s *Server) bootSnapshotCopy() (protocol.TreeSnapshot, bool) {
 	}
 	copySnapshot := protocol.TreeSnapshot{Panes: make([]protocol.PaneSnapshot, len(s.bootSnapshot.Panes))}
 	copy(copySnapshot.Panes, s.bootSnapshot.Panes)
+	copySnapshot.Root = s.bootSnapshot.Root
 	return copySnapshot, true
+}
+
+func (s *Server) applyBootSnapshot() {
+	if s.desktopSink == nil {
+		return
+	}
+	snapshot, ok := s.bootSnapshotCopy()
+	if !ok {
+		return
+	}
+	desktop := s.desktopSink.Desktop()
+	if desktop == nil {
+		return
+	}
+	capture := protocolToTreeCapture(snapshot)
+	if err := desktop.ApplyTreeCapture(capture); err != nil {
+		log.Printf("apply boot snapshot failed: %v", err)
+	}
 }
 
 func (s *Server) startSnapshotLoop() {
@@ -218,38 +258,14 @@ func (s *Server) persistSnapshot() {
 	if desktop == nil {
 		return
 	}
-	panes := desktop.SnapshotBuffers()
-	if len(panes) == 0 {
+	capture := desktop.CaptureTree()
+	if len(capture.Panes) == 0 {
 		return
 	}
-	if err := s.snapshotStore.Save(panes); err != nil {
+	if err := s.snapshotStore.Save(capture); err != nil {
 		log.Printf("snapshot save failed: %v", err)
 	}
-	protoPanes := make([]protocol.PaneSnapshot, len(panes))
-	for i, pane := range panes {
-		rows := make([]string, len(pane.Buffer))
-		for y, row := range pane.Buffer {
-			runes := make([]rune, len(row))
-			for x, cell := range row {
-				if cell.Ch == 0 {
-					runes[x] = ' '
-				} else {
-					runes[x] = cell.Ch
-				}
-			}
-			rows[y] = string(runes)
-		}
-		protoPanes[i] = protocol.PaneSnapshot{
-			PaneID: pane.ID,
-			Title:  pane.Title,
-			Rows:   rows,
-			X:      int32(pane.Rect.X),
-			Y:      int32(pane.Rect.Y),
-			Width:  int32(pane.Rect.Width),
-			Height: int32(pane.Rect.Height),
-		}
-	}
-	s.setBootSnapshot(protocol.TreeSnapshot{Panes: protoPanes})
+	s.setBootSnapshot(treeCaptureToProtocol(capture))
 }
 
 func (s *Server) sendSnapshot(conn net.Conn, session *Session) {

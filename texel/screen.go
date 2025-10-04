@@ -157,6 +157,13 @@ func (s *Screen) Unsubscribe(listener Listener) {
 	s.dispatcher.Unsubscribe(listener)
 }
 
+func (s *Screen) notifyFocus() {
+	if s.desktop == nil || s.tree == nil {
+		return
+	}
+	s.desktop.notifyFocusNode(s.tree.ActiveLeaf)
+}
+
 func (s *Screen) AddApp(app App) {
 	log.Printf("AddApp: Adding app '%s'", app.GetTitle())
 
@@ -167,10 +174,7 @@ func (s *Screen) AddApp(app App) {
 	// Set initial active state AFTER attaching the app
 	log.Printf("AddApp: Setting pane '%s' as active", p.getTitle())
 	p.SetActive(true)
-
-    if listener, ok := s.desktop.(FocusBroadcaster); ok {
-        listener.BroadcastFocus(s.tree.ActiveLeaf)
-    }
+	s.notifyFocus()
 	s.desktop.broadcastStateUpdate()
 }
 
@@ -234,6 +238,7 @@ func (s *Screen) moveActivePane(d Direction) {
 
 	s.Broadcast(Event{Type: EventPaneActiveChanged, Payload: s.tree.ActiveLeaf})
 	s.desktop.broadcastStateUpdate()
+	s.notifyFocus()
 }
 
 func (s *Screen) handleEvent(ev *tcell.EventKey) {
@@ -444,6 +449,7 @@ func (s *Screen) actuallyClosePane(closedPaneNode *Node, parent *Node, closingIn
 
 	s.recalculateLayout()
 	s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
+	s.notifyFocus()
 }
 
 func (s *Screen) PerformSplit(splitDir SplitType) {
@@ -501,6 +507,7 @@ func (s *Screen) PerformSplit(splitDir SplitType) {
 	// The new pane should be active
 	log.Printf("PerformSplit: Activating new pane '%s'", newPane.getTitle())
 	newPane.SetActive(true)
+	s.notifyFocus()
 
 	// Start appropriate animation based on split type
 	if addToExistingGroup {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"math"
 )
 
 var (
@@ -117,14 +118,14 @@ type ThemeUpdate struct {
 
 // ThemeAck confirms that a theme update has been applied server-side.
 type ThemeAck struct {
-    Section string
-    Key     string
-    Value   string
+	Section string
+	Key     string
+	Value   string
 }
 
 // PaneFocus identifies the pane that is currently active/focused.
 type PaneFocus struct {
-    PaneID [16]byte
+	PaneID [16]byte
 }
 
 // PaneSnapshot describes the full buffer content for a single pane.
@@ -139,9 +140,27 @@ type PaneSnapshot struct {
 	Height   int32
 }
 
-// TreeSnapshot aggregates all pane snapshots.
+// SplitKind describes how an internal node divides space among children.
+type SplitKind uint8
+
+const (
+	SplitNone SplitKind = iota
+	SplitHorizontal
+	SplitVertical
+)
+
+// TreeNodeSnapshot captures either a leaf pane index or an internal split node.
+type TreeNodeSnapshot struct {
+	PaneIndex   int32
+	Split       SplitKind
+	SplitRatios []float32
+	Children    []TreeNodeSnapshot
+}
+
+// TreeSnapshot aggregates pane snapshots along with the layout tree so peers can rebuild geometry.
 type TreeSnapshot struct {
 	Panes []PaneSnapshot
+	Root  TreeNodeSnapshot
 }
 
 func encodeString(buf *bytes.Buffer, value string) error {
@@ -565,25 +584,25 @@ func EncodeThemeAck(msg ThemeAck) ([]byte, error) {
 }
 
 func DecodeThemeAck(b []byte) (ThemeAck, error) {
-    update, err := DecodeThemeUpdate(b)
-    return ThemeAck(update), err
+	update, err := DecodeThemeUpdate(b)
+	return ThemeAck(update), err
 }
 
 func EncodePaneFocus(focus PaneFocus) ([]byte, error) {
-    buf := bytes.NewBuffer(nil)
-    if err := binary.Write(buf, binary.LittleEndian, focus.PaneID); err != nil {
-        return nil, err
-    }
-    return buf.Bytes(), nil
+	buf := bytes.NewBuffer(nil)
+	if err := binary.Write(buf, binary.LittleEndian, focus.PaneID); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func DecodePaneFocus(b []byte) (PaneFocus, error) {
-    var focus PaneFocus
-    if len(b) < len(focus.PaneID) {
-        return focus, errPayloadShort
-    }
-    copy(focus.PaneID[:], b[:len(focus.PaneID)])
-    return focus, nil
+	var focus PaneFocus
+	if len(b) < len(focus.PaneID) {
+		return focus, errPayloadShort
+	}
+	copy(focus.PaneID[:], b[:len(focus.PaneID)])
+	return focus, nil
 }
 
 // EncodeTreeSnapshot serialises the tree snapshot for transport.
@@ -625,6 +644,9 @@ func EncodeTreeSnapshot(snapshot TreeSnapshot) ([]byte, error) {
 				return nil, err
 			}
 		}
+	}
+	if err := encodeTreeNode(buf, snapshot.Root); err != nil {
+		return nil, err
 	}
 	return buf.Bytes(), nil
 }
@@ -672,7 +694,76 @@ func DecodeTreeSnapshot(b []byte) (TreeSnapshot, error) {
 		snapshot.Panes[i] = pane
 		b = rest
 	}
+	node, remaining, err := decodeTreeNode(b)
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.Root = node
+	if len(remaining) != 0 {
+		return snapshot, errPayloadShort
+	}
 	return snapshot, nil
+}
+
+func encodeTreeNode(buf *bytes.Buffer, node TreeNodeSnapshot) error {
+	if err := binary.Write(buf, binary.LittleEndian, node.PaneIndex); err != nil {
+		return err
+	}
+	if err := buf.WriteByte(byte(node.Split)); err != nil {
+		return err
+	}
+	childCount := uint16(len(node.Children))
+	if err := binary.Write(buf, binary.LittleEndian, childCount); err != nil {
+		return err
+	}
+	if childCount > 0 {
+		if len(node.SplitRatios) != int(childCount) {
+			return errPayloadShort
+		}
+		for _, ratio := range node.SplitRatios {
+			if err := binary.Write(buf, binary.LittleEndian, ratio); err != nil {
+				return err
+			}
+		}
+		for _, child := range node.Children {
+			if err := encodeTreeNode(buf, child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decodeTreeNode(b []byte) (TreeNodeSnapshot, []byte, error) {
+	var node TreeNodeSnapshot
+	if len(b) < 7 {
+		return node, nil, errPayloadShort
+	}
+	node.PaneIndex = int32(binary.LittleEndian.Uint32(b[:4]))
+	node.Split = SplitKind(b[4])
+	childCount := binary.LittleEndian.Uint16(b[5:7])
+	b = b[7:]
+	if childCount > 0 {
+		req := int(childCount) * 4
+		if len(b) < req {
+			return node, nil, errPayloadShort
+		}
+		node.SplitRatios = make([]float32, childCount)
+		for i := 0; i < int(childCount); i++ {
+			node.SplitRatios[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4 : (i+1)*4]))
+		}
+		b = b[req:]
+		node.Children = make([]TreeNodeSnapshot, 0, childCount)
+		for i := 0; i < int(childCount); i++ {
+			child, rest, err := decodeTreeNode(b)
+			if err != nil {
+				return node, nil, err
+			}
+			node.Children = append(node.Children, child)
+			b = rest
+		}
+	}
+	return node, b, nil
 }
 
 func EncodeKeyEvent(ev KeyEvent) ([]byte, error) {

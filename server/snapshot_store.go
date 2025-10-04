@@ -2,8 +2,10 @@ package server
 
 import (
 	"crypto/sha1"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"hash"
 	"os"
 	"path/filepath"
 	"sync"
@@ -24,6 +26,15 @@ type StoredSnapshot struct {
 	Timestamp time.Time    `json:"timestamp"`
 	Hash      string       `json:"hash"`
 	Panes     []StoredPane `json:"panes"`
+	Tree      StoredNode   `json:"tree"`
+}
+
+// StoredNode captures the persisted tree layout.
+type StoredNode struct {
+	PaneIndex int          `json:"pane_index"`
+	Split     string       `json:"split"`
+	Ratios    []float64    `json:"ratios,omitempty"`
+	Children  []StoredNode `json:"children,omitempty"`
 }
 
 // StoredPane represents a single pane's textual content.
@@ -42,18 +53,18 @@ func NewSnapshotStore(path string) *SnapshotStore {
 }
 
 // Save writes the current snapshots to disk, computing a SHA-1 hash for integrity.
-func (s *SnapshotStore) Save(panes []texel.PaneSnapshot) error {
+func (s *SnapshotStore) Save(capture texel.TreeCapture) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	stored := StoredSnapshot{
 		Timestamp: time.Now().UTC(),
-		Panes:     make([]StoredPane, len(panes)),
+		Panes:     make([]StoredPane, len(capture.Panes)),
 	}
 
 	hasher := sha1.New()
 
-	for i, pane := range panes {
+	for i, pane := range capture.Panes {
 		id := hex.EncodeToString(pane.ID[:])
 		rows := make([]string, len(pane.Buffer))
 		for y, row := range pane.Buffer {
@@ -82,6 +93,8 @@ func (s *SnapshotStore) Save(panes []texel.PaneSnapshot) error {
 			Height: pane.Rect.Height,
 		}
 	}
+	hashTreeCapture(capture.Root, hasher)
+	stored.Tree = storeTreeNode(capture.Root)
 
 	stored.Hash = hex.EncodeToString(hasher.Sum(nil))
 
@@ -119,7 +132,9 @@ func (s StoredSnapshot) ToTreeSnapshot() protocol.TreeSnapshot {
 	for i, pane := range s.Panes {
 		panes[i] = pane.toProtocolPane()
 	}
-	return protocol.TreeSnapshot{Panes: panes}
+	snapshot := protocol.TreeSnapshot{Panes: panes}
+	snapshot.Root = s.Tree.toProtocolNode()
+	return snapshot
 }
 
 func (sp StoredPane) ToPaneSnapshot() texel.PaneSnapshot {
@@ -157,4 +172,68 @@ func (sp StoredPane) toProtocolPane() protocol.PaneSnapshot {
 		Width:  int32(sp.Width),
 		Height: int32(sp.Height),
 	}
+}
+
+func hashTreeCapture(node *texel.TreeNodeCapture, hasher hash.Hash) {
+	if node == nil {
+		hasher.Write([]byte{0xFF})
+		return
+	}
+	_ = binary.Write(hasher, binary.LittleEndian, int32(node.PaneIndex))
+	hasher.Write([]byte{byte(node.Split)})
+	childCount := uint16(len(node.Children))
+	_ = binary.Write(hasher, binary.LittleEndian, childCount)
+	for _, ratio := range node.SplitRatios {
+		_ = binary.Write(hasher, binary.LittleEndian, ratio)
+	}
+	for _, child := range node.Children {
+		hashTreeCapture(child, hasher)
+	}
+}
+
+func storeTreeNode(node *texel.TreeNodeCapture) StoredNode {
+	if node == nil {
+		return StoredNode{PaneIndex: -1, Split: "none"}
+	}
+	stored := StoredNode{PaneIndex: node.PaneIndex}
+	if len(node.Children) == 0 {
+		stored.Split = "none"
+		return stored
+	}
+	switch node.Split {
+	case texel.Vertical:
+		stored.Split = "vertical"
+	case texel.Horizontal:
+		stored.Split = "horizontal"
+	default:
+		stored.Split = "none"
+	}
+	stored.Ratios = make([]float64, len(node.SplitRatios))
+	copy(stored.Ratios, node.SplitRatios)
+	stored.Children = make([]StoredNode, len(node.Children))
+	for i, child := range node.Children {
+		stored.Children[i] = storeTreeNode(child)
+	}
+	return stored
+}
+
+func (sn StoredNode) toProtocolNode() protocol.TreeNodeSnapshot {
+	node := protocol.TreeNodeSnapshot{PaneIndex: int32(sn.PaneIndex)}
+	switch sn.Split {
+	case "vertical":
+		node.Split = protocol.SplitVertical
+	case "horizontal":
+		node.Split = protocol.SplitHorizontal
+	default:
+		node.Split = protocol.SplitNone
+	}
+	node.SplitRatios = make([]float32, len(sn.Ratios))
+	for i, ratio := range sn.Ratios {
+		node.SplitRatios[i] = float32(ratio)
+	}
+	node.Children = make([]protocol.TreeNodeSnapshot, len(sn.Children))
+	for i, child := range sn.Children {
+		node.Children[i] = child.toProtocolNode()
+	}
+	return node
 }

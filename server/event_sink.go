@@ -9,7 +9,7 @@ type EventSink interface {
 	HandleClipboardSet(session *Session, event protocol.ClipboardSet)
 	HandleClipboardGet(session *Session, event protocol.ClipboardGet) []byte
 	HandleThemeUpdate(session *Session, event protocol.ThemeUpdate)
-    HandlePaneFocus(session *Session, focus protocol.PaneFocus)
+	HandlePaneFocus(session *Session, focus protocol.PaneFocus)
 }
 
 // SnapshotProvider exposes a full tree snapshot for connected clients.

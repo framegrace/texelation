@@ -7,12 +7,13 @@
 
 ## Current Assessment
 - Keyboard/mouse events travel end-to-end.
-- Clipboard/theme now round trip with explicit acknowledgements; memconn integration test covers the flow.
-- Remaining work: focus/active-pane signalling for multi-client readiness and structured telemetry for clipboard/theme metrics.
+- Clipboard/theme continue to round trip with explicit acknowledgements; memconn integration test covers the flow.
+- Focus/active-pane signalling now publishes `MsgPaneFocus` frames on connect and after resume; tests cover cold and resumed sessions.
+- Focus metrics hook provides lightweight logging/stats for downstream telemetry sinks.
 
 ## Next Steps
-1. Review focus/active pane change events to determine if additional protocol messages are needed before multi-client support.
-2. Wire theme/clipboard updates into structured logging once the metrics sink is defined.
+1. Fold focus metrics into the broader monitoring pipeline once the server logging stack solidifies.
+2. Carry the remaining telemetry work into Phase 7 alongside persistence/boot snapshot hardening.
 
 ---
-_Last updated: 2025-10-03_
+_Last updated: 2025-10-04_
