@@ -62,28 +62,28 @@ func (a *textApp) SetRefreshNotifier(ch chan<- bool) { a.notify = ch }
 func main() {
 	tcell.SetEncodingFallback(tcell.EncodingFallbackASCII)
 
-    socketPath := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
-    title := flag.String("title", "Texel Server", "Title for the main pane")
-    snapshotPath := flag.String("snapshot", "", "Optional path to persist pane snapshots")
-    cpuProfile := flag.String("pprof-cpu", "", "Write CPU profile to file")
-    memProfile := flag.String("pprof-mem", "", "Write heap profile to file on exit")
-    flag.Parse()
+	socketPath := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
+	title := flag.String("title", "Texel Server", "Title for the main pane")
+	snapshotPath := flag.String("snapshot", "", "Optional path to persist pane snapshots")
+	cpuProfile := flag.String("pprof-cpu", "", "Write CPU profile to file")
+	memProfile := flag.String("pprof-mem", "", "Write heap profile to file on exit")
+	flag.Parse()
 
-    if *cpuProfile != "" {
-        f, err := os.Create(*cpuProfile)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "failed to create CPU profile: %v\n", err)
-            os.Exit(1)
-        }
-        if err := pprof.StartCPUProfile(f); err != nil {
-            fmt.Fprintf(os.Stderr, "failed to start CPU profile: %v\n", err)
-            os.Exit(1)
-        }
-        defer func() {
-            pprof.StopCPUProfile()
-            _ = f.Close()
-        }()
-    }
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to start CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			_ = f.Close()
+		}()
+	}
 
 	manager := server.NewManager()
 
@@ -138,17 +138,17 @@ func main() {
 	_ = srv.Stop(ctx)
 	desktop.Close()
 
-    if *memProfile != "" {
-        f, err := os.Create(*memProfile)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "failed to create heap profile: %v\n", err)
-        } else {
-            if err := pprof.WriteHeapProfile(f); err != nil {
-                fmt.Fprintf(os.Stderr, "failed to write heap profile: %v\n", err)
-            }
-            _ = f.Close()
-        }
-    }
+	if *memProfile != "" {
+		f, err := os.Create(*memProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create heap profile: %v\n", err)
+		} else {
+			if err := pprof.WriteHeapProfile(f); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to write heap profile: %v\n", err)
+			}
+			_ = f.Close()
+		}
+	}
 
-    fmt.Println("Server stopped")
+	fmt.Println("Server stopped")
 }
