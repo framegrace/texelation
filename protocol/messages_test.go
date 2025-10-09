@@ -1,6 +1,9 @@
 package protocol
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestHelloRoundTrip(t *testing.T) {
 	var id [16]byte
@@ -213,8 +216,9 @@ func TestTreeSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+
 func BenchmarkEncodeBufferDelta(b *testing.B) {
-	delta := protocol.BufferDelta{
+	delta := BufferDelta{
 		PaneID: [16]byte{1, 2, 3, 4},
 		Revision: 42,
 		Styles: []protocol.StyleEntry{
@@ -223,14 +227,14 @@ func BenchmarkEncodeBufferDelta(b *testing.B) {
 		Rows: make([]protocol.RowDelta, 24),
 	}
 	for i := range delta.Rows {
-		delta.Rows[i] = protocol.RowDelta{
+		delta.Rows[i] = RowDelta{
 			Row:   uint16(i),
-			Spans: []protocol.CellSpan{{StartCol: 0, Text: strings.Repeat("A", 80), StyleIndex: 0}},
+			Spans: []CellSpan{{StartCol: 0, Text: strings.Repeat("A", 80), StyleIndex: 0}},
 		}
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := protocol.EncodeBufferDelta(delta); err != nil {
+		if _, err := EncodeBufferDelta(delta); err != nil {
 			b.Fatal(err)
 		}
 	}
