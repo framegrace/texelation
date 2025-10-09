@@ -130,14 +130,16 @@ type PaneFocus struct {
 
 // PaneSnapshot describes the full buffer content for a single pane.
 type PaneSnapshot struct {
-	PaneID   [16]byte
-	Revision uint32
-	Title    string
-	Rows     []string
-	X        int32
-	Y        int32
-	Width    int32
-	Height   int32
+	PaneID    [16]byte
+	Revision  uint32
+	Title     string
+	Rows      []string
+	X         int32
+	Y         int32
+	Width     int32
+	Height    int32
+	AppType   string
+	AppConfig string
 }
 
 // SplitKind describes how an internal node divides space among children.
@@ -644,6 +646,12 @@ func EncodeTreeSnapshot(snapshot TreeSnapshot) ([]byte, error) {
 				return nil, err
 			}
 		}
+		if err := encodeString(buf, pane.AppType); err != nil {
+			return nil, err
+		}
+		if err := encodeString(buf, pane.AppConfig); err != nil {
+			return nil, err
+		}
 	}
 	if err := encodeTreeNode(buf, snapshot.Root); err != nil {
 		return nil, err
@@ -691,8 +699,18 @@ func DecodeTreeSnapshot(b []byte) (TreeSnapshot, error) {
 			pane.Rows[r] = row
 			rest = remaining
 		}
+		appType, remaining, err := decodeString(rest)
+		if err != nil {
+			return snapshot, err
+		}
+		config, remaining, err := decodeString(remaining)
+		if err != nil {
+			return snapshot, err
+		}
+		pane.AppType = appType
+		pane.AppConfig = config
 		snapshot.Panes[i] = pane
-		b = rest
+		b = remaining
 	}
 	node, remaining, err := decodeTreeNode(b)
 	if err != nil {

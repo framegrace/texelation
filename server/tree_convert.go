@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+
 	"texelation/protocol"
 	"texelation/texel"
 )
@@ -21,14 +23,16 @@ func treeCaptureToProtocol(capture texel.TreeCapture) protocol.TreeSnapshot {
 			rows[y] = string(runes)
 		}
 		snapshot.Panes[i] = protocol.PaneSnapshot{
-			PaneID:   pane.ID,
-			Revision: 0,
-			Title:    pane.Title,
-			Rows:     rows,
-			X:        int32(pane.Rect.X),
-			Y:        int32(pane.Rect.Y),
-			Width:    int32(pane.Rect.Width),
-			Height:   int32(pane.Rect.Height),
+			PaneID:    pane.ID,
+			Revision:  0,
+			Title:     pane.Title,
+			Rows:      rows,
+			X:         int32(pane.Rect.X),
+			Y:         int32(pane.Rect.Y),
+			Width:     int32(pane.Rect.Width),
+			Height:    int32(pane.Rect.Height),
+			AppType:   pane.AppType,
+			AppConfig: encodeAppConfig(pane.AppConfig),
 		}
 	}
 	snapshot.Root = buildProtocolTreeNode(capture.Root)
@@ -47,10 +51,12 @@ func protocolToTreeCapture(snapshot protocol.TreeSnapshot) texel.TreeCapture {
 			}
 		}
 		capture.Panes[i] = texel.PaneSnapshot{
-			ID:     pane.PaneID,
-			Title:  pane.Title,
-			Buffer: buffer,
-			Rect:   texel.Rectangle{X: int(pane.X), Y: int(pane.Y), Width: int(pane.Width), Height: int(pane.Height)},
+			ID:        pane.PaneID,
+			Title:     pane.Title,
+			Buffer:    buffer,
+			Rect:      texel.Rectangle{X: int(pane.X), Y: int(pane.Y), Width: int(pane.Width), Height: int(pane.Height)},
+			AppType:   pane.AppType,
+			AppConfig: decodeAppConfig(pane.AppConfig),
 		}
 	}
 	capture.Root = protocolNodeToCapture(snapshot.Root)
@@ -103,6 +109,28 @@ func cloneProtocolTree(node protocol.TreeNodeSnapshot) protocol.TreeNodeSnapshot
 		clone.Children[i] = cloneProtocolTree(child)
 	}
 	return clone
+}
+
+func encodeAppConfig(cfg map[string]interface{}) string {
+	if cfg == nil {
+		return ""
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func decodeAppConfig(data string) map[string]interface{} {
+	if data == "" {
+		return nil
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+		return nil
+	}
+	return cfg
 }
 
 func buildProtocolTreeNode(node *texel.TreeNodeCapture) protocol.TreeNodeSnapshot {

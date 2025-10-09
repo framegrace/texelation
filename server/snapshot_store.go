@@ -39,13 +39,15 @@ type StoredNode struct {
 
 // StoredPane represents a single pane's textual content.
 type StoredPane struct {
-	ID     string   `json:"id"`
-	Title  string   `json:"title"`
-	Rows   []string `json:"rows"`
-	X      int      `json:"x"`
-	Y      int      `json:"y"`
-	Width  int      `json:"width"`
-	Height int      `json:"height"`
+	ID        string                 `json:"id"`
+	Title     string                 `json:"title"`
+	Rows      []string               `json:"rows"`
+	X         int                    `json:"x"`
+	Y         int                    `json:"y"`
+	Width     int                    `json:"width"`
+	Height    int                    `json:"height"`
+	AppType   string                 `json:"app_type,omitempty"`
+	AppConfig map[string]interface{} `json:"app_config,omitempty"`
 }
 
 func NewSnapshotStore(path string) *SnapshotStore {
@@ -84,13 +86,23 @@ func (s *SnapshotStore) Save(capture texel.TreeCapture) error {
 		hasher.Write([]byte(pane.Title))
 
 		stored.Panes[i] = StoredPane{
-			ID:     id,
-			Title:  pane.Title,
-			Rows:   rows,
-			X:      pane.Rect.X,
-			Y:      pane.Rect.Y,
-			Width:  pane.Rect.Width,
-			Height: pane.Rect.Height,
+			ID:        id,
+			Title:     pane.Title,
+			Rows:      rows,
+			X:         pane.Rect.X,
+			Y:         pane.Rect.Y,
+			Width:     pane.Rect.Width,
+			Height:    pane.Rect.Height,
+			AppType:   pane.AppType,
+			AppConfig: cloneAppConfig(pane.AppConfig),
+		}
+	}
+	for _, pane := range capture.Panes {
+		hasher.Write([]byte(pane.AppType))
+		if pane.AppConfig != nil {
+			if data, err := json.Marshal(pane.AppConfig); err == nil {
+				hasher.Write(data)
+			}
 		}
 	}
 	hashTreeCapture(capture.Root, hasher)
@@ -146,13 +158,21 @@ func (sp StoredPane) ToPaneSnapshot() texel.PaneSnapshot {
 
 	buffer := make([][]texel.Cell, len(sp.Rows))
 	for i, row := range sp.Rows {
-		buffer[i] = make([]texel.Cell, len([]rune(row)))
-		for j, ch := range []rune(row) {
+		runes := []rune(row)
+		buffer[i] = make([]texel.Cell, len(runes))
+		for j, ch := range runes {
 			buffer[i][j] = texel.Cell{Ch: ch}
 		}
 	}
 
-	return texel.PaneSnapshot{ID: id, Title: sp.Title, Buffer: buffer, Rect: texel.Rectangle{X: sp.X, Y: sp.Y, Width: sp.Width, Height: sp.Height}}
+	return texel.PaneSnapshot{
+		ID:        id,
+		Title:     sp.Title,
+		Buffer:    buffer,
+		Rect:      texel.Rectangle{X: sp.X, Y: sp.Y, Width: sp.Width, Height: sp.Height},
+		AppType:   sp.AppType,
+		AppConfig: cloneAppConfig(sp.AppConfig),
+	}
 }
 
 func (sp StoredPane) toProtocolPane() protocol.PaneSnapshot {
@@ -164,13 +184,15 @@ func (sp StoredPane) toProtocolPane() protocol.PaneSnapshot {
 	rows := make([]string, len(sp.Rows))
 	copy(rows, sp.Rows)
 	return protocol.PaneSnapshot{
-		PaneID: id,
-		Title:  sp.Title,
-		Rows:   rows,
-		X:      int32(sp.X),
-		Y:      int32(sp.Y),
-		Width:  int32(sp.Width),
-		Height: int32(sp.Height),
+		PaneID:    id,
+		Title:     sp.Title,
+		Rows:      rows,
+		X:         int32(sp.X),
+		Y:         int32(sp.Y),
+		Width:     int32(sp.Width),
+		Height:    int32(sp.Height),
+		AppType:   sp.AppType,
+		AppConfig: encodeStoredConfig(sp.AppConfig),
 	}
 }
 
@@ -189,6 +211,28 @@ func hashTreeCapture(node *texel.TreeNodeCapture, hasher hash.Hash) {
 	for _, child := range node.Children {
 		hashTreeCapture(child, hasher)
 	}
+}
+
+func cloneAppConfig(cfg map[string]interface{}) map[string]interface{} {
+	if cfg == nil {
+		return nil
+	}
+	clone := make(map[string]interface{}, len(cfg))
+	for k, v := range cfg {
+		clone[k] = v
+	}
+	return clone
+}
+
+func encodeStoredConfig(cfg map[string]interface{}) string {
+	if cfg == nil {
+		return ""
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func storeTreeNode(node *texel.TreeNodeCapture) StoredNode {

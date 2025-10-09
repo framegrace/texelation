@@ -190,7 +190,7 @@ func TestPaneFocusRoundTrip(t *testing.T) {
 func TestTreeSnapshotRoundTrip(t *testing.T) {
 	snapshot := TreeSnapshot{
 		Panes: []PaneSnapshot{
-			{PaneID: [16]byte{1}, Revision: 1, Title: "pane", Rows: []string{"hello", "world"}, X: 5, Y: 6, Width: 80, Height: 24},
+			{PaneID: [16]byte{1}, Revision: 1, Title: "pane", Rows: []string{"hello", "world"}, X: 5, Y: 6, Width: 80, Height: 24, AppType: "test", AppConfig: `{"msg":"hi"}`},
 		},
 		Root: TreeNodeSnapshot{PaneIndex: 0, Split: SplitNone},
 	}
@@ -204,6 +204,9 @@ func TestTreeSnapshotRoundTrip(t *testing.T) {
 	}
 	if len(decoded.Panes) != 1 || decoded.Panes[0].Title != "pane" || decoded.Panes[0].Rows[1] != "world" || decoded.Panes[0].X != 5 {
 		t.Fatalf("unexpected snapshot: %#v", decoded)
+	}
+	if decoded.Panes[0].AppType != "test" || decoded.Panes[0].AppConfig != `{"msg":"hi"}` {
+		t.Fatalf("unexpected app metadata: %#v", decoded.Panes[0])
 	}
 	if decoded.Root.PaneIndex != 0 || decoded.Root.Split != SplitNone {
 		t.Fatalf("unexpected root node: %#v", decoded.Root)

@@ -33,3 +33,11 @@ type App interface {
 	HandleKey(ev *tcell.EventKey)
 	SetRefreshNotifier(refreshChan chan<- bool)
 }
+
+// SnapshotProvider is implemented by apps that can describe how to restore themselves.
+type SnapshotProvider interface {
+	SnapshotMetadata() (appType string, config map[string]interface{})
+}
+
+// SnapshotFactory constructs an app instance from persisted metadata.
+type SnapshotFactory func(title string, config map[string]interface{}) App

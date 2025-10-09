@@ -71,6 +71,7 @@ type Desktop struct {
 	lastClipboardMime string
 	focusMu           sync.RWMutex
 	focusListeners    []DesktopFocusListener
+	snapshotFactories map[string]SnapshotFactory
 }
 
 // NewDesktop creates and initializes a new desktop environment.
@@ -124,6 +125,7 @@ func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppF
 		subControlMode:    0,
 		clipboard:         make(map[string][]byte),
 		focusListeners:    make([]DesktopFocusListener, 0),
+		snapshotFactories: make(map[string]SnapshotFactory),
 	}
 
 	log.Printf("NewDesktop: Created with inControlMode=%v", d.inControlMode)
@@ -147,6 +149,14 @@ func (d *Desktop) RegisterFocusListener(listener DesktopFocusListener) {
 	d.focusListeners = append(d.focusListeners, listener)
 	d.focusMu.Unlock()
 	d.notifyFocusActive()
+}
+
+// RegisterSnapshotFactory registers a factory used to restore apps from snapshot metadata.
+func (d *Desktop) RegisterSnapshotFactory(appType string, factory SnapshotFactory) {
+	if appType == "" || factory == nil {
+		return
+	}
+	d.snapshotFactories[appType] = factory
 }
 
 // UnregisterFocusListener removes a previously registered focus listener.
@@ -696,6 +706,18 @@ func (d *Desktop) notifyFocus(paneID [16]byte) {
 	for _, listener := range listeners {
 		listener.PaneFocused(paneID)
 	}
+}
+
+func (d *Desktop) appFromSnapshot(snap PaneSnapshot) App {
+	if snap.AppType != "" {
+		if factory, ok := d.snapshotFactories[snap.AppType]; ok {
+			cfg := cloneAppConfig(snap.AppConfig)
+			if app := factory(snap.Title, cfg); app != nil {
+				return app
+			}
+		}
+	}
+	return NewSnapshotApp(snap.Title, snap.Buffer)
 }
 
 func (d *Desktop) draw() {

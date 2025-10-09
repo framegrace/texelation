@@ -30,7 +30,7 @@ func (d *Desktop) ApplyTreeCapture(capture TreeCapture) error {
 	for i, snap := range capture.Panes {
 		p := newPane(screen)
 		p.setID(snap.ID)
-		app := newSnapshotApp(snap.Title, snap.Buffer)
+		app := d.appFromSnapshot(snap)
 		p.AttachApp(app, screen.refreshChan)
 		panes[i] = p
 	}
@@ -138,7 +138,7 @@ func findFirstLeaf(node *Node) *Node {
 	return nil
 }
 
-func newSnapshotApp(title string, buffer [][]Cell) App {
+func NewSnapshotApp(title string, buffer [][]Cell) App {
 	rows := make([][]Cell, len(buffer))
 	for i, row := range buffer {
 		rows[i] = make([]Cell, len(row))

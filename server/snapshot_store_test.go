@@ -18,6 +18,8 @@ func TestSnapshotStoreSaveAndLoad(t *testing.T) {
 		Buffer: [][]texel.Cell{{{Ch: 'A'}, {Ch: 'B'}}},
 		Rect:   texel.Rectangle{X: 1, Y: 2, Width: 10, Height: 5},
 	}
+	pane.AppType = "test"
+	pane.AppConfig = map[string]interface{}{"msg": "hello"}
 	capture := texel.TreeCapture{
 		Panes: []texel.PaneSnapshot{pane},
 		Root:  &texel.TreeNodeCapture{PaneIndex: 0},
@@ -47,6 +49,12 @@ func TestSnapshotStoreSaveAndLoad(t *testing.T) {
 	}
 	if loaded.Panes[0].X != 1 || loaded.Panes[0].Width != 10 {
 		t.Fatalf("unexpected geometry %+v", loaded.Panes[0])
+	}
+	if loaded.Panes[0].AppType != "test" {
+		t.Fatalf("expected app type, got %s", loaded.Panes[0].AppType)
+	}
+	if msg, ok := loaded.Panes[0].AppConfig["msg"].(string); !ok || msg != "hello" {
+		t.Fatalf("expected app config to be stored, got %+v", loaded.Panes[0].AppConfig)
 	}
 	if loaded.Tree.PaneIndex != 0 {
 		t.Fatalf("expected root pane index 0, got %d", loaded.Tree.PaneIndex)

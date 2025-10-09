@@ -2,10 +2,12 @@ package texel
 
 // PaneSnapshot captures the render buffer for a pane along with a stable ID.
 type PaneSnapshot struct {
-	ID     [16]byte
-	Title  string
-	Buffer [][]Cell
-	Rect   Rectangle
+	ID        [16]byte
+	Title     string
+	Buffer    [][]Cell
+	Rect      Rectangle
+	AppType   string
+	AppConfig map[string]interface{}
 }
 
 // Rectangle stores pane position and size in screen coordinates.
@@ -66,7 +68,7 @@ func (d *Desktop) CaptureTree() TreeCapture {
 func capturePaneSnapshot(p *pane) PaneSnapshot {
 	buf := p.Render()
 	id := p.ID()
-	return PaneSnapshot{
+	snap := PaneSnapshot{
 		ID:     id,
 		Title:  p.getTitle(),
 		Buffer: buf,
@@ -77,6 +79,12 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 			Height: p.Height(),
 		},
 	}
+	if provider, ok := p.app.(SnapshotProvider); ok {
+		appType, config := provider.SnapshotMetadata()
+		snap.AppType = appType
+		snap.AppConfig = cloneAppConfig(config)
+	}
+	return snap
 }
 
 func buildTreeCapture(n *Node, paneIndex map[*pane]int) *TreeNodeCapture {
@@ -98,4 +106,15 @@ func buildTreeCapture(n *Node, paneIndex map[*pane]int) *TreeNodeCapture {
 		node.Children[i] = buildTreeCapture(child, paneIndex)
 	}
 	return node
+}
+
+func cloneAppConfig(cfg map[string]interface{}) map[string]interface{} {
+	if cfg == nil {
+		return nil
+	}
+	clone := make(map[string]interface{}, len(cfg))
+	for k, v := range cfg {
+		clone[k] = v
+	}
+	return clone
 }
