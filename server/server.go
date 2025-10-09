@@ -186,7 +186,7 @@ func (s *Server) loadBootSnapshot() {
 func (s *Server) setBootSnapshot(snapshot protocol.TreeSnapshot) {
 	copySnapshot := protocol.TreeSnapshot{Panes: make([]protocol.PaneSnapshot, len(snapshot.Panes))}
 	copy(copySnapshot.Panes, snapshot.Panes)
-	copySnapshot.Root = snapshot.Root
+	copySnapshot.Root = cloneProtocolTree(snapshot.Root)
 	s.bootSnapshotMu.Lock()
 	s.bootSnapshot = &copySnapshot
 	s.bootSnapshotMu.Unlock()
@@ -200,7 +200,7 @@ func (s *Server) bootSnapshotCopy() (protocol.TreeSnapshot, bool) {
 	}
 	copySnapshot := protocol.TreeSnapshot{Panes: make([]protocol.PaneSnapshot, len(s.bootSnapshot.Panes))}
 	copy(copySnapshot.Panes, s.bootSnapshot.Panes)
-	copySnapshot.Root = s.bootSnapshot.Root
+	copySnapshot.Root = cloneProtocolTree(s.bootSnapshot.Root)
 	return copySnapshot, true
 }
 
