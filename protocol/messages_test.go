@@ -216,15 +216,14 @@ func TestTreeSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
-
 func BenchmarkEncodeBufferDelta(b *testing.B) {
 	delta := BufferDelta{
-		PaneID: [16]byte{1, 2, 3, 4},
+		PaneID:   [16]byte{1, 2, 3, 4},
 		Revision: 42,
-		Styles: []protocol.StyleEntry{
-			{AttrFlags: protocol.AttrBold, FgModel: protocol.ColorModelRGB, FgValue: 0xFFFFFF, BgModel: protocol.ColorModelRGB, BgValue: 0x000000},
+		Styles: []StyleEntry{
+			{AttrFlags: AttrBold, FgModel: ColorModelRGB, FgValue: 0xFFFFFF, BgModel: ColorModelRGB, BgValue: 0x000000},
 		},
-		Rows: make([]protocol.RowDelta, 24),
+		Rows: make([]RowDelta, 24),
 	}
 	for i := range delta.Rows {
 		delta.Rows[i] = RowDelta{
