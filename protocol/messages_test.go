@@ -212,3 +212,26 @@ func TestTreeSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected root node: %#v", decoded.Root)
 	}
 }
+
+func BenchmarkEncodeBufferDelta(b *testing.B) {
+	delta := protocol.BufferDelta{
+		PaneID: [16]byte{1, 2, 3, 4},
+		Revision: 42,
+		Styles: []protocol.StyleEntry{
+			{AttrFlags: protocol.AttrBold, FgModel: protocol.ColorModelRGB, FgValue: 0xFFFFFF, BgModel: protocol.ColorModelRGB, BgValue: 0x000000},
+		},
+		Rows: make([]protocol.RowDelta, 24),
+	}
+	for i := range delta.Rows {
+		delta.Rows[i] = protocol.RowDelta{
+			Row:   uint16(i),
+			Spans: []protocol.CellSpan{{StartCol: 0, Text: strings.Repeat("A", 80), StyleIndex: 0}},
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := protocol.EncodeBufferDelta(delta); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
