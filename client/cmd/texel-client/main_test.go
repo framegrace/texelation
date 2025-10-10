@@ -20,21 +20,31 @@ func TestRenderRespectsPaneGeometry(t *testing.T) {
 			PaneID:   leftID,
 			Title:    "left",
 			Revision: 3,
-			Rows:     []string{"ls -l", "tail -f"},
-			X:        0,
-			Y:        0,
-			Width:    12,
-			Height:   4,
+			Rows: []string{
+				"+----------+",
+				"|ls -l    |",
+				"|tail -f  |",
+				"+----------+",
+			},
+			X:      0,
+			Y:      0,
+			Width:  12,
+			Height: 4,
 		},
 		{
 			PaneID:   rightID,
 			Title:    "right",
 			Revision: 5,
-			Rows:     []string{"htop", "logs"},
-			X:        16,
-			Y:        2,
-			Width:    10,
-			Height:   4,
+			Rows: []string{
+				"+--------+",
+				"|htop    |",
+				"|logs    |",
+				"+--------+",
+			},
+			X:      16,
+			Y:      2,
+			Width:  10,
+			Height: 4,
 		},
 	}}
 	state.cache.ApplySnapshot(snapshot)
@@ -47,22 +57,22 @@ func TestRenderRespectsPaneGeometry(t *testing.T) {
 
 	render(state, screen)
 
-	leftTitle := readScreenLine(screen, 0, 0, 12)
-	if leftTitle != "[left rev 3]" {
-		t.Fatalf("expected left title, got %q", leftTitle)
+	leftTop := readScreenLine(screen, 0, 0, 12)
+	if leftTop != "+----------+" {
+		t.Fatalf("expected left top border, got %q", leftTop)
 	}
-	leftContent := readScreenLine(screen, 0, 1, 12)
-	if leftContent != "ls -l" {
-		t.Fatalf("expected left content row, got %q", leftContent)
+	leftBody := readScreenLine(screen, 0, 1, 12)
+	if leftBody != "|ls -l    |" {
+		t.Fatalf("expected left body row, got %q", leftBody)
 	}
 
-	rightTitle := readScreenLine(screen, 16, 2, 10)
-	if rightTitle != "[right rev" { // clipped to width 10
-		t.Fatalf("expected right title prefix, got %q", rightTitle)
+	rightTop := readScreenLine(screen, 16, 2, 10)
+	if rightTop != "+--------+" {
+		t.Fatalf("expected right top border, got %q", rightTop)
 	}
-	rightContent := readScreenLine(screen, 16, 3, 10)
-	if rightContent != "htop" {
-		t.Fatalf("expected right content row, got %q", rightContent)
+	rightBody := readScreenLine(screen, 16, 3, 10)
+	if rightBody != "|htop    |" {
+		t.Fatalf("expected right body row, got %q", rightBody)
 	}
 
 	belowLeft := readScreenLine(screen, 0, 5, 12)

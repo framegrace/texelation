@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -22,6 +23,8 @@ type uiState struct {
 	hasTheme     bool
 	focus        protocol.PaneFocus
 	hasFocus     bool
+	themeValues  map[string]map[string]string
+	defaultStyle tcell.Style
 }
 
 func main() {
@@ -43,7 +46,7 @@ func main() {
 
 	fmt.Printf("Connected to session %s\n", client.FormatUUID(accept.SessionID))
 
-	state := &uiState{cache: client.NewBufferCache()}
+	state := &uiState{cache: client.NewBufferCache(), themeValues: make(map[string]map[string]string), defaultStyle: tcell.StyleDefault}
 	lastSequence := uint64(0)
 
 	if *reconnect {
@@ -64,6 +67,7 @@ func main() {
 	if err := screen.Init(); err != nil {
 		log.Fatalf("init screen failed: %v", err)
 	}
+	screen.HideCursor()
 	defer screen.Fini()
 
 	render(state, screen)
@@ -171,6 +175,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		}
 		state.theme = protocol.ThemeAck(themeUpdate)
 		state.hasTheme = true
+		state.updateTheme(themeUpdate.Section, themeUpdate.Key, themeUpdate.Value)
 	case protocol.MsgThemeAck:
 		ack, err := protocol.DecodeThemeAck(payload)
 		if err != nil {
@@ -179,6 +184,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		}
 		state.theme = ack
 		state.hasTheme = true
+		state.updateTheme(ack.Section, ack.Key, ack.Value)
 	case protocol.MsgPaneFocus:
 		focus, err := protocol.DecodePaneFocus(payload)
 		if err != nil {
@@ -195,86 +201,38 @@ func render(state *uiState, screen tcell.Screen) {
 	if len(panes) == 0 {
 		return
 	}
+	width, height := screen.Size()
+	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
 	for _, pane := range panes {
 		if pane == nil || pane.Rect.Width <= 0 || pane.Rect.Height <= 0 {
 			continue
 		}
-		titleText := pane.Title
-		if titleText == "" {
-			titleText = fmt.Sprintf("%x", pane.ID[:4])
-		}
-		title := fmt.Sprintf("[%s rev %d]", titleText, pane.Revision)
-		drawClippedText(screen, pane.Rect.X, pane.Rect.Y, pane.Rect.Width, title, tcell.StyleDefault.Bold(true))
-		maxContentRows := pane.Rect.Height - 1
-		if maxContentRows <= 0 {
-			continue
-		}
-		rows := pane.Rows()
-		baseY := pane.Rect.Y + 1
-		for rowIdx := 0; rowIdx < maxContentRows; rowIdx++ {
-			line := ""
-			if rowIdx < len(rows) {
-				line = rows[rowIdx]
+		for rowIdx := 0; rowIdx < pane.Rect.Height; rowIdx++ {
+			targetY := pane.Rect.Y + rowIdx
+			if targetY < 0 || targetY >= height {
+				continue
 			}
-			drawClippedText(screen, pane.Rect.X, baseY+rowIdx, pane.Rect.Width, line, tcell.StyleDefault)
+			row := pane.RowCells(rowIdx)
+			for col := 0; col < pane.Rect.Width; col++ {
+				targetX := pane.Rect.X + col
+				if targetX < 0 || targetX >= width {
+					continue
+				}
+				ch := ' '
+				style := tcell.StyleDefault
+				if row != nil && col < len(row) {
+					cell := row[col]
+					if cell.Ch != 0 {
+						ch = cell.Ch
+					}
+					style = cell.Style
+				}
+				screen.SetContent(targetX, targetY, ch, nil, style)
+			}
 		}
-	}
-	width, height := screen.Size()
-	var statusLines []string
-	if state.hasFocus {
-		statusLines = append(statusLines, fmt.Sprintf("Focus: %s", formatPaneID(state.focus.PaneID)))
-	}
-	if state.hasClipboard {
-		statusLines = append(statusLines, fmt.Sprintf("Clipboard [%s]: %s", state.clipboard.MimeType, truncateForStatus(string(state.clipboard.Data), width-len(state.clipboard.MimeType)-14)))
-	}
-	if state.hasTheme {
-		statusLines = append(statusLines, fmt.Sprintf("Theme %s.%s = %s", state.theme.Section, state.theme.Key, state.theme.Value))
-	}
-	startY := height - len(statusLines)
-	for i, text := range statusLines {
-		y := startY + i
-		if y < 0 {
-			continue
-		}
-		drawClippedText(screen, 0, y, width, truncateForStatus(text, width), tcell.StyleDefault)
 	}
 	screen.Show()
-}
-
-func drawClippedText(screen tcell.Screen, x, y, width int, text string, style tcell.Style) {
-	if y < 0 || width <= 0 {
-		return
-	}
-	runes := []rune(text)
-	for i := 0; i < width; i++ {
-		if x+i < 0 {
-			continue
-		}
-		ch := ' '
-		if i < len(runes) {
-			ch = runes[i]
-		}
-		screen.SetContent(x+i, y, ch, nil, style)
-	}
-}
-
-func truncateForStatus(text string, max int) string {
-	runes := []rune(text)
-	if max <= 0 {
-		return ""
-	}
-	if len(runes) <= max {
-		return text
-	}
-	if max <= 3 {
-		return string(runes[:max])
-	}
-	return string(runes[:max-3]) + "..."
-}
-
-func formatPaneID(id [16]byte) string {
-	return fmt.Sprintf("%x", id[:4])
 }
 
 func isNetworkClosed(err error) bool {
@@ -283,4 +241,55 @@ func isNetworkClosed(err error) bool {
 	}
 	ne, ok := err.(net.Error)
 	return ok && !ne.Timeout()
+}
+
+func (s *uiState) updateTheme(section, key, value string) {
+	if section == "" || key == "" {
+		return
+	}
+	if s.themeValues == nil {
+		s.themeValues = make(map[string]map[string]string)
+	}
+	sec := s.themeValues[section]
+	if sec == nil {
+		sec = make(map[string]string)
+		s.themeValues[section] = sec
+	}
+	sec[key] = value
+	s.defaultStyle = computeDefaultStyle(s.themeValues)
+}
+
+func computeDefaultStyle(values map[string]map[string]string) tcell.Style {
+	style := tcell.StyleDefault
+	if values == nil {
+		return style
+	}
+	if desktop, ok := values["desktop"]; ok {
+		if fgStr, ok := desktop["default_fg"]; ok {
+			if fg, ok := parseHexColor(fgStr); ok {
+				style = style.Foreground(fg)
+			}
+		}
+		if bgStr, ok := desktop["default_bg"]; ok {
+			if bg, ok := parseHexColor(bgStr); ok {
+				style = style.Background(bg)
+			}
+		}
+	}
+	return style
+}
+
+func parseHexColor(value string) (tcell.Color, bool) {
+	if len(value) == 0 {
+		return tcell.ColorDefault, false
+	}
+	if len(value) == 7 && value[0] == '#' {
+		if fg, err := strconv.ParseInt(value[1:], 16, 32); err == nil {
+			r := int32((fg >> 16) & 0xFF)
+			g := int32((fg >> 8) & 0xFF)
+			b := int32(fg & 0xFF)
+			return tcell.NewRGBColor(r, g, b), true
+		}
+	}
+	return tcell.ColorDefault, false
 }

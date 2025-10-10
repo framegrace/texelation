@@ -131,6 +131,7 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 	if c.panes == nil {
 		c.panes = make(map[[16]byte]*PaneState)
 	}
+	seen := make(map[[16]byte]struct{}, len(snapshot.Panes))
 	for _, paneSnap := range snapshot.Panes {
 		pane := c.panes[paneSnap.PaneID]
 		if pane == nil {
@@ -146,6 +147,21 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 		}
 		pane.Rect = clientRect{X: int(paneSnap.X), Y: int(paneSnap.Y), Width: int(paneSnap.Width), Height: int(paneSnap.Height)}
 		c.trackOrdering(paneSnap.PaneID, pane.UpdatedAt)
+		seen[paneSnap.PaneID] = struct{}{}
+	}
+	if len(seen) > 0 && len(c.panes) > len(seen) {
+		for id := range c.panes {
+			if _, ok := seen[id]; !ok {
+				delete(c.panes, id)
+			}
+		}
+		filtered := c.order[:0]
+		for _, ord := range c.order {
+			if _, ok := c.panes[ord.id]; ok {
+				filtered = append(filtered, ord)
+			}
+		}
+		c.order = filtered
 	}
 }
 

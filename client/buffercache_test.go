@@ -91,6 +91,23 @@ func TestBufferCacheApplySnapshot(t *testing.T) {
 	}
 }
 
+func TestBufferCacheApplySnapshotPrunesMissingPanes(t *testing.T) {
+	cache := NewBufferCache()
+	var id1, id2 [16]byte
+	id1[0] = 1
+	id2[0] = 2
+	cache.ApplySnapshot(protocol.TreeSnapshot{Panes: []protocol.PaneSnapshot{{PaneID: id1}, {PaneID: id2}}})
+
+	cache.ApplySnapshot(protocol.TreeSnapshot{Panes: []protocol.PaneSnapshot{{PaneID: id2}}})
+	panes := cache.LayoutPanes()
+	if len(panes) != 1 {
+		t.Fatalf("expected single pane after prune, got %d", len(panes))
+	}
+	if panes[0].ID != id2 {
+		t.Fatalf("expected remaining pane id2, got %v", panes[0].ID)
+	}
+}
+
 func TestBufferCacheResumeFlow(t *testing.T) {
 	cache := NewBufferCache()
 	var id [16]byte
