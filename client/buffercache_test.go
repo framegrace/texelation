@@ -3,6 +3,8 @@ package client
 import (
 	"testing"
 
+	"github.com/gdamore/tcell/v2"
+
 	"texelation/protocol"
 )
 
@@ -14,6 +16,12 @@ func TestBufferCacheApplyDelta(t *testing.T) {
 	delta := protocol.BufferDelta{
 		PaneID:   id,
 		Revision: 1,
+		Styles: []protocol.StyleEntry{{
+			AttrFlags: protocol.AttrBold,
+			FgModel:   protocol.ColorModelRGB,
+			FgValue:   0x112233,
+			BgModel:   protocol.ColorModelDefault,
+		}},
 		Rows: []protocol.RowDelta{
 			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "Hello", StyleIndex: 0}}},
 			{Row: 1, Spans: []protocol.CellSpan{{StartCol: 2, Text: "World", StyleIndex: 0}}},
@@ -33,6 +41,17 @@ func TestBufferCacheApplyDelta(t *testing.T) {
 	}
 	if rows[1] != "  World" {
 		t.Fatalf("unexpected row1 %q", rows[1])
+	}
+	cells := state.RowCells(0)
+	if len(cells) < 5 {
+		t.Fatalf("expected 5 cells, got %d", len(cells))
+	}
+	fg, _, attrs := cells[0].Style.Decompose()
+	if attrs&tcell.AttrBold == 0 {
+		t.Fatalf("expected bold style")
+	}
+	if r, g, b := fg.RGB(); r != 0x11 || g != 0x22 || b != 0x33 {
+		t.Fatalf("unexpected fg colour %x,%x,%x", r, g, b)
 	}
 
 	delta2 := protocol.BufferDelta{

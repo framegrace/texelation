@@ -4,6 +4,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+
 	"texelation/protocol"
 )
 
@@ -12,9 +14,15 @@ type PaneState struct {
 	ID        [16]byte
 	Revision  uint32
 	UpdatedAt time.Time
-	rows      map[int][]rune
+	rows      map[int][]Cell
 	Title     string
 	Rect      clientRect
+}
+
+// Cell mirrors texel.Cell but keeps the remote client decoupled from desktop internals.
+type Cell struct {
+	Ch    rune
+	Style tcell.Style
 }
 
 type clientRect struct {
@@ -44,10 +52,22 @@ func (p *PaneState) Rows() []string {
 		if len(row) == 0 {
 			out[i] = ""
 		} else {
-			out[i] = string(row)
+			runes := make([]rune, len(row))
+			for idx, cell := range row {
+				runes[idx] = cell.Ch
+			}
+			out[i] = trimRightSpaces(string(runes))
 		}
 	}
 	return out
+}
+
+// RowCells returns the styled cells for the given row, if present.
+func (p *PaneState) RowCells(row int) []Cell {
+	if p == nil || p.rows == nil {
+		return nil
+	}
+	return p.rows[row]
 }
 
 // BufferCache maintains pane states keyed by pane ID.
@@ -73,13 +93,14 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) *PaneState {
 	}
 	pane := c.panes[delta.PaneID]
 	if pane == nil {
-		pane = &PaneState{ID: delta.PaneID, rows: make(map[int][]rune)}
+		pane = &PaneState{ID: delta.PaneID, rows: make(map[int][]Cell)}
 		c.panes[delta.PaneID] = pane
 	}
 	if delta.Revision < pane.Revision {
 		return pane
 	}
 
+	styles := buildStyles(delta.Styles)
 	for _, rowDelta := range delta.Rows {
 		rowIdx := int(rowDelta.Row)
 		row := pane.rows[rowIdx]
@@ -88,9 +109,15 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) *PaneState {
 			textRunes := []rune(span.Text)
 			needed := start + len(textRunes)
 			row = ensureRowLength(row, needed)
-			copy(row[start:], textRunes)
+			style := tcell.StyleDefault
+			if int(span.StyleIndex) < len(styles) {
+				style = styles[span.StyleIndex]
+			}
+			for i, r := range textRunes {
+				row[start+i] = Cell{Ch: r, Style: style}
+			}
 		}
-		pane.rows[rowIdx] = trimTrailingSpaces(row)
+		pane.rows[rowIdx] = row
 	}
 	pane.Revision = delta.Revision
 	pane.UpdatedAt = time.Now().UTC()
@@ -107,15 +134,15 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 	for _, paneSnap := range snapshot.Panes {
 		pane := c.panes[paneSnap.PaneID]
 		if pane == nil {
-			pane = &PaneState{ID: paneSnap.PaneID, rows: make(map[int][]rune)}
+			pane = &PaneState{ID: paneSnap.PaneID}
 			c.panes[paneSnap.PaneID] = pane
 		}
 		pane.Title = paneSnap.Title
 		pane.Revision = paneSnap.Revision
 		pane.UpdatedAt = time.Now().UTC()
-		pane.rows = make(map[int][]rune, len(paneSnap.Rows))
+		pane.rows = make(map[int][]Cell, len(paneSnap.Rows))
 		for idx, row := range paneSnap.Rows {
-			pane.rows[idx] = []rune(row)
+			pane.rows[idx] = stringToCells(row)
 		}
 		pane.Rect = clientRect{X: int(paneSnap.X), Y: int(paneSnap.Y), Width: int(paneSnap.Width), Height: int(paneSnap.Height)}
 		c.trackOrdering(paneSnap.PaneID, pane.UpdatedAt)
@@ -180,24 +207,84 @@ func (c *BufferCache) trackOrdering(id [16]byte, ts time.Time) {
 	})
 }
 
-func ensureRowLength(row []rune, n int) []rune {
+func ensureRowLength(row []Cell, n int) []Cell {
 	if len(row) >= n {
 		return row
 	}
-	out := make([]rune, n)
+	out := make([]Cell, n)
 	copy(out, row)
 	for i := len(row); i < n; i++ {
-		out[i] = ' '
+		out[i] = Cell{Ch: ' ', Style: tcell.StyleDefault}
 	}
 	return out
 }
 
-func trimTrailingSpaces(row []rune) []rune {
-	last := len(row) - 1
-	for last >= 0 && row[last] == ' ' {
-		last--
+func buildStyles(entries []protocol.StyleEntry) []tcell.Style {
+	styles := make([]tcell.Style, len(entries))
+	for i, entry := range entries {
+		styles[i] = styleFromEntry(entry)
 	}
-	return row[:last+1]
+	return styles
+}
+
+func styleFromEntry(entry protocol.StyleEntry) tcell.Style {
+	style := tcell.StyleDefault
+	fg := colorFromModel(entry.FgModel, entry.FgValue)
+	bg := colorFromModel(entry.BgModel, entry.BgValue)
+	style = style.Foreground(fg).Background(bg)
+	if entry.AttrFlags&protocol.AttrBold != 0 {
+		style = style.Bold(true)
+	}
+	if entry.AttrFlags&protocol.AttrUnderline != 0 {
+		style = style.Underline(true)
+	}
+	if entry.AttrFlags&protocol.AttrReverse != 0 {
+		style = style.Reverse(true)
+	}
+	if entry.AttrFlags&protocol.AttrBlink != 0 {
+		style = style.Blink(true)
+	}
+	if entry.AttrFlags&protocol.AttrDim != 0 {
+		style = style.Dim(true)
+	}
+	if entry.AttrFlags&protocol.AttrItalic != 0 {
+		style = style.Italic(true)
+	}
+	return style
+}
+
+func colorFromModel(model protocol.ColorModel, value uint32) tcell.Color {
+	switch model {
+	case protocol.ColorModelDefault:
+		return tcell.ColorDefault
+	case protocol.ColorModelRGB:
+		r := int32(value >> 16 & 0xFF)
+		g := int32(value >> 8 & 0xFF)
+		b := int32(value & 0xFF)
+		return tcell.NewRGBColor(r, g, b)
+	case protocol.ColorModelANSI16, protocol.ColorModelANSI256:
+		return tcell.PaletteColor(int(value))
+	default:
+		return tcell.ColorDefault
+	}
+}
+
+func stringToCells(row string) []Cell {
+	runes := []rune(row)
+	cells := make([]Cell, len(runes))
+	for i, r := range runes {
+		cells[i] = Cell{Ch: r, Style: tcell.StyleDefault}
+	}
+	return cells
+}
+
+func trimRightSpaces(s string) string {
+	runes := []rune(s)
+	end := len(runes)
+	for end > 0 && runes[end-1] == ' ' {
+		end--
+	}
+	return string(runes[:end])
 }
 
 func compareBytes(a, b []byte) int {
