@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,13 @@ func main() {
 	reconnect := flag.Bool("reconnect", false, "Attempt to resume previous session")
 	flag.Parse()
 
+	logFile, err := setupLogging()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "logging disabled: %v\n", err)
+	} else {
+		defer logFile.Close()
+	}
+
 	simple := client.NewSimpleClient(*socket)
 	var sessionID [16]byte
 	if !*reconnect {
@@ -57,7 +65,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	fmt.Printf("Connected to session %s\n", client.FormatUUID(accept.SessionID))
+	log.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 
 	state := &uiState{
 		cache:        client.NewBufferCache(),
@@ -156,7 +164,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			log.Printf("ack failed: %v", err)
 		}
 		if state != nil {
-			fmt.Printf("Delta: pane=%x rev=%d rows=%d\n", delta.PaneID, delta.Revision, len(state.Rows()))
+			log.Printf("delta applied: pane=%x rev=%d rows=%d", delta.PaneID, delta.Revision, len(state.Rows()))
 		}
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
@@ -645,4 +653,23 @@ func applyZoomOverlay(style tcell.Style, intensity float32, state *uiState) tcel
 		Blink(attrs&tcell.AttrBlink != 0).
 		Dim(attrs&tcell.AttrDim != 0).
 		Italic(attrs&tcell.AttrItalic != 0)
+}
+
+func setupLogging() (*os.File, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	logDir := filepath.Join(configDir, "texelation", "logs")
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
+		return nil, err
+	}
+	logPath := filepath.Join(logDir, "remote-client.log")
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return nil, err
+	}
+	log.SetOutput(file)
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	return file, nil
 }
