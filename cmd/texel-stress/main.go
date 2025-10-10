@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -22,11 +23,11 @@ import (
 )
 
 func main() {
-	socketPath := flag.String("socket", "/tmp/texel-stress.sock", "Unix socket path for stress server")
-	sessions := flag.Int("sessions", 1, "number of concurrent sessions")
-	duration := flag.Duration("duration", 10*time.Second, "total duration of the stress run")
+	socketPath := flag.String("socket", "/tmp/texel-stress.sock", "Unix socket path for the stress harness")
+	sessions := flag.Int("sessions", 2, "number of concurrent sessions")
+	duration := flag.Duration("duration", 15*time.Second, "total duration of the stress run")
 	publishInterval := flag.Duration("publish", 100*time.Millisecond, "interval between publish ticks")
-	messagesPerCycle := flag.Int("messages", 10, "messages to process before forcing a resume")
+	messagesPerCycle := flag.Int("messages", 25, "messages to consume per session cycle before resuming")
 	flag.Parse()
 
 	if err := os.RemoveAll(*socketPath); err != nil {
@@ -47,9 +48,11 @@ func main() {
 	}()
 
 	desktop, mainApp := buildDesktop()
+	metrics := newStressMetrics()
+
 	manager := server.NewManager()
 	srv := server.NewServer(*socketPath, manager)
-	server.SetSessionStatsObserver(server.NewSessionStatsLogger(log.Default()))
+	server.SetSessionStatsObserver(metrics)
 
 	publishers := make([]*server.DesktopPublisher, 0)
 	var pubMu sync.Mutex
@@ -58,10 +61,10 @@ func main() {
 	srv.SetEventSink(sink)
 	srv.SetPublisherFactory(func(sess *server.Session) *server.DesktopPublisher {
 		pub := server.NewDesktopPublisher(desktop, sess)
+		pub.SetObserver(metrics)
 		pubMu.Lock()
 		publishers = append(publishers, pub)
 		pubMu.Unlock()
-		pub.SetObserver(server.NewPublishLogger(log.Default()))
 		return pub
 	})
 
@@ -74,14 +77,15 @@ func main() {
 	var wg sync.WaitGroup
 	for i := 0; i < *sessions; i++ {
 		wg.Add(1)
-		go func(id int) {
+		go func(idx int) {
 			defer wg.Done()
-			runSession(ctx, *socketPath, *messagesPerCycle)
+			runSession(ctx, metrics, *socketPath, *messagesPerCycle)
 		}(i)
 	}
 
 	publishTicker := time.NewTicker(*publishInterval)
 	defer publishTicker.Stop()
+
 	counter := 0
 	for {
 		select {
@@ -91,6 +95,7 @@ func main() {
 			defer cancelStop()
 			_ = srv.Stop(timeoutCtx)
 			desktop.Close()
+			metrics.printSummary()
 			fmt.Println("stress run complete")
 			return
 		case <-publishTicker.C:
@@ -98,7 +103,9 @@ func main() {
 			mainApp.SetMessage(fmt.Sprintf("session tick %d", counter))
 			pubMu.Lock()
 			for _, pub := range publishers {
-				_ = pub.Publish()
+				if err := pub.Publish(); err != nil {
+					metrics.recordError(err)
+				}
 			}
 			pubMu.Unlock()
 		}
@@ -118,10 +125,14 @@ func buildDesktop() (*texel.Desktop, *stressApp) {
 	if err != nil {
 		log.Fatalf("desktop init failed: %v", err)
 	}
+	desktop.RegisterSnapshotFactory("stress", func(title string, cfg map[string]interface{}) texel.App {
+		msg, _ := cfg["message"].(string)
+		return newStressApp(title, msg)
+	})
 	return desktop, app
 }
 
-func runSession(ctx context.Context, socket string, messagesPerCycle int) {
+func runSession(ctx context.Context, metrics *stressMetrics, socket string, messagesPerCycle int) {
 	simple := client.NewSimpleClient(socket)
 	var sessionID [16]byte
 	var lastSeq uint64
@@ -136,36 +147,44 @@ func runSession(ctx context.Context, socket string, messagesPerCycle int) {
 			continue
 		}
 		_ = accept
-		if err := consumeMessages(ctx, conn, sessionID, &lastSeq, messagesPerCycle); err != nil && !errors.Is(err, context.Canceled) {
-			// ignore transient errors
+		metrics.recordSession()
+		if err := consumeMessages(ctx, metrics, conn, sessionID, &lastSeq, messagesPerCycle); err != nil && !errors.Is(err, context.Canceled) {
+			metrics.recordError(err)
 		}
 		_ = conn.Close()
 		if ctx.Err() != nil {
 			return
 		}
+
 		accept, conn, err = simple.Connect(&sessionID)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		_ = accept
+
 		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSeq)
 		if err != nil {
+			metrics.recordError(err)
 			_ = conn.Close()
 			continue
 		}
 		if hdr.Type == protocol.MsgTreeSnapshot {
 			if _, err := protocol.DecodeTreeSnapshot(payload); err != nil {
+				metrics.recordError(err)
 				_ = conn.Close()
 				continue
 			}
 		}
-		if err := consumeMessages(ctx, conn, sessionID, &lastSeq, messagesPerCycle); err != nil && !errors.Is(err, context.Canceled) {
+		metrics.recordResume()
+		if err := consumeMessages(ctx, metrics, conn, sessionID, &lastSeq, messagesPerCycle); err != nil && !errors.Is(err, context.Canceled) {
+			metrics.recordError(err)
 		}
 		_ = conn.Close()
 	}
 }
 
-func consumeMessages(ctx context.Context, conn net.Conn, sessionID [16]byte, lastSeq *uint64, target int) error {
+func consumeMessages(ctx context.Context, metrics *stressMetrics, conn net.Conn, sessionID [16]byte, lastSeq *uint64, target int) error {
 	ackHeader := protocol.Header{Version: protocol.Version, Type: protocol.MsgBufferAck, Flags: protocol.FlagChecksum, SessionID: sessionID}
 	received := 0
 	for received < target {
@@ -197,6 +216,7 @@ func consumeMessages(ctx context.Context, conn net.Conn, sessionID [16]byte, las
 				return err
 			}
 			*lastSeq = hdr.Sequence
+			metrics.recordDelta()
 			received++
 		default:
 			received++
@@ -249,4 +269,63 @@ func (a *stressApp) SetMessage(msg string) {
 		default:
 		}
 	}
+}
+
+func (a *stressApp) SnapshotMetadata() (string, map[string]interface{}) {
+	a.mu.Lock()
+	msg := string(a.runes)
+	a.mu.Unlock()
+	return "stress", map[string]interface{}{"message": msg}
+}
+
+type stressMetrics struct {
+	publishes   atomic.Uint64
+	publishTime atomic.Int64
+	deltas      atomic.Uint64
+	sessions    atomic.Uint64
+	resumes     atomic.Uint64
+	errors      atomic.Uint64
+}
+
+func newStressMetrics() *stressMetrics {
+	return &stressMetrics{}
+}
+
+func (m *stressMetrics) ObservePublish(session *server.Session, paneCount int, duration time.Duration) {
+	_ = session
+	m.publishes.Add(uint64(paneCount))
+	m.publishTime.Add(duration.Nanoseconds())
+}
+
+func (m *stressMetrics) ObserveSessionStats(stats server.SessionStats) {
+	_ = stats
+}
+
+func (m *stressMetrics) recordDelta() {
+	m.deltas.Add(1)
+}
+
+func (m *stressMetrics) recordSession() {
+	m.sessions.Add(1)
+}
+
+func (m *stressMetrics) recordResume() {
+	m.resumes.Add(1)
+}
+
+func (m *stressMetrics) recordError(err error) {
+	if err != nil {
+		m.errors.Add(1)
+	}
+}
+
+func (m *stressMetrics) printSummary() {
+	pubs := m.publishes.Load()
+	totalDur := time.Duration(m.publishTime.Load())
+	avgDur := time.Duration(0)
+	if pubs > 0 {
+		avgDur = totalDur / time.Duration(pubs)
+	}
+	fmt.Printf("summary: publishes=%d deltas=%d sessions=%d resumes=%d errors=%d avg_publish=%s\n",
+		pubs, m.deltas.Load(), m.sessions.Load(), m.resumes.Load(), m.errors.Load(), avgDur)
 }
