@@ -2,6 +2,7 @@ package server
 
 import (
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -15,6 +16,12 @@ type DesktopPublisher struct {
 	desktop   *texel.Desktop
 	session   *Session
 	revisions map[[16]byte]uint32
+	observer  PublishObserver
+}
+
+// PublishObserver records desktop publish metrics for instrumentation.
+type PublishObserver interface {
+	ObservePublish(session *Session, paneCount int, duration time.Duration)
 }
 
 func NewDesktopPublisher(desktop *texel.Desktop, session *Session) *DesktopPublisher {
@@ -25,11 +32,16 @@ func NewDesktopPublisher(desktop *texel.Desktop, session *Session) *DesktopPubli
 	}
 }
 
+// SetObserver registers an optional metrics observer invoked after each publish.
+func (p *DesktopPublisher) SetObserver(observer PublishObserver) {
+	p.observer = observer
+}
+
 func (p *DesktopPublisher) Publish() error {
 	if p.desktop == nil || p.session == nil {
 		return nil
 	}
-
+	start := time.Now()
 	snapshots := p.desktop.SnapshotBuffers()
 	for _, snap := range snapshots {
 		rev := p.revisions[snap.ID] + 1
@@ -38,6 +50,9 @@ func (p *DesktopPublisher) Publish() error {
 		if err := p.session.EnqueueDiff(delta); err != nil {
 			return err
 		}
+	}
+	if p.observer != nil {
+		p.observer.ObservePublish(p.session, len(snapshots), time.Since(start))
 	}
 	return nil
 }

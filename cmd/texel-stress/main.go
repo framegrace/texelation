@@ -49,6 +49,7 @@ func main() {
 	desktop, mainApp := buildDesktop()
 	manager := server.NewManager()
 	srv := server.NewServer(*socketPath, manager)
+	server.SetSessionStatsObserver(server.NewSessionStatsLogger(log.Default()))
 
 	publishers := make([]*server.DesktopPublisher, 0)
 	var pubMu sync.Mutex
@@ -60,6 +61,7 @@ func main() {
 		pubMu.Lock()
 		publishers = append(publishers, pub)
 		pubMu.Unlock()
+		pub.SetObserver(server.NewPublishLogger(log.Default()))
 		return pub
 	})
 

@@ -107,11 +107,15 @@ func main() {
 	srv := server.NewServer(*socketPath, manager)
 	metrics := server.NewFocusMetrics(log.Default())
 	srv.SetFocusMetrics(metrics)
+	statsLogger := server.NewSessionStatsLogger(log.Default())
+	server.SetSessionStatsObserver(statsLogger)
+	publishLogger := server.NewPublishLogger(log.Default())
 	sink := server.NewDesktopSink(desktop)
 	srv.SetEventSink(sink)
 	srv.SetPublisherFactory(func(sess *server.Session) *server.DesktopPublisher {
 		publisher := server.NewDesktopPublisher(desktop, sess)
 		sink.SetPublisher(publisher)
+		publisher.SetObserver(publishLogger)
 		return publisher
 	})
 	if *snapshotPath != "" {

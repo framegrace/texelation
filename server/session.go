@@ -20,6 +20,15 @@ func SetSessionStatsReporter(reporter func(SessionStats)) {
 	sessionStatsReporter = reporter
 }
 
+// SetSessionStatsObserver registers an observer for session stats.
+func SetSessionStatsObserver(observer SessionStatsObserver) {
+	if observer == nil {
+		sessionStatsReporter = nil
+		return
+	}
+	sessionStatsReporter = observer.ObserveSessionStats
+}
+
 // DiffPacket holds a serialised buffer delta ready to be sent to clients.
 type DiffPacket struct {
 	Sequence uint64
