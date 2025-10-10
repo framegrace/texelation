@@ -17,6 +17,8 @@ type PaneState struct {
 	rows      map[int][]Cell
 	Title     string
 	Rect      clientRect
+	Active    bool
+	Resizing  bool
 }
 
 // Cell mirrors texel.Cell but keeps the remote client decoupled from desktop internals.
@@ -163,6 +165,21 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 		}
 		c.order = filtered
 	}
+}
+
+// SetPaneFlags updates tracked pane flags, creating an entry if necessary.
+func (c *BufferCache) SetPaneFlags(id [16]byte, active, resizing bool) *PaneState {
+	if c.panes == nil {
+		c.panes = make(map[[16]byte]*PaneState)
+	}
+	pane := c.panes[id]
+	if pane == nil {
+		pane = &PaneState{ID: id, rows: make(map[int][]Cell)}
+		c.panes[id] = pane
+	}
+	pane.Active = active
+	pane.Resizing = resizing
+	return pane
 }
 
 // AllPanes returns panes in order of last update.

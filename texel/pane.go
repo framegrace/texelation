@@ -101,6 +101,7 @@ func (p *pane) SetActive(active bool) {
 	}
 
 	p.IsActive = active
+	p.notifyStateChange()
 
 	// Stop any existing animations on the inactive fade effect to prevent conflicts
 	p.animator.Stop(p.inactiveFade)
@@ -132,6 +133,7 @@ func (p *pane) SetResizing(resizing bool) {
 	}
 
 	p.IsResizing = resizing
+	p.notifyStateChange()
 
 	// Stop any existing animations on the resizing fade effect
 	p.animator.Stop(p.resizingFade)
@@ -161,6 +163,13 @@ func (p *pane) AddEffect(effect Effect) {
 // RemoveEffect removes an effect from the pane's pipeline
 func (p *pane) RemoveEffect(effect Effect) {
 	p.effects.RemoveEffect(effect)
+}
+
+func (p *pane) notifyStateChange() {
+	if p.screen == nil || p.screen.desktop == nil {
+		return
+	}
+	p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing)
 }
 
 // SetZOrder sets the z-order (layering) of the pane

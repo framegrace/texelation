@@ -139,6 +139,20 @@ type StateUpdate struct {
 	DesktopBgRGB  uint32
 }
 
+// PaneStateFlags indicate pane state bits.
+type PaneStateFlags uint8
+
+const (
+	PaneStateActive PaneStateFlags = 1 << iota
+	PaneStateResizing
+)
+
+// PaneState reports transient pane flags (active, resizing, etc.).
+type PaneState struct {
+	PaneID [16]byte
+	Flags  PaneStateFlags
+}
+
 // PaneSnapshot describes the full buffer content for a single pane.
 type PaneSnapshot struct {
 	PaneID    [16]byte
@@ -697,6 +711,27 @@ func DecodeStateUpdate(b []byte) (StateUpdate, error) {
 		return update, errExtraBytes
 	}
 	return update, nil
+}
+
+// EncodePaneState serialises pane state flags.
+func EncodePaneState(state PaneState) ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 18))
+	if err := binary.Write(buf, binary.LittleEndian, state.PaneID); err != nil {
+		return nil, err
+	}
+	buf.WriteByte(byte(state.Flags))
+	return buf.Bytes(), nil
+}
+
+// DecodePaneState deserialises pane state flags.
+func DecodePaneState(b []byte) (PaneState, error) {
+	var state PaneState
+	if len(b) < len(state.PaneID)+1 {
+		return state, errPayloadShort
+	}
+	copy(state.PaneID[:], b[:len(state.PaneID)])
+	state.Flags = PaneStateFlags(b[len(state.PaneID)])
+	return state, nil
 }
 
 // EncodeTreeSnapshot serialises the tree snapshot for transport.

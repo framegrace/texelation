@@ -49,6 +49,7 @@ const (
 	MsgThemeAck
 	MsgPaneFocus
 	MsgStateUpdate
+	MsgPaneState
 )
 
 // Header describes the fixed portion of every frame exchanged over the wire.

@@ -211,6 +211,15 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		}
 		state.focus = focus
 		state.hasFocus = true
+	case protocol.MsgPaneState:
+		paneFlags, err := protocol.DecodePaneState(payload)
+		if err != nil {
+			log.Printf("decode pane state failed: %v", err)
+			return
+		}
+		active := paneFlags.Flags&protocol.PaneStateActive != 0
+		resizing := paneFlags.Flags&protocol.PaneStateResizing != 0
+		state.cache.SetPaneFlags(paneFlags.PaneID, active, resizing)
 	case protocol.MsgStateUpdate:
 		update, err := protocol.DecodeStateUpdate(payload)
 		if err != nil {
@@ -231,7 +240,9 @@ func render(state *uiState, screen tcell.Screen) {
 			continue
 		}
 		inactiveIntensity := float32(0)
-		if state.hasFocus && pane.ID != state.focus.PaneID {
+		if !pane.Active {
+			inactiveIntensity = 0.3
+		} else if state.hasFocus && pane.ID != state.focus.PaneID {
 			inactiveIntensity = 0.3
 		}
 		for rowIdx := 0; rowIdx < pane.Rect.Height; rowIdx++ {
@@ -258,6 +269,9 @@ func render(state *uiState, screen tcell.Screen) {
 				}
 				if inactiveIntensity > 0 {
 					style = applyInactiveOverlay(style, inactiveIntensity, state)
+				}
+				if pane.Resizing {
+					style = applyResizingOverlay(style, 0.2, state)
 				}
 				screen.SetContent(targetX, targetY, ch, nil, style)
 			}
@@ -545,6 +559,39 @@ func applyInactiveOverlay(style tcell.Style, intensity float32, state *uiState) 
 	overlay := blendColor(bg, state.desktopBg, 0.5)
 	blendedFg := blendColor(fg, overlay, intensity)
 	blendedBg := blendColor(bg, state.desktopBg, intensity)
+	return tcell.StyleDefault.Foreground(blendedFg).
+		Background(blendedBg).
+		Bold(attrs&tcell.AttrBold != 0).
+		Underline(attrs&tcell.AttrUnderline != 0).
+		Reverse(attrs&tcell.AttrReverse != 0).
+		Blink(attrs&tcell.AttrBlink != 0).
+		Dim(attrs&tcell.AttrDim != 0).
+		Italic(attrs&tcell.AttrItalic != 0)
+}
+
+func applyResizingOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {
+	if intensity <= 0 {
+		return style
+	}
+	fg, bg, attrs := style.Decompose()
+	if !fg.Valid() {
+		fg = state.defaultFg
+		if !fg.Valid() {
+			fg = tcell.ColorWhite
+		}
+	}
+	if !bg.Valid() {
+		bg = state.defaultBg
+		if !bg.Valid() {
+			bg = state.desktopBg
+			if !bg.Valid() {
+				bg = tcell.ColorBlack
+			}
+		}
+	}
+	resizingTint := tcell.NewRGBColor(255, 184, 108)
+	blendedFg := blendColor(fg, resizingTint, intensity/1.5)
+	blendedBg := blendColor(bg, resizingTint, intensity)
 	return tcell.StyleDefault.Foreground(blendedFg).
 		Background(blendedBg).
 		Bold(attrs&tcell.AttrBold != 0).

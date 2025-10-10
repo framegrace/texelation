@@ -244,6 +244,21 @@ func TestStateUpdateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPaneStateRoundTrip(t *testing.T) {
+	state := PaneState{PaneID: [16]byte{1, 2, 3, 4}, Flags: PaneStateActive | PaneStateResizing}
+	payload, err := EncodePaneState(state)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodePaneState(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded != state {
+		t.Fatalf("pane state mismatch: %#v", decoded)
+	}
+}
+
 func BenchmarkEncodeBufferDelta(b *testing.B) {
 	delta := BufferDelta{
 		PaneID:   [16]byte{1, 2, 3, 4},

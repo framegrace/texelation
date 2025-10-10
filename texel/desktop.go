@@ -63,15 +63,24 @@ type Desktop struct {
 	animationTicker *time.Ticker
 	animationStop   chan struct{}
 
-	lastMouseX        int
-	lastMouseY        int
-	lastMouseButtons  tcell.ButtonMask
-	lastMouseModifier tcell.ModMask
-	clipboard         map[string][]byte
-	lastClipboardMime string
-	focusMu           sync.RWMutex
-	focusListeners    []DesktopFocusListener
-	snapshotFactories map[string]SnapshotFactory
+	lastMouseX         int
+	lastMouseY         int
+	lastMouseButtons   tcell.ButtonMask
+	lastMouseModifier  tcell.ModMask
+	clipboard          map[string][]byte
+	lastClipboardMime  string
+	focusMu            sync.RWMutex
+	focusListeners     []DesktopFocusListener
+	paneStateMu        sync.RWMutex
+	paneStateListeners []PaneStateListener
+	snapshotFactories  map[string]SnapshotFactory
+}
+
+// PaneStateSnapshot captures dynamic pane flags for external consumers.
+type PaneStateSnapshot struct {
+	ID       [16]byte
+	Active   bool
+	Resizing bool
 }
 
 // NewDesktop creates and initializes a new desktop environment.
@@ -109,23 +118,24 @@ func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppF
 	driver.HideCursor()
 
 	d := &Desktop{
-		display:           driver,
-		workspaces:        make(map[int]*Screen),
-		statusPanes:       make([]*StatusPane, 0),
-		quit:              make(chan struct{}),
-		ShellAppFactory:   shellFactory,
-		WelcomeAppFactory: welcomeFactory,
-		styleCache:        make(map[styleKey]tcell.Style),
-		DefaultFgColor:    deffg,
-		DefaultBgColor:    defbg,
-		dispatcher:        NewEventDispatcher(),
-		statusBuffer:      NewInMemoryBufferStore(),
-		appLifecycle:      lifecycle,
-		inControlMode:     false,
-		subControlMode:    0,
-		clipboard:         make(map[string][]byte),
-		focusListeners:    make([]DesktopFocusListener, 0),
-		snapshotFactories: make(map[string]SnapshotFactory),
+		display:            driver,
+		workspaces:         make(map[int]*Screen),
+		statusPanes:        make([]*StatusPane, 0),
+		quit:               make(chan struct{}),
+		ShellAppFactory:    shellFactory,
+		WelcomeAppFactory:  welcomeFactory,
+		styleCache:         make(map[styleKey]tcell.Style),
+		DefaultFgColor:     deffg,
+		DefaultBgColor:     defbg,
+		dispatcher:         NewEventDispatcher(),
+		statusBuffer:       NewInMemoryBufferStore(),
+		appLifecycle:       lifecycle,
+		inControlMode:      false,
+		subControlMode:     0,
+		clipboard:          make(map[string][]byte),
+		focusListeners:     make([]DesktopFocusListener, 0),
+		paneStateListeners: make([]PaneStateListener, 0),
+		snapshotFactories:  make(map[string]SnapshotFactory),
 	}
 
 	log.Printf("NewDesktop: Created with inControlMode=%v", d.inControlMode)
@@ -151,6 +161,16 @@ func (d *Desktop) RegisterFocusListener(listener DesktopFocusListener) {
 	d.notifyFocusActive()
 }
 
+// RegisterPaneStateListener registers a listener for pane active/resizing changes.
+func (d *Desktop) RegisterPaneStateListener(listener PaneStateListener) {
+	if listener == nil {
+		return
+	}
+	d.paneStateMu.Lock()
+	d.paneStateListeners = append(d.paneStateListeners, listener)
+	d.paneStateMu.Unlock()
+}
+
 // RegisterSnapshotFactory registers a factory used to restore apps from snapshot metadata.
 func (d *Desktop) RegisterSnapshotFactory(appType string, factory SnapshotFactory) {
 	if appType == "" || factory == nil {
@@ -169,6 +189,21 @@ func (d *Desktop) UnregisterFocusListener(listener DesktopFocusListener) {
 	for i, registered := range d.focusListeners {
 		if registered == listener {
 			d.focusListeners = append(d.focusListeners[:i], d.focusListeners[i+1:]...)
+			break
+		}
+	}
+}
+
+// UnregisterPaneStateListener removes a previously registered pane state listener.
+func (d *Desktop) UnregisterPaneStateListener(listener PaneStateListener) {
+	if listener == nil {
+		return
+	}
+	d.paneStateMu.Lock()
+	defer d.paneStateMu.Unlock()
+	for i, registered := range d.paneStateListeners {
+		if registered == listener {
+			d.paneStateListeners = append(d.paneStateListeners[:i], d.paneStateListeners[i+1:]...)
 			break
 		}
 	}
@@ -726,6 +761,48 @@ func (d *Desktop) notifyFocusNode(node *Node) {
 		return
 	}
 	d.notifyFocus(node.Pane.ID())
+}
+
+func (d *Desktop) notifyPaneState(id [16]byte, active, resizing bool) {
+	d.paneStateMu.RLock()
+	listeners := append([]PaneStateListener(nil), d.paneStateListeners...)
+	d.paneStateMu.RUnlock()
+	for _, l := range listeners {
+		l.PaneStateChanged(id, active, resizing)
+	}
+}
+
+func (d *Desktop) forEachPane(fn func(*pane)) {
+	if fn == nil {
+		return
+	}
+	for _, ws := range d.workspaces {
+		if ws == nil || ws.tree == nil {
+			continue
+		}
+		var traverse func(*Node)
+		traverse = func(node *Node) {
+			if node == nil {
+				return
+			}
+			if node.Pane != nil {
+				fn(node.Pane)
+			}
+			for _, child := range node.Children {
+				traverse(child)
+			}
+		}
+		traverse(ws.tree.Root)
+	}
+}
+
+// PaneStates returns the current pane flags across all workspaces.
+func (d *Desktop) PaneStates() []PaneStateSnapshot {
+	states := make([]PaneStateSnapshot, 0)
+	d.forEachPane(func(p *pane) {
+		states = append(states, PaneStateSnapshot{ID: p.ID(), Active: p.IsActive, Resizing: p.IsResizing})
+	})
+	return states
 }
 
 func (d *Desktop) notifyFocus(paneID [16]byte) {

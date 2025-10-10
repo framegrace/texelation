@@ -12,16 +12,17 @@ import (
 )
 
 type connection struct {
-	conn            net.Conn
-	session         *Session
-	lastSent        uint64
-	lastAcked       uint64
-	sink            EventSink
-	writeMu         sync.Mutex
-	unregisterFocus func()
-	unregisterState func()
-	awaitResume     bool
-	attachListeners func()
+	conn                net.Conn
+	session             *Session
+	lastSent            uint64
+	lastAcked           uint64
+	sink                EventSink
+	writeMu             sync.Mutex
+	unregisterFocus     func()
+	unregisterState     func()
+	unregisterPaneState func()
+	awaitResume         bool
+	attachListeners     func()
 }
 
 func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume bool) *connection {
@@ -40,7 +41,10 @@ func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume 
 				c.unregisterFocus = func() { desktop.UnregisterFocusListener(c) }
 				desktop.Subscribe(c)
 				c.unregisterState = func() { desktop.Unsubscribe(c) }
+				desktop.RegisterPaneStateListener(c)
+				c.unregisterPaneState = func() { desktop.UnregisterPaneStateListener(c) }
 				c.sendStateUpdate(desktop.CurrentStatePayload())
+				c.sendPaneStateSnapshots(desktop.PaneStates())
 			}
 			if awaitResume {
 				c.attachListeners = func() {
@@ -62,6 +66,9 @@ func (c *connection) serve() error {
 		}
 		if c.unregisterState != nil {
 			c.unregisterState()
+		}
+		if c.unregisterPaneState != nil {
+			c.unregisterPaneState()
 		}
 	}()
 	defer c.session.MarkSnapshot(time.Now()) // placeholder for future persistence triggers
@@ -205,6 +212,10 @@ func (c *connection) OnEvent(event texel.Event) {
 	c.sendStateUpdate(payload)
 }
 
+func (c *connection) PaneStateChanged(id [16]byte, active bool, resizing bool) {
+	c.sendPaneState(id, active, resizing)
+}
+
 func (c *connection) sendPending() error {
 	if c.awaitResume {
 		return nil
@@ -285,4 +296,25 @@ func (c *connection) sendStateUpdate(state texel.StatePayload) {
 
 func colorToRGB(r, g, b int32) uint32 {
 	return ((uint32(r) & 0xFF) << 16) | ((uint32(g) & 0xFF) << 8) | (uint32(b) & 0xFF)
+}
+
+func (c *connection) sendPaneStateSnapshots(states []texel.PaneStateSnapshot) {
+	for _, state := range states {
+		c.sendPaneState(state.ID, state.Active, state.Resizing)
+	}
+}
+
+func (c *connection) sendPaneState(id [16]byte, active, resizing bool) {
+	var flags protocol.PaneStateFlags
+	if active {
+		flags |= protocol.PaneStateActive
+	}
+	if resizing {
+		flags |= protocol.PaneStateResizing
+	}
+	payload, err := protocol.EncodePaneState(protocol.PaneState{PaneID: id, Flags: flags})
+	if err != nil {
+		return
+	}
+	_ = c.writeControlMessage(protocol.MsgPaneState, payload)
 }

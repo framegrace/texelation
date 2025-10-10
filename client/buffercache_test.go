@@ -108,6 +108,20 @@ func TestBufferCacheApplySnapshotPrunesMissingPanes(t *testing.T) {
 	}
 }
 
+func TestBufferCacheSetPaneFlags(t *testing.T) {
+	cache := NewBufferCache()
+	var id [16]byte
+	id[0] = 9
+	pane := cache.SetPaneFlags(id, true, true)
+	if !pane.Active || !pane.Resizing {
+		t.Fatalf("expected flags to be set")
+	}
+	cache.SetPaneFlags(id, false, true)
+	if pane.Active || !pane.Resizing {
+		t.Fatalf("expected active=false resizing=true, got %+v", pane)
+	}
+}
+
 func TestBufferCacheResumeFlow(t *testing.T) {
 	cache := NewBufferCache()
 	var id [16]byte
