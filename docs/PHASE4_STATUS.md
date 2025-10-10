@@ -11,6 +11,7 @@
 - Remote renderer draws server-provided buffers with full styling, applies live theme defaults, and passes updated geometry tests (`client/cmd/texel-client/main.go`, `client/cmd/texel-client/main_test.go`).
 - Server capture path now skips visual-effect overlays so pane diffs contain raw app output (`texel/pane.go`, `texel/snapshot.go`).
 - Protocol gained `MsgStateUpdate`; connections forward desktop state and the remote renderer consumes it for status lines and control-mode overlays (`protocol/messages.go`, `server/connection.go`, `client/cmd/texel-client/main.go`).
+- Remote renderer now re-applies inactive pane dimming based on streamed focus state so non-focused panes stay visually subdued (`client/cmd/texel-client/main.go`).
 - Resume scaffolding exists: `SimpleClient.RequestResume` sends `MsgResumeRequest` and the CLI uses cached sequence numbers to request snapshots/diffs.
 - Resume integration test now uses a headless screen driver and sends an explicit initial snapshot before starting the connection loop, eliminating the tcell locale failure (`server/client_integration_test.go`).
 

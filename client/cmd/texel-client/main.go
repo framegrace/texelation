@@ -230,6 +230,10 @@ func render(state *uiState, screen tcell.Screen) {
 		if pane == nil || pane.Rect.Width <= 0 || pane.Rect.Height <= 0 {
 			continue
 		}
+		inactiveIntensity := float32(0)
+		if state.hasFocus && pane.ID != state.focus.PaneID {
+			inactiveIntensity = 0.3
+		}
 		for rowIdx := 0; rowIdx < pane.Rect.Height; rowIdx++ {
 			targetY := pane.Rect.Y + rowIdx
 			if targetY < 0 || targetY >= height {
@@ -251,6 +255,9 @@ func render(state *uiState, screen tcell.Screen) {
 					if cell.Style != (tcell.Style{}) {
 						style = cell.Style
 					}
+				}
+				if inactiveIntensity > 0 {
+					style = applyInactiveOverlay(style, inactiveIntensity, state)
 				}
 				screen.SetContent(targetX, targetY, ch, nil, style)
 			}
@@ -513,4 +520,37 @@ func hsvToRGB(h, s, v float32) tcell.Color {
 
 func formatPaneID(id [16]byte) string {
 	return fmt.Sprintf("%x", id[:4])
+}
+
+func applyInactiveOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {
+	if intensity <= 0 {
+		return style
+	}
+	fg, bg, attrs := style.Decompose()
+	if !fg.Valid() {
+		fg = state.defaultFg
+		if !fg.Valid() {
+			fg = tcell.ColorWhite
+		}
+	}
+	if !bg.Valid() {
+		bg = state.defaultBg
+		if !bg.Valid() {
+			bg = state.desktopBg
+			if !bg.Valid() {
+				bg = tcell.ColorBlack
+			}
+		}
+	}
+	overlay := blendColor(bg, state.desktopBg, 0.5)
+	blendedFg := blendColor(fg, overlay, intensity)
+	blendedBg := blendColor(bg, state.desktopBg, intensity)
+	return tcell.StyleDefault.Foreground(blendedFg).
+		Background(blendedBg).
+		Bold(attrs&tcell.AttrBold != 0).
+		Underline(attrs&tcell.AttrUnderline != 0).
+		Reverse(attrs&tcell.AttrReverse != 0).
+		Blink(attrs&tcell.AttrBlink != 0).
+		Dim(attrs&tcell.AttrDim != 0).
+		Italic(attrs&tcell.AttrItalic != 0)
 }
