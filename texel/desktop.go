@@ -631,19 +631,48 @@ func (d *Desktop) broadcastStateUpdate() {
 	sort.Ints(allWsIDs)
 
 	d.dispatcher.Broadcast(Event{
-		Type: EventStateUpdate,
-		Payload: StatePayload{
-			AllWorkspaces:  allWsIDs,
-			WorkspaceID:    d.activeWorkspace.id,
-			InControlMode:  d.inControlMode,
-			SubMode:        d.subControlMode,
-			ActiveTitle:    title,
-			DesktopBgColor: d.DefaultBgColor, // Provide the desktop's default background color
-		},
+		Type:    EventStateUpdate,
+		Payload: d.currentStatePayload(allWsIDs, title),
 	})
 	//	if d.activeWorkspace != nil {
 	//		d.activeWorkspace.Refresh()
 	//	}
+}
+
+func (d *Desktop) currentStatePayload(allWsIDs []int, title string) StatePayload {
+	if allWsIDs == nil {
+		allWsIDs = make([]int, 0, len(d.workspaces))
+		for id := range d.workspaces {
+			allWsIDs = append(allWsIDs, id)
+		}
+		sort.Ints(allWsIDs)
+	}
+	if title == "" {
+		if d.inControlMode && d.zoomedPane != nil {
+			if d.zoomedPane.Pane != nil {
+				title = d.zoomedPane.Pane.getTitle()
+			}
+		} else if d.activeWorkspace != nil {
+			title = d.activeWorkspace.tree.GetActiveTitle()
+		}
+	}
+	workspaceID := 0
+	if d.activeWorkspace != nil {
+		workspaceID = d.activeWorkspace.id
+	}
+	return StatePayload{
+		AllWorkspaces:  allWsIDs,
+		WorkspaceID:    workspaceID,
+		InControlMode:  d.inControlMode,
+		SubMode:        d.subControlMode,
+		ActiveTitle:    title,
+		DesktopBgColor: d.DefaultBgColor,
+	}
+}
+
+// CurrentStatePayload exposes the latest desktop state snapshot.
+func (d *Desktop) CurrentStatePayload() StatePayload {
+	return d.currentStatePayload(nil, "")
 }
 
 func (d *Desktop) SwitchToWorkspace(id int) {

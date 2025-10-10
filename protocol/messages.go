@@ -10,6 +10,7 @@ import (
 var (
 	errStringTooLong = errors.New("protocol: string exceeds 64KB limit")
 	errPayloadShort  = errors.New("protocol: payload too short")
+	errExtraBytes    = errors.New("protocol: payload has trailing data")
 )
 
 // Hello initiates the handshake from client to server.
@@ -126,6 +127,16 @@ type ThemeAck struct {
 // PaneFocus identifies the pane that is currently active/focused.
 type PaneFocus struct {
 	PaneID [16]byte
+}
+
+// StateUpdate mirrors texel.StatePayload for remote clients.
+type StateUpdate struct {
+	WorkspaceID   int32
+	AllWorkspaces []int32
+	InControlMode bool
+	SubMode       rune
+	ActiveTitle   string
+	DesktopBgRGB  uint32
 }
 
 // PaneSnapshot describes the full buffer content for a single pane.
@@ -605,6 +616,87 @@ func DecodePaneFocus(b []byte) (PaneFocus, error) {
 	}
 	copy(focus.PaneID[:], b[:len(focus.PaneID)])
 	return focus, nil
+}
+
+// EncodeStateUpdate serialises a state update for transport.
+func EncodeStateUpdate(update StateUpdate) ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+	if err := binary.Write(buf, binary.LittleEndian, update.WorkspaceID); err != nil {
+		return nil, err
+	}
+	if update.InControlMode {
+		buf.WriteByte(1)
+	} else {
+		buf.WriteByte(0)
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint32(update.SubMode)); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, update.DesktopBgRGB); err != nil {
+		return nil, err
+	}
+	if len(update.AllWorkspaces) > 0xFFFF {
+		return nil, errStringTooLong
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint16(len(update.AllWorkspaces))); err != nil {
+		return nil, err
+	}
+	for _, ws := range update.AllWorkspaces {
+		if err := binary.Write(buf, binary.LittleEndian, ws); err != nil {
+			return nil, err
+		}
+	}
+	if err := encodeString(buf, update.ActiveTitle); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// DecodeStateUpdate deserialises the state update payload.
+func DecodeStateUpdate(b []byte) (StateUpdate, error) {
+	var update StateUpdate
+	if len(b) < 4 {
+		return update, errPayloadShort
+	}
+	update.WorkspaceID = int32(binary.LittleEndian.Uint32(b[:4]))
+	b = b[4:]
+	if len(b) < 1 {
+		return update, errPayloadShort
+	}
+	update.InControlMode = b[0] != 0
+	b = b[1:]
+	if len(b) < 4 {
+		return update, errPayloadShort
+	}
+	update.SubMode = rune(binary.LittleEndian.Uint32(b[:4]))
+	b = b[4:]
+	if len(b) < 4 {
+		return update, errPayloadShort
+	}
+	update.DesktopBgRGB = binary.LittleEndian.Uint32(b[:4])
+	b = b[4:]
+	if len(b) < 2 {
+		return update, errPayloadShort
+	}
+	count := binary.LittleEndian.Uint16(b[:2])
+	b = b[2:]
+	update.AllWorkspaces = make([]int32, count)
+	for i := 0; i < int(count); i++ {
+		if len(b) < 4 {
+			return update, errPayloadShort
+		}
+		update.AllWorkspaces[i] = int32(binary.LittleEndian.Uint32(b[:4]))
+		b = b[4:]
+	}
+	var err error
+	update.ActiveTitle, b, err = decodeString(b)
+	if err != nil {
+		return update, err
+	}
+	if len(b) != 0 {
+		return update, errExtraBytes
+	}
+	return update, nil
 }
 
 // EncodeTreeSnapshot serialises the tree snapshot for transport.

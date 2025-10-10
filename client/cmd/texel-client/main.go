@@ -4,9 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -25,6 +27,15 @@ type uiState struct {
 	hasFocus     bool
 	themeValues  map[string]map[string]string
 	defaultStyle tcell.Style
+	defaultFg    tcell.Color
+	defaultBg    tcell.Color
+	workspaces   []int
+	workspaceID  int
+	activeTitle  string
+	controlMode  bool
+	subMode      rune
+	desktopBg    tcell.Color
+	rainbowPhase float32
 }
 
 func main() {
@@ -46,7 +57,14 @@ func main() {
 
 	fmt.Printf("Connected to session %s\n", client.FormatUUID(accept.SessionID))
 
-	state := &uiState{cache: client.NewBufferCache(), themeValues: make(map[string]map[string]string), defaultStyle: tcell.StyleDefault}
+	state := &uiState{
+		cache:        client.NewBufferCache(),
+		themeValues:  make(map[string]map[string]string),
+		defaultStyle: tcell.StyleDefault,
+		defaultFg:    tcell.ColorDefault,
+		defaultBg:    tcell.ColorDefault,
+		desktopBg:    tcell.ColorDefault,
+	}
 	lastSequence := uint64(0)
 
 	if *reconnect {
@@ -80,7 +98,7 @@ func main() {
 				return
 			}
 			switch hdr.Type {
-			case protocol.MsgTreeSnapshot, protocol.MsgBufferDelta, protocol.MsgClipboardData, protocol.MsgThemeAck, protocol.MsgClipboardSet, protocol.MsgThemeUpdate:
+			case protocol.MsgTreeSnapshot, protocol.MsgBufferDelta, protocol.MsgClipboardData, protocol.MsgThemeAck, protocol.MsgClipboardSet, protocol.MsgThemeUpdate, protocol.MsgStateUpdate:
 				render(state, screen)
 			}
 		default:
@@ -193,17 +211,21 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		}
 		state.focus = focus
 		state.hasFocus = true
+	case protocol.MsgStateUpdate:
+		update, err := protocol.DecodeStateUpdate(payload)
+		if err != nil {
+			log.Printf("decode state update failed: %v", err)
+			return
+		}
+		state.applyStateUpdate(update)
 	}
 }
 
 func render(state *uiState, screen tcell.Screen) {
-	panes := state.cache.LayoutPanes()
-	if len(panes) == 0 {
-		return
-	}
 	width, height := screen.Size()
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
+	panes := state.cache.LayoutPanes()
 	for _, pane := range panes {
 		if pane == nil || pane.Rect.Width <= 0 || pane.Rect.Height <= 0 {
 			continue
@@ -220,17 +242,31 @@ func render(state *uiState, screen tcell.Screen) {
 					continue
 				}
 				ch := ' '
-				style := tcell.StyleDefault
+				style := state.defaultStyle
 				if row != nil && col < len(row) {
 					cell := row[col]
 					if cell.Ch != 0 {
 						ch = cell.Ch
 					}
-					style = cell.Style
+					if cell.Style != (tcell.Style{}) {
+						style = cell.Style
+					}
 				}
 				screen.SetContent(targetX, targetY, ch, nil, style)
 			}
 		}
+	}
+	statusLines := state.buildStatusLines(width)
+	startY := height - len(statusLines)
+	for i, line := range statusLines {
+		y := startY + i
+		if y < 0 || y >= height {
+			continue
+		}
+		drawText(screen, 0, y, width, truncateForStatus(line, width), state.defaultStyle)
+	}
+	if state.controlMode {
+		applyControlOverlay(state, screen)
 	}
 	screen.Show()
 }
@@ -256,27 +292,90 @@ func (s *uiState) updateTheme(section, key, value string) {
 		s.themeValues[section] = sec
 	}
 	sec[key] = value
-	s.defaultStyle = computeDefaultStyle(s.themeValues)
+	if section == "desktop" {
+		switch key {
+		case "default_fg":
+			if fg, ok := parseHexColor(value); ok {
+				s.defaultFg = fg
+			}
+		case "default_bg":
+			if bg, ok := parseHexColor(value); ok {
+				s.defaultBg = bg
+				s.desktopBg = bg
+			}
+		}
+	}
+	s.recomputeDefaultStyle()
 }
 
-func computeDefaultStyle(values map[string]map[string]string) tcell.Style {
+func (s *uiState) recomputeDefaultStyle() {
 	style := tcell.StyleDefault
-	if values == nil {
-		return style
+	if s.defaultFg != tcell.ColorDefault {
+		style = style.Foreground(s.defaultFg)
 	}
-	if desktop, ok := values["desktop"]; ok {
-		if fgStr, ok := desktop["default_fg"]; ok {
-			if fg, ok := parseHexColor(fgStr); ok {
-				style = style.Foreground(fg)
-			}
-		}
-		if bgStr, ok := desktop["default_bg"]; ok {
-			if bg, ok := parseHexColor(bgStr); ok {
-				style = style.Background(bg)
-			}
-		}
+	if s.defaultBg != tcell.ColorDefault {
+		style = style.Background(s.defaultBg)
 	}
-	return style
+	s.defaultStyle = style
+}
+
+func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
+	s.workspaceID = int(update.WorkspaceID)
+	if cap(s.workspaces) < len(update.AllWorkspaces) {
+		s.workspaces = make([]int, 0, len(update.AllWorkspaces))
+	} else {
+		s.workspaces = s.workspaces[:0]
+	}
+	for _, id := range update.AllWorkspaces {
+		s.workspaces = append(s.workspaces, int(id))
+	}
+	s.controlMode = update.InControlMode
+	s.subMode = update.SubMode
+	s.activeTitle = update.ActiveTitle
+	bg := colorFromRGB(update.DesktopBgRGB)
+	if bg != tcell.ColorDefault {
+		s.desktopBg = bg
+		s.defaultBg = bg
+	}
+	if !s.controlMode {
+		s.rainbowPhase = 0
+	}
+	s.recomputeDefaultStyle()
+}
+
+func (s *uiState) buildStatusLines(width int) []string {
+	var lines []string
+	if len(s.workspaces) > 0 {
+		parts := make([]string, len(s.workspaces))
+		for i, id := range s.workspaces {
+			label := fmt.Sprintf("%d", id)
+			if id == s.workspaceID {
+				label = "[" + label + "]"
+			}
+			parts[i] = label
+		}
+		lines = append(lines, "Workspaces: "+strings.Join(parts, " "))
+	}
+	if s.controlMode {
+		mode := "Control"
+		if s.subMode != 0 {
+			mode += fmt.Sprintf(" (%c)", s.subMode)
+		}
+		lines = append(lines, "Mode: "+mode)
+	}
+	if s.activeTitle != "" {
+		lines = append(lines, "Active: "+s.activeTitle)
+	}
+	if s.hasFocus {
+		lines = append(lines, "Focus: "+formatPaneID(s.focus.PaneID))
+	}
+	if s.hasClipboard {
+		lines = append(lines, fmt.Sprintf("Clipboard[%s]: %s", s.clipboard.MimeType, string(s.clipboard.Data)))
+	}
+	if s.hasTheme {
+		lines = append(lines, fmt.Sprintf("Theme %s.%s = %s", s.theme.Section, s.theme.Key, s.theme.Value))
+	}
+	return lines
 }
 
 func parseHexColor(value string) (tcell.Color, bool) {
@@ -292,4 +391,126 @@ func parseHexColor(value string) (tcell.Color, bool) {
 		}
 	}
 	return tcell.ColorDefault, false
+}
+
+func colorFromRGB(rgb uint32) tcell.Color {
+	r := int32((rgb >> 16) & 0xFF)
+	g := int32((rgb >> 8) & 0xFF)
+	b := int32(rgb & 0xFF)
+	return tcell.NewRGBColor(r, g, b)
+}
+
+func drawText(screen tcell.Screen, x, y, width int, text string, style tcell.Style) {
+	runes := []rune(text)
+	for i := 0; i < width; i++ {
+		ch := ' '
+		if i < len(runes) {
+			ch = runes[i]
+		}
+		screen.SetContent(x+i, y, ch, nil, style)
+	}
+}
+
+func truncateForStatus(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
+}
+
+func applyControlOverlay(state *uiState, screen tcell.Screen) {
+	width, height := screen.Size()
+	offset := state.rainbowPhase
+	state.rainbowPhase += 0.09
+	if state.rainbowPhase > 2*math.Pi {
+		state.rainbowPhase = 0
+	}
+	intensity := float32(0.15)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			ch, comb, style, cellW := screen.GetContent(x, y)
+			if cellW <= 0 {
+				cellW = 1
+			}
+			fg, bg, attrs := style.Decompose()
+			if !fg.Valid() {
+				fg = state.defaultFg
+				if !fg.Valid() {
+					fg = tcell.ColorWhite
+				}
+			}
+			if !bg.Valid() {
+				bg = state.defaultBg
+				if !bg.Valid() {
+					bg = state.desktopBg
+					if !bg.Valid() {
+						bg = tcell.ColorBlack
+					}
+				}
+			}
+			hue := offset + float32(x+y)*0.1
+			overlay := hsvToRGB(hue, 1.0, 1.0)
+			blendedFg := blendColor(fg, overlay, intensity)
+			blendedBg := blendColor(bg, overlay, intensity)
+			styled := tcell.StyleDefault.Foreground(blendedFg).Background(blendedBg)
+			styled = styled.Bold(attrs&tcell.AttrBold != 0).
+				Underline(attrs&tcell.AttrUnderline != 0).
+				Reverse(attrs&tcell.AttrReverse != 0).
+				Blink(attrs&tcell.AttrBlink != 0).
+				Dim(attrs&tcell.AttrDim != 0).
+				Italic(attrs&tcell.AttrItalic != 0)
+			screen.SetContent(x, y, ch, comb, styled)
+			x += cellW - 1
+		}
+	}
+}
+
+func blendColor(base, overlay tcell.Color, intensity float32) tcell.Color {
+	if intensity <= 0 {
+		return base
+	}
+	if intensity > 1 {
+		intensity = 1
+	}
+	r1, g1, b1 := base.RGB()
+	r2, g2, b2 := overlay.RGB()
+	blend := func(a, b int32) int32 {
+		return int32(float32(a)*(1-intensity) + float32(b)*intensity)
+	}
+	return tcell.NewRGBColor(blend(r1, r2), blend(g1, g2), blend(b1, b2))
+}
+
+func hsvToRGB(h, s, v float32) tcell.Color {
+	h = float32(math.Mod(float64(h), 2*math.Pi)) / (2 * math.Pi) * 360
+	c := v * s
+	x := c * (1 - float32(math.Abs(math.Mod(float64(h/60), 2)-1)))
+	m := v - c
+	var r, g, b float32
+	switch {
+	case h < 60:
+		r, g, b = c, x, 0
+	case h < 120:
+		r, g, b = x, c, 0
+	case h < 180:
+		r, g, b = 0, c, x
+	case h < 240:
+		r, g, b = 0, x, c
+	case h < 300:
+		r, g, b = x, 0, c
+	default:
+		r, g, b = c, 0, x
+	}
+	r, g, b = (r+m)*255, (g+m)*255, (b+m)*255
+	return tcell.NewRGBColor(int32(r), int32(g), int32(b))
+}
+
+func formatPaneID(id [16]byte) string {
+	return fmt.Sprintf("%x", id[:4])
 }

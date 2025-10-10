@@ -216,6 +216,34 @@ func TestTreeSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateUpdateRoundTrip(t *testing.T) {
+	update := StateUpdate{
+		WorkspaceID:   7,
+		AllWorkspaces: []int32{1, 3, 5},
+		InControlMode: true,
+		SubMode:       'w',
+		ActiveTitle:   "shell",
+		DesktopBgRGB:  0x112233,
+	}
+	payload, err := EncodeStateUpdate(update)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeStateUpdate(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded.WorkspaceID != update.WorkspaceID || decoded.SubMode != update.SubMode || decoded.ActiveTitle != update.ActiveTitle {
+		t.Fatalf("unexpected decoded state %#v", decoded)
+	}
+	if decoded.DesktopBgRGB != update.DesktopBgRGB {
+		t.Fatalf("desktop color mismatch: %x", decoded.DesktopBgRGB)
+	}
+	if len(decoded.AllWorkspaces) != len(update.AllWorkspaces) {
+		t.Fatalf("workspace list mismatch: %v", decoded.AllWorkspaces)
+	}
+}
+
 func BenchmarkEncodeBufferDelta(b *testing.B) {
 	delta := BufferDelta{
 		PaneID:   [16]byte{1, 2, 3, 4},

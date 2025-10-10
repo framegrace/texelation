@@ -66,7 +66,7 @@ func (d *Desktop) CaptureTree() TreeCapture {
 }
 
 func capturePaneSnapshot(p *pane) PaneSnapshot {
-	buf := p.Render()
+	buf := p.renderBuffer(false)
 	id := p.ID()
 	snap := PaneSnapshot{
 		ID:     id,

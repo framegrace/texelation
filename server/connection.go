@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"texelation/protocol"
+	"texelation/texel"
 )
 
 type connection struct {
@@ -18,8 +19,9 @@ type connection struct {
 	sink            EventSink
 	writeMu         sync.Mutex
 	unregisterFocus func()
+	unregisterState func()
 	awaitResume     bool
-	focusAttach     func()
+	attachListeners func()
 }
 
 func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume bool) *connection {
@@ -33,14 +35,20 @@ func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume 
 	}
 	if ds, ok := sink.(*DesktopSink); ok {
 		if desktop := ds.Desktop(); desktop != nil {
-			if awaitResume {
-				c.focusAttach = func() {
-					desktop.RegisterFocusListener(c)
-					c.unregisterFocus = func() { desktop.UnregisterFocusListener(c) }
-				}
-			} else {
+			attach := func() {
 				desktop.RegisterFocusListener(c)
 				c.unregisterFocus = func() { desktop.UnregisterFocusListener(c) }
+				desktop.Subscribe(c)
+				c.unregisterState = func() { desktop.Unsubscribe(c) }
+				c.sendStateUpdate(desktop.CurrentStatePayload())
+			}
+			if awaitResume {
+				c.attachListeners = func() {
+					attach()
+					c.attachListeners = nil
+				}
+			} else {
+				attach()
 			}
 		}
 	}
@@ -48,9 +56,14 @@ func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume 
 }
 
 func (c *connection) serve() error {
-	if c.unregisterFocus != nil {
-		defer c.unregisterFocus()
-	}
+	defer func() {
+		if c.unregisterFocus != nil {
+			c.unregisterFocus()
+		}
+		if c.unregisterState != nil {
+			c.unregisterState()
+		}
+	}()
 	defer c.session.MarkSnapshot(time.Now()) // placeholder for future persistence triggers
 	for {
 		if err := c.sendPending(); err != nil {
@@ -157,9 +170,8 @@ func (c *connection) serve() error {
 			}
 			c.lastAcked = request.LastSequence
 			c.awaitResume = false
-			if c.focusAttach != nil {
-				c.focusAttach()
-				c.focusAttach = nil
+			if c.attachListeners != nil {
+				c.attachListeners()
 			}
 			if provider, ok := c.sink.(SnapshotProvider); ok {
 				snapshot, err := provider.Snapshot()
@@ -180,6 +192,17 @@ func (c *connection) serve() error {
 			// Unknown messages are ignored for now.
 		}
 	}
+}
+
+func (c *connection) OnEvent(event texel.Event) {
+	if event.Type != texel.EventStateUpdate {
+		return
+	}
+	payload, ok := event.Payload.(texel.StatePayload)
+	if !ok {
+		return
+	}
+	c.sendStateUpdate(payload)
 }
 
 func (c *connection) sendPending() error {
@@ -235,4 +258,31 @@ func (c *connection) PaneFocused(paneID [16]byte) {
 	if err := c.writeControlMessage(protocol.MsgPaneFocus, payload); err != nil {
 		// Ignore errors when the connection is closing.
 	}
+}
+
+func (c *connection) sendStateUpdate(state texel.StatePayload) {
+	all := make([]int32, len(state.AllWorkspaces))
+	for i, id := range state.AllWorkspaces {
+		all[i] = int32(id)
+	}
+	r, g, b := state.DesktopBgColor.RGB()
+	update := protocol.StateUpdate{
+		WorkspaceID:   int32(state.WorkspaceID),
+		AllWorkspaces: all,
+		InControlMode: state.InControlMode,
+		SubMode:       state.SubMode,
+		ActiveTitle:   state.ActiveTitle,
+		DesktopBgRGB:  colorToRGB(r, g, b),
+	}
+	payload, err := protocol.EncodeStateUpdate(update)
+	if err != nil {
+		return
+	}
+	if err := c.writeControlMessage(protocol.MsgStateUpdate, payload); err != nil {
+		// Ignore write failures; connection loop will surface them.
+	}
+}
+
+func colorToRGB(r, g, b int32) uint32 {
+	return ((uint32(r) & 0xFF) << 16) | ((uint32(g) & 0xFF) << 8) | (uint32(b) & 0xFF)
 }

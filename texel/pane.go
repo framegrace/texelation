@@ -191,8 +191,12 @@ func (p *pane) SetAsDialog() {
 	p.SetZOrder(ZOrderDialog)
 }
 
-// Render draws the pane's borders, title, and the hosted application's content.
+// Render draws the pane's borders, title, and the hosted application's content including effects.
 func (p *pane) Render() [][]Cell {
+	return p.renderBuffer(true)
+}
+
+func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	w := p.Width()
 	h := p.Height()
 
@@ -285,7 +289,9 @@ func (p *pane) Render() [][]Cell {
 	}
 
 	// Apply all effects in the pipeline to the entire pane buffer
-	p.effects.Apply(&buffer)
+	if applyEffects {
+		p.effects.Apply(&buffer)
+	}
 
 	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
 	return buffer

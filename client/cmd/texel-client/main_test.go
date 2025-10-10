@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -78,6 +79,29 @@ func TestRenderRespectsPaneGeometry(t *testing.T) {
 	belowLeft := readScreenLine(screen, 0, 5, 12)
 	if belowLeft != "" {
 		t.Fatalf("expected empty area, got %q", belowLeft)
+	}
+}
+
+func TestStateUpdateFeedsStatusLines(t *testing.T) {
+	state := &uiState{defaultStyle: tcell.StyleDefault}
+	update := protocol.StateUpdate{
+		WorkspaceID:   2,
+		AllWorkspaces: []int32{1, 2, 3},
+		InControlMode: true,
+		SubMode:       'w',
+		ActiveTitle:   "shell",
+		DesktopBgRGB:  0x112233,
+	}
+	state.applyStateUpdate(update)
+	if !state.controlMode || state.workspaceID != 2 || state.activeTitle != "shell" {
+		t.Fatalf("state not applied: %#v", state)
+	}
+	lines := state.buildStatusLines(80)
+	if len(lines) == 0 {
+		t.Fatalf("expected status lines")
+	}
+	if !strings.Contains(lines[0], "Workspaces") {
+		t.Fatalf("expected workspace status, got %q", lines[0])
 	}
 }
 
