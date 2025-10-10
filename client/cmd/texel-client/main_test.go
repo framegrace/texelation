@@ -91,6 +91,8 @@ func TestStateUpdateFeedsStatusLines(t *testing.T) {
 		SubMode:       'w',
 		ActiveTitle:   "shell",
 		DesktopBgRGB:  0x112233,
+		Zoomed:        true,
+		ZoomedPaneID:  [16]byte{9, 9, 9, 9},
 	}
 	state.applyStateUpdate(update)
 	if !state.controlMode || state.workspaceID != 2 || state.activeTitle != "shell" {
@@ -100,8 +102,14 @@ func TestStateUpdateFeedsStatusLines(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatalf("expected status lines")
 	}
+	if len(lines) < 3 {
+		t.Fatalf("expected multiple status lines, got %v", lines)
+	}
 	if !strings.Contains(lines[0], "Workspaces") {
 		t.Fatalf("expected workspace status, got %q", lines[0])
+	}
+	if !strings.Contains(strings.Join(lines, " "), "Zoom") {
+		t.Fatalf("expected zoom status, got %v", lines)
 	}
 }
 

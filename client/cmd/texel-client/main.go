@@ -36,6 +36,8 @@ type uiState struct {
 	subMode      rune
 	desktopBg    tcell.Color
 	rainbowPhase float32
+	zoomed       bool
+	zoomedPane   [16]byte
 }
 
 func main() {
@@ -273,6 +275,9 @@ func render(state *uiState, screen tcell.Screen) {
 				if pane.Resizing {
 					style = applyResizingOverlay(style, 0.2, state)
 				}
+				if state.zoomed && pane.ID == state.zoomedPane {
+					style = applyZoomOverlay(style, 0.2, state)
+				}
 				screen.SetContent(targetX, targetY, ch, nil, style)
 			}
 		}
@@ -361,6 +366,10 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 	if !s.controlMode {
 		s.rainbowPhase = 0
 	}
+	s.zoomed = update.Zoomed
+	if update.Zoomed {
+		s.zoomedPane = update.ZoomedPaneID
+	}
 	s.recomputeDefaultStyle()
 }
 
@@ -386,6 +395,9 @@ func (s *uiState) buildStatusLines(width int) []string {
 	}
 	if s.activeTitle != "" {
 		lines = append(lines, "Active: "+s.activeTitle)
+	}
+	if s.zoomed {
+		lines = append(lines, "Zoom: "+formatPaneID(s.zoomedPane))
 	}
 	if s.hasFocus {
 		lines = append(lines, "Focus: "+formatPaneID(s.focus.PaneID))
@@ -595,6 +607,39 @@ func applyResizingOverlay(style tcell.Style, intensity float32, state *uiState) 
 	return tcell.StyleDefault.Foreground(blendedFg).
 		Background(blendedBg).
 		Bold(attrs&tcell.AttrBold != 0).
+		Underline(attrs&tcell.AttrUnderline != 0).
+		Reverse(attrs&tcell.AttrReverse != 0).
+		Blink(attrs&tcell.AttrBlink != 0).
+		Dim(attrs&tcell.AttrDim != 0).
+		Italic(attrs&tcell.AttrItalic != 0)
+}
+
+func applyZoomOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {
+	if intensity <= 0 {
+		return style
+	}
+	fg, bg, attrs := style.Decompose()
+	if !fg.Valid() {
+		fg = state.defaultFg
+		if !fg.Valid() {
+			fg = tcell.ColorWhite
+		}
+	}
+	if !bg.Valid() {
+		bg = state.defaultBg
+		if !bg.Valid() {
+			bg = state.desktopBg
+			if !bg.Valid() {
+				bg = tcell.ColorBlack
+			}
+		}
+	}
+	outline := tcell.NewRGBColor(120, 200, 255)
+	blendedFg := blendColor(fg, outline, intensity/2)
+	blendedBg := blendColor(bg, outline, intensity/1.5)
+	return tcell.StyleDefault.Foreground(blendedFg).
+		Background(blendedBg).
+		Bold(true).
 		Underline(attrs&tcell.AttrUnderline != 0).
 		Reverse(attrs&tcell.AttrReverse != 0).
 		Blink(attrs&tcell.AttrBlink != 0).

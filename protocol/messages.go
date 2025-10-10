@@ -137,6 +137,8 @@ type StateUpdate struct {
 	SubMode       rune
 	ActiveTitle   string
 	DesktopBgRGB  uint32
+	Zoomed        bool
+	ZoomedPaneID  [16]byte
 }
 
 // PaneStateFlags indicate pane state bits.
@@ -649,6 +651,14 @@ func EncodeStateUpdate(update StateUpdate) ([]byte, error) {
 	if err := binary.Write(buf, binary.LittleEndian, update.DesktopBgRGB); err != nil {
 		return nil, err
 	}
+	if update.Zoomed {
+		buf.WriteByte(1)
+	} else {
+		buf.WriteByte(0)
+	}
+	if err := binary.Write(buf, binary.LittleEndian, update.ZoomedPaneID); err != nil {
+		return nil, err
+	}
 	if len(update.AllWorkspaces) > 0xFFFF {
 		return nil, errStringTooLong
 	}
@@ -689,6 +699,16 @@ func DecodeStateUpdate(b []byte) (StateUpdate, error) {
 	}
 	update.DesktopBgRGB = binary.LittleEndian.Uint32(b[:4])
 	b = b[4:]
+	if len(b) < 1 {
+		return update, errPayloadShort
+	}
+	update.Zoomed = b[0] != 0
+	b = b[1:]
+	if len(b) < len(update.ZoomedPaneID) {
+		return update, errPayloadShort
+	}
+	copy(update.ZoomedPaneID[:], b[:len(update.ZoomedPaneID)])
+	b = b[len(update.ZoomedPaneID):]
 	if len(b) < 2 {
 		return update, errPayloadShort
 	}

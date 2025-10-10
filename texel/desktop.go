@@ -695,6 +695,12 @@ func (d *Desktop) currentStatePayload(allWsIDs []int, title string) StatePayload
 	if d.activeWorkspace != nil {
 		workspaceID = d.activeWorkspace.id
 	}
+	var zoomID [16]byte
+	zoomed := false
+	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
+		zoomed = true
+		zoomID = d.zoomedPane.Pane.ID()
+	}
 	return StatePayload{
 		AllWorkspaces:  allWsIDs,
 		WorkspaceID:    workspaceID,
@@ -702,6 +708,8 @@ func (d *Desktop) currentStatePayload(allWsIDs []int, title string) StatePayload
 		SubMode:        d.subControlMode,
 		ActiveTitle:    title,
 		DesktopBgColor: d.DefaultBgColor,
+		Zoomed:         zoomed,
+		ZoomedPaneID:   zoomID,
 	}
 }
 

@@ -33,6 +33,8 @@ type StatePayload struct {
 	SubMode        rune
 	ActiveTitle    string
 	DesktopBgColor tcell.Color // Added: Desktop's default background color
+	Zoomed         bool
+	ZoomedPaneID   [16]byte
 }
 
 // Listener is an interface that any component can implement to receive events.

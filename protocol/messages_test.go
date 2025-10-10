@@ -224,6 +224,8 @@ func TestStateUpdateRoundTrip(t *testing.T) {
 		SubMode:       'w',
 		ActiveTitle:   "shell",
 		DesktopBgRGB:  0x112233,
+		Zoomed:        true,
+		ZoomedPaneID:  [16]byte{9, 9, 9, 9},
 	}
 	payload, err := EncodeStateUpdate(update)
 	if err != nil {
@@ -238,6 +240,9 @@ func TestStateUpdateRoundTrip(t *testing.T) {
 	}
 	if decoded.DesktopBgRGB != update.DesktopBgRGB {
 		t.Fatalf("desktop color mismatch: %x", decoded.DesktopBgRGB)
+	}
+	if !decoded.Zoomed || decoded.ZoomedPaneID != update.ZoomedPaneID {
+		t.Fatalf("zoom info mismatch: %#v", decoded)
 	}
 	if len(decoded.AllWorkspaces) != len(update.AllWorkspaces) {
 		t.Fatalf("workspace list mismatch: %v", decoded.AllWorkspaces)
