@@ -218,8 +218,28 @@ func consumeMessages(ctx context.Context, metrics *stressMetrics, conn net.Conn,
 			*lastSeq = hdr.Sequence
 			metrics.recordDelta()
 			received++
+		case protocol.MsgPaneState:
+			if _, err := protocol.DecodePaneState(payload); err != nil {
+				return err
+			}
+			continue
+		case protocol.MsgStateUpdate:
+			if _, err := protocol.DecodeStateUpdate(payload); err != nil {
+				return err
+			}
+			continue
+		case protocol.MsgClipboardData:
+			if _, err := protocol.DecodeClipboardData(payload); err != nil {
+				return err
+			}
+			continue
+		case protocol.MsgThemeAck:
+			if _, err := protocol.DecodeThemeAck(payload); err != nil {
+				return err
+			}
+			continue
 		default:
-			received++
+			continue
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
