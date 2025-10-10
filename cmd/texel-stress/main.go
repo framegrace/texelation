@@ -113,7 +113,7 @@ func main() {
 }
 
 func buildDesktop() (*texel.Desktop, *stressApp) {
-	screen := tcell.NewSimulationScreen("ansi")
+	screen := tcell.NewSimulationScreen("utf-8")
 	driver := texel.NewTcellScreenDriver(screen)
 	lifecycle := &texel.LocalAppLifecycle{}
 
