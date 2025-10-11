@@ -83,8 +83,9 @@ func main() {
 		}
 	}
 
-	inbound := make(chan protocol.Header, 16)
-	go readLoop(conn, inbound, state, sessionID, &lastSequence)
+	renderCh := make(chan struct{}, 1)
+	doneCh := make(chan struct{})
+	go readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh)
 
 	screen, err := tcell.NewScreen()
 	if err != nil {
@@ -129,15 +130,8 @@ func main() {
 
 	for {
 		select {
-		case hdr, ok := <-inbound:
-			if !ok {
-				fmt.Println("Connection closed")
-				return
-			}
-			switch hdr.Type {
-			case protocol.MsgTreeSnapshot, protocol.MsgBufferDelta, protocol.MsgClipboardData, protocol.MsgThemeAck, protocol.MsgClipboardSet, protocol.MsgThemeUpdate, protocol.MsgStateUpdate:
-				render(state, screen)
-			}
+		case <-renderCh:
+			render(state, screen)
 		case ev, ok := <-events:
 			if !ok {
 				return
@@ -145,42 +139,48 @@ func main() {
 			if !handleScreenEvent(ev, state, screen, conn, sessionID) {
 				return
 			}
-		case <-time.After(500 * time.Millisecond):
-			render(state, screen)
+		case <-doneCh:
+			fmt.Println("Connection closed")
+			return
 		}
 	}
 }
 
-func readLoop(conn net.Conn, headers chan<- protocol.Header, state *uiState, sessionID [16]byte, lastSequence *uint64) {
+func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *uint64, renderCh chan<- struct{}, doneCh chan<- struct{}) {
 	for {
 		hdr, payload, err := protocol.ReadMessage(conn)
 		if err != nil {
 			if !isNetworkClosed(err) {
 				log.Printf("read failed: %v", err)
 			}
-			close(headers)
+			close(doneCh)
 			return
 		}
-		handleControlMessage(state, conn, hdr, payload, sessionID, lastSequence)
-		headers <- hdr
+		if handleControlMessage(state, conn, hdr, payload, sessionID, lastSequence) {
+			select {
+			case renderCh <- struct{}{}:
+			default:
+			}
+		}
 	}
 }
 
-func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64) {
+	func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64) bool {
 	cache := state.cache
 	switch hdr.Type {
 	case protocol.MsgTreeSnapshot:
 		snap, err := protocol.DecodeTreeSnapshot(payload)
 		if err != nil {
 			log.Printf("decode snapshot failed: %v", err)
-			return
+			return false
 		}
 		cache.ApplySnapshot(snap)
+		return true
 	case protocol.MsgBufferDelta:
 		delta, err := protocol.DecodeBufferDelta(payload)
 		if err != nil {
 			log.Printf("decode delta failed: %v", err)
-			return
+			return false
 		}
 		cache.ApplyDelta(delta)
 		ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
@@ -191,69 +191,79 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
 		}
+		return true
 	case protocol.MsgPing:
 		pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})
 		_ = protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgPong, Flags: protocol.FlagChecksum, SessionID: sessionID}, pong)
+		return false
 	case protocol.MsgClipboardSet:
 		clip, err := protocol.DecodeClipboardSet(payload)
 		if err != nil {
 			log.Printf("decode clipboard failed: %v", err)
-			return
+			return false
 		}
 		state.clipboard = protocol.ClipboardData{MimeType: clip.MimeType, Data: clip.Data}
 		state.hasClipboard = true
+		return true
 	case protocol.MsgClipboardData:
 		clip, err := protocol.DecodeClipboardData(payload)
 		if err != nil {
 			log.Printf("decode clipboard data failed: %v", err)
-			return
+			return false
 		}
 		state.clipboard = clip
 		state.hasClipboard = true
+		return true
 	case protocol.MsgThemeUpdate:
 		themeUpdate, err := protocol.DecodeThemeUpdate(payload)
 		if err != nil {
 			log.Printf("decode theme update failed: %v", err)
-			return
+			return false
 		}
 		state.theme = protocol.ThemeAck(themeUpdate)
 		state.hasTheme = true
 		state.updateTheme(themeUpdate.Section, themeUpdate.Key, themeUpdate.Value)
+		return true
 	case protocol.MsgThemeAck:
 		ack, err := protocol.DecodeThemeAck(payload)
 		if err != nil {
 			log.Printf("decode theme ack failed: %v", err)
-			return
+			return false
 		}
 		state.theme = ack
 		state.hasTheme = true
 		state.updateTheme(ack.Section, ack.Key, ack.Value)
+		return true
 	case protocol.MsgPaneFocus:
 		focus, err := protocol.DecodePaneFocus(payload)
 		if err != nil {
 			log.Printf("decode pane focus failed: %v", err)
-			return
+			return false
 		}
 		state.focus = focus
 		state.hasFocus = true
+		return true
 	case protocol.MsgPaneState:
 		paneFlags, err := protocol.DecodePaneState(payload)
 		if err != nil {
 			log.Printf("decode pane state failed: %v", err)
-			return
+			return false
 		}
 		active := paneFlags.Flags&protocol.PaneStateActive != 0
 		resizing := paneFlags.Flags&protocol.PaneStateResizing != 0
 		state.cache.SetPaneFlags(paneFlags.PaneID, active, resizing)
+		return true
 	case protocol.MsgStateUpdate:
 		update, err := protocol.DecodeStateUpdate(payload)
 		if err != nil {
 			log.Printf("decode state update failed: %v", err)
-			return
+			return false
 		}
 		log.Printf("state update: control=%v sub=%q zoom=%v", update.InControlMode, update.SubMode, update.Zoomed)
 		state.applyStateUpdate(update)
+		return true
 	}
+	return false
 }
 
 func render(state *uiState, screen tcell.Screen) {
