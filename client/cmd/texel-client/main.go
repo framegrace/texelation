@@ -318,9 +318,11 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 		if state.controlMode && ev.Modifiers() == 0 {
 			r := ev.Rune()
 			if r == 'q' || r == 'Q' {
-				if err := sendControlMode(conn, sessionID, false); err != nil {
+				if err := sendKeyEvent(conn, sessionID, tcell.KeyEsc, 0, 0); err != nil {
 					log.Printf("control reset failed: %v", err)
 				}
+				state.controlMode = false
+				state.subMode = 0
 				log.Printf("control quit requested; closing client")
 				return false
 			}
@@ -335,10 +337,7 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 			state.subMode = 0
 			render(state, screen)
 		}
-		key := protocol.KeyEvent{KeyCode: uint32(ev.Key()), RuneValue: ev.Rune(), Modifiers: uint16(ev.Modifiers())}
-		log.Printf("send key: key=%v rune=%q mods=%v", ev.Key(), ev.Rune(), ev.Modifiers())
-		payload, _ := protocol.EncodeKeyEvent(key)
-		if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgKeyEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
+		if err := sendKeyEvent(conn, sessionID, ev.Key(), ev.Rune(), ev.Modifiers()); err != nil {
 			log.Printf("send key failed: %v", err)
 		}
 	case *tcell.EventMouse:
@@ -548,13 +547,14 @@ func sendResize(conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
 	}
 }
 
-func sendControlMode(conn net.Conn, sessionID [16]byte, active bool) error {
-	update := protocol.StateUpdate{InControlMode: active}
-	payload, err := protocol.EncodeStateUpdate(update)
+func sendKeyEvent(conn net.Conn, sessionID [16]byte, key tcell.Key, r rune, mods tcell.ModMask) error {
+	event := protocol.KeyEvent{KeyCode: uint32(key), RuneValue: r, Modifiers: uint16(mods)}
+	log.Printf("send key: key=%v rune=%q mods=%v", key, r, mods)
+	payload, err := protocol.EncodeKeyEvent(event)
 	if err != nil {
 		return err
 	}
-	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgStateUpdate, Flags: protocol.FlagChecksum, SessionID: sessionID}
+	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgKeyEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}
 	return protocol.WriteMessage(conn, header, payload)
 }
 
