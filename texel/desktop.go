@@ -235,7 +235,7 @@ func (d *Desktop) AddStatusPane(app App, side Side, size int) {
 }
 
 func (d *Desktop) getMainArea() (int, int, int, int) {
-	w, h := d.display.Size()
+	w, h := d.viewportSize()
 	mainX, mainY := 0, 0
 	mainW, mainH := w, h
 
