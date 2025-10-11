@@ -60,6 +60,7 @@ func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume 
 }
 
 func (c *connection) serve() error {
+	_ = c.conn.SetDeadline(time.Time{})
 	defer func() {
 		if c.unregisterFocus != nil {
 			c.unregisterFocus()
@@ -80,8 +81,12 @@ func (c *connection) serve() error {
 			return err
 		}
 
+		_ = c.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		header, payload, err := protocol.ReadMessage(c.conn)
 		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue
+			}
 			if err == io.EOF {
 				return nil
 			}

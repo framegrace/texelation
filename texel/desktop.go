@@ -98,6 +98,8 @@ type Desktop struct {
 	lastState    StatePayload
 
 	animationsEnabled bool
+	refreshMu         sync.RWMutex
+	refreshHandler    func()
 }
 
 // PaneStateSnapshot captures dynamic pane flags for external consumers.
@@ -733,6 +735,23 @@ func (d *Desktop) DisableAnimations() {
 	}
 }
 
+func (d *Desktop) SetRefreshHandler(handler func()) {
+	d.refreshMu.Lock()
+	d.refreshHandler = handler
+	for _, ws := range d.workspaces {
+		if ws != nil {
+			ws.startRefreshMonitor()
+		}
+	}
+	d.refreshMu.Unlock()
+}
+
+func (d *Desktop) refreshHandlerFunc() func() {
+	d.refreshMu.RLock()
+	defer d.refreshMu.RUnlock()
+	return d.refreshHandler
+}
+
 func (d *Desktop) broadcastTreeChanged() {
 	d.dispatcher.Broadcast(Event{Type: EventTreeChanged})
 }
@@ -827,6 +846,10 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 			welcomeApp := d.WelcomeAppFactory()
 			ws.AddApp(welcomeApp)
 		}
+	}
+
+	if handler := d.refreshHandlerFunc(); handler != nil && d.activeWorkspace != nil {
+		d.activeWorkspace.startRefreshMonitor()
 	}
 
 	// Apply current control mode state to the new workspace

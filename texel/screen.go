@@ -6,6 +6,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"log"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -67,8 +68,9 @@ type Screen struct {
 	//controlModeFade *FadeEffect
 	controlModeFade *RainbowEffect
 
-	resizeSelection   *selectedBorder
-	debugFramesToDump int
+	resizeSelection    *selectedBorder
+	debugFramesToDump  int
+	refreshMonitorOnce sync.Once
 }
 
 // newScreen creates a new workspace screen.
@@ -138,6 +140,26 @@ func (s *Screen) Refresh() {
 	case s.refreshChan <- true:
 	default:
 	}
+}
+
+func (s *Screen) startRefreshMonitor() {
+	if s == nil || s.refreshChan == nil || s.desktop == nil {
+		return
+	}
+	s.refreshMonitorOnce.Do(func() {
+		go func() {
+			for {
+				select {
+				case <-s.desktop.quit:
+					return
+				case <-s.refreshChan:
+					if handler := s.desktop.refreshHandlerFunc(); handler != nil {
+						handler()
+					}
+				}
+			}
+		}()
+	})
 }
 
 func (s *Screen) Broadcast(event Event) {

@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/gdamore/tcell/v2"
 
+	"sync"
 	"texelation/protocol"
 	"texelation/texel"
 )
@@ -11,6 +12,7 @@ import (
 type DesktopSink struct {
 	desktop   *texel.Desktop
 	publisher *DesktopPublisher
+	mu        sync.Mutex
 }
 
 func NewDesktopSink(desktop *texel.Desktop) *DesktopSink {
@@ -71,12 +73,30 @@ func (d *DesktopSink) Desktop() *texel.Desktop {
 
 func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
 	d.publisher = publisher
+	if d.desktop == nil {
+		return
+	}
+	if publisher == nil {
+		d.desktop.SetRefreshHandler(nil)
+		return
+	}
+	d.desktop.SetRefreshHandler(d.publish)
 }
 
 func (d *DesktopSink) Publish() {
 	if d.publisher != nil {
 		_ = d.publisher.Publish()
 	}
+}
+
+func (d *DesktopSink) publish() {
+	d.mu.Lock()
+	publisher := d.publisher
+	d.mu.Unlock()
+	if publisher == nil {
+		return
+	}
+	_ = publisher.Publish()
 }
 
 func (d *DesktopSink) Snapshot() (protocol.TreeSnapshot, error) {
