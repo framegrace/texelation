@@ -8,56 +8,17 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"texelation/apps/statusbar"
+	"texelation/apps/texelterm"
 	"texelation/server"
 	"texelation/texel"
 )
-
-type textApp struct {
-	title   string
-	message []rune
-	notify  chan<- bool
-}
-
-func newTextApp(title, message string) *textApp {
-	return &textApp{title: title, message: []rune(message)}
-}
-
-func (a *textApp) Run() error { return nil }
-func (a *textApp) Stop()      {}
-
-func (a *textApp) Resize(cols, rows int) {}
-
-func (a *textApp) Render() [][]texel.Cell {
-	line := string(a.message)
-	buf := make([][]texel.Cell, 1)
-	buf[0] = make([]texel.Cell, len(line))
-	for i, ch := range line {
-		buf[0][i] = texel.Cell{Ch: ch, Style: tcell.StyleDefault}
-	}
-	return buf
-}
-
-func (a *textApp) GetTitle() string { return a.title }
-
-func (a *textApp) HandleKey(ev *tcell.EventKey) {
-	if ev.Rune() != 0 {
-		a.message = append(a.message, ev.Rune())
-		if a.notify != nil {
-			select {
-			case a.notify <- true:
-			default:
-			}
-		}
-	}
-}
-
-func (a *textApp) SetRefreshNotifier(ch chan<- bool) { a.notify = ch }
 
 func main() {
 	tcell.SetEncodingFallback(tcell.EncodingFallbackASCII)
@@ -91,9 +52,18 @@ func main() {
 	driver := texel.NewTcellScreenDriver(simScreen)
 	lifecycle := &texel.LocalAppLifecycle{}
 
-	mainApp := newTextApp(*title, "Welcome to the texel server harness. Type from the client to append text.")
-	shellFactory := func() texel.App { return mainApp }
-	welcomeFactory := func() texel.App { return newTextApp("welcome", "Remote desktop ready") }
+	defaultShell := os.Getenv("SHELL")
+	if defaultShell == "" {
+		defaultShell = "/bin/bash"
+	}
+
+	var shellSeq atomic.Int64
+	shellFactory := func() texel.App {
+		id := shellSeq.Add(1)
+		title := fmt.Sprintf("%s-%d", *title, id)
+		return texelterm.New(title, defaultShell)
+	}
+	welcomeFactory := shellFactory
 
 	desktop, err := texel.NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
