@@ -14,6 +14,7 @@
 - Remote renderer now re-applies inactive pane dimming based on streamed focus state so non-focused panes stay visually subdued (`client/cmd/texel-client/main.go`).
 - Added `MsgPaneState` messages so active/resizing flags mirror desktop effects; server broadcasts changes and the client overlays highlights for resizing panes (`protocol/messages.go`, `server/connection.go`, `client/buffercache.go`, `client/cmd/texel-client/main.go`).
 - Zoom state now streams through the existing state update path so the remote client can call out the zoomed pane (`texel/desktop.go`, `protocol/messages.go`, `client/cmd/texel-client/main.go`).
+- Client immediately reports terminal dimensions via a new resize message so the server-resident desktop matches the remote viewport (`protocol/messages.go`, `server/connection.go`, `texel/desktop.go`, `client/cmd/texel-client/main.go`).
 - Resume scaffolding exists: `SimpleClient.RequestResume` sends `MsgResumeRequest` and the CLI uses cached sequence numbers to request snapshots/diffs.
 - Resume integration test now uses a headless screen driver and sends an explicit initial snapshot before starting the connection loop, eliminating the tcell locale failure (`server/client_integration_test.go`).
 
