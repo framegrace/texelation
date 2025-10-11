@@ -378,6 +378,7 @@ func (d *Desktop) Run() error {
 		case <-refreshChan:
 			d.broadcastStateUpdate()
 			d.draw()
+			d.broadcastTreeChanged()
 
 		case <-drawChan:
 			d.draw()
