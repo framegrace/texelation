@@ -417,6 +417,9 @@ func (s *Screen) actuallyClosePane(closedPaneNode *Node, parent *Node, closingIn
 	s.recalculateLayout()
 	s.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
 	s.notifyFocus()
+	if s.desktop != nil {
+		s.desktop.broadcastTreeChanged()
+	}
 }
 
 func (s *Screen) PerformSplit(splitDir SplitType) {
@@ -501,6 +504,9 @@ func (s *Screen) PerformSplit(splitDir SplitType) {
 	}
 
 	log.Printf("PerformSplit: Split completed successfully")
+	if s.desktop != nil {
+		s.desktop.broadcastTreeChanged()
+	}
 }
 
 func (s *Screen) SwapActivePane(d Direction) {

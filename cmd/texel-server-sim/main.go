@@ -102,7 +102,7 @@ func main() {
 	}
 
 	status := statusbar.New()
-	desktop.AddStatusPane(status, texel.SideBottom, 1)
+	desktop.AddStatusPane(status, texel.SideTop, 1)
 
 	srv := server.NewServer(*socketPath, manager)
 	metrics := server.NewFocusMetrics(log.Default())

@@ -251,6 +251,7 @@ func (d *Desktop) AddStatusPane(app App, side Side, size int) {
 
 	d.appLifecycle.StartApp(app)
 	d.recalculateLayout()
+	d.broadcastTreeChanged()
 }
 
 func (d *Desktop) getMainArea() (int, int, int, int) {
@@ -590,6 +591,7 @@ func (d *Desktop) toggleZoom() {
 			d.zoomedPane = nodeToZoom
 			d.recalculateLayout()
 			d.broadcastStateUpdate()
+			d.broadcastTreeChanged()
 		})
 	} else { // ZOOM OUT
 		nodeToUnZoom := d.zoomedPane
@@ -607,6 +609,7 @@ func (d *Desktop) toggleZoom() {
 		effect = NewZoomEffect(d.activeWorkspace, nodeToUnZoom, start, end, 250*time.Millisecond, func() {
 			d.recalculateLayout()
 			d.broadcastStateUpdate()
+			d.broadcastTreeChanged()
 		})
 	}
 
@@ -712,6 +715,10 @@ func (d *Desktop) broadcastStateUpdate() {
 	//	}
 }
 
+func (d *Desktop) broadcastTreeChanged() {
+	d.dispatcher.Broadcast(Event{Type: EventTreeChanged})
+}
+
 func (d *Desktop) shouldBroadcastState(payload StatePayload) bool {
 	d.stateMu.Lock()
 	defer d.stateMu.Unlock()
@@ -815,6 +822,7 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 	d.recalculateLayout()
 	d.broadcastStateUpdate()
 	d.notifyFocusActive()
+	d.broadcastTreeChanged()
 }
 
 func (d *Desktop) notifyFocusActive() {

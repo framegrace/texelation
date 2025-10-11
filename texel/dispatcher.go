@@ -15,6 +15,7 @@ const (
 	EventPaneClosed
 	// Screen/Global Events
 	EventStateUpdate
+	EventTreeChanged
 	// Add other event types here as needed
 )
 

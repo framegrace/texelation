@@ -208,14 +208,33 @@ func (c *connection) serve() error {
 }
 
 func (c *connection) OnEvent(event texel.Event) {
-	if event.Type != texel.EventStateUpdate {
-		return
+	switch event.Type {
+	case texel.EventStateUpdate:
+		payload, ok := event.Payload.(texel.StatePayload)
+		if !ok {
+			return
+		}
+		c.sendStateUpdate(payload)
+	case texel.EventTreeChanged:
+		c.sendTreeSnapshot()
 	}
-	payload, ok := event.Payload.(texel.StatePayload)
+}
+
+func (c *connection) sendTreeSnapshot() {
+	sink, ok := c.sink.(*DesktopSink)
 	if !ok {
 		return
 	}
-	c.sendStateUpdate(payload)
+	snapshot, err := sink.Snapshot()
+	if err != nil || len(snapshot.Panes) == 0 {
+		return
+	}
+	payload, err := protocol.EncodeTreeSnapshot(snapshot)
+	if err != nil {
+		return
+	}
+	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
+	_ = c.writeMessage(header, payload)
 }
 
 func (c *connection) PaneStateChanged(id [16]byte, active bool, resizing bool) {
