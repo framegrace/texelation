@@ -28,11 +28,16 @@ func TestBufferCacheApplyDelta(t *testing.T) {
 		},
 	}
 
-	state := cache.ApplyDelta(delta)
-	if state == nil {
-		t.Fatalf("expected pane state")
-	}
-	rows := state.Rows()
+	cache.ApplyDelta(delta)
+	var rows []string
+	var cells []Cell
+	cache.ForEachPaneSorted(func(p *PaneState) {
+		if p.ID != id {
+			return
+		}
+		rows = append([]string(nil), p.Rows()...)
+		cells = append([]Cell(nil), p.RowCells(0)...)
+	})
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(rows))
 	}
@@ -42,7 +47,6 @@ func TestBufferCacheApplyDelta(t *testing.T) {
 	if rows[1] != "  World" {
 		t.Fatalf("unexpected row1 %q", rows[1])
 	}
-	cells := state.RowCells(0)
 	if len(cells) < 5 {
 		t.Fatalf("expected 5 cells, got %d", len(cells))
 	}
@@ -59,8 +63,13 @@ func TestBufferCacheApplyDelta(t *testing.T) {
 		Revision: 2,
 		Rows:     []protocol.RowDelta{{Row: 0, Spans: []protocol.CellSpan{{StartCol: 5, Text: "!", StyleIndex: 0}}}},
 	}
-	state = cache.ApplyDelta(delta2)
-	rows = state.Rows()
+	cache.ApplyDelta(delta2)
+	rows = nil
+	cache.ForEachPaneSorted(func(p *PaneState) {
+		if p.ID == id {
+			rows = append([]string(nil), p.Rows()...)
+		}
+	})
 	if rows[0] != "Hello!" {
 		t.Fatalf("expected Hello!, got %q", rows[0])
 	}
@@ -81,11 +90,12 @@ func TestBufferCacheApplySnapshot(t *testing.T) {
 	}
 
 	cache.ApplySnapshot(snapshot)
-	panes := cache.AllPanes()
-	if len(panes) != 1 {
-		t.Fatalf("expected 1 pane, got %d", len(panes))
-	}
-	rows := panes[0].Rows()
+	var rows []string
+	cache.ForEachPaneSorted(func(p *PaneState) {
+		if p.ID == id {
+			rows = append([]string(nil), p.Rows()...)
+		}
+	})
 	if rows[1] != "def" {
 		t.Fatalf("unexpected row %q", rows[1])
 	}
@@ -99,12 +109,15 @@ func TestBufferCacheApplySnapshotPrunesMissingPanes(t *testing.T) {
 	cache.ApplySnapshot(protocol.TreeSnapshot{Panes: []protocol.PaneSnapshot{{PaneID: id1}, {PaneID: id2}}})
 
 	cache.ApplySnapshot(protocol.TreeSnapshot{Panes: []protocol.PaneSnapshot{{PaneID: id2}}})
-	panes := cache.LayoutPanes()
-	if len(panes) != 1 {
-		t.Fatalf("expected single pane after prune, got %d", len(panes))
-	}
-	if panes[0].ID != id2 {
-		t.Fatalf("expected remaining pane id2, got %v", panes[0].ID)
+	count := 0
+	cache.ForEachPaneSorted(func(p *PaneState) {
+		count++
+		if p.ID != id2 {
+			t.Fatalf("expected remaining pane id2, got %v", p.ID)
+		}
+	})
+	if count != 1 {
+		t.Fatalf("expected single pane after prune, got %d", count)
 	}
 }
 
@@ -135,12 +148,20 @@ func TestBufferCacheResumeFlow(t *testing.T) {
 			Spans: []protocol.CellSpan{{StartCol: 0, Text: "hello", StyleIndex: 0}},
 		}},
 	}
-	state := cache.ApplyDelta(delta)
-	if state.Revision != 1 {
-		t.Fatalf("expected revision 1, got %d", state.Revision)
+	cache.ApplyDelta(delta)
+	var revision uint32
+	var rows []string
+	cache.ForEachPaneSorted(func(p *PaneState) {
+		if p.ID == id {
+			revision = p.Revision
+			rows = append([]string(nil), p.Rows()...)
+		}
+	})
+	if revision != 1 {
+		t.Fatalf("expected revision 1, got %d", revision)
 	}
-	if got := state.Rows()[0]; got != "hello" {
-		t.Fatalf("expected delta content, got %q", got)
+	if len(rows) == 0 || rows[0] != "hello" {
+		t.Fatalf("expected delta content, got %q", rows)
 	}
 
 	snapshot := protocol.TreeSnapshot{
@@ -156,19 +177,24 @@ func TestBufferCacheResumeFlow(t *testing.T) {
 		}},
 	}
 	cache.ApplySnapshot(snapshot)
-	panes := cache.AllPanes()
-	if len(panes) != 1 {
-		t.Fatalf("expected 1 pane after snapshot, got %d", len(panes))
+	revision = 0
+	rows = nil
+	var rect clientRect
+	cache.ForEachPaneSorted(func(p *PaneState) {
+		if p.ID == id {
+			revision = p.Revision
+			rows = append([]string(nil), p.Rows()...)
+			rect = p.Rect
+		}
+	})
+	if revision != 5 {
+		t.Fatalf("expected revision 5 after snapshot, got %d", revision)
 	}
-	pane := panes[0]
-	if pane.Revision != 5 {
-		t.Fatalf("expected revision 5 after snapshot, got %d", pane.Revision)
+	if len(rows) == 0 || rows[0] != "world" {
+		t.Fatalf("expected snapshot content 'world', got %q", rows)
 	}
-	if got := pane.Rows()[0]; got != "world" {
-		t.Fatalf("expected snapshot content 'world', got %q", got)
-	}
-	if pane.Rect.X != 4 || pane.Rect.Y != 3 || pane.Rect.Width != 10 || pane.Rect.Height != 2 {
-		t.Fatalf("unexpected rect %+v", pane.Rect)
+	if rect.X != 4 || rect.Y != 3 || rect.Width != 10 || rect.Height != 2 {
+		t.Fatalf("unexpected rect %+v", rect)
 	}
 
 	staleDelta := protocol.BufferDelta{
@@ -177,8 +203,14 @@ func TestBufferCacheResumeFlow(t *testing.T) {
 		Rows:     []protocol.RowDelta{{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "stale", StyleIndex: 0}}}},
 	}
 	cache.ApplyDelta(staleDelta)
-	if got := pane.Rows()[0]; got != "world" {
-		t.Fatalf("stale delta should be ignored, got %q", got)
+	rows = nil
+	cache.ForEachPaneSorted(func(p *PaneState) {
+		if p.ID == id {
+			rows = append([]string(nil), p.Rows()...)
+		}
+	})
+	if len(rows) == 0 || rows[0] != "world" {
+		t.Fatalf("stale delta should be ignored, got %q", rows)
 	}
 
 	resumeDelta := protocol.BufferDelta{
@@ -186,12 +218,20 @@ func TestBufferCacheResumeFlow(t *testing.T) {
 		Revision: 6,
 		Rows:     []protocol.RowDelta{{Row: 0, Spans: []protocol.CellSpan{{StartCol: 5, Text: "!", StyleIndex: 0}}}},
 	}
-	state = cache.ApplyDelta(resumeDelta)
-	if state.Revision != 6 {
-		t.Fatalf("expected revision 6, got %d", state.Revision)
+	cache.ApplyDelta(resumeDelta)
+	revision = 0
+	rows = nil
+	cache.ForEachPaneSorted(func(p *PaneState) {
+		if p.ID == id {
+			revision = p.Revision
+			rows = append([]string(nil), p.Rows()...)
+		}
+	})
+	if revision != 6 {
+		t.Fatalf("expected revision 6, got %d", revision)
 	}
-	if got := state.Rows()[0]; got != "world!" {
-		t.Fatalf("expected merged resume delta, got %q", got)
+	if len(rows) == 0 || rows[0] != "world!" {
+		t.Fatalf("expected merged resume delta, got %q", rows)
 	}
 }
 
@@ -210,17 +250,20 @@ func TestBufferCacheLayoutPanesOrdersByGeometry(t *testing.T) {
 	}}
 	cache.ApplySnapshot(snapshot)
 
-	panes := cache.LayoutPanes()
-	if len(panes) != 3 {
-		t.Fatalf("expected 3 panes, got %d", len(panes))
+	var ids [][16]byte
+	cache.ForEachPaneSorted(func(p *PaneState) {
+		ids = append(ids, p.ID)
+	})
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 panes, got %d", len(ids))
 	}
-	if panes[0].ID != id1 {
-		t.Fatalf("expected pane id1 first, got %v", panes[0].ID)
+	if ids[0] != id1 {
+		t.Fatalf("expected pane id1 first, got %v", ids[0])
 	}
-	if panes[1].ID != id2 {
-		t.Fatalf("expected pane id2 second, got %v", panes[1].ID)
+	if ids[1] != id2 {
+		t.Fatalf("expected pane id2 second, got %v", ids[1])
 	}
-	if panes[2].ID != id3 {
-		t.Fatalf("expected pane id3 third, got %v", panes[2].ID)
+	if ids[2] != id3 {
+		t.Fatalf("expected pane id3 third, got %v", ids[2])
 	}
 }

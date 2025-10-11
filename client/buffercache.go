@@ -2,6 +2,7 @@ package client
 
 import (
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -74,6 +75,7 @@ func (p *PaneState) RowCells(row int) []Cell {
 
 // BufferCache maintains pane states keyed by pane ID.
 type BufferCache struct {
+	mu    sync.RWMutex
 	panes map[[16]byte]*PaneState
 	order []paneOrder
 }
@@ -89,7 +91,10 @@ func NewBufferCache() *BufferCache {
 }
 
 // ApplyDelta merges the buffer delta into the cache and returns the updated pane.
-func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) *PaneState {
+
+func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.panes == nil {
 		c.panes = make(map[[16]byte]*PaneState)
 	}
@@ -99,7 +104,7 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) *PaneState {
 		c.panes[delta.PaneID] = pane
 	}
 	if delta.Revision < pane.Revision {
-		return pane
+		return
 	}
 
 	styles := buildStyles(delta.Styles)
@@ -124,12 +129,13 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) *PaneState {
 	pane.Revision = delta.Revision
 	pane.UpdatedAt = time.Now().UTC()
 
-	c.trackOrdering(delta.PaneID, pane.UpdatedAt)
-	return pane
+	c.trackOrderingLocked(delta.PaneID, pane.UpdatedAt)
 }
 
 // ApplySnapshot replaces local state with the provided snapshot.
 func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.panes == nil {
 		c.panes = make(map[[16]byte]*PaneState)
 	}
@@ -148,7 +154,7 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 			pane.rows[idx] = stringToCells(row)
 		}
 		pane.Rect = clientRect{X: int(paneSnap.X), Y: int(paneSnap.Y), Width: int(paneSnap.Width), Height: int(paneSnap.Height)}
-		c.trackOrdering(paneSnap.PaneID, pane.UpdatedAt)
+		c.trackOrderingLocked(paneSnap.PaneID, pane.UpdatedAt)
 		seen[paneSnap.PaneID] = struct{}{}
 	}
 	if len(seen) > 0 && len(c.panes) > len(seen) {
@@ -169,9 +175,8 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 
 // SetPaneFlags updates tracked pane flags, creating an entry if necessary.
 func (c *BufferCache) SetPaneFlags(id [16]byte, active, resizing bool) *PaneState {
-	if c.panes == nil {
-		c.panes = make(map[[16]byte]*PaneState)
-	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	pane := c.panes[id]
 	if pane == nil {
 		pane = &PaneState{ID: id, rows: make(map[int][]Cell)}
@@ -184,6 +189,8 @@ func (c *BufferCache) SetPaneFlags(id [16]byte, active, resizing bool) *PaneStat
 
 // AllPanes returns panes in order of last update.
 func (c *BufferCache) AllPanes() []*PaneState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	panes := make([]*PaneState, len(c.order))
 	for i, ord := range c.order {
 		panes[i] = c.panes[ord.id]
@@ -193,9 +200,11 @@ func (c *BufferCache) AllPanes() []*PaneState {
 
 // LayoutPanes returns panes sorted by their recorded geometry so renderers can
 // draw them deterministically.
-func (c *BufferCache) LayoutPanes() []*PaneState {
+func (c *BufferCache) ForEachPaneSorted(fn func(*PaneState)) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if len(c.panes) == 0 {
-		return nil
+		return
 	}
 	panes := make([]*PaneState, 0, len(c.panes))
 	for _, pane := range c.panes {
@@ -211,11 +220,15 @@ func (c *BufferCache) LayoutPanes() []*PaneState {
 		}
 		return compareBytes(pi.ID[:], pj.ID[:]) < 0
 	})
-	return panes
+	for _, pane := range panes {
+		fn(pane)
+	}
 }
 
 // LatestPane returns the most recently updated pane.
 func (c *BufferCache) LatestPane() *PaneState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if len(c.order) == 0 {
 		return nil
 	}
@@ -224,6 +237,12 @@ func (c *BufferCache) LatestPane() *PaneState {
 }
 
 func (c *BufferCache) trackOrdering(id [16]byte, ts time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trackOrderingLocked(id, ts)
+}
+
+func (c *BufferCache) trackOrderingLocked(id [16]byte, ts time.Time) {
 	found := false
 	for i := range c.order {
 		if c.order[i].id == id {

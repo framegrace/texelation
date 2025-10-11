@@ -182,14 +182,12 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			log.Printf("decode delta failed: %v", err)
 			return
 		}
-		state := cache.ApplyDelta(delta)
+		cache.ApplyDelta(delta)
 		ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
 		if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgBufferAck, Flags: protocol.FlagChecksum, SessionID: sessionID}, ackPayload); err != nil {
 			log.Printf("ack failed: %v", err)
 		}
-		if state != nil {
-			log.Printf("delta applied: pane=%x rev=%d rows=%d", delta.PaneID, delta.Revision, len(state.Rows()))
-		}
+		log.Printf("delta applied: pane=%x rev=%d spans=%d", delta.PaneID, delta.Revision, len(delta.Rows))
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
 		}
@@ -262,10 +260,9 @@ func render(state *uiState, screen tcell.Screen) {
 	width, height := screen.Size()
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
-	panes := state.cache.LayoutPanes()
-	for _, pane := range panes {
+	state.cache.ForEachPaneSorted(func(pane *client.PaneState) {
 		if pane == nil || pane.Rect.Width <= 0 || pane.Rect.Height <= 0 {
-			continue
+			return
 		}
 		inactiveIntensity := float32(0)
 		if !pane.Active {
@@ -307,7 +304,7 @@ func render(state *uiState, screen tcell.Screen) {
 				screen.SetContent(targetX, targetY, ch, nil, style)
 			}
 		}
-	}
+	})
 	if state.controlMode {
 		applyControlOverlay(state, screen)
 	}
