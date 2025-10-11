@@ -329,6 +329,13 @@ func (c *connection) handleResize(size protocol.Resize) {
 	if sink, ok := c.sink.(*DesktopSink); ok {
 		if desktop := sink.Desktop(); desktop != nil {
 			desktop.SetViewportSize(int(size.Cols), int(size.Rows))
+			if snapshot, err := sink.Snapshot(); err == nil {
+				if payload, err := protocol.EncodeTreeSnapshot(snapshot); err == nil {
+					header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
+					_ = c.writeMessage(header, payload)
+				}
+			}
+			sink.Publish()
 		}
 	}
 }

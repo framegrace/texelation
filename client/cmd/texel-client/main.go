@@ -36,7 +36,6 @@ type uiState struct {
 	controlMode  bool
 	subMode      rune
 	desktopBg    tcell.Color
-	rainbowPhase float32
 	zoomed       bool
 	zoomedPane   [16]byte
 }
@@ -373,9 +372,6 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 		s.desktopBg = bg
 		s.defaultBg = bg
 	}
-	if !s.controlMode {
-		s.rainbowPhase = 0
-	}
 	s.zoomed = update.Zoomed
 	if update.Zoomed {
 		s.zoomedPane = update.ZoomedPaneID
@@ -470,12 +466,8 @@ func truncateForStatus(text string, max int) string {
 
 func applyControlOverlay(state *uiState, screen tcell.Screen) {
 	width, height := screen.Size()
-	offset := state.rainbowPhase
-	state.rainbowPhase += 0.09
-	if state.rainbowPhase > 2*math.Pi {
-		state.rainbowPhase = 0
-	}
-	intensity := float32(0.15)
+	accent := tcell.NewRGBColor(90, 200, 255)
+	intensity := float32(0.35)
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			ch, comb, style, cellW := screen.GetContent(x, y)
@@ -498,11 +490,8 @@ func applyControlOverlay(state *uiState, screen tcell.Screen) {
 					}
 				}
 			}
-			hue := offset + float32(x+y)*0.1
-			overlay := hsvToRGB(hue, 1.0, 1.0)
-			blendedFg := blendColor(fg, overlay, intensity)
-			blendedBg := blendColor(bg, overlay, intensity)
-			styled := tcell.StyleDefault.Foreground(blendedFg).Background(blendedBg)
+			blendedFg := blendColor(fg, accent, intensity)
+			styled := tcell.StyleDefault.Foreground(blendedFg).Background(bg)
 			styled = styled.Bold(attrs&tcell.AttrBold != 0).
 				Underline(attrs&tcell.AttrUnderline != 0).
 				Reverse(attrs&tcell.AttrReverse != 0).

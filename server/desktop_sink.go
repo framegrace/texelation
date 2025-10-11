@@ -70,6 +70,12 @@ func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
 	d.publisher = publisher
 }
 
+func (d *DesktopSink) Publish() {
+	if d.publisher != nil {
+		_ = d.publisher.Publish()
+	}
+}
+
 func (d *DesktopSink) Snapshot() (protocol.TreeSnapshot, error) {
 	if d.desktop == nil {
 		return protocol.TreeSnapshot{}, nil

@@ -89,34 +89,13 @@ func newScreen(id int, shellFactory AppFactory, lifecycle AppLifecycleManager, d
 	// Create control mode effects with more subtle colors
 	// Use a subtle green tint for control mode
 	//s.controlModeFade = NewFadeEffect(desktop, tcell.NewRGBColor(0, 100, 0)) // Dark green
-	s.controlModeFade = NewRainbowEffect(desktop) // Dark green
-	log.Printf("newScreen: Created controlModeFade with initial intensity=%.3f", s.controlModeFade.GetIntensity())
-
-	// Add the fade effect to the screen's effect pipeline
-	s.effects.AddEffect(s.controlModeFade)
-	log.Printf("newScreen: Added controlModeFade to effects pipeline")
+	s.controlModeFade = NewRainbowEffect(desktop) // placeholder; remote client owns visuals now
 
 	return s, nil
 }
 
 func (s *Screen) SetControlMode(active bool) {
-	log.Printf("SetControlMode called: active=%v, current intensity=%.3f", active, s.controlModeFade.GetIntensity())
-
-	if active {
-		log.Printf("SetControlMode: Activating control mode, animating to 0.15")
-		// Fade in the control mode effects with subtle intensity
-		s.animator.AnimateTo(s.controlModeFade, 0.15, 150*time.Millisecond, func() {
-			log.Printf("SetControlMode: Control mode fade-in animation completed")
-			s.Refresh()
-		})
-	} else {
-		log.Printf("SetControlMode: Deactivating control mode, animating to 0.0")
-		// Fade out the control mode effects
-		s.animator.FadeOut(s.controlModeFade, 150*time.Millisecond, func() {
-			log.Printf("SetControlMode: Control mode fade-out animation completed")
-			s.Refresh()
-		})
-	}
+	log.Printf("SetControlMode called: active=%v", active)
 }
 
 // AddEffect adds a custom effect to the screen's pipeline
@@ -213,25 +192,13 @@ func (s *Screen) moveActivePane(d Direction) {
 
 	// Set states and handle animations properly
 	if currentPane != nil {
-		// Stop any existing animations
-		currentPane.animator.Stop(currentPane.inactiveFade)
-		// Set inactive state and animate
 		currentPane.IsActive = false
-		currentPane.animator.AnimateTo(currentPane.inactiveFade, 0.3, 200*time.Millisecond, func() {
-			log.Printf("moveActivePane: Deactivation of '%s' completed", currentTitle)
-			s.Refresh()
-		})
+		currentPane.notifyStateChange()
 	}
 
 	if targetPane != nil {
-		// Stop any existing animations
-		targetPane.animator.Stop(targetPane.inactiveFade)
-		// Set active state and animate
 		targetPane.IsActive = true
-		targetPane.animator.FadeOut(targetPane.inactiveFade, 200*time.Millisecond, func() {
-			log.Printf("moveActivePane: Activation of '%s' completed", targetTitle)
-			s.Refresh()
-		})
+		targetPane.notifyStateChange()
 	}
 
 	log.Printf("moveActivePane: Moved from '%s' to '%s'", currentTitle, targetTitle)
@@ -650,22 +617,7 @@ func (s *Screen) hasActiveEffects() bool {
 
 // Add this method to check if any panes have active animations
 func (s *Screen) hasActivePaneAnimations() bool {
-	hasAnimations := false
-	s.tree.Traverse(func(node *Node) {
-		if node.Pane != nil {
-			if node.Pane.inactiveFade.IsAnimating() {
-				log.Printf("hasActivePaneAnimations: Pane '%s' inactiveFade is animating (intensity=%.3f)",
-					node.Pane.getTitle(), node.Pane.inactiveFade.GetIntensity())
-				hasAnimations = true
-			}
-			if node.Pane.resizingFade.IsAnimating() {
-				log.Printf("hasActivePaneAnimations: Pane '%s' resizingFade is animating (intensity=%.3f)",
-					node.Pane.getTitle(), node.Pane.resizingFade.GetIntensity())
-				hasAnimations = true
-			}
-		}
-	})
-	return hasAnimations
+	return false
 }
 
 // applyScreenEffects applies screen-level effects to the entire screen area

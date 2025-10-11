@@ -8,7 +8,6 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"log"
 	"texelation/texel/theme"
-	"time"
 	"unicode/utf8"
 )
 
@@ -58,18 +57,7 @@ func newPane(s *Screen) *pane {
 		copy(p.id[:], sum[:])
 	}
 
-	// Create pre-made effects for common states
-	// Use darker colors for inactive fade - this will darken the pane
-	p.inactiveFade = NewFadeEffect(s.desktop, tcell.NewRGBColor(20, 20, 0)) // Dark yellow for darkening
-	// Use orange tint for resizing
-	p.resizingFade = NewFadeEffect(s.desktop, tcell.NewRGBColor(255, 184, 108)) // Orange from your theme
-
-	log.Printf("newPane: Created pane with inactive fade intensity=%.3f, resizing fade intensity=%.3f",
-		p.inactiveFade.GetIntensity(), p.resizingFade.GetIntensity())
-
-	// Add them to the pipeline (they start with 0 intensity)
-	p.effects.AddEffect(p.inactiveFade)
-	p.effects.AddEffect(p.resizingFade)
+	// Client now owns pane visual effects; keep placeholders for API compatibility
 
 	return p
 }
@@ -93,66 +81,22 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 
 // SetActive changes the active state of the pane and animates the appropriate effects
 func (p *pane) SetActive(active bool) {
-	log.Printf("SetActive called on pane '%s': active=%v, current IsActive=%v", p.getTitle(), active, p.IsActive)
-
 	if p.IsActive == active {
-		log.Printf("SetActive: No change needed for pane '%s'", p.getTitle())
 		return
 	}
 
 	p.IsActive = active
 	p.notifyStateChange()
-
-	// Stop any existing animations on the inactive fade effect to prevent conflicts
-	p.animator.Stop(p.inactiveFade)
-
-	// Animate the inactive fade effect
-	if active {
-		log.Printf("SetActive: Activating pane '%s' - fading out inactive effect", p.getTitle())
-		// Fade out the inactive effect (return to normal brightness)
-		p.animator.FadeOut(p.inactiveFade, 200*time.Millisecond, func() {
-			log.Printf("SetActive: Pane '%s' activation animation completed", p.getTitle())
-			p.screen.Refresh() // Request a redraw when animation completes
-		})
-	} else {
-		log.Printf("SetActive: Deactivating pane '%s' - fading in inactive effect to 0.3", p.getTitle())
-		// Fade in the inactive effect (darken the pane) - FIXED: Use 0.3 instead of 1.0
-		p.animator.AnimateTo(p.inactiveFade, 0.3, 200*time.Millisecond, func() {
-			log.Printf("SetActive: Pane '%s' deactivation animation completed", p.getTitle())
-			p.screen.Refresh()
-		})
-	}
 }
 
 // SetResizing changes the resizing state of the pane and animates the appropriate effects
 func (p *pane) SetResizing(resizing bool) {
-	log.Printf("SetResizing called on pane '%s': resizing=%v, current IsResizing=%v", p.getTitle(), resizing, p.IsResizing)
-
 	if p.IsResizing == resizing {
 		return
 	}
 
 	p.IsResizing = resizing
 	p.notifyStateChange()
-
-	// Stop any existing animations on the resizing fade effect
-	p.animator.Stop(p.resizingFade)
-
-	// Animate the resizing fade effect
-	if resizing {
-		log.Printf("SetResizing: Pane '%s' entering resize mode", p.getTitle())
-		// Use moderate intensity for resize effect
-		p.animator.AnimateTo(p.resizingFade, 0.2, 100*time.Millisecond, func() {
-			log.Printf("SetResizing: Pane '%s' resize fade-in completed", p.getTitle())
-			p.screen.Refresh()
-		})
-	} else {
-		log.Printf("SetResizing: Pane '%s' exiting resize mode", p.getTitle())
-		p.animator.FadeOut(p.resizingFade, 100*time.Millisecond, func() {
-			log.Printf("SetResizing: Pane '%s' resize fade-out completed", p.getTitle())
-			p.screen.Refresh()
-		})
-	}
 }
 
 // AddEffect adds a custom effect to the pane's pipeline
