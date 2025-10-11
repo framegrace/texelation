@@ -44,6 +44,7 @@ func (d *Desktop) CaptureTree() TreeCapture {
 	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil || d.activeWorkspace.tree.Root == nil {
 		return capture
 	}
+	d.recalculateLayout()
 	paneIndex := make(map[*pane]int)
 	capture.Panes = make([]PaneSnapshot, 0)
 	var collect func(*Node)
