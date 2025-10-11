@@ -70,6 +70,7 @@ server/
   desktop_publisher.go  // Captures pane snapshots -> BufferDelta
   tree_convert.go       // Desktop tree <-> protocol snapshot conversion
   session.go            // Sequencing, buffering, ack handling
+  snapshot_store.go     // Load/save persisted desktop snapshots (JSON today)
 ```
 
 Responsibilities:
@@ -85,6 +86,9 @@ Responsibilities:
     pushing a fresh snapshot so the client re-renders with the new geometry.
 - Track diff history per session (`session.go`) so reconnecting clients can
   resume from the last acked sequence.
+- On startup the server loads any persisted desktop snapshot (via
+  `snapshot_store.go`) before accepting clients, and it persists updates back to
+  disk on schedule or structural changes.
 
 ### Desktop (texel/)
 
