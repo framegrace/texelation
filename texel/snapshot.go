@@ -62,6 +62,9 @@ func (d *Desktop) CaptureTree() TreeCapture {
 	}
 	collect(d.activeWorkspace.tree.Root)
 	capture.Root = buildTreeCapture(d.activeWorkspace.tree.Root, paneIndex)
+	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
+		capture.Panes = append(capture.Panes, status...)
+	}
 	return capture
 }
 
@@ -85,6 +88,100 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		snap.AppConfig = cloneAppConfig(config)
 	}
 	return snap
+}
+
+func (d *Desktop) captureStatusPaneSnapshots() []PaneSnapshot {
+	if len(d.statusPanes) == 0 {
+		return nil
+	}
+	width, height := d.viewportSize()
+	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
+	snaps := make([]PaneSnapshot, 0, len(d.statusPanes))
+
+	for _, sp := range d.statusPanes {
+		if sp == nil || sp.app == nil {
+			continue
+		}
+		buf := sp.app.Render()
+		rows := len(buf)
+		if rows == 0 {
+			continue
+		}
+		maxCols := 0
+		for _, row := range buf {
+			if len(row) > maxCols {
+				maxCols = len(row)
+			}
+		}
+		if maxCols == 0 {
+			continue
+		}
+
+		rect := Rectangle{}
+		switch sp.side {
+		case SideTop:
+			rect.X = leftOffset
+			rect.Y = topOffset
+			rect.Width = maxCols
+			rect.Height = rows
+			topOffset += rect.Height
+		case SideBottom:
+			rect.X = leftOffset
+			rect.Height = rows
+			rect.Width = maxCols
+			rect.Y = height - bottomOffset - rect.Height
+			bottomOffset += rect.Height
+		case SideLeft:
+			rect.X = leftOffset
+			rect.Y = topOffset
+			rect.Width = maxCols
+			rect.Height = rows
+			leftOffset += rect.Width
+		case SideRight:
+			rect.Width = maxCols
+			rect.Height = rows
+			rect.X = width - rightOffset - rect.Width
+			rect.Y = topOffset
+			rightOffset += rect.Width
+		}
+
+		if rect.Width <= 0 || rect.Height <= 0 {
+			continue
+		}
+
+		cloned := cloneBuffer(buf, rect.Height, rect.Width)
+		snap := PaneSnapshot{
+			ID:     sp.id,
+			Title:  sp.app.GetTitle(),
+			Buffer: cloned,
+			Rect:   rect,
+		}
+		if provider, ok := sp.app.(SnapshotProvider); ok {
+			appType, cfg := provider.SnapshotMetadata()
+			snap.AppType = appType
+			snap.AppConfig = cloneAppConfig(cfg)
+		}
+		snaps = append(snaps, snap)
+	}
+	return snaps
+}
+
+func cloneBuffer(src [][]Cell, maxRows, maxCols int) [][]Cell {
+	rows := maxRows
+	if rows > len(src) {
+		rows = len(src)
+	}
+	out := make([][]Cell, rows)
+	for y := 0; y < rows; y++ {
+		cols := maxCols
+		if len(src[y]) < cols {
+			cols = len(src[y])
+		}
+		row := make([]Cell, maxCols)
+		copy(row, src[y][:cols])
+		out[y] = row
+	}
+	return out
 }
 
 func buildTreeCapture(n *Node, paneIndex map[*pane]int) *TreeNodeCapture {

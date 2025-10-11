@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -303,19 +302,6 @@ func render(state *uiState, screen tcell.Screen) {
 			}
 		}
 	}
-	statusLines := state.buildStatusLines(width)
-	if len(statusLines) > 0 {
-		startY := height - len(statusLines)
-		if startY >= 0 && rowsAreBlank(screen, startY, len(statusLines), width) {
-			for i, line := range statusLines {
-				y := startY + i
-				if y < 0 || y >= height {
-					continue
-				}
-				drawText(screen, 0, y, width, truncateForStatus(line, width), state.defaultStyle)
-			}
-		}
-	}
 	if state.controlMode {
 		applyControlOverlay(state, screen)
 	}
@@ -395,44 +381,6 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 	s.recomputeDefaultStyle()
 }
 
-func (s *uiState) buildStatusLines(width int) []string {
-	var lines []string
-	if len(s.workspaces) > 0 {
-		parts := make([]string, len(s.workspaces))
-		for i, id := range s.workspaces {
-			label := fmt.Sprintf("%d", id)
-			if id == s.workspaceID {
-				label = "[" + label + "]"
-			}
-			parts[i] = label
-		}
-		lines = append(lines, "Workspaces: "+strings.Join(parts, " "))
-	}
-	if s.controlMode {
-		mode := "Control"
-		if s.subMode != 0 {
-			mode += fmt.Sprintf(" (%c)", s.subMode)
-		}
-		lines = append(lines, "Mode: "+mode)
-	}
-	if s.activeTitle != "" {
-		lines = append(lines, "Active: "+s.activeTitle)
-	}
-	if s.zoomed {
-		lines = append(lines, "Zoom: "+formatPaneID(s.zoomedPane))
-	}
-	if s.hasFocus {
-		lines = append(lines, "Focus: "+formatPaneID(s.focus.PaneID))
-	}
-	if s.hasClipboard {
-		lines = append(lines, fmt.Sprintf("Clipboard[%s]: %s", s.clipboard.MimeType, string(s.clipboard.Data)))
-	}
-	if s.hasTheme {
-		lines = append(lines, fmt.Sprintf("Theme %s.%s = %s", s.theme.Section, s.theme.Key, s.theme.Value))
-	}
-	return lines
-}
-
 func parseHexColor(value string) (tcell.Color, bool) {
 	if len(value) == 0 {
 		return tcell.ColorDefault, false
@@ -453,57 +401,6 @@ func colorFromRGB(rgb uint32) tcell.Color {
 	g := int32((rgb >> 8) & 0xFF)
 	b := int32(rgb & 0xFF)
 	return tcell.NewRGBColor(r, g, b)
-}
-
-func drawText(screen tcell.Screen, x, y, width int, text string, style tcell.Style) {
-	runes := []rune(text)
-	for i := 0; i < width; i++ {
-		ch := ' '
-		if i < len(runes) {
-			ch = runes[i]
-		}
-		screen.SetContent(x+i, y, ch, nil, style)
-	}
-}
-
-func rowsAreBlank(screen tcell.Screen, startY, lines, width int) bool {
-	for row := 0; row < lines; row++ {
-		if !rowIsBlank(screen, startY+row, width) {
-			return false
-		}
-	}
-	return true
-}
-
-func rowIsBlank(screen tcell.Screen, y, width int) bool {
-	if y < 0 {
-		return false
-	}
-	for x := 0; x < width; x++ {
-		ch, _, _, cellWidth := screen.GetContent(x, y)
-		if cellWidth <= 0 {
-			cellWidth = 1
-		}
-		if ch != 0 && ch != ' ' {
-			return false
-		}
-		x += cellWidth - 1
-	}
-	return true
-}
-
-func truncateForStatus(text string, max int) string {
-	if max <= 0 {
-		return ""
-	}
-	runes := []rune(text)
-	if len(runes) <= max {
-		return text
-	}
-	if max <= 3 {
-		return string(runes[:max])
-	}
-	return string(runes[:max-3]) + "..."
 }
 
 func applyControlOverlay(state *uiState, screen tcell.Screen) {

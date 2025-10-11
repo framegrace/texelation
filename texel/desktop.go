@@ -2,6 +2,8 @@ package texel
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha1"
 	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/term"
@@ -30,10 +32,22 @@ type StatusPane struct {
 	app  App
 	side Side
 	size int // rows for Top/Bottom, cols for Left/Right
+	id   [16]byte
 }
 
 type PaneRect struct {
 	x, y, w, h int
+}
+
+func newStatusPaneID(app App) [16]byte {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err == nil {
+		return id
+	}
+	fingerprint := fmt.Sprintf("status:%p:%d", app, time.Now().UnixNano())
+	sum := sha1.Sum([]byte(fingerprint))
+	copy(id[:], sum[:])
+	return id
 }
 
 // Desktop manages a collection of workspaces (Screens).
@@ -223,6 +237,7 @@ func (d *Desktop) AddStatusPane(app App, side Side, size int) {
 		app:  app,
 		side: side,
 		size: size,
+		id:   newStatusPaneID(app),
 	}
 	d.statusPanes = append(d.statusPanes, sp)
 
