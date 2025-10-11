@@ -97,6 +97,7 @@ func main() {
 	}
 	screen.HideCursor()
 	defer screen.Fini()
+	sendResize(conn, sessionID, screen)
 
 	render(state, screen)
 
@@ -128,6 +129,7 @@ func main() {
 					log.Printf("send mouse failed: %v", err)
 				}
 			case *tcell.EventResize:
+				sendResize(conn, sessionID, screen)
 				render(state, screen)
 			}
 		}
@@ -554,6 +556,19 @@ func hsvToRGB(h, s, v float32) tcell.Color {
 
 func formatPaneID(id [16]byte) string {
 	return fmt.Sprintf("%x", id[:4])
+}
+
+func sendResize(conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
+	cols, rows := screen.Size()
+	payload, err := protocol.EncodeResize(protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
+	if err != nil {
+		log.Printf("encode resize failed: %v", err)
+		return
+	}
+	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgResize, Flags: protocol.FlagChecksum, SessionID: sessionID}
+	if err := protocol.WriteMessage(conn, header, payload); err != nil {
+		log.Printf("send resize failed: %v", err)
+	}
 }
 
 func applyInactiveOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {

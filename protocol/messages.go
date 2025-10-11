@@ -155,6 +155,12 @@ type PaneState struct {
 	Flags  PaneStateFlags
 }
 
+// Resize describes terminal size.
+type Resize struct {
+	Cols uint16
+	Rows uint16
+}
+
 // PaneSnapshot describes the full buffer content for a single pane.
 type PaneSnapshot struct {
 	PaneID    [16]byte
@@ -752,6 +758,29 @@ func DecodePaneState(b []byte) (PaneState, error) {
 	copy(state.PaneID[:], b[:len(state.PaneID)])
 	state.Flags = PaneStateFlags(b[len(state.PaneID)])
 	return state, nil
+}
+
+// EncodeResize serialises terminal size info.
+func EncodeResize(r Resize) ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 4))
+	if err := binary.Write(buf, binary.LittleEndian, r.Cols); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, r.Rows); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// DecodeResize parses a resize payload.
+func DecodeResize(b []byte) (Resize, error) {
+	var r Resize
+	if len(b) < 4 {
+		return r, errPayloadShort
+	}
+	r.Cols = binary.LittleEndian.Uint16(b[:2])
+	r.Rows = binary.LittleEndian.Uint16(b[2:4])
+	return r, nil
 }
 
 // EncodeTreeSnapshot serialises the tree snapshot for transport.

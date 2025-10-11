@@ -74,6 +74,10 @@ type Desktop struct {
 	paneStateMu        sync.RWMutex
 	paneStateListeners []PaneStateListener
 	snapshotFactories  map[string]SnapshotFactory
+	viewportMu         sync.RWMutex
+	viewportWidth      int
+	viewportHeight     int
+	hasViewport        bool
 }
 
 // PaneStateSnapshot captures dynamic pane flags for external consumers.
@@ -258,7 +262,7 @@ func (d *Desktop) getMainArea() (int, int, int, int) {
 }
 
 func (d *Desktop) recalculateLayout() {
-	w, h := d.display.Size()
+	w, h := d.viewportSize()
 	mainX, mainY, mainW, mainH := d.getMainArea()
 
 	for _, sp := range d.statusPanes {
@@ -281,6 +285,15 @@ func (d *Desktop) recalculateLayout() {
 	} else if d.activeWorkspace != nil {
 		d.activeWorkspace.setArea(mainX, mainY, mainW, mainH)
 	}
+}
+
+func (d *Desktop) viewportSize() (int, int) {
+	d.viewportMu.RLock()
+	defer d.viewportMu.RUnlock()
+	if d.hasViewport && d.viewportWidth > 0 && d.viewportHeight > 0 {
+		return d.viewportWidth, d.viewportHeight
+	}
+	return d.display.Size()
 }
 
 func (d *Desktop) Run() error {
@@ -811,6 +824,20 @@ func (d *Desktop) PaneStates() []PaneStateSnapshot {
 		states = append(states, PaneStateSnapshot{ID: p.ID(), Active: p.IsActive, Resizing: p.IsResizing})
 	})
 	return states
+}
+
+// SetViewportSize overrides the desktop viewport dimensions, typically used by
+// remote clients to dictate layout size.
+func (d *Desktop) SetViewportSize(cols, rows int) {
+	d.viewportMu.Lock()
+	d.viewportWidth = cols
+	d.viewportHeight = rows
+	d.hasViewport = cols > 0 && rows > 0
+	d.viewportMu.Unlock()
+	d.recalculateLayout()
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.Refresh()
+	}
 }
 
 func (d *Desktop) notifyFocus(paneID [16]byte) {

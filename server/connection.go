@@ -129,6 +129,12 @@ func (c *connection) serve() error {
 				return err
 			}
 			c.sink.HandleMouseEvent(c.session, mouseEvent)
+		case protocol.MsgResize:
+			size, err := protocol.DecodeResize(payload)
+			if err != nil {
+				return err
+			}
+			c.handleResize(size)
 		case protocol.MsgClipboardSet:
 			clipSet, err := protocol.DecodeClipboardSet(payload)
 			if err != nil {
@@ -317,4 +323,12 @@ func (c *connection) sendPaneState(id [16]byte, active, resizing bool) {
 		return
 	}
 	_ = c.writeControlMessage(protocol.MsgPaneState, payload)
+}
+
+func (c *connection) handleResize(size protocol.Resize) {
+	if sink, ok := c.sink.(*DesktopSink); ok {
+		if desktop := sink.Desktop(); desktop != nil {
+			desktop.SetViewportSize(int(size.Cols), int(size.Rows))
+		}
+	}
 }

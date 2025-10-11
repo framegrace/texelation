@@ -264,6 +264,21 @@ func TestPaneStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestResizeRoundTrip(t *testing.T) {
+	resize := Resize{Cols: 120, Rows: 40}
+	payload, err := EncodeResize(resize)
+	if err != nil {
+		t.Fatalf("encode resize failed: %v", err)
+	}
+	decoded, err := DecodeResize(payload)
+	if err != nil {
+		t.Fatalf("decode resize failed: %v", err)
+	}
+	if decoded != resize {
+		t.Fatalf("resize mismatch: %#v", decoded)
+	}
+}
+
 func BenchmarkEncodeBufferDelta(b *testing.B) {
 	delta := BufferDelta{
 		PaneID:   [16]byte{1, 2, 3, 4},
