@@ -99,6 +99,34 @@ func main() {
 
 	render(state, screen)
 
+	events := make(chan tcell.Event, 32)
+	stopEvents := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopEvents:
+				close(events)
+				return
+			default:
+				ev := screen.PollEvent()
+				if ev == nil {
+					close(events)
+					return
+				}
+				select {
+				case events <- ev:
+				case <-stopEvents:
+					close(events)
+					return
+				}
+			}
+		}
+	}()
+	defer func() {
+		close(stopEvents)
+		screen.PostEventWait(tcell.NewEventInterrupt(nil))
+	}()
+
 	for {
 		select {
 		case hdr, ok := <-inbound:
@@ -110,37 +138,11 @@ func main() {
 			case protocol.MsgTreeSnapshot, protocol.MsgBufferDelta, protocol.MsgClipboardData, protocol.MsgThemeAck, protocol.MsgClipboardSet, protocol.MsgThemeUpdate, protocol.MsgStateUpdate:
 				render(state, screen)
 			}
-		default:
-			ev := screen.PollEvent()
-			switch ev := ev.(type) {
-			case *tcell.EventKey:
-				if ev.Key() == tcell.KeyCtrlA {
-					state.controlMode = !state.controlMode
-					state.subMode = 0
-					render(state, screen)
-				}
-				if ev.Key() == tcell.KeyEsc && ev.Modifiers() == 0 && state.controlMode {
-					state.controlMode = false
-					state.subMode = 0
-					render(state, screen)
-				}
-				key := protocol.KeyEvent{KeyCode: uint32(ev.Key()), RuneValue: ev.Rune(), Modifiers: uint16(ev.Modifiers())}
-				log.Printf("send key: key=%v rune=%q mods=%v", ev.Key(), ev.Rune(), ev.Modifiers())
-				payload, _ := protocol.EncodeKeyEvent(key)
-				if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgKeyEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
-					log.Printf("send key failed: %v", err)
-				}
-			case *tcell.EventMouse:
-				x, y := ev.Position()
-				mouse := protocol.MouseEvent{X: int16(x), Y: int16(y), ButtonMask: uint32(ev.Buttons()), Modifiers: uint16(ev.Modifiers())}
-				payload, _ := protocol.EncodeMouseEvent(mouse)
-				if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgMouseEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
-					log.Printf("send mouse failed: %v", err)
-				}
-			case *tcell.EventResize:
-				sendResize(conn, sessionID, screen)
-				render(state, screen)
+		case ev, ok := <-events:
+			if !ok {
+				return
 			}
+			handleScreenEvent(ev, state, screen, conn, sessionID)
 		}
 	}
 }
@@ -306,6 +308,40 @@ func render(state *uiState, screen tcell.Screen) {
 		applyControlOverlay(state, screen)
 	}
 	screen.Show()
+}
+
+func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn net.Conn, sessionID [16]byte) {
+	switch ev := ev.(type) {
+	case *tcell.EventKey:
+		if ev.Key() == tcell.KeyCtrlA {
+			state.controlMode = !state.controlMode
+			state.subMode = 0
+			render(state, screen)
+		}
+		if ev.Key() == tcell.KeyEsc && ev.Modifiers() == 0 && state.controlMode {
+			state.controlMode = false
+			state.subMode = 0
+			render(state, screen)
+		}
+		key := protocol.KeyEvent{KeyCode: uint32(ev.Key()), RuneValue: ev.Rune(), Modifiers: uint16(ev.Modifiers())}
+		log.Printf("send key: key=%v rune=%q mods=%v", ev.Key(), ev.Rune(), ev.Modifiers())
+		payload, _ := protocol.EncodeKeyEvent(key)
+		if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgKeyEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
+			log.Printf("send key failed: %v", err)
+		}
+	case *tcell.EventMouse:
+		x, y := ev.Position()
+		mouse := protocol.MouseEvent{X: int16(x), Y: int16(y), ButtonMask: uint32(ev.Buttons()), Modifiers: uint16(ev.Modifiers())}
+		payload, _ := protocol.EncodeMouseEvent(mouse)
+		if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgMouseEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
+			log.Printf("send mouse failed: %v", err)
+		}
+	case *tcell.EventResize:
+		sendResize(conn, sessionID, screen)
+		render(state, screen)
+	case *tcell.EventInterrupt:
+		// Ignore; used to wake PollEvent for shutdown.
+	}
 }
 
 func isNetworkClosed(err error) bool {
