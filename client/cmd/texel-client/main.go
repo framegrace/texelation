@@ -318,6 +318,9 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 		if state.controlMode && ev.Modifiers() == 0 {
 			r := ev.Rune()
 			if r == 'q' || r == 'Q' {
+				if err := sendControlMode(conn, sessionID, false); err != nil {
+					log.Printf("control reset failed: %v", err)
+				}
 				log.Printf("control quit requested; closing client")
 				return false
 			}
@@ -543,6 +546,16 @@ func sendResize(conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
 	if err := protocol.WriteMessage(conn, header, payload); err != nil {
 		log.Printf("send resize failed: %v", err)
 	}
+}
+
+func sendControlMode(conn net.Conn, sessionID [16]byte, active bool) error {
+	update := protocol.StateUpdate{InControlMode: active}
+	payload, err := protocol.EncodeStateUpdate(update)
+	if err != nil {
+		return err
+	}
+	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgStateUpdate, Flags: protocol.FlagChecksum, SessionID: sessionID}
+	return protocol.WriteMessage(conn, header, payload)
 }
 
 func applyInactiveOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {
