@@ -235,6 +235,7 @@ func (c *connection) sendTreeSnapshot() {
 	}
 	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
 	_ = c.writeMessage(header, payload)
+	sink.Publish()
 }
 
 func (c *connection) PaneStateChanged(id [16]byte, active bool, resizing bool) {
