@@ -229,13 +229,36 @@ func (c *connection) sendTreeSnapshot() {
 	if err != nil || len(snapshot.Panes) == 0 {
 		return
 	}
+	sink.Publish()
 	payload, err := protocol.EncodeTreeSnapshot(snapshot)
 	if err != nil {
 		return
 	}
 	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
 	_ = c.writeMessage(header, payload)
-	sink.Publish()
+	states := snapshotMergedPaneStates(snapshot, sink.Desktop())
+	for _, pane := range states {
+		c.sendPaneState(pane.ID, pane.Active, pane.Resizing)
+	}
+}
+
+func snapshotMergedPaneStates(snapshot protocol.TreeSnapshot, desktop *texel.Desktop) []texel.PaneStateSnapshot {
+	if desktop == nil {
+		return nil
+	}
+	byID := make(map[[16]byte]texel.PaneStateSnapshot)
+	for _, state := range desktop.PaneStates() {
+		byID[state.ID] = state
+	}
+	merged := make([]texel.PaneStateSnapshot, 0, len(snapshot.Panes))
+	for _, pane := range snapshot.Panes {
+		if state, ok := byID[pane.PaneID]; ok {
+			merged = append(merged, state)
+		} else {
+			merged = append(merged, texel.PaneStateSnapshot{ID: pane.PaneID})
+		}
+	}
+	return merged
 }
 
 func (c *connection) PaneStateChanged(id [16]byte, active bool, resizing bool) {
