@@ -373,6 +373,13 @@ func (c *connection) sendPaneState(id [16]byte, active, resizing bool) {
 	_ = c.writeControlMessage(protocol.MsgPaneState, payload)
 }
 
+func (c *connection) nudge() {
+	if c.conn == nil {
+		return
+	}
+	_ = c.conn.SetReadDeadline(time.Now())
+}
+
 func (c *connection) handleResize(size protocol.Resize) {
 	if sink, ok := c.sink.(*DesktopSink); ok {
 		if desktop := sink.Desktop(); desktop != nil {

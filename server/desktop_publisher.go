@@ -19,6 +19,7 @@ type DesktopPublisher struct {
 	revisions map[[16]byte]uint32
 	observer  PublishObserver
 	mu        sync.Mutex
+	notify    func()
 }
 
 // PublishObserver records desktop publish metrics for instrumentation.
@@ -39,6 +40,11 @@ func (p *DesktopPublisher) SetObserver(observer PublishObserver) {
 	p.observer = observer
 }
 
+// SetNotifier registers a callback invoked after diffs are enqueued.
+func (p *DesktopPublisher) SetNotifier(fn func()) {
+	p.notify = fn
+}
+
 func (p *DesktopPublisher) Publish() error {
 	if p.desktop == nil || p.session == nil {
 		return nil
@@ -57,6 +63,9 @@ func (p *DesktopPublisher) Publish() error {
 	}
 	if p.observer != nil {
 		p.observer.ObservePublish(p.session, len(snapshots), time.Since(start))
+	}
+	if p.notify != nil {
+		p.notify()
 	}
 	return nil
 }

@@ -112,18 +112,22 @@ func (s *Server) acceptLoop() {
 			if err != nil {
 				return
 			}
+			conn := newConnection(c, session, s.sink, resuming)
 			publisher := (*DesktopPublisher)(nil)
 			if s.publisherFactory != nil {
 				publisher = s.publisherFactory(session)
+			}
+			if publisher != nil {
+				publisher.SetNotifier(conn.nudge)
 			}
 			if s.desktopSink != nil {
 				s.desktopSink.SetPublisher(publisher)
 			}
 			if publisher != nil {
 				_ = publisher.Publish()
+				conn.nudge()
 			}
 			s.sendSnapshot(c, session)
-			conn := newConnection(c, session, s.sink, resuming)
 			_ = conn.serve()
 		}(conn)
 	}
