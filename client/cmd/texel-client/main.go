@@ -115,7 +115,18 @@ func main() {
 			ev := screen.PollEvent()
 			switch ev := ev.(type) {
 			case *tcell.EventKey:
+				if ev.Key() == tcell.KeyCtrlA {
+					state.controlMode = !state.controlMode
+					state.subMode = 0
+					render(state, screen)
+				}
+				if ev.Key() == tcell.KeyEsc && ev.Modifiers() == 0 && state.controlMode {
+					state.controlMode = false
+					state.subMode = 0
+					render(state, screen)
+				}
 				key := protocol.KeyEvent{KeyCode: uint32(ev.Key()), RuneValue: ev.Rune(), Modifiers: uint16(ev.Modifiers())}
+				log.Printf("send key: key=%v rune=%q mods=%v", ev.Key(), ev.Rune(), ev.Modifiers())
 				payload, _ := protocol.EncodeKeyEvent(key)
 				if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgKeyEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
 					log.Printf("send key failed: %v", err)
@@ -237,6 +248,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			log.Printf("decode state update failed: %v", err)
 			return
 		}
+		log.Printf("state update: control=%v sub=%q zoom=%v", update.InControlMode, update.SubMode, update.Zoomed)
 		state.applyStateUpdate(update)
 	}
 }
