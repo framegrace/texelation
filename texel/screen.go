@@ -565,6 +565,11 @@ func (s *Screen) SwapActivePane(d Direction) {
 	if d != -1 {
 		s.tree.SwapActivePane(d)
 		s.recalculateLayout()
+		s.Refresh()
+		if s.desktop != nil {
+			s.desktop.broadcastTreeChanged()
+			s.desktop.broadcastStateUpdate()
+		}
 	}
 }
 
