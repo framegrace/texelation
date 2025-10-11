@@ -14,6 +14,9 @@ type DesktopSink struct {
 }
 
 func NewDesktopSink(desktop *texel.Desktop) *DesktopSink {
+	if desktop != nil {
+		desktop.DisableAnimations()
+	}
 	return &DesktopSink{desktop: desktop}
 }
 

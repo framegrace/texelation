@@ -96,6 +96,8 @@ type Desktop struct {
 	stateMu      sync.Mutex
 	hasLastState bool
 	lastState    StatePayload
+
+	animationsEnabled bool
 }
 
 // PaneStateSnapshot captures dynamic pane flags for external consumers.
@@ -158,6 +160,7 @@ func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppF
 		focusListeners:     make([]DesktopFocusListener, 0),
 		paneStateListeners: make([]PaneStateListener, 0),
 		snapshotFactories:  make(map[string]SnapshotFactory),
+		animationsEnabled:  true,
 	}
 
 	log.Printf("NewDesktop: Created with inControlMode=%v", d.inControlMode)
@@ -714,6 +717,20 @@ func (d *Desktop) broadcastStateUpdate() {
 	//	if d.activeWorkspace != nil {
 	//		d.activeWorkspace.Refresh()
 	//	}
+}
+
+func (d *Desktop) animationsDisabled() bool {
+	return !d.animationsEnabled
+}
+
+// DisableAnimations turns off desktop-level animations for remote runtimes.
+func (d *Desktop) DisableAnimations() {
+	d.animationsEnabled = false
+	for _, ws := range d.workspaces {
+		if ws != nil {
+			ws.disableAnimations()
+		}
+	}
 }
 
 func (d *Desktop) broadcastTreeChanged() {

@@ -91,6 +91,10 @@ func newScreen(id int, shellFactory AppFactory, lifecycle AppLifecycleManager, d
 	//s.controlModeFade = NewFadeEffect(desktop, tcell.NewRGBColor(0, 100, 0)) // Dark green
 	s.controlModeFade = NewRainbowEffect(desktop) // placeholder; remote client owns visuals now
 
+	if desktop != nil && desktop.animationsDisabled() {
+		s.disableAnimations()
+	}
+
 	return s, nil
 }
 
@@ -106,6 +110,18 @@ func (s *Screen) AddEffect(effect Effect) {
 // RemoveEffect removes an effect from the screen's pipeline
 func (s *Screen) RemoveEffect(effect Effect) {
 	s.effects.RemoveEffect(effect)
+}
+
+func (s *Screen) disableAnimations() {
+	s.animator.StopAll()
+	s.effects.Clear()
+}
+
+func (s *Screen) animationsDisabled() bool {
+	if s.desktop == nil {
+		return false
+	}
+	return s.desktop.animationsDisabled()
 }
 
 func (s *Screen) getDefaultBackground() tcell.Color {
@@ -272,6 +288,13 @@ func (s *Screen) AnimateGroupExpansion(groupNode *Node, newPaneIndex int, durati
 		numOldChildren, numChildren, oldEqualRatio, newEqualRatio)
 	log.Printf("AnimateGroupExpansion: start=%v, target=%v", startRatios, targetRatios)
 
+	if s.animationsDisabled() {
+		groupNode.SplitRatios = targetRatios
+		s.recalculateLayout()
+		s.Refresh()
+		return
+	}
+
 	s.animateLayoutTransition(groupNode, startRatios, targetRatios, duration)
 }
 
@@ -291,6 +314,13 @@ func (s *Screen) AnimatePaneSplit(splitNode *Node, duration time.Duration) {
 	targetRatios := []float64{0.5, 0.5}
 
 	log.Printf("AnimatePaneSplit: start=%v, target=%v", startRatios, targetRatios)
+
+	if s.animationsDisabled() {
+		splitNode.SplitRatios = targetRatios
+		s.recalculateLayout()
+		s.Refresh()
+		return
+	}
 
 	s.animateLayoutTransition(splitNode, startRatios, targetRatios, duration)
 }
@@ -692,6 +722,13 @@ func (s *Screen) AnimatePaneCreation(newNodeParent *Node, newPaneIndex int, dura
 
 	log.Printf("AnimatePaneCreation: start=%v, target=%v", startRatios, targetRatios)
 
+	if s.animationsDisabled() {
+		newNodeParent.SplitRatios = targetRatios
+		s.recalculateLayout()
+		s.Refresh()
+		return
+	}
+
 	// Create and start the layout animation
 	layoutEffect := NewLayoutEffect(newNodeParent, s, startRatios, targetRatios)
 	s.effects.AddEffect(layoutEffect)
@@ -745,6 +782,16 @@ func (s *Screen) AnimatePaneRemoval(nodeParent *Node, removingIndex int, duratio
 	}
 
 	log.Printf("AnimatePaneRemoval: start=%v, target=%v", startRatios, targetRatios)
+
+	if s.animationsDisabled() {
+		nodeParent.SplitRatios = targetRatios
+		s.recalculateLayout()
+		s.Refresh()
+		if onComplete != nil {
+			onComplete()
+		}
+		return
+	}
 
 	// Create and start the layout animation
 	layoutEffect := NewLayoutEffect(nodeParent, s, startRatios, targetRatios)
