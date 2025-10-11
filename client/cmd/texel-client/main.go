@@ -167,6 +167,13 @@ func readLoop(conn net.Conn, headers chan<- protocol.Header, state *uiState, ses
 func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64) {
 	cache := state.cache
 	switch hdr.Type {
+	case protocol.MsgTreeSnapshot:
+		snap, err := protocol.DecodeTreeSnapshot(payload)
+		if err != nil {
+			log.Printf("decode snapshot failed: %v", err)
+			return
+		}
+		cache.ApplySnapshot(snap)
 	case protocol.MsgBufferDelta:
 		delta, err := protocol.DecodeBufferDelta(payload)
 		if err != nil {
@@ -184,13 +191,6 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
 		}
-	case protocol.MsgTreeSnapshot:
-		snap, err := protocol.DecodeTreeSnapshot(payload)
-		if err != nil {
-			log.Printf("decode snapshot failed: %v", err)
-			return
-		}
-		cache.ApplySnapshot(snap)
 	case protocol.MsgPing:
 		pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})
 		_ = protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgPong, Flags: protocol.FlagChecksum, SessionID: sessionID}, pong)
