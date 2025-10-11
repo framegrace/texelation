@@ -78,6 +78,10 @@ type Desktop struct {
 	viewportWidth      int
 	viewportHeight     int
 	hasViewport        bool
+
+	stateMu      sync.Mutex
+	hasLastState bool
+	lastState    StatePayload
 }
 
 // PaneStateSnapshot captures dynamic pane flags for external consumers.
@@ -678,13 +682,41 @@ func (d *Desktop) broadcastStateUpdate() {
 	}
 	sort.Ints(allWsIDs)
 
+	payload := d.currentStatePayload(allWsIDs, title)
+
+	if !d.shouldBroadcastState(payload) {
+		return
+	}
+
 	d.dispatcher.Broadcast(Event{
 		Type:    EventStateUpdate,
-		Payload: d.currentStatePayload(allWsIDs, title),
+		Payload: payload,
 	})
 	//	if d.activeWorkspace != nil {
 	//		d.activeWorkspace.Refresh()
 	//	}
+}
+
+func (d *Desktop) shouldBroadcastState(payload StatePayload) bool {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
+	if !d.hasLastState {
+		d.storeLastState(payload)
+		return true
+	}
+	if d.lastState.equal(payload) {
+		return false
+	}
+	d.storeLastState(payload)
+	return true
+}
+
+func (d *Desktop) storeLastState(payload StatePayload) {
+	d.lastState = payload
+	if payload.AllWorkspaces != nil {
+		d.lastState.AllWorkspaces = append([]int(nil), payload.AllWorkspaces...)
+	}
+	d.hasLastState = true
 }
 
 func (d *Desktop) currentStatePayload(allWsIDs []int, title string) StatePayload {

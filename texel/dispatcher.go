@@ -37,6 +37,36 @@ type StatePayload struct {
 	ZoomedPaneID   [16]byte
 }
 
+func (s StatePayload) equal(other StatePayload) bool {
+	if s.WorkspaceID != other.WorkspaceID {
+		return false
+	}
+	if s.InControlMode != other.InControlMode || s.SubMode != other.SubMode {
+		return false
+	}
+	if s.ActiveTitle != other.ActiveTitle {
+		return false
+	}
+	if s.DesktopBgColor != other.DesktopBgColor {
+		return false
+	}
+	if s.Zoomed != other.Zoomed {
+		return false
+	}
+	if s.ZoomedPaneID != other.ZoomedPaneID {
+		return false
+	}
+	if len(s.AllWorkspaces) != len(other.AllWorkspaces) {
+		return false
+	}
+	for i, id := range s.AllWorkspaces {
+		if id != other.AllWorkspaces[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // Listener is an interface that any component can implement to receive events.
 type Listener interface {
 	// OnEvent is the callback method for receiving events.
