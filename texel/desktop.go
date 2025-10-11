@@ -674,9 +674,6 @@ func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
 		exitControlMode = false // Stay in control mode for sub-mode
 	case 'z':
 		d.toggleZoom()
-	case 'q', 'Q':
-		d.Close()
-		return
 	}
 	if exitControlMode {
 		d.toggleControlMode()

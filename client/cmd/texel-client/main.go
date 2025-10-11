@@ -142,7 +142,9 @@ func main() {
 			if !ok {
 				return
 			}
-			handleScreenEvent(ev, state, screen, conn, sessionID)
+			if !handleScreenEvent(ev, state, screen, conn, sessionID) {
+				return
+			}
 		}
 	}
 }
@@ -310,9 +312,16 @@ func render(state *uiState, screen tcell.Screen) {
 	screen.Show()
 }
 
-func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn net.Conn, sessionID [16]byte) {
+func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn net.Conn, sessionID [16]byte) bool {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
+		if state.controlMode && ev.Modifiers() == 0 {
+			r := ev.Rune()
+			if r == 'q' || r == 'Q' {
+				log.Printf("control quit requested; closing client")
+				return false
+			}
+		}
 		if ev.Key() == tcell.KeyCtrlA {
 			state.controlMode = !state.controlMode
 			state.subMode = 0
@@ -342,6 +351,7 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 	case *tcell.EventInterrupt:
 		// Ignore; used to wake PollEvent for shutdown.
 	}
+	return true
 }
 
 func isNetworkClosed(err error) bool {
