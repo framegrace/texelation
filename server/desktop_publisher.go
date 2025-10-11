@@ -2,6 +2,7 @@ package server
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -17,6 +18,7 @@ type DesktopPublisher struct {
 	session   *Session
 	revisions map[[16]byte]uint32
 	observer  PublishObserver
+	mu        sync.Mutex
 }
 
 // PublishObserver records desktop publish metrics for instrumentation.
@@ -41,6 +43,8 @@ func (p *DesktopPublisher) Publish() error {
 	if p.desktop == nil || p.session == nil {
 		return nil
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	start := time.Now()
 	snapshots := p.desktop.SnapshotBuffers()
 	for _, snap := range snapshots {
