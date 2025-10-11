@@ -304,13 +304,17 @@ func render(state *uiState, screen tcell.Screen) {
 		}
 	}
 	statusLines := state.buildStatusLines(width)
-	startY := height - len(statusLines)
-	for i, line := range statusLines {
-		y := startY + i
-		if y < 0 || y >= height {
-			continue
+	if len(statusLines) > 0 {
+		startY := height - len(statusLines)
+		if startY >= 0 && rowsAreBlank(screen, startY, len(statusLines), width) {
+			for i, line := range statusLines {
+				y := startY + i
+				if y < 0 || y >= height {
+					continue
+				}
+				drawText(screen, 0, y, width, truncateForStatus(line, width), state.defaultStyle)
+			}
 		}
-		drawText(screen, 0, y, width, truncateForStatus(line, width), state.defaultStyle)
 	}
 	if state.controlMode {
 		applyControlOverlay(state, screen)
@@ -460,6 +464,32 @@ func drawText(screen tcell.Screen, x, y, width int, text string, style tcell.Sty
 		}
 		screen.SetContent(x+i, y, ch, nil, style)
 	}
+}
+
+func rowsAreBlank(screen tcell.Screen, startY, lines, width int) bool {
+	for row := 0; row < lines; row++ {
+		if !rowIsBlank(screen, startY+row, width) {
+			return false
+		}
+	}
+	return true
+}
+
+func rowIsBlank(screen tcell.Screen, y, width int) bool {
+	if y < 0 {
+		return false
+	}
+	for x := 0; x < width; x++ {
+		ch, _, _, cellWidth := screen.GetContent(x, y)
+		if cellWidth <= 0 {
+			cellWidth = 1
+		}
+		if ch != 0 && ch != ' ' {
+			return false
+		}
+		x += cellWidth - 1
+	}
+	return true
 }
 
 func truncateForStatus(text string, max int) string {

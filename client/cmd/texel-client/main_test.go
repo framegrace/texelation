@@ -82,6 +82,106 @@ func TestRenderRespectsPaneGeometry(t *testing.T) {
 	}
 }
 
+func TestRenderSkipsStatusWhenBottomOccupied(t *testing.T) {
+	state := &uiState{cache: client.NewBufferCache(), defaultStyle: tcell.StyleDefault}
+	var paneID [16]byte
+	paneID[0] = 3
+	snapshot := protocol.TreeSnapshot{Panes: []protocol.PaneSnapshot{
+		{
+			PaneID:   paneID,
+			Title:    "main",
+			Revision: 1,
+			Rows: []string{
+				"+---------+",
+				"|shell    |",
+				"|prompt   |",
+				"+---------+",
+			},
+			X:      0,
+			Y:      0,
+			Width:  11,
+			Height: 4,
+		},
+	}}
+	state.cache.ApplySnapshot(snapshot)
+	state.applyStateUpdate(protocol.StateUpdate{
+		WorkspaceID:   1,
+		AllWorkspaces: []int32{1, 2},
+		InControlMode: true,
+		SubMode:       'w',
+		ActiveTitle:   "shell",
+	})
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(20, 6)
+
+	render(state, screen)
+
+	bottom := readScreenLine(screen, 0, 3, 11)
+	if bottom != "+---------+" {
+		t.Fatalf("expected bottom border to remain, got %q", bottom)
+	}
+	if screenHasSubstring(screen, "Workspaces") {
+		t.Fatalf("expected status overlay to skip occupied row")
+	}
+}
+
+func TestRenderShowsStatusWhenSpaceAvailable(t *testing.T) {
+	state := &uiState{cache: client.NewBufferCache(), defaultStyle: tcell.StyleDefault}
+	var paneID [16]byte
+	paneID[0] = 4
+	snapshot := protocol.TreeSnapshot{Panes: []protocol.PaneSnapshot{
+		{
+			PaneID:   paneID,
+			Title:    "main",
+			Revision: 1,
+			Rows: []string{
+				"+------+",
+				"|shell |",
+				"+------+",
+			},
+			X:      0,
+			Y:      0,
+			Width:  8,
+			Height: 3,
+		},
+	}}
+	state.cache.ApplySnapshot(snapshot)
+	state.applyStateUpdate(protocol.StateUpdate{
+		WorkspaceID:   1,
+		AllWorkspaces: []int32{1, 2},
+		ActiveTitle:   "shell",
+	})
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(20, 6)
+
+	render(state, screen)
+
+	if !screenHasSubstring(screen, "Workspaces") {
+		t.Fatalf("expected status overlay to render when space is available")
+	}
+}
+
+func screenHasSubstring(screen tcell.Screen, substr string) bool {
+	width, height := screen.Size()
+	for y := 0; y < height; y++ {
+		line := readScreenLine(screen, 0, y, width)
+		if strings.Contains(line, substr) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestStateUpdateFeedsStatusLines(t *testing.T) {
 	state := &uiState{defaultStyle: tcell.StyleDefault}
 	update := protocol.StateUpdate{
