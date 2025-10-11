@@ -18,12 +18,8 @@
 - Resume scaffolding exists: `SimpleClient.RequestResume` sends `MsgResumeRequest` and the CLI uses cached sequence numbers to request snapshots/diffs.
 - Resume integration test now uses a headless screen driver and sends an explicit initial snapshot before starting the connection loop, eliminating the tcell locale failure (`server/client_integration_test.go`).
 
-## In Progress / Issues
-- Verify remaining desktop-only effects (pane resize highlight, zoom overlays) and port them as needed.
-
 ## Next Steps
-1. Extend parity checks to pane resize/zoom treatments once control-mode fade stabilises.
-2. Re-validate Phase 4 parity before moving on to offline retention work.
+1. Re-validate Phase 4 parity across varied workloads before moving on to offline retention work (Phase 5).
 
 ---
-_Last updated: 2025-10-03 (session resumed)_
+_Last updated: 2025-10-11_
