@@ -81,7 +81,7 @@ func (c *connection) serve() error {
 			return err
 		}
 
-		_ = c.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_ = c.conn.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
 		header, payload, err := protocol.ReadMessage(c.conn)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
