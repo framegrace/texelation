@@ -57,3 +57,5 @@
 - Explore compression strategies (zstd delta, dictionary-based) if diffs grow large.
 - Plan for multi-client viewing (read-only observers) once single-client flow stabilizes.
 - Support mapping individual client workspaces to arbitrary server workspaces so a single client can follow multiple servers (or multiple server workspaces) concurrently.
+- Investigate running each app inside an isolated container/VM so Texelation server restarts do not terminate the processes; restart would simply reconnect to the long-lived container (aligns with Phase 5 resiliency goals).
+- Explore CRIU/container checkpoint/restore integration to snapshot app state periodically or on shutdown, enabling fast resume even after host reboot.
