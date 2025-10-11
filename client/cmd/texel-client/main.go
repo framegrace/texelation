@@ -145,6 +145,8 @@ func main() {
 			if !handleScreenEvent(ev, state, screen, conn, sessionID) {
 				return
 			}
+		case <-time.After(500 * time.Millisecond):
+			render(state, screen)
 		}
 	}
 }
