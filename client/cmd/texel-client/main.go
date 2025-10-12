@@ -3,11 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -40,10 +42,57 @@ type uiState struct {
 	zoomedPane   [16]byte
 }
 
+type panicLogger struct {
+	path string
+	mu   sync.Mutex
+}
+
+func newPanicLogger(path string) *panicLogger {
+	return &panicLogger{path: path}
+}
+
+func (p *panicLogger) Recover(context string) {
+	if r := recover(); r != nil {
+		p.logPanic(context, r)
+		os.Exit(2)
+	}
+}
+
+func (p *panicLogger) Go(context string, fn func()) {
+	go func() {
+		defer p.Recover(context)
+		fn()
+	}()
+}
+
+func (p *panicLogger) logPanic(context string, r interface{}) {
+	buf := make([]byte, 1<<16)
+	n := runtime.Stack(buf, true)
+	stack := buf[:n]
+	log.Printf("panic in %s: %v\n%s", context, r, stack)
+	if p.path == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f, err := os.OpenFile(p.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("panic: unable to write panic log: %v", err)
+		return
+	}
+	defer f.Close()
+	ts := time.Now().Format(time.RFC3339Nano)
+	fmt.Fprintf(f, "[%s] panic in %s: %v\n%s\n", ts, context, r, stack)
+}
+
 func main() {
 	socket := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
 	reconnect := flag.Bool("reconnect", false, "Attempt to resume previous session")
+	panicLogPath := flag.String("panic-log", "", "File to append panic stack traces")
 	flag.Parse()
+
+	panicLogger := newPanicLogger(*panicLogPath)
+	defer panicLogger.Recover("main")
 
 	logFile, err := setupLogging()
 	if err != nil {
@@ -87,9 +136,13 @@ func main() {
 
 	renderCh := make(chan struct{}, 1)
 	doneCh := make(chan struct{})
-	go readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh, &writeMu)
+	panicLogger.Go("readLoop", func() {
+		readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh, &writeMu)
+	})
 	pingStop := make(chan struct{})
-	go pingLoop(conn, sessionID, doneCh, pingStop, &writeMu)
+	panicLogger.Go("pingLoop", func() {
+		pingLoop(conn, sessionID, doneCh, pingStop, &writeMu)
+	})
 
 	screen, err := tcell.NewScreen()
 	if err != nil {
@@ -107,7 +160,7 @@ func main() {
 
 	events := make(chan tcell.Event, 32)
 	stopEvents := make(chan struct{})
-	go func() {
+	panicLogger.Go("eventPoll", func() {
 		for {
 			select {
 			case <-stopEvents:
@@ -127,7 +180,7 @@ func main() {
 				}
 			}
 		}
-	}()
+	})
 	defer func() {
 		close(stopEvents)
 		screen.PostEventWait(tcell.NewEventInterrupt(nil))
@@ -720,7 +773,7 @@ func setupLogging() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.SetOutput(file)
+	log.SetOutput(io.MultiWriter(file, os.Stderr))
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	return file, nil
 }
