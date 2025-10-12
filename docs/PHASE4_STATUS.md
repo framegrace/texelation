@@ -17,9 +17,10 @@
 - Client immediately reports terminal dimensions via a new resize message so the server-resident desktop matches the remote viewport (`protocol/messages.go`, `server/connection.go`, `texel/desktop.go`, `client/cmd/texel-client/main.go`).
 - Resume scaffolding exists: `SimpleClient.RequestResume` sends `MsgResumeRequest` and the CLI uses cached sequence numbers to request snapshots/diffs.
 - Resume integration test now uses a headless screen driver and sends an explicit initial snapshot before starting the connection loop, eliminating the tcell locale failure (`server/client_integration_test.go`).
+- Connection loop now streams reads on a dedicated goroutine, nudges flush pending diffs without deadlines, and the client serialises socket writes with keepalive pings, removing the "wrong magic" disconnects seen under heavy diff load (`server/connection.go`, `server/connection_test.go`, `client/cmd/texel-client/main.go`).
 
 ## Next Steps
 1. Re-validate Phase 4 parity across varied workloads before moving on to offline retention work (Phase 5).
 
 ---
-_Last updated: 2025-10-11_
+_Last updated: 2025-10-12_
