@@ -153,6 +153,7 @@ const (
 type PaneState struct {
 	PaneID [16]byte
 	Flags  PaneStateFlags
+	ZOrder int32
 }
 
 // Resize describes terminal size.
@@ -741,22 +742,30 @@ func DecodeStateUpdate(b []byte) (StateUpdate, error) {
 
 // EncodePaneState serialises pane state flags.
 func EncodePaneState(state PaneState) ([]byte, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 18))
+	buf := bytes.NewBuffer(make([]byte, 0, 22))
 	if err := binary.Write(buf, binary.LittleEndian, state.PaneID); err != nil {
 		return nil, err
 	}
 	buf.WriteByte(byte(state.Flags))
+	if err := binary.Write(buf, binary.LittleEndian, state.ZOrder); err != nil {
+		return nil, err
+	}
 	return buf.Bytes(), nil
 }
 
 // DecodePaneState deserialises pane state flags.
 func DecodePaneState(b []byte) (PaneState, error) {
 	var state PaneState
-	if len(b) < len(state.PaneID)+1 {
+	required := len(state.PaneID) + 1 + 4
+	if len(b) < required {
 		return state, errPayloadShort
 	}
 	copy(state.PaneID[:], b[:len(state.PaneID)])
 	state.Flags = PaneStateFlags(b[len(state.PaneID)])
+	state.ZOrder = int32(binary.LittleEndian.Uint32(b[len(state.PaneID)+1 : required]))
+	if len(b) > required {
+		return state, errExtraBytes
+	}
 	return state, nil
 }
 

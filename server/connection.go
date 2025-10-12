@@ -334,7 +334,7 @@ func (c *connection) sendTreeSnapshot() {
 	_ = c.writeMessage(header, payload)
 	states := snapshotMergedPaneStates(snapshot, sink.Desktop())
 	for _, pane := range states {
-		c.sendPaneState(pane.ID, pane.Active, pane.Resizing)
+		c.sendPaneState(pane.ID, pane.Active, pane.Resizing, pane.ZOrder)
 	}
 }
 
@@ -357,8 +357,8 @@ func snapshotMergedPaneStates(snapshot protocol.TreeSnapshot, desktop *texel.Des
 	return merged
 }
 
-func (c *connection) PaneStateChanged(id [16]byte, active bool, resizing bool) {
-	c.sendPaneState(id, active, resizing)
+func (c *connection) PaneStateChanged(id [16]byte, active bool, resizing bool, z int) {
+	c.sendPaneState(id, active, resizing, z)
 }
 
 func (c *connection) sendPending() error {
@@ -445,11 +445,11 @@ func colorToRGB(r, g, b int32) uint32 {
 
 func (c *connection) sendPaneStateSnapshots(states []texel.PaneStateSnapshot) {
 	for _, state := range states {
-		c.sendPaneState(state.ID, state.Active, state.Resizing)
+		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder)
 	}
 }
 
-func (c *connection) sendPaneState(id [16]byte, active, resizing bool) {
+func (c *connection) sendPaneState(id [16]byte, active, resizing bool, z int) {
 	var flags protocol.PaneStateFlags
 	if active {
 		flags |= protocol.PaneStateActive
@@ -457,7 +457,7 @@ func (c *connection) sendPaneState(id [16]byte, active, resizing bool) {
 	if resizing {
 		flags |= protocol.PaneStateResizing
 	}
-	payload, err := protocol.EncodePaneState(protocol.PaneState{PaneID: id, Flags: flags})
+	payload, err := protocol.EncodePaneState(protocol.PaneState{PaneID: id, Flags: flags, ZOrder: int32(z)})
 	if err != nil {
 		return
 	}

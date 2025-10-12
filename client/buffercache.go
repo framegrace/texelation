@@ -20,6 +20,7 @@ type PaneState struct {
 	Rect      clientRect
 	Active    bool
 	Resizing  bool
+	ZOrder    int
 }
 
 // Cell mirrors texel.Cell but keeps the remote client decoupled from desktop internals.
@@ -174,7 +175,7 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 }
 
 // SetPaneFlags updates tracked pane flags, creating an entry if necessary.
-func (c *BufferCache) SetPaneFlags(id [16]byte, active, resizing bool) *PaneState {
+func (c *BufferCache) SetPaneFlags(id [16]byte, active, resizing bool, zOrder int32) *PaneState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	pane := c.panes[id]
@@ -184,6 +185,7 @@ func (c *BufferCache) SetPaneFlags(id [16]byte, active, resizing bool) *PaneStat
 	}
 	pane.Active = active
 	pane.Resizing = resizing
+	pane.ZOrder = int(zOrder)
 	return pane
 }
 
@@ -201,10 +203,24 @@ func (c *BufferCache) AllPanes() []*PaneState {
 // LayoutPanes returns panes sorted by their recorded geometry so renderers can
 // draw them deterministically.
 func (c *BufferCache) ForEachPaneSorted(fn func(*PaneState)) {
+	for _, pane := range c.SortedPanes() {
+		fn(pane)
+	}
+}
+
+// PaneByID returns the cached pane for the given identifier, if present.
+func (c *BufferCache) PaneByID(id [16]byte) *PaneState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.panes[id]
+}
+
+// SortedPanes returns the panes ordered by geometry (top-to-bottom, left-to-right).
+func (c *BufferCache) SortedPanes() []*PaneState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if len(c.panes) == 0 {
-		return
+		return nil
 	}
 	panes := make([]*PaneState, 0, len(c.panes))
 	for _, pane := range c.panes {
@@ -212,6 +228,12 @@ func (c *BufferCache) ForEachPaneSorted(fn func(*PaneState)) {
 	}
 	sort.Slice(panes, func(i, j int) bool {
 		pi, pj := panes[i], panes[j]
+		if pi == nil || pj == nil {
+			return i < j
+		}
+		if pi.ZOrder != pj.ZOrder {
+			return pi.ZOrder < pj.ZOrder
+		}
 		if pi.Rect.Y != pj.Rect.Y {
 			return pi.Rect.Y < pj.Rect.Y
 		}
@@ -220,9 +242,7 @@ func (c *BufferCache) ForEachPaneSorted(fn func(*PaneState)) {
 		}
 		return compareBytes(pi.ID[:], pj.ID[:]) < 0
 	})
-	for _, pane := range panes {
-		fn(pane)
-	}
+	return panes
 }
 
 // LatestPane returns the most recently updated pane.

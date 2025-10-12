@@ -256,7 +256,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		}
 		active := paneFlags.Flags&protocol.PaneStateActive != 0
 		resizing := paneFlags.Flags&protocol.PaneStateResizing != 0
-		state.cache.SetPaneFlags(paneFlags.PaneID, active, resizing)
+		state.cache.SetPaneFlags(paneFlags.PaneID, active, resizing, paneFlags.ZOrder)
 		return true
 	case protocol.MsgStateUpdate:
 		update, err := protocol.DecodeStateUpdate(payload)
@@ -275,7 +275,7 @@ func render(state *uiState, screen tcell.Screen) {
 	width, height := screen.Size()
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
-	state.cache.ForEachPaneSorted(func(pane *client.PaneState) {
+	drawPane := func(pane *client.PaneState, overlayZoom bool) {
 		if pane == nil || pane.Rect.Width <= 0 || pane.Rect.Height <= 0 {
 			return
 		}
@@ -313,13 +313,16 @@ func render(state *uiState, screen tcell.Screen) {
 				if pane.Resizing {
 					style = applyResizingOverlay(style, 0.2, state)
 				}
-				if state.zoomed && pane.ID == state.zoomedPane {
+				if overlayZoom {
 					style = applyZoomOverlay(style, 0.2, state)
 				}
 				screen.SetContent(targetX, targetY, ch, nil, style)
 			}
 		}
-	})
+	}
+	for _, pane := range state.cache.SortedPanes() {
+		drawPane(pane, state.zoomed && pane != nil && pane.ID == state.zoomedPane)
+	}
 	if state.controlMode {
 		applyControlOverlay(state, screen)
 	}

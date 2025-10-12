@@ -113,15 +113,23 @@ func (p *pane) notifyStateChange() {
 	if p.screen == nil || p.screen.desktop == nil {
 		return
 	}
-	p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing)
+	p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder)
 }
 
 // SetZOrder sets the z-order (layering) of the pane
 // Higher values render on top. Default is 0.
 func (p *pane) SetZOrder(zOrder int) {
+	if p.ZOrder == zOrder {
+		return
+	}
 	p.ZOrder = zOrder
 	log.Printf("SetZOrder: Pane '%s' z-order set to %d", p.getTitle(), zOrder)
-	p.screen.Refresh() // Trigger redraw
+	if p.screen != nil && p.screen.desktop != nil {
+		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder)
+	}
+	if p.screen != nil {
+		p.screen.Refresh() // Trigger redraw
+	}
 }
 
 // GetZOrder returns the current z-order of the pane

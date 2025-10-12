@@ -107,6 +107,7 @@ type PaneStateSnapshot struct {
 	ID       [16]byte
 	Active   bool
 	Resizing bool
+	ZOrder   int
 }
 
 // NewDesktop creates and initializes a new desktop environment.
@@ -620,6 +621,14 @@ func (d *Desktop) toggleZoom() {
 	}
 
 	if effect != nil {
+		// If animations are disabled we complete immediately to keep remote clients in sync.
+		if d.animationsDisabled() {
+			if effect.onComplete != nil {
+				effect.onComplete()
+			}
+			effect.Cleanup()
+			return
+		}
 		d.activeWorkspace.AddEffect(effect)
 		d.activeWorkspace.animator.AnimateTo(effect, 1.0, 250*time.Millisecond, func() {
 			// Call cleanup before removing effect to reset z-order
@@ -880,12 +889,12 @@ func (d *Desktop) notifyFocusNode(node *Node) {
 	d.notifyFocus(node.Pane.ID())
 }
 
-func (d *Desktop) notifyPaneState(id [16]byte, active, resizing bool) {
+func (d *Desktop) notifyPaneState(id [16]byte, active, resizing bool, z int) {
 	d.paneStateMu.RLock()
 	listeners := append([]PaneStateListener(nil), d.paneStateListeners...)
 	d.paneStateMu.RUnlock()
 	for _, l := range listeners {
-		l.PaneStateChanged(id, active, resizing)
+		l.PaneStateChanged(id, active, resizing, z)
 	}
 }
 
@@ -917,7 +926,7 @@ func (d *Desktop) forEachPane(fn func(*pane)) {
 func (d *Desktop) PaneStates() []PaneStateSnapshot {
 	states := make([]PaneStateSnapshot, 0)
 	d.forEachPane(func(p *pane) {
-		states = append(states, PaneStateSnapshot{ID: p.ID(), Active: p.IsActive, Resizing: p.IsResizing})
+		states = append(states, PaneStateSnapshot{ID: p.ID(), Active: p.IsActive, Resizing: p.IsResizing, ZOrder: p.ZOrder})
 	})
 	return states
 }

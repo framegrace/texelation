@@ -81,6 +81,68 @@ func TestRenderRespectsPaneGeometry(t *testing.T) {
 	}
 }
 
+func TestZoomedPaneDrawsOnTop(t *testing.T) {
+	state := &uiState{cache: client.NewBufferCache(), defaultStyle: tcell.StyleDefault}
+	var topID, bottomID [16]byte
+	topID[0] = 1
+	bottomID[0] = 2
+
+	snapshot := protocol.TreeSnapshot{Panes: []protocol.PaneSnapshot{
+		{
+			PaneID:   topID,
+			Title:    "top",
+			Revision: 1,
+			Rows: []string{
+				"ZZZZ",
+				"ZZZZ",
+				"ZZZZ",
+				"ZZZZ",
+				"ZZZZ",
+				"ZZZZ",
+			},
+			X:      0,
+			Y:      0,
+			Width:  4,
+			Height: 6,
+		},
+		{
+			PaneID:   bottomID,
+			Title:    "bottom",
+			Revision: 1,
+			Rows: []string{
+				"BBBB",
+				"BBBB",
+			},
+			X:      0,
+			Y:      4,
+			Width:  4,
+			Height: 2,
+		},
+	}}
+	state.cache.ApplySnapshot(snapshot)
+	state.cache.SetPaneFlags(topID, true, false, 10)
+	state.cache.SetPaneFlags(bottomID, false, false, 0)
+	state.focus = protocol.PaneFocus{PaneID: topID}
+	state.hasFocus = true
+	state.zoomed = true
+	state.zoomedPane = topID
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init screen: %v", err)
+	}
+	defer screen.Fini()
+
+	render(state, screen)
+
+	// When the top pane is zoomed it should cover the area previously
+	// occupied by the bottom pane, so we expect its content to draw last.
+	line := readScreenLine(screen, 0, 4, 4)
+	if line != "ZZZZ" {
+		t.Fatalf("expected zoomed pane to overdraw, got %q", line)
+	}
+}
+
 func TestStateUpdateFeedsStatusLines(t *testing.T) {
 	state := &uiState{defaultStyle: tcell.StyleDefault}
 	update := protocol.StateUpdate{

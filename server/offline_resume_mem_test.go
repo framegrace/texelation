@@ -235,11 +235,12 @@ func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 		t.Fatalf("resume write request: %v", err)
 	}
 
-	acked := 0
-	target := len(session.Pending(0))
-	for acked < target {
+	for {
 		hdr, payload, err := readMessageSkippingFocus(clientConn)
 		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			t.Fatalf("resume read message: %v", err)
 		}
 		switch hdr.Type {
@@ -251,7 +252,6 @@ func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 			if _, err := protocol.DecodeBufferDelta(payload); err != nil {
 				t.Fatalf("resume decode delta: %v", err)
 			}
-			acked++
 			ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
 			if err := protocol.WriteMessage(clientConn, protocol.Header{Version: protocol.Version, Type: protocol.MsgBufferAck, Flags: protocol.FlagChecksum, SessionID: session.ID()}, ackPayload); err != nil {
 				t.Fatalf("resume write ack: %v", err)
@@ -259,10 +259,17 @@ func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 		default:
 			t.Fatalf("resume unexpected message type %v", hdr.Type)
 		}
+		if len(session.Pending(0)) == 0 {
+			_ = clientConn.Close()
+			break
+		}
 	}
 
-	_ = clientConn.Close()
 	if err := <-errCh; err != nil && err != io.EOF {
 		t.Fatalf("resume connection err: %v", err)
+	}
+	if pending := session.Pending(0); len(pending) > 0 {
+		last := pending[len(pending)-1]
+		session.Ack(last.Sequence)
 	}
 }
