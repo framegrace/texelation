@@ -14,6 +14,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2"
+	"golang.org/x/sys/unix"
 )
 
 type TexelTerm struct {
@@ -246,6 +247,7 @@ func (a *TexelTerm) Run() error {
 	if err != nil {
 		return fmt.Errorf("failed to start pty: %w", err)
 	}
+	disableFlowControl(ptmx)
 	a.pty = ptmx
 	a.cmd = cmd
 
@@ -317,6 +319,19 @@ func (a *TexelTerm) Run() error {
 	}()
 
 	return cmd.Wait()
+}
+
+func disableFlowControl(f *os.File) {
+	fd := int(f.Fd())
+	tios, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil {
+		log.Printf("texelterm: unable to get termios: %v", err)
+		return
+	}
+	tios.Iflag &^= unix.IXON | unix.IXOFF | unix.IXANY
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS, tios); err != nil {
+		log.Printf("texelterm: unable to disable IXON/IXOFF: %v", err)
+	}
 }
 
 func (a *TexelTerm) Resize(cols, rows int) {
