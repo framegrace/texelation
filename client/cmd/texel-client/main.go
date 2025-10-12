@@ -249,7 +249,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		}, ackPayload); err != nil {
 			log.Printf("ack failed: %v", err)
 		}
-		log.Printf("delta applied: pane=%x rev=%d spans=%d", delta.PaneID, delta.Revision, len(delta.Rows))
+		// log.Printf("delta applied: pane=%x rev=%d spans=%d", delta.PaneID, delta.Revision, len(delta.Rows))
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
 		}
@@ -630,7 +630,7 @@ func sendResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, screen t
 
 func sendKeyEvent(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, key tcell.Key, r rune, mods tcell.ModMask) error {
 	event := protocol.KeyEvent{KeyCode: uint32(key), RuneValue: r, Modifiers: uint16(mods)}
-	log.Printf("send key: key=%v rune=%q mods=%v", key, r, mods)
+	// log.Printf("send key: key=%v rune=%q mods=%v", key, r, mods)
 	payload, err := protocol.EncodeKeyEvent(event)
 	if err != nil {
 		return err
