@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -23,6 +24,15 @@ type connection struct {
 	unregisterPaneState func()
 	awaitResume         bool
 	attachListeners     func()
+	incoming            chan protocolMessage
+	readErr             chan error
+	pending             chan struct{}
+	stop                chan struct{}
+}
+
+type protocolMessage struct {
+	header  protocol.Header
+	payload []byte
 }
 
 func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume bool) *connection {
@@ -30,6 +40,10 @@ func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume 
 		sink = nopSink{}
 	}
 	c := &connection{conn: conn, session: session, sink: sink, awaitResume: awaitResume}
+	c.incoming = make(chan protocolMessage, 32)
+	c.readErr = make(chan error, 1)
+	c.pending = make(chan struct{}, 1)
+	c.stop = make(chan struct{})
 	id := session.ID()
 	if awaitResume {
 		log.Printf("server: connection %x awaiting resume request", id[:4])
@@ -56,11 +70,17 @@ func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume 
 			}
 		}
 	}
+
+	go c.readMessages()
+	c.nudge()
 	return c
 }
 
-func (c *connection) serve() error {
+func (c *connection) serve() (retErr error) {
+	connID := c.session.ID()
+	prefix := fmt.Sprintf("connection %x", connID[:4])
 	_ = c.conn.SetDeadline(time.Time{})
+	defer close(c.stop)
 	defer func() {
 		if c.unregisterFocus != nil {
 			c.unregisterFocus()
@@ -71,145 +91,216 @@ func (c *connection) serve() error {
 		if c.unregisterPaneState != nil {
 			c.unregisterPaneState()
 		}
+		if retErr != nil {
+			log.Printf("%s exiting with error: %v", prefix, retErr)
+		} else {
+			log.Printf("%s exiting cleanly", prefix)
+		}
 	}()
-	defer c.session.MarkSnapshot(time.Now()) // placeholder for future persistence triggers
+	defer c.session.MarkSnapshot(time.Now())
 	for {
 		if err := c.sendPending(); err != nil {
 			if err == io.EOF {
+				log.Printf("%s sendPending reached EOF", prefix)
 				return nil
 			}
+			log.Printf("%s sendPending error: %v", prefix, err)
+			retErr = err
 			return err
 		}
 
-		_ = c.conn.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+		select {
+		case <-c.pending:
+			continue
+		case err := <-c.readErr:
+			if err == io.EOF {
+				log.Printf("%s read EOF", prefix)
+				return nil
+			}
+			if err != nil {
+				log.Printf("%s read error: %v", prefix, err)
+				retErr = err
+				return err
+			}
+			return nil
+		case msg, ok := <-c.incoming:
+			if !ok {
+				err := c.awaitReadError()
+				if err == io.EOF {
+					log.Printf("%s read EOF", prefix)
+					return nil
+				}
+				if err != nil {
+					log.Printf("%s read error: %v", prefix, err)
+					retErr = err
+					return err
+				}
+				return nil
+			}
+			log.Printf("%s recv type=%d seq=%d len=%d", prefix, msg.header.Type, msg.header.Sequence, len(msg.payload))
+			if err := c.handleMessage(prefix, msg.header, msg.payload); err != nil {
+				retErr = err
+				return err
+			}
+		}
+	}
+}
+
+func (c *connection) readMessages() {
+	defer close(c.incoming)
+	for {
 		header, payload, err := protocol.ReadMessage(c.conn)
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				continue
-			}
-			if err == io.EOF {
-				return nil
-			}
+			c.reportReadError(err)
+			return
+		}
+		msg := protocolMessage{header: header, payload: payload}
+		select {
+		case c.incoming <- msg:
+		case <-c.stop:
+			return
+		}
+	}
+}
+
+func (c *connection) reportReadError(err error) {
+	if err == nil {
+		return
+	}
+	select {
+	case c.readErr <- err:
+	default:
+	}
+}
+
+func (c *connection) awaitReadError() error {
+	select {
+	case err := <-c.readErr:
+		return err
+	default:
+		return nil
+	}
+}
+
+func (c *connection) handleMessage(prefix string, header protocol.Header, payload []byte) error {
+	switch header.Type {
+	case protocol.MsgBufferAck:
+		ack, err := protocol.DecodeBufferAck(payload)
+		if err != nil {
 			return err
 		}
-
-		switch header.Type {
-		case protocol.MsgBufferAck:
-			ack, err := protocol.DecodeBufferAck(payload)
-			if err != nil {
-				return err
-			}
-			c.session.Ack(ack.Sequence)
-			if ack.Sequence > c.lastAcked {
-				c.lastAcked = ack.Sequence
-			}
-		case protocol.MsgPing:
-			ping, err := protocol.DecodePing(payload)
-			if err != nil {
-				return err
-			}
-			pongPayload, err := protocol.EncodePong(protocol.Pong{Timestamp: ping.Timestamp})
-			if err != nil {
-				return err
-			}
-			pongHeader := protocol.Header{
-				Version:   protocol.Version,
-				Type:      protocol.MsgPong,
-				Flags:     protocol.FlagChecksum,
-				SessionID: c.session.ID(),
-				Sequence:  c.lastSent,
-			}
-			if err := c.writeMessage(pongHeader, pongPayload); err != nil {
-				return err
-			}
-		case protocol.MsgKeyEvent:
-			keyEvent, err := protocol.DecodeKeyEvent(payload)
-			if err != nil {
-				return err
-			}
-			c.sink.HandleKeyEvent(c.session, keyEvent)
-		case protocol.MsgMouseEvent:
-			mouseEvent, err := protocol.DecodeMouseEvent(payload)
-			if err != nil {
-				return err
-			}
-			c.sink.HandleMouseEvent(c.session, mouseEvent)
-		case protocol.MsgResize:
-			size, err := protocol.DecodeResize(payload)
-			if err != nil {
-				return err
-			}
-			c.handleResize(size)
-		case protocol.MsgClipboardSet:
-			clipSet, err := protocol.DecodeClipboardSet(payload)
-			if err != nil {
-				return err
-			}
-			c.sink.HandleClipboardSet(c.session, clipSet)
-			if data := c.requestClipboardData(clipSet.MimeType); data != nil {
-				encoded, err := protocol.EncodeClipboardData(protocol.ClipboardData{MimeType: clipSet.MimeType, Data: data})
-				if err != nil {
-					return err
-				}
-				if err := c.writeControlMessage(protocol.MsgClipboardData, encoded); err != nil {
-					return err
-				}
-			}
-		case protocol.MsgClipboardGet:
-			clipGet, err := protocol.DecodeClipboardGet(payload)
-			if err != nil {
-				return err
-			}
-			data := c.sink.HandleClipboardGet(c.session, clipGet)
-			encoded, err := protocol.EncodeClipboardData(protocol.ClipboardData{MimeType: clipGet.MimeType, Data: data})
+		c.session.Ack(ack.Sequence)
+		if ack.Sequence > c.lastAcked {
+			c.lastAcked = ack.Sequence
+		}
+	case protocol.MsgPing:
+		ping, err := protocol.DecodePing(payload)
+		if err != nil {
+			return err
+		}
+		pongPayload, err := protocol.EncodePong(protocol.Pong{Timestamp: ping.Timestamp})
+		if err != nil {
+			return err
+		}
+		pongHeader := protocol.Header{
+			Version:   protocol.Version,
+			Type:      protocol.MsgPong,
+			Flags:     protocol.FlagChecksum,
+			SessionID: c.session.ID(),
+			Sequence:  c.lastSent,
+		}
+		if err := c.writeMessage(pongHeader, pongPayload); err != nil {
+			return err
+		}
+	case protocol.MsgKeyEvent:
+		keyEvent, err := protocol.DecodeKeyEvent(payload)
+		if err != nil {
+			return err
+		}
+		c.sink.HandleKeyEvent(c.session, keyEvent)
+	case protocol.MsgMouseEvent:
+		mouseEvent, err := protocol.DecodeMouseEvent(payload)
+		if err != nil {
+			return err
+		}
+		c.sink.HandleMouseEvent(c.session, mouseEvent)
+	case protocol.MsgResize:
+		size, err := protocol.DecodeResize(payload)
+		if err != nil {
+			return err
+		}
+		c.handleResize(size)
+	case protocol.MsgClipboardSet:
+		clipSet, err := protocol.DecodeClipboardSet(payload)
+		if err != nil {
+			return err
+		}
+		c.sink.HandleClipboardSet(c.session, clipSet)
+		if data := c.requestClipboardData(clipSet.MimeType); data != nil {
+			encoded, err := protocol.EncodeClipboardData(protocol.ClipboardData{MimeType: clipSet.MimeType, Data: data})
 			if err != nil {
 				return err
 			}
 			if err := c.writeControlMessage(protocol.MsgClipboardData, encoded); err != nil {
 				return err
 			}
-		case protocol.MsgThemeUpdate:
-			themeUpdate, err := protocol.DecodeThemeUpdate(payload)
+		}
+	case protocol.MsgClipboardGet:
+		clipGet, err := protocol.DecodeClipboardGet(payload)
+		if err != nil {
+			return err
+		}
+		data := c.sink.HandleClipboardGet(c.session, clipGet)
+		encoded, err := protocol.EncodeClipboardData(protocol.ClipboardData{MimeType: clipGet.MimeType, Data: data})
+		if err != nil {
+			return err
+		}
+		if err := c.writeControlMessage(protocol.MsgClipboardData, encoded); err != nil {
+			return err
+		}
+	case protocol.MsgThemeUpdate:
+		themeUpdate, err := protocol.DecodeThemeUpdate(payload)
+		if err != nil {
+			return err
+		}
+		c.sink.HandleThemeUpdate(c.session, themeUpdate)
+		encoded, err := protocol.EncodeThemeAck(protocol.ThemeAck(themeUpdate))
+		if err != nil {
+			return err
+		}
+		if err := c.writeControlMessage(protocol.MsgThemeAck, encoded); err != nil {
+			return err
+		}
+	case protocol.MsgResumeRequest:
+		request, err := protocol.DecodeResumeRequest(payload)
+		if err != nil {
+			return err
+		}
+		c.lastAcked = request.LastSequence
+		c.awaitResume = false
+		if c.attachListeners != nil {
+			c.attachListeners()
+		}
+		if provider, ok := c.sink.(SnapshotProvider); ok {
+			snapshot, err := provider.Snapshot()
 			if err != nil {
-				return err
-			}
-			c.sink.HandleThemeUpdate(c.session, themeUpdate)
-			encoded, err := protocol.EncodeThemeAck(protocol.ThemeAck(themeUpdate))
-			if err != nil {
-				return err
-			}
-			if err := c.writeControlMessage(protocol.MsgThemeAck, encoded); err != nil {
-				return err
-			}
-		case protocol.MsgResumeRequest:
-			request, err := protocol.DecodeResumeRequest(payload)
-			if err != nil {
-				return err
-			}
-			c.lastAcked = request.LastSequence
-			c.awaitResume = false
-			if c.attachListeners != nil {
-				c.attachListeners()
-			}
-			if provider, ok := c.sink.(SnapshotProvider); ok {
-				snapshot, err := provider.Snapshot()
-				if err != nil {
-					log.Printf("server: resume snapshot error: %v", err)
+				log.Printf("server: resume snapshot error: %v", err)
+			} else {
+				if payload, err := protocol.EncodeTreeSnapshot(snapshot); err != nil {
+					log.Printf("server: encode snapshot error: %v", err)
 				} else {
-					if payload, err := protocol.EncodeTreeSnapshot(snapshot); err != nil {
-						log.Printf("server: encode snapshot error: %v", err)
-					} else {
-						header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
-						if err := c.writeMessage(header, payload); err != nil {
-							return err
-						}
+					header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
+					if err := c.writeMessage(header, payload); err != nil {
+						return err
 					}
 				}
 			}
-		default:
-			// Unknown messages are ignored for now.
 		}
+		c.nudge()
+	default:
+		log.Printf("%s ignoring message type %d", prefix, header.Type)
 	}
+	return nil
 }
 
 func (c *connection) OnEvent(event texel.Event) {
@@ -374,10 +465,13 @@ func (c *connection) sendPaneState(id [16]byte, active, resizing bool) {
 }
 
 func (c *connection) nudge() {
-	if c.conn == nil {
+	if c.pending == nil {
 		return
 	}
-	_ = c.conn.SetReadDeadline(time.Now())
+	select {
+	case c.pending <- struct{}{}:
+	default:
+	}
 }
 
 func (c *connection) handleResize(size protocol.Resize) {

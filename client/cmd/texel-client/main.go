@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -62,6 +63,7 @@ func main() {
 		log.Fatalf("connect failed: %v", err)
 	}
 	defer conn.Close()
+	var writeMu sync.Mutex
 
 	log.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 
@@ -79,13 +81,15 @@ func main() {
 		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence); err != nil {
 			log.Fatalf("resume request failed: %v", err)
 		} else {
-			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence)
+			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu)
 		}
 	}
 
 	renderCh := make(chan struct{}, 1)
 	doneCh := make(chan struct{})
-	go readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh)
+	go readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh, &writeMu)
+	pingStop := make(chan struct{})
+	go pingLoop(conn, sessionID, doneCh, pingStop, &writeMu)
 
 	screen, err := tcell.NewScreen()
 	if err != nil {
@@ -96,7 +100,8 @@ func main() {
 	}
 	screen.HideCursor()
 	defer screen.Fini()
-	sendResize(conn, sessionID, screen)
+	defer close(pingStop)
+	sendResize(&writeMu, conn, sessionID, screen)
 
 	render(state, screen)
 
@@ -136,7 +141,7 @@ func main() {
 			if !ok {
 				return
 			}
-			if !handleScreenEvent(ev, state, screen, conn, sessionID) {
+			if !handleScreenEvent(ev, state, screen, conn, sessionID, &writeMu) {
 				return
 			}
 		case <-doneCh:
@@ -146,7 +151,7 @@ func main() {
 	}
 }
 
-func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *uint64, renderCh chan<- struct{}, doneCh chan<- struct{}) {
+func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex) {
 	for {
 		hdr, payload, err := protocol.ReadMessage(conn)
 		if err != nil {
@@ -156,7 +161,7 @@ func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *u
 			close(doneCh)
 			return
 		}
-		if handleControlMessage(state, conn, hdr, payload, sessionID, lastSequence) {
+		if handleControlMessage(state, conn, hdr, payload, sessionID, lastSequence, writeMu) {
 			select {
 			case renderCh <- struct{}{}:
 			default:
@@ -165,7 +170,7 @@ func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *u
 	}
 }
 
-	func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64) bool {
+func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64, writeMu *sync.Mutex) bool {
 	cache := state.cache
 	switch hdr.Type {
 	case protocol.MsgTreeSnapshot:
@@ -321,13 +326,13 @@ func render(state *uiState, screen tcell.Screen) {
 	screen.Show()
 }
 
-func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn net.Conn, sessionID [16]byte) bool {
+func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex) bool {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
 		if state.controlMode && ev.Modifiers() == 0 {
 			r := ev.Rune()
 			if r == 'q' || r == 'Q' {
-				if err := sendKeyEvent(conn, sessionID, tcell.KeyEsc, 0, 0); err != nil {
+				if err := sendKeyEvent(writeMu, conn, sessionID, tcell.KeyEsc, 0, 0); err != nil {
 					log.Printf("control reset failed: %v", err)
 				}
 				state.controlMode = false
@@ -346,18 +351,18 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 			state.subMode = 0
 			render(state, screen)
 		}
-		if err := sendKeyEvent(conn, sessionID, ev.Key(), ev.Rune(), ev.Modifiers()); err != nil {
+		if err := sendKeyEvent(writeMu, conn, sessionID, ev.Key(), ev.Rune(), ev.Modifiers()); err != nil {
 			log.Printf("send key failed: %v", err)
 		}
 	case *tcell.EventMouse:
 		x, y := ev.Position()
 		mouse := protocol.MouseEvent{X: int16(x), Y: int16(y), ButtonMask: uint32(ev.Buttons()), Modifiers: uint16(ev.Modifiers())}
 		payload, _ := protocol.EncodeMouseEvent(mouse)
-		if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgMouseEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
+		if err := writeMessage(writeMu, conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgMouseEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
 			log.Printf("send mouse failed: %v", err)
 		}
 	case *tcell.EventResize:
-		sendResize(conn, sessionID, screen)
+		sendResize(writeMu, conn, sessionID, screen)
 		render(state, screen)
 	case *tcell.EventInterrupt:
 		// Ignore; used to wake PollEvent for shutdown.
@@ -543,7 +548,7 @@ func formatPaneID(id [16]byte) string {
 	return fmt.Sprintf("%x", id[:4])
 }
 
-func sendResize(conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
+func sendResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
 	cols, rows := screen.Size()
 	payload, err := protocol.EncodeResize(protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
@@ -551,12 +556,12 @@ func sendResize(conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
 		return
 	}
 	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgResize, Flags: protocol.FlagChecksum, SessionID: sessionID}
-	if err := protocol.WriteMessage(conn, header, payload); err != nil {
+	if err := writeMessage(writeMu, conn, header, payload); err != nil {
 		log.Printf("send resize failed: %v", err)
 	}
 }
 
-func sendKeyEvent(conn net.Conn, sessionID [16]byte, key tcell.Key, r rune, mods tcell.ModMask) error {
+func sendKeyEvent(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, key tcell.Key, r rune, mods tcell.ModMask) error {
 	event := protocol.KeyEvent{KeyCode: uint32(key), RuneValue: r, Modifiers: uint16(mods)}
 	log.Printf("send key: key=%v rune=%q mods=%v", key, r, mods)
 	payload, err := protocol.EncodeKeyEvent(event)
@@ -564,6 +569,38 @@ func sendKeyEvent(conn net.Conn, sessionID [16]byte, key tcell.Key, r rune, mods
 		return err
 	}
 	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgKeyEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}
+	return writeMessage(writeMu, conn, header, payload)
+}
+
+func pingLoop(conn net.Conn, sessionID [16]byte, done <-chan struct{}, stop <-chan struct{}, writeMu *sync.Mutex) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-stop:
+			return
+		case <-ticker.C:
+			ping := protocol.Ping{Timestamp: time.Now().UnixNano()}
+			payload, err := protocol.EncodePing(ping)
+			if err != nil {
+				log.Printf("encode ping failed: %v", err)
+				continue
+			}
+			header := protocol.Header{Version: protocol.Version, Type: protocol.MsgPing, Flags: protocol.FlagChecksum, SessionID: sessionID}
+			if err := writeMessage(writeMu, conn, header, payload); err != nil {
+				log.Printf("send ping failed: %v", err)
+				return
+			}
+		}
+	}
+}
+
+func writeMessage(mu *sync.Mutex, conn net.Conn, header protocol.Header, payload []byte) error {
+	mu.Lock()
+	defer mu.Unlock()
+	log.Printf("client tx type=%d seq=%d len=%d", header.Type, header.Sequence, len(payload))
 	return protocol.WriteMessage(conn, header, payload)
 }
 
