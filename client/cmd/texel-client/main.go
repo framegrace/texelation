@@ -241,7 +241,12 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		}
 		cache.ApplyDelta(delta)
 		ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
-		if err := protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgBufferAck, Flags: protocol.FlagChecksum, SessionID: sessionID}, ackPayload); err != nil {
+		if err := writeMessage(writeMu, conn, protocol.Header{
+			Version:   protocol.Version,
+			Type:      protocol.MsgBufferAck,
+			Flags:     protocol.FlagChecksum,
+			SessionID: sessionID,
+		}, ackPayload); err != nil {
 			log.Printf("ack failed: %v", err)
 		}
 		log.Printf("delta applied: pane=%x rev=%d spans=%d", delta.PaneID, delta.Revision, len(delta.Rows))
@@ -251,7 +256,14 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		return true
 	case protocol.MsgPing:
 		pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})
-		_ = protocol.WriteMessage(conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgPong, Flags: protocol.FlagChecksum, SessionID: sessionID}, pong)
+		if err := writeMessage(writeMu, conn, protocol.Header{
+			Version:   protocol.Version,
+			Type:      protocol.MsgPong,
+			Flags:     protocol.FlagChecksum,
+			SessionID: sessionID,
+		}, pong); err != nil {
+			log.Printf("send pong failed: %v", err)
+		}
 		return false
 	case protocol.MsgClipboardSet:
 		clip, err := protocol.DecodeClipboardSet(payload)
