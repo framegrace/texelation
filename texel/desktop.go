@@ -583,8 +583,10 @@ func (d *Desktop) toggleZoom() {
 
 	mainX, mainY, mainW, mainH := d.getMainArea()
 
+	zoomingIn := d.zoomedPane == nil
+
 	var effect *ZoomEffect
-	if d.zoomedPane == nil { // ZOOM IN
+	if zoomingIn { // ZOOM IN
 		nodeToZoom := d.activeWorkspace.tree.ActiveLeaf
 		if nodeToZoom == nil || nodeToZoom.Pane == nil {
 			return
@@ -596,6 +598,9 @@ func (d *Desktop) toggleZoom() {
 
 		effect = NewZoomEffect(d.activeWorkspace, nodeToZoom, start, end, 250*time.Millisecond, func() {
 			d.zoomedPane = nodeToZoom
+			if nodeToZoom.Pane != nil {
+				nodeToZoom.Pane.SetZOrder(ZOrderAnimation)
+			}
 			d.recalculateLayout()
 			d.broadcastStateUpdate()
 			d.broadcastTreeChanged()
@@ -614,6 +619,9 @@ func (d *Desktop) toggleZoom() {
 		p.setDimensions(start.x, start.y, start.x+start.w, start.y+start.h)
 
 		effect = NewZoomEffect(d.activeWorkspace, nodeToUnZoom, start, end, 250*time.Millisecond, func() {
+			if nodeToUnZoom.Pane != nil {
+				nodeToUnZoom.Pane.SetZOrder(ZOrderDefault)
+			}
 			d.recalculateLayout()
 			d.broadcastStateUpdate()
 			d.broadcastTreeChanged()
@@ -626,7 +634,9 @@ func (d *Desktop) toggleZoom() {
 			if effect.onComplete != nil {
 				effect.onComplete()
 			}
-			effect.Cleanup()
+			if !zoomingIn {
+				effect.Cleanup()
+			}
 			return
 		}
 		d.activeWorkspace.AddEffect(effect)
