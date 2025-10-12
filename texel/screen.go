@@ -29,7 +29,6 @@ type AppFactory func() App
 
 const (
 	keyControlMode = tcell.KeyCtrlA
-	keyQuit        = tcell.KeyCtrlQ
 )
 
 const (

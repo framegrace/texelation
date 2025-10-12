@@ -428,13 +428,6 @@ func (d *Desktop) handleEvent(ev tcell.Event) {
 		return
 	}
 
-	if key.Key() == keyQuit {
-		if d.inControlMode {
-			d.Close()
-		}
-		return
-	}
-
 	if key.Key() == keyControlMode {
 		d.toggleControlMode()
 		return
