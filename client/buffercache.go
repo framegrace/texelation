@@ -15,6 +15,7 @@ type PaneState struct {
 	ID        [16]byte
 	Revision  uint32
 	UpdatedAt time.Time
+	rowsMu    sync.RWMutex
 	rows      map[int][]Cell
 	Title     string
 	Rect      clientRect
@@ -41,6 +42,8 @@ func (p *PaneState) Rows() []string {
 	if p == nil {
 		return nil
 	}
+	p.rowsMu.RLock()
+	defer p.rowsMu.RUnlock()
 	if len(p.rows) == 0 {
 		return nil
 	}
@@ -71,7 +74,15 @@ func (p *PaneState) RowCells(row int) []Cell {
 	if p == nil || p.rows == nil {
 		return nil
 	}
-	return p.rows[row]
+	p.rowsMu.RLock()
+	defer p.rowsMu.RUnlock()
+	src := p.rows[row]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]Cell, len(src))
+	copy(out, src)
+	return out
 }
 
 // BufferCache maintains pane states keyed by pane ID.
@@ -109,6 +120,7 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) {
 	}
 
 	styles := buildStyles(delta.Styles)
+	pane.rowsMu.Lock()
 	for _, rowDelta := range delta.Rows {
 		rowIdx := int(rowDelta.Row)
 		row := pane.rows[rowIdx]
@@ -127,6 +139,7 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) {
 		}
 		pane.rows[rowIdx] = row
 	}
+	pane.rowsMu.Unlock()
 	pane.Revision = delta.Revision
 	pane.UpdatedAt = time.Now().UTC()
 
@@ -150,10 +163,12 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 		pane.Title = paneSnap.Title
 		pane.Revision = paneSnap.Revision
 		pane.UpdatedAt = time.Now().UTC()
+		pane.rowsMu.Lock()
 		pane.rows = make(map[int][]Cell, len(paneSnap.Rows))
 		for idx, row := range paneSnap.Rows {
 			pane.rows[idx] = stringToCells(row)
 		}
+		pane.rowsMu.Unlock()
 		pane.Rect = clientRect{X: int(paneSnap.X), Y: int(paneSnap.Y), Width: int(paneSnap.Width), Height: int(paneSnap.Height)}
 		c.trackOrderingLocked(paneSnap.PaneID, pane.UpdatedAt)
 		seen[paneSnap.PaneID] = struct{}{}

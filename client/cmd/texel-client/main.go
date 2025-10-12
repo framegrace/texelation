@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"net"
@@ -773,7 +772,7 @@ func setupLogging() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.SetOutput(io.MultiWriter(file, os.Stderr))
+	log.SetOutput(file)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	return file, nil
 }
