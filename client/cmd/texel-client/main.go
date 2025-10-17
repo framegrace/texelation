@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -125,22 +126,29 @@ func main() {
 	}
 	lastSequence := uint64(0)
 
+	var pendingAck atomic.Uint64
+	var lastAck atomic.Uint64
+	ackSignal := make(chan struct{}, 1)
+
 	if *reconnect {
 		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence); err != nil {
 			log.Fatalf("resume request failed: %v", err)
 		} else {
-			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu)
+			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
 		}
 	}
 
 	renderCh := make(chan struct{}, 1)
 	doneCh := make(chan struct{})
 	panicLogger.Go("readLoop", func() {
-		readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh, &writeMu)
+		readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh, &writeMu, &pendingAck, ackSignal)
 	})
 	pingStop := make(chan struct{})
 	panicLogger.Go("pingLoop", func() {
 		pingLoop(conn, sessionID, doneCh, pingStop, &writeMu)
+	})
+	panicLogger.Go("ackLoop", func() {
+		ackLoop(conn, sessionID, &writeMu, doneCh, &pendingAck, &lastAck, ackSignal)
 	})
 
 	screen, err := tcell.NewScreen()
@@ -203,7 +211,7 @@ func main() {
 	}
 }
 
-func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex) {
+func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) {
 	for {
 		hdr, payload, err := protocol.ReadMessage(conn)
 		if err != nil {
@@ -213,7 +221,7 @@ func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *u
 			close(doneCh)
 			return
 		}
-		if handleControlMessage(state, conn, hdr, payload, sessionID, lastSequence, writeMu) {
+		if handleControlMessage(state, conn, hdr, payload, sessionID, lastSequence, writeMu, pendingAck, ackSignal) {
 			select {
 			case renderCh <- struct{}{}:
 			default:
@@ -222,7 +230,7 @@ func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *u
 	}
 }
 
-func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64, writeMu *sync.Mutex) bool {
+func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) bool {
 	cache := state.cache
 	switch hdr.Type {
 	case protocol.MsgTreeSnapshot:
@@ -240,16 +248,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			return false
 		}
 		cache.ApplyDelta(delta)
-		ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
-		if err := writeMessage(writeMu, conn, protocol.Header{
-			Version:   protocol.Version,
-			Type:      protocol.MsgBufferAck,
-			Flags:     protocol.FlagChecksum,
-			SessionID: sessionID,
-		}, ackPayload); err != nil {
-			log.Printf("ack failed: %v", err)
-		}
-		// log.Printf("delta applied: pane=%x rev=%d spans=%d", delta.PaneID, delta.Revision, len(delta.Rows))
+		scheduleAck(pendingAck, ackSignal, hdr.Sequence)
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
 		}
@@ -669,6 +668,55 @@ func writeMessage(mu *sync.Mutex, conn net.Conn, header protocol.Header, payload
 	defer mu.Unlock()
 	log.Printf("client tx type=%d seq=%d len=%d", header.Type, header.Sequence, len(payload))
 	return protocol.WriteMessage(conn, header, payload)
+}
+
+func scheduleAck(pending *atomic.Uint64, signal chan<- struct{}, seq uint64) {
+	for {
+		current := pending.Load()
+		if seq <= current {
+			break
+		}
+		if pending.CompareAndSwap(current, seq) {
+			break
+		}
+	}
+	select {
+	case signal <- struct{}{}:
+	default:
+	}
+}
+
+func ackLoop(conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex, done <-chan struct{}, pending *atomic.Uint64, lastAck *atomic.Uint64, signal <-chan struct{}) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-signal:
+		case <-ticker.C:
+		}
+		target := pending.Load()
+		if target == 0 || target == lastAck.Load() {
+			continue
+		}
+		payload, err := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: target})
+		if err != nil {
+			log.Printf("ack encode failed: %v", err)
+			continue
+		}
+		header := protocol.Header{
+			Version:   protocol.Version,
+			Type:      protocol.MsgBufferAck,
+			Flags:     protocol.FlagChecksum,
+			SessionID: sessionID,
+		}
+		if err := writeMessage(writeMu, conn, header, payload); err != nil {
+			log.Printf("ack send failed: %v", err)
+			return
+		}
+		lastAck.Store(target)
+	}
 }
 
 func applyInactiveOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {
