@@ -934,6 +934,9 @@ func (s *Screen) adjustBorder(border *selectedBorder, d Direction) {
 	border.node.SplitRatios[shrinkerIndex] -= transferAmount
 
 	s.recalculateLayout()
+	if s.desktop != nil {
+		s.desktop.broadcastTreeChanged()
+	}
 	s.Refresh()
 }
 
