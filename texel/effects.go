@@ -153,23 +153,6 @@ func (ea *EffectAnimator) AnimateTo(effect AnimatedEffect, targetIntensity float
 	}()
 }
 
-func (f *FadeEffect) SetIntensity(intensity float32) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	oldIntensity := f.intensity
-
-	if intensity < 0.0 {
-		intensity = 0.0
-	} else if intensity > 1.0 {
-		intensity = 1.0
-	}
-	f.intensity = intensity
-
-	if oldIntensity != f.intensity {
-		log.Printf("FadeEffect.SetIntensity: Changed from %.3f to %.3f", oldIntensity, f.intensity)
-	}
-}
-
 // FadeIn animates an effect to full intensity
 func (ea *EffectAnimator) FadeIn(effect AnimatedEffect, duration time.Duration, onComplete func()) {
 	ea.AnimateTo(effect, 1.0, duration, onComplete)
@@ -248,4 +231,3 @@ func (ep *EffectPipeline) GetActiveAnimationCount() int {
 	}
 	return count
 }
-

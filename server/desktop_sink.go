@@ -16,10 +16,7 @@ type DesktopSink struct {
 }
 
 func NewDesktopSink(desktop *texel.Desktop) *DesktopSink {
-	if desktop != nil {
-		desktop.DisableAnimations()
-	}
-	return &DesktopSink{desktop: desktop}
+    return &DesktopSink{desktop: desktop}
 }
 
 func (d *DesktopSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) {

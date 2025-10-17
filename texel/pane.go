@@ -8,6 +8,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"log"
 	"texelation/texel/theme"
+	"time"
 	"unicode/utf8"
 )
 
@@ -41,6 +42,10 @@ type pane struct {
 	IsActive   bool
 	IsResizing bool
 	ZOrder     int // Higher values render on top, default is 0
+
+	inactiveFadeIntensity float32
+	resizingFadeIntensity float32
+	effectsInitialized    bool
 }
 
 // newPane creates a new, empty Pane. The App is attached later.
@@ -57,7 +62,34 @@ func newPane(s *Screen) *pane {
 		copy(p.id[:], sum[:])
 	}
 
-	// Client now owns pane visual effects; keep placeholders for API compatibility
+	if s != nil && s.desktop != nil {
+		tm := theme.Get()
+		inactiveColor := tm.GetColor("pane", "inactive_overlay_color", tcell.NewRGBColor(20, 20, 32))
+		resizingColor := tm.GetColor("pane", "resizing_overlay_color", tcell.NewRGBColor(255, 184, 108))
+		inactiveIntensity := float32(tm.GetFloat("pane", "inactive_overlay_intensity", 0.35))
+		resizingIntensity := float32(tm.GetFloat("pane", "resizing_overlay_intensity", 0.20))
+		if inactiveIntensity < 0 {
+			inactiveIntensity = 0
+		} else if inactiveIntensity > 1 {
+			inactiveIntensity = 1
+		}
+		if resizingIntensity < 0 {
+			resizingIntensity = 0
+		} else if resizingIntensity > 1 {
+			resizingIntensity = 1
+		}
+
+		p.inactiveFadeIntensity = inactiveIntensity
+		p.resizingFadeIntensity = resizingIntensity
+
+		p.inactiveFade = NewFadeEffect(s.desktop, inactiveColor)
+		p.inactiveFade.SetIntensity(inactiveIntensity)
+		p.effects.AddEffect(p.inactiveFade)
+
+		p.resizingFade = NewFadeEffect(s.desktop, resizingColor)
+		p.resizingFade.SetIntensity(0)
+		p.effects.AddEffect(p.resizingFade)
+	}
 
 	return p
 }
@@ -86,7 +118,17 @@ func (p *pane) SetActive(active bool) {
 	}
 
 	p.IsActive = active
+	p.updateFade(p.inactiveFade, func() float32 {
+		if active {
+			return 0
+		}
+		return p.inactiveFadeIntensity
+	}())
 	p.notifyStateChange()
+	if p.screen != nil {
+		p.screen.Refresh()
+	}
+	p.effectsInitialized = true
 }
 
 // SetResizing changes the resizing state of the pane and animates the appropriate effects
@@ -96,7 +138,15 @@ func (p *pane) SetResizing(resizing bool) {
 	}
 
 	p.IsResizing = resizing
+	target := float32(0)
+	if resizing {
+		target = p.resizingFadeIntensity
+	}
+	p.updateFade(p.resizingFade, target)
 	p.notifyStateChange()
+	if p.screen != nil {
+		p.screen.Refresh()
+	}
 }
 
 // AddEffect adds a custom effect to the pane's pipeline
@@ -187,6 +237,28 @@ func (p *pane) handlePaste(data []byte) {
 		}
 		p.app.HandleKey(ev)
 	}
+}
+
+func (p *pane) updateFade(effect *FadeEffect, target float32) {
+	if effect == nil {
+		return
+	}
+	if target < 0 {
+		target = 0
+	} else if target > 1 {
+		target = 1
+	}
+	desktop := func() *Desktop {
+		if p.screen != nil {
+			return p.screen.desktop
+		}
+		return nil
+	}()
+	if !p.effectsInitialized || desktop == nil || desktop.animationsDisabled() {
+		effect.SetIntensity(target)
+		return
+	}
+	p.animator.AnimateTo(effect, target, 160*time.Millisecond, nil)
 }
 
 func (p *pane) renderBuffer(applyEffects bool) [][]Cell {

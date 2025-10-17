@@ -3,7 +3,6 @@ package texel
 
 import (
 	"github.com/gdamore/tcell/v2"
-	"log"
 	"sync"
 )
 
@@ -22,7 +21,6 @@ func NewFadeEffect(desktop *Desktop, fadeColor tcell.Color) *FadeEffect {
 		fadeColor: fadeColor,
 		desktop:   desktop,
 	}
-	log.Printf("NewFadeEffect: Created with intensity=%.3f, fadeColor=%v", effect.intensity, fadeColor)
 	return effect
 }
 
@@ -37,11 +35,6 @@ func (f *FadeEffect) Apply(buffer *[][]Cell) {
 		return
 	}
 
-	// Debug logging
-	log.Printf("FadeEffect.Apply: intensity=%.3f, fadeColor=%v, buffer size=%dx%d",
-		intensity, fadeColor, len(*buffer), len((*buffer)[0]))
-
-	effectiveChanges := 0
 	for y := range *buffer {
 		for x := range (*buffer)[y] {
 			cell := &(*buffer)[y][x]
@@ -80,12 +73,7 @@ func (f *FadeEffect) Apply(buffer *[][]Cell) {
 
 			// Keep the original character - this is crucial!
 			cell.Ch = originalChar
-			effectiveChanges++
 		}
-	}
-
-	if effectiveChanges > 0 {
-		log.Printf("FadeEffect applied to %d cells", effectiveChanges)
 	}
 }
 
@@ -104,16 +92,16 @@ func (f *FadeEffect) GetIntensity() float32 {
 }
 
 // SetIntensity sets the fade intensity
-//func (f *FadeEffect) SetIntensity(intensity float32) {
-//	f.mu.Lock()
-//	defer f.mu.Unlock()
-//	if intensity < 0.0 {
-//		intensity = 0.0
-//	} else if intensity > 1.0 {
-//		intensity = 1.0
-//	}
-//	f.intensity = intensity
-//}
+func (f *FadeEffect) SetIntensity(intensity float32) {
+	if intensity < 0.0 {
+		intensity = 0.0
+	} else if intensity > 1.0 {
+		intensity = 1.0
+	}
+	f.mu.Lock()
+	f.intensity = intensity
+	f.mu.Unlock()
+}
 
 // IsAnimating returns true if the effect has non-zero intensity
 func (f *FadeEffect) IsAnimating() bool {

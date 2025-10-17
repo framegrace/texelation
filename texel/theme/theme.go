@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 )
 
@@ -97,6 +98,31 @@ func (c Config) GetString(sectionName, key, defaultValue string) string {
 		if val, ok := section[key]; ok {
 			if strVal, ok := val.(string); ok {
 				return strVal
+			}
+		}
+	}
+	return defaultValue
+}
+
+// GetFloat retrieves a float value from the theme/config.
+func (c Config) GetFloat(sectionName, key string, defaultValue float64) float64 {
+	if section, ok := c[sectionName]; ok {
+		if val, ok := section[key]; ok {
+			switch v := val.(type) {
+			case float64:
+				return v
+			case float32:
+				return float64(v)
+			case int:
+				return float64(v)
+			case json.Number:
+				if parsed, err := v.Float64(); err == nil {
+					return parsed
+				}
+			case string:
+				if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+					return parsed
+				}
 			}
 		}
 	}

@@ -64,6 +64,10 @@ func registerDefaultThemes(tm theme.Config) {
 		"inactive_border_fg": "#6272a4",
 		"active_border_fg":   "#50fa7b",
 		"resizing_border_fg": "#ffb86c",
+		"inactive_overlay_color":   "#141400",
+		"inactive_overlay_intensity": 0.35,
+		"resizing_overlay_color":   "#ffb86c",
+		"resizing_overlay_intensity": 0.20,
 	})
 	tm.RegisterDefaults("statusbar", theme.Section{
 		"base_fg":         "#f8f8f2",
