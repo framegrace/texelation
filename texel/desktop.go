@@ -472,6 +472,20 @@ func (d *Desktop) HandleClipboardGet(mime string) []byte {
 	return append([]byte(nil), d.clipboard[mime]...)
 }
 
+// HandlePaste routes paste data to the active pane.
+func (d *Desktop) HandlePaste(data []byte) {
+	if len(data) == 0 || d.inControlMode {
+		return
+	}
+	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
+		d.zoomedPane.Pane.handlePaste(data)
+		return
+	}
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.handlePaste(data)
+	}
+}
+
 // HandleThemeUpdate applies runtime theme overrides.
 func (d *Desktop) HandleThemeUpdate(section, key, value string) {
 	config := theme.Get()

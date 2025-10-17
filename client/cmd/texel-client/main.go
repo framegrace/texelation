@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -40,6 +41,8 @@ type uiState struct {
 	desktopBg    tcell.Color
 	zoomed       bool
 	zoomedPane   [16]byte
+	pasting      bool
+	pasteBuf     []byte
 }
 
 type panicLogger struct {
@@ -158,6 +161,7 @@ func main() {
 	if err := screen.Init(); err != nil {
 		log.Fatalf("init screen failed: %v", err)
 	}
+	screen.EnablePaste()
 	screen.HideCursor()
 	defer screen.Fini()
 	defer close(pingStop)
@@ -394,7 +398,11 @@ func render(state *uiState, screen tcell.Screen) {
 
 func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex) bool {
 	switch ev := ev.(type) {
-	case *tcell.EventKey:
+case *tcell.EventKey:
+		if state.pasting {
+			consumePasteKey(state, ev)
+			return true
+		}
 		if state.controlMode && ev.Modifiers() == 0 {
 			r := ev.Rune()
 			if r == 'q' || r == 'Q' {
@@ -432,6 +440,20 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 		render(state, screen)
 	case *tcell.EventInterrupt:
 		// Ignore; used to wake PollEvent for shutdown.
+	case *tcell.EventPaste:
+		if ev.Start() {
+			state.pasting = true
+			state.pasteBuf = state.pasteBuf[:0]
+		} else {
+			state.pasting = false
+			if len(state.pasteBuf) > 0 {
+				data := append([]byte(nil), state.pasteBuf...)
+				if err := sendPaste(writeMu, conn, sessionID, data); err != nil {
+					log.Printf("send paste failed: %v", err)
+				}
+				state.pasteBuf = state.pasteBuf[:0]
+			}
+		}
 	}
 	return true
 }
@@ -638,6 +660,15 @@ func sendKeyEvent(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, key tc
 	return writeMessage(writeMu, conn, header, payload)
 }
 
+func sendPaste(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, data []byte) error {
+	payload, err := protocol.EncodePaste(protocol.Paste{Data: data})
+	if err != nil {
+		return err
+	}
+	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgPaste, Flags: protocol.FlagChecksum, SessionID: sessionID}
+	return writeMessage(writeMu, conn, header, payload)
+}
+
 func pingLoop(conn net.Conn, sessionID [16]byte, done <-chan struct{}, stop <-chan struct{}, writeMu *sync.Mutex) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -668,6 +699,41 @@ func writeMessage(mu *sync.Mutex, conn net.Conn, header protocol.Header, payload
 	defer mu.Unlock()
 	log.Printf("client tx type=%d seq=%d len=%d", header.Type, header.Sequence, len(payload))
 	return protocol.WriteMessage(conn, header, payload)
+}
+
+func consumePasteKey(state *uiState, ev *tcell.EventKey) {
+	var b byte
+	switch ev.Key() {
+	case tcell.KeyRune:
+		r := ev.Rune()
+		if r == '\n' {
+			state.pasteBuf = append(state.pasteBuf, '\r')
+		} else {
+			state.pasteBuf = utf8.AppendRune(state.pasteBuf, r)
+		}
+		return
+	case tcell.KeyEnter:
+		state.pasteBuf = append(state.pasteBuf, '\r')
+		return
+	case tcell.KeyTab:
+		state.pasteBuf = append(state.pasteBuf, '\t')
+		return
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		state.pasteBuf = append(state.pasteBuf, '')
+		return
+	case tcell.KeyEsc:
+		state.pasteBuf = append(state.pasteBuf, 0x1b)
+		return
+	default:
+		if ev.Rune() != 0 {
+			state.pasteBuf = utf8.AppendRune(state.pasteBuf, ev.Rune())
+			return
+		}
+	}
+	b = byte(ev.Rune())
+	if b != 0 {
+		state.pasteBuf = append(state.pasteBuf, b)
+	}
 }
 
 func scheduleAck(pending *atomic.Uint64, signal chan<- struct{}, seq uint64) {

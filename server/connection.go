@@ -271,6 +271,12 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		if err := c.writeControlMessage(protocol.MsgThemeAck, encoded); err != nil {
 			return err
 		}
+	case protocol.MsgPaste:
+		paste, err := protocol.DecodePaste(payload)
+		if err != nil {
+			return err
+		}
+		c.sink.HandlePaste(c.session, paste)
 	case protocol.MsgResumeRequest:
 		request, err := protocol.DecodeResumeRequest(payload)
 		if err != nil {

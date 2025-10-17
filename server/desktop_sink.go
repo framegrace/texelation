@@ -67,6 +67,16 @@ func (d *DesktopSink) HandleThemeUpdate(session *Session, event protocol.ThemeUp
 
 func (d *DesktopSink) HandlePaneFocus(session *Session, focus protocol.PaneFocus) {}
 
+func (d *DesktopSink) HandlePaste(session *Session, paste protocol.Paste) {
+	if d.desktop == nil || len(paste.Data) == 0 {
+		return
+	}
+	d.desktop.HandlePaste(paste.Data)
+	if d.publisher != nil {
+		_ = d.publisher.Publish()
+	}
+}
+
 func (d *DesktopSink) Desktop() *texel.Desktop {
 	return d.desktop
 }

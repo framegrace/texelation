@@ -157,6 +157,38 @@ func (p *pane) Render() [][]Cell {
 	return p.renderBuffer(true)
 }
 
+func (p *pane) handlePaste(data []byte) {
+	if p == nil || p.app == nil || len(data) == 0 {
+		return
+	}
+	if handler, ok := p.app.(PasteHandler); ok {
+		handler.HandlePaste(data)
+		return
+	}
+	for len(data) > 0 {
+		r, size := utf8.DecodeRune(data)
+		if r == utf8.RuneError && size == 1 {
+			// treat invalid byte as literal
+			r = rune(data[0])
+		}
+		data = data[size:]
+		var ev *tcell.EventKey
+		switch r {
+		case '\r', '\n':
+			ev = tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)
+		case '\t':
+			ev = tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+		case '':
+			ev = tcell.NewEventKey(tcell.KeyBackspace2, 0, tcell.ModNone)
+		case 0x1b:
+			ev = tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone)
+		default:
+			ev = tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone)
+		}
+		p.app.HandleKey(ev)
+	}
+}
+
 func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	w := p.Width()
 	h := p.Height()

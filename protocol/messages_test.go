@@ -143,6 +143,21 @@ func TestClipboardDataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPasteRoundTrip(t *testing.T) {
+	msg := Paste{Data: []byte("hello world")}
+	payload, err := EncodePaste(msg)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodePaste(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if string(decoded.Data) != string(msg.Data) {
+		t.Fatalf("mismatch: %#v vs %#v", decoded, msg)
+	}
+}
+
 func TestThemeUpdateRoundTrip(t *testing.T) {
 	update := ThemeUpdate{Section: "pane", Key: "fg", Value: "#ffffff"}
 	payload, err := EncodeThemeUpdate(update)

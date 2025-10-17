@@ -233,6 +233,23 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
+func (a *TexelTerm) HandlePaste(data []byte) {
+	if a.pty == nil || len(data) == 0 {
+		return
+	}
+	converted := make([]byte, len(data))
+	for i, b := range data {
+		if b == '\n' {
+			converted[i] = '\r'
+		} else {
+			converted[i] = b
+		}
+	}
+	if _, err := a.pty.Write(converted); err != nil {
+		log.Printf("TexelTerm: paste write failed: %v", err)
+	}
+}
+
 func (a *TexelTerm) Run() error {
 
 	a.mu.Lock()

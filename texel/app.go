@@ -34,6 +34,11 @@ type App interface {
 	SetRefreshNotifier(refreshChan chan<- bool)
 }
 
+// PasteHandler is implemented by apps that can consume bulk paste payloads.
+type PasteHandler interface {
+	HandlePaste(data []byte)
+}
+
 // SnapshotProvider is implemented by apps that can describe how to restore themselves.
 type SnapshotProvider interface {
 	SnapshotMetadata() (appType string, config map[string]interface{})

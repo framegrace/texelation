@@ -110,6 +110,11 @@ type ClipboardData struct {
 	Data     []byte
 }
 
+// Paste delivers bracketed paste content from client to server.
+type Paste struct {
+	Data []byte
+}
+
 // ThemeUpdate notifies about runtime theme adjustments.
 type ThemeUpdate struct {
 	Section string
@@ -579,6 +584,34 @@ func DecodeClipboardGet(b []byte) (ClipboardGet, error) {
 	}
 	req.MimeType = mime
 	return req, nil
+}
+
+func EncodePaste(msg Paste) ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 4+len(msg.Data)))
+	if err := binary.Write(buf, binary.LittleEndian, uint32(len(msg.Data))); err != nil {
+		return nil, err
+	}
+	if len(msg.Data) > 0 {
+		if _, err := buf.Write(msg.Data); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func DecodePaste(b []byte) (Paste, error) {
+	var msg Paste
+	if len(b) < 4 {
+		return msg, errPayloadShort
+	}
+	dataLen := binary.LittleEndian.Uint32(b[:4])
+	if len(b) < int(4+dataLen) {
+		return msg, errPayloadShort
+	}
+	if dataLen > 0 {
+		msg.Data = append([]byte(nil), b[4:4+dataLen]...)
+	}
+	return msg, nil
 }
 
 func EncodeThemeUpdate(update ThemeUpdate) ([]byte, error) {

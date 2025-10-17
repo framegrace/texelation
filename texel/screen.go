@@ -273,6 +273,15 @@ func (s *Screen) handleEvent(ev *tcell.EventKey) {
 	}
 }
 
+func (s *Screen) handlePaste(data []byte) {
+	if s == nil || len(data) == 0 {
+		return
+	}
+	if s.tree.ActiveLeaf != nil && s.tree.ActiveLeaf.Pane != nil {
+		s.tree.ActiveLeaf.Pane.handlePaste(data)
+	}
+}
+
 func (s *Screen) AnimateGroupExpansion(groupNode *Node, newPaneIndex int, duration time.Duration) {
 	if groupNode == nil || len(groupNode.SplitRatios) <= newPaneIndex {
 		s.recalculateLayout()

@@ -51,6 +51,7 @@ const (
 	MsgStateUpdate
 	MsgPaneState
 	MsgResize
+	MsgPaste
 )
 
 // Header describes the fixed portion of every frame exchanged over the wire.
