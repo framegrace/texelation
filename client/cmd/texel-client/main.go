@@ -524,6 +524,7 @@ func render(state *uiState, screen tcell.Screen) {
 	drawStates := make([]*geometryPaneState, 0, len(geomStates))
 	for _, pane := range panes {
 		if geom := geomStates[pane.ID]; geom != nil {
+			geom.Dirty = true
 			drawStates = append(drawStates, geom)
 		}
 	}

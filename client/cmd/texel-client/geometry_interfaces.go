@@ -21,6 +21,7 @@ type geometryPaneState struct {
 	Buffer  [][]client.Cell
 	Ghost   bool
 	ZIndex  int
+	Dirty   bool
 	Opacity float32
 }
 
