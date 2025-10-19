@@ -587,6 +587,26 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 		}
 		if err := sendKeyEvent(writeMu, conn, sessionID, ev.Key(), ev.Rune(), ev.Modifiers()); err != nil {
 			log.Printf("send key failed: %v", err)
+		} else if state.effects != nil {
+			now := time.Now()
+			r := ev.Rune()
+			mod := uint16(ev.Modifiers())
+			if state.hasFocus {
+				state.effects.HandleTrigger(EffectTrigger{
+					Type:      TriggerPaneKey,
+					PaneID:    state.focus.PaneID,
+					Key:       r,
+					Modifiers: mod,
+					Timestamp: now,
+				})
+			}
+			state.effects.HandleTrigger(EffectTrigger{
+				Type:        TriggerWorkspaceKey,
+				WorkspaceID: state.workspaceID,
+				Key:         r,
+				Modifiers:   mod,
+				Timestamp:   now,
+			})
 		}
 	case *tcell.EventMouse:
 		x, y := ev.Position()
