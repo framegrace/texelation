@@ -559,17 +559,34 @@ func render(state *uiState, screen tcell.Screen) {
 					source = geom.Buffer[rowIdx]
 				}
 			} else if pane != nil {
-				source = pane.RowCells(rowIdx)
+				sourceRow := rowIdx
+				if rect.Height < pane.Rect.Height {
+					if rect.Y > geom.Base.Y {
+						offset := pane.Rect.Height - rect.Height
+						sourceRow = rowIdx + offset
+						if sourceRow >= pane.Rect.Height {
+							sourceRow = pane.Rect.Height - 1
+						}
+					}
+				}
+				source = pane.RowCells(sourceRow)
 			}
 			for col := 0; col < rect.Width; col++ {
 				cell := client.Cell{Ch: ' ', Style: state.defaultStyle}
-				if source != nil && col < len(source) {
-					cell = source[col]
-					if cell.Ch == 0 {
-						cell.Ch = ' '
+				if source != nil && len(source) > 0 {
+					xOffset := 0
+					if rect.Width < len(source) && rect.X > geom.Base.X {
+						xOffset = len(source) - rect.Width
 					}
-					if cell.Style == (tcell.Style{}) {
-						cell.Style = state.defaultStyle
+					srcIdx := xOffset + col
+					if srcIdx >= 0 && srcIdx < len(source) {
+						cell = source[srcIdx]
+						if cell.Ch == 0 {
+							cell.Ch = ' '
+						}
+						if cell.Style == (tcell.Style{}) {
+							cell.Style = state.defaultStyle
+						}
 					}
 				}
 				row[col] = cell
