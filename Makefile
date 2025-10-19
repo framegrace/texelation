@@ -1,19 +1,25 @@
 # Build/test helper for Texelation project
 
-APP_NAME := texelation
 BIN_DIR := bin
 CACHE_DIR := $(CURDIR)/.cache
-GO_ENV := GOCACHE=$(CACHE_DIR) CGO_ENABLED=0
+GO_ENV := CCACHE_DISABLE=1 GOCACHE=$(CACHE_DIR) CGO_ENABLED=0
+CLIENT_PKG := ./client/cmd/texel-client
+SERVER_PKG := ./cmd/texel-server
 
-.PHONY: build run test lint fmt tidy clean help server client
+.PHONY: build install run test lint fmt tidy clean help server client release
 
-build: ## Build the desktop binary into bin/
+build: ## Build texel-server and texel-client binaries into bin/
 	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
-	$(GO_ENV) go build -o $(BIN_DIR)/$(APP_NAME) .
+	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
+	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
 
-run: ## Launch the desktop directly
+install: ## Install texel binaries into GOPATH/bin
 	@mkdir -p $(CACHE_DIR)
-	$(GO_ENV) go run .
+	$(GO_ENV) go install $(SERVER_PKG) $(CLIENT_PKG)
+
+run: ## Launch texel-server (for manual smoke testing)
+	@mkdir -p $(CACHE_DIR)
+	$(GO_ENV) go run $(SERVER_PKG) --socket /tmp/texelation.sock
 
 test: ## Execute all Go tests
 	@mkdir -p $(CACHE_DIR)
@@ -32,14 +38,17 @@ tidy: ## Sync go.mod with source imports
 
 server: ## Run texel-server harness
 	@mkdir -p $(CACHE_DIR)
-	$(GO_ENV) go run ./cmd/texel-server --socket /tmp/texelation.sock
+	$(GO_ENV) go run $(SERVER_PKG) --socket /tmp/texelation.sock
 
 client: ## Run remote texel client against socket
 	@mkdir -p $(CACHE_DIR)
-	$(GO_ENV) go run ./client/cmd/texel-client --socket /tmp/texelation.sock
+	$(GO_ENV) go run $(CLIENT_PKG) --socket /tmp/texelation.sock
+
+release: ## Cross-compile binaries for common platforms into dist/
+	./scripts/build-release.sh
 
 clean: ## Remove build artifacts
-	rm -rf $(BIN_DIR) $(CACHE_DIR)
+	rm -rf $(BIN_DIR) $(CACHE_DIR) dist
 
 help: ## Print available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' Makefile | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "%-10s %s\n", $$1, $$2}'
