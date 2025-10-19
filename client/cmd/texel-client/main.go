@@ -753,9 +753,6 @@ func (s *uiState) refreshPaneGeometry(emit bool) {
 		}
 		rect := PaneRect{X: pane.Rect.X, Y: pane.Rect.Y, Width: pane.Rect.Width, Height: pane.Rect.Height}
 		current[pane.ID] = rect
-		if s.lastPaneBuffer != nil {
-			s.lastPaneBuffer[pane.ID] = clonePaneBuffer(pane)
-		}
 		if emit && s.geometry != nil {
 			if old, ok := previous[pane.ID]; ok {
 				if old != rect {
@@ -767,10 +764,13 @@ func (s *uiState) refreshPaneGeometry(emit bool) {
 				if s.geometryCfg.SplitMode == splitModeGhost {
 					startRect = expandRectFromLine(rect, relatedRect)
 				} else if relatedRect != (PaneRect{}) {
-					startRect = relatedRect
+					startRect = alignRectToEdge(rect, relatedRect)
 				}
 				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneCreated, PaneID: pane.ID, RelatedPaneID: relatedID, OldRect: startRect, NewRect: rect, Timestamp: now})
 			}
+		}
+		if s.lastPaneBuffer != nil {
+			s.lastPaneBuffer[pane.ID] = clonePaneBuffer(pane)
 		}
 	}
 	if emit && s.geometry != nil {
@@ -894,6 +894,31 @@ func collapseRectTowards(source, reference PaneRect) PaneRect {
 	target.Width = 0
 	target.Height = 0
 	return target
+}
+
+func alignRectToEdge(target, reference PaneRect) PaneRect {
+	start := target
+	if reference.Width == target.Width && reference.X == target.X {
+		// vertical stack
+		start.Height = 0
+		if target.Y >= reference.Y+reference.Height {
+			start.Y = reference.Y + reference.Height
+		} else {
+			start.Y = reference.Y
+		}
+		return start
+	}
+	if reference.Height == target.Height && reference.Y == target.Y {
+		// horizontal stack
+		start.Width = 0
+		if target.X >= reference.X+reference.Width {
+			start.X = reference.X + reference.Width
+		} else {
+			start.X = reference.X
+		}
+		return start
+	}
+	return start
 }
 
 func maxInt(a, b int) int {

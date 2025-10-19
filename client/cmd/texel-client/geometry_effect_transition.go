@@ -81,21 +81,25 @@ func (e *geometryTransitionEffect) HandleTrigger(trigger EffectTrigger) {
 			startTime: now,
 			duration:  e.cfg.SplitDuration,
 		}
+		if e.cfg.SplitMode == splitModeGhost && trigger.Type == TriggerPaneCreated {
+			anim.ghost = true
+			anim.forceTop = true
+		}
 		e.panes[trigger.PaneID] = anim
-case TriggerPaneRemoved:
-    anim := &paneAnimation{
-        start:     trigger.OldRect,
-        end:       trigger.NewRect,
-        startTime: now,
-        duration:  e.cfg.RemoveDuration,
-        buffer:    trigger.PaneBuffer,
-        ghost:     trigger.Ghost,
-        forceTop:  trigger.Ghost,
-    }
-    if !anim.ghost && len(anim.buffer) > 0 {
-        anim.ghost = true
-    }
-    e.panes[trigger.PaneID] = anim
+	case TriggerPaneRemoved:
+		anim := &paneAnimation{
+			start:     trigger.OldRect,
+			end:       trigger.NewRect,
+			startTime: now,
+			duration:  e.cfg.RemoveDuration,
+			buffer:    trigger.PaneBuffer,
+			ghost:     trigger.Ghost,
+			forceTop:  trigger.Ghost,
+		}
+		if !anim.ghost && len(anim.buffer) > 0 {
+			anim.ghost = true
+		}
+		e.panes[trigger.PaneID] = anim
 	case TriggerWorkspaceZoom:
 		zoom := &zoomAnimation{
 			paneID:    trigger.PaneID,
