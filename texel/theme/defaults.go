@@ -17,12 +17,11 @@ func ApplyDefaults(cfg Config) {
 	}
 
 	if applySectionDefaults(cfg, "pane", Section{
-		"inactive_border_fg":           "#6272a4",
-		"active_border_fg":             "#50fa7b",
-		"resizing_border_fg":           "#ffb86c",
-		"inactive_overlay_color":       "#141400",
-		"inactive_overlay_intensity":   0.35,
-		"inactive_overlay_duration_ms": 400,
+		"inactive_border_fg": "#6272a4",
+		"inactive_border_bg": "#282a36",
+		"active_border_fg":   "#50fa7b",
+		"active_border_bg":   "#282a36",
+		"resizing_border_fg": "#ffb86c",
 		"effects": []map[string]interface{}{
 			{
 				"id":          "inactive-overlay",

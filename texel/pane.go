@@ -269,7 +269,9 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 		p.getTitle(), w, h, p.absX0, p.absY0, p.absX1, p.absY1)
 
 	tm := theme.Get()
-	defstyle := tcell.StyleDefault.Background(tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()).Foreground(tm.GetColor("desktop", "default_fg", tcell.ColorReset).TrueColor())
+	desktopBg := tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()
+	desktopFg := tm.GetColor("desktop", "default_fg", tcell.ColorReset).TrueColor()
+	defstyle := tcell.StyleDefault.Background(desktopBg).Foreground(desktopFg)
 
 	// Create the pane's buffer.
 	buffer := make([][]Cell, h)
@@ -287,15 +289,18 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	}
 
 	// Determine border style based on active state.
-	borderStyle := defstyle.Foreground(
-		tm.GetColor("pane", "inactive_border_fg", tcell.ColorPink).TrueColor())
+	inactiveBorderFG := tm.GetColor("pane", "inactive_border_fg", tcell.ColorPink).TrueColor()
+	inactiveBorderBG := tm.GetColor("pane", "inactive_border_bg", desktopBg).TrueColor()
+	activeBorderFG := tm.GetColor("pane", "active_border_fg", tcell.ColorPink).TrueColor()
+	activeBorderBG := tm.GetColor("pane", "active_border_bg", desktopBg).TrueColor()
+	resizingBorderFG := tm.GetColor("pane", "resizing_border_fg", tcell.ColorPink).TrueColor()
+
+	borderStyle := defstyle.Foreground(inactiveBorderFG).Background(inactiveBorderBG)
 	if p.IsActive {
-		borderStyle = defstyle.Foreground(
-			tm.GetColor("pane", "active_border_fg", tcell.ColorPink).TrueColor())
+		borderStyle = defstyle.Foreground(activeBorderFG).Background(activeBorderBG)
 	}
 	if p.IsResizing {
-		borderStyle = defstyle.Foreground(
-			tm.GetColor("pane", "resizing_border_fg", tcell.ColorPink).TrueColor())
+		borderStyle = defstyle.Foreground(resizingBorderFG).Background(activeBorderBG)
 	}
 
 	// Draw borders
