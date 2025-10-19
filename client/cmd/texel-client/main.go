@@ -1,10 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,30 +19,106 @@ import (
 
 	"texelation/client"
 	"texelation/protocol"
+	"texelation/texel/theme"
 )
 
 type uiState struct {
-	cache        *client.BufferCache
-	clipboard    protocol.ClipboardData
-	hasClipboard bool
-	theme        protocol.ThemeAck
-	hasTheme     bool
-	focus        protocol.PaneFocus
-	hasFocus     bool
-	themeValues  map[string]map[string]string
-	defaultStyle tcell.Style
-	defaultFg    tcell.Color
-	defaultBg    tcell.Color
-	workspaces   []int
-	workspaceID  int
-	activeTitle  string
-	controlMode  bool
-	subMode      rune
-	desktopBg    tcell.Color
-	zoomed       bool
-	zoomedPane   [16]byte
-	pasting      bool
-	pasteBuf     []byte
+	cache          *client.BufferCache
+	clipboard      protocol.ClipboardData
+	hasClipboard   bool
+	theme          protocol.ThemeAck
+	hasTheme       bool
+	focus          protocol.PaneFocus
+	hasFocus       bool
+	themeValues    map[string]map[string]interface{}
+	defaultStyle   tcell.Style
+	defaultFg      tcell.Color
+	defaultBg      tcell.Color
+	workspaces     []int
+	workspaceID    int
+	activeTitle    string
+	controlMode    bool
+	subMode        rune
+	desktopBg      tcell.Color
+	zoomed         bool
+	zoomedPane     [16]byte
+	pasting        bool
+	pasteBuf       []byte
+	effectRegistry *effectRegistry
+	renderCh       chan<- struct{}
+	effects        *effectManager
+}
+
+func (s *uiState) setRenderChannel(ch chan<- struct{}) {
+	s.renderCh = ch
+	if s.effects != nil {
+		s.effects.attachRenderChannel(ch)
+	}
+}
+
+func (s *uiState) setThemeValue(section, key string, value interface{}) {
+	if s.themeValues == nil {
+		s.themeValues = make(map[string]map[string]interface{})
+	}
+	sec := s.themeValues[section]
+	if sec == nil {
+		sec = make(map[string]interface{})
+		s.themeValues[section] = sec
+	}
+	sec[key] = value
+}
+
+func (s *uiState) applyEffectConfig(reg *effectRegistry) {
+	if reg == nil {
+		if s.effectRegistry != nil {
+			reg = s.effectRegistry
+		} else {
+			reg = newEffectRegistry()
+		}
+	}
+	s.effectRegistry = reg
+
+	paneSpecs := []paneEffectSpec{{ID: "inactive-overlay"}}
+	if section, ok := s.themeValues["pane"]; ok {
+		if raw, ok := section["effects"]; ok && raw != "" {
+			if specs, err := parsePaneEffectSpecs(raw); err == nil && len(specs) > 0 {
+				paneSpecs = specs
+			}
+		}
+	}
+
+	workspaceSpecs := []workspaceEffectSpec{{ID: "rainbow"}, {ID: "flash"}}
+	if section, ok := s.themeValues["workspace"]; ok {
+		if raw, ok := section["effects"]; ok && raw != "" {
+			if specs, err := parseWorkspaceEffectSpecs(raw); err == nil && len(specs) > 0 {
+				workspaceSpecs = specs
+			}
+		}
+	}
+
+	manager := newEffectManager()
+	for _, spec := range paneSpecs {
+		if eff := reg.createPaneEffect(spec); eff != nil {
+			manager.registerPaneEffect(eff)
+		}
+	}
+	for _, spec := range workspaceSpecs {
+		if eff := reg.createWorkspaceEffect(spec); eff != nil {
+			manager.registerWorkspaceEffect(eff)
+		}
+	}
+	if s.renderCh != nil {
+		manager.attachRenderChannel(s.renderCh)
+	}
+	s.effects = manager
+	if s.cache != nil {
+		s.effects.ResetPaneStates(s.cache.SortedPanes())
+	}
+	s.effects.HandleTrigger(EffectTrigger{
+		Type:      TriggerWorkspaceControl,
+		Active:    s.controlMode,
+		Timestamp: time.Now(),
+	})
 }
 
 type panicLogger struct {
@@ -121,12 +197,24 @@ func main() {
 
 	state := &uiState{
 		cache:        client.NewBufferCache(),
-		themeValues:  make(map[string]map[string]string),
+		themeValues:  make(map[string]map[string]interface{}),
 		defaultStyle: tcell.StyleDefault,
 		defaultFg:    tcell.ColorDefault,
 		defaultBg:    tcell.ColorDefault,
 		desktopBg:    tcell.ColorDefault,
 	}
+
+	cfg := theme.Get()
+	theme.ApplyDefaults(cfg)
+	for sectionName, section := range cfg {
+		for key, value := range section {
+			state.setThemeValue(sectionName, key, value)
+		}
+	}
+
+	registry := newEffectRegistry()
+	state.effectRegistry = registry
+	state.applyEffectConfig(nil)
 	lastSequence := uint64(0)
 
 	var pendingAck atomic.Uint64
@@ -142,6 +230,7 @@ func main() {
 	}
 
 	renderCh := make(chan struct{}, 1)
+	state.setRenderChannel(renderCh)
 	doneCh := make(chan struct{})
 	panicLogger.Go("readLoop", func() {
 		readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh, &writeMu, &pendingAck, ackSignal)
@@ -244,6 +333,9 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			return false
 		}
 		cache.ApplySnapshot(snap)
+		if state.effects != nil {
+			state.effects.ResetPaneStates(cache.SortedPanes())
+		}
 		return true
 	case protocol.MsgBufferDelta:
 		delta, err := protocol.DecodeBufferDelta(payload)
@@ -295,6 +387,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		state.theme = protocol.ThemeAck(themeUpdate)
 		state.hasTheme = true
 		state.updateTheme(themeUpdate.Section, themeUpdate.Key, themeUpdate.Value)
+		state.applyEffectConfig(nil)
 		return true
 	case protocol.MsgThemeAck:
 		ack, err := protocol.DecodeThemeAck(payload)
@@ -305,6 +398,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		state.theme = ack
 		state.hasTheme = true
 		state.updateTheme(ack.Section, ack.Key, ack.Value)
+		state.applyEffectConfig(nil)
 		return true
 	case protocol.MsgPaneFocus:
 		focus, err := protocol.DecodePaneFocus(payload)
@@ -324,6 +418,11 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		active := paneFlags.Flags&protocol.PaneStateActive != 0
 		resizing := paneFlags.Flags&protocol.PaneStateResizing != 0
 		state.cache.SetPaneFlags(paneFlags.PaneID, active, resizing, paneFlags.ZOrder)
+		if state.effects != nil {
+			ts := time.Now()
+			state.effects.HandleTrigger(EffectTrigger{Type: TriggerPaneActive, PaneID: paneFlags.PaneID, Active: active, Timestamp: ts})
+			state.effects.HandleTrigger(EffectTrigger{Type: TriggerPaneResizing, PaneID: paneFlags.PaneID, Resizing: resizing, Timestamp: ts})
+		}
 		return true
 	case protocol.MsgStateUpdate:
 		update, err := protocol.DecodeStateUpdate(payload)
@@ -342,54 +441,94 @@ func render(state *uiState, screen tcell.Screen) {
 	width, height := screen.Size()
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
-	drawPane := func(pane *client.PaneState, overlayZoom bool) {
+
+	if state.effects != nil {
+		state.effects.Update(time.Now())
+	}
+
+	workspaceBuffer := make([][]client.Cell, height)
+	for y := 0; y < height; y++ {
+		row := make([]client.Cell, width)
+		for x := range row {
+			row[x] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+		}
+		workspaceBuffer[y] = row
+	}
+
+	panes := state.cache.SortedPanes()
+	for _, pane := range panes {
 		if pane == nil || pane.Rect.Width <= 0 || pane.Rect.Height <= 0 {
-			return
+			continue
 		}
-		inactiveIntensity := float32(0)
-		if !pane.Active {
-			inactiveIntensity = 0.3
-		} else if state.hasFocus && pane.ID != state.focus.PaneID {
-			inactiveIntensity = 0.3
+
+		paneBuffer := make([][]client.Cell, pane.Rect.Height)
+		for rowIdx := 0; rowIdx < pane.Rect.Height; rowIdx++ {
+			row := make([]client.Cell, pane.Rect.Width)
+			source := pane.RowCells(rowIdx)
+			for col := 0; col < pane.Rect.Width; col++ {
+				cell := client.Cell{Ch: ' ', Style: state.defaultStyle}
+				if source != nil && col < len(source) {
+					cell = source[col]
+					if cell.Ch == 0 {
+						cell.Ch = ' '
+					}
+					if cell.Style == (tcell.Style{}) {
+						cell.Style = state.defaultStyle
+					}
+				}
+				row[col] = cell
+			}
+			paneBuffer[rowIdx] = row
 		}
+
+		if state.effects != nil {
+			state.effects.ApplyPaneEffects(pane, paneBuffer)
+		}
+
+		resizingOverlay := pane.Resizing
+		zoomOverlay := state.zoomed && pane.ID == state.zoomedPane
 		for rowIdx := 0; rowIdx < pane.Rect.Height; rowIdx++ {
 			targetY := pane.Rect.Y + rowIdx
 			if targetY < 0 || targetY >= height {
 				continue
 			}
-			row := pane.RowCells(rowIdx)
+			row := paneBuffer[rowIdx]
 			for col := 0; col < pane.Rect.Width; col++ {
 				targetX := pane.Rect.X + col
 				if targetX < 0 || targetX >= width {
 					continue
 				}
-				ch := ' '
-				style := state.defaultStyle
-				if row != nil && col < len(row) {
-					cell := row[col]
-					if cell.Ch != 0 {
-						ch = cell.Ch
-					}
-					if cell.Style != (tcell.Style{}) {
-						style = cell.Style
-					}
-				}
-				if inactiveIntensity > 0 {
-					style = applyInactiveOverlay(style, inactiveIntensity, state)
-				}
-				if pane.Resizing {
+				cell := row[col]
+				style := cell.Style
+				if resizingOverlay {
 					style = applyResizingOverlay(style, 0.2, state)
 				}
-				if overlayZoom {
+				if zoomOverlay {
 					style = applyZoomOverlay(style, 0.2, state)
 				}
-				screen.SetContent(targetX, targetY, ch, nil, style)
+				workspaceBuffer[targetY][targetX] = client.Cell{Ch: cell.Ch, Style: style}
 			}
 		}
 	}
-	for _, pane := range state.cache.SortedPanes() {
-		drawPane(pane, state.zoomed && pane != nil && pane.ID == state.zoomedPane)
+
+	if state.effects != nil {
+		state.effects.ApplyWorkspaceEffects(workspaceBuffer)
 	}
+
+	for y, row := range workspaceBuffer {
+		for x, cell := range row {
+			ch := cell.Ch
+			if ch == 0 {
+				ch = ' '
+			}
+			style := cell.Style
+			if style == (tcell.Style{}) {
+				style = state.defaultStyle
+			}
+			screen.SetContent(x, y, ch, nil, style)
+		}
+	}
+
 	if state.controlMode {
 		applyControlOverlay(state, screen)
 	}
@@ -398,7 +537,7 @@ func render(state *uiState, screen tcell.Screen) {
 
 func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex) bool {
 	switch ev := ev.(type) {
-case *tcell.EventKey:
+	case *tcell.EventKey:
 		if state.pasting {
 			consumePasteKey(state, ev)
 			return true
@@ -411,6 +550,13 @@ case *tcell.EventKey:
 				}
 				state.controlMode = false
 				state.subMode = 0
+				if state.effects != nil {
+					state.effects.HandleTrigger(EffectTrigger{
+						Type:      TriggerWorkspaceControl,
+						Active:    state.controlMode,
+						Timestamp: time.Now(),
+					})
+				}
 				log.Printf("control quit requested; closing client")
 				return false
 			}
@@ -418,11 +564,25 @@ case *tcell.EventKey:
 		if ev.Key() == tcell.KeyCtrlA {
 			state.controlMode = !state.controlMode
 			state.subMode = 0
+			if state.effects != nil {
+				state.effects.HandleTrigger(EffectTrigger{
+					Type:      TriggerWorkspaceControl,
+					Active:    state.controlMode,
+					Timestamp: time.Now(),
+				})
+			}
 			render(state, screen)
 		}
 		if ev.Key() == tcell.KeyEsc && ev.Modifiers() == 0 && state.controlMode {
 			state.controlMode = false
 			state.subMode = 0
+			if state.effects != nil {
+				state.effects.HandleTrigger(EffectTrigger{
+					Type:      TriggerWorkspaceControl,
+					Active:    state.controlMode,
+					Timestamp: time.Now(),
+				})
+			}
 			render(state, screen)
 		}
 		if err := sendKeyEvent(writeMu, conn, sessionID, ev.Key(), ev.Rune(), ev.Modifiers()); err != nil {
@@ -470,15 +630,14 @@ func (s *uiState) updateTheme(section, key, value string) {
 	if section == "" || key == "" {
 		return
 	}
-	if s.themeValues == nil {
-		s.themeValues = make(map[string]map[string]string)
+	var stored interface{} = value
+	if key == "effects" {
+		var decoded interface{}
+		if err := json.Unmarshal([]byte(value), &decoded); err == nil {
+			stored = decoded
+		}
 	}
-	sec := s.themeValues[section]
-	if sec == nil {
-		sec = make(map[string]string)
-		s.themeValues[section] = sec
-	}
-	sec[key] = value
+	s.setThemeValue(section, key, stored)
 	if section == "desktop" {
 		switch key {
 		case "default_fg":
@@ -493,6 +652,7 @@ func (s *uiState) updateTheme(section, key, value string) {
 		}
 	}
 	s.recomputeDefaultStyle()
+	s.applyEffectConfig(nil)
 }
 
 func (s *uiState) recomputeDefaultStyle() {
@@ -516,6 +676,7 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 	for _, id := range update.AllWorkspaces {
 		s.workspaces = append(s.workspaces, int(id))
 	}
+	prevControl := s.controlMode
 	s.controlMode = update.InControlMode
 	s.subMode = update.SubMode
 	s.activeTitle = update.ActiveTitle
@@ -527,8 +688,17 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 	s.zoomed = update.Zoomed
 	if update.Zoomed {
 		s.zoomedPane = update.ZoomedPaneID
+	} else {
+		s.zoomedPane = [16]byte{}
 	}
 	s.recomputeDefaultStyle()
+	if s.effects != nil && prevControl != s.controlMode {
+		s.effects.HandleTrigger(EffectTrigger{
+			Type:      TriggerWorkspaceControl,
+			Active:    s.controlMode,
+			Timestamp: time.Now(),
+		})
+	}
 }
 
 func parseHexColor(value string) (tcell.Color, bool) {
@@ -591,45 +761,6 @@ func applyControlOverlay(state *uiState, screen tcell.Screen) {
 			x += cellW - 1
 		}
 	}
-}
-
-func blendColor(base, overlay tcell.Color, intensity float32) tcell.Color {
-	if intensity <= 0 {
-		return base
-	}
-	if intensity > 1 {
-		intensity = 1
-	}
-	r1, g1, b1 := base.RGB()
-	r2, g2, b2 := overlay.RGB()
-	blend := func(a, b int32) int32 {
-		return int32(float32(a)*(1-intensity) + float32(b)*intensity)
-	}
-	return tcell.NewRGBColor(blend(r1, r2), blend(g1, g2), blend(b1, b2))
-}
-
-func hsvToRGB(h, s, v float32) tcell.Color {
-	h = float32(math.Mod(float64(h), 2*math.Pi)) / (2 * math.Pi) * 360
-	c := v * s
-	x := c * (1 - float32(math.Abs(math.Mod(float64(h/60), 2)-1)))
-	m := v - c
-	var r, g, b float32
-	switch {
-	case h < 60:
-		r, g, b = c, x, 0
-	case h < 120:
-		r, g, b = x, c, 0
-	case h < 180:
-		r, g, b = 0, c, x
-	case h < 240:
-		r, g, b = 0, x, c
-	case h < 300:
-		r, g, b = x, 0, c
-	default:
-		r, g, b = c, 0, x
-	}
-	r, g, b = (r+m)*255, (g+m)*255, (b+m)*255
-	return tcell.NewRGBColor(int32(r), int32(g), int32(b))
 }
 
 func formatPaneID(id [16]byte) string {
@@ -783,39 +914,6 @@ func ackLoop(conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex, done <-chan
 		}
 		lastAck.Store(target)
 	}
-}
-
-func applyInactiveOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {
-	if intensity <= 0 {
-		return style
-	}
-	fg, bg, attrs := style.Decompose()
-	if !fg.Valid() {
-		fg = state.defaultFg
-		if !fg.Valid() {
-			fg = tcell.ColorWhite
-		}
-	}
-	if !bg.Valid() {
-		bg = state.defaultBg
-		if !bg.Valid() {
-			bg = state.desktopBg
-			if !bg.Valid() {
-				bg = tcell.ColorBlack
-			}
-		}
-	}
-	overlay := blendColor(bg, state.desktopBg, 0.5)
-	blendedFg := blendColor(fg, overlay, intensity)
-	blendedBg := blendColor(bg, state.desktopBg, intensity)
-	return tcell.StyleDefault.Foreground(blendedFg).
-		Background(blendedBg).
-		Bold(attrs&tcell.AttrBold != 0).
-		Underline(attrs&tcell.AttrUnderline != 0).
-		Reverse(attrs&tcell.AttrReverse != 0).
-		Blink(attrs&tcell.AttrBlink != 0).
-		Dim(attrs&tcell.AttrDim != 0).
-		Italic(attrs&tcell.AttrItalic != 0)
 }
 
 func applyResizingOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {
