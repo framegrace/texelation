@@ -1,6 +1,10 @@
 package main
 
-import "time"
+import (
+	"time"
+
+	"texelation/client"
+)
 
 type EffectTriggerType int
 
@@ -16,6 +20,7 @@ type PaneRect struct {
 type EffectTrigger struct {
 	Type                 EffectTriggerType
 	PaneID               PaneID
+	RelatedPaneID        PaneID
 	WorkspaceID          int
 	Key                  rune
 	Modifiers            uint16
@@ -27,6 +32,7 @@ type EffectTrigger struct {
 	ZOrder               int
 	DeltaCols, DeltaRows int
 	Timestamp            time.Time
+	PaneBuffer           [][]client.Cell
 }
 
 const (
