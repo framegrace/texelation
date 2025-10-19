@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: client/cmd/texel-headless/main.go
+// Summary: Implements main capabilities for the headless client harness.
+// Usage: Used in CI and automated tests to validate protocol flows without opening a tcell screen.
+// Notes: Provides a minimal client for scripted scenarios.
+
 package main
 
 import (

@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: protocol/buffer_delta.go
+// Summary: Implements buffer delta capabilities for the protocol definitions.
+// Usage: Shared by clients and servers to encode buffer delta messages over the wire.
+// Notes: Keep changes backward-compatible; any additions require coordinated version bumps.
+
 package protocol
 
 import (

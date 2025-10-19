@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: texel/fade_effect.go
+// Summary: Implements fade effect capabilities for the core desktop engine.
+// Usage: Used throughout the project to implement fade effect inside the desktop and panes.
+// Notes: Legacy desktop logic migrated from the monolithic application.
+
 // Fixed fade_effect.go
 package texel
 

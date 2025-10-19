@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/runtime/server/focus_metrics.go
+// Summary: Implements focus metrics capabilities for the server runtime.
+// Usage: Used by texel-server to coordinate focus metrics when hosting apps and sessions.
+// Notes: This package bridges the legacy desktop code with the client/server protocol implementation.
+
 package server
 
 import (

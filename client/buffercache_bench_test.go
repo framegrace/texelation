@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: client/buffercache_bench_test.go
+// Summary: Benchmarks buffercache performance within the client runtime support library.
+// Usage: Run via `go test -bench` to observe hot-path behaviour under load.
+// Notes: Shared across multiple client binaries and tests.
+
 package client
 
 import (

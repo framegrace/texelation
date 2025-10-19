@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: client/buffercache_test.go
+// Summary: Exercises buffercache behaviour to ensure the client runtime support library remains reliable.
+// Usage: Executed during `go test` to guard against regressions.
+// Notes: Shared across multiple client binaries and tests.
+
 package client
 
 import (

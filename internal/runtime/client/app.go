@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/runtime/client/app.go
+// Summary: Implements app capabilities for the remote client runtime.
+// Usage: Embedded by client binaries to handle app as part of the render/event loop.
+// Notes: Owns session management, rendering, and protocol interaction for remote front-ends.
+
 package clientruntime
 
 import (

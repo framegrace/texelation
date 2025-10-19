@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: texel/pane_state_listener.go
+// Summary: Implements pane state listener capabilities for the core desktop engine.
+// Usage: Used throughout the project to implement pane state listener inside the desktop and panes.
+// Notes: Legacy desktop logic migrated from the monolithic application.
+
 package texel
 
 // PaneStateListener observes active/resizing changes so remotes can mirror visuals.

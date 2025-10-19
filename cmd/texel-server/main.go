@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: cmd/texel-server/main.go
+// Summary: Implements main capabilities for the server CLI harness.
+// Usage: Executed by operators to start the production server that manages sessions.
+// Notes: Focuses on wiring flags and lifecycle around the internal runtime.
+
 package main
 
 import (

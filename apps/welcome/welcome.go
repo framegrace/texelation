@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: apps/welcome/welcome.go
+// Summary: Implements welcome capabilities for the welcome application.
+// Usage: Presented on new sessions to guide users through the interface.
+// Notes: Displays static content; simple example app.
+
 package welcome
 
 import (

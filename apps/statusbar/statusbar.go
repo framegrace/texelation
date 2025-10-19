@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: apps/statusbar/statusbar.go
+// Summary: Implements statusbar capabilities for the status bar application.
+// Usage: Added to desktops to render workspace and mode metadata.
+// Notes: Works in both local and remote deployments.
+
 package statusbar
 
 import (

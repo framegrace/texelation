@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/effects/pane_inactive_overlay.go
+// Summary: Implements pane inactive overlay capabilities for the client effect subsystem.
+// Usage: Used by the client runtime to orchestrate pane inactive overlay visuals before rendering.
+// Notes: Centralises every pane and workspace overlay so they can be configured via themes.
+
 package effects
 
 import (

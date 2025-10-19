@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: protocol/messages.go
+// Summary: Implements messages capabilities for the protocol definitions.
+// Usage: Shared by clients and servers to encode messages messages over the wire.
+// Notes: Keep changes backward-compatible; any additions require coordinated version bumps.
+
 package protocol
 
 import (

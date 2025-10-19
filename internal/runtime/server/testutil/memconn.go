@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/runtime/server/testutil/memconn.go
+// Summary: Implements memconn capabilities for the server runtime test utilities.
+// Usage: Imported by server tests when they need memconn helpers.
+// Notes: Not shipped with production binaries; only used in test code.
+
 package testutil
 
 import (

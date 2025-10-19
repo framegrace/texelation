@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/runtime/server/testutil/memconn_test.go
+// Summary: Exercises memconn behaviour to ensure the server runtime test utilities remains reliable.
+// Usage: Executed during `go test` to guard against regressions.
+// Notes: Not shipped with production binaries; only used in test code.
+
 package testutil
 
 import (

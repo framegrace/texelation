@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: cmd/texel-stress/main.go
+// Summary: Implements main capabilities for the stress harness.
+// Usage: Run in integration environments to pressure-test server throughput and protocol stability.
+// Notes: Spawns multiple client connections to simulate load.
+
 package main
 
 import (

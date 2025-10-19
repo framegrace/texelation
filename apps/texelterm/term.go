@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: apps/texelterm/term.go
+// Summary: Implements term capabilities for the terminal application.
+// Usage: Spawned by desktop factories to provide shell access.
+// Notes: Wraps PTY management and integrates with the parser package.
+
 package texelterm
 
 import (

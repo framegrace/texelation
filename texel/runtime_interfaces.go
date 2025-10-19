@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: texel/runtime_interfaces.go
+// Summary: Implements runtime interfaces capabilities for the core desktop engine.
+// Usage: Used throughout the project to implement runtime interfaces inside the desktop and panes.
+// Notes: Legacy desktop logic migrated from the monolithic application.
+
 package texel
 
 import "github.com/gdamore/tcell/v2"

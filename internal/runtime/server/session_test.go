@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/runtime/server/session_test.go
+// Summary: Exercises session behaviour to ensure the server runtime remains reliable.
+// Usage: Executed during `go test` to guard against regressions.
+// Notes: This package bridges the legacy desktop code with the client/server protocol implementation.
+
 package server
 
 import (

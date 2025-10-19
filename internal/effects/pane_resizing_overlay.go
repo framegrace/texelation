@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/effects/pane_resizing_overlay.go
+// Summary: Implements pane resizing overlay capabilities for the client effect subsystem.
+// Usage: Used by the client runtime to orchestrate pane resizing overlay visuals before rendering.
+// Notes: Centralises every pane and workspace overlay so they can be configured via themes.
+
 package effects
 
 import (

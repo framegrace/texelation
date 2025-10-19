@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: texel/tree.go
+// Summary: Implements tree capabilities for the core desktop engine.
+// Usage: Used throughout the project to implement tree inside the desktop and panes.
+// Notes: Legacy desktop logic migrated from the monolithic application.
+
 package texel
 
 import (

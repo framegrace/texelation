@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: protocol/buffer_delta_test.go
+// Summary: Exercises buffer delta behaviour to ensure the protocol definitions remains reliable.
+// Usage: Executed during `go test` to guard against regressions.
+// Notes: Keep changes backward-compatible; any additions require coordinated version bumps.
+
 package protocol
 
 import "testing"

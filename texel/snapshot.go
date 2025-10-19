@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: texel/snapshot.go
+// Summary: Implements snapshot capabilities for the core desktop engine.
+// Usage: Used throughout the project to implement snapshot inside the desktop and panes.
+// Notes: Legacy desktop logic migrated from the monolithic application.
+
 package texel
 
 // PaneSnapshot captures the render buffer for a pane along with a stable ID.

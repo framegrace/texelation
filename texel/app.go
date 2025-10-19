@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: texel/app.go
+// Summary: Implements app capabilities for the core desktop engine.
+// Usage: Used throughout the project to implement app inside the desktop and panes.
+// Notes: Legacy desktop logic migrated from the monolithic application.
+
 package texel
 
 import "github.com/gdamore/tcell/v2"

@@ -1,6 +1,14 @@
 //go:build integration
 // +build integration
 
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/runtime/server/server_desktop_integration_test.go
+// Summary: Exercises server desktop integration behaviour to ensure the server runtime remains reliable.
+// Usage: Executed during `go test` to guard against regressions.
+// Notes: This package bridges the legacy desktop code with the client/server protocol implementation.
+
 package server
 
 import (

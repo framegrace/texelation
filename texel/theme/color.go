@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: texel/theme/color.go
+// Summary: Implements color capabilities for the theme subsystem.
+// Usage: Accessed by both server and client when reading color from theme configurations.
+// Notes: Ensures user theme files always contain required defaults.
+
 package theme
 
 import (

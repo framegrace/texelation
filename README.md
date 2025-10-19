@@ -79,7 +79,10 @@ Additional helpers:
 4. Tag the release (`git tag vX.Y.Z && git push --tags`).
 5. Publish binaries from `dist/` if cross-platform artifacts are required.
 
+## License
+
+Texelation is licensed under the GNU Affero General Public License version 3.0 (or any later version at your option). See `LICENSE` for the full text. Contributions must be compatible with AGPLv3.
+
 ## Contributing
 
 Issues and pull requests are welcome! Please run `make fmt test` before submitting patches and mention whether any integration tests were executed. For significant protocol or runtime changes, add notes to `docs/` explaining new behaviour.
-

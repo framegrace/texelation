@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: apps/texelterm/parser/cell.go
+// Summary: Implements cell capabilities for the terminal parser module.
+// Usage: Consumed by the terminal app when decoding VT sequences.
+// Notes: Keeps parsing concerns isolated from rendering.
+
 package parser
 
 type Attribute uint16

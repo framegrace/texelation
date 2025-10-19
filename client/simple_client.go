@@ -1,3 +1,11 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: client/simple_client.go
+// Summary: Implements simple client capabilities for the client runtime support library.
+// Usage: Imported by the remote renderer to manage simple client during live sessions.
+// Notes: Shared across multiple client binaries and tests.
+
 package client
 
 import (
