@@ -897,8 +897,10 @@ func collapseRectTowards(source, reference PaneRect) PaneRect {
 			target.X = source.X
 		} else if reference.X >= source.X+source.Width {
 			target.X = source.X + source.Width
-		} else {
+		} else if reference.X < source.X {
 			target.X = source.X
+		} else {
+			target.X = source.X + source.Width
 		}
 		target.Width = 0
 		return target
@@ -910,8 +912,10 @@ func collapseRectTowards(source, reference PaneRect) PaneRect {
 			target.Y = source.Y
 		} else if reference.Y >= source.Y+source.Height {
 			target.Y = source.Y + source.Height
-		} else {
+		} else if reference.Y < source.Y {
 			target.Y = source.Y
+		} else {
+			target.Y = source.Y + source.Height
 		}
 		target.Height = 0
 		return target
@@ -924,21 +928,23 @@ func collapseRectTowards(source, reference PaneRect) PaneRect {
 func alignRectToEdge(target, reference PaneRect) PaneRect {
 	start := target
 	if reference == (PaneRect{}) {
-		start.Y = target.Y
-		start.Height = target.Height
 		start.X = target.X + target.Width
 		start.Width = 0
+		start.Y = target.Y
+		start.Height = target.Height
 		return start
 	}
 	if target.Y == reference.Y && target.Height == reference.Height {
 		start.Y = target.Y
 		start.Height = target.Height
 		if target.X >= reference.X+reference.Width {
-			start.X = target.X + target.Width
+			start.X = reference.X + reference.Width
 		} else if target.X+target.Width <= reference.X {
-			start.X = target.X
+			start.X = reference.X
+		} else if target.X < reference.X {
+			start.X = reference.X
 		} else {
-			start.X = target.X + target.Width
+			start.X = reference.X + reference.Width
 		}
 		start.Width = 0
 		return start
@@ -947,11 +953,13 @@ func alignRectToEdge(target, reference PaneRect) PaneRect {
 		start.X = target.X
 		start.Width = target.Width
 		if target.Y >= reference.Y+reference.Height {
-			start.Y = target.Y + target.Height
+			start.Y = reference.Y + reference.Height
 		} else if target.Y+target.Height <= reference.Y {
-			start.Y = target.Y
+			start.Y = reference.Y
+		} else if target.Y < reference.Y {
+			start.Y = reference.Y
 		} else {
-			start.Y = target.Y + target.Height
+			start.Y = reference.Y + reference.Height
 		}
 		start.Height = 0
 		return start
