@@ -818,12 +818,22 @@ func findRelatedPane(rect PaneRect, candidates map[[16]byte]PaneRect) (PaneID, P
 	var bestID PaneID
 	bestRect := PaneRect{}
 	bestArea := -1
+	dirHorizontal := rect.Width >= rect.Height
 	for id, candidate := range candidates {
-		area := sharedEdgeScore(rect, candidate)
-		if area > bestArea {
-			bestArea = area
+		score := sharedEdgeScore(rect, candidate)
+		if score > bestArea {
+			bestArea = score
 			bestID = id
 			bestRect = candidate
+		} else if score == bestArea && score > 0 {
+			// tie break: prefer matching orientation
+			if dirHorizontal && candidate.Height == rect.Height {
+				bestID = id
+				bestRect = candidate
+			} else if !dirHorizontal && candidate.Width == rect.Width {
+				bestID = id
+				bestRect = candidate
+			}
 		}
 	}
 	return bestID, bestRect
