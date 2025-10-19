@@ -879,10 +879,10 @@ func collapseRectTowards(source, reference PaneRect) PaneRect {
 	if source.Y == reference.Y && source.Height == reference.Height {
 		target.Y = source.Y
 		target.Height = source.Height
-		if reference.X >= source.X+source.Width {
-			target.X = source.X + source.Width
-		} else if reference.X+reference.Width <= source.X {
+		if reference.X+reference.Width <= source.X {
 			target.X = source.X
+		} else if reference.X >= source.X+source.Width {
+			target.X = source.X + source.Width
 		} else {
 			target.X = source.X
 		}
@@ -892,10 +892,10 @@ func collapseRectTowards(source, reference PaneRect) PaneRect {
 	if source.X == reference.X && source.Width == reference.Width {
 		target.X = source.X
 		target.Width = source.Width
-		if reference.Y >= source.Y+source.Height {
-			target.Y = source.Y + source.Height
-		} else if reference.Y+reference.Height <= source.Y {
+		if reference.Y+reference.Height <= source.Y {
 			target.Y = source.Y
+		} else if reference.Y >= source.Y+source.Height {
+			target.Y = source.Y + source.Height
 		} else {
 			target.Y = source.Y
 		}
