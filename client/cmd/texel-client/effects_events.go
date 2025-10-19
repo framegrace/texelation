@@ -33,6 +33,7 @@ type EffectTrigger struct {
 	DeltaCols, DeltaRows int
 	Timestamp            time.Time
 	PaneBuffer           [][]client.Cell
+	Ghost                bool
 }
 
 const (

@@ -53,6 +53,7 @@ type uiState struct {
 	lastPaneBuffer map[[16]byte][][]client.Cell
 	workspaceCols  int
 	workspaceRows  int
+	geometryCfg    geometryConfig
 }
 
 func (s *uiState) setRenderChannel(ch chan<- struct{}) {
@@ -129,11 +130,17 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 		Timestamp: time.Now(),
 	})
 
+	if sec, ok := s.themeValues["geometry"]; ok {
+		s.geometryCfg = parseGeometryConfig(sec)
+	} else {
+		s.geometryCfg = parseGeometryConfig(nil)
+	}
+
 	geom := newGeometryManager()
 	if s.renderCh != nil {
 		geom.attachRenderChannel(s.renderCh)
 	}
-	geom.registerEffect(newGeometryTransitionEffect())
+	geom.registerEffect(newGeometryTransitionEffect(s.geometryCfg))
 	s.geometry = geom
 	if s.lastPaneRects == nil {
 		s.lastPaneRects = make(map[[16]byte]PaneRect)
@@ -756,7 +763,12 @@ func (s *uiState) refreshPaneGeometry(emit bool) {
 				}
 			} else {
 				relatedID, relatedRect := findRelatedPane(rect, previous)
-				startRect := expandRectFromLine(rect, relatedRect)
+				startRect := rect
+				if s.geometryCfg.SplitMode == splitModeGhost {
+					startRect = expandRectFromLine(rect, relatedRect)
+				} else if relatedRect != (PaneRect{}) {
+					startRect = relatedRect
+				}
 				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneCreated, PaneID: pane.ID, RelatedPaneID: relatedID, OldRect: startRect, NewRect: rect, Timestamp: now})
 			}
 		}
@@ -766,12 +778,13 @@ func (s *uiState) refreshPaneGeometry(emit bool) {
 			if _, ok := current[id]; !ok {
 				relatedID, relatedRect := findRelatedPane(oldRect, current)
 				targetRect := collapseRectTowards(oldRect, relatedRect)
+				ghost := s.geometryCfg.RemoveMode == removeModeGhost
 				var buffer [][]client.Cell
 				if s.lastPaneBuffer != nil {
 					buffer = s.lastPaneBuffer[id]
 					delete(s.lastPaneBuffer, id)
 				}
-				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneRemoved, PaneID: id, RelatedPaneID: relatedID, OldRect: oldRect, NewRect: targetRect, PaneBuffer: buffer, Timestamp: now})
+				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneRemoved, PaneID: id, RelatedPaneID: relatedID, OldRect: oldRect, NewRect: targetRect, PaneBuffer: buffer, Ghost: ghost, Timestamp: now})
 			}
 		}
 	}

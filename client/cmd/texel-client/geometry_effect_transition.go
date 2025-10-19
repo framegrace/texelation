@@ -31,11 +31,13 @@ type geometryTransitionEffect struct {
 	panes      map[[16]byte]*paneAnimation
 	zoom       *zoomAnimation
 	lastUpdate time.Time
+	cfg        geometryConfig
 }
 
-func newGeometryTransitionEffect() *geometryTransitionEffect {
+func newGeometryTransitionEffect(cfg geometryConfig) *geometryTransitionEffect {
 	return &geometryTransitionEffect{
 		panes: make(map[[16]byte]*paneAnimation),
+		cfg:   cfg,
 	}
 }
 
@@ -77,31 +79,30 @@ func (e *geometryTransitionEffect) HandleTrigger(trigger EffectTrigger) {
 			start:     trigger.OldRect,
 			end:       trigger.NewRect,
 			startTime: now,
-			duration:  160 * time.Millisecond,
+			duration:  e.cfg.SplitDuration,
 		}
 		e.panes[trigger.PaneID] = anim
-	case TriggerPaneRemoved:
-		if len(trigger.PaneBuffer) == 0 {
-			// without buffer nothing to animate
-			return
-		}
-		anim := &paneAnimation{
-			start:     trigger.OldRect,
-			end:       trigger.NewRect,
-			startTime: now,
-			duration:  160 * time.Millisecond,
-			buffer:    trigger.PaneBuffer,
-			ghost:     true,
-			forceTop:  true,
-		}
-		e.panes[trigger.PaneID] = anim
+case TriggerPaneRemoved:
+    anim := &paneAnimation{
+        start:     trigger.OldRect,
+        end:       trigger.NewRect,
+        startTime: now,
+        duration:  e.cfg.RemoveDuration,
+        buffer:    trigger.PaneBuffer,
+        ghost:     trigger.Ghost,
+        forceTop:  trigger.Ghost,
+    }
+    if !anim.ghost && len(anim.buffer) > 0 {
+        anim.ghost = true
+    }
+    e.panes[trigger.PaneID] = anim
 	case TriggerWorkspaceZoom:
 		zoom := &zoomAnimation{
 			paneID:    trigger.PaneID,
 			start:     trigger.OldRect,
 			end:       trigger.NewRect,
 			startTime: now,
-			duration:  220 * time.Millisecond,
+			duration:  e.cfg.ZoomDuration,
 			active:    true,
 		}
 		e.zoom = zoom
