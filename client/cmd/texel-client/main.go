@@ -1,20 +1,20 @@
 package main
 
 import (
-	"encoding/json"
-	"flag"
-	"fmt"
-	"log"
-	"net"
-	"os"
-	"path/filepath"
-	"runtime"
-	"sort"
-	"strconv"
-	"sync"
-	"sync/atomic"
-	"time"
-	"unicode/utf8"
+    "encoding/json"
+    "flag"
+    "fmt"
+    "log"
+    "net"
+    "os"
+    "path/filepath"
+    "runtime"
+    "sort"
+    "strconv"
+    "sync"
+    "sync/atomic"
+    "time"
+    "unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -835,6 +835,9 @@ func findRelatedPane(rect PaneRect, candidates map[[16]byte]PaneRect) (PaneID, P
 				bestRect = candidate
 			}
 		}
+	}
+	if bestID != ([16]byte{}) {
+		log.Printf("geom-select: new=%+v peer=%x rect=%+v score=%d", rect, bestID[:4], bestRect, bestArea)
 	}
 	return bestID, bestRect
 }

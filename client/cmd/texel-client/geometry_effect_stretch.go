@@ -1,8 +1,9 @@
 package main
 
 import (
-	"sync"
-	"time"
+    "log"
+    "sync"
+    "time"
 )
 
 type stretchGeometryEffect struct {
@@ -71,6 +72,7 @@ func (e *stretchGeometryEffect) ApplyGeometry(panes map[[16]byte]*geometryPaneSt
 		if state := panes[id]; state != nil {
 			state.Rect = rect
 			state.Dirty = true
+			log.Printf("geom-stretch: pane=%x progress=%.2f rect=%+v", id[:4], progress, rect)
 		}
 		if peerID := e.peers[id]; peerID != ([16]byte{}) {
 			if _, animated := e.panes[peerID]; !animated {
@@ -78,6 +80,7 @@ func (e *stretchGeometryEffect) ApplyGeometry(panes map[[16]byte]*geometryPaneSt
 					peerRect := adjustPeerRect(peerState.Base, rect)
 					peerState.Rect = peerRect
 					peerState.Dirty = true
+					log.Printf("geom-stretch: peer=%x base=%+v rect=%+v", peerID[:4], peerState.Base, peerRect)
 				}
 			}
 		}
