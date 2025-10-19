@@ -28,6 +28,8 @@ func (r *recordingSink) HandleThemeUpdate(session *Session, event protocol.Theme
 
 func (r *recordingSink) HandlePaneFocus(session *Session, focus protocol.PaneFocus) {}
 
+func (r *recordingSink) HandlePaste(session *Session, paste protocol.Paste) {}
+
 func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 	mgr := NewManager()
 	client, srv := net.Pipe()
