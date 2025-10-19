@@ -1,20 +1,20 @@
 package main
 
 import (
-    "encoding/json"
-    "flag"
-    "fmt"
-    "log"
-    "net"
-    "os"
-    "path/filepath"
-    "runtime"
-    "sort"
-    "strconv"
-    "sync"
-    "sync/atomic"
-    "time"
-    "unicode/utf8"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -380,6 +380,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			return false
 		}
 		cache.ApplyDelta(delta)
+		log.Printf("geom-delta: pane=%x rows=%d flags=%d", delta.PaneID[:4], len(delta.Rows), delta.Flags)
 		state.refreshPaneGeometry(true)
 		scheduleAck(pendingAck, ackSignal, hdr.Sequence)
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
