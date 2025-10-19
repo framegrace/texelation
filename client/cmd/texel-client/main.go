@@ -818,7 +818,7 @@ func findRelatedPane(rect PaneRect, candidates map[[16]byte]PaneRect) (PaneID, P
 	bestRect := PaneRect{}
 	bestArea := -1
 	for id, candidate := range candidates {
-		area := rectOverlapArea(rect, candidate)
+		area := sharedEdgeScore(rect, candidate)
 		if area > bestArea {
 			bestArea = area
 			bestID = id
@@ -837,6 +837,20 @@ func rectOverlapArea(a, b PaneRect) int {
 		return 0
 	}
 	return (x1 - x0) * (y1 - y0)
+}
+
+func sharedEdgeScore(a, b PaneRect) int {
+	if a.Width == b.Width && a.X == b.X {
+		if a.Y+a.Height == b.Y || b.Y+b.Height == a.Y {
+			return a.Width
+		}
+	}
+	if a.Height == b.Height && a.Y == b.Y {
+		if a.X+a.Width == b.X || b.X+b.Width == a.X {
+			return a.Height
+		}
+	}
+	return rectOverlapArea(a, b)
 }
 
 func expandRectFromLine(target, reference PaneRect) PaneRect {

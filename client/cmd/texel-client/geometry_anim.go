@@ -60,3 +60,37 @@ func easeInOutQuad(t float32) float32 {
 	}
 	return -1 + (4-2*t)*t
 }
+
+func adjustPeerRect(peerBase, childRect PaneRect) PaneRect {
+	peer := peerBase
+	if peer.Width == childRect.Width {
+		// vertical: adjust height
+		if childRect.Y <= peer.Y {
+			delta := (peer.Y + peer.Height) - (childRect.Y + childRect.Height)
+			if delta < 0 {
+				delta = 0
+			}
+			peer.Y = childRect.Y + childRect.Height
+			peer.Height = maxInt(0, peer.Height-delta)
+		} else {
+			peer.Height = maxInt(0, childRect.Y-peer.Y)
+		}
+		return peer
+	}
+	if peer.Height == childRect.Height {
+		// horizontal: adjust width
+		if childRect.X <= peer.X {
+			delta := (peer.X + peer.Width) - (childRect.X + childRect.Width)
+			if delta < 0 {
+				delta = 0
+			}
+			peer.X = childRect.X + childRect.Width
+			peer.Width = maxInt(0, peer.Width-delta)
+		} else {
+			peer.Width = maxInt(0, childRect.X-peer.X)
+		}
+		return peer
+	}
+	// fallback: no change
+	return peer
+}

@@ -9,12 +9,14 @@ type stretchGeometryEffect struct {
 	mu    sync.Mutex
 	cfg   geometryConfig
 	panes map[PaneID]*paneAnimation
+	peers map[PaneID]PaneID
 }
 
 func newStretchEffect(cfg geometryConfig) GeometryEffect {
 	return &stretchGeometryEffect{
 		cfg:   cfg,
 		panes: make(map[PaneID]*paneAnimation),
+		peers: make(map[PaneID]PaneID),
 	}
 }
 
@@ -53,6 +55,7 @@ func (e *stretchGeometryEffect) HandleTrigger(trigger EffectTrigger) {
 		duration:  e.cfg.SplitDuration,
 	}
 	e.panes[trigger.PaneID] = anim
+	e.peers[trigger.PaneID] = trigger.RelatedPaneID
 	e.mu.Unlock()
 }
 
@@ -67,6 +70,12 @@ func (e *stretchGeometryEffect) ApplyGeometry(panes map[[16]byte]*geometryPaneSt
 		rect := lerpRect(anim.start, anim.end, progress)
 		if state := panes[id]; state != nil {
 			state.Rect = rect
+		}
+		if peerID := e.peers[id]; peerID != ([16]byte{}) {
+			if peerState := panes[peerID]; peerState != nil {
+				peerRect := adjustPeerRect(peerState.Base, rect)
+				peerState.Rect = peerRect
+			}
 		}
 	}
 	e.mu.Unlock()
