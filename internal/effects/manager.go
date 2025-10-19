@@ -1,4 +1,4 @@
-package main
+package effects
 
 import (
 	"sync"
@@ -7,7 +7,7 @@ import (
 	"texelation/client"
 )
 
-type effectManager struct {
+type Manager struct {
 	mu               sync.RWMutex
 	paneEffects      []PaneEffect
 	workspaceEffects []WorkspaceEffect
@@ -16,14 +16,14 @@ type effectManager struct {
 	frameTimer       *time.Timer
 }
 
-func newEffectManager() *effectManager {
-	return &effectManager{
+func NewManager() *Manager {
+	return &Manager{
 		paneEffects:      make([]PaneEffect, 0),
 		workspaceEffects: make([]WorkspaceEffect, 0),
 	}
 }
 
-func (m *effectManager) attachRenderChannel(ch chan<- struct{}) {
+func (m *Manager) AttachRenderChannel(ch chan<- struct{}) {
 	m.frameMu.Lock()
 	m.renderCh = ch
 	if m.frameTimer != nil {
@@ -33,19 +33,19 @@ func (m *effectManager) attachRenderChannel(ch chan<- struct{}) {
 	m.frameMu.Unlock()
 }
 
-func (m *effectManager) registerPaneEffect(effect PaneEffect) {
+func (m *Manager) RegisterPaneEffect(effect PaneEffect) {
 	m.mu.Lock()
 	m.paneEffects = append(m.paneEffects, effect)
 	m.mu.Unlock()
 }
 
-func (m *effectManager) registerWorkspaceEffect(effect WorkspaceEffect) {
+func (m *Manager) RegisterWorkspaceEffect(effect WorkspaceEffect) {
 	m.mu.Lock()
 	m.workspaceEffects = append(m.workspaceEffects, effect)
 	m.mu.Unlock()
 }
 
-func (m *effectManager) requestFrame() {
+func (m *Manager) requestFrame() {
 	m.frameMu.Lock()
 	if m.renderCh == nil {
 		m.frameMu.Unlock()
@@ -68,7 +68,7 @@ func (m *effectManager) requestFrame() {
 	m.frameMu.Unlock()
 }
 
-func (m *effectManager) Update(now time.Time) {
+func (m *Manager) Update(now time.Time) {
 	if m == nil {
 		return
 	}
@@ -94,7 +94,7 @@ func (m *effectManager) Update(now time.Time) {
 	}
 }
 
-func (m *effectManager) ApplyPaneEffects(pane *client.PaneState, buffer [][]client.Cell) {
+func (m *Manager) ApplyPaneEffects(pane *client.PaneState, buffer [][]client.Cell) {
 	if m == nil {
 		return
 	}
@@ -106,7 +106,7 @@ func (m *effectManager) ApplyPaneEffects(pane *client.PaneState, buffer [][]clie
 	}
 }
 
-func (m *effectManager) ApplyWorkspaceEffects(buffer [][]client.Cell) {
+func (m *Manager) ApplyWorkspaceEffects(buffer [][]client.Cell) {
 	if m == nil {
 		return
 	}
@@ -118,7 +118,7 @@ func (m *effectManager) ApplyWorkspaceEffects(buffer [][]client.Cell) {
 	}
 }
 
-func (m *effectManager) HandleTrigger(trigger EffectTrigger) {
+func (m *Manager) HandleTrigger(trigger EffectTrigger) {
 	if m == nil {
 		return
 	}
@@ -138,7 +138,7 @@ func (m *effectManager) HandleTrigger(trigger EffectTrigger) {
 	m.requestFrame()
 }
 
-func (m *effectManager) ResetPaneStates(panes []*client.PaneState) {
+func (m *Manager) ResetPaneStates(panes []*client.PaneState) {
 	if m == nil {
 		return
 	}

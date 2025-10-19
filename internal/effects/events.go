@@ -1,4 +1,4 @@
-package main
+package effects
 
 import (
 	"time"
@@ -18,22 +18,22 @@ type PaneRect struct {
 }
 
 type EffectTrigger struct {
-    Type                 EffectTriggerType
-    PaneID               PaneID
-    RelatedPaneID        PaneID
-    WorkspaceID          int
-    Key                  rune
-    Modifiers            uint16
-    Active               bool
-    Resizing             bool
-    NewRect              PaneRect
-    OldRect              PaneRect
-    Title                string
-    ZOrder               int
-    DeltaCols, DeltaRows int
-    Timestamp            time.Time
-    PaneBuffer           [][]client.Cell
-    Ghost                bool
+	Type                 EffectTriggerType
+	PaneID               PaneID
+	RelatedPaneID        PaneID
+	WorkspaceID          int
+	Key                  rune
+	Modifiers            uint16
+	Active               bool
+	Resizing             bool
+	NewRect              PaneRect
+	OldRect              PaneRect
+	Title                string
+	ZOrder               int
+	DeltaCols, DeltaRows int
+	Timestamp            time.Time
+	PaneBuffer           [][]client.Cell
+	Ghost                bool
 }
 
 const (

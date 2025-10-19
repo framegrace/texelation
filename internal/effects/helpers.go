@@ -1,7 +1,8 @@
-package main
+package effects
 
 import (
 	"math"
+	"strconv"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -11,6 +12,21 @@ var (
 	defaultFlashColor    = tcell.NewRGBColor(255, 255, 255)
 	defaultResizingColor = tcell.NewRGBColor(255, 184, 108)
 )
+
+func parseHexColor(value string) (tcell.Color, bool) {
+	if len(value) == 0 {
+		return tcell.ColorDefault, false
+	}
+	if len(value) == 7 && value[0] == '#' {
+		if fg, err := strconv.ParseInt(value[1:], 16, 32); err == nil {
+			r := int32((fg >> 16) & 0xFF)
+			g := int32((fg >> 8) & 0xFF)
+			b := int32(fg & 0xFF)
+			return tcell.NewRGBColor(r, g, b), true
+		}
+	}
+	return tcell.ColorDefault, false
+}
 
 func tintStyle(style tcell.Style, overlay tcell.Color, intensity float32) tcell.Style {
 	if intensity <= 0 {

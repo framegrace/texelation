@@ -1,4 +1,4 @@
-package main
+package effects
 
 import (
 	"sync"
@@ -9,7 +9,7 @@ import (
 	"texelation/client"
 )
 
-type resizingOverlayEffect struct {
+type inactiveOverlayEffect struct {
 	color     tcell.Color
 	intensity float32
 	duration  time.Duration
@@ -17,13 +17,13 @@ type resizingOverlayEffect struct {
 	mu        sync.Mutex
 }
 
-func newResizingOverlayEffect(color tcell.Color, intensity float32, duration time.Duration) *resizingOverlayEffect {
-	eff := &resizingOverlayEffect{timelines: make(map[[16]byte]*fadeTimeline)}
+func newInactiveOverlayEffect(color tcell.Color, intensity float32, duration time.Duration) *inactiveOverlayEffect {
+	eff := &inactiveOverlayEffect{timelines: make(map[[16]byte]*fadeTimeline)}
 	eff.Configure(color, intensity, duration)
 	return eff
 }
 
-func (e *resizingOverlayEffect) Configure(color tcell.Color, intensity float32, duration time.Duration) {
+func (e *inactiveOverlayEffect) Configure(color tcell.Color, intensity float32, duration time.Duration) {
 	if intensity < 0 {
 		intensity = 0
 	} else if intensity > 1 {
@@ -37,9 +37,9 @@ func (e *resizingOverlayEffect) Configure(color tcell.Color, intensity float32, 
 	e.duration = duration
 }
 
-func (e *resizingOverlayEffect) ID() string { return "pane-resizing-overlay" }
+func (e *inactiveOverlayEffect) ID() string { return "pane-inactive-overlay" }
 
-func (e *resizingOverlayEffect) Active() bool {
+func (e *inactiveOverlayEffect) Active() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, tl := range e.timelines {
@@ -50,7 +50,7 @@ func (e *resizingOverlayEffect) Active() bool {
 	return false
 }
 
-func (e *resizingOverlayEffect) Update(now time.Time) {
+func (e *inactiveOverlayEffect) Update(now time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, timeline := range e.timelines {
@@ -58,8 +58,8 @@ func (e *resizingOverlayEffect) Update(now time.Time) {
 	}
 }
 
-func (e *resizingOverlayEffect) HandleTrigger(trigger EffectTrigger) {
-	if trigger.Type != TriggerPaneResizing {
+func (e *inactiveOverlayEffect) HandleTrigger(trigger EffectTrigger) {
+	if trigger.Type != TriggerPaneActive {
 		return
 	}
 	e.mu.Lock()
@@ -69,7 +69,7 @@ func (e *resizingOverlayEffect) HandleTrigger(trigger EffectTrigger) {
 		e.timelines[trigger.PaneID] = timeline
 	}
 	target := float32(0)
-	if trigger.Resizing {
+	if !trigger.Active {
 		target = e.intensity
 	}
 	when := trigger.Timestamp
@@ -85,15 +85,15 @@ func (e *resizingOverlayEffect) HandleTrigger(trigger EffectTrigger) {
 	e.mu.Unlock()
 }
 
-func (e *resizingOverlayEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {
-	if pane == nil || len(buffer) == 0 {
+func (e *inactiveOverlayEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {
+	if pane == nil {
 		return
 	}
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	timeline := e.timelines[pane.ID]
 	if timeline == nil {
-		if !pane.Resizing {
-			e.mu.Unlock()
+		if pane.Active {
 			return
 		}
 		timeline = &fadeTimeline{}
@@ -101,7 +101,6 @@ func (e *resizingOverlayEffect) ApplyPane(pane *client.PaneState, buffer [][]cli
 		timeline.setInstant(e.intensity, e.duration, time.Now())
 	}
 	intensity := timeline.current
-	e.mu.Unlock()
 	if intensity <= 0 {
 		return
 	}

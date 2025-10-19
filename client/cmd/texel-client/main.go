@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -18,6 +17,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"texelation/client"
+	"texelation/internal/effects"
+	clientrt "texelation/internal/runtime/client"
 	"texelation/protocol"
 	"texelation/texel/theme"
 )
@@ -46,9 +47,9 @@ type uiState struct {
 	zoomedPane     [16]byte
 	pasting        bool
 	pasteBuf       []byte
-	effectRegistry *effectRegistry
+	effectRegistry *effects.Registry
 	renderCh       chan<- struct{}
-	effects        *effectManager
+	effects        *effects.Manager
 	resizeMu       sync.Mutex
 	pendingResize  protocol.Resize
 	resizeSeq      uint64
@@ -57,7 +58,7 @@ type uiState struct {
 func (s *uiState) setRenderChannel(ch chan<- struct{}) {
 	s.renderCh = ch
 	if s.effects != nil {
-		s.effects.attachRenderChannel(ch)
+		s.effects.AttachRenderChannel(ch)
 	}
 }
 
@@ -96,17 +97,17 @@ func (s *uiState) scheduleResize(writeMu *sync.Mutex, conn net.Conn, sessionID [
 	}()
 }
 
-func (s *uiState) applyEffectConfig(reg *effectRegistry) {
+func (s *uiState) applyEffectConfig(reg *effects.Registry) {
 	if reg == nil {
 		if s.effectRegistry != nil {
 			reg = s.effectRegistry
 		} else {
-			reg = newEffectRegistry()
+			reg = effects.NewRegistry()
 		}
 	}
 	s.effectRegistry = reg
 
-	defaultPaneSpecs := []paneEffectSpec{
+	defaultPaneSpecs := []effects.PaneEffectSpec{
 		{ID: "inactive-overlay"},
 		{ID: "resizing-overlay"},
 	}
@@ -117,7 +118,7 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 			usePaneDefaults = false
 			if raw == nil || raw == "" {
 				paneSpecs = nil
-			} else if specs, err := parsePaneEffectSpecs(raw); err == nil {
+			} else if specs, err := effects.ParsePaneEffectSpecs(raw); err == nil {
 				paneSpecs = specs
 			} else {
 				paneSpecs = nil
@@ -128,7 +129,7 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 		paneSpecs = defaultPaneSpecs
 	}
 
-	defaultWorkspaceSpecs := []workspaceEffectSpec{{ID: "rainbow"}, {ID: "flash"}}
+	defaultWorkspaceSpecs := []effects.WorkspaceEffectSpec{{ID: "rainbow"}, {ID: "flash"}}
 	workspaceSpecs := defaultWorkspaceSpecs
 	useWorkspaceDefaults := true
 	if section, ok := s.themeValues["workspace"]; ok {
@@ -136,7 +137,7 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 			useWorkspaceDefaults = false
 			if raw == nil || raw == "" {
 				workspaceSpecs = nil
-			} else if specs, err := parseWorkspaceEffectSpecs(raw); err == nil {
+			} else if specs, err := effects.ParseWorkspaceEffectSpecs(raw); err == nil {
 				workspaceSpecs = specs
 			} else {
 				workspaceSpecs = nil
@@ -147,74 +148,29 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 		workspaceSpecs = defaultWorkspaceSpecs
 	}
 
-	manager := newEffectManager()
+	manager := effects.NewManager()
 	for _, spec := range paneSpecs {
-		if eff := reg.createPaneEffect(spec); eff != nil {
-			manager.registerPaneEffect(eff)
+		if eff := reg.CreatePaneEffect(spec); eff != nil {
+			manager.RegisterPaneEffect(eff)
 		}
 	}
 	for _, spec := range workspaceSpecs {
-		if eff := reg.createWorkspaceEffect(spec); eff != nil {
-			manager.registerWorkspaceEffect(eff)
+		if eff := reg.CreateWorkspaceEffect(spec); eff != nil {
+			manager.RegisterWorkspaceEffect(eff)
 		}
 	}
 	if s.renderCh != nil {
-		manager.attachRenderChannel(s.renderCh)
+		manager.AttachRenderChannel(s.renderCh)
 	}
 	s.effects = manager
 	if s.cache != nil {
 		s.effects.ResetPaneStates(s.cache.SortedPanes())
 	}
-	s.effects.HandleTrigger(EffectTrigger{
-		Type:      TriggerWorkspaceControl,
+	s.effects.HandleTrigger(effects.EffectTrigger{
+		Type:      effects.TriggerWorkspaceControl,
 		Active:    s.controlMode,
 		Timestamp: time.Now(),
 	})
-}
-
-type panicLogger struct {
-	path string
-	mu   sync.Mutex
-}
-
-func newPanicLogger(path string) *panicLogger {
-	return &panicLogger{path: path}
-}
-
-func (p *panicLogger) Recover(context string) {
-	if r := recover(); r != nil {
-		p.logPanic(context, r)
-		os.Exit(2)
-	}
-}
-
-func (p *panicLogger) Go(context string, fn func()) {
-	go func() {
-		defer p.Recover(context)
-		fn()
-	}()
-}
-
-func (p *panicLogger) logPanic(context string, r interface{}) {
-	buf := make([]byte, 1<<16)
-	n := runtime.Stack(buf, true)
-	stack := buf[:n]
-	msg := fmt.Sprintf("panic in %s: %v\n%s", context, r, stack)
-	log.Print(msg)
-	fmt.Fprintln(os.Stderr, msg)
-	if p.path == "" {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	f, err := os.OpenFile(p.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		log.Printf("panic: unable to write panic log: %v", err)
-		return
-	}
-	defer f.Close()
-	ts := time.Now().Format(time.RFC3339Nano)
-	fmt.Fprintf(f, "[%s] panic in %s: %v\n%s\n", ts, context, r, stack)
 }
 
 func main() {
@@ -223,7 +179,7 @@ func main() {
 	panicLogPath := flag.String("panic-log", "", "File to append panic stack traces")
 	flag.Parse()
 
-	panicLogger := newPanicLogger(*panicLogPath)
+	panicLogger := clientrt.NewPanicLogger(*panicLogPath)
 	defer panicLogger.Recover("main")
 
 	logFile, err := setupLogging()
@@ -268,7 +224,7 @@ func main() {
 		}
 	}
 
-	registry := newEffectRegistry()
+	registry := effects.NewRegistry()
 	state.effectRegistry = registry
 	state.applyEffectConfig(nil)
 	lastSequence := uint64(0)
@@ -482,8 +438,8 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		state.cache.SetPaneFlags(paneFlags.PaneID, active, resizing, paneFlags.ZOrder)
 		if state.effects != nil {
 			ts := time.Now()
-			state.effects.HandleTrigger(EffectTrigger{Type: TriggerPaneActive, PaneID: paneFlags.PaneID, Active: active, Timestamp: ts})
-			state.effects.HandleTrigger(EffectTrigger{Type: TriggerPaneResizing, PaneID: paneFlags.PaneID, Resizing: resizing, Timestamp: ts})
+			state.effects.HandleTrigger(effects.EffectTrigger{Type: effects.TriggerPaneActive, PaneID: paneFlags.PaneID, Active: active, Timestamp: ts})
+			state.effects.HandleTrigger(effects.EffectTrigger{Type: effects.TriggerPaneResizing, PaneID: paneFlags.PaneID, Resizing: resizing, Timestamp: ts})
 		}
 		return true
 	case protocol.MsgStateUpdate:
@@ -616,8 +572,8 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 				state.controlMode = false
 				state.subMode = 0
 				if state.effects != nil {
-					state.effects.HandleTrigger(EffectTrigger{
-						Type:      TriggerWorkspaceControl,
+					state.effects.HandleTrigger(effects.EffectTrigger{
+						Type:      effects.TriggerWorkspaceControl,
 						Active:    state.controlMode,
 						Timestamp: time.Now(),
 					})
@@ -630,8 +586,8 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 			state.controlMode = !state.controlMode
 			state.subMode = 0
 			if state.effects != nil {
-				state.effects.HandleTrigger(EffectTrigger{
-					Type:      TriggerWorkspaceControl,
+				state.effects.HandleTrigger(effects.EffectTrigger{
+					Type:      effects.TriggerWorkspaceControl,
 					Active:    state.controlMode,
 					Timestamp: time.Now(),
 				})
@@ -642,8 +598,8 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 			state.controlMode = false
 			state.subMode = 0
 			if state.effects != nil {
-				state.effects.HandleTrigger(EffectTrigger{
-					Type:      TriggerWorkspaceControl,
+				state.effects.HandleTrigger(effects.EffectTrigger{
+					Type:      effects.TriggerWorkspaceControl,
 					Active:    state.controlMode,
 					Timestamp: time.Now(),
 				})
@@ -657,16 +613,16 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 			r := ev.Rune()
 			mod := uint16(ev.Modifiers())
 			if state.hasFocus {
-				state.effects.HandleTrigger(EffectTrigger{
-					Type:      TriggerPaneKey,
+				state.effects.HandleTrigger(effects.EffectTrigger{
+					Type:      effects.TriggerPaneKey,
 					PaneID:    state.focus.PaneID,
 					Key:       r,
 					Modifiers: mod,
 					Timestamp: now,
 				})
 			}
-			state.effects.HandleTrigger(EffectTrigger{
-				Type:        TriggerWorkspaceKey,
+			state.effects.HandleTrigger(effects.EffectTrigger{
+				Type:        effects.TriggerWorkspaceKey,
 				WorkspaceID: state.workspaceID,
 				Key:         r,
 				Modifiers:   mod,
@@ -779,8 +735,8 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 	}
 	s.recomputeDefaultStyle()
 	if s.effects != nil && prevControl != s.controlMode {
-		s.effects.HandleTrigger(EffectTrigger{
-			Type:      TriggerWorkspaceControl,
+		s.effects.HandleTrigger(effects.EffectTrigger{
+			Type:      effects.TriggerWorkspaceControl,
 			Active:    s.controlMode,
 			Timestamp: time.Now(),
 		})
@@ -1040,6 +996,21 @@ func applyZoomOverlay(style tcell.Style, intensity float32, state *uiState) tcel
 		Blink(attrs&tcell.AttrBlink != 0).
 		Dim(attrs&tcell.AttrDim != 0).
 		Italic(attrs&tcell.AttrItalic != 0)
+}
+
+func blendColor(base, overlay tcell.Color, intensity float32) tcell.Color {
+	if !overlay.Valid() || intensity <= 0 {
+		return base
+	}
+	if !base.Valid() {
+		return overlay
+	}
+	br, bg, bb := base.RGB()
+	or, og, ob := overlay.RGB()
+	blend := func(bc, oc int32) int32 {
+		return int32(float32(bc)*(1-intensity) + float32(oc)*intensity)
+	}
+	return tcell.NewRGBColor(blend(br, or), blend(bg, og), blend(bb, ob))
 }
 
 func setupLogging() (*os.File, error) {

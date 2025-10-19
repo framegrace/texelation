@@ -1,4 +1,4 @@
-package main
+package effects
 
 import (
 	"encoding/json"
@@ -10,23 +10,23 @@ import (
 
 type EffectConfig map[string]interface{}
 
-type paneEffectSpec struct {
+type PaneEffectSpec struct {
 	ID     string
 	Config EffectConfig
 }
 
-type workspaceEffectSpec struct {
+type WorkspaceEffectSpec struct {
 	ID     string
 	Config EffectConfig
 }
 
-type effectRegistry struct {
+type Registry struct {
 	paneFactories      map[string]func(EffectConfig) (PaneEffect, error)
 	workspaceFactories map[string]func(EffectConfig) (WorkspaceEffect, error)
 }
 
-func newEffectRegistry() *effectRegistry {
-	reg := &effectRegistry{
+func NewRegistry() *Registry {
+	reg := &Registry{
 		paneFactories:      make(map[string]func(EffectConfig) (PaneEffect, error)),
 		workspaceFactories: make(map[string]func(EffectConfig) (WorkspaceEffect, error)),
 	}
@@ -54,7 +54,7 @@ func newEffectRegistry() *effectRegistry {
 	return reg
 }
 
-func (r *effectRegistry) createPaneEffect(spec paneEffectSpec) PaneEffect {
+func (r *Registry) CreatePaneEffect(spec PaneEffectSpec) PaneEffect {
 	if factory, ok := r.paneFactories[spec.ID]; ok {
 		if eff, err := factory(spec.Config); err == nil {
 			return eff
@@ -63,7 +63,7 @@ func (r *effectRegistry) createPaneEffect(spec paneEffectSpec) PaneEffect {
 	return nil
 }
 
-func (r *effectRegistry) createWorkspaceEffect(spec workspaceEffectSpec) WorkspaceEffect {
+func (r *Registry) CreateWorkspaceEffect(spec WorkspaceEffectSpec) WorkspaceEffect {
 	if factory, ok := r.workspaceFactories[spec.ID]; ok {
 		if eff, err := factory(spec.Config); err == nil {
 			return eff
@@ -72,7 +72,7 @@ func (r *effectRegistry) createWorkspaceEffect(spec workspaceEffectSpec) Workspa
 	return nil
 }
 
-func parsePaneEffectSpecs(raw interface{}) ([]paneEffectSpec, error) {
+func ParsePaneEffectSpecs(raw interface{}) ([]PaneEffectSpec, error) {
 	var entries []map[string]interface{}
 	switch v := raw.(type) {
 	case nil:
@@ -97,7 +97,7 @@ func parsePaneEffectSpecs(raw interface{}) ([]paneEffectSpec, error) {
 	default:
 		return nil, nil
 	}
-	specs := make([]paneEffectSpec, 0, len(entries))
+	specs := make([]PaneEffectSpec, 0, len(entries))
 	for _, entry := range entries {
 		idVal, _ := entry["id"].(string)
 		if idVal == "" {
@@ -110,12 +110,12 @@ func parsePaneEffectSpecs(raw interface{}) ([]paneEffectSpec, error) {
 			}
 			cfg[k] = v
 		}
-		specs = append(specs, paneEffectSpec{ID: idVal, Config: cfg})
+		specs = append(specs, PaneEffectSpec{ID: idVal, Config: cfg})
 	}
 	return specs, nil
 }
 
-func parseWorkspaceEffectSpecs(raw interface{}) ([]workspaceEffectSpec, error) {
+func ParseWorkspaceEffectSpecs(raw interface{}) ([]WorkspaceEffectSpec, error) {
 	var entries []map[string]interface{}
 	switch v := raw.(type) {
 	case nil:
@@ -140,7 +140,7 @@ func parseWorkspaceEffectSpecs(raw interface{}) ([]workspaceEffectSpec, error) {
 	default:
 		return nil, nil
 	}
-	specs := make([]workspaceEffectSpec, 0, len(entries))
+	specs := make([]WorkspaceEffectSpec, 0, len(entries))
 	for _, entry := range entries {
 		idVal, _ := entry["id"].(string)
 		if idVal == "" {
@@ -153,7 +153,7 @@ func parseWorkspaceEffectSpecs(raw interface{}) ([]workspaceEffectSpec, error) {
 			}
 			cfg[k] = v
 		}
-		specs = append(specs, workspaceEffectSpec{ID: idVal, Config: cfg})
+		specs = append(specs, WorkspaceEffectSpec{ID: idVal, Config: cfg})
 	}
 	return specs, nil
 }
