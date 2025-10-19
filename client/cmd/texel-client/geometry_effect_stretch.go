@@ -73,10 +73,12 @@ func (e *stretchGeometryEffect) ApplyGeometry(panes map[[16]byte]*geometryPaneSt
 			state.Dirty = true
 		}
 		if peerID := e.peers[id]; peerID != ([16]byte{}) {
-			if peerState := panes[peerID]; peerState != nil {
-				peerRect := adjustPeerRect(peerState.Base, rect)
-				peerState.Rect = peerRect
-				peerState.Dirty = true
+			if _, animated := e.panes[peerID]; !animated {
+				if peerState := panes[peerID]; peerState != nil {
+					peerRect := adjustPeerRect(peerState.Base, rect)
+					peerState.Rect = peerRect
+					peerState.Dirty = true
+				}
 			}
 		}
 	}
