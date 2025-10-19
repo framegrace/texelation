@@ -140,7 +140,9 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 	if s.renderCh != nil {
 		geom.attachRenderChannel(s.renderCh)
 	}
-	geom.registerEffect(newGeometryTransitionEffect(s.geometryCfg))
+	geom.registerEffect(newSplitGeometryEffect(s.geometryCfg))
+	geom.registerEffect(newRemoveGeometryEffect(s.geometryCfg))
+	geom.registerEffect(newZoomGeometryEffect(s.geometryCfg))
 	s.geometry = geom
 	if s.lastPaneRects == nil {
 		s.lastPaneRects = make(map[[16]byte]PaneRect)
@@ -761,12 +763,13 @@ func (s *uiState) refreshPaneGeometry(emit bool) {
 			} else {
 				relatedID, relatedRect := findRelatedPane(rect, previous)
 				startRect := rect
-				if s.geometryCfg.SplitMode == splitModeGhost {
+				ghost := s.geometryCfg.SplitMode == splitModeGhost
+				if ghost {
 					startRect = expandRectFromLine(rect, relatedRect)
 				} else if relatedRect != (PaneRect{}) {
 					startRect = alignRectToEdge(rect, relatedRect)
 				}
-				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneCreated, PaneID: pane.ID, RelatedPaneID: relatedID, OldRect: startRect, NewRect: rect, Timestamp: now})
+				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneCreated, PaneID: pane.ID, RelatedPaneID: relatedID, OldRect: startRect, NewRect: rect, Ghost: ghost, Timestamp: now})
 			}
 		}
 		if s.lastPaneBuffer != nil {
