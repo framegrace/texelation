@@ -47,12 +47,17 @@ type uiState struct {
 	effectRegistry *effectRegistry
 	renderCh       chan<- struct{}
 	effects        *effectManager
+	geometry       *geometryManager
+	lastPaneRects  map[[16]byte]PaneRect
 }
 
 func (s *uiState) setRenderChannel(ch chan<- struct{}) {
 	s.renderCh = ch
 	if s.effects != nil {
 		s.effects.attachRenderChannel(ch)
+	}
+	if s.geometry != nil {
+		s.geometry.attachRenderChannel(ch)
 	}
 }
 
@@ -119,6 +124,16 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 		Active:    s.controlMode,
 		Timestamp: time.Now(),
 	})
+
+	geom := newGeometryManager()
+	if s.renderCh != nil {
+		geom.attachRenderChannel(s.renderCh)
+	}
+	s.geometry = geom
+	if s.lastPaneRects == nil {
+		s.lastPaneRects = make(map[[16]byte]PaneRect)
+	}
+	s.refreshPaneGeometry(false)
 }
 
 type panicLogger struct {
@@ -196,12 +211,13 @@ func main() {
 	log.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 
 	state := &uiState{
-		cache:        client.NewBufferCache(),
-		themeValues:  make(map[string]map[string]interface{}),
-		defaultStyle: tcell.StyleDefault,
-		defaultFg:    tcell.ColorDefault,
-		defaultBg:    tcell.ColorDefault,
-		desktopBg:    tcell.ColorDefault,
+		cache:         client.NewBufferCache(),
+		themeValues:   make(map[string]map[string]interface{}),
+		defaultStyle:  tcell.StyleDefault,
+		defaultFg:     tcell.ColorDefault,
+		defaultBg:     tcell.ColorDefault,
+		desktopBg:     tcell.ColorDefault,
+		lastPaneRects: make(map[[16]byte]PaneRect),
 	}
 
 	cfg := theme.Get()
@@ -339,6 +355,8 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		if state.effects != nil {
 			state.effects.ResetPaneStates(cache.SortedPanes())
 		}
+		emitGeometry := state.geometry != nil && len(state.lastPaneRects) > 0
+		state.refreshPaneGeometry(emitGeometry)
 		return true
 	case protocol.MsgBufferDelta:
 		delta, err := protocol.DecodeBufferDelta(payload)
@@ -347,6 +365,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			return false
 		}
 		cache.ApplyDelta(delta)
+		state.refreshPaneGeometry(true)
 		scheduleAck(pendingAck, ackSignal, hdr.Sequence)
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
@@ -445,8 +464,12 @@ func render(state *uiState, screen tcell.Screen) {
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
 
+	now := time.Now()
 	if state.effects != nil {
-		state.effects.Update(time.Now())
+		state.effects.Update(now)
+	}
+	if state.geometry != nil {
+		state.geometry.Update(now)
 	}
 
 	workspaceBuffer := make([][]client.Cell, height)
@@ -647,6 +670,39 @@ func isNetworkClosed(err error) bool {
 	}
 	ne, ok := err.(net.Error)
 	return ok && !ne.Timeout()
+}
+
+func (s *uiState) refreshPaneGeometry(emit bool) {
+	if s == nil || s.cache == nil {
+		return
+	}
+	panes := s.cache.SortedPanes()
+	current := make(map[[16]byte]PaneRect, len(panes))
+	now := time.Now()
+	for _, pane := range panes {
+		if pane == nil {
+			continue
+		}
+		rect := PaneRect{X: pane.Rect.X, Y: pane.Rect.Y, Width: pane.Rect.Width, Height: pane.Rect.Height}
+		current[pane.ID] = rect
+		if emit && s.geometry != nil {
+			if old, ok := s.lastPaneRects[pane.ID]; ok {
+				if old != rect {
+					s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneGeometry, PaneID: pane.ID, OldRect: old, NewRect: rect, Timestamp: now})
+				}
+			} else {
+				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneCreated, PaneID: pane.ID, NewRect: rect, Timestamp: now})
+			}
+		}
+	}
+	if emit && s.geometry != nil {
+		for id, oldRect := range s.lastPaneRects {
+			if _, ok := current[id]; !ok {
+				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneRemoved, PaneID: id, OldRect: oldRect, Timestamp: now})
+			}
+		}
+	}
+	s.lastPaneRects = current
 }
 
 func (s *uiState) updateTheme(section, key, value string) {
