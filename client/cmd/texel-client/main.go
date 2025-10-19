@@ -868,27 +868,35 @@ func expandRectFromLine(target, reference PaneRect) PaneRect {
 
 func collapseRectTowards(source, reference PaneRect) PaneRect {
 	target := source
-	if reference.Width == 0 && reference.Height == 0 {
+	if reference == (PaneRect{}) {
 		target.Width = 0
 		target.Height = 0
 		return target
 	}
-	if reference.Height == source.Height && reference.Y == source.Y {
-		target.Width = 0
+	if source.Y == reference.Y && source.Height == reference.Height {
+		target.Y = source.Y
+		target.Height = source.Height
 		if reference.X >= source.X+source.Width {
 			target.X = source.X + source.Width
 		} else if reference.X+reference.Width <= source.X {
 			target.X = source.X
+		} else {
+			target.X = source.X
 		}
+		target.Width = 0
 		return target
 	}
-	if reference.Width == source.Width && reference.X == source.X {
-		target.Height = 0
+	if source.X == reference.X && source.Width == reference.Width {
+		target.X = source.X
+		target.Width = source.Width
 		if reference.Y >= source.Y+source.Height {
 			target.Y = source.Y + source.Height
 		} else if reference.Y+reference.Height <= source.Y {
 			target.Y = source.Y
+		} else {
+			target.Y = source.Y
 		}
+		target.Height = 0
 		return target
 	}
 	target.Width = 0
@@ -898,26 +906,43 @@ func collapseRectTowards(source, reference PaneRect) PaneRect {
 
 func alignRectToEdge(target, reference PaneRect) PaneRect {
 	start := target
-	if reference.Width == target.Width && reference.X == target.X {
-		// vertical stack
-		start.Height = 0
-		if target.Y >= reference.Y+reference.Height {
-			start.Y = reference.Y + reference.Height
-		} else {
-			start.Y = reference.Y
-		}
-		return start
-	}
-	if reference.Height == target.Height && reference.Y == target.Y {
-		// horizontal stack
+	if reference == (PaneRect{}) {
+		start.Y = target.Y
+		start.Height = target.Height
+		start.X = target.X + target.Width
 		start.Width = 0
-		if target.X >= reference.X+reference.Width {
-			start.X = reference.X + reference.Width
-		} else {
-			start.X = reference.X
-		}
 		return start
 	}
+	if target.Y == reference.Y && target.Height == reference.Height {
+		start.Y = target.Y
+		start.Height = target.Height
+		if target.X >= reference.X+reference.Width {
+			start.X = target.X + target.Width
+		} else if target.X+target.Width <= reference.X {
+			start.X = target.X
+		} else {
+			start.X = target.X + target.Width
+		}
+		start.Width = 0
+		return start
+	}
+	if target.X == reference.X && target.Width == reference.Width {
+		start.X = target.X
+		start.Width = target.Width
+		if target.Y >= reference.Y+reference.Height {
+			start.Y = target.Y + target.Height
+		} else if target.Y+target.Height <= reference.Y {
+			start.Y = target.Y
+		} else {
+			start.Y = target.Y + target.Height
+		}
+		start.Height = 0
+		return start
+	}
+	start.X = target.X + target.Width
+	start.Width = 0
+	start.Y = target.Y
+	start.Height = target.Height
 	return start
 }
 
