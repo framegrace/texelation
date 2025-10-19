@@ -17,8 +17,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"texelation/client"
+	serverrt "texelation/internal/runtime/server"
 	"texelation/protocol"
-	"texelation/server"
 	"texelation/texel"
 )
 
@@ -50,17 +50,17 @@ func main() {
 	desktop, mainApp := buildDesktop()
 	metrics := newStressMetrics()
 
-	manager := server.NewManager()
-	srv := server.NewServer(*socketPath, manager)
-	server.SetSessionStatsObserver(metrics)
+	manager := serverrt.NewManager()
+	srv := serverrt.NewServer(*socketPath, manager)
+	serverrt.SetSessionStatsObserver(metrics)
 
-	publishers := make([]*server.DesktopPublisher, 0)
+	publishers := make([]*serverrt.DesktopPublisher, 0)
 	var pubMu sync.Mutex
 
-	sink := server.NewDesktopSink(desktop)
+	sink := serverrt.NewDesktopSink(desktop)
 	srv.SetEventSink(sink)
-	srv.SetPublisherFactory(func(sess *server.Session) *server.DesktopPublisher {
-		pub := server.NewDesktopPublisher(desktop, sess)
+	srv.SetPublisherFactory(func(sess *serverrt.Session) *serverrt.DesktopPublisher {
+		pub := serverrt.NewDesktopPublisher(desktop, sess)
 		pub.SetObserver(metrics)
 		pubMu.Lock()
 		publishers = append(publishers, pub)
@@ -311,13 +311,13 @@ func newStressMetrics() *stressMetrics {
 	return &stressMetrics{}
 }
 
-func (m *stressMetrics) ObservePublish(session *server.Session, paneCount int, duration time.Duration) {
+func (m *stressMetrics) ObservePublish(session *serverrt.Session, paneCount int, duration time.Duration) {
 	_ = session
 	m.publishes.Add(uint64(paneCount))
 	m.publishTime.Add(duration.Nanoseconds())
 }
 
-func (m *stressMetrics) ObserveSessionStats(stats server.SessionStats) {
+func (m *stressMetrics) ObserveSessionStats(stats serverrt.SessionStats) {
 	_ = stats
 }
 

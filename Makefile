@@ -30,9 +30,9 @@ tidy: ## Sync go.mod with source imports
 	@mkdir -p $(CACHE_DIR)
 	$(GO_ENV) go mod tidy
 
-server: ## Run texel-server-sim harness
+server: ## Run texel-server harness
 	@mkdir -p $(CACHE_DIR)
-	$(GO_ENV) go run ./cmd/texel-server-sim --socket /tmp/texelation.sock
+	$(GO_ENV) go run ./cmd/texel-server --socket /tmp/texelation.sock
 
 client: ## Run remote texel client against socket
 	@mkdir -p $(CACHE_DIR)

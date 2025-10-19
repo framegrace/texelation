@@ -16,7 +16,7 @@ import (
 
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
-	"texelation/server"
+	"texelation/internal/runtime/server"
 	"texelation/texel"
 )
 

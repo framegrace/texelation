@@ -7,8 +7,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"texelation/internal/runtime/server/testutil"
 	"texelation/protocol"
-	"texelation/server/testutil"
 	"texelation/texel"
 )
 

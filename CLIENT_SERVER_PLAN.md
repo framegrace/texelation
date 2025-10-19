@@ -53,7 +53,7 @@
 - Capture metrics (latency, throughput, queue depth) to validate tmux-like responsiveness and guide future TCP support.
 
 ## Phase 10 – Final Client/Server Release
-- Graduate the `texel-server-sim` and remote CLI into the production binaries, rename CLIs, and align packaging/scripts with the new entry points.
+- Graduate the server harness (now `texel-server`) and remote CLI into the production binaries, rename CLIs, and align packaging/scripts with the new entry points.
 - Port any remaining desktop-only UX polish (effects, status integrations, shortcuts) into the server/client pair to match the original monolith.
 - Harden distribution assets: update docs, release notes, and build artifacts so remote mode becomes the default developer workflow.
 - Capture operational runbooks covering snapshot recovery, diff retention tuning, and monitoring hooks to support production deployment.
