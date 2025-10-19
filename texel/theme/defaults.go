@@ -51,8 +51,9 @@ func ApplyDefaults(cfg Config) {
 	}
 
 	if applySectionDefaults(cfg, "geometry", Section{
-		"split_mode":         "stretch",
-		"remove_mode":        "ghost",
+		"split_effect":       "stretch",
+		"remove_effect":      "ghost_n_grow",
+		"zoom_effect":        "expand",
 		"split_duration_ms":  160,
 		"remove_duration_ms": 160,
 		"zoom_duration_ms":   220,

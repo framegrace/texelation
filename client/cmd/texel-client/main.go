@@ -136,13 +136,13 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 		s.geometryCfg = parseGeometryConfig(nil)
 	}
 
-	geom := newGeometryManager()
+	geom := newGeometryManager(s.geometryCfg)
+	geom.registerEffectFactory(geometryEffectGhost, newGhostGrowEffect)
+	geom.registerEffectFactory(geometryEffectStretch, newStretchEffect)
+	geom.registerEffectFactory(geometryEffectExpand, newExpandEffect)
 	if s.renderCh != nil {
 		geom.attachRenderChannel(s.renderCh)
 	}
-	geom.registerEffect(newSplitGeometryEffect(s.geometryCfg))
-	geom.registerEffect(newRemoveGeometryEffect(s.geometryCfg))
-	geom.registerEffect(newZoomGeometryEffect(s.geometryCfg))
 	s.geometry = geom
 	if s.lastPaneRects == nil {
 		s.lastPaneRects = make(map[[16]byte]PaneRect)
@@ -763,7 +763,7 @@ func (s *uiState) refreshPaneGeometry(emit bool) {
 			} else {
 				relatedID, relatedRect := findRelatedPane(rect, previous)
 				startRect := rect
-				ghost := s.geometryCfg.SplitMode == splitModeGhost
+				ghost := s.geometryCfg.SplitEffect == geometryEffectGhost
 				if ghost {
 					startRect = expandRectFromLine(rect, relatedRect)
 				} else if relatedRect != (PaneRect{}) {
@@ -781,7 +781,7 @@ func (s *uiState) refreshPaneGeometry(emit bool) {
 			if _, ok := current[id]; !ok {
 				relatedID, relatedRect := findRelatedPane(oldRect, current)
 				targetRect := collapseRectTowards(oldRect, relatedRect)
-				ghost := s.geometryCfg.RemoveMode == removeModeGhost
+				ghost := s.geometryCfg.RemoveEffect == geometryEffectGhost
 				var buffer [][]client.Cell
 				if s.lastPaneBuffer != nil {
 					buffer = s.lastPaneBuffer[id]
