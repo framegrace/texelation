@@ -9,6 +9,7 @@ import (
 var (
 	defaultInactiveColor = tcell.NewRGBColor(20, 20, 32)
 	defaultFlashColor    = tcell.NewRGBColor(255, 255, 255)
+	defaultResizingColor = tcell.NewRGBColor(255, 184, 108)
 )
 
 func tintStyle(style tcell.Style, overlay tcell.Color, intensity float32) tcell.Style {

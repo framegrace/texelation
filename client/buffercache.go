@@ -161,13 +161,13 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 			c.panes[paneSnap.PaneID] = pane
 		}
 		pane.Title = paneSnap.Title
-		pane.Revision = paneSnap.Revision
 		pane.UpdatedAt = time.Now().UTC()
-		pane.rowsMu.Lock()
-		pane.rows = make(map[int][]Cell, len(paneSnap.Rows))
-		for idx, row := range paneSnap.Rows {
-			pane.rows[idx] = stringToCells(row)
+		if paneSnap.Revision != 0 || pane.Revision == 0 {
+			pane.Revision = paneSnap.Revision
 		}
+		pane.rowsMu.Lock()
+		prevRows := pane.rows
+		pane.rows = applySnapshotRows(prevRows, paneSnap.Rows, int(paneSnap.Height), int(paneSnap.Width))
 		pane.rowsMu.Unlock()
 		pane.Rect = clientRect{X: int(paneSnap.X), Y: int(paneSnap.Y), Width: int(paneSnap.Width), Height: int(paneSnap.Height)}
 		c.trackOrderingLocked(paneSnap.PaneID, pane.UpdatedAt)
@@ -292,6 +292,51 @@ func (c *BufferCache) trackOrderingLocked(id [16]byte, ts time.Time) {
 	sort.Slice(c.order, func(i, j int) bool {
 		return c.order[i].seen.Before(c.order[j].seen)
 	})
+}
+
+func applySnapshotRows(existing map[int][]Cell, rows []string, height, width int) map[int][]Cell {
+	if len(rows) > 0 {
+		newRows := make(map[int][]Cell, len(rows))
+		for idx, row := range rows {
+			cells := stringToCells(row)
+			if width > 0 {
+				cells = resizeRowToWidth(cells, width)
+			}
+			newRows[idx] = cells
+		}
+		return newRows
+	}
+	return resizePaneRows(existing, height, width)
+}
+
+func resizePaneRows(existing map[int][]Cell, height, width int) map[int][]Cell {
+	if height < 0 {
+		height = 0
+	}
+	if width <= 0 {
+		return make(map[int][]Cell)
+	}
+	out := make(map[int][]Cell, height)
+	for row := 0; row < height; row++ {
+		var src []Cell
+		if existing != nil {
+			src = existing[row]
+		}
+		out[row] = resizeRowToWidth(src, width)
+	}
+	return out
+}
+
+func resizeRowToWidth(row []Cell, width int) []Cell {
+	if width <= 0 {
+		return nil
+	}
+	if len(row) >= width {
+		out := make([]Cell, width)
+		copy(out, row[:width])
+		return out
+	}
+	return ensureRowLength(row, width)
 }
 
 func ensureRowLength(row []Cell, n int) []Cell {

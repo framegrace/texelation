@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -22,6 +21,8 @@ import (
 	"texelation/protocol"
 	"texelation/texel/theme"
 )
+
+const resizeDebounce = 45 * time.Millisecond
 
 type uiState struct {
 	cache          *client.BufferCache
@@ -48,21 +49,15 @@ type uiState struct {
 	effectRegistry *effectRegistry
 	renderCh       chan<- struct{}
 	effects        *effectManager
-	geometry       *geometryManager
-	lastPaneRects  map[[16]byte]PaneRect
-	lastPaneBuffer map[[16]byte][][]client.Cell
-	workspaceCols  int
-	workspaceRows  int
-	geometryCfg    geometryConfig
+	resizeMu       sync.Mutex
+	pendingResize  protocol.Resize
+	resizeSeq      uint64
 }
 
 func (s *uiState) setRenderChannel(ch chan<- struct{}) {
 	s.renderCh = ch
 	if s.effects != nil {
 		s.effects.attachRenderChannel(ch)
-	}
-	if s.geometry != nil {
-		s.geometry.attachRenderChannel(ch)
 	}
 }
 
@@ -78,6 +73,29 @@ func (s *uiState) setThemeValue(section, key string, value interface{}) {
 	sec[key] = value
 }
 
+func (s *uiState) scheduleResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, resize protocol.Resize) {
+	if s == nil {
+		return
+	}
+	s.resizeMu.Lock()
+	s.pendingResize = resize
+	s.resizeSeq++
+	seq := s.resizeSeq
+	s.resizeMu.Unlock()
+
+	go func() {
+		time.Sleep(resizeDebounce)
+		s.resizeMu.Lock()
+		if seq != s.resizeSeq {
+			s.resizeMu.Unlock()
+			return
+		}
+		res := s.pendingResize
+		s.resizeMu.Unlock()
+		sendResizeMessage(writeMu, conn, sessionID, res)
+	}()
+}
+
 func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 	if reg == nil {
 		if s.effectRegistry != nil {
@@ -88,22 +106,45 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 	}
 	s.effectRegistry = reg
 
-	paneSpecs := []paneEffectSpec{{ID: "inactive-overlay"}}
+	defaultPaneSpecs := []paneEffectSpec{
+		{ID: "inactive-overlay"},
+		{ID: "resizing-overlay"},
+	}
+	paneSpecs := defaultPaneSpecs
+	usePaneDefaults := true
 	if section, ok := s.themeValues["pane"]; ok {
-		if raw, ok := section["effects"]; ok && raw != "" {
-			if specs, err := parsePaneEffectSpecs(raw); err == nil && len(specs) > 0 {
+		if raw, ok := section["effects"]; ok {
+			usePaneDefaults = false
+			if raw == nil || raw == "" {
+				paneSpecs = nil
+			} else if specs, err := parsePaneEffectSpecs(raw); err == nil {
 				paneSpecs = specs
+			} else {
+				paneSpecs = nil
 			}
 		}
 	}
+	if usePaneDefaults {
+		paneSpecs = defaultPaneSpecs
+	}
 
-	workspaceSpecs := []workspaceEffectSpec{{ID: "rainbow"}, {ID: "flash"}}
+	defaultWorkspaceSpecs := []workspaceEffectSpec{{ID: "rainbow"}, {ID: "flash"}}
+	workspaceSpecs := defaultWorkspaceSpecs
+	useWorkspaceDefaults := true
 	if section, ok := s.themeValues["workspace"]; ok {
-		if raw, ok := section["effects"]; ok && raw != "" {
-			if specs, err := parseWorkspaceEffectSpecs(raw); err == nil && len(specs) > 0 {
+		if raw, ok := section["effects"]; ok {
+			useWorkspaceDefaults = false
+			if raw == nil || raw == "" {
+				workspaceSpecs = nil
+			} else if specs, err := parseWorkspaceEffectSpecs(raw); err == nil {
 				workspaceSpecs = specs
+			} else {
+				workspaceSpecs = nil
 			}
 		}
+	}
+	if useWorkspaceDefaults {
+		workspaceSpecs = defaultWorkspaceSpecs
 	}
 
 	manager := newEffectManager()
@@ -129,25 +170,6 @@ func (s *uiState) applyEffectConfig(reg *effectRegistry) {
 		Active:    s.controlMode,
 		Timestamp: time.Now(),
 	})
-
-	if sec, ok := s.themeValues["geometry"]; ok {
-		s.geometryCfg = parseGeometryConfig(sec)
-	} else {
-		s.geometryCfg = parseGeometryConfig(nil)
-	}
-
-	geom := newGeometryManager(s.geometryCfg)
-	geom.registerEffectFactory(geometryEffectGhost, newGhostGrowEffect)
-	geom.registerEffectFactory(geometryEffectStretch, newStretchEffect)
-	geom.registerEffectFactory(geometryEffectExpand, newExpandEffect)
-	if s.renderCh != nil {
-		geom.attachRenderChannel(s.renderCh)
-	}
-	s.geometry = geom
-	if s.lastPaneRects == nil {
-		s.lastPaneRects = make(map[[16]byte]PaneRect)
-	}
-	s.refreshPaneGeometry(false)
 }
 
 type panicLogger struct {
@@ -177,7 +199,9 @@ func (p *panicLogger) logPanic(context string, r interface{}) {
 	buf := make([]byte, 1<<16)
 	n := runtime.Stack(buf, true)
 	stack := buf[:n]
-	log.Printf("panic in %s: %v\n%s", context, r, stack)
+	msg := fmt.Sprintf("panic in %s: %v\n%s", context, r, stack)
+	log.Print(msg)
+	fmt.Fprintln(os.Stderr, msg)
 	if p.path == "" {
 		return
 	}
@@ -225,14 +249,12 @@ func main() {
 	log.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 
 	state := &uiState{
-		cache:          client.NewBufferCache(),
-		themeValues:    make(map[string]map[string]interface{}),
-		defaultStyle:   tcell.StyleDefault,
-		defaultFg:      tcell.ColorDefault,
-		defaultBg:      tcell.ColorDefault,
-		desktopBg:      tcell.ColorDefault,
-		lastPaneRects:  make(map[[16]byte]PaneRect),
-		lastPaneBuffer: make(map[[16]byte][][]client.Cell),
+		cache:        client.NewBufferCache(),
+		themeValues:  make(map[string]map[string]interface{}),
+		defaultStyle: tcell.StyleDefault,
+		defaultFg:    tcell.ColorDefault,
+		defaultBg:    tcell.ColorDefault,
+		desktopBg:    tcell.ColorDefault,
 	}
 
 	cfg := theme.Get()
@@ -366,12 +388,16 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			log.Printf("decode snapshot failed: %v", err)
 			return false
 		}
+		if len(snap.Panes) == 0 {
+			if existing := cache.SortedPanes(); len(existing) > 0 {
+				log.Printf("ignoring empty snapshot; retaining %d cached panes", len(existing))
+				return false
+			}
+		}
 		cache.ApplySnapshot(snap)
 		if state.effects != nil {
 			state.effects.ResetPaneStates(cache.SortedPanes())
 		}
-		emitGeometry := state.geometry != nil && len(state.lastPaneRects) > 0
-		state.refreshPaneGeometry(emitGeometry)
 		return true
 	case protocol.MsgBufferDelta:
 		delta, err := protocol.DecodeBufferDelta(payload)
@@ -380,8 +406,6 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			return false
 		}
 		cache.ApplyDelta(delta)
-		log.Printf("geom-delta: pane=%x rows=%d flags=%d", delta.PaneID[:4], len(delta.Rows), delta.Flags)
-		state.refreshPaneGeometry(true)
 		scheduleAck(pendingAck, ackSignal, hdr.Sequence)
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
@@ -477,17 +501,11 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 
 func render(state *uiState, screen tcell.Screen) {
 	width, height := screen.Size()
-	state.workspaceCols = width
-	state.workspaceRows = height
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
 
-	now := time.Now()
 	if state.effects != nil {
-		state.effects.Update(now)
-	}
-	if state.geometry != nil {
-		state.geometry.Update(now)
+		state.effects.Update(time.Now())
 	}
 
 	workspaceBuffer := make([][]client.Cell, height)
@@ -500,93 +518,31 @@ func render(state *uiState, screen tcell.Screen) {
 	}
 
 	panes := state.cache.SortedPanes()
-	geomStates := make(map[[16]byte]*geometryPaneState, len(panes))
-	orderIndex := make(map[*geometryPaneState]int, len(panes))
-	for idx, pane := range panes {
+	for _, pane := range panes {
 		if pane == nil {
 			continue
 		}
-		rect := PaneRect{X: pane.Rect.X, Y: pane.Rect.Y, Width: pane.Rect.Width, Height: pane.Rect.Height}
-		geom := &geometryPaneState{Pane: pane, Base: rect, Rect: rect}
-		geomStates[pane.ID] = geom
-		orderIndex[geom] = idx
-	}
-
-	workspaceGeom := geometryWorkspaceState{
-		Width:      width,
-		Height:     height,
-		Zoomed:     state.zoomed,
-		ZoomedPane: state.zoomedPane,
-	}
-	if state.geometry != nil {
-		state.geometry.Apply(geomStates, &workspaceGeom)
-	}
-
-	drawStates := make([]*geometryPaneState, 0, len(geomStates))
-	for _, pane := range panes {
-		if geom := geomStates[pane.ID]; geom != nil {
-			geom.Dirty = true
-			drawStates = append(drawStates, geom)
-		}
-	}
-	for _, geom := range geomStates {
-		if _, ok := orderIndex[geom]; !ok {
-			orderIndex[geom] = len(orderIndex) + 1000
-			drawStates = append(drawStates, geom)
-		}
-	}
-
-	sort.SliceStable(drawStates, func(i, j int) bool {
-		if drawStates[i].ZIndex == drawStates[j].ZIndex {
-			return orderIndex[drawStates[i]] < orderIndex[drawStates[j]]
-		}
-		return drawStates[i].ZIndex < drawStates[j].ZIndex
-	})
-
-	for _, geom := range drawStates {
-		rect := geom.Rect
-		if rect.Width <= 0 || rect.Height <= 0 {
+		x := pane.Rect.X
+		y := pane.Rect.Y
+		w := pane.Rect.Width
+		h := pane.Rect.Height
+		if w <= 0 || h <= 0 {
 			continue
 		}
-		pane := geom.Pane
 
-		paneBuffer := make([][]client.Cell, rect.Height)
-		for rowIdx := 0; rowIdx < rect.Height; rowIdx++ {
-			row := make([]client.Cell, rect.Width)
-			var source []client.Cell
-			if geom.Buffer != nil {
-				if rowIdx < len(geom.Buffer) {
-					source = geom.Buffer[rowIdx]
-				}
-			} else if pane != nil {
-				sourceRow := rowIdx
-				if rect.Height < pane.Rect.Height {
-					if rect.Y > geom.Base.Y {
-						offset := pane.Rect.Height - rect.Height
-						sourceRow = rowIdx + offset
-						if sourceRow >= pane.Rect.Height {
-							sourceRow = pane.Rect.Height - 1
-						}
-					}
-				}
-				source = pane.RowCells(sourceRow)
-			}
-			for col := 0; col < rect.Width; col++ {
+		paneBuffer := make([][]client.Cell, h)
+		for rowIdx := 0; rowIdx < h; rowIdx++ {
+			row := make([]client.Cell, w)
+			source := pane.RowCells(rowIdx)
+			for col := 0; col < w; col++ {
 				cell := client.Cell{Ch: ' ', Style: state.defaultStyle}
-				if source != nil && len(source) > 0 {
-					xOffset := 0
-					if rect.Width < len(source) && rect.X > geom.Base.X {
-						xOffset = len(source) - rect.Width
+				if source != nil && col < len(source) {
+					cell = source[col]
+					if cell.Ch == 0 {
+						cell.Ch = ' '
 					}
-					srcIdx := xOffset + col
-					if srcIdx >= 0 && srcIdx < len(source) {
-						cell = source[srcIdx]
-						if cell.Ch == 0 {
-							cell.Ch = ' '
-						}
-						if cell.Style == (tcell.Style{}) {
-							cell.Style = state.defaultStyle
-						}
+					if cell.Style == (tcell.Style{}) {
+						cell.Style = state.defaultStyle
 					}
 				}
 				row[col] = cell
@@ -594,30 +550,25 @@ func render(state *uiState, screen tcell.Screen) {
 			paneBuffer[rowIdx] = row
 		}
 
-		if pane != nil && state.effects != nil {
+		if state.effects != nil {
 			state.effects.ApplyPaneEffects(pane, paneBuffer)
 		}
 
-		for rowIdx := 0; rowIdx < rect.Height; rowIdx++ {
-			targetY := rect.Y + rowIdx
+		zoomOverlay := state.zoomed && pane.ID == state.zoomedPane
+		for rowIdx := 0; rowIdx < h; rowIdx++ {
+			targetY := y + rowIdx
 			if targetY < 0 || targetY >= height {
 				continue
 			}
 			row := paneBuffer[rowIdx]
-			for col := 0; col < rect.Width; col++ {
-				targetX := rect.X + col
+			for col := 0; col < w; col++ {
+				targetX := x + col
 				if targetX < 0 || targetX >= width {
 					continue
 				}
-				cell := client.Cell{Ch: ' ', Style: state.defaultStyle}
-				if row != nil && col < len(row) {
-					cell = row[col]
-				}
+				cell := row[col]
 				style := cell.Style
-				if pane != nil && pane.Resizing {
-					style = applyResizingOverlay(style, 0.2, state)
-				}
-				if pane != nil && state.zoomed && pane.ID == state.zoomedPane {
+				if zoomOverlay {
 					style = applyZoomOverlay(style, 0.2, state)
 				}
 				workspaceBuffer[targetY][targetX] = client.Cell{Ch: cell.Ch, Style: style}
@@ -730,8 +681,9 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 			log.Printf("send mouse failed: %v", err)
 		}
 	case *tcell.EventResize:
-		sendResize(writeMu, conn, sessionID, screen)
-		render(state, screen)
+		cols, rows := screen.Size()
+		state.scheduleResize(writeMu, conn, sessionID, protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
+		screen.Sync()
 	case *tcell.EventInterrupt:
 		// Ignore; used to wake PollEvent for shutdown.
 	case *tcell.EventPaste:
@@ -758,263 +710,6 @@ func isNetworkClosed(err error) bool {
 	}
 	ne, ok := err.(net.Error)
 	return ok && !ne.Timeout()
-}
-
-func (s *uiState) refreshPaneGeometry(emit bool) {
-	if s == nil || s.cache == nil {
-		return
-	}
-	panes := s.cache.SortedPanes()
-	current := make(map[[16]byte]PaneRect, len(panes))
-	now := time.Now()
-	previous := s.lastPaneRects
-	for _, pane := range panes {
-		if pane == nil {
-			continue
-		}
-		rect := PaneRect{X: pane.Rect.X, Y: pane.Rect.Y, Width: pane.Rect.Width, Height: pane.Rect.Height}
-		current[pane.ID] = rect
-		if emit && s.geometry != nil {
-			if old, ok := previous[pane.ID]; ok {
-				if old != rect {
-					s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneGeometry, PaneID: pane.ID, OldRect: old, NewRect: rect, Timestamp: now})
-				}
-			} else {
-				relatedID, relatedRect := findRelatedPane(rect, previous)
-				startRect := rect
-				ghost := s.geometryCfg.SplitEffect == geometryEffectGhost
-				if ghost {
-					startRect = expandRectFromLine(rect, relatedRect)
-				} else if relatedRect != (PaneRect{}) {
-					startRect = alignRectToEdge(rect, relatedRect)
-				}
-				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneCreated, PaneID: pane.ID, RelatedPaneID: relatedID, OldRect: startRect, NewRect: rect, Ghost: ghost, Timestamp: now})
-			}
-		}
-		if s.lastPaneBuffer != nil {
-			s.lastPaneBuffer[pane.ID] = clonePaneBuffer(pane)
-		}
-	}
-	if emit && s.geometry != nil {
-		for id, oldRect := range previous {
-			if _, ok := current[id]; !ok {
-				relatedID, relatedRect := findRelatedPane(oldRect, current)
-				targetRect := collapseRectTowards(oldRect, relatedRect)
-				ghost := s.geometryCfg.RemoveEffect == geometryEffectGhost
-				var buffer [][]client.Cell
-				if s.lastPaneBuffer != nil {
-					buffer = s.lastPaneBuffer[id]
-					delete(s.lastPaneBuffer, id)
-				}
-				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerPaneRemoved, PaneID: id, RelatedPaneID: relatedID, OldRect: oldRect, NewRect: targetRect, PaneBuffer: buffer, Ghost: ghost, Timestamp: now})
-			}
-		}
-	}
-	s.lastPaneRects = current
-}
-
-func clonePaneBuffer(pane *client.PaneState) [][]client.Cell {
-	if pane == nil {
-		return nil
-	}
-	height := pane.Rect.Height
-	buffer := make([][]client.Cell, height)
-	for rowIdx := 0; rowIdx < height; rowIdx++ {
-		src := pane.RowCells(rowIdx)
-		if len(src) == 0 {
-			buffer[rowIdx] = nil
-			continue
-		}
-		row := make([]client.Cell, len(src))
-		copy(row, src)
-		buffer[rowIdx] = row
-	}
-	return buffer
-}
-
-func findRelatedPane(rect PaneRect, candidates map[[16]byte]PaneRect) (PaneID, PaneRect) {
-	var bestID PaneID
-	bestRect := PaneRect{}
-	bestArea := -1
-	dirHorizontal := rect.Width >= rect.Height
-	for id, candidate := range candidates {
-		score := sharedEdgeScore(rect, candidate)
-		if score > bestArea {
-			bestArea = score
-			bestID = id
-			bestRect = candidate
-		} else if score == bestArea && score > 0 {
-			// tie break: prefer matching orientation
-			if dirHorizontal && candidate.Height == rect.Height {
-				bestID = id
-				bestRect = candidate
-			} else if !dirHorizontal && candidate.Width == rect.Width {
-				bestID = id
-				bestRect = candidate
-			}
-		}
-	}
-	if bestID != ([16]byte{}) {
-		log.Printf("geom-select: new=%+v peer=%x rect=%+v score=%d", rect, bestID[:4], bestRect, bestArea)
-	}
-	return bestID, bestRect
-}
-
-func rectOverlapArea(a, b PaneRect) int {
-	x0 := maxInt(a.X, b.X)
-	y0 := maxInt(a.Y, b.Y)
-	x1 := minInt(a.X+a.Width, b.X+b.Width)
-	y1 := minInt(a.Y+a.Height, b.Y+b.Height)
-	if x1 <= x0 || y1 <= y0 {
-		return 0
-	}
-	return (x1 - x0) * (y1 - y0)
-}
-
-func sharedEdgeScore(a, b PaneRect) int {
-	if a.Width == b.Width && a.X == b.X {
-		if a.Y+a.Height == b.Y || b.Y+b.Height == a.Y {
-			return a.Width
-		}
-	}
-	if a.Height == b.Height && a.Y == b.Y {
-		if a.X+a.Width == b.X || b.X+b.Width == a.X {
-			return a.Height
-		}
-	}
-	return rectOverlapArea(a, b)
-}
-
-func expandRectFromLine(target, reference PaneRect) PaneRect {
-	start := target
-	if reference.Width == 0 && reference.Height == 0 {
-		start.Width = 0
-		start.Height = 0
-		return start
-	}
-	if reference.Height == target.Height && reference.Y == target.Y {
-		start.Width = 0
-		if target.X >= reference.X+reference.Width {
-			start.X = target.X
-		} else if target.X+target.Width <= reference.X {
-			start.X = target.X + target.Width
-		}
-		return start
-	}
-	if reference.Width == target.Width && reference.X == target.X {
-		start.Height = 0
-		if target.Y >= reference.Y+reference.Height {
-			start.Y = target.Y
-		} else if target.Y+target.Height <= reference.Y {
-			start.Y = target.Y + target.Height
-		}
-		return start
-	}
-	start.Width = 0
-	start.Height = 0
-	return start
-}
-
-func collapseRectTowards(source, reference PaneRect) PaneRect {
-	target := source
-	if reference == (PaneRect{}) {
-		target.Width = 0
-		target.Height = 0
-		return target
-	}
-	if source.Y == reference.Y && source.Height == reference.Height {
-		target.Y = source.Y
-		target.Height = source.Height
-		if reference.X+reference.Width <= source.X {
-			target.X = source.X
-		} else if reference.X >= source.X+source.Width {
-			target.X = source.X + source.Width
-		} else if reference.X < source.X {
-			target.X = source.X
-		} else {
-			target.X = source.X + source.Width
-		}
-		target.Width = 0
-		return target
-	}
-	if source.X == reference.X && source.Width == reference.Width {
-		target.X = source.X
-		target.Width = source.Width
-		if reference.Y+reference.Height <= source.Y {
-			target.Y = source.Y
-		} else if reference.Y >= source.Y+source.Height {
-			target.Y = source.Y + source.Height
-		} else if reference.Y < source.Y {
-			target.Y = source.Y
-		} else {
-			target.Y = source.Y + source.Height
-		}
-		target.Height = 0
-		return target
-	}
-	target.Width = 0
-	target.Height = 0
-	return target
-}
-
-func alignRectToEdge(target, reference PaneRect) PaneRect {
-	start := target
-	if reference == (PaneRect{}) {
-		start.X = target.X + target.Width
-		start.Width = 0
-		start.Y = target.Y
-		start.Height = target.Height
-		return start
-	}
-	if target.Y == reference.Y && target.Height == reference.Height {
-		start.Y = target.Y
-		start.Height = target.Height
-		if target.X >= reference.X+reference.Width {
-			start.X = reference.X + reference.Width
-		} else if target.X+target.Width <= reference.X {
-			start.X = reference.X
-		} else if target.X < reference.X {
-			start.X = reference.X
-		} else {
-			start.X = reference.X + reference.Width
-		}
-		start.Width = 0
-		return start
-	}
-	if target.X == reference.X && target.Width == reference.Width {
-		start.X = target.X
-		start.Width = target.Width
-		if target.Y >= reference.Y+reference.Height {
-			start.Y = reference.Y + reference.Height
-		} else if target.Y+target.Height <= reference.Y {
-			start.Y = reference.Y
-		} else if target.Y < reference.Y {
-			start.Y = reference.Y
-		} else {
-			start.Y = reference.Y + reference.Height
-		}
-		start.Height = 0
-		return start
-	}
-	start.X = target.X + target.Width
-	start.Width = 0
-	start.Y = target.Y
-	start.Height = target.Height
-	return start
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func (s *uiState) updateTheme(section, key, value string) {
@@ -1068,8 +763,6 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 		s.workspaces = append(s.workspaces, int(id))
 	}
 	prevControl := s.controlMode
-	prevZoomed := s.zoomed
-	prevZoomPane := s.zoomedPane
 	s.controlMode = update.InControlMode
 	s.subMode = update.SubMode
 	s.activeTitle = update.ActiveTitle
@@ -1085,29 +778,6 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 		s.zoomedPane = [16]byte{}
 	}
 	s.recomputeDefaultStyle()
-	if s.geometry != nil {
-		paneID := s.zoomedPane
-		if !s.zoomed {
-			paneID = prevZoomPane
-		}
-		if paneID != ([16]byte{}) {
-			now := time.Now()
-			startRect := s.lastPaneRects[paneID]
-			workspaceTarget := PaneRect{X: 0, Y: 0, Width: s.workspaceCols, Height: s.workspaceRows}
-			if s.zoomed && (!prevZoomed || paneID != prevZoomPane) {
-				if startRect == (PaneRect{}) {
-					startRect = workspaceTarget
-				}
-				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerWorkspaceZoom, PaneID: paneID, OldRect: startRect, NewRect: workspaceTarget, Active: true, Timestamp: now})
-			} else if !s.zoomed && prevZoomed {
-				targetRect := s.lastPaneRects[paneID]
-				if targetRect == (PaneRect{}) {
-					targetRect = startRect
-				}
-				s.geometry.HandleTrigger(EffectTrigger{Type: TriggerWorkspaceZoom, PaneID: paneID, OldRect: workspaceTarget, NewRect: targetRect, Active: false, Timestamp: now})
-			}
-		}
-	}
 	if s.effects != nil && prevControl != s.controlMode {
 		s.effects.HandleTrigger(EffectTrigger{
 			Type:      TriggerWorkspaceControl,
@@ -1185,7 +855,14 @@ func formatPaneID(id [16]byte) string {
 
 func sendResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
 	cols, rows := screen.Size()
-	payload, err := protocol.EncodeResize(protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
+	sendResizeMessage(writeMu, conn, sessionID, protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
+}
+
+func sendResizeMessage(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, resize protocol.Resize) {
+	if resize.Cols == 0 || resize.Rows == 0 {
+		return
+	}
+	payload, err := protocol.EncodeResize(resize)
 	if err != nil {
 		log.Printf("encode resize failed: %v", err)
 		return
@@ -1330,39 +1007,6 @@ func ackLoop(conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex, done <-chan
 		}
 		lastAck.Store(target)
 	}
-}
-
-func applyResizingOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {
-	if intensity <= 0 {
-		return style
-	}
-	fg, bg, attrs := style.Decompose()
-	if !fg.Valid() {
-		fg = state.defaultFg
-		if !fg.Valid() {
-			fg = tcell.ColorWhite
-		}
-	}
-	if !bg.Valid() {
-		bg = state.defaultBg
-		if !bg.Valid() {
-			bg = state.desktopBg
-			if !bg.Valid() {
-				bg = tcell.ColorBlack
-			}
-		}
-	}
-	resizingTint := tcell.NewRGBColor(255, 184, 108)
-	blendedFg := blendColor(fg, resizingTint, intensity/1.5)
-	blendedBg := blendColor(bg, resizingTint, intensity)
-	return tcell.StyleDefault.Foreground(blendedFg).
-		Background(blendedBg).
-		Bold(attrs&tcell.AttrBold != 0).
-		Underline(attrs&tcell.AttrUnderline != 0).
-		Reverse(attrs&tcell.AttrReverse != 0).
-		Blink(attrs&tcell.AttrBlink != 0).
-		Dim(attrs&tcell.AttrDim != 0).
-		Italic(attrs&tcell.AttrItalic != 0)
 }
 
 func applyZoomOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {

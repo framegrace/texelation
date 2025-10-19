@@ -36,6 +36,12 @@ func newEffectRegistry() *effectRegistry {
 		duration := parseDurationOrDefault(cfg, "duration_ms", 400)
 		return newInactiveOverlayEffect(color, intensity, duration), nil
 	}
+	reg.paneFactories["resizing-overlay"] = func(cfg EffectConfig) (PaneEffect, error) {
+		color := parseColorOrDefault(cfg, "color", defaultResizingColor)
+		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.2))
+		duration := parseDurationOrDefault(cfg, "duration_ms", 160)
+		return newResizingOverlayEffect(color, intensity, duration), nil
+	}
 	reg.workspaceFactories["rainbow"] = func(cfg EffectConfig) (WorkspaceEffect, error) {
 		speed := parseFloatOrDefault(cfg, "speed_hz", 0.5)
 		return newWorkspaceRainbowEffect(speed), nil

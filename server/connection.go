@@ -332,7 +332,9 @@ func (c *connection) sendTreeSnapshot() {
 		return
 	}
 	sink.Publish()
-	payload, err := protocol.EncodeTreeSnapshot(snapshot)
+	geometrySnapshot := geometryOnlySnapshot(snapshot)
+
+	payload, err := protocol.EncodeTreeSnapshot(geometrySnapshot)
 	if err != nil {
 		return
 	}
@@ -481,16 +483,59 @@ func (c *connection) nudge() {
 }
 
 func (c *connection) handleResize(size protocol.Resize) {
-	if sink, ok := c.sink.(*DesktopSink); ok {
-		if desktop := sink.Desktop(); desktop != nil {
-			desktop.SetViewportSize(int(size.Cols), int(size.Rows))
-			if snapshot, err := sink.Snapshot(); err == nil {
-				if payload, err := protocol.EncodeTreeSnapshot(snapshot); err == nil {
-					header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
-					_ = c.writeMessage(header, payload)
-				}
-			}
-			sink.Publish()
-		}
+	sink, ok := c.sink.(*DesktopSink)
+	if !ok {
+		return
 	}
+	desktop := sink.Desktop()
+	if desktop == nil {
+		return
+	}
+
+	desktop.SetViewportSize(int(size.Cols), int(size.Rows))
+
+	snapshot, err := sink.Snapshot()
+	if err != nil {
+		sink.Publish()
+		return
+	}
+	if len(snapshot.Panes) == 0 {
+		sink.Publish()
+		return
+	}
+
+	sink.Publish()
+
+	payload, err := protocol.EncodeTreeSnapshot(snapshot)
+	if err != nil {
+		return
+	}
+
+	header := protocol.Header{
+		Version:   protocol.Version,
+		Type:      protocol.MsgTreeSnapshot,
+		Flags:     protocol.FlagChecksum,
+		SessionID: c.session.ID(),
+	}
+	if err := c.writeMessage(header, payload); err != nil {
+		return
+	}
+
+	states := snapshotMergedPaneStates(snapshot, desktop)
+	for _, state := range states {
+		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder)
+	}
+}
+
+func geometryOnlySnapshot(snapshot protocol.TreeSnapshot) protocol.TreeSnapshot {
+	out := protocol.TreeSnapshot{
+		Panes: make([]protocol.PaneSnapshot, len(snapshot.Panes)),
+		Root:  snapshot.Root,
+	}
+	for i, pane := range snapshot.Panes {
+		cloned := pane
+		cloned.Rows = nil
+		out.Panes[i] = cloned
+	}
+	return out
 }
