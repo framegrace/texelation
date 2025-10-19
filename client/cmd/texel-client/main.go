@@ -205,6 +205,9 @@ func main() {
 	}
 
 	cfg := theme.Get()
+	if err := theme.Err(); err != nil {
+		log.Fatalf("failed to load theme: %v", err)
+	}
 	theme.ApplyDefaults(cfg)
 	for sectionName, section := range cfg {
 		for key, value := range section {

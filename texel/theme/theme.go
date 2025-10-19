@@ -2,6 +2,7 @@ package theme
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/gdamore/tcell/v2"
 	"log"
 	"os"
@@ -20,6 +21,7 @@ type Section map[string]interface{}
 var (
 	instance Config
 	once     sync.Once
+	loadErr  error
 )
 
 // Get returns the singleton instance of the configuration.
@@ -27,9 +29,9 @@ var (
 func Get() Config {
 	once.Do(func() {
 		instance = make(Config)
-		err := instance.Load()
-		if err != nil {
-			log.Printf("Theme info: Could not load theme file (%v). A new default theme will be created.", err)
+		loadErr = instance.Load()
+		if loadErr != nil {
+			log.Printf("Theme info: Could not load theme file (%v). A new default theme will be created.", loadErr)
 			// Defaults are now applied explicitly in main.go using RegisterDefaults.
 			// This ensures we start with an empty but valid config map on error.
 		}
@@ -55,10 +57,23 @@ func (c Config) Load() error {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 
-	return json.Unmarshal(data, &c)
+	if err := json.Unmarshal(data, &c); err != nil {
+		return err
+	}
+	for sectionName, section := range c {
+		for key, value := range section {
+			if m, ok := value.(map[string]interface{}); ok {
+				c[sectionName][key] = m
+			}
+		}
+	}
+	return nil
 }
 
 // Save writes the current configuration to the default path.
@@ -142,4 +157,9 @@ func (c Config) RegisterDefaults(sectionName string, defaults Section) {
 			c[sectionName][key] = defaultValue
 		}
 	}
+}
+
+// Err returns any error encountered during the initial load of the theme file.
+func Err() error {
+	return loadErr
 }
