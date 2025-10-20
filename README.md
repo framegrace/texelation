@@ -58,7 +58,7 @@ Visual overlays are now defined entirely through the theme file. The default `th
 "effects": {
   "bindings": [
     {"event": "pane.active", "target": "pane", "effect": "fadeTint"},
-    {"event": "pane.resizing", "target": "pane", "effect": "resizeTint"},
+    {"event": "pane.resizing", "target": "pane", "effect": "fadeTint"},
     {"event": "workspace.control", "target": "workspace", "effect": "rainbow"},
     {"event": "workspace.key", "target": "workspace", "effect": "flash", "params": {"keys": ["F"]}}
   ]
