@@ -515,7 +515,7 @@ func render(state *uiState, screen tcell.Screen) {
 		}
 	}
 
-	if state.controlMode {
+	if state.controlMode && (state.effects == nil || !state.effects.HasBindings(effects.TriggerWorkspaceControl)) {
 		applyControlOverlay(state, screen)
 	}
 	screen.Show()
