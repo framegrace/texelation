@@ -515,9 +515,6 @@ func render(state *uiState, screen tcell.Screen) {
 		}
 	}
 
-	if state.controlMode && (state.effects == nil || !state.effects.HasBindings(effects.TriggerWorkspaceControl)) {
-		applyControlOverlay(state, screen)
-	}
 	screen.Show()
 }
 
@@ -728,46 +725,6 @@ func colorFromRGB(rgb uint32) tcell.Color {
 	g := int32((rgb >> 8) & 0xFF)
 	b := int32(rgb & 0xFF)
 	return tcell.NewRGBColor(r, g, b)
-}
-
-func applyControlOverlay(state *uiState, screen tcell.Screen) {
-	width, height := screen.Size()
-	accent := tcell.NewRGBColor(90, 200, 255)
-	intensity := float32(0.35)
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			ch, comb, style, cellW := screen.GetContent(x, y)
-			if cellW <= 0 {
-				cellW = 1
-			}
-			fg, bg, attrs := style.Decompose()
-			if !fg.Valid() {
-				fg = state.defaultFg
-				if !fg.Valid() {
-					fg = tcell.ColorWhite
-				}
-			}
-			if !bg.Valid() {
-				bg = state.defaultBg
-				if !bg.Valid() {
-					bg = state.desktopBg
-					if !bg.Valid() {
-						bg = tcell.ColorBlack
-					}
-				}
-			}
-			blendedFg := blendColor(fg, accent, intensity)
-			styled := tcell.StyleDefault.Foreground(blendedFg).Background(bg)
-			styled = styled.Bold(attrs&tcell.AttrBold != 0).
-				Underline(attrs&tcell.AttrUnderline != 0).
-				Reverse(attrs&tcell.AttrReverse != 0).
-				Blink(attrs&tcell.AttrBlink != 0).
-				Dim(attrs&tcell.AttrDim != 0).
-				Italic(attrs&tcell.AttrItalic != 0)
-			screen.SetContent(x, y, ch, comb, styled)
-			x += cellW - 1
-		}
-	}
 }
 
 func formatPaneID(id [16]byte) string {

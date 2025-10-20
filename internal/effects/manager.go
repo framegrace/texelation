@@ -166,13 +166,6 @@ func (m *Manager) HandleTrigger(trigger EffectTrigger) {
 	}
 }
 
-// HasBindings reports whether any effects are registered for the provided trigger.
-func (m *Manager) HasBindings(event EffectTriggerType) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.bindings[event]) > 0
-}
-
 // ResetPaneStates primes pane effects with the current desktop state when the client connects.
 func (m *Manager) ResetPaneStates(panes []*client.PaneState) {
 	if m == nil {
