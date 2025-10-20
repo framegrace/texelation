@@ -10,7 +10,9 @@ package effects
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -18,70 +20,159 @@ import (
 
 type EffectConfig map[string]interface{}
 
-type PaneEffectSpec struct {
-	ID     string
-	Config EffectConfig
-}
-
-type WorkspaceEffectSpec struct {
-	ID     string
+type BindingSpec struct {
+	Event  EffectTriggerType
+	Target Target
+	Effect string
 	Config EffectConfig
 }
 
 type Registry struct {
-	paneFactories      map[string]func(EffectConfig) (PaneEffect, error)
-	workspaceFactories map[string]func(EffectConfig) (WorkspaceEffect, error)
+	factories map[string]func(EffectConfig) (Effect, error)
 }
 
 func NewRegistry() *Registry {
-	reg := &Registry{
-		paneFactories:      make(map[string]func(EffectConfig) (PaneEffect, error)),
-		workspaceFactories: make(map[string]func(EffectConfig) (WorkspaceEffect, error)),
+	factories := map[string]func(EffectConfig) (Effect, error){
+		"fadeTint": func(cfg EffectConfig) (Effect, error) {
+			color := parseColorOrDefault(cfg, "color", defaultInactiveColor)
+			intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.35))
+			duration := parseDurationOrDefault(cfg, "duration_ms", 400)
+			return newInactiveOverlayEffect(color, intensity, duration), nil
+		},
+		"resizeTint": func(cfg EffectConfig) (Effect, error) {
+			color := parseColorOrDefault(cfg, "color", defaultResizingColor)
+			intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.2))
+			duration := parseDurationOrDefault(cfg, "duration_ms", 160)
+			return newResizingOverlayEffect(color, intensity, duration), nil
+		},
+		"rainbow": func(cfg EffectConfig) (Effect, error) {
+			speed := parseFloatOrDefault(cfg, "speed_hz", 0.5)
+			return newWorkspaceRainbowEffect(speed), nil
+		},
+		"flash": func(cfg EffectConfig) (Effect, error) {
+			color := parseColorOrDefault(cfg, "color", defaultFlashColor)
+			duration := parseDurationOrDefault(cfg, "duration_ms", 250)
+			return newWorkspaceFlashEffect(color, duration), nil
+		},
 	}
-	reg.paneFactories["inactive-overlay"] = func(cfg EffectConfig) (PaneEffect, error) {
-		color := parseColorOrDefault(cfg, "color", defaultInactiveColor)
-		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.35))
-		duration := parseDurationOrDefault(cfg, "duration_ms", 400)
-		return newInactiveOverlayEffect(color, intensity, duration), nil
-	}
-	reg.paneFactories["resizing-overlay"] = func(cfg EffectConfig) (PaneEffect, error) {
-		color := parseColorOrDefault(cfg, "color", defaultResizingColor)
-		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.2))
-		duration := parseDurationOrDefault(cfg, "duration_ms", 160)
-		return newResizingOverlayEffect(color, intensity, duration), nil
-	}
-	reg.workspaceFactories["rainbow"] = func(cfg EffectConfig) (WorkspaceEffect, error) {
-		speed := parseFloatOrDefault(cfg, "speed_hz", 0.5)
-		return newWorkspaceRainbowEffect(speed), nil
-	}
-	reg.workspaceFactories["flash"] = func(cfg EffectConfig) (WorkspaceEffect, error) {
-		color := parseColorOrDefault(cfg, "color", defaultFlashColor)
-		duration := parseDurationOrDefault(cfg, "duration_ms", 250)
-		return newWorkspaceFlashEffect(color, duration), nil
-	}
-	return reg
+	return &Registry{factories: factories}
 }
 
-func (r *Registry) CreatePaneEffect(spec PaneEffectSpec) PaneEffect {
-	if factory, ok := r.paneFactories[spec.ID]; ok {
-		if eff, err := factory(spec.Config); err == nil {
-			return eff
+func (r *Registry) CreateEffect(id string, cfg EffectConfig) (Effect, error) {
+	factory, ok := r.factories[id]
+	if !ok {
+		return nil, fmt.Errorf("unknown effect id %q", id)
+	}
+	return factory(cfg)
+}
+
+func ParseBindings(raw interface{}) ([]BindingSpec, error) {
+	entries, err := normaliseEntries(raw)
+	if err != nil {
+		return nil, err
+	}
+	specs := make([]BindingSpec, 0, len(entries))
+	for _, entry := range entries {
+		effectID, _ := entry["effect"].(string)
+		if effectID == "" {
+			continue
 		}
-	}
-	return nil
-}
-
-func (r *Registry) CreateWorkspaceEffect(spec WorkspaceEffectSpec) WorkspaceEffect {
-	if factory, ok := r.workspaceFactories[spec.ID]; ok {
-		if eff, err := factory(spec.Config); err == nil {
-			return eff
+		eventName, _ := entry["event"].(string)
+		evt, ok := ParseTrigger(eventName)
+		if !ok {
+			return nil, fmt.Errorf("unknown effect event %q", eventName)
 		}
+		targetName, _ := entry["target"].(string)
+		tgt, ok := parseTarget(targetName)
+		if !ok {
+			return nil, fmt.Errorf("unknown effect target %q", targetName)
+		}
+		cfg := make(EffectConfig)
+		if params, ok := entry["params"].(map[string]interface{}); ok {
+			for k, v := range params {
+				cfg[k] = v
+			}
+		}
+		specs = append(specs, BindingSpec{Event: evt, Target: tgt, Effect: effectID, Config: cfg})
 	}
-	return nil
+	return specs, nil
 }
 
-func ParsePaneEffectSpecs(raw interface{}) ([]PaneEffectSpec, error) {
-	var entries []map[string]interface{}
+func DefaultBindings() []BindingSpec {
+	return []BindingSpec{
+		{
+			Event:  TriggerPaneActive,
+			Target: TargetPane,
+			Effect: "fadeTint",
+			Config: EffectConfig{
+				"color":       "#141400",
+				"intensity":   0.35,
+				"duration_ms": 400,
+			},
+		},
+		{
+			Event:  TriggerPaneResizing,
+			Target: TargetPane,
+			Effect: "resizeTint",
+			Config: EffectConfig{
+				"color":       "#ffb86c",
+				"intensity":   0.2,
+				"duration_ms": 160,
+			},
+		},
+		{
+			Event:  TriggerWorkspaceControl,
+			Target: TargetWorkspace,
+			Effect: "rainbow",
+			Config: EffectConfig{
+				"speed_hz": 0.5,
+			},
+		},
+		{
+			Event:  TriggerWorkspaceKey,
+			Target: TargetWorkspace,
+			Effect: "flash",
+			Config: EffectConfig{
+				"color":       "#ffffff",
+				"duration_ms": 250,
+			},
+		},
+	}
+}
+
+func ParseTrigger(name string) (EffectTriggerType, bool) {
+	switch strings.ToLower(name) {
+	case "pane.active":
+		return TriggerPaneActive, true
+	case "pane.resizing":
+		return TriggerPaneResizing, true
+	case "workspace.control":
+		return TriggerWorkspaceControl, true
+	case "workspace.key":
+		return TriggerWorkspaceKey, true
+	case "workspace.resize":
+		return TriggerWorkspaceResize, true
+	case "workspace.switch":
+		return TriggerWorkspaceSwitch, true
+	case "workspace.zoom":
+		return TriggerWorkspaceZoom, true
+	default:
+		return 0, false
+	}
+}
+
+func parseTarget(value string) (Target, bool) {
+	switch strings.ToLower(value) {
+	case "pane", "panes":
+		return TargetPane, true
+	case "workspace", "workspaces":
+		return TargetWorkspace, true
+	default:
+		return 0, false
+	}
+}
+
+func normaliseEntries(raw interface{}) ([]map[string]interface{}, error) {
 	switch v := raw.(type) {
 	case nil:
 		return nil, nil
@@ -89,81 +180,26 @@ func ParsePaneEffectSpecs(raw interface{}) ([]PaneEffectSpec, error) {
 		if v == "" {
 			return nil, nil
 		}
-		if err := json.Unmarshal([]byte(v), &entries); err != nil {
+		var out []map[string]interface{}
+		if err := json.Unmarshal([]byte(v), &out); err != nil {
 			return nil, err
 		}
+		return out, nil
 	case []interface{}:
 		bytes, err := json.Marshal(v)
 		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(bytes, &entries); err != nil {
+		var out []map[string]interface{}
+		if err := json.Unmarshal(bytes, &out); err != nil {
 			return nil, err
 		}
+		return out, nil
 	case []map[string]interface{}:
-		entries = v
+		return v, nil
 	default:
-		return nil, nil
+		return nil, fmt.Errorf("invalid effect bindings format: %T", raw)
 	}
-	specs := make([]PaneEffectSpec, 0, len(entries))
-	for _, entry := range entries {
-		idVal, _ := entry["id"].(string)
-		if idVal == "" {
-			continue
-		}
-		cfg := make(EffectConfig)
-		for k, v := range entry {
-			if k == "id" {
-				continue
-			}
-			cfg[k] = v
-		}
-		specs = append(specs, PaneEffectSpec{ID: idVal, Config: cfg})
-	}
-	return specs, nil
-}
-
-func ParseWorkspaceEffectSpecs(raw interface{}) ([]WorkspaceEffectSpec, error) {
-	var entries []map[string]interface{}
-	switch v := raw.(type) {
-	case nil:
-		return nil, nil
-	case string:
-		if v == "" {
-			return nil, nil
-		}
-		if err := json.Unmarshal([]byte(v), &entries); err != nil {
-			return nil, err
-		}
-	case []interface{}:
-		bytes, err := json.Marshal(v)
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(bytes, &entries); err != nil {
-			return nil, err
-		}
-	case []map[string]interface{}:
-		entries = v
-	default:
-		return nil, nil
-	}
-	specs := make([]WorkspaceEffectSpec, 0, len(entries))
-	for _, entry := range entries {
-		idVal, _ := entry["id"].(string)
-		if idVal == "" {
-			continue
-		}
-		cfg := make(EffectConfig)
-		for k, v := range entry {
-			if k == "id" {
-				continue
-			}
-			cfg[k] = v
-		}
-		specs = append(specs, WorkspaceEffectSpec{ID: idVal, Config: cfg})
-	}
-	return specs, nil
 }
 
 func parseColorOrDefault(cfg EffectConfig, key string, fallback tcell.Color) tcell.Color {

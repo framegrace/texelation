@@ -45,7 +45,7 @@ func (e *resizingOverlayEffect) Configure(color tcell.Color, intensity float32, 
 	e.duration = duration
 }
 
-func (e *resizingOverlayEffect) ID() string { return "pane-resizing-overlay" }
+func (e *resizingOverlayEffect) ID() string { return "resizeTint" }
 
 func (e *resizingOverlayEffect) Active() bool {
 	e.mu.Lock()
@@ -65,6 +65,8 @@ func (e *resizingOverlayEffect) Update(now time.Time) {
 		timeline.valueAt(now)
 	}
 }
+
+func (e *resizingOverlayEffect) ApplyWorkspace(buffer [][]client.Cell) {}
 
 func (e *resizingOverlayEffect) HandleTrigger(trigger EffectTrigger) {
 	if trigger.Type != TriggerPaneResizing {

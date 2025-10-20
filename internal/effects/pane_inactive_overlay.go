@@ -45,7 +45,7 @@ func (e *inactiveOverlayEffect) Configure(color tcell.Color, intensity float32, 
 	e.duration = duration
 }
 
-func (e *inactiveOverlayEffect) ID() string { return "pane-inactive-overlay" }
+func (e *inactiveOverlayEffect) ID() string { return "fadeTint" }
 
 func (e *inactiveOverlayEffect) Active() bool {
 	e.mu.Lock()
@@ -120,3 +120,5 @@ func (e *inactiveOverlayEffect) ApplyPane(pane *client.PaneState, buffer [][]cli
 		}
 	}
 }
+
+func (e *inactiveOverlayEffect) ApplyWorkspace(buffer [][]client.Cell) {}

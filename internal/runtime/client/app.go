@@ -120,57 +120,26 @@ func (s *uiState) applyEffectConfig(reg *effects.Registry) {
 	}
 	s.effectRegistry = reg
 
-	defaultPaneSpecs := []effects.PaneEffectSpec{
-		{ID: "inactive-overlay"},
-		{ID: "resizing-overlay"},
+	var rawBindings interface{}
+	if section, ok := s.themeValues["effects"]; ok {
+		rawBindings = section["bindings"]
 	}
-	paneSpecs := defaultPaneSpecs
-	usePaneDefaults := true
-	if section, ok := s.themeValues["pane"]; ok {
-		if raw, ok := section["effects"]; ok {
-			usePaneDefaults = false
-			if raw == nil || raw == "" {
-				paneSpecs = nil
-			} else if specs, err := effects.ParsePaneEffectSpecs(raw); err == nil {
-				paneSpecs = specs
-			} else {
-				paneSpecs = nil
-			}
-		}
+	bindings, err := effects.ParseBindings(rawBindings)
+	if err != nil {
+		log.Printf("effect bindings parse failed: %v", err)
 	}
-	if usePaneDefaults {
-		paneSpecs = defaultPaneSpecs
-	}
-
-	defaultWorkspaceSpecs := []effects.WorkspaceEffectSpec{{ID: "rainbow"}, {ID: "flash"}}
-	workspaceSpecs := defaultWorkspaceSpecs
-	useWorkspaceDefaults := true
-	if section, ok := s.themeValues["workspace"]; ok {
-		if raw, ok := section["effects"]; ok {
-			useWorkspaceDefaults = false
-			if raw == nil || raw == "" {
-				workspaceSpecs = nil
-			} else if specs, err := effects.ParseWorkspaceEffectSpecs(raw); err == nil {
-				workspaceSpecs = specs
-			} else {
-				workspaceSpecs = nil
-			}
-		}
-	}
-	if useWorkspaceDefaults {
-		workspaceSpecs = defaultWorkspaceSpecs
+	if len(bindings) == 0 {
+		bindings = effects.DefaultBindings()
 	}
 
 	manager := effects.NewManager()
-	for _, spec := range paneSpecs {
-		if eff := reg.CreatePaneEffect(spec); eff != nil {
-			manager.RegisterPaneEffect(eff)
+	for _, binding := range bindings {
+		eff, err := reg.CreateEffect(binding.Effect, binding.Config)
+		if err != nil {
+			log.Printf("effect %s creation failed: %v", binding.Effect, err)
+			continue
 		}
-	}
-	for _, spec := range workspaceSpecs {
-		if eff := reg.CreateWorkspaceEffect(spec); eff != nil {
-			manager.RegisterWorkspaceEffect(eff)
-		}
+		manager.RegisterBinding(effects.Binding{Effect: eff, Target: binding.Target, Event: binding.Event})
 	}
 	if s.renderCh != nil {
 		manager.AttachRenderChannel(s.renderCh)
@@ -681,7 +650,7 @@ func (s *uiState) updateTheme(section, key, value string) {
 		return
 	}
 	var stored interface{} = value
-	if key == "effects" {
+	if section == "effects" && key == "bindings" {
 		var decoded interface{}
 		if err := json.Unmarshal([]byte(value), &decoded); err == nil {
 			stored = decoded

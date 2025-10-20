@@ -36,7 +36,7 @@ func (e *workspaceFlashEffect) Configure(color tcell.Color, duration time.Durati
 	e.duration = duration
 }
 
-func (e *workspaceFlashEffect) ID() string { return "workspace-flash" }
+func (e *workspaceFlashEffect) ID() string { return "flash" }
 
 func (e *workspaceFlashEffect) Active() bool {
 	return e.timeline.animating || e.timeline.current > 0
@@ -48,9 +48,6 @@ func (e *workspaceFlashEffect) Update(now time.Time) {
 
 func (e *workspaceFlashEffect) HandleTrigger(trigger EffectTrigger) {
 	if trigger.Type != TriggerWorkspaceKey {
-		return
-	}
-	if trigger.Key != 'f' && trigger.Key != 'F' {
 		return
 	}
 	when := trigger.Timestamp
@@ -77,3 +74,5 @@ func (e *workspaceFlashEffect) ApplyWorkspace(buffer [][]client.Cell) {
 		e.timeline.startAnimation(intensity, 0, e.duration, time.Now())
 	}
 }
+
+func (e *workspaceFlashEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}

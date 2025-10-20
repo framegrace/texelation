@@ -28,7 +28,7 @@ func newWorkspaceRainbowEffect(speedHz float64) *workspaceRainbowEffect {
 	return eff
 }
 
-func (e *workspaceRainbowEffect) ID() string { return "workspace-rainbow" }
+func (e *workspaceRainbowEffect) ID() string { return "rainbow" }
 
 func (e *workspaceRainbowEffect) Active() bool { return e.active }
 
@@ -86,3 +86,5 @@ func (e *workspaceRainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {
 		}
 	}
 }
+
+func (e *workspaceRainbowEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}

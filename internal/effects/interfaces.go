@@ -14,18 +14,32 @@ import (
 	"texelation/client"
 )
 
-type PaneEffect interface {
+// Target identifies where an effect applies its visual changes.
+type Target int
+
+const (
+	TargetPane Target = iota
+	TargetWorkspace
+)
+
+// Effect represents a visual overlay that can react to triggers and mutate pane/workspace buffers.
+type Effect interface {
 	ID() string
 	Active() bool
 	Update(now time.Time)
 	HandleTrigger(trigger EffectTrigger)
 	ApplyPane(pane *client.PaneState, buffer [][]client.Cell)
-}
-
-type WorkspaceEffect interface {
-	ID() string
-	Active() bool
-	Update(now time.Time)
-	HandleTrigger(trigger EffectTrigger)
 	ApplyWorkspace(buffer [][]client.Cell)
 }
+
+// PaneAdapter wraps an effect and suppresses workspace application.
+type PaneAdapter struct{ Effect }
+
+// ApplyWorkspace for pane-bound effects is a no-op.
+func (PaneAdapter) ApplyWorkspace(buffer [][]client.Cell) {}
+
+// WorkspaceAdapter wraps an effect and suppresses pane application.
+type WorkspaceAdapter struct{ Effect }
+
+// ApplyPane for workspace-bound effects is a no-op.
+func (WorkspaceAdapter) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}

@@ -66,7 +66,7 @@ func (le *LayoutEffect) Apply(buffer *[][]Cell) {
 	for _, ratio := range currentRatios {
 		ratioSum += ratio
 	}
-	
+
 	if ratioSum > 0.0 && len(currentRatios) > 0 {
 		// Normalize ratios to sum to 1.0
 		for i := range currentRatios {

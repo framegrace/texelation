@@ -30,22 +30,13 @@ func ApplyDefaults(cfg Config) {
 		"active_border_fg":   "#50fa7b",
 		"active_border_bg":   "#282a36",
 		"resizing_border_fg": "#ffb86c",
-		"effects":            defaultPaneEffects(),
 	}) {
 		changed = true
 	}
 
-	if applySectionDefaults(cfg, "workspace", Section{
-		"effects": defaultWorkspaceEffects(),
+	if applySectionDefaults(cfg, "effects", Section{
+		"bindings": defaultEffectBindings(),
 	}) {
-		changed = true
-	}
-
-	if normalizePaneEffects(cfg) {
-		changed = true
-	}
-
-	if normalizeWorkspaceEffects(cfg) {
 		changed = true
 	}
 
@@ -111,109 +102,44 @@ func applySectionDefaults(cfg Config, section string, defaults Section) bool {
 	}
 	return changed
 }
-
-func defaultPaneEffects() []map[string]interface{} {
+func defaultEffectBindings() []map[string]interface{} {
 	return []map[string]interface{}{
 		{
-			"id":          "inactive-overlay",
-			"color":       "#141400",
-			"intensity":   0.35,
-			"duration_ms": 400,
+			"event":  "pane.active",
+			"target": "pane",
+			"effect": "fadeTint",
+			"params": map[string]interface{}{
+				"color":       "#141400",
+				"intensity":   0.35,
+				"duration_ms": 400,
+			},
 		},
 		{
-			"id":          "resizing-overlay",
-			"color":       "#ffb86c",
-			"intensity":   0.2,
-			"duration_ms": 160,
-		},
-	}
-}
-
-func defaultWorkspaceEffects() []map[string]interface{} {
-	return []map[string]interface{}{
-		{
-			"id":       "rainbow",
-			"speed_hz": 0.5,
+			"event":  "pane.resizing",
+			"target": "pane",
+			"effect": "resizeTint",
+			"params": map[string]interface{}{
+				"color":       "#ffb86c",
+				"intensity":   0.2,
+				"duration_ms": 160,
+			},
 		},
 		{
-			"id":          "flash",
-			"color":       "#ffffff",
-			"duration_ms": 250,
+			"event":  "workspace.control",
+			"target": "workspace",
+			"effect": "rainbow",
+			"params": map[string]interface{}{
+				"speed_hz": 0.5,
+			},
+		},
+		{
+			"event":  "workspace.key",
+			"target": "workspace",
+			"effect": "flash",
+			"params": map[string]interface{}{
+				"color":       "#ffffff",
+				"duration_ms": 250,
+			},
 		},
 	}
-}
-
-func normalizePaneEffects(cfg Config) bool {
-	sec, ok := cfg["pane"]
-	if !ok || sec == nil {
-		return false
-	}
-	raw, ok := sec["effects"]
-	if !ok || raw == nil {
-		sec["effects"] = defaultPaneEffects()
-		return true
-	}
-	effects, ok := toEffectList(raw)
-	if !ok {
-		sec["effects"] = defaultPaneEffects()
-		return true
-	}
-	if len(effects) == 0 {
-		sec["effects"] = defaultPaneEffects()
-		return true
-	}
-	return false
-}
-
-func normalizeWorkspaceEffects(cfg Config) bool {
-	sec, ok := cfg["workspace"]
-	if !ok || sec == nil {
-		cfg["workspace"] = Section{"effects": defaultWorkspaceEffects()}
-		return true
-	}
-	raw, ok := sec["effects"]
-	if !ok || raw == nil {
-		sec["effects"] = defaultWorkspaceEffects()
-		return true
-	}
-	effects, ok := toEffectList(raw)
-	if !ok || len(effects) == 0 {
-		sec["effects"] = defaultWorkspaceEffects()
-		return true
-	}
-	return false
-}
-
-func toEffectList(value interface{}) ([]map[string]interface{}, bool) {
-	switch v := value.(type) {
-	case []map[string]interface{}:
-		out := make([]map[string]interface{}, len(v))
-		for i, item := range v {
-			out[i] = cloneEffect(item)
-		}
-		return out, true
-	case []interface{}:
-		out := make([]map[string]interface{}, 0, len(v))
-		for _, item := range v {
-			m, ok := item.(map[string]interface{})
-			if !ok {
-				return nil, false
-			}
-			out = append(out, cloneEffect(m))
-		}
-		return out, true
-	default:
-		return nil, false
-	}
-}
-
-func cloneEffect(entry map[string]interface{}) map[string]interface{} {
-	if entry == nil {
-		return nil
-	}
-	clone := make(map[string]interface{}, len(entry))
-	for k, v := range entry {
-		clone[k] = v
-	}
-	return clone
 }

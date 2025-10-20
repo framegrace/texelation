@@ -39,13 +39,13 @@ func NewZoomEffect(screen *Screen, node *Node, start, end PaneRect, duration tim
 		duration:   duration,
 		onComplete: onComplete,
 	}
-	
+
 	// Set the pane to render on top during the zoom animation
 	if node != nil && node.Pane != nil {
 		node.Pane.SetZOrder(ZOrderAnimation) // High z-order to ensure it's on top
 		log.Printf("ZoomEffect: Set pane '%s' z-order to %d for zoom animation", node.Pane.getTitle(), ZOrderAnimation)
 	}
-	
+
 	return effect
 }
 
@@ -87,7 +87,7 @@ func (e *ZoomEffect) Apply(buffer *[][]Cell) {
 
 	if e.node != nil && e.node.Pane != nil {
 		e.node.Pane.setDimensions(currX, currY, currX+currW, currY+currH)
-		log.Printf("ZoomEffect.Apply: Pane '%s' animated to (%d,%d) size %dx%d", 
+		log.Printf("ZoomEffect.Apply: Pane '%s' animated to (%d,%d) size %dx%d",
 			e.node.Pane.getTitle(), currX, currY, currW, currH)
 	}
 }
@@ -128,10 +128,9 @@ func (e *ZoomEffect) IsAnimating() bool {
 func (e *ZoomEffect) Cleanup() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	
+
 	if e.node != nil && e.node.Pane != nil {
 		e.node.Pane.SetZOrder(ZOrderDefault) // Reset to default z-order
 		log.Printf("ZoomEffect.Cleanup: Reset pane '%s' z-order to %d", e.node.Pane.getTitle(), ZOrderDefault)
 	}
 }
-
