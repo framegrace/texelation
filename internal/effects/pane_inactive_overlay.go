@@ -137,4 +137,10 @@ func init() {
 		duration := parseDurationOrDefault(cfg, "duration_ms", 400)
 		return newPaneTintEffect(color, intensity, duration), nil
 	})
+	Register("resizeTint", func(cfg EffectConfig) (Effect, error) {
+		color := parseColorOrDefault(cfg, "color", defaultResizingColor)
+		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.2))
+		duration := parseDurationOrDefault(cfg, "duration_ms", 160)
+		return newPaneTintEffect(color, intensity, duration), nil
+	})
 }
