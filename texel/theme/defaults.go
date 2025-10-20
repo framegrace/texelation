@@ -117,7 +117,7 @@ func defaultEffectBindings() []map[string]interface{} {
 		{
 			"event":  "pane.resizing",
 			"target": "pane",
-			"effect": "resizeTint",
+			"effect": "fadeTint",
 			"params": map[string]interface{}{
 				"color":       "#ffb86c",
 				"intensity":   0.2,

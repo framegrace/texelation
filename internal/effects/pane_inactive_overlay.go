@@ -17,7 +17,7 @@ import (
 	"texelation/client"
 )
 
-type inactiveOverlayEffect struct {
+type paneTintEffect struct {
 	color     tcell.Color
 	intensity float32
 	duration  time.Duration
@@ -25,7 +25,7 @@ type inactiveOverlayEffect struct {
 	mu        sync.Mutex
 }
 
-func newInactiveOverlayEffect(color tcell.Color, intensity float32, duration time.Duration) Effect {
+func newPaneTintEffect(color tcell.Color, intensity float32, duration time.Duration) Effect {
 	if intensity < 0 {
 		intensity = 0
 	} else if intensity > 1 {
@@ -34,7 +34,7 @@ func newInactiveOverlayEffect(color tcell.Color, intensity float32, duration tim
 	if duration < 0 {
 		duration = 0
 	}
-	return &inactiveOverlayEffect{
+	return &paneTintEffect{
 		color:     color,
 		intensity: intensity,
 		duration:  duration,
@@ -42,9 +42,9 @@ func newInactiveOverlayEffect(color tcell.Color, intensity float32, duration tim
 	}
 }
 
-func (e *inactiveOverlayEffect) ID() string { return "fadeTint" }
+func (e *paneTintEffect) ID() string { return "fadeTint" }
 
-func (e *inactiveOverlayEffect) Active() bool {
+func (e *paneTintEffect) Active() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, tl := range e.timelines {
@@ -55,7 +55,7 @@ func (e *inactiveOverlayEffect) Active() bool {
 	return false
 }
 
-func (e *inactiveOverlayEffect) Update(now time.Time) {
+func (e *paneTintEffect) Update(now time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, timeline := range e.timelines {
@@ -63,8 +63,8 @@ func (e *inactiveOverlayEffect) Update(now time.Time) {
 	}
 }
 
-func (e *inactiveOverlayEffect) HandleTrigger(trigger EffectTrigger) {
-	if trigger.Type != TriggerPaneActive {
+func (e *paneTintEffect) HandleTrigger(trigger EffectTrigger) {
+	if trigger.Type != TriggerPaneActive && trigger.Type != TriggerPaneResizing {
 		return
 	}
 	e.mu.Lock()
@@ -73,10 +73,19 @@ func (e *inactiveOverlayEffect) HandleTrigger(trigger EffectTrigger) {
 		timeline = &fadeTimeline{}
 		e.timelines[trigger.PaneID] = timeline
 	}
+
 	target := float32(0)
-	if !trigger.Active {
-		target = e.intensity
+	switch trigger.Type {
+	case TriggerPaneActive:
+		if !trigger.Active {
+			target = e.intensity
+		}
+	case TriggerPaneResizing:
+		if trigger.Resizing {
+			target = e.intensity
+		}
 	}
+
 	when := trigger.Timestamp
 	if when.IsZero() {
 		when = time.Now()
@@ -90,15 +99,15 @@ func (e *inactiveOverlayEffect) HandleTrigger(trigger EffectTrigger) {
 	e.mu.Unlock()
 }
 
-func (e *inactiveOverlayEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {
+func (e *paneTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {
 	if pane == nil {
 		return
 	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	timeline := e.timelines[pane.ID]
 	if timeline == nil {
 		if pane.Active {
+			e.mu.Unlock()
 			return
 		}
 		timeline = &fadeTimeline{}
@@ -106,6 +115,7 @@ func (e *inactiveOverlayEffect) ApplyPane(pane *client.PaneState, buffer [][]cli
 		timeline.setInstant(e.intensity, e.duration, time.Now())
 	}
 	intensity := timeline.current
+	e.mu.Unlock()
 	if intensity <= 0 {
 		return
 	}
@@ -118,13 +128,19 @@ func (e *inactiveOverlayEffect) ApplyPane(pane *client.PaneState, buffer [][]cli
 	}
 }
 
-func (e *inactiveOverlayEffect) ApplyWorkspace(buffer [][]client.Cell) {}
+func (e *paneTintEffect) ApplyWorkspace(buffer [][]client.Cell) {}
 
 func init() {
 	Register("fadeTint", func(cfg EffectConfig) (Effect, error) {
 		color := parseColorOrDefault(cfg, "color", defaultInactiveColor)
 		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.35))
 		duration := parseDurationOrDefault(cfg, "duration_ms", 400)
-		return newInactiveOverlayEffect(color, intensity, duration), nil
+		return newPaneTintEffect(color, intensity, duration), nil
+	})
+	Register("resizeTint", func(cfg EffectConfig) (Effect, error) {
+		color := parseColorOrDefault(cfg, "color", defaultResizingColor)
+		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.2))
+		duration := parseDurationOrDefault(cfg, "duration_ms", 160)
+		return newPaneTintEffect(color, intensity, duration), nil
 	})
 }

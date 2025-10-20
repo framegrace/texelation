@@ -83,7 +83,7 @@ func DefaultBindings() []BindingSpec {
 		{
 			Event:  TriggerPaneResizing,
 			Target: TargetPane,
-			Effect: "resizeTint",
+			Effect: "fadeTint",
 			Config: EffectConfig{
 				"color":       "#ffb86c",
 				"intensity":   0.2,
