@@ -12,21 +12,29 @@ import (
 	"math"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+
 	"texelation/client"
 )
 
 type rainbowEffect struct {
 	active     bool
 	speedHz    float64
+	mix        float32
 	phase      float64
 	lastUpdate time.Time
 }
 
-func newRainbowEffect(speedHz float64) Effect {
+func newRainbowEffect(speedHz float64, mix float32) Effect {
 	if speedHz <= 0 {
 		speedHz = 0.5
 	}
-	return &rainbowEffect{speedHz: speedHz}
+	if mix < 0 {
+		mix = 0
+	} else if mix > 1 {
+		mix = 1
+	}
+	return &rainbowEffect{speedHz: speedHz, mix: mix}
 }
 
 func (e *rainbowEffect) ID() string { return "rainbow" }
@@ -70,13 +78,26 @@ func (e *rainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {
 	if width == 0 {
 		return
 	}
+	mix := e.mix
 	for y := 0; y < height; y++ {
 		row := buffer[y]
 		for x := 0; x < len(row); x++ {
 			cell := &row[x]
 			offset := float64(x+y) * 0.1
-			color := hsvToRGB(float32(e.phase+offset), 1.0, 1.0)
-			cell.Style = cell.Style.Foreground(color)
+			tint := hsvToRGB(float32(e.phase+offset), 1.0, 1.0)
+			fg, bg, attrs := cell.Style.Decompose()
+			baseFg := fg.TrueColor()
+			if fg == tcell.ColorDefault {
+				baseFg = defaultInactiveColor.TrueColor()
+			}
+			mixed := blendColor(baseFg, tint.TrueColor(), mix)
+			cell.Style = tcell.StyleDefault.Foreground(mixed).Background(bg.TrueColor()).
+				Bold(attrs&tcell.AttrBold != 0).
+				Underline(attrs&tcell.AttrUnderline != 0).
+				Reverse(attrs&tcell.AttrReverse != 0).
+				Blink(attrs&tcell.AttrBlink != 0).
+				Dim(attrs&tcell.AttrDim != 0).
+				Italic(attrs&tcell.AttrItalic != 0)
 		}
 	}
 }
@@ -86,6 +107,7 @@ func (e *rainbowEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell
 func init() {
 	Register("rainbow", func(cfg EffectConfig) (Effect, error) {
 		speed := parseFloatOrDefault(cfg, "speed_hz", 0.5)
-		return newRainbowEffect(speed), nil
+		mix := float32(parseFloatOrDefault(cfg, "mix", 0.6))
+		return newRainbowEffect(speed, mix), nil
 	})
 }
