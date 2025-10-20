@@ -90,6 +90,12 @@ func (e *rainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {
 			if fg == tcell.ColorDefault || !baseFg.Valid() {
 				baseFg = defaultInactiveColor.TrueColor()
 			}
+
+			// Detect prompt/background hacks that encode background in the foreground colour.
+			if matchesNeighborBackground(baseFg, row, x) {
+				continue
+			}
+
 			mixed := blendColor(baseFg, tint, mix)
 			style := cell.Style.Foreground(mixed)
 			if bg != tcell.ColorDefault {
@@ -115,4 +121,25 @@ func init() {
 		mix := float32(parseFloatOrDefault(cfg, "mix", 0.6))
 		return newRainbowEffect(speed, mix), nil
 	})
+}
+
+func matchesNeighborBackground(base tcell.Color, row []client.Cell, x int) bool {
+	if !base.Valid() {
+		return false
+	}
+	if x > 0 {
+		if _, bg, _ := row[x-1].Style.Decompose(); bg != tcell.ColorDefault {
+			if base.TrueColor() == bg.TrueColor() {
+				return true
+			}
+		}
+	}
+	if x+1 < len(row) {
+		if _, bg, _ := row[x+1].Style.Decompose(); bg != tcell.ColorDefault {
+			if base.TrueColor() == bg.TrueColor() {
+				return true
+			}
+		}
+	}
+	return false
 }
