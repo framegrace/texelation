@@ -84,20 +84,25 @@ func (e *rainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {
 		for x := 0; x < len(row); x++ {
 			cell := &row[x]
 			offset := float64(x+y) * 0.1
-			tint := hsvToRGB(float32(e.phase+offset), 1.0, 1.0)
+			tint := hsvToRGB(float32(e.phase+offset), 1.0, 1.0).TrueColor()
 			fg, bg, attrs := cell.Style.Decompose()
 			baseFg := fg.TrueColor()
-			if fg == tcell.ColorDefault {
+			if fg == tcell.ColorDefault || !baseFg.Valid() {
 				baseFg = defaultInactiveColor.TrueColor()
 			}
-			mixed := blendColor(baseFg, tint.TrueColor(), mix)
-			cell.Style = tcell.StyleDefault.Foreground(mixed).Background(bg.TrueColor()).
+			mixed := blendColor(baseFg, tint, mix)
+			style := cell.Style.Foreground(mixed)
+			if bg != tcell.ColorDefault {
+				style = style.Background(bg.TrueColor())
+			}
+			style = style.
 				Bold(attrs&tcell.AttrBold != 0).
 				Underline(attrs&tcell.AttrUnderline != 0).
 				Reverse(attrs&tcell.AttrReverse != 0).
 				Blink(attrs&tcell.AttrBlink != 0).
 				Dim(attrs&tcell.AttrDim != 0).
 				Italic(attrs&tcell.AttrItalic != 0)
+			cell.Style = style
 		}
 	}
 }
