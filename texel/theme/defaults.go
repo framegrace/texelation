@@ -139,6 +139,7 @@ func defaultEffectBindings() []map[string]interface{} {
 			"params": map[string]interface{}{
 				"color":       "#ffffff",
 				"duration_ms": 250,
+				"keys":        []string{"F"},
 			},
 		},
 	}

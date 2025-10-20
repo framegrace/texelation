@@ -10,6 +10,7 @@ package effects
 
 import (
 	"time"
+	"unicode"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -20,20 +21,31 @@ type workspaceFlashEffect struct {
 	color    tcell.Color
 	duration time.Duration
 	timeline *fadeTimeline
+	keys     map[rune]struct{}
 }
 
-func newWorkspaceFlashEffect(color tcell.Color, duration time.Duration) *workspaceFlashEffect {
+func newWorkspaceFlashEffect(color tcell.Color, duration time.Duration, keys []rune) *workspaceFlashEffect {
 	eff := &workspaceFlashEffect{timeline: &fadeTimeline{}}
-	eff.Configure(color, duration)
+	eff.Configure(color, duration, keys)
 	return eff
 }
 
-func (e *workspaceFlashEffect) Configure(color tcell.Color, duration time.Duration) {
+func (e *workspaceFlashEffect) Configure(color tcell.Color, duration time.Duration, keys []rune) {
 	e.color = color
 	if duration < 0 {
 		duration = 0
 	}
 	e.duration = duration
+	if len(keys) == 0 {
+		keys = []rune{'F'}
+	}
+	e.keys = make(map[rune]struct{}, len(keys))
+	for _, r := range keys {
+		if r == 0 {
+			continue
+		}
+		e.keys[unicode.ToUpper(r)] = struct{}{}
+	}
 }
 
 func (e *workspaceFlashEffect) ID() string { return "flash" }
@@ -49,6 +61,11 @@ func (e *workspaceFlashEffect) Update(now time.Time) {
 func (e *workspaceFlashEffect) HandleTrigger(trigger EffectTrigger) {
 	if trigger.Type != TriggerWorkspaceKey {
 		return
+	}
+	if len(e.keys) > 0 {
+		if _, ok := e.keys[unicode.ToUpper(trigger.Key)]; !ok {
+			return
+		}
 	}
 	when := trigger.Timestamp
 	if when.IsZero() {

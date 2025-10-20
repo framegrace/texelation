@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -52,7 +53,8 @@ func NewRegistry() *Registry {
 		"flash": func(cfg EffectConfig) (Effect, error) {
 			color := parseColorOrDefault(cfg, "color", defaultFlashColor)
 			duration := parseDurationOrDefault(cfg, "duration_ms", 250)
-			return newWorkspaceFlashEffect(color, duration), nil
+			keys := parseKeysOrDefault(cfg, "keys", []rune{'F'})
+			return newWorkspaceFlashEffect(color, duration, keys), nil
 		},
 	}
 	return &Registry{factories: factories}
@@ -258,4 +260,46 @@ func parseDurationOrDefault(cfg EffectConfig, key string, fallbackMS int64) time
 		}
 	}
 	return time.Duration(fallbackMS) * time.Millisecond
+}
+
+func parseKeysOrDefault(cfg EffectConfig, key string, fallback []rune) []rune {
+	if cfg == nil {
+		return append([]rune(nil), fallback...)
+	}
+	raw, ok := cfg[key]
+	if !ok || raw == nil {
+		return append([]rune(nil), fallback...)
+	}
+	switch v := raw.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []rune(v)
+	case []interface{}:
+		out := make([]rune, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				r, _ := utf8.DecodeRuneInString(s)
+				if r != utf8.RuneError {
+					out = append(out, r)
+				}
+			}
+		}
+		return out
+	case []string:
+		out := make([]rune, 0, len(v))
+		for _, s := range v {
+			if s == "" {
+				continue
+			}
+			r, _ := utf8.DecodeRuneInString(s)
+			if r != utf8.RuneError {
+				out = append(out, r)
+			}
+		}
+		return out
+	default:
+		return append([]rune(nil), fallback...)
+	}
 }
