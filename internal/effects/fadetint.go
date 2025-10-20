@@ -1,9 +1,9 @@
 // Copyright © 2025 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: internal/effects/pane_inactive_overlay.go
-// Summary: Implements pane inactive overlay capabilities for the client effect subsystem.
-// Usage: Used by the client runtime to orchestrate pane inactive overlay visuals before rendering.
+// File: internal/effects/fadetint.go
+// Summary: Implements fade tint capabilities for the client effect subsystem.
+// Usage: Used by the client runtime to orchestrate fade tint visuals before rendering.
 // Notes: Centralises every pane and workspace overlay so they can be configured via themes.
 
 package effects
@@ -17,7 +17,7 @@ import (
 	"texelation/client"
 )
 
-type paneTintEffect struct {
+type fadeTintEffect struct {
 	color     tcell.Color
 	intensity float32
 	duration  time.Duration
@@ -25,7 +25,7 @@ type paneTintEffect struct {
 	mu        sync.Mutex
 }
 
-func newPaneTintEffect(color tcell.Color, intensity float32, duration time.Duration) Effect {
+func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Duration) Effect {
 	if intensity < 0 {
 		intensity = 0
 	} else if intensity > 1 {
@@ -34,7 +34,7 @@ func newPaneTintEffect(color tcell.Color, intensity float32, duration time.Durat
 	if duration < 0 {
 		duration = 0
 	}
-	return &paneTintEffect{
+	return &fadeTintEffect{
 		color:     color,
 		intensity: intensity,
 		duration:  duration,
@@ -42,9 +42,9 @@ func newPaneTintEffect(color tcell.Color, intensity float32, duration time.Durat
 	}
 }
 
-func (e *paneTintEffect) ID() string { return "fadeTint" }
+func (e *fadeTintEffect) ID() string { return "fadeTint" }
 
-func (e *paneTintEffect) Active() bool {
+func (e *fadeTintEffect) Active() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, tl := range e.timelines {
@@ -55,7 +55,7 @@ func (e *paneTintEffect) Active() bool {
 	return false
 }
 
-func (e *paneTintEffect) Update(now time.Time) {
+func (e *fadeTintEffect) Update(now time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, timeline := range e.timelines {
@@ -63,7 +63,7 @@ func (e *paneTintEffect) Update(now time.Time) {
 	}
 }
 
-func (e *paneTintEffect) HandleTrigger(trigger EffectTrigger) {
+func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 	if trigger.Type != TriggerPaneActive && trigger.Type != TriggerPaneResizing {
 		return
 	}
@@ -73,7 +73,6 @@ func (e *paneTintEffect) HandleTrigger(trigger EffectTrigger) {
 		timeline = &fadeTimeline{}
 		e.timelines[trigger.PaneID] = timeline
 	}
-
 	target := float32(0)
 	switch trigger.Type {
 	case TriggerPaneActive:
@@ -85,7 +84,6 @@ func (e *paneTintEffect) HandleTrigger(trigger EffectTrigger) {
 			target = e.intensity
 		}
 	}
-
 	when := trigger.Timestamp
 	if when.IsZero() {
 		when = time.Now()
@@ -99,7 +97,7 @@ func (e *paneTintEffect) HandleTrigger(trigger EffectTrigger) {
 	e.mu.Unlock()
 }
 
-func (e *paneTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {
+func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {
 	if pane == nil {
 		return
 	}
@@ -128,13 +126,13 @@ func (e *paneTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cel
 	}
 }
 
-func (e *paneTintEffect) ApplyWorkspace(buffer [][]client.Cell) {}
+func (e *fadeTintEffect) ApplyWorkspace(buffer [][]client.Cell) {}
 
 func init() {
 	Register("fadeTint", func(cfg EffectConfig) (Effect, error) {
 		color := parseColorOrDefault(cfg, "color", defaultInactiveColor)
 		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.35))
 		duration := parseDurationOrDefault(cfg, "duration_ms", 400)
-		return newPaneTintEffect(color, intensity, duration), nil
+		return newFadeTintEffect(color, intensity, duration), nil
 	})
 }

@@ -1,9 +1,9 @@
 // Copyright © 2025 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: internal/effects/workspace_rainbow.go
-// Summary: Implements workspace rainbow capabilities for the client effect subsystem.
-// Usage: Used by the client runtime to orchestrate workspace rainbow visuals before rendering.
+// File: internal/effects/rainbow.go
+// Summary: Implements rainbow capabilities for the client effect subsystem.
+// Usage: Used by the client runtime to orchestrate rainbow visuals before rendering.
 // Notes: Centralises every pane and workspace overlay so they can be configured via themes.
 
 package effects
@@ -15,25 +15,25 @@ import (
 	"texelation/client"
 )
 
-type workspaceRainbowEffect struct {
+type rainbowEffect struct {
 	active     bool
 	speedHz    float64
 	phase      float64
 	lastUpdate time.Time
 }
 
-func newWorkspaceRainbowEffect(speedHz float64) Effect {
+func newRainbowEffect(speedHz float64) Effect {
 	if speedHz <= 0 {
 		speedHz = 0.5
 	}
-	return &workspaceRainbowEffect{speedHz: speedHz}
+	return &rainbowEffect{speedHz: speedHz}
 }
 
-func (e *workspaceRainbowEffect) ID() string { return "rainbow" }
+func (e *rainbowEffect) ID() string { return "rainbow" }
 
-func (e *workspaceRainbowEffect) Active() bool { return e.active }
+func (e *rainbowEffect) Active() bool { return e.active }
 
-func (e *workspaceRainbowEffect) Update(now time.Time) {
+func (e *rainbowEffect) Update(now time.Time) {
 	if !e.active {
 		return
 	}
@@ -46,7 +46,7 @@ func (e *workspaceRainbowEffect) Update(now time.Time) {
 	e.phase = math.Mod(e.phase+2*math.Pi*e.speedHz*delta, 2*math.Pi)
 }
 
-func (e *workspaceRainbowEffect) HandleTrigger(trigger EffectTrigger) {
+func (e *rainbowEffect) HandleTrigger(trigger EffectTrigger) {
 	if trigger.Type != TriggerWorkspaceControl {
 		return
 	}
@@ -58,7 +58,7 @@ func (e *workspaceRainbowEffect) HandleTrigger(trigger EffectTrigger) {
 	}
 }
 
-func (e *workspaceRainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {
+func (e *rainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {
 	if !e.active {
 		return
 	}
@@ -81,11 +81,11 @@ func (e *workspaceRainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {
 	}
 }
 
-func (e *workspaceRainbowEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
+func (e *rainbowEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
 
 func init() {
 	Register("rainbow", func(cfg EffectConfig) (Effect, error) {
 		speed := parseFloatOrDefault(cfg, "speed_hz", 0.5)
-		return newWorkspaceRainbowEffect(speed), nil
+		return newRainbowEffect(speed), nil
 	})
 }
