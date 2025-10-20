@@ -24,27 +24,25 @@ type workspaceFlashEffect struct {
 	keys     map[rune]struct{}
 }
 
-func newWorkspaceFlashEffect(color tcell.Color, duration time.Duration, keys []rune) *workspaceFlashEffect {
-	eff := &workspaceFlashEffect{timeline: &fadeTimeline{}}
-	eff.Configure(color, duration, keys)
-	return eff
-}
-
-func (e *workspaceFlashEffect) Configure(color tcell.Color, duration time.Duration, keys []rune) {
-	e.color = color
+func newWorkspaceFlashEffect(color tcell.Color, duration time.Duration, keys []rune) Effect {
 	if duration < 0 {
 		duration = 0
 	}
-	e.duration = duration
 	if len(keys) == 0 {
 		keys = []rune{'F'}
 	}
-	e.keys = make(map[rune]struct{}, len(keys))
+	upper := make(map[rune]struct{}, len(keys))
 	for _, r := range keys {
 		if r == 0 {
 			continue
 		}
-		e.keys[unicode.ToUpper(r)] = struct{}{}
+		upper[unicode.ToUpper(r)] = struct{}{}
+	}
+	return &workspaceFlashEffect{
+		color:    color,
+		duration: duration,
+		timeline: &fadeTimeline{},
+		keys:     upper,
 	}
 }
 
@@ -93,3 +91,12 @@ func (e *workspaceFlashEffect) ApplyWorkspace(buffer [][]client.Cell) {
 }
 
 func (e *workspaceFlashEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
+
+func init() {
+	Register("flash", func(cfg EffectConfig) (Effect, error) {
+		color := parseColorOrDefault(cfg, "color", defaultFlashColor)
+		duration := parseDurationOrDefault(cfg, "duration_ms", 250)
+		keys := parseKeysOrDefault(cfg, "keys", []rune{'F'})
+		return newWorkspaceFlashEffect(color, duration, keys), nil
+	})
+}

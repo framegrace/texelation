@@ -28,40 +28,8 @@ type BindingSpec struct {
 	Config EffectConfig
 }
 
-type Registry struct {
-	factories map[string]func(EffectConfig) (Effect, error)
-}
-
-func NewRegistry() *Registry {
-	factories := map[string]func(EffectConfig) (Effect, error){
-		"fadeTint": func(cfg EffectConfig) (Effect, error) {
-			color := parseColorOrDefault(cfg, "color", defaultInactiveColor)
-			intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.35))
-			duration := parseDurationOrDefault(cfg, "duration_ms", 400)
-			return newInactiveOverlayEffect(color, intensity, duration), nil
-		},
-		"resizeTint": func(cfg EffectConfig) (Effect, error) {
-			color := parseColorOrDefault(cfg, "color", defaultResizingColor)
-			intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.2))
-			duration := parseDurationOrDefault(cfg, "duration_ms", 160)
-			return newResizingOverlayEffect(color, intensity, duration), nil
-		},
-		"rainbow": func(cfg EffectConfig) (Effect, error) {
-			speed := parseFloatOrDefault(cfg, "speed_hz", 0.5)
-			return newWorkspaceRainbowEffect(speed), nil
-		},
-		"flash": func(cfg EffectConfig) (Effect, error) {
-			color := parseColorOrDefault(cfg, "color", defaultFlashColor)
-			duration := parseDurationOrDefault(cfg, "duration_ms", 250)
-			keys := parseKeysOrDefault(cfg, "keys", []rune{'F'})
-			return newWorkspaceFlashEffect(color, duration, keys), nil
-		},
-	}
-	return &Registry{factories: factories}
-}
-
-func (r *Registry) CreateEffect(id string, cfg EffectConfig) (Effect, error) {
-	factory, ok := r.factories[id]
+func CreateEffect(id string, cfg EffectConfig) (Effect, error) {
+	factory, ok := Lookup(id)
 	if !ok {
 		return nil, fmt.Errorf("unknown effect id %q", id)
 	}
@@ -137,6 +105,7 @@ func DefaultBindings() []BindingSpec {
 			Config: EffectConfig{
 				"color":       "#ffffff",
 				"duration_ms": 250,
+				"keys":        []string{"F"},
 			},
 		},
 	}

@@ -25,13 +25,7 @@ type resizingOverlayEffect struct {
 	mu        sync.Mutex
 }
 
-func newResizingOverlayEffect(color tcell.Color, intensity float32, duration time.Duration) *resizingOverlayEffect {
-	eff := &resizingOverlayEffect{timelines: make(map[[16]byte]*fadeTimeline)}
-	eff.Configure(color, intensity, duration)
-	return eff
-}
-
-func (e *resizingOverlayEffect) Configure(color tcell.Color, intensity float32, duration time.Duration) {
+func newResizingOverlayEffect(color tcell.Color, intensity float32, duration time.Duration) Effect {
 	if intensity < 0 {
 		intensity = 0
 	} else if intensity > 1 {
@@ -40,9 +34,12 @@ func (e *resizingOverlayEffect) Configure(color tcell.Color, intensity float32, 
 	if duration < 0 {
 		duration = 0
 	}
-	e.color = color
-	e.intensity = intensity
-	e.duration = duration
+	return &resizingOverlayEffect{
+		color:     color,
+		intensity: intensity,
+		duration:  duration,
+		timelines: make(map[[16]byte]*fadeTimeline),
+	}
 }
 
 func (e *resizingOverlayEffect) ID() string { return "resizeTint" }
@@ -122,4 +119,13 @@ func (e *resizingOverlayEffect) ApplyPane(pane *client.PaneState, buffer [][]cli
 			cell.Style = tintStyle(cell.Style, e.color, intensity)
 		}
 	}
+}
+
+func init() {
+	Register("resizeTint", func(cfg EffectConfig) (Effect, error) {
+		color := parseColorOrDefault(cfg, "color", defaultResizingColor)
+		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.2))
+		duration := parseDurationOrDefault(cfg, "duration_ms", 160)
+		return newResizingOverlayEffect(color, intensity, duration), nil
+	})
 }

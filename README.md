@@ -50,6 +50,23 @@ make client
 
 Both commands use a shared build cache in `.cache/` to avoid polluting `$GOCACHE`.
 
+### Effect Configuration
+
+Visual overlays are now defined entirely through the theme file. The default `theme.json` will contain an `effects.bindings` array like:
+
+```json
+"effects": {
+  "bindings": [
+    {"event": "pane.active", "target": "pane", "effect": "fadeTint"},
+    {"event": "pane.resizing", "target": "pane", "effect": "resizeTint"},
+    {"event": "workspace.control", "target": "workspace", "effect": "rainbow"},
+    {"event": "workspace.key", "target": "workspace", "effect": "flash", "params": {"keys": ["F"]}}
+  ]
+}
+```
+
+Each entry wires a trigger (e.g. `workspace.key`) to an effect implementation (`flash`) with optional parameters. Add your own bindings or swap effects without touching Go code—new effect packages simply register themselves at import time.
+
 ## Testing
 
 Unit tests (excluding long-running integration suites) can be executed with:

@@ -25,13 +25,7 @@ type inactiveOverlayEffect struct {
 	mu        sync.Mutex
 }
 
-func newInactiveOverlayEffect(color tcell.Color, intensity float32, duration time.Duration) *inactiveOverlayEffect {
-	eff := &inactiveOverlayEffect{timelines: make(map[[16]byte]*fadeTimeline)}
-	eff.Configure(color, intensity, duration)
-	return eff
-}
-
-func (e *inactiveOverlayEffect) Configure(color tcell.Color, intensity float32, duration time.Duration) {
+func newInactiveOverlayEffect(color tcell.Color, intensity float32, duration time.Duration) Effect {
 	if intensity < 0 {
 		intensity = 0
 	} else if intensity > 1 {
@@ -40,9 +34,12 @@ func (e *inactiveOverlayEffect) Configure(color tcell.Color, intensity float32, 
 	if duration < 0 {
 		duration = 0
 	}
-	e.color = color
-	e.intensity = intensity
-	e.duration = duration
+	return &inactiveOverlayEffect{
+		color:     color,
+		intensity: intensity,
+		duration:  duration,
+		timelines: make(map[[16]byte]*fadeTimeline),
+	}
 }
 
 func (e *inactiveOverlayEffect) ID() string { return "fadeTint" }
@@ -122,3 +119,12 @@ func (e *inactiveOverlayEffect) ApplyPane(pane *client.PaneState, buffer [][]cli
 }
 
 func (e *inactiveOverlayEffect) ApplyWorkspace(buffer [][]client.Cell) {}
+
+func init() {
+	Register("fadeTint", func(cfg EffectConfig) (Effect, error) {
+		color := parseColorOrDefault(cfg, "color", defaultInactiveColor)
+		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.35))
+		duration := parseDurationOrDefault(cfg, "duration_ms", 400)
+		return newInactiveOverlayEffect(color, intensity, duration), nil
+	})
+}

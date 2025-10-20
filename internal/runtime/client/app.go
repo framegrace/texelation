@@ -39,33 +39,32 @@ type Options struct {
 }
 
 type uiState struct {
-	cache          *client.BufferCache
-	clipboard      protocol.ClipboardData
-	hasClipboard   bool
-	theme          protocol.ThemeAck
-	hasTheme       bool
-	focus          protocol.PaneFocus
-	hasFocus       bool
-	themeValues    map[string]map[string]interface{}
-	defaultStyle   tcell.Style
-	defaultFg      tcell.Color
-	defaultBg      tcell.Color
-	workspaces     []int
-	workspaceID    int
-	activeTitle    string
-	controlMode    bool
-	subMode        rune
-	desktopBg      tcell.Color
-	zoomed         bool
-	zoomedPane     [16]byte
-	pasting        bool
-	pasteBuf       []byte
-	effectRegistry *effects.Registry
-	renderCh       chan<- struct{}
-	effects        *effects.Manager
-	resizeMu       sync.Mutex
-	pendingResize  protocol.Resize
-	resizeSeq      uint64
+	cache         *client.BufferCache
+	clipboard     protocol.ClipboardData
+	hasClipboard  bool
+	theme         protocol.ThemeAck
+	hasTheme      bool
+	focus         protocol.PaneFocus
+	hasFocus      bool
+	themeValues   map[string]map[string]interface{}
+	defaultStyle  tcell.Style
+	defaultFg     tcell.Color
+	defaultBg     tcell.Color
+	workspaces    []int
+	workspaceID   int
+	activeTitle   string
+	controlMode   bool
+	subMode       rune
+	desktopBg     tcell.Color
+	zoomed        bool
+	zoomedPane    [16]byte
+	pasting       bool
+	pasteBuf      []byte
+	renderCh      chan<- struct{}
+	effects       *effects.Manager
+	resizeMu      sync.Mutex
+	pendingResize protocol.Resize
+	resizeSeq     uint64
 }
 
 func (s *uiState) setRenderChannel(ch chan<- struct{}) {
@@ -110,16 +109,7 @@ func (s *uiState) scheduleResize(writeMu *sync.Mutex, conn net.Conn, sessionID [
 	}()
 }
 
-func (s *uiState) applyEffectConfig(reg *effects.Registry) {
-	if reg == nil {
-		if s.effectRegistry != nil {
-			reg = s.effectRegistry
-		} else {
-			reg = effects.NewRegistry()
-		}
-	}
-	s.effectRegistry = reg
-
+func (s *uiState) applyEffectConfig() {
 	var rawBindings interface{}
 	if section, ok := s.themeValues["effects"]; ok {
 		rawBindings = section["bindings"]
@@ -134,7 +124,7 @@ func (s *uiState) applyEffectConfig(reg *effects.Registry) {
 
 	manager := effects.NewManager()
 	for _, binding := range bindings {
-		eff, err := reg.CreateEffect(binding.Effect, binding.Config)
+		eff, err := effects.CreateEffect(binding.Effect, binding.Config)
 		if err != nil {
 			log.Printf("effect %s creation failed: %v", binding.Effect, err)
 			continue
@@ -201,9 +191,7 @@ func Run(opts Options) error {
 		}
 	}
 
-	registry := effects.NewRegistry()
-	state.effectRegistry = registry
-	state.applyEffectConfig(nil)
+	state.applyEffectConfig()
 	lastSequence := uint64(0)
 
 	var pendingAck atomic.Uint64
@@ -382,7 +370,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		state.theme = protocol.ThemeAck(themeUpdate)
 		state.hasTheme = true
 		state.updateTheme(themeUpdate.Section, themeUpdate.Key, themeUpdate.Value)
-		state.applyEffectConfig(nil)
+		state.applyEffectConfig()
 		return true
 	case protocol.MsgThemeAck:
 		ack, err := protocol.DecodeThemeAck(payload)
@@ -393,7 +381,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		state.theme = ack
 		state.hasTheme = true
 		state.updateTheme(ack.Section, ack.Key, ack.Value)
-		state.applyEffectConfig(nil)
+		state.applyEffectConfig()
 		return true
 	case protocol.MsgPaneFocus:
 		focus, err := protocol.DecodePaneFocus(payload)
@@ -671,7 +659,7 @@ func (s *uiState) updateTheme(section, key, value string) {
 		}
 	}
 	s.recomputeDefaultStyle()
-	s.applyEffectConfig(nil)
+	s.applyEffectConfig()
 }
 
 func (s *uiState) recomputeDefaultStyle() {

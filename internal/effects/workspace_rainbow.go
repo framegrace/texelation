@@ -22,22 +22,16 @@ type workspaceRainbowEffect struct {
 	lastUpdate time.Time
 }
 
-func newWorkspaceRainbowEffect(speedHz float64) *workspaceRainbowEffect {
-	eff := &workspaceRainbowEffect{}
-	eff.Configure(speedHz)
-	return eff
+func newWorkspaceRainbowEffect(speedHz float64) Effect {
+	if speedHz <= 0 {
+		speedHz = 0.5
+	}
+	return &workspaceRainbowEffect{speedHz: speedHz}
 }
 
 func (e *workspaceRainbowEffect) ID() string { return "rainbow" }
 
 func (e *workspaceRainbowEffect) Active() bool { return e.active }
-
-func (e *workspaceRainbowEffect) Configure(speedHz float64) {
-	if speedHz <= 0 {
-		speedHz = 0.5
-	}
-	e.speedHz = speedHz
-}
 
 func (e *workspaceRainbowEffect) Update(now time.Time) {
 	if !e.active {
@@ -88,3 +82,10 @@ func (e *workspaceRainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {
 }
 
 func (e *workspaceRainbowEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
+
+func init() {
+	Register("rainbow", func(cfg EffectConfig) (Effect, error) {
+		speed := parseFloatOrDefault(cfg, "speed_hz", 0.5)
+		return newWorkspaceRainbowEffect(speed), nil
+	})
+}
