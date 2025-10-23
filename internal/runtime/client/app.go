@@ -15,7 +15,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -703,28 +702,6 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 			Timestamp: time.Now(),
 		})
 	}
-}
-
-func parseHexColor(value string) (tcell.Color, bool) {
-	if len(value) == 0 {
-		return tcell.ColorDefault, false
-	}
-	if len(value) == 7 && value[0] == '#' {
-		if fg, err := strconv.ParseInt(value[1:], 16, 32); err == nil {
-			r := int32((fg >> 16) & 0xFF)
-			g := int32((fg >> 8) & 0xFF)
-			b := int32(fg & 0xFF)
-			return tcell.NewRGBColor(r, g, b), true
-		}
-	}
-	return tcell.ColorDefault, false
-}
-
-func colorFromRGB(rgb uint32) tcell.Color {
-	r := int32((rgb >> 16) & 0xFF)
-	g := int32((rgb >> 8) & 0xFF)
-	b := int32(rgb & 0xFF)
-	return tcell.NewRGBColor(r, g, b)
 }
 
 func formatPaneID(id [16]byte) string {
