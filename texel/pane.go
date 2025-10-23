@@ -25,7 +25,7 @@ const (
 	ZOrderDefault   = 0    // Normal panes
 	ZOrderFloating  = 100  // Floating windows
 	ZOrderDialog    = 500  // Modal dialogs
-	ZOrderAnimation = 1000 // During animations (zoom, etc.)
+	ZOrderAnimation = 1000 // Reserved for future use (visual effects, etc.)
 	ZOrderTooltip   = 2000 // Tooltips and temporary overlays
 )
 

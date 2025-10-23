@@ -598,74 +598,27 @@ func (d *Desktop) toggleZoom() {
 		return
 	}
 
-	mainX, mainY, mainW, mainH := d.getMainArea()
-
-	zoomingIn := d.zoomedPane == nil
-
-	var effect *ZoomEffect
-	if zoomingIn { // ZOOM IN
+	if d.zoomedPane == nil {
+		// ZOOM IN
 		nodeToZoom := d.activeWorkspace.tree.ActiveLeaf
 		if nodeToZoom == nil || nodeToZoom.Pane == nil {
 			return
 		}
-
-		p := nodeToZoom.Pane
-		start := PaneRect{x: p.absX0, y: p.absY0, w: p.Width(), h: p.Height()}
-		end := PaneRect{x: mainX, y: mainY, w: mainW, h: mainH}
-
-		effect = NewZoomEffect(d.activeWorkspace, nodeToZoom, start, end, 250*time.Millisecond, func() {
-			d.zoomedPane = nodeToZoom
-			if nodeToZoom.Pane != nil {
-				nodeToZoom.Pane.SetZOrder(ZOrderAnimation)
-			}
-			d.recalculateLayout()
-			d.broadcastStateUpdate()
-			d.broadcastTreeChanged()
-		})
-	} else { // ZOOM OUT
-		nodeToUnZoom := d.zoomedPane
-		d.zoomedPane = nil // Immediately set to nil to restore original layout for calculation
-
-		// Recalculate layout to find the target un-zoomed position
-		d.recalculateLayout()
-
-		p := nodeToUnZoom.Pane
-		end := PaneRect{x: p.absX0, y: p.absY0, w: p.Width(), h: p.Height()}
-		start := PaneRect{x: mainX, y: mainY, w: mainW, h: mainH}
-
-		p.setDimensions(start.x, start.y, start.x+start.w, start.y+start.h)
-
-		effect = NewZoomEffect(d.activeWorkspace, nodeToUnZoom, start, end, 250*time.Millisecond, func() {
-			if nodeToUnZoom.Pane != nil {
-				nodeToUnZoom.Pane.SetZOrder(ZOrderDefault)
-			}
-			d.recalculateLayout()
-			d.broadcastStateUpdate()
-			d.broadcastTreeChanged()
-		})
-	}
-
-	if effect != nil {
-		// If animations are disabled we complete immediately to keep remote clients in sync.
-		if d.animationsDisabled() {
-			if effect.onComplete != nil {
-				effect.onComplete()
-			}
-			if !zoomingIn {
-				effect.Cleanup()
-			}
-			return
+		d.zoomedPane = nodeToZoom
+		// Set high z-order so zoomed pane renders on top
+		nodeToZoom.Pane.SetZOrder(ZOrderAnimation)
+	} else {
+		// ZOOM OUT
+		if d.zoomedPane.Pane != nil {
+			// Reset z-order back to default
+			d.zoomedPane.Pane.SetZOrder(ZOrderDefault)
 		}
-		d.activeWorkspace.AddEffect(effect)
-		d.activeWorkspace.animator.AnimateTo(effect, 1.0, 250*time.Millisecond, func() {
-			// Call cleanup before removing effect to reset z-order
-			effect.Cleanup()
-			d.activeWorkspace.RemoveEffect(effect)
-			if effect.onComplete != nil {
-				effect.onComplete()
-			}
-		})
+		d.zoomedPane = nil
 	}
+
+	d.recalculateLayout()
+	d.broadcastStateUpdate()
+	d.broadcastTreeChanged()
 }
 
 // handleControlMode processes all commands when the Desktop is in control mode.

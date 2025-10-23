@@ -291,101 +291,18 @@ func (s *Screen) handlePaste(data []byte) {
 }
 
 func (s *Screen) AnimateGroupExpansion(groupNode *Node, newPaneIndex int, duration time.Duration) {
-	if groupNode == nil || len(groupNode.SplitRatios) <= newPaneIndex {
-		s.recalculateLayout()
-		return
-	}
-
-	log.Printf("AnimateGroupExpansion: Animating expansion of group with %d children", len(groupNode.Children))
-
-	// The SplitActive method already set the ratios to equal distribution
-	// We need to reconstruct what the ratios were BEFORE the new pane was added
-	numChildren := len(groupNode.Children)
-	numOldChildren := numChildren - 1
-
-	// Start ratios: simulate the state before the new pane was added
-	startRatios := make([]float64, numChildren)
-	oldEqualRatio := 1.0 / float64(numOldChildren) // What each pane had before
-
-	for i := 0; i < numChildren; i++ {
-		if i == newPaneIndex {
-			startRatios[i] = 0.0 // New pane starts at 0
-		} else {
-			startRatios[i] = oldEqualRatio // Existing panes start at their old equal size
-		}
-	}
-
-	// Target ratios: equal distribution among ALL panes (what SplitActive set)
-	targetRatios := make([]float64, numChildren)
-	newEqualRatio := 1.0 / float64(numChildren)
-	for i := range targetRatios {
-		targetRatios[i] = newEqualRatio
-	}
-
-	log.Printf("AnimateGroupExpansion: %d->%d children, old ratio=%.3f, new ratio=%.3f",
-		numOldChildren, numChildren, oldEqualRatio, newEqualRatio)
-	log.Printf("AnimateGroupExpansion: start=%v, target=%v", startRatios, targetRatios)
-
-	if s.animationsDisabled() {
-		groupNode.SplitRatios = targetRatios
-		s.recalculateLayout()
-		s.Refresh()
-		return
-	}
-
-	s.animateLayoutTransition(groupNode, startRatios, targetRatios, duration)
+	// Animation removed - just set final layout directly
+	s.recalculateLayout()
+	s.Refresh()
 }
 
 // Animation for splitting current pane (only 2 panes involved)
 func (s *Screen) AnimatePaneSplit(splitNode *Node, duration time.Duration) {
-	if splitNode == nil || len(splitNode.Children) != 2 {
-		s.recalculateLayout()
-		return
-	}
-
-	log.Printf("AnimatePaneSplit: Animating split of single pane into two")
-
-	// Start ratios: first pane gets 100%, second gets 0%
-	startRatios := []float64{1.0, 0.0}
-
-	// Target ratios: 50/50 split
-	targetRatios := []float64{0.5, 0.5}
-
-	log.Printf("AnimatePaneSplit: start=%v, target=%v", startRatios, targetRatios)
-
-	if s.animationsDisabled() {
-		splitNode.SplitRatios = targetRatios
-		s.recalculateLayout()
-		s.Refresh()
-		return
-	}
-
-	s.animateLayoutTransition(splitNode, startRatios, targetRatios, duration)
-}
-
-// Common animation helper
-func (s *Screen) animateLayoutTransition(node *Node, startRatios, targetRatios []float64, duration time.Duration) {
-	// Create and start the layout animation
-	layoutEffect := NewLayoutEffect(node, s, startRatios, targetRatios)
-	s.effects.AddEffect(layoutEffect)
-
-	// Set initial state
-	node.SplitRatios = make([]float64, len(startRatios))
-	copy(node.SplitRatios, startRatios)
+	// Animation removed - just set final layout directly
 	s.recalculateLayout()
-
-	// Animate to target
-	s.animator.AnimateTo(layoutEffect, 1.0, duration, func() {
-		log.Printf("animateLayoutTransition: Animation completed")
-		// Clean up the effect
-		s.effects.RemoveEffect(layoutEffect)
-		// Ensure final ratios are exactly the target
-		node.SplitRatios = make([]float64, len(targetRatios))
-		copy(node.SplitRatios, targetRatios)
-		s.recalculateLayout()
-		s.Refresh()
-	})
+	s.Refresh()
 }
+
 
 func (s *Screen) CloseActivePane() {
 	if s.tree.ActiveLeaf == nil {
@@ -740,116 +657,16 @@ func (s *Screen) recalculateLayout() {
 }
 
 func (s *Screen) AnimatePaneCreation(newNodeParent *Node, newPaneIndex int, duration time.Duration) {
-	if newNodeParent == nil || len(newNodeParent.SplitRatios) <= newPaneIndex {
-		return
-	}
-
-	log.Printf("AnimatePaneCreation: Starting animation for new pane at index %d", newPaneIndex)
-
-	// Calculate start ratios (new pane has 0 size, others expanded)
-	startRatios := make([]float64, len(newNodeParent.SplitRatios))
-	targetRatios := make([]float64, len(newNodeParent.SplitRatios))
-
-	// Target ratios are the current equal split
-	copy(targetRatios, newNodeParent.SplitRatios)
-
-	// Start ratios: new pane starts at 0, others share the space
-	totalNonNewPanes := float64(len(newNodeParent.Children) - 1)
-	for i := range startRatios {
-		if i == newPaneIndex {
-			startRatios[i] = 0.0 // New pane starts with 0 size
-		} else {
-			startRatios[i] = 1.0 / totalNonNewPanes // Others share the full space
-		}
-	}
-
-	log.Printf("AnimatePaneCreation: start=%v, target=%v", startRatios, targetRatios)
-
-	if s.animationsDisabled() {
-		newNodeParent.SplitRatios = targetRatios
-		s.recalculateLayout()
-		s.Refresh()
-		return
-	}
-
-	// Create and start the layout animation
-	layoutEffect := NewLayoutEffect(newNodeParent, s, startRatios, targetRatios)
-	s.effects.AddEffect(layoutEffect)
-
-	// Set initial state
-	newNodeParent.SplitRatios = startRatios
+	// Animation removed - just set final layout directly
 	s.recalculateLayout()
-
-	// Animate to target
-	s.animator.AnimateTo(layoutEffect, 1.0, duration, func() {
-		log.Printf("AnimatePaneCreation: Animation completed")
-		// Clean up the effect
-		s.effects.RemoveEffect(layoutEffect)
-		// Ensure final ratios are exactly the target
-		newNodeParent.SplitRatios = targetRatios
-		s.recalculateLayout()
-		s.Refresh()
-	})
+	s.Refresh()
 }
 
 func (s *Screen) AnimatePaneRemoval(nodeParent *Node, removingIndex int, duration time.Duration, onComplete func()) {
-	if nodeParent == nil || removingIndex >= len(nodeParent.SplitRatios) {
-		if onComplete != nil {
-			onComplete()
-		}
-		return
+	// Animation removed - just execute the completion callback directly
+	if onComplete != nil {
+		onComplete()
 	}
-
-	log.Printf("AnimatePaneRemoval: Starting animation for pane at index %d", removingIndex)
-
-	// Calculate start and target ratios
-	startRatios := make([]float64, len(nodeParent.SplitRatios))
-	copy(startRatios, nodeParent.SplitRatios)
-
-	// Target: removing pane goes to 0, others expand proportionally
-	targetRatios := make([]float64, len(nodeParent.SplitRatios))
-	totalOtherRatio := 0.0
-	for i, ratio := range startRatios {
-		if i != removingIndex {
-			totalOtherRatio += ratio
-		}
-	}
-
-	for i := range targetRatios {
-		if i == removingIndex {
-			targetRatios[i] = 0.0 // Removing pane shrinks to 0
-		} else if totalOtherRatio > 0 {
-			// Expand proportionally
-			targetRatios[i] = startRatios[i] / totalOtherRatio
-		}
-	}
-
-	log.Printf("AnimatePaneRemoval: start=%v, target=%v", startRatios, targetRatios)
-
-	if s.animationsDisabled() {
-		nodeParent.SplitRatios = targetRatios
-		s.recalculateLayout()
-		s.Refresh()
-		if onComplete != nil {
-			onComplete()
-		}
-		return
-	}
-
-	// Create and start the layout animation
-	layoutEffect := NewLayoutEffect(nodeParent, s, startRatios, targetRatios)
-	s.effects.AddEffect(layoutEffect)
-
-	// Animate to target
-	s.animator.AnimateTo(layoutEffect, 1.0, duration, func() {
-		log.Printf("AnimatePaneRemoval: Animation completed")
-		// Clean up the effect
-		s.effects.RemoveEffect(layoutEffect)
-		// Now actually remove the pane from the tree
-		if onComplete != nil {
-			onComplete()
-		}
-	})
 }
 
 func (s *Screen) findBorderToResize(d Direction) *selectedBorder {

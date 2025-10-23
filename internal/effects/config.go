@@ -113,20 +113,42 @@ func DefaultBindings() []BindingSpec {
 
 func ParseTrigger(name string) (EffectTriggerType, bool) {
 	switch strings.ToLower(name) {
+	case "pane.created":
+		return TriggerPaneCreated, true
+	case "pane.removed":
+		return TriggerPaneRemoved, true
 	case "pane.active":
 		return TriggerPaneActive, true
 	case "pane.resizing":
 		return TriggerPaneResizing, true
+	case "pane.geometry":
+		return TriggerPaneGeometry, true
+	case "pane.title":
+		return TriggerPaneTitle, true
+	case "pane.zorder":
+		return TriggerPaneZOrder, true
+	case "pane.key":
+		return TriggerPaneKey, true
 	case "workspace.control":
 		return TriggerWorkspaceControl, true
 	case "workspace.key":
 		return TriggerWorkspaceKey, true
-	case "workspace.resize":
-		return TriggerWorkspaceResize, true
 	case "workspace.switch":
 		return TriggerWorkspaceSwitch, true
+	case "workspace.resize":
+		return TriggerWorkspaceResize, true
+	case "workspace.layout":
+		return TriggerWorkspaceLayout, true
 	case "workspace.zoom":
 		return TriggerWorkspaceZoom, true
+	case "workspace.theme":
+		return TriggerWorkspaceTheme, true
+	case "clipboard.changed":
+		return TriggerClipboardChanged, true
+	case "clock.tick":
+		return TriggerClockTick, true
+	case "session.state":
+		return TriggerSessionState, true
 	default:
 		return 0, false
 	}
