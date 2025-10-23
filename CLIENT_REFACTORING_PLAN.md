@@ -1,6 +1,6 @@
 # Client Refactoring Plan - IN PROGRESS
 
-## Status: 5/8 Complete (colors.go, ui_state.go, message_sender.go, input_handler.go, renderer.go extracted)
+## Status: 6/8 Complete (colors.go, ui_state.go, message_sender.go, input_handler.go, renderer.go, protocol_handler.go extracted)
 
 ## Goal
 Split monolithic `internal/runtime/client/app.go` (955 lines → ~100 lines) into 8 focused modules for better testability, maintainability, and reusability.
@@ -138,10 +138,10 @@ func blendColor(fg, bg tcell.Color, alpha float64) tcell.Color
 
 ---
 
-### 6. protocol_handler.go - NEXT
-**Lines**: ~150 (app.go lines ~100-310)
-**Dependencies**: ui_state.go
-**Status**: TODO
+### ✅ 6. protocol_handler.go - COMPLETED
+**Lines**: ~165 (extracted from app.go lines 174-311)
+**Dependencies**: ui_state.go, message_sender.go (writeMessage), input_handler.go (isNetworkClosed)
+**Status**: ✓ Done
 
 **What to Extract**:
 ```go
@@ -159,8 +159,8 @@ func handleControlMessage(msg protocol.Message, state *uiState, ...) error
 
 ---
 
-### 7. background_tasks.go
-**Lines**: ~120 (app.go lines 774-888)
+### 7. background_tasks.go - NEXT
+**Lines**: ~120 (app.go lines ~178-250)
 **Dependencies**: message_sender.go
 **Status**: TODO
 
@@ -219,15 +219,16 @@ func formatPaneID(id [16]byte) string
 
 ---
 
-## Current State (After renderer.go)
+## Current State (After protocol_handler.go)
 
-**app.go**: ~390 lines (was 955)
+**app.go**: ~260 lines (was 955)
 **Extracted**:
 - 21 lines → colors.go
 - 114 lines → ui_state.go
 - 70 lines → message_sender.go
 - 175 lines → input_handler.go
 - 185 lines → renderer.go
+- 130 lines → protocol_handler.go
 **Build**: ✓ Passing
 
 ---
@@ -263,10 +264,10 @@ Once all files are extracted:
 | message_sender.go | 70 | ✓ Done |
 | input_handler.go | 175 | ✓ Done |
 | renderer.go | 175 | ✓ Done |
-| protocol_handler.go | ~150 | TODO |
+| protocol_handler.go | 165 | ✓ Done |
 | background_tasks.go | ~120 | TODO |
 | session.go | ~200 | TODO |
-| **Total** | **~1080** | **5/8** |
+| **Total** | **~1095** | **6/8** |
 | app.go (after) | ~100 | Will contain Run() + imports + Options |
 
 ---
