@@ -9,7 +9,6 @@
 package effects
 
 import (
-	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -18,11 +17,10 @@ import (
 )
 
 type fadeTintEffect struct {
-	color     tcell.Color
+	color    tcell.Color
 	intensity float32
-	duration  time.Duration
-	timelines map[[16]byte]*fadeTimeline
-	mu        sync.Mutex
+	duration time.Duration
+	timeline *Timeline
 }
 
 func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Duration) Effect {
@@ -35,44 +33,28 @@ func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Durat
 		duration = 0
 	}
 	return &fadeTintEffect{
-		color:     color,
+		color:    color,
 		intensity: intensity,
-		duration:  duration,
-		timelines: make(map[[16]byte]*fadeTimeline),
+		duration: duration,
+		timeline: NewTimeline(0.0), // Default to 0 (no tint)
 	}
 }
 
 func (e *fadeTintEffect) ID() string { return "fadeTint" }
 
 func (e *fadeTintEffect) Active() bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	for _, tl := range e.timelines {
-		if tl.animating || tl.current > 0 {
-			return true
-		}
-	}
-	return false
+	return e.timeline.HasActiveAnimations() || e.timeline.Get(nil) > 0
 }
 
 func (e *fadeTintEffect) Update(now time.Time) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	for _, timeline := range e.timelines {
-		timeline.valueAt(now)
-	}
+	e.timeline.Update(now)
 }
 
 func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 	if trigger.Type != TriggerPaneActive && trigger.Type != TriggerPaneResizing {
 		return
 	}
-	e.mu.Lock()
-	timeline := e.timelines[trigger.PaneID]
-	if timeline == nil {
-		timeline = &fadeTimeline{}
-		e.timelines[trigger.PaneID] = timeline
-	}
+
 	target := float32(0)
 	switch trigger.Type {
 	case TriggerPaneActive:
@@ -84,39 +66,23 @@ func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 			target = e.intensity
 		}
 	}
-	when := trigger.Timestamp
-	if when.IsZero() {
-		when = time.Now()
-	}
-	if !timeline.initialized {
-		timeline.setInstant(target, e.duration, when)
-	} else {
-		current, _ := timeline.valueAt(when)
-		timeline.startAnimation(current, target, e.duration, when)
-	}
-	e.mu.Unlock()
+
+	// Simple! Just animate to the target - Timeline handles everything
+	e.timeline.AnimateTo(trigger.PaneID, target, e.duration)
 }
 
 func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {
 	if pane == nil {
 		return
 	}
-	e.mu.Lock()
-	timeline := e.timelines[pane.ID]
-	if timeline == nil {
-		if pane.Active {
-			e.mu.Unlock()
-			return
-		}
-		timeline = &fadeTimeline{}
-		e.timelines[pane.ID] = timeline
-		timeline.setInstant(e.intensity, e.duration, time.Now())
-	}
-	intensity := timeline.current
-	e.mu.Unlock()
+
+	// Get current animated value - Timeline handles initialization, locking, everything
+	intensity := e.timeline.Get(pane.ID)
 	if intensity <= 0 {
 		return
 	}
+
+	// Apply tint
 	for y := range buffer {
 		row := buffer[y]
 		for x := range row {

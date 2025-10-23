@@ -20,7 +20,7 @@ import (
 type keyFlashEffect struct {
 	color    tcell.Color
 	duration time.Duration
-	timeline *fadeTimeline
+	timeline *Timeline
 	keys     map[rune]struct{}
 }
 
@@ -41,7 +41,7 @@ func newKeyFlashEffect(color tcell.Color, duration time.Duration, keys []rune) E
 	return &keyFlashEffect{
 		color:    color,
 		duration: duration,
-		timeline: &fadeTimeline{},
+		timeline: NewTimeline(0.0), // Default to 0 (no flash)
 		keys:     upper,
 	}
 }
@@ -49,11 +49,12 @@ func newKeyFlashEffect(color tcell.Color, duration time.Duration, keys []rune) E
 func (e *keyFlashEffect) ID() string { return "flash" }
 
 func (e *keyFlashEffect) Active() bool {
-	return e.timeline.animating || e.timeline.current > 0
+	// Use a dummy key for workspace-wide flash
+	return e.timeline.Get("flash") > 0
 }
 
 func (e *keyFlashEffect) Update(now time.Time) {
-	e.timeline.valueAt(now)
+	e.timeline.Update(now)
 }
 
 func (e *keyFlashEffect) HandleTrigger(trigger EffectTrigger) {
@@ -65,19 +66,19 @@ func (e *keyFlashEffect) HandleTrigger(trigger EffectTrigger) {
 			return
 		}
 	}
-	when := trigger.Timestamp
-	if when.IsZero() {
-		when = time.Now()
-	}
-	current, _ := e.timeline.valueAt(when)
-	e.timeline.startAnimation(current, 1.0, e.duration, when)
+
+	// Flash to full intensity, then back to zero
+	// AnimateTo returns current value and starts the animation
+	e.timeline.AnimateTo("flash", 1.0, e.duration)
 }
 
 func (e *keyFlashEffect) ApplyWorkspace(buffer [][]client.Cell) {
-	intensity := e.timeline.current
+	intensity := e.timeline.Get("flash")
 	if intensity <= 0 {
 		return
 	}
+
+	// Apply flash tint
 	for y := range buffer {
 		row := buffer[y]
 		for x := range row {
@@ -85,8 +86,11 @@ func (e *keyFlashEffect) ApplyWorkspace(buffer [][]client.Cell) {
 			cell.Style = tintStyle(cell.Style, e.color, intensity)
 		}
 	}
-	if !e.timeline.animating && intensity > 0 {
-		e.timeline.startAnimation(intensity, 0, e.duration, time.Now())
+
+	// Auto-fade back to zero after reaching peak
+	// If we're at or near peak and not animating back, start fade-out
+	if intensity >= 0.99 && !e.timeline.IsAnimating("flash") {
+		e.timeline.AnimateTo("flash", 0.0, e.duration)
 	}
 }
 
