@@ -276,7 +276,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.SetCursorVisible(true)
 		case 1002, 1004, 1006, 2004:
 			// Ignore mouse and focus reporting for now
-		case 1049: // Switch to Alt Screen
+		case 1049: // Switch to Alt Workspace
 			if v.inAltScreen {
 				return
 			}
@@ -307,7 +307,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.SetCursorVisible(false)
 		case 1002, 1004, 1006, 2004, 2031, 2048:
 			// Ignore mouse and focus reporting for now
-		case 1049: // Switch to Main Screen
+		case 1049: // Switch to Main Workspace
 			if !v.inAltScreen {
 				return
 			}

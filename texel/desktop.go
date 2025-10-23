@@ -61,8 +61,8 @@ func newStatusPaneID(app App) [16]byte {
 // Desktop manages a collection of workspaces (Screens).
 type Desktop struct {
 	display           ScreenDriver
-	workspaces        map[int]*Screen
-	activeWorkspace   *Screen
+	workspaces        map[int]*Workspace
+	activeWorkspace   *Workspace
 	statusPanes       []*StatusPane
 	quit              chan struct{}
 	closeOnce         sync.Once
@@ -149,7 +149,7 @@ func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppF
 
 	d := &Desktop{
 		display:            driver,
-		workspaces:         make(map[int]*Screen),
+		workspaces:         make(map[int]*Workspace),
 		statusPanes:        make([]*StatusPane, 0),
 		quit:               make(chan struct{}),
 		ShellAppFactory:    shellFactory,
@@ -674,7 +674,7 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 	if ws, exists := d.workspaces[id]; exists {
 		d.activeWorkspace = ws
 	} else {
-		ws, err := newScreen(id, d.ShellAppFactory, d.appLifecycle, d)
+		ws, err := newWorkspace(id, d.ShellAppFactory, d.appLifecycle, d)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating workspace: %v\n", err)
 			return

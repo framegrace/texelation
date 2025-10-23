@@ -21,7 +21,7 @@ const (
 	// Pane Events
 	EventPaneActiveChanged
 	EventPaneClosed
-	// Screen/Global Events
+	// Workspace/Global Events
 	EventStateUpdate
 	EventTreeChanged
 	// Add other event types here as needed

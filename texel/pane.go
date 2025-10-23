@@ -34,7 +34,7 @@ type pane struct {
 	app     App
 	name    string
 	prevBuf [][]Cell
-	screen  *Screen
+	screen  *Workspace
 	id      [16]byte
 
 	// Public state fields
@@ -44,7 +44,7 @@ type pane struct {
 }
 
 // newPane creates a new, empty Pane. The App is attached later.
-func newPane(s *Screen) *pane {
+func newPane(s *Workspace) *pane {
 	p := &pane{
 		screen:     s,
 		IsActive:   false,

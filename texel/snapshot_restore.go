@@ -79,7 +79,7 @@ func stopApps(node *Node, lifecycle AppLifecycleManager) {
 	}
 }
 
-func buildNodesFromCapture(screen *Screen, capture *TreeNodeCapture, panes []*pane) (*Node, *Node, error) {
+func buildNodesFromCapture(screen *Workspace, capture *TreeNodeCapture, panes []*pane) (*Node, *Node, error) {
 	if capture == nil {
 		return nil, nil, nil
 	}
