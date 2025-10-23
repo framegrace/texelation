@@ -59,7 +59,7 @@ func newStatusPaneID(app App) [16]byte {
 }
 
 // Desktop manages a collection of workspaces (Screens).
-type Desktop struct {
+type DesktopEngine struct {
 	display           ScreenDriver
 	workspaces        map[int]*Workspace
 	activeWorkspace   *Workspace
@@ -113,8 +113,8 @@ type PaneStateSnapshot struct {
 	ZOrder   int
 }
 
-// NewDesktop creates and initializes a new desktop environment.
-func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
+// NewDesktopEngine creates and initializes a new desktop engine.
+func NewDesktopEngine(shellFactory, welcomeFactory AppFactory) (*DesktopEngine, error) {
 	tcellScreen, err := tcell.NewScreen()
 	if err != nil {
 		return nil, err
@@ -122,13 +122,13 @@ func NewDesktop(shellFactory, welcomeFactory AppFactory) (*Desktop, error) {
 
 	driver := NewTcellScreenDriver(tcellScreen)
 	lifecycle := &LocalAppLifecycle{}
-	return NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	return NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 }
 
-// NewDesktopWithDriver wires a Desktop using the provided screen driver and
+// NewDesktopEngineWithDriver wires a DesktopEngine using the provided screen driver and
 // lifecycle manager. It exists primarily to support tests and future remote
 // runtimes.
-func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppFactory, lifecycle AppLifecycleManager) (*Desktop, error) {
+func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppFactory, lifecycle AppLifecycleManager) (*DesktopEngine, error) {
 	if driver == nil {
 		return nil, fmt.Errorf("screen driver is required")
 	}
@@ -147,7 +147,7 @@ func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppF
 	driver.SetStyle(defStyle)
 	driver.HideCursor()
 
-	d := &Desktop{
+	d := &DesktopEngine{
 		display:            driver,
 		workspaces:         make(map[int]*Workspace),
 		statusPanes:        make([]*StatusPane, 0),
@@ -173,15 +173,15 @@ func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppF
 	return d, nil
 }
 
-func (d *Desktop) Subscribe(listener Listener) {
+func (d *DesktopEngine) Subscribe(listener Listener) {
 	d.dispatcher.Subscribe(listener)
 }
 
-func (d *Desktop) Unsubscribe(listener Listener) {
+func (d *DesktopEngine) Unsubscribe(listener Listener) {
 	d.dispatcher.Unsubscribe(listener)
 }
 
-func (d *Desktop) RegisterFocusListener(listener DesktopFocusListener) {
+func (d *DesktopEngine) RegisterFocusListener(listener DesktopFocusListener) {
 	if listener == nil {
 		return
 	}
@@ -192,7 +192,7 @@ func (d *Desktop) RegisterFocusListener(listener DesktopFocusListener) {
 }
 
 // RegisterPaneStateListener registers a listener for pane active/resizing changes.
-func (d *Desktop) RegisterPaneStateListener(listener PaneStateListener) {
+func (d *DesktopEngine) RegisterPaneStateListener(listener PaneStateListener) {
 	if listener == nil {
 		return
 	}
@@ -202,7 +202,7 @@ func (d *Desktop) RegisterPaneStateListener(listener PaneStateListener) {
 }
 
 // RegisterSnapshotFactory registers a factory used to restore apps from snapshot metadata.
-func (d *Desktop) RegisterSnapshotFactory(appType string, factory SnapshotFactory) {
+func (d *DesktopEngine) RegisterSnapshotFactory(appType string, factory SnapshotFactory) {
 	if appType == "" || factory == nil {
 		return
 	}
@@ -210,7 +210,7 @@ func (d *Desktop) RegisterSnapshotFactory(appType string, factory SnapshotFactor
 }
 
 // UnregisterFocusListener removes a previously registered focus listener.
-func (d *Desktop) UnregisterFocusListener(listener DesktopFocusListener) {
+func (d *DesktopEngine) UnregisterFocusListener(listener DesktopFocusListener) {
 	if listener == nil {
 		return
 	}
@@ -225,7 +225,7 @@ func (d *Desktop) UnregisterFocusListener(listener DesktopFocusListener) {
 }
 
 // UnregisterPaneStateListener removes a previously registered pane state listener.
-func (d *Desktop) UnregisterPaneStateListener(listener PaneStateListener) {
+func (d *DesktopEngine) UnregisterPaneStateListener(listener PaneStateListener) {
 	if listener == nil {
 		return
 	}
@@ -240,7 +240,7 @@ func (d *Desktop) UnregisterPaneStateListener(listener PaneStateListener) {
 }
 
 // AddStatusPane adds a new status pane to the desktop.
-func (d *Desktop) AddStatusPane(app App, side Side, size int) {
+func (d *DesktopEngine) AddStatusPane(app App, side Side, size int) {
 	sp := &StatusPane{
 		app:  app,
 		side: side,
@@ -262,7 +262,7 @@ func (d *Desktop) AddStatusPane(app App, side Side, size int) {
 	d.broadcastTreeChanged()
 }
 
-func (d *Desktop) getMainArea() (int, int, int, int) {
+func (d *DesktopEngine) getMainArea() (int, int, int, int) {
 	w, h := d.viewportSize()
 	mainX, mainY := 0, 0
 	mainW, mainH := w, h
@@ -289,7 +289,7 @@ func (d *Desktop) getMainArea() (int, int, int, int) {
 	return mainX, mainY, mainW, mainH
 }
 
-func (d *Desktop) recalculateLayout() {
+func (d *DesktopEngine) recalculateLayout() {
 	w, h := d.viewportSize()
 	mainX, mainY, mainW, mainH := d.getMainArea()
 
@@ -315,7 +315,7 @@ func (d *Desktop) recalculateLayout() {
 	}
 }
 
-func (d *Desktop) viewportSize() (int, int) {
+func (d *DesktopEngine) viewportSize() (int, int) {
 	d.viewportMu.RLock()
 	defer d.viewportMu.RUnlock()
 	if d.hasViewport && d.viewportWidth > 0 && d.viewportHeight > 0 {
@@ -324,7 +324,7 @@ func (d *Desktop) viewportSize() (int, int) {
 	return d.display.Size()
 }
 
-func (d *Desktop) handleEvent(ev tcell.Event) {
+func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 	if _, ok := ev.(*tcell.EventResize); ok {
 		d.recalculateLayout()
 		return
@@ -355,7 +355,7 @@ func (d *Desktop) handleEvent(ev tcell.Event) {
 }
 
 // InjectMouseEvent records the latest mouse event metadata from remote clients.
-func (d *Desktop) InjectMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+func (d *DesktopEngine) InjectMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
 	d.lastMouseX = x
 	d.lastMouseY = y
 	d.lastMouseButtons = buttons
@@ -363,7 +363,7 @@ func (d *Desktop) InjectMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers
 }
 
 // HandleClipboardSet stores clipboard contents using the provided MIME type.
-func (d *Desktop) HandleClipboardSet(mime string, data []byte) {
+func (d *DesktopEngine) HandleClipboardSet(mime string, data []byte) {
 	if d.clipboard == nil {
 		d.clipboard = make(map[string][]byte)
 	}
@@ -371,7 +371,7 @@ func (d *Desktop) HandleClipboardSet(mime string, data []byte) {
 }
 
 // HandleClipboardGet records the last clipboard lookup.
-func (d *Desktop) HandleClipboardGet(mime string) []byte {
+func (d *DesktopEngine) HandleClipboardGet(mime string) []byte {
 	d.lastClipboardMime = mime
 	if d.clipboard == nil {
 		return nil
@@ -380,7 +380,7 @@ func (d *Desktop) HandleClipboardGet(mime string) []byte {
 }
 
 // HandlePaste routes paste data to the active pane.
-func (d *Desktop) HandlePaste(data []byte) {
+func (d *DesktopEngine) HandlePaste(data []byte) {
 	if len(data) == 0 || d.inControlMode {
 		return
 	}
@@ -394,7 +394,7 @@ func (d *Desktop) HandlePaste(data []byte) {
 }
 
 // HandleThemeUpdate applies runtime theme overrides.
-func (d *Desktop) HandleThemeUpdate(section, key, value string) {
+func (d *DesktopEngine) HandleThemeUpdate(section, key, value string) {
 	config := theme.Get()
 	if _, ok := config[section]; !ok {
 		config[section] = theme.Section{}
@@ -403,28 +403,28 @@ func (d *Desktop) HandleThemeUpdate(section, key, value string) {
 }
 
 // LastMousePosition returns the most recently recorded mouse coordinates.
-func (d *Desktop) LastMousePosition() (int, int) {
+func (d *DesktopEngine) LastMousePosition() (int, int) {
 	return d.lastMouseX, d.lastMouseY
 }
 
 // LastMouseButtons exposes the last recorded button mask.
-func (d *Desktop) LastMouseButtons() tcell.ButtonMask {
+func (d *DesktopEngine) LastMouseButtons() tcell.ButtonMask {
 	return d.lastMouseButtons
 }
 
 // LastMouseModifiers exposes the last recorded modifier mask.
-func (d *Desktop) LastMouseModifiers() tcell.ModMask {
+func (d *DesktopEngine) LastMouseModifiers() tcell.ModMask {
 	return d.lastMouseModifier
 }
 
 // InjectKeyEvent allows external callers (e.g., remote clients) to deliver key
 // input directly into the desktop event pipeline.
-func (d *Desktop) InjectKeyEvent(key tcell.Key, ch rune, modifiers tcell.ModMask) {
+func (d *DesktopEngine) InjectKeyEvent(key tcell.Key, ch rune, modifiers tcell.ModMask) {
 	event := tcell.NewEventKey(key, ch, modifiers)
 	d.handleEvent(event)
 }
 
-func (d *Desktop) toggleControlMode() {
+func (d *DesktopEngine) toggleControlMode() {
 	wasInControlMode := d.inControlMode
 	d.inControlMode = !d.inControlMode
 	d.subControlMode = 0
@@ -457,7 +457,7 @@ func (d *Desktop) toggleControlMode() {
 	d.broadcastStateUpdate()
 }
 
-func (d *Desktop) toggleZoom() {
+func (d *DesktopEngine) toggleZoom() {
 	if d.activeWorkspace == nil {
 		return
 	}
@@ -486,7 +486,7 @@ func (d *Desktop) toggleZoom() {
 }
 
 // handleControlMode processes all commands when the Desktop is in control mode.
-func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
+func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 	if ev.Key() == tcell.KeyEsc {
 		d.toggleControlMode()
 		return
@@ -540,7 +540,7 @@ func (d *Desktop) handleControlMode(ev *tcell.EventKey) {
 }
 
 // broadcastStateUpdate now broadcasts on the Desktop's dispatcher
-func (d *Desktop) broadcastStateUpdate() {
+func (d *DesktopEngine) broadcastStateUpdate() {
 	if d.activeWorkspace == nil {
 		return
 	}
@@ -575,7 +575,7 @@ func (d *Desktop) broadcastStateUpdate() {
 }
 
 
-func (d *Desktop) SetRefreshHandler(handler func()) {
+func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 	d.refreshMu.Lock()
 	d.refreshHandler = handler
 	for _, ws := range d.workspaces {
@@ -586,17 +586,17 @@ func (d *Desktop) SetRefreshHandler(handler func()) {
 	d.refreshMu.Unlock()
 }
 
-func (d *Desktop) refreshHandlerFunc() func() {
+func (d *DesktopEngine) refreshHandlerFunc() func() {
 	d.refreshMu.RLock()
 	defer d.refreshMu.RUnlock()
 	return d.refreshHandler
 }
 
-func (d *Desktop) broadcastTreeChanged() {
+func (d *DesktopEngine) broadcastTreeChanged() {
 	d.dispatcher.Broadcast(Event{Type: EventTreeChanged})
 }
 
-func (d *Desktop) shouldBroadcastState(payload StatePayload) bool {
+func (d *DesktopEngine) shouldBroadcastState(payload StatePayload) bool {
 	d.stateMu.Lock()
 	defer d.stateMu.Unlock()
 	if !d.hasLastState {
@@ -610,7 +610,7 @@ func (d *Desktop) shouldBroadcastState(payload StatePayload) bool {
 	return true
 }
 
-func (d *Desktop) storeLastState(payload StatePayload) {
+func (d *DesktopEngine) storeLastState(payload StatePayload) {
 	d.lastState = payload
 	if payload.AllWorkspaces != nil {
 		d.lastState.AllWorkspaces = append([]int(nil), payload.AllWorkspaces...)
@@ -618,7 +618,7 @@ func (d *Desktop) storeLastState(payload StatePayload) {
 	d.hasLastState = true
 }
 
-func (d *Desktop) currentStatePayload(allWsIDs []int, title string) StatePayload {
+func (d *DesktopEngine) currentStatePayload(allWsIDs []int, title string) StatePayload {
 	if allWsIDs == nil {
 		allWsIDs = make([]int, 0, len(d.workspaces))
 		for id := range d.workspaces {
@@ -658,11 +658,11 @@ func (d *Desktop) currentStatePayload(allWsIDs []int, title string) StatePayload
 }
 
 // CurrentStatePayload exposes the latest desktop state snapshot.
-func (d *Desktop) CurrentStatePayload() StatePayload {
+func (d *DesktopEngine) CurrentStatePayload() StatePayload {
 	return d.currentStatePayload(nil, "")
 }
 
-func (d *Desktop) SwitchToWorkspace(id int) {
+func (d *DesktopEngine) SwitchToWorkspace(id int) {
 	if d.activeWorkspace != nil && d.activeWorkspace.id == id {
 		return
 	}
@@ -706,21 +706,21 @@ func (d *Desktop) SwitchToWorkspace(id int) {
 	d.broadcastTreeChanged()
 }
 
-func (d *Desktop) notifyFocusActive() {
+func (d *DesktopEngine) notifyFocusActive() {
 	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil {
 		return
 	}
 	d.notifyFocusNode(d.activeWorkspace.tree.ActiveLeaf)
 }
 
-func (d *Desktop) notifyFocusNode(node *Node) {
+func (d *DesktopEngine) notifyFocusNode(node *Node) {
 	if node == nil || node.Pane == nil {
 		return
 	}
 	d.notifyFocus(node.Pane.ID())
 }
 
-func (d *Desktop) notifyPaneState(id [16]byte, active, resizing bool, z int) {
+func (d *DesktopEngine) notifyPaneState(id [16]byte, active, resizing bool, z int) {
 	d.paneStateMu.RLock()
 	listeners := append([]PaneStateListener(nil), d.paneStateListeners...)
 	d.paneStateMu.RUnlock()
@@ -729,7 +729,7 @@ func (d *Desktop) notifyPaneState(id [16]byte, active, resizing bool, z int) {
 	}
 }
 
-func (d *Desktop) forEachPane(fn func(*pane)) {
+func (d *DesktopEngine) forEachPane(fn func(*pane)) {
 	if fn == nil {
 		return
 	}
@@ -754,7 +754,7 @@ func (d *Desktop) forEachPane(fn func(*pane)) {
 }
 
 // PaneStates returns the current pane flags across all workspaces.
-func (d *Desktop) PaneStates() []PaneStateSnapshot {
+func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 	states := make([]PaneStateSnapshot, 0)
 	d.forEachPane(func(p *pane) {
 		states = append(states, PaneStateSnapshot{ID: p.ID(), Active: p.IsActive, Resizing: p.IsResizing, ZOrder: p.ZOrder})
@@ -764,7 +764,7 @@ func (d *Desktop) PaneStates() []PaneStateSnapshot {
 
 // SetViewportSize overrides the desktop viewport dimensions, typically used by
 // remote clients to dictate layout size.
-func (d *Desktop) SetViewportSize(cols, rows int) {
+func (d *DesktopEngine) SetViewportSize(cols, rows int) {
 	d.viewportMu.Lock()
 	d.viewportWidth = cols
 	d.viewportHeight = rows
@@ -776,7 +776,7 @@ func (d *Desktop) SetViewportSize(cols, rows int) {
 	}
 }
 
-func (d *Desktop) notifyFocus(paneID [16]byte) {
+func (d *DesktopEngine) notifyFocus(paneID [16]byte) {
 	d.focusMu.RLock()
 	listeners := append([]DesktopFocusListener(nil), d.focusListeners...)
 	d.focusMu.RUnlock()
@@ -785,7 +785,7 @@ func (d *Desktop) notifyFocus(paneID [16]byte) {
 	}
 }
 
-func (d *Desktop) appFromSnapshot(snap PaneSnapshot) App {
+func (d *DesktopEngine) appFromSnapshot(snap PaneSnapshot) App {
 	if snap.AppType != "" {
 		if factory, ok := d.snapshotFactories[snap.AppType]; ok {
 			cfg := cloneAppConfig(snap.AppConfig)
@@ -797,7 +797,7 @@ func (d *Desktop) appFromSnapshot(snap PaneSnapshot) App {
 	return NewSnapshotApp(snap.Title, snap.Buffer)
 }
 
-func (d *Desktop) Close() {
+func (d *DesktopEngine) Close() {
 	d.closeOnce.Do(func() {
 		close(d.quit)
 		for _, ws := range d.workspaces {
@@ -812,7 +812,7 @@ func (d *Desktop) Close() {
 	})
 }
 
-func (d *Desktop) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {
+func (d *DesktopEngine) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {
 	key := styleKey{fg: fg, bg: bg, bold: bold, underline: underline, reverse: reverse}
 	if st, ok := d.styleCache[key]; ok {
 		return st

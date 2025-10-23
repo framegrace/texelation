@@ -22,7 +22,7 @@ import (
 // DesktopPublisher captures desktop pane buffers and enqueues them as buffer
 // deltas on the associated session.
 type DesktopPublisher struct {
-	desktop   *texel.Desktop
+	desktop   *texel.DesktopEngine
 	session   *Session
 	revisions map[[16]byte]uint32
 	observer  PublishObserver
@@ -35,7 +35,7 @@ type PublishObserver interface {
 	ObservePublish(session *Session, paneCount int, duration time.Duration)
 }
 
-func NewDesktopPublisher(desktop *texel.Desktop, session *Session) *DesktopPublisher {
+func NewDesktopPublisher(desktop *texel.DesktopEngine, session *Session) *DesktopPublisher {
 	return &DesktopPublisher{
 		desktop:   desktop,
 		session:   session,

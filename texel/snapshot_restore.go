@@ -14,7 +14,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-func (d *Desktop) ApplyTreeCapture(capture TreeCapture) error {
+func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 	if len(capture.Panes) == 0 || capture.Root == nil {
 		return nil
 	}

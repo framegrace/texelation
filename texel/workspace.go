@@ -56,7 +56,7 @@ type selectedBorder struct {
 type Workspace struct {
 	id                  int
 	x, y, width, height int
-	desktop             *Desktop
+	desktop             *DesktopEngine
 	tree                *Tree
 	refreshChan         chan bool
 	drawChan            chan bool
@@ -70,7 +70,7 @@ type Workspace struct {
 }
 
 // newWorkspace creates a new workspace with its own tiling pane tree.
-func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager, desktop *Desktop) (*Workspace, error) {
+func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager, desktop *DesktopEngine) (*Workspace, error) {
 	w := &Workspace{
 		id:              id,
 		desktop:         desktop,

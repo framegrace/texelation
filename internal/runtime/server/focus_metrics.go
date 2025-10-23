@@ -38,7 +38,7 @@ func NewFocusMetrics(logger *log.Logger) *FocusMetrics {
 	return &FocusMetrics{logger: logger}
 }
 
-func (f *FocusMetrics) Attach(desktop *texel.Desktop) {
+func (f *FocusMetrics) Attach(desktop *texel.DesktopEngine) {
 	if desktop == nil {
 		return
 	}

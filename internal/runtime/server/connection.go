@@ -354,7 +354,7 @@ func (c *connection) sendTreeSnapshot() {
 	}
 }
 
-func snapshotMergedPaneStates(snapshot protocol.TreeSnapshot, desktop *texel.Desktop) []texel.PaneStateSnapshot {
+func snapshotMergedPaneStates(snapshot protocol.TreeSnapshot, desktop *texel.DesktopEngine) []texel.PaneStateSnapshot {
 	if desktop == nil {
 		return nil
 	}

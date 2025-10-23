@@ -100,7 +100,7 @@ func TestOfflineRetentionAndResumeWithMemConn(t *testing.T) {
 	}
 }
 
-func initialHandshake(t *testing.T, srv *Server, sink *DesktopSink, desktop *texel.Desktop, publisherMu *sync.Mutex, publisher **DesktopPublisher) *Session {
+func initialHandshake(t *testing.T, srv *Server, sink *DesktopSink, desktop *texel.DesktopEngine, publisherMu *sync.Mutex, publisher **DesktopPublisher) *Session {
 	serverConn, clientConn := testutil.NewMemPipe(32)
 	t.Cleanup(func() {
 		_ = serverConn.Close()
@@ -203,7 +203,7 @@ func initialClientFlow(t *testing.T, session *Session) uint64 {
 	return first.Sequence
 }
 
-func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *texel.Desktop, session *Session, lastSeq uint64) {
+func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *texel.DesktopEngine, session *Session, lastSeq uint64) {
 	serverConn, clientConn := testutil.NewMemPipe(32)
 	t.Cleanup(func() {
 		_ = serverConn.Close()

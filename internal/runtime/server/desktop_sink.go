@@ -18,12 +18,12 @@ import (
 
 // DesktopSink forwards key events to a local Desktop instance.
 type DesktopSink struct {
-	desktop   *texel.Desktop
+	desktop   *texel.DesktopEngine
 	publisher *DesktopPublisher
 	mu        sync.Mutex
 }
 
-func NewDesktopSink(desktop *texel.Desktop) *DesktopSink {
+func NewDesktopSink(desktop *texel.DesktopEngine) *DesktopSink {
 	return &DesktopSink{desktop: desktop}
 }
 
@@ -82,7 +82,7 @@ func (d *DesktopSink) HandlePaste(session *Session, paste protocol.Paste) {
 	}
 }
 
-func (d *DesktopSink) Desktop() *texel.Desktop {
+func (d *DesktopSink) Desktop() *texel.DesktopEngine {
 	return d.desktop
 }
 
