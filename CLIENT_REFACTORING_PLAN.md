@@ -1,6 +1,6 @@
 # Client Refactoring Plan - IN PROGRESS
 
-## Status: 1/8 Complete (colors.go extracted)
+## Status: 2/8 Complete (colors.go, ui_state.go extracted)
 
 ## Goal
 Split monolithic `internal/runtime/client/app.go` (955 lines → ~100 lines) into 8 focused modules for better testability, maintainability, and reusability.
@@ -20,10 +20,10 @@ Split monolithic `internal/runtime/client/app.go` (955 lines → ~100 lines) int
 
 ---
 
-### 2. ui_state.go - NEXT
-**Lines**: ~150 (app.go lines 41-68 + 70-146 + 633-706)
+### ✅ 2. ui_state.go - COMPLETED
+**Lines**: ~150 (extracted from app.go lines 40-145 + 632-705)
 **Dependencies**: colors.go
-**Status**: TODO
+**Status**: ✓ Done
 
 **What to Extract**:
 
@@ -77,8 +77,8 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate)
 
 ---
 
-### 3. message_sender.go
-**Lines**: ~100 (app.go lines 734-804)
+### 3. message_sender.go - NEXT
+**Lines**: ~100 (app.go lines ~525-620)
 **Dependencies**: None (uses only protocol, net, sync)
 **Status**: TODO
 
@@ -219,19 +219,20 @@ func formatPaneID(id [16]byte) string
 
 ---
 
-## Current State (After colors.go)
+## Current State (After ui_state.go)
 
-**app.go**: 934 lines (was 955)
-**Extracted**: 21 lines → colors.go
+**app.go**: ~820 lines (was 955)
+**Extracted**:
+- 21 lines → colors.go
+- 114 lines → ui_state.go
 **Build**: ✓ Passing
-**Last Commit**: 86f8818
 
 ---
 
 ## Next Steps
 
-1. Extract ui_state.go (struct + methods)
-2. Test build
+1. ✅ Extract colors.go
+2. ✅ Extract ui_state.go (struct + methods)
 3. Extract message_sender.go
 4. Test build
 5. Continue through list...
@@ -255,14 +256,14 @@ Once all files are extracted:
 | File | Lines | Status |
 |------|-------|--------|
 | colors.go | 40 | ✓ Done |
-| ui_state.go | ~150 | TODO |
+| ui_state.go | 150 | ✓ Done |
 | message_sender.go | ~100 | TODO |
 | input_handler.go | ~150 | TODO |
 | renderer.go | ~120 | TODO |
 | protocol_handler.go | ~150 | TODO |
 | background_tasks.go | ~120 | TODO |
 | session.go | ~200 | TODO |
-| **Total** | **~1030** | **1/8** |
+| **Total** | **~1030** | **2/8** |
 | app.go (after) | ~100 | Will contain Run() + imports + Options |
 
 ---
