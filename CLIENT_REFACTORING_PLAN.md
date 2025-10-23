@@ -1,6 +1,6 @@
 # Client Refactoring Plan - IN PROGRESS
 
-## Status: 6/8 Complete (colors.go, ui_state.go, message_sender.go, input_handler.go, renderer.go, protocol_handler.go extracted)
+## Status: 7/8 Complete (colors.go, ui_state.go, message_sender.go, input_handler.go, renderer.go, protocol_handler.go, background_tasks.go extracted)
 
 ## Goal
 Split monolithic `internal/runtime/client/app.go` (955 lines → ~100 lines) into 8 focused modules for better testability, maintainability, and reusability.
@@ -159,10 +159,10 @@ func handleControlMessage(msg protocol.Message, state *uiState, ...) error
 
 ---
 
-### 7. background_tasks.go - NEXT
-**Lines**: ~120 (app.go lines ~178-250)
-**Dependencies**: message_sender.go
-**Status**: TODO
+### ✅ 7. background_tasks.go - COMPLETED
+**Lines**: ~95 (extracted from app.go lines 178-249)
+**Dependencies**: message_sender.go (writeMessage)
+**Status**: ✓ Done
 
 **What to Extract**:
 ```go
@@ -219,9 +219,9 @@ func formatPaneID(id [16]byte) string
 
 ---
 
-## Current State (After protocol_handler.go)
+## Current State (After background_tasks.go)
 
-**app.go**: ~260 lines (was 955)
+**app.go**: ~193 lines (was 955)
 **Extracted**:
 - 21 lines → colors.go
 - 114 lines → ui_state.go
@@ -229,6 +229,7 @@ func formatPaneID(id [16]byte) string
 - 175 lines → input_handler.go
 - 185 lines → renderer.go
 - 130 lines → protocol_handler.go
+- 67 lines → background_tasks.go
 **Build**: ✓ Passing
 
 ---
@@ -265,10 +266,10 @@ Once all files are extracted:
 | input_handler.go | 175 | ✓ Done |
 | renderer.go | 175 | ✓ Done |
 | protocol_handler.go | 165 | ✓ Done |
-| background_tasks.go | ~120 | TODO |
+| background_tasks.go | 95 | ✓ Done |
 | session.go | ~200 | TODO |
-| **Total** | **~1095** | **6/8** |
-| app.go (after) | ~100 | Will contain Run() + imports + Options |
+| **Total** | **~1070** | **7/8** |
+| app.go (after) | ~193 | Contains Run() + helpers |
 
 ---
 
