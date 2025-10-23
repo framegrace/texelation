@@ -8,3 +8,8 @@ logfile
 node_modules
 package.json
 package-lock.json
+
+# Test data files
+/test
+/tttt
+out.json
