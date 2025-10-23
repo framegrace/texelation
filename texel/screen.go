@@ -10,10 +10,8 @@
 package texel
 
 import (
-	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"log"
-	"sort"
 	"sync"
 )
 
@@ -420,99 +418,6 @@ func (s *Screen) SwapActivePane(d Direction) {
 }
 
 // Update the draw method to also log when pane animations are detected
-func (s *Screen) draw(tcs ScreenDriver) {
-	log.Printf("Screen.draw: Drawing screen %d", s.id)
-
-	// Create a full screen buffer to collect all pane content
-	screenBuffer := make([][]Cell, s.height)
-	for y := range screenBuffer {
-		screenBuffer[y] = make([]Cell, s.width)
-		// Initialize with default background
-		defaultStyle := tcell.StyleDefault.Background(s.getDefaultBackground())
-		for x := range screenBuffer[y] {
-			screenBuffer[y][x] = Cell{Ch: ' ', Style: defaultStyle}
-		}
-	}
-
-	// Collect all panes and sort them by z-order for proper layering
-	type paneWithOrder struct {
-		pane   *pane
-		zOrder int
-	}
-
-	var allPanes []paneWithOrder
-	s.tree.Traverse(func(node *Node) {
-		if node.Pane != nil && node.Pane.app != nil {
-			allPanes = append(allPanes, paneWithOrder{
-				pane:   node.Pane,
-				zOrder: node.Pane.GetZOrder(),
-			})
-		}
-	})
-
-	// Check if z-order sorting is needed (optimization for common case)
-	needsSorting := false
-	for _, paneInfo := range allPanes {
-		if paneInfo.zOrder != 0 {
-			needsSorting = true
-			break
-		}
-	}
-
-	// Only sort if z-order is actually being used
-	if needsSorting {
-		sort.Slice(allPanes, func(i, j int) bool {
-			return allPanes[i].zOrder < allPanes[j].zOrder
-		})
-
-		// Log z-orders for debugging when sorting is performed
-		log.Printf("Screen.draw: Sorted panes by z-order:")
-		for i, paneInfo := range allPanes {
-			log.Printf("  [%d] '%s' z-order=%d", i, paneInfo.pane.getTitle(), paneInfo.zOrder)
-		}
-	}
-
-	// Render all panes in z-order (lowest to highest)
-	paneCount := 0
-	for _, paneInfo := range allPanes {
-		paneCount++
-		p := paneInfo.pane
-		zOrderStr := ""
-		if p.GetZOrder() != 0 {
-			zOrderStr = fmt.Sprintf(" [Z:%d]", p.GetZOrder())
-		}
-		log.Printf("Screen.draw: Rendering pane %d: '%s' at abs(%d,%d)-(%d,%d)%s",
-			paneCount, p.getTitle(), p.absX0, p.absY0, p.absX1, p.absY1, zOrderStr)
-		paneBuffer := p.Render()
-
-		// Copy pane buffer into screen buffer at the correct position
-		for y, row := range paneBuffer {
-			screenY := y + (p.absY0 - s.y) // Account for Y offset
-			if screenY < 0 || screenY >= s.height {
-				continue
-			}
-			for x, cell := range row {
-				screenX := x + (p.absX0 - s.x)
-				if screenX < 0 || screenX >= s.width {
-					continue
-				}
-				screenBuffer[screenY][screenX] = cell
-			}
-		}
-	}
-
-	log.Printf("Screen.draw: Rendered %d panes", paneCount)
-
-	// Now blit the final buffer to the screen
-	for y, row := range screenBuffer {
-		for x, cell := range row {
-			tcs.SetContent(s.x+x, s.y+y, cell.Ch, nil, cell.Style)
-		}
-	}
-
-	log.Printf("Screen.draw: Screen draw completed")
-}
-
 func (s *Screen) Close() {
 
 	// Close all panes

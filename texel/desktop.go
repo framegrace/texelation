@@ -324,58 +324,9 @@ func (d *Desktop) viewportSize() (int, int) {
 	return d.display.Size()
 }
 
-func (d *Desktop) Run() error {
-	eventChan := make(chan tcell.Event, 10)
-	go func() {
-		for {
-			select {
-			case <-d.quit:
-				return
-			default:
-				eventChan <- d.display.PollEvent()
-			}
-		}
-	}()
-
-	d.recalculateLayout()
-
-	if d.activeWorkspace != nil {
-		go func() {
-			d.activeWorkspace.drawChan <- true
-		}()
-	}
-
-	for {
-		if d.activeWorkspace == nil {
-			<-time.After(100 * time.Millisecond)
-			continue
-		}
-
-		refreshChan := d.activeWorkspace.refreshChan
-		drawChan := d.activeWorkspace.drawChan
-
-		select {
-		case ev := <-eventChan:
-			d.handleEvent(ev)
-
-		case <-refreshChan:
-			d.broadcastStateUpdate()
-			d.draw()
-			d.broadcastTreeChanged()
-
-		case <-drawChan:
-			d.draw()
-
-		case <-d.quit:
-			return nil
-		}
-	}
-}
-
 func (d *Desktop) handleEvent(ev tcell.Event) {
 	if _, ok := ev.(*tcell.EventResize); ok {
 		d.recalculateLayout()
-		d.draw()
 		return
 	}
 
@@ -471,41 +422,6 @@ func (d *Desktop) LastMouseModifiers() tcell.ModMask {
 func (d *Desktop) InjectKeyEvent(key tcell.Key, ch rune, modifiers tcell.ModMask) {
 	event := tcell.NewEventKey(key, ch, modifiers)
 	d.handleEvent(event)
-}
-
-func (d *Desktop) drawStatusPanes(display ScreenDriver) {
-	w, h := display.Size()
-	topOffset, bottomOffset, leftOffset, rightOffset := 0, 0, 0, 0
-
-	for _, sp := range d.statusPanes {
-		switch sp.side {
-		case SideTop:
-			buf := sp.app.Render()
-			d.statusPaneBlit(display, leftOffset, topOffset, buf)
-			topOffset += sp.size
-		case SideBottom:
-			buf := sp.app.Render()
-			d.statusPaneBlit(display, leftOffset, h-bottomOffset-sp.size, buf)
-			bottomOffset += sp.size
-		case SideLeft:
-			buf := sp.app.Render()
-			d.statusPaneBlit(display, leftOffset, topOffset, buf)
-			leftOffset += sp.size
-		case SideRight:
-			buf := sp.app.Render()
-			d.statusPaneBlit(display, w-rightOffset-sp.size, topOffset, buf)
-			rightOffset += sp.size
-		}
-	}
-}
-func (d *Desktop) statusPaneBlit(display ScreenDriver, x, y int, buf [][]Cell) {
-	prev := d.statusBuffer.Snapshot()
-	if prev != nil {
-		blitDiff(display, x, y, prev, buf)
-	} else {
-		blit(display, x, y, buf)
-	}
-	d.statusBuffer.Save(buf)
 }
 
 func (d *Desktop) toggleControlMode() {
@@ -879,21 +795,6 @@ func (d *Desktop) appFromSnapshot(snap PaneSnapshot) App {
 		}
 	}
 	return NewSnapshotApp(snap.Title, snap.Buffer)
-}
-
-func (d *Desktop) draw() {
-
-	if d.zoomedPane != nil {
-		mainX, mainY, _, _ := d.getMainArea()
-		if d.zoomedPane.Pane != nil {
-			paneBuffer := d.zoomedPane.Pane.Render()
-			blit(d.display, mainX, mainY, paneBuffer)
-		}
-	} else if d.activeWorkspace != nil {
-		d.activeWorkspace.draw(d.display)
-	}
-	d.drawStatusPanes(d.display)
-	d.display.Show()
 }
 
 func (d *Desktop) Close() {
