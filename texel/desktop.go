@@ -1196,21 +1196,3 @@ func (d *Desktop) logActiveAnimations() {
 		}
 	})
 }
-
-//func blitDiff(tcs tcell.Screen, x0, y0 int, oldBuf, buf [][]Cell) {
-//	for y, row := range buf {
-//		for x, cell := range row {
-//			if y >= len(oldBuf) || x >= len(oldBuf[y]) || cell != oldBuf[y][x] {
-//				tcs.SetContent(x0+x, y0+y, cell.Ch, nil, cell.Style)
-//			}
-//		}
-//	}
-//}
-//
-//func blit(tcs tcell.Screen, x, y int, buf [][]Cell) {
-//	for r, row := range buf {
-//		for c, cell := range row {
-//			tcs.SetContent(x+c, y+r, cell.Ch, nil, cell.Style)
-//		}
-//	}
-//}

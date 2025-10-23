@@ -70,10 +70,6 @@ type Screen struct {
 	effects  *EffectPipeline
 	animator *EffectAnimator
 
-	// Pre-created effects for control mode
-	//controlModeFade *FadeEffect
-	controlModeFade *RainbowEffect
-
 	resizeSelection    *selectedBorder
 	debugFramesToDump  int
 	refreshMonitorOnce sync.Once
@@ -93,11 +89,6 @@ func newScreen(id int, shellFactory AppFactory, lifecycle AppLifecycleManager, d
 		effects:         NewEffectPipeline(),
 		animator:        NewEffectAnimator(),
 	}
-
-	// Create control mode effects with more subtle colors
-	// Use a subtle green tint for control mode
-	//s.controlModeFade = NewFadeEffect(desktop, tcell.NewRGBColor(0, 100, 0)) // Dark green
-	s.controlModeFade = NewRainbowEffect(desktop) // placeholder; remote client owns visuals now
 
 	if desktop != nil && desktop.animationsDisabled() {
 		s.disableAnimations()
