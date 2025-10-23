@@ -15,7 +15,6 @@ import (
 	"log"
 	"sort"
 	"sync"
-	"time"
 )
 
 type Direction int
@@ -290,20 +289,6 @@ func (s *Screen) handlePaste(data []byte) {
 	}
 }
 
-func (s *Screen) AnimateGroupExpansion(groupNode *Node, newPaneIndex int, duration time.Duration) {
-	// Animation removed - just set final layout directly
-	s.recalculateLayout()
-	s.Refresh()
-}
-
-// Animation for splitting current pane (only 2 panes involved)
-func (s *Screen) AnimatePaneSplit(splitNode *Node, duration time.Duration) {
-	// Animation removed - just set final layout directly
-	s.recalculateLayout()
-	s.Refresh()
-}
-
-
 func (s *Screen) CloseActivePane() {
 	if s.tree.ActiveLeaf == nil {
 		return
@@ -334,17 +319,7 @@ func (s *Screen) CloseActivePane() {
 	log.Printf("CloseActivePane: Closing pane '%s' at index %d",
 		closedPaneNode.Pane.getTitle(), closingIndex)
 
-	// Start removal animation
-	s.AnimatePaneRemoval(parent, closingIndex, 100*time.Millisecond, func() {
-		log.Printf("CloseActivePane: Animation completed, actually removing pane")
-
-		// Now perform the actual tree cleanup
-		s.actuallyClosePane(closedPaneNode, parent, closingIndex)
-	})
-}
-
-// Helper method to do the actual pane removal after animation
-func (s *Screen) actuallyClosePane(closedPaneNode *Node, parent *Node, closingIndex int) {
+	// Perform the actual tree cleanup
 	if closedPaneNode.Pane != nil {
 		closedPaneNode.Pane.IsActive = false
 	}
@@ -464,29 +439,8 @@ func (s *Screen) PerformSplit(splitDir SplitType) {
 	newPane.SetActive(true)
 	s.notifyFocus()
 
-	// Start appropriate animation based on split type
-	if addToExistingGroup {
-		// CASE 1: Adding to existing equally-sized group
-		// All panes were resized equally, animate the entire group
-		log.Printf("PerformSplit: Animating addition to existing group")
-		parent := newNode.Parent // parent is the group that got a new child
-		if parent != nil {
-			newPaneIndex := len(parent.Children) - 1 // New pane is always added at the end
-			s.AnimateGroupExpansion(parent, newPaneIndex, 300*time.Millisecond)
-		} else {
-			s.recalculateLayout()
-		}
-	} else {
-		// CASE 2: Created new split (split current pane in two)
-		// Only the current pane was split, animate just that split
-		log.Printf("PerformSplit: Animating new split creation")
-		parent := newNode.Parent // parent is the newly created split node
-		if parent != nil && len(parent.Children) == 2 {
-			s.AnimatePaneSplit(parent, 300*time.Millisecond)
-		} else {
-			s.recalculateLayout()
-		}
-	}
+	// Recalculate layout after split
+	s.recalculateLayout()
 
 	log.Printf("PerformSplit: Split completed successfully")
 	if s.desktop != nil {
@@ -654,19 +608,6 @@ func (s *Screen) Close() {
 
 func (s *Screen) recalculateLayout() {
 	s.tree.Resize(s.x, s.y, s.width, s.height)
-}
-
-func (s *Screen) AnimatePaneCreation(newNodeParent *Node, newPaneIndex int, duration time.Duration) {
-	// Animation removed - just set final layout directly
-	s.recalculateLayout()
-	s.Refresh()
-}
-
-func (s *Screen) AnimatePaneRemoval(nodeParent *Node, removingIndex int, duration time.Duration, onComplete func()) {
-	// Animation removed - just execute the completion callback directly
-	if onComplete != nil {
-		onComplete()
-	}
 }
 
 func (s *Screen) findBorderToResize(d Direction) *selectedBorder {

@@ -40,17 +40,6 @@ func ApplyDefaults(cfg Config) {
 		changed = true
 	}
 
-	if applySectionDefaults(cfg, "geometry", Section{
-		"split_effect":       "stretch",
-		"remove_effect":      "ghost_n_grow",
-		"zoom_effect":        "expand",
-		"split_duration_ms":  160,
-		"remove_duration_ms": 160,
-		"zoom_duration_ms":   220,
-	}) {
-		changed = true
-	}
-
 	if applySectionDefaults(cfg, "statusbar", Section{
 		"base_fg":         "#f8f8f2",
 		"base_bg":         "#21222C",
