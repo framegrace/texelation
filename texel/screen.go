@@ -66,10 +66,6 @@ type Screen struct {
 	ShellAppFactory     AppFactory
 	appLifecycle        AppLifecycleManager
 
-	// New effects system for screen-level effects
-	effects  *EffectPipeline
-	animator *EffectAnimator
-
 	resizeSelection    *selectedBorder
 	debugFramesToDump  int
 	refreshMonitorOnce sync.Once
@@ -86,12 +82,6 @@ func newScreen(id int, shellFactory AppFactory, lifecycle AppLifecycleManager, d
 		dispatcher:      NewEventDispatcher(),
 		ShellAppFactory: shellFactory,
 		appLifecycle:    lifecycle,
-		effects:         NewEffectPipeline(),
-		animator:        NewEffectAnimator(),
-	}
-
-	if desktop != nil && desktop.animationsDisabled() {
-		s.disableAnimations()
 	}
 
 	return s, nil
@@ -99,28 +89,6 @@ func newScreen(id int, shellFactory AppFactory, lifecycle AppLifecycleManager, d
 
 func (s *Screen) SetControlMode(active bool) {
 	log.Printf("SetControlMode called: active=%v", active)
-}
-
-// AddEffect adds a custom effect to the screen's pipeline
-func (s *Screen) AddEffect(effect Effect) {
-	s.effects.AddEffect(effect)
-}
-
-// RemoveEffect removes an effect from the screen's pipeline
-func (s *Screen) RemoveEffect(effect Effect) {
-	s.effects.RemoveEffect(effect)
-}
-
-func (s *Screen) disableAnimations() {
-	s.animator.StopAll()
-	s.effects.Clear()
-}
-
-func (s *Screen) animationsDisabled() bool {
-	if s.desktop == nil {
-		return false
-	}
-	return s.desktop.animationsDisabled()
 }
 
 func (s *Screen) getDefaultBackground() tcell.Color {
@@ -535,12 +503,6 @@ func (s *Screen) draw(tcs ScreenDriver) {
 
 	log.Printf("Screen.draw: Rendered %d panes", paneCount)
 
-	// Apply screen-level effects to the collected buffer
-	if s.hasActiveEffects() {
-		log.Printf("Screen.draw: Applying screen effects (%d active)", s.effects.GetActiveAnimationCount())
-		s.effects.Apply(&screenBuffer)
-	}
-
 	// Now blit the final buffer to the screen
 	for y, row := range screenBuffer {
 		for x, cell := range row {
@@ -551,43 +513,7 @@ func (s *Screen) draw(tcs ScreenDriver) {
 	log.Printf("Screen.draw: Screen draw completed")
 }
 
-// hasActiveEffects checks if any screen-level effects are currently active
-func (s *Screen) hasActiveEffects() bool {
-	return s.effects.IsAnimating()
-}
-
-// Add this method to check if any panes have active animations
-func (s *Screen) hasActivePaneAnimations() bool {
-	return false
-}
-
-// applyScreenEffects applies screen-level effects to the entire screen area
-func (s *Screen) applyScreenEffects(tcs ScreenDriver) {
-	// Create a buffer for the entire screen area
-	buffer := make([][]Cell, s.height)
-	for y := range buffer {
-		buffer[y] = make([]Cell, s.width)
-		for x := range buffer[y] {
-			// Read the current content from tcell screen
-			mainc, _, style, _ := tcs.GetContent(s.x+x, s.y+y)
-			buffer[y][x] = Cell{Ch: mainc, Style: style}
-		}
-	}
-
-	// Apply screen-level effects
-	s.effects.Apply(&buffer)
-
-	// Write the modified buffer back to the screen
-	for y, row := range buffer {
-		for x, cell := range row {
-			tcs.SetContent(s.x+x, s.y+y, cell.Ch, nil, cell.Style)
-		}
-	}
-}
-
 func (s *Screen) Close() {
-	// Stop all screen-level animations
-	s.animator.StopAll()
 
 	// Close all panes
 	s.tree.Traverse(func(node *Node) {

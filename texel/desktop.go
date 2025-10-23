@@ -81,10 +81,6 @@ type Desktop struct {
 	resizeSelection *selectedBorder
 	zoomedPane      *Node
 
-	// Animation system
-	animationTicker *time.Ticker
-	animationStop   chan struct{}
-
 	lastMouseX         int
 	lastMouseY         int
 	lastMouseButtons   tcell.ButtonMask
@@ -105,9 +101,8 @@ type Desktop struct {
 	hasLastState bool
 	lastState    StatePayload
 
-	animationsEnabled bool
-	refreshMu         sync.RWMutex
-	refreshHandler    func()
+	refreshMu      sync.RWMutex
+	refreshHandler func()
 }
 
 // PaneStateSnapshot captures dynamic pane flags for external consumers.
@@ -171,7 +166,6 @@ func NewDesktopWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppF
 		focusListeners:     make([]DesktopFocusListener, 0),
 		paneStateListeners: make([]PaneStateListener, 0),
 		snapshotFactories:  make(map[string]SnapshotFactory),
-		animationsEnabled:  true,
 	}
 
 	log.Printf("NewDesktop: Created with inControlMode=%v", d.inControlMode)
@@ -343,31 +337,6 @@ func (d *Desktop) Run() error {
 		}
 	}()
 
-	// Start animation timer for smooth effects
-	d.animationTicker = time.NewTicker(16 * time.Millisecond) // 60fps
-	d.animationStop = make(chan struct{})
-
-	go func() {
-		for {
-			select {
-			case <-d.animationTicker.C:
-				if d.hasActiveAnimations() {
-					log.Printf("Animation timer: Triggering redraw for active animations")
-					if d.activeWorkspace != nil {
-						select {
-						case d.activeWorkspace.drawChan <- true:
-						default:
-						}
-					}
-				}
-			case <-d.animationStop:
-				return
-			case <-d.quit:
-				return
-			}
-		}
-	}()
-
 	d.recalculateLayout()
 
 	if d.activeWorkspace != nil {
@@ -401,27 +370,6 @@ func (d *Desktop) Run() error {
 			return nil
 		}
 	}
-}
-
-func (d *Desktop) hasActiveAnimations() bool {
-	if d.activeWorkspace == nil {
-		return false
-	}
-
-	// Check screen-level effects
-	if d.activeWorkspace.effects.IsAnimating() {
-		return true
-	}
-
-	// Check all pane-level effects
-	hasActivePaneAnimations := false
-	d.activeWorkspace.tree.Traverse(func(node *Node) {
-		if node.Pane != nil && node.Pane.effects.IsAnimating() {
-			hasActivePaneAnimations = true
-		}
-	})
-
-	return hasActivePaneAnimations
 }
 
 func (d *Desktop) handleEvent(ev tcell.Event) {
@@ -710,19 +658,6 @@ func (d *Desktop) broadcastStateUpdate() {
 	//	}
 }
 
-func (d *Desktop) animationsDisabled() bool {
-	return !d.animationsEnabled
-}
-
-// DisableAnimations turns off desktop-level animations for remote runtimes.
-func (d *Desktop) DisableAnimations() {
-	d.animationsEnabled = false
-	for _, ws := range d.workspaces {
-		if ws != nil {
-			ws.disableAnimations()
-		}
-	}
-}
 
 func (d *Desktop) SetRefreshHandler(handler func()) {
 	d.refreshMu.Lock()
@@ -963,14 +898,6 @@ func (d *Desktop) draw() {
 
 func (d *Desktop) Close() {
 	d.closeOnce.Do(func() {
-		// Stop animation timer
-		if d.animationTicker != nil {
-			d.animationTicker.Stop()
-		}
-		if d.animationStop != nil {
-			close(d.animationStop)
-		}
-
 		close(d.quit)
 		for _, ws := range d.workspaces {
 			ws.Close()
@@ -982,21 +909,6 @@ func (d *Desktop) Close() {
 			d.display.Fini()
 		}
 	})
-}
-
-func (d *Desktop) AddCustomEffect(effect Effect) {
-	if d.activeWorkspace != nil {
-		d.activeWorkspace.AddEffect(effect)
-	}
-}
-
-// AddCustomPaneEffect adds a custom effect to the active pane
-func (d *Desktop) AddCustomPaneEffect(effect Effect) {
-	if d.activeWorkspace != nil &&
-		d.activeWorkspace.tree.ActiveLeaf != nil &&
-		d.activeWorkspace.tree.ActiveLeaf.Pane != nil {
-		d.activeWorkspace.tree.ActiveLeaf.Pane.AddEffect(effect)
-	}
 }
 
 func (d *Desktop) getStyle(fg, bg tcell.Color, bold, underline, reverse bool) tcell.Style {
@@ -1142,57 +1054,3 @@ func initDefaultColors() (tcell.Color, tcell.Color, error) {
 	return fg, bg, nil
 }
 
-func (d *Desktop) TestEffectSystem() {
-	log.Printf("=== EFFECT SYSTEM TEST ===")
-
-	// Create a test effect
-	testEffect := NewFadeEffect(d, tcell.NewRGBColor(255, 0, 0))
-	log.Printf("Test effect created with intensity: %.3f", testEffect.GetIntensity())
-
-	// Test setting intensity directly
-	testEffect.SetIntensity(0.5)
-	log.Printf("After SetIntensity(0.5): %.3f", testEffect.GetIntensity())
-
-	testEffect.SetIntensity(0.0)
-	log.Printf("After SetIntensity(0.0): %.3f", testEffect.GetIntensity())
-
-	// Test animator
-	animator := NewEffectAnimator()
-	log.Printf("Starting animation test...")
-
-	animator.AnimateTo(testEffect, 0.75, 1*time.Second, func() {
-		log.Printf("Animation completed, final intensity: %.3f", testEffect.GetIntensity())
-	})
-
-	// Check intensity during animation
-	time.Sleep(100 * time.Millisecond)
-	log.Printf("After 100ms: %.3f", testEffect.GetIntensity())
-
-	time.Sleep(400 * time.Millisecond)
-	log.Printf("After 500ms: %.3f", testEffect.GetIntensity())
-
-	time.Sleep(600 * time.Millisecond)
-	log.Printf("After 1100ms: %.3f", testEffect.GetIntensity())
-
-	log.Printf("=== END EFFECT SYSTEM TEST ===")
-}
-
-func (d *Desktop) logActiveAnimations() {
-	if d.activeWorkspace == nil {
-		return
-	}
-
-	screenCount := d.activeWorkspace.effects.GetActiveAnimationCount()
-	if screenCount > 0 {
-		log.Printf("Active screen animations: %d", screenCount)
-	}
-
-	d.activeWorkspace.tree.Traverse(func(node *Node) {
-		if node.Pane != nil {
-			paneCount := node.Pane.effects.GetActiveAnimationCount()
-			if paneCount > 0 {
-				log.Printf("Active animations in pane '%s': %d", node.Pane.getTitle(), paneCount)
-			}
-		}
-	})
-}
