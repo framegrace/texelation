@@ -1,6 +1,6 @@
 # Client Refactoring Plan - IN PROGRESS
 
-## Status: 2/8 Complete (colors.go, ui_state.go extracted)
+## Status: 3/8 Complete (colors.go, ui_state.go, message_sender.go extracted)
 
 ## Goal
 Split monolithic `internal/runtime/client/app.go` (955 lines → ~100 lines) into 8 focused modules for better testability, maintainability, and reusability.
@@ -77,10 +77,10 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate)
 
 ---
 
-### 3. message_sender.go - NEXT
-**Lines**: ~100 (app.go lines ~525-620)
-**Dependencies**: None (uses only protocol, net, sync)
-**Status**: TODO
+### ✅ 3. message_sender.go - COMPLETED
+**Lines**: ~70 (extracted from app.go lines 528-598)
+**Dependencies**: None (uses only protocol, net, sync, tcell)
+**Status**: ✓ Done
 
 **What to Extract**:
 ```go
@@ -95,8 +95,8 @@ func writeMessage(writeMu *sync.Mutex, conn net.Conn, msg protocol.Message) erro
 
 ---
 
-### 4. input_handler.go
-**Lines**: ~150 (app.go lines 521-623 + 806-839)
+### 4. input_handler.go - NEXT
+**Lines**: ~150 (app.go lines ~400-520 + paste handling)
 **Dependencies**: message_sender.go, ui_state.go
 **Status**: TODO
 
@@ -219,12 +219,13 @@ func formatPaneID(id [16]byte) string
 
 ---
 
-## Current State (After ui_state.go)
+## Current State (After message_sender.go)
 
-**app.go**: ~820 lines (was 955)
+**app.go**: ~750 lines (was 955)
 **Extracted**:
 - 21 lines → colors.go
 - 114 lines → ui_state.go
+- 70 lines → message_sender.go
 **Build**: ✓ Passing
 
 ---
@@ -257,13 +258,13 @@ Once all files are extracted:
 |------|-------|--------|
 | colors.go | 40 | ✓ Done |
 | ui_state.go | 150 | ✓ Done |
-| message_sender.go | ~100 | TODO |
+| message_sender.go | 70 | ✓ Done |
 | input_handler.go | ~150 | TODO |
 | renderer.go | ~120 | TODO |
 | protocol_handler.go | ~150 | TODO |
 | background_tasks.go | ~120 | TODO |
 | session.go | ~200 | TODO |
-| **Total** | **~1030** | **2/8** |
+| **Total** | **~1000** | **3/8** |
 | app.go (after) | ~100 | Will contain Run() + imports + Options |
 
 ---
