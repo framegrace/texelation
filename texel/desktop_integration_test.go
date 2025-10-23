@@ -28,7 +28,7 @@ func TestDesktopSplitCreatesNewPane(t *testing.T) {
 	}
 	welcomeFactory := func() App { return newFakeApp("welcome") }
 
-	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestDesktopStatusPaneResizesMainArea(t *testing.T) {
 	shellFactory := func() App { return newFakeApp("shell") }
 	welcomeFactory := func() App { return newFakeApp("welcome") }
 
-	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDesktopSwitchWorkspaceCreatesNewScreen(t *testing.T) {
 	shellFactory := func() App { return newFakeApp("shell") }
 	welcomeFactory := func() App { return newFakeApp("welcome") }
 
-	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestDesktopInjectKeyEvent(t *testing.T) {
 	shellFactory := func() App { return recorder }
 	welcomeFactory := func() App { return newFakeApp("welcome") }
 
-	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestDesktopInjectMouseEvent(t *testing.T) {
 	shellFactory := func() App { return newFakeApp("shell") }
 	welcomeFactory := func() App { return newFakeApp("welcome") }
 
-	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestDesktopClipboardAndThemeHandling(t *testing.T) {
 	shellFactory := func() App { return newFakeApp("shell") }
 	welcomeFactory := func() App { return newFakeApp("welcome") }
 
-	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}

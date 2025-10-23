@@ -133,7 +133,7 @@ func TestDesktopWithInjectedDriverAndLifecycle(t *testing.T) {
 	shellFactory := func() App { return newFakeApp("shell") }
 	welcomeFactory := func() App { return newFakeApp("welcome") }
 
-	desktop, err := NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		t.Fatalf("expected desktop, got error %v", err)
 	}

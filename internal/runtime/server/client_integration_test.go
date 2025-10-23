@@ -32,7 +32,7 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 	shellFactory := func() texel.App { return app }
 	welcomeFactory := func() texel.App { return app }
 
-	desktop, err := texel.NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}

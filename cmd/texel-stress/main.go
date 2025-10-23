@@ -120,7 +120,7 @@ func main() {
 	}
 }
 
-func buildDesktop() (*texel.Desktop, *stressApp) {
+func buildDesktop() (*texel.DesktopEngine, *stressApp) {
 	screen := tcell.NewSimulationScreen("utf-8")
 	driver := texel.NewTcellScreenDriver(screen)
 	lifecycle := &texel.LocalAppLifecycle{}
@@ -129,7 +129,7 @@ func buildDesktop() (*texel.Desktop, *stressApp) {
 	shellFactory := func() texel.App { return app }
 	welcomeFactory := func() texel.App { return newStressApp("welcome", "loaded") }
 
-	desktop, err := texel.NewDesktopWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		log.Fatalf("desktop init failed: %v", err)
 	}
