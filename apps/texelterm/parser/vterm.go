@@ -149,28 +149,34 @@ func (v *VTerm) placeChar(r rune) {
 	} else if v.cursorX < v.width-1 {
 		v.SetCursorPos(v.cursorY, v.cursorX+1)
 	}
+
 }
 
 // --- Cursor and Scrolling ---
 
 // SetCursorPos moves the cursor to a new position, clamping to screen bounds.
 func (v *VTerm) SetCursorPos(y, x int) {
-	v.wrapNext = false
-	v.prevCursorY = v.cursorY
+	// Clamp coordinates first
 	if x < 0 {
 		x = 0
 	}
 	if x >= v.width {
 		x = v.width - 1
 	}
-	v.cursorX = x
-
 	if y < 0 {
 		y = 0
 	}
 	if y >= v.height {
 		y = v.height - 1
 	}
+
+	// Only clear wrapNext if we're actually moving to a different position
+	if y != v.cursorY || x != v.cursorX {
+		v.wrapNext = false
+	}
+
+	v.prevCursorY = v.cursorY
+	v.cursorX = x
 	v.cursorY = y
 
 	v.MarkDirty(v.prevCursorY)
@@ -345,7 +351,6 @@ func (v *VTerm) ClearScreen() {
 func (v *VTerm) SaveCursor() {
 	if v.inAltScreen {
 		v.savedAltCursorX, v.savedAltCursorY = v.cursorX, v.cursorY
-		log.Printf("Saving cursor: %d,%d", v.savedAltCursorX, v.savedAltCursorY)
 	} else {
 		v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY
 	}
@@ -355,7 +360,6 @@ func (v *VTerm) SaveCursor() {
 func (v *VTerm) RestoreCursor() {
 	v.wrapNext = false
 	if v.inAltScreen {
-		log.Printf("Restoring cursor: %d,%d", v.savedAltCursorX, v.savedAltCursorY)
 		v.SetCursorPos(v.savedAltCursorY, v.savedAltCursorX)
 	} else {
 		v.SetCursorPos(v.savedMainCursorY, v.savedMainCursorX)
@@ -433,7 +437,6 @@ func (v *VTerm) ClearDirty() {
 // --- Basic Terminal Operations ---
 
 func (v *VTerm) CarriageReturn() {
-	v.wrapNext = false
 	v.SetCursorPos(v.cursorY, 0)
 }
 
@@ -490,7 +493,6 @@ func (v *VTerm) ReverseIndex() {
 
 // ProcessCSI interprets a parsed CSI sequence and calls the appropriate handler.
 func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
-	v.wrapNext = false
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
@@ -577,9 +579,12 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 	case 'D':
 		v.MoveCursorBackward(param(0, 1))
 	case 'G':
-		v.SetCursorPos(v.cursorY, param(0, 1)-1)
+		col := param(0, 1) - 1
+		v.SetCursorPos(v.cursorY, col)
 	case 'H', 'f':
-		v.SetCursorPos(param(0, 1)-1, param(1, 1)-1)
+		row := param(0, 1) - 1
+		col := param(1, 1) - 1
+		v.SetCursorPos(row, col)
 	case 'd':
 		v.SetCursorPos(param(0, 1)-1, v.cursorX)
 	}

@@ -1,4 +1,10 @@
-ansiterm.log
+***/*.log
 texelation
 bin/
 .cache/
+log
+logs
+logfile
+node_modules
+package.json
+package-lock.json

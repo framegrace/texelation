@@ -227,7 +227,7 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	case tcell.KeyEnter:
 		keyBytes = []byte("\r")
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		keyBytes = []byte{'\b'}
+		keyBytes = []byte{0x7F}
 	case tcell.KeyTab:
 		keyBytes = []byte("\t")
 	case tcell.KeyEsc:
@@ -412,7 +412,7 @@ func If[T any](condition bool, trueVal, falseVal T) T {
 func newDefaultPalette() [258]tcell.Color {
 	var p [258]tcell.Color
 	// Standard ANSI colors 0-15
-	p[0] = tcell.NewRGBColor(0, 0, 0)
+	p[0] = tcell.NewRGBColor(10, 10, 20)
 	p[1] = tcell.NewRGBColor(128, 0, 0)
 	p[2] = tcell.NewRGBColor(0, 128, 0)
 	p[3] = tcell.NewRGBColor(128, 128, 0)

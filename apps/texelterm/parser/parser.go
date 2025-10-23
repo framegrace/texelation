@@ -59,7 +59,8 @@ func (p *Parser) Parse(r rune) {
 		case '\x1b':
 			p.state = StateEscape
 		case '\n':
-			p.vterm.CarriageReturn()
+			// LF should only move down one line, preserving column (not CR+LF)
+			// In default mode (LNM reset), \n does only line feed
 			p.vterm.LineFeed()
 		case '\r':
 			p.vterm.CarriageReturn()

@@ -821,7 +821,7 @@ func consumePasteKey(state *uiState, ev *tcell.EventKey) {
 		state.pasteBuf = append(state.pasteBuf, '\t')
 		return
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		state.pasteBuf = append(state.pasteBuf, '')
+		state.pasteBuf = append(state.pasteBuf, 0x7F)
 		return
 	case tcell.KeyEsc:
 		state.pasteBuf = append(state.pasteBuf, 0x1b)
