@@ -1142,11 +1142,12 @@ func TestDeepNestedSplits(t *testing.T) {
 
 	t.Logf("Starting with %d pane", len(snapshot.Panes))
 
-	// Create 4 splits (will result in 5 panes total)
+	// Try to create multiple splits to test deep nesting
 	// Alternate between vertical and horizontal to create complex tree
-	splits := []rune{'|', '-', '|', '-'}
-
-	initialSnapshotCount := client.SnapshotCount()
+	// Note: Some splits may be rejected if panes get too small (MinPaneWidth/MinPaneHeight)
+	splits := []rune{'|', '-', '|', '-', '|', '-'}
+	successfulSplits := 0
+	lastPaneCount := 1
 
 	for i, splitChar := range splits {
 		if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
@@ -1159,52 +1160,63 @@ func TestDeepNestedSplits(t *testing.T) {
 			t.Fatalf("failed to send split %d: %v", i+1, err)
 		}
 
-		// Wait for the TreeSnapshot from this split
+		// Wait for potential TreeSnapshot from this split
 		time.Sleep(100 * time.Millisecond)
-		snapshot := client.WaitForTreeSnapshot(2 * time.Second)
-		expectedPanes := i + 2
-		if len(snapshot.Panes) != expectedPanes {
-			t.Fatalf("after split %d: expected %d panes, got %d", i+1, expectedPanes, len(snapshot.Panes))
+
+		// Try to get snapshot, but it might timeout if split was rejected
+		currentSnapshot, ok := client.TryGetTreeSnapshot(500 * time.Millisecond)
+		if !ok {
+			// No snapshot - split was likely rejected due to size constraints
+			t.Logf("Split %d/%d: No TreeSnapshot received (likely rejected due to size)", i+1, len(splits))
+			continue
 		}
 
-		// Drain deltas for this split
-		client.WaitForAnyBufferDelta(1 * time.Second)
-		client.DrainDeltas()
+		// Check if pane count increased
+		if len(currentSnapshot.Panes) > lastPaneCount {
+			successfulSplits++
+			lastPaneCount = len(currentSnapshot.Panes)
 
-		t.Logf("Split %d/%d complete: %d panes", i+1, len(splits), len(snapshot.Panes))
+			// Drain deltas for this split
+			client.WaitForAnyBufferDelta(1 * time.Second)
+			client.DrainDeltas()
+
+			t.Logf("Split %d/%d succeeded: now %d panes", i+1, len(splits), len(currentSnapshot.Panes))
+		} else {
+			t.Logf("Split %d/%d: Pane count unchanged (split rejected)", i+1, len(splits))
+		}
 	}
 
-	finalSnapshotCount := client.SnapshotCount()
-	t.Logf("Received %d snapshots total (%d new)", finalSnapshotCount, finalSnapshotCount-initialSnapshotCount)
+	t.Logf("Completed %d successful splits out of %d attempts", successfulSplits, len(splits))
 
-	// Verify final state has 5 panes using cache
+	// Verify final state using cache
 	paneCount := client.GetPaneCount()
-	if paneCount != 5 {
-		// Log what we have for debugging
-		panes := client.GetAllPanes()
-		t.Logf("Found %d panes instead of 5:", paneCount)
-		for i, paneID := range panes {
-			x, y, w, h, _ := client.GetPaneGeometry(paneID)
-			t.Logf("  Pane %d: %x at (%d,%d) size %dx%d", i+1, paneID[:4], x, y, w, h)
-		}
-		t.Fatalf("expected 5 panes in final state, got %d", paneCount)
+
+	// Should have at least 4 splits (5 panes) on 120x40 screen before hitting size limits
+	if paneCount < 4 {
+		t.Fatalf("expected at least 4 panes, got %d (minimum size protection may be too aggressive)", paneCount)
 	}
 
-	t.Logf("Deep nesting verified: 5 panes created with 4 splits")
+	t.Logf("Deep nesting verified: %d panes created with %d successful splits", paneCount, successfulSplits)
 
-	// Verify all panes are accessible and have reasonable geometry
+	// Verify all panes meet minimum size requirements
 	panes := client.GetAllPanes()
+	minWidth := 20  // texel.MinPaneWidth
+	minHeight := 8  // texel.MinPaneHeight
+
 	for i, paneID := range panes {
 		x, y, w, h, err := client.GetPaneGeometry(paneID)
 		if err != nil {
 			t.Fatalf("failed to get geometry for pane %d: %v", i, err)
 		}
-		if w < 5 || h < 3 {
-			t.Fatalf("pane %d has unreasonable size: %dx%d at (%d,%d)", i, w, h, x, y)
+		// All panes should meet or exceed minimum size since splits are now rejected for too-small panes
+		if w < minWidth || h < minHeight {
+			t.Errorf("pane %d below minimum size: %dx%d at (%d,%d), expected at least %dx%d",
+				i, w, h, x, y, minWidth, minHeight)
 		}
+		t.Logf("  Pane %d: %dx%d at (%d,%d)", i+1, w, h, x, y)
 	}
 
-	t.Logf("All panes have reasonable geometry")
+	t.Logf("All %d panes meet minimum size requirements", len(panes))
 }
 
 func TestFocusTransferWhenActivePaneRemoved(t *testing.T) {

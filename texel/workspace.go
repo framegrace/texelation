@@ -23,6 +23,12 @@ const (
 	DirRight
 )
 
+// Minimum usable pane dimensions (including borders)
+const (
+	MinPaneWidth  = 20 // ~18 chars drawable area
+	MinPaneHeight = 8  // ~6 lines drawable area
+)
+
 // DebuggableApp is an interface that apps can implement to provide
 // detailed state information for debugging purposes.
 type DebuggableApp interface {
@@ -343,6 +349,21 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 	if w.tree.ActiveLeaf == nil || w.ShellAppFactory == nil {
 		log.Printf("PerformSplit: Cannot split - no active leaf or shell factory")
 		return
+	}
+
+	// Check if split would make panes too small
+	if w.tree.ActiveLeaf.Pane != nil {
+		currentW := w.tree.ActiveLeaf.Pane.Width()
+		currentH := w.tree.ActiveLeaf.Pane.Height()
+
+		if splitDir == Vertical && currentW/2 < MinPaneWidth {
+			log.Printf("PerformSplit: Cannot split vertically - resulting panes too narrow (%d/2 < %d)", currentW, MinPaneWidth)
+			return
+		}
+		if splitDir == Horizontal && currentH/2 < MinPaneHeight {
+			log.Printf("PerformSplit: Cannot split horizontally - resulting panes too short (%d/2 < %d)", currentH, MinPaneHeight)
+			return
+		}
 	}
 
 	log.Printf("PerformSplit: Splitting in direction %v", splitDir)

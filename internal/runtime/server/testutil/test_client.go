@@ -326,6 +326,23 @@ func (tc *TestClient) WaitForTreeSnapshot(timeout time.Duration) protocol.TreeSn
 	return protocol.TreeSnapshot{}
 }
 
+// TryGetTreeSnapshot attempts to get a TreeSnapshot with the given timeout.
+// Returns the snapshot and true if received, or empty snapshot and false on timeout.
+// Does not fail the test on timeout.
+func (tc *TestClient) TryGetTreeSnapshot(timeout time.Duration) (protocol.TreeSnapshot, bool) {
+	tc.t.Helper()
+
+	select {
+	case snapshot := <-tc.snapshots:
+		return snapshot, true
+	case err := <-tc.errors:
+		tc.t.Fatalf("error while waiting for snapshot: %v", err)
+	case <-time.After(timeout):
+		return protocol.TreeSnapshot{}, false
+	}
+	return protocol.TreeSnapshot{}, false
+}
+
 // WaitForBufferDelta waits for a BufferDelta for the specified pane.
 // Returns the delta or fails the test on timeout.
 func (tc *TestClient) WaitForBufferDelta(paneID [16]byte, timeout time.Duration) protocol.BufferDelta {
