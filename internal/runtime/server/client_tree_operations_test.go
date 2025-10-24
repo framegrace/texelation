@@ -1487,30 +1487,43 @@ func TestServerHandlesCorruptedMessage(t *testing.T) {
 	sessionID := accept.SessionID
 	t.Logf("Connected with session %x", sessionID[:4])
 
-	// Now send corrupted message - write invalid protocol data
-	// Send enough bytes to look like a header but with invalid magic/version
-	t.Logf("Sending corrupted message (invalid magic number)")
-	corruptedData := []byte{
-		0xFF, 0xFF, 0xFF, 0xFF, // Invalid magic (should be 0x54584c01)
-		0xFF, 0xFF, 0xFF, 0xFF,
-		0xFF, 0xFF, 0xFF, 0xFF,
-		0xFF, 0xFF, 0xFF, 0xFF,
+	// Drain initial messages (TreeSnapshot) sent by server after handshake
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	drainedCount := 0
+	for {
+		_, _, err := protocol.ReadMessage(conn)
+		if err != nil {
+			// Timeout or connection closed - we've drained all initial messages
+			break
+		}
+		drainedCount++
+		if drainedCount > 10 {
+			break // Safety limit
+		}
 	}
+	t.Logf("Drained %d initial messages", drainedCount)
+
+	// Now send corrupted message - write a full 40-byte header with invalid magic
+	t.Logf("Sending corrupted message (invalid magic number)")
+	corruptedData := make([]byte, 40) // Full header size
+	// Set invalid magic (should be 0x54584c01)
+	corruptedData[0] = 0xFF
+	corruptedData[1] = 0xFF
+	corruptedData[2] = 0xFF
+	corruptedData[3] = 0xFF
+	// Rest filled with zeros (invalid but complete header)
 	if _, err := conn.Write(corruptedData); err != nil {
 		t.Logf("Write of corrupted data failed: %v", err)
 	}
 
-	// Try to read response - connection should be closed by server or we get read error
+	// Try to read response - connection should be closed by server
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	hdr2, _, err := protocol.ReadMessage(conn)
+	_, _, err = protocol.ReadMessage(conn)
 	if err != nil {
 		// Expected - server closed connection or we got protocol error
-		t.Logf("Server closed connection after corrupted message (expected): %v", err)
+		t.Logf("Server correctly closed connection after corrupted message: %v", err)
 	} else {
-		// Unexpected - server sent a message despite corruption
-		// This might mean server didn't validate the protocol properly
-		t.Logf("WARNING: Server sent message despite corruption - received type %v", hdr2.Type)
-		t.Logf("This suggests server may not be validating protocol magic/version properly")
+		t.Fatalf("Server should have closed connection after corrupted message")
 	}
 }
 

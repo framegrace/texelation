@@ -160,7 +160,14 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 		t.Fatalf("write key event: %v", err)
 	}
 
-	time.Sleep(5 * time.Millisecond)
+	// Give server time to process key event and drain any responses
+	srvClient.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	for {
+		_, _, err := readMessageSkippingFocus(srvClient)
+		if err != nil {
+			break // Timeout or EOF - done reading
+		}
+	}
 
 	srvClient.Close()
 
