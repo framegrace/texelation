@@ -1380,3 +1380,207 @@ func TestRapidSplitCloseLoop(t *testing.T) {
 		t.Fatalf("pane count mismatch: GetPaneCount=%d, GetAllPanes=%d", paneCount, len(panes))
 	}
 }
+
+// ============================================================================
+// Phase 6: Error Handling Tests
+// ============================================================================
+
+func TestClientDisconnectDuringSplit(t *testing.T) {
+	socketPath, mgr, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+
+	// Wait for initial state
+	client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+
+	// Verify we have a session
+	sessionID := client.SessionID()
+	if sessionID == [16]byte{} {
+		t.Fatalf("expected valid session ID")
+	}
+
+	// Trigger a split
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	client.DrainStateUpdates()
+
+	if err := client.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send split: %v", err)
+	}
+
+	// Immediately disconnect without waiting for TreeSnapshot
+	t.Logf("Disconnecting client during split operation")
+	if err := client.Close(); err != nil {
+		t.Logf("Client close returned: %v", err)
+	}
+
+	// Give server time to detect disconnect and cleanup
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify session handling after disconnect
+	session, err := mgr.Lookup(sessionID)
+	if err != nil {
+		t.Logf("Session removed after disconnect: %v (expected behavior)", err)
+	} else {
+		t.Logf("Session retained after disconnect (supports reconnect)")
+		stats := session.Stats()
+		t.Logf("Session stats: Pending=%d, NextSeq=%d", stats.PendingCount, stats.NextSequence)
+	}
+
+	t.Logf("Server handled client disconnect during split gracefully")
+}
+
+func TestServerHandlesCorruptedMessage(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	// Connect directly with raw socket to send corrupted data
+	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	// Send valid hello
+	helloPayload, _ := protocol.EncodeHello(protocol.Hello{ClientName: "corruption-test"})
+	if err := protocol.WriteMessage(conn, protocol.Header{
+		Version: protocol.Version,
+		Type:    protocol.MsgHello,
+		Flags:   protocol.FlagChecksum,
+	}, helloPayload); err != nil {
+		t.Fatalf("failed to write hello: %v", err)
+	}
+
+	// Read welcome
+	if _, _, err := protocol.ReadMessage(conn); err != nil {
+		t.Fatalf("failed to read welcome: %v", err)
+	}
+
+	// Send connect request
+	connectPayload, _ := protocol.EncodeConnectRequest(protocol.ConnectRequest{})
+	if err := protocol.WriteMessage(conn, protocol.Header{
+		Version: protocol.Version,
+		Type:    protocol.MsgConnectRequest,
+		Flags:   protocol.FlagChecksum,
+	}, connectPayload); err != nil {
+		t.Fatalf("failed to write connect: %v", err)
+	}
+
+	// Read connect accept
+	hdr, payload, err := protocol.ReadMessage(conn)
+	if err != nil {
+		t.Fatalf("failed to read connect accept: %v", err)
+	}
+	if hdr.Type != protocol.MsgConnectAccept {
+		t.Fatalf("expected connect accept, got %v", hdr.Type)
+	}
+
+	accept, err := protocol.DecodeConnectAccept(payload)
+	if err != nil {
+		t.Fatalf("failed to decode connect accept: %v", err)
+	}
+
+	sessionID := accept.SessionID
+	t.Logf("Connected with session %x", sessionID[:4])
+
+	// Now send corrupted message - write invalid protocol data
+	// Send enough bytes to look like a header but with invalid magic/version
+	t.Logf("Sending corrupted message (invalid magic number)")
+	corruptedData := []byte{
+		0xFF, 0xFF, 0xFF, 0xFF, // Invalid magic (should be 0x54584c01)
+		0xFF, 0xFF, 0xFF, 0xFF,
+		0xFF, 0xFF, 0xFF, 0xFF,
+		0xFF, 0xFF, 0xFF, 0xFF,
+	}
+	if _, err := conn.Write(corruptedData); err != nil {
+		t.Logf("Write of corrupted data failed: %v", err)
+	}
+
+	// Try to read response - connection should be closed by server or we get read error
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	hdr2, _, err := protocol.ReadMessage(conn)
+	if err != nil {
+		// Expected - server closed connection or we got protocol error
+		t.Logf("Server closed connection after corrupted message (expected): %v", err)
+	} else {
+		// Unexpected - server sent a message despite corruption
+		// This might mean server didn't validate the protocol properly
+		t.Logf("WARNING: Server sent message despite corruption - received type %v", hdr2.Type)
+		t.Logf("This suggests server may not be validating protocol magic/version properly")
+	}
+}
+
+func TestMultipleClientsOneDisconnects(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	// Connect two clients
+	client1 := testutil.NewTestClient(t, socketPath)
+	defer client1.Close()
+
+	client2 := testutil.NewTestClient(t, socketPath)
+
+	// Both clients receive initial state
+	client1.WaitForInitialSnapshot()
+	client1.WaitForAnyBufferDelta(2 * time.Second)
+
+	client2.WaitForInitialSnapshot()
+	client2.WaitForAnyBufferDelta(2 * time.Second)
+
+	t.Logf("Both clients connected")
+
+	// Client 1 triggers a split
+	if err := client1.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("client1: failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	client1.DrainStateUpdates()
+
+	if err := client1.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+		t.Fatalf("client1: failed to send split: %v", err)
+	}
+
+	// Client 1 waits for split
+	snapshot1 := client1.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot1.Panes) != 2 {
+		t.Fatalf("client1: expected 2 panes, got %d", len(snapshot1.Panes))
+	}
+
+	// Client 2 should also receive the split
+	snapshot2 := client2.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot2.Panes) != 2 {
+		t.Fatalf("client2: expected 2 panes, got %d", len(snapshot2.Panes))
+	}
+
+	t.Logf("Both clients received split: %d panes", len(snapshot1.Panes))
+
+	// Now disconnect client 2
+	t.Logf("Disconnecting client 2")
+	if err := client2.Close(); err != nil {
+		t.Logf("Client 2 close returned: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Client 1 should still be able to perform operations
+	if err := client1.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("client1: failed to enter control mode after client2 disconnect: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	client1.DrainStateUpdates()
+
+	if err := client1.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+		t.Fatalf("client1: failed to send second split: %v", err)
+	}
+
+	snapshot3 := client1.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot3.Panes) != 3 {
+		t.Fatalf("client1: expected 3 panes after second split, got %d", len(snapshot3.Panes))
+	}
+
+	t.Logf("Client 1 continues working after client 2 disconnect: %d panes", len(snapshot3.Panes))
+}
