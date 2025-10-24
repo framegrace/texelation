@@ -744,6 +744,122 @@ func TestClientReceivesTreeSnapshotAfterZoom(t *testing.T) {
 		rightWidth, leftHeight, zoomedWidth, zoomedHeight, restoredWidth, restoredHeight)
 }
 
+func TestClientReceivesTreeSnapshotAfterPaneSwap(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	snapshot1 := client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	if len(snapshot1.Panes) != 1 {
+		t.Fatalf("expected 1 initial pane, got %d", len(snapshot1.Panes))
+	}
+
+	// Create a vertical split so we have 2 panes side-by-side
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if err := client.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send split command: %v", err)
+	}
+
+	snapshot2 := client.WaitForTreeSnapshot(2 * time.Second)
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	if len(snapshot2.Panes) != 2 {
+		t.Fatalf("expected 2 panes after split, got %d", len(snapshot2.Panes))
+	}
+
+	// Identify left and right panes by their X position
+	var leftPaneID, rightPaneID [16]byte
+	var leftX, rightX int
+	for _, pane := range snapshot2.Panes {
+		if pane.X == 0 {
+			leftPaneID = pane.PaneID
+			leftX = int(pane.X)
+		} else {
+			rightPaneID = pane.PaneID
+			rightX = int(pane.X)
+		}
+	}
+
+	t.Logf("Before swap: left pane %x at X=%d, right pane %x at X=%d",
+		leftPaneID[:4], leftX, rightPaneID[:4], rightX)
+
+	// Now perform swap: Ctrl+A, 'w', Right arrow
+	// After split, active pane should be the right pane
+	// Swapping right will swap with the pane to the right (but there isn't one)
+	// So let's move left first, then swap right
+
+	// Move focus to left pane
+	if err := client.SendKey(tcell.KeyLeft, 0, tcell.ModShift); err != nil {
+		t.Fatalf("failed to send Shift+Left to move focus: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Enter control mode for swap
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode for swap: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	client.DrainStateUpdates()
+
+	// Send 'w' to enter swap sub-mode
+	if err := client.SendKey(tcell.KeyRune, 'w', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send 'w' for swap mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Send Right arrow to swap with right neighbor
+	if err := client.SendKey(tcell.KeyRight, 0, tcell.ModNone); err != nil {
+		t.Fatalf("failed to send Right arrow for swap: %v", err)
+	}
+
+	// Wait for TreeSnapshot showing swapped panes
+	snapshot3 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot3.Panes) != 2 {
+		t.Fatalf("expected 2 panes after swap, got %d", len(snapshot3.Panes))
+	}
+
+	// Verify panes have swapped positions
+	var newLeftPaneID, newRightPaneID [16]byte
+	var newLeftX, newRightX int
+	for _, pane := range snapshot3.Panes {
+		if pane.X == 0 || pane.X < snapshot3.Panes[1].X {
+			newLeftPaneID = pane.PaneID
+			newLeftX = int(pane.X)
+		} else {
+			newRightPaneID = pane.PaneID
+			newRightX = int(pane.X)
+		}
+	}
+
+	t.Logf("After swap: left pane %x at X=%d, right pane %x at X=%d",
+		newLeftPaneID[:4], newLeftX, newRightPaneID[:4], newRightX)
+
+	// The pane that was on the left should now be on the right, and vice versa
+	if newLeftPaneID != rightPaneID {
+		t.Fatalf("expected left position to have pane %x, got %x",
+			rightPaneID[:4], newLeftPaneID[:4])
+	}
+
+	if newRightPaneID != leftPaneID {
+		t.Fatalf("expected right position to have pane %x, got %x",
+			leftPaneID[:4], newRightPaneID[:4])
+	}
+
+	t.Logf("Swap verified: panes successfully swapped positions")
+}
+
 func TestClientWorkspaceSwitchingAndCreation(t *testing.T) {
 	socketPath, _, _, cleanup := setupTreeTestServer(t)
 	defer cleanup()
