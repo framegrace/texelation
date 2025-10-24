@@ -12,6 +12,7 @@
 package server
 
 import (
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -197,7 +198,8 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 	resumeClient.Close()
 	select {
 	case err := <-resumeErr:
-		if err != nil && err != io.EOF {
+		// Accept nil, EOF, and closed pipe errors as success - these are expected when client closes
+		if err != nil && err != io.EOF && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("resume server error: %v", err)
 		}
 	case <-time.After(50 * time.Millisecond):

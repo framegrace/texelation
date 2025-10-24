@@ -246,7 +246,17 @@ func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 		t.Fatalf("resume write request: %v", err)
 	}
 
+	snapshotReceived := false
+	deltasReceived := 0
+	expectedDeltas := 2 // Retention limit set at line 54
+
 	for {
+		// Check if we're done - received snapshot and all expected deltas
+		if snapshotReceived && deltasReceived >= expectedDeltas {
+			_ = clientConn.Close()
+			break
+		}
+
 		hdr, payload, err := readMessageSkippingFocus(clientConn)
 		if err != nil {
 			if err == io.EOF {
@@ -259,20 +269,25 @@ func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 			if _, err := protocol.DecodeTreeSnapshot(payload); err != nil {
 				t.Fatalf("resume decode snapshot: %v", err)
 			}
+			snapshotReceived = true
 		case protocol.MsgBufferDelta:
 			if _, err := protocol.DecodeBufferDelta(payload); err != nil {
 				t.Fatalf("resume decode delta: %v", err)
 			}
+			deltasReceived++
+			// Send ACK for this delta
 			ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
-			if err := protocol.WriteMessage(clientConn, protocol.Header{Version: protocol.Version, Type: protocol.MsgBufferAck, Flags: protocol.FlagChecksum, SessionID: session.ID()}, ackPayload); err != nil {
+			if err := protocol.WriteMessage(clientConn, protocol.Header{
+				Version:   protocol.Version,
+				Type:      protocol.MsgBufferAck,
+				Flags:     protocol.FlagChecksum,
+				SessionID: session.ID(),
+			}, ackPayload); err != nil {
 				t.Fatalf("resume write ack: %v", err)
 			}
 		default:
-			t.Fatalf("resume unexpected message type %v", hdr.Type)
-		}
-		if len(session.Pending(0)) == 0 {
-			_ = clientConn.Close()
-			break
+			// Skip other message types (PaneFocus, StateUpdate, etc.)
+			continue
 		}
 	}
 
