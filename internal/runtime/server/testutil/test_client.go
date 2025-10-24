@@ -31,10 +31,11 @@ type TestClient struct {
 	lastSequence uint64
 
 	// Channels for routing messages
-	snapshots chan protocol.TreeSnapshot
-	deltas    chan protocol.BufferDelta
-	paneState chan protocol.PaneState
-	errors    chan error
+	snapshots    chan protocol.TreeSnapshot
+	deltas       chan protocol.BufferDelta
+	paneState    chan protocol.PaneState
+	stateUpdates chan protocol.StateUpdate
+	errors       chan error
 
 	// Write protection
 	writeMu sync.Mutex
@@ -59,15 +60,16 @@ func NewTestClient(t *testing.T, socketPath string) *TestClient {
 	}
 
 	tc := &TestClient{
-		t:         t,
-		conn:      conn,
-		cache:     client.NewBufferCache(),
-		snapshots: make(chan protocol.TreeSnapshot, 10),
-		deltas:    make(chan protocol.BufferDelta, 100),
-		paneState: make(chan protocol.PaneState, 10),
-		errors:    make(chan error, 10),
-		stopCh:    make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		t:            t,
+		conn:         conn,
+		cache:        client.NewBufferCache(),
+		snapshots:    make(chan protocol.TreeSnapshot, 10),
+		deltas:       make(chan protocol.BufferDelta, 100),
+		paneState:    make(chan protocol.PaneState, 10),
+		stateUpdates: make(chan protocol.StateUpdate, 10),
+		errors:       make(chan error, 10),
+		stopCh:       make(chan struct{}),
+		doneCh:       make(chan struct{}),
 	}
 
 	// Perform handshake
@@ -228,7 +230,17 @@ func (tc *TestClient) handleMessage(hdr protocol.Header, payload []byte) error {
 			return fmt.Errorf("write pong: %w", err)
 		}
 
-	case protocol.MsgPaneFocus, protocol.MsgStateUpdate, protocol.MsgThemeUpdate, protocol.MsgClipboardSet:
+	case protocol.MsgStateUpdate:
+		stateUpdate, err := protocol.DecodeStateUpdate(payload)
+		if err != nil {
+			return fmt.Errorf("decode state update: %w", err)
+		}
+		select {
+		case tc.stateUpdates <- stateUpdate:
+		case <-tc.stopCh:
+		}
+
+	case protocol.MsgPaneFocus, protocol.MsgThemeUpdate, protocol.MsgClipboardSet:
 		// Ignore these for now - can add channels later if needed
 
 	default:
@@ -470,6 +482,33 @@ func (tc *TestClient) SnapshotCount() int {
 // DeltaCount returns the number of deltas received.
 func (tc *TestClient) DeltaCount() int {
 	return tc.deltaCount
+}
+
+// WaitForStateUpdate waits for a StateUpdate message with the given timeout.
+// Returns the state update or fails the test on timeout.
+func (tc *TestClient) WaitForStateUpdate(timeout time.Duration) protocol.StateUpdate {
+	tc.t.Helper()
+
+	select {
+	case stateUpdate := <-tc.stateUpdates:
+		return stateUpdate
+	case err := <-tc.errors:
+		tc.t.Fatalf("error while waiting for state update: %v", err)
+	case <-time.After(timeout):
+		tc.t.Fatalf("timeout waiting for state update after %v", timeout)
+	}
+	return protocol.StateUpdate{}
+}
+
+// DrainStateUpdates drains any pending state updates from the channel.
+func (tc *TestClient) DrainStateUpdates() {
+	for {
+		select {
+		case <-tc.stateUpdates:
+		default:
+			return
+		}
+	}
 }
 
 // Close stops the read loop and closes the connection.

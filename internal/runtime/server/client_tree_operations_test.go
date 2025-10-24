@@ -743,3 +743,216 @@ func TestClientReceivesTreeSnapshotAfterZoom(t *testing.T) {
 	t.Logf("Zoom out verified: %dx%d -> %dx%d -> %dx%d",
 		rightWidth, leftHeight, zoomedWidth, zoomedHeight, restoredWidth, restoredHeight)
 }
+
+func TestClientWorkspaceSwitchingAndCreation(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	snapshot1 := client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+	client.DrainStateUpdates()
+
+	if len(snapshot1.Panes) != 1 {
+		t.Fatalf("expected 1 initial pane, got %d", len(snapshot1.Panes))
+	}
+
+	t.Logf("Starting in workspace 1 with %d pane", len(snapshot1.Panes))
+
+	// Switch to workspace 2 (doesn't exist, should create it)
+	// Ctrl+A then '2'
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain state updates from entering control mode
+	client.DrainStateUpdates()
+
+	if err := client.SendKey(tcell.KeyRune, '2', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send workspace 2 command: %v", err)
+	}
+
+	// Should receive StateUpdate with workspace 2 (sent before TreeSnapshot)
+	stateUpdate2 := client.WaitForStateUpdate(2 * time.Second)
+	if stateUpdate2.WorkspaceID != 2 {
+		t.Fatalf("expected workspace 2, got %d", stateUpdate2.WorkspaceID)
+	}
+
+	// Should receive TreeSnapshot (new workspace with welcome pane)
+	snapshot2 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot2.Panes) != 1 {
+		t.Fatalf("expected 1 pane in workspace 2, got %d", len(snapshot2.Panes))
+	}
+
+	t.Logf("Switched to workspace: %d", stateUpdate2.WorkspaceID)
+
+	// Verify pane IDs are different (new workspace has new pane)
+	if snapshot2.Panes[0].PaneID == snapshot1.Panes[0].PaneID {
+		t.Fatalf("expected different pane ID in workspace 2")
+	}
+
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+	client.DrainStateUpdates()
+
+	// Switch back to workspace 1
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain state updates from entering control mode
+	client.DrainStateUpdates()
+
+	if err := client.SendKey(tcell.KeyRune, '1', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send workspace 1 command: %v", err)
+	}
+
+	// Should receive StateUpdate with workspace 1 (sent before TreeSnapshot)
+	stateUpdate3 := client.WaitForStateUpdate(2 * time.Second)
+	if stateUpdate3.WorkspaceID != 1 {
+		t.Fatalf("expected workspace 1, got %d", stateUpdate3.WorkspaceID)
+	}
+
+	// Should receive TreeSnapshot with original workspace 1 pane
+	snapshot3 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot3.Panes) != 1 {
+		t.Fatalf("expected 1 pane back in workspace 1, got %d", len(snapshot3.Panes))
+	}
+
+	// Verify we're back to the original pane
+	if snapshot3.Panes[0].PaneID != snapshot1.Panes[0].PaneID {
+		t.Fatalf("expected same pane ID when returning to workspace 1")
+	}
+
+	t.Logf("Workspace switching verified: 1 -> 2 (created) -> 1")
+}
+
+func TestClientWorkspaceIndependence(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	snapshot1 := client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+	client.DrainStateUpdates()
+
+	if len(snapshot1.Panes) != 1 {
+		t.Fatalf("expected 1 initial pane in workspace 1, got %d", len(snapshot1.Panes))
+	}
+
+	originalPaneID := snapshot1.Panes[0].PaneID
+
+	// Create a split in workspace 1
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if err := client.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send split command: %v", err)
+	}
+
+	snapshot2 := client.WaitForTreeSnapshot(2 * time.Second)
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+	client.DrainStateUpdates()
+
+	if len(snapshot2.Panes) != 2 {
+		t.Fatalf("expected 2 panes in workspace 1 after split, got %d", len(snapshot2.Panes))
+	}
+
+	t.Logf("Workspace 1 has %d panes after split", len(snapshot2.Panes))
+
+	// Switch to workspace 3
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain state updates from entering control mode
+	client.DrainStateUpdates()
+
+	if err := client.SendKey(tcell.KeyRune, '3', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send workspace 3 command: %v", err)
+	}
+
+	stateUpdate3 := client.WaitForStateUpdate(2 * time.Second)
+	snapshot3 := client.WaitForTreeSnapshot(2 * time.Second)
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+	client.DrainStateUpdates()
+
+	if stateUpdate3.WorkspaceID != 3 {
+		t.Fatalf("expected workspace 3, got %d", stateUpdate3.WorkspaceID)
+	}
+
+	// Workspace 3 should have only 1 pane (fresh workspace)
+	if len(snapshot3.Panes) != 1 {
+		t.Fatalf("expected 1 pane in workspace 3, got %d", len(snapshot3.Panes))
+	}
+
+	t.Logf("Workspace 3 has %d pane (fresh)", len(snapshot3.Panes))
+
+	// Verify workspace 3 pane is different from workspace 1 panes
+	ws3PaneID := snapshot3.Panes[0].PaneID
+	for _, pane := range snapshot2.Panes {
+		if ws3PaneID == pane.PaneID {
+			t.Fatalf("workspace 3 pane has same ID as workspace 1 pane")
+		}
+	}
+
+	// Switch back to workspace 1
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain state updates from entering control mode
+	client.DrainStateUpdates()
+
+	if err := client.SendKey(tcell.KeyRune, '1', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send workspace 1 command: %v", err)
+	}
+
+	stateUpdate4 := client.WaitForStateUpdate(2 * time.Second)
+	snapshot4 := client.WaitForTreeSnapshot(2 * time.Second)
+
+	if stateUpdate4.WorkspaceID != 1 {
+		t.Fatalf("expected workspace 1, got %d", stateUpdate4.WorkspaceID)
+	}
+
+	// Workspace 1 should still have 2 panes (split preserved)
+	if len(snapshot4.Panes) != 2 {
+		t.Fatalf("expected 2 panes in workspace 1, got %d", len(snapshot4.Panes))
+	}
+
+	t.Logf("Workspace 1 still has %d panes (split preserved)", len(snapshot4.Panes))
+
+	// Verify the original pane is still there
+	foundOriginalPane := false
+	for _, pane := range snapshot4.Panes {
+		if pane.PaneID == originalPaneID {
+			foundOriginalPane = true
+			break
+		}
+	}
+
+	if !foundOriginalPane {
+		t.Fatalf("original pane not found when returning to workspace 1")
+	}
+
+	t.Logf("Workspace independence verified: WS1(2 panes) <-> WS3(1 pane)")
+}
