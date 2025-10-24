@@ -436,3 +436,155 @@ func TestClientCacheUpdateAfterTreeChange(t *testing.T) {
 
 	t.Logf("Cache correctly updated: %d -> %d panes", count1, count2)
 }
+
+func TestClientReceivesTreeSnapshotAfterPaneResize(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	snapshot1 := client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	if len(snapshot1.Panes) != 1 {
+		t.Fatalf("expected 1 initial pane, got %d", len(snapshot1.Panes))
+	}
+
+	// Create a vertical split so we have two panes side by side
+	if err := client.SendKey(tcell.KeyCtrlA, 0, tcell.ModNone); err != nil {
+		t.Fatalf("failed to send Ctrl+A: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := client.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send '|': %v", err)
+	}
+
+	snapshot2 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot2.Panes) != 2 {
+		t.Fatalf("expected 2 panes after split, got %d", len(snapshot2.Panes))
+	}
+
+	// Drain any pending messages
+	time.Sleep(100 * time.Millisecond)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	// Get initial geometry of both panes
+	leftPane := snapshot2.Panes[0]
+	rightPane := snapshot2.Panes[1]
+
+	leftWidth1 := int(leftPane.Width)
+	rightWidth1 := int(rightPane.Width)
+
+	t.Logf("Initial geometry: left=%dx%d, right=%dx%d",
+		leftPane.Width, leftPane.Height, rightPane.Width, rightPane.Height)
+
+	// Now resize: Need to be in control mode for Ctrl+arrow to work
+	// After split, the right pane (shell) is active, so use Ctrl+Left to adjust its left border
+	// Enter control mode with Ctrl+A
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// First Ctrl+Left selects the border to the left of active pane
+	if err := client.SendKey(tcell.KeyLeft, 0, tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to send first Ctrl+Left: %v", err)
+	}
+
+	// Give it a moment to process the border selection
+	time.Sleep(50 * time.Millisecond)
+
+	// Second Ctrl+Left resizes: shrinks left pane, grows right pane
+	if err := client.SendKey(tcell.KeyLeft, 0, tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to send second Ctrl+Left: %v", err)
+	}
+
+	// Wait for TreeSnapshot from resize
+	snapshot3 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot3.Panes) != 2 {
+		t.Fatalf("expected 2 panes after resize, got %d", len(snapshot3.Panes))
+	}
+
+	// Get updated geometry
+	var leftPane2, rightPane2 protocol.PaneSnapshot
+	for _, pane := range snapshot3.Panes {
+		if pane.PaneID == leftPane.PaneID {
+			leftPane2 = pane
+		} else if pane.PaneID == rightPane.PaneID {
+			rightPane2 = pane
+		}
+	}
+
+	leftWidth2 := int(leftPane2.Width)
+	rightWidth2 := int(rightPane2.Width)
+
+	t.Logf("After resize: left=%dx%d, right=%dx%d",
+		leftPane2.Width, leftPane2.Height, rightPane2.Width, rightPane2.Height)
+
+	// Verify the resize occurred
+	// Ctrl+Left from right pane: left pane shrinks, right pane grows
+	if leftWidth2 >= leftWidth1 {
+		t.Fatalf("expected left pane to shrink: was %d, now %d", leftWidth1, leftWidth2)
+	}
+
+	if rightWidth2 <= rightWidth1 {
+		t.Fatalf("expected right pane to grow: was %d, now %d", rightWidth1, rightWidth2)
+	}
+
+	// Total width should remain constant
+	totalWidth1 := leftWidth1 + rightWidth1
+	totalWidth2 := leftWidth2 + rightWidth2
+
+	if totalWidth1 != totalWidth2 {
+		t.Fatalf("total width changed: was %d, now %d", totalWidth1, totalWidth2)
+	}
+
+	t.Logf("Resize verified: left %d->%d (%+d), right %d->%d (%+d)",
+		leftWidth1, leftWidth2, leftWidth2-leftWidth1,
+		rightWidth1, rightWidth2, rightWidth2-rightWidth1)
+
+	// Test multiple resize steps
+	client.DrainSnapshots()
+
+	// Send another Ctrl+Left to resize more
+	if err := client.SendKey(tcell.KeyLeft, 0, tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to send third Ctrl+Left: %v", err)
+	}
+
+	snapshot4 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot4.Panes) != 2 {
+		t.Fatalf("expected 2 panes after second resize, got %d", len(snapshot4.Panes))
+	}
+
+	// Get updated geometry after second resize
+	var leftPane3, rightPane3 protocol.PaneSnapshot
+	for _, pane := range snapshot4.Panes {
+		if pane.PaneID == leftPane.PaneID {
+			leftPane3 = pane
+		} else if pane.PaneID == rightPane.PaneID {
+			rightPane3 = pane
+		}
+	}
+
+	leftWidth3 := int(leftPane3.Width)
+	rightWidth3 := int(rightPane3.Width)
+
+	t.Logf("After second resize: left=%dx%d, right=%dx%d",
+		leftPane3.Width, leftPane3.Height, rightPane3.Width, rightPane3.Height)
+
+	// Left should have shrunk more, right should have grown more
+	if leftWidth3 >= leftWidth2 {
+		t.Fatalf("expected left pane to shrink more: was %d, now %d", leftWidth2, leftWidth3)
+	}
+
+	if rightWidth3 <= rightWidth2 {
+		t.Fatalf("expected right pane to grow more: was %d, now %d", rightWidth2, rightWidth3)
+	}
+
+	t.Logf("Multi-step resize successful: left %d -> %d -> %d, right %d -> %d -> %d",
+		leftWidth1, leftWidth2, leftWidth3, rightWidth1, rightWidth2, rightWidth3)
+}
