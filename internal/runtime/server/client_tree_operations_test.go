@@ -1316,8 +1316,8 @@ func TestDeepNestedSplits(t *testing.T) {
 
 	// Verify all panes meet minimum size requirements
 	panes := client.GetAllPanes()
-	minWidth := 20  // texel.MinPaneWidth
-	minHeight := 8  // texel.MinPaneHeight
+	minWidth := 20 // texel.MinPaneWidth
+	minHeight := 8 // texel.MinPaneHeight
 
 	for i, paneID := range panes {
 		x, y, w, h, err := client.GetPaneGeometry(paneID)
