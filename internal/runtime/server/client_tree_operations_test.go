@@ -588,3 +588,158 @@ func TestClientReceivesTreeSnapshotAfterPaneResize(t *testing.T) {
 	t.Logf("Multi-step resize successful: left %d -> %d -> %d, right %d -> %d -> %d",
 		leftWidth1, leftWidth2, leftWidth3, rightWidth1, rightWidth2, rightWidth3)
 }
+
+func TestClientReceivesTreeSnapshotAfterZoom(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	snapshot1 := client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	if len(snapshot1.Panes) != 1 {
+		t.Fatalf("expected 1 initial pane, got %d", len(snapshot1.Panes))
+	}
+
+	// Create a vertical split so we have 2 panes
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if err := client.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send split command: %v", err)
+	}
+
+	snapshot2 := client.WaitForTreeSnapshot(2 * time.Second)
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	if len(snapshot2.Panes) != 2 {
+		t.Fatalf("expected 2 panes after split, got %d", len(snapshot2.Panes))
+	}
+
+	// Find left and right panes
+	var leftPane, rightPane protocol.PaneSnapshot
+	for _, pane := range snapshot2.Panes {
+		if pane.X == 0 {
+			leftPane = pane
+		} else {
+			rightPane = pane
+		}
+	}
+
+	leftHeight := int(leftPane.Height)
+	rightWidth := int(rightPane.Width)
+
+	t.Logf("Split geometry: left=%dx%d, right=%dx%d",
+		leftPane.Width, leftPane.Height, rightPane.Width, rightPane.Height)
+
+	// Now zoom in: Enter control mode and press 'z'
+	// The right pane (shell) should be active after split
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode for zoom: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if err := client.SendKey(tcell.KeyRune, 'z', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send zoom command: %v", err)
+	}
+
+	// Wait for TreeSnapshot after zoom in
+	snapshot3 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot3.Panes) != 2 {
+		t.Fatalf("expected 2 panes after zoom, got %d", len(snapshot3.Panes))
+	}
+
+	// Find the active (zoomed) pane - should be the right pane
+	var zoomedPane protocol.PaneSnapshot
+	for _, pane := range snapshot3.Panes {
+		if pane.PaneID == rightPane.PaneID {
+			zoomedPane = pane
+			break
+		}
+	}
+
+	zoomedWidth := int(zoomedPane.Width)
+	zoomedHeight := int(zoomedPane.Height)
+
+	t.Logf("After zoom in: zoomed pane=%dx%d", zoomedPane.Width, zoomedPane.Height)
+
+	// When zoomed, the pane should be fullscreen (120x40)
+	// It should be significantly larger than its split size
+	if zoomedWidth <= rightWidth {
+		t.Fatalf("expected zoomed pane to be wider: was %d, now %d", rightWidth, zoomedWidth)
+	}
+
+	if zoomedHeight < leftHeight {
+		t.Fatalf("expected zoomed pane height to be at least split height: was %d, now %d", leftHeight, zoomedHeight)
+	}
+
+	// The zoomed pane should be close to the full workspace size (120x40)
+	expectedWidth := 120
+	expectedHeight := 40
+	if zoomedWidth < expectedWidth-5 || zoomedWidth > expectedWidth {
+		t.Fatalf("expected zoomed width ~%d, got %d", expectedWidth, zoomedWidth)
+	}
+	if zoomedHeight < expectedHeight-5 || zoomedHeight > expectedHeight {
+		t.Fatalf("expected zoomed height ~%d, got %d", expectedHeight, zoomedHeight)
+	}
+
+	t.Logf("Zoom in verified: %dx%d -> %dx%d",
+		rightWidth, leftHeight, zoomedWidth, zoomedHeight)
+
+	// Now zoom out: Send 'z' again (still in control mode or need to re-enter)
+	client.DrainSnapshots()
+
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode for zoom out: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if err := client.SendKey(tcell.KeyRune, 'z', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send zoom out command: %v", err)
+	}
+
+	// Wait for TreeSnapshot after zoom out
+	snapshot4 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot4.Panes) != 2 {
+		t.Fatalf("expected 2 panes after zoom out, got %d", len(snapshot4.Panes))
+	}
+
+	// Find the panes after zoom out
+	var restoredRightPane protocol.PaneSnapshot
+	for _, pane := range snapshot4.Panes {
+		if pane.PaneID == rightPane.PaneID {
+			restoredRightPane = pane
+			break
+		}
+	}
+
+	restoredWidth := int(restoredRightPane.Width)
+	restoredHeight := int(restoredRightPane.Height)
+
+	t.Logf("After zoom out: restored pane=%dx%d", restoredRightPane.Width, restoredRightPane.Height)
+
+	// After zoom out, the pane should be back to split size
+	if restoredWidth >= zoomedWidth {
+		t.Fatalf("expected restored pane to be smaller: was %d (zoomed), now %d", zoomedWidth, restoredWidth)
+	}
+
+	// Should be close to original split size
+	if restoredWidth < rightWidth-5 || restoredWidth > rightWidth+5 {
+		t.Fatalf("expected restored width ~%d, got %d", rightWidth, restoredWidth)
+	}
+
+	if restoredHeight < leftHeight-5 || restoredHeight > leftHeight+5 {
+		t.Fatalf("expected restored height ~%d, got %d", leftHeight, restoredHeight)
+	}
+
+	t.Logf("Zoom out verified: %dx%d -> %dx%d -> %dx%d",
+		rightWidth, leftHeight, zoomedWidth, zoomedHeight, restoredWidth, restoredHeight)
+}
