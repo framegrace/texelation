@@ -956,3 +956,415 @@ func TestClientWorkspaceIndependence(t *testing.T) {
 
 	t.Logf("Workspace independence verified: WS1(2 panes) <-> WS3(1 pane)")
 }
+
+func TestClientTerminalResize(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	snapshot1 := client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	if len(snapshot1.Panes) != 1 {
+		t.Fatalf("expected 1 initial pane, got %d", len(snapshot1.Panes))
+	}
+
+	initialWidth := int(snapshot1.Panes[0].Width)
+	initialHeight := int(snapshot1.Panes[0].Height)
+
+	t.Logf("Initial terminal size: %dx%d", initialWidth, initialHeight)
+
+	// Resize terminal to 100x30
+	if err := client.SendResize(100, 30); err != nil {
+		t.Fatalf("failed to send resize: %v", err)
+	}
+
+	// Should receive TreeSnapshot with new geometry
+	snapshot2 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot2.Panes) != 1 {
+		t.Fatalf("expected 1 pane after resize, got %d", len(snapshot2.Panes))
+	}
+
+	newWidth := int(snapshot2.Panes[0].Width)
+	newHeight := int(snapshot2.Panes[0].Height)
+
+	t.Logf("After resize: %dx%d", newWidth, newHeight)
+
+	// Verify dimensions changed
+	if newWidth == initialWidth && newHeight == initialHeight {
+		t.Fatalf("pane dimensions didn't change after resize")
+	}
+
+	// Verify new dimensions are close to requested (accounting for borders)
+	if newWidth < 95 || newWidth > 100 {
+		t.Fatalf("expected width ~100, got %d", newWidth)
+	}
+
+	if newHeight < 25 || newHeight > 30 {
+		t.Fatalf("expected height ~30, got %d", newHeight)
+	}
+
+	t.Logf("Terminal resize verified: %dx%d -> %dx%d",
+		initialWidth, initialHeight, newWidth, newHeight)
+}
+
+func TestTerminalResizeAfterSplit(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	// Create a vertical split
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if err := client.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send split command: %v", err)
+	}
+
+	snapshot2 := client.WaitForTreeSnapshot(2 * time.Second)
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	if len(snapshot2.Panes) != 2 {
+		t.Fatalf("expected 2 panes after split, got %d", len(snapshot2.Panes))
+	}
+
+	// Find left and right panes
+	var leftPane, rightPane protocol.PaneSnapshot
+	for _, pane := range snapshot2.Panes {
+		if pane.X == 0 {
+			leftPane = pane
+		} else {
+			rightPane = pane
+		}
+	}
+
+	leftWidth1 := int(leftPane.Width)
+	rightWidth1 := int(rightPane.Width)
+	height1 := int(leftPane.Height)
+
+	t.Logf("After split: left=%dx%d, right=%dx%d", leftWidth1, height1, rightWidth1, height1)
+
+	// Calculate split ratio
+	totalWidth1 := leftWidth1 + rightWidth1
+	leftRatio := float64(leftWidth1) / float64(totalWidth1)
+	rightRatio := float64(rightWidth1) / float64(totalWidth1)
+
+	t.Logf("Split ratios: left=%.2f, right=%.2f", leftRatio, rightRatio)
+
+	// Now resize terminal to 150x50
+	if err := client.SendResize(150, 50); err != nil {
+		t.Fatalf("failed to send resize: %v", err)
+	}
+
+	snapshot3 := client.WaitForTreeSnapshot(2 * time.Second)
+	if len(snapshot3.Panes) != 2 {
+		t.Fatalf("expected 2 panes after resize, got %d", len(snapshot3.Panes))
+	}
+
+	// Find panes after resize
+	var leftPane2, rightPane2 protocol.PaneSnapshot
+	for _, pane := range snapshot3.Panes {
+		if pane.PaneID == leftPane.PaneID {
+			leftPane2 = pane
+		} else if pane.PaneID == rightPane.PaneID {
+			rightPane2 = pane
+		}
+	}
+
+	leftWidth2 := int(leftPane2.Width)
+	rightWidth2 := int(rightPane2.Width)
+	height2 := int(leftPane2.Height)
+
+	t.Logf("After resize: left=%dx%d, right=%dx%d", leftWidth2, height2, rightWidth2, height2)
+
+	// Verify both panes resized
+	if leftWidth2 <= leftWidth1 {
+		t.Fatalf("expected left pane to grow: was %d, now %d", leftWidth1, leftWidth2)
+	}
+
+	if rightWidth2 <= rightWidth1 {
+		t.Fatalf("expected right pane to grow: was %d, now %d", rightWidth1, rightWidth2)
+	}
+
+	if height2 <= height1 {
+		t.Fatalf("expected height to increase: was %d, now %d", height1, height2)
+	}
+
+	// Verify split ratios are approximately preserved
+	totalWidth2 := leftWidth2 + rightWidth2
+	leftRatio2 := float64(leftWidth2) / float64(totalWidth2)
+	rightRatio2 := float64(rightWidth2) / float64(totalWidth2)
+
+	t.Logf("New ratios: left=%.2f, right=%.2f", leftRatio2, rightRatio2)
+
+	// Ratios should be within 10% of original
+	if leftRatio2 < leftRatio-0.1 || leftRatio2 > leftRatio+0.1 {
+		t.Fatalf("left ratio changed too much: %.2f -> %.2f", leftRatio, leftRatio2)
+	}
+
+	if rightRatio2 < rightRatio-0.1 || rightRatio2 > rightRatio+0.1 {
+		t.Fatalf("right ratio changed too much: %.2f -> %.2f", rightRatio, rightRatio2)
+	}
+
+	t.Logf("Proportional resize verified: ratios preserved")
+}
+
+func TestDeepNestedSplits(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	snapshot := client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	if len(snapshot.Panes) != 1 {
+		t.Fatalf("expected 1 initial pane, got %d", len(snapshot.Panes))
+	}
+
+	t.Logf("Starting with %d pane", len(snapshot.Panes))
+
+	// Create 4 splits (will result in 5 panes total)
+	// Alternate between vertical and horizontal to create complex tree
+	splits := []rune{'|', '-', '|', '-'}
+
+	initialSnapshotCount := client.SnapshotCount()
+
+	for i, splitChar := range splits {
+		if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+			t.Fatalf("failed to enter control mode for split %d: %v", i+1, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		client.DrainStateUpdates()
+
+		if err := client.SendKey(tcell.KeyRune, splitChar, tcell.ModNone); err != nil {
+			t.Fatalf("failed to send split %d: %v", i+1, err)
+		}
+
+		// Wait for the TreeSnapshot from this split
+		time.Sleep(100 * time.Millisecond)
+		snapshot := client.WaitForTreeSnapshot(2 * time.Second)
+		expectedPanes := i + 2
+		if len(snapshot.Panes) != expectedPanes {
+			t.Fatalf("after split %d: expected %d panes, got %d", i+1, expectedPanes, len(snapshot.Panes))
+		}
+
+		// Drain deltas for this split
+		client.WaitForAnyBufferDelta(1 * time.Second)
+		client.DrainDeltas()
+
+		t.Logf("Split %d/%d complete: %d panes", i+1, len(splits), len(snapshot.Panes))
+	}
+
+	finalSnapshotCount := client.SnapshotCount()
+	t.Logf("Received %d snapshots total (%d new)", finalSnapshotCount, finalSnapshotCount-initialSnapshotCount)
+
+	// Verify final state has 5 panes using cache
+	paneCount := client.GetPaneCount()
+	if paneCount != 5 {
+		// Log what we have for debugging
+		panes := client.GetAllPanes()
+		t.Logf("Found %d panes instead of 5:", paneCount)
+		for i, paneID := range panes {
+			x, y, w, h, _ := client.GetPaneGeometry(paneID)
+			t.Logf("  Pane %d: %x at (%d,%d) size %dx%d", i+1, paneID[:4], x, y, w, h)
+		}
+		t.Fatalf("expected 5 panes in final state, got %d", paneCount)
+	}
+
+	t.Logf("Deep nesting verified: 5 panes created with 4 splits")
+
+	// Verify all panes are accessible and have reasonable geometry
+	panes := client.GetAllPanes()
+	for i, paneID := range panes {
+		x, y, w, h, err := client.GetPaneGeometry(paneID)
+		if err != nil {
+			t.Fatalf("failed to get geometry for pane %d: %v", i, err)
+		}
+		if w < 5 || h < 3 {
+			t.Fatalf("pane %d has unreasonable size: %dx%d at (%d,%d)", i, w, h, x, y)
+		}
+	}
+
+	t.Logf("All panes have reasonable geometry")
+}
+
+func TestFocusTransferWhenActivePaneRemoved(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	// Create 3 panes (2 splits)
+	for i := 0; i < 2; i++ {
+		if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+			t.Fatalf("failed to enter control mode: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		client.DrainStateUpdates()
+
+		if err := client.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+			t.Fatalf("failed to send split: %v", err)
+		}
+
+		time.Sleep(150 * time.Millisecond)
+		t.Logf("Sent split %d/2", i+1)
+	}
+
+	// Allow splits to complete
+	time.Sleep(300 * time.Millisecond)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	// Verify we have 3 panes using cache
+	paneCount := client.GetPaneCount()
+	if paneCount != 3 {
+		t.Fatalf("expected 3 panes after 2 splits, got %d", paneCount)
+	}
+
+	t.Logf("Created %d panes", paneCount)
+
+	// Now close the active pane
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode for close: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	client.DrainStateUpdates()
+
+	if err := client.SendKey(tcell.KeyRune, 'x', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send close command: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	// Verify we now have 2 panes using cache
+	paneCount = client.GetPaneCount()
+	if paneCount != 2 {
+		t.Fatalf("expected 2 panes after close, got %d", paneCount)
+	}
+
+	t.Logf("After closing active pane: %d panes remain", paneCount)
+
+	// Close another pane - verify we can still interact (focus transferred)
+	if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+		t.Fatalf("failed to enter control mode after close: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	client.DrainStateUpdates()
+
+	if err := client.SendKey(tcell.KeyRune, 'x', tcell.ModNone); err != nil {
+		t.Fatalf("failed to send second close: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	// Verify we now have 1 pane using cache
+	paneCount = client.GetPaneCount()
+	if paneCount != 1 {
+		t.Fatalf("expected 1 pane after second close, got %d", paneCount)
+	}
+
+	t.Logf("Focus transfer verified: closed 2 panes, 1 remains active")
+}
+
+func TestRapidSplitCloseLoop(t *testing.T) {
+	socketPath, _, _, cleanup := setupTreeTestServer(t)
+	defer cleanup()
+
+	client := testutil.NewTestClient(t, socketPath)
+	defer client.Close()
+
+	client.WaitForInitialSnapshot()
+	client.WaitForAnyBufferDelta(2 * time.Second)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	t.Logf("Starting rapid split/close torture test")
+
+	// Perform 20 rapid operations: split, split, close, repeat
+	for cycle := 0; cycle < 10; cycle++ {
+		// Split twice
+		for i := 0; i < 2; i++ {
+			if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+				t.Fatalf("cycle %d split %d: failed to enter control mode: %v", cycle, i, err)
+			}
+			time.Sleep(30 * time.Millisecond)
+			client.DrainStateUpdates()
+
+			if err := client.SendKey(tcell.KeyRune, '|', tcell.ModNone); err != nil {
+				t.Fatalf("cycle %d split %d: failed to send split: %v", cycle, i, err)
+			}
+
+			// Don't wait for full response, just brief pause
+			time.Sleep(30 * time.Millisecond)
+		}
+
+		// Close once
+		if err := client.SendKey(tcell.KeyCtrlA, rune(1), tcell.ModCtrl); err != nil {
+			t.Fatalf("cycle %d close: failed to enter control mode: %v", cycle, err)
+		}
+		time.Sleep(30 * time.Millisecond)
+		client.DrainStateUpdates()
+
+		if err := client.SendKey(tcell.KeyRune, 'x', tcell.ModNone); err != nil {
+			t.Fatalf("cycle %d close: failed to send close: %v", cycle, err)
+		}
+
+		time.Sleep(30 * time.Millisecond)
+
+		if cycle%5 == 4 {
+			t.Logf("Completed cycle %d (20 operations so far)", cycle+1)
+		}
+	}
+
+	t.Logf("Torture test completed all 10 cycles (30 operations total)")
+
+	// Final verification - allow operations to complete and check cache state
+	time.Sleep(200 * time.Millisecond)
+	client.DrainDeltas()
+	client.DrainSnapshots()
+
+	// Check the client's cache state (reflects all applied snapshots/deltas)
+	paneCount := client.GetPaneCount()
+
+	if paneCount == 0 {
+		t.Fatalf("no panes remaining after torture test")
+	}
+
+	t.Logf("Torture test complete: %d panes remain after 10 cycles of split/close", paneCount)
+	t.Logf("Operations survived: 20 splits, 10 closes")
+
+	// Verify all panes are accessible
+	panes := client.GetAllPanes()
+	if len(panes) != paneCount {
+		t.Fatalf("pane count mismatch: GetPaneCount=%d, GetAllPanes=%d", paneCount, len(panes))
+	}
+}
