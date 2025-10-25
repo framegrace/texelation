@@ -42,6 +42,9 @@ type VirtualScreen struct {
 	dirty           bool
 	contentDrawn    bool // Track if content has been drawn since last Clear()
 	onFirstShow     func() // Callback for first successful Show() (buffer swap)
+
+	// Refresh notification
+	refreshChan chan<- bool // Notify when frame is ready (called in Show())
 }
 
 // NewVirtualScreen creates a new virtual screen with the given dimensions.
@@ -266,6 +269,15 @@ func (vs *VirtualScreen) Show() {
 			callback()
 			vs.mu.Lock()
 		}
+
+		// Notify that a new frame is ready for rendering
+		// This triggers the pane to call Render() and publish the updated buffer
+		if vs.refreshChan != nil {
+			select {
+			case vs.refreshChan <- true:
+			default: // Don't block if channel is full
+			}
+		}
 	}
 
 	vs.dirty = false
@@ -277,6 +289,14 @@ func (vs *VirtualScreen) SetOnFirstShow(callback func()) {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 	vs.onFirstShow = callback
+}
+
+// SetRefreshNotifier sets the channel used to signal when a frame is ready.
+// Called in Show() after buffer swap to trigger pane refresh and publishing.
+func (vs *VirtualScreen) SetRefreshNotifier(ch chan<- bool) {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+	vs.refreshChan = ch
 }
 
 // Sync synchronizes the screen (no-op for virtual screen).

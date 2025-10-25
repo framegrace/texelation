@@ -81,6 +81,11 @@ func (t *TViewApp) Run() error {
 		close(t.firstFrameCh)
 	})
 
+	// Pass refresh notifier to VirtualScreen so it can trigger refreshes in Show()
+	if t.refreshChan != nil {
+		t.screen.SetRefreshNotifier(t.refreshChan)
+	}
+
 	t.running = true
 	t.mu.Unlock()
 
@@ -219,10 +224,16 @@ func (t *TViewApp) HandleKey(ev *tcell.EventKey) {
 }
 
 // SetRefreshNotifier sets the channel used to signal refresh requests.
+// Also forwards it to VirtualScreen so Show() can trigger refreshes.
 func (t *TViewApp) SetRefreshNotifier(ch chan<- bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.refreshChan = ch
+
+	// Forward to VirtualScreen if it exists
+	if t.screen != nil {
+		t.screen.SetRefreshNotifier(ch)
+	}
 }
 
 // QueueUpdate queues a function to be executed on the tview thread.
