@@ -386,6 +386,15 @@ func (vs *VirtualScreen) GetBuffer() [][]texel.Cell {
 	vs.mu.RLock()
 	defer vs.mu.RUnlock()
 
+	// Guard: Don't return buffer if we're mid-frame (Clear called but Show not called)
+	// This prevents returning a buffer that might get cleared in-place after we return it
+	// contentDrawn=false means either:
+	// - Clear() was just called and drawing hasn't started yet
+	// - Drawing started but Show() hasn't been called yet
+	// In either case, frontBuffer is the last complete frame and safe to return
+	// But we need to deep copy it because after we release the lock, Show() might swap it
+	// to backBuffer, and then Clear() might modify it in place
+
 	// Use frontBuffer's actual dimensions, not vs.width/vs.height
 	// (they may differ during resize)
 	if len(vs.frontBuffer) == 0 {
@@ -405,12 +414,24 @@ func (vs *VirtualScreen) GetBuffer() [][]texel.Cell {
 		return buffer
 	}
 
-	// Return frontBuffer directly - it's safe because:
-	// 1. frontBuffer is only swapped in Show(), not modified in place
-	// 2. The RLock ensures we get a consistent reference
-	// 3. Callers treat the buffer as read-only
-	// This eliminates expensive deep copy on every Render() call
-	return vs.frontBuffer
+	// Deep copy frontBuffer to prevent caller from seeing in-place modifications
+	// This is necessary because:
+	// 1. We return frontBuffer reference
+	// 2. After releasing lock, Show() might swap frontBuffer->backBuffer
+	// 3. Then Clear() modifies backBuffer in-place
+	// 4. Caller still holding old reference would see cleared cells!
+	height := len(vs.frontBuffer)
+	width := 0
+	if height > 0 {
+		width = len(vs.frontBuffer[0])
+	}
+
+	buffer := make([][]texel.Cell, height)
+	for y := 0; y < height; y++ {
+		buffer[y] = make([]texel.Cell, width)
+		copy(buffer[y], vs.frontBuffer[y])
+	}
+	return buffer
 }
 
 // EnableMouse enables mouse events (no-op).
