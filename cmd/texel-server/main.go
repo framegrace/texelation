@@ -26,6 +26,7 @@ import (
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
 	"texelation/internal/runtime/server"
+	// "texelation/internal/tviewapps" // Uncomment to enable menu overlay
 	"texelation/texel"
 )
 
@@ -70,7 +71,13 @@ func main() {
 	shellFactory := func() texel.App {
 		id := shellSeq.Add(1)
 		title := fmt.Sprintf("%s-%d", *title, id)
+
+		// Normal terminal (no menu)
 		return texelterm.New(title, defaultShell)
+
+		// OPTIONAL: Add menu bar overlay with minimal change:
+		// baseApp := texelterm.New(title, defaultShell)
+		// return tviewapps.WithOverlay(baseApp, texelterm.CreateMenuBar)
 	}
 	welcomeFactory := func() texel.App {
 		// Simplified tview welcome (zero boilerplate!)
