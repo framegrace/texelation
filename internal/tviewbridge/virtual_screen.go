@@ -385,19 +385,12 @@ func (vs *VirtualScreen) GetBuffer() [][]texel.Cell {
 		return buffer
 	}
 
-	height := len(vs.frontBuffer)
-	width := 0
-	if height > 0 {
-		width = len(vs.frontBuffer[0])
-	}
-
-	// Return a deep copy with frontBuffer's actual dimensions
-	buffer := make([][]texel.Cell, height)
-	for y := 0; y < height; y++ {
-		buffer[y] = make([]texel.Cell, width)
-		copy(buffer[y], vs.frontBuffer[y])
-	}
-	return buffer
+	// Return frontBuffer directly - it's safe because:
+	// 1. frontBuffer is only swapped in Show(), not modified in place
+	// 2. The RLock ensures we get a consistent reference
+	// 3. Callers treat the buffer as read-only
+	// This eliminates expensive deep copy on every Render() call
+	return vs.frontBuffer
 }
 
 // EnableMouse enables mouse events (no-op).
