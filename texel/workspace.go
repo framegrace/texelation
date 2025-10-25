@@ -81,7 +81,7 @@ func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager
 		id:              id,
 		desktop:         desktop,
 		tree:            NewTree(),
-		refreshChan:     make(chan bool, 1),
+		refreshChan:     make(chan bool, 100), // Increased from 1 to handle rapid tview updates
 		drawChan:        make(chan bool, 1),
 		dispatcher:      NewEventDispatcher(),
 		ShellAppFactory: shellFactory,

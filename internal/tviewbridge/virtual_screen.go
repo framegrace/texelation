@@ -53,7 +53,7 @@ func NewVirtualScreen(width, height int) *VirtualScreen {
 		width:     width,
 		height:    height,
 		style:     tcell.StyleDefault,
-		eventChan: make(chan tcell.Event, 32),
+		eventChan: make(chan tcell.Event, 256), // Increased from 32 to handle rapid typing
 		stopChan:  make(chan struct{}),
 	}
 	vs.allocateBuffers()
@@ -233,6 +233,7 @@ func (vs *VirtualScreen) PostEvent(ev tcell.Event) error {
 		return nil
 	default:
 		// Drop event if channel is full
+		println("VirtualScreen.PostEvent: WARNING - Event channel full, dropping event!")
 		return nil
 	}
 }
@@ -276,6 +277,7 @@ func (vs *VirtualScreen) Show() {
 			select {
 			case vs.refreshChan <- true:
 			default: // Don't block if channel is full
+				println("VirtualScreen.Show: WARNING - Refresh channel full, dropping notification!")
 			}
 		}
 	}
@@ -431,6 +433,7 @@ func (vs *VirtualScreen) GetBuffer() [][]texel.Cell {
 		buffer[y] = make([]texel.Cell, width)
 		copy(buffer[y], vs.frontBuffer[y])
 	}
+
 	return buffer
 }
 
