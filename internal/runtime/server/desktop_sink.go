@@ -12,17 +12,15 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"sync"
-	"time"
 	"texelation/protocol"
 	"texelation/texel"
 )
 
 // DesktopSink forwards key events to a local Desktop instance.
 type DesktopSink struct {
-	desktop     *texel.DesktopEngine
-	publisher   *DesktopPublisher
-	mu          sync.Mutex
-	lastPublish time.Time // Throttle refresh-triggered publishes to 60fps
+	desktop   *texel.DesktopEngine
+	publisher *DesktopPublisher
+	mu        sync.Mutex
 }
 
 func NewDesktopSink(desktop *texel.DesktopEngine) *DesktopSink {
@@ -108,14 +106,6 @@ func (d *DesktopSink) Publish() {
 
 func (d *DesktopSink) publish() {
 	d.mu.Lock()
-	// Throttle: Skip refresh-triggered publishes that happen too quickly (< 16ms = 60fps)
-	// This prevents flickering from rapid tview updates while keeping UI responsive
-	now := time.Now()
-	if !d.lastPublish.IsZero() && now.Sub(d.lastPublish) < 16*time.Millisecond {
-		d.mu.Unlock()
-		return // Skip this publish, too soon
-	}
-	d.lastPublish = now
 	publisher := d.publisher
 	d.mu.Unlock()
 	if publisher == nil {
