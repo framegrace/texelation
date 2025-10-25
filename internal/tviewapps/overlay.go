@@ -109,17 +109,15 @@ func (a *AppWithOverlay) GetTitle() string {
 	return a.baseApp.GetTitle()
 }
 
-// HandleKey forwards to tview first (for menus), then to base app.
-// This allows menus to intercept keys when active, otherwise pass through.
+// HandleKey forwards keys exclusively to tview overlay.
+// Design: When tview overlay is active, ALL keys go to tview only.
+// The base app (e.g., texelterm) should NOT receive keys - tview handles everything.
+// This prevents double rendering from both apps processing the same keystroke.
 func (a *AppWithOverlay) HandleKey(ev *tcell.EventKey) {
-	// TODO: Add focus management - if menu is active, only send to tview
-	// For now, send to both (tview overlay can handle menu interactions)
 	if a.tviewApp != nil {
 		a.tviewApp.HandleKey(ev)
 	}
-
-	// Also forward to base app (unless overlay consumed it)
-	a.baseApp.HandleKey(ev)
+	// Do NOT forward to base app - tview handles all input when active
 }
 
 // SetRefreshNotifier sets refresh for both base app and overlay.
