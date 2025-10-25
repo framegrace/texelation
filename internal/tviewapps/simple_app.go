@@ -25,6 +25,7 @@ type SimpleTViewApp struct {
 	widgetFactory func() tview.Primitive
 	baseFactory   func(int, int) [][]texel.Cell
 	onAppCreated  func(*tview.Application) // Callback after tview app is created
+	refreshChan   chan<- bool              // Stored until tviewApp is created
 }
 
 // New creates a new SimpleTViewApp with the given title and widget factory.
@@ -89,6 +90,11 @@ func (a *SimpleTViewApp) Run() error {
 	// Create tview app wrapper
 	a.tviewApp = tviewbridge.NewTViewApp(a.title, root)
 	a.tviewApp.Resize(a.width, a.height)
+
+	// Forward refresh channel if it was set before Run() was called
+	if a.refreshChan != nil {
+		a.tviewApp.SetRefreshNotifier(a.refreshChan)
+	}
 
 	// Start tview's event loop in background
 	if err := a.tviewApp.Run(); err != nil {
@@ -155,10 +161,14 @@ func (a *SimpleTViewApp) HandleKey(ev *tcell.EventKey) {
 }
 
 // SetRefreshNotifier forwards the refresh channel to tview.
+// If tviewApp doesn't exist yet (called before Run()), stores it for later.
 func (a *SimpleTViewApp) SetRefreshNotifier(ch chan<- bool) {
+	a.refreshChan = ch
 	if a.tviewApp != nil {
+		// tviewApp already created, forward immediately
 		a.tviewApp.SetRefreshNotifier(ch)
 	}
+	// Otherwise, it will be forwarded in Run() after tviewApp is created
 }
 
 // GetTViewApp returns the underlying TViewApp wrapper for advanced use cases.
