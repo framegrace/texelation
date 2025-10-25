@@ -246,6 +246,11 @@ func (a *interactiveDemoApp) updateTable() {
 			a.table.SetCell(rowIdx+1, colIdx, cell)
 		}
 	}
+
+	// Request a redraw if tview app is available
+	if a.tviewApp != nil {
+		a.tviewApp.Draw()
+	}
 }
 
 func (a *interactiveDemoApp) log(message string) {
