@@ -80,8 +80,8 @@ func main() {
 		// return tviewapps.WithOverlay(baseApp, texelterm.CreateMenuBar)
 	}
 	welcomeFactory := func() texel.App {
-		// Simplified tview welcome (zero boilerplate!)
-		return welcome.NewSimpleTView()
+		// Interactive tview demo - test dynamic features!
+		return welcome.NewInteractiveDemo()
 	}
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
