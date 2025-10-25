@@ -22,12 +22,13 @@ import (
 // DesktopPublisher captures desktop pane buffers and enqueues them as buffer
 // deltas on the associated session.
 type DesktopPublisher struct {
-	desktop   *texel.DesktopEngine
-	session   *Session
-	revisions map[[16]byte]uint32
-	observer  PublishObserver
-	mu        sync.Mutex
-	notify    func()
+	desktop     *texel.DesktopEngine
+	session     *Session
+	revisions   map[[16]byte]uint32
+	observer    PublishObserver
+	mu          sync.Mutex
+	notify      func()
+	lastPublish time.Time // Throttle: track last successful publish time
 }
 
 // PublishObserver records desktop publish metrics for instrumentation.
@@ -59,7 +60,15 @@ func (p *DesktopPublisher) Publish() error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	start := time.Now()
+
+	// Throttle: Skip publishes that happen too quickly (< 16ms = 60fps)
+	// This prevents flickering from rapid tview updates while keeping UI responsive
+	now := time.Now()
+	if !p.lastPublish.IsZero() && now.Sub(p.lastPublish) < 16*time.Millisecond {
+		return nil // Skip this publish, too soon
+	}
+
+	start := now
 	snapshots := p.desktop.SnapshotBuffers()
 	for _, snap := range snapshots {
 		rev := p.revisions[snap.ID] + 1
@@ -69,6 +78,9 @@ func (p *DesktopPublisher) Publish() error {
 			return err
 		}
 	}
+	// Update lastPublish timestamp after successful publish
+	p.lastPublish = now
+
 	if p.observer != nil {
 		p.observer.ObservePublish(p.session, len(snapshots), time.Since(start))
 	}
