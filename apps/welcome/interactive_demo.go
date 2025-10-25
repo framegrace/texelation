@@ -40,23 +40,7 @@ type interactiveDemoApp struct {
 }
 
 func (a *interactiveDemoApp) createLayout() tview.Primitive {
-	// Create title
-	title := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter).
-		SetDynamicColors(true)
-	title.SetBackgroundColor(tcell.ColorDarkMagenta)
-	title.SetText("[yellow::b]Interactive TView Demo[white::-]\n[gray]Use Tab to switch focus, Arrow keys to navigate")
-
-	// Create interactive list
-	a.list = a.createList()
-
-	// Create form
-	form := a.createForm()
-
-	// Create table
-	a.table = a.createTable()
-
-	// Create log view
+	// Create log view FIRST (other widgets will log during creation)
 	a.logView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true).
@@ -67,6 +51,24 @@ func (a *interactiveDemoApp) createLayout() tview.Primitive {
 		SetTitle(" Event Log ").
 		SetBorderColor(tcell.ColorYellow)
 	a.logView.SetBackgroundColor(tcell.ColorBlack)
+
+	// Create title
+	title := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetDynamicColors(true)
+	title.SetBackgroundColor(tcell.ColorDarkMagenta)
+	title.SetText("[yellow::b]Interactive TView Demo[white::-]\n[gray]Use Tab to switch focus, Arrow keys to navigate")
+
+	// Create table (before form, so form can update it)
+	a.table = a.createTable()
+
+	// Create interactive list
+	a.list = a.createList()
+
+	// Create form (may trigger logs and table updates)
+	form := a.createForm()
+
+	// Log startup messages
 	a.log("[green]Interactive demo started")
 	a.log("[cyan]Use Tab to switch between widgets")
 
@@ -201,6 +203,10 @@ func (a *interactiveDemoApp) createTable() *tview.Table {
 }
 
 func (a *interactiveDemoApp) updateTable() {
+	if a.table == nil {
+		return // Not initialized yet
+	}
+
 	// Clear existing rows (keep header)
 	for row := a.table.GetRowCount() - 1; row > 0; row-- {
 		a.table.RemoveRow(row)
@@ -234,6 +240,9 @@ func (a *interactiveDemoApp) updateTable() {
 }
 
 func (a *interactiveDemoApp) log(message string) {
+	if a.logView == nil {
+		return // Not initialized yet
+	}
 	timestamp := time.Now().Format("15:04:05")
 	fmt.Fprintf(a.logView, "[gray]%s[white] %s\n", timestamp, message)
 }
