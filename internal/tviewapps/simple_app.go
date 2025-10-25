@@ -24,6 +24,7 @@ type SimpleTViewApp struct {
 	tviewApp      *tviewbridge.TViewApp
 	widgetFactory func() tview.Primitive
 	baseFactory   func(int, int) [][]texel.Cell
+	onAppCreated  func(*tview.Application) // Callback after tview app is created
 }
 
 // New creates a new SimpleTViewApp with the given title and widget factory.
@@ -60,6 +61,20 @@ func (a *SimpleTViewApp) WithBaseLayer(factory func(int, int) [][]texel.Cell) *S
 	return a
 }
 
+// WithAppCallback sets a callback that is called after the tview.Application is created.
+// This allows direct access to the tview app for advanced features like focus management.
+//
+// Example:
+//
+//	app := tviewapps.New("My App", createWidgets).
+//	    WithAppCallback(func(app *tview.Application) {
+//	        app.SetFocus(myWidget)
+//	    })
+func (a *SimpleTViewApp) WithAppCallback(callback func(*tview.Application)) *SimpleTViewApp {
+	a.onAppCreated = callback
+	return a
+}
+
 // Run initializes the tview app and starts its event loop.
 // This is called automatically by the desktop when the app is launched.
 func (a *SimpleTViewApp) Run() error {
@@ -76,7 +91,19 @@ func (a *SimpleTViewApp) Run() error {
 	a.tviewApp.Resize(a.width, a.height)
 
 	// Start tview's event loop in background
-	return a.tviewApp.Run()
+	if err := a.tviewApp.Run(); err != nil {
+		return err
+	}
+
+	// Call callback if provided (now that tview app is created)
+	if a.onAppCreated != nil {
+		app := a.tviewApp.GetApplication()
+		if app != nil {
+			a.onAppCreated(app)
+		}
+	}
+
+	return nil
 }
 
 // Stop terminates the tview app.
@@ -132,6 +159,12 @@ func (a *SimpleTViewApp) SetRefreshNotifier(ch chan<- bool) {
 	if a.tviewApp != nil {
 		a.tviewApp.SetRefreshNotifier(ch)
 	}
+}
+
+// GetTViewApp returns the underlying TViewApp wrapper for advanced use cases.
+// This allows direct access to tview.Application for focus management, etc.
+func (a *SimpleTViewApp) GetTViewApp() *tviewbridge.TViewApp {
+	return a.tviewApp
 }
 
 // defaultBaseLayer creates an empty base layer with transparent cells.

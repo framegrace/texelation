@@ -22,12 +22,13 @@ import (
 // NewInteractiveDemo creates a fully interactive tview demo.
 // This demonstrates dynamic features: lists, forms, buttons, tables, input fields.
 func NewInteractiveDemo() texel.App {
-	return tviewapps.New("Interactive Demo", createInteractiveDemoWidgets)
-}
+	demo := &interactiveDemoApp{}
 
-func createInteractiveDemoWidgets() tview.Primitive {
-	app := &interactiveDemoApp{}
-	return app.createLayout()
+	return tviewapps.New("Interactive Demo", demo.createWidgetsForFactory).
+		WithAppCallback(func(app *tview.Application) {
+			demo.tviewApp = app
+			demo.setupFocusChain()
+		})
 }
 
 type interactiveDemoApp struct {
@@ -37,6 +38,14 @@ type interactiveDemoApp struct {
 	inputField   *tview.InputField
 	list         *tview.List
 	table        *tview.Table
+	form         *tview.Form
+	focusables   []tview.Primitive
+	currentFocus int
+	tviewApp     *tview.Application
+}
+
+func (a *interactiveDemoApp) createWidgetsForFactory() tview.Primitive {
+	return a.createLayout()
 }
 
 func (a *interactiveDemoApp) createLayout() tview.Primitive {
@@ -66,7 +75,7 @@ func (a *interactiveDemoApp) createLayout() tview.Primitive {
 	a.list = a.createList()
 
 	// Create form (may trigger logs and table updates)
-	form := a.createForm()
+	a.form = a.createForm()
 
 	// Log startup messages
 	a.log("[green]Interactive demo started")
@@ -75,7 +84,7 @@ func (a *interactiveDemoApp) createLayout() tview.Primitive {
 	// Left panel: list + form
 	leftPanel := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.list, 0, 1, true).
-		AddItem(form, 0, 1, false)
+		AddItem(a.form, 0, 1, false)
 
 	// Right panel: table + log
 	rightPanel := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -245,4 +254,38 @@ func (a *interactiveDemoApp) log(message string) {
 	}
 	timestamp := time.Now().Format("15:04:05")
 	fmt.Fprintf(a.logView, "[gray]%s[white] %s\n", timestamp, message)
+}
+
+func (a *interactiveDemoApp) setupFocusChain() {
+	// List of focusable widgets in order
+	a.focusables = []tview.Primitive{a.list, a.form}
+	a.currentFocus = 0
+
+	// Set up Tab key handling for each widget
+	a.list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyTab {
+			a.nextFocus()
+			return nil // Consume the event
+		}
+		return event
+	})
+
+	a.form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyTab {
+			a.nextFocus()
+			return nil // Consume the event
+		}
+		return event
+	})
+}
+
+func (a *interactiveDemoApp) nextFocus() {
+	a.currentFocus = (a.currentFocus + 1) % len(a.focusables)
+	nextWidget := a.focusables[a.currentFocus]
+	a.log(fmt.Sprintf("[cyan]Focus switched to widget %d", a.currentFocus+1))
+
+	// Actually change focus in tview
+	if a.tviewApp != nil {
+		a.tviewApp.SetFocus(nextWidget)
+	}
 }
