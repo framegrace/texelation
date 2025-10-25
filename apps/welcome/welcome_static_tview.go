@@ -40,13 +40,13 @@ func (w *StaticTViewWelcome) Run() error {
 		w.height = 24
 	}
 
-	// Create tview welcome screen with transparent text area
+	// Create centered text box with solid background inside, transparent outside
 	textView := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter).
 		SetWordWrap(true)
 
-	textView.SetBackgroundColor(tcell.ColorDefault) // Transparent background
+	textView.SetBackgroundColor(tcell.ColorDarkCyan) // Solid background - opaque
 
 	textView.SetText(`[yellow::b]Welcome to Texelation![white::-]
 
@@ -63,20 +63,26 @@ Press [yellow]Shift-Arrow[white] to navigate panes anytime.
 Press [yellow]Ctrl-Arrow[white] to resize panes.
 Press [yellow]Ctrl-Q[white] to quit.
 
-[gray]Transparent text on opaque frame![white]`)
+[gray]Solid box on transparent background![white]`)
 
-	// Create a frame with NON-default background (opaque) around the text
-	frame := tview.NewFrame(textView).
-		SetBorders(2, 2, 4, 4, 2, 2) // top, bottom, header, footer, left, right padding
-
-	frame.SetBorder(true).
+	textView.SetBorder(true).
 		SetTitle(" Welcome ").
 		SetTitleAlign(tview.AlignCenter).
-		SetBorderColor(tcell.ColorPurple).
-		SetBackgroundColor(tcell.ColorDarkCyan) // Opaque background - will NOT be transparent
+		SetBorderColor(tcell.ColorPurple)
 
+	// Use Flex to center the text box (smaller, not full screen)
+	flex := tview.NewFlex().
+		AddItem(nil, 0, 1, false). // Left spacer
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false). // Top spacer
+			AddItem(textView, 18, 0, false). // Text box (18 rows)
+			AddItem(nil, 0, 1, false), // Bottom spacer
+			0, 1, false).
+		AddItem(nil, 0, 1, false) // Right spacer
+
+	// Flex has transparent background by default, so blue dots show through
 	// Create tview app that will run in background
-	w.tviewApp = tviewbridge.NewTViewApp("Welcome", frame)
+	w.tviewApp = tviewbridge.NewTViewApp("Welcome", flex)
 	w.tviewApp.Resize(w.width, w.height)
 
 	// Start tview's event loop in background goroutine
