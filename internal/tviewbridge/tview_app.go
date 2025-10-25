@@ -154,15 +154,12 @@ func (t *TViewApp) Resize(cols, rows int) {
 
 	// DON'T manually call Draw() and Show() here - let tview's event loop handle it.
 	// If we call Show() before tview finishes drawing, we swap an empty buffer to the front!
-	// The tview event loop will call Draw() and Show() naturally when it processes the resize event.
-
-	// Request a refresh after resize
-	if t.refreshChan != nil {
-		select {
-		case t.refreshChan <- true:
-		default:
-		}
-	}
+	// The tview event loop will:
+	// 1. Pick up the resize event via PollEvent()
+	// 2. Process it and call Draw()
+	// 3. Call Show() when done
+	// 4. Show() will trigger refresh notification
+	// No need to manually send refresh here - Show() handles it
 }
 
 // Render returns the application's current visual state as a 2D buffer of Cells.
@@ -207,20 +204,14 @@ func (t *TViewApp) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
-	// Post the event to the virtual screen
+	// Just post the event to the virtual screen
+	// The tview event loop running in the background will:
+	// 1. Pick up the event via PollEvent()
+	// 2. Process it and call Draw()
+	// 3. Call Show() when done
+	// 4. Show() will trigger refresh notification
+	// This prevents race conditions between HandleKey and the background loop
 	t.screen.PostEvent(ev)
-
-	// Manually trigger a draw to process the event
-	t.app.Draw()
-	t.screen.Show()
-
-	// Notify that we need a refresh (only if refresh chan is set)
-	if t.refreshChan != nil {
-		select {
-		case t.refreshChan <- true:
-		default:
-		}
-	}
 }
 
 // SetRefreshNotifier sets the channel used to signal refresh requests.
