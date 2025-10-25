@@ -4,7 +4,86 @@ This guide explains how to add tview widgets to any Texelation app.
 
 ## Overview
 
-Texelation provides a **tviewbridge** package that allows you to run tview widgets as background threads in your app, with proper synchronization and no flickering.
+Texelation provides a **tviewapps** package that makes tview integration incredibly simple - just define your widgets, and all the boilerplate is handled automatically!
+
+## Quick Start (Recommended)
+
+The easiest way to create a tview-based app is using `tviewapps.SimpleTViewApp`:
+
+```go
+import (
+    "github.com/rivo/tview"
+    "texelation/internal/tviewapps"
+)
+
+func NewMyApp() texel.App {
+    return tviewapps.New("My App", func() tview.Primitive {
+        // Define your widgets here
+        textView := tview.NewTextView()
+        textView.SetBackgroundColor(tcell.ColorDarkCyan)
+        textView.SetText("Hello World!")
+        return textView
+    })
+}
+```
+
+**That's it!** All integration is automatic:
+- ✅ Run() / Stop() lifecycle
+- ✅ Resize() handling
+- ✅ Render() with transparency
+- ✅ HandleKey() for interactivity
+- ✅ SetRefreshNotifier()
+
+See `apps/welcome/welcome_simple_tview.go` for a complete example.
+
+## With Custom Base Layer
+
+Add a custom base layer (like a pattern or gradient):
+
+```go
+func NewMyApp() texel.App {
+    return tviewapps.New("My App", createWidgets).
+        WithBaseLayer(tviewapps.DotPattern)
+}
+
+// Or custom:
+func NewMyApp() texel.App {
+    return tviewapps.New("My App", createWidgets).
+        WithBaseLayer(func(w, h int) [][]texel.Cell {
+            // Create your base layer
+            return myCustomPattern(w, h)
+        })
+}
+```
+
+## Interactive Widgets
+
+Interactive widgets (lists, forms, inputs) work automatically - no extra code needed!
+
+```go
+func NewInteractiveApp() texel.App {
+    return tviewapps.New("Interactive", func() tview.Primitive {
+        list := tview.NewList().
+            AddItem("Item 1", "Description", '1', nil).
+            AddItem("Item 2", "Description", '2', nil)
+
+        form := tview.NewForm().
+            AddInputField("Name", "", 20, nil, nil).
+            AddButton("Submit", func() {})
+
+        // Layout side by side
+        return tview.NewFlex().
+            AddItem(list, 0, 1, true).
+            AddItem(form, 0, 1, false)
+    })
+}
+```
+
+See `apps/welcome/interactive_example.go` for a full example with lists and forms.
+
+## Advanced: Manual Integration
+
+If you need more control (custom state, complex lifecycle), you can use **tviewbridge** directly:
 
 ## Key Concepts
 

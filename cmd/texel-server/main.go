@@ -73,8 +73,8 @@ func main() {
 		return texelterm.New(title, defaultShell)
 	}
 	welcomeFactory := func() texel.App {
-		// TView welcome screen with base buffer background (composite approach)
-		return welcome.NewStaticTView()
+		// Simplified tview welcome (zero boilerplate!)
+		return welcome.NewSimpleTView()
 	}
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
