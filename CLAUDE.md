@@ -158,3 +158,4 @@ Remaining work focuses on production hardening and operational tooling.
 
 ### Testing Client/Server Flow
 Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testing without Unix sockets. See integration tests in `internal/runtime/server/*_test.go` for patterns.
+- Please remeber to always pass refression tests before confirming changes, And commit with an appropiate message (not mentioning claude nor LLMS) after every successful change.

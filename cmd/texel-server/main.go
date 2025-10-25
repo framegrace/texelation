@@ -24,6 +24,7 @@ import (
 
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
+	"texelation/apps/welcome"
 	"texelation/internal/runtime/server"
 	"texelation/texel"
 )
@@ -71,7 +72,10 @@ func main() {
 		title := fmt.Sprintf("%s-%d", *title, id)
 		return texelterm.New(title, defaultShell)
 	}
-	welcomeFactory := shellFactory
+	welcomeFactory := func() texel.App {
+		// TView welcome screen with base buffer background (composite approach)
+		return welcome.NewStaticTView()
+	}
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
