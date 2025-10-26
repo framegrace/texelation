@@ -58,6 +58,12 @@ func NewTestClient(t *testing.T, socketPath string) *TestClient {
 	if err != nil {
 		t.Fatalf("failed to connect to server: %v", err)
 	}
+	return NewTestClientWithConn(t, conn)
+}
+
+// NewTestClientWithConn wraps an existing connection (e.g. net.Pipe) with the test client.
+func NewTestClientWithConn(t *testing.T, conn net.Conn) *TestClient {
+	t.Helper()
 
 	tc := &TestClient{
 		t:            t,
@@ -383,6 +389,21 @@ func (tc *TestClient) WaitForAnyBufferDelta(timeout time.Duration) protocol.Buff
 		tc.t.Fatalf("timeout waiting for any buffer delta after %v", timeout)
 	}
 	return protocol.BufferDelta{}
+}
+
+// ExpectNoDeltaWithin asserts that no buffer delta arrives within the timeout.
+// Useful for validating that a single user action only produces one frame.
+func (tc *TestClient) ExpectNoDeltaWithin(timeout time.Duration) {
+	tc.t.Helper()
+
+	select {
+	case delta := <-tc.deltas:
+		tc.t.Fatalf("expected no buffer delta within %v, but received pane %x rev %d", timeout, delta.PaneID[:4], delta.Revision)
+	case err := <-tc.errors:
+		tc.t.Fatalf("error while waiting for absence of delta: %v", err)
+	case <-time.After(timeout):
+		// Success: no delta observed within the interval.
+	}
 }
 
 // DrainSnapshots drains any pending snapshots from the channel.

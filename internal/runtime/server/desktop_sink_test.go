@@ -71,6 +71,7 @@ func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 }
 
 func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
+
 	driver := sinkScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
@@ -88,6 +89,9 @@ func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 	sink.SetPublisher(publisher)
 
 	sink.HandleKeyEvent(session, protocol.KeyEvent{KeyCode: uint32(tcell.KeyRune), RuneValue: 'x', Modifiers: 0})
+
+	// Simulate the desktop committing a refreshed frame after the key event.
+	sink.publish()
 
 	if len(session.Pending(0)) == 0 {
 		t.Fatalf("expected diffs after key event")

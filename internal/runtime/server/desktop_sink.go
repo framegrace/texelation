@@ -9,22 +9,30 @@
 package server
 
 import (
+	"sync"
+	"time"
+
 	"github.com/gdamore/tcell/v2"
 
-	"sync"
 	"texelation/protocol"
 	"texelation/texel"
 )
+
+var publishFallbackDelay = 12 * time.Millisecond
 
 // DesktopSink forwards key events to a local Desktop instance.
 type DesktopSink struct {
 	desktop   *texel.DesktopEngine
 	publisher *DesktopPublisher
+	scheduler *publishScheduler
 	mu        sync.Mutex
 }
 
 func NewDesktopSink(desktop *texel.DesktopEngine) *DesktopSink {
-	return &DesktopSink{desktop: desktop}
+	return &DesktopSink{
+		desktop:   desktop,
+		scheduler: newPublishScheduler(publishFallbackDelay),
+	}
 }
 
 func (d *DesktopSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) {
@@ -34,8 +42,9 @@ func (d *DesktopSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) 
 	key := tcell.Key(event.KeyCode)
 	mod := tcell.ModMask(event.Modifiers)
 	d.desktop.InjectKeyEvent(key, event.RuneValue, mod)
-	if d.publisher != nil {
-		_ = d.publisher.Publish()
+	if paneID, ok := d.markActivePaneDirty(); ok {
+		d.publish()
+		d.scheduleFallback(paneID)
 	}
 }
 
@@ -44,8 +53,9 @@ func (d *DesktopSink) HandleMouseEvent(session *Session, event protocol.MouseEve
 		return
 	}
 	d.desktop.InjectMouseEvent(int(event.X), int(event.Y), tcell.ButtonMask(event.ButtonMask), tcell.ModMask(event.Modifiers))
-	if d.publisher != nil {
-		_ = d.publisher.Publish()
+	if paneID, ok := d.markActivePaneDirty(); ok {
+		d.publish()
+		d.scheduleFallback(paneID)
 	}
 }
 
@@ -77,8 +87,9 @@ func (d *DesktopSink) HandlePaste(session *Session, paste protocol.Paste) {
 		return
 	}
 	d.desktop.HandlePaste(paste.Data)
-	if d.publisher != nil {
-		_ = d.publisher.Publish()
+	if paneID, ok := d.markActivePaneDirty(); ok {
+		d.publish()
+		d.scheduleFallback(paneID)
 	}
 }
 
@@ -88,6 +99,9 @@ func (d *DesktopSink) Desktop() *texel.DesktopEngine {
 
 func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
 	d.publisher = publisher
+	if d.scheduler != nil {
+		d.scheduler.SetPublisher(publisher)
+	}
 	if d.desktop == nil {
 		return
 	}
@@ -99,6 +113,13 @@ func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
 }
 
 func (d *DesktopSink) Publish() {
+    if d.publisher != nil {
+        d.publisher.MarkAllDirty()
+    }
+	if d.scheduler != nil {
+		d.scheduler.ForcePublish()
+		return
+	}
 	if d.publisher != nil {
 		_ = d.publisher.Publish()
 	}
@@ -112,6 +133,25 @@ func (d *DesktopSink) publish() {
 		return
 	}
 	_ = publisher.Publish()
+}
+
+func (d *DesktopSink) scheduleFallback(paneID [16]byte) {
+	if d.scheduler == nil || isZeroPaneID(paneID) {
+		return
+	}
+	d.scheduler.RequestPublish(paneID)
+}
+
+func (d *DesktopSink) markActivePaneDirty() ([16]byte, bool) {
+	if d.desktop == nil || d.publisher == nil {
+		return [16]byte{}, false
+	}
+	paneID, ok := d.desktop.ActivePaneID()
+	if !ok || isZeroPaneID(paneID) {
+		return [16]byte{}, false
+	}
+	d.publisher.MarkPaneDirty(paneID)
+	return paneID, true
 }
 
 func (d *DesktopSink) Snapshot() (protocol.TreeSnapshot, error) {

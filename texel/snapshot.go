@@ -42,8 +42,46 @@ type TreeNodeCapture struct {
 
 // SnapshotBuffers collects the current buffers for all panes in the active workspace.
 func (d *DesktopEngine) SnapshotBuffers() []PaneSnapshot {
-	capture := d.CaptureTree()
-	return capture.Panes
+	return d.SnapshotBuffersFiltered(nil)
+}
+
+// SnapshotBuffersFiltered collects pane buffers that match the optional filter.
+// When filter is nil, all panes are included.
+func (d *DesktopEngine) SnapshotBuffersFiltered(filter func([16]byte) bool) []PaneSnapshot {
+	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil || d.activeWorkspace.tree.Root == nil {
+		return nil
+	}
+	d.recalculateLayout()
+	result := make([]PaneSnapshot, 0)
+	var collect func(*Node)
+	collect = func(n *Node) {
+		if n == nil {
+			return
+		}
+		if len(n.Children) == 0 && n.Pane != nil && n.Pane.app != nil {
+			id := n.Pane.ID()
+			if filter == nil || filter(id) {
+				result = append(result, capturePaneSnapshot(n.Pane))
+			}
+			return
+		}
+		for _, child := range n.Children {
+			collect(child)
+		}
+	}
+	collect(d.activeWorkspace.tree.Root)
+	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
+		if filter == nil {
+			result = append(result, status...)
+		} else {
+			for _, sp := range status {
+				if filter(sp.ID) {
+					result = append(result, sp)
+				}
+			}
+		}
+	}
+	return result
 }
 
 // CaptureTree gathers panes and the layout tree for persistence or transport.
