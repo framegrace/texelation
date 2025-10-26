@@ -109,13 +109,10 @@ func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
 		d.desktop.SetRefreshHandler(nil)
 		return
 	}
-	d.desktop.SetRefreshHandler(d.publish)
+	d.desktop.SetRefreshHandler(d.handleRefresh)
 }
 
 func (d *DesktopSink) Publish() {
-    if d.publisher != nil {
-        d.publisher.MarkAllDirty()
-    }
 	if d.scheduler != nil {
 		d.scheduler.ForcePublish()
 		return
@@ -123,6 +120,14 @@ func (d *DesktopSink) Publish() {
 	if d.publisher != nil {
 		_ = d.publisher.Publish()
 	}
+}
+
+// PublishAll forces a publish after marking every pane dirty. Use for snapshot/tree updates.
+func (d *DesktopSink) PublishAll() {
+	if d.publisher != nil {
+		d.publisher.MarkAllDirty()
+	}
+	d.Publish()
 }
 
 func (d *DesktopSink) publish() {
@@ -133,6 +138,14 @@ func (d *DesktopSink) publish() {
 		return
 	}
 	_ = publisher.Publish()
+}
+
+func (d *DesktopSink) handleRefresh() {
+	if _, ok := d.markActivePaneDirty(); ok {
+		d.publish()
+		return
+	}
+	d.publish()
 }
 
 func (d *DesktopSink) scheduleFallback(paneID [16]byte) {

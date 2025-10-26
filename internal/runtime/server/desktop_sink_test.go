@@ -9,6 +9,7 @@
 package server
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -45,6 +46,55 @@ func (r *recordingApp) Render() [][]texel.Cell            { return [][]texel.Cel
 func (r *recordingApp) GetTitle() string                  { return r.title }
 func (r *recordingApp) HandleKey(ev *tcell.EventKey)      { r.keys = append(r.keys, ev) }
 func (r *recordingApp) SetRefreshNotifier(ch chan<- bool) {}
+
+type keyPaneApp struct {
+	title   string
+	content rune
+	mu      sync.Mutex
+	refresh chan<- bool
+}
+
+func newKeyPaneApp(title string) *keyPaneApp {
+	return &keyPaneApp{title: title, content: ' '}
+}
+
+func (a *keyPaneApp) Run() error            { return nil }
+func (a *keyPaneApp) Stop()                 {}
+func (a *keyPaneApp) Resize(cols, rows int) {}
+func (a *keyPaneApp) Render() [][]texel.Cell {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	buf := make([][]texel.Cell, 1)
+	buf[0] = []texel.Cell{{Ch: a.content, Style: tcell.StyleDefault}}
+	return buf
+}
+func (a *keyPaneApp) GetTitle() string { return a.title }
+func (a *keyPaneApp) HandleKey(ev *tcell.EventKey) {
+	a.mu.Lock()
+	a.content = ev.Rune()
+	a.mu.Unlock()
+	if a.refresh != nil {
+		select {
+		case a.refresh <- true:
+		default:
+		}
+	}
+}
+func (a *keyPaneApp) SetRefreshNotifier(ch chan<- bool) { a.refresh = ch }
+
+type staticPaneApp struct {
+	title string
+}
+
+func (s *staticPaneApp) Run() error            { return nil }
+func (s *staticPaneApp) Stop()                 {}
+func (s *staticPaneApp) Resize(cols, rows int) {}
+func (s *staticPaneApp) Render() [][]texel.Cell {
+	return [][]texel.Cell{{{Ch: 'T', Style: tcell.StyleDefault}}}
+}
+func (s *staticPaneApp) GetTitle() string                  { return s.title }
+func (s *staticPaneApp) HandleKey(ev *tcell.EventKey)      {}
+func (s *staticPaneApp) SetRefreshNotifier(ch chan<- bool) {}
 
 func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 	driver := sinkScreenDriver{}
@@ -129,5 +179,87 @@ func TestDesktopSinkHandlesAdditionalEvents(t *testing.T) {
 	cfg := theme.Get()
 	if section, ok := cfg["pane"]; !ok || section["fg"] != "#123456" {
 		t.Fatalf("theme update not applied")
+	}
+}
+
+func TestOtherPaneInputDoesNotPublishTViewPane(t *testing.T) {
+	driver := sinkScreenDriver{}
+	shellFactory := func() texel.App { return newKeyPaneApp("shell") }
+	welcomeFactory := func() texel.App { return &staticPaneApp{title: "tview"} }
+
+	lifecycle := texel.NoopAppLifecycle{}
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+
+	session := NewSession([16]byte{3}, 512)
+	publisher := NewDesktopPublisher(desktop, session)
+
+	sink := NewDesktopSink(desktop)
+	sink.SetPublisher(publisher)
+
+	// Split to create the shell pane.
+	ctrlA := protocol.KeyEvent{KeyCode: uint32(tcell.KeyCtrlA)}
+	sink.HandleKeyEvent(nil, ctrlA)
+	sink.HandleKeyEvent(nil, protocol.KeyEvent{KeyCode: uint32(tcell.KeyRune), RuneValue: '|'})
+	// Move focus to the shell pane (right pane after vertical split).
+	sink.HandleKeyEvent(nil, protocol.KeyEvent{KeyCode: uint32(tcell.KeyRight), Modifiers: uint16(tcell.ModShift)})
+
+	snap, err := sink.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot failed: %v", err)
+	}
+	if len(snap.Panes) != 2 {
+		t.Fatalf("expected 2 panes, got %d", len(snap.Panes))
+	}
+
+	var shellID, tviewID [16]byte
+	for _, pane := range snap.Panes {
+		switch pane.Title {
+		case "shell":
+			shellID = pane.PaneID
+		case "tview":
+			tviewID = pane.PaneID
+		}
+	}
+	if isZeroPaneID(shellID) || isZeroPaneID(tviewID) {
+		t.Fatalf("failed to discover pane IDs (shell=%x tview=%x)", shellID, tviewID)
+	}
+
+	if activeID, ok := sink.Desktop().ActivePaneID(); !ok || activeID != shellID {
+		t.Fatalf("expected shell pane to be active")
+	}
+
+	// Drain initial diffs.
+	base := len(session.Pending(0))
+
+	for _, r := range []rune{'a', 'b', 'c'} {
+		prev := len(session.Pending(0))
+		sink.HandleKeyEvent(nil, protocol.KeyEvent{KeyCode: uint32(tcell.KeyRune), RuneValue: r})
+		pending := session.Pending(0)
+		if len(pending) <= prev {
+			t.Fatalf("no new diffs after key %q", r)
+		}
+		for _, diff := range pending[prev:] {
+			delta, err := protocol.DecodeBufferDelta(diff.Payload)
+			if err != nil {
+				t.Fatalf("decode delta failed: %v", err)
+			}
+			if delta.PaneID == tviewID {
+				t.Fatalf("tview pane received delta for key %q", r)
+			}
+			if delta.PaneID != shellID {
+				t.Fatalf("unexpected pane %x in delta", delta.PaneID[:4])
+			}
+		}
+	}
+
+	if sink.scheduler != nil && sink.scheduler.FallbackCount() != 0 {
+		t.Fatalf("fallback scheduler fired unexpectedly (%d)", sink.scheduler.FallbackCount())
+	}
+
+	if len(session.Pending(0)) <= base {
+		t.Fatalf("expected new diffs queued")
 	}
 }
