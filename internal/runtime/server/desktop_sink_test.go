@@ -11,6 +11,7 @@ package server
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -139,9 +140,7 @@ func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 	sink.SetPublisher(publisher)
 
 	sink.HandleKeyEvent(session, protocol.KeyEvent{KeyCode: uint32(tcell.KeyRune), RuneValue: 'x', Modifiers: 0})
-
-	// Simulate the desktop committing a refreshed frame after the key event.
-	sink.publish()
+	time.Sleep(2 * publishFallbackDelay)
 
 	if len(session.Pending(0)) == 0 {
 		t.Fatalf("expected diffs after key event")
@@ -237,6 +236,7 @@ func TestOtherPaneInputDoesNotPublishTViewPane(t *testing.T) {
 	for _, r := range []rune{'a', 'b', 'c'} {
 		prev := len(session.Pending(0))
 		sink.HandleKeyEvent(nil, protocol.KeyEvent{KeyCode: uint32(tcell.KeyRune), RuneValue: r})
+		time.Sleep(2 * publishFallbackDelay)
 		pending := session.Pending(0)
 		if len(pending) <= prev {
 			t.Fatalf("no new diffs after key %q", r)

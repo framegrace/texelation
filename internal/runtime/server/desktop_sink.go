@@ -43,7 +43,6 @@ func (d *DesktopSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) 
 	mod := tcell.ModMask(event.Modifiers)
 	d.desktop.InjectKeyEvent(key, event.RuneValue, mod)
 	if paneID, ok := d.markActivePaneDirty(); ok {
-		d.publish()
 		d.scheduleFallback(paneID)
 	}
 }
@@ -54,7 +53,6 @@ func (d *DesktopSink) HandleMouseEvent(session *Session, event protocol.MouseEve
 	}
 	d.desktop.InjectMouseEvent(int(event.X), int(event.Y), tcell.ButtonMask(event.ButtonMask), tcell.ModMask(event.Modifiers))
 	if paneID, ok := d.markActivePaneDirty(); ok {
-		d.publish()
 		d.scheduleFallback(paneID)
 	}
 }
@@ -88,7 +86,6 @@ func (d *DesktopSink) HandlePaste(session *Session, paste protocol.Paste) {
 	}
 	d.desktop.HandlePaste(paste.Data)
 	if paneID, ok := d.markActivePaneDirty(); ok {
-		d.publish()
 		d.scheduleFallback(paneID)
 	}
 }

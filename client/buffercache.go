@@ -223,6 +223,13 @@ func (c *BufferCache) AllPanes() []*PaneState {
 	return panes
 }
 
+// Pane returns the cached pane state by ID, if present.
+func (c *BufferCache) Pane(id [16]byte) *PaneState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.panes[id]
+}
+
 // LayoutPanes returns panes sorted by their recorded geometry so renderers can
 // draw them deterministically.
 func (c *BufferCache) ForEachPaneSorted(fn func(*PaneState)) {

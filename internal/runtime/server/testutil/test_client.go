@@ -11,6 +11,7 @@ package testutil
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -510,6 +511,21 @@ func (tc *TestClient) SessionID() [16]byte {
 // LastSequence returns the last acknowledged sequence number.
 func (tc *TestClient) LastSequence() uint64 {
 	return tc.lastSequence
+}
+
+// PaneContains reports whether the cached pane rows contain the substring.
+func (tc *TestClient) PaneContains(paneID [16]byte, substr string) bool {
+	pane := tc.cache.Pane(paneID)
+	if pane == nil {
+		return false
+	}
+	rows := pane.Rows()
+	for _, row := range rows {
+		if strings.Contains(row, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 // SnapshotCount returns the number of snapshots received.

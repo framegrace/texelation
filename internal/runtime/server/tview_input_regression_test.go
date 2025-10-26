@@ -87,7 +87,7 @@ func TestInteractiveDemoPublishesSingleFramePerKey(t *testing.T) {
 	client.WaitForBufferDelta(paneID, 2*time.Second)
 	client.DrainDeltas()
 
-	verifyFirstDelta := func(r rune) {
+	verifyKeyFrame := func(r rune) {
 		if err := client.SendKey(tcell.KeyRune, r, tcell.ModNone); err != nil {
 			t.Fatalf("failed to send rune %q: %v", r, err)
 		}
@@ -95,13 +95,13 @@ func TestInteractiveDemoPublishesSingleFramePerKey(t *testing.T) {
 		if delta.PaneID != paneID {
 			t.Fatalf("expected delta for pane %x, got %x", paneID[:4], delta.PaneID[:4])
 		}
+		if !client.PaneContains(paneID, "Interactive") {
+			t.Fatalf("pane %x missing expected content after key %q", paneID[:4], r)
+		}
 	}
 
-	verifyFirstDelta('a')
-	for _, ch := range []rune{'b', 'c'} {
-		if err := client.SendKey(tcell.KeyRune, ch, tcell.ModNone); err != nil {
-			t.Fatalf("failed to send rune %q: %v", ch, err)
-		}
+	for _, ch := range []rune{'a', 'b', 'c', 'd'} {
+		verifyKeyFrame(ch)
 	}
 
 	// Close client and ensure server goroutine exits.
