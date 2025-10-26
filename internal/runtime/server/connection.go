@@ -339,7 +339,7 @@ func (c *connection) sendTreeSnapshot() {
 	if err != nil || len(snapshot.Panes) == 0 {
 		return
 	}
-	sink.PublishAll()
+	sink.Publish()
 	geometrySnapshot := geometryOnlySnapshot(snapshot)
 
 	payload, err := protocol.EncodeTreeSnapshot(geometrySnapshot)
@@ -504,15 +504,15 @@ func (c *connection) handleResize(size protocol.Resize) {
 
 	snapshot, err := sink.Snapshot()
 	if err != nil {
-		sink.PublishAll()
+		sink.Publish()
 		return
 	}
 	if len(snapshot.Panes) == 0 {
-		sink.PublishAll()
+		sink.Publish()
 		return
 	}
 
-	sink.PublishAll()
+	sink.Publish()
 
 	payload, err := protocol.EncodeTreeSnapshot(snapshot)
 	if err != nil {
