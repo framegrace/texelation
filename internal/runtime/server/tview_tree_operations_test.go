@@ -27,17 +27,20 @@ import (
 
 // setupTViewTreeTestServer creates a test server with tview welcome apps.
 func setupTViewTreeTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, func()) {
-	return setupTViewServer(t,
-		func() texel.App { return welcome.NewStaticTView() },
-		func() texel.App { return welcome.NewStaticTView() },
-	)
-}
-
-func setupTViewServer(t *testing.T, shellFactory, welcomeFactory func() texel.App) (string, *Manager, *texel.DesktopEngine, func()) {
 	t.Helper()
 
-	socketPath := "/tmp/texel-tview-test-" + t.Name() + ".sock"
+	socketPath := "/tmp/texel-tview-tree-test-" + t.Name() + ".sock"
+
+	// Use real tview welcome app for shell and welcome
+	shellFactory := func() texel.App {
+		return welcome.NewStaticTView()
+	}
+	welcomeFactory := func() texel.App {
+		return welcome.NewStaticTView()
+	}
 	lifecycle := &texel.LocalAppLifecycle{}
+
+	// Use simple test driver (same as client_tree_operations_test.go)
 	driver := tviewTestDriver{}
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
@@ -48,6 +51,7 @@ func setupTViewServer(t *testing.T, shellFactory, welcomeFactory func() texel.Ap
 	mgr := NewManager()
 	sink := NewDesktopSink(desktop)
 
+	// Remove socket if it exists
 	_ = os.Remove(socketPath)
 
 	listener, err := net.Listen("unix", socketPath)
@@ -62,7 +66,7 @@ func setupTViewServer(t *testing.T, shellFactory, welcomeFactory func() texel.Ap
 			if err != nil {
 				return
 			}
-			go handleTViewTestConnection(conn, mgr, desktop, sink)
+			go handleTViewTreeTestConnection(conn, mgr, desktop, sink)
 		}
 	}()
 
@@ -76,7 +80,7 @@ func setupTViewServer(t *testing.T, shellFactory, welcomeFactory func() texel.Ap
 	return socketPath, mgr, desktop, cleanup
 }
 
-func handleTViewTestConnection(conn net.Conn, mgr *Manager, desktop *texel.DesktopEngine, sink *DesktopSink) {
+func handleTViewTreeTestConnection(conn net.Conn, mgr *Manager, desktop *texel.DesktopEngine, sink *DesktopSink) {
 	defer conn.Close()
 
 	session, resuming, err := handleHandshake(conn, mgr)

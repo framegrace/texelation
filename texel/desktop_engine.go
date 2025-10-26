@@ -417,17 +417,6 @@ func (d *DesktopEngine) LastMouseModifiers() tcell.ModMask {
 	return d.lastMouseModifier
 }
 
-// ActivePaneID returns the pane ID for the currently focused pane, if any.
-func (d *DesktopEngine) ActivePaneID() ([16]byte, bool) {
-	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil || d.activeWorkspace.tree.ActiveLeaf == nil {
-		return [16]byte{}, false
-	}
-	if d.activeWorkspace.tree.ActiveLeaf.Pane == nil {
-		return [16]byte{}, false
-	}
-	return d.activeWorkspace.tree.ActiveLeaf.Pane.ID(), true
-}
-
 // InjectKeyEvent allows external callers (e.g., remote clients) to deliver key
 // input directly into the desktop event pipeline.
 func (d *DesktopEngine) InjectKeyEvent(key tcell.Key, ch rune, modifiers tcell.ModMask) {
@@ -584,6 +573,7 @@ func (d *DesktopEngine) broadcastStateUpdate() {
 	//		d.activeWorkspace.Refresh()
 	//	}
 }
+
 
 func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 	d.refreshMu.Lock()
@@ -964,3 +954,4 @@ func initDefaultColors() (tcell.Color, tcell.Color, error) {
 	}
 	return fg, bg, nil
 }
+

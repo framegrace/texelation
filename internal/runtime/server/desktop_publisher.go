@@ -9,8 +9,6 @@
 package server
 
 import (
-	"encoding/binary"
-	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
@@ -27,14 +25,9 @@ type DesktopPublisher struct {
 	desktop   *texel.DesktopEngine
 	session   *Session
 	revisions map[[16]byte]uint32
-	digests   map[[16]byte]uint64
 	observer  PublishObserver
 	mu        sync.Mutex
 	notify    func()
-
-	paneListeners []PanePublishListener
-	dirtyAll      bool
-	dirtyPanes    map[[16]byte]struct{}
 }
 
 // PublishObserver records desktop publish metrics for instrumentation.
@@ -47,8 +40,6 @@ func NewDesktopPublisher(desktop *texel.DesktopEngine, session *Session) *Deskto
 		desktop:   desktop,
 		session:   session,
 		revisions: make(map[[16]byte]uint32),
-		digests:   make(map[[16]byte]uint64),
-		dirtyPanes: make(map[[16]byte]struct{}),
 	}
 }
 
@@ -66,35 +57,17 @@ func (p *DesktopPublisher) Publish() error {
 	if p.desktop == nil || p.session == nil {
 		return nil
 	}
-	dirty, dirtyAll := p.consumeDirty()
-	var filter func([16]byte) bool
-	if !dirtyAll && len(dirty) > 0 {
-		filter = func(id [16]byte) bool {
-			_, ok := dirty[id]
-			return ok
-		}
-	}
-
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	start := time.Now()
-	snapshots := p.desktop.SnapshotBuffersFiltered(filter)
-	published := make([][16]byte, 0)
+	snapshots := p.desktop.SnapshotBuffers()
 	for _, snap := range snapshots {
-		currentDigest := hashPaneBuffer(snap.Buffer)
-		p.mu.Lock()
-		prev, ok := p.digests[snap.ID]
-		if ok && prev == currentDigest {
-			p.mu.Unlock()
-			continue
-		}
 		rev := p.revisions[snap.ID] + 1
 		p.revisions[snap.ID] = rev
-		p.digests[snap.ID] = currentDigest
-		p.mu.Unlock()
 		delta := bufferToDelta(snap, rev)
 		if err := p.session.EnqueueDiff(delta); err != nil {
 			return err
 		}
-		published = append(published, snap.ID)
 	}
 	if p.observer != nil {
 		p.observer.ObservePublish(p.session, len(snapshots), time.Since(start))
@@ -102,71 +75,7 @@ func (p *DesktopPublisher) Publish() error {
 	if p.notify != nil {
 		p.notify()
 	}
-	for _, id := range published {
-		p.notifyPanePublished(id)
-	}
 	return nil
-}
-
-func (p *DesktopPublisher) addPaneListener(listener PanePublishListener) {
-	p.mu.Lock()
-	p.paneListeners = append(p.paneListeners, listener)
-	p.mu.Unlock()
-}
-
-func (p *DesktopPublisher) removePaneListener(listener PanePublishListener) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	n := make([]PanePublishListener, 0, len(p.paneListeners))
-	for _, l := range p.paneListeners {
-		if l == listener {
-			continue
-		}
-		n = append(n, l)
-	}
-	p.paneListeners = n
-}
-
-func (p *DesktopPublisher) notifyPanePublished(id [16]byte) {
-	listeners := make([]PanePublishListener, 0)
-	p.mu.Lock()
-	listeners = append(listeners, p.paneListeners...)
-	p.mu.Unlock()
-	for _, listener := range listeners {
-		listener.OnPanePublished(id)
-	}
-}
-
-func (p *DesktopPublisher) MarkPaneDirty(id [16]byte) {
-	if isZeroPaneID(id) {
-		return
-	}
-	p.mu.Lock()
-	p.dirtyPanes[id] = struct{}{}
-	p.mu.Unlock()
-}
-
-func (p *DesktopPublisher) MarkAllDirty() {
-	p.mu.Lock()
-	p.dirtyAll = true
-	p.dirtyPanes = make(map[[16]byte]struct{})
-	p.mu.Unlock()
-}
-
-func (p *DesktopPublisher) consumeDirty() (map[[16]byte]struct{}, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.dirtyAll || len(p.dirtyPanes) == 0 {
-		p.dirtyAll = false
-		p.dirtyPanes = make(map[[16]byte]struct{})
-		return nil, true
-	}
-	out := make(map[[16]byte]struct{}, len(p.dirtyPanes))
-	for id := range p.dirtyPanes {
-		out[id] = struct{}{}
-	}
-	p.dirtyPanes = make(map[[16]byte]struct{})
-	return out, false
 }
 
 func bufferToDelta(snap texel.PaneSnapshot, revision uint32) protocol.BufferDelta {
@@ -264,33 +173,4 @@ func convertColor(color tcell.Color) (protocol.ColorModel, uint32) {
 	}
 	r, g, b := color.RGB()
 	return protocol.ColorModelRGB, (uint32(r)&0xff)<<16 | (uint32(g)&0xff)<<8 | (uint32(b) & 0xff)
-}
-
-func hashPaneBuffer(buffer [][]texel.Cell) uint64 {
-	hasher := fnv.New64a()
-	var scratch [8]byte
-
-	writeUint32 := func(v uint32) {
-		binary.LittleEndian.PutUint32(scratch[:4], v)
-		hasher.Write(scratch[:4])
-	}
-	writeUint16 := func(v uint16) {
-		binary.LittleEndian.PutUint16(scratch[:2], v)
-		hasher.Write(scratch[:2])
-	}
-
-	writeUint32(uint32(len(buffer)))
-	for _, row := range buffer {
-		writeUint32(uint32(len(row)))
-		for _, cell := range row {
-			writeUint32(uint32(cell.Ch))
-			key, _ := convertStyle(cell.Style)
-			writeUint16(key.attrFlags)
-			writeUint32(uint32(key.fgModel))
-			writeUint32(key.fgValue)
-			writeUint32(uint32(key.bgModel))
-			writeUint32(key.bgValue)
-		}
-	}
-	return hasher.Sum64()
 }
