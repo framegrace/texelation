@@ -70,6 +70,7 @@ func (a *interactiveDemoApp) createLayout() tview.Primitive {
 
 	// Create table (before form, so form can update it)
 	a.table = a.createTable()
+	a.updateTable()
 
 	// Create interactive list
 	a.list = a.createList()
@@ -207,7 +208,6 @@ func (a *interactiveDemoApp) createTable() *tview.Table {
 		table.SetCell(0, col, cell)
 	}
 
-	a.updateTable()
 	return table
 }
 
