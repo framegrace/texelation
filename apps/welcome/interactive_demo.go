@@ -247,10 +247,7 @@ func (a *interactiveDemoApp) updateTable() {
 		}
 	}
 
-	// Request a redraw if tview app is available
-	if a.tviewApp != nil {
-		a.tviewApp.Draw()
-	}
+	// tview's event loop will repaint after this callback returns.
 }
 
 func (a *interactiveDemoApp) log(message string) {
