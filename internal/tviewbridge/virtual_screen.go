@@ -171,17 +171,28 @@ func (vs *VirtualScreen) GetContent(x, y int) (rune, []rune, tcell.Style, int) {
 	vs.mu.RLock()
 	defer vs.mu.RUnlock()
 
-	// Check against actual buffer dimensions, not vs.width/vs.height
-	// During resize, width/height may be updated before frontBuffer is resized
-	if y < 0 || y >= len(vs.frontBuffer) {
-		return ' ', nil, tcell.StyleDefault, 1
-	}
-	if x < 0 || x >= len(vs.frontBuffer[y]) {
-		return ' ', nil, tcell.StyleDefault, 1
+	// Prefer the back buffer so tview can read what it just drew during the same frame.
+	if cell, ok := vs.cellAt(vs.backBuffer, x, y); ok {
+		return cell.Ch, nil, cell.Style, 1
 	}
 
-	cell := vs.frontBuffer[y][x]
-	return cell.Ch, nil, cell.Style, 1
+	// Fall back to the front buffer (last completed frame) if the back buffer
+	// isn't available or indices are out of range (can happen during resize).
+	if cell, ok := vs.cellAt(vs.frontBuffer, x, y); ok {
+		return cell.Ch, nil, cell.Style, 1
+	}
+
+	return ' ', nil, tcell.StyleDefault, 1
+}
+
+func (vs *VirtualScreen) cellAt(buffer [][]texel.Cell, x, y int) (texel.Cell, bool) {
+	if y < 0 || y >= len(buffer) {
+		return texel.Cell{}, false
+	}
+	if x < 0 || x >= len(buffer[y]) {
+		return texel.Cell{}, false
+	}
+	return buffer[y][x], true
 }
 
 // SetStyle sets the default style.
