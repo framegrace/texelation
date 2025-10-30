@@ -42,7 +42,7 @@ type TexelTerm struct {
 }
 
 func New(title, command string) texel.App {
-	base := &TexelTerm{
+	return &TexelTerm{
 		title:        title,
 		command:      command,
 		width:        80, // Sensible defaults
@@ -50,7 +50,6 @@ func New(title, command string) texel.App {
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
 	}
-	return newMenuOverlay(base)
 }
 
 func (a *TexelTerm) Vterm() *parser.VTerm {
