@@ -20,6 +20,7 @@ import (
 	"texelation/apps/texelterm/parser"
 	"texelation/texel"
 	"texelation/texel/cards"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2"
@@ -36,6 +37,7 @@ type TexelTerm struct {
 	parser       *parser.Parser
 	mu           sync.Mutex
 	stop         chan struct{}
+	stopOnce     sync.Once
 	refreshChan  chan<- bool
 	wg           sync.WaitGroup
 	buf          [][]texel.Cell
@@ -323,12 +325,6 @@ func (a *TexelTerm) Run() error {
 		reader := bufio.NewReader(ptmx)
 
 		for {
-			select {
-			case <-a.stop:
-				return
-			default:
-			}
-
 			r, _, err := reader.ReadRune()
 			if err != nil {
 				if err != io.EOF {
@@ -378,13 +374,32 @@ func (a *TexelTerm) Resize(cols, rows int) {
 }
 
 func (a *TexelTerm) Stop() {
-	close(a.stop)
-	if a.pty != nil {
-		a.pty.Close()
-	}
-	if a.cmd != nil && a.cmd.Process != nil {
-		a.cmd.Process.Signal(syscall.SIGTERM)
-	}
+	a.stopOnce.Do(func() {
+		close(a.stop)
+		var (
+			cmd *exec.Cmd
+			pty *os.File
+		)
+		a.mu.Lock()
+		cmd = a.cmd
+		pty = a.pty
+		a.cmd = nil
+		a.pty = nil
+		a.mu.Unlock()
+
+		if pty != nil {
+			_ = pty.Close()
+		}
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			proc := cmd.Process
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				proc.Signal(syscall.SIGKILL) // Ignore error; process may already be gone.
+			}()
+		}
+	})
+	a.wg.Wait()
 }
 
 func (a *TexelTerm) GetTitle() string {
