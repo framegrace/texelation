@@ -87,15 +87,16 @@ func (p *Pipeline) Error() error {
 	return p.err
 }
 
-// Run starts all cards concurrently.
+// Run starts all cards (once) and blocks until they complete.
 func (p *Pipeline) Run() error {
-	cards := p.Cards()
 	p.runOnce.Do(func() {
+		cards := p.Cards()
 		for _, card := range cards {
 			p.StartCard(card)
 		}
 	})
-	return nil
+	p.wg.Wait()
+	return p.Error()
 }
 
 // Stop stops all cards and waits for them to exit.
