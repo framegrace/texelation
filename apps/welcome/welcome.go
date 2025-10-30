@@ -21,20 +21,26 @@ import (
 type welcomeApp struct {
 	width, height int
 	mu            sync.RWMutex
+	stop          chan struct{}
+	stopOnce      sync.Once
 }
 
 // NewWelcomeApp now returns the App interface for consistency.
 func NewWelcomeApp() texel.App {
-	base := &welcomeApp{}
+	base := &welcomeApp{stop: make(chan struct{})}
 	return cards.NewPipeline(nil, cards.WrapApp(base))
 }
 
 func (a *welcomeApp) Run() error {
-	// No background process needed for this static app.
+	<-a.stop
 	return nil
 }
 
-func (a *welcomeApp) Stop() {}
+func (a *welcomeApp) Stop() {
+	a.stopOnce.Do(func() {
+		close(a.stop)
+	})
+}
 
 func (a *welcomeApp) Resize(cols, rows int) {
 	a.mu.Lock()
