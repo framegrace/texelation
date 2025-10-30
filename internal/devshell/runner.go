@@ -79,6 +79,8 @@ func RunApp(name string, args []string) error {
 		}
 	}()
 
+	draw()
+
 	for {
 		select {
 		case err := <-runErr:
