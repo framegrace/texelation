@@ -353,7 +353,9 @@ func (a *TexelTerm) Run() error {
 		}
 	}()
 
-	return cmd.Wait()
+	err = cmd.Wait()
+	a.wg.Wait()
+	return err
 }
 
 func (a *TexelTerm) Resize(cols, rows int) {
