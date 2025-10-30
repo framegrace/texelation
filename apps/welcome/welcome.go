@@ -11,6 +11,7 @@ package welcome
 import (
 	"sync"
 	"texelation/texel"
+	"texelation/texel/cards"
 	"texelation/texel/theme"
 
 	"github.com/gdamore/tcell/v2"
@@ -24,7 +25,8 @@ type welcomeApp struct {
 
 // NewWelcomeApp now returns the App interface for consistency.
 func NewWelcomeApp() texel.App {
-	return &welcomeApp{}
+	base := &welcomeApp{}
+	return cards.NewPipeline(nil, cards.WrapApp(base))
 }
 
 func (a *welcomeApp) Run() error {

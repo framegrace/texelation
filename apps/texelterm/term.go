@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"texelation/apps/texelterm/parser"
 	"texelation/texel"
+	"texelation/texel/cards"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2"
@@ -42,14 +43,25 @@ type TexelTerm struct {
 }
 
 func New(title, command string) texel.App {
-	return &TexelTerm{
+	term := &TexelTerm{
 		title:        title,
 		command:      command,
-		width:        80, // Sensible defaults
+		width:        80,
 		height:       24,
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
 	}
+
+	rainbow := cards.NewRainbowCard(0.5, 0.6)
+	control := func(ev *tcell.EventKey) bool {
+		if ev.Key() == tcell.KeyCtrlG {
+			rainbow.Toggle()
+			return true
+		}
+		return false
+	}
+
+	return cards.NewPipeline(control, cards.WrapApp(term), rainbow)
 }
 
 func (a *TexelTerm) Vterm() *parser.VTerm {
