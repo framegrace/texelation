@@ -2,6 +2,7 @@ package cards
 
 import (
 	"math"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -10,12 +11,16 @@ import (
 
 // RainbowCard applies a simple rainbow tint to the incoming buffer when enabled.
 type RainbowCard struct {
+	mu         sync.Mutex
 	enabled    bool
 	speedHz    float64
 	mix        float32
 	phase      float64
 	lastUpdate time.Time
 	refresh    chan<- bool
+
+	ticker     *time.Ticker
+	tickerStop chan struct{}
 }
 
 // NewRainbowCard constructs a rainbow effect card.
@@ -31,32 +36,49 @@ func NewRainbowCard(speedHz float64, mix float32) *RainbowCard {
 	return &RainbowCard{speedHz: speedHz, mix: mix}
 }
 
-func (c *RainbowCard) Run() error                        { return nil }
-func (c *RainbowCard) Stop()                             {}
-func (c *RainbowCard) Resize(int, int)                   {}
-func (c *RainbowCard) HandleKey(*tcell.EventKey)         {}
-func (c *RainbowCard) HandleMessage(texel.Message)       {}
-func (c *RainbowCard) SetRefreshNotifier(ch chan<- bool) { c.refresh = ch }
+func (c *RainbowCard) Run() error { return nil }
+func (c *RainbowCard) Stop() {
+	c.mu.Lock()
+	c.stopTickerLocked()
+	c.mu.Unlock()
+}
+func (c *RainbowCard) Resize(int, int)             {}
+func (c *RainbowCard) HandleKey(*tcell.EventKey)   {}
+func (c *RainbowCard) HandleMessage(texel.Message) {}
+func (c *RainbowCard) SetRefreshNotifier(ch chan<- bool) {
+	c.mu.Lock()
+	c.refresh = ch
+	c.mu.Unlock()
+}
 
 // Render tints the buffer when enabled.
+
 func (c *RainbowCard) Render(input [][]texel.Cell) [][]texel.Cell {
 	if input == nil {
 		return nil
 	}
-	if !c.enabled {
+	c.mu.Lock()
+	enabled := c.enabled
+	speed := c.speedHz
+	mix := c.mix
+	c.mu.Unlock()
+
+	if !enabled {
 		return input
 	}
 
 	now := time.Now()
+	c.mu.Lock()
 	if c.lastUpdate.IsZero() {
 		c.lastUpdate = now
 	}
 	delta := now.Sub(c.lastUpdate).Seconds()
 	c.lastUpdate = now
-	c.phase = math.Mod(c.phase+2*math.Pi*c.speedHz*delta, 2*math.Pi)
+	c.phase = math.Mod(c.phase+2*math.Pi*speed*delta, 2*math.Pi)
+	phase := c.phase
+	c.mu.Unlock()
 
 	out := cloneBuffer(input)
-	mix := c.mix
 
 	for y := range out {
 		row := out[y]
@@ -66,7 +88,7 @@ func (c *RainbowCard) Render(input [][]texel.Cell) [][]texel.Cell {
 			if !fg.Valid() {
 				continue
 			}
-			angle := c.phase + float64(x+y)*0.12
+			angle := phase + float64(x+y)*0.12
 			tint := hsvToRGB(float32(angle), 1.0, 1.0)
 			blended := blendColor(fg, tint, mix)
 			style := tcell.StyleDefault.Foreground(blended).Attributes(attrs)
@@ -82,13 +104,24 @@ func (c *RainbowCard) Render(input [][]texel.Cell) [][]texel.Cell {
 
 // Toggle flips the enabled state.
 func (c *RainbowCard) Toggle() {
+	c.mu.Lock()
 	c.enabled = !c.enabled
-	c.lastUpdate = time.Now()
+	if c.enabled {
+		c.lastUpdate = time.Now()
+		c.ensureTickerLocked()
+	} else {
+		c.stopTickerLocked()
+	}
+	c.mu.Unlock()
 	c.requestRefresh()
 }
 
 // Enabled reports whether the card is active.
-func (c *RainbowCard) Enabled() bool { return c.enabled }
+func (c *RainbowCard) Enabled() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.enabled
+}
 
 func (c *RainbowCard) requestRefresh() {
 	if c.refresh == nil {
@@ -98,6 +131,34 @@ func (c *RainbowCard) requestRefresh() {
 	case c.refresh <- true:
 	default:
 	}
+}
+
+func (c *RainbowCard) ensureTickerLocked() {
+	if c.ticker != nil {
+		return
+	}
+	c.ticker = time.NewTicker(50 * time.Millisecond)
+	c.tickerStop = make(chan struct{})
+	go func(stop <-chan struct{}, tick *time.Ticker) {
+		for {
+			select {
+			case <-tick.C:
+				c.requestRefresh()
+			case <-stop:
+				return
+			}
+		}
+	}(c.tickerStop, c.ticker)
+}
+
+func (c *RainbowCard) stopTickerLocked() {
+	if c.ticker == nil {
+		return
+	}
+	c.ticker.Stop()
+	close(c.tickerStop)
+	c.ticker = nil
+	c.tickerStop = nil
 }
 
 func cloneBuffer(input [][]texel.Cell) [][]texel.Cell {
