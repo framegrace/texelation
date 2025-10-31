@@ -7,6 +7,7 @@
 package server
 
 import (
+	"strings"
 	"testing"
 
 	"texelation/apps/welcome"
@@ -69,11 +70,11 @@ func TestSimpleColoredWelcomeRendersContent(t *testing.T) {
 			rowText += string(buffer[y][x].Ch)
 		}
 
-		if contains(rowText, "Welcome") {
+		if strings.Contains(rowText, "Welcome") {
 			foundWelcome = true
 			t.Logf("Found 'Welcome' in row %d: %s", y, rowText)
 		}
-		if contains(rowText, "Texelation") {
+		if strings.Contains(rowText, "Texelation") {
 			foundTexelation = true
 			t.Logf("Found 'Texelation' in row %d: %s", y, rowText)
 		}
