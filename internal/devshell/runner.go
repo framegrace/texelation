@@ -27,6 +27,17 @@ var registry = map[string]Builder{
 	},
 }
 
+var screenFactory = tcell.NewScreen
+
+// SetScreenFactory overrides the screen factory used by Run. Passing nil restores the default.
+func SetScreenFactory(factory func() (tcell.Screen, error)) {
+	if factory == nil {
+		screenFactory = tcell.NewScreen
+		return
+	}
+	screenFactory = factory
+}
+
 // Run executes the provided builder inside a local tcell screen.
 func Run(builder Builder, args []string) error {
 	app, err := builder(args)
@@ -34,7 +45,7 @@ func Run(builder Builder, args []string) error {
 		return err
 	}
 
-	screen, err := tcell.NewScreen()
+	screen, err := screenFactory()
 	if err != nil {
 		return fmt.Errorf("init screen: %w", err)
 	}

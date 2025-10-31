@@ -12,12 +12,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+
 	"texelation/apps/texelterm"
 	"texelation/texel"
+	"texelation/texel/cards"
 )
 
 func TestTexelTermRunRendersOutput(t *testing.T) {
@@ -85,6 +89,91 @@ func TestTexelTermStopTerminatesProcess(t *testing.T) {
 	app.Stop()
 }
 
+func TestTexelTermHandleKeyScrollAndControl(t *testing.T) {
+	script := writeScript(t, "#!/bin/sh\nfor i in $(seq 1 40); do printf 'line %02d\\n' \"$i\"; done\nsleep 5\n")
+
+	app := texelterm.New("texelterm", script)
+	app.Resize(20, 10)
+	refresh := make(chan bool, 32)
+	app.SetRefreshNotifier(refresh)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Run()
+	}()
+	defer app.Stop()
+
+	waitForOutput(t, app, refresh, "line 40", 2*time.Second)
+
+	initial := app.Render()
+	initialTop := rowToString(initial[0])
+	baseline, ok := parseLineNumber(initialTop)
+	if !ok {
+		t.Fatalf("could not parse initial line: %q", initialTop)
+	}
+
+	drainRefresh(refresh)
+	app.HandleKey(tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModAlt))
+	waitForRefresh(t, refresh)
+	scrolled := app.Render()
+	scrolledTop := rowToString(scrolled[0])
+	scrollLine, ok := parseLineNumber(scrolledTop)
+	if !ok || scrollLine >= baseline {
+		t.Fatalf("expected scroll to reveal earlier lines, got %q", scrolledTop)
+	}
+
+	drainRefresh(refresh)
+	app.HandleKey(tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModAlt))
+	waitForRefresh(t, refresh)
+	reset := app.Render()
+	resetTop := rowToString(reset[0])
+	resetLine, ok := parseLineNumber(resetTop)
+	if !ok || resetLine != baseline {
+		t.Fatalf("expected scroll down to restore baseline, got %q", resetTop)
+	}
+
+	pipeline, ok := app.(*cards.Pipeline)
+	if !ok {
+		t.Fatal("app is not a cards pipeline")
+	}
+	var rainbow *cards.RainbowCard
+	for _, card := range pipeline.Cards() {
+		if r, ok := card.(*cards.RainbowCard); ok {
+			rainbow = r
+			break
+		}
+	}
+	if rainbow == nil {
+		t.Fatal("rainbow card not found")
+	}
+	if rainbow.Enabled() {
+		t.Fatal("rainbow card should start disabled")
+	}
+
+	app.HandleKey(tcell.NewEventKey(tcell.KeyCtrlG, 0, tcell.ModCtrl))
+	if !rainbow.Enabled() {
+		t.Fatal("rainbow card did not toggle on")
+	}
+	app.HandleKey(tcell.NewEventKey(tcell.KeyCtrlG, 0, tcell.ModCtrl))
+	if rainbow.Enabled() {
+		t.Fatal("rainbow card did not toggle off")
+	}
+
+	app.Stop()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); !ok {
+				t.Fatalf("unexpected shutdown error: %v", err)
+			} else if exitErr.ExitCode() == 0 {
+				// treat zero exit as success
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not exit after stop")
+	}
+}
+
 func writeScript(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -105,4 +194,69 @@ func rowToString(row []texel.Cell) string {
 		b.WriteRune(cell.Ch)
 	}
 	return strings.TrimRight(b.String(), " ")
+}
+
+func parseLineNumber(line string) (int, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "line ") {
+		return 0, false
+	}
+	num := strings.TrimPrefix(line, "line ")
+	value, err := strconv.Atoi(strings.Fields(num)[0])
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func drainRefresh(ch <-chan bool) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+func waitForRefresh(t *testing.T, ch <-chan bool) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for refresh")
+	}
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition not satisfied before timeout")
+}
+
+func waitForOutput(t *testing.T, app texel.App, refresh <-chan bool, needle string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-refresh:
+		case <-time.After(20 * time.Millisecond):
+		}
+		buf := app.Render()
+		if len(buf) == 0 {
+			continue
+		}
+		for _, row := range buf {
+			if strings.Contains(rowToString(row), needle) {
+				return
+			}
+		}
+	}
+	t.Fatalf("output did not contain %q before timeout", needle)
 }
