@@ -10,23 +10,34 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
+	"os"
 
 	clientrt "texelation/internal/runtime/client"
 )
 
-func main() {
-	socket := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
-	reconnect := flag.Bool("reconnect", false, "Attempt to resume previous session")
-	panicLogPath := flag.String("panic-log", "", "File to append panic stack traces")
-	flag.Parse()
+var runClient = clientrt.Run
 
+func main() {
+	if err := run(os.Args[1:]); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(args []string) error {
+	fs := flag.NewFlagSet("texel-client", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	socket := fs.String("socket", "/tmp/texelation.sock", "Unix socket path")
+	reconnect := fs.Bool("reconnect", false, "Attempt to resume previous session")
+	panicLogPath := fs.String("panic-log", "", "File to append panic stack traces")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	opts := clientrt.Options{
 		Socket:    *socket,
 		Reconnect: *reconnect,
 		PanicLog:  *panicLogPath,
 	}
-	if err := clientrt.Run(opts); err != nil {
-		log.Fatal(err)
-	}
+	return runClient(opts)
 }
