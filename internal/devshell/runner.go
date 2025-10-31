@@ -11,7 +11,10 @@ import (
 	"texelation/texel"
 )
 
-var registry = map[string]func(args []string) (texel.App, error){
+// Builder constructs a texel.App, optionally using CLI args.
+type Builder func(args []string) (texel.App, error)
+
+var registry = map[string]Builder{
 	"texelterm": func(args []string) (texel.App, error) {
 		shell := "/bin/bash"
 		if len(args) > 0 {
@@ -24,15 +27,9 @@ var registry = map[string]func(args []string) (texel.App, error){
 	},
 }
 
-// RunApp locates the named app, runs it inside a local tcell screen, and
-// applies a minimal event loop. It is intended for development only.
-func RunApp(name string, args []string) error {
-	buildApp, ok := registry[name]
-	if !ok {
-		return fmt.Errorf("unknown app %q", name)
-	}
-
-	app, err := buildApp(args)
+// Run executes the provided builder inside a local tcell screen.
+func Run(builder Builder, args []string) error {
+	app, err := builder(args)
 	if err != nil {
 		return err
 	}
@@ -104,4 +101,13 @@ func RunApp(name string, args []string) error {
 			draw()
 		}
 	}
+}
+
+// RunApp finds a registered builder by name and runs it.
+func RunApp(name string, args []string) error {
+	buildApp, ok := registry[name]
+	if !ok {
+		return fmt.Errorf("unknown app %q", name)
+	}
+	return Run(buildApp, args)
 }
