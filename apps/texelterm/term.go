@@ -43,6 +43,7 @@ type TexelTerm struct {
 	buf          [][]texel.Cell
 	colorPalette [258]tcell.Color
 	controlBus   cards.ControlBus
+	lastKeyTime  time.Time
 }
 
 func New(title, command string) texel.App {
@@ -113,8 +114,12 @@ func (a *TexelTerm) AttachControlBus(bus cards.ControlBus) {
 func (a *TexelTerm) onBell() {
 	a.mu.Lock()
 	bus := a.controlBus
+	keyTime := a.lastKeyTime
 	a.mu.Unlock()
 	if bus == nil {
+		return
+	}
+	if !keyTime.IsZero() && time.Since(keyTime) < 75*time.Millisecond {
 		return
 	}
 	if err := bus.Trigger(cards.FlashTriggerID, nil); err != nil {
@@ -265,6 +270,9 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 
 	if keyBytes != nil {
 		a.pty.Write(keyBytes)
+		a.mu.Lock()
+		a.lastKeyTime = time.Now()
+		a.mu.Unlock()
 	}
 }
 
