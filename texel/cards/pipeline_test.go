@@ -139,3 +139,27 @@ func TestPipelineControlBusRegistersCards(t *testing.T) {
 		t.Fatal("expected card control handler to run")
 	}
 }
+
+func TestPipelineControlFuncTriggersBus(t *testing.T) {
+	base := &stubCard{}
+	controlCard := &busCard{}
+	var pipe *Pipeline
+	control := func(ev *tcell.EventKey) bool {
+		if ev.Key() == tcell.KeyF5 {
+			if err := pipe.ControlBus().Trigger("card.trigger", nil); err != nil {
+				t.Fatalf("control bus trigger failed: %v", err)
+			}
+			return true
+		}
+		return false
+	}
+	pipe = NewPipeline(control, base, controlCard)
+	ev := tcell.NewEventKey(tcell.KeyF5, 0, 0)
+	pipe.HandleKey(ev)
+	if !controlCard.triggered {
+		t.Fatal("expected control function to trigger bus")
+	}
+	if len(base.handledKeys) != 0 {
+		t.Fatalf("expected base card not to receive handled key, got %d", len(base.handledKeys))
+	}
+}

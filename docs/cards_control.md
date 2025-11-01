@@ -55,3 +55,29 @@ func (t *TexelTerm) onBell() {
 Because the flash card registers `effects.flash`, the app never needs to reach
 into the card to toggle state directly. Developers can follow the same pattern
 for future overlays or behavioural hooks.
+
+## Example: Custom Function-Key Toggle
+
+You can layer multiple cards and expose custom toggles without touching card
+internals. The example below intercepts `F12`, toggles a diagnostics card via
+the bus, and forwards other keys through the pipeline unchanged:
+
+```go
+flash := cards.NewFlashCard(120*time.Millisecond, tcell.ColorWhite)
+diag := NewDiagnosticsCard() // implements cards.ControllableCard
+var pipe *cards.Pipeline
+pipe = cards.NewPipeline(func(ev *tcell.EventKey) bool {
+    if ev.Key() == tcell.KeyF12 {
+        if err := pipe.ControlBus().Trigger("diagnostics.toggle", nil); err != nil {
+            log.Printf("toggle failed: %v", err)
+        }
+        return true
+    }
+    return false
+}, cards.WrapApp(app), diag, flash)
+```
+
+`diag` registers the `diagnostics.toggle` capability inside `RegisterControls`.
+The control function intercepts the key, triggers the card, and leaves the rest
+of the stack untouched. Apps can compose additional effects the same way while
+keeping the control surface self-documenting via `Capabilities()`.
