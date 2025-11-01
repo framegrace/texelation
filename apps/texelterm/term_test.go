@@ -24,6 +24,21 @@ import (
 	"texelation/texel/cards"
 )
 
+type recordingBus struct {
+	cards.ControlBus
+	triggered chan string
+}
+
+func (b *recordingBus) Trigger(id string, payload interface{}) error {
+	if b.triggered != nil {
+		select {
+		case b.triggered <- id:
+		default:
+		}
+	}
+	return b.ControlBus.Trigger(id, payload)
+}
+
 func TestTexelTermRunRendersOutput(t *testing.T) {
 	script := writeScript(t, "#!/bin/sh\nprintf 'hello texelterm'\n")
 
@@ -89,7 +104,7 @@ func TestTexelTermStopTerminatesProcess(t *testing.T) {
 	app.Stop()
 }
 
-func TestTexelTermHandleKeyScrollAndControl(t *testing.T) {
+func TestTexelTermAltScroll(t *testing.T) {
 	script := writeScript(t, "#!/bin/sh\nfor i in $(seq 1 40); do printf 'line %02d\\n' \"$i\"; done\nsleep 5\n")
 
 	app := texelterm.New("texelterm", script)
@@ -132,33 +147,6 @@ func TestTexelTermHandleKeyScrollAndControl(t *testing.T) {
 		t.Fatalf("expected scroll down to restore baseline, got %q", resetTop)
 	}
 
-	pipeline, ok := app.(*cards.Pipeline)
-	if !ok {
-		t.Fatal("app is not a cards pipeline")
-	}
-	var rainbow *cards.RainbowCard
-	for _, card := range pipeline.Cards() {
-		if r, ok := card.(*cards.RainbowCard); ok {
-			rainbow = r
-			break
-		}
-	}
-	if rainbow == nil {
-		t.Fatal("rainbow card not found")
-	}
-	if rainbow.Enabled() {
-		t.Fatal("rainbow card should start disabled")
-	}
-
-	app.HandleKey(tcell.NewEventKey(tcell.KeyCtrlG, 0, tcell.ModCtrl))
-	if !rainbow.Enabled() {
-		t.Fatal("rainbow card did not toggle on")
-	}
-	app.HandleKey(tcell.NewEventKey(tcell.KeyCtrlG, 0, tcell.ModCtrl))
-	if rainbow.Enabled() {
-		t.Fatal("rainbow card did not toggle off")
-	}
-
 	app.Stop()
 	select {
 	case err := <-errCh:
@@ -171,6 +159,88 @@ func TestTexelTermHandleKeyScrollAndControl(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not exit after stop")
+	}
+}
+
+func TestTexelTermVisualBellTriggersFlash(t *testing.T) {
+	script := writeScript(t, "#!/bin/sh\nprintf 'ready\\n'\nsleep 0.1\nprintf '\a'\nsleep 0.3\n")
+
+	app := texelterm.New("texelterm", script)
+	app.Resize(20, 6)
+	refresh := make(chan bool, 16)
+	app.SetRefreshNotifier(refresh)
+
+	pipeline, ok := app.(*cards.Pipeline)
+	if !ok {
+		t.Fatal("app is not a cards pipeline")
+	}
+
+	caps := pipeline.ControlBus().Capabilities()
+	foundFlash := false
+	for _, cap := range caps {
+		if cap.ID == cards.FlashTriggerID {
+			foundFlash = true
+			break
+		}
+	}
+	if !foundFlash {
+		t.Fatalf("flash capability not advertised: %+v", caps)
+	}
+
+	var flash *cards.FlashCard
+	for _, card := range pipeline.Cards() {
+		if f, ok := card.(*cards.FlashCard); ok {
+			flash = f
+			break
+		}
+	}
+	if flash == nil {
+		t.Fatal("flash card not present")
+	}
+
+	accessor, ok := pipeline.Cards()[0].(cards.AppAccessor)
+	if !ok {
+		t.Fatal("pipeline head is not an app accessor")
+	}
+	term, ok := accessor.UnderlyingApp().(*texelterm.TexelTerm)
+	if !ok {
+		t.Fatal("unexpected app type returned by pipeline")
+	}
+	recorder := &recordingBus{ControlBus: pipeline.ControlBus(), triggered: make(chan string, 4)}
+	term.AttachControlBus(recorder)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Run()
+	}()
+	defer app.Stop()
+
+	// Ensure the session is active before waiting for the bell.
+	waitForOutput(t, app, refresh, "ready", time.Second)
+
+	select {
+	case id := <-recorder.triggered:
+		if id != cards.FlashTriggerID {
+			t.Fatalf("unexpected trigger id %q", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for flash trigger")
+	}
+
+	waitForCondition(t, 200*time.Millisecond, func() bool { return flash.Active() })
+	waitForCondition(t, 400*time.Millisecond, func() bool { return !flash.Active() })
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); !ok {
+				t.Fatalf("unexpected shutdown error: %v", err)
+			} else if exitErr.ExitCode() == 0 {
+				// treat zero exit as success
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not exit after bell script")
 	}
 }
 

@@ -42,6 +42,7 @@ type TexelTerm struct {
 	wg           sync.WaitGroup
 	buf          [][]texel.Cell
 	colorPalette [258]tcell.Color
+	controlBus   cards.ControlBus
 }
 
 func New(title, command string) texel.App {
@@ -54,16 +55,10 @@ func New(title, command string) texel.App {
 		colorPalette: newDefaultPalette(),
 	}
 
-	rainbow := cards.NewRainbowCard(0.5, 0.6)
-	control := func(ev *tcell.EventKey) bool {
-		if ev.Key() == tcell.KeyCtrlG {
-			rainbow.Toggle()
-			return true
-		}
-		return false
-	}
-
-	return cards.NewPipeline(control, cards.WrapApp(term), rainbow)
+	flash := cards.NewFlashCard(100*time.Millisecond, tcell.ColorWhite)
+	pipe := cards.NewPipeline(nil, cards.WrapApp(term), flash)
+	term.AttachControlBus(pipe.ControlBus())
+	return pipe
 }
 
 func (a *TexelTerm) Vterm() *parser.VTerm {
@@ -107,6 +102,24 @@ func (a *TexelTerm) applyParserStyle(pCell parser.Cell) texel.Cell {
 
 func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
+}
+
+func (a *TexelTerm) AttachControlBus(bus cards.ControlBus) {
+	a.mu.Lock()
+	a.controlBus = bus
+	a.mu.Unlock()
+}
+
+func (a *TexelTerm) onBell() {
+	a.mu.Lock()
+	bus := a.controlBus
+	a.mu.Unlock()
+	if bus == nil {
+		return
+	}
+	if err := bus.Trigger(cards.FlashTriggerID, nil); err != nil {
+		log.Printf("TexelTerm: flash trigger error: %v", err)
+	}
 }
 
 func (a *TexelTerm) HandleMessage(msg texel.Message) {}
@@ -331,6 +344,11 @@ func (a *TexelTerm) Run() error {
 					log.Printf("Error reading from PTY: %v", err)
 				}
 				return
+			}
+
+			if r == '' {
+				a.onBell()
+				continue
 			}
 
 			a.mu.Lock()

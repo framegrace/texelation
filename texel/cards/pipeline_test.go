@@ -48,6 +48,24 @@ func (effectCard) HandleKey(*tcell.EventKey)      {}
 func (effectCard) SetRefreshNotifier(chan<- bool) {}
 func (effectCard) HandleMessage(texel.Message)    {}
 
+type busCard struct {
+	triggered bool
+}
+
+func (b *busCard) Run() error                                 { return nil }
+func (b *busCard) Stop()                                      {}
+func (b *busCard) Resize(int, int)                            {}
+func (b *busCard) Render(input [][]texel.Cell) [][]texel.Cell { return input }
+func (b *busCard) HandleKey(*tcell.EventKey)                  {}
+func (b *busCard) SetRefreshNotifier(chan<- bool)             {}
+func (b *busCard) HandleMessage(texel.Message)                {}
+func (b *busCard) RegisterControls(reg ControlRegistry) error {
+	return reg.Register("card.trigger", "Bus test trigger", func(interface{}) error {
+		b.triggered = true
+		return nil
+	})
+}
+
 func TestPipelineRenderOrder(t *testing.T) {
 	base := &stubCard{}
 	eff := effectCard{}
@@ -93,5 +111,31 @@ func TestPipelineResizeAndRefresh(t *testing.T) {
 	p.Resize(80, 24)
 	if len(base.resized) == 0 || base.resized[len(base.resized)-1] != [2]int{80, 24} {
 		t.Fatalf("resize not forwarded: %+v", base.resized)
+	}
+}
+
+func TestPipelineControlBusRegistersCards(t *testing.T) {
+	base := &stubCard{}
+	controlCard := &busCard{}
+	p := NewPipeline(nil, base, controlCard)
+	if p.ControlBus() == nil {
+		t.Fatal("control bus not initialized")
+	}
+	caps := p.ControlBus().Capabilities()
+	found := false
+	for _, cap := range caps {
+		if cap.ID == "card.trigger" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected capability registered, got %+v", caps)
+	}
+	if err := p.ControlBus().Trigger("card.trigger", nil); err != nil {
+		t.Fatalf("triggering card control failed: %v", err)
+	}
+	if !controlCard.triggered {
+		t.Fatal("expected card control handler to run")
 	}
 }

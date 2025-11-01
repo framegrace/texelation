@@ -1,6 +1,7 @@
 package cards
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
@@ -10,6 +11,12 @@ import (
 // ControlFunc allows the pipeline to intercept key events before the cards see them.
 // Returning true marks the event as consumed.
 type ControlFunc func(*tcell.EventKey) bool
+
+// ControllableCard allows cards to expose control capabilities on the pipeline bus.
+type ControllableCard interface {
+	Card
+	RegisterControls(reg ControlRegistry) error
+}
 
 // Pipeline composes multiple cards into a single texel.App implementation.
 // Cards are executed in order; the output buffer of one card becomes the
@@ -21,6 +28,7 @@ type Pipeline struct {
 	height  int
 	refresh chan<- bool
 	control ControlFunc
+	bus     *controlBus
 
 	runOnce  sync.Once
 	stopOnce sync.Once
@@ -34,7 +42,19 @@ var _ texel.App = (*Pipeline)(nil)
 // NewPipeline constructs a pipeline with the provided cards. The resulting
 // Pipeline implements texel.App and can be launched like any other app.
 func NewPipeline(control ControlFunc, cards ...Card) *Pipeline {
-	return &Pipeline{cards: append([]Card(nil), cards...), control: control}
+	p := &Pipeline{
+		cards:   append([]Card(nil), cards...),
+		control: control,
+		bus:     newControlBus(),
+	}
+	for _, card := range p.cards {
+		if controllable, ok := card.(ControllableCard); ok {
+			if err := controllable.RegisterControls(p.bus); err != nil {
+				panic(fmt.Sprintf("cards: register controls: %v", err))
+			}
+		}
+	}
+	return p
 }
 
 // Cards returns a snapshot of the current card list.
@@ -177,4 +197,9 @@ func (p *Pipeline) SetRefreshNotifier(ch chan<- bool) {
 	for _, card := range cards {
 		card.SetRefreshNotifier(ch)
 	}
+}
+
+// ControlBus exposes the control bus associated with this pipeline.
+func (p *Pipeline) ControlBus() ControlBus {
+	return p.bus
 }

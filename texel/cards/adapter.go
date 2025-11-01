@@ -11,6 +11,11 @@ func WrapApp(app texel.App) Card {
 	return &appAdapter{app: app}
 }
 
+// AppAccessor is implemented by cards that wrap a texel.App directly.
+type AppAccessor interface {
+	UnderlyingApp() texel.App
+}
+
 type messageAware interface {
 	HandleMessage(texel.Message)
 }
@@ -29,4 +34,8 @@ func (a *appAdapter) HandleMessage(msg texel.Message) {
 	if handler, ok := a.app.(messageAware); ok {
 		handler.HandleMessage(msg)
 	}
+}
+
+func (a *appAdapter) UnderlyingApp() texel.App {
+	return a.app
 }
