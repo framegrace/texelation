@@ -55,7 +55,7 @@ func New(title, command string) texel.App {
 		colorPalette: newDefaultPalette(),
 	}
 
-	subtle := tcell.NewRGBColor(160, 160, 160)
+	subtle := tcell.NewRGBColor(191, 191, 191)
 	flash := cards.NewFlashCard(100*time.Millisecond, subtle)
 	pipe := cards.NewPipeline(nil, cards.WrapApp(term), flash)
 	term.AttachControlBus(pipe.ControlBus())

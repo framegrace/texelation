@@ -93,14 +93,6 @@ func (c *FlashCard) requestRefresh() {
 	}
 }
 
-const (
-	fadeForegroundMix      = 0.45
-	backgroundBlendMix     = 0.4
-	defaultBackgroundBlend = 0.3
-)
-
-var baseBackgroundColor = tcell.ColorBlack
-
 func (c *FlashCard) Render(input [][]texel.Cell) [][]texel.Cell {
 	if input == nil {
 		return nil
@@ -119,32 +111,21 @@ func (c *FlashCard) Render(input [][]texel.Cell) [][]texel.Cell {
 		source := input[y]
 		for x := range row {
 			cell := &row[x]
-			fg, bg, attrs := source[x].Style.Decompose()
-			style := tcell.StyleDefault.Attributes(attrs)
-
-			finalFg := fg
-			finalBg := bg
-
+			fg, bg, attrs := cell.Style.Decompose()
+			style := tcell.StyleDefault.Foreground(fg).Attributes(attrs)
 			if shouldFadeForeground(source, x) {
-				finalFg = blendColors(fg, overlayColor, fadeForegroundMix)
-				if !bg.Valid() {
-					finalBg = blendColors(baseBackgroundColor, overlayColor, defaultBackgroundBlend)
+				faded := blendColors(fg, overlayColor, 0.5)
+				style = style.Foreground(faded)
+				if bg.Valid() {
+					style = style.Background(bg)
 				}
 			} else {
 				if bg.Valid() {
-					finalBg = blendColors(bg, overlayColor, backgroundBlendMix)
+					style = style.Background(overlayColor)
 				} else {
-					finalBg = blendColors(baseBackgroundColor, overlayColor, defaultBackgroundBlend)
+					style = style.Background(overlayColor)
 				}
 			}
-
-			if finalFg.Valid() {
-				style = style.Foreground(finalFg)
-			}
-			if finalBg.Valid() {
-				style = style.Background(finalBg)
-			}
-
 			cell.Style = style
 		}
 	}
@@ -173,16 +154,10 @@ func shouldFadeForeground(row []texel.Cell, idx int) bool {
 
 func blendColors(base, overlay tcell.Color, mix float32) tcell.Color {
 	if !overlay.Valid() || mix <= 0 {
-		if base.Valid() {
-			return base
-		}
-		return overlay
-	}
-	if mix >= 1 {
-		return overlay
+		return base
 	}
 	if !base.Valid() {
-		base = baseBackgroundColor
+		return overlay
 	}
 	br, bg, bb := base.RGB()
 	or, og, ob := overlay.RGB()

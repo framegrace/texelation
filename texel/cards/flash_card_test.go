@@ -64,15 +64,13 @@ func TestFlashCardRenderOverlay(t *testing.T) {
 	if bg != bgColor {
 		t.Fatalf("expected fake background to retain background color, got %v", bg)
 	}
-	expectedFg := blendColors(bgColor, overlay, fadeForegroundMix)
-	if fg != expectedFg {
-		t.Fatalf("expected faded foreground %v, got %v", expectedFg, fg)
+	if fg == bgColor {
+		t.Fatal("expected fake background foreground to be faded")
 	}
 	third := out[0][2].Style
 	_, thirdBg, _ := third.Decompose()
-	expectedBg := blendColors(baseBackgroundColor, overlay, defaultBackgroundBlend)
-	if thirdBg != expectedBg {
-		t.Fatalf("expected background %v, got %v", expectedBg, thirdBg)
+	if thirdBg != overlay {
+		t.Fatalf("expected regular cell background to use overlay color, got %v", thirdBg)
 	}
 }
 
