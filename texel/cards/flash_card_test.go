@@ -29,13 +29,20 @@ func TestFlashCardTriggerLifecycle(t *testing.T) {
 }
 
 func TestFlashCardRenderOverlay(t *testing.T) {
-	flash := NewFlashCard(100*time.Millisecond, tcell.ColorBlue)
+	overlay := tcell.ColorBlue
+	flash := NewFlashCard(100*time.Millisecond, overlay)
 	bus := newControlBus()
 	if err := flash.RegisterControls(bus); err != nil {
 		t.Fatalf("register controls: %v", err)
 	}
 
-	input := [][]texel.Cell{{{Ch: 'A', Style: tcell.StyleDefault}}}
+	bgColor := tcell.NewRGBColor(40, 40, 40)
+	fakeStyle := tcell.StyleDefault.Foreground(bgColor).Background(bgColor)
+	input := [][]texel.Cell{{
+		{Ch: ' ', Style: fakeStyle},
+		{Ch: ' ', Style: fakeStyle},
+		{Ch: 'X', Style: tcell.StyleDefault},
+	}}
 	outInactive := flash.Render(input)
 	if &outInactive[0][0] != &input[0][0] {
 		// When inactive the buffer should be returned as-is (no clone performed).
@@ -51,6 +58,19 @@ func TestFlashCardRenderOverlay(t *testing.T) {
 	}
 	if &out[0][0] == &input[0][0] {
 		t.Fatal("expected clone of buffer while flash is active")
+	}
+	first := out[0][0].Style
+	fg, bg, _ := first.Decompose()
+	if bg != bgColor {
+		t.Fatalf("expected fake background to retain background color, got %v", bg)
+	}
+	if fg == bgColor {
+		t.Fatal("expected fake background foreground to be faded")
+	}
+	third := out[0][2].Style
+	_, thirdBg, _ := third.Decompose()
+	if thirdBg != overlay {
+		t.Fatalf("expected regular cell background to use overlay color, got %v", thirdBg)
 	}
 }
 

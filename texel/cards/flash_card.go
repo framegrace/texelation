@@ -108,12 +108,61 @@ func (c *FlashCard) Render(input [][]texel.Cell) [][]texel.Cell {
 	out := cloneBuffer(input)
 	for y := range out {
 		row := out[y]
+		source := input[y]
 		for x := range row {
 			cell := &row[x]
-			fg, _, attrs := cell.Style.Decompose()
-			style := tcell.StyleDefault.Foreground(fg).Attributes(attrs).Background(overlayColor)
+			fg, bg, attrs := cell.Style.Decompose()
+			style := tcell.StyleDefault.Foreground(fg).Attributes(attrs)
+			if shouldFadeForeground(source, x) {
+				faded := blendColors(fg, overlayColor, 0.5)
+				style = style.Foreground(faded)
+				if bg.Valid() {
+					style = style.Background(bg)
+				}
+			} else {
+				if bg.Valid() {
+					style = style.Background(overlayColor)
+				} else {
+					style = style.Background(overlayColor)
+				}
+			}
 			cell.Style = style
 		}
 	}
 	return out
+}
+
+func shouldFadeForeground(row []texel.Cell, idx int) bool {
+	fg, bg, _ := row[idx].Style.Decompose()
+	if !fg.Valid() || !bg.Valid() || fg != bg {
+		return false
+	}
+	if idx > 0 {
+		lf, lb, _ := row[idx-1].Style.Decompose()
+		if lf == fg && lb == bg {
+			return true
+		}
+	}
+	if idx+1 < len(row) {
+		rf, rb, _ := row[idx+1].Style.Decompose()
+		if rf == fg && rb == bg {
+			return true
+		}
+	}
+	return false
+}
+
+func blendColors(base, overlay tcell.Color, mix float32) tcell.Color {
+	if !overlay.Valid() || mix <= 0 {
+		return base
+	}
+	if !base.Valid() {
+		return overlay
+	}
+	br, bg, bb := base.RGB()
+	or, og, ob := overlay.RGB()
+	blend := func(bc, oc int32) int32 {
+		return int32(float32(bc)*(1-mix) + float32(oc)*mix)
+	}
+	return tcell.NewRGBColor(blend(br, or), blend(bg, og), blend(bb, ob))
 }
