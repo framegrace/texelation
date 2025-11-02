@@ -10,8 +10,11 @@ contributors so they can go from idea to shipping app quickly.
 ## 1. The `texel.App` Interface
 
 Texel apps are self-contained binaries that can run inside the Texelation
-desktop **or** be launched standalone via `go run ./cmd/app-runner -app <name>`.
-Design your app so it operates correctly even outside the desktop; compatibility
+desktop **or** as standalone executables. The primary way to launch them on
+their own is via the dedicated CLI in `cmd/<app>` (for example,
+`go run ./cmd/texelterm`). The helper `cmd/app-runner` exists for internal
+testing but should not be considered the main entry point. Design your app so it
+operates correctly even outside the desktop; compatibility
 with the card pipeline is treated as an additional perk rather than a hard
 requirement.
 
@@ -199,6 +202,7 @@ prototype Android-inspired layout features.
 | Control bus helpers               | `texel/cards/control_bus.go`           |
 | Effect card adapter               | `texel/cards/effect_card.go`           |
 | TexelTerm example pipeline        | `apps/texelterm/term.go`               |
+| Standalone app entrypoints        | `cmd/<app>/main.go` (e.g. `cmd/texelterm`) |
 | BEL regression test               | `apps/texelterm/term_test.go`          |
 | Future improvements tracker       | `docs/FUTURE_ROADMAP.md`               |
 
