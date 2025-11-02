@@ -161,9 +161,34 @@ func TestDesktopInjectMouseEvent(t *testing.T) {
 		t.Fatalf("desktop init failed: %v", err)
 	}
 
-	desktop.InjectMouseEvent(12, 34, tcell.Button1, tcell.ModMask(2))
+	ws := desktop.activeWorkspace
+	if ws == nil || ws.tree == nil || ws.tree.Root == nil {
+		t.Fatalf("expected active workspace with root pane")
+	}
 
-	if desktop.lastMouseX != 12 || desktop.lastMouseY != 34 {
+	ws.PerformSplit(Vertical)
+
+	root := ws.tree.Root
+	if len(root.Children) != 2 {
+		t.Fatalf("expected vertical split to produce two children, got %d", len(root.Children))
+	}
+
+	left := root.Children[0]
+	right := root.Children[1]
+	if left == nil || left.Pane == nil || right == nil || right.Pane == nil {
+		t.Fatalf("expected both panes to be present")
+	}
+
+	if ws.tree.ActiveLeaf != right {
+		t.Fatalf("expected new pane on the right to be active after split")
+	}
+
+	clickX := left.Pane.absX0 + left.Pane.Width()/2
+	clickY := left.Pane.absY0 + left.Pane.Height()/2
+
+	desktop.InjectMouseEvent(clickX, clickY, tcell.Button1, tcell.ModMask(2))
+
+	if desktop.lastMouseX != clickX || desktop.lastMouseY != clickY {
 		t.Fatalf("unexpected mouse position %d,%d", desktop.lastMouseX, desktop.lastMouseY)
 	}
 	if desktop.lastMouseButtons != tcell.Button1 {
@@ -171,6 +196,9 @@ func TestDesktopInjectMouseEvent(t *testing.T) {
 	}
 	if desktop.lastMouseModifier != tcell.ModMask(2) {
 		t.Fatalf("unexpected modifiers %v", desktop.lastMouseModifier)
+	}
+	if ws.tree.ActiveLeaf != left {
+		t.Fatalf("expected click to activate left pane")
 	}
 }
 

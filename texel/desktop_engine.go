@@ -324,8 +324,12 @@ func (d *DesktopEngine) viewportSize() (int, int) {
 }
 
 func (d *DesktopEngine) handleEvent(ev tcell.Event) {
-	if _, ok := ev.(*tcell.EventResize); ok {
+	switch tev := ev.(type) {
+	case *tcell.EventResize:
 		d.recalculateLayout()
+		return
+	case *tcell.EventMouse:
+		d.handleMouseEvent(tev)
 		return
 	}
 
@@ -355,10 +359,7 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 
 // InjectMouseEvent records the latest mouse event metadata from remote clients.
 func (d *DesktopEngine) InjectMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
-	d.lastMouseX = x
-	d.lastMouseY = y
-	d.lastMouseButtons = buttons
-	d.lastMouseModifier = modifiers
+	d.processMouseEvent(x, y, buttons, modifiers)
 }
 
 // HandleClipboardSet stores clipboard contents using the provided MIME type.
@@ -421,6 +422,54 @@ func (d *DesktopEngine) LastMouseModifiers() tcell.ModMask {
 func (d *DesktopEngine) InjectKeyEvent(key tcell.Key, ch rune, modifiers tcell.ModMask) {
 	event := tcell.NewEventKey(key, ch, modifiers)
 	d.handleEvent(event)
+}
+
+func (d *DesktopEngine) handleMouseEvent(ev *tcell.EventMouse) {
+	if ev == nil {
+		return
+	}
+	x, y := ev.Position()
+	d.processMouseEvent(x, y, ev.Buttons(), ev.Modifiers())
+}
+
+func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	prevButtons := d.lastMouseButtons
+
+	d.lastMouseX = x
+	d.lastMouseY = y
+	d.lastMouseButtons = buttons
+	d.lastMouseModifier = modifiers
+
+	buttonPressed := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0
+	if !buttonPressed {
+		return
+	}
+	d.activatePaneAt(x, y)
+}
+
+func (d *DesktopEngine) activatePaneAt(x, y int) {
+	if d.inControlMode {
+		return
+	}
+
+	ws := d.activeWorkspace
+	if d.zoomedPane != nil {
+		if ws == nil {
+			return
+		}
+		if d.zoomedPane.Pane != nil && d.zoomedPane.Pane.contains(x, y) {
+			ws.activateLeaf(d.zoomedPane)
+		}
+		return
+	}
+
+	if ws == nil {
+		return
+	}
+
+	if node := ws.nodeAt(x, y); node != nil {
+		ws.activateLeaf(node)
+	}
 }
 
 func (d *DesktopEngine) toggleControlMode() {
@@ -953,4 +1002,3 @@ func initDefaultColors() (tcell.Color, tcell.Color, error) {
 	}
 	return fg, bg, nil
 }
-

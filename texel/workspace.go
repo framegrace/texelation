@@ -252,6 +252,39 @@ func (w *Workspace) handlePaste(data []byte) {
 	}
 }
 
+func (w *Workspace) nodeAt(x, y int) *Node {
+	if w == nil || w.tree == nil {
+		return nil
+	}
+	return w.tree.FindLeafAt(x, y)
+}
+
+func (w *Workspace) activateLeaf(node *Node) bool {
+	if w == nil || node == nil || node.Pane == nil || w.tree == nil {
+		return false
+	}
+	if w.tree.ActiveLeaf == node {
+		if !node.Pane.IsActive {
+			node.Pane.SetActive(true)
+		}
+		return false
+	}
+
+	if current := w.tree.ActiveLeaf; current != nil && current.Pane != nil {
+		current.Pane.SetActive(false)
+	}
+
+	w.tree.ActiveLeaf = node
+	node.Pane.SetActive(true)
+
+	w.Broadcast(Event{Type: EventPaneActiveChanged, Payload: node})
+	w.notifyFocus()
+	if w.desktop != nil {
+		w.desktop.broadcastStateUpdate()
+	}
+	return true
+}
+
 func (w *Workspace) CloseActivePane() {
 	if w.tree.ActiveLeaf == nil {
 		return

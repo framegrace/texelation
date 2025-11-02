@@ -115,6 +115,7 @@ func Run(opts Options) error {
 		return fmt.Errorf("init screen failed: %w", err)
 	}
 	screen.EnablePaste()
+	screen.EnableMouse()
 	screen.HideCursor()
 	defer screen.Fini()
 	defer close(pingStop)

@@ -446,3 +446,26 @@ func (t *Tree) debugPrintTree(node *Node, depth int) {
 		}
 	}
 }
+
+// FindLeafAt returns the leaf node whose pane contains the provided coordinates.
+func (t *Tree) FindLeafAt(x, y int) *Node {
+	return findLeafAt(t.Root, x, y)
+}
+
+func findLeafAt(node *Node, x, y int) *Node {
+	if node == nil {
+		return nil
+	}
+	if node.Pane != nil {
+		if node.Pane.contains(x, y) {
+			return node
+		}
+		return nil
+	}
+	for _, child := range node.Children {
+		if hit := findLeafAt(child, x, y); hit != nil {
+			return hit
+		}
+	}
+	return nil
+}
