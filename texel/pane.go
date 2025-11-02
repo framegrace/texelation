@@ -358,3 +358,17 @@ func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 		p.app.Resize(drawableW, drawableH)
 	}
 }
+
+// contains reports whether the absolute pane bounds include the provided coordinates.
+func (p *pane) contains(x, y int) bool {
+	if p == nil {
+		return false
+	}
+	if x < p.absX0 || x >= p.absX1 {
+		return false
+	}
+	if y < p.absY0 || y >= p.absY1 {
+		return false
+	}
+	return true
+}

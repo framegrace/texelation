@@ -54,6 +54,7 @@ func Run(builder Builder, args []string) error {
 	}
 	defer screen.Fini()
 	screen.Clear()
+	screen.EnableMouse()
 
 	width, height := screen.Size()
 	app.Resize(width, height)
