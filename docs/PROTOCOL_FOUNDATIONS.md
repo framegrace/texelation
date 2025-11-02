@@ -102,4 +102,4 @@ snapshot.
 4. **Metrics channel** – wire up `MsgMetricUpdate` for live telemetry
    (diff backlog, encode latency) without scraping logs.
 
-Track these items in `FUTURE_IMPROVEMENTS.md` once scoped.
+Track these items in `docs/FUTURE_ROADMAP.md` once scoped.

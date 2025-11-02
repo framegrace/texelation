@@ -171,21 +171,21 @@ Desktop mutation → DesktopPublisher → Session.enqueue(seq, delta)
 
 ## 5. Future Improvements & Open Items
 
-These are sourced from `FUTURE_IMPROVEMENTS.md` and recent design discussions:
+A consolidated backlog lives in `docs/FUTURE_ROADMAP.md`. Items from that list
+that directly impact the architecture above include:
 
 1. **Control mode handler extraction** – move the control-mode state machine out
    of `DesktopEngine` for clarity and easier testing.
-2. **Client runtime modularisation** – fully finish the `internal/runtime/client`
-   break-up (some packages still share helpers that can be simplified).
-4. **Snapshot store enhancements** – add rotation, metrics, and hazard logging so
-   operations can monitor reconnect behaviour.
-5. **Effect layering** – support ordered stacks (e.g. fadeTint + flash) via the
-   effect manager without manual card composition.
-6. **Diagnostics hooks** – mirror stress harness metrics into the server in a
-   lightweight `/debug` channel.
+2. **Client runtime modularisation** – complete the refactor of
+   `internal/runtime/client` into focused packages.
+3. **Snapshot store enhancements** – add rotation, metrics, and hazard logging
+   so operations can monitor reconnect behaviour.
+4. **Effect layering** – support ordered overlays (e.g. fadeTint + flash) via
+   the effect manager without bespoke card composition.
+5. **Diagnostics hooks** – surface diff backlog/latency metrics via a lightweight
+   `/debug` endpoint.
 
-Each improvement should be implemented in isolation and accompanied by updates
-to this document to keep it authoritative.
+Update this section whenever architecture-affecting work lands.
 
 ---
 

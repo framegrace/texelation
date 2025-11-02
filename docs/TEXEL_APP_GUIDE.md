@@ -185,7 +185,7 @@ These are active items or areas we want to explore:
 * **TUI bridge** – investigate lightweight widget helpers so cards can host
   richer controls without dragging in heavyweight frameworks.
 
-Update this section whenever new ideas land in `FUTURE_IMPROVEMENTS.md` or as we
+Update this section whenever new ideas land in `docs/FUTURE_ROADMAP.md` or as we
 prototype Android-inspired layout features.
 
 ---
@@ -200,7 +200,7 @@ prototype Android-inspired layout features.
 | Effect card adapter               | `texel/cards/effect_card.go`           |
 | TexelTerm example pipeline        | `apps/texelterm/term.go`               |
 | BEL regression test               | `apps/texelterm/term_test.go`          |
-| Future improvements tracker       | `FUTURE_IMPROVEMENTS.md`               |
+| Future improvements tracker       | `docs/FUTURE_ROADMAP.md`               |
 
 Keep this document up to date whenever we add new capabilities or refine the
 card layout system.
