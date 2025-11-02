@@ -17,13 +17,15 @@ import (
 )
 
 type fadeTintEffect struct {
-	color    tcell.Color
+	color     tcell.Color
 	intensity float32
-	duration time.Duration
-	timeline *Timeline
+	duration  time.Duration
+	timeline  *Timeline
+	defaultFg tcell.Color
+	defaultBg tcell.Color
 }
 
-func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Duration) Effect {
+func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Duration, defaultFg, defaultBg tcell.Color) Effect {
 	if intensity < 0 {
 		intensity = 0
 	} else if intensity > 1 {
@@ -33,10 +35,12 @@ func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Durat
 		duration = 0
 	}
 	return &fadeTintEffect{
-		color:    color,
+		color:     color,
 		intensity: intensity,
-		duration: duration,
-		timeline: NewTimeline(0.0), // Default to 0 (no tint)
+		duration:  duration,
+		timeline:  NewTimeline(0.0), // Default to 0 (no tint)
+		defaultFg: defaultFg,
+		defaultBg: defaultBg,
 	}
 }
 
@@ -87,7 +91,15 @@ func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cel
 		row := buffer[y]
 		for x := range row {
 			cell := &row[x]
-			cell.Style = tintStyle(cell.Style, e.color, intensity)
+			fgFallback := e.defaultFg
+			if fgFallback == tcell.ColorDefault {
+				fgFallback = tcell.ColorWhite
+			}
+			bgFallback := e.defaultBg
+			if bgFallback == tcell.ColorDefault {
+				bgFallback = tcell.ColorBlack
+			}
+			cell.Style = tintStyle(cell.Style, e.color, intensity, false, fgFallback, bgFallback)
 		}
 	}
 }
@@ -99,6 +111,8 @@ func init() {
 		color := parseColorOrDefault(cfg, "color", defaultInactiveColor)
 		intensity := float32(parseFloatOrDefault(cfg, "intensity", 0.35))
 		duration := parseDurationOrDefault(cfg, "duration_ms", 400)
-		return newFadeTintEffect(color, intensity, duration), nil
+		defaultFg := parseColorOrDefault(cfg, "default_fg", tcell.ColorWhite)
+		defaultBg := parseColorOrDefault(cfg, "default_bg", tcell.ColorBlack)
+		return newFadeTintEffect(color, intensity, duration, defaultFg, defaultBg), nil
 	})
 }

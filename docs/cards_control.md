@@ -19,16 +19,18 @@ one control bus.
 Cards that want to publish controls implement `cards.ControllableCard`:
 
 ```go
-func (f *FlashCard) RegisterControls(reg cards.ControlRegistry) error {
-    return reg.Register(cards.FlashTriggerID, "Activate the flash overlay", func(_ interface{}) error {
-        f.Trigger()
+func (c *DiagnosticsCard) RegisterControls(reg cards.ControlRegistry) error {
+    return reg.Register("diagnostics.toggle", "Toggle diagnostics overlay", func(_ interface{}) error {
+        c.Toggle()
         return nil
     })
 }
 ```
 
 `RegisterControls` is called automatically when the pipeline is constructed. The
-registry will reject duplicate identifiers.
+registry will reject duplicate identifiers. Built-in visual effects created via
+`cards.NewEffectCard` already register an `effects.<id>` trigger (for example
+`cards.FlashTriggerID`).
 
 Apps can also register their own controls on the bus, for example to expose
 custom toggles while still delegating to shared effects:
@@ -52,7 +54,7 @@ func (t *TexelTerm) onBell() {
 }
 ```
 
-Because the flash card registers `effects.flash`, the app never needs to reach
+Because the flash effect registers `effects.flash`, the app never needs to reach
 into the card to toggle state directly. Developers can follow the same pattern
 for future overlays or behavioural hooks.
 
@@ -63,7 +65,10 @@ internals. The example below intercepts `F12`, toggles a diagnostics card via
 the bus, and forwards other keys through the pipeline unchanged:
 
 ```go
-flash := cards.NewFlashCard(120*time.Millisecond, tcell.ColorWhite)
+flash, _ := cards.NewEffectCard("flash", effects.EffectConfig{
+    "duration_ms": 120,
+    "color":       "#FFFFFF",
+})
 diag := NewDiagnosticsCard() // implements cards.ControllableCard
 var pipe *cards.Pipeline
 pipe = cards.NewPipeline(func(ev *tcell.EventKey) bool {

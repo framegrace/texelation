@@ -17,10 +17,12 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
+
 	"texelation/apps/texelterm/parser"
+	"texelation/internal/effects"
 	"texelation/texel"
 	"texelation/texel/cards"
-	"time"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2"
@@ -56,7 +58,21 @@ func New(title, command string) texel.App {
 	}
 
 	subtle := tcell.NewRGBColor(160, 160, 160)
-	flash := cards.NewFlashCard(100*time.Millisecond, subtle)
+	flashConfig := effects.EffectConfig{
+		"color":         colorToHex(subtle),
+		"duration_ms":   100,
+		"max_intensity": 0.75,
+		"trigger_type":  "workspace.control",
+		"default_fg":    colorToHex(term.colorPalette[256]),
+		"default_bg":    colorToHex(term.colorPalette[257]),
+	}
+	flash, err := cards.NewEffectCard("flash", flashConfig)
+	if err != nil {
+		log.Printf("texelterm: flash effect unavailable: %v", err)
+		pipe := cards.NewPipeline(nil, cards.WrapApp(term))
+		term.AttachControlBus(pipe.ControlBus())
+		return pipe
+	}
 	pipe := cards.NewPipeline(nil, cards.WrapApp(term), flash)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
@@ -121,6 +137,15 @@ func (a *TexelTerm) onBell() {
 	if err := bus.Trigger(cards.FlashTriggerID, nil); err != nil {
 		log.Printf("TexelTerm: flash trigger error: %v", err)
 	}
+}
+
+func colorToHex(c tcell.Color) string {
+	trueColor := c.TrueColor()
+	if !trueColor.Valid() {
+		return "#000000"
+	}
+	r, g, b := trueColor.RGB()
+	return fmt.Sprintf("#%02X%02X%02X", r&0xFF, g&0xFF, b&0xFF)
 }
 
 func (a *TexelTerm) HandleMessage(msg texel.Message) {}

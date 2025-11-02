@@ -187,15 +187,15 @@ func TestTexelTermVisualBellTriggersFlash(t *testing.T) {
 		t.Fatalf("flash capability not advertised: %+v", caps)
 	}
 
-	var flash *cards.FlashCard
+	var flashCard *cards.EffectCard
 	for _, card := range pipeline.Cards() {
-		if f, ok := card.(*cards.FlashCard); ok {
-			flash = f
+		if f, ok := card.(*cards.EffectCard); ok && f.Effect().ID() == "flash" {
+			flashCard = f
 			break
 		}
 	}
-	if flash == nil {
-		t.Fatal("flash card not present")
+	if flashCard == nil {
+		t.Fatal("flash effect card not present")
 	}
 
 	accessor, ok := pipeline.Cards()[0].(cards.AppAccessor)
@@ -227,8 +227,15 @@ func TestTexelTermVisualBellTriggersFlash(t *testing.T) {
 		t.Fatal("timed out waiting for flash trigger")
 	}
 
-	waitForCondition(t, 200*time.Millisecond, func() bool { return flash.Active() })
-	waitForCondition(t, 400*time.Millisecond, func() bool { return !flash.Active() })
+	waitForCondition(t, time.Second, func() bool {
+		return flashCard.Effect().Active()
+	})
+
+	dummy := [][]texel.Cell{{{Ch: ' '}}}
+	waitForCondition(t, time.Second, func() bool {
+		flashCard.Render(dummy)
+		return !flashCard.Effect().Active()
+	})
 
 	select {
 	case err := <-errCh:

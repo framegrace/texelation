@@ -9,6 +9,7 @@ package clientruntime
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -107,7 +108,18 @@ func (s *uiState) applyEffectConfig() {
 
 	manager := effects.NewManager()
 	for _, binding := range bindings {
-		eff, err := effects.CreateEffect(binding.Effect, binding.Config)
+		cfg := make(effects.EffectConfig, len(binding.Config)+2)
+		for k, v := range binding.Config {
+			cfg[k] = v
+		}
+		if s.defaultFg != tcell.ColorDefault {
+			cfg["default_fg"] = colorToHex(s.defaultFg)
+		}
+		if s.defaultBg != tcell.ColorDefault {
+			cfg["default_bg"] = colorToHex(s.defaultBg)
+		}
+
+		eff, err := effects.CreateEffect(binding.Effect, cfg)
 		if err != nil {
 			log.Printf("effect %s creation failed: %v", binding.Effect, err)
 			continue
@@ -201,4 +213,12 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 			Timestamp: time.Now(),
 		})
 	}
+}
+
+func colorToHex(c tcell.Color) string {
+	if c == tcell.ColorDefault {
+		return ""
+	}
+	r, g, b := c.RGB()
+	return fmt.Sprintf("#%02X%02X%02X", r&0xFF, g&0xFF, b&0xFF)
 }

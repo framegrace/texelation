@@ -36,19 +36,23 @@ func parseHexColor(value string) (tcell.Color, bool) {
 	return tcell.ColorDefault, false
 }
 
-func tintStyle(style tcell.Style, overlay tcell.Color, intensity float32) tcell.Style {
+func tintStyle(style tcell.Style, overlay tcell.Color, intensity float32, reverse bool, defaultFg, defaultBg tcell.Color) tcell.Style {
 	if intensity <= 0 {
 		return style
 	}
 	fg, bg, attrs := style.Decompose()
-	if !fg.Valid() {
-		fg = tcell.ColorWhite
+	if reverse {
+		fg, bg = bg, fg
 	}
-	if !bg.Valid() {
-		bg = tcell.ColorBlack
+	trueOverlay := convertToTrueRGB(overlay, overlay)
+	trueFg := convertToTrueRGB(fg, defaultFg)
+	trueBg := convertToTrueRGB(bg, defaultBg)
+
+	blendedFg := blendColor(trueFg, trueOverlay, intensity)
+	blendedBg := blendColor(trueBg, trueOverlay, intensity)
+	if reverse {
+		blendedFg, blendedBg = blendedBg, blendedFg
 	}
-	blendedFg := blendColor(fg, overlay, intensity)
-	blendedBg := blendColor(bg, overlay, intensity)
 	return tcell.StyleDefault.Foreground(blendedFg).
 		Background(blendedBg).
 		Bold(attrs&tcell.AttrBold != 0).
@@ -96,4 +100,24 @@ func hsvToRGB(angle float32, saturation float32, value float32) tcell.Color {
 	}
 	r, g, b = (r+m)*255, (g+m)*255, (b+m)*255
 	return tcell.NewRGBColor(int32(r), int32(g), int32(b))
+}
+
+func convertToTrueRGB(color tcell.Color, fallback tcell.Color) tcell.Color {
+	if color == tcell.ColorDefault {
+		color = fallback
+	}
+	trueColor := color.TrueColor()
+	if trueColor.Valid() {
+		return trueColor
+	}
+
+	if fallback == tcell.ColorDefault {
+		return color
+	}
+
+	fallbackTrue := fallback.TrueColor()
+	if fallbackTrue.Valid() {
+		return fallbackTrue
+	}
+	return fallback
 }
