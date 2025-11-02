@@ -80,21 +80,28 @@ type DesktopEngine struct {
 	resizeSelection *selectedBorder
 	zoomedPane      *Node
 
-	lastMouseX         int
-	lastMouseY         int
-	lastMouseButtons   tcell.ButtonMask
-	lastMouseModifier  tcell.ModMask
-	clipboard          map[string][]byte
-	lastClipboardMime  string
-	focusMu            sync.RWMutex
-	focusListeners     []DesktopFocusListener
-	paneStateMu        sync.RWMutex
-	paneStateListeners []PaneStateListener
-	snapshotFactories  map[string]SnapshotFactory
-	viewportMu         sync.RWMutex
-	viewportWidth      int
-	viewportHeight     int
-	hasViewport        bool
+	lastMouseX           int
+	lastMouseY           int
+	lastMouseButtons     tcell.ButtonMask
+	lastMouseModifier    tcell.ModMask
+	clipboard            map[string][]byte
+	lastClipboardMime    string
+	selectionMu          sync.Mutex
+	selectionActive      bool
+	selectionPane        *pane
+	selectionHandler     SelectionHandler
+	pendingClipboardMime string
+	pendingClipboardData []byte
+	hasPendingClipboard  bool
+	focusMu              sync.RWMutex
+	focusListeners       []DesktopFocusListener
+	paneStateMu          sync.RWMutex
+	paneStateListeners   []PaneStateListener
+	snapshotFactories    map[string]SnapshotFactory
+	viewportMu           sync.RWMutex
+	viewportWidth        int
+	viewportHeight       int
+	hasViewport          bool
 
 	stateMu      sync.Mutex
 	hasLastState bool
@@ -106,10 +113,11 @@ type DesktopEngine struct {
 
 // PaneStateSnapshot captures dynamic pane flags for external consumers.
 type PaneStateSnapshot struct {
-	ID       [16]byte
-	Active   bool
-	Resizing bool
-	ZOrder   int
+	ID               [16]byte
+	Active           bool
+	Resizing         bool
+	ZOrder           int
+	HandlesSelection bool
 }
 
 // NewDesktopEngine creates and initializes a new desktop engine.
@@ -440,11 +448,26 @@ func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, mo
 	d.lastMouseButtons = buttons
 	d.lastMouseModifier = modifiers
 
+	d.handleAppSelection(x, y, buttons, modifiers, prevButtons)
+
 	buttonPressed := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0
 	if !buttonPressed {
 		return
 	}
 	d.activatePaneAt(x, y)
+}
+
+func (d *DesktopEngine) paneAtCoordinates(x, y int) *pane {
+	if d.zoomedPane != nil && d.zoomedPane.Pane != nil && d.zoomedPane.Pane.contains(x, y) {
+		return d.zoomedPane.Pane
+	}
+	if d.activeWorkspace == nil {
+		return nil
+	}
+	if node := d.activeWorkspace.nodeAt(x, y); node != nil {
+		return node.Pane
+	}
+	return nil
 }
 
 func (d *DesktopEngine) activatePaneAt(x, y int) {
@@ -470,6 +493,82 @@ func (d *DesktopEngine) activatePaneAt(x, y int) {
 	if node := ws.nodeAt(x, y); node != nil {
 		ws.activateLeaf(node)
 	}
+}
+
+func (d *DesktopEngine) handleAppSelection(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask, prevButtons tcell.ButtonMask) {
+	d.selectionMu.Lock()
+	defer d.selectionMu.Unlock()
+
+	start := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0
+	release := buttons&tcell.Button1 == 0 && prevButtons&tcell.Button1 != 0
+	dragging := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 != 0
+
+	if start {
+		if d.selectionActive && d.selectionHandler != nil {
+			d.selectionHandler.SelectionCancel()
+		}
+		d.selectionActive = false
+		d.selectionHandler = nil
+		d.selectionPane = nil
+
+		pane := d.paneAtCoordinates(x, y)
+		if pane != nil && pane.handlesSelectionEvents() {
+			localX, localY := pane.selectionLocalCoords(x, y)
+			if pane.selectionHandler.SelectionStart(localX, localY, buttons, modifiers) {
+				d.selectionActive = true
+				d.selectionHandler = pane.selectionHandler
+				d.selectionPane = pane
+			}
+		}
+		return
+	}
+
+	if !d.selectionActive || d.selectionHandler == nil || d.selectionPane == nil {
+		return
+	}
+
+	pane := d.selectionPane
+	if dragging {
+		localX, localY := pane.selectionLocalCoords(x, y)
+		d.selectionHandler.SelectionUpdate(localX, localY, buttons, modifiers)
+		return
+	}
+
+	if release {
+		localX, localY := pane.selectionLocalCoords(x, y)
+		mime, data, ok := d.selectionHandler.SelectionFinish(localX, localY, buttons, modifiers)
+		d.selectionActive = false
+		d.selectionHandler = nil
+		d.selectionPane = nil
+		if ok && len(data) > 0 {
+			d.HandleClipboardSet(mime, data)
+			d.pendingClipboardMime = mime
+			d.pendingClipboardData = append([]byte(nil), data...)
+			d.hasPendingClipboard = true
+		}
+		return
+	}
+
+	if buttons&tcell.Button1 == 0 {
+		d.selectionHandler.SelectionCancel()
+		d.selectionActive = false
+		d.selectionHandler = nil
+		d.selectionPane = nil
+	}
+}
+
+func (d *DesktopEngine) PopPendingClipboard() (string, []byte, bool) {
+	d.selectionMu.Lock()
+	defer d.selectionMu.Unlock()
+	if !d.hasPendingClipboard {
+		return "", nil, false
+	}
+	mime := d.pendingClipboardMime
+	data := append([]byte(nil), d.pendingClipboardData...)
+	d.pendingClipboardMime = ""
+	d.pendingClipboardData = nil
+	d.hasPendingClipboard = false
+	return mime, data, true
 }
 
 func (d *DesktopEngine) toggleControlMode() {
@@ -622,7 +721,6 @@ func (d *DesktopEngine) broadcastStateUpdate() {
 	//	}
 }
 
-
 func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 	d.refreshMu.Lock()
 	d.refreshHandler = handler
@@ -768,12 +866,12 @@ func (d *DesktopEngine) notifyFocusNode(node *Node) {
 	d.notifyFocus(node.Pane.ID())
 }
 
-func (d *DesktopEngine) notifyPaneState(id [16]byte, active, resizing bool, z int) {
+func (d *DesktopEngine) notifyPaneState(id [16]byte, active, resizing bool, z int, handlesSelection bool) {
 	d.paneStateMu.RLock()
 	listeners := append([]PaneStateListener(nil), d.paneStateListeners...)
 	d.paneStateMu.RUnlock()
 	for _, l := range listeners {
-		l.PaneStateChanged(id, active, resizing, z)
+		l.PaneStateChanged(id, active, resizing, z, handlesSelection)
 	}
 }
 
@@ -805,7 +903,13 @@ func (d *DesktopEngine) forEachPane(fn func(*pane)) {
 func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 	states := make([]PaneStateSnapshot, 0)
 	d.forEachPane(func(p *pane) {
-		states = append(states, PaneStateSnapshot{ID: p.ID(), Active: p.IsActive, Resizing: p.IsResizing, ZOrder: p.ZOrder})
+		states = append(states, PaneStateSnapshot{
+			ID:               p.ID(),
+			Active:           p.IsActive,
+			Resizing:         p.IsResizing,
+			ZOrder:           p.ZOrder,
+			HandlesSelection: p.handlesSelectionEvents(),
+		})
 	})
 	return states
 }

@@ -95,11 +95,21 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 			})
 		}
 	case *tcell.EventMouse:
+		selectionChanged := state.handleSelectionMouse(ev)
 		x, y := ev.Position()
 		mouse := protocol.MouseEvent{X: int16(x), Y: int16(y), ButtonMask: uint32(ev.Buttons()), Modifiers: uint16(ev.Modifiers())}
 		payload, _ := protocol.EncodeMouseEvent(mouse)
 		if err := writeMessage(writeMu, conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgMouseEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
 			log.Printf("send mouse failed: %v", err)
+		}
+		if selectionChanged {
+			render(state, screen)
+		}
+		if state.selection.consumePendingCopy() {
+			if data, mime, ok := state.selectionClipboardData(); ok {
+				screen.SetClipboard(data)
+				sendClipboardSet(writeMu, conn, sessionID, mime, data)
+			}
 		}
 	case *tcell.EventResize:
 		cols, rows := screen.Size()

@@ -86,8 +86,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			log.Printf("decode clipboard failed: %v", err)
 			return false
 		}
-		state.clipboard = protocol.ClipboardData{MimeType: clip.MimeType, Data: clip.Data}
-		state.hasClipboard = true
+		state.setClipboard(protocol.ClipboardData{MimeType: clip.MimeType, Data: clip.Data})
 		return true
 	case protocol.MsgClipboardData:
 		clip, err := protocol.DecodeClipboardData(payload)
@@ -95,8 +94,7 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 			log.Printf("decode clipboard data failed: %v", err)
 			return false
 		}
-		state.clipboard = clip
-		state.hasClipboard = true
+		state.setClipboard(clip)
 		return true
 	case protocol.MsgThemeUpdate:
 		themeUpdate, err := protocol.DecodeThemeUpdate(payload)
@@ -137,7 +135,8 @@ func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, pa
 		}
 		active := paneFlags.Flags&protocol.PaneStateActive != 0
 		resizing := paneFlags.Flags&protocol.PaneStateResizing != 0
-		state.cache.SetPaneFlags(paneFlags.PaneID, active, resizing, paneFlags.ZOrder)
+		handlesSelection := paneFlags.Flags&protocol.PaneStateSelectionDelegated != 0
+		state.cache.SetPaneFlags(paneFlags.PaneID, active, resizing, paneFlags.ZOrder, handlesSelection)
 		if state.effects != nil {
 			ts := time.Now()
 			state.effects.HandleTrigger(effects.EffectTrigger{Type: effects.TriggerPaneActive, PaneID: paneFlags.PaneID, Active: active, Timestamp: ts})

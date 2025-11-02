@@ -412,6 +412,27 @@ func (v *VTerm) getTopHistoryLine() int {
 	return top
 }
 
+// VisibleTop returns the history index of the first visible line.
+func (v *VTerm) VisibleTop() int {
+	return v.getTopHistoryLine()
+}
+
+// HistoryLength exposes the number of lines tracked in history.
+func (v *VTerm) HistoryLength() int {
+	return v.historyLen
+}
+
+// HistoryLineCopy returns a copy of the specified history line, or nil if out of range.
+func (v *VTerm) HistoryLineCopy(index int) []Cell {
+	line := v.getHistoryLine(index)
+	if line == nil {
+		return nil
+	}
+	out := make([]Cell, len(line))
+	copy(out, line)
+	return out
+}
+
 // --- Dirty Line Tracking for Optimized Rendering ---
 
 func (v *VTerm) MarkDirty(line int) {

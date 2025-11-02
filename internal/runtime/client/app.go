@@ -65,6 +65,8 @@ func Run(opts Options) error {
 		defaultFg:    tcell.ColorDefault,
 		defaultBg:    tcell.ColorDefault,
 		desktopBg:    tcell.ColorDefault,
+		selectionFg:  tcell.ColorBlack,
+		selectionBg:  tcell.NewRGBColor(232, 217, 255),
 	}
 
 	cfg := theme.Get()
@@ -116,6 +118,7 @@ func Run(opts Options) error {
 	}
 	screen.EnablePaste()
 	screen.EnableMouse()
+	defer screen.DisableMouse()
 	screen.HideCursor()
 	defer screen.Fini()
 	defer close(pingStop)
@@ -165,6 +168,9 @@ func Run(opts Options) error {
 		case <-doneCh:
 			fmt.Println("Connection closed")
 			return nil
+		}
+		if clip, ok := state.consumeClipboardSync(); ok && len(clip.Data) > 0 {
+			screen.SetClipboard(clip.Data)
 		}
 	}
 }

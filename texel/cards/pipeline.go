@@ -38,6 +38,8 @@ type Pipeline struct {
 }
 
 var _ texel.App = (*Pipeline)(nil)
+var _ texel.SelectionHandler = (*Pipeline)(nil)
+var _ texel.SelectionDeclarer = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
 // Pipeline implements texel.App and can be launched like any other app.
@@ -197,6 +199,62 @@ func (p *Pipeline) SetRefreshNotifier(ch chan<- bool) {
 	for _, card := range cards {
 		card.SetRefreshNotifier(ch)
 	}
+}
+
+// selectionHandler finds the first card capable of handling selections.
+func (p *Pipeline) selectionHandler() texel.SelectionHandler {
+	cards := p.Cards()
+	for _, card := range cards {
+		if decl, ok := card.(texel.SelectionDeclarer); ok && !decl.SelectionEnabled() {
+			continue
+		}
+		if handler, ok := card.(texel.SelectionHandler); ok {
+			return handler
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if decl, ok := underlying.(texel.SelectionDeclarer); ok && !decl.SelectionEnabled() {
+				continue
+			}
+			if handler, ok := underlying.(texel.SelectionHandler); ok {
+				return handler
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Pipeline) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
+	if handler := p.selectionHandler(); handler != nil {
+		return handler.SelectionStart(x, y, buttons, modifiers)
+	}
+	return false
+}
+
+func (p *Pipeline) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	if handler := p.selectionHandler(); handler != nil {
+		handler.SelectionUpdate(x, y, buttons, modifiers)
+	}
+}
+
+func (p *Pipeline) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
+	if handler := p.selectionHandler(); handler != nil {
+		return handler.SelectionFinish(x, y, buttons, modifiers)
+	}
+	return "", nil, false
+}
+
+func (p *Pipeline) SelectionCancel() {
+	if handler := p.selectionHandler(); handler != nil {
+		handler.SelectionCancel()
+	}
+}
+
+func (p *Pipeline) SelectionEnabled() bool {
+	return p.selectionHandler() != nil
 }
 
 // ControlBus exposes the control bus associated with this pipeline.

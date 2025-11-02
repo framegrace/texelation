@@ -67,6 +67,13 @@ func ApplyDefaults(cfg Config) {
 		changed = true
 	}
 
+	if applySectionDefaults(cfg, "selection", Section{
+		"highlight_bg": "#e8d9ff",
+		"highlight_fg": "#000000",
+	}) {
+		changed = true
+	}
+
 	if !changed {
 		return
 	}
