@@ -150,6 +150,8 @@ Additional helpers:
 - `make fmt` – format all Go sources.
 - `make lint` – run `go vet` on the module.
 - `make tidy` – update dependencies.
+- `make build-apps` – compile the standalone TexelApps (e.g., texelterm, welcome) into `bin/` for distribution or embedding.
+
 - `go run ./client/cmd/texel-headless` – drive the headless renderer to replicate UI interactions without opening a terminal (perfect for automated UI checks).
 - `make clean` – remove build artifacts (`bin`, `dist`, `.cache`).
 
