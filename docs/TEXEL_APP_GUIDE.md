@@ -9,6 +9,12 @@ contributors so they can go from idea to shipping app quickly.
 
 ## 1. The `texel.App` Interface
 
+Texel apps are self-contained binaries that can run inside the Texelation
+desktop **or** be launched standalone via `go run ./cmd/app-runner -app <name>`.
+Design your app so it operates correctly even outside the desktop; compatibility
+with the card pipeline is treated as an additional perk rather than a hard
+requirement.
+
 Every app must implement `texel.App` (see `texel/app.go`):
 
 ```go
@@ -176,8 +182,8 @@ These are active items or areas we want to explore:
   so end users can customise the stack without recompiling.
 * **Reusable diagnostics card** – shared overlay that surfaces latency, diff
   backlog, and theme mismatches.
-* **TView/TUI bridge** – the resurrected `TVIEW_INTEGRATION.md` outlines how we
-  plan to embed richer widgets inside apps once the card system stabilises.
+* **TUI bridge** – investigate lightweight widget helpers so cards can host
+  richer controls without dragging in heavyweight frameworks.
 
 Update this section whenever new ideas land in `FUTURE_IMPROVEMENTS.md` or as we
 prototype Android-inspired layout features.

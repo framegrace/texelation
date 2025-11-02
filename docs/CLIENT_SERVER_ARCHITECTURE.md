@@ -177,8 +177,6 @@ These are sourced from `FUTURE_IMPROVEMENTS.md` and recent design discussions:
    of `DesktopEngine` for clarity and easier testing.
 2. **Client runtime modularisation** – fully finish the `internal/runtime/client`
    break-up (some packages still share helpers that can be simplified).
-3. **Protocol-neutral cell/style types** – not required today, but if a web
-   client becomes a priority we will need an abstraction over `tcell.Style`.
 4. **Snapshot store enhancements** – add rotation, metrics, and hazard logging so
    operations can monitor reconnect behaviour.
 5. **Effect layering** – support ordered stacks (e.g. fadeTint + flash) via the

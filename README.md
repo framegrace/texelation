@@ -77,7 +77,6 @@ for composing effect cards inside app pipelines.
 - [Effect development guide](docs/EFFECTS_GUIDE.md)
 - [Texel app & card pipeline guide](docs/TEXEL_APP_GUIDE.md)
 - [Card control bus reference](docs/cards_control.md)
-- [TView integration notes](TVIEW_INTEGRATION.md)
 
 These documents replace the old phase planning notes and are kept current as
 features evolve.

@@ -1,34 +1,49 @@
 # Smoke & Integration Test Strategy
 
-## Goals
-- Provide fast confidence checks for desktop behaviour as the client/server split begins.
-- Replace legacy `cmd/*` harnesses that previously exercised pane creation, tree persistence, and protocol flows.
+This plan reflects the smoke coverage we rely on today, plus near-term
+enhancements we want to add.
 
-## Proposed Suites
-1. **Headless Desktop Smoke**
-   - Entry: `go test ./texel/...` with the `_test.go` harness that instantiates the desktop using the new `ScreenDriver` stub.
-   - Assertions: desktop initialisation, lifecycle wiring, and status pane attachment.
+## Current Suites
 
-2. **Desktop Headless Lifecycle**
-   - Tests in `texel/desktop_integration_test.go` cover workspace switching, pane splitting, status-pane sizing, and injected key events using the stubbed screen driver.
-   - Ensures core desktop invariants (active workspace, tree structure, area calculations) remain stable when refactoring.
+1. **Desktop headless smoke**
+   - Command: `go test ./texel/...`
+   - Uses the fake `ScreenDriver` to exercise workspace switching, pane splits,
+     and status-pane layout. Run on every commit.
 
-3. **Server Harness (CLI)**
-   - `cmd/texel-server` spins up the Unix-socket server with a simulation screen and deterministic apps.
-   - Run locally: `go run ./cmd/texel-server --socket /tmp/texelation.sock [--snapshot ./snap.json]` then connect with the protocol smoke client once implemented.
+2. **Server runtime smoke**
+   - Command: `go test ./internal/runtime/server`
+   - Covers connection handshake, diff sequencing, snapshot persistence, and
+     in-memory resume (`testutil/memconn`). Includes the offline retention
+     integration test when run with `-tags=integration`.
 
-4. **Session Persistence Check**
-   - Unit tests for forthcoming persistence package once pane tree serialization exists; `go test ./server/persistence` will validate round-trips.
-   - Include regression cases for empty tree, deep splits, and app-specific metadata.
+3. **Client runtime smoke**
+   - Command: `go test ./internal/runtime/client`
+   - Ensures protocol handler, buffercache application, and effect bindings stay
+     consistent during refactors.
 
-5. **Protocol Loopback (Future Phase)**
-   - Integration test that spins up server + client in-process over Unix sockets; asserts reconnection behaviour and diff replay.
+4. **End-to-end stress harness**
+   - Command: `go run ./cmd/texel-stress`
+   - Simulates connect/run/resume cycles, large paste events, and effect
+     overlays over real sockets. Used before releases and protocol changes.
 
-## Tooling Hooks
-- Extend `Makefile` with `smoke` target that sequentially runs the above suites (when implemented).
-- Add GitHub Actions workflow once suites stabilize to ensure branches gate on smoke coverage.
+5. **Headless renderer sanity**
+   - Command: `go run ./client/cmd/texel-headless`
+   - Validates basic rendering without opening a `tcell` screen; handy for CI
+     smoke jobs.
 
-## Action Items
-- Implement mock tcell screen to unlock headless testing (Phase 1 deliverable).
-- Draft initial buffer smoke CLI mirroring the old `cmd/full-test` behaviour but deterministic.
-- Decide golden snapshot format (JSON vs. binary) before storing fixtures under version control.
+## Near-Term Additions
+
+| Item | Description |
+|------|-------------|
+| Protocol loopback | In-process server+client test asserting resume and diff replay behaviour using Unix sockets. |
+| Snapshot regression | Golden snapshot JSON fixtures exercised by `snapshot_store_test.go` to detect schema drift. |
+| Effect pipeline smoke | Deterministic pipeline test ensuring commonly composed effect cards (flash + fadeTint) render in the expected order. |
+| Metrics watchdog | Lightweight CLI that asserts `cmd/texel-stress` reports diff backlog below configured threshold. |
+
+## Automation
+
+* Add a `make smoke` target that runs the desktop, client, and server packages.
+* Once the loopback test lands, add a GitHub Actions workflow to execute the
+  smoke target on pull requests.
+
+Keep this document updated whenever new suites land or existing ones change.

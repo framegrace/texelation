@@ -1,63 +1,105 @@
-# Protocol Foundations (Phase 2)
+# Protocol Foundations
+
+This document captures the **implemented** wire format used by the Texelation
+client/server runtime. It supersedes the old phase planning notes and should be
+kept up to date alongside `protocol/messages.go`.
 
 ## Transport & Framing
-- **Transport**: Unix domain sockets (`/tmp/texelation.sock`) for initial implementation; abstractions should allow swapping the dial/listen layer later (TCP/WebSocket).
-- **Frame structure** (little endian):
-  - `magic` (4 bytes) = `0x54584c01` (`TXL\x01`) guards against mismatched peers.
-  - `version` (1 byte) = protocol schema version (start at `0`).
-  - `msg_type` (1 byte) enumerating payload semantics.
-  - `flags` (1 byte) bitmask (compression, ack required, etc.).
-  - `reserved` (1 byte) for alignment/future expansion.
-  - `session_id` (16 bytes UUID).
-  - `sequence` (8 bytes) monotonically increasing per session.
-  - `payload_len` (4 bytes) length of payload.
-  - `checksum` (4 bytes) CRC32 of header (sans magic) + payload; `0` disables.
 
-All fields precede the payload blob. Zero-copy decode by slicing into the incoming byte buffer where possible.
+* **Transport** – Unix domain sockets (`/tmp/texelation.sock`) by default.
+  Dial/listen helpers make it easy to swap to TCP/WebSockets in future.
+* **Header layout** (little endian):
 
-## Message Taxonomy
-- **Control**: `HELLO`, `WELCOME`, `PING`, `PONG`, `GOODBYE`.
-- **Session lifecycle**: `CONNECT_REQUEST`, `CONNECT_ACCEPT`, `RESUME_REQUEST`, `RESUME_DATA`, `DISCONNECT_NOTICE`.
-- **Display tree**: `TREE_SNAPSHOT`, `TREE_DELTA` (structural changes including node IDs, split ratios).
-- **Buffer updates**: `BUFFER_DELTA` streaming per-pane diffs; `BUFFER_ACK` to trim server history.
-- **Input/events**: `KEY_EVENT`, `MOUSE_EVENT`, `CLIPBOARD_SET`, `CLIPBOARD_GET`, `THEME_UPDATE`.
-- **Diagnostics**: `ERROR` (with codes), `METRIC_UPDATE` for optional telemetry.
+| Field        | Size | Notes |
+|--------------|------|-------|
+| `magic`      | 4    | Constant `0x54584c01` (`TXL\x01`). Guards against peers speaking another protocol. |
+| `version`    | 1    | Schema version. Current runtime negotiates `0`. |
+| `msg_type`   | 1    | Enumerated payload type (`MsgHello`, `MsgBufferDelta`, ...). |
+| `flags`      | 1    | Bitmask reserved for compression/priority (0 today). |
+| `reserved`   | 1    | Alignment / future use. |
+| `session_id` | 16   | UUID identifying the desktop session. |
+| `sequence`   | 8    | Monotonically increasing per session. Drives resume/ack logic. |
+| `payload_len`| 4    | Length of payload in bytes. |
+| `checksum`   | 4    | CRC32 (IEEE) of header (sans magic) + payload. A zero checksum disables the check. |
 
-Message types stay below 128 to reserve top bit for experimental/extension frames.
+The header precedes the payload. `protocol.ReadMessage` and `WriteMessage`
+reuse buffers internally to minimise allocations.
+
+## Message Families
+
+| Category             | Messages (Go enums)                                        | Notes |
+|----------------------|------------------------------------------------------------|-------|
+| Handshake            | `MsgHello`, `MsgWelcome`, `MsgPing`, `MsgPong`             | Wiring happens in `client/simple_client.go` and `server/connection.go`. |
+| Session lifecycle    | `MsgConnectRequest`, `MsgConnectAccept`, `MsgResumeRequest`, `MsgDisconnectNotice` | Resume includes last acked sequence. |
+| Snapshot & layout    | `MsgTreeSnapshot`, `MsgTreeDelta` (currently unused)       | Snapshot contains full pane tree + buffers. |
+| Buffer streaming     | `MsgBufferDelta`, `MsgBufferAck`                           | Per-pane diff plus ack for pruning history. |
+| State broadcasts     | `MsgStateUpdate`, `MsgPaneState`                           | Control mode, workspace, zoom, active/resizing flags. |
+| Input & clipboard    | `MsgKeyEvent`, `MsgMouseEvent`, `MsgResize`, `MsgClipboard{Get,Set,Data}` | Two-way traffic; clipboard data can be binary-safe. |
+| Theme & effects      | `MsgThemeUpdate`, `MsgThemeAck`                            | Keeps client palette/effect config aligned. |
+| Diagnostics (future) | `MsgError`, `MsgMetricUpdate` (reserved)                   | Not emitted yet; placeholders in the enum. |
+
+Message IDs stay below 128 to reserve the high bit for experimental extensions.
 
 ## Buffer Delta Encoding
-- Pane buffer stored row-major. Deltas transmit:
-  - `pane_id` (16 bytes UUID)
-  - `revision` (uint32) incremented server-side.
-  - `first_row` (uint16) + run count.
-  - For each row run: `row_index` + `cell_span_count` + spans.
-  - Each span: `start_col` (uint16), `end_col` (uint16), `attrs` (see below), UTF-8 for rune data.
-- Styles compressed via palette table per message: header includes `style_count`, followed by encoded `tcell.Style` triplets (flags, fg RGB, bg RGB). Spans reference palette index (uint8/uint16 depending on size) + rune(s).
-- Allow optional run-length encoding for repeated spaces with identical style (flagged via `flags`).
 
-## tcell.Style Serialization
-- Compose bitfield:
-  - `attr_flags` (uint8): bold, underline, reverse, blink, dim, italic.
-  - `fg_model` (uint8) + `fg_value` (either RGB24 or color ID).
-  - `bg_model` (uint8) + `bg_value`.
-- Align on 4-byte boundary; keep encoding simple enough for server/client to convert without instantiating tcell objects until necessary.
+`MsgBufferDelta` is the main payload streamed to clients:
 
-## Sequencing & Reliability
-- Server maintains per-pane revision history and per-session sequence numbers.
-- Client acknowledges highest contiguous sequence via `BUFFER_ACK` to let server prune history.
-- On reconnect, client sends `RESUME_REQUEST` with last acknowledged sequence + snapshot hash to receive either `RESUME_DATA` (diff) or `TREE_SNAPSHOT` (full reset).
+* `pane_id` (`[16]byte`) – matches the UUID in the tree snapshot.
+* `revision` (`uint32`) – incremented server-side for idempotency.
+* `rows` – encoded as a list of row mutations:
+  - `row_index` (`uint16`).
+  - `span_count` (`uint16`).
+  - For each span: `start_col`, `length`, `runes` (UTF-8), `style_index`.
+* `style_palette` – table of `tcell.Style` entries (see below) referenced by
+  spans via index to avoid repeating colour data.
 
-## Implementation Notes
-- Introduce `protocol` Go package with:
-  - `MessageType` enum, header struct, and `ReadMessage`/`WriteMessage` streaming helpers.
-  - `Encoder`/`Decoder` that reuse buffers (sync.Pool) to minimise allocations.
-  - Unit tests for header validation, CRC failures, short reads, etc.
-- Provide fixture-driven tests for buffer deltas once serialization format implemented.
-- Benchmark `EncodeBufferDelta` with representative pane content (80x24). Target <150µs encode on dev machine.
+### Style Serialization
 
-## Open Questions
-- Compression toggle per frame or negotiated upfront?
-- Should we allow multiplexing multiple panes per frame for batching?
-- Strategy for clipboard-files or binary attachments (maybe dedicated `BLOB` message with streaming chunks).
+Styles are encoded compactly:
 
-These decisions can evolve, but the initial implementation should cover control, lifecycle, and buffer deltas with clear extension hooks.
+| Field        | Size | Description |
+|--------------|------|-------------|
+| `attr_flags` | 1    | Bold, underline, reverse, blink, dim, italic. |
+| `fg_model`   | 1    | `0` = default, `1` = ANSI, `2` = RGB. |
+| `fg_value`   | 4    | Packed RGB or palette index. |
+| `bg_model`   | 1    | Same scheme as foreground. |
+| `bg_value`   | 4    | Packed RGB or palette index. |
+
+The decoder converts these into `tcell.Style` when applying deltas. Palette
+entries default to true RGB colours when effects blend with theme defaults.
+
+## Sequencing & Resume
+
+* Every frame increments the session `sequence`.
+* Clients send `MsgBufferAck(ackSeq)` after applying a delta; servers drop all
+  buffered diffs ≤ `ackSeq`.
+* On reconnect the client sends `MsgResumeRequest` with the last acknowledged
+  sequence. The server responds with:
+  1. `MsgConnectAccept` (same as initial handshake).
+  2. `MsgTreeSnapshot` (always sent to re-establish tree state).
+  3. All buffered `MsgBufferDelta` frames with `sequence > ackSeq`.
+
+If no diffs remain the client simply receives an empty stream after the
+snapshot.
+
+## Implementation Notes & Tests
+
+* `protocol/messages_test.go` covers header framing, CRC validation, and short
+  reads. Add regression cases there when extending the wire format.
+* For buffer encoding/decoding, use the fixtures in `internal/runtime/server/testutil`
+  and `client/buffercache_test.go`.
+* `cmd/texel-stress` contains helpers that simulate reconnect storms and large
+  clipboard transfers. Use it before changing sequencing semantics.
+
+## Future Protocol Enhancements
+
+1. **Compression flag** – evaluate a per-frame compression bit for massive
+   buffers (useful for large background images or traces).
+2. **Batched deltas** – allow multiple panes in a single `MsgBufferDelta` to
+   reduce framing overhead during split-screen refresh bursts.
+3. **Binary clipboard** – extend clipboard messages with chunked streaming to
+   support file payloads.
+4. **Metrics channel** – wire up `MsgMetricUpdate` for live telemetry
+   (diff backlog, encode latency) without scraping logs.
+
+Track these items in `FUTURE_IMPROVEMENTS.md` once scoped.
