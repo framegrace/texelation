@@ -193,7 +193,9 @@ And it only took me the weekends of 4 or 6 months to this half useful state.
 ## Colaborations
 
 At first thought it would be fun to only allow AI produced PR's, to keep the code "PURE" :) 
+
 But that would be a nightmare to check and really, this being started by AI, at the end would be just a curiosity.
+
 So everyone that finds this usable and wants to collaborate is open to do it, no matter the color or the matter of your skin.
 
 ## Contributing
