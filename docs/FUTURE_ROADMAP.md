@@ -101,6 +101,17 @@ Refer to `docs/SMOKE_TEST_PLAN.md` for the canonical smoke suite and near-term
 
 ## 4. Minor Cleanups
 
+### 3.4 Client Runtime Hardening
+- Implement a single-writer goroutine (message pump) to eliminate `writeMu` contention and deadlock risk during large payloads.
+- Refactor long function signatures in the client runtime into struct-based configs for readability/testing.
+- Parameterise timeouts/buffer sizes via package constants and expose them for tuning.
+- Ensure resize debounce goroutines respect context cancellation to avoid leaks during shutdown.
+- Add integration coverage for large paste scenarios to verify write queue behaviour under load.
+
+---
+
+## 4. Minor Cleanups
+
 - Remove legacy `blit` helpers from `texel/workspace.go` once confirmed unused.
 - Finish the `internal/runtime/client` module split (some helpers still share
   the old monolithic structure).
