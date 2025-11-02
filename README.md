@@ -12,6 +12,7 @@ tmux on jet fuel: simple to run, easy to extend, and heavily themeable.
 | 🎨 Themeable effects | Customise overlays and colour schemes via JSON bindings shared between the desktop and card pipelines. Sample effects ship today; the pipeline is ready for richer animations tomorrow. |
 | ⚡ Responsive & lean | Optimised buffer deltas, debounced resizes, snapshot persistence, and a lean protocol keep the UI snappy. |
 | 🧪 Developer-friendly | First-class testing harnesses (`texel-headless`, memconn fixtures), clean package structure, and docs tuned for contributors. |
+| 🖥️ TexelTerm | Full terminal emulator rendered to a tcell buffer. Easily embeddable today and slated to gain multi-backend (including web) support. |
 
 ## TexelApps & Future TexelTui
 
