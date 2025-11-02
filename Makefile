@@ -6,9 +6,17 @@ GO_ENV := CCACHE_DISABLE=1 GOCACHE=$(CACHE_DIR) CGO_ENABLED=0
 CLIENT_PKG := ./client/cmd/texel-client
 SERVER_PKG := ./cmd/texel-server
 
-.PHONY: build install run test lint fmt tidy clean help server client release
+APPS := texelterm welcome
+
+.PHONY: build install run test lint fmt tidy clean help server client release build-apps
+
 
 build: ## Build texel-server and texel-client binaries into bin/
+
+build-apps: ## Build standalone app binaries into bin/
+	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
+	$(GO_ENV) go build -o $(BIN_DIR)/texelterm ./cmd/texelterm
+	$(GO_ENV) go build -o $(BIN_DIR)/welcome ./cmd/welcome
 	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
