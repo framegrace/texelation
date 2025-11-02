@@ -37,6 +37,8 @@ type pane struct {
 	id                         [16]byte
 	selectionHandler           SelectionHandler
 	handlesSelection           bool
+	wheelHandler               MouseWheelHandler
+	handlesWheel               bool
 
 	// Public state fields
 	IsActive   bool
@@ -85,6 +87,22 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	} else {
 		p.selectionHandler = nil
 		p.handlesSelection = false
+	}
+	if handler, ok := app.(MouseWheelHandler); ok {
+		enabled := true
+		if declarer, ok := app.(MouseWheelDeclarer); ok {
+			enabled = declarer.MouseWheelEnabled()
+		}
+		if enabled {
+			p.wheelHandler = handler
+			p.handlesWheel = true
+		} else {
+			p.wheelHandler = nil
+			p.handlesWheel = false
+		}
+	} else {
+		p.wheelHandler = nil
+		p.handlesWheel = false
 	}
 	// The app is resized considering the space for borders.
 	p.app.Resize(p.drawableWidth(), p.drawableHeight())
@@ -398,7 +416,7 @@ func (p *pane) handlesSelectionEvents() bool {
 	return p != nil && p.handlesSelection && p.selectionHandler != nil
 }
 
-func (p *pane) selectionLocalCoords(x, y int) (int, int) {
+func (p *pane) contentLocalCoords(x, y int) (int, int) {
 	innerX := x - (p.absX0 + 1)
 	innerY := y - (p.absY0 + 1)
 	innerWidth := p.drawableWidth()
@@ -422,4 +440,16 @@ func (p *pane) selectionLocalCoords(x, y int) (int, int) {
 		}
 	}
 	return innerX, innerY
+}
+
+func (p *pane) handlesWheelEvents() bool {
+	return p != nil && p.handlesWheel && p.wheelHandler != nil
+}
+
+func (p *pane) handleMouseWheel(x, y, dx, dy int, modifiers tcell.ModMask) {
+	if !p.handlesWheelEvents() {
+		return
+	}
+	localX, localY := p.contentLocalCoords(x, y)
+	p.wheelHandler.HandleMouseWheel(localX, localY, dx, dy, modifiers)
 }

@@ -448,6 +448,12 @@ func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, mo
 	d.lastMouseButtons = buttons
 	d.lastMouseModifier = modifiers
 
+	wheelDX, wheelDY := wheelDeltaFromMask(buttons)
+	if wheelDX != 0 || wheelDY != 0 {
+		d.dispatchMouseWheel(x, y, wheelDX, wheelDY, modifiers)
+		return
+	}
+
 	d.handleAppSelection(x, y, buttons, modifiers, prevButtons)
 
 	buttonPressed := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0
@@ -468,6 +474,31 @@ func (d *DesktopEngine) paneAtCoordinates(x, y int) *pane {
 		return node.Pane
 	}
 	return nil
+}
+
+func (d *DesktopEngine) dispatchMouseWheel(x, y, dx, dy int, modifiers tcell.ModMask) {
+	pane := d.paneAtCoordinates(x, y)
+	if pane == nil || !pane.handlesWheelEvents() {
+		return
+	}
+	pane.handleMouseWheel(x, y, dx, dy, modifiers)
+}
+
+func wheelDeltaFromMask(mask tcell.ButtonMask) (int, int) {
+	dx, dy := 0, 0
+	if mask&tcell.WheelUp != 0 {
+		dy--
+	}
+	if mask&tcell.WheelDown != 0 {
+		dy++
+	}
+	if mask&tcell.WheelLeft != 0 {
+		dx--
+	}
+	if mask&tcell.WheelRight != 0 {
+		dx++
+	}
+	return dx, dy
 }
 
 func (d *DesktopEngine) activatePaneAt(x, y int) {
@@ -513,7 +544,7 @@ func (d *DesktopEngine) handleAppSelection(x, y int, buttons tcell.ButtonMask, m
 
 		pane := d.paneAtCoordinates(x, y)
 		if pane != nil && pane.handlesSelectionEvents() {
-			localX, localY := pane.selectionLocalCoords(x, y)
+			localX, localY := pane.contentLocalCoords(x, y)
 			if pane.selectionHandler.SelectionStart(localX, localY, buttons, modifiers) {
 				d.selectionActive = true
 				d.selectionHandler = pane.selectionHandler
@@ -529,13 +560,13 @@ func (d *DesktopEngine) handleAppSelection(x, y int, buttons tcell.ButtonMask, m
 
 	pane := d.selectionPane
 	if dragging {
-		localX, localY := pane.selectionLocalCoords(x, y)
+		localX, localY := pane.contentLocalCoords(x, y)
 		d.selectionHandler.SelectionUpdate(localX, localY, buttons, modifiers)
 		return
 	}
 
 	if release {
-		localX, localY := pane.selectionLocalCoords(x, y)
+		localX, localY := pane.contentLocalCoords(x, y)
 		mime, data, ok := d.selectionHandler.SelectionFinish(localX, localY, buttons, modifiers)
 		d.selectionActive = false
 		d.selectionHandler = nil

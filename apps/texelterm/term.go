@@ -397,6 +397,35 @@ func (a *TexelTerm) SelectionCancel() {
 	a.requestRefresh()
 }
 
+func (a *TexelTerm) MouseWheelEnabled() bool {
+	return true
+}
+
+func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {
+	if deltaY == 0 {
+		return
+	}
+	a.mu.Lock()
+	if a.vterm == nil {
+		a.mu.Unlock()
+		return
+	}
+	lines := deltaY
+	if modifiers&tcell.ModShift != 0 {
+		page := a.height
+		if page <= 0 {
+			page = 1
+		}
+		lines *= page
+	} else {
+		const step = 3
+		lines *= step
+	}
+	a.vterm.Scroll(lines)
+	a.mu.Unlock()
+	a.requestRefresh()
+}
+
 func (a *TexelTerm) Run() error {
 
 	a.mu.Lock()

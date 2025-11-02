@@ -26,6 +26,8 @@ type appAdapter struct {
 
 var _ Card = (*appAdapter)(nil)
 var _ texel.SelectionDeclarer = (*appAdapter)(nil)
+var _ texel.MouseWheelHandler = (*appAdapter)(nil)
+var _ texel.MouseWheelDeclarer = (*appAdapter)(nil)
 
 func (a *appAdapter) Run() error                             { return a.app.Run() }
 func (a *appAdapter) Stop()                                  { a.app.Stop() }
@@ -68,6 +70,21 @@ func (a *appAdapter) SelectionCancel() {
 
 func (a *appAdapter) SelectionEnabled() bool {
 	_, ok := a.app.(texel.SelectionHandler)
+	return ok
+}
+
+// Mouse wheel handling delegates to the underlying app when available.
+func (a *appAdapter) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {
+	if handler, ok := a.app.(texel.MouseWheelHandler); ok {
+		handler.HandleMouseWheel(x, y, deltaX, deltaY, modifiers)
+	}
+}
+
+func (a *appAdapter) MouseWheelEnabled() bool {
+	if declarer, ok := a.app.(texel.MouseWheelDeclarer); ok {
+		return declarer.MouseWheelEnabled()
+	}
+	_, ok := a.app.(texel.MouseWheelHandler)
 	return ok
 }
 
