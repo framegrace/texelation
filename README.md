@@ -2,5 +2,8 @@
 
 Texelation is a modular text-based desktop environment currently in heavy development.
 
-The detailed project overview now lives in [docs/README.md](docs/README.md).
-
+📚 Documentation lives under [`docs/`](docs/). Start here:
+- [Project overview](docs/README.md)
+- [Client/server architecture](docs/CLIENT_SERVER_ARCHITECTURE.md)
+- [Effect development guide](docs/EFFECTS_GUIDE.md)
+- [Texel app & card pipeline guide](docs/TEXEL_APP_GUIDE.md)

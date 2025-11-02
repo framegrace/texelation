@@ -1,35 +1,45 @@
-# Texelation a TDE
+# Texelation: a Text Desktop Environment
 
-**Texelation** is a fast, flexible **text desktop environment** built for terminals. It pairs a
-headless server—responsible for panes, apps, and state—with a tcell-powered
-client that renders the experience and applies UI effects. The result feels like
-tmux on jet fuel: simple to run, easy to extend, and heavily themeable.
+**Texelation** is a fast, flexible **text desktop environment** built for
+terminals. It pairs a headless server—responsible for panes, apps, and
+state—with a tcell-powered client that renders the experience and applies UI
+effects. The result feels like tmux on jet fuel: simple to run, easy to extend,
+and heavily themeable.
 
-It currently has:
-- A tiling panel manager
-- multiple desktops
-- themeable
-- desktop effects which are easily extendible
-- TexelApps: Easy text app making framwork that can run directly on texelaction or standalone.
-- Texelterm: a full fledged terminal emulator for fast rendering. (Independent of the hosting one)
+## Highlights
 
-On the plans: 
-- Form based configuration: No more file editing
-- Networking (servers and clients on different hosts)
-- Multihost integration (Servers on different hosts)
-- Multiclient integration (Multiple clients on the same server for multi-monitor, or many othe prossibilities)
-- Grafic panels, using kitty protocol. (We have big plans for that)
+- 🧱 **Tiling pane manager** with multi-workspace support and instant pane
+  activation via mouse clicks.
+- 🎨 **Fully themeable** appearance, including selectable highlight colours and
+  optional visual effects.
+- 🌀 **Rich selection & scroll UX**: drag to copy anywhere, mouse wheel (and
+  Shift/Alt variants) to move through history, and keyboard navigation with
+  familiar shortcuts.
+- 🧩 **TexelApps pipeline** for composing reusable cards/effects; apps can run
+  inside Texelation or standalone.
+- 🖥️ **TexelTerm**: a full terminal emulator rendered to a tcell buffer,
+  designed for speed and future multi-backend support.
+- 🧪 **Developer-friendly tooling** with headless renderers, snapshot-based
+  tests, and a clean protocol.
+
+## On the Roadmap
+
+- Form-based configuration (no manual file edits).
+- Remote networking (servers and clients on different hosts).
+- Multi-host integration (distributed servers).
+- Multi-client sessions (multi-monitor, collaborative setups).
+- Rich graphical panels via Kitty protocol extensions.
 
 ## Features
 
-| Built-in Highlights | Description |
-| -------------------- | ----------- |
-| 🧩 Modular client/server | Server keeps authoritative state; clients can reconnect instantly and render the same buffers. |
-| 🎛️ Card-based composition | Apps flow through a card pipeline, making overlays/effects reusable and easy to stack. |
-| 🎨 Themeable effects | Customise overlays and colour schemes via JSON bindings shared between the desktop and card pipelines. Sample effects ship today; the pipeline is ready for richer animations tomorrow. |
-| ⚡ Responsive & lean | Optimised buffer deltas, debounced resizes, snapshot persistence, and a lean protocol keep the UI snappy. |
-| 🧪 Developer-friendly | First-class testing harnesses (`texel-headless`, memconn fixtures), clean package structure, and docs tuned for contributors. |
-| 🖥️ TexelTerm | Full terminal emulator rendered to a tcell buffer. Easily embeddable today and slated to gain multi-backend (including web) support. |
+| Built-in Highlights        | Description                                                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 🧩 Modular client/server   | Server keeps authoritative state; clients can reconnect instantly and render the same buffers.                                  |
+| 🎛️ Card-based composition | Apps flow through a card pipeline, making overlays/effects reusable and easy to stack.                                          |
+| 🎨 Themeable effects       | Customise overlays and colour schemes via JSON bindings. Sample effects ship today; richer animations are drop-in ready.        |
+| ⚡ Responsive & lean       | Optimised buffer deltas, debounced resizes, snapshot persistence, and a lean protocol keep the UI snappy.                       |
+| 🧪 Developer-friendly      | Headless renderers (`texel-headless`), memconn fixtures, and a clear package layout make iterating fast.                        |
+| 🖥️ TexelTerm               | Full terminal emulator with mouse/keyboard scrolling, selection, and optional visual bell—built to be embedded anywhere.       |
 
 ## Coding
 
@@ -41,8 +51,8 @@ Please check the note at the end.
 TexelApps live under `apps/` and can run standalone (`go run ./cmd/texelterm`) or
 inside the desktop pipeline. The current set includes the terminal emulator,
 status bar, welcome pane, and clock. The pipeline infrastructure (cards,
-effects, control bus) lays the groundwork for **TexelTui**—a forthcoming toolkit
-for building rich text apps with minimal boilerplate.
+effects, control bus) lays the groundwork for **TexelTui**—a forthcoming
+toolkit for building rich text apps with minimal boilerplate.
 
 Planned TexelApps improvements:
 
@@ -51,6 +61,34 @@ Planned TexelApps improvements:
 - TexelTui components for form input, charts, and animated layouts.
 
 Stay tuned as TexelTui graduates from infancy to a full-fledged framework.
+
+## Keyboard & Mouse Cheat Sheet
+
+### Workspace & Pane Control
+
+- `Ctrl+A` → enter control mode; `Esc` exits.
+- `|` / `-` in control mode → split vertically / horizontally.
+- `x` in control mode → close active pane.
+- `w` in control mode → swap panes using the arrow keys.
+- `z` in control mode → toggle zoom on the focused pane.
+- `1-9` in control mode → jump to workspace N.
+- `Ctrl+Arrow` (control mode) → resize panes along the arrow direction.
+- `Shift+Arrow` (anytime) → move focus among panes.
+- Mouse click → activate the pane under the cursor.
+
+### TexelTerm Navigation
+
+- Mouse wheel → scroll terminal history.
+- `Shift` + wheel → page through history (pane height per tick).
+- `Alt` + wheel → fine-grained line scrolling.
+- `Alt` + `PgUp`/`PgDn` → page through history via keyboard.
+- `Alt` + `Up`/`Down` → scroll history line-by-line.
+- Drag with mouse → select & copy text (highlight respects theme colours).
+
+### Miscellaneous
+
+- `Ctrl+Q` → quit Texelation.
+- Selections honour theme colours defined under the `selection` section.
 
 ## Project Layout
 
