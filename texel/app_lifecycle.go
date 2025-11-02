@@ -4,7 +4,6 @@
 // File: texel/app_lifecycle.go
 // Summary: Implements app lifecycle capabilities for the core desktop engine.
 // Usage: Used throughout the project to implement app lifecycle inside the desktop and panes.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 package texel
 

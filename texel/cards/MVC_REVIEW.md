@@ -146,10 +146,15 @@ The ControlBus implements an excellent Observer/Publish-Subscribe pattern:
 
 ```go
 // Cards (Views) register capabilities
-flash.RegisterControls(bus)
+flashCard, _ := cards.NewEffectCard("flash", effects.EffectConfig{
+    "duration_ms":   100,
+    "color":         "#FFFFFF",
+    "max_intensity": 0.75,
+})
+flashCard.RegisterControls(bus)
 
 // Apps (Controllers) trigger without tight coupling
-bus.Trigger(FlashTriggerID, nil)
+bus.Trigger(cards.FlashTriggerID, nil)
 ```
 
 **✅ Excellent Design**:

@@ -1,220 +1,208 @@
 # Texelation Client/Server Architecture
 
-This document captures the current architecture of the remote Texelation runtime
-(Phase 4 client parity). It complements `CLIENT_SERVER_PLAN.md` and focuses on
-module responsibilities, data flow, and operational workflows.
+This document describes the **current** client/server runtime as it exists
+today. Earlier phase and migration notes have been retired; this page should be
+considered the single source of truth for how the remote desktop works, how the
+modules interact, and which gaps we still plan to close.
 
-## High-Level Overview
+---
 
-```
-+-----------------+      +------------------+      +----------------+
-| Remote Client   |      | Unix Socket IPC |      | Server Runtime |
-| (tcell front-end+------+  (protocol.go)   +------+  (desktop, apps) |
-+-----------------+      +------------------+      +----------------+
-        |                         |                        |
-        |   MsgHello/Welcome      |                        |
-        |------------------------>|                        |
-        |   MsgConnect/Accept     |                        |
-        |<------------------------|                        |
-        |   MsgTreeSnapshot/Delta |                        |
-        |<------------------------|                        |
-        |   MsgKey/Mouse/Resize   |                        |
-        |------------------------>|                        |
-```
-
-At its core the client is a thin renderer that applies the same buffer
-snapshots the desktop used locally. The authoritative state (pane tree,
-buffers, app lifecycle) remains in the server. Communication is via framed
-messages defined in `protocol/`.
-
-## Module Map
-
-### Client
+## 1. High-Level Topology
 
 ```
-client/
-  buffercache.go         // Applies TreeSnapshot/BufferDelta to local pane cache
-  cmd/texel-client/      // Remote renderer (tcell screen)
-  simple_client.go       // Handshake/resume helper (shared by tools)
+┌──────────────────────┐        ┌────────────────┐        ┌──────────────────────┐
+│ Remote Client (tcell │        │  Unix Socket   │        │   Server Runtime     │
+│ renderer + effects)  ├────────┤  protocol.go   ├────────┤  (texel Desktop +    │
+└──────────┬───────────┘        └────────┬───────┘        │   apps / sessions)   │
+           │ Handshake (Hello/Connect)    │                └──────────┬───────────┘
+           │ Buffer streaming (Tree/Delta)│                           │
+           │ Input/control (Key/Mouse/etc)│                           │
+           ▼                              ▼                           ▼
+    `internal/runtime/client`     `protocol/messages.go`     `internal/runtime/server`
 ```
 
-Key responsibilities:
+* The **server** owns the authoritative `texel.Desktop`, pane tree, app
+  lifecycles, and persisted snapshot history.
+* The **client** is a thin renderer. It mirrors buffers into a local
+  `BufferCache`, applies visual effects, and pushes input/control events back to
+  the server.
+* Communication happens over framed protocol messages defined in
+  `protocol/messages.go`. The framing supports resume by sequence number so
+  clients can reconnect without losing buffered diffs.
 
-- Manage a `BufferCache` with pane geometry, styled cells, and active/resizing
-  flags received from the server.
-- Translate `MsgTreeSnapshot`, `MsgBufferDelta`, `MsgStateUpdate`, `MsgPaneState`,
-  and `MsgResize` into local state and visuals.
-- Emit `MsgKeyEvent`, `MsgMouseEvent`, `MsgResize`, `MsgClipboardGet/Set`, and
-  `MsgThemeUpdate` back to the server.
-- Render using `tcell` simulation screen (same primitives as the legacy desktop).
+---
 
-### Protocol
+## 2. Module Responsibilities
 
-`protocol/` defines message framing (`protocol.go`) and payload encoders/decoders
-(`messages.go`). Important message types for the remote flow:
+### 2.1 Client (`internal/runtime/client`)
 
-- `MsgTreeSnapshot`: Full pane tree & buffers on connect/resume.
-- `MsgBufferDelta`: Per-pane cell updates (canonical data path).
-- `MsgStateUpdate`: Global desktop state (control mode, zoomed pane, workspace).
-- `MsgPaneState`: Per-pane flag updates (active, resizing, etc.).
-- `MsgResize`: Client terminal dimensions.
-- Input & control messages (`MsgKeyEvent`, `MsgMouseEvent`, clipboard, theme).
+| Package/File                     | Responsibility |
+| -------------------------------- | -------------- |
+| `app.go` (now ~100 lines)        | Entry-point wiring that scaffolds the runtime and delegates to focused modules. |
+| `renderer.go`                    | Applies `BufferCache` contents to the `tcell` screen. |
+| `buffercache.go`                 | Maintains pane geometry & styled cells based on `MsgTreeSnapshot` and `MsgBufferDelta`. |
+| `protocol_handler.go`            | Decodes inbound frames, drives `uiState`, schedules re-renders. |
+| `input_handler.go`               | Converts keyboard/mouse/paste events into protocol messages; performs optimistic UI updates (control mode overlay). |
+| `message_sender.go`              | Encodes outbound messages; centralises error handling/retry semantics. |
+| `background_tasks.go`            | Ping/ack loops, session liveness tracking. |
+| `ui_state.go`                    | Aggregates server state (workspace, theme defaults, focus) and resolves effect bindings. |
+| `effects/`                       | Effect registry used by both the remote client and the new card layer. |
 
-### Server
+Client-side optimisations:
 
-```
-server/
-  server.go              // Session manager, socket accept loop
-  connection.go         // Per-client connection state & message loop
-  desktop_sink.go       // Bridges protocol events to the local Desktop
-  desktop_publisher.go  // Captures pane snapshots -> BufferDelta
-  tree_convert.go       // Desktop tree <-> protocol snapshot conversion
-  session.go            // Sequencing, buffering, ack handling
-  snapshot_store.go     // Load/save persisted desktop snapshots (JSON today)
-```
+* **Delta batching** – multiple `MsgBufferDelta` frames can be applied in a
+  single render pass; the renderer only invalidates the rows that changed.
+* **Optimistic control mode** – overlays are displayed immediately while the
+  authoritative active/zoom state is confirmed via `MsgStateUpdate`.
+* **Effect timeline integration** – the same easing/timeline helpers power
+  client overlays and card-based effects, so animations remain smooth and
+  consistent.
 
-Responsibilities:
+### 2.2 Protocol (`protocol/`)
 
-- Maintain a running `texel.Desktop` identical to the local runtime: app
-  lifecycle, pane layout, effects (now minimal), status panes.
-- For each client connection, run `connection.serve()` which:
-  - Performs the handshake (`Hello/Welcome/Connect`).
-  - Streams `MsgTreeSnapshot` + subsequent `MsgBufferDelta` updates via
-    `DesktopPublisher`.
-  - Receives input/control messages and forwards them through `DesktopSink`.
-  - Handles client resizes by calling `Desktop.SetViewportSize` and immediately
-    pushing a fresh snapshot so the client re-renders with the new geometry.
-- Track diff history per session (`session.go`) so reconnecting clients can
-  resume from the last acked sequence.
-- On startup the server loads any persisted desktop snapshot (via
-  `snapshot_store.go`) before accepting clients, and it persists updates back to
-  disk on schedule or structural changes.
+* `protocol.go` – frame header (type, sequence, payload length) and CRC helpers.
+* `messages.go` – concrete payload encoders/decoders. This layer is deliberately
+  boring to keep compatibility stories straightforward.
+* Message types important to the remote flow:
+  - `MsgTreeSnapshot` – full pane tree & buffers (sent on connect/resume).
+  - `MsgBufferDelta` – row-based cell updates streamed continuously.
+  - `MsgStateUpdate`, `MsgPaneState` – broadcast desktop flags.
+  - `MsgResize`, `MsgClipboard{Get,Set,Data}`, `MsgThemeUpdate/Ack`.
+  - `MsgBufferAck` – lets the server trim diff history safely.
 
-### Desktop (texel/)
+### 2.3 Server (`internal/runtime/server`)
 
-The existing desktop codebase is still the authoritative source of pane layout
-logic. Important updates for the remote flow:
+| Package/File                | Responsibility |
+| --------------------------- | -------------- |
+| `server.go`                 | Socket accept loop, snapshot load/save orchestration. |
+| `connection.go`             | Per-client state machine (handshake, streaming, resume). |
+| `session.go`                | Sequencing, diff buffering, ack accounting. |
+| `desktop_publisher.go`      | Converts desktop buffers into protocol deltas. |
+| `desktop_sink.go`           | Applies inbound control/input to the desktop. |
+| `tree_convert.go`           | Desktop tree ↔ protocol snapshot conversion. |
+| `snapshot_store.go`         | Persistence of desktop snapshot JSON blobs. |
+| `testutil/`                 | In-memory connections used in integration tests. |
 
-- `Desktop.SetViewportSize(cols, rows)`: overrides the size used in layout
-  calculations so the server can match the remote terminal.
-- `Desktop.PaneStates()`: exposes active/resizing flags for each pane.
-- Animations (control mode fade, inactive/resizing tints) are disabled server
-  side—those are handled by the client for responsiveness.
+Server optimisations:
 
-## Workflow Walkthroughs
+* **Back-pressure aware streaming** – diffs are buffered per session until the
+  client acks them; `session.go` enforces a cap to avoid unbounded growth.
+* **Resume safety** – reconnecting clients send their last acked sequence
+  number; the server replays buffered diffs after a snapshot so the client
+  catches up without losing intermediate updates.
+* **Viewport control** – each connection feeds remote terminal dimensions into
+  `Desktop.SetViewportSize`, ensuring layout decisions (splits, status panes)
+  match the client.
+* **Snapshot persistence** – the latest tree+buffer snapshot survives restarts,
+  shrinking reconnect time and enabling future crash recovery tooling.
 
-### Connect / Initial Render
+### 2.4 Cards & Effects (`texel/cards`, `internal/effects`)
 
-```
-Client                               Server
-  |                                    |
-  | MsgHello ------------------------> |
-  |                        MsgWelcome  |
-  | <--------------------------------- |
-  | MsgConnectRequest ---------------->|
-  |                        MsgConnectAccept
-  | <--------------------------------- |
-  |                        MsgTreeSnapshot
-  | <--------------------------------- |
-  | apply snapshot + render            |
-  |                                    |
-```
+* `texel/cards/effect_card.go` adapts any registry effect into the card
+  pipeline. Configuration mirrors theme JSON (duration, colors, trigger
+  semantics, max intensity, etc.). Cards register control bus triggers of the
+  form `effects.<effectID>` (e.g. `cards.FlashTriggerID`).
+* Legacy card implementations (`FlashCard`, `RainbowCard`) have been removed in
+  favour of the unified adapter.
+* The effect registry (`internal/effects`) exposes:
+  - `Effect` interface (`ID`, `Active`, `Update`, `HandleTrigger`,
+    `ApplyWorkspace`, `ApplyPane`).
+  - A shared `Timeline` easing helper used by the client runtime and cards.
+  - Helpers for default-colour conversion so effects behave consistently even
+    when apps emit `tcell.ColorDefault`.
 
-- The client establishes the Unix domain socket connection and drives the
-  `Hello`/`Connect` handshake using helpers in `client/simple_client.go`.
-- `server.connection` responds with `MsgTreeSnapshot`, generated by
-  `desktop_publisher.go` (`Desktop.SnapshotBuffers` + `tree_convert.go`).
-- The client populates its `BufferCache` and renders immediately.
-- Right after `screen.Init()` the client sends `MsgResize` with the actual
-  terminal size so the server can recompute layout (`Desktop.SetViewportSize`).
-  The server reacts by sending another snapshot/delta for the new geometry.
+---
 
-### Steady-State Updates
+## 3. Runtime Workflows
 
-```
-[Server Desktop] --capture--> BufferDelta --enqueue--> Session
-Session.Pending --> connection.sendPending --> client ApplyDelta --> render
-```
+### 3.1 Connect
 
-- `DesktopPublisher.Publish()` runs after any desktop change (input, resize,
-  timed publish) and converts pane buffers into `MsgBufferDelta` frames.
-- `server/session.EnquireDiff` assigns monotonically increasing sequence numbers
-  and buffers them until acknowledged.
-- `connection.sendPending()` pulls queued `DiffPacket`s and writes them to the
-  socket. The client responds with `MsgBufferAck`, allowing the session to drop
-  older diffs.
-- Additional control frames:
-  - `MsgStateUpdate` whenever control mode, workspace, or zoom state changes.
-  - `MsgPaneState` whenever a pane's active/resizing flag flips.
+1. Client connects to the Unix socket and exchanges `MsgHello`/`MsgWelcome`.
+2. Client sends `MsgConnectRequest` (or `MsgResumeRequest` if reconnecting).
+3. Server responds with `MsgConnectAccept` followed by a full `MsgTreeSnapshot`.
+4. Client populates its `BufferCache`, triggers an initial render, then sends
+   `MsgResize` with the actual terminal size.
+5. Server applies the resize (layout is recalculated instantly) and emits a new
+   snapshot/delta reflecting the remote viewport.
 
-### Input / Control Flow
+### 3.2 Steady-State Streaming
 
 ```
-Client UI -> MsgKeyEvent/MsgMouseEvent/MsgResize -> connection.serve()
-  -> DesktopSink.Handle* -> Desktop.* handlers -> possible state updates
+Desktop mutation → DesktopPublisher → Session.enqueue(seq, delta)
+   └─ connection.sendPending → protocol stream → client ApplyDelta → render
 ```
 
-Concrete paths:
+* The publisher runs after any desktop change (input, app update, timed tick).
+* Diff packets are sequenced and buffered until acknowledged by the client.
+* Client acks via `MsgBufferAck(lastSeq)`; the session drops older packets.
 
-- Keys: `connection` decodes `MsgKeyEvent` and calls `DesktopSink.HandleKeyEvent`
-  which forwards them through `Desktop.InjectKeyEvent`. Control-mode toggles,
-  splits, zoom, etc. trigger state updates that are published back via 
-  `DesktopPublisher + connection` (and optimistically applied client-side for
-  responsiveness).
-- Mouse: delivered to `Desktop.InjectMouseEvent` (still used by status panes,
-  future selections).
-- Resize: `MsgResize` -> `Desktop.SetViewportSize` -> immediate snapshot and
-  publish.
+### 3.3 Input & Control
 
-### Resume Workflow
+* Keys (`MsgKeyEvent`) feed into `DesktopSink.HandleKeyEvent`. Control-mode
+  toggles, splits, etc. update desktop state which is broadcast back via
+  `MsgStateUpdate`.
+* Mouse (`MsgMouseEvent`) supports selection/status panes.
+* Resizes feed into `Desktop.SetViewportSize` and immediately trigger a fresh
+  snapshot.
+* Clipboard traffic flows through `MsgClipboard{Get,Set,Data}`; the server owns
+  the clipboard store so multiple clients remain consistent.
 
-```
-Client reconnects
-  -> MsgResumeRequest(lastSeq)
-     <- connection Replay: TreeSnapshot + Pending diffs beyond lastSeq
-```
+### 3.4 Resume
 
-- On reconnect the client sends `MsgResumeRequest` with the last acked sequence.
-- The server replays the latest snapshot (`Snapshot()`), followed by diff history
-  newer than `lastSeq`. This is handled in `connection.serve()` after handshake.
-- Normal delta streaming resumes once the backfill completes.
+* Client reconnects with `MsgResumeRequest(lastAckedSeq)`.
+* Server responds with a snapshot followed by each buffered diff newer than the
+  sequence the client already rendered.
+* Normal streaming resumes once the backfill completes.
 
-## Data Flow Summary
+---
 
-```
-+----------------+     +------------------+     +--------------------+
-| Desktop (Go)   | --> | DesktopPublisher | --> | Session (buffer &  |
-| - Pane tree    |     | - Snapshots      |     |   sequencing)      |
-| - Apps         |     | - BufferDelta    |     +---------+----------+
-+--------+-------+     +--------+---------+               |
-         ^                        |                       v
-         |                        |            +----------------------+
-         |                        +------------> connection (per client)
-         |                                      - Read/Write protocol
-         |                                      - Track resize/state
-         |                                      - Drive DesktopSink
-         |                                      - Send pending diffs
-         +--------------------------------------+
-```
+## 4. Operational Notes & Tooling
 
-## Feature Matrix
+* **Stress harness** (`cmd/texel-stress`) simulates clients to validate reconnect
+  logic and delta batching under load.
+* **Headless client** (`client/cmd/texel-headless`) decodes protocol streams in
+  CI without a `tcell` screen.
+* **Snapshot store** writes JSON blobs; a follow-up project will add rotation and
+  change auditing.
+* **Telemetry** (TODO) – currently logging-driven; future work should add wall
+  clock metrics around diff queue depth and reconnect latency.
 
-| Feature                     | Server Responsibility                            | Client Responsibility                      |
-| --------------------------- | ------------------------------------------------- | ------------------------------------------- |
-| Pane lifecycle/layout       | `Desktop` (apps, split/zoom, status panes)        | Render buffers delivered via protocol       |
-| Buffer diffing              | `DesktopPublisher` (snapshot -> delta conversion) | Apply deltas (`client.BufferCache`)         |
-| Active/resizing highlights  | Flag state & broadcast (`MsgPaneState`)           | Visual overlay + status lines               |
-| Control mode                | Toggle & state publish                            | Visual overlay, optimistic toggling         |
-| Resize                      | `Desktop.SetViewportSize`, fresh snapshot         | Measure terminal, send `MsgResize`          |
-| Clipboard                   | `Desktop` handles store/fetch                     | Send `MsgClipboardSet/Get/Data`             |
-| Theme updates               | `Desktop.HandleThemeUpdate` -> publish updates    | Apply `MsgThemeUpdate/Ack` to local style   |
-| Stress harness              | `cmd/texel-stress` simulates connect/run/resume   | (Reader only) consumes stream for metrics   |
+---
 
-## Reference Documents
+## 5. Future Improvements & Open Items
 
-- `CLIENT_SERVER_PLAN.md`: Phase roadmap and milestones.
-- `docs/PHASE4_STATUS.md`: Progress log with the latest parity notes.
-- `docs/PHASE8_STATUS.md`: Performance tuning goals (useful when profiling).
+These are sourced from `FUTURE_IMPROVEMENTS.md` and recent design discussions:
 
-Feel free to extend this document as new protocol messages or components are
-added. An accurate diagram makes future manual modifications much simpler.
+1. **Control mode handler extraction** – move the control-mode state machine out
+   of `DesktopEngine` for clarity and easier testing.
+2. **Client runtime modularisation** – fully finish the `internal/runtime/client`
+   break-up (some packages still share helpers that can be simplified).
+3. **Protocol-neutral cell/style types** – not required today, but if a web
+   client becomes a priority we will need an abstraction over `tcell.Style`.
+4. **Snapshot store enhancements** – add rotation, metrics, and hazard logging so
+   operations can monitor reconnect behaviour.
+5. **Effect layering** – support ordered stacks (e.g. fadeTint + flash) via the
+   effect manager without manual card composition.
+6. **Diagnostics hooks** – mirror stress harness metrics into the server in a
+   lightweight `/debug` channel.
+
+Each improvement should be implemented in isolation and accompanied by updates
+to this document to keep it authoritative.
+
+---
+
+## 6. Quick Reference
+
+| Capability              | Where to start                              |
+| ----------------------- | ------------------------------------------- |
+| Client handshake        | `internal/runtime/client/session.go`        |
+| Delta publishing        | `internal/runtime/server/desktop_publisher.go` |
+| Resume sequence logic   | `internal/runtime/server/session.go`        |
+| Effect registration     | `internal/effects/registry.go`              |
+| Effect card usage       | `texel/cards/effect_card.go`                |
+| Protocol definitions    | `protocol/messages.go`                      |
+| Snapshot persistence    | `internal/runtime/server/snapshot_store.go` |
+
+Keep this document up to date whenever modules move or behaviour changes. A
+clear architecture reference is critical now that the old migration phases have
+been completed.

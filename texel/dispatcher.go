@@ -4,7 +4,6 @@
 // File: texel/dispatcher.go
 // Summary: Implements dispatcher capabilities for the core desktop engine.
 // Usage: Used throughout the project to implement dispatcher inside the desktop and panes.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 package texel
 

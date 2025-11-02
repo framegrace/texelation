@@ -78,7 +78,7 @@ DIR_INFO = {
     "texel": {
         "component": "core desktop engine",
         "usage_template": "Used throughout the project to implement {feature} inside the desktop and panes.",
-        "notes": "Legacy desktop logic migrated from the monolithic application.",
+        "notes": "Provides the desktop engine shared across the server and client pipelines.",
     },
     "cmd/texel-server": {
         "component": "server CLI harness",

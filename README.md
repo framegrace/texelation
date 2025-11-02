@@ -52,20 +52,35 @@ Both commands use a shared build cache in `.cache/` to avoid polluting `$GOCACHE
 
 ### Effect Configuration
 
-Visual overlays are now defined entirely through the theme file. The default `theme.json` will contain an `effects.bindings` array like:
+Visual overlays are configured through the theme file and can also be composed
+directly in card pipelines via `cards.NewEffectCard`. Bindings use the same
+JSON-style structure in both cases:
 
-```json
+```jsonc
 "effects": {
   "bindings": [
     {"event": "pane.active", "target": "pane", "effect": "fadeTint"},
     {"event": "pane.resizing", "target": "pane", "effect": "fadeTint"},
-    {"event": "workspace.control", "target": "workspace", "effect": "rainbow"},
-    {"event": "workspace.key", "target": "workspace", "effect": "flash", "params": {"keys": ["F"]}}
+    {"event": "workspace.control", "target": "workspace", "effect": "rainbow", "params": {"mix": 0.6}},
+    {"event": "workspace.key", "target": "workspace", "effect": "flash", "params": {"keys": ["F"], "max_intensity": 0.75}}
   ]
 }
 ```
 
-Each entry wires a trigger (e.g. `workspace.key`) to an effect implementation (`flash`) with optional parameters. Add your own bindings or swap effects without touching Go code—new effect packages simply register themselves at import time.
+See [`docs/EFFECTS_GUIDE.md`](docs/EFFECTS_GUIDE.md) for the complete
+development workflow and [`docs/TEXEL_APP_GUIDE.md`](docs/TEXEL_APP_GUIDE.md)
+for composing effect cards inside app pipelines.
+
+## Documentation
+
+- [Client/Server architecture](docs/CLIENT_SERVER_ARCHITECTURE.md)
+- [Effect development guide](docs/EFFECTS_GUIDE.md)
+- [Texel app & card pipeline guide](docs/TEXEL_APP_GUIDE.md)
+- [Card control bus reference](docs/cards_control.md)
+- [TView integration notes](TVIEW_INTEGRATION.md)
+
+These documents replace the old phase planning notes and are kept current as
+features evolve.
 
 ## Testing
 

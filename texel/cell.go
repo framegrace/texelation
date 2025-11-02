@@ -4,7 +4,6 @@
 // File: texel/cell.go
 // Summary: Implements cell capabilities for the core desktop engine.
 // Usage: Used throughout the project to implement cell inside the desktop and panes.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 package texel
 

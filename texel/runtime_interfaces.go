@@ -4,7 +4,6 @@
 // File: texel/runtime_interfaces.go
 // Summary: Implements runtime interfaces capabilities for the core desktop engine.
 // Usage: Used throughout the project to implement runtime interfaces inside the desktop and panes.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 package texel
 

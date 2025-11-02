@@ -4,7 +4,6 @@
 // File: texel/desktop_test.go
 // Summary: Exercises desktop behaviour to ensure the core desktop engine remains reliable.
 // Usage: Executed during `go test` to guard against regressions.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 package texel
 

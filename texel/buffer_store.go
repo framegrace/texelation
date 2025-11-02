@@ -4,7 +4,6 @@
 // File: texel/buffer_store.go
 // Summary: Implements buffer store capabilities for the core desktop engine.
 // Usage: Used throughout the project to implement buffer store inside the desktop and panes.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 package texel
 

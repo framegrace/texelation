@@ -126,28 +126,26 @@ Effect implementations register themselves at import time via `effects.Register(
 
 ## Current Branch: client-server-split
 
-This branch implements the client/server migration (see CLIENT_SERVER_PLAN.md). Key completed phases:
-- Phase 1-3: Component boundaries, protocol foundations, server runtime extraction
-- Phase 4: Client runtime with tcell renderer and buffer cache
-- Phase 5: Offline operation with queued diffs and resume
-- Phase 6: Signal/event plumbing (keyboard, mouse, clipboard, theme updates)
-- Phase 7-8: Snapshot persistence, performance tuning
+For an architectural overview refer to:
 
-Remaining work focuses on production hardening and operational tooling.
+- `docs/CLIENT_SERVER_ARCHITECTURE.md` – current client/server runtime, data flow, and open items.
+- `docs/EFFECTS_GUIDE.md` – how effects are implemented and configured.
+- `docs/TEXEL_APP_GUIDE.md` – how to build pipeline-based apps using cards and the control bus.
 
 ## Important Patterns
 
 ### Adding a New App
-1. Create package under `apps/yourapp/`
-2. Implement `texel.App` interface (Run, Stop, Resize, Render, GetTitle, HandleKey, SetRefreshNotifier)
-3. Optionally implement `texel.SnapshotProvider` for persistence
-4. Register factory in server harness (`cmd/texel-server/main.go`)
+See `docs/TEXEL_APP_GUIDE.md` for the end-to-end workflow. In summary:
+1. Create a package under `apps/<name>/` implementing `texel.App`.
+2. Build a card pipeline (`cards.WrapApp`, `cards.NewEffectCard`, etc.).
+3. Register the factory in the server harness (`cmd/texel-server/main.go`).
 
 ### Adding a New Effect
-1. Create effect type implementing `effects.Effect` interface in `internal/effects/`
-2. Register factory via `effects.Register(id, factory)` in `init()`
-3. Add theme binding in default `theme.json` or user config
-4. Effect receives `EffectConfig` with params map and timeline control
+Follow `docs/EFFECTS_GUIDE.md`. Highlights:
+1. Implement `effects.Effect`, register it in `init()`.
+2. Parse configuration via `EffectConfig`; support theme and card usage.
+3. Reuse `timeline.go` for animations and `helpers.go` for tint blending.
+4. Add unit tests and update documentation.
 
 ### Modifying Protocol
 1. Add new `MessageType` constant in `protocol/protocol.go`

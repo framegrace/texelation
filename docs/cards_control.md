@@ -65,6 +65,10 @@ internals. The example below intercepts `F12`, toggles a diagnostics card via
 the bus, and forwards other keys through the pipeline unchanged:
 
 ```go
+// import (
+//     "texelation/internal/effects"
+//     "texelation/texel/cards"
+// )
 flash, _ := cards.NewEffectCard("flash", effects.EffectConfig{
     "duration_ms": 120,
     "color":       "#FFFFFF",

@@ -4,7 +4,6 @@
 // File: texel/snapshot_restore.go
 // Summary: Implements snapshot restore capabilities for the core desktop engine.
 // Usage: Used throughout the project to implement snapshot restore inside the desktop and panes.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 package texel
 

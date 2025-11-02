@@ -4,7 +4,6 @@
 // File: texel/app.go
 // Summary: Implements app capabilities for the core desktop engine.
 // Usage: Used throughout the project to implement app inside the desktop and panes.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 package texel
 

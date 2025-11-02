@@ -16,17 +16,12 @@ Registered effects in `internal/effects`:
 ### Before (Card-Specific)
 
 ```go
-import (
-    "time"
-    "texelation/texel/cards"
-    "github.com/gdamore/tcell/v2"
-)
-
+// Legacy snippet (cards removed)
 subtle := tcell.NewRGBColor(160, 160, 160)
 flash := cards.NewFlashCard(100*time.Millisecond, subtle)
 rainbow := cards.NewRainbowCard(0.5, 0.6)
 
-pipe := cards.NewPipeline(nil, 
+pipe := cards.NewPipeline(nil,
     cards.WrapApp(app),
     flash,
     rainbow,

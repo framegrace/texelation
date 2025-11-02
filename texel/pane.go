@@ -4,7 +4,6 @@
 // File: texel/pane.go
 // Summary: Implements pane capabilities for the core desktop engine.
 // Usage: Used throughout the project to implement pane inside the desktop and panes.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 // texel/pane_v2.go
 package texel

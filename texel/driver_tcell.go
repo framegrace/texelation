@@ -4,7 +4,6 @@
 // File: texel/driver_tcell.go
 // Summary: Implements driver tcell capabilities for the core desktop engine.
 // Usage: Used throughout the project to implement driver tcell inside the desktop and panes.
-// Notes: Legacy desktop logic migrated from the monolithic application.
 
 package texel
 
