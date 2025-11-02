@@ -1,6 +1,33 @@
 # Texelation
 
-Texelation is a modular text-based desktop environment that now runs as a client/server pair. The server hosts apps and manages the pane graph, while the client renders buffers and routes user input over a binary protocol.
+**Texelation** is a fast, flexible text desktop built for terminals. It pairs a
+headless server—responsible for panes, apps, and state—with a tcell-powered
+client that renders the experience and applies UI effects. The result feels like
+tmux on jet fuel: simple to run, easy to extend, and heavily themeable.
+
+| Built-in Highlights | Description |
+| -------------------- | ----------- |
+| 🧩 Modular client/server | Server keeps authoritative state; clients can reconnect instantly and render the same buffers. |
+| 🎛️ Card-based composition | Apps flow through a card pipeline, making overlays/effects reusable and easy to stack. |
+| 🎨 Themeable effects | Customise overlays and colour schemes via JSON bindings shared between the desktop and card pipelines. Sample effects ship today; the pipeline is ready for richer animations tomorrow. |
+| ⚡ Responsive & lean | Optimised buffer deltas, debounced resizes, snapshot persistence, and a lean protocol keep the UI snappy. |
+| 🧪 Developer-friendly | First-class testing harnesses (`texel-headless`, memconn fixtures), clean package structure, and docs tuned for contributors. |
+
+## TexelApps & Future TexelTui
+
+TexelApps live under `apps/` and can run standalone (`go run ./cmd/texelterm`) or
+inside the desktop pipeline. The current set includes the terminal emulator,
+status bar, welcome pane, and clock. The pipeline infrastructure (cards,
+effects, control bus) lays the groundwork for **TexelTui**—a forthcoming toolkit
+for building rich text apps with minimal boilerplate.
+
+Planned TexelApps improvements:
+
+- Sub-queues and declarative card layouts for complex dashboards.
+- Shared diagnostics overlays and widget libraries.
+- TexelTui components for form input, charts, and animated layouts.
+
+Stay tuned as TexelTui graduates from infancy to a full-fledged framework.
 
 ## Project Layout
 
