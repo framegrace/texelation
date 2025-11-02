@@ -70,3 +70,14 @@ type SelectionHandler interface {
 type SelectionDeclarer interface {
 	SelectionEnabled() bool
 }
+
+// MouseWheelHandler is implemented by apps that want to react to mouse wheel input.
+// deltaX and deltaY indicate wheel steps (positive values scroll right/down).
+type MouseWheelHandler interface {
+	HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask)
+}
+
+// MouseWheelDeclarer allows apps (or wrappers) to indicate whether they currently handle mouse wheel events.
+type MouseWheelDeclarer interface {
+	MouseWheelEnabled() bool
+}

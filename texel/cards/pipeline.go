@@ -40,6 +40,8 @@ type Pipeline struct {
 var _ texel.App = (*Pipeline)(nil)
 var _ texel.SelectionHandler = (*Pipeline)(nil)
 var _ texel.SelectionDeclarer = (*Pipeline)(nil)
+var _ texel.MouseWheelHandler = (*Pipeline)(nil)
+var _ texel.MouseWheelDeclarer = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
 // Pipeline implements texel.App and can be launched like any other app.
@@ -255,6 +257,41 @@ func (p *Pipeline) SelectionCancel() {
 
 func (p *Pipeline) SelectionEnabled() bool {
 	return p.selectionHandler() != nil
+}
+
+func (p *Pipeline) wheelHandler() texel.MouseWheelHandler {
+	cards := p.Cards()
+	for _, card := range cards {
+		if decl, ok := card.(texel.MouseWheelDeclarer); ok && !decl.MouseWheelEnabled() {
+			continue
+		}
+		if handler, ok := card.(texel.MouseWheelHandler); ok {
+			return handler
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if decl, ok := underlying.(texel.MouseWheelDeclarer); ok && !decl.MouseWheelEnabled() {
+				continue
+			}
+			if handler, ok := underlying.(texel.MouseWheelHandler); ok {
+				return handler
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Pipeline) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {
+	if handler := p.wheelHandler(); handler != nil {
+		handler.HandleMouseWheel(x, y, deltaX, deltaY, modifiers)
+	}
+}
+
+func (p *Pipeline) MouseWheelEnabled() bool {
+	return p.wheelHandler() != nil
 }
 
 // ControlBus exposes the control bus associated with this pipeline.

@@ -10,8 +10,8 @@ It currently has:
 - multiple desktops
 - themeable
 - desktop effects which are easily extendible
-- TexelApps Easy txext app making framwork that can run directly on texelaction or standalone.
-- Texelterm a full fledged terminal emulator for fast rendering. (Independent of the hosting one)
+- TexelApps: Easy text app making framwork that can run directly on texelaction or standalone.
+- Texelterm: a full fledged terminal emulator for fast rendering. (Independent of the hosting one)
 
 On the plans: 
 - Form based configuration: No more file editing

@@ -74,6 +74,12 @@ func ApplyDefaults(cfg Config) {
 		changed = true
 	}
 
+	if applySectionDefaults(cfg, "texelterm", Section{
+		"visual_bell_enabled": false,
+	}) {
+		changed = true
+	}
+
 	if !changed {
 		return
 	}

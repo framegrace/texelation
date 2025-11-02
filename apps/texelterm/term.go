@@ -68,23 +68,27 @@ func New(title, command string) texel.App {
 		colorPalette: newDefaultPalette(),
 	}
 
-	subtle := tcell.NewRGBColor(160, 160, 160)
-	flashConfig := effects.EffectConfig{
-		"color":         colorToHex(subtle),
-		"duration_ms":   100,
-		"max_intensity": 0.75,
-		"trigger_type":  "workspace.control",
-		"default_fg":    colorToHex(term.colorPalette[256]),
-		"default_bg":    colorToHex(term.colorPalette[257]),
+	cfg := theme.Get()
+	flashEnabled := cfg.GetBool("texelterm", "visual_bell_enabled", false)
+	wrapped := cards.WrapApp(term)
+	cardList := []cards.Card{wrapped}
+	if flashEnabled {
+		subtle := tcell.NewRGBColor(160, 160, 160)
+		flashConfig := effects.EffectConfig{
+			"color":         colorToHex(subtle),
+			"duration_ms":   100,
+			"max_intensity": 0.75,
+			"trigger_type":  "workspace.control",
+			"default_fg":    colorToHex(term.colorPalette[256]),
+			"default_bg":    colorToHex(term.colorPalette[257]),
+		}
+		if flash, err := cards.NewEffectCard("flash", flashConfig); err != nil {
+			log.Printf("texelterm: flash effect unavailable: %v", err)
+		} else {
+			cardList = append(cardList, flash)
+		}
 	}
-	flash, err := cards.NewEffectCard("flash", flashConfig)
-	if err != nil {
-		log.Printf("texelterm: flash effect unavailable: %v", err)
-		pipe := cards.NewPipeline(nil, cards.WrapApp(term))
-		term.AttachControlBus(pipe.ControlBus())
-		return pipe
-	}
-	pipe := cards.NewPipeline(nil, cards.WrapApp(term), flash)
+	pipe := cards.NewPipeline(nil, cardList...)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
 }
@@ -394,6 +398,35 @@ func (a *TexelTerm) SelectionCancel() {
 	if a.vterm != nil {
 		a.vterm.MarkAllDirty()
 	}
+	a.requestRefresh()
+}
+
+func (a *TexelTerm) MouseWheelEnabled() bool {
+	return true
+}
+
+func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {
+	if deltaY == 0 {
+		return
+	}
+	a.mu.Lock()
+	if a.vterm == nil {
+		a.mu.Unlock()
+		return
+	}
+	lines := deltaY
+	if modifiers&tcell.ModShift != 0 {
+		page := a.height
+		if page <= 0 {
+			page = 1
+		}
+		lines *= page
+	} else {
+		const step = 3
+		lines *= step
+	}
+	a.vterm.Scroll(lines)
+	a.mu.Unlock()
 	a.requestRefresh()
 }
 
