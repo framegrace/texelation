@@ -68,23 +68,27 @@ func New(title, command string) texel.App {
 		colorPalette: newDefaultPalette(),
 	}
 
-	subtle := tcell.NewRGBColor(160, 160, 160)
-	flashConfig := effects.EffectConfig{
-		"color":         colorToHex(subtle),
-		"duration_ms":   100,
-		"max_intensity": 0.75,
-		"trigger_type":  "workspace.control",
-		"default_fg":    colorToHex(term.colorPalette[256]),
-		"default_bg":    colorToHex(term.colorPalette[257]),
+	cfg := theme.Get()
+	flashEnabled := cfg.GetBool("texelterm", "visual_bell_enabled", false)
+	wrapped := cards.WrapApp(term)
+	cardList := []cards.Card{wrapped}
+	if flashEnabled {
+		subtle := tcell.NewRGBColor(160, 160, 160)
+		flashConfig := effects.EffectConfig{
+			"color":         colorToHex(subtle),
+			"duration_ms":   100,
+			"max_intensity": 0.75,
+			"trigger_type":  "workspace.control",
+			"default_fg":    colorToHex(term.colorPalette[256]),
+			"default_bg":    colorToHex(term.colorPalette[257]),
+		}
+		if flash, err := cards.NewEffectCard("flash", flashConfig); err != nil {
+			log.Printf("texelterm: flash effect unavailable: %v", err)
+		} else {
+			cardList = append(cardList, flash)
+		}
 	}
-	flash, err := cards.NewEffectCard("flash", flashConfig)
-	if err != nil {
-		log.Printf("texelterm: flash effect unavailable: %v", err)
-		pipe := cards.NewPipeline(nil, cards.WrapApp(term))
-		term.AttachControlBus(pipe.ControlBus())
-		return pipe
-	}
-	pipe := cards.NewPipeline(nil, cards.WrapApp(term), flash)
+	pipe := cards.NewPipeline(nil, cardList...)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
 }

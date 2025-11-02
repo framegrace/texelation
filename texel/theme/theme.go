@@ -152,6 +152,31 @@ func (c Config) GetFloat(sectionName, key string, defaultValue float64) float64 
 	return defaultValue
 }
 
+// GetBool retrieves a boolean value from the theme/config.
+func (c Config) GetBool(sectionName, key string, defaultValue bool) bool {
+	if section, ok := c[sectionName]; ok {
+		if val, ok := section[key]; ok {
+			switch v := val.(type) {
+			case bool:
+				return v
+			case string:
+				if parsed, err := strconv.ParseBool(v); err == nil {
+					return parsed
+				}
+			case json.Number:
+				if parsed, err := v.Int64(); err == nil {
+					return parsed != 0
+				}
+			case float64:
+				return v != 0
+			case int:
+				return v != 0
+			}
+		}
+	}
+	return defaultValue
+}
+
 // RegisterDefaults ensures that a section has default values for keys that are not already set by the user.
 // This allows adding new theme options without overwriting user customizations.
 func (c Config) RegisterDefaults(sectionName string, defaults Section) {
