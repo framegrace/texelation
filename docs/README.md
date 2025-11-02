@@ -5,6 +5,39 @@ headless server—responsible for panes, apps, and state—with a tcell-powered
 client that renders the experience and applies UI effects. The result feels like
 tmux on jet fuel: simple to run, easy to extend, and heavily themeable.
 
+## An Important Note
+
+Although I’m tech-savvy—and even if I was a relatively good Java programmer a quarter of a century ago, and tried to keep up by learning new languages now and then—my programming “fu” isn’t quite up to modern times. I’ve been on the systems side of the business for most of my life: sysadmin, architect, and DevOps. These days my work revolves around k8s, CI/CD, cloud APIs, and monitoring tools. The only languages I can honestly call myself “top” in are Bash and regex.
+
+So this all started because I was frustrated by tmux/screen: lots of obscurities and a surprisingly steep learning curve for such simple tools. I’ve used them from the start and still use them daily, but once you get older you just want to stop being a rebel and use something that does the basics out of the box. I also want it to render FAST—everything should feel snappy.
+
+During a quiet period at work, I went looking for a project and thought I’d try building a tmux alternative. The other source of frustration, “vi,” was:
+a) Maybe too big of a project.
+b) There’s no way I’m stopping using “vi.” It would be like losing a friend that’s been by your side every day for 40 years.
+
+So tmux it was.
+
+I wanted to learn a new language and, coming from the k8s world, Go seemed right. I figured I’d start a small project using ChatGPT to plan it and scaffold the app for me to take over and… it got out of hand.
+
+This entire project is now an experiment in “vibe coding.”
+
+Every line so far has been written by an LLM (mostly Claude and ChatGPT CLI tools—I've tried others, but those work best for my method). I haven’t typed a single line of code myself. Even the commits have been made and documented by AI. (I only handle the branches and merging.)
+
+All of this has been done through conversations with the AIs, and it’s been a fun, eye-opening experience. It has its challenges: sometimes the AI goes totally off-road following a strange implementation choice, and it’s hard to steer it back. On the other hand, having someone who can refactor big parts of the code as many times as needed is a blessing.
+
+I'm quite impressed by the results, most of the architecture decisiosn have been mine, but all the messaging protocol including it's fantastic optimizactions and features (diff queuing and replay on connect particularly impressive) is purely CHatGPT 5's idea. Sometimes I had to explain the exact algorithm or data structure is the best, sometimes they provided surprising ideas that worked super well...
+
+So here I publish my results. I think at the end would be a nice product to release. So here it is...
+And it only took me the weekends of 4 or 6 months to this half useful state.
+
+## Colaborations
+
+At first thought it would be fun to only allow AI produced PR's, to keep the code "PURE" :) 
+But that would be a nightmare to check and really, this being started by AI, at the end would be just a curiosity.
+So everyone that finds this usable and wants to collaborate is open to do it, no matter the color or the matter of your skin.
+
+## Features
+
 | Built-in Highlights | Description |
 | -------------------- | ----------- |
 | 🧩 Modular client/server | Server keeps authoritative state; clients can reconnect instantly and render the same buffers. |
@@ -12,10 +45,6 @@ tmux on jet fuel: simple to run, easy to extend, and heavily themeable.
 | 🎨 Themeable effects | Customise overlays and colour schemes via JSON bindings shared between the desktop and card pipelines. Sample effects ship today; the pipeline is ready for richer animations tomorrow. |
 | ⚡ Responsive & lean | Optimised buffer deltas, debounced resizes, snapshot persistence, and a lean protocol keep the UI snappy. |
 | 🧪 Developer-friendly | First-class testing harnesses (`texel-headless`, memconn fixtures), clean package structure, and docs tuned for contributors. |
-
-## A Personal Note
-
-This entire project is an experiment in “vibe coding” — every line so far has been written with the help of LLMs (mostly Claude and ChatGPT CLI tools). Even this same note has been made by AI.
 
 | 🖥️ TexelTerm | Full terminal emulator rendered to a tcell buffer. Easily embeddable today and slated to gain multi-backend (including web) support. |
 
@@ -133,6 +162,7 @@ Additional helpers:
 - `make fmt` – format all Go sources.
 - `make lint` – run `go vet` on the module.
 - `make tidy` – update dependencies.
+- `go run ./client/cmd/texel-headless` – drive the headless renderer to replicate UI interactions without opening a terminal (perfect for automated UI checks).
 - `make clean` – remove build artifacts (`bin`, `dist`, `.cache`).
 
 ## Release Checklist
