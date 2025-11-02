@@ -273,7 +273,7 @@ func TestStateUpdateRoundTrip(t *testing.T) {
 }
 
 func TestPaneStateRoundTrip(t *testing.T) {
-	state := PaneState{PaneID: [16]byte{1, 2, 3, 4}, Flags: PaneStateActive | PaneStateResizing, ZOrder: 42}
+	state := PaneState{PaneID: [16]byte{1, 2, 3, 4}, Flags: PaneStateActive | PaneStateResizing | PaneStateSelectionDelegated, ZOrder: 42}
 	payload, err := EncodePaneState(state)
 	if err != nil {
 		t.Fatalf("encode failed: %v", err)

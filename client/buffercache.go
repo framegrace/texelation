@@ -20,16 +20,17 @@ import (
 
 // PaneState represents the locally cached state of a pane.
 type PaneState struct {
-	ID        [16]byte
-	Revision  uint32
-	UpdatedAt time.Time
-	rowsMu    sync.RWMutex
-	rows      map[int][]Cell
-	Title     string
-	Rect      clientRect
-	Active    bool
-	Resizing  bool
-	ZOrder    int
+	ID               [16]byte
+	Revision         uint32
+	UpdatedAt        time.Time
+	rowsMu           sync.RWMutex
+	rows             map[int][]Cell
+	Title            string
+	Rect             clientRect
+	Active           bool
+	Resizing         bool
+	ZOrder           int
+	HandlesSelection bool
 }
 
 // Cell mirrors texel.Cell but keeps the remote client decoupled from desktop internals.
@@ -198,7 +199,7 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 }
 
 // SetPaneFlags updates tracked pane flags, creating an entry if necessary.
-func (c *BufferCache) SetPaneFlags(id [16]byte, active, resizing bool, zOrder int32) *PaneState {
+func (c *BufferCache) SetPaneFlags(id [16]byte, active, resizing bool, zOrder int32, handlesSelection bool) *PaneState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	pane := c.panes[id]
@@ -209,6 +210,7 @@ func (c *BufferCache) SetPaneFlags(id [16]byte, active, resizing bool, zOrder in
 	pane.Active = active
 	pane.Resizing = resizing
 	pane.ZOrder = int(zOrder)
+	pane.HandlesSelection = handlesSelection
 	return pane
 }
 
@@ -243,6 +245,46 @@ func (c *BufferCache) PaneByID(id [16]byte) *PaneState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.panes[id]
+}
+
+// PaneAt returns the topmost pane containing the provided workspace coordinates.
+func (c *BufferCache) PaneAt(x, y int) *PaneState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.panes) == 0 {
+		return nil
+	}
+	var best *PaneState
+	for _, pane := range c.panes {
+		if pane == nil {
+			continue
+		}
+		rect := pane.Rect
+		if rect.Width <= 0 || rect.Height <= 0 {
+			continue
+		}
+		if x < rect.X || x >= rect.X+rect.Width || y < rect.Y || y >= rect.Y+rect.Height {
+			continue
+		}
+		if best == nil {
+			best = pane
+			continue
+		}
+		if pane.ZOrder > best.ZOrder {
+			best = pane
+			continue
+		}
+		if pane.ZOrder == best.ZOrder {
+			if pane.Active && !best.Active {
+				best = pane
+				continue
+			}
+			if pane.Rect.Y > best.Rect.Y || (pane.Rect.Y == best.Rect.Y && pane.Rect.X > best.Rect.X) {
+				best = pane
+			}
+		}
+	}
+	return best
 }
 
 // SortedPanes returns the panes ordered by geometry (top-to-bottom, left-to-right).

@@ -53,3 +53,20 @@ type SnapshotProvider interface {
 
 // SnapshotFactory constructs an app instance from persisted metadata.
 type SnapshotFactory func(title string, config map[string]interface{}) App
+
+// SelectionHandler is implemented by apps that want to handle mouse selections directly.
+// Coordinates are pane-local (0-based). SelectionStart should return true if the app
+// will manage the selection; returning false allows the workspace fallback to run.
+type SelectionHandler interface {
+	SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool
+	SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask)
+	SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (mime string, data []byte, ok bool)
+	SelectionCancel()
+}
+
+// SelectionDeclarer allows apps to indicate whether they currently support handling selections.
+// This is primarily used by wrapper types (like pipelines) that only delegate when an inner app
+// provides selection handling.
+type SelectionDeclarer interface {
+	SelectionEnabled() bool
+}

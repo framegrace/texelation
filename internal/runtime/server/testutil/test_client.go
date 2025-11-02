@@ -211,7 +211,8 @@ func (tc *TestClient) handleMessage(hdr protocol.Header, payload []byte) error {
 		}
 		active := state.Flags&protocol.PaneStateActive != 0
 		resizing := state.Flags&protocol.PaneStateResizing != 0
-		tc.cache.SetPaneFlags(state.PaneID, active, resizing, state.ZOrder)
+		handles := state.Flags&protocol.PaneStateSelectionDelegated != 0
+		tc.cache.SetPaneFlags(state.PaneID, active, resizing, state.ZOrder, handles)
 
 		select {
 		case tc.paneState <- state:

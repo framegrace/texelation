@@ -24,6 +24,9 @@ type appAdapter struct {
 	app texel.App
 }
 
+var _ Card = (*appAdapter)(nil)
+var _ texel.SelectionDeclarer = (*appAdapter)(nil)
+
 func (a *appAdapter) Run() error                             { return a.app.Run() }
 func (a *appAdapter) Stop()                                  { a.app.Stop() }
 func (a *appAdapter) Resize(cols, rows int)                  { a.app.Resize(cols, rows) }
@@ -34,6 +37,38 @@ func (a *appAdapter) HandleMessage(msg texel.Message) {
 	if handler, ok := a.app.(messageAware); ok {
 		handler.HandleMessage(msg)
 	}
+}
+
+// Selection handling delegates to the underlying app when available.
+func (a *appAdapter) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
+	if handler, ok := a.app.(texel.SelectionHandler); ok {
+		return handler.SelectionStart(x, y, buttons, modifiers)
+	}
+	return false
+}
+
+func (a *appAdapter) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	if handler, ok := a.app.(texel.SelectionHandler); ok {
+		handler.SelectionUpdate(x, y, buttons, modifiers)
+	}
+}
+
+func (a *appAdapter) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
+	if handler, ok := a.app.(texel.SelectionHandler); ok {
+		return handler.SelectionFinish(x, y, buttons, modifiers)
+	}
+	return "", nil, false
+}
+
+func (a *appAdapter) SelectionCancel() {
+	if handler, ok := a.app.(texel.SelectionHandler); ok {
+		handler.SelectionCancel()
+	}
+}
+
+func (a *appAdapter) SelectionEnabled() bool {
+	_, ok := a.app.(texel.SelectionHandler)
+	return ok
 }
 
 func (a *appAdapter) UnderlyingApp() texel.App {

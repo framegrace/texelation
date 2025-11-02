@@ -57,6 +57,19 @@ func sendPaste(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, data []by
 	return writeMessage(writeMu, conn, header, payload)
 }
 
+func sendClipboardSet(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, mime string, data []byte) {
+	msg := protocol.ClipboardSet{MimeType: mime, Data: data}
+	payload, err := protocol.EncodeClipboardSet(msg)
+	if err != nil {
+		log.Printf("encode clipboard set failed: %v", err)
+		return
+	}
+	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgClipboardSet, Flags: protocol.FlagChecksum, SessionID: sessionID}
+	if err := writeMessage(writeMu, conn, header, payload); err != nil {
+		log.Printf("send clipboard set failed: %v", err)
+	}
+}
+
 func writeMessage(mu *sync.Mutex, conn net.Conn, header protocol.Header, payload []byte) error {
 	mu.Lock()
 	defer mu.Unlock()

@@ -232,6 +232,17 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			return err
 		}
 		c.sink.HandleMouseEvent(c.session, mouseEvent)
+		if popper, ok := c.sink.(interface{ PopPendingClipboard() (string, []byte, bool) }); ok {
+			if mime, data, ok := popper.PopPendingClipboard(); ok && len(data) > 0 {
+				encoded, err := protocol.EncodeClipboardSet(protocol.ClipboardSet{MimeType: mime, Data: data})
+				if err != nil {
+					return err
+				}
+				if err := c.writeControlMessage(protocol.MsgClipboardSet, encoded); err != nil {
+					return err
+				}
+			}
+		}
 	case protocol.MsgResize:
 		size, err := protocol.DecodeResize(payload)
 		if err != nil {
@@ -350,7 +361,7 @@ func (c *connection) sendTreeSnapshot() {
 	_ = c.writeMessage(header, payload)
 	states := snapshotMergedPaneStates(snapshot, sink.Desktop())
 	for _, pane := range states {
-		c.sendPaneState(pane.ID, pane.Active, pane.Resizing, pane.ZOrder)
+		c.sendPaneState(pane.ID, pane.Active, pane.Resizing, pane.ZOrder, pane.HandlesSelection)
 	}
 }
 
@@ -373,8 +384,8 @@ func snapshotMergedPaneStates(snapshot protocol.TreeSnapshot, desktop *texel.Des
 	return merged
 }
 
-func (c *connection) PaneStateChanged(id [16]byte, active bool, resizing bool, z int) {
-	c.sendPaneState(id, active, resizing, z)
+func (c *connection) PaneStateChanged(id [16]byte, active bool, resizing bool, z int, handlesSelection bool) {
+	c.sendPaneState(id, active, resizing, z, handlesSelection)
 }
 
 func (c *connection) sendPending() error {
@@ -461,17 +472,20 @@ func colorToRGB(r, g, b int32) uint32 {
 
 func (c *connection) sendPaneStateSnapshots(states []texel.PaneStateSnapshot) {
 	for _, state := range states {
-		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder)
+		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesSelection)
 	}
 }
 
-func (c *connection) sendPaneState(id [16]byte, active, resizing bool, z int) {
+func (c *connection) sendPaneState(id [16]byte, active, resizing bool, z int, handlesSelection bool) {
 	var flags protocol.PaneStateFlags
 	if active {
 		flags |= protocol.PaneStateActive
 	}
 	if resizing {
 		flags |= protocol.PaneStateResizing
+	}
+	if handlesSelection {
+		flags |= protocol.PaneStateSelectionDelegated
 	}
 	payload, err := protocol.EncodePaneState(protocol.PaneState{PaneID: id, Flags: flags, ZOrder: int32(z)})
 	if err != nil {
@@ -531,7 +545,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 
 	states := snapshotMergedPaneStates(snapshot, desktop)
 	for _, state := range states {
-		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder)
+		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesSelection)
 	}
 }
 

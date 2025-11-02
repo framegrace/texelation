@@ -160,6 +160,7 @@ type PaneStateFlags uint8
 const (
 	PaneStateActive PaneStateFlags = 1 << iota
 	PaneStateResizing
+	PaneStateSelectionDelegated
 )
 
 // PaneState reports transient pane flags (active, resizing, etc.).

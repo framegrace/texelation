@@ -30,11 +30,13 @@ const (
 // Pane represents a rectangular area on the screen that hosts an App.
 type pane struct {
 	absX0, absY0, absX1, absY1 int
-	app     App
-	name    string
-	prevBuf [][]Cell
-	screen  *Workspace
-	id      [16]byte
+	app                        App
+	name                       string
+	prevBuf                    [][]Cell
+	screen                     *Workspace
+	id                         [16]byte
+	selectionHandler           SelectionHandler
+	handlesSelection           bool
 
 	// Public state fields
 	IsActive   bool
@@ -68,9 +70,28 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	if listener, ok := app.(Listener); ok {
 		p.screen.Subscribe(listener)
 	}
+	if handler, ok := app.(SelectionHandler); ok {
+		enabled := true
+		if declarer, ok := app.(SelectionDeclarer); ok {
+			enabled = declarer.SelectionEnabled()
+		}
+		if enabled {
+			p.selectionHandler = handler
+			p.handlesSelection = true
+		} else {
+			p.selectionHandler = nil
+			p.handlesSelection = false
+		}
+	} else {
+		p.selectionHandler = nil
+		p.handlesSelection = false
+	}
 	// The app is resized considering the space for borders.
 	p.app.Resize(p.drawableWidth(), p.drawableHeight())
 	p.screen.appLifecycle.StartApp(p.app)
+	if p.screen != nil && p.screen.desktop != nil {
+		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
+	}
 }
 
 // SetActive changes the active state of the pane
@@ -101,7 +122,7 @@ func (p *pane) notifyStateChange() {
 	if p.screen == nil || p.screen.desktop == nil {
 		return
 	}
-	p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder)
+	p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
 }
 
 // SetZOrder sets the z-order (layering) of the pane
@@ -113,7 +134,7 @@ func (p *pane) SetZOrder(zOrder int) {
 	p.ZOrder = zOrder
 	log.Printf("SetZOrder: Pane '%s' z-order set to %d", p.getTitle(), zOrder)
 	if p.screen != nil && p.screen.desktop != nil {
-		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder)
+		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
 	}
 	if p.screen != nil {
 		p.screen.Refresh() // Trigger redraw
@@ -371,4 +392,34 @@ func (p *pane) contains(x, y int) bool {
 		return false
 	}
 	return true
+}
+
+func (p *pane) handlesSelectionEvents() bool {
+	return p != nil && p.handlesSelection && p.selectionHandler != nil
+}
+
+func (p *pane) selectionLocalCoords(x, y int) (int, int) {
+	innerX := x - (p.absX0 + 1)
+	innerY := y - (p.absY0 + 1)
+	innerWidth := p.drawableWidth()
+	innerHeight := p.drawableHeight()
+	if innerWidth <= 0 {
+		innerX = 0
+	} else {
+		if innerX < 0 {
+			innerX = 0
+		} else if innerX >= innerWidth {
+			innerX = innerWidth - 1
+		}
+	}
+	if innerHeight <= 0 {
+		innerY = 0
+	} else {
+		if innerY < 0 {
+			innerY = 0
+		} else if innerY >= innerHeight {
+			innerY = innerHeight - 1
+		}
+	}
+	return innerX, innerY
 }

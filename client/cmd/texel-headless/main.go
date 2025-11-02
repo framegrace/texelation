@@ -163,7 +163,8 @@ func (s *headlessState) handleMessage(logger *log.Logger, hdr protocol.Header, p
 		}
 		active := state.Flags&protocol.PaneStateActive != 0
 		resizing := state.Flags&protocol.PaneStateResizing != 0
-		s.cache.SetPaneFlags(state.PaneID, active, resizing, state.ZOrder)
+		handles := state.Flags&protocol.PaneStateSelectionDelegated != 0
+		s.cache.SetPaneFlags(state.PaneID, active, resizing, state.ZOrder, handles)
 	case protocol.MsgPing:
 		ping, err := protocol.DecodePing(payload)
 		if err != nil {

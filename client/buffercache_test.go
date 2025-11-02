@@ -133,16 +133,16 @@ func TestBufferCacheSetPaneFlags(t *testing.T) {
 	cache := NewBufferCache()
 	var id [16]byte
 	id[0] = 9
-	pane := cache.SetPaneFlags(id, true, true, 7)
+	pane := cache.SetPaneFlags(id, true, true, 7, true)
 	if !pane.Active || !pane.Resizing {
 		t.Fatalf("expected flags to be set")
 	}
 	if pane.ZOrder != 7 {
 		t.Fatalf("expected z-order 7, got %d", pane.ZOrder)
 	}
-	cache.SetPaneFlags(id, false, true, -3)
-	if pane.Active || !pane.Resizing || pane.ZOrder != -3 {
-		t.Fatalf("expected active=false resizing=true z=-3, got %+v", pane)
+	cache.SetPaneFlags(id, false, true, -3, false)
+	if pane.Active || !pane.Resizing || pane.ZOrder != -3 || pane.HandlesSelection {
+		t.Fatalf("expected active=false resizing=true z=-3 handles=false, got %+v", pane)
 	}
 }
 

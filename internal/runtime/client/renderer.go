@@ -96,6 +96,10 @@ func render(state *uiState, screen tcell.Screen) {
 		state.effects.ApplyWorkspaceEffects(workspaceBuffer)
 	}
 
+	if pane, minX, maxX, minY, maxY, ok := state.selectionBounds(); ok {
+		applySelectionHighlight(state, workspaceBuffer, pane, minX, maxX, minY, maxY)
+	}
+
 	for y, row := range workspaceBuffer {
 		for x, cell := range row {
 			ch := cell.Ch
@@ -159,4 +163,49 @@ func blendColor(base, overlay tcell.Color, intensity float32) tcell.Color {
 		return int32(float32(bc)*(1-intensity) + float32(oc)*intensity)
 	}
 	return tcell.NewRGBColor(blend(br, or), blend(bg, og), blend(bb, ob))
+}
+
+func applySelectionHighlight(state *uiState, buffer [][]client.Cell, pane *client.PaneState, minX, maxX, minY, maxY int) {
+	if len(buffer) == 0 {
+		return
+	}
+	bgColor := state.selectionBg
+	if !bgColor.Valid() {
+		bgColor = tcell.NewRGBColor(232, 217, 255)
+	}
+	fgColor := state.selectionFg
+	if !fgColor.Valid() {
+		fgColor = tcell.ColorBlack
+	}
+	paneX0, paneY0, paneX1, paneY1 := 0, 0, 0, 0
+	if pane != nil {
+		paneX0 = pane.Rect.X
+		paneY0 = pane.Rect.Y
+		paneX1 = pane.Rect.X + pane.Rect.Width
+		paneY1 = pane.Rect.Y + pane.Rect.Height
+	}
+	for y := minY; y < maxY; y++ {
+		if y < 0 || y >= len(buffer) {
+			continue
+		}
+		if pane != nil && (y < paneY0 || y >= paneY1) {
+			continue
+		}
+		row := buffer[y]
+		for x := minX; x < maxX; x++ {
+			if x < 0 || x >= len(row) {
+				continue
+			}
+			if pane != nil && (x < paneX0 || x >= paneX1) {
+				continue
+			}
+			cell := row[x]
+			style := cell.Style
+			if style == (tcell.Style{}) {
+				style = state.defaultStyle
+			}
+			style = style.Background(bgColor).Foreground(fgColor)
+			row[x] = client.Cell{Ch: cell.Ch, Style: style}
+		}
+	}
 }

@@ -49,6 +49,13 @@ func (d *DesktopSink) HandleMouseEvent(session *Session, event protocol.MouseEve
 	}
 }
 
+func (d *DesktopSink) PopPendingClipboard() (string, []byte, bool) {
+	if d.desktop == nil {
+		return "", nil, false
+	}
+	return d.desktop.PopPendingClipboard()
+}
+
 func (d *DesktopSink) HandleClipboardSet(session *Session, event protocol.ClipboardSet) {
 	if d.desktop == nil {
 		return

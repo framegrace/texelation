@@ -55,17 +55,12 @@ func Run(builder Builder, args []string) error {
 	defer screen.Fini()
 	screen.Clear()
 	screen.EnableMouse()
+	defer screen.DisableMouse()
 
 	width, height := screen.Size()
 	app.Resize(width, height)
 	refreshCh := make(chan bool, 1)
 	app.SetRefreshNotifier(refreshCh)
-
-	runErr := make(chan error, 1)
-	go func() {
-		runErr <- app.Run()
-	}()
-	defer app.Stop()
 
 	draw := func() {
 		screen.Clear()
@@ -81,6 +76,14 @@ func Run(builder Builder, args []string) error {
 		}
 		screen.Show()
 	}
+
+	draw()
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- app.Run()
+	}()
+	defer app.Stop()
 
 	go func() {
 		for range refreshCh {

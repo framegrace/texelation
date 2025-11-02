@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"texelation/internal/effects"
 	"texelation/texel"
 	"texelation/texel/cards"
+	"texelation/texel/theme"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2"
@@ -45,6 +47,15 @@ type TexelTerm struct {
 	buf          [][]texel.Cell
 	colorPalette [258]tcell.Color
 	controlBus   cards.ControlBus
+	selection    termSelection
+}
+
+type termSelection struct {
+	active      bool
+	anchorLine  int
+	anchorCol   int
+	currentLine int
+	currentCol  int
 }
 
 func New(title, command string) texel.App {
@@ -200,6 +211,7 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 	}
 
 	a.vterm.ClearDirty()
+	a.applySelectionHighlightLocked(a.buf)
 	return a.buf
 }
 
@@ -311,6 +323,80 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	}
 }
 
+// SelectionStart implements texel.SelectionHandler.
+func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.vterm == nil {
+		return false
+	}
+	line, col := a.resolveSelectionPositionLocked(x, y)
+	a.selection = termSelection{
+		active:      true,
+		anchorLine:  line,
+		anchorCol:   col,
+		currentLine: line,
+		currentCol:  col,
+	}
+	a.vterm.MarkAllDirty()
+	a.requestRefresh()
+	return true
+}
+
+// SelectionUpdate implements texel.SelectionHandler.
+func (a *TexelTerm) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.vterm == nil || !a.selection.active {
+		return
+	}
+	line, col := a.resolveSelectionPositionLocked(x, y)
+	if !a.selection.active {
+		return
+	}
+	if line == a.selection.currentLine && col == a.selection.currentCol {
+		return
+	}
+	a.selection.currentLine = line
+	a.selection.currentCol = col
+	a.vterm.MarkAllDirty()
+	a.requestRefresh()
+}
+
+// SelectionFinish implements texel.SelectionHandler.
+func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.vterm == nil || !a.selection.active {
+		return "", nil, false
+	}
+	line, col := a.resolveSelectionPositionLocked(x, y)
+	a.selection.currentLine = line
+	a.selection.currentCol = col
+	text := a.buildSelectionTextLocked()
+	a.selection = termSelection{}
+	a.vterm.MarkAllDirty()
+	a.requestRefresh()
+	if text == "" {
+		return "", nil, false
+	}
+	return "text/plain", []byte(text), true
+}
+
+// SelectionCancel implements texel.SelectionHandler.
+func (a *TexelTerm) SelectionCancel() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.selection.active {
+		return
+	}
+	a.selection = termSelection{}
+	if a.vterm != nil {
+		a.vterm.MarkAllDirty()
+	}
+	a.requestRefresh()
+}
+
 func (a *TexelTerm) Run() error {
 
 	a.mu.Lock()
@@ -396,6 +482,162 @@ func (a *TexelTerm) Run() error {
 	err = cmd.Wait()
 	a.wg.Wait()
 	return err
+}
+
+func (a *TexelTerm) resolveSelectionPositionLocked(x, y int) (int, int) {
+	if a.vterm == nil {
+		return 0, 0
+	}
+	top := a.vterm.VisibleTop()
+	line := top + y
+	historyLen := a.vterm.HistoryLength()
+	if historyLen <= 0 {
+		line = 0
+	} else {
+		if line < 0 {
+			line = 0
+		} else if line >= historyLen {
+			line = historyLen - 1
+		}
+	}
+	col := x
+	if col < 0 {
+		col = 0
+	}
+	if historyLen > 0 {
+		if cells := a.vterm.HistoryLineCopy(line); cells != nil {
+			if col > len(cells) {
+				col = len(cells)
+			}
+		}
+	}
+	return line, col
+}
+
+func (a *TexelTerm) selectionRangeLocked() (int, int, int, int, bool) {
+	if !a.selection.active {
+		return 0, 0, 0, 0, false
+	}
+	startLine := a.selection.anchorLine
+	startCol := a.selection.anchorCol
+	endLine := a.selection.currentLine
+	endCol := a.selection.currentCol
+	if startLine > endLine || (startLine == endLine && startCol > endCol) {
+		startLine, endLine = endLine, startLine
+		startCol, endCol = endCol, startCol
+	}
+	if startLine == endLine && startCol == endCol {
+		return 0, 0, 0, 0, false
+	}
+	return startLine, startCol, endLine, endCol + 1, true
+}
+
+func (a *TexelTerm) buildSelectionTextLocked() string {
+	if a.vterm == nil {
+		return ""
+	}
+	startLine, startCol, endLine, endColExclusive, ok := a.selectionRangeLocked()
+	if !ok {
+		return ""
+	}
+	lines := make([]string, 0, endLine-startLine+1)
+	for line := startLine; line <= endLine; line++ {
+		cells := a.vterm.HistoryLineCopy(line)
+		runes := cellsToRunes(cells)
+		lineStart := 0
+		lineEnd := len(runes)
+		if line == startLine {
+			lineStart = clampInt(startCol, 0, lineEnd)
+		}
+		if line == endLine {
+			target := clampInt(endColExclusive, lineStart, len(runes))
+			lineEnd = target
+		}
+		if line > startLine && line < endLine {
+			lineStart = 0
+			lineEnd = len(runes)
+		}
+		segment := ""
+		if lineEnd > lineStart {
+			segment = string(runes[lineStart:lineEnd])
+		}
+		segment = strings.TrimRight(segment, " ")
+		lines = append(lines, segment)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texel.Cell) {
+	if a.vterm == nil || !a.selection.active || len(buf) == 0 {
+		return
+	}
+	startLine, startCol, endLine, endColExclusive, ok := a.selectionRangeLocked()
+	if !ok {
+		return
+	}
+	top := a.vterm.VisibleTop()
+	cfg := theme.Get()
+	defaultBg := tcell.NewRGBColor(232, 217, 255)
+	highlight := cfg.GetColor("selection", "highlight_bg", defaultBg)
+	if !highlight.Valid() {
+		highlight = defaultBg
+	}
+	highlight = highlight.TrueColor()
+	fgColor := cfg.GetColor("selection", "highlight_fg", tcell.ColorBlack)
+	if !fgColor.Valid() {
+		fgColor = tcell.ColorBlack
+	}
+	fgColor = fgColor.TrueColor()
+	for y := 0; y < len(buf); y++ {
+		lineIdx := top + y
+		if lineIdx < startLine || lineIdx > endLine {
+			continue
+		}
+		row := buf[y]
+		lineStart := 0
+		lineEnd := len(row)
+		if lineIdx == startLine {
+			lineStart = clampInt(startCol, 0, lineEnd)
+		}
+		if lineIdx == endLine {
+			lineEnd = clampInt(endColExclusive, lineStart, len(row))
+		}
+		if lineIdx > startLine && lineIdx < endLine {
+			lineStart = 0
+			lineEnd = len(row)
+		}
+		if lineIdx == startLine && lineIdx == endLine {
+			lineEnd = clampInt(endColExclusive, lineStart, len(row))
+		}
+		for x := lineStart; x < lineEnd && x < len(row); x++ {
+			row[x].Style = row[x].Style.Background(highlight).Foreground(fgColor)
+		}
+	}
+}
+
+func cellsToRunes(cells []parser.Cell) []rune {
+	if len(cells) == 0 {
+		return nil
+	}
+	out := make([]rune, len(cells))
+	for i, cell := range cells {
+		r := cell.Rune
+		if r == 0 {
+			r = ' '
+		}
+		out[i] = r
+	}
+	return out
+}
+
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 func (a *TexelTerm) Resize(cols, rows int) {
