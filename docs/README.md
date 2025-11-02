@@ -196,7 +196,7 @@ At first thought it would be fun to only allow AI produced PR's, to keep the cod
 
 But that would be a nightmare to check and really, this being started by AI, at the end would be just a curiosity.
 
-So everyone that finds this usable and wants to collaborate is open to do it, no matter the the matter your brain is made of.
+So everyone that finds this usable and wants to collaborate is open to do it, no matter the matter your brain is made of.
 
 ## Contributing
 
