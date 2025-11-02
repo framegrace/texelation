@@ -8,13 +8,8 @@ and heavily themeable.
 
 ## Highlights
 
-- 🧱 **Tiling pane manager** with multi-workspace support and instant pane
-  activation via mouse clicks.
-- 🎨 **Fully themeable** appearance, including selectable highlight colours and
-  optional visual effects.
-- 🌀 **Rich selection & scroll UX**: drag to copy anywhere, mouse wheel (and
-  Shift/Alt variants) to move through history, and keyboard navigation with
-  familiar shortcuts.
+- 🧱 **Tiling pane manager** with multi-workspace and mouse support. (still partial)
+- 🎨 **Fully themeable** appearance including optional visual effects.
 - 🧩 **TexelApps pipeline** for composing reusable cards/effects; apps can run
   inside Texelation or standalone.
 - 🖥️ **TexelTerm**: a full terminal emulator rendered to a tcell buffer,
@@ -56,9 +51,9 @@ toolkit for building rich text apps with minimal boilerplate.
 
 Planned TexelApps improvements:
 
+- TexelTui components for form input, charts, and animated layouts.
 - Sub-queues and declarative card layouts for complex dashboards.
 - Shared diagnostics overlays and widget libraries.
-- TexelTui components for form input, charts, and animated layouts.
 
 Stay tuned as TexelTui graduates from infancy to a full-fledged framework.
 
