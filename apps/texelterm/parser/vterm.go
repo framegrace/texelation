@@ -114,8 +114,10 @@ func (v *VTerm) Grid() [][]Cell {
 // placeChar puts a rune at the current cursor position, handling wrapping and insert mode.
 func (v *VTerm) placeChar(r rune) {
 	if v.wrapNext {
-		v.cursorX = 0
-		v.LineFeed()
+		if v.inAltScreen {
+			v.cursorX = 0
+			v.LineFeed()
+		}
 		v.wrapNext = false
 	}
 
@@ -144,9 +146,13 @@ func (v *VTerm) placeChar(r rune) {
 		v.MarkDirty(v.cursorY)
 	}
 
-	if v.autoWrapMode && v.cursorX == v.width-1 {
-		v.wrapNext = true
-	} else if v.cursorX < v.width-1 {
+	if v.inAltScreen {
+		if v.autoWrapMode && v.cursorX == v.width-1 {
+			v.wrapNext = true
+		} else if v.cursorX < v.width-1 {
+			v.SetCursorPos(v.cursorY, v.cursorX+1)
+		}
+	} else {
 		v.SetCursorPos(v.cursorY, v.cursorX+1)
 	}
 
@@ -160,8 +166,10 @@ func (v *VTerm) SetCursorPos(y, x int) {
 	if x < 0 {
 		x = 0
 	}
-	if x >= v.width {
-		x = v.width - 1
+	if v.inAltScreen {
+		if x >= v.width {
+			x = v.width - 1
+		}
 	}
 	if y < 0 {
 		y = 0
