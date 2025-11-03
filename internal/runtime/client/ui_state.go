@@ -114,7 +114,7 @@ func (s *uiState) applyEffectConfig() {
 
 	manager := effects.NewManager()
 	for _, binding := range bindings {
-		cfg := make(effects.EffectConfig, len(binding.Config)+2)
+		cfg := make(effects.EffectConfig)
 		for k, v := range binding.Config {
 			cfg[k] = v
 		}

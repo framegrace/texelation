@@ -444,13 +444,30 @@ func (c *connection) PaneFocused(paneID [16]byte) {
 }
 
 func (c *connection) sendStateUpdate(state texel.StatePayload) {
-	all := make([]int32, len(state.AllWorkspaces))
-	for i, id := range state.AllWorkspaces {
-		all[i] = int32(id)
+	const (
+		minInt32 = -1 << 31
+		maxInt32 = 1<<31 - 1
+	)
+
+	all := make([]int32, 0, len(state.AllWorkspaces))
+	for _, id := range state.AllWorkspaces {
+		if id < minInt32 || id > maxInt32 {
+			log.Printf("connection: workspace id %d out of int32 range; skipping", id)
+			continue
+		}
+		all = append(all, int32(id))
 	}
+
+	workspaceID := int32(0)
+	if state.WorkspaceID < minInt32 || state.WorkspaceID > maxInt32 {
+		log.Printf("connection: active workspace id %d out of int32 range; defaulting to 0", state.WorkspaceID)
+	} else {
+		workspaceID = int32(state.WorkspaceID)
+	}
+
 	r, g, b := state.DesktopBgColor.RGB()
 	update := protocol.StateUpdate{
-		WorkspaceID:   int32(state.WorkspaceID),
+		WorkspaceID:   workspaceID,
 		AllWorkspaces: all,
 		InControlMode: state.InControlMode,
 		SubMode:       state.SubMode,

@@ -31,24 +31,24 @@ import (
 )
 
 type TexelTerm struct {
-	title              string
-	command            string
-	width              int
-	height             int
-	cmd                *exec.Cmd
-	pty                *os.File
-	vterm              *parser.VTerm
-	parser             *parser.Parser
-	mu                 sync.Mutex
-	stop               chan struct{}
-	stopOnce           sync.Once
-	refreshChan        chan<- bool
-	wg                 sync.WaitGroup
-	buf                [][]texel.Cell
-	colorPalette       [258]tcell.Color
-	controlBus         cards.ControlBus
-	selection          termSelection
-	visualBellEnabled  bool
+	title             string
+	command           string
+	width             int
+	height            int
+	cmd               *exec.Cmd
+	pty               *os.File
+	vterm             *parser.VTerm
+	parser            *parser.Parser
+	mu                sync.Mutex
+	stop              chan struct{}
+	stopOnce          sync.Once
+	refreshChan       chan<- bool
+	wg                sync.WaitGroup
+	buf               [][]texel.Cell
+	colorPalette      [258]tcell.Color
+	controlBus        cards.ControlBus
+	selection         termSelection
+	visualBellEnabled bool
 }
 
 type termSelection struct {
