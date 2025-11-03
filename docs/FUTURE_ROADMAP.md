@@ -35,8 +35,8 @@ theme; update their status as work lands or priorities change.
 ### 1.3 Desktop Services & SDK
 - **Service split** – Break `DesktopEngine` into focused services (window
   manager, effect service, event service) to improve testability.
-- **Control mode handler** – Extract the control-mode state machine into its own
-  component for clarity and targeted tests.
+- ~~Control mode handler~~ – Extract the control-mode state machine into its own
+  component for clarity and targeted tests. *(Completed in v0.1.0)*
 - **Developer SDK** – Offer higher-level builders/helpers for assembling apps,
   including stubs for renderer/input/effect hooks.
 - **Hot reload dev server** – Watch source files, reload apps/effects on the fly,
