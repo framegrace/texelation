@@ -58,7 +58,7 @@ func Run(opts Options) error {
 
 	log.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 
-	state := &uiState{
+	state := &clientState{
 		cache:        client.NewBufferCache(),
 		themeValues:  make(map[string]map[string]interface{}),
 		defaultStyle: tcell.StyleDefault,

@@ -1,7 +1,7 @@
 // Copyright © 2025 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: internal/runtime/client/ui_state.go
+// File: internal/runtime/client/client_state.go
 // Summary: UI state management and theme application for client runtime.
 // Usage: Manages client-side state including theme, focus, clipboard, and effects configuration.
 
@@ -23,7 +23,7 @@ import (
 	"texelation/protocol"
 )
 
-type uiState struct {
+type clientState struct {
 	cache                *client.BufferCache
 	clipboardMu          sync.Mutex
 	clipboard            protocol.ClipboardData
@@ -57,14 +57,14 @@ type uiState struct {
 	selection            selectionState
 }
 
-func (s *uiState) setRenderChannel(ch chan<- struct{}) {
+func (s *clientState) setRenderChannel(ch chan<- struct{}) {
 	s.renderCh = ch
 	if s.effects != nil {
 		s.effects.AttachRenderChannel(ch)
 	}
 }
 
-func (s *uiState) setThemeValue(section, key string, value interface{}) {
+func (s *clientState) setThemeValue(section, key string, value interface{}) {
 	if s.themeValues == nil {
 		s.themeValues = make(map[string]map[string]interface{})
 	}
@@ -76,7 +76,7 @@ func (s *uiState) setThemeValue(section, key string, value interface{}) {
 	sec[key] = value
 }
 
-func (s *uiState) scheduleResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, resize protocol.Resize) {
+func (s *clientState) scheduleResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, resize protocol.Resize) {
 	if s == nil {
 		return
 	}
@@ -99,7 +99,7 @@ func (s *uiState) scheduleResize(writeMu *sync.Mutex, conn net.Conn, sessionID [
 	}()
 }
 
-func (s *uiState) applyEffectConfig() {
+func (s *clientState) applyEffectConfig() {
 	var rawBindings interface{}
 	if section, ok := s.themeValues["effects"]; ok {
 		rawBindings = section["bindings"]
@@ -146,7 +146,7 @@ func (s *uiState) applyEffectConfig() {
 	})
 }
 
-func (s *uiState) updateTheme(section, key, value string) {
+func (s *clientState) updateTheme(section, key, value string) {
 	if section == "" || key == "" {
 		return
 	}
@@ -186,7 +186,7 @@ func (s *uiState) updateTheme(section, key, value string) {
 	s.applyEffectConfig()
 }
 
-func (s *uiState) recomputeDefaultStyle() {
+func (s *clientState) recomputeDefaultStyle() {
 	style := tcell.StyleDefault
 	if s.defaultFg != tcell.ColorDefault {
 		style = style.Foreground(s.defaultFg)
@@ -197,7 +197,7 @@ func (s *uiState) recomputeDefaultStyle() {
 	s.defaultStyle = style
 }
 
-func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
+func (s *clientState) applyStateUpdate(update protocol.StateUpdate) {
 	s.workspaceID = int(update.WorkspaceID)
 	if cap(s.workspaces) < len(update.AllWorkspaces) {
 		s.workspaces = make([]int, 0, len(update.AllWorkspaces))
@@ -232,7 +232,7 @@ func (s *uiState) applyStateUpdate(update protocol.StateUpdate) {
 	}
 }
 
-func (s *uiState) handleSelectionMouse(ev *tcell.EventMouse) bool {
+func (s *clientState) handleSelectionMouse(ev *tcell.EventMouse) bool {
 	if s == nil || ev == nil || s.cache == nil {
 		return false
 	}
@@ -269,14 +269,14 @@ func (s *uiState) handleSelectionMouse(ev *tcell.EventMouse) bool {
 	return changed
 }
 
-func (s *uiState) clearSelection() bool {
+func (s *clientState) clearSelection() bool {
 	if s == nil {
 		return false
 	}
 	return s.selection.clear()
 }
 
-func (s *uiState) selectionBounds() (pane *client.PaneState, minX, maxX, minY, maxY int, ok bool) {
+func (s *clientState) selectionBounds() (pane *client.PaneState, minX, maxX, minY, maxY int, ok bool) {
 	if s == nil {
 		return nil, 0, 0, 0, 0, false
 	}
@@ -295,7 +295,7 @@ func (s *uiState) selectionBounds() (pane *client.PaneState, minX, maxX, minY, m
 	return pane, minX, maxX, minY, maxY, true
 }
 
-func (s *uiState) selectionClipboardData() ([]byte, string, bool) {
+func (s *clientState) selectionClipboardData() ([]byte, string, bool) {
 	pane, minX, maxX, minY, maxY, ok := s.selectionBounds()
 	if !ok || pane == nil {
 		return nil, "", false
@@ -342,7 +342,7 @@ func (s *uiState) selectionClipboardData() ([]byte, string, bool) {
 	return []byte(text), "text/plain", true
 }
 
-func (s *uiState) setClipboard(data protocol.ClipboardData) {
+func (s *clientState) setClipboard(data protocol.ClipboardData) {
 	if s == nil {
 		return
 	}
@@ -353,7 +353,7 @@ func (s *uiState) setClipboard(data protocol.ClipboardData) {
 	s.clipboardMu.Unlock()
 }
 
-func (s *uiState) consumeClipboardSync() (protocol.ClipboardData, bool) {
+func (s *clientState) consumeClipboardSync() (protocol.ClipboardData, bool) {
 	if s == nil {
 		return protocol.ClipboardData{}, false
 	}

@@ -12,8 +12,8 @@ import (
 	"texelation/protocol"
 )
 
-func TestUIStateSetRenderChannel(t *testing.T) {
-	state := &uiState{}
+func TestClientStateSetRenderChannel(t *testing.T) {
+	state := &clientState{}
 	ch := make(chan struct{}, 1)
 
 	state.setRenderChannel(ch)
@@ -23,8 +23,8 @@ func TestUIStateSetRenderChannel(t *testing.T) {
 	}
 }
 
-func TestUIStateSetThemeValue(t *testing.T) {
-	state := &uiState{}
+func TestClientStateSetThemeValue(t *testing.T) {
+	state := &clientState{}
 
 	// Set a value
 	state.setThemeValue("pane", "fg", "#ffffff")
@@ -60,8 +60,8 @@ func TestUIStateSetThemeValue(t *testing.T) {
 	}
 }
 
-func TestUIStateUpdateTheme(t *testing.T) {
-	state := &uiState{
+func TestClientStateUpdateTheme(t *testing.T) {
+	state := &clientState{
 		defaultFg: tcell.ColorWhite,
 		defaultBg: tcell.ColorBlack,
 	}
@@ -96,8 +96,8 @@ func TestUIStateUpdateTheme(t *testing.T) {
 	}
 }
 
-func TestUIStateRecomputeDefaultStyle(t *testing.T) {
-	state := &uiState{
+func TestClientStateRecomputeDefaultStyle(t *testing.T) {
+	state := &clientState{
 		defaultFg: tcell.NewRGBColor(255, 0, 0),
 		defaultBg: tcell.NewRGBColor(0, 0, 255),
 	}
@@ -117,20 +117,20 @@ func TestUIStateRecomputeDefaultStyle(t *testing.T) {
 	}
 }
 
-func TestUIStateApplyStateUpdate(t *testing.T) {
-	state := &uiState{
+func TestClientStateApplyStateUpdate(t *testing.T) {
+	state := &clientState{
 		cache: client.NewBufferCache(),
 	}
 
 	update := protocol.StateUpdate{
-		WorkspaceID:    2,
-		AllWorkspaces:  []int32{1, 2, 3},
-		InControlMode:  true,
-		SubMode:        'h',
-		ActiveTitle:    "test-title",
-		DesktopBgRGB:   0xff5733, // Orange
-		Zoomed:         true,
-		ZoomedPaneID:   [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		WorkspaceID:   2,
+		AllWorkspaces: []int32{1, 2, 3},
+		InControlMode: true,
+		SubMode:       'h',
+		ActiveTitle:   "test-title",
+		DesktopBgRGB:  0xff5733, // Orange
+		Zoomed:        true,
+		ZoomedPaneID:  [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 	}
 
 	state.applyStateUpdate(update)
@@ -173,8 +173,8 @@ func TestUIStateApplyStateUpdate(t *testing.T) {
 	}
 }
 
-func TestUIStateApplyStateUpdatePreservesCapacity(t *testing.T) {
-	state := &uiState{
+func TestClientStateApplyStateUpdatePreservesCapacity(t *testing.T) {
+	state := &clientState{
 		cache:      client.NewBufferCache(),
 		workspaces: make([]int, 0, 10), // Pre-allocated capacity
 	}
@@ -195,8 +195,8 @@ func TestUIStateApplyStateUpdatePreservesCapacity(t *testing.T) {
 	}
 }
 
-func TestUIStateApplyStateUpdateUnzoom(t *testing.T) {
-	state := &uiState{
+func TestClientStateApplyStateUpdateUnzoom(t *testing.T) {
+	state := &clientState{
 		cache:      client.NewBufferCache(),
 		zoomed:     true,
 		zoomedPane: [16]byte{1, 2, 3},

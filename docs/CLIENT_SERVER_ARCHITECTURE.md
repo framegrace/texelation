@@ -41,7 +41,7 @@ modules interact, and which gaps we still plan to close.
 | `app.go` (now ~100 lines)        | Entry-point wiring that scaffolds the runtime and delegates to focused modules. |
 | `renderer.go`                    | Applies `BufferCache` contents to the `tcell` screen. |
 | `buffercache.go`                 | Maintains pane geometry & styled cells based on `MsgTreeSnapshot` and `MsgBufferDelta`. |
-| `protocol_handler.go`            | Decodes inbound frames, drives `uiState`, schedules re-renders. |
+| `protocol_handler.go`            | Decodes inbound frames, drives `clientState`, schedules re-renders. |
 | `input_handler.go`               | Converts keyboard/mouse/paste events into protocol messages; performs optimistic UI updates (control mode overlay). |
 | `message_sender.go`              | Encodes outbound messages; centralises error handling/retry semantics. |
 | `background_tasks.go`            | Ping/ack loops, session liveness tracking. |
