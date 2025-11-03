@@ -54,7 +54,7 @@ func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume 
 	c.stop = make(chan struct{})
 	id := session.ID()
 	if awaitResume {
-		log.Printf("server: connection %x awaiting resume request", id[:4])
+		debugLog.Printf("server: connection %x awaiting resume request", id[:4])
 	}
 	if ds, ok := sink.(*DesktopSink); ok {
 		if desktop := ds.Desktop(); desktop != nil {
@@ -100,16 +100,16 @@ func (c *connection) serve() (retErr error) {
 			c.unregisterPaneState()
 		}
 		if retErr != nil {
-			log.Printf("%s exiting with error: %v", prefix, retErr)
+			debugLog.Printf("%s exiting with error: %v", prefix, retErr)
 		} else {
-			log.Printf("%s exiting cleanly", prefix)
+			debugLog.Printf("%s exiting cleanly", prefix)
 		}
 	}()
 	defer c.session.MarkSnapshot(time.Now())
 	for {
 		if err := c.sendPending(); err != nil {
 			if err == io.EOF {
-				log.Printf("%s sendPending reached EOF", prefix)
+				debugLog.Printf("%s sendPending reached EOF", prefix)
 				return nil
 			}
 			log.Printf("%s sendPending error: %v", prefix, err)
@@ -122,7 +122,7 @@ func (c *connection) serve() (retErr error) {
 			continue
 		case err := <-c.readErr:
 			if err == io.EOF {
-				log.Printf("%s read EOF", prefix)
+				debugLog.Printf("%s read EOF", prefix)
 				return nil
 			}
 			if err != nil {
@@ -135,7 +135,7 @@ func (c *connection) serve() (retErr error) {
 			if !ok {
 				err := c.awaitReadError()
 				if err == io.EOF {
-					log.Printf("%s read EOF", prefix)
+					debugLog.Printf("%s read EOF", prefix)
 					return nil
 				}
 				if err != nil {
@@ -145,7 +145,7 @@ func (c *connection) serve() (retErr error) {
 				}
 				return nil
 			}
-			log.Printf("%s recv type=%d seq=%d len=%d", prefix, msg.header.Type, msg.header.Sequence, len(msg.payload))
+			debugLog.Printf("%s recv type=%d seq=%d len=%d", prefix, msg.header.Type, msg.header.Sequence, len(msg.payload))
 			if err := c.handleMessage(prefix, msg.header, msg.payload); err != nil {
 				retErr = err
 				return err
@@ -323,7 +323,7 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		}
 		c.nudge()
 	default:
-		log.Printf("%s ignoring message type %d", prefix, header.Type)
+		debugLog.Printf("%s ignoring message type %d", prefix, header.Type)
 	}
 	return nil
 }

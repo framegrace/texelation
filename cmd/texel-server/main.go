@@ -37,7 +37,10 @@ func main() {
 	snapshotPath := flag.String("snapshot", "", "Optional path to persist pane snapshots")
 	cpuProfile := flag.String("pprof-cpu", "", "Write CPU profile to file")
 	memProfile := flag.String("pprof-mem", "", "Write heap profile to file on exit")
+	verboseLogs := flag.Bool("verbose-logs", false, "Enable verbose server logging")
 	flag.Parse()
+
+	server.SetVerboseLogging(*verboseLogs)
 
 	if *cpuProfile != "" {
 		f, err := os.Create(*cpuProfile)
