@@ -24,6 +24,7 @@ and heavily themeable.
 - Multi-host integration (distributed servers).
 - Multi-client sessions (multi-monitor, collaborative setups).
 - Rich graphical panels via Kitty protocol extensions.
+- User-configurable key bindings.
 
 ## Features
 
