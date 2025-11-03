@@ -15,7 +15,7 @@ import (
 	"texelation/client"
 )
 
-func render(state *uiState, screen tcell.Screen) {
+func render(state *clientState, screen tcell.Screen) {
 	width, height := screen.Size()
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
@@ -117,7 +117,7 @@ func render(state *uiState, screen tcell.Screen) {
 	screen.Show()
 }
 
-func applyZoomOverlay(style tcell.Style, intensity float32, state *uiState) tcell.Style {
+func applyZoomOverlay(style tcell.Style, intensity float32, state *clientState) tcell.Style {
 	if intensity <= 0 {
 		return style
 	}
@@ -165,7 +165,7 @@ func blendColor(base, overlay tcell.Color, intensity float32) tcell.Color {
 	return tcell.NewRGBColor(blend(br, or), blend(bg, og), blend(bb, ob))
 }
 
-func applySelectionHighlight(state *uiState, buffer [][]client.Cell, pane *client.PaneState, minX, maxX, minY, maxY int) {
+func applySelectionHighlight(state *clientState, buffer [][]client.Cell, pane *client.PaneState, minX, maxX, minY, maxY int) {
 	if len(buffer) == 0 {
 		return
 	}

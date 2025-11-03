@@ -39,8 +39,8 @@ func TestBlendColor(t *testing.T) {
 		},
 		{
 			name:      "half intensity blends colors",
-			base:      tcell.NewRGBColor(255, 0, 0),   // Red
-			overlay:   tcell.NewRGBColor(0, 0, 255),   // Blue
+			base:      tcell.NewRGBColor(255, 0, 0), // Red
+			overlay:   tcell.NewRGBColor(0, 0, 255), // Blue
 			intensity: 0.5,
 			wantR:     127, // (255*0.5 + 0*0.5)
 			wantG:     0,
@@ -48,7 +48,7 @@ func TestBlendColor(t *testing.T) {
 		},
 		{
 			name:      "blend white and black at 25%",
-			base:      tcell.NewRGBColor(0, 0, 0),     // Black
+			base:      tcell.NewRGBColor(0, 0, 0),       // Black
 			overlay:   tcell.NewRGBColor(255, 255, 255), // White
 			intensity: 0.25,
 			wantR:     63, // (0*0.75 + 255*0.25)
@@ -98,10 +98,10 @@ func TestBlendColor(t *testing.T) {
 }
 
 func TestApplyZoomOverlay(t *testing.T) {
-	state := &uiState{
-		defaultFg:  tcell.NewRGBColor(255, 255, 255), // White
-		defaultBg:  tcell.NewRGBColor(0, 0, 0),       // Black
-		desktopBg:  tcell.NewRGBColor(32, 32, 32),    // Dark gray
+	state := &clientState{
+		defaultFg: tcell.NewRGBColor(255, 255, 255), // White
+		defaultBg: tcell.NewRGBColor(0, 0, 0),       // Black
+		desktopBg: tcell.NewRGBColor(32, 32, 32),    // Dark gray
 	}
 
 	t.Run("zero intensity returns original style", func(t *testing.T) {

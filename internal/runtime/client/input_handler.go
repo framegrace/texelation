@@ -21,7 +21,7 @@ import (
 	"texelation/protocol"
 )
 
-func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex) bool {
+func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex) bool {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
 		if state.pasting {
@@ -135,7 +135,7 @@ func handleScreenEvent(ev tcell.Event, state *uiState, screen tcell.Screen, conn
 	return true
 }
 
-func consumePasteKey(state *uiState, ev *tcell.EventKey) {
+func consumePasteKey(state *clientState, ev *tcell.EventKey) {
 	var b byte
 	switch ev.Key() {
 	case tcell.KeyRune:

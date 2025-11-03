@@ -120,7 +120,7 @@ func TestConsumePasteKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			state := &uiState{
+			state := &clientState{
 				pasteBuf: make([]byte, 0, 10),
 			}
 
@@ -151,7 +151,7 @@ func TestConsumePasteKey(t *testing.T) {
 }
 
 func TestConsumePasteKeyAccumulates(t *testing.T) {
-	state := &uiState{
+	state := &clientState{
 		pasteBuf: make([]byte, 0, 100),
 	}
 

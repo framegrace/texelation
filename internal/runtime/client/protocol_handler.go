@@ -18,7 +18,7 @@ import (
 	"texelation/protocol"
 )
 
-func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) {
+func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequence *uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) {
 	for {
 		hdr, payload, err := protocol.ReadMessage(conn)
 		if err != nil {
@@ -37,7 +37,7 @@ func readLoop(conn net.Conn, state *uiState, sessionID [16]byte, lastSequence *u
 	}
 }
 
-func handleControlMessage(state *uiState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) bool {
+func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) bool {
 	cache := state.cache
 	switch hdr.Type {
 	case protocol.MsgTreeSnapshot:
