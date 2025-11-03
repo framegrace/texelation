@@ -31,23 +31,24 @@ import (
 )
 
 type TexelTerm struct {
-	title        string
-	command      string
-	width        int
-	height       int
-	cmd          *exec.Cmd
-	pty          *os.File
-	vterm        *parser.VTerm
-	parser       *parser.Parser
-	mu           sync.Mutex
-	stop         chan struct{}
-	stopOnce     sync.Once
-	refreshChan  chan<- bool
-	wg           sync.WaitGroup
-	buf          [][]texel.Cell
-	colorPalette [258]tcell.Color
-	controlBus   cards.ControlBus
-	selection    termSelection
+	title              string
+	command            string
+	width              int
+	height             int
+	cmd                *exec.Cmd
+	pty                *os.File
+	vterm              *parser.VTerm
+	parser             *parser.Parser
+	mu                 sync.Mutex
+	stop               chan struct{}
+	stopOnce           sync.Once
+	refreshChan        chan<- bool
+	wg                 sync.WaitGroup
+	buf                [][]texel.Cell
+	colorPalette       [258]tcell.Color
+	controlBus         cards.ControlBus
+	selection          termSelection
+	visualBellEnabled  bool
 }
 
 type termSelection struct {
@@ -60,16 +61,18 @@ type termSelection struct {
 
 func New(title, command string) texel.App {
 	term := &TexelTerm{
-		title:        title,
-		command:      command,
-		width:        80,
-		height:       24,
-		stop:         make(chan struct{}),
-		colorPalette: newDefaultPalette(),
+		title:             title,
+		command:           command,
+		width:             80,
+		height:            24,
+		stop:              make(chan struct{}),
+		colorPalette:      newDefaultPalette(),
+		visualBellEnabled: false,
 	}
 
 	cfg := theme.Get()
 	flashEnabled := cfg.GetBool("texelterm", "visual_bell_enabled", false)
+	term.visualBellEnabled = flashEnabled
 	wrapped := cards.WrapApp(term)
 	cardList := []cards.Card{wrapped}
 	if flashEnabled {
