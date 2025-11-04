@@ -454,6 +454,12 @@ func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, mo
 		return
 	}
 
+	if d.activeWorkspace != nil {
+		if d.activeWorkspace.handleMouseResize(x, y, buttons, prevButtons) {
+			return
+		}
+	}
+
 	d.handleAppSelection(x, y, buttons, modifiers, prevButtons)
 
 	buttonPressed := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0

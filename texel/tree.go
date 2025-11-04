@@ -343,6 +343,47 @@ func (t *Tree) FindNodeWithPane(target *pane) *Node {
 	return result
 }
 
+// NodeBounds returns the absolute bounds covered by the provided node.
+// Coordinates are [x0,y0) to [x1,y1), matching pane dimensions.
+func (t *Tree) NodeBounds(node *Node) (int, int, int, int, bool) {
+	if node == nil {
+		return 0, 0, 0, 0, false
+	}
+	if node.Pane != nil {
+		return node.Pane.absX0, node.Pane.absY0, node.Pane.absX1, node.Pane.absY1, true
+	}
+
+	hasBounds := false
+	var minX, minY, maxX, maxY int
+	for _, child := range node.Children {
+		cx0, cy0, cx1, cy1, ok := t.NodeBounds(child)
+		if !ok {
+			continue
+		}
+		if !hasBounds {
+			minX, minY, maxX, maxY = cx0, cy0, cx1, cy1
+			hasBounds = true
+			continue
+		}
+		if cx0 < minX {
+			minX = cx0
+		}
+		if cy0 < minY {
+			minY = cy0
+		}
+		if cx1 > maxX {
+			maxX = cx1
+		}
+		if cy1 > maxY {
+			maxY = cy1
+		}
+	}
+	if !hasBounds {
+		return 0, 0, 0, 0, false
+	}
+	return minX, minY, maxX, maxY, true
+}
+
 // findParentOf finds the parent of the given node.
 func (t *Tree) findParentOf(current, parent, target *Node) *Node {
 	if current == nil {

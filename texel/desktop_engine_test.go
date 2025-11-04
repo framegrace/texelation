@@ -312,3 +312,72 @@ func TestCloseActivePaneRespawnsWelcome(t *testing.T) {
 		t.Fatalf("expected the new welcome app to be active after respawn")
 	}
 }
+
+func TestMouseBorderResizeAdjustsRatios(t *testing.T) {
+	driver := &stubScreenDriver{}
+	lifecycle := &trackingLifecycle{}
+
+	var welcomeCount int
+	welcomeFactory := func() App {
+		title := fmt.Sprintf("welcome-%d", welcomeCount)
+		welcomeCount++
+		return newFakeApp(title)
+	}
+
+	var shellCount int
+	shellFactory := func() App {
+		title := fmt.Sprintf("shell-%d", shellCount)
+		shellCount++
+		return newFakeApp(title)
+	}
+
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("expected desktop, got error %v", err)
+	}
+
+	ws := desktop.activeWorkspace
+	if ws == nil {
+		t.Fatalf("workspace should be initialised")
+	}
+
+	ws.PerformSplit(Vertical)
+
+	root := ws.tree.Root
+	if root == nil || root.Split != Vertical || len(root.Children) != 2 {
+		t.Fatalf("expected vertical root with two children after split")
+	}
+
+	leftPane := root.Children[0].Pane
+	rightPane := root.Children[1].Pane
+	if leftPane == nil || rightPane == nil {
+		t.Fatalf("expected leaf panes on both sides of split")
+	}
+
+	initialLeftWidth := leftPane.Width()
+	initialLeftRatio := root.SplitRatios[0]
+
+	borderX := leftPane.absX1 - 1
+	borderY := leftPane.absY0 + leftPane.Height()/2
+
+	if !ws.handleMouseResize(borderX, borderY, tcell.Button1, tcell.ButtonNone) {
+		t.Fatalf("expected mouse resize to start when clicking border")
+	}
+
+	moveX := borderX + 4
+	ws.handleMouseResize(moveX, borderY, tcell.Button1, tcell.Button1)
+	ws.handleMouseResize(moveX, borderY, tcell.ButtonNone, tcell.Button1)
+
+	if ws.mouseResizeBorder != nil {
+		t.Fatalf("expected mouse resize state to clear after release")
+	}
+	if leftPane.IsResizing || rightPane.IsResizing {
+		t.Fatalf("expected panes to exit resizing state after mouse release")
+	}
+	if leftPane.Width() <= initialLeftWidth {
+		t.Fatalf("expected left pane width to increase after dragging (before=%d, after=%d)", initialLeftWidth, leftPane.Width())
+	}
+	if root.SplitRatios[0] <= initialLeftRatio {
+		t.Fatalf("expected left ratio to grow after drag (before=%.3f, after=%.3f)", initialLeftRatio, root.SplitRatios[0])
+	}
+}
