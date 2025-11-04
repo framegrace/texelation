@@ -326,6 +326,23 @@ func (t *Tree) findFirstLeaf(node *Node) *Node {
 	return curr
 }
 
+// FindNodeWithPane returns the first node whose pane matches the provided pane pointer.
+func (t *Tree) FindNodeWithPane(target *pane) *Node {
+	if t == nil || target == nil {
+		return nil
+	}
+	var result *Node
+	t.Traverse(func(n *Node) {
+		if result != nil || n == nil {
+			return
+		}
+		if n.Pane == target {
+			result = n
+		}
+	})
+	return result
+}
+
 // findParentOf finds the parent of the given node.
 func (t *Tree) findParentOf(current, parent, target *Node) *Node {
 	if current == nil {

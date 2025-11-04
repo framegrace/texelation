@@ -44,6 +44,6 @@ type EventRouter interface {
 // default implementation simply runs apps locally, but remote runtimes can
 // provide their own orchestration while preserving the same call sites.
 type AppLifecycleManager interface {
-	StartApp(app App)
+	StartApp(app App, onExit func(error))
 	StopApp(app App)
 }

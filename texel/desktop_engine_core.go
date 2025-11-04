@@ -264,7 +264,7 @@ func (d *DesktopEngine) AddStatusPane(app App, side Side, size int) {
 		app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
 	}
 
-	d.appLifecycle.StartApp(app)
+	d.appLifecycle.StartApp(app, nil)
 	d.recalculateLayout()
 	d.broadcastTreeChanged()
 }
