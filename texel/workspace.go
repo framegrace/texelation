@@ -71,6 +71,7 @@ type Workspace struct {
 	appLifecycle        AppLifecycleManager
 
 	resizeSelection    *selectedBorder
+	mouseResizeBorder  *selectedBorder
 	debugFramesToDump  int
 	refreshMonitorOnce sync.Once
 }
@@ -100,6 +101,19 @@ func (w *Workspace) isDesktopClosing() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func forEachLeafPane(node *Node, fn func(*pane)) {
+	if node == nil || fn == nil {
+		return
+	}
+	if node.Pane != nil {
+		fn(node.Pane)
+		return
+	}
+	for _, child := range node.Children {
+		forEachLeafPane(child, fn)
 	}
 }
 
@@ -307,6 +321,23 @@ func (w *Workspace) nodeAt(x, y int) *Node {
 	return w.tree.FindLeafAt(x, y)
 }
 
+func (w *Workspace) setBorderResizing(border *selectedBorder, resizing bool) {
+	if border == nil || border.node == nil {
+		return
+	}
+	if border.index < 0 || border.index+1 >= len(border.node.Children) {
+		return
+	}
+	left := border.node.Children[border.index]
+	right := border.node.Children[border.index+1]
+	forEachLeafPane(left, func(p *pane) {
+		p.SetResizing(resizing)
+	})
+	forEachLeafPane(right, func(p *pane) {
+		p.SetResizing(resizing)
+	})
+}
+
 func (w *Workspace) activateLeaf(node *Node) bool {
 	if w == nil || node == nil || node.Pane == nil || w.tree == nil {
 		return false
@@ -336,6 +367,10 @@ func (w *Workspace) activateLeaf(node *Node) bool {
 func (w *Workspace) removeNode(target *Node, allowRoot bool) {
 	if w == nil || w.tree == nil || target == nil {
 		return
+	}
+
+	if w.mouseResizeBorder != nil {
+		w.finishMouseResize()
 	}
 
 	pane := target.Pane
@@ -506,6 +541,300 @@ func (w *Workspace) ensureWelcomePane() {
 	}
 }
 
+func (w *Workspace) borderForNeighbor(node *Node, dir Direction) *selectedBorder {
+	if w == nil || w.tree == nil || node == nil {
+		return nil
+	}
+	current := node
+	for current.Parent != nil {
+		parent := current.Parent
+		index := -1
+		for i, child := range parent.Children {
+			if child == current {
+				index = i
+				break
+			}
+		}
+		if index == -1 {
+			return nil
+		}
+
+		switch dir {
+		case DirLeft:
+			if parent.Split == Vertical && index > 0 {
+				return &selectedBorder{node: parent, index: index - 1}
+			}
+		case DirRight:
+			if parent.Split == Vertical && index < len(parent.Children)-1 {
+				return &selectedBorder{node: parent, index: index}
+			}
+		case DirUp:
+			if parent.Split == Horizontal && index > 0 {
+				return &selectedBorder{node: parent, index: index - 1}
+			}
+		case DirDown:
+			if parent.Split == Horizontal && index < len(parent.Children)-1 {
+				return &selectedBorder{node: parent, index: index}
+			}
+		}
+
+		current = parent
+	}
+	return nil
+}
+
+func (w *Workspace) borderAt(x, y int) *selectedBorder {
+	if w == nil || w.tree == nil {
+		return nil
+	}
+	node := w.tree.FindLeafAt(x, y)
+	if node == nil || node.Pane == nil {
+		return nil
+	}
+	p := node.Pane
+	if x == p.absX0 {
+		if border := w.borderForNeighbor(node, DirLeft); border != nil {
+			return border
+		}
+	}
+	if x == p.absX1-1 {
+		if border := w.borderForNeighbor(node, DirRight); border != nil {
+			return border
+		}
+	}
+	if y == p.absY0 {
+		if border := w.borderForNeighbor(node, DirUp); border != nil {
+			return border
+		}
+	}
+	if y == p.absY1-1 {
+		if border := w.borderForNeighbor(node, DirDown); border != nil {
+			return border
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) startMouseResize(border *selectedBorder) {
+	if border == nil {
+		return
+	}
+	clone := &selectedBorder{
+		node:  border.node,
+		index: border.index,
+	}
+	w.mouseResizeBorder = clone
+	w.setBorderResizing(clone, true)
+}
+
+func (w *Workspace) finishMouseResize() {
+	if w.mouseResizeBorder == nil {
+		return
+	}
+	w.setBorderResizing(w.mouseResizeBorder, false)
+	w.mouseResizeBorder = nil
+}
+
+func (w *Workspace) updateMouseResize(x, y int) {
+	if w == nil || w.tree == nil || w.mouseResizeBorder == nil {
+		return
+	}
+	border := w.mouseResizeBorder
+	if border.node == nil {
+		return
+	}
+
+	switch border.node.Split {
+	case Vertical:
+		w.adjustBorderToX(border, x)
+	case Horizontal:
+		w.adjustBorderToY(border, y)
+	}
+}
+
+func (w *Workspace) handleMouseResize(x, y int, buttons, prevButtons tcell.ButtonMask) bool {
+	if w == nil || w.tree == nil {
+		return false
+	}
+
+	resizing := w.mouseResizeBorder != nil
+	buttonDown := buttons&tcell.Button1 != 0
+	prevDown := prevButtons&tcell.Button1 != 0
+
+	if resizing {
+		if buttonDown {
+			w.updateMouseResize(x, y)
+		} else if prevDown {
+			w.finishMouseResize()
+		}
+		return true
+	}
+
+	start := buttonDown && !prevDown
+	if !start {
+		return false
+	}
+
+	border := w.borderAt(x, y)
+	if border == nil {
+		return false
+	}
+
+	w.startMouseResize(border)
+	return true
+}
+
+func (w *Workspace) adjustBorderToX(border *selectedBorder, x int) {
+	if border == nil || border.node == nil || border.index < 0 || border.index+1 >= len(border.node.Children) {
+		return
+	}
+
+	parent := border.node
+	left := parent.Children[border.index]
+	right := parent.Children[border.index+1]
+
+	lx0, _, _, _, okLeft := w.tree.NodeBounds(left)
+	_, _, rx1, _, okRight := w.tree.NodeBounds(right)
+	px0, _, px1, _, okParent := w.tree.NodeBounds(parent)
+
+	if !okLeft || !okRight || !okParent {
+		return
+	}
+
+	minX := lx0 + MinPaneWidth
+	maxX := rx1 - MinPaneWidth
+	if maxX <= minX {
+		return
+	}
+
+	if x < minX {
+		x = minX
+	}
+	if x > maxX {
+		x = maxX
+	}
+
+	parentWidth := px1 - px0
+	if parentWidth <= 0 {
+		return
+	}
+
+	leftWidth := x - lx0
+	rightWidth := rx1 - x
+	if leftWidth < MinPaneWidth {
+		leftWidth = MinPaneWidth
+	}
+	if rightWidth < MinPaneWidth {
+		rightWidth = MinPaneWidth
+	}
+
+	leftRatio := float64(leftWidth) / float64(parentWidth)
+	rightRatio := float64(rightWidth) / float64(parentWidth)
+
+	w.applyBorderRatios(parent, border.index, leftRatio, rightRatio)
+	w.recalculateLayout()
+	if w.desktop != nil {
+		w.desktop.broadcastTreeChanged()
+	}
+	w.Refresh()
+}
+
+func (w *Workspace) adjustBorderToY(border *selectedBorder, y int) {
+	if border == nil || border.node == nil || border.index < 0 || border.index+1 >= len(border.node.Children) {
+		return
+	}
+
+	parent := border.node
+	top := parent.Children[border.index]
+	bottom := parent.Children[border.index+1]
+
+	_, ty0, _, _, okTop := w.tree.NodeBounds(top)
+	_, _, _, by1, okBottom := w.tree.NodeBounds(bottom)
+	_, py0, _, py1, okParent := w.tree.NodeBounds(parent)
+
+	if !okTop || !okBottom || !okParent {
+		return
+	}
+
+	minY := ty0 + MinPaneHeight
+	maxY := by1 - MinPaneHeight
+	if maxY <= minY {
+		return
+	}
+
+	if y < minY {
+		y = minY
+	}
+	if y > maxY {
+		y = maxY
+	}
+
+	parentHeight := py1 - py0
+	if parentHeight <= 0 {
+		return
+	}
+
+	topHeight := y - ty0
+	bottomHeight := by1 - y
+	if topHeight < MinPaneHeight {
+		topHeight = MinPaneHeight
+	}
+	if bottomHeight < MinPaneHeight {
+		bottomHeight = MinPaneHeight
+	}
+
+	topRatio := float64(topHeight) / float64(parentHeight)
+	bottomRatio := float64(bottomHeight) / float64(parentHeight)
+
+	w.applyBorderRatios(parent, border.index, topRatio, bottomRatio)
+	w.recalculateLayout()
+	if w.desktop != nil {
+		w.desktop.broadcastTreeChanged()
+	}
+	w.Refresh()
+}
+
+func (w *Workspace) applyBorderRatios(parent *Node, index int, first, second float64) {
+	if parent == nil || index < 0 || index+1 >= len(parent.SplitRatios) {
+		return
+	}
+
+	sumOthers := 0.0
+	for i, ratio := range parent.SplitRatios {
+		if i == index || i == index+1 {
+			continue
+		}
+		sumOthers += ratio
+	}
+
+	parent.SplitRatios[index] = first
+	parent.SplitRatios[index+1] = second
+
+	remaining := 1.0 - (first + second)
+	if sumOthers > 0 {
+		if remaining < 0 {
+			remaining = 0
+		}
+		scale := remaining / sumOthers
+		for i := range parent.SplitRatios {
+			if i == index || i == index+1 {
+				continue
+			}
+			parent.SplitRatios[i] *= scale
+		}
+	}
+
+	total := 0.0
+	for _, ratio := range parent.SplitRatios {
+		total += ratio
+	}
+	if total > 0 {
+		for i := range parent.SplitRatios {
+			parent.SplitRatios[i] /= total
+		}
+	}
+}
+
 func (w *Workspace) PerformSplit(splitDir SplitType) {
 	if w.tree.ActiveLeaf == nil || w.ShellAppFactory == nil {
 		log.Printf("PerformSplit: Cannot split - no active leaf or shell factory")
@@ -602,6 +931,8 @@ func (w *Workspace) SwapActivePane(d Direction) {
 // Update the draw method to also log when pane animations are detected
 func (w *Workspace) Close() {
 
+	w.finishMouseResize()
+
 	// Close all panes
 	w.tree.Traverse(func(node *Node) {
 		if node.Pane != nil {
@@ -648,15 +979,9 @@ func (w *Workspace) findBorderToResize(d Direction) *selectedBorder {
 		curr = parent
 	}
 	if border != nil {
-		// Use the new SetResizing method
-		if p1 := border.node.Children[border.index].Pane; p1 != nil {
-			p1.SetResizing(true)
-		}
-		if p2 := border.node.Children[border.index+1].Pane; p2 != nil {
-			p2.SetResizing(true)
-		}
+		w.setBorderResizing(border, true)
+		w.Refresh()
 	}
-	w.Refresh()
 	return border
 }
 
@@ -714,13 +1039,7 @@ func (w *Workspace) clearResizeSelection(selection *selectedBorder) {
 	if selection == nil {
 		return
 	}
-	// Use the new SetResizing method
-	if p1 := selection.node.Children[selection.index].Pane; p1 != nil {
-		p1.SetResizing(false)
-	}
-	if p2 := selection.node.Children[selection.index+1].Pane; p2 != nil {
-		p2.SetResizing(false)
-	}
+	w.setBorderResizing(selection, false)
 	w.Refresh()
 }
 
