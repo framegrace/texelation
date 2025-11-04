@@ -16,11 +16,14 @@ type LocalAppLifecycle struct {
 }
 
 // StartApp launches the app's Run method asynchronously.
-func (l *LocalAppLifecycle) StartApp(app App) {
+func (l *LocalAppLifecycle) StartApp(app App, onExit func(error)) {
 	l.wg.Add(1)
 	go func() {
 		defer l.wg.Done()
-		_ = app.Run()
+		err := app.Run()
+		if onExit != nil {
+			onExit(err)
+		}
 	}()
 }
 
@@ -38,5 +41,5 @@ func (l *LocalAppLifecycle) Wait() {
 // out and should not be invoked.
 type NoopAppLifecycle struct{}
 
-func (NoopAppLifecycle) StartApp(app App) {}
-func (NoopAppLifecycle) StopApp(app App)  {}
+func (NoopAppLifecycle) StartApp(app App, _ func(error)) {}
+func (NoopAppLifecycle) StopApp(app App)                 {}

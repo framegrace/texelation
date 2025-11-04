@@ -106,7 +106,10 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	}
 	// The app is resized considering the space for borders.
 	p.app.Resize(p.drawableWidth(), p.drawableHeight())
-	p.screen.appLifecycle.StartApp(p.app)
+	currentApp := p.app
+	p.screen.appLifecycle.StartApp(p.app, func(err error) {
+		p.screen.handleAppExit(p, currentApp, err)
+	})
 	if p.screen != nil && p.screen.desktop != nil {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
 	}

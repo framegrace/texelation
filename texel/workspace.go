@@ -91,6 +91,18 @@ func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager
 	return w, nil
 }
 
+func (w *Workspace) isDesktopClosing() bool {
+	if w == nil || w.desktop == nil || w.desktop.quit == nil {
+		return false
+	}
+	select {
+	case <-w.desktop.quit:
+		return true
+	default:
+		return false
+	}
+}
+
 func (w *Workspace) SetControlMode(active bool) {
 	log.Printf("SetControlMode called: active=%v", active)
 }
@@ -252,6 +264,42 @@ func (w *Workspace) handlePaste(data []byte) {
 	}
 }
 
+func (w *Workspace) handleAppExit(p *pane, exitedApp App, runErr error) {
+	if w == nil || p == nil || w.tree == nil {
+		return
+	}
+	if w.isDesktopClosing() {
+		return
+	}
+
+	// Ignore stale callbacks if the pane has already attached a new app.
+	if exitedApp != nil && p.app != nil && p.app != exitedApp {
+		log.Printf("handleAppExit: ignoring exit for stale app '%s'", exitedApp.GetTitle())
+		return
+	}
+
+	title := "unknown"
+	if exitedApp != nil {
+		title = exitedApp.GetTitle()
+	} else if p.app != nil {
+		title = p.app.GetTitle()
+	}
+
+	if runErr != nil {
+		log.Printf("handleAppExit: app '%s' exited with error: %v", title, runErr)
+	} else {
+		log.Printf("handleAppExit: app '%s' exited cleanly", title)
+	}
+
+	node := w.tree.FindNodeWithPane(p)
+	if node == nil {
+		log.Printf("handleAppExit: pane for app '%s' already removed", title)
+		return
+	}
+
+	w.removeNode(node, true)
+}
+
 func (w *Workspace) nodeAt(x, y int) *Node {
 	if w == nil || w.tree == nil {
 		return nil
@@ -285,57 +333,97 @@ func (w *Workspace) activateLeaf(node *Node) bool {
 	return true
 }
 
-func (w *Workspace) CloseActivePane() {
-	if w.tree.ActiveLeaf == nil {
+func (w *Workspace) removeNode(target *Node, allowRoot bool) {
+	if w == nil || w.tree == nil || target == nil {
 		return
 	}
 
-	closedPaneNode := w.tree.ActiveLeaf
-	parent := closedPaneNode.Parent
-
-	// If this is the root pane, don't close it
-	if parent == nil {
+	pane := target.Pane
+	if pane == nil {
 		return
 	}
 
-	// Find the index of the pane being closed
+	isRoot := target.Parent == nil
+	if isRoot && !allowRoot {
+		log.Printf("removeNode: refusing to remove root pane '%s'", pane.getTitle())
+		return
+	}
+
+	log.Printf("removeNode: removing pane '%s' (root=%v)", pane.getTitle(), isRoot)
+
+	wasActive := w.tree.ActiveLeaf == target
+
+	if isRoot {
+		pane.IsActive = false
+		pane.Close()
+		w.tree.Root = nil
+		w.tree.ActiveLeaf = nil
+		w.recalculateLayout()
+		w.Broadcast(Event{Type: EventPaneClosed, Payload: target})
+		w.notifyFocus()
+		if w.desktop != nil {
+			w.desktop.broadcastTreeChanged()
+			w.desktop.broadcastStateUpdate()
+		}
+		w.ensureWelcomePane()
+		return
+	}
+
+	parent := target.Parent
 	closingIndex := -1
 	for i, child := range parent.Children {
-		if child == closedPaneNode {
+		if child == target {
 			closingIndex = i
 			break
 		}
 	}
-
 	if closingIndex == -1 {
-		log.Printf("CloseActivePane: Could not find pane index")
+		log.Printf("removeNode: could not locate pane '%s' within parent", pane.getTitle())
 		return
 	}
 
-	log.Printf("CloseActivePane: Closing pane '%s' at index %d",
-		closedPaneNode.Pane.getTitle(), closingIndex)
-
-	// Perform the actual tree cleanup
-	if closedPaneNode.Pane != nil {
-		closedPaneNode.Pane.IsActive = false
+	if len(parent.Children) > 0 {
+		parent.Children = append(parent.Children[:closingIndex], parent.Children[closingIndex+1:]...)
+	}
+	if closingIndex < len(parent.SplitRatios) {
+		parent.SplitRatios = append(parent.SplitRatios[:closingIndex], parent.SplitRatios[closingIndex+1:]...)
 	}
 
-	// Remove the child from the parent's slice
-	parent.Children = append(parent.Children[:closingIndex], parent.Children[closingIndex+1:]...)
-	parent.SplitRatios = append(parent.SplitRatios[:closingIndex], parent.SplitRatios[closingIndex+1:]...)
-
-	// If the parent has only one child left, the split is no longer needed.
-	// Promote the remaining child to replace its parent.
-	var nextActiveNode *Node
-	if len(parent.Children) == 1 {
+	var nextActive *Node
+	switch len(parent.Children) {
+	case 0:
+		grandparent := parent.Parent
+		if grandparent == nil {
+			w.tree.Root = nil
+		} else {
+			parentIndex := -1
+			for i, child := range grandparent.Children {
+				if child == parent {
+					parentIndex = i
+					break
+				}
+			}
+			if parentIndex != -1 {
+				grandparent.Children = append(grandparent.Children[:parentIndex], grandparent.Children[parentIndex+1:]...)
+				if parentIndex < len(grandparent.SplitRatios) {
+					grandparent.SplitRatios = append(grandparent.SplitRatios[:parentIndex], grandparent.SplitRatios[parentIndex+1:]...)
+				}
+				if len(grandparent.Children) > 0 {
+					idx := parentIndex
+					if idx >= len(grandparent.Children) {
+						idx = len(grandparent.Children) - 1
+					}
+					nextActive = w.tree.findFirstLeaf(grandparent.Children[idx])
+				}
+			}
+		}
+	case 1:
 		remainingChild := parent.Children[0]
 		grandparent := parent.Parent
 		remainingChild.Parent = grandparent
-
 		if grandparent == nil {
 			w.tree.Root = remainingChild
 		} else {
-			// Find parent's index in grandparent's children and replace it
 			for i, child := range grandparent.Children {
 				if child == parent {
 					grandparent.Children[i] = remainingChild
@@ -343,9 +431,8 @@ func (w *Workspace) CloseActivePane() {
 				}
 			}
 		}
-		nextActiveNode = w.tree.findFirstLeaf(remainingChild)
-	} else {
-		// Normalize ratios after removal
+		nextActive = w.tree.findFirstLeaf(remainingChild)
+	default:
 		totalRatio := 0.0
 		for _, ratio := range parent.SplitRatios {
 			totalRatio += ratio
@@ -355,26 +442,67 @@ func (w *Workspace) CloseActivePane() {
 				parent.SplitRatios[i] = parent.SplitRatios[i] / totalRatio
 			}
 		}
-
-		// Set focus to the previous sibling, or the new last one if we closed the first
 		newIndex := closingIndex
 		if newIndex >= len(parent.Children) {
 			newIndex = len(parent.Children) - 1
 		}
-		nextActiveNode = w.tree.findFirstLeaf(parent.Children[newIndex])
+		if newIndex >= 0 && newIndex < len(parent.Children) {
+			nextActive = w.tree.findFirstLeaf(parent.Children[newIndex])
+		}
 	}
 
-	closedPaneNode.Pane.Close() // Ensure the closed app is stopped
-	w.tree.ActiveLeaf = nextActiveNode
-	if w.tree.ActiveLeaf.Pane != nil {
-		w.tree.ActiveLeaf.Pane.SetActive(true)
+	pane.IsActive = false
+	pane.Close()
+
+	if wasActive {
+		w.tree.ActiveLeaf = nextActive
+		if w.tree.ActiveLeaf != nil && w.tree.ActiveLeaf.Pane != nil {
+			w.tree.ActiveLeaf.Pane.SetActive(true)
+		}
+	} else if w.tree.ActiveLeaf == nil {
+		w.tree.ActiveLeaf = nextActive
+		if w.tree.ActiveLeaf != nil && w.tree.ActiveLeaf.Pane != nil {
+			w.tree.ActiveLeaf.Pane.SetActive(true)
+		}
 	}
 
 	w.recalculateLayout()
-	w.Broadcast(Event{Type: EventPaneClosed, Payload: closedPaneNode})
+	w.Broadcast(Event{Type: EventPaneClosed, Payload: target})
 	w.notifyFocus()
 	if w.desktop != nil {
 		w.desktop.broadcastTreeChanged()
+		w.desktop.broadcastStateUpdate()
+	}
+	w.ensureWelcomePane()
+}
+
+func (w *Workspace) CloseActivePane() {
+	if w == nil || w.tree == nil || w.tree.ActiveLeaf == nil {
+		return
+	}
+	w.removeNode(w.tree.ActiveLeaf, true)
+}
+
+func (w *Workspace) ensureWelcomePane() {
+	if w == nil || w.tree == nil {
+		return
+	}
+	if w.tree.Root != nil {
+		return
+	}
+	if w.isDesktopClosing() {
+		return
+	}
+	if w.desktop == nil || w.desktop.WelcomeAppFactory == nil {
+		return
+	}
+
+	welcomeApp := w.desktop.WelcomeAppFactory()
+	w.AddApp(welcomeApp)
+	w.recalculateLayout()
+	if w.desktop != nil {
+		w.desktop.broadcastTreeChanged()
+		w.desktop.broadcastStateUpdate()
 	}
 }
 

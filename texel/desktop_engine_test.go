@@ -8,6 +8,7 @@
 package texel
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -73,16 +74,33 @@ func (s *stubScreenDriver) GetContent(x, y int) (rune, []rune, tcell.Style, int)
 }
 
 type trackingLifecycle struct {
-	started []App
-	stopped []App
+	started       []App
+	stopped       []App
+	exitCallbacks map[App]func(error)
 }
 
-func (l *trackingLifecycle) StartApp(app App) {
+func (l *trackingLifecycle) StartApp(app App, onExit func(error)) {
 	l.started = append(l.started, app)
+	if onExit != nil {
+		if l.exitCallbacks == nil {
+			l.exitCallbacks = make(map[App]func(error))
+		}
+		l.exitCallbacks[app] = onExit
+	}
 }
 
 func (l *trackingLifecycle) StopApp(app App) {
 	l.stopped = append(l.stopped, app)
+}
+
+func (l *trackingLifecycle) TriggerExit(app App, err error) {
+	if l.exitCallbacks == nil {
+		return
+	}
+	if cb, ok := l.exitCallbacks[app]; ok {
+		cb(err)
+		delete(l.exitCallbacks, app)
+	}
 }
 
 type fakeApp struct {
@@ -160,5 +178,137 @@ func TestDesktopWithInjectedDriverAndLifecycle(t *testing.T) {
 
 	if !driver.finiCalled {
 		t.Fatalf("driver was not closed")
+	}
+}
+
+func TestWorkspaceRemovesPaneWhenAppExits(t *testing.T) {
+	driver := &stubScreenDriver{}
+	lifecycle := &trackingLifecycle{}
+
+	var welcomeCount int
+	welcomeFactory := func() App {
+		title := fmt.Sprintf("welcome-%d", welcomeCount)
+		welcomeCount++
+		return newFakeApp(title)
+	}
+
+	var shellCount int
+	shellFactory := func() App {
+		title := fmt.Sprintf("shell-%d", shellCount)
+		shellCount++
+		return newFakeApp(title)
+	}
+
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("expected desktop, got error %v", err)
+	}
+
+	ws := desktop.activeWorkspace
+	if ws == nil {
+		t.Fatalf("workspace should be initialised")
+	}
+
+	if len(lifecycle.started) != 1 {
+		t.Fatalf("expected initial welcome app to start, got %d", len(lifecycle.started))
+	}
+	welcomeApp := lifecycle.started[0]
+
+	ws.PerformSplit(Vertical)
+
+	if len(lifecycle.started) != 2 {
+		t.Fatalf("expected shell app to start after split, got %d", len(lifecycle.started))
+	}
+	shellApp := lifecycle.started[1]
+
+	leafCount := 0
+	ws.tree.Traverse(func(n *Node) {
+		if n != nil && n.Pane != nil {
+			leafCount++
+		}
+	})
+	if leafCount != 2 {
+		t.Fatalf("expected two panes after split, got %d", leafCount)
+	}
+
+	lifecycle.TriggerExit(shellApp, nil)
+
+	leafCount = 0
+	ws.tree.Traverse(func(n *Node) {
+		if n != nil && n.Pane != nil {
+			leafCount++
+		}
+	})
+	if leafCount != 1 {
+		t.Fatalf("expected one pane after shell exit, got %d", leafCount)
+	}
+
+	if ws.tree.ActiveLeaf == nil || ws.tree.ActiveLeaf.Pane == nil {
+		t.Fatalf("expected active pane after removing shell")
+	}
+	if ws.tree.ActiveLeaf.Pane.app != welcomeApp {
+		t.Fatalf("expected welcome app to remain active after shell exit")
+	}
+
+	lifecycle.TriggerExit(welcomeApp, nil)
+
+	if len(lifecycle.started) != 3 {
+		t.Fatalf("expected welcome to restart automatically, got %d apps started", len(lifecycle.started))
+	}
+
+	if ws.tree.ActiveLeaf == nil || ws.tree.ActiveLeaf.Pane == nil {
+		t.Fatalf("expected active pane after welcome restart")
+	}
+	newWelcome := lifecycle.started[2]
+	if ws.tree.ActiveLeaf.Pane.app != newWelcome {
+		t.Fatalf("expected new welcome app to be active after restart")
+	}
+}
+
+func TestCloseActivePaneRespawnsWelcome(t *testing.T) {
+	driver := &stubScreenDriver{}
+	lifecycle := &trackingLifecycle{}
+
+	var welcomeCount int
+	welcomeFactory := func() App {
+		title := fmt.Sprintf("welcome-%d", welcomeCount)
+		welcomeCount++
+		return newFakeApp(title)
+	}
+
+	shellFactory := func() App { return newFakeApp("shell") }
+
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	if err != nil {
+		t.Fatalf("expected desktop, got error %v", err)
+	}
+
+	ws := desktop.activeWorkspace
+	if ws == nil {
+		t.Fatalf("workspace should be initialised")
+	}
+
+	if len(lifecycle.started) != 1 {
+		t.Fatalf("expected initial welcome app to start, got %d", len(lifecycle.started))
+	}
+	initialWelcome := lifecycle.started[0]
+
+	ws.CloseActivePane()
+
+	if len(lifecycle.stopped) != 1 || lifecycle.stopped[0] != initialWelcome {
+		t.Fatalf("expected initial welcome app to be stopped once")
+	}
+	if len(lifecycle.started) != 2 {
+		t.Fatalf("expected welcome app to restart automatically, got %d starts", len(lifecycle.started))
+	}
+
+	newWelcome := lifecycle.started[1]
+
+	if ws.tree.Root == nil || ws.tree.ActiveLeaf == nil || ws.tree.ActiveLeaf.Pane == nil {
+		t.Fatalf("expected a new pane to exist after closing the last one")
+	}
+
+	if ws.tree.ActiveLeaf.Pane.app != newWelcome {
+		t.Fatalf("expected the new welcome app to be active after respawn")
 	}
 }
