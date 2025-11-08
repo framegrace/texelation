@@ -158,3 +158,7 @@ Follow `docs/EFFECTS_GUIDE.md`. Highlights:
 Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testing without Unix sockets. See integration tests in `internal/runtime/server/*_test.go` for patterns.
 - Please remeber to always pass refression tests before confirming changes, And commit with an appropiate message (not mentioning claude nor LLMS) after every successful change.
 - Commit as we go, to be able to quickly go back on experimets or dead ends.
+
+## Planning Artifacts
+
+- TexelUI plan: see `docs/TEXELUI_PLAN.md`. When working on TexelUI, keep this plan up to date (checklist and sections) and commit changes to it alongside related code. Future sessions should consult and update this file as the source of truth for TexelUI scope, status, and next steps.
