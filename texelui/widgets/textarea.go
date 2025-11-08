@@ -16,18 +16,11 @@ type TextArea struct {
     OffY       int
     Style      tcell.Style
     CaretStyle tcell.Style
-    SelStyle   tcell.Style
-    // selection state
-    selActive    bool
-    selSX, selSY int
-    selEX, selEY int
-    // selection direction for Shift+Arrow: -1 (left/up), +1 (right/down), 0 (none)
-    selDir int
-	// local clipboard
+	// local clipboard (paste only for now)
 	clip string
 	// invalidation callback
 	inv func(core.Rect)
-    // mouse state for click/drag selection
+    // mouse state
     mouseDown bool
 }
 
@@ -37,14 +30,10 @@ func NewTextArea(x, y, w, h int) *TextArea {
     fg := tm.GetColor("ui", "text_fg", tcell.ColorWhite)
     // Default caret color: slightly greyer than text
     caret := tm.GetColor("ui", "caret_fg", tcell.ColorSilver)
-    // Selection colors (themeable), default to light grey background with black text
-    selBG := tm.GetColor("ui", "selection_bg", tcell.ColorSilver)
-    selFG := tm.GetColor("ui", "selection_fg", tcell.ColorBlack)
     ta := &TextArea{
         Lines:      []string{""},
         Style:      tcell.StyleDefault.Background(bg).Foreground(fg),
         CaretStyle: tcell.StyleDefault.Foreground(caret),
-        SelStyle:   tcell.StyleDefault.Background(selBG).Foreground(selFG),
     }
 	ta.SetPosition(x, y)
 	ta.Resize(w, h)
@@ -100,24 +89,20 @@ func (t *TextArea) ensureVisible() {
 func (t *TextArea) Draw(p *core.Painter) {
 	// fill background
 	p.Fill(t.Rect, ' ', t.Style)
-	// draw visible lines
-	for row := 0; row < t.Rect.H; row++ {
+    // draw visible lines
+    for row := 0; row < t.Rect.H; row++ {
 		ly := t.OffY + row
 		if ly >= len(t.Lines) {
 			break
 		}
 		visible := []rune(t.Lines[ly])
-		// column window
-		col := 0
-    for cx := t.OffX; cx < len(visible) && col < t.Rect.W; cx++ {
-        style := t.Style
-        if t.isSelected(cx, ly) {
-            style = t.SelStyle
+        // column window
+        col := 0
+        for cx := t.OffX; cx < len(visible) && col < t.Rect.W; cx++ {
+            p.SetCell(t.Rect.X+col, t.Rect.Y+row, visible[cx], t.Style)
+            col++
         }
-        p.SetCell(t.Rect.X+col, t.Rect.Y+row, visible[cx], style)
-        col++
     }
-	}
     // caret: draw underlying rune with reversed video (swap fg/bg)
     if t.IsFocused() {
 		cx := t.CaretX - t.OffX
@@ -130,13 +115,8 @@ func (t *TextArea) Draw(p *core.Painter) {
 					ch = line[t.CaretX]
 				}
 			}
-            // Determine current cell style (selected or normal)
+            // Determine current cell style (no selection styling)
             baseStyle := t.Style
-            if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
-                if t.isSelected(t.CaretX, t.CaretY) {
-                    baseStyle = t.SelStyle
-                }
-            }
             fg, bg, _ := baseStyle.Decompose()
             // Reverse: swap fg and bg of the effective cell style
             caretStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
@@ -313,177 +293,19 @@ func (t *TextArea) HandleMouse(ev *tcell.EventMouse) bool {
 		t.invalidateViewport()
 		return true
 	}
-	if btn&tcell.Button1 != 0 {
-		// press/drag
-		if !t.mouseDown {
-			t.mouseDown = true
-			t.CaretY = t.OffY + ly
-			if t.CaretY >= len(t.Lines) {
-				t.CaretY = len(t.Lines) - 1
-			}
-			t.CaretX = t.OffX + lx
-			t.startSelection()
-		}
-		t.extendSelection()
-		t.clampCaret()
-		t.ensureVisible()
-		t.invalidateViewport()
-		return true
-	}
-	// release: if no selection range, clear selection
-	if t.mouseDown && btn&tcell.Button1 == 0 {
-		t.mouseDown = false
-		if !t.hasSelection() {
-			t.clearSelection()
-			t.invalidateViewport()
-		}
-		return true
-	}
-	return false
-}
-
-func (t *TextArea) startSelection() {
-	t.selActive = true
-	t.selSX, t.selSY = t.CaretX, t.CaretY
-	t.selEX, t.selEY = t.CaretX, t.CaretY
-}
-func (t *TextArea) extendSelection() {
-	if !t.selActive {
-		t.startSelection()
-		return
-	}
-	// Update raw end (exclusive handled by consumers where needed)
-	t.selEX, t.selEY = t.CaretX, t.CaretY
-}
-func (t *TextArea) clearSelection() { t.selActive = false; t.selDir = 0 }
-func (t *TextArea) hasSelection() bool {
-    // Under the new semantics, a single-cell selection (sx==ex, sy==ey) is valid.
-    return t.selActive
-}
-
-// SelectedRange returns the current selection start and end on the same line
-// for debugging/tests. If no selection or multi-line, returns (-1,-1).
-func (t *TextArea) SelectedRange() (int, int) {
-    if !t.hasSelection() || t.selSY != t.selEY {
-        return -1, -1
-    }
-    sx, _, ex, _ := t.selSX, t.selSY, t.selEX, t.selEY
-    if sx > ex { sx, ex = ex, sx }
-    return sx, ex
-}
-
-func (t *TextArea) isSelected(cx, cy int) bool {
-    if !t.hasSelection() {
-        return false
-    }
-    sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
-    // Normalize order so (sx,sy) -> (ex,ey) is forward
-    if ey < sy || (ey == sy && ex < sx) {
-        sx, sy, ex, ey = ex, ey, sx, sy
-    }
-    if cy < sy || cy > ey {
-        return false
-    }
-    if sy == ey {
-        // Single-line selection uses inclusive end [sx, ex]
-        return cx >= sx && cx <= ex
-    }
-    if cy == sy {
-        return cx >= sx
-    }
-    if cy == ey {
-        return cx < ex
-    }
-    return true
-}
-
-func (t *TextArea) getSelectedText() string {
-	if !t.hasSelection() {
-		return ""
-	}
-	sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
-	if sy > ey || (sy == ey && sx > ex) {
-		sx, sy, ex, ey = ex, ey, sx, sy
-	}
-    if sy == ey {
-        r := []rune(t.Lines[sy])
-        if ex >= len(r) {
-            ex = len(r) - 1
+    if btn&tcell.Button1 != 0 {
+        // simple click-to-caret; no drag-selection
+        t.CaretY = t.OffY + ly
+        if t.CaretY >= len(t.Lines) {
+            t.CaretY = len(t.Lines) - 1
         }
-        if sx < 0 { sx = 0 }
-        if sx > len(r) { sx = len(r) }
-        if ex < sx { return "" }
-        // Inclusive end: slice [sx:ex+1]
-        return string(r[sx : ex+1])
-    }
-	out := ""
-	r := []rune(t.Lines[sy])
-	out += string(r[sx:]) + "\n"
-	for yy := sy + 1; yy < ey; yy++ {
-		out += t.Lines[yy] + "\n"
-	}
-    rr := []rune(t.Lines[ey])
-    if ex >= len(rr) {
-        ex = len(rr) - 1
-    }
-    if ex >= 0 {
-        // Inclusive end on the last line
-        out += string(rr[:ex+1])
-    }
-    return out
-}
-
-func (t *TextArea) deleteSelection() {
-    if !t.hasSelection() {
-        return
-    }
-    sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
-    // Normalize order so (sx,sy) -> (ex,ey) is forward
-    if ey < sy || (ey == sy && ex < sx) {
-        sx, sy, ex, ey = ex, ey, sx, sy
-    }
-    if sy == ey {
-        r := []rune(t.Lines[sy])
-        if ex >= len(r) {
-            ex = len(r) - 1
-        }
-        if sx < 0 {
-            sx = 0
-        }
-        if sx > len(r) {
-            sx = len(r)
-        }
-        if ex < sx {
-            t.clearSelection()
-            t.invalidateViewport()
-            return
-        }
-        // Remove inclusive [sx, ex]
-        t.Lines[sy] = string(append(r[:sx], r[ex+1:]...))
-        t.CaretX, t.CaretY = sx, sy
-        t.clearSelection()
+        t.CaretX = t.OffX + lx
+        t.clampCaret()
+        t.ensureVisible()
         t.invalidateViewport()
-        return
+        return true
     }
-    head := []rune(t.Lines[sy])
-    tail := []rune(t.Lines[ey])
-    if ex >= len(tail) {
-        ex = len(tail) - 1
-    }
-    if sx < 0 {
-        sx = 0
-    }
-    if sx > len(head) {
-        sx = len(head)
-    }
-    if ex < 0 { ex = -1 }
-    // Remove inclusive [sx, ex] across lines: keep left head[:sx] + right tail[ex+1:]
-    newHead := string(head[:sx]) + string(tail[ex+1:])
-    t.Lines = append(t.Lines[:sy+1], t.Lines[ey+1:]...)
-    t.Lines[sy] = newHead
-    t.CaretX, t.CaretY = sx, sy
-    t.clearSelection()
-    t.invalidateViewport()
+    return false
 }
 
 func (t *TextArea) insertText(s string) {
