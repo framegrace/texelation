@@ -16,6 +16,7 @@ type TextArea struct {
     OffY       int
     Style      tcell.Style
     CaretStyle tcell.Style
+    SelStyle   tcell.Style
     // selection state
     selActive    bool
     selSX, selSY int
@@ -31,16 +32,20 @@ type TextArea struct {
 }
 
 func NewTextArea(x, y, w, h int) *TextArea {
-	tm := theme.Get()
+    tm := theme.Get()
     bg := tm.GetColor("ui", "text_bg", tcell.ColorBlack)
     fg := tm.GetColor("ui", "text_fg", tcell.ColorWhite)
     // Default caret color: slightly greyer than text
     caret := tm.GetColor("ui", "caret_fg", tcell.ColorSilver)
-	ta := &TextArea{
-		Lines:      []string{""},
+    // Selection colors (themeable), default to light grey background with black text
+    selBG := tm.GetColor("ui", "selection_bg", tcell.ColorSilver)
+    selFG := tm.GetColor("ui", "selection_fg", tcell.ColorBlack)
+    ta := &TextArea{
+        Lines:      []string{""},
         Style:      tcell.StyleDefault.Background(bg).Foreground(fg),
         CaretStyle: tcell.StyleDefault.Foreground(caret),
-	}
+        SelStyle:   tcell.StyleDefault.Background(selBG).Foreground(selFG),
+    }
 	ta.SetPosition(x, y)
 	ta.Resize(w, h)
 	ta.SetFocusable(true)
@@ -104,17 +109,14 @@ func (t *TextArea) Draw(p *core.Painter) {
 		visible := []rune(t.Lines[ly])
 		// column window
 		col := 0
-		// selection style (invert)
-		fg, bg, _ := t.Style.Decompose()
-		selStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
-		for cx := t.OffX; cx < len(visible) && col < t.Rect.W; cx++ {
-			style := t.Style
-			if t.isSelected(cx, ly) {
-				style = selStyle
-			}
-			p.SetCell(t.Rect.X+col, t.Rect.Y+row, visible[cx], style)
-			col++
-		}
+    for cx := t.OffX; cx < len(visible) && col < t.Rect.W; cx++ {
+        style := t.Style
+        if t.isSelected(cx, ly) {
+            style = t.SelStyle
+        }
+        p.SetCell(t.Rect.X+col, t.Rect.Y+row, visible[cx], style)
+        col++
+    }
 	}
     // caret: draw underlying rune with reversed video (swap fg/bg)
     if t.IsFocused() {
@@ -132,8 +134,7 @@ func (t *TextArea) Draw(p *core.Painter) {
             baseStyle := t.Style
             if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
                 if t.isSelected(t.CaretX, t.CaretY) {
-                    fg, bg, _ := t.Style.Decompose()
-                    baseStyle = tcell.StyleDefault.Background(fg).Foreground(bg)
+                    baseStyle = t.SelStyle
                 }
             }
             fg, bg, _ := baseStyle.Decompose()
