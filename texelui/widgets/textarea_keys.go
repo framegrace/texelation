@@ -126,21 +126,25 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 		return false
 	}
 
-	// Update selection after movement keys
-	switch ev.Key() {
-	case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd:
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			if !t.selActive {
-				t.selActive = true
-				t.selSX, t.selSY = prevCX, prevCY
-			}
-			t.selEX, t.selEY = t.CaretX, t.CaretY
-		} else {
-			t.clearSelection()
-		}
-		t.invalidateViewport()
-	}
-	t.clampCaret()
-	t.ensureVisible()
-	return true
+    // Update selection after movement keys
+    switch ev.Key() {
+    case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd:
+        if ev.Modifiers()&tcell.ModShift != 0 {
+            if !t.selActive {
+                t.selActive = true
+                t.selSX, t.selSY = prevCX, prevCY
+            }
+            t.selEX, t.selEY = t.CaretX, t.CaretY
+        } else {
+            t.clearSelection()
+        }
+        // Clamp and ensure visibility before invalidation so redraw reflects new viewport
+        t.clampCaret()
+        t.ensureVisible()
+        t.invalidateViewport()
+        return true
+    }
+    t.clampCaret()
+    t.ensureVisible()
+    return true
 }
