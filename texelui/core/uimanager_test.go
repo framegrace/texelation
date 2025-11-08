@@ -123,12 +123,15 @@ func TestDualTextAreasClickFocusAndType(t *testing.T) {
 
     // Left border + TA
     lb := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
+    // Make focus color identifiable for the test (left border green)
+    lb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorGreen)
     lta := widgets.NewTextArea(0, 0, 8, 2)
     lb.SetChild(lta)
     ui.AddWidget(lb)
 
     // Right border + TA
     rb := widgets.NewBorder(10, 0, 10, 4, tcell.StyleDefault)
+    rb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorTeal)
     rta := widgets.NewTextArea(0, 0, 8, 2)
     rb.SetChild(rta)
     ui.AddWidget(rb)
@@ -153,6 +156,19 @@ func TestDualTextAreasClickFocusAndType(t *testing.T) {
     // Ensure right TA still has 'b'
     if got := buf[1][11].Ch; got != 'b' {
         t.Fatalf("right TA lost content; got %q", string(got))
+    }
+
+    // Check border highlight colors:
+    // Left border top-left corner is at (0,0), right border top-left at (10,0)
+    lfg, _, _ := lb.FocusedStyle.Decompose()
+    rfg, _, _ := rb.FocusedStyle.Decompose()
+    // Left is focused now; its corner should use FocusedStyle FG
+    if gotFG, _, _ := buf[0][0].Style.Decompose(); gotFG != lfg {
+        t.Fatalf("left border FG not focused; got %v want %v", gotFG, lfg)
+    }
+    // Right is not focused; its corner should not match FocusedStyle FG (unless same)
+    if gotFG, _, _ := buf[0][10].Style.Decompose(); gotFG == rfg {
+        t.Fatalf("right border unexpectedly shows focused FG color")
     }
 }
 

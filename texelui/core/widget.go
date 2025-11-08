@@ -70,6 +70,12 @@ type HitTester interface {
     WidgetAt(x, y int) Widget
 }
 
+// FocusState is implemented by widgets embedding BaseWidget and allows
+// containers to query whether a widget is focused.
+type FocusState interface {
+    IsFocused() bool
+}
+
 // BlinkAware widgets support periodic blink updates (e.g., caret blink).
 // UI frameworks can call BlinkTick at a fixed interval; the widget should
 // invalidate any regions that need redraw and return immediately.
