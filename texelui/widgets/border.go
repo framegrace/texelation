@@ -22,8 +22,17 @@ func NewBorder(x, y, w, h int, style tcell.Style) *Border {
     // Default focused style from theme (fg override), bg same as base style
     tm := theme.Get()
     ffg := tm.GetColor("ui", "focus_border_fg", tcell.ColorYellow)
-    _, bg, _ := style.Decompose()
+    fg, bg, _ := style.Decompose()
+    if bg == tcell.ColorDefault {
+        bg = tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
+    }
     b.FocusedStyle = tcell.StyleDefault.Foreground(ffg).Background(bg)
+    // Also set BaseWidget focused style for self-focus (theme defaults)
+    fbg := tm.GetColor("ui", "focus_border_bg", bg)
+    if fg == tcell.ColorDefault {
+        fg = tm.GetColor("ui", "surface_fg", tcell.ColorWhite)
+    }
+    b.SetFocusedStyle(tcell.StyleDefault.Foreground(ffg).Background(fbg), true)
 	// default single-line charset
 	b.Charset = [6]rune{'─', '│', '┌', '┐', '└', '┘'}
 	b.SetPosition(x, y)

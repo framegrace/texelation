@@ -37,6 +37,10 @@ func NewTextArea(x, y, w, h int) *TextArea {
         Style:      tcell.StyleDefault.Background(bg).Foreground(fg),
         CaretStyle: tcell.StyleDefault.Foreground(caret),
     }
+    // Enable focused styling using theme defaults (falls back to text colors)
+    fbg := tm.GetColor("ui", "focus_text_bg", bg)
+    ffg := tm.GetColor("ui", "focus_text_fg", fg)
+    ta.SetFocusedStyle(tcell.StyleDefault.Background(fbg).Foreground(ffg), true)
 	ta.SetPosition(x, y)
 	ta.Resize(w, h)
 	ta.SetFocusable(true)
