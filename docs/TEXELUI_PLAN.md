@@ -93,7 +93,10 @@ Last updated: 2025-11-08
 - [x] Focus traversal (Tab/Shift-Tab), click-to-focus hit-testing
 - [x] Mouse handling with capture for drags (basic)
 - [x] Clipboard integration for TextArea (local copy/cut/paste)
-- [ ] Damage tracking improvements (line/rect union; per-widget invalidation API)
-- [ ] Additional tests and quickstart docs
+- [x] Damage tracking improvements (rect merging; multi-clip redraw)
+- [x] Quickstart doc for demo and embedding
+- [ ] Per-widget invalidation API (plumb widget-driven dirty regions)
+- [ ] Benchmarks for redraw cost (typing and selection)
+- [ ] Cursor blink timer and IME hooks
 
 Maintenance note: Update this checklist and sections whenever work lands. Commit this file alongside related code changes.

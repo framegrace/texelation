@@ -239,36 +239,20 @@ func (u *UIManager) Render() [][]texel.Cell {
 	if len(u.dirty) == 0 {
 		return u.buf
 	}
-	// Merge dirties into a single clip for MVP
-	x0, y0, x1, y1 := u.W, u.H, 0, 0
-	for _, r := range u.dirty {
-		if r.X < x0 {
-			x0 = r.X
-		}
-		if r.Y < y0 {
-			y0 = r.Y
-		}
-		if r.X+r.W > x1 {
-			x1 = r.X + r.W
-		}
-		if r.Y+r.H > y1 {
-			y1 = r.Y + r.H
-		}
-	}
-	if x0 > x1 || y0 > y1 {
-		x0, y0, x1, y1 = 0, 0, 0, 0
-	}
-	clip := Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
-	p := NewPainter(u.buf, clip)
-	// Clear dirty region
-	p.Fill(clip, ' ', u.bgStyle)
-	// Draw widgets intersecting clip
-	for _, w := range u.widgets {
-		wx, wy := w.Position()
-		ww, wh := w.Size()
-		wr := Rect{X: wx, Y: wy, W: ww, H: wh}
-		if rectsOverlap(wr, clip) {
-			w.Draw(p)
+	// Merge dirty rects to reduce redraw area, but keep multiple clips
+	merged := mergeRects(u.dirty)
+	for _, clip := range merged {
+		p := NewPainter(u.buf, clip)
+		// Clear dirty region
+		p.Fill(clip, ' ', u.bgStyle)
+		// Draw widgets intersecting clip
+		for _, w := range u.widgets {
+			wx, wy := w.Position()
+			ww, wh := w.Size()
+			wr := Rect{X: wx, Y: wy, W: ww, H: wh}
+			if rectsOverlap(wr, clip) {
+				w.Draw(p)
+			}
 		}
 	}
 	u.dirty = u.dirty[:0]
@@ -284,4 +268,69 @@ func rectsOverlap(a, b Rect) bool {
 	bx1 := b.X + b.W
 	by1 := b.Y + b.H
 	return a.X < bx1 && ax1 > b.X && a.Y < by1 && ay1 > b.Y
+}
+
+// mergeRects unions overlapping or edge-adjacent rectangles into a compact set.
+func mergeRects(in []Rect) []Rect {
+	out := make([]Rect, 0, len(in))
+	// Copy and normalize (remove zero-sized)
+	for _, r := range in {
+		if r.W <= 0 || r.H <= 0 {
+			continue
+		}
+		out = append(out, r)
+	}
+	// Iteratively merge until stable
+	changed := true
+	for changed {
+		changed = false
+		for i := 0; i < len(out) && !changed; i++ {
+			for j := i + 1; j < len(out) && !changed; j++ {
+				if rectsTouchOrOverlap(out[i], out[j]) {
+					out[i] = union(out[i], out[j])
+					out = append(out[:j], out[j+1:]...)
+					changed = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+func rectsTouchOrOverlap(a, b Rect) bool {
+	// Overlap
+	if rectsOverlap(a, b) {
+		return true
+	}
+	// Edge adjacency (share edge or corner)
+	ax1 := a.X + a.W
+	ay1 := a.Y + a.H
+	bx1 := b.X + b.W
+	by1 := b.Y + b.H
+	horizontallyAdjacent := (ax1 == b.X || bx1 == a.X) && !(a.Y >= by1 || ay1 <= b.Y)
+	verticallyAdjacent := (ay1 == b.Y || by1 == a.Y) && !(a.X >= bx1 || ax1 <= b.X)
+	// Corner adjacency allowed to merge into larger block
+	cornerAdjacent := (ax1 == b.X || bx1 == a.X) && (ay1 == b.Y || by1 == a.Y)
+	return horizontallyAdjacent || verticallyAdjacent || cornerAdjacent
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func union(a, b Rect) Rect {
+	x0 := min(a.X, b.X)
+	y0 := min(a.Y, b.Y)
+	x1 := max(a.X+a.W, b.X+b.W)
+	y1 := max(a.Y+a.H, b.Y+b.H)
+	return Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
 }
