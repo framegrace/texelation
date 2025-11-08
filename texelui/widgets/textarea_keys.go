@@ -44,28 +44,28 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             t.handleShiftArrow(-1, 0)
             return true
         }
-        t.clearSelection(); t.selDir = 0
+        t.clearSelection(); t.selDir = 0; t.blinkOn = true
         t.CaretX--
     case tcell.KeyRight:
         if ev.Modifiers()&tcell.ModShift != 0 {
             t.handleShiftArrow(1, 0)
             return true
         }
-        t.clearSelection(); t.selDir = 0
+        t.clearSelection(); t.selDir = 0; t.blinkOn = true
         t.CaretX++
     case tcell.KeyUp:
         if ev.Modifiers()&tcell.ModShift != 0 {
             t.handleShiftArrow(0, -1)
             return true
         }
-        t.clearSelection(); t.selDir = 0
+        t.clearSelection(); t.selDir = 0; t.blinkOn = true
         t.CaretY--
     case tcell.KeyDown:
         if ev.Modifiers()&tcell.ModShift != 0 {
             t.handleShiftArrow(0, 1)
             return true
         }
-        t.clearSelection(); t.selDir = 0
+        t.clearSelection(); t.selDir = 0; t.blinkOn = true
         t.CaretY++
     case tcell.KeyHome:
         if ev.Modifiers()&tcell.ModShift != 0 {
@@ -79,7 +79,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             t.invalidateViewport()
             return true
         }
-        t.clearSelection(); t.selDir = 0
+        t.clearSelection(); t.selDir = 0; t.blinkOn = true
         t.CaretX = 0
     case tcell.KeyEnd:
         if ev.Modifiers()&tcell.ModShift != 0 {
@@ -93,7 +93,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             t.invalidateViewport()
             return true
         }
-        t.clearSelection(); t.selDir = 0
+        t.clearSelection(); t.selDir = 0; t.blinkOn = true
         t.CaretX = 1 << 30
 	case tcell.KeyEnter:
 		line := t.Lines[t.CaretY]
@@ -107,30 +107,30 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 		t.invalidateViewport()
 		return true
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		if t.hasSelection() {
-			t.deleteSelection()
-			t.clampCaret()
-			t.ensureVisible()
-			t.invalidateViewport()
-			return true
-		}
-		if t.CaretX > 0 {
-			line := []rune(t.Lines[t.CaretY])
-			t.Lines[t.CaretY] = string(append(line[:t.CaretX-1], line[t.CaretX:]...))
-			t.CaretX--
-			t.invalidateViewport()
-			return true
-		} else if t.CaretY > 0 {
-			prev := t.Lines[t.CaretY-1]
-			cur := t.Lines[t.CaretY]
-			t.CaretX = len([]rune(prev))
-			t.Lines[t.CaretY-1] = prev + cur
-			t.Lines = append(t.Lines[:t.CaretY], t.Lines[t.CaretY+1:]...)
-			t.CaretY--
-			t.invalidateViewport()
-			return true
-		}
-		return false
+        if t.hasSelection() {
+            t.deleteSelection()
+            t.clampCaret()
+            t.ensureVisible()
+            t.invalidateViewport()
+            return true
+        }
+        if t.CaretX > 0 {
+            line := []rune(t.Lines[t.CaretY])
+            t.Lines[t.CaretY] = string(append(line[:t.CaretX-1], line[t.CaretX:]...))
+            t.CaretX--
+            t.invalidateViewport()
+            return true
+        } else if t.CaretY > 0 {
+            prev := t.Lines[t.CaretY-1]
+            cur := t.Lines[t.CaretY]
+            t.CaretX = len([]rune(prev))
+            t.Lines[t.CaretY-1] = prev + cur
+            t.Lines = append(t.Lines[:t.CaretY], t.Lines[t.CaretY+1:]...)
+            t.CaretY--
+            t.invalidateViewport()
+            return true
+        }
+        return false
 	case tcell.KeyDelete:
 		if t.hasSelection() {
 			t.deleteSelection()
@@ -149,22 +149,22 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 		}
 		return false
 	case tcell.KeyRune:
-		if t.hasSelection() {
-			t.deleteSelection()
-		}
-		r := ev.Rune()
-		line := []rune(t.Lines[t.CaretY])
-		if t.CaretX < 0 {
-			t.CaretX = 0
-		}
-		if t.CaretX > len(line) {
-			t.CaretX = len(line)
-		}
-		line = append(line[:t.CaretX], append([]rune{r}, line[t.CaretX:]...)...)
-		t.Lines[t.CaretY] = string(line)
-		t.CaretX++
-		t.invalidateViewport()
-		return true
+        if t.hasSelection() {
+            t.deleteSelection()
+        }
+        r := ev.Rune()
+        line := []rune(t.Lines[t.CaretY])
+        if t.CaretX < 0 {
+            t.CaretX = 0
+        }
+        if t.CaretX > len(line) {
+            t.CaretX = len(line)
+        }
+        line = append(line[:t.CaretX], append([]rune{r}, line[t.CaretX:]...)...)
+        t.Lines[t.CaretY] = string(line)
+        t.CaretX++
+        t.invalidateViewport()
+        return true
     default:
         // Not handled
         return false
@@ -191,6 +191,7 @@ func (t *TextArea) handleShiftArrow(dx, dy int) {
         t.selDir = dir
         // move caret
         t.moveCaretBy(dx, dy)
+        t.blinkOn = true
         t.clampCaret(); t.ensureVisible(); t.invalidateViewport()
         return
     }
@@ -204,6 +205,7 @@ func (t *TextArea) handleShiftArrow(dx, dy int) {
         t.selEX, t.selEY = t.CaretX, t.CaretY
         t.selDir = dir
     }
+    t.blinkOn = true
     t.clampCaret(); t.ensureVisible(); t.invalidateViewport()
 }
 

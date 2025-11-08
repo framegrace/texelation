@@ -1,10 +1,11 @@
 package adapter
 
 import (
-	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
-	"texelation/texelui/core"
-	"texelation/texelui/widgets"
+    "github.com/gdamore/tcell/v2"
+    "texelation/texel"
+    "texelation/texelui/core"
+    "texelation/texelui/widgets"
+    "time"
 )
 
 // UIApp adapts a TexelUI UIManager to the texel.App interface.
@@ -24,8 +25,25 @@ func NewUIApp(title string, ui *core.UIManager) *UIApp {
 }
 
 func (a *UIApp) Run() error {
-	<-a.stopCh
-	return nil
+    // Start caret blink ticker
+    ticker := time.NewTicker(500 * time.Millisecond)
+    defer ticker.Stop()
+    done := make(chan struct{})
+    go func() {
+        for {
+            select {
+            case <-ticker.C:
+                if a.ui != nil {
+                    a.ui.BlinkTick()
+                }
+            case <-a.stopCh:
+                close(done)
+                return
+            }
+        }
+    }()
+    <-done
+    return nil
 }
 
 func (a *UIApp) Stop() {

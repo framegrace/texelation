@@ -26,8 +26,10 @@ type TextArea struct {
 	clip string
 	// invalidation callback
 	inv func(core.Rect)
-	// mouse state for click/drag selection
-	mouseDown bool
+    // mouse state for click/drag selection
+    mouseDown bool
+    // caret blink state
+    blinkOn bool
 }
 
 func NewTextArea(x, y, w, h int) *TextArea {
@@ -39,6 +41,7 @@ func NewTextArea(x, y, w, h int) *TextArea {
 		Lines:      []string{""},
 		Style:      tcell.StyleDefault.Background(bg).Foreground(fg),
 		CaretStyle: tcell.StyleDefault.Background(fg).Foreground(caret),
+		blinkOn:    true,
 	}
 	ta.SetPosition(x, y)
 	ta.Resize(w, h)
@@ -115,8 +118,8 @@ func (t *TextArea) Draw(p *core.Painter) {
 			col++
 		}
 	}
-	// caret: draw underlying rune with inverted style (swap fg/bg of current cell)
-	if t.IsFocused() {
+    // caret: draw underlying rune with inverted style (swap fg/bg) when blink is ON
+    if t.IsFocused() && t.blinkOn {
 		cx := t.CaretX - t.OffX
 		cy := t.CaretY - t.OffY
 		if cx >= 0 && cy >= 0 && cx < t.Rect.W && cy < t.Rect.H {
@@ -136,11 +139,11 @@ func (t *TextArea) Draw(p *core.Painter) {
 				}
 			}
 			fg, bg, _ := baseStyle.Decompose()
-			// Invert the current cell's style by swapping fg/bg once
-			caretStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
-			p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, caretStyle)
-		}
-	}
+            // Invert the current cell's style by swapping fg/bg once
+            caretStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
+            p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, caretStyle)
+        }
+    }
 }
 
 /*
@@ -527,5 +530,14 @@ func (t *TextArea) invalidateCaretAt(cx, cy int) {
 	if vx < 0 || vy < 0 || vx >= t.Rect.W || vy >= t.Rect.H {
 		return
 	}
-	t.inv(core.Rect{X: t.Rect.X + vx, Y: t.Rect.Y + vy, W: 1, H: 1})
+    t.inv(core.Rect{X: t.Rect.X + vx, Y: t.Rect.Y + vy, W: 1, H: 1})
+}
+
+// BlinkTick toggles caret visibility and invalidates the caret cell if focused.
+func (t *TextArea) BlinkTick() {
+    if !t.IsFocused() {
+        return
+    }
+    t.blinkOn = !t.blinkOn
+    t.invalidateCaretAt(t.CaretX, t.CaretY)
 }

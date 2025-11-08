@@ -67,5 +67,12 @@ type ChildContainer interface {
 
 // HitTester allows a container to return the deepest widget under a point.
 type HitTester interface {
-	WidgetAt(x, y int) Widget
+    WidgetAt(x, y int) Widget
+}
+
+// BlinkAware widgets support periodic blink updates (e.g., caret blink).
+// UI frameworks can call BlinkTick at a fixed interval; the widget should
+// invalidate any regions that need redraw and return immediately.
+type BlinkAware interface {
+    BlinkTick()
 }

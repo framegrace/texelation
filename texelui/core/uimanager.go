@@ -16,7 +16,7 @@ type UIManager struct {
 	buf      [][]texel.Cell
 	dirty    []Rect
 	lay      Layout
-	capture  Widget
+    capture  Widget
 }
 
 func NewUIManager() *UIManager {
@@ -36,6 +36,25 @@ func (u *UIManager) RequestRefresh() {
 	case u.notifier <- true:
 	default:
 	}
+}
+
+// BlinkTick calls BlinkTick on all widgets that implement BlinkAware,
+// allowing them to update internal blink state and invalidate caret regions.
+func (u *UIManager) BlinkTick() {
+    // Visit all widgets depth-first
+    var visit func(w Widget)
+    visit = func(w Widget) {
+        if ba, ok := w.(BlinkAware); ok {
+            ba.BlinkTick()
+        }
+        if cc, ok := w.(ChildContainer); ok {
+            cc.VisitChildren(func(child Widget) { visit(child) })
+        }
+    }
+    for _, w := range u.widgets {
+        visit(w)
+    }
+    u.RequestRefresh()
 }
 
 func (u *UIManager) Resize(w, h int) {
