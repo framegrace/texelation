@@ -67,6 +67,25 @@ func TestUIManagerDirtyClipsRestrictDraw(t *testing.T) {
 	}
 }
 
+// Clicking should focus the inner TextArea, not the border, and allow typing.
+func TestClickToFocusInnerWidget(t *testing.T) {
+	ui := core.NewUIManager()
+	ui.Resize(10, 4)
+	b := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
+	ta := widgets.NewTextArea(1, 1, 8, 2)
+	b.SetChild(ta)
+	ui.AddWidget(b)
+	// Click inside textarea at (1,1) (client origin)
+	me := tcell.NewEventMouse(1, 1, tcell.Button1, 0)
+	ui.HandleMouse(me)
+	// Type 'z'
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'z', 0))
+	buf := ui.Render()
+	if got := buf[1][1].Ch; got != 'z' {
+		t.Fatalf("expected 'z' at (1,1), got %q", string(got))
+	}
+}
+
 // If a widget consumes keys but doesn't invalidate, UIManager falls back to full redraw.
 func TestUIManagerKeyFallbackRedraw(t *testing.T) {
 	ui := core.NewUIManager()

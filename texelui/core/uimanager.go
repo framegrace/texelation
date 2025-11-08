@@ -71,6 +71,9 @@ func (u *UIManager) propagateInvalidator(w Widget) {
 func (u *UIManager) SetLayout(l Layout) { u.lay = l }
 
 func (u *UIManager) Focus(w Widget) {
+	if w == nil || !w.Focusable() {
+		return
+	}
 	if u.focused == w {
 		return
 	}
@@ -158,10 +161,33 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 
 func (u *UIManager) topmostAt(x, y int) Widget {
 	for i := len(u.widgets) - 1; i >= 0; i-- {
-		w := u.widgets[i]
-		if w.HitTest(x, y) {
+		if w := deepHit(u.widgets[i], x, y); w != nil {
 			return w
 		}
+	}
+	return nil
+}
+
+func deepHit(w Widget, x, y int) Widget {
+	if ht, ok := w.(HitTester); ok {
+		if dw := ht.WidgetAt(x, y); dw != nil {
+			return dw
+		}
+	}
+	if w.HitTest(x, y) {
+		return w
+	}
+	if cc, ok := w.(ChildContainer); ok {
+		var res Widget
+		cc.VisitChildren(func(child Widget) {
+			if res != nil {
+				return
+			}
+			if dw := deepHit(child, x, y); dw != nil {
+				res = dw
+			}
+		})
+		return res
 	}
 	return nil
 }

@@ -64,3 +64,8 @@ type InvalidationAware interface {
 type ChildContainer interface {
 	VisitChildren(func(Widget))
 }
+
+// HitTester allows a container to return the deepest widget under a point.
+type HitTester interface {
+	WidgetAt(x, y int) Widget
+}

@@ -82,3 +82,19 @@ func (b *Border) SetInvalidator(fn func(core.Rect)) {
 		}
 	}
 }
+
+// WidgetAt returns the deepest child under the point or the border itself.
+func (b *Border) WidgetAt(x, y int) core.Widget {
+	if b.Child != nil && b.Child.HitTest(x, y) {
+		if ht, ok := b.Child.(core.HitTester); ok {
+			if dw := ht.WidgetAt(x, y); dw != nil {
+				return dw
+			}
+		}
+		return b.Child
+	}
+	if b.HitTest(x, y) {
+		return b
+	}
+	return nil
+}
