@@ -164,6 +164,41 @@ func TestDeleteSelectionShiftRightSequence(t *testing.T) {
 	}
 }
 
+// Minimal single-line backspace deletion: select middle and backspace removes exactly that slice.
+func TestBackspaceDeletesMiddleSelectionSingleLine(t *testing.T) {
+    ui := core.NewUIManager()
+    ui.Resize(20, 3)
+    b := widgets.NewBorder(0, 0, 20, 3, tcell.StyleDefault)
+    ta := widgets.NewTextArea(0, 0, 18, 1)
+    b.SetChild(ta)
+    ui.AddWidget(b)
+    ui.Focus(ta)
+
+    // Type: abcdef
+    for _, r := range "abcdef" {
+        ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, r, 0))
+    }
+    // Move Home, then Right x2 to index 2
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, 0))
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, 0))
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, 0))
+    // Shift+Right x2 to select "cd" ([2,4))
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+    // Backspace to delete selection
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyBackspace, 0, 0))
+
+    buf := ui.Render()
+    expected := "abef"
+    gotRunes := make([]rune, 0, len(expected))
+    for i := 0; i < len(expected); i++ {
+        gotRunes = append(gotRunes, buf[1][i+1].Ch)
+    }
+    if got := string(gotRunes); got != expected {
+        t.Fatalf("after backspace got %q, expected %q", got, expected)
+    }
+}
+
 // If a widget consumes keys but doesn't invalidate, UIManager falls back to full redraw.
 func TestUIManagerKeyFallbackRedraw(t *testing.T) {
 	ui := core.NewUIManager()
