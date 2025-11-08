@@ -48,3 +48,8 @@ func (b *BaseWidget) Blur()                             { b.focused = false }
 func (b *BaseWidget) IsFocused() bool                   { return b.focused }
 func (b *BaseWidget) HitTest(x, y int) bool             { return b.Rect.Contains(x, y) }
 func (b *BaseWidget) HandleKey(ev *tcell.EventKey) bool { return false }
+
+// MouseAware widgets can consume mouse events directly.
+type MouseAware interface {
+	HandleMouse(ev *tcell.EventMouse) bool
+}

@@ -16,6 +16,12 @@ type TextArea struct {
 	OffY       int
 	Style      tcell.Style
 	CaretStyle tcell.Style
+	// selection state
+	selActive    bool
+	selSX, selSY int
+	selEX, selEY int
+	// local clipboard
+	clip string
 }
 
 func NewTextArea(x, y, w, h int) *TextArea {
@@ -88,8 +94,15 @@ func (t *TextArea) Draw(p *core.Painter) {
 		visible := []rune(t.Lines[ly])
 		// column window
 		col := 0
+		// selection style (invert)
+		fg, bg, _ := t.Style.Decompose()
+		selStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
 		for cx := t.OffX; cx < len(visible) && col < t.Rect.W; cx++ {
-			p.SetCell(t.Rect.X+col, t.Rect.Y+row, visible[cx], t.Style)
+			style := t.Style
+			if t.isSelected(cx, ly) {
+				style = selStyle
+			}
+			p.SetCell(t.Rect.X+col, t.Rect.Y+row, visible[cx], style)
 			col++
 		}
 	}
@@ -105,19 +118,68 @@ func (t *TextArea) Draw(p *core.Painter) {
 }
 
 func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
+	// clipboard shortcuts
+	if ev.Modifiers()&tcell.ModCtrl != 0 {
+		switch ev.Rune() {
+		case 'c':
+			t.clip = t.getSelectedText()
+			return true
+		case 'x':
+			t.clip = t.getSelectedText()
+			t.deleteSelection()
+			t.clampCaret()
+			t.ensureVisible()
+			return true
+		case 'v':
+			if t.clip != "" {
+				t.insertText(t.clip)
+				return true
+			}
+		}
+	}
 	switch ev.Key() {
 	case tcell.KeyLeft:
 		t.CaretX--
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			t.extendSelection()
+		} else {
+			t.clearSelection()
+		}
 	case tcell.KeyRight:
 		t.CaretX++
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			t.extendSelection()
+		} else {
+			t.clearSelection()
+		}
 	case tcell.KeyUp:
 		t.CaretY--
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			t.extendSelection()
+		} else {
+			t.clearSelection()
+		}
 	case tcell.KeyDown:
 		t.CaretY++
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			t.extendSelection()
+		} else {
+			t.clearSelection()
+		}
 	case tcell.KeyHome:
 		t.CaretX = 0
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			t.extendSelection()
+		} else {
+			t.clearSelection()
+		}
 	case tcell.KeyEnd:
 		t.CaretX = 1 << 30
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			t.extendSelection()
+		} else {
+			t.clearSelection()
+		}
 	case tcell.KeyEnter:
 		// split line
 		line := t.Lines[t.CaretY]
@@ -129,6 +191,12 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 		t.CaretY++
 		t.CaretX = 0
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if t.hasSelection() {
+			t.deleteSelection()
+			t.clampCaret()
+			t.ensureVisible()
+			return true
+		}
 		if t.CaretX > 0 {
 			line := []rune(t.Lines[t.CaretY])
 			t.Lines[t.CaretY] = string(append(line[:t.CaretX-1], line[t.CaretX:]...))
@@ -143,6 +211,9 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 			t.CaretY--
 		}
 	case tcell.KeyRune:
+		if t.hasSelection() {
+			t.deleteSelection()
+		}
 		r := ev.Rune()
 		line := []rune(t.Lines[t.CaretY])
 		if t.CaretX < 0 {
@@ -160,4 +231,160 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 	t.clampCaret()
 	t.ensureVisible()
 	return true
+}
+
+// Mouse-aware implementation for selection and scrolling.
+func (t *TextArea) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	lx := x - t.Rect.X
+	ly := y - t.Rect.Y
+	if lx < 0 || ly < 0 || lx >= t.Rect.W || ly >= t.Rect.H {
+		return false
+	}
+	btn := ev.Buttons()
+	if btn&(tcell.WheelUp|tcell.WheelDown) != 0 {
+		if btn&tcell.WheelUp != 0 && t.OffY > 0 {
+			t.OffY--
+		}
+		if btn&tcell.WheelDown != 0 {
+			t.OffY++
+		}
+		return true
+	}
+	if btn&tcell.Button1 != 0 {
+		t.CaretY = t.OffY + ly
+		if t.CaretY >= len(t.Lines) {
+			t.CaretY = len(t.Lines) - 1
+		}
+		t.CaretX = t.OffX + lx
+		if !t.selActive {
+			t.startSelection()
+		}
+		t.extendSelection()
+		t.clampCaret()
+		t.ensureVisible()
+		return true
+	}
+	return false
+}
+
+func (t *TextArea) startSelection() {
+	t.selActive = true
+	t.selSX, t.selSY = t.CaretX, t.CaretY
+	t.selEX, t.selEY = t.CaretX, t.CaretY
+}
+func (t *TextArea) extendSelection() {
+	if !t.selActive {
+		t.startSelection()
+		return
+	}
+	t.selEX, t.selEY = t.CaretX, t.CaretY
+}
+func (t *TextArea) clearSelection() { t.selActive = false }
+func (t *TextArea) hasSelection() bool {
+	return t.selActive && (t.selSX != t.selEX || t.selSY != t.selEY)
+}
+
+func (t *TextArea) isSelected(cx, cy int) bool {
+	if !t.hasSelection() {
+		return false
+	}
+	sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
+	if sy > ey || (sy == ey && sx > ex) {
+		sx, sy, ex, ey = ex, ey, sx, sy
+	}
+	if cy < sy || cy > ey {
+		return false
+	}
+	if sy == ey {
+		return cx >= sx && cx < ex
+	}
+	if cy == sy {
+		return cx >= sx
+	}
+	if cy == ey {
+		return cx < ex
+	}
+	return true
+}
+
+func (t *TextArea) getSelectedText() string {
+	if !t.hasSelection() {
+		return ""
+	}
+	sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
+	if sy > ey || (sy == ey && sx > ex) {
+		sx, sy, ex, ey = ex, ey, sx, sy
+	}
+	if sy == ey {
+		r := []rune(t.Lines[sy])
+		if ex > len(r) {
+			ex = len(r)
+		}
+		return string(r[sx:ex])
+	}
+	out := ""
+	r := []rune(t.Lines[sy])
+	out += string(r[sx:]) + "\n"
+	for yy := sy + 1; yy < ey; yy++ {
+		out += t.Lines[yy] + "\n"
+	}
+	rr := []rune(t.Lines[ey])
+	if ex > len(rr) {
+		ex = len(rr)
+	}
+	out += string(rr[:ex])
+	return out
+}
+
+func (t *TextArea) deleteSelection() {
+	if !t.hasSelection() {
+		return
+	}
+	sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
+	if sy > ey || (sy == ey && sx > ex) {
+		sx, sy, ex, ey = ex, ey, sx, sy
+	}
+	if sy == ey {
+		r := []rune(t.Lines[sy])
+		t.Lines[sy] = string(append(r[:sx], r[ex:]...))
+		t.CaretX, t.CaretY = sx, sy
+		t.clearSelection()
+		return
+	}
+	head := []rune(t.Lines[sy])
+	tail := []rune(t.Lines[ey])
+	newHead := string(head[:sx]) + string(tail[ex:])
+	t.Lines = append(t.Lines[:sy+1], t.Lines[ey+1:]...)
+	t.Lines[sy] = newHead
+	t.CaretX, t.CaretY = sx, sy
+	t.clearSelection()
+}
+
+func (t *TextArea) insertText(s string) {
+	for _, r := range s {
+		if r == '\n' {
+			line := t.Lines[t.CaretY]
+			head := []rune(line)[:t.CaretX]
+			tail := []rune(line)[t.CaretX:]
+			t.Lines[t.CaretY] = string(head)
+			t.Lines = append(t.Lines[:t.CaretY+1], append([]string{""}, t.Lines[t.CaretY+1:]...)...)
+			t.Lines[t.CaretY+1] = string(tail)
+			t.CaretY++
+			t.CaretX = 0
+		} else {
+			line := []rune(t.Lines[t.CaretY])
+			if t.CaretX < 0 {
+				t.CaretX = 0
+			}
+			if t.CaretX > len(line) {
+				t.CaretX = len(line)
+			}
+			line = append(line[:t.CaretX], append([]rune{r}, line[t.CaretX:]...)...)
+			t.Lines[t.CaretY] = string(line)
+			t.CaretX++
+		}
+	}
+	t.clampCaret()
+	t.ensureVisible()
 }

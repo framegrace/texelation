@@ -16,6 +16,7 @@ type UIManager struct {
 	buf      [][]texel.Cell
 	dirty    []Rect
 	lay      Layout
+	capture  Widget
 }
 
 func NewUIManager() *UIManager {
@@ -71,12 +72,125 @@ func (u *UIManager) Focus(w Widget) {
 }
 
 func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
+	// Focus traversal on Tab/Shift-Tab
+	if ev.Key() == tcell.KeyTab {
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			u.focusPrev()
+		} else {
+			u.focusNext()
+		}
+		u.InvalidateAll()
+		u.RequestRefresh()
+		return true
+	}
+
 	if u.focused != nil && u.focused.HandleKey(ev) {
 		u.InvalidateAll()
 		u.RequestRefresh()
 		return true
 	}
 	return false
+}
+
+// HandleMouse routes mouse events for click-to-focus and optional capture drags.
+func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	buttons := ev.Buttons()
+	prevIsDown := u.capture != nil
+	nowDown := buttons&tcell.Button1 != 0
+
+	// Start capture on press over a widget
+	if !prevIsDown && nowDown {
+		if w := u.topmostAt(x, y); w != nil {
+			u.Focus(w)
+			u.capture = w
+			if mw, ok := w.(MouseAware); ok {
+				_ = mw.HandleMouse(ev)
+			}
+			u.InvalidateAll()
+			u.RequestRefresh()
+			return true
+		}
+		return false
+	}
+
+	// While captured, forward all mouse events
+	if u.capture != nil {
+		if mw, ok := u.capture.(MouseAware); ok {
+			_ = mw.HandleMouse(ev)
+		}
+		// Release on button up
+		if prevIsDown && !nowDown {
+			u.capture = nil
+		}
+		u.InvalidateAll()
+		u.RequestRefresh()
+		return true
+	}
+	// Wheel-only events over topmost
+	if buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0 {
+		if w := u.topmostAt(x, y); w != nil {
+			if mw, ok := w.(MouseAware); ok {
+				_ = mw.HandleMouse(ev)
+				u.InvalidateAll()
+				u.RequestRefresh()
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (u *UIManager) topmostAt(x, y int) Widget {
+	for i := len(u.widgets) - 1; i >= 0; i-- {
+		w := u.widgets[i]
+		if w.HitTest(x, y) {
+			return w
+		}
+	}
+	return nil
+}
+
+func (u *UIManager) focusNext() {
+	if len(u.widgets) == 0 {
+		return
+	}
+	start := -1
+	for i, w := range u.widgets {
+		if w == u.focused {
+			start = i
+			break
+		}
+	}
+	n := len(u.widgets)
+	for i := 1; i <= n; i++ {
+		idx := (start + i) % n
+		if u.widgets[idx].Focusable() {
+			u.Focus(u.widgets[idx])
+			return
+		}
+	}
+}
+
+func (u *UIManager) focusPrev() {
+	if len(u.widgets) == 0 {
+		return
+	}
+	start := -1
+	for i, w := range u.widgets {
+		if w == u.focused {
+			start = i
+			break
+		}
+	}
+	n := len(u.widgets)
+	for i := 1; i <= n; i++ {
+		idx := (start - i + n) % n
+		if u.widgets[idx].Focusable() {
+			u.Focus(u.widgets[idx])
+			return
+		}
+	}
 }
 
 // Invalidate marks a region for redraw.

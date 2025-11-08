@@ -90,9 +90,9 @@ Last updated: 2025-11-08
 - [x] Minimal tests for render pipeline
 - [x] Dirty-region rendering (initial, coarse merge of regions)
 - [x] Layout manager interface (Absolute)
-- [ ] Focus traversal (Tab/Shift-Tab), click-to-focus hit-testing
-- [ ] Mouse handling with capture for drags
-- [ ] Clipboard integration for TextArea (copy/cut/paste)
+- [x] Focus traversal (Tab/Shift-Tab), click-to-focus hit-testing
+- [x] Mouse handling with capture for drags (basic)
+- [x] Clipboard integration for TextArea (local copy/cut/paste)
 - [ ] Damage tracking improvements (line/rect union; per-widget invalidation API)
 - [ ] Additional tests and quickstart docs
 

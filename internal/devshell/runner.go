@@ -118,6 +118,11 @@ func Run(builder Builder, args []string) error {
 			}
 			app.HandleKey(tev)
 			draw()
+		case *tcell.EventMouse:
+			if mh, ok := app.(interface{ HandleMouse(*tcell.EventMouse) }); ok {
+				mh.HandleMouse(tev)
+				draw()
+			}
 		}
 	}
 }

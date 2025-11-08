@@ -54,6 +54,8 @@ func (a *UIApp) GetTitle() string {
 
 func (a *UIApp) HandleKey(ev *tcell.EventKey) { a.ui.HandleKey(ev) }
 
+func (a *UIApp) HandleMouse(ev *tcell.EventMouse) { a.ui.HandleMouse(ev) }
+
 func (a *UIApp) SetRefreshNotifier(ch chan<- bool) { a.refresh = ch; a.ui.SetRefreshNotifier(ch) }
 
 // Expose UI for composition
