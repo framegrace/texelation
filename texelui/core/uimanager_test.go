@@ -147,8 +147,8 @@ func TestDeleteSelectionShiftRightSequence(t *testing.T) {
 	for i := 0; i < 17; i++ {
 		ui.HandleKey(tcell.NewEventKey(tcell.KeyLeft, 0, 0))
 	}
-	// Shift+Right 10 times
-	for i := 0; i < 10; i++ {
+	// Shift+Right 11 times
+	for i := 0; i < 11; i++ {
 		ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
 	}
 	// Backspace to delete selection

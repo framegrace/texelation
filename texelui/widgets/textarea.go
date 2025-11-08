@@ -353,35 +353,43 @@ func (t *TextArea) extendSelection() {
 }
 func (t *TextArea) clearSelection() { t.selActive = false }
 func (t *TextArea) hasSelection() bool {
-	return t.selActive && (t.selSX != t.selEX || t.selSY != t.selEY)
+    return t.selActive && (t.selSX != t.selEX || t.selSY != t.selEY)
+}
+
+// SelectedRange returns the current selection start and end on the same line
+// for debugging/tests. If no selection or multi-line, returns (-1,-1).
+func (t *TextArea) SelectedRange() (int, int) {
+    if !t.hasSelection() || t.selSY != t.selEY {
+        return -1, -1
+    }
+    sx, _, ex, _ := t.selSX, t.selSY, t.selEX, t.selEY
+    if sx > ex { sx, ex = ex, sx }
+    return sx, ex
 }
 
 func (t *TextArea) isSelected(cx, cy int) bool {
-	if !t.hasSelection() {
-		return false
-	}
-	sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
-	forward := (ey > sy) || (ey == sy && ex >= sx)
-	if !forward {
-		sx, sy, ex, ey = ex, ey, sx, sy
-	}
-	if cy < sy || cy > ey {
-		return false
-	}
-	if sy == ey {
-		end := ex
-		if forward {
-			end = ex + 1
-		}
-		return cx >= sx && cx < end
-	}
-	if cy == sy {
-		return cx >= sx
-	}
-	if cy == ey {
-		return cx < ex
-	}
-	return true
+    if !t.hasSelection() {
+        return false
+    }
+    sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
+    // Normalize order so (sx,sy) -> (ex,ey) is forward
+    if ey < sy || (ey == sy && ex < sx) {
+        sx, sy, ex, ey = ex, ey, sx, sy
+    }
+    if cy < sy || cy > ey {
+        return false
+    }
+    if sy == ey {
+        // Single-line selection uses exclusive end [sx, ex)
+        return cx >= sx && cx < ex
+    }
+    if cy == sy {
+        return cx >= sx
+    }
+    if cy == ey {
+        return cx < ex
+    }
+    return true
 }
 
 func (t *TextArea) getSelectedText() string {
@@ -414,56 +422,50 @@ func (t *TextArea) getSelectedText() string {
 }
 
 func (t *TextArea) deleteSelection() {
-	if !t.hasSelection() {
-		return
-	}
-	sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
-	forward := (ey > sy) || (ey == sy && ex >= sx)
-	if !forward {
-		sx, sy, ex, ey = ex, ey, sx, sy
-	}
-	if sy == ey {
-		r := []rune(t.Lines[sy])
-		end := ex
-		if forward {
-			end = ex + 1
-		}
-		if end > len(r) {
-			end = len(r)
-		}
-		if sx < 0 {
-			sx = 0
-		}
-		if sx > len(r) {
-			sx = len(r)
-		}
-		t.Lines[sy] = string(append(r[:sx], r[end:]...))
-		t.CaretX, t.CaretY = sx, sy
-		t.clearSelection()
-		t.invalidateViewport()
-		return
-	}
-	head := []rune(t.Lines[sy])
-	tail := []rune(t.Lines[ey])
-	end := ex
-	if forward {
-		end = ex + 1
-	}
-	if end > len(tail) {
-		end = len(tail)
-	}
-	if sx < 0 {
-		sx = 0
-	}
-	if sx > len(head) {
-		sx = len(head)
-	}
-	newHead := string(head[:sx]) + string(tail[end:])
-	t.Lines = append(t.Lines[:sy+1], t.Lines[ey+1:]...)
-	t.Lines[sy] = newHead
-	t.CaretX, t.CaretY = sx, sy
-	t.clearSelection()
-	t.invalidateViewport()
+    if !t.hasSelection() {
+        return
+    }
+    sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
+    // Normalize order so (sx,sy) -> (ex,ey) is forward
+    if ey < sy || (ey == sy && ex < sx) {
+        sx, sy, ex, ey = ex, ey, sx, sy
+    }
+    if sy == ey {
+        r := []rune(t.Lines[sy])
+        if ex > len(r) {
+            ex = len(r)
+        }
+        if sx < 0 {
+            sx = 0
+        }
+        if sx > len(r) {
+            sx = len(r)
+        }
+        // Remove [sx, ex) exactly
+        t.Lines[sy] = string(append(r[:sx], r[ex:]...))
+        t.CaretX, t.CaretY = sx, sy
+        t.clearSelection()
+        t.invalidateViewport()
+        return
+    }
+    head := []rune(t.Lines[sy])
+    tail := []rune(t.Lines[ey])
+    if ex > len(tail) {
+        ex = len(tail)
+    }
+    if sx < 0 {
+        sx = 0
+    }
+    if sx > len(head) {
+        sx = len(head)
+    }
+    // Remove [sx, ex) spanning multiple lines: keep left head[:sx] + right tail[ex:]
+    newHead := string(head[:sx]) + string(tail[ex:])
+    t.Lines = append(t.Lines[:sy+1], t.Lines[ey+1:]...)
+    t.Lines[sy] = newHead
+    t.CaretX, t.CaretY = sx, sy
+    t.clearSelection()
+    t.invalidateViewport()
 }
 
 func (t *TextArea) insertText(s string) {
