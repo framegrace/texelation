@@ -24,6 +24,8 @@ type TextArea struct {
 	clip string
 	// invalidation callback
 	inv func(core.Rect)
+	// mouse state for click/drag selection
+	mouseDown bool
 }
 
 func NewTextArea(x, y, w, h int) *TextArea {
@@ -111,18 +113,33 @@ func (t *TextArea) Draw(p *core.Painter) {
 			col++
 		}
 	}
-	// caret (invert style of cell at caret when focused)
-	if t.IsFocused() {
+	// caret: draw underlying rune with caret style only when no selection
+	if t.IsFocused() && !t.hasSelection() {
 		cx := t.CaretX - t.OffX
 		cy := t.CaretY - t.OffY
 		if cx >= 0 && cy >= 0 && cx < t.Rect.W && cy < t.Rect.H {
-			// draw space with caret style at caret location
-			p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ' ', t.CaretStyle)
+			ch := ' '
+			if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
+				line := []rune(t.Lines[t.CaretY])
+				if t.CaretX >= 0 && t.CaretX < len(line) {
+					ch = line[t.CaretX]
+				}
+			}
+			p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, t.CaretStyle)
 		}
 	}
 }
 
 func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
+	// ESC clears selection
+	if ev.Key() == tcell.KeyEsc {
+		if t.hasSelection() {
+			t.clearSelection()
+			t.invalidateViewport()
+			return true
+		}
+		return false
+	}
 	prevCX, prevCY := t.CaretX, t.CaretY
 	// clipboard shortcuts
 	if ev.Modifiers()&tcell.ModCtrl != 0 {
@@ -266,18 +283,29 @@ func (t *TextArea) HandleMouse(ev *tcell.EventMouse) bool {
 		return true
 	}
 	if btn&tcell.Button1 != 0 {
-		t.CaretY = t.OffY + ly
-		if t.CaretY >= len(t.Lines) {
-			t.CaretY = len(t.Lines) - 1
-		}
-		t.CaretX = t.OffX + lx
-		if !t.selActive {
+		// press/drag
+		if !t.mouseDown {
+			t.mouseDown = true
+			t.CaretY = t.OffY + ly
+			if t.CaretY >= len(t.Lines) {
+				t.CaretY = len(t.Lines) - 1
+			}
+			t.CaretX = t.OffX + lx
 			t.startSelection()
 		}
 		t.extendSelection()
 		t.clampCaret()
 		t.ensureVisible()
 		t.invalidateViewport()
+		return true
+	}
+	// release: if no selection range, clear selection
+	if t.mouseDown && btn&tcell.Button1 == 0 {
+		t.mouseDown = false
+		if !t.hasSelection() {
+			t.clearSelection()
+			t.invalidateViewport()
+		}
 		return true
 	}
 	return false
