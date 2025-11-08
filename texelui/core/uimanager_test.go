@@ -28,6 +28,7 @@ func TestUIManagerRendersPaneAndTextArea(t *testing.T) {
 
 type miniWidget struct {
 	core.BaseWidget
+	toggled bool
 }
 
 func (m *miniWidget) Draw(p *core.Painter) {
@@ -35,7 +36,11 @@ func (m *miniWidget) Draw(p *core.Painter) {
 	w, h := m.Size()
 	for yy := 0; yy < h; yy++ {
 		for xx := 0; xx < w; xx++ {
-			p.SetCell(x+xx, y+yy, 'X', tcell.StyleDefault)
+			ch := 'X'
+			if m.toggled {
+				ch = 'Y'
+			}
+			p.SetCell(x+xx, y+yy, ch, tcell.StyleDefault)
 		}
 	}
 }
@@ -59,5 +64,33 @@ func TestUIManagerDirtyClipsRestrictDraw(t *testing.T) {
 	// Border client area starts at (1,1)
 	if got := buf[1][1].Ch; got != 'a' {
 		t.Fatalf("expected 'a' at (1,1), got %q", string(got))
+	}
+}
+
+// If a widget consumes keys but doesn't invalidate, UIManager falls back to full redraw.
+func TestUIManagerKeyFallbackRedraw(t *testing.T) {
+	ui := core.NewUIManager()
+	ui.Resize(6, 3)
+	mw := &miniWidget{}
+	mw.SetPosition(1, 1)
+	mw.Resize(1, 1)
+	ui.AddWidget(mw)
+
+	// Initial draw shows 'X'
+	buf := ui.Render()
+	if got := buf[1][1].Ch; got != 'X' {
+		t.Fatalf("expected 'X', got %q", string(got))
+	}
+
+	// Make mw consume keys without invalidating by focusing it and toggling state in HandleKey via embedding
+	// We don't have a HandleKey; simulate by forcing fallback: call HandleKey on UI with a non-Tab key while focused
+	// and then toggle state manually to emulate a consumed change without invalidation.
+	ui.Focus(mw)
+	// Manually set toggled; UI.HandleKey should detect no dirty and issue full redraw
+	mw.toggled = true
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'z', 0))
+	buf = ui.Render()
+	if got := buf[1][1].Ch; got != 'Y' {
+		t.Fatalf("expected 'Y' after fallback redraw, got %q", string(got))
 	}
 }

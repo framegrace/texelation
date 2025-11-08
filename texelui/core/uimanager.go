@@ -54,6 +54,8 @@ func (u *UIManager) Resize(w, h int) {
 func (u *UIManager) AddWidget(w Widget) {
 	u.widgets = append(u.widgets, w)
 	u.propagateInvalidator(w)
+	// Ensure a first full draw after adding widgets
+	u.InvalidateAll()
 }
 
 func (u *UIManager) propagateInvalidator(w Widget) {
@@ -95,6 +97,10 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 	}
 
 	if u.focused != nil && u.focused.HandleKey(ev) {
+		// Fallback: if widget didn't mark anything dirty, redraw everything
+		if len(u.dirty) == 0 {
+			u.InvalidateAll()
+		}
 		u.RequestRefresh()
 		return true
 	}
@@ -248,6 +254,13 @@ func (u *UIManager) ensureBuffer() {
 func (u *UIManager) Render() [][]texel.Cell {
 	u.ensureBuffer()
 	if len(u.dirty) == 0 {
+		// No specific dirty regions requested: compose full frame.
+		full := Rect{X: 0, Y: 0, W: u.W, H: u.H}
+		p := NewPainter(u.buf, full)
+		p.Fill(full, ' ', u.bgStyle)
+		for _, w := range u.widgets {
+			w.Draw(p)
+		}
 		return u.buf
 	}
 	// Merge dirty rects to reduce redraw area, but keep multiple clips
