@@ -147,14 +147,15 @@ func TestDeleteSelectionShiftRightSequence(t *testing.T) {
 	for i := 0; i < 17; i++ {
 		ui.HandleKey(tcell.NewEventKey(tcell.KeyLeft, 0, 0))
 	}
-	// Shift+Right 11 times
-	for i := 0; i < 11; i++ {
-		ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
-	}
-	// Backspace to delete selection
-	ui.HandleKey(tcell.NewEventKey(tcell.KeyBackspace, 0, 0))
-	buf := ui.Render()
-	expected := "1234567890"
+    // Shift+Right 11 times (inclusive end semantics)
+    for i := 0; i < 11; i++ {
+        ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+    }
+    // Backspace to delete selection
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyBackspace, 0, 0))
+    buf := ui.Render()
+    // With inclusive end, this removes one more char (the caret cell), result:
+    expected := "123467890"
 	gotRunes := make([]rune, 0, len(expected))
 	for i := 0; i < len(expected); i++ {
 		gotRunes = append(gotRunes, buf[1][i+1].Ch)
@@ -178,12 +179,11 @@ func TestBackspaceDeletesMiddleSelectionSingleLine(t *testing.T) {
     for _, r := range "abcdef" {
         ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, r, 0))
     }
-    // Move Home, then Right x2 to index 2
+    // Move Home, then Right x2 to index 2 (caret on 'c')
     ui.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, 0))
     ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, 0))
     ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, 0))
-    // Shift+Right x2 to select "cd" ([2,4))
-    ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+    // Shift+Right x1 selects inclusive end: 'c'..'d'
     ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
     // Backspace to delete selection
     ui.HandleKey(tcell.NewEventKey(tcell.KeyBackspace, 0, 0))

@@ -380,8 +380,8 @@ func (t *TextArea) isSelected(cx, cy int) bool {
         return false
     }
     if sy == ey {
-        // Single-line selection uses exclusive end [sx, ex)
-        return cx >= sx && cx < ex
+        // Single-line selection uses inclusive end [sx, ex]
+        return cx >= sx && cx <= ex
     }
     if cy == sy {
         return cx >= sx
@@ -400,25 +400,32 @@ func (t *TextArea) getSelectedText() string {
 	if sy > ey || (sy == ey && sx > ex) {
 		sx, sy, ex, ey = ex, ey, sx, sy
 	}
-	if sy == ey {
-		r := []rune(t.Lines[sy])
-		if ex > len(r) {
-			ex = len(r)
-		}
-		return string(r[sx:ex])
-	}
+    if sy == ey {
+        r := []rune(t.Lines[sy])
+        if ex >= len(r) {
+            ex = len(r) - 1
+        }
+        if sx < 0 { sx = 0 }
+        if sx > len(r) { sx = len(r) }
+        if ex < sx { return "" }
+        // Inclusive end: slice [sx:ex+1]
+        return string(r[sx : ex+1])
+    }
 	out := ""
 	r := []rune(t.Lines[sy])
 	out += string(r[sx:]) + "\n"
 	for yy := sy + 1; yy < ey; yy++ {
 		out += t.Lines[yy] + "\n"
 	}
-	rr := []rune(t.Lines[ey])
-	if ex > len(rr) {
-		ex = len(rr)
-	}
-	out += string(rr[:ex])
-	return out
+    rr := []rune(t.Lines[ey])
+    if ex >= len(rr) {
+        ex = len(rr) - 1
+    }
+    if ex >= 0 {
+        // Inclusive end on the last line
+        out += string(rr[:ex+1])
+    }
+    return out
 }
 
 func (t *TextArea) deleteSelection() {
@@ -432,8 +439,8 @@ func (t *TextArea) deleteSelection() {
     }
     if sy == ey {
         r := []rune(t.Lines[sy])
-        if ex > len(r) {
-            ex = len(r)
+        if ex >= len(r) {
+            ex = len(r) - 1
         }
         if sx < 0 {
             sx = 0
@@ -441,8 +448,13 @@ func (t *TextArea) deleteSelection() {
         if sx > len(r) {
             sx = len(r)
         }
-        // Remove [sx, ex) exactly
-        t.Lines[sy] = string(append(r[:sx], r[ex:]...))
+        if ex < sx {
+            t.clearSelection()
+            t.invalidateViewport()
+            return
+        }
+        // Remove inclusive [sx, ex]
+        t.Lines[sy] = string(append(r[:sx], r[ex+1:]...))
         t.CaretX, t.CaretY = sx, sy
         t.clearSelection()
         t.invalidateViewport()
@@ -450,8 +462,8 @@ func (t *TextArea) deleteSelection() {
     }
     head := []rune(t.Lines[sy])
     tail := []rune(t.Lines[ey])
-    if ex > len(tail) {
-        ex = len(tail)
+    if ex >= len(tail) {
+        ex = len(tail) - 1
     }
     if sx < 0 {
         sx = 0
@@ -459,8 +471,9 @@ func (t *TextArea) deleteSelection() {
     if sx > len(head) {
         sx = len(head)
     }
-    // Remove [sx, ex) spanning multiple lines: keep left head[:sx] + right tail[ex:]
-    newHead := string(head[:sx]) + string(tail[ex:])
+    if ex < 0 { ex = -1 }
+    // Remove inclusive [sx, ex] across lines: keep left head[:sx] + right tail[ex+1:]
+    newHead := string(head[:sx]) + string(tail[ex+1:])
     t.Lines = append(t.Lines[:sy+1], t.Lines[ey+1:]...)
     t.Lines[sy] = newHead
     t.CaretX, t.CaretY = sx, sy
