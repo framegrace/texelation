@@ -64,57 +64,66 @@ func (t *TextArea) clampCaret() {
 }
 
 func (t *TextArea) ensureVisible() {
-	// horizontal
-	if t.CaretX < t.OffX {
-		t.OffX = t.CaretX
-	}
-	if t.CaretX >= t.OffX+t.Rect.W {
-		t.OffX = t.CaretX - t.Rect.W + 1
-	}
-	if t.OffX < 0 {
-		t.OffX = 0
-	}
-	// vertical
-	if t.CaretY < t.OffY {
-		t.OffY = t.CaretY
-	}
-	if t.CaretY >= t.OffY+t.Rect.H {
-		t.OffY = t.CaretY - t.Rect.H + 1
-	}
-	if t.OffY < 0 {
-		t.OffY = 0
-	}
+    // With wrapping, horizontal offset is unused
+    t.OffX = 0
+    // Ensure caret's visual row is within the viewport
+    _, vcy := t.caretVisualPos()
+    if vcy < t.OffY {
+        t.OffY = vcy
+    }
+    if vcy >= t.OffY+t.Rect.H {
+        t.OffY = vcy - t.Rect.H + 1
+    }
+    if t.OffY < 0 {
+        t.OffY = 0
+    }
 }
 
 func (t *TextArea) Draw(p *core.Painter) {
-	// fill background
-	p.Fill(t.Rect, ' ', t.Style)
-    // draw visible lines
-    for row := 0; row < t.Rect.H; row++ {
-		ly := t.OffY + row
-		if ly >= len(t.Lines) {
-			break
-		}
-		visible := []rune(t.Lines[ly])
-        // column window
-        col := 0
-        for cx := t.OffX; cx < len(visible) && col < t.Rect.W; cx++ {
-            p.SetCell(t.Rect.X+col, t.Rect.Y+row, visible[cx], t.Style)
-            col++
+    // fill background
+    p.Fill(t.Rect, ' ', t.Style)
+    // draw wrapped content
+    if t.Rect.W <= 0 || t.Rect.H <= 0 { return }
+    globalRow := 0
+    drawnRows := 0
+    for li := 0; li < len(t.Lines) && drawnRows < t.Rect.H; li++ {
+        r := []rune(t.Lines[li])
+        if len(r) == 0 {
+            // empty line still occupies one visual row
+            if globalRow >= t.OffY {
+                // nothing to draw beyond background
+                drawnRows++
+            }
+            globalRow++
+            continue
+        }
+        for start := 0; start < len(r) && drawnRows < t.Rect.H; start += t.Rect.W {
+            end := start + t.Rect.W
+            if end > len(r) { end = len(r) }
+            if globalRow >= t.OffY {
+                row := drawnRows
+                col := 0
+                for i := start; i < end && col < t.Rect.W; i++ {
+                    p.SetCell(t.Rect.X+col, t.Rect.Y+row, r[i], t.Style)
+                    col++
+                }
+                drawnRows++
+            }
+            globalRow++
         }
     }
     // caret: draw underlying rune with reversed video (swap fg/bg)
     if t.IsFocused() {
-		cx := t.CaretX - t.OffX
-		cy := t.CaretY - t.OffY
-		if cx >= 0 && cy >= 0 && cx < t.Rect.W && cy < t.Rect.H {
-			ch := ' '
-			if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
-				line := []rune(t.Lines[t.CaretY])
-				if t.CaretX >= 0 && t.CaretX < len(line) {
-					ch = line[t.CaretX]
-				}
-			}
+        cx, cy := t.caretVisualPos()
+        cy = cy - t.OffY
+        if cx >= 0 && cy >= 0 && cx < t.Rect.W && cy < t.Rect.H {
+            ch := ' '
+            if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
+                line := []rune(t.Lines[t.CaretY])
+                if t.CaretX >= 0 && t.CaretX < len(line) {
+                    ch = line[t.CaretX]
+                }
+            }
             // Determine current cell style (no selection styling)
             baseStyle := t.Style
             fg, bg, _ := baseStyle.Decompose()
@@ -123,6 +132,28 @@ func (t *TextArea) Draw(p *core.Painter) {
             p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, caretStyle)
         }
     }
+}
+
+// caretVisualPos returns the caret position in visual (wrapped) coordinates (x within width, y as visual row index).
+func (t *TextArea) caretVisualPos() (int, int) {
+    if t.Rect.W <= 0 { return 0, 0 }
+    vrow := 0
+    for li := 0; li < len(t.Lines) && li < t.CaretY; li++ {
+        r := []rune(t.Lines[li])
+        // number of wrapped rows for this line (at least 1)
+        n := (len(r) + t.Rect.W - 1) / t.Rect.W
+        if n == 0 { n = 1 }
+        vrow += n
+    }
+    // for current line
+    cx := t.CaretX
+    if cx < 0 { cx = 0 }
+    r := []rune("")
+    if t.CaretY >=0 && t.CaretY < len(t.Lines) { r = []rune(t.Lines[t.CaretY]) }
+    if cx > len(r) { cx = len(r) }
+    vrow += cx / max(1, t.Rect.W)
+    vx := cx % max(1, t.Rect.W)
+    return vx, vrow
 }
 
 /*
@@ -294,18 +325,57 @@ func (t *TextArea) HandleMouse(ev *tcell.EventMouse) bool {
 		return true
 	}
     if btn&tcell.Button1 != 0 {
-        // simple click-to-caret; no drag-selection
-        t.CaretY = t.OffY + ly
-        if t.CaretY >= len(t.Lines) {
-            t.CaretY = len(t.Lines) - 1
-        }
-        t.CaretX = t.OffX + lx
+        // simple click-to-caret on wrapped layout
+        vrow := t.OffY + ly
+        // Map visual row to logical line and offset
+        li, start := t.visualRowToLogical(vrow)
+        t.CaretY = li
+        // clamp x to segment length
+        segLen := t.segmentLen(li, start)
+        dx := lx
+        if dx > segLen { dx = segLen }
+        t.CaretX = start + dx
         t.clampCaret()
         t.ensureVisible()
         t.invalidateViewport()
         return true
     }
     return false
+}
+
+// visualRowToLogical maps a visual wrapped row index to (logical line, start rune offset of that segment).
+func (t *TextArea) visualRowToLogical(vrow int) (int, int) {
+    if t.Rect.W <= 0 { return 0, 0 }
+    row := 0
+    for li := 0; li < len(t.Lines); li++ {
+        r := []rune(t.Lines[li])
+        n := (len(r) + t.Rect.W - 1) / t.Rect.W
+        if n == 0 { n = 1 }
+        if vrow < row+n {
+            // within this logical line
+            segIdx := vrow - row
+            start := segIdx * t.Rect.W
+            if start > len(r) { start = len(r) }
+            return li, start
+        }
+        row += n
+    }
+    // past end: clamp to last line end
+    li := len(t.Lines) - 1
+    if li < 0 { li = 0 }
+    r := []rune("")
+    if li < len(t.Lines) { r = []rune(t.Lines[li]) }
+    return li, len(r)
+}
+
+func (t *TextArea) segmentLen(li, start int) int {
+    if li < 0 || li >= len(t.Lines) || t.Rect.W <= 0 { return 0 }
+    r := []rune(t.Lines[li])
+    if start < 0 { start = 0 }
+    if start > len(r) { return 0 }
+    end := start + t.Rect.W
+    if end > len(r) { end = len(r) }
+    return end - start
 }
 
 func (t *TextArea) insertText(s string) {
