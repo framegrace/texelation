@@ -9,6 +9,7 @@ import (
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
 	"texelation/texel"
+	"texelation/texelui/adapter"
 )
 
 // Builder constructs a texel.App, optionally using CLI args.
@@ -24,6 +25,9 @@ var registry = map[string]Builder{
 	},
 	"welcome": func(args []string) (texel.App, error) {
 		return welcome.NewWelcomeApp(), nil
+	},
+	"texelui-demo": func(args []string) (texel.App, error) {
+		return adapter.NewTextEditorApp("TexelUI Demo"), nil
 	},
 }
 
