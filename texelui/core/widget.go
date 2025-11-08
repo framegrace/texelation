@@ -18,11 +18,14 @@ type Widget interface {
 
 // BaseWidget provides common fields/behaviour for widgets.
 type BaseWidget struct {
-	Rect      Rect
-	focused   bool
-	enabled   bool
-	visible   bool
-	focusable bool
+    Rect      Rect
+    focused   bool
+    enabled   bool
+    visible   bool
+    focusable bool
+    // Optional focus styling: if enabled, widgets may use FocusedStyle when focused.
+    focusStyleEnabled bool
+    focusedStyle      tcell.Style
 }
 
 func (b *BaseWidget) SetPosition(x, y int) { b.Rect.X, b.Rect.Y = x, y }
@@ -40,14 +43,33 @@ func (b *BaseWidget) Size() (int, int)    { return b.Rect.W, b.Rect.H }
 func (b *BaseWidget) Focusable() bool     { return b.focusable }
 func (b *BaseWidget) SetFocusable(f bool) { b.focusable = f }
 func (b *BaseWidget) Focus() {
-	if b.focusable {
-		b.focused = true
-	}
+    if b.focusable {
+        b.focused = true
+    }
 }
 func (b *BaseWidget) Blur()                             { b.focused = false }
 func (b *BaseWidget) IsFocused() bool                   { return b.focused }
 func (b *BaseWidget) HitTest(x, y int) bool             { return b.Rect.Contains(x, y) }
 func (b *BaseWidget) HandleKey(ev *tcell.EventKey) bool { return false }
+
+// SetFocusedStyle enables or disables focused styling and sets the focused style value.
+func (b *BaseWidget) SetFocusedStyle(style tcell.Style, enabled bool) {
+    b.focusedStyle = style
+    b.focusStyleEnabled = enabled
+}
+
+// EffectiveStyle returns the style to use given a base style, applying focused style
+// if the widget is focused and focus styling is enabled.
+func (b *BaseWidget) EffectiveStyle(base tcell.Style) tcell.Style {
+    if b.focused && b.focusStyleEnabled {
+        // Merge: use focused style's FG/BG but preserve other attributes from base
+        fFG, fBG, fAttr := b.focusedStyle.Decompose()
+        _, _, bAttr := base.Decompose()
+        // Combine attributes: keep base attrs and add focused attrs
+        return tcell.StyleDefault.Foreground(fFG).Background(fBG).Attributes(bAttr | fAttr)
+    }
+    return base
+}
 
 // MouseAware widgets can consume mouse events directly.
 type MouseAware interface {

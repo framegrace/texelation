@@ -18,5 +18,6 @@ func NewPane(x, y, w, h int, style tcell.Style) *Pane {
 }
 
 func (p *Pane) Draw(painter *core.Painter) {
-	painter.Fill(core.Rect{X: p.Rect.X, Y: p.Rect.Y, W: p.Rect.W, H: p.Rect.H}, ' ', p.Style)
+    style := p.EffectiveStyle(p.Style)
+    painter.Fill(core.Rect{X: p.Rect.X, Y: p.Rect.Y, W: p.Rect.W, H: p.Rect.H}, ' ', style)
 }

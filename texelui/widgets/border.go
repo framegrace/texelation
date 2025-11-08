@@ -65,6 +65,9 @@ func (b *Border) Draw(p *core.Painter) {
     // If this border or any descendant contains focus, use FocusedStyle
     if b.isDescendantFocused() {
         style = b.FocusedStyle
+    } else {
+        // Otherwise apply own focus style if enabled
+        style = b.EffectiveStyle(style)
     }
     p.DrawBorder(b.Rect, style, b.Charset)
     if b.Child != nil {

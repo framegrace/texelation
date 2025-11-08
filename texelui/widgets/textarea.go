@@ -83,7 +83,8 @@ func (t *TextArea) ensureVisible() {
 
 func (t *TextArea) Draw(p *core.Painter) {
     // fill background
-    p.Fill(t.Rect, ' ', t.Style)
+    base := t.EffectiveStyle(t.Style)
+    p.Fill(t.Rect, ' ', base)
     // draw wrapped content
     if t.Rect.W <= 0 || t.Rect.H <= 0 { return }
     globalRow := 0
@@ -106,7 +107,7 @@ func (t *TextArea) Draw(p *core.Painter) {
                 row := drawnRows
                 col := 0
                 for i := start; i < end && col < t.Rect.W; i++ {
-                    p.SetCell(t.Rect.X+col, t.Rect.Y+row, r[i], t.Style)
+                    p.SetCell(t.Rect.X+col, t.Rect.Y+row, r[i], base)
                     col++
                 }
                 drawnRows++
@@ -127,7 +128,7 @@ func (t *TextArea) Draw(p *core.Painter) {
                 }
             }
             // Determine current cell style (no selection styling)
-            baseStyle := t.Style
+            baseStyle := base
             fg, bg, _ := baseStyle.Decompose()
             var caretStyle tcell.Style
             if t.replaceMode {
