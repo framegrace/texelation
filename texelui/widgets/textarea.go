@@ -28,20 +28,18 @@ type TextArea struct {
 	inv func(core.Rect)
     // mouse state for click/drag selection
     mouseDown bool
-    // caret blink state
-    blinkOn bool
 }
 
 func NewTextArea(x, y, w, h int) *TextArea {
 	tm := theme.Get()
-	bg := tm.GetColor("ui", "text_bg", tcell.ColorBlack)
-	fg := tm.GetColor("ui", "text_fg", tcell.ColorWhite)
-	caret := tm.GetColor("ui", "caret_fg", fg)
+    bg := tm.GetColor("ui", "text_bg", tcell.ColorBlack)
+    fg := tm.GetColor("ui", "text_fg", tcell.ColorWhite)
+    // Default caret color: slightly greyer than text
+    caret := tm.GetColor("ui", "caret_fg", tcell.ColorSilver)
 	ta := &TextArea{
 		Lines:      []string{""},
-		Style:      tcell.StyleDefault.Background(bg).Foreground(fg),
-		CaretStyle: tcell.StyleDefault.Background(fg).Foreground(caret),
-		blinkOn:    true,
+        Style:      tcell.StyleDefault.Background(bg).Foreground(fg),
+        CaretStyle: tcell.StyleDefault.Foreground(caret),
 	}
 	ta.SetPosition(x, y)
 	ta.Resize(w, h)
@@ -118,8 +116,8 @@ func (t *TextArea) Draw(p *core.Painter) {
 			col++
 		}
 	}
-    // caret: draw underlying rune with inverted style (swap fg/bg) when blink is ON
-    if t.IsFocused() && t.blinkOn {
+    // caret: redraw underlying rune using caret foreground color (slightly greyer)
+    if t.IsFocused() {
 		cx := t.CaretX - t.OffX
 		cy := t.CaretY - t.OffY
 		if cx >= 0 && cy >= 0 && cx < t.Rect.W && cy < t.Rect.H {
@@ -130,17 +128,17 @@ func (t *TextArea) Draw(p *core.Painter) {
 					ch = line[t.CaretX]
 				}
 			}
-			// Determine current cell style (selected or normal), then invert
-			baseStyle := t.Style
-			if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
-				if t.isSelected(t.CaretX, t.CaretY) {
-					fg, bg, _ := t.Style.Decompose()
-					baseStyle = tcell.StyleDefault.Background(fg).Foreground(bg)
-				}
-			}
-			fg, bg, _ := baseStyle.Decompose()
-            // Invert the current cell's style by swapping fg/bg once
-            caretStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
+            // Determine current cell style (selected or normal)
+            baseStyle := t.Style
+            if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
+                if t.isSelected(t.CaretX, t.CaretY) {
+                    fg, bg, _ := t.Style.Decompose()
+                    baseStyle = tcell.StyleDefault.Background(fg).Foreground(bg)
+                }
+            }
+            _, bg, _ := baseStyle.Decompose()
+            cf, _, _ := t.CaretStyle.Decompose()
+            caretStyle := tcell.StyleDefault.Background(bg).Foreground(cf)
             p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, caretStyle)
         }
     }
@@ -522,22 +520,13 @@ func (t *TextArea) invalidateViewport() {
 	t.inv(t.Rect)
 }
 func (t *TextArea) invalidateCaretAt(cx, cy int) {
-	if t.inv == nil {
-		return
-	}
-	vx := cx - t.OffX
-	vy := cy - t.OffY
-	if vx < 0 || vy < 0 || vx >= t.Rect.W || vy >= t.Rect.H {
-		return
-	}
-    t.inv(core.Rect{X: t.Rect.X + vx, Y: t.Rect.Y + vy, W: 1, H: 1})
-}
-
-// BlinkTick toggles caret visibility and invalidates the caret cell if focused.
-func (t *TextArea) BlinkTick() {
-    if !t.IsFocused() {
+    if t.inv == nil {
         return
     }
-    t.blinkOn = !t.blinkOn
-    t.invalidateCaretAt(t.CaretX, t.CaretY)
+    vx := cx - t.OffX
+    vy := cy - t.OffY
+    if vx < 0 || vy < 0 || vx >= t.Rect.W || vy >= t.Rect.H {
+        return
+    }
+    t.inv(core.Rect{X: t.Rect.X + vx, Y: t.Rect.Y + vy, W: 1, H: 1})
 }

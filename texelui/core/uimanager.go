@@ -40,22 +40,7 @@ func (u *UIManager) RequestRefresh() {
 
 // BlinkTick calls BlinkTick on all widgets that implement BlinkAware,
 // allowing them to update internal blink state and invalidate caret regions.
-func (u *UIManager) BlinkTick() {
-    // Visit all widgets depth-first
-    var visit func(w Widget)
-    visit = func(w Widget) {
-        if ba, ok := w.(BlinkAware); ok {
-            ba.BlinkTick()
-        }
-        if cc, ok := w.(ChildContainer); ok {
-            cc.VisitChildren(func(child Widget) { visit(child) })
-        }
-    }
-    for _, w := range u.widgets {
-        visit(w)
-    }
-    u.RequestRefresh()
-}
+// BlinkTick was used for caret blinking; deprecated and no-op.
 
 func (u *UIManager) Resize(w, h int) {
 	if w < 0 {

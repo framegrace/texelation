@@ -73,6 +73,4 @@ type HitTester interface {
 // BlinkAware widgets support periodic blink updates (e.g., caret blink).
 // UI frameworks can call BlinkTick at a fixed interval; the widget should
 // invalidate any regions that need redraw and return immediately.
-type BlinkAware interface {
-    BlinkTick()
-}
+// (Deprecated) BlinkAware was used for caret blinking and is no longer needed.

@@ -44,28 +44,28 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             t.handleShiftArrow(-1, 0)
             return true
         }
-        t.clearSelection(); t.selDir = 0; t.blinkOn = true
+        t.clearSelection(); t.selDir = 0
         t.CaretX--
     case tcell.KeyRight:
         if ev.Modifiers()&tcell.ModShift != 0 {
             t.handleShiftArrow(1, 0)
             return true
         }
-        t.clearSelection(); t.selDir = 0; t.blinkOn = true
+        t.clearSelection(); t.selDir = 0
         t.CaretX++
     case tcell.KeyUp:
         if ev.Modifiers()&tcell.ModShift != 0 {
             t.handleShiftArrow(0, -1)
             return true
         }
-        t.clearSelection(); t.selDir = 0; t.blinkOn = true
+        t.clearSelection(); t.selDir = 0
         t.CaretY--
     case tcell.KeyDown:
         if ev.Modifiers()&tcell.ModShift != 0 {
             t.handleShiftArrow(0, 1)
             return true
         }
-        t.clearSelection(); t.selDir = 0; t.blinkOn = true
+        t.clearSelection(); t.selDir = 0
         t.CaretY++
     case tcell.KeyHome:
         if ev.Modifiers()&tcell.ModShift != 0 {
@@ -79,7 +79,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             t.invalidateViewport()
             return true
         }
-        t.clearSelection(); t.selDir = 0; t.blinkOn = true
+        t.clearSelection(); t.selDir = 0
         t.CaretX = 0
     case tcell.KeyEnd:
         if ev.Modifiers()&tcell.ModShift != 0 {
@@ -93,7 +93,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             t.invalidateViewport()
             return true
         }
-        t.clearSelection(); t.selDir = 0; t.blinkOn = true
+        t.clearSelection(); t.selDir = 0
         t.CaretX = 1 << 30
 	case tcell.KeyEnter:
 		line := t.Lines[t.CaretY]
@@ -191,7 +191,6 @@ func (t *TextArea) handleShiftArrow(dx, dy int) {
         t.selDir = dir
         // move caret
         t.moveCaretBy(dx, dy)
-        t.blinkOn = true
         t.clampCaret(); t.ensureVisible(); t.invalidateViewport()
         return
     }
@@ -205,7 +204,6 @@ func (t *TextArea) handleShiftArrow(dx, dy int) {
         t.selEX, t.selEY = t.CaretX, t.CaretY
         t.selDir = dir
     }
-    t.blinkOn = true
     t.clampCaret(); t.ensureVisible(); t.invalidateViewport()
 }
 
