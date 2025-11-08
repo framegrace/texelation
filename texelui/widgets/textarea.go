@@ -331,7 +331,13 @@ func (t *TextArea) extendSelection() {
 		t.startSelection()
 		return
 	}
+	// Update raw end
 	t.selEX, t.selEY = t.CaretX, t.CaretY
+	// Ensure end is exclusive when extending forward
+	forward := (t.selEY > t.selSY) || (t.selEY == t.selSY && t.selEX >= t.selSX)
+	if forward {
+		t.selEX++
+	}
 }
 func (t *TextArea) clearSelection() { t.selActive = false }
 func (t *TextArea) hasSelection() bool {
@@ -400,6 +406,15 @@ func (t *TextArea) deleteSelection() {
 	}
 	if sy == ey {
 		r := []rune(t.Lines[sy])
+		if ex > len(r) {
+			ex = len(r)
+		}
+		if sx < 0 {
+			sx = 0
+		}
+		if sx > len(r) {
+			sx = len(r)
+		}
 		t.Lines[sy] = string(append(r[:sx], r[ex:]...))
 		t.CaretX, t.CaretY = sx, sy
 		t.clearSelection()
@@ -408,6 +423,15 @@ func (t *TextArea) deleteSelection() {
 	}
 	head := []rune(t.Lines[sy])
 	tail := []rune(t.Lines[ey])
+	if ex > len(tail) {
+		ex = len(tail)
+	}
+	if sx < 0 {
+		sx = 0
+	}
+	if sx > len(head) {
+		sx = len(head)
+	}
 	newHead := string(head[:sx]) + string(tail[ex:])
 	t.Lines = append(t.Lines[:sy+1], t.Lines[ey+1:]...)
 	t.Lines[sy] = newHead
