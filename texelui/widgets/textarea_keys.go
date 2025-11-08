@@ -1,7 +1,7 @@
 package widgets
 
 import (
-	"github.com/gdamore/tcell/v2"
+    "github.com/gdamore/tcell/v2"
 )
 
 // HandleKey implements keyboard editing, selection, and clipboard operations.
@@ -16,7 +16,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 		return false
 	}
 
-	prevCX, prevCY := t.CaretX, t.CaretY
+    prevCX, prevCY := t.CaretX, t.CaretY
 
 	if ev.Modifiers()&tcell.ModCtrl != 0 {
 		switch ev.Rune() {
@@ -38,19 +38,63 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 		}
 	}
 
-	switch ev.Key() {
-	case tcell.KeyLeft:
-		t.CaretX--
-	case tcell.KeyRight:
-		t.CaretX++
-	case tcell.KeyUp:
-		t.CaretY--
-	case tcell.KeyDown:
-		t.CaretY++
-	case tcell.KeyHome:
-		t.CaretX = 0
-	case tcell.KeyEnd:
-		t.CaretX = 1 << 30
+    switch ev.Key() {
+    case tcell.KeyLeft:
+        if ev.Modifiers()&tcell.ModShift != 0 {
+            t.handleShiftArrow(-1, 0)
+            return true
+        }
+        t.clearSelection(); t.selDir = 0
+        t.CaretX--
+    case tcell.KeyRight:
+        if ev.Modifiers()&tcell.ModShift != 0 {
+            t.handleShiftArrow(1, 0)
+            return true
+        }
+        t.clearSelection(); t.selDir = 0
+        t.CaretX++
+    case tcell.KeyUp:
+        if ev.Modifiers()&tcell.ModShift != 0 {
+            t.handleShiftArrow(0, -1)
+            return true
+        }
+        t.clearSelection(); t.selDir = 0
+        t.CaretY--
+    case tcell.KeyDown:
+        if ev.Modifiers()&tcell.ModShift != 0 {
+            t.handleShiftArrow(0, 1)
+            return true
+        }
+        t.clearSelection(); t.selDir = 0
+        t.CaretY++
+    case tcell.KeyHome:
+        if ev.Modifiers()&tcell.ModShift != 0 {
+            if !t.selActive {
+                t.selActive = true
+                t.selSX, t.selSY = prevCX, prevCY
+            }
+            t.CaretX = 0
+            t.clampCaret(); t.ensureVisible()
+            t.selEX, t.selEY = t.CaretX, t.CaretY
+            t.invalidateViewport()
+            return true
+        }
+        t.clearSelection(); t.selDir = 0
+        t.CaretX = 0
+    case tcell.KeyEnd:
+        if ev.Modifiers()&tcell.ModShift != 0 {
+            if !t.selActive {
+                t.selActive = true
+                t.selSX, t.selSY = prevCX, prevCY
+            }
+            t.CaretX = 1 << 30
+            t.clampCaret(); t.ensureVisible()
+            t.selEX, t.selEY = t.CaretX, t.CaretY
+            t.invalidateViewport()
+            return true
+        }
+        t.clearSelection(); t.selDir = 0
+        t.CaretX = 1 << 30
 	case tcell.KeyEnter:
 		line := t.Lines[t.CaretY]
 		head := []rune(line)[:t.CaretX]
@@ -121,30 +165,53 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 		t.CaretX++
 		t.invalidateViewport()
 		return true
-	default:
-		// Not handled
-		return false
-	}
-
-    // Update selection after movement keys
-    switch ev.Key() {
-    case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd:
-        if ev.Modifiers()&tcell.ModShift != 0 {
-            if !t.selActive {
-                t.selActive = true
-                t.selSX, t.selSY = prevCX, prevCY
-            }
-            t.selEX, t.selEY = t.CaretX, t.CaretY
-        } else {
-            t.clearSelection()
-        }
-        // Clamp and ensure visibility before invalidation so redraw reflects new viewport
-        t.clampCaret()
-        t.ensureVisible()
-        t.invalidateViewport()
-        return true
+    default:
+        // Not handled
+        return false
     }
     t.clampCaret()
     t.ensureVisible()
     return true
+}
+
+// handleShiftArrow applies the selection algorithm requested:
+// - On first Shift+Arrow: set both selection ends to current char, move caret.
+// - On continued Shift+Arrow in same direction: set end to current position, then move caret.
+// - On opposite direction: move caret first, then set end to new position.
+// dx,dy in {-1,0,1}; horizontal uses dx; vertical uses dy.
+func (t *TextArea) handleShiftArrow(dx, dy int) {
+    dir := 0
+    if dx < 0 || dy < 0 { dir = -1 }
+    if dx > 0 || dy > 0 { dir = 1 }
+
+    if !t.selActive {
+        t.selActive = true
+        t.selSX, t.selSY = t.CaretX, t.CaretY
+        t.selEX, t.selEY = t.CaretX, t.CaretY
+        t.selDir = dir
+        // move caret
+        t.moveCaretBy(dx, dy)
+        t.clampCaret(); t.ensureVisible(); t.invalidateViewport()
+        return
+    }
+    if t.selDir == 0 || t.selDir == dir {
+        // same direction: snapshot end at current caret, then move
+        t.selEX, t.selEY = t.CaretX, t.CaretY
+        t.moveCaretBy(dx, dy)
+    } else {
+        // opposite: move first, then set end to new caret
+        t.moveCaretBy(dx, dy)
+        t.selEX, t.selEY = t.CaretX, t.CaretY
+        t.selDir = dir
+    }
+    t.clampCaret(); t.ensureVisible(); t.invalidateViewport()
+}
+
+func (t *TextArea) moveCaretBy(dx, dy int) {
+    if dy != 0 {
+        t.CaretY += dy
+    }
+    if dx != 0 {
+        t.CaretX += dx
+    }
 }

@@ -8,18 +8,20 @@ import (
 
 // TextArea is a minimal multiline text editor with viewport.
 type TextArea struct {
-	core.BaseWidget
-	Lines      []string
-	CaretX     int
-	CaretY     int
-	OffX       int
-	OffY       int
-	Style      tcell.Style
-	CaretStyle tcell.Style
-	// selection state
-	selActive    bool
-	selSX, selSY int
-	selEX, selEY int
+    core.BaseWidget
+    Lines      []string
+    CaretX     int
+    CaretY     int
+    OffX       int
+    OffY       int
+    Style      tcell.Style
+    CaretStyle tcell.Style
+    // selection state
+    selActive    bool
+    selSX, selSY int
+    selEX, selEY int
+    // selection direction for Shift+Arrow: -1 (left/up), +1 (right/down), 0 (none)
+    selDir int
 	// local clipboard
 	clip string
 	// invalidation callback
@@ -351,9 +353,10 @@ func (t *TextArea) extendSelection() {
 	// Update raw end (exclusive handled by consumers where needed)
 	t.selEX, t.selEY = t.CaretX, t.CaretY
 }
-func (t *TextArea) clearSelection() { t.selActive = false }
+func (t *TextArea) clearSelection() { t.selActive = false; t.selDir = 0 }
 func (t *TextArea) hasSelection() bool {
-    return t.selActive && (t.selSX != t.selEX || t.selSY != t.selEY)
+    // Under the new semantics, a single-cell selection (sx==ex, sy==ey) is valid.
+    return t.selActive
 }
 
 // SelectedRange returns the current selection start and end on the same line
