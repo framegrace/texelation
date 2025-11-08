@@ -243,6 +243,20 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 	default:
 		return false
 	}
+	// Update selection after movement keys
+	switch ev.Key() {
+	case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd:
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			if !t.selActive {
+				t.selActive = true
+				t.selSX, t.selSY = prevCX, prevCY
+			}
+			t.selEX, t.selEY = t.CaretX, t.CaretY
+		} else {
+			t.clearSelection()
+		}
+		t.invalidateViewport()
+	}
 	t.clampCaret()
 	t.ensureVisible()
 	return true
