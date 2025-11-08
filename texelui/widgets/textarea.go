@@ -163,46 +163,16 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 	switch ev.Key() {
 	case tcell.KeyLeft:
 		t.CaretX--
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			t.extendSelection()
-		} else {
-			t.clearSelection()
-		}
 	case tcell.KeyRight:
 		t.CaretX++
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			t.extendSelection()
-		} else {
-			t.clearSelection()
-		}
 	case tcell.KeyUp:
 		t.CaretY--
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			t.extendSelection()
-		} else {
-			t.clearSelection()
-		}
 	case tcell.KeyDown:
 		t.CaretY++
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			t.extendSelection()
-		} else {
-			t.clearSelection()
-		}
 	case tcell.KeyHome:
 		t.CaretX = 0
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			t.extendSelection()
-		} else {
-			t.clearSelection()
-		}
 	case tcell.KeyEnd:
 		t.CaretX = 1 << 30
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			t.extendSelection()
-		} else {
-			t.clearSelection()
-		}
 	case tcell.KeyEnter:
 		// split line
 		line := t.Lines[t.CaretY]
@@ -216,6 +186,21 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if t.hasSelection() {
 			t.deleteSelection()
+			// Update selection after movement keys
+			switch ev.Key() {
+			case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd:
+				if ev.Modifiers()&tcell.ModShift != 0 {
+					if !t.selActive {
+						t.selActive = true
+						t.selSX, t.selSY = prevCX, prevCY
+					}
+					t.selEX, t.selEY = t.CaretX, t.CaretY
+				} else {
+					t.clearSelection()
+				}
+				// Ensure selection visuals update immediately
+				t.invalidateViewport()
+			}
 			t.clampCaret()
 			t.ensureVisible()
 			// Invalidate: if selection active, redraw viewport; else only caret move
