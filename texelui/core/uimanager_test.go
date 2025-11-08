@@ -45,15 +45,19 @@ func (m *miniWidget) Focusable() bool { return false }
 func TestUIManagerDirtyClipsRestrictDraw(t *testing.T) {
 	ui := core.NewUIManager()
 	ui.Resize(10, 4)
-	mw := &miniWidget{}
-	mw.SetPosition(2, 1)
-	mw.Resize(3, 1)
-	ui.AddWidget(mw)
+	// Border + TextArea child, ensure invalidator is propagated
+	b := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
+	ta := widgets.NewTextArea(0, 0, 8, 2)
+	b.SetChild(ta)
+	ui.AddWidget(b)
 
 	// Invalidate overlapping cell; widget draws 'X' at (2,1)
-	ui.Invalidate(core.Rect{X: 2, Y: 1, W: 1, H: 1})
+	// Focus and type 'a'; caret moves to (2,1), 'a' appears at client(1,1)
+	ui.Focus(ta)
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'a', 0))
 	buf := ui.Render()
-	if got := buf[1][2].Ch; got != 'X' {
-		t.Fatalf("expected draw at (2,1) to be 'X', got %q", string(got))
+	// Border client area starts at (1,1)
+	if got := buf[1][1].Ch; got != 'a' {
+		t.Fatalf("expected 'a' at (1,1), got %q", string(got))
 	}
 }

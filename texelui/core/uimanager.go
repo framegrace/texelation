@@ -53,8 +53,15 @@ func (u *UIManager) Resize(w, h int) {
 
 func (u *UIManager) AddWidget(w Widget) {
 	u.widgets = append(u.widgets, w)
+	u.propagateInvalidator(w)
+}
+
+func (u *UIManager) propagateInvalidator(w Widget) {
 	if ia, ok := w.(InvalidationAware); ok {
 		ia.SetInvalidator(u.Invalidate)
+	}
+	if cc, ok := w.(ChildContainer); ok {
+		cc.VisitChildren(func(child Widget) { u.propagateInvalidator(child) })
 	}
 }
 

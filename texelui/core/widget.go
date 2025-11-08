@@ -58,3 +58,9 @@ type MouseAware interface {
 type InvalidationAware interface {
 	SetInvalidator(func(Rect))
 }
+
+// ChildContainer allows recursive operations over widget trees without
+// depending on concrete widget packages.
+type ChildContainer interface {
+	VisitChildren(func(Widget))
+}

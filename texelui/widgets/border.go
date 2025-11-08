@@ -11,6 +11,7 @@ type Border struct {
 	Style   tcell.Style
 	Charset [6]rune // h, v, tl, tr, bl, br
 	Child   core.Widget
+	inv     func(core.Rect)
 }
 
 func NewBorder(x, y, w, h int, style tcell.Style) *Border {
@@ -36,6 +37,9 @@ func (b *Border) SetChild(w core.Widget) {
 	if b.Child != nil {
 		b.Child.SetPosition(cr.X, cr.Y)
 		b.Child.Resize(cr.W, cr.H)
+		if ia, ok := b.Child.(core.InvalidationAware); ok {
+			ia.SetInvalidator(b.invalidate)
+		}
 	}
 }
 
@@ -52,5 +56,29 @@ func (b *Border) Draw(p *core.Painter) {
 	p.DrawBorder(b.Rect, b.Style, b.Charset)
 	if b.Child != nil {
 		b.Child.Draw(p)
+	}
+}
+
+// VisitChildren implements core.ChildContainer for recursive operations.
+func (b *Border) VisitChildren(f func(core.Widget)) {
+	if b.Child != nil {
+		f(b.Child)
+	}
+}
+
+// invalidate adapts the injected invalidator to child-local use.
+func (b *Border) invalidate(r core.Rect) {
+	if b.inv != nil {
+		b.inv(r)
+	}
+}
+
+// SetInvalidator lets UIManager inject invalidation into the child tree.
+func (b *Border) SetInvalidator(fn func(core.Rect)) {
+	b.inv = fn
+	if b.Child != nil {
+		if ia, ok := b.Child.(core.InvalidationAware); ok {
+			ia.SetInvalidator(fn)
+		}
 	}
 }
