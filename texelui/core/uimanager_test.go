@@ -116,5 +116,44 @@ func TestUIManagerKeyFallbackRedraw(t *testing.T) {
 	}
 }
 
+// Replace mode toggles with Insert; typing overwrites and caret is underlined.
+func TestTextAreaReplaceModeOverwritesAndUnderlineCaret(t *testing.T) {
+    ui := core.NewUIManager()
+    ui.Resize(10, 1)
+    ta := widgets.NewTextArea(0, 0, 10, 1)
+    ui.AddWidget(ta)
+    ui.Focus(ta)
+
+    // Type abc
+    for _, r := range "abc" {
+        ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, r, 0))
+    }
+    // Move Home, then Right (caret at index 1, over 'b')
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, 0))
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, 0))
+
+    // Toggle replace mode
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyInsert, 0, 0))
+
+    // Type Z; should overwrite 'b' → aZc
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'Z', 0))
+    buf := ui.Render()
+    // Assert content "aZc"
+    expected := "aZc"
+    gotRunes := make([]rune, len(expected))
+    for i := range expected {
+        gotRunes[i] = buf[0][i].Ch
+    }
+    if got := string(gotRunes); got != expected {
+        t.Fatalf("content=%q, want %q", got, expected)
+    }
+    // Caret moved to index 2; caret cell should be underlined
+    style := buf[0][2].Style
+    _, _, attr := style.Decompose()
+    if attr&tcell.AttrUnderline == 0 {
+        t.Fatalf("caret style not underlined in replace mode")
+    }
+}
+
 // Ensure first Shift+Left moves caret left and selects previous rune inclusively.
 // selection-related tests removed; selection will be reintroduced later

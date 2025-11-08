@@ -19,6 +19,11 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
     }
 
     switch ev.Key() {
+    case tcell.KeyInsert:
+        // Toggle insert/replace mode
+        t.replaceMode = !t.replaceMode
+        t.invalidateCaretAt(t.CaretX, t.CaretY)
+        return true
     case tcell.KeyLeft:
         t.CaretX--
     case tcell.KeyRight:
@@ -79,9 +84,17 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
         if t.CaretX > len(line) {
             t.CaretX = len(line)
         }
-        line = append(line[:t.CaretX], append([]rune{r}, line[t.CaretX:]...)...)
-        t.Lines[t.CaretY] = string(line)
-        t.CaretX++
+        if t.replaceMode && t.CaretX < len(line) {
+            // Overwrite current character
+            line[t.CaretX] = r
+            t.Lines[t.CaretY] = string(line)
+            t.CaretX++
+        } else {
+            // Insert mode (default)
+            line = append(line[:t.CaretX], append([]rune{r}, line[t.CaretX:]...)...)
+            t.Lines[t.CaretY] = string(line)
+            t.CaretX++
+        }
         t.invalidateViewport()
         return true
     default:

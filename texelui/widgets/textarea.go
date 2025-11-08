@@ -22,6 +22,8 @@ type TextArea struct {
 	inv func(core.Rect)
     // mouse state
     mouseDown bool
+    // insert vs replace mode: false=insert (default), true=replace (overwrite)
+    replaceMode bool
 }
 
 func NewTextArea(x, y, w, h int) *TextArea {
@@ -112,7 +114,7 @@ func (t *TextArea) Draw(p *core.Painter) {
             globalRow++
         }
     }
-    // caret: draw underlying rune with reversed video (swap fg/bg)
+    // caret: draw underlying rune; reverse in insert mode, underline in replace mode
     if t.IsFocused() {
         cx, cy := t.caretVisualPos()
         cy = cy - t.OffY
@@ -127,8 +129,14 @@ func (t *TextArea) Draw(p *core.Painter) {
             // Determine current cell style (no selection styling)
             baseStyle := t.Style
             fg, bg, _ := baseStyle.Decompose()
-            // Reverse: swap fg and bg of the effective cell style
-            caretStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
+            var caretStyle tcell.Style
+            if t.replaceMode {
+                // Underline caret in replace mode
+                caretStyle = tcell.StyleDefault.Background(bg).Foreground(fg).Underline(true)
+            } else {
+                // Reverse video caret in insert mode
+                caretStyle = tcell.StyleDefault.Background(fg).Foreground(bg)
+            }
             p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, caretStyle)
         }
     }
