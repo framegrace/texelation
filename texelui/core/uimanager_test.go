@@ -116,6 +116,46 @@ func TestUIManagerKeyFallbackRedraw(t *testing.T) {
 	}
 }
 
+// Two text areas demo-like layout: clicking should focus the clicked textarea and typing affects only it.
+func TestDualTextAreasClickFocusAndType(t *testing.T) {
+    ui := core.NewUIManager()
+    ui.Resize(20, 4)
+
+    // Left border + TA
+    lb := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
+    lta := widgets.NewTextArea(0, 0, 8, 2)
+    lb.SetChild(lta)
+    ui.AddWidget(lb)
+
+    // Right border + TA
+    rb := widgets.NewBorder(10, 0, 10, 4, tcell.StyleDefault)
+    rta := widgets.NewTextArea(0, 0, 8, 2)
+    rb.SetChild(rta)
+    ui.AddWidget(rb)
+
+    // Click right TA client area (11,1) and type 'b'
+    ui.HandleMouse(tcell.NewEventMouse(11, 1, tcell.Button1, 0))
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'b', 0))
+    buf := ui.Render()
+    if got := buf[1][11].Ch; got != 'b' {
+        t.Fatalf("expected 'b' in right TA at (11,1), got %q", string(got))
+    }
+
+    // Release then click left TA client area (1,1) and type 'a'
+    ui.HandleMouse(tcell.NewEventMouse(11, 1, 0, 0))
+    ui.HandleMouse(tcell.NewEventMouse(1, 1, tcell.Button1, 0))
+    ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'a', 0))
+    buf = ui.Render()
+    if got := buf[1][1].Ch; got != 'a' {
+        t.Fatalf("expected 'a' in left TA at (1,1), got %q", string(got))
+    }
+
+    // Ensure right TA still has 'b'
+    if got := buf[1][11].Ch; got != 'b' {
+        t.Fatalf("right TA lost content; got %q", string(got))
+    }
+}
+
 // Replace mode toggles with Insert; typing overwrites and caret is underlined.
 func TestTextAreaReplaceModeOverwritesAndUnderlineCaret(t *testing.T) {
     ui := core.NewUIManager()

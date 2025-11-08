@@ -79,3 +79,42 @@ func NewTextEditorApp(title string) *UIApp {
 	}
 	return app
 }
+
+// NewDualTextEditorApp constructs a UI with two bordered TextAreas side-by-side to test focus.
+func NewDualTextEditorApp(title string) *UIApp {
+    ui := core.NewUIManager()
+
+    // Base pane background
+    pane := widgets.NewPane(0, 0, 0, 0, tcell.StyleDefault)
+    ui.AddWidget(pane)
+
+    // Left editor
+    leftBorder := widgets.NewBorder(0, 0, 0, 0, tcell.StyleDefault)
+    leftTA := widgets.NewTextArea(0, 0, 0, 0)
+    leftBorder.SetChild(leftTA)
+    ui.AddWidget(leftBorder)
+
+    // Right editor
+    rightBorder := widgets.NewBorder(0, 0, 0, 0, tcell.StyleDefault)
+    rightTA := widgets.NewTextArea(0, 0, 0, 0)
+    rightBorder.SetChild(rightTA)
+    ui.AddWidget(rightBorder)
+
+    // Start focused on left
+    ui.Focus(leftTA)
+
+    app := NewUIApp(title, ui)
+    app.onResize = func(w, h int) {
+        pane.SetPosition(0, 0)
+        pane.Resize(w, h)
+
+        // Split vertical into two columns
+        lw := w / 2
+        rw := w - lw
+        leftBorder.SetPosition(0, 0)
+        leftBorder.Resize(lw, h)
+        rightBorder.SetPosition(lw, 0)
+        rightBorder.Resize(rw, h)
+    }
+    return app
+}

@@ -26,9 +26,12 @@ var registry = map[string]Builder{
 	"welcome": func(args []string) (texel.App, error) {
 		return welcome.NewWelcomeApp(), nil
 	},
-	"texelui-demo": func(args []string) (texel.App, error) {
-		return adapter.NewTextEditorApp("TexelUI Demo"), nil
-	},
+    "texelui-demo": func(args []string) (texel.App, error) {
+        return adapter.NewTextEditorApp("TexelUI Demo"), nil
+    },
+    "texelui-demo2": func(args []string) (texel.App, error) {
+        return adapter.NewDualTextEditorApp("TexelUI Dual Demo"), nil
+    },
 }
 
 var screenFactory = tcell.NewScreen
