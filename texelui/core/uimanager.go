@@ -53,6 +53,9 @@ func (u *UIManager) Resize(w, h int) {
 
 func (u *UIManager) AddWidget(w Widget) {
 	u.widgets = append(u.widgets, w)
+	if ia, ok := w.(InvalidationAware); ok {
+		ia.SetInvalidator(u.Invalidate)
+	}
 }
 
 // SetLayout sets the layout manager (defaults to Absolute).
@@ -85,7 +88,6 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 	}
 
 	if u.focused != nil && u.focused.HandleKey(ev) {
-		u.InvalidateAll()
 		u.RequestRefresh()
 		return true
 	}

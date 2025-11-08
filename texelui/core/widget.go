@@ -53,3 +53,8 @@ func (b *BaseWidget) HandleKey(ev *tcell.EventKey) bool { return false }
 type MouseAware interface {
 	HandleMouse(ev *tcell.EventMouse) bool
 }
+
+// InvalidationAware widgets accept an invalidation callback to mark dirty regions.
+type InvalidationAware interface {
+	SetInvalidator(func(Rect))
+}

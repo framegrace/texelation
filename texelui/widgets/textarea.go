@@ -22,6 +22,8 @@ type TextArea struct {
 	selEX, selEY int
 	// local clipboard
 	clip string
+	// invalidation callback
+	inv func(core.Rect)
 }
 
 func NewTextArea(x, y, w, h int) *TextArea {
@@ -39,6 +41,9 @@ func NewTextArea(x, y, w, h int) *TextArea {
 	ta.SetFocusable(true)
 	return ta
 }
+
+// SetInvalidator allows the UI manager to inject a dirty-region invalidator.
+func (t *TextArea) SetInvalidator(fn func(core.Rect)) { t.inv = fn }
 
 func (t *TextArea) clampCaret() {
 	if t.CaretY < 0 {
@@ -118,6 +123,7 @@ func (t *TextArea) Draw(p *core.Painter) {
 }
 
 func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
+	prevCX, prevCY := t.CaretX, t.CaretY
 	// clipboard shortcuts
 	if ev.Modifiers()&tcell.ModCtrl != 0 {
 		switch ev.Rune() {
@@ -195,6 +201,13 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 			t.deleteSelection()
 			t.clampCaret()
 			t.ensureVisible()
+			// Invalidate: if selection active, redraw viewport; else only caret move
+			if t.hasSelection() {
+				t.invalidateViewport()
+			} else {
+				t.invalidateCaretAt(prevCX, prevCY)
+				t.invalidateCaretAt(t.CaretX, t.CaretY)
+			}
 			return true
 		}
 		if t.CaretX > 0 {
@@ -249,6 +262,7 @@ func (t *TextArea) HandleMouse(ev *tcell.EventMouse) bool {
 		if btn&tcell.WheelDown != 0 {
 			t.OffY++
 		}
+		t.invalidateViewport()
 		return true
 	}
 	if btn&tcell.Button1 != 0 {
@@ -263,6 +277,7 @@ func (t *TextArea) HandleMouse(ev *tcell.EventMouse) bool {
 		t.extendSelection()
 		t.clampCaret()
 		t.ensureVisible()
+		t.invalidateViewport()
 		return true
 	}
 	return false
@@ -350,6 +365,7 @@ func (t *TextArea) deleteSelection() {
 		t.Lines[sy] = string(append(r[:sx], r[ex:]...))
 		t.CaretX, t.CaretY = sx, sy
 		t.clearSelection()
+		t.invalidateViewport()
 		return
 	}
 	head := []rune(t.Lines[sy])
@@ -359,6 +375,7 @@ func (t *TextArea) deleteSelection() {
 	t.Lines[sy] = newHead
 	t.CaretX, t.CaretY = sx, sy
 	t.clearSelection()
+	t.invalidateViewport()
 }
 
 func (t *TextArea) insertText(s string) {
@@ -387,4 +404,22 @@ func (t *TextArea) insertText(s string) {
 	}
 	t.clampCaret()
 	t.ensureVisible()
+	t.invalidateViewport()
+}
+func (t *TextArea) invalidateViewport() {
+	if t.inv == nil {
+		return
+	}
+	t.inv(t.Rect)
+}
+func (t *TextArea) invalidateCaretAt(cx, cy int) {
+	if t.inv == nil {
+		return
+	}
+	vx := cx - t.OffX
+	vy := cy - t.OffY
+	if vx < 0 || vy < 0 || vx >= t.Rect.W || vy >= t.Rect.H {
+		return
+	}
+	t.inv(core.Rect{X: t.Rect.X + vx, Y: t.Rect.Y + vy, W: 1, H: 1})
 }

@@ -95,7 +95,7 @@ Last updated: 2025-11-08
 - [x] Clipboard integration for TextArea (local copy/cut/paste)
 - [x] Damage tracking improvements (rect merging; multi-clip redraw)
 - [x] Quickstart doc for demo and embedding
-- [ ] Per-widget invalidation API (plumb widget-driven dirty regions)
+- [x] Per-widget invalidation API (widgets can call injected invalidator)
 - [ ] Benchmarks for redraw cost (typing and selection)
 - [ ] Cursor blink timer and IME hooks
 
