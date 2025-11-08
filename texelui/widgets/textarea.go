@@ -134,9 +134,8 @@ func (t *TextArea) Draw(p *core.Painter) {
 				}
 			}
 			fg, bg, _ := baseStyle.Decompose()
+			// Invert the current cell's style by swapping fg/bg once
 			caretStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
-			// swap to invert
-			caretStyle = tcell.StyleDefault.Background(bg).Foreground(fg)
 			p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, caretStyle)
 		}
 	}
