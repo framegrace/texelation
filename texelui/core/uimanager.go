@@ -221,11 +221,13 @@ func (u *UIManager) Invalidate(r Rect) {
 		return
 	}
 	u.dirty = append(u.dirty, r)
+	u.RequestRefresh()
 }
 
 // InvalidateAll marks the whole surface for redraw.
 func (u *UIManager) InvalidateAll() {
 	u.dirty = append(u.dirty, Rect{X: 0, Y: 0, W: u.W, H: u.H})
+	u.RequestRefresh()
 }
 
 func (u *UIManager) ensureBuffer() {
