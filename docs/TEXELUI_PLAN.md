@@ -81,14 +81,19 @@ Last updated: 2025-11-08
 
 ## Status / Progress
 - [x] Planning document created (this file)
-- [ ] Core package scaffolded
-- [ ] UIManager + Painter + Style glue
-- [ ] Pane widget
-- [ ] Border decorator
-- [ ] TextArea (MVP)
-- [ ] Adapter integration into a sample TexelApp
-- [ ] Tests and docs for MVP
-- [ ] Performance pass (damage), layout managers roadmap sketched in code
+- [x] Core package scaffolded
+- [x] UIManager + Painter + Style glue
+- [x] Pane widget
+- [x] Border decorator
+- [x] TextArea (MVP)
+- [x] Adapter integration into a sample TexelApp
+- [x] Minimal tests for render pipeline
+- [x] Dirty-region rendering (initial, coarse merge of regions)
+- [x] Layout manager interface (Absolute)
+- [ ] Focus traversal (Tab/Shift-Tab), click-to-focus hit-testing
+- [ ] Mouse handling with capture for drags
+- [ ] Clipboard integration for TextArea (copy/cut/paste)
+- [ ] Damage tracking improvements (line/rect union; per-widget invalidation API)
+- [ ] Additional tests and quickstart docs
 
 Maintenance note: Update this checklist and sections whenever work lands. Commit this file alongside related code changes.
-

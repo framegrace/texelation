@@ -13,6 +13,9 @@ type UIManager struct {
 	bgStyle  tcell.Style
 	notifier chan<- bool
 	focused  Widget
+	buf      [][]texel.Cell
+	dirty    []Rect
+	lay      Layout
 }
 
 func NewUIManager() *UIManager {
@@ -42,15 +45,17 @@ func (u *UIManager) Resize(w, h int) {
 		h = 0
 	}
 	u.W, u.H = w, h
-	for _, w := range u.widgets {
-		// Widgets manage their own geometry; no-op here for absolute layout
-		_ = w
-	}
+	// Resize framebuffer and invalidate all
+	u.buf = nil
+	u.InvalidateAll()
 }
 
 func (u *UIManager) AddWidget(w Widget) {
 	u.widgets = append(u.widgets, w)
 }
+
+// SetLayout sets the layout manager (defaults to Absolute).
+func (u *UIManager) SetLayout(l Layout) { u.lay = l }
 
 func (u *UIManager) Focus(w Widget) {
 	if u.focused == w {
@@ -67,25 +72,102 @@ func (u *UIManager) Focus(w Widget) {
 
 func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 	if u.focused != nil && u.focused.HandleKey(ev) {
+		u.InvalidateAll()
 		u.RequestRefresh()
 		return true
 	}
 	return false
 }
 
-// Render draws into a fresh buffer and returns it.
-func (u *UIManager) Render() [][]texel.Cell {
-	buf := make([][]texel.Cell, u.H)
+// Invalidate marks a region for redraw.
+func (u *UIManager) Invalidate(r Rect) {
+	// Clip to surface
+	if r.X < 0 {
+		r.X = 0
+	}
+	if r.Y < 0 {
+		r.Y = 0
+	}
+	if r.X+r.W > u.W {
+		r.W = u.W - r.X
+	}
+	if r.Y+r.H > u.H {
+		r.H = u.H - r.Y
+	}
+	if r.W <= 0 || r.H <= 0 {
+		return
+	}
+	u.dirty = append(u.dirty, r)
+}
+
+// InvalidateAll marks the whole surface for redraw.
+func (u *UIManager) InvalidateAll() {
+	u.dirty = append(u.dirty, Rect{X: 0, Y: 0, W: u.W, H: u.H})
+}
+
+func (u *UIManager) ensureBuffer() {
+	if u.buf != nil && len(u.buf) == u.H && (u.H == 0 || len(u.buf[0]) == u.W) {
+		return
+	}
+	u.buf = make([][]texel.Cell, u.H)
 	for y := 0; y < u.H; y++ {
 		row := make([]texel.Cell, u.W)
 		for x := 0; x < u.W; x++ {
 			row[x] = texel.Cell{Ch: ' ', Style: u.bgStyle}
 		}
-		buf[y] = row
+		u.buf[y] = row
 	}
-	p := NewPainter(buf, Rect{X: 0, Y: 0, W: u.W, H: u.H})
+}
+
+// Render updates dirty regions and returns the framebuffer.
+func (u *UIManager) Render() [][]texel.Cell {
+	u.ensureBuffer()
+	if len(u.dirty) == 0 {
+		return u.buf
+	}
+	// Merge dirties into a single clip for MVP
+	x0, y0, x1, y1 := u.W, u.H, 0, 0
+	for _, r := range u.dirty {
+		if r.X < x0 {
+			x0 = r.X
+		}
+		if r.Y < y0 {
+			y0 = r.Y
+		}
+		if r.X+r.W > x1 {
+			x1 = r.X + r.W
+		}
+		if r.Y+r.H > y1 {
+			y1 = r.Y + r.H
+		}
+	}
+	if x0 > x1 || y0 > y1 {
+		x0, y0, x1, y1 = 0, 0, 0, 0
+	}
+	clip := Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
+	p := NewPainter(u.buf, clip)
+	// Clear dirty region
+	p.Fill(clip, ' ', u.bgStyle)
+	// Draw widgets intersecting clip
 	for _, w := range u.widgets {
-		w.Draw(p)
+		wx, wy := w.Position()
+		ww, wh := w.Size()
+		wr := Rect{X: wx, Y: wy, W: ww, H: wh}
+		if rectsOverlap(wr, clip) {
+			w.Draw(p)
+		}
 	}
-	return buf
+	u.dirty = u.dirty[:0]
+	return u.buf
+}
+
+func rectsOverlap(a, b Rect) bool {
+	if a.W <= 0 || a.H <= 0 || b.W <= 0 || b.H <= 0 {
+		return false
+	}
+	ax1 := a.X + a.W
+	ay1 := a.Y + a.H
+	bx1 := b.X + b.W
+	by1 := b.Y + b.H
+	return a.X < bx1 && ax1 > b.X && a.Y < by1 && ay1 > b.Y
 }
