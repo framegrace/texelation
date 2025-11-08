@@ -113,8 +113,8 @@ func (t *TextArea) Draw(p *core.Painter) {
 			col++
 		}
 	}
-	// caret: draw underlying rune with caret style only when no selection
-	if t.IsFocused() && !t.hasSelection() {
+	// caret: draw underlying rune with caret style
+	if t.IsFocused() {
 		cx := t.CaretX - t.OffX
 		cy := t.CaretY - t.OffY
 		if cx >= 0 && cy >= 0 && cx < t.Rect.W && cy < t.Rect.H {
