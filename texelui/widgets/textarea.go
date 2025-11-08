@@ -141,139 +141,156 @@ func (t *TextArea) Draw(p *core.Painter) {
 	}
 }
 
-func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
-	// ESC clears selection
-	if ev.Key() == tcell.KeyEsc {
-		if t.hasSelection() {
-			t.clearSelection()
-			t.invalidateViewport()
-			return true
-		}
-		return false
-	}
-	prevCX, prevCY := t.CaretX, t.CaretY
-	// clipboard shortcuts
-	if ev.Modifiers()&tcell.ModCtrl != 0 {
-		switch ev.Rune() {
-		case 'c':
-			t.clip = t.getSelectedText()
-			return true
-		case 'x':
-			t.clip = t.getSelectedText()
-			t.deleteSelection()
-			t.clampCaret()
-			t.ensureVisible()
-			return true
-		case 'v':
-			if t.clip != "" {
-				t.insertText(t.clip)
+/*
+	func (t *TextArea) HandleKeyOld(ev *tcell.EventKey) bool {
+		// ESC clears selection
+		if ev.Key() == tcell.KeyEsc {
+			if t.hasSelection() {
+				t.clearSelection()
+				t.invalidateViewport()
 				return true
 			}
+			return false
 		}
-	}
-	switch ev.Key() {
-	case tcell.KeyLeft:
-		t.CaretX--
-	case tcell.KeyRight:
-		t.CaretX++
-	case tcell.KeyUp:
-		t.CaretY--
-	case tcell.KeyDown:
-		t.CaretY++
-	case tcell.KeyHome:
-		t.CaretX = 0
-	case tcell.KeyEnd:
-		t.CaretX = 1 << 30
-	case tcell.KeyEnter:
-		// split line
-		line := t.Lines[t.CaretY]
-		head := []rune(line)[:t.CaretX]
-		tail := []rune(line)[t.CaretX:]
-		t.Lines[t.CaretY] = string(head)
-		t.Lines = append(t.Lines[:t.CaretY+1], append([]string{""}, t.Lines[t.CaretY+1:]...)...)
-		t.Lines[t.CaretY+1] = string(tail)
-		t.CaretY++
-		t.CaretX = 0
-	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		if t.hasSelection() {
-			t.deleteSelection()
-			// Update selection after movement keys
-			switch ev.Key() {
-			case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd:
-				if ev.Modifiers()&tcell.ModShift != 0 {
-					if !t.selActive {
-						t.selActive = true
-						t.selSX, t.selSY = prevCX, prevCY
-					}
-					t.selEX, t.selEY = t.CaretX, t.CaretY
-				} else {
-					t.clearSelection()
+		prevCX, prevCY := t.CaretX, t.CaretY
+		// clipboard shortcuts
+		if ev.Modifiers()&tcell.ModCtrl != 0 {
+			switch ev.Rune() {
+			case 'c':
+				t.clip = t.getSelectedText()
+				return true
+			case 'x':
+				t.clip = t.getSelectedText()
+				t.deleteSelection()
+				t.clampCaret()
+				t.ensureVisible()
+				return true
+			case 'v':
+				if t.clip != "" {
+					t.insertText(t.clip)
+					return true
 				}
-				// Ensure selection visuals update immediately
-				t.invalidateViewport()
 			}
-			t.clampCaret()
-			t.ensureVisible()
-			// Invalidate: if selection active, redraw viewport; else only caret move
-			if t.hasSelection() {
-				t.invalidateViewport()
-			} else {
-				t.invalidateCaretAt(prevCX, prevCY)
-				t.invalidateCaretAt(t.CaretX, t.CaretY)
-			}
-			return true
 		}
-		if t.CaretX > 0 {
-			line := []rune(t.Lines[t.CaretY])
-			t.Lines[t.CaretY] = string(append(line[:t.CaretX-1], line[t.CaretX:]...))
+	    switch ev.Key() {
+		case tcell.KeyLeft:
 			t.CaretX--
-		} else if t.CaretY > 0 {
-			// join with previous
-			prev := t.Lines[t.CaretY-1]
-			cur := t.Lines[t.CaretY]
-			t.CaretX = len([]rune(prev))
-			t.Lines[t.CaretY-1] = prev + cur
-			t.Lines = append(t.Lines[:t.CaretY], t.Lines[t.CaretY+1:]...)
+		case tcell.KeyRight:
+			t.CaretX++
+		case tcell.KeyUp:
 			t.CaretY--
-		}
-	case tcell.KeyRune:
-		if t.hasSelection() {
-			t.deleteSelection()
-		}
-		r := ev.Rune()
-		line := []rune(t.Lines[t.CaretY])
-		if t.CaretX < 0 {
+		case tcell.KeyDown:
+			t.CaretY++
+		case tcell.KeyHome:
 			t.CaretX = 0
-		}
-		if t.CaretX > len(line) {
-			t.CaretX = len(line)
-		}
-		line = append(line[:t.CaretX], append([]rune{r}, line[t.CaretX:]...)...)
-		t.Lines[t.CaretY] = string(line)
-		t.CaretX++
-	default:
-		return false
-	}
-	// Update selection after movement keys
-	switch ev.Key() {
-	case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd:
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			if !t.selActive {
-				t.selActive = true
-				t.selSX, t.selSY = prevCX, prevCY
+		case tcell.KeyEnd:
+			t.CaretX = 1 << 30
+		case tcell.KeyEnter:
+			// split line
+			line := t.Lines[t.CaretY]
+			head := []rune(line)[:t.CaretX]
+			tail := []rune(line)[t.CaretX:]
+			t.Lines[t.CaretY] = string(head)
+			t.Lines = append(t.Lines[:t.CaretY+1], append([]string{""}, t.Lines[t.CaretY+1:]...)...)
+			t.Lines[t.CaretY+1] = string(tail)
+			t.CaretY++
+			t.CaretX = 0
+	    case tcell.KeyBackspace, tcell.KeyBackspace2:
+			if t.hasSelection() {
+				t.deleteSelection()
+				// Update selection after movement keys
+				switch ev.Key() {
+				case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd:
+					if ev.Modifiers()&tcell.ModShift != 0 {
+						if !t.selActive {
+							t.selActive = true
+							t.selSX, t.selSY = prevCX, prevCY
+	        }
+	    case tcell.KeyDelete:
+	        if t.hasSelection() {
+	            t.deleteSelection()
+	            t.clampCaret(); t.ensureVisible(); t.invalidateViewport()
+	            return true
+	        }
+	        // Delete char at caret
+	        if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
+	            line := []rune(t.Lines[t.CaretY])
+	            if t.CaretX >= 0 && t.CaretX < len(line) {
+	                t.Lines[t.CaretY] = string(append(line[:t.CaretX], line[t.CaretX+1:]...))
+	                t.invalidateViewport()
+	                return true
+	            }
+	        }
+						t.selEX, t.selEY = t.CaretX, t.CaretY
+					} else {
+						t.clearSelection()
+					}
+					// Ensure selection visuals update immediately
+					t.invalidateViewport()
+				}
+				t.clampCaret()
+				t.ensureVisible()
+				// Invalidate: if selection active, redraw viewport; else only caret move
+				if t.hasSelection() {
+					t.invalidateViewport()
+				} else {
+					t.invalidateCaretAt(prevCX, prevCY)
+					t.invalidateCaretAt(t.CaretX, t.CaretY)
+				}
+				return true
 			}
-			t.selEX, t.selEY = t.CaretX, t.CaretY
-		} else {
-			t.clearSelection()
+			if t.CaretX > 0 {
+				line := []rune(t.Lines[t.CaretY])
+				t.Lines[t.CaretY] = string(append(line[:t.CaretX-1], line[t.CaretX:]...))
+				t.CaretX--
+			} else if t.CaretY > 0 {
+				// join with previous
+				prev := t.Lines[t.CaretY-1]
+				cur := t.Lines[t.CaretY]
+				t.CaretX = len([]rune(prev))
+				t.Lines[t.CaretY-1] = prev + cur
+				t.Lines = append(t.Lines[:t.CaretY], t.Lines[t.CaretY+1:]...)
+				t.CaretY--
+			}
+		case tcell.KeyRune:
+			if t.hasSelection() {
+				t.deleteSelection()
+			}
+			r := ev.Rune()
+			line := []rune(t.Lines[t.CaretY])
+			if t.CaretX < 0 {
+				t.CaretX = 0
+			}
+			if t.CaretX > len(line) {
+				t.CaretX = len(line)
+			}
+			line = append(line[:t.CaretX], append([]rune{r}, line[t.CaretX:]...)...)
+			t.Lines[t.CaretY] = string(line)
+			t.CaretX++
+		default:
+			return false
 		}
-		t.invalidateViewport()
+		// Update selection after movement keys
+		switch ev.Key() {
+		case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd:
+			if ev.Modifiers()&tcell.ModShift != 0 {
+				if !t.selActive {
+					t.selActive = true
+					t.selSX, t.selSY = prevCX, prevCY
+				}
+				t.selEX, t.selEY = t.CaretX, t.CaretY
+			} else {
+				t.clearSelection()
+			}
+			t.invalidateViewport()
+		}
+		t.clampCaret()
+		t.ensureVisible()
+		return true
 	}
-	t.clampCaret()
-	t.ensureVisible()
-	return true
-}
 
 // Mouse-aware implementation for selection and scrolling.
+*/
 func (t *TextArea) HandleMouse(ev *tcell.EventMouse) bool {
 	x, y := ev.Position()
 	lx := x - t.Rect.X
@@ -331,13 +348,8 @@ func (t *TextArea) extendSelection() {
 		t.startSelection()
 		return
 	}
-	// Update raw end
+	// Update raw end (exclusive handled by consumers where needed)
 	t.selEX, t.selEY = t.CaretX, t.CaretY
-	// Ensure end is exclusive when extending forward
-	forward := (t.selEY > t.selSY) || (t.selEY == t.selSY && t.selEX >= t.selSX)
-	if forward {
-		t.selEX++
-	}
 }
 func (t *TextArea) clearSelection() { t.selActive = false }
 func (t *TextArea) hasSelection() bool {

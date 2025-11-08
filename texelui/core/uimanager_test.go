@@ -78,11 +78,55 @@ func TestClickToFocusInnerWidget(t *testing.T) {
 	// Click inside textarea at (1,1) (client origin)
 	me := tcell.NewEventMouse(1, 1, tcell.Button1, 0)
 	ui.HandleMouse(me)
-	// Type 'z'
-	ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'z', 0))
+	// Type 'a' then Home, then Shift+Right
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'a', 0))
 	buf := ui.Render()
-	if got := buf[1][1].Ch; got != 'z' {
-		t.Fatalf("expected 'z' at (1,1), got %q", string(got))
+	if got := buf[1][1].Ch; got != 'a' {
+		t.Fatalf("expected 'a' at (1,1), got %q", string(got))
+	}
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, 0))
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+	buf = ui.Render()
+	// The selected cell keeps the underlying rune 'a'
+	if got := buf[1][1].Ch; got != 'a' {
+		t.Fatalf("expected selected 'a' at (1,1), got %q", string(got))
+	}
+}
+
+// Delete a range from the first 10 to the end; expect only first block remains.
+func TestDeleteSelectionKeepsExpectedSubstring(t *testing.T) {
+	ui := core.NewUIManager()
+	ui.Resize(40, 3)
+	b := widgets.NewBorder(0, 0, 40, 3, tcell.StyleDefault)
+	ta := widgets.NewTextArea(0, 0, 38, 1)
+	b.SetChild(ta)
+	ui.AddWidget(b)
+	ui.Focus(ta)
+	// Type the test string
+	input := "1234567890 1234567890"
+	for _, r := range input {
+		ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, r, 0))
+	}
+	// Move to line start
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, 0))
+	// Move right 10 (caret to after first block)
+	for i := 0; i < 10; i++ {
+		ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, 0))
+	}
+	// Select to end
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModShift))
+	// Delete selection
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyDelete, 0, 0))
+	buf := ui.Render()
+	// Expect only first block remains
+	expected := "1234567890"
+	gotRunes := make([]rune, 0, len(expected))
+	for i := 0; i < len(expected); i++ {
+		gotRunes = append(gotRunes, buf[1][i+1].Ch)
+	}
+	got := string(gotRunes)
+	if got != expected {
+		t.Fatalf("after delete got %q, expected %q", got, expected)
 	}
 }
 
