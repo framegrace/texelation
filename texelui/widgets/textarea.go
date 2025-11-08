@@ -116,7 +116,7 @@ func (t *TextArea) Draw(p *core.Painter) {
 			col++
 		}
 	}
-    // caret: redraw underlying rune using caret foreground color (slightly greyer)
+    // caret: draw underlying rune with reversed video (swap fg/bg)
     if t.IsFocused() {
 		cx := t.CaretX - t.OffX
 		cy := t.CaretY - t.OffY
@@ -136,9 +136,9 @@ func (t *TextArea) Draw(p *core.Painter) {
                     baseStyle = tcell.StyleDefault.Background(fg).Foreground(bg)
                 }
             }
-            _, bg, _ := baseStyle.Decompose()
-            cf, _, _ := t.CaretStyle.Decompose()
-            caretStyle := tcell.StyleDefault.Background(bg).Foreground(cf)
+            fg, bg, _ := baseStyle.Decompose()
+            // Reverse: swap fg and bg of the effective cell style
+            caretStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
             p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, caretStyle)
         }
     }
