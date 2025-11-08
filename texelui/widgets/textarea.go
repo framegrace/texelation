@@ -361,14 +361,19 @@ func (t *TextArea) isSelected(cx, cy int) bool {
 		return false
 	}
 	sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
-	if sy > ey || (sy == ey && sx > ex) {
+	forward := (ey > sy) || (ey == sy && ex >= sx)
+	if !forward {
 		sx, sy, ex, ey = ex, ey, sx, sy
 	}
 	if cy < sy || cy > ey {
 		return false
 	}
 	if sy == ey {
-		return cx >= sx && cx < ex
+		end := ex
+		if forward {
+			end = ex + 1
+		}
+		return cx >= sx && cx < end
 	}
 	if cy == sy {
 		return cx >= sx
@@ -413,13 +418,18 @@ func (t *TextArea) deleteSelection() {
 		return
 	}
 	sx, sy, ex, ey := t.selSX, t.selSY, t.selEX, t.selEY
-	if sy > ey || (sy == ey && sx > ex) {
+	forward := (ey > sy) || (ey == sy && ex >= sx)
+	if !forward {
 		sx, sy, ex, ey = ex, ey, sx, sy
 	}
 	if sy == ey {
 		r := []rune(t.Lines[sy])
-		if ex > len(r) {
-			ex = len(r)
+		end := ex
+		if forward {
+			end = ex + 1
+		}
+		if end > len(r) {
+			end = len(r)
 		}
 		if sx < 0 {
 			sx = 0
@@ -427,7 +437,7 @@ func (t *TextArea) deleteSelection() {
 		if sx > len(r) {
 			sx = len(r)
 		}
-		t.Lines[sy] = string(append(r[:sx], r[ex:]...))
+		t.Lines[sy] = string(append(r[:sx], r[end:]...))
 		t.CaretX, t.CaretY = sx, sy
 		t.clearSelection()
 		t.invalidateViewport()
@@ -435,8 +445,12 @@ func (t *TextArea) deleteSelection() {
 	}
 	head := []rune(t.Lines[sy])
 	tail := []rune(t.Lines[ey])
-	if ex > len(tail) {
-		ex = len(tail)
+	end := ex
+	if forward {
+		end = ex + 1
+	}
+	if end > len(tail) {
+		end = len(tail)
 	}
 	if sx < 0 {
 		sx = 0
@@ -444,7 +458,7 @@ func (t *TextArea) deleteSelection() {
 	if sx > len(head) {
 		sx = len(head)
 	}
-	newHead := string(head[:sx]) + string(tail[ex:])
+	newHead := string(head[:sx]) + string(tail[end:])
 	t.Lines = append(t.Lines[:sy+1], t.Lines[ey+1:]...)
 	t.Lines[sy] = newHead
 	t.CaretX, t.CaretY = sx, sy

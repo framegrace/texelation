@@ -130,6 +130,40 @@ func TestDeleteSelectionKeepsExpectedSubstring(t *testing.T) {
 	}
 }
 
+func TestDeleteSelectionShiftRightSequence(t *testing.T) {
+	ui := core.NewUIManager()
+	ui.Resize(40, 3)
+	b := widgets.NewBorder(0, 0, 40, 3, tcell.StyleDefault)
+	ta := widgets.NewTextArea(0, 0, 38, 1)
+	b.SetChild(ta)
+	ui.AddWidget(b)
+	ui.Focus(ta)
+
+	input := "1234567890 1234567890"
+	for _, r := range input {
+		ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, r, 0))
+	}
+	// Move left 17
+	for i := 0; i < 17; i++ {
+		ui.HandleKey(tcell.NewEventKey(tcell.KeyLeft, 0, 0))
+	}
+	// Shift+Right 10 times
+	for i := 0; i < 10; i++ {
+		ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+	}
+	// Backspace to delete selection
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyBackspace, 0, 0))
+	buf := ui.Render()
+	expected := "1234567890"
+	gotRunes := make([]rune, 0, len(expected))
+	for i := 0; i < len(expected); i++ {
+		gotRunes = append(gotRunes, buf[1][i+1].Ch)
+	}
+	if got := string(gotRunes); got != expected {
+		t.Fatalf("after delete got %q, expected %q", got, expected)
+	}
+}
+
 // If a widget consumes keys but doesn't invalidate, UIManager falls back to full redraw.
 func TestUIManagerKeyFallbackRedraw(t *testing.T) {
 	ui := core.NewUIManager()
