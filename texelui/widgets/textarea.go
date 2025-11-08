@@ -113,7 +113,7 @@ func (t *TextArea) Draw(p *core.Painter) {
 			col++
 		}
 	}
-	// caret: draw underlying rune with caret style
+	// caret: draw underlying rune with inverted style (swap fg/bg of current cell)
 	if t.IsFocused() {
 		cx := t.CaretX - t.OffX
 		cy := t.CaretY - t.OffY
@@ -125,7 +125,19 @@ func (t *TextArea) Draw(p *core.Painter) {
 					ch = line[t.CaretX]
 				}
 			}
-			p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, t.CaretStyle)
+			// Determine current cell style (selected or normal), then invert
+			baseStyle := t.Style
+			if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
+				if t.isSelected(t.CaretX, t.CaretY) {
+					fg, bg, _ := t.Style.Decompose()
+					baseStyle = tcell.StyleDefault.Background(fg).Foreground(bg)
+				}
+			}
+			fg, bg, _ := baseStyle.Decompose()
+			caretStyle := tcell.StyleDefault.Background(fg).Foreground(bg)
+			// swap to invert
+			caretStyle = tcell.StyleDefault.Background(bg).Foreground(fg)
+			p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, caretStyle)
 		}
 	}
 }
