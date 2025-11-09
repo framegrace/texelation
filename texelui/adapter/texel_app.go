@@ -94,11 +94,9 @@ func NewDualTextEditorApp(title string) *UIApp {
     leftBorder.SetChild(leftTA)
     ui.AddWidget(leftBorder)
 
-    // Right editor
-    rightBorder := widgets.NewBorder(0, 0, 0, 0, tcell.StyleDefault)
+    // Right editor (no border): add TextArea directly
     rightTA := widgets.NewTextArea(0, 0, 0, 0)
-    rightBorder.SetChild(rightTA)
-    ui.AddWidget(rightBorder)
+    ui.AddWidget(rightTA)
 
     // Start focused on left
     ui.Focus(leftTA)
@@ -113,8 +111,8 @@ func NewDualTextEditorApp(title string) *UIApp {
         rw := w - lw
         leftBorder.SetPosition(0, 0)
         leftBorder.Resize(lw, h)
-        rightBorder.SetPosition(lw, 0)
-        rightBorder.Resize(rw, h)
+        rightTA.SetPosition(lw, 0)
+        rightTA.Resize(rw, h)
     }
     return app
 }
