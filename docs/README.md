@@ -6,5 +6,6 @@ This directory houses Texelation's supporting documentation. Key entry points:
 - [Client/server architecture](CLIENT_SERVER_ARCHITECTURE.md)
 - [Effect development guide](EFFECTS_GUIDE.md)
 - [Texel app & card pipeline guide](TEXEL_APP_GUIDE.md)
+- [TexelUI quickstart](TEXELUI_QUICKSTART.md)
+- [TexelUI theme keys](TEXELUI_THEME.md)
 - [Future roadmap](FUTURE_ROADMAP.md)
-

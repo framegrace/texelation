@@ -67,12 +67,32 @@ func ApplyDefaults(cfg Config) {
 		changed = true
 	}
 
-	if applySectionDefaults(cfg, "selection", Section{
-		"highlight_bg": "#e8d9ff",
-		"highlight_fg": "#000000",
-	}) {
-		changed = true
-	}
+    if applySectionDefaults(cfg, "selection", Section{
+        "highlight_bg": "#e8d9ff",
+        "highlight_fg": "#000000",
+    }) {
+        changed = true
+    }
+
+    // TexelUI (TUI widgets) default colors
+    if applySectionDefaults(cfg, "ui", Section{
+        // Base surfaces and text
+        "surface_bg":        "#000000",
+        "surface_fg":        "#f8f8f2",
+        "text_bg":           "#000000",
+        "text_fg":           "#f8f8f2",
+        // Caret
+        "caret_fg":          "#c0c0c0",
+        // Focused variants
+        "focus_surface_bg":  "#101010",
+        "focus_surface_fg":  "#ffffff",
+        "focus_text_bg":     "#101010",
+        "focus_text_fg":     "#ffffff",
+        "focus_border_fg":   "#ffff00",
+        "focus_border_bg":   "#000000",
+    }) {
+        changed = true
+    }
 
 	if applySectionDefaults(cfg, "texelterm", Section{
 		"visual_bell_enabled": false,
