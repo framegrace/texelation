@@ -21,10 +21,11 @@ import (
 	"time"
 
 	"texelation/apps/texelterm/parser"
-	"texelation/internal/effects"
 	"texelation/texel"
 	"texelation/texel/cards"
 	"texelation/texel/theme"
+	"texelation/texelui/core"
+	"texelation/texelui/widgets"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2"
@@ -72,13 +73,24 @@ func New(title, command string) texel.App {
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
 	}
-	// Overlay disabled by default; read theme flag if present
-	cfg := theme.Get()
-	term.overlayEnabled = cfg.GetBool("texelterm", "longline_overlay_enabled", false)
+	// Built-in overlay drawing disabled; handled by editor card now
+	term.overlayEnabled = false
 
 	wrapped := cards.WrapApp(term)
-	cardList := []cards.Card{wrapped}
-	pipe := cards.NewPipeline(nil, cardList...)
+	editor := newLongLineEditorCard(term)
+	// Order matters: base app first, then overlay editor to post-process/draw on top
+	cardList := []cards.Card{wrapped, editor}
+	// Control function: when overlay should capture, send keys only to overlay and consume
+	control := func(ev *tcell.EventKey) bool {
+		if editor.shouldCapture() {
+			editor.interceptKey(ev)
+			return true // consume; do not forward to base app
+		}
+		// Not capturing: ensure overlay is deactivated immediately and let app handle input
+		editor.deactivate()
+		return false
+	}
+	pipe := cards.NewPipeline(control, cardList...)
 	return pipe
 }
 
@@ -205,10 +217,7 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 
 	a.vterm.ClearDirty()
 
-	// Optionally draw long-line overlay editor (disabled by default)
-	if a.overlayEnabled {
-		a.maybeRenderLongLineOverlayLocked()
-	}
+	// Editor overlay is handled by a dedicated card; nothing here
 
 	a.applySelectionHighlightLocked(a.buf)
 	return a.buf
@@ -256,6 +265,13 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 			}
 			return
 		}
+	}
+
+	// If long-line overlay is active, close it on Enter (still forward key to PTY)
+	if a.overlayActive && key == tcell.KeyEnter {
+		a.mu.Lock()
+		a.overlayActive = false
+		a.mu.Unlock()
 	}
 
 	var keyBytes []byte
@@ -370,6 +386,7 @@ func (a *TexelTerm) maybeRenderLongLineOverlayLocked() {
 	// Lazily create TextArea
 	if a.overlayTA == nil {
 		a.overlayTA = widgets.NewTextArea(0, 0, 0, 0)
+		a.overlayTA.SetFocusable(true)
 	}
 	// Configure and draw
 	a.overlayTA.SetPosition(a.overlayRect.X, a.overlayRect.Y)
@@ -386,6 +403,8 @@ func (a *TexelTerm) maybeRenderLongLineOverlayLocked() {
 	}
 	a.overlayTA.CaretX = caretCol
 	a.overlayTA.CaretY = 0
+	// Force focus so caret renders in overlay (this TextArea is visual-only)
+	a.overlayTA.Focus()
 	// Draw into terminal framebuffer via Painter
 	p := core.NewPainter(a.buf, core.Rect{X: 0, Y: 0, W: cols, H: rows})
 	// Fill overlay area first
@@ -576,8 +595,8 @@ func (a *TexelTerm) Run() error {
 				return
 			}
 
-			if r == '' {
-				a.onBell()
+			if r == '\u0007' {
+				// Ignore BEL (no visual bell integration)
 				continue
 			}
 

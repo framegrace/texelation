@@ -1,10 +1,10 @@
 package adapter
 
 import (
-    "github.com/gdamore/tcell/v2"
-    "texelation/texel"
-    "texelation/texelui/core"
-    "texelation/texelui/widgets"
+	"github.com/gdamore/tcell/v2"
+	"texelation/texel"
+	"texelation/texelui/core"
+	"texelation/texelui/widgets"
 )
 
 // UIApp adapts a TexelUI UIManager to the texel.App interface.
@@ -82,37 +82,37 @@ func NewTextEditorApp(title string) *UIApp {
 
 // NewDualTextEditorApp constructs a UI with two bordered TextAreas side-by-side to test focus.
 func NewDualTextEditorApp(title string) *UIApp {
-    ui := core.NewUIManager()
+	ui := core.NewUIManager()
 
-    // Base pane background
-    pane := widgets.NewPane(0, 0, 0, 0, tcell.StyleDefault)
-    ui.AddWidget(pane)
+	// Base pane background
+	pane := widgets.NewPane(0, 0, 0, 0, tcell.StyleDefault)
+	ui.AddWidget(pane)
 
-    // Left editor
-    leftBorder := widgets.NewBorder(0, 0, 0, 0, tcell.StyleDefault)
-    leftTA := widgets.NewTextArea(0, 0, 0, 0)
-    leftBorder.SetChild(leftTA)
-    ui.AddWidget(leftBorder)
+	// Left editor
+	leftBorder := widgets.NewBorder(0, 0, 0, 0, tcell.StyleDefault)
+	leftTA := widgets.NewTextArea(0, 0, 0, 0)
+	leftBorder.SetChild(leftTA)
+	ui.AddWidget(leftBorder)
 
-    // Right editor (no border): add TextArea directly
-    rightTA := widgets.NewTextArea(0, 0, 0, 0)
-    ui.AddWidget(rightTA)
+	// Right editor (no border): add TextArea directly
+	rightTA := widgets.NewTextArea(0, 0, 0, 0)
+	ui.AddWidget(rightTA)
 
-    // Start focused on left
-    ui.Focus(leftTA)
+	// Start focused on left
+	ui.Focus(leftTA)
 
-    app := NewUIApp(title, ui)
-    app.onResize = func(w, h int) {
-        pane.SetPosition(0, 0)
-        pane.Resize(w, h)
+	app := NewUIApp(title, ui)
+	app.onResize = func(w, h int) {
+		pane.SetPosition(0, 0)
+		pane.Resize(w, h)
 
-        // Split vertical into two columns
-        lw := w / 2
-        rw := w - lw
-        leftBorder.SetPosition(0, 0)
-        leftBorder.Resize(lw, h)
-        rightTA.SetPosition(lw, 0)
-        rightTA.Resize(rw, h)
-    }
-    return app
+		// Split vertical into two columns
+		lw := w / 2
+		rw := w - lw
+		leftBorder.SetPosition(0, 0)
+		leftBorder.Resize(lw, h)
+		rightTA.SetPosition(lw, 0)
+		rightTA.Resize(rw, h)
+	}
+	return app
 }

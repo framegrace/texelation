@@ -9,8 +9,8 @@
 package texelterm_test
 
 import (
-    "os"
-    "os/exec"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,18 +21,18 @@ import (
 
 	"texelation/apps/texelterm"
 	"texelation/texel"
-    "texelation/texel/cards"
+	"texelation/texel/cards"
 )
 
 func skipIfNoPTY(t *testing.T) {
-    if os.Getenv("TDE_SKIP_PTY_TESTS") == "1" {
-        t.Skip("Skipping PTY-dependent tests (TDE_SKIP_PTY_TESTS=1)")
-    }
-    f, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
-    if err != nil {
-        t.Skipf("Skipping PTY-dependent tests (cannot open /dev/ptmx): %v", err)
-    }
-    _ = f.Close()
+	if os.Getenv("TDE_SKIP_PTY_TESTS") == "1" {
+		t.Skip("Skipping PTY-dependent tests (TDE_SKIP_PTY_TESTS=1)")
+	}
+	f, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		t.Skipf("Skipping PTY-dependent tests (cannot open /dev/ptmx): %v", err)
+	}
+	_ = f.Close()
 }
 
 type recordingBus struct {
@@ -51,8 +51,8 @@ func (b *recordingBus) Trigger(id string, payload interface{}) error {
 }
 
 func TestTexelTermRunRendersOutput(t *testing.T) {
-    skipIfNoPTY(t)
-    script := writeScript(t, "#!/bin/sh\nprintf 'hello texelterm'\n")
+	skipIfNoPTY(t)
+	script := writeScript(t, "#!/bin/sh\nprintf 'hello texelterm'\n")
 
 	app := texelterm.New("texelterm", script)
 	app.Resize(40, 10)
@@ -85,8 +85,8 @@ func TestTexelTermRunRendersOutput(t *testing.T) {
 }
 
 func TestTexelTermStopTerminatesProcess(t *testing.T) {
-    skipIfNoPTY(t)
-    script := writeScript(t, "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 1; done\n")
+	skipIfNoPTY(t)
+	script := writeScript(t, "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 1; done\n")
 
 	app := texelterm.New("texelterm", script)
 	app.Resize(40, 10)
@@ -118,8 +118,8 @@ func TestTexelTermStopTerminatesProcess(t *testing.T) {
 }
 
 func TestTexelTermAltScroll(t *testing.T) {
-    skipIfNoPTY(t)
-    script := writeScript(t, "#!/bin/sh\nfor i in $(seq 1 40); do printf 'line %02d\\n' \"$i\"; done\nsleep 5\n")
+	skipIfNoPTY(t)
+	script := writeScript(t, "#!/bin/sh\nfor i in $(seq 1 40); do printf 'line %02d\\n' \"$i\"; done\nsleep 5\n")
 
 	app := texelterm.New("texelterm", script)
 	app.Resize(20, 10)

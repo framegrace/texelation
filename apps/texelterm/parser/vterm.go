@@ -827,6 +827,8 @@ func (v *VTerm) InsertLines(n int) {
 	v.MarkAllDirty()
 }
 
+// (Prompt detection removed)
+
 func (v *VTerm) insertHistoryLine(index int, line []Cell) {
 	if index < 0 || index > v.historyLen {
 		return
