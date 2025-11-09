@@ -465,9 +465,7 @@ func (v *VTerm) ClearDirty() {
 
 // --- Basic Terminal Operations ---
 
-func (v *VTerm) CarriageReturn() {
-	v.SetCursorPos(v.cursorY, 0)
-}
+func (v *VTerm) CarriageReturn() { v.SetCursorPos(v.cursorY, 0) }
 
 func (v *VTerm) Backspace() {
 	v.wrapNext = false

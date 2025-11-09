@@ -31,24 +31,28 @@ import (
 )
 
 type TexelTerm struct {
-	title             string
-	command           string
-	width             int
-	height            int
-	cmd               *exec.Cmd
-	pty               *os.File
-	vterm             *parser.VTerm
-	parser            *parser.Parser
-	mu                sync.Mutex
-	stop              chan struct{}
-	stopOnce          sync.Once
-	refreshChan       chan<- bool
-	wg                sync.WaitGroup
-	buf               [][]texel.Cell
-	colorPalette      [258]tcell.Color
-	controlBus        cards.ControlBus
-	selection         termSelection
-	visualBellEnabled bool
+	title        string
+	command      string
+	width        int
+	height       int
+	cmd          *exec.Cmd
+	pty          *os.File
+	vterm        *parser.VTerm
+	parser       *parser.Parser
+	mu           sync.Mutex
+	stop         chan struct{}
+	stopOnce     sync.Once
+	refreshChan  chan<- bool
+	wg           sync.WaitGroup
+	buf          [][]texel.Cell
+	colorPalette [258]tcell.Color
+	selection    termSelection
+
+	// long-line overlay editor (TextArea) state
+	overlayEnabled bool
+	overlayActive  bool
+	overlayTA      *widgets.TextArea
+	overlayRect    core.Rect
 }
 
 type termSelection struct {
@@ -61,38 +65,20 @@ type termSelection struct {
 
 func New(title, command string) texel.App {
 	term := &TexelTerm{
-		title:             title,
-		command:           command,
-		width:             80,
-		height:            24,
-		stop:              make(chan struct{}),
-		colorPalette:      newDefaultPalette(),
-		visualBellEnabled: false,
+		title:        title,
+		command:      command,
+		width:        80,
+		height:       24,
+		stop:         make(chan struct{}),
+		colorPalette: newDefaultPalette(),
 	}
-
+	// Overlay disabled by default; read theme flag if present
 	cfg := theme.Get()
-	flashEnabled := cfg.GetBool("texelterm", "visual_bell_enabled", false)
-	term.visualBellEnabled = flashEnabled
+	term.overlayEnabled = cfg.GetBool("texelterm", "longline_overlay_enabled", false)
+
 	wrapped := cards.WrapApp(term)
 	cardList := []cards.Card{wrapped}
-	if flashEnabled {
-		subtle := tcell.NewRGBColor(160, 160, 160)
-		flashConfig := effects.EffectConfig{
-			"color":         colorToHex(subtle),
-			"duration_ms":   100,
-			"max_intensity": 0.75,
-			"trigger_type":  "workspace.control",
-			"default_fg":    colorToHex(term.colorPalette[256]),
-			"default_bg":    colorToHex(term.colorPalette[257]),
-		}
-		if flash, err := cards.NewEffectCard("flash", flashConfig); err != nil {
-			log.Printf("texelterm: flash effect unavailable: %v", err)
-		} else {
-			cardList = append(cardList, flash)
-		}
-	}
 	pipe := cards.NewPipeline(nil, cardList...)
-	term.AttachControlBus(pipe.ControlBus())
 	return pipe
 }
 
@@ -218,6 +204,12 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 	}
 
 	a.vterm.ClearDirty()
+
+	// Optionally draw long-line overlay editor (disabled by default)
+	if a.overlayEnabled {
+		a.maybeRenderLongLineOverlayLocked()
+	}
+
 	a.applySelectionHighlightLocked(a.buf)
 	return a.buf
 }
@@ -311,6 +303,94 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	if keyBytes != nil {
 		a.pty.Write(keyBytes)
 	}
+}
+
+// maybeRenderLongLineOverlayLocked checks the current cursor line length and draws a
+// borderless TextArea over the terminal buffer when the line exceeds the viewport width.
+// It mirrors the current line content and caret, providing an editable preview; actual
+// edits are applied via the terminal (keystrokes forwarded), and the overlay refreshes
+// from the parsed buffer.
+func (a *TexelTerm) maybeRenderLongLineOverlayLocked() {
+	if !a.overlayEnabled {
+		return
+	}
+	if a.vterm == nil || len(a.buf) == 0 {
+		return
+	}
+	rows := len(a.buf)
+	cols := len(a.buf[0])
+	cursorX, cursorY := a.vterm.Cursor()
+	top := a.vterm.VisibleTop()
+	lineIdx := top + cursorY
+	historyLen := a.vterm.HistoryLength()
+	if historyLen <= 0 || lineIdx < 0 || lineIdx >= historyLen {
+		a.overlayActive = false
+		return
+	}
+	cells := a.vterm.HistoryLineCopy(lineIdx)
+	if cells == nil {
+		a.overlayActive = false
+		return
+	}
+	// Build trimmed text of current line
+	runes := cellsToRunes(cells)
+	text := strings.TrimRight(string(runes), " ")
+	lineLen := len([]rune(text))
+
+	// Activate overlay when the caret has moved past the visible columns
+	// or the logical line has grown beyond the viewport width.
+	if cursorX >= cols || lineLen > cols {
+		a.overlayActive = true
+	} else {
+		a.overlayActive = false
+	}
+	if !a.overlayActive {
+		return
+	}
+
+	// Determine overlay rectangle: prefer below the cursor; if it would overlap
+	// the cursor row (near bottom), place it above instead. Never overlap cursor line.
+	const overlayH = 2
+	oy := cursorY + 1
+	if oy+overlayH > rows {
+		// place above the cursor
+		oy = cursorY - overlayH
+		if oy < 0 {
+			oy = 0
+		}
+	}
+	a.overlayRect = core.Rect{X: 0, Y: oy, W: cols, H: overlayH}
+
+	// Theme colors
+	cfg := theme.Get()
+	bg := cfg.GetColor("texelterm", "longline_overlay_bg", tcell.NewRGBColor(16, 16, 16))
+	fg := cfg.GetColor("texelterm", "longline_overlay_fg", tcell.ColorWhite)
+	style := tcell.StyleDefault.Background(bg).Foreground(fg)
+
+	// Lazily create TextArea
+	if a.overlayTA == nil {
+		a.overlayTA = widgets.NewTextArea(0, 0, 0, 0)
+	}
+	// Configure and draw
+	a.overlayTA.SetPosition(a.overlayRect.X, a.overlayRect.Y)
+	a.overlayTA.Resize(a.overlayRect.W, a.overlayRect.H)
+	a.overlayTA.Style = style
+	a.overlayTA.Lines = []string{text}
+	// Map caret: approximate by clamping to line length
+	caretCol := cursorX
+	if caretCol < 0 {
+		caretCol = 0
+	}
+	if caretCol > lineLen {
+		caretCol = lineLen
+	}
+	a.overlayTA.CaretX = caretCol
+	a.overlayTA.CaretY = 0
+	// Draw into terminal framebuffer via Painter
+	p := core.NewPainter(a.buf, core.Rect{X: 0, Y: 0, W: cols, H: rows})
+	// Fill overlay area first
+	p.Fill(a.overlayRect, ' ', style)
+	a.overlayTA.Draw(p)
 }
 
 func (a *TexelTerm) HandlePaste(data []byte) {
@@ -442,7 +522,9 @@ func (a *TexelTerm) Run() error {
 	cmd := exec.Command(a.command)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+	// Present a very wide terminal to the shell so it avoids soft-wrapping
+	const shellWideCols = 2048
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: shellWideCols})
 	if err != nil {
 		return fmt.Errorf("failed to start pty: %w", err)
 	}
@@ -691,7 +773,12 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	}
 
 	if a.pty != nil {
-		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+		const shellWideCols = 2048
+		colsToShell := uint16(cols)
+		if shellWideCols > colsToShell {
+			colsToShell = shellWideCols
+		}
+		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(rows), Cols: colsToShell})
 	}
 }
 
