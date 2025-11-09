@@ -162,3 +162,62 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
 ## Planning Artifacts
 
 - TexelUI plan: see `docs/TEXELUI_PLAN.md`. When working on TexelUI, keep this plan up to date (checklist and sections) and commit changes to it alongside related code. Future sessions should consult and update this file as the source of truth for TexelUI scope, status, and next steps.
+
+## Session Handoff: Current State (TexelUI + Long-Line Editing)
+
+This section summarizes the latest work so the next agent can pick up quickly. Keep this section fresh after every substantive session (append or amend as needed).
+
+### TexelUI Snapshot
+- Packages and files:
+  - Core: `texelui/core` (UIManager, Painter, types, layout iface)
+  - Widgets: `texelui/widgets` (Pane, Border, TextArea)
+  - Layout: `texelui/layout` (initial absolute layout interface; more managers later)
+  - Adapter: `texelui/adapter/texel_app.go` (hosting a UI in cards/apps)
+  - Demos: `cmd/texelui-demo` (single TextArea), `cmd/texelui-demo2` (two TextAreas; left with border, right borderless)
+- Features implemented:
+  - UIManager with dirty-region redraw + full-frame fallback on input events.
+  - Hit-testing and click-to-focus (deep path to inner widgets).
+  - Focus styling: widgets can react to focus; Border supports focused/unfocused styles.
+  - TextArea: multiline editor with wrapping + reflow on resize; insert/replace modes.
+    - Caret visuals: reverse for insert, underline for replace; blinking intentionally disabled for clarity.
+    - Selection handling (mouse/keys) has been removed for now; to be rebuilt later.
+  - Theme seeds and defaults for widget styles; see `docs/TEXELUI_THEME.md`.
+- What’s next (tracked in `docs/TEXELUI_PLAN.md`):
+  - Reintroduce selection (keyboard + mouse) with robust, tested semantics.
+  - Cursor blink as a themeable optional feature.
+  - Additional layout managers (tiling, grid) and focus manager improvements.
+  - Componentization and theming polish across widgets.
+
+### TexelTerm Long-Line Editing (Overlay) Snapshot
+- Purpose: When the active input line exceeds the visible width, show a 2-row TextArea overlay to edit comfortably without forcing soft-wrap in the shell.
+- Design:
+  - Implemented as a card layered above the terminal buffer: `apps/texelterm/editor_card.go`.
+  - Authority is caret-position-based:
+    - Capture when `cursorX >= viewport width`: overlay handles keys and also forwards them to the terminal so vterm stays in sync.
+    - Mirror-only when the line is long but caret is inside width: overlay renders text and caret from vterm, caret is blurred, and no keys are handled by the overlay.
+  - The card’s control is wired from `apps/texelterm/term.go` via a pipeline control function that consumes key events only while capturing.
+  - No prompt detection (OSC 133) logic is used; shell prompt is left to the shell. Visual bell integration was removed.
+  - PTY width: the shell is started with a very wide column count to discourage shell-side soft wrapping while still rendering a normal viewport.
+- Theme keys (defaults applied if absent):
+  - `texelterm.longline_overlay_bg`
+  - `texelterm.longline_overlay_fg`
+- Tests:
+  - `apps/texelterm/overlay_internal_test.go` – overlay appears when long line without PTY.
+  - `apps/texelterm/overlay_sync_test.go` – insertion sync across authority switch.
+  - PTY-dependent tests in `apps/texelterm/term_test.go` auto-skip when `/dev/ptmx` is unavailable.
+- Known considerations / follow-ups:
+  - Add more boundary tests around the capture transition (caret at width-1/width, Backspace at edge, Home/End).
+  - Ensure overlay is fully read-only and only mirrors terminal state when not capturing; in capture mode, it must forward all keystrokes to the terminal.
+
+### Environment & Testing Notes
+- Go cache in this environment:
+  - Use: `CCACHE_DISABLE=1 GOCACHE=$(pwd)/.cache go test ./...`
+  - Integration tests that require `/dev/ptmx` will auto-skip when it’s unavailable.
+- Headless rendering/tests:
+  - Prefer tests under `texelui/core` and server/client testutil for UI behaviors without a real TTY.
+- Logging:
+  - Server is quiet by default; pass `--verbose-logs` to increase verbosity. Avoid adding noisy logs in hot paths.
+
+### Workflow Reminders
+- Keep `docs/TEXELUI_PLAN.md` updated with checklists and next steps whenever touching TexelUI.
+- Update this CLAUDE.md handoff section with a brief summary of what changed and what remains.
