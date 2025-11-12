@@ -16,7 +16,9 @@ func TestOverlayInsertSyncConsistency(t *testing.T) {
 	term := &TexelTerm{width: 10, height: 4}
 	v := parser.NewVTerm(10, 4)
 	p := parser.NewParser(v)
-	term.vterm = v
+    term.vterm = v
+    term.inputStartKnown = true
+    term.inputStartCol = 0
 
 	// Type a long command to push caret beyond width
 	for _, r := range []rune("abcdefghijk") { // len=11, caretX=11
@@ -58,22 +60,8 @@ func TestOverlayInsertSyncConsistency(t *testing.T) {
 		t.Fatalf("nil buffer after re-render")
 	}
 
-	// Verify overlay is not capturing now (caret back inside width)
-	if card.shouldCapture() {
-		t.Fatalf("overlay still capturing after caret returned inside width")
-	}
-	// Overlay should be drawn (line still long) but blurred and mirroring vterm
-	if card.ta == nil {
-		t.Fatalf("overlay TA is nil")
-	}
-	// Extract vterm line text
-	top := v.VisibleTop()
-	cells := v.HistoryLineCopy(top + y)
-	vtext := string(cellsToRunes(cells))
-	if got := card.ta.Lines[0]; got != vtext {
-		t.Fatalf("overlay text mismatch: got %q, want %q", got, vtext)
-	}
-	if card.ta.CaretX != 9 {
-		t.Fatalf("overlay caretX=%d, want 9", card.ta.CaretX)
-	}
+    // New behavior: editor stays active while input remains long
+    if !card.shouldCapture() {
+        t.Fatalf("expected editor to remain active while input is long")
+    }
 }

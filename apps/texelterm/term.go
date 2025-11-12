@@ -53,7 +53,13 @@ type TexelTerm struct {
 	overlayEnabled bool
 	overlayActive  bool
 	overlayTA      *widgets.TextArea
-	overlayRect    core.Rect
+    overlayRect    core.Rect
+
+    // Shell integration (OSC 133) state for input start detection
+    promptActive    bool
+    promptLineIdx   int
+    inputStartCol   int
+    inputStartKnown bool
 }
 
 type termSelection struct {
@@ -224,13 +230,21 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 }
 
 func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
-	if a.pty == nil {
-		return
-	}
+    if a.pty == nil {
+        return
+    }
 
-	a.mu.Lock()
-	appMode := a.vterm.AppCursorKeys()
-	a.mu.Unlock()
+    a.mu.Lock()
+    appMode := a.vterm.AppCursorKeys()
+    // Capture input start column on first keystroke after prompt begin
+    if a.promptActive && !a.inputStartKnown {
+        x, y := a.vterm.Cursor()
+        a.inputStartCol = x
+        a.inputStartKnown = true
+        top := a.vterm.VisibleTop()
+        a.promptLineIdx = top + y
+    }
+    a.mu.Unlock()
 
 	key := ev.Key()
 
@@ -550,35 +564,59 @@ func (a *TexelTerm) Run() error {
 	a.pty = ptmx
 	a.cmd = cmd
 
-	a.mu.Lock()
-	a.vterm = parser.NewVTerm(cols, rows,
-		parser.WithTitleChangeHandler(func(newTitle string) {
-			a.title = newTitle
-			a.requestRefresh()
-		}),
-		parser.WithPtyWriter(func(b []byte) {
-			if a.pty != nil {
-				a.pty.Write(b)
-			}
-		}),
-		parser.WithDefaultFgChangeHandler(func(c parser.Color) {
-			a.colorPalette[256] = a.mapParserColorToTCell(c)
-		}),
-		parser.WithDefaultBgChangeHandler(func(c parser.Color) {
-			a.colorPalette[257] = a.mapParserColorToTCell(c)
-		}),
-		parser.WithQueryDefaultFgHandler(func() {
-			a.respondToColorQuery(10)
-		}),
-		parser.WithQueryDefaultBgHandler(func() {
-			a.respondToColorQuery(11)
-		}),
-		parser.WithScreenRestoredHandler(func() {
-			go a.Resize(a.width, a.height)
-		}),
-	)
-	a.parser = parser.NewParser(a.vterm)
-	a.mu.Unlock()
+    a.mu.Lock()
+    opts := []parser.Option{
+        parser.WithTitleChangeHandler(func(newTitle string) {
+            a.title = newTitle
+            a.requestRefresh()
+        }),
+        parser.WithPtyWriter(func(b []byte) {
+            if a.pty != nil {
+                a.pty.Write(b)
+            }
+        }),
+        parser.WithDefaultFgChangeHandler(func(c parser.Color) {
+            a.colorPalette[256] = a.mapParserColorToTCell(c)
+        }),
+        parser.WithDefaultBgChangeHandler(func(c parser.Color) {
+            a.colorPalette[257] = a.mapParserColorToTCell(c)
+        }),
+        parser.WithQueryDefaultFgHandler(func() {
+            a.respondToColorQuery(10)
+        }),
+        parser.WithQueryDefaultBgHandler(func() {
+            a.respondToColorQuery(11)
+        }),
+        parser.WithScreenRestoredHandler(func() {
+            go a.Resize(a.width, a.height)
+        }),
+    }
+    if os.Getenv("TEXEL_OSC133") == "1" || strings.ToLower(os.Getenv("TEXEL_OSC133")) == "true" {
+        opts = append(opts,
+            parser.WithEnableOSC133(true),
+            parser.WithOSC133Handlers(
+                func() { // PromptStart (A)
+                    a.mu.Lock()
+                    a.promptActive = true
+                    a.inputStartKnown = false
+                    if a.vterm != nil {
+                        top := a.vterm.VisibleTop()
+                        _, cy := a.vterm.Cursor()
+                        a.promptLineIdx = top + cy
+                    } else {
+                        a.promptLineIdx = 0
+                    }
+                    a.mu.Unlock()
+                },
+                func() { a.mu.Lock(); a.promptActive = false; a.mu.Unlock() }, // CommandStart (B)
+                func() {},                                                   // CommandExecuted (C)
+                func(status string) {},                                      // CommandFinished (D)
+            ),
+        )
+    }
+    a.vterm = parser.NewVTerm(cols, rows, opts...)
+    a.parser = parser.NewParser(a.vterm)
+    a.mu.Unlock()
 
 	a.wg.Add(1)
 	go func() {
@@ -595,15 +633,17 @@ func (a *TexelTerm) Run() error {
 				return
 			}
 
-			if r == '\u0007' {
-				// Ignore BEL (no visual bell integration)
-				continue
-			}
 
+			// Avoid holding TexelTerm mutex while parsing, since OSC133
+			// callbacks may lock TexelTerm too, causing deadlocks.
 			a.mu.Lock()
 			inSync := a.vterm.InSynchronizedUpdate
+			a.mu.Unlock()
+
 			a.parser.Parse(r)
-			// Check if the sync state *ended* after this rune
+
+			a.mu.Lock()
+			// Check if the sync state ended after this rune
 			syncEnded := inSync && !a.vterm.InSynchronizedUpdate
 			a.mu.Unlock()
 

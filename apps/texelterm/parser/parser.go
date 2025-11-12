@@ -182,8 +182,8 @@ func (p *Parser) handleOSC(sequence []rune) {
 
 	payload := string(parts[1])
 
-	switch command {
-	case 10: // Set/Query Default Foreground Color
+    switch command {
+    case 10: // Set/Query Default Foreground Color
 		log.Printf("set/query default fg")
 		if payload == "?" {
 			// --- TRIGGER QUERY CALLBACK ---
@@ -217,9 +217,26 @@ func (p *Parser) handleOSC(sequence []rune) {
 				p.vterm.DefaultBgChanged(color)
 			}
 		}
-	case 0:
-		p.vterm.SetTitle(string(payload))
-	}
+    case 0:
+        p.vterm.SetTitle(string(payload))
+    case 133: // iTerm2 Shell Integration markers
+        if !p.vterm.EnableOSC133 { return }
+        // Payload examples: "A", "B", "C", "D;0"
+        parts133 := strings.Split(payload, ";")
+        tag := parts133[0]
+        switch tag {
+        case "A":
+            if p.vterm.OnOSC133PromptStart != nil { p.vterm.OnOSC133PromptStart() }
+        case "B":
+            if p.vterm.OnOSC133CommandStart != nil { p.vterm.OnOSC133CommandStart() }
+        case "C":
+            if p.vterm.OnOSC133CommandExecuted != nil { p.vterm.OnOSC133CommandExecuted() }
+        case "D":
+            status := ""
+            if len(parts133) > 1 { status = parts133[1] }
+            if p.vterm.OnOSC133CommandFinished != nil { p.vterm.OnOSC133CommandFinished(status) }
+        }
+    }
 }
 
 func parseOSCColor(payload string) (Color, bool) {

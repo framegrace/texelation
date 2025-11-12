@@ -23,8 +23,11 @@ func TestOverlayAppearsOnLongLineWithoutPTY(t *testing.T) {
 		p.Parse(r)
 	}
 
-	term.vterm = v
-	term.overlayEnabled = true
+    term.vterm = v
+    term.overlayEnabled = true
+    // Simulate OSC133-known input start at column 0 for tests
+    term.inputStartKnown = true
+    term.inputStartCol = 0
 
 	// Base render of term (no overlay here)
 	base := term.Render()

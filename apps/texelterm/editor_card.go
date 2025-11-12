@@ -6,6 +6,7 @@ import (
 	"texelation/texel/theme"
 	"texelation/texelui/core"
 	"texelation/texelui/widgets"
+    "os"
 )
 
 // longLineEditorCard overlays a TextArea when the current line exceeds the viewport width
@@ -23,12 +24,16 @@ type longLineEditorCard struct {
 	w, h      int
 
 	enabled bool
+	pendingAfterScroll bool
 }
 
 func newLongLineEditorCard(term *TexelTerm) *longLineEditorCard {
-	cfg := theme.Get()
-	enabled := cfg.GetBool("texelterm", "longline_overlay_enabled", true)
-	return &longLineEditorCard{term: term, enabled: enabled}
+    cfg := theme.Get()
+    enabled := cfg.GetBool("texelterm", "longline_overlay_enabled", true)
+    if v := os.Getenv("TEXEL_LONG_LINE_ENABLED"); v == "0" || v == "false" {
+        enabled = false
+    }
+    return &longLineEditorCard{term: term, enabled: enabled}
 }
 
 func (c *longLineEditorCard) Run() error                        { return nil }
@@ -100,10 +105,41 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
 		return buf
 	}
 
-	// Decide draw/capture: draw while line is long OR caret past edge; capture only if caret past edge
-	long := len([]rune(text)) > cols
-	c.capture = cursorX >= cols
-	shouldDraw := long || c.capture
+    // Determine input start column via shell integration; if unknown, do not open editor yet
+    startX := 0
+    startKnown := false
+    if t != nil {
+        t.mu.Lock()
+        startKnown = t.inputStartKnown
+        if startKnown { startX = t.inputStartCol }
+        t.mu.Unlock()
+    }
+    if !startKnown {
+        // We don't know the prompt/input split yet; do not activate the editor.
+        c.deactivate()
+        return buf
+    }
+    if startX < 0 { startX = 0 }
+    if startX > cols-1 { startX = cols-1 }
+
+    // Consider only the input portion for editing. When editor is active, use the
+    // TextArea buffer (we don't forward keys to the terminal while editing),
+    // otherwise seed from the terminal line.
+    rr := []rune(text)
+    if startX > len(rr) { startX = len(rr) }
+    inputText := ""
+    if c.active && c.ta != nil && len(c.ta.Lines) > 0 {
+        inputText = c.ta.Lines[0]
+    } else {
+        inputText = string(rr[startX:])
+    }
+
+    // Show editor only when input exceeds available columns
+    avail := cols - startX
+    if avail < 1 { avail = 1 }
+    long := len([]rune(inputText)) > avail
+    c.capture = long
+    shouldDraw := long
 	if !shouldDraw {
 		c.deactivate()
 		if c.ta != nil {
@@ -120,35 +156,40 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
 		}
 		return buf
 	}
-	if !c.active || c.ta == nil {
-		if c.ta == nil {
-			c.ta = widgets.NewTextArea(0, 0, 0, 0)
-			c.ta.SetFocusable(true)
-		}
-		c.ta.Lines = []string{text}
-		cx := cursorX
-		if cx < 0 {
-			cx = 0
-		}
-		if cx > len([]rune(text)) {
-			cx = len([]rune(text))
-		}
-		c.ta.CaretX = cx
-		c.ta.CaretY = 0
-		c.active = true
-		c.wasActive = true
-	}
+    if !c.active || c.ta == nil {
+        if c.ta == nil {
+            c.ta = widgets.NewTextArea(0, 0, 0, 0)
+            c.ta.SetFocusable(true)
+        }
+        c.ta.Lines = []string{inputText}
+        cx := cursorX - startX
+        if cx < 0 {
+            cx = 0
+        }
+        if cx > len([]rune(inputText)) {
+            cx = len([]rune(inputText))
+        }
+        c.ta.CaretX = cx
+        c.ta.CaretY = 0
+        c.active = true
+        c.wasActive = true
+    }
 
-	// Determine overlay rect (2 rows) above or below the cursor
-	const overlayH = 2
-	oy := cursorY + 1
-	if oy+overlayH > rows {
-		oy = cursorY - overlayH
-		if oy < 0 {
-			oy = 0
-		}
-	}
-	c.rect = core.Rect{X: 0, Y: oy, W: cols, H: overlayH}
+    // Determine overlay rect anchored at cursor line; grow down, scroll up if at bottom
+    editorW := cols - startX
+    if editorW < 1 { editorW = 1 }
+    // Required wrapped rows for input
+    ir := []rune(inputText)
+    needH := len(ir) / editorW
+    if len(ir)%editorW != 0 { needH++ }
+    if needH < 1 { needH = 1 }
+    oy := cursorY
+    if oy+needH > rows {
+        // Remove special last-line scrolling; simply anchor editor within bounds
+        oy = rows - needH
+        if oy < 0 { oy = 0 }
+    }
+    c.rect = core.Rect{X: startX, Y: oy, W: editorW, H: needH}
 
 	// Initialize TA if needed (already handled on activation)
 	if c.ta == nil {
@@ -165,23 +206,8 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
 	c.ta.SetPosition(c.rect.X, c.rect.Y)
 	c.ta.Resize(c.rect.W, c.rect.H)
 	c.ta.Style = style
-	if c.capture {
-		// authoritative: keep local edits; focus to draw caret
-		c.ta.Focus()
-	} else {
-		// terminal authoritative and overlay visible: mirror text/caret, blur to hide caret
-		c.ta.Lines = []string{text}
-		cx := cursorX
-		if cx < 0 {
-			cx = 0
-		}
-		if cx > len([]rune(text)) {
-			cx = len([]rune(text))
-		}
-		c.ta.CaretX = cx
-		c.ta.CaretY = 0
-		c.ta.Blur()
-	}
+    // Authoritative editor while active
+    c.ta.Focus()
 
 	// Draw overlay
 	p := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: cols, H: rows})
@@ -191,15 +217,7 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
 }
 
 // shouldCapture returns true if overlay should be authoritative based on caret position.
-func (c *longLineEditorCard) shouldCapture() bool {
-	if !c.enabled || c.term == nil || c.term.vterm == nil || c.w <= 0 {
-		return false
-	}
-	v := c.term.vterm
-	cursorX, _ := v.Cursor()
-	cols := c.w
-	return cursorX >= cols
-}
+func (c *longLineEditorCard) shouldCapture() bool { return c.enabled && c.active }
 
 // ensureActive seeds the overlay TA from the current terminal line if not already active.
 func (c *longLineEditorCard) ensureActive() {
@@ -238,29 +256,93 @@ func (c *longLineEditorCard) ensureActive() {
 
 // deactivate immediately disables overlay and blurs the TextArea
 func (c *longLineEditorCard) deactivate() {
-	if c.active {
-		c.active = false
-		if c.ta != nil {
-			c.ta.Blur()
-		}
-	}
+    if c.active {
+        c.active = false
+        if c.ta != nil {
+            c.ta.Blur()
+        }
+        // Mark overlay lines dirty so the base renderer clears any remnants
+        if c.term != nil {
+            c.term.mu.Lock()
+            if c.term.vterm != nil {
+                for y := c.rect.Y; y < c.rect.Y+c.rect.H; y++ {
+                    c.term.vterm.MarkDirty(y)
+                }
+            }
+            c.term.mu.Unlock()
+        }
+        if c.refresh != nil { select { case c.refresh <- true: default: } }
+    }
 }
 
 // interceptKey is called by the pipeline control when overlay should be authoritative.
 func (c *longLineEditorCard) interceptKey(ev *tcell.EventKey) {
-	c.ensureActive()
-	if c.ta != nil {
-		_ = c.ta.HandleKey(ev)
-		// Also forward to terminal so vterm stays in sync; this lets caret/length
-		// reflect the same edits and allows authority to switch back naturally.
-		if c.term != nil {
-			c.term.HandleKey(ev)
-		}
-		if c.refresh != nil {
-			select {
-			case c.refresh <- true:
-			default:
-			}
-		}
-	}
+    c.ensureActive()
+    if c.ta == nil { return }
+    // Vertical movement across wrapped rows using editor width
+    if c.term != nil && (ev.Key() == tcell.KeyUp || ev.Key() == tcell.KeyDown) {
+        cols := 0
+        c.term.mu.Lock()
+        if c.term.vterm != nil {
+            grid := c.term.vterm.Grid()
+            if len(grid) > 0 { cols = len(grid[0]) }
+        }
+        startX := 0
+        if c.term.inputStartKnown { startX = c.term.inputStartCol }
+        c.term.mu.Unlock()
+        editorW := cols - startX
+        if editorW < 1 { editorW = 1 }
+        line := []rune("")
+        if len(c.ta.Lines) > 0 { line = []rune(c.ta.Lines[0]) }
+        nx := c.ta.CaretX
+        if ev.Key() == tcell.KeyUp {
+            nx -= editorW
+        } else {
+            nx += editorW
+        }
+        if nx < 0 { nx = 0 }
+        if nx > len(line) { nx = len(line) }
+        c.ta.CaretX = nx
+        if c.refresh != nil { select { case c.refresh <- true: default: } }
+        return
+    }
+    switch ev.Key() {
+    case tcell.KeyEsc:
+        c.deactivate()
+        if c.refresh != nil { select { case c.refresh <- true: default: } }
+        return
+    case tcell.KeyCtrlC, tcell.KeyCtrlD:
+        if c.term != nil { c.term.HandleKey(ev) }
+        c.deactivate()
+        if c.refresh != nil { select { case c.refresh <- true: default: } }
+        return
+    case tcell.KeyEnter:
+        c.commitEditor()
+        c.deactivate()
+        if c.refresh != nil { select { case c.refresh <- true: default: } }
+        return
+    }
+    _ = c.ta.HandleKey(ev)
+    if c.refresh != nil { select { case c.refresh <- true: default: } }
+}
+
+func (c *longLineEditorCard) commitEditor() {
+    if c.term == nil || c.term.pty == nil || c.ta == nil { return }
+    // Concatenate lines with spaces
+    text := ""
+    for i, s := range c.ta.Lines { if i > 0 { text += " " }; text += s }
+    // ^A, ^K then bracketed paste text and Enter
+    seq := []byte{0x01, 0x0b}
+    seq = append(seq, []byte("\x1b[200~")...)
+    seq = append(seq, []byte(text)...)
+    seq = append(seq, []byte("\x1b[201~")...)
+    seq = append(seq, '\r')
+    _, _ = c.term.pty.Write(seq)
+    // After committing, ensure viewport snaps back to bottom so terminal
+    // resumes normal state.
+    c.term.mu.Lock()
+    if c.term.vterm != nil {
+        c.term.vterm.Scroll(1<<20)
+    }
+    c.term.mu.Unlock()
 }
