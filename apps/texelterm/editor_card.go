@@ -138,7 +138,6 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
     avail := cols - startX
     if avail < 1 { avail = 1 }
     long := len([]rune(inputText)) > avail
-    c.capture = long
     shouldDraw := long
 	if !shouldDraw {
 		c.deactivate()
