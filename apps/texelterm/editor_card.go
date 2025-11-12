@@ -17,14 +17,14 @@ type longLineEditorCard struct {
 	term      *TexelTerm
 	ta        *widgets.TextArea
 	active    bool
-	capture   bool
 	wasActive bool
 	rect      core.Rect
 	refresh   chan<- bool
 	w, h      int
 
-	enabled bool
-	pendingAfterScroll bool
+    enabled bool
+    pendingAfterScroll bool
+    scrollSize int
 }
 
 func newLongLineEditorCard(term *TexelTerm) *longLineEditorCard {
@@ -173,6 +173,12 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
         c.ta.CaretY = 0
         c.active = true
         c.wasActive = true
+        // If opening at the last screen row, start visual scroll (skip one row)
+        if cursorY == rows-1 {
+            c.scrollSize = 1
+        } else {
+            c.scrollSize = 0
+        }
     }
 
     // Determine overlay rect anchored at cursor line; grow down, scroll up if at bottom
@@ -183,13 +189,24 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
     needH := len(ir) / editorW
     if len(ir)%editorW != 0 { needH++ }
     if needH < 1 { needH = 1 }
-    oy := cursorY
+    // Visual scroll: adjust overlay Y by current scrollSize
+    oy := cursorY - c.scrollSize
     if oy+needH > rows {
         // Remove special last-line scrolling; simply anchor editor within bounds
         oy = rows - needH
         if oy < 0 { oy = 0 }
     }
+    // Growth detection: if editor height increased, increase visual scroll accordingly
+    prevH := c.rect.H
     c.rect = core.Rect{X: startX, Y: oy, W: editorW, H: needH}
+    if prevH > 0 && needH > prevH {
+        c.scrollSize += (needH - prevH)
+        // Re-adjust overlay Y after scroll change
+        newY := cursorY - c.scrollSize
+        if newY+needH > rows { newY = rows - needH }
+        if newY < 0 { newY = 0 }
+        c.rect.Y = newY
+    }
 
 	// Initialize TA if needed (already handled on activation)
 	if c.ta == nil {
@@ -209,11 +226,32 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
     // Authoritative editor while active
     c.ta.Focus()
 
-	// Draw overlay
-	p := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: cols, H: rows})
-	p.Fill(c.rect, ' ', style)
-	c.ta.Draw(p)
-	return buf
+    // Prepare output buffer applying visual scroll (skip top scrollSize rows)
+    out := buf
+    if c.scrollSize > 0 && c.scrollSize < rows {
+        out = make([][]texel.Cell, rows)
+        // Base clear style for blank rows at the bottom after scroll
+        tm := theme.Get()
+        clrBg := tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
+        clrFg := tm.GetColor("ui", "surface_fg", tcell.ColorWhite)
+        clearStyle := tcell.StyleDefault.Background(clrBg).Foreground(clrFg)
+        for y := 0; y < rows; y++ {
+            out[y] = make([]texel.Cell, cols)
+            sy := y + c.scrollSize
+            if sy < rows {
+                copy(out[y], buf[sy])
+            } else {
+                for x := 0; x < cols; x++ {
+                    out[y][x] = texel.Cell{Ch: ' ', Style: clearStyle}
+                }
+            }
+        }
+    }
+    // Draw overlay
+    p := core.NewPainter(out, core.Rect{X: 0, Y: 0, W: cols, H: rows})
+    p.Fill(c.rect, ' ', style)
+    c.ta.Draw(p)
+    return out
 }
 
 // shouldCapture returns true if overlay should be authoritative based on caret position.
@@ -317,6 +355,8 @@ func (c *longLineEditorCard) interceptKey(ev *tcell.EventKey) {
         if c.refresh != nil { select { case c.refresh <- true: default: } }
         return
     case tcell.KeyEnter:
+        // Reset visual scroll before committing so base buffer returns to normal
+        c.scrollSize = 0
         c.commitEditor()
         c.deactivate()
         if c.refresh != nil { select { case c.refresh <- true: default: } }
@@ -338,11 +378,4 @@ func (c *longLineEditorCard) commitEditor() {
     seq = append(seq, []byte("\x1b[201~")...)
     seq = append(seq, '\r')
     _, _ = c.term.pty.Write(seq)
-    // After committing, ensure viewport snaps back to bottom so terminal
-    // resumes normal state.
-    c.term.mu.Lock()
-    if c.term.vterm != nil {
-        c.term.vterm.Scroll(1<<20)
-    }
-    c.term.mu.Unlock()
 }
