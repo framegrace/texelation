@@ -155,6 +155,14 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
 		}
 		return buf
 	}
+    // Precompute initial needed height for potential initial scroll on open
+    initEditorW := cols - startX
+    if initEditorW < 1 { initEditorW = 1 }
+    initLen := len([]rune(inputText))
+    initNeedH := initLen / initEditorW
+    if initLen%initEditorW != 0 { initNeedH++ }
+    if initNeedH < 1 { initNeedH = 1 }
+
     if !c.active || c.ta == nil {
         if c.ta == nil {
             c.ta = widgets.NewTextArea(0, 0, 0, 0)
@@ -172,9 +180,10 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
         c.ta.CaretY = 0
         c.active = true
         c.wasActive = true
-        // If opening at the last screen row, start visual scroll (skip one row)
+        // If opening at the last screen row, start visual scroll for full initial height
         if cursorY == rows-1 {
-            c.scrollSize = 1
+            c.scrollSize = initNeedH
+            if c.scrollSize >= rows { c.scrollSize = rows - 1 }
         } else {
             c.scrollSize = 0
         }
@@ -316,7 +325,7 @@ func (c *longLineEditorCard) deactivate() {
 func (c *longLineEditorCard) interceptKey(ev *tcell.EventKey) {
     c.ensureActive()
     if c.ta == nil { return }
-    // Vertical movement across wrapped rows using editor width
+    // Vertical movement across wrapped rows using editor width (no pass-through)
     if c.term != nil && (ev.Key() == tcell.KeyUp || ev.Key() == tcell.KeyDown) {
         cols := 0
         c.term.mu.Lock()
