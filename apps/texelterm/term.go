@@ -60,6 +60,9 @@ type TexelTerm struct {
     promptLineIdx   int
     inputStartCol   int
     inputStartKnown bool
+
+    // Optional control bus for effects (no-op if unset)
+    controlBus cards.ControlBus
 }
 
 type termSelection struct {
@@ -82,10 +85,13 @@ func New(title, command string) texel.App {
 	// Built-in overlay drawing disabled; handled by editor card now
 	term.overlayEnabled = false
 
-	wrapped := cards.WrapApp(term)
-	editor := newLongLineEditorCard(term)
-	// Order matters: base app first, then overlay editor to post-process/draw on top
-	cardList := []cards.Card{wrapped, editor}
+    wrapped := cards.WrapApp(term)
+    editor := newLongLineEditorCard(term)
+    // Add a flash effect card so the control bus exposes the flash trigger capability
+    flashCard, _ := cards.NewEffectCard("flash", nil)
+    // Order matters: base app first, then overlay editor, then flash effect
+    cardList := []cards.Card{wrapped, editor}
+    cardList = append(cardList, flashCard)
 	// Control function: when overlay should capture, send keys only to overlay and consume
 	control := func(ev *tcell.EventKey) bool {
 		if editor.shouldCapture() {

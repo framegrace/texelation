@@ -14,13 +14,13 @@ import (
 // It renders on top of the buffer and consumes no events from the pipeline by design —
 // the underlying app still receives keys to keep the PTY authoritative.
 type longLineEditorCard struct {
-	term      *TexelTerm
-	ta        *widgets.TextArea
-	active    bool
-	wasActive bool
-	rect      core.Rect
-	refresh   chan<- bool
-	w, h      int
+    term      *TexelTerm
+    ta        *widgets.TextArea
+    active    bool
+    wasActive bool
+    rect      core.Rect
+    refresh   chan<- bool
+    w, h      int
 
     enabled bool
     pendingAfterScroll bool
@@ -139,22 +139,23 @@ func (c *longLineEditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
     if avail < 1 { avail = 1 }
     long := len([]rune(inputText)) > avail
     shouldDraw := long
-	if !shouldDraw {
-		c.deactivate()
-		if c.ta != nil {
-			c.ta.Lines = []string{text}
-			cx := cursorX
-			if cx < 0 {
-				cx = 0
-			}
-			if cx > len([]rune(text)) {
-				cx = len([]rune(text))
-			}
-			c.ta.CaretX = cx
-			c.ta.CaretY = 0
-		}
-		return buf
-	}
+    if !shouldDraw {
+        c.deactivate()
+        if c.ta != nil {
+            c.ta.Lines = []string{text}
+            cx := cursorX
+            if cx < 0 {
+                cx = 0
+            }
+            if cx > len([]rune(text)) {
+                cx = len([]rune(text))
+            }
+            c.ta.CaretX = cx
+            c.ta.CaretY = 0
+        }
+        return buf
+    }
+    // No boundary pass-through suspension; behave normally
     // Precompute initial needed height for potential initial scroll on open
     initEditorW := cols - startX
     if initEditorW < 1 { initEditorW = 1 }
@@ -307,6 +308,8 @@ func (c *longLineEditorCard) deactivate() {
         if c.ta != nil {
             c.ta.Blur()
         }
+        // Reset visual scroll on close
+        c.scrollSize = 0
         // Mark overlay lines dirty so the base renderer clears any remnants
         if c.term != nil {
             c.term.mu.Lock()
@@ -387,3 +390,5 @@ func (c *longLineEditorCard) commitEditor() {
     seq = append(seq, '\r')
     _, _ = c.term.pty.Write(seq)
 }
+
+// (No commit without Enter; boundary pass-through is handled in future steps.)

@@ -189,7 +189,7 @@ This section summarizes the latest work so the next agent can pick up quickly. K
   - Componentization and theming polish across widgets.
 
 ### TexelTerm Long-Line Editing (Overlay) Snapshot
-- Purpose: When the active input line exceeds the visible width, show a 2-row TextArea overlay to edit comfortably without forcing soft-wrap in the shell.
+- Purpose: When the active input line exceeds the visible width, show a TextArea overlay to edit comfortably without forcing soft-wrap in the shell.
 - Design:
   - Implemented as a card layered above the terminal buffer: `apps/texelterm/editor_card.go`.
   - Authority is caret-position-based:
@@ -208,6 +208,17 @@ This section summarizes the latest work so the next agent can pick up quickly. K
 - Known considerations / follow-ups:
   - Add more boundary tests around the capture transition (caret at width-1/width, Backspace at edge, Home/End).
   - Ensure overlay is fully read-only and only mirrors terminal state when not capturing; in capture mode, it must forward all keystrokes to the terminal.
+
+### Today’s Update (Multiline Editor Status)
+- Multiline editing via overlay TextArea is working, including pure visual scroll (ScrollSize) to simulate terminal scroll at the bottom. Bottom-row artifacts are cleared.
+- OSC 133 prompt detection is supported (opt-in via `TEXEL_OSC133=1`) and used to align the overlay starting column after the prompt.
+- We attempted “Up-boundary” pass-through (commit-without-enter + send Up + suspend re-entry) but reverted it after visual glitches (partial clearing). Current behavior: Up/Down only move within the overlay; no pass-through.
+- Flash capability: a flash effect card is now in the texelterm pipeline so the control bus advertises `effects.flash` (fixes the test expectation in normal PTY environments).
+
+Open follow-ups (left for another day)
+- Boundary behavior for history navigation:
+  - On Up at first wrapped row and Down at last wrapped row, commit editor text back to the shell line without Enter, close overlay, send the corresponding arrow to the terminal, and re-open only after the shell redraws a new input line (debounced by a visible line change). This needs careful re-entry gating to avoid immediately recapturing the same line.
+- Bash search/history actions should react correctly when the overlay exits at boundaries (currently overlay keeps the key inside and the shell does nothing). This is the next refinement.
 
 ### Environment & Testing Notes
 - Go cache in this environment:
