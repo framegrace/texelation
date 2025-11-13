@@ -35,7 +35,7 @@ and heavily themeable.
 | 🎨 Themeable effects       | Customise overlays and colour schemes via JSON bindings. Sample effects ship today; richer animations are drop-in ready.        |
 | ⚡ Responsive & lean       | Optimised buffer deltas, debounced resizes, snapshot persistence, and a lean protocol keep the UI snappy.                       |
 | 🧪 Developer-friendly      | Headless renderers (`texel-headless`), memconn fixtures, and a clear package layout make iterating fast.                        |
-| 🖥️ TexelTerm               | Full terminal emulator with mouse/keyboard scrolling, selection, and optional visual bell—built to be embedded anywhere.       |
+| 🖥️ TexelTerm               | Full terminal emulator with mouse/keyboard scrolling and selection—built to be embedded anywhere.                              |
 
 ## Coding
 
@@ -145,8 +145,7 @@ JSON-style structure in both cases:
   "bindings": [
     {"event": "pane.active", "target": "pane", "effect": "fadeTint"},
     {"event": "pane.resizing", "target": "pane", "effect": "fadeTint"},
-    {"event": "workspace.control", "target": "workspace", "effect": "rainbow", "params": {"mix": 0.6}},
-    {"event": "workspace.key", "target": "workspace", "effect": "flash", "params": {"keys": ["F"], "max_intensity": 0.75}}
+    {"event": "workspace.control", "target": "workspace", "effect": "rainbow", "params": {"mix": 0.6}}
   ]
 }
 ```

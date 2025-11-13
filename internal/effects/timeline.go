@@ -117,13 +117,15 @@ func NewTimeline(defaultInitial float32) *Timeline {
 // Returns the current animated value at this moment
 //
 // Minimal usage:
-//   value := timeline.AnimateTo(key, target, duration)
+//
+//	value := timeline.AnimateTo(key, target, duration)
 //
 // With custom easing:
-//   value := timeline.AnimateToWithOptions(key, target, AnimateOptions{
-//       Duration: 300*time.Millisecond,
-//       Easing: EaseInOutCubic,
-//   })
+//
+//	value := timeline.AnimateToWithOptions(key, target, AnimateOptions{
+//	    Duration: 300*time.Millisecond,
+//	    Easing: EaseInOutCubic,
+//	})
 func (tl *Timeline) AnimateTo(key interface{}, target float32, duration time.Duration) float32 {
 	return tl.AnimateToWithOptions(key, target, DefaultAnimateOptions(duration))
 }

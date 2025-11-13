@@ -16,7 +16,7 @@ type UIManager struct {
 	buf      [][]texel.Cell
 	dirty    []Rect
 	lay      Layout
-    capture  Widget
+	capture  Widget
 }
 
 func NewUIManager() *UIManager {
@@ -91,17 +91,17 @@ func (u *UIManager) Focus(w Widget) {
 }
 
 func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
-    // Focus traversal on Tab/Shift-Tab
-    if ev.Key() == tcell.KeyTab {
-        if ev.Modifiers()&tcell.ModShift != 0 {
-            u.focusPrevDeep()
-        } else {
-            u.focusNextDeep()
-        }
-        u.InvalidateAll()
-        u.RequestRefresh()
-        return true
-    }
+	// Focus traversal on Tab/Shift-Tab
+	if ev.Key() == tcell.KeyTab {
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			u.focusPrevDeep()
+		} else {
+			u.focusNextDeep()
+		}
+		u.InvalidateAll()
+		u.RequestRefresh()
+		return true
+	}
 
 	if u.focused != nil && u.focused.HandleKey(ev) {
 		// Fallback: if widget didn't mark anything dirty, redraw everything
@@ -198,35 +198,55 @@ func deepHit(w Widget, x, y int) Widget {
 
 // Deep focus traversal across all widgets in z-order (top-level order, then children).
 func (u *UIManager) focusNextDeep() {
-    order := u.flattenFocusable()
-    if len(order) == 0 { return }
-    cur := -1
-    for i, w := range order { if w == u.focused { cur = i; break } }
-    next := (cur + 1) % len(order)
-    u.Focus(order[next])
+	order := u.flattenFocusable()
+	if len(order) == 0 {
+		return
+	}
+	cur := -1
+	for i, w := range order {
+		if w == u.focused {
+			cur = i
+			break
+		}
+	}
+	next := (cur + 1) % len(order)
+	u.Focus(order[next])
 }
 
 func (u *UIManager) focusPrevDeep() {
-    order := u.flattenFocusable()
-    if len(order) == 0 { return }
-    cur := -1
-    for i, w := range order { if w == u.focused { cur = i; break } }
-    prev := cur - 1
-    if prev < 0 { prev = len(order) - 1 }
-    u.Focus(order[prev])
+	order := u.flattenFocusable()
+	if len(order) == 0 {
+		return
+	}
+	cur := -1
+	for i, w := range order {
+		if w == u.focused {
+			cur = i
+			break
+		}
+	}
+	prev := cur - 1
+	if prev < 0 {
+		prev = len(order) - 1
+	}
+	u.Focus(order[prev])
 }
 
 func (u *UIManager) flattenFocusable() []Widget {
-    var out []Widget
-    var visit func(w Widget)
-    visit = func(w Widget) {
-        if w.Focusable() { out = append(out, w) }
-        if cc, ok := w.(ChildContainer); ok {
-            cc.VisitChildren(func(child Widget) { visit(child) })
-        }
-    }
-    for _, w := range u.widgets { visit(w) }
-    return out
+	var out []Widget
+	var visit func(w Widget)
+	visit = func(w Widget) {
+		if w.Focusable() {
+			out = append(out, w)
+		}
+		if cc, ok := w.(ChildContainer); ok {
+			cc.VisitChildren(func(child Widget) { visit(child) })
+		}
+	}
+	for _, w := range u.widgets {
+		visit(w)
+	}
+	return out
 }
 
 // Invalidate marks a region for redraw.

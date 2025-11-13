@@ -46,7 +46,14 @@ type VTerm struct {
 	dirtyLines                         map[int]bool
 	allDirty                           bool
 	prevCursorY                        int
-	InSynchronizedUpdate               bool
+    InSynchronizedUpdate               bool
+
+    // Shell integration (OSC 133) callbacks
+    OnOSC133PromptStart      func()
+    OnOSC133CommandStart     func()
+    OnOSC133CommandExecuted  func()
+    OnOSC133CommandFinished  func(status string)
+    EnableOSC133             bool
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -465,9 +472,7 @@ func (v *VTerm) ClearDirty() {
 
 // --- Basic Terminal Operations ---
 
-func (v *VTerm) CarriageReturn() {
-	v.SetCursorPos(v.cursorY, 0)
-}
+func (v *VTerm) CarriageReturn() { v.SetCursorPos(v.cursorY, 0) }
 
 func (v *VTerm) Backspace() {
 	v.wrapNext = false
@@ -829,6 +834,8 @@ func (v *VTerm) InsertLines(n int) {
 	v.MarkAllDirty()
 }
 
+// (Prompt detection removed)
+
 func (v *VTerm) insertHistoryLine(index int, line []Cell) {
 	if index < 0 || index > v.historyLen {
 		return
@@ -1048,7 +1055,24 @@ func WithQueryDefaultBgHandler(handler func()) Option {
 }
 
 func WithScreenRestoredHandler(handler func()) Option {
-	return func(v *VTerm) { v.ScreenRestored = handler }
+    return func(v *VTerm) { v.ScreenRestored = handler }
+}
+
+// WithOSC133Handlers registers callbacks for iTerm2-style shell integration
+// (OSC 133) events: prompt start (A), command start (B), command executed (C),
+// and command finished with status (D;status).
+func WithOSC133Handlers(promptStart func(), commandStart func(), commandExecuted func(), commandFinished func(status string)) Option {
+    return func(v *VTerm) {
+        v.OnOSC133PromptStart = promptStart
+        v.OnOSC133CommandStart = commandStart
+        v.OnOSC133CommandExecuted = commandExecuted
+        v.OnOSC133CommandFinished = commandFinished
+    }
+}
+
+// WithEnableOSC133 toggles handling of OSC 133 markers.
+func WithEnableOSC133(enabled bool) Option {
+    return func(v *VTerm) { v.EnableOSC133 = enabled }
 }
 
 // Resize handles changes to the terminal's dimensions.

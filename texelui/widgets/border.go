@@ -1,38 +1,38 @@
 package widgets
 
 import (
-    "github.com/gdamore/tcell/v2"
-    "texelation/texel/theme"
-    "texelation/texelui/core"
+	"github.com/gdamore/tcell/v2"
+	"texelation/texel/theme"
+	"texelation/texelui/core"
 )
 
 // Border draws a border around its Rect and can optionally have a child rendered inside.
 type Border struct {
-    core.BaseWidget
-    Style   tcell.Style
-    Charset [6]rune // h, v, tl, tr, bl, br
-    Child   core.Widget
-    inv     func(core.Rect)
-    // FocusedStyle optionally overrides Style when this border (or a focused descendant) is focused.
-    FocusedStyle tcell.Style
+	core.BaseWidget
+	Style   tcell.Style
+	Charset [6]rune // h, v, tl, tr, bl, br
+	Child   core.Widget
+	inv     func(core.Rect)
+	// FocusedStyle optionally overrides Style when this border (or a focused descendant) is focused.
+	FocusedStyle tcell.Style
 }
 
 func NewBorder(x, y, w, h int, style tcell.Style) *Border {
-    b := &Border{Style: style}
-    // Default focused style from theme (fg override), bg same as base style
-    tm := theme.Get()
-    ffg := tm.GetColor("ui", "focus_border_fg", tcell.ColorYellow)
-    fg, bg, _ := style.Decompose()
-    if bg == tcell.ColorDefault {
-        bg = tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
-    }
-    b.FocusedStyle = tcell.StyleDefault.Foreground(ffg).Background(bg)
-    // Also set BaseWidget focused style for self-focus (theme defaults)
-    fbg := tm.GetColor("ui", "focus_border_bg", bg)
-    if fg == tcell.ColorDefault {
-        fg = tm.GetColor("ui", "surface_fg", tcell.ColorWhite)
-    }
-    b.SetFocusedStyle(tcell.StyleDefault.Foreground(ffg).Background(fbg), true)
+	b := &Border{Style: style}
+	// Default focused style from theme (fg override), bg same as base style
+	tm := theme.Get()
+	ffg := tm.GetColor("ui", "focus_border_fg", tcell.ColorYellow)
+	fg, bg, _ := style.Decompose()
+	if bg == tcell.ColorDefault {
+		bg = tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
+	}
+	b.FocusedStyle = tcell.StyleDefault.Foreground(ffg).Background(bg)
+	// Also set BaseWidget focused style for self-focus (theme defaults)
+	fbg := tm.GetColor("ui", "focus_border_bg", bg)
+	if fg == tcell.ColorDefault {
+		fg = tm.GetColor("ui", "surface_fg", tcell.ColorWhite)
+	}
+	b.SetFocusedStyle(tcell.StyleDefault.Foreground(ffg).Background(fbg), true)
 	// default single-line charset
 	b.Charset = [6]rune{'─', '│', '┌', '┐', '└', '┘'}
 	b.SetPosition(x, y)
@@ -70,18 +70,18 @@ func (b *Border) Resize(w, h int) {
 }
 
 func (b *Border) Draw(p *core.Painter) {
-    style := b.Style
-    // If this border or any descendant contains focus, use FocusedStyle
-    if b.isDescendantFocused() {
-        style = b.FocusedStyle
-    } else {
-        // Otherwise apply own focus style if enabled
-        style = b.EffectiveStyle(style)
-    }
-    p.DrawBorder(b.Rect, style, b.Charset)
-    if b.Child != nil {
-        b.Child.Draw(p)
-    }
+	style := b.Style
+	// If this border or any descendant contains focus, use FocusedStyle
+	if b.isDescendantFocused() {
+		style = b.FocusedStyle
+	} else {
+		// Otherwise apply own focus style if enabled
+		style = b.EffectiveStyle(style)
+	}
+	p.DrawBorder(b.Rect, style, b.Charset)
+	if b.Child != nil {
+		b.Child.Draw(p)
+	}
 }
 
 // VisitChildren implements core.ChildContainer for recursive operations.
@@ -125,34 +125,46 @@ func (b *Border) WidgetAt(x, y int) core.Widget {
 }
 
 func (b *Border) isDescendantFocused() bool {
-    // Check self
-    if fs, ok := interface{}(b).(core.FocusState); ok {
-        if fs.IsFocused() { return true }
-    }
-    // Check child recursively
-    if b.Child == nil { return false }
-    if fs, ok := b.Child.(core.FocusState); ok {
-        if fs.IsFocused() { return true }
-    }
-    if cc, ok := b.Child.(core.ChildContainer); ok {
-        focused := false
-        cc.VisitChildren(func(w core.Widget) {
-            if focused { return }
-            if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
-                focused = true
-                return
-            }
-            if ccc, ok := w.(core.ChildContainer); ok {
-                // nested containers
-                ccc.VisitChildren(func(ww core.Widget) {
-                    if focused { return }
-                    if fs2, ok := ww.(core.FocusState); ok && fs2.IsFocused() {
-                        focused = true
-                    }
-                })
-            }
-        })
-        if focused { return true }
-    }
-    return false
+	// Check self
+	if fs, ok := interface{}(b).(core.FocusState); ok {
+		if fs.IsFocused() {
+			return true
+		}
+	}
+	// Check child recursively
+	if b.Child == nil {
+		return false
+	}
+	if fs, ok := b.Child.(core.FocusState); ok {
+		if fs.IsFocused() {
+			return true
+		}
+	}
+	if cc, ok := b.Child.(core.ChildContainer); ok {
+		focused := false
+		cc.VisitChildren(func(w core.Widget) {
+			if focused {
+				return
+			}
+			if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+				focused = true
+				return
+			}
+			if ccc, ok := w.(core.ChildContainer); ok {
+				// nested containers
+				ccc.VisitChildren(func(ww core.Widget) {
+					if focused {
+						return
+					}
+					if fs2, ok := ww.(core.FocusState); ok && fs2.IsFocused() {
+						focused = true
+					}
+				})
+			}
+		})
+		if focused {
+			return true
+		}
+	}
+	return false
 }

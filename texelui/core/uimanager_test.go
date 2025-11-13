@@ -78,12 +78,12 @@ func TestClickToFocusInnerWidget(t *testing.T) {
 	// Click inside textarea at (1,1) (client origin)
 	me := tcell.NewEventMouse(1, 1, tcell.Button1, 0)
 	ui.HandleMouse(me)
-    // Type 'a' and ensure it appears
-    ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'a', 0))
-    buf := ui.Render()
-    if got := buf[1][1].Ch; got != 'a' {
-        t.Fatalf("expected 'a' at (1,1), got %q", string(got))
-    }
+	// Type 'a' and ensure it appears
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'a', 0))
+	buf := ui.Render()
+	if got := buf[1][1].Ch; got != 'a' {
+		t.Fatalf("expected 'a' at (1,1), got %q", string(got))
+	}
 }
 
 // Delete a range from the first 10 to the end; expect only first block remains.
@@ -118,97 +118,97 @@ func TestUIManagerKeyFallbackRedraw(t *testing.T) {
 
 // Two text areas demo-like layout: clicking should focus the clicked textarea and typing affects only it.
 func TestDualTextAreasClickFocusAndType(t *testing.T) {
-    ui := core.NewUIManager()
-    ui.Resize(20, 4)
+	ui := core.NewUIManager()
+	ui.Resize(20, 4)
 
-    // Left border + TA
-    lb := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
-    // Make focus color identifiable for the test (left border green)
-    lb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorGreen)
-    lta := widgets.NewTextArea(0, 0, 8, 2)
-    lb.SetChild(lta)
-    ui.AddWidget(lb)
+	// Left border + TA
+	lb := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
+	// Make focus color identifiable for the test (left border green)
+	lb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorGreen)
+	lta := widgets.NewTextArea(0, 0, 8, 2)
+	lb.SetChild(lta)
+	ui.AddWidget(lb)
 
-    // Right border + TA
-    rb := widgets.NewBorder(10, 0, 10, 4, tcell.StyleDefault)
-    rb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorTeal)
-    rta := widgets.NewTextArea(0, 0, 8, 2)
-    rb.SetChild(rta)
-    ui.AddWidget(rb)
+	// Right border + TA
+	rb := widgets.NewBorder(10, 0, 10, 4, tcell.StyleDefault)
+	rb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorTeal)
+	rta := widgets.NewTextArea(0, 0, 8, 2)
+	rb.SetChild(rta)
+	ui.AddWidget(rb)
 
-    // Click right TA client area (11,1) and type 'b'
-    ui.HandleMouse(tcell.NewEventMouse(11, 1, tcell.Button1, 0))
-    ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'b', 0))
-    buf := ui.Render()
-    if got := buf[1][11].Ch; got != 'b' {
-        t.Fatalf("expected 'b' in right TA at (11,1), got %q", string(got))
-    }
+	// Click right TA client area (11,1) and type 'b'
+	ui.HandleMouse(tcell.NewEventMouse(11, 1, tcell.Button1, 0))
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'b', 0))
+	buf := ui.Render()
+	if got := buf[1][11].Ch; got != 'b' {
+		t.Fatalf("expected 'b' in right TA at (11,1), got %q", string(got))
+	}
 
-    // Release then click left TA client area (1,1) and type 'a'
-    ui.HandleMouse(tcell.NewEventMouse(11, 1, 0, 0))
-    ui.HandleMouse(tcell.NewEventMouse(1, 1, tcell.Button1, 0))
-    ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'a', 0))
-    buf = ui.Render()
-    if got := buf[1][1].Ch; got != 'a' {
-        t.Fatalf("expected 'a' in left TA at (1,1), got %q", string(got))
-    }
+	// Release then click left TA client area (1,1) and type 'a'
+	ui.HandleMouse(tcell.NewEventMouse(11, 1, 0, 0))
+	ui.HandleMouse(tcell.NewEventMouse(1, 1, tcell.Button1, 0))
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'a', 0))
+	buf = ui.Render()
+	if got := buf[1][1].Ch; got != 'a' {
+		t.Fatalf("expected 'a' in left TA at (1,1), got %q", string(got))
+	}
 
-    // Ensure right TA still has 'b'
-    if got := buf[1][11].Ch; got != 'b' {
-        t.Fatalf("right TA lost content; got %q", string(got))
-    }
+	// Ensure right TA still has 'b'
+	if got := buf[1][11].Ch; got != 'b' {
+		t.Fatalf("right TA lost content; got %q", string(got))
+	}
 
-    // Check border highlight colors:
-    // Left border top-left corner is at (0,0), right border top-left at (10,0)
-    lfg, _, _ := lb.FocusedStyle.Decompose()
-    rfg, _, _ := rb.FocusedStyle.Decompose()
-    // Left is focused now; its corner should use FocusedStyle FG
-    if gotFG, _, _ := buf[0][0].Style.Decompose(); gotFG != lfg {
-        t.Fatalf("left border FG not focused; got %v want %v", gotFG, lfg)
-    }
-    // Right is not focused; its corner should not match FocusedStyle FG (unless same)
-    if gotFG, _, _ := buf[0][10].Style.Decompose(); gotFG == rfg {
-        t.Fatalf("right border unexpectedly shows focused FG color")
-    }
+	// Check border highlight colors:
+	// Left border top-left corner is at (0,0), right border top-left at (10,0)
+	lfg, _, _ := lb.FocusedStyle.Decompose()
+	rfg, _, _ := rb.FocusedStyle.Decompose()
+	// Left is focused now; its corner should use FocusedStyle FG
+	if gotFG, _, _ := buf[0][0].Style.Decompose(); gotFG != lfg {
+		t.Fatalf("left border FG not focused; got %v want %v", gotFG, lfg)
+	}
+	// Right is not focused; its corner should not match FocusedStyle FG (unless same)
+	if gotFG, _, _ := buf[0][10].Style.Decompose(); gotFG == rfg {
+		t.Fatalf("right border unexpectedly shows focused FG color")
+	}
 }
 
 // Replace mode toggles with Insert; typing overwrites and caret is underlined.
 func TestTextAreaReplaceModeOverwritesAndUnderlineCaret(t *testing.T) {
-    ui := core.NewUIManager()
-    ui.Resize(10, 1)
-    ta := widgets.NewTextArea(0, 0, 10, 1)
-    ui.AddWidget(ta)
-    ui.Focus(ta)
+	ui := core.NewUIManager()
+	ui.Resize(10, 1)
+	ta := widgets.NewTextArea(0, 0, 10, 1)
+	ui.AddWidget(ta)
+	ui.Focus(ta)
 
-    // Type abc
-    for _, r := range "abc" {
-        ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, r, 0))
-    }
-    // Move Home, then Right (caret at index 1, over 'b')
-    ui.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, 0))
-    ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, 0))
+	// Type abc
+	for _, r := range "abc" {
+		ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, r, 0))
+	}
+	// Move Home, then Right (caret at index 1, over 'b')
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, 0))
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRight, 0, 0))
 
-    // Toggle replace mode
-    ui.HandleKey(tcell.NewEventKey(tcell.KeyInsert, 0, 0))
+	// Toggle replace mode
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyInsert, 0, 0))
 
-    // Type Z; should overwrite 'b' → aZc
-    ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'Z', 0))
-    buf := ui.Render()
-    // Assert content "aZc"
-    expected := "aZc"
-    gotRunes := make([]rune, len(expected))
-    for i := range expected {
-        gotRunes[i] = buf[0][i].Ch
-    }
-    if got := string(gotRunes); got != expected {
-        t.Fatalf("content=%q, want %q", got, expected)
-    }
-    // Caret moved to index 2; caret cell should be underlined
-    style := buf[0][2].Style
-    _, _, attr := style.Decompose()
-    if attr&tcell.AttrUnderline == 0 {
-        t.Fatalf("caret style not underlined in replace mode")
-    }
+	// Type Z; should overwrite 'b' → aZc
+	ui.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'Z', 0))
+	buf := ui.Render()
+	// Assert content "aZc"
+	expected := "aZc"
+	gotRunes := make([]rune, len(expected))
+	for i := range expected {
+		gotRunes[i] = buf[0][i].Ch
+	}
+	if got := string(gotRunes); got != expected {
+		t.Fatalf("content=%q, want %q", got, expected)
+	}
+	// Caret moved to index 2; caret cell should be underlined
+	style := buf[0][2].Style
+	_, _, attr := style.Decompose()
+	if attr&tcell.AttrUnderline == 0 {
+		t.Fatalf("caret style not underlined in replace mode")
+	}
 }
 
 // Ensure first Shift+Left moves caret left and selects previous rune inclusively.
