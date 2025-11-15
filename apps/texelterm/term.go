@@ -53,16 +53,16 @@ type TexelTerm struct {
 	overlayEnabled bool
 	overlayActive  bool
 	overlayTA      *widgets.TextArea
-    overlayRect    core.Rect
+	overlayRect    core.Rect
 
-    // Shell integration (OSC 133) state for input start detection
-    promptActive    bool
-    promptLineIdx   int
-    inputStartCol   int
-    inputStartKnown bool
+	// Shell integration (OSC 133) state for input start detection
+	promptActive    bool
+	promptLineIdx   int
+	inputStartCol   int
+	inputStartKnown bool
 
-    // Optional control bus for effects (no-op if unset)
-    controlBus cards.ControlBus
+	// Optional control bus for effects (no-op if unset)
+	controlBus cards.ControlBus
 }
 
 type termSelection struct {
@@ -85,13 +85,13 @@ func New(title, command string) texel.App {
 	// Built-in overlay drawing disabled; handled by editor card now
 	term.overlayEnabled = false
 
-    wrapped := cards.WrapApp(term)
-    editor := newLongLineEditorCard(term)
-    // Add a flash effect card so the control bus exposes the flash trigger capability
-    flashCard, _ := cards.NewEffectCard("flash", nil)
-    // Order matters: base app first, then overlay editor, then flash effect
-    cardList := []cards.Card{wrapped, editor}
-    cardList = append(cardList, flashCard)
+	wrapped := cards.WrapApp(term)
+	editor := newLongLineEditorCard(term)
+	// Add a flash effect card so the control bus exposes the flash trigger capability
+	flashCard, _ := cards.NewEffectCard("flash", nil)
+	// Order matters: base app first, then overlay editor, then flash effect
+	cardList := []cards.Card{wrapped, editor}
+	cardList = append(cardList, flashCard)
 	// Control function: when overlay should capture, send keys only to overlay and consume
 	control := func(ev *tcell.EventKey) bool {
 		if editor.shouldCapture() {
@@ -236,21 +236,21 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 }
 
 func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
-    if a.pty == nil {
-        return
-    }
+	if a.pty == nil {
+		return
+	}
 
-    a.mu.Lock()
-    appMode := a.vterm.AppCursorKeys()
-    // Capture input start column on first keystroke after prompt begin
-    if a.promptActive && !a.inputStartKnown {
-        x, y := a.vterm.Cursor()
-        a.inputStartCol = x
-        a.inputStartKnown = true
-        top := a.vterm.VisibleTop()
-        a.promptLineIdx = top + y
-    }
-    a.mu.Unlock()
+	a.mu.Lock()
+	appMode := a.vterm.AppCursorKeys()
+	// Capture input start column on first keystroke after prompt begin
+	if a.promptActive && !a.inputStartKnown {
+		x, y := a.vterm.Cursor()
+		a.inputStartCol = x
+		a.inputStartKnown = true
+		top := a.vterm.VisibleTop()
+		a.promptLineIdx = top + y
+	}
+	a.mu.Unlock()
 
 	key := ev.Key()
 
@@ -570,59 +570,70 @@ func (a *TexelTerm) Run() error {
 	a.pty = ptmx
 	a.cmd = cmd
 
-    a.mu.Lock()
-    opts := []parser.Option{
-        parser.WithTitleChangeHandler(func(newTitle string) {
-            a.title = newTitle
-            a.requestRefresh()
-        }),
-        parser.WithPtyWriter(func(b []byte) {
-            if a.pty != nil {
-                a.pty.Write(b)
-            }
-        }),
-        parser.WithDefaultFgChangeHandler(func(c parser.Color) {
-            a.colorPalette[256] = a.mapParserColorToTCell(c)
-        }),
-        parser.WithDefaultBgChangeHandler(func(c parser.Color) {
-            a.colorPalette[257] = a.mapParserColorToTCell(c)
-        }),
-        parser.WithQueryDefaultFgHandler(func() {
-            a.respondToColorQuery(10)
-        }),
-        parser.WithQueryDefaultBgHandler(func() {
-            a.respondToColorQuery(11)
-        }),
-        parser.WithScreenRestoredHandler(func() {
-            go a.Resize(a.width, a.height)
-        }),
-    }
-    if os.Getenv("TEXEL_OSC133") == "1" || strings.ToLower(os.Getenv("TEXEL_OSC133")) == "true" {
-        opts = append(opts,
-            parser.WithEnableOSC133(true),
-            parser.WithOSC133Handlers(
-                func() { // PromptStart (A)
-                    a.mu.Lock()
-                    a.promptActive = true
-                    a.inputStartKnown = false
-                    if a.vterm != nil {
-                        top := a.vterm.VisibleTop()
-                        _, cy := a.vterm.Cursor()
-                        a.promptLineIdx = top + cy
-                    } else {
-                        a.promptLineIdx = 0
-                    }
-                    a.mu.Unlock()
-                },
-                func() { a.mu.Lock(); a.promptActive = false; a.mu.Unlock() }, // CommandStart (B)
-                func() {},                                                   // CommandExecuted (C)
-                func(status string) {},                                      // CommandFinished (D)
-            ),
-        )
-    }
-    a.vterm = parser.NewVTerm(cols, rows, opts...)
-    a.parser = parser.NewParser(a.vterm)
-    a.mu.Unlock()
+	a.mu.Lock()
+	opts := []parser.Option{
+		parser.WithTitleChangeHandler(func(newTitle string) {
+			a.title = newTitle
+			a.requestRefresh()
+		}),
+		parser.WithPtyWriter(func(b []byte) {
+			if a.pty != nil {
+				a.pty.Write(b)
+			}
+		}),
+		parser.WithDefaultFgChangeHandler(func(c parser.Color) {
+			a.colorPalette[256] = a.mapParserColorToTCell(c)
+		}),
+		parser.WithDefaultBgChangeHandler(func(c parser.Color) {
+			a.colorPalette[257] = a.mapParserColorToTCell(c)
+		}),
+		parser.WithQueryDefaultFgHandler(func() {
+			a.respondToColorQuery(10)
+		}),
+		parser.WithQueryDefaultBgHandler(func() {
+			a.respondToColorQuery(11)
+		}),
+		parser.WithScreenRestoredHandler(func() {
+			go a.Resize(a.width, a.height)
+		}),
+	}
+	// Enable OSC 133 shell integration by default; allow opt-out via
+	// TEXEL_OSC133=0 or TEXEL_OSC133=false for environments that do not
+	// support it.
+	enableOSC133 := true
+	if v := strings.ToLower(os.Getenv("TEXEL_OSC133")); v == "0" || v == "false" {
+		enableOSC133 = false
+	}
+	if enableOSC133 {
+		opts = append(opts,
+			parser.WithEnableOSC133(true),
+			parser.WithOSC133Handlers(
+				func() { // PromptStart (A)
+					a.mu.Lock()
+					a.promptActive = true
+					a.inputStartKnown = false
+					if a.vterm != nil {
+						top := a.vterm.VisibleTop()
+						_, cy := a.vterm.Cursor()
+						a.promptLineIdx = top + cy
+					} else {
+						a.promptLineIdx = 0
+					}
+					a.mu.Unlock()
+				},
+				func() {
+					a.mu.Lock()
+					a.promptActive = false
+					a.mu.Unlock()
+				}, // CommandStart (B)
+				func() {},       // CommandExecuted (C)
+				func(string) {}, // CommandFinished (D)
+			),
+		)
+	}
+	a.vterm = parser.NewVTerm(cols, rows, opts...)
+	a.parser = parser.NewParser(a.vterm)
+	a.mu.Unlock()
 
 	a.wg.Add(1)
 	go func() {
@@ -638,7 +649,6 @@ func (a *TexelTerm) Run() error {
 				}
 				return
 			}
-
 
 			// Avoid holding TexelTerm mutex while parsing, since OSC133
 			// callbacks may lock TexelTerm too, causing deadlocks.
