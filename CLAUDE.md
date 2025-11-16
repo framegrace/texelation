@@ -162,3 +162,4 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
 ## Planning Artifacts
 
 - TexelUI plan: see `docs/TEXELUI_PLAN.md`. When working on TexelUI, keep this plan up to date (checklist and sections) and commit changes to it alongside related code. Future sessions should consult and update this file as the source of truth for TexelUI scope, status, and next steps.
+- Long Line Editor plan: see `docs/LONG_LINE_EDITOR_PLAN.md`. Phased implementation of overlay editor for long command lines in texelterm. Update progress and status as work proceeds.

@@ -47,6 +47,15 @@ type VTerm struct {
 	allDirty                           bool
 	prevCursorY                        int
 	InSynchronizedUpdate               bool
+	// Shell integration (OSC 133)
+	PromptActive                       bool
+	InputActive                        bool
+	CommandActive                      bool
+	InputStartLine, InputStartCol      int
+	OnPromptStart                      func()
+	OnInputStart                       func()
+	OnCommandStart                     func()
+	OnCommandEnd                       func(exitCode int)
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -189,6 +198,16 @@ func (v *VTerm) SetCursorPos(y, x int) {
 
 	v.MarkDirty(v.prevCursorY)
 	v.MarkDirty(v.cursorY)
+}
+
+// GetCursorX returns the current cursor X position
+func (v *VTerm) GetCursorX() int {
+	return v.cursorX
+}
+
+// GetCursorY returns the current cursor Y position
+func (v *VTerm) GetCursorY() int {
+	return v.cursorY
 }
 
 // LineFeed moves the cursor down one line, scrolling if necessary.
