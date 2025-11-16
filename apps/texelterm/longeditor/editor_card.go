@@ -224,6 +224,9 @@ func (e *EditorCard) Open(initialText string) {
 func (e *EditorCard) Close() {
 	e.active = false
 	e.SetText("") // Clear for next time
+	// Request multiple refreshes to ensure terminal redraws
+	e.requestRefresh()
+	e.requestRefresh()
 	e.requestRefresh()
 }
 
