@@ -276,8 +276,6 @@ func (p *Parser) handleOSC133(payload string) {
 		// Record where input starts
 		p.vterm.InputStartLine = p.vterm.GetCursorY()
 		p.vterm.InputStartCol = p.vterm.GetCursorX()
-		// Reset the auto-open trigger flag for this new input session
-		p.vterm.ResetInputLengthTrigger()
 		if p.vterm.OnInputStart != nil {
 			p.vterm.OnInputStart()
 		}
