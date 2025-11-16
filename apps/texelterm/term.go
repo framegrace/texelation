@@ -73,9 +73,10 @@ func New(title, command string) texel.App {
 	cardList := []cards.Card{wrapped}
 
 	// Add long line editor if enabled
+	var editor *longeditor.EditorCard
 	longLineEnabled := cfg.GetBool("texelterm", "long_line_editor_enabled", true)
 	if longLineEnabled {
-		editor := longeditor.NewEditorCard(
+		editor = longeditor.NewEditorCard(
 			// onCommit: write accumulated text to PTY
 			func(text string) {
 				if term.pty != nil {
@@ -88,7 +89,28 @@ func New(title, command string) texel.App {
 		cardList = append(cardList, editor)
 	}
 
-	pipe := cards.NewPipeline(nil, cardList...)
+	// ControlFunc intercepts keys for the editor
+	controlFunc := func(ev *tcell.EventKey) bool {
+		if editor == nil {
+			return false
+		}
+
+		// When editor is active, route ALL keys to it (except it handles its own keys)
+		if editor.IsActive() {
+			editor.HandleKey(ev)
+			return true // Consume all keys when overlay is active
+		}
+
+		// When editor is inactive, only intercept Ctrl+O to toggle it open
+		if ev.Key() == tcell.KeyRune && ev.Rune() == 'o' && ev.Modifiers()&tcell.ModCtrl != 0 {
+			editor.Toggle()
+			return true
+		}
+
+		return false // Let terminal handle other keys
+	}
+
+	pipe := cards.NewPipeline(controlFunc, cardList...)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
 }

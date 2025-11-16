@@ -140,20 +140,21 @@ func (e *EditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
 
 // HandleKey implements cards.Card
 func (e *EditorCard) HandleKey(ev *tcell.EventKey) {
+	key := ev.Key()
+	mod := ev.Modifiers()
+
+	// Ctrl+O: Toggle (always check, even when inactive)
+	if key == tcell.KeyRune && ev.Rune() == 'o' && mod&tcell.ModCtrl != 0 {
+		e.Toggle()
+		return
+	}
+
 	if !e.active {
 		// Pass through when inactive
 		return
 	}
 
-	// Handle special keys
-	key := ev.Key()
-	mod := ev.Modifiers()
-
-	// Ctrl+O: Toggle (close overlay)
-	if key == tcell.KeyRune && ev.Rune() == 'o' && mod&tcell.ModCtrl != 0 {
-		e.Close()
-		return
-	}
+	// Handle other special keys when active
 
 	// Enter: Commit
 	if key == tcell.KeyEnter {
