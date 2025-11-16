@@ -71,6 +71,10 @@ func (p *Parser) Parse(r rune) {
 		default:
 			if r >= ' ' {
 				p.vterm.placeChar(r)
+			} else if r == '\x07' {
+				// BEL - ignore (visual bell not implemented)
+			} else {
+				log.Printf("Parser: StateGround unprintable 0x%02x", r)
 			}
 		}
 	case StateEscape:
@@ -127,18 +131,20 @@ func (p *Parser) Parse(r rune) {
 		} else {
 			p.oscBuffer = append(p.oscBuffer, r)
 
-			// CRITICAL FIX: OSC 133 subcommands are single letters with no parameters
-			// Bash/Starship incorrectly sends command output as part of the OSC payload
-			// We must terminate immediately after seeing "133;[ABCD]" to prevent
-			// swallowing the output
+			// CRITICAL FIX: OSC 133 subcommands A/B/C have no parameters
+			// Bash/Starship doesn't send terminators for these, so we must auto-terminate
+			// to prevent swallowing command output
+			// OSC 133;D has parameters (;exitcode), so we let it collect until BEL/ESC
 			payload := string(p.oscBuffer)
 			if len(payload) >= 5 && payload[:4] == "133;" {
 				lastChar := payload[len(payload)-1]
-				if lastChar == 'A' || lastChar == 'B' || lastChar == 'C' || lastChar == 'D' {
-					// This is a complete OSC 133 sequence, terminate it NOW
+				if lastChar == 'A' || lastChar == 'B' || lastChar == 'C' {
+					// Auto-terminate A/B/C immediately (no parameters expected)
 					p.handleOSC(p.oscBuffer)
 					p.state = StateGround
 				}
+				// For 'D', continue collecting until we see the actual BEL/ESC terminator
+				// to capture the exit code parameter
 			}
 		}
 	case StateDCS:
@@ -193,9 +199,13 @@ func (p *Parser) handleOSC(sequence []rune) {
 			if len(parts) >= 2 {
 				p.handleOSC133(string(parts[1]))
 			}
+		} else {
+			log.Printf("Parser: handleOSC unknown command %q (full sequence=%q)", commandStr, string(sequence))
 		}
 		return
 	}
+
+	log.Printf("Parser: handleOSC command=%d, parts=%d", command, len(parts))
 
 	// For setting colors, we require a payload.
 	if len(parts) < 2 {
