@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"texelation/apps/texelterm/longeditor"
 	"texelation/apps/texelterm/parser"
 	"texelation/internal/effects"
 	"texelation/texel"
@@ -91,6 +92,23 @@ func New(title, command string) texel.App {
 			cardList = append(cardList, flash)
 		}
 	}
+
+	// Add long line editor if enabled
+	longLineEnabled := cfg.GetBool("texelterm", "long_line_editor_enabled", true)
+	if longLineEnabled {
+		editor := longeditor.NewEditorCard(
+			// onCommit: write accumulated text to PTY
+			func(text string) {
+				if term.pty != nil {
+					term.pty.Write([]byte(text))
+				}
+			},
+			// onCancel: do nothing (overlay just closes)
+			func() {},
+		)
+		cardList = append(cardList, editor)
+	}
+
 	pipe := cards.NewPipeline(nil, cardList...)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
