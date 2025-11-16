@@ -158,11 +158,11 @@ func (e *EditorCard) HandleKey(ev *tcell.EventKey) {
 
 	// Handle other special keys when active
 
-	// Shift+Enter: Insert newline (route to TextArea)
+	// Alt+Enter: Insert newline (route to TextArea)
 	// Enter: Commit
 	if key == tcell.KeyEnter {
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			// Shift+Enter: insert newline in TextArea
+		if ev.Modifiers()&tcell.ModAlt != 0 {
+			// Alt+Enter: insert newline in TextArea
 			e.ui.HandleKey(ev)
 			return
 		}
