@@ -150,6 +150,7 @@ func (v *VTerm) placeChar(r rune) {
 			line = append(line, Cell{}) // Make space for the new char
 			copy(line[v.cursorX+1:], line[v.cursorX:])
 		}
+
 		line[v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
 		v.setHistoryLine(logicalY, line)
 		v.MarkDirty(v.cursorY)

@@ -126,6 +126,20 @@ func (p *Parser) Parse(r rune) {
 			}
 		} else {
 			p.oscBuffer = append(p.oscBuffer, r)
+
+			// CRITICAL FIX: OSC 133 subcommands are single letters with no parameters
+			// Bash/Starship incorrectly sends command output as part of the OSC payload
+			// We must terminate immediately after seeing "133;[ABCD]" to prevent
+			// swallowing the output
+			payload := string(p.oscBuffer)
+			if len(payload) >= 5 && payload[:4] == "133;" {
+				lastChar := payload[len(payload)-1]
+				if lastChar == 'A' || lastChar == 'B' || lastChar == 'C' || lastChar == 'D' {
+					// This is a complete OSC 133 sequence, terminate it NOW
+					p.handleOSC(p.oscBuffer)
+					p.state = StateGround
+				}
+			}
 		}
 	case StateDCS:
 		if r == '\x1b' {
