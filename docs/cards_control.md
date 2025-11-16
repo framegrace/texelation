@@ -42,22 +42,6 @@ if err := bus.Register("terminal.toggle-autoscroll", "Toggle terminal autoscroll
 }
 ```
 
-## Triggering Effects
-
-The texelterm app triggers a flash overlay when it receives a BEL sequence:
-
-```go
-func (t *TexelTerm) onBell() {
-    if bus := t.bus; bus != nil {
-        _ = bus.Trigger(cards.FlashTriggerID, nil)
-    }
-}
-```
-
-Because the flash effect registers `effects.flash`, the app never needs to reach
-into the card to toggle state directly. Developers can follow the same pattern
-for future overlays or behavioural hooks.
-
 ## Example: Custom Function-Key Toggle
 
 You can layer multiple cards and expose custom toggles without touching card

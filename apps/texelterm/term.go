@@ -21,9 +21,7 @@ import (
 	"time"
 
 	"texelation/apps/texelterm/parser"
-	"texelation/internal/effects"
 	"texelation/texel"
-	"texelation/texel/cards"
 	"texelation/texel/theme"
 
 	"github.com/creack/pty"
@@ -31,24 +29,29 @@ import (
 )
 
 type TexelTerm struct {
-	title             string
-	command           string
-	width             int
-	height            int
-	cmd               *exec.Cmd
-	pty               *os.File
-	vterm             *parser.VTerm
-	parser            *parser.Parser
-	mu                sync.Mutex
-	stop              chan struct{}
-	stopOnce          sync.Once
-	refreshChan       chan<- bool
-	wg                sync.WaitGroup
-	buf               [][]texel.Cell
-	colorPalette      [258]tcell.Color
-	controlBus        cards.ControlBus
-	selection         termSelection
-	visualBellEnabled bool
+	title        string
+	command      string
+	width        int
+	height       int
+	cmd          *exec.Cmd
+	pty          *os.File
+	vterm        *parser.VTerm
+	parser       *parser.Parser
+	mu           sync.Mutex
+	stop         chan struct{}
+	stopOnce     sync.Once
+	refreshChan  chan<- bool
+	wg           sync.WaitGroup
+	buf          [][]texel.Cell
+	colorPalette [258]tcell.Color
+	selection    termSelection
+
+	// OSC133 / prompt integration: tracks where the current shell prompt and
+	// input line begin so visual wrapping can respect the prompt prefix.
+	promptActive    bool
+	promptLineIdx   int
+	inputStartCol   int
+	inputStartKnown bool
 }
 
 type termSelection struct {
@@ -61,39 +64,15 @@ type termSelection struct {
 
 func New(title, command string) texel.App {
 	term := &TexelTerm{
-		title:             title,
-		command:           command,
-		width:             80,
-		height:            24,
-		stop:              make(chan struct{}),
-		colorPalette:      newDefaultPalette(),
-		visualBellEnabled: false,
+		title:        title,
+		command:      command,
+		width:        80,
+		height:       24,
+		stop:         make(chan struct{}),
+		colorPalette: newDefaultPalette(),
 	}
 
-	cfg := theme.Get()
-	flashEnabled := cfg.GetBool("texelterm", "visual_bell_enabled", false)
-	term.visualBellEnabled = flashEnabled
-	wrapped := cards.WrapApp(term)
-	cardList := []cards.Card{wrapped}
-	if flashEnabled {
-		subtle := tcell.NewRGBColor(160, 160, 160)
-		flashConfig := effects.EffectConfig{
-			"color":         colorToHex(subtle),
-			"duration_ms":   100,
-			"max_intensity": 0.75,
-			"trigger_type":  "workspace.control",
-			"default_fg":    colorToHex(term.colorPalette[256]),
-			"default_bg":    colorToHex(term.colorPalette[257]),
-		}
-		if flash, err := cards.NewEffectCard("flash", flashConfig); err != nil {
-			log.Printf("texelterm: flash effect unavailable: %v", err)
-		} else {
-			cardList = append(cardList, flash)
-		}
-	}
-	pipe := cards.NewPipeline(nil, cardList...)
-	term.AttachControlBus(pipe.ControlBus())
-	return pipe
+	return term
 }
 
 func (a *TexelTerm) Vterm() *parser.VTerm {
@@ -139,24 +118,6 @@ func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 }
 
-func (a *TexelTerm) AttachControlBus(bus cards.ControlBus) {
-	a.mu.Lock()
-	a.controlBus = bus
-	a.mu.Unlock()
-}
-
-func (a *TexelTerm) onBell() {
-	a.mu.Lock()
-	bus := a.controlBus
-	a.mu.Unlock()
-	if bus == nil {
-		return
-	}
-	if err := bus.Trigger(cards.FlashTriggerID, nil); err != nil {
-		log.Printf("TexelTerm: flash trigger error: %v", err)
-	}
-}
-
 func colorToHex(c tcell.Color) string {
 	trueColor := c.TrueColor()
 	if !trueColor.Valid() {
@@ -193,7 +154,6 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 
 	cursorX, cursorY := a.vterm.Cursor()
 	cursorVisible := a.vterm.CursorVisible()
-	dirtyLines, allDirty := a.vterm.GetDirtyLines()
 
 	renderLine := func(y int) {
 		for x := 0; x < cols; x++ {
@@ -205,19 +165,25 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 		}
 	}
 
-	if allDirty {
-		for y := 0; y < rows; y++ {
-			renderLine(y)
-		}
-	} else {
-		for y := range dirtyLines {
-			if y >= 0 && y < rows {
-				renderLine(y)
-			}
-		}
+	// For simplicity and to keep visual wrapping logic deterministic, redraw
+	// all rows each frame rather than relying on vterm's dirty-line tracking.
+	for y := 0; y < rows; y++ {
+		renderLine(y)
 	}
 
 	a.vterm.ClearDirty()
+	// Visual-only reflow of long logical line at the cursor row.
+	a.applyVisualWrapLocked(cursorX, cursorY, cols, rows)
+
+	// Optional debug dump of the rendered lines for wrap investigation.
+	if os.Getenv("TEXEL_WRAP_DEBUG") == "1" {
+		lines := make([]string, len(a.buf))
+		for i := range a.buf {
+			lines[i] = wrapRowToString(a.buf[i])
+		}
+		log.Printf("TEXEL_WRAP_DEBUG rows=%d cols=%d cursor=(%d,%d) lines=%q", rows, cols, cursorX, cursorY, lines)
+	}
+
 	a.applySelectionHighlightLocked(a.buf)
 	return a.buf
 }
@@ -437,9 +403,10 @@ func (a *TexelTerm) Run() error {
 
 	a.mu.Lock()
 	cols, rows := a.width, a.height
+	cmdStr := a.command
 	a.mu.Unlock()
 
-	cmd := exec.Command(a.command)
+	cmd := exec.Command(cmdStr)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
@@ -492,11 +459,6 @@ func (a *TexelTerm) Run() error {
 					log.Printf("Error reading from PTY: %v", err)
 				}
 				return
-			}
-
-			if r == '' {
-				a.onBell()
-				continue
 			}
 
 			a.mu.Lock()
@@ -648,6 +610,163 @@ func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texel.Cell) {
 		for x := lineStart; x < lineEnd && x < len(row); x++ {
 			row[x].Style = row[x].Style.Background(highlight).Foreground(fgColor)
 		}
+	}
+}
+
+// wrapRowToString converts a row of cells into a trimmed string, used for
+// debugging visual wrapping behaviour.
+func wrapRowToString(row []texel.Cell) string {
+	var b strings.Builder
+	for _, cell := range row {
+		ch := cell.Ch
+		if ch == 0 {
+			ch = ' '
+		}
+		b.WriteRune(ch)
+	}
+	return strings.TrimRight(b.String(), " ")
+}
+
+// applyVisualWrapLocked performs a visual-only reflow of the logical line at
+// the cursor when it exceeds the viewport width. It does not modify vterm
+// state or the PTY; it only redraws the affected rows in a.buf so the user sees
+// a wrapped view of the current line while typing.
+func (a *TexelTerm) applyVisualWrapLocked(cursorX, cursorY, cols, rows int) {
+	if a.vterm == nil || cols <= 0 || rows <= 0 {
+		return
+	}
+	top := a.vterm.VisibleTop()
+	lineIdx := top + cursorY
+	historyLen := a.vterm.HistoryLength()
+	if historyLen <= 0 || lineIdx < 0 || lineIdx >= historyLen {
+		return
+	}
+	cells := a.vterm.HistoryLineCopy(lineIdx)
+	if cells == nil {
+		return
+	}
+	totalLen := len(cells)
+	if totalLen <= cols {
+		// Fits in a single row; no need to reflow.
+		return
+	}
+
+	// For now, treat the entire line as input; once OSC133 inputStartCol is
+	// wired through and safely accessible without locking, we can preserve the
+	// prompt prefix and only wrap the tail.
+	prefixCols := 0
+	if prefixCols < 0 {
+		prefixCols = 0
+	}
+	if prefixCols > cols {
+		prefixCols = cols
+	}
+
+	tailStart := prefixCols
+	if tailStart > totalLen {
+		tailStart = totalLen
+	}
+	tailLen := totalLen - tailStart
+	if tailLen <= 0 {
+		return
+	}
+
+	firstSegWidth := cols - prefixCols
+	if firstSegWidth <= 0 {
+		firstSegWidth = cols
+		prefixCols = 0
+		tailStart = 0
+		tailLen = totalLen
+	}
+
+	if tailLen <= firstSegWidth {
+		// Tail fits on the first row after any prefix.
+		return
+	}
+
+	remain := tailLen - firstSegWidth
+	extraSegs := (remain + cols - 1) / cols
+	segCount := 1 + extraSegs
+
+	// Compute visual anchor: first segment row and potential scroll so all
+	// wrapped segments fit within the viewport, preferring to open rows below.
+	startY := cursorY
+	lastSegY := startY + segCount - 1
+	scrollUp := 0
+	if lastSegY >= rows {
+		scrollUp = lastSegY - (rows - 1)
+	}
+
+	if scrollUp > 0 {
+		shifted := make([][]texel.Cell, rows)
+		tm := theme.Get()
+		clrBg := tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
+		clrFg := tm.GetColor("ui", "surface_fg", tcell.ColorWhite)
+		clearStyle := tcell.StyleDefault.Background(clrBg).Foreground(clrFg)
+		for y := 0; y < rows; y++ {
+			srcY := y + scrollUp
+			if srcY < rows {
+				shifted[y] = a.buf[srcY]
+			} else {
+				shifted[y] = make([]texel.Cell, cols)
+				for x := 0; x < cols; x++ {
+					shifted[y][x] = texel.Cell{Ch: ' ', Style: clearStyle}
+				}
+			}
+		}
+		a.buf = shifted
+		startY = cursorY - scrollUp
+		if startY < 0 {
+			startY = 0
+		}
+	}
+
+	// Redraw wrapped segments: first row keeps any prefix, subsequent rows are
+	// full-width tail segments.
+	// First segment row
+	if startY >= 0 && startY < rows {
+		// Clear tail area only (keep any prefix).
+		for x := prefixCols; x < cols; x++ {
+			a.buf[startY][x].Ch = ' '
+		}
+		segTailEnd := tailStart + firstSegWidth
+		if segTailEnd > totalLen {
+			segTailEnd = totalLen
+		}
+		for x, ci := prefixCols, tailStart; ci < segTailEnd && x < cols; ci, x = ci+1, x+1 {
+			a.buf[startY][x] = a.applyParserStyle(cells[ci])
+		}
+	}
+
+	// Remaining segments below.
+	offset := firstSegWidth
+	for seg := 1; seg < segCount; seg++ {
+		targetY := startY + seg
+		if targetY < 0 || targetY >= rows {
+			continue
+		}
+		for x := 0; x < cols; x++ {
+			a.buf[targetY][x].Ch = ' '
+		}
+		start := tailStart + offset + (seg-1)*cols
+		end := start + cols
+		if end > totalLen {
+			end = totalLen
+		}
+		for x, ci := 0, start; ci < end && x < cols; ci, x = ci+1, x+1 {
+			a.buf[targetY][x] = a.applyParserStyle(cells[ci])
+		}
+	}
+
+	// Re-apply caret styling at the original cursor position.
+	if cursorX < 0 {
+		cursorX = 0
+	}
+	if cursorX >= cols {
+		cursorX = cols - 1
+	}
+	if cursorY >= 0 && cursorY < rows {
+		a.buf[cursorY][cursorX].Style = a.buf[cursorY][cursorX].Style.Reverse(true)
 	}
 }
 

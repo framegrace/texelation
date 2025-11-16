@@ -114,23 +114,13 @@ that implement `ControllableCard` register capabilities (ID + description).
 * The new effect card registers `effects.<id>` – e.g. `cards.FlashTriggerID`.
 * Apps can introspect capabilities (`bus.Capabilities()`) to decide which
   features are available at runtime.
-* Triggers accept an optional payload. For the flash effect a boolean toggles
-  active state, while other cards may expect structured data.
-
-Example BEL handler in TexelTerm:
-
-```go
-func (t *TexelTerm) onBell() {
-    if bus := t.controlBus; bus != nil {
-        _ = bus.Trigger(cards.FlashTriggerID, nil)
-    }
-}
-```
+* Triggers accept an optional payload. Cards may expect simple booleans or
+  structured data depending on their behaviour.
 
 Design tips:
 
 1. Treat the control bus as the public API between app logic and presentation.
-2. Keep card IDs descriptive (`diagnostics.toggle`, `effects.flash`).
+2. Keep card IDs descriptive (`diagnostics.toggle`, `effects.rainbow`).
 3. If a card requires configuration, expose it via JSON-style maps so it works
    with both the desktop runtime and pipelines (mirroring the theme format).
 
@@ -165,7 +155,7 @@ overlays (diagnostics, grids) after colour-based effects so they render on top.
    for standalone app debugging.
 5. **Effects** – when adding an effect card, add unit coverage similar to
    `internal/effects/keyflash_test.go` and wire a regression into the
-   corresponding app test (as TexelTerm does for BEL).
+   corresponding app test where appropriate.
 
 Tips for deterministic tests:
 
