@@ -22,7 +22,6 @@ import (
 
 	"texelation/apps/texelterm/longeditor"
 	"texelation/apps/texelterm/parser"
-	"texelation/internal/effects"
 	"texelation/texel"
 	"texelation/texel/cards"
 	"texelation/texel/theme"
@@ -47,9 +46,8 @@ type TexelTerm struct {
 	wg                sync.WaitGroup
 	buf               [][]texel.Cell
 	colorPalette      [258]tcell.Color
-	controlBus        cards.ControlBus
-	selection         termSelection
-	visualBellEnabled bool
+	controlBus cards.ControlBus
+	selection  termSelection
 }
 
 type termSelection struct {
@@ -62,36 +60,17 @@ type termSelection struct {
 
 func New(title, command string) texel.App {
 	term := &TexelTerm{
-		title:             title,
-		command:           command,
-		width:             80,
-		height:            24,
-		stop:              make(chan struct{}),
-		colorPalette:      newDefaultPalette(),
-		visualBellEnabled: false,
+		title:        title,
+		command:      command,
+		width:        80,
+		height:       24,
+		stop:         make(chan struct{}),
+		colorPalette: newDefaultPalette(),
 	}
 
 	cfg := theme.Get()
-	flashEnabled := cfg.GetBool("texelterm", "visual_bell_enabled", false)
-	term.visualBellEnabled = flashEnabled
 	wrapped := cards.WrapApp(term)
 	cardList := []cards.Card{wrapped}
-	if flashEnabled {
-		subtle := tcell.NewRGBColor(160, 160, 160)
-		flashConfig := effects.EffectConfig{
-			"color":         colorToHex(subtle),
-			"duration_ms":   100,
-			"max_intensity": 0.75,
-			"trigger_type":  "workspace.control",
-			"default_fg":    colorToHex(term.colorPalette[256]),
-			"default_bg":    colorToHex(term.colorPalette[257]),
-		}
-		if flash, err := cards.NewEffectCard("flash", flashConfig); err != nil {
-			log.Printf("texelterm: flash effect unavailable: %v", err)
-		} else {
-			cardList = append(cardList, flash)
-		}
-	}
 
 	// Add long line editor if enabled
 	longLineEnabled := cfg.GetBool("texelterm", "long_line_editor_enabled", true)
@@ -161,18 +140,6 @@ func (a *TexelTerm) AttachControlBus(bus cards.ControlBus) {
 	a.mu.Lock()
 	a.controlBus = bus
 	a.mu.Unlock()
-}
-
-func (a *TexelTerm) onBell() {
-	a.mu.Lock()
-	bus := a.controlBus
-	a.mu.Unlock()
-	if bus == nil {
-		return
-	}
-	if err := bus.Trigger(cards.FlashTriggerID, nil); err != nil {
-		log.Printf("TexelTerm: flash trigger error: %v", err)
-	}
 }
 
 func colorToHex(c tcell.Color) string {
@@ -513,8 +480,8 @@ func (a *TexelTerm) Run() error {
 			}
 
 			if r == '' {
-				a.onBell()
-				continue
+			// Skip BEL character (visual bell not implemented)
+			continue
 			}
 
 			a.mu.Lock()
