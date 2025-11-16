@@ -56,6 +56,9 @@ type VTerm struct {
 	OnInputStart                       func()
 	OnCommandStart                     func()
 	OnCommandEnd                       func(exitCode int)
+	OnInputLengthExceeded              func(length int) // Called when input exceeds threshold
+	inputLengthThreshold               int             // Width threshold for auto-open (0 = disabled)
+	inputLengthExceededTriggered       bool            // Flag to trigger callback only once per input session
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -166,6 +169,8 @@ func (v *VTerm) placeChar(r rune) {
 		v.SetCursorPos(v.cursorY, v.cursorX+1)
 	}
 
+	// Check if input line length has exceeded threshold (for auto-open)
+	v.checkInputLengthThreshold()
 }
 
 // --- Cursor and Scrolling ---
@@ -1112,3 +1117,54 @@ func (v *VTerm) Cursor() (int, int)  { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool { return v.cursorVisible }
 func (v *VTerm) DefaultFG() Color    { return v.defaultFG }
 func (v *VTerm) DefaultBG() Color    { return v.defaultBG }
+
+// --- Input Length Tracking ---
+
+// SetInputLengthThreshold sets the character count threshold for auto-opening
+// the long line editor. When the input line exceeds this length, OnInputLengthExceeded
+// will be called. Set to 0 to disable auto-open.
+func (v *VTerm) SetInputLengthThreshold(threshold int) {
+	v.inputLengthThreshold = threshold
+}
+
+// ResetInputLengthTrigger resets the flag that tracks whether the auto-open
+// callback has been triggered. This should be called at the start of each new
+// input session (OSC 133 B).
+func (v *VTerm) ResetInputLengthTrigger() {
+	v.inputLengthExceededTriggered = false
+}
+
+// getCurrentInputLength calculates the current input line length from the start
+// of input (InputStartCol) to the current cursor position.
+func (v *VTerm) getCurrentInputLength() int {
+	if !v.InputActive {
+		return 0
+	}
+	// Simple calculation: current column minus start column
+	// This assumes input is on a single line
+	return v.cursorX - v.InputStartCol
+}
+
+// checkInputLengthThreshold checks if the input length has exceeded the threshold
+// and triggers the callback if so. The callback is only triggered once per input session.
+func (v *VTerm) checkInputLengthThreshold() {
+	if v.inputLengthThreshold <= 0 {
+		return
+	}
+	if !v.InputActive {
+		return
+	}
+	if v.OnInputLengthExceeded == nil {
+		return
+	}
+	// Only trigger once per input session
+	if v.inputLengthExceededTriggered {
+		return
+	}
+
+	length := v.getCurrentInputLength()
+	if length >= v.inputLengthThreshold {
+		v.inputLengthExceededTriggered = true
+		v.OnInputLengthExceeded(length)
+	}
+}

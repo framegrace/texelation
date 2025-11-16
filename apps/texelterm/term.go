@@ -46,8 +46,14 @@ type TexelTerm struct {
 	wg                sync.WaitGroup
 	buf               [][]texel.Cell
 	colorPalette      [258]tcell.Color
-	controlBus cards.ControlBus
-	selection  termSelection
+	controlBus        cards.ControlBus
+	selection         termSelection
+	editor            *longeditor.EditorCard
+	// Input buffer tracking for auto-open (separate mutex to avoid deadlock)
+	inputMu           sync.Mutex
+	inputLineBuffer   string
+	inputBufferActive bool
+	autoOpenThreshold int
 }
 
 type termSelection struct {
@@ -73,38 +79,108 @@ func New(title, command string) texel.App {
 	cardList := []cards.Card{wrapped}
 
 	// Add long line editor if enabled
-	var editor *longeditor.EditorCard
 	longLineEnabled := cfg.GetBool("texelterm", "long_line_editor_enabled", true)
+	autoOpen := cfg.GetBool("texelterm", "long_line_editor_auto_open", false)
+	term.autoOpenThreshold = cfg.GetInt("texelterm", "long_line_editor_width_threshold", 80)
+
 	if longLineEnabled {
-		editor = longeditor.NewEditorCard(
+		term.editor = longeditor.NewEditorCard(
 			// onCommit: write accumulated text to PTY
 			func(text string) {
+				term.inputMu.Lock()
+				term.inputLineBuffer = ""
+				term.inputMu.Unlock()
+
 				if term.pty != nil {
+					// Send final text
 					term.pty.Write([]byte(text))
 				}
 			},
-			// onCancel: do nothing (overlay just closes)
-			func() {},
+			// onCancel: restore bash line from buffer
+			func() {
+				term.inputMu.Lock()
+				bufferCopy := term.inputLineBuffer
+				term.inputMu.Unlock()
+
+				if term.pty != nil && bufferCopy != "" {
+					// Restore the line that was being edited
+					term.pty.Write([]byte("\x15")) // Ctrl+U (clear line)
+					term.pty.Write([]byte(bufferCopy))
+				}
+			},
+			// onChange: synchronize bash line as textarea changes
+			func(text string) {
+				// Convert multiline to single line (replace newlines with spaces)
+				singleLine := strings.ReplaceAll(text, "\n", " ")
+
+				term.inputMu.Lock()
+				term.inputLineBuffer = singleLine
+				term.inputMu.Unlock()
+
+				if term.pty != nil {
+					// Synchronize bash: Ctrl+U (clear) + paste
+					term.pty.Write([]byte("\x15")) // Ctrl+U
+					term.pty.Write([]byte(singleLine))
+				}
+			},
 		)
-		cardList = append(cardList, editor)
+		cardList = append(cardList, term.editor)
 	}
 
 	// ControlFunc intercepts keys for the editor
 	controlFunc := func(ev *tcell.EventKey) bool {
-		if editor == nil {
+		if term.editor == nil {
 			return false
 		}
 
 		// When editor is active, route ALL keys to it (except it handles its own keys)
-		if editor.IsActive() {
-			editor.HandleKey(ev)
+		if term.editor.IsActive() {
+			term.editor.HandleKey(ev)
 			return true // Consume all keys when overlay is active
 		}
 
-		// When editor is inactive, only intercept Ctrl+o to toggle it open
+		// When editor is inactive, intercept Ctrl+o to toggle it open
 		if ev.Key() == tcell.KeyCtrlO {
-			editor.Toggle()
+			term.inputMu.Lock()
+			currentBuffer := term.inputLineBuffer
+			term.inputMu.Unlock()
+			term.editor.Open(currentBuffer)
 			return true
+		}
+
+		// Auto-open logic: track input buffer and check threshold
+		if autoOpen && term.autoOpenThreshold > 0 {
+			term.inputMu.Lock()
+			bufferActive := term.inputBufferActive
+			term.inputMu.Unlock()
+
+			// Auto-activate buffer if we're typing printable characters
+			// (more robust than relying solely on OSC 133)
+			if !bufferActive && ev.Key() == tcell.KeyRune {
+				term.inputMu.Lock()
+				term.inputBufferActive = true
+				bufferActive = true
+				term.inputMu.Unlock()
+			}
+
+			if bufferActive {
+				// Build the input buffer from keypresses
+				handled := term.updateInputBuffer(ev)
+				if handled {
+					// Check if we've exceeded threshold
+					term.inputMu.Lock()
+					bufferLen := len(term.inputLineBuffer)
+					currentBuffer := term.inputLineBuffer
+					term.inputMu.Unlock()
+
+					if bufferLen >= term.autoOpenThreshold {
+						// Auto-open with current buffer
+						term.editor.Open(currentBuffer)
+						return true
+					}
+				}
+				// Fall through to send key to bash
+			}
 		}
 
 		return false // Let terminal handle other keys
@@ -486,6 +562,28 @@ func (a *TexelTerm) Run() error {
 	a.parser = parser.NewParser(a.vterm)
 	a.mu.Unlock()
 
+	// Set up shell integration callbacks for input buffer tracking
+	// Use separate inputMu to avoid deadlock (callbacks called during Parse while holding main mu)
+	a.vterm.OnInputStart = func() {
+		a.inputMu.Lock()
+		a.inputBufferActive = true
+		a.inputLineBuffer = ""
+		a.inputMu.Unlock()
+	}
+
+	a.vterm.OnCommandStart = func() {
+		a.inputMu.Lock()
+		a.inputBufferActive = false
+		a.inputLineBuffer = ""
+		a.inputMu.Unlock()
+	}
+
+	a.vterm.OnPromptStart = func() {
+		a.inputMu.Lock()
+		a.inputBufferActive = false
+		a.inputMu.Unlock()
+	}
+
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
@@ -756,6 +854,56 @@ func (a *TexelTerm) requestRefresh() {
 		case a.refreshChan <- true:
 		default:
 		}
+	}
+}
+
+// updateInputBuffer tracks keypresses and updates the input line buffer
+// Returns true if the key was handled and should be tracked
+func (a *TexelTerm) updateInputBuffer(ev *tcell.EventKey) bool {
+	a.inputMu.Lock()
+	defer a.inputMu.Unlock()
+
+	key := ev.Key()
+
+	switch key {
+	case tcell.KeyRune:
+		// Add character to buffer
+		a.inputLineBuffer += string(ev.Rune())
+		return true
+
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		// Remove last character
+		if len(a.inputLineBuffer) > 0 {
+			runes := []rune(a.inputLineBuffer)
+			a.inputLineBuffer = string(runes[:len(runes)-1])
+		}
+		return true
+
+	case tcell.KeyEnter:
+		// Clear buffer on enter (command will execute)
+		a.inputLineBuffer = ""
+		return true
+
+	case tcell.KeyCtrlU:
+		// Ctrl+U clears the line in bash
+		a.inputLineBuffer = ""
+		return true
+
+	case tcell.KeyCtrlW:
+		// Ctrl+W deletes previous word in bash
+		// Simple implementation: find last space and delete from there
+		trimmed := strings.TrimRight(a.inputLineBuffer, " ")
+		lastSpace := strings.LastIndex(trimmed, " ")
+		if lastSpace >= 0 {
+			a.inputLineBuffer = a.inputLineBuffer[:lastSpace+1]
+		} else {
+			a.inputLineBuffer = ""
+		}
+		return true
+
+	default:
+		// Don't track other keys (arrows, function keys, etc.)
+		return false
 	}
 }
 

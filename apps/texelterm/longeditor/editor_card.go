@@ -30,17 +30,19 @@ type EditorCard struct {
 	height      int
 	onCommit    func(text string)
 	onCancel    func()
+	onChange    func(text string)
 	refreshChan chan<- bool
 	stopChan    chan struct{}
 }
 
 // NewEditorCard creates a new long line editor card
-func NewEditorCard(onCommit func(string), onCancel func()) *EditorCard {
+func NewEditorCard(onCommit func(string), onCancel func(), onChange func(string)) *EditorCard {
 	ec := &EditorCard{
 		active:   false,
 		ui:       core.NewUIManager(),
 		onCommit: onCommit,
 		onCancel: onCancel,
+		onChange: onChange,
 		stopChan: make(chan struct{}),
 	}
 
@@ -164,6 +166,10 @@ func (e *EditorCard) HandleKey(ev *tcell.EventKey) {
 		if ev.Modifiers()&tcell.ModAlt != 0 {
 			// Alt+Enter: insert newline in TextArea
 			e.ui.HandleKey(ev)
+			// Notify of change
+			if e.onChange != nil {
+				e.onChange(e.GetText())
+			}
 			return
 		}
 		// Plain Enter: commit and close
@@ -197,6 +203,11 @@ func (e *EditorCard) HandleKey(ev *tcell.EventKey) {
 
 	// Otherwise, route to textarea
 	e.ui.HandleKey(ev)
+
+	// Notify of change after processing key
+	if e.onChange != nil {
+		e.onChange(e.GetText())
+	}
 }
 
 // SetRefreshNotifier implements cards.Card
@@ -224,6 +235,9 @@ func (e *EditorCard) Open(initialText string) {
 	e.active = true
 	e.SetText(initialText)
 	e.ui.Focus(e.textarea)
+	// Request multiple refreshes to ensure overlay is drawn
+	e.requestRefresh()
+	e.requestRefresh()
 	e.requestRefresh()
 }
 
