@@ -158,8 +158,15 @@ func (e *EditorCard) HandleKey(ev *tcell.EventKey) {
 
 	// Handle other special keys when active
 
+	// Ctrl+Enter: Insert newline (route to TextArea)
 	// Enter: Commit
 	if key == tcell.KeyEnter {
+		if ev.Modifiers()&tcell.ModCtrl != 0 {
+			// Ctrl+Enter: insert newline in TextArea
+			e.ui.HandleKey(ev)
+			return
+		}
+		// Plain Enter: commit and close
 		text := e.GetText()
 		e.Close()
 		if e.onCommit != nil {
