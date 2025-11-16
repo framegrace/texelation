@@ -95,7 +95,8 @@ func ApplyDefaults(cfg Config) {
     }
 
 	if applySectionDefaults(cfg, "texelterm", Section{
-		"visual_bell_enabled": false,
+		"visual_bell_enabled":       false,
+		"long_line_editor_enabled": true,
 	}) {
 		changed = true
 	}
