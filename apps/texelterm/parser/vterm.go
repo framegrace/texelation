@@ -35,6 +35,7 @@ type VTerm struct {
 	tabStops                           map[int]bool
 	cursorVisible                      bool
 	wrapNext, autoWrapMode, insertMode bool
+	wrapEnabled, reflowEnabled         bool // Line wrapping for main screen buffer
 	appCursorKeys                      bool
 	TitleChanged                       func(string)
 	WriteToPty                         func([]byte)
@@ -71,6 +72,8 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		tabStops:       make(map[int]bool),
 		cursorVisible:  true,
 		autoWrapMode:   true,
+		wrapEnabled:    true,
+		reflowEnabled:  true,
 		marginTop:      0,
 		marginBottom:   height - 1,
 		defaultFG:      DefaultFG,
@@ -163,7 +166,23 @@ func (v *VTerm) placeChar(r rune) {
 			v.SetCursorPos(v.cursorY, v.cursorX+1)
 		}
 	} else {
-		v.SetCursorPos(v.cursorY, v.cursorX+1)
+		// Main screen wrapping logic
+		if v.wrapEnabled && v.cursorX == v.width-1 {
+			// Mark the current cell as wrapped (continues on next line)
+			logicalY := v.cursorY + v.getTopHistoryLine()
+			line := v.getHistoryLine(logicalY)
+			if len(line) > v.cursorX {
+				line[v.cursorX].Wrapped = true
+				v.setHistoryLine(logicalY, line)
+			}
+			// Move to next line
+			v.LineFeed()
+			v.cursorX = 0
+			v.MarkDirty(v.cursorY)
+		} else if v.cursorX < v.width-1 {
+			v.SetCursorPos(v.cursorY, v.cursorX+1)
+		}
+		// If at the edge and wrapping is disabled, cursor stays at the last column
 	}
 }
 
@@ -1044,6 +1063,14 @@ func WithTitleChangeHandler(handler func(string)) Option {
 	return func(v *VTerm) { v.TitleChanged = handler }
 }
 
+func WithWrap(enabled bool) Option {
+	return func(v *VTerm) { v.wrapEnabled = enabled }
+}
+
+func WithReflow(enabled bool) Option {
+	return func(v *VTerm) { v.reflowEnabled = enabled }
+}
+
 func (v *VTerm) SetTitle(title string) {
 	if v.TitleChanged != nil {
 		v.TitleChanged(title)
@@ -1070,6 +1097,84 @@ func WithScreenRestoredHandler(handler func()) Option {
 	return func(v *VTerm) { v.ScreenRestored = handler }
 }
 
+// reflowHistoryBuffer rewraps all lines in the history buffer to fit the new width.
+// It reconstructs logical lines by joining wrapped segments and re-wraps them.
+func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
+	if v.historyLen == 0 {
+		return
+	}
+
+	// Extract all logical lines from history buffer
+	var logicalLines [][]Cell
+	currentLogical := []Cell{}
+
+	for i := 0; i < v.historyLen; i++ {
+		line := v.getHistoryLine(i)
+		currentLogical = append(currentLogical, line...)
+
+		// Check if this line wraps to the next (look at the last cell with content)
+		wrapped := false
+		if len(line) > 0 {
+			// Find the rightmost non-empty cell
+			for j := len(line) - 1; j >= 0; j-- {
+				if line[j].Rune != 0 && line[j].Rune != ' ' {
+					wrapped = line[j].Wrapped
+					break
+				}
+			}
+		}
+
+		if !wrapped {
+			// End of logical line - save it and start a new one
+			logicalLines = append(logicalLines, currentLogical)
+			currentLogical = []Cell{}
+		}
+	}
+
+	// If there's a partial logical line at the end, save it
+	if len(currentLogical) > 0 {
+		logicalLines = append(logicalLines, currentLogical)
+	}
+
+	// Re-wrap each logical line with the new width
+	newHistory := make([][]Cell, 0, v.maxHistorySize)
+	for _, logical := range logicalLines {
+		// Split this logical line into physical lines of newWidth
+		for len(logical) > 0 {
+			lineWidth := newWidth
+			if len(logical) < newWidth {
+				lineWidth = len(logical)
+			}
+
+			physicalLine := make([]Cell, lineWidth)
+			copy(physicalLine, logical[:lineWidth])
+
+			// Mark as wrapped if there's more content
+			if len(logical) > newWidth {
+				physicalLine[lineWidth-1].Wrapped = true
+			}
+
+			newHistory = append(newHistory, physicalLine)
+			logical = logical[lineWidth:]
+		}
+	}
+
+	// Replace history buffer with reflowed content
+	v.historyLen = len(newHistory)
+	v.historyHead = 0
+	for i := 0; i < v.historyLen && i < v.maxHistorySize; i++ {
+		v.historyBuffer[i] = newHistory[i]
+	}
+	// If we have more lines than fit in the buffer, keep only the most recent
+	if v.historyLen > v.maxHistorySize {
+		offset := v.historyLen - v.maxHistorySize
+		for i := 0; i < v.maxHistorySize; i++ {
+			v.historyBuffer[i] = newHistory[offset+i]
+		}
+		v.historyLen = v.maxHistorySize
+	}
+}
+
 // Resize handles changes to the terminal's dimensions.
 func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
@@ -1081,6 +1186,7 @@ func (v *VTerm) Resize(width, height int) {
 	}
 
 	oldHeight := v.height
+	oldWidth := v.width
 	v.width = width
 	v.height = height
 
@@ -1096,6 +1202,10 @@ func (v *VTerm) Resize(width, height int) {
 		v.altBuffer = newAltBuffer
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	} else {
+		// Reflow main screen buffer if enabled and width changed
+		if v.reflowEnabled && oldWidth != width {
+			v.reflowHistoryBuffer(oldWidth, width)
+		}
 		physicalY := savedLogicalY - v.getTopHistoryLine()
 		v.SetCursorPos(physicalY, v.cursorX) // Re-clamp cursor
 	}

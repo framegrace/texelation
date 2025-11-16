@@ -100,6 +100,8 @@ func ApplyDefaults(cfg Config) {
 
 	if applySectionDefaults(cfg, "texelterm", Section{
 		"visual_bell_enabled": false,
+		"wrap_enabled":        true,
+		"reflow_enabled":      true,
 	}) {
 		changed = true
 	}

@@ -415,6 +415,11 @@ func (a *TexelTerm) Run() error {
 	a.cmd = cmd
 
 	a.mu.Lock()
+	// Read wrap/reflow configuration from theme
+	cfg := theme.Get()
+	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
+	reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
+
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
 			a.title = newTitle
@@ -440,6 +445,8 @@ func (a *TexelTerm) Run() error {
 		parser.WithScreenRestoredHandler(func() {
 			go a.Resize(a.width, a.height)
 		}),
+		parser.WithWrap(wrapEnabled),
+		parser.WithReflow(reflowEnabled),
 	)
 	a.parser = parser.NewParser(a.vterm)
 	a.mu.Unlock()

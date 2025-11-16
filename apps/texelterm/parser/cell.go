@@ -35,10 +35,11 @@ type Color struct {
 
 // Cell represents a single character cell on the screen.
 type Cell struct {
-	Rune rune
-	FG   Color
-	BG   Color
-	Attr Attribute
+	Rune    rune
+	FG      Color
+	BG      Color
+	Attr    Attribute
+	Wrapped bool // True if this cell is at the end of a line that wraps to the next line
 }
 
 // --- Predefined default colors for convenience ---
