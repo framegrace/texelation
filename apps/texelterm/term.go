@@ -101,8 +101,9 @@ func New(title, command string) texel.App {
 			return true // Consume all keys when overlay is active
 		}
 
-		// When editor is inactive, only intercept Ctrl+O to toggle it open
-		if ev.Key() == tcell.KeyRune && ev.Rune() == 'o' && ev.Modifiers()&tcell.ModCtrl != 0 {
+		// When editor is inactive, only intercept Ctrl+o to toggle it open
+		// Ctrl+o produces ASCII control character 0x0F (SI - Shift In)
+		if ev.Key() == tcell.KeyRune && ev.Rune() == '\x0f' {
 			editor.Toggle()
 			return true
 		}

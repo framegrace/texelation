@@ -141,10 +141,10 @@ func (e *EditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
 // HandleKey implements cards.Card
 func (e *EditorCard) HandleKey(ev *tcell.EventKey) {
 	key := ev.Key()
-	mod := ev.Modifiers()
 
-	// Ctrl+O: Toggle (always check, even when inactive)
-	if key == tcell.KeyRune && ev.Rune() == 'o' && mod&tcell.ModCtrl != 0 {
+	// Ctrl+o: Toggle (always check, even when inactive)
+	// Ctrl+o produces ASCII control character 0x0F (SI - Shift In)
+	if key == tcell.KeyRune && ev.Rune() == '\x0f' {
 		e.Toggle()
 		return
 	}
@@ -176,17 +176,16 @@ func (e *EditorCard) HandleKey(ev *tcell.EventKey) {
 	}
 
 	// Passthrough keys: Ctrl+C, Ctrl+D, Ctrl+Z, Ctrl+\
-	if mod&tcell.ModCtrl != 0 {
-		r := ev.Rune()
-		if r == 'c' || r == 'd' || r == 'z' || r == '\\' {
-			text := e.GetText()
-			e.Close()
-			if e.onCommit != nil {
-				// Commit text first, then the control character will be sent separately
-				e.onCommit(text)
-			}
-			return
+	// These are control characters: Ctrl+C=0x03, Ctrl+D=0x04, Ctrl+Z=0x1A, Ctrl+\=0x1C
+	r := ev.Rune()
+	if r == '\x03' || r == '\x04' || r == '\x1a' || r == '\x1c' {
+		text := e.GetText()
+		e.Close()
+		if e.onCommit != nil {
+			// Commit text first, then the control character will be sent separately
+			e.onCommit(text)
 		}
+		return
 	}
 
 	// Otherwise, route to textarea
