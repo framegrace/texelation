@@ -167,9 +167,6 @@ func (p *Parser) Parse(r rune) {
 }
 
 func (v *VTerm) handleDCS(payload []rune) {
-	payloadStr := string(payload)
-	log.Printf("DCS Payload: %s", payloadStr)
-
 	// A tmux payload is typically in the format "tmux;<escaped_command>"
 	// For now, we will just log it. In a full implementation, you would
 	// parse this further. For example, if you received a query, you
@@ -199,13 +196,9 @@ func (p *Parser) handleOSC(sequence []rune) {
 			if len(parts) >= 2 {
 				p.handleOSC133(string(parts[1]))
 			}
-		} else {
-			log.Printf("Parser: handleOSC unknown command %q (full sequence=%q)", commandStr, string(sequence))
 		}
 		return
 	}
-
-	log.Printf("Parser: handleOSC command=%d, parts=%d", command, len(parts))
 
 	// For setting colors, we require a payload.
 	if len(parts) < 2 {
@@ -216,7 +209,6 @@ func (p *Parser) handleOSC(sequence []rune) {
 
 	switch command {
 	case 10: // Set/Query Default Foreground Color
-		log.Printf("set/query default fg")
 		if payload == "?" {
 			// --- TRIGGER QUERY CALLBACK ---
 			if p.vterm.QueryDefaultFg != nil {
@@ -225,15 +217,12 @@ func (p *Parser) handleOSC(sequence []rune) {
 			return
 		}
 		if color, ok := parseOSCColor(payload); ok {
-			log.Printf("Setting default fg")
 			p.vterm.defaultFG = color
 			if p.vterm.DefaultFgChanged != nil {
-				log.Printf(" default fg (Callback)")
 				p.vterm.DefaultFgChanged(color)
 			}
 		}
 	case 11: // Set/Query Default Background Color
-		log.Printf("set/query default bg")
 		if payload == "?" {
 			// --- TRIGGER QUERY CALLBACK ---
 			if p.vterm.QueryDefaultBg != nil {
@@ -242,10 +231,8 @@ func (p *Parser) handleOSC(sequence []rune) {
 			return
 		}
 		if color, ok := parseOSCColor(payload); ok {
-			log.Printf("Setting default bg")
 			p.vterm.defaultBG = color
 			if p.vterm.DefaultBgChanged != nil {
-				log.Printf(" default bg (Callback)")
 				p.vterm.DefaultBgChanged(color)
 			}
 		}
