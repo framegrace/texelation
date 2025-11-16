@@ -102,8 +102,7 @@ func New(title, command string) texel.App {
 		}
 
 		// When editor is inactive, only intercept Ctrl+o to toggle it open
-		// Ctrl+o produces ASCII control character 0x0F (SI - Shift In)
-		if ev.Key() == tcell.KeyRune && ev.Rune() == '\x0f' {
+		if ev.Key() == tcell.KeyCtrlO {
 			editor.Toggle()
 			return true
 		}

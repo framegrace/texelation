@@ -143,8 +143,7 @@ func (e *EditorCard) HandleKey(ev *tcell.EventKey) {
 	key := ev.Key()
 
 	// Ctrl+o: Toggle (always check, even when inactive)
-	// Ctrl+o produces ASCII control character 0x0F (SI - Shift In)
-	if key == tcell.KeyRune && ev.Rune() == '\x0f' {
+	if key == tcell.KeyCtrlO {
 		e.Toggle()
 		return
 	}
@@ -176,9 +175,7 @@ func (e *EditorCard) HandleKey(ev *tcell.EventKey) {
 	}
 
 	// Passthrough keys: Ctrl+C, Ctrl+D, Ctrl+Z, Ctrl+\
-	// These are control characters: Ctrl+C=0x03, Ctrl+D=0x04, Ctrl+Z=0x1A, Ctrl+\=0x1C
-	r := ev.Rune()
-	if r == '\x03' || r == '\x04' || r == '\x1a' || r == '\x1c' {
+	if key == tcell.KeyCtrlC || key == tcell.KeyCtrlD || key == tcell.KeyCtrlZ || key == tcell.KeyCtrlBackslash {
 		text := e.GetText()
 		e.Close()
 		if e.onCommit != nil {
