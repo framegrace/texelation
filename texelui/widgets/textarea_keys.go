@@ -103,5 +103,6 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
     }
     t.clampCaret()
     t.ensureVisible()
+    t.invalidateViewport()
     return true
 }

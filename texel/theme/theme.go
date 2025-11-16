@@ -152,6 +152,31 @@ func (c Config) GetFloat(sectionName, key string, defaultValue float64) float64 
 	return defaultValue
 }
 
+// GetInt retrieves an integer value from the theme/config.
+func (c Config) GetInt(sectionName, key string, defaultValue int) int {
+	if section, ok := c[sectionName]; ok {
+		if val, ok := section[key]; ok {
+			switch v := val.(type) {
+			case int:
+				return v
+			case float64:
+				return int(v)
+			case float32:
+				return int(v)
+			case json.Number:
+				if parsed, err := v.Int64(); err == nil {
+					return int(parsed)
+				}
+			case string:
+				if parsed, err := strconv.Atoi(v); err == nil {
+					return parsed
+				}
+			}
+		}
+	}
+	return defaultValue
+}
+
 // GetBool retrieves a boolean value from the theme/config.
 func (c Config) GetBool(sectionName, key string, defaultValue bool) bool {
 	if section, ok := c[sectionName]; ok {

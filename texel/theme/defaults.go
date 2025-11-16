@@ -90,12 +90,18 @@ func ApplyDefaults(cfg Config) {
         "focus_text_fg":     "#ffffff",
         "focus_border_fg":   "#ffff00",
         "focus_border_bg":   "#000000",
+        // Overlay (long line editor)
+        "overlay_bg":        "#1e1e1e",
+        "overlay_fg":        "#f8f8f2",
+        "overlay_border":    "#4a4a4a",
     }) {
         changed = true
     }
 
 	if applySectionDefaults(cfg, "texelterm", Section{
 		"visual_bell_enabled": false,
+		"wrap_enabled":        true,
+		"reflow_enabled":      true,
 	}) {
 		changed = true
 	}

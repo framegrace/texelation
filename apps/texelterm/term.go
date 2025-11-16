@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"texelation/apps/texelterm/parser"
-	"texelation/internal/effects"
 	"texelation/texel"
 	"texelation/texel/cards"
 	"texelation/texel/theme"
@@ -48,7 +47,6 @@ type TexelTerm struct {
 	colorPalette      [258]tcell.Color
 	controlBus        cards.ControlBus
 	selection         termSelection
-	visualBellEnabled bool
 }
 
 type termSelection struct {
@@ -61,37 +59,16 @@ type termSelection struct {
 
 func New(title, command string) texel.App {
 	term := &TexelTerm{
-		title:             title,
-		command:           command,
-		width:             80,
-		height:            24,
-		stop:              make(chan struct{}),
-		colorPalette:      newDefaultPalette(),
-		visualBellEnabled: false,
+		title:        title,
+		command:      command,
+		width:        80,
+		height:       24,
+		stop:         make(chan struct{}),
+		colorPalette: newDefaultPalette(),
 	}
 
-	cfg := theme.Get()
-	flashEnabled := cfg.GetBool("texelterm", "visual_bell_enabled", false)
-	term.visualBellEnabled = flashEnabled
 	wrapped := cards.WrapApp(term)
-	cardList := []cards.Card{wrapped}
-	if flashEnabled {
-		subtle := tcell.NewRGBColor(160, 160, 160)
-		flashConfig := effects.EffectConfig{
-			"color":         colorToHex(subtle),
-			"duration_ms":   100,
-			"max_intensity": 0.75,
-			"trigger_type":  "workspace.control",
-			"default_fg":    colorToHex(term.colorPalette[256]),
-			"default_bg":    colorToHex(term.colorPalette[257]),
-		}
-		if flash, err := cards.NewEffectCard("flash", flashConfig); err != nil {
-			log.Printf("texelterm: flash effect unavailable: %v", err)
-		} else {
-			cardList = append(cardList, flash)
-		}
-	}
-	pipe := cards.NewPipeline(nil, cardList...)
+	pipe := cards.NewPipeline(nil, wrapped)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
 }
@@ -143,18 +120,6 @@ func (a *TexelTerm) AttachControlBus(bus cards.ControlBus) {
 	a.mu.Lock()
 	a.controlBus = bus
 	a.mu.Unlock()
-}
-
-func (a *TexelTerm) onBell() {
-	a.mu.Lock()
-	bus := a.controlBus
-	a.mu.Unlock()
-	if bus == nil {
-		return
-	}
-	if err := bus.Trigger(cards.FlashTriggerID, nil); err != nil {
-		log.Printf("TexelTerm: flash trigger error: %v", err)
-	}
 }
 
 func colorToHex(c tcell.Color) string {
@@ -450,6 +415,11 @@ func (a *TexelTerm) Run() error {
 	a.cmd = cmd
 
 	a.mu.Lock()
+	// Read wrap/reflow configuration from theme
+	cfg := theme.Get()
+	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
+	reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
+
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
 			a.title = newTitle
@@ -475,6 +445,8 @@ func (a *TexelTerm) Run() error {
 		parser.WithScreenRestoredHandler(func() {
 			go a.Resize(a.width, a.height)
 		}),
+		parser.WithWrap(wrapEnabled),
+		parser.WithReflow(reflowEnabled),
 	)
 	a.parser = parser.NewParser(a.vterm)
 	a.mu.Unlock()
@@ -495,8 +467,8 @@ func (a *TexelTerm) Run() error {
 			}
 
 			if r == '' {
-				a.onBell()
-				continue
+			// Skip BEL character (visual bell not implemented)
+			continue
 			}
 
 			a.mu.Lock()
