@@ -82,7 +82,6 @@ func (e *EditorCard) Stop() {
 func (e *EditorCard) Resize(cols, rows int) {
 	e.width = cols
 	e.height = rows
-	e.ui.Resize(cols, rows)
 
 	// Calculate overlay dimensions (80% width, 60% height, centered)
 	overlayWidth := (cols * 8) / 10
@@ -100,13 +99,13 @@ func (e *EditorCard) Resize(cols, rows int) {
 		overlayHeight = rows
 	}
 
-	offsetX := (cols - overlayWidth) / 2
-	offsetY := (rows - overlayHeight) / 2
+	// Resize UIManager to only the overlay size (not full screen)
+	e.ui.Resize(overlayWidth, overlayHeight)
 
-	// Position widgets
-	e.pane.SetPosition(offsetX, offsetY)
+	// Position widgets at 0,0 since UI is now overlay-sized
+	e.pane.SetPosition(0, 0)
 	e.pane.Resize(overlayWidth, overlayHeight)
-	e.border.SetPosition(offsetX, offsetY)
+	e.border.SetPosition(0, 0)
 	e.border.Resize(overlayWidth, overlayHeight)
 }
 
@@ -124,14 +123,18 @@ func (e *EditorCard) Render(input [][]texel.Cell) [][]texel.Cell {
 		copy(output[i], input[i])
 	}
 
-	// Render UI overlay
+	// Calculate overlay position (centered)
+	overlayWidth := e.ui.W
+	overlayHeight := e.ui.H
+	offsetX := (e.width - overlayWidth) / 2
+	offsetY := (e.height - overlayHeight) / 2
+
+	// Render UI overlay at centered position
 	uiBuf := e.ui.Render()
-	for y := 0; y < len(uiBuf) && y < len(output); y++ {
-		for x := 0; x < len(uiBuf[y]) && x < len(output[y]); x++ {
-			// Only overlay non-background cells (simple transparency)
-			cell := uiBuf[y][x]
-			// For now, always overlay since we have a pane background
-			output[y][x] = cell
+	for y := 0; y < len(uiBuf) && (offsetY+y) < len(output); y++ {
+		for x := 0; x < len(uiBuf[y]) && (offsetX+x) < len(output[offsetY+y]); x++ {
+			// Overlay UI cell at offset position
+			output[offsetY+y][offsetX+x] = uiBuf[y][x]
 		}
 	}
 
