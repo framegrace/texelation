@@ -348,22 +348,56 @@ func (a *TexelTerm) selectWordAtPositionLocked(line, col int) {
 	a.selection.currentCol = end
 }
 
-// selectLineAtPositionLocked selects the entire line at the given position.
+// selectLineAtPositionLocked selects the entire logical line at the given position,
+// following wrapped lines to capture the complete command/output.
 func (a *TexelTerm) selectLineAtPositionLocked(line int) {
-	cells := a.vterm.HistoryLineCopy(line)
-	if cells == nil {
-		cells = []parser.Cell{}
+	historyLen := a.vterm.HistoryLength()
+	if historyLen == 0 {
+		return
 	}
 
-	// Select from start of line to end of actual content (excluding trailing spaces)
-	endCol := len(cells) - 1
-	if endCol < 0 {
-		endCol = 0
+	// Find the start of the logical line by going backwards
+	startLine := line
+	for startLine > 0 {
+		prevLine := a.vterm.HistoryLineCopy(startLine - 1)
+		if prevLine == nil || len(prevLine) == 0 {
+			break
+		}
+		// Check if the previous line wraps (continues to our line)
+		if prevLine[len(prevLine)-1].Wrapped {
+			startLine--
+		} else {
+			break
+		}
 	}
 
-	a.selection.anchorLine = line
+	// Find the end of the logical line by going forwards
+	endLine := line
+	for endLine < historyLen-1 {
+		currentLine := a.vterm.HistoryLineCopy(endLine)
+		if currentLine == nil || len(currentLine) == 0 {
+			break
+		}
+		// Check if the current line wraps (continues on next line)
+		if currentLine[len(currentLine)-1].Wrapped {
+			endLine++
+		} else {
+			break
+		}
+	}
+
+	// Set selection range
+	a.selection.anchorLine = startLine
 	a.selection.anchorCol = 0
-	a.selection.currentLine = line
+
+	// Find the end column on the last line (excluding trailing spaces)
+	endCells := a.vterm.HistoryLineCopy(endLine)
+	endCol := 0
+	if endCells != nil && len(endCells) > 0 {
+		endCol = len(endCells) - 1
+	}
+
+	a.selection.currentLine = endLine
 	a.selection.currentCol = endCol
 }
 
