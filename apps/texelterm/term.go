@@ -386,9 +386,22 @@ func (a *TexelTerm) selectLineAtPositionLocked(line int) {
 		}
 	}
 
+	// Determine start column - skip prompt if selecting the current input line
+	startCol := 0
+	if a.vterm.InputActive {
+		// Convert InputStartLine (screen-relative) to history coordinates
+		top := a.vterm.VisibleTop()
+		inputStartHistoryLine := top + a.vterm.InputStartLine
+
+		// If the logical line starts at the input start line, skip the prompt
+		if startLine == inputStartHistoryLine {
+			startCol = a.vterm.InputStartCol
+		}
+	}
+
 	// Set selection range
 	a.selection.anchorLine = startLine
-	a.selection.anchorCol = 0
+	a.selection.anchorCol = startCol
 
 	// Find the end column on the last line (excluding trailing spaces)
 	endCells := a.vterm.HistoryLineCopy(endLine)
