@@ -181,6 +181,8 @@ func (p *Parser) handleOSC(sequence []rune) {
 	// Use your existing helper to split the sequence at the first semicolon.
 	parts := splitRunesN(sequence, ';', 2)
 
+	log.Printf("DEBUG: handleOSC called with sequence: %q", string(sequence))
+
 	// We must have at least a command part.
 	if len(parts) == 0 {
 		return
@@ -191,9 +193,11 @@ func (p *Parser) handleOSC(sequence []rune) {
 	if err != nil {
 		// Check for non-numeric commands (e.g., OSC 133)
 		commandStr := string(commandPart)
+		log.Printf("DEBUG: OSC command string: %q", commandStr)
 		if commandStr == "133" {
 			// OSC 133 - Shell integration
 			if len(parts) >= 2 {
+				log.Printf("DEBUG: Calling handleOSC133 with payload: %q", string(parts[1]))
 				p.handleOSC133(string(parts[1]))
 			}
 		}
@@ -251,12 +255,14 @@ func (p *Parser) handleOSC(sequence []rune) {
 // C = Input end / Command start
 // D = Command end [; exitcode]
 func (p *Parser) handleOSC133(payload string) {
+	log.Printf("DEBUG: handleOSC133 called with payload: %q", payload)
 	parts := strings.Split(payload, ";")
 	if len(parts) == 0 {
 		return
 	}
 
 	subcommand := strings.TrimSpace(parts[0])
+	log.Printf("DEBUG: OSC 133 subcommand: %q", subcommand)
 
 	switch subcommand {
 	case "A":
