@@ -389,12 +389,9 @@ func (a *TexelTerm) selectLineAtPositionLocked(line int) {
 	// Determine start column - skip prompt if selecting the current input line
 	startCol := 0
 	if a.vterm.InputActive {
-		// Convert InputStartLine (screen-relative) to history coordinates
-		top := a.vterm.VisibleTop()
-		inputStartHistoryLine := top + a.vterm.InputStartLine
-
+		// InputStartLine is already a history line index (not screen-relative)
 		// If the logical line starts at the input start line, skip the prompt
-		if startLine == inputStartHistoryLine {
+		if startLine == a.vterm.InputStartLine {
 			startCol = a.vterm.InputStartCol
 		}
 	}
