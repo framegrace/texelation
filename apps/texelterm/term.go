@@ -50,7 +50,8 @@ type TexelTerm struct {
 }
 
 type termSelection struct {
-	active        bool
+	active        bool // true when drag operation is in progress
+	rendered      bool // true when selection should be visually highlighted
 	anchorLine    int
 	anchorCol     int
 	currentLine   int
@@ -390,6 +391,7 @@ func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers
 
 	a.selection = termSelection{
 		active:        true,
+		rendered:      true,
 		lastClickTime: now,
 		lastClickLine: line,
 		lastClickCol:  col,
@@ -446,14 +448,29 @@ func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifier
 	a.selection.currentLine = line
 	a.selection.currentCol = col
 	text := a.buildSelectionTextLocked()
-	// Preserve click history for multi-click detection
-	a.selection = termSelection{
+
+	// For multi-click selections, keep the visual selection visible after mouse up
+	isMultiClick := a.selection.clickCount >= 2
+
+	// Preserve click history and selection state for multi-click detection
+	newSelection := termSelection{
 		active:        false,
+		rendered:      isMultiClick, // Keep visible for double/triple-click
 		lastClickTime: a.selection.lastClickTime,
 		lastClickLine: a.selection.lastClickLine,
 		lastClickCol:  a.selection.lastClickCol,
 		clickCount:    a.selection.clickCount,
 	}
+
+	// If multi-click, also preserve the selection range for rendering
+	if isMultiClick {
+		newSelection.anchorLine = a.selection.anchorLine
+		newSelection.anchorCol = a.selection.anchorCol
+		newSelection.currentLine = a.selection.currentLine
+		newSelection.currentCol = a.selection.currentCol
+	}
+
+	a.selection = newSelection
 	a.vterm.MarkAllDirty()
 	a.requestRefresh()
 	if text == "" {
@@ -466,12 +483,13 @@ func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifier
 func (a *TexelTerm) SelectionCancel() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.selection.active {
+	if !a.selection.active && !a.selection.rendered {
 		return
 	}
 	// Preserve click history for multi-click detection
 	a.selection = termSelection{
 		active:        false,
+		rendered:      false,
 		lastClickTime: a.selection.lastClickTime,
 		lastClickLine: a.selection.lastClickLine,
 		lastClickCol:  a.selection.lastClickCol,
@@ -690,7 +708,7 @@ func (a *TexelTerm) buildSelectionTextLocked() string {
 }
 
 func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texel.Cell) {
-	if a.vterm == nil || !a.selection.active || len(buf) == 0 {
+	if a.vterm == nil || !a.selection.rendered || len(buf) == 0 {
 		return
 	}
 	startLine, startCol, endLine, endColExclusive, ok := a.selectionRangeLocked()
