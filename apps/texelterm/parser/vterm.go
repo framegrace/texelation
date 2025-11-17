@@ -1111,17 +1111,20 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	for i := 0; i < v.historyLen; i++ {
 		line := v.getHistoryLine(i)
 
-		// Check if this line wraps to the next (look at the last cell with content)
+		// Check if this line wraps to the next by looking at the LAST cell (not last non-space)
+		// The Wrapped flag is set on the cell at the edge (width-1) when we wrap
 		wrapped := false
-		lastNonSpace := -1
 		if len(line) > 0 {
-			// Find the rightmost non-empty cell
-			for j := len(line) - 1; j >= 0; j-- {
-				if line[j].Rune != 0 && line[j].Rune != ' ' {
-					wrapped = line[j].Wrapped
-					lastNonSpace = j
-					break
-				}
+			// Check the very last cell in the line
+			wrapped = line[len(line)-1].Wrapped
+		}
+
+		// Find last non-space cell for trimming non-wrapped lines
+		lastNonSpace := -1
+		for j := len(line) - 1; j >= 0; j-- {
+			if line[j].Rune != 0 && line[j].Rune != ' ' {
+				lastNonSpace = j
+				break
 			}
 		}
 
