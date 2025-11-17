@@ -29,6 +29,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+const (
+	// multiClickTimeout is the maximum time between clicks to be considered a multi-click
+	multiClickTimeout = 500 * time.Millisecond
+)
+
 type TexelTerm struct {
 	title             string
 	command           string
@@ -49,13 +54,26 @@ type TexelTerm struct {
 	selection         termSelection
 }
 
+// termSelection tracks the current text selection state and multi-click history.
+//
+// Selection behavior:
+//   - Single-click: Start character-by-character selection
+//   - Double-click: Select entire word at cursor (alphanumeric + _ + -)
+//   - Triple-click: Select entire logical line (following wrapped lines)
+//
+// The selection uses two separate flags:
+//   - active: true while mouse button is held (drag in progress)
+//   - rendered: true while selection should be visually highlighted
+//
+// This separation allows multi-click selections to remain visible after mouse-up
+// while still copying to clipboard, matching standard terminal behavior.
 type termSelection struct {
 	active        bool // true when drag operation is in progress
 	rendered      bool // true when selection should be visually highlighted
-	anchorLine    int
-	anchorCol     int
-	currentLine   int
-	currentCol    int
+	anchorLine    int  // history line index where selection started
+	anchorCol     int  // column where selection started
+	currentLine   int  // history line index where selection currently ends
+	currentCol    int  // column where selection currently ends
 	lastClickTime time.Time
 	lastClickLine int
 	lastClickCol  int
@@ -348,6 +366,33 @@ func (a *TexelTerm) selectWordAtPositionLocked(line, col int) {
 	a.selection.currentCol = end
 }
 
+// detectPromptEnd scans a line from the start and returns the column after the prompt.
+// Returns 0 if no prompt pattern is detected.
+// Prompts are detected as: non-alphanumeric character(s) followed by a space.
+func detectPromptEnd(cells []parser.Cell) int {
+	if cells == nil || len(cells) < 2 {
+		return 0
+	}
+
+	// Scan from start: count consecutive non-alphanumeric characters
+	for i := 0; i < len(cells); i++ {
+		r := cells[i].Rune
+		// Check if this is a non-alphanumeric character (potential prompt char)
+		if (r < '0' || r > '9') && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') {
+			if r == ' ' && i > 0 {
+				// Found space after special chars - this is the prompt end
+				return i + 1
+			}
+			// Continue scanning special chars
+			continue
+		} else {
+			// Hit alphanumeric - if we haven't found a space yet, no prompt
+			break
+		}
+	}
+	return 0
+}
+
 // selectLineAtPositionLocked selects the entire logical line at the given position,
 // following wrapped lines to capture the complete command/output.
 func (a *TexelTerm) selectLineAtPositionLocked(line int) {
@@ -390,48 +435,13 @@ func (a *TexelTerm) selectLineAtPositionLocked(line int) {
 	startCol := 0
 
 	// First try OSC 133 shell integration if available
-	if a.vterm.InputActive {
-		// InputStartLine is already a history line index (not screen-relative)
-		// If the logical line starts at the input start line, skip the prompt
-		if startLine == a.vterm.InputStartLine {
-			startCol = a.vterm.InputStartCol
-		}
-		log.Printf("DEBUG: Triple-click: InputActive=%v, startLine=%d, InputStartLine=%d, InputStartCol=%d, startCol=%d",
-			a.vterm.InputActive, startLine, a.vterm.InputStartLine, a.vterm.InputStartCol, startCol)
+	if a.vterm.InputActive && startLine == a.vterm.InputStartLine {
+		// Use OSC 133 input start position to skip the prompt
+		startCol = a.vterm.InputStartCol
 	} else {
-		// Fallback: detect prompt by finding special characters followed by space
-		// Common pattern: prompts start with non-alphanumeric chars ($ ❯ > # % ➜ λ etc) then space
+		// Fallback: detect prompt pattern by scanning the line
 		startLineCells := a.vterm.HistoryLineCopy(startLine)
-		if startLineCells != nil && len(startLineCells) > 1 {
-			// Scan from start: count consecutive non-alphanumeric characters
-			promptEnd := 0
-			for i := 0; i < len(startLineCells); i++ {
-				r := startLineCells[i].Rune
-				// Check if this is a non-alphanumeric character (potential prompt char)
-				if (r < '0' || r > '9') && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') {
-					if r == ' ' && i > 0 {
-						// Found space after special chars - this is likely the prompt end
-						promptEnd = i + 1
-						break
-					}
-					// Continue scanning special chars
-					continue
-				} else {
-					// Hit alphanumeric - if we haven't found a space yet, no prompt
-					break
-				}
-			}
-			if promptEnd > 0 {
-				startCol = promptEnd
-				promptStr := ""
-				for i := 0; i < promptEnd && i < len(startLineCells); i++ {
-					promptStr += string(startLineCells[i].Rune)
-				}
-				log.Printf("DEBUG: Triple-click: Detected prompt %q, skipping to col %d", promptStr, startCol)
-			} else {
-				log.Printf("DEBUG: Triple-click: InputActive=false, no prompt pattern detected, startLine=%d", startLine)
-			}
-		}
+		startCol = detectPromptEnd(startLineCells)
 	}
 
 	// Set selection range
@@ -460,9 +470,8 @@ func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers
 
 	// Detect double/triple-click
 	now := time.Now()
-	clickTimeout := 500 * time.Millisecond
 	samePosition := line == a.selection.lastClickLine && col == a.selection.lastClickCol
-	withinTimeout := now.Sub(a.selection.lastClickTime) < clickTimeout
+	withinTimeout := now.Sub(a.selection.lastClickTime) < multiClickTimeout
 
 	var clickCount int
 	if samePosition && withinTimeout {
