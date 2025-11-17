@@ -444,13 +444,19 @@ func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifier
 	if a.vterm == nil || !a.selection.active {
 		return "", nil, false
 	}
-	line, col := a.resolveSelectionPositionLocked(x, y)
-	a.selection.currentLine = line
-	a.selection.currentCol = col
-	text := a.buildSelectionTextLocked()
 
 	// For multi-click selections, keep the visual selection visible after mouse up
 	isMultiClick := a.selection.clickCount >= 2
+
+	// Only update selection position for single-click drag selections
+	// Multi-click selections already have the correct range set
+	if !isMultiClick {
+		line, col := a.resolveSelectionPositionLocked(x, y)
+		a.selection.currentLine = line
+		a.selection.currentCol = col
+	}
+
+	text := a.buildSelectionTextLocked()
 
 	// Preserve click history and selection state for multi-click detection
 	newSelection := termSelection{
