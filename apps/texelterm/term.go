@@ -50,11 +50,15 @@ type TexelTerm struct {
 }
 
 type termSelection struct {
-	active      bool
-	anchorLine  int
-	anchorCol   int
-	currentLine int
-	currentCol  int
+	active        bool
+	anchorLine    int
+	anchorCol     int
+	currentLine   int
+	currentCol    int
+	lastClickTime time.Time
+	lastClickLine int
+	lastClickCol  int
+	clickCount    int
 }
 
 func New(title, command string) texel.App {
@@ -295,6 +299,73 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	}
 }
 
+// isWordChar determines if a rune is part of a word (alphanumeric, underscore, or dash).
+func isWordChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') || r == '_' || r == '-'
+}
+
+// selectWordAtPositionLocked selects the word at the given position.
+func (a *TexelTerm) selectWordAtPositionLocked(line, col int) {
+	cells := a.vterm.HistoryLineCopy(line)
+	if cells == nil || len(cells) == 0 {
+		return
+	}
+
+	// Clamp col to valid range
+	if col >= len(cells) {
+		col = len(cells) - 1
+	}
+	if col < 0 {
+		col = 0
+	}
+
+	// If clicking on whitespace, select nothing
+	if col < len(cells) && !isWordChar(cells[col].Rune) {
+		a.selection.anchorLine = line
+		a.selection.anchorCol = col
+		a.selection.currentLine = line
+		a.selection.currentCol = col
+		return
+	}
+
+	// Find start of word
+	start := col
+	for start > 0 && isWordChar(cells[start-1].Rune) {
+		start--
+	}
+
+	// Find end of word
+	end := col
+	for end < len(cells)-1 && isWordChar(cells[end+1].Rune) {
+		end++
+	}
+
+	a.selection.anchorLine = line
+	a.selection.anchorCol = start
+	a.selection.currentLine = line
+	a.selection.currentCol = end
+}
+
+// selectLineAtPositionLocked selects the entire line at the given position.
+func (a *TexelTerm) selectLineAtPositionLocked(line int) {
+	cells := a.vterm.HistoryLineCopy(line)
+	if cells == nil {
+		cells = []parser.Cell{}
+	}
+
+	// Select from start of line to end of actual content (excluding trailing spaces)
+	endCol := len(cells) - 1
+	if endCol < 0 {
+		endCol = 0
+	}
+
+	a.selection.anchorLine = line
+	a.selection.anchorCol = 0
+	a.selection.currentLine = line
+	a.selection.currentCol = endCol
+}
+
 // SelectionStart implements texel.SelectionHandler.
 func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
 	a.mu.Lock()
@@ -303,13 +374,42 @@ func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers
 		return false
 	}
 	line, col := a.resolveSelectionPositionLocked(x, y)
-	a.selection = termSelection{
-		active:      true,
-		anchorLine:  line,
-		anchorCol:   col,
-		currentLine: line,
-		currentCol:  col,
+
+	// Detect double/triple-click
+	now := time.Now()
+	clickTimeout := 500 * time.Millisecond
+	samePosition := line == a.selection.lastClickLine && col == a.selection.lastClickCol
+	withinTimeout := now.Sub(a.selection.lastClickTime) < clickTimeout
+
+	var clickCount int
+	if samePosition && withinTimeout {
+		clickCount = a.selection.clickCount + 1
+	} else {
+		clickCount = 1
 	}
+
+	a.selection = termSelection{
+		active:        true,
+		lastClickTime: now,
+		lastClickLine: line,
+		lastClickCol:  col,
+		clickCount:    clickCount,
+	}
+
+	if clickCount == 2 {
+		// Double-click: select word
+		a.selectWordAtPositionLocked(line, col)
+	} else if clickCount >= 3 {
+		// Triple-click: select line
+		a.selectLineAtPositionLocked(line)
+	} else {
+		// Single click: start normal selection
+		a.selection.anchorLine = line
+		a.selection.anchorCol = col
+		a.selection.currentLine = line
+		a.selection.currentCol = col
+	}
+
 	a.vterm.MarkAllDirty()
 	a.requestRefresh()
 	return true

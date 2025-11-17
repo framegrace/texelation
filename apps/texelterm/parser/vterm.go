@@ -1110,21 +1110,29 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 
 	for i := 0; i < v.historyLen; i++ {
 		line := v.getHistoryLine(i)
-		currentLogical = append(currentLogical, line...)
 
 		// Check if this line wraps to the next (look at the last cell with content)
 		wrapped := false
+		lastNonSpace := -1
 		if len(line) > 0 {
 			// Find the rightmost non-empty cell
 			for j := len(line) - 1; j >= 0; j-- {
 				if line[j].Rune != 0 && line[j].Rune != ' ' {
 					wrapped = line[j].Wrapped
+					lastNonSpace = j
 					break
 				}
 			}
 		}
 
-		if !wrapped {
+		// If line is wrapped, include all cells (content continues on next line)
+		// If not wrapped, only include cells up to last non-space (trim padding)
+		if wrapped {
+			currentLogical = append(currentLogical, line...)
+		} else {
+			if lastNonSpace >= 0 {
+				currentLogical = append(currentLogical, line[:lastNonSpace+1]...)
+			}
 			// End of logical line - save it and start a new one
 			logicalLines = append(logicalLines, currentLogical)
 			currentLogical = []Cell{}
