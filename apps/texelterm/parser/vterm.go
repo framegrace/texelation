@@ -1110,21 +1110,32 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 
 	for i := 0; i < v.historyLen; i++ {
 		line := v.getHistoryLine(i)
-		currentLogical = append(currentLogical, line...)
 
-		// Check if this line wraps to the next (look at the last cell with content)
+		// Check if this line wraps to the next by looking at the LAST cell (not last non-space)
+		// The Wrapped flag is set on the cell at the edge (width-1) when we wrap
 		wrapped := false
 		if len(line) > 0 {
-			// Find the rightmost non-empty cell
-			for j := len(line) - 1; j >= 0; j-- {
-				if line[j].Rune != 0 && line[j].Rune != ' ' {
-					wrapped = line[j].Wrapped
-					break
-				}
+			// Check the very last cell in the line
+			wrapped = line[len(line)-1].Wrapped
+		}
+
+		// Find last non-space cell for trimming non-wrapped lines
+		lastNonSpace := -1
+		for j := len(line) - 1; j >= 0; j-- {
+			if line[j].Rune != 0 && line[j].Rune != ' ' {
+				lastNonSpace = j
+				break
 			}
 		}
 
-		if !wrapped {
+		// If line is wrapped, include all cells (content continues on next line)
+		// If not wrapped, only include cells up to last non-space (trim padding)
+		if wrapped {
+			currentLogical = append(currentLogical, line...)
+		} else {
+			if lastNonSpace >= 0 {
+				currentLogical = append(currentLogical, line[:lastNonSpace+1]...)
+			}
 			// End of logical line - save it and start a new one
 			logicalLines = append(logicalLines, currentLogical)
 			currentLogical = []Cell{}
@@ -1180,9 +1191,12 @@ func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
 		return
 	}
-	var savedLogicalY int
+	var linesFromEnd int
 	if !v.inAltScreen {
-		savedLogicalY = v.cursorY + v.getTopHistoryLine()
+		// Save cursor position as distance from end of history
+		// This way after reflow changes line count, we can restore relative position
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		linesFromEnd = v.historyLen - logicalY - 1
 	}
 
 	oldHeight := v.height
@@ -1206,7 +1220,12 @@ func (v *VTerm) Resize(width, height int) {
 		if v.reflowEnabled && oldWidth != width {
 			v.reflowHistoryBuffer(oldWidth, width)
 		}
-		physicalY := savedLogicalY - v.getTopHistoryLine()
+		// Restore cursor to same distance from end of history
+		newLogicalY := v.historyLen - linesFromEnd - 1
+		if newLogicalY < 0 {
+			newLogicalY = 0
+		}
+		physicalY := newLogicalY - v.getTopHistoryLine()
 		v.SetCursorPos(physicalY, v.cursorX) // Re-clamp cursor
 	}
 

@@ -273,8 +273,8 @@ func (p *Parser) handleOSC133(payload string) {
 		p.vterm.PromptActive = false
 		p.vterm.InputActive = true
 		p.vterm.CommandActive = false
-		// Record where input starts
-		p.vterm.InputStartLine = p.vterm.GetCursorY()
+		// Record where input starts (convert screen position to history line index)
+		p.vterm.InputStartLine = p.vterm.getTopHistoryLine() + p.vterm.GetCursorY()
 		p.vterm.InputStartCol = p.vterm.GetCursorX()
 		if p.vterm.OnInputStart != nil {
 			p.vterm.OnInputStart()

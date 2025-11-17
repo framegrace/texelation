@@ -29,6 +29,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+const (
+	// multiClickTimeout is the maximum time between clicks to be considered a multi-click
+	multiClickTimeout = 500 * time.Millisecond
+)
+
 type TexelTerm struct {
 	title             string
 	command           string
@@ -49,12 +54,30 @@ type TexelTerm struct {
 	selection         termSelection
 }
 
+// termSelection tracks the current text selection state and multi-click history.
+//
+// Selection behavior:
+//   - Single-click: Start character-by-character selection
+//   - Double-click: Select entire word at cursor (alphanumeric + _ + -)
+//   - Triple-click: Select entire logical line (following wrapped lines)
+//
+// The selection uses two separate flags:
+//   - active: true while mouse button is held (drag in progress)
+//   - rendered: true while selection should be visually highlighted
+//
+// This separation allows multi-click selections to remain visible after mouse-up
+// while still copying to clipboard, matching standard terminal behavior.
 type termSelection struct {
-	active      bool
-	anchorLine  int
-	anchorCol   int
-	currentLine int
-	currentCol  int
+	active        bool // true when drag operation is in progress
+	rendered      bool // true when selection should be visually highlighted
+	anchorLine    int  // history line index where selection started
+	anchorCol     int  // column where selection started
+	currentLine   int  // history line index where selection currently ends
+	currentCol    int  // column where selection currently ends
+	lastClickTime time.Time
+	lastClickLine int
+	lastClickCol  int
+	clickCount    int
 }
 
 func New(title, command string) texel.App {
@@ -295,6 +318,147 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	}
 }
 
+// isWordChar determines if a rune is part of a word (alphanumeric, underscore, or dash).
+func isWordChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') || r == '_' || r == '-'
+}
+
+// selectWordAtPositionLocked selects the word at the given position.
+func (a *TexelTerm) selectWordAtPositionLocked(line, col int) {
+	cells := a.vterm.HistoryLineCopy(line)
+	if cells == nil || len(cells) == 0 {
+		return
+	}
+
+	// Clamp col to valid range
+	if col >= len(cells) {
+		col = len(cells) - 1
+	}
+	if col < 0 {
+		col = 0
+	}
+
+	// If clicking on whitespace, select nothing
+	if col < len(cells) && !isWordChar(cells[col].Rune) {
+		a.selection.anchorLine = line
+		a.selection.anchorCol = col
+		a.selection.currentLine = line
+		a.selection.currentCol = col
+		return
+	}
+
+	// Find start of word
+	start := col
+	for start > 0 && isWordChar(cells[start-1].Rune) {
+		start--
+	}
+
+	// Find end of word
+	end := col
+	for end < len(cells)-1 && isWordChar(cells[end+1].Rune) {
+		end++
+	}
+
+	a.selection.anchorLine = line
+	a.selection.anchorCol = start
+	a.selection.currentLine = line
+	a.selection.currentCol = end
+}
+
+// detectPromptEnd scans a line from the start and returns the column after the prompt.
+// Returns 0 if no prompt pattern is detected.
+// Prompts are detected as: non-alphanumeric character(s) followed by a space.
+func detectPromptEnd(cells []parser.Cell) int {
+	if cells == nil || len(cells) < 2 {
+		return 0
+	}
+
+	// Scan from start: count consecutive non-alphanumeric characters
+	for i := 0; i < len(cells); i++ {
+		r := cells[i].Rune
+		// Check if this is a non-alphanumeric character (potential prompt char)
+		if (r < '0' || r > '9') && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') {
+			if r == ' ' && i > 0 {
+				// Found space after special chars - this is the prompt end
+				return i + 1
+			}
+			// Continue scanning special chars
+			continue
+		} else {
+			// Hit alphanumeric - if we haven't found a space yet, no prompt
+			break
+		}
+	}
+	return 0
+}
+
+// selectLineAtPositionLocked selects the entire logical line at the given position,
+// following wrapped lines to capture the complete command/output.
+func (a *TexelTerm) selectLineAtPositionLocked(line int) {
+	historyLen := a.vterm.HistoryLength()
+	if historyLen == 0 {
+		return
+	}
+
+	// Find the start of the logical line by going backwards
+	startLine := line
+	for startLine > 0 {
+		prevLine := a.vterm.HistoryLineCopy(startLine - 1)
+		if prevLine == nil || len(prevLine) == 0 {
+			break
+		}
+		// Check if the previous line wraps (continues to our line)
+		if prevLine[len(prevLine)-1].Wrapped {
+			startLine--
+		} else {
+			break
+		}
+	}
+
+	// Find the end of the logical line by going forwards
+	endLine := line
+	for endLine < historyLen-1 {
+		currentLine := a.vterm.HistoryLineCopy(endLine)
+		if currentLine == nil || len(currentLine) == 0 {
+			break
+		}
+		// Check if the current line wraps (continues on next line)
+		if currentLine[len(currentLine)-1].Wrapped {
+			endLine++
+		} else {
+			break
+		}
+	}
+
+	// Determine start column - skip prompt if selecting the current input line
+	startCol := 0
+
+	// First try OSC 133 shell integration if available
+	if a.vterm.InputActive && startLine == a.vterm.InputStartLine {
+		// Use OSC 133 input start position to skip the prompt
+		startCol = a.vterm.InputStartCol
+	} else {
+		// Fallback: detect prompt pattern by scanning the line
+		startLineCells := a.vterm.HistoryLineCopy(startLine)
+		startCol = detectPromptEnd(startLineCells)
+	}
+
+	// Set selection range
+	a.selection.anchorLine = startLine
+	a.selection.anchorCol = startCol
+
+	// Find the end column on the last line (excluding trailing spaces)
+	endCells := a.vterm.HistoryLineCopy(endLine)
+	endCol := 0
+	if endCells != nil && len(endCells) > 0 {
+		endCol = len(endCells) - 1
+	}
+
+	a.selection.currentLine = endLine
+	a.selection.currentCol = endCol
+}
+
 // SelectionStart implements texel.SelectionHandler.
 func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
 	a.mu.Lock()
@@ -303,13 +467,42 @@ func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers
 		return false
 	}
 	line, col := a.resolveSelectionPositionLocked(x, y)
-	a.selection = termSelection{
-		active:      true,
-		anchorLine:  line,
-		anchorCol:   col,
-		currentLine: line,
-		currentCol:  col,
+
+	// Detect double/triple-click
+	now := time.Now()
+	samePosition := line == a.selection.lastClickLine && col == a.selection.lastClickCol
+	withinTimeout := now.Sub(a.selection.lastClickTime) < multiClickTimeout
+
+	var clickCount int
+	if samePosition && withinTimeout {
+		clickCount = a.selection.clickCount + 1
+	} else {
+		clickCount = 1
 	}
+
+	a.selection = termSelection{
+		active:        true,
+		rendered:      true,
+		lastClickTime: now,
+		lastClickLine: line,
+		lastClickCol:  col,
+		clickCount:    clickCount,
+	}
+
+	if clickCount == 2 {
+		// Double-click: select word
+		a.selectWordAtPositionLocked(line, col)
+	} else if clickCount >= 3 {
+		// Triple-click: select line
+		a.selectLineAtPositionLocked(line)
+	} else {
+		// Single click: start normal selection
+		a.selection.anchorLine = line
+		a.selection.anchorCol = col
+		a.selection.currentLine = line
+		a.selection.currentCol = col
+	}
+
 	a.vterm.MarkAllDirty()
 	a.requestRefresh()
 	return true
@@ -342,11 +535,39 @@ func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifier
 	if a.vterm == nil || !a.selection.active {
 		return "", nil, false
 	}
-	line, col := a.resolveSelectionPositionLocked(x, y)
-	a.selection.currentLine = line
-	a.selection.currentCol = col
+
+	// For multi-click selections, keep the visual selection visible after mouse up
+	isMultiClick := a.selection.clickCount >= 2
+
+	// Only update selection position for single-click drag selections
+	// Multi-click selections already have the correct range set
+	if !isMultiClick {
+		line, col := a.resolveSelectionPositionLocked(x, y)
+		a.selection.currentLine = line
+		a.selection.currentCol = col
+	}
+
 	text := a.buildSelectionTextLocked()
-	a.selection = termSelection{}
+
+	// Preserve click history and selection state for multi-click detection
+	newSelection := termSelection{
+		active:        false,
+		rendered:      isMultiClick, // Keep visible for double/triple-click
+		lastClickTime: a.selection.lastClickTime,
+		lastClickLine: a.selection.lastClickLine,
+		lastClickCol:  a.selection.lastClickCol,
+		clickCount:    a.selection.clickCount,
+	}
+
+	// If multi-click, also preserve the selection range for rendering
+	if isMultiClick {
+		newSelection.anchorLine = a.selection.anchorLine
+		newSelection.anchorCol = a.selection.anchorCol
+		newSelection.currentLine = a.selection.currentLine
+		newSelection.currentCol = a.selection.currentCol
+	}
+
+	a.selection = newSelection
 	a.vterm.MarkAllDirty()
 	a.requestRefresh()
 	if text == "" {
@@ -359,10 +580,18 @@ func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifier
 func (a *TexelTerm) SelectionCancel() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.selection.active {
+	if !a.selection.active && !a.selection.rendered {
 		return
 	}
-	a.selection = termSelection{}
+	// Preserve click history for multi-click detection
+	a.selection = termSelection{
+		active:        false,
+		rendered:      false,
+		lastClickTime: a.selection.lastClickTime,
+		lastClickLine: a.selection.lastClickLine,
+		lastClickCol:  a.selection.lastClickCol,
+		clickCount:    a.selection.clickCount,
+	}
 	if a.vterm != nil {
 		a.vterm.MarkAllDirty()
 	}
@@ -576,7 +805,7 @@ func (a *TexelTerm) buildSelectionTextLocked() string {
 }
 
 func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texel.Cell) {
-	if a.vterm == nil || !a.selection.active || len(buf) == 0 {
+	if a.vterm == nil || !a.selection.rendered || len(buf) == 0 {
 		return
 	}
 	startLine, startCol, endLine, endColExclusive, ok := a.selectionRangeLocked()
