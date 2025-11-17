@@ -276,6 +276,8 @@ func (p *Parser) handleOSC133(payload string) {
 		// Record where input starts (convert screen position to history line index)
 		p.vterm.InputStartLine = p.vterm.getTopHistoryLine() + p.vterm.GetCursorY()
 		p.vterm.InputStartCol = p.vterm.GetCursorX()
+		log.Printf("DEBUG: OSC 133;B received - InputStartLine=%d, InputStartCol=%d, InputActive=%v",
+			p.vterm.InputStartLine, p.vterm.InputStartCol, p.vterm.InputActive)
 		if p.vterm.OnInputStart != nil {
 			p.vterm.OnInputStart()
 		}
@@ -285,6 +287,7 @@ func (p *Parser) handleOSC133(payload string) {
 		p.vterm.PromptActive = false
 		p.vterm.InputActive = false
 		p.vterm.CommandActive = true
+		log.Printf("DEBUG: OSC 133;C received - InputActive set to false")
 		if p.vterm.OnCommandStart != nil {
 			p.vterm.OnCommandStart()
 		}

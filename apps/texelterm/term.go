@@ -394,6 +394,11 @@ func (a *TexelTerm) selectLineAtPositionLocked(line int) {
 		if startLine == a.vterm.InputStartLine {
 			startCol = a.vterm.InputStartCol
 		}
+		// DEBUG: Log the values
+		log.Printf("DEBUG: Triple-click: InputActive=%v, startLine=%d, InputStartLine=%d, InputStartCol=%d, startCol=%d",
+			a.vterm.InputActive, startLine, a.vterm.InputStartLine, a.vterm.InputStartCol, startCol)
+	} else {
+		log.Printf("DEBUG: Triple-click: InputActive=false, startLine=%d", startLine)
 	}
 
 	// Set selection range
