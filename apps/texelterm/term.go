@@ -446,7 +446,14 @@ func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifier
 	a.selection.currentLine = line
 	a.selection.currentCol = col
 	text := a.buildSelectionTextLocked()
-	a.selection = termSelection{}
+	// Preserve click history for multi-click detection
+	a.selection = termSelection{
+		active:        false,
+		lastClickTime: a.selection.lastClickTime,
+		lastClickLine: a.selection.lastClickLine,
+		lastClickCol:  a.selection.lastClickCol,
+		clickCount:    a.selection.clickCount,
+	}
 	a.vterm.MarkAllDirty()
 	a.requestRefresh()
 	if text == "" {
@@ -462,7 +469,14 @@ func (a *TexelTerm) SelectionCancel() {
 	if !a.selection.active {
 		return
 	}
-	a.selection = termSelection{}
+	// Preserve click history for multi-click detection
+	a.selection = termSelection{
+		active:        false,
+		lastClickTime: a.selection.lastClickTime,
+		lastClickLine: a.selection.lastClickLine,
+		lastClickCol:  a.selection.lastClickCol,
+		clickCount:    a.selection.clickCount,
+	}
 	if a.vterm != nil {
 		a.vterm.MarkAllDirty()
 	}
