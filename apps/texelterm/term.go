@@ -388,17 +388,42 @@ func (a *TexelTerm) selectLineAtPositionLocked(line int) {
 
 	// Determine start column - skip prompt if selecting the current input line
 	startCol := 0
+
+	// First try OSC 133 shell integration if available
 	if a.vterm.InputActive {
 		// InputStartLine is already a history line index (not screen-relative)
 		// If the logical line starts at the input start line, skip the prompt
 		if startLine == a.vterm.InputStartLine {
 			startCol = a.vterm.InputStartCol
 		}
-		// DEBUG: Log the values
 		log.Printf("DEBUG: Triple-click: InputActive=%v, startLine=%d, InputStartLine=%d, InputStartCol=%d, startCol=%d",
 			a.vterm.InputActive, startLine, a.vterm.InputStartLine, a.vterm.InputStartCol, startCol)
 	} else {
-		log.Printf("DEBUG: Triple-click: InputActive=false, startLine=%d", startLine)
+		// Fallback: detect common prompt patterns and skip them
+		startLineCells := a.vterm.HistoryLineCopy(startLine)
+		if startLineCells != nil && len(startLineCells) > 0 {
+			// Common prompt patterns: "$ ", "❯ ", "> ", "# ", etc.
+			promptPatterns := []string{"$ ", "❯ ", "> ", "# ", "% ", "➜ "}
+			for _, pattern := range promptPatterns {
+				if len(startLineCells) >= len(pattern) {
+					match := true
+					for i, ch := range pattern {
+						if startLineCells[i].Rune != ch {
+							match = false
+							break
+						}
+					}
+					if match {
+						startCol = len(pattern)
+						log.Printf("DEBUG: Triple-click: Detected prompt pattern %q, skipping to col %d", pattern, startCol)
+						break
+					}
+				}
+			}
+		}
+		if startCol == 0 {
+			log.Printf("DEBUG: Triple-click: InputActive=false, no prompt pattern detected, startLine=%d", startLine)
+		}
 	}
 
 	// Set selection range
