@@ -46,7 +46,7 @@ tidy: ## Sync go.mod with source imports
 
 server: ## Run texel-server harness
 	@mkdir -p $(CACHE_DIR)
-	$(GO_ENV) go run $(SERVER_PKG) --socket /tmp/texelation.sock
+	$(GO_ENV) go run $(SERVER_PKG) --socket /tmp/texelation.sock --verbose-logs
 
 client: ## Run remote texel client against socket
 	@mkdir -p $(CACHE_DIR)
