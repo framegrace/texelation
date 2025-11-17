@@ -1191,9 +1191,12 @@ func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
 		return
 	}
-	var savedLogicalY int
+	var linesFromEnd int
 	if !v.inAltScreen {
-		savedLogicalY = v.cursorY + v.getTopHistoryLine()
+		// Save cursor position as distance from end of history
+		// This way after reflow changes line count, we can restore relative position
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		linesFromEnd = v.historyLen - logicalY - 1
 	}
 
 	oldHeight := v.height
@@ -1217,7 +1220,12 @@ func (v *VTerm) Resize(width, height int) {
 		if v.reflowEnabled && oldWidth != width {
 			v.reflowHistoryBuffer(oldWidth, width)
 		}
-		physicalY := savedLogicalY - v.getTopHistoryLine()
+		// Restore cursor to same distance from end of history
+		newLogicalY := v.historyLen - linesFromEnd - 1
+		if newLogicalY < 0 {
+			newLogicalY = 0
+		}
+		physicalY := newLogicalY - v.getTopHistoryLine()
 		v.SetCursorPos(physicalY, v.cursorX) // Re-clamp cursor
 	}
 
