@@ -2,7 +2,18 @@
 
 This document tracks the design and implementation plan for TexelUI — a reusable, text‑only UI library intended to run inside TexelApps (and other tcell‑based apps). Keep this file up to date as work progresses.
 
-Last updated: 2025-11-08
+Last updated: 2025-11-18
+
+## Current Status & Next Steps
+
+**Architecture Review Completed (2025-11-18)**: Comprehensive evaluation documented in `TEXELUI_ARCHITECTURE_REVIEW.md`.
+
+**Key Findings:**
+- Core architecture is solid (widgets, focus, rendering)
+- Missing higher-level form-building primitives
+- Need common widgets, layout managers, and form helpers
+
+**Next Priority:** Implement Phase 1 widgets (Label, Button, Input, Checkbox) and basic layouts (VBox, HBox) to enable productive form development. See architecture review for detailed implementation plan and code examples.
 
 ## Goals
 - Provide a clean widget kernel that can be embedded in any TexelApp/pane.
