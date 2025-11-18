@@ -160,15 +160,5 @@ func defaultEffectBindings() []map[string]interface{} {
 				"speed_hz": 0.5,
 			},
 		},
-		{
-			"event":  "workspace.key",
-			"target": "workspace",
-			"effect": "flash",
-			"params": map[string]interface{}{
-				"color":       "#ffffff",
-				"duration_ms": 250,
-				"keys":        []string{"F"},
-			},
-		},
 	}
 }
