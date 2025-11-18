@@ -88,14 +88,13 @@ Effects are configured via JSON-like dictionaries:
 
 ```jsonc
 {
-  "event": "workspace.key",
-  "target": "workspace",
-  "effect": "flash",
+  "event": "pane.active",
+  "target": "pane",
+  "effect": "fadeTint",
   "params": {
-    "duration_ms": 100,
-    "color": "#FFFFFF",
-    "max_intensity": 0.75,
-    "keys": ["F"]
+    "duration_ms": 200,
+    "color": "#50fa7b",
+    "intensity": 0.15
   }
 }
 ```

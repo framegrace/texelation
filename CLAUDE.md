@@ -78,8 +78,7 @@ Visual overlays are defined entirely through `theme.json`:
 "effects": {
   "bindings": [
     {"event": "pane.active", "target": "pane", "effect": "fadeTint"},
-    {"event": "workspace.control", "target": "workspace", "effect": "rainbow"},
-    {"event": "workspace.key", "target": "workspace", "effect": "flash", "params": {"keys": ["F"]}}
+    {"event": "workspace.control", "target": "workspace", "effect": "rainbow"}
   ]
 }
 ```
@@ -87,7 +86,7 @@ Visual overlays are defined entirely through `theme.json`:
 Effect implementations register themselves at import time via `effects.Register(id, factory)`. Supported effects:
 - **fadeTint** – Fade tint overlay on pane state changes
 - **rainbow** – Rainbow animation across workspace
-- **flash** – Key-triggered flash effect with configurable keys
+- **flash** – Flash effect (used for visual bell in terminal)
 - **zoom** – Zoom animation (legacy, needs migration)
 
 ## Protocol Design
