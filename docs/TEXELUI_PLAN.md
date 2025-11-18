@@ -6,14 +6,24 @@ Last updated: 2025-11-18
 
 ## Current Status & Next Steps
 
-**Architecture Review Completed (2025-11-18)**: Comprehensive evaluation documented in `TEXELUI_ARCHITECTURE_REVIEW.md`.
+**Core Widgets Completed (2025-11-18)**: Priority 1 and 2 widgets from the architecture review have been implemented and tested.
 
-**Key Findings:**
-- Core architecture is solid (widgets, focus, rendering)
-- Missing higher-level form-building primitives
-- Need common widgets, layout managers, and form helpers
+**Completed:**
+- ✅ Label widget (static text with alignment)
+- ✅ Button widget (clickable, keyboard activatable)
+- ✅ Input widget (single-line text entry)
+- ✅ Checkbox widget (toggle state)
+- ✅ VBox layout manager (vertical stack with spacing)
+- ✅ HBox layout manager (horizontal row with spacing)
+- ✅ Comprehensive tests (11 test cases, all passing)
+- ✅ Demo application (`texelui/examples/widget_demo.go`)
 
-**Next Priority:** Implement Phase 1 widgets (Label, Button, Input, Checkbox) and basic layouts (VBox, HBox) to enable productive form development. See architecture review for detailed implementation plan and code examples.
+**Next Priority:**
+- RadioButton widget (mutually exclusive groups)
+- Grid layout manager
+- Form helper widget for automatic label/input pairing
+- Validation framework (Required, Email, MinLength, etc.)
+- Advanced container widgets (ScrollPane, Tabs, SplitPane)
 
 ## Goals
 - Provide a clean widget kernel that can be embedded in any TexelApp/pane.
@@ -107,6 +117,18 @@ Last updated: 2025-11-18
 - [x] Damage tracking improvements (rect merging; multi-clip redraw)
 - [x] Quickstart doc for demo and embedding
 - [x] Per-widget invalidation API (widgets can call injected invalidator)
+- [x] Label widget (left/center/right alignment)
+- [x] Button widget (click + keyboard activation)
+- [x] Input widget (single-line text entry with caret)
+- [x] Checkbox widget (toggle with callbacks)
+- [x] VBox layout manager (vertical stacking)
+- [x] HBox layout manager (horizontal arrangement)
+- [x] Widget tests (11 comprehensive test cases)
+- [x] Demo application (texelui/examples/widget_demo.go)
+- [ ] RadioButton widget (mutually exclusive groups)
+- [ ] Grid layout manager (rows × columns)
+- [ ] Form helper widget
+- [ ] Validation framework
 - [ ] Benchmarks for redraw cost (typing and selection)
 - [ ] Cursor blink timer and IME hooks
 
