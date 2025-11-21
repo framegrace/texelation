@@ -242,9 +242,11 @@ func (h *TestHarness) DumpWithHistory() string {
 	return sb.String()
 }
 
-// Clear clears the terminal (same as ESC[2J + ESC[H).
+// Clear clears the terminal by resetting it completely.
 func (h *TestHarness) Clear() {
-	h.SendSeq("\x1b[2J\x1b[H")
+	// For tests, we want a true reset of the terminal state
+	// Use RIS (Reset to Initial State) instead of just ED 2
+	h.Reset()
 }
 
 // Reset resets the terminal to initial state (ESC c).
@@ -258,6 +260,7 @@ func (h *TestHarness) FillWithPattern(pattern string) {
 	width, height := h.GetSize()
 	h.Clear()
 
+	// Fill each line completely - cursor will auto-wrap at width
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			idx := (y*width + x) % len(pattern)

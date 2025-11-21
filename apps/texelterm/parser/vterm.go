@@ -371,7 +371,9 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 	}
 }
 
-// ClearScreen clears the active buffer (main or alt).
+// ClearScreen clears the visible screen (ED 2).
+// Note: This does NOT move the cursor (per xterm spec for ED 2).
+// It erases the visible display but preserves scrollback history.
 func (v *VTerm) ClearScreen() {
 	v.MarkAllDirty()
 	if v.inAltScreen {
@@ -380,14 +382,21 @@ func (v *VTerm) ClearScreen() {
 				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 			}
 		}
-		v.SetCursorPos(0, 0)
+		// Cursor position unchanged
 	} else {
-		v.historyBuffer = make([][]Cell, v.maxHistorySize)
-		v.historyHead = 0
-		v.historyLen = 1
-		v.historyBuffer[0] = make([]Cell, 0, v.width)
-		v.viewOffset = 0
-		v.SetCursorPos(0, 0)
+		// For main screen, clear all visible lines
+		logicalTop := v.getTopHistoryLine()
+		blankLine := make([]Cell, v.width)
+		for x := 0; x < v.width; x++ {
+			blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		}
+		for y := 0; y < v.height; y++ {
+			logicalY := logicalTop + y
+			if logicalY < v.historyLen {
+				v.setHistoryLine(logicalY, append([]Cell(nil), blankLine...))
+			}
+		}
+		// Cursor position unchanged
 	}
 }
 
@@ -687,21 +696,25 @@ func (v *VTerm) ClearScreenMode(mode int) {
 	v.MarkAllDirty()
 	switch mode {
 	case 0: // Erase from cursor to end of screen
-		v.ClearLine(0)
+		v.ClearLine(0) // Clear from cursor to end of current line
 		if v.inAltScreen {
+			// Clear all lines below cursor
 			for y := v.cursorY + 1; y < v.height; y++ {
 				for x := 0; x < v.width; x++ {
 					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 				}
 			}
 		} else {
+			// For main screen, clear all lines below cursor by clearing them individually
 			logicalY := v.cursorY + v.getTopHistoryLine()
-			line := v.getHistoryLine(logicalY)
-			if v.cursorX < len(line) {
-				v.setHistoryLine(logicalY, line[:v.cursorX])
+			for y := logicalY + 1; y < v.historyLen && y < logicalY+v.height-v.cursorY; y++ {
+				// Clear each line below cursor within the visible screen
+				blankLine := make([]Cell, v.width)
+				for x := 0; x < v.width; x++ {
+					blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+				}
+				v.setHistoryLine(y, blankLine)
 			}
-			// Effectively truncates history from the line after the cursor
-			v.historyLen = logicalY + 1
 		}
 	case 1: // Erase from beginning of screen to cursor
 		v.ClearLine(1)
