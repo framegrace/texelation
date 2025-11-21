@@ -8,7 +8,6 @@ import (
 
 // Checkbox is a toggleable widget that displays a checked or unchecked state.
 // Format: [X] Label or [ ] Label
-// When focused, shows a cursor: > [X] Label
 type Checkbox struct {
 	core.BaseWidget
 	Label    string
@@ -31,15 +30,13 @@ func NewCheckbox(x, y int, label string) *Checkbox {
 	bg := tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
 	c.Style = tcell.StyleDefault.Foreground(fg).Background(bg)
 
-	// Configure focused style
-	focusFg := tm.GetColor("ui", "focus_text_fg", tcell.ColorSilver)
-	focusBg := tm.GetColor("ui", "focus_surface_bg", bg)
-	c.SetFocusedStyle(tcell.StyleDefault.Foreground(focusFg).Background(focusBg), true)
+	// Configure focused style - reverse colors for clear visibility
+	c.SetFocusedStyle(tcell.StyleDefault.Foreground(bg).Background(fg), true)
 
 	c.SetPosition(x, y)
 
-	// Width: "> [X] " + label = 6 + len(label) (includes cursor when focused)
-	w := 6 + len(label)
+	// Width: "[X] " + label = 4 + len(label)
+	w := 4 + len(label)
 	c.Resize(w, 1)
 
 	// Checkboxes are focusable by default
@@ -55,14 +52,6 @@ func (c *Checkbox) Draw(painter *core.Painter) {
 	// Fill background
 	painter.Fill(core.Rect{X: c.Rect.X, Y: c.Rect.Y, W: c.Rect.W, H: 1}, ' ', style)
 
-	// Add cursor indicator when focused
-	var cursor string
-	if c.IsFocused() {
-		cursor = "> "
-	} else {
-		cursor = "  "
-	}
-
 	// Determine checkbox character
 	var checkChar string
 	if c.Checked {
@@ -71,8 +60,8 @@ func (c *Checkbox) Draw(painter *core.Painter) {
 		checkChar = "[ ] "
 	}
 
-	// Draw cursor, checkbox indicator, and label
-	displayText := cursor + checkChar + c.Label
+	// Draw checkbox indicator and label
+	displayText := checkChar + c.Label
 	painter.DrawText(c.Rect.X, c.Rect.Y, displayText, style)
 }
 
