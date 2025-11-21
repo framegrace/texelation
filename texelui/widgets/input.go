@@ -24,6 +24,9 @@ type Input struct {
 	// Mouse state
 	mouseDown bool
 
+	// Insert vs replace mode: false=insert (default), true=replace (overwrite)
+	replaceMode bool
+
 	// Invalidation callback
 	inv func(core.Rect)
 }
@@ -92,8 +95,25 @@ func (i *Input) Draw(painter *core.Painter) {
 	if i.IsFocused() {
 		caretX := i.Rect.X + i.CaretPos - i.OffX
 		if caretX >= i.Rect.X && caretX < i.Rect.X+i.Rect.W {
-			// Draw caret as an underscore or block
-			painter.DrawText(caretX, i.Rect.Y, "_", i.CaretStyle)
+			// Determine what character is under the caret
+			ch := ' '
+			if i.CaretPos >= 0 && i.CaretPos < len(runes) {
+				ch = runes[i.CaretPos]
+			}
+
+			// Determine caret style based on mode
+			fg, bg, _ := style.Decompose()
+			var caretStyle tcell.Style
+			if i.replaceMode {
+				// Underline caret in replace mode
+				caretStyle = tcell.StyleDefault.Background(bg).Foreground(fg).Underline(true)
+			} else {
+				// Reverse video caret in insert mode
+				caretStyle = tcell.StyleDefault.Background(fg).Foreground(bg)
+			}
+
+			// Draw the character with caret styling
+			painter.SetCell(caretX, i.Rect.Y, ch, caretStyle)
 		}
 	}
 }
@@ -160,12 +180,26 @@ func (i *Input) HandleKey(ev *tcell.EventKey) bool {
 		}
 		return true
 
+	case tcell.KeyInsert:
+		// Toggle insert/replace mode
+		i.replaceMode = !i.replaceMode
+		i.invalidate()
+		return true
+
 	case tcell.KeyRune:
-		// Insert character at caret position
+		// Insert or replace character at caret position
 		r := ev.Rune()
-		runes = append(runes[:i.CaretPos], append([]rune{r}, runes[i.CaretPos:]...)...)
-		i.CaretPos++
-		i.Text = string(runes)
+		if i.replaceMode && i.CaretPos < textLen {
+			// Overwrite current character
+			runes[i.CaretPos] = r
+			i.CaretPos++
+			i.Text = string(runes)
+		} else {
+			// Insert mode (default)
+			runes = append(runes[:i.CaretPos], append([]rune{r}, runes[i.CaretPos:]...)...)
+			i.CaretPos++
+			i.Text = string(runes)
+		}
 		i.onChange()
 		i.invalidate()
 		return true

@@ -248,3 +248,59 @@ func TestCheckboxDraw(t *testing.T) {
 		t.Error("expected checked checkbox to write cells")
 	}
 }
+
+func TestInputInsertReplaceMode(t *testing.T) {
+	input := NewInput(0, 0, 20)
+	input.Text = "Hello"
+	input.CaretPos = 1
+
+	// Start in insert mode (default)
+	if input.replaceMode {
+		t.Error("expected insert mode by default")
+	}
+
+	// Type in insert mode - should insert
+	ev := tcell.NewEventKey(tcell.KeyRune, 'X', tcell.ModNone)
+	input.HandleKey(ev)
+
+	if input.Text != "HXello" {
+		t.Errorf("expected 'HXello' after insert, got '%s'", input.Text)
+	}
+	if input.CaretPos != 2 {
+		t.Errorf("expected caret at 2, got %d", input.CaretPos)
+	}
+
+	// Toggle to replace mode
+	evInsert := tcell.NewEventKey(tcell.KeyInsert, 0, tcell.ModNone)
+	input.HandleKey(evInsert)
+
+	if !input.replaceMode {
+		t.Error("expected replace mode after Insert key")
+	}
+
+	// Type in replace mode - should overwrite
+	ev = tcell.NewEventKey(tcell.KeyRune, 'Y', tcell.ModNone)
+	input.HandleKey(ev)
+
+	if input.Text != "HXYllo" {
+		t.Errorf("expected 'HXYllo' after replace, got '%s'", input.Text)
+	}
+	if input.CaretPos != 3 {
+		t.Errorf("expected caret at 3, got %d", input.CaretPos)
+	}
+
+	// Toggle back to insert mode
+	input.HandleKey(evInsert)
+
+	if input.replaceMode {
+		t.Error("expected insert mode after second Insert key")
+	}
+
+	// Type in insert mode again
+	ev = tcell.NewEventKey(tcell.KeyRune, 'Z', tcell.ModNone)
+	input.HandleKey(ev)
+
+	if input.Text != "HXYZllo" {
+		t.Errorf("expected 'HXYZllo' after insert, got '%s'", input.Text)
+	}
+}
