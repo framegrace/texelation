@@ -371,10 +371,30 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 	}
 }
 
-// ClearScreen clears the visible screen (ED 2).
-// Note: This does NOT move the cursor (per xterm spec for ED 2).
-// It erases the visible display but preserves scrollback history.
+// ClearScreen fully resets the terminal buffer (used for RIS/Reset).
+// This is the full reset version - it resets history and moves cursor to home.
 func (v *VTerm) ClearScreen() {
+	v.MarkAllDirty()
+	if v.inAltScreen {
+		for y := range v.altBuffer {
+			for x := range v.altBuffer[y] {
+				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			}
+		}
+		v.SetCursorPos(0, 0)
+	} else {
+		v.historyBuffer = make([][]Cell, v.maxHistorySize)
+		v.historyHead = 0
+		v.historyLen = 1
+		v.historyBuffer[0] = make([]Cell, 0, v.width)
+		v.viewOffset = 0
+		v.SetCursorPos(0, 0)
+	}
+}
+
+// ClearVisibleScreen clears just the visible display (ED 2).
+// Preserves scrollback history and cursor position.
+func (v *VTerm) ClearVisibleScreen() {
 	v.MarkAllDirty()
 	if v.inAltScreen {
 		for y := range v.altBuffer {
@@ -730,7 +750,9 @@ func (v *VTerm) ClearScreenMode(mode int) {
 				v.setHistoryLine(i, make([]Cell, 0, v.width))
 			}
 		}
-	case 2, 3: // Erase entire screen (+ scrollback for 3)
+	case 2: // Erase entire visible screen (ED 2)
+		v.ClearVisibleScreen()
+	case 3: // Erase screen and scrollback (ED 3)
 		v.ClearScreen()
 	}
 }
