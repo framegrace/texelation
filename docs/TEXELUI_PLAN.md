@@ -2,21 +2,27 @@
 
 This document tracks the design and implementation plan for TexelUI — a reusable, text‑only UI library intended to run inside TexelApps (and other tcell‑based apps). Keep this file up to date as work progresses.
 
-Last updated: 2025-11-18
+Last updated: 2025-11-18 (evening session)
 
 ## Current Status & Next Steps
 
-**Core Widgets Completed (2025-11-18)**: Priority 1 and 2 widgets from the architecture review have been implemented and tested.
+**Core Widgets Completed (2025-11-18)**: Priority 1 and 2 widgets from the architecture review have been implemented, tested, and polished.
 
 **Completed:**
 - ✅ Label widget (static text with alignment)
 - ✅ Button widget (clickable, keyboard activatable)
-- ✅ Input widget (single-line text entry)
-- ✅ Checkbox widget (toggle state)
+- ✅ Input widget (single-line text entry with proper cursor)
+  - ✅ Insert/replace mode support (Insert key toggles)
+  - ✅ Cursor shows character underneath (reverse video or underline)
+- ✅ Checkbox widget (toggle state with reverse video focus)
 - ✅ VBox layout manager (vertical stack with spacing)
 - ✅ HBox layout manager (horizontal row with spacing)
-- ✅ Comprehensive tests (11 test cases, all passing)
+- ✅ Comprehensive tests (12 test cases, all passing)
 - ✅ Demo application (`texelui/examples/widget_demo.go`)
+
+**Ready for Production:**
+The core widget set is now stable and ready for use in forms and applications.
+All widgets have consistent focus behavior (reverse video) and proper keyboard/mouse support.
 
 **Next Priority:**
 - RadioButton widget (mutually exclusive groups)
@@ -120,10 +126,14 @@ Last updated: 2025-11-18
 - [x] Label widget (left/center/right alignment)
 - [x] Button widget (click + keyboard activation)
 - [x] Input widget (single-line text entry with caret)
+  - [x] Insert/replace mode (Insert key toggles)
+  - [x] Proper cursor rendering (shows character, doesn't erase)
+  - [x] Cursor styles: reverse video (insert), underline (replace)
 - [x] Checkbox widget (toggle with callbacks)
+  - [x] Reverse video focus indicator
 - [x] VBox layout manager (vertical stacking)
 - [x] HBox layout manager (horizontal arrangement)
-- [x] Widget tests (11 comprehensive test cases)
+- [x] Widget tests (12 comprehensive test cases)
 - [x] Demo application (texelui/examples/widget_demo.go)
 - [ ] RadioButton widget (mutually exclusive groups)
 - [ ] Grid layout manager (rows × columns)
