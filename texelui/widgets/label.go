@@ -1,0 +1,88 @@
+package widgets
+
+import (
+	"github.com/gdamore/tcell/v2"
+	"texelation/texel/theme"
+	"texelation/texelui/core"
+)
+
+// Alignment specifies how text is aligned within a widget.
+type Alignment int
+
+const (
+	AlignLeft Alignment = iota
+	AlignCenter
+	AlignRight
+)
+
+// Label displays static text with configurable alignment.
+// It's a non-interactive widget by default (not focusable).
+type Label struct {
+	core.BaseWidget
+	Text  string
+	Style tcell.Style
+	Align Alignment
+}
+
+// NewLabel creates a label at the specified position and size.
+// If w or h are 0, the label will size to fit the text.
+func NewLabel(x, y, w, h int, text string) *Label {
+	l := &Label{
+		Text:  text,
+		Align: AlignLeft,
+	}
+
+	// Get default style from theme
+	tm := theme.Get()
+	fg := tm.GetColor("ui", "text_fg", tcell.ColorWhite)
+	bg := tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
+	l.Style = tcell.StyleDefault.Foreground(fg).Background(bg)
+
+	l.SetPosition(x, y)
+
+	// Auto-size if dimensions are 0
+	if w == 0 {
+		w = len(text)
+	}
+	if h == 0 {
+		h = 1
+	}
+	l.Resize(w, h)
+
+	// Labels are not focusable by default
+	l.SetFocusable(false)
+
+	return l
+}
+
+// Draw renders the label text with the configured alignment.
+func (l *Label) Draw(painter *core.Painter) {
+	style := l.EffectiveStyle(l.Style)
+
+	// Fill background
+	painter.Fill(core.Rect{X: l.Rect.X, Y: l.Rect.Y, W: l.Rect.W, H: l.Rect.H}, ' ', style)
+
+	if l.Text == "" {
+		return
+	}
+
+	// Calculate text position based on alignment
+	textLen := len(l.Text)
+	if textLen > l.Rect.W {
+		textLen = l.Rect.W
+	}
+
+	var startX int
+	switch l.Align {
+	case AlignLeft:
+		startX = l.Rect.X
+	case AlignCenter:
+		startX = l.Rect.X + (l.Rect.W-textLen)/2
+	case AlignRight:
+		startX = l.Rect.X + l.Rect.W - textLen
+	}
+
+	// Render text (center vertically if height > 1)
+	y := l.Rect.Y + l.Rect.H/2
+	painter.DrawText(startX, y, l.Text, style)
+}
