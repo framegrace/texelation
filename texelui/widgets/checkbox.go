@@ -8,6 +8,7 @@ import (
 
 // Checkbox is a toggleable widget that displays a checked or unchecked state.
 // Format: [X] Label or [ ] Label
+// When focused, shows a cursor: > [X] Label
 type Checkbox struct {
 	core.BaseWidget
 	Label    string
@@ -37,8 +38,8 @@ func NewCheckbox(x, y int, label string) *Checkbox {
 
 	c.SetPosition(x, y)
 
-	// Width: "[X] " + label = 4 + len(label)
-	w := 4 + len(label)
+	// Width: "> [X] " + label = 6 + len(label) (includes cursor when focused)
+	w := 6 + len(label)
 	c.Resize(w, 1)
 
 	// Checkboxes are focusable by default
@@ -54,6 +55,14 @@ func (c *Checkbox) Draw(painter *core.Painter) {
 	// Fill background
 	painter.Fill(core.Rect{X: c.Rect.X, Y: c.Rect.Y, W: c.Rect.W, H: 1}, ' ', style)
 
+	// Add cursor indicator when focused
+	var cursor string
+	if c.IsFocused() {
+		cursor = "> "
+	} else {
+		cursor = "  "
+	}
+
 	// Determine checkbox character
 	var checkChar string
 	if c.Checked {
@@ -62,8 +71,8 @@ func (c *Checkbox) Draw(painter *core.Painter) {
 		checkChar = "[ ] "
 	}
 
-	// Draw checkbox indicator and label
-	displayText := checkChar + c.Label
+	// Draw cursor, checkbox indicator, and label
+	displayText := cursor + checkChar + c.Label
 	painter.DrawText(c.Rect.X, c.Rect.Y, displayText, style)
 }
 
