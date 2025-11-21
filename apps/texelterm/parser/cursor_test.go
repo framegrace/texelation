@@ -422,3 +422,24 @@ func TestCursorAtEdges(t *testing.T) {
 	h.SendSeq("\x1b[D")  // Left (should stay)
 	h.AssertCursor(t, 0, 23)
 }
+
+// TestStringTerminator tests ESC \ (ST - String Terminator)
+// XTerm spec: ESC \ terminates OSC, DCS, and other string sequences
+func TestStringTerminator(t *testing.T) {
+	h := NewTestHarness(80, 24)
+
+	// Test OSC terminated with ST instead of BEL
+	// OSC 0 sets window title
+	h.SendSeq("\x1b]0;Test Title\x1b\\")
+
+	// Verify we're back in ground state by sending cursor movement
+	h.SendSeq("\x1b[5;10H")
+	h.AssertCursor(t, 9, 4)
+
+	// Test another OSC with ST terminator
+	h.SendSeq("\x1b]0;Another Title\x1b\\")
+
+	// Move cursor again to verify state
+	h.SendSeq("\x1b[10;20H")
+	h.AssertCursor(t, 19, 9)
+}

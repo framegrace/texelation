@@ -91,6 +91,11 @@ func (p *Parser) Parse(r rune) {
 		case 'P':
 			p.state = StateDCS
 			p.dcsBuffer = p.dcsBuffer[:0]
+		case '\\':
+			// ST (String Terminator) - ESC \
+			// This completes string sequences that were terminated with ESC \
+			// (The actual string handling already occurred when we saw the ESC)
+			p.state = StateGround
 		case 'c':
 			p.vterm.Reset()
 			p.state = StateGround
