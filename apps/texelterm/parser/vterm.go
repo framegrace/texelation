@@ -194,10 +194,8 @@ func (v *VTerm) SetCursorPos(y, x int) {
 	if x < 0 {
 		x = 0
 	}
-	if v.inAltScreen {
-		if x >= v.width {
-			x = v.width - 1
-		}
+	if x >= v.width {
+		x = v.width - 1
 	}
 	if y < 0 {
 		y = 0
@@ -586,7 +584,7 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 	}
 
 	switch command {
-	case 'A', 'B', 'C', 'D', 'G', 'H', 'f', 'd':
+	case 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'f', 'd':
 		v.handleCursorMovement(command, params)
 	case 'J', 'K', 'P', 'X':
 		v.handleErase(command, params)
@@ -645,6 +643,14 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 		v.MoveCursorForward(param(0, 1))
 	case 'D':
 		v.MoveCursorBackward(param(0, 1))
+	case 'E':
+		// CNL - Cursor Next Line: move down N lines and to column 0
+		v.MoveCursorDown(param(0, 1))
+		v.SetCursorPos(v.cursorY, 0)
+	case 'F':
+		// CPL - Cursor Previous Line: move up N lines and to column 0
+		v.MoveCursorUp(param(0, 1))
+		v.SetCursorPos(v.cursorY, 0)
 	case 'G':
 		col := param(0, 1) - 1
 		v.SetCursorPos(v.cursorY, col)
