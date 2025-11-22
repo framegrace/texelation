@@ -727,13 +727,18 @@ func (v *VTerm) ClearScreenMode(mode int) {
 		} else {
 			// For main screen, clear all lines below cursor by clearing them individually
 			logicalY := v.cursorY + v.getTopHistoryLine()
-			for y := logicalY + 1; y < v.historyLen && y < logicalY+v.height-v.cursorY; y++ {
-				// Clear each line below cursor within the visible screen
-				blankLine := make([]Cell, v.width)
-				for x := 0; x < v.width; x++ {
-					blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-				}
-				v.setHistoryLine(y, blankLine)
+			endY := v.getTopHistoryLine() + v.height
+			blankLine := make([]Cell, v.width)
+			for x := 0; x < v.width; x++ {
+				blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			}
+			// Ensure all lines exist in history up to end of viewport
+			for v.historyLen < endY {
+				v.appendHistoryLine(make([]Cell, 0, v.width))
+			}
+			// Now clear lines below cursor
+			for y := logicalY + 1; y < endY; y++ {
+				v.setHistoryLine(y, append([]Cell(nil), blankLine...))
 			}
 		}
 	case 1: // Erase from beginning of screen to cursor
@@ -746,8 +751,12 @@ func (v *VTerm) ClearScreenMode(mode int) {
 			}
 		} else {
 			logicalY := v.cursorY + v.getTopHistoryLine()
+			blankLine := make([]Cell, v.width)
+			for x := 0; x < v.width; x++ {
+				blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			}
 			for i := v.getTopHistoryLine(); i < logicalY; i++ {
-				v.setHistoryLine(i, make([]Cell, 0, v.width))
+				v.setHistoryLine(i, append([]Cell(nil), blankLine...))
 			}
 		}
 	case 2: // Erase entire visible screen (ED 2)
