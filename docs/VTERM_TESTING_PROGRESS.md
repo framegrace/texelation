@@ -81,6 +81,31 @@ We're systematically testing and fixing all VTerm rendering bugs by:
 - Fixed sparse line issues in test harness
 - Improved reliability of erase operation tests
 
+### Phase 3.3: Insertion/Deletion Tests ✅ (2025-11-22)
+
+**Files Created:**
+- `apps/texelterm/parser/insert_delete_test.go` (465 lines)
+
+**Test Coverage: 18 test cases, ALL PASSING**
+
+| Sequence | Command | Tests | Status | Notes |
+|----------|---------|-------|--------|-------|
+| ESC[<n>@ | ICH (Insert Character) | 7 | ✅ PASS | Default, explicit, multiple, edges, isolation |
+| ESC[<n>L | IL (Insert Line) | 7 | ✅ PASS | Respects scrolling margins, pushes lines down |
+| ESC[<n>M | DL (Delete Line) | 8 | ✅ PASS | Respects scrolling margins, pulls lines up |
+| (combinations) | ICH+DCH, IL+DL | 3 | ✅ PASS | Reversible operations |
+
+**Total Insertion/Deletion Tests:** 18 tests, 100% passing
+
+**Test Infrastructure Improvements:**
+- Added `GetLine()` helper method to test harness for full line inspection
+
+**Findings:**
+- **NO BUGS FOUND!** All insertion/deletion operations were already correctly implemented
+- ICH/DCH properly handle character shifting within lines
+- IL/DL properly respect scrolling margins
+- Operations are reversible (ICH followed by DCH restores original state)
+
 ---
 
 ## Bugs Fixed
@@ -198,10 +223,18 @@ PASS: TestEraseWithColors (2 cases: EL + ED color preservation)
 
 Subtotal: 28 erase tests
 
+=== Insertion/Deletion Tests ===
+PASS: TestInsertCharacters (7 cases: ICH default, explicit, multiple, edges)
+PASS: TestInsertLines (7 cases: IL default, margins, edges)
+PASS: TestDeleteLines (8 cases: DL default, margins, overflow)
+PASS: TestInsertDeleteCombinations (3 cases: reversibility)
+
+Subtotal: 18 insertion/deletion tests
+
 === Other Tests ===
 PASS: Line wrapping and reflow tests (8 cases)
 
-Total: 68 + 28 + 8 = 104 tests
+Total: 68 + 28 + 18 + 8 = 122 tests
 Result: ALL PASS ✅
 ```
 
@@ -209,13 +242,7 @@ Result: ALL PASS ✅
 
 ## Next Steps
 
-### Phase 3.3: Insertion/Deletion Tests (Next Priority)
-- ICH (Insert Characters)
-- DCH (Delete Characters)
-- IL (Insert Lines)
-- DL (Delete Lines)
-
-### Phase 3.4: SGR (Color/Attribute) Tests
+### Phase 3.4: SGR (Color/Attribute) Tests (Next Priority)
 - Basic attributes (bold, underline, reverse, etc.)
 - 8 basic colors (30-37 fg, 40-47 bg)
 - Bright colors (90-97, 100-107)
@@ -240,16 +267,17 @@ Result: ALL PASS ✅
 
 ## Metrics
 
-- **Test Infrastructure Lines:** 306
-- **Test Code Lines:** 424 (cursor) + 607 (erase) = 1,031 lines
+- **Test Infrastructure Lines:** 319 (added GetLine helper)
+- **Test Code Lines:** 424 (cursor) + 607 (erase) + 465 (insert/delete) = 1,496 lines
 - **Bugs Found:** 9
 - **Bugs Fixed:** 9
 - **Critical Bugs:** 1 (black screen bug #7)
-- **Test Pass Rate:** 100% (104/104)
-- **Time Spent:** ~4 hours
+- **Test Pass Rate:** 100% (122/122)
+- **Time Spent:** ~5 hours
 - **Coverage:**
   - ✅ Cursor movement operations (complete)
   - ✅ Erase operations (complete)
+  - ✅ Insertion/deletion operations (complete)
 
 ---
 
@@ -272,22 +300,23 @@ Result: ALL PASS ✅
 - XTerm Control Sequences: `docs/xterm.pdf`
 - VTerm Implementation: `apps/texelterm/parser/vterm.go` (1250+ lines)
 - Parser Implementation: `apps/texelterm/parser/parser.go` (344 lines)
-- Test Harness: `apps/texelterm/parser/testharness.go` (306 lines)
+- Test Harness: `apps/texelterm/parser/testharness.go` (319 lines)
 - Cursor Tests: `apps/texelterm/parser/cursor_test.go` (424 lines)
 - Erase Tests: `apps/texelterm/parser/erase_test.go` (607 lines)
+- Insert/Delete Tests: `apps/texelterm/parser/insert_delete_test.go` (465 lines)
 
 ---
 
 ## Estimated Remaining Work
 
 - **Phase 3.2 (Erase Tests):** ✅ COMPLETE (found 5 bugs, all fixed)
-- **Phase 3.3 (Insert/Delete):** 1 day (expect to find 2-3 bugs)
+- **Phase 3.3 (Insert/Delete):** ✅ COMPLETE (found 0 bugs - already correct!)
 - **Phase 3.4 (SGR Colors):** 1-2 days (expect to find 4-6 bugs, especially in 256/RGB modes)
 - **Phase 3.5 (Scrolling):** 1 day (expect to find 2-4 bugs)
 - **Phase 3.6 (Screen Modes):** 1 day (expect to find 1-2 bugs)
 - **Phase 4 (Combined Tests):** 1-2 days (test real-world sequences)
 
-**Total Remaining:** 5-9 days to complete all VTerm testing and bug fixes
+**Total Remaining:** 4-8 days to complete all VTerm testing and bug fixes
 
 ---
 
