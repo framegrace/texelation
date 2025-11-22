@@ -792,7 +792,11 @@ func (v *VTerm) ClearLine(mode int) {
 			line[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
 	}
-	if !v.inAltScreen {
+
+	// Write the modified line back to the appropriate buffer
+	if v.inAltScreen {
+		v.altBuffer[v.cursorY] = line
+	} else {
 		v.setHistoryLine(v.cursorY+v.getTopHistoryLine(), line)
 	}
 }
@@ -812,7 +816,11 @@ func (v *VTerm) EraseCharacters(n int) {
 			line[v.cursorX+i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
 	}
-	if !v.inAltScreen {
+
+	// Write the modified line back to the appropriate buffer
+	if v.inAltScreen {
+		v.altBuffer[v.cursorY] = line
+	} else {
 		v.setHistoryLine(logicalY, line)
 	}
 }

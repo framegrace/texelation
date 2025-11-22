@@ -348,6 +348,57 @@ func (h *TestHarness) GetCell(x, y int) Cell {
 
 **Tests Added:** 8 new tests in `altscreen_column_test.go` and `simple_altscreen_test.go`
 
+### Bug #12: Alternate Screen ClearLine/EraseCharacters Not Writing Back (CRITICAL - User-Reported Codex Bug)
+**Files:** `apps/texelterm/parser/vterm.go:773-806, 809-825`
+**User Report:** "Codex app shows blue prompt characters (❯ and >) stuck in column 0 that don't get erased when the app redraws"
+**Issue:** ClearLine and EraseCharacters read a line from altBuffer, modified it, but never wrote it back. This is a subtle Go slice bug: when `append()` causes the slice to grow beyond capacity, Go allocates a new underlying array, so modifications happen to a copy, not the original buffer.
+**Impact:** ANY alternate screen app (codex, vim, less) that used EL (Erase Line) or ECH (Erase Characters) would fail to actually erase content. Neovim worked because it likely uses different erase sequences or redraws more aggressively.
+**Root Cause:**
+```go
+line = v.altBuffer[v.cursorY]  // Get slice reference
+for len(line) < v.width {
+    line = append(line, Cell{})  // May allocate NEW array!
+}
+// Clear cells in 'line'...
+// ❌ But never write 'line' back to v.altBuffer[v.cursorY]!
+```
+
+**Fix:** Write the modified line back to altBuffer after modifications.
+
+**Before:**
+```go
+func (v *VTerm) ClearLine(mode int) {
+    if v.inAltScreen {
+        line = v.altBuffer[v.cursorY]
+    }
+    // ... clear cells in line ...
+    if !v.inAltScreen {
+        v.setHistoryLine(...)  // ❌ Only writes back for main screen
+    }
+}
+```
+
+**After:**
+```go
+func (v *VTerm) ClearLine(mode int) {
+    if v.inAltScreen {
+        line = v.altBuffer[v.cursorY]
+    }
+    // ... clear cells in line ...
+    if v.inAltScreen {
+        v.altBuffer[v.cursorY] = line  // ✅ Write back to alt buffer
+    } else {
+        v.setHistoryLine(...)
+    }
+}
+```
+
+**Functions Fixed:**
+- `ClearLine()` - ESC[K sequences
+- `EraseCharacters()` - ESC[X sequences
+
+**Tests Added:** 3 new tests in `codex_bug_test.go` specifically reproducing codex behavior
+
 ---
 
 ## Test Results
@@ -408,13 +459,14 @@ Subtotal: 8 wrap/newline tests
 PASS: TestSimpleAltScreen (3 cases: basic writes, positioning, clear)
 PASS: TestAltScreenColumnZero (3 cases: erase/rewrite, CR+EL, EL from cursor)
 PASS: TestColumnZeroOverwrite (5 cases: CR overwrite, CHA positioning)
+PASS: TestCodexColumnZereBug (3 cases: codex menu rendering, EL 0, direct write)
 
-Subtotal: 11 alt screen tests
+Subtotal: 14 alt screen tests
 
 === Other Tests ===
 PASS: Line wrapping and reflow tests (8 cases)
 
-Total: 68 + 28 + 18 + 62 + 8 + 11 + 8 = 203 tests
+Total: 68 + 28 + 18 + 62 + 8 + 14 + 8 = 206 tests
 Result: ALL PASS ✅
 ```
 
@@ -439,14 +491,14 @@ Result: ALL PASS ✅
 ## Metrics
 
 - **Test Infrastructure Lines:** 372 (added GetLine helper, fixed alt screen support)
-- **Test Code Lines:** 424 (cursor) + 607 (erase) + 465 (insert/delete) + 822 (SGR) + 205 (wrap/newline) + 85 (alt screen) + 76 (simple alt) + 105 (column zero) = 2,789 lines
-- **Bugs Found:** 11
-- **Bugs Fixed:** 11
-- **Critical Bugs:** 2 (black screen bug #7, extra blank line bug #10)
-- **User-Reported Bugs:** 2 (bug #10 - power prompts broken, bug #11 - codex column 0 rendering)
+- **Test Code Lines:** 424 (cursor) + 607 (erase) + 465 (insert/delete) + 822 (SGR) + 205 (wrap/newline) + 85 (alt screen) + 76 (simple alt) + 105 (column zero) + 97 (codex bug) = 2,886 lines
+- **Bugs Found:** 12
+- **Bugs Fixed:** 12
+- **Critical Bugs:** 3 (black screen #7, extra blank line #10, alt screen erase #12)
+- **User-Reported Bugs:** 3 (bug #10 - power prompts, bug #11 - test harness, bug #12 - codex column 0)
 - **Test Infrastructure Bugs:** 1 (bug #11 - test harness reading wrong buffer)
-- **Test Pass Rate:** 100% (203/203)
-- **Time Spent:** ~8 hours
+- **Test Pass Rate:** 100% (206/206)
+- **Time Spent:** ~9 hours
 - **Coverage:**
   - ✅ Cursor movement operations (complete)
   - ✅ Erase operations (complete)
