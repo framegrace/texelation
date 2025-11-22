@@ -63,6 +63,19 @@ func (h *TestHarness) GetCell(x, y int) Cell {
 	return line[x]
 }
 
+// GetLine returns the entire line at the specified Y position.
+// Position is relative to current viewport (0-based).
+func (h *TestHarness) GetLine(y int) []Cell {
+	topLine := h.vterm.getTopHistoryLine()
+	historyLine := topLine + y
+
+	if historyLine < 0 || historyLine >= h.vterm.HistoryLength() {
+		return []Cell{} // out of bounds
+	}
+
+	return h.vterm.HistoryLineCopy(historyLine)
+}
+
 // GetCursor returns the current cursor position (0-based).
 func (h *TestHarness) GetCursor() (x, y int) {
 	return h.vterm.GetCursorX(), h.vterm.GetCursorY()
