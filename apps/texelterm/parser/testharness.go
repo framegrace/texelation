@@ -48,6 +48,20 @@ func (h *TestHarness) SendText(text string) {
 // GetCell returns the cell at the specified position.
 // Position is relative to current viewport (0-based).
 func (h *TestHarness) GetCell(x, y int) Cell {
+	// Check if we're in alternate screen mode
+	if h.vterm.inAltScreen {
+		// Read from alternate buffer
+		if y < 0 || y >= len(h.vterm.altBuffer) {
+			return Cell{} // out of bounds
+		}
+		line := h.vterm.altBuffer[y]
+		if x < 0 || x >= len(line) {
+			return Cell{} // out of bounds
+		}
+		return line[x]
+	}
+
+	// Read from main screen (history buffer)
 	topLine := h.vterm.getTopHistoryLine()
 	historyLine := topLine + y
 
@@ -66,6 +80,18 @@ func (h *TestHarness) GetCell(x, y int) Cell {
 // GetLine returns the entire line at the specified Y position.
 // Position is relative to current viewport (0-based).
 func (h *TestHarness) GetLine(y int) []Cell {
+	// Check if we're in alternate screen mode
+	if h.vterm.inAltScreen {
+		if y < 0 || y >= len(h.vterm.altBuffer) {
+			return []Cell{} // out of bounds
+		}
+		// Return a copy to prevent external modification
+		line := make([]Cell, len(h.vterm.altBuffer[y]))
+		copy(line, h.vterm.altBuffer[y])
+		return line
+	}
+
+	// Read from main screen (history buffer)
 	topLine := h.vterm.getTopHistoryLine()
 	historyLine := topLine + y
 

@@ -317,6 +317,37 @@ case '\n':
     p.vterm.LineFeed()
 ```
 
+### Bug #11: Test Harness GetCell/GetLine Reading Wrong Buffer (User-Reported Bug Root Cause)
+**Files:** `apps/texelterm/parser/testharness.go:50-78, 82-103`
+**Issue:** GetCell and GetLine always read from history buffer (main screen), even when VTerm is in alternate screen mode. This caused all alternate screen rendering tests to fail and was the ROOT CAUSE of the codex column 0 bug reported by the user.
+**Impact:** Apps using alternate screen buffer (like codex, vim, less) would appear to have column 0 rendering issues when tested, but the actual VTerm code was working correctly. This was a test infrastructure bug that masked the real behavior.
+**Discovery:** While investigating user's codex column 0 bug, created tests that revealed test harness was reading from wrong buffer.
+**Fix:** Updated both GetCell and GetLine to check `h.vterm.inAltScreen` and read from `h.vterm.altBuffer` when in alternate screen mode.
+
+**Before:**
+```go
+func (h *TestHarness) GetCell(x, y int) Cell {
+    topLine := h.vterm.getTopHistoryLine()
+    historyLine := topLine + y
+    // ... always reads from history buffer
+}
+```
+
+**After:**
+```go
+func (h *TestHarness) GetCell(x, y int) Cell {
+    if h.vterm.inAltScreen {
+        // Read from alternate buffer
+        return h.vterm.altBuffer[y][x]
+    }
+    // Read from main screen (history buffer)
+    topLine := h.vterm.getTopHistoryLine()
+    // ...
+}
+```
+
+**Tests Added:** 8 new tests in `altscreen_column_test.go` and `simple_altscreen_test.go`
+
 ---
 
 ## Test Results
@@ -373,10 +404,17 @@ PASS: TestWrapNextWithCarriageReturn (2 cases: CR behavior at edge)
 
 Subtotal: 8 wrap/newline tests
 
+=== Alternate Screen Tests ===
+PASS: TestSimpleAltScreen (3 cases: basic writes, positioning, clear)
+PASS: TestAltScreenColumnZero (3 cases: erase/rewrite, CR+EL, EL from cursor)
+PASS: TestColumnZeroOverwrite (5 cases: CR overwrite, CHA positioning)
+
+Subtotal: 11 alt screen tests
+
 === Other Tests ===
 PASS: Line wrapping and reflow tests (8 cases)
 
-Total: 68 + 28 + 18 + 62 + 8 + 8 = 192 tests
+Total: 68 + 28 + 18 + 62 + 8 + 11 + 8 = 203 tests
 Result: ALL PASS ✅
 ```
 
@@ -400,20 +438,22 @@ Result: ALL PASS ✅
 
 ## Metrics
 
-- **Test Infrastructure Lines:** 319 (added GetLine helper)
-- **Test Code Lines:** 424 (cursor) + 607 (erase) + 465 (insert/delete) + 822 (SGR) + 205 (wrap/newline) = 2,523 lines
-- **Bugs Found:** 10
-- **Bugs Fixed:** 10
+- **Test Infrastructure Lines:** 372 (added GetLine helper, fixed alt screen support)
+- **Test Code Lines:** 424 (cursor) + 607 (erase) + 465 (insert/delete) + 822 (SGR) + 205 (wrap/newline) + 85 (alt screen) + 76 (simple alt) + 105 (column zero) = 2,789 lines
+- **Bugs Found:** 11
+- **Bugs Fixed:** 11
 - **Critical Bugs:** 2 (black screen bug #7, extra blank line bug #10)
-- **User-Reported Bugs:** 1 (bug #10 - power prompts broken)
-- **Test Pass Rate:** 100% (192/192)
-- **Time Spent:** ~7 hours
+- **User-Reported Bugs:** 2 (bug #10 - power prompts broken, bug #11 - codex column 0 rendering)
+- **Test Infrastructure Bugs:** 1 (bug #11 - test harness reading wrong buffer)
+- **Test Pass Rate:** 100% (203/203)
+- **Time Spent:** ~8 hours
 - **Coverage:**
   - ✅ Cursor movement operations (complete)
   - ✅ Erase operations (complete)
   - ✅ Insertion/deletion operations (complete)
   - ✅ SGR color and attribute operations (complete)
   - ✅ Wrap/newline behavior at terminal edges (complete)
+  - ✅ Alternate screen buffer operations (complete)
 
 ---
 
