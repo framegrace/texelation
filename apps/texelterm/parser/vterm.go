@@ -144,7 +144,16 @@ func (v *VTerm) placeChar(r rune) {
 			v.SetCursorPos(v.historyLen-1-v.getTopHistoryLine(), v.cursorX)
 		}
 		logicalY := v.cursorY + v.getTopHistoryLine()
+
+		// Ensure all lines exist up to the cursor position
+		for v.historyLen <= logicalY {
+			v.appendHistoryLine(make([]Cell, 0, v.width))
+		}
+
 		line := v.getHistoryLine(logicalY)
+		if line == nil {
+			line = make([]Cell, 0, v.width)
+		}
 		for len(line) <= v.cursorX {
 			line = append(line, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
 		}
@@ -328,6 +337,10 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.altBuffer = make([][]Cell, v.height)
 			for i := range v.altBuffer {
 				v.altBuffer[i] = make([]Cell, v.width)
+				// Initialize all cells with proper default colors
+				for j := range v.altBuffer[i] {
+					v.altBuffer[i][j] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+				}
 			}
 			v.ClearScreen()
 		case 2026: // START Synchronized Update
@@ -375,9 +388,10 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 func (v *VTerm) ClearScreen() {
 	v.MarkAllDirty()
 	if v.inAltScreen {
+		// Use default colors, not currentFG/BG which might be from previous content
 		for y := range v.altBuffer {
 			for x := range v.altBuffer[y] {
-				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
 			}
 		}
 		v.SetCursorPos(0, 0)
@@ -396,9 +410,10 @@ func (v *VTerm) ClearScreen() {
 func (v *VTerm) ClearVisibleScreen() {
 	v.MarkAllDirty()
 	if v.inAltScreen {
+		// Use default colors for cleared cells
 		for y := range v.altBuffer {
 			for x := range v.altBuffer[y] {
-				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
 			}
 		}
 		// Cursor position unchanged
@@ -769,10 +784,19 @@ func (v *VTerm) ClearScreenMode(mode int) {
 func (v *VTerm) ClearLine(mode int) {
 	v.MarkDirty(v.cursorY)
 	var line []Cell
+	var logicalY int
 	if v.inAltScreen {
 		line = v.altBuffer[v.cursorY]
 	} else {
-		line = v.getHistoryLine(v.cursorY + v.getTopHistoryLine())
+		logicalY = v.cursorY + v.getTopHistoryLine()
+		// Ensure line exists
+		for v.historyLen <= logicalY {
+			v.appendHistoryLine(make([]Cell, 0, v.width))
+		}
+		line = v.getHistoryLine(logicalY)
+		if line == nil {
+			line = make([]Cell, 0, v.width)
+		}
 	}
 	start, end := 0, v.width
 	switch mode {
@@ -784,7 +808,7 @@ func (v *VTerm) ClearLine(mode int) {
 	}
 
 	for len(line) < v.width { // Ensure line is full width before clearing
-		line = append(line, Cell{Rune: ' '})
+		line = append(line, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
 	}
 
 	for x := start; x < end; x++ {
@@ -797,7 +821,7 @@ func (v *VTerm) ClearLine(mode int) {
 	if v.inAltScreen {
 		v.altBuffer[v.cursorY] = line
 	} else {
-		v.setHistoryLine(v.cursorY+v.getTopHistoryLine(), line)
+		v.setHistoryLine(logicalY, line)
 	}
 }
 
@@ -808,7 +832,14 @@ func (v *VTerm) EraseCharacters(n int) {
 	if v.inAltScreen {
 		line = v.altBuffer[v.cursorY]
 	} else {
+		// Ensure line exists
+		for v.historyLen <= logicalY {
+			v.appendHistoryLine(make([]Cell, 0, v.width))
+		}
 		line = v.getHistoryLine(logicalY)
+		if line == nil {
+			line = make([]Cell, 0, v.width)
+		}
 	}
 
 	for i := 0; i < n; i++ {
@@ -913,7 +944,11 @@ func (v *VTerm) InsertLines(n int) {
 		// In alt screen, shift lines down within the buffer
 		for i := 0; i < n; i++ {
 			copy(v.altBuffer[v.cursorY+1:v.marginBottom+1], v.altBuffer[v.cursorY:v.marginBottom])
+			// Create properly initialized blank line
 			v.altBuffer[v.cursorY] = make([]Cell, v.width)
+			for j := range v.altBuffer[v.cursorY] {
+				v.altBuffer[v.cursorY][j] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+			}
 		}
 	} else {
 		// In main screen, insert lines into history
@@ -954,7 +989,11 @@ func (v *VTerm) DeleteLines(n int) {
 	if v.inAltScreen {
 		copy(v.altBuffer[v.cursorY:v.marginBottom], v.altBuffer[v.cursorY+n:v.marginBottom+1])
 		for y := v.marginBottom - n + 1; y <= v.marginBottom; y++ {
-			v.altBuffer[y] = make([]Cell, v.width) // Clear new lines at bottom
+			// Create properly initialized blank line
+			v.altBuffer[y] = make([]Cell, v.width)
+			for x := range v.altBuffer[y] {
+				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+			}
 		}
 	} else {
 		logicalY := v.cursorY + v.getTopHistoryLine()
