@@ -126,10 +126,9 @@ func (v *VTerm) Grid() [][]Cell {
 // placeChar puts a rune at the current cursor position, handling wrapping and insert mode.
 func (v *VTerm) placeChar(r rune) {
 	if v.wrapNext {
-		if v.inAltScreen {
-			v.cursorX = 0
-			v.LineFeed()
-		}
+		// Wrap to next line for both alt and main screen
+		v.cursorX = 0
+		v.LineFeed()
 		v.wrapNext = false
 	}
 
@@ -175,10 +174,9 @@ func (v *VTerm) placeChar(r rune) {
 				line[v.cursorX].Wrapped = true
 				v.setHistoryLine(logicalY, line)
 			}
-			// Move to next line
-			v.LineFeed()
-			v.cursorX = 0
-			v.MarkDirty(v.cursorY)
+			// Set wrapNext instead of wrapping immediately
+			// This allows CR or LF to clear the flag without creating extra lines
+			v.wrapNext = true
 		} else if v.cursorX < v.width-1 {
 			v.SetCursorPos(v.cursorY, v.cursorX+1)
 		}
@@ -229,6 +227,7 @@ func (v *VTerm) GetCursorY() int {
 
 // LineFeed moves the cursor down one line, scrolling if necessary.
 func (v *VTerm) LineFeed() {
+	v.wrapNext = false // Clear wrapNext flag when moving to new line
 	v.MarkDirty(v.cursorY)
 	if v.inAltScreen {
 		if v.cursorY == v.marginBottom {
@@ -531,6 +530,7 @@ func (v *VTerm) ClearDirty() {
 // --- Basic Terminal Operations ---
 
 func (v *VTerm) CarriageReturn() {
+	v.wrapNext = false // Clear wrapNext when returning to start of line
 	v.SetCursorPos(v.cursorY, 0)
 }
 

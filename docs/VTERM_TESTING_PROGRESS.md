@@ -134,6 +134,35 @@ We're systematically testing and fixing all VTerm rendering bugs by:
 - Mixed color modes work (e.g., basic FG with 256-color BG)
 - Color overrides work correctly
 
+### Phase 3.5: Wrap/Newline Tests ✅ (2025-11-22)
+
+**Files Created:**
+- `apps/texelterm/parser/wrap_newline_test.go` (205 lines)
+
+**Test Coverage: 8 test cases, ALL PASSING**
+
+| Test Group | Tests | Status | Notes |
+|------------|-------|--------|-------|
+| Text-to-edge + newline behavior | 6 | ✅ PASS | Edge wrapping, CRLF, overfull lines |
+| Carriage return at edge | 2 | ✅ PASS | CR should not wrap |
+
+**Test Cases:**
+1. Text fills to edge → newline (no extra blank line)
+2. Two-line prompt with wrapping (power prompt scenario)
+3. Alternating full lines and newlines
+4. Almost full line then newline (9 chars + \n)
+5. Overfull line forces wrap then newline
+6. CR LF handling at edge (Windows-style)
+7. Text to edge then CR (stays on same line)
+8. Text to edge, CR, more text (overwrite on same line)
+
+**Total Wrap/Newline Tests:** 8 tests, 100% passing
+
+**Critical User-Reported Bug Fixed:**
+- **Bug #10:** Extra blank line appearing in power prompts (starship, powerlevel10k) and 'claude' command
+- **Root Cause:** Main screen was wrapping immediately when cursor reached right edge, then \n caused second wrap
+- **Impact:** Made texelterm unusable with modern shell prompts
+
 ---
 
 ## Bugs Fixed
@@ -219,6 +248,75 @@ if x >= v.width {
 **Fix:** Ensure all lines exist up to viewport bottom using `appendHistoryLine` before clearing them
 **Tests Affected:** TestEraseWithColors, all ED tests on fresh terminals
 
+### Bug #10: wrapNext Extra Blank Line (CRITICAL - User Reported)
+**Files:** `apps/texelterm/parser/vterm.go:170-181, 230-252, 532-535` and `apps/texelterm/parser/parser.go:61-66`
+**User Report:** "My powerprompt that uses 2 lines on a normal terminal, but on texelterm now has an extra empty line between. The same happens when I start 'claude' inside texelterm, every line has an extra newline."
+**Issue:** When text fills exactly to the right edge (e.g., 80 chars on 80-column terminal), the main screen would wrap immediately (call LineFeed()). Then when \n arrived, it would call LineFeed() again, creating an extra blank line.
+**Impact:** Made texelterm unusable with modern shell prompts (starship, powerlevel10k) and line-oriented applications like Claude CLI
+**Root Causes:**
+1. Main screen was using immediate wrapping instead of deferred wrapping (wrapNext flag)
+2. LineFeed() wasn't clearing the wrapNext flag
+3. CarriageReturn() wasn't clearing the wrapNext flag
+4. Parser was handling \n as pure LF instead of CR+LF
+
+**Fixes:**
+1. **vterm.go:170-181** - Changed main screen to use wrapNext flag instead of immediate LineFeed()
+2. **vterm.go:230-252** - Added `v.wrapNext = false` to LineFeed() to clear flag when moving to new line
+3. **vterm.go:532-535** - Added `v.wrapNext = false` to CarriageReturn() to clear flag on CR
+4. **parser.go:61-66** - Changed \n handling from pure LF to CR+LF (LNM mode - standard modern terminal behavior)
+
+**Tests Added:** 8 comprehensive tests in `wrap_newline_test.go`
+
+**Before (main screen wrapping):**
+```go
+if v.cursorX == v.width-1 {
+    line[v.cursorX].Wrapped = true
+    v.setHistoryLine(logicalY, line)
+    v.LineFeed()  // ❌ Wraps immediately
+}
+```
+
+**After (deferred wrapping):**
+```go
+if v.wrapEnabled && v.cursorX == v.width-1 {
+    line[v.cursorX].Wrapped = true
+    v.setHistoryLine(logicalY, line)
+    v.wrapNext = true  // ✅ Defer wrap until next char
+}
+```
+
+**Before (LineFeed):**
+```go
+func (v *VTerm) LineFeed() {
+    v.MarkDirty(v.cursorY)
+    // ... rest of function
+}
+```
+
+**After (LineFeed):**
+```go
+func (v *VTerm) LineFeed() {
+    v.wrapNext = false  // ✅ Clear wrapNext flag
+    v.MarkDirty(v.cursorY)
+    // ... rest of function
+}
+```
+
+**Before (parser \n handling):**
+```go
+case '\n':
+    p.vterm.LineFeed()  // ❌ Pure LF
+```
+
+**After (parser \n handling - LNM mode):**
+```go
+case '\n':
+    // In LNM set mode (New Line Mode), \n acts as CR+LF
+    // This is the common behavior in modern terminals
+    p.vterm.CarriageReturn()  // ✅ CR+LF
+    p.vterm.LineFeed()
+```
+
 ---
 
 ## Test Results
@@ -269,10 +367,16 @@ PASS: TestSGRCombinations (4 cases: mixed modes, overrides, reset)
 
 Subtotal: 62 SGR tests
 
+=== Wrap/Newline Tests ===
+PASS: TestWrapNextWithNewline (6 cases: edge wrapping, CRLF, overfull)
+PASS: TestWrapNextWithCarriageReturn (2 cases: CR behavior at edge)
+
+Subtotal: 8 wrap/newline tests
+
 === Other Tests ===
 PASS: Line wrapping and reflow tests (8 cases)
 
-Total: 68 + 28 + 18 + 62 + 8 = 184 tests
+Total: 68 + 28 + 18 + 62 + 8 + 8 = 192 tests
 Result: ALL PASS ✅
 ```
 
@@ -280,14 +384,14 @@ Result: ALL PASS ✅
 
 ## Next Steps
 
-### Phase 3.5: Scrolling Region Tests (Next Priority)
+### Phase 3.6: Scrolling Region Tests (Next Priority)
 - DECSTBM (Set scrolling margins)
 - IND (Index - scroll up)
 - RI (Reverse Index - scroll down)
 - Cursor movement within margins
 - Line feed at margins
 
-### Phase 3.6: Screen Mode Tests
+### Phase 3.7: Screen Mode Tests
 - Alternate screen buffer
 - Cursor save/restore with screen switching
 - Mode switches (cursor visibility, etc.)
@@ -297,17 +401,19 @@ Result: ALL PASS ✅
 ## Metrics
 
 - **Test Infrastructure Lines:** 319 (added GetLine helper)
-- **Test Code Lines:** 424 (cursor) + 607 (erase) + 465 (insert/delete) + 822 (SGR) = 2,318 lines
-- **Bugs Found:** 9
-- **Bugs Fixed:** 9
-- **Critical Bugs:** 1 (black screen bug #7)
-- **Test Pass Rate:** 100% (184/184)
-- **Time Spent:** ~6 hours
+- **Test Code Lines:** 424 (cursor) + 607 (erase) + 465 (insert/delete) + 822 (SGR) + 205 (wrap/newline) = 2,523 lines
+- **Bugs Found:** 10
+- **Bugs Fixed:** 10
+- **Critical Bugs:** 2 (black screen bug #7, extra blank line bug #10)
+- **User-Reported Bugs:** 1 (bug #10 - power prompts broken)
+- **Test Pass Rate:** 100% (192/192)
+- **Time Spent:** ~7 hours
 - **Coverage:**
   - ✅ Cursor movement operations (complete)
   - ✅ Erase operations (complete)
   - ✅ Insertion/deletion operations (complete)
   - ✅ SGR color and attribute operations (complete)
+  - ✅ Wrap/newline behavior at terminal edges (complete)
 
 ---
 
