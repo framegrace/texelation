@@ -817,6 +817,14 @@ func (v *VTerm) ClearLine(mode int) {
 		}
 	}
 
+	// If we're erasing to the end of line, truncate any content beyond 'end'
+	// This handles cases where the history line is longer than the terminal width
+	if mode == 0 || mode == 2 { // EL 0 (cursor to end) or EL 2 (entire line)
+		if len(line) > end {
+			line = line[:end]
+		}
+	}
+
 	// Write the modified line back to the appropriate buffer
 	if v.inAltScreen {
 		v.altBuffer[v.cursorY] = line
