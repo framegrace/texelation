@@ -104,27 +104,73 @@ func (v *VTerm) Grid() [][]Cell {
 	}
 	grid := make([][]Cell, v.height)
 	topHistoryLine := v.getTopHistoryLine()
-	for i := 0; i < v.height; i++ {
-		historyIdx := topHistoryLine + i
-		grid[i] = make([]Cell, v.width)
-		var logicalLine []Cell
-		if historyIdx >= 0 && historyIdx < v.historyLen {
-			logicalLine = v.getHistoryLine(historyIdx)
+
+	displayRow := 0           // Current row in the grid we're filling
+	historyIdx := topHistoryLine
+	offset := 0               // Offset within the current wrapped logical line
+
+	for displayRow < v.height && historyIdx < v.historyLen {
+		grid[displayRow] = make([]Cell, v.width)
+		logicalLine := v.getHistoryLine(historyIdx)
+
+		if logicalLine == nil {
+			// Empty history line - fill with blanks
+			for x := 0; x < v.width; x++ {
+				grid[displayRow][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+			}
+			displayRow++
+			historyIdx++
+			offset = 0
+			continue
 		}
-		// Fill the grid line, padding with default cells if the history line is short.
+
+		// Copy characters from the logical line, starting at offset
 		for x := 0; x < v.width; x++ {
-			if logicalLine != nil && x < len(logicalLine) {
-				grid[i][x] = logicalLine[x]
+			srcIdx := offset + x
+			if srcIdx < len(logicalLine) {
+				grid[displayRow][x] = logicalLine[srcIdx]
 			} else {
-				grid[i][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+				grid[displayRow][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
 			}
 		}
+
+		// Check if this logical line continues (is wrapped)
+		lastCellIdx := offset + v.width - 1
+		if lastCellIdx < len(logicalLine) && logicalLine[lastCellIdx].Wrapped {
+			// This line wraps - continue with the same history line on the next display row
+			offset += v.width
+			displayRow++
+		} else {
+			// This logical line is complete - move to the next history line
+			historyIdx++
+			offset = 0
+			displayRow++
+		}
 	}
+
+	// Fill any remaining display rows with blanks
+	for displayRow < v.height {
+		grid[displayRow] = make([]Cell, v.width)
+		for x := 0; x < v.width; x++ {
+			grid[displayRow][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+		}
+		displayRow++
+	}
+
 	return grid
 }
 
 // placeChar puts a rune at the current cursor position, handling wrapping and insert mode.
 func (v *VTerm) placeChar(r rune) {
+	if r == ' ' && v.cursorX == 0 && !v.inAltScreen {
+		log.Printf("placeChar: About to write SPACE to column 0, line %d", v.cursorY)
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		line := v.getHistoryLine(logicalY)
+		if line != nil && len(line) > 0 {
+			log.Printf("  Current content at column 0: rune=%q (0x%04x) FG=%d BG=%d", line[0].Rune, line[0].Rune, line[0].FG, line[0].BG)
+		}
+	}
+
 	if v.wrapNext {
 		// Wrap to next line for both alt and main screen
 		v.cursorX = 0
@@ -151,6 +197,9 @@ func (v *VTerm) placeChar(r rune) {
 		}
 
 		line := v.getHistoryLine(logicalY)
+		if r == ' ' && v.cursorX == 0 {
+			log.Printf("  logicalY=%d, line length=%d, cursorX=%d", logicalY, len(line), v.cursorX)
+		}
 		if line == nil {
 			line = make([]Cell, 0, v.width)
 		}
@@ -165,6 +214,21 @@ func (v *VTerm) placeChar(r rune) {
 		line[v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
 		v.setHistoryLine(logicalY, line)
 		v.MarkDirty(v.cursorY)
+
+		// Verify the write actually happened
+		if r == ' ' && v.cursorX == 0 {
+			log.Printf("  Write details: cursorY=%d, topHistoryLine=%d, logicalY=%d, historyLen=%d",
+				v.cursorY, v.getTopHistoryLine(), logicalY, v.historyLen)
+			verifyLine := v.getHistoryLine(logicalY)
+			if verifyLine != nil && len(verifyLine) > 0 {
+				log.Printf("  AFTER WRITE: column 0 now has rune=%q (0x%04x)", verifyLine[0].Rune, verifyLine[0].Rune)
+				if verifyLine[0].Rune != ' ' {
+					log.Printf("  BUG CONFIRMED: Write to column 0 failed! Expected ' ', still has %q", verifyLine[0].Rune)
+				}
+			} else {
+				log.Printf("  WARNING: verifyLine is nil or empty after write!")
+			}
+		}
 	}
 
 	if v.inAltScreen {
@@ -197,6 +261,10 @@ func (v *VTerm) placeChar(r rune) {
 
 // SetCursorPos moves the cursor to a new position, clamping to screen bounds.
 func (v *VTerm) SetCursorPos(y, x int) {
+	if !v.inAltScreen && x == 1 && v.cursorX == 0 && v.cursorY == y {
+		log.Printf("SetCursorPos: SUSPICIOUS! Moving from column 0 to column 1 on same line %d (main screen)", y)
+	}
+	log.Printf("SetCursorPos y=%d, x=%d (before clamping)", y, x)
 	// Clamp coordinates first
 	if x < 0 {
 		x = 0
@@ -330,8 +398,10 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			// Ignore mouse and focus reporting for now
 		case 1049: // Switch to Alt Workspace
 			if v.inAltScreen {
+				log.Println("Parser: Already in alt screen, ignoring 1049h")
 				return
 			}
+			log.Println("Parser: ===== SWITCHING TO ALT SCREEN (1049h) =====")
 			v.inAltScreen = true
 			v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY //+v.getTopHistoryLine()
 			v.altBuffer = make([][]Cell, v.height)
@@ -365,8 +435,10 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			// Ignore mouse and focus reporting for now
 		case 1049: // Switch to Main Workspace
 			if !v.inAltScreen {
+				log.Println("Parser: Not in alt screen, ignoring 1049l")
 				return
 			}
+			log.Println("Parser: ===== EXITING ALT SCREEN (1049l) =====")
 			v.inAltScreen = false
 			v.altBuffer = nil
 			physicalY := v.savedMainCursorY // - v.getTopHistoryLine()
@@ -782,6 +854,7 @@ func (v *VTerm) ClearScreenMode(mode int) {
 }
 
 func (v *VTerm) ClearLine(mode int) {
+	log.Printf("ClearLine mode=%d, cursorX=%d, cursorY=%d, inAltScreen=%v", mode, v.cursorX, v.cursorY, v.inAltScreen)
 	v.MarkDirty(v.cursorY)
 	var line []Cell
 	var logicalY int

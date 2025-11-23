@@ -10,6 +10,7 @@ package parser
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"testing"
 )
@@ -72,6 +73,12 @@ func (h *TestHarness) GetCell(x, y int) Cell {
 	line := h.vterm.HistoryLineCopy(historyLine)
 	if x < 0 || x >= len(line) {
 		return Cell{} // out of bounds
+	}
+
+	// Debug logging for column 0 reads
+	if x == 0 && y < 3 {
+		log.Printf("GetCell(%d, %d): topLine=%d, historyLine=%d, historyLen=%d, lineLen=%d, rune=%q",
+			x, y, topLine, historyLine, h.vterm.HistoryLength(), len(line), line[x].Rune)
 	}
 
 	return line[x]
