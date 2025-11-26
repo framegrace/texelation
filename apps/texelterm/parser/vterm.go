@@ -40,6 +40,8 @@ type VTerm struct {
 	TitleChanged                       func(string)
 	WriteToPty                         func([]byte)
 	marginTop, marginBottom            int
+	marginLeft, marginRight            int
+	leftRightMarginMode                bool
 	defaultFG, defaultBG               Color
 	DefaultFgChanged, DefaultBgChanged func(Color)
 	QueryDefaultFg, QueryDefaultBg     func()
@@ -72,14 +74,17 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		tabStops:       make(map[int]bool),
 		cursorVisible:  true,
 		autoWrapMode:   true,
-		wrapEnabled:    true,
-		reflowEnabled:  true,
-		marginTop:      0,
-		marginBottom:   height - 1,
-		defaultFG:      DefaultFG,
-		defaultBG:      DefaultBG,
-		dirtyLines:     make(map[int]bool),
-		allDirty:       true,
+		wrapEnabled:         true,
+		reflowEnabled:       true,
+		marginTop:           0,
+		marginBottom:        height - 1,
+		marginLeft:          0,
+		marginRight:         width - 1,
+		leftRightMarginMode: false,
+		defaultFG:           DefaultFG,
+		defaultBG:           DefaultBG,
+		dirtyLines:          make(map[int]bool),
+		allDirty:            true,
 	}
 	for _, opt := range opts {
 		opt(v)
@@ -326,6 +331,8 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			log.Println("Parser: Ignoring set blinking cursor (12h)")
 		case 25:
 			v.SetCursorVisible(true)
+		case 69: // DECLRMM - Enable left/right margin mode
+			v.leftRightMarginMode = true
 		case 1002, 1004, 1006, 2004:
 			// Ignore mouse and focus reporting for now
 		case 1049: // Switch to Alt Workspace
@@ -361,6 +368,11 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			log.Println("Parser: Ignoring reset steady cursor (12l)")
 		case 25:
 			v.SetCursorVisible(false)
+		case 69: // DECLRMM - Disable left/right margin mode
+			v.leftRightMarginMode = false
+			// Reset margins to full width
+			v.marginLeft = 0
+			v.marginRight = v.width - 1
 		case 1002, 1004, 1006, 2004, 2031, 2048:
 			// Ignore mouse and focus reporting for now
 		case 1049: // Switch to Main Workspace
@@ -654,7 +666,14 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 	case 'r': // DECSTBM - Set Top and Bottom Margins
 		v.SetMargins(param(0, 1), param(1, v.height))
 	case 's':
-		v.SaveCursor()
+		// When DECLRMM is enabled, 's' is DECSLRM (Set Left/Right Margins)
+		// Otherwise, it's SCOSC (Save Cursor)
+		if v.leftRightMarginMode {
+			// DECSLRM - Set Left and Right Margins
+			v.SetLeftRightMargins(param(0, 1), param(1, v.width))
+		} else {
+			v.SaveCursor()
+		}
 	case 'u':
 		v.RestoreCursor()
 	case 'c': // DA - Device Attributes
@@ -871,33 +890,87 @@ func (v *VTerm) InsertCharacters(n int) {
 		return
 	}
 
+	// Determine the effective right boundary
+	rightBoundary := v.width
+	if v.leftRightMarginMode {
+		// If DECLRMM is enabled and cursor is outside margins, do nothing
+		if v.cursorX < v.marginLeft || v.cursorX > v.marginRight {
+			return
+		}
+		rightBoundary = v.marginRight + 1
+	}
+
 	if v.inAltScreen {
 		line := v.altBuffer[v.cursorY]
-		// Create a copy of the segment that needs to be shifted
-		if v.cursorX < len(line) {
-			segment := make([]Cell, len(line[v.cursorX:]))
-			copy(segment, line[v.cursorX:])
+		// Calculate how many chars to copy and where they should end
+		segmentStart := v.cursorX
+		segmentEnd := rightBoundary
+		if segmentEnd > len(line) {
+			segmentEnd = len(line)
+		}
 
-			// Insert blanks
-			for i := 0; i < n && v.cursorX+i < v.width; i++ {
+		// Create a copy of the segment that will be shifted
+		segmentLen := segmentEnd - segmentStart
+		if segmentLen > 0 {
+			segment := make([]Cell, segmentLen)
+			copy(segment, line[segmentStart:segmentEnd])
+
+			// Insert blanks at cursor position
+			blanksToInsert := n
+			if v.cursorX+blanksToInsert > rightBoundary {
+				blanksToInsert = rightBoundary - v.cursorX
+			}
+			for i := 0; i < blanksToInsert; i++ {
 				line[v.cursorX+i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 			}
 
-			// Copy the original segment back, shifted
-			if v.cursorX+n < v.width {
-				copy(line[v.cursorX+n:], segment)
+			// Copy the original segment back, shifted right
+			destStart := v.cursorX + n
+			if destStart < rightBoundary {
+				toCopy := rightBoundary - destStart
+				if toCopy > len(segment) {
+					toCopy = len(segment)
+				}
+				copy(line[destStart:rightBoundary], segment[:toCopy])
 			}
 		}
 	} else {
-		// Existing logic for the history buffer (this is correct for the main screen)
+		// Main screen with history buffer
 		logicalY := v.cursorY + v.getTopHistoryLine()
 		line := v.getHistoryLine(logicalY)
+
+		// Insert blanks at cursor position
 		blanks := make([]Cell, n)
 		for i := range blanks {
 			blanks[i] = Cell{Rune: ' '}
 		}
-		line = append(line[:v.cursorX], append(blanks, line[v.cursorX:]...)...)
-		v.setHistoryLine(logicalY, line)
+
+		if v.leftRightMarginMode {
+			// With left/right margins: preserve everything outside margins
+			// Build: [before cursor] + [blanks] + [cursor to right margin - n chars] + [after right margin]
+			newLine := append([]Cell{}, line[:v.cursorX]...)
+			newLine = append(newLine, blanks...)
+
+			// Add shifted content within margins (up to right boundary - n)
+			copyEnd := rightBoundary - n
+			if copyEnd > len(line) {
+				copyEnd = len(line)
+			}
+			if copyEnd > v.cursorX {
+				newLine = append(newLine, line[v.cursorX:copyEnd]...)
+			}
+
+			// Preserve everything after the right margin
+			if rightBoundary < len(line) {
+				newLine = append(newLine, line[rightBoundary:]...)
+			}
+
+			v.setHistoryLine(logicalY, newLine)
+		} else {
+			// No margins: insert and shift entire line
+			newLine := append(line[:v.cursorX], append(blanks, line[v.cursorX:]...)...)
+			v.setHistoryLine(logicalY, newLine)
+		}
 	}
 }
 
@@ -1101,6 +1174,23 @@ func (v *VTerm) SetMargins(top, bottom int) {
 	//v.SetCursorPos(v.marginTop, 0)
 }
 
+func (v *VTerm) SetLeftRightMargins(left, right int) {
+	if left == 0 {
+		left = 1
+	}
+	if right == 0 || right > v.width {
+		right = v.width
+	}
+	if left >= right {
+		// Invalid region, reset to full width
+		v.marginLeft = 0
+		v.marginRight = v.width - 1
+		return
+	}
+	v.marginLeft = left - 1
+	v.marginRight = right - 1
+}
+
 func (v *VTerm) MoveCursorForward(n int) {
 	v.SetCursorPos(v.cursorY, v.cursorX+n)
 }
@@ -1112,8 +1202,18 @@ func (v *VTerm) MoveCursorBackward(n int) {
 func (v *VTerm) MoveCursorUp(n int) {
 	v.wrapNext = false
 	newY := v.cursorY - n
-	if newY < v.marginTop {
-		newY = v.marginTop
+
+	// Apply scroll region constraints only if cursor is currently inside the region
+	if v.cursorY >= v.marginTop && v.cursorY <= v.marginBottom {
+		// Inside scroll region - constrain to top margin
+		if newY < v.marginTop {
+			newY = v.marginTop
+		}
+	} else {
+		// Outside scroll region - constrain to top of screen
+		if newY < 0 {
+			newY = 0
+		}
 	}
 	v.SetCursorPos(newY, v.cursorX)
 }
@@ -1121,8 +1221,18 @@ func (v *VTerm) MoveCursorUp(n int) {
 func (v *VTerm) MoveCursorDown(n int) {
 	v.wrapNext = false
 	newY := v.cursorY + n
-	if newY > v.marginBottom {
-		newY = v.marginBottom
+
+	// Apply scroll region constraints only if cursor is currently inside the region
+	if v.cursorY >= v.marginTop && v.cursorY <= v.marginBottom {
+		// Inside scroll region - constrain to bottom margin
+		if newY > v.marginBottom {
+			newY = v.marginBottom
+		}
+	} else {
+		// Outside scroll region - constrain to bottom of screen
+		if newY >= v.height {
+			newY = v.height - 1
+		}
 	}
 	v.SetCursorPos(newY, v.cursorX)
 }

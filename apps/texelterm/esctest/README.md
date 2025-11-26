@@ -24,28 +24,29 @@ The original Python-based tests have been converted to Go to enable:
 
 ### Converted Tests
 
-- ✅ **cuu_test.go** - CUU (Cursor Up) - 5 tests, 4 passing, 1 failing
-- ✅ **ich_test.go** - ICH (Insert Character) - 6 tests, 4 passing, 2 failing
+- ✅ **cuu_test.go** - CUU (Cursor Up) - 5 tests, all passing
+- ✅ **ich_test.go** - ICH (Insert Character) - 6 tests, all passing
 
 ### Test Results Summary
 
 **Total**: 11 tests
-**Passing**: 8 (73%)
-**Failing**: 3 (27%)
+**Passing**: 11 (100%) ✅
+**Failing**: 0
 
-#### Known Failures
+All compliance tests passing! The following issues were fixed:
 
-1. **Test_CUU_StopsAtTopLineWhenBegunAboveScrollRegion**
-   - Issue: Cursor doesn't move to top of screen when starting above scroll region
-   - Expected: Y=1, Got: Y=4
+#### Fixed Issues
 
-2. **Test_ICH_IsNoOpWhenCursorBeginsOutsideScrollRegion**
-   - Issue: DECLRMM (left/right margin mode) not implemented
-   - Missing: CSI ? 69 h/l support
+1. **Scroll Region Boundary Bug** (CUU)
+   - Fixed cursor movement to properly distinguish between inside/outside scroll regions
+   - Cursor now correctly moves to top of screen when starting above scroll region
+   - See vterm.go:1112 (MoveCursorUp) and vterm.go:1131 (MoveCursorDown)
 
-3. **Test_ICH_ScrollOffRightMarginInScrollRegion**
-   - Issue: DECLRMM (left/right margin mode) not implemented
-   - ICH should respect left/right margins
+2. **DECLRMM Support** (Left/Right Margin Mode)
+   - Implemented CSI ? 69 h/l (enable/disable left/right margin mode)
+   - Implemented DECSLRM (CSI Ps ; Ps s) to set left/right margins
+   - ICH now respects left/right margins when DECLRMM is active
+   - See vterm.go:334, 371, 668, 1123, 887
 
 ## Test Conversion Plan
 
