@@ -2,13 +2,13 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: 53866e5 (Batch 7)
+**Latest Commit**: 332533a (Scroll-down fixes)
 
 ## Current Status
 
 **Total Tests**: 119
-**Passing**: 115 (97%)
-**Failing**: 4 (known issues documented below)
+**Passing**: 119 (100%) ✓
+**Failing**: 0
 
 ### Completed Batches
 
@@ -16,30 +16,7 @@
 - **Batch 4**: Character editing - DCH, ECH, REP (14 tests) - ALL PASSING
 - **Batch 5**: Line editing - DL, IL (16 tests) - ALL PASSING
 - **Batch 6**: Erase operations - ED, EL (13 tests) - ALL PASSING
-- **Batch 7**: Scrolling - DECSTBM, IND, RI (22 tests) - 18/22 PASSING
-
-### Known Issues (4 failing tests)
-
-**All in Batch 7 - Related to RI (Reverse Index) scroll-down on main screen:**
-
-1. `Test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll`
-   - Issue: Content not preserved correctly when scrolling outside margin region
-   - Location: apps/texelterm/esctest/decstbm_test.go
-
-2. `Test_RI_Scrolls`
-   - Issue: RI scroll-down on main screen losing content
-   - Expected: Line 3 should show "b", getting " "
-   - Location: apps/texelterm/esctest/ri_test.go:50
-
-3. `Test_RI_ScrollsInTopBottomRegionStartingBelow`
-   - Issue: RI scroll within region not preserving "x"
-   - Location: apps/texelterm/esctest/ri_test.go:68
-
-4. `Test_RI_ScrollsInTopBottomRegionStartingWithin`
-   - Issue: Similar to above
-   - Location: apps/texelterm/esctest/ri_test.go:85
-
-**Root Cause**: Main screen scroll-down logic in `scrollRegion()` at vterm.go:325-336 appears to have an issue with content preservation during reverse index operations.
+- **Batch 7**: Scrolling - DECSTBM, IND, RI (22 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -81,6 +58,49 @@ func RI(d *Driver)   // ESC M - Reverse Index (already existed)
 ```
 
 **18/22 tests passing**
+
+### Scroll-Down Bug Fixes (Commit: 332533a)
+
+**Fixed Issues:**
+- All 4 failing Batch 7 tests now passing
+- Test suite at 100% pass rate (119/119)
+
+**Root Causes Identified:**
+1. **Scroll-down content loss**: `scrollRegion()` attempted to write to history indices that didn't exist yet. The `setHistoryLine()` bounds check (`index >= historyLen`) caused writes to silently fail, losing content during reverse index operations.
+
+2. **Unwanted viewport shifts**: `LineFeed()` was appending history lines even when cursor was at the bottom of the physical screen (outside scroll region). This caused `historyLen` to grow and shift `getTopHistoryLine()`, inadvertently scrolling the viewport.
+
+**Fixes Applied** (vterm.go):
+1. Lines 326-330: Ensure history buffer has all required lines before scroll-down:
+   ```go
+   // Ensure history buffer has all lines we'll be writing to
+   endLogicalY := topHistory + bottom
+   for v.historyLen <= endLogicalY {
+       v.appendHistoryLine(make([]Cell, 0, v.width))
+   }
+   ```
+
+2. Lines 272-283: Only append history lines when cursor will actually move:
+   ```go
+   } else if v.cursorY < v.height-1 {
+       // Only append history lines when cursor will actually move down
+       logicalY := v.cursorY + v.getTopHistoryLine()
+       if logicalY+1 >= v.historyLen {
+           v.appendHistoryLine(make([]Cell, 0, v.width))
+       }
+       v.SetCursorPos(v.cursorY+1, v.cursorX)
+   } else {
+       // At bottom of screen but not at scroll region bottom: stay put
+       v.viewOffset = 0
+       v.MarkAllDirty()
+   }
+   ```
+
+**Tests Fixed:**
+- `Test_RI_Scrolls` - RI scroll-down on main screen
+- `Test_RI_ScrollsInTopBottomRegionStartingBelow` - RI with scroll region from below
+- `Test_RI_ScrollsInTopBottomRegionStartingWithin` - RI within scroll region
+- `Test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll` - Scrolling outside margins
 
 ## Test Conversion Process
 
@@ -143,26 +163,14 @@ DECRESET(d, DECLRMM)         // Disable left/right margin mode
 
 ## Next Steps
 
-### Immediate Priority: Fix Batch 7 Failures
-
-The 4 failing tests are all related to RI scroll-down on main screen. Investigation needed:
-
-1. Check `scrollRegion()` main screen scroll-down logic (vterm.go:325-336)
-2. Verify history line preservation during scroll
-3. Test with simple reproduction case
-4. Consider if history buffer initialization is the issue
-
-### Next Batch Options
+### Ready for Batch 8: SU/SD Scroll Commands
 
 **Batch 8: Scroll Commands (SU/SD)**
 - Source files: `su.py` (9 tests), `sd.py` (9 tests)
 - 18 tests total
 - Tests CSI S (Scroll Up) and CSI T (Scroll Down)
 - Important for full scrolling compliance
-
-**Alternative: Fix Batch 7 First**
-- Could address the 4 failing tests before moving on
-- Would bring pass rate back to 100%
+- All prerequisite scroll infrastructure now working correctly
 
 ## Running Tests
 
