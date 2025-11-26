@@ -42,10 +42,15 @@ The original Python-based tests have been converted to Go to enable:
 **Batch 3: Save/Restore Cursor**
 - ✅ **save_restore_cursor_test.go** - DECSC/DECRC (Save/Restore Cursor) - 5 tests, all passing
 
+**Batch 4: Character Editing**
+- ✅ **dch_test.go** - DCH (Delete Character) - 6 tests, all passing
+- ✅ **ech_test.go** - ECH (Erase Character) - 4 tests, all passing
+- ✅ **rep_test.go** - REP (Repeat) - 4 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 58 tests
-**Passing**: 58 (100%) ✅
+**Total**: 72 tests
+**Passing**: 72 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
@@ -81,6 +86,31 @@ All compliance tests passing! The following issues were fixed:
    - DECRC (Restore Cursor) now resets origin mode to off, per xterm behavior
    - Ensures cursor positioning returns to absolute screen coordinates after restore
    - See vterm.go:467-478
+
+6. **DCH Left/Right Margin Support** (DCH)
+   - DeleteCharacters now respects left/right margins when DECLRMM is active
+   - Cursor outside margins: DCH does nothing
+   - Cursor inside margins: DCH only deletes within margin boundaries
+   - Similar pattern to ICH margin handling
+   - See vterm.go:1004-1086
+
+7. **REP (Repeat Character) Implementation** (REP)
+   - Implemented CSI b (REP - Repeat previous graphic character)
+   - Tracks last graphic character written in placeChar
+   - REP respects both left/right and top/bottom margins via placeChar
+   - See vterm.go:54 (lastGraphicChar field), 136 (tracking), 773 (handler), 1088-1099 (implementation)
+
+8. **Margin-Aware Character Wrapping** (REP, general)
+   - placeChar now wraps at right margin edge when DECLRMM active
+   - Wrapping returns cursor to left margin instead of column 0
+   - Fixes REP behavior with left/right margins
+   - See vterm.go:138-148 (wrap to left margin), 180-209 (margin-aware wrapping)
+
+9. **Main Screen Scrolling Within Margins** (LineFeed, scrollRegion)
+   - LineFeed now checks for bottom margin on main screen and scrolls region
+   - scrollRegion now works for both alt and main screens
+   - Fixes scrolling behavior for commands that use margins (REP, etc.)
+   - See vterm.go:259-285 (LineFeed), 287-339 (scrollRegion)
 
 ## Test Conversion Plan
 

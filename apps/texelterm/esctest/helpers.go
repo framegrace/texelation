@@ -183,6 +183,15 @@ func ECH(d *Driver, n ...int) {
 	}
 }
 
+// REP (Repeat) - Repeat the previous graphic character n times.
+func REP(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[b", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%db", ESC, n[0]))
+	}
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {
