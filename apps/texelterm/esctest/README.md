@@ -1,0 +1,181 @@
+# esctest - Terminal Emulation Compliance Tests
+
+This package provides a Go-native test framework for validating terminal emulator compliance with xterm standards.
+
+## Origin
+
+This test suite is derived from **esctest2** by George Nachman and Thomas E. Dickey:
+- **Project**: https://github.com/ThomasDickey/esctest2
+- **Authors**: George Nachman, Thomas E. Dickey
+- **License**: GPL v2
+
+The original Python-based tests have been converted to Go to enable:
+- Offline, deterministic testing without Python dependencies
+- Direct integration with the texelterm parser without PTY overhead
+- Fast execution as part of the standard Go test suite
+
+## Current Status
+
+### Framework Components
+
+- ✅ **types.go** - Point, Rect, Size types for positioning and regions
+- ✅ **driver.go** - Headless terminal driver for sending sequences and querying state
+- ✅ **helpers.go** - Assertion functions and escape sequence commands
+
+### Converted Tests
+
+- ✅ **cuu_test.go** - CUU (Cursor Up) - 5 tests, 4 passing, 1 failing
+- ✅ **ich_test.go** - ICH (Insert Character) - 6 tests, 4 passing, 2 failing
+
+### Test Results Summary
+
+**Total**: 11 tests
+**Passing**: 8 (73%)
+**Failing**: 3 (27%)
+
+#### Known Failures
+
+1. **Test_CUU_StopsAtTopLineWhenBegunAboveScrollRegion**
+   - Issue: Cursor doesn't move to top of screen when starting above scroll region
+   - Expected: Y=1, Got: Y=4
+
+2. **Test_ICH_IsNoOpWhenCursorBeginsOutsideScrollRegion**
+   - Issue: DECLRMM (left/right margin mode) not implemented
+   - Missing: CSI ? 69 h/l support
+
+3. **Test_ICH_ScrollOffRightMarginInScrollRegion**
+   - Issue: DECLRMM (left/right margin mode) not implemented
+   - ICH should respect left/right margins
+
+## Test Conversion Plan
+
+### Priority 1: Basic Cursor Movement (Core Functionality)
+
+These sequences are heavily used and critical for terminal operation:
+
+- [ ] **cud_test.go** - CUD (Cursor Down)
+- [ ] **cuf_test.go** - CUF (Cursor Forward)
+- [ ] **cub_test.go** - CUB (Cursor Backward)
+- [ ] **cha_test.go** - CHA (Cursor Horizontal Absolute)
+- [ ] **vpa_test.go** - VPA (Vertical Position Absolute)
+- [ ] **hvp_test.go** - HVP (Horizontal and Vertical Position)
+- [ ] **cnl_test.go** - CNL (Cursor Next Line)
+- [ ] **cpl_test.go** - CPL (Cursor Previous Line)
+
+### Priority 2: Character Manipulation
+
+Essential for text editing:
+
+- [ ] **dch_test.go** - DCH (Delete Character)
+- [ ] **ech_test.go** - ECH (Erase Character)
+- [ ] **dl_test.go** - DL (Delete Line)
+- [ ] **il_test.go** - IL (Insert Line)
+- [ ] **ed_test.go** - ED (Erase in Display)
+- [ ] **el_test.go** - EL (Erase in Line)
+
+### Priority 3: Scrolling and Regions
+
+Important for fullscreen applications:
+
+- [ ] **decstbm_test.go** - DECSTBM (Set Top and Bottom Margins)
+- [ ] **ind_test.go** - IND (Index)
+- [ ] **ri_test.go** - RI (Reverse Index)
+- [ ] **su_test.go** - SU (Scroll Up)
+- [ ] **sd_test.go** - SD (Scroll Down)
+
+### Priority 4: Character Sets and Attributes
+
+Visual display and character encoding:
+
+- [ ] **sgr_test.go** - SGR (Select Graphic Rendition)
+- [ ] **sm_test.go** - SM (Set Mode)
+- [ ] **rm_test.go** - RM (Reset Mode)
+- [ ] **decset_test.go** - DECSET (DEC Private Mode Set)
+- [ ] **decreset_test.go** - DECRESET (DEC Private Mode Reset)
+
+### Priority 5: Device Reports and Queries
+
+Terminal identification and state queries:
+
+- [ ] **da_test.go** - DA (Device Attributes)
+- [ ] **da2_test.go** - DA2 (Secondary Device Attributes)
+- [ ] **dsr_test.go** - DSR (Device Status Report)
+- [ ] **decrqss_test.go** - DECRQSS (Request Selection or Setting)
+
+### Priority 6: Advanced Features
+
+Less common but useful for full compliance:
+
+- [ ] **decaln_test.go** - DECALN (Screen Alignment Test)
+- [ ] **decbi_test.go** - DECBI (Back Index)
+- [ ] **decfi_test.go** - DECFI (Forward Index)
+- [ ] **decstr_test.go** - DECSTR (Soft Terminal Reset)
+- [ ] **ris_test.go** - RIS (Reset to Initial State)
+- [ ] **save_restore_cursor_test.go** - DECSC/DECRC (Save/Restore Cursor)
+
+### Priority 7: xterm Extensions
+
+xterm-specific features:
+
+- [ ] **xterm_winops_test.go** - Window operations
+- [ ] **manipulate_selection_data_test.go** - Selection/clipboard
+- [ ] **change_color_test.go** - Color changes
+- [ ] **change_dynamic_color_test.go** - Dynamic color changes
+
+## Adding New Escape Sequences to helpers.go
+
+When converting tests, you may need to add new escape sequence helper functions:
+
+```go
+// Example: Add CHA (Cursor Horizontal Absolute)
+func CHA(d *Driver, x int) {
+    d.WriteRaw(fmt.Sprintf("%s[%dG", ESC, x))
+}
+```
+
+Common patterns:
+- `CSI n A` → `fmt.Sprintf("%s[%dA", ESC, n)` - Cursor Up
+- `CSI n ; m H` → `fmt.Sprintf("%s[%d;%dH", ESC, y, x)` - Cursor Position
+- `CSI ? n h` → `fmt.Sprintf("%s[?%dh", ESC, n)` - DEC Private Mode Set
+- `CSI ? n l` → `fmt.Sprintf("%s[?%dl", ESC, n)` - DEC Private Mode Reset
+
+## Running Tests
+
+```bash
+# Run all tests
+go test texelation/apps/texelterm/esctest
+
+# Run specific test file
+go test texelation/apps/texelterm/esctest -run Test_CUU
+
+# Run with verbose output
+go test -v texelation/apps/texelterm/esctest
+
+# Run specific test
+go test texelation/apps/texelterm/esctest -run Test_ICH_DefaultParam
+```
+
+## Test Conversion Guidelines
+
+1. **Preserve test intent**: Keep the same test logic and expectations
+2. **Add attribution**: Each file should cite the original esctest2 source
+3. **Use 1-indexed coordinates**: VT standards use 1-indexed positions
+4. **Handle optional parameters**: Use variadic args for sequences with optional params
+5. **Document failures**: Note any failing tests and the reason
+
+## Next Steps
+
+1. Convert Priority 1 tests (basic cursor movement)
+2. Fix DECLRMM support to pass failing ICH tests
+3. Investigate CUU scroll region behavior
+4. Continue with Priority 2-7 tests based on need
+5. Consider automated conversion script for remaining tests
+
+## Contributing
+
+When adding new tests:
+1. Follow the existing file naming convention: `<sequence>_test.go`
+2. Add attribution header citing esctest2
+3. Document test purpose in comments
+4. Run tests and note any failures
+5. Update this README with test status
