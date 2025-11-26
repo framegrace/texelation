@@ -269,17 +269,17 @@ func (v *VTerm) LineFeed() {
 		// Main screen: check if we're at bottom margin
 		if v.cursorY == v.marginBottom {
 			v.scrollRegion(1, v.marginTop, v.marginBottom)
-		} else {
+		} else if v.cursorY < v.height-1 {
+			// Only append history lines when cursor will actually move down
 			logicalY := v.cursorY + v.getTopHistoryLine()
 			if logicalY+1 >= v.historyLen {
 				v.appendHistoryLine(make([]Cell, 0, v.width))
 			}
-			if v.cursorY < v.height-1 {
-				v.SetCursorPos(v.cursorY+1, v.cursorX)
-			} else {
-				v.viewOffset = 0 // Jump to the bottom
-				v.MarkAllDirty()
-			}
+			v.SetCursorPos(v.cursorY+1, v.cursorX)
+		} else {
+			// At bottom of screen but not at scroll region bottom: stay put
+			v.viewOffset = 0 // Jump to the bottom
+			v.MarkAllDirty()
 		}
 	}
 }
@@ -323,6 +323,11 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 				v.setHistoryLine(topHistory+bottom, blankLine)
 			}
 		} else { // Scroll Down
+			// Ensure history buffer has all lines we'll be writing to
+			endLogicalY := topHistory + bottom
+			for v.historyLen <= endLogicalY {
+				v.appendHistoryLine(make([]Cell, 0, v.width))
+			}
 			for i := 0; i < -n; i++ {
 				// Move all lines in region down by one
 				for y := bottom; y > top; y-- {
