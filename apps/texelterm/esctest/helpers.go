@@ -120,6 +120,42 @@ func CHA(d *Driver, n ...int) {
 	}
 }
 
+// VPA (Vertical Position Absolute) - Move cursor to row n on current column.
+func VPA(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[d", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dd", ESC, n[0]))
+	}
+}
+
+// HVP (Horizontal and Vertical Position) - Same as CUP but uses 'f' instead of 'H'.
+func HVP(d *Driver, p ...Point) {
+	if len(p) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[f", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%d;%df", ESC, p[0].Y, p[0].X))
+	}
+}
+
+// CNL (Cursor Next Line) - Move cursor down n lines to column 1.
+func CNL(d *Driver, n ...int) {
+	count := 1
+	if len(n) > 0 {
+		count = n[0]
+	}
+	d.WriteRaw(fmt.Sprintf("%s[%dE", ESC, count))
+}
+
+// CPL (Cursor Previous Line) - Move cursor up n lines to column 1.
+func CPL(d *Driver, n ...int) {
+	count := 1
+	if len(n) > 0 {
+		count = n[0]
+	}
+	d.WriteRaw(fmt.Sprintf("%s[%dF", ESC, count))
+}
+
 // ICH (Insert Character) - Insert n blank characters at cursor position.
 func ICH(d *Driver, n ...int) {
 	if len(n) == 0 {

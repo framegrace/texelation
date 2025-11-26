@@ -32,10 +32,17 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **cha_test.go** - CHA (Cursor Horizontal Absolute) - 6 tests, all passing
 - ✅ **ich_test.go** - ICH (Insert Character) - 6 tests, all passing
 
+**Batch 2: Advanced Cursor Movement**
+- ✅ **vpa_test.go** - VPA (Vertical Position Absolute) - 4 tests, all passing
+- ✅ **hvp_test.go** - HVP (Horizontal and Vertical Position) - 3 tests, all passing
+- ✅ **cup_test.go** - CUP (Cursor Position) - 4 tests, all passing
+- ✅ **cnl_test.go** - CNL (Cursor Next Line) - 5 tests, all passing
+- ✅ **cpl_test.go** - CPL (Cursor Previous Line) - 5 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 32 tests
-**Passing**: 32 (100%) ✅
+**Total**: 53 tests
+**Passing**: 53 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
