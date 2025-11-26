@@ -210,6 +210,24 @@ func IL(d *Driver, n ...int) {
 	}
 }
 
+// ED (Erase in Display) - Erase parts of the display.
+func ED(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[J", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dJ", ESC, n[0]))
+	}
+}
+
+// EL (Erase in Line) - Erase parts of the line.
+func EL(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[K", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dK", ESC, n[0]))
+	}
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {

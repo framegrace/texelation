@@ -870,8 +870,29 @@ func (v *VTerm) ClearScreenMode(mode int) {
 		}
 	case 2: // Erase entire visible screen (ED 2)
 		v.ClearVisibleScreen()
-	case 3: // Erase screen and scrollback (ED 3)
-		v.ClearScreen()
+	case 3: // Erase scrollback only, leave visible screen intact (ED 3)
+		if !v.inAltScreen {
+			// Clear scrollback by resetting history to only contain visible screen
+			topHistory := v.getTopHistoryLine()
+			newHistory := make([][]Cell, v.maxHistorySize)
+
+			// Copy visible screen lines to new history buffer starting at position 0
+			for i := 0; i < v.height; i++ {
+				oldLine := v.getHistoryLine(topHistory + i)
+				if oldLine != nil {
+					newHistory[i] = append([]Cell(nil), oldLine...)
+				} else {
+					newHistory[i] = make([]Cell, 0, v.width)
+				}
+			}
+
+			// Replace history buffer and reset pointers
+			v.historyBuffer = newHistory
+			v.historyHead = 0
+			v.historyLen = v.height
+			v.viewOffset = 0
+		}
+		// On alt screen, ED 3 does nothing (no scrollback to clear)
 	}
 }
 

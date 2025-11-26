@@ -51,10 +51,14 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **dl_test.go** - DL (Delete Line) - 10 tests, all passing
 - ✅ **il_test.go** - IL (Insert Line) - 6 tests, all passing
 
+**Batch 6: Erase Operations**
+- ✅ **ed_test.go** - ED (Erase in Display) - 8 tests, all passing
+- ✅ **el_test.go** - EL (Erase in Line) - 5 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 88 tests
-**Passing**: 88 (100%) ✅
+**Total**: 101 tests
+**Passing**: 101 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
@@ -135,6 +139,13 @@ All compliance tests passing! The following issues were fixed:
     - Prevents negative indices when n > region height
     - Ensures only lines from cursor to marginBottom are affected
     - See vterm.go:1364-1367, 1401-1404
+
+13. **ED 3 Scrollback-Only Clear** (ED)
+    - Fixed ED(3) to only clear scrollback history, leaving visible screen intact
+    - Previously incorrectly cleared both screen and scrollback
+    - Now preserves visible screen content and only removes history above it
+    - On alt screen (no scrollback), ED 3 correctly does nothing
+    - See vterm.go:873-896
 
 ## Test Conversion Plan
 
