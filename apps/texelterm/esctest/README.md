@@ -47,10 +47,14 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **ech_test.go** - ECH (Erase Character) - 4 tests, all passing
 - ✅ **rep_test.go** - REP (Repeat) - 4 tests, all passing
 
+**Batch 5: Line Editing**
+- ✅ **dl_test.go** - DL (Delete Line) - 10 tests, all passing
+- ✅ **il_test.go** - IL (Insert Line) - 6 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 72 tests
-**Passing**: 72 (100%) ✅
+**Total**: 88 tests
+**Passing**: 88 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
@@ -111,6 +115,26 @@ All compliance tests passing! The following issues were fixed:
    - scrollRegion now works for both alt and main screens
    - Fixes scrolling behavior for commands that use margins (REP, etc.)
    - See vterm.go:259-285 (LineFeed), 287-339 (scrollRegion)
+
+10. **DL/IL Left/Right Margin Support** (DL, IL)
+    - DeleteLines and InsertLines now respect left/right margins when DECLRMM is active
+    - Cursor outside margins: DL/IL does nothing
+    - Cursor inside margins: DL/IL only operates within margin columns
+    - Similar pattern to DCH margin handling
+    - See vterm.go:1290-1417 (DeleteLines), 1144-1247 (InsertLines)
+
+11. **DL/IL Scroll Region Compliance** (DL, IL)
+    - Rewrote DeleteLines and InsertLines to only affect lines within scroll region
+    - Lines outside top/bottom margins are now preserved correctly
+    - Fixed main screen handling to work like alt screen for IL/DL
+    - Prevents lines from being deleted from or inserted into history incorrectly
+    - See vterm.go:1314-1347 (deleteFullLines), 1167-1205 (insertFullLines)
+
+12. **DL/IL Margin Region Boundary Clamping** (DL, IL)
+    - Fixed clearing loop in deleteLinesWithinMargins to clamp start position
+    - Prevents negative indices when n > region height
+    - Ensures only lines from cursor to marginBottom are affected
+    - See vterm.go:1364-1367, 1401-1404
 
 ## Test Conversion Plan
 

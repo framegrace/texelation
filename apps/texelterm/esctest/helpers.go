@@ -192,6 +192,24 @@ func REP(d *Driver, n ...int) {
 	}
 }
 
+// DL (Delete Line) - Delete n lines at cursor position.
+func DL(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[M", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dM", ESC, n[0]))
+	}
+}
+
+// IL (Insert Line) - Insert n blank lines at cursor position.
+func IL(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[L", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dL", ESC, n[0]))
+	}
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {
