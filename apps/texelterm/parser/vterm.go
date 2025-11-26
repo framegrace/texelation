@@ -42,6 +42,7 @@ type VTerm struct {
 	marginTop, marginBottom            int
 	marginLeft, marginRight            int
 	leftRightMarginMode                bool
+	originMode                         bool
 	defaultFG, defaultBG               Color
 	DefaultFgChanged, DefaultBgChanged func(Color)
 	QueryDefaultFg, QueryDefaultBg     func()
@@ -324,6 +325,10 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.appCursorKeys = true
 		case 4: // SET Insert Mode
 			v.insertMode = true
+		case 6: // DECOM - Origin Mode
+			v.originMode = true
+			// Move cursor to home position of scroll region
+			v.SetCursorPos(v.marginTop, v.marginLeft)
 		case 7:
 			v.autoWrapMode = true
 		case 12: // SET Blinking Cursor
@@ -361,6 +366,10 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.appCursorKeys = false
 		case 4: // RESET Insert Mode
 			v.insertMode = false
+		case 6: // DECOM - Reset Origin Mode
+			v.originMode = false
+			// Move cursor to absolute home position
+			v.SetCursorPos(0, 0)
 		case 7:
 			v.autoWrapMode = false
 		case 12: // RESET Steady Cursor (Stop Blinking)
@@ -714,15 +723,29 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 		// CPL - Cursor Previous Line: move up N lines and to column 0
 		v.MoveCursorUp(param(0, 1))
 		v.SetCursorPos(v.cursorY, 0)
-	case 'G':
+	case 'G': // CHA - Cursor Horizontal Absolute
 		col := param(0, 1) - 1
+		// In origin mode, column is relative to left margin
+		if v.originMode {
+			col += v.marginLeft
+		}
 		v.SetCursorPos(v.cursorY, col)
-	case 'H', 'f':
+	case 'H', 'f': // CUP - Cursor Position
 		row := param(0, 1) - 1
 		col := param(1, 1) - 1
+		// In origin mode, coordinates are relative to scroll region
+		if v.originMode {
+			row += v.marginTop
+			col += v.marginLeft
+		}
 		v.SetCursorPos(row, col)
-	case 'd':
-		v.SetCursorPos(param(0, 1)-1, v.cursorX)
+	case 'd': // VPA - Vertical Position Absolute
+		row := param(0, 1) - 1
+		// In origin mode, row is relative to top margin
+		if v.originMode {
+			row += v.marginTop
+		}
+		v.SetCursorPos(row, v.cursorX)
 	}
 }
 
@@ -1192,11 +1215,39 @@ func (v *VTerm) SetLeftRightMargins(left, right int) {
 }
 
 func (v *VTerm) MoveCursorForward(n int) {
-	v.SetCursorPos(v.cursorY, v.cursorX+n)
+	newX := v.cursorX + n
+
+	// Apply left/right margin constraints only if cursor is currently inside the region
+	if v.leftRightMarginMode && v.cursorX >= v.marginLeft && v.cursorX <= v.marginRight {
+		// Inside scroll region - constrain to right margin
+		if newX > v.marginRight {
+			newX = v.marginRight
+		}
+	} else {
+		// Outside scroll region or no margins - constrain to right edge of screen
+		if newX >= v.width {
+			newX = v.width - 1
+		}
+	}
+	v.SetCursorPos(v.cursorY, newX)
 }
 
 func (v *VTerm) MoveCursorBackward(n int) {
-	v.SetCursorPos(v.cursorY, v.cursorX-n)
+	newX := v.cursorX - n
+
+	// Apply left/right margin constraints only if cursor is currently inside the region
+	if v.leftRightMarginMode && v.cursorX >= v.marginLeft && v.cursorX <= v.marginRight {
+		// Inside scroll region - constrain to left margin
+		if newX < v.marginLeft {
+			newX = v.marginLeft
+		}
+	} else {
+		// Outside scroll region or no margins - constrain to left edge of screen
+		if newX < 0 {
+			newX = 0
+		}
+	}
+	v.SetCursorPos(v.cursorY, newX)
 }
 
 func (v *VTerm) MoveCursorUp(n int) {
@@ -1455,3 +1506,7 @@ func (v *VTerm) Cursor() (int, int)  { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool { return v.cursorVisible }
 func (v *VTerm) DefaultFG() Color    { return v.defaultFG }
 func (v *VTerm) DefaultBG() Color    { return v.defaultBG }
+func (v *VTerm) OriginMode() bool    { return v.originMode }
+func (v *VTerm) ScrollMargins() (int, int) {
+	return v.marginTop, v.marginLeft
+}

@@ -24,13 +24,18 @@ The original Python-based tests have been converted to Go to enable:
 
 ### Converted Tests
 
+**Batch 1: Basic Cursor Movement**
 - ✅ **cuu_test.go** - CUU (Cursor Up) - 5 tests, all passing
+- ✅ **cud_test.go** - CUD (Cursor Down) - 5 tests, all passing
+- ✅ **cuf_test.go** - CUF (Cursor Forward) - 5 tests, all passing
+- ✅ **cub_test.go** - CUB (Cursor Backward) - 5 tests, all passing
+- ✅ **cha_test.go** - CHA (Cursor Horizontal Absolute) - 6 tests, all passing
 - ✅ **ich_test.go** - ICH (Insert Character) - 6 tests, all passing
 
 ### Test Results Summary
 
-**Total**: 11 tests
-**Passing**: 11 (100%) ✅
+**Total**: 32 tests
+**Passing**: 32 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
@@ -47,6 +52,20 @@ All compliance tests passing! The following issues were fixed:
    - Implemented DECSLRM (CSI Ps ; Ps s) to set left/right margins
    - ICH now respects left/right margins when DECLRMM is active
    - See vterm.go:334, 371, 668, 1123, 887
+
+3. **Horizontal Cursor Movement Margin Support** (CUF, CUB)
+   - CUF (Cursor Forward) now respects left/right margins when DECLRMM is active
+   - CUB (Cursor Backward) now respects left/right margins when DECLRMM is active
+   - When cursor is inside margin region, movement stops at margin boundaries
+   - When cursor is outside margins, movement stops at screen boundaries
+   - See vterm.go:1194-1228
+
+4. **DECOM (Origin Mode) Implementation**
+   - Implemented CSI ? 6 h/l (enable/disable origin mode)
+   - When enabled, cursor positioning (CUP, CHA, VPA) is relative to scroll region
+   - Cursor position reporting adjusted to return relative coordinates in origin mode
+   - Entering/exiting origin mode moves cursor to home position of region/screen
+   - See vterm.go:328-331, 369-372, 726-748, driver.go:53-67, 1509-1512
 
 ## Test Conversion Plan
 

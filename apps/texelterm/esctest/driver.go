@@ -51,9 +51,18 @@ func (d *Driver) WriteRaw(data string) {
 }
 
 // GetCursorPosition returns the current cursor position (1-indexed).
+// In origin mode, returns position relative to scroll region margins.
 func (d *Driver) GetCursorPosition() Point {
 	// VTerm uses 0-indexed cursor, but VT standards use 1-indexed
 	x, y := d.vterm.Cursor()
+
+	// In origin mode, report relative to scroll region
+	if d.vterm.OriginMode() {
+		marginTop, marginLeft := d.vterm.ScrollMargins()
+		x -= marginLeft
+		y -= marginTop
+	}
+
 	return NewPoint(x+1, y+1)
 }
 

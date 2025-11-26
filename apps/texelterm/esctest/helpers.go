@@ -111,6 +111,15 @@ func CUB(d *Driver, n ...int) {
 	d.WriteRaw(fmt.Sprintf("%s[%dD", ESC, count))
 }
 
+// CHA (Cursor Horizontal Absolute) - Move cursor to column n on current line.
+func CHA(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[G", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dG", ESC, n[0]))
+	}
+}
+
 // ICH (Insert Character) - Insert n blank characters at cursor position.
 func ICH(d *Driver, n ...int) {
 	if len(n) == 0 {
@@ -160,9 +169,11 @@ func DECRESET(d *Driver, mode int) {
 
 // DEC Private Mode constants
 const (
-	DECLRMM = 69 // Left/right margin mode
-	DECOM   = 6  // Origin mode
-	DECAWM  = 7  // Auto-wrap mode
+	DECLRMM           = 69   // Left/right margin mode
+	DECOM             = 6    // Origin mode
+	DECAWM            = 7    // Auto-wrap mode
+	ReverseWrapInline = 45   // Reverse-wraparound mode
+	ReverseWrapExtend = 1045 // Extended Reverse-wraparound mode
 )
 
 // Blank returns a space character (used for blank cells).
