@@ -660,10 +660,32 @@ func (v *VTerm) Reset() {
 }
 
 // ReverseIndex moves the cursor up one line, scrolling down if at the top margin.
+// Index moves cursor down one line, scrolling if at bottom margin.
+func (v *VTerm) Index() {
+	v.wrapNext = false
+	// Check if cursor is outside left/right margins - if so, don't scroll
+	outsideMargins := v.leftRightMarginMode && (v.cursorX < v.marginLeft || v.cursorX > v.marginRight)
+
+	if v.cursorY == v.marginBottom {
+		if !outsideMargins {
+			v.scrollRegion(1, v.marginTop, v.marginBottom)
+		}
+		// If outside margins, stay at marginBottom (don't move past it)
+	} else if v.cursorY < v.height-1 {
+		v.SetCursorPos(v.cursorY+1, v.cursorX)
+	}
+}
+
 func (v *VTerm) ReverseIndex() {
 	v.wrapNext = false
+	// Check if cursor is outside left/right margins - if so, don't scroll
+	outsideMargins := v.leftRightMarginMode && (v.cursorX < v.marginLeft || v.cursorX > v.marginRight)
+
 	if v.cursorY == v.marginTop {
-		v.scrollRegion(-1, v.marginTop, v.marginBottom)
+		if !outsideMargins {
+			v.scrollRegion(-1, v.marginTop, v.marginBottom)
+		}
+		// If outside margins, stay at marginTop (don't move past it)
 	} else if v.cursorY > 0 {
 		v.SetCursorPos(v.cursorY-1, v.cursorX)
 	}
@@ -1521,8 +1543,8 @@ func (v *VTerm) SetMargins(top, bottom int) {
 	}
 	v.marginTop = top - 1
 	v.marginBottom = bottom - 1
-	// Per spec, move cursor to home on change
-	//v.SetCursorPos(v.marginTop, 0)
+	// Per spec, DECSTBM moves cursor to home position (1,1)
+	v.SetCursorPos(0, 0)
 }
 
 func (v *VTerm) SetLeftRightMargins(left, right int) {

@@ -103,6 +103,9 @@ func (p *Parser) Parse(r rune) {
 			p.state = StateGround
 		case '(':
 			p.state = StateCharset
+		case 'D':
+			p.vterm.Index()
+			p.state = StateGround
 		case 'M':
 			p.vterm.ReverseIndex()
 			p.state = StateGround

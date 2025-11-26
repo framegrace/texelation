@@ -55,11 +55,16 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **ed_test.go** - ED (Erase in Display) - 8 tests, all passing
 - ✅ **el_test.go** - EL (Erase in Line) - 5 tests, all passing
 
+**Batch 7: Scrolling and Regions**
+- ⚠️ **decstbm_test.go** - DECSTBM (Set Top/Bottom Margins) - 9/10 passing
+- ✅ **ind_test.go** - IND (Index) - 6 tests, all passing
+- ⚠️ **ri_test.go** - RI (Reverse Index) - 3/6 passing
+
 ### Test Results Summary
 
-**Total**: 101 tests
-**Passing**: 101 (100%) ✅
-**Failing**: 0
+**Total**: 119 tests
+**Passing**: 115 (97%) ✅
+**Failing**: 4 (known issues)
 
 All compliance tests passing! The following issues were fixed:
 
@@ -146,6 +151,36 @@ All compliance tests passing! The following issues were fixed:
     - Now preserves visible screen content and only removes history above it
     - On alt screen (no scrollback), ED 3 correctly does nothing
     - See vterm.go:873-896
+
+14. **IND (Index) Implementation** (IND)
+    - Implemented ESC D (Index) command for cursor down with scroll
+    - Moves cursor down one line, scrolls region up if at bottom margin
+    - Respects left/right margins - won't scroll if cursor outside margins
+    - Stops at bottom margin when outside left/right margins
+    - See parser.go:106-108, vterm.go:663-677
+
+15. **DECSTBM Cursor to Origin** (DECSTBM)
+    - Fixed DECSTBM to move cursor to home position (1,1) per spec
+    - Previously left cursor at current position
+    - Ensures consistent behavior when setting scroll regions
+    - See vterm.go:1534-1535
+
+16. **IND/RI Left/Right Margin Handling** (IND, RI)
+    - Fixed Index and ReverseIndex to respect left/right margins
+    - When cursor outside margins: won't scroll region, but respects top/bottom limits
+    - When at margin boundary outside left/right: stays at boundary
+    - Prevents unwanted scrolling when cursor at edge of screen
+    - See vterm.go:666-677, 681-692
+
+## Known Issues
+
+**Batch 7 Failures (4 tests):**
+- Test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll - Content preservation issue
+- Test_RI_Scrolls - Main screen scroll down not working correctly
+- Test_RI_ScrollsInTopBottomRegionStartingBelow - RI scroll region issue
+- Test_RI_ScrollsInTopBottomRegionStartingWithin - RI scroll region issue
+
+These failures are related to Reverse Index scrolling on the main screen and will be addressed in a future update.
 
 ## Test Conversion Plan
 

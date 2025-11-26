@@ -228,6 +228,16 @@ func EL(d *Driver, n ...int) {
 	}
 }
 
+// IND (Index) - Move cursor down one line, scroll if at bottom.
+func IND(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%sD", ESC))
+}
+
+// RI (Reverse Index) - Move cursor up one line, scroll if at top.
+func RI(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%sM", ESC))
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {
