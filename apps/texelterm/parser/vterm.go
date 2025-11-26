@@ -465,8 +465,11 @@ func (v *VTerm) SaveCursor() {
 }
 
 // RestoreCursor restores the cursor position for either the main or alt screen.
+// According to xterm behavior, DECRC also resets origin mode.
 func (v *VTerm) RestoreCursor() {
 	v.wrapNext = false
+	// Reset origin mode (xterm behavior)
+	v.originMode = false
 	if v.inAltScreen {
 		v.SetCursorPos(v.savedAltCursorY, v.savedAltCursorX)
 	} else {

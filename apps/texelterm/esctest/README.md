@@ -39,10 +39,13 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **cnl_test.go** - CNL (Cursor Next Line) - 5 tests, all passing
 - ✅ **cpl_test.go** - CPL (Cursor Previous Line) - 5 tests, all passing
 
+**Batch 3: Save/Restore Cursor**
+- ✅ **save_restore_cursor_test.go** - DECSC/DECRC (Save/Restore Cursor) - 5 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 53 tests
-**Passing**: 53 (100%) ✅
+**Total**: 58 tests
+**Passing**: 58 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
@@ -73,6 +76,11 @@ All compliance tests passing! The following issues were fixed:
    - Cursor position reporting adjusted to return relative coordinates in origin mode
    - Entering/exiting origin mode moves cursor to home position of region/screen
    - See vterm.go:328-331, 369-372, 726-748, driver.go:53-67, 1509-1512
+
+5. **DECRC Origin Mode Reset** (DECSC/DECRC)
+   - DECRC (Restore Cursor) now resets origin mode to off, per xterm behavior
+   - Ensures cursor positioning returns to absolute screen coordinates after restore
+   - See vterm.go:467-478
 
 ## Test Conversion Plan
 

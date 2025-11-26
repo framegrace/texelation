@@ -185,7 +185,22 @@ func ECH(d *Driver, n ...int) {
 
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
-	d.WriteRaw(fmt.Sprintf("%s[%d;%dr", ESC, top, bottom))
+	if top == 0 && bottom == 0 {
+		// Reset margins
+		d.WriteRaw(fmt.Sprintf("%s[r", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%d;%dr", ESC, top, bottom))
+	}
+}
+
+// DECSC (Save Cursor) - Save cursor position and attributes (ESC 7).
+func DECSC(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%s7", ESC))
+}
+
+// DECRC (Restore Cursor) - Restore cursor position and attributes (ESC 8).
+func DECRC(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%s8", ESC))
 }
 
 // DECSLRM (Set Left and Right Margins) - Set left/right margins.
