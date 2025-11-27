@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: [To be determined] (Batch 10)
+**Latest Commit**: 1d5d1f4 (Batch 10)
 
 ## Current Status
 
@@ -171,7 +171,7 @@ func TBC(d *Driver, n ...int) // CSI g - Clear tabs
 
 **All 5 tests passing**
 
-### Batch 10: Additional Cursor Movement (Commit: TBD)
+### Batch 10: Additional Cursor Movement (Commit: 1d5d1f4)
 
 **Files Created:**
 - `apps/texelterm/esctest/hpa_test.go` - 4 HPA (Horizontal Position Absolute) tests
