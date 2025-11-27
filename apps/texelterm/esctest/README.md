@@ -80,10 +80,13 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **lf_test.go** - LF (Line Feed) - 6 tests, all passing
 - ✅ **nel_test.go** - NEL (Next Line) - 6 tests, all passing
 
+**Batch 12: Screen Alignment Test**
+- ✅ **decaln_test.go** - DECALN (Screen Alignment Test) - 3 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 181 tests
-**Passing**: 181 (100%) ✅
+**Total**: 184 tests
+**Passing**: 184 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
@@ -245,6 +248,15 @@ All compliance tests passing! The following issues were fixed:
     - LF now respects left/right margins (won't scroll when outside)
     - Parser no longer assumes LNM (Line Feed/New Line Mode) is always on
     - See parser.go:61-65, 109-112, vterm.go:259-293, 783-805, 941-966
+
+23. **DECALN (Screen Alignment Test)** (ESC # 8)
+    - Implemented DECALN command for screen alignment testing
+    - Fills entire screen with 'E' characters
+    - Resets all margins (top/bottom and left/right) to full screen
+    - Moves cursor to home position (1,1)
+    - Works on both main screen and alt screen
+    - Added StateHash parser state for ESC # sequences
+    - See parser.go:27, 106-107, 192-199, vterm.go:905-955
 
 ## Test Conversion Plan
 

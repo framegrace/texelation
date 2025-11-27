@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: c405dac (Batch 11)
+**Latest Commit**: [TBD] (Batch 12)
 
 ## Current Status
 
-**Total Tests**: 181
-**Passing**: 181 (100%) ✓
+**Total Tests**: 184
+**Passing**: 184 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -21,6 +21,7 @@
 - **Batch 9**: Tab operations - HTS, TBC (5 tests) - ALL PASSING
 - **Batch 10**: Additional cursor movement - HPA, HPR, VPR, CBT, CHT (19 tests) - ALL PASSING
 - **Batch 11**: Line control characters - CR, LF, NEL (17 tests) - ALL PASSING
+- **Batch 12**: Screen Alignment Test - DECALN (3 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -264,6 +265,34 @@ func NEL(d *Driver)  // ESC E - Next Line
 - NEL correctly decides when to move horizontally based on vertical movement success
 
 **All 17 tests passing**
+
+### Batch 12: Screen Alignment Test (Commit: TBD)
+
+**Files Created:**
+- `apps/texelterm/esctest/decaln_test.go` - 3 DECALN tests
+
+**Implementations:**
+1. **DECALN (Screen Alignment Test) - ESC # 8** (parser.go:27, 106-107, 192-199, vterm.go:905-955)
+   - Fills entire screen with 'E' characters
+   - Resets all margins (top/bottom and left/right) to full screen
+   - Moves cursor to home position (1,1)
+   - Works correctly on both main screen (with history) and alt screen
+
+**Parser Changes:**
+- Added StateHash parser state for ESC # sequences
+- ESC # 8 now correctly triggers DECALN command
+
+**Helper Functions Added** (helpers.go:335-338):
+```go
+func DECALN(d *Driver)  // ESC # 8 - Screen Alignment Test
+```
+
+**Use Case:**
+- DECALN is a diagnostic command used to test all screen positions
+- Useful for checking terminal rendering and alignment
+- Commonly used by technicians to verify display quality
+
+**All 3 tests passing**
 
 ## Test Conversion Process
 

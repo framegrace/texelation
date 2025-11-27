@@ -332,6 +332,11 @@ func NEL(d *Driver) {
 	d.WriteRaw(fmt.Sprintf("%sE", ESC))
 }
 
+// DECALN (Screen Alignment Test) - Fill screen with E's, reset margins, move cursor to home.
+func DECALN(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%s#8", ESC))
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {

@@ -901,6 +901,59 @@ func (v *VTerm) ClearTabStop(mode int) {
 }
 
 // Reset brings the terminal to its initial state.
+// DECALN (Screen Alignment Test) fills the screen with E's, resets margins, and moves cursor home.
+func (v *VTerm) DECALN() {
+	v.MarkAllDirty()
+
+	// Fill entire screen with 'E' characters
+	if v.inAltScreen {
+		for y := 0; y < v.height; y++ {
+			for x := 0; x < v.width; x++ {
+				v.altBuffer[y][x] = Cell{
+					Rune: 'E',
+					FG:   v.defaultFG,
+					BG:   v.defaultBG,
+				}
+			}
+		}
+	} else {
+		// Main screen: fill visible area
+		topHistory := v.getTopHistoryLine()
+		for y := 0; y < v.height; y++ {
+			logicalY := topHistory + y
+			// Ensure line exists
+			for logicalY >= v.historyLen {
+				v.appendHistoryLine(make([]Cell, 0, v.width))
+			}
+			line := v.getHistoryLine(logicalY)
+			// Resize line if needed
+			if len(line) < v.width {
+				newLine := make([]Cell, v.width)
+				copy(newLine, line)
+				v.setHistoryLine(logicalY, newLine)
+				line = newLine
+			}
+			for x := 0; x < v.width; x++ {
+				line[x] = Cell{
+					Rune: 'E',
+					FG:   v.defaultFG,
+					BG:   v.defaultBG,
+				}
+			}
+			v.setHistoryLine(logicalY, line)
+		}
+	}
+
+	// Reset margins to full screen
+	v.marginTop = 0
+	v.marginBottom = v.height - 1
+	v.marginLeft = 0
+	v.marginRight = v.width - 1
+
+	// Move cursor to home
+	v.SetCursorPos(0, 0)
+}
+
 func (v *VTerm) Reset() {
 	v.MarkAllDirty()
 	v.savedMainCursorX, v.savedMainCursorY = 0, 0

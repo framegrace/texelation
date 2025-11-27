@@ -24,6 +24,7 @@ const (
 	StateCharset
 	StateDCS
 	StateDCSEscape
+	StateHash
 )
 
 type Parser struct {
@@ -102,6 +103,8 @@ func (p *Parser) Parse(r rune) {
 			p.state = StateGround
 		case '(':
 			p.state = StateCharset
+		case '#':
+			p.state = StateHash
 		case 'D':
 			p.vterm.Index()
 			p.state = StateGround
@@ -186,6 +189,14 @@ func (p *Parser) Parse(r rune) {
 			p.state = StateDCS
 			p.dcsBuffer = append(p.dcsBuffer, '\x1b', r)
 		}
+	case StateHash:
+		// ESC # sequences
+		switch r {
+		case '8':
+			// DECALN - Screen Alignment Test
+			p.vterm.DECALN()
+		}
+		p.state = StateGround
 	case StateCharset:
 		p.state = StateGround
 	}
