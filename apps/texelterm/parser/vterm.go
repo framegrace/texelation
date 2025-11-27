@@ -2543,6 +2543,10 @@ func WithScreenRestoredHandler(handler func()) Option {
 	return func(v *VTerm) { v.ScreenRestored = handler }
 }
 
+func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
+	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
+}
+
 // reflowHistoryBuffer rewraps all lines in the history buffer to fit the new width.
 // It reconstructs logical lines by joining wrapped segments and re-wraps them.
 func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
