@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: 9089ea1 (Batch 15)
+**Latest Commit**: (pending - Batch 16)
 
 ## Current Status
 
-**Total Tests**: 212
-**Passing**: 212 (100%) ✓
+**Total Tests**: 220
+**Passing**: 220 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -24,7 +24,8 @@
 - **Batch 12**: Screen Alignment Test - DECALN (3 tests) - ALL PASSING
 - **Batch 13**: VT and FF control characters (12 tests) - ALL PASSING
 - **Batch 14**: Terminal Reset - RIS (6 tests) - ALL PASSING
-- **Batch 15**: SGR - Text attributes and colors (10 tests) - ALL PASSING
+- **Batch 15**: SGR - Text attributes and basic colors (10 tests) - ALL PASSING
+- **Batch 16**: Extended SGR colors (8 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -413,6 +414,60 @@ func RIS(d *Driver)  // ESC c - Reset to Initial State
 - OSC color change sequences - texelterm supports!
 
 **All 10 tests passing**
+
+### Batch 16: Extended SGR Colors (Commit: pending)
+
+**Files Modified:**
+- `apps/texelterm/esctest/sgr_test.go` - Added 8 more comprehensive SGR tests
+
+**Tests Added:**
+
+1. **Bright Foreground Colors (SGR 90-97)**
+   - Tests bright versions of standard 8 colors
+   - Maps to color indices 8-15
+   - Example: SGR 90 = bright black (gray, index 8)
+
+2. **Bright Background Colors (SGR 100-107)**
+   - Tests bright background colors
+   - Maps to color indices 8-15
+   - Example: SGR 107 = bright white background (index 15)
+
+3. **256-Color Foreground (SGR 38;5;n)**
+   - Tests 256-color palette mode
+   - Uses `ColorMode256` with value 0-255
+   - Example: `SGR(d, 38, 5, 196)` = color 196 (bright red)
+
+4. **256-Color Background (SGR 48;5;n)**
+   - Tests 256-color background mode
+   - Example: `SGR(d, 48, 5, 226)` = color 226 (yellow)
+
+5. **RGB True-Color Foreground (SGR 38;2;r;g;b)**
+   - Tests 24-bit RGB mode
+   - Uses `ColorModeRGB` with R, G, B components
+   - Example: `SGR(d, 38, 2, 255, 128, 0)` = orange (255,128,0)
+
+6. **RGB True-Color Background (SGR 48;2;r;g;b)**
+   - Tests RGB background mode
+   - Example: `SGR(d, 48, 2, 64, 224, 208)` = turquoise
+
+7. **Combined Attributes and Colors**
+   - Tests setting multiple parameters at once
+   - Example: `SGR(d, SGR_BOLD, SGR_UNDERLINE, SGR_FG_RED, SGR_BG_BLUE)`
+   - Verifies attributes and colors apply independently
+
+8. **SGR 0 Reset Behavior**
+   - Verifies SGR 0 resets both attributes AND colors
+   - All defaults should be restored
+
+**Coverage Summary:**
+- ✅ Standard 8 colors (30-37, 40-47)
+- ✅ Bright 8 colors (90-97, 100-107)
+- ✅ 256-color palette mode (38;5;n, 48;5;n)
+- ✅ RGB true-color mode (38;2;r;g;b, 48;2;r;g;b)
+- ✅ Combined attributes + colors
+- ✅ Full reset behavior
+
+**All 8 tests passing (18 total SGR tests)**
 
 ## Test Conversion Process
 
