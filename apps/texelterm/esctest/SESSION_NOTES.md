@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: 5a2f73e (Batch 14)
+**Latest Commit**: (pending - Batch 15)
 
 ## Current Status
 
-**Total Tests**: 202
-**Passing**: 202 (100%) ✓
+**Total Tests**: 212
+**Passing**: 212 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -24,6 +24,7 @@
 - **Batch 12**: Screen Alignment Test - DECALN (3 tests) - ALL PASSING
 - **Batch 13**: VT and FF control characters (12 tests) - ALL PASSING
 - **Batch 14**: Terminal Reset - RIS (6 tests) - ALL PASSING
+- **Batch 15**: SGR - Text attributes and colors (10 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -364,6 +365,54 @@ func RIS(d *Driver)  // ESC c - Reset to Initial State
 - `test_RIS_ResetDECCOLM` - Requires 80/132 column switching (not implemented)
 
 **All 6 tests passing**
+
+### Batch 15: SGR (Select Graphic Rendition) - Infrastructure and Basic Tests (Commit: pending)
+
+**Files Created:**
+- `apps/texelterm/esctest/sgr_test.go` - 10 SGR tests for text attributes and colors
+
+**Infrastructure Added:**
+
+1. **Driver Extensions** (driver.go):
+   - Added `GetCellAt(Point) *parser.Cell` - Returns full cell including attributes and colors
+   - Enables inspection of cell appearance, not just content
+
+2. **Assertion Functions** (helpers.go:50-132):
+   - `AssertCellHasAttribute(t, d, p, attr, msg)` - Checks for bold/underline/reverse
+   - `AssertCellDoesNotHaveAttribute(t, d, p, attr, msg)` - Checks attribute absence
+   - `AssertCellForegroundColor(t, d, p, color, msg)` - Validates FG color
+   - `AssertCellBackgroundColor(t, d, p, color, msg)` - Validates BG color
+   - `colorsEqual(a, b)` - Helper for comparing Color structs (handles all modes)
+
+3. **SGR Helper** (helpers.go:502-545):
+   - `SGR(d, params...)` - Sends SGR escape sequence
+   - Constants for all SGR codes (SGR_BOLD, SGR_FG_RED, SGR_BG_BLUE, etc.)
+   - Supports multiple parameters: `SGR(d, SGR_BOLD, SGR_FG_RED)`
+
+**Tests Implemented:**
+1. **Bold** - SGR 1 enables bold, SGR 22 disables
+2. **Underline** - SGR 4 enables underline, SGR 24 disables
+3. **Reverse** - SGR 7 enables reverse video, SGR 27 disables
+4. **Reset** - SGR 0 clears all attributes
+5. **Foreground Colors** - SGR 30-37 (standard 8 colors)
+6. **Background Colors** - SGR 40-47 (standard 8 colors)
+7. **Reset Colors** - SGR 39 (FG default), SGR 49 (BG default)
+
+**What's Tested:**
+- ✅ Bold, underline, reverse attributes
+- ✅ Standard 8 ANSI colors (foreground and background)
+- ✅ Attribute persistence across characters
+- ✅ SGR 0 reset
+- ✅ Individual attribute disable (SGR 22, 24, 27)
+- ✅ Color reset to defaults (SGR 39, 49)
+
+**What's NOT Yet Tested:**
+- Bright colors (SGR 90-97, 100-107) - texelterm supports these!
+- 256-color mode (SGR 38;5;n, 48;5;n) - texelterm supports!
+- RGB true-color (SGR 38;2;r;g;b, 48;2;r;g;b) - texelterm supports!
+- OSC color change sequences - texelterm supports!
+
+**All 10 tests passing**
 
 ## Test Conversion Process
 

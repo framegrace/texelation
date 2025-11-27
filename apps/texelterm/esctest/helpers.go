@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"texelation/apps/texelterm/parser"
 )
 
 // ESC is the escape character.
@@ -45,6 +47,90 @@ func AssertGE(t *testing.T, actual, minimum int) {
 	if actual < minimum {
 		t.Errorf("Expected %d >= %d", actual, minimum)
 	}
+}
+
+// AssertCellHasAttribute checks if a cell has a specific attribute (bold, underline, reverse).
+func AssertCellHasAttribute(t *testing.T, d *Driver, p Point, attr parser.Attribute, message string) {
+	t.Helper()
+	cell := d.GetCellAt(p)
+	if cell == nil {
+		t.Errorf("Cell at %v is out of bounds", p)
+		return
+	}
+	if cell.Attr&attr == 0 {
+		if message != "" {
+			t.Errorf("%s: Cell at %v missing attribute %v (has %v)", message, p, attr, cell.Attr)
+		} else {
+			t.Errorf("Cell at %v missing attribute %v (has %v)", p, attr, cell.Attr)
+		}
+	}
+}
+
+// AssertCellDoesNotHaveAttribute checks if a cell does NOT have a specific attribute.
+func AssertCellDoesNotHaveAttribute(t *testing.T, d *Driver, p Point, attr parser.Attribute, message string) {
+	t.Helper()
+	cell := d.GetCellAt(p)
+	if cell == nil {
+		t.Errorf("Cell at %v is out of bounds", p)
+		return
+	}
+	if cell.Attr&attr != 0 {
+		if message != "" {
+			t.Errorf("%s: Cell at %v should not have attribute %v (has %v)", message, p, attr, cell.Attr)
+		} else {
+			t.Errorf("Cell at %v should not have attribute %v (has %v)", p, attr, cell.Attr)
+		}
+	}
+}
+
+// AssertCellForegroundColor checks if a cell has the expected foreground color.
+func AssertCellForegroundColor(t *testing.T, d *Driver, p Point, expected parser.Color, message string) {
+	t.Helper()
+	cell := d.GetCellAt(p)
+	if cell == nil {
+		t.Errorf("Cell at %v is out of bounds", p)
+		return
+	}
+	if !colorsEqual(cell.FG, expected) {
+		if message != "" {
+			t.Errorf("%s: Cell at %v has wrong FG color: expected %+v, got %+v", message, p, expected, cell.FG)
+		} else {
+			t.Errorf("Cell at %v has wrong FG color: expected %+v, got %+v", p, expected, cell.FG)
+		}
+	}
+}
+
+// AssertCellBackgroundColor checks if a cell has the expected background color.
+func AssertCellBackgroundColor(t *testing.T, d *Driver, p Point, expected parser.Color, message string) {
+	t.Helper()
+	cell := d.GetCellAt(p)
+	if cell == nil {
+		t.Errorf("Cell at %v is out of bounds", p)
+		return
+	}
+	if !colorsEqual(cell.BG, expected) {
+		if message != "" {
+			t.Errorf("%s: Cell at %v has wrong BG color: expected %+v, got %+v", message, p, expected, cell.BG)
+		} else {
+			t.Errorf("Cell at %v has wrong BG color: expected %+v, got %+v", p, expected, cell.BG)
+		}
+	}
+}
+
+// colorsEqual compares two Color values for equality.
+func colorsEqual(a, b parser.Color) bool {
+	if a.Mode != b.Mode {
+		return false
+	}
+	switch a.Mode {
+	case parser.ColorModeDefault:
+		return true
+	case parser.ColorModeStandard, parser.ColorMode256:
+		return a.Value == b.Value
+	case parser.ColorModeRGB:
+		return a.R == b.R && a.G == b.G && a.B == b.B
+	}
+	return false
 }
 
 // AssertScreenCharsInRectEqual asserts that the characters in a rectangle match expected strings.
@@ -412,3 +498,48 @@ func Empty() string {
 func Repeat(s string, n int) string {
 	return strings.Repeat(s, n)
 }
+
+// --- SGR (Select Graphic Rendition) Helpers ---
+
+// SGR sends an SGR (Select Graphic Rendition) sequence.
+func SGR(d *Driver, params ...int) {
+	if len(params) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[m", ESC))
+		return
+	}
+
+	paramStr := fmt.Sprintf("%d", params[0])
+	for i := 1; i < len(params); i++ {
+		paramStr += fmt.Sprintf(";%d", params[i])
+	}
+	d.WriteRaw(fmt.Sprintf("%s[%sm", ESC, paramStr))
+}
+
+// SGR constants for common attributes
+const (
+	SGR_RESET          = 0
+	SGR_BOLD           = 1
+	SGR_UNDERLINE      = 4
+	SGR_REVERSE        = 7
+	SGR_NORMAL         = 22  // Not bold
+	SGR_NOT_UNDERLINE  = 24
+	SGR_NOT_REVERSE    = 27
+	SGR_FG_DEFAULT     = 39
+	SGR_BG_DEFAULT     = 49
+	SGR_FG_BLACK       = 30
+	SGR_FG_RED         = 31
+	SGR_FG_GREEN       = 32
+	SGR_FG_YELLOW      = 33
+	SGR_FG_BLUE        = 34
+	SGR_FG_MAGENTA     = 35
+	SGR_FG_CYAN        = 36
+	SGR_FG_WHITE       = 37
+	SGR_BG_BLACK       = 40
+	SGR_BG_RED         = 41
+	SGR_BG_GREEN       = 42
+	SGR_BG_YELLOW      = 43
+	SGR_BG_BLUE        = 44
+	SGR_BG_MAGENTA     = 45
+	SGR_BG_CYAN        = 46
+	SGR_BG_WHITE       = 47
+)

@@ -90,10 +90,13 @@ The original Python-based tests have been converted to Go to enable:
 **Batch 14: Terminal Reset**
 - ✅ **ris_test.go** - RIS (Reset to Initial State) - 6 tests, all passing
 
+**Batch 15: SGR (Select Graphic Rendition)**
+- ✅ **sgr_test.go** - Text attributes and colors - 10 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 202 tests
-**Passing**: 202 (100%) ✅
+**Total**: 212 tests
+**Passing**: 212 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:

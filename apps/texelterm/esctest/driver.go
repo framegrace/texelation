@@ -122,3 +122,15 @@ func (d *Driver) Reset() {
 	d.vterm = parser.NewVTerm(d.width, d.height)
 	d.parser = parser.NewParser(d.vterm)
 }
+
+// GetCellAt returns the cell at the specified position (1-indexed).
+// Returns nil if the position is out of bounds.
+func (d *Driver) GetCellAt(p Point) *parser.Cell {
+	if p.X < 1 || p.X > d.width || p.Y < 1 || p.Y > d.height {
+		return nil
+	}
+
+	grid := d.vterm.Grid()
+	cell := grid[p.Y-1][p.X-1]
+	return &cell
+}
