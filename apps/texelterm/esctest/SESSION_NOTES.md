@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: [TBD] (Batch 11)
+**Latest Commit**: c405dac (Batch 11)
 
 ## Current Status
 
@@ -224,7 +224,7 @@ func CHT(d *Driver, n ...int)  // CSI I - Cursor Horizontal Tab
 
 **All 19 tests passing**
 
-### Batch 11: Line Control Characters (Commit: TBD)
+### Batch 11: Line Control Characters (Commit: c405dac)
 
 **Files Created:**
 - `apps/texelterm/esctest/cr_test.go` - 5 CR (Carriage Return) tests
