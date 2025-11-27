@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: TBD (Batch 8)
+**Latest Commit**: b8482e0 (Batch 8)
 
 ## Current Status
 
@@ -103,7 +103,7 @@ func RI(d *Driver)   // ESC M - Reverse Index (already existed)
 - `Test_RI_ScrollsInTopBottomRegionStartingWithin` - RI within scroll region
 - `Test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll` - Scrolling outside margins
 
-### Batch 8: SU/SD Scroll Commands (Commit: TBD)
+### Batch 8: SU/SD Scroll Commands (Commit: b8482e0)
 
 **Files Created:**
 - `apps/texelterm/esctest/su_test.go` - 9 SU (Scroll Up) tests
