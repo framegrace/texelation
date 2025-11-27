@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: (pending - Batch 14)
+**Latest Commit**: 5a2f73e (Batch 14)
 
 ## Current Status
 
@@ -333,7 +333,7 @@ func FF(d *Driver)  // \f - Form Feed (same as IND)
 
 **All 12 tests passing (6 VT + 6 FF)**
 
-### Batch 14: Terminal Reset (Commit: pending)
+### Batch 14: Terminal Reset (Commit: 5a2f73e)
 
 **Files Created:**
 - `apps/texelterm/esctest/ris_test.go` - 6 RIS (Reset to Initial State) tests
