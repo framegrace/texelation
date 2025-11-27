@@ -154,9 +154,16 @@ func (p *Parser) Parse(r rune) {
 		case r == ';':
 			p.params = append(p.params, p.currentParam)
 			p.currentParam = 0
-		case r >= '<' && r <= '?':
+		case r == '?':
+			// '?' is the DEC private parameter marker (e.g., CSI ? 6 h for DECSET)
 			p.private = true
+		case r == '>':
+			// '>' is used for DA2 and similar queries (CSI > c)
+			// Treat it as an intermediate byte for simplicity
+			p.intermediate = r
 		case r >= ' ' && r <= '/':
+			// Intermediate bytes: space (0x20) through '/' (0x2F)
+			// Includes '!', '\'',' etc.
 			p.intermediate = r
 		case r >= '@' && r <= '~':
 			p.params = append(p.params, p.currentParam)

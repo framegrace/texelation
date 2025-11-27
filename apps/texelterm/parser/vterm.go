@@ -1441,6 +1441,20 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, privat
 		return
 	}
 
+	// Handle DA2 (Secondary Device Attributes) - CSI > c
+	if command == 'c' && intermediate == '>' {
+		// Response: CSI > Ps ; Pv ; Pc c
+		// Ps = Terminal type (1=VT220, 24=VT320, 41=VT420, 64=VT520)
+		// Pv = Firmware version (e.g., 100 for version 1.0.0)
+		// Pc = Keyboard type (0)
+		// We claim to be VT220 (1) with version 100 and keyboard type 0
+		response := "\x1b[>1;100;0c"
+		if v.WriteToPty != nil {
+			v.WriteToPty([]byte(response))
+		}
+		return
+	}
+
 	// Handle mode setting/resetting (SM/RM for ANSI modes, DECSET/DECRESET for DEC private modes)
 	if command == 'h' || command == 'l' {
 		if private {
@@ -1500,8 +1514,17 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, privat
 		}
 	case 'u':
 		v.RestoreCursor()
-	case 'c': // DA - Device Attributes
-		response := "\x1b[?6c" // "I am a VT102"
+	case 'c': // DA - Primary Device Attributes
+		// Response: CSI ? Ps ; Ps ; ... c
+		// Ps values:
+		//   62 = VT220, 63 = VT320, 64 = VT420, 65 = VT520
+		//   1 = 132 columns, 2 = printer, 4 = sixel graphics
+		//   6 = selective erase, 9 = national replacement character-sets
+		//   15 = DEC technical set, 21 = horizontal scrolling
+		//   22 = color, 28 = rectangular editing, 29 = ANSI text locator
+		// We claim VT220 (62) with color (22), selective erase (6),
+		// horizontal scrolling (21), and rectangular editing (28)
+		response := "\x1b[?62;6;21;22;28c"
 		if v.WriteToPty != nil {
 			v.WriteToPty([]byte(response))
 		}

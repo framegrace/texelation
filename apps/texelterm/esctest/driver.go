@@ -15,23 +15,33 @@ import (
 // Driver provides a headless interface to a texelterm instance for testing.
 // It allows sending escape sequences and text, and querying terminal state.
 type Driver struct {
-	vterm  *parser.VTerm
-	parser *parser.Parser
-	width  int
-	height int
+	vterm     *parser.VTerm
+	parser    *parser.Parser
+	width     int
+	height    int
+	ptyOutput string // Buffer to capture PTY responses (DA, DSR, etc.)
 }
 
 // NewDriver creates a new headless terminal driver with the given dimensions.
 func NewDriver(width, height int) *Driver {
-	vterm := parser.NewVTerm(width, height)
-	p := parser.NewParser(vterm)
-
-	return &Driver{
-		vterm:  vterm,
-		parser: p,
+	d := &Driver{
 		width:  width,
 		height: height,
 	}
+
+	vterm := parser.NewVTerm(width, height)
+
+	// Set up PTY output callback to capture responses
+	vterm.WriteToPty = func(data []byte) {
+		d.ptyOutput += string(data)
+	}
+
+	p := parser.NewParser(vterm)
+
+	d.vterm = vterm
+	d.parser = p
+
+	return d
 }
 
 // Write sends text to the terminal (without parsing escape sequences in it).
@@ -120,7 +130,14 @@ func (d *Driver) GetScreenChar(p Point) rune {
 // Reset resets the terminal to its initial state.
 func (d *Driver) Reset() {
 	d.vterm = parser.NewVTerm(d.width, d.height)
+
+	// Set up PTY output callback to capture responses
+	d.vterm.WriteToPty = func(data []byte) {
+		d.ptyOutput += string(data)
+	}
+
 	d.parser = parser.NewParser(d.vterm)
+	d.ptyOutput = "" // Clear any pending output
 }
 
 // GetCellAt returns the cell at the specified position (1-indexed).
@@ -133,4 +150,12 @@ func (d *Driver) GetCellAt(p Point) *parser.Cell {
 	grid := d.vterm.Grid()
 	cell := grid[p.Y-1][p.X-1]
 	return &cell
+}
+
+// ReadPtyResponse reads and clears the PTY output buffer.
+// This captures responses from the terminal (DA, DA2, DSR, etc.).
+func (d *Driver) ReadPtyResponse() string {
+	response := d.ptyOutput
+	d.ptyOutput = ""
+	return response
 }
