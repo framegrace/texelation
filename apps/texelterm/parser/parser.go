@@ -109,6 +109,10 @@ func (p *Parser) Parse(r rune) {
 		case 'M':
 			p.vterm.ReverseIndex()
 			p.state = StateGround
+		case 'H':
+			// HTS - Horizontal Tab Set
+			p.vterm.SetTabStop()
+			p.state = StateGround
 		case '7':
 			// DECSC - Save Cursor
 			p.vterm.SaveCursor()

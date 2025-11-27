@@ -256,6 +256,22 @@ func SD(d *Driver, n ...int) {
 	}
 }
 
+// HTS (Horizontal Tab Set) - Set a tab stop at current column (ESC H).
+func HTS(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%sH", ESC))
+}
+
+// TBC (Tab Clear) - Clear tab stops.
+// No parameter or 0: clear tab at cursor
+// 3: clear all tabs
+func TBC(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[g", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dg", ESC, n[0]))
+	}
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {

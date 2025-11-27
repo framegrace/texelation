@@ -803,6 +803,25 @@ func (v *VTerm) Tab() {
 	v.SetCursorPos(v.cursorY, v.width-1)
 }
 
+// SetTabStop sets a tab stop at the current cursor column.
+func (v *VTerm) SetTabStop() {
+	v.tabStops[v.cursorX] = true
+}
+
+// ClearTabStop clears tab stops.
+// mode 0 or default: clear tab at cursor
+// mode 3: clear all tabs
+func (v *VTerm) ClearTabStop(mode int) {
+	switch mode {
+	case 0:
+		// Clear tab at cursor
+		delete(v.tabStops, v.cursorX)
+	case 3:
+		// Clear all tabs
+		v.tabStops = make(map[int]bool)
+	}
+}
+
 // Reset brings the terminal to its initial state.
 func (v *VTerm) Reset() {
 	v.MarkAllDirty()
@@ -935,6 +954,8 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 		if v.WriteToPty != nil {
 			v.WriteToPty([]byte(response))
 		}
+	case 'g': // TBC - Tab Clear
+		v.ClearTabStop(param(0, 0))
 	case 'q', 't':
 		// Ignore DECSCA, window manipulation
 	default:

@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: b8482e0 (Batch 8)
+**Latest Commit**: TBD (Batch 9)
 
 ## Current Status
 
-**Total Tests**: 140
-**Passing**: 140 (100%) ✓
+**Total Tests**: 145
+**Passing**: 145 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -18,6 +18,7 @@
 - **Batch 6**: Erase operations - ED, EL (13 tests) - ALL PASSING
 - **Batch 7**: Scrolling - DECSTBM, IND, RI (22 tests) - ALL PASSING
 - **Batch 8**: Scroll commands - SU, SD (18 tests) - ALL PASSING
+- **Batch 9**: Tab operations - HTS, TBC (5 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -139,6 +140,35 @@ func RI(d *Driver)   // ESC M - Reverse Index (already existed)
 - IND/RI shift entire lines (full-line scrolling)
 
 **All 18 tests passing**
+
+### Batch 9: Tab Operations (Commit: TBD)
+
+**Files Created:**
+- `apps/texelterm/esctest/hts_test.go` - 1 HTS (Horizontal Tab Set) test
+- `apps/texelterm/esctest/tbc_test.go` - 4 TBC (Tab Clear) tests
+
+**Implementations:**
+1. **HTS (Horizontal Tab Set) - ESC H** (parser.go:112-115, vterm.go:806-809)
+   - Sets a tab stop at the current cursor column
+   - Simple implementation using existing tabStops map
+
+2. **TBC (Tab Clear) - CSI Ps g** (vterm.go:957-958, 811-823)
+   - Mode 0 or default: clear tab stop at cursor position
+   - Mode 3: clear all tab stops
+   - Uses delete() to remove specific tab or recreates map for "clear all"
+
+**Helper Functions Added** (helpers.go:259-273):
+```go
+func HTS(d *Driver)           // ESC H - Set tab at cursor
+func TBC(d *Driver, n ...int) // CSI g - Clear tabs
+```
+
+**Tab Infrastructure:**
+- Tab stops already existed every 8 columns (0, 8, 16, 24...)
+- Tab() function already implemented and working
+- HTS/TBC complete the tab stop management
+
+**All 5 tests passing**
 
 ## Test Conversion Process
 

@@ -64,10 +64,14 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **su_test.go** - SU (Scroll Up) - 9 tests, all passing
 - ✅ **sd_test.go** - SD (Scroll Down) - 9 tests, all passing
 
+**Batch 9: Tab Operations**
+- ✅ **hts_test.go** - HTS (Horizontal Tab Set) - 1 test, all passing
+- ✅ **tbc_test.go** - TBC (Tab Clear) - 4 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 140 tests
-**Passing**: 140 (100%) ✅
+**Total**: 145 tests
+**Passing**: 145 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
@@ -196,6 +200,14 @@ All compliance tests passing! The following issues were fixed:
     - Content outside margins is preserved during scroll operations
     - Matches xterm behavior for rectangular region scrolling
     - See vterm.go:346-504, 740-750
+
+20. **HTS/TBC Tab Operations** (HTS, TBC)
+    - Implemented HTS (ESC H) to set tab stop at cursor column
+    - Implemented TBC (CSI g) to clear tab stops
+    - TBC mode 0: clear tab at cursor
+    - TBC mode 3: clear all tabs
+    - Tab stops already existed every 8 columns by default
+    - See parser.go:112-115, vterm.go:806-823, 957-958
 
 ## Test Conversion Plan
 
