@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: 82ba050 (Batch 16)
+**Latest Commit**: (Batch 17 - pending)
 
 ## Current Status
 
-**Total Tests**: 220
-**Passing**: 220 (100%) ✓
+**Total Tests**: 227
+**Passing**: 227 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -26,6 +26,7 @@
 - **Batch 14**: Terminal Reset - RIS (6 tests) - ALL PASSING
 - **Batch 15**: SGR - Text attributes and basic colors (10 tests) - ALL PASSING
 - **Batch 16**: Extended SGR colors (8 tests) - ALL PASSING
+- **Batch 17**: OSC color sequences (7 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -468,6 +469,67 @@ func RIS(d *Driver)  // ESC c - Reset to Initial State
 - ✅ Full reset behavior
 
 **All 8 tests passing (18 total SGR tests)**
+
+### Batch 17: OSC Color Sequences (Commit: pending)
+
+**Files Created:**
+- `apps/texelterm/esctest/osc_colors_test.go` - 7 OSC 10/11 tests for dynamic color changes
+
+**Tests Implemented:**
+
+1. **Set Default Foreground (OSC 10)**
+   - Tests OSC 10 changes what "default" means
+   - Verifies SGR 39 uses the new OSC-set default
+   - Example: `OSC 10;rgb:fe00/0000/0000 BEL` sets default FG to red
+
+2. **Set Default Background (OSC 11)**
+   - Tests OSC 11 changes default background
+   - Verifies SGR 49 uses the new OSC-set default
+   - Example: `OSC 11;rgb:0000/0000/ff00 BEL` sets default BG to blue
+
+3. **Set Both Colors**
+   - Tests setting both FG and BG via OSC
+   - Verifies SGR 39 and 49 both use new defaults
+
+4. **SGR Overrides Default**
+   - Tests that SGR explicit colors override OSC defaults
+   - Verifies SGR 39 resets back to OSC-set default
+
+5. **RIS Restores Original Defaults**
+   - Tests that RIS (Reset to Initial State) clears OSC colors
+   - Verifies text after RIS uses original defaults
+
+6. **16-bit RGB Format**
+   - Tests OSC color parsing with 16-bit hex values
+   - Verifies integer division conversion: 0x8000 / 257 = 127
+
+7. **Multiple Changes**
+   - Tests changing OSC defaults multiple times
+   - Each SGR 39 uses the current OSC-set default
+
+**VTerm Fixes:**
+
+1. **Reset() OSC Color Handling** (vterm.go:962-965)
+   - Added `v.defaultFG = DefaultFG` and `v.defaultBG = DefaultBG`
+   - Moved BEFORE `ResetAttributes()` call so currentFG/currentBG get correct values
+   - Without this fix, RIS wouldn't clear OSC-set colors
+
+**Key Insights:**
+- OSC 10/11 set `defaultFG`/`defaultBG`, not `currentFG`/`currentBG`
+- These defaults only affect:
+  1. SGR 39/49 reset behavior
+  2. Empty cell colors when extending lines
+- Text is written with `currentFG`/`currentBG` (set by SGR commands)
+- 16-bit RGB values scaled to 8-bit via integer division: `value / 257`
+
+**Color Format:**
+```
+OSC 10 ; rgb:rrrr/gggg/bbbb BEL
+      ↑         ↑    ↑    ↑
+      Ps        R    G    B (each 4 hex digits, 0000-FFFF)
+```
+
+**All 7 tests passing**
 
 ## Test Conversion Process
 

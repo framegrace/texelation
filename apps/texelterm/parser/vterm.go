@@ -959,6 +959,9 @@ func (v *VTerm) Reset() {
 	v.savedMainCursorX, v.savedMainCursorY = 0, 0
 	v.savedAltCursorX, v.savedAltCursorY = 0, 0
 	v.ClearScreen()
+	// Reset OSC defaults BEFORE ResetAttributes() so currentFG/currentBG get correct values
+	v.defaultFG = DefaultFG
+	v.defaultBG = DefaultBG
 	v.ResetAttributes()
 	v.SetMargins(0, 0)
 	v.marginLeft = 0
