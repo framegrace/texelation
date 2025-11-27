@@ -803,6 +803,57 @@ func (v *VTerm) Tab() {
 	v.SetCursorPos(v.cursorY, v.width-1)
 }
 
+// TabForward (CHT) moves cursor forward n tab stops.
+// In DEC terminals (xterm), tabs stop at the right margin when DECLRMM is active.
+func (v *VTerm) TabForward(n int) {
+	v.wrapNext = false
+
+	// Determine right boundary
+	rightEdge := v.width - 1
+	if v.leftRightMarginMode {
+		rightEdge = v.marginRight
+	}
+
+	for i := 0; i < n; i++ {
+		found := false
+		for x := v.cursorX + 1; x <= rightEdge; x++ {
+			if v.tabStops[x] {
+				v.SetCursorPos(v.cursorY, x)
+				found = true
+				break
+			}
+		}
+		if !found {
+			// No more tab stops, move to right edge
+			v.SetCursorPos(v.cursorY, rightEdge)
+			break
+		}
+	}
+}
+
+// TabBackward (CBT) moves cursor backward n tab stops.
+// CBT ignores left/right margins and can move all the way to column 1.
+func (v *VTerm) TabBackward(n int) {
+	v.wrapNext = false
+
+	for i := 0; i < n; i++ {
+		found := false
+		// Search backward from current position
+		for x := v.cursorX - 1; x >= 0; x-- {
+			if v.tabStops[x] {
+				v.SetCursorPos(v.cursorY, x)
+				found = true
+				break
+			}
+		}
+		if !found {
+			// No more tab stops, move to left edge
+			v.SetCursorPos(v.cursorY, 0)
+			break
+		}
+	}
+}
+
 // SetTabStop sets a tab stop at the current cursor column.
 func (v *VTerm) SetTabStop() {
 	v.tabStops[v.cursorX] = true
@@ -905,8 +956,12 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 	}
 
 	switch command {
-	case 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'f', 'd':
+	case 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'f', 'd', '`', 'a', 'e':
 		v.handleCursorMovement(command, params)
+	case 'I': // CHT - Cursor Horizontal Tab
+		v.TabForward(param(0, 1))
+	case 'Z': // CBT - Cursor Backward Tab
+		v.TabBackward(param(0, 1))
 	case 'J', 'K', 'P', 'X', 'b':
 		v.handleErase(command, params)
 	case '@':
@@ -1012,6 +1067,31 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			row += v.marginTop
 		}
 		v.SetCursorPos(row, v.cursorX)
+	case '`': // HPA - Horizontal Position Absolute
+		col := param(0, 1) - 1
+		// In origin mode, column is relative to left margin
+		if v.originMode {
+			col += v.marginLeft
+		}
+		v.SetCursorPos(v.cursorY, col)
+	case 'a': // HPR - Horizontal Position Relative
+		// Move right by n columns (relative, not absolute)
+		n := param(0, 1)
+		newX := v.cursorX + n
+		// Clamp to right edge
+		if newX >= v.width {
+			newX = v.width - 1
+		}
+		v.SetCursorPos(v.cursorY, newX)
+	case 'e': // VPR - Vertical Position Relative
+		// Move down by n rows (relative, not absolute)
+		n := param(0, 1)
+		newY := v.cursorY + n
+		// Clamp to bottom edge
+		if newY >= v.height {
+			newY = v.height - 1
+		}
+		v.SetCursorPos(newY, v.cursorX)
 	}
 }
 

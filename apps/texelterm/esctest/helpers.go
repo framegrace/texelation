@@ -272,6 +272,51 @@ func TBC(d *Driver, n ...int) {
 	}
 }
 
+// HPA (Horizontal Position Absolute) - Move cursor to absolute column.
+func HPA(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[`", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%d`", ESC, n[0]))
+	}
+}
+
+// HPR (Horizontal Position Relative) - Move cursor right by n columns.
+func HPR(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[a", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%da", ESC, n[0]))
+	}
+}
+
+// VPR (Vertical Position Relative) - Move cursor down by n rows.
+func VPR(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[e", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%de", ESC, n[0]))
+	}
+}
+
+// CBT (Cursor Backward Tab) - Move cursor backward n tab stops.
+func CBT(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[Z", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dZ", ESC, n[0]))
+	}
+}
+
+// CHT (Cursor Horizontal Tab) - Move cursor forward n tab stops.
+func CHT(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[I", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dI", ESC, n[0]))
+	}
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {

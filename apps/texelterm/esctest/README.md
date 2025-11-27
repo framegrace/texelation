@@ -68,10 +68,17 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **hts_test.go** - HTS (Horizontal Tab Set) - 1 test, all passing
 - ✅ **tbc_test.go** - TBC (Tab Clear) - 4 tests, all passing
 
+**Batch 10: Additional Cursor Movement**
+- ✅ **hpa_test.go** - HPA (Horizontal Position Absolute) - 4 tests, all passing
+- ✅ **hpr_test.go** - HPR (Horizontal Position Relative) - 4 tests, all passing
+- ✅ **vpr_test.go** - VPR (Vertical Position Relative) - 4 tests, all passing
+- ✅ **cbt_test.go** - CBT (Cursor Backward Tab) - 4 tests, all passing
+- ✅ **cht_test.go** - CHT (Cursor Horizontal Tab) - 3 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 145 tests
-**Passing**: 145 (100%) ✅
+**Total**: 164 tests
+**Passing**: 164 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
@@ -208,6 +215,18 @@ All compliance tests passing! The following issues were fixed:
     - TBC mode 3: clear all tabs
     - Tab stops already existed every 8 columns by default
     - See parser.go:112-115, vterm.go:806-823, 957-958
+
+21. **Additional Cursor Movement Commands** (HPA, HPR, VPR, CBT, CHT)
+    - Implemented HPA (CSI `) - Horizontal Position Absolute
+    - Implemented HPR (CSI a) - Horizontal Position Relative (move right by n)
+    - Implemented VPR (CSI e) - Vertical Position Relative (move down by n)
+    - Implemented CBT (CSI Z) - Cursor Backward Tab (n tab stops back)
+    - Implemented CHT (CSI I) - Cursor Horizontal Tab (n tab stops forward)
+    - HPA and HPR respect origin mode like CHA
+    - VPR respects origin mode like VPA
+    - CHT respects right margin when DECLRMM is active
+    - CBT ignores left/right margins (can tab to column 1)
+    - See vterm.go:908-913, 1070-1091, 795-855
 
 ## Test Conversion Plan
 

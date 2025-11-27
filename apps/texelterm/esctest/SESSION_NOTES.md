@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: fa31d66 (Batch 9)
+**Latest Commit**: [To be determined] (Batch 10)
 
 ## Current Status
 
-**Total Tests**: 145
-**Passing**: 145 (100%) ✓
+**Total Tests**: 164
+**Passing**: 164 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -19,6 +19,7 @@
 - **Batch 7**: Scrolling - DECSTBM, IND, RI (22 tests) - ALL PASSING
 - **Batch 8**: Scroll commands - SU, SD (18 tests) - ALL PASSING
 - **Batch 9**: Tab operations - HTS, TBC (5 tests) - ALL PASSING
+- **Batch 10**: Additional cursor movement - HPA, HPR, VPR, CBT, CHT (19 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -169,6 +170,58 @@ func TBC(d *Driver, n ...int) // CSI g - Clear tabs
 - HTS/TBC complete the tab stop management
 
 **All 5 tests passing**
+
+### Batch 10: Additional Cursor Movement (Commit: TBD)
+
+**Files Created:**
+- `apps/texelterm/esctest/hpa_test.go` - 4 HPA (Horizontal Position Absolute) tests
+- `apps/texelterm/esctest/hpr_test.go` - 4 HPR (Horizontal Position Relative) tests
+- `apps/texelterm/esctest/vpr_test.go` - 4 VPR (Vertical Position Relative) tests
+- `apps/texelterm/esctest/cbt_test.go` - 4 CBT (Cursor Backward Tab) tests
+- `apps/texelterm/esctest/cht_test.go` - 3 CHT (Cursor Horizontal Tab) tests
+
+**Implementations:**
+1. **HPA (Horizontal Position Absolute) - CSI Ps `** (vterm.go:1070-1076)
+   - Moves cursor to absolute column position
+   - Respects origin mode (like CHA/VPA)
+   - Clamps to screen boundaries
+
+2. **HPR (Horizontal Position Relative) - CSI Ps a** (vterm.go:1077-1084)
+   - Moves cursor right by n columns
+   - Clamps to right edge
+   - Relative movement, not absolute positioning
+
+3. **VPR (Vertical Position Relative) - CSI Ps e** (vterm.go:1085-1092)
+   - Moves cursor down by n rows
+   - Clamps to bottom edge
+   - Relative movement, not absolute positioning
+
+4. **CBT (Cursor Backward Tab) - CSI Ps Z** (vterm.go:834-855, parser.go:912-913)
+   - Moves cursor backward n tab stops
+   - Ignores left/right margins (can reach column 1)
+   - Stops at left edge if no more tab stops
+
+5. **CHT (Cursor Horizontal Tab) - CSI Ps I** (vterm.go:806-832, parser.go:910-911)
+   - Moves cursor forward n tab stops
+   - Respects right margin when DECLRMM is active
+   - Stops at right edge/margin if no more tab stops
+
+**Helper Functions Added** (helpers.go:275-318):
+```go
+func HPA(d *Driver, n ...int)  // CSI ` - Horizontal Position Absolute
+func HPR(d *Driver, n ...int)  // CSI a - Horizontal Position Relative
+func VPR(d *Driver, n ...int)  // CSI e - Vertical Position Relative
+func CBT(d *Driver, n ...int)  // CSI Z - Cursor Backward Tab
+func CHT(d *Driver, n ...int)  // CSI I - Cursor Horizontal Tab
+```
+
+**Key Behaviors:**
+- HPA/HPR/VPR respect origin mode for consistency with CHA/VPA
+- CHT respects right margin (DEC terminal behavior)
+- CBT ignores margins (ECMA-48 behavior)
+- All commands clamp to screen/margin boundaries
+
+**All 19 tests passing**
 
 ## Test Conversion Process
 
