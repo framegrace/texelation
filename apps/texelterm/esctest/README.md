@@ -75,10 +75,15 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **cbt_test.go** - CBT (Cursor Backward Tab) - 4 tests, all passing
 - ✅ **cht_test.go** - CHT (Cursor Horizontal Tab) - 3 tests, all passing
 
+**Batch 11: Line Control Characters**
+- ✅ **cr_test.go** - CR (Carriage Return) - 5 tests, all passing
+- ✅ **lf_test.go** - LF (Line Feed) - 6 tests, all passing
+- ✅ **nel_test.go** - NEL (Next Line) - 6 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 164 tests
-**Passing**: 164 (100%) ✅
+**Total**: 181 tests
+**Passing**: 181 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
@@ -227,6 +232,19 @@ All compliance tests passing! The following issues were fixed:
     - CHT respects right margin when DECLRMM is active
     - CBT ignores left/right margins (can tab to column 1)
     - See vterm.go:908-913, 1070-1091, 795-855
+
+22. **Line Control Characters** (CR, LF, NEL)
+    - Fixed CarriageReturn() to respect left/right margins correctly
+    - CR moves to left margin when inside margins
+    - CR moves to column 0 when outside margins (unless in origin mode)
+    - CR always goes to left margin in origin mode
+    - Implemented NEL (ESC E) - Next Line command
+    - NEL moves down (like Index) then to left margin or column 0
+    - NEL preserves column when cursor is left of margin and can't move down
+    - Fixed LF to behave like Index (move down only, no CR)
+    - LF now respects left/right margins (won't scroll when outside)
+    - Parser no longer assumes LNM (Line Feed/New Line Mode) is always on
+    - See parser.go:61-65, 109-112, vterm.go:259-293, 783-805, 941-966
 
 ## Test Conversion Plan
 

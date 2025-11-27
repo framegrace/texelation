@@ -259,16 +259,24 @@ func (v *VTerm) GetCursorY() int {
 func (v *VTerm) LineFeed() {
 	v.wrapNext = false // Clear wrapNext flag when moving to new line
 	v.MarkDirty(v.cursorY)
+
+	// Check if cursor is outside left/right margins - if so, don't scroll
+	outsideMargins := v.leftRightMarginMode && (v.cursorX < v.marginLeft || v.cursorX > v.marginRight)
+
 	if v.inAltScreen {
 		if v.cursorY == v.marginBottom {
-			v.scrollRegion(1, v.marginTop, v.marginBottom)
+			if !outsideMargins {
+				v.scrollRegion(1, v.marginTop, v.marginBottom)
+			}
 		} else if v.cursorY < v.height-1 {
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
 		}
 	} else {
 		// Main screen: check if we're at bottom margin
 		if v.cursorY == v.marginBottom {
-			v.scrollRegion(1, v.marginTop, v.marginBottom)
+			if !outsideMargins {
+				v.scrollRegion(1, v.marginTop, v.marginBottom)
+			}
 		} else if v.cursorY < v.height-1 {
 			// Only append history lines when cursor will actually move down
 			logicalY := v.cursorY + v.getTopHistoryLine()
@@ -782,7 +790,26 @@ func (v *VTerm) ClearDirty() {
 
 func (v *VTerm) CarriageReturn() {
 	v.wrapNext = false // Clear wrapNext when returning to start of line
-	v.SetCursorPos(v.cursorY, 0)
+
+	// CR behavior with left/right margins:
+	// - If inside margins: go to left margin
+	// - If left of left margin: go to column 0 (unless in origin mode, then go to left margin)
+	// - If right of right margin: no margins, so go to column 0
+	// - If at left margin: stay there
+	if v.leftRightMarginMode {
+		if v.originMode {
+			// In origin mode: always go to left margin
+			v.SetCursorPos(v.cursorY, v.marginLeft)
+		} else if v.cursorX >= v.marginLeft && v.cursorX <= v.marginRight {
+			// Inside margins: go to left margin
+			v.SetCursorPos(v.cursorY, v.marginLeft)
+		} else {
+			// Outside margins (left or right): go to column 0
+			v.SetCursorPos(v.cursorY, 0)
+		}
+	} else {
+		v.SetCursorPos(v.cursorY, 0)
+	}
 }
 
 func (v *VTerm) Backspace() {
@@ -908,6 +935,33 @@ func (v *VTerm) Index() {
 		// If outside margins, stay at marginBottom (don't move past it)
 	} else if v.cursorY < v.height-1 {
 		v.SetCursorPos(v.cursorY+1, v.cursorX)
+	}
+}
+
+// NextLine (NEL) moves cursor down one line and to the appropriate left position.
+func (v *VTerm) NextLine() {
+	// Save current position to detect if Index actually moved
+	oldY := v.cursorY
+	oldX := v.cursorX
+
+	// First move down like Index
+	v.Index()
+
+	// Then determine horizontal position:
+	// NEL always goes to left margin or column 0, EXCEPT:
+	// - When cursor was LEFT of left margin and didn't move vertically (stay at column 0/1)
+	if v.leftRightMarginMode {
+		// With left/right margins active
+		if v.cursorY == oldY && oldX < v.marginLeft {
+			// Didn't move down and was left of margin: stay at current X
+			// (This happens when at bottom and outside margins)
+		} else {
+			// Go to left margin in all other cases
+			v.SetCursorPos(v.cursorY, v.marginLeft)
+		}
+	} else {
+		// No left/right margins: always go to column 0
+		v.SetCursorPos(v.cursorY, 0)
 	}
 }
 

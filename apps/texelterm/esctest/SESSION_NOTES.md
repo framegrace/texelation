@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: 1d5d1f4 (Batch 10)
+**Latest Commit**: [TBD] (Batch 11)
 
 ## Current Status
 
-**Total Tests**: 164
-**Passing**: 164 (100%) ✓
+**Total Tests**: 181
+**Passing**: 181 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -20,6 +20,7 @@
 - **Batch 8**: Scroll commands - SU, SD (18 tests) - ALL PASSING
 - **Batch 9**: Tab operations - HTS, TBC (5 tests) - ALL PASSING
 - **Batch 10**: Additional cursor movement - HPA, HPR, VPR, CBT, CHT (19 tests) - ALL PASSING
+- **Batch 11**: Line control characters - CR, LF, NEL (17 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -222,6 +223,47 @@ func CHT(d *Driver, n ...int)  // CSI I - Cursor Horizontal Tab
 - All commands clamp to screen/margin boundaries
 
 **All 19 tests passing**
+
+### Batch 11: Line Control Characters (Commit: TBD)
+
+**Files Created:**
+- `apps/texelterm/esctest/cr_test.go` - 5 CR (Carriage Return) tests
+- `apps/texelterm/esctest/lf_test.go` - 6 LF (Line Feed) tests
+- `apps/texelterm/esctest/nel_test.go` - 6 NEL (Next Line) tests
+
+**Implementations:**
+1. **NEL (Next Line) - ESC E** (parser.go:109-112, vterm.go:941-966)
+   - Moves cursor down one line (via Index)
+   - Then moves to left margin or column 0
+   - Preserves column when cursor left of margin and can't move down
+   - Respects left/right margins for vertical movement
+
+2. **CR (Carriage Return) - \\r** (vterm.go:783-805)
+   - Fixed to respect left/right margins correctly
+   - Inside margins: goes to left margin
+   - Outside margins: goes to column 0 (unless in origin mode)
+   - Origin mode: always goes to left margin
+
+3. **LF (Line Feed) - \\n** (parser.go:61-65, vterm.go:259-293)
+   - Fixed to behave like Index (move down only)
+   - No longer calls CarriageReturn() (LNM mode not implemented)
+   - Now respects left/right margins (won't scroll when outside)
+   - Matches esctest expectations for pure LF behavior
+
+**Helper Functions Added** (helpers.go:320-333):
+```go
+func CR(d *Driver)   // \\r - Carriage Return
+func LF(d *Driver)   // \\n - Line Feed
+func NEL(d *Driver)  // ESC E - Next Line
+```
+
+**Key Fixes:**
+- Parser no longer assumes LNM (Line Feed/New Line Mode) is always on
+- LF now behaves identically to IND (Index) per xterm specification
+- CR properly handles all combinations of margins and origin mode
+- NEL correctly decides when to move horizontally based on vertical movement success
+
+**All 17 tests passing**
 
 ## Test Conversion Process
 

@@ -317,6 +317,21 @@ func CHT(d *Driver, n ...int) {
 	}
 }
 
+// CR (Carriage Return) - Move cursor to column 1 (or left margin).
+func CR(d *Driver) {
+	d.WriteRaw("\r")
+}
+
+// LF (Line Feed) - Move cursor down one line.
+func LF(d *Driver) {
+	d.WriteRaw("\n")
+}
+
+// NEL (Next Line) - Move cursor to next line and column 1.
+func NEL(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%sE", ESC))
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {

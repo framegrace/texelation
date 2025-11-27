@@ -59,10 +59,9 @@ func (p *Parser) Parse(r rune) {
 		case '\x1b':
 			p.state = StateEscape
 		case '\n':
-			// In LNM set mode (New Line Mode), \n acts as CR+LF
-			// This is the common behavior in modern terminals and fixes
-			// the issue with prompts that fill to the edge then send \n
-			p.vterm.CarriageReturn()
+			// LF (Line Feed) - just move down (like IND/Index)
+			// Note: LNM (Line Feed/New Line Mode) would make this behave as CR+LF,
+			// but that mode is not currently implemented. Pure LF just moves down.
 			p.vterm.LineFeed()
 		case '\r':
 			p.vterm.CarriageReturn()
@@ -105,6 +104,10 @@ func (p *Parser) Parse(r rune) {
 			p.state = StateCharset
 		case 'D':
 			p.vterm.Index()
+			p.state = StateGround
+		case 'E':
+			// NEL - Next Line (move down and to column 1)
+			p.vterm.NextLine()
 			p.state = StateGround
 		case 'M':
 			p.vterm.ReverseIndex()
