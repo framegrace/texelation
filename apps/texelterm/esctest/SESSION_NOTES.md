@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: TBD (Batch 9)
+**Latest Commit**: fa31d66 (Batch 9)
 
 ## Current Status
 
@@ -141,7 +141,7 @@ func RI(d *Driver)   // ESC M - Reverse Index (already existed)
 
 **All 18 tests passing**
 
-### Batch 9: Tab Operations (Commit: TBD)
+### Batch 9: Tab Operations (Commit: fa31d66)
 
 **Files Created:**
 - `apps/texelterm/esctest/hts_test.go` - 1 HTS (Horizontal Tab Set) test
