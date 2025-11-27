@@ -814,7 +814,15 @@ func (v *VTerm) CarriageReturn() {
 
 func (v *VTerm) Backspace() {
 	v.wrapNext = false
-	if v.cursorX > 0 {
+
+	// Determine minimum column based on left margin
+	minX := 0
+	if v.leftRightMarginMode && v.cursorX >= v.marginLeft && v.cursorX <= v.marginRight {
+		// Inside margins: stop at left margin
+		minX = v.marginLeft
+	}
+
+	if v.cursorX > minX {
 		v.SetCursorPos(v.cursorY, v.cursorX-1)
 	}
 }

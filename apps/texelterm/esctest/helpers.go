@@ -433,6 +433,11 @@ func FF(d *Driver) {
 	d.WriteRaw("\f")
 }
 
+// BS (Backspace) - Move cursor left one position (0x08).
+func BS(d *Driver) {
+	d.WriteRaw("\b")
+}
+
 // RIS (Reset to Initial State) - Perform a full terminal reset (ESC c).
 func RIS(d *Driver) {
 	d.WriteRaw(fmt.Sprintf("%sc", ESC))
