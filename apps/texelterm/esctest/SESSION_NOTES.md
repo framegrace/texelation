@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: (pending - Batch 13)
+**Latest Commit**: 8ebb61e (Batch 13)
 
 ## Current Status
 
@@ -295,7 +295,7 @@ func DECALN(d *Driver)  // ESC # 8 - Screen Alignment Test
 
 **All 3 tests passing**
 
-### Batch 13: VT and FF Control Characters (Commit: pending)
+### Batch 13: VT and FF Control Characters (Commit: 8ebb61e)
 
 **Files Created:**
 - `apps/texelterm/esctest/vt_test.go` - 6 VT (Vertical Tab) tests
