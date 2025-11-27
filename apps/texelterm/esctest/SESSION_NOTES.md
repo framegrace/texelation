@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: 8ebb61e (Batch 13)
+**Latest Commit**: (pending - Batch 14)
 
 ## Current Status
 
-**Total Tests**: 196
-**Passing**: 196 (100%) ✓
+**Total Tests**: 202
+**Passing**: 202 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -23,6 +23,7 @@
 - **Batch 11**: Line control characters - CR, LF, NEL (17 tests) - ALL PASSING
 - **Batch 12**: Screen Alignment Test - DECALN (3 tests) - ALL PASSING
 - **Batch 13**: VT and FF control characters (12 tests) - ALL PASSING
+- **Batch 14**: Terminal Reset - RIS (6 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -331,6 +332,38 @@ func FF(d *Driver)  // \f - Form Feed (same as IND)
 - No new VTerm implementation needed - just wire up the control characters to Index()
 
 **All 12 tests passing (6 VT + 6 FF)**
+
+### Batch 14: Terminal Reset (Commit: pending)
+
+**Files Created:**
+- `apps/texelterm/esctest/ris_test.go` - 6 RIS (Reset to Initial State) tests
+
+**Implementations:**
+1. **RIS (Reset to Initial State) - ESC c** (parser.go:101-103, already implemented)
+   - Performs a full terminal reset (hard reset)
+   - Clears screen and scrollback
+   - Resets cursor to home position (1,1)
+   - Resets tab stops to default (every 8 columns)
+   - Exits alt screen if active
+   - Resets all margins and modes
+
+**VTerm Fixes:**
+- Fixed `Reset()` function (vterm.go:957-979) to properly reset all margin-related state:
+  - Added `v.marginLeft = 0` and `v.marginRight = v.width - 1`
+  - Added `v.leftRightMarginMode = false`
+  - Added `v.originMode = false`
+  - These were missing and causing margins/origin mode to persist after reset
+
+**Helper Functions Added** (helpers.go:350-353):
+```go
+func RIS(d *Driver)  // ESC c - Reset to Initial State
+```
+
+**Tests Skipped from Original:**
+- `test_RIS_ResetTitleMode` - Requires title mode management (not implemented)
+- `test_RIS_ResetDECCOLM` - Requires 80/132 column switching (not implemented)
+
+**All 6 tests passing**
 
 ## Test Conversion Process
 

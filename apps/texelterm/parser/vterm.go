@@ -961,6 +961,10 @@ func (v *VTerm) Reset() {
 	v.ClearScreen()
 	v.ResetAttributes()
 	v.SetMargins(0, 0)
+	v.marginLeft = 0
+	v.marginRight = v.width - 1
+	v.leftRightMarginMode = false
+	v.originMode = false
 	v.cursorVisible = true
 	v.wrapNext = false
 	v.autoWrapMode = true

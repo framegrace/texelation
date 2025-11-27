@@ -347,6 +347,11 @@ func FF(d *Driver) {
 	d.WriteRaw("\f")
 }
 
+// RIS (Reset to Initial State) - Perform a full terminal reset (ESC c).
+func RIS(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%sc", ESC))
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {

@@ -87,10 +87,13 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **vt_test.go** - VT (Vertical Tab) - 6 tests, all passing
 - ✅ **ff_test.go** - FF (Form Feed) - 6 tests, all passing
 
+**Batch 14: Terminal Reset**
+- ✅ **ris_test.go** - RIS (Reset to Initial State) - 6 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 196 tests
-**Passing**: 196 (100%) ✅
+**Total**: 202 tests
+**Passing**: 202 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
