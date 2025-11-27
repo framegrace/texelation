@@ -19,6 +19,11 @@ import (
 // ESC is the escape character.
 const ESC = "\x1b"
 
+// ANSI mode constants (for SM/RM)
+const (
+	IRM = 4 // Insert/Replace Mode
+)
+
 // --- Assertion Functions ---
 
 // AssertEQ asserts that two values are equal.
@@ -441,6 +446,21 @@ func BS(d *Driver) {
 // RIS (Reset to Initial State) - Perform a full terminal reset (ESC c).
 func RIS(d *Driver) {
 	d.WriteRaw(fmt.Sprintf("%sc", ESC))
+}
+
+// DECSTR (Soft Terminal Reset) - Reset terminal state without clearing screen (CSI ! p).
+func DECSTR(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%s[!p", ESC))
+}
+
+// SM (Set Mode) - Set ANSI mode (CSI Ps h).
+func SM(d *Driver, mode int) {
+	d.WriteRaw(fmt.Sprintf("%s[%dh", ESC, mode))
+}
+
+// RM (Reset Mode) - Reset ANSI mode (CSI Ps l).
+func RM(d *Driver, mode int) {
+	d.WriteRaw(fmt.Sprintf("%s[%dl", ESC, mode))
 }
 
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.

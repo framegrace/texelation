@@ -989,6 +989,38 @@ func (v *VTerm) Reset() {
 	}
 }
 
+// SoftReset (DECSTR) performs a soft terminal reset.
+// Unlike RIS (Reset), DECSTR does not clear the screen or move the cursor.
+// It resets modes, margins, and saved state to defaults.
+func (v *VTerm) SoftReset() {
+	// Save current cursor position (DECSTR must not move cursor)
+	savedX, savedY := v.cursorX, v.cursorY
+
+	// Reset saved cursor position to origin
+	v.savedMainCursorX, v.savedMainCursorY = 0, 0
+	v.savedAltCursorX, v.savedAltCursorY = 0, 0
+
+	// Reset modes
+	v.insertMode = false
+	v.originMode = false
+	v.autoWrapMode = true // Keep autowrap ON (xterm compatibility)
+
+	// Reset margins to full screen
+	// Note: SetMargins() moves cursor to origin, so we restore it afterward
+	v.SetMargins(0, 0) // This sets top=0, bottom=height-1
+	v.marginLeft = 0
+	v.marginRight = v.width - 1
+	v.leftRightMarginMode = false
+
+	// Reset graphics rendition (SGR) to normal
+	v.ResetAttributes()
+
+	// Restore cursor position (DECSTR must not move cursor)
+	v.SetCursorPos(savedY, savedX)
+
+	// Note: Does NOT clear screen or reset tab stops
+}
+
 // ReverseIndex moves the cursor up one line, scrolling down if at the top margin.
 // Index moves cursor down one line, scrolling if at bottom margin.
 func (v *VTerm) Index() {
@@ -1057,6 +1089,11 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 			return params[i]
 		}
 		return defaultVal
+	}
+
+	if intermediate == '!' && command == 'p' { // DECSTR - Soft Terminal Reset
+		v.SoftReset()
+		return
 	}
 
 	if intermediate == '$' && command == 'p' { // DECRQM - Request Mode
