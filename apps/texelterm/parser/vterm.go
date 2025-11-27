@@ -343,6 +343,166 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 	v.MarkAllDirty()
 }
 
+// scrollUpWithinMargins scrolls content up within the left/right margins.
+// Similar to deleteLinesWithinMargins but operates on the entire top/bottom region.
+func (v *VTerm) scrollUpWithinMargins(n int) {
+	v.wrapNext = false
+	leftCol := v.marginLeft
+	rightCol := v.marginRight
+
+	if v.inAltScreen {
+		// Shift content within margins upward
+		for y := v.marginTop; y <= v.marginBottom-n; y++ {
+			srcY := y + n
+			if srcY <= v.marginBottom {
+				// Copy the margin region from source line to current line
+				copy(v.altBuffer[y][leftCol:rightCol+1], v.altBuffer[srcY][leftCol:rightCol+1])
+			}
+		}
+		// Clear the bottom n lines' margin regions
+		clearStart := v.marginBottom - n + 1
+		if clearStart < v.marginTop {
+			clearStart = v.marginTop
+		}
+		for y := clearStart; y <= v.marginBottom; y++ {
+			if y >= 0 && y < v.height {
+				for x := leftCol; x <= rightCol; x++ {
+					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+				}
+			}
+		}
+	} else {
+		// Main screen with history buffer
+		topHistory := v.getTopHistoryLine()
+
+		// Ensure history has all required lines
+		endLogicalY := topHistory + v.marginBottom
+		for v.historyLen <= endLogicalY {
+			v.appendHistoryLine(make([]Cell, 0, v.width))
+		}
+
+		// Shift content within margins upward
+		for y := v.marginTop; y <= v.marginBottom-n; y++ {
+			srcY := y + n
+			if srcY <= v.marginBottom {
+				dstLine := v.getHistoryLine(topHistory + y)
+				srcLine := v.getHistoryLine(topHistory + srcY)
+
+				// Ensure lines are wide enough
+				for len(dstLine) <= rightCol {
+					dstLine = append(dstLine, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
+				}
+				for len(srcLine) <= rightCol {
+					srcLine = append(srcLine, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
+				}
+
+				// Copy margin region
+				copy(dstLine[leftCol:rightCol+1], srcLine[leftCol:rightCol+1])
+				v.setHistoryLine(topHistory+y, dstLine)
+			}
+		}
+
+		// Clear the bottom n lines' margin regions
+		clearStart := v.marginBottom - n + 1
+		if clearStart < v.marginTop {
+			clearStart = v.marginTop
+		}
+		for y := clearStart; y <= v.marginBottom; y++ {
+			if y >= 0 {
+				line := v.getHistoryLine(topHistory + y)
+				for len(line) <= rightCol {
+					line = append(line, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
+				}
+				for x := leftCol; x <= rightCol; x++ {
+					line[x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+				}
+				v.setHistoryLine(topHistory+y, line)
+			}
+		}
+	}
+	v.MarkAllDirty()
+}
+
+// scrollDownWithinMargins scrolls content down within the left/right margins.
+// Similar to insertLinesWithinMargins but operates on the entire top/bottom region.
+func (v *VTerm) scrollDownWithinMargins(n int) {
+	v.wrapNext = false
+	leftCol := v.marginLeft
+	rightCol := v.marginRight
+
+	if v.inAltScreen {
+		// Shift content within margins downward
+		for y := v.marginBottom; y >= v.marginTop+n; y-- {
+			srcY := y - n
+			if srcY >= v.marginTop {
+				// Copy the margin region from source line to current line
+				copy(v.altBuffer[y][leftCol:rightCol+1], v.altBuffer[srcY][leftCol:rightCol+1])
+			}
+		}
+		// Clear the top n lines' margin regions
+		clearEnd := v.marginTop + n - 1
+		if clearEnd > v.marginBottom {
+			clearEnd = v.marginBottom
+		}
+		for y := v.marginTop; y <= clearEnd; y++ {
+			if y >= 0 && y < v.height {
+				for x := leftCol; x <= rightCol; x++ {
+					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+				}
+			}
+		}
+	} else {
+		// Main screen with history buffer
+		topHistory := v.getTopHistoryLine()
+
+		// Ensure history has all required lines
+		endLogicalY := topHistory + v.marginBottom
+		for v.historyLen <= endLogicalY {
+			v.appendHistoryLine(make([]Cell, 0, v.width))
+		}
+
+		// Shift content within margins downward
+		for y := v.marginBottom; y >= v.marginTop+n; y-- {
+			srcY := y - n
+			if srcY >= v.marginTop {
+				dstLine := v.getHistoryLine(topHistory + y)
+				srcLine := v.getHistoryLine(topHistory + srcY)
+
+				// Ensure lines are wide enough
+				for len(dstLine) <= rightCol {
+					dstLine = append(dstLine, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
+				}
+				for len(srcLine) <= rightCol {
+					srcLine = append(srcLine, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
+				}
+
+				// Copy margin region
+				copy(dstLine[leftCol:rightCol+1], srcLine[leftCol:rightCol+1])
+				v.setHistoryLine(topHistory+y, dstLine)
+			}
+		}
+
+		// Clear the top n lines' margin regions
+		clearEnd := v.marginTop + n - 1
+		if clearEnd > v.marginBottom {
+			clearEnd = v.marginBottom
+		}
+		for y := v.marginTop; y <= clearEnd; y++ {
+			if y >= 0 {
+				line := v.getHistoryLine(topHistory + y)
+				for len(line) <= rightCol {
+					line = append(line, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
+				}
+				for x := leftCol; x <= rightCol; x++ {
+					line[x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+				}
+				v.setHistoryLine(topHistory+y, line)
+			}
+		}
+	}
+	v.MarkAllDirty()
+}
+
 // Scroll adjusts the viewport offset for the history buffer.
 func (v *VTerm) Scroll(delta int) {
 	if v.inAltScreen {
@@ -737,9 +897,17 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 	case 'M':
 		v.DeleteLines(param(0, 1))
 	case 'S': // SU - Scroll Up
-		v.scrollRegion(param(0, 1), v.marginTop, v.marginBottom)
+		if v.leftRightMarginMode {
+			v.scrollUpWithinMargins(param(0, 1))
+		} else {
+			v.scrollRegion(param(0, 1), v.marginTop, v.marginBottom)
+		}
 	case 'T': // SD - Scroll Down
-		v.scrollRegion(-param(0, 1), v.marginTop, v.marginBottom)
+		if v.leftRightMarginMode {
+			v.scrollDownWithinMargins(param(0, 1))
+		} else {
+			v.scrollRegion(-param(0, 1), v.marginTop, v.marginBottom)
+		}
 	case 'm':
 		v.handleSGR(params)
 	case 'n': // DSR - Device Status Report

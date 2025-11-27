@@ -56,15 +56,19 @@ The original Python-based tests have been converted to Go to enable:
 - ✅ **el_test.go** - EL (Erase in Line) - 5 tests, all passing
 
 **Batch 7: Scrolling and Regions**
-- ⚠️ **decstbm_test.go** - DECSTBM (Set Top/Bottom Margins) - 9/10 passing
+- ✅ **decstbm_test.go** - DECSTBM (Set Top/Bottom Margins) - 10 tests, all passing
 - ✅ **ind_test.go** - IND (Index) - 6 tests, all passing
-- ⚠️ **ri_test.go** - RI (Reverse Index) - 3/6 passing
+- ✅ **ri_test.go** - RI (Reverse Index) - 6 tests, all passing
+
+**Batch 8: Scroll Commands**
+- ✅ **su_test.go** - SU (Scroll Up) - 9 tests, all passing
+- ✅ **sd_test.go** - SD (Scroll Down) - 9 tests, all passing
 
 ### Test Results Summary
 
-**Total**: 119 tests
-**Passing**: 115 (97%) ✅
-**Failing**: 4 (known issues)
+**Total**: 140 tests
+**Passing**: 140 (100%) ✅
+**Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
 
@@ -172,15 +176,26 @@ All compliance tests passing! The following issues were fixed:
     - Prevents unwanted scrolling when cursor at edge of screen
     - See vterm.go:666-677, 681-692
 
-## Known Issues
+17. **Scroll-Down Content Preservation** (RI)
+    - Fixed scrollRegion to ensure history buffer has all required lines before scroll-down
+    - Previously setHistoryLine() bounds check caused writes to silently fail
+    - Content was lost during reverse index operations
+    - Now creates missing lines before shifting content
+    - See vterm.go:326-330
 
-**Batch 7 Failures (4 tests):**
-- Test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll - Content preservation issue
-- Test_RI_Scrolls - Main screen scroll down not working correctly
-- Test_RI_ScrollsInTopBottomRegionStartingBelow - RI scroll region issue
-- Test_RI_ScrollsInTopBottomRegionStartingWithin - RI scroll region issue
+18. **LineFeed Viewport Shift Fix** (RI)
+    - Fixed LineFeed to not append history lines when cursor at bottom of screen
+    - Previously caused unwanted viewport shifts outside scroll regions
+    - Now only appends lines when cursor will actually move down
+    - Prevents historyLen growth that shifts getTopHistoryLine() incorrectly
+    - See vterm.go:272-283
 
-These failures are related to Reverse Index scrolling on the main screen and will be addressed in a future update.
+19. **SU/SD Left/Right Margin Support** (SU, SD)
+    - Implemented scrollUpWithinMargins and scrollDownWithinMargins functions
+    - SU/SD now respect both top/bottom and left/right margins
+    - Content outside margins is preserved during scroll operations
+    - Matches xterm behavior for rectangular region scrolling
+    - See vterm.go:346-504, 740-750
 
 ## Test Conversion Plan
 

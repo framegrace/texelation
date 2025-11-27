@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: 332533a (Scroll-down fixes)
+**Latest Commit**: TBD (Batch 8)
 
 ## Current Status
 
-**Total Tests**: 119
-**Passing**: 119 (100%) ✓
+**Total Tests**: 140
+**Passing**: 140 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -17,6 +17,7 @@
 - **Batch 5**: Line editing - DL, IL (16 tests) - ALL PASSING
 - **Batch 6**: Erase operations - ED, EL (13 tests) - ALL PASSING
 - **Batch 7**: Scrolling - DECSTBM, IND, RI (22 tests) - ALL PASSING
+- **Batch 8**: Scroll commands - SU, SD (18 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -102,6 +103,43 @@ func RI(d *Driver)   // ESC M - Reverse Index (already existed)
 - `Test_RI_ScrollsInTopBottomRegionStartingWithin` - RI within scroll region
 - `Test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll` - Scrolling outside margins
 
+### Batch 8: SU/SD Scroll Commands (Commit: TBD)
+
+**Files Created:**
+- `apps/texelterm/esctest/su_test.go` - 9 SU (Scroll Up) tests
+- `apps/texelterm/esctest/sd_test.go` - 9 SD (Scroll Down) tests
+
+**Implementations:**
+1. **SU (Scroll Up) - CSI Ps S** (vterm.go:739-744, helpers.go:241-248)
+   - Scrolls content up within margins
+   - Respects both top/bottom and left/right margins
+   - Operates on entire region (not just from cursor)
+
+2. **SD (Scroll Down) - CSI Ps T** (vterm.go:745-750, helpers.go:250-257)
+   - Scrolls content down within margins
+   - Respects both top/bottom and left/right margins
+   - Operates on entire region (not just from cursor)
+
+3. **scrollUpWithinMargins()** (vterm.go:346-424)
+   - New function for SU when DECLRMM is active
+   - Scrolls content up only within left/right margins
+   - Preserves content outside margin columns
+   - Similar to deleteLinesWithinMargins but operates on entire top/bottom region
+
+4. **scrollDownWithinMargins()** (vterm.go:426-504)
+   - New function for SD when DECLRMM is active
+   - Scrolls content down only within left/right margins
+   - Preserves content outside margin columns
+   - Similar to insertLinesWithinMargins but operates on entire top/bottom region
+
+**Key Differences from IND/RI:**
+- IND/RI check cursor position and don't scroll if outside left/right margins
+- SU/SD always scroll the region, but only the columns within margins when DECLRMM active
+- SU/SD preserve content outside margin columns (rectangular scrolling)
+- IND/RI shift entire lines (full-line scrolling)
+
+**All 18 tests passing**
+
 ## Test Conversion Process
 
 ### Source
@@ -163,14 +201,13 @@ DECRESET(d, DECLRMM)         // Disable left/right margin mode
 
 ## Next Steps
 
-### Ready for Batch 8: SU/SD Scroll Commands
+### Potential Next Batches
 
-**Batch 8: Scroll Commands (SU/SD)**
-- Source files: `su.py` (9 tests), `sd.py` (9 tests)
-- 18 tests total
-- Tests CSI S (Scroll Up) and CSI T (Scroll Down)
-- Important for full scrolling compliance
-- All prerequisite scroll infrastructure now working correctly
+With all scrolling infrastructure complete and working (IND, RI, SU, SD, DECSTBM), the foundation is solid for continuing conversions. Potential next batches could include:
+
+- Batch 9+: Additional escape sequences from esctest2 test suite
+- Focus on sequences that build on the working scroll/margin infrastructure
+- Continue improving xterm compliance incrementally
 
 ## Running Tests
 

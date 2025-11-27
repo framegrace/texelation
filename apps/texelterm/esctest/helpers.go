@@ -238,6 +238,24 @@ func RI(d *Driver) {
 	d.WriteRaw(fmt.Sprintf("%sM", ESC))
 }
 
+// SU (Scroll Up) - Scroll up by n lines (default 1).
+func SU(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[S", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dS", ESC, n[0]))
+	}
+}
+
+// SD (Scroll Down) - Scroll down by n lines (default 1).
+func SD(d *Driver, n ...int) {
+	if len(n) == 0 {
+		d.WriteRaw(fmt.Sprintf("%s[T", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%dT", ESC, n[0]))
+	}
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {
