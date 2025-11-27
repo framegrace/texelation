@@ -463,6 +463,16 @@ func RM(d *Driver, mode int) {
 	d.WriteRaw(fmt.Sprintf("%s[%dl", ESC, mode))
 }
 
+// DECBI (Back Index) - Move cursor back or scroll data right (ESC 6).
+func DECBI(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%s6", ESC))
+}
+
+// DECFI (Forward Index) - Move cursor forward or scroll data left (ESC 9).
+func DECFI(d *Driver) {
+	d.WriteRaw(fmt.Sprintf("%s9", ESC))
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {

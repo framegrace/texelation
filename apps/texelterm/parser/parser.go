@@ -133,6 +133,14 @@ func (p *Parser) Parse(r rune) {
 			// DECRC - Restore Cursor
 			p.vterm.RestoreCursor()
 			p.state = StateGround
+		case '6':
+			// DECBI - Back Index (horizontal scroll right)
+			p.vterm.BackIndex()
+			p.state = StateGround
+		case '9':
+			// DECFI - Forward Index (horizontal scroll left)
+			p.vterm.ForwardIndex()
+			p.state = StateGround
 		case '=', '>':
 			p.state = StateGround
 		default:

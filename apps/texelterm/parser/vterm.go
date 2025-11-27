@@ -1107,6 +1107,153 @@ func (v *VTerm) ReverseIndex() {
 	}
 }
 
+// BackIndex (DECBI) moves cursor back one column or scrolls content right.
+// ESC 6 - VT420 feature for horizontal scrolling.
+func (v *VTerm) BackIndex() {
+	v.wrapNext = false
+
+	// Determine effective left/right margins
+	leftMargin := 0
+	rightMargin := v.width - 1
+	if v.leftRightMarginMode {
+		leftMargin = v.marginLeft
+		rightMargin = v.marginRight
+	}
+
+	// Check if cursor is outside top/bottom margins
+	outsideVerticalMargins := v.cursorY < v.marginTop || v.cursorY > v.marginBottom
+
+	// If at left margin and inside vertical margins, scroll content right
+	if v.cursorX == leftMargin && !outsideVerticalMargins {
+		v.scrollHorizontal(1, leftMargin, rightMargin, v.marginTop, v.marginBottom)
+		// Cursor stays at left margin
+	} else if v.cursorX > 0 {
+		// Not at left margin or outside margins - just move cursor left
+		v.SetCursorPos(v.cursorY, v.cursorX-1)
+	}
+	// If at column 0, stay there (can't move further left)
+}
+
+// ForwardIndex (DECFI) moves cursor forward one column or scrolls content left.
+// ESC 9 - VT420 feature for horizontal scrolling.
+func (v *VTerm) ForwardIndex() {
+	v.wrapNext = false
+
+	// Determine effective left/right margins
+	leftMargin := 0
+	rightMargin := v.width - 1
+	if v.leftRightMarginMode {
+		leftMargin = v.marginLeft
+		rightMargin = v.marginRight
+	}
+
+	// Check if cursor is outside top/bottom margins
+	outsideVerticalMargins := v.cursorY < v.marginTop || v.cursorY > v.marginBottom
+
+	// If at right margin and inside vertical margins, scroll content left
+	if v.cursorX == rightMargin && !outsideVerticalMargins {
+		v.scrollHorizontal(-1, leftMargin, rightMargin, v.marginTop, v.marginBottom)
+		// Cursor stays at right margin
+	} else if v.cursorX < v.width-1 {
+		// Not at right margin or outside margins - just move cursor right
+		v.SetCursorPos(v.cursorY, v.cursorX+1)
+	}
+	// If at right edge of screen (width-1), stay there (can't move further right)
+}
+
+// scrollHorizontal scrolls content horizontally within specified margins.
+// n > 0: scroll right (content shifts right, blank column inserted at left)
+// n < 0: scroll left (content shifts left, blank column inserted at right)
+func (v *VTerm) scrollHorizontal(n int, left int, right int, top int, bottom int) {
+	if v.inAltScreen {
+		buffer := v.altBuffer
+		if n > 0 {
+			// Scroll right: shift content right, insert blank at left margin
+			for i := 0; i < n; i++ {
+				for y := top; y <= bottom; y++ {
+					if y >= len(buffer) {
+						continue
+					}
+					line := buffer[y]
+					// Ensure line is wide enough
+					for len(line) <= right {
+						line = append(line, Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG})
+					}
+					// Shift columns right within margin region
+					for x := right; x > left; x-- {
+						line[x] = line[x-1]
+					}
+					// Insert blank at left margin
+					line[left] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+					buffer[y] = line
+				}
+			}
+		} else if n < 0 {
+			// Scroll left: shift content left, insert blank at right margin
+			for i := 0; i < -n; i++ {
+				for y := top; y <= bottom; y++ {
+					if y >= len(buffer) {
+						continue
+					}
+					line := buffer[y]
+					// Ensure line is wide enough
+					for len(line) <= right {
+						line = append(line, Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG})
+					}
+					// Shift columns left within margin region
+					for x := left; x < right; x++ {
+						line[x] = line[x+1]
+					}
+					// Insert blank at right margin
+					line[right] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+					buffer[y] = line
+				}
+			}
+		}
+	} else {
+		// Main screen scrolling
+		topHistory := v.getTopHistoryLine()
+		if n > 0 {
+			// Scroll right: shift content right, insert blank at left margin
+			for i := 0; i < n; i++ {
+				for y := top; y <= bottom; y++ {
+					line := v.getHistoryLine(topHistory + y)
+					// Ensure line is wide enough
+					for len(line) <= right {
+						line = append(line, Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG})
+					}
+					// Shift columns right within margin region
+					for x := right; x > left; x-- {
+						line[x] = line[x-1]
+					}
+					// Insert blank at left margin
+					line[left] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+					v.setHistoryLine(topHistory+y, line)
+				}
+			}
+		} else if n < 0 {
+			// Scroll left: shift content left, insert blank at right margin
+			for i := 0; i < -n; i++ {
+				for y := top; y <= bottom; y++ {
+					line := v.getHistoryLine(topHistory + y)
+					// Ensure line is wide enough
+					for len(line) <= right {
+						line = append(line, Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG})
+					}
+					// Shift columns left within margin region
+					for x := left; x < right; x++ {
+						line[x] = line[x+1]
+					}
+					// Insert blank at right margin
+					line[right] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+					v.setHistoryLine(topHistory+y, line)
+				}
+			}
+		}
+	}
+	v.MarkAllDirty()
+}
+
 // --- Core CSI Dispatch ---
 
 // ProcessCSI interprets a parsed CSI sequence and calls the appropriate handler.
