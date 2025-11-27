@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: [TBD] (Batch 12)
+**Latest Commit**: bb48c99 (Batch 12)
 
 ## Current Status
 
@@ -266,7 +266,7 @@ func NEL(d *Driver)  // ESC E - Next Line
 
 **All 17 tests passing**
 
-### Batch 12: Screen Alignment Test (Commit: TBD)
+### Batch 12: Screen Alignment Test (Commit: bb48c99)
 
 **Files Created:**
 - `apps/texelterm/esctest/decaln_test.go` - 3 DECALN tests
