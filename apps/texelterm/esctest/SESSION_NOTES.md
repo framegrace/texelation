@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: (pending - Batch 15)
+**Latest Commit**: 9089ea1 (Batch 15)
 
 ## Current Status
 
@@ -366,7 +366,7 @@ func RIS(d *Driver)  // ESC c - Reset to Initial State
 
 **All 6 tests passing**
 
-### Batch 15: SGR (Select Graphic Rendition) - Infrastructure and Basic Tests (Commit: pending)
+### Batch 15: SGR (Select Graphic Rendition) - Infrastructure and Basic Tests (Commit: 9089ea1)
 
 **Files Created:**
 - `apps/texelterm/esctest/sgr_test.go` - 10 SGR tests for text attributes and colors
