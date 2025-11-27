@@ -61,6 +61,9 @@ type VTerm struct {
 	OnInputStart                       func()
 	OnCommandStart                     func()
 	OnCommandEnd                       func(exitCode int)
+	// Bracketed paste mode (DECSET 2004)
+	bracketedPasteMode                 bool
+	OnBracketedPasteModeChange         func(bool)
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -128,6 +131,11 @@ func (v *VTerm) Grid() [][]Cell {
 		}
 	}
 	return grid
+}
+
+// IsBracketedPasteModeEnabled returns whether bracketed paste mode is enabled.
+func (v *VTerm) IsBracketedPasteModeEnabled() bool {
+	return v.bracketedPasteMode
 }
 
 // placeChar puts a rune at the current cursor position, handling wrapping and insert mode.
@@ -587,8 +595,15 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.SetCursorVisible(true)
 		case 69: // DECLRMM - Enable left/right margin mode
 			v.leftRightMarginMode = true
-		case 1002, 1004, 1006, 2004:
+		case 1002, 1004, 1006:
 			// Ignore mouse and focus reporting for now
+		case 2004: // Enable bracketed paste mode
+			if !v.bracketedPasteMode {
+				v.bracketedPasteMode = true
+				if v.OnBracketedPasteModeChange != nil {
+					v.OnBracketedPasteModeChange(true)
+				}
+			}
 		case 1049: // Switch to Alt Workspace
 			if v.inAltScreen {
 				return
@@ -629,8 +644,15 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			// Reset margins to full width
 			v.marginLeft = 0
 			v.marginRight = v.width - 1
-		case 1002, 1004, 1006, 2004, 2031, 2048:
+		case 1002, 1004, 1006, 2031, 2048:
 			// Ignore mouse and focus reporting for now
+		case 2004: // Disable bracketed paste mode
+			if v.bracketedPasteMode {
+				v.bracketedPasteMode = false
+				if v.OnBracketedPasteModeChange != nil {
+					v.OnBracketedPasteModeChange(false)
+				}
+			}
 		case 1049: // Switch to Main Workspace
 			if !v.inAltScreen {
 				return
@@ -1008,6 +1030,13 @@ func (v *VTerm) Reset() {
 	v.autoWrapMode = true
 	v.insertMode = false
 	v.appCursorKeys = false
+	// Reset bracketed paste mode
+	if v.bracketedPasteMode {
+		v.bracketedPasteMode = false
+		if v.OnBracketedPasteModeChange != nil {
+			v.OnBracketedPasteModeChange(false)
+		}
+	}
 	v.tabStops = make(map[int]bool)
 	for i := 0; i < v.width; i++ {
 		if i%8 == 0 {
@@ -1031,6 +1060,14 @@ func (v *VTerm) SoftReset() {
 	v.insertMode = false
 	v.originMode = false
 	v.autoWrapMode = true // Keep autowrap ON (xterm compatibility)
+
+	// Reset bracketed paste mode
+	if v.bracketedPasteMode {
+		v.bracketedPasteMode = false
+		if v.OnBracketedPasteModeChange != nil {
+			v.OnBracketedPasteModeChange(false)
+		}
+	}
 
 	// Reset margins to full screen
 	// Note: SetMargins() moves cursor to origin, so we restore it afterward

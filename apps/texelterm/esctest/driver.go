@@ -159,3 +159,13 @@ func (d *Driver) ReadPtyResponse() string {
 	d.ptyOutput = ""
 	return response
 }
+
+// IsBracketedPasteModeEnabled returns whether bracketed paste mode is enabled.
+func (d *Driver) IsBracketedPasteModeEnabled() bool {
+	return d.vterm.IsBracketedPasteModeEnabled()
+}
+
+// SetBracketedPasteCallback sets a callback for when bracketed paste mode changes.
+func (d *Driver) SetBracketedPasteCallback(cb func(bool)) {
+	d.vterm.OnBracketedPasteModeChange = cb
+}
