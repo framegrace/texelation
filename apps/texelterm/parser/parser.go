@@ -152,8 +152,9 @@ func (p *Parser) Parse(r rune) {
 			p.intermediate = r
 		case r >= '@' && r <= '~':
 			p.params = append(p.params, p.currentParam)
-			p.vterm.ProcessCSI(r, p.params, p.intermediate)
+			p.vterm.ProcessCSI(r, p.params, p.intermediate, p.private)
 			p.state = StateGround
+			p.private = false // Reset for next CSI
 		}
 	case StateOSC:
 		if r == '\x07' || r == '\x1b' { // Terminated by BEL or another ESC

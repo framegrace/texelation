@@ -175,6 +175,13 @@ func (v *VTerm) placeChar(r rune) {
 		if v.insertMode {
 			line = append(line, Cell{}) // Make space for the new char
 			copy(line[v.cursorX+1:], line[v.cursorX:])
+			// Truncate at right margin if DECLRMM is active
+			if v.leftRightMarginMode && v.cursorX >= v.marginLeft && v.cursorX <= v.marginRight {
+				// Ensure line doesn't extend beyond right margin
+				if len(line) > v.marginRight+1 {
+					line = line[:v.marginRight+1]
+				}
+			}
 		}
 
 		line[v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
@@ -532,6 +539,30 @@ func (v *VTerm) Scroll(delta int) {
 
 // --- CSI Handlers ---
 
+// processANSIMode handles ANSI mode setting/resetting (SM/RM - without '?' prefix).
+func (v *VTerm) processANSIMode(command rune, params []int) {
+	if len(params) == 0 {
+		return
+	}
+	mode := params[0]
+	switch command {
+	case 'h': // SM - Set Mode
+		switch mode {
+		case 4: // IRM - Insert/Replace Mode
+			v.insertMode = true
+		default:
+			log.Printf("Parser: Unhandled ANSI set mode: %d%c", mode, command)
+		}
+	case 'l': // RM - Reset Mode
+		switch mode {
+		case 4: // IRM - Insert/Replace Mode
+			v.insertMode = false
+		default:
+			log.Printf("Parser: Unhandled ANSI reset mode: %d%c", mode, command)
+		}
+	}
+}
+
 // processPrivateCSI handles terminal-specific CSI sequences (starting with '?').
 func (v *VTerm) processPrivateCSI(command rune, params []int) {
 	if len(params) == 0 {
@@ -543,8 +574,6 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 		switch mode {
 		case 1:
 			v.appCursorKeys = true
-		case 4: // SET Insert Mode
-			v.insertMode = true
 		case 6: // DECOM - Origin Mode
 			v.originMode = true
 			// Move cursor to home position of scroll region
@@ -584,8 +613,6 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 		switch mode {
 		case 1:
 			v.appCursorKeys = false
-		case 4: // RESET Insert Mode
-			v.insertMode = false
 		case 6: // DECOM - Reset Origin Mode
 			v.originMode = false
 			// Move cursor to absolute home position
@@ -1083,7 +1110,7 @@ func (v *VTerm) ReverseIndex() {
 // --- Core CSI Dispatch ---
 
 // ProcessCSI interprets a parsed CSI sequence and calls the appropriate handler.
-func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
+func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, private bool) {
 	param := func(i int, defaultVal int) int {
 		if i < len(params) && params[i] != 0 {
 			return params[i]
@@ -1109,8 +1136,13 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune) {
 		return
 	}
 
-	if param(0, -1) > 0 && (command == 'h' || command == 'l') {
-		v.processPrivateCSI(command, params)
+	// Handle mode setting/resetting (SM/RM for ANSI modes, DECSET/DECRESET for DEC private modes)
+	if command == 'h' || command == 'l' {
+		if private {
+			v.processPrivateCSI(command, params)
+		} else {
+			v.processANSIMode(command, params)
+		}
 		return
 	}
 
