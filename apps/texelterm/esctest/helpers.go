@@ -473,6 +473,24 @@ func DECFI(d *Driver) {
 	d.WriteRaw(fmt.Sprintf("%s9", ESC))
 }
 
+// DECIC (Insert Column) - Insert blank columns at cursor (CSI Pn ' }).
+func DECIC(d *Driver, n int) {
+	if n == 0 {
+		d.WriteRaw(fmt.Sprintf("%s['}", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%d'}", ESC, n))
+	}
+}
+
+// DECDC (Delete Column) - Delete columns at cursor (CSI Pn ' ~).
+func DECDC(d *Driver, n int) {
+	if n == 0 {
+		d.WriteRaw(fmt.Sprintf("%s['~", ESC))
+	} else {
+		d.WriteRaw(fmt.Sprintf("%s[%d'~", ESC, n))
+	}
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {
