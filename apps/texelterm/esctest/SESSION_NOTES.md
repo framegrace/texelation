@@ -2,12 +2,12 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: bb48c99 (Batch 12)
+**Latest Commit**: (pending - Batch 13)
 
 ## Current Status
 
-**Total Tests**: 184
-**Passing**: 184 (100%) ✓
+**Total Tests**: 196
+**Passing**: 196 (100%) ✓
 **Failing**: 0
 
 ### Completed Batches
@@ -22,6 +22,7 @@
 - **Batch 10**: Additional cursor movement - HPA, HPR, VPR, CBT, CHT (19 tests) - ALL PASSING
 - **Batch 11**: Line control characters - CR, LF, NEL (17 tests) - ALL PASSING
 - **Batch 12**: Screen Alignment Test - DECALN (3 tests) - ALL PASSING
+- **Batch 13**: VT and FF control characters (12 tests) - ALL PASSING
 
 ## Latest Changes (This Session)
 
@@ -293,6 +294,43 @@ func DECALN(d *Driver)  // ESC # 8 - Screen Alignment Test
 - Commonly used by technicians to verify display quality
 
 **All 3 tests passing**
+
+### Batch 13: VT and FF Control Characters (Commit: pending)
+
+**Files Created:**
+- `apps/texelterm/esctest/vt_test.go` - 6 VT (Vertical Tab) tests
+- `apps/texelterm/esctest/ff_test.go` - 6 FF (Form Feed) tests
+
+**Implementations:**
+1. **VT (Vertical Tab) - \v (0x0B)** (parser.go:73-75)
+   - Moves cursor down one line (behaves identically to IND)
+   - Scrolls when at bottom of scroll region
+   - Respects left/right margins (won't scroll when outside)
+   - All VT tests leverage existing Index() function
+
+2. **FF (Form Feed) - \f (0x0C)** (parser.go:76-78)
+   - Moves cursor down one line (behaves identically to IND)
+   - Scrolls when at bottom of scroll region
+   - Respects left/right margins (won't scroll when outside)
+   - All FF tests leverage existing Index() function
+
+**Parser Changes:**
+- Added case for '\v' (Vertical Tab) in StateGround
+- Added case for '\f' (Form Feed) in StateGround
+- Both control characters call existing Index() function
+
+**Helper Functions Added** (helpers.go:340-348):
+```go
+func VT(d *Driver)  // \v - Vertical Tab (same as IND)
+func FF(d *Driver)  // \f - Form Feed (same as IND)
+```
+
+**Key Insight:**
+- Both VT and FF are legacy control characters that modern terminals implement as synonyms for IND (Index)
+- The Python test files explicitly note: "These tests are the same as those for IND"
+- No new VTerm implementation needed - just wire up the control characters to Index()
+
+**All 12 tests passing (6 VT + 6 FF)**
 
 ## Test Conversion Process
 

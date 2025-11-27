@@ -337,6 +337,16 @@ func DECALN(d *Driver) {
 	d.WriteRaw(fmt.Sprintf("%s#8", ESC))
 }
 
+// VT (Vertical Tab) - Move cursor down one line (same as IND).
+func VT(d *Driver) {
+	d.WriteRaw("\v")
+}
+
+// FF (Form Feed) - Move cursor down one line (same as IND).
+func FF(d *Driver) {
+	d.WriteRaw("\f")
+}
+
 // DECSTBM (Set Top and Bottom Margins) - Set scrolling region.
 func DECSTBM(d *Driver, top, bottom int) {
 	if top == 0 && bottom == 0 {

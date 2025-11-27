@@ -70,6 +70,12 @@ func (p *Parser) Parse(r rune) {
 			p.vterm.Backspace()
 		case '\t':
 			p.vterm.Tab()
+		case '\v':
+			// VT (Vertical Tab) - behaves like IND (Index)
+			p.vterm.Index()
+		case '\f':
+			// FF (Form Feed) - behaves like IND (Index)
+			p.vterm.Index()
 		default:
 			if r >= ' ' {
 				p.vterm.placeChar(r)

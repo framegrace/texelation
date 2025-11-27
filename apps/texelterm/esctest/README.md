@@ -83,10 +83,14 @@ The original Python-based tests have been converted to Go to enable:
 **Batch 12: Screen Alignment Test**
 - ✅ **decaln_test.go** - DECALN (Screen Alignment Test) - 3 tests, all passing
 
+**Batch 13: VT and FF Control Characters**
+- ✅ **vt_test.go** - VT (Vertical Tab) - 6 tests, all passing
+- ✅ **ff_test.go** - FF (Form Feed) - 6 tests, all passing
+
 ### Test Results Summary
 
-**Total**: 184 tests
-**Passing**: 184 (100%) ✅
+**Total**: 196 tests
+**Passing**: 196 (100%) ✅
 **Failing**: 0
 
 All compliance tests passing! The following issues were fixed:
