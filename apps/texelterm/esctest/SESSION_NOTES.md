@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-11-27
 **Current Branch**: texelterm-bug-fixing
-**Latest Commit**: (pending - Batch 16)
+**Latest Commit**: 82ba050 (Batch 16)
 
 ## Current Status
 
@@ -415,7 +415,7 @@ func RIS(d *Driver)  // ESC c - Reset to Initial State
 
 **All 10 tests passing**
 
-### Batch 16: Extended SGR Colors (Commit: pending)
+### Batch 16: Extended SGR Colors (Commit: 82ba050)
 
 **Files Modified:**
 - `apps/texelterm/esctest/sgr_test.go` - Added 8 more comprehensive SGR tests
