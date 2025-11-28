@@ -24,6 +24,7 @@ const (
 	StateCharset
 	StateDCS
 	StateDCSEscape
+	StateHash
 )
 
 type Parser struct {
@@ -59,8 +60,9 @@ func (p *Parser) Parse(r rune) {
 		case '\x1b':
 			p.state = StateEscape
 		case '\n':
-			// LF should only move down one line, preserving column (not CR+LF)
-			// In default mode (LNM reset), \n does only line feed
+			// LF (Line Feed) - just move down (like IND/Index)
+			// Note: LNM (Line Feed/New Line Mode) would make this behave as CR+LF,
+			// but that mode is not currently implemented. Pure LF just moves down.
 			p.vterm.LineFeed()
 		case '\r':
 			p.vterm.CarriageReturn()
@@ -68,6 +70,12 @@ func (p *Parser) Parse(r rune) {
 			p.vterm.Backspace()
 		case '\t':
 			p.vterm.Tab()
+		case '\v':
+			// VT (Vertical Tab) - behaves like IND (Index)
+			p.vterm.Index()
+		case '\f':
+			// FF (Form Feed) - behaves like IND (Index)
+			p.vterm.Index()
 		default:
 			if r >= ' ' {
 				p.vterm.placeChar(r)
@@ -91,13 +99,47 @@ func (p *Parser) Parse(r rune) {
 		case 'P':
 			p.state = StateDCS
 			p.dcsBuffer = p.dcsBuffer[:0]
+		case '\\':
+			// ST (String Terminator) - ESC \
+			// This completes string sequences that were terminated with ESC \
+			// (The actual string handling already occurred when we saw the ESC)
+			p.state = StateGround
 		case 'c':
 			p.vterm.Reset()
 			p.state = StateGround
 		case '(':
 			p.state = StateCharset
+		case '#':
+			p.state = StateHash
+		case 'D':
+			p.vterm.Index()
+			p.state = StateGround
+		case 'E':
+			// NEL - Next Line (move down and to column 1)
+			p.vterm.NextLine()
+			p.state = StateGround
 		case 'M':
 			p.vterm.ReverseIndex()
+			p.state = StateGround
+		case 'H':
+			// HTS - Horizontal Tab Set
+			p.vterm.SetTabStop()
+			p.state = StateGround
+		case '7':
+			// DECSC - Save Cursor
+			p.vterm.SaveCursor()
+			p.state = StateGround
+		case '8':
+			// DECRC - Restore Cursor
+			p.vterm.RestoreCursor()
+			p.state = StateGround
+		case '6':
+			// DECBI - Back Index (horizontal scroll right)
+			p.vterm.BackIndex()
+			p.state = StateGround
+		case '9':
+			// DECFI - Forward Index (horizontal scroll left)
+			p.vterm.ForwardIndex()
 			p.state = StateGround
 		case '=', '>':
 			p.state = StateGround
@@ -112,14 +154,22 @@ func (p *Parser) Parse(r rune) {
 		case r == ';':
 			p.params = append(p.params, p.currentParam)
 			p.currentParam = 0
-		case r >= '<' && r <= '?':
+		case r == '?':
+			// '?' is the DEC private parameter marker (e.g., CSI ? 6 h for DECSET)
 			p.private = true
+		case r == '>':
+			// '>' is used for DA2 and similar queries (CSI > c)
+			// Treat it as an intermediate byte for simplicity
+			p.intermediate = r
 		case r >= ' ' && r <= '/':
+			// Intermediate bytes: space (0x20) through '/' (0x2F)
+			// Includes '!', '\'',' etc.
 			p.intermediate = r
 		case r >= '@' && r <= '~':
 			p.params = append(p.params, p.currentParam)
-			p.vterm.ProcessCSI(r, p.params, p.intermediate)
+			p.vterm.ProcessCSI(r, p.params, p.intermediate, p.private)
 			p.state = StateGround
+			p.private = false // Reset for next CSI
 		}
 	case StateOSC:
 		if r == '\x07' || r == '\x1b' { // Terminated by BEL or another ESC
@@ -161,6 +211,14 @@ func (p *Parser) Parse(r rune) {
 			p.state = StateDCS
 			p.dcsBuffer = append(p.dcsBuffer, '\x1b', r)
 		}
+	case StateHash:
+		// ESC # sequences
+		switch r {
+		case '8':
+			// DECALN - Screen Alignment Test
+			p.vterm.DECALN()
+		}
+		p.state = StateGround
 	case StateCharset:
 		p.state = StateGround
 	}

@@ -35,23 +35,24 @@ const (
 )
 
 type TexelTerm struct {
-	title             string
-	command           string
-	width             int
-	height            int
-	cmd               *exec.Cmd
-	pty               *os.File
-	vterm             *parser.VTerm
-	parser            *parser.Parser
-	mu                sync.Mutex
-	stop              chan struct{}
-	stopOnce          sync.Once
-	refreshChan       chan<- bool
-	wg                sync.WaitGroup
-	buf               [][]texel.Cell
-	colorPalette      [258]tcell.Color
-	controlBus        cards.ControlBus
-	selection         termSelection
+	title                string
+	command              string
+	width                int
+	height               int
+	cmd                  *exec.Cmd
+	pty                  *os.File
+	vterm                *parser.VTerm
+	parser               *parser.Parser
+	mu                   sync.Mutex
+	stop                 chan struct{}
+	stopOnce             sync.Once
+	refreshChan          chan<- bool
+	wg                   sync.WaitGroup
+	buf                  [][]texel.Cell
+	colorPalette         [258]tcell.Color
+	controlBus           cards.ControlBus
+	selection            termSelection
+	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
 }
 
 // termSelection tracks the current text selection state and multi-click history.
@@ -305,16 +306,39 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	if a.pty == nil || len(data) == 0 {
 		return
 	}
-	converted := make([]byte, len(data))
-	for i, b := range data {
-		if b == '\n' {
-			converted[i] = '\r'
-		} else {
-			converted[i] = b
+
+	// Check if bracketed paste mode is enabled (bool reads are atomic)
+	if a.bracketedPasteMode {
+		// In bracketed paste mode, send data as-is (preserve LF)
+		// The application knows it's paste data and handles newlines itself
+		prefix := []byte("\x1b[200~")
+		suffix := []byte("\x1b[201~")
+
+		// Write: prefix + data + suffix
+		if _, err := a.pty.Write(prefix); err != nil {
+			log.Printf("TexelTerm: paste prefix write failed: %v", err)
+			return
 		}
-	}
-	if _, err := a.pty.Write(converted); err != nil {
-		log.Printf("TexelTerm: paste write failed: %v", err)
+		if _, err := a.pty.Write(data); err != nil {
+			log.Printf("TexelTerm: paste data write failed: %v", err)
+			return
+		}
+		if _, err := a.pty.Write(suffix); err != nil {
+			log.Printf("TexelTerm: paste suffix write failed: %v", err)
+		}
+	} else {
+		// No bracketed paste - convert LF to CR (terminal behavior)
+		converted := make([]byte, len(data))
+		for i, b := range data {
+			if b == '\n' {
+				converted[i] = '\r'
+			} else {
+				converted[i] = b
+			}
+		}
+		if _, err := a.pty.Write(converted); err != nil {
+			log.Printf("TexelTerm: paste write failed: %v", err)
+		}
 	}
 }
 
@@ -673,6 +697,10 @@ func (a *TexelTerm) Run() error {
 		}),
 		parser.WithScreenRestoredHandler(func() {
 			go a.Resize(a.width, a.height)
+		}),
+		parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
+			// Note: bool writes are atomic, no lock needed for simple assignment
+			a.bracketedPasteMode = enabled
 		}),
 		parser.WithWrap(wrapEnabled),
 		parser.WithReflow(reflowEnabled),
