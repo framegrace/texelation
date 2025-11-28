@@ -19,3 +19,12 @@ esctest2/
 tools/
 ptylog-output.txt
 run_*.sh
+
+# Screenshots and debug images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+err.log
+err2.log
