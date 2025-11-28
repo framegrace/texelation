@@ -63,6 +63,7 @@ func Run(builder Builder, args []string) error {
 	screen.Clear()
 	screen.EnableMouse()
 	defer screen.DisableMouse()
+	screen.EnablePaste()
 
 	width, height := screen.Size()
 	app.Resize(width, height)
@@ -100,6 +101,10 @@ func Run(builder Builder, args []string) error {
 
 	draw()
 
+	// Buffer for collecting paste data
+	var pasteBuffer []byte
+	var inPaste bool
+
 	for {
 		select {
 		case err := <-runErr:
@@ -115,12 +120,37 @@ func Run(builder Builder, args []string) error {
 			w, h := tev.Size()
 			app.Resize(w, h)
 			draw()
+		case *tcell.EventPaste:
+			if tev.Start() {
+				// Start collecting paste data
+				inPaste = true
+				pasteBuffer = nil
+			} else if tev.End() {
+				// End of paste - send to app if it supports HandlePaste
+				inPaste = false
+				if ph, ok := app.(interface{ HandlePaste([]byte) }); ok && len(pasteBuffer) > 0 {
+					ph.HandlePaste(pasteBuffer)
+					draw()
+				}
+				pasteBuffer = nil
+			}
 		case *tcell.EventKey:
 			if tev.Key() == tcell.KeyCtrlC {
 				return nil
 			}
-			app.HandleKey(tev)
-			draw()
+			if inPaste {
+				// Collect paste data
+				if tev.Key() == tcell.KeyRune {
+					// Convert rune to UTF-8 bytes
+					pasteBuffer = append(pasteBuffer, []byte(string(tev.Rune()))...)
+				} else if tev.Key() == tcell.KeyEnter {
+					pasteBuffer = append(pasteBuffer, '\n')
+				}
+			} else {
+				// Normal key handling
+				app.HandleKey(tev)
+				draw()
+			}
 		case *tcell.EventMouse:
 			if mh, ok := app.(interface{ HandleMouse(*tcell.EventMouse) }); ok {
 				mh.HandleMouse(tev)
