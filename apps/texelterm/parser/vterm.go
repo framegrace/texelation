@@ -2663,10 +2663,17 @@ func (v *VTerm) Resize(width, height int) {
 		if v.reflowEnabled && oldWidth != width {
 			v.reflowHistoryBuffer(oldWidth, width)
 		}
-		// In main screen mode, don't try to preserve cursor position.
-		// The PTY application (bash/shell) will reposition the cursor itself
-		// after receiving SIGWINCH. Just clamp to valid bounds.
-		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor to new dimensions
+		// In main screen mode, keep cursor at same distance from bottom.
+		// This way if the prompt was at the bottom, it stays at the bottom.
+		distanceFromBottom := oldHeight - v.cursorY - 1
+		newY := v.height - distanceFromBottom - 1
+		if newY < 0 {
+			newY = 0
+		}
+		if newY >= v.height {
+			newY = v.height - 1
+		}
+		v.SetCursorPos(newY, v.cursorX)
 	}
 
 	v.SetMargins(0, 0) // Reset margins on resize
