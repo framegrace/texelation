@@ -2641,13 +2641,6 @@ func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
 		return
 	}
-	var linesFromEnd int
-	if !v.inAltScreen {
-		// Save cursor position as distance from end of history
-		// This way after reflow changes line count, we can restore relative position
-		logicalY := v.cursorY + v.getTopHistoryLine()
-		linesFromEnd = v.historyLen - logicalY - 1
-	}
 
 	oldHeight := v.height
 	oldWidth := v.width
@@ -2670,13 +2663,10 @@ func (v *VTerm) Resize(width, height int) {
 		if v.reflowEnabled && oldWidth != width {
 			v.reflowHistoryBuffer(oldWidth, width)
 		}
-		// Restore cursor to same distance from end of history
-		newLogicalY := v.historyLen - linesFromEnd - 1
-		if newLogicalY < 0 {
-			newLogicalY = 0
-		}
-		physicalY := newLogicalY - v.getTopHistoryLine()
-		v.SetCursorPos(physicalY, v.cursorX) // Re-clamp cursor
+		// In main screen mode, don't try to preserve cursor position.
+		// The PTY application (bash/shell) will reposition the cursor itself
+		// after receiving SIGWINCH. Just clamp to valid bounds.
+		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor to new dimensions
 	}
 
 	v.SetMargins(0, 0) // Reset margins on resize
