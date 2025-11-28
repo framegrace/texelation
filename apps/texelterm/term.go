@@ -303,28 +303,14 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 }
 
 func (a *TexelTerm) HandlePaste(data []byte) {
-	log.Printf("DEBUG: HandlePaste called with %d bytes", len(data))
 	if a.pty == nil || len(data) == 0 {
-		log.Printf("DEBUG: HandlePaste exiting early (pty=%v, len=%d)", a.pty != nil, len(data))
 		return
 	}
 
 	// Check if bracketed paste mode is enabled (bool reads are atomic)
-	log.Printf("DEBUG: bracketedPasteMode = %v", a.bracketedPasteMode)
 	if a.bracketedPasteMode {
-		log.Printf("DEBUG: Wrapping paste with bracketed paste markers")
 		// In bracketed paste mode, send data as-is (preserve LF)
 		// The application knows it's paste data and handles newlines itself
-
-		// Debug: count newlines
-		newlineCount := 0
-		for _, b := range data {
-			if b == '\n' {
-				newlineCount++
-			}
-		}
-		log.Printf("DEBUG: Paste data has %d newlines", newlineCount)
-
 		prefix := []byte("\x1b[200~")
 		suffix := []byte("\x1b[201~")
 
@@ -714,7 +700,6 @@ func (a *TexelTerm) Run() error {
 		}),
 		parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
 			// Note: bool writes are atomic, no lock needed for simple assignment
-			log.Printf("DEBUG: Neovim %s bracketed paste mode", map[bool]string{true: "ENABLED", false: "DISABLED"}[enabled])
 			a.bracketedPasteMode = enabled
 		}),
 		parser.WithWrap(wrapEnabled),

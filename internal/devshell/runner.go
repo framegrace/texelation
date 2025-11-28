@@ -2,7 +2,6 @@ package devshell
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -123,19 +122,14 @@ func Run(builder Builder, args []string) error {
 		case *tcell.EventPaste:
 			// Bracketed paste event from tcell
 			if tev.Start() {
-				log.Printf("DEBUG RUNNER: Paste START")
 				inPaste = true
 				pasteBuffer = nil
 			} else if tev.End() {
-				log.Printf("DEBUG RUNNER: Paste END, collected %d bytes", len(pasteBuffer))
 				inPaste = false
 				// Send collected paste data to app
 				if ph, ok := app.(interface{ HandlePaste([]byte) }); ok && len(pasteBuffer) > 0 {
-					log.Printf("DEBUG RUNNER: Calling HandlePaste with %d bytes", len(pasteBuffer))
 					ph.HandlePaste(pasteBuffer)
 					draw()
-				} else {
-					log.Printf("DEBUG RUNNER: NOT calling HandlePaste (ok=%v, len=%d)", ok, len(pasteBuffer))
 				}
 				pasteBuffer = nil
 			}
@@ -147,14 +141,8 @@ func Run(builder Builder, args []string) error {
 				// Collect paste data
 				if tev.Key() == tcell.KeyRune {
 					pasteBuffer = append(pasteBuffer, []byte(string(tev.Rune()))...)
-					if len(pasteBuffer) <= 10 {
-						log.Printf("DEBUG RUNNER: Collected rune '%c' (total: %d)", tev.Rune(), len(pasteBuffer))
-					}
 				} else if tev.Key() == tcell.KeyEnter || tev.Key() == 10 { // KeyEnter (CR) or LF
 					pasteBuffer = append(pasteBuffer, '\n')
-					log.Printf("DEBUG RUNNER: Collected newline (total: %d)", len(pasteBuffer))
-				} else {
-					log.Printf("DEBUG RUNNER: Ignoring key type %v during paste", tev.Key())
 				}
 				// Don't draw during paste collection
 			} else {
