@@ -317,12 +317,8 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 		}
 	}
 
-	// Check if bracketed paste mode is enabled
-	a.mu.Lock()
-	bracketedPaste := a.bracketedPasteMode
-	a.mu.Unlock()
-
-	if bracketedPaste {
+	// Check if bracketed paste mode is enabled (bool reads are atomic)
+	if a.bracketedPasteMode {
 		// Wrap paste in bracketed paste markers
 		// ESC[200~ = paste start, ESC[201~ = paste end
 		prefix := []byte("\x1b[200~")
@@ -705,9 +701,8 @@ func (a *TexelTerm) Run() error {
 			go a.Resize(a.width, a.height)
 		}),
 		parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
-			a.mu.Lock()
+			// Note: bool writes are atomic, no lock needed for simple assignment
 			a.bracketedPasteMode = enabled
-			a.mu.Unlock()
 		}),
 		parser.WithWrap(wrapEnabled),
 		parser.WithReflow(reflowEnabled),
