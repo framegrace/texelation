@@ -309,31 +309,21 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 		return
 	}
 
-	// Convert line endings (LF -> CR)
-	converted := make([]byte, len(data))
-	for i, b := range data {
-		if b == '\n' {
-			converted[i] = '\r'
-		} else {
-			converted[i] = b
-		}
-	}
-
 	// Check if bracketed paste mode is enabled (bool reads are atomic)
 	log.Printf("DEBUG: bracketedPasteMode = %v", a.bracketedPasteMode)
 	if a.bracketedPasteMode {
 		log.Printf("DEBUG: Wrapping paste with bracketed paste markers")
-		// Wrap paste in bracketed paste markers
-		// ESC[200~ = paste start, ESC[201~ = paste end
+		// In bracketed paste mode, send data as-is (preserve LF)
+		// The application knows it's paste data and handles newlines itself
 		prefix := []byte("\x1b[200~")
 		suffix := []byte("\x1b[201~")
 
-		// Write: prefix + converted + suffix
+		// Write: prefix + data + suffix
 		if _, err := a.pty.Write(prefix); err != nil {
 			log.Printf("TexelTerm: paste prefix write failed: %v", err)
 			return
 		}
-		if _, err := a.pty.Write(converted); err != nil {
+		if _, err := a.pty.Write(data); err != nil {
 			log.Printf("TexelTerm: paste data write failed: %v", err)
 			return
 		}
@@ -341,7 +331,15 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 			log.Printf("TexelTerm: paste suffix write failed: %v", err)
 		}
 	} else {
-		// No bracketed paste - send as-is
+		// No bracketed paste - convert LF to CR (terminal behavior)
+		converted := make([]byte, len(data))
+		for i, b := range data {
+			if b == '\n' {
+				converted[i] = '\r'
+			} else {
+				converted[i] = b
+			}
+		}
 		if _, err := a.pty.Write(converted); err != nil {
 			log.Printf("TexelTerm: paste write failed: %v", err)
 		}
