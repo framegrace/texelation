@@ -19,6 +19,16 @@ esctest2/
 tools/
 ptylog-output.txt
 run_*.sh
+debug_*.sh
+test_*.sh
+test_*.go
+ss
+
+# Compiled binaries (should be in bin/ or built elsewhere)
+texel-server
+texel-client
+texelterm
+welcome
 
 # Screenshots and debug images
 *.png
