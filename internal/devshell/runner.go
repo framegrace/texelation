@@ -150,9 +150,11 @@ func Run(builder Builder, args []string) error {
 					if len(pasteBuffer) <= 10 {
 						log.Printf("DEBUG RUNNER: Collected rune '%c' (total: %d)", tev.Rune(), len(pasteBuffer))
 					}
-				} else if tev.Key() == tcell.KeyEnter {
+				} else if tev.Key() == tcell.KeyEnter || tev.Key() == 10 { // KeyEnter (CR) or LF
 					pasteBuffer = append(pasteBuffer, '\n')
 					log.Printf("DEBUG RUNNER: Collected newline (total: %d)", len(pasteBuffer))
+				} else {
+					log.Printf("DEBUG RUNNER: Ignoring key type %v during paste", tev.Key())
 				}
 				// Don't draw during paste collection
 			} else {

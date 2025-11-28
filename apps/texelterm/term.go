@@ -315,6 +315,16 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 		log.Printf("DEBUG: Wrapping paste with bracketed paste markers")
 		// In bracketed paste mode, send data as-is (preserve LF)
 		// The application knows it's paste data and handles newlines itself
+
+		// Debug: count newlines
+		newlineCount := 0
+		for _, b := range data {
+			if b == '\n' {
+				newlineCount++
+			}
+		}
+		log.Printf("DEBUG: Paste data has %d newlines", newlineCount)
+
 		prefix := []byte("\x1b[200~")
 		suffix := []byte("\x1b[201~")
 
