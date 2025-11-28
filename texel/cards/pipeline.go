@@ -294,6 +294,33 @@ func (p *Pipeline) MouseWheelEnabled() bool {
 	return p.wheelHandler() != nil
 }
 
+// pasteHandler finds the first card capable of handling paste events.
+func (p *Pipeline) pasteHandler() interface{ HandlePaste([]byte) } {
+	cards := p.Cards()
+	for _, card := range cards {
+		if handler, ok := card.(interface{ HandlePaste([]byte) }); ok {
+			return handler
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if handler, ok := underlying.(interface{ HandlePaste([]byte) }); ok {
+				return handler
+			}
+		}
+	}
+	return nil
+}
+
+// HandlePaste forwards paste events to the first capable card.
+func (p *Pipeline) HandlePaste(data []byte) {
+	if handler := p.pasteHandler(); handler != nil {
+		handler.HandlePaste(data)
+	}
+}
+
 // ControlBus exposes the control bus associated with this pipeline.
 func (p *Pipeline) ControlBus() ControlBus {
 	return p.bus

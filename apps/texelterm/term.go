@@ -303,7 +303,9 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 }
 
 func (a *TexelTerm) HandlePaste(data []byte) {
+	log.Printf("DEBUG: HandlePaste called with %d bytes", len(data))
 	if a.pty == nil || len(data) == 0 {
+		log.Printf("DEBUG: HandlePaste exiting early (pty=%v, len=%d)", a.pty != nil, len(data))
 		return
 	}
 
@@ -318,7 +320,9 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	}
 
 	// Check if bracketed paste mode is enabled (bool reads are atomic)
+	log.Printf("DEBUG: bracketedPasteMode = %v", a.bracketedPasteMode)
 	if a.bracketedPasteMode {
+		log.Printf("DEBUG: Wrapping paste with bracketed paste markers")
 		// Wrap paste in bracketed paste markers
 		// ESC[200~ = paste start, ESC[201~ = paste end
 		prefix := []byte("\x1b[200~")
