@@ -63,8 +63,7 @@ func Run(builder Builder, args []string) error {
 	screen.Clear()
 	screen.EnableMouse()
 	defer screen.DisableMouse()
-	// Note: Don't use screen.EnablePaste() here - it interferes with paste handling
-	// in nested terminals. Let bracketed paste work naturally through key events.
+	screen.EnablePaste() // Enable bracketed paste support
 
 	width, height := screen.Size()
 	app.Resize(width, height)
@@ -102,6 +101,9 @@ func Run(builder Builder, args []string) error {
 
 	draw()
 
+	var pasteBuffer []byte
+	var inPaste bool
+
 	for {
 		select {
 		case err := <-runErr:
@@ -117,12 +119,37 @@ func Run(builder Builder, args []string) error {
 			w, h := tev.Size()
 			app.Resize(w, h)
 			draw()
+		case *tcell.EventPaste:
+			// Bracketed paste event from tcell
+			if tev.Start() {
+				inPaste = true
+				pasteBuffer = nil
+			} else if tev.End() {
+				inPaste = false
+				// Send collected paste data to app
+				if ph, ok := app.(interface{ HandlePaste([]byte) }); ok && len(pasteBuffer) > 0 {
+					ph.HandlePaste(pasteBuffer)
+					draw()
+				}
+				pasteBuffer = nil
+			}
 		case *tcell.EventKey:
 			if tev.Key() == tcell.KeyCtrlC {
 				return nil
 			}
-			app.HandleKey(tev)
-			draw()
+			if inPaste {
+				// Collect paste data
+				if tev.Key() == tcell.KeyRune {
+					pasteBuffer = append(pasteBuffer, []byte(string(tev.Rune()))...)
+				} else if tev.Key() == tcell.KeyEnter {
+					pasteBuffer = append(pasteBuffer, '\n')
+				}
+				// Don't draw during paste collection
+			} else {
+				// Normal key handling
+				app.HandleKey(tev)
+				draw()
+			}
 		case *tcell.EventMouse:
 			if mh, ok := app.(interface{ HandleMouse(*tcell.EventMouse) }); ok {
 				mh.HandleMouse(tev)

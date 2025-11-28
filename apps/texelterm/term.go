@@ -702,6 +702,7 @@ func (a *TexelTerm) Run() error {
 		}),
 		parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
 			// Note: bool writes are atomic, no lock needed for simple assignment
+			log.Printf("DEBUG: Neovim %s bracketed paste mode", map[bool]string{true: "ENABLED", false: "DISABLED"}[enabled])
 			a.bracketedPasteMode = enabled
 		}),
 		parser.WithWrap(wrapEnabled),
