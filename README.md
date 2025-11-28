@@ -200,6 +200,10 @@ Additional helpers:
 
 Texelation is licensed under the GNU Affero General Public License version 3.0 (or any later version at your option). See `LICENSE` for the full text. Contributions must be compatible with AGPLv3.
 
+## Acknowledgements
+
+We'd like to thank **George Nachman** and **Thomas E. Dickey** for creating [esctest2](https://github.com/ThomasDickey/esctest2). Their comprehensive VT terminal test suite was invaluable in helping us catch and fix terminal emulation bugs in our project. The 285 tests derived from their work continue to ensure our terminal stays VT-compliant.
+
 ## An Important Note
 
 Although I’m tech-savvy—and even if I was a relatively good Java programmer a quarter of a century ago, and tried to keep up by learning new languages now and then—my programming “fu” isn’t quite up to modern times. I’ve been on the systems side of the business for most of my life: sysadmin, architect, and DevOps. These days my work revolves around k8s, CI/CD, cloud APIs, and monitoring tools. The only languages I can honestly call myself “top” in are Bash and regex.
