@@ -102,6 +102,21 @@ func (h *TestHarness) GetLine(y int) []Cell {
 	return h.vterm.HistoryLineCopy(historyLine)
 }
 
+// GetLineText returns the text content of a line (up to maxLen characters).
+// Position is relative to current viewport (0-based).
+func (h *TestHarness) GetLineText(y, maxLen int) string {
+	line := h.GetLine(y)
+	var result strings.Builder
+	for i := 0; i < maxLen && i < len(line); i++ {
+		if line[i].Rune == 0 {
+			result.WriteRune(' ')
+		} else {
+			result.WriteRune(line[i].Rune)
+		}
+	}
+	return result.String()
+}
+
 // GetCursor returns the current cursor position (0-based).
 func (h *TestHarness) GetCursor() (x, y int) {
 	return h.vterm.GetCursorX(), h.vterm.GetCursorY()
