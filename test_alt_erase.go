@@ -73,7 +73,7 @@ func printLine(vterm *parser.VTerm, y int, altScreen bool) {
 		// For now, just print what we can see
 	} else {
 		if y < vterm.HistoryLength() {
-			line = vterm.HistoryLineCopy(y + vterm.GetTopHistoryLine())
+			line = vterm.HistoryLineCopy(y + vterm.VisibleTop())
 		}
 	}
 
