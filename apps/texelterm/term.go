@@ -962,18 +962,30 @@ func (a *TexelTerm) GetTitle() string {
 // OnEvent implements texel.Listener to handle theme changes.
 func (a *TexelTerm) OnEvent(event texel.Event) {
 	if event.Type == texel.EventThemeChanged {
-		log.Println("TexelTerm: Received EventThemeChanged, rebuilding palette")
+		log.Printf("TexelTerm[%s]: Received EventThemeChanged, rebuilding palette", a.title)
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		
+
+		// Log old palette colors for comparison
+		oldRed := a.colorPalette[1]
+		oldBg := a.colorPalette[257]
+
 		// Regenerate the palette with the new theme colors
 		a.colorPalette = newDefaultPalette()
-		
+
+		// Log new palette colors
+		newRed := a.colorPalette[1]
+		newBg := a.colorPalette[257]
+		log.Printf("TexelTerm[%s]: Palette updated - Red: %v -> %v, BG: %v -> %v",
+			a.title, oldRed, newRed, oldBg, newBg)
+
 		// Force a full redraw
 		if a.vterm != nil {
 			a.vterm.MarkAllDirty()
+			log.Printf("TexelTerm[%s]: Marked all vterm content dirty", a.title)
 		}
 		a.requestRefresh()
+		log.Printf("TexelTerm[%s]: Requested refresh", a.title)
 	}
 }
 
@@ -1027,6 +1039,8 @@ func newDefaultPalette() [258]tcell.Color {
 	p[13] = theme.ResolveColorName("pink")
 	p[14] = theme.ResolveColorName("teal")
 	p[15] = theme.ResolveColorName("text")
+
+	log.Printf("newDefaultPalette: ANSI red (1) = %v, ANSI blue (4) = %v", p[1], p[4])
 
 	// Fallback for any missing palette colors
 	if p[0] == tcell.ColorDefault { p[0] = tcell.NewRGBColor(10, 10, 20) }
