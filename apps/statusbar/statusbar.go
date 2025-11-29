@@ -117,18 +117,30 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 
 	// Define color schemes
 	tm := theme.Get()
-	defbgColor := tm.GetColor("statusbar", "base_bg", tcell.ColorPink).TrueColor()
-	deffgColor := tm.GetColor("statusbar", "base_fg", tcell.ColorPink).TrueColor()
-	if a.inControlMode {
-		defbgColor = tm.GetColor("statusbar", "control_mode_bg", tcell.ColorPink).TrueColor()
-		deffgColor = tm.GetColor("statusbar", "control_mode_fg", tcell.ColorPink).TrueColor()
-	}
-	styleBase := tcell.StyleDefault.Background(defbgColor).Foreground(deffgColor)
-	styleActiveTab := tcell.StyleDefault.Background(a.desktopBgColor.TrueColor()).Foreground(tm.GetColor("statusbar", "active_tab_fg", tcell.ColorPink).TrueColor())
-	styleInactiveTab := tcell.StyleDefault.Background(tm.GetColor("statusbar", "inactive_tab_bg", tcell.ColorPink).TrueColor()).Foreground(tm.GetColor("statusbar", "inactive_tab_fg", tcell.ColorPink).TrueColor())
+	// Base background (Mantle)
+	defbgColor := tm.GetSemanticColor("bg.mantle").TrueColor()
+	deffgColor := tm.GetSemanticColor("text.primary").TrueColor()
 
-	styleActiveTabStart := tcell.StyleDefault.Background(defbgColor).Foreground(a.desktopBgColor)
-	styleInactiveTabStart := tcell.StyleDefault.Background(defbgColor).Foreground(tm.GetColor("statusbar", "inactive_tab_bg", tcell.ColorPink).TrueColor())
+	if a.inControlMode {
+		// Control Mode -> Danger (Red)
+		defbgColor = tm.GetSemanticColor("action.danger").TrueColor()
+		deffgColor = tm.GetSemanticColor("text.inverse").TrueColor()
+	}
+
+	styleBase := tcell.StyleDefault.Background(defbgColor).Foreground(deffgColor)
+	
+	// Active Tab: seamless with desktop (bg.base)
+	activeTabBg := a.desktopBgColor.TrueColor() // Should be bg.base
+	activeTabFg := tm.GetSemanticColor("text.primary").TrueColor()
+	styleActiveTab := tcell.StyleDefault.Background(activeTabBg).Foreground(activeTabFg)
+
+	// Inactive Tab: darker (bg.mantle or bg.crust?)
+	inactiveTabBg := tm.GetSemanticColor("bg.crust").TrueColor() 
+	inactiveTabFg := tm.GetSemanticColor("text.muted").TrueColor()
+	styleInactiveTab := tcell.StyleDefault.Background(inactiveTabBg).Foreground(inactiveTabFg)
+
+	styleActiveTabStart := tcell.StyleDefault.Background(defbgColor).Foreground(activeTabBg)
+	styleInactiveTabStart := tcell.StyleDefault.Background(defbgColor).Foreground(inactiveTabBg)
 
 	// Fill the entire bar with the base style first
 	for i := 0; i < a.width; i++ {

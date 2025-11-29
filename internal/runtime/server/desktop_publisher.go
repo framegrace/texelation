@@ -17,6 +17,7 @@ import (
 
 	"texelation/protocol"
 	"texelation/texel"
+	"texelation/texel/theme"
 )
 
 // DesktopPublisher captures desktop pane buffers and enqueues them as buffer
@@ -171,6 +172,57 @@ func convertColor(color tcell.Color) (protocol.ColorModel, uint32) {
 	if color == tcell.ColorDefault {
 		return protocol.ColorModelDefault, 0
 	}
+
+	// Intercept standard ANSI colors (0-15) and map them to theme colors
+	if color >= tcell.ColorBlack && color <= tcell.ColorWhite {
+		// We map standard tcell colors to their palette names
+		// tcell.ColorBlack (0) -> "surface1" (or explicit ansi black)
+		// tcell.ColorRed (1) -> "red"
+		// ...
+		var paletteName string
+		switch color {
+		case tcell.ColorBlack:
+			paletteName = "surface1" // Often better than true black for TUI
+		case tcell.ColorMaroon:
+			paletteName = "maroon"
+		case tcell.ColorGreen:
+			paletteName = "green"
+		case tcell.ColorOlive:
+			paletteName = "yellow"
+		case tcell.ColorNavy:
+			paletteName = "blue"
+		case tcell.ColorPurple:
+			paletteName = "pink"
+		case tcell.ColorTeal:
+			paletteName = "teal"
+		case tcell.ColorSilver:
+			paletteName = "subtext1"
+		case tcell.ColorGray:
+			paletteName = "surface2"
+		case tcell.ColorRed:
+			paletteName = "red"
+		case tcell.ColorLime:
+			paletteName = "green"
+		case tcell.ColorYellow:
+			paletteName = "yellow"
+		case tcell.ColorBlue:
+			paletteName = "blue"
+		case tcell.ColorFuchsia:
+			paletteName = "pink"
+		case tcell.ColorAqua:
+			paletteName = "teal"
+		case tcell.ColorWhite:
+			paletteName = "text"
+		}
+		
+		if paletteName != "" {
+			themeColor := theme.ResolveColorName(paletteName)
+			if themeColor != tcell.ColorDefault {
+				color = themeColor
+			}
+		}
+	}
+
 	r, g, b := color.RGB()
 	return protocol.ColorModelRGB, (uint32(r)&0xff)<<16 | (uint32(g)&0xff)<<8 | (uint32(b) & 0xff)
 }

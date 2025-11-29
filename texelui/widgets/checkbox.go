@@ -26,8 +26,8 @@ func NewCheckbox(x, y int, label string) *Checkbox {
 
 	// Get default style from theme
 	tm := theme.Get()
-	fg := tm.GetColor("ui", "text_fg", tcell.ColorWhite)
-	bg := tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
+	fg := tm.GetSemanticColor("text.primary")
+	bg := tm.GetSemanticColor("bg.surface")
 	c.Style = tcell.StyleDefault.Foreground(fg).Background(bg)
 
 	// Configure focused style - reverse colors for clear visibility

@@ -34,9 +34,9 @@ type Input struct {
 // NewInput creates a single-line input field at the specified position and size.
 func NewInput(x, y, w int) *Input {
 	tm := theme.Get()
-	bg := tm.GetColor("ui", "input_bg", tcell.ColorBlack)
-	fg := tm.GetColor("ui", "input_fg", tcell.ColorWhite)
-	caret := tm.GetColor("ui", "caret_fg", tcell.ColorSilver)
+	bg := tm.GetSemanticColor("bg.surface")
+	fg := tm.GetSemanticColor("text.primary")
+	caret := tm.GetSemanticColor("caret")
 
 	i := &Input{
 		Text:       "",
@@ -46,9 +46,8 @@ func NewInput(x, y, w int) *Input {
 	}
 
 	// Configure focused style
-	focusFg := tm.GetColor("ui", "input_focus_fg", fg)
-	focusBg := tm.GetColor("ui", "input_focus_bg", bg)
-	i.SetFocusedStyle(tcell.StyleDefault.Foreground(focusFg).Background(focusBg), true)
+	// For now, keep same as default, or allow overrides via theme if needed
+	i.SetFocusedStyle(tcell.StyleDefault.Foreground(fg).Background(bg), true)
 
 	i.SetPosition(x, y)
 	i.Resize(w, 1) // Input is always single-line

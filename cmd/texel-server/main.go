@@ -27,6 +27,7 @@ import (
 	"texelation/apps/welcome"
 	"texelation/internal/runtime/server"
 	"texelation/texel"
+	"texelation/texel/theme"
 )
 
 func main() {
@@ -121,8 +122,23 @@ func main() {
 	fmt.Println("Use the integration test client or proto harness to connect and send key events.")
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+	for {
+		sig := <-sigCh
+		if sig == syscall.SIGHUP {
+			log.Println("Received SIGHUP, reloading configuration...")
+			if err := theme.Reload(); err != nil {
+				log.Printf("Failed to reload theme: %v", err)
+			} else {
+				log.Println("Theme reloaded successfully.")
+				desktop.ForceRefresh()
+			}
+			continue
+		}
+		// SIGINT or SIGTERM -> Exit
+		break
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

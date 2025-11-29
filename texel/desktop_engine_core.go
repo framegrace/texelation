@@ -148,8 +148,8 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 	}
 
 	tm := theme.Get()
-	defbg := tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()
-	deffg := tm.GetColor("desktop", "default_fg", tcell.ColorReset).TrueColor()
+	defbg := tm.GetSemanticColor("bg.base").TrueColor()
+	deffg := tm.GetSemanticColor("text.primary").TrueColor()
 	defStyle := tcell.StyleDefault.Background(defbg).Foreground(deffg)
 	driver.SetStyle(defStyle)
 	driver.HideCursor()
@@ -180,7 +180,28 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 	return d, nil
 }
 
+// ForceRefresh clears caches and triggers a full repaint.
+func (d *DesktopEngine) ForceRefresh() {
+	log.Println("Desktop: ForceRefresh triggered")
+	// Clear style cache to force re-evaluation of colors
+	d.styleCache = make(map[styleKey]tcell.Style)
+	
+	// Trigger a full layout and state broadcast
+	d.recalculateLayout()
+	d.broadcastStateUpdate()
+	d.broadcastTreeChanged()
+	
+	log.Println("Desktop: Broadcasting EventThemeChanged")
+	d.dispatcher.Broadcast(Event{Type: EventThemeChanged})
+	
+	// Notify refresh handler if one is set (to wake up the loop)
+	if d.refreshHandler != nil {
+		d.refreshHandler()
+	}
+}
+
 func (d *DesktopEngine) Subscribe(listener Listener) {
+	log.Printf("Desktop: Subscribing listener %T", listener)
 	d.dispatcher.Subscribe(listener)
 }
 
