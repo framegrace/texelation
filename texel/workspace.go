@@ -92,7 +92,6 @@ func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager
 	// Subscribe workspace to Desktop events so it can relay them to apps
 	if desktop != nil {
 		desktop.Subscribe(w)
-		log.Printf("Workspace %d: Subscribed to Desktop events", id)
 	}
 
 	return w, nil

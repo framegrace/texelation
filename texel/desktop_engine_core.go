@@ -201,7 +201,6 @@ func (d *DesktopEngine) ForceRefresh() {
 }
 
 func (d *DesktopEngine) Subscribe(listener Listener) {
-	log.Printf("Desktop: Subscribing listener %T", listener)
 	d.dispatcher.Subscribe(listener)
 }
 

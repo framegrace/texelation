@@ -154,25 +154,7 @@ func (c Config) Save() error {
 func (c Config) GetColor(sectionName, key string, defaultColor tcell.Color) tcell.Color {
 	mu.RLock()
 	defer mu.RUnlock()
-	
-	// We operate on the global 'instance' if 'c' is empty or the singleton, 
-	// but strictly speaking 'c' IS the map. However, reloading replaces 'instance'.
-	// To be safe with reloading, we should always look up in 'instance' if this method is called on the singleton.
-	// But 'c' is a map copy (reference). If 'instance' is replaced, 'c' points to old data.
-	// Ideally, getters should be functions on a package-level struct or we accept that 'Get()' returns a snapshot.
-	// For now, let's assume callers call Get() -> then GetColor().
-	// To support hot-reload, callers need to re-call Get() or we make these methods package-level wrappers.
-	
-	// Let's trust 'c' is the map we want to read from.
-	// Wait, if we replace 'instance' in Reload(), old references held by consumers won't update.
-	// We need to change the architecture slightly: Get() should return a pointer or handle, OR consumers must re-fetch.
-	// Or better: GetColor checks the global instance lock?
-	
-	// Correct approach for this refactor without breaking API:
-	// The 'Config' type is a map. Replacing 'instance' means old maps are stale.
-	// Consumers usually do `theme.Get().GetColor(...)`.
-	// If we want dynamic updates, we should probably make GetColor look at the *latest* instance.
-	
+
 	val, ok := c.getRawValue(sectionName, key)
 	if !ok {
 		return defaultColor
