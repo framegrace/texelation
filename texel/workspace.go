@@ -89,6 +89,12 @@ func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager
 		appLifecycle:    lifecycle,
 	}
 
+	// Subscribe workspace to Desktop events so it can relay them to apps
+	if desktop != nil {
+		desktop.Subscribe(w)
+		log.Printf("Workspace %d: Subscribed to Desktop events", id)
+	}
+
 	return w, nil
 }
 
@@ -167,6 +173,18 @@ func (w *Workspace) Subscribe(listener Listener) {
 
 func (w *Workspace) Unsubscribe(listener Listener) {
 	w.dispatcher.Unsubscribe(listener)
+}
+
+// OnEvent implements Listener to receive Desktop events and relay them to workspace apps.
+func (w *Workspace) OnEvent(event Event) {
+	// Relay Desktop-level events to all apps in this workspace
+	switch event.Type {
+	case EventThemeChanged:
+		log.Printf("Workspace %d: Received EventThemeChanged, relaying to apps", w.id)
+		w.dispatcher.Broadcast(event)
+	default:
+		// Other Desktop events can be handled here if needed
+	}
 }
 
 func (w *Workspace) notifyFocus() {
