@@ -167,6 +167,9 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 	reg.RegisterBuiltIn("texelterm", func() interface{} { return shellFactory() })
 	reg.RegisterBuiltIn("welcome", func() interface{} { return welcomeFactory() })
 
+	// Note: launcher will be registered after Desktop is created,
+	// since it needs access to the registry
+
 	d := &DesktopEngine{
 		display:            driver,
 		workspaces:         make(map[int]*Workspace),

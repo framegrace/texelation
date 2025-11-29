@@ -23,6 +23,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"texelation/apps/launcher"
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
@@ -100,6 +101,12 @@ func main() {
 			command = command + " " + strings.Join(m.Args, " ")
 		}
 		return texelterm.New(m.DisplayName, command)
+	})
+
+	// Register launcher as a built-in app
+	// Launcher needs the registry to show available apps
+	desktop.Registry().RegisterBuiltIn("launcher", func() interface{} {
+		return launcher.New(desktop.Registry())
 	})
 
 	status := statusbar.New()
