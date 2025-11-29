@@ -14,26 +14,29 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
-
-	"texelation/texel"
 )
+
+// AppFactory creates a new app instance.
+// Returns interface{} which is expected to be a texel.App.
+type AppFactory func() interface{}
 
 // AppEntry represents a discovered application with its metadata and factory.
 type AppEntry struct {
 	Manifest *Manifest
 	Dir      string
-	Factory  texel.AppFactory
+	Factory  AppFactory
 }
 
 // WrapperFactory creates an app instance from a manifest.
 // This is used for wrapper apps that need custom creation logic.
-type WrapperFactory func(manifest *Manifest) texel.App
+// Returns interface{} which is expected to be a texel.App.
+type WrapperFactory func(manifest *Manifest) interface{}
 
 // Registry manages the collection of available applications.
 type Registry struct {
 	mu             sync.RWMutex
 	apps           map[string]*AppEntry // name -> entry
-	builtIn        map[string]texel.AppFactory
+	builtIn        map[string]AppFactory
 	wrapperFactories map[string]WrapperFactory // wraps -> factory
 }
 
@@ -41,7 +44,7 @@ type Registry struct {
 func New() *Registry {
 	return &Registry{
 		apps:             make(map[string]*AppEntry),
-		builtIn:          make(map[string]texel.AppFactory),
+		builtIn:          make(map[string]AppFactory),
 		wrapperFactories: make(map[string]WrapperFactory),
 	}
 }
@@ -57,7 +60,8 @@ func (r *Registry) RegisterWrapperFactory(wrapsType string, factory WrapperFacto
 
 // RegisterBuiltIn registers a built-in app that's compiled into the binary.
 // Built-in apps have priority over external apps with the same name.
-func (r *Registry) RegisterBuiltIn(name string, factory texel.AppFactory) {
+// The factory should return a texel.App instance.
+func (r *Registry) RegisterBuiltIn(name string, factory AppFactory) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.builtIn[name] = factory
@@ -112,7 +116,7 @@ func (r *Registry) loadApp(dir string) error {
 	}
 
 	// Create factory based on app type
-	var factory texel.AppFactory
+	var factory AppFactory
 
 	switch manifest.Type {
 	case AppTypeWrapper:
@@ -122,7 +126,7 @@ func (r *Registry) loadApp(dir string) error {
 	case AppTypeExternal:
 		// External apps are not supported yet - need external process protocol
 		// TODO: Implement external app launching
-		factory = func() texel.App {
+		factory = func() interface{} {
 			log.Printf("Registry: External app launch not yet implemented: %s", manifest.Name)
 			return nil
 		}
@@ -143,8 +147,8 @@ func (r *Registry) loadApp(dir string) error {
 }
 
 // createWrapperFactory creates a factory function for wrapper apps.
-func (r *Registry) createWrapperFactory(manifest *Manifest) texel.AppFactory {
-	return func() texel.App {
+func (r *Registry) createWrapperFactory(manifest *Manifest) AppFactory {
+	return func() interface{} {
 		// Check if we have a custom wrapper factory registered
 		if wrapperFactory, ok := r.wrapperFactories[manifest.Wraps]; ok {
 			return wrapperFactory(manifest)
@@ -266,7 +270,8 @@ func (r *Registry) ListByCategory() map[string][]*AppEntry {
 
 // CreateApp creates a new instance of the named app.
 // Returns nil if the app doesn't exist.
-func (r *Registry) CreateApp(name string, config map[string]interface{}) texel.App {
+// The returned interface{} is expected to be a texel.App.
+func (r *Registry) CreateApp(name string, config map[string]interface{}) interface{} {
 	entry := r.Get(name)
 	if entry == nil {
 		log.Printf("Registry: App not found: %s", name)

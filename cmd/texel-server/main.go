@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
 	"texelation/internal/runtime/server"
+	"texelation/registry"
 	"texelation/texel"
 	"texelation/texel/theme"
 )
@@ -88,6 +90,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to create desktop: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Register wrapper factory for texelterm
+	// This allows wrapper apps to create texelterm instances with custom commands
+	desktop.Registry().RegisterWrapperFactory("texelterm", func(m *registry.Manifest) interface{} {
+		command := m.Command
+		if len(m.Args) > 0 {
+			// Combine command and args
+			command = command + " " + strings.Join(m.Args, " ")
+		}
+		return texelterm.New(m.DisplayName, command)
+	})
 
 	status := statusbar.New()
 	desktop.AddStatusPane(status, texel.SideTop, 1)

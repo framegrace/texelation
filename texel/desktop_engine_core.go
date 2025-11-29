@@ -16,13 +16,18 @@ import (
 	"golang.org/x/term"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"sync"
+	"texelation/registry"
 	"texelation/texel/theme"
 	"time"
 )
+
+// AppRegistry is an alias for the registry.Registry type.
+type AppRegistry = registry.Registry
 
 // Side defines the placement of a StatusPane.
 type Side int
@@ -73,6 +78,7 @@ type DesktopEngine struct {
 	dispatcher        *EventDispatcher
 	statusBuffer      BufferStore
 	appLifecycle      AppLifecycleManager
+	registry          *AppRegistry
 
 	// Global state now lives on the Desktop
 	inControlMode   bool
@@ -154,6 +160,13 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 	driver.SetStyle(defStyle)
 	driver.HideCursor()
 
+	// Initialize app registry
+	reg := registry.New()
+
+	// Register built-in apps (wrap texel.AppFactory to registry.AppFactory)
+	reg.RegisterBuiltIn("texelterm", func() interface{} { return shellFactory() })
+	reg.RegisterBuiltIn("welcome", func() interface{} { return welcomeFactory() })
+
 	d := &DesktopEngine{
 		display:            driver,
 		workspaces:         make(map[int]*Workspace),
@@ -167,6 +180,7 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 		dispatcher:         NewEventDispatcher(),
 		statusBuffer:       NewInMemoryBufferStore(),
 		appLifecycle:       lifecycle,
+		registry:           reg,
 		inControlMode:      false,
 		subControlMode:     0,
 		clipboard:          make(map[string][]byte),
@@ -175,25 +189,47 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 		snapshotFactories:  make(map[string]SnapshotFactory),
 	}
 
-	log.Printf("NewDesktop: Created with inControlMode=%v", d.inControlMode)
+	// Scan for external apps
+	d.loadApps()
+
+	log.Printf("NewDesktop: Created with inControlMode=%v, %d apps registered", d.inControlMode, d.registry.Count())
 	d.SwitchToWorkspace(1)
 	return d, nil
 }
 
+// loadApps scans the user's app directory and loads available apps.
+func (d *DesktopEngine) loadApps() {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		log.Printf("Desktop: Failed to get user config dir: %v", err)
+		return
+	}
+
+	appsDir := filepath.Join(configDir, "texelation", "apps")
+	if err := d.registry.Scan(appsDir); err != nil {
+		log.Printf("Desktop: Failed to scan apps: %v", err)
+	}
+}
+
 // ForceRefresh clears caches and triggers a full repaint.
+// When triggered by SIGHUP, this also reloads theme and apps.
 func (d *DesktopEngine) ForceRefresh() {
 	log.Println("Desktop: ForceRefresh triggered")
+
+	// Reload apps
+	d.loadApps()
+
 	// Clear style cache to force re-evaluation of colors
 	d.styleCache = make(map[styleKey]tcell.Style)
-	
+
 	// Trigger a full layout and state broadcast
 	d.recalculateLayout()
 	d.broadcastStateUpdate()
 	d.broadcastTreeChanged()
-	
+
 	log.Println("Desktop: Broadcasting EventThemeChanged")
 	d.dispatcher.Broadcast(Event{Type: EventThemeChanged})
-	
+
 	// Notify refresh handler if one is set (to wake up the loop)
 	if d.refreshHandler != nil {
 		d.refreshHandler()
@@ -206,6 +242,11 @@ func (d *DesktopEngine) Subscribe(listener Listener) {
 
 func (d *DesktopEngine) Unsubscribe(listener Listener) {
 	d.dispatcher.Unsubscribe(listener)
+}
+
+// Registry returns the app registry for this desktop.
+func (d *DesktopEngine) Registry() *AppRegistry {
+	return d.registry
 }
 
 func (d *DesktopEngine) RegisterFocusListener(listener DesktopFocusListener) {
