@@ -959,8 +959,24 @@ func (a *TexelTerm) GetTitle() string {
 	return a.title
 }
 
-func (a *TexelTerm) respondToColorQuery(code int) {
-	if a.pty == nil {
+// OnEvent implements texel.Listener to handle theme changes.
+func (a *TexelTerm) OnEvent(event texel.Event) {
+	if event.Type == texel.EventThemeChanged {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+
+		// Regenerate the palette with the new theme colors
+		a.colorPalette = newDefaultPalette()
+
+		// Force a full redraw
+		if a.vterm != nil {
+			a.vterm.MarkAllDirty()
+		}
+		a.requestRefresh()
+	}
+}
+
+func (a *TexelTerm) respondToColorQuery(code int) {	if a.pty == nil {
 		return
 	}
 	// Slot 256 for default FG, 257 for default BG
@@ -991,23 +1007,29 @@ func If[T any](condition bool, trueVal, falseVal T) T {
 
 func newDefaultPalette() [258]tcell.Color {
 	var p [258]tcell.Color
-	// Standard ANSI colors 0-15
-	p[0] = tcell.NewRGBColor(10, 10, 20)
-	p[1] = tcell.NewRGBColor(128, 0, 0)
-	p[2] = tcell.NewRGBColor(0, 128, 0)
-	p[3] = tcell.NewRGBColor(128, 128, 0)
-	p[4] = tcell.NewRGBColor(60, 60, 128)
-	p[5] = tcell.NewRGBColor(128, 0, 128)
-	p[6] = tcell.NewRGBColor(0, 128, 128)
-	p[7] = tcell.NewRGBColor(192, 192, 192)
-	p[8] = tcell.NewRGBColor(128, 128, 128)
-	p[9] = tcell.NewRGBColor(255, 0, 0)
-	p[10] = tcell.NewRGBColor(0, 255, 0)
-	p[11] = tcell.NewRGBColor(255, 255, 0)
-	p[12] = tcell.NewRGBColor(0, 0, 255)
-	p[13] = tcell.NewRGBColor(255, 0, 255)
-	p[14] = tcell.NewRGBColor(0, 255, 255)
-	p[15] = tcell.NewRGBColor(255, 255, 255)
+	tm := theme.Get()
+
+	// Standard ANSI colors 0-15 (Mapped to Catppuccin Palette)
+	p[0] = theme.ResolveColorName("surface1")
+	p[1] = theme.ResolveColorName("red")
+	p[2] = theme.ResolveColorName("green")
+	p[3] = theme.ResolveColorName("yellow")
+	p[4] = theme.ResolveColorName("blue")
+	p[5] = theme.ResolveColorName("pink")
+	p[6] = theme.ResolveColorName("teal")
+	p[7] = theme.ResolveColorName("subtext1")
+	p[8] = theme.ResolveColorName("surface2")
+	p[9] = theme.ResolveColorName("red")
+	p[10] = theme.ResolveColorName("green")
+	p[11] = theme.ResolveColorName("yellow")
+	p[12] = theme.ResolveColorName("blue")
+	p[13] = theme.ResolveColorName("pink")
+	p[14] = theme.ResolveColorName("teal")
+	p[15] = theme.ResolveColorName("text")
+
+	// Fallback for any missing palette colors
+	if p[0] == tcell.ColorDefault { p[0] = tcell.NewRGBColor(10, 10, 20) }
+	// ... (simplified fallback, we trust the palette mostly)
 
 	// 6x6x6 color cube (16-231)
 	levels := []int32{0, 95, 135, 175, 215, 255}
@@ -1029,7 +1051,7 @@ func newDefaultPalette() [258]tcell.Color {
 	}
 
 	// Default FG (slot 256) and BG (slot 257)
-	p[256] = p[15] // White
-	p[257] = p[0]  // Black
+	p[256] = tm.GetSemanticColor("text.primary")
+	p[257] = tm.GetSemanticColor("bg.base")
 	return p
 }

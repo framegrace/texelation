@@ -325,3 +325,24 @@ func (p *Pipeline) HandlePaste(data []byte) {
 func (p *Pipeline) ControlBus() ControlBus {
 	return p.bus
 }
+
+// OnEvent implements texel.Listener to forward events to all cards.
+func (p *Pipeline) OnEvent(event texel.Event) {
+	cards := p.Cards()
+	for _, card := range cards {
+		// Try the card directly
+		if listener, ok := card.(texel.Listener); ok {
+			listener.OnEvent(event)
+			continue
+		}
+		// Try the underlying app if this is an appAdapter
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying != nil {
+				if listener, ok := underlying.(texel.Listener); ok {
+					listener.OnEvent(event)
+				}
+			}
+		}
+	}
+}

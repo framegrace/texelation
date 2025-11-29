@@ -19,13 +19,13 @@ func NewPane(x, y, w, h int, style tcell.Style) *Pane {
     tm := theme.Get()
     fg, bg, _ := style.Decompose()
     if fg == tcell.ColorDefault {
-        fg = tm.GetColor("ui", "surface_fg", tcell.ColorWhite)
+        fg = tm.GetSemanticColor("text.primary")
     }
     if bg == tcell.ColorDefault {
-        bg = tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
+        bg = tm.GetSemanticColor("bg.surface")
     }
-    fbg := tm.GetColor("ui", "focus_surface_bg", bg)
-    ffg := tm.GetColor("ui", "focus_surface_fg", fg)
+    fbg := tm.GetSemanticColor("bg.surface") // Default to surface, can be overridden if needed
+    ffg := tm.GetSemanticColor("text.primary")
     p.SetFocusedStyle(tcell.StyleDefault.Background(fbg).Foreground(ffg), true)
     return p
 }

@@ -17,19 +17,22 @@ func ApplyDefaults(cfg Config) {
 	}
 	changed := false
 
+	// Load standard semantic definitions first to ensure "ui" section has basics
+	cfg.LoadStandardSemantics()
+
 	if applySectionDefaults(cfg, "desktop", Section{
-		"default_fg": "#f8f8f2",
-		"default_bg": "#282a36",
+		"default_fg": "text.primary",
+		"default_bg": "bg.base",
 	}) {
 		changed = true
 	}
 
 	if applySectionDefaults(cfg, "pane", Section{
-		"inactive_border_fg": "#6272a4",
-		"inactive_border_bg": "#282a36",
-		"active_border_fg":   "#50fa7b",
-		"active_border_bg":   "#282a36",
-		"resizing_border_fg": "#ffb86c",
+		"inactive_border_fg": "border.inactive",
+		"inactive_border_bg": "bg.base",
+		"active_border_fg":   "border.active",
+		"active_border_bg":   "bg.base",
+		"resizing_border_fg": "border.resizing",
 	}) {
 		changed = true
 	}
@@ -41,59 +44,52 @@ func ApplyDefaults(cfg Config) {
 	}
 
 	if applySectionDefaults(cfg, "statusbar", Section{
-		"base_fg":         "#f8f8f2",
-		"base_bg":         "#21222C",
-		"inactive_tab_fg": "#6272a4",
-		"inactive_tab_bg": "#383a46",
-		"active_tab_fg":   "#f8f8f2",
-		"active_tab_bg":   "#44475a",
-		"control_mode_fg": "#f8f8f2",
-		"control_mode_bg": "#ff5555",
-		"title_fg":        "#8be9fd",
-		"clock_fg":        "#f1fa8c",
+		"base_fg":         "text.primary",
+		"base_bg":         "bg.mantle",
+		"inactive_tab_fg": "text.muted",
+		"inactive_tab_bg": "bg.crust",
+		"active_tab_fg":   "text.primary",
+		"active_tab_bg":   "bg.base",
+		"control_mode_fg": "text.inverse",
+		"control_mode_bg": "action.danger",
+		"title_fg":        "text.primary",
+		"clock_fg":        "text.primary",
 	}) {
 		changed = true
 	}
 
 	if applySectionDefaults(cfg, "welcome", Section{
-		"text_fg": "#bd93f9",
+		"text_fg": "text.accent",
 	}) {
 		changed = true
 	}
 
 	if applySectionDefaults(cfg, "clock", Section{
-		"text_fg": "#f1fa8c",
+		"text_fg": "text.primary",
 	}) {
 		changed = true
 	}
 
     if applySectionDefaults(cfg, "selection", Section{
-        "highlight_bg": "#e8d9ff",
-        "highlight_fg": "#000000",
+        "highlight_bg": "selection",
+        "highlight_fg": "text.primary",
     }) {
         changed = true
     }
 
     // TexelUI (TUI widgets) default colors
+    // Most widgets now rely on semantic keys (ui.*), but we can still
+    // populate overrides here if we want specific UI element tweaks.
     if applySectionDefaults(cfg, "ui", Section{
-        // Base surfaces and text
-        "surface_bg":        "#000000",
-        "surface_fg":        "#f8f8f2",
-        "text_bg":           "#000000",
-        "text_fg":           "#f8f8f2",
-        // Caret
-        "caret_fg":          "#c0c0c0",
-        // Focused variants
-        "focus_surface_bg":  "#101010",
-        "focus_surface_fg":  "#ffffff",
-        "focus_text_bg":     "#101010",
-        "focus_text_fg":     "#ffffff",
-        "focus_border_fg":   "#ffff00",
-        "focus_border_bg":   "#000000",
-        // Overlay (long line editor)
-        "overlay_bg":        "#1e1e1e",
-        "overlay_fg":        "#f8f8f2",
-        "overlay_border":    "#4a4a4a",
+        // These map the semantic names (defined in semantics.go) to palette colors.
+        // We re-assert them here just in case, but semantics.go does the heavy lifting.
+        // For specific widget overrides:
+        "button_bg": "action.primary",
+        "button_fg": "text.inverse",
+        
+        // Legacy keys (mapped to new system for backward compat)
+        "surface_bg": "bg.surface",
+        "surface_fg": "text.primary",
     }) {
         changed = true
     }
@@ -137,7 +133,7 @@ func defaultEffectBindings() []map[string]interface{} {
 			"target": "pane",
 			"effect": "fadeTint",
 			"params": map[string]interface{}{
-				"color":       "#141400",
+				"color":       "bg.base", // Use semantic background
 				"intensity":   0.35,
 				"duration_ms": 400,
 			},
@@ -147,7 +143,7 @@ func defaultEffectBindings() []map[string]interface{} {
 			"target": "pane",
 			"effect": "fadeTint",
 			"params": map[string]interface{}{
-				"color":       "#ffb86c",
+				"color":       "border.resizing", // Match resizing border
 				"intensity":   0.2,
 				"duration_ms": 160,
 			},

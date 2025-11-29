@@ -28,13 +28,13 @@ func NewButton(x, y, w, h int, text string) *Button {
 
 	// Get default style from theme
 	tm := theme.Get()
-	fg := tm.GetColor("ui", "button_fg", tcell.ColorWhite)
-	bg := tm.GetColor("ui", "button_bg", tcell.ColorBlue)
+	fg := tm.GetSemanticColor("text.inverse")
+	bg := tm.GetSemanticColor("action.primary")
 	b.Style = tcell.StyleDefault.Foreground(fg).Background(bg)
 
 	// Configure focused style
-	focusFg := tm.GetColor("ui", "button_focus_fg", tcell.ColorBlack)
-	focusBg := tm.GetColor("ui", "button_focus_bg", tcell.ColorSilver)
+	focusFg := tm.GetSemanticColor("text.inverse")
+	focusBg := tm.GetSemanticColor("border.focus")
 	b.SetFocusedStyle(tcell.StyleDefault.Foreground(focusFg).Background(focusBg), true)
 
 	b.SetPosition(x, y)

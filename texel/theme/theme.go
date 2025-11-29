@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -30,6 +31,7 @@ var (
 	instance Config
 	once     sync.Once
 	loadErr  error
+	mu       sync.RWMutex // Protects access to the instance map
 )
 
 // Get returns the singleton instance of the configuration.
@@ -40,11 +42,52 @@ func Get() Config {
 		loadErr = instance.Load()
 		if loadErr != nil {
 			log.Printf("Theme info: Could not load theme file (%v). A new default theme will be created.", loadErr)
-			// Defaults are now applied explicitly in main.go using RegisterDefaults.
-			// This ensures we start with an empty but valid config map on error.
 		}
+		
+		// Load Palette
+		paletteName := instance.GetString("meta", "palette", "mocha")
+		if err := LoadPalette(paletteName); err != nil {
+			log.Printf("Theme warning: Could not load palette '%s' (%v), falling back to 'mocha'", paletteName, err)
+			LoadPalette("mocha")
+		}
+		
+		// Apply standard semantics (Catppuccin defaults)
+		instance.LoadStandardSemantics()
 	})
+	
+	mu.RLock()
+	defer mu.RUnlock()
 	return instance
+}
+
+// Reload forces a re-read of the theme file and palette.
+func Reload() error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	log.Println("Theme: Reloading configuration...")
+	
+	// Re-create instance to clear old state
+	newInstance := make(Config)
+	if err := newInstance.Load(); err != nil {
+		log.Printf("Theme: Failed to reload theme file: %v", err)
+		return err
+	}
+	
+	instance = newInstance
+
+	// Re-load Palette
+	paletteName := instance.GetString("meta", "palette", "mocha")
+	if err := LoadPalette(paletteName); err != nil {
+		log.Printf("Theme warning: Could not load palette '%s' (%v), falling back to 'mocha'", paletteName, err)
+		LoadPalette("mocha")
+	}
+
+	// Re-apply defaults
+	instance.LoadStandardSemantics()
+	ApplyDefaults(instance)
+
+	return nil
 }
 
 // configPath returns the default path for the theme file.
@@ -57,6 +100,7 @@ func configPath() (string, error) {
 }
 
 // Load reads the configuration from the default path.
+// Note: This method is internal and not thread-safe on its own; callers must hold the lock.
 func (c Config) Load() error {
 	path, err := configPath()
 	if err != nil {
@@ -86,6 +130,9 @@ func (c Config) Load() error {
 
 // Save writes the current configuration to the default path.
 func (c Config) Save() error {
+	mu.Lock()
+	defer mu.Unlock()
+	
 	path, err := configPath()
 	if err != nil {
 		return err
@@ -105,14 +152,70 @@ func (c Config) Save() error {
 
 // GetColor retrieves a color from the theme.
 func (c Config) GetColor(sectionName, key string, defaultColor tcell.Color) tcell.Color {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	val, ok := c.getRawValue(sectionName, key)
+	if !ok {
+		return defaultColor
+	}
+
+	if colorStr, ok := val.(string); ok {
+		return c.resolveColorString(colorStr, 0)
+	}
+	return defaultColor
+}
+
+func (c Config) getRawValue(sectionName, key string) (interface{}, bool) {
 	if section, ok := c[sectionName]; ok {
 		if val, ok := section[key]; ok {
-			if colorStr, ok := val.(string); ok {
-				return HexColor(colorStr).ToTcell()
+			return val, true
+		}
+	}
+	return nil, false
+}
+
+func (c Config) resolveColorString(s string, depth int) tcell.Color {
+	if depth > 5 { // Prevent infinite recursion
+		return tcell.ColorDefault
+	}
+
+	// 1. Hex Color
+	if strings.HasPrefix(s, "#") {
+		return HexColor(s).ToTcell()
+	}
+
+	// 2. Palette Reference
+	if strings.HasPrefix(s, "@") {
+		return ResolveColorName(strings.TrimPrefix(s, "@"))
+	}
+
+	// 3. Indirection (section.key)
+	if parts := strings.Split(s, "."); len(parts) == 2 {
+		if refVal, ok := c.getRawValue(parts[0], parts[1]); ok {
+			if refStr, ok := refVal.(string); ok {
+				return c.resolveColorString(refStr, depth+1)
 			}
 		}
 	}
-	return defaultColor
+
+	// 4. Implicit "ui" section Indirection
+	// If "s" is something like "bg.base", check "ui.bg.base"
+	if refVal, ok := c.getRawValue("ui", s); ok {
+		if refStr, ok := refVal.(string); ok {
+			return c.resolveColorString(refStr, depth+1)
+		}
+	}
+
+	// 5. Try parsing as hex if it looks like one but missed # (legacy/fallback)
+	if len(s) == 6 {
+		// Simple check to see if it's hex-like
+		if _, err := strconv.ParseInt(s, 16, 64); err == nil {
+			return HexColor("#" + s).ToTcell()
+		}
+	}
+
+	return tcell.ColorDefault
 }
 
 // GetString retrieves a string value from the theme/config.
