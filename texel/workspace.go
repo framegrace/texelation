@@ -535,6 +535,15 @@ func (w *Workspace) CloseActivePane() {
 	w.removeNode(w.tree.ActiveLeaf, true)
 }
 
+// ActivePane returns the currently active pane in this workspace.
+// Returns nil if there is no active pane.
+func (w *Workspace) ActivePane() *pane {
+	if w == nil || w.tree == nil || w.tree.ActiveLeaf == nil {
+		return nil
+	}
+	return w.tree.ActiveLeaf.Pane
+}
+
 func (w *Workspace) ensureWelcomePane() {
 	if w == nil || w.tree == nil {
 		return

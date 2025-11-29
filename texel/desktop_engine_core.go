@@ -252,6 +252,11 @@ func (d *DesktopEngine) Registry() *AppRegistry {
 	return d.registry
 }
 
+// ActiveWorkspace returns the currently active workspace.
+func (d *DesktopEngine) ActiveWorkspace() *Workspace {
+	return d.activeWorkspace
+}
+
 func (d *DesktopEngine) RegisterFocusListener(listener DesktopFocusListener) {
 	if listener == nil {
 		return

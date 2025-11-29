@@ -26,6 +26,7 @@ import (
 	"texelation/apps/launcher"
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
+	"texelation/apps/welcome"
 	"texelation/internal/runtime/server"
 	"texelation/registry"
 	"texelation/texel"
@@ -81,16 +82,11 @@ func main() {
 		return texelterm.New(title, defaultShell)
 
 	}
-
-	// Use launcher as the default welcome app
-	// We need a forward reference to desktop to access the registry
-	var desktopInstance *texel.DesktopEngine
 	welcomeFactory := func() texel.App {
-		return launcher.New(desktopInstance.Registry())
+		return welcome.NewWelcomeApp()
 	}
 
-	desktopInstance, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
-	desktop := desktopInstance
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create desktop: %v\n", err)
 		os.Exit(1)
@@ -112,6 +108,14 @@ func main() {
 	desktop.Registry().RegisterBuiltIn("launcher", func() interface{} {
 		return launcher.New(desktop.Registry())
 	})
+
+	// Replace the initial welcome app with launcher
+	// This gives immediate access to all available apps
+	if ws := desktop.ActiveWorkspace(); ws != nil {
+		if activePane := ws.ActivePane(); activePane != nil {
+			activePane.ReplaceWithApp("launcher", nil)
+		}
+	}
 
 	status := statusbar.New()
 	desktop.AddStatusPane(status, texel.SideTop, 1)
