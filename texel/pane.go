@@ -110,9 +110,52 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	p.screen.appLifecycle.StartApp(p.app, func(err error) {
 		p.screen.handleAppExit(p, currentApp, err)
 	})
+
+	// Inject the replacer if the app wants it
+	if receiver, ok := app.(ReplacerReceiver); ok {
+		receiver.SetReplacer(p)
+	}
+
 	if p.screen != nil && p.screen.desktop != nil {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
 	}
+}
+
+// ReplaceWithApp replaces the current app in this pane with a new app from the registry.
+// This implements the AppReplacer interface, allowing apps to spawn other apps in their place.
+func (p *pane) ReplaceWithApp(name string, config map[string]interface{}) {
+	if p.screen == nil || p.screen.desktop == nil {
+		log.Printf("Pane: Cannot replace app - no desktop reference")
+		return
+	}
+
+	// Create the new app from the registry
+	registry := p.screen.desktop.Registry()
+	if registry == nil {
+		log.Printf("Pane: Cannot replace app - no registry")
+		return
+	}
+
+	appInterface := registry.CreateApp(name, config)
+	if appInterface == nil {
+		log.Printf("Pane: Failed to create app '%s' from registry", name)
+		return
+	}
+
+	// Type assert to App
+	newApp, ok := appInterface.(App)
+	if !ok {
+		log.Printf("Pane: Registry returned non-App type for '%s'", name)
+		return
+	}
+
+	log.Printf("Pane: Replacing app with '%s'", name)
+
+	// Attach the new app (this will stop the old app and start the new one)
+	p.AttachApp(newApp, p.screen.refreshChan)
+
+	// Broadcast state update so the desktop knows about the change
+	p.screen.desktop.broadcastStateUpdate()
 }
 
 // SetActive changes the active state of the pane

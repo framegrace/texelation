@@ -81,3 +81,15 @@ type MouseWheelHandler interface {
 type MouseWheelDeclarer interface {
 	MouseWheelEnabled() bool
 }
+
+// AppReplacer allows an app to replace itself with another app in the same pane.
+// This is primarily used by launcher apps to spawn the selected app in their place.
+type AppReplacer interface {
+	ReplaceWithApp(name string, config map[string]interface{})
+}
+
+// ReplacerReceiver is implemented by apps that want to receive an AppReplacer.
+// The pane will call SetReplacer during AttachApp if the app implements this interface.
+type ReplacerReceiver interface {
+	SetReplacer(replacer AppReplacer)
+}
