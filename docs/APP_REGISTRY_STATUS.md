@@ -241,19 +241,48 @@ func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
 ## 📋 Summary
 
 ### Done ✅
-- Registry package with wrapper support
-- Manifest format and validation
-- Example manifests and docs
+
+#### Phase 1: Registry Foundation
+- ✅ Registry package with wrapper support
+- ✅ Manifest format and validation
+- ✅ Example manifests and docs
+
+#### Phase 2: Wire Registry to Desktop
+- ✅ Registry integrated into DesktopEngine
+- ✅ Built-in app registration (texelterm, welcome)
+- ✅ Wrapper factory for texelterm
+- ✅ App scanning from ~/.config/texelation/apps/
+- ✅ SIGHUP reload support for apps
+
+#### Phase 3: AppReplacer Interface
+- ✅ AppReplacer interface defined
+- ✅ ReplacerReceiver interface for apps
+- ✅ Pane implements ReplaceWithApp
+- ✅ Automatic replacer injection in AttachApp
+
+#### Phase 4: Launcher App with TexelUI
+- ✅ Launcher app implementation (apps/launcher/)
+- ✅ TexelUI-based interface
+- ✅ Keyboard navigation (Up/Down/Enter)
+- ✅ Visual selection highlighting
+- ✅ Comprehensive test suite (8 tests, all passing)
+- ✅ Registered as built-in app "launcher"
 
 ### Next ⏭️
-1. Wire registry to Desktop (30 min)
-2. Add AppReplacer interface (30 min)
-3. Build launcher UI with TexelUI (2-3 hours)
-4. Add floating panel support (2-3 hours)
-5. Wire up Ctrl+A+L keybind (15 min)
 
-### Total Remaining: ~6-7 hours of work
+#### Phase 5: Launcher Invocation
+1. Add floating panel support (2-3 hours) - **OPTIONAL**
+   - Or use existing pane replacement for now
+2. Wire up Ctrl+A+L keybind to show launcher (15 min)
+3. Test end-to-end workflow
 
-The foundation is solid! The wrapper app system means users can add apps without writing code.
+### Total Remaining: ~15 min - 3 hours (depending on floating panel approach)
 
-Should we continue with Phase 2 (wiring registry to desktop)?
+## 🎉 Current Status
+
+**Phase 1-4 Complete!** The launcher is fully functional and can be launched as a regular app.
+Users can navigate apps with arrow keys and press Enter to launch them.
+
+**Next Step**: Add Ctrl+A+L keybind to make launcher easily accessible from any pane.
+
+**Optional Enhancement**: Floating panel overlay for launcher (can be deferred)
