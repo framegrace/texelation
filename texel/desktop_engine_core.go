@@ -368,6 +368,8 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 	d.appLifecycle.StartApp(app, nil)
 	app.Resize(w, h)
 	
+	d.notifyPaneState(panel.id, true, false, ZOrderFloating, false)
+
 	d.recalculateLayout()
 	d.broadcastTreeChanged()
 	// d.broadcastStateUpdate() // TODO: Notify focus change if we focus the panel?
@@ -1069,6 +1071,15 @@ func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 			HandlesSelection: p.handlesSelectionEvents(),
 		})
 	})
+	for _, fp := range d.floatingPanels {
+		states = append(states, PaneStateSnapshot{
+			ID:               fp.id,
+			Active:           true,
+			Resizing:         false,
+			ZOrder:           ZOrderFloating,
+			HandlesSelection: false,
+		})
+	}
 	return states
 }
 
