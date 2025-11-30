@@ -161,13 +161,26 @@ func (p *pane) ReplaceWithApp(name string, config map[string]interface{}) {
 		return
 	}
 
-	log.Printf("Pane: Replacing app with '%s'", name)
+	log.Printf("Pane: Replacing app '%s' with '%s'", p.getTitle(), name)
+
+	// Stop the current app explicitly before attaching the new one
+	// Although AttachApp does this, doing it here ensures clean teardown before new setup
+	// if p.app != nil {
+	// 	 p.screen.appLifecycle.StopApp(p.app)
+	// 	 p.app = nil 
+	// } 
+    // AttachApp handles the stop.
 
 	// Attach the new app (this will stop the old app and start the new one)
 	p.AttachApp(newApp, p.screen.refreshChan)
 
 	// Broadcast state update so the desktop knows about the change
 	p.screen.desktop.broadcastStateUpdate()
+	
+	// Force a refresh of the workspace to ensure the new app is rendered
+	if p.screen != nil {
+		p.screen.Refresh()
+	}
 }
 
 // SetActive changes the active state of the pane
