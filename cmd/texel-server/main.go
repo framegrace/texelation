@@ -77,45 +77,47 @@ func main() {
 	shellFactory := func() texel.App {
 		id := shellSeq.Add(1)
 		title := fmt.Sprintf("%s-%d", *title, id)
-
-		// Normal terminal (no menu)
 		return texelterm.New(title, defaultShell)
-
-	}
-	welcomeFactory := func() texel.App {
-		return welcome.NewWelcomeApp()
 	}
 
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	// Use a pointer to capture desktop reference for launcher
+	var desktopPtr *texel.DesktopEngine
+	launcherFactory := func() texel.App {
+		if desktopPtr == nil {
+			log.Printf("Warning: launcher created before desktop initialized")
+			return welcome.NewWelcomeApp()
+		}
+		return launcher.New(desktopPtr.Registry())
+	}
+
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, launcherFactory, lifecycle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create desktop: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Capture desktop reference for launcher factory
+	desktopPtr = desktop
 
 	// Register wrapper factory for texelterm
 	// This allows wrapper apps to create texelterm instances with custom commands
 	desktop.Registry().RegisterWrapperFactory("texelterm", func(m *registry.Manifest) interface{} {
 		command := m.Command
 		if len(m.Args) > 0 {
-			// Combine command and args
 			command = command + " " + strings.Join(m.Args, " ")
 		}
 		return texelterm.New(m.DisplayName, command)
 	})
 
-	// Register launcher as a built-in app
-	// Launcher needs the registry to show available apps
+	// Register launcher in registry for discoverability
 	desktop.Registry().RegisterBuiltIn("launcher", func() interface{} {
 		return launcher.New(desktop.Registry())
 	})
 
-	// Replace the initial welcome app with launcher
-	// This gives immediate access to all available apps
-	if ws := desktop.ActiveWorkspace(); ws != nil {
-		if activePane := ws.ActivePane(); activePane != nil {
-			activePane.ReplaceWithApp("launcher", nil)
-		}
-	}
+	// Register welcome app as an option
+	desktop.Registry().RegisterBuiltIn("welcome", func() interface{} {
+		return welcome.NewWelcomeApp()
+	})
 
 	status := statusbar.New()
 	desktop.AddStatusPane(status, texel.SideTop, 1)

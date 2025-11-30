@@ -52,8 +52,7 @@ func New(reg *registry.Registry) texel.App {
 	// Load apps from registry
 	l.loadApps()
 
-	// Build UI
-	l.buildUI()
+	// Note: UI will be built on first Resize() call
 
 	// Wrap in pipeline for effects support
 	return cards.NewPipeline(nil, cards.WrapApp(l))
@@ -83,10 +82,8 @@ func (l *Launcher) loadApps() {
 }
 
 // buildUI constructs the TexelUI interface.
+// Assumes l.mu is already locked by caller.
 func (l *Launcher) buildUI() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	ui := l.UI()
 
 	// Add background pane
@@ -145,6 +142,11 @@ func (l *Launcher) Resize(cols, rows int) {
 
 	l.width, l.height = cols, rows
 
+	// Build UI on first resize if not already built
+	if l.pane == nil && cols > 0 && rows > 0 {
+		l.buildUI()
+	}
+
 	// Call parent resize
 	l.UIApp.Resize(cols, rows)
 
@@ -169,7 +171,7 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 	case tcell.KeyUp:
 		if l.selectedIdx > 0 {
 			l.selectedIdx--
-			if l.selectedIdx < len(l.labels) {
+			if l.UIApp != nil && l.selectedIdx < len(l.labels) {
 				l.UI().Focus(l.labels[l.selectedIdx])
 			}
 			l.updateSelection()
@@ -180,7 +182,7 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 	case tcell.KeyDown:
 		if l.selectedIdx < len(l.apps)-1 {
 			l.selectedIdx++
-			if l.selectedIdx < len(l.labels) {
+			if l.UIApp != nil && l.selectedIdx < len(l.labels) {
 				l.UI().Focus(l.labels[l.selectedIdx])
 			}
 			l.updateSelection()
@@ -208,8 +210,10 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 
 	l.mu.Unlock()
 
-	// Pass to UI manager for other keys
-	l.UIApp.HandleKey(ev)
+	// Pass to UI manager for other keys (if initialized)
+	if l.UIApp != nil {
+		l.UIApp.HandleKey(ev)
+	}
 }
 
 // GetTitle returns the launcher title.

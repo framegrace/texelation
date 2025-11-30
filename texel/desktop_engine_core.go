@@ -163,12 +163,11 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 	// Initialize app registry
 	reg := registry.New()
 
-	// Register built-in apps (wrap texel.AppFactory to registry.AppFactory)
+	// Register built-in shell app (wrap texel.AppFactory to registry.AppFactory)
 	reg.RegisterBuiltIn("texelterm", func() interface{} { return shellFactory() })
-	reg.RegisterBuiltIn("welcome", func() interface{} { return welcomeFactory() })
 
-	// Note: launcher will be registered after Desktop is created,
-	// since it needs access to the registry
+	// Note: Other apps (launcher, welcome, etc.) are registered in main.go
+	// after Desktop is created, since launcher needs access to the registry
 
 	d := &DesktopEngine{
 		display:            driver,
