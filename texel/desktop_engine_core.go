@@ -195,7 +195,13 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 	d.loadApps()
 
 	log.Printf("NewDesktop: Created with inControlMode=%v, %d apps registered", d.inControlMode, d.registry.Count())
-	d.SwitchToWorkspace(1)
+
+	// Note: Don't call SwitchToWorkspace here if welcomeFactory is nil
+	// Caller should call SwitchToWorkspace(1) after setting WelcomeAppFactory
+	if welcomeFactory != nil {
+		d.SwitchToWorkspace(1)
+	}
+
 	return d, nil
 }
 
