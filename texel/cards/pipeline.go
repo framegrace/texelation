@@ -83,6 +83,20 @@ func (p *Pipeline) AppendCard(card Card) {
 	card.SetRefreshNotifier(refresh)
 }
 
+// Run starts all cards (once) and blocks until they complete.
+// If any card returns an error, the pipeline will attempt to stop all other cards
+// and return the error.
+func (p *Pipeline) Run() error {
+	p.runOnce.Do(func() {
+		cards := p.Cards()
+		for _, card := range cards {
+			p.StartCard(card)
+		}
+	})
+	p.wg.Wait()
+	return p.Error()
+}
+
 // StartCard launches Run() for the specified card in its own goroutine.
 func (p *Pipeline) StartCard(card Card) {
 	p.wg.Add(1)
@@ -90,6 +104,10 @@ func (p *Pipeline) StartCard(card Card) {
 		defer p.wg.Done()
 		if err := card.Run(); err != nil {
 			p.setError(err)
+			// If one card fails, we should probably stop the whole pipeline?
+			// For now, just logging it via error state.
+			// In a robust system, we might want to cancel a context or call Stop().
+			p.Stop() // Force stop all cards to unblock Run()
 		}
 	}()
 }
@@ -110,18 +128,6 @@ func (p *Pipeline) Error() error {
 	p.errMu.Lock()
 	defer p.errMu.Unlock()
 	return p.err
-}
-
-// Run starts all cards (once) and blocks until they complete.
-func (p *Pipeline) Run() error {
-	p.runOnce.Do(func() {
-		cards := p.Cards()
-		for _, card := range cards {
-			p.StartCard(card)
-		}
-	})
-	p.wg.Wait()
-	return p.Error()
 }
 
 // Stop stops all cards and waits for them to exit.
