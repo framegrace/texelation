@@ -570,6 +570,18 @@ type FloatingLauncherReplacer struct {
 
 func (r *FloatingLauncherReplacer) ReplaceWithApp(name string, config map[string]interface{}) {
 	// Close the specific panel hosting this app
+	r.Close()
+
+	// Launch in active pane
+	if ws := r.desktop.ActiveWorkspace(); ws != nil {
+		if pane := ws.ActivePane(); pane != nil {
+			pane.ReplaceWithApp(name, config)
+		}
+	}
+}
+
+func (r *FloatingLauncherReplacer) Close() {
+	// Close the specific panel hosting this app
 	var panel *FloatingPanel
 	for _, fp := range r.desktop.floatingPanels {
 		if fp.app == r.app {
@@ -579,13 +591,6 @@ func (r *FloatingLauncherReplacer) ReplaceWithApp(name string, config map[string
 	}
 	if panel != nil {
 		r.desktop.CloseFloatingPanel(panel)
-	}
-
-	// Launch in active pane
-	if ws := r.desktop.ActiveWorkspace(); ws != nil {
-		if pane := ws.ActivePane(); pane != nil {
-			pane.ReplaceWithApp(name, config)
-		}
 	}
 }
 

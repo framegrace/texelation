@@ -415,6 +415,7 @@ func (p *pane) getTitle() string {
 	return p.name
 }
 
+// Close implements AppReplacer.Close by stopping the current app.
 func (p *pane) Close() {
 	// Clean up app
 	if listener, ok := p.app.(Listener); ok {

@@ -86,6 +86,7 @@ type MouseWheelDeclarer interface {
 // This is primarily used by launcher apps to spawn the selected app in their place.
 type AppReplacer interface {
 	ReplaceWithApp(name string, config map[string]interface{})
+	Close()
 }
 
 // ReplacerReceiver is implemented by apps that want to receive an AppReplacer.

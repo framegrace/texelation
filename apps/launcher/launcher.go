@@ -206,6 +206,15 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 		}
 		l.mu.Unlock()
 		return
+
+	case tcell.KeyEsc:
+		replacer := l.replacer
+		l.mu.Unlock()
+		if replacer != nil {
+			log.Printf("Launcher: Closing")
+			replacer.Close()
+		}
+		return
 	}
 
 	l.mu.Unlock()
