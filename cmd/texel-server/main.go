@@ -27,6 +27,7 @@ import (
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
 	"texelation/apps/welcome"
+	"texelation/config"
 	"texelation/internal/runtime/server"
 	"texelation/registry"
 	"texelation/texel"
@@ -42,10 +43,22 @@ func main() {
 	cpuProfile := flag.String("pprof-cpu", "", "Write CPU profile to file")
 	memProfile := flag.String("pprof-mem", "", "Write heap profile to file on exit")
 	verboseLogs := flag.Bool("verbose-logs", false, "Enable verbose server logging")
-	defaultApp := flag.String("default-app", "launcher", "Default app for new panes (launcher, texelterm, welcome)")
+	defaultApp := flag.String("default-app", "", "Default app for new panes (launcher, texelterm, welcome) - overrides config file")
 	flag.Parse()
 
 	server.SetVerboseLogging(*verboseLogs)
+
+	// Load configuration from file
+	cfg, err := config.Load()
+	if err != nil {
+		log.Printf("Warning: Failed to load config: %v, using defaults", err)
+		cfg = config.Default()
+	}
+
+	// Command-line flag overrides config file
+	if *defaultApp == "" {
+		*defaultApp = cfg.DefaultApp
+	}
 
 	if *cpuProfile != "" {
 		f, err := os.Create(*cpuProfile)

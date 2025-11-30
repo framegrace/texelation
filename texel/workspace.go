@@ -915,8 +915,13 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 	}
 	log.Printf("PerformSplit: Tree split completed")
 
-	// Create and attach new app
-	newApp := w.ShellAppFactory()
+	// Create and attach new app (use default app if available, otherwise shell)
+	var newApp App
+	if w.desktop != nil && w.desktop.WelcomeAppFactory != nil {
+		newApp = w.desktop.WelcomeAppFactory()
+	} else {
+		newApp = w.ShellAppFactory()
+	}
 	newPane.AttachApp(newApp, w.refreshChan)
 	log.Printf("PerformSplit: Attached app '%s' to new pane", newApp.GetTitle())
 
