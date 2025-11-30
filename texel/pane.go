@@ -63,15 +63,21 @@ func newPane(s *Workspace) *pane {
 // AttachApp connects an application to the pane, gives it its initial size,
 // and starts its main run loop.
 func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
+	log.Printf("AttachApp: Starting attachment of app '%s'", app.GetTitle())
 	if p.app != nil {
+		log.Printf("AttachApp: Stopping existing app '%s'", p.app.GetTitle())
 		p.screen.appLifecycle.StopApp(p.app)
 	}
 	p.app = app
 	p.name = app.GetTitle()
 	p.app.SetRefreshNotifier(refreshChan)
+	log.Printf("AttachApp: Refresh notifier set")
+
 	if listener, ok := app.(Listener); ok {
 		p.screen.Subscribe(listener)
 	}
+	
+	// ... (rest of interface checks) ...
 	if handler, ok := app.(SelectionHandler); ok {
 		enabled := true
 		if declarer, ok := app.(SelectionDeclarer); ok {
@@ -104,8 +110,12 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.wheelHandler = nil
 		p.handlesWheel = false
 	}
+	
+	log.Printf("AttachApp: Resizing app '%s' to %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
 	// The app is resized considering the space for borders.
 	p.app.Resize(p.drawableWidth(), p.drawableHeight())
+	
+	log.Printf("AttachApp: Starting app lifecycle for '%s'", p.getTitle())
 	currentApp := p.app
 	p.screen.appLifecycle.StartApp(p.app, func(err error) {
 		p.screen.handleAppExit(p, currentApp, err)
@@ -116,9 +126,11 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		receiver.SetReplacer(p)
 	}
 
+	log.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
 	if p.screen != nil && p.screen.desktop != nil {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
 	}
+	log.Printf("AttachApp: Completed attachment of app '%s'", p.getTitle())
 }
 
 // ReplaceWithApp replaces the current app in this pane with a new app from the registry.

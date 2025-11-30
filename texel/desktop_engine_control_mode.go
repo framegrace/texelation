@@ -113,6 +113,8 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 		exitControlMode = false
 	case 'z':
 		d.toggleZoom()
+	case 'l':
+		d.launchLauncherOverlay()
 	}
 
 	if exitControlMode {

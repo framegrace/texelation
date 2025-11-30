@@ -95,7 +95,7 @@ func main() {
 	}
 
 	// Create desktop first (no welcome app yet - we'll set it after registry is ready)
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, nil, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, *defaultApp, lifecycle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create desktop: %v\n", err)
 		os.Exit(1)
@@ -120,25 +120,6 @@ func main() {
 	desktop.Registry().RegisterBuiltIn("welcome", func() interface{} {
 		return welcome.NewWelcomeApp()
 	})
-
-	// Set the default app factory based on configuration
-	switch *defaultApp {
-	case "launcher":
-		desktop.WelcomeAppFactory = func() texel.App {
-			return launcher.New(desktop.Registry())
-		}
-	case "welcome":
-		desktop.WelcomeAppFactory = func() texel.App {
-			return welcome.NewWelcomeApp()
-		}
-	case "texelterm":
-		desktop.WelcomeAppFactory = shellFactory
-	default:
-		log.Printf("Warning: unknown default app '%s', using launcher", *defaultApp)
-		desktop.WelcomeAppFactory = func() texel.App {
-			return launcher.New(desktop.Registry())
-		}
-	}
 
 	// Create initial workspace with configured default app
 	desktop.SwitchToWorkspace(1)

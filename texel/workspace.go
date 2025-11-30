@@ -205,6 +205,7 @@ func (w *Workspace) AddApp(app App) {
 	p.SetActive(true)
 	w.notifyFocus()
 	w.desktop.broadcastStateUpdate()
+	log.Printf("AddApp: Completed adding app '%s'", app.GetTitle())
 }
 
 func (w *Workspace) moveActivePane(d Direction) {
@@ -554,11 +555,19 @@ func (w *Workspace) ensureWelcomePane() {
 	if w.isDesktopClosing() {
 		return
 	}
-	if w.desktop == nil || w.desktop.WelcomeAppFactory == nil {
+	if w.desktop == nil || w.desktop.InitAppName == "" {
 		return
 	}
 
-	welcomeApp := w.desktop.WelcomeAppFactory()
+	appInstance := w.desktop.Registry().CreateApp(w.desktop.InitAppName, nil)
+	if appInstance == nil {
+		return
+	}
+	welcomeApp, ok := appInstance.(App)
+	if !ok {
+		return
+	}
+
 	w.AddApp(welcomeApp)
 	w.recalculateLayout()
 	if w.desktop != nil {
@@ -917,9 +926,14 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 
 	// Create and attach new app (use default app if available, otherwise shell)
 	var newApp App
-	if w.desktop != nil && w.desktop.WelcomeAppFactory != nil {
-		newApp = w.desktop.WelcomeAppFactory()
-	} else {
+	if w.desktop != nil && w.desktop.InitAppName != "" {
+		if appInstance := w.desktop.Registry().CreateApp(w.desktop.InitAppName, nil); appInstance != nil {
+			if app, ok := appInstance.(App); ok {
+				newApp = app
+			}
+		}
+	}
+	if newApp == nil {
 		newApp = w.ShellAppFactory()
 	}
 	newPane.AttachApp(newApp, w.refreshChan)

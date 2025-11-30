@@ -176,17 +176,14 @@ if key == tcell.KeyRune && rune == 'l' {
 ### Current State
 
 - `texel/overlay.go` exists but only for buffer compositing
-- No desktop-level floating panel support yet
-- Panes are always part of the tree
+- ✅ Desktop-level floating panel support implemented
+- ✅ Panes can be rendered as overlays on top of workspace
 
-### Proposed Architecture
+### Architecture Implemented
 
 ```go
 type DesktopEngine struct {
-    // Existing
-    workspaces []*Workspace
-
-    // NEW: Floating overlays
+    // ...
     floatingPanels []*FloatingPanel
 }
 
@@ -196,21 +193,7 @@ type FloatingPanel struct {
     width  int
     height int
     modal  bool  // Blocks input to underlying panes
-}
-
-func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
-    panel := &FloatingPanel{
-        app: app,
-        x: x, y: y,
-        width: w, height: h,
-        modal: true,
-    }
-    d.floatingPanels = append(d.floatingPanels, panel)
-}
-
-func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
-    // Remove from slice
-    // Return focus to underlying workspace
+    id     [16]byte
 }
 ```
 
@@ -219,24 +202,13 @@ func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
 ```
 1. Render workspace tree → base buffer
 2. Render effects → effect buffer
-3. Render floating panels → overlay buffer
+3. Render floating panels → overlay buffer (DONE)
 4. Composite all layers → final buffer
 ```
 
 ### Use Cases
 
-- **Launcher**: Floating on Ctrl+A+L
-- **Command palette**: Quick commands
-- **Notifications**: Toast messages
-- **Dialogs**: Confirmation prompts
-- **Context menus**: Right-click actions
-
-### Implementation Effort
-
-- **Small**: 2-3 hours
-- Mostly rendering pipeline changes
-- Input routing (modal vs non-modal)
-- Focus management
+- **Launcher**: Floating on Ctrl+A+L (Implemented)
 
 ## 📋 Summary
 
@@ -268,21 +240,18 @@ func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
 - ✅ Comprehensive test suite (8 tests, all passing)
 - ✅ Registered as built-in app "launcher"
 
-### Next ⏭️
-
-#### Phase 5: Launcher Invocation
-1. Add floating panel support (2-3 hours) - **OPTIONAL**
-   - Or use existing pane replacement for now
-2. Wire up Ctrl+A+L keybind to show launcher (15 min)
-3. Test end-to-end workflow
-
-### Total Remaining: ~15 min - 3 hours (depending on floating panel approach)
+#### Phase 5: Launcher Invocation & Floating Panels
+- ✅ Floating panel support in DesktopEngine
+- ✅ Input routing for modal panels
+- ✅ Rendering pipeline update
+- ✅ Ctrl+A+L keybinding
+- ✅ FloatingLauncherReplacer for launching apps into active pane
 
 ## 🎉 Current Status
 
-**Phase 1-4 Complete!** The launcher is fully functional and can be launched as a regular app.
-Users can navigate apps with arrow keys and press Enter to launch them.
+**Phase 1-5 Complete!**
+- Users can launch the launcher with `Ctrl+A L`.
+- It appears as a floating modal overlay.
+- Selecting an app launches it in the underlying active pane and closes the overlay.
 
-**Next Step**: Add Ctrl+A+L keybind to make launcher easily accessible from any pane.
-
-**Optional Enhancement**: Floating panel overlay for launcher (can be deferred)
+**Next Step**: Enjoy the new launcher experience!

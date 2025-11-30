@@ -73,6 +73,9 @@ func (d *DesktopEngine) CaptureTree() TreeCapture {
 	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
 		capture.Panes = append(capture.Panes, status...)
 	}
+	if floating := d.captureFloatingPanelSnapshots(); len(floating) > 0 {
+		capture.Panes = append(capture.Panes, floating...)
+	}
 	return capture
 }
 
@@ -165,6 +168,55 @@ func (d *DesktopEngine) captureStatusPaneSnapshots() []PaneSnapshot {
 			Rect:   rect,
 		}
 		if provider, ok := sp.app.(SnapshotProvider); ok {
+			appType, cfg := provider.SnapshotMetadata()
+			snap.AppType = appType
+			snap.AppConfig = cloneAppConfig(cfg)
+		}
+		snaps = append(snaps, snap)
+	}
+	return snaps
+}
+
+func (d *DesktopEngine) captureFloatingPanelSnapshots() []PaneSnapshot {
+	if len(d.floatingPanels) == 0 {
+		return nil
+	}
+	snaps := make([]PaneSnapshot, 0, len(d.floatingPanels))
+
+	for _, fp := range d.floatingPanels {
+		if fp == nil || fp.app == nil {
+			continue
+		}
+		buf := fp.app.Render()
+		if len(buf) == 0 || len(buf[0]) == 0 {
+			continue
+		}
+		
+		// Floating panels have explicit dimensions in the struct
+		// But we should use the rendered buffer size if it matches?
+		// The app was resized to fp.width/height in ShowFloatingPanel.
+		
+		rect := Rectangle{
+			X:      fp.x,
+			Y:      fp.y,
+			Width:  fp.width,
+			Height: fp.height,
+		}
+		
+		// Ensure we capture what was rendered, but respecting the requested area
+		cloned := cloneBuffer(buf, rect.Height, rect.Width)
+
+		snap := PaneSnapshot{
+			ID:     fp.id,
+			Title:  fp.app.GetTitle(),
+			Buffer: cloned,
+			Rect:   rect,
+			// Set a high Z-order for floating panels implicitly by being last?
+			// PaneSnapshot doesn't store ZOrder. The protocol handles it by order or we need to add it?
+			// The current client renderer likely draws in order of the array. 
+			// So appending floating panels LAST ensures they are on top.
+		}
+		if provider, ok := fp.app.(SnapshotProvider); ok {
 			appType, cfg := provider.SnapshotMetadata()
 			snap.AppType = appType
 			snap.AppConfig = cloneAppConfig(cfg)
