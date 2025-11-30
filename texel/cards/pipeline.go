@@ -42,6 +42,7 @@ var _ texel.SelectionHandler = (*Pipeline)(nil)
 var _ texel.SelectionDeclarer = (*Pipeline)(nil)
 var _ texel.MouseWheelHandler = (*Pipeline)(nil)
 var _ texel.MouseWheelDeclarer = (*Pipeline)(nil)
+var _ texel.ReplacerReceiver = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
 // Pipeline implements texel.App and can be launched like any other app.
@@ -292,6 +293,27 @@ func (p *Pipeline) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.Mo
 
 func (p *Pipeline) MouseWheelEnabled() bool {
 	return p.wheelHandler() != nil
+}
+
+// SetReplacer implements ReplacerReceiver by forwarding to the first card that wants it.
+func (p *Pipeline) SetReplacer(replacer texel.AppReplacer) {
+	cards := p.Cards()
+	for _, card := range cards {
+		if receiver, ok := card.(texel.ReplacerReceiver); ok {
+			receiver.SetReplacer(replacer)
+			return
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if receiver, ok := underlying.(texel.ReplacerReceiver); ok {
+				receiver.SetReplacer(replacer)
+				return
+			}
+		}
+	}
 }
 
 // pasteHandler finds the first card capable of handling paste events.

@@ -42,6 +42,7 @@ func main() {
 	cpuProfile := flag.String("pprof-cpu", "", "Write CPU profile to file")
 	memProfile := flag.String("pprof-mem", "", "Write heap profile to file on exit")
 	verboseLogs := flag.Bool("verbose-logs", false, "Enable verbose server logging")
+	defaultApp := flag.String("default-app", "launcher", "Default app for new panes (launcher, texelterm, welcome)")
 	flag.Parse()
 
 	server.SetVerboseLogging(*verboseLogs)
@@ -80,24 +81,12 @@ func main() {
 		return texelterm.New(title, defaultShell)
 	}
 
-	// Use a pointer to capture desktop reference for launcher
-	var desktopPtr *texel.DesktopEngine
-	launcherFactory := func() texel.App {
-		if desktopPtr == nil {
-			log.Printf("Warning: launcher created before desktop initialized")
-			return welcome.NewWelcomeApp()
-		}
-		return launcher.New(desktopPtr.Registry())
-	}
-
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, launcherFactory, lifecycle)
+	// Create desktop first (no welcome app yet - we'll set it after registry is ready)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, nil, lifecycle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create desktop: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Capture desktop reference for launcher factory
-	desktopPtr = desktop
 
 	// Register wrapper factory for texelterm
 	// This allows wrapper apps to create texelterm instances with custom commands
@@ -109,15 +98,37 @@ func main() {
 		return texelterm.New(m.DisplayName, command)
 	})
 
-	// Register launcher in registry for discoverability
+	// Register launcher in registry
 	desktop.Registry().RegisterBuiltIn("launcher", func() interface{} {
 		return launcher.New(desktop.Registry())
 	})
 
-	// Register welcome app as an option
+	// Register welcome app
 	desktop.Registry().RegisterBuiltIn("welcome", func() interface{} {
 		return welcome.NewWelcomeApp()
 	})
+
+	// Set the default app factory based on configuration
+	switch *defaultApp {
+	case "launcher":
+		desktop.WelcomeAppFactory = func() texel.App {
+			return launcher.New(desktop.Registry())
+		}
+	case "welcome":
+		desktop.WelcomeAppFactory = func() texel.App {
+			return welcome.NewWelcomeApp()
+		}
+	case "texelterm":
+		desktop.WelcomeAppFactory = shellFactory
+	default:
+		log.Printf("Warning: unknown default app '%s', using launcher", *defaultApp)
+		desktop.WelcomeAppFactory = func() texel.App {
+			return launcher.New(desktop.Registry())
+		}
+	}
+
+	// Create initial workspace with configured default app
+	desktop.SwitchToWorkspace(1)
 
 	status := statusbar.New()
 	desktop.AddStatusPane(status, texel.SideTop, 1)

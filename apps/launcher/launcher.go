@@ -167,6 +167,9 @@ func (l *Launcher) Resize(cols, rows int) {
 func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 	l.mu.Lock()
 
+	// Debug logging
+	log.Printf("Launcher: HandleKey called - Key=%v, Rune=%v, Mod=%v", ev.Key(), ev.Rune(), ev.Modifiers())
+
 	switch ev.Key() {
 	case tcell.KeyUp:
 		if l.selectedIdx > 0 {
@@ -191,6 +194,9 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 		return
 
 	case tcell.KeyEnter:
+		log.Printf("Launcher: Enter pressed - selectedIdx=%d, apps=%d, replacer=%v",
+			l.selectedIdx, len(l.apps), l.replacer != nil)
+
 		if l.selectedIdx >= 0 && l.selectedIdx < len(l.apps) {
 			selectedApp := l.apps[l.selectedIdx]
 			replacer := l.replacer
