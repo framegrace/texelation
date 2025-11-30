@@ -107,7 +107,7 @@ func (p *Pipeline) StartCard(card Card) {
 			// If one card fails, we should probably stop the whole pipeline?
 			// For now, just logging it via error state.
 			// In a robust system, we might want to cancel a context or call Stop().
-			p.Stop() // Force stop all cards to unblock Run()
+			p.terminate() // Force stop all cards to unblock Run()
 		}
 	}()
 }
@@ -132,13 +132,18 @@ func (p *Pipeline) Error() error {
 
 // Stop stops all cards and waits for them to exit.
 func (p *Pipeline) Stop() {
+	p.terminate()
+	p.wg.Wait()
+}
+
+// terminate signals all cards to stop but does not wait.
+func (p *Pipeline) terminate() {
 	p.stopOnce.Do(func() {
 		cards := p.Cards()
 		for _, card := range cards {
 			card.Stop()
 		}
 	})
-	p.wg.Wait()
 }
 
 // Resize propagates dimensions to all cards.
