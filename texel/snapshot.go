@@ -7,6 +7,11 @@
 
 package texel
 
+import (
+	"github.com/gdamore/tcell/v2"
+	"texelation/texel/theme"
+)
+
 // PaneSnapshot captures the render buffer for a pane along with a stable ID.
 type PaneSnapshot struct {
 	ID        [16]byte
@@ -72,6 +77,9 @@ func (d *DesktopEngine) CaptureTree() TreeCapture {
 	capture.Root = buildTreeCapture(d.activeWorkspace.tree.Root, paneIndex)
 	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
 		capture.Panes = append(capture.Panes, status...)
+	}
+	if floating := d.captureFloatingPanelSnapshots(); len(floating) > 0 {
+		capture.Panes = append(capture.Panes, floating...)
 	}
 	return capture
 }
@@ -165,6 +173,130 @@ func (d *DesktopEngine) captureStatusPaneSnapshots() []PaneSnapshot {
 			Rect:   rect,
 		}
 		if provider, ok := sp.app.(SnapshotProvider); ok {
+			appType, cfg := provider.SnapshotMetadata()
+			snap.AppType = appType
+			snap.AppConfig = cloneAppConfig(cfg)
+		}
+		snaps = append(snaps, snap)
+	}
+	return snaps
+}
+
+func (d *DesktopEngine) captureFloatingPanelSnapshots() []PaneSnapshot {
+	if len(d.floatingPanels) == 0 {
+		return nil
+	}
+	snaps := make([]PaneSnapshot, 0, len(d.floatingPanels))
+
+	// Use default style for border
+	tm := theme.Get()
+	desktopBg := tm.GetSemanticColor("bg.base").TrueColor()
+	desktopFg := tm.GetSemanticColor("text.primary").TrueColor()
+	borderFg := tm.GetSemanticColor("border.active").TrueColor() // Floating panels are active-like
+	defStyle := tcell.StyleDefault.Background(desktopBg).Foreground(desktopFg)
+	borderStyle := tcell.StyleDefault.Background(desktopBg).Foreground(borderFg)
+
+	for _, fp := range d.floatingPanels {
+		if fp == nil || fp.app == nil {
+			continue
+		}
+		buf := fp.app.Render()
+		if len(buf) == 0 || len(buf[0]) == 0 {
+			continue
+		}
+
+		// Calculate dimensions with border (padding 1 on each side)
+		contentW := fp.width
+		contentH := fp.height
+		
+		// Sanity check buffer size vs requested size, clip if needed
+		if len(buf) < contentH {
+			contentH = len(buf)
+		}
+		// Assume uniform width for now
+		if len(buf) > 0 && len(buf[0]) < contentW {
+			contentW = len(buf[0])
+		}
+
+		borderW := contentW + 2
+		borderH := contentH + 2
+
+		// Create larger buffer
+		out := make([][]Cell, borderH)
+		for i := range out {
+			out[i] = make([]Cell, borderW)
+			for j := range out[i] {
+				out[i][j] = Cell{Ch: ' ', Style: defStyle}
+			}
+		}
+
+		// Draw borders
+		for x := 0; x < borderW; x++ {
+			out[0][x] = Cell{Ch: tcell.RuneHLine, Style: borderStyle}
+			out[borderH-1][x] = Cell{Ch: tcell.RuneHLine, Style: borderStyle}
+		}
+		for y := 0; y < borderH; y++ {
+			out[y][0] = Cell{Ch: tcell.RuneVLine, Style: borderStyle}
+			out[y][borderW-1] = Cell{Ch: tcell.RuneVLine, Style: borderStyle}
+		}
+		out[0][0] = Cell{Ch: tcell.RuneULCorner, Style: borderStyle}
+		out[0][borderW-1] = Cell{Ch: tcell.RuneURCorner, Style: borderStyle}
+		out[borderH-1][0] = Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
+		out[borderH-1][borderW-1] = Cell{Ch: '╯', Style: borderStyle}
+
+		// Draw Title
+		title := fp.app.GetTitle()
+		if title != "" && borderW > 4 {
+			titleRuneCount := 0
+			for range title {
+				titleRuneCount++
+			}
+			
+			maxTitleLen := borderW - 4
+			if titleRuneCount > maxTitleLen {
+				// Truncate
+				r := []rune(title)
+				title = string(r[:maxTitleLen])
+				titleRuneCount = maxTitleLen
+			}
+			
+			// Center title
+			startX := (borderW - (titleRuneCount + 2)) / 2
+			if startX < 1 { startX = 1 }
+			
+			titleStr := " " + title + " "
+			for i, ch := range titleStr {
+				if startX+i < borderW-1 {
+					out[0][startX+i] = Cell{Ch: ch, Style: borderStyle}
+				}
+			}
+		}
+
+		// Copy content into center
+		for y := 0; y < contentH; y++ {
+			if y >= len(buf) { break }
+			row := buf[y]
+			for x := 0; x < contentW; x++ {
+				if x >= len(row) { break }
+				out[y+1][x+1] = row[x]
+			}
+		}
+
+		// Adjust rect to include border
+		rect := Rectangle{
+			X:      fp.x - 1,
+			Y:      fp.y - 1,
+			Width:  borderW,
+			Height: borderH,
+		}
+
+		snap := PaneSnapshot{
+			ID:     fp.id,
+			Title:  fp.app.GetTitle(),
+			Buffer: out,
+			Rect:   rect,
+		}
+		if provider, ok := fp.app.(SnapshotProvider); ok {
 			appType, cfg := provider.SnapshotMetadata()
 			snap.AppType = appType
 			snap.AppConfig = cloneAppConfig(cfg)

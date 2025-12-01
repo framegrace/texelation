@@ -127,12 +127,16 @@ func buildDesktop() (*texel.DesktopEngine, *stressApp) {
 
 	app := newStressApp("stress", "starting")
 	shellFactory := func() texel.App { return app }
-	welcomeFactory := func() texel.App { return newStressApp("welcome", "loaded") }
 
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "welcome", lifecycle)
 	if err != nil {
 		log.Fatalf("desktop init failed: %v", err)
 	}
+	
+	desktop.Registry().RegisterBuiltIn("welcome", func() interface{} {
+		return newStressApp("welcome", "loaded")
+	})
+
 	desktop.RegisterSnapshotFactory("stress", func(title string, cfg map[string]interface{}) texel.App {
 		msg, _ := cfg["message"].(string)
 		return newStressApp(title, msg)

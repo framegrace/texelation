@@ -1,12 +1,12 @@
 // Copyright © 2025 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: apps/welcome/welcome.go
-// Summary: Implements welcome capabilities for the welcome application.
+// File: apps/help/help.go
+// Summary: Implements help capabilities for the help application.
 // Usage: Presented on new sessions to guide users through the interface.
 // Notes: Displays static content; simple example app.
 
-package welcome
+package help
 
 import (
 	"sync"
@@ -17,38 +17,38 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-// welcomeApp is a simple internal widget that displays a static welcome message.
-type welcomeApp struct {
+// helpApp is a simple internal widget that displays a static help message.
+type helpApp struct {
 	width, height int
 	mu            sync.RWMutex
 	stop          chan struct{}
 	stopOnce      sync.Once
 }
 
-// NewWelcomeApp now returns the App interface for consistency.
-func NewWelcomeApp() texel.App {
-	base := &welcomeApp{stop: make(chan struct{})}
+// NewHelpApp now returns the App interface for consistency.
+func NewHelpApp() texel.App {
+	base := &helpApp{stop: make(chan struct{})}
 	return cards.NewPipeline(nil, cards.WrapApp(base))
 }
 
-func (a *welcomeApp) Run() error {
+func (a *helpApp) Run() error {
 	<-a.stop
 	return nil
 }
 
-func (a *welcomeApp) Stop() {
+func (a *helpApp) Stop() {
 	a.stopOnce.Do(func() {
 		close(a.stop)
 	})
 }
 
-func (a *welcomeApp) Resize(cols, rows int) {
+func (a *helpApp) Resize(cols, rows int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.width, a.height = cols, rows
 }
 
-func (a *welcomeApp) Render() [][]texel.Cell {
+func (a *helpApp) Render() [][]texel.Cell {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -69,17 +69,22 @@ func (a *welcomeApp) Render() [][]texel.Cell {
 	}
 
 	messages := []string{
-		"Welcome to Texelation!",
+		"Texelation Help",
+		"",
+		"Global Shortcuts:",
+		"  F1           Show this Help",
+		"  Ctrl+A L     Open Launcher",
+		"  Ctrl+A H     Show this Help",
 		"",
 		"Control Mode (Ctrl-A):",
-		"  |   Split vertically",
-		"  -   Split horizontally",
-		"  x   Close active pane",
-		"  w   Swap panes (then Arrow keys)",
-		"  z   Toggle zoom",
-		"  1-9 Switch workspaces",
-		"  Ctrl+Arrow  Resize panes",
-		"  Esc         Exit control mode",
+		"  |            Split vertically",
+		"  -            Split horizontally",
+		"  x            Close active pane",
+		"  w            Swap panes (then Arrow keys)",
+		"  z            Toggle zoom",
+		"  1-9          Switch workspaces",
+		"  Ctrl+Arrow   Resize panes",
+		"  Esc          Exit control mode",
 		"",
 		"Anytime:",
 		"  Shift+Arrow  Move focus",
@@ -108,14 +113,14 @@ func (a *welcomeApp) Render() [][]texel.Cell {
 	return buffer
 }
 
-func (a *welcomeApp) GetTitle() string {
-	return "Welcome"
+func (a *helpApp) GetTitle() string {
+	return "Help"
 }
 
-func (a *welcomeApp) HandleKey(ev *tcell.EventKey) {
+func (a *helpApp) HandleKey(ev *tcell.EventKey) {
 	// This app doesn't handle key presses.
 }
 
-func (a *welcomeApp) SetRefreshNotifier(refreshChan chan<- bool) {
+func (a *helpApp) SetRefreshNotifier(refreshChan chan<- bool) {
 	// No-op
 }

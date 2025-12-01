@@ -81,3 +81,27 @@ type MouseWheelHandler interface {
 type MouseWheelDeclarer interface {
 	MouseWheelEnabled() bool
 }
+
+// AppReplacer allows an app to replace itself with another app in the same pane.
+// This is primarily used by launcher apps to spawn the selected app in their place.
+type AppReplacer interface {
+	ReplaceWithApp(name string, config map[string]interface{})
+	Close()
+}
+
+// ReplacerReceiver is implemented by apps that want to receive an AppReplacer.
+// The pane will call SetReplacer during AttachApp if the app implements this interface.
+type ReplacerReceiver interface {
+	SetReplacer(replacer AppReplacer)
+}
+
+// CloseRequester is implemented by apps that want to intercept closure requests
+// (from pane close or replacement) to show a confirmation UI.
+type CloseRequester interface {
+	// RequestClose is called when the container wants to close the app.
+	// Returns true if the app is ready to close immediately.
+	// Returns false if the app has intercepted the request (e.g., to show confirmation).
+	// If false is returned, the app is responsible for calling AppReplacer.Close()
+	// (or equivalent) when it is eventually ready to close.
+	RequestClose() bool
+}

@@ -34,8 +34,8 @@ func NewLabel(x, y, w, h int, text string) *Label {
 
 	// Get default style from theme
 	tm := theme.Get()
-	fg := tm.GetColor("ui", "text_fg", tcell.ColorWhite)
-	bg := tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
+	fg := tm.GetSemanticColor("text.primary")
+	bg := tm.GetSemanticColor("bg.surface")
 	l.Style = tcell.StyleDefault.Foreground(fg).Background(bg)
 
 	l.SetPosition(x, y)

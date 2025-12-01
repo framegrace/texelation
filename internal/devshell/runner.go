@@ -7,7 +7,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"texelation/apps/texelterm"
-	"texelation/apps/welcome"
+	"texelation/apps/help"
 	"texelation/texel"
 	"texelation/texelui/adapter"
 )
@@ -23,8 +23,8 @@ var registry = map[string]Builder{
 		}
 		return texelterm.New("texelterm", shell), nil
 	},
-	"welcome": func(args []string) (texel.App, error) {
-		return welcome.NewWelcomeApp(), nil
+	"help": func(args []string) (texel.App, error) {
+		return help.NewHelpApp(), nil
 	},
     "texelui-demo": func(args []string) (texel.App, error) {
         return adapter.NewTextEditorApp("TexelUI Demo"), nil

@@ -53,7 +53,15 @@ type TexelTerm struct {
 	controlBus           cards.ControlBus
 	selection            termSelection
 	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
+
+	confirmClose    bool
+	confirmCallback func()
+	closeCh         chan struct{}
+	replacer        texel.AppReplacer
 }
+
+var _ texel.CloseRequester = (*TexelTerm)(nil)
+var _ texel.ReplacerReceiver = (*TexelTerm)(nil)
 
 // termSelection tracks the current text selection state and multi-click history.
 //
@@ -89,12 +97,88 @@ func New(title, command string) texel.App {
 		height:       24,
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
+		closeCh:      make(chan struct{}),
 	}
 
 	wrapped := cards.WrapApp(term)
 	pipe := cards.NewPipeline(nil, wrapped)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
+}
+
+func (a *TexelTerm) SetReplacer(r texel.AppReplacer) {
+	a.mu.Lock()
+	a.replacer = r
+	a.mu.Unlock()
+}
+
+func (a *TexelTerm) RequestClose() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.confirmClose = true
+	a.confirmCallback = func() {
+		if a.replacer != nil {
+			a.replacer.Close()
+		}
+	}
+	a.requestRefresh()
+	return false
+}
+
+func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
+	if len(buf) == 0 {
+		return
+	}
+	height := len(buf)
+	width := len(buf[0])
+
+	// Box dimensions
+	boxW := 40
+	boxH := 5
+	x := (width - boxW) / 2
+	y := (height - boxH) / 2
+
+	// Ensure fits
+	if x < 0 { x = 0 }
+	if y < 0 { y = 0 }
+	if boxW > width { boxW = width }
+	if boxH > height { boxH = height }
+
+	style := tcell.StyleDefault.Background(tcell.ColorDarkRed).Foreground(tcell.ColorWhite)
+	borderStyle := tcell.StyleDefault.Background(tcell.ColorDarkRed).Foreground(tcell.ColorWhite)
+
+	// Draw box
+	for r := 0; r < boxH; r++ {
+		for c := 0; c < boxW; c++ {
+			if y+r < height && x+c < width {
+				buf[y+r][x+c] = texel.Cell{Ch: ' ', Style: style}
+			}
+		}
+	}
+
+	// Borders
+	for c := 0; c < boxW; c++ {
+		buf[y][x+c] = texel.Cell{Ch: tcell.RuneHLine, Style: borderStyle}
+		buf[y+boxH-1][x+c] = texel.Cell{Ch: tcell.RuneHLine, Style: borderStyle}
+	}
+	for r := 0; r < boxH; r++ {
+		buf[y+r][x] = texel.Cell{Ch: tcell.RuneVLine, Style: borderStyle}
+		buf[y+r][x+boxW-1] = texel.Cell{Ch: tcell.RuneVLine, Style: borderStyle}
+	}
+	buf[y][x] = texel.Cell{Ch: tcell.RuneULCorner, Style: borderStyle}
+	buf[y][x+boxW-1] = texel.Cell{Ch: tcell.RuneURCorner, Style: borderStyle}
+	buf[y+boxH-1][x] = texel.Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
+	buf[y+boxH-1][x+boxW-1] = texel.Cell{Ch: tcell.RuneLRCorner, Style: borderStyle}
+
+	// Text
+	msg := "Close Terminal? (y/n)"
+	textX := x + (boxW-len(msg))/2
+	textY := y + 2
+	for i, r := range msg {
+		if textX+i < width {
+			buf[textY][textX+i] = texel.Cell{Ch: r, Style: style.Bold(true)}
+		}
+	}
 }
 
 func (a *TexelTerm) Vterm() *parser.VTerm {
@@ -208,10 +292,37 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 
 	a.vterm.ClearDirty()
 	a.applySelectionHighlightLocked(a.buf)
+	
+	if a.confirmClose {
+		a.drawConfirmation(a.buf)
+	}
+	
 	return a.buf
 }
 
 func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
+	a.mu.Lock()
+	if a.confirmClose {
+		if ev.Key() == tcell.KeyRune {
+			r := ev.Rune()
+			if r == 'y' || r == 'Y' {
+				if a.confirmCallback != nil {
+					a.mu.Unlock()
+					a.confirmCallback()
+					return // Callback handles close
+				}
+				// Internal close (PTY exit)
+				close(a.closeCh)
+			} else if r == 'n' || r == 'N' {
+				a.confirmClose = false
+				a.requestRefresh()
+			}
+		}
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+
 	if a.pty == nil {
 		return
 	}
@@ -746,7 +857,20 @@ func (a *TexelTerm) Run() error {
 
 	err = cmd.Wait()
 	a.wg.Wait()
-	return err
+	
+	// PTY exited. Ask for confirmation before closing pane.
+	a.mu.Lock()
+	a.confirmClose = true
+	a.confirmCallback = nil // Internal close
+	a.requestRefresh()
+	a.mu.Unlock()
+	
+	select {
+	case <-a.closeCh:
+		return err
+	case <-a.stop:
+		return err
+	}
 }
 
 func (a *TexelTerm) resolveSelectionPositionLocked(x, y int) (int, int) {
@@ -959,8 +1083,24 @@ func (a *TexelTerm) GetTitle() string {
 	return a.title
 }
 
-func (a *TexelTerm) respondToColorQuery(code int) {
-	if a.pty == nil {
+// OnEvent implements texel.Listener to handle theme changes.
+func (a *TexelTerm) OnEvent(event texel.Event) {
+	if event.Type == texel.EventThemeChanged {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+
+		// Regenerate the palette with the new theme colors
+		a.colorPalette = newDefaultPalette()
+
+		// Force a full redraw
+		if a.vterm != nil {
+			a.vterm.MarkAllDirty()
+		}
+		a.requestRefresh()
+	}
+}
+
+func (a *TexelTerm) respondToColorQuery(code int) {	if a.pty == nil {
 		return
 	}
 	// Slot 256 for default FG, 257 for default BG
@@ -991,23 +1131,29 @@ func If[T any](condition bool, trueVal, falseVal T) T {
 
 func newDefaultPalette() [258]tcell.Color {
 	var p [258]tcell.Color
-	// Standard ANSI colors 0-15
-	p[0] = tcell.NewRGBColor(10, 10, 20)
-	p[1] = tcell.NewRGBColor(128, 0, 0)
-	p[2] = tcell.NewRGBColor(0, 128, 0)
-	p[3] = tcell.NewRGBColor(128, 128, 0)
-	p[4] = tcell.NewRGBColor(60, 60, 128)
-	p[5] = tcell.NewRGBColor(128, 0, 128)
-	p[6] = tcell.NewRGBColor(0, 128, 128)
-	p[7] = tcell.NewRGBColor(192, 192, 192)
-	p[8] = tcell.NewRGBColor(128, 128, 128)
-	p[9] = tcell.NewRGBColor(255, 0, 0)
-	p[10] = tcell.NewRGBColor(0, 255, 0)
-	p[11] = tcell.NewRGBColor(255, 255, 0)
-	p[12] = tcell.NewRGBColor(0, 0, 255)
-	p[13] = tcell.NewRGBColor(255, 0, 255)
-	p[14] = tcell.NewRGBColor(0, 255, 255)
-	p[15] = tcell.NewRGBColor(255, 255, 255)
+	tm := theme.Get()
+
+	// Standard ANSI colors 0-15 (Mapped to Catppuccin Palette)
+	p[0] = theme.ResolveColorName("surface1")
+	p[1] = theme.ResolveColorName("red")
+	p[2] = theme.ResolveColorName("green")
+	p[3] = theme.ResolveColorName("yellow")
+	p[4] = theme.ResolveColorName("blue")
+	p[5] = theme.ResolveColorName("pink")
+	p[6] = theme.ResolveColorName("teal")
+	p[7] = theme.ResolveColorName("subtext1")
+	p[8] = theme.ResolveColorName("surface2")
+	p[9] = theme.ResolveColorName("red")
+	p[10] = theme.ResolveColorName("green")
+	p[11] = theme.ResolveColorName("yellow")
+	p[12] = theme.ResolveColorName("blue")
+	p[13] = theme.ResolveColorName("pink")
+	p[14] = theme.ResolveColorName("teal")
+	p[15] = theme.ResolveColorName("text")
+
+	// Fallback for any missing palette colors
+	if p[0] == tcell.ColorDefault { p[0] = tcell.NewRGBColor(10, 10, 20) }
+	// ... (simplified fallback, we trust the palette mostly)
 
 	// 6x6x6 color cube (16-231)
 	levels := []int32{0, 95, 135, 175, 215, 255}
@@ -1029,7 +1175,7 @@ func newDefaultPalette() [258]tcell.Color {
 	}
 
 	// Default FG (slot 256) and BG (slot 257)
-	p[256] = p[15] // White
-	p[257] = p[0]  // Black
+	p[256] = tm.GetSemanticColor("text.primary")
+	p[257] = tm.GetSemanticColor("bg.base")
 	return p
 }

@@ -1,12 +1,12 @@
 // Copyright © 2025 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: apps/welcome/welcome_simple_colored.go
-// Summary: Simple colored welcome screen (no tview needed).
-// Usage: Creates a static welcome buffer with colors.
+// File: apps/help/welcome_simple_colored.go
+// Summary: Simple colored help screen (no tview needed).
+// Usage: Creates a static help buffer with colors.
 // Notes: No dependencies, no event loop, just a static buffer.
 
-package welcome
+package help
 
 import (
 	"sync"
@@ -15,23 +15,23 @@ import (
 	"texelation/texel"
 )
 
-// SimpleColoredWelcome is a static welcome screen with colors.
-type SimpleColoredWelcome struct {
+// SimpleColoredHelp is a static help screen with colors.
+type SimpleColoredHelp struct {
 	width  int
 	height int
 	buffer [][]texel.Cell
 	mu     sync.RWMutex
 }
 
-// NewSimpleColored creates a simple colored welcome screen.
-func NewSimpleColored() texel.App {
-	return &SimpleColoredWelcome{
+// NewSimpleColoredHelp creates a simple colored help screen.
+func NewSimpleColoredHelp() texel.App {
+	return &SimpleColoredHelp{
 		width:  80,
 		height: 24,
 	}
 }
 
-func (w *SimpleColoredWelcome) Run() error {
+func (w *SimpleColoredHelp) Run() error {
 	// Create the buffer immediately
 	w.mu.Lock()
 	w.renderBuffer()
@@ -39,10 +39,10 @@ func (w *SimpleColoredWelcome) Run() error {
 	return nil
 }
 
-func (w *SimpleColoredWelcome) Stop() {
+func (w *SimpleColoredHelp) Stop() {
 }
 
-func (w *SimpleColoredWelcome) Resize(cols, rows int) {
+func (w *SimpleColoredHelp) Resize(cols, rows int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -53,7 +53,7 @@ func (w *SimpleColoredWelcome) Resize(cols, rows int) {
 	}
 }
 
-func (w *SimpleColoredWelcome) renderBuffer() {
+func (w *SimpleColoredHelp) renderBuffer() {
 	// Don't render if dimensions are invalid
 	if w.width <= 0 || w.height <= 0 {
 		w.buffer = make([][]texel.Cell, 0)
@@ -82,7 +82,7 @@ func (w *SimpleColoredWelcome) renderBuffer() {
 		}
 	}
 
-	// Draw a simple colored welcome message
+	// Draw a simple colored help message
 	yellowBold := tcell.StyleDefault.Foreground(tcell.ColorYellow).Bold(true)
 	green := tcell.StyleDefault.Foreground(tcell.ColorGreen)
 	cyan := tcell.StyleDefault.Foreground(tcell.ColorAqua)
@@ -94,7 +94,7 @@ func (w *SimpleColoredWelcome) renderBuffer() {
 		text  string
 		style tcell.Style
 	}{
-		{2, "Welcome to Texelation!", yellowBold},
+		{2, "Texelation Help", yellowBold},
 		{4, "A modular text-based desktop environment", green},
 		{6, "Press Ctrl-A to enter Control Mode, then:", white},
 		{7, "  | or -  - Split vertically or horizontally", cyan},
@@ -105,7 +105,7 @@ func (w *SimpleColoredWelcome) renderBuffer() {
 		{13, "Press Shift-Arrow to navigate panes anytime.", white},
 		{14, "Press Ctrl-Arrow to resize panes.", white},
 		{15, "Press Ctrl-Q to quit.", white},
-		{17, "This is a simple colored welcome (no tview!).", gray},
+		{17, "This is a simple colored help (no tview!).", gray},
 	}
 
 	for _, line := range lines {
@@ -125,7 +125,7 @@ func (w *SimpleColoredWelcome) renderBuffer() {
 	}
 }
 
-func (w *SimpleColoredWelcome) Render() [][]texel.Cell {
+func (w *SimpleColoredHelp) Render() [][]texel.Cell {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -137,12 +137,12 @@ func (w *SimpleColoredWelcome) Render() [][]texel.Cell {
 	return w.buffer
 }
 
-func (w *SimpleColoredWelcome) GetTitle() string {
-	return "Welcome"
+func (w *SimpleColoredHelp) GetTitle() string {
+	return "Help"
 }
 
-func (w *SimpleColoredWelcome) HandleKey(ev *tcell.EventKey) {
+func (w *SimpleColoredHelp) HandleKey(ev *tcell.EventKey) {
 }
 
-func (w *SimpleColoredWelcome) SetRefreshNotifier(ch chan<- bool) {
+func (w *SimpleColoredHelp) SetRefreshNotifier(ch chan<- bool) {
 }
