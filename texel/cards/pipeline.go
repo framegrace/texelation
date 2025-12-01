@@ -43,6 +43,7 @@ var _ texel.SelectionDeclarer = (*Pipeline)(nil)
 var _ texel.MouseWheelHandler = (*Pipeline)(nil)
 var _ texel.MouseWheelDeclarer = (*Pipeline)(nil)
 var _ texel.ReplacerReceiver = (*Pipeline)(nil)
+var _ texel.CloseRequester = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
 // Pipeline implements texel.App and can be launched like any other app.
@@ -378,4 +379,32 @@ func (p *Pipeline) OnEvent(event texel.Event) {
 			}
 		}
 	}
+}
+
+// closeRequester finds the first card capable of handling close requests.
+func (p *Pipeline) closeRequester() texel.CloseRequester {
+	cards := p.Cards()
+	for _, card := range cards {
+		if handler, ok := card.(texel.CloseRequester); ok {
+			return handler
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if handler, ok := underlying.(texel.CloseRequester); ok {
+				return handler
+			}
+		}
+	}
+	return nil
+}
+
+// RequestClose implements texel.CloseRequester.
+func (p *Pipeline) RequestClose() bool {
+	if handler := p.closeRequester(); handler != nil {
+		return handler.RequestClose()
+	}
+	return true // Default: allowed to close
 }

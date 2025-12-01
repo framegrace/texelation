@@ -23,10 +23,10 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"texelation/apps/help"
 	"texelation/apps/launcher"
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
-	"texelation/apps/welcome"
 	"texelation/config"
 	"texelation/internal/runtime/server"
 	"texelation/registry"
@@ -43,7 +43,7 @@ func main() {
 	cpuProfile := flag.String("pprof-cpu", "", "Write CPU profile to file")
 	memProfile := flag.String("pprof-mem", "", "Write heap profile to file on exit")
 	verboseLogs := flag.Bool("verbose-logs", false, "Enable verbose server logging")
-	defaultApp := flag.String("default-app", "", "Default app for new panes (launcher, texelterm, welcome) - overrides config file")
+	defaultApp := flag.String("default-app", "", "Default app for new panes (launcher, texelterm, help) - overrides config file")
 	flag.Parse()
 
 	server.SetVerboseLogging(*verboseLogs)
@@ -94,7 +94,7 @@ func main() {
 		return texelterm.New(title, defaultShell)
 	}
 
-	// Create desktop first (no welcome app yet - we'll set it after registry is ready)
+	// Create desktop first (no help app yet - we'll set it after registry is ready)
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, *defaultApp, lifecycle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create desktop: %v\n", err)
@@ -116,9 +116,9 @@ func main() {
 		return launcher.New(desktop.Registry())
 	})
 
-	// Register welcome app
-	desktop.Registry().RegisterBuiltIn("welcome", func() interface{} {
-		return welcome.NewWelcomeApp()
+	// Register help app
+	desktop.Registry().RegisterBuiltIn("help", func() interface{} {
+		return help.NewHelpApp()
 	})
 
 	// Create initial workspace with configured default app

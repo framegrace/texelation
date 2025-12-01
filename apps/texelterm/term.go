@@ -53,7 +53,15 @@ type TexelTerm struct {
 	controlBus           cards.ControlBus
 	selection            termSelection
 	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
+
+	confirmClose    bool
+	confirmCallback func()
+	closeCh         chan struct{}
+	replacer        texel.AppReplacer
 }
+
+var _ texel.CloseRequester = (*TexelTerm)(nil)
+var _ texel.ReplacerReceiver = (*TexelTerm)(nil)
 
 // termSelection tracks the current text selection state and multi-click history.
 //
@@ -89,12 +97,88 @@ func New(title, command string) texel.App {
 		height:       24,
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
+		closeCh:      make(chan struct{}),
 	}
 
 	wrapped := cards.WrapApp(term)
 	pipe := cards.NewPipeline(nil, wrapped)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
+}
+
+func (a *TexelTerm) SetReplacer(r texel.AppReplacer) {
+	a.mu.Lock()
+	a.replacer = r
+	a.mu.Unlock()
+}
+
+func (a *TexelTerm) RequestClose() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.confirmClose = true
+	a.confirmCallback = func() {
+		if a.replacer != nil {
+			a.replacer.Close()
+		}
+	}
+	a.requestRefresh()
+	return false
+}
+
+func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
+	if len(buf) == 0 {
+		return
+	}
+	height := len(buf)
+	width := len(buf[0])
+
+	// Box dimensions
+	boxW := 40
+	boxH := 5
+	x := (width - boxW) / 2
+	y := (height - boxH) / 2
+
+	// Ensure fits
+	if x < 0 { x = 0 }
+	if y < 0 { y = 0 }
+	if boxW > width { boxW = width }
+	if boxH > height { boxH = height }
+
+	style := tcell.StyleDefault.Background(tcell.ColorDarkRed).Foreground(tcell.ColorWhite)
+	borderStyle := tcell.StyleDefault.Background(tcell.ColorDarkRed).Foreground(tcell.ColorWhite)
+
+	// Draw box
+	for r := 0; r < boxH; r++ {
+		for c := 0; c < boxW; c++ {
+			if y+r < height && x+c < width {
+				buf[y+r][x+c] = texel.Cell{Ch: ' ', Style: style}
+			}
+		}
+	}
+
+	// Borders
+	for c := 0; c < boxW; c++ {
+		buf[y][x+c] = texel.Cell{Ch: tcell.RuneHLine, Style: borderStyle}
+		buf[y+boxH-1][x+c] = texel.Cell{Ch: tcell.RuneHLine, Style: borderStyle}
+	}
+	for r := 0; r < boxH; r++ {
+		buf[y+r][x] = texel.Cell{Ch: tcell.RuneVLine, Style: borderStyle}
+		buf[y+r][x+boxW-1] = texel.Cell{Ch: tcell.RuneVLine, Style: borderStyle}
+	}
+	buf[y][x] = texel.Cell{Ch: tcell.RuneULCorner, Style: borderStyle}
+	buf[y][x+boxW-1] = texel.Cell{Ch: tcell.RuneURCorner, Style: borderStyle}
+	buf[y+boxH-1][x] = texel.Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
+	buf[y+boxH-1][x+boxW-1] = texel.Cell{Ch: tcell.RuneLRCorner, Style: borderStyle}
+
+	// Text
+	msg := "Close Terminal? (y/n)"
+	textX := x + (boxW-len(msg))/2
+	textY := y + 2
+	for i, r := range msg {
+		if textX+i < width {
+			buf[textY][textX+i] = texel.Cell{Ch: r, Style: style.Bold(true)}
+		}
+	}
 }
 
 func (a *TexelTerm) Vterm() *parser.VTerm {
@@ -208,10 +292,37 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 
 	a.vterm.ClearDirty()
 	a.applySelectionHighlightLocked(a.buf)
+	
+	if a.confirmClose {
+		a.drawConfirmation(a.buf)
+	}
+	
 	return a.buf
 }
 
 func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
+	a.mu.Lock()
+	if a.confirmClose {
+		if ev.Key() == tcell.KeyRune {
+			r := ev.Rune()
+			if r == 'y' || r == 'Y' {
+				if a.confirmCallback != nil {
+					a.mu.Unlock()
+					a.confirmCallback()
+					return // Callback handles close
+				}
+				// Internal close (PTY exit)
+				close(a.closeCh)
+			} else if r == 'n' || r == 'N' {
+				a.confirmClose = false
+				a.requestRefresh()
+			}
+		}
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+
 	if a.pty == nil {
 		return
 	}
@@ -746,7 +857,20 @@ func (a *TexelTerm) Run() error {
 
 	err = cmd.Wait()
 	a.wg.Wait()
-	return err
+	
+	// PTY exited. Ask for confirmation before closing pane.
+	a.mu.Lock()
+	a.confirmClose = true
+	a.confirmCallback = nil // Internal close
+	a.requestRefresh()
+	a.mu.Unlock()
+	
+	select {
+	case <-a.closeCh:
+		return err
+	case <-a.stop:
+		return err
+	}
 }
 
 func (a *TexelTerm) resolveSelectionPositionLocked(x, y int) (int, int) {

@@ -500,6 +500,12 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 		return
 	}
 	
+	// Global Shortcuts
+	if key.Key() == tcell.KeyF1 {
+		d.launchHelpOverlay()
+		return
+	}
+	
 	// Check floating panels (topmost first)
 	// Iterate in reverse to find topmost modal
 	for i := len(d.floatingPanels) - 1; i >= 0; i-- {
@@ -553,6 +559,42 @@ func (d *DesktopEngine) launchLauncherOverlay() {
 	vw, vh := d.viewportSize()
 	w := 60
 	h := 20
+	if w > vw {
+		w = vw - 2
+	}
+	if h > vh {
+		h = vh - 2
+	}
+	x := (vw - w) / 2
+	y := (vh - h) / 2
+
+	d.ShowFloatingPanel(app, x, y, w, h)
+}
+
+func (d *DesktopEngine) launchHelpOverlay() {
+	// Check if already open
+	for _, fp := range d.floatingPanels {
+		if fp.app.GetTitle() == "Help" {
+			d.CloseFloatingPanel(fp)
+			return
+		}
+	}
+
+	appInstance := d.registry.CreateApp("help", nil)
+	app, ok := appInstance.(App)
+	if !ok {
+		return
+	}
+
+	// Custom replacer for floating context
+	replacer := &FloatingLauncherReplacer{desktop: d, app: app}
+	if receiver, ok := app.(ReplacerReceiver); ok {
+		receiver.SetReplacer(replacer)
+	}
+
+	vw, vh := d.viewportSize()
+	w := 60
+	h := 30 // Help needs more height
 	if w > vw {
 		w = vw - 2
 	}
