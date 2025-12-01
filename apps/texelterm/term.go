@@ -768,7 +768,8 @@ func (a *TexelTerm) Run() error {
 	cols, rows := a.width, a.height
 	a.mu.Unlock()
 
-	cmd := exec.Command(a.command)
+	parts := strings.Fields(a.command)
+	cmd := exec.Command(parts[0], parts[1:]...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
