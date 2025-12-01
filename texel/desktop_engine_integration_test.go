@@ -20,12 +20,13 @@ func TestDesktopSplitCreatesNewPane(t *testing.T) {
 	driver := &stubScreenDriver{width: 120, height: 40}
 	lifecycle := NoopAppLifecycle{}
 
-	var shellCount int
-	shellFactory := func() App {
-		shellCount++
-		return newFakeApp(fmt.Sprintf("shell-%d", shellCount))
+	var count int
+	shellFactory := func() App { return newFakeApp("shell") }
+	// Splits now use welcomeFactory (the default app), so we count those
+	welcomeFactory := func() App {
+		count++
+		return newFakeApp(fmt.Sprintf("default-%d", count))
 	}
-	welcomeFactory := func() App { return newFakeApp("welcome") }
 
 	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {
@@ -37,7 +38,12 @@ func TestDesktopSplitCreatesNewPane(t *testing.T) {
 		t.Fatalf("expected active workspace")
 	}
 	if ws.tree.Root == nil || ws.tree.Root.Pane == nil {
-		t.Fatalf("expected initial welcome pane")
+		t.Fatalf("expected initial pane")
+	}
+
+	// Initial pane should have been created (count=1)
+	if count != 1 {
+		t.Fatalf("expected default app factory invoked once for initial pane, got %d", count)
 	}
 
 	ws.PerformSplit(Horizontal)
@@ -45,14 +51,15 @@ func TestDesktopSplitCreatesNewPane(t *testing.T) {
 	if ws.tree.Root == nil || len(ws.tree.Root.Children) != 2 {
 		t.Fatalf("expected root split into two children")
 	}
-	if shellCount != 1 {
-		t.Fatalf("expected shell factory invoked once, got %d", shellCount)
+	// After split, default app factory should have been called twice (initial + split)
+	if count != 2 {
+		t.Fatalf("expected default app factory invoked twice (initial + split), got %d", count)
 	}
 	if ws.tree.ActiveLeaf == nil || ws.tree.ActiveLeaf.Pane == nil {
 		t.Fatalf("expected active pane after split")
 	}
-	if got := ws.tree.ActiveLeaf.Pane.getTitle(); got != "shell-1" {
-		t.Fatalf("expected new pane title shell-1, got %s", got)
+	if got := ws.tree.ActiveLeaf.Pane.getTitle(); got != "default-2" {
+		t.Fatalf("expected new pane title default-2, got %s", got)
 	}
 }
 
@@ -124,10 +131,12 @@ func (a *keyRecordingApp) SetRefreshNotifier(ch chan<- bool) {}
 func TestDesktopInjectKeyEvent(t *testing.T) {
 	driver := &stubScreenDriver{}
 	lifecycle := NoopAppLifecycle{}
-	recorder := &keyRecordingApp{title: "shell"}
+	recorder := &keyRecordingApp{title: "recorder"}
 
-	shellFactory := func() App { return recorder }
-	welcomeFactory := func() App { return newFakeApp("welcome") }
+	shellFactory := func() App { return newFakeApp("shell") }
+	// Split will create whatever welcomeFactory returns (the default app)
+	// So we use the recorder as the welcome factory to test key routing
+	welcomeFactory := func() App { return recorder }
 
 	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
 	if err != nil {

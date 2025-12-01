@@ -63,7 +63,7 @@ func NewSnapshotStore(path string) *SnapshotStore {
 }
 
 // Save writes the current snapshots to disk, computing a SHA-1 hash for integrity.
-func (s *SnapshotStore) Save(capture texel.TreeCapture) error {
+func (s *SnapshotStore) Save(capture *texel.TreeCapture) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

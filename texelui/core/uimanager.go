@@ -1,6 +1,8 @@
 package core
 
 import (
+	"sync"
+
 	"github.com/gdamore/tcell/v2"
 	"texelation/texel"
 	"texelation/texel/theme"
@@ -8,6 +10,7 @@ import (
 
 // UIManager owns a small widget tree (floating for MVP) and composes to a buffer.
 type UIManager struct {
+	mu       sync.Mutex
 	W, H     int
 	widgets  []Widget // z-ordered: later entries draw on top
 	bgStyle  tcell.Style
@@ -16,7 +19,7 @@ type UIManager struct {
 	buf      [][]texel.Cell
 	dirty    []Rect
 	lay      Layout
-    capture  Widget
+	capture  Widget
 }
 
 func NewUIManager() *UIManager {
@@ -26,14 +29,24 @@ func NewUIManager() *UIManager {
 	return &UIManager{bgStyle: tcell.StyleDefault.Background(bg).Foreground(fg)}
 }
 
-func (u *UIManager) SetRefreshNotifier(ch chan<- bool) { u.notifier = ch }
+func (u *UIManager) SetRefreshNotifier(ch chan<- bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.notifier = ch
+}
 
 func (u *UIManager) RequestRefresh() {
-	if u.notifier == nil {
+	// notifier is read under lock or we assume atomic pointer/channel safe?
+	// Channel send is safe. Reading u.notifier needs lock if it changes.
+	u.mu.Lock()
+	ch := u.notifier
+	u.mu.Unlock()
+
+	if ch == nil {
 		return
 	}
 	select {
-	case u.notifier <- true:
+	case ch <- true:
 	default:
 	}
 }
@@ -43,6 +56,9 @@ func (u *UIManager) RequestRefresh() {
 // BlinkTick was used for caret blinking; deprecated and no-op.
 
 func (u *UIManager) Resize(w, h int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
 	if w < 0 {
 		w = 0
 	}
@@ -52,14 +68,17 @@ func (u *UIManager) Resize(w, h int) {
 	u.W, u.H = w, h
 	// Resize framebuffer and invalidate all
 	u.buf = nil
-	u.InvalidateAll()
+	u.invalidateAllLocked()
 }
 
 func (u *UIManager) AddWidget(w Widget) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
 	u.widgets = append(u.widgets, w)
 	u.propagateInvalidator(w)
 	// Ensure a first full draw after adding widgets
-	u.InvalidateAll()
+	u.invalidateAllLocked()
 }
 
 func (u *UIManager) propagateInvalidator(w Widget) {
@@ -72,9 +91,19 @@ func (u *UIManager) propagateInvalidator(w Widget) {
 }
 
 // SetLayout sets the layout manager (defaults to Absolute).
-func (u *UIManager) SetLayout(l Layout) { u.lay = l }
+func (u *UIManager) SetLayout(l Layout) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.lay = l
+}
 
 func (u *UIManager) Focus(w Widget) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.focusLocked(w)
+}
+
+func (u *UIManager) focusLocked(w Widget) {
 	if w == nil || !w.Focusable() {
 		return
 	}
@@ -91,24 +120,33 @@ func (u *UIManager) Focus(w Widget) {
 }
 
 func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
-    // Focus traversal on Tab/Shift-Tab
-    if ev.Key() == tcell.KeyTab {
-        if ev.Modifiers()&tcell.ModShift != 0 {
-            u.focusPrevDeep()
-        } else {
-            u.focusNextDeep()
-        }
-        u.InvalidateAll()
-        u.RequestRefresh()
-        return true
-    }
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	// Focus traversal on Tab/Shift-Tab
+	if ev.Key() == tcell.KeyTab {
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			u.focusPrevDeepLocked()
+		} else {
+			u.focusNextDeepLocked()
+		}
+		u.invalidateAllLocked()
+		return true
+	}
 
 	if u.focused != nil && u.focused.HandleKey(ev) {
 		// Fallback: if widget didn't mark anything dirty, redraw everything
 		if len(u.dirty) == 0 {
-			u.InvalidateAll()
+			u.invalidateAllLocked()
+		} else {
+			// Release lock before calling RequestRefresh? 
+			// No, RequestRefresh handles its own locking safely (releases before send).
+			// Wait, RequestRefresh locks mu internally to read notifier.
+			// Recursive lock! UIManager.mu is not recursive.
+			// We must unlock before calling RequestRefresh, OR make RequestRefresh assume lock, OR use internal variable.
+			// FIX: Call requestRefreshLocked or similar.
+			u.requestRefreshLocked()
 		}
-		u.RequestRefresh()
 		return true
 	}
 	return false
@@ -116,6 +154,9 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 
 // HandleMouse routes mouse events for click-to-focus and optional capture drags.
 func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
 	x, y := ev.Position()
 	buttons := ev.Buttons()
 	prevIsDown := u.capture != nil
@@ -123,14 +164,13 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 
 	// Start capture on press over a widget
 	if !prevIsDown && nowDown {
-		if w := u.topmostAt(x, y); w != nil {
-			u.Focus(w)
+		if w := u.topmostAtLocked(x, y); w != nil {
+			u.focusLocked(w)
 			u.capture = w
 			if mw, ok := w.(MouseAware); ok {
 				_ = mw.HandleMouse(ev)
 			}
-			u.InvalidateAll()
-			u.RequestRefresh()
+			u.invalidateAllLocked()
 			return true
 		}
 		return false
@@ -145,17 +185,15 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 		if prevIsDown && !nowDown {
 			u.capture = nil
 		}
-		u.InvalidateAll()
-		u.RequestRefresh()
+		u.invalidateAllLocked()
 		return true
 	}
 	// Wheel-only events over topmost
 	if buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0 {
-		if w := u.topmostAt(x, y); w != nil {
+		if w := u.topmostAtLocked(x, y); w != nil {
 			if mw, ok := w.(MouseAware); ok {
 				_ = mw.HandleMouse(ev)
-				u.InvalidateAll()
-				u.RequestRefresh()
+				u.invalidateAllLocked()
 				return true
 			}
 		}
@@ -163,7 +201,7 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 	return false
 }
 
-func (u *UIManager) topmostAt(x, y int) Widget {
+func (u *UIManager) topmostAtLocked(x, y int) Widget {
 	for i := len(u.widgets) - 1; i >= 0; i-- {
 		if w := deepHit(u.widgets[i], x, y); w != nil {
 			return w
@@ -197,74 +235,107 @@ func deepHit(w Widget, x, y int) Widget {
 }
 
 // Deep focus traversal across all widgets in z-order (top-level order, then children).
-func (u *UIManager) focusNextDeep() {
-    order := u.flattenFocusable()
-    if len(order) == 0 { return }
-    cur := -1
-    for i, w := range order { if w == u.focused { cur = i; break } }
-    next := (cur + 1) % len(order)
-    u.Focus(order[next])
+func (u *UIManager) focusNextDeepLocked() {
+	order := u.flattenFocusableLocked()
+	if len(order) == 0 {
+		return
+	}
+	cur := -1
+	for i, w := range order {
+		if w == u.focused {
+			cur = i
+			break
+		}
+	}
+	next := (cur + 1) % len(order)
+	u.focusLocked(order[next])
 }
 
-func (u *UIManager) focusPrevDeep() {
-    order := u.flattenFocusable()
-    if len(order) == 0 { return }
-    cur := -1
-    for i, w := range order { if w == u.focused { cur = i; break } }
-    prev := cur - 1
-    if prev < 0 { prev = len(order) - 1 }
-    u.Focus(order[prev])
+func (u *UIManager) focusPrevDeepLocked() {
+	order := u.flattenFocusableLocked()
+	if len(order) == 0 {
+		return
+	}
+	cur := -1
+	for i, w := range order {
+		if w == u.focused {
+			cur = i
+			break
+		}
+	}
+	prev := cur - 1
+	if prev < 0 {
+		prev = len(order) - 1
+	}
+	u.focusLocked(order[prev])
 }
 
-func (u *UIManager) flattenFocusable() []Widget {
-    var out []Widget
-    var visit func(w Widget)
-    visit = func(w Widget) {
-        if w.Focusable() { out = append(out, w) }
-        if cc, ok := w.(ChildContainer); ok {
-            cc.VisitChildren(func(child Widget) { visit(child) })
-        }
-    }
-    for _, w := range u.widgets { visit(w) }
-    return out
+func (u *UIManager) flattenFocusableLocked() []Widget {
+	var out []Widget
+	var visit func(w Widget)
+	visit = func(w Widget) {
+		if w.Focusable() {
+			out = append(out, w)
+		}
+		if cc, ok := w.(ChildContainer); ok {
+			cc.VisitChildren(func(child Widget) { visit(child) })
+		}
+	}
+	for _, w := range u.widgets {
+		visit(w)
+	}
+	return out
 }
 
 // Invalidate marks a region for redraw.
+// Thread-safe.
 func (u *UIManager) Invalidate(r Rect) {
-	// Clip to surface
-	if r.X < 0 {
-		r.X = 0
-	}
-	if r.Y < 0 {
-		r.Y = 0
-	}
-	if r.X+r.W > u.W {
-		r.W = u.W - r.X
-	}
-	if r.Y+r.H > u.H {
-		r.H = u.H - r.Y
-	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	
 	if r.W <= 0 || r.H <= 0 {
 		return
 	}
 	u.dirty = append(u.dirty, r)
-	u.RequestRefresh()
+	u.requestRefreshLocked()
 }
 
 // InvalidateAll marks the whole surface for redraw.
+// Public version.
 func (u *UIManager) InvalidateAll() {
-	u.dirty = append(u.dirty, Rect{X: 0, Y: 0, W: u.W, H: u.H})
-	u.RequestRefresh()
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.invalidateAllLocked()
 }
 
-func (u *UIManager) ensureBuffer() {
-	if u.buf != nil && len(u.buf) == u.H && (u.H == 0 || len(u.buf[0]) == u.W) {
+// Internal helper
+func (u *UIManager) invalidateAllLocked() {
+	r := Rect{X: 0, Y: 0, W: u.W, H: u.H}
+	u.dirty = append(u.dirty, r)
+	u.requestRefreshLocked()
+}
+
+func (u *UIManager) requestRefreshLocked() {
+	if u.notifier == nil {
 		return
 	}
-	u.buf = make([][]texel.Cell, u.H)
-	for y := 0; y < u.H; y++ {
-		row := make([]texel.Cell, u.W)
-		for x := 0; x < u.W; x++ {
+	select {
+	case u.notifier <- true:
+	default:
+	}
+}
+
+func (u *UIManager) ensureBufferLocked() {
+	// Capture W and H to avoid race if they change during loop (though we hold lock now)
+	h := u.H
+	w := u.W
+	if u.buf != nil && len(u.buf) == h && (h == 0 || len(u.buf[0]) == w) {
+		return
+	}
+	u.buf = make([][]texel.Cell, h)
+	for y := 0; y < h; y++ {
+		row := make([]texel.Cell, w)
+		for x := 0; x < w; x++ {
 			row[x] = texel.Cell{Ch: ' ', Style: u.bgStyle}
 		}
 		u.buf[y] = row
@@ -273,9 +344,16 @@ func (u *UIManager) ensureBuffer() {
 
 // Render updates dirty regions and returns the framebuffer.
 func (u *UIManager) Render() [][]texel.Cell {
-	u.ensureBuffer()
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	u.ensureBufferLocked()
+
 	if len(u.dirty) == 0 {
 		// No specific dirty regions requested: compose full frame.
+		// Note: if this is a fresh render (no dirty), we assume full redraw needed if it was requested?
+		// Or just return buffer? 
+		// Original logic: if len(dirty) == 0 -> full redraw.
 		full := Rect{X: 0, Y: 0, W: u.W, H: u.H}
 		p := NewPainter(u.buf, full)
 		p.Fill(full, ' ', u.bgStyle)
@@ -284,9 +362,33 @@ func (u *UIManager) Render() [][]texel.Cell {
 		}
 		return u.buf
 	}
+
+	// Copy dirty list to avoid holding it? No, we consume it.
+	dirtyCopy := u.dirty
+	u.dirty = nil // clear it
+
 	// Merge dirty rects to reduce redraw area, but keep multiple clips
-	merged := mergeRects(u.dirty)
+	merged := mergeRects(dirtyCopy)
 	for _, clip := range merged {
+		// Clip against surface bounds
+		if clip.X < 0 {
+			clip.W += clip.X
+			clip.X = 0
+		}
+		if clip.Y < 0 {
+			clip.H += clip.Y
+			clip.Y = 0
+		}
+		if clip.X+clip.W > u.W {
+			clip.W = u.W - clip.X
+		}
+		if clip.Y+clip.H > u.H {
+			clip.H = u.H - clip.Y
+		}
+		if clip.W <= 0 || clip.H <= 0 {
+			continue
+		}
+
 		p := NewPainter(u.buf, clip)
 		// Clear dirty region
 		p.Fill(clip, ' ', u.bgStyle)
@@ -300,7 +402,6 @@ func (u *UIManager) Render() [][]texel.Cell {
 			}
 		}
 	}
-	u.dirty = u.dirty[:0]
 	return u.buf
 }
 

@@ -16,16 +16,20 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
+	"texelation/apps/help"
+	"texelation/apps/launcher"
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
-	"texelation/apps/welcome"
+	"texelation/config"
 	"texelation/internal/runtime/server"
+	"texelation/registry"
 	"texelation/texel"
 	"texelation/texel/theme"
 )
@@ -39,9 +43,22 @@ func main() {
 	cpuProfile := flag.String("pprof-cpu", "", "Write CPU profile to file")
 	memProfile := flag.String("pprof-mem", "", "Write heap profile to file on exit")
 	verboseLogs := flag.Bool("verbose-logs", false, "Enable verbose server logging")
+	defaultApp := flag.String("default-app", "", "Default app for new panes (launcher, texelterm, help) - overrides config file")
 	flag.Parse()
 
 	server.SetVerboseLogging(*verboseLogs)
+
+	// Load configuration from file
+	cfg, err := config.Load()
+	if err != nil {
+		log.Printf("Warning: Failed to load config: %v, using defaults", err)
+		cfg = config.Default()
+	}
+
+	// Command-line flag overrides config file
+	if *defaultApp == "" {
+		*defaultApp = cfg.DefaultApp
+	}
 
 	if *cpuProfile != "" {
 		f, err := os.Create(*cpuProfile)
@@ -74,20 +91,38 @@ func main() {
 	shellFactory := func() texel.App {
 		id := shellSeq.Add(1)
 		title := fmt.Sprintf("%s-%d", *title, id)
-
-		// Normal terminal (no menu)
 		return texelterm.New(title, defaultShell)
-
-	}
-	welcomeFactory := func() texel.App {
-		return welcome.NewWelcomeApp()
 	}
 
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	// Create desktop first (no help app yet - we'll set it after registry is ready)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, *defaultApp, lifecycle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create desktop: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Register wrapper factory for texelterm
+	// This allows wrapper apps to create texelterm instances with custom commands
+	desktop.Registry().RegisterWrapperFactory("texelterm", func(m *registry.Manifest) interface{} {
+		command := m.Command
+		if len(m.Args) > 0 {
+			command = command + " " + strings.Join(m.Args, " ")
+		}
+		return texelterm.New(m.DisplayName, command)
+	})
+
+	// Register launcher in registry
+	desktop.Registry().RegisterBuiltIn("launcher", func() interface{} {
+		return launcher.New(desktop.Registry())
+	})
+
+	// Register help app
+	desktop.Registry().RegisterBuiltIn("help", func() interface{} {
+		return help.NewHelpApp()
+	})
+
+	// Create initial workspace with configured default app
+	desktop.SwitchToWorkspace(1)
 
 	status := statusbar.New()
 	desktop.AddStatusPane(status, texel.SideTop, 1)

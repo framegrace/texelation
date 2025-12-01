@@ -205,6 +205,7 @@ func (w *Workspace) AddApp(app App) {
 	p.SetActive(true)
 	w.notifyFocus()
 	w.desktop.broadcastStateUpdate()
+	log.Printf("AddApp: Completed adding app '%s'", app.GetTitle())
 }
 
 func (w *Workspace) moveActivePane(d Direction) {
@@ -535,6 +536,15 @@ func (w *Workspace) CloseActivePane() {
 	w.removeNode(w.tree.ActiveLeaf, true)
 }
 
+// ActivePane returns the currently active pane in this workspace.
+// Returns nil if there is no active pane.
+func (w *Workspace) ActivePane() *pane {
+	if w == nil || w.tree == nil || w.tree.ActiveLeaf == nil {
+		return nil
+	}
+	return w.tree.ActiveLeaf.Pane
+}
+
 func (w *Workspace) ensureWelcomePane() {
 	if w == nil || w.tree == nil {
 		return
@@ -545,11 +555,19 @@ func (w *Workspace) ensureWelcomePane() {
 	if w.isDesktopClosing() {
 		return
 	}
-	if w.desktop == nil || w.desktop.WelcomeAppFactory == nil {
+	if w.desktop == nil || w.desktop.InitAppName == "" {
 		return
 	}
 
-	welcomeApp := w.desktop.WelcomeAppFactory()
+	appInstance := w.desktop.Registry().CreateApp(w.desktop.InitAppName, nil)
+	if appInstance == nil {
+		return
+	}
+	welcomeApp, ok := appInstance.(App)
+	if !ok {
+		return
+	}
+
 	w.AddApp(welcomeApp)
 	w.recalculateLayout()
 	if w.desktop != nil {
@@ -906,8 +924,18 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 	}
 	log.Printf("PerformSplit: Tree split completed")
 
-	// Create and attach new app
-	newApp := w.ShellAppFactory()
+	// Create and attach new app (use default app if available, otherwise shell)
+	var newApp App
+	if w.desktop != nil && w.desktop.InitAppName != "" {
+		if appInstance := w.desktop.Registry().CreateApp(w.desktop.InitAppName, nil); appInstance != nil {
+			if app, ok := appInstance.(App); ok {
+				newApp = app
+			}
+		}
+	}
+	if newApp == nil {
+		newApp = w.ShellAppFactory()
+	}
 	newPane.AttachApp(newApp, w.refreshChan)
 	log.Printf("PerformSplit: Attached app '%s' to new pane", newApp.GetTitle())
 

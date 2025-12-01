@@ -16,13 +16,18 @@ import (
 	"golang.org/x/term"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"sync"
+	"texelation/registry"
 	"texelation/texel/theme"
 	"time"
 )
+
+// AppRegistry is an alias for the registry.Registry type.
+type AppRegistry = registry.Registry
 
 // Side defines the placement of a StatusPane.
 type Side int
@@ -63,16 +68,18 @@ type DesktopEngine struct {
 	workspaces        map[int]*Workspace
 	activeWorkspace   *Workspace
 	statusPanes       []*StatusPane
+	floatingPanels    []*FloatingPanel
 	quit              chan struct{}
 	closeOnce         sync.Once
 	ShellAppFactory   AppFactory
-	WelcomeAppFactory AppFactory
+	InitAppName       string
 	styleCache        map[styleKey]tcell.Style
 	DefaultFgColor    tcell.Color
 	DefaultBgColor    tcell.Color
 	dispatcher        *EventDispatcher
 	statusBuffer      BufferStore
 	appLifecycle      AppLifecycleManager
+	registry          *AppRegistry
 
 	// Global state now lives on the Desktop
 	inControlMode   bool
@@ -111,6 +118,27 @@ type DesktopEngine struct {
 	refreshHandler func()
 }
 
+// FloatingPanel represents an app floating above the workspace.
+type FloatingPanel struct {
+	app    App
+	x, y   int
+	width  int
+	height int
+	modal  bool
+	id     [16]byte
+}
+
+func newFloatingPanelID(app App) [16]byte {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err == nil {
+		return id
+	}
+	fingerprint := fmt.Sprintf("float:%p:%d", app, time.Now().UnixNano())
+	sum := sha1.Sum([]byte(fingerprint))
+	copy(id[:], sum[:])
+	return id
+}
+
 // PaneStateSnapshot captures dynamic pane flags for external consumers.
 type PaneStateSnapshot struct {
 	ID               [16]byte
@@ -121,7 +149,7 @@ type PaneStateSnapshot struct {
 }
 
 // NewDesktopEngine creates and initializes a new desktop engine.
-func NewDesktopEngine(shellFactory, welcomeFactory AppFactory) (*DesktopEngine, error) {
+func NewDesktopEngine(shellFactory AppFactory, initAppName string) (*DesktopEngine, error) {
 	tcellScreen, err := tcell.NewScreen()
 	if err != nil {
 		return nil, err
@@ -129,13 +157,13 @@ func NewDesktopEngine(shellFactory, welcomeFactory AppFactory) (*DesktopEngine, 
 
 	driver := NewTcellScreenDriver(tcellScreen)
 	lifecycle := &LocalAppLifecycle{}
-	return NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	return NewDesktopEngineWithDriver(driver, shellFactory, initAppName, lifecycle)
 }
 
 // NewDesktopEngineWithDriver wires a DesktopEngine using the provided screen driver and
 // lifecycle manager. It exists primarily to support tests and future remote
 // runtimes.
-func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactory AppFactory, lifecycle AppLifecycleManager) (*DesktopEngine, error) {
+func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory AppFactory, initAppName string, lifecycle AppLifecycleManager) (*DesktopEngine, error) {
 	if driver == nil {
 		return nil, fmt.Errorf("screen driver is required")
 	}
@@ -154,19 +182,30 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 	driver.SetStyle(defStyle)
 	driver.HideCursor()
 
+	// Initialize app registry
+	reg := registry.New()
+
+	// Register built-in shell app (wrap texel.AppFactory to registry.AppFactory)
+	reg.RegisterBuiltIn("texelterm", func() interface{} { return shellFactory() })
+
+	// Note: Other apps (launcher, welcome, etc.) are registered in main.go
+	// after Desktop is created, since launcher needs access to the registry
+
 	d := &DesktopEngine{
 		display:            driver,
 		workspaces:         make(map[int]*Workspace),
 		statusPanes:        make([]*StatusPane, 0),
+		floatingPanels:     make([]*FloatingPanel, 0),
 		quit:               make(chan struct{}),
 		ShellAppFactory:    shellFactory,
-		WelcomeAppFactory:  welcomeFactory,
+		InitAppName:        initAppName,
 		styleCache:         make(map[styleKey]tcell.Style),
 		DefaultFgColor:     deffg,
 		DefaultBgColor:     defbg,
 		dispatcher:         NewEventDispatcher(),
 		statusBuffer:       NewInMemoryBufferStore(),
 		appLifecycle:       lifecycle,
+		registry:           reg,
 		inControlMode:      false,
 		subControlMode:     0,
 		clipboard:          make(map[string][]byte),
@@ -175,25 +214,47 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory, welcomeFactor
 		snapshotFactories:  make(map[string]SnapshotFactory),
 	}
 
-	log.Printf("NewDesktop: Created with inControlMode=%v", d.inControlMode)
-	d.SwitchToWorkspace(1)
+	// Scan for external apps
+	d.loadApps()
+
+	log.Printf("NewDesktop: Created with inControlMode=%v, %d apps registered, InitAppName=%s", d.inControlMode, d.registry.Count(), d.InitAppName)
+
 	return d, nil
 }
 
+// loadApps scans the user's app directory and loads available apps.
+func (d *DesktopEngine) loadApps() {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		log.Printf("Desktop: Failed to get user config dir: %v", err)
+		return
+	}
+
+	appsDir := filepath.Join(configDir, "texelation", "apps")
+	if err := d.registry.Scan(appsDir); err != nil {
+		log.Printf("Desktop: Failed to scan apps: %v", err)
+	}
+}
+
 // ForceRefresh clears caches and triggers a full repaint.
+// When triggered by SIGHUP, this also reloads theme and apps.
 func (d *DesktopEngine) ForceRefresh() {
 	log.Println("Desktop: ForceRefresh triggered")
+
+	// Reload apps
+	d.loadApps()
+
 	// Clear style cache to force re-evaluation of colors
 	d.styleCache = make(map[styleKey]tcell.Style)
-	
+
 	// Trigger a full layout and state broadcast
 	d.recalculateLayout()
 	d.broadcastStateUpdate()
 	d.broadcastTreeChanged()
-	
+
 	log.Println("Desktop: Broadcasting EventThemeChanged")
 	d.dispatcher.Broadcast(Event{Type: EventThemeChanged})
-	
+
 	// Notify refresh handler if one is set (to wake up the loop)
 	if d.refreshHandler != nil {
 		d.refreshHandler()
@@ -206,6 +267,16 @@ func (d *DesktopEngine) Subscribe(listener Listener) {
 
 func (d *DesktopEngine) Unsubscribe(listener Listener) {
 	d.dispatcher.Unsubscribe(listener)
+}
+
+// Registry returns the app registry for this desktop.
+func (d *DesktopEngine) Registry() *AppRegistry {
+	return d.registry
+}
+
+// ActiveWorkspace returns the currently active workspace.
+func (d *DesktopEngine) ActiveWorkspace() *Workspace {
+	return d.activeWorkspace
 }
 
 func (d *DesktopEngine) RegisterFocusListener(listener DesktopFocusListener) {
@@ -263,6 +334,66 @@ func (d *DesktopEngine) UnregisterPaneStateListener(listener PaneStateListener) 
 			d.paneStateListeners = append(d.paneStateListeners[:i], d.paneStateListeners[i+1:]...)
 			break
 		}
+	}
+}
+
+// ShowFloatingPanel displays an app in a floating overlay.
+func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
+	if app == nil {
+		return
+	}
+	
+	// Check if app is already floating? Maybe not needed for now.
+	
+	panel := &FloatingPanel{
+		app:    app,
+		x:      x,
+		y:      y,
+		width:  w,
+		height: h,
+		modal:  true,
+		id:     newFloatingPanelID(app),
+	}
+	
+	d.floatingPanels = append(d.floatingPanels, panel)
+	
+	if listener, ok := app.(Listener); ok {
+		d.Subscribe(listener)
+	}
+
+	if d.activeWorkspace != nil {
+		app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+	}
+
+	d.appLifecycle.StartApp(app, nil)
+	app.Resize(w, h)
+	
+	d.notifyPaneState(panel.id, true, false, ZOrderFloating, false)
+
+	d.recalculateLayout()
+	d.broadcastTreeChanged()
+	// d.broadcastStateUpdate() // TODO: Notify focus change if we focus the panel?
+}
+
+// CloseFloatingPanel removes a floating panel.
+func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
+	if panel == nil {
+		return
+	}
+	
+	found := false
+	for i, p := range d.floatingPanels {
+		if p == panel {
+			d.floatingPanels = append(d.floatingPanels[:i], d.floatingPanels[i+1:]...)
+			found = true
+			break
+		}
+	}
+	
+	if found {
+		d.appLifecycle.StopApp(panel.app)
+		d.recalculateLayout()
+		d.broadcastTreeChanged()
 	}
 }
 
@@ -332,6 +463,9 @@ func (d *DesktopEngine) recalculateLayout() {
 			sp.app.Resize(sp.size, h-mainY-(h-mainY-mainH))
 		}
 	}
+	
+	// Resize floating panels if needed (e.g. ensure they fit?)
+	// For now, leave them as requested.
 
 	if d.zoomedPane != nil {
 		if d.zoomedPane.Pane != nil {
@@ -365,6 +499,22 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 	if !ok {
 		return
 	}
+	
+	// Global Shortcuts
+	if key.Key() == tcell.KeyF1 {
+		d.launchHelpOverlay()
+		return
+	}
+	
+	// Check floating panels (topmost first)
+	// Iterate in reverse to find topmost modal
+	for i := len(d.floatingPanels) - 1; i >= 0; i-- {
+		fp := d.floatingPanels[i]
+		if fp.modal {
+			fp.app.HandleKey(key)
+			return
+		}
+	}
 
 	if key.Key() == keyControlMode {
 		d.toggleControlMode()
@@ -382,6 +532,109 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 		}
 	} else if d.activeWorkspace != nil {
 		d.activeWorkspace.handleEvent(key)
+	}
+}
+
+func (d *DesktopEngine) launchLauncherOverlay() {
+	// Check if already open
+	for _, fp := range d.floatingPanels {
+		if fp.app.GetTitle() == "Launcher" {
+			d.CloseFloatingPanel(fp)
+			return
+		}
+	}
+
+	appInstance := d.registry.CreateApp("launcher", nil)
+	app, ok := appInstance.(App)
+	if !ok {
+		return
+	}
+
+	// Custom replacer for floating context
+	replacer := &FloatingLauncherReplacer{desktop: d, app: app}
+	if receiver, ok := app.(ReplacerReceiver); ok {
+		receiver.SetReplacer(replacer)
+	}
+
+	vw, vh := d.viewportSize()
+	w := 60
+	h := 20
+	if w > vw {
+		w = vw - 2
+	}
+	if h > vh {
+		h = vh - 2
+	}
+	x := (vw - w) / 2
+	y := (vh - h) / 2
+
+	d.ShowFloatingPanel(app, x, y, w, h)
+}
+
+func (d *DesktopEngine) launchHelpOverlay() {
+	// Check if already open
+	for _, fp := range d.floatingPanels {
+		if fp.app.GetTitle() == "Help" {
+			d.CloseFloatingPanel(fp)
+			return
+		}
+	}
+
+	appInstance := d.registry.CreateApp("help", nil)
+	app, ok := appInstance.(App)
+	if !ok {
+		return
+	}
+
+	// Custom replacer for floating context
+	replacer := &FloatingLauncherReplacer{desktop: d, app: app}
+	if receiver, ok := app.(ReplacerReceiver); ok {
+		receiver.SetReplacer(replacer)
+	}
+
+	vw, vh := d.viewportSize()
+	w := 60
+	h := 30 // Help needs more height
+	if w > vw {
+		w = vw - 2
+	}
+	if h > vh {
+		h = vh - 2
+	}
+	x := (vw - w) / 2
+	y := (vh - h) / 2
+
+	d.ShowFloatingPanel(app, x, y, w, h)
+}
+
+type FloatingLauncherReplacer struct {
+	desktop *DesktopEngine
+	app     App
+}
+
+func (r *FloatingLauncherReplacer) ReplaceWithApp(name string, config map[string]interface{}) {
+	// Close the specific panel hosting this app
+	r.Close()
+
+	// Launch in active pane
+	if ws := r.desktop.ActiveWorkspace(); ws != nil {
+		if pane := ws.ActivePane(); pane != nil {
+			pane.ReplaceWithApp(name, config)
+		}
+	}
+}
+
+func (r *FloatingLauncherReplacer) Close() {
+	// Close the specific panel hosting this app
+	var panel *FloatingPanel
+	for _, fp := range r.desktop.floatingPanels {
+		if fp.app == r.app {
+			panel = fp
+			break
+		}
+	}
+	if panel != nil {
+		r.desktop.CloseFloatingPanel(panel)
 	}
 }
 
@@ -770,9 +1023,16 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 		d.workspaces[id] = ws
 		d.activeWorkspace = ws
 
-		if d.WelcomeAppFactory != nil {
-			welcomeApp := d.WelcomeAppFactory()
-			ws.AddApp(welcomeApp)
+		if d.InitAppName != "" {
+			if appInstance := d.registry.CreateApp(d.InitAppName, nil); appInstance != nil {
+				if app, ok := appInstance.(App); ok {
+					ws.AddApp(app)
+				} else {
+					log.Printf("SwitchToWorkspace: Created app '%s' but it does not implement App interface", d.InitAppName)
+				}
+			} else {
+				log.Printf("SwitchToWorkspace: Failed to create init app '%s'", d.InitAppName)
+			}
 		}
 	}
 
@@ -853,6 +1113,15 @@ func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 			HandlesSelection: p.handlesSelectionEvents(),
 		})
 	})
+	for _, fp := range d.floatingPanels {
+		states = append(states, PaneStateSnapshot{
+			ID:               fp.id,
+			Active:           true,
+			Resizing:         false,
+			ZOrder:           ZOrderFloating,
+			HandlesSelection: false,
+		})
+	}
 	return states
 }
 

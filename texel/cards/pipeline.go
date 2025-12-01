@@ -42,6 +42,8 @@ var _ texel.SelectionHandler = (*Pipeline)(nil)
 var _ texel.SelectionDeclarer = (*Pipeline)(nil)
 var _ texel.MouseWheelHandler = (*Pipeline)(nil)
 var _ texel.MouseWheelDeclarer = (*Pipeline)(nil)
+var _ texel.ReplacerReceiver = (*Pipeline)(nil)
+var _ texel.CloseRequester = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
 // Pipeline implements texel.App and can be launched like any other app.
@@ -82,6 +84,20 @@ func (p *Pipeline) AppendCard(card Card) {
 	card.SetRefreshNotifier(refresh)
 }
 
+// Run starts all cards (once) and blocks until they complete.
+// If any card returns an error, the pipeline will attempt to stop all other cards
+// and return the error.
+func (p *Pipeline) Run() error {
+	p.runOnce.Do(func() {
+		cards := p.Cards()
+		for _, card := range cards {
+			p.StartCard(card)
+		}
+	})
+	p.wg.Wait()
+	return p.Error()
+}
+
 // StartCard launches Run() for the specified card in its own goroutine.
 func (p *Pipeline) StartCard(card Card) {
 	p.wg.Add(1)
@@ -89,6 +105,10 @@ func (p *Pipeline) StartCard(card Card) {
 		defer p.wg.Done()
 		if err := card.Run(); err != nil {
 			p.setError(err)
+			// If one card fails, we should probably stop the whole pipeline?
+			// For now, just logging it via error state.
+			// In a robust system, we might want to cancel a context or call Stop().
+			p.terminate() // Force stop all cards to unblock Run()
 		}
 	}()
 }
@@ -111,27 +131,20 @@ func (p *Pipeline) Error() error {
 	return p.err
 }
 
-// Run starts all cards (once) and blocks until they complete.
-func (p *Pipeline) Run() error {
-	p.runOnce.Do(func() {
-		cards := p.Cards()
-		for _, card := range cards {
-			p.StartCard(card)
-		}
-	})
-	p.wg.Wait()
-	return p.Error()
-}
-
 // Stop stops all cards and waits for them to exit.
 func (p *Pipeline) Stop() {
+	p.terminate()
+	p.wg.Wait()
+}
+
+// terminate signals all cards to stop but does not wait.
+func (p *Pipeline) terminate() {
 	p.stopOnce.Do(func() {
 		cards := p.Cards()
 		for _, card := range cards {
 			card.Stop()
 		}
 	})
-	p.wg.Wait()
 }
 
 // Resize propagates dimensions to all cards.
@@ -294,6 +307,27 @@ func (p *Pipeline) MouseWheelEnabled() bool {
 	return p.wheelHandler() != nil
 }
 
+// SetReplacer implements ReplacerReceiver by forwarding to the first card that wants it.
+func (p *Pipeline) SetReplacer(replacer texel.AppReplacer) {
+	cards := p.Cards()
+	for _, card := range cards {
+		if receiver, ok := card.(texel.ReplacerReceiver); ok {
+			receiver.SetReplacer(replacer)
+			return
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if receiver, ok := underlying.(texel.ReplacerReceiver); ok {
+				receiver.SetReplacer(replacer)
+				return
+			}
+		}
+	}
+}
+
 // pasteHandler finds the first card capable of handling paste events.
 func (p *Pipeline) pasteHandler() interface{ HandlePaste([]byte) } {
 	cards := p.Cards()
@@ -345,4 +379,32 @@ func (p *Pipeline) OnEvent(event texel.Event) {
 			}
 		}
 	}
+}
+
+// closeRequester finds the first card capable of handling close requests.
+func (p *Pipeline) closeRequester() texel.CloseRequester {
+	cards := p.Cards()
+	for _, card := range cards {
+		if handler, ok := card.(texel.CloseRequester); ok {
+			return handler
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if handler, ok := underlying.(texel.CloseRequester); ok {
+				return handler
+			}
+		}
+	}
+	return nil
+}
+
+// RequestClose implements texel.CloseRequester.
+func (p *Pipeline) RequestClose() bool {
+	if handler := p.closeRequester(); handler != nil {
+		return handler.RequestClose()
+	}
+	return true // Default: allowed to close
 }

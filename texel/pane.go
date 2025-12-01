@@ -63,15 +63,21 @@ func newPane(s *Workspace) *pane {
 // AttachApp connects an application to the pane, gives it its initial size,
 // and starts its main run loop.
 func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
+	log.Printf("AttachApp: Starting attachment of app '%s'", app.GetTitle())
 	if p.app != nil {
+		log.Printf("AttachApp: Stopping existing app '%s'", p.app.GetTitle())
 		p.screen.appLifecycle.StopApp(p.app)
 	}
 	p.app = app
 	p.name = app.GetTitle()
 	p.app.SetRefreshNotifier(refreshChan)
+	log.Printf("AttachApp: Refresh notifier set")
+
 	if listener, ok := app.(Listener); ok {
 		p.screen.Subscribe(listener)
 	}
+	
+	// ... (rest of interface checks) ...
 	if handler, ok := app.(SelectionHandler); ok {
 		enabled := true
 		if declarer, ok := app.(SelectionDeclarer); ok {
@@ -104,14 +110,76 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.wheelHandler = nil
 		p.handlesWheel = false
 	}
+	
+	log.Printf("AttachApp: Resizing app '%s' to %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
 	// The app is resized considering the space for borders.
 	p.app.Resize(p.drawableWidth(), p.drawableHeight())
+	
+	log.Printf("AttachApp: Starting app lifecycle for '%s'", p.getTitle())
 	currentApp := p.app
 	p.screen.appLifecycle.StartApp(p.app, func(err error) {
 		p.screen.handleAppExit(p, currentApp, err)
 	})
+
+	// Inject the replacer if the app wants it
+	if receiver, ok := app.(ReplacerReceiver); ok {
+		receiver.SetReplacer(p)
+	}
+
+	log.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
 	if p.screen != nil && p.screen.desktop != nil {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
+	}
+	log.Printf("AttachApp: Completed attachment of app '%s'", p.getTitle())
+}
+
+// ReplaceWithApp replaces the current app in this pane with a new app from the registry.
+// This implements the AppReplacer interface, allowing apps to spawn other apps in their place.
+func (p *pane) ReplaceWithApp(name string, config map[string]interface{}) {
+	if p.screen == nil || p.screen.desktop == nil {
+		log.Printf("Pane: Cannot replace app - no desktop reference")
+		return
+	}
+
+	// Create the new app from the registry
+	registry := p.screen.desktop.Registry()
+	if registry == nil {
+		log.Printf("Pane: Cannot replace app - no registry")
+		return
+	}
+
+	appInterface := registry.CreateApp(name, config)
+	if appInterface == nil {
+		log.Printf("Pane: Failed to create app '%s' from registry", name)
+		return
+	}
+
+	// Type assert to App
+	newApp, ok := appInterface.(App)
+	if !ok {
+		log.Printf("Pane: Registry returned non-App type for '%s'", name)
+		return
+	}
+
+	log.Printf("Pane: Replacing app '%s' with '%s'", p.getTitle(), name)
+
+	// Stop the current app explicitly before attaching the new one
+	// Although AttachApp does this, doing it here ensures clean teardown before new setup
+	// if p.app != nil {
+	// 	 p.screen.appLifecycle.StopApp(p.app)
+	// 	 p.app = nil 
+	// } 
+    // AttachApp handles the stop.
+
+	// Attach the new app (this will stop the old app and start the new one)
+	p.AttachApp(newApp, p.screen.refreshChan)
+
+	// Broadcast state update so the desktop knows about the change
+	p.screen.desktop.broadcastStateUpdate()
+	
+	// Force a refresh of the workspace to ensure the new app is rendered
+	if p.screen != nil {
+		p.screen.Refresh()
 	}
 }
 
@@ -360,6 +428,7 @@ func (p *pane) getTitle() string {
 	return p.name
 }
 
+// Close implements AppReplacer.Close by stopping the current app.
 func (p *pane) Close() {
 	// Clean up app
 	if listener, ok := p.app.(Listener); ok {
