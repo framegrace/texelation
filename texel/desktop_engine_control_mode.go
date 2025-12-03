@@ -114,8 +114,10 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 	case 'z':
 		d.toggleZoom()
 	case 'l':
+		log.Printf("Control mode: 'l' pressed, launching launcher overlay")
 		d.launchLauncherOverlay()
 	case 'h':
+		log.Printf("Control mode: 'h' pressed, launching help overlay")
 		d.launchHelpOverlay()
 	}
 
