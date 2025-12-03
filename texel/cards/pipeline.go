@@ -15,7 +15,7 @@ type ControlFunc func(*tcell.EventKey) bool
 // ControllableCard allows cards to expose control capabilities on the pipeline bus.
 type ControllableCard interface {
 	Card
-	RegisterControls(reg ControlRegistry) error
+	RegisterControls(reg texel.ControlRegistry) error
 }
 
 // Pipeline composes multiple cards into a single texel.App implementation.
@@ -28,7 +28,7 @@ type Pipeline struct {
 	height  int
 	refresh chan<- bool
 	control ControlFunc
-	bus     *controlBus
+	bus     texel.ControlBus
 
 	runOnce  sync.Once
 	stopOnce sync.Once
@@ -51,7 +51,7 @@ func NewPipeline(control ControlFunc, cards ...Card) *Pipeline {
 	p := &Pipeline{
 		cards:   append([]Card(nil), cards...),
 		control: control,
-		bus:     newControlBus(),
+		bus:     texel.NewControlBus(),
 	}
 	for _, card := range p.cards {
 		if controllable, ok := card.(ControllableCard); ok {
@@ -335,7 +335,7 @@ func (p *Pipeline) HandlePaste(data []byte) {
 }
 
 // ControlBus exposes the control bus associated with this pipeline.
-func (p *Pipeline) ControlBus() ControlBus {
+func (p *Pipeline) ControlBus() texel.ControlBus {
 	return p.bus
 }
 
@@ -343,7 +343,7 @@ func (p *Pipeline) ControlBus() ControlBus {
 // This allows apps wrapped in pipelines to register control handlers without importing the cards package.
 func (p *Pipeline) RegisterControl(id, description string, handler func(payload interface{}) error) error {
 	// Wrap the handler to match ControlHandler type
-	wrappedHandler := ControlHandler(handler)
+	wrappedHandler := texel.ControlHandler(handler)
 	return p.bus.Register(id, description, wrappedHandler)
 }
 

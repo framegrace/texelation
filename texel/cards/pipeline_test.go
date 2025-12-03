@@ -59,7 +59,7 @@ func (b *busCard) Render(input [][]texel.Cell) [][]texel.Cell { return input }
 func (b *busCard) HandleKey(*tcell.EventKey)                  {}
 func (b *busCard) SetRefreshNotifier(chan<- bool)             {}
 func (b *busCard) HandleMessage(texel.Message)                {}
-func (b *busCard) RegisterControls(reg ControlRegistry) error {
+func (b *busCard) RegisterControls(reg texel.ControlRegistry) error {
 	return reg.Register("card.trigger", "Bus test trigger", func(interface{}) error {
 		b.triggered = true
 		return nil

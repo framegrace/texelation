@@ -9,19 +9,18 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"texelation/registry"
 	"texelation/texel"
-	"texelation/texel/cards"
 )
 
-// mockControlBus implements cards.ControlBus for testing.
+// mockControlBus implements texel.ControlBus for testing.
 type mockControlBus struct {
-	handlers     map[string]cards.ControlHandler
+	handlers     map[string]texel.ControlHandler
 	triggerCount map[string]int
 	lastPayload  map[string]interface{}
 }
 
 func newMockControlBus() *mockControlBus {
 	return &mockControlBus{
-		handlers:     make(map[string]cards.ControlHandler),
+		handlers:     make(map[string]texel.ControlHandler),
 		triggerCount: make(map[string]int),
 		lastPayload:  make(map[string]interface{}),
 	}
@@ -36,11 +35,11 @@ func (m *mockControlBus) Trigger(id string, payload interface{}) error {
 	return nil
 }
 
-func (m *mockControlBus) Capabilities() []cards.ControlCapability {
+func (m *mockControlBus) Capabilities() []texel.ControlCapability {
 	return nil
 }
 
-func (m *mockControlBus) Register(id, description string, handler cards.ControlHandler) error {
+func (m *mockControlBus) Register(id, description string, handler texel.ControlHandler) error {
 	m.handlers[id] = handler
 	return nil
 }

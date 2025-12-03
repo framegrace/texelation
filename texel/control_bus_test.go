@@ -1,9 +1,9 @@
-package cards
+package texel
 
 import "testing"
 
 func TestControlBusRegisterTrigger(t *testing.T) {
-	bus := newControlBus()
+	bus := NewControlBus()
 	called := false
 	err := bus.Register("demo.toggle", "demo", func(payload interface{}) error {
 		if payload != nil {
@@ -30,7 +30,7 @@ func TestControlBusRegisterTrigger(t *testing.T) {
 }
 
 func TestControlBusDuplicateRegistration(t *testing.T) {
-	bus := newControlBus()
+	bus := NewControlBus()
 	h := func(interface{}) error { return nil }
 	if err := bus.Register("demo", "demo", h); err != nil {
 		t.Fatalf("unexpected error registering control: %v", err)

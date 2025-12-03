@@ -50,7 +50,7 @@ type TexelTerm struct {
 	wg                   sync.WaitGroup
 	buf                  [][]texel.Cell
 	colorPalette         [258]tcell.Color
-	controlBus           cards.ControlBus
+	controlBus           texel.ControlBus
 	selection            termSelection
 	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
 
@@ -214,7 +214,7 @@ func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 }
 
-func (a *TexelTerm) AttachControlBus(bus cards.ControlBus) {
+func (a *TexelTerm) AttachControlBus(bus texel.ControlBus) {
 	a.mu.Lock()
 	a.controlBus = bus
 	a.mu.Unlock()

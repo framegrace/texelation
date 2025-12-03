@@ -27,7 +27,7 @@ type Launcher struct {
 	*adapter.UIApp
 
 	registry   *registry.Registry
-	controlBus cards.ControlBus
+	controlBus texel.ControlBus
 
 	mu           sync.RWMutex
 	apps         []*registry.AppEntry
@@ -63,7 +63,7 @@ func New(reg *registry.Registry) texel.App {
 
 // AttachControlBus connects the launcher to its pipeline's control bus.
 // This allows the launcher to signal app selection and closure events.
-func (l *Launcher) AttachControlBus(bus cards.ControlBus) {
+func (l *Launcher) AttachControlBus(bus texel.ControlBus) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.controlBus = bus
