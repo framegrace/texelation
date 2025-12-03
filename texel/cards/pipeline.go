@@ -196,14 +196,6 @@ func (p *Pipeline) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
-// HandleMessage broadcasts messages to all cards.
-func (p *Pipeline) HandleMessage(msg texel.Message) {
-	cards := p.Cards()
-	for _, card := range cards {
-		card.HandleMessage(msg)
-	}
-}
-
 // SetRefreshNotifier stores the refresh channel and forwards it to all cards.
 func (p *Pipeline) SetRefreshNotifier(ch chan<- bool) {
 	p.mu.Lock()

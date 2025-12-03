@@ -9,20 +9,6 @@ package texel
 
 import "github.com/gdamore/tcell/v2"
 
-// MessageType defines the type of a message sent to an app.
-type MessageType int
-
-const (
-	// MsgStateUpdate is sent when screen-level state changes.
-	MsgStateUpdate MessageType = iota
-)
-
-// Message is a generic message that can be sent to an app.
-type Message struct {
-	Type    MessageType
-	Payload interface{}
-}
-
 // App defines the interface for any application that can be rendered within a Pane.
 // It abstracts the content source, whether it's an external command (PTY)
 // or an internal widget (like a clock).

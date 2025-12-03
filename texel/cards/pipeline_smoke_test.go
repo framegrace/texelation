@@ -30,7 +30,6 @@ func (d *dummyCard) Render(input [][]texel.Cell) [][]texel.Cell {
 	return buf
 }
 func (d *dummyCard) HandleKey(ev *tcell.EventKey)   {}
-func (d *dummyCard) HandleMessage(texel.Message)    {}
 func (d *dummyCard) SetRefreshNotifier(chan<- bool) {}
 
 func TestPipelineRenderSmoke(t *testing.T) {

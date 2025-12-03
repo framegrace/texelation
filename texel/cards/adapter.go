@@ -16,10 +16,6 @@ type AppAccessor interface {
 	UnderlyingApp() texel.App
 }
 
-type messageAware interface {
-	HandleMessage(texel.Message)
-}
-
 type appAdapter struct {
 	app texel.App
 }
@@ -35,11 +31,6 @@ func (a *appAdapter) Resize(cols, rows int)                  { a.app.Resize(cols
 func (a *appAdapter) Render(_ [][]texel.Cell) [][]texel.Cell { return a.app.Render() }
 func (a *appAdapter) HandleKey(ev *tcell.EventKey)           { a.app.HandleKey(ev) }
 func (a *appAdapter) SetRefreshNotifier(ch chan<- bool)      { a.app.SetRefreshNotifier(ch) }
-func (a *appAdapter) HandleMessage(msg texel.Message) {
-	if handler, ok := a.app.(messageAware); ok {
-		handler.HandleMessage(msg)
-	}
-}
 
 // Selection handling delegates to the underlying app when available.
 func (a *appAdapter) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {

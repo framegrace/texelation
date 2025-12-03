@@ -15,5 +15,4 @@ type Card interface {
 	Render(input [][]texel.Cell) [][]texel.Cell
 	HandleKey(ev *tcell.EventKey)
 	SetRefreshNotifier(refreshChan chan<- bool)
-	HandleMessage(msg texel.Message)
 }

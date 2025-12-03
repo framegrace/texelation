@@ -148,8 +148,6 @@ func (c *EffectCard) Resize(cols, rows int) {
 
 func (c *EffectCard) HandleKey(*tcell.EventKey) {}
 
-func (c *EffectCard) HandleMessage(texel.Message) {}
-
 func (c *EffectCard) SetRefreshNotifier(ch chan<- bool) {
 	c.mu.Lock()
 	c.refresh = ch
