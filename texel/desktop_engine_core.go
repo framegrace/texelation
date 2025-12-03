@@ -566,10 +566,13 @@ func (d *DesktopEngine) launchLauncherOverlay() {
 
 	// Register control bus handlers if the app provides a control bus
 	if provider, ok := app.(ControlBusProvider); ok {
+		log.Printf("Desktop: Registering control bus handlers for launcher")
 		// Register handler for app selection
-		provider.RegisterControl("launcher.select-app", "Launch selected app in active pane", func(payload interface{}) error {
+		err := provider.RegisterControl("launcher.select-app", "Launch selected app in active pane", func(payload interface{}) error {
+			log.Printf("Desktop: launcher.select-app handler called with payload: %v", payload)
 			appName, ok := payload.(string)
 			if !ok {
+				log.Printf("Desktop: payload is not a string, ignoring")
 				return nil
 			}
 
@@ -579,17 +582,27 @@ func (d *DesktopEngine) launchLauncherOverlay() {
 			// Launch the selected app in the active pane
 			if ws := d.ActiveWorkspace(); ws != nil {
 				if pane := ws.ActivePane(); pane != nil {
+					log.Printf("Desktop: Launching app '%s' in active pane", appName)
 					pane.ReplaceWithApp(appName, nil)
 				}
 			}
 			return nil
 		})
+		if err != nil {
+			log.Printf("Desktop: Failed to register launcher.select-app: %v", err)
+		}
 
 		// Register handler for launcher close
-		provider.RegisterControl("launcher.close", "Close launcher overlay", func(payload interface{}) error {
+		err = provider.RegisterControl("launcher.close", "Close launcher overlay", func(payload interface{}) error {
+			log.Printf("Desktop: launcher.close handler called")
 			d.closeFloatingPanelByApp(app)
 			return nil
 		})
+		if err != nil {
+			log.Printf("Desktop: Failed to register launcher.close: %v", err)
+		}
+	} else {
+		log.Printf("Desktop: Launcher does not implement ControlBusProvider")
 	}
 
 	vw, vh := d.viewportSize()

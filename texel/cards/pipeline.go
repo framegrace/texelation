@@ -342,7 +342,9 @@ func (p *Pipeline) ControlBus() ControlBus {
 // RegisterControl implements texel.ControlBusProvider by forwarding to the pipeline's control bus.
 // This allows apps wrapped in pipelines to register control handlers without importing the cards package.
 func (p *Pipeline) RegisterControl(id, description string, handler func(payload interface{}) error) error {
-	return p.bus.Register(id, description, handler)
+	// Wrap the handler to match ControlHandler type
+	wrappedHandler := ControlHandler(handler)
+	return p.bus.Register(id, description, wrappedHandler)
 }
 
 // OnEvent implements texel.Listener to forward events to all cards.
