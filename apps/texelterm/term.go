@@ -57,11 +57,9 @@ type TexelTerm struct {
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
-	replacer        texel.AppReplacer
 }
 
 var _ texel.CloseRequester = (*TexelTerm)(nil)
-var _ texel.ReplacerReceiver = (*TexelTerm)(nil)
 
 // termSelection tracks the current text selection state and multi-click history.
 //
@@ -106,20 +104,12 @@ func New(title, command string) texel.App {
 	return pipe
 }
 
-func (a *TexelTerm) SetReplacer(r texel.AppReplacer) {
-	a.mu.Lock()
-	a.replacer = r
-	a.mu.Unlock()
-}
-
 func (a *TexelTerm) RequestClose() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.confirmClose = true
 	a.confirmCallback = func() {
-		if a.replacer != nil {
-			a.replacer.Close()
-		}
+		close(a.closeCh)
 	}
 	a.requestRefresh()
 	return false

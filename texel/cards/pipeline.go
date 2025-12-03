@@ -42,7 +42,7 @@ var _ texel.SelectionHandler = (*Pipeline)(nil)
 var _ texel.SelectionDeclarer = (*Pipeline)(nil)
 var _ texel.MouseWheelHandler = (*Pipeline)(nil)
 var _ texel.MouseWheelDeclarer = (*Pipeline)(nil)
-var _ texel.ReplacerReceiver = (*Pipeline)(nil)
+var _ texel.ControlBusProvider = (*Pipeline)(nil)
 var _ texel.CloseRequester = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
@@ -307,27 +307,6 @@ func (p *Pipeline) MouseWheelEnabled() bool {
 	return p.wheelHandler() != nil
 }
 
-// SetReplacer implements ReplacerReceiver by forwarding to the first card that wants it.
-func (p *Pipeline) SetReplacer(replacer texel.AppReplacer) {
-	cards := p.Cards()
-	for _, card := range cards {
-		if receiver, ok := card.(texel.ReplacerReceiver); ok {
-			receiver.SetReplacer(replacer)
-			return
-		}
-		if accessor, ok := card.(AppAccessor); ok {
-			underlying := accessor.UnderlyingApp()
-			if underlying == nil {
-				continue
-			}
-			if receiver, ok := underlying.(texel.ReplacerReceiver); ok {
-				receiver.SetReplacer(replacer)
-				return
-			}
-		}
-	}
-}
-
 // pasteHandler finds the first card capable of handling paste events.
 func (p *Pipeline) pasteHandler() interface{ HandlePaste([]byte) } {
 	cards := p.Cards()
@@ -358,6 +337,12 @@ func (p *Pipeline) HandlePaste(data []byte) {
 // ControlBus exposes the control bus associated with this pipeline.
 func (p *Pipeline) ControlBus() ControlBus {
 	return p.bus
+}
+
+// RegisterControl implements texel.ControlBusProvider by forwarding to the pipeline's control bus.
+// This allows apps wrapped in pipelines to register control handlers without importing the cards package.
+func (p *Pipeline) RegisterControl(id, description string, handler func(payload interface{}) error) error {
+	return p.bus.Register(id, description, handler)
 }
 
 // OnEvent implements texel.Listener to forward events to all cards.

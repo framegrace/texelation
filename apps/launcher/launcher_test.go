@@ -9,19 +9,44 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"texelation/registry"
 	"texelation/texel"
+	"texelation/texel/cards"
 )
 
-// mockReplacer implements AppReplacer for testing.
-type mockReplacer struct {
-	lastAppName   string
-	lastConfig    map[string]interface{}
-	replaceCount  int
+// mockControlBus implements cards.ControlBus for testing.
+type mockControlBus struct {
+	handlers     map[string]cards.ControlHandler
+	triggerCount map[string]int
+	lastPayload  map[string]interface{}
 }
 
-func (m *mockReplacer) ReplaceWithApp(name string, config map[string]interface{}) {
-	m.lastAppName = name
-	m.lastConfig = config
-	m.replaceCount++
+func newMockControlBus() *mockControlBus {
+	return &mockControlBus{
+		handlers:     make(map[string]cards.ControlHandler),
+		triggerCount: make(map[string]int),
+		lastPayload:  make(map[string]interface{}),
+	}
+}
+
+func (m *mockControlBus) Trigger(id string, payload interface{}) error {
+	m.triggerCount[id]++
+	m.lastPayload[id] = payload
+	if handler, ok := m.handlers[id]; ok {
+		return handler(payload)
+	}
+	return nil
+}
+
+func (m *mockControlBus) Capabilities() []cards.ControlCapability {
+	return nil
+}
+
+func (m *mockControlBus) Register(id, description string, handler cards.ControlHandler) error {
+	m.handlers[id] = handler
+	return nil
+}
+
+func (m *mockControlBus) Unregister(id string) {
+	delete(m.handlers, id)
 }
 
 // mockApp is a minimal app for testing.
@@ -89,18 +114,18 @@ func TestLauncher_LoadsApps(t *testing.T) {
 	}
 }
 
-func TestLauncher_SetReplacer(t *testing.T) {
+func TestLauncher_AttachControlBus(t *testing.T) {
 	reg := createTestRegistry()
 	l := &Launcher{
 		registry: reg,
 	}
 	l.loadApps()
 
-	replacer := &mockReplacer{}
-	l.SetReplacer(replacer)
+	bus := newMockControlBus()
+	l.AttachControlBus(bus)
 
-	if l.replacer == nil {
-		t.Error("SetReplacer() did not set the replacer")
+	if l.controlBus == nil {
+		t.Error("AttachControlBus() did not set the control bus")
 	}
 }
 
@@ -162,8 +187,8 @@ func TestLauncher_LaunchApp(t *testing.T) {
 	}
 	l.loadApps()
 
-	replacer := &mockReplacer{}
-	l.SetReplacer(replacer)
+	bus := newMockControlBus()
+	l.AttachControlBus(bus)
 
 	// Should have 3 apps
 	if len(l.apps) != 3 {
@@ -173,28 +198,28 @@ func TestLauncher_LaunchApp(t *testing.T) {
 	// Launch first app (app1)
 	l.HandleKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 
-	if replacer.replaceCount != 1 {
-		t.Errorf("Expected 1 replace call, got %d", replacer.replaceCount)
+	if bus.triggerCount["launcher.select-app"] != 1 {
+		t.Errorf("Expected 1 select-app trigger, got %d", bus.triggerCount["launcher.select-app"])
 	}
 
-	if replacer.lastAppName != "app1" {
-		t.Errorf("Expected to launch 'app1', got '%s'", replacer.lastAppName)
+	if bus.lastPayload["launcher.select-app"] != "app1" {
+		t.Errorf("Expected to launch 'app1', got '%v'", bus.lastPayload["launcher.select-app"])
 	}
 
 	// Move down and launch second app
 	l.HandleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
 	l.HandleKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 
-	if replacer.replaceCount != 2 {
-		t.Errorf("Expected 2 replace calls, got %d", replacer.replaceCount)
+	if bus.triggerCount["launcher.select-app"] != 2 {
+		t.Errorf("Expected 2 select-app triggers, got %d", bus.triggerCount["launcher.select-app"])
 	}
 
-	if replacer.lastAppName != "app2" {
-		t.Errorf("Expected to launch 'app2', got '%s'", replacer.lastAppName)
+	if bus.lastPayload["launcher.select-app"] != "app2" {
+		t.Errorf("Expected to launch 'app2', got '%v'", bus.lastPayload["launcher.select-app"])
 	}
 }
 
-func TestLauncher_LaunchWithoutReplacer(t *testing.T) {
+func TestLauncher_LaunchWithoutControlBus(t *testing.T) {
 	reg := createTestRegistry()
 	l := &Launcher{
 		registry:    reg,
@@ -202,7 +227,7 @@ func TestLauncher_LaunchWithoutReplacer(t *testing.T) {
 	}
 	l.loadApps()
 
-	// Don't set replacer - should not panic
+	// Don't attach control bus - should not panic
 	l.HandleKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 
 	// Should complete without error
