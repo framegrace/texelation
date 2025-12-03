@@ -124,21 +124,16 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	// Register control bus handlers if this is a launcher app in a pane
 	if app.GetTitle() == "Launcher" {
 		if provider, ok := app.(ControlBusProvider); ok {
-			log.Printf("Pane: Registering control bus handlers for launcher in pane")
 			provider.RegisterControl("launcher.select-app", "Launch selected app in this pane", func(payload interface{}) error {
-				log.Printf("Pane: launcher.select-app handler called with payload: %v", payload)
 				appName, ok := payload.(string)
 				if !ok {
-					log.Printf("Pane: payload is not a string, ignoring")
 					return nil
 				}
-				log.Printf("Pane: Replacing launcher with app '%s'", appName)
 				p.ReplaceWithApp(appName, nil)
 				return nil
 			})
 
 			provider.RegisterControl("launcher.close", "Close launcher", func(payload interface{}) error {
-				log.Printf("Pane: launcher.close handler called - closing pane")
 				if p.screen != nil {
 					p.screen.CloseActivePane()
 				}
