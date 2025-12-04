@@ -2608,7 +2608,8 @@ func WithHistoryManager(hm *HistoryManager) Option {
 // reflowHistoryBuffer rewraps all lines in the history buffer to fit the new width.
 // It reconstructs logical lines by joining wrapped segments and re-wraps them.
 func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
-	if v.historyLen == 0 {
+	histLen := v.getHistoryLen()
+	if histLen == 0 {
 		return
 	}
 
@@ -2679,18 +2680,24 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	}
 
 	// Replace history buffer with reflowed content
-	v.historyLen = len(newHistory)
-	v.historyHead = 0
-	for i := 0; i < v.getHistoryLen() && i < v.maxHistorySize; i++ {
-		v.historyBuffer[i] = newHistory[i]
-	}
-	// If we have more lines than fit in the buffer, keep only the most recent
-	if v.getHistoryLen() > v.maxHistorySize {
-		offset := v.getHistoryLen() - v.maxHistorySize
-		for i := 0; i < v.maxHistorySize; i++ {
-			v.historyBuffer[i] = newHistory[offset+i]
+	if v.historyManager != nil {
+		// Using HistoryManager - replace buffer with reflowed content
+		v.historyManager.ReplaceBuffer(newHistory)
+	} else {
+		// Using legacy buffer
+		v.historyLen = len(newHistory)
+		v.historyHead = 0
+		for i := 0; i < len(newHistory) && i < v.maxHistorySize; i++ {
+			v.historyBuffer[i] = newHistory[i]
 		}
-		v.historyLen = v.maxHistorySize
+		// If we have more lines than fit in the buffer, keep only the most recent
+		if len(newHistory) > v.maxHistorySize {
+			offset := len(newHistory) - v.maxHistorySize
+			for i := 0; i < v.maxHistorySize; i++ {
+				v.historyBuffer[i] = newHistory[offset+i]
+			}
+			v.historyLen = v.maxHistorySize
+		}
 	}
 }
 
@@ -2760,44 +2767,57 @@ func (v *VTerm) Resize(width, height int) {
 		v.altBuffer = newAltBuffer
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	} else {
-		// Reflow main screen buffer if enabled and width changed
-		if v.reflowEnabled && oldWidth != width {
+		// Handle height-only changes (no width change, no reflow needed)
+		if oldHeight != height && oldWidth == width {
+			// Height changed but not width - adjust cursor position
+			// When height increases, topHistory decreases (we show more lines above)
+			// so cursor needs to move down on screen to stay at same absolute line
+			oldTopHistory := v.getHistoryLen() - oldHeight + v.viewOffset
+			newTopHistory := v.getHistoryLen() - height + v.viewOffset
+			deltaTop := newTopHistory - oldTopHistory // Negative when height increases
+
+			// Adjust cursor Y to compensate for topHistory shift
+			v.cursorY -= deltaTop
+
+			// Clamp to screen bounds
+			if v.cursorY < 0 {
+				v.cursorY = 0
+			} else if v.cursorY >= v.height {
+				v.cursorY = v.height - 1
+			}
+		} else if v.reflowEnabled && oldWidth != width {
 			// Place marker at cursor position before reflow
 			markerPlaced := v.placeCursorMarker()
 
 			// Reflow the buffer (marker will move with content)
 			v.reflowHistoryBuffer(oldWidth, width)
 
-			// Find marker after reflow and position cursor there
+			// Find marker and place cursor there
 			if markerPlaced {
 				if markerLine, markerCol, found := v.findAndRemoveCursorMarker(); found {
-					// Calculate new top of visible region after reflow
-					newTopHistory := v.getTopHistoryLine()
-
-					// Convert absolute history line to screen-relative position
-					newY := markerLine - newTopHistory
-					newX := markerCol
-
-					// If cursor moved off-screen due to history length changes,
-					// adjust viewOffset to keep it visible
-					if newY < 0 {
-						// Marker is above visible area - scroll up to show it
-						v.viewOffset = v.viewOffset + (-newY)
-						newY = 0
-					} else if newY >= v.height {
-						// Marker is below visible area - it should be at bottom
-						newY = v.height - 1
+					// Clamp X to screen width
+					if markerCol >= v.width {
+						markerCol = v.width - 1
 					}
 
-					// Clamp X position
-					if newX < 0 {
-						newX = 0
-					} else if newX >= v.width {
-						newX = v.width - 1
+					// Calculate where marker currently is on screen (with current viewOffset)
+					topHistory := v.getTopHistoryLine()
+					screenY := markerLine - topHistory
+
+					// Only adjust viewOffset if marker is off-screen
+					if screenY < 0 {
+						// Marker is above visible area - scroll up to show it at top
+						v.viewOffset += -screenY
+						screenY = 0
+					} else if screenY >= v.height {
+						// Marker is below visible area - scroll down to show it at bottom
+						adjustment := screenY - v.height + 1
+						v.viewOffset -= adjustment
+						screenY = v.height - 1
 					}
 
-					v.cursorY = newY
-					v.cursorX = newX
+					v.cursorY = screenY
+					v.cursorX = markerCol
 				} else {
 					// Fallback: clamp cursor if marker not found
 					v.SetCursorPos(v.cursorY, v.cursorX)

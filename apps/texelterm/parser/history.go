@@ -344,3 +344,26 @@ func (hm *HistoryManager) GetMetadata() SessionMetadata {
 	defer hm.mu.RUnlock()
 	return hm.metadata
 }
+
+// ReplaceBuffer replaces the entire history buffer with new content (used during reflow).
+// This is used when terminal width changes and lines need to be re-wrapped.
+func (hm *HistoryManager) ReplaceBuffer(newLines [][]Cell) {
+	hm.mu.Lock()
+	defer hm.mu.Unlock()
+
+	hm.head = 0
+	hm.length = len(newLines)
+
+	// Keep only the most recent lines if they exceed buffer size
+	if hm.length > hm.maxSize {
+		offset := hm.length - hm.maxSize
+		for i := 0; i < hm.maxSize; i++ {
+			hm.buffer[i] = newLines[offset+i]
+		}
+		hm.length = hm.maxSize
+	} else {
+		for i := 0; i < hm.length; i++ {
+			hm.buffer[i] = newLines[i]
+		}
+	}
+}
