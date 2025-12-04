@@ -55,9 +55,8 @@ type TexelTerm struct {
 	selection            termSelection
 	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
 
-	// Scroll velocity tracking for dynamic scrolling
-	lastScrollTime time.Time
-	scrollVelocity float64
+	// Scroll debouncing to handle mice that send multiple events per click
+	scrollEventTime time.Time
 
 	confirmClose    bool
 	confirmCallback func()
@@ -741,7 +740,19 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 	}
 
 	now := time.Now()
+
+	// Debounce: Ignore events that are too close together (< 50ms)
+	// This handles mice that send multiple events per physical click
+	const debounceThreshold = 50 * time.Millisecond
+	if !a.scrollEventTime.IsZero() && now.Sub(a.scrollEventTime) < debounceThreshold {
+		log.Printf("DEBUG SCROLL: DEBOUNCED deltaY=%d (too soon after last event)", deltaY)
+		a.mu.Unlock()
+		return
+	}
+	a.scrollEventTime = now
+
 	lines := deltaY
+	log.Printf("DEBUG SCROLL: deltaY=%d, lines=%d", deltaY, lines)
 
 	if modifiers&tcell.ModShift != 0 {
 		// Shift modifier: full page scroll
@@ -750,37 +761,11 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 			page = 1
 		}
 		lines *= page
+		log.Printf("DEBUG SCROLL RESULT: shift+wheel, final_lines=%d", lines)
 	} else {
-		// Dynamic scrolling based on velocity
-		const velocityDecay = 0.2   // How quickly velocity decays (seconds)
-		const maxMultiplier = 10.0  // Maximum multiplier for very fast scrolling
-		const velocityIncrement = 1.5 // How much velocity increases per quick scroll
-
-		// Calculate time since last scroll
-		timeDelta := now.Sub(a.lastScrollTime).Seconds()
-
-		// Update velocity with decay - starts at 0, builds gradually
-		if timeDelta < velocityDecay && !a.lastScrollTime.IsZero() {
-			// Fast scrolling - increase velocity gradually
-			a.scrollVelocity += velocityIncrement
-			if a.scrollVelocity > maxMultiplier {
-				a.scrollVelocity = maxMultiplier
-			}
-		} else {
-			// Slow scrolling or first scroll - reset to base
-			a.scrollVelocity = 0.0
-		}
-
-		// Apply multiplier: base 1 + accumulated velocity
-		multiplier := 1.0 + a.scrollVelocity
-
-		lines = int(float64(lines) * multiplier)
-		if lines == 0 && deltaY != 0 {
-			lines = deltaY // Ensure at least minimal scroll
-		}
+		// Direct 1:1 scrolling - follow wheel speed naturally
+		log.Printf("DEBUG SCROLL RESULT: direct scroll, final_lines=%d", lines)
 	}
-
-	a.lastScrollTime = now
 	a.vterm.Scroll(lines)
 	a.mu.Unlock()
 	a.requestRefresh()
