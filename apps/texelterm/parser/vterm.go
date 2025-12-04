@@ -2771,17 +2771,25 @@ func (v *VTerm) Resize(width, height int) {
 			// Find marker after reflow and position cursor there
 			if markerPlaced {
 				if markerLine, markerCol, found := v.findAndRemoveCursorMarker(); found {
+					// Calculate new top of visible region after reflow
+					newTopHistory := v.getTopHistoryLine()
+
 					// Convert absolute history line to screen-relative position
-					topHistory := v.getTopHistoryLine()
-					newY := markerLine - topHistory
+					newY := markerLine - newTopHistory
 					newX := markerCol
 
-					// Clamp to screen bounds
+					// If cursor moved off-screen due to history length changes,
+					// adjust viewOffset to keep it visible
 					if newY < 0 {
+						// Marker is above visible area - scroll up to show it
+						v.viewOffset = v.viewOffset + (-newY)
 						newY = 0
 					} else if newY >= v.height {
+						// Marker is below visible area - it should be at bottom
 						newY = v.height - 1
 					}
+
+					// Clamp X position
 					if newX < 0 {
 						newX = 0
 					} else if newX >= v.width {
