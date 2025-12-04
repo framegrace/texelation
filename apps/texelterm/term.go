@@ -43,6 +43,7 @@ type TexelTerm struct {
 	pty                  *os.File
 	vterm                *parser.VTerm
 	parser               *parser.Parser
+	historyManager       *parser.HistoryManager
 	mu                   sync.Mutex
 	stop                 chan struct{}
 	stopOnce             sync.Once
@@ -767,10 +768,31 @@ func (a *TexelTerm) Run() error {
 	a.cmd = cmd
 
 	a.mu.Lock()
-	// Read wrap/reflow configuration from theme
+	// Read wrap/reflow and history configuration from theme
 	cfg := theme.Get()
 	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
 	reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
+
+	// Create history configuration
+	histCfg := parser.DefaultHistoryConfig()
+	histCfg.MemoryLines = cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
+	histCfg.PersistEnabled = cfg.GetBool("texelterm.history", "persist_enabled", true)
+	if persistDir := cfg.GetString("texelterm.history", "persist_dir", ""); persistDir != "" {
+		histCfg.PersistDir = persistDir
+	}
+	histCfg.Compress = cfg.GetBool("texelterm.history", "compress", true)
+	histCfg.Encrypt = cfg.GetBool("texelterm.history", "encrypt", false)
+
+	// Get current working directory
+	workingDir, _ := os.Getwd()
+
+	// Create history manager
+	hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir)
+	if err != nil {
+		log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
+		hm = nil
+	}
+	a.historyManager = hm
 
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
@@ -803,6 +825,7 @@ func (a *TexelTerm) Run() error {
 		}),
 		parser.WithWrap(wrapEnabled),
 		parser.WithReflow(reflowEnabled),
+		parser.WithHistoryManager(hm),
 	)
 	a.parser = parser.NewParser(a.vterm)
 	a.mu.Unlock()
@@ -1042,10 +1065,12 @@ func (a *TexelTerm) Stop() {
 		var (
 			cmd *exec.Cmd
 			pty *os.File
+			hm  *parser.HistoryManager
 		)
 		a.mu.Lock()
 		cmd = a.cmd
 		pty = a.pty
+		hm = a.historyManager
 		a.cmd = nil
 		a.pty = nil
 		a.mu.Unlock()
@@ -1060,6 +1085,13 @@ func (a *TexelTerm) Stop() {
 				time.Sleep(500 * time.Millisecond)
 				proc.Signal(syscall.SIGKILL) // Ignore error; process may already be gone.
 			}()
+		}
+
+		// Close history manager
+		if hm != nil {
+			if err := hm.Close(); err != nil {
+				log.Printf("Error closing history manager: %v", err)
+			}
 		}
 	})
 	a.wg.Wait()

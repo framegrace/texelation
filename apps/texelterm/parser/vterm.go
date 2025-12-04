@@ -24,9 +24,12 @@ type VTerm struct {
 	cursorX, cursorY                   int
 	savedMainCursorX, savedMainCursorY int
 	savedAltCursorX, savedAltCursorY   int
+	// Legacy circular buffer (deprecated in favor of historyManager)
 	historyBuffer                      [][]Cell
 	maxHistorySize                     int
 	historyHead, historyLen            int
+	// New infinite history system
+	historyManager                     *HistoryManager
 	viewOffset                         int
 	inAltScreen                        bool
 	altBuffer                          [][]Cell
@@ -535,7 +538,11 @@ func (v *VTerm) Scroll(delta int) {
 	if v.viewOffset < 0 {
 		v.viewOffset = 0
 	}
-	maxOffset := v.historyLen - v.height
+	histLen := v.historyLen
+	if v.historyManager != nil {
+		histLen = v.historyManager.Length()
+	}
+	maxOffset := histLen - v.height
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
@@ -748,8 +755,12 @@ func (v *VTerm) RestoreCursor() {
 
 // --- History and Viewport Management ---
 
-// getHistoryLine retrieves a specific line from the circular history buffer.
+// getHistoryLine retrieves a specific line from the history buffer (or HistoryManager).
 func (v *VTerm) getHistoryLine(index int) []Cell {
+	if v.historyManager != nil {
+		return v.historyManager.GetLine(index)
+	}
+	// Legacy circular buffer
 	if index < 0 || index >= v.historyLen {
 		return nil
 	}
@@ -757,8 +768,13 @@ func (v *VTerm) getHistoryLine(index int) []Cell {
 	return v.historyBuffer[physicalIndex]
 }
 
-// setHistoryLine updates a specific line in the circular history buffer.
+// setHistoryLine updates a specific line in the history buffer (or HistoryManager).
 func (v *VTerm) setHistoryLine(index int, line []Cell) {
+	if v.historyManager != nil {
+		v.historyManager.SetLine(index, line)
+		return
+	}
+	// Legacy circular buffer
 	if index < 0 || index >= v.historyLen {
 		return
 	}
@@ -768,6 +784,11 @@ func (v *VTerm) setHistoryLine(index int, line []Cell) {
 
 // appendHistoryLine adds a new line to the end of the history buffer.
 func (v *VTerm) appendHistoryLine(line []Cell) {
+	if v.historyManager != nil {
+		v.historyManager.AppendLine(line)
+		return
+	}
+	// Legacy circular buffer
 	if v.historyLen < v.maxHistorySize {
 		physicalIndex := (v.historyHead + v.historyLen) % v.maxHistorySize
 		v.historyBuffer[physicalIndex] = line
@@ -785,7 +806,11 @@ func (v *VTerm) getTopHistoryLine() int {
 	if v.inAltScreen {
 		return 0
 	}
-	top := v.historyLen - v.height - v.viewOffset
+	histLen := v.historyLen
+	if v.historyManager != nil {
+		histLen = v.historyManager.Length()
+	}
+	top := histLen - v.height - v.viewOffset
 	if top < 0 {
 		top = 0
 	}
@@ -799,6 +824,9 @@ func (v *VTerm) VisibleTop() int {
 
 // HistoryLength exposes the number of lines tracked in history.
 func (v *VTerm) HistoryLength() int {
+	if v.historyManager != nil {
+		return v.historyManager.Length()
+	}
 	return v.historyLen
 }
 
@@ -2545,6 +2573,10 @@ func WithScreenRestoredHandler(handler func()) Option {
 
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
+}
+
+func WithHistoryManager(hm *HistoryManager) Option {
+	return func(v *VTerm) { v.historyManager = hm }
 }
 
 // reflowHistoryBuffer rewraps all lines in the history buffer to fit the new width.
