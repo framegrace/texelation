@@ -56,12 +56,6 @@ func TestOfflineRetentionAndResumeWithMemConn(t *testing.T) {
 	lifecycle := texel.NoopAppLifecycle{}
 	app := &offlineApp{title: "welcome"}
 	shellFactory := func() texel.App { return app }
-	welcomeFactory := func() texel.App { return app }
-
-	desktop, err := texel.NewDesktopEngineWithDriver(offlineScreenDriver{}, shellFactory, "", lifecycle)
-	if err != nil {
-		t.Fatalf("desktop init failed: %v", err)
-	}
 
 	sink := NewDesktopSink(desktop)
 	srv := &Server{manager: mgr, sink: sink, desktopSink: sink}

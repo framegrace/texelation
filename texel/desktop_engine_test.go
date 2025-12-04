@@ -186,11 +186,6 @@ func TestWorkspaceRemovesPaneWhenAppExits(t *testing.T) {
 	lifecycle := &trackingLifecycle{}
 
 	var welcomeCount int
-	welcomeFactory := func() App {
-		title := fmt.Sprintf("welcome-%d", welcomeCount)
-		welcomeCount++
-		return newFakeApp(title)
-	}
 
 	var shellCount int
 	shellFactory := func() App {
@@ -270,11 +265,6 @@ func TestCloseActivePaneRespawnsWelcome(t *testing.T) {
 	lifecycle := &trackingLifecycle{}
 
 	var welcomeCount int
-	welcomeFactory := func() App {
-		title := fmt.Sprintf("welcome-%d", welcomeCount)
-		welcomeCount++
-		return newFakeApp(title)
-	}
 
 	shellFactory := func() App { return newFakeApp("shell") }
 
@@ -318,11 +308,6 @@ func TestMouseBorderResizeAdjustsRatios(t *testing.T) {
 	lifecycle := &trackingLifecycle{}
 
 	var welcomeCount int
-	welcomeFactory := func() App {
-		title := fmt.Sprintf("welcome-%d", welcomeCount)
-		welcomeCount++
-		return newFakeApp(title)
-	}
 
 	var shellCount int
 	shellFactory := func() App {

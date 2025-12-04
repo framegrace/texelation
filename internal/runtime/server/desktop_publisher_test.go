@@ -50,12 +50,6 @@ func TestDesktopPublisherProducesDiffs(t *testing.T) {
 	lifecycle := texel.NoopAppLifecycle{}
 
 	shellFactory := func() texel.App { return &simpleApp{title: "shell"} }
-	welcomeFactory := func() texel.App { return &simpleApp{title: "welcome"} }
-
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
-	if err != nil {
-		t.Fatalf("desktop init failed: %v", err)
-	}
 
 	session := NewSession([16]byte{1}, 512)
 	publisher := NewDesktopPublisher(desktop, session)

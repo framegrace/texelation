@@ -36,9 +36,6 @@ func setupTreeTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, 
 		appCount++
 		return &treeTestApp{id: appCount}
 	}
-	welcomeFactory := func() texel.App {
-		return &treeTestApp{id: 0}
-	}
 	lifecycle := &texel.NoopAppLifecycle{}
 
 	desktop, err := texel.NewDesktopEngineWithDriver(treeTestDriver{}, shellFactory, "", lifecycle)

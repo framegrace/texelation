@@ -146,12 +146,6 @@ func newDesktopSink(t *testing.T) (*DesktopSink, *texel.DesktopEngine, func()) {
 	driver := connectionTestDriver{width: 80, height: 24}
 	lifecycle := texel.NoopAppLifecycle{}
 	shellFactory := func() texel.App { return &staticApp{title: "shell"} }
-	welcomeFactory := func() texel.App { return &staticApp{title: "welcome"} }
-
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
-	if err != nil {
-		t.Fatalf("desktop init failed: %v", err)
-	}
 	sink := NewDesktopSink(desktop)
 	cleanup := func() {
 		desktop.Close()
