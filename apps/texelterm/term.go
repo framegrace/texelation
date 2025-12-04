@@ -752,28 +752,27 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 		lines *= page
 	} else {
 		// Dynamic scrolling based on velocity
-		const baseStep = 1          // Base multiplier (reduced from 3)
-		const velocityDecay = 0.3   // How quickly velocity decays (seconds)
+		const velocityDecay = 0.2   // How quickly velocity decays (seconds)
 		const maxMultiplier = 10.0  // Maximum multiplier for very fast scrolling
+		const velocityIncrement = 1.5 // How much velocity increases per quick scroll
 
 		// Calculate time since last scroll
 		timeDelta := now.Sub(a.lastScrollTime).Seconds()
 
-		// Update velocity with decay
-		if timeDelta < velocityDecay {
-			// Fast scrolling - increase velocity
-			a.scrollVelocity = a.scrollVelocity*0.7 + 3.0
+		// Update velocity with decay - starts at 0, builds gradually
+		if timeDelta < velocityDecay && !a.lastScrollTime.IsZero() {
+			// Fast scrolling - increase velocity gradually
+			a.scrollVelocity += velocityIncrement
+			if a.scrollVelocity > maxMultiplier {
+				a.scrollVelocity = maxMultiplier
+			}
 		} else {
-			// Slow scrolling - reset velocity
-			a.scrollVelocity = 1.0
+			// Slow scrolling or first scroll - reset to base
+			a.scrollVelocity = 0.0
 		}
 
-		// Apply non-linear multiplier based on velocity
-		// Uses sqrt to create a smooth acceleration curve
-		multiplier := baseStep * (1.0 + (a.scrollVelocity - 1.0) * 0.5)
-		if multiplier > maxMultiplier {
-			multiplier = maxMultiplier
-		}
+		// Apply multiplier: base 1 + accumulated velocity
+		multiplier := 1.0 + a.scrollVelocity
 
 		lines = int(float64(lines) * multiplier)
 		if lines == 0 && deltaY != 0 {
