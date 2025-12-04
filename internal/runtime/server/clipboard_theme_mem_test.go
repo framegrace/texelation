@@ -48,15 +48,17 @@ func (s *signalApp) SetRefreshNotifier(chan<- bool) {}
 
 func TestClipboardAndThemeRoundTrip(t *testing.T) {
 	mgr := NewManager()
+	driver := signalScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	app := &signalApp{title: "welcome"}
 	shellFactory := func() texel.App { return app }
-	welcomeFactory := func() texel.App { return app }
 
-	desktop, err := texel.NewDesktopEngineWithDriver(signalScreenDriver{}, shellFactory, "", lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
+	desktop.SwitchToWorkspace(1)
+	desktop.GetActiveWorkspace().AddApp(app)
 
 	sink := NewDesktopSink(desktop)
 

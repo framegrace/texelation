@@ -8,7 +8,6 @@
 package texel
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -20,18 +19,15 @@ func TestDesktopSplitCreatesNewPane(t *testing.T) {
 	driver := &stubScreenDriver{width: 120, height: 40}
 	lifecycle := NoopAppLifecycle{}
 
-	var count int
 	shellFactory := func() App { return newFakeApp("shell") }
-	// Splits now use welcomeFactory (the default app), so we count those
-	welcomeFactory := func() App {
-		count++
-		return newFakeApp(fmt.Sprintf("default-%d", count))
-	}
 
 	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
+
+	desktop.SwitchToWorkspace(1)
+	desktop.activeWorkspace.AddApp(newFakeApp("initial"))
 
 	ws := desktop.activeWorkspace
 	if ws == nil {
@@ -41,19 +37,10 @@ func TestDesktopSplitCreatesNewPane(t *testing.T) {
 		t.Fatalf("expected initial pane")
 	}
 
-	// Initial pane should have been created (count=1)
-	if count != 1 {
-		t.Fatalf("expected default app factory invoked once for initial pane, got %d", count)
-	}
-
 	ws.PerformSplit(Horizontal)
 
 	if ws.tree.Root == nil || len(ws.tree.Root.Children) != 2 {
 		t.Fatalf("expected root split into two children")
-	}
-	// After split, default app factory should have been called twice (initial + split)
-	if count != 2 {
-		t.Fatalf("expected default app factory invoked twice (initial + split), got %d", count)
 	}
 	if ws.tree.ActiveLeaf == nil || ws.tree.ActiveLeaf.Pane == nil {
 		t.Fatalf("expected active pane after split")
@@ -68,12 +55,14 @@ func TestDesktopStatusPaneResizesMainArea(t *testing.T) {
 	lifecycle := NoopAppLifecycle{}
 
 	shellFactory := func() App { return newFakeApp("shell") }
-	welcomeFactory := func() App { return newFakeApp("welcome") }
 
 	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
+
+	desktop.SwitchToWorkspace(1)
+	desktop.activeWorkspace.AddApp(newFakeApp("initial"))
 
 	statusApp := newFakeApp("status")
 	desktop.AddStatusPane(statusApp, SideTop, 2)
@@ -94,14 +83,16 @@ func TestDesktopSwitchWorkspaceCreatesNewScreen(t *testing.T) {
 	driver := &stubScreenDriver{}
 	lifecycle := NoopAppLifecycle{}
 	shellFactory := func() App { return newFakeApp("shell") }
-	welcomeFactory := func() App { return newFakeApp("welcome") }
 
 	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
 
+	desktop.SwitchToWorkspace(1)
+	desktop.activeWorkspace.AddApp(newFakeApp("ws1"))
 	desktop.SwitchToWorkspace(2)
+	desktop.activeWorkspace.AddApp(newFakeApp("ws2"))
 
 	if desktop.activeWorkspace == nil || desktop.activeWorkspace.id != 2 {
 		t.Fatalf("expected active workspace 2")
@@ -133,15 +124,15 @@ func TestDesktopInjectKeyEvent(t *testing.T) {
 	lifecycle := NoopAppLifecycle{}
 	recorder := &keyRecordingApp{title: "recorder"}
 
-	shellFactory := func() App { return newFakeApp("shell") }
-	// Split will create whatever welcomeFactory returns (the default app)
-	// So we use the recorder as the welcome factory to test key routing
-	welcomeFactory := func() App { return recorder }
+	shellFactory := func() App { return recorder }
 
 	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
+
+	desktop.SwitchToWorkspace(1)
+	desktop.activeWorkspace.AddApp(recorder)
 
 	if desktop.activeWorkspace == nil {
 		t.Fatalf("expected active workspace")
@@ -163,12 +154,14 @@ func TestDesktopInjectMouseEvent(t *testing.T) {
 	driver := &stubScreenDriver{}
 	lifecycle := NoopAppLifecycle{}
 	shellFactory := func() App { return newFakeApp("shell") }
-	welcomeFactory := func() App { return newFakeApp("welcome") }
 
 	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
+
+	desktop.SwitchToWorkspace(1)
+	desktop.activeWorkspace.AddApp(newFakeApp("initial"))
 
 	ws := desktop.activeWorkspace
 	if ws == nil || ws.tree == nil || ws.tree.Root == nil {
@@ -215,12 +208,14 @@ func TestDesktopClipboardAndThemeHandling(t *testing.T) {
 	driver := &stubScreenDriver{}
 	lifecycle := NoopAppLifecycle{}
 	shellFactory := func() App { return newFakeApp("shell") }
-	welcomeFactory := func() App { return newFakeApp("welcome") }
 
 	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
+
+	desktop.SwitchToWorkspace(1)
+	desktop.activeWorkspace.AddApp(newFakeApp("initial"))
 
 	desktop.HandleClipboardSet("text/plain", []byte("hello"))
 	data := desktop.HandleClipboardGet("text/plain")

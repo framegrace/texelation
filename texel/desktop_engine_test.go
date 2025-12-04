@@ -185,13 +185,6 @@ func TestWorkspaceRemovesPaneWhenAppExits(t *testing.T) {
 	driver := &stubScreenDriver{}
 	lifecycle := &trackingLifecycle{}
 
-	var welcomeCount int
-	welcomeFactory := func() App {
-		title := fmt.Sprintf("welcome-%d", welcomeCount)
-		welcomeCount++
-		return newFakeApp(title)
-	}
-
 	var shellCount int
 	shellFactory := func() App {
 		title := fmt.Sprintf("shell-%d", shellCount)
@@ -204,6 +197,10 @@ func TestWorkspaceRemovesPaneWhenAppExits(t *testing.T) {
 		t.Fatalf("expected desktop, got error %v", err)
 	}
 
+	desktop.SwitchToWorkspace(1)
+	welcomeApp := newFakeApp("initial")
+	desktop.activeWorkspace.AddApp(welcomeApp)
+
 	ws := desktop.activeWorkspace
 	if ws == nil {
 		t.Fatalf("workspace should be initialised")
@@ -212,7 +209,6 @@ func TestWorkspaceRemovesPaneWhenAppExits(t *testing.T) {
 	if len(lifecycle.started) != 1 {
 		t.Fatalf("expected initial welcome app to start, got %d", len(lifecycle.started))
 	}
-	welcomeApp := lifecycle.started[0]
 
 	ws.PerformSplit(Vertical)
 
@@ -269,19 +265,16 @@ func TestCloseActivePaneRespawnsWelcome(t *testing.T) {
 	driver := &stubScreenDriver{}
 	lifecycle := &trackingLifecycle{}
 
-	var welcomeCount int
-	welcomeFactory := func() App {
-		title := fmt.Sprintf("welcome-%d", welcomeCount)
-		welcomeCount++
-		return newFakeApp(title)
-	}
-
 	shellFactory := func() App { return newFakeApp("shell") }
 
 	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("expected desktop, got error %v", err)
 	}
+
+	desktop.SwitchToWorkspace(1)
+	initialWelcome := newFakeApp("initial")
+	desktop.activeWorkspace.AddApp(initialWelcome)
 
 	ws := desktop.activeWorkspace
 	if ws == nil {
@@ -291,7 +284,6 @@ func TestCloseActivePaneRespawnsWelcome(t *testing.T) {
 	if len(lifecycle.started) != 1 {
 		t.Fatalf("expected initial welcome app to start, got %d", len(lifecycle.started))
 	}
-	initialWelcome := lifecycle.started[0]
 
 	ws.CloseActivePane()
 
@@ -317,13 +309,6 @@ func TestMouseBorderResizeAdjustsRatios(t *testing.T) {
 	driver := &stubScreenDriver{}
 	lifecycle := &trackingLifecycle{}
 
-	var welcomeCount int
-	welcomeFactory := func() App {
-		title := fmt.Sprintf("welcome-%d", welcomeCount)
-		welcomeCount++
-		return newFakeApp(title)
-	}
-
 	var shellCount int
 	shellFactory := func() App {
 		title := fmt.Sprintf("shell-%d", shellCount)
@@ -335,6 +320,9 @@ func TestMouseBorderResizeAdjustsRatios(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected desktop, got error %v", err)
 	}
+
+	desktop.SwitchToWorkspace(1)
+	desktop.activeWorkspace.AddApp(newFakeApp("initial"))
 
 	ws := desktop.activeWorkspace
 	if ws == nil {

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"strings"
@@ -54,6 +55,11 @@ type TexelTerm struct {
 	controlBus           texel.ControlBus
 	selection            termSelection
 	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
+
+	// Scroll tracking for smooth velocity-based acceleration
+	scrollEventTime time.Time // For debouncing duplicate events
+	lastScrollTime  time.Time // For velocity tracking
+	scrollVelocity  float64   // Accumulated velocity
 
 	confirmClose    bool
 	confirmCallback func()
@@ -735,17 +741,65 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 		a.mu.Unlock()
 		return
 	}
+
+	now := time.Now()
+
+	// Read scroll configuration from theme
+	cfg := theme.Get()
+	debounceMs := cfg.GetInt("texelterm.scroll", "debounce_ms", 50)
+	debounceThreshold := time.Duration(debounceMs) * time.Millisecond
+
+	// Debounce: Ignore events that are too close together
+	// This handles mice that send multiple events per physical click
+	if !a.scrollEventTime.IsZero() && now.Sub(a.scrollEventTime) < debounceThreshold {
+		a.mu.Unlock()
+		return
+	}
+	a.scrollEventTime = now
+
 	lines := deltaY
+
 	if modifiers&tcell.ModShift != 0 {
+		// Shift modifier: full page scroll
 		page := a.height
 		if page <= 0 {
 			page = 1
 		}
 		lines *= page
 	} else {
-		const step = 3
-		lines *= step
+		// Smooth velocity-based acceleration - read parameters from config
+		velocityDecay := cfg.GetFloat("texelterm.scroll", "velocity_decay", 0.6)
+		velocityIncrement := cfg.GetFloat("texelterm.scroll", "velocity_increment", 0.6)
+		maxVelocity := cfg.GetFloat("texelterm.scroll", "max_velocity", 15.0)
+		expCurve := cfg.GetFloat("texelterm.scroll", "exponential_curve", 0.8)
+
+		// Calculate time since last scroll
+		timeDelta := now.Sub(a.lastScrollTime).Seconds()
+
+		// Update velocity with smooth decay
+		if timeDelta < velocityDecay && !a.lastScrollTime.IsZero() {
+			// Continued scrolling - gradually increase velocity
+			a.scrollVelocity += velocityIncrement
+			if a.scrollVelocity > maxVelocity {
+				a.scrollVelocity = maxVelocity
+			}
+		} else {
+			// Long pause or first scroll - reset to base
+			a.scrollVelocity = 0.0
+		}
+
+		// Apply smooth exponential curve: 1 + velocity^curve
+		// This creates gentler acceleration than linear
+		smoothVelocity := math.Pow(a.scrollVelocity, expCurve)
+		multiplier := 1.0 + smoothVelocity
+
+		lines = int(float64(lines) * multiplier)
+		if lines == 0 && deltaY != 0 {
+			lines = deltaY
+		}
 	}
+
+	a.lastScrollTime = now
 	a.vterm.Scroll(lines)
 	a.mu.Unlock()
 	a.requestRefresh()

@@ -11,6 +11,7 @@ package parser
 import (
 	"fmt"
 	"log"
+	"os"
 )
 
 const (
@@ -345,15 +346,15 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 		topHistory := v.getTopHistoryLine()
 		if n > 0 { // Scroll Up
 			for i := 0; i < n; i++ {
-				if top == 0 {
-					// Scrolling at the top of the screen - preserve line as history
-					// Append a new blank line to history, effectively pushing old content up
-					blankLine := make([]Cell, 0, v.width)
-					v.appendHistoryLine(blankLine)
-					// viewOffset needs to stay at bottom, which happens naturally
+				if top == 0 && v.getHistoryLen() >= v.height {
+					// Scrolling at top with scrollback already present
+					// Appending will shift topHistory, moving visible window up
+					v.appendHistoryLine(make([]Cell, 0, v.width))
+					topHistory = v.getTopHistoryLine()
 					v.viewOffset = 0
 				} else {
-					// Scrolling within a region (not at screen top) - shift lines up
+					// Either scrolling within a region (top > 0) or no scrollback yet
+					// Manually shift lines
 					for y := top; y < bottom; y++ {
 						srcLine := v.getHistoryLine(topHistory + y + 1)
 						v.setHistoryLine(topHistory+y, srcLine)
@@ -361,6 +362,12 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 					// Clear the bottom line of the region
 					blankLine := make([]Cell, 0, v.width)
 					v.setHistoryLine(topHistory+bottom, blankLine)
+
+					// If scrolling at top, grow history to record the scroll
+					if top == 0 {
+						v.appendHistoryLine(make([]Cell, 0, v.width))
+						// topHistory stays at 0 since histLen < height
+					}
 				}
 			}
 		} else { // Scroll Down
@@ -892,6 +899,17 @@ func (v *VTerm) ClearDirty() {
 // --- Basic Terminal Operations ---
 
 func (v *VTerm) CarriageReturn() {
+	// If wrapNext is set, clear the Wrapped flag on the current line
+	// because an explicit carriage return means this is a hard line break, not a wrap
+	if v.wrapNext && !v.inAltScreen {
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		line := v.getHistoryLine(logicalY)
+		if line != nil && len(line) > v.cursorX && line[v.cursorX].Wrapped {
+			line[v.cursorX].Wrapped = false
+			v.setHistoryLine(logicalY, line)
+		}
+	}
+
 	v.wrapNext = false // Clear wrapNext when returning to start of line
 
 	// CR behavior with left/right margins:
@@ -1142,6 +1160,17 @@ func (v *VTerm) SoftReset() {
 // ReverseIndex moves the cursor up one line, scrolling down if at the top margin.
 // Index moves cursor down one line, scrolling if at bottom margin.
 func (v *VTerm) Index() {
+	// If wrapNext is set, clear the Wrapped flag on the current line
+	// because an explicit line feed means this is a hard line break, not a wrap
+	if v.wrapNext && !v.inAltScreen {
+		logicalY := v.cursorY + v.getTopHistoryLine()
+		line := v.getHistoryLine(logicalY)
+		if line != nil && len(line) > v.cursorX && line[v.cursorX].Wrapped {
+			line[v.cursorX].Wrapped = false
+			v.setHistoryLine(logicalY, line)
+		}
+	}
+
 	v.wrapNext = false
 	// Check if cursor is outside left/right margins - if so, don't scroll
 	outsideMargins := v.leftRightMarginMode && (v.cursorX < v.marginLeft || v.cursorX > v.marginRight)
@@ -2617,6 +2646,13 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	var logicalLines [][]Cell
 	currentLogical := []Cell{}
 
+	debugReflow := false // Set to true to enable debug output
+	if debugReflow {
+		fmt.Fprintf(os.Stderr, "DEBUG REFLOW: oldWidth=%d, newWidth=%d, histLen=%d\n", oldWidth, newWidth, histLen)
+	}
+
+	logicalLineCount := 0
+	physicalLineDebugCount := 0
 	for i := 0; i < v.getHistoryLen(); i++ {
 		line := v.getHistoryLine(i)
 
@@ -2637,6 +2673,22 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 			}
 		}
 
+		if debugReflow && physicalLineDebugCount < 30 {
+			lineStr := ""
+			for _, cell := range line {
+				if cell.Rune == 0 {
+					lineStr += "∅"
+				} else {
+					lineStr += string(cell.Rune)
+				}
+			}
+			if len(lineStr) > 50 {
+				lineStr = lineStr[:50] + "..."
+			}
+			fmt.Fprintf(os.Stderr, "DEBUG PHYS[%d] len=%d wrapped=%v lastNonSpace=%d: %q\n", i, len(line), wrapped, lastNonSpace, lineStr)
+			physicalLineDebugCount++
+		}
+
 		// If line is wrapped, include all cells (content continues on next line)
 		// If not wrapped, only include cells up to last non-space (trim padding)
 		if wrapped {
@@ -2647,6 +2699,7 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 			}
 			// End of logical line - save it and start a new one
 			logicalLines = append(logicalLines, currentLogical)
+			logicalLineCount++
 			currentLogical = []Cell{}
 		}
 	}
@@ -2654,6 +2707,10 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	// If there's a partial logical line at the end, save it
 	if len(currentLogical) > 0 {
 		logicalLines = append(logicalLines, currentLogical)
+	}
+
+	if debugReflow {
+		fmt.Fprintf(os.Stderr, "DEBUG REFLOW: Created %d logical lines from %d physical lines\n", len(logicalLines), histLen)
 	}
 
 	// Re-wrap each logical line with the new width
