@@ -15,6 +15,9 @@ import (
 
 const (
 	defaultHistorySize = 2000
+	// cursorMarker is a special character used to track cursor position during reflow
+	// Using Unicode Private Use Area character that won't appear in normal text
+	cursorMarker = rune(0xF8FF)
 )
 
 // VTerm represents the state of a virtual terminal, managing both the main screen
@@ -24,9 +27,12 @@ type VTerm struct {
 	cursorX, cursorY                   int
 	savedMainCursorX, savedMainCursorY int
 	savedAltCursorX, savedAltCursorY   int
+	// Legacy circular buffer (deprecated in favor of historyManager)
 	historyBuffer                      [][]Cell
 	maxHistorySize                     int
 	historyHead, historyLen            int
+	// New infinite history system
+	historyManager                     *HistoryManager
 	viewOffset                         int
 	inAltScreen                        bool
 	altBuffer                          [][]Cell
@@ -114,11 +120,15 @@ func (v *VTerm) Grid() [][]Cell {
 	}
 	grid := make([][]Cell, v.height)
 	topHistoryLine := v.getTopHistoryLine()
+	histLen := v.historyLen
+	if v.historyManager != nil {
+		histLen = v.historyManager.Length()
+	}
 	for i := 0; i < v.height; i++ {
 		historyIdx := topHistoryLine + i
 		grid[i] = make([]Cell, v.width)
 		var logicalLine []Cell
-		if historyIdx >= 0 && historyIdx < v.historyLen {
+		if historyIdx >= 0 && historyIdx < histLen {
 			logicalLine = v.getHistoryLine(historyIdx)
 		}
 		// Fill the grid line, padding with default cells if the history line is short.
@@ -164,12 +174,12 @@ func (v *VTerm) placeChar(r rune) {
 		if v.viewOffset > 0 { // If scrolled up, jump to the bottom on new input
 			v.viewOffset = 0
 			v.MarkAllDirty()
-			v.SetCursorPos(v.historyLen-1-v.getTopHistoryLine(), v.cursorX)
+			v.SetCursorPos(v.getHistoryLen()-1-v.getTopHistoryLine(), v.cursorX)
 		}
 		logicalY := v.cursorY + v.getTopHistoryLine()
 
 		// Ensure all lines exist up to the cursor position
-		for v.historyLen <= logicalY {
+		for v.getHistoryLen() <= logicalY {
 			v.appendHistoryLine(make([]Cell, 0, v.width))
 		}
 
@@ -295,7 +305,7 @@ func (v *VTerm) LineFeed() {
 		} else if v.cursorY < v.height-1 {
 			// Only append history lines when cursor will actually move down
 			logicalY := v.cursorY + v.getTopHistoryLine()
-			if logicalY+1 >= v.historyLen {
+			if logicalY+1 >= v.getHistoryLen() {
 				v.appendHistoryLine(make([]Cell, 0, v.width))
 			}
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
@@ -335,20 +345,28 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 		topHistory := v.getTopHistoryLine()
 		if n > 0 { // Scroll Up
 			for i := 0; i < n; i++ {
-				// Remove the top line of the region
-				// Move all lines in region up by one
-				for y := top; y < bottom; y++ {
-					srcLine := v.getHistoryLine(topHistory + y + 1)
-					v.setHistoryLine(topHistory+y, srcLine)
+				if top == 0 {
+					// Scrolling at the top of the screen - preserve line as history
+					// Append a new blank line to history, effectively pushing old content up
+					blankLine := make([]Cell, 0, v.width)
+					v.appendHistoryLine(blankLine)
+					// viewOffset needs to stay at bottom, which happens naturally
+					v.viewOffset = 0
+				} else {
+					// Scrolling within a region (not at screen top) - shift lines up
+					for y := top; y < bottom; y++ {
+						srcLine := v.getHistoryLine(topHistory + y + 1)
+						v.setHistoryLine(topHistory+y, srcLine)
+					}
+					// Clear the bottom line of the region
+					blankLine := make([]Cell, 0, v.width)
+					v.setHistoryLine(topHistory+bottom, blankLine)
 				}
-				// Clear the bottom line
-				blankLine := make([]Cell, 0, v.width)
-				v.setHistoryLine(topHistory+bottom, blankLine)
 			}
 		} else { // Scroll Down
 			// Ensure history buffer has all lines we'll be writing to
 			endLogicalY := topHistory + bottom
-			for v.historyLen <= endLogicalY {
+			for v.getHistoryLen() <= endLogicalY {
 				v.appendHistoryLine(make([]Cell, 0, v.width))
 			}
 			for i := 0; i < -n; i++ {
@@ -400,7 +418,7 @@ func (v *VTerm) scrollUpWithinMargins(n int) {
 
 		// Ensure history has all required lines
 		endLogicalY := topHistory + v.marginBottom
-		for v.historyLen <= endLogicalY {
+		for v.getHistoryLen() <= endLogicalY {
 			v.appendHistoryLine(make([]Cell, 0, v.width))
 		}
 
@@ -480,7 +498,7 @@ func (v *VTerm) scrollDownWithinMargins(n int) {
 
 		// Ensure history has all required lines
 		endLogicalY := topHistory + v.marginBottom
-		for v.historyLen <= endLogicalY {
+		for v.getHistoryLen() <= endLogicalY {
 			v.appendHistoryLine(make([]Cell, 0, v.width))
 		}
 
@@ -535,7 +553,8 @@ func (v *VTerm) Scroll(delta int) {
 	if v.viewOffset < 0 {
 		v.viewOffset = 0
 	}
-	maxOffset := v.historyLen - v.height
+	histLen := v.getHistoryLen()
+	maxOffset := histLen - v.height
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
@@ -686,10 +705,16 @@ func (v *VTerm) ClearScreen() {
 		}
 		v.SetCursorPos(0, 0)
 	} else {
-		v.historyBuffer = make([][]Cell, v.maxHistorySize)
-		v.historyHead = 0
-		v.historyLen = 1
-		v.historyBuffer[0] = make([]Cell, 0, v.width)
+		if v.historyManager != nil {
+			// Using HistoryManager - just append first line
+			v.historyManager.AppendLine(make([]Cell, 0, v.width))
+		} else {
+			// Legacy circular buffer
+			v.historyBuffer = make([][]Cell, v.maxHistorySize)
+			v.historyHead = 0
+			v.historyLen = 1
+			v.historyBuffer[0] = make([]Cell, 0, v.width)
+		}
 		v.viewOffset = 0
 		v.SetCursorPos(0, 0)
 	}
@@ -716,7 +741,7 @@ func (v *VTerm) ClearVisibleScreen() {
 		}
 		for y := 0; y < v.height; y++ {
 			logicalY := logicalTop + y
-			if logicalY < v.historyLen {
+			if logicalY < v.getHistoryLen() {
 				v.setHistoryLine(logicalY, append([]Cell(nil), blankLine...))
 			}
 		}
@@ -748,18 +773,35 @@ func (v *VTerm) RestoreCursor() {
 
 // --- History and Viewport Management ---
 
-// getHistoryLine retrieves a specific line from the circular history buffer.
+// getHistoryLen returns the current history length (from HistoryManager or legacy buffer).
+func (v *VTerm) getHistoryLen() int {
+	if v.historyManager != nil {
+		return v.historyManager.Length()
+	}
+	return v.historyLen
+}
+
+// getHistoryLine retrieves a specific line from the history buffer (or HistoryManager).
 func (v *VTerm) getHistoryLine(index int) []Cell {
-	if index < 0 || index >= v.historyLen {
+	if v.historyManager != nil {
+		return v.historyManager.GetLine(index)
+	}
+	// Legacy circular buffer
+	if index < 0 || index >= v.getHistoryLen() {
 		return nil
 	}
 	physicalIndex := (v.historyHead + index) % v.maxHistorySize
 	return v.historyBuffer[physicalIndex]
 }
 
-// setHistoryLine updates a specific line in the circular history buffer.
+// setHistoryLine updates a specific line in the history buffer (or HistoryManager).
 func (v *VTerm) setHistoryLine(index int, line []Cell) {
-	if index < 0 || index >= v.historyLen {
+	if v.historyManager != nil {
+		v.historyManager.SetLine(index, line)
+		return
+	}
+	// Legacy circular buffer
+	if index < 0 || index >= v.getHistoryLen() {
 		return
 	}
 	physicalIndex := (v.historyHead + index) % v.maxHistorySize
@@ -768,14 +810,19 @@ func (v *VTerm) setHistoryLine(index int, line []Cell) {
 
 // appendHistoryLine adds a new line to the end of the history buffer.
 func (v *VTerm) appendHistoryLine(line []Cell) {
-	if v.historyLen < v.maxHistorySize {
-		physicalIndex := (v.historyHead + v.historyLen) % v.maxHistorySize
+	if v.historyManager != nil {
+		v.historyManager.AppendLine(line)
+		return
+	}
+	// Legacy circular buffer
+	if v.getHistoryLen() < v.maxHistorySize {
+		physicalIndex := (v.historyHead + v.getHistoryLen()) % v.maxHistorySize
 		v.historyBuffer[physicalIndex] = line
 		v.historyLen++
 	} else {
 		// Buffer is full, wrap around (overwrite the oldest line)
 		v.historyHead = (v.historyHead + 1) % v.maxHistorySize
-		physicalIndex := (v.historyHead + v.historyLen - 1) % v.maxHistorySize
+		physicalIndex := (v.historyHead + v.getHistoryLen() - 1) % v.maxHistorySize
 		v.historyBuffer[physicalIndex] = line
 	}
 }
@@ -785,7 +832,11 @@ func (v *VTerm) getTopHistoryLine() int {
 	if v.inAltScreen {
 		return 0
 	}
-	top := v.historyLen - v.height - v.viewOffset
+	histLen := v.historyLen
+	if v.historyManager != nil {
+		histLen = v.historyManager.Length()
+	}
+	top := histLen - v.height - v.viewOffset
 	if top < 0 {
 		top = 0
 	}
@@ -799,6 +850,9 @@ func (v *VTerm) VisibleTop() int {
 
 // HistoryLength exposes the number of lines tracked in history.
 func (v *VTerm) HistoryLength() int {
+	if v.historyManager != nil {
+		return v.historyManager.Length()
+	}
 	return v.historyLen
 }
 
@@ -979,7 +1033,7 @@ func (v *VTerm) DECALN() {
 		for y := 0; y < v.height; y++ {
 			logicalY := topHistory + y
 			// Ensure line exists
-			for logicalY >= v.historyLen {
+			for logicalY >= v.getHistoryLen() {
 				v.appendHistoryLine(make([]Cell, 0, v.width))
 			}
 			line := v.getHistoryLine(logicalY)
@@ -1694,7 +1748,7 @@ func (v *VTerm) ClearScreenMode(mode int) {
 				blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 			}
 			// Ensure all lines exist in history up to end of viewport
-			for v.historyLen < endY {
+			for v.getHistoryLen() < endY {
 				v.appendHistoryLine(make([]Cell, 0, v.width))
 			}
 			// Now clear lines below cursor
@@ -1757,7 +1811,7 @@ func (v *VTerm) ClearLine(mode int) {
 	} else {
 		logicalY = v.cursorY + v.getTopHistoryLine()
 		// Ensure line exists
-		for v.historyLen <= logicalY {
+		for v.getHistoryLen() <= logicalY {
 			v.appendHistoryLine(make([]Cell, 0, v.width))
 		}
 		line = v.getHistoryLine(logicalY)
@@ -1808,7 +1862,7 @@ func (v *VTerm) EraseCharacters(n int) {
 		line = v.altBuffer[v.cursorY]
 	} else {
 		// Ensure line exists
-		for v.historyLen <= logicalY {
+		for v.getHistoryLen() <= logicalY {
 			v.appendHistoryLine(make([]Cell, 0, v.width))
 		}
 		line = v.getHistoryLine(logicalY)
@@ -2058,7 +2112,7 @@ func (v *VTerm) insertFullLines(n int) {
 		} else {
 			// Main screen: ensure history has enough lines first
 			endLogicalY := topHistory + v.marginBottom
-			for v.historyLen <= endLogicalY {
+			for v.getHistoryLen() <= endLogicalY {
 				v.appendHistoryLine(make([]Cell, 0, v.width))
 			}
 
@@ -2141,13 +2195,13 @@ func (v *VTerm) insertLinesWithinMargins(n int) {
 }
 
 func (v *VTerm) insertHistoryLine(index int, line []Cell) {
-	if index < 0 || index > v.historyLen {
+	if index < 0 || index > v.getHistoryLen() {
 		return
 	}
-	if v.historyLen < v.maxHistorySize {
+	if v.getHistoryLen() < v.maxHistorySize {
 		physicalInsertIndex := (v.historyHead + index) % v.maxHistorySize
 		// Shift existing lines to make room
-		for i := v.historyLen; i > index; i-- {
+		for i := v.getHistoryLen(); i > index; i-- {
 			srcPhysical := (v.historyHead + i - 1 + v.maxHistorySize) % v.maxHistorySize
 			dstPhysical := (v.historyHead + i) % v.maxHistorySize
 			v.historyBuffer[dstPhysical] = v.historyBuffer[srcPhysical]
@@ -2202,7 +2256,7 @@ func (v *VTerm) deleteFullLines(n int) {
 		} else {
 			// Main screen: ensure history has enough lines first
 			endLogicalY := topHistory + v.marginBottom
-			for v.historyLen <= endLogicalY {
+			for v.getHistoryLen() <= endLogicalY {
 				v.appendHistoryLine(make([]Cell, 0, v.width))
 			}
 
@@ -2291,11 +2345,11 @@ func (v *VTerm) deleteLinesWithinMargins(n int) {
 }
 
 func (v *VTerm) deleteHistoryLine(index int) {
-	if index < 0 || index >= v.historyLen {
+	if index < 0 || index >= v.getHistoryLen() {
 		return
 	}
 	// Shift lines up to fill the gap
-	for i := index; i < v.historyLen-1; i++ {
+	for i := index; i < v.getHistoryLen()-1; i++ {
 		srcPhysical := (v.historyHead + i + 1) % v.maxHistorySize
 		dstPhysical := (v.historyHead + i) % v.maxHistorySize
 		v.historyBuffer[dstPhysical] = v.historyBuffer[srcPhysical]
@@ -2547,10 +2601,15 @@ func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
 }
 
+func WithHistoryManager(hm *HistoryManager) Option {
+	return func(v *VTerm) { v.historyManager = hm }
+}
+
 // reflowHistoryBuffer rewraps all lines in the history buffer to fit the new width.
 // It reconstructs logical lines by joining wrapped segments and re-wraps them.
 func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
-	if v.historyLen == 0 {
+	histLen := v.getHistoryLen()
+	if histLen == 0 {
 		return
 	}
 
@@ -2558,7 +2617,7 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	var logicalLines [][]Cell
 	currentLogical := []Cell{}
 
-	for i := 0; i < v.historyLen; i++ {
+	for i := 0; i < v.getHistoryLen(); i++ {
 		line := v.getHistoryLine(i)
 
 		// Check if this line wraps to the next by looking at the LAST cell (not last non-space)
@@ -2621,19 +2680,68 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	}
 
 	// Replace history buffer with reflowed content
-	v.historyLen = len(newHistory)
-	v.historyHead = 0
-	for i := 0; i < v.historyLen && i < v.maxHistorySize; i++ {
-		v.historyBuffer[i] = newHistory[i]
-	}
-	// If we have more lines than fit in the buffer, keep only the most recent
-	if v.historyLen > v.maxHistorySize {
-		offset := v.historyLen - v.maxHistorySize
-		for i := 0; i < v.maxHistorySize; i++ {
-			v.historyBuffer[i] = newHistory[offset+i]
+	if v.historyManager != nil {
+		// Using HistoryManager - replace buffer with reflowed content
+		v.historyManager.ReplaceBuffer(newHistory)
+	} else {
+		// Using legacy buffer
+		v.historyLen = len(newHistory)
+		v.historyHead = 0
+		for i := 0; i < len(newHistory) && i < v.maxHistorySize; i++ {
+			v.historyBuffer[i] = newHistory[i]
 		}
-		v.historyLen = v.maxHistorySize
+		// If we have more lines than fit in the buffer, keep only the most recent
+		if len(newHistory) > v.maxHistorySize {
+			offset := len(newHistory) - v.maxHistorySize
+			for i := 0; i < v.maxHistorySize; i++ {
+				v.historyBuffer[i] = newHistory[offset+i]
+			}
+			v.historyLen = v.maxHistorySize
+		}
 	}
+}
+
+// placeCursorMarker places a special marker character at the current cursor position.
+// Returns true if marker was placed successfully.
+func (v *VTerm) placeCursorMarker() bool {
+	topHistory := v.getTopHistoryLine()
+	cursorLine := topHistory + v.cursorY
+
+	if cursorLine >= v.getHistoryLen() {
+		return false
+	}
+
+	line := v.getHistoryLine(cursorLine)
+	if line == nil {
+		return false
+	}
+
+	// Extend line if cursor is beyond current line length
+	for len(line) <= v.cursorX {
+		line = append(line, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
+	}
+
+	// Place marker at cursor position
+	line[v.cursorX].Rune = cursorMarker
+	v.setHistoryLine(cursorLine, line)
+	return true
+}
+
+// findAndRemoveCursorMarker searches for the cursor marker and returns its position.
+// Removes the marker and returns (line, column, found).
+func (v *VTerm) findAndRemoveCursorMarker() (int, int, bool) {
+	for i := 0; i < v.getHistoryLen(); i++ {
+		line := v.getHistoryLine(i)
+		for j := 0; j < len(line); j++ {
+			if line[j].Rune == cursorMarker {
+				// Remove the marker by replacing it with a space
+				line[j].Rune = ' '
+				v.setHistoryLine(i, line)
+				return i, j, true
+			}
+		}
+	}
+	return 0, 0, false
 }
 
 // Resize handles changes to the terminal's dimensions.
@@ -2659,18 +2767,69 @@ func (v *VTerm) Resize(width, height int) {
 		v.altBuffer = newAltBuffer
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	} else {
-		// Reflow main screen buffer if enabled and width changed
-		if v.reflowEnabled && oldWidth != width {
+		// Handle height-only changes (no width change, no reflow needed)
+		if oldHeight != height && oldWidth == width {
+			// Height changed but not width - adjust cursor position
+			// When height increases, topHistory decreases (we show more lines above)
+			// so cursor needs to move down on screen to stay at same absolute line
+			oldTopHistory := v.getHistoryLen() - oldHeight + v.viewOffset
+			newTopHistory := v.getHistoryLen() - height + v.viewOffset
+			deltaTop := newTopHistory - oldTopHistory // Negative when height increases
+
+			// Adjust cursor Y to compensate for topHistory shift
+			v.cursorY -= deltaTop
+
+			// Clamp to screen bounds
+			if v.cursorY < 0 {
+				v.cursorY = 0
+			} else if v.cursorY >= v.height {
+				v.cursorY = v.height - 1
+			}
+		} else if v.reflowEnabled && oldWidth != width {
+			// Place marker at cursor position before reflow
+			markerPlaced := v.placeCursorMarker()
+
+			// Reflow the buffer (marker will move with content)
 			v.reflowHistoryBuffer(oldWidth, width)
+
+			// Find marker and place cursor there
+			if markerPlaced {
+				if markerLine, markerCol, found := v.findAndRemoveCursorMarker(); found {
+					// Clamp X to screen width
+					if markerCol >= v.width {
+						markerCol = v.width - 1
+					}
+
+					// Calculate where marker currently is on screen (with current viewOffset)
+					topHistory := v.getTopHistoryLine()
+					screenY := markerLine - topHistory
+
+					// Only adjust viewOffset if marker is off-screen
+					if screenY < 0 {
+						// Marker is above visible area - scroll up to show it at top
+						v.viewOffset += -screenY
+						screenY = 0
+					} else if screenY >= v.height {
+						// Marker is below visible area - scroll down to show it at bottom
+						adjustment := screenY - v.height + 1
+						v.viewOffset -= adjustment
+						screenY = v.height - 1
+					}
+
+					v.cursorY = screenY
+					v.cursorX = markerCol
+				} else {
+					// Fallback: clamp cursor if marker not found
+					v.SetCursorPos(v.cursorY, v.cursorX)
+				}
+			} else {
+				// Fallback: clamp cursor if marker couldn't be placed
+				v.SetCursorPos(v.cursorY, v.cursorX)
+			}
+		} else {
+			// No reflow needed, just clamp cursor
+			v.SetCursorPos(v.cursorY, v.cursorX)
 		}
-		// In main screen mode, the PTY application (bash/shell) will reposition
-		// the cursor itself after receiving SIGWINCH. Our job is just to ensure
-		// the cursor stays within valid bounds for the new dimensions.
-		//
-		// IMPORTANT: Don't try to "preserve" cursor position by adjusting it,
-		// because bash maintains its own cursor state and will get confused if
-		// we move the cursor without bash knowing.
-		v.SetCursorPos(v.cursorY, v.cursorX) // Just clamp to new dimensions
 	}
 
 	// Reset margins on resize (without moving cursor)

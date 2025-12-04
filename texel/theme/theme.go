@@ -60,6 +60,15 @@ func Get() Config {
 	return instance
 }
 
+// GetLoadError returns the error that occurred during theme loading, if any.
+// This allows callers to check if the theme loaded successfully.
+func GetLoadError() error {
+	_ = Get() // Ensure theme has been loaded
+	mu.RLock()
+	defer mu.RUnlock()
+	return loadErr
+}
+
 // Reload forces a re-read of the theme file and palette.
 func Reload() error {
 	mu.Lock()

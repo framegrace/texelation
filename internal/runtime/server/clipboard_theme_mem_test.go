@@ -53,7 +53,7 @@ func TestClipboardAndThemeRoundTrip(t *testing.T) {
 	shellFactory := func() texel.App { return app }
 	welcomeFactory := func() texel.App { return app }
 
-	desktop, err := texel.NewDesktopEngineWithDriver(signalScreenDriver{}, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(signalScreenDriver{}, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}

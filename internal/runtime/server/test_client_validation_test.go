@@ -63,7 +63,7 @@ func setupTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, func
 	welcomeFactory := func() texel.App { return app }
 	lifecycle := &texel.NoopAppLifecycle{}
 
-	desktop, err := texel.NewDesktopEngineWithDriver(stubDriver{}, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(stubDriver{}, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("failed to create desktop: %v", err)
 	}

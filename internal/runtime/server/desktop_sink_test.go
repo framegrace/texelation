@@ -54,7 +54,7 @@ func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
 	welcomeFactory := func() texel.App { return recorder }
 
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
 	welcomeFactory := func() texel.App { return &recordingApp{title: "welcome"} }
 
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestDesktopSinkHandlesAdditionalEvents(t *testing.T) {
 	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
 	welcomeFactory := func() texel.App { return &recordingApp{title: "welcome"} }
 
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
