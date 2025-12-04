@@ -397,6 +397,20 @@ func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
 	}
 }
 
+// closeFloatingPanelByApp finds and closes the floating panel hosting the given app.
+func (d *DesktopEngine) closeFloatingPanelByApp(app App) {
+	var panel *FloatingPanel
+	for _, fp := range d.floatingPanels {
+		if fp.app == app {
+			panel = fp
+			break
+		}
+	}
+	if panel != nil {
+		d.CloseFloatingPanel(panel)
+	}
+}
+
 // AddStatusPane adds a new status pane to the desktop.
 func (d *DesktopEngine) AddStatusPane(app App, side Side, size int) {
 	sp := &StatusPane{
@@ -550,10 +564,32 @@ func (d *DesktopEngine) launchLauncherOverlay() {
 		return
 	}
 
-	// Custom replacer for floating context
-	replacer := &FloatingLauncherReplacer{desktop: d, app: app}
-	if receiver, ok := app.(ReplacerReceiver); ok {
-		receiver.SetReplacer(replacer)
+	// Register control bus handlers if the app provides a control bus
+	if provider, ok := app.(ControlBusProvider); ok {
+		// Register handler for app selection
+		provider.RegisterControl("launcher.select-app", "Launch selected app in active pane", func(payload interface{}) error {
+			appName, ok := payload.(string)
+			if !ok {
+				return nil
+			}
+
+			// Close the launcher floating panel
+			d.closeFloatingPanelByApp(app)
+
+			// Launch the selected app in the active pane
+			if ws := d.ActiveWorkspace(); ws != nil {
+				if pane := ws.ActivePane(); pane != nil {
+					pane.ReplaceWithApp(appName, nil)
+				}
+			}
+			return nil
+		})
+
+		// Register handler for launcher close
+		provider.RegisterControl("launcher.close", "Close launcher overlay", func(payload interface{}) error {
+			d.closeFloatingPanelByApp(app)
+			return nil
+		})
 	}
 
 	vw, vh := d.viewportSize()
@@ -586,10 +622,13 @@ func (d *DesktopEngine) launchHelpOverlay() {
 		return
 	}
 
-	// Custom replacer for floating context
-	replacer := &FloatingLauncherReplacer{desktop: d, app: app}
-	if receiver, ok := app.(ReplacerReceiver); ok {
-		receiver.SetReplacer(replacer)
+	// Register control bus handlers if the app provides a control bus
+	if provider, ok := app.(ControlBusProvider); ok {
+		// Register handler for help close
+		provider.RegisterControl("help.close", "Close help overlay", func(payload interface{}) error {
+			d.closeFloatingPanelByApp(app)
+			return nil
+		})
 	}
 
 	vw, vh := d.viewportSize()
@@ -605,37 +644,6 @@ func (d *DesktopEngine) launchHelpOverlay() {
 	y := (vh - h) / 2
 
 	d.ShowFloatingPanel(app, x, y, w, h)
-}
-
-type FloatingLauncherReplacer struct {
-	desktop *DesktopEngine
-	app     App
-}
-
-func (r *FloatingLauncherReplacer) ReplaceWithApp(name string, config map[string]interface{}) {
-	// Close the specific panel hosting this app
-	r.Close()
-
-	// Launch in active pane
-	if ws := r.desktop.ActiveWorkspace(); ws != nil {
-		if pane := ws.ActivePane(); pane != nil {
-			pane.ReplaceWithApp(name, config)
-		}
-	}
-}
-
-func (r *FloatingLauncherReplacer) Close() {
-	// Close the specific panel hosting this app
-	var panel *FloatingPanel
-	for _, fp := range r.desktop.floatingPanels {
-		if fp.app == r.app {
-			panel = fp
-			break
-		}
-	}
-	if panel != nil {
-		r.desktop.CloseFloatingPanel(panel)
-	}
 }
 
 // InjectMouseEvent records the latest mouse event metadata from remote clients.

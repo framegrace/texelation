@@ -50,18 +50,16 @@ type TexelTerm struct {
 	wg                   sync.WaitGroup
 	buf                  [][]texel.Cell
 	colorPalette         [258]tcell.Color
-	controlBus           cards.ControlBus
+	controlBus           texel.ControlBus
 	selection            termSelection
 	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
 
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
-	replacer        texel.AppReplacer
 }
 
 var _ texel.CloseRequester = (*TexelTerm)(nil)
-var _ texel.ReplacerReceiver = (*TexelTerm)(nil)
 
 // termSelection tracks the current text selection state and multi-click history.
 //
@@ -106,20 +104,12 @@ func New(title, command string) texel.App {
 	return pipe
 }
 
-func (a *TexelTerm) SetReplacer(r texel.AppReplacer) {
-	a.mu.Lock()
-	a.replacer = r
-	a.mu.Unlock()
-}
-
 func (a *TexelTerm) RequestClose() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.confirmClose = true
 	a.confirmCallback = func() {
-		if a.replacer != nil {
-			a.replacer.Close()
-		}
+		close(a.closeCh)
 	}
 	a.requestRefresh()
 	return false
@@ -224,7 +214,7 @@ func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 }
 
-func (a *TexelTerm) AttachControlBus(bus cards.ControlBus) {
+func (a *TexelTerm) AttachControlBus(bus texel.ControlBus) {
 	a.mu.Lock()
 	a.controlBus = bus
 	a.mu.Unlock()
@@ -238,8 +228,6 @@ func colorToHex(c tcell.Color) string {
 	r, g, b := trueColor.RGB()
 	return fmt.Sprintf("#%02X%02X%02X", r&0xFF, g&0xFF, b&0xFF)
 }
-
-func (a *TexelTerm) HandleMessage(msg texel.Message) {}
 
 func (a *TexelTerm) Render() [][]texel.Cell {
 	a.mu.Lock()

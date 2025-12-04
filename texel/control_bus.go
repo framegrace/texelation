@@ -1,4 +1,4 @@
-package cards
+package texel
 
 import (
 	"errors"
@@ -10,13 +10,15 @@ import (
 // ControlHandler processes a control trigger with an optional payload.
 type ControlHandler func(payload interface{}) error
 
-// ControlCapability describes a control trigger registered on the pipeline.
+// ControlCapability describes a control trigger registered on a control bus.
 type ControlCapability struct {
 	ID          string
 	Description string
 }
 
-// ControlBus allows apps to trigger or register control hooks exposed by cards.
+// ControlBus allows apps to trigger or register control hooks for event signaling.
+// This is the primary communication pattern used throughout Texelation for apps
+// to signal events to their containers and for cards to expose controls.
 type ControlBus interface {
 	Trigger(id string, payload interface{}) error
 	Capabilities() []ControlCapability
@@ -24,7 +26,7 @@ type ControlBus interface {
 	Unregister(id string)
 }
 
-// ControlRegistry is implemented by the pipeline to let cards publish controls.
+// ControlRegistry is implemented by control bus providers to let components publish controls.
 type ControlRegistry interface {
 	Register(id, description string, handler ControlHandler) error
 }
@@ -36,7 +38,8 @@ type controlBus struct {
 	capSorted []ControlCapability
 }
 
-func newControlBus() *controlBus {
+// NewControlBus creates a new control bus for event signaling.
+func NewControlBus() ControlBus {
 	return &controlBus{
 		handlers: make(map[string]ControlHandler),
 		capByID:  make(map[string]ControlCapability),
@@ -45,16 +48,16 @@ func newControlBus() *controlBus {
 
 func (b *controlBus) Register(id, description string, handler ControlHandler) error {
 	if id == "" {
-		return errors.New("cards: control id must not be empty")
+		return errors.New("texel: control id must not be empty")
 	}
 	if handler == nil {
-		return fmt.Errorf("cards: control %q must provide a handler", id)
+		return fmt.Errorf("texel: control %q must provide a handler", id)
 	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if _, exists := b.handlers[id]; exists {
-		return fmt.Errorf("cards: control %q already registered", id)
+		return fmt.Errorf("texel: control %q already registered", id)
 	}
 	b.handlers[id] = handler
 	cap := ControlCapability{ID: id, Description: description}
@@ -89,7 +92,7 @@ func (b *controlBus) Trigger(id string, payload interface{}) error {
 	handler, ok := b.handlers[id]
 	b.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("cards: unknown control %q", id)
+		return fmt.Errorf("texel: unknown control %q", id)
 	}
 	return handler(payload)
 }

@@ -121,9 +121,25 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.screen.handleAppExit(p, currentApp, err)
 	})
 
-	// Inject the replacer if the app wants it
-	if receiver, ok := app.(ReplacerReceiver); ok {
-		receiver.SetReplacer(p)
+	// Register control bus handlers if this is a launcher app in a pane
+	if app.GetTitle() == "Launcher" {
+		if provider, ok := app.(ControlBusProvider); ok {
+			provider.RegisterControl("launcher.select-app", "Launch selected app in this pane", func(payload interface{}) error {
+				appName, ok := payload.(string)
+				if !ok {
+					return nil
+				}
+				p.ReplaceWithApp(appName, nil)
+				return nil
+			})
+
+			provider.RegisterControl("launcher.close", "Close launcher", func(payload interface{}) error {
+				if p.screen != nil {
+					p.screen.CloseActivePane()
+				}
+				return nil
+			})
+		}
 	}
 
 	log.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
@@ -134,7 +150,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 }
 
 // ReplaceWithApp replaces the current app in this pane with a new app from the registry.
-// This implements the AppReplacer interface, allowing apps to spawn other apps in their place.
+// This is called by control bus handlers when apps signal they want to launch a different app.
 func (p *pane) ReplaceWithApp(name string, config map[string]interface{}) {
 	if p.screen == nil || p.screen.desktop == nil {
 		log.Printf("Pane: Cannot replace app - no desktop reference")
@@ -428,7 +444,7 @@ func (p *pane) getTitle() string {
 	return p.name
 }
 
-// Close implements AppReplacer.Close by stopping the current app.
+// Close stops the current app and cleans up the pane.
 func (p *pane) Close() {
 	// Clean up app
 	if listener, ok := p.app.(Listener); ok {

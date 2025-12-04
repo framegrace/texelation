@@ -9,20 +9,6 @@ package texel
 
 import "github.com/gdamore/tcell/v2"
 
-// MessageType defines the type of a message sent to an app.
-type MessageType int
-
-const (
-	// MsgStateUpdate is sent when screen-level state changes.
-	MsgStateUpdate MessageType = iota
-)
-
-// Message is a generic message that can be sent to an app.
-type Message struct {
-	Type    MessageType
-	Payload interface{}
-}
-
 // App defines the interface for any application that can be rendered within a Pane.
 // It abstracts the content source, whether it's an external command (PTY)
 // or an internal widget (like a clock).
@@ -82,26 +68,20 @@ type MouseWheelDeclarer interface {
 	MouseWheelEnabled() bool
 }
 
-// AppReplacer allows an app to replace itself with another app in the same pane.
-// This is primarily used by launcher apps to spawn the selected app in their place.
-type AppReplacer interface {
-	ReplaceWithApp(name string, config map[string]interface{})
-	Close()
-}
-
-// ReplacerReceiver is implemented by apps that want to receive an AppReplacer.
-// The pane will call SetReplacer during AttachApp if the app implements this interface.
-type ReplacerReceiver interface {
-	SetReplacer(replacer AppReplacer)
-}
-
 // CloseRequester is implemented by apps that want to intercept closure requests
 // (from pane close or replacement) to show a confirmation UI.
 type CloseRequester interface {
 	// RequestClose is called when the container wants to close the app.
 	// Returns true if the app is ready to close immediately.
 	// Returns false if the app has intercepted the request (e.g., to show confirmation).
-	// If false is returned, the app is responsible for calling AppReplacer.Close()
-	// (or equivalent) when it is eventually ready to close.
+	// If false is returned, the app should handle its own cleanup and closure.
 	RequestClose() bool
+}
+
+// ControlBusProvider is implemented by apps that expose a control bus for signaling.
+// This allows apps to communicate events (like launcher app selection) without direct coupling.
+type ControlBusProvider interface {
+	// RegisterControl registers a control handler with the given ID and description.
+	// Returns an error if the ID is already registered.
+	RegisterControl(id, description string, handler func(payload interface{}) error) error
 }

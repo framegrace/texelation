@@ -77,7 +77,6 @@ func (a *stubApp) HandleKey(ev *tcell.EventKey) {
 }
 
 func (a *stubApp) SetRefreshNotifier(ch chan<- bool) { a.refresh = ch }
-func (a *stubApp) HandleMessage(texel.Message)       {}
 func (a *stubApp) GetTitle() string                  { return "stub" }
 
 func (a *stubApp) waitRunStarted(t *testing.T) {

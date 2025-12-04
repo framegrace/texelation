@@ -15,7 +15,7 @@ type ControlFunc func(*tcell.EventKey) bool
 // ControllableCard allows cards to expose control capabilities on the pipeline bus.
 type ControllableCard interface {
 	Card
-	RegisterControls(reg ControlRegistry) error
+	RegisterControls(reg texel.ControlRegistry) error
 }
 
 // Pipeline composes multiple cards into a single texel.App implementation.
@@ -28,7 +28,7 @@ type Pipeline struct {
 	height  int
 	refresh chan<- bool
 	control ControlFunc
-	bus     *controlBus
+	bus     texel.ControlBus
 
 	runOnce  sync.Once
 	stopOnce sync.Once
@@ -42,7 +42,7 @@ var _ texel.SelectionHandler = (*Pipeline)(nil)
 var _ texel.SelectionDeclarer = (*Pipeline)(nil)
 var _ texel.MouseWheelHandler = (*Pipeline)(nil)
 var _ texel.MouseWheelDeclarer = (*Pipeline)(nil)
-var _ texel.ReplacerReceiver = (*Pipeline)(nil)
+var _ texel.ControlBusProvider = (*Pipeline)(nil)
 var _ texel.CloseRequester = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
@@ -51,7 +51,7 @@ func NewPipeline(control ControlFunc, cards ...Card) *Pipeline {
 	p := &Pipeline{
 		cards:   append([]Card(nil), cards...),
 		control: control,
-		bus:     newControlBus(),
+		bus:     texel.NewControlBus(),
 	}
 	for _, card := range p.cards {
 		if controllable, ok := card.(ControllableCard); ok {
@@ -196,14 +196,6 @@ func (p *Pipeline) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
-// HandleMessage broadcasts messages to all cards.
-func (p *Pipeline) HandleMessage(msg texel.Message) {
-	cards := p.Cards()
-	for _, card := range cards {
-		card.HandleMessage(msg)
-	}
-}
-
 // SetRefreshNotifier stores the refresh channel and forwards it to all cards.
 func (p *Pipeline) SetRefreshNotifier(ch chan<- bool) {
 	p.mu.Lock()
@@ -307,27 +299,6 @@ func (p *Pipeline) MouseWheelEnabled() bool {
 	return p.wheelHandler() != nil
 }
 
-// SetReplacer implements ReplacerReceiver by forwarding to the first card that wants it.
-func (p *Pipeline) SetReplacer(replacer texel.AppReplacer) {
-	cards := p.Cards()
-	for _, card := range cards {
-		if receiver, ok := card.(texel.ReplacerReceiver); ok {
-			receiver.SetReplacer(replacer)
-			return
-		}
-		if accessor, ok := card.(AppAccessor); ok {
-			underlying := accessor.UnderlyingApp()
-			if underlying == nil {
-				continue
-			}
-			if receiver, ok := underlying.(texel.ReplacerReceiver); ok {
-				receiver.SetReplacer(replacer)
-				return
-			}
-		}
-	}
-}
-
 // pasteHandler finds the first card capable of handling paste events.
 func (p *Pipeline) pasteHandler() interface{ HandlePaste([]byte) } {
 	cards := p.Cards()
@@ -356,8 +327,16 @@ func (p *Pipeline) HandlePaste(data []byte) {
 }
 
 // ControlBus exposes the control bus associated with this pipeline.
-func (p *Pipeline) ControlBus() ControlBus {
+func (p *Pipeline) ControlBus() texel.ControlBus {
 	return p.bus
+}
+
+// RegisterControl implements texel.ControlBusProvider by forwarding to the pipeline's control bus.
+// This allows apps wrapped in pipelines to register control handlers without importing the cards package.
+func (p *Pipeline) RegisterControl(id, description string, handler func(payload interface{}) error) error {
+	// Wrap the handler to match ControlHandler type
+	wrappedHandler := texel.ControlHandler(handler)
+	return p.bus.Register(id, description, wrappedHandler)
 }
 
 // OnEvent implements texel.Listener to forward events to all cards.

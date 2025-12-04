@@ -93,30 +93,31 @@ killall -HUP texel-server
    - Rescan apps directory
    - Like theme reload
 
-### Phase 3: AppReplacer Interface
+### Phase 3: Control Bus Integration
 
-Add ability for apps to replace themselves (for launcher):
+Apps communicate via the control bus pattern (consistent with the rest of Texelation):
 
 ```go
 // In texel/app.go
-type AppReplacer interface {
-    ReplaceWithApp(name string, config map[string]interface{})
+type ControlBusProvider interface {
+    RegisterControl(id, description string, handler func(payload interface{}) error) error
 }
 
-// In texel/pane.go
-func (p *pane) ReplaceWithApp(name string, config map[string]interface{}) {
-    newApp := p.screen.desktop.registry.CreateApp(name, config)
-    p.AttachApp(newApp, p.screen.refreshChan)
-    p.screen.desktop.broadcastStateUpdate()
-}
-
-func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
-    // ... existing code ...
-
-    // Give app ability to replace itself
-    if replaceable, ok := app.(interface{ SetReplacer(AppReplacer) }); ok {
-        replaceable.SetReplacer(p)
+// Apps signal events through the control bus
+func (l *Launcher) HandleKey(ev *tcell.EventKey) {
+    if ev.Key() == tcell.KeyEnter {
+        // Trigger control bus event instead of calling replacer
+        l.controlBus.Trigger("launcher.select-app", selectedAppName)
     }
+}
+
+// Desktop registers handlers on the app's control bus
+if provider, ok := app.(ControlBusProvider); ok {
+    provider.RegisterControl("launcher.select-app", "Launch selected app", func(payload interface{}) error {
+        appName := payload.(string)
+        // Handle app launch in active pane
+        return nil
+    })
 }
 ```
 
@@ -126,21 +127,21 @@ Create `apps/launcher/` using TexelUI:
 
 ```go
 type Launcher struct {
-    registry *registry.Registry
-    replacer texel.AppReplacer
+    registry   *registry.Registry
+    controlBus cards.ControlBus
     // ... UI state ...
 }
 
-func (l *Launcher) SetReplacer(r texel.AppReplacer) {
-    l.replacer = r
+func (l *Launcher) AttachControlBus(bus cards.ControlBus) {
+    l.controlBus = bus
 }
 
 func (l *Launcher) HandleKey(ev *tcell.EventKey) {
     if ev.Key() == tcell.KeyEnter {
         selected := l.selectedApp
 
-        // Replace launcher with selected app
-        l.replacer.ReplaceWithApp(selected, nil)
+        // Signal app selection via control bus
+        l.controlBus.Trigger("launcher.select-app", selected)
     }
 }
 ```
@@ -226,11 +227,12 @@ type FloatingPanel struct {
 - ✅ App scanning from ~/.config/texelation/apps/
 - ✅ SIGHUP reload support for apps
 
-#### Phase 3: AppReplacer Interface
-- ✅ AppReplacer interface defined
-- ✅ ReplacerReceiver interface for apps
-- ✅ Pane implements ReplaceWithApp
-- ✅ Automatic replacer injection in AttachApp
+#### Phase 3: Control Bus Integration
+- ✅ ControlBusProvider interface defined in texel/app.go
+- ✅ Pipeline implements ControlBusProvider
+- ✅ Desktop registers handlers on launcher's control bus
+- ✅ Launcher signals events via control bus
+- ✅ Consistent with Texelation's control bus pattern
 
 #### Phase 4: Launcher App with TexelUI
 - ✅ Launcher app implementation (apps/launcher/)
@@ -245,13 +247,16 @@ type FloatingPanel struct {
 - ✅ Input routing for modal panels
 - ✅ Rendering pipeline update
 - ✅ Ctrl+A+L keybinding
-- ✅ FloatingLauncherReplacer for launching apps into active pane
+- ✅ Control bus handlers for launching apps into active pane
 
 ## 🎉 Current Status
 
-**Phase 1-5 Complete!**
+**Phase 1-5 Complete with Control Bus Pattern!**
 - Users can launch the launcher with `Ctrl+A L`.
 - It appears as a floating modal overlay.
 - Selecting an app launches it in the underlying active pane and closes the overlay.
+- **Fully consistent with Texelation architecture**: Uses control bus pattern instead of direct injection.
+- Apps signal events through their control bus, desktop listens and responds.
+- No special-case interfaces or bidirectional dependencies.
 
-**Next Step**: Enjoy the new launcher experience!
+**Next Step**: Enjoy the new launcher experience with clean, consistent architecture!

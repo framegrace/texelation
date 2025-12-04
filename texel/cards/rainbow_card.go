@@ -42,9 +42,8 @@ func (c *RainbowCard) Stop() {
 	c.stopTickerLocked()
 	c.mu.Unlock()
 }
-func (c *RainbowCard) Resize(int, int)             {}
-func (c *RainbowCard) HandleKey(*tcell.EventKey)   {}
-func (c *RainbowCard) HandleMessage(texel.Message) {}
+func (c *RainbowCard) Resize(int, int)           {}
+func (c *RainbowCard) HandleKey(*tcell.EventKey) {}
 func (c *RainbowCard) SetRefreshNotifier(ch chan<- bool) {
 	c.mu.Lock()
 	c.refresh = ch

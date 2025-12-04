@@ -30,7 +30,6 @@ func (s *stubCard) Render(input [][]texel.Cell) [][]texel.Cell {
 }
 func (s *stubCard) HandleKey(ev *tcell.EventKey)      { s.handledKeys = append(s.handledKeys, ev) }
 func (s *stubCard) SetRefreshNotifier(ch chan<- bool) { s.refresh = ch }
-func (s *stubCard) HandleMessage(msg texel.Message)   {}
 
 type effectCard struct{}
 
@@ -46,7 +45,6 @@ func (effectCard) Render(input [][]texel.Cell) [][]texel.Cell {
 }
 func (effectCard) HandleKey(*tcell.EventKey)      {}
 func (effectCard) SetRefreshNotifier(chan<- bool) {}
-func (effectCard) HandleMessage(texel.Message)    {}
 
 type busCard struct {
 	triggered bool
@@ -56,10 +54,9 @@ func (b *busCard) Run() error                                 { return nil }
 func (b *busCard) Stop()                                      {}
 func (b *busCard) Resize(int, int)                            {}
 func (b *busCard) Render(input [][]texel.Cell) [][]texel.Cell { return input }
-func (b *busCard) HandleKey(*tcell.EventKey)                  {}
-func (b *busCard) SetRefreshNotifier(chan<- bool)             {}
-func (b *busCard) HandleMessage(texel.Message)                {}
-func (b *busCard) RegisterControls(reg ControlRegistry) error {
+func (b *busCard) HandleKey(*tcell.EventKey)      {}
+func (b *busCard) SetRefreshNotifier(chan<- bool) {}
+func (b *busCard) RegisterControls(reg texel.ControlRegistry) error {
 	return reg.Register("card.trigger", "Bus test trigger", func(interface{}) error {
 		b.triggered = true
 		return nil

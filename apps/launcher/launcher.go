@@ -27,7 +27,7 @@ type Launcher struct {
 	*adapter.UIApp
 
 	registry   *registry.Registry
-	replacer   texel.AppReplacer
+	controlBus texel.ControlBus
 
 	mu           sync.RWMutex
 	apps         []*registry.AppEntry
@@ -55,15 +55,19 @@ func New(reg *registry.Registry) texel.App {
 	// Note: UI will be built on first Resize() call
 
 	// Wrap in pipeline for effects support
-	return cards.NewPipeline(nil, cards.WrapApp(l))
+	wrapped := cards.WrapApp(l)
+	pipe := cards.NewPipeline(nil, wrapped)
+	l.AttachControlBus(pipe.ControlBus())
+	return pipe
 }
 
-// SetReplacer implements ReplacerReceiver to receive the replacer from the pane.
-func (l *Launcher) SetReplacer(replacer texel.AppReplacer) {
+// AttachControlBus connects the launcher to its pipeline's control bus.
+// This allows the launcher to signal app selection and closure events.
+func (l *Launcher) AttachControlBus(bus texel.ControlBus) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.replacer = replacer
-	log.Printf("Launcher: Replacer set")
+	l.controlBus = bus
+	log.Printf("Launcher: Control bus attached")
 }
 
 // loadApps fetches the list of apps from the registry.
@@ -193,14 +197,17 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 	case tcell.KeyEnter:
 		if l.selectedIdx >= 0 && l.selectedIdx < len(l.apps) {
 			selectedApp := l.apps[l.selectedIdx]
-			replacer := l.replacer
+			bus := l.controlBus
 			l.mu.Unlock()
 
-			if replacer != nil {
-				log.Printf("Launcher: Launching app '%s'", selectedApp.Manifest.Name)
-				replacer.ReplaceWithApp(selectedApp.Manifest.Name, nil)
+			if bus != nil {
+				log.Printf("Launcher: Signaling app selection '%s'", selectedApp.Manifest.Name)
+				// Trigger control bus event with app name as payload
+				if err := bus.Trigger("launcher.select-app", selectedApp.Manifest.Name); err != nil {
+					log.Printf("Launcher: Failed to trigger select-app: %v", err)
+				}
 			} else {
-				log.Printf("Launcher: Cannot launch - no replacer set")
+				log.Printf("Launcher: Cannot launch - no control bus attached")
 			}
 			return
 		}
@@ -208,11 +215,14 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 		return
 
 	case tcell.KeyEsc:
-		replacer := l.replacer
+		bus := l.controlBus
 		l.mu.Unlock()
-		if replacer != nil {
-			log.Printf("Launcher: Closing")
-			replacer.Close()
+		if bus != nil {
+			log.Printf("Launcher: Signaling close")
+			// Trigger control bus event to close launcher
+			if err := bus.Trigger("launcher.close", nil); err != nil {
+				log.Printf("Launcher: Failed to trigger close: %v", err)
+			}
 		}
 		return
 	}

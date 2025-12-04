@@ -148,8 +148,6 @@ func (c *EffectCard) Resize(cols, rows int) {
 
 func (c *EffectCard) HandleKey(*tcell.EventKey) {}
 
-func (c *EffectCard) HandleMessage(texel.Message) {}
-
 func (c *EffectCard) SetRefreshNotifier(ch chan<- bool) {
 	c.mu.Lock()
 	c.refresh = ch
@@ -184,7 +182,7 @@ func (c *EffectCard) Effect() effects.Effect {
 }
 
 // RegisterControls wires the effect onto the card control bus.
-func (c *EffectCard) RegisterControls(reg ControlRegistry) error {
+func (c *EffectCard) RegisterControls(reg texel.ControlRegistry) error {
 	triggerID := "effects." + c.effectID
 	description := "Trigger " + c.effectID + " effect"
 
