@@ -2,6 +2,7 @@ package devshell
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -9,6 +10,7 @@ import (
 	"texelation/apps/texelterm"
 	"texelation/apps/help"
 	"texelation/texel"
+	"texelation/texel/theme"
 	"texelation/texelui/adapter"
 )
 
@@ -64,6 +66,13 @@ func Run(builder Builder, args []string) error {
 	screen.EnableMouse()
 	defer screen.DisableMouse()
 	screen.EnablePaste() // Enable bracketed paste support
+
+	// Check if theme loaded successfully
+	_ = theme.Get() // Force theme initialization
+	if err := theme.GetLoadError(); err != nil {
+		screen.Fini()
+		log.Fatalf("Fatal: Theme configuration error: %v\nPlease fix your theme file and try again.", err)
+	}
 
 	width, height := screen.Size()
 	app.Resize(width, height)

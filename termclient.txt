@@ -1,0 +1,1 @@
+2025/12/04 02:08:14 Theme info: Could not load theme file (invalid character '}' looking for beginning of object key string). A new default theme will be created.
