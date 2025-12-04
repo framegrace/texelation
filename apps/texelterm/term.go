@@ -55,6 +55,10 @@ type TexelTerm struct {
 	selection            termSelection
 	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
 
+	// Scroll velocity tracking for dynamic scrolling
+	lastScrollTime time.Time
+	scrollVelocity float64
+
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
@@ -735,17 +739,49 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 		a.mu.Unlock()
 		return
 	}
+
+	now := time.Now()
 	lines := deltaY
+
 	if modifiers&tcell.ModShift != 0 {
+		// Shift modifier: full page scroll
 		page := a.height
 		if page <= 0 {
 			page = 1
 		}
 		lines *= page
 	} else {
-		const step = 3
-		lines *= step
+		// Dynamic scrolling based on velocity
+		const baseStep = 1          // Base multiplier (reduced from 3)
+		const velocityDecay = 0.3   // How quickly velocity decays (seconds)
+		const maxMultiplier = 10.0  // Maximum multiplier for very fast scrolling
+
+		// Calculate time since last scroll
+		timeDelta := now.Sub(a.lastScrollTime).Seconds()
+
+		// Update velocity with decay
+		if timeDelta < velocityDecay {
+			// Fast scrolling - increase velocity
+			a.scrollVelocity = a.scrollVelocity*0.7 + 3.0
+		} else {
+			// Slow scrolling - reset velocity
+			a.scrollVelocity = 1.0
+		}
+
+		// Apply non-linear multiplier based on velocity
+		// Uses sqrt to create a smooth acceleration curve
+		multiplier := baseStep * (1.0 + (a.scrollVelocity - 1.0) * 0.5)
+		if multiplier > maxMultiplier {
+			multiplier = maxMultiplier
+		}
+
+		lines = int(float64(lines) * multiplier)
+		if lines == 0 && deltaY != 0 {
+			lines = deltaY // Ensure at least minimal scroll
+		}
 	}
+
+	a.lastScrollTime = now
 	a.vterm.Scroll(lines)
 	a.mu.Unlock()
 	a.requestRefresh()
