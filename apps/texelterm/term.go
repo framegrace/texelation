@@ -769,7 +769,7 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 		// Smooth velocity-based acceleration
 		const velocityDecay = 0.6      // Longer time window (600ms) for speed detection
 		const velocityIncrement = 0.6  // Gradual acceleration per scroll
-		const maxVelocity = 8.0        // Cap at 9x multiplier (1 + 8)
+		const maxVelocity = 15.0       // Cap at 16x multiplier (1 + 15)
 
 		// Calculate time since last scroll
 		timeDelta := now.Sub(a.lastScrollTime).Seconds()
