@@ -342,15 +342,23 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 		topHistory := v.getTopHistoryLine()
 		if n > 0 { // Scroll Up
 			for i := 0; i < n; i++ {
-				// Remove the top line of the region
-				// Move all lines in region up by one
-				for y := top; y < bottom; y++ {
-					srcLine := v.getHistoryLine(topHistory + y + 1)
-					v.setHistoryLine(topHistory+y, srcLine)
+				if top == 0 {
+					// Scrolling at the top of the screen - preserve line as history
+					// Append a new blank line to history, effectively pushing old content up
+					blankLine := make([]Cell, 0, v.width)
+					v.appendHistoryLine(blankLine)
+					// viewOffset needs to stay at bottom, which happens naturally
+					v.viewOffset = 0
+				} else {
+					// Scrolling within a region (not at screen top) - shift lines up
+					for y := top; y < bottom; y++ {
+						srcLine := v.getHistoryLine(topHistory + y + 1)
+						v.setHistoryLine(topHistory+y, srcLine)
+					}
+					// Clear the bottom line of the region
+					blankLine := make([]Cell, 0, v.width)
+					v.setHistoryLine(topHistory+bottom, blankLine)
 				}
-				// Clear the bottom line
-				blankLine := make([]Cell, 0, v.width)
-				v.setHistoryLine(topHistory+bottom, blankLine)
 			}
 		} else { // Scroll Down
 			// Ensure history buffer has all lines we'll be writing to
