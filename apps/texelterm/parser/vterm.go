@@ -15,6 +15,9 @@ import (
 
 const (
 	defaultHistorySize = 2000
+	// cursorMarker is a special character used to track cursor position during reflow
+	// Using Unicode Private Use Area character that won't appear in normal text
+	cursorMarker = rune(0xF8FF)
 )
 
 // VTerm represents the state of a virtual terminal, managing both the main screen
@@ -2691,6 +2694,49 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	}
 }
 
+// placeCursorMarker places a special marker character at the current cursor position.
+// Returns true if marker was placed successfully.
+func (v *VTerm) placeCursorMarker() bool {
+	topHistory := v.getTopHistoryLine()
+	cursorLine := topHistory + v.cursorY
+
+	if cursorLine >= v.getHistoryLen() {
+		return false
+	}
+
+	line := v.getHistoryLine(cursorLine)
+	if line == nil {
+		return false
+	}
+
+	// Extend line if cursor is beyond current line length
+	for len(line) <= v.cursorX {
+		line = append(line, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
+	}
+
+	// Place marker at cursor position
+	line[v.cursorX].Rune = cursorMarker
+	v.setHistoryLine(cursorLine, line)
+	return true
+}
+
+// findAndRemoveCursorMarker searches for the cursor marker and returns its position.
+// Removes the marker and returns (line, column, found).
+func (v *VTerm) findAndRemoveCursorMarker() (int, int, bool) {
+	for i := 0; i < v.getHistoryLen(); i++ {
+		line := v.getHistoryLine(i)
+		for j := 0; j < len(line); j++ {
+			if line[j].Rune == cursorMarker {
+				// Remove the marker by replacing it with a space
+				line[j].Rune = ' '
+				v.setHistoryLine(i, line)
+				return i, j, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
 // Resize handles changes to the terminal's dimensions.
 func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
@@ -2716,16 +2762,46 @@ func (v *VTerm) Resize(width, height int) {
 	} else {
 		// Reflow main screen buffer if enabled and width changed
 		if v.reflowEnabled && oldWidth != width {
+			// Place marker at cursor position before reflow
+			markerPlaced := v.placeCursorMarker()
+
+			// Reflow the buffer (marker will move with content)
 			v.reflowHistoryBuffer(oldWidth, width)
+
+			// Find marker after reflow and position cursor there
+			if markerPlaced {
+				if markerLine, markerCol, found := v.findAndRemoveCursorMarker(); found {
+					// Convert absolute history line to screen-relative position
+					topHistory := v.getTopHistoryLine()
+					newY := markerLine - topHistory
+					newX := markerCol
+
+					// Clamp to screen bounds
+					if newY < 0 {
+						newY = 0
+					} else if newY >= v.height {
+						newY = v.height - 1
+					}
+					if newX < 0 {
+						newX = 0
+					} else if newX >= v.width {
+						newX = v.width - 1
+					}
+
+					v.cursorY = newY
+					v.cursorX = newX
+				} else {
+					// Fallback: clamp cursor if marker not found
+					v.SetCursorPos(v.cursorY, v.cursorX)
+				}
+			} else {
+				// Fallback: clamp cursor if marker couldn't be placed
+				v.SetCursorPos(v.cursorY, v.cursorX)
+			}
+		} else {
+			// No reflow needed, just clamp cursor
+			v.SetCursorPos(v.cursorY, v.cursorX)
 		}
-		// In main screen mode, the PTY application (bash/shell) will reposition
-		// the cursor itself after receiving SIGWINCH. Our job is just to ensure
-		// the cursor stays within valid bounds for the new dimensions.
-		//
-		// IMPORTANT: Don't try to "preserve" cursor position by adjusting it,
-		// because bash maintains its own cursor state and will get confused if
-		// we move the cursor without bash knowing.
-		v.SetCursorPos(v.cursorY, v.cursorX) // Just clamp to new dimensions
 	}
 
 	// Reset margins on resize (without moving cursor)
