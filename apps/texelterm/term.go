@@ -229,8 +229,6 @@ func colorToHex(c tcell.Color) string {
 	return fmt.Sprintf("#%02X%02X%02X", r&0xFF, g&0xFF, b&0xFF)
 }
 
-func (a *TexelTerm) HandleMessage(msg texel.Message) {}
-
 func (a *TexelTerm) Render() [][]texel.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()
