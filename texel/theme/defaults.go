@@ -102,6 +102,16 @@ func ApplyDefaults(cfg Config) {
 		changed = true
 	}
 
+	if applySectionDefaults(cfg, "texelterm.scroll", Section{
+		"velocity_decay":       0.6,   // Time window (seconds) for velocity accumulation
+		"velocity_increment":   0.6,   // Velocity increase per scroll event
+		"max_velocity":         15.0,  // Maximum velocity (multiplier will be 1 + max_velocity)
+		"debounce_ms":          50,    // Milliseconds to debounce duplicate events
+		"exponential_curve":    0.8,   // Exponential smoothing factor (velocity^curve)
+	}) {
+		changed = true
+	}
+
 	if !changed {
 		return
 	}

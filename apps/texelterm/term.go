@@ -744,18 +744,20 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 
 	now := time.Now()
 
-	// Debounce: Ignore events that are too close together (< 50ms)
+	// Read scroll configuration from theme
+	cfg := theme.Get()
+	debounceMs := cfg.GetInt("texelterm.scroll", "debounce_ms", 50)
+	debounceThreshold := time.Duration(debounceMs) * time.Millisecond
+
+	// Debounce: Ignore events that are too close together
 	// This handles mice that send multiple events per physical click
-	const debounceThreshold = 50 * time.Millisecond
 	if !a.scrollEventTime.IsZero() && now.Sub(a.scrollEventTime) < debounceThreshold {
-		log.Printf("DEBUG SCROLL: DEBOUNCED deltaY=%d (too soon after last event)", deltaY)
 		a.mu.Unlock()
 		return
 	}
 	a.scrollEventTime = now
 
 	lines := deltaY
-	log.Printf("DEBUG SCROLL: deltaY=%d, velocity=%.2f", deltaY, a.scrollVelocity)
 
 	if modifiers&tcell.ModShift != 0 {
 		// Shift modifier: full page scroll
@@ -764,12 +766,12 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 			page = 1
 		}
 		lines *= page
-		log.Printf("DEBUG SCROLL RESULT: shift+wheel, final_lines=%d", lines)
 	} else {
-		// Smooth velocity-based acceleration
-		const velocityDecay = 0.6      // Longer time window (600ms) for speed detection
-		const velocityIncrement = 0.6  // Gradual acceleration per scroll
-		const maxVelocity = 15.0       // Cap at 16x multiplier (1 + 15)
+		// Smooth velocity-based acceleration - read parameters from config
+		velocityDecay := cfg.GetFloat("texelterm.scroll", "velocity_decay", 0.6)
+		velocityIncrement := cfg.GetFloat("texelterm.scroll", "velocity_increment", 0.6)
+		maxVelocity := cfg.GetFloat("texelterm.scroll", "max_velocity", 15.0)
+		expCurve := cfg.GetFloat("texelterm.scroll", "exponential_curve", 0.8)
 
 		// Calculate time since last scroll
 		timeDelta := now.Sub(a.lastScrollTime).Seconds()
@@ -786,17 +788,15 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 			a.scrollVelocity = 0.0
 		}
 
-		// Apply smooth exponential curve: 1 + velocity^0.8
+		// Apply smooth exponential curve: 1 + velocity^curve
 		// This creates gentler acceleration than linear
-		smoothVelocity := math.Pow(a.scrollVelocity, 0.8)
+		smoothVelocity := math.Pow(a.scrollVelocity, expCurve)
 		multiplier := 1.0 + smoothVelocity
 
 		lines = int(float64(lines) * multiplier)
 		if lines == 0 && deltaY != 0 {
 			lines = deltaY
 		}
-		log.Printf("DEBUG SCROLL RESULT: velocity=%.2f, smoothed=%.2f, multiplier=%.2f, final_lines=%d",
-			a.scrollVelocity, smoothVelocity, multiplier, lines)
 	}
 
 	a.lastScrollTime = now
