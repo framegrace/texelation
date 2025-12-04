@@ -148,9 +148,8 @@ func TestDesktopWithInjectedDriverAndLifecycle(t *testing.T) {
 	lifecycle := &trackingLifecycle{}
 
 	shellFactory := func() App { return newFakeApp("shell") }
-	welcomeFactory := func() App { return newFakeApp("welcome") }
 
-	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("expected desktop, got error %v", err)
 	}
@@ -159,21 +158,22 @@ func TestDesktopWithInjectedDriverAndLifecycle(t *testing.T) {
 		t.Fatalf("driver was not initialised correctly: %+v", driver)
 	}
 
-	if len(lifecycle.started) != 1 {
-		t.Fatalf("expected welcome app to start, got %d", len(lifecycle.started))
+	// No initial app with empty initAppName
+	if len(lifecycle.started) != 0 {
+		t.Fatalf("expected no app to start initially, got %d", len(lifecycle.started))
 	}
 
 	statusApp := newFakeApp("status")
 	desktop.AddStatusPane(statusApp, SideTop, 1)
 
-	if len(lifecycle.started) != 2 {
+	if len(lifecycle.started) != 1 {
 		t.Fatalf("expected status app to start, got %d", len(lifecycle.started))
 	}
 
 	desktop.Close()
 
-	if len(lifecycle.stopped) != 2 {
-		t.Fatalf("expected two apps to stop, got %d", len(lifecycle.stopped))
+	if len(lifecycle.stopped) != 1 {
+		t.Fatalf("expected one app to stop, got %d", len(lifecycle.stopped))
 	}
 
 	if !driver.finiCalled {
@@ -199,7 +199,7 @@ func TestWorkspaceRemovesPaneWhenAppExits(t *testing.T) {
 		return newFakeApp(title)
 	}
 
-	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("expected desktop, got error %v", err)
 	}
@@ -278,7 +278,7 @@ func TestCloseActivePaneRespawnsWelcome(t *testing.T) {
 
 	shellFactory := func() App { return newFakeApp("shell") }
 
-	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("expected desktop, got error %v", err)
 	}
@@ -331,7 +331,7 @@ func TestMouseBorderResizeAdjustsRatios(t *testing.T) {
 		return newFakeApp(title)
 	}
 
-	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("expected desktop, got error %v", err)
 	}

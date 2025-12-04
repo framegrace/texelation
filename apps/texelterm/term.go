@@ -281,11 +281,11 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 
 	a.vterm.ClearDirty()
 	a.applySelectionHighlightLocked(a.buf)
-	
+
 	if a.confirmClose {
 		a.drawConfirmation(a.buf)
 	}
-	
+
 	return a.buf
 }
 

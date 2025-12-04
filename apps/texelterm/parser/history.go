@@ -166,6 +166,7 @@ func (hm *HistoryManager) AppendLine(line []Cell) {
 	hm.mu.Lock()
 	defer hm.mu.Unlock()
 
+
 	// Make a copy of the line to avoid mutation
 	lineCopy := make([]Cell, len(line))
 	copy(lineCopy, line)

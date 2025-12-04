@@ -36,7 +36,7 @@ func TestServerSendsBootSnapshotFallback(t *testing.T) {
 		Root:  &texel.TreeNodeCapture{PaneIndex: 0},
 	}
 
-	if err := store.Save(capture); err != nil {
+	if err := store.Save(&capture); err != nil {
 		t.Fatalf("save snapshot: %v", err)
 	}
 

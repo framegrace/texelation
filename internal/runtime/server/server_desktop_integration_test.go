@@ -63,7 +63,7 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 	shellFactory := func() texel.App { return app }
 	welcomeFactory := func() texel.App { return app }
 
-	desktop, err := texel.NewDesktopEngineWithDriver(integrationScreenDriver{}, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(integrationScreenDriver{}, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}

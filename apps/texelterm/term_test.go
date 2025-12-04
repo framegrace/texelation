@@ -32,15 +32,10 @@ func TestTexelTermRunRendersOutput(t *testing.T) {
 		errCh <- app.Run()
 	}()
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("run returned error: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("texelterm did not exit")
-	}
+	// Wait for the process to finish and show confirmation
+	time.Sleep(500 * time.Millisecond)
 
+	// Check buffer before stopping
 	buffer := app.Render()
 	if len(buffer) == 0 {
 		t.Fatalf("expected render buffer, got none")
@@ -50,7 +45,18 @@ func TestTexelTermRunRendersOutput(t *testing.T) {
 		t.Fatalf("expected output in buffer, got %q", line)
 	}
 
+	// Stop the app to dismiss confirmation and allow Run() to return
 	app.Stop()
+
+	// Now wait for Run() to return
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("texelterm did not exit after stop")
+	}
 }
 
 func TestTexelTermStopTerminatesProcess(t *testing.T) {

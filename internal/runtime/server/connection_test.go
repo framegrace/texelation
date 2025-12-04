@@ -148,7 +148,7 @@ func newDesktopSink(t *testing.T) (*DesktopSink, *texel.DesktopEngine, func()) {
 	shellFactory := func() texel.App { return &staticApp{title: "shell"} }
 	welcomeFactory := func() texel.App { return &staticApp{title: "welcome"} }
 
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, welcomeFactory, lifecycle)
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
