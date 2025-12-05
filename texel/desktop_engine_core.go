@@ -932,7 +932,12 @@ func (d *DesktopEngine) broadcastStateUpdate() {
 
 func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 	d.refreshMu.Lock()
-	d.refreshHandler = handler
+	d.refreshHandler = func() {
+		d.broadcastStateUpdate()
+		if handler != nil {
+			handler()
+		}
+	}
 	for _, ws := range d.workspaces {
 		if ws != nil {
 			ws.startRefreshMonitor()
