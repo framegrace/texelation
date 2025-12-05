@@ -45,8 +45,8 @@ func TestDesktopSplitCreatesNewPane(t *testing.T) {
 	if ws.tree.ActiveLeaf == nil || ws.tree.ActiveLeaf.Pane == nil {
 		t.Fatalf("expected active pane after split")
 	}
-	if got := ws.tree.ActiveLeaf.Pane.getTitle(); got != "default-2" {
-		t.Fatalf("expected new pane title default-2, got %s", got)
+	if got := ws.tree.ActiveLeaf.Pane.getTitle(); got != "shell" {
+		t.Fatalf("expected new pane title shell, got %s", got)
 	}
 }
 

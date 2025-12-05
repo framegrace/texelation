@@ -10,7 +10,8 @@ import (
 
 // UIManager owns a small widget tree (floating for MVP) and composes to a buffer.
 type UIManager struct {
-	mu       sync.Mutex
+	mu       sync.Mutex // protects widgets, layout, focus, capture, buffer
+	dirtyMu  sync.Mutex // protects dirty list and notifier
 	W, H     int
 	widgets  []Widget // z-ordered: later entries draw on top
 	bgStyle  tcell.Style
@@ -30,17 +31,15 @@ func NewUIManager() *UIManager {
 }
 
 func (u *UIManager) SetRefreshNotifier(ch chan<- bool) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	u.dirtyMu.Lock()
+	defer u.dirtyMu.Unlock()
 	u.notifier = ch
 }
 
 func (u *UIManager) RequestRefresh() {
-	// notifier is read under lock or we assume atomic pointer/channel safe?
-	// Channel send is safe. Reading u.notifier needs lock if it changes.
-	u.mu.Lock()
+	u.dirtyMu.Lock()
 	ch := u.notifier
-	u.mu.Unlock()
+	u.dirtyMu.Unlock()
 
 	if ch == nil {
 		return
@@ -58,6 +57,8 @@ func (u *UIManager) RequestRefresh() {
 func (u *UIManager) Resize(w, h int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.dirtyMu.Lock()
+	defer u.dirtyMu.Unlock()
 
 	if w < 0 {
 		w = 0
@@ -78,7 +79,9 @@ func (u *UIManager) AddWidget(w Widget) {
 	u.widgets = append(u.widgets, w)
 	u.propagateInvalidator(w)
 	// Ensure a first full draw after adding widgets
+	u.dirtyMu.Lock()
 	u.invalidateAllLocked()
+	u.dirtyMu.Unlock()
 }
 
 func (u *UIManager) propagateInvalidator(w Widget) {
@@ -130,23 +133,21 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 		} else {
 			u.focusNextDeepLocked()
 		}
+		u.dirtyMu.Lock()
 		u.invalidateAllLocked()
+		u.dirtyMu.Unlock()
 		return true
 	}
 
 	if u.focused != nil && u.focused.HandleKey(ev) {
 		// Fallback: if widget didn't mark anything dirty, redraw everything
+		u.dirtyMu.Lock()
 		if len(u.dirty) == 0 {
 			u.invalidateAllLocked()
 		} else {
-			// Release lock before calling RequestRefresh? 
-			// No, RequestRefresh handles its own locking safely (releases before send).
-			// Wait, RequestRefresh locks mu internally to read notifier.
-			// Recursive lock! UIManager.mu is not recursive.
-			// We must unlock before calling RequestRefresh, OR make RequestRefresh assume lock, OR use internal variable.
-			// FIX: Call requestRefreshLocked or similar.
 			u.requestRefreshLocked()
 		}
+		u.dirtyMu.Unlock()
 		return true
 	}
 	return false
@@ -170,7 +171,9 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 			if mw, ok := w.(MouseAware); ok {
 				_ = mw.HandleMouse(ev)
 			}
+			u.dirtyMu.Lock()
 			u.invalidateAllLocked()
+			u.dirtyMu.Unlock()
 			return true
 		}
 		return false
@@ -185,7 +188,9 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 		if prevIsDown && !nowDown {
 			u.capture = nil
 		}
+		u.dirtyMu.Lock()
 		u.invalidateAllLocked()
+		u.dirtyMu.Unlock()
 		return true
 	}
 	// Wheel-only events over topmost
@@ -193,7 +198,9 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 		if w := u.topmostAtLocked(x, y); w != nil {
 			if mw, ok := w.(MouseAware); ok {
 				_ = mw.HandleMouse(ev)
+				u.dirtyMu.Lock()
 				u.invalidateAllLocked()
+				u.dirtyMu.Unlock()
 				return true
 			}
 		}
@@ -290,9 +297,9 @@ func (u *UIManager) flattenFocusableLocked() []Widget {
 // Invalidate marks a region for redraw.
 // Thread-safe.
 func (u *UIManager) Invalidate(r Rect) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	
+	u.dirtyMu.Lock()
+	defer u.dirtyMu.Unlock()
+
 	if r.W <= 0 || r.H <= 0 {
 		return
 	}
@@ -303,18 +310,19 @@ func (u *UIManager) Invalidate(r Rect) {
 // InvalidateAll marks the whole surface for redraw.
 // Public version.
 func (u *UIManager) InvalidateAll() {
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	u.dirtyMu.Lock()
+	defer u.dirtyMu.Unlock()
 	u.invalidateAllLocked()
 }
 
-// Internal helper
+// Internal helper - assumes dirtyMu is held
 func (u *UIManager) invalidateAllLocked() {
 	r := Rect{X: 0, Y: 0, W: u.W, H: u.H}
 	u.dirty = append(u.dirty, r)
 	u.requestRefreshLocked()
 }
 
+// Internal helper - assumes dirtyMu is held
 func (u *UIManager) requestRefreshLocked() {
 	if u.notifier == nil {
 		return
@@ -349,11 +357,14 @@ func (u *UIManager) Render() [][]texel.Cell {
 
 	u.ensureBufferLocked()
 
-	if len(u.dirty) == 0 {
+	u.dirtyMu.Lock()
+	// Copy dirty list to avoid holding it? No, we consume it.
+	dirtyCopy := u.dirty
+	u.dirty = nil // clear it
+	u.dirtyMu.Unlock()
+
+	if len(dirtyCopy) == 0 {
 		// No specific dirty regions requested: compose full frame.
-		// Note: if this is a fresh render (no dirty), we assume full redraw needed if it was requested?
-		// Or just return buffer? 
-		// Original logic: if len(dirty) == 0 -> full redraw.
 		full := Rect{X: 0, Y: 0, W: u.W, H: u.H}
 		p := NewPainter(u.buf, full)
 		p.Fill(full, ' ', u.bgStyle)
@@ -362,10 +373,6 @@ func (u *UIManager) Render() [][]texel.Cell {
 		}
 		return u.buf
 	}
-
-	// Copy dirty list to avoid holding it? No, we consume it.
-	dirtyCopy := u.dirty
-	u.dirty = nil // clear it
 
 	// Merge dirty rects to reduce redraw area, but keep multiple clips
 	merged := mergeRects(dirtyCopy)

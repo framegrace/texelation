@@ -203,6 +203,7 @@ func (w *Workspace) AddApp(app App) {
 	// Set initial active state AFTER attaching the app
 	log.Printf("AddApp: Setting pane '%s' as active", p.getTitle())
 	p.SetActive(true)
+	w.recalculateLayout()
 	w.notifyFocus()
 	w.desktop.broadcastStateUpdate()
 	log.Printf("AddApp: Completed adding app '%s'", app.GetTitle())
@@ -555,20 +556,25 @@ func (w *Workspace) ensureWelcomePane() {
 	if w.isDesktopClosing() {
 		return
 	}
-	if w.desktop == nil || w.desktop.InitAppName == "" {
+
+	var app App
+	if w.desktop != nil && w.desktop.InitAppName != "" {
+		if appInstance := w.desktop.Registry().CreateApp(w.desktop.InitAppName, nil); appInstance != nil {
+			if a, ok := appInstance.(App); ok {
+				app = a
+			}
+		}
+	}
+
+	if app == nil && w.ShellAppFactory != nil {
+		app = w.ShellAppFactory()
+	}
+
+	if app == nil {
 		return
 	}
 
-	appInstance := w.desktop.Registry().CreateApp(w.desktop.InitAppName, nil)
-	if appInstance == nil {
-		return
-	}
-	welcomeApp, ok := appInstance.(App)
-	if !ok {
-		return
-	}
-
-	w.AddApp(welcomeApp)
+	w.AddApp(app)
 	w.recalculateLayout()
 	if w.desktop != nil {
 		w.desktop.broadcastTreeChanged()

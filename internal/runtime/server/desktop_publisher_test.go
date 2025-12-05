@@ -51,6 +51,13 @@ func TestDesktopPublisherProducesDiffs(t *testing.T) {
 
 	shellFactory := func() texel.App { return &simpleApp{title: "shell"} }
 
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+	desktop.SwitchToWorkspace(1)
+	desktop.ActiveWorkspace().AddApp(&simpleApp{title: "initial"})
+
 	session := NewSession([16]byte{1}, 512)
 	publisher := NewDesktopPublisher(desktop, session)
 	if err := publisher.Publish(); err != nil {

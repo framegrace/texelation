@@ -53,6 +53,13 @@ func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 	lifecycle := texel.NoopAppLifecycle{}
 	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
 
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+	desktop.SwitchToWorkspace(1)
+	desktop.ActiveWorkspace().AddApp(recorder)
+
 	sink := NewDesktopSink(desktop)
 	sink.HandleKeyEvent(nil, protocol.KeyEvent{KeyCode: uint32(tcell.KeyEnter), RuneValue: '\n', Modifiers: 0})
 
@@ -68,6 +75,13 @@ func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 	driver := sinkScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+	desktop.SwitchToWorkspace(1)
+	desktop.ActiveWorkspace().AddApp(&recordingApp{title: "initial"})
 
 	session := NewSession([16]byte{2}, 512)
 	publisher := NewDesktopPublisher(desktop, session)
@@ -86,6 +100,12 @@ func TestDesktopSinkHandlesAdditionalEvents(t *testing.T) {
 	driver := sinkScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init failed: %v", err)
+	}
+	desktop.SwitchToWorkspace(1)
 
 	sink := NewDesktopSink(desktop)
 	sink.HandleMouseEvent(nil, protocol.MouseEvent{X: 5, Y: 6, ButtonMask: 1, Modifiers: 2})

@@ -152,7 +152,7 @@ func newDesktopSink(t *testing.T) (*DesktopSink, *texel.DesktopEngine, func()) {
 		t.Fatalf("desktop init failed: %v", err)
 	}
 	desktop.SwitchToWorkspace(1)
-	desktop.GetActiveWorkspace().AddApp(&staticApp{title: "initial"})
+	desktop.ActiveWorkspace().AddApp(&staticApp{title: "initial"})
 
 	sink := NewDesktopSink(desktop)
 	cleanup := func() {

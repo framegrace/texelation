@@ -58,7 +58,7 @@ func TestClipboardAndThemeRoundTrip(t *testing.T) {
 		t.Fatalf("desktop init failed: %v", err)
 	}
 	desktop.SwitchToWorkspace(1)
-	desktop.GetActiveWorkspace().AddApp(app)
+	desktop.ActiveWorkspace().AddApp(app)
 
 	sink := NewDesktopSink(desktop)
 

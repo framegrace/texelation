@@ -237,6 +237,13 @@ func (s *clientState) handleSelectionMouse(ev *tcell.EventMouse) bool {
 		return false
 	}
 	buttons := ev.Buttons()
+
+	// Ignore wheel events for selection state to prevent false releases
+	// (wheel events often don't report held buttons correctly)
+	if buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0 {
+		return false
+	}
+
 	x, y := ev.Position()
 	sel := &s.selection
 	changed := false
