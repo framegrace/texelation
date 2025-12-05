@@ -66,7 +66,7 @@ type VTerm struct {
 	InputStartLine, InputStartCol      int
 	OnPromptStart                      func()
 	OnInputStart                       func()
-	OnCommandStart                     func()
+	OnCommandStart                     func(cmd string)
 	OnCommandEnd                       func(exitCode int)
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode                 bool
@@ -891,6 +891,10 @@ func WithQueryDefaultBgHandler(handler func()) Option {
 
 func WithScreenRestoredHandler(handler func()) Option {
 	return func(v *VTerm) { v.ScreenRestored = handler }
+}
+
+func WithCommandStartHandler(handler func(string)) Option {
+	return func(v *VTerm) { v.OnCommandStart = handler }
 }
 
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {

@@ -1038,6 +1038,12 @@ func (a *TexelTerm) Run() error {
 			a.title = newTitle
 			a.requestRefresh()
 		}),
+		parser.WithCommandStartHandler(func(cmd string) {
+			if cmd != "" {
+				a.title = cmd
+				a.requestRefresh()
+			}
+		}),
 		parser.WithPtyWriter(func(b []byte) {
 			if a.pty != nil {
 				a.pty.Write(b)
