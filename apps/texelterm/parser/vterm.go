@@ -875,26 +875,7 @@ func (v *VTerm) HistoryLineCopy(index int) []Cell {
 }
 
 // --- Dirty Line Tracking for Optimized Rendering ---
-
-func (v *VTerm) MarkDirty(line int) {
-	if line >= 0 && line < v.height {
-		v.dirtyLines[line] = true
-	}
-}
-
-func (v *VTerm) MarkAllDirty() { v.allDirty = true }
-
-func (v *VTerm) GetDirtyLines() (map[int]bool, bool) {
-	return v.dirtyLines, v.allDirty
-}
-
-func (v *VTerm) ClearDirty() {
-	v.allDirty = false
-	v.dirtyLines = make(map[int]bool)
-	// Always mark cursor lines to handle blinking and movement
-	v.MarkDirty(v.prevCursorY)
-	v.MarkDirty(v.cursorY)
-}
+// See vterm_dirty.go: MarkDirty, MarkAllDirty, GetDirtyLines, ClearDirty
 
 // --- Basic Terminal Operations ---
 
