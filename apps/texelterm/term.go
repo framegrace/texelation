@@ -920,12 +920,12 @@ func (a *TexelTerm) autoScrollLoop() {
 			// Read config
 			cfg := theme.Get()
 			edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
-			maxSpeed := cfg.GetInt("texelterm.selection", "max_scroll_speed", 10)
+			maxSpeed := cfg.GetInt("texelterm.selection", "max_scroll_speed", 15)
 			if edgeZone <= 0 {
 				edgeZone = 2
 			}
 			if maxSpeed <= 0 {
-				maxSpeed = 10
+				maxSpeed = 15
 			}
 
 			mouseY := a.lastMouseY
@@ -938,8 +938,8 @@ func (a *TexelTerm) autoScrollLoop() {
 			// Ramp up speed over time (max 3 seconds for full multiplier)
 			elapsed := time.Since(startTime).Seconds()
 			timeMultiplier := 1.0 + (elapsed * 2.0) // 1x -> 7x over 3s
-			if timeMultiplier > 5.0 {
-				timeMultiplier = 5.0
+			if timeMultiplier > 8.0 {
+				timeMultiplier = 8.0
 			}
 
 			if mouseY < edgeZone {
