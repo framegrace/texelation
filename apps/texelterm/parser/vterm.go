@@ -243,43 +243,7 @@ func (v *VTerm) placeChar(r rune) {
 // --- Cursor and Scrolling ---
 
 // SetCursorPos moves the cursor to a new position, clamping to screen bounds.
-func (v *VTerm) SetCursorPos(y, x int) {
-	// Clamp coordinates first
-	if x < 0 {
-		x = 0
-	}
-	if x >= v.width {
-		x = v.width - 1
-	}
-	if y < 0 {
-		y = 0
-	}
-	if y >= v.height {
-		y = v.height - 1
-	}
-
-	// Only clear wrapNext if we're actually moving to a different position
-	if y != v.cursorY || x != v.cursorX {
-		v.wrapNext = false
-	}
-
-	v.prevCursorY = v.cursorY
-	v.cursorX = x
-	v.cursorY = y
-
-	v.MarkDirty(v.prevCursorY)
-	v.MarkDirty(v.cursorY)
-}
-
-// GetCursorX returns the current cursor X position
-func (v *VTerm) GetCursorX() int {
-	return v.cursorX
-}
-
-// GetCursorY returns the current cursor Y position
-func (v *VTerm) GetCursorY() int {
-	return v.cursorY
-}
+// Cursor position operations: See vterm_cursor.go
 
 // LineFeed moves the cursor down one line, scrolling if necessary.
 func (v *VTerm) LineFeed() {
@@ -634,26 +598,7 @@ func (v *VTerm) ClearVisibleScreen() {
 }
 
 // SaveCursor saves the current cursor position for either the main or alt screen.
-func (v *VTerm) SaveCursor() {
-	if v.inAltScreen {
-		v.savedAltCursorX, v.savedAltCursorY = v.cursorX, v.cursorY
-	} else {
-		v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY
-	}
-}
-
-// RestoreCursor restores the cursor position for either the main or alt screen.
-// According to xterm behavior, DECRC also resets origin mode.
-func (v *VTerm) RestoreCursor() {
-	v.wrapNext = false
-	// Reset origin mode (xterm behavior)
-	v.originMode = false
-	if v.inAltScreen {
-		v.SetCursorPos(v.savedAltCursorY, v.savedAltCursorX)
-	} else {
-		v.SetCursorPos(v.savedMainCursorY, v.savedMainCursorX)
-	}
-}
+// SaveCursor and RestoreCursor: See vterm_cursor.go
 
 // --- History and Viewport Management ---
 
@@ -2358,12 +2303,7 @@ func (v *VTerm) MoveCursorDown(n int) {
 
 // Text attribute functions: See vterm_sgr.go
 
-func (v *VTerm) SetCursorVisible(visible bool) {
-	if v.cursorVisible != visible {
-		v.cursorVisible = visible
-		v.MarkDirty(v.cursorY)
-	}
-}
+// SetCursorVisible: See vterm_cursor.go
 
 func (c Color) String() string {
 	switch c.Mode {
