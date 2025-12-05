@@ -188,13 +188,13 @@ func (p *Parser) Parse(r rune) {
 			payload := string(p.oscBuffer)
 			if len(payload) >= 5 && payload[:4] == "133;" {
 				lastChar := payload[len(payload)-1]
-				if lastChar == 'A' || lastChar == 'B' || lastChar == 'C' {
-					// Auto-terminate A/B/C immediately (no parameters expected)
+				if lastChar == 'A' || lastChar == 'B' {
+					// Auto-terminate A/B immediately (no parameters expected)
 					p.handleOSC(p.oscBuffer)
 					p.state = StateGround
 				}
-				// For 'D', continue collecting until we see the actual BEL/ESC terminator
-				// to capture the exit code parameter
+				// For 'C' and 'D', continue collecting until we see the actual BEL/ESC terminator
+				// to capture optional parameters (command line or exit code)
 			}
 		}
 	case StateDCS:
