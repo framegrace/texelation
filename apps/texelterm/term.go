@@ -61,6 +61,12 @@ type TexelTerm struct {
 	lastScrollTime  time.Time // For velocity tracking
 	scrollVelocity  float64   // Accumulated velocity
 
+	// Auto-scroll during selection
+	autoScrollActive bool
+	autoScrollStop   chan struct{}
+	lastMouseY       int
+	lastMouseX       int
+
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
@@ -645,17 +651,27 @@ func (a *TexelTerm) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifier
 	if a.vterm == nil || !a.selection.active {
 		return
 	}
+
+	// Save mouse position for auto-scroll
+	a.lastMouseX = x
+	a.lastMouseY = y
+
 	line, col := a.resolveSelectionPositionLocked(x, y)
 	if !a.selection.active {
 		return
 	}
 	if line == a.selection.currentLine && col == a.selection.currentCol {
+		// Position hasn't changed, but check for edge-based auto-scroll
+		a.updateAutoScrollLocked(y)
 		return
 	}
 	a.selection.currentLine = line
 	a.selection.currentCol = col
 	a.vterm.MarkAllDirty()
 	a.requestRefresh()
+
+	// Check if we need to start/stop auto-scroll based on mouse position
+	a.updateAutoScrollLocked(y)
 }
 
 // SelectionFinish implements texel.SelectionHandler.
@@ -665,6 +681,9 @@ func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifier
 	if a.vterm == nil || !a.selection.active {
 		return "", nil, false
 	}
+
+	// Stop auto-scroll if active
+	a.stopAutoScrollLocked()
 
 	// For multi-click selections, keep the visual selection visible after mouse up
 	isMultiClick := a.selection.clickCount >= 2
@@ -713,6 +732,10 @@ func (a *TexelTerm) SelectionCancel() {
 	if !a.selection.active && !a.selection.rendered {
 		return
 	}
+
+	// Stop auto-scroll if active
+	a.stopAutoScrollLocked()
+
 	// Preserve click history for multi-click detection
 	a.selection = termSelection{
 		active:        false,
@@ -803,6 +826,133 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 	a.vterm.Scroll(lines)
 	a.mu.Unlock()
 	a.requestRefresh()
+}
+
+// updateAutoScrollLocked checks if the mouse is near the top/bottom edge during selection
+// and starts/stops auto-scroll accordingly. Must be called with a.mu locked.
+func (a *TexelTerm) updateAutoScrollLocked(mouseY int) {
+	if !a.selection.active {
+		a.stopAutoScrollLocked()
+		return
+	}
+
+	// Read config for edge zone threshold
+	cfg := theme.Get()
+	edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
+	if edgeZone <= 0 {
+		edgeZone = 2
+	}
+
+	// Check if mouse is in the edge zone
+	nearTop := mouseY < edgeZone
+	nearBottom := mouseY >= a.height-edgeZone
+
+	if nearTop || nearBottom {
+		// Start auto-scroll if not already active
+		if !a.autoScrollActive {
+			a.startAutoScrollLocked()
+		}
+	} else {
+		// Stop auto-scroll if active
+		a.stopAutoScrollLocked()
+	}
+}
+
+// startAutoScrollLocked starts the auto-scroll goroutine. Must be called with a.mu locked.
+func (a *TexelTerm) startAutoScrollLocked() {
+	if a.autoScrollActive {
+		return
+	}
+
+	a.autoScrollActive = true
+	a.autoScrollStop = make(chan struct{})
+
+	// Start auto-scroll goroutine
+	a.wg.Add(1)
+	go a.autoScrollLoop()
+}
+
+// stopAutoScrollLocked stops the auto-scroll goroutine. Must be called with a.mu locked.
+func (a *TexelTerm) stopAutoScrollLocked() {
+	if !a.autoScrollActive {
+		return
+	}
+
+	a.autoScrollActive = false
+	close(a.autoScrollStop)
+	a.autoScrollStop = nil
+}
+
+// autoScrollLoop runs in a goroutine and performs auto-scrolling based on mouse position.
+func (a *TexelTerm) autoScrollLoop() {
+	defer a.wg.Done()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	stopChan := a.autoScrollStop
+
+	for {
+		select {
+		case <-stopChan:
+			return
+		case <-a.stop:
+			return
+		case <-ticker.C:
+			a.mu.Lock()
+
+			if !a.selection.active || a.vterm == nil {
+				a.mu.Unlock()
+				return
+			}
+
+			// Read config
+			cfg := theme.Get()
+			edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
+			maxSpeed := cfg.GetInt("texelterm.selection", "max_scroll_speed", 10)
+			if edgeZone <= 0 {
+				edgeZone = 2
+			}
+			if maxSpeed <= 0 {
+				maxSpeed = 10
+			}
+
+			mouseY := a.lastMouseY
+			mouseX := a.lastMouseX
+
+			// Calculate scroll amount based on distance from edge
+			var scrollLines int
+			if mouseY < edgeZone {
+				// Near top - scroll up (negative)
+				distance := float64(edgeZone - mouseY)
+				speed := 1 + int(distance*float64(maxSpeed)/float64(edgeZone))
+				scrollLines = -speed
+			} else if mouseY >= a.height-edgeZone {
+				// Near bottom - scroll down (positive)
+				distance := float64(mouseY - (a.height - edgeZone) + 1)
+				speed := 1 + int(distance*float64(maxSpeed)/float64(edgeZone))
+				scrollLines = speed
+			} else {
+				// Not in edge zone - shouldn't happen, but handle gracefully
+				a.mu.Unlock()
+				continue
+			}
+
+			// Perform scroll
+			a.vterm.Scroll(scrollLines)
+
+			// Update selection endpoint to current mouse position
+			line, col := a.resolveSelectionPositionLocked(mouseX, mouseY)
+			if a.selection.active {
+				a.selection.currentLine = line
+				a.selection.currentCol = col
+				a.vterm.MarkAllDirty()
+			}
+
+			a.mu.Unlock()
+			a.requestRefresh()
+		}
+	}
 }
 
 func (a *TexelTerm) Run() error {
