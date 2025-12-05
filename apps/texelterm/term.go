@@ -824,6 +824,15 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 
 	a.lastScrollTime = now
 	a.vterm.Scroll(lines)
+
+	// If selection is active, update it based on the new scroll position
+	if a.selection.active {
+		line, col := a.resolveSelectionPositionLocked(a.lastMouseX, a.lastMouseY)
+		a.selection.currentLine = line
+		a.selection.currentCol = col
+		a.vterm.MarkAllDirty()
+	}
+
 	a.mu.Unlock()
 	a.requestRefresh()
 }
@@ -892,6 +901,7 @@ func (a *TexelTerm) autoScrollLoop() {
 
 	stopChan := a.autoScrollStop
 	var accumulator float64
+	startTime := time.Now()
 
 	for {
 		select {
@@ -921,9 +931,16 @@ func (a *TexelTerm) autoScrollLoop() {
 			mouseY := a.lastMouseY
 			mouseX := a.lastMouseX
 
-			// Calculate scroll amount based on distance from edge
+			// Calculate scroll amount based on distance from edge and time
 			var scrollLines int
 			var speedLinesPerSec float64
+
+			// Ramp up speed over time (max 3 seconds for full multiplier)
+			elapsed := time.Since(startTime).Seconds()
+			timeMultiplier := 1.0 + (elapsed * 2.0) // 1x -> 7x over 3s
+			if timeMultiplier > 5.0 {
+				timeMultiplier = 5.0
+			}
 
 			if mouseY < edgeZone {
 				// Near top - scroll up (negative)
@@ -937,9 +954,13 @@ func (a *TexelTerm) autoScrollLoop() {
 			} else {
 				// Not in edge zone
 				accumulator = 0
+				// Reset start time if we stop scrolling (though updateAutoScrollLocked usually kills the loop)
 				a.mu.Unlock()
 				continue
 			}
+
+			// Apply time multiplier
+			speedLinesPerSec *= timeMultiplier
 
 			// Convert lines/sec to lines/tick (50ms = 20 ticks/sec)
 			accumulator += speedLinesPerSec / 20.0
