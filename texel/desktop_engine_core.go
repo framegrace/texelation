@@ -724,16 +724,22 @@ func (d *DesktopEngine) handleMouseEvent(ev *tcell.EventMouse) {
 func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
 	prevButtons := d.lastMouseButtons
 
+	wheelDX, wheelDY := wheelDeltaFromMask(buttons)
+	if wheelDX != 0 || wheelDY != 0 {
+		// Update position and modifiers, but keep lastMouseButtons (to preserve drag state)
+		// Wheel events often don't report held buttons correctly.
+		d.lastMouseX = x
+		d.lastMouseY = y
+		d.lastMouseModifier = modifiers
+
+		d.dispatchMouseWheel(x, y, wheelDX, wheelDY, modifiers)
+		return
+	}
+
 	d.lastMouseX = x
 	d.lastMouseY = y
 	d.lastMouseButtons = buttons
 	d.lastMouseModifier = modifiers
-
-	wheelDX, wheelDY := wheelDeltaFromMask(buttons)
-	if wheelDX != 0 || wheelDY != 0 {
-		d.dispatchMouseWheel(x, y, wheelDX, wheelDY, modifiers)
-		return
-	}
 
 	if d.activeWorkspace != nil {
 		if d.activeWorkspace.handleMouseResize(x, y, buttons, prevButtons) {

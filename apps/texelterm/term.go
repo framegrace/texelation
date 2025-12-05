@@ -891,6 +891,7 @@ func (a *TexelTerm) autoScrollLoop() {
 	defer ticker.Stop()
 
 	stopChan := a.autoScrollStop
+	var accumulator float64
 
 	for {
 		select {
@@ -922,39 +923,52 @@ func (a *TexelTerm) autoScrollLoop() {
 
 			// Calculate scroll amount based on distance from edge
 			var scrollLines int
+			var speedLinesPerSec float64
+
 			if mouseY < edgeZone {
 				// Near top - scroll up (negative)
 				distance := float64(edgeZone - mouseY)
-				speed := 1 + int(distance*float64(maxSpeed)/float64(edgeZone))
-				scrollLines = -speed
+				// Scale speed based on distance. At distance == edgeZone, we reach maxSpeed.
+				speedLinesPerSec = -(distance * float64(maxSpeed) / float64(edgeZone))
 			} else if mouseY >= a.height-edgeZone {
 				// Near bottom - scroll down (positive)
 				distance := float64(mouseY - (a.height - edgeZone) + 1)
-				speed := 1 + int(distance*float64(maxSpeed)/float64(edgeZone))
-				scrollLines = speed
+				speedLinesPerSec = distance * float64(maxSpeed) / float64(edgeZone)
 			} else {
-				// Not in edge zone - shouldn't happen, but handle gracefully
+				// Not in edge zone
+				accumulator = 0
 				a.mu.Unlock()
 				continue
 			}
 
-			// Perform scroll
-			a.vterm.Scroll(scrollLines)
+			// Convert lines/sec to lines/tick (50ms = 20 ticks/sec)
+			accumulator += speedLinesPerSec / 20.0
 
-			// Update selection endpoint to current mouse position
-			line, col := a.resolveSelectionPositionLocked(mouseX, mouseY)
-			if a.selection.active {
-				a.selection.currentLine = line
-				a.selection.currentCol = col
-				a.vterm.MarkAllDirty()
+			if accumulator >= 1.0 || accumulator <= -1.0 {
+				scrollLines = int(accumulator)
+				accumulator -= float64(scrollLines)
+			}
+
+			if scrollLines != 0 {
+				// Perform scroll
+				a.vterm.Scroll(scrollLines)
+
+				// Update selection endpoint to current mouse position
+				line, col := a.resolveSelectionPositionLocked(mouseX, mouseY)
+				if a.selection.active {
+					a.selection.currentLine = line
+					a.selection.currentCol = col
+					a.vterm.MarkAllDirty()
+				}
 			}
 
 			a.mu.Unlock()
-			a.requestRefresh()
+			if scrollLines != 0 {
+				a.requestRefresh()
+			}
 		}
 	}
 }
-
 func (a *TexelTerm) Run() error {
 
 	a.mu.Lock()
