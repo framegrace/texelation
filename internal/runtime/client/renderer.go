@@ -38,10 +38,22 @@ func render(state *clientState, screen tcell.Screen) {
 		if pane == nil {
 			continue
 		}
+
+		// Use animated layout if available
 		x := pane.Rect.X
 		y := pane.Rect.Y
 		w := pane.Rect.Width
 		h := pane.Rect.Height
+
+		if state.layoutTransition != nil {
+			if layout, isAnimating := state.layoutTransition.GetInterpolatedLayout(pane.ID); isAnimating {
+				x = layout.X
+				y = layout.Y
+				w = layout.Width
+				h = layout.Height
+			}
+		}
+
 		if w <= 0 || h <= 0 {
 			continue
 		}

@@ -51,6 +51,7 @@ type clientState struct {
 	pasteBuf             []byte
 	renderCh             chan<- struct{}
 	effects              *effects.Manager
+	layoutTransition     *LayoutTransitionAnimator
 	resizeMu             sync.Mutex
 	pendingResize        protocol.Resize
 	resizeSeq            uint64
@@ -61,6 +62,9 @@ func (s *clientState) setRenderChannel(ch chan<- struct{}) {
 	s.renderCh = ch
 	if s.effects != nil {
 		s.effects.AttachRenderChannel(ch)
+	}
+	if s.layoutTransition != nil {
+		s.layoutTransition.AttachRenderSignal(ch)
 	}
 }
 
@@ -146,6 +150,35 @@ func (s *clientState) applyEffectConfig() {
 	})
 }
 
+func (s *clientState) applyLayoutTransitionConfig() {
+	cfg := DefaultLayoutTransitionConfig()
+
+	// Parse configuration from theme
+	if section, ok := s.themeValues["layout_transitions"]; ok {
+		if enabled, ok := section["enabled"].(bool); ok {
+			cfg.Enabled = enabled
+		}
+		if durationMs, ok := section["duration_ms"].(float64); ok {
+			cfg.Duration = time.Duration(durationMs) * time.Millisecond
+		}
+		if easing, ok := section["easing"].(string); ok {
+			cfg.EasingFunc = easing
+		}
+		if threshold, ok := section["min_threshold"].(float64); ok {
+			cfg.MinThreshold = int(threshold)
+		}
+	}
+
+	// Create or update animator
+	if s.layoutTransition == nil {
+		s.layoutTransition = NewLayoutTransitionAnimator()
+		if s.renderCh != nil {
+			s.layoutTransition.AttachRenderSignal(s.renderCh)
+		}
+	}
+	s.layoutTransition.SetConfig(cfg)
+}
+
 func (s *clientState) updateTheme(section, key, value string) {
 	if section == "" || key == "" {
 		return
@@ -184,6 +217,7 @@ func (s *clientState) updateTheme(section, key, value string) {
 	}
 	s.recomputeDefaultStyle()
 	s.applyEffectConfig()
+	s.applyLayoutTransitionConfig()
 }
 
 func (s *clientState) recomputeDefaultStyle() {
