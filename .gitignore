@@ -16,7 +16,6 @@ out.json
 
 # Development and debugging tools
 esctest2/
-tools/
 ptylog-output.txt
 run_*.sh
 debug_*.sh

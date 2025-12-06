@@ -27,6 +27,7 @@ import (
 	"texelation/apps/launcher"
 	"texelation/apps/statusbar"
 	"texelation/apps/texelterm"
+	"texelation/apps/flicker"
 	"texelation/config"
 	"texelation/internal/runtime/server"
 	"texelation/registry"
@@ -119,6 +120,11 @@ func main() {
 	// Register help app
 	desktop.Registry().RegisterBuiltIn("help", func() interface{} {
 		return help.NewHelpApp()
+	})
+
+	// Register flicker app
+	desktop.Registry().RegisterBuiltIn("flicker", func() interface{} {
+		return flicker.New()
 	})
 
 	// Create initial workspace with configured default app
