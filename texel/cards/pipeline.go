@@ -67,6 +67,9 @@ func NewPipeline(control ControlFunc, cards ...Card) *Pipeline {
 func (p *Pipeline) Cards() []Card {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	if p.cards == nil {
+		return nil
+	}
 	return append([]Card(nil), p.cards...)
 }
 
@@ -149,6 +152,9 @@ func (p *Pipeline) terminate() {
 
 // Resize propagates dimensions to all cards.
 func (p *Pipeline) Resize(cols, rows int) {
+	if p == nil {
+		return
+	}
 	p.mu.Lock()
 	p.width, p.height = cols, rows
 	cards := append([]Card(nil), p.cards...)
@@ -171,8 +177,14 @@ func (p *Pipeline) Render() [][]texel.Cell {
 
 // GetTitle returns the title of the first card that supports texel.App semantics.
 func (p *Pipeline) GetTitle() string {
+	if p == nil {
+		return ""
+	}
 	cards := p.Cards()
 	if len(cards) == 0 {
+		return ""
+	}
+	if cards[0] == nil {
 		return ""
 	}
 	if adapter, ok := cards[0].(*appAdapter); ok {
