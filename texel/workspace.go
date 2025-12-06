@@ -89,6 +89,9 @@ func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager
 		appLifecycle:    lifecycle,
 	}
 
+	// Enable layout animations (Phase 2 testing)
+	w.tree.SetLayoutAnimationEnabled(true)
+
 	// Subscribe workspace to Desktop events so it can relay them to apps
 	if desktop != nil {
 		desktop.Subscribe(w)
