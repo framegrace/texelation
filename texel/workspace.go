@@ -76,6 +76,8 @@ type Workspace struct {
 	mouseResizeBorder  *selectedBorder
 	debugFramesToDump  int
 	refreshMonitorOnce sync.Once
+	animationLoopActive bool
+	animationMu         sync.Mutex
 }
 
 // newWorkspace creates a new workspace with its own tiling pane tree.
@@ -1000,13 +1002,43 @@ func (w *Workspace) Close() {
 func (w *Workspace) recalculateLayout() {
 	w.tree.Resize(w.x, w.y, w.width, w.height)
 
-	// If layout animations are active, schedule another refresh to continue the animation
+	// If layout animations are active, ensure animation loop is running
 	if w.tree.HasActiveLayoutAnimations() {
-		// Schedule a refresh after a small delay (~16ms for 60fps)
-		go func() {
-			time.Sleep(16 * time.Millisecond)
-			w.Refresh()
-		}()
+		w.animationMu.Lock()
+		if !w.animationLoopActive {
+			w.animationLoopActive = true
+			w.animationMu.Unlock()
+
+			// Start animation loop
+			go w.animationLoop()
+		} else {
+			w.animationMu.Unlock()
+		}
+	}
+}
+
+func (w *Workspace) animationLoop() {
+	ticker := time.NewTicker(16 * time.Millisecond) // ~60fps
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+
+		// Check if animations are still active
+		if !w.tree.HasActiveLayoutAnimations() {
+			w.animationMu.Lock()
+			w.animationLoopActive = false
+			w.animationMu.Unlock()
+			log.Printf("Animation loop stopped - no active animations")
+			return
+		}
+
+		// Recalculate layout with new animation values
+		log.Printf("Animation loop: recalculating layout")
+		w.tree.Resize(w.x, w.y, w.width, w.height)
+
+		// Trigger redraw
+		w.Refresh()
 	}
 }
 

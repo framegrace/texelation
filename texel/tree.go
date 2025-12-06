@@ -152,10 +152,13 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 			numChildren, equalRatio)
 
 		// Animate new pane from 0 to 1 (full weight)
-		if t.layoutAnimator != nil {
+		if t.layoutAnimator != nil && t.animationEnabled {
 			now := time.Now()
+			log.Printf("SplitActive: Starting animation for new pane (adding to group)")
 			t.layoutAnimator.AnimatePaneWeightWithDuration(newPane.id, 0, 0, now)  // Instant: set to 0
+			log.Printf("SplitActive: Set new pane weight to 0 (instant)")
 			t.layoutAnimator.AnimatePaneWeight(newPane.id, 1.0, now)              // Animate to 1
+			log.Printf("SplitActive: Started animation 0→1 for new pane")
 		}
 
 	} else {
@@ -180,10 +183,13 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 
 		// Animate new pane from 0 to 1 (full weight)
 		// Original pane keeps weight 1 (no animation needed)
-		if t.layoutAnimator != nil {
+		if t.layoutAnimator != nil && t.animationEnabled {
 			now := time.Now()
+			log.Printf("SplitActive: Starting animation for new pane (new split group)")
 			t.layoutAnimator.AnimatePaneWeightWithDuration(newPane.id, 0, 0, now)  // Instant: set to 0
+			log.Printf("SplitActive: Set new pane weight to 0 (instant)")
 			t.layoutAnimator.AnimatePaneWeight(newPane.id, 1.0, now)              // Animate to 1
+			log.Printf("SplitActive: Started animation 0→1 for new pane")
 		}
 	}
 
