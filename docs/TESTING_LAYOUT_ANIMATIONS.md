@@ -1,8 +1,23 @@
-# Testing Layout Animations (Phase 2)
+# Testing Layout Animations (Client-Side)
 
 ## Quick Start
 
-Layout animations are now **enabled by default** in `texel/workspace.go:93`.
+Layout animations are **client-side** and run at 60fps for smooth transitions.
+
+### Configuration
+
+Edit `~/.config/texelation/theme.json`:
+
+```json
+{
+  "layout_transitions": {
+    "enabled": true,
+    "duration_ms": 200,
+    "easing": "smoothstep",
+    "min_threshold": 3
+  }
+}
+```
 
 ### Build and Run
 
@@ -36,6 +51,7 @@ make client
 - New pane should **smoothly slide in from bottom** over 200ms
 - Existing pane should **smoothly shrink** to make room
 - Both panes should move in sync
+- Content renders correctly throughout animation
 
 ### 2. Vertical Split Animation
 **Default binding**: `Ctrl+Space` then `v` (split vertical)
@@ -44,6 +60,7 @@ make client
 - New pane should **smoothly slide in from right** over 200ms
 - Existing pane should **smoothly shrink** to make room
 - Smooth coordinated motion
+- Content visible during entire animation
 
 ### 3. Multiple Splits
 Try creating a complex layout:
@@ -56,88 +73,132 @@ Try creating a complex layout:
 
 **Expected**: Each new pane should animate smoothly regardless of tree complexity.
 
+## Configuration Options
+
+### Duration
+Change animation speed:
+```json
+{
+  "layout_transitions": {
+    "duration_ms": 100  // Fast
+    "duration_ms": 200  // Balanced (default)
+    "duration_ms": 300  // Slow
+  }
+}
+```
+
+### Easing Functions
+Try different timing curves:
+```json
+{
+  "layout_transitions": {
+    "easing": "linear"       // Constant speed
+    "easing": "smoothstep"   // Smooth start/end (default)
+    "easing": "ease-in"      // Slow start
+    "easing": "ease-out"     // Slow end
+    "easing": "ease-in-out"  // Slow start and end
+  }
+}
+```
+
+### Disable Animations
+For instant splits:
+```json
+{
+  "layout_transitions": {
+    "enabled": false
+  }
+}
+```
+
 ## Technical Details
 
-### Animation Parameters
-- **Duration**: 200ms (configured in `texel/tree.go:49`)
-- **Easing**: Smoothstep (from `effects.Timeline`)
-- **Weight range**: 0.0 (hidden) → 1.0 (full size)
+### How It Works (Client-Side)
+1. **Server** performs split instantly, sends ONE tree snapshot with final layout
+2. **Client** detects layout changes between old and new snapshots
+3. **Client** animates locally at 60fps for configured duration
+4. **Interpolation** smoothly transitions pane positions/sizes
+5. **Rendering** uses animated coordinates during transition
 
-### How It Works
-1. New pane starts at weight factor 0 (instant)
-2. Timeline animates weight 0 → 1.0 over 200ms
-3. Every frame: `Tree.Resize()` updates animations and applies weights
-4. Layout ratios are multiplied by weight factors
-5. Result: smooth size transitions
+### Benefits vs Server-Side
+- ✅ **Lower latency**: No waiting for network round-trips
+- ✅ **Less bandwidth**: 1 snapshot message instead of ~12 deltas
+- ✅ **Smoother**: Client controls precise frame timing
+- ✅ **Better performance**: No server CPU for animation calculations
 
-### Logs to Watch
-If you want to see the animation in action, check the server logs for:
+### Animation Flow
 ```
-resizeNode: Processing [horizontal|vertical] split (effective ratios: [0.XX 0.YY])
-```
-
-The ratios will change each frame during animation:
-- Start: `[1.0 0.0]` (old pane full size, new pane hidden)
-- Mid:   `[0.7 0.3]` (transitioning)
-- End:   `[0.5 0.5]` (equal split)
-
-## Disabling Animations
-
-To disable and return to instant splits:
-
-**Option 1**: Comment out line in `texel/workspace.go:93`
-```go
-// w.tree.SetLayoutAnimationEnabled(true)
+Server Split → Tree Snapshot Sent
+                ↓
+Client Receives → Detects Changes
+                ↓
+Start Animation → 60fps interpolation loop
+                ↓
+Render Frames → Use animated layouts
+                ↓
+Complete (200ms) → Commit final layout
 ```
 
-**Option 2**: Change to false
-```go
-w.tree.SetLayoutAnimationEnabled(false)
-```
-
-Then rebuild.
-
-## Recent Fixes
-
-**Issue**: New pane showed only borders during animation, content appeared only after animation finished.
-**Fix** (commit e0aeb90): Workspace now continuously refreshes at 60fps during active animations, ensuring app content is rendered throughout the animation.
-
-## Known Limitations (Current Phase)
-
-- ✅ Split animations working
-- ✅ Content renders during animation (fixed!)
-- ❌ Pane close animations not implemented yet (instant removal)
-- ❌ No visual effects on split (glow, highlight) - Phase 3
-- ❌ No emit of TriggerPaneSplit events yet - Phase 3
-
-## Performance
-
-Animations run at **60fps** with negligible CPU impact:
-- Single `Update()` call per frame
-- Cached weight values used during layout
+### Performance
+- Runs at **60fps** (16ms per frame)
+- Minimal CPU impact (simple lerp calculations)
 - No allocations in hot path
 - Animations stop automatically when complete
+- Only animates changes above min_threshold
 
 ## Troubleshooting
 
 **Problem**: Splits are still instant
-- Check that line 93 in `workspace.go` enables animations
-- Verify you rebuilt after making changes
-- Check server logs for animation-related output
+- Check `~/.config/texelation/theme.json` has `enabled: true`
+- Verify you restarted the client after changing config
+- Check for JSON syntax errors in theme file
 
 **Problem**: Animations feel jerky
-- This indicates frame timing issues (not animation system)
-- Check if client is getting consistent frame updates
-- Monitor CPU usage
+- Reduce `duration_ms` (try 150 or 100)
+- Try different easing function (e.g., `"ease-out"`)
+- Check system isn't under heavy load
 
-**Problem**: Weird layout glitches during animation
-- Check logs for "effective ratios" - should always sum to ~1.0
-- File a bug with reproduction steps
+**Problem**: Animations too slow
+- Decrease `duration_ms` (try 150 or 100)
+- Try `"ease-out"` easing for faster finish
 
-## Next Steps (Phase 3)
+**Problem**: Small movements are annoying
+- Increase `min_threshold` to 5 or 6
+- This filters out minor layout adjustments
 
-Future enhancements will add:
-1. Visual effects on split (e.g., new pane glows during entrance)
-2. Animated pane removal (shrink to 0 before removal)
-3. Custom animation durations per operation
-4. Configurable easing functions
+## Advanced Configuration
+
+### Fine-Tuned Example
+```json
+{
+  "desktop": {
+    "default_fg": "#E0E0E0",
+    "default_bg": "#1E1E1E"
+  },
+  "layout_transitions": {
+    "enabled": true,
+    "duration_ms": 180,
+    "easing": "ease-out",
+    "min_threshold": 4
+  },
+  "effects": {
+    "bindings": [
+      {"event": "pane.active", "target": "pane", "effect": "fadeTint"}
+    ]
+  }
+}
+```
+
+### Disable Only for Testing
+```json
+{
+  "layout_transitions": {
+    "enabled": false
+  }
+}
+```
+
+## See Also
+
+- [LAYOUT_TRANSITIONS_CONFIG.md](LAYOUT_TRANSITIONS_CONFIG.md) - Full configuration reference
+- [THEMING_GUIDE.md](THEMING_GUIDE.md) - Theme system overview
