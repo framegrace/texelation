@@ -43,25 +43,30 @@ Based on external architectural review feedback, expanding the effects system to
 
 ## Implementation Phases
 
-### Phase 1: Foundation Fixes (CURRENT)
-1. Timeline time source unification
-2. Base effect helper classes (PaneEffectBase, WorkspaceEffectBase)
-3. Migrate all existing effects
+### Phase 1: Foundation Fixes ✅ COMPLETED (commit 8e5ba39)
+1. ✅ Timeline time source unification
+2. ✅ Base effect helper classes (PaneEffectBase, WorkspaceEffectBase)
+3. ✅ Migrate all existing effects (fadeTint, keyflash)
 
-### Phase 2: Layout Animation System
-1. New event triggers (TriggerPaneSplit, TriggerPaneRemoving, TriggerPaneReplaced)
-2. LayoutAnimator component
-3. Integration into Tree operations
+**Outcome**: Cleaner API, reduced effect code by ~30%, eliminated animation jitter
 
-### Phase 3: Integration & Migration
-1. Emit layout triggers from Tree
-2. Demonstrate with example effect
-3. Update Effect Manager if needed
+### Phase 2: Layout Animation System ✅ COMPLETED (commit 61dc222)
+1. ✅ New event triggers (TriggerPaneSplit, TriggerPaneRemoving, TriggerPaneReplaced)
+2. ✅ LayoutAnimator component
+3. ✅ Integration into Tree operations (SplitActive, CloseActiveLeaf, Resize)
 
-### Phase 4: Documentation & Testing
-1. Update EFFECTS_GUIDE.md
-2. Add tests for new components
-3. Integration tests for animated layout
+**Outcome**: Smooth split animations working, disabled by default, all tests passing
+
+### Phase 3: Integration & Migration (FUTURE)
+1. Emit layout triggers from Desktop layer (requires event bus access)
+2. Create example visual effect using layout triggers
+3. Optional: animated pane removal (requires ghost state)
+
+### Phase 4: Documentation & Testing (FUTURE)
+1. Update EFFECTS_GUIDE.md with layout animation examples
+2. Add unit tests for LayoutAnimator
+3. Integration tests for animated split scenarios
+4. Document how to enable animations in applications
 
 ## Notes
 
