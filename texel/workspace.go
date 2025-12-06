@@ -9,9 +9,11 @@
 package texel
 
 import (
-	"github.com/gdamore/tcell/v2"
 	"log"
 	"sync"
+	"time"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 type Direction int
@@ -997,6 +999,15 @@ func (w *Workspace) Close() {
 
 func (w *Workspace) recalculateLayout() {
 	w.tree.Resize(w.x, w.y, w.width, w.height)
+
+	// If layout animations are active, schedule another refresh to continue the animation
+	if w.tree.HasActiveLayoutAnimations() {
+		// Schedule a refresh after a small delay (~16ms for 60fps)
+		go func() {
+			time.Sleep(16 * time.Millisecond)
+			w.Refresh()
+		}()
+	}
 }
 
 func (w *Workspace) findBorderToResize(d Direction) *selectedBorder {

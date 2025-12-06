@@ -59,6 +59,14 @@ func (t *Tree) SetLayoutAnimationEnabled(enabled bool) {
 	}
 }
 
+// HasActiveLayoutAnimations returns true if any layout animations are currently running.
+func (t *Tree) HasActiveLayoutAnimations() bool {
+	if t.layoutAnimator == nil {
+		return false
+	}
+	return t.layoutAnimator.HasActiveAnimations()
+}
+
 // SetRoot sets the root of the tree to a single node containing the given pane.
 func (t *Tree) SetRoot(p *pane) {
 	leaf := &Node{
