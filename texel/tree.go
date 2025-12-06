@@ -10,6 +10,7 @@ package texel
 import (
 	"log"
 	"math"
+	"time"
 )
 
 // Rect defines a rectangle using fractional coordinates (0.0 to 1.0).
@@ -36,13 +37,26 @@ type Node struct {
 
 // Tree manages the node hierarchy of panes.
 type Tree struct {
-	Root       *Node
-	ActiveLeaf *Node
+	Root            *Node
+	ActiveLeaf      *Node
+	layoutAnimator  *LayoutAnimator
+	animationEnabled bool
 }
 
 // NewTree creates a new layout tree.
 func NewTree() *Tree {
-	return &Tree{}
+	return &Tree{
+		layoutAnimator:   NewLayoutAnimator(200 * time.Millisecond), // 200ms default for layout animations
+		animationEnabled: false, // Disabled by default; enable via SetLayoutAnimationEnabled
+	}
+}
+
+// SetLayoutAnimationEnabled enables or disables layout animations.
+func (t *Tree) SetLayoutAnimationEnabled(enabled bool) {
+	t.animationEnabled = enabled
+	if t.layoutAnimator != nil {
+		t.layoutAnimator.SetEnabled(enabled)
+	}
 }
 
 // SetRoot sets the root of the tree to a single node containing the given pane.
@@ -129,6 +143,13 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 		log.Printf("SplitActive: Added to existing group, now %d children with ratio %.3f each",
 			numChildren, equalRatio)
 
+		// Animate new pane from 0 to 1 (full weight)
+		if t.layoutAnimator != nil {
+			now := time.Now()
+			t.layoutAnimator.AnimatePaneWeightWithDuration(newPane.id, 0, 0, now)  // Instant: set to 0
+			t.layoutAnimator.AnimatePaneWeight(newPane.id, 1.0, now)              // Animate to 1
+		}
+
 	} else {
 		// CASE 2: Split the current pane into a new group of two.
 		log.Printf("SplitActive: Creating new split group")
@@ -148,6 +169,14 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 		log.Printf("  - Child 1: pane '%s'", child1.Pane.getTitle())
 		log.Printf("  - Child 2: pane '%s'", child2.Pane.getTitle())
 		log.Printf("  - Ratios: %v", nodeToModify.SplitRatios)
+
+		// Animate new pane from 0 to 1 (full weight)
+		// Original pane keeps weight 1 (no animation needed)
+		if t.layoutAnimator != nil {
+			now := time.Now()
+			t.layoutAnimator.AnimatePaneWeightWithDuration(newPane.id, 0, 0, now)  // Instant: set to 0
+			t.layoutAnimator.AnimatePaneWeight(newPane.id, 1.0, now)              // Animate to 1
+		}
 	}
 
 	t.ActiveLeaf = newActiveNode
@@ -219,6 +248,11 @@ func (t *Tree) CloseActiveLeaf() *Node {
 			newIndex = len(parent.Children) - 1
 		}
 		nextActiveNode = t.findFirstLeaf(parent.Children[newIndex])
+	}
+
+	// Clean up animation state for the closed pane
+	if t.layoutAnimator != nil && leaf.Pane != nil {
+		t.layoutAnimator.Reset(leaf.Pane.id)
 	}
 
 	leaf.Pane.Close() // Ensure the closed app is stopped
@@ -416,11 +450,28 @@ func (t *Tree) traverse(n *Node, f func(*Node)) {
 // Also add debugging to the main Resize method:
 func (t *Tree) Resize(x, y, w, h int) {
 	log.Printf("Tree.Resize: Setting root to (%d,%d) size %dx%d", x, y, w, h)
+
+	// Update layout animations before computing dimensions
+	if t.layoutAnimator != nil {
+		t.layoutAnimator.Update(time.Now())
+	}
+
 	if t.Root != nil {
 		t.resizeNode(t.Root, x, y, w, h)
 	} else {
 		log.Printf("Tree.Resize: Root is nil!")
 	}
+}
+
+// getPaneIDForNode returns the pane ID if this node is a leaf, nil otherwise.
+func (t *Tree) getPaneIDForNode(n *Node) *[16]byte {
+	if n == nil {
+		return nil
+	}
+	if n.Pane != nil {
+		return &n.Pane.id
+	}
+	return nil
 }
 
 // resizeNode is the recursive helper for Resize.
@@ -452,11 +503,39 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 	log.Printf("resizeNode: Internal node with %d children, split=%v, ratios=%v",
 		numChildren, n.Split, n.SplitRatios)
 
+	// Compute effective ratios with animation factors
+	effectiveRatios := make([]float64, numChildren)
+	totalEffective := 0.0
+	for i, child := range n.Children {
+		weightFactor := 1.0
+		// Get animation weight factor for this child's pane (if it has one)
+		if t.layoutAnimator != nil {
+			if leafPaneID := t.getPaneIDForNode(child); leafPaneID != nil {
+				weightFactor = t.layoutAnimator.GetPaneWeightFactorCached(*leafPaneID)
+			}
+		}
+		effectiveRatios[i] = n.SplitRatios[i] * weightFactor
+		totalEffective += effectiveRatios[i]
+	}
+
+	// Normalize effective ratios to sum to 1.0
+	if totalEffective > 0 {
+		for i := range effectiveRatios {
+			effectiveRatios[i] /= totalEffective
+		}
+	} else {
+		// All weights are 0 (all panes animating out) - distribute equally
+		equalRatio := 1.0 / float64(numChildren)
+		for i := range effectiveRatios {
+			effectiveRatios[i] = equalRatio
+		}
+	}
+
 	if n.Split == Vertical {
-		log.Printf("resizeNode: Processing vertical split")
+		log.Printf("resizeNode: Processing vertical split (effective ratios: %v)", effectiveRatios)
 		currentX := x
 		for i, child := range n.Children {
-			childW := int(float64(w) * n.SplitRatios[i])
+			childW := int(float64(w) * effectiveRatios[i])
 			if i == numChildren-1 {
 				childW = w - (currentX - x)
 			}
@@ -465,10 +544,10 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 			currentX += childW
 		}
 	} else { // Horizontal
-		log.Printf("resizeNode: Processing horizontal split")
+		log.Printf("resizeNode: Processing horizontal split (effective ratios: %v)", effectiveRatios)
 		currentY := y
 		for i, child := range n.Children {
-			childH := int(float64(h) * n.SplitRatios[i])
+			childH := int(float64(h) * effectiveRatios[i])
 			if i == numChildren-1 {
 				childH = h - (currentY - y)
 			}
