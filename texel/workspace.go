@@ -1018,23 +1018,26 @@ func (w *Workspace) recalculateLayout() {
 }
 
 func (w *Workspace) animationLoop() {
+	log.Printf("ANIM: Loop started")
 	ticker := time.NewTicker(16 * time.Millisecond) // ~60fps
 	defer ticker.Stop()
 
+	frameCount := 0
 	for {
 		<-ticker.C
+		frameCount++
 
 		// Check if animations are still active
 		if !w.tree.HasActiveLayoutAnimations() {
 			w.animationMu.Lock()
 			w.animationLoopActive = false
 			w.animationMu.Unlock()
-			log.Printf("Animation loop stopped - no active animations")
+			log.Printf("ANIM: Loop stopped after %d frames", frameCount)
 			return
 		}
 
 		// Recalculate layout with new animation values
-		log.Printf("Animation loop: recalculating layout")
+		log.Printf("ANIM: Loop frame %d - recalculating layout", frameCount)
 		w.tree.Resize(w.x, w.y, w.width, w.height)
 
 		// Trigger redraw
