@@ -151,14 +151,15 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 		log.Printf("SplitActive: Added to existing group, now %d children with ratio %.3f each",
 			numChildren, equalRatio)
 
-		// Animate new pane from 0 to 1 (full weight)
+		// Animate new pane from minimum size to 1 (full weight)
+		// Start from 0.15 instead of 0 to ensure pane has some drawable area
 		if t.layoutAnimator != nil && t.animationEnabled {
 			now := time.Now()
 			log.Printf("SplitActive: Starting animation for new pane (adding to group)")
-			t.layoutAnimator.AnimatePaneWeightWithDuration(newPane.id, 0, 0, now)  // Instant: set to 0
-			log.Printf("SplitActive: Set new pane weight to 0 (instant)")
+			t.layoutAnimator.AnimatePaneWeightWithDuration(newPane.id, 0.15, 0, now)  // Instant: set to 15%
+			log.Printf("SplitActive: Set new pane weight to 0.15 (instant)")
 			t.layoutAnimator.AnimatePaneWeight(newPane.id, 1.0, now)              // Animate to 1
-			log.Printf("SplitActive: Started animation 0→1 for new pane")
+			log.Printf("SplitActive: Started animation 0.15→1 for new pane")
 		}
 
 	} else {
@@ -181,15 +182,16 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 		log.Printf("  - Child 2: pane '%s'", child2.Pane.getTitle())
 		log.Printf("  - Ratios: %v", nodeToModify.SplitRatios)
 
-		// Animate new pane from 0 to 1 (full weight)
+		// Animate new pane from minimum size to 1 (full weight)
+		// Start from 0.15 instead of 0 to ensure pane has some drawable area
 		// Original pane keeps weight 1 (no animation needed)
 		if t.layoutAnimator != nil && t.animationEnabled {
 			now := time.Now()
 			log.Printf("SplitActive: Starting animation for new pane (new split group)")
-			t.layoutAnimator.AnimatePaneWeightWithDuration(newPane.id, 0, 0, now)  // Instant: set to 0
-			log.Printf("SplitActive: Set new pane weight to 0 (instant)")
+			t.layoutAnimator.AnimatePaneWeightWithDuration(newPane.id, 0.15, 0, now)  // Instant: set to 15%
+			log.Printf("SplitActive: Set new pane weight to 0.15 (instant)")
 			t.layoutAnimator.AnimatePaneWeight(newPane.id, 1.0, now)              // Animate to 1
-			log.Printf("SplitActive: Started animation 0→1 for new pane")
+			log.Printf("SplitActive: Started animation 0.15→1 for new pane")
 		}
 	}
 
@@ -526,6 +528,9 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 		if t.layoutAnimator != nil {
 			if leafPaneID := t.getPaneIDForNode(child); leafPaneID != nil {
 				weightFactor = t.layoutAnimator.GetPaneWeightFactorCached(*leafPaneID)
+				if weightFactor != 1.0 {
+					log.Printf("resizeNode: Child %d has animation weight factor %.3f", i, weightFactor)
+				}
 			}
 		}
 		effectiveRatios[i] = n.SplitRatios[i] * weightFactor
