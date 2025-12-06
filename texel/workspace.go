@@ -11,7 +11,6 @@ package texel
 import (
 	"log"
 	"sync"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -76,8 +75,6 @@ type Workspace struct {
 	mouseResizeBorder  *selectedBorder
 	debugFramesToDump  int
 	refreshMonitorOnce sync.Once
-	animationLoopActive bool
-	animationMu         sync.Mutex
 }
 
 // newWorkspace creates a new workspace with its own tiling pane tree.
@@ -92,11 +89,6 @@ func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager
 		ShellAppFactory: shellFactory,
 		appLifecycle:    lifecycle,
 	}
-
-	// Enable layout animations (Phase 2 testing)
-	log.Printf("ANIM: Enabling layout animations for workspace %d", id)
-	w.tree.SetLayoutAnimationEnabled(true)
-	log.Printf("ANIM: Layout animations enabled=%v", w.tree.animationEnabled)
 
 	// Subscribe workspace to Desktop events so it can relay them to apps
 	if desktop != nil {
@@ -1002,52 +994,7 @@ func (w *Workspace) Close() {
 }
 
 func (w *Workspace) recalculateLayout() {
-	hasActive := w.tree.HasActiveLayoutAnimations()
-	log.Printf("ANIM: recalculateLayout called, hasActiveAnimations=%v", hasActive)
-
 	w.tree.Resize(w.x, w.y, w.width, w.height)
-
-	// If layout animations are active, ensure animation loop is running
-	if hasActive {
-		w.animationMu.Lock()
-		if !w.animationLoopActive {
-			w.animationLoopActive = true
-			w.animationMu.Unlock()
-
-			// Start animation loop
-			go w.animationLoop()
-		} else {
-			w.animationMu.Unlock()
-		}
-	}
-}
-
-func (w *Workspace) animationLoop() {
-	log.Printf("ANIM: Loop started")
-	ticker := time.NewTicker(16 * time.Millisecond) // ~60fps
-	defer ticker.Stop()
-
-	frameCount := 0
-	for {
-		<-ticker.C
-		frameCount++
-
-		// Check if animations are still active
-		if !w.tree.HasActiveLayoutAnimations() {
-			w.animationMu.Lock()
-			w.animationLoopActive = false
-			w.animationMu.Unlock()
-			log.Printf("ANIM: Loop stopped after %d frames", frameCount)
-			return
-		}
-
-		// Recalculate layout with new animation values
-		log.Printf("ANIM: Loop frame %d - recalculating layout", frameCount)
-		w.tree.Resize(w.x, w.y, w.width, w.height)
-
-		// Trigger redraw
-		w.Refresh()
-	}
 }
 
 func (w *Workspace) findBorderToResize(d Direction) *selectedBorder {
