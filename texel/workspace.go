@@ -94,7 +94,9 @@ func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager
 	}
 
 	// Enable layout animations (Phase 2 testing)
+	log.Printf("ANIM: Enabling layout animations for workspace %d", id)
 	w.tree.SetLayoutAnimationEnabled(true)
+	log.Printf("ANIM: Layout animations enabled=%v", w.tree.animationEnabled)
 
 	// Subscribe workspace to Desktop events so it can relay them to apps
 	if desktop != nil {
@@ -1000,10 +1002,13 @@ func (w *Workspace) Close() {
 }
 
 func (w *Workspace) recalculateLayout() {
+	hasActive := w.tree.HasActiveLayoutAnimations()
+	log.Printf("ANIM: recalculateLayout called, hasActiveAnimations=%v", hasActive)
+
 	w.tree.Resize(w.x, w.y, w.width, w.height)
 
 	// If layout animations are active, ensure animation loop is running
-	if w.tree.HasActiveLayoutAnimations() {
+	if hasActive {
 		w.animationMu.Lock()
 		if !w.animationLoopActive {
 			w.animationLoopActive = true

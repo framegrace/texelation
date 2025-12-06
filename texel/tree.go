@@ -204,6 +204,7 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 		t.ActiveLeaf.Pane.IsActive = true
 	}
 
+	log.Printf("ANIM: DEBUG - After split, animationEnabled=%v, layoutAnimator=%v", t.animationEnabled, t.layoutAnimator != nil)
 	log.Printf("SplitActive: New active leaf is pane '%s'", t.ActiveLeaf.Pane.getTitle())
 
 	// Debug: traverse the tree to see the final structure
