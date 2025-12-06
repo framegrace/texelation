@@ -1,0 +1,123 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/effects/helpers.go
+// Summary: Implements helpers capabilities for the client effect subsystem.
+// Usage: Used by the client runtime to orchestrate helpers visuals before rendering.
+// Notes: Centralises every pane and workspace overlay so they can be configured via themes.
+
+package effects
+
+import (
+	"math"
+	"strconv"
+
+	"github.com/gdamore/tcell/v2"
+)
+
+var (
+	defaultInactiveColor = tcell.NewRGBColor(20, 20, 32)
+	defaultFlashColor    = tcell.NewRGBColor(255, 255, 255)
+	defaultResizingColor = tcell.NewRGBColor(255, 184, 108)
+)
+
+func parseHexColor(value string) (tcell.Color, bool) {
+	if len(value) == 0 {
+		return tcell.ColorDefault, false
+	}
+	if len(value) == 7 && value[0] == '#' {
+		if fg, err := strconv.ParseInt(value[1:], 16, 32); err == nil {
+			r := int32((fg >> 16) & 0xFF)
+			g := int32((fg >> 8) & 0xFF)
+			b := int32(fg & 0xFF)
+			return tcell.NewRGBColor(r, g, b), true
+		}
+	}
+	return tcell.ColorDefault, false
+}
+
+func tintStyle(style tcell.Style, overlay tcell.Color, intensity float32, reverse bool, defaultFg, defaultBg tcell.Color) tcell.Style {
+	if intensity <= 0 {
+		return style
+	}
+	fg, bg, attrs := style.Decompose()
+	if reverse {
+		fg, bg = bg, fg
+	}
+	trueOverlay := convertToTrueRGB(overlay, overlay)
+	trueFg := convertToTrueRGB(fg, defaultFg)
+	trueBg := convertToTrueRGB(bg, defaultBg)
+
+	blendedFg := blendColor(trueFg, trueOverlay, intensity)
+	blendedBg := blendColor(trueBg, trueOverlay, intensity)
+	if reverse {
+		blendedFg, blendedBg = blendedBg, blendedFg
+	}
+	return tcell.StyleDefault.Foreground(blendedFg).
+		Background(blendedBg).
+		Bold(attrs&tcell.AttrBold != 0).
+		Underline(attrs&tcell.AttrUnderline != 0).
+		Reverse(attrs&tcell.AttrReverse != 0).
+		Blink(attrs&tcell.AttrBlink != 0).
+		Dim(attrs&tcell.AttrDim != 0).
+		Italic(attrs&tcell.AttrItalic != 0)
+}
+
+func blendColor(base, overlay tcell.Color, intensity float32) tcell.Color {
+	if !overlay.Valid() || intensity <= 0 {
+		return base
+	}
+	if !base.Valid() {
+		return overlay
+	}
+	br, bg, bb := base.RGB()
+	or, og, ob := overlay.RGB()
+	blend := func(bc, oc int32) int32 {
+		return int32(float32(bc)*(1-intensity) + float32(oc)*intensity)
+	}
+	return tcell.NewRGBColor(blend(br, or), blend(bg, og), blend(bb, ob))
+}
+
+func hsvToRGB(angle float32, saturation float32, value float32) tcell.Color {
+	h := float32(math.Mod(float64(angle), 2*math.Pi)) / (2 * math.Pi) * 360
+	c := value * saturation
+	x := c * (1 - float32(math.Abs(math.Mod(float64(h/60), 2)-1)))
+	m := value - c
+	var r, g, b float32
+	switch {
+	case h < 60:
+		r, g, b = c, x, 0
+	case h < 120:
+		r, g, b = x, c, 0
+	case h < 180:
+		r, g, b = 0, c, x
+	case h < 240:
+		r, g, b = 0, x, c
+	case h < 300:
+		r, g, b = x, 0, c
+	default:
+		r, g, b = c, 0, x
+	}
+	r, g, b = (r+m)*255, (g+m)*255, (b+m)*255
+	return tcell.NewRGBColor(int32(r), int32(g), int32(b))
+}
+
+func convertToTrueRGB(color tcell.Color, fallback tcell.Color) tcell.Color {
+	if color == tcell.ColorDefault {
+		color = fallback
+	}
+	trueColor := color.TrueColor()
+	if trueColor.Valid() {
+		return trueColor
+	}
+
+	if fallback == tcell.ColorDefault {
+		return color
+	}
+
+	fallbackTrue := fallback.TrueColor()
+	if fallbackTrue.Valid() {
+		return fallbackTrue
+	}
+	return fallback
+}

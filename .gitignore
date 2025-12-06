@@ -1,0 +1,40 @@
+***/*.log
+texelation
+bin/
+.cache/
+log
+logs
+logfile
+node_modules
+package.json
+package-lock.json
+
+# Test data files
+/test
+/tttt
+out.json
+
+# Development and debugging tools
+esctest2/
+tools/
+ptylog-output.txt
+run_*.sh
+debug_*.sh
+test_*.sh
+test_*.go
+ss
+
+# Compiled binaries (should be in bin/ or built elsewhere)
+texel-server
+texel-client
+texelterm
+welcome
+
+# Screenshots and debug images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+err.log
+err2.log

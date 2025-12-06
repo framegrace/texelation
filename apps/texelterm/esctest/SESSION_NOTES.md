@@ -1,0 +1,688 @@
+# esctest Conversion - Session Notes
+
+**Last Updated**: 2025-11-27
+**Current Branch**: texelterm-bug-fixing
+**Latest Commit**: (Batch 17 - pending)
+
+## Current Status
+
+**Total Tests**: 227
+**Passing**: 227 (100%) ✓
+**Failing**: 0
+
+### Completed Batches
+
+- **Batch 1-3**: Basic cursor movement, save/restore (58 tests) - ALL PASSING
+- **Batch 4**: Character editing - DCH, ECH, REP (14 tests) - ALL PASSING
+- **Batch 5**: Line editing - DL, IL (16 tests) - ALL PASSING
+- **Batch 6**: Erase operations - ED, EL (13 tests) - ALL PASSING
+- **Batch 7**: Scrolling - DECSTBM, IND, RI (22 tests) - ALL PASSING
+- **Batch 8**: Scroll commands - SU, SD (18 tests) - ALL PASSING
+- **Batch 9**: Tab operations - HTS, TBC (5 tests) - ALL PASSING
+- **Batch 10**: Additional cursor movement - HPA, HPR, VPR, CBT, CHT (19 tests) - ALL PASSING
+- **Batch 11**: Line control characters - CR, LF, NEL (17 tests) - ALL PASSING
+- **Batch 12**: Screen Alignment Test - DECALN (3 tests) - ALL PASSING
+- **Batch 13**: VT and FF control characters (12 tests) - ALL PASSING
+- **Batch 14**: Terminal Reset - RIS (6 tests) - ALL PASSING
+- **Batch 15**: SGR - Text attributes and basic colors (10 tests) - ALL PASSING
+- **Batch 16**: Extended SGR colors (8 tests) - ALL PASSING
+- **Batch 17**: OSC color sequences (7 tests) - ALL PASSING
+
+## Latest Changes (This Session)
+
+### Batch 6: Erase Operations (Commit: fbe57e3)
+
+**Files Created:**
+- `apps/texelterm/esctest/ed_test.go` - 8 ED (Erase in Display) tests
+- `apps/texelterm/esctest/el_test.go` - 5 EL (Erase in Line) tests
+
+**Fixes Applied:**
+- Fixed ED(3) to only clear scrollback, not visible screen (vterm.go:873-896)
+
+**All 13 tests passing**
+
+### Batch 7: Scrolling and Regions (Commit: 53866e5)
+
+**Files Created:**
+- `apps/texelterm/esctest/decstbm_test.go` - 10 DECSTBM tests (9 passing)
+- `apps/texelterm/esctest/ind_test.go` - 6 IND tests (all passing)
+- `apps/texelterm/esctest/ri_test.go` - 6 RI tests (3 passing)
+
+**Implementations:**
+1. **IND (Index) - ESC D** (parser.go:106-108, vterm.go:663-677)
+   - Moves cursor down one line
+   - Scrolls region up if at bottom margin
+   - Respects left/right margins
+
+2. **DECSTBM Cursor Movement** (vterm.go:1534-1535)
+   - Now correctly moves cursor to origin (1,1) when setting margins
+
+3. **IND/RI Left/Right Margin Handling** (vterm.go:666-677, 681-692)
+   - Won't scroll when cursor outside left/right margins
+   - Stays at margin boundary when outside margins
+
+**Helper Functions Added** (helpers.go):
+```go
+func IND(d *Driver)  // ESC D - Index
+func RI(d *Driver)   // ESC M - Reverse Index (already existed)
+```
+
+**18/22 tests passing**
+
+### Scroll-Down Bug Fixes (Commit: 332533a)
+
+**Fixed Issues:**
+- All 4 failing Batch 7 tests now passing
+- Test suite at 100% pass rate (119/119)
+
+**Root Causes Identified:**
+1. **Scroll-down content loss**: `scrollRegion()` attempted to write to history indices that didn't exist yet. The `setHistoryLine()` bounds check (`index >= historyLen`) caused writes to silently fail, losing content during reverse index operations.
+
+2. **Unwanted viewport shifts**: `LineFeed()` was appending history lines even when cursor was at the bottom of the physical screen (outside scroll region). This caused `historyLen` to grow and shift `getTopHistoryLine()`, inadvertently scrolling the viewport.
+
+**Fixes Applied** (vterm.go):
+1. Lines 326-330: Ensure history buffer has all required lines before scroll-down:
+   ```go
+   // Ensure history buffer has all lines we'll be writing to
+   endLogicalY := topHistory + bottom
+   for v.historyLen <= endLogicalY {
+       v.appendHistoryLine(make([]Cell, 0, v.width))
+   }
+   ```
+
+2. Lines 272-283: Only append history lines when cursor will actually move:
+   ```go
+   } else if v.cursorY < v.height-1 {
+       // Only append history lines when cursor will actually move down
+       logicalY := v.cursorY + v.getTopHistoryLine()
+       if logicalY+1 >= v.historyLen {
+           v.appendHistoryLine(make([]Cell, 0, v.width))
+       }
+       v.SetCursorPos(v.cursorY+1, v.cursorX)
+   } else {
+       // At bottom of screen but not at scroll region bottom: stay put
+       v.viewOffset = 0
+       v.MarkAllDirty()
+   }
+   ```
+
+**Tests Fixed:**
+- `Test_RI_Scrolls` - RI scroll-down on main screen
+- `Test_RI_ScrollsInTopBottomRegionStartingBelow` - RI with scroll region from below
+- `Test_RI_ScrollsInTopBottomRegionStartingWithin` - RI within scroll region
+- `Test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll` - Scrolling outside margins
+
+### Batch 8: SU/SD Scroll Commands (Commit: b8482e0)
+
+**Files Created:**
+- `apps/texelterm/esctest/su_test.go` - 9 SU (Scroll Up) tests
+- `apps/texelterm/esctest/sd_test.go` - 9 SD (Scroll Down) tests
+
+**Implementations:**
+1. **SU (Scroll Up) - CSI Ps S** (vterm.go:739-744, helpers.go:241-248)
+   - Scrolls content up within margins
+   - Respects both top/bottom and left/right margins
+   - Operates on entire region (not just from cursor)
+
+2. **SD (Scroll Down) - CSI Ps T** (vterm.go:745-750, helpers.go:250-257)
+   - Scrolls content down within margins
+   - Respects both top/bottom and left/right margins
+   - Operates on entire region (not just from cursor)
+
+3. **scrollUpWithinMargins()** (vterm.go:346-424)
+   - New function for SU when DECLRMM is active
+   - Scrolls content up only within left/right margins
+   - Preserves content outside margin columns
+   - Similar to deleteLinesWithinMargins but operates on entire top/bottom region
+
+4. **scrollDownWithinMargins()** (vterm.go:426-504)
+   - New function for SD when DECLRMM is active
+   - Scrolls content down only within left/right margins
+   - Preserves content outside margin columns
+   - Similar to insertLinesWithinMargins but operates on entire top/bottom region
+
+**Key Differences from IND/RI:**
+- IND/RI check cursor position and don't scroll if outside left/right margins
+- SU/SD always scroll the region, but only the columns within margins when DECLRMM active
+- SU/SD preserve content outside margin columns (rectangular scrolling)
+- IND/RI shift entire lines (full-line scrolling)
+
+**All 18 tests passing**
+
+### Batch 9: Tab Operations (Commit: fa31d66)
+
+**Files Created:**
+- `apps/texelterm/esctest/hts_test.go` - 1 HTS (Horizontal Tab Set) test
+- `apps/texelterm/esctest/tbc_test.go` - 4 TBC (Tab Clear) tests
+
+**Implementations:**
+1. **HTS (Horizontal Tab Set) - ESC H** (parser.go:112-115, vterm.go:806-809)
+   - Sets a tab stop at the current cursor column
+   - Simple implementation using existing tabStops map
+
+2. **TBC (Tab Clear) - CSI Ps g** (vterm.go:957-958, 811-823)
+   - Mode 0 or default: clear tab stop at cursor position
+   - Mode 3: clear all tab stops
+   - Uses delete() to remove specific tab or recreates map for "clear all"
+
+**Helper Functions Added** (helpers.go:259-273):
+```go
+func HTS(d *Driver)           // ESC H - Set tab at cursor
+func TBC(d *Driver, n ...int) // CSI g - Clear tabs
+```
+
+**Tab Infrastructure:**
+- Tab stops already existed every 8 columns (0, 8, 16, 24...)
+- Tab() function already implemented and working
+- HTS/TBC complete the tab stop management
+
+**All 5 tests passing**
+
+### Batch 10: Additional Cursor Movement (Commit: 1d5d1f4)
+
+**Files Created:**
+- `apps/texelterm/esctest/hpa_test.go` - 4 HPA (Horizontal Position Absolute) tests
+- `apps/texelterm/esctest/hpr_test.go` - 4 HPR (Horizontal Position Relative) tests
+- `apps/texelterm/esctest/vpr_test.go` - 4 VPR (Vertical Position Relative) tests
+- `apps/texelterm/esctest/cbt_test.go` - 4 CBT (Cursor Backward Tab) tests
+- `apps/texelterm/esctest/cht_test.go` - 3 CHT (Cursor Horizontal Tab) tests
+
+**Implementations:**
+1. **HPA (Horizontal Position Absolute) - CSI Ps `** (vterm.go:1070-1076)
+   - Moves cursor to absolute column position
+   - Respects origin mode (like CHA/VPA)
+   - Clamps to screen boundaries
+
+2. **HPR (Horizontal Position Relative) - CSI Ps a** (vterm.go:1077-1084)
+   - Moves cursor right by n columns
+   - Clamps to right edge
+   - Relative movement, not absolute positioning
+
+3. **VPR (Vertical Position Relative) - CSI Ps e** (vterm.go:1085-1092)
+   - Moves cursor down by n rows
+   - Clamps to bottom edge
+   - Relative movement, not absolute positioning
+
+4. **CBT (Cursor Backward Tab) - CSI Ps Z** (vterm.go:834-855, parser.go:912-913)
+   - Moves cursor backward n tab stops
+   - Ignores left/right margins (can reach column 1)
+   - Stops at left edge if no more tab stops
+
+5. **CHT (Cursor Horizontal Tab) - CSI Ps I** (vterm.go:806-832, parser.go:910-911)
+   - Moves cursor forward n tab stops
+   - Respects right margin when DECLRMM is active
+   - Stops at right edge/margin if no more tab stops
+
+**Helper Functions Added** (helpers.go:275-318):
+```go
+func HPA(d *Driver, n ...int)  // CSI ` - Horizontal Position Absolute
+func HPR(d *Driver, n ...int)  // CSI a - Horizontal Position Relative
+func VPR(d *Driver, n ...int)  // CSI e - Vertical Position Relative
+func CBT(d *Driver, n ...int)  // CSI Z - Cursor Backward Tab
+func CHT(d *Driver, n ...int)  // CSI I - Cursor Horizontal Tab
+```
+
+**Key Behaviors:**
+- HPA/HPR/VPR respect origin mode for consistency with CHA/VPA
+- CHT respects right margin (DEC terminal behavior)
+- CBT ignores margins (ECMA-48 behavior)
+- All commands clamp to screen/margin boundaries
+
+**All 19 tests passing**
+
+### Batch 11: Line Control Characters (Commit: c405dac)
+
+**Files Created:**
+- `apps/texelterm/esctest/cr_test.go` - 5 CR (Carriage Return) tests
+- `apps/texelterm/esctest/lf_test.go` - 6 LF (Line Feed) tests
+- `apps/texelterm/esctest/nel_test.go` - 6 NEL (Next Line) tests
+
+**Implementations:**
+1. **NEL (Next Line) - ESC E** (parser.go:109-112, vterm.go:941-966)
+   - Moves cursor down one line (via Index)
+   - Then moves to left margin or column 0
+   - Preserves column when cursor left of margin and can't move down
+   - Respects left/right margins for vertical movement
+
+2. **CR (Carriage Return) - \\r** (vterm.go:783-805)
+   - Fixed to respect left/right margins correctly
+   - Inside margins: goes to left margin
+   - Outside margins: goes to column 0 (unless in origin mode)
+   - Origin mode: always goes to left margin
+
+3. **LF (Line Feed) - \\n** (parser.go:61-65, vterm.go:259-293)
+   - Fixed to behave like Index (move down only)
+   - No longer calls CarriageReturn() (LNM mode not implemented)
+   - Now respects left/right margins (won't scroll when outside)
+   - Matches esctest expectations for pure LF behavior
+
+**Helper Functions Added** (helpers.go:320-333):
+```go
+func CR(d *Driver)   // \\r - Carriage Return
+func LF(d *Driver)   // \\n - Line Feed
+func NEL(d *Driver)  // ESC E - Next Line
+```
+
+**Key Fixes:**
+- Parser no longer assumes LNM (Line Feed/New Line Mode) is always on
+- LF now behaves identically to IND (Index) per xterm specification
+- CR properly handles all combinations of margins and origin mode
+- NEL correctly decides when to move horizontally based on vertical movement success
+
+**All 17 tests passing**
+
+### Batch 12: Screen Alignment Test (Commit: bb48c99)
+
+**Files Created:**
+- `apps/texelterm/esctest/decaln_test.go` - 3 DECALN tests
+
+**Implementations:**
+1. **DECALN (Screen Alignment Test) - ESC # 8** (parser.go:27, 106-107, 192-199, vterm.go:905-955)
+   - Fills entire screen with 'E' characters
+   - Resets all margins (top/bottom and left/right) to full screen
+   - Moves cursor to home position (1,1)
+   - Works correctly on both main screen (with history) and alt screen
+
+**Parser Changes:**
+- Added StateHash parser state for ESC # sequences
+- ESC # 8 now correctly triggers DECALN command
+
+**Helper Functions Added** (helpers.go:335-338):
+```go
+func DECALN(d *Driver)  // ESC # 8 - Screen Alignment Test
+```
+
+**Use Case:**
+- DECALN is a diagnostic command used to test all screen positions
+- Useful for checking terminal rendering and alignment
+- Commonly used by technicians to verify display quality
+
+**All 3 tests passing**
+
+### Batch 13: VT and FF Control Characters (Commit: 8ebb61e)
+
+**Files Created:**
+- `apps/texelterm/esctest/vt_test.go` - 6 VT (Vertical Tab) tests
+- `apps/texelterm/esctest/ff_test.go` - 6 FF (Form Feed) tests
+
+**Implementations:**
+1. **VT (Vertical Tab) - \v (0x0B)** (parser.go:73-75)
+   - Moves cursor down one line (behaves identically to IND)
+   - Scrolls when at bottom of scroll region
+   - Respects left/right margins (won't scroll when outside)
+   - All VT tests leverage existing Index() function
+
+2. **FF (Form Feed) - \f (0x0C)** (parser.go:76-78)
+   - Moves cursor down one line (behaves identically to IND)
+   - Scrolls when at bottom of scroll region
+   - Respects left/right margins (won't scroll when outside)
+   - All FF tests leverage existing Index() function
+
+**Parser Changes:**
+- Added case for '\v' (Vertical Tab) in StateGround
+- Added case for '\f' (Form Feed) in StateGround
+- Both control characters call existing Index() function
+
+**Helper Functions Added** (helpers.go:340-348):
+```go
+func VT(d *Driver)  // \v - Vertical Tab (same as IND)
+func FF(d *Driver)  // \f - Form Feed (same as IND)
+```
+
+**Key Insight:**
+- Both VT and FF are legacy control characters that modern terminals implement as synonyms for IND (Index)
+- The Python test files explicitly note: "These tests are the same as those for IND"
+- No new VTerm implementation needed - just wire up the control characters to Index()
+
+**All 12 tests passing (6 VT + 6 FF)**
+
+### Batch 14: Terminal Reset (Commit: 5a2f73e)
+
+**Files Created:**
+- `apps/texelterm/esctest/ris_test.go` - 6 RIS (Reset to Initial State) tests
+
+**Implementations:**
+1. **RIS (Reset to Initial State) - ESC c** (parser.go:101-103, already implemented)
+   - Performs a full terminal reset (hard reset)
+   - Clears screen and scrollback
+   - Resets cursor to home position (1,1)
+   - Resets tab stops to default (every 8 columns)
+   - Exits alt screen if active
+   - Resets all margins and modes
+
+**VTerm Fixes:**
+- Fixed `Reset()` function (vterm.go:957-979) to properly reset all margin-related state:
+  - Added `v.marginLeft = 0` and `v.marginRight = v.width - 1`
+  - Added `v.leftRightMarginMode = false`
+  - Added `v.originMode = false`
+  - These were missing and causing margins/origin mode to persist after reset
+
+**Helper Functions Added** (helpers.go:350-353):
+```go
+func RIS(d *Driver)  // ESC c - Reset to Initial State
+```
+
+**Tests Skipped from Original:**
+- `test_RIS_ResetTitleMode` - Requires title mode management (not implemented)
+- `test_RIS_ResetDECCOLM` - Requires 80/132 column switching (not implemented)
+
+**All 6 tests passing**
+
+### Batch 15: SGR (Select Graphic Rendition) - Infrastructure and Basic Tests (Commit: 9089ea1)
+
+**Files Created:**
+- `apps/texelterm/esctest/sgr_test.go` - 10 SGR tests for text attributes and colors
+
+**Infrastructure Added:**
+
+1. **Driver Extensions** (driver.go):
+   - Added `GetCellAt(Point) *parser.Cell` - Returns full cell including attributes and colors
+   - Enables inspection of cell appearance, not just content
+
+2. **Assertion Functions** (helpers.go:50-132):
+   - `AssertCellHasAttribute(t, d, p, attr, msg)` - Checks for bold/underline/reverse
+   - `AssertCellDoesNotHaveAttribute(t, d, p, attr, msg)` - Checks attribute absence
+   - `AssertCellForegroundColor(t, d, p, color, msg)` - Validates FG color
+   - `AssertCellBackgroundColor(t, d, p, color, msg)` - Validates BG color
+   - `colorsEqual(a, b)` - Helper for comparing Color structs (handles all modes)
+
+3. **SGR Helper** (helpers.go:502-545):
+   - `SGR(d, params...)` - Sends SGR escape sequence
+   - Constants for all SGR codes (SGR_BOLD, SGR_FG_RED, SGR_BG_BLUE, etc.)
+   - Supports multiple parameters: `SGR(d, SGR_BOLD, SGR_FG_RED)`
+
+**Tests Implemented:**
+1. **Bold** - SGR 1 enables bold, SGR 22 disables
+2. **Underline** - SGR 4 enables underline, SGR 24 disables
+3. **Reverse** - SGR 7 enables reverse video, SGR 27 disables
+4. **Reset** - SGR 0 clears all attributes
+5. **Foreground Colors** - SGR 30-37 (standard 8 colors)
+6. **Background Colors** - SGR 40-47 (standard 8 colors)
+7. **Reset Colors** - SGR 39 (FG default), SGR 49 (BG default)
+
+**What's Tested:**
+- ✅ Bold, underline, reverse attributes
+- ✅ Standard 8 ANSI colors (foreground and background)
+- ✅ Attribute persistence across characters
+- ✅ SGR 0 reset
+- ✅ Individual attribute disable (SGR 22, 24, 27)
+- ✅ Color reset to defaults (SGR 39, 49)
+
+**What's NOT Yet Tested:**
+- Bright colors (SGR 90-97, 100-107) - texelterm supports these!
+- 256-color mode (SGR 38;5;n, 48;5;n) - texelterm supports!
+- RGB true-color (SGR 38;2;r;g;b, 48;2;r;g;b) - texelterm supports!
+- OSC color change sequences - texelterm supports!
+
+**All 10 tests passing**
+
+### Batch 16: Extended SGR Colors (Commit: 82ba050)
+
+**Files Modified:**
+- `apps/texelterm/esctest/sgr_test.go` - Added 8 more comprehensive SGR tests
+
+**Tests Added:**
+
+1. **Bright Foreground Colors (SGR 90-97)**
+   - Tests bright versions of standard 8 colors
+   - Maps to color indices 8-15
+   - Example: SGR 90 = bright black (gray, index 8)
+
+2. **Bright Background Colors (SGR 100-107)**
+   - Tests bright background colors
+   - Maps to color indices 8-15
+   - Example: SGR 107 = bright white background (index 15)
+
+3. **256-Color Foreground (SGR 38;5;n)**
+   - Tests 256-color palette mode
+   - Uses `ColorMode256` with value 0-255
+   - Example: `SGR(d, 38, 5, 196)` = color 196 (bright red)
+
+4. **256-Color Background (SGR 48;5;n)**
+   - Tests 256-color background mode
+   - Example: `SGR(d, 48, 5, 226)` = color 226 (yellow)
+
+5. **RGB True-Color Foreground (SGR 38;2;r;g;b)**
+   - Tests 24-bit RGB mode
+   - Uses `ColorModeRGB` with R, G, B components
+   - Example: `SGR(d, 38, 2, 255, 128, 0)` = orange (255,128,0)
+
+6. **RGB True-Color Background (SGR 48;2;r;g;b)**
+   - Tests RGB background mode
+   - Example: `SGR(d, 48, 2, 64, 224, 208)` = turquoise
+
+7. **Combined Attributes and Colors**
+   - Tests setting multiple parameters at once
+   - Example: `SGR(d, SGR_BOLD, SGR_UNDERLINE, SGR_FG_RED, SGR_BG_BLUE)`
+   - Verifies attributes and colors apply independently
+
+8. **SGR 0 Reset Behavior**
+   - Verifies SGR 0 resets both attributes AND colors
+   - All defaults should be restored
+
+**Coverage Summary:**
+- ✅ Standard 8 colors (30-37, 40-47)
+- ✅ Bright 8 colors (90-97, 100-107)
+- ✅ 256-color palette mode (38;5;n, 48;5;n)
+- ✅ RGB true-color mode (38;2;r;g;b, 48;2;r;g;b)
+- ✅ Combined attributes + colors
+- ✅ Full reset behavior
+
+**All 8 tests passing (18 total SGR tests)**
+
+### Batch 17: OSC Color Sequences (Commit: pending)
+
+**Files Created:**
+- `apps/texelterm/esctest/osc_colors_test.go` - 7 OSC 10/11 tests for dynamic color changes
+
+**Tests Implemented:**
+
+1. **Set Default Foreground (OSC 10)**
+   - Tests OSC 10 changes what "default" means
+   - Verifies SGR 39 uses the new OSC-set default
+   - Example: `OSC 10;rgb:fe00/0000/0000 BEL` sets default FG to red
+
+2. **Set Default Background (OSC 11)**
+   - Tests OSC 11 changes default background
+   - Verifies SGR 49 uses the new OSC-set default
+   - Example: `OSC 11;rgb:0000/0000/ff00 BEL` sets default BG to blue
+
+3. **Set Both Colors**
+   - Tests setting both FG and BG via OSC
+   - Verifies SGR 39 and 49 both use new defaults
+
+4. **SGR Overrides Default**
+   - Tests that SGR explicit colors override OSC defaults
+   - Verifies SGR 39 resets back to OSC-set default
+
+5. **RIS Restores Original Defaults**
+   - Tests that RIS (Reset to Initial State) clears OSC colors
+   - Verifies text after RIS uses original defaults
+
+6. **16-bit RGB Format**
+   - Tests OSC color parsing with 16-bit hex values
+   - Verifies integer division conversion: 0x8000 / 257 = 127
+
+7. **Multiple Changes**
+   - Tests changing OSC defaults multiple times
+   - Each SGR 39 uses the current OSC-set default
+
+**VTerm Fixes:**
+
+1. **Reset() OSC Color Handling** (vterm.go:962-965)
+   - Added `v.defaultFG = DefaultFG` and `v.defaultBG = DefaultBG`
+   - Moved BEFORE `ResetAttributes()` call so currentFG/currentBG get correct values
+   - Without this fix, RIS wouldn't clear OSC-set colors
+
+**Key Insights:**
+- OSC 10/11 set `defaultFG`/`defaultBG`, not `currentFG`/`currentBG`
+- These defaults only affect:
+  1. SGR 39/49 reset behavior
+  2. Empty cell colors when extending lines
+- Text is written with `currentFG`/`currentBG` (set by SGR commands)
+- 16-bit RGB values scaled to 8-bit via integer division: `value / 257`
+
+**Color Format:**
+```
+OSC 10 ; rgb:rrrr/gggg/bbbb BEL
+      ↑         ↑    ↑    ↑
+      Ps        R    G    B (each 4 hex digits, 0000-FFFF)
+```
+
+**All 7 tests passing**
+
+## Test Conversion Process
+
+### Source
+- Original: esctest2 Python tests (https://github.com/ThomasDickey/esctest2)
+- Location: `/home/marc/projects/tde/esctest2/esctest/tests/`
+- License: GPL v2
+- Authors: George Nachman, Thomas E. Dickey
+
+### Conversion Pattern
+
+1. Read Python test file from esctest2
+2. Create Go test file in `apps/texelterm/esctest/`
+3. Convert test logic preserving intent
+4. Add helper functions to `helpers.go` if needed
+5. Run tests and fix failures
+6. Update README.md with results
+7. Commit batch
+
+### Test File Structure
+
+Each test file includes:
+```go
+// Package esctest provides a Go-native test framework...
+// Original esctest2 source:
+//   - Project: https://github.com/ThomasDickey/esctest2
+//   - File: esctest/tests/[name].py
+//   - Authors: George Nachman, Thomas E. Dickey
+//   - License: GPL v2
+package esctest
+
+import "testing"
+
+func Test_[Name]_[Description](t *testing.T) {
+    d := NewDriver(80, 24)
+    // Test implementation
+}
+```
+
+### Key Testing Patterns
+
+**Cursor Positioning (1-indexed):**
+```go
+CUP(d, NewPoint(x, y))  // Move to column x, row y
+```
+
+**Assertions:**
+```go
+AssertEQ(t, actual, expected)
+AssertScreenCharsInRectEqual(t, d, NewRect(left, top, right, bottom), []string{"line1", "line2"})
+```
+
+**Margins:**
+```go
+DECSTBM(d, top, bottom)      // Set top/bottom margins
+DECSLRM(d, left, right)      // Set left/right margins (requires DECLRMM)
+DECSET(d, DECLRMM)           // Enable left/right margin mode
+DECRESET(d, DECLRMM)         // Disable left/right margin mode
+```
+
+## Next Steps
+
+### Potential Next Batches
+
+With all scrolling infrastructure complete and working (IND, RI, SU, SD, DECSTBM), the foundation is solid for continuing conversions. Potential next batches could include:
+
+- Batch 9+: Additional escape sequences from esctest2 test suite
+- Focus on sequences that build on the working scroll/margin infrastructure
+- Continue improving xterm compliance incrementally
+
+## Running Tests
+
+```bash
+# All esctest tests
+go test texelation/apps/texelterm/esctest -v
+
+# Specific batch
+go test texelation/apps/texelterm/esctest -v -run "Test_ED|Test_EL"
+
+# Single test
+go test texelation/apps/texelterm/esctest -v -run "Test_RI_Scrolls$"
+
+# See summary
+go test texelation/apps/texelterm/esctest | tail -20
+```
+
+## Important Files
+
+**Test Framework:**
+- `apps/texelterm/esctest/driver.go` - Headless terminal driver
+- `apps/texelterm/esctest/types.go` - Point, Rect, Size types
+- `apps/texelterm/esctest/helpers.go` - Escape sequence helpers and assertions
+
+**Implementation:**
+- `apps/texelterm/parser/vterm.go` - VTerm core (1500+ lines)
+- `apps/texelterm/parser/parser.go` - Escape sequence parser
+
+**Documentation:**
+- `apps/texelterm/esctest/README.md` - Progress tracking, test results, fixed issues
+- `apps/texelterm/esctest/SESSION_NOTES.md` - This file
+
+## Key Implementation Details
+
+### Margin Handling
+
+**Top/Bottom Margins (DECSTBM):**
+- Stored as 0-indexed: `marginTop`, `marginBottom`
+- Default: 0 to height-1 (full screen)
+- Commands: CUP, scrolling, line editing respect these
+
+**Left/Right Margins (DECSLRM):**
+- Requires `DECLRMM` mode enabled (CSI ? 69 h)
+- Stored as 0-indexed: `marginLeft`, `marginRight`
+- Default: 0 to width-1 (full screen)
+- Commands: ICH, DCH, DL, IL, REP, IND, RI respect these
+
+### Scrolling Logic
+
+**Alt Screen** (simpler):
+- Direct buffer manipulation
+- No history
+- Scroll up: copy buffer[top+1:bottom+1] to buffer[top:bottom], clear bottom
+- Scroll down: copy buffer[top:bottom] to buffer[top+1:bottom+1], clear top
+
+**Main Screen** (complex):
+- Uses circular history buffer
+- Scroll up: move lines up, push top to history, clear bottom
+- Scroll down: move lines down, insert blank at top (ISSUE HERE)
+
+### Common Gotchas
+
+1. **Coordinates are 1-indexed in tests, 0-indexed internally**
+2. **DECSTBM moves cursor to origin** - must call SetCursorPos(0, 0)
+3. **Margin checks**: Commands outside margins behave differently
+4. **History buffer**: Main screen requires careful line existence checks
+5. **Driver methods**: Use `d.GetCursorPosition().X` not `d.GetCursorX()`
+
+## Recent Git History
+
+```
+53866e5 Add Batch 7 esctest: Scrolling and regions (18/22 passing)
+fbe57e3 Add Batch 6 esctest: ED and EL erase operations (13 tests)
+1dd4618 Add Batch 5 esctest: DL and IL line editing (16 tests)
+cf85eb1 Add Batch 4 esctest: Character editing (14 tests)
+```
+
+## Session Context for Next Time
+
+When resuming:
+
+1. **Check if RI failures should be fixed first** or continue with new batches
+2. **Consider using Task tool** for complex debugging of RI scroll-down
+3. **SU/SD tests are natural next step** if moving forward
+4. **All test infrastructure is in place** - just need conversions and fixes
+
+The conversion process is well-established and efficient. Each batch takes about 30-45 minutes including fixes.
