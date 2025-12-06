@@ -97,9 +97,15 @@ w.tree.SetLayoutAnimationEnabled(false)
 
 Then rebuild.
 
+## Recent Fixes
+
+**Issue**: New pane showed only borders during animation, content appeared only after animation finished.
+**Fix** (commit e0aeb90): Workspace now continuously refreshes at 60fps during active animations, ensuring app content is rendered throughout the animation.
+
 ## Known Limitations (Current Phase)
 
 - ✅ Split animations working
+- ✅ Content renders during animation (fixed!)
 - ❌ Pane close animations not implemented yet (instant removal)
 - ❌ No visual effects on split (glow, highlight) - Phase 3
 - ❌ No emit of TriggerPaneSplit events yet - Phase 3
