@@ -117,23 +117,22 @@ func NewTimeline(defaultInitial float32) *Timeline {
 // Returns the current animated value at this moment
 //
 // Minimal usage:
-//   value := timeline.AnimateTo(key, target, duration)
+//   value := timeline.AnimateTo(key, target, duration, now)
 //
 // With custom easing:
 //   value := timeline.AnimateToWithOptions(key, target, AnimateOptions{
 //       Duration: 300*time.Millisecond,
 //       Easing: EaseInOutCubic,
-//   })
-func (tl *Timeline) AnimateTo(key interface{}, target float32, duration time.Duration) float32 {
-	return tl.AnimateToWithOptions(key, target, DefaultAnimateOptions(duration))
+//   }, now)
+func (tl *Timeline) AnimateTo(key interface{}, target float32, duration time.Duration, now time.Time) float32 {
+	return tl.AnimateToWithOptions(key, target, DefaultAnimateOptions(duration), now)
 }
 
 // AnimateToWithOptions starts an animation with custom easing function
-func (tl *Timeline) AnimateToWithOptions(key interface{}, target float32, opts AnimateOptions) float32 {
+func (tl *Timeline) AnimateToWithOptions(key interface{}, target float32, opts AnimateOptions, now time.Time) float32 {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
 
-	now := time.Now()
 	state := tl.states[key]
 
 	if state == nil {
@@ -185,7 +184,7 @@ func (tl *Timeline) AnimateToWithOptions(key interface{}, target float32, opts A
 
 // Get returns the current animated value for a key
 // If the key hasn't been initialized, returns the default initial value
-func (tl *Timeline) Get(key interface{}) float32 {
+func (tl *Timeline) Get(key interface{}, now time.Time) float32 {
 	tl.mu.RLock()
 	state := tl.states[key]
 	tl.mu.RUnlock()
@@ -195,15 +194,30 @@ func (tl *Timeline) Get(key interface{}) float32 {
 	}
 
 	tl.mu.Lock()
-	value := tl.computeValue(state, time.Now())
+	value := tl.computeValue(state, now)
 	state.current = value
 	tl.mu.Unlock()
 
 	return value
 }
 
+// GetCached returns the last computed value for a key without recomputing.
+// This is useful when called after Update() in the same frame to avoid redundant calculations.
+// If the key hasn't been initialized, returns the default initial value.
+func (tl *Timeline) GetCached(key interface{}) float32 {
+	tl.mu.RLock()
+	defer tl.mu.RUnlock()
+
+	state := tl.states[key]
+	if state == nil {
+		return tl.defaultInitial
+	}
+
+	return state.current
+}
+
 // IsAnimating returns true if the key is currently animating
-func (tl *Timeline) IsAnimating(key interface{}) bool {
+func (tl *Timeline) IsAnimating(key interface{}, now time.Time) bool {
 	tl.mu.RLock()
 	defer tl.mu.RUnlock()
 
@@ -212,17 +226,20 @@ func (tl *Timeline) IsAnimating(key interface{}) bool {
 		return false
 	}
 
-	elapsed := time.Since(state.startTime)
+	elapsed := now.Sub(state.startTime)
 	return elapsed < state.duration && state.current != state.target
 }
 
 // HasActiveAnimations returns true if any key is currently animating
+// This method still exists for convenience but should be used sparingly.
+// Prefer checking specific keys with IsAnimating when possible for better performance.
 func (tl *Timeline) HasActiveAnimations() bool {
 	tl.mu.RLock()
 	defer tl.mu.RUnlock()
 
+	now := time.Now()
 	for _, state := range tl.states {
-		if state.duration > 0 && time.Since(state.startTime) < state.duration {
+		if state.duration > 0 && now.Sub(state.startTime) < state.duration {
 			if state.current != state.target {
 				return true
 			}
