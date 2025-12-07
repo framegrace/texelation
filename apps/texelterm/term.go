@@ -129,9 +129,8 @@ func (a *TexelTerm) RequestClose() bool {
 	defer a.mu.Unlock()
 	a.confirmClose = true
 	a.confirmCallback = func() {
-		a.closeOnce.Do(func() {
-			close(a.closeCh)
-		})
+		// External close confirmed - stop the app
+		a.Stop()
 	}
 	a.requestRefresh()
 	return false
@@ -330,9 +329,11 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 				})
 			} else if r == 'n' || r == 'N' {
 				a.confirmClose = false
+				wasExternal := a.confirmCallback != nil
+				a.confirmCallback = nil // Clear callback
 				a.requestRefresh()
 				// If this was an internal close (shell exit), restart the shell
-				if a.confirmCallback == nil {
+				if !wasExternal {
 					// Signal restart in non-blocking way
 					select {
 					case a.restartCh <- struct{}{}:
