@@ -1092,13 +1092,18 @@ func (a *TexelTerm) runShell() error {
 
 	// Use snapshot cwd if available
 	cwd := a.snapshotCwd
+
+	// Check if this is a restart (vterm already exists)
+	isRestart := a.vterm != nil
 	a.mu.Unlock()
 
 	cmd := exec.Command(a.command)
 	cmd.Env = env
 	if cwd != "" {
 		cmd.Dir = cwd
-		log.Printf("Restoring shell in directory: %s", cwd)
+		if isRestart {
+			log.Printf("Restarting shell in directory: %s", cwd)
+		}
 	}
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
@@ -1109,33 +1114,48 @@ func (a *TexelTerm) runShell() error {
 	a.cmd = cmd
 
 	a.mu.Lock()
-	// Read wrap/reflow and history configuration from theme
-	cfg := theme.Get()
-	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
-	reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
 
-	// Create history configuration
-	histCfg := parser.DefaultHistoryConfig()
-	histCfg.MemoryLines = cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
-	histCfg.PersistEnabled = cfg.GetBool("texelterm.history", "persist_enabled", true)
-	if persistDir := cfg.GetString("texelterm.history", "persist_dir", ""); persistDir != "" {
-		histCfg.PersistDir = persistDir
-	}
-	histCfg.Compress = cfg.GetBool("texelterm.history", "compress", true)
-	histCfg.Encrypt = cfg.GetBool("texelterm.history", "encrypt", false)
+	if isRestart {
+		// Restarting - just update the PTY writer, keep existing vterm
+		log.Println("Reusing existing vterm for seamless restart")
+		// Update the PTY writer callback to point to new PTY
+		if a.vterm != nil {
+			a.vterm.WriteToPty = func(b []byte) {
+				if a.pty != nil {
+					a.pty.Write(b)
+				}
+			}
+		}
+		a.mu.Unlock()
+	} else {
+		// First run - create vterm and parser
+		// Read wrap/reflow and history configuration from theme
+		cfg := theme.Get()
+		wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
+		reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
 
-	// Get current working directory
-	workingDir, _ := os.Getwd()
+		// Create history configuration
+		histCfg := parser.DefaultHistoryConfig()
+		histCfg.MemoryLines = cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
+		histCfg.PersistEnabled = cfg.GetBool("texelterm.history", "persist_enabled", true)
+		if persistDir := cfg.GetString("texelterm.history", "persist_dir", ""); persistDir != "" {
+			histCfg.PersistDir = persistDir
+		}
+		histCfg.Compress = cfg.GetBool("texelterm.history", "compress", true)
+		histCfg.Encrypt = cfg.GetBool("texelterm.history", "encrypt", false)
 
-	// Create history manager
-	hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir)
-	if err != nil {
-		log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
-		hm = nil
-	}
-	a.historyManager = hm
+		// Get current working directory
+		workingDir, _ := os.Getwd()
 
-	a.vterm = parser.NewVTerm(cols, rows,
+		// Create history manager
+		hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir)
+		if err != nil {
+			log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
+			hm = nil
+		}
+		a.historyManager = hm
+
+		a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
 			a.title = newTitle
 			a.requestRefresh()
@@ -1176,10 +1196,12 @@ func (a *TexelTerm) runShell() error {
 		parser.WithWrap(wrapEnabled),
 		parser.WithReflow(reflowEnabled),
 		parser.WithHistoryManager(hm),
-	)
-	a.parser = parser.NewParser(a.vterm)
-	a.mu.Unlock()
+		)
+		a.parser = parser.NewParser(a.vterm)
+		a.mu.Unlock()
+	}
 
+	// Start PTY reader goroutine (for both first run and restart)
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
