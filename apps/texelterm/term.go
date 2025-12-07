@@ -185,10 +185,11 @@ func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
 	msg := "Close Terminal? (y/n)"
 	textX := x + (boxW-len(msg))/2
 	textY := y + 2
-	if textY < height {
+	if textY < height && textY >= 0 {
 		for i, r := range msg {
-			if textX+i < width {
-				buf[textY][textX+i] = texel.Cell{Ch: r, Style: style.Bold(true)}
+			col := textX + i
+			if col >= 0 && col < width {
+				buf[textY][col] = texel.Cell{Ch: r, Style: style.Bold(true)}
 			}
 		}
 	}
@@ -331,6 +332,9 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 				a.confirmClose = false
 				wasExternal := a.confirmCallback != nil
 				a.confirmCallback = nil // Clear callback
+				if a.vterm != nil {
+					a.vterm.MarkAllDirty() // Force full redraw to clear dialog
+				}
 				a.requestRefresh()
 				// If this was an internal close (shell exit), restart the shell
 				if !wasExternal {
