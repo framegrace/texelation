@@ -129,6 +129,15 @@ func main() {
 		return flicker.New()
 	})
 
+	// Register snapshot factory for texelterm
+	desktop.RegisterSnapshotFactory("texelterm", func(title string, config map[string]interface{}) texel.App {
+		command, _ := config["command"].(string)
+		if command == "" {
+			command = defaultShell
+		}
+		return texelterm.New(title, command)
+	})
+
 	// Create initial workspace with configured default app
 	desktop.SwitchToWorkspace(1)
 
