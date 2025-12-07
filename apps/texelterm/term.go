@@ -1217,10 +1217,7 @@ func (a *TexelTerm) runShell() error {
 				return
 			}
 
-			if r == '' {
-			// Skip BEL character (visual bell not implemented)
-			continue
-			}
+			// Don't skip BEL - the parser needs it to terminate OSC sequences!
 
 			a.mu.Lock()
 			inSync := a.vterm.InSynchronizedUpdate
