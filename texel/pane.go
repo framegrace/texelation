@@ -385,8 +385,8 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	if p.app != nil {
 		appBuffer := p.app.Render()
 		if len(appBuffer) > 0 && len(appBuffer[0]) > 0 {
-			log.Printf("Render: Pane '%s' app buffer size: %dx%d",
-				p.getTitle(), len(appBuffer[0]), len(appBuffer))
+			log.Printf("ANIM: Render: Pane '%s' app buffer size: %dx%d (pane size: %dx%d, drawable: %dx%d)",
+				p.getTitle(), len(appBuffer[0]), len(appBuffer), w, h, p.drawableWidth(), p.drawableHeight())
 
 			for y, row := range appBuffer {
 				for x, cell := range row {
@@ -395,9 +395,12 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 					}
 				}
 			}
+		} else {
+			log.Printf("ANIM: Render: Pane '%s' app returned EMPTY buffer! (pane size: %dx%d, drawable: %dx%d)",
+				p.getTitle(), w, h, p.drawableWidth(), p.drawableHeight())
 		}
 	} else {
-		log.Printf("Render: Pane '%s' has no app!", p.getTitle())
+		log.Printf("ANIM: Render: Pane '%s' has no app!", p.getTitle())
 	}
 
 	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
@@ -472,7 +475,7 @@ func (p *pane) Height() int {
 }
 
 func (p *pane) setDimensions(x0, y0, x1, y1 int) {
-	log.Printf("setDimensions: Pane '%s' set to (%d,%d)-(%d,%d), size %dx%d",
+	log.Printf("ANIM: setDimensions: Pane '%s' set to (%d,%d)-(%d,%d), size %dx%d",
 		p.getTitle(), x0, y0, x1, y1, x1-x0, y1-y0)
 
 	p.absX0, p.absY0, p.absX1, p.absY1 = x0, y0, x1, y1
@@ -480,9 +483,11 @@ func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 	if p.app != nil {
 		drawableW := p.drawableWidth()
 		drawableH := p.drawableHeight()
-		log.Printf("setDimensions: Pane '%s' drawable area: %dx%d",
+		log.Printf("ANIM: setDimensions: Pane '%s' calling app.Resize(%d, %d)",
 			p.getTitle(), drawableW, drawableH)
 		p.app.Resize(drawableW, drawableH)
+	} else {
+		log.Printf("ANIM: setDimensions: Pane '%s' has no app yet!", p.getTitle())
 	}
 }
 

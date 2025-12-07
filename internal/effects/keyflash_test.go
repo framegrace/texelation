@@ -47,8 +47,11 @@ func TestKeyFlashTintsFakeBackgroundCellForeground(t *testing.T) {
 	}
 	buffer := [][]client.Cell{row}
 
-	flash := newKeyFlashEffect(tcell.ColorWhite, 50*time.Millisecond, []rune{'F'}, tcell.NewRGBColor(220, 220, 220), tcell.NewRGBColor(0, 0, 0), 1.0).(*keyFlashEffect)
-	flash.timeline.AnimateTo("flash", 1.0, 0)
+	now := time.Now()
+	// Use duration=0 for instant effect in tests
+	flash := newKeyFlashEffect(tcell.ColorWhite, 0, []rune{'F'}, tcell.NewRGBColor(220, 220, 220), tcell.NewRGBColor(0, 0, 0), 1.0).(*keyFlashEffect)
+	flash.Animate("flash", 1.0, now) // Use base helper method
+	flash.Update(now)                // Update timeline to compute values
 
 	origFg, origBg, _ := buffer[0][1].Style.Decompose()
 	flash.ApplyWorkspace(buffer)

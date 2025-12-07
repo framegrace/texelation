@@ -1,0 +1,43 @@
+2025/12/06 17:49:32 Config: No config file at /home/marc/.config/texelation/config.json, using defaults
+2025/12/06 17:49:32 Registry: Registered built-in app 'texelterm'
+2025/12/06 17:49:32 Registry: Loaded wrapper app 'htop' (System Monitor) from /home/marc/.config/texelation/apps/htop
+2025/12/06 17:49:32 Registry: Loaded 1 external apps, 1 built-in apps
+2025/12/06 17:49:32 NewDesktop: Created with inControlMode=false, 2 apps registered, InitAppName=launcher
+2025/12/06 17:49:32 Registry: Registered wrapper factory for 'texelterm'
+2025/12/06 17:49:32 Registry: Registered built-in app 'launcher'
+2025/12/06 17:49:32 Registry: Registered built-in app 'help'
+2025/12/06 17:49:32 Registry: Registered built-in app 'flicker'
+2025/12/06 17:49:32 ANIM: Enabling layout animations for workspace 1
+2025/12/06 17:49:32 ANIM: Layout animations enabled=true
+2025/12/06 17:49:32 Launcher: Loaded 5 apps
+2025/12/06 17:49:32 Launcher: Control bus attached
+2025/12/06 17:49:32 AddApp: Adding app 'Launcher'
+2025/12/06 17:49:32 Tree.SetRoot: Set root pane '', IsActive will be set by caller
+2025/12/06 17:49:32 AttachApp: Starting attachment of app 'Launcher'
+2025/12/06 17:49:32 AttachApp: Refresh notifier set
+2025/12/06 17:49:32 AttachApp: Resizing app 'Launcher' to 0x0
+2025/12/06 17:49:32 AttachApp: Starting app lifecycle for 'Launcher'
+2025/12/06 17:49:32 AttachApp: Notifying pane state for 'Launcher'
+2025/12/06 17:49:32 AttachApp: Completed attachment of app 'Launcher'
+2025/12/06 17:49:32 AddApp: Setting pane 'Launcher' as active
+2025/12/06 17:49:32 ANIM: recalculateLayout called, hasActiveAnimations=false
+2025/12/06 17:49:32 Tree.Resize: Setting root to (0,0) size 0x0
+2025/12/06 17:49:32 resizeNode: node at (0,0) size 0x0, hasPane=true, numChildren=0
+2025/12/06 17:49:32 resizeNode: Setting pane 'Launcher' dimensions to (0,0)-(0,0)
+2025/12/06 17:49:32 setDimensions: Pane 'Launcher' set to (0,0)-(0,0), size 0x0
+2025/12/06 17:49:32 setDimensions: Pane 'Launcher' drawable area: 0x0
+2025/12/06 17:49:32 AddApp: Completed adding app 'Launcher'
+2025/12/06 17:49:32 SetControlMode called: active=false
+2025/12/06 17:49:32 ANIM: recalculateLayout called, hasActiveAnimations=false
+2025/12/06 17:49:32 Tree.Resize: Setting root to (0,0) size 80x25
+2025/12/06 17:49:32 resizeNode: node at (0,0) size 80x25, hasPane=true, numChildren=0
+2025/12/06 17:49:32 resizeNode: Setting pane 'Launcher' dimensions to (0,0)-(80,25)
+2025/12/06 17:49:32 setDimensions: Pane 'Launcher' set to (0,0)-(80,25), size 80x25
+2025/12/06 17:49:32 setDimensions: Pane 'Launcher' drawable area: 78x23
+2025/12/06 17:49:32 ANIM: recalculateLayout called, hasActiveAnimations=false
+2025/12/06 17:49:32 Tree.Resize: Setting root to (0,1) size 80x24
+2025/12/06 17:49:32 resizeNode: node at (0,1) size 80x24, hasPane=true, numChildren=0
+2025/12/06 17:49:32 resizeNode: Setting pane 'Launcher' dimensions to (0,1)-(80,25)
+2025/12/06 17:49:32 setDimensions: Pane 'Launcher' set to (0,1)-(80,25), size 80x24
+2025/12/06 17:49:32 setDimensions: Pane 'Launcher' drawable area: 78x22
+2025/12/06 17:49:32 metric focus pane=711de1ca changes=1

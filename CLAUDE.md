@@ -163,3 +163,49 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
 - TexelUI plan: see `docs/TEXELUI_PLAN.md`. When working on TexelUI, keep this plan up to date (checklist and sections) and commit changes to it alongside related code. Future sessions should consult and update this file as the source of truth for TexelUI scope, status, and next steps.
 - TexelUI Architecture Review: see `docs/TEXELUI_ARCHITECTURE_REVIEW.md`. **[IMPORTANT - NEXT SESSION]** Comprehensive evaluation of TexelUI for form building completed 2025-11-18. Current state: solid low-level foundation but missing high-level primitives for productive form development. **Next steps:** Implement common widgets (Label, Button, Input, Checkbox), layout managers (VBox, HBox, Grid), and form helpers. Priority order and implementation details in review doc. Estimated 2-3 weeks for essential features.
 - Long Line Editor plan: see `docs/LONG_LINE_EDITOR_PLAN.md`. Phased implementation of overlay editor for long command lines in texelterm. Update progress and status as work proceeds.
+- **Layout Transitions (Server-Side) - COMPLETE (2025-12-07)**:
+  - **Status**: Fully implemented and working
+  - **Architecture**: Server-side animation system that animates SplitRatios over time, broadcasting tree snapshots at 60fps
+  - **Implementation**: `texel/layout_transitions.go` (~200 lines)
+  - **Configuration**: Via `theme.json` under `layout_transitions` section (duration_ms, easing, enabled, min_threshold)
+  - **How It Works**:
+    - **Split**: New pane starts at 1% of space, existing panes at 99%, animates to final ratios (e.g., [0.99, 0.01] → [0.5, 0.5])
+    - **Close**: Closing pane shrinks from current size to 1%, siblings grow to fill space, then pane is removed
+    - Each animation frame: Updates ratios → calls recalculateLayout() → broadcasts tree snapshot
+    - Client receives rapid snapshots and renders them normally with proper borders
+    - Animation identical to manual resize operations (reuses same code path)
+    - Callbacks execute after animation completes (for close, performs actual removal)
+  - **Benefits**:
+    - Borders render at correct positions (server renders buffers at current animated size)
+    - Server controls authoritative tree state throughout animation
+    - Client is stateless - just renders snapshots as received
+    - Reuses existing snapshot broadcast mechanism
+    - Can be disabled/configured per theme without code changes
+  - **Related Files**:
+    - `texel/layout_transitions.go` - Server-side animator with timeline, easing, 60fps ticker
+    - `texel/desktop_engine_core.go` - Initializes manager, parses theme config
+    - `texel/workspace.go` - PerformSplit hooks into animator
+  - **Configuration Example**:
+    ```json
+    "layout_transitions": {
+      "duration_ms": 300,
+      "easing": "smoothstep",
+      "enabled": true,
+      "min_threshold": 3
+    }
+    ```
+  - **Available Easing Functions**:
+    - `linear` - Constant speed, no acceleration
+    - `smoothstep` - Smooth acceleration and deceleration (default)
+    - `ease-in-out` - Fast in the middle, slow at ends
+    - `spring` - Physics-based overshoot and wobble (bouncy, fun!)
+  - **Hot Reload**: Configuration is hot-reloadable on SIGHUP
+    - Edit `~/.config/texelation/theme.json` (change duration, easing, or enabled)
+    - Send `kill -HUP $(pidof texel-server)`
+    - New settings apply immediately to future animations
+    - Great for live-tuning the spring effect or trying different easings!
+  - **Future Enhancements**:
+    - Make animations interruptible (currently complete before next action)
+    - Animate workspace switches (fade/slide transitions)
+    - Animate pane swaps (visual exchange of positions)
+    - Add more spring parameters (damping, frequency) to theme config

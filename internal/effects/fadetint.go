@@ -17,10 +17,9 @@ import (
 )
 
 type fadeTintEffect struct {
+	PaneEffectBase
 	color     tcell.Color
 	intensity float32
-	duration  time.Duration
-	timeline  *Timeline
 	defaultFg tcell.Color
 	defaultBg tcell.Color
 }
@@ -35,24 +34,17 @@ func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Durat
 		duration = 0
 	}
 	return &fadeTintEffect{
-		color:     color,
-		intensity: intensity,
-		duration:  duration,
-		timeline:  NewTimeline(0.0), // Default to 0 (no tint)
-		defaultFg: defaultFg,
-		defaultBg: defaultBg,
+		PaneEffectBase: NewPaneEffectBase(duration),
+		color:          color,
+		intensity:      intensity,
+		defaultFg:      defaultFg,
+		defaultBg:      defaultBg,
 	}
 }
 
 func (e *fadeTintEffect) ID() string { return "fadeTint" }
 
-func (e *fadeTintEffect) Active() bool {
-	return e.timeline.HasActiveAnimations() || e.timeline.Get(nil) > 0
-}
-
-func (e *fadeTintEffect) Update(now time.Time) {
-	e.timeline.Update(now)
-}
+// Active and Update are provided by PaneEffectBase
 
 func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 	if trigger.Type != TriggerPaneActive && trigger.Type != TriggerPaneResizing {
@@ -71,8 +63,8 @@ func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 		}
 	}
 
-	// Simple! Just animate to the target - Timeline handles everything
-	e.timeline.AnimateTo(trigger.PaneID, target, e.duration)
+	// Use base helper - even simpler now!
+	e.Animate(trigger.PaneID, target, trigger.Timestamp)
 }
 
 func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {
@@ -80,8 +72,8 @@ func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cel
 		return
 	}
 
-	// Get current animated value - Timeline handles initialization, locking, everything
-	intensity := e.timeline.Get(pane.ID)
+	// Get cached value (Update was already called this frame)
+	intensity := e.GetCached(pane.ID)
 	if intensity <= 0 {
 		return
 	}

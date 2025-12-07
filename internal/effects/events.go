@@ -42,6 +42,10 @@ type EffectTrigger struct {
 	Timestamp            time.Time
 	PaneBuffer           [][]client.Cell
 	Ghost                bool
+
+	// Layout animation fields (Phase 2)
+	SplitOrientation int     // 0=Horizontal, 1=Vertical (matches texel.SplitType)
+	TargetWeight     float64 // Target weight after animation [0..1]
 }
 
 const (
@@ -53,6 +57,11 @@ const (
 	TriggerPaneTitle
 	TriggerPaneZOrder
 	TriggerPaneKey
+
+	// Layout animation triggers (Phase 2)
+	TriggerPaneSplit     // Pane is being split into two
+	TriggerPaneRemoving  // Pane is being removed (animate out)
+	TriggerPaneReplaced  // Pane is being replaced by another
 
 	TriggerWorkspaceControl
 	TriggerWorkspaceKey
