@@ -1293,10 +1293,8 @@ func (a *TexelTerm) runShell() error {
 		// Get current working directory
 		workingDir, _ := os.Getwd()
 
-		// Create history manager with pane ID for persistent scrollback
-		a.mu.Lock()
+		// Create history manager with pane ID for persistent scrollback (lock already held)
 		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
-		a.mu.Unlock()
 
 		hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
 		if err != nil {
