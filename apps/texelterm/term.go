@@ -70,6 +70,7 @@ type TexelTerm struct {
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
+	closeOnce       sync.Once      // Protects closeCh from being closed twice
 	restartCh       chan struct{} // Signal to restart shell after confirmation
 
 	// Session state for restart/recovery
@@ -128,7 +129,9 @@ func (a *TexelTerm) RequestClose() bool {
 	defer a.mu.Unlock()
 	a.confirmClose = true
 	a.confirmCallback = func() {
-		close(a.closeCh)
+		a.closeOnce.Do(func() {
+			close(a.closeCh)
+		})
 	}
 	a.requestRefresh()
 	return false
@@ -319,7 +322,9 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 					return // Callback handles close
 				}
 				// Internal close (PTY exit) - user confirmed, close the pane
-				close(a.closeCh)
+				a.closeOnce.Do(func() {
+					close(a.closeCh)
+				})
 			} else if r == 'n' || r == 'N' {
 				a.confirmClose = false
 				a.requestRefresh()
@@ -1010,23 +1015,26 @@ func (a *TexelTerm) Run() error {
 		// Create a new closeCh for this iteration (in case previous one was closed)
 		a.mu.Lock()
 		a.closeCh = make(chan struct{})
+		a.closeOnce = sync.Once{} // Reset closeOnce for new closeCh
 		a.mu.Unlock()
 
 		err := a.runShell()
-		if err != nil && err.Error() == "user confirmed close" {
-			return nil // User said yes to close confirmation
-		}
 
-		// Check if we should restart or exit
-		select {
-		case <-a.restartCh:
-			log.Println("Restarting shell after user declined close")
-			continue // Restart the shell
-		case <-a.closeCh:
-			return nil // User confirmed close
-		case <-a.stop:
-			return nil // External stop
+		// runShell() already consumed the signal (closeCh, restartCh, or stop)
+		// Check the error to decide what to do
+		if err != nil {
+			if err.Error() == "user confirmed close" {
+				return nil // User pressed 'y' to close confirmation
+			}
+			if err.Error() == "external stop" {
+				return nil // Stop() was called
+			}
+			// Unexpected error
+			return err
 		}
+		// err == nil means user pressed 'n' to decline close, restart the shell
+		log.Println("Restarting shell after user declined close")
+		continue
 	}
 }
 
@@ -1218,8 +1226,8 @@ func (a *TexelTerm) runShell() error {
 		// User declined close with 'n' - will restart
 		return nil
 	case <-a.stop:
-		// External stop signal
-		return err
+		// External stop signal (Stop() was called)
+		return fmt.Errorf("external stop")
 	}
 }
 
