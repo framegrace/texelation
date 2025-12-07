@@ -9,6 +9,7 @@ package texel
 
 import (
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -285,6 +286,14 @@ func (m *LayoutTransitionManager) applyEasing(t float64, easing string) float64 
 			return 2 * t * t
 		}
 		return 1 - 2*(1-t)*(1-t)
+	case "spring":
+		// Physics-based spring animation with overshoot and damped oscillation
+		// Simulates a spring connecting the current position to the target
+		damping := 0.5    // How quickly oscillations die out (0-1, lower = more bouncy)
+		frequency := 2.5  // How many bounces (higher = more oscillations)
+
+		// Damped harmonic oscillator: overshoots target and wobbles before settling
+		return 1.0 - math.Exp(-damping*10.0*t)*math.Cos(frequency*2.0*math.Pi*t)
 	default:
 		return t * t * (3 - 2*t) // default to smoothstep
 	}
