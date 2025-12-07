@@ -134,14 +134,14 @@ func (m *LayoutTransitionManager) AnimateRemoval(node *Node, closingIndex int, o
 		return
 	}
 
-	// Calculate target ratios: closing pane gets 0.01, others share 0.99
+	// Calculate target ratios: closing pane gets 0.001 (essentially 0), others share remaining
 	targetRatios := make([]float64, len(node.SplitRatios))
-	remaining := 0.99
+	remaining := 0.999
 	numOthers := len(node.SplitRatios) - 1
 	if numOthers > 0 {
 		for i := range targetRatios {
 			if i == closingIndex {
-				targetRatios[i] = 0.01
+				targetRatios[i] = 0.001 // Much smaller so it reaches 0 pixels faster
 			} else {
 				targetRatios[i] = remaining / float64(numOthers)
 			}
@@ -235,6 +235,22 @@ func (m *LayoutTransitionManager) updateAnimations() {
 				node.SplitRatios[i] = state.startRatios[i] + (state.targetRatios[i]-state.startRatios[i])*t
 			}
 			needsBroadcast = true
+
+			// For removal animations, complete early if the pane has shrunk to near-zero
+			// This prevents visible "hanging" at the end when pane is 0 pixels but animation continues
+			if state.onComplete != nil {
+				for i, ratio := range node.SplitRatios {
+					if state.targetRatios[i] < 0.01 && ratio < 0.005 {
+						// Pane has shrunk to essentially nothing, complete animation now
+						node.SplitRatios = state.targetRatios
+						completed = append(completed, node)
+						callbacks = append(callbacks, state.onComplete)
+						log.Printf("LayoutTransitionManager: Early completion for removal (ratio %v reached, target was %v)",
+							ratio, state.targetRatios[i])
+						break
+					}
+				}
+			}
 		}
 	}
 
