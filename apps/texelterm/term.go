@@ -70,6 +70,7 @@ type TexelTerm struct {
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
+	restartCh       chan struct{} // Signal to restart shell after confirmation
 }
 
 var _ texel.CloseRequester = (*TexelTerm)(nil)
@@ -109,6 +110,7 @@ func New(title, command string) texel.App {
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
 		closeCh:      make(chan struct{}),
+		restartCh:    make(chan struct{}, 1), // Buffered to avoid blocking
 	}
 
 	wrapped := cards.WrapApp(term)
@@ -312,11 +314,19 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 					a.confirmCallback()
 					return // Callback handles close
 				}
-				// Internal close (PTY exit)
+				// Internal close (PTY exit) - user confirmed, close the pane
 				close(a.closeCh)
 			} else if r == 'n' || r == 'N' {
 				a.confirmClose = false
 				a.requestRefresh()
+				// If this was an internal close (shell exit), restart the shell
+				if a.confirmCallback == nil {
+					// Signal restart in non-blocking way
+					select {
+					case a.restartCh <- struct{}{}:
+					default:
+					}
+				}
 			}
 		}
 		a.mu.Unlock()
@@ -991,7 +1001,32 @@ func (a *TexelTerm) autoScrollLoop() {
 	}
 }
 func (a *TexelTerm) Run() error {
+	// Main run loop - allows restarting shell after exit
+	for {
+		// Create a new closeCh for this iteration (in case previous one was closed)
+		a.mu.Lock()
+		a.closeCh = make(chan struct{})
+		a.mu.Unlock()
 
+		err := a.runShell()
+		if err != nil && err.Error() == "user confirmed close" {
+			return nil // User said yes to close confirmation
+		}
+
+		// Check if we should restart or exit
+		select {
+		case <-a.restartCh:
+			log.Println("Restarting shell after user declined close")
+			continue // Restart the shell
+		case <-a.closeCh:
+			return nil // User confirmed close
+		case <-a.stop:
+			return nil // External stop
+		}
+	}
+}
+
+func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
 	cols, rows := a.width, a.height
 	a.mu.Unlock()
@@ -1113,18 +1148,23 @@ func (a *TexelTerm) Run() error {
 
 	err = cmd.Wait()
 	a.wg.Wait()
-	
+
 	// PTY exited. Ask for confirmation before closing pane.
 	a.mu.Lock()
 	a.confirmClose = true
 	a.confirmCallback = nil // Internal close
 	a.requestRefresh()
 	a.mu.Unlock()
-	
+
 	select {
 	case <-a.closeCh:
-		return err
+		// User confirmed close with 'y'
+		return fmt.Errorf("user confirmed close")
+	case <-a.restartCh:
+		// User declined close with 'n' - will restart
+		return nil
 	case <-a.stop:
+		// External stop signal
 		return err
 	}
 }
