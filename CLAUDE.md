@@ -163,3 +163,49 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
 - TexelUI plan: see `docs/TEXELUI_PLAN.md`. When working on TexelUI, keep this plan up to date (checklist and sections) and commit changes to it alongside related code. Future sessions should consult and update this file as the source of truth for TexelUI scope, status, and next steps.
 - TexelUI Architecture Review: see `docs/TEXELUI_ARCHITECTURE_REVIEW.md`. **[IMPORTANT - NEXT SESSION]** Comprehensive evaluation of TexelUI for form building completed 2025-11-18. Current state: solid low-level foundation but missing high-level primitives for productive form development. **Next steps:** Implement common widgets (Label, Button, Input, Checkbox), layout managers (VBox, HBox, Grid), and form helpers. Priority order and implementation details in review doc. Estimated 2-3 weeks for essential features.
 - Long Line Editor plan: see `docs/LONG_LINE_EDITOR_PLAN.md`. Phased implementation of overlay editor for long command lines in texelterm. Update progress and status as work proceeds.
+- **Layout Transitions (Client-Side) - IN PROGRESS (2025-12-07)**:
+  - **Status**: Implemented but visually not working as expected
+  - **Architecture**: Fully client-side animation system (like visual effects), server only sends final layout states
+  - **Implementation**: `internal/runtime/client/layout_transition.go` (~350 lines)
+  - **Configuration**: Via `theme.json` under `layout_transitions` section (duration_ms, easing, enabled, min_threshold)
+  - **What Works**:
+    - Animation system runs at 60fps for configured duration
+    - Interpolation calculations are correct (verified in logs: 99→96→95...→49 cells)
+    - Removed panes shrink away smoothly to center point
+    - First panel on startup doesn't animate (200ms grace period)
+    - Render channel buffering (64 slots) and draining works
+  - **What Doesn't Work**:
+    - Split animations appear instant (no visible resize despite correct interpolation)
+    - Logs show frames 0-60 with correct intermediate values but user sees instant change
+  - **Technical Details**:
+    - Server sends multiple rapid snapshots during splits (48ms apart)
+    - Fixed: Animation target updates instead of restart when new snapshot arrives during animation
+    - Fixed: Deadlock in completeAnimation() by releasing lock before signaling render
+    - Fixed: Buffer clipping to handle animated size vs final content size
+    - Increased render channel buffer from 1 to 64 to avoid dropped frames
+    - Added signal draining to always render latest animation frame
+  - **Debug Approach Used**:
+    - File-based logging to `/tmp/layout_anim_debug.log` (tcell redirects stdout)
+    - Confirmed GetInterpolatedLayout returns correct values: `99x24 -> 49x24 (now 96x24)` at frame 10
+    - Confirmed render() is called 60+ times per second during animation
+    - Yellow border debug overlay confirmed renders are happening but layout appears instant
+  - **Next Steps**:
+    - Try longer duration (2000ms) to see if animation becomes visible
+    - Investigate if tcell's screen.Show() is batching/optimizing away intermediate frames
+    - Consider if terminal refresh rate or double-buffering is hiding smooth transitions
+    - May need to add artificial visual feedback (e.g., fade effect) to make animation perceptible
+  - **Related Files**:
+    - `internal/runtime/client/layout_transition.go` - Core animator
+    - `internal/runtime/client/renderer.go` - Uses animated layouts
+    - `internal/runtime/client/app.go` - Render channel (line 99, 160-171)
+    - `internal/runtime/client/protocol_handler.go` - Triggers animations on snapshot
+    - `internal/runtime/client/client_state.go` - Config parsing
+  - **Configuration Example**:
+    ```json
+    "layout_transitions": {
+      "duration_ms": 1000,
+      "easing": "smoothstep",
+      "enabled": true,
+      "min_threshold": 3
+    }
+    ```
