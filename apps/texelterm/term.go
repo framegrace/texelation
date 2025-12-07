@@ -1295,7 +1295,7 @@ func (a *TexelTerm) runShell() error {
 
 		// Create history manager with pane ID for persistent scrollback
 		a.mu.Lock()
-		paneIDHex := fmt.Sprintf("%x", a.paneID)
+		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
 		a.mu.Unlock()
 
 		hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
