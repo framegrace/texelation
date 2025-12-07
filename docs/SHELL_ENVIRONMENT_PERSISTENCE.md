@@ -111,6 +111,22 @@ TEST1=Blah
 - File read: < 5ms (parse ~100 variables)
 - Negligible impact on prompt latency
 
+## Per-Terminal History Isolation
+
+Each terminal panel maintains its own independent command history:
+
+**Implementation:**
+- Server passes pane ID to app via `PaneIDSetter` interface
+- TexelTerm stores pane ID and sets `TEXEL_PANE_ID` environment variable
+- Shell integration reads `$TEXEL_PANE_ID` and sets `HISTFILE=~/.texel-history-$TEXEL_PANE_ID`
+- Each panel gets isolated history: `~/.texel-history-<pane-id-hex>`
+
+**Benefits:**
+- Multiple bash shells run simultaneously with independent histories
+- No "last shell wins" problem when exiting shells
+- History persists across shell restart (when declining exit confirmation)
+- Each panel's history is preserved separately
+
 ## Testing
 
 Current testing done:
@@ -119,8 +135,11 @@ Current testing done:
 - ✅ No bash function import errors
 - ✅ No prompt hangs or delays
 - ✅ Temporary files cleaned up after use
+- ✅ Per-terminal history isolation implemented
+- ✅ Pane ID passed to terminal apps via SetPaneID interface
 
 Future testing needed:
+- [ ] Manual verification of per-terminal history isolation
 - [ ] Snapshot serialization/deserialization
 - [ ] Server restart with multiple terminals
 - [ ] Large environments (1000+ variables)
