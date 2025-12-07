@@ -31,6 +31,7 @@ type transitionState struct {
 	startTime    time.Time
 	duration     time.Duration
 	easing       string
+	onComplete   func() // Called when animation finishes
 }
 
 // LayoutTransitionManager coordinates smooth layout transitions on the server side.
@@ -110,10 +111,59 @@ func (m *LayoutTransitionManager) Stop() {
 // AnimateSplit starts animating split ratios from current to target values.
 // This is called instead of immediately setting ratios in SplitActive/CloseActiveLeaf.
 func (m *LayoutTransitionManager) AnimateSplit(node *Node, targetRatios []float64) {
+	m.animateSplitWithCallback(node, targetRatios, nil)
+}
+
+// AnimateRemoval animates a child pane shrinking to tiny size, then calls onComplete.
+// The onComplete callback should do the actual removal of the pane.
+func (m *LayoutTransitionManager) AnimateRemoval(node *Node, closingIndex int, onComplete func()) {
+	if !m.enabled || node == nil || closingIndex < 0 || closingIndex >= len(node.SplitRatios) {
+		// If disabled or invalid, just call callback immediately
+		if onComplete != nil {
+			onComplete()
+		}
+		return
+	}
+
+	// Grace period: don't animate first removal on startup
+	if time.Since(m.graceStart) < 200*time.Millisecond {
+		log.Println("LayoutTransitionManager: Skipping removal animation (grace period)")
+		if onComplete != nil {
+			onComplete()
+		}
+		return
+	}
+
+	// Calculate target ratios: closing pane gets 0.01, others share 0.99
+	targetRatios := make([]float64, len(node.SplitRatios))
+	remaining := 0.99
+	numOthers := len(node.SplitRatios) - 1
+	if numOthers > 0 {
+		for i := range targetRatios {
+			if i == closingIndex {
+				targetRatios[i] = 0.01
+			} else {
+				targetRatios[i] = remaining / float64(numOthers)
+			}
+		}
+	} else {
+		targetRatios[closingIndex] = 1.0
+	}
+
+	log.Printf("LayoutTransitionManager: Starting removal animation for index %d (ratios: %v → %v)",
+		closingIndex, node.SplitRatios, targetRatios)
+	m.animateSplitWithCallback(node, targetRatios, onComplete)
+}
+
+// animateSplitWithCallback is the internal method that handles animation with optional callback.
+func (m *LayoutTransitionManager) animateSplitWithCallback(node *Node, targetRatios []float64, onComplete func()) {
 	if !m.enabled || node == nil {
-		// If disabled, just set ratios immediately
+		// If disabled, just set ratios immediately and call callback
 		if node != nil {
 			node.SplitRatios = targetRatios
+		}
+		if onComplete != nil {
+			onComplete()
 		}
 		return
 	}
@@ -122,6 +172,9 @@ func (m *LayoutTransitionManager) AnimateSplit(node *Node, targetRatios []float6
 	if time.Since(m.graceStart) < 200*time.Millisecond {
 		log.Println("LayoutTransitionManager: Skipping animation (grace period)")
 		node.SplitRatios = targetRatios
+		if onComplete != nil {
+			onComplete()
+		}
 		return
 	}
 
@@ -139,6 +192,7 @@ func (m *LayoutTransitionManager) AnimateSplit(node *Node, targetRatios []float6
 		startTime:    time.Now(),
 		duration:     m.duration,
 		easing:       m.easing,
+		onComplete:   onComplete,
 	}
 
 	m.animating[node] = state
@@ -149,15 +203,16 @@ func (m *LayoutTransitionManager) AnimateSplit(node *Node, targetRatios []float6
 // updateAnimations advances all active animations and broadcasts updates.
 func (m *LayoutTransitionManager) updateAnimations() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if len(m.animating) == 0 {
+		m.mu.Unlock()
 		return
 	}
 
 	now := time.Now()
 	needsBroadcast := false
 	completed := make([]*Node, 0)
+	callbacks := make([]func(), 0)
 
 	for node, state := range m.animating {
 		elapsed := now.Sub(state.startTime)
@@ -167,6 +222,9 @@ func (m *LayoutTransitionManager) updateAnimations() {
 			// Animation complete
 			node.SplitRatios = state.targetRatios
 			completed = append(completed, node)
+			if state.onComplete != nil {
+				callbacks = append(callbacks, state.onComplete)
+			}
 			needsBroadcast = true
 			log.Printf("LayoutTransitionManager: Animation complete for node (final ratios: %v)", state.targetRatios)
 		} else {
@@ -189,6 +247,13 @@ func (m *LayoutTransitionManager) updateAnimations() {
 	if needsBroadcast && m.desktop != nil {
 		m.desktop.recalculateLayout()
 		m.desktop.broadcastTreeChanged()
+	}
+
+	m.mu.Unlock()
+
+	// Call completion callbacks AFTER releasing lock to avoid potential deadlocks
+	for _, callback := range callbacks {
+		callback()
 	}
 }
 

@@ -437,6 +437,29 @@ func (w *Workspace) removeNode(target *Node, allowRoot bool) {
 		return
 	}
 
+	// Try to animate the removal if enabled and we have siblings
+	if w.desktop != nil && w.desktop.layoutTransitions != nil && len(parent.Children) > 1 {
+		log.Printf("removeNode: Starting animated removal of pane '%s' at index %d", pane.getTitle(), closingIndex)
+		w.desktop.layoutTransitions.AnimateRemoval(parent, closingIndex, func() {
+			log.Printf("removeNode: Animation complete, performing actual removal of '%s'", pane.getTitle())
+			w.doRemoveNode(target, parent, closingIndex, wasActive)
+		})
+		return // The callback will finish the job
+	}
+
+	// No animation, do immediate removal
+	log.Printf("removeNode: Performing immediate removal of pane '%s'", pane.getTitle())
+	w.doRemoveNode(target, parent, closingIndex, wasActive)
+}
+
+// doRemoveNode performs the actual removal of a pane from the tree.
+// This is called either immediately or from the animation callback.
+func (w *Workspace) doRemoveNode(target *Node, parent *Node, closingIndex int, wasActive bool) {
+	pane := target.Pane
+	if pane == nil {
+		return
+	}
+
 	if len(parent.Children) > 0 {
 		parent.Children = append(parent.Children[:closingIndex], parent.Children[closingIndex+1:]...)
 	}
