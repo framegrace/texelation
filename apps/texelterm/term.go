@@ -71,6 +71,10 @@ type TexelTerm struct {
 	confirmCallback func()
 	closeCh         chan struct{}
 	restartCh       chan struct{} // Signal to restart shell after confirmation
+
+	// Session state for restart/recovery
+	snapshotEnv []string // Last captured environment variables
+	snapshotCwd string   // Last captured working directory
 }
 
 var _ texel.CloseRequester = (*TexelTerm)(nil)
@@ -1026,13 +1030,63 @@ func (a *TexelTerm) Run() error {
 	}
 }
 
+// snapshotShellState captures the current environment and working directory
+// from the running shell process. Called when user is at a prompt.
+func (a *TexelTerm) snapshotShellState() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.cmd == nil || a.cmd.Process == nil {
+		return
+	}
+
+	pid := a.cmd.Process.Pid
+
+	// Capture working directory from /proc/<pid>/cwd
+	cwdLink := fmt.Sprintf("/proc/%d/cwd", pid)
+	if cwd, err := os.Readlink(cwdLink); err == nil {
+		a.snapshotCwd = cwd
+	}
+
+	// Capture environment from /proc/<pid>/environ
+	environPath := fmt.Sprintf("/proc/%d/environ", pid)
+	if data, err := os.ReadFile(environPath); err == nil {
+		// /proc/<pid>/environ uses null bytes as separators
+		envVars := strings.Split(string(data), "\x00")
+		// Filter out empty strings
+		filtered := make([]string, 0, len(envVars))
+		for _, env := range envVars {
+			if env != "" {
+				filtered = append(filtered, env)
+			}
+		}
+		a.snapshotEnv = filtered
+		log.Printf("Snapshot captured: cwd=%s, env vars=%d", a.snapshotCwd, len(a.snapshotEnv))
+	}
+}
+
 func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
 	cols, rows := a.width, a.height
+
+	// Use snapshot environment if available, otherwise use current process env
+	env := a.snapshotEnv
+	if len(env) == 0 {
+		env = os.Environ()
+	}
+	// Always set TERM for the shell
+	env = append(env, "TERM=xterm-256color")
+
+	// Use snapshot cwd if available
+	cwd := a.snapshotCwd
 	a.mu.Unlock()
 
 	cmd := exec.Command(a.command)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = env
+	if cwd != "" {
+		cmd.Dir = cwd
+		log.Printf("Restoring shell in directory: %s", cwd)
+	}
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	if err != nil {
@@ -1078,6 +1132,9 @@ func (a *TexelTerm) runShell() error {
 				a.title = cmd
 				a.requestRefresh()
 			}
+			// Snapshot environment and cwd when user is about to run a command
+			// This gives us the latest state before any command execution
+			a.snapshotShellState()
 		}),
 		parser.WithPtyWriter(func(b []byte) {
 			if a.pty != nil {
