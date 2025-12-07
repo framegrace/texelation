@@ -897,6 +897,10 @@ func WithCommandStartHandler(handler func(string)) Option {
 	return func(v *VTerm) { v.OnCommandStart = handler }
 }
 
+func WithCommandEndHandler(handler func(int)) Option {
+	return func(v *VTerm) { v.OnCommandEnd = handler }
+}
+
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
 }

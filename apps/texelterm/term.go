@@ -1165,8 +1165,10 @@ func (a *TexelTerm) runShell() error {
 				a.title = cmd
 				a.requestRefresh()
 			}
-			// Snapshot environment and cwd when user is about to run a command
-			// This gives us the latest state before any command execution
+		}),
+		parser.WithCommandEndHandler(func(exitCode int) {
+			// Snapshot environment and cwd AFTER command completes
+			// This captures any environment changes the command made
 			a.snapshotShellStateLocked()
 		}),
 		parser.WithPtyWriter(func(b []byte) {
