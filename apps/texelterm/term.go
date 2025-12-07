@@ -1030,12 +1030,9 @@ func (a *TexelTerm) Run() error {
 	}
 }
 
-// snapshotShellState captures the current environment and working directory
-// from the running shell process. Called when user is at a prompt.
-func (a *TexelTerm) snapshotShellState() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
+// snapshotShellStateLocked captures the current environment and working directory
+// from the running shell process. Must be called with a.mu held.
+func (a *TexelTerm) snapshotShellStateLocked() {
 	if a.cmd == nil || a.cmd.Process == nil {
 		return
 	}
@@ -1134,7 +1131,7 @@ func (a *TexelTerm) runShell() error {
 			}
 			// Snapshot environment and cwd when user is about to run a command
 			// This gives us the latest state before any command execution
-			a.snapshotShellState()
+			a.snapshotShellStateLocked()
 		}),
 		parser.WithPtyWriter(func(b []byte) {
 			if a.pty != nil {
