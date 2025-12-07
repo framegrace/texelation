@@ -73,6 +73,11 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	p.app.SetRefreshNotifier(refreshChan)
 	log.Printf("AttachApp: Refresh notifier set")
 
+	// Pass pane ID to apps that need it (e.g., for per-pane history)
+	if idSetter, ok := app.(PaneIDSetter); ok {
+		idSetter.SetPaneID(p.id)
+	}
+
 	if listener, ok := app.(Listener); ok {
 		p.screen.Subscribe(listener)
 	}

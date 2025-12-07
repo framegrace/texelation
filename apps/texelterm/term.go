@@ -40,6 +40,7 @@ const (
 type TexelTerm struct {
 	title                string
 	command              string
+	paneID               string // Pane ID for per-terminal history isolation
 	width                int
 	height               int
 	cmd                  *exec.Cmd
@@ -243,6 +244,12 @@ func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 func (a *TexelTerm) AttachControlBus(bus texel.ControlBus) {
 	a.mu.Lock()
 	a.controlBus = bus
+	a.mu.Unlock()
+}
+
+func (a *TexelTerm) SetPaneID(id [16]byte) {
+	a.mu.Lock()
+	a.paneID = fmt.Sprintf("%x", id)
 	a.mu.Unlock()
 }
 
@@ -1276,6 +1283,11 @@ func (a *TexelTerm) runShell() error {
 	}
 	// Always set TERM for the shell
 	env = append(env, "TERM=xterm-256color")
+
+	// Set pane ID for per-terminal history isolation
+	if a.paneID != "" {
+		env = append(env, "TEXEL_PANE_ID="+a.paneID)
+	}
 
 	// Inject shell integration
 	env = a.injectShellIntegration(env)
