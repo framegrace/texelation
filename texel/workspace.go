@@ -558,6 +558,18 @@ func (w *Workspace) CloseActivePane() {
 	if w == nil || w.tree == nil || w.tree.ActiveLeaf == nil {
 		return
 	}
+
+	// Check if the app wants to intercept the close request (e.g., to show confirmation)
+	pane := w.tree.ActiveLeaf.Pane
+	if pane != nil && pane.App != nil {
+		if requester, ok := pane.App.(CloseRequester); ok {
+			if !requester.RequestClose() {
+				// App intercepted the close (showing confirmation, etc.)
+				return
+			}
+		}
+	}
+
 	w.removeNode(w.tree.ActiveLeaf, true)
 }
 
