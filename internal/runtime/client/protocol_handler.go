@@ -52,10 +52,6 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 				return false
 			}
 		}
-		// Notify layout transition animator before applying snapshot
-		if state.layoutTransition != nil {
-			state.layoutTransition.OnTreeSnapshot(snap)
-		}
 		cache.ApplySnapshot(snap)
 		if state.effects != nil {
 			state.effects.ResetPaneStates(cache.SortedPanes())
