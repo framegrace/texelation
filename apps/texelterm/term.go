@@ -186,9 +186,11 @@ func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
 	msg := "Close Terminal? (y/n)"
 	textX := x + (boxW-len(msg))/2
 	textY := y + 2
-	for i, r := range msg {
-		if textX+i < width {
-			buf[textY][textX+i] = texel.Cell{Ch: r, Style: style.Bold(true)}
+	if textY < height {
+		for i, r := range msg {
+			if textX+i < width {
+				buf[textY][textX+i] = texel.Cell{Ch: r, Style: style.Bold(true)}
+			}
 		}
 	}
 }
@@ -316,6 +318,7 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		if ev.Key() == tcell.KeyRune {
 			r := ev.Rune()
 			if r == 'y' || r == 'Y' {
+				a.confirmClose = false // Dismiss dialog
 				if a.confirmCallback != nil {
 					a.mu.Unlock()
 					a.confirmCallback()
