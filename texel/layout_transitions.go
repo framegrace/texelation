@@ -1,0 +1,220 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: texel/layout_transitions.go
+// Summary: Server-side layout transition animations for smooth split/close operations.
+// Usage: Animates SplitRatios over time when panes are added or removed, similar to manual resize.
+
+package texel
+
+import (
+	"log"
+	"sync"
+	"time"
+
+	"texelation/internal/effects"
+)
+
+// LayoutTransitionConfig holds configuration for layout transitions from theme.json.
+type LayoutTransitionConfig struct {
+	Enabled      bool    `json:"enabled"`
+	DurationMs   int     `json:"duration_ms"`
+	Easing       string  `json:"easing"`
+	MinThreshold int     `json:"min_threshold"`
+}
+
+// transitionState tracks an ongoing split ratio animation for a node.
+type transitionState struct {
+	node         *Node
+	startRatios  []float64
+	targetRatios []float64
+	startTime    time.Time
+	duration     time.Duration
+	easing       string
+}
+
+// LayoutTransitionManager coordinates smooth layout transitions on the server side.
+// Unlike client-side effects (visual overlays), this animates the tree structure itself.
+type LayoutTransitionManager struct {
+	mu         sync.Mutex
+	enabled    bool
+	duration   time.Duration
+	easing     string
+	timeline   *effects.Timeline
+	animating  map[*Node]*transitionState
+	desktop    *DesktopEngine
+	ticker     *time.Ticker
+	stopCh     chan struct{}
+	graceStart time.Time
+}
+
+// NewLayoutTransitionManager creates a new layout transition manager.
+func NewLayoutTransitionManager(config LayoutTransitionConfig, desktop *DesktopEngine) *LayoutTransitionManager {
+	if !config.Enabled {
+		log.Println("LayoutTransitionManager: Disabled via config")
+		return &LayoutTransitionManager{enabled: false}
+	}
+
+	duration := time.Duration(config.DurationMs) * time.Millisecond
+	if duration <= 0 {
+		duration = 300 * time.Millisecond
+	}
+
+	easing := config.Easing
+	if easing == "" {
+		easing = "smoothstep"
+	}
+
+	m := &LayoutTransitionManager{
+		enabled:   true,
+		duration:  duration,
+		easing:    easing,
+		timeline:  effects.NewTimeline(0.0),
+		animating: make(map[*Node]*transitionState),
+		desktop:   desktop,
+		stopCh:    make(chan struct{}),
+	}
+
+	// Grace period to avoid animating first panel on startup
+	m.graceStart = time.Now()
+
+	log.Printf("LayoutTransitionManager: Enabled (duration=%v, easing=%s)", duration, easing)
+	m.startAnimationLoop()
+	return m
+}
+
+// startAnimationLoop runs a ticker that updates animations and broadcasts tree changes.
+func (m *LayoutTransitionManager) startAnimationLoop() {
+	m.ticker = time.NewTicker(16 * time.Millisecond) // ~60fps
+
+	go func() {
+		for {
+			select {
+			case <-m.ticker.C:
+				m.updateAnimations()
+			case <-m.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+// Stop stops the animation loop.
+func (m *LayoutTransitionManager) Stop() {
+	if m.ticker != nil {
+		m.ticker.Stop()
+	}
+	close(m.stopCh)
+}
+
+// AnimateSplit starts animating split ratios from current to target values.
+// This is called instead of immediately setting ratios in SplitActive/CloseActiveLeaf.
+func (m *LayoutTransitionManager) AnimateSplit(node *Node, targetRatios []float64) {
+	if !m.enabled || node == nil {
+		// If disabled, just set ratios immediately
+		if node != nil {
+			node.SplitRatios = targetRatios
+		}
+		return
+	}
+
+	// Grace period: don't animate first split on startup
+	if time.Since(m.graceStart) < 200*time.Millisecond {
+		log.Println("LayoutTransitionManager: Skipping animation (grace period)")
+		node.SplitRatios = targetRatios
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Copy current ratios as start state
+	startRatios := make([]float64, len(node.SplitRatios))
+	copy(startRatios, node.SplitRatios)
+
+	state := &transitionState{
+		node:         node,
+		startRatios:  startRatios,
+		targetRatios: targetRatios,
+		startTime:    time.Now(),
+		duration:     m.duration,
+		easing:       m.easing,
+	}
+
+	m.animating[node] = state
+	log.Printf("LayoutTransitionManager: Starting animation for node (ratios: %v → %v, duration=%v)",
+		startRatios, targetRatios, m.duration)
+}
+
+// updateAnimations advances all active animations and broadcasts updates.
+func (m *LayoutTransitionManager) updateAnimations() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.animating) == 0 {
+		return
+	}
+
+	now := time.Now()
+	needsBroadcast := false
+	completed := make([]*Node, 0)
+
+	for node, state := range m.animating {
+		elapsed := now.Sub(state.startTime)
+		progress := float64(elapsed) / float64(state.duration)
+
+		if progress >= 1.0 {
+			// Animation complete
+			node.SplitRatios = state.targetRatios
+			completed = append(completed, node)
+			needsBroadcast = true
+			log.Printf("LayoutTransitionManager: Animation complete for node (final ratios: %v)", state.targetRatios)
+		} else {
+			// Interpolate ratios
+			t := m.applyEasing(progress, state.easing)
+			node.SplitRatios = make([]float64, len(state.startRatios))
+			for i := range node.SplitRatios {
+				node.SplitRatios[i] = state.startRatios[i] + (state.targetRatios[i]-state.startRatios[i])*t
+			}
+			needsBroadcast = true
+		}
+	}
+
+	// Remove completed animations
+	for _, node := range completed {
+		delete(m.animating, node)
+	}
+
+	// Recalculate layout and broadcast if anything changed
+	if needsBroadcast && m.desktop != nil {
+		m.desktop.recalculateLayout()
+		m.desktop.broadcastTreeChanged()
+	}
+}
+
+// applyEasing applies an easing function to the linear progress value.
+func (m *LayoutTransitionManager) applyEasing(t float64, easing string) float64 {
+	switch easing {
+	case "linear":
+		return t
+	case "smoothstep":
+		return t * t * (3 - 2*t)
+	case "ease-in-out":
+		if t < 0.5 {
+			return 2 * t * t
+		}
+		return 1 - 2*(1-t)*(1-t)
+	default:
+		return t * t * (3 - 2*t) // default to smoothstep
+	}
+}
+
+// IsAnimating returns true if any animations are in progress.
+func (m *LayoutTransitionManager) IsAnimating() bool {
+	if !m.enabled {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.animating) > 0
+}
