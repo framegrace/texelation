@@ -9,9 +9,10 @@
 package texel
 
 import (
-	"github.com/gdamore/tcell/v2"
 	"log"
 	"sync"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 type Direction int
@@ -433,6 +434,29 @@ func (w *Workspace) removeNode(target *Node, allowRoot bool) {
 	}
 	if closingIndex == -1 {
 		log.Printf("removeNode: could not locate pane '%s' within parent", pane.getTitle())
+		return
+	}
+
+	// Try to animate the removal if enabled and we have siblings
+	if w.desktop != nil && w.desktop.layoutTransitions != nil && len(parent.Children) > 1 {
+		log.Printf("removeNode: Starting animated removal of pane '%s' at index %d", pane.getTitle(), closingIndex)
+		w.desktop.layoutTransitions.AnimateRemoval(parent, closingIndex, func() {
+			log.Printf("removeNode: Animation complete, performing actual removal of '%s'", pane.getTitle())
+			w.doRemoveNode(target, parent, closingIndex, wasActive)
+		})
+		return // The callback will finish the job
+	}
+
+	// No animation, do immediate removal
+	log.Printf("removeNode: Performing immediate removal of pane '%s'", pane.getTitle())
+	w.doRemoveNode(target, parent, closingIndex, wasActive)
+}
+
+// doRemoveNode performs the actual removal of a pane from the tree.
+// This is called either immediately or from the animation callback.
+func (w *Workspace) doRemoveNode(target *Node, parent *Node, closingIndex int, wasActive bool) {
+	pane := target.Pane
+	if pane == nil {
 		return
 	}
 
@@ -922,13 +946,53 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 			len(parent.Children), parent.SplitRatios, ratiosAreEqual(parent.SplitRatios))
 	}
 
-	// Perform the split in the tree
+	// Perform the split in the tree (this sets final ratios)
 	newNode := w.tree.SplitActive(splitDir, newPane)
 	if newNode == nil {
 		log.Printf("PerformSplit: Failed to split tree")
 		return
 	}
 	log.Printf("PerformSplit: Tree split completed")
+
+	// Capture the target ratios set by SplitActive, then animate from initial to target
+	var nodeWithRatios *Node
+	if addToExistingGroup && parent != nil {
+		nodeWithRatios = parent
+	} else if nodeToModify != nil {
+		nodeWithRatios = nodeToModify
+	}
+
+	// Start transition animation if we have a node with ratios
+	if nodeWithRatios != nil && len(nodeWithRatios.SplitRatios) > 0 {
+		targetRatios := make([]float64, len(nodeWithRatios.SplitRatios))
+		copy(targetRatios, nodeWithRatios.SplitRatios)
+
+		// Set initial ratios (new pane starts tiny)
+		numChildren := len(nodeWithRatios.Children)
+		if numChildren > 1 {
+			// Give new pane a tiny initial ratio
+			initialRatios := make([]float64, numChildren)
+			if addToExistingGroup {
+				// Existing children share the space, new one gets tiny slice
+				remaining := 0.99
+				for i := 0; i < numChildren-1; i++ {
+					initialRatios[i] = remaining / float64(numChildren-1)
+				}
+				initialRatios[numChildren-1] = 0.01
+			} else {
+				// Two children: existing gets 0.99, new gets 0.01
+				initialRatios[0] = 0.99
+				initialRatios[1] = 0.01
+			}
+			nodeWithRatios.SplitRatios = initialRatios
+			log.Printf("PerformSplit: Set initial ratios %v, will animate to %v", initialRatios, targetRatios)
+
+			// Start animation
+			if w.desktop != nil && w.desktop.layoutTransitions != nil {
+				w.desktop.layoutTransitions.AnimateSplit(nodeWithRatios, targetRatios)
+			}
+		}
+	}
 
 	// Create and attach new app (use default app if available, otherwise shell)
 	var newApp App
@@ -958,12 +1022,17 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 	newPane.SetActive(true)
 	w.notifyFocus()
 
-	// Recalculate layout after split
-	w.recalculateLayout()
-
-	log.Printf("PerformSplit: Split completed successfully")
-	if w.desktop != nil {
-		w.desktop.broadcastTreeChanged()
+	// Recalculate layout after split (if animations are disabled or no animation started, do it now)
+	// If animations are active, the animator will handle recalculate + broadcast on each frame
+	animating := w.desktop != nil && w.desktop.layoutTransitions != nil && w.desktop.layoutTransitions.IsAnimating()
+	if !animating {
+		w.recalculateLayout()
+		log.Printf("PerformSplit: Split completed successfully (no animation)")
+		if w.desktop != nil {
+			w.desktop.broadcastTreeChanged()
+		}
+	} else {
+		log.Printf("PerformSplit: Split completed successfully (animating)")
 	}
 }
 

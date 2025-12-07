@@ -8,12 +8,21 @@
 package clientruntime
 
 import (
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"texelation/client"
 )
+
+func debugLogRender(msg string) {
+	if f, err := os.OpenFile("/tmp/layout_anim_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+		fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05.000"), msg)
+		f.Close()
+	}
+}
 
 func render(state *clientState, screen tcell.Screen) {
 	width, height := screen.Size()
@@ -38,10 +47,12 @@ func render(state *clientState, screen tcell.Screen) {
 		if pane == nil {
 			continue
 		}
+
 		x := pane.Rect.X
 		y := pane.Rect.Y
 		w := pane.Rect.Width
 		h := pane.Rect.Height
+
 		if w <= 0 || h <= 0 {
 			continue
 		}
@@ -50,18 +61,21 @@ func render(state *clientState, screen tcell.Screen) {
 		for rowIdx := 0; rowIdx < h; rowIdx++ {
 			row := make([]client.Cell, w)
 			source := pane.RowCells(rowIdx)
-			for col := 0; col < w; col++ {
-				cell := client.Cell{Ch: ' ', Style: state.defaultStyle}
-				if source != nil && col < len(source) {
-					cell = source[col]
-					if cell.Ch == 0 {
-						cell.Ch = ' '
-					}
-					if cell.Style == (tcell.Style{}) {
-						cell.Style = state.defaultStyle
-					}
+			for col := 0; col < w && col < len(source); col++ {
+				cell := source[col]
+				if cell.Ch == 0 {
+					cell.Ch = ' '
+				}
+				if cell.Style == (tcell.Style{}) {
+					cell.Style = state.defaultStyle
 				}
 				row[col] = cell
+			}
+			// Fill any remaining cells with default
+			for col := 0; col < w; col++ {
+				if row[col].Ch == 0 {
+					row[col] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+				}
 			}
 			paneBuffer[rowIdx] = row
 		}
@@ -82,8 +96,10 @@ func render(state *clientState, screen tcell.Screen) {
 				if targetX < 0 || targetX >= width {
 					continue
 				}
+
 				cell := row[col]
 				style := cell.Style
+
 				if zoomOverlay {
 					style = applyZoomOverlay(style, 0.2, state)
 				}

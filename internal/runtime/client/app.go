@@ -95,7 +95,7 @@ func Run(opts Options) error {
 		}
 	}
 
-	renderCh := make(chan struct{}, 1)
+	renderCh := make(chan struct{}, 64) // Larger buffer for smooth animations
 	state.setRenderChannel(renderCh)
 	doneCh := make(chan struct{})
 	panicLogger.Go("readLoop", func() {
@@ -157,6 +157,16 @@ func Run(opts Options) error {
 	for {
 		select {
 		case <-renderCh:
+			// Drain any additional pending render signals to avoid rendering stale frames
+			drainLoop:
+			for {
+				select {
+				case <-renderCh:
+					// Drained one more signal
+				default:
+					break drainLoop
+				}
+			}
 			render(state, screen)
 		case ev, ok := <-events:
 			if !ok {

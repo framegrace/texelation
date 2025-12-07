@@ -413,9 +413,9 @@ func (t *Tree) traverse(n *Node, f func(*Node)) {
 }
 
 // Resize recalculates the dimensions of all panes in the tree.
-// Also add debugging to the main Resize method:
 func (t *Tree) Resize(x, y, w, h int) {
 	log.Printf("Tree.Resize: Setting root to (%d,%d) size %dx%d", x, y, w, h)
+
 	if t.Root != nil {
 		t.resizeNode(t.Root, x, y, w, h)
 	} else {
@@ -453,7 +453,7 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 		numChildren, n.Split, n.SplitRatios)
 
 	if n.Split == Vertical {
-		log.Printf("resizeNode: Processing vertical split")
+		log.Printf("resizeNode: Processing vertical split (ratios: %v)", n.SplitRatios)
 		currentX := x
 		for i, child := range n.Children {
 			childW := int(float64(w) * n.SplitRatios[i])
@@ -465,7 +465,7 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 			currentX += childW
 		}
 	} else { // Horizontal
-		log.Printf("resizeNode: Processing horizontal split")
+		log.Printf("resizeNode: Processing horizontal split (ratios: %v)", n.SplitRatios)
 		currentY := y
 		for i, child := range n.Children {
 			childH := int(float64(h) * n.SplitRatios[i])

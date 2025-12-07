@@ -18,9 +18,8 @@ import (
 )
 
 type keyFlashEffect struct {
+	WorkspaceEffectBase
 	color        tcell.Color
-	duration     time.Duration
-	timeline     *Timeline
 	keys         map[rune]struct{}
 	defaultFg    tcell.Color
 	defaultBg    tcell.Color
@@ -42,26 +41,18 @@ func newKeyFlashEffect(color tcell.Color, duration time.Duration, keys []rune, d
 		upper[unicode.ToUpper(r)] = struct{}{}
 	}
 	return &keyFlashEffect{
-		color:        color,
-		duration:     duration,
-		timeline:     NewTimeline(0.0), // Default to 0 (no flash)
-		keys:         upper,
-		defaultFg:    defaultFg,
-		defaultBg:    defaultBg,
-		maxIntensity: maxIntensity,
+		WorkspaceEffectBase: NewWorkspaceEffectBase(duration),
+		color:               color,
+		keys:                upper,
+		defaultFg:           defaultFg,
+		defaultBg:           defaultBg,
+		maxIntensity:        maxIntensity,
 	}
 }
 
 func (e *keyFlashEffect) ID() string { return "flash" }
 
-func (e *keyFlashEffect) Active() bool {
-	// Use a dummy key for workspace-wide flash
-	return e.timeline.Get("flash") > 0
-}
-
-func (e *keyFlashEffect) Update(now time.Time) {
-	e.timeline.Update(now)
-}
+// Active and Update are provided by WorkspaceEffectBase
 
 func (e *keyFlashEffect) HandleTrigger(trigger EffectTrigger) {
 	switch trigger.Type {
@@ -71,17 +62,18 @@ func (e *keyFlashEffect) HandleTrigger(trigger EffectTrigger) {
 				return
 			}
 		}
-		e.timeline.AnimateTo("flash", 1.0, e.duration)
+		e.Animate("flash", 1.0, trigger.Timestamp)
 	case TriggerWorkspaceControl:
 		if !trigger.Active {
 			return
 		}
-		e.timeline.AnimateTo("flash", 1.0, e.duration)
+		e.Animate("flash", 1.0, trigger.Timestamp)
 	}
 }
 
 func (e *keyFlashEffect) ApplyWorkspace(buffer [][]client.Cell) {
-	baseIntensity := e.timeline.Get("flash")
+	// Get cached value (Update was already called this frame)
+	baseIntensity := e.GetCached("flash")
 	if baseIntensity <= 0 {
 		return
 	}
@@ -110,8 +102,9 @@ func (e *keyFlashEffect) ApplyWorkspace(buffer [][]client.Cell) {
 
 	// Auto-fade back to zero after reaching peak
 	// If we're at or near peak and not animating back, start fade-out
-	if baseIntensity >= 0.99 && !e.timeline.IsAnimating("flash") {
-		e.timeline.AnimateTo("flash", 0.0, e.duration)
+	// Note: We use time.Now() here since this is a state decision, not rendering
+	if baseIntensity >= 0.99 && !e.IsAnimating("flash", time.Now()) {
+		e.Animate("flash", 0.0, time.Now())
 	}
 }
 
