@@ -194,8 +194,18 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
       "min_threshold": 3
     }
     ```
+  - **Available Easing Functions**:
+    - `linear` - Constant speed, no acceleration
+    - `smoothstep` - Smooth acceleration and deceleration (default)
+    - `ease-in-out` - Fast in the middle, slow at ends
+    - `spring` - Physics-based overshoot and wobble (bouncy, fun!)
+  - **Hot Reload**: Configuration is hot-reloadable on SIGHUP
+    - Edit `~/.config/texelation/theme.json` (change duration, easing, or enabled)
+    - Send `kill -HUP $(pidof texel-server)`
+    - New settings apply immediately to future animations
+    - Great for live-tuning the spring effect or trying different easings!
   - **Future Enhancements**:
-    - Support additional easing functions (ease-in, ease-out, cubic-bezier, etc.)
     - Make animations interruptible (currently complete before next action)
     - Animate workspace switches (fade/slide transitions)
     - Animate pane swaps (visual exchange of positions)
+    - Add more spring parameters (damping, frequency) to theme config
