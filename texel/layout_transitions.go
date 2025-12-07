@@ -308,3 +308,27 @@ func (m *LayoutTransitionManager) IsAnimating() bool {
 	defer m.mu.Unlock()
 	return len(m.animating) > 0
 }
+
+// UpdateConfig updates the manager's configuration at runtime (e.g., on theme reload).
+// Does not affect animations already in progress.
+func (m *LayoutTransitionManager) UpdateConfig(config LayoutTransitionConfig) {
+	if m == nil {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.enabled = config.Enabled
+
+	if config.DurationMs > 0 {
+		m.duration = time.Duration(config.DurationMs) * time.Millisecond
+	}
+
+	if config.Easing != "" {
+		m.easing = config.Easing
+	}
+
+	log.Printf("LayoutTransitionManager: Config updated (enabled=%v, duration=%v, easing=%s)",
+		m.enabled, m.duration, m.easing)
+}

@@ -270,6 +270,9 @@ func (d *DesktopEngine) ForceRefresh() {
 	// Reload apps
 	d.loadApps()
 
+	// Reload layout transitions configuration from theme
+	d.reloadLayoutTransitions()
+
 	// Clear style cache to force re-evaluation of colors
 	d.styleCache = make(map[styleKey]tcell.Style)
 
@@ -285,6 +288,43 @@ func (d *DesktopEngine) ForceRefresh() {
 	if d.refreshHandler != nil {
 		d.refreshHandler()
 	}
+}
+
+// reloadLayoutTransitions reads layout transition config from theme and updates the manager.
+func (d *DesktopEngine) reloadLayoutTransitions() {
+	if d.layoutTransitions == nil {
+		return
+	}
+
+	tm := theme.Get()
+
+	// Parse layout transitions config from theme (same as initialization)
+	config := LayoutTransitionConfig{
+		Enabled:      true,
+		DurationMs:   300,
+		Easing:       "smoothstep",
+		MinThreshold: 3,
+	}
+
+	if section, ok := tm["layout_transitions"]; ok {
+		if enabled, ok := section["enabled"].(bool); ok {
+			config.Enabled = enabled
+		}
+		if duration, ok := section["duration_ms"].(float64); ok {
+			config.DurationMs = int(duration)
+		}
+		if easing, ok := section["easing"].(string); ok {
+			config.Easing = easing
+		}
+		if threshold, ok := section["min_threshold"].(float64); ok {
+			config.MinThreshold = int(threshold)
+		}
+	}
+
+	log.Printf("Desktop: Reloading layout transitions config: enabled=%v, duration=%dms, easing=%s",
+		config.Enabled, config.DurationMs, config.Easing)
+
+	d.layoutTransitions.UpdateConfig(config)
 }
 
 func (d *DesktopEngine) Subscribe(listener Listener) {
