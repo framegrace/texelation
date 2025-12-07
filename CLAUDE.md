@@ -169,11 +169,12 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
   - **Implementation**: `texel/layout_transitions.go` (~200 lines)
   - **Configuration**: Via `theme.json` under `layout_transitions` section (duration_ms, easing, enabled, min_threshold)
   - **How It Works**:
-    - When a pane is split, new pane starts at 1% of space, existing panes at 99%
-    - LayoutTransitionManager animates split ratios from initial to final (e.g., [0.99, 0.01] → [0.5, 0.5])
+    - **Split**: New pane starts at 1% of space, existing panes at 99%, animates to final ratios (e.g., [0.99, 0.01] → [0.5, 0.5])
+    - **Close**: Closing pane shrinks from current size to 1%, siblings grow to fill space, then pane is removed
     - Each animation frame: Updates ratios → calls recalculateLayout() → broadcasts tree snapshot
     - Client receives rapid snapshots and renders them normally with proper borders
     - Animation identical to manual resize operations (reuses same code path)
+    - Callbacks execute after animation completes (for close, performs actual removal)
   - **Benefits**:
     - Borders render at correct positions (server renders buffers at current animated size)
     - Server controls authoritative tree state throughout animation
@@ -194,6 +195,7 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
     }
     ```
   - **Future Enhancements**:
-    - Add close animations (pane shrinks before removal)
-    - Support different easing functions (ease-in, ease-out, etc.)
+    - Support additional easing functions (ease-in, ease-out, cubic-bezier, etc.)
     - Make animations interruptible (currently complete before next action)
+    - Animate workspace switches (fade/slide transitions)
+    - Animate pane swaps (visual exchange of positions)
