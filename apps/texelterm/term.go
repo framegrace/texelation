@@ -1293,8 +1293,12 @@ func (a *TexelTerm) runShell() error {
 		// Get current working directory
 		workingDir, _ := os.Getwd()
 
-		// Create history manager
-		hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir)
+		// Create history manager with pane ID for persistent scrollback
+		a.mu.Lock()
+		paneIDHex := fmt.Sprintf("%x", a.paneID)
+		a.mu.Unlock()
+
+		hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
 		if err != nil {
 			log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
 			hm = nil

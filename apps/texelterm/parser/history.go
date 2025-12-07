@@ -43,7 +43,8 @@ type HistoryConfig struct {
 // DefaultHistoryConfig returns default configuration.
 func DefaultHistoryConfig() HistoryConfig {
 	homeDir, _ := os.UserHomeDir()
-	persistDir := filepath.Join(homeDir, ".local", "share", "texelation", "history")
+	// Use ~/.texelation for scrollback persistence (simpler than .local/share/texelation)
+	persistDir := filepath.Join(homeDir, ".texelation")
 
 	return HistoryConfig{
 		MemoryLines:      DefaultMemoryLines,
@@ -73,15 +74,21 @@ type SessionMetadata struct {
 }
 
 // NewSessionMetadata creates metadata for a new session.
-func NewSessionMetadata(command, workingDir string) SessionMetadata {
+// If paneID is empty, generates a new UUID (for backwards compatibility).
+func NewSessionMetadata(command, workingDir, paneID string) SessionMetadata {
 	hostname, _ := os.Hostname()
 	username := "unknown"
 	if u, err := user.Current(); err == nil {
 		username = u.Username
 	}
 
+	sessionID := paneID
+	if sessionID == "" {
+		sessionID = uuid.New().String()
+	}
+
 	return SessionMetadata{
-		SessionID:   uuid.New().String(),
+		SessionID:   sessionID,
 		StartTime:   time.Now(),
 		Command:     command,
 		WorkingDir:  workingDir,
@@ -126,8 +133,9 @@ type HistoryManager struct {
 }
 
 // NewHistoryManager creates a new history manager.
-func NewHistoryManager(config HistoryConfig, command, workingDir string) (*HistoryManager, error) {
-	metadata := NewSessionMetadata(command, workingDir)
+// paneID should be the hex-encoded pane ID for persistent scrollback across restarts.
+func NewHistoryManager(config HistoryConfig, command, workingDir, paneID string) (*HistoryManager, error) {
+	metadata := NewSessionMetadata(command, workingDir, paneID)
 
 	hm := &HistoryManager{
 		buffer:        make([][]Cell, config.MemoryLines),
@@ -143,6 +151,27 @@ func NewHistoryManager(config HistoryConfig, command, workingDir string) (*Histo
 		lastFlushTime: time.Now(),
 	}
 
+	// Load existing history if persistence is enabled
+	var existingLines [][]Cell
+	if config.PersistEnabled {
+		// Construct the session file path the same way NewHistoryStore does
+		scrollbackDir := filepath.Join(config.PersistDir, "scrollback")
+		ext := ".hist"
+		if config.Encrypt {
+			ext += ".enc"
+		}
+		sessionFile := filepath.Join(scrollbackDir, metadata.SessionID+ext)
+
+		// Try to load existing history
+		lines, err := LoadHistoryLines(sessionFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load existing history: %v\n", err)
+		} else if len(lines) > 0 {
+			existingLines = lines
+			fmt.Fprintf(os.Stderr, "Loaded %d lines from existing history file\n", len(lines))
+		}
+	}
+
 	// Initialize persistent storage if enabled
 	if config.PersistEnabled {
 		store, err := NewHistoryStore(config, metadata)
@@ -155,6 +184,11 @@ func NewHistoryManager(config HistoryConfig, command, workingDir string) (*Histo
 			// Start periodic flush timer
 			go hm.flushLoop()
 		}
+	}
+
+	// Populate buffer with existing history
+	if len(existingLines) > 0 {
+		hm.ReplaceBuffer(existingLines)
 	}
 
 	return hm, nil
