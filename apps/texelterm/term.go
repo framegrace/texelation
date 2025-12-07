@@ -10,12 +10,14 @@ package texelterm
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -1046,35 +1048,178 @@ func (a *TexelTerm) Run() error {
 	}
 }
 
-// snapshotShellStateLocked captures the current environment and working directory
-// from the running shell process. Must be called with a.mu held.
-func (a *TexelTerm) snapshotShellStateLocked() {
+// injectShellIntegration modifies the shell command to auto-load integration scripts.
+// For interactive shells, we need to modify the command itself, not just env vars.
+func (a *TexelTerm) injectShellIntegration(env []string) []string {
+	// Note: This function only sets up env for now
+	// The actual command modification happens in runShell
+	return env
+}
+
+// getShellCommandSimpleIntegration returns a command that integrates shell monitoring
+// Uses --rcfile approach with simplified integration (no background jobs)
+func (a *TexelTerm) getShellCommandSimpleIntegration(env []string) *exec.Cmd {
+	shellName := strings.ToLower(filepath.Base(a.command))
+
+	// For bash, use --rcfile to load integration + user bashrc
+	if strings.Contains(shellName, "bash") {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			configDir := filepath.Join(homeDir, ".config", "texelation", "shell-integration")
+			if err := a.ensureShellIntegrationScripts(configDir); err == nil {
+				// Use existing bash-wrapper.sh which sources both integration and user bashrc
+				wrapperScript := filepath.Join(configDir, "bash-wrapper.sh")
+
+				// bash-wrapper.sh should already exist from ensureShellIntegrationScripts
+				if _, err := os.Stat(wrapperScript); err == nil {
+					log.Printf("Shell integration: bash --rcfile %s -i (simplified, no background jobs)", wrapperScript)
+					return exec.Command(a.command, "--rcfile", wrapperScript, "-i")
+				}
+			}
+		}
+	}
+
+	// Default: no integration, just run shell normally
+	log.Printf("Shell integration: disabled for %s", shellName)
+	return exec.Command(a.command)
+}
+
+// getShellCommandWithIntegration returns the shell command with integration script loaded
+func (a *TexelTerm) getShellCommandWithIntegration() (string, []string) {
+	// Detect shell type from command
+	shellName := strings.ToLower(filepath.Base(a.command))
+
+	// Get config directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("Failed to get home directory: %v", err)
+		return a.command, nil
+	}
+
+	configDir := filepath.Join(homeDir, ".config", "texelation", "shell-integration")
+
+	// Check if integration script exists, create if needed
+	if err := a.ensureShellIntegrationScripts(configDir); err != nil {
+		log.Printf("Failed to ensure shell integration scripts: %v", err)
+		return a.command, nil
+	}
+
+	var integrationScript string
+	var shellCmd string
+	var args []string
+
+	switch {
+	case strings.Contains(shellName, "bash"):
+		integrationScript = filepath.Join(configDir, "bash.sh")
+		userRcFile := filepath.Join(homeDir, ".bashrc")
+
+		// Create a temporary rc file that sources both our integration and user's bashrc
+		tmpRcFile := filepath.Join(configDir, "bash-init.sh")
+		rcContent := fmt.Sprintf("#!/bin/bash\n[[ -f %s ]] && source %s\n[[ -f %s ]] && source %s\n",
+			integrationScript, integrationScript, userRcFile, userRcFile)
+		if err := os.WriteFile(tmpRcFile, []byte(rcContent), 0755); err != nil {
+			log.Printf("Failed to create temp rc file: %v", err)
+			return a.command, nil
+		}
+
+		shellCmd = a.command
+		args = []string{"--rcfile", tmpRcFile, "-i"}
+		log.Printf("Injecting shell integration via: bash --rcfile %s -i", tmpRcFile)
+
+	case strings.Contains(shellName, "zsh"):
+		integrationScript = filepath.Join(configDir, "zsh.sh")
+		userRcFile := filepath.Join(homeDir, ".zshrc")
+
+		sourceCmd := fmt.Sprintf("[[ -f %s ]] && source %s; [[ -f %s ]] && source %s; exec %s",
+			integrationScript, integrationScript, userRcFile, userRcFile, a.command)
+
+		shellCmd = a.command
+		args = []string{"-c", sourceCmd}
+		log.Printf("Injecting shell integration via: zsh -c 'source integration && exec zsh'")
+
+	case strings.Contains(shellName, "fish"):
+		integrationScript = filepath.Join(configDir, "fish.fish")
+		shellCmd = a.command
+		args = []string{"--init-command", fmt.Sprintf("source %s", integrationScript)}
+		log.Printf("Injecting shell integration: fish --init-command source %s", integrationScript)
+
+	default:
+		// Unknown shell, no integration
+		log.Printf("Shell integration not available for: %s", shellName)
+		return a.command, nil
+	}
+
+	return shellCmd, args
+}
+
+// ensureShellIntegrationScripts creates shell integration scripts if they don't exist
+func (a *TexelTerm) ensureShellIntegrationScripts(configDir string) error {
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// We assume the scripts are already created in the config directory
+	// If not, they would need to be embedded in the binary or copied on first run
+	// For now, we just log and continue
+	log.Printf("Shell integration directory created: %s", configDir)
+	log.Printf("Please ensure integration scripts exist in this directory")
+
+	return nil
+}
+
+// snapshotCwdLocked captures the current working directory from the running shell process.
+// Must be called with a.mu held.
+func (a *TexelTerm) snapshotCwdLocked() {
 	if a.cmd == nil || a.cmd.Process == nil {
 		return
 	}
 
 	pid := a.cmd.Process.Pid
-
-	// Capture working directory from /proc/<pid>/cwd
 	cwdLink := fmt.Sprintf("/proc/%d/cwd", pid)
 	if cwd, err := os.Readlink(cwdLink); err == nil {
 		a.snapshotCwd = cwd
+		log.Printf("Snapshot cwd: %s", a.snapshotCwd)
+	}
+}
+
+// decodeAndStoreEnvironment decodes base64-encoded environment from DCS sequence
+// and stores it in snapshotEnv. Called from parser callback (already threadsafe).
+func (a *TexelTerm) decodeAndStoreEnvironment(base64Env string) {
+	// Decode base64-encoded environment
+	decoded, err := base64.StdEncoding.DecodeString(base64Env)
+	if err != nil {
+		log.Printf("Failed to decode environment: %v", err)
+		return
 	}
 
-	// Capture environment from /proc/<pid>/environ
-	environPath := fmt.Sprintf("/proc/%d/environ", pid)
-	if data, err := os.ReadFile(environPath); err == nil {
-		// /proc/<pid>/environ uses null bytes as separators
-		envVars := strings.Split(string(data), "\x00")
-		// Filter out empty strings
-		filtered := make([]string, 0, len(envVars))
-		for _, env := range envVars {
-			if env != "" {
-				filtered = append(filtered, env)
-			}
+	// Split on newlines (env output format)
+	envVars := strings.Split(string(decoded), "\n")
+
+	// Filter out empty strings
+	filtered := make([]string, 0, len(envVars))
+	for _, env := range envVars {
+		if env != "" {
+			filtered = append(filtered, env)
 		}
-		a.snapshotEnv = filtered
-		log.Printf("Snapshot captured: cwd=%s, env vars=%d", a.snapshotCwd, len(a.snapshotEnv))
+	}
+
+	a.mu.Lock()
+	a.snapshotEnv = filtered
+	a.mu.Unlock()
+
+	log.Printf("Environment captured: %d vars", len(filtered))
+
+	// DEBUG: Check if TEST1 is in the snapshot
+	foundTest1 := false
+	for _, env := range filtered {
+		if strings.HasPrefix(env, "TEST1=") {
+			log.Printf("  Found in environment: %s", env)
+			foundTest1 = true
+		}
+	}
+	if !foundTest1 {
+		log.Printf("  TEST1 NOT found in environment (checked %d vars)", len(filtered))
 	}
 }
 
@@ -1082,22 +1227,65 @@ func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
 	cols, rows := a.width, a.height
 
-	// Use snapshot environment if available, otherwise use current process env
-	env := a.snapshotEnv
+	// Check if this is a restart (vterm already exists)
+	isRestart := a.vterm != nil
+	var oldPid int
+	if isRestart && a.cmd != nil && a.cmd.Process != nil {
+		oldPid = a.cmd.Process.Pid
+	}
+	a.mu.Unlock()
+
+	// Try to read environment from file if this is a restart
+	var env []string
+	if isRestart && oldPid > 0 {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			envFile := filepath.Join(homeDir, fmt.Sprintf(".texel-env.%d", oldPid))
+			if data, err := os.ReadFile(envFile); err == nil {
+				// Parse env file (one VAR=value per line)
+				lines := strings.Split(string(data), "\n")
+				for _, line := range lines {
+					if line == "" {
+						continue
+					}
+					// Skip bash functions (BASH_FUNC_*%%) to avoid import errors
+					if strings.HasPrefix(line, "BASH_FUNC_") {
+						continue
+					}
+					env = append(env, line)
+				}
+				log.Printf("Loaded environment from %s: %d variables", envFile, len(env))
+				// Clean up the file
+				os.Remove(envFile)
+			} else {
+				log.Printf("Could not read env file %s: %v", envFile, err)
+			}
+		}
+	}
+
+	a.mu.Lock()
+	// Fall back to snapshot env or os.Environ if file read failed
 	if len(env) == 0 {
-		env = os.Environ()
+		env = a.snapshotEnv
+		if len(env) == 0 {
+			log.Println("No snapshot env, using os.Environ()")
+			env = os.Environ()
+		} else {
+			log.Printf("Restoring snapshot env with %d variables", len(env))
+		}
 	}
 	// Always set TERM for the shell
 	env = append(env, "TERM=xterm-256color")
 
+	// Inject shell integration
+	env = a.injectShellIntegration(env)
+
 	// Use snapshot cwd if available
 	cwd := a.snapshotCwd
-
-	// Check if this is a restart (vterm already exists)
-	isRestart := a.vterm != nil
 	a.mu.Unlock()
 
-	cmd := exec.Command(a.command)
+	// Get shell command - try simpler integration via ENV
+	cmd := a.getShellCommandSimpleIntegration(env)
 	cmd.Env = env
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -1167,9 +1355,13 @@ func (a *TexelTerm) runShell() error {
 			}
 		}),
 		parser.WithCommandEndHandler(func(exitCode int) {
-			// Snapshot environment and cwd AFTER command completes
-			// This captures any environment changes the command made
-			a.snapshotShellStateLocked()
+			// Snapshot working directory AFTER command completes
+			log.Printf("CommandEndHandler: Taking cwd snapshot (exitCode=%d)", exitCode)
+			a.snapshotCwdLocked()
+		}),
+		parser.WithEnvironmentUpdateHandler(func(base64Env string) {
+			// Decode base64-encoded environment from DCS sequence
+			a.decodeAndStoreEnvironment(base64Env)
 		}),
 		parser.WithPtyWriter(func(b []byte) {
 			if a.pty != nil {

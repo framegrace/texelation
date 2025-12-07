@@ -68,6 +68,7 @@ type VTerm struct {
 	OnInputStart                       func()
 	OnCommandStart                     func(cmd string)
 	OnCommandEnd                       func(exitCode int)
+	OnEnvironmentUpdate                func(base64Env string)
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode                 bool
 	OnBracketedPasteModeChange         func(bool)
@@ -899,6 +900,10 @@ func WithCommandStartHandler(handler func(string)) Option {
 
 func WithCommandEndHandler(handler func(int)) Option {
 	return func(v *VTerm) { v.OnCommandEnd = handler }
+}
+
+func WithEnvironmentUpdateHandler(handler func(string)) Option {
+	return func(v *VTerm) { v.OnEnvironmentUpdate = handler }
 }
 
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
