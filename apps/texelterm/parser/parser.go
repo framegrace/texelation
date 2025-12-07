@@ -181,14 +181,15 @@ func (p *Parser) Parse(r rune) {
 		} else {
 			p.oscBuffer = append(p.oscBuffer, r)
 
-			// CRITICAL FIX: OSC 133 subcommands A/B/C have no parameters
+			// CRITICAL FIX: OSC 133 subcommands A/B have no parameters
 			// Bash/Starship doesn't send terminators for these, so we must auto-terminate
 			// to prevent swallowing command output
-			// OSC 133;D has parameters (;exitcode), so we let it collect until BEL/ESC
+			// OSC 133;C and 133;D have parameters (command text, exit code), so we
+			// let them collect until BEL/ESC terminator
 			payload := string(p.oscBuffer)
 			if len(payload) >= 5 && payload[:4] == "133;" {
-				lastChar := payload[len(payload)-1]
-				if lastChar == 'A' || lastChar == 'B' {
+				subcommand := payload[4] // The character right after "133;"
+				if subcommand == 'A' || subcommand == 'B' {
 					// Auto-terminate A/B immediately (no parameters expected)
 					p.handleOSC(p.oscBuffer)
 					p.state = StateGround
