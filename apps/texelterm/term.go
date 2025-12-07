@@ -10,7 +10,6 @@ package texelterm
 
 import (
 	"bufio"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -75,10 +74,6 @@ type TexelTerm struct {
 	closeCh         chan struct{}
 	closeOnce       sync.Once      // Protects closeCh from being closed twice
 	restartCh       chan struct{} // Signal to restart shell after confirmation
-
-	// Session state for restart/recovery
-	snapshotEnv []string // Last captured environment variables
-	snapshotCwd string   // Last captured working directory
 }
 
 var _ texel.CloseRequester = (*TexelTerm)(nil)
@@ -257,18 +252,9 @@ func (a *TexelTerm) SnapshotMetadata() (appType string, config map[string]interf
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// Only store the command - env and cwd are in pane-ID-based files
 	config = make(map[string]interface{})
 	config["command"] = a.command
-
-	// Save environment variables for server restart
-	if len(a.snapshotEnv) > 0 {
-		config["environment"] = a.snapshotEnv
-	}
-
-	// Save working directory for server restart
-	if a.snapshotCwd != "" {
-		config["working_directory"] = a.snapshotCwd
-	}
 
 	return "texelterm", config
 }
@@ -1195,84 +1181,36 @@ func (a *TexelTerm) ensureShellIntegrationScripts(configDir string) error {
 	return nil
 }
 
-// snapshotCwdLocked captures the current working directory from the running shell process.
-// Must be called with a.mu held.
-func (a *TexelTerm) snapshotCwdLocked() {
-	if a.cmd == nil || a.cmd.Process == nil {
-		return
-	}
-
-	pid := a.cmd.Process.Pid
-	cwdLink := fmt.Sprintf("/proc/%d/cwd", pid)
-	if cwd, err := os.Readlink(cwdLink); err == nil {
-		a.snapshotCwd = cwd
-		log.Printf("Snapshot cwd: %s", a.snapshotCwd)
-	}
-}
-
-// decodeAndStoreEnvironment decodes base64-encoded environment from DCS sequence
-// and stores it in snapshotEnv. Called from parser callback (already threadsafe).
-func (a *TexelTerm) decodeAndStoreEnvironment(base64Env string) {
-	// Decode base64-encoded environment
-	decoded, err := base64.StdEncoding.DecodeString(base64Env)
-	if err != nil {
-		log.Printf("Failed to decode environment: %v", err)
-		return
-	}
-
-	// Split on newlines (env output format)
-	envVars := strings.Split(string(decoded), "\n")
-
-	// Filter out empty strings
-	filtered := make([]string, 0, len(envVars))
-	for _, env := range envVars {
-		if env != "" {
-			filtered = append(filtered, env)
-		}
-	}
-
-	a.mu.Lock()
-	a.snapshotEnv = filtered
-	a.mu.Unlock()
-
-	log.Printf("Environment captured: %d vars", len(filtered))
-
-	// DEBUG: Check if TEST1 is in the snapshot
-	foundTest1 := false
-	for _, env := range filtered {
-		if strings.HasPrefix(env, "TEST1=") {
-			log.Printf("  Found in environment: %s", env)
-			foundTest1 = true
-		}
-	}
-	if !foundTest1 {
-		log.Printf("  TEST1 NOT found in environment (checked %d vars)", len(filtered))
-	}
-}
-
 func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
 	cols, rows := a.width, a.height
 
 	// Check if this is a restart (vterm already exists)
 	isRestart := a.vterm != nil
-	var oldPid int
-	if isRestart && a.cmd != nil && a.cmd.Process != nil {
-		oldPid = a.cmd.Process.Pid
-	}
 	a.mu.Unlock()
 
-	// Try to read environment from file if this is a restart
+	// Try to read environment from pane-ID-based file (for both restart and server restart)
 	var env []string
-	if isRestart && oldPid > 0 {
+	var cwd string
+	a.mu.Lock()
+	paneID := a.paneID
+	a.mu.Unlock()
+
+	if paneID != "" {
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
-			envFile := filepath.Join(homeDir, fmt.Sprintf(".texel-env.%d", oldPid))
+			envFile := filepath.Join(homeDir, fmt.Sprintf(".texel-env-%s", paneID))
 			if data, err := os.ReadFile(envFile); err == nil {
 				// Parse env file (one VAR=value per line)
 				lines := strings.Split(string(data), "\n")
 				for _, line := range lines {
 					if line == "" {
+						continue
+					}
+					// Extract working directory (special marker from shell integration)
+					if strings.HasPrefix(line, "__TEXEL_CWD=") {
+						cwd = strings.TrimPrefix(line, "__TEXEL_CWD=")
+						log.Printf("Restored working directory: %s", cwd)
 						continue
 					}
 					// Skip bash functions (BASH_FUNC_*%%) to avoid import errors
@@ -1282,24 +1220,17 @@ func (a *TexelTerm) runShell() error {
 					env = append(env, line)
 				}
 				log.Printf("Loaded environment from %s: %d variables", envFile, len(env))
-				// Clean up the file
-				os.Remove(envFile)
 			} else {
-				log.Printf("Could not read env file %s: %v", envFile, err)
+				log.Printf("Could not read env file %s: %v (this is normal on first run)", envFile, err)
 			}
 		}
 	}
 
 	a.mu.Lock()
-	// Fall back to snapshot env or os.Environ if file read failed
+	// Fall back to os.Environ if file read failed
 	if len(env) == 0 {
-		env = a.snapshotEnv
-		if len(env) == 0 {
-			log.Println("No snapshot env, using os.Environ()")
-			env = os.Environ()
-		} else {
-			log.Printf("Restoring snapshot env with %d variables", len(env))
-		}
+		log.Println("No pane-based env file, using os.Environ()")
+		env = os.Environ()
 	}
 	// Always set TERM for the shell
 	env = append(env, "TERM=xterm-256color")
@@ -1311,9 +1242,6 @@ func (a *TexelTerm) runShell() error {
 
 	// Inject shell integration
 	env = a.injectShellIntegration(env)
-
-	// Use snapshot cwd if available
-	cwd := a.snapshotCwd
 	a.mu.Unlock()
 
 	// Get shell command - try simpler integration via ENV
@@ -1321,9 +1249,7 @@ func (a *TexelTerm) runShell() error {
 	cmd.Env = env
 	if cwd != "" {
 		cmd.Dir = cwd
-		if isRestart {
-			log.Printf("Restarting shell in directory: %s", cwd)
-		}
+		log.Printf("Starting shell in directory: %s", cwd)
 	}
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
@@ -1385,15 +1311,6 @@ func (a *TexelTerm) runShell() error {
 				a.title = cmd
 				a.requestRefresh()
 			}
-		}),
-		parser.WithCommandEndHandler(func(exitCode int) {
-			// Snapshot working directory AFTER command completes
-			log.Printf("CommandEndHandler: Taking cwd snapshot (exitCode=%d)", exitCode)
-			a.snapshotCwdLocked()
-		}),
-		parser.WithEnvironmentUpdateHandler(func(base64Env string) {
-			// Decode base64-encoded environment from DCS sequence
-			a.decodeAndStoreEnvironment(base64Env)
 		}),
 		parser.WithPtyWriter(func(b []byte) {
 			if a.pty != nil {
