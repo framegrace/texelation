@@ -253,6 +253,26 @@ func (a *TexelTerm) SetPaneID(id [16]byte) {
 	a.mu.Unlock()
 }
 
+func (a *TexelTerm) SnapshotMetadata() (appType string, config map[string]interface{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	config = make(map[string]interface{})
+	config["command"] = a.command
+
+	// Save environment variables for server restart
+	if len(a.snapshotEnv) > 0 {
+		config["environment"] = a.snapshotEnv
+	}
+
+	// Save working directory for server restart
+	if a.snapshotCwd != "" {
+		config["working_directory"] = a.snapshotCwd
+	}
+
+	return "texelterm", config
+}
+
 func colorToHex(c tcell.Color) string {
 	trueColor := c.TrueColor()
 	if !trueColor.Valid() {

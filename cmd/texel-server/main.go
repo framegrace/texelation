@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/pprof"
 	"strings"
 	"sync/atomic"
@@ -40,7 +41,8 @@ func main() {
 
 	socketPath := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
 	title := flag.String("title", "Texel Server", "Title for the main pane")
-	snapshotPath := flag.String("snapshot", "", "Optional path to persist pane snapshots")
+	snapshotPath := flag.String("snapshot", "", "Path to persist pane snapshots (default: ~/.texelation/snapshot.json)")
+	fromScratch := flag.Bool("from-scratch", false, "Start from scratch, ignoring any saved snapshot")
 	cpuProfile := flag.String("pprof-cpu", "", "Write CPU profile to file")
 	memProfile := flag.String("pprof-mem", "", "Write heap profile to file on exit")
 	verboseLogs := flag.Bool("verbose-logs", false, "Enable verbose server logging")
@@ -147,9 +149,30 @@ func main() {
 		publisher.SetObserver(publishLogger)
 		return publisher
 	})
-	if *snapshotPath != "" {
-		store := server.NewSnapshotStore(*snapshotPath)
-		srv.SetSnapshotStore(store, 5*time.Second)
+	// Enable snapshots by default unless --from-scratch is specified
+	if !*fromScratch {
+		// Use default path if not specified
+		snapPath := *snapshotPath
+		if snapPath == "" {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				log.Printf("Warning: Could not get home directory: %v", err)
+			} else {
+				configDir := filepath.Join(homeDir, ".texelation")
+				if err := os.MkdirAll(configDir, 0755); err != nil {
+					log.Printf("Warning: Could not create config directory: %v", err)
+				} else {
+					snapPath = filepath.Join(configDir, "snapshot.json")
+				}
+			}
+		}
+		if snapPath != "" {
+			store := server.NewSnapshotStore(snapPath)
+			srv.SetSnapshotStore(store, 5*time.Second)
+			log.Printf("Session persistence enabled: %s", snapPath)
+		}
+	} else {
+		log.Println("Starting from scratch (--from-scratch flag set)")
 	}
 
 	go func() {
