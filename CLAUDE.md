@@ -209,3 +209,42 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
     - Animate workspace switches (fade/slide transitions)
     - Animate pane swaps (visual exchange of positions)
     - Add more spring parameters (damping, frequency) to theme config
+
+- **Scrollback Persistence - COMPLETE (2025-12-08)**:
+  - **Status**: Fixed and working
+  - **Implementation**: `apps/texelterm/parser/history.go`
+  - **Issue Fixed**: Scrollback history was persisting empty lines only
+  - **Root Cause**: Terminal content updates via `SetLine()` which modifies in-memory buffer but doesn't queue for disk write. Only empty lines from `AppendLine()` were being persisted.
+  - **Solution**: Modified `Close()` to rewrite entire circular buffer to disk instead of relying on `pendingLines` queue
+  - **Key Changes**:
+    - `Close()` (lines 347-380) - Extracts all lines from circular buffer and rewrites history file
+    - `rewriteHistoryFile()` (lines 382-416) - Deletes old file, creates new store, writes all lines
+  - **Additional Fixes**:
+    - Cursor positioning: Terminal now positions cursor at bottom when loading history (vterm.go lines 1149-1166)
+    - Margin initialization: Fixed scrolling bug by ensuring margin reset code runs (lines 1214-1217)
+    - Tree corruption: Added defensive bounds checking in tree.go resizeNode() to prevent crashes
+  - **Related Files**:
+    - `apps/texelterm/parser/history.go` - HistoryManager with write-on-close strategy
+    - `apps/texelterm/parser/vterm.go` - Resize() with cursor positioning and margin init
+    - `texel/tree.go` - Defensive bounds checking for SplitRatios array
+
+- **Pane Loss During Server Restart - OPEN ISSUE (2025-12-08)**:
+  - **Status**: Under investigation
+  - **Symptom**: Panes are lost when server restarts, but work perfectly during normal runtime
+  - **Evidence**:
+    - User created 3 panels, restarted server, only 1 remained
+    - `snapshot.json` shows only single pane with `"split": "none"`, meaning panes already lost before snapshot saved
+    - Quote: "the previous lifecycle, without server restarts was working perfectly"
+  - **Scope**: Issue is specifically in snapshot save/restore flow, NOT general pane lifecycle
+  - **Areas to Investigate**:
+    - Server initialization from snapshot (`internal/runtime/server/server.go`)
+    - Tree serialization/deserialization (`texel/snapshot.go`)
+    - App lifecycle during restore (are apps being started correctly?)
+    - Pane ID management and potential conflicts
+    - Desktop state restoration sequence
+  - **Test Case**: Create fresh server with 3 terminals, kill server, restart - only 1 terminal appears
+  - **Related Files**:
+    - `internal/runtime/server/snapshot_store.go` - Snapshot persistence
+    - `texel/snapshot.go` - Tree serialization
+    - `cmd/texel-server/main.go` - Server initialization
+    - `/home/marc/.texelation/snapshot.json` - Saved state (check for tree structure corruption)
