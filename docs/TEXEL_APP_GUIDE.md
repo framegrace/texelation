@@ -85,10 +85,11 @@ Key components:
 * `cards.EffectCard` – wraps any registered effect (flash, rainbow, fadeTint).
 * `cards.Pipeline` – executes the cards in order, handles lifecycle wiring, and
   exposes a control bus.
+* `cards.DefaultPipeline` – conventional wrapper that turns a base app plus extra cards into a `texel.App`.
 * Control function (`NewPipeline(controlFunc, ...)`) – intercepts keys before
   cards process them (useful for toggles like F12 diagnostics).
 
-Example pipeline used by TexelTerm:
+Example pipeline used by TexelTerm (simplified):
 
 ```go
 flash, _ := cards.NewEffectCard("flash", effects.EffectConfig{
@@ -98,11 +99,7 @@ flash, _ := cards.NewEffectCard("flash", effects.EffectConfig{
     "trigger_type":  "workspace.control",
 })
 
-pipe := cards.NewPipeline(nil,
-    cards.WrapApp(term),
-    flash,
-)
-
+pipe := cards.DefaultPipeline(term, flash)
 term.AttachControlBus(pipe.ControlBus())
 return pipe
 ```

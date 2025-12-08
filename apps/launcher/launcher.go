@@ -29,11 +29,11 @@ type Launcher struct {
 	registry   *registry.Registry
 	controlBus texel.ControlBus
 
-	mu           sync.RWMutex
-	apps         []*registry.AppEntry
-	selectedIdx  int
-	labels       []*widgets.Label
-	pane         *widgets.Pane
+	mu          sync.RWMutex
+	apps        []*registry.AppEntry
+	selectedIdx int
+	labels      []*widgets.Label
+	pane        *widgets.Pane
 
 	width, height int
 }
@@ -55,8 +55,7 @@ func New(reg *registry.Registry) texel.App {
 	// Note: UI will be built on first Resize() call
 
 	// Wrap in pipeline for effects support
-	wrapped := cards.WrapApp(l)
-	pipe := cards.NewPipeline(nil, wrapped)
+	pipe := cards.DefaultPipeline(l)
 	l.AttachControlBus(pipe.ControlBus())
 	return pipe
 }

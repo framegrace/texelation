@@ -11,6 +11,15 @@ func WrapApp(app texel.App) Card {
 	return &appAdapter{app: app}
 }
 
+// DefaultPipeline constructs the conventional TexelApp pipeline:
+// the base texel.App wrapped as a card plus any extra cards, returned
+// as a texel.App implemented by Pipeline.
+func DefaultPipeline(app texel.App, extra ...Card) texel.App {
+	base := WrapApp(app)
+	cards := append([]Card{base}, extra...)
+	return NewPipeline(nil, cards...)
+}
+
 // AppAccessor is implemented by cards that wrap a texel.App directly.
 type AppAccessor interface {
 	UnderlyingApp() texel.App
