@@ -148,7 +148,7 @@ make client
 
 Client flags:
 - `--socket` (Unix socket path)
-- `--reconnect` (resume previous session if possible)
+- `--reconnect` (resume previous session; enabled by default)
 - `--panic-log` (path to append panic stack traces)
 
 ### Effect Configuration
