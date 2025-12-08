@@ -1343,6 +1343,15 @@ func (a *TexelTerm) runShell() error {
 		parser.WithHistoryManager(hm),
 		)
 		a.parser = parser.NewParser(a.vterm)
+
+		// Position cursor at bottom if we loaded history
+		// This is needed because cursor positioning normally happens in Resize(),
+		// but when vterm is created with correct dimensions, no resize is triggered
+		if hm != nil && hm.Length() > rows {
+			a.vterm.SetCursorPos(rows-1, 0)
+			fmt.Fprintf(os.Stderr, "[CURSOR FIX] Initial cursor position after history load: cursorY=%d, cursorX=0\n", rows-1)
+		}
+
 		a.mu.Unlock()
 	}
 

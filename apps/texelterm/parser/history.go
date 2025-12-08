@@ -186,6 +186,10 @@ func NewHistoryManager(config HistoryConfig, command, workingDir, paneID string)
 		}
 	}
 
+	// Trim trailing empty lines from loaded history
+	// These accumulate from ClearScreen operations during previous server runs
+	existingLines = trimTrailingEmptyLines(existingLines)
+
 	// Populate buffer with existing history
 	if len(existingLines) > 0 {
 		hm.ReplaceBuffer(existingLines)
@@ -420,6 +424,42 @@ func (hm *HistoryManager) GetMetadata() SessionMetadata {
 	hm.mu.RLock()
 	defer hm.mu.RUnlock()
 	return hm.metadata
+}
+
+// trimTrailingEmptyLines removes trailing empty lines from a history buffer.
+// Empty lines accumulate from ClearScreen operations during previous server runs.
+func trimTrailingEmptyLines(lines [][]Cell) [][]Cell {
+	if len(lines) == 0 {
+		return lines
+	}
+
+	// Find the last non-empty line
+	lastNonEmpty := len(lines) - 1
+	for lastNonEmpty >= 0 {
+		line := lines[lastNonEmpty]
+		if len(line) > 0 {
+			// Check if line has any non-space content
+			hasContent := false
+			for _, cell := range line {
+				if cell.Rune != ' ' && cell.Rune != 0 {
+					hasContent = true
+					break
+				}
+			}
+			if hasContent {
+				break
+			}
+		}
+		lastNonEmpty--
+	}
+
+	trimmed := lastNonEmpty + 1
+	if trimmed < len(lines) {
+		fmt.Fprintf(os.Stderr, "[TRIM DEBUG] Trimmed %d trailing empty lines (was %d, now %d)\n",
+			len(lines)-trimmed, len(lines), trimmed)
+		return lines[:trimmed]
+	}
+	return lines
 }
 
 // ReplaceBuffer replaces the entire history buffer with new content (used during reflow).

@@ -27,16 +27,22 @@ func (v *VTerm) ClearScreen() {
 		if v.historyManager != nil {
 			// DEBUG: Log history state before and after
 			lenBefore := v.historyManager.Length()
-			// Using HistoryManager - just append first line
-			v.historyManager.AppendLine(make([]Cell, 0, v.width))
+			// Append `height` empty lines so the entire visible screen is cleared
+			// This ensures that after clearscreen, the visible area shows all new/empty content
+			// and cursor at (0,0) writes to the first of these new lines
+			for i := 0; i < v.height; i++ {
+				v.historyManager.AppendLine(make([]Cell, 0, v.width))
+			}
 			lenAfter := v.historyManager.Length()
-			fmt.Fprintf(os.Stderr, "[CLEARSCREEN DEBUG] histLen before=%d, after=%d\n", lenBefore, lenAfter)
+			fmt.Fprintf(os.Stderr, "[CLEARSCREEN DEBUG] histLen before=%d, after=%d (added %d lines)\n", lenBefore, lenAfter, v.height)
 		} else {
 			// Legacy circular buffer
 			v.historyBuffer = make([][]Cell, v.maxHistorySize)
 			v.historyHead = 0
-			v.historyLen = 1
-			v.historyBuffer[0] = make([]Cell, 0, v.width)
+			v.historyLen = v.height
+			for i := 0; i < v.height && i < v.maxHistorySize; i++ {
+				v.historyBuffer[i] = make([]Cell, 0, v.width)
+			}
 		}
 		v.viewOffset = 0
 		v.SetCursorPos(0, 0)

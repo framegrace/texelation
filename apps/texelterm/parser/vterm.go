@@ -107,7 +107,11 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 			v.tabStops[i] = true
 		}
 	}
-	v.ClearScreen()
+	// Only clear screen if we don't have loaded history content
+	// When restoring from snapshot, history is already loaded and we want to show it
+	if v.historyManager == nil || v.historyManager.Length() == 0 {
+		v.ClearScreen()
+	}
 	return v
 }
 
