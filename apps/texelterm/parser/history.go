@@ -43,7 +43,8 @@ type HistoryConfig struct {
 // DefaultHistoryConfig returns default configuration.
 func DefaultHistoryConfig() HistoryConfig {
 	homeDir, _ := os.UserHomeDir()
-	persistDir := filepath.Join(homeDir, ".local", "share", "texelation", "history")
+	// Use ~/.texelation for scrollback persistence (simpler than .local/share/texelation)
+	persistDir := filepath.Join(homeDir, ".texelation")
 
 	return HistoryConfig{
 		MemoryLines:      DefaultMemoryLines,
@@ -73,15 +74,21 @@ type SessionMetadata struct {
 }
 
 // NewSessionMetadata creates metadata for a new session.
-func NewSessionMetadata(command, workingDir string) SessionMetadata {
+// If paneID is empty, generates a new UUID (for backwards compatibility).
+func NewSessionMetadata(command, workingDir, paneID string) SessionMetadata {
 	hostname, _ := os.Hostname()
 	username := "unknown"
 	if u, err := user.Current(); err == nil {
 		username = u.Username
 	}
 
+	sessionID := paneID
+	if sessionID == "" {
+		sessionID = uuid.New().String()
+	}
+
 	return SessionMetadata{
-		SessionID:   uuid.New().String(),
+		SessionID:   sessionID,
 		StartTime:   time.Now(),
 		Command:     command,
 		WorkingDir:  workingDir,
@@ -126,8 +133,9 @@ type HistoryManager struct {
 }
 
 // NewHistoryManager creates a new history manager.
-func NewHistoryManager(config HistoryConfig, command, workingDir string) (*HistoryManager, error) {
-	metadata := NewSessionMetadata(command, workingDir)
+// paneID should be the hex-encoded pane ID for persistent scrollback across restarts.
+func NewHistoryManager(config HistoryConfig, command, workingDir, paneID string) (*HistoryManager, error) {
+	metadata := NewSessionMetadata(command, workingDir, paneID)
 
 	hm := &HistoryManager{
 		buffer:        make([][]Cell, config.MemoryLines),
@@ -143,6 +151,27 @@ func NewHistoryManager(config HistoryConfig, command, workingDir string) (*Histo
 		lastFlushTime: time.Now(),
 	}
 
+	// Load existing history if persistence is enabled
+	var existingLines [][]Cell
+	if config.PersistEnabled {
+		// Construct the session file path the same way NewHistoryStore does
+		scrollbackDir := filepath.Join(config.PersistDir, "scrollback")
+		ext := ".hist"
+		if config.Encrypt {
+			ext += ".enc"
+		}
+		sessionFile := filepath.Join(scrollbackDir, metadata.SessionID+ext)
+
+		// Try to load existing history
+		lines, err := LoadHistoryLines(sessionFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load existing history: %v\n", err)
+		} else if len(lines) > 0 {
+			existingLines = lines
+			fmt.Fprintf(os.Stderr, "Loaded %d lines from existing history file\n", len(lines))
+		}
+	}
+
 	// Initialize persistent storage if enabled
 	if config.PersistEnabled {
 		store, err := NewHistoryStore(config, metadata)
@@ -155,6 +184,15 @@ func NewHistoryManager(config HistoryConfig, command, workingDir string) (*Histo
 			// Start periodic flush timer
 			go hm.flushLoop()
 		}
+	}
+
+	// Trim trailing empty lines from loaded history
+	// These accumulate from ClearScreen operations during previous server runs
+	existingLines = trimTrailingEmptyLines(existingLines)
+
+	// Populate buffer with existing history
+	if len(existingLines) > 0 {
+		hm.ReplaceBuffer(existingLines)
 	}
 
 	return hm, nil
@@ -288,7 +326,9 @@ func (hm *HistoryManager) flushPendingLinesLocked() error {
 	return nil
 }
 
-// flushLoop periodically flushes pending lines to disk.
+// flushLoop periodically flushes the entire buffer to disk.
+// We write the whole buffer because terminal content is updated via SetLine()
+// which modifies in-place without queuing, so we need to capture all changes.
 func (hm *HistoryManager) flushLoop() {
 	ticker := time.NewTicker(hm.config.FlushInterval)
 	defer ticker.Stop()
@@ -297,12 +337,22 @@ func (hm *HistoryManager) flushLoop() {
 		select {
 		case <-ticker.C:
 			hm.mu.Lock()
-			if len(hm.pendingLines) > 0 {
-				if err := hm.flushPendingLinesLocked(); err != nil {
+			if hm.length > 0 && hm.enabled && hm.store != nil {
+				// Extract all lines from circular buffer
+				allLines := make([][]Cell, hm.length)
+				for i := 0; i < hm.length; i++ {
+					physicalIndex := (hm.head + i) % hm.maxSize
+					allLines[i] = hm.buffer[physicalIndex]
+				}
+				hm.mu.Unlock()
+
+				// Rewrite the entire history file
+				if err := hm.rewriteHistoryFile(allLines); err != nil {
 					fmt.Fprintf(os.Stderr, "History flush error: %v\n", err)
 				}
+			} else {
+				hm.mu.Unlock()
 			}
-			hm.mu.Unlock()
 
 		case <-hm.stopFlush:
 			return
@@ -318,21 +368,63 @@ func (hm *HistoryManager) Close() error {
 	hm.mu.Lock()
 	defer hm.mu.Unlock()
 
-	// Final flush
-	if err := hm.flushPendingLinesLocked(); err != nil {
-		fmt.Fprintf(os.Stderr, "Final history flush error: %v\n", err)
-	}
-
 	// Close store
 	if hm.store != nil {
+		// Close the current store to flush buffers
 		hm.metadata.EndTime = time.Now()
-		hm.metadata.LineCount = hm.store.LineCount()
-		hm.metadata.FileSize = hm.store.BytesWritten()
 		hm.metadata.PrivacyGaps = hm.privacyGaps
 
 		if err := hm.store.Close(hm.metadata); err != nil {
 			return fmt.Errorf("failed to close history store: %w", err)
 		}
+
+		// Reopen the history file and write the ENTIRE buffer
+		// This ensures we capture all in-place updates made via SetLine()
+		allLines := make([][]Cell, hm.length)
+		for i := 0; i < hm.length; i++ {
+			physicalIndex := (hm.head + i) % hm.maxSize
+			allLines[i] = hm.buffer[physicalIndex]
+		}
+
+		// Rewrite the history file with complete buffer
+		if err := hm.rewriteHistoryFile(allLines); err != nil {
+			return fmt.Errorf("failed to rewrite history file: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// rewriteHistoryFile rewrites the entire history file with the given lines.
+// Called during Close() to ensure all in-memory updates are persisted.
+func (hm *HistoryManager) rewriteHistoryFile(lines [][]Cell) error {
+	// Construct the history file path
+	scrollbackDir := filepath.Join(hm.config.PersistDir, "scrollback")
+	ext := ".hist"
+	sessionFile := filepath.Join(scrollbackDir, hm.metadata.SessionID+ext)
+
+	// Delete the old file so NewHistoryStore creates a fresh one
+	os.Remove(sessionFile)
+
+	// Recreate the store (will create empty file since we deleted it)
+	store, err := NewHistoryStore(hm.config, hm.metadata)
+	if err != nil {
+		return fmt.Errorf("failed to create new history store: %w", err)
+	}
+
+	// Write all lines
+	if err := store.WriteLines(lines); err != nil {
+		store.Close(hm.metadata) // Try to close cleanly
+		return fmt.Errorf("failed to write lines: %w", err)
+	}
+
+	// Update metadata
+	hm.metadata.LineCount = store.LineCount()
+	hm.metadata.FileSize = store.BytesWritten()
+
+	// Close the store
+	if err := store.Close(hm.metadata); err != nil {
+		return fmt.Errorf("failed to close rewritten store: %w", err)
 	}
 
 	return nil
@@ -343,6 +435,40 @@ func (hm *HistoryManager) GetMetadata() SessionMetadata {
 	hm.mu.RLock()
 	defer hm.mu.RUnlock()
 	return hm.metadata
+}
+
+// trimTrailingEmptyLines removes trailing empty lines from a history buffer.
+// Empty lines accumulate from ClearScreen operations during previous server runs.
+func trimTrailingEmptyLines(lines [][]Cell) [][]Cell {
+	if len(lines) == 0 {
+		return lines
+	}
+
+	// Find the last non-empty line
+	lastNonEmpty := len(lines) - 1
+	for lastNonEmpty >= 0 {
+		line := lines[lastNonEmpty]
+		if len(line) > 0 {
+			// Check if line has any non-space content
+			hasContent := false
+			for _, cell := range line {
+				if cell.Rune != ' ' && cell.Rune != 0 {
+					hasContent = true
+					break
+				}
+			}
+			if hasContent {
+				break
+			}
+		}
+		lastNonEmpty--
+	}
+
+	trimmed := lastNonEmpty + 1
+	if trimmed < len(lines) {
+		return lines[:trimmed]
+	}
+	return lines
 }
 
 // ReplaceBuffer replaces the entire history buffer with new content (used during reflow).

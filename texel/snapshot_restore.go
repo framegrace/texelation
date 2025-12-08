@@ -17,6 +17,12 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 	if len(capture.Panes) == 0 || capture.Root == nil {
 		return nil
 	}
+
+	// Reset layout transition grace period to prevent animations during restore
+	if d.layoutTransitions != nil {
+		d.layoutTransitions.ResetGracePeriod()
+	}
+
 	if d.activeWorkspace == nil {
 		// ensure at least one workspace exists
 		if len(d.workspaces) == 0 {
@@ -38,7 +44,8 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		p := newPane(screen)
 		p.setID(snap.ID)
 		app := d.appFromSnapshot(snap)
-		p.AttachApp(app, screen.refreshChan)
+		// Use PrepareAppForRestore instead of AttachApp to defer starting until after layout
+		p.PrepareAppForRestore(app, screen.refreshChan)
 		panes[i] = p
 	}
 
@@ -59,7 +66,14 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		active.Pane.SetActive(true)
 	}
 
+	// Calculate layout BEFORE starting apps so they get proper dimensions
 	screen.recalculateLayout()
+
+	// Now start all prepared apps with their correct dimensions
+	for _, p := range panes {
+		p.StartPreparedApp()
+	}
+
 	screen.Refresh()
 	screen.notifyFocus()
 	d.broadcastStateUpdate()

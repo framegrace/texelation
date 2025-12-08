@@ -44,6 +44,8 @@ var _ texel.MouseWheelHandler = (*Pipeline)(nil)
 var _ texel.MouseWheelDeclarer = (*Pipeline)(nil)
 var _ texel.ControlBusProvider = (*Pipeline)(nil)
 var _ texel.CloseRequester = (*Pipeline)(nil)
+var _ texel.SnapshotProvider = (*Pipeline)(nil)
+var _ texel.PaneIDSetter = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
 // Pipeline implements texel.App and can be launched like any other app.
@@ -398,4 +400,52 @@ func (p *Pipeline) RequestClose() bool {
 		return handler.RequestClose()
 	}
 	return true // Default: allowed to close
+}
+
+// snapshotProvider finds the first card capable of providing snapshot metadata.
+func (p *Pipeline) snapshotProvider() texel.SnapshotProvider {
+	cards := p.Cards()
+	for _, card := range cards {
+		if provider, ok := card.(texel.SnapshotProvider); ok {
+			return provider
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if provider, ok := underlying.(texel.SnapshotProvider); ok {
+				return provider
+			}
+		}
+	}
+	return nil
+}
+
+// SnapshotMetadata implements texel.SnapshotProvider by forwarding to the first
+// card that implements it (typically the wrapped app).
+func (p *Pipeline) SnapshotMetadata() (appType string, config map[string]interface{}) {
+	if provider := p.snapshotProvider(); provider != nil {
+		return provider.SnapshotMetadata()
+	}
+	return "", nil
+}
+
+// SetPaneID implements texel.PaneIDSetter by forwarding to all cards that need it.
+func (p *Pipeline) SetPaneID(id [16]byte) {
+	cards := p.Cards()
+	for _, card := range cards {
+		if setter, ok := card.(texel.PaneIDSetter); ok {
+			setter.SetPaneID(id)
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if setter, ok := underlying.(texel.PaneIDSetter); ok {
+				setter.SetPaneID(id)
+			}
+		}
+	}
 }

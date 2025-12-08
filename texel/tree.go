@@ -456,6 +456,19 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 		log.Printf("resizeNode: Processing vertical split (ratios: %v)", n.SplitRatios)
 		currentX := x
 		for i, child := range n.Children {
+			// Defensive bounds check to prevent crash on corrupted tree
+			if i >= len(n.SplitRatios) {
+				log.Printf("resizeNode: ERROR - child index %d exceeds SplitRatios length %d, using equal split",
+					i, len(n.SplitRatios))
+				childW := w / numChildren
+				if i == numChildren-1 {
+					childW = w - (currentX - x)
+				}
+				t.resizeNode(child, currentX, y, childW, h)
+				currentX += childW
+				continue
+			}
+
 			childW := int(float64(w) * n.SplitRatios[i])
 			if i == numChildren-1 {
 				childW = w - (currentX - x)
@@ -468,6 +481,19 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 		log.Printf("resizeNode: Processing horizontal split (ratios: %v)", n.SplitRatios)
 		currentY := y
 		for i, child := range n.Children {
+			// Defensive bounds check to prevent crash on corrupted tree
+			if i >= len(n.SplitRatios) {
+				log.Printf("resizeNode: ERROR - child index %d exceeds SplitRatios length %d, using equal split",
+					i, len(n.SplitRatios))
+				childH := h / numChildren
+				if i == numChildren-1 {
+					childH = h - (currentY - y)
+				}
+				t.resizeNode(child, x, currentY, w, childH)
+				currentY += childH
+				continue
+			}
+
 			childH := int(float64(h) * n.SplitRatios[i])
 			if i == numChildren-1 {
 				childH = h - (currentY - y)

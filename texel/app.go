@@ -85,3 +85,9 @@ type ControlBusProvider interface {
 	// Returns an error if the ID is already registered.
 	RegisterControl(id, description string, handler func(payload interface{}) error) error
 }
+
+// PaneIDSetter is implemented by apps that need to know their pane ID.
+// This allows apps to maintain per-pane state like isolated history files.
+type PaneIDSetter interface {
+	SetPaneID(id [16]byte)
+}
