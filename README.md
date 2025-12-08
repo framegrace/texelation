@@ -39,6 +39,28 @@ and heavily themeable.
 | 🖥️ TexelTerm                       | Full terminal emulator with rich scrollback, selection, bracketed paste, and clipboard handling; embeddable in any pane or pipeline.                   |
 | 🧪 Developer-friendly tooling       | Headless renderer, in-memory memconn tests, and a clear package layout for rapid iteration and CI-friendly checks.                                      |
 
+## First Run (Quick Start)
+
+1. Build the binaries (server, client, and apps) into `./bin`:
+   ```bash
+   make build-apps
+   ```
+2. Start the server (creates a default session if no snapshot exists):
+   ```bash
+   ./bin/texel-server --socket /tmp/texelation.sock
+   ```
+3. In another terminal, start the client against the same socket:
+   ```bash
+   ./bin/texel-client --socket /tmp/texelation.sock
+   ```
+4. Enter control mode with `Ctrl+A`, then `|` / `-` to split, `l` for the launcher, `h` for help, `x` to close a pane, `z` to zoom.
+
+## Sessions & Persistence
+
+- **Server snapshots**: By default the server loads/saves a snapshot at `~/.texelation/snapshot.json`. If the file exists, startup restores the prior pane tree/buffers; if not, a fresh session starts with the default app. Use `--from-scratch` to ignore any snapshot or `--snapshot <path>` to override the location.
+- **Client reconnect**: The client uses `--reconnect` (default: true) to resume prior sessions; it will request a snapshot and buffered deltas on connect. Restarting the client against a running server should pick up where you left off.
+- **Sockets**: Default socket is `/tmp/texelation.sock`; override with `--socket` on both server and client.
+
 ## Coding
 
 Every line of code here was produced by multiple AIs--No human typed any of it.
