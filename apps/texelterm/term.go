@@ -104,8 +104,10 @@ type termSelection struct {
 	clickCount    int
 }
 
-func New(title, command string) texel.App {
-	term := &TexelTerm{
+// NewBase constructs the underlying TexelTerm without wrapping it in a card pipeline.
+// This is useful for tests or tools that want direct access to the base app.
+func NewBase(title, command string) *TexelTerm {
+	return &TexelTerm{
 		title:        title,
 		command:      command,
 		width:        80,
@@ -115,7 +117,11 @@ func New(title, command string) texel.App {
 		closeCh:      make(chan struct{}),
 		restartCh:    make(chan struct{}, 1), // Buffered to avoid blocking
 	}
+}
 
+// New constructs a TexelTerm and wraps it in the standard card pipeline.
+func New(title, command string) texel.App {
+	term := NewBase(title, command)
 	pipe := cards.DefaultPipeline(term)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
