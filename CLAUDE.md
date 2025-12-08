@@ -123,7 +123,7 @@ Effect implementations register themselves at import time via `effects.Register(
 - **Formatting**: `gofmt` with tabs for indentation
 - **Commit Style**: Short present-tense (e.g., "Zoom working perfectly"), subject < 60 chars
 
-## Current Branch: client-server-split
+## Current Branch: feature/cleanup-documentation
 
 For an architectural overview refer to:
 
@@ -160,14 +160,14 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
 
 ## Planning Artifacts
 
-- TexelUI plan: see `docs/TEXELUI_PLAN.md`. When working on TexelUI, keep this plan up to date (checklist and sections) and commit changes to it alongside related code. Future sessions should consult and update this file as the source of truth for TexelUI scope, status, and next steps.
+- TexelUI plan: see `docs/plans/TEXELUI_PLAN.md`. When working on TexelUI, keep this plan up to date (checklist and sections) and commit changes to it alongside related code. Future sessions should consult and update this file as the source of truth for TexelUI scope, status, and next steps.
 - TexelUI Architecture Review: see `docs/TEXELUI_ARCHITECTURE_REVIEW.md`. **[IMPORTANT - NEXT SESSION]** Comprehensive evaluation of TexelUI for form building completed 2025-11-18. Current state: solid low-level foundation but missing high-level primitives for productive form development. **Next steps:** Implement common widgets (Label, Button, Input, Checkbox), layout managers (VBox, HBox, Grid), and form helpers. Priority order and implementation details in review doc. Estimated 2-3 weeks for essential features.
-- Long Line Editor plan: see `docs/LONG_LINE_EDITOR_PLAN.md`. Phased implementation of overlay editor for long command lines in texelterm. Update progress and status as work proceeds.
+- Long Line Editor plan: see `docs/plans/LONG_LINE_EDITOR_PLAN.md`. Phased implementation of overlay editor for long command lines in texelterm. Update progress and status as work proceeds.
 - **Layout Transitions (Server-Side) - COMPLETE (2025-12-07)**:
   - **Status**: Fully implemented and working
   - **Architecture**: Server-side animation system that animates SplitRatios over time, broadcasting tree snapshots at 60fps
   - **Implementation**: `texel/layout_transitions.go` (~200 lines)
-  - **Configuration**: Via `theme.json` under `layout_transitions` section (duration_ms, easing, enabled, min_threshold)
+  - **Configuration**: Via `theme.json` under `layout_transitions` section (duration_ms, easing, enabled; min_threshold parsed but currently unused)
   - **How It Works**:
     - **Split**: New pane starts at 1% of space, existing panes at 99%, animates to final ratios (e.g., [0.99, 0.01] → [0.5, 0.5])
     - **Close**: Closing pane shrinks from current size to 1%, siblings grow to fill space, then pane is removed

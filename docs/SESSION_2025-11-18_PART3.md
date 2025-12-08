@@ -57,7 +57,7 @@
 - `texelui/widgets/input.go` - Cursor rendering and insert/replace mode
 - `texelui/widgets/checkbox.go` - Focus indicator with reverse video
 - `texelui/widgets/widgets_test.go` - New insert/replace mode test
-- `docs/TEXELUI_PLAN.md` - Updated with cursor improvements
+- `docs/plans/TEXELUI_PLAN.md` - Updated with cursor improvements
 - `docs/SESSION_2025-11-18_PART3.md` - This file
 
 ## Commits

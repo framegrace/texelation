@@ -1,59 +1,31 @@
 # TexelUI Theme Keys
 
-TexelUI widgets use the global theme to style surfaces, text, borders, and focus states. All keys live under the `ui` section. Reasonable defaults are applied to the theme file automatically on first run.
+TexelUI widgets use the core theme’s **semantic** colors rather than a separate `ui.*` namespace. Ensure these keys exist in your theme; sensible defaults are applied automatically.
 
-## Keys
+## Keys used by TexelUI
 
-| Key                  | Purpose                       | Default      |
-|----------------------|-------------------------------|--------------|
-| `ui.surface_bg`      | Background of containers      | `#000000`    |
-| `ui.surface_fg`      | Foreground of containers      | `#f8f8f2`    |
-| `ui.text_bg`         | Background for text widgets   | `#000000`    |
-| `ui.text_fg`         | Foreground for text widgets   | `#f8f8f2`    |
-| `ui.caret_fg`        | Caret color (used by editors) | `#c0c0c0`    |
-| `ui.focus_surface_bg`| Focused container bg          | `#101010`    |
-| `ui.focus_surface_fg`| Focused container fg          | `#ffffff`    |
-| `ui.focus_text_bg`   | Focused text widget bg        | `#101010`    |
-| `ui.focus_text_fg`   | Focused text widget fg        | `#ffffff`    |
-| `ui.focus_border_fg` | Border fg when focused        | `#ffff00`    |
-| `ui.focus_border_bg` | Border bg when focused        | `#000000`    |
-
-Notes:
-- Colors are true RGB hex strings. If a key is missing, the code falls back to a sensible default.
-- The caret is rendered with reverse video for insert mode and underline for replace mode (see TextArea behavior). The `ui.caret_fg` color is currently used by caret implementations that prefer a tint rather than reverse; reverse mode ignores it.
+| Key                | Purpose                                   |
+|--------------------|-------------------------------------------|
+| `bg.surface`       | Background for panes, borders, inputs     |
+| `text.primary`     | Default foreground for text widgets       |
+| `text.inverse`     | Inverted text for buttons/focus states    |
+| `border.focus`     | Focus highlight for borders/buttons       |
+| `border.active`    | Active border color (used by decorators)  |
+| `action.primary`   | Primary action background (buttons)       |
+| `caret`            | Caret color for text inputs               |
 
 ## Where keys are used
 
-- Pane (`texelui/widgets/pane.go`)
-  - Base style from `ui.surface_*`
-  - Focus style from `ui.focus_surface_*`
+- **Pane** (`texelui/widgets/pane.go`): `bg.surface`, `text.primary` (focus styles reuse the same semantics).
+- **Border** (`texelui/widgets/border.go`): `bg.surface`, `text.primary`, `border.focus`/`border.active` for focused descendants.
+- **TextArea** (`texelui/widgets/textarea.go`): `bg.surface`, `text.primary`.
+- **Input** (`texelui/widgets/input.go`): `bg.surface`, `text.primary`, `caret`.
+- **Label** (`texelui/widgets/label.go`): `bg.surface`, `text.primary`.
+- **Checkbox** (`texelui/widgets/checkbox.go`): `bg.surface`, `text.primary`.
+- **Button** (`texelui/widgets/button.go`): `action.primary`, `text.inverse`, `border.focus` for focus styling.
 
-- Border (`texelui/widgets/border.go`)
-  - Base style (passed by caller)
-  - Descendant-focused highlight uses `ui.focus_border_*`
-  - Border itself also supports focus styling via BaseWidget (uses `ui.focus_border_*`)
+## Notes
 
-- TextArea (`texelui/widgets/textarea.go`)
-  - Base text style from `ui.text_*`
-  - Focused style from `ui.focus_text_*`
-  - Caret color from `ui.caret_fg` (only for caret styles that use a tint)
-
-## Enabling focus styles on custom widgets
-
-All widgets embed `core.BaseWidget`, which provides focus styling helpers:
-
-- `SetFocusedStyle(style tcell.Style, enabled bool)` to configure a focused style.
-- In your `Draw`, call `EffectiveStyle(base)` to obtain the style that respects focus.
-
-Example:
-
-```go
-style := tcell.StyleDefault.Background(themeBg).Foreground(themeFg)
-w.SetFocusedStyle(tcell.StyleDefault.Background(focusBg).Foreground(focusFg), true)
-drawStyle := w.EffectiveStyle(style)
-```
-
-## Changing theme
-
-The theme file is managed by `texel/theme`. On startup, defaults are applied and saved if missing. To customize, edit the theme file or use your app’s configuration flow to point to a different theme.
-
+- TexelUI currently positions widgets absolutely; layout helpers (VBox/HBox) exist but UIManager defaults to explicit coordinates.
+- If a key is missing, theme defaults are applied automatically via `texel/theme`.
+- Caret rendering still uses reverse/underline styles where appropriate; the `caret` color is applied to tinted caret styles.

@@ -1,11 +1,11 @@
 # Layout Animation Design Decisions
 
 **Date**: 2025-12-06
-**Status**: Implementation in progress
+**Status**: Implemented server-side (Dec 2025)
 
 ## Context
 
-Based on external architectural review feedback, expanding the effects system to support layout animations (split/remove/replace panes with smooth transitions).
+Based on external architectural review feedback, expanding the layout system to animate splits and closes with smooth transitions. The final design runs entirely on the **server**: layout ratios animate in `texel/layout_transitions.go`, and the server streams intermediate snapshots/deltas to clients.
 
 ## Key Decisions
 
@@ -20,7 +20,7 @@ Based on external architectural review feedback, expanding the effects system to
 - Can always be made pluggable later if theme configuration is needed
 
 **Implementation**:
-- LayoutAnimator lives inside `texel/tree.go` or adjacent file
+- LayoutAnimator lives in `texel/layout_transitions.go` inside the core `texel` package
 - Not exposed through Effect interface
 - Uses same Timeline primitive for consistency
 - Tree operations (SplitActive, CloseActiveLeaf) directly control animations
@@ -41,32 +41,18 @@ Based on external architectural review feedback, expanding the effects system to
 - All `IsAnimating(key)` → `IsAnimating(key, now)`
 - Update all current effects: fadeTint, rainbow, keyflash, any others
 
-## Implementation Phases
+## Current Implementation
 
-### Phase 1: Foundation Fixes ✅ COMPLETED (commit 8e5ba39)
-1. ✅ Timeline time source unification
-2. ✅ Base effect helper classes (PaneEffectBase, WorkspaceEffectBase)
-3. ✅ Migrate all existing effects (fadeTint, keyflash)
+- **Server-driven**: `LayoutTransitionManager` (`texel/layout_transitions.go`) animates split ratios at ~60fps and broadcasts snapshots/deltas each frame.
+- **Workspace integration**: `workspace.go` calls `AnimateSplit` and `AnimateRemoval` for splits/closes. A grace period skips animations during startup/restore.
+- **Timeline unification**: Effects and layout share the timestamped `Timeline` helper to avoid jitter.
+- **Config**: Parsed from `layout_transitions` in the theme (enabled, duration_ms, easing). `min_threshold` is parsed but not applied yet.
 
-**Outcome**: Cleaner API, reduced effect code by ~30%, eliminated animation jitter
-
-### Phase 2: Layout Animation System ✅ COMPLETED (commit 61dc222)
-1. ✅ New event triggers (TriggerPaneSplit, TriggerPaneRemoving, TriggerPaneReplaced)
-2. ✅ LayoutAnimator component
-3. ✅ Integration into Tree operations (SplitActive, CloseActiveLeaf, Resize)
-
-**Outcome**: Smooth split animations working, disabled by default, all tests passing
-
-### Phase 3: Integration & Migration (FUTURE)
-1. Emit layout triggers from Desktop layer (requires event bus access)
-2. Create example visual effect using layout triggers
-3. Optional: animated pane removal (requires ghost state)
-
-### Phase 4: Documentation & Testing (FUTURE)
-1. Update EFFECTS_GUIDE.md with layout animation examples
-2. Add unit tests for LayoutAnimator
-3. Integration tests for animated split scenarios
-4. Document how to enable animations in applications
+## Remaining Follow-ups
+- Interrupt animations if a new split/close arrives mid-flight.
+- Decide whether to keep or remove `min_threshold` (currently unused).
+- Add coverage around animated splits/closes and update EFFECTS_GUIDE with a brief note.
+- Consider optional workspace/pane swap animations in the future.
 
 ## Notes
 

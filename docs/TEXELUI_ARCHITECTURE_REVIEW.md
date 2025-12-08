@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-TexelUI has a **solid, clean foundation** with good widget abstractions, focus management, and dirty-region rendering. However, it needs **higher-level primitives** for productive form building and widget composition.
+TexelUI has a **solid, clean foundation** with good widget abstractions, focus management, and dirty-region rendering. Core form widgets (Label, Button, Input, Checkbox) and basic layout managers (VBox/HBox) are now in place, but it still needs **higher-level primitives** for productive form building and widget composition.
 
 **Current State:** Low-level widget kernel (think: raw Win32 API)
 **Desired State:** High-level form builder (think: React, SwiftUI, Flutter)
@@ -41,35 +41,33 @@ TexelUI has a **solid, clean foundation** with good widget abstractions, focus m
 
 ### 1. Common Form Widgets ❌
 
-**Currently have:** TextArea, Border, Pane
+**Currently have:** Pane, Border, TextArea, Label, Button, Input, Checkbox  
 **Need for forms:**
-- Label (static text with alignment)
-- Button (clickable, keyboard activatable)
-- Checkbox (toggle state)
 - RadioButton (mutually exclusive groups)
 - Select/Dropdown (choose from list)
-- Input (single-line text entry with validation)
 - ProgressBar
 - Spinner/LoadingIndicator
+- Built-in validation helpers for Input
 
 **Example of current pain:**
 ```go
-// Today: ~20 lines to create a labeled input field
-pane := widgets.NewPane(0, 0, 40, 10, style)
-label := widgets.NewLabel(1, 1, "Username:")  // ❌ Doesn't exist
-input := widgets.NewInput(12, 1, 25)         // ❌ Doesn't exist
-// Manual positioning, no relationship between label and input
+// Today: widgets exist, but validation is DIY
+email := widgets.NewInput(0, 0, 30)
+email.OnChange = func(text string) {
+    if !strings.Contains(text, "@") {
+        // No built-in validation feedback; must roll your own
+    }
+}
 ```
 
 ### 2. Layout Managers ❌
 
-**Currently have:** Absolute (manual x,y,w,h)
+**Currently have:** Absolute (manual x,y,w,h), VBox, HBox  
 **Need:**
-- VBox (vertical stack)
-- HBox (horizontal row)
 - Grid (rows × columns)
 - Flex (flexible sizing)
 - Padding/Margins/Spacing helpers
+- UIManager still defaults to absolute positioning; SetLayout wiring + padding helpers remain TODO.
 
 **Example of current pain:**
 ```go
@@ -324,15 +322,15 @@ Add containers:
 ## Implementation Plan
 
 ### Phase 1: Essential Widgets (Week 1)
-- [ ] Label widget
-- [ ] Button widget
-- [ ] Input widget (single-line)
-- [ ] Checkbox widget
+- [x] Label widget
+- [x] Button widget
+- [x] Input widget (single-line)
+- [x] Checkbox widget
 - [ ] Basic validation (Required, MinLength, Email)
 
 ### Phase 2: Layout System (Week 1-2)
-- [ ] VBox layout
-- [ ] HBox layout
+- [x] VBox layout
+- [x] HBox layout
 - [ ] Padding/Spacing helpers
 - [ ] Update UIManager to support layouts
 
@@ -414,43 +412,17 @@ ui.Focus(form)
 
 ## Quick Wins (Can Implement Today)
 
-### 1. Label Widget (30 minutes)
-```go
-type Label struct {
-    core.BaseWidget
-    Text  string
-    Style tcell.Style
-    Align Alignment // Left, Center, Right
-}
-```
+### 1. RadioButton Group (1-2 hours)
+- RadioButton widget with shared group ID and OnChange callback.
+- Keyboard: arrows/Tab to move, Space/Enter to select.
 
-### 2. Button Widget (1 hour)
-```go
-type Button struct {
-    core.BaseWidget
-    Text    string
-    Style   tcell.Style
-    OnClick func()
-}
-// HandleKey: trigger on Enter/Space
-// HandleMouse: trigger on click
-```
+### 2. Grid Layout Skeleton (2 hours)
+- Simple row/column assignment with fixed widths/heights.
+- Optional cell padding to reduce manual positioning.
 
-### 3. VBox Layout (1 hour)
-```go
-type VBox struct {
-    Spacing int
-}
-
-func (v *VBox) Apply(container Rect, children []Widget) {
-    y := container.Y
-    for _, child := range children {
-        child.SetPosition(container.X, y)
-        _, h := child.Size()
-        y += h + v.Spacing
-    }
-}
-```
+### 3. Form Helper (2-3 hours for MVP)
+- Collects rows of Label + Input/Checkbox/RadioButton.
+- Adds inline validation hooks for required/min-length/email.
 
 ---
 
@@ -459,10 +431,10 @@ func (v *VBox) Apply(container Rect, children []Widget) {
 TexelUI is **architecturally sound** but lacks the **high-level abstractions** needed for rapid form development. The recommendations above will bring it on par with mature TUI libraries while maintaining its performance advantages and clean design.
 
 **Priority order:**
-1. Core widgets (Label, Button, Input, Checkbox) - Essential
-2. Layout managers (VBox, HBox) - High impact
-3. Form helper - Makes common case trivial
+1. Form helper + validation hooks - Makes common case trivial
+2. RadioButton and dropdown/select - Completes core form set
+3. Grid/padding layout helpers - Reduce manual positioning
 4. Builder API - Reduces boilerplate
-5. Advanced features (validation, data binding) - Nice to have
+5. Advanced features (data binding, progress/spinner) - Nice to have
 
 **Estimated effort:** 2-3 weeks for Priorities 1-3, which covers 80% of form use cases.

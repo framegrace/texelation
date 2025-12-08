@@ -94,7 +94,7 @@ See `docs/PROTOCOL_FOUNDATIONS.md` for the current wire format details.
 - Add a GitHub Actions workflow running the smoke target plus the protocol
   loopback test once implemented.
 
-Refer to `docs/SMOKE_TEST_PLAN.md` for the canonical smoke suite and near-term
+Refer to `docs/plans/SMOKE_TEST_PLAN.md` for the canonical smoke suite and near-term
  additions.
 
 ---
