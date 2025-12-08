@@ -36,7 +36,7 @@ and heavily themeable.
 | 🎨 Themeable effects & animations   | Registry-driven effects plus server-side layout transitions; configure via JSON, hot-reload on SIGHUP, and reuse inside card pipelines.                 |
 | 🔌 App registry & wrappers          | Discover apps from manifests under `~/.config/texelation/apps/`; wrapper manifests turn TexelTerm into custom commands without writing Go code.        |
 | 🧩 TexelUI widget library           | Label, Button, Input, Checkbox, TextArea, VBox/HBox layouts, and adapters to run TexelUI UIs as regular TexelApps.                                     |
-| 🖥️ TexelTerm                       | Full terminal emulator with rich scrollback, selection, BEL flash effect, bracketed paste, and clipboard handling; embeddable in any pane or pipeline. |
+| 🖥️ TexelTerm                       | Full terminal emulator with rich scrollback, selection, bracketed paste, and clipboard handling; embeddable in any pane or pipeline.                   |
 | 🧪 Developer-friendly tooling       | Headless renderer, in-memory memconn tests, and a clear package layout for rapid iteration and CI-friendly checks.                                      |
 
 ## Coding
@@ -48,9 +48,10 @@ Please check the note at the end.
 
 TexelApps live under `apps/` and can run standalone (`go run ./cmd/texelterm`) or
 inside the desktop pipeline. The current set includes the terminal emulator,
-status bar, welcome pane, and clock. The pipeline infrastructure (cards,
-effects, control bus) lays the groundwork for **TexelTui**—a forthcoming
-toolkit for building rich text apps with minimal boilerplate.
+status bar, launcher, help overlay, clock, and the flicker demo. The pipeline
+infrastructure (cards, effects, control bus) lays the groundwork for
+**TexelTui**—a forthcoming toolkit for building rich text apps with minimal
+boilerplate.
 
 Planned TexelApps improvements:
 
@@ -85,7 +86,6 @@ Stay tuned as TexelTui graduates from infancy to a full-fledged framework.
 
 ### Miscellaneous
 
-- `Ctrl+Q` → quit Texelation.
 - Selections honour theme colours defined under the `selection` section.
 
 ## Project Layout
@@ -152,7 +152,7 @@ JSON-style structure in both cases:
 }
 ```
 
-See [Effect Guide](EFFECTS_GUIDE.md) for the complete development workflow and [Texel App Guide](TEXEL_APP_GUIDE.md) for composing effect cards inside app pipelines.
+See [Effect Guide](docs/EFFECTS_GUIDE.md) for the complete development workflow and [Texel App Guide](docs/TEXEL_APP_GUIDE.md) for composing effect cards inside app pipelines.
 
 ## Documentation
 
