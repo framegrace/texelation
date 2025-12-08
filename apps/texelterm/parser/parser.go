@@ -173,6 +173,15 @@ func (p *Parser) Parse(r rune) {
 		}
 	case StateOSC:
 		if r == '\x07' || r == '\x1b' { // Terminated by BEL or another ESC
+			// DEBUG: Log OSC sequences
+			oscStr := string(p.oscBuffer)
+			if len(oscStr) > 0 && oscStr[0] == '1' {
+				maxLen := 50
+				if len(oscStr) < maxLen {
+					maxLen = len(oscStr)
+				}
+				log.Printf("OSC complete: %q (len=%d)", oscStr[:maxLen], len(oscStr))
+			}
 			p.handleOSC(p.oscBuffer)
 			p.state = StateGround
 			if r == '\x1b' {
@@ -180,21 +189,12 @@ func (p *Parser) Parse(r rune) {
 			}
 		} else {
 			p.oscBuffer = append(p.oscBuffer, r)
-
-			// CRITICAL FIX: OSC 133 subcommands A/B/C have no parameters
-			// Bash/Starship doesn't send terminators for these, so we must auto-terminate
-			// to prevent swallowing command output
-			// OSC 133;D has parameters (;exitcode), so we let it collect until BEL/ESC
-			payload := string(p.oscBuffer)
-			if len(payload) >= 5 && payload[:4] == "133;" {
-				lastChar := payload[len(payload)-1]
-				if lastChar == 'A' || lastChar == 'B' {
-					// Auto-terminate A/B immediately (no parameters expected)
-					p.handleOSC(p.oscBuffer)
-					p.state = StateGround
-				}
-				// For 'C' and 'D', continue collecting until we see the actual BEL/ESC terminator
-				// to capture optional parameters (command line or exit code)
+			// DEBUG: Log if we're collecting a lot without seeing terminator
+			if len(p.oscBuffer) == 100 {
+				log.Printf("OSC buffer growing (100 chars): %q...", string(p.oscBuffer[:50]))
+			}
+			if len(p.oscBuffer) == 500 {
+				log.Printf("OSC buffer very large (500 chars) - possible missing terminator")
 			}
 		}
 	case StateDCS:
@@ -225,14 +225,30 @@ func (p *Parser) Parse(r rune) {
 }
 
 func (v *VTerm) handleDCS(payload []rune) {
-	// A tmux payload is typically in the format "tmux;<escaped_command>"
-	// For now, we will just log it. In a full implementation, you would
-	// parse this further. For example, if you received a query, you
-	// would construct a response here and send it back via v.WriteToPty.
-	//
-	// The simple act of acknowledging these DCS sequences, even without
-	// a full response, is often enough to make applications like nvim
-	// use their more advanced rendering paths.
+	// Parse DCS sequences
+	// Format: <prefix>;<data>
+	// Supported:
+	//   - texel-env;<base64-encoded-env>  (shell environment capture)
+	//   - tmux;<escaped_command>          (tmux passthrough)
+
+	payloadStr := string(payload)
+	prefixLen := 20
+	if len(payloadStr) < prefixLen {
+		prefixLen = len(payloadStr)
+	}
+	log.Printf("DCS received: prefix=%q, len=%d", payloadStr[:prefixLen], len(payloadStr))
+
+	if strings.HasPrefix(payloadStr, "texel-env;") {
+		// Extract base64-encoded environment
+		encodedEnv := strings.TrimPrefix(payloadStr, "texel-env;")
+		log.Printf("DCS texel-env: len=%d, calling handler", len(encodedEnv))
+		if v.OnEnvironmentUpdate != nil {
+			v.OnEnvironmentUpdate(encodedEnv)
+		} else {
+			log.Printf("DCS texel-env: WARNING - no handler registered!")
+		}
+	}
+	// Other DCS sequences (like tmux) are ignored for now
 }
 
 func (p *Parser) handleOSC(sequence []rune) {
@@ -313,8 +329,9 @@ func (p *Parser) handleOSC(sequence []rune) {
 		if len(parts) == 0 {
 			return
 		}
-	
+
 		subcommand := strings.TrimSpace(parts[0])
+		log.Printf("OSC 133 subcommand: %q (payload: %q)", subcommand, payload)
 	
 		switch subcommand {
 		case "A":
@@ -361,8 +378,11 @@ func (p *Parser) handleOSC(sequence []rune) {
 		p.vterm.PromptActive = false
 		p.vterm.InputActive = false
 		p.vterm.CommandActive = false
+		log.Printf("OSC 133;D received (exitCode=%d), handler=%v", exitCode, p.vterm.OnCommandEnd != nil)
 		if p.vterm.OnCommandEnd != nil {
 			p.vterm.OnCommandEnd(exitCode)
+		} else {
+			log.Printf("  WARNING: OnCommandEnd handler is nil!")
 		}
 	}
 }

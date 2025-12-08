@@ -176,19 +176,23 @@ func (s *Server) SetDiffRetentionLimit(limit int) {
 }
 
 func (s *Server) loadBootSnapshot() {
+	log.Printf("[BOOT] loadBootSnapshot called, snapshotStore=%v", s.snapshotStore != nil)
 	if s.snapshotStore == nil {
 		return
 	}
 	stored, err := s.snapshotStore.Load()
 	if err != nil {
 		if os.IsNotExist(err) {
+			log.Printf("[BOOT] snapshot file does not exist")
 			return
 		}
 		log.Printf("snapshot load failed: %v", err)
 		return
 	}
 	snapshot := stored.ToTreeSnapshot()
+	log.Printf("[BOOT] Loaded snapshot with %d panes, tree=%+v", len(snapshot.Panes), snapshot.Root)
 	if len(snapshot.Panes) == 0 {
+		log.Printf("[BOOT] No panes in snapshot, skipping")
 		return
 	}
 	s.setBootSnapshot(snapshot)
@@ -217,20 +221,26 @@ func (s *Server) bootSnapshotCopy() (protocol.TreeSnapshot, bool) {
 }
 
 func (s *Server) applyBootSnapshot() {
+	log.Printf("[BOOT] applyBootSnapshot called, desktopSink=%v", s.desktopSink != nil)
 	if s.desktopSink == nil {
 		return
 	}
 	snapshot, ok := s.bootSnapshotCopy()
+	log.Printf("[BOOT] bootSnapshotCopy returned ok=%v, panes=%d", ok, len(snapshot.Panes))
 	if !ok {
 		return
 	}
 	desktop := s.desktopSink.Desktop()
 	if desktop == nil {
+		log.Printf("[BOOT] desktop is nil, cannot apply snapshot")
 		return
 	}
 	capture := protocolToTreeCapture(snapshot)
+	log.Printf("[BOOT] Applying tree capture with %d panes, root=%+v", len(capture.Panes), capture.Root)
 	if err := desktop.ApplyTreeCapture(capture); err != nil {
 		log.Printf("apply boot snapshot failed: %v", err)
+	} else {
+		log.Printf("[BOOT] Successfully applied boot snapshot")
 	}
 }
 

@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 )
 
 const (
@@ -60,36 +59,31 @@ type HistoryStore struct {
 }
 
 // NewHistoryStore creates a new history store for persistence.
+// Uses pane-ID-based file naming (from metadata.SessionID) in ~/.texelation/scrollback/
+// for persistent scrollback across server restarts.
+// Note: Compression is disabled for append-mode files (can't append to gzip).
 func NewHistoryStore(config HistoryConfig, metadata SessionMetadata) (*HistoryStore, error) {
-	// Create dated directory structure
-	now := time.Now()
-	dateDir := filepath.Join(
-		config.PersistDir,
-		fmt.Sprintf("%04d", now.Year()),
-		fmt.Sprintf("%02d", now.Month()),
-		fmt.Sprintf("%02d", now.Day()),
-	)
+	// Use simpler directory structure for pane-ID-based persistence
+	scrollbackDir := filepath.Join(config.PersistDir, "scrollback")
 
-	if err := os.MkdirAll(dateDir, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create history directory: %w", err)
+	if err := os.MkdirAll(scrollbackDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create scrollback directory: %w", err)
 	}
 
-	// Construct file paths
+	// Construct file paths using session ID (which is the pane ID for persistent sessions)
+	// Note: No compression for append-mode files (gzip doesn't support appending)
 	ext := ".hist"
-	if config.Compress {
-		ext += ".gz"
-	}
 	if config.Encrypt {
 		ext += ".enc"
 	}
 
-	sessionFile := filepath.Join(dateDir, metadata.SessionID+ext)
-	metaFile := filepath.Join(dateDir, metadata.SessionID+".meta")
+	sessionFile := filepath.Join(scrollbackDir, metadata.SessionID+ext)
+	metaFile := filepath.Join(scrollbackDir, metadata.SessionID+".meta")
 
-	// Open history file for writing
-	file, err := os.OpenFile(sessionFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	// Open history file for appending (to support restarts)
+	file, err := os.OpenFile(sessionFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create history file: %w", err)
+		return nil, fmt.Errorf("failed to open history file: %w", err)
 	}
 
 	store := &HistoryStore{
@@ -97,24 +91,32 @@ func NewHistoryStore(config HistoryConfig, metadata SessionMetadata) (*HistorySt
 		sessionFile:       sessionFile,
 		metaFile:          metaFile,
 		file:              file,
-		compress:          config.Compress,
+		compress:          false, // Never compress append-mode files
 		encryptionEnabled: config.Encrypt,
 		lineCount:         0,
 		bytesWritten:      0,
 	}
 
-	// Write file header
-	if err := store.writeHeader(); err != nil {
+	// Check if this is a new file (size == 0) and write header if needed
+	fileInfo, err := file.Stat()
+	if err != nil {
 		file.Close()
-		return nil, fmt.Errorf("failed to write header: %w", err)
+		return nil, fmt.Errorf("failed to stat history file: %w", err)
 	}
 
-	// Set up write pipeline
+	if fileInfo.Size() == 0 {
+		// New file - write header
+		if err := store.writeHeader(); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to write header: %w", err)
+		}
+	} else {
+		// Existing file - skip header, we're appending
+		store.bytesWritten = fileInfo.Size()
+	}
+
+	// Set up write pipeline (no gzip for append-mode)
 	store.bufWriter = bufio.NewWriter(file)
-
-	if config.Compress {
-		store.gzipWriter = gzip.NewWriter(store.bufWriter)
-	}
 
 	return store, nil
 }
@@ -369,4 +371,84 @@ func (hs *HistoryStore) BytesWritten() int64 {
 	}
 
 	return hs.bytesWritten
+}
+
+// LoadLines reads existing history from a file and returns the lines.
+// This is used to restore scrollback when reopening a persisted session.
+func LoadHistoryLines(sessionFile string) ([][]Cell, error) {
+	// Check if file exists
+	fileInfo, err := os.Stat(sessionFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No existing history, not an error
+		}
+		return nil, fmt.Errorf("failed to stat history file: %w", err)
+	}
+
+	// Empty file means no history yet
+	if fileInfo.Size() == 0 {
+		return nil, nil
+	}
+
+	// Open file for reading
+	file, err := os.Open(sessionFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open history file: %w", err)
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+
+	// Read and validate header
+	header := make([]byte, len(historyMagic)+4)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		if err == io.EOF {
+			return nil, nil // Empty file
+		}
+		return nil, fmt.Errorf("failed to read header: %w", err)
+	}
+
+	// Validate magic
+	if string(header[:len(historyMagic)]) != historyMagic {
+		return nil, fmt.Errorf("invalid history file magic")
+	}
+
+	// Read flags (for future use)
+	_ = binary.LittleEndian.Uint32(header[len(historyMagic):])
+
+	// Read lines until EOF
+	var lines [][]Cell
+	cellBuf := make([]byte, cellEncodedSize)
+
+	for {
+		// Read line length
+		lenBuf := make([]byte, 4)
+		if _, err := io.ReadFull(reader, lenBuf); err != nil {
+			if err == io.EOF {
+				break // Normal end of file
+			}
+			return nil, fmt.Errorf("failed to read line length: %w", err)
+		}
+
+		lineLen := binary.LittleEndian.Uint32(lenBuf)
+
+		// Read cells for this line
+		line := make([]Cell, lineLen)
+		for i := uint32(0); i < lineLen; i++ {
+			if _, err := io.ReadFull(reader, cellBuf); err != nil {
+				return nil, fmt.Errorf("failed to read cell %d: %w", i, err)
+			}
+
+			cell, err := decodeCell(cellBuf)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode cell %d: %w", i, err)
+			}
+
+			line[i] = cell
+		}
+
+		lines = append(lines, line)
+	}
+
+	return lines, nil
 }

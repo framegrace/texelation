@@ -73,6 +73,11 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	p.app.SetRefreshNotifier(refreshChan)
 	log.Printf("AttachApp: Refresh notifier set")
 
+	// Pass pane ID to apps that need it (e.g., for per-pane history)
+	if idSetter, ok := app.(PaneIDSetter); ok {
+		idSetter.SetPaneID(p.id)
+	}
+
 	if listener, ok := app.(Listener); ok {
 		p.screen.Subscribe(listener)
 	}
@@ -147,6 +152,112 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
 	}
 	log.Printf("AttachApp: Completed attachment of app '%s'", p.getTitle())
+}
+
+// PrepareAppForRestore connects an application to the pane without starting it.
+// This is used during snapshot restore where we need to set up pane dimensions
+// before starting apps. Call StartPreparedApp after layout is calculated.
+func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
+	log.Printf("PrepareAppForRestore: Preparing app '%s'", app.GetTitle())
+	if p.app != nil {
+		log.Printf("PrepareAppForRestore: Stopping existing app '%s'", p.app.GetTitle())
+		p.screen.appLifecycle.StopApp(p.app)
+	}
+	p.app = app
+	p.name = app.GetTitle()
+	p.app.SetRefreshNotifier(refreshChan)
+
+	// Pass pane ID to apps that need it (e.g., for per-pane history)
+	if idSetter, ok := app.(PaneIDSetter); ok {
+		idSetter.SetPaneID(p.id)
+	}
+
+	if listener, ok := app.(Listener); ok {
+		p.screen.Subscribe(listener)
+	}
+
+	// Set up selection and mouse handlers
+	if handler, ok := app.(SelectionHandler); ok {
+		enabled := true
+		if declarer, ok := app.(SelectionDeclarer); ok {
+			enabled = declarer.SelectionEnabled()
+		}
+		if enabled {
+			p.selectionHandler = handler
+			p.handlesSelection = true
+		} else {
+			p.selectionHandler = nil
+			p.handlesSelection = false
+		}
+	} else {
+		p.selectionHandler = nil
+		p.handlesSelection = false
+	}
+	if handler, ok := app.(MouseWheelHandler); ok {
+		enabled := true
+		if declarer, ok := app.(MouseWheelDeclarer); ok {
+			enabled = declarer.MouseWheelEnabled()
+		}
+		if enabled {
+			p.wheelHandler = handler
+			p.handlesWheel = true
+		} else {
+			p.wheelHandler = nil
+			p.handlesWheel = false
+		}
+	} else {
+		p.wheelHandler = nil
+		p.handlesWheel = false
+	}
+
+	// NOTE: We intentionally skip Resize and StartApp here.
+	// These will be called by StartPreparedApp after layout is calculated.
+	log.Printf("PrepareAppForRestore: App '%s' prepared (will start after layout)", p.getTitle())
+}
+
+// StartPreparedApp resizes and starts an app that was prepared via PrepareAppForRestore.
+// Should be called after layout is calculated so pane has proper dimensions.
+func (p *pane) StartPreparedApp() {
+	if p.app == nil {
+		return
+	}
+	log.Printf("StartPreparedApp: Starting app '%s' with size %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
+
+	// Now resize with proper dimensions
+	p.app.Resize(p.drawableWidth(), p.drawableHeight())
+
+	// Start the app lifecycle
+	currentApp := p.app
+	p.screen.appLifecycle.StartApp(p.app, func(err error) {
+		p.screen.handleAppExit(p, currentApp, err)
+	})
+
+	// Register control bus handlers if this is a launcher app in a pane
+	if p.app.GetTitle() == "Launcher" {
+		if provider, ok := p.app.(ControlBusProvider); ok {
+			provider.RegisterControl("launcher.select-app", "Launch selected app in this pane", func(payload interface{}) error {
+				appName, ok := payload.(string)
+				if !ok {
+					return nil
+				}
+				p.ReplaceWithApp(appName, nil)
+				return nil
+			})
+
+			provider.RegisterControl("launcher.close", "Close launcher", func(payload interface{}) error {
+				if p.screen != nil {
+					p.screen.CloseActivePane()
+				}
+				return nil
+			})
+		}
+	}
+
+	// Notify pane state
+	if p.screen != nil && p.screen.desktop != nil {
+		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
+	}
+	log.Printf("StartPreparedApp: Completed starting app '%s'", p.getTitle())
 }
 
 // ReplaceWithApp replaces the current app in this pane with a new app from the registry.

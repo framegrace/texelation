@@ -8,6 +8,8 @@
 package texel
 
 import (
+	"log"
+
 	"github.com/gdamore/tcell/v2"
 	"texelation/texel/theme"
 )
@@ -64,10 +66,17 @@ func (d *DesktopEngine) CaptureTree() TreeCapture {
 		if n == nil {
 			return
 		}
-		if len(n.Children) == 0 && n.Pane != nil && n.Pane.app != nil {
-			paneSnap := capturePaneSnapshot(n.Pane)
-			paneIndex[n.Pane] = len(capture.Panes)
-			capture.Panes = append(capture.Panes, paneSnap)
+		if len(n.Children) == 0 {
+			// Leaf node - should have a pane with an app
+			if n.Pane == nil {
+				log.Printf("WARNING: CaptureTree found leaf node with nil Pane - tree may be corrupted")
+			} else if n.Pane.app == nil {
+				log.Printf("WARNING: CaptureTree found pane '%s' with nil app - this pane will be EXCLUDED from snapshot (tree corruption risk)", n.Pane.getTitle())
+			} else {
+				paneSnap := capturePaneSnapshot(n.Pane)
+				paneIndex[n.Pane] = len(capture.Panes)
+				capture.Panes = append(capture.Panes, paneSnap)
+			}
 		}
 		for _, child := range n.Children {
 			collect(child)
@@ -332,6 +341,9 @@ func buildTreeCapture(n *Node, paneIndex map[*pane]int) *TreeNodeCapture {
 	if len(n.Children) == 0 {
 		if idx, ok := paneIndex[n.Pane]; ok {
 			node.PaneIndex = idx
+		} else if n.Pane != nil {
+			// This means the pane exists in the tree but wasn't captured (likely app == nil)
+			log.Printf("WARNING: buildTreeCapture - leaf pane '%s' not in paneIndex map, setting PaneIndex=-1 (CORRUPTED TREE)", n.Pane.getTitle())
 		}
 		return node
 	}

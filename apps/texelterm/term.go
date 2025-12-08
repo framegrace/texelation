@@ -16,6 +16,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -38,6 +39,7 @@ const (
 type TexelTerm struct {
 	title                string
 	command              string
+	paneID               string // Pane ID for per-terminal history isolation
 	width                int
 	height               int
 	cmd                  *exec.Cmd
@@ -70,6 +72,8 @@ type TexelTerm struct {
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
+	closeOnce       sync.Once      // Protects closeCh from being closed twice
+	restartCh       chan struct{} // Signal to restart shell after confirmation
 }
 
 var _ texel.CloseRequester = (*TexelTerm)(nil)
@@ -109,6 +113,7 @@ func New(title, command string) texel.App {
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
 		closeCh:      make(chan struct{}),
+		restartCh:    make(chan struct{}, 1), // Buffered to avoid blocking
 	}
 
 	wrapped := cards.WrapApp(term)
@@ -122,7 +127,8 @@ func (a *TexelTerm) RequestClose() bool {
 	defer a.mu.Unlock()
 	a.confirmClose = true
 	a.confirmCallback = func() {
-		close(a.closeCh)
+		// External close confirmed - stop the app
+		a.Stop()
 	}
 	a.requestRefresh()
 	return false
@@ -177,9 +183,12 @@ func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
 	msg := "Close Terminal? (y/n)"
 	textX := x + (boxW-len(msg))/2
 	textY := y + 2
-	for i, r := range msg {
-		if textX+i < width {
-			buf[textY][textX+i] = texel.Cell{Ch: r, Style: style.Bold(true)}
+	if textY < height && textY >= 0 {
+		for i, r := range msg {
+			col := textX + i
+			if col >= 0 && col < width {
+				buf[textY][col] = texel.Cell{Ch: r, Style: style.Bold(true)}
+			}
 		}
 	}
 }
@@ -231,6 +240,23 @@ func (a *TexelTerm) AttachControlBus(bus texel.ControlBus) {
 	a.mu.Lock()
 	a.controlBus = bus
 	a.mu.Unlock()
+}
+
+func (a *TexelTerm) SetPaneID(id [16]byte) {
+	a.mu.Lock()
+	a.paneID = fmt.Sprintf("%x", id)
+	a.mu.Unlock()
+}
+
+func (a *TexelTerm) SnapshotMetadata() (appType string, config map[string]interface{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Only store the command - env and cwd are in pane-ID-based files
+	config = make(map[string]interface{})
+	config["command"] = a.command
+
+	return "texelterm", config
 }
 
 func colorToHex(c tcell.Color) string {
@@ -307,16 +333,32 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		if ev.Key() == tcell.KeyRune {
 			r := ev.Rune()
 			if r == 'y' || r == 'Y' {
+				a.confirmClose = false // Dismiss dialog
 				if a.confirmCallback != nil {
 					a.mu.Unlock()
 					a.confirmCallback()
 					return // Callback handles close
 				}
-				// Internal close (PTY exit)
-				close(a.closeCh)
+				// Internal close (PTY exit) - user confirmed, close the pane
+				a.closeOnce.Do(func() {
+					close(a.closeCh)
+				})
 			} else if r == 'n' || r == 'N' {
 				a.confirmClose = false
+				wasExternal := a.confirmCallback != nil
+				a.confirmCallback = nil // Clear callback
+				if a.vterm != nil {
+					a.vterm.MarkAllDirty() // Force full redraw to clear dialog
+				}
 				a.requestRefresh()
+				// If this was an internal close (shell exit), restart the shell
+				if !wasExternal {
+					// Signal restart in non-blocking way
+					select {
+					case a.restartCh <- struct{}{}:
+					default:
+					}
+				}
 			}
 		}
 		a.mu.Unlock()
@@ -991,13 +1033,224 @@ func (a *TexelTerm) autoScrollLoop() {
 	}
 }
 func (a *TexelTerm) Run() error {
+	// Main run loop - allows restarting shell after exit
+	for {
+		// Create a new closeCh for this iteration (in case previous one was closed)
+		a.mu.Lock()
+		a.closeCh = make(chan struct{})
+		a.closeOnce = sync.Once{} // Reset closeOnce for new closeCh
+		a.mu.Unlock()
 
+		err := a.runShell()
+
+		// runShell() already consumed the signal (closeCh, restartCh, or stop)
+		// Check the error to decide what to do
+		if err != nil {
+			if err.Error() == "user confirmed close" {
+				return nil // User pressed 'y' to close confirmation
+			}
+			if err.Error() == "external stop" {
+				return nil // Stop() was called
+			}
+			// Unexpected error
+			return err
+		}
+		// err == nil means user pressed 'n' to decline close, restart the shell
+		log.Println("Restarting shell after user declined close")
+		continue
+	}
+}
+
+// injectShellIntegration modifies the shell command to auto-load integration scripts.
+// For interactive shells, we need to modify the command itself, not just env vars.
+func (a *TexelTerm) injectShellIntegration(env []string) []string {
+	// Note: This function only sets up env for now
+	// The actual command modification happens in runShell
+	return env
+}
+
+// getShellCommandSimpleIntegration returns a command that integrates shell monitoring
+// Uses --rcfile approach with simplified integration (no background jobs)
+func (a *TexelTerm) getShellCommandSimpleIntegration(env []string) *exec.Cmd {
+	shellName := strings.ToLower(filepath.Base(a.command))
+
+	// For bash, use --rcfile to load integration + user bashrc
+	if strings.Contains(shellName, "bash") {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			configDir := filepath.Join(homeDir, ".config", "texelation", "shell-integration")
+			if err := a.ensureShellIntegrationScripts(configDir); err == nil {
+				// Use existing bash-wrapper.sh which sources both integration and user bashrc
+				wrapperScript := filepath.Join(configDir, "bash-wrapper.sh")
+
+				// bash-wrapper.sh should already exist from ensureShellIntegrationScripts
+				if _, err := os.Stat(wrapperScript); err == nil {
+					log.Printf("Shell integration: bash --rcfile %s -i (simplified, no background jobs)", wrapperScript)
+					return exec.Command(a.command, "--rcfile", wrapperScript, "-i")
+				}
+			}
+		}
+	}
+
+	// Default: no integration, just run shell normally
+	log.Printf("Shell integration: disabled for %s", shellName)
+	return exec.Command(a.command)
+}
+
+// getShellCommandWithIntegration returns the shell command with integration script loaded
+func (a *TexelTerm) getShellCommandWithIntegration() (string, []string) {
+	// Detect shell type from command
+	shellName := strings.ToLower(filepath.Base(a.command))
+
+	// Get config directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("Failed to get home directory: %v", err)
+		return a.command, nil
+	}
+
+	configDir := filepath.Join(homeDir, ".config", "texelation", "shell-integration")
+
+	// Check if integration script exists, create if needed
+	if err := a.ensureShellIntegrationScripts(configDir); err != nil {
+		log.Printf("Failed to ensure shell integration scripts: %v", err)
+		return a.command, nil
+	}
+
+	var integrationScript string
+	var shellCmd string
+	var args []string
+
+	switch {
+	case strings.Contains(shellName, "bash"):
+		integrationScript = filepath.Join(configDir, "bash.sh")
+		userRcFile := filepath.Join(homeDir, ".bashrc")
+
+		// Create a temporary rc file that sources both our integration and user's bashrc
+		tmpRcFile := filepath.Join(configDir, "bash-init.sh")
+		rcContent := fmt.Sprintf("#!/bin/bash\n[[ -f %s ]] && source %s\n[[ -f %s ]] && source %s\n",
+			integrationScript, integrationScript, userRcFile, userRcFile)
+		if err := os.WriteFile(tmpRcFile, []byte(rcContent), 0755); err != nil {
+			log.Printf("Failed to create temp rc file: %v", err)
+			return a.command, nil
+		}
+
+		shellCmd = a.command
+		args = []string{"--rcfile", tmpRcFile, "-i"}
+		log.Printf("Injecting shell integration via: bash --rcfile %s -i", tmpRcFile)
+
+	case strings.Contains(shellName, "zsh"):
+		integrationScript = filepath.Join(configDir, "zsh.sh")
+		userRcFile := filepath.Join(homeDir, ".zshrc")
+
+		sourceCmd := fmt.Sprintf("[[ -f %s ]] && source %s; [[ -f %s ]] && source %s; exec %s",
+			integrationScript, integrationScript, userRcFile, userRcFile, a.command)
+
+		shellCmd = a.command
+		args = []string{"-c", sourceCmd}
+		log.Printf("Injecting shell integration via: zsh -c 'source integration && exec zsh'")
+
+	case strings.Contains(shellName, "fish"):
+		integrationScript = filepath.Join(configDir, "fish.fish")
+		shellCmd = a.command
+		args = []string{"--init-command", fmt.Sprintf("source %s", integrationScript)}
+		log.Printf("Injecting shell integration: fish --init-command source %s", integrationScript)
+
+	default:
+		// Unknown shell, no integration
+		log.Printf("Shell integration not available for: %s", shellName)
+		return a.command, nil
+	}
+
+	return shellCmd, args
+}
+
+// ensureShellIntegrationScripts creates shell integration scripts if they don't exist
+func (a *TexelTerm) ensureShellIntegrationScripts(configDir string) error {
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// We assume the scripts are already created in the config directory
+	// If not, they would need to be embedded in the binary or copied on first run
+	// For now, we just log and continue
+	log.Printf("Shell integration directory created: %s", configDir)
+	log.Printf("Please ensure integration scripts exist in this directory")
+
+	return nil
+}
+
+func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
 	cols, rows := a.width, a.height
+
+	// Check if this is a restart (vterm already exists)
+	isRestart := a.vterm != nil
 	a.mu.Unlock()
 
-	cmd := exec.Command(a.command)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	// Try to read environment from pane-ID-based file (for both restart and server restart)
+	var env []string
+	var cwd string
+	a.mu.Lock()
+	paneID := a.paneID
+	a.mu.Unlock()
+
+	if paneID != "" {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			envFile := filepath.Join(homeDir, fmt.Sprintf(".texel-env-%s", paneID))
+			if data, err := os.ReadFile(envFile); err == nil {
+				// Parse env file (one VAR=value per line)
+				lines := strings.Split(string(data), "\n")
+				for _, line := range lines {
+					if line == "" {
+						continue
+					}
+					// Extract working directory (special marker from shell integration)
+					if strings.HasPrefix(line, "__TEXEL_CWD=") {
+						cwd = strings.TrimPrefix(line, "__TEXEL_CWD=")
+						log.Printf("Restored working directory: %s", cwd)
+						continue
+					}
+					// Skip bash functions (BASH_FUNC_*%%) to avoid import errors
+					if strings.HasPrefix(line, "BASH_FUNC_") {
+						continue
+					}
+					env = append(env, line)
+				}
+				log.Printf("Loaded environment from %s: %d variables", envFile, len(env))
+			} else {
+				log.Printf("Could not read env file %s: %v (this is normal on first run)", envFile, err)
+			}
+		}
+	}
+
+	a.mu.Lock()
+	// Fall back to os.Environ if file read failed
+	if len(env) == 0 {
+		log.Println("No pane-based env file, using os.Environ()")
+		env = os.Environ()
+	}
+	// Always set TERM for the shell
+	env = append(env, "TERM=xterm-256color")
+
+	// Set pane ID for per-terminal history isolation
+	if a.paneID != "" {
+		env = append(env, "TEXEL_PANE_ID="+a.paneID)
+	}
+
+	// Inject shell integration
+	env = a.injectShellIntegration(env)
+	a.mu.Unlock()
+
+	// Get shell command - try simpler integration via ENV
+	cmd := a.getShellCommandSimpleIntegration(env)
+	cmd.Env = env
+	if cwd != "" {
+		cmd.Dir = cwd
+		log.Printf("Starting shell in directory: %s", cwd)
+	}
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	if err != nil {
@@ -1007,33 +1260,50 @@ func (a *TexelTerm) Run() error {
 	a.cmd = cmd
 
 	a.mu.Lock()
-	// Read wrap/reflow and history configuration from theme
-	cfg := theme.Get()
-	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
-	reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
 
-	// Create history configuration
-	histCfg := parser.DefaultHistoryConfig()
-	histCfg.MemoryLines = cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
-	histCfg.PersistEnabled = cfg.GetBool("texelterm.history", "persist_enabled", true)
-	if persistDir := cfg.GetString("texelterm.history", "persist_dir", ""); persistDir != "" {
-		histCfg.PersistDir = persistDir
-	}
-	histCfg.Compress = cfg.GetBool("texelterm.history", "compress", true)
-	histCfg.Encrypt = cfg.GetBool("texelterm.history", "encrypt", false)
+	if isRestart {
+		// Restarting - just update the PTY writer, keep existing vterm
+		log.Println("Reusing existing vterm for seamless restart")
+		// Update the PTY writer callback to point to new PTY
+		if a.vterm != nil {
+			a.vterm.WriteToPty = func(b []byte) {
+				if a.pty != nil {
+					a.pty.Write(b)
+				}
+			}
+		}
+		a.mu.Unlock()
+	} else {
+		// First run - create vterm and parser
+		// Read wrap/reflow and history configuration from theme
+		cfg := theme.Get()
+		wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
+		reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
 
-	// Get current working directory
-	workingDir, _ := os.Getwd()
+		// Create history configuration
+		histCfg := parser.DefaultHistoryConfig()
+		histCfg.MemoryLines = cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
+		histCfg.PersistEnabled = cfg.GetBool("texelterm.history", "persist_enabled", true)
+		if persistDir := cfg.GetString("texelterm.history", "persist_dir", ""); persistDir != "" {
+			histCfg.PersistDir = persistDir
+		}
+		histCfg.Compress = cfg.GetBool("texelterm.history", "compress", true)
+		histCfg.Encrypt = cfg.GetBool("texelterm.history", "encrypt", false)
 
-	// Create history manager
-	hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir)
-	if err != nil {
-		log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
-		hm = nil
-	}
-	a.historyManager = hm
+		// Get current working directory
+		workingDir, _ := os.Getwd()
 
-	a.vterm = parser.NewVTerm(cols, rows,
+		// Create history manager with pane ID for persistent scrollback (lock already held)
+		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
+
+		hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
+		if err != nil {
+			log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
+			hm = nil
+		}
+		a.historyManager = hm
+
+		a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
 			a.title = newTitle
 			a.requestRefresh()
@@ -1071,10 +1341,21 @@ func (a *TexelTerm) Run() error {
 		parser.WithWrap(wrapEnabled),
 		parser.WithReflow(reflowEnabled),
 		parser.WithHistoryManager(hm),
-	)
-	a.parser = parser.NewParser(a.vterm)
-	a.mu.Unlock()
+		)
+		a.parser = parser.NewParser(a.vterm)
 
+		// Position cursor at bottom if we loaded history
+		// This is needed because cursor positioning normally happens in Resize(),
+		// but when vterm is created with correct dimensions, no resize is triggered
+		if hm != nil && hm.Length() > rows {
+			a.vterm.SetCursorPos(rows-1, 0)
+			fmt.Fprintf(os.Stderr, "[CURSOR FIX] Initial cursor position after history load: cursorY=%d, cursorX=0\n", rows-1)
+		}
+
+		a.mu.Unlock()
+	}
+
+	// Start PTY reader goroutine (for both first run and restart)
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
@@ -1090,10 +1371,7 @@ func (a *TexelTerm) Run() error {
 				return
 			}
 
-			if r == '' {
-			// Skip BEL character (visual bell not implemented)
-			continue
-			}
+			// Don't skip BEL - the parser needs it to terminate OSC sequences!
 
 			a.mu.Lock()
 			inSync := a.vterm.InSynchronizedUpdate
@@ -1113,19 +1391,24 @@ func (a *TexelTerm) Run() error {
 
 	err = cmd.Wait()
 	a.wg.Wait()
-	
+
 	// PTY exited. Ask for confirmation before closing pane.
 	a.mu.Lock()
 	a.confirmClose = true
 	a.confirmCallback = nil // Internal close
 	a.requestRefresh()
 	a.mu.Unlock()
-	
+
 	select {
 	case <-a.closeCh:
-		return err
+		// User confirmed close with 'y'
+		return fmt.Errorf("user confirmed close")
+	case <-a.restartCh:
+		// User declined close with 'n' - will restart
+		return nil
 	case <-a.stop:
-		return err
+		// External stop signal (Stop() was called)
+		return fmt.Errorf("external stop")
 	}
 }
 

@@ -558,6 +558,18 @@ func (w *Workspace) CloseActivePane() {
 	if w == nil || w.tree == nil || w.tree.ActiveLeaf == nil {
 		return
 	}
+
+	// Check if the app wants to intercept the close request (e.g., to show confirmation)
+	pane := w.tree.ActiveLeaf.Pane
+	if pane != nil && pane.app != nil {
+		if requester, ok := pane.app.(CloseRequester); ok {
+			if !requester.RequestClose() {
+				// App intercepted the close (showing confirmation, etc.)
+				return
+			}
+		}
+	}
+
 	w.removeNode(w.tree.ActiveLeaf, true)
 }
 
@@ -954,6 +966,23 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 	}
 	log.Printf("PerformSplit: Tree split completed")
 
+	// IMPORTANT: Create and attach the app BEFORE starting animation.
+	// The animation broadcasts tree snapshots at 60fps, and CaptureTree() skips
+	// panes with app == nil, which would corrupt the persisted tree structure.
+	var newApp App
+	if w.desktop != nil && w.desktop.InitAppName != "" {
+		if appInstance := w.desktop.Registry().CreateApp(w.desktop.InitAppName, nil); appInstance != nil {
+			if app, ok := appInstance.(App); ok {
+				newApp = app
+			}
+		}
+	}
+	if newApp == nil {
+		newApp = w.ShellAppFactory()
+	}
+	newPane.AttachApp(newApp, w.refreshChan)
+	log.Printf("PerformSplit: Attached app '%s' to new pane (before animation)", newApp.GetTitle())
+
 	// Capture the target ratios set by SplitActive, then animate from initial to target
 	var nodeWithRatios *Node
 	if addToExistingGroup && parent != nil {
@@ -994,21 +1023,6 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 		}
 	}
 
-	// Create and attach new app (use default app if available, otherwise shell)
-	var newApp App
-	if w.desktop != nil && w.desktop.InitAppName != "" {
-		if appInstance := w.desktop.Registry().CreateApp(w.desktop.InitAppName, nil); appInstance != nil {
-			if app, ok := appInstance.(App); ok {
-				newApp = app
-			}
-		}
-	}
-	if newApp == nil {
-		newApp = w.ShellAppFactory()
-	}
-	newPane.AttachApp(newApp, w.refreshChan)
-	log.Printf("PerformSplit: Attached app '%s' to new pane", newApp.GetTitle())
-
 	// Set pane states
 	w.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node != newNode && node != w.tree.ActiveLeaf {
@@ -1048,9 +1062,7 @@ func (w *Workspace) SwapActivePane(d Direction) {
 	}
 }
 
-// Update the draw method to also log when pane animations are detected
 func (w *Workspace) Close() {
-
 	w.finishMouseResize()
 
 	// Close all panes
