@@ -109,6 +109,18 @@ func (m *LayoutTransitionManager) Stop() {
 	close(m.stopCh)
 }
 
+// ResetGracePeriod resets the grace period timer to now.
+// This is called during snapshot restore to prevent animations from interfering.
+func (m *LayoutTransitionManager) ResetGracePeriod() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.graceStart = time.Now()
+	log.Println("LayoutTransitionManager: Grace period reset for snapshot restore")
+}
+
 // AnimateSplit starts animating split ratios from current to target values.
 // This is called instead of immediately setting ratios in SplitActive/CloseActiveLeaf.
 func (m *LayoutTransitionManager) AnimateSplit(node *Node, targetRatios []float64) {

@@ -138,8 +138,32 @@ func main() {
 		return texelterm.New(title, command)
 	})
 
-	// Create initial workspace with configured default app
+	// Check if we'll be loading from a snapshot - if so, don't create the initial app
+	// The snapshot restore will create the proper apps
+	snapshotExists := false
+	if !*fromScratch {
+		snapPath := *snapshotPath
+		if snapPath == "" {
+			if homeDir, err := os.UserHomeDir(); err == nil {
+				snapPath = filepath.Join(homeDir, ".texelation", "snapshot.json")
+			}
+		}
+		if snapPath != "" {
+			if _, err := os.Stat(snapPath); err == nil {
+				snapshotExists = true
+				log.Printf("Snapshot file exists, deferring initial app creation")
+				desktop.InitAppName = "" // Don't create initial app - snapshot will restore it
+			}
+		}
+	}
+
+	// Create initial workspace (with or without default app based on snapshot existence)
 	desktop.SwitchToWorkspace(1)
+
+	// Restore InitAppName for future workspace creation (if user opens new workspace)
+	if snapshotExists {
+		desktop.InitAppName = *defaultApp
+	}
 
 	status := statusbar.New()
 	desktop.AddStatusPane(status, texel.SideTop, 1)
