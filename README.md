@@ -28,14 +28,16 @@ and heavily themeable.
 
 ## Features
 
-| Built-in Highlights        | Description                                                                                                                     |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| 🧩 Modular client/server   | Server keeps authoritative state; clients can reconnect instantly and render the same buffers.                                  |
-| 🎛️ Card-based composition | Apps flow through a card pipeline, making overlays/effects reusable and easy to stack.                                          |
-| 🎨 Themeable effects       | Customise overlays and colour schemes via JSON bindings. Sample effects ship today; richer animations are drop-in ready.        |
-| ⚡ Responsive & lean       | Optimised buffer deltas, debounced resizes, snapshot persistence, and a lean protocol keep the UI snappy.                       |
-| 🧪 Developer-friendly      | Headless renderers (`texel-headless`), memconn fixtures, and a clear package layout make iterating fast.                        |
-| 🖥️ TexelTerm               | Full terminal emulator with mouse/keyboard scrolling, selection, and optional visual bell—built to be embedded anywhere.       |
+| Highlight                          | Description                                                                                                                                             |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🧠 Server-authoritative desktop    | Pane tree, buffers, and theme state live on the server. Clients are thin renderers that can reconnect instantly and resume with buffered deltas.        |
+| 💾 Persistent session restore      | Full terminal pane state (buffers, tree, focus) is snapshotted to disk; sessions survive server restarts and resume where you left off.                 |
+| 🎛️ Card pipeline & control bus     | Stack reusable cards (effects, diagnostics, overlays) around any app. Trigger capabilities via a control bus instead of wiring bespoke toggles.        |
+| 🎨 Themeable effects & animations   | Registry-driven effects plus server-side layout transitions; configure via JSON, hot-reload on SIGHUP, and reuse inside card pipelines.                 |
+| 🔌 App registry & wrappers          | Discover apps from manifests under `~/.config/texelation/apps/`; wrapper manifests turn TexelTerm into custom commands without writing Go code.        |
+| 🧩 TexelUI widget library           | Label, Button, Input, Checkbox, TextArea, VBox/HBox layouts, and adapters to run TexelUI UIs as regular TexelApps.                                     |
+| 🖥️ TexelTerm                       | Full terminal emulator with rich scrollback, selection, BEL flash effect, bracketed paste, and clipboard handling; embeddable in any pane or pipeline. |
+| 🧪 Developer-friendly tooling       | Headless renderer, in-memory memconn tests, and a clear package layout for rapid iteration and CI-friendly checks.                                      |
 
 ## Coding
 
@@ -154,12 +156,15 @@ See [Effect Guide](EFFECTS_GUIDE.md) for the complete development workflow and [
 
 ## Documentation
 
-- [Client/Server architecture](CLIENT_SERVER_ARCHITECTURE.md)
-- [Effect development guide](EFFECTS_GUIDE.md)
-- [Texel app & card pipeline guide](TEXEL_APP_GUIDE.md)
-- [Card control bus reference](cards_control.md)
-- [Contribution guide](CONTRIBUTING.md)
-- [Future roadmap](FUTURE_ROADMAP.md)
+- [Client/Server architecture](docs/CLIENT_SERVER_ARCHITECTURE.md)
+- [User app guide](docs/user/APPS.md)
+- [Developer guide](docs/programmer/DEVELOPER_GUIDE.md)
+- [Effect development guide](docs/EFFECTS_GUIDE.md)
+- [Texel app & card pipeline guide](docs/TEXEL_APP_GUIDE.md)
+- [Card control bus reference](docs/cards_control.md)
+- [Contribution guide](docs/CONTRIBUTING.md)
+- [Future roadmap](docs/FUTURE_ROADMAP.md)
+- [Plans](docs/plans/README.md)
 
 These documents replace the old phase planning notes and are kept current as
 features evolve.

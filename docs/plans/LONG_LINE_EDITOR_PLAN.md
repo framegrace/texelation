@@ -18,6 +18,11 @@ A card-based overlay editor that provides better editing experience for long com
 - Use shell integration (OSC 133) to detect prompt boundaries
 - Let shell remain authoritative; overlay is temporary buffer only
 
+## Current Status (Dec 2025)
+
+- **Not started**: No OSC 133 handling or long line editor card exists in the codebase yet.
+- TexelUI widgets (TextArea, Input, Button, Checkbox, Label) are available for reuse when work begins.
+
 ## Implementation Phases
 
 ### Phase 1: Shell Integration (OSC 133)
@@ -328,14 +333,14 @@ Theme.json additions:
 ## Success Criteria
 
 ### MVP (Phase 1-3)
-- [x] OSC 133 sequences recognized and tracked
-- [x] Ctrl+O toggles overlay editor
-- [x] Can edit text in overlay with full TextArea features
-- [x] Enter commits text to shell
-- [x] Escape cancels and closes overlay
-- [x] Basic passthrough keys work (Ctrl+C, Ctrl+D)
-- [x] Integration tests pass
-- [x] Works with bash when shell integration is configured
+- [ ] OSC 133 sequences recognized and tracked
+- [ ] Ctrl+O toggles overlay editor
+- [ ] Can edit text in overlay with full TextArea features
+- [ ] Enter commits text to shell
+- [ ] Escape cancels and closes overlay
+- [ ] Basic passthrough keys work (Ctrl+C, Ctrl+D)
+- [ ] Integration tests pass
+- [ ] Works with bash when shell integration is configured
 
 ### Phase 4
 - [ ] Auto-opens when line exceeds width

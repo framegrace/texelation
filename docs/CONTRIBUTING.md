@@ -56,7 +56,7 @@ additional operational details and smoke targets.
 * Avoid snapshot diffs; assert on meaningful geometry/state changes.
 * Capture regressions with scripts or sample buffers rather than checking binary
   assets into the repo.
-* See `docs/SMOKE_TEST_PLAN.md` for the canonical smoke suites and future
+* See `docs/plans/SMOKE_TEST_PLAN.md` for the canonical smoke suites and future
   testing roadmap.
 
 ---
