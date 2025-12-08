@@ -10,7 +10,9 @@ A quick starting point for building on Texelation. It links to detailed docs and
 - Effects: `docs/EFFECTS_GUIDE.md`
 - Plans: `docs/plans/TEXELUI_PLAN.md`, `docs/plans/LONG_LINE_EDITOR_PLAN.md`
 
-## TexelUI Basics
+## TexelUI Basics (Standalone or Integrated)
+
+TexelUI and TexelApps can run **standalone** (`go run ./cmd/<app>`) without the desktop. Texelation integration is optional; the same apps can be embedded into the card pipeline later.
 
 ```go
 import (
