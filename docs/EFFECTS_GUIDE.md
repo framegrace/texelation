@@ -32,9 +32,11 @@ Key concepts:
 * **Triggers** – the effect manager emits `EffectTrigger` instances when control
   mode toggles, keys are pressed, panes become active/resizing, etc. The effect
   chooses which triggers it cares about inside `HandleTrigger`.
-* **Timeline** – reusable easing helper (`timeline.go`) that handles animation
-  curves and delta time. Effects call `AnimateTo(key, target, duration)` to move
-  values smoothly.
+* **Timeline / EffectBase** – reusable easing helper (`timeline.go`) and the
+  pane/workspace base structs (`PaneEffectBase`, `WorkspaceEffectBase`) that
+  handle animation state for you. Embed a base and call `Animate(...)` in your
+  triggers, then `Get(...)`/`GetCached(...)` in `Apply*` to fetch the current
+  intensity.
 
 Both the remote client runtime and `texel/cards/effect_card.go` share the same
 registry, so an effect automatically works in the runtime and via cards if the
@@ -46,8 +48,9 @@ configuration is exposed.
 
 1. **Create the file** under `internal/effects/`. Use a descriptive name
    (`sparkle.go`, `glitch.go`, etc.).
-2. **Define the struct** holding any state you need (timelines, colours,
-   parameters). Keep fields private and expose configuration through the factory.
+2. **Define the struct** holding any state you need (colours, params). Embed
+   `PaneEffectBase` or `WorkspaceEffectBase` to get animation/timeline handling
+   for free.
 3. **Implement the interface**:
    * `ID()` should return the registry identifier (lowercase string).
    * `Active()` should return `true` only when the effect must render.
@@ -79,6 +82,40 @@ configuration is exposed.
 9. **Update documentation** – add a short entry to `docs/EFFECTS_GUIDE.md`
    (this file) and, if needed, to `docs/EFFECT_CARD_MIGRATION.md` so app authors
    know the effect exists.
+
+### Example: PaneEffectBase
+
+```go
+type FadeTint struct {
+    effects.PaneEffectBase
+    color tcell.Color
+}
+
+func NewFadeTint(cfg effects.EffectConfig) effects.Effect {
+    dur := parseDurationOrDefault(cfg, "duration_ms", 200)
+    return &FadeTint{
+        PaneEffectBase: effects.NewPaneEffectBase(dur),
+        color:          parseColorOrDefault(cfg, "color", tcell.ColorGray),
+    }
+}
+
+func (f *FadeTint) Update(now time.Time) { f.PaneEffectBase.Update(now) }
+
+func (f *FadeTint) HandleTrigger(tr effects.EffectTrigger) {
+    if tr.Type == effects.TriggerPaneActive {
+        target := float32(0)
+        if !tr.Active {
+            target = 1.0
+        }
+        f.Animate(tr.PaneID, target, tr.Timestamp)
+    }
+}
+
+func (f *FadeTint) ApplyPane(pane *client.PaneState, buf [][]client.Cell) {
+    intensity := f.GetCached(pane.ID)
+    // blend buf with f.color scaled by intensity...
+}
+```
 
 ---
 

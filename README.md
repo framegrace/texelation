@@ -39,6 +39,28 @@ and heavily themeable.
 | 🖥️ TexelTerm                       | Full terminal emulator with rich scrollback, selection, bracketed paste, and clipboard handling; embeddable in any pane or pipeline.                   |
 | 🧪 Developer-friendly tooling       | Headless renderer, in-memory memconn tests, and a clear package layout for rapid iteration and CI-friendly checks.                                      |
 
+## First Run (Quick Start)
+
+1. Build the binaries (server, client, and apps) into `./bin`:
+   ```bash
+   make build-apps
+   ```
+2. Start the server (creates a default session if no snapshot exists):
+   ```bash
+   ./bin/texel-server
+   ```
+3. In another terminal, start the client against the same socket:
+   ```bash
+   ./bin/texel-client
+   ```
+4. Enter control mode with `Ctrl+A`, then `|` / `-` to split, `l` for the launcher, `h` for help, `x` to close a pane, `z` to zoom.
+
+## Sessions & Persistence
+
+- **Server snapshots**: By default the server loads/saves a snapshot at `~/.texelation/snapshot.json`. If the file exists, startup restores the prior pane tree/buffers; if not, a fresh session starts with the default app. Use `--from-scratch` to ignore any snapshot or `--snapshot <path>` to override the location.
+- **Client reconnect**: The client uses `--reconnect` (default: true) to resume prior sessions; it will request a snapshot and buffered deltas on connect. Restarting the client against a running server should pick up where you left off.
+- **Sockets**: Default socket is `/tmp/texelation.sock`; override with `--socket` on both server and client.
+
 ## Coding
 
 Every line of code here was produced by multiple AIs--No human typed any of it.
@@ -100,41 +122,56 @@ Stay tuned as TexelTui graduates from infancy to a full-fledged framework.
 
 ## Building
 
-Use the supplied Makefile targets to build the production binaries into `./bin`:
+Use the Makefile helper to build the server, client, and standalone apps into `./bin`:
 
 ```bash
-make build
+make build-apps
 ```
 
-The resulting folder contains `texel-server` and `texel-client`. Install them into your `GOPATH/bin` with:
+This produces `texel-server`, `texel-client`, `texelterm`, `flicker`, and `help`. You can also install the server/client directly with:
 
 ```bash
 make install
 ```
 
-To produce cross-compiled binaries for release testing, run:
+For cross-compiled release artifacts:
 
 ```bash
 make release
 ```
 
-This writes platform-specific builds into `./dist` for Linux, macOS, and Windows (amd64 + arm64).
-
 ## Running Locally
 
-Start the server harness:
+Start the server harness (either from source or from `bin/`):
 
 ```bash
+# From source with verbose logs and default socket
 make server
+
+# Or using the built binary
+./bin/texel-server --socket /tmp/texelation.sock --default-app texelterm
 ```
 
-It listens on `/tmp/texelation.sock` by default. In a new terminal, launch the remote client:
+Key server flags:
+- `--socket` (default `/tmp/texelation.sock`)
+- `--default-app` (launcher, texelterm, help)
+- `--snapshot` path (default `~/.texelation/snapshot.json`)
+- `--from-scratch` (ignore existing snapshot)
+- `--verbose-logs` (enable verbose logging)
+- `--pprof-cpu` / `--pprof-mem` (write profiles)
+
+Launch the remote client against the same socket:
 
 ```bash
 make client
+# or
+./bin/texel-client --socket /tmp/texelation.sock --reconnect
 ```
 
-Both commands use a shared build cache in `.cache/` to avoid polluting `$GOCACHE`.
+Client flags:
+- `--socket` (Unix socket path)
+- `--reconnect` (resume previous session; enabled by default)
+- `--panic-log` (path to append panic stack traces)
 
 ### Effect Configuration
 
