@@ -5,7 +5,7 @@ A quick starting point for building on Texelation. It links to detailed docs and
 ## Quick Links
 
 - Architecture: `docs/CLIENT_SERVER_ARCHITECTURE.md`
-- TexelUI: `docs/TEXELUI_QUICKSTART.md`, `docs/TEXELUI_THEME.md`
+- TexelUI: `docs/TEXELUI_QUICKSTART.md`, `docs/TEXELUI_THEME.md`, `docs/programmer/TEXELUI_USAGE.md`
 - Card pipeline: `docs/TEXEL_APP_GUIDE.md`, `docs/cards_control.md`
 - Effects: `docs/EFFECTS_GUIDE.md`
 - Plans: `docs/plans/TEXELUI_PLAN.md`, `docs/plans/LONG_LINE_EDITOR_PLAN.md`

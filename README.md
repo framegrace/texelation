@@ -173,6 +173,16 @@ Client flags:
 - `--reconnect` (resume previous session; enabled by default)
 - `--panic-log` (path to append panic stack traces)
 
+## TexelUI Widgets (Standalone Demos)
+
+TexelUI apps run without the desktop. Try the demos to see the widget set:
+
+- Single TextArea with border: `go run ./cmd/texelui-demo`
+- Dual TextAreas for focus/resize: `go run ./cmd/texelui-demo2`
+- Widget showcase (Label, Input, Checkbox, Button with VBox/HBox layout): `go run ./texelui/examples/widget_demo.go`
+
+Each demo opens directly in your terminal; no server/client needed.
+
 ### Effect Configuration
 
 Visual overlays are configured through the theme file and can also be composed
