@@ -228,23 +228,14 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
     - `apps/texelterm/parser/vterm.go` - Resize() with cursor positioning and margin init
     - `texel/tree.go` - Defensive bounds checking for SplitRatios array
 
-- **Pane Loss During Server Restart - OPEN ISSUE (2025-12-08)**:
-  - **Status**: Under investigation
-  - **Symptom**: Panes are lost when server restarts, but work perfectly during normal runtime
-  - **Evidence**:
-    - User created 3 panels, restarted server, only 1 remained
-    - `snapshot.json` shows only single pane with `"split": "none"`, meaning panes already lost before snapshot saved
-    - Quote: "the previous lifecycle, without server restarts was working perfectly"
-  - **Scope**: Issue is specifically in snapshot save/restore flow, NOT general pane lifecycle
-  - **Areas to Investigate**:
-    - Server initialization from snapshot (`internal/runtime/server/server.go`)
-    - Tree serialization/deserialization (`texel/snapshot.go`)
-    - App lifecycle during restore (are apps being started correctly?)
-    - Pane ID management and potential conflicts
-    - Desktop state restoration sequence
-  - **Test Case**: Create fresh server with 3 terminals, kill server, restart - only 1 terminal appears
+- **Pane Loss During Server Restart - FIXED (2025-12-08)**:
+  - **Status**: Fixed - race condition in PerformSplit
+  - **Root Cause**: Layout transition animation was broadcasting tree snapshots at 60fps while new panes still had `app == nil`. `CaptureTree()` skips panes without apps, so newly created panes were excluded from snapshots during the ~300ms animation window.
+  - **Fix**: In `workspace.go` `PerformSplit()`, moved app creation and `AttachApp()` to execute BEFORE `AnimateSplit()` starts broadcasting tree snapshots. This ensures the pane has an app attached when snapshots are captured.
+  - **Additional Changes**:
+    - Added debug logging in `CaptureTree()` to warn when panes with `nil app` are found
+    - Added debug logging in `buildTreeCapture()` to warn when tree nodes reference uncaptured panes
   - **Related Files**:
-    - `internal/runtime/server/snapshot_store.go` - Snapshot persistence
-    - `texel/snapshot.go` - Tree serialization
-    - `cmd/texel-server/main.go` - Server initialization
-    - `/home/marc/.texelation/snapshot.json` - Saved state (check for tree structure corruption)
+    - `texel/workspace.go` - PerformSplit() with fixed ordering (lines 969-984)
+    - `texel/snapshot.go` - CaptureTree() with debug logging for corruption detection
+  - **How It Was Found**: Traced through `CaptureTree()` → `PerformSplit()` → animation loop, identified window where `newPane.app == nil` while snapshots were being broadcast
