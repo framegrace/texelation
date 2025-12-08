@@ -46,12 +46,12 @@ Please check the note at the end.
 
 ## TexelApps & Future TexelTui
 
-TexelApps live under `apps/` and can run standalone (`go run ./cmd/texelterm`) or
-inside the desktop pipeline. The current set includes the terminal emulator,
-status bar, launcher, help overlay, clock, and the flicker demo. The pipeline
-infrastructure (cards, effects, control bus) lays the groundwork for
-**TexelTui**—a forthcoming toolkit for building rich text apps with minimal
-boilerplate.
+TexelApps live under `apps/` and can run **standalone** (`go run ./cmd/<app>`) or
+inside the desktop pipeline. Texelation integration is optional—the same apps
+work as normal binaries. The current set includes the terminal emulator, status
+bar, launcher, help overlay, clock, and the flicker demo. The pipeline
+infrastructure (cards, effects, control bus) lays the groundwork for **TexelTui**—
+a forthcoming toolkit for building rich text apps with minimal boilerplate.
 
 Planned TexelApps improvements:
 
