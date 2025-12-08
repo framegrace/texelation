@@ -352,23 +352,66 @@ func (hm *HistoryManager) Close() error {
 	hm.mu.Lock()
 	defer hm.mu.Unlock()
 
-	// Final flush
-	if err := hm.flushPendingLinesLocked(); err != nil {
-		fmt.Fprintf(os.Stderr, "Final history flush error: %v\n", err)
-	}
-
 	// Close store
 	if hm.store != nil {
+		// Close the current store to flush buffers
 		hm.metadata.EndTime = time.Now()
-		hm.metadata.LineCount = hm.store.LineCount()
-		hm.metadata.FileSize = hm.store.BytesWritten()
 		hm.metadata.PrivacyGaps = hm.privacyGaps
 
 		if err := hm.store.Close(hm.metadata); err != nil {
 			return fmt.Errorf("failed to close history store: %w", err)
 		}
+
+		// Reopen the history file and write the ENTIRE buffer
+		// This ensures we capture all in-place updates made via SetLine()
+		allLines := make([][]Cell, hm.length)
+		for i := 0; i < hm.length; i++ {
+			physicalIndex := (hm.head + i) % hm.maxSize
+			allLines[i] = hm.buffer[physicalIndex]
+		}
+
+		// Rewrite the history file with complete buffer
+		if err := hm.rewriteHistoryFile(allLines); err != nil {
+			return fmt.Errorf("failed to rewrite history file: %w", err)
+		}
 	}
 
+	return nil
+}
+
+// rewriteHistoryFile rewrites the entire history file with the given lines.
+// Called during Close() to ensure all in-memory updates are persisted.
+func (hm *HistoryManager) rewriteHistoryFile(lines [][]Cell) error {
+	// Construct the history file path
+	scrollbackDir := filepath.Join(hm.config.PersistDir, "scrollback")
+	ext := ".hist"
+	sessionFile := filepath.Join(scrollbackDir, hm.metadata.SessionID+ext)
+
+	// Delete the old file so NewHistoryStore creates a fresh one
+	os.Remove(sessionFile)
+
+	// Recreate the store (will create empty file since we deleted it)
+	store, err := NewHistoryStore(hm.config, hm.metadata)
+	if err != nil {
+		return fmt.Errorf("failed to create new history store: %w", err)
+	}
+
+	// Write all lines
+	if err := store.WriteLines(lines); err != nil {
+		store.Close(hm.metadata) // Try to close cleanly
+		return fmt.Errorf("failed to write lines: %w", err)
+	}
+
+	// Update metadata
+	hm.metadata.LineCount = store.LineCount()
+	hm.metadata.FileSize = store.BytesWritten()
+
+	// Close the store
+	if err := store.Close(hm.metadata); err != nil {
+		return fmt.Errorf("failed to close rewritten store: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "[REWRITE DEBUG] Rewrote history file with %d lines\n", len(lines))
 	return nil
 }
 
@@ -384,6 +427,11 @@ func (hm *HistoryManager) GetMetadata() SessionMetadata {
 func (hm *HistoryManager) ReplaceBuffer(newLines [][]Cell) {
 	hm.mu.Lock()
 	defer hm.mu.Unlock()
+
+	// DEBUG: Log buffer replacement
+	oldLen := hm.length
+	newLen := len(newLines)
+	fmt.Fprintf(os.Stderr, "[REPLACE DEBUG] ReplaceBuffer called: oldLen=%d, newLen=%d\n", oldLen, newLen)
 
 	hm.head = 0
 	hm.length = len(newLines)
