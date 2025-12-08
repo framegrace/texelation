@@ -229,13 +229,26 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
     - `texel/tree.go` - Defensive bounds checking for SplitRatios array
 
 - **Pane Loss During Server Restart - FIXED (2025-12-08)**:
-  - **Status**: Fixed - race condition in PerformSplit
-  - **Root Cause**: Layout transition animation was broadcasting tree snapshots at 60fps while new panes still had `app == nil`. `CaptureTree()` skips panes without apps, so newly created panes were excluded from snapshots during the ~300ms animation window.
-  - **Fix**: In `workspace.go` `PerformSplit()`, moved app creation and `AttachApp()` to execute BEFORE `AnimateSplit()` starts broadcasting tree snapshots. This ensures the pane has an app attached when snapshots are captured.
-  - **Additional Changes**:
-    - Added debug logging in `CaptureTree()` to warn when panes with `nil app` are found
-    - Added debug logging in `buildTreeCapture()` to warn when tree nodes reference uncaptured panes
-  - **Related Files**:
-    - `texel/workspace.go` - PerformSplit() with fixed ordering (lines 969-984)
-    - `texel/snapshot.go` - CaptureTree() with debug logging for corruption detection
-  - **How It Was Found**: Traced through `CaptureTree()` → `PerformSplit()` → animation loop, identified window where `newPane.app == nil` while snapshots were being broadcast
+  - **Status**: Fully fixed with multiple improvements
+  - **Issues Fixed**:
+    1. **Race condition in PerformSplit**: Animation was broadcasting tree snapshots while new panes had `app == nil`
+    2. **0x0 resize during restore**: Apps were started before layout calculated, causing vterm to be created with 0 dimensions
+    3. **Launcher creation conflict**: Launcher was created before snapshot restore, conflicting with restored panes
+  - **Solutions**:
+    - Moved app creation before `AnimateSplit()` in workspace.go
+    - Added `PrepareAppForRestore()` and `StartPreparedApp()` in pane.go to defer app startup until after `recalculateLayout()`
+    - Added snapshot existence check in main.go to skip initial Launcher creation
+    - Added `ResetGracePeriod()` to layout transitions to skip animations during restore
+  - **Key Code Changes**:
+    - `texel/pane.go` - New `PrepareAppForRestore()` attaches app without starting; `StartPreparedApp()` starts with correct dimensions
+    - `texel/snapshot_restore.go` - Uses deferred app startup pattern: prepare → build tree → layout → start
+    - `cmd/texel-server/main.go` - Sets `InitAppName = ""` when snapshot exists
+    - `texel/layout_transitions.go` - Added `ResetGracePeriod()` for snapshot restore
+  - **Debug Logging**:
+    - BOOT logs in server.go track snapshot load/apply flow
+    - CaptureTree() warns when panes have nil apps
+  - **How It Works Now**:
+    1. Server starts, detects snapshot exists, sets InitAppName = ""
+    2. SwitchToWorkspace(1) creates empty workspace (no app created)
+    3. ApplyTreeCapture runs: prepares apps (no resize/start), builds tree, calculates layout, then starts all apps with correct dimensions
+    4. Apps load history and render correctly in their sized panes
