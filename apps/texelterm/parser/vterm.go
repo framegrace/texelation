@@ -9,6 +9,7 @@
 package parser
 
 import (
+	"fmt"
 	"log"
 )
 
@@ -931,7 +932,6 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	currentLogical := []Cell{}
 
 	logicalLineCount := 0
-	physicalLineDebugCount := 0
 	for i := 0; i < v.getHistoryLen(); i++ {
 		line := v.getHistoryLine(i)
 

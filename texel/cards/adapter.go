@@ -13,8 +13,8 @@ func WrapApp(app texel.App) Card {
 
 // DefaultPipeline constructs the conventional TexelApp pipeline:
 // the base texel.App wrapped as a card plus any extra cards, returned
-// as a texel.App implemented by Pipeline.
-func DefaultPipeline(app texel.App, extra ...Card) texel.App {
+// as a *Pipeline (which implements texel.App).
+func DefaultPipeline(app texel.App, extra ...Card) *Pipeline {
 	base := WrapApp(app)
 	cards := append([]Card{base}, extra...)
 	return NewPipeline(nil, cards...)
