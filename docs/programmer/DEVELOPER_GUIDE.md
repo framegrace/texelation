@@ -39,7 +39,9 @@ app.Resize(cols, rows) // call from pane resize
 - Widgets are positioned absolutely today; VBox/HBox helpers exist (`texelui/layout/*`) but UIManager still defaults to manual coordinates.
 - Theme keys rely on semantic colours such as `bg.surface`, `text.primary`, `action.primary`.
 
-## Card Pipeline Primer
+## Card Pipeline Primer (App-side, Optional)
+
+Cards are an **app-internal** composition mechanism. They wrap a `texel.App` to layer effects/overlays/diagnostics before handing the final buffer to the desktop. The desktop only sees a `texel.App`; cards are optional and can be omitted entirely.
 
 ```go
 import (
