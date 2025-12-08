@@ -7,6 +7,11 @@
 
 package parser
 
+import (
+	"fmt"
+	"os"
+)
+
 // LineFeed moves the cursor down one line, scrolling if necessary.
 func (v *VTerm) LineFeed() {
 	v.wrapNext = false // Clear wrapNext flag when moving to new line
@@ -282,6 +287,7 @@ func (v *VTerm) Scroll(delta int) {
 	if v.inAltScreen {
 		return
 	}
+	oldOffset := v.viewOffset
 	v.viewOffset -= delta
 	if v.viewOffset < 0 {
 		v.viewOffset = 0
@@ -294,6 +300,11 @@ func (v *VTerm) Scroll(delta int) {
 	if v.viewOffset > maxOffset {
 		v.viewOffset = maxOffset
 	}
+
+	// DEBUG: Log scroll events
+	fmt.Fprintf(os.Stderr, "[SCROLL DEBUG] delta=%d, oldOffset=%d, newOffset=%d, histLen=%d, maxOffset=%d\n",
+		delta, oldOffset, v.viewOffset, histLen, maxOffset)
+
 	v.MarkAllDirty()
 }
 

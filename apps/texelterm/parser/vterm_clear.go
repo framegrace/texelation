@@ -7,6 +7,11 @@
 
 package parser
 
+import (
+	"fmt"
+	"os"
+)
+
 // ClearScreen clears the entire screen and resets history (for main screen).
 func (v *VTerm) ClearScreen() {
 	v.MarkAllDirty()
@@ -20,8 +25,12 @@ func (v *VTerm) ClearScreen() {
 		v.SetCursorPos(0, 0)
 	} else {
 		if v.historyManager != nil {
+			// DEBUG: Log history state before and after
+			lenBefore := v.historyManager.Length()
 			// Using HistoryManager - just append first line
 			v.historyManager.AppendLine(make([]Cell, 0, v.width))
+			lenAfter := v.historyManager.Length()
+			fmt.Fprintf(os.Stderr, "[CLEARSCREEN DEBUG] histLen before=%d, after=%d\n", lenBefore, lenAfter)
 		} else {
 			// Legacy circular buffer
 			v.historyBuffer = make([][]Cell, v.maxHistorySize)
