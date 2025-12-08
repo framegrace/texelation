@@ -79,7 +79,7 @@
 - Removed non-existent `Color.Dim()` method, used `tcell.ColorGray` instead
 
 **Files Modified:**
-- `docs/TEXELUI_PLAN.md` - Updated status and checklist
+- `docs/plans/TEXELUI_PLAN.md` - Updated status and checklist
 
 **Files Created:**
 - `texelui/widgets/label.go`
@@ -270,6 +270,6 @@ vbox.Apply(container, []Widget{
 ## References
 
 - Architecture Review: `docs/TEXELUI_ARCHITECTURE_REVIEW.md`
-- Plan Document: `docs/TEXELUI_PLAN.md`
+- Plan Document: `docs/plans/TEXELUI_PLAN.md`
 - Session Notes Part 1: `docs/SESSION_2025-11-18.md`
 - Demo Application: `texelui/examples/widget_demo.go`

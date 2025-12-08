@@ -4,7 +4,7 @@
 
 ### What's Done
 
-1. **App Registry Package** (`texel/registry/`)
+1. **App Registry Package** (`registry/`)
    - Manifest parsing and validation
    - Directory scanning for apps
    - Thread-safe app storage
@@ -52,125 +52,13 @@ killall -HUP texel-server
 # htop now appears in launcher!
 ```
 
-## 🚧 Next Steps
+## Current Wiring
 
-### Phase 2: Wire Registry to Desktop
-
-1. **Add Registry to Desktop**
-   ```go
-   type DesktopEngine struct {
-       // ...
-       registry *registry.Registry
-   }
-   ```
-
-2. **Register Built-in Apps**
-   ```go
-   registry.RegisterBuiltIn("texelterm", func() App {
-       return texelterm.New("term", "/bin/bash")
-   })
-
-   registry.RegisterBuiltIn("welcome", func() App {
-       return welcome.NewWelcomeApp()
-   })
-   ```
-
-3. **Register TexelTerm Wrapper Factory**
-   ```go
-   registry.RegisterWrapperFactory("texelterm", func(m *Manifest) App {
-       return texelterm.New(m.DisplayName, m.Command)
-   })
-   ```
-
-4. **Scan Apps on Startup**
-   ```go
-   configDir := os.UserConfigDir()
-   appsDir := filepath.Join(configDir, "texelation", "apps")
-   registry.Scan(appsDir)
-   ```
-
-5. **Reload on SIGHUP**
-   - Rescan apps directory
-   - Like theme reload
-
-### Phase 3: Control Bus Integration
-
-Apps communicate via the control bus pattern (consistent with the rest of Texelation):
-
-```go
-// In texel/app.go
-type ControlBusProvider interface {
-    RegisterControl(id, description string, handler func(payload interface{}) error) error
-}
-
-// Apps signal events through the control bus
-func (l *Launcher) HandleKey(ev *tcell.EventKey) {
-    if ev.Key() == tcell.KeyEnter {
-        // Trigger control bus event instead of calling replacer
-        l.controlBus.Trigger("launcher.select-app", selectedAppName)
-    }
-}
-
-// Desktop registers handlers on the app's control bus
-if provider, ok := app.(ControlBusProvider); ok {
-    provider.RegisterControl("launcher.select-app", "Launch selected app", func(payload interface{}) error {
-        appName := payload.(string)
-        // Handle app launch in active pane
-        return nil
-    })
-}
-```
-
-### Phase 4: Launcher App (TexelUI)
-
-Create `apps/launcher/` using TexelUI:
-
-```go
-type Launcher struct {
-    registry   *registry.Registry
-    controlBus cards.ControlBus
-    // ... UI state ...
-}
-
-func (l *Launcher) AttachControlBus(bus cards.ControlBus) {
-    l.controlBus = bus
-}
-
-func (l *Launcher) HandleKey(ev *tcell.EventKey) {
-    if ev.Key() == tcell.KeyEnter {
-        selected := l.selectedApp
-
-        // Signal app selection via control bus
-        l.controlBus.Trigger("launcher.select-app", selected)
-    }
-}
-```
-
-### Phase 5: Launcher Invocation (Hybrid Mode)
-
-**Default Shell**: Terminal
-```go
-shellFactory := func() texel.App {
-    return texelterm.New("terminal", "/bin/bash")
-}
-```
-
-**Ctrl+A+L**: Show launcher in current pane
-```go
-// In desktop key handler
-if key == tcell.KeyRune && rune == 'l' {
-    // Replace current pane's app with launcher
-    currentPane.ReplaceWithApp("launcher", nil)
-}
-```
-
-**Launcher Features**:
-- Grid/list view of apps
-- Category filtering
-- Search/fuzzy find
-- Icons and descriptions
-- **Enter**: Replace with app
-- **Ctrl+Enter**: Spawn in new split (future)
+- **Desktop integration**: `texel/desktop_engine_core.go` constructs a `registry.Registry`, registers the default texelterm factory, and scans `~/.config/texelation/apps` on startup and on `ForceRefresh`/SIGHUP.
+- **Server built-ins**: `cmd/texel-server/main.go` registers the texelterm wrapper factory plus built-in `launcher`, `help`, and `flicker` apps. Snapshot restore factories are registered for texelterm.
+- **Control bus**: `texel/pane.go` and `texel/desktop_engine_core.go` attach control handlers when an app exposes `ControlBusProvider`. Launcher uses `launcher.select-app` / `launcher.close` controls to replace the active pane or close itself.
+- **Launcher app**: Lives in `apps/launcher/`, built with TexelUI widgets and covered by tests. Selecting an app fires control bus triggers; Escape closes via `launcher.close`.
+- **Remaining gaps**: External app type is still a stub; manifest `config` is parsed but not passed through factories (see TODO in `registry.CreateApp`).
 
 ## 🔮 Floating Panels (For Launcher Overlay)
 
@@ -222,7 +110,7 @@ type FloatingPanel struct {
 
 #### Phase 2: Wire Registry to Desktop
 - ✅ Registry integrated into DesktopEngine
-- ✅ Built-in app registration (texelterm, welcome)
+- ✅ Built-in app registration (texelterm, launcher, help, flicker)
 - ✅ Wrapper factory for texelterm
 - ✅ App scanning from ~/.config/texelation/apps/
 - ✅ SIGHUP reload support for apps
@@ -259,4 +147,6 @@ type FloatingPanel struct {
 - Apps signal events through their control bus, desktop listens and responds.
 - No special-case interfaces or bidirectional dependencies.
 
-**Next Step**: Enjoy the new launcher experience with clean, consistent architecture!
+External app launching and passing manifest `config` into factories remain open items.
+
+**Next Step**: Wire manifest `config` through `registry.CreateApp` and implement the external app type.
