@@ -47,11 +47,11 @@ and heavily themeable.
    ```
 2. Start the server (creates a default session if no snapshot exists):
    ```bash
-   ./bin/texel-server --socket /tmp/texelation.sock
+   ./bin/texel-server
    ```
 3. In another terminal, start the client against the same socket:
    ```bash
-   ./bin/texel-client --socket /tmp/texelation.sock
+   ./bin/texel-client
    ```
 4. Enter control mode with `Ctrl+A`, then `|` / `-` to split, `l` for the launcher, `h` for help, `x` to close a pane, `z` to zoom.
 
