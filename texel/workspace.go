@@ -1062,9 +1062,7 @@ func (w *Workspace) SwapActivePane(d Direction) {
 	}
 }
 
-// Update the draw method to also log when pane animations are detected
 func (w *Workspace) Close() {
-
 	w.finishMouseResize()
 
 	// Close all panes

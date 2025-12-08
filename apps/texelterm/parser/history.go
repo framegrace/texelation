@@ -326,7 +326,9 @@ func (hm *HistoryManager) flushPendingLinesLocked() error {
 	return nil
 }
 
-// flushLoop periodically flushes pending lines to disk.
+// flushLoop periodically flushes the entire buffer to disk.
+// We write the whole buffer because terminal content is updated via SetLine()
+// which modifies in-place without queuing, so we need to capture all changes.
 func (hm *HistoryManager) flushLoop() {
 	ticker := time.NewTicker(hm.config.FlushInterval)
 	defer ticker.Stop()
@@ -335,12 +337,22 @@ func (hm *HistoryManager) flushLoop() {
 		select {
 		case <-ticker.C:
 			hm.mu.Lock()
-			if len(hm.pendingLines) > 0 {
-				if err := hm.flushPendingLinesLocked(); err != nil {
+			if hm.length > 0 && hm.enabled && hm.store != nil {
+				// Extract all lines from circular buffer
+				allLines := make([][]Cell, hm.length)
+				for i := 0; i < hm.length; i++ {
+					physicalIndex := (hm.head + i) % hm.maxSize
+					allLines[i] = hm.buffer[physicalIndex]
+				}
+				hm.mu.Unlock()
+
+				// Rewrite the entire history file
+				if err := hm.rewriteHistoryFile(allLines); err != nil {
 					fmt.Fprintf(os.Stderr, "History flush error: %v\n", err)
 				}
+			} else {
+				hm.mu.Unlock()
 			}
-			hm.mu.Unlock()
 
 		case <-hm.stopFlush:
 			return
@@ -415,7 +427,6 @@ func (hm *HistoryManager) rewriteHistoryFile(lines [][]Cell) error {
 		return fmt.Errorf("failed to close rewritten store: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "[REWRITE DEBUG] Rewrote history file with %d lines\n", len(lines))
 	return nil
 }
 
@@ -455,8 +466,6 @@ func trimTrailingEmptyLines(lines [][]Cell) [][]Cell {
 
 	trimmed := lastNonEmpty + 1
 	if trimmed < len(lines) {
-		fmt.Fprintf(os.Stderr, "[TRIM DEBUG] Trimmed %d trailing empty lines (was %d, now %d)\n",
-			len(lines)-trimmed, len(lines), trimmed)
 		return lines[:trimmed]
 	}
 	return lines
@@ -467,11 +476,6 @@ func trimTrailingEmptyLines(lines [][]Cell) [][]Cell {
 func (hm *HistoryManager) ReplaceBuffer(newLines [][]Cell) {
 	hm.mu.Lock()
 	defer hm.mu.Unlock()
-
-	// DEBUG: Log buffer replacement
-	oldLen := hm.length
-	newLen := len(newLines)
-	fmt.Fprintf(os.Stderr, "[REPLACE DEBUG] ReplaceBuffer called: oldLen=%d, newLen=%d\n", oldLen, newLen)
 
 	hm.head = 0
 	hm.length = len(newLines)
