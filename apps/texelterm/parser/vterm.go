@@ -72,6 +72,8 @@ type VTerm struct {
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode                 bool
 	OnBracketedPasteModeChange         func(bool)
+	// Display buffer for scrollback reflow (new architecture)
+	displayBuf                         *displayBufferState
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -123,6 +125,11 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 func (v *VTerm) Grid() [][]Cell {
 	if v.inAltScreen {
 		return v.altBuffer
+	}
+
+	// Use new display buffer path if enabled
+	if v.IsDisplayBufferEnabled() {
+		return v.displayBufferGrid()
 	}
 	grid := make([][]Cell, v.height)
 	topHistoryLine := v.getTopHistoryLine()
@@ -197,6 +204,11 @@ func (v *VTerm) placeChar(r rune) {
 			v.MarkDirty(v.cursorY)
 		}
 	} else {
+		// Also write to display buffer if enabled
+		if v.IsDisplayBufferEnabled() {
+			v.displayBufferPlaceChar(r)
+		}
+
 		if v.viewOffset > 0 { // If scrolled up, jump to the bottom on new input
 			v.viewOffset = 0
 			v.MarkAllDirty()
@@ -1130,6 +1142,10 @@ func (v *VTerm) Resize(width, height int) {
 			}
 		}
 		v.altBuffer = newAltBuffer
+		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
+	} else if v.IsDisplayBufferEnabled() {
+		// Use display buffer reflow - this is the new clean path
+		v.displayBufferResize(width, height)
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	} else {
 		// Handle height-only changes (no width change, no reflow needed)

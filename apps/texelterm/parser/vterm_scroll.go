@@ -29,6 +29,11 @@ func (v *VTerm) LineFeed() {
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
 		}
 	} else {
+		// Commit current logical line to display buffer if enabled
+		if v.IsDisplayBufferEnabled() {
+			v.displayBufferLineFeed()
+		}
+
 		// Main screen: check if we're at bottom margin
 		if v.cursorY == v.marginBottom {
 			if !outsideMargins {
@@ -287,6 +292,14 @@ func (v *VTerm) Scroll(delta int) {
 	if v.inAltScreen {
 		return
 	}
+
+	// Use display buffer scroll if enabled
+	if v.IsDisplayBufferEnabled() {
+		v.displayBufferScroll(delta)
+		v.MarkAllDirty()
+		return
+	}
+
 	oldOffset := v.viewOffset
 	v.viewOffset -= delta
 	if v.viewOffset < 0 {
