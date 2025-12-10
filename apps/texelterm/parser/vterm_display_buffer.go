@@ -237,3 +237,64 @@ func (v *VTerm) DisplayBufferGetHistory() *ScrollbackHistory {
 	}
 	return v.displayBuf.history
 }
+
+// displayBufferEraseToEndOfLine truncates the current logical line at the current position.
+// Used for EL 0 (Erase from cursor to end of line).
+func (v *VTerm) displayBufferEraseToEndOfLine() {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+
+	currentLine := v.displayBuf.display.CurrentLine()
+	if currentLine != nil {
+		currentLine.Truncate(v.displayBuf.currentLogicalX)
+	}
+}
+
+// displayBufferEraseFromStartOfLine clears the current logical line from start to cursor.
+// Used for EL 1 (Erase from start of line to cursor).
+func (v *VTerm) displayBufferEraseFromStartOfLine() {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+
+	currentLine := v.displayBuf.display.CurrentLine()
+	if currentLine != nil {
+		// Fill from 0 to currentLogicalX with spaces
+		for i := 0; i <= v.displayBuf.currentLogicalX && i < currentLine.Len(); i++ {
+			currentLine.Cells[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		}
+	}
+}
+
+// displayBufferEraseLine clears the entire current logical line.
+// Used for EL 2 (Erase entire line).
+func (v *VTerm) displayBufferEraseLine() {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+
+	currentLine := v.displayBuf.display.CurrentLine()
+	if currentLine != nil {
+		currentLine.Clear()
+	}
+	v.displayBuf.currentLogicalX = 0
+}
+
+// displayBufferEraseCharacters replaces n characters at current position with spaces.
+// Used for ECH (Erase Character).
+func (v *VTerm) displayBufferEraseCharacters(n int) {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+
+	currentLine := v.displayBuf.display.CurrentLine()
+	if currentLine != nil {
+		for i := 0; i < n; i++ {
+			pos := v.displayBuf.currentLogicalX + i
+			if pos < currentLine.Len() {
+				currentLine.Cells[pos] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			}
+		}
+	}
+}

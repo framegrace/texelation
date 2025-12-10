@@ -327,3 +327,67 @@ func TestVTerm_DisplayBufferReflowAfterLoad(t *testing.T) {
 		t.Errorf("expected width 10 after resize, got %d", len(grid[0]))
 	}
 }
+
+func TestVTerm_DisplayBufferEraseToEndOfLine(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Write "Hello World"
+	for _, r := range "Hello World" {
+		v.placeChar(r)
+	}
+
+	// Move cursor back to position 5 (after "Hello")
+	v.displayBuf.currentLogicalX = 5
+	v.cursorX = 5
+
+	// Erase from cursor to end (EL 0)
+	v.ClearLine(0)
+
+	line := v.displayBufferGetCurrentLine()
+	got := cellsToString(line.Cells)
+	if got != "Hello" {
+		t.Errorf("expected 'Hello' after erase to end, got '%s'", got)
+	}
+}
+
+func TestVTerm_DisplayBufferEraseEntireLine(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Write "Hello World"
+	for _, r := range "Hello World" {
+		v.placeChar(r)
+	}
+
+	// Erase entire line (EL 2)
+	v.ClearLine(2)
+
+	line := v.displayBufferGetCurrentLine()
+	if line.Len() != 0 {
+		t.Errorf("expected empty line after erase entire, got len %d", line.Len())
+	}
+}
+
+func TestVTerm_DisplayBufferEraseCharacters(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Write "Hello World"
+	for _, r := range "Hello World" {
+		v.placeChar(r)
+	}
+
+	// Move cursor to position 0
+	v.displayBuf.currentLogicalX = 0
+	v.cursorX = 0
+
+	// Erase 5 characters (ECH 5)
+	v.EraseCharacters(5)
+
+	line := v.displayBufferGetCurrentLine()
+	got := cellsToString(line.Cells)
+	if got != "      World" {
+		t.Errorf("expected '      World' after erase chars, got '%s'", got)
+	}
+}
