@@ -22,6 +22,11 @@ func (v *VTerm) CarriageReturn() {
 
 	v.wrapNext = false // Clear wrapNext when returning to start of line
 
+	// Update display buffer logical X
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferCarriageReturn()
+	}
+
 	// CR behavior with left/right margins:
 	// - If inside margins: go to left margin
 	// - If left of left margin: go to column 0 (unless in origin mode, then go to left margin)
@@ -55,6 +60,10 @@ func (v *VTerm) Backspace() {
 	}
 
 	if v.cursorX > minX {
+		// Update display buffer logical X
+		if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+			v.displayBufferBackspace()
+		}
 		v.SetCursorPos(v.cursorY, v.cursorX-1)
 	}
 }

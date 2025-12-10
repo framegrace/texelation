@@ -209,3 +209,121 @@ func TestVTerm_DisplayBufferCarriageReturn(t *testing.T) {
 		t.Errorf("expected 'XXllo' after CR overwrite, got '%s'", got)
 	}
 }
+
+func TestVTerm_DisplayBufferLoadHistory(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Create some logical lines to load
+	lines := []*LogicalLine{
+		NewLogicalLineFromCells(makeCells("History line 1")),
+		NewLogicalLineFromCells(makeCells("History line 2")),
+		NewLogicalLineFromCells(makeCells("History line 3")),
+	}
+
+	v.displayBufferLoadHistory(lines)
+
+	// History should have 3 lines
+	if v.displayBufferHistoryLen() != 3 {
+		t.Errorf("expected 3 lines in history, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Grid should show the loaded content
+	grid := v.Grid()
+	if grid == nil {
+		t.Fatal("Grid() returned nil")
+	}
+
+	// Should be at live edge
+	if !v.displayBufferAtLiveEdge() {
+		t.Error("should be at live edge after loading history")
+	}
+}
+
+func TestVTerm_DisplayBufferLoadFromPhysical(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Create physical lines with wrapping
+	line1 := makeCells("Hello")
+	line1[len(line1)-1].Wrapped = true
+
+	line2 := makeCells("World")
+	// Not wrapped - ends logical line
+
+	physical := [][]Cell{line1, line2}
+
+	v.displayBufferLoadFromPhysical(physical)
+
+	// Should have 1 logical line (wrapped physical lines joined)
+	if v.displayBufferHistoryLen() != 1 {
+		t.Errorf("expected 1 logical line, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Verify the content
+	history := v.DisplayBufferGetHistory()
+	if history == nil {
+		t.Fatal("history is nil")
+	}
+
+	line := history.Get(0)
+	got := cellsToString(line.Cells)
+	if got != "HelloWorld" {
+		t.Errorf("expected 'HelloWorld', got %q", got)
+	}
+}
+
+func TestVTerm_DisplayBufferBackspace(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Write "Hello"
+	for _, r := range "Hello" {
+		v.placeChar(r)
+	}
+
+	// Backspace twice
+	v.Backspace()
+	v.Backspace()
+
+	// Write "XY" - should produce "HelXY"
+	for _, r := range "XY" {
+		v.placeChar(r)
+	}
+
+	line := v.displayBufferGetCurrentLine()
+	got := cellsToString(line.Cells)
+	if got != "HelXY" {
+		t.Errorf("expected 'HelXY' after backspace+type, got '%s'", got)
+	}
+}
+
+func TestVTerm_DisplayBufferReflowAfterLoad(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Load a long logical line
+	longText := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	lines := []*LogicalLine{
+		NewLogicalLineFromCells(makeCells(longText)),
+	}
+	v.displayBufferLoadHistory(lines)
+
+	// At width 20, this is 2 physical lines (20 + 6)
+	// Resize to width 10 - should reflow to 3 physical lines (10 + 10 + 6)
+	v.Resize(10, 5)
+
+	// History should still have 1 logical line
+	if v.displayBufferHistoryLen() != 1 {
+		t.Errorf("expected 1 logical line after resize, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Grid should show reflowed content
+	grid := v.Grid()
+	if grid == nil {
+		t.Fatal("Grid() returned nil after resize")
+	}
+	if len(grid[0]) != 10 {
+		t.Errorf("expected width 10 after resize, got %d", len(grid[0]))
+	}
+}

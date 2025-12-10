@@ -198,3 +198,42 @@ func (v *VTerm) displayBufferHistoryLen() int {
 	}
 	return v.displayBuf.history.Len()
 }
+
+// displayBufferLoadHistory loads logical lines into the display buffer history.
+// This is used when restoring from persisted history.
+func (v *VTerm) displayBufferLoadHistory(lines []*LogicalLine) {
+	if v.displayBuf == nil {
+		v.initDisplayBuffer()
+	}
+
+	for _, line := range lines {
+		v.displayBuf.history.Append(line)
+	}
+
+	// Rebuild the display buffer with loaded history
+	v.displayBuf.display = NewDisplayBuffer(v.displayBuf.history, DisplayBufferConfig{
+		Width:       v.width,
+		Height:      v.height,
+		MarginAbove: 200,
+		MarginBelow: 50,
+	})
+
+	// Scroll to live edge
+	v.displayBuf.display.ScrollToBottom()
+}
+
+// displayBufferLoadFromPhysical loads physical lines (old format) into the display buffer.
+// Converts them to logical lines using the Wrapped flag.
+func (v *VTerm) displayBufferLoadFromPhysical(physical [][]Cell) {
+	logical := ConvertPhysicalToLogical(physical)
+	v.displayBufferLoadHistory(logical)
+}
+
+// DisplayBufferGetHistory returns the ScrollbackHistory for persistence.
+// Returns nil if display buffer is not enabled.
+func (v *VTerm) DisplayBufferGetHistory() *ScrollbackHistory {
+	if v.displayBuf == nil {
+		return nil
+	}
+	return v.displayBuf.history
+}
