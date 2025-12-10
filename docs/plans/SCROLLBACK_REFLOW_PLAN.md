@@ -584,6 +584,175 @@ func migrateOldHistory(oldLines [][]Cell) []LogicalLine {
 3. **Current line handling**: How to sync in-progress line between history and display?
 4. **Cursor tracking**: Need `logicalCursorX` separate from display `cursorX`?
 
+## Tricky Aspects to Consider
+
+### 1. The "Current Line" Problem
+
+When user is typing, we have an incomplete logical line. This needs to be:
+- In history: `history.current` (being built, not yet committed)
+- In display: Visible at cursor position
+
+**Challenge**: The display buffer shows wrapped physical lines, but we're still adding to the logical line. We need to sync them.
+
+**Proposed solution**: The display buffer's bottom rows (where cursor is) are special - they're a "live zone" that mirrors `history.current` wrapped to current width. On each character:
+
+```go
+func (v *VTerm) placeChar(r rune) {
+    // Add to logical line
+    v.history.SetCell(v.logicalCursorX, cell)
+    v.logicalCursorX++
+
+    // Update live zone in display buffer
+    // The live zone is the wrapped representation of history.current
+    v.display.UpdateLiveZone(v.history.CurrentLine(), v.width)
+
+    // Cursor advances in display coordinates
+    v.cursorX++
+    if v.cursorX >= v.width {
+        v.cursorX = 0
+        v.cursorY++
+        // Live zone may have grown by one row
+    }
+}
+```
+
+### 2. Scroll Position When at Live Edge
+
+When `viewOffset == 0`, user sees the live output. The display buffer structure:
+
+```
+┌────────────────────────┐
+│ Off-screen above       │  ← Old history, loaded on scroll-up
+├────────────────────────┤
+│ Viewport row 0         │  ← Recent committed history
+│ ...                    │
+│ Viewport row N-2       │  ← Recent committed history
+│ Viewport row N-1       │  ← Live zone (current line wrapped)
+├────────────────────────┤
+│ Off-screen below       │  ← Empty when at live edge
+└────────────────────────┘
+```
+
+When user scrolls up, we're viewing history, cursor is "detached". When user presses key or output arrives, snap back to live edge.
+
+### 3. Carriage Return (Overwrite) Handling
+
+CR moves cursor to column 0 without advancing to next line. This means the program can overwrite content on the current logical line.
+
+```
+Program writes: "Loading...\rDone!     "
+Logical line:   "Done!     " (overwrote "Loading...")
+```
+
+**Current behavior**: `SetCell()` overwrites in the logical line. This works fine.
+
+**Display sync**: The live zone needs to re-render the entire current logical line wrapped, not just the changed cell.
+
+### 4. Backspace and Editing
+
+When user types backspace in shell:
+- Shell sends `\b \b` (back, space, back) to erase visually
+- This modifies the current logical line
+
+Same solution: Live zone re-renders from `history.current`.
+
+### 5. Terminal Scroll Regions
+
+Programs can define scroll regions (VT100 DECSTBM). When content scrolls within a region:
+- Only that region moves
+- Rest of screen unchanged
+
+**Challenge**: Our model assumes scrolling = moving content into history. With scroll regions, content may scroll without becoming history.
+
+**Proposed solution**:
+- Scroll within region = pure display buffer operation (shift rows within region)
+- Only content scrolling off the TOP of the FULL screen goes to history
+- This matches current behavior, actually
+
+### 6. Bottom-Up Loading on Initial Display
+
+When terminal first opens with existing history:
+1. Load N logical lines from end of history
+2. Wrap each to current width
+3. Fill display buffer from bottom up
+4. Position viewport at live edge
+
+```go
+func (db *DisplayBuffer) LoadFromEnd(history *ScrollbackHistory, width, height int) {
+    db.rows = nil
+
+    // Start from most recent logical line
+    for i := history.Length() - 1; i >= 0 && len(db.rows) < height*2; i-- {
+        line := history.Line(i)
+        wrapped := line.WrapToWidth(width)
+        db.rows = append(wrapped, db.rows...)  // Prepend
+    }
+
+    // Position viewport at bottom (live edge)
+    if len(db.rows) > height {
+        db.viewportTop = len(db.rows) - height
+    } else {
+        db.viewportTop = 0
+    }
+}
+```
+
+### 7. Display Buffer Anchor Tracking
+
+We need to know which logical line corresponds to which display row. Options:
+
+**Option A: Track per-row**
+```go
+type DisplayRow struct {
+    Cells        []Cell
+    LogicalIndex int  // Which logical line this is part of
+    WrapIndex    int  // Which wrap segment (0 = first)
+}
+```
+Pro: Exact mapping always known
+Con: More memory, more bookkeeping
+
+**Option B: Track anchor only**
+```go
+type DisplayBuffer struct {
+    rows          [][]Cell
+    anchorLogical int  // rows[anchorRow] is first wrap of history[anchorLogical]
+    anchorRow     int
+}
+```
+Pro: Simpler
+Con: Must walk to find non-anchor line mappings
+
+**Recommendation**: Start with Option B (anchor only). If we need per-row tracking, add it later.
+
+### 8. Memory Management
+
+With 100,000 logical lines in history and a 50-row viewport, the display buffer should be small. But we need policies:
+
+- **Max off-screen rows**: Cap at e.g., 200 above + 200 below
+- **Trim on scroll**: When scrolling far, trim distant off-screen content
+- **Lazy loading**: Only load history when scrolling toward it
+
+```go
+const (
+    maxOffscreenAbove = 200
+    maxOffscreenBelow = 200
+)
+
+func (db *DisplayBuffer) trimAbove(max int) {
+    excess := db.RowsAbove() - max
+    if excess > 0 {
+        db.rows = db.rows[excess:]
+        db.viewportTop -= excess
+        db.anchorRow -= excess
+        // If anchor row went negative, we trimmed past it - need to recalculate
+        if db.anchorRow < 0 {
+            db.recalculateAnchor()
+        }
+    }
+}
+```
+
 ## References
 
 - Current implementation: `apps/texelterm/parser/vterm.go`
