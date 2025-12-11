@@ -28,6 +28,20 @@ func TestVTerm_DisplayBufferInit(t *testing.T) {
 	}
 }
 
+func TestVTerm_WithDisplayBufferOption(t *testing.T) {
+	// Test enabling via option
+	v := NewVTerm(80, 24, WithDisplayBuffer(true))
+	if !v.IsDisplayBufferEnabled() {
+		t.Error("display buffer should be enabled when WithDisplayBuffer(true) is passed")
+	}
+
+	// Test disabling via option (default behavior)
+	v2 := NewVTerm(80, 24, WithDisplayBuffer(false))
+	if v2.IsDisplayBufferEnabled() {
+		t.Error("display buffer should be disabled when WithDisplayBuffer(false) is passed")
+	}
+}
+
 func TestVTerm_DisplayBufferPlaceChar(t *testing.T) {
 	v := NewVTerm(10, 5)
 	v.EnableDisplayBuffer()

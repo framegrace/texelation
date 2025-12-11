@@ -1,8 +1,9 @@
 # Scrollback Reflow Plan
 
-## Status: Approved - Ready for Implementation
+## Status: Phase 1-4 Complete - Ready for Testing
 **Created**: 2025-12-11
 **Approved**: 2025-12-11
+**Updated**: 2025-12-11
 **Branch**: `feature/fix-scrollback-reflow`
 
 ## Problem Statement
@@ -500,39 +501,77 @@ The `Wrapped` flag is no longer stored - wrapping is determined at render time.
 
 ## Implementation Phases
 
-### Phase 1: Data Structures
-- [ ] Implement `LogicalLine` with wrapping methods
-- [ ] Implement `ScrollbackHistory` with append/get operations
-- [ ] Implement `DisplayBuffer` with viewport management
-- [ ] Unit tests for each structure
+### Phase 1: Data Structures ✅ Complete
+- [x] Implement `LogicalLine` with wrapping methods - `parser/logical_line.go`
+- [x] Implement `ScrollbackHistory` with append/get operations - `parser/scrollback_history.go`
+- [x] Implement `DisplayBuffer` with viewport management - `parser/display_buffer.go`
+- [x] Unit tests for each structure - comprehensive test suites
 
-### Phase 2: Display Buffer Operations
-- [ ] Implement `loadAbove()` / `loadBelow()`
-- [ ] Implement `ScrollUp()` / `ScrollDown()`
-- [ ] Implement `Resize()`
-- [ ] Implement trimming logic
-- [ ] Unit tests for scroll and resize
+### Phase 2: Display Buffer Operations ✅ Complete
+- [x] Implement `loadAbove()` / `loadBelow()` - `display_buffer.go`
+- [x] Implement `ScrollUp()` / `ScrollDown()` - `display_buffer.go`
+- [x] Implement `Resize()` - `display_buffer.go`
+- [x] Implement trimming logic - `display_buffer.go`
+- [x] Unit tests for scroll and resize
 
-### Phase 3: VTerm Integration
-- [ ] Add history and display buffer to VTerm
-- [ ] Modify `placeChar()` for dual writes
-- [ ] Modify `lineFeed()` for history commits
-- [ ] Modify `Resize()` to rebuild display
-- [ ] Modify `Grid()` to return display viewport
-- [ ] Update scroll handling
+### Phase 3: VTerm Integration ✅ Complete
+- [x] Add history and display buffer to VTerm - `displayBuf *displayBufferState` in vterm.go
+- [x] Modify `placeChar()` for dual writes - `vterm_display_buffer.go`
+- [x] Modify `lineFeed()` for history commits - `vterm_scroll.go`
+- [x] Modify `Resize()` to rebuild display - `vterm.go`
+- [x] Modify `Grid()` to return display viewport - `vterm.go`
+- [x] Update scroll handling - `vterm_scroll.go`
+- [x] Wire CarriageReturn and Backspace - `vterm_navigation.go`
+- [x] Wire erase operations (ClearLine, EraseCharacters) - `vterm_erase.go`, `vterm_display_buffer.go`
 
-### Phase 4: Persistence
-- [ ] New storage format for logical lines
-- [ ] Migration from old format
-- [ ] Update `HistoryManager` / `HistoryStore`
-- [ ] Test persistence round-trip
+### Phase 4: Persistence & Config ✅ Complete
+- [x] New storage format for logical lines - `parser/logical_line_persistence.go` (TXLHIST1 format)
+- [x] Migration from old format - `ConvertPhysicalToLogical()` function
+- [x] `displayBufferLoadHistory()` / `displayBufferLoadFromPhysical()` methods
+- [x] Config option to enable display buffer - `term.go` reads `display_buffer_enabled`
+- [x] Unit tests for persistence
 
-### Phase 5: Edge Cases & Polish
-- [ ] Alt screen handling (no scrollback, unchanged)
-- [ ] Scroll regions/margins
-- [ ] Cursor positioning across resize
+### Phase 5: Edge Cases & Polish 🔄 In Progress
+- [x] Alt screen handling (no scrollback, unchanged) - Display buffer only operates on main screen
+- [ ] Scroll regions/margins - Need to verify DECSTBM behavior
+- [ ] Cursor positioning across resize - Need end-to-end testing
 - [ ] Performance testing with large histories
 - [ ] Memory usage optimization
+- [ ] End-to-end testing with real terminal
+
+## Files Created/Modified
+
+### New Files
+- `apps/texelterm/parser/logical_line.go` - LogicalLine data structure
+- `apps/texelterm/parser/logical_line_test.go` - Unit tests
+- `apps/texelterm/parser/scrollback_history.go` - ScrollbackHistory storage
+- `apps/texelterm/parser/scrollback_history_test.go` - Unit tests
+- `apps/texelterm/parser/display_buffer.go` - DisplayBuffer viewport management
+- `apps/texelterm/parser/display_buffer_test.go` - Unit tests
+- `apps/texelterm/parser/vterm_display_buffer.go` - VTerm integration layer
+- `apps/texelterm/parser/vterm_display_buffer_test.go` - Integration tests
+- `apps/texelterm/parser/logical_line_persistence.go` - New TXLHIST1 format
+
+### Modified Files
+- `apps/texelterm/parser/vterm.go` - Added displayBuf, WithDisplayBuffer option, Grid() path
+- `apps/texelterm/parser/vterm_scroll.go` - LineFeed commits to display buffer
+- `apps/texelterm/parser/vterm_navigation.go` - CR/Backspace sync logical X
+- `apps/texelterm/parser/vterm_erase.go` - Erase operations update display buffer
+- `apps/texelterm/term.go` - Read `display_buffer_enabled` config option
+
+## How to Enable
+
+Add to your `~/.config/texelation/theme.json`:
+
+```json
+{
+  "texelterm": {
+    "display_buffer_enabled": true
+  }
+}
+```
+
+The feature is disabled by default until testing is complete.
 
 ## Design Decisions
 
