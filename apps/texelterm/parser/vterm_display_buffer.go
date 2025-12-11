@@ -148,6 +148,25 @@ func (v *VTerm) displayBufferAtLiveEdge() bool {
 	return v.displayBuf.display.AtLiveEdge()
 }
 
+// AtLiveEdge returns whether the viewport is at the live edge (bottom of output).
+// When display buffer is disabled, checks the legacy viewOffset.
+func (v *VTerm) AtLiveEdge() bool {
+	if v.IsDisplayBufferEnabled() {
+		return v.displayBufferAtLiveEdge()
+	}
+	return v.viewOffset == 0
+}
+
+// ScrollToLiveEdge scrolls the viewport to the live edge (bottom of output).
+func (v *VTerm) ScrollToLiveEdge() {
+	if v.IsDisplayBufferEnabled() {
+		v.displayBufferScrollToBottom()
+	} else {
+		v.viewOffset = 0
+	}
+	v.MarkAllDirty()
+}
+
 // displayBufferSetCursorFromPhysical syncs the logical cursor position
 // based on the physical cursor position. Used when cursor moves via escape sequences.
 func (v *VTerm) displayBufferSetCursorFromPhysical() {

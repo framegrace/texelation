@@ -311,3 +311,101 @@ func TestDisplayBuffer_CanScroll(t *testing.T) {
 		t.Error("should be able to scroll down after scrolling up")
 	}
 }
+
+func TestDisplayBuffer_ResizePreservesScrollPosition(t *testing.T) {
+	h := NewScrollbackHistory(1000)
+	db := NewDisplayBuffer(h, DisplayBufferConfig{
+		Width:       20,
+		Height:      5,
+		MarginAbove: 50,
+		MarginBelow: 20,
+	})
+
+	// Add 30 lines of content
+	for i := 0; i < 30; i++ {
+		for j := 0; j < 20; j++ {
+			db.SetCell(j, Cell{Rune: rune('A' + (i % 26))})
+		}
+		db.CommitCurrentLine()
+	}
+
+	// Should be at live edge
+	if !db.AtLiveEdge() {
+		t.Error("should be at live edge initially")
+	}
+
+	// Scroll up to somewhere in the middle (say, 15 lines up)
+	db.ScrollUp(15)
+	if db.AtLiveEdge() {
+		t.Error("should not be at live edge after scrolling up")
+	}
+
+	// Remember which logical line is at viewport top
+	viewport := db.GetViewport()
+	anchorLogicalIdx := viewport[0].LogicalIndex
+	anchorContent := viewport[0].Cells
+	if len(anchorContent) == 0 {
+		t.Fatal("anchor line should have content")
+	}
+	anchorChar := anchorContent[0].Rune
+
+	// Resize to a different width
+	db.Resize(15, 5)
+
+	// Should NOT jump to live edge
+	if db.AtLiveEdge() {
+		t.Error("resize should preserve scroll position, not jump to live edge")
+	}
+
+	// Check that the same logical line is at or near the viewport top
+	newViewport := db.GetViewport()
+	found := false
+	for i := 0; i < 3; i++ { // Allow some tolerance due to wrap changes
+		if i < len(newViewport) && newViewport[i].LogicalIndex == anchorLogicalIdx {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected logical line %d to still be visible near viewport top after resize", anchorLogicalIdx)
+	}
+
+	// The content should still be the same letter pattern
+	foundChar := false
+	for _, line := range newViewport {
+		if len(line.Cells) > 0 && line.Cells[0].Rune == anchorChar {
+			foundChar = true
+			break
+		}
+	}
+	if !foundChar {
+		t.Errorf("expected to find content starting with '%c' in viewport after resize", anchorChar)
+	}
+}
+
+func TestDisplayBuffer_ResizeAtLiveEdgeStaysAtLiveEdge(t *testing.T) {
+	h := NewScrollbackHistory(1000)
+	db := NewDisplayBuffer(h, DisplayBufferConfig{
+		Width:  20,
+		Height: 5,
+	})
+
+	// Add some content
+	for i := 0; i < 10; i++ {
+		db.SetCell(0, Cell{Rune: rune('0' + i)})
+		db.CommitCurrentLine()
+	}
+
+	// Should be at live edge
+	if !db.AtLiveEdge() {
+		t.Error("should be at live edge")
+	}
+
+	// Resize
+	db.Resize(15, 5)
+
+	// Should still be at live edge
+	if !db.AtLiveEdge() {
+		t.Error("resize should keep us at live edge when we were at live edge")
+	}
+}

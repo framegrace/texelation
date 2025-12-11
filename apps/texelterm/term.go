@@ -292,7 +292,8 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 	}
 
 	cursorX, cursorY := a.vterm.Cursor()
-	cursorVisible := a.vterm.CursorVisible()
+	// Only show cursor if it's visible AND we're at the live edge (not scrolled into history)
+	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.GetDirtyLines()
 
 	renderLine := func(y int) {
@@ -452,6 +453,13 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 
 	if keyBytes != nil {
+		// Scroll to live edge when user types (so they can see what they're typing)
+		a.mu.Lock()
+		if a.vterm != nil && a.vterm.IsDisplayBufferEnabled() && !a.vterm.AtLiveEdge() {
+			a.vterm.ScrollToLiveEdge()
+		}
+		a.mu.Unlock()
+
 		a.pty.Write(keyBytes)
 	}
 }

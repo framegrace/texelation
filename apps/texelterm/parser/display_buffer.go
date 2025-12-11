@@ -331,30 +331,50 @@ func (db *DisplayBuffer) rewrap() {
 	// Remember where we were anchored
 	wasAtLiveEdge := db.atLiveEdge
 
+	// Remember anchor for scroll position preservation
+	var anchorLogicalIdx int = -1
+	var anchorWrapOffset int = 0
+
+	if !wasAtLiveEdge && len(db.lines) > 0 && db.viewportTop < len(db.lines) {
+		// Find which logical line is at the top of viewport
+		anchorLine := db.lines[db.viewportTop]
+		anchorLogicalIdx = anchorLine.LogicalIndex
+		anchorWrapOffset = anchorLine.Offset
+	}
+
 	// Rebuild from history
 	db.lines = make([]PhysicalLine, 0)
 
 	if db.history != nil && db.history.Len() > 0 {
 		// Load a window of history around what we need
-		// For simplicity, load enough to fill viewport + margins
 		linesNeeded := db.height + db.marginAbove + db.marginBelow
 
-		// Start from the end of history and work backwards
-		db.historyTopIndex = db.history.Len()
-		physicalLoaded := 0
+		if anchorLogicalIdx >= 0 {
+			// Load around the anchor point to preserve scroll position
+			// Start loading from before the anchor
+			startIdx := max(0, anchorLogicalIdx-db.marginAbove)
+			endIdx := min(db.history.Len(), anchorLogicalIdx+db.marginBelow+db.height)
 
-		// Walk backwards through logical lines until we have enough physical lines
-		for db.historyTopIndex > 0 && physicalLoaded < linesNeeded {
-			db.historyTopIndex--
-			line := db.history.Get(db.historyTopIndex)
-			if line != nil {
-				physical := line.WrapToWidth(db.width)
-				physicalLoaded += len(physical)
+			db.historyTopIndex = startIdx
+			db.lines = db.history.WrapToWidth(startIdx, endIdx, db.width)
+		} else {
+			// Start from the end of history and work backwards
+			db.historyTopIndex = db.history.Len()
+			physicalLoaded := 0
+
+			// Walk backwards through logical lines until we have enough physical lines
+			for db.historyTopIndex > 0 && physicalLoaded < linesNeeded {
+				db.historyTopIndex--
+				line := db.history.Get(db.historyTopIndex)
+				if line != nil {
+					physical := line.WrapToWidth(db.width)
+					physicalLoaded += len(physical)
+				}
 			}
-		}
 
-		// Now load those lines
-		db.lines = db.history.WrapToWidth(db.historyTopIndex, db.history.Len(), db.width)
+			// Now load those lines
+			db.lines = db.history.WrapToWidth(db.historyTopIndex, db.history.Len(), db.width)
+		}
 	}
 
 	// Rebuild current line
@@ -363,11 +383,51 @@ func (db *DisplayBuffer) rewrap() {
 	// Position viewport
 	if wasAtLiveEdge {
 		db.scrollToLiveEdge()
+	} else if anchorLogicalIdx >= 0 {
+		// Try to maintain scroll position based on anchor logical line
+		db.scrollToLogicalLine(anchorLogicalIdx, anchorWrapOffset)
 	} else {
-		// Try to maintain approximate scroll position
-		// For now, just go to live edge (can improve later)
 		db.scrollToLiveEdge()
 	}
+}
+
+// scrollToLogicalLine positions the viewport so the given logical line
+// (at the given wrap offset) is at the top of the viewport.
+func (db *DisplayBuffer) scrollToLogicalLine(logicalIdx, wrapOffset int) {
+	// Find the physical line that corresponds to this logical line
+	for i, line := range db.lines {
+		if line.LogicalIndex == logicalIdx {
+			// Found the start of this logical line
+			// Add wrap offset (clamped to available physical lines for this logical)
+			targetIdx := i + wrapOffset
+
+			// Count how many physical lines this logical line spans
+			physicalCount := 0
+			for j := i; j < len(db.lines) && db.lines[j].LogicalIndex == logicalIdx; j++ {
+				physicalCount++
+			}
+
+			// Clamp wrap offset
+			if wrapOffset >= physicalCount {
+				targetIdx = i + physicalCount - 1
+			}
+
+			// Set viewport
+			if targetIdx >= 0 && targetIdx < len(db.lines) {
+				db.viewportTop = targetIdx
+				db.atLiveEdge = false
+
+				// Load more above if needed
+				if db.viewportTop < db.marginAbove {
+					db.loadAbove(db.marginAbove - db.viewportTop)
+				}
+				return
+			}
+		}
+	}
+
+	// Logical line not found in buffer - fall back to live edge
+	db.scrollToLiveEdge()
 }
 
 // SetCell sets a cell in the current line at the given logical X position.
