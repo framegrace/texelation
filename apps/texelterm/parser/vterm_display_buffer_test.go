@@ -405,3 +405,108 @@ func TestVTerm_DisplayBufferEraseCharacters(t *testing.T) {
 		t.Errorf("expected '      World' after erase chars, got '%s'", got)
 	}
 }
+
+func TestVTerm_DisplayBufferResizeReflowContent(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Write a line that exactly fills 10 columns
+	for _, r := range "ABCDEFGHIJ" {
+		v.placeChar(r)
+	}
+	v.LineFeed()
+
+	// Write another line (don't LineFeed at end - keep it as current line)
+	for _, r := range "1234567890" {
+		v.placeChar(r)
+	}
+
+	// At width 10, we have 1 committed line + current line
+	if v.displayBufferHistoryLen() != 1 {
+		t.Fatalf("expected 1 committed line in history, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Resize to width 5 - each line should wrap to 2 physical lines
+	v.Resize(5, 5)
+
+	// Grid should now show wrapped content correctly
+	grid := v.Grid()
+	if grid == nil {
+		t.Fatal("Grid() returned nil after resize")
+	}
+
+	// Verify the grid is 5 columns wide
+	if len(grid[0]) != 5 {
+		t.Errorf("expected width 5, got %d", len(grid[0]))
+	}
+
+	// History should still have 1 committed line (unchanged)
+	if v.displayBufferHistoryLen() != 1 {
+		t.Errorf("expected 1 logical line after resize, got %d", v.displayBufferHistoryLen())
+	}
+}
+
+func TestVTerm_DisplayBufferResizeWiderUnwraps(t *testing.T) {
+	v := NewVTerm(5, 5)
+	v.EnableDisplayBuffer()
+
+	// Write content that wraps at width 5 (keep as current line, no LineFeed)
+	for _, r := range "ABCDEFGHIJ" { // 10 chars = 2 physical lines at width 5
+		v.placeChar(r)
+	}
+
+	// Current line is not committed yet, history is empty
+	if v.displayBufferHistoryLen() != 0 {
+		t.Errorf("expected 0 committed lines, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Now resize wider - should unwrap to single physical line
+	v.Resize(20, 5)
+
+	grid := v.Grid()
+	if grid == nil {
+		t.Fatal("Grid() returned nil after resize")
+	}
+
+	// Verify the grid is 20 columns wide
+	if len(grid[0]) != 20 {
+		t.Errorf("expected width 20, got %d", len(grid[0]))
+	}
+
+	// Still 0 committed lines (current line not committed)
+	if v.displayBufferHistoryLen() != 0 {
+		t.Errorf("expected 0 logical lines, got %d", v.displayBufferHistoryLen())
+	}
+}
+
+func TestVTerm_DisplayBufferMultipleResizes(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Write a long line
+	longText := "The quick brown fox jumps over the lazy dog"
+	for _, r := range longText {
+		v.placeChar(r)
+	}
+	v.LineFeed()
+
+	initialHistLen := v.displayBufferHistoryLen()
+
+	// Resize multiple times - history should remain unchanged
+	v.Resize(10, 5)
+	v.Resize(40, 5)
+	v.Resize(15, 5)
+	v.Resize(20, 5)
+
+	// History length should be unchanged through all resizes
+	if v.displayBufferHistoryLen() != initialHistLen {
+		t.Errorf("history length changed after resizes: expected %d, got %d",
+			initialHistLen, v.displayBufferHistoryLen())
+	}
+
+	// Grid should be correct dimensions
+	grid := v.Grid()
+	if len(grid[0]) != 20 {
+		t.Errorf("expected width 20, got %d", len(grid[0]))
+	}
+}

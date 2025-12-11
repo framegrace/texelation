@@ -194,7 +194,8 @@ func (v *VTerm) placeChar(r rune) {
 		} else {
 			v.cursorX = 0
 		}
-		v.LineFeed()
+		// Use lineFeedForWrap to not commit the logical line (this is auto-wrap, not explicit LF)
+		v.lineFeedForWrap()
 		v.wrapNext = false
 	}
 

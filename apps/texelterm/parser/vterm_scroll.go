@@ -13,7 +13,19 @@ import (
 )
 
 // LineFeed moves the cursor down one line, scrolling if necessary.
+// This is called for explicit LF characters - it commits the logical line.
 func (v *VTerm) LineFeed() {
+	v.lineFeedInternal(true) // true = commit logical line
+}
+
+// lineFeedForWrap is called when auto-wrapping - doesn't commit the logical line.
+func (v *VTerm) lineFeedForWrap() {
+	v.lineFeedInternal(false) // false = don't commit, just wrap
+}
+
+// lineFeedInternal handles the actual line feed logic.
+// commitLogical: true if this is an explicit LF (commit line), false if auto-wrap (continue line)
+func (v *VTerm) lineFeedInternal(commitLogical bool) {
 	v.wrapNext = false // Clear wrapNext flag when moving to new line
 	v.MarkDirty(v.cursorY)
 
@@ -30,7 +42,8 @@ func (v *VTerm) LineFeed() {
 		}
 	} else {
 		// Commit current logical line to display buffer if enabled
-		if v.IsDisplayBufferEnabled() {
+		// Only commit on explicit LF, not on auto-wrap
+		if commitLogical && v.IsDisplayBufferEnabled() {
 			v.displayBufferLineFeed()
 		}
 
