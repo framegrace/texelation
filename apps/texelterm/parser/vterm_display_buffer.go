@@ -106,17 +106,19 @@ func (v *VTerm) displayBufferCarriageReturn() {
 }
 
 // displayBufferScroll handles viewport scrolling.
+// Positive delta = scroll down (view newer content, like pressing Page Down)
+// Negative delta = scroll up (view older content, like pressing Page Up)
 func (v *VTerm) displayBufferScroll(delta int) {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return
 	}
 
 	if delta > 0 {
-		// Scroll up (view older content)
-		v.displayBuf.display.ScrollUp(delta)
+		// Positive delta: scroll down (view newer content)
+		v.displayBuf.display.ScrollDown(delta)
 	} else if delta < 0 {
-		// Scroll down (view newer content)
-		v.displayBuf.display.ScrollDown(-delta)
+		// Negative delta: scroll up (view older content)
+		v.displayBuf.display.ScrollUp(-delta)
 	}
 }
 

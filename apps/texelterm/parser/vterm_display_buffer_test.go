@@ -184,8 +184,8 @@ func TestVTerm_DisplayBufferScroll(t *testing.T) {
 		t.Error("should be at live edge initially")
 	}
 
-	// Scroll up
-	v.Scroll(2)
+	// Scroll up (negative delta = view older content)
+	v.Scroll(-2)
 
 	// Should no longer be at live edge
 	if v.displayBufferAtLiveEdge() {
