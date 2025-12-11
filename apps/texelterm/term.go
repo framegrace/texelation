@@ -1613,6 +1613,13 @@ func (a *TexelTerm) Stop() {
 		cmd = a.cmd
 		pty = a.pty
 		hm = a.historyManager
+
+		// Sync display buffer content to history manager before closing
+		// This ensures the new display buffer history is persisted
+		if a.vterm != nil {
+			a.vterm.SyncDisplayBufferToHistoryManager()
+		}
+
 		a.cmd = nil
 		a.pty = nil
 		a.mu.Unlock()
