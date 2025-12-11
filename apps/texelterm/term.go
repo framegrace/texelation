@@ -1279,6 +1279,7 @@ func (a *TexelTerm) runShell() error {
 		cfg := theme.Get()
 		wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
 		reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
+		displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", false)
 
 		// Create history configuration
 		histCfg := parser.DefaultHistoryConfig()
@@ -1341,8 +1342,13 @@ func (a *TexelTerm) runShell() error {
 		parser.WithWrap(wrapEnabled),
 		parser.WithReflow(reflowEnabled),
 		parser.WithHistoryManager(hm),
+		parser.WithDisplayBuffer(displayBufferEnabled),
 		)
 		a.parser = parser.NewParser(a.vterm)
+
+		if displayBufferEnabled {
+			log.Printf("[DISPLAY_BUFFER] Enabled for terminal (experimental scrollback reflow)")
+		}
 
 		// Position cursor at bottom if we loaded history
 		// This is needed because cursor positioning normally happens in Resize(),

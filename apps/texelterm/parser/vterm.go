@@ -904,6 +904,17 @@ func WithReflow(enabled bool) Option {
 	return func(v *VTerm) { v.reflowEnabled = enabled }
 }
 
+// WithDisplayBuffer enables the new display buffer architecture for scrollback reflow.
+// When enabled, the terminal uses logical lines (width-independent) for history storage
+// and reflows content correctly on resize.
+func WithDisplayBuffer(enabled bool) Option {
+	return func(v *VTerm) {
+		if enabled {
+			v.EnableDisplayBuffer()
+		}
+	}
+}
+
 func (v *VTerm) SetTitle(title string) {
 	if v.TitleChanged != nil {
 		v.TitleChanged(title)
