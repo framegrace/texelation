@@ -510,3 +510,318 @@ func TestVTerm_DisplayBufferMultipleResizes(t *testing.T) {
 		t.Errorf("expected width 20, got %d", len(grid[0]))
 	}
 }
+
+func TestVTerm_DisplayBufferLongLineWrap(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Write a line longer than width (should auto-wrap but stay as one logical line)
+	for _, r := range "ABCDEFGHIJKLMNOPQRST" { // 20 chars = 2 wraps at width 10
+		v.placeChar(r)
+	}
+
+	// Should still be 0 committed lines (current line not committed)
+	if v.displayBufferHistoryLen() != 0 {
+		t.Errorf("expected 0 committed lines during typing, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Current line should have all 20 characters
+	line := v.displayBufferGetCurrentLine()
+	if line.Len() != 20 {
+		t.Errorf("expected current line length 20, got %d", line.Len())
+	}
+
+	// Now commit with LineFeed
+	v.LineFeed()
+
+	// Should have 1 committed line
+	if v.displayBufferHistoryLen() != 1 {
+		t.Errorf("expected 1 committed line after LF, got %d", v.displayBufferHistoryLen())
+	}
+
+	// That line should have 20 characters
+	history := v.DisplayBufferGetHistory()
+	committedLine := history.Get(0)
+	if committedLine.Len() != 20 {
+		t.Errorf("expected committed line length 20, got %d", committedLine.Len())
+	}
+}
+
+func TestVTerm_DisplayBufferCursorAfterResize(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Write some content
+	for _, r := range "Hello World" {
+		v.placeChar(r)
+	}
+
+	// Cursor should be at position 11
+	if v.displayBuf.currentLogicalX != 11 {
+		t.Errorf("expected logicalX 11, got %d", v.displayBuf.currentLogicalX)
+	}
+
+	// Resize narrower
+	v.Resize(10, 5)
+
+	// Logical X should be unchanged (still position 11 in logical line)
+	if v.displayBuf.currentLogicalX != 11 {
+		t.Errorf("expected logicalX 11 after resize, got %d", v.displayBuf.currentLogicalX)
+	}
+}
+
+func TestVTerm_DisplayBufferScrollPreservesContent(t *testing.T) {
+	v := NewVTerm(10, 3)
+	v.EnableDisplayBuffer()
+
+	// Write multiple lines
+	lines := []string{"Line1", "Line2", "Line3", "Line4", "Line5"}
+	for _, line := range lines {
+		for _, r := range line {
+			v.placeChar(r)
+		}
+		v.LineFeed()
+	}
+
+	// Should have 5 committed lines
+	if v.displayBufferHistoryLen() != 5 {
+		t.Errorf("expected 5 lines in history, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Scroll up (view older content)
+	v.Scroll(-2)
+
+	// History should still have 5 lines
+	if v.displayBufferHistoryLen() != 5 {
+		t.Errorf("expected 5 lines after scroll, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Should not be at live edge
+	if v.displayBufferAtLiveEdge() {
+		t.Error("should not be at live edge after scrolling up")
+	}
+
+	// Scroll back down
+	v.Scroll(2)
+
+	// Should be at live edge again
+	if !v.displayBufferAtLiveEdge() {
+		t.Error("should be at live edge after scrolling back down")
+	}
+}
+
+func TestVTerm_DisplayBufferScrollRegion(t *testing.T) {
+	// Scroll regions (DECSTBM) are display-only operations
+	// They should NOT affect the logical line history
+	v := NewVTerm(20, 10)
+	v.EnableDisplayBuffer()
+
+	// Write some lines first
+	for i := 0; i < 5; i++ {
+		for _, r := range "Line" {
+			v.placeChar(r)
+		}
+		v.LineFeed()
+	}
+
+	initialHistLen := v.displayBufferHistoryLen()
+
+	// Set scroll region using DECSTBM (CSI 2;8 r)
+	// SetMargins takes 1-indexed values like the terminal protocol
+	v.SetMargins(2, 8)
+
+	// History should be unchanged by setting scroll region
+	if v.displayBufferHistoryLen() != initialHistLen {
+		t.Errorf("scroll region setup changed history: expected %d, got %d",
+			initialHistLen, v.displayBufferHistoryLen())
+	}
+
+	// Reset scroll region
+	v.SetMargins(1, 10)
+}
+
+func TestVTerm_DisplayBufferEmptyLines(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Write a line, then empty line, then another line
+	for _, r := range "First" {
+		v.placeChar(r)
+	}
+	v.LineFeed()
+
+	// Empty line (just LF)
+	v.LineFeed()
+
+	for _, r := range "Third" {
+		v.placeChar(r)
+	}
+	v.LineFeed()
+
+	// Should have 3 committed lines (including empty one)
+	if v.displayBufferHistoryLen() != 3 {
+		t.Errorf("expected 3 lines in history, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Verify content
+	history := v.DisplayBufferGetHistory()
+
+	line0 := history.Get(0)
+	if cellsToString(line0.Cells) != "First" {
+		t.Errorf("expected 'First', got '%s'", cellsToString(line0.Cells))
+	}
+
+	line1 := history.Get(1)
+	if line1.Len() != 0 {
+		t.Errorf("expected empty line, got length %d", line1.Len())
+	}
+
+	line2 := history.Get(2)
+	if cellsToString(line2.Cells) != "Third" {
+		t.Errorf("expected 'Third', got '%s'", cellsToString(line2.Cells))
+	}
+}
+
+func TestVTerm_DisplayBufferProgressBar(t *testing.T) {
+	// Simulates a progress bar that uses CR to overwrite
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Write "Progress: 0%"
+	for _, r := range "Progress: 0%" {
+		v.placeChar(r)
+	}
+
+	// CR and overwrite
+	v.CarriageReturn()
+	for _, r := range "Progress: 50%" {
+		v.placeChar(r)
+	}
+
+	// CR and overwrite again
+	v.CarriageReturn()
+	for _, r := range "Progress: 100%" {
+		v.placeChar(r)
+	}
+
+	// Should still be on current line (not committed)
+	if v.displayBufferHistoryLen() != 0 {
+		t.Errorf("expected 0 committed lines during progress, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Current line should have final content
+	line := v.displayBufferGetCurrentLine()
+	got := cellsToString(line.Cells)
+	if got != "Progress: 100%" {
+		t.Errorf("expected 'Progress: 100%%', got '%s'", got)
+	}
+
+	// Now commit
+	v.LineFeed()
+
+	if v.displayBufferHistoryLen() != 1 {
+		t.Errorf("expected 1 committed line, got %d", v.displayBufferHistoryLen())
+	}
+}
+
+func TestVTerm_DisplayBufferLargeHistory(t *testing.T) {
+	// Test performance with large history
+	v := NewVTerm(80, 24)
+	v.EnableDisplayBuffer()
+
+	// Write 10000 lines
+	for i := 0; i < 10000; i++ {
+		text := "This is line number " + string(rune('0'+i%10))
+		for _, r := range text {
+			v.placeChar(r)
+		}
+		v.LineFeed()
+	}
+
+	// Should have 10000 committed lines
+	if v.displayBufferHistoryLen() != 10000 {
+		t.Errorf("expected 10000 lines in history, got %d", v.displayBufferHistoryLen())
+	}
+
+	// Grid should still work
+	grid := v.Grid()
+	if grid == nil {
+		t.Fatal("Grid() returned nil with large history")
+	}
+	if len(grid) != 24 {
+		t.Errorf("expected 24 rows, got %d", len(grid))
+	}
+
+	// Resize should work (this is the key test - O(viewport) not O(history))
+	v.Resize(40, 24)
+
+	grid = v.Grid()
+	if grid == nil {
+		t.Fatal("Grid() returned nil after resize")
+	}
+	if len(grid[0]) != 40 {
+		t.Errorf("expected width 40, got %d", len(grid[0]))
+	}
+
+	// Scroll up into history
+	v.Scroll(-100)
+
+	// Should still have 10000 lines
+	if v.displayBufferHistoryLen() != 10000 {
+		t.Errorf("expected 10000 lines after scroll, got %d", v.displayBufferHistoryLen())
+	}
+}
+
+func BenchmarkDisplayBuffer_PlaceChar(b *testing.B) {
+	v := NewVTerm(80, 24)
+	v.EnableDisplayBuffer()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		v.placeChar('A')
+		if i%80 == 79 {
+			v.LineFeed()
+		}
+	}
+}
+
+func BenchmarkDisplayBuffer_Resize(b *testing.B) {
+	v := NewVTerm(80, 24)
+	v.EnableDisplayBuffer()
+
+	// Write some content first
+	for i := 0; i < 1000; i++ {
+		for _, r := range "Test line content here" {
+			v.placeChar(r)
+		}
+		v.LineFeed()
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if i%2 == 0 {
+			v.Resize(40, 24)
+		} else {
+			v.Resize(80, 24)
+		}
+	}
+}
+
+func BenchmarkDisplayBuffer_Scroll(b *testing.B) {
+	v := NewVTerm(80, 24)
+	v.EnableDisplayBuffer()
+
+	// Write content to create scrollable history
+	for i := 0; i < 1000; i++ {
+		for _, r := range "Test line" {
+			v.placeChar(r)
+		}
+		v.LineFeed()
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		v.Scroll(-10) // Scroll up
+		v.Scroll(10)  // Scroll back down
+	}
+}
