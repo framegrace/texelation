@@ -1393,12 +1393,10 @@ func (a *TexelTerm) runShell() error {
 			totalLines := a.vterm.DisplayBufferGetHistory().TotalLen()
 			if totalLines > int64(rows) {
 				a.vterm.SetCursorPos(rows-1, 0)
-				fmt.Fprintf(os.Stderr, "[CURSOR FIX] Initial cursor position after history load: cursorY=%d, cursorX=0\n", rows-1)
 			}
 		} else if hm != nil && hm.Length() > rows {
 			// Position cursor at bottom if we loaded history (legacy path)
 			a.vterm.SetCursorPos(rows-1, 0)
-			fmt.Fprintf(os.Stderr, "[CURSOR FIX] Initial cursor position after history load: cursorY=%d, cursorX=0\n", rows-1)
 		}
 
 		a.mu.Unlock()

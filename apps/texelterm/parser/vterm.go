@@ -138,31 +138,12 @@ func (v *VTerm) Grid() [][]Cell {
 		histLen = v.historyManager.Length()
 	}
 
-	// DEBUG: Log viewport calculation
-	if histLen > 0 {
-		fmt.Fprintf(os.Stderr, "[GRID DEBUG] histLen=%d, viewOffset=%d, height=%d, topHistoryLine=%d\n",
-			histLen, v.viewOffset, v.height, topHistoryLine)
-	}
-
 	for i := 0; i < v.height; i++ {
 		historyIdx := topHistoryLine + i
 		grid[i] = make([]Cell, v.width)
 		var logicalLine []Cell
 		if historyIdx >= 0 && historyIdx < histLen {
 			logicalLine = v.getHistoryLine(historyIdx)
-			// DEBUG: Log first few lines
-			if i < 3 && histLen > 0 {
-				linePreview := ""
-				if logicalLine != nil && len(logicalLine) > 0 {
-					for j := 0; j < len(logicalLine) && j < 40; j++ {
-						if logicalLine[j].Rune >= 32 && logicalLine[j].Rune < 127 {
-							linePreview += string(logicalLine[j].Rune)
-						}
-					}
-				}
-				fmt.Fprintf(os.Stderr, "[GRID DEBUG]   line %d (histIdx=%d): %q (len=%d)\n",
-					i, historyIdx, linePreview, len(logicalLine))
-			}
 		}
 		// Fill the grid line, padding with default cells if the history line is short.
 		for x := 0; x < v.width; x++ {
@@ -977,9 +958,6 @@ func WithHistoryManager(hm *HistoryManager) Option {
 func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	histLen := v.getHistoryLen()
 
-	// DEBUG: Always log reflow calls
-	fmt.Fprintf(os.Stderr, "[REFLOW DEBUG] Called: oldWidth=%d, newWidth=%d, histLen=%d\n", oldWidth, newWidth, histLen)
-
 	if histLen == 0 {
 		return
 	}
@@ -1193,17 +1171,12 @@ func (v *VTerm) Resize(width, height int) {
 			// Reflowing loaded history destroys it because loaded lines may not have
 			// consistent wrapping information across width changes
 			if v.historyManager != nil && v.historyManager.Length() > v.height {
-				fmt.Fprintf(os.Stderr, "[REFLOW SKIP] Skipping reflow for loaded history (histLen=%d > height=%d)\n",
-					v.historyManager.Length(), v.height)
-
 				// Position cursor at bottom of screen where new shell output will appear
 				// viewOffset=0 means we're viewing the bottom of history
 				// The cursor should be at the last visible line
 				v.viewOffset = 0
 				v.cursorY = v.height - 1
 				v.cursorX = 0
-				fmt.Fprintf(os.Stderr, "[CURSOR FIX] Positioned cursor at bottom: cursorY=%d, cursorX=%d\n",
-					v.cursorY, v.cursorX)
 				// DON'T return early - we need to continue to the margin reset code at the end
 			} else {
 

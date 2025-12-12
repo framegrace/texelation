@@ -314,6 +314,188 @@ func TestVTerm_DisplayBufferBackspace(t *testing.T) {
 	}
 }
 
+// TestVTerm_DisplayBufferBackspaceErase tests the BS+SPACE+BS pattern
+// that shells use to visually erase a character.
+func TestVTerm_DisplayBufferBackspaceErase(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Write "Hello"
+	for _, r := range "Hello" {
+		v.placeChar(r)
+	}
+
+	// Verify initial state
+	line := v.displayBufferGetCurrentLine()
+	if cellsToString(line.Cells) != "Hello" {
+		t.Errorf("expected 'Hello', got '%s'", cellsToString(line.Cells))
+	}
+
+	// Simulate BS + SPACE + BS (shell's erase sequence)
+	v.Backspace()       // Move cursor left (pos 4)
+	v.placeChar(' ')    // Overwrite 'o' with space (pos 5)
+	v.Backspace()       // Move cursor back (pos 4)
+
+	// Check the logical line content
+	line = v.displayBufferGetCurrentLine()
+	got := cellsToString(line.Cells)
+	if got != "Hell " {
+		t.Errorf("expected 'Hell ' after BS+SPACE+BS, got '%s'", got)
+	}
+
+	// Also verify Grid() returns the correct content
+	grid := v.Grid()
+	gridLine := ""
+	for x := 0; x < 5; x++ {
+		gridLine += string(grid[0][x].Rune)
+	}
+	if gridLine != "Hell " {
+		t.Errorf("expected Grid to show 'Hell ', got '%s'", gridLine)
+	}
+}
+
+// TestVTerm_DisplayBufferBackspaceEraseWithParser tests the BS+SPACE+BS pattern
+// through the parser, exactly as the real terminal would receive it.
+func TestVTerm_DisplayBufferBackspaceEraseWithParser(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	t.Logf("DisplayBuffer enabled: %v", v.IsDisplayBufferEnabled())
+	if !v.IsDisplayBufferEnabled() {
+		t.Fatal("Display buffer should be enabled")
+	}
+
+	getGridLine := func() string {
+		grid := v.Grid()
+		if len(grid) == 0 || len(grid[0]) == 0 {
+			return ""
+		}
+		result := ""
+		for x := 0; x < min(10, len(grid[0])); x++ {
+			c := grid[0][x]
+			if c.Rune == 0 || c.Rune == ' ' {
+				result += "_"
+			} else {
+				result += string(c.Rune)
+			}
+		}
+		return result
+	}
+
+	// Type "Hello" through parser
+	for _, r := range "Hello" {
+		p.Parse(r)
+		_ = v.Grid() // Simulate render after each char
+	}
+
+	gridLine := getGridLine()
+	t.Logf("After 'Hello': %s (cursor at %d)", gridLine, v.GetCursorX())
+	if gridLine != "Hello_____" {
+		t.Errorf("expected 'Hello_____', got '%s'", gridLine)
+	}
+
+	// BS (0x08) through parser
+	p.Parse('\b')
+	gridLine = getGridLine()
+	t.Logf("After BS: %s (cursor at %d)", gridLine, v.GetCursorX())
+	if v.GetCursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	}
+
+	// SPACE (0x20) through parser - this erases 'o'
+	p.Parse(' ')
+	gridLine = getGridLine()
+	t.Logf("After SPACE: %s (cursor at %d)", gridLine, v.GetCursorX())
+	if gridLine != "Hell______" {
+		t.Errorf("expected 'Hell______' after SPACE, got '%s'", gridLine)
+	}
+
+	// BS (0x08) through parser
+	p.Parse('\b')
+	gridLine = getGridLine()
+	t.Logf("After final BS: %s (cursor at %d)", gridLine, v.GetCursorX())
+	if gridLine != "Hell______" {
+		t.Errorf("expected 'Hell______' after final BS, got '%s'", gridLine)
+	}
+	if v.GetCursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	}
+}
+
+// TestVTerm_DisplayBufferBackspaceEraseWithInterleavedGridCalls tests the BS+SPACE+BS
+// pattern with Grid() calls after each operation, simulating real terminal behavior.
+func TestVTerm_DisplayBufferBackspaceEraseWithInterleavedGridCalls(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	getGridLine := func() string {
+		grid := v.Grid()
+		if len(grid) == 0 || len(grid[0]) == 0 {
+			return ""
+		}
+		result := ""
+		for x := 0; x < min(10, len(grid[0])); x++ {
+			c := grid[0][x]
+			if c.Rune == 0 || c.Rune == ' ' {
+				result += "_"
+			} else {
+				result += string(c.Rune)
+			}
+		}
+		return result
+	}
+
+	// Write "Hello" with Grid() call after each char
+	for _, r := range "Hello" {
+		v.placeChar(r)
+		_ = v.Grid() // Simulate render after each char
+	}
+
+	// Verify state: "Hello_____"
+	gridLine := getGridLine()
+	t.Logf("After 'Hello': %s", gridLine)
+	if gridLine != "Hello_____" {
+		t.Errorf("expected 'Hello_____', got '%s'", gridLine)
+	}
+
+	// BS (cursor 5 -> 4)
+	v.Backspace()
+	gridLine = getGridLine()
+	t.Logf("After BS: %s (cursor at %d)", gridLine, v.GetCursorX())
+	// Content should still be "Hello" but cursor at 4
+	if gridLine != "Hello_____" {
+		t.Errorf("expected 'Hello_____' after BS, got '%s'", gridLine)
+	}
+	if v.GetCursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	}
+
+	// SPACE (overwrites 'o' with space, cursor 4 -> 5)
+	v.placeChar(' ')
+	gridLine = getGridLine()
+	t.Logf("After SPACE: %s (cursor at %d)", gridLine, v.GetCursorX())
+	// Content should now be "Hell " (with trailing space)
+	if gridLine != "Hell______" {
+		t.Errorf("expected 'Hell______' after SPACE, got '%s'", gridLine)
+	}
+	if v.GetCursorX() != 5 {
+		t.Errorf("expected cursor at 5, got %d", v.GetCursorX())
+	}
+
+	// BS (cursor 5 -> 4)
+	v.Backspace()
+	gridLine = getGridLine()
+	t.Logf("After final BS: %s (cursor at %d)", gridLine, v.GetCursorX())
+	// Content should still be "Hell " with cursor at 4
+	if gridLine != "Hell______" {
+		t.Errorf("expected 'Hell______' after final BS, got '%s'", gridLine)
+	}
+	if v.GetCursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	}
+}
+
 func TestVTerm_DisplayBufferReflowAfterLoad(t *testing.T) {
 	v := NewVTerm(20, 5)
 	v.EnableDisplayBuffer()
