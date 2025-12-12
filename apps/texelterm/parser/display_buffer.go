@@ -198,13 +198,12 @@ func (db *DisplayBuffer) CommitCurrentLine() {
 }
 
 // scrollToLiveEdge adjusts viewportTop so the viewport shows the bottom content.
+// Content is positioned at the BOTTOM of the viewport with empty space above if needed.
 func (db *DisplayBuffer) scrollToLiveEdge() {
 	totalLines := db.contentLineCount()
-	if totalLines <= db.height {
-		db.viewportTop = 0
-	} else {
-		db.viewportTop = totalLines - db.height
-	}
+	// viewportTop = totalLines - height
+	// This can be negative when content < height, meaning empty rows at top
+	db.viewportTop = totalLines - db.height
 	db.atLiveEdge = true
 }
 
@@ -283,16 +282,17 @@ func (db *DisplayBuffer) ScrollDown(lines int) int {
 	}
 
 	totalLines := db.contentLineCount()
-	maxViewportTop := totalLines - db.height
-	if maxViewportTop < 0 {
-		maxViewportTop = 0
-	}
+	// Live edge position: totalLines - height (can be negative)
+	liveEdgeViewportTop := totalLines - db.height
 
-	actual := min(lines, maxViewportTop-db.viewportTop)
+	actual := min(lines, liveEdgeViewportTop-db.viewportTop)
+	if actual < 0 {
+		actual = 0
+	}
 	db.viewportTop += actual
 
 	// Check if we've reached the live edge
-	if db.viewportTop >= maxViewportTop {
+	if db.viewportTop >= liveEdgeViewportTop {
 		db.atLiveEdge = true
 	}
 
@@ -306,6 +306,7 @@ func (db *DisplayBuffer) ScrollToBottom() {
 
 // GetViewport returns the physical lines currently visible in the viewport.
 // The returned slice has exactly 'height' elements, padded with empty lines if needed.
+// When viewportTop is negative (content < height at live edge), empty rows appear at top.
 func (db *DisplayBuffer) GetViewport() []PhysicalLine {
 	result := make([]PhysicalLine, db.height)
 
@@ -317,7 +318,7 @@ func (db *DisplayBuffer) GetViewport() []PhysicalLine {
 		if bufferIdx >= 0 && bufferIdx < len(allLines) {
 			result[i] = allLines[bufferIdx]
 		} else {
-			// Empty line
+			// Empty line (either above content when viewportTop < 0, or padding)
 			result[i] = PhysicalLine{
 				Cells:        make([]Cell, 0),
 				LogicalIndex: -1,
@@ -380,26 +381,19 @@ func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
 	totalLines := db.contentLineCount()
 
 	if db.atLiveEdge {
-		// At live edge - keep viewport showing the bottom content
-		// When growing, we want to show more history above (if available)
-		// When shrinking, we just show less
-		if totalLines <= newHeight {
-			db.viewportTop = 0
-		} else {
-			db.viewportTop = totalLines - newHeight
-		}
+		// At live edge - keep content at bottom of viewport
+		// viewportTop = totalLines - newHeight (can be negative if content < height)
+		db.viewportTop = totalLines - newHeight
 
 		// If we grew and need more lines from history, load them
 		if newHeight > oldHeight && db.viewportTop < db.marginAbove {
 			needed := db.marginAbove - db.viewportTop
-			db.loadAbove(needed)
+			if needed > 0 {
+				db.loadAbove(needed)
+			}
 			// Recalculate after loading
 			totalLines = db.contentLineCount()
-			if totalLines <= newHeight {
-				db.viewportTop = 0
-			} else {
-				db.viewportTop = totalLines - newHeight
-			}
+			db.viewportTop = totalLines - newHeight
 		}
 	} else {
 		// Not at live edge - keep the same content at the top of viewport
@@ -408,6 +402,7 @@ func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
 		// - Clamp viewportTop if we shrank and it's now past valid range
 
 		maxViewportTop := totalLines - newHeight
+		// Don't allow negative viewport when not at live edge (stay at top of content)
 		if maxViewportTop < 0 {
 			maxViewportTop = 0
 		}
