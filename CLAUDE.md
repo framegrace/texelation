@@ -253,20 +253,27 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
     3. ApplyTreeCapture runs: prepares apps (no resize/start), builds tree, calculates layout, then starts all apps with correct dimensions
     4. Apps load history and render correctly in their sized panes
 
-- **Scrollback Reflow - IN PROGRESS (2025-12-11)**:
-  - **Status**: Plan approved, ready for implementation
+- **Scrollback Reflow - COMPLETE (2025-12-12)**:
+  - **Status**: Three-level architecture implemented with disk backing
   - **Full Plan**: `docs/plans/SCROLLBACK_REFLOW_PLAN.md`
-  - **Problem**: Current implementation stores physical (wrapped) lines. After loading persisted history, reflow is disabled because `Wrapped` flags are inconsistent. Long lines appear broken at different terminal widths.
-  - **Solution**: "Display Buffer Architecture" - separate storage from display (inspired by SNES tile scrolling):
+  - **Architecture**: Separate storage from display (inspired by SNES tile scrolling)
 
   ```
   ┌─────────────────────────────────────────┐
-  │           SCROLLBACK HISTORY            │
-  │   (Logical lines - width independent)   │
-  │   Source of truth, persisted to disk    │
+  │              DISK HISTORY               │
+  │   (TXHIST02 format - O(1) random access)│
+  │   Unlimited logical lines on disk       │
   └─────────────────────────────────────────┘
                       │
                       │ Load/Unload on demand
+                      ▼
+  ┌─────────────────────────────────────────┐
+  │         SCROLLBACK HISTORY              │
+  │   (~5000 logical lines in memory)       │
+  │   Sliding window with global indices    │
+  └─────────────────────────────────────────┘
+                      │
+                      │ Wrap to current width
                       ▼
   ┌─────────────────────────────────────────┐
   │            DISPLAY BUFFER               │
@@ -281,35 +288,31 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
   └─────────────────────────────────────────┘
   ```
 
-  - **Key Data Structures**:
-    - `LogicalLine`: Unwrapped content of any length, with `WrapToWidth(w)` method
-    - `ScrollbackHistory`: Stores `[]LogicalLine`, width-independent, persisted
-    - `DisplayBuffer`: Physical rows at current width, ephemeral, has `viewportTop` and `atLiveEdge` flag
+  - **Key Files**:
+    - `apps/texelterm/parser/disk_history.go` - TXHIST02 indexed format with O(1) random access
+    - `apps/texelterm/parser/scrollback_history.go` - Memory window with disk backing
+    - `apps/texelterm/parser/display_buffer.go` - Physical lines at current width
+    - `apps/texelterm/parser/logical_line.go` - Width-independent line storage
+    - `apps/texelterm/parser/vterm_display_buffer.go` - VTerm integration
 
-  - **Key Concepts**:
-    - **Logical line boundary**: LF/CNL commits a line; auto-wrap at edge continues same logical line
-    - **Live edge**: Bottom of history where commands are typed and output appears
-    - **Dual cursor tracking**: `logicalX` (position in logical line) + `cursorX/cursorY` (physical display position)
-    - **Scroll regions (DECSTBM)**: Display-only operations, don't affect history
-    - **Resize**: O(viewport) rebuild of display buffer, not O(history)
+  - **Key Features**:
+    - **Disk persistence**: TXHIST02 format stores index at end for append-without-rewrite
+    - **Global indices**: Track position across disk + memory seamlessly
+    - **Configurable limits**: MaxMemoryLines, MarginAbove, MarginBelow all configurable
+    - **On-demand loading**: Scrolling into disk history loads lines automatically
+    - **Proper reflow**: Resize O(viewport) not O(history)
 
-  - **Implementation Phases**:
-    1. Data structures (`LogicalLine`, `ScrollbackHistory`, `DisplayBuffer`)
-    2. Display buffer operations (scroll, load, resize, trim)
-    3. VTerm integration (dual writes in `placeChar`/`lineFeed`, `Grid()` returns display viewport)
-    4. Persistence (new format storing logical lines, no `Wrapped` flag)
-    5. Edge cases & polish
+  - **Usage**:
+    ```go
+    // Enable disk-backed display buffer
+    err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+        MaxMemoryLines: 5000,
+        MarginAbove:    200,
+        MarginBelow:    50,
+    })
+    defer v.CloseDisplayBuffer()
+    ```
 
-  - **Tricky Aspects Resolved**:
-    - Current line problem → dual tracking (logicalX + physical cursor)
-    - Carriage return → `SetCell` overwrites, `logicalX` resets to 0
-    - User scroll vs screen scroll → `atLiveEdge` flag
-    - Cursor movement to other lines → allow in-place edits to visible lines
-    - Anchor tracking → single anchor + walk (display buffer is small)
-
-  - **Files to Modify**:
-    - `apps/texelterm/parser/vterm.go` - Add history + display buffer, modify placeChar/lineFeed
-    - `apps/texelterm/parser/history.go` - Rewrite for logical lines
-    - `apps/texelterm/parser/history_store.go` - New format (no Wrapped flag)
-    - New file: `apps/texelterm/parser/display_buffer.go`
-    - New file: `apps/texelterm/parser/logical_line.go`
+  - **Next Steps (Optional)**:
+    - Update `term.go` to use `EnableDisplayBufferWithDisk()` instead of legacy HistoryManager
+    - Remove legacy HistoryManager once new system is proven in production
