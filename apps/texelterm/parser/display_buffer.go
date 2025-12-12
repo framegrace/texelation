@@ -469,13 +469,14 @@ func (db *DisplayBuffer) rewrap() {
 		linesNeeded := db.height + db.marginAbove + db.marginBelow
 
 		if anchorLogicalIdx >= 0 {
-			// Load around the anchor point to preserve scroll position
-			// Start loading from before the anchor (using global indices)
+			// Load from before the anchor point all the way to the end of history.
+			// This ensures the user can scroll down to the live edge after resize.
+			// We load from (anchor - marginAbove) to totalLines.
 			startIdx := int64(max(0, anchorLogicalIdx-db.marginAbove))
-			endIdx := int64(min(int(totalLines), anchorLogicalIdx+db.marginBelow+db.height))
 
 			db.globalTopIndex = startIdx
-			db.lines = db.history.WrapGlobalToWidth(startIdx, endIdx, db.width)
+			// Load all the way to the end so user can scroll down to live edge
+			db.lines = db.history.WrapGlobalToWidth(startIdx, totalLines, db.width)
 		} else {
 			// Start from the end of history and work backwards
 			db.globalTopIndex = totalLines

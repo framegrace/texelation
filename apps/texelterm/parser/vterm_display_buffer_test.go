@@ -572,6 +572,57 @@ func TestVTerm_DisplayBufferCursorAfterResize(t *testing.T) {
 	}
 }
 
+func TestVTerm_DisplayBufferResizeWhileScrolledUp(t *testing.T) {
+	// Regression test: resizing while scrolled up should preserve full history
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Write 50 lines of content
+	for i := 0; i < 50; i++ {
+		text := "Line " + string(rune('A'+i%26))
+		for _, r := range text {
+			v.placeChar(r)
+		}
+		v.LineFeed()
+	}
+
+	// Verify we have 50 lines
+	histLen := v.displayBufferHistoryLen()
+	if histLen != 50 {
+		t.Fatalf("expected 50 lines in history, got %d", histLen)
+	}
+
+	// Scroll up a lot (away from live edge)
+	v.Scroll(-30)
+
+	// Should not be at live edge
+	if v.displayBufferAtLiveEdge() {
+		t.Error("should not be at live edge after scrolling up")
+	}
+
+	// Now resize (this was triggering the bug)
+	v.Resize(15, 5)
+
+	// History should still be fully intact
+	histLenAfter := v.displayBufferHistoryLen()
+	if histLenAfter != 50 {
+		t.Errorf("expected 50 lines after resize, got %d (history was truncated!)", histLenAfter)
+	}
+
+	// Should be able to scroll down to live edge
+	v.ScrollToLiveEdge()
+
+	if !v.displayBufferAtLiveEdge() {
+		t.Error("should be at live edge after ScrollToLiveEdge")
+	}
+
+	// Grid should still work and show content
+	grid := v.Grid()
+	if grid == nil {
+		t.Fatal("Grid() returned nil after resize while scrolled")
+	}
+}
+
 func TestVTerm_DisplayBufferScrollPreservesContent(t *testing.T) {
 	v := NewVTerm(10, 3)
 	v.EnableDisplayBuffer()
