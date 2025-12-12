@@ -431,6 +431,7 @@ func (v *VTerm) displayBufferEraseToEndOfLine() {
 	currentLine := v.displayBuf.display.CurrentLine()
 	if currentLine != nil {
 		currentLine.Truncate(v.displayBuf.currentLogicalX)
+		v.displayBuf.display.RebuildCurrentLine()
 	}
 }
 
@@ -447,6 +448,7 @@ func (v *VTerm) displayBufferEraseFromStartOfLine() {
 		for i := 0; i <= v.displayBuf.currentLogicalX && i < currentLine.Len(); i++ {
 			currentLine.Cells[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
+		v.displayBuf.display.RebuildCurrentLine()
 	}
 }
 
@@ -460,6 +462,7 @@ func (v *VTerm) displayBufferEraseLine() {
 	currentLine := v.displayBuf.display.CurrentLine()
 	if currentLine != nil {
 		currentLine.Clear()
+		v.displayBuf.display.RebuildCurrentLine()
 	}
 	v.displayBuf.currentLogicalX = 0
 }
@@ -479,6 +482,7 @@ func (v *VTerm) displayBufferEraseCharacters(n int) {
 				currentLine.Cells[pos] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 			}
 		}
+		v.displayBuf.display.RebuildCurrentLine()
 	}
 }
 

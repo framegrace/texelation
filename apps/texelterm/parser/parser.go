@@ -50,10 +50,6 @@ func NewParser(v *VTerm) *Parser {
 
 // Parse processes a slice of bytes from the PTY.
 func (p *Parser) Parse(r rune) {
-	//	if p.state == StateGround && r == '\x1b' {
-	//		p.vterm.DumpGrid("Before ESC sequence")
-	//		log.Printf("Parser: Processing sequence starting with ESC")
-	//	}
 	switch p.state {
 	case StateGround:
 		switch r {
