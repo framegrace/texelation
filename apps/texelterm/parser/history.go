@@ -161,17 +161,11 @@ func NewHistoryManager(config HistoryConfig, command, workingDir, paneID string)
 			ext += ".enc"
 		}
 		sessionFile := filepath.Join(scrollbackDir, metadata.SessionID+ext)
-		fmt.Fprintf(os.Stderr, "[HISTORY] Loading from: %s\n", sessionFile)
 
 		// Try to load existing history
 		lines, err := LoadHistoryLines(sessionFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[HISTORY] Warning: failed to load existing history: %v\n", err)
-		} else if len(lines) > 0 {
+		if err == nil && len(lines) > 0 {
 			existingLines = lines
-			fmt.Fprintf(os.Stderr, "[HISTORY] Loaded %d lines from existing history file\n", len(lines))
-		} else {
-			fmt.Fprintf(os.Stderr, "[HISTORY] No lines loaded (file empty or new)\n")
 		}
 	}
 

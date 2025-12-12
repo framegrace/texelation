@@ -113,15 +113,8 @@ func (v *VTerm) EnableDisplayBuffer() {
 	v.displayBuf.enabled = true
 
 	// If historyManager already has content (loaded from disk), import it
-	if v.historyManager != nil {
-		hmLen := v.historyManager.Length()
-		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] EnableDisplayBuffer: historyManager.Length()=%d\n", hmLen)
-		if hmLen > 0 {
-			v.loadHistoryManagerIntoDisplayBuffer()
-			fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] After load: displayBuf.history.Len()=%d\n", v.displayBuf.history.Len())
-		}
-	} else {
-		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] EnableDisplayBuffer: historyManager is nil\n")
+	if v.historyManager != nil && v.historyManager.Length() > 0 {
+		v.loadHistoryManagerIntoDisplayBuffer()
 	}
 }
 
@@ -136,16 +129,6 @@ func (v *VTerm) EnableDisplayBufferWithDisk(diskPath string, opts DisplayBufferO
 	opts.DiskPath = diskPath
 	v.initDisplayBufferWithOptions(opts)
 	v.displayBuf.enabled = true
-
-	// Log status
-	if v.displayBuf.history.HasDiskBacking() {
-		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Enabled with disk backing: %s\n", diskPath)
-		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Loaded %d lines from disk, %d in memory\n",
-			v.displayBuf.history.TotalLen(), v.displayBuf.history.Len())
-	} else {
-		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Enabled (memory-only, disk init failed)\n")
-	}
-
 	return nil
 }
 
