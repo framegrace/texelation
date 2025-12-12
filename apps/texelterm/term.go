@@ -1362,24 +1362,31 @@ func (a *TexelTerm) runShell() error {
 
 		// Enable new three-level display buffer with disk persistence
 		if displayBufferEnabled {
-			// Construct disk path for new format (.hist2)
-			scrollbackDir := filepath.Join(histCfg.PersistDir, "scrollback")
-			if err := os.MkdirAll(scrollbackDir, 0755); err != nil {
-				log.Printf("Failed to create scrollback dir: %v", err)
-			}
-			diskPath := filepath.Join(scrollbackDir, paneIDHex+".hist2")
+			// Only enable disk persistence if we have a pane ID
+			if paneIDHex != "" {
+				// Construct disk path for new format (.hist2)
+				scrollbackDir := filepath.Join(histCfg.PersistDir, "scrollback")
+				if err := os.MkdirAll(scrollbackDir, 0755); err != nil {
+					log.Printf("Failed to create scrollback dir: %v", err)
+				}
+				diskPath := filepath.Join(scrollbackDir, paneIDHex+".hist2")
 
-			err := a.vterm.EnableDisplayBufferWithDisk(diskPath, parser.DisplayBufferOptions{
-				MaxMemoryLines: histCfg.MemoryLines,
-				MarginAbove:    200,
-				MarginBelow:    50,
-			})
-			if err != nil {
-				log.Printf("[DISPLAY_BUFFER] Failed to enable disk-backed display buffer: %v", err)
-				// Fall back to memory-only
-				a.vterm.EnableDisplayBuffer()
+				err := a.vterm.EnableDisplayBufferWithDisk(diskPath, parser.DisplayBufferOptions{
+					MaxMemoryLines: histCfg.MemoryLines,
+					MarginAbove:    200,
+					MarginBelow:    50,
+				})
+				if err != nil {
+					log.Printf("[DISPLAY_BUFFER] Failed to enable disk-backed display buffer: %v", err)
+					// Fall back to memory-only
+					a.vterm.EnableDisplayBuffer()
+				} else {
+					log.Printf("[DISPLAY_BUFFER] Enabled with disk persistence: %s", diskPath)
+				}
 			} else {
-				log.Printf("[DISPLAY_BUFFER] Enabled with disk persistence: %s", diskPath)
+				// No pane ID - use memory-only display buffer
+				a.vterm.EnableDisplayBuffer()
+				log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID)")
 			}
 
 			// Position cursor at bottom if we loaded history

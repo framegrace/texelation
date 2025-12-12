@@ -955,6 +955,80 @@ func TestVTerm_DisplayBufferPersistAndReload(t *testing.T) {
 	}
 }
 
+func TestVTerm_DisplayBufferAppendAfterReload(t *testing.T) {
+	// Regression test: must be able to append new lines after loading existing history
+	tmpDir := t.TempDir()
+	diskPath := filepath.Join(tmpDir, "append_test.hist")
+
+	// Create terminal and write initial content
+	v := NewVTerm(80, 10)
+	err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 50,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk failed: %v", err)
+	}
+
+	// Write 10 lines
+	for i := 0; i < 10; i++ {
+		for _, r := range "Initial line" {
+			v.placeChar(r)
+		}
+		v.LineFeed()
+	}
+
+	// Close to flush to disk
+	if err := v.CloseDisplayBuffer(); err != nil {
+		t.Fatalf("CloseDisplayBuffer failed: %v", err)
+	}
+
+	// Reopen and append more lines
+	v2 := NewVTerm(80, 10)
+	err = v2.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 50,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk on reload failed: %v", err)
+	}
+
+	// Verify initial content loaded
+	if v2.displayBufferHistoryTotalLen() != 10 {
+		t.Fatalf("expected 10 lines after reload, got %d", v2.displayBufferHistoryTotalLen())
+	}
+
+	// Append 5 more lines (this was failing before the fix)
+	for i := 0; i < 5; i++ {
+		for _, r := range "New line after reload" {
+			v2.placeChar(r)
+		}
+		v2.LineFeed()
+	}
+
+	// Should now have 15 lines total
+	if v2.displayBufferHistoryTotalLen() != 15 {
+		t.Errorf("expected 15 lines after appending, got %d", v2.displayBufferHistoryTotalLen())
+	}
+
+	// Close and reopen to verify persistence
+	if err := v2.CloseDisplayBuffer(); err != nil {
+		t.Fatalf("CloseDisplayBuffer failed: %v", err)
+	}
+
+	v3 := NewVTerm(80, 10)
+	err = v3.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 50,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk on second reload failed: %v", err)
+	}
+	defer v3.CloseDisplayBuffer()
+
+	// Should still have 15 lines
+	if v3.displayBufferHistoryTotalLen() != 15 {
+		t.Errorf("expected 15 lines after second reload, got %d", v3.displayBufferHistoryTotalLen())
+	}
+}
+
 func BenchmarkDisplayBuffer_PlaceChar(b *testing.B) {
 	v := NewVTerm(80, 24)
 	v.EnableDisplayBuffer()

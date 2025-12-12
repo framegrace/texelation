@@ -89,6 +89,7 @@ type DiskHistory struct {
 
 // OpenDiskHistory opens an existing history file for reading.
 // Returns nil, nil if file doesn't exist.
+// Call EnableWriteMode() after this to allow appending.
 func OpenDiskHistory(path string) (*DiskHistory, error) {
 	// Check if file exists
 	info, err := os.Stat(path)
@@ -128,6 +129,59 @@ func OpenDiskHistory(path string) (*DiskHistory, error) {
 	}
 
 	return dh, nil
+}
+
+// EnableWriteMode reopens the file for appending.
+// This must be called after OpenDiskHistory if you want to append new lines.
+func (dh *DiskHistory) EnableWriteMode() error {
+	dh.mu.Lock()
+	defer dh.mu.Unlock()
+
+	if dh.writeMode {
+		return nil // Already in write mode
+	}
+
+	// Close read-only file
+	path := dh.config.Path
+	if dh.file != nil {
+		dh.file.Close()
+	}
+
+	// Reopen in read/write mode
+	file, err := os.OpenFile(path, os.O_RDWR, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to reopen file for writing: %w", err)
+	}
+	dh.file = file
+
+	// Calculate write offset: right after the last line's data
+	// The index is at the end, so we write over it and rewrite on close
+	if len(dh.index) > 0 {
+		lastLineOffset := dh.index[len(dh.index)-1]
+		// Seek to after the last line's data
+		// We need to read the line to find its end
+		line, err := dh.readLineAt(lastLineOffset)
+		if err != nil {
+			file.Close()
+			return fmt.Errorf("failed to find write position: %w", err)
+		}
+		// Calculate size of serialized line
+		lineSize := 4 + len(line.Cells)*diskCellSize // numCells(4) + cells
+		dh.writeOffset = lastLineOffset + uint64(lineSize)
+	} else {
+		dh.writeOffset = diskHeaderSize
+	}
+
+	// Seek to write position
+	if _, err := file.Seek(int64(dh.writeOffset), 0); err != nil {
+		file.Close()
+		return fmt.Errorf("failed to seek to write position: %w", err)
+	}
+
+	dh.writer = bufio.NewWriter(file)
+	dh.writeMode = true
+
+	return nil
 }
 
 // CreateDiskHistory creates a new history file for writing.

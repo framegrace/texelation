@@ -125,6 +125,12 @@ func NewScrollbackHistoryWithDisk(config ScrollbackHistoryConfig) (*ScrollbackHi
 			h.lines = lines
 		}
 
+		// Enable write mode so we can append new lines
+		if err := existing.EnableWriteMode(); err != nil {
+			existing.Close()
+			return nil, fmt.Errorf("failed to enable write mode: %w", err)
+		}
+
 		return h, nil
 	}
 

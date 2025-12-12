@@ -202,12 +202,16 @@ func (db *DisplayBuffer) CommitCurrentLine() {
 }
 
 // scrollToLiveEdge adjusts viewportTop so the viewport shows the bottom content.
-// Content is positioned at the BOTTOM of the viewport with empty space above if needed.
+// When content exceeds viewport height, the latest content is at the bottom.
+// When content is less than viewport height, content starts at the top (row 0).
 func (db *DisplayBuffer) scrollToLiveEdge() {
 	totalLines := db.contentLineCount()
 	// viewportTop = totalLines - height
-	// This can be negative when content < height, meaning empty rows at top
+	// But never go negative - content starts at top when it doesn't fill the screen
 	db.viewportTop = totalLines - db.height
+	if db.viewportTop < 0 {
+		db.viewportTop = 0
+	}
 	db.atLiveEdge = true
 }
 
@@ -333,7 +337,6 @@ func (db *DisplayBuffer) ScrollToBottom() {
 
 // GetViewport returns the physical lines currently visible in the viewport.
 // The returned slice has exactly 'height' elements, padded with empty lines if needed.
-// When viewportTop is negative (content < height at live edge), empty rows appear at top.
 func (db *DisplayBuffer) GetViewport() []PhysicalLine {
 	result := make([]PhysicalLine, db.height)
 
@@ -345,7 +348,7 @@ func (db *DisplayBuffer) GetViewport() []PhysicalLine {
 		if bufferIdx >= 0 && bufferIdx < len(allLines) {
 			result[i] = allLines[bufferIdx]
 		} else {
-			// Empty line (either above content when viewportTop < 0, or padding)
+			// Empty line (padding at the end)
 			result[i] = PhysicalLine{
 				Cells:        make([]Cell, 0),
 				LogicalIndex: -1,
