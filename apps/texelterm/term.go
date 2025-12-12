@@ -1287,7 +1287,7 @@ func (a *TexelTerm) runShell() error {
 		cfg := theme.Get()
 		wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
 		reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
-		displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", false)
+		displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", true) // Default to new three-level architecture
 
 		// Create history configuration
 		histCfg := parser.DefaultHistoryConfig()
@@ -1304,14 +1304,19 @@ func (a *TexelTerm) runShell() error {
 
 		// Create history manager with pane ID for persistent scrollback (lock already held)
 		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
-		log.Printf("[HISTORY DEBUG] Creating history manager with paneID=%q, persistDir=%q", paneIDHex, histCfg.PersistDir)
 
-		hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
-		if err != nil {
-			log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
-			hm = nil
+		// Only create legacy HistoryManager if display buffer is disabled
+		var hm *parser.HistoryManager
+		if !displayBufferEnabled {
+			log.Printf("[HISTORY DEBUG] Creating history manager with paneID=%q, persistDir=%q", paneIDHex, histCfg.PersistDir)
+			var err error
+			hm, err = parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
+			if err != nil {
+				log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
+				hm = nil
+			}
+			a.historyManager = hm
 		}
-		a.historyManager = hm
 
 		a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
@@ -1350,19 +1355,41 @@ func (a *TexelTerm) runShell() error {
 		}),
 		parser.WithWrap(wrapEnabled),
 		parser.WithReflow(reflowEnabled),
-		parser.WithHistoryManager(hm),
-		parser.WithDisplayBuffer(displayBufferEnabled),
+		parser.WithHistoryManager(hm), // nil when displayBufferEnabled
+		parser.WithDisplayBuffer(false), // Don't use old in-memory display buffer
 		)
 		a.parser = parser.NewParser(a.vterm)
 
+		// Enable new three-level display buffer with disk persistence
 		if displayBufferEnabled {
-			log.Printf("[DISPLAY_BUFFER] Enabled for terminal (experimental scrollback reflow)")
-		}
+			// Construct disk path for new format (.hist2)
+			scrollbackDir := filepath.Join(histCfg.PersistDir, "scrollback")
+			if err := os.MkdirAll(scrollbackDir, 0755); err != nil {
+				log.Printf("Failed to create scrollback dir: %v", err)
+			}
+			diskPath := filepath.Join(scrollbackDir, paneIDHex+".hist2")
 
-		// Position cursor at bottom if we loaded history
-		// This is needed because cursor positioning normally happens in Resize(),
-		// but when vterm is created with correct dimensions, no resize is triggered
-		if hm != nil && hm.Length() > rows {
+			err := a.vterm.EnableDisplayBufferWithDisk(diskPath, parser.DisplayBufferOptions{
+				MaxMemoryLines: histCfg.MemoryLines,
+				MarginAbove:    200,
+				MarginBelow:    50,
+			})
+			if err != nil {
+				log.Printf("[DISPLAY_BUFFER] Failed to enable disk-backed display buffer: %v", err)
+				// Fall back to memory-only
+				a.vterm.EnableDisplayBuffer()
+			} else {
+				log.Printf("[DISPLAY_BUFFER] Enabled with disk persistence: %s", diskPath)
+			}
+
+			// Position cursor at bottom if we loaded history
+			totalLines := a.vterm.DisplayBufferGetHistory().TotalLen()
+			if totalLines > int64(rows) {
+				a.vterm.SetCursorPos(rows-1, 0)
+				fmt.Fprintf(os.Stderr, "[CURSOR FIX] Initial cursor position after history load: cursorY=%d, cursorX=0\n", rows-1)
+			}
+		} else if hm != nil && hm.Length() > rows {
+			// Position cursor at bottom if we loaded history (legacy path)
 			a.vterm.SetCursorPos(rows-1, 0)
 			fmt.Fprintf(os.Stderr, "[CURSOR FIX] Initial cursor position after history load: cursorY=%d, cursorX=0\n", rows-1)
 		}
@@ -1615,10 +1642,17 @@ func (a *TexelTerm) Stop() {
 		pty = a.pty
 		hm = a.historyManager
 
-		// Sync display buffer content to history manager before closing
-		// This ensures the new display buffer history is persisted
+		// Close display buffer (flushes to disk if disk-backed)
+		// For legacy path, sync to history manager first
 		if a.vterm != nil {
-			a.vterm.SyncDisplayBufferToHistoryManager()
+			if a.vterm.IsDisplayBufferEnabled() {
+				if err := a.vterm.CloseDisplayBuffer(); err != nil {
+					log.Printf("Error closing display buffer: %v", err)
+				}
+			} else {
+				// Legacy path: sync to history manager
+				a.vterm.SyncDisplayBufferToHistoryManager()
+			}
 		}
 
 		a.cmd = nil
@@ -1637,7 +1671,7 @@ func (a *TexelTerm) Stop() {
 			}()
 		}
 
-		// Close history manager
+		// Close history manager (only used in legacy path)
 		if hm != nil {
 			if err := hm.Close(); err != nil {
 				log.Printf("Error closing history manager: %v", err)
