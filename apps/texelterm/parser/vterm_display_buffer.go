@@ -94,6 +94,10 @@ func (v *VTerm) loadHistoryManagerIntoDisplayBuffer() {
 
 	// Scroll to live edge
 	v.displayBuf.display.ScrollToBottom()
+
+	// Position cursor at bottom of viewport where new shell output will appear
+	v.cursorY = v.height - 1
+	v.cursorX = 0
 }
 
 // DisableDisplayBuffer switches back to the legacy rendering path.
@@ -177,7 +181,14 @@ func (v *VTerm) displayBufferResize(width, height int) {
 		return
 	}
 
+	wasAtLiveEdge := v.displayBuf.display.AtLiveEdge()
+
 	v.displayBuf.display.Resize(width, height)
+
+	// When at live edge, cursor should be at the bottom of the viewport
+	if wasAtLiveEdge && v.displayBuf.display.AtLiveEdge() {
+		v.cursorY = height - 1
+	}
 }
 
 // displayBufferScrollToBottom scrolls to live edge.
