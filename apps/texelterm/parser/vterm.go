@@ -811,6 +811,11 @@ func (v *VTerm) MoveCursorForward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
+
+	// Sync display buffer's logical X for horizontal cursor movement
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferSetCursorFromPhysical()
+	}
 }
 
 func (v *VTerm) MoveCursorBackward(n int) {
@@ -829,6 +834,11 @@ func (v *VTerm) MoveCursorBackward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
+
+	// Sync display buffer's logical X for horizontal cursor movement
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferSetCursorFromPhysical()
+	}
 }
 
 func (v *VTerm) MoveCursorUp(n int) {
