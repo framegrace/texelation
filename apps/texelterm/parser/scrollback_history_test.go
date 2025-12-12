@@ -1,21 +1,23 @@
 package parser
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestScrollbackHistory_NewAndLen(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	if h.Len() != 0 {
 		t.Errorf("expected empty history, got len %d", h.Len())
 	}
-	if h.MaxLines() != 1000 {
-		t.Errorf("expected max 1000, got %d", h.MaxLines())
+	if h.MaxMemoryLines() != 1000 {
+		t.Errorf("expected max 1000, got %d", h.MaxMemoryLines())
 	}
 }
 
 func TestScrollbackHistory_Append(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 
 	h.Append(NewLogicalLineFromCells(makeCells("Line 1")))
 	h.Append(NewLogicalLineFromCells(makeCells("Line 2")))
@@ -30,7 +32,7 @@ func TestScrollbackHistory_Append(t *testing.T) {
 }
 
 func TestScrollbackHistory_Get(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	h.Append(NewLogicalLineFromCells(makeCells("Line 0")))
 	h.Append(NewLogicalLineFromCells(makeCells("Line 1")))
 	h.Append(NewLogicalLineFromCells(makeCells("Line 2")))
@@ -53,7 +55,7 @@ func TestScrollbackHistory_Get(t *testing.T) {
 }
 
 func TestScrollbackHistory_MaxLines(t *testing.T) {
-	h := NewScrollbackHistory(5)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 5})
 
 	// Add 7 lines
 	for i := 0; i < 7; i++ {
@@ -67,7 +69,7 @@ func TestScrollbackHistory_MaxLines(t *testing.T) {
 }
 
 func TestScrollbackHistory_Clear(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	h.Append(NewLogicalLineFromCells(makeCells("Line")))
 	h.Append(NewLogicalLineFromCells(makeCells("Line")))
 
@@ -82,7 +84,7 @@ func TestScrollbackHistory_Clear(t *testing.T) {
 }
 
 func TestScrollbackHistory_GetRange(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	for i := 0; i < 5; i++ {
 		h.AppendCells(makeCells("Line"))
 	}
@@ -107,7 +109,7 @@ func TestScrollbackHistory_GetRange(t *testing.T) {
 }
 
 func TestScrollbackHistory_LastN(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	for i := 0; i < 10; i++ {
 		h.AppendCells(makeCells("Line"))
 	}
@@ -130,7 +132,7 @@ func TestScrollbackHistory_LastN(t *testing.T) {
 }
 
 func TestScrollbackHistory_WrapToWidth(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	h.AppendCells(makeCells("ABCDEFGHIJ")) // 10 chars -> 2 lines at width 5
 	h.AppendCells(makeCells("XY"))         // 2 chars -> 1 line at width 5
 
@@ -150,7 +152,7 @@ func TestScrollbackHistory_WrapToWidth(t *testing.T) {
 }
 
 func TestScrollbackHistory_PhysicalLineCount(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	h.AppendCells(makeCells("ABCDEFGHIJ")) // 10 chars -> 2 lines at width 5
 	h.AppendCells(makeCells("XY"))         // 2 chars -> 1 line at width 5
 	h.AppendCells(makeCells(""))           // empty -> 1 line
@@ -162,15 +164,15 @@ func TestScrollbackHistory_PhysicalLineCount(t *testing.T) {
 }
 
 func TestScrollbackHistory_FindLogicalIndexForPhysicalLine(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	h.AppendCells(makeCells("ABCDEFGHIJ")) // logical 0 -> physical 0,1 (at width 5)
 	h.AppendCells(makeCells("XY"))         // logical 1 -> physical 2
 	h.AppendCells(makeCells("12345"))      // logical 2 -> physical 3
 
 	tests := []struct {
-		physical      int
-		expectedLog   int
-		expectedOff   int
+		physical    int
+		expectedLog int
+		expectedOff int
 	}{
 		{0, 0, 0},
 		{1, 0, 5}, // Second row of first logical line, offset 5
@@ -190,7 +192,7 @@ func TestScrollbackHistory_FindLogicalIndexForPhysicalLine(t *testing.T) {
 }
 
 func TestScrollbackHistory_DirtyFlag(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 
 	if h.IsDirty() {
 		t.Error("new history should not be dirty")
@@ -204,5 +206,176 @@ func TestScrollbackHistory_DirtyFlag(t *testing.T) {
 	h.MarkClean()
 	if h.IsDirty() {
 		t.Error("should not be dirty after MarkClean")
+	}
+}
+
+// Test disk-backed history
+func TestScrollbackHistory_WithDisk(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "history.hist")
+
+	// Create history with disk
+	h, err := NewScrollbackHistoryWithDisk(ScrollbackHistoryConfig{
+		MaxMemoryLines: 100,
+		DiskPath:       path,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create history: %v", err)
+	}
+
+	// Add some lines
+	for i := 0; i < 50; i++ {
+		h.AppendCells(makeCells("Line"))
+	}
+
+	if h.Len() != 50 {
+		t.Errorf("expected 50 lines, got %d", h.Len())
+	}
+	if h.TotalLen() != 50 {
+		t.Errorf("expected total 50, got %d", h.TotalLen())
+	}
+	if !h.HasDiskBacking() {
+		t.Error("should have disk backing")
+	}
+
+	// Close
+	if err := h.Close(); err != nil {
+		t.Fatalf("Failed to close: %v", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("History file not created: %v", err)
+	}
+
+	// Reopen
+	h2, err := NewScrollbackHistoryWithDisk(ScrollbackHistoryConfig{
+		MaxMemoryLines: 100,
+		DiskPath:       path,
+	})
+	if err != nil {
+		t.Fatalf("Failed to reopen: %v", err)
+	}
+	defer h2.Close()
+
+	if h2.TotalLen() != 50 {
+		t.Errorf("expected 50 lines after reopen, got %d", h2.TotalLen())
+	}
+}
+
+func TestScrollbackHistory_DiskTrimsMemory(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "history.hist")
+
+	h, err := NewScrollbackHistoryWithDisk(ScrollbackHistoryConfig{
+		MaxMemoryLines: 10,
+		DiskPath:       path,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create: %v", err)
+	}
+	defer h.Close()
+
+	// Add 50 lines
+	for i := 0; i < 50; i++ {
+		h.AppendCells(makeCells("Line"))
+	}
+
+	// Memory should be trimmed to 10
+	if h.Len() != 10 {
+		t.Errorf("expected 10 in memory, got %d", h.Len())
+	}
+
+	// Total should be 50
+	if h.TotalLen() != 50 {
+		t.Errorf("expected 50 total, got %d", h.TotalLen())
+	}
+
+	// Window should start at 40
+	if h.WindowStart() != 40 {
+		t.Errorf("expected window start 40, got %d", h.WindowStart())
+	}
+}
+
+func TestScrollbackHistory_LoadAbove(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "history.hist")
+
+	h, err := NewScrollbackHistoryWithDisk(ScrollbackHistoryConfig{
+		MaxMemoryLines: 10,
+		DiskPath:       path,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create: %v", err)
+	}
+	defer h.Close()
+
+	// Add 50 lines
+	for i := 0; i < 50; i++ {
+		h.AppendCells(makeCells("Line"))
+	}
+
+	// Memory has lines 40-49, disk has 0-49
+
+	if !h.CanLoadAbove() {
+		t.Error("should be able to load above")
+	}
+
+	// Load 5 lines above
+	loaded := h.LoadAbove(5)
+	if loaded != 5 {
+		t.Errorf("expected to load 5, loaded %d", loaded)
+	}
+
+	// Now memory should have lines 35-49 (15 lines, but trimmed to 10)
+	// After loading 5 above, and trimming below...
+	if h.Len() != 10 {
+		t.Errorf("expected 10 in memory after trim, got %d", h.Len())
+	}
+
+	if h.WindowStart() != 35 {
+		t.Errorf("expected window start 35, got %d", h.WindowStart())
+	}
+}
+
+func TestScrollbackHistory_GetGlobal(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "history.hist")
+
+	h, err := NewScrollbackHistoryWithDisk(ScrollbackHistoryConfig{
+		MaxMemoryLines: 10,
+		DiskPath:       path,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create: %v", err)
+	}
+	defer h.Close()
+
+	// Add lines with identifiable content
+	for i := 0; i < 30; i++ {
+		cells := []Cell{{Rune: rune('A' + (i % 26))}}
+		h.Append(NewLogicalLineFromCells(cells))
+	}
+
+	// Memory has 20-29, disk has 0-29
+
+	// Get from memory (line 25)
+	line := h.GetGlobal(25)
+	if line == nil {
+		t.Fatal("expected line 25")
+	}
+	expectedRune := rune('A' + (25 % 26))
+	if line.Cells[0].Rune != expectedRune {
+		t.Errorf("line 25: expected %c, got %c", expectedRune, line.Cells[0].Rune)
+	}
+
+	// Get from disk (line 5)
+	line = h.GetGlobal(5)
+	if line == nil {
+		t.Fatal("expected line 5 from disk")
+	}
+	expectedRune = rune('A' + (5 % 26))
+	if line.Cells[0].Rune != expectedRune {
+		t.Errorf("line 5: expected %c, got %c", expectedRune, line.Cells[0].Rune)
 	}
 }

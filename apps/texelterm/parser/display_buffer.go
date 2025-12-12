@@ -9,6 +9,7 @@ package parser
 //	┌─────────────────────────────────────────┐
 //	│           SCROLLBACK HISTORY            │
 //	│   (Logical lines - width independent)   │
+//	│   (Disk-backed, supports global index)  │
 //	└─────────────────────────────────────────┘
 //	                    │
 //	                    │ Load on demand
@@ -51,9 +52,10 @@ type DisplayBuffer struct {
 	// history is a reference to the scrollback history for loading lines.
 	history *ScrollbackHistory
 
-	// historyTopIndex tracks which logical line corresponds to lines[0].
-	// This is the "anchor" for the display buffer into history.
-	historyTopIndex int
+	// globalTopIndex tracks which GLOBAL logical line corresponds to lines[0].
+	// This is the anchor for the display buffer into history, using global indices
+	// that work across disk and memory.
+	globalTopIndex int64
 
 	// currentLine is the live line being edited (not yet committed to history).
 	// This is always conceptually at the bottom of the display.
@@ -87,22 +89,22 @@ func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *D
 	}
 
 	db := &DisplayBuffer{
-		lines:           make([]PhysicalLine, 0),
-		width:           config.Width,
-		height:          config.Height,
-		viewportTop:     0,
-		marginAbove:     config.MarginAbove,
-		marginBelow:     config.MarginBelow,
-		atLiveEdge:      true,
-		history:         history,
-		historyTopIndex: 0,
-		currentLine:     NewLogicalLine(),
+		lines:          make([]PhysicalLine, 0),
+		width:          config.Width,
+		height:         config.Height,
+		viewportTop:    0,
+		marginAbove:    config.MarginAbove,
+		marginBelow:    config.MarginBelow,
+		atLiveEdge:     true,
+		history:        history,
+		globalTopIndex: 0,
+		currentLine:    NewLogicalLine(),
 	}
 
 	db.rebuildCurrentLinePhysical()
 
 	// If history has content, load the bottom portion into lines
-	if history != nil && history.Len() > 0 {
+	if history != nil && history.TotalLen() > 0 {
 		db.loadInitialHistory()
 	}
 
@@ -112,29 +114,30 @@ func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *D
 // loadInitialHistory loads the bottom portion of history into lines.
 // Called when creating a display buffer with existing history.
 func (db *DisplayBuffer) loadInitialHistory() {
-	if db.history == nil || db.history.Len() == 0 {
+	if db.history == nil || db.history.TotalLen() == 0 {
 		return
 	}
 
 	// Calculate how many lines we need to show the live edge
 	linesNeeded := db.height + db.marginAbove
+	totalLines := db.history.TotalLen()
 
 	// Start from the end of history and work backwards
-	db.historyTopIndex = db.history.Len()
+	db.globalTopIndex = totalLines
 	physicalLoaded := 0
 
 	// Walk backwards through logical lines until we have enough physical lines
-	for db.historyTopIndex > 0 && physicalLoaded < linesNeeded {
-		db.historyTopIndex--
-		line := db.history.Get(db.historyTopIndex)
+	for db.globalTopIndex > 0 && physicalLoaded < linesNeeded {
+		db.globalTopIndex--
+		line := db.history.GetGlobal(db.globalTopIndex)
 		if line != nil {
 			physical := line.WrapToWidth(db.width)
 			physicalLoaded += len(physical)
 		}
 	}
 
-	// Now load those lines
-	db.lines = db.history.WrapToWidth(db.historyTopIndex, db.history.Len(), db.width)
+	// Now load those lines using global range
+	db.lines = db.history.WrapGlobalToWidth(db.globalTopIndex, totalLines, db.width)
 
 	// Position viewport at the live edge (bottom)
 	db.scrollToLiveEdge()
@@ -178,9 +181,10 @@ func (db *DisplayBuffer) CommitCurrentLine() {
 
 	// Add the committed line's physical representation to our buffer
 	committed := db.currentLine.WrapToWidth(db.width)
-	historyIdx := db.history.Len() - 1
+	// Use global index (TotalLen - 1 is the just-appended line)
+	globalIdx := int(db.history.TotalLen()) - 1
 	for i := range committed {
-		committed[i].LogicalIndex = historyIdx
+		committed[i].LogicalIndex = globalIdx
 	}
 	db.lines = append(db.lines, committed...)
 
@@ -222,32 +226,55 @@ func (db *DisplayBuffer) contentLineCount() int {
 func (db *DisplayBuffer) trimAbove() {
 	excessAbove := db.viewportTop - db.marginAbove
 	if excessAbove > 0 {
+		// Count how many logical lines we're removing
+		// Walk through removed physical lines and find the new globalTopIndex
+		newGlobalTop := db.globalTopIndex
+		for i := 0; i < excessAbove && i < len(db.lines); i++ {
+			// When we cross to a new logical line, advance the global index
+			if i > 0 && db.lines[i].LogicalIndex != db.lines[i-1].LogicalIndex {
+				newGlobalTop = int64(db.lines[i].LogicalIndex)
+			}
+		}
+		if excessAbove < len(db.lines) {
+			newGlobalTop = int64(db.lines[excessAbove].LogicalIndex)
+		}
+
 		// Remove excess lines from the top
 		db.lines = db.lines[excessAbove:]
 		db.viewportTop -= excessAbove
-		// Update anchor
-		// Need to figure out how many logical lines we removed
-		// For now, we'll track this more precisely later
+		db.globalTopIndex = newGlobalTop
 	}
 }
 
 // loadAbove loads more lines from history above the current buffer.
+// Uses global indices and triggers disk loading if needed.
 func (db *DisplayBuffer) loadAbove(count int) {
-	if db.history == nil || db.historyTopIndex <= 0 {
+	if db.history == nil || db.globalTopIndex <= 0 {
 		return
 	}
 
 	// Calculate how many logical lines to load
-	linesToLoad := min(count, db.historyTopIndex)
-	startIdx := db.historyTopIndex - linesToLoad
+	linesToLoad := int64(count)
+	if linesToLoad > db.globalTopIndex {
+		linesToLoad = db.globalTopIndex
+	}
+	startIdx := db.globalTopIndex - linesToLoad
 
-	// Wrap those logical lines to physical
-	physical := db.history.WrapToWidth(startIdx, db.historyTopIndex, db.width)
+	// Ensure ScrollbackHistory has these lines loaded from disk
+	// LoadAbove returns how many were loaded, but we use global range which
+	// will read from disk as needed via GetGlobalRange
+	if db.history.CanLoadAbove() {
+		// Try to load into memory first for better performance
+		db.history.LoadAbove(int(linesToLoad))
+	}
+
+	// Wrap those logical lines to physical using global range
+	physical := db.history.WrapGlobalToWidth(startIdx, db.globalTopIndex, db.width)
 
 	// Prepend to our lines
 	db.lines = append(physical, db.lines...)
 	db.viewportTop += len(physical)
-	db.historyTopIndex = startIdx
+	db.globalTopIndex = startIdx
 }
 
 // ScrollUp scrolls the viewport up by the given number of lines.
@@ -422,7 +449,7 @@ func (db *DisplayBuffer) rewrap() {
 	// Remember where we were anchored
 	wasAtLiveEdge := db.atLiveEdge
 
-	// Remember anchor for scroll position preservation
+	// Remember anchor for scroll position preservation (using global index)
 	var anchorLogicalIdx int = -1
 	var anchorWrapOffset int = 0
 
@@ -435,36 +462,37 @@ func (db *DisplayBuffer) rewrap() {
 
 	// Rebuild from history
 	db.lines = make([]PhysicalLine, 0)
+	totalLines := db.history.TotalLen()
 
-	if db.history != nil && db.history.Len() > 0 {
+	if db.history != nil && totalLines > 0 {
 		// Load a window of history around what we need
 		linesNeeded := db.height + db.marginAbove + db.marginBelow
 
 		if anchorLogicalIdx >= 0 {
 			// Load around the anchor point to preserve scroll position
-			// Start loading from before the anchor
-			startIdx := max(0, anchorLogicalIdx-db.marginAbove)
-			endIdx := min(db.history.Len(), anchorLogicalIdx+db.marginBelow+db.height)
+			// Start loading from before the anchor (using global indices)
+			startIdx := int64(max(0, anchorLogicalIdx-db.marginAbove))
+			endIdx := int64(min(int(totalLines), anchorLogicalIdx+db.marginBelow+db.height))
 
-			db.historyTopIndex = startIdx
-			db.lines = db.history.WrapToWidth(startIdx, endIdx, db.width)
+			db.globalTopIndex = startIdx
+			db.lines = db.history.WrapGlobalToWidth(startIdx, endIdx, db.width)
 		} else {
 			// Start from the end of history and work backwards
-			db.historyTopIndex = db.history.Len()
+			db.globalTopIndex = totalLines
 			physicalLoaded := 0
 
 			// Walk backwards through logical lines until we have enough physical lines
-			for db.historyTopIndex > 0 && physicalLoaded < linesNeeded {
-				db.historyTopIndex--
-				line := db.history.Get(db.historyTopIndex)
+			for db.globalTopIndex > 0 && physicalLoaded < linesNeeded {
+				db.globalTopIndex--
+				line := db.history.GetGlobal(db.globalTopIndex)
 				if line != nil {
 					physical := line.WrapToWidth(db.width)
 					physicalLoaded += len(physical)
 				}
 			}
 
-			// Now load those lines
-			db.lines = db.history.WrapToWidth(db.historyTopIndex, db.history.Len(), db.width)
+			// Now load those lines using global range
+			db.lines = db.history.WrapGlobalToWidth(db.globalTopIndex, totalLines, db.width)
 		}
 	}
 
@@ -546,7 +574,7 @@ func (db *DisplayBuffer) ViewportTopLine() int {
 
 // CanScrollUp returns true if there's content above the viewport to scroll to.
 func (db *DisplayBuffer) CanScrollUp() bool {
-	return db.viewportTop > 0 || db.historyTopIndex > 0
+	return db.viewportTop > 0 || db.globalTopIndex > 0
 }
 
 // CanScrollDown returns true if there's content below the viewport to scroll to.

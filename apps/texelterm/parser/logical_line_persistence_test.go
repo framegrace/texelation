@@ -345,7 +345,7 @@ func TestScrollbackHistory_SaveAndLoad(t *testing.T) {
 	histFile := filepath.Join(tmpDir, "test.lhist")
 
 	// Create a ScrollbackHistory and add lines
-	history := NewScrollbackHistory(1000)
+	history := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	history.AppendCells(makeCells("Line 1"))
 	history.AppendCells(makeCells("Line 2 is longer"))
 	history.AppendCells(makeCells(""))
@@ -358,7 +358,7 @@ func TestScrollbackHistory_SaveAndLoad(t *testing.T) {
 	}
 
 	// Load into a new history
-	newHistory := NewScrollbackHistory(1000)
+	newHistory := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	err = LoadScrollbackHistory(histFile, newHistory)
 	if err != nil {
 		t.Fatalf("LoadScrollbackHistory failed: %v", err)

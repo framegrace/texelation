@@ -5,7 +5,7 @@ import (
 )
 
 func TestDisplayBuffer_New(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:  80,
 		Height: 24,
@@ -23,7 +23,7 @@ func TestDisplayBuffer_New(t *testing.T) {
 }
 
 func TestDisplayBuffer_SetCell(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:  80,
 		Height: 24,
@@ -44,7 +44,7 @@ func TestDisplayBuffer_SetCell(t *testing.T) {
 }
 
 func TestDisplayBuffer_CommitCurrentLine(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:  80,
 		Height: 24,
@@ -72,7 +72,7 @@ func TestDisplayBuffer_CommitCurrentLine(t *testing.T) {
 }
 
 func TestDisplayBuffer_GetViewport(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:  10,
 		Height: 3,
@@ -104,7 +104,7 @@ func TestDisplayBuffer_GetViewport(t *testing.T) {
 }
 
 func TestDisplayBuffer_GetViewportAsCells(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:  5,
 		Height: 2,
@@ -140,7 +140,7 @@ func TestDisplayBuffer_GetViewportAsCells(t *testing.T) {
 }
 
 func TestDisplayBuffer_Scroll(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:       80,
 		Height:      3,
@@ -176,7 +176,7 @@ func TestDisplayBuffer_Scroll(t *testing.T) {
 }
 
 func TestDisplayBuffer_Resize(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:  10,
 		Height: 5,
@@ -204,7 +204,7 @@ func TestDisplayBuffer_Resize(t *testing.T) {
 }
 
 func TestDisplayBuffer_WrapPreservesContent(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:  10,
 		Height: 5,
@@ -238,7 +238,7 @@ func TestDisplayBuffer_WrapPreservesContent(t *testing.T) {
 }
 
 func TestDisplayBuffer_LiveEdgeBehavior(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:       80,
 		Height:      3,
@@ -274,7 +274,7 @@ func TestDisplayBuffer_LiveEdgeBehavior(t *testing.T) {
 }
 
 func TestDisplayBuffer_CanScroll(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:  80,
 		Height: 5,
@@ -313,7 +313,7 @@ func TestDisplayBuffer_CanScroll(t *testing.T) {
 }
 
 func TestDisplayBuffer_ResizePreservesScrollPosition(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:       20,
 		Height:      5,
@@ -384,7 +384,7 @@ func TestDisplayBuffer_ResizePreservesScrollPosition(t *testing.T) {
 }
 
 func TestDisplayBuffer_ResizeAtLiveEdgeStaysAtLiveEdge(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:  20,
 		Height: 5,
@@ -411,7 +411,7 @@ func TestDisplayBuffer_ResizeAtLiveEdgeStaysAtLiveEdge(t *testing.T) {
 }
 
 func TestDisplayBuffer_VerticalResizePreservesScrollPosition(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:       80,
 		Height:      10,
@@ -459,7 +459,7 @@ func TestDisplayBuffer_VerticalResizePreservesScrollPosition(t *testing.T) {
 }
 
 func TestDisplayBuffer_VerticalResizeAtLiveEdge(t *testing.T) {
-	h := NewScrollbackHistory(1000)
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
 	db := NewDisplayBuffer(h, DisplayBufferConfig{
 		Width:       80,
 		Height:      10,

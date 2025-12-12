@@ -33,8 +33,10 @@ type displayBufferState struct {
 // Called from NewVTerm when the feature is enabled.
 func (v *VTerm) initDisplayBuffer() {
 	v.displayBuf = &displayBufferState{
-		history: NewScrollbackHistory(10000), // 10k logical lines
-		enabled: false,                       // Start disabled, enable explicitly
+		history: NewScrollbackHistory(ScrollbackHistoryConfig{
+			MaxMemoryLines: 10000, // 10k logical lines in memory
+		}),
+		enabled: false, // Start disabled, enable explicitly
 	}
 	v.displayBuf.display = NewDisplayBuffer(v.displayBuf.history, DisplayBufferConfig{
 		Width:       v.width,
