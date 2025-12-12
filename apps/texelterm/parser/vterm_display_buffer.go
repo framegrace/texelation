@@ -29,20 +29,79 @@ type displayBufferState struct {
 	currentLogicalX int
 }
 
+// DisplayBufferOptions configures the display buffer system.
+type DisplayBufferOptions struct {
+	// MaxMemoryLines is the max logical lines to keep in memory (default 5000).
+	MaxMemoryLines int
+	// MarginAbove is display buffer margin above viewport (default 200).
+	MarginAbove int
+	// MarginBelow is display buffer margin below viewport (default 50).
+	MarginBelow int
+	// DiskPath enables disk persistence if non-empty.
+	DiskPath string
+}
+
+// DefaultDisplayBufferOptions returns sensible defaults.
+func DefaultDisplayBufferOptions() DisplayBufferOptions {
+	return DisplayBufferOptions{
+		MaxMemoryLines: 5000,
+		MarginAbove:    200,
+		MarginBelow:    50,
+		DiskPath:       "",
+	}
+}
+
 // initDisplayBuffer initializes the display buffer system for VTerm.
 // Called from NewVTerm when the feature is enabled.
 func (v *VTerm) initDisplayBuffer() {
+	v.initDisplayBufferWithOptions(DefaultDisplayBufferOptions())
+}
+
+// initDisplayBufferWithOptions initializes the display buffer with custom options.
+func (v *VTerm) initDisplayBufferWithOptions(opts DisplayBufferOptions) {
+	if opts.MaxMemoryLines <= 0 {
+		opts.MaxMemoryLines = 5000
+	}
+	if opts.MarginAbove <= 0 {
+		opts.MarginAbove = 200
+	}
+	if opts.MarginBelow <= 0 {
+		opts.MarginBelow = 50
+	}
+
+	var history *ScrollbackHistory
+	var err error
+
+	if opts.DiskPath != "" {
+		// Create disk-backed history
+		history, err = NewScrollbackHistoryWithDisk(ScrollbackHistoryConfig{
+			MaxMemoryLines: opts.MaxMemoryLines,
+			MarginAbove:    opts.MarginAbove,
+			MarginBelow:    opts.MarginBelow,
+			DiskPath:       opts.DiskPath,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Failed to create disk-backed history: %v, falling back to memory-only\n", err)
+			history = nil
+		}
+	}
+
+	if history == nil {
+		// Memory-only history
+		history = NewScrollbackHistory(ScrollbackHistoryConfig{
+			MaxMemoryLines: opts.MaxMemoryLines,
+		})
+	}
+
 	v.displayBuf = &displayBufferState{
-		history: NewScrollbackHistory(ScrollbackHistoryConfig{
-			MaxMemoryLines: 10000, // 10k logical lines in memory
-		}),
+		history: history,
 		enabled: false, // Start disabled, enable explicitly
 	}
 	v.displayBuf.display = NewDisplayBuffer(v.displayBuf.history, DisplayBufferConfig{
 		Width:       v.width,
 		Height:      v.height,
-		MarginAbove: 200,
-		MarginBelow: 50,
+		MarginAbove: opts.MarginAbove,
+		MarginBelow: opts.MarginBelow,
 	})
 }
 
@@ -64,6 +123,39 @@ func (v *VTerm) EnableDisplayBuffer() {
 	} else {
 		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] EnableDisplayBuffer: historyManager is nil\n")
 	}
+}
+
+// EnableDisplayBufferWithDisk enables the display buffer with disk-backed persistence.
+// This bypasses the legacy HistoryManager and uses the new three-level architecture:
+// Disk -> Memory (ScrollbackHistory) -> Display (DisplayBuffer)
+//
+// The diskPath should be the full path to the history file (e.g., ~/.texelation/scrollback/pane-id.hist2).
+// If the file exists with valid TXHIST02 format, history is loaded from it.
+// If the file doesn't exist or has an old format, starts fresh.
+func (v *VTerm) EnableDisplayBufferWithDisk(diskPath string, opts DisplayBufferOptions) error {
+	opts.DiskPath = diskPath
+	v.initDisplayBufferWithOptions(opts)
+	v.displayBuf.enabled = true
+
+	// Log status
+	if v.displayBuf.history.HasDiskBacking() {
+		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Enabled with disk backing: %s\n", diskPath)
+		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Loaded %d lines from disk, %d in memory\n",
+			v.displayBuf.history.TotalLen(), v.displayBuf.history.Len())
+	} else {
+		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Enabled (memory-only, disk init failed)\n")
+	}
+
+	return nil
+}
+
+// CloseDisplayBuffer closes the display buffer and its disk backing (if any).
+// Should be called when the terminal is shutting down.
+func (v *VTerm) CloseDisplayBuffer() error {
+	if v.displayBuf == nil || v.displayBuf.history == nil {
+		return nil
+	}
+	return v.displayBuf.history.Close()
 }
 
 // loadHistoryManagerIntoDisplayBuffer converts physical lines from the legacy
@@ -274,12 +366,20 @@ func (v *VTerm) displayBufferGetCurrentLine() *LogicalLine {
 	return v.displayBuf.display.CurrentLine()
 }
 
-// displayBufferHistoryLen returns the number of committed logical lines.
+// displayBufferHistoryLen returns the number of committed logical lines in memory.
 func (v *VTerm) displayBufferHistoryLen() int {
 	if v.displayBuf == nil || v.displayBuf.history == nil {
 		return 0
 	}
 	return v.displayBuf.history.Len()
+}
+
+// displayBufferHistoryTotalLen returns the total number of lines including disk.
+func (v *VTerm) displayBufferHistoryTotalLen() int64 {
+	if v.displayBuf == nil || v.displayBuf.history == nil {
+		return 0
+	}
+	return v.displayBuf.history.TotalLen()
 }
 
 // displayBufferLoadHistory loads logical lines into the display buffer history.

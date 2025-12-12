@@ -4,6 +4,7 @@
 package parser
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -726,9 +727,20 @@ func TestVTerm_DisplayBufferProgressBar(t *testing.T) {
 }
 
 func TestVTerm_DisplayBufferLargeHistory(t *testing.T) {
-	// Test performance with large history
+	// Test performance with large history using disk backing
+	tmpDir := t.TempDir()
+	diskPath := filepath.Join(tmpDir, "large_history.hist")
+
 	v := NewVTerm(80, 24)
-	v.EnableDisplayBuffer()
+	err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 1000, // Small memory window to test disk spilling
+		MarginAbove:    200,
+		MarginBelow:    50,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk failed: %v", err)
+	}
+	defer v.CloseDisplayBuffer()
 
 	// Write 10000 lines
 	for i := 0; i < 10000; i++ {
@@ -739,9 +751,14 @@ func TestVTerm_DisplayBufferLargeHistory(t *testing.T) {
 		v.LineFeed()
 	}
 
-	// Should have 10000 committed lines
-	if v.displayBufferHistoryLen() != 10000 {
-		t.Errorf("expected 10000 lines in history, got %d", v.displayBufferHistoryLen())
+	// Should have 10000 total lines (disk + memory)
+	if v.displayBufferHistoryTotalLen() != 10000 {
+		t.Errorf("expected 10000 total lines, got %d", v.displayBufferHistoryTotalLen())
+	}
+
+	// Memory should be limited
+	if v.displayBufferHistoryLen() > 1000 {
+		t.Errorf("expected <= 1000 lines in memory, got %d", v.displayBufferHistoryLen())
 	}
 
 	// Grid should still work
@@ -767,9 +784,123 @@ func TestVTerm_DisplayBufferLargeHistory(t *testing.T) {
 	// Scroll up into history
 	v.Scroll(-100)
 
-	// Should still have 10000 lines
-	if v.displayBufferHistoryLen() != 10000 {
-		t.Errorf("expected 10000 lines after scroll, got %d", v.displayBufferHistoryLen())
+	// Should still have 10000 total lines
+	if v.displayBufferHistoryTotalLen() != 10000 {
+		t.Errorf("expected 10000 total lines after scroll, got %d", v.displayBufferHistoryTotalLen())
+	}
+}
+
+func TestVTerm_DisplayBufferDiskScrolling(t *testing.T) {
+	// Test that scrolling back into disk history works correctly
+	tmpDir := t.TempDir()
+	diskPath := filepath.Join(tmpDir, "scroll_test.hist")
+
+	v := NewVTerm(80, 10) // Small viewport
+	err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 20, // Very small memory to force disk usage
+		MarginAbove:    10,
+		MarginBelow:    5,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk failed: %v", err)
+	}
+	defer v.CloseDisplayBuffer()
+
+	// Write 100 lines with identifiable content
+	for i := 0; i < 100; i++ {
+		text := "Line number " + string(rune('A'+(i%26)))
+		for _, r := range text {
+			v.placeChar(r)
+		}
+		// Pad with index
+		for _, r := range " [" + string(rune('0'+i/10)) + string(rune('0'+i%10)) + "]" {
+			v.placeChar(r)
+		}
+		v.LineFeed()
+	}
+
+	// Verify total count
+	if v.displayBufferHistoryTotalLen() != 100 {
+		t.Errorf("expected 100 total lines, got %d", v.displayBufferHistoryTotalLen())
+	}
+
+	// Memory should be limited
+	if v.displayBufferHistoryLen() > 20 {
+		t.Errorf("expected <= 20 lines in memory, got %d", v.displayBufferHistoryLen())
+	}
+
+	// At live edge, we should see the latest lines
+	if !v.displayBufferAtLiveEdge() {
+		t.Error("should be at live edge after writing")
+	}
+
+	// Scroll up a lot to go back into disk history
+	v.Scroll(-80) // This should trigger loading from disk
+
+	// Should no longer be at live edge
+	if v.displayBufferAtLiveEdge() {
+		t.Error("should not be at live edge after scrolling up")
+	}
+
+	// Grid should still work
+	grid := v.Grid()
+	if grid == nil {
+		t.Fatal("Grid() returned nil after scroll into disk history")
+	}
+
+	// Scroll back to live edge
+	v.ScrollToLiveEdge()
+
+	if !v.displayBufferAtLiveEdge() {
+		t.Error("should be at live edge after ScrollToLiveEdge")
+	}
+
+	// Total should still be 100
+	if v.displayBufferHistoryTotalLen() != 100 {
+		t.Errorf("expected 100 total lines after scroll cycle, got %d", v.displayBufferHistoryTotalLen())
+	}
+}
+
+func TestVTerm_DisplayBufferPersistAndReload(t *testing.T) {
+	// Test that history persists across close/reopen
+	tmpDir := t.TempDir()
+	diskPath := filepath.Join(tmpDir, "persist_test.hist")
+
+	// Create terminal and write some content
+	v := NewVTerm(80, 10)
+	err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 50,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk failed: %v", err)
+	}
+
+	// Write 30 lines
+	for i := 0; i < 30; i++ {
+		for _, r := range "Persistent line" {
+			v.placeChar(r)
+		}
+		v.LineFeed()
+	}
+
+	// Close to flush to disk
+	if err := v.CloseDisplayBuffer(); err != nil {
+		t.Fatalf("CloseDisplayBuffer failed: %v", err)
+	}
+
+	// Create new terminal and load from disk
+	v2 := NewVTerm(80, 10)
+	err = v2.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 50,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk on reload failed: %v", err)
+	}
+	defer v2.CloseDisplayBuffer()
+
+	// Should have 30 lines from disk
+	if v2.displayBufferHistoryTotalLen() != 30 {
+		t.Errorf("expected 30 lines after reload, got %d", v2.displayBufferHistoryTotalLen())
 	}
 }
 
