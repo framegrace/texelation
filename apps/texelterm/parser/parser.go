@@ -76,8 +76,10 @@ func (p *Parser) Parse(r rune) {
 		case '\f':
 			// FF (Form Feed) - behaves like IND (Index)
 			p.vterm.Index()
+		case '\x7f': // DEL - treat same as backspace
+			p.vterm.Backspace()
 		default:
-			if r >= ' ' {
+			if r >= ' ' && r != '\x7f' {
 				p.vterm.placeChar(r)
 			} else if r == '\x07' {
 				// BEL - ignore (visual bell not implemented)
