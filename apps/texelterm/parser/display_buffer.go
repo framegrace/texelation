@@ -199,13 +199,24 @@ func (db *DisplayBuffer) CommitCurrentLine() {
 
 // scrollToLiveEdge adjusts viewportTop so the viewport shows the bottom content.
 func (db *DisplayBuffer) scrollToLiveEdge() {
-	totalLines := len(db.lines) + len(db.currentLinePhysical)
+	totalLines := db.contentLineCount()
 	if totalLines <= db.height {
 		db.viewportTop = 0
 	} else {
 		db.viewportTop = totalLines - db.height
 	}
 	db.atLiveEdge = true
+}
+
+// contentLineCount returns the number of lines that have actual content.
+// Empty current line doesn't count toward content for viewport positioning.
+func (db *DisplayBuffer) contentLineCount() int {
+	total := len(db.lines)
+	// Only count current line if it has content
+	if db.currentLine != nil && db.currentLine.Len() > 0 {
+		total += len(db.currentLinePhysical)
+	}
+	return total
 }
 
 // trimAbove removes lines from the top that exceed marginAbove.
@@ -271,7 +282,7 @@ func (db *DisplayBuffer) ScrollDown(lines int) int {
 		return 0
 	}
 
-	totalLines := len(db.lines) + len(db.currentLinePhysical)
+	totalLines := db.contentLineCount()
 	maxViewportTop := totalLines - db.height
 	if maxViewportTop < 0 {
 		maxViewportTop = 0
@@ -366,7 +377,7 @@ func (db *DisplayBuffer) Resize(newWidth, newHeight int) {
 
 // resizeHeight handles vertical-only resize, preserving scroll position.
 func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
-	totalLines := len(db.lines) + len(db.currentLinePhysical)
+	totalLines := db.contentLineCount()
 
 	if db.atLiveEdge {
 		// At live edge - keep viewport showing the bottom content
@@ -383,7 +394,7 @@ func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
 			needed := db.marginAbove - db.viewportTop
 			db.loadAbove(needed)
 			// Recalculate after loading
-			totalLines = len(db.lines) + len(db.currentLinePhysical)
+			totalLines = db.contentLineCount()
 			if totalLines <= newHeight {
 				db.viewportTop = 0
 			} else {
