@@ -1121,3 +1121,114 @@ func (db *DisplayBuffer) TrimBelow() {
 - Current implementation: `apps/texelterm/parser/vterm.go`
 - History management: `apps/texelterm/parser/history.go`
 - Storage format: `apps/texelterm/parser/history_store.go`
+
+---
+
+## Future Work: Shell Integration Markers in History
+
+### Overview
+
+Store OSC 133 shell integration markers directly in the history format. This enables several advanced features and fixes a known bug.
+
+### OSC 133 Sequences
+
+The shell integration protocol uses these markers:
+- `OSC 133;A` - Prompt start
+- `OSC 133;B` - Prompt end / Input start (user typing begins)
+- `OSC 133;C` - Input end / Command start (command execution begins)
+- `OSC 133;D;exitcode` - Command end with exit status
+
+### Features Enabled
+
+#### 1. Command Search with Fuzzy Logic
+With markers, we can extract just the commands (content between B and C markers):
+```
+[A] ~/projects/myapp (main) $    ← prompt (ignore in search)
+[B] git status                   ← command (searchable!)
+[C]                              ← execution started
+On branch main                   ← output (ignore in search)
+nothing to commit                ← output
+[D;0]                            ← exit status 0 (success)
+```
+
+Benefits:
+- Fuzzy search only over actual commands, not output noise
+- Autocomplete from command history
+- Filter by exit status (show only successful commands, or find failed ones)
+
+#### 2. Command Output Extraction
+Jump between commands, collapse/expand output sections, copy just the command or just its output.
+
+#### 3. Exit Status Tracking
+- Visual indicators for failed commands (exit code != 0)
+- Search for failed commands: "show me all failed `make` commands"
+- Statistics: command success rates
+
+#### 4. **Bug Fix: Duplicate Prompt on Server Restart**
+**Current issue**: After server restart, the prompt from the previous session is loaded from history, then the shell outputs a fresh prompt, causing duplication (especially noticeable with multi-line prompts).
+
+**Fix with markers**: On history load, find the last `OSC 133;D` (command end) or `OSC 133;C` (command start) marker and truncate everything after it. This removes the stale prompt that was displayed but never followed by a command.
+
+```
+... command output ...
+[D;0]                    ← last command ended here
+[A] ~/projects $         ← stale prompt - TRUNCATE FROM HERE
+```
+
+### Implementation Sketch
+
+#### History Format Extension (TXHIST03?)
+
+Add a new line type for markers:
+```
+Line types:
+  0x01 = Content line (existing)
+  0x02 = Marker line (new)
+
+Marker line format:
+  [1 byte type][1 byte marker_type][4 bytes payload_len][payload]
+
+Marker types:
+  'A' = Prompt start
+  'B' = Input start
+  'C' = Command start
+  'D' = Command end (payload = exit code as varint)
+```
+
+#### LogicalLine Extension
+
+```go
+type LogicalLine struct {
+    Cells  []Cell
+    Marker *ShellMarker  // nil for normal content lines
+}
+
+type ShellMarker struct {
+    Type     byte   // 'A', 'B', 'C', 'D'
+    ExitCode int    // only for 'D'
+}
+```
+
+#### Parser Integration
+
+In `handleOSC133()`, after updating state flags, also append a marker to history:
+```go
+case "A":
+    db.AppendMarker(ShellMarker{Type: 'A'})
+case "D":
+    db.AppendMarker(ShellMarker{Type: 'D', ExitCode: exitCode})
+```
+
+### Complexity Estimate
+
+- History format changes: ~100 lines
+- Parser integration: ~30 lines
+- Command extraction/search: ~200 lines
+- UI for command navigation: ~300 lines
+- Migration from TXHIST02: ~50 lines
+
+Total: ~700 lines for core functionality, more for full fuzzy search UI.
+
+### Priority
+
+Medium - Not blocking current functionality, but valuable for power users and would fix the prompt duplication annoyance.
