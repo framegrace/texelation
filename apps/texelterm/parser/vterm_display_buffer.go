@@ -29,12 +29,17 @@ type displayBufferState struct {
 	currentLogicalX int
 }
 
+// DisplayBufferMemoryLines is the number of logical lines to keep in the
+// DisplayBuffer's in-memory history. More lines can be loaded on-demand
+// from the HistoryManager when scrolling.
+const DisplayBufferMemoryLines = 5000
+
 // initDisplayBuffer initializes the display buffer system for VTerm.
 // Called from NewVTerm when the feature is enabled.
 func (v *VTerm) initDisplayBuffer() {
 	v.displayBuf = &displayBufferState{
-		history: NewScrollbackHistory(DefaultMemoryLines), // Match HistoryManager capacity
-		enabled: false,                                    // Start disabled, enable explicitly
+		history: NewScrollbackHistory(DisplayBufferMemoryLines),
+		enabled: false, // Start disabled, enable explicitly
 	}
 	v.displayBuf.display = NewDisplayBuffer(v.displayBuf.history, DisplayBufferConfig{
 		Width:       v.width,
@@ -66,16 +71,27 @@ func (v *VTerm) EnableDisplayBuffer() {
 
 // loadHistoryManagerIntoDisplayBuffer converts physical lines from the legacy
 // historyManager and loads them into the display buffer's logical line storage.
+// Only loads the most recent lines to fit in DisplayBufferMemoryLines; older
+// lines are loaded on-demand when scrolling via the HistoryLoader.
 func (v *VTerm) loadHistoryManagerIntoDisplayBuffer() {
 	if v.historyManager == nil || v.displayBuf == nil {
 		return
 	}
 
-	// Extract all physical lines from history manager
-	length := v.historyManager.Length()
-	physical := make([][]Cell, length)
-	for i := 0; i < length; i++ {
-		physical[i] = v.historyManager.GetLine(i)
+	totalLines := v.historyManager.Length()
+	if totalLines == 0 {
+		return
+	}
+
+	// Only load the most recent lines that fit in our memory window
+	// The rest will be loaded on-demand via the loader
+	linesToLoad := min(totalLines, DisplayBufferMemoryLines)
+	startIdx := totalLines - linesToLoad
+
+	// Extract physical lines from history manager (most recent portion)
+	physical := make([][]Cell, linesToLoad)
+	for i := 0; i < linesToLoad; i++ {
+		physical[i] = v.historyManager.GetLine(startIdx + i)
 	}
 
 	// Convert physical lines to logical lines and load into display buffer
@@ -91,6 +107,11 @@ func (v *VTerm) loadHistoryManagerIntoDisplayBuffer() {
 		MarginAbove: 200,
 		MarginBelow: 50,
 	})
+
+	// Set up the loader for on-demand loading of older history
+	// The loader knows that 'linesToLoad' physical lines have been loaded
+	loader := NewHistoryManagerLoader(v.historyManager, linesToLoad)
+	v.displayBuf.display.SetLoader(loader)
 
 	// Scroll to live edge
 	v.displayBuf.display.ScrollToBottom()

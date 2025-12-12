@@ -727,6 +727,8 @@ func TestVTerm_DisplayBufferProgressBar(t *testing.T) {
 
 func TestVTerm_DisplayBufferLargeHistory(t *testing.T) {
 	// Test performance with large history
+	// Note: In-memory history is limited to DisplayBufferMemoryLines (5000)
+	// Older lines are available via on-demand loading from disk
 	v := NewVTerm(80, 24)
 	v.EnableDisplayBuffer()
 
@@ -739,9 +741,14 @@ func TestVTerm_DisplayBufferLargeHistory(t *testing.T) {
 		v.LineFeed()
 	}
 
-	// Should have 10000 committed lines
-	if v.displayBufferHistoryLen() != 10000 {
-		t.Errorf("expected 10000 lines in history, got %d", v.displayBufferHistoryLen())
+	// In-memory history should be capped at DisplayBufferMemoryLines
+	// The most recent lines are kept, oldest are discarded (but would be on disk)
+	histLen := v.displayBufferHistoryLen()
+	if histLen > DisplayBufferMemoryLines {
+		t.Errorf("history should be capped at %d, got %d", DisplayBufferMemoryLines, histLen)
+	}
+	if histLen < DisplayBufferMemoryLines {
+		t.Errorf("expected history to have %d lines, got %d", DisplayBufferMemoryLines, histLen)
 	}
 
 	// Grid should still work
@@ -764,12 +771,12 @@ func TestVTerm_DisplayBufferLargeHistory(t *testing.T) {
 		t.Errorf("expected width 40, got %d", len(grid[0]))
 	}
 
-	// Scroll up into history
+	// Scroll up into history - should work with in-memory history
 	v.Scroll(-100)
 
-	// Should still have 10000 lines
-	if v.displayBufferHistoryLen() != 10000 {
-		t.Errorf("expected 10000 lines after scroll, got %d", v.displayBufferHistoryLen())
+	// History length should be unchanged
+	if v.displayBufferHistoryLen() != histLen {
+		t.Errorf("expected %d lines after scroll, got %d", histLen, v.displayBufferHistoryLen())
 	}
 }
 

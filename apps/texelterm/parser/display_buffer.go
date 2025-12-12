@@ -1,5 +1,22 @@
 package parser
 
+// HistoryLoader provides on-demand loading of historical lines from disk.
+// This allows the DisplayBuffer to access unlimited history without keeping
+// everything in memory.
+type HistoryLoader interface {
+	// LoadLinesAbove loads up to 'count' logical lines from disk that are
+	// older than what's currently in memory. Returns the lines in chronological
+	// order (oldest first). Returns nil if no more history available.
+	LoadLinesAbove(count int) []*LogicalLine
+
+	// HasMoreAbove returns true if there's more history on disk above what's loaded.
+	HasMoreAbove() bool
+
+	// TotalLines returns the total number of lines available (memory + disk).
+	// Returns -1 if unknown/unlimited.
+	TotalLines() int
+}
+
 // DisplayBuffer manages the physical lines shown in the terminal viewport.
 // It maintains a window of physical lines around the visible area, loading
 // from ScrollbackHistory on demand.
@@ -61,6 +78,10 @@ type DisplayBuffer struct {
 
 	// currentLinePhysical is the wrapped version of currentLine at current width.
 	currentLinePhysical []PhysicalLine
+
+	// loader provides on-demand loading of older history from disk.
+	// If nil, only in-memory history is available.
+	loader HistoryLoader
 }
 
 // DisplayBufferConfig holds configuration for creating a DisplayBuffer.
@@ -231,23 +252,73 @@ func (db *DisplayBuffer) trimAbove() {
 	}
 }
 
+// SetLoader sets the history loader for on-demand disk loading.
+func (db *DisplayBuffer) SetLoader(loader HistoryLoader) {
+	db.loader = loader
+}
+
 // loadAbove loads more lines from history above the current buffer.
 func (db *DisplayBuffer) loadAbove(count int) {
-	if db.history == nil || db.historyTopIndex <= 0 {
+	if db.history == nil {
 		return
 	}
 
-	// Calculate how many logical lines to load
-	linesToLoad := min(count, db.historyTopIndex)
-	startIdx := db.historyTopIndex - linesToLoad
+	// First try to load from in-memory history
+	if db.historyTopIndex > 0 {
+		linesToLoad := min(count, db.historyTopIndex)
+		startIdx := db.historyTopIndex - linesToLoad
 
-	// Wrap those logical lines to physical
-	physical := db.history.WrapToWidth(startIdx, db.historyTopIndex, db.width)
+		// Wrap those logical lines to physical
+		physical := db.history.WrapToWidth(startIdx, db.historyTopIndex, db.width)
+
+		// Prepend to our lines
+		db.lines = append(physical, db.lines...)
+		db.viewportTop += len(physical)
+		db.historyTopIndex = startIdx
+		count -= linesToLoad
+	}
+
+	// If we still need more and have a disk loader, load from disk
+	if count > 0 && db.loader != nil && db.loader.HasMoreAbove() {
+		db.loadFromDisk(count)
+	}
+}
+
+// loadFromDisk loads older lines from disk via the HistoryLoader.
+func (db *DisplayBuffer) loadFromDisk(count int) {
+	if db.loader == nil {
+		return
+	}
+
+	// Load logical lines from disk
+	diskLines := db.loader.LoadLinesAbove(count)
+	if len(diskLines) == 0 {
+		return
+	}
+
+	// Prepend to ScrollbackHistory
+	db.history.PrependLines(diskLines)
+
+	// historyTopIndex now points to the first of the newly loaded lines
+	// (which is at index 0 in history)
+	// We need to wrap these new lines and prepend to display buffer
+
+	// Wrap the newly loaded lines
+	physical := make([]PhysicalLine, 0)
+	for i, line := range diskLines {
+		wrapped := line.WrapToWidth(db.width)
+		for j := range wrapped {
+			wrapped[j].LogicalIndex = i // Index relative to new start
+		}
+		physical = append(physical, wrapped...)
+	}
 
 	// Prepend to our lines
 	db.lines = append(physical, db.lines...)
 	db.viewportTop += len(physical)
-	db.historyTopIndex = startIdx
+
+	// historyTopIndex stays at 0 (we're at the start of in-memory history)
+	// but now history has more lines prepended
 }
 
 // ScrollUp scrolls the viewport up by the given number of lines.
