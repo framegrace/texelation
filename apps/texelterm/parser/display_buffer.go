@@ -100,7 +100,44 @@ func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *D
 	}
 
 	db.rebuildCurrentLinePhysical()
+
+	// If history has content, load the bottom portion into lines
+	if history != nil && history.Len() > 0 {
+		db.loadInitialHistory()
+	}
+
 	return db
+}
+
+// loadInitialHistory loads the bottom portion of history into lines.
+// Called when creating a display buffer with existing history.
+func (db *DisplayBuffer) loadInitialHistory() {
+	if db.history == nil || db.history.Len() == 0 {
+		return
+	}
+
+	// Calculate how many lines we need to show the live edge
+	linesNeeded := db.height + db.marginAbove
+
+	// Start from the end of history and work backwards
+	db.historyTopIndex = db.history.Len()
+	physicalLoaded := 0
+
+	// Walk backwards through logical lines until we have enough physical lines
+	for db.historyTopIndex > 0 && physicalLoaded < linesNeeded {
+		db.historyTopIndex--
+		line := db.history.Get(db.historyTopIndex)
+		if line != nil {
+			physical := line.WrapToWidth(db.width)
+			physicalLoaded += len(physical)
+		}
+	}
+
+	// Now load those lines
+	db.lines = db.history.WrapToWidth(db.historyTopIndex, db.history.Len(), db.width)
+
+	// Position viewport at the live edge (bottom)
+	db.scrollToLiveEdge()
 }
 
 // Width returns the current terminal width.

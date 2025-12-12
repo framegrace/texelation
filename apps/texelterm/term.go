@@ -1304,6 +1304,7 @@ func (a *TexelTerm) runShell() error {
 
 		// Create history manager with pane ID for persistent scrollback (lock already held)
 		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
+		log.Printf("[HISTORY DEBUG] Creating history manager with paneID=%q, persistDir=%q", paneIDHex, histCfg.PersistDir)
 
 		hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
 		if err != nil {
