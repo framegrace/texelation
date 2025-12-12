@@ -482,6 +482,43 @@ func (v *VTerm) displayBufferEraseCharacters(n int) {
 	}
 }
 
+// displayBufferDeleteCharacters removes n characters at current position, shifting content left.
+// Used for DCH (Delete Character) - CSI P.
+func (v *VTerm) displayBufferDeleteCharacters(n int) {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+
+	currentLine := v.displayBuf.display.CurrentLine()
+	if currentLine == nil || currentLine.Len() == 0 {
+		return
+	}
+
+	pos := v.displayBuf.currentLogicalX
+	lineLen := currentLine.Len()
+
+	if pos >= lineLen {
+		return
+	}
+
+	// Calculate how many chars to actually delete
+	deleteCount := n
+	if pos+deleteCount > lineLen {
+		deleteCount = lineLen - pos
+	}
+
+	// Shift content left
+	if pos+deleteCount < lineLen {
+		copy(currentLine.Cells[pos:], currentLine.Cells[pos+deleteCount:])
+	}
+
+	// Truncate the line (remove the now-duplicate trailing cells)
+	currentLine.Cells = currentLine.Cells[:lineLen-deleteCount]
+
+	// Rebuild physical representation
+	v.displayBuf.display.RebuildCurrentLine()
+}
+
 // SyncDisplayBufferToHistoryManager converts the display buffer's logical lines
 // back to physical lines and updates the history manager's buffer.
 // This should be called before closing the history manager to persist changes.

@@ -598,6 +598,65 @@ func TestVTerm_DisplayBufferBackspaceEraseWithInterleavedGridCalls(t *testing.T)
 	}
 }
 
+// TestVTerm_DisplayBufferBackspaceEraseWithDCH tests the DCH (Delete Character) sequence
+// that modern shells like bash use for backspace erase: CUB (cursor back) + DCH
+func TestVTerm_DisplayBufferBackspaceEraseWithDCH(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	getGridLine := func() string {
+		grid := v.Grid()
+		if len(grid) == 0 || len(grid[0]) == 0 {
+			return ""
+		}
+		result := ""
+		for x := 0; x < min(10, len(grid[0])); x++ {
+			c := grid[0][x]
+			if c.Rune == 0 || c.Rune == ' ' {
+				result += "_"
+			} else {
+				result += string(c.Rune)
+			}
+		}
+		return result
+	}
+
+	// Type "Hello" through parser
+	for _, r := range "Hello" {
+		p.Parse(r)
+	}
+
+	gridLine := getGridLine()
+	t.Logf("After 'Hello': %s (cursor at %d)", gridLine, v.GetCursorX())
+	if gridLine != "Hello_____" {
+		t.Errorf("expected 'Hello_____', got '%s'", gridLine)
+	}
+
+	// Simulate bash's backspace using DCH (Delete Character)
+	// First move cursor back with BS
+	p.Parse('\b')
+	t.Logf("After BS: cursor at %d", v.GetCursorX())
+	if v.GetCursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	}
+
+	// Then send DCH (CSI P) to delete the character
+	p.Parse('\x1b')
+	p.Parse('[')
+	p.Parse('P')
+
+	gridLine = getGridLine()
+	t.Logf("After DCH: %s (cursor at %d)", gridLine, v.GetCursorX())
+	// DCH shifts content left, so 'o' should be gone and we should have "Hell"
+	if gridLine != "Hell______" {
+		t.Errorf("expected 'Hell______' after DCH, got '%s'", gridLine)
+	}
+	if v.GetCursorX() != 4 {
+		t.Errorf("expected cursor at 4 after DCH, got %d", v.GetCursorX())
+	}
+}
+
 func TestVTerm_DisplayBufferReflowAfterLoad(t *testing.T) {
 	v := NewVTerm(20, 5)
 	v.EnableDisplayBuffer()

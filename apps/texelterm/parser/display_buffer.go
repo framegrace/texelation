@@ -172,6 +172,16 @@ func (db *DisplayBuffer) rebuildCurrentLinePhysical() {
 	}
 }
 
+// RebuildCurrentLine triggers a rebuild of the current line's physical representation.
+// Call this after directly modifying the current line content.
+func (db *DisplayBuffer) RebuildCurrentLine() {
+	db.rebuildCurrentLinePhysical()
+	// Update viewport if at live edge
+	if db.atLiveEdge {
+		db.scrollToLiveEdge()
+	}
+}
+
 // CommitCurrentLine moves the current line into history and starts a new one.
 // This is called when a line feed (LF) occurs.
 func (db *DisplayBuffer) CommitCurrentLine() {
