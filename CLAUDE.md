@@ -253,68 +253,63 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
     3. ApplyTreeCapture runs: prepares apps (no resize/start), builds tree, calculates layout, then starts all apps with correct dimensions
     4. Apps load history and render correctly in their sized panes
 
-- **Scrollback Reflow - MOSTLY COMPLETE (2025-12-12)**:
-  - **Status**: Core architecture implemented and working, on-demand loading from disk functional
+- **Scrollback Reflow - IN PROGRESS (2025-12-11)**:
+  - **Status**: Plan approved, ready for implementation
   - **Full Plan**: `docs/plans/SCROLLBACK_REFLOW_PLAN.md`
-  - **Problem Solved**: Separate logical (width-independent) lines from physical (wrapped) display
+  - **Problem**: Current implementation stores physical (wrapped) lines. After loading persisted history, reflow is disabled because `Wrapped` flags are inconsistent. Long lines appear broken at different terminal widths.
+  - **Solution**: "Display Buffer Architecture" - separate storage from display (inspired by SNES tile scrolling):
 
-  - **Architecture Implemented**:
   ```
   ┌─────────────────────────────────────────┐
   │           SCROLLBACK HISTORY            │
   │   (Logical lines - width independent)   │
-  │   In-memory cache: 5000 lines           │
+  │   Source of truth, persisted to disk    │
   └─────────────────────────────────────────┘
                       │
-                      │ Load on-demand from disk
-                      ▼
-  ┌─────────────────────────────────────────┐
-  │         INDEXED HISTORY FILE            │
-  │   (TXHIST02 format - random access)     │
-  │   Unlimited logical lines on disk       │
-  └─────────────────────────────────────────┘
-                      │
-                      │ Wrap to current width
+                      │ Load/Unload on demand
                       ▼
   ┌─────────────────────────────────────────┐
   │            DISPLAY BUFFER               │
-  │   (Physical lines at current width)     │
-  │   Grows as needed when scrolling        │
+  │   (Physical lines - current width)      │
+  │   ┌─────────────────────────────────┐   │
+  │   │     Off-screen ABOVE (~200)     │   │
+  │   ├─────────────────────────────────┤   │
+  │   │     VISIBLE VIEWPORT            │   │
+  │   ├─────────────────────────────────┤   │
+  │   │     Off-screen BELOW (~50)      │   │
+  │   └─────────────────────────────────┘   │
   └─────────────────────────────────────────┘
   ```
 
-  - **Key Components**:
-    - `LogicalLine`: Width-independent line with `WrapToWidth(w)` method
-    - `ScrollbackHistory`: In-memory cache (5000 lines), supports `PrependLines` for on-demand loading
-    - `DisplayBuffer`: Physical lines array, manages viewport, loads more when scrolling
-    - `IndexedHistoryFile`: TXHIST02 format with line offset index for O(1) random access
-    - `HistoryLoader`: Interface for on-demand loading (`indexedFileLoader`, `historyManagerLoader`)
+  - **Key Data Structures**:
+    - `LogicalLine`: Unwrapped content of any length, with `WrapToWidth(w)` method
+    - `ScrollbackHistory`: Stores `[]LogicalLine`, width-independent, persisted
+    - `DisplayBuffer`: Physical rows at current width, ephemeral, has `viewportTop` and `atLiveEdge` flag
 
-  - **Indexed History Format (TXHIST02)**:
-    ```
-    Header (32 bytes): Magic + Flags + LineCount + IndexOffset
-    Line Data: CellCount(4) + Cells(16 each: rune+fg+bg+attr)
-    Index: uint64 offsets for each line (enables random access)
-    ```
+  - **Key Concepts**:
+    - **Logical line boundary**: LF/CNL commits a line; auto-wrap at edge continues same logical line
+    - **Live edge**: Bottom of history where commands are typed and output appears
+    - **Dual cursor tracking**: `logicalX` (position in logical line) + `cursorX/cursorY` (physical display position)
+    - **Scroll regions (DECSTBM)**: Display-only operations, don't affect history
+    - **Resize**: O(viewport) rebuild of display buffer, not O(history)
 
-  - **On-Demand Loading Flow**:
-    1. On startup: Load last 5000 logical lines from indexed file into memory
-    2. Create `indexedFileLoader` pointing to remaining lines on disk
-    3. When scrolling past in-memory content, `loadFromDisk()` fetches more
-    4. Loaded lines wrapped to physical and prepended to DisplayBuffer
+  - **Implementation Phases**:
+    1. Data structures (`LogicalLine`, `ScrollbackHistory`, `DisplayBuffer`)
+    2. Display buffer operations (scroll, load, resize, trim)
+    3. VTerm integration (dual writes in `placeChar`/`lineFeed`, `Grid()` returns display viewport)
+    4. Persistence (new format storing logical lines, no `Wrapped` flag)
+    5. Edge cases & polish
 
-  - **Files Created/Modified**:
-    - `apps/texelterm/parser/logical_line.go` - LogicalLine with WrapToWidth
-    - `apps/texelterm/parser/scrollback_history.go` - ScrollbackHistory cache
-    - `apps/texelterm/parser/display_buffer.go` - DisplayBuffer with viewport management
-    - `apps/texelterm/parser/history_indexed.go` - TXHIST02 format reader/writer
-    - `apps/texelterm/parser/history_loader.go` - HistoryLoader interface and implementations
-    - `apps/texelterm/parser/vterm_display_buffer.go` - VTerm integration
-    - `apps/texelterm/parser/history.go` - Now writes indexed format
-    - `apps/texelterm/parser/history_store.go` - Reads both TXHIST01 and TXHIST02
+  - **Tricky Aspects Resolved**:
+    - Current line problem → dual tracking (logicalX + physical cursor)
+    - Carriage return → `SetCell` overwrites, `logicalX` resets to 0
+    - User scroll vs screen scroll → `atLiveEdge` flag
+    - Cursor movement to other lines → allow in-place edits to visible lines
+    - Anchor tracking → single anchor + walk (display buffer is small)
 
-  - **Remaining Work**:
-    - Hook up new terminal output (placeChar/lineFeed) to write to logical lines
-    - Currently loads existing history but new output goes through legacy path
-    - Test with very long lines (longer than terminal width)
-    - Performance tuning for large history files
+  - **Files to Modify**:
+    - `apps/texelterm/parser/vterm.go` - Add history + display buffer, modify placeChar/lineFeed
+    - `apps/texelterm/parser/history.go` - Rewrite for logical lines
+    - `apps/texelterm/parser/history_store.go` - New format (no Wrapped flag)
+    - New file: `apps/texelterm/parser/display_buffer.go`
+    - New file: `apps/texelterm/parser/logical_line.go`

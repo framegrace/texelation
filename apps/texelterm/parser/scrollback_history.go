@@ -71,32 +71,6 @@ func (h *ScrollbackHistory) AppendCells(cells []Cell) {
 	h.Append(NewLogicalLineFromCells(cells))
 }
 
-// PrependLines adds lines to the beginning of history (older content loaded from disk).
-// If this would exceed maxLines, the oldest of the NEW lines are discarded.
-// This is used for on-demand loading when scrolling into older history.
-func (h *ScrollbackHistory) PrependLines(lines []*LogicalLine) {
-	if len(lines) == 0 {
-		return
-	}
-
-	// Calculate how many we can actually prepend
-	available := h.maxLines - len(h.lines)
-	if available <= 0 {
-		// Already at capacity, can't prepend
-		return
-	}
-
-	// Take only what we can fit
-	if len(lines) > available {
-		// Take the most recent of the new lines (end of slice)
-		lines = lines[len(lines)-available:]
-	}
-
-	// Prepend
-	h.lines = append(lines, h.lines...)
-	h.dirty = true
-}
-
 // Clear removes all lines from history.
 func (h *ScrollbackHistory) Clear() {
 	// Help GC
