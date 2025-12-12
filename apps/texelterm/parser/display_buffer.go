@@ -350,17 +350,65 @@ func (db *DisplayBuffer) Resize(newWidth, newHeight int) {
 	}
 
 	oldWidth := db.width
+	oldHeight := db.height
 	db.width = newWidth
 	db.height = newHeight
 
 	if oldWidth == newWidth {
-		// Only height changed - just adjust viewport
-		db.scrollToLiveEdge()
+		// Only height changed - adjust viewport position
+		db.resizeHeight(oldHeight, newHeight)
 		return
 	}
 
 	// Width changed - need to rewrap visible content
 	db.rewrap()
+}
+
+// resizeHeight handles vertical-only resize, preserving scroll position.
+func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
+	totalLines := len(db.lines) + len(db.currentLinePhysical)
+
+	if db.atLiveEdge {
+		// At live edge - keep viewport showing the bottom content
+		// When growing, we want to show more history above (if available)
+		// When shrinking, we just show less
+		if totalLines <= newHeight {
+			db.viewportTop = 0
+		} else {
+			db.viewportTop = totalLines - newHeight
+		}
+
+		// If we grew and need more lines from history, load them
+		if newHeight > oldHeight && db.viewportTop < db.marginAbove {
+			needed := db.marginAbove - db.viewportTop
+			db.loadAbove(needed)
+			// Recalculate after loading
+			totalLines = len(db.lines) + len(db.currentLinePhysical)
+			if totalLines <= newHeight {
+				db.viewportTop = 0
+			} else {
+				db.viewportTop = totalLines - newHeight
+			}
+		}
+	} else {
+		// Not at live edge - keep the same content at the top of viewport
+		// The viewportTop index stays the same, but we may need to:
+		// - Load more lines if we grew and don't have enough below
+		// - Clamp viewportTop if we shrank and it's now past valid range
+
+		maxViewportTop := totalLines - newHeight
+		if maxViewportTop < 0 {
+			maxViewportTop = 0
+		}
+
+		if db.viewportTop > maxViewportTop {
+			db.viewportTop = maxViewportTop
+			// Check if we've reached the live edge
+			if db.viewportTop >= totalLines-newHeight {
+				db.atLiveEdge = true
+			}
+		}
+	}
 }
 
 // rewrap rebuilds the display buffer at the current width.

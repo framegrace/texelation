@@ -409,3 +409,98 @@ func TestDisplayBuffer_ResizeAtLiveEdgeStaysAtLiveEdge(t *testing.T) {
 		t.Error("resize should keep us at live edge when we were at live edge")
 	}
 }
+
+func TestDisplayBuffer_VerticalResizePreservesScrollPosition(t *testing.T) {
+	h := NewScrollbackHistory(1000)
+	db := NewDisplayBuffer(h, DisplayBufferConfig{
+		Width:       80,
+		Height:      10,
+		MarginAbove: 50,
+		MarginBelow: 20,
+	})
+
+	// Add 50 lines of content
+	for i := 0; i < 50; i++ {
+		for j := 0; j < 10; j++ {
+			db.SetCell(j, Cell{Rune: rune('A' + (i % 26))})
+		}
+		db.CommitCurrentLine()
+	}
+
+	// Scroll up to somewhere in the middle
+	db.ScrollUp(20)
+	if db.AtLiveEdge() {
+		t.Error("should not be at live edge after scrolling up")
+	}
+
+	// Remember viewport top
+	oldViewportTop := db.ViewportTopLine()
+
+	// Vertical resize (grow) - should preserve scroll position
+	db.Resize(80, 15)
+
+	// Should still NOT be at live edge
+	if db.AtLiveEdge() {
+		t.Error("vertical resize should preserve scroll position, not jump to live edge")
+	}
+
+	// ViewportTop should be the same (same content at top)
+	if db.ViewportTopLine() != oldViewportTop {
+		t.Errorf("viewportTop changed from %d to %d after vertical grow", oldViewportTop, db.ViewportTopLine())
+	}
+
+	// Now resize back smaller
+	db.Resize(80, 10)
+
+	// Should still preserve position
+	if db.ViewportTopLine() != oldViewportTop {
+		t.Errorf("viewportTop changed from %d to %d after vertical shrink", oldViewportTop, db.ViewportTopLine())
+	}
+}
+
+func TestDisplayBuffer_VerticalResizeAtLiveEdge(t *testing.T) {
+	h := NewScrollbackHistory(1000)
+	db := NewDisplayBuffer(h, DisplayBufferConfig{
+		Width:       80,
+		Height:      10,
+		MarginAbove: 50,
+		MarginBelow: 20,
+	})
+
+	// Add 30 lines of content
+	for i := 0; i < 30; i++ {
+		for j := 0; j < 10; j++ {
+			db.SetCell(j, Cell{Rune: rune('A' + (i % 26))})
+		}
+		db.CommitCurrentLine()
+	}
+
+	// Should be at live edge
+	if !db.AtLiveEdge() {
+		t.Error("should be at live edge")
+	}
+
+	// Remember which content is at bottom
+	viewport := db.GetViewport()
+	lastLineContent := viewport[9].Cells // Last visible line
+
+	// Grow vertically
+	db.Resize(80, 15)
+
+	// Should still be at live edge
+	if !db.AtLiveEdge() {
+		t.Error("should stay at live edge after vertical grow")
+	}
+
+	// The same content should now be at the new bottom (line 14)
+	newViewport := db.GetViewport()
+	newLastLineContent := newViewport[14].Cells
+
+	// Compare content
+	if len(lastLineContent) > 0 && len(newLastLineContent) > 0 {
+		if lastLineContent[0].Rune != newLastLineContent[0].Rune {
+			t.Errorf("bottom content changed after resize: was '%c', now '%c'",
+				lastLineContent[0].Rune, newLastLineContent[0].Rune)
+		}
+	}
+}
