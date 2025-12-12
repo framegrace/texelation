@@ -9,6 +9,7 @@
 package parser
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/user"
@@ -399,38 +400,61 @@ func (hm *HistoryManager) Close() error {
 }
 
 // rewriteHistoryFile rewrites the entire history file with the given lines.
-// Called during Close() to ensure all in-memory updates are persisted.
+// Called during Close() and flushLoop() to persist in-memory updates.
+// Now writes in indexed format (TXHIST02) for efficient random access.
 func (hm *HistoryManager) rewriteHistoryFile(lines [][]Cell) error {
 	// Construct the history file path
 	scrollbackDir := filepath.Join(hm.config.PersistDir, "scrollback")
 	ext := ".hist"
 	sessionFile := filepath.Join(scrollbackDir, hm.metadata.SessionID+ext)
 
-	// Delete the old file so NewHistoryStore creates a fresh one
+	// Convert physical lines to logical lines
+	logicalLines := ConvertPhysicalToLogical(lines)
+
+	// Delete the old file
 	os.Remove(sessionFile)
 
-	// Recreate the store (will create empty file since we deleted it)
-	store, err := NewHistoryStore(hm.config, hm.metadata)
+	// Create new indexed writer
+	writer, err := NewIndexedHistoryWriter(sessionFile)
 	if err != nil {
-		return fmt.Errorf("failed to create new history store: %w", err)
+		return fmt.Errorf("failed to create indexed history writer: %w", err)
 	}
 
-	// Write all lines
-	if err := store.WriteLines(lines); err != nil {
-		store.Close(hm.metadata) // Try to close cleanly
-		return fmt.Errorf("failed to write lines: %w", err)
+	// Write all logical lines
+	if err := writer.WriteLines(logicalLines); err != nil {
+		writer.Close()
+		return fmt.Errorf("failed to write logical lines: %w", err)
 	}
 
 	// Update metadata
-	hm.metadata.LineCount = store.LineCount()
-	hm.metadata.FileSize = store.BytesWritten()
+	hm.metadata.LineCount = writer.LineCount()
 
-	// Close the store
-	if err := store.Close(hm.metadata); err != nil {
-		return fmt.Errorf("failed to close rewritten store: %w", err)
+	// Close the writer (this writes the index and header)
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("failed to close indexed writer: %w", err)
+	}
+
+	// Get file size for metadata
+	if info, err := os.Stat(sessionFile); err == nil {
+		hm.metadata.FileSize = info.Size()
+	}
+
+	// Write metadata file
+	metaFile := filepath.Join(scrollbackDir, hm.metadata.SessionID+".meta")
+	if err := writeMetadataFile(metaFile, hm.metadata); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write metadata: %v\n", err)
 	}
 
 	return nil
+}
+
+// writeMetadataFile writes session metadata to a JSON file.
+func writeMetadataFile(path string, metadata SessionMetadata) error {
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
 }
 
 // GetMetadata returns the session metadata.
@@ -472,6 +496,13 @@ func trimTrailingEmptyLines(lines [][]Cell) [][]Cell {
 		return lines[:trimmed]
 	}
 	return lines
+}
+
+// SessionFilePath returns the path to the history file for this session.
+func (hm *HistoryManager) SessionFilePath() string {
+	scrollbackDir := filepath.Join(hm.config.PersistDir, "scrollback")
+	ext := ".hist"
+	return filepath.Join(scrollbackDir, hm.metadata.SessionID+ext)
 }
 
 // ReplaceBuffer replaces the entire history buffer with new content (used during reflow).

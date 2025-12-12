@@ -69,8 +69,9 @@ func (v *VTerm) EnableDisplayBuffer() {
 	}
 }
 
-// loadHistoryManagerIntoDisplayBuffer converts physical lines from the legacy
-// historyManager and loads them into the display buffer's logical line storage.
+// loadHistoryManagerIntoDisplayBuffer loads history into the display buffer.
+// It tries to use the indexed file format (TXHIST02) for efficient on-demand
+// loading from disk. Falls back to HistoryManager's in-memory buffer if needed.
 // Only loads the most recent lines to fit in DisplayBufferMemoryLines; older
 // lines are loaded on-demand when scrolling via the HistoryLoader.
 func (v *VTerm) loadHistoryManagerIntoDisplayBuffer() {
@@ -83,20 +84,64 @@ func (v *VTerm) loadHistoryManagerIntoDisplayBuffer() {
 		return
 	}
 
-	// Only load the most recent lines that fit in our memory window
-	// The rest will be loaded on-demand via the loader
-	linesToLoad := min(totalLines, DisplayBufferMemoryLines)
-	startIdx := totalLines - linesToLoad
-
-	// Extract physical lines from history manager (most recent portion)
-	physical := make([][]Cell, linesToLoad)
-	for i := 0; i < linesToLoad; i++ {
-		physical[i] = v.historyManager.GetLine(startIdx + i)
+	// Try to open indexed file for on-demand loading
+	sessionFile := v.historyManager.SessionFilePath()
+	indexedFile, err := OpenIndexedHistory(sessionFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Warning: failed to open indexed file: %v\n", err)
 	}
 
-	// Convert physical lines to logical lines and load into display buffer
-	logical := ConvertPhysicalToLogical(physical)
-	for _, line := range logical {
+	var loader HistoryLoader
+	var logicalLinesToLoad []*LogicalLine
+	var linesLoadedFromDisk int64
+
+	if indexedFile != nil {
+		// Use indexed file for on-demand loading
+		diskLineCount := indexedFile.LineCount()
+		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Using indexed file with %d logical lines\n", diskLineCount)
+
+		// Load the most recent lines into memory
+		linesToLoad := min(int64(DisplayBufferMemoryLines), diskLineCount)
+		startIdx := diskLineCount - linesToLoad
+
+		lines, err := indexedFile.ReadLineRange(startIdx, diskLineCount)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Warning: failed to read from indexed file: %v\n", err)
+			indexedFile.Close()
+			indexedFile = nil
+		} else {
+			logicalLinesToLoad = lines
+			linesLoadedFromDisk = linesToLoad
+			// Create loader for the rest
+			loader = NewIndexedFileLoader(indexedFile, linesLoadedFromDisk)
+		}
+	}
+
+	// Fallback to HistoryManager if indexed file not available
+	if logicalLinesToLoad == nil {
+		if indexedFile != nil {
+			indexedFile.Close()
+		}
+		// Fall back to loading from HistoryManager's in-memory buffer
+		linesToLoad := min(totalLines, DisplayBufferMemoryLines)
+		startIdx := totalLines - linesToLoad
+
+		// Extract physical lines from history manager (most recent portion)
+		physical := make([][]Cell, linesToLoad)
+		for i := 0; i < linesToLoad; i++ {
+			physical[i] = v.historyManager.GetLine(startIdx + i)
+		}
+
+		// Convert physical lines to logical lines
+		logicalLinesToLoad = ConvertPhysicalToLogical(physical)
+
+		// Create loader for the rest from HistoryManager
+		loader = NewHistoryManagerLoader(v.historyManager, linesToLoad)
+		fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Using HistoryManager fallback with %d lines\n", len(logicalLinesToLoad))
+	}
+
+	// Load logical lines into display buffer
+	for _, line := range logicalLinesToLoad {
 		v.displayBuf.history.Append(line)
 	}
 
@@ -109,8 +154,6 @@ func (v *VTerm) loadHistoryManagerIntoDisplayBuffer() {
 	})
 
 	// Set up the loader for on-demand loading of older history
-	// The loader knows that 'linesToLoad' physical lines have been loaded
-	loader := NewHistoryManagerLoader(v.historyManager, linesToLoad)
 	v.displayBuf.display.SetLoader(loader)
 
 	// Scroll to live edge

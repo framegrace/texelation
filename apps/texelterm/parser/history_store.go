@@ -373,8 +373,9 @@ func (hs *HistoryStore) BytesWritten() int64 {
 	return hs.bytesWritten
 }
 
-// LoadLines reads existing history from a file and returns the lines.
+// LoadHistoryLines reads existing history from a file and returns the lines.
 // This is used to restore scrollback when reopening a persisted session.
+// Supports both TXHIST01 (physical lines) and TXHIST02 (indexed logical lines) formats.
 func LoadHistoryLines(sessionFile string) ([][]Cell, error) {
 	// Check if file exists
 	fileInfo, err := os.Stat(sessionFile)
@@ -399,22 +400,35 @@ func LoadHistoryLines(sessionFile string) ([][]Cell, error) {
 
 	reader := bufio.NewReader(file)
 
-	// Read and validate header
-	header := make([]byte, len(historyMagic)+4)
-	if _, err := io.ReadFull(reader, header); err != nil {
+	// Read magic to determine format
+	magic := make([]byte, 8)
+	if _, err := io.ReadFull(reader, magic); err != nil {
 		if err == io.EOF {
 			return nil, nil // Empty file
 		}
-		return nil, fmt.Errorf("failed to read header: %w", err)
+		return nil, fmt.Errorf("failed to read magic: %w", err)
 	}
 
-	// Validate magic
-	if string(header[:len(historyMagic)]) != historyMagic {
-		return nil, fmt.Errorf("invalid history file magic")
+	magicStr := string(magic)
+
+	// Check for indexed format (TXHIST02)
+	if magicStr == indexedHistoryMagic {
+		// Close and reopen with indexed reader
+		file.Close()
+		return loadIndexedHistoryAsPhysical(sessionFile)
 	}
 
-	// Read flags (for future use)
-	_ = binary.LittleEndian.Uint32(header[len(historyMagic):])
+	// Check for legacy format (TXHIST01)
+	if magicStr != historyMagic {
+		return nil, fmt.Errorf("invalid history file magic: %s", magicStr)
+	}
+
+	// Legacy format: read flags and lines
+	flagsBuf := make([]byte, 4)
+	if _, err := io.ReadFull(reader, flagsBuf); err != nil {
+		return nil, fmt.Errorf("failed to read flags: %w", err)
+	}
+	// _ = binary.LittleEndian.Uint32(flagsBuf) // For future use
 
 	// Read lines until EOF
 	var lines [][]Cell
@@ -451,4 +465,47 @@ func LoadHistoryLines(sessionFile string) ([][]Cell, error) {
 	}
 
 	return lines, nil
+}
+
+// loadIndexedHistoryAsPhysical reads indexed format and converts to physical lines.
+// This is used when the HistoryManager wants to load into its circular buffer.
+// For display buffer, use OpenIndexedHistory + indexedFileLoader instead.
+func loadIndexedHistoryAsPhysical(sessionFile string) ([][]Cell, error) {
+	indexed, err := OpenIndexedHistory(sessionFile)
+	if err != nil {
+		return nil, err
+	}
+	if indexed == nil {
+		return nil, nil // File doesn't exist or wrong format
+	}
+	defer indexed.Close()
+
+	lineCount := indexed.LineCount()
+	if lineCount == 0 {
+		return nil, nil
+	}
+
+	// Read all logical lines
+	logicalLines, err := indexed.ReadLineRange(0, lineCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read logical lines: %w", err)
+	}
+
+	// Convert logical lines to physical lines (at default width 80 for compatibility)
+	// The actual width doesn't matter much since display buffer will rewrap anyway
+	var physical [][]Cell
+	for _, ll := range logicalLines {
+		wrapped := ll.WrapToWidth(80)
+		for j, pl := range wrapped {
+			row := make([]Cell, len(pl.Cells))
+			copy(row, pl.Cells)
+			// Mark all but the last physical line as wrapped
+			if j < len(wrapped)-1 && len(row) > 0 {
+				row[len(row)-1].Wrapped = true
+			}
+			physical = append(physical, row)
+		}
+	}
+
+	return physical, nil
 }

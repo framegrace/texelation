@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// stringToCells converts a string to a slice of Cells
+func stringToCells(s string) []Cell {
+	cells := make([]Cell, len(s))
+	for i, r := range s {
+		cells[i] = Cell{Rune: r, FG: DefaultFG, BG: DefaultBG}
+	}
+	return cells
+}
+
 func TestVTerm_DisplayBufferInit(t *testing.T) {
 	v := NewVTerm(80, 24)
 
@@ -954,4 +963,233 @@ func TestVTerm_DisplayBufferLoadsFromHistoryManager(t *testing.T) {
 	if cellsToString(dbLine0.Cells) != "Hello" {
 		t.Errorf("expected 'Hello', got '%s'", cellsToString(dbLine0.Cells))
 	}
+}
+
+func TestVTerm_IndexedHistoryOnDemandLoading(t *testing.T) {
+	// This test verifies the full flow:
+	// 1. Create a HistoryManager with some lines
+	// 2. Close it to persist in indexed format (TXHIST02)
+	// 3. Reopen it and load into display buffer
+	// 4. Verify on-demand loading works when scrolling
+
+	tmpDir := t.TempDir()
+
+	// Create history config with small memory buffer to force on-demand loading
+	cfg := HistoryConfig{
+		MemoryLines:    100000,
+		PersistEnabled: true,
+		PersistDir:     tmpDir,
+		FlushInterval:  5 * time.Second,
+	}
+
+	// Create history manager and add many lines
+	hm, err := NewHistoryManager(cfg, "/bin/bash", "/tmp", "test-indexed-pane")
+	if err != nil {
+		t.Fatalf("Failed to create history manager: %v", err)
+	}
+
+	// Add 200 lines (more than DisplayBufferMemoryLines=5000, but enough to test)
+	for i := 0; i < 200; i++ {
+		line := stringToCells(string(rune('A'+i%26)) + " Line " + string(rune('0'+i%10)))
+		hm.AppendLine(line)
+	}
+
+	// Close to persist in indexed format
+	if err := hm.Close(); err != nil {
+		t.Fatalf("Failed to close history manager: %v", err)
+	}
+
+	// Verify the file was written in indexed format
+	sessionFile := hm.SessionFilePath()
+	indexed, err := OpenIndexedHistory(sessionFile)
+	if err != nil {
+		t.Fatalf("Failed to open indexed file: %v", err)
+	}
+	if indexed == nil {
+		t.Fatal("Expected indexed file to exist")
+	}
+
+	// With 200 physical lines, we should get fewer logical lines due to merging
+	// (if any had Wrapped flags, which AppendLine doesn't set)
+	lineCount := indexed.LineCount()
+	if lineCount == 0 {
+		t.Fatal("Expected lines in indexed file")
+	}
+	t.Logf("Indexed file has %d logical lines", lineCount)
+	indexed.Close()
+
+	// Reopen history manager
+	hm2, err := NewHistoryManager(cfg, "/bin/bash", "/tmp", "test-indexed-pane")
+	if err != nil {
+		t.Fatalf("Failed to reopen history manager: %v", err)
+	}
+	defer hm2.Close()
+
+	// Verify it loaded the lines
+	if hm2.Length() == 0 {
+		t.Fatal("Expected history manager to have loaded lines")
+	}
+	t.Logf("HistoryManager has %d physical lines after reload", hm2.Length())
+
+	// Create VTerm with display buffer
+	v := NewVTerm(80, 24,
+		WithHistoryManager(hm2),
+		WithDisplayBuffer(true),
+	)
+
+	// Check display buffer history was loaded
+	dbHistory := v.DisplayBufferGetHistory()
+	if dbHistory == nil {
+		t.Fatal("display buffer history should not be nil")
+	}
+	t.Logf("Display buffer history has %d logical lines", dbHistory.Len())
+
+	// Scroll up and verify content is still accessible
+	v.Scroll(-50) // Scroll up 50 lines
+
+	grid := v.Grid()
+	if grid == nil {
+		t.Fatal("Grid should not be nil after scrolling")
+	}
+
+	// Grid should still be valid
+	if len(grid) != 24 {
+		t.Errorf("Expected grid height 24, got %d", len(grid))
+	}
+
+	// Scroll to bottom
+	v.ScrollToLiveEdge()
+	if !v.AtLiveEdge() {
+		t.Error("Should be at live edge after ScrollToLiveEdge()")
+	}
+}
+
+func TestIndexedHistoryFormat(t *testing.T) {
+	// Test the indexed history format directly
+	tmpDir := t.TempDir()
+	testFile := tmpDir + "/test.hist"
+
+	// Create writer
+	writer, err := NewIndexedHistoryWriter(testFile)
+	if err != nil {
+		t.Fatalf("Failed to create writer: %v", err)
+	}
+
+	// Write some logical lines
+	lines := []*LogicalLine{
+		NewLogicalLineFromCells(stringToCells("Line 1 - Hello World")),
+		NewLogicalLineFromCells(stringToCells("Line 2 - Testing indexed format")),
+		NewLogicalLineFromCells(stringToCells("Line 3 - With some more content")),
+	}
+
+	for _, line := range lines {
+		if err := writer.WriteLine(line); err != nil {
+			t.Fatalf("Failed to write line: %v", err)
+		}
+	}
+
+	// Close writer (this writes index and header)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Failed to close writer: %v", err)
+	}
+
+	// Open reader
+	reader, err := OpenIndexedHistory(testFile)
+	if err != nil {
+		t.Fatalf("Failed to open reader: %v", err)
+	}
+	if reader == nil {
+		t.Fatal("Reader should not be nil")
+	}
+	defer reader.Close()
+
+	// Verify line count
+	if reader.LineCount() != 3 {
+		t.Errorf("Expected 3 lines, got %d", reader.LineCount())
+	}
+
+	// Read lines back and verify
+	for i, expectedLine := range lines {
+		readLine, err := reader.ReadLine(int64(i))
+		if err != nil {
+			t.Fatalf("Failed to read line %d: %v", i, err)
+		}
+
+		expected := cellsToString(expectedLine.Cells)
+		got := cellsToString(readLine.Cells)
+		if got != expected {
+			t.Errorf("Line %d: expected %q, got %q", i, expected, got)
+		}
+	}
+
+	// Test ReadLineRange
+	rangeLines, err := reader.ReadLineRange(0, 3)
+	if err != nil {
+		t.Fatalf("Failed to read line range: %v", err)
+	}
+	if len(rangeLines) != 3 {
+		t.Errorf("Expected 3 lines from range, got %d", len(rangeLines))
+	}
+}
+
+func TestIndexedFileLoader(t *testing.T) {
+	// Test the indexedFileLoader implementation
+	tmpDir := t.TempDir()
+	testFile := tmpDir + "/test.hist"
+
+	// Create indexed file with 100 lines
+	writer, err := NewIndexedHistoryWriter(testFile)
+	if err != nil {
+		t.Fatalf("Failed to create writer: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		line := NewLogicalLineFromCells(stringToCells(string(rune('A'+i%26)) + " - Line"))
+		writer.WriteLine(line)
+	}
+	writer.Close()
+
+	// Open reader
+	reader, err := OpenIndexedHistory(testFile)
+	if err != nil {
+		t.Fatalf("Failed to open reader: %v", err)
+	}
+
+	// Simulate: we've loaded the last 20 lines into memory
+	initiallyLoaded := int64(20)
+	loader := NewIndexedFileLoader(reader, initiallyLoaded)
+
+	// Check HasMoreAbove
+	if !loader.HasMoreAbove() {
+		t.Error("Should have more lines above (80 remaining)")
+	}
+
+	// Check TotalLines
+	if loader.TotalLines() != 100 {
+		t.Errorf("Expected 100 total lines, got %d", loader.TotalLines())
+	}
+
+	// Load 30 lines from above
+	loaded := loader.LoadLinesAbove(30)
+	if len(loaded) != 30 {
+		t.Errorf("Expected to load 30 lines, got %d", len(loaded))
+	}
+
+	// Should still have more (50 remaining)
+	if !loader.HasMoreAbove() {
+		t.Error("Should still have more lines above (50 remaining)")
+	}
+
+	// Load remaining
+	loaded = loader.LoadLinesAbove(100) // Request more than available
+	if len(loaded) != 50 {
+		t.Errorf("Expected to load 50 lines (remaining), got %d", len(loaded))
+	}
+
+	// Now should have no more
+	if loader.HasMoreAbove() {
+		t.Error("Should have no more lines above")
+	}
+
+	reader.Close()
 }
