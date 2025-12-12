@@ -354,6 +354,108 @@ func TestVTerm_DisplayBufferBackspaceErase(t *testing.T) {
 	}
 }
 
+// TestVTerm_DisplayBufferBackspaceXSync tests that cursorX and currentLogicalX
+// stay synchronized during the backspace erase pattern.
+func TestVTerm_DisplayBufferBackspaceXSync(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Helper to get currentLogicalX
+	getLogicalX := func() int {
+		if v.displayBuf == nil {
+			return -1
+		}
+		return v.displayBuf.currentLogicalX
+	}
+
+	// Write "Hello"
+	for i, r := range "Hello" {
+		v.placeChar(r)
+		t.Logf("After '%c': cursorX=%d, logicalX=%d", r, v.GetCursorX(), getLogicalX())
+		if v.GetCursorX() != i+1 {
+			t.Errorf("After '%c': expected cursorX=%d, got %d", r, i+1, v.GetCursorX())
+		}
+		if getLogicalX() != i+1 {
+			t.Errorf("After '%c': expected logicalX=%d, got %d", r, i+1, getLogicalX())
+		}
+	}
+
+	// cursorX=5, logicalX=5 (both pointing past the last char)
+
+	// BS should decrement both
+	v.Backspace()
+	t.Logf("After BS: cursorX=%d, logicalX=%d", v.GetCursorX(), getLogicalX())
+	if v.GetCursorX() != 4 {
+		t.Errorf("After BS: expected cursorX=4, got %d", v.GetCursorX())
+	}
+	if getLogicalX() != 4 {
+		t.Errorf("After BS: expected logicalX=4, got %d", getLogicalX())
+	}
+
+	// SPACE should write at position 4 and advance both to 5
+	v.placeChar(' ')
+	t.Logf("After SPACE: cursorX=%d, logicalX=%d", v.GetCursorX(), getLogicalX())
+	if v.GetCursorX() != 5 {
+		t.Errorf("After SPACE: expected cursorX=5, got %d", v.GetCursorX())
+	}
+	if getLogicalX() != 5 {
+		t.Errorf("After SPACE: expected logicalX=5, got %d", getLogicalX())
+	}
+
+	// BS again
+	v.Backspace()
+	t.Logf("After 2nd BS: cursorX=%d, logicalX=%d", v.GetCursorX(), getLogicalX())
+	if v.GetCursorX() != 4 {
+		t.Errorf("After 2nd BS: expected cursorX=4, got %d", v.GetCursorX())
+	}
+	if getLogicalX() != 4 {
+		t.Errorf("After 2nd BS: expected logicalX=4, got %d", getLogicalX())
+	}
+}
+
+// TestVTerm_DisplayBufferBackspaceEraseCellValues tests that the actual Cell
+// values are correct after the BS+SPACE+BS pattern - checking both Rune and attributes.
+func TestVTerm_DisplayBufferBackspaceEraseCellValues(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Write "Hello"
+	for _, r := range "Hello" {
+		v.placeChar(r)
+	}
+
+	// Get the grid and check the initial Cell values
+	grid := v.Grid()
+	for x := 0; x < 5; x++ {
+		cell := grid[0][x]
+		t.Logf("Before BS: grid[0][%d] = Rune=%q (0x%02x), FG=%+v, BG=%+v, Attr=%d",
+			x, cell.Rune, cell.Rune, cell.FG, cell.BG, cell.Attr)
+	}
+
+	// Simulate BS + SPACE + BS
+	v.Backspace()
+	v.placeChar(' ')
+	v.Backspace()
+
+	// Get the grid again and check Cell values
+	grid = v.Grid()
+	for x := 0; x < 6; x++ {
+		cell := grid[0][x]
+		t.Logf("After BS+SP+BS: grid[0][%d] = Rune=%q (0x%02x), FG=%+v, BG=%+v, Attr=%d",
+			x, cell.Rune, cell.Rune, cell.FG, cell.BG, cell.Attr)
+	}
+
+	// Position 4 should now be a SPACE (0x20), not 'o'
+	cell4 := grid[0][4]
+	if cell4.Rune != ' ' {
+		t.Errorf("grid[0][4].Rune should be ' ' (0x20), got %q (0x%02x)", cell4.Rune, cell4.Rune)
+	}
+	// Verify it's not the null character
+	if cell4.Rune == 0 {
+		t.Errorf("grid[0][4].Rune is null (0x00), should be space (0x20)")
+	}
+}
+
 // TestVTerm_DisplayBufferBackspaceEraseWithParser tests the BS+SPACE+BS pattern
 // through the parser, exactly as the real terminal would receive it.
 func TestVTerm_DisplayBufferBackspaceEraseWithParser(t *testing.T) {
