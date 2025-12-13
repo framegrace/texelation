@@ -122,6 +122,7 @@ Effect implementations register themselves at import time via `effects.Register(
 - **Testing**: Table-driven tests in `_test.go` files; integration tests under `integration` build tag
 - **Formatting**: `gofmt` with tabs for indentation
 - **Commit Style**: Short present-tense (e.g., "Fix backspace visual erase"), subject < 60 chars
+- **Test-Driven Development**: Write tests first, then implement to make them pass
 - Always pass regression tests before confirming changes
 - Commit after every successful change to enable quick rollback
 

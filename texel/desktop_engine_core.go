@@ -80,6 +80,7 @@ type DesktopEngine struct {
 	statusBuffer      BufferStore
 	appLifecycle      AppLifecycleManager
 	registry          *AppRegistry
+	storage           StorageService
 	layoutTransitions *LayoutTransitionManager
 
 	// Global state now lives on the Desktop
@@ -240,6 +241,17 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory AppFactory, in
 	// Initialize layout transitions manager (needs desktop pointer, so created after struct)
 	d.layoutTransitions = NewLayoutTransitionManager(layoutTransitionsConfig, d)
 
+	// Initialize storage service
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		storageBaseDir := filepath.Join(homeDir, ".texelation")
+		if storage, err := NewStorageService(storageBaseDir); err == nil {
+			d.storage = storage
+		} else {
+			log.Printf("Warning: Failed to initialize storage service: %v", err)
+		}
+	}
+
 	// Scan for external apps
 	d.loadApps()
 
@@ -340,6 +352,11 @@ func (d *DesktopEngine) Registry() *AppRegistry {
 	return d.registry
 }
 
+// Storage returns the storage service for this desktop.
+func (d *DesktopEngine) Storage() StorageService {
+	return d.storage
+}
+
 // ActiveWorkspace returns the currently active workspace.
 func (d *DesktopEngine) ActiveWorkspace() *Workspace {
 	return d.activeWorkspace
@@ -408,9 +425,9 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 	if app == nil {
 		return
 	}
-	
+
 	// Check if app is already floating? Maybe not needed for now.
-	
+
 	panel := &FloatingPanel{
 		app:    app,
 		x:      x,
@@ -420,15 +437,26 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 		modal:  true,
 		id:     newFloatingPanelID(app),
 	}
-	
+
 	d.floatingPanels = append(d.floatingPanels, panel)
-	
+
 	if listener, ok := app.(Listener); ok {
 		d.Subscribe(listener)
 	}
 
 	if d.activeWorkspace != nil {
 		app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+	}
+
+	// Inject app-level storage for floating panels (they don't have pane IDs)
+	if d.storage != nil {
+		appType := "unknown"
+		if provider, ok := app.(SnapshotProvider); ok {
+			appType, _ = provider.SnapshotMetadata()
+		}
+		if setter, ok := app.(AppStorageSetter); ok {
+			setter.SetAppStorage(d.storage.AppStorage(appType))
+		}
 	}
 
 	d.appLifecycle.StartApp(app, nil)
@@ -1253,6 +1281,12 @@ func (d *DesktopEngine) Close() {
 		}
 		for _, sp := range d.statusPanes {
 			d.appLifecycle.StopApp(sp.app)
+		}
+		// Flush and close storage service
+		if d.storage != nil {
+			if err := d.storage.Close(); err != nil {
+				log.Printf("Error closing storage: %v", err)
+			}
 		}
 		if d.display != nil {
 			d.display.Fini()

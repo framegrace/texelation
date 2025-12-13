@@ -78,10 +78,26 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		idSetter.SetPaneID(p.id)
 	}
 
+	// Inject storage for apps that need it
+	if p.screen != nil && p.screen.desktop != nil && p.screen.desktop.Storage() != nil {
+		appType := "unknown"
+		if provider, ok := app.(SnapshotProvider); ok {
+			appType, _ = provider.SnapshotMetadata()
+		}
+		// Per-pane storage
+		if setter, ok := app.(StorageSetter); ok {
+			setter.SetStorage(p.screen.desktop.Storage().PaneStorage(appType, p.id))
+		}
+		// App-level storage (shared across instances)
+		if setter, ok := app.(AppStorageSetter); ok {
+			setter.SetAppStorage(p.screen.desktop.Storage().AppStorage(appType))
+		}
+	}
+
 	if listener, ok := app.(Listener); ok {
 		p.screen.Subscribe(listener)
 	}
-	
+
 	// ... (rest of interface checks) ...
 	if handler, ok := app.(SelectionHandler); ok {
 		enabled := true
@@ -170,6 +186,22 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 	// Pass pane ID to apps that need it (e.g., for per-pane history)
 	if idSetter, ok := app.(PaneIDSetter); ok {
 		idSetter.SetPaneID(p.id)
+	}
+
+	// Inject storage for apps that need it
+	if p.screen != nil && p.screen.desktop != nil && p.screen.desktop.Storage() != nil {
+		appType := "unknown"
+		if provider, ok := app.(SnapshotProvider); ok {
+			appType, _ = provider.SnapshotMetadata()
+		}
+		// Per-pane storage
+		if setter, ok := app.(StorageSetter); ok {
+			setter.SetStorage(p.screen.desktop.Storage().PaneStorage(appType, p.id))
+		}
+		// App-level storage (shared across instances)
+		if setter, ok := app.(AppStorageSetter); ok {
+			setter.SetAppStorage(p.screen.desktop.Storage().AppStorage(appType))
+		}
 	}
 
 	if listener, ok := app.(Listener); ok {
