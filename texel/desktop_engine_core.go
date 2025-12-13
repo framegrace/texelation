@@ -425,9 +425,9 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 	if app == nil {
 		return
 	}
-	
+
 	// Check if app is already floating? Maybe not needed for now.
-	
+
 	panel := &FloatingPanel{
 		app:    app,
 		x:      x,
@@ -437,15 +437,26 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 		modal:  true,
 		id:     newFloatingPanelID(app),
 	}
-	
+
 	d.floatingPanels = append(d.floatingPanels, panel)
-	
+
 	if listener, ok := app.(Listener); ok {
 		d.Subscribe(listener)
 	}
 
 	if d.activeWorkspace != nil {
 		app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+	}
+
+	// Inject app-level storage for floating panels (they don't have pane IDs)
+	if d.storage != nil {
+		appType := "unknown"
+		if provider, ok := app.(SnapshotProvider); ok {
+			appType, _ = provider.SnapshotMetadata()
+		}
+		if setter, ok := app.(AppStorageSetter); ok {
+			setter.SetAppStorage(d.storage.AppStorage(appType))
+		}
 	}
 
 	d.appLifecycle.StartApp(app, nil)
