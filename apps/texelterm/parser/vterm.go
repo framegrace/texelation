@@ -72,6 +72,8 @@ type VTerm struct {
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode                 bool
 	OnBracketedPasteModeChange         func(bool)
+	// Display buffer for scrollback reflow (new architecture)
+	displayBuf                         *displayBufferState
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -124,17 +126,16 @@ func (v *VTerm) Grid() [][]Cell {
 	if v.inAltScreen {
 		return v.altBuffer
 	}
+
+	// Use new display buffer path if enabled
+	if v.IsDisplayBufferEnabled() {
+		return v.displayBufferGrid()
+	}
 	grid := make([][]Cell, v.height)
 	topHistoryLine := v.getTopHistoryLine()
 	histLen := v.historyLen
 	if v.historyManager != nil {
 		histLen = v.historyManager.Length()
-	}
-
-	// DEBUG: Log viewport calculation
-	if histLen > 0 {
-		fmt.Fprintf(os.Stderr, "[GRID DEBUG] histLen=%d, viewOffset=%d, height=%d, topHistoryLine=%d\n",
-			histLen, v.viewOffset, v.height, topHistoryLine)
 	}
 
 	for i := 0; i < v.height; i++ {
@@ -143,19 +144,6 @@ func (v *VTerm) Grid() [][]Cell {
 		var logicalLine []Cell
 		if historyIdx >= 0 && historyIdx < histLen {
 			logicalLine = v.getHistoryLine(historyIdx)
-			// DEBUG: Log first few lines
-			if i < 3 && histLen > 0 {
-				linePreview := ""
-				if logicalLine != nil && len(logicalLine) > 0 {
-					for j := 0; j < len(logicalLine) && j < 40; j++ {
-						if logicalLine[j].Rune >= 32 && logicalLine[j].Rune < 127 {
-							linePreview += string(logicalLine[j].Rune)
-						}
-					}
-				}
-				fmt.Fprintf(os.Stderr, "[GRID DEBUG]   line %d (histIdx=%d): %q (len=%d)\n",
-					i, historyIdx, linePreview, len(logicalLine))
-			}
 		}
 		// Fill the grid line, padding with default cells if the history line is short.
 		for x := 0; x < v.width; x++ {
@@ -187,7 +175,8 @@ func (v *VTerm) placeChar(r rune) {
 		} else {
 			v.cursorX = 0
 		}
-		v.LineFeed()
+		// Use lineFeedForWrap to not commit the logical line (this is auto-wrap, not explicit LF)
+		v.lineFeedForWrap()
 		v.wrapNext = false
 	}
 
@@ -197,6 +186,11 @@ func (v *VTerm) placeChar(r rune) {
 			v.MarkDirty(v.cursorY)
 		}
 	} else {
+		// Also write to display buffer if enabled
+		if v.IsDisplayBufferEnabled() {
+			v.displayBufferPlaceChar(r)
+		}
+
 		if v.viewOffset > 0 { // If scrolled up, jump to the bottom on new input
 			v.viewOffset = 0
 			v.MarkAllDirty()
@@ -798,6 +792,11 @@ func (v *VTerm) MoveCursorForward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
+
+	// Sync display buffer's logical X for horizontal cursor movement
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferSetCursorFromPhysical()
+	}
 }
 
 func (v *VTerm) MoveCursorBackward(n int) {
@@ -816,6 +815,11 @@ func (v *VTerm) MoveCursorBackward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
+
+	// Sync display buffer's logical X for horizontal cursor movement
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferSetCursorFromPhysical()
+	}
 }
 
 func (v *VTerm) MoveCursorUp(n int) {
@@ -892,6 +896,17 @@ func WithReflow(enabled bool) Option {
 	return func(v *VTerm) { v.reflowEnabled = enabled }
 }
 
+// WithDisplayBuffer enables the new display buffer architecture for scrollback reflow.
+// When enabled, the terminal uses logical lines (width-independent) for history storage
+// and reflows content correctly on resize.
+func WithDisplayBuffer(enabled bool) Option {
+	return func(v *VTerm) {
+		if enabled {
+			v.EnableDisplayBuffer()
+		}
+	}
+}
+
 func (v *VTerm) SetTitle(title string) {
 	if v.TitleChanged != nil {
 		v.TitleChanged(title)
@@ -942,9 +957,6 @@ func WithHistoryManager(hm *HistoryManager) Option {
 // It reconstructs logical lines by joining wrapped segments and re-wraps them.
 func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	histLen := v.getHistoryLen()
-
-	// DEBUG: Always log reflow calls
-	fmt.Fprintf(os.Stderr, "[REFLOW DEBUG] Called: oldWidth=%d, newWidth=%d, histLen=%d\n", oldWidth, newWidth, histLen)
 
 	if histLen == 0 {
 		return
@@ -1131,6 +1143,10 @@ func (v *VTerm) Resize(width, height int) {
 		}
 		v.altBuffer = newAltBuffer
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
+	} else if v.IsDisplayBufferEnabled() {
+		// Use display buffer reflow - this is the new clean path
+		v.displayBufferResize(width, height)
+		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	} else {
 		// Handle height-only changes (no width change, no reflow needed)
 		if oldHeight != height && oldWidth == width {
@@ -1155,17 +1171,12 @@ func (v *VTerm) Resize(width, height int) {
 			// Reflowing loaded history destroys it because loaded lines may not have
 			// consistent wrapping information across width changes
 			if v.historyManager != nil && v.historyManager.Length() > v.height {
-				fmt.Fprintf(os.Stderr, "[REFLOW SKIP] Skipping reflow for loaded history (histLen=%d > height=%d)\n",
-					v.historyManager.Length(), v.height)
-
 				// Position cursor at bottom of screen where new shell output will appear
 				// viewOffset=0 means we're viewing the bottom of history
 				// The cursor should be at the last visible line
 				v.viewOffset = 0
 				v.cursorY = v.height - 1
 				v.cursorX = 0
-				fmt.Fprintf(os.Stderr, "[CURSOR FIX] Positioned cursor at bottom: cursorY=%d, cursorX=%d\n",
-					v.cursorY, v.cursorX)
 				// DON'T return early - we need to continue to the margin reset code at the end
 			} else {
 

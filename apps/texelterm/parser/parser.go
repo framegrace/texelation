@@ -50,10 +50,6 @@ func NewParser(v *VTerm) *Parser {
 
 // Parse processes a slice of bytes from the PTY.
 func (p *Parser) Parse(r rune) {
-	//	if p.state == StateGround && r == '\x1b' {
-	//		p.vterm.DumpGrid("Before ESC sequence")
-	//		log.Printf("Parser: Processing sequence starting with ESC")
-	//	}
 	switch p.state {
 	case StateGround:
 		switch r {
@@ -76,8 +72,10 @@ func (p *Parser) Parse(r rune) {
 		case '\f':
 			// FF (Form Feed) - behaves like IND (Index)
 			p.vterm.Index()
+		case '\x7f': // DEL - treat same as backspace
+			p.vterm.Backspace()
 		default:
-			if r >= ' ' {
+			if r >= ' ' && r != '\x7f' {
 				p.vterm.placeChar(r)
 			} else if r == '\x07' {
 				// BEL - ignore (visual bell not implemented)

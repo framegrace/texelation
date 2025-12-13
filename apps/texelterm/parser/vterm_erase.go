@@ -109,6 +109,19 @@ func (v *VTerm) ClearScreenMode(mode int) {
 // ClearLine handles EL (Erase in Line) with different modes.
 func (v *VTerm) ClearLine(mode int) {
 	v.MarkDirty(v.cursorY)
+
+	// Update display buffer if enabled (only for main screen, current line)
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		switch mode {
+		case 0:
+			v.displayBufferEraseToEndOfLine()
+		case 1:
+			v.displayBufferEraseFromStartOfLine()
+		case 2:
+			v.displayBufferEraseLine()
+		}
+	}
+
 	var line []Cell
 	var logicalY int
 	if v.inAltScreen {
@@ -162,6 +175,12 @@ func (v *VTerm) ClearLine(mode int) {
 // EraseCharacters handles ECH (Erase Character) - replaces n characters with blanks.
 func (v *VTerm) EraseCharacters(n int) {
 	v.MarkDirty(v.cursorY)
+
+	// Update display buffer if enabled
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferEraseCharacters(n)
+	}
+
 	var line []Cell
 	logicalY := v.cursorY + v.getTopHistoryLine()
 	if v.inAltScreen {

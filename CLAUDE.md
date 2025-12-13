@@ -123,7 +123,7 @@ Effect implementations register themselves at import time via `effects.Register(
 - **Formatting**: `gofmt` with tabs for indentation
 - **Commit Style**: Short present-tense (e.g., "Zoom working perfectly"), subject < 60 chars
 
-## Current Branch: feature/cleanup-documentation
+## Current Branch: feature/fix-scrollback-reflow
 
 For an architectural overview refer to:
 
@@ -252,3 +252,67 @@ Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testi
     2. SwitchToWorkspace(1) creates empty workspace (no app created)
     3. ApplyTreeCapture runs: prepares apps (no resize/start), builds tree, calculates layout, then starts all apps with correct dimensions
     4. Apps load history and render correctly in their sized panes
+
+- **Scrollback Reflow - COMPLETE (2025-12-12)**:
+  - **Status**: Three-level architecture implemented with disk backing
+  - **Full Plan**: `docs/plans/SCROLLBACK_REFLOW_PLAN.md`
+  - **Architecture**: Separate storage from display (inspired by SNES tile scrolling)
+
+  ```
+  ┌─────────────────────────────────────────┐
+  │              DISK HISTORY               │
+  │   (TXHIST02 format - O(1) random access)│
+  │   Unlimited logical lines on disk       │
+  └─────────────────────────────────────────┘
+                      │
+                      │ Load/Unload on demand
+                      ▼
+  ┌─────────────────────────────────────────┐
+  │         SCROLLBACK HISTORY              │
+  │   (~5000 logical lines in memory)       │
+  │   Sliding window with global indices    │
+  └─────────────────────────────────────────┘
+                      │
+                      │ Wrap to current width
+                      ▼
+  ┌─────────────────────────────────────────┐
+  │            DISPLAY BUFFER               │
+  │   (Physical lines - current width)      │
+  │   ┌─────────────────────────────────┐   │
+  │   │     Off-screen ABOVE (~200)     │   │
+  │   ├─────────────────────────────────┤   │
+  │   │     VISIBLE VIEWPORT            │   │
+  │   ├─────────────────────────────────┤   │
+  │   │     Off-screen BELOW (~50)      │   │
+  │   └─────────────────────────────────┘   │
+  └─────────────────────────────────────────┘
+  ```
+
+  - **Key Files**:
+    - `apps/texelterm/parser/disk_history.go` - TXHIST02 indexed format with O(1) random access
+    - `apps/texelterm/parser/scrollback_history.go` - Memory window with disk backing
+    - `apps/texelterm/parser/display_buffer.go` - Physical lines at current width
+    - `apps/texelterm/parser/logical_line.go` - Width-independent line storage
+    - `apps/texelterm/parser/vterm_display_buffer.go` - VTerm integration
+
+  - **Key Features**:
+    - **Disk persistence**: TXHIST02 format stores index at end for append-without-rewrite
+    - **Global indices**: Track position across disk + memory seamlessly
+    - **Configurable limits**: MaxMemoryLines, MarginAbove, MarginBelow all configurable
+    - **On-demand loading**: Scrolling into disk history loads lines automatically
+    - **Proper reflow**: Resize O(viewport) not O(history)
+
+  - **Usage**:
+    ```go
+    // Enable disk-backed display buffer
+    err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+        MaxMemoryLines: 5000,
+        MarginAbove:    200,
+        MarginBelow:    50,
+    })
+    defer v.CloseDisplayBuffer()
+    ```
+
+  - **Next Steps (Optional)**:
+    - Update `term.go` to use `EnableDisplayBufferWithDisk()` instead of legacy HistoryManager
+    - Remove legacy HistoryManager once new system is proven in production
