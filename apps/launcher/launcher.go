@@ -8,8 +8,10 @@
 package launcher
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
@@ -28,9 +30,11 @@ type Launcher struct {
 
 	registry   *registry.Registry
 	controlBus texel.ControlBus
+	storage    texel.AppStorage
 
 	mu           sync.RWMutex
 	apps         []*registry.AppEntry
+	usageCounts  map[string]int
 	selectedIdx  int
 	labels       []*widgets.Label
 	pane         *widgets.Pane
@@ -42,6 +46,7 @@ type Launcher struct {
 func New(reg *registry.Registry) texel.App {
 	l := &Launcher{
 		registry:    reg,
+		usageCounts: make(map[string]int),
 		selectedIdx: 0,
 	}
 
@@ -70,6 +75,74 @@ func (l *Launcher) AttachControlBus(bus texel.ControlBus) {
 	log.Printf("Launcher: Control bus attached")
 }
 
+// SetAppStorage implements texel.AppStorageSetter.
+// This is called by the pane to inject app-level storage.
+func (l *Launcher) SetAppStorage(storage texel.AppStorage) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.storage = storage
+	log.Printf("Launcher: Storage attached (scope: %s)", storage.Scope())
+
+	// Load usage counts from storage
+	l.loadUsageCounts()
+
+	// Re-sort apps by usage if already loaded
+	if len(l.apps) > 0 {
+		l.sortAppsByUsage()
+	}
+}
+
+// loadUsageCounts loads app usage counts from storage.
+// Assumes l.mu is already locked.
+func (l *Launcher) loadUsageCounts() {
+	if l.storage == nil {
+		return
+	}
+
+	data, err := l.storage.Get("usageCounts")
+	if err != nil {
+		log.Printf("Launcher: Failed to load usage counts: %v", err)
+		return
+	}
+	if data == nil {
+		return
+	}
+
+	var counts map[string]int
+	if err := json.Unmarshal(data, &counts); err != nil {
+		log.Printf("Launcher: Failed to parse usage counts: %v", err)
+		return
+	}
+
+	l.usageCounts = counts
+	log.Printf("Launcher: Loaded usage counts for %d apps", len(counts))
+}
+
+// saveUsageCounts persists app usage counts to storage.
+// Assumes l.mu is already locked.
+func (l *Launcher) saveUsageCounts() {
+	if l.storage == nil {
+		return
+	}
+
+	if err := l.storage.Set("usageCounts", l.usageCounts); err != nil {
+		log.Printf("Launcher: Failed to save usage counts: %v", err)
+	}
+}
+
+// sortAppsByUsage sorts apps by usage count (most used first).
+// Assumes l.mu is already locked.
+func (l *Launcher) sortAppsByUsage() {
+	if l.usageCounts == nil {
+		return
+	}
+	sort.SliceStable(l.apps, func(i, j int) bool {
+		countI := l.usageCounts[l.apps[i].Manifest.Name]
+		countJ := l.usageCounts[l.apps[j].Manifest.Name]
+		return countI > countJ
+	})
+}
+
 // loadApps fetches the list of apps from the registry.
 func (l *Launcher) loadApps() {
 	l.mu.Lock()
@@ -82,7 +155,11 @@ func (l *Launcher) loadApps() {
 	}
 
 	l.apps = l.registry.List()
-	log.Printf("Launcher: Loaded %d apps", len(l.apps))
+
+	// Sort by usage counts (most used first)
+	l.sortAppsByUsage()
+
+	log.Printf("Launcher: Loaded %d apps (sorted by usage)", len(l.apps))
 }
 
 // buildUI constructs the TexelUI interface.
@@ -198,6 +275,15 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 		if l.selectedIdx >= 0 && l.selectedIdx < len(l.apps) {
 			selectedApp := l.apps[l.selectedIdx]
 			bus := l.controlBus
+
+			// Track usage for this app (if storage is available)
+			if l.usageCounts != nil {
+				l.usageCounts[selectedApp.Manifest.Name]++
+				l.saveUsageCounts()
+				log.Printf("Launcher: Incremented usage for '%s' to %d",
+					selectedApp.Manifest.Name, l.usageCounts[selectedApp.Manifest.Name])
+			}
+
 			l.mu.Unlock()
 
 			if bus != nil {
@@ -238,4 +324,10 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 // GetTitle returns the launcher title.
 func (l *Launcher) GetTitle() string {
 	return "Launcher"
+}
+
+// SnapshotMetadata implements texel.SnapshotProvider.
+// This allows the storage service to use the correct app type.
+func (l *Launcher) SnapshotMetadata() (string, map[string]interface{}) {
+	return "launcher", nil
 }

@@ -80,6 +80,7 @@ type DesktopEngine struct {
 	statusBuffer      BufferStore
 	appLifecycle      AppLifecycleManager
 	registry          *AppRegistry
+	storage           StorageService
 	layoutTransitions *LayoutTransitionManager
 
 	// Global state now lives on the Desktop
@@ -240,6 +241,17 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory AppFactory, in
 	// Initialize layout transitions manager (needs desktop pointer, so created after struct)
 	d.layoutTransitions = NewLayoutTransitionManager(layoutTransitionsConfig, d)
 
+	// Initialize storage service
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		storageBaseDir := filepath.Join(homeDir, ".texelation")
+		if storage, err := NewStorageService(storageBaseDir); err == nil {
+			d.storage = storage
+		} else {
+			log.Printf("Warning: Failed to initialize storage service: %v", err)
+		}
+	}
+
 	// Scan for external apps
 	d.loadApps()
 
@@ -338,6 +350,11 @@ func (d *DesktopEngine) Unsubscribe(listener Listener) {
 // Registry returns the app registry for this desktop.
 func (d *DesktopEngine) Registry() *AppRegistry {
 	return d.registry
+}
+
+// Storage returns the storage service for this desktop.
+func (d *DesktopEngine) Storage() StorageService {
+	return d.storage
 }
 
 // ActiveWorkspace returns the currently active workspace.
@@ -1253,6 +1270,12 @@ func (d *DesktopEngine) Close() {
 		}
 		for _, sp := range d.statusPanes {
 			d.appLifecycle.StopApp(sp.app)
+		}
+		// Flush and close storage service
+		if d.storage != nil {
+			if err := d.storage.Close(); err != nil {
+				log.Printf("Error closing storage: %v", err)
+			}
 		}
 		if d.display != nil {
 			d.display.Fini()
