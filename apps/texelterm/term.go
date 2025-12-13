@@ -37,26 +37,26 @@ const (
 )
 
 type TexelTerm struct {
-	title                string
-	command              string
-	paneID               string // Pane ID for per-terminal history isolation
-	width                int
-	height               int
-	cmd                  *exec.Cmd
-	pty                  *os.File
-	vterm                *parser.VTerm
-	parser               *parser.Parser
-	historyManager       *parser.HistoryManager
-	mu                   sync.Mutex
-	stop                 chan struct{}
-	stopOnce             sync.Once
-	refreshChan          chan<- bool
-	wg                   sync.WaitGroup
-	buf                  [][]texel.Cell
-	colorPalette         [258]tcell.Color
-	controlBus           texel.ControlBus
-	selection            termSelection
-	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
+	title              string
+	command            string
+	paneID             string // Pane ID for per-terminal history isolation
+	width              int
+	height             int
+	cmd                *exec.Cmd
+	pty                *os.File
+	vterm              *parser.VTerm
+	parser             *parser.Parser
+	historyManager     *parser.HistoryManager
+	mu                 sync.Mutex
+	stop               chan struct{}
+	stopOnce           sync.Once
+	refreshChan        chan<- bool
+	wg                 sync.WaitGroup
+	buf                [][]texel.Cell
+	colorPalette       [258]tcell.Color
+	controlBus         texel.ControlBus
+	selection          termSelection
+	bracketedPasteMode bool // Tracks if application has enabled bracketed paste
 
 	// Scroll tracking for smooth velocity-based acceleration
 	scrollEventTime time.Time // For debouncing duplicate events
@@ -72,7 +72,7 @@ type TexelTerm struct {
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
-	closeOnce       sync.Once      // Protects closeCh from being closed twice
+	closeOnce       sync.Once     // Protects closeCh from being closed twice
 	restartCh       chan struct{} // Signal to restart shell after confirmation
 }
 
@@ -104,8 +104,10 @@ type termSelection struct {
 	clickCount    int
 }
 
-func New(title, command string) texel.App {
-	term := &TexelTerm{
+// NewBase constructs the underlying TexelTerm without wrapping it in a card pipeline.
+// This is useful for tests or tools that want direct access to the base app.
+func NewBase(title, command string) *TexelTerm {
+	return &TexelTerm{
 		title:        title,
 		command:      command,
 		width:        80,
@@ -115,9 +117,12 @@ func New(title, command string) texel.App {
 		closeCh:      make(chan struct{}),
 		restartCh:    make(chan struct{}, 1), // Buffered to avoid blocking
 	}
+}
 
-	wrapped := cards.WrapApp(term)
-	pipe := cards.NewPipeline(nil, wrapped)
+// New constructs a TexelTerm and wraps it in the standard card pipeline.
+func New(title, command string) texel.App {
+	term := NewBase(title, command)
+	pipe := cards.DefaultPipeline(term)
 	term.AttachControlBus(pipe.ControlBus())
 	return pipe
 }
@@ -148,10 +153,18 @@ func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
 	y := (height - boxH) / 2
 
 	// Ensure fits
-	if x < 0 { x = 0 }
-	if y < 0 { y = 0 }
-	if boxW > width { boxW = width }
-	if boxH > height { boxH = height }
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	if boxW > width {
+		boxW = width
+	}
+	if boxH > height {
+		boxH = height
+	}
 
 	style := tcell.StyleDefault.Background(tcell.ColorDarkRed).Foreground(tcell.ColorWhite)
 	borderStyle := tcell.StyleDefault.Background(tcell.ColorDarkRed).Foreground(tcell.ColorWhite)
@@ -1319,13 +1332,8 @@ func (a *TexelTerm) runShell() error {
 		}
 
 		a.vterm = parser.NewVTerm(cols, rows,
-		parser.WithTitleChangeHandler(func(newTitle string) {
-			a.title = newTitle
-			a.requestRefresh()
-		}),
-		parser.WithCommandStartHandler(func(cmd string) {
-			if cmd != "" {
-				a.title = cmd
+			parser.WithTitleChangeHandler(func(newTitle string) {
+				a.title = newTitle
 				a.requestRefresh()
 			}
 		}),
@@ -1709,7 +1717,8 @@ func (a *TexelTerm) OnEvent(event texel.Event) {
 	}
 }
 
-func (a *TexelTerm) respondToColorQuery(code int) {	if a.pty == nil {
+func (a *TexelTerm) respondToColorQuery(code int) {
+	if a.pty == nil {
 		return
 	}
 	// Slot 256 for default FG, 257 for default BG
@@ -1761,7 +1770,9 @@ func newDefaultPalette() [258]tcell.Color {
 	p[15] = theme.ResolveColorName("text")
 
 	// Fallback for any missing palette colors
-	if p[0] == tcell.ColorDefault { p[0] = tcell.NewRGBColor(10, 10, 20) }
+	if p[0] == tcell.ColorDefault {
+		p[0] = tcell.NewRGBColor(10, 10, 20)
+	}
 	// ... (simplified fallback, we trust the palette mostly)
 
 	// 6x6x6 color cube (16-231)

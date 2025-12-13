@@ -11,7 +11,6 @@ package parser
 import (
 	"fmt"
 	"log"
-	"os"
 )
 
 const (
@@ -29,9 +28,9 @@ type VTerm struct {
 	savedMainCursorX, savedMainCursorY int
 	savedAltCursorX, savedAltCursorY   int
 	// Legacy circular buffer (deprecated in favor of historyManager)
-	historyBuffer                      [][]Cell
-	maxHistorySize                     int
-	historyHead, historyLen            int
+	historyBuffer           [][]Cell
+	maxHistorySize          int
+	historyHead, historyLen int
 	// New infinite history system
 	historyManager                     *HistoryManager
 	viewOffset                         int
@@ -60,15 +59,15 @@ type VTerm struct {
 	InSynchronizedUpdate               bool
 	lastGraphicChar                    rune // Last graphic character written (for REP command)
 	// Shell integration (OSC 133)
-	PromptActive                       bool
-	InputActive                        bool
-	CommandActive                      bool
-	InputStartLine, InputStartCol      int
-	OnPromptStart                      func()
-	OnInputStart                       func()
-	OnCommandStart                     func(cmd string)
-	OnCommandEnd                       func(exitCode int)
-	OnEnvironmentUpdate                func(base64Env string)
+	PromptActive                  bool
+	InputActive                   bool
+	CommandActive                 bool
+	InputStartLine, InputStartCol int
+	OnPromptStart                 func()
+	OnInputStart                  func()
+	OnCommandStart                func(cmd string)
+	OnCommandEnd                  func(exitCode int)
+	OnEnvironmentUpdate           func(base64Env string)
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode                 bool
 	OnBracketedPasteModeChange         func(bool)
@@ -79,16 +78,16 @@ type VTerm struct {
 // NewVTerm creates and initializes a new virtual terminal.
 func NewVTerm(width, height int, opts ...Option) *VTerm {
 	v := &VTerm{
-		width:          width,
-		height:         height,
-		maxHistorySize: defaultHistorySize,
-		historyBuffer:  make([][]Cell, defaultHistorySize),
-		viewOffset:     0,
-		currentFG:      DefaultFG,
-		currentBG:      DefaultBG,
-		tabStops:       make(map[int]bool),
-		cursorVisible:  true,
-		autoWrapMode:   true,
+		width:               width,
+		height:              height,
+		maxHistorySize:      defaultHistorySize,
+		historyBuffer:       make([][]Cell, defaultHistorySize),
+		viewOffset:          0,
+		currentFG:           DefaultFG,
+		currentBG:           DefaultBG,
+		tabStops:            make(map[int]bool),
+		cursorVisible:       true,
+		autoWrapMode:        true,
 		wrapEnabled:         true,
 		reflowEnabled:       true,
 		marginTop:           0,
@@ -966,13 +965,7 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	var logicalLines [][]Cell
 	currentLogical := []Cell{}
 
-	debugReflow := false // Set to true to enable debug output
-	if debugReflow {
-		fmt.Fprintf(os.Stderr, "DEBUG REFLOW: oldWidth=%d, newWidth=%d, histLen=%d\n", oldWidth, newWidth, histLen)
-	}
-
 	logicalLineCount := 0
-	physicalLineDebugCount := 0
 	for i := 0; i < v.getHistoryLen(); i++ {
 		line := v.getHistoryLine(i)
 
@@ -993,22 +986,6 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 			}
 		}
 
-		if debugReflow && physicalLineDebugCount < 30 {
-			lineStr := ""
-			for _, cell := range line {
-				if cell.Rune == 0 {
-					lineStr += "∅"
-				} else {
-					lineStr += string(cell.Rune)
-				}
-			}
-			if len(lineStr) > 50 {
-				lineStr = lineStr[:50] + "..."
-			}
-			fmt.Fprintf(os.Stderr, "DEBUG PHYS[%d] len=%d wrapped=%v lastNonSpace=%d: %q\n", i, len(line), wrapped, lastNonSpace, lineStr)
-			physicalLineDebugCount++
-		}
-
 		// If line is wrapped, include all cells (content continues on next line)
 		// If not wrapped, only include cells up to last non-space (trim padding)
 		if wrapped {
@@ -1027,10 +1004,6 @@ func (v *VTerm) reflowHistoryBuffer(oldWidth, newWidth int) {
 	// If there's a partial logical line at the end, save it
 	if len(currentLogical) > 0 {
 		logicalLines = append(logicalLines, currentLogical)
-	}
-
-	if debugReflow {
-		fmt.Fprintf(os.Stderr, "DEBUG REFLOW: Created %d logical lines from %d physical lines\n", len(logicalLines), histLen)
 	}
 
 	// Re-wrap each logical line with the new width
@@ -1180,46 +1153,46 @@ func (v *VTerm) Resize(width, height int) {
 				// DON'T return early - we need to continue to the margin reset code at the end
 			} else {
 
-			// Place marker at cursor position before reflow
-			markerPlaced := v.placeCursorMarker()
+				// Place marker at cursor position before reflow
+				markerPlaced := v.placeCursorMarker()
 
-			// Reflow the buffer (marker will move with content)
-			v.reflowHistoryBuffer(oldWidth, width)
+				// Reflow the buffer (marker will move with content)
+				v.reflowHistoryBuffer(oldWidth, width)
 
-			// Find marker and place cursor there
-			if markerPlaced {
-				if markerLine, markerCol, found := v.findAndRemoveCursorMarker(); found {
-					// Clamp X to screen width
-					if markerCol >= v.width {
-						markerCol = v.width - 1
+				// Find marker and place cursor there
+				if markerPlaced {
+					if markerLine, markerCol, found := v.findAndRemoveCursorMarker(); found {
+						// Clamp X to screen width
+						if markerCol >= v.width {
+							markerCol = v.width - 1
+						}
+
+						// Calculate where marker currently is on screen (with current viewOffset)
+						topHistory := v.getTopHistoryLine()
+						screenY := markerLine - topHistory
+
+						// Only adjust viewOffset if marker is off-screen
+						if screenY < 0 {
+							// Marker is above visible area - scroll up to show it at top
+							v.viewOffset += -screenY
+							screenY = 0
+						} else if screenY >= v.height {
+							// Marker is below visible area - scroll down to show it at bottom
+							adjustment := screenY - v.height + 1
+							v.viewOffset -= adjustment
+							screenY = v.height - 1
+						}
+
+						v.cursorY = screenY
+						v.cursorX = markerCol
+					} else {
+						// Fallback: clamp cursor if marker not found
+						v.SetCursorPos(v.cursorY, v.cursorX)
 					}
-
-					// Calculate where marker currently is on screen (with current viewOffset)
-					topHistory := v.getTopHistoryLine()
-					screenY := markerLine - topHistory
-
-					// Only adjust viewOffset if marker is off-screen
-					if screenY < 0 {
-						// Marker is above visible area - scroll up to show it at top
-						v.viewOffset += -screenY
-						screenY = 0
-					} else if screenY >= v.height {
-						// Marker is below visible area - scroll down to show it at bottom
-						adjustment := screenY - v.height + 1
-						v.viewOffset -= adjustment
-						screenY = v.height - 1
-					}
-
-					v.cursorY = screenY
-					v.cursorX = markerCol
 				} else {
-					// Fallback: clamp cursor if marker not found
+					// Fallback: clamp cursor if marker couldn't be placed
 					v.SetCursorPos(v.cursorY, v.cursorX)
 				}
-			} else {
-				// Fallback: clamp cursor if marker couldn't be placed
-				v.SetCursorPos(v.cursorY, v.cursorX)
-			}
 			}
 		} else {
 			// No reflow needed, just clamp cursor
