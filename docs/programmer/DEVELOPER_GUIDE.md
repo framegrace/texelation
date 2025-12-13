@@ -41,7 +41,12 @@ app.Resize(cols, rows) // call from pane resize
 
 ## Card Pipeline Primer (App-side)
 
-Cards are an **app-internal** composition mechanism. They wrap a `texel.App` to layer effects/overlays/diagnostics before handing the final buffer to the desktop. The desktop only sees a `texel.App`; the pipeline lives entirely inside the app.
+Cards are an **app-internal** composition mechanism. They wrap a `texel.App` to layer effects/overlays/diagnostics before handing the final buffer to the desktop. The desktop only sees a `texel.App`; the pipeline lives entirely inside the app. The standard pattern is:
+
+```go
+base := NewMyAppCore(...)
+app  := cards.DefaultPipeline(base /*, extra cards... */)
+```
 
 ```go
 import (

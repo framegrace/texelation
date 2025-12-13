@@ -28,7 +28,7 @@ type helpApp struct {
 // NewHelpApp now returns the App interface for consistency.
 func NewHelpApp() texel.App {
 	base := &helpApp{stop: make(chan struct{})}
-	return cards.NewPipeline(nil, cards.WrapApp(base))
+	return cards.DefaultPipeline(base)
 }
 
 func (a *helpApp) Run() error {

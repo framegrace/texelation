@@ -18,9 +18,4 @@ package cards
 //   })
 //
 // Pipeline usage (same for both):
-//   pipe := cards.NewPipeline(nil,
-//       cards.WrapApp(app),
-//       flash,
-//       rainbow,
-//   )
-
+//   pipe := cards.DefaultPipeline(app, flash, rainbow)
