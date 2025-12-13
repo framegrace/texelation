@@ -53,7 +53,7 @@ func NewNoteApp() texel.App {
 
 Hooking into the desktop/pipeline:
 ```go
-pipe := cards.DefaultPipeline(NewNoteApp())
+pipe := cards.NewPipeline(nil, cards.WrapApp(NewNoteApp()))
 return pipe // satisfies texel.App
 ```
 
