@@ -162,7 +162,7 @@ flash, err := cards.NewEffectCard("flash", effects.EffectConfig{
 if err != nil {
     log.Printf("flash effect unavailable: %v", err)
 }
-pipe := cards.DefaultPipeline(app, flash)
+pipe := cards.NewPipeline(nil, cards.WrapApp(app), flash)
 ```
 
 The card automatically:

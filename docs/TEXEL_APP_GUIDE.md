@@ -14,16 +14,9 @@ desktop **or** as standalone executables. The primary way to launch them on
 their own is via the dedicated CLI in `cmd/<app>` (for example,
 `go run ./cmd/texelterm`). The helper `cmd/app-runner` exists for internal
 testing but should not be considered the main entry point. Design your app so it
-operates correctly even outside the desktop.
-
-In this project, **the standard pattern** for a TexelApp is:
-
-1. Implement the core logic as a `texel.App` (the “base app”).
-2. Wrap it in a card pipeline (`cards.WrapApp` + `cards.NewPipeline`).
-3. Return the pipeline from `New(...) texel.App`.
-
-That makes the card system and control bus available everywhere while keeping
-the desktop API focused only on the `texel.App` interface.
+operates correctly even outside the desktop; compatibility
+with the card pipeline is treated as an additional perk rather than a hard
+requirement.
 
 Every app must implement `texel.App` (see `texel/app.go`):
 
@@ -85,11 +78,10 @@ Key components:
 * `cards.EffectCard` – wraps any registered effect (flash, rainbow, fadeTint).
 * `cards.Pipeline` – executes the cards in order, handles lifecycle wiring, and
   exposes a control bus.
-* `cards.DefaultPipeline` – conventional wrapper that turns a base app plus extra cards into a `texel.App`.
 * Control function (`NewPipeline(controlFunc, ...)`) – intercepts keys before
   cards process them (useful for toggles like F12 diagnostics).
 
-Example pipeline used by TexelTerm (simplified):
+Example pipeline used by TexelTerm:
 
 ```go
 flash, _ := cards.NewEffectCard("flash", effects.EffectConfig{
@@ -99,7 +91,11 @@ flash, _ := cards.NewEffectCard("flash", effects.EffectConfig{
     "trigger_type":  "workspace.control",
 })
 
-pipe := cards.DefaultPipeline(term, flash)
+pipe := cards.NewPipeline(nil,
+    cards.WrapApp(term),
+    flash,
+)
+
 term.AttachControlBus(pipe.ControlBus())
 return pipe
 ```

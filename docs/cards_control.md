@@ -84,9 +84,6 @@ pipe = cards.NewPipeline(func(ev *tcell.EventKey) bool {
     }
     return false
 }, cards.WrapApp(app), diag, flash)
-
-// Or, when you don't need a custom control func:
-//   app = cards.DefaultPipeline(app, diag, flash)
 ```
 
 `diag` registers the `diagnostics.toggle` capability inside `RegisterControls`.
