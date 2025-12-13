@@ -7,7 +7,7 @@ This document describes how texelterm persists terminal state across resizes, sh
 Terminal persistence in texelation covers three main areas:
 
 1. **Scrollback History** - Terminal output preserved across resizes with proper reflow
-2. **Shell Environment** - Environment variables, working directory preserved across shell restarts
+2. **Shell Environment** - Environment variables, working directory preserved across shell AND server restarts
 3. **Command History** - Per-terminal bash history isolation
 
 ```
@@ -15,13 +15,15 @@ Terminal persistence in texelation covers three main areas:
 │                     TERMINAL PERSISTENCE                        │
 ├─────────────────────┬─────────────────────┬─────────────────────┤
 │  Scrollback History │  Shell Environment  │  Command History    │
-│  (Three-level arch) │  (File-based)       │  (Per-pane files)   │
+│  (Three-level arch) │  (Pane-ID files)    │  (Per-pane files)   │
 ├─────────────────────┼─────────────────────┼─────────────────────┤
-│  DiskHistory        │  ~/.texel-env.$$    │  ~/.texel-history-  │
-│  ScrollbackHistory  │                     │  <pane-id>          │
+│  DiskHistory        │  ~/.texel-env-      │  ~/.texel-history-  │
+│  ScrollbackHistory  │  <pane-id>          │  <pane-id>          │
 │  DisplayBuffer      │                     │                     │
 └─────────────────────┴─────────────────────┴─────────────────────┘
 ```
+
+All persistence is keyed by **pane ID** (stable UUID), enabling seamless restoration across shell restarts AND server restarts.
 
 ---
 
@@ -151,52 +153,89 @@ Benchmarks on AMD Ryzen 9 3950X:
 
 ## 2. Shell Environment Persistence
 
-**Status**: Shell restart working, server restart planned
+**Status**: Complete (works across shell restarts AND server restarts)
 
-### Current Implementation (Shell Restart)
+Environment variables and working directory are preserved using pane-ID-based files that survive both shell restarts and server restarts.
 
-When a user declines to exit a shell (presses 'n' on exit confirmation), the environment is restored from a temporary file.
+### How It Works
 
-**Components:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Shell Integration (PROMPT_COMMAND)                             │
+│  After each command, writes to ~/.texel-env-<pane-id>:          │
+│    - All environment variables (VAR=value format)               │
+│    - Working directory as __TEXEL_CWD=/path/to/dir              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Terminal App (runShell)                                        │
+│  On shell start (restart OR server restart):                    │
+│    1. Read ~/.texel-env-<pane-id>                               │
+│    2. Parse environment variables                               │
+│    3. Extract __TEXEL_CWD for working directory                 │
+│    4. Filter out BASH_FUNC_* (cause import errors)              │
+│    5. Start shell with cmd.Env and cmd.Dir                      │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-1. **Shell Integration** (`~/.config/texelation/shell-integration/bash.sh`)
-   - Runs after each command via `PROMPT_COMMAND`
-   - Writes environment to `~/.texel-env.$$` using `env >| ~/.texel-env.$$`
-   - Uses `>|` to bypass noclobber protection
+### Key Implementation Details
 
-2. **Terminal App** (`apps/texelterm/term.go:runShell()`)
-   - On shell restart, reads `~/.texel-env.<old-pid>`
-   - Filters out `BASH_FUNC_*` entries (cause import errors)
-   - Passes environment to new shell via `cmd.Env`
-   - Deletes the temporary file after reading
+**Pane ID Stability**: Pane IDs are UUIDs assigned when a pane is created and restored from snapshots on server restart. This makes environment files persist across server restarts.
 
-3. **OSC 133 Integration**
-   - Tracks command boundaries: A=prompt start, B=prompt end, C=command start, D=command end
-   - Environment is captured after D (command end) marker
+**Environment File Format** (`~/.texel-env-<pane-id-hex>`):
+```bash
+HOME=/home/user
+PATH=/usr/bin:/bin
+MY_VAR=some_value
+__TEXEL_CWD=/home/user/projects/myproject
+```
+
+**Shell Integration** (`~/.config/texelation/shell-integration/bash.sh`):
+- Runs after each command via `PROMPT_COMMAND`
+- Writes environment using `env >| ~/.texel-env-$TEXEL_PANE_ID`
+- Appends `__TEXEL_CWD=$(pwd)` for working directory
+- Uses `>|` to bypass noclobber protection
+
+**Terminal Restoration** (`apps/texelterm/term.go:runShell()`):
+```go
+// Read environment from pane-ID-based file
+envFile := filepath.Join(homeDir, fmt.Sprintf(".texel-env-%s", paneID))
+if data, err := os.ReadFile(envFile); err == nil {
+    for _, line := range strings.Split(string(data), "\n") {
+        if strings.HasPrefix(line, "__TEXEL_CWD=") {
+            cwd = strings.TrimPrefix(line, "__TEXEL_CWD=")
+            continue
+        }
+        if strings.HasPrefix(line, "BASH_FUNC_") {
+            continue // Skip bash functions
+        }
+        env = append(env, line)
+    }
+}
+cmd.Env = env
+cmd.Dir = cwd  // Restore working directory
+```
 
 ### Why File-Based?
 
-DCS (Device Control String) sequences failed due to bash limitations - base64-encoded environment (8KB+) written to stdout causes `PROMPT_COMMAND` to hang. File-based approach:
+DCS (Device Control String) sequences were attempted first but failed:
+- Base64-encoded environment is 8KB+ of data
+- Bash's `PROMPT_COMMAND` hangs waiting for stdout writes
+- Even background jobs with stdout connected cause hangs
+
+File-based approach advantages:
 - `env >| file` completes instantly (no stdout writes)
 - No prompt hangs or delays
-- Works reliably with noclobber
-
-### Future: Server Restart Persistence
-
-Environment will be integrated into the terminal snapshot system:
-
-```
-1. Shell writes: env → ~/.texel-env.$$
-2. Terminal periodically reads file → internal state
-3. Snapshot system: terminal state (with env) → disk
-4. Server restart: snapshot → restore terminal + environment
-```
+- Works reliably with Fedora's noclobber default
+- Naturally persists across server restarts
 
 ### Files
 
-- `~/.config/texelation/shell-integration/bash.sh` - Environment capture
-- `apps/texelterm/term.go` - Environment restoration (runShell)
-- `apps/texelterm/parser/parser.go` - OSC 133 integration
+- `~/.config/texelation/shell-integration/bash.sh` - Captures env + CWD after each command
+- `~/.texel-env-<pane-id>` - Per-pane environment storage
+- `apps/texelterm/term.go:runShell()` - Reads env file on shell start
+- `apps/texelterm/term.go:SetPaneID()` - Receives pane ID from server
 
 ---
 
@@ -281,14 +320,16 @@ Regex patterns to automatically redact sensitive data:
 
 ## Testing Status
 
-### Implemented
+### Implemented & Working
 - Scrollback reflow on resize
 - Environment preserved across shell restart
-- Per-terminal history isolation
+- Environment preserved across server restart
+- Working directory restored on restart
+- Per-terminal command history isolation
 - Fedora noclobber compatibility
 - No prompt hangs or delays
 
-### Future Testing
-- Server restart with multiple terminals
+### Edge Cases to Monitor
 - Large environments (1000+ variables)
 - Concurrent terminal startup from snapshots
+- Environment files with special characters in values
