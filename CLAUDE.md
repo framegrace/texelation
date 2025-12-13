@@ -121,15 +121,20 @@ Effect implementations register themselves at import time via `effects.Register(
 - **Go Version**: 1.24.3
 - **Testing**: Table-driven tests in `_test.go` files; integration tests under `integration` build tag
 - **Formatting**: `gofmt` with tabs for indentation
-- **Commit Style**: Short present-tense (e.g., "Zoom working perfectly"), subject < 60 chars
+- **Commit Style**: Short present-tense (e.g., "Fix backspace visual erase"), subject < 60 chars
+- Always pass regression tests before confirming changes
+- Commit after every successful change to enable quick rollback
 
 ## Current Branch: feature/fix-scrollback-reflow
 
-For an architectural overview refer to:
+## Documentation
 
-- `docs/CLIENT_SERVER_ARCHITECTURE.md` – current client/server runtime, data flow, and open items.
-- `docs/EFFECTS_GUIDE.md` – how effects are implemented and configured.
-- `docs/TEXEL_APP_GUIDE.md` – how to build pipeline-based apps using cards and the control bus.
+- `docs/CLIENT_SERVER_ARCHITECTURE.md` – Client/server runtime, data flow
+- `docs/EFFECTS_GUIDE.md` – How effects are implemented and configured
+- `docs/TEXEL_APP_GUIDE.md` – How to build pipeline-based apps using cards
+- `docs/plans/SCROLLBACK_REFLOW_PLAN.md` – Scrollback reflow architecture reference
+- `docs/plans/TEXELUI_PLAN.md` – TexelUI widget library status
+- `docs/plans/LONG_LINE_EDITOR_PLAN.md` – Long line editor overlay (not started)
 
 ## Important Patterns
 
@@ -155,164 +160,89 @@ Follow `docs/EFFECTS_GUIDE.md`. Highlights:
 
 ### Testing Client/Server Flow
 Use `internal/runtime/server/testutil/memconn.go` for in-memory connection testing without Unix sockets. See integration tests in `internal/runtime/server/*_test.go` for patterns.
-- Please remeber to always pass refression tests before confirming changes, And commit with an appropiate message (not mentioning claude nor LLMS) after every successful change.
-- Commit as we go, to be able to quickly go back on experimets or dead ends.
 
-## Planning Artifacts
+---
 
-- TexelUI plan: see `docs/plans/TEXELUI_PLAN.md`. When working on TexelUI, keep this plan up to date (checklist and sections) and commit changes to it alongside related code. Future sessions should consult and update this file as the source of truth for TexelUI scope, status, and next steps.
-- TexelUI Architecture Review: see `docs/TEXELUI_ARCHITECTURE_REVIEW.md`. **[IMPORTANT - NEXT SESSION]** Comprehensive evaluation of TexelUI for form building completed 2025-11-18. Current state: solid low-level foundation but missing high-level primitives for productive form development. **Next steps:** Implement common widgets (Label, Button, Input, Checkbox), layout managers (VBox, HBox, Grid), and form helpers. Priority order and implementation details in review doc. Estimated 2-3 weeks for essential features.
-- Long Line Editor plan: see `docs/plans/LONG_LINE_EDITOR_PLAN.md`. Phased implementation of overlay editor for long command lines in texelterm. Update progress and status as work proceeds.
-- **Layout Transitions (Server-Side) - COMPLETE (2025-12-07)**:
-  - **Status**: Fully implemented and working
-  - **Architecture**: Server-side animation system that animates SplitRatios over time, broadcasting tree snapshots at 60fps
-  - **Implementation**: `texel/layout_transitions.go` (~200 lines)
-  - **Configuration**: Via `theme.json` under `layout_transitions` section (duration_ms, easing, enabled; min_threshold parsed but currently unused)
-  - **How It Works**:
-    - **Split**: New pane starts at 1% of space, existing panes at 99%, animates to final ratios (e.g., [0.99, 0.01] → [0.5, 0.5])
-    - **Close**: Closing pane shrinks from current size to 1%, siblings grow to fill space, then pane is removed
-    - Each animation frame: Updates ratios → calls recalculateLayout() → broadcasts tree snapshot
-    - Client receives rapid snapshots and renders them normally with proper borders
-    - Animation identical to manual resize operations (reuses same code path)
-    - Callbacks execute after animation completes (for close, performs actual removal)
-  - **Benefits**:
-    - Borders render at correct positions (server renders buffers at current animated size)
-    - Server controls authoritative tree state throughout animation
-    - Client is stateless - just renders snapshots as received
-    - Reuses existing snapshot broadcast mechanism
-    - Can be disabled/configured per theme without code changes
-  - **Related Files**:
-    - `texel/layout_transitions.go` - Server-side animator with timeline, easing, 60fps ticker
-    - `texel/desktop_engine_core.go` - Initializes manager, parses theme config
-    - `texel/workspace.go` - PerformSplit hooks into animator
-  - **Configuration Example**:
-    ```json
-    "layout_transitions": {
-      "duration_ms": 300,
-      "easing": "smoothstep",
-      "enabled": true,
-      "min_threshold": 3
-    }
-    ```
-  - **Available Easing Functions**:
-    - `linear` - Constant speed, no acceleration
-    - `smoothstep` - Smooth acceleration and deceleration (default)
-    - `ease-in-out` - Fast in the middle, slow at ends
-    - `spring` - Physics-based overshoot and wobble (bouncy, fun!)
-  - **Hot Reload**: Configuration is hot-reloadable on SIGHUP
-    - Edit `~/.config/texelation/theme.json` (change duration, easing, or enabled)
-    - Send `kill -HUP $(pidof texel-server)`
-    - New settings apply immediately to future animations
-    - Great for live-tuning the spring effect or trying different easings!
-  - **Future Enhancements**:
-    - Make animations interruptible (currently complete before next action)
-    - Animate workspace switches (fade/slide transitions)
-    - Animate pane swaps (visual exchange of positions)
-    - Add more spring parameters (damping, frequency) to theme config
+## Completed Features
 
-- **Scrollback Persistence - COMPLETE (2025-12-08)**:
-  - **Status**: Fixed and working
-  - **Implementation**: `apps/texelterm/parser/history.go`
-  - **Issue Fixed**: Scrollback history was persisting empty lines only
-  - **Root Cause**: Terminal content updates via `SetLine()` which modifies in-memory buffer but doesn't queue for disk write. Only empty lines from `AppendLine()` were being persisted.
-  - **Solution**: Modified `Close()` to rewrite entire circular buffer to disk instead of relying on `pendingLines` queue
-  - **Key Changes**:
-    - `Close()` (lines 347-380) - Extracts all lines from circular buffer and rewrites history file
-    - `rewriteHistoryFile()` (lines 382-416) - Deletes old file, creates new store, writes all lines
-  - **Additional Fixes**:
-    - Cursor positioning: Terminal now positions cursor at bottom when loading history (vterm.go lines 1149-1166)
-    - Margin initialization: Fixed scrolling bug by ensuring margin reset code runs (lines 1214-1217)
-    - Tree corruption: Added defensive bounds checking in tree.go resizeNode() to prevent crashes
-  - **Related Files**:
-    - `apps/texelterm/parser/history.go` - HistoryManager with write-on-close strategy
-    - `apps/texelterm/parser/vterm.go` - Resize() with cursor positioning and margin init
-    - `texel/tree.go` - Defensive bounds checking for SplitRatios array
+### Layout Transitions (Server-Side)
+Server-side animation system that animates SplitRatios over time, broadcasting tree snapshots at 60fps.
 
-- **Pane Loss During Server Restart - FIXED (2025-12-08)**:
-  - **Status**: Fully fixed with multiple improvements
-  - **Issues Fixed**:
-    1. **Race condition in PerformSplit**: Animation was broadcasting tree snapshots while new panes had `app == nil`
-    2. **0x0 resize during restore**: Apps were started before layout calculated, causing vterm to be created with 0 dimensions
-    3. **Launcher creation conflict**: Launcher was created before snapshot restore, conflicting with restored panes
-  - **Solutions**:
-    - Moved app creation before `AnimateSplit()` in workspace.go
-    - Added `PrepareAppForRestore()` and `StartPreparedApp()` in pane.go to defer app startup until after `recalculateLayout()`
-    - Added snapshot existence check in main.go to skip initial Launcher creation
-    - Added `ResetGracePeriod()` to layout transitions to skip animations during restore
-  - **Key Code Changes**:
-    - `texel/pane.go` - New `PrepareAppForRestore()` attaches app without starting; `StartPreparedApp()` starts with correct dimensions
-    - `texel/snapshot_restore.go` - Uses deferred app startup pattern: prepare → build tree → layout → start
-    - `cmd/texel-server/main.go` - Sets `InitAppName = ""` when snapshot exists
-    - `texel/layout_transitions.go` - Added `ResetGracePeriod()` for snapshot restore
-  - **Debug Logging**:
-    - BOOT logs in server.go track snapshot load/apply flow
-    - CaptureTree() warns when panes have nil apps
-  - **How It Works Now**:
-    1. Server starts, detects snapshot exists, sets InitAppName = ""
-    2. SwitchToWorkspace(1) creates empty workspace (no app created)
-    3. ApplyTreeCapture runs: prepares apps (no resize/start), builds tree, calculates layout, then starts all apps with correct dimensions
-    4. Apps load history and render correctly in their sized panes
+**Implementation**: `texel/layout_transitions.go` (~200 lines)
 
-- **Scrollback Reflow - COMPLETE (2025-12-12)**:
-  - **Status**: Three-level architecture implemented with disk backing
-  - **Full Plan**: `docs/plans/SCROLLBACK_REFLOW_PLAN.md`
-  - **Architecture**: Separate storage from display (inspired by SNES tile scrolling)
+**How It Works**:
+- **Split**: New pane starts at 1% of space, animates to final ratio
+- **Close**: Closing pane shrinks to 1%, then removed
+- Each frame: Updates ratios → recalculateLayout() → broadcasts tree snapshot
+- Client receives snapshots and renders normally
 
-  ```
-  ┌─────────────────────────────────────────┐
-  │              DISK HISTORY               │
-  │   (TXHIST02 format - O(1) random access)│
-  │   Unlimited logical lines on disk       │
-  └─────────────────────────────────────────┘
-                      │
-                      │ Load/Unload on demand
-                      ▼
-  ┌─────────────────────────────────────────┐
-  │         SCROLLBACK HISTORY              │
-  │   (~5000 logical lines in memory)       │
-  │   Sliding window with global indices    │
-  └─────────────────────────────────────────┘
-                      │
-                      │ Wrap to current width
-                      ▼
-  ┌─────────────────────────────────────────┐
-  │            DISPLAY BUFFER               │
-  │   (Physical lines - current width)      │
-  │   ┌─────────────────────────────────┐   │
-  │   │     Off-screen ABOVE (~200)     │   │
-  │   ├─────────────────────────────────┤   │
-  │   │     VISIBLE VIEWPORT            │   │
-  │   ├─────────────────────────────────┤   │
-  │   │     Off-screen BELOW (~50)      │   │
-  │   └─────────────────────────────────┘   │
-  └─────────────────────────────────────────┘
-  ```
+**Configuration** (`theme.json`):
+```json
+"layout_transitions": {
+  "duration_ms": 300,
+  "easing": "smoothstep",
+  "enabled": true
+}
+```
 
-  - **Key Files**:
-    - `apps/texelterm/parser/disk_history.go` - TXHIST02 indexed format with O(1) random access
-    - `apps/texelterm/parser/scrollback_history.go` - Memory window with disk backing
-    - `apps/texelterm/parser/display_buffer.go` - Physical lines at current width
-    - `apps/texelterm/parser/logical_line.go` - Width-independent line storage
-    - `apps/texelterm/parser/vterm_display_buffer.go` - VTerm integration
+**Easing Functions**: `linear`, `smoothstep`, `ease-in-out`, `spring`
 
-  - **Key Features**:
-    - **Disk persistence**: TXHIST02 format stores index at end for append-without-rewrite
-    - **Global indices**: Track position across disk + memory seamlessly
-    - **Configurable limits**: MaxMemoryLines, MarginAbove, MarginBelow all configurable
-    - **On-demand loading**: Scrolling into disk history loads lines automatically
-    - **Proper reflow**: Resize O(viewport) not O(history)
+**Hot Reload**: Send `kill -HUP $(pidof texel-server)` after editing theme.
 
-  - **Usage**:
-    ```go
-    // Enable disk-backed display buffer
-    err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
-        MaxMemoryLines: 5000,
-        MarginAbove:    200,
-        MarginBelow:    50,
-    })
-    defer v.CloseDisplayBuffer()
-    ```
+**Related Files**: `texel/layout_transitions.go`, `texel/desktop_engine_core.go`, `texel/workspace.go`
 
-  - **Next Steps (Optional)**:
-    - Update `term.go` to use `EnableDisplayBufferWithDisk()` instead of legacy HistoryManager
-    - Remove legacy HistoryManager once new system is proven in production
+---
+
+### Scrollback Reflow (Three-Level Architecture)
+Separates storage from display for efficient reflow on resize. See `docs/plans/SCROLLBACK_REFLOW_PLAN.md` for full architecture.
+
+**Architecture**:
+```
+Disk History (TXHIST02) → Scrollback History (~5000 lines) → Display Buffer (viewport)
+```
+
+**Key Files**:
+- `apps/texelterm/parser/disk_history.go` - TXHIST02 indexed format
+- `apps/texelterm/parser/scrollback_history.go` - Memory window with disk backing
+- `apps/texelterm/parser/display_buffer.go` - Physical lines at current width
+- `apps/texelterm/parser/logical_line.go` - Width-independent line storage
+- `apps/texelterm/parser/vterm_display_buffer.go` - VTerm integration
+
+**Usage**:
+```go
+err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+    MaxMemoryLines: 5000,
+    MarginAbove:    200,
+    MarginBelow:    50,
+})
+```
+
+**Performance**: Resize is O(viewport) not O(history).
+
+---
+
+### Pane Loss During Server Restart - Fixed
+**Issues Fixed**:
+1. Race condition in PerformSplit: Animation broadcasting while panes had nil apps
+2. 0x0 resize during restore: Apps started before layout calculated
+3. Launcher creation conflict with restored panes
+
+**Solution**: Deferred app startup pattern - prepare apps → build tree → calculate layout → start apps with correct dimensions.
+
+**Key Files**: `texel/pane.go` (PrepareAppForRestore, StartPreparedApp), `texel/snapshot_restore.go`, `cmd/texel-server/main.go`
+
+---
+
+### Backspace Visual Erase - Fixed (2025-12-13)
+**Problem**: Pressing backspace moved cursor but didn't visually erase characters until typing a new character.
+
+**Root Cause**: Bash uses BS + EL (Erase to End of Line) for backspace. The `displayBufferEraseToEndOfLine()` function was truncating the logical line but not rebuilding the physical representation.
+
+**Fix**: Added `RebuildCurrentLine()` calls to all display buffer erase functions:
+- `displayBufferEraseToEndOfLine()` - EL 0
+- `displayBufferEraseFromStartOfLine()` - EL 1
+- `displayBufferEraseLine()` - EL 2
+- `displayBufferEraseCharacters()` - ECH
+- `displayBufferDeleteCharacters()` - DCH
+
+**Files Modified**: `apps/texelterm/parser/vterm_display_buffer.go`, `apps/texelterm/parser/display_buffer.go`, `apps/texelterm/parser/vterm_edit_char.go`
