@@ -46,6 +46,8 @@ var _ texel.ControlBusProvider = (*Pipeline)(nil)
 var _ texel.CloseRequester = (*Pipeline)(nil)
 var _ texel.SnapshotProvider = (*Pipeline)(nil)
 var _ texel.PaneIDSetter = (*Pipeline)(nil)
+var _ texel.StorageSetter = (*Pipeline)(nil)
+var _ texel.AppStorageSetter = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
 // Pipeline implements texel.App and can be launched like any other app.
@@ -445,6 +447,44 @@ func (p *Pipeline) SetPaneID(id [16]byte) {
 			}
 			if setter, ok := underlying.(texel.PaneIDSetter); ok {
 				setter.SetPaneID(id)
+			}
+		}
+	}
+}
+
+// SetStorage implements texel.StorageSetter by forwarding to all cards that need it.
+func (p *Pipeline) SetStorage(storage texel.AppStorage) {
+	cards := p.Cards()
+	for _, card := range cards {
+		if setter, ok := card.(texel.StorageSetter); ok {
+			setter.SetStorage(storage)
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if setter, ok := underlying.(texel.StorageSetter); ok {
+				setter.SetStorage(storage)
+			}
+		}
+	}
+}
+
+// SetAppStorage implements texel.AppStorageSetter by forwarding to all cards that need it.
+func (p *Pipeline) SetAppStorage(storage texel.AppStorage) {
+	cards := p.Cards()
+	for _, card := range cards {
+		if setter, ok := card.(texel.AppStorageSetter); ok {
+			setter.SetAppStorage(storage)
+		}
+		if accessor, ok := card.(AppAccessor); ok {
+			underlying := accessor.UnderlyingApp()
+			if underlying == nil {
+				continue
+			}
+			if setter, ok := underlying.(texel.AppStorageSetter); ok {
+				setter.SetAppStorage(storage)
 			}
 		}
 	}
