@@ -6,7 +6,8 @@ This directory houses Texelation's supporting documentation. Key entry points:
 - [Client/server architecture](CLIENT_SERVER_ARCHITECTURE.md) – runtime, data flow, modules
 - [Protocol foundations](PROTOCOL_FOUNDATIONS.md) – wire format, message types, sequencing
 - [Terminal persistence](TERMINAL_PERSISTENCE_ARCHITECTURE.md) – scrollback, environment, history
-- [Layout animation design](LAYOUT_ANIMATION_DESIGN.md) – server-side split/close transitions
+- [Layout animations](LAYOUT_ANIMATION_DESIGN.md) – server-side split/close transitions
+- [Visual effects](EFFECTS_ARCHITECTURE.md) – client-side overlays and animations
 
 ## User Documentation
 - [Project overview](../README.md)
