@@ -11,5 +11,5 @@ This folder holds active plans and test checklists.
 ## Completed (Moved to docs/)
 
 Implementation references for completed features live in the parent `docs/` directory:
-- `../SCROLLBACK_REFLOW.md` – Three-level scrollback architecture
+- `../TERMINAL_PERSISTENCE_ARCHITECTURE.md` – Scrollback, environment, history persistence
 - `../LAYOUT_ANIMATION_DESIGN.md` – Server-side layout transitions

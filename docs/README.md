@@ -5,7 +5,7 @@ This directory houses Texelation's supporting documentation. Key entry points:
 ## Architecture & Protocol
 - [Client/server architecture](CLIENT_SERVER_ARCHITECTURE.md) – runtime, data flow, modules
 - [Protocol foundations](PROTOCOL_FOUNDATIONS.md) – wire format, message types, sequencing
-- [Scrollback reflow](SCROLLBACK_REFLOW.md) – three-level terminal history architecture
+- [Terminal persistence](TERMINAL_PERSISTENCE_ARCHITECTURE.md) – scrollback, environment, history
 - [Layout animation design](LAYOUT_ANIMATION_DESIGN.md) – server-side split/close transitions
 
 ## User Documentation

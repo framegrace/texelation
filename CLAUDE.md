@@ -132,7 +132,7 @@ Effect implementations register themselves at import time via `effects.Register(
 - `docs/CLIENT_SERVER_ARCHITECTURE.md` – Client/server runtime, data flow
 - `docs/EFFECTS_GUIDE.md` – How effects are implemented and configured
 - `docs/TEXEL_APP_GUIDE.md` – How to build pipeline-based apps using cards
-- `docs/SCROLLBACK_REFLOW.md` – Scrollback reflow architecture reference
+- `docs/TERMINAL_PERSISTENCE_ARCHITECTURE.md` – Scrollback, environment, history persistence
 - `docs/plans/TEXELUI_PLAN.md` – TexelUI widget library status
 - `docs/plans/LONG_LINE_EDITOR_PLAN.md` – Long line editor overlay (not started)
 
@@ -194,7 +194,7 @@ Server-side animation system that animates SplitRatios over time, broadcasting t
 ---
 
 ### Scrollback Reflow (Three-Level Architecture)
-Separates storage from display for efficient reflow on resize. See `docs/SCROLLBACK_REFLOW.md` for full architecture.
+Separates storage from display for efficient reflow on resize. See `docs/TERMINAL_PERSISTENCE_ARCHITECTURE.md` for full architecture.
 
 **Architecture**:
 ```
