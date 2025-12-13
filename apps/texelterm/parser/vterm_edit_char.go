@@ -115,6 +115,11 @@ func (v *VTerm) DeleteCharacters(n int) {
 		rightBoundary = v.marginRight + 1
 	}
 
+	// Update display buffer if enabled (main screen only)
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferDeleteCharacters(n)
+	}
+
 	if v.inAltScreen {
 		line := v.altBuffer[v.cursorY]
 		if v.cursorX < len(line) {

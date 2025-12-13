@@ -305,7 +305,8 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 	}
 
 	cursorX, cursorY := a.vterm.Cursor()
-	cursorVisible := a.vterm.CursorVisible()
+	// Only show cursor if it's visible AND we're at the live edge (not scrolled into history)
+	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.GetDirtyLines()
 
 	renderLine := func(y int) {
@@ -465,6 +466,13 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 
 	if keyBytes != nil {
+		// Scroll to live edge when user types (so they can see what they're typing)
+		a.mu.Lock()
+		if a.vterm != nil && a.vterm.IsDisplayBufferEnabled() && !a.vterm.AtLiveEdge() {
+			a.vterm.ScrollToLiveEdge()
+		}
+		a.mu.Unlock()
+
 		a.pty.Write(keyBytes)
 	}
 }
@@ -1292,6 +1300,7 @@ func (a *TexelTerm) runShell() error {
 		cfg := theme.Get()
 		wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
 		reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
+		displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", true) // Default to new three-level architecture
 
 		// Create history configuration
 		histCfg := parser.DefaultHistoryConfig()
@@ -1309,58 +1318,92 @@ func (a *TexelTerm) runShell() error {
 		// Create history manager with pane ID for persistent scrollback (lock already held)
 		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
 
-		hm, err := parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
-		if err != nil {
-			log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
-			hm = nil
+		// Only create legacy HistoryManager if display buffer is disabled
+		var hm *parser.HistoryManager
+		if !displayBufferEnabled {
+			log.Printf("[HISTORY DEBUG] Creating history manager with paneID=%q, persistDir=%q", paneIDHex, histCfg.PersistDir)
+			var err error
+			hm, err = parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
+			if err != nil {
+				log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
+				hm = nil
+			}
+			a.historyManager = hm
 		}
-		a.historyManager = hm
 
 		a.vterm = parser.NewVTerm(cols, rows,
 			parser.WithTitleChangeHandler(func(newTitle string) {
 				a.title = newTitle
 				a.requestRefresh()
-			}),
-			parser.WithCommandStartHandler(func(cmd string) {
-				if cmd != "" {
-					a.title = cmd
-					a.requestRefresh()
-				}
-			}),
-			parser.WithPtyWriter(func(b []byte) {
-				if a.pty != nil {
-					a.pty.Write(b)
-				}
-			}),
-			parser.WithDefaultFgChangeHandler(func(c parser.Color) {
-				a.colorPalette[256] = a.mapParserColorToTCell(c)
-			}),
-			parser.WithDefaultBgChangeHandler(func(c parser.Color) {
-				a.colorPalette[257] = a.mapParserColorToTCell(c)
-			}),
-			parser.WithQueryDefaultFgHandler(func() {
-				a.respondToColorQuery(10)
-			}),
-			parser.WithQueryDefaultBgHandler(func() {
-				a.respondToColorQuery(11)
-			}),
-			parser.WithScreenRestoredHandler(func() {
-				go a.Resize(a.width, a.height)
-			}),
-			parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
-				// Note: bool writes are atomic, no lock needed for simple assignment
-				a.bracketedPasteMode = enabled
-			}),
-			parser.WithWrap(wrapEnabled),
-			parser.WithReflow(reflowEnabled),
-			parser.WithHistoryManager(hm),
+			}
+		}),
+		parser.WithPtyWriter(func(b []byte) {
+			if a.pty != nil {
+				a.pty.Write(b)
+			}
+		}),
+		parser.WithDefaultFgChangeHandler(func(c parser.Color) {
+			a.colorPalette[256] = a.mapParserColorToTCell(c)
+		}),
+		parser.WithDefaultBgChangeHandler(func(c parser.Color) {
+			a.colorPalette[257] = a.mapParserColorToTCell(c)
+		}),
+		parser.WithQueryDefaultFgHandler(func() {
+			a.respondToColorQuery(10)
+		}),
+		parser.WithQueryDefaultBgHandler(func() {
+			a.respondToColorQuery(11)
+		}),
+		parser.WithScreenRestoredHandler(func() {
+			go a.Resize(a.width, a.height)
+		}),
+		parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
+			// Note: bool writes are atomic, no lock needed for simple assignment
+			a.bracketedPasteMode = enabled
+		}),
+		parser.WithWrap(wrapEnabled),
+		parser.WithReflow(reflowEnabled),
+		parser.WithHistoryManager(hm), // nil when displayBufferEnabled
+		parser.WithDisplayBuffer(false), // Don't use old in-memory display buffer
 		)
 		a.parser = parser.NewParser(a.vterm)
 
-		// Position cursor at bottom if we loaded history
-		// This is needed because cursor positioning normally happens in Resize(),
-		// but when vterm is created with correct dimensions, no resize is triggered
-		if hm != nil && hm.Length() > rows {
+		// Enable new three-level display buffer with disk persistence
+		if displayBufferEnabled {
+			// Only enable disk persistence if we have a pane ID
+			if paneIDHex != "" {
+				// Construct disk path for new format (.hist2)
+				scrollbackDir := filepath.Join(histCfg.PersistDir, "scrollback")
+				if err := os.MkdirAll(scrollbackDir, 0755); err != nil {
+					log.Printf("Failed to create scrollback dir: %v", err)
+				}
+				diskPath := filepath.Join(scrollbackDir, paneIDHex+".hist2")
+
+				err := a.vterm.EnableDisplayBufferWithDisk(diskPath, parser.DisplayBufferOptions{
+					MaxMemoryLines: histCfg.MemoryLines,
+					MarginAbove:    200,
+					MarginBelow:    50,
+				})
+				if err != nil {
+					log.Printf("[DISPLAY_BUFFER] Failed to enable disk-backed display buffer: %v", err)
+					// Fall back to memory-only
+					a.vterm.EnableDisplayBuffer()
+				} else {
+					log.Printf("[DISPLAY_BUFFER] Enabled with disk persistence: %s", diskPath)
+				}
+			} else {
+				// No pane ID - use memory-only display buffer
+				a.vterm.EnableDisplayBuffer()
+				log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID)")
+			}
+
+			// Position cursor at bottom if we loaded history
+			totalLines := a.vterm.DisplayBufferGetHistory().TotalLen()
+			if totalLines > int64(rows) {
+				a.vterm.SetCursorPos(rows-1, 0)
+			}
+		} else if hm != nil && hm.Length() > rows {
+			// Position cursor at bottom if we loaded history (legacy path)
 			a.vterm.SetCursorPos(rows-1, 0)
 		}
 
@@ -1611,6 +1654,20 @@ func (a *TexelTerm) Stop() {
 		cmd = a.cmd
 		pty = a.pty
 		hm = a.historyManager
+
+		// Close display buffer (flushes to disk if disk-backed)
+		// For legacy path, sync to history manager first
+		if a.vterm != nil {
+			if a.vterm.IsDisplayBufferEnabled() {
+				if err := a.vterm.CloseDisplayBuffer(); err != nil {
+					log.Printf("Error closing display buffer: %v", err)
+				}
+			} else {
+				// Legacy path: sync to history manager
+				a.vterm.SyncDisplayBufferToHistoryManager()
+			}
+		}
+
 		a.cmd = nil
 		a.pty = nil
 		a.mu.Unlock()
@@ -1627,7 +1684,7 @@ func (a *TexelTerm) Stop() {
 			}()
 		}
 
-		// Close history manager
+		// Close history manager (only used in legacy path)
 		if hm != nil {
 			if err := hm.Close(); err != nil {
 				log.Printf("Error closing history manager: %v", err)

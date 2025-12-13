@@ -7,13 +7,20 @@
 
 package parser
 
-import (
-	"fmt"
-	"os"
-)
-
 // LineFeed moves the cursor down one line, scrolling if necessary.
+// This is called for explicit LF characters - it commits the logical line.
 func (v *VTerm) LineFeed() {
+	v.lineFeedInternal(true) // true = commit logical line
+}
+
+// lineFeedForWrap is called when auto-wrapping - doesn't commit the logical line.
+func (v *VTerm) lineFeedForWrap() {
+	v.lineFeedInternal(false) // false = don't commit, just wrap
+}
+
+// lineFeedInternal handles the actual line feed logic.
+// commitLogical: true if this is an explicit LF (commit line), false if auto-wrap (continue line)
+func (v *VTerm) lineFeedInternal(commitLogical bool) {
 	v.wrapNext = false // Clear wrapNext flag when moving to new line
 	v.MarkDirty(v.cursorY)
 
@@ -29,6 +36,12 @@ func (v *VTerm) LineFeed() {
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
 		}
 	} else {
+		// Commit current logical line to display buffer if enabled
+		// Only commit on explicit LF, not on auto-wrap
+		if commitLogical && v.IsDisplayBufferEnabled() {
+			v.displayBufferLineFeed()
+		}
+
 		// Main screen: check if we're at bottom margin
 		if v.cursorY == v.marginBottom {
 			if !outsideMargins {
@@ -287,7 +300,14 @@ func (v *VTerm) Scroll(delta int) {
 	if v.inAltScreen {
 		return
 	}
-	oldOffset := v.viewOffset
+
+	// Use display buffer scroll if enabled
+	if v.IsDisplayBufferEnabled() {
+		v.displayBufferScroll(delta)
+		v.MarkAllDirty()
+		return
+	}
+
 	v.viewOffset -= delta
 	if v.viewOffset < 0 {
 		v.viewOffset = 0
@@ -300,10 +320,6 @@ func (v *VTerm) Scroll(delta int) {
 	if v.viewOffset > maxOffset {
 		v.viewOffset = maxOffset
 	}
-
-	// DEBUG: Log scroll events
-	fmt.Fprintf(os.Stderr, "[SCROLL DEBUG] delta=%d, oldOffset=%d, newOffset=%d, histLen=%d, maxOffset=%d\n",
-		delta, oldOffset, v.viewOffset, histLen, maxOffset)
 
 	v.MarkAllDirty()
 }

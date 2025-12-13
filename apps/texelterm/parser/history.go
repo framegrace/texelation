@@ -164,11 +164,8 @@ func NewHistoryManager(config HistoryConfig, command, workingDir, paneID string)
 
 		// Try to load existing history
 		lines, err := LoadHistoryLines(sessionFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to load existing history: %v\n", err)
-		} else if len(lines) > 0 {
+		if err == nil && len(lines) > 0 {
 			existingLines = lines
-			fmt.Fprintf(os.Stderr, "Loaded %d lines from existing history file\n", len(lines))
 		}
 	}
 

@@ -69,8 +69,10 @@ type VTerm struct {
 	OnCommandEnd                  func(exitCode int)
 	OnEnvironmentUpdate           func(base64Env string)
 	// Bracketed paste mode (DECSET 2004)
-	bracketedPasteMode         bool
-	OnBracketedPasteModeChange func(bool)
+	bracketedPasteMode                 bool
+	OnBracketedPasteModeChange         func(bool)
+	// Display buffer for scrollback reflow (new architecture)
+	displayBuf                         *displayBufferState
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -123,6 +125,11 @@ func (v *VTerm) Grid() [][]Cell {
 	if v.inAltScreen {
 		return v.altBuffer
 	}
+
+	// Use new display buffer path if enabled
+	if v.IsDisplayBufferEnabled() {
+		return v.displayBufferGrid()
+	}
 	grid := make([][]Cell, v.height)
 	topHistoryLine := v.getTopHistoryLine()
 	histLen := v.historyLen
@@ -167,7 +174,8 @@ func (v *VTerm) placeChar(r rune) {
 		} else {
 			v.cursorX = 0
 		}
-		v.LineFeed()
+		// Use lineFeedForWrap to not commit the logical line (this is auto-wrap, not explicit LF)
+		v.lineFeedForWrap()
 		v.wrapNext = false
 	}
 
@@ -177,6 +185,11 @@ func (v *VTerm) placeChar(r rune) {
 			v.MarkDirty(v.cursorY)
 		}
 	} else {
+		// Also write to display buffer if enabled
+		if v.IsDisplayBufferEnabled() {
+			v.displayBufferPlaceChar(r)
+		}
+
 		if v.viewOffset > 0 { // If scrolled up, jump to the bottom on new input
 			v.viewOffset = 0
 			v.MarkAllDirty()
@@ -778,6 +791,11 @@ func (v *VTerm) MoveCursorForward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
+
+	// Sync display buffer's logical X for horizontal cursor movement
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferSetCursorFromPhysical()
+	}
 }
 
 func (v *VTerm) MoveCursorBackward(n int) {
@@ -796,6 +814,11 @@ func (v *VTerm) MoveCursorBackward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
+
+	// Sync display buffer's logical X for horizontal cursor movement
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferSetCursorFromPhysical()
+	}
 }
 
 func (v *VTerm) MoveCursorUp(n int) {
@@ -870,6 +893,17 @@ func WithWrap(enabled bool) Option {
 
 func WithReflow(enabled bool) Option {
 	return func(v *VTerm) { v.reflowEnabled = enabled }
+}
+
+// WithDisplayBuffer enables the new display buffer architecture for scrollback reflow.
+// When enabled, the terminal uses logical lines (width-independent) for history storage
+// and reflows content correctly on resize.
+func WithDisplayBuffer(enabled bool) Option {
+	return func(v *VTerm) {
+		if enabled {
+			v.EnableDisplayBuffer()
+		}
+	}
 }
 
 func (v *VTerm) SetTitle(title string) {
@@ -1081,6 +1115,10 @@ func (v *VTerm) Resize(width, height int) {
 			}
 		}
 		v.altBuffer = newAltBuffer
+		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
+	} else if v.IsDisplayBufferEnabled() {
+		// Use display buffer reflow - this is the new clean path
+		v.displayBufferResize(width, height)
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	} else {
 		// Handle height-only changes (no width change, no reflow needed)
