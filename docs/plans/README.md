@@ -10,5 +10,5 @@ This folder holds active plans, implementation references, and test checklists.
 
 ## Implementation References (Complete)
 
-- `SCROLLBACK_REFLOW_PLAN.md` – Three-level scrollback architecture (Disk → Memory → Display). Complete as of 2025-12-12.
-- `SCROLLBACK_PERSISTENCE_PLAN.md` – Superseded by SCROLLBACK_REFLOW_PLAN.md.
+- `SCROLLBACK_REFLOW.md` – Three-level scrollback architecture (Disk → Memory → Display). Complete as of 2025-12-12.
+- `SCROLLBACK_PERSISTENCE.md` – Superseded by SCROLLBACK_REFLOW.md.
