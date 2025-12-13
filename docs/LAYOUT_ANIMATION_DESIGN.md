@@ -1,61 +1,142 @@
-# Layout Animation Design Decisions
+# Layout Animation Architecture
 
-**Date**: 2025-12-06
-**Status**: Implemented server-side (Dec 2025)
+This document describes how Texelation animates pane splits and closes with smooth transitions.
 
-## Context
+## Overview
 
-Based on external architectural review feedback, expanding the layout system to animate splits and closes with smooth transitions. The final design runs entirely on the **server**: layout ratios animate in `texel/layout_transitions.go`, and the server streams intermediate snapshots/deltas to clients.
+Layout transitions run entirely on the **server**. When panes split or close, the server animates the split ratios over time, broadcasting tree snapshots at ~60fps. Clients simply render each snapshot as it arrives.
 
-## Key Decisions
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LAYOUT ANIMATION FLOW                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  User Action (split/close)                                      │
+│         │                                                       │
+│         ▼                                                       │
+│  LayoutTransitionManager                                        │
+│    - Sets start and target ratios                               │
+│    - Starts 60fps ticker                                        │
+│         │                                                       │
+│         ▼ (each tick)                                           │
+│  Interpolate ratios using easing function                       │
+│         │                                                       │
+│         ▼                                                       │
+│  recalculateLayout() → broadcast snapshot to clients            │
+│         │                                                       │
+│         ▼ (animation complete)                                  │
+│  Execute callback (e.g., remove pane after close animation)     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-### A. LayoutAnimator Scope
+## How It Works
 
-**Decision**: Option 1 - Tree-internal component (APPROVED)
+### Split Animation
 
-**Rationale**:
-- Layout animation is Tree's responsibility, not a visual effect
+When a pane splits:
+1. New pane starts at 1% of the space, existing pane at 99%
+2. Ratios animate toward final values (e.g., 50/50)
+3. Each frame updates the tree and broadcasts to clients
+
+```
+Start: [0.99, 0.01]  →  End: [0.50, 0.50]
+```
+
+### Close Animation
+
+When a pane closes:
+1. Closing pane shrinks from current size toward 1%
+2. Sibling panes grow to fill the space
+3. After animation completes, pane is actually removed from tree
+
+```
+Start: [0.50, 0.50]  →  End: [0.99, 0.01]  →  Remove pane
+```
+
+## Configuration
+
+Configure in `~/.config/texelation/theme.json`:
+
+```json
+{
+  "layout_transitions": {
+    "enabled": true,
+    "duration_ms": 200,
+    "easing": "smoothstep"
+  }
+}
+```
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `true` | Enable/disable animations |
+| `duration_ms` | `300` | Animation duration in milliseconds |
+| `easing` | `"smoothstep"` | Easing function for timing |
+
+### Easing Functions
+
+- `linear` - Constant speed
+- `smoothstep` - Smooth acceleration and deceleration (default)
+- `ease-in-out` - Slow start/end, fast middle
+- `spring` - Bouncy overshoot effect
+
+### Hot Reload
+
+Configuration reloads on `SIGHUP`:
+```bash
+kill -HUP $(pidof texel-server)
+```
+
+## Implementation
+
+### Core Components
+
+**LayoutTransitionManager** (`texel/layout_transitions.go`):
+- Manages active animations
+- Runs 60fps ticker during animations
+- Interpolates ratios using configured easing
+- Triggers layout recalculation and broadcast each frame
+
+**Timeline** (`internal/effects/timeline.go`):
+- Shared animation primitive used by both effects and layout
+- All methods take explicit `time.Time` parameter for frame synchronization
+- Prevents jitter from multiple `time.Now()` calls per frame
+
+### Integration Points
+
+- `texel/workspace.go` - Calls `AnimateSplit()` and `AnimateRemoval()`
+- `texel/desktop_engine_core.go` - Initializes manager, parses theme config
+- `texel/tree.go` - Stores animated `SplitRatios` in tree nodes
+
+### Grace Period
+
+During server startup and snapshot restore, a grace period skips animations to avoid visual noise. This ensures restored layouts appear instantly.
+
+## Files
+
+- `texel/layout_transitions.go` - LayoutTransitionManager (~200 lines)
+- `texel/workspace.go` - Split/close hooks into animator
+- `texel/desktop_engine_core.go` - Config parsing and initialization
+- `internal/effects/timeline.go` - Shared animation timeline
+
+## Design Rationale
+
+**Why server-side?**
+- Server owns authoritative tree state
+- Clients remain stateless thin renderers
+- Borders render correctly at each animated position
+- Reuses existing snapshot broadcast mechanism
+
+**Why not an Effect?**
+- Layout animation modifies tree structure, not visual overlay
+- Keeps separation of concerns (effects = visual, layout = structural)
 - Simpler implementation with fewer moving parts
-- Avoids violating separation of concerns (effects shouldn't modify layout)
-- Can always be made pluggable later if theme configuration is needed
 
-**Implementation**:
-- LayoutAnimator lives in `texel/layout_transitions.go` inside the core `texel` package
-- Not exposed through Effect interface
-- Uses same Timeline primitive for consistency
-- Tree operations (SplitActive, CloseActiveLeaf) directly control animations
+## Future Enhancements
 
-### B. Timeline API Breaking Change
-
-**Decision**: Accept breaking change - all Timeline methods require `now time.Time` parameter (APPROVED)
-
-**Rationale**:
-- Eliminates time source inconsistency between render loop and Timeline
-- Prevents animation jitter from multiple `time.Now()` calls per frame
-- Proper frame synchronization is critical for smooth animations
-- Migration is straightforward with clear compiler errors
-
-**Migration Required**:
-- All `AnimateTo(key, target, duration)` → `AnimateTo(key, target, duration, now)`
-- All `Get(key)` → `Get(key, now)`
-- All `IsAnimating(key)` → `IsAnimating(key, now)`
-- Update all current effects: fadeTint, rainbow, keyflash, any others
-
-## Current Implementation
-
-- **Server-driven**: `LayoutTransitionManager` (`texel/layout_transitions.go`) animates split ratios at ~60fps and broadcasts snapshots/deltas each frame.
-- **Workspace integration**: `workspace.go` calls `AnimateSplit` and `AnimateRemoval` for splits/closes. A grace period skips animations during startup/restore.
-- **Timeline unification**: Effects and layout share the timestamped `Timeline` helper to avoid jitter.
-- **Config**: Parsed from `layout_transitions` in the theme (enabled, duration_ms, easing). `min_threshold` is parsed but not applied yet.
-
-## Remaining Follow-ups
-- Interrupt animations if a new split/close arrives mid-flight.
-- Decide whether to keep or remove `min_threshold` (currently unused).
-- Add coverage around animated splits/closes and update EFFECTS_GUIDE with a brief note.
-- Consider optional workspace/pane swap animations in the future.
-
-## Notes
-
-- Commit after each phase for easy rollback
-- Run full regression tests before each commit
-- Update this document as implementation progresses
+- Interrupt animations when new split/close arrives mid-flight
+- Animate workspace switches (fade/slide)
+- Animate pane swaps
