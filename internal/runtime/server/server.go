@@ -81,6 +81,8 @@ func (s *Server) SetSnapshotStore(store *SnapshotStore, interval time.Duration) 
 	if interval > 0 {
 		s.snapshotInterval = interval
 	}
+	// Load snapshot immediately so it's available for applyBootSnapshot
+	s.loadBootSnapshot()
 }
 
 func (s *Server) Start() error {
@@ -92,7 +94,7 @@ func (s *Server) Start() error {
 		return err
 	}
 	s.listener = l
-	s.loadBootSnapshot()
+	// Note: loadBootSnapshot is called from SetSnapshotStore, not here
 	s.wg.Add(1)
 	go s.acceptLoop()
 	s.startSnapshotLoop()

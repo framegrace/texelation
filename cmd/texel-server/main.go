@@ -174,17 +174,10 @@ func main() {
 	statsLogger := server.NewSessionStatsLogger(log.Default())
 	server.SetSessionStatsObserver(statsLogger)
 	publishLogger := server.NewPublishLogger(log.Default())
-	sink := server.NewDesktopSink(desktop)
-	srv.SetEventSink(sink)
-	srv.SetPublisherFactory(func(sess *server.Session) *server.DesktopPublisher {
-		publisher := server.NewDesktopPublisher(desktop, sess)
-		sink.SetPublisher(publisher)
-		publisher.SetObserver(publishLogger)
-		return publisher
-	})
-	// Enable snapshots by default unless --from-scratch is specified
+
+	// Enable snapshots BEFORE SetEventSink - SetEventSink triggers applyBootSnapshot
+	// which needs the snapshot store to be set first
 	if !*fromScratch {
-		// Use default path if not specified
 		snapPath := *snapshotPath
 		if snapPath == "" {
 			homeDir, err := os.UserHomeDir()
@@ -207,6 +200,15 @@ func main() {
 	} else {
 		log.Println("Starting from scratch (--from-scratch flag set)")
 	}
+
+	sink := server.NewDesktopSink(desktop)
+	srv.SetEventSink(sink)
+	srv.SetPublisherFactory(func(sess *server.Session) *server.DesktopPublisher {
+		publisher := server.NewDesktopPublisher(desktop, sess)
+		sink.SetPublisher(publisher)
+		publisher.SetObserver(publishLogger)
+		return publisher
+	})
 
 	go func() {
 		if err := srv.Start(); err != nil {
