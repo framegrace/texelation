@@ -1,6 +1,6 @@
 # Planning Documents
 
-This folder holds active plans, implementation references, and test checklists.
+This folder holds active plans and test checklists.
 
 ## Active Plans
 
@@ -8,7 +8,8 @@ This folder holds active plans, implementation references, and test checklists.
 - `LONG_LINE_EDITOR_PLAN.md` – Phased plan for the texelterm long-line editor overlay.
 - `SMOKE_TEST_PLAN.md` – Canonical smoke and integration test suites plus near-term additions.
 
-## Implementation References (Complete)
+## Completed (Moved to docs/)
 
-- `SCROLLBACK_REFLOW.md` – Three-level scrollback architecture (Disk → Memory → Display). Complete as of 2025-12-12.
-- `SCROLLBACK_PERSISTENCE.md` – Superseded by SCROLLBACK_REFLOW.md.
+Implementation references for completed features live in the parent `docs/` directory:
+- `../SCROLLBACK_REFLOW.md` – Three-level scrollback architecture
+- `../LAYOUT_ANIMATION_DESIGN.md` – Server-side layout transitions

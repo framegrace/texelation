@@ -2,7 +2,7 @@
 
 **Status**: Superseded by SCROLLBACK_REFLOW.md
 
-The three-level scrollback architecture (Disk → Memory → Display) was implemented as part of the scrollback reflow feature. See `docs/plans/SCROLLBACK_REFLOW.md` for the complete architecture and implementation details.
+The three-level scrollback architecture (Disk → Memory → Display) was implemented as part of the scrollback reflow feature. See `SCROLLBACK_REFLOW.md` for the complete architecture and implementation details.
 
 ## Summary
 

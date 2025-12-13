@@ -99,9 +99,8 @@ Refer to `docs/plans/SMOKE_TEST_PLAN.md` for the canonical smoke suite and near-
 
 ---
 
-## 4. Minor Cleanups
+## 4. Client Runtime Hardening
 
-### 3.4 Client Runtime Hardening
 - Implement a single-writer goroutine (message pump) to eliminate `writeMu` contention and deadlock risk during large payloads.
 - Refactor long function signatures in the client runtime into struct-based configs for readability/testing.
 - Parameterise timeouts/buffer sizes via package constants and expose them for tuning.
@@ -110,7 +109,7 @@ Refer to `docs/plans/SMOKE_TEST_PLAN.md` for the canonical smoke suite and near-
 
 ---
 
-## 4. Minor Cleanups
+## 5. Minor Cleanups
 
 - Remove legacy `blit` helpers from `texel/workspace.go` once confirmed unused.
 - Finish the `internal/runtime/client` module split (some helpers still share

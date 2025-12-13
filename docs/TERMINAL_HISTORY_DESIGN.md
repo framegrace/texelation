@@ -1,8 +1,14 @@
 # Terminal History Design
 
-## Overview
+**Status**: Superseded by `SCROLLBACK_REFLOW.md`
 
-This document describes the design for infinite terminal history in texelterm, combining a large in-memory buffer with file-based persistent storage. The design is built with encryption and privacy controls in mind from the start.
+The original design described here was replaced by the three-level scrollback architecture. See `SCROLLBACK_REFLOW.md` for the implemented system.
+
+---
+
+## Original Design (Historical Reference)
+
+This document described the original design for infinite terminal history in texelterm, combining a large in-memory buffer with file-based persistent storage. The design was built with encryption and privacy controls in mind from the start.
 
 ## Goals
 
