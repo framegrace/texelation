@@ -72,7 +72,14 @@ func New() texel.App {
 	// Compose in a pipeline
 	// Order matters: earlier cards are drawn first (bottom).
 	// Here we draw alt1, then alt2.
-	// Frame 0: alt1 draws Blue, alt2 passes through → Blue.
-	// Frame 1: alt1 passes through, alt2 draws Red → Red.
+	// On frame 0: alt1 draws, alt2 skips -> Result Blue
+	// On frame 1: alt1 skips, alt2 draws -> Result Red (over transparent? no, skips means returns input)
+	// Wait, pipeline passes input buffer.
+	// If alt1 skips, it returns input (empty/black?).
+	// If alt2 skips, it returns input (from alt1).
+	// Frame 0: alt1 draws Blue. alt2 skips (returns Blue). Output: Blue.
+	// Frame 1: alt1 skips (returns input/empty). alt2 draws Red. Output: Red.
+	// Result: Blue / Red flickering.
+	
 	return cards.NewPipeline(nil, alt1, alt2)
 }
