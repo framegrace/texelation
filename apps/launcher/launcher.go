@@ -81,7 +81,6 @@ func (l *Launcher) SetAppStorage(storage texel.AppStorage) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.storage = storage
-	log.Printf("Launcher: Storage attached (scope: %s)", storage.Scope())
 
 	// Load usage counts from storage
 	l.loadUsageCounts()
@@ -100,22 +99,16 @@ func (l *Launcher) loadUsageCounts() {
 	}
 
 	data, err := l.storage.Get("usageCounts")
-	if err != nil {
-		log.Printf("Launcher: Failed to load usage counts: %v", err)
-		return
-	}
-	if data == nil {
+	if err != nil || data == nil {
 		return
 	}
 
 	var counts map[string]int
 	if err := json.Unmarshal(data, &counts); err != nil {
-		log.Printf("Launcher: Failed to parse usage counts: %v", err)
 		return
 	}
 
 	l.usageCounts = counts
-	log.Printf("Launcher: Loaded usage counts for %d apps", len(counts))
 }
 
 // saveUsageCounts persists app usage counts to storage.
@@ -125,9 +118,7 @@ func (l *Launcher) saveUsageCounts() {
 		return
 	}
 
-	if err := l.storage.Set("usageCounts", l.usageCounts); err != nil {
-		log.Printf("Launcher: Failed to save usage counts: %v", err)
-	}
+	_ = l.storage.Set("usageCounts", l.usageCounts)
 }
 
 // sortAppsByUsage sorts apps by usage count (most used first).
@@ -280,8 +271,6 @@ func (l *Launcher) HandleKey(ev *tcell.EventKey) {
 			if l.usageCounts != nil {
 				l.usageCounts[selectedApp.Manifest.Name]++
 				l.saveUsageCounts()
-				log.Printf("Launcher: Incremented usage for '%s' to %d",
-					selectedApp.Manifest.Name, l.usageCounts[selectedApp.Manifest.Name])
 			}
 
 			l.mu.Unlock()
