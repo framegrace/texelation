@@ -113,18 +113,16 @@ func TestLauncher_LoadsApps(t *testing.T) {
 	}
 }
 
-func TestLauncher_AttachControlBus(t *testing.T) {
+func TestLauncher_ControlBus(t *testing.T) {
 	reg := createTestRegistry()
 	l := &Launcher{
-		registry: reg,
+		registry:   reg,
+		controlBus: newMockControlBus(),
 	}
 	l.loadApps()
 
-	bus := newMockControlBus()
-	l.AttachControlBus(bus)
-
-	if l.controlBus == nil {
-		t.Error("AttachControlBus() did not set the control bus")
+	if l.ControlBus() == nil {
+		t.Error("ControlBus() returned nil")
 	}
 }
 
@@ -180,14 +178,13 @@ func TestLauncher_NavigationUpDown(t *testing.T) {
 
 func TestLauncher_LaunchApp(t *testing.T) {
 	reg := createTestRegistry()
+	bus := newMockControlBus()
 	l := &Launcher{
 		registry:    reg,
 		selectedIdx: 0,
+		controlBus:  bus,
 	}
 	l.loadApps()
-
-	bus := newMockControlBus()
-	l.AttachControlBus(bus)
 
 	// Should have 3 apps
 	if len(l.apps) != 3 {

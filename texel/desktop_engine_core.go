@@ -122,12 +122,13 @@ type DesktopEngine struct {
 
 // FloatingPanel represents an app floating above the workspace.
 type FloatingPanel struct {
-	app    App
-	x, y   int
-	width  int
-	height int
-	modal  bool
-	id     [16]byte
+	app      App
+	pipeline RenderPipeline // For events and rendering (from PipelineProvider)
+	x, y     int
+	width    int
+	height   int
+	modal    bool
+	id       [16]byte
 }
 
 func newFloatingPanelID(app App) [16]byte {
@@ -438,14 +439,24 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 		id:     newFloatingPanelID(app),
 	}
 
+	// Get pipeline for events and rendering
+	if provider, ok := app.(PipelineProvider); ok {
+		panel.pipeline = provider.Pipeline()
+	}
+
 	d.floatingPanels = append(d.floatingPanels, panel)
 
 	if listener, ok := app.(Listener); ok {
 		d.Subscribe(listener)
 	}
 
+	// Wire refresh notifier to pipeline (or app as fallback)
 	if d.activeWorkspace != nil {
-		app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+		if panel.pipeline != nil {
+			panel.pipeline.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+		} else {
+			app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+		}
 	}
 
 	// Inject app-level storage for floating panels (they don't have pane IDs)
@@ -460,7 +471,12 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 	}
 
 	d.appLifecycle.StartApp(app, nil)
-	app.Resize(w, h)
+	// Resize pipeline (or app as fallback)
+	if panel.pipeline != nil {
+		panel.pipeline.Resize(w, h)
+	} else {
+		app.Resize(w, h)
+	}
 	
 	d.notifyPaneState(panel.id, true, false, ZOrderFloating, false)
 
@@ -619,7 +635,12 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 	for i := len(d.floatingPanels) - 1; i >= 0; i-- {
 		fp := d.floatingPanels[i]
 		if fp.modal {
-			fp.app.HandleKey(key)
+			// Route to pipeline (or app as fallback)
+			if fp.pipeline != nil {
+				fp.pipeline.HandleKey(key)
+			} else {
+				fp.app.HandleKey(key)
+			}
 			return
 		}
 	}
@@ -636,7 +657,12 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 
 	if d.zoomedPane != nil {
 		if d.zoomedPane.Pane != nil {
-			d.zoomedPane.Pane.app.HandleKey(key)
+			// Route to pipeline (or app as fallback)
+			if d.zoomedPane.Pane.pipeline != nil {
+				d.zoomedPane.Pane.pipeline.HandleKey(key)
+			} else if d.zoomedPane.Pane.app != nil {
+				d.zoomedPane.Pane.app.HandleKey(key)
+			}
 		}
 	} else if d.activeWorkspace != nil {
 		d.activeWorkspace.handleEvent(key)

@@ -209,7 +209,13 @@ func (d *DesktopEngine) captureFloatingPanelSnapshots() []PaneSnapshot {
 		if fp == nil || fp.app == nil {
 			continue
 		}
-		buf := fp.app.Render()
+		// Render from pipeline (or app as fallback)
+		var buf [][]Cell
+		if fp.pipeline != nil {
+			buf = fp.pipeline.Render()
+		} else {
+			buf = fp.app.Render()
+		}
 		if len(buf) == 0 || len(buf[0]) == 0 {
 			continue
 		}
