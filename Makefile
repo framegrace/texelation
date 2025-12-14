@@ -16,7 +16,6 @@ build: ## Build texel-server and texel-client binaries into bin/
 build-apps: ## Build standalone app binaries into bin/
 	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
 	$(GO_ENV) go build -o $(BIN_DIR)/texelterm ./cmd/texelterm
-	$(GO_ENV) go build -o $(BIN_DIR)/flicker ./cmd/flicker
 	$(GO_ENV) go build -o $(BIN_DIR)/help ./cmd/help
 	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
