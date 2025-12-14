@@ -122,11 +122,24 @@ Effect implementations register themselves at import time via `effects.Register(
 - **Testing**: Table-driven tests in `_test.go` files; integration tests under `integration` build tag
 - **Formatting**: `gofmt` with tabs for indentation
 - **Commit Style**: Short present-tense (e.g., "Fix backspace visual erase"), subject < 60 chars
-- **Test-Driven Development**: Write tests first, then implement to make them pass
 - Always pass regression tests before confirming changes
 - Commit after every successful change to enable quick rollback
 
-## Current Branch: feature/fix-scrollback-reflow
+## Git Workflow Rules
+
+- **NEVER commit directly to main** - Always create a feature branch first
+- Branch naming: `feature/<description>`, `fix/<description>`, or `refactor/<description>`
+- Create PR to merge into main after review
+- Example workflow:
+  ```bash
+  git checkout main
+  git pull
+  git checkout -b feature/my-new-feature
+  # ... make changes ...
+  git add -A && git commit -m "Description of changes"
+  git push -u origin feature/my-new-feature
+  # Then create PR on GitHub
+  ```
 
 ## Documentation
 
@@ -142,8 +155,30 @@ Effect implementations register themselves at import time via `effects.Register(
 ### Adding a New App
 See `docs/TEXEL_APP_GUIDE.md` for the end-to-end workflow. In summary:
 1. Create a package under `apps/<name>/` implementing `texel.App`.
-2. Build a card pipeline (`cards.WrapApp`, `cards.NewEffectCard`, etc.).
-3. Register the factory in the server harness (`cmd/texel-server/main.go`).
+2. Return the app directly from `New()` - no pipeline wrapper needed.
+3. If the app needs a ControlBus, create one with `texel.NewControlBus()` and implement `ControlBusProvider`.
+4. If the app needs card pipelines (for dialogs, effects), implement `PipelineProvider` to expose the internal pipeline.
+5. Register the factory in the server harness (`cmd/texel-server/main.go`).
+
+**Simple app pattern** (most apps):
+```go
+func New() texel.App {
+    return &MyApp{
+        controlBus: texel.NewControlBus(),
+    }
+}
+```
+
+**Pipeline app pattern** (apps needing card interception):
+```go
+func New() texel.App {
+    app := &MyApp{}
+    app.pipeline = cards.NewPipeline(nil, cards.WrapApp(app), myDialogCard)
+    return app
+}
+
+func (a *MyApp) Pipeline() texel.RenderPipeline { return a.pipeline }
+```
 
 ### Adding a New Effect
 Follow `docs/EFFECTS_GUIDE.md`. Highlights:
@@ -247,3 +282,36 @@ err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
 - `displayBufferDeleteCharacters()` - DCH
 
 **Files Modified**: `apps/texelterm/parser/vterm_display_buffer.go`, `apps/texelterm/parser/display_buffer.go`, `apps/texelterm/parser/vterm_edit_char.go`
+
+---
+
+### Pipeline Architecture Simplification (2025-12-14)
+**Problem**: Pipeline forwarded 11+ optional interfaces to wrapped apps, requiring ~15-20 lines of boilerplate per interface. Easy to forget (as happened with StorageSetter).
+
+**Solution**: Clear separation of concerns:
+- **User events** (keys, mouse, paste) → Pipeline (for card interception)
+- **Interfaces** (SetStorage, SetPaneID, etc.) → App directly
+
+**Changes**:
+- Apps return themselves directly instead of pipeline wrappers
+- Pane gets pipeline via `PipelineProvider` interface (if app provides one)
+- Removed ~140 lines of interface forwarding from Pipeline
+- Added `RenderPipeline` and `PipelineProvider` interfaces for future use
+
+**Key Interfaces** (`texel/app.go`):
+```go
+type RenderPipeline interface {
+    Render() [][]Cell
+    Resize(cols, rows int)
+    Run() error
+    Stop()
+    HandleKey(*tcell.EventKey)
+    SetRefreshNotifier(chan<- bool)
+}
+
+type PipelineProvider interface {
+    Pipeline() RenderPipeline
+}
+```
+
+**TODO**: Extract texelterm's confirmation dialog to a reusable `cards.DialogCard` (see TODO in `apps/texelterm/term.go`).
