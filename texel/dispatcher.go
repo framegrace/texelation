@@ -25,6 +25,7 @@ const (
 	EventTreeChanged
 	// Add other event types here as needed
 	EventThemeChanged
+	EventAppAttached
 )
 
 // Event represents a message passed through the system.

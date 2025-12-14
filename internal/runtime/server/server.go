@@ -47,7 +47,7 @@ func NewServer(addr string, manager *Manager) *Server {
 
 // OnEvent implements texel.Listener to react to desktop events.
 func (s *Server) OnEvent(event texel.Event) {
-	if event.Type == texel.EventTreeChanged {
+	if event.Type == texel.EventTreeChanged || event.Type == texel.EventAppAttached {
 		s.persistSnapshot()
 	}
 }

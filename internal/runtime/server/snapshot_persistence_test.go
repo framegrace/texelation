@@ -94,9 +94,15 @@ func TestSnapshotSavedOnLayoutChange(t *testing.T) {
 	initialTime := initialInfo.ModTime()
 
 	// Trigger Layout Change (simulate adding a pane/split)
-	// We add another app to the current workspace, which triggers EventTreeChanged AND ensures we have panes to save.
-	t.Log("Adding second app to trigger EventTreeChanged...")
-	desktop.ActiveWorkspace().AddApp(&recordingApp{title: "second"})
+	// We use PerformSplit to simulate user action (Ctrl+A |)
+	// This involves animation and potentially different event timing
+	t.Log("Performing split to trigger EventTreeChanged...")
+	// Need to ensure we have an active workspace and pane
+	ws := desktop.ActiveWorkspace()
+	if ws == nil {
+		t.Fatalf("no active workspace")
+	}
+	ws.PerformSplit(texel.Vertical)
 
 	// Wait a bit for the event to be processed
 	time.Sleep(200 * time.Millisecond)
