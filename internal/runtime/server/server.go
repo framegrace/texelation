@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"texelation/protocol"
+	"texelation/texel"
 )
 
 // Server listens on a Unix domain socket and manages sessions.
@@ -44,6 +45,13 @@ func NewServer(addr string, manager *Manager) *Server {
 	return &Server{addr: addr, manager: manager, quit: make(chan struct{}), sink: nopSink{}}
 }
 
+// OnEvent implements texel.Listener to react to desktop events.
+func (s *Server) OnEvent(event texel.Event) {
+	if event.Type == texel.EventTreeChanged {
+		s.persistSnapshot()
+	}
+}
+
 func (s *Server) SetEventSink(sink EventSink) {
 	if sink == nil {
 		sink = nopSink{}
@@ -56,6 +64,12 @@ func (s *Server) SetEventSink(sink EventSink) {
 				s.focusMetrics.Attach(desktop)
 			}
 		}
+
+		// Subscribe to desktop events for snapshot triggers
+		if desktop := ds.Desktop(); desktop != nil {
+			desktop.Subscribe(s)
+		}
+
 		s.applyBootSnapshot()
 	}
 }
@@ -144,7 +158,14 @@ func (s *Server) acceptLoop() {
 }
 
 func (s *Server) Stop(ctx context.Context) error {
-	close(s.quit)
+	select {
+	case <-s.quit:
+		// Already stopped
+		return nil
+	default:
+		close(s.quit)
+	}
+
 	if s.snapshotQuit != nil {
 		close(s.snapshotQuit)
 	}
@@ -156,6 +177,11 @@ func (s *Server) Stop(ctx context.Context) error {
 		s.wg.Wait()
 		close(done)
 	}()
+
+	if ctx == nil {
+		<-done
+		return nil
+	}
 
 	select {
 	case <-done:
@@ -260,6 +286,9 @@ func (s *Server) startSnapshotLoop() {
 	go func() {
 		defer s.wg.Done()
 		defer ticker.Stop()
+		// Ensure we save one last time when the loop exits
+		defer s.persistSnapshot()
+
 		for {
 			select {
 			case <-ticker.C:

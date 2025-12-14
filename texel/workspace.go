@@ -206,6 +206,7 @@ func (w *Workspace) AddApp(app App) {
 	p.SetActive(true)
 	w.recalculateLayout()
 	w.notifyFocus()
+	w.desktop.broadcastTreeChanged() // Notify that the tree structure changed
 	w.desktop.broadcastStateUpdate()
 	log.Printf("AddApp: Completed adding app '%s'", app.GetTitle())
 }
