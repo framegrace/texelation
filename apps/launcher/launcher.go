@@ -17,12 +17,17 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"texelation/registry"
 	"texelation/texel"
-	"texelation/texel/cards"
 	"texelation/texel/theme"
 	"texelation/texelui/adapter"
 	"texelation/texelui/core"
 	"texelation/texelui/widgets"
 )
+
+// Compile-time interface checks
+var _ texel.App = (*Launcher)(nil)
+var _ texel.AppStorageSetter = (*Launcher)(nil)
+var _ texel.SnapshotProvider = (*Launcher)(nil)
+var _ texel.ControlBusProvider = (*Launcher)(nil)
 
 // Launcher displays available apps from the registry and allows launching them.
 type Launcher struct {
@@ -48,6 +53,7 @@ func New(reg *registry.Registry) texel.App {
 		registry:    reg,
 		usageCounts: make(map[string]int),
 		selectedIdx: 0,
+		controlBus:  texel.NewControlBus(), // Own control bus, no pipeline needed
 	}
 
 	// Create TexelUI manager
@@ -59,20 +65,18 @@ func New(reg *registry.Registry) texel.App {
 
 	// Note: UI will be built on first Resize() call
 
-	// Wrap in pipeline for effects support
-	wrapped := cards.WrapApp(l)
-	pipe := cards.NewPipeline(nil, wrapped)
-	l.AttachControlBus(pipe.ControlBus())
-	return pipe
+	return l
 }
 
-// AttachControlBus connects the launcher to its pipeline's control bus.
-// This allows the launcher to signal app selection and closure events.
-func (l *Launcher) AttachControlBus(bus texel.ControlBus) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.controlBus = bus
-	log.Printf("Launcher: Control bus attached")
+// ControlBus returns the launcher's control bus for external registration.
+func (l *Launcher) ControlBus() texel.ControlBus {
+	return l.controlBus
+}
+
+// RegisterControl implements texel.ControlBusProvider.
+// This allows external code to register control handlers on the launcher's bus.
+func (l *Launcher) RegisterControl(id, description string, handler func(payload interface{}) error) error {
+	return l.controlBus.Register(id, description, texel.ControlHandler(handler))
 }
 
 // SetAppStorage implements texel.AppStorageSetter.

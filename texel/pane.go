@@ -30,7 +30,8 @@ const (
 // Pane represents a rectangular area on the screen that hosts an App.
 type pane struct {
 	absX0, absY0, absX1, absY1 int
-	app                        App
+	app                        App            // The real app - for interfaces only
+	pipeline                   RenderPipeline // For events and rendering (from PipelineProvider)
 	name                       string
 	prevBuf                    [][]Cell
 	screen                     *Workspace
@@ -70,7 +71,20 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	}
 	p.app = app
 	p.name = app.GetTitle()
-	p.app.SetRefreshNotifier(refreshChan)
+
+	// Get pipeline directly from app if it provides one
+	p.pipeline = nil
+	if provider, ok := app.(PipelineProvider); ok {
+		p.pipeline = provider.Pipeline()
+		log.Printf("AttachApp: Got pipeline from app '%s'", app.GetTitle())
+	}
+
+	// Set refresh notifier on pipeline (or app as fallback)
+	if p.pipeline != nil {
+		p.pipeline.SetRefreshNotifier(refreshChan)
+	} else {
+		p.app.SetRefreshNotifier(refreshChan)
+	}
 	log.Printf("AttachApp: Refresh notifier set")
 
 	// Pass pane ID to apps that need it (e.g., for per-pane history)
@@ -78,7 +92,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		idSetter.SetPaneID(p.id)
 	}
 
-	// Inject storage for apps that need it
+	// Inject storage for apps that need it (interfaces go to app, not pipeline)
 	if p.screen != nil && p.screen.desktop != nil && p.screen.desktop.Storage() != nil {
 		appType := "unknown"
 		if provider, ok := app.(SnapshotProvider); ok {
@@ -98,44 +112,45 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.screen.Subscribe(listener)
 	}
 
-	// ... (rest of interface checks) ...
-	if handler, ok := app.(SelectionHandler); ok {
+	// Check pipeline for selection/wheel handlers (fallback to app for backwards compat)
+	p.selectionHandler = nil
+	p.handlesSelection = false
+	eventSource := interface{}(p.pipeline)
+	if eventSource == nil {
+		eventSource = app
+	}
+	if handler, ok := eventSource.(SelectionHandler); ok {
 		enabled := true
-		if declarer, ok := app.(SelectionDeclarer); ok {
+		if declarer, ok := eventSource.(SelectionDeclarer); ok {
 			enabled = declarer.SelectionEnabled()
 		}
 		if enabled {
 			p.selectionHandler = handler
 			p.handlesSelection = true
-		} else {
-			p.selectionHandler = nil
-			p.handlesSelection = false
 		}
-	} else {
-		p.selectionHandler = nil
-		p.handlesSelection = false
 	}
-	if handler, ok := app.(MouseWheelHandler); ok {
+
+	p.wheelHandler = nil
+	p.handlesWheel = false
+	if handler, ok := eventSource.(MouseWheelHandler); ok {
 		enabled := true
-		if declarer, ok := app.(MouseWheelDeclarer); ok {
+		if declarer, ok := eventSource.(MouseWheelDeclarer); ok {
 			enabled = declarer.MouseWheelEnabled()
 		}
 		if enabled {
 			p.wheelHandler = handler
 			p.handlesWheel = true
-		} else {
-			p.wheelHandler = nil
-			p.handlesWheel = false
 		}
-	} else {
-		p.wheelHandler = nil
-		p.handlesWheel = false
 	}
-	
+
 	log.Printf("AttachApp: Resizing app '%s' to %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
-	// The app is resized considering the space for borders.
-	p.app.Resize(p.drawableWidth(), p.drawableHeight())
-	
+	// Resize pipeline (or app as fallback)
+	if p.pipeline != nil {
+		p.pipeline.Resize(p.drawableWidth(), p.drawableHeight())
+	} else {
+		p.app.Resize(p.drawableWidth(), p.drawableHeight())
+	}
+
 	log.Printf("AttachApp: Starting app lifecycle for '%s'", p.getTitle())
 	currentApp := p.app
 	p.screen.appLifecycle.StartApp(p.app, func(err error) {
@@ -181,14 +196,27 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 	}
 	p.app = app
 	p.name = app.GetTitle()
-	p.app.SetRefreshNotifier(refreshChan)
+
+	// Get pipeline directly from app if it provides one
+	p.pipeline = nil
+	if provider, ok := app.(PipelineProvider); ok {
+		p.pipeline = provider.Pipeline()
+		log.Printf("PrepareAppForRestore: Got pipeline from app '%s'", app.GetTitle())
+	}
+
+	// Set refresh notifier on pipeline (or app as fallback)
+	if p.pipeline != nil {
+		p.pipeline.SetRefreshNotifier(refreshChan)
+	} else {
+		p.app.SetRefreshNotifier(refreshChan)
+	}
 
 	// Pass pane ID to apps that need it (e.g., for per-pane history)
 	if idSetter, ok := app.(PaneIDSetter); ok {
 		idSetter.SetPaneID(p.id)
 	}
 
-	// Inject storage for apps that need it
+	// Inject storage for apps that need it (interfaces go to app, not pipeline)
 	if p.screen != nil && p.screen.desktop != nil && p.screen.desktop.Storage() != nil {
 		appType := "unknown"
 		if provider, ok := app.(SnapshotProvider); ok {
@@ -208,38 +236,35 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 		p.screen.Subscribe(listener)
 	}
 
-	// Set up selection and mouse handlers
-	if handler, ok := app.(SelectionHandler); ok {
+	// Check pipeline for selection/wheel handlers (fallback to app for backwards compat)
+	p.selectionHandler = nil
+	p.handlesSelection = false
+	eventSource := interface{}(p.pipeline)
+	if eventSource == nil {
+		eventSource = app
+	}
+	if handler, ok := eventSource.(SelectionHandler); ok {
 		enabled := true
-		if declarer, ok := app.(SelectionDeclarer); ok {
+		if declarer, ok := eventSource.(SelectionDeclarer); ok {
 			enabled = declarer.SelectionEnabled()
 		}
 		if enabled {
 			p.selectionHandler = handler
 			p.handlesSelection = true
-		} else {
-			p.selectionHandler = nil
-			p.handlesSelection = false
 		}
-	} else {
-		p.selectionHandler = nil
-		p.handlesSelection = false
 	}
-	if handler, ok := app.(MouseWheelHandler); ok {
+
+	p.wheelHandler = nil
+	p.handlesWheel = false
+	if handler, ok := eventSource.(MouseWheelHandler); ok {
 		enabled := true
-		if declarer, ok := app.(MouseWheelDeclarer); ok {
+		if declarer, ok := eventSource.(MouseWheelDeclarer); ok {
 			enabled = declarer.MouseWheelEnabled()
 		}
 		if enabled {
 			p.wheelHandler = handler
 			p.handlesWheel = true
-		} else {
-			p.wheelHandler = nil
-			p.handlesWheel = false
 		}
-	} else {
-		p.wheelHandler = nil
-		p.handlesWheel = false
 	}
 
 	// NOTE: We intentionally skip Resize and StartApp here.
@@ -255,8 +280,12 @@ func (p *pane) StartPreparedApp() {
 	}
 	log.Printf("StartPreparedApp: Starting app '%s' with size %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
 
-	// Now resize with proper dimensions
-	p.app.Resize(p.drawableWidth(), p.drawableHeight())
+	// Resize pipeline (or app as fallback)
+	if p.pipeline != nil {
+		p.pipeline.Resize(p.drawableWidth(), p.drawableHeight())
+	} else {
+		p.app.Resize(p.drawableWidth(), p.drawableHeight())
+	}
 
 	// Start the app lifecycle
 	currentApp := p.app
@@ -415,13 +444,24 @@ func (p *pane) Render() [][]Cell {
 }
 
 func (p *pane) handlePaste(data []byte) {
-	if p == nil || p.app == nil || len(data) == 0 {
+	if p == nil || len(data) == 0 {
 		return
 	}
-	if handler, ok := p.app.(PasteHandler); ok {
-		handler.HandlePaste(data)
-		return
+	// Try pipeline first for paste handling
+	if p.pipeline != nil {
+		if handler, ok := p.pipeline.(PasteHandler); ok {
+			handler.HandlePaste(data)
+			return
+		}
 	}
+	// Fallback to app
+	if p.app != nil {
+		if handler, ok := p.app.(PasteHandler); ok {
+			handler.HandlePaste(data)
+			return
+		}
+	}
+	// No paste handler - convert to key events
 	for len(data) > 0 {
 		r, size := utf8.DecodeRune(data)
 		if r == utf8.RuneError && size == 1 {
@@ -442,7 +482,11 @@ func (p *pane) handlePaste(data []byte) {
 		default:
 			ev = tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone)
 		}
-		p.app.HandleKey(ev)
+		if p.pipeline != nil {
+			p.pipeline.HandleKey(ev)
+		} else if p.app != nil {
+			p.app.HandleKey(ev)
+		}
 	}
 }
 
@@ -524,26 +568,28 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 		}
 	}
 
-	// Render the app's content inside the borders.
-	if p.app != nil {
-		appBuffer := p.app.Render()
-		if len(appBuffer) > 0 && len(appBuffer[0]) > 0 {
-			log.Printf("ANIM: Render: Pane '%s' app buffer size: %dx%d (pane size: %dx%d, drawable: %dx%d)",
-				p.getTitle(), len(appBuffer[0]), len(appBuffer), w, h, p.drawableWidth(), p.drawableHeight())
+	// Render content from pipeline (or app as fallback).
+	var appBuffer [][]Cell
+	if p.pipeline != nil {
+		appBuffer = p.pipeline.Render()
+	} else if p.app != nil {
+		appBuffer = p.app.Render()
+	}
 
-			for y, row := range appBuffer {
-				for x, cell := range row {
-					if 1+x < w-1 && 1+y < h-1 {
-						buffer[1+y][1+x] = cell
-					}
+	if len(appBuffer) > 0 && len(appBuffer[0]) > 0 {
+		log.Printf("ANIM: Render: Pane '%s' buffer size: %dx%d (pane size: %dx%d, drawable: %dx%d)",
+			p.getTitle(), len(appBuffer[0]), len(appBuffer), w, h, p.drawableWidth(), p.drawableHeight())
+
+		for y, row := range appBuffer {
+			for x, cell := range row {
+				if 1+x < w-1 && 1+y < h-1 {
+					buffer[1+y][1+x] = cell
 				}
 			}
-		} else {
-			log.Printf("ANIM: Render: Pane '%s' app returned EMPTY buffer! (pane size: %dx%d, drawable: %dx%d)",
-				p.getTitle(), w, h, p.drawableWidth(), p.drawableHeight())
 		}
 	} else {
-		log.Printf("ANIM: Render: Pane '%s' has no app!", p.getTitle())
+		log.Printf("ANIM: Render: Pane '%s' returned EMPTY buffer! (pane size: %dx%d, drawable: %dx%d)",
+			p.getTitle(), w, h, p.drawableWidth(), p.drawableHeight())
 	}
 
 	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
@@ -623,9 +669,15 @@ func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 
 	p.absX0, p.absY0, p.absX1, p.absY1 = x0, y0, x1, y1
 
-	if p.app != nil {
-		drawableW := p.drawableWidth()
-		drawableH := p.drawableHeight()
+	drawableW := p.drawableWidth()
+	drawableH := p.drawableHeight()
+
+	// Resize pipeline (or app as fallback)
+	if p.pipeline != nil {
+		log.Printf("ANIM: setDimensions: Pane '%s' calling pipeline.Resize(%d, %d)",
+			p.getTitle(), drawableW, drawableH)
+		p.pipeline.Resize(drawableW, drawableH)
+	} else if p.app != nil {
 		log.Printf("ANIM: setDimensions: Pane '%s' calling app.Resize(%d, %d)",
 			p.getTitle(), drawableW, drawableH)
 		p.app.Resize(drawableW, drawableH)

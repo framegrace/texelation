@@ -24,7 +24,6 @@ import (
 
 	"texelation/apps/texelterm/parser"
 	"texelation/texel"
-	"texelation/texel/cards"
 	"texelation/texel/theme"
 
 	"github.com/creack/pty"
@@ -69,6 +68,9 @@ type TexelTerm struct {
 	lastMouseY       int
 	lastMouseX       int
 
+	// TODO: Extract confirmation dialog to a reusable cards.DialogCard
+	// that intercepts key events and renders the overlay. This would allow
+	// texelterm to own a pipeline with the dialog card for cleaner separation.
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
@@ -114,12 +116,10 @@ func New(title, command string) texel.App {
 		colorPalette: newDefaultPalette(),
 		closeCh:      make(chan struct{}),
 		restartCh:    make(chan struct{}, 1), // Buffered to avoid blocking
+		controlBus:   texel.NewControlBus(),  // Own control bus, no pipeline needed
 	}
 
-	wrapped := cards.WrapApp(term)
-	pipe := cards.NewPipeline(nil, wrapped)
-	term.AttachControlBus(pipe.ControlBus())
-	return pipe
+	return term
 }
 
 func (a *TexelTerm) RequestClose() bool {
@@ -236,10 +236,14 @@ func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 }
 
-func (a *TexelTerm) AttachControlBus(bus texel.ControlBus) {
-	a.mu.Lock()
-	a.controlBus = bus
-	a.mu.Unlock()
+// ControlBus returns the terminal's control bus for external registration.
+func (a *TexelTerm) ControlBus() texel.ControlBus {
+	return a.controlBus
+}
+
+// RegisterControl implements texel.ControlBusProvider.
+func (a *TexelTerm) RegisterControl(id, description string, handler func(payload interface{}) error) error {
+	return a.controlBus.Register(id, description, texel.ControlHandler(handler))
 }
 
 func (a *TexelTerm) SetPaneID(id [16]byte) {

@@ -283,9 +283,14 @@ func (w *Workspace) handleEvent(ev *tcell.EventKey) {
 		}
 	}
 
-	// Pass all other keys to the active application
+	// Pass all other keys to the active pane's pipeline (or app as fallback)
 	if w.tree.ActiveLeaf != nil && w.tree.ActiveLeaf.Pane != nil {
-		w.tree.ActiveLeaf.Pane.app.HandleKey(ev)
+		pane := w.tree.ActiveLeaf.Pane
+		if pane.pipeline != nil {
+			pane.pipeline.HandleKey(ev)
+		} else if pane.app != nil {
+			pane.app.HandleKey(ev)
+		}
 	}
 }
 

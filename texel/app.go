@@ -91,3 +91,27 @@ type ControlBusProvider interface {
 type PaneIDSetter interface {
 	SetPaneID(id [16]byte)
 }
+
+// RenderPipeline is the interface for a rendering and event handling pipeline.
+// This is typically a cards.Pipeline that composes multiple cards for overlay effects.
+// Pane uses this for user events and rendering, bypassing the app.
+type RenderPipeline interface {
+	// Rendering
+	Render() [][]Cell
+	Resize(cols, rows int)
+
+	// Lifecycle
+	Run() error
+	Stop()
+
+	// User events (required)
+	HandleKey(*tcell.EventKey)
+	SetRefreshNotifier(chan<- bool)
+}
+
+// PipelineProvider is implemented by apps that have an internal rendering pipeline.
+// The pane uses this to get direct access to the pipeline for events and rendering,
+// rather than routing through the app.
+type PipelineProvider interface {
+	Pipeline() RenderPipeline
+}

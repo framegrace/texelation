@@ -11,7 +11,6 @@ package help
 import (
 	"sync"
 	"texelation/texel"
-	"texelation/texel/cards"
 	"texelation/texel/theme"
 
 	"github.com/gdamore/tcell/v2"
@@ -25,10 +24,9 @@ type helpApp struct {
 	stopOnce      sync.Once
 }
 
-// NewHelpApp now returns the App interface for consistency.
+// NewHelpApp returns a simple help display app.
 func NewHelpApp() texel.App {
-	base := &helpApp{stop: make(chan struct{})}
-	return cards.NewPipeline(nil, cards.WrapApp(base))
+	return &helpApp{stop: make(chan struct{})}
 }
 
 func (a *helpApp) Run() error {
