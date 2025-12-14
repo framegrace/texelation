@@ -100,7 +100,13 @@ func buildNodesFromCapture(screen *Workspace, capture *TreeNodeCapture, panes []
 	if len(capture.Children) == 0 {
 		idx := capture.PaneIndex
 		if idx < 0 || idx >= len(panes) {
-			return nil, nil, fmt.Errorf("invalid pane index %d", idx)
+			// Instead of failing, create a placeholder pane to preserve layout
+			// This handles cases where a pane was excluded or index is corrupted
+			p := newPane(screen)
+			app := NewSnapshotApp("Error: Missing Pane", nil)
+			p.PrepareAppForRestore(app, screen.refreshChan)
+			node.Pane = p
+			return node, node, nil
 		}
 		node.Pane = panes[idx]
 		return node, node, nil

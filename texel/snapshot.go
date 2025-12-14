@@ -70,9 +70,8 @@ func (d *DesktopEngine) CaptureTree() TreeCapture {
 			// Leaf node - should have a pane with an app
 			if n.Pane == nil {
 				log.Printf("WARNING: CaptureTree found leaf node with nil Pane - tree may be corrupted")
-			} else if n.Pane.app == nil {
-				log.Printf("WARNING: CaptureTree found pane '%s' with nil app - this pane will be EXCLUDED from snapshot (tree corruption risk)", n.Pane.getTitle())
 			} else {
+				// Even if app is nil, capture the pane to preserve tree structure
 				paneSnap := capturePaneSnapshot(n.Pane)
 				paneIndex[n.Pane] = len(capture.Panes)
 				capture.Panes = append(capture.Panes, paneSnap)
@@ -107,10 +106,17 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 			Height: p.Height(),
 		},
 	}
-	if provider, ok := p.app.(SnapshotProvider); ok {
-		appType, config := provider.SnapshotMetadata()
-		snap.AppType = appType
-		snap.AppConfig = cloneAppConfig(config)
+	// p.app might be nil if capturing during split before attach, or if app crashed
+	if p.app != nil {
+		if provider, ok := p.app.(SnapshotProvider); ok {
+			appType, config := provider.SnapshotMetadata()
+			snap.AppType = appType
+			snap.AppConfig = cloneAppConfig(config)
+		}
+	} else {
+		// Mark as placeholder
+		snap.AppType = "placeholder"
+		snap.Title = "Loading..."
 	}
 	return snap
 }
