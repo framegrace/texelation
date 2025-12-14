@@ -36,26 +36,26 @@ const (
 )
 
 type TexelTerm struct {
-	title                string
-	command              string
-	paneID               string // Pane ID for per-terminal history isolation
-	width                int
-	height               int
-	cmd                  *exec.Cmd
-	pty                  *os.File
-	vterm                *parser.VTerm
-	parser               *parser.Parser
-	historyManager       *parser.HistoryManager
-	mu                   sync.Mutex
-	stop                 chan struct{}
-	stopOnce             sync.Once
-	refreshChan          chan<- bool
-	wg                   sync.WaitGroup
-	buf                  [][]texel.Cell
-	colorPalette         [258]tcell.Color
-	controlBus           texel.ControlBus
-	selection            termSelection
-	bracketedPasteMode   bool // Tracks if application has enabled bracketed paste
+	title              string
+	command            string
+	paneID             string // Pane ID for per-terminal history isolation
+	width              int
+	height             int
+	cmd                *exec.Cmd
+	pty                *os.File
+	vterm              *parser.VTerm
+	parser             *parser.Parser
+	historyManager     *parser.HistoryManager
+	mu                 sync.Mutex
+	stop               chan struct{}
+	stopOnce           sync.Once
+	refreshChan        chan<- bool
+	wg                 sync.WaitGroup
+	buf                [][]texel.Cell
+	colorPalette       [258]tcell.Color
+	controlBus         texel.ControlBus
+	selection          termSelection
+	bracketedPasteMode bool // Tracks if application has enabled bracketed paste
 
 	// Scroll tracking for smooth velocity-based acceleration
 	scrollEventTime time.Time // For debouncing duplicate events
@@ -74,7 +74,7 @@ type TexelTerm struct {
 	confirmClose    bool
 	confirmCallback func()
 	closeCh         chan struct{}
-	closeOnce       sync.Once      // Protects closeCh from being closed twice
+	closeOnce       sync.Once     // Protects closeCh from being closed twice
 	restartCh       chan struct{} // Signal to restart shell after confirmation
 }
 
@@ -148,10 +148,18 @@ func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
 	y := (height - boxH) / 2
 
 	// Ensure fits
-	if x < 0 { x = 0 }
-	if y < 0 { y = 0 }
-	if boxW > width { boxW = width }
-	if boxH > height { boxH = height }
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	if boxW > width {
+		boxW = width
+	}
+	if boxH > height {
+		boxH = height
+	}
 
 	style := tcell.StyleDefault.Background(tcell.ColorDarkRed).Foreground(tcell.ColorWhite)
 	borderStyle := tcell.StyleDefault.Background(tcell.ColorDarkRed).Foreground(tcell.ColorWhite)
@@ -1323,44 +1331,44 @@ func (a *TexelTerm) runShell() error {
 		}
 
 		a.vterm = parser.NewVTerm(cols, rows,
-		parser.WithTitleChangeHandler(func(newTitle string) {
-			a.title = newTitle
-			a.requestRefresh()
-		}),
-		parser.WithCommandStartHandler(func(cmd string) {
-			if cmd != "" {
-				a.title = cmd
+			parser.WithTitleChangeHandler(func(newTitle string) {
+				a.title = newTitle
 				a.requestRefresh()
-			}
-		}),
-		parser.WithPtyWriter(func(b []byte) {
-			if a.pty != nil {
-				a.pty.Write(b)
-			}
-		}),
-		parser.WithDefaultFgChangeHandler(func(c parser.Color) {
-			a.colorPalette[256] = a.mapParserColorToTCell(c)
-		}),
-		parser.WithDefaultBgChangeHandler(func(c parser.Color) {
-			a.colorPalette[257] = a.mapParserColorToTCell(c)
-		}),
-		parser.WithQueryDefaultFgHandler(func() {
-			a.respondToColorQuery(10)
-		}),
-		parser.WithQueryDefaultBgHandler(func() {
-			a.respondToColorQuery(11)
-		}),
-		parser.WithScreenRestoredHandler(func() {
-			go a.Resize(a.width, a.height)
-		}),
-		parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
-			// Note: bool writes are atomic, no lock needed for simple assignment
-			a.bracketedPasteMode = enabled
-		}),
-		parser.WithWrap(wrapEnabled),
-		parser.WithReflow(reflowEnabled),
-		parser.WithHistoryManager(hm), // nil when displayBufferEnabled
-		parser.WithDisplayBuffer(false), // Don't use old in-memory display buffer
+			}),
+			parser.WithCommandStartHandler(func(cmd string) {
+				if cmd != "" {
+					a.title = cmd
+					a.requestRefresh()
+				}
+			}),
+			parser.WithPtyWriter(func(b []byte) {
+				if a.pty != nil {
+					a.pty.Write(b)
+				}
+			}),
+			parser.WithDefaultFgChangeHandler(func(c parser.Color) {
+				a.colorPalette[256] = a.mapParserColorToTCell(c)
+			}),
+			parser.WithDefaultBgChangeHandler(func(c parser.Color) {
+				a.colorPalette[257] = a.mapParserColorToTCell(c)
+			}),
+			parser.WithQueryDefaultFgHandler(func() {
+				a.respondToColorQuery(10)
+			}),
+			parser.WithQueryDefaultBgHandler(func() {
+				a.respondToColorQuery(11)
+			}),
+			parser.WithScreenRestoredHandler(func() {
+				go a.Resize(a.width, a.height)
+			}),
+			parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
+				// Note: bool writes are atomic, no lock needed for simple assignment
+				a.bracketedPasteMode = enabled
+			}),
+			parser.WithWrap(wrapEnabled),
+			parser.WithReflow(reflowEnabled),
+			parser.WithHistoryManager(hm),   // nil when displayBufferEnabled
+			parser.WithDisplayBuffer(false), // Don't use old in-memory display buffer
 		)
 		a.parser = parser.NewParser(a.vterm)
 
@@ -1520,8 +1528,15 @@ func (a *TexelTerm) buildSelectionTextLocked() string {
 		return ""
 	}
 	lines := make([]string, 0, endLine-startLine+1)
+	inAlt := a.vterm.InAltScreen()
+
 	for line := startLine; line <= endLine; line++ {
-		cells := a.vterm.HistoryLineCopy(line)
+		var cells []parser.Cell
+		if inAlt {
+			cells = a.vterm.GetAltBufferLine(line)
+		} else {
+			cells = a.vterm.HistoryLineCopy(line)
+		}
 		runes := cellsToRunes(cells)
 		lineStart := 0
 		lineEnd := len(runes)
@@ -1713,7 +1728,8 @@ func (a *TexelTerm) OnEvent(event texel.Event) {
 	}
 }
 
-func (a *TexelTerm) respondToColorQuery(code int) {	if a.pty == nil {
+func (a *TexelTerm) respondToColorQuery(code int) {
+	if a.pty == nil {
 		return
 	}
 	// Slot 256 for default FG, 257 for default BG
@@ -1765,7 +1781,9 @@ func newDefaultPalette() [258]tcell.Color {
 	p[15] = theme.ResolveColorName("text")
 
 	// Fallback for any missing palette colors
-	if p[0] == tcell.ColorDefault { p[0] = tcell.NewRGBColor(10, 10, 20) }
+	if p[0] == tcell.ColorDefault {
+		p[0] = tcell.NewRGBColor(10, 10, 20)
+	}
 	// ... (simplified fallback, we trust the palette mostly)
 
 	// 6x6x6 color cube (16-231)
