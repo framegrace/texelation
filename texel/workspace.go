@@ -326,7 +326,10 @@ func (w *Workspace) handleAppExit(p *pane, exitedApp App, runErr error) {
 	}
 
 	if runErr != nil {
-		log.Printf("handleAppExit: app '%s' exited with error: %v", title, runErr)
+		log.Printf("handleAppExit: app '%s' exited with error: %v - preserving pane", title, runErr)
+		// Do not remove the pane. This allows the user to see the error or restart the session
+		// without losing the window layout.
+		return
 	} else {
 		log.Printf("handleAppExit: app '%s' exited cleanly", title)
 	}
