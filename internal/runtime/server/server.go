@@ -300,7 +300,8 @@ func (s *Server) startSnapshotLoop() {
 			}
 		}
 	}()
-	s.persistSnapshot()
+	// Do NOT save immediately on startup - we might be restoring!
+	// s.persistSnapshot() 
 }
 
 func (s *Server) persistSnapshot() {

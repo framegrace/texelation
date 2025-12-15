@@ -54,42 +54,53 @@ func TestSnapshotSavedOnLayoutChange(t *testing.T) {
 	// Use mock store to track calls
 	mockStore := newMockSnapshotStore(path)
 
-	// Create Desktop and add an initial app so snapshot isn't empty
-	driver := sinkScreenDriver{}
-	lifecycle := texel.NoopAppLifecycle{}
-	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
-	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
-	if err != nil {
-		t.Fatalf("desktop init failed: %v", err)
-	}
-	desktop.SwitchToWorkspace(1)
-	desktop.ActiveWorkspace().AddApp(&recordingApp{title: "initial"})
-
-	// Create Server
-	// Use a random socket path to avoid conflicts
-	sockPath := filepath.Join(dir, "test.sock")
-	srv := NewServer(sockPath, NewManager())
-	sink := NewDesktopSink(desktop)
-	srv.SetEventSink(sink)
-
-	// Set snapshot store with LONG interval
-	srv.SetSnapshotStore(mockStore.SnapshotStore, 1*time.Hour)
-
-	// Start Server
-	go func() {
-		if err := srv.Start(); err != nil && err != os.ErrClosed {
-			// t.Logf("Server start error: %v", err)
-			// Logging here might be racey with test end
+		// Create Desktop (but don't add app yet)
+		driver := sinkScreenDriver{}
+		lifecycle := texel.NoopAppLifecycle{}
+		shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+		desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
+		if err != nil {
+			t.Fatalf("desktop init failed: %v", err)
 		}
-	}()
-	defer srv.Stop(context.Background())
-
-	// Wait for initial save (Server.Start calls startSnapshotLoop which calls persistSnapshot)
-	// We need to wait enough for the goroutine to spin up and save.
-	time.Sleep(500 * time.Millisecond)
+		desktop.SwitchToWorkspace(1)
+		
+		// Create Server
+		// Use a random socket path to avoid conflicts
+		sockPath := filepath.Join(dir, "test.sock")
+		srv := NewServer(sockPath, NewManager())
+		sink := NewDesktopSink(desktop)
+		srv.SetEventSink(sink) // This subscribes the server to desktop events
+		
+		// Set snapshot store with LONG interval
+		srv.SetSnapshotStore(mockStore.SnapshotStore, 1*time.Hour)
+		
+		// Start Server
+		go func() {
+			if err := srv.Start(); err != nil && err != os.ErrClosed {
+				// t.Logf("Server start error: %v", err) 
+			}
+		}()
+		defer srv.Stop(context.Background())
+	
+		// Add app AFTER server is started/subscribed so it catches the event
+		desktop.ActiveWorkspace().AddApp(&recordingApp{title: "initial"})
+	
+		// Wait for initial save (Triggered by AddApp -> EventAppAttached/EventTreeChanged)	// We rely on the event from AddApp, which happens asynchronously
+	startWait := time.Now()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			t.Logf("Snapshot created after %v", time.Since(startWait))
+			break
+		}
+		if time.Since(startWait) > 10*time.Second {
+			t.Fatalf("initial snapshot not created after timeout")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	
 	initialInfo, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("initial snapshot not created: %v", err)
+		t.Fatalf("failed to stat snapshot: %v", err)
 	}
 	initialTime := initialInfo.ModTime()
 

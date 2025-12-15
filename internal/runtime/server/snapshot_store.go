@@ -127,7 +127,12 @@ func (s *SnapshotStore) Save(capture *texel.TreeCapture) error {
 		return err
 	}
 
-	return os.WriteFile(s.path, data, 0o644)
+	// Atomic write: write to temp file then rename
+	tmpPath := s.path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.path)
 }
 
 // Load retrieves the most recent stored snapshot from disk.
