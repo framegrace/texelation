@@ -8,13 +8,11 @@
 package texel
 
 import (
-	"fmt"
-
 	"github.com/gdamore/tcell/v2"
 )
 
 func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
-	if len(capture.Panes) == 0 || capture.Root == nil {
+	if len(capture.Panes) == 0 {
 		return nil
 	}
 
@@ -23,61 +21,125 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		d.layoutTransitions.ResetGracePeriod()
 	}
 
-	if d.activeWorkspace == nil {
-		// ensure at least one workspace exists
-		if len(d.workspaces) == 0 {
-			d.SwitchToWorkspace(1)
-		}
-		if d.activeWorkspace == nil {
-			return fmt.Errorf("desktop has no active workspace")
-		}
-	}
-
-	screen := d.activeWorkspace
-	// stop existing apps before replacing the tree
-	if screen.tree != nil {
-		stopApps(screen.tree.Root, screen.appLifecycle)
-	}
-
+	// 1. Prepare all panes (they are flat list)
+	// We need a map to look them up by index
 	panes := make([]*pane, len(capture.Panes))
+	
+	// We need a dummy screen for creating panes initially, but we'll re-assign them to correct workspaces
+	// Ensure at least one workspace exists
+	if len(d.workspaces) == 0 {
+		d.SwitchToWorkspace(1)
+	}
+	dummyScreen := d.activeWorkspace
+
 	for i, snap := range capture.Panes {
-		p := newPane(screen)
+		p := newPane(dummyScreen)
 		p.setID(snap.ID)
 		app := d.appFromSnapshot(snap)
 		// Use PrepareAppForRestore instead of AttachApp to defer starting until after layout
-		p.PrepareAppForRestore(app, screen.refreshChan)
+		p.PrepareAppForRestore(app, dummyScreen.refreshChan)
 		panes[i] = p
 	}
 
-	root, active, err := buildNodesFromCapture(screen, capture.Root, panes)
-	if err != nil {
-		return err
+	// 2. Restore Workspaces
+	
+	// If legacy capture (Root only), treat as single workspace
+	if len(capture.WorkspaceRoots) == 0 && capture.Root != nil {
+		capture.WorkspaceRoots = map[int]*TreeNodeCapture{1: capture.Root}
 	}
 
-	if screen.tree == nil {
-		screen.tree = NewTree()
-	}
-	if active == nil {
-		active = findFirstLeaf(root)
-	}
-	screen.tree.Root = root
-	screen.tree.ActiveLeaf = active
-	if active != nil && active.Pane != nil {
-		active.Pane.SetActive(true)
-	}
+	// Track which workspaces we touched
+	restoredIDs := make(map[int]bool)
 
-	// Calculate layout BEFORE starting apps so they get proper dimensions
-	screen.recalculateLayout()
+	for id, rootCapture := range capture.WorkspaceRoots {
+		restoredIDs[id] = true
+		
+		// Ensure workspace exists
+		if _, exists := d.workspaces[id]; !exists {
+			// Manually create workspace to avoid triggering side-effects of SwitchToWorkspace
+			ws, err := newWorkspace(id, d.ShellAppFactory, d.appLifecycle, d)
+			if err != nil {
+				continue
+			}
+			d.workspaces[id] = ws
+		}
+		
+		screen := d.workspaces[id]
+		
+		// Stop existing apps in this workspace
+		if screen.tree != nil {
+			stopApps(screen.tree.Root, screen.appLifecycle)
+		}
 
-	// Now start all prepared apps with their correct dimensions
+		// Rebuild tree
+		root, active, err := buildNodesFromCapture(screen, rootCapture, panes)
+		if err != nil {
+			return err
+		}
+
+		if screen.tree == nil {
+			screen.tree = NewTree()
+		}
+		
+		// Re-assign panes to this workspace
+		assignPanesToWorkspace(root, screen)
+		
+		if active == nil {
+			active = findFirstLeaf(root)
+		}
+		screen.tree.Root = root
+		screen.tree.ActiveLeaf = active
+		if active != nil && active.Pane != nil {
+			active.Pane.SetActive(true)
+		}
+		
+		// Calculate layout for this workspace
+		screen.recalculateLayout()
+	}
+	
+	// 3. Start apps
 	for _, p := range panes {
 		p.StartPreparedApp()
 	}
+	
+	// 4. Activate correct workspace
+	if capture.ActiveWorkspaceID > 0 {
+		if _, exists := d.workspaces[capture.ActiveWorkspaceID]; exists {
+			d.activeWorkspace = d.workspaces[capture.ActiveWorkspaceID]
+		}
+	} else if len(restoredIDs) > 0 {
+		// Fallback: pick first available
+		for id := range restoredIDs {
+			d.activeWorkspace = d.workspaces[id]
+			break
+		}
+	}
 
-	screen.Refresh()
-	screen.notifyFocus()
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.Refresh()
+		d.activeWorkspace.notifyFocus()
+	}
 	d.broadcastStateUpdate()
 	return nil
+}
+
+func assignPanesToWorkspace(node *Node, ws *Workspace) {
+	if node == nil {
+		return
+	}
+	if node.Pane != nil {
+		node.Pane.screen = ws
+		// Update refresh notifier
+		if node.Pane.app != nil {
+			node.Pane.app.SetRefreshNotifier(ws.refreshChan)
+		}
+		if node.Pane.pipeline != nil {
+			node.Pane.pipeline.SetRefreshNotifier(ws.refreshChan)
+		}
+	}
+	for _, child := range node.Children {
+		assignPanesToWorkspace(child, ws)
+	}
 }
 
 func stopApps(node *Node, lifecycle AppLifecycleManager) {

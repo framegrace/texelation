@@ -217,14 +217,23 @@ func (s *Server) loadBootSnapshot() {
 		log.Printf("snapshot load failed: %v", err)
 		return
 	}
-	snapshot := stored.ToTreeSnapshot()
-	log.Printf("[BOOT] Loaded snapshot with %d panes, tree=%+v", len(snapshot.Panes), snapshot.Root)
-	if len(snapshot.Panes) == 0 {
+	
+	// Convert to TreeCapture which supports multiple workspaces
+	capture := stored.ToTreeCapture()
+	
+	log.Printf("[BOOT] Loaded snapshot with %d panes, workspaces=%d", len(capture.Panes), len(capture.WorkspaceRoots))
+	if len(capture.Panes) == 0 {
 		log.Printf("[BOOT] No panes in snapshot, skipping")
 		return
 	}
+	
+	// Convert back to protocol format for initial client handshake (active workspace only)
+	// We do this so setBootSnapshot still works for clients
+	snapshot := stored.ToTreeSnapshot()
 	s.setBootSnapshot(snapshot)
-	s.applyBootSnapshot()
+	
+	// Apply the full capture
+	s.applyBootCapture(capture)
 }
 
 func (s *Server) setBootSnapshot(snapshot protocol.TreeSnapshot) {
@@ -248,14 +257,10 @@ func (s *Server) bootSnapshotCopy() (protocol.TreeSnapshot, bool) {
 	return copySnapshot, true
 }
 
-func (s *Server) applyBootSnapshot() {
-	log.Printf("[BOOT] applyBootSnapshot called, desktopSink=%v", s.desktopSink != nil)
+// applyBootCapture applies the full multi-workspace capture
+func (s *Server) applyBootCapture(capture texel.TreeCapture) {
+	log.Printf("[BOOT] applyBootCapture called, desktopSink=%v", s.desktopSink != nil)
 	if s.desktopSink == nil {
-		return
-	}
-	snapshot, ok := s.bootSnapshotCopy()
-	log.Printf("[BOOT] bootSnapshotCopy returned ok=%v, panes=%d", ok, len(snapshot.Panes))
-	if !ok {
 		return
 	}
 	desktop := s.desktopSink.Desktop()
@@ -263,12 +268,19 @@ func (s *Server) applyBootSnapshot() {
 		log.Printf("[BOOT] desktop is nil, cannot apply snapshot")
 		return
 	}
-	capture := protocolToTreeCapture(snapshot)
-	log.Printf("[BOOT] Applying tree capture with %d panes, root=%+v", len(capture.Panes), capture.Root)
+	log.Printf("[BOOT] Applying tree capture with %d panes", len(capture.Panes))
 	if err := desktop.ApplyTreeCapture(capture); err != nil {
 		log.Printf("apply boot snapshot failed: %v", err)
 	} else {
 		log.Printf("[BOOT] Successfully applied boot snapshot")
+	}
+}
+
+// Deprecated: use applyBootCapture
+func (s *Server) applyBootSnapshot() {
+	// Re-load snapshot to get full capture if possible, or fallback to saved protocol snapshot
+	if s.snapshotStore != nil {
+		s.loadBootSnapshot()
 	}
 }
 
