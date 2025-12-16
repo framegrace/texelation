@@ -54,7 +54,7 @@ func (d *DesktopEngine) SnapshotBuffers() []PaneSnapshot {
 	
 	// Only capture active workspace for rendering
 	if d.activeWorkspace != nil && d.activeWorkspace.tree != nil {
-		d.recalculateLayout()
+		// d.recalculateLayout() // REMOVED: This causes race condition with SwitchToWorkspace
 		var collect func(*Node)
 		collect = func(n *Node) {
 			if n == nil {
@@ -71,11 +71,7 @@ func (d *DesktopEngine) SnapshotBuffers() []PaneSnapshot {
 		}
 		if d.activeWorkspace.tree.Root != nil {
 			collect(d.activeWorkspace.tree.Root)
-		} else {
-			log.Printf("SnapshotBuffers: Active workspace %d has nil root", d.activeWorkspace.id)
 		}
-	} else {
-		log.Printf("SnapshotBuffers: No active workspace or tree")
 	}
 
 	// Always include status/floating
