@@ -69,7 +69,13 @@ func (d *DesktopEngine) SnapshotBuffers() []PaneSnapshot {
 				collect(child)
 			}
 		}
-		collect(d.activeWorkspace.tree.Root)
+		if d.activeWorkspace.tree.Root != nil {
+			collect(d.activeWorkspace.tree.Root)
+		} else {
+			log.Printf("SnapshotBuffers: Active workspace %d has nil root", d.activeWorkspace.id)
+		}
+	} else {
+		log.Printf("SnapshotBuffers: No active workspace or tree")
 	}
 
 	// Always include status/floating
