@@ -50,8 +50,36 @@ type TreeNodeCapture struct {
 
 // SnapshotBuffers collects the current buffers for all panes in the active workspace.
 func (d *DesktopEngine) SnapshotBuffers() []PaneSnapshot {
-	capture := d.CaptureTree()
-	return capture.Panes
+	var panes []PaneSnapshot
+	
+	// Only capture active workspace for rendering
+	if d.activeWorkspace != nil && d.activeWorkspace.tree != nil {
+		d.recalculateLayout()
+		var collect func(*Node)
+		collect = func(n *Node) {
+			if n == nil {
+				return
+			}
+			if len(n.Children) == 0 {
+				if n.Pane != nil {
+					panes = append(panes, capturePaneSnapshot(n.Pane))
+				}
+			}
+			for _, child := range n.Children {
+				collect(child)
+			}
+		}
+		collect(d.activeWorkspace.tree.Root)
+	}
+
+	// Always include status/floating
+	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
+		panes = append(panes, status...)
+	}
+	if floating := d.captureFloatingPanelSnapshots(); len(floating) > 0 {
+		panes = append(panes, floating...)
+	}
+	return panes
 }
 
 // CaptureTree gathers panes and the layout tree for persistence or transport.
