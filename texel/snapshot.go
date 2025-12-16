@@ -84,6 +84,59 @@ func (d *DesktopEngine) SnapshotBuffers() []PaneSnapshot {
 	return panes
 }
 
+// SnapshotForClient captures only the active workspace for sending to the client.
+func (d *DesktopEngine) SnapshotForClient() TreeCapture {
+	var capture TreeCapture
+	// Default to empty if nothing to capture
+	capture.WorkspaceRoots = make(map[int]*TreeNodeCapture)
+	
+	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil {
+		return capture
+	}
+	
+	// We do NOT recalculate layout here to avoid the race condition fixed previously
+	// The layout should already be valid from the logic operations (AddApp, etc.)
+	
+	paneIndex := make(map[*pane]int)
+	capture.Panes = make([]PaneSnapshot, 0)
+	capture.ActiveWorkspaceID = d.activeWorkspace.id
+
+	var collect func(*Node)
+	collect = func(n *Node) {
+		if n == nil {
+			return
+		}
+		if len(n.Children) == 0 {
+			if n.Pane != nil {
+				// Check if already captured
+				if _, exists := paneIndex[n.Pane]; !exists {
+					paneSnap := capturePaneSnapshot(n.Pane)
+					paneIndex[n.Pane] = len(capture.Panes)
+					capture.Panes = append(capture.Panes, paneSnap)
+				}
+			}
+		}
+		for _, child := range n.Children {
+			collect(child)
+		}
+	}
+	
+	if d.activeWorkspace.tree.Root != nil {
+		collect(d.activeWorkspace.tree.Root)
+		capture.Root = buildTreeCapture(d.activeWorkspace.tree.Root, paneIndex)
+		// For consistency, also set it in map
+		capture.WorkspaceRoots[d.activeWorkspace.id] = capture.Root
+	}
+
+	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
+		capture.Panes = append(capture.Panes, status...)
+	}
+	if floating := d.captureFloatingPanelSnapshots(); len(floating) > 0 {
+		capture.Panes = append(capture.Panes, floating...)
+	}
+	return capture
+}
+
 // CaptureTree gathers panes and the layout tree for persistence or transport.
 func (d *DesktopEngine) CaptureTree() TreeCapture {
 	var capture TreeCapture
