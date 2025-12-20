@@ -328,6 +328,105 @@ func TestDisplayBuffer_WithDiskPersistence(t *testing.T) {
 	}
 }
 
+// TestDisplayBuffer_ResizeKeepsLiveEdge tests that resize keeps cursor at live edge position.
+func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
+	v := NewVTerm(20, 10) // Start with 10 rows
+	v.EnableDisplayBuffer()
+
+	// Write only 3 lines (less than screen height)
+	for i := 1; i <= 3; i++ {
+		for _, ch := range "Line" {
+			v.placeChar(ch)
+		}
+		v.placeChar(rune('0' + i))
+		if i < 3 {
+			v.CarriageReturn()
+			v.LineFeed()
+		}
+	}
+
+	t.Logf("Before resize: cursorY=%d (height=10)", v.cursorY)
+
+	// Cursor should be at row 2 (after Line1, Line2, Line3)
+	if v.cursorY != 2 {
+		t.Errorf("Before resize: expected cursorY=2, got %d", v.cursorY)
+	}
+
+	// Resize to a larger terminal
+	v.Resize(20, 15)
+
+	t.Logf("After resize to 15 rows: cursorY=%d", v.cursorY)
+
+	// Cursor should still be at row 2 (live edge hasn't moved)
+	// NOT at row 14 (bottom of new screen)
+	if v.cursorY != 2 {
+		t.Errorf("After resize: expected cursorY=2 (live edge), got %d", v.cursorY)
+	}
+
+	// Content should still be at rows 0-2
+	grid := v.Grid()
+	for i := 0; i < 3; i++ {
+		expected := "Line" + string(rune('1'+i))
+		actual := strings.TrimRight(cellsToStringTest(grid[i]), " ")
+		if actual != expected {
+			t.Errorf("Row %d: expected %q, got %q", i, expected, actual)
+		}
+	}
+
+	// Write more content - it should appear at the cursor position
+	v.CarriageReturn()
+	v.LineFeed()
+	for _, ch := range "NewLine" {
+		v.placeChar(ch)
+	}
+
+	grid = v.Grid()
+	t.Logf("After adding NewLine: cursorY=%d", v.cursorY)
+	t.Logf("Grid:\n%s", gridToString(grid))
+
+	// NewLine should appear at row 3
+	row3 := strings.TrimRight(cellsToStringTest(grid[3]), " ")
+	if row3 != "NewLine" {
+		t.Errorf("Expected 'NewLine' at row 3, got %q", row3)
+	}
+}
+
+// TestDisplayBuffer_ResizeWithFullScreen tests resize when content fills screen.
+func TestDisplayBuffer_ResizeWithFullScreen(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+
+	// Write 5 lines (exactly filling the screen)
+	for i := 1; i <= 5; i++ {
+		for _, ch := range "Line" {
+			v.placeChar(ch)
+		}
+		v.placeChar(rune('0' + i))
+		if i < 5 {
+			v.CarriageReturn()
+			v.LineFeed()
+		}
+	}
+
+	t.Logf("Before resize: cursorY=%d (height=5)", v.cursorY)
+
+	// Cursor should be at row 4 (bottom)
+	if v.cursorY != 4 {
+		t.Errorf("Before resize: expected cursorY=4, got %d", v.cursorY)
+	}
+
+	// Resize to larger terminal
+	v.Resize(20, 10)
+
+	t.Logf("After resize to 10 rows: cursorY=%d", v.cursorY)
+
+	// With 5 lines of content and 10 row viewport, content is at rows 0-4
+	// Cursor should be at row 4 (live edge = after Line5)
+	if v.cursorY != 4 {
+		t.Errorf("After resize: expected cursorY=4 (live edge), got %d", v.cursorY)
+	}
+}
+
 func cellsToStringTest(cells []Cell) string {
 	var sb strings.Builder
 	for _, cell := range cells {

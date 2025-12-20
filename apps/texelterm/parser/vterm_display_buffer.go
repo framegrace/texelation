@@ -291,9 +291,11 @@ func (v *VTerm) displayBufferResize(width, height int) {
 
 	v.displayBuf.display.Resize(width, height)
 
-	// When at live edge, cursor should be at the bottom of the viewport
+	// When at live edge, sync cursor with the actual live edge position
+	// This handles both cases: content fills screen (cursor at bottom) and
+	// content doesn't fill screen (cursor at the row after content)
 	if wasAtLiveEdge && v.displayBuf.display.AtLiveEdge() {
-		v.cursorY = height - 1
+		v.cursorY = v.displayBuf.display.LiveEdgeRow()
 	}
 }
 

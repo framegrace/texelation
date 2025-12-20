@@ -422,8 +422,11 @@ func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
 
 	if db.atLiveEdge {
 		// At live edge - keep content at bottom of viewport
-		// viewportTop = totalLines - newHeight (can be negative if content < height)
+		// viewportTop = totalLines - newHeight (clamped to 0 if content < height)
 		db.viewportTop = totalLines - newHeight
+		if db.viewportTop < 0 {
+			db.viewportTop = 0
+		}
 
 		// If we grew and need more lines from history, load them
 		if newHeight > oldHeight && db.viewportTop < db.marginAbove {
@@ -434,6 +437,9 @@ func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
 			// Recalculate after loading
 			totalLines = db.contentLineCount()
 			db.viewportTop = totalLines - newHeight
+			if db.viewportTop < 0 {
+				db.viewportTop = 0
+			}
 		}
 	} else {
 		// Not at live edge - keep the same content at the top of viewport
@@ -612,12 +618,23 @@ func (db *DisplayBuffer) CanScrollDown() bool {
 // This is where the cursor should be positioned when at the live edge.
 func (db *DisplayBuffer) LiveEdgeRow() int {
 	// The current line appears after all committed lines
-	// Its position in the viewport depends on viewportTop
 	committedLines := len(db.lines)
 
-	// The current line starts at index 'committedLines' in allLines
-	// Its viewport row = committedLines - viewportTop
-	row := committedLines - db.viewportTop
+	// When content doesn't fill the screen, viewportTop is 0 or negative (clamped to 0).
+	// In this case, the current line appears at row = committedLines.
+	// When content exceeds the screen, viewportTop > 0 and current line is at the bottom.
+
+	// Calculate where current line appears in the viewport
+	// viewportTop is the offset into allLines (lines + currentLinePhysical)
+	// If viewportTop < 0, it's been clamped to 0, but content starts at row 0
+	effectiveViewportTop := db.viewportTop
+	if effectiveViewportTop < 0 {
+		effectiveViewportTop = 0
+	}
+
+	// Current line is at index committedLines in allLines
+	// Its viewport row = committedLines - effectiveViewportTop
+	row := committedLines - effectiveViewportTop
 
 	// Clamp to valid viewport range
 	if row < 0 {
