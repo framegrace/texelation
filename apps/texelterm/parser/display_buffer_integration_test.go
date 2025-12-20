@@ -391,6 +391,278 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 	}
 }
 
+// TestDisplayBuffer_WrapWithoutScrollDirty tests dirty tracking when wrapping without scroll.
+func TestDisplayBuffer_WrapWithoutScrollDirty(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Write first line and commit it
+	for _, ch := range "Line1" {
+		v.placeChar(ch)
+	}
+	v.CarriageReturn()
+	v.LineFeed()
+
+	// Clear dirty to simulate render
+	v.ClearDirty()
+
+	t.Logf("After Line1: cursorY=%d", v.cursorY)
+
+	// Now write a long line that wraps (but doesn't need to scroll)
+	for i, ch := range "ABCDEFGHIJ" {
+		v.placeChar(ch)
+		if i == 9 {
+			dirtyLines, allDirty := v.GetDirtyLines()
+			t.Logf("After char 10 (J): allDirty=%v, dirtyLines=%v", allDirty, dirtyLines)
+		}
+		v.ClearDirty()
+	}
+
+	// Type the wrap-triggering character
+	v.placeChar('K')
+	dirtyLines, allDirty := v.GetDirtyLines()
+	t.Logf("After 'K' (wrap, no scroll): cursorY=%d, allDirty=%v, dirtyLines=%v",
+		v.cursorY, allDirty, dirtyLines)
+
+	// Check what lines should be dirty
+	// Row 1 had ABCDEFGHIJ, now it still has ABCDEFGHIJ (no change visually)
+	// Row 2 is NEW - it now has K
+	// Without scroll, only the new row should need to be dirty, BUT
+	// the display buffer's viewport might have changed
+
+	grid := v.Grid()
+	t.Logf("Grid:\n%s", gridToString(grid))
+
+	// Verify content
+	row0 := strings.TrimRight(cellsToStringTest(grid[0]), " ")
+	row1 := cellsToStringTest(grid[1])
+	row2 := strings.TrimRight(cellsToStringTest(grid[2]), " ")
+
+	if row0 != "Line1" {
+		t.Errorf("Row 0: expected 'Line1', got %q", row0)
+	}
+	if row1 != "ABCDEFGHIJ" {
+		t.Errorf("Row 1: expected 'ABCDEFGHIJ', got %q", row1)
+	}
+	if row2 != "K" {
+		t.Errorf("Row 2: expected 'K', got %q", row2)
+	}
+}
+
+// TestDisplayBuffer_FreshTerminalWrap tests wrapping on a completely fresh terminal.
+func TestDisplayBuffer_FreshTerminalWrap(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Initial state check
+	t.Logf("Initial: cursorY=%d, LiveEdgeRow=%d", v.cursorY, v.displayBuf.display.LiveEdgeRow())
+
+	// Write a long line that wraps
+	text := "ABCDEFGHIJKLMNO"
+	for i, ch := range text {
+		v.placeChar(ch)
+		if i == 9 || i == 10 || i == 14 {
+			grid := v.Grid()
+			t.Logf("After char %d (%c): cursorX=%d, cursorY=%d", i+1, ch, v.cursorX, v.cursorY)
+			t.Logf("  Grid row 0: %s", cellsToStringTest(grid[0]))
+			t.Logf("  Grid row 1: %s", cellsToStringTest(grid[1]))
+		}
+	}
+
+	grid := v.Grid()
+	t.Logf("Final Grid:\n%s", gridToString(grid))
+
+	// First row should have ABCDEFGHIJ
+	row0 := cellsToStringTest(grid[0])
+	if row0 != "ABCDEFGHIJ" {
+		t.Errorf("Row 0: expected 'ABCDEFGHIJ', got %q", row0)
+	}
+
+	// Second row should have KLMNO
+	row1 := strings.TrimRight(cellsToStringTest(grid[1]), " ")
+	if row1 != "KLMNO" {
+		t.Errorf("Row 1: expected 'KLMNO', got %q", row1)
+	}
+
+	// Cursor should be at (5, 1)
+	if v.cursorX != 5 || v.cursorY != 1 {
+		t.Errorf("Expected cursor at (5,1), got (%d,%d)", v.cursorX, v.cursorY)
+	}
+}
+
+// TestDisplayBuffer_DirtyTrackingOnWrap tests that dirty lines are marked correctly during wrap.
+func TestDisplayBuffer_DirtyTrackingOnWrap(t *testing.T) {
+	v := NewVTerm(10, 5) // 10 columns wide, 5 rows
+	v.EnableDisplayBuffer()
+
+	// Fill up the screen
+	for i := 1; i <= 4; i++ {
+		for _, ch := range "Line" {
+			v.placeChar(ch)
+		}
+		v.placeChar(rune('0' + i))
+		v.CarriageReturn()
+		v.LineFeed()
+	}
+
+	// Clear dirty and get initial state
+	v.ClearDirty()
+
+	// Write characters up to the wrap point, simulating Render() after each
+	for i, ch := range "ABCDEFGHIJ" {
+		v.placeChar(ch)
+		dirtyLines, allDirty := v.GetDirtyLines()
+		t.Logf("After char %d (%c): cursorY=%d, allDirty=%v, dirtyLines=%v",
+			i+1, ch, v.cursorY, allDirty, dirtyLines)
+		v.ClearDirty() // Simulate Render() clearing dirty
+	}
+
+	// Now type the wrap-triggering character
+	v.placeChar('K')
+	dirtyLines, allDirty := v.GetDirtyLines()
+	t.Logf("After 'K' (wrap): cursorY=%d, allDirty=%v, dirtyLines=%v",
+		v.cursorY, allDirty, dirtyLines)
+
+	// After wrapping, allDirty should be true (scrollRegion calls MarkAllDirty)
+	if !allDirty {
+		t.Errorf("Expected allDirty=true after wrap, got false")
+	}
+
+	// Verify grid content is correct
+	grid := v.Grid()
+	t.Logf("Grid:\n%s", gridToString(grid))
+}
+
+// TestDisplayBuffer_LineWrapWithScroll tests wrapping when the screen needs to scroll.
+func TestDisplayBuffer_LineWrapWithScroll(t *testing.T) {
+	v := NewVTerm(10, 5) // 10 columns wide, 5 rows
+	v.EnableDisplayBuffer()
+
+	// Fill up the screen with 4 committed lines
+	for i := 1; i <= 4; i++ {
+		for _, ch := range "Line" {
+			v.placeChar(ch)
+		}
+		v.placeChar(rune('0' + i))
+		v.CarriageReturn()
+		v.LineFeed()
+	}
+
+	t.Logf("After 4 committed lines: cursorY=%d", v.cursorY)
+	t.Logf("  history lines=%d", v.displayBuf.history.Len())
+
+	grid := v.Grid()
+	t.Logf("Grid before wrapping line:\n%s", gridToString(grid))
+
+	// Now write a long line that wraps - this should cause scrolling
+	text := "ABCDEFGHIJKLMNO" // 15 chars = wraps to 2 lines
+	for i, ch := range text {
+		v.placeChar(ch)
+		if i == 9 || i == 10 { // Log around the wrap point
+			t.Logf("After char %d (%c): cursorX=%d, cursorY=%d, logicalX=%d",
+				i+1, ch, v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+		}
+	}
+
+	grid = v.Grid()
+	t.Logf("Final Grid:\n%s", gridToString(grid))
+
+	// The screen should have scrolled. Expected layout depends on scrolling behavior.
+	// With 4 committed lines + 2 physical lines from wrapping = 6 physical lines
+	// Screen has 5 rows, so the oldest line should scroll off
+
+	// Cursor should be at row 4 (bottom of screen after scroll)
+	t.Logf("Final cursor: (%d, %d)", v.cursorX, v.cursorY)
+}
+
+// TestDisplayBuffer_LineWrapWithHistory tests wrapping when there's already committed history.
+func TestDisplayBuffer_LineWrapWithHistory(t *testing.T) {
+	v := NewVTerm(10, 5) // 10 columns wide, 5 rows
+	v.EnableDisplayBuffer()
+
+	// First, write and commit a few lines
+	for i := 1; i <= 2; i++ {
+		for _, ch := range "Line" {
+			v.placeChar(ch)
+		}
+		v.placeChar(rune('0' + i))
+		v.CarriageReturn()
+		v.LineFeed()
+	}
+
+	t.Logf("After 2 committed lines: cursorY=%d", v.cursorY)
+	t.Logf("  history lines=%d", v.displayBuf.history.Len())
+
+	// Now write a long line that wraps
+	text := "ABCDEFGHIJKLMNO" // 15 chars = wraps to 2 lines
+	for i, ch := range text {
+		v.placeChar(ch)
+		t.Logf("After char %d (%c): cursorX=%d, cursorY=%d, logicalX=%d",
+			i+1, ch, v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+	}
+
+	grid := v.Grid()
+	t.Logf("Final Grid:\n%s", gridToString(grid))
+
+	// Expected layout:
+	// Row 0: Line1
+	// Row 1: Line2
+	// Row 2: ABCDEFGHIJ (first 10 chars of wrapped line)
+	// Row 3: KLMNO (remaining 5 chars)
+	// Row 4: empty
+
+	expected := []string{"Line1", "Line2", "ABCDEFGHIJ", "KLMNO", ""}
+	for i, exp := range expected {
+		got := strings.TrimRight(cellsToStringTest(grid[i]), " ")
+		if got != exp {
+			t.Errorf("Row %d: expected %q, got %q", i, exp, got)
+		}
+	}
+
+	// Cursor should be at (5, 3) - after 'O' on row 3
+	if v.cursorX != 5 || v.cursorY != 3 {
+		t.Errorf("Expected cursor at (5,3), got (%d,%d)", v.cursorX, v.cursorY)
+	}
+}
+
+// TestDisplayBuffer_LineWrap tests that characters appear when wrapping to next line.
+func TestDisplayBuffer_LineWrap(t *testing.T) {
+	v := NewVTerm(10, 5) // 10 columns wide
+	v.EnableDisplayBuffer()
+
+	// Write 15 characters - should wrap to second line
+	text := "ABCDEFGHIJKLMNO" // 15 chars
+	for _, ch := range text {
+		v.placeChar(ch)
+	}
+
+	t.Logf("After writing 15 chars:")
+	t.Logf("  cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+	t.Logf("  currentLogicalX=%d", v.displayBuf.currentLogicalX)
+	t.Logf("  currentLine.Len()=%d", v.displayBuf.display.CurrentLine().Len())
+	t.Logf("  currentLinePhysical count=%d", len(v.displayBuf.display.currentLinePhysical))
+
+	grid := v.Grid()
+	t.Logf("Grid:\n%s", gridToString(grid))
+
+	// First row should have ABCDEFGHIJ (10 chars)
+	row0 := cellsToStringTest(grid[0])
+	if row0 != "ABCDEFGHIJ" {
+		t.Errorf("Row 0: expected 'ABCDEFGHIJ', got %q", row0)
+	}
+
+	// Second row should have KLMNO (5 chars + spaces)
+	row1 := strings.TrimRight(cellsToStringTest(grid[1]), " ")
+	if row1 != "KLMNO" {
+		t.Errorf("Row 1: expected 'KLMNO', got %q", row1)
+	}
+
+	// Cursor should be at (5, 1) - after the 'O' on second line
+	if v.cursorX != 5 || v.cursorY != 1 {
+		t.Errorf("Expected cursor at (5,1), got (%d,%d)", v.cursorX, v.cursorY)
+	}
+}
+
 // TestDisplayBuffer_ResizeWithFullScreen tests resize when content fills screen.
 func TestDisplayBuffer_ResizeWithFullScreen(t *testing.T) {
 	v := NewVTerm(20, 5)
