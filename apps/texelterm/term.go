@@ -1400,12 +1400,7 @@ func (a *TexelTerm) runShell() error {
 				a.vterm.EnableDisplayBuffer()
 				log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID)")
 			}
-
-			// Position cursor at bottom if we loaded history
-			totalLines := a.vterm.DisplayBufferGetHistory().TotalLen()
-			if totalLines > int64(rows) {
-				a.vterm.SetCursorPos(rows-1, 0)
-			}
+			// Note: cursor position is automatically synced in EnableDisplayBuffer/EnableDisplayBufferWithDisk
 		} else if hm != nil && hm.Length() > rows {
 			// Position cursor at bottom if we loaded history (legacy path)
 			a.vterm.SetCursorPos(rows-1, 0)

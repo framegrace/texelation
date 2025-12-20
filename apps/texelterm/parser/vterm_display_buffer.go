@@ -116,6 +116,9 @@ func (v *VTerm) EnableDisplayBuffer() {
 	if v.historyManager != nil && v.historyManager.Length() > 0 {
 		v.loadHistoryManagerIntoDisplayBuffer()
 	}
+
+	// Sync cursor position with display buffer's live edge
+	v.syncCursorWithDisplayBuffer()
 }
 
 // EnableDisplayBufferWithDisk enables the display buffer with disk-backed persistence.
@@ -129,7 +132,27 @@ func (v *VTerm) EnableDisplayBufferWithDisk(diskPath string, opts DisplayBufferO
 	opts.DiskPath = diskPath
 	v.initDisplayBufferWithOptions(opts)
 	v.displayBuf.enabled = true
+
+	// Sync cursor position with display buffer's live edge
+	v.syncCursorWithDisplayBuffer()
+
 	return nil
+}
+
+// syncCursorWithDisplayBuffer positions the cursor to match where new content
+// will appear in the display buffer. Called after loading history.
+func (v *VTerm) syncCursorWithDisplayBuffer() {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+
+	// Get the row where new content will appear
+	liveEdgeRow := v.displayBuf.display.LiveEdgeRow()
+
+	// Position cursor at the live edge
+	v.cursorY = liveEdgeRow
+	v.cursorX = 0
+	v.displayBuf.currentLogicalX = 0
 }
 
 // CloseDisplayBuffer closes the display buffer and its disk backing (if any).

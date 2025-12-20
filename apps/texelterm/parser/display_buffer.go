@@ -607,3 +607,25 @@ func (db *DisplayBuffer) CanScrollUp() bool {
 func (db *DisplayBuffer) CanScrollDown() bool {
 	return !db.atLiveEdge
 }
+
+// LiveEdgeRow returns the viewport row where new content will appear.
+// This is where the cursor should be positioned when at the live edge.
+func (db *DisplayBuffer) LiveEdgeRow() int {
+	// The current line appears after all committed lines
+	// Its position in the viewport depends on viewportTop
+	committedLines := len(db.lines)
+
+	// The current line starts at index 'committedLines' in allLines
+	// Its viewport row = committedLines - viewportTop
+	row := committedLines - db.viewportTop
+
+	// Clamp to valid viewport range
+	if row < 0 {
+		row = 0
+	}
+	if row >= db.height {
+		row = db.height - 1
+	}
+
+	return row
+}
