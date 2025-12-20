@@ -199,6 +199,7 @@ func (v *VTerm) displayBufferGrid() [][]Cell {
 
 // displayBufferPlaceChar writes a character using the display buffer system.
 // This performs a dual-write: to the current logical line AND the display buffer.
+// Respects insert mode (IRM) - in insert mode, shifts existing content right.
 func (v *VTerm) displayBufferPlaceChar(r rune) {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return
@@ -208,7 +209,12 @@ func (v *VTerm) displayBufferPlaceChar(r rune) {
 	cell := Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
 
 	// Write to logical line at currentLogicalX
-	db.SetCell(v.displayBuf.currentLogicalX, cell)
+	// In insert mode, shift existing content right
+	if v.insertMode {
+		db.InsertCell(v.displayBuf.currentLogicalX, cell)
+	} else {
+		db.SetCell(v.displayBuf.currentLogicalX, cell)
+	}
 
 	// Advance logical position
 	v.displayBuf.currentLogicalX++

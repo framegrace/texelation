@@ -504,3 +504,81 @@ func TestDisplayBuffer_VerticalResizeAtLiveEdge(t *testing.T) {
 		}
 	}
 }
+
+func TestDisplayBuffer_InsertCell(t *testing.T) {
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
+	db := NewDisplayBuffer(h, DisplayBufferConfig{
+		Width:  80,
+		Height: 24,
+	})
+
+	// Set up initial content "ABC"
+	db.SetCell(0, Cell{Rune: 'A', FG: DefaultFG, BG: DefaultBG})
+	db.SetCell(1, Cell{Rune: 'B', FG: DefaultFG, BG: DefaultBG})
+	db.SetCell(2, Cell{Rune: 'C', FG: DefaultFG, BG: DefaultBG})
+
+	// Insert 'X' at position 1 - should become "AXBC"
+	db.InsertCell(1, Cell{Rune: 'X', FG: DefaultFG, BG: DefaultBG})
+
+	currentLine := db.CurrentLine()
+	if currentLine.Len() != 4 {
+		t.Errorf("expected current line length 4, got %d", currentLine.Len())
+	}
+
+	if cellsToString(currentLine.Cells) != "AXBC" {
+		t.Errorf("expected 'AXBC', got '%s'", cellsToString(currentLine.Cells))
+	}
+}
+
+func TestDisplayBuffer_InsertCell_RebuildsPhysical(t *testing.T) {
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
+	db := NewDisplayBuffer(h, DisplayBufferConfig{
+		Width:  5, // Short width to test wrapping
+		Height: 10,
+	})
+
+	// Set up "ABCD" on current line
+	db.SetCell(0, Cell{Rune: 'A', FG: DefaultFG, BG: DefaultBG})
+	db.SetCell(1, Cell{Rune: 'B', FG: DefaultFG, BG: DefaultBG})
+	db.SetCell(2, Cell{Rune: 'C', FG: DefaultFG, BG: DefaultBG})
+	db.SetCell(3, Cell{Rune: 'D', FG: DefaultFG, BG: DefaultBG})
+
+	// Insert 'X' - line becomes "AXBCD" which is 5 chars (exactly fits in width)
+	db.InsertCell(1, Cell{Rune: 'X', FG: DefaultFG, BG: DefaultBG})
+
+	currentLine := db.CurrentLine()
+	if cellsToString(currentLine.Cells) != "AXBCD" {
+		t.Errorf("expected 'AXBCD', got '%s'", cellsToString(currentLine.Cells))
+	}
+
+	// Insert another char - should cause wrap
+	db.InsertCell(2, Cell{Rune: 'Y', FG: DefaultFG, BG: DefaultBG})
+
+	currentLine = db.CurrentLine()
+	if cellsToString(currentLine.Cells) != "AXYBCD" {
+		t.Errorf("expected 'AXYBCD', got '%s'", cellsToString(currentLine.Cells))
+	}
+
+	// Verify physical lines are rebuilt (content should wrap to 2 lines)
+	if db.TotalPhysicalLines() < 2 {
+		t.Error("expected content to wrap to multiple physical lines")
+	}
+}
+
+func TestDisplayBuffer_InsertCell_AtStart(t *testing.T) {
+	h := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
+	db := NewDisplayBuffer(h, DisplayBufferConfig{
+		Width:  80,
+		Height: 24,
+	})
+
+	db.SetCell(0, Cell{Rune: 'A', FG: DefaultFG, BG: DefaultBG})
+	db.SetCell(1, Cell{Rune: 'B', FG: DefaultFG, BG: DefaultBG})
+
+	db.InsertCell(0, Cell{Rune: 'X', FG: DefaultFG, BG: DefaultBG})
+
+	currentLine := db.CurrentLine()
+	if cellsToString(currentLine.Cells) != "XAB" {
+		t.Errorf("expected 'XAB', got '%s'", cellsToString(currentLine.Cells))
+	}
+}

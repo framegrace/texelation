@@ -575,6 +575,18 @@ func (db *DisplayBuffer) SetCell(logicalX int, cell Cell) {
 	}
 }
 
+// InsertCell inserts a cell in the current line at the given logical X position,
+// shifting existing cells right. Used for insert mode (IRM).
+func (db *DisplayBuffer) InsertCell(logicalX int, cell Cell) {
+	db.currentLine.InsertCell(logicalX, cell)
+	db.rebuildCurrentLinePhysical()
+
+	// Update the visible line in the buffer if at live edge
+	if db.atLiveEdge {
+		db.scrollToLiveEdge()
+	}
+}
+
 // TotalPhysicalLines returns the total number of physical lines in the buffer
 // (committed + current line).
 func (db *DisplayBuffer) TotalPhysicalLines() int {
