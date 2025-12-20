@@ -53,9 +53,15 @@ func TestOfflineRetentionAndResumeWithMemConn(t *testing.T) {
 	mgr := NewManager()
 	mgr.SetDiffRetentionLimit(2)
 
+	driver := offlineScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	app := &offlineApp{title: "welcome"}
 	shellFactory := func() texel.App { return app }
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", &lifecycle)
+	if err != nil {
+		t.Fatalf("failed to create desktop: %v", err)
+	}
+	defer desktop.Close()
 
 	sink := NewDesktopSink(desktop)
 	srv := &Server{manager: mgr, sink: sink, desktopSink: sink}

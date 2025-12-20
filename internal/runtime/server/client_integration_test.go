@@ -31,6 +31,10 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 	lifecycle := &texel.NoopAppLifecycle{}
 	app := &resumeApp{title: "welcome"}
 	shellFactory := func() texel.App { return app }
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
+	if err != nil {
+		t.Fatalf("failed to create desktop: %v", err)
+	}
 	defer desktop.Close()
 
 	sink := NewDesktopSink(desktop)

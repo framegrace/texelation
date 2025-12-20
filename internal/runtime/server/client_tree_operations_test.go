@@ -38,10 +38,19 @@ func setupTreeTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, 
 	}
 	lifecycle := &texel.NoopAppLifecycle{}
 
-	desktop, err := texel.NewDesktopEngineWithDriver(treeTestDriver{}, shellFactory, "", lifecycle)
+	// Create desktop with "testapp" as the initial app name
+	desktop, err := texel.NewDesktopEngineWithDriver(treeTestDriver{}, shellFactory, "testapp", lifecycle)
 	if err != nil {
 		t.Fatalf("failed to create desktop: %v", err)
 	}
+
+	// Register the test app in the registry so SwitchToWorkspace can create it
+	desktop.Registry().RegisterBuiltIn("testapp", func() interface{} {
+		return shellFactory()
+	})
+
+	// Create initial workspace - will automatically create testapp
+	desktop.SwitchToWorkspace(1)
 
 	mgr := NewManager()
 	sink := NewDesktopSink(desktop)
