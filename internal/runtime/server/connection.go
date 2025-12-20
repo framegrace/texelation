@@ -347,9 +347,10 @@ func (c *connection) sendTreeSnapshot() {
 		return
 	}
 	snapshot, err := sink.Snapshot()
-	if err != nil || len(snapshot.Panes) == 0 {
+	if err != nil {
 		return
 	}
+	// Always send snapshot, even if empty - client needs to clear old panes during workspace switches
 	sink.Publish()
 	geometrySnapshot := geometryOnlySnapshot(snapshot)
 

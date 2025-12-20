@@ -61,8 +61,10 @@ func (p *DesktopPublisher) Publish() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	start := time.Now()
-	snapshots := p.desktop.SnapshotBuffers()
-	for _, snap := range snapshots {
+	buffers := p.desktop.SnapshotBuffers()
+	// if len(buffers) > 0 { log.Printf("DesktopPublisher: Publishing %d buffers", len(buffers)) }
+
+	for _, snap := range buffers {
 		rev := p.revisions[snap.ID] + 1
 		p.revisions[snap.ID] = rev
 		delta := bufferToDelta(snap, rev)
@@ -71,7 +73,7 @@ func (p *DesktopPublisher) Publish() error {
 		}
 	}
 	if p.observer != nil {
-		p.observer.ObservePublish(p.session, len(snapshots), time.Since(start))
+		p.observer.ObservePublish(p.session, len(buffers), time.Since(start))
 	}
 	if p.notify != nil {
 		p.notify()

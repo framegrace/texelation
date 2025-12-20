@@ -10,14 +10,14 @@ import (
 	"strings"
 	"testing"
 
-	"texelation/apps/welcome"
+	"texelation/apps/help"
 )
 
 // TestSimpleColoredWelcomeRendersContent verifies that the simple colored welcome
 // screen renders content properly without blocking or flickering.
 func TestSimpleColoredWelcomeRendersContent(t *testing.T) {
-	// Create the welcome app
-	app := welcome.NewSimpleColored()
+	// Create the help app
+	app := help.NewSimpleColoredHelp()
 
 	// Resize it to reasonable dimensions
 	app.Resize(80, 24)

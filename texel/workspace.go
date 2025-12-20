@@ -206,6 +206,7 @@ func (w *Workspace) AddApp(app App) {
 	p.SetActive(true)
 	w.recalculateLayout()
 	w.notifyFocus()
+	w.desktop.broadcastTreeChanged() // Notify that the tree structure changed
 	w.desktop.broadcastStateUpdate()
 	log.Printf("AddApp: Completed adding app '%s'", app.GetTitle())
 }
@@ -325,7 +326,10 @@ func (w *Workspace) handleAppExit(p *pane, exitedApp App, runErr error) {
 	}
 
 	if runErr != nil {
-		log.Printf("handleAppExit: app '%s' exited with error: %v", title, runErr)
+		log.Printf("handleAppExit: app '%s' exited with error: %v - preserving pane", title, runErr)
+		// Do not remove the pane. This allows the user to see the error or restart the session
+		// without losing the window layout.
+		return
 	} else {
 		log.Printf("handleAppExit: app '%s' exited cleanly", title)
 	}

@@ -9,9 +9,11 @@
 package server
 
 import (
+	"log"
+	"sync"
+
 	"github.com/gdamore/tcell/v2"
 
-	"sync"
 	"texelation/protocol"
 	"texelation/texel"
 )
@@ -125,6 +127,8 @@ func (d *DesktopSink) Snapshot() (protocol.TreeSnapshot, error) {
 	if d.desktop == nil {
 		return protocol.TreeSnapshot{}, nil
 	}
-	capture := d.desktop.CaptureTree()
+	// Use SnapshotForClient to get only the active workspace's layout and panes
+	capture := d.desktop.SnapshotForClient()
+	log.Printf("DesktopSink.Snapshot: ActiveWS=%d, Panes=%d", capture.ActiveWorkspaceID, len(capture.Panes))
 	return treeCaptureToProtocol(capture), nil
 }

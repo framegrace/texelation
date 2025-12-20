@@ -118,6 +118,11 @@ func main() {
 		return launcher.New(desktop.Registry())
 	})
 
+	// Register snapshot factory for launcher
+	desktop.RegisterSnapshotFactory("launcher", func(title string, config map[string]interface{}) texel.App {
+		return launcher.New(desktop.Registry())
+	})
+
 	// Register help app
 	desktop.Registry().RegisterBuiltIn("help", func() interface{} {
 		return help.NewHelpApp()

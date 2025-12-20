@@ -58,9 +58,15 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 	srvClient, srvConn := net.Pipe()
 	defer srvClient.Close()
 
+	driver := integrationScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	app := &deterministicApp{title: "welcome"}
 	shellFactory := func() texel.App { return app }
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", &lifecycle)
+	if err != nil {
+		t.Fatalf("failed to create desktop: %v", err)
+	}
+	defer desktop.Close()
 
 	sink := NewDesktopSink(desktop)
 
