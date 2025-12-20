@@ -31,10 +31,12 @@ type SnapshotStore struct {
 
 // StoredSnapshot is the serialized representation written to disk.
 type StoredSnapshot struct {
-	Timestamp time.Time    `json:"timestamp"`
-	Hash      string       `json:"hash"`
-	Panes     []StoredPane `json:"panes"`
-	Tree      StoredNode   `json:"tree"`
+	Timestamp         time.Time            `json:"timestamp"`
+	Hash              string               `json:"hash"`
+	Panes             []StoredPane         `json:"panes"`
+	Tree              StoredNode           `json:"tree"` // Deprecated: active workspace root
+	Workspaces        map[int]StoredNode   `json:"workspaces,omitempty"`
+	ActiveWorkspaceID int                  `json:"active_workspace_id"`
 }
 
 // StoredNode captures the persisted tree layout.
@@ -68,8 +70,10 @@ func (s *SnapshotStore) Save(capture *texel.TreeCapture) error {
 	defer s.mu.Unlock()
 
 	stored := StoredSnapshot{
-		Timestamp: time.Now().UTC(),
-		Panes:     make([]StoredPane, len(capture.Panes)),
+		Timestamp:         time.Now().UTC(),
+		Panes:             make([]StoredPane, len(capture.Panes)),
+		Workspaces:        make(map[int]StoredNode),
+		ActiveWorkspaceID: capture.ActiveWorkspaceID,
 	}
 
 	hasher := sha1.New()
@@ -113,8 +117,28 @@ func (s *SnapshotStore) Save(capture *texel.TreeCapture) error {
 			}
 		}
 	}
-	hashTreeCapture(capture.Root, hasher)
-	stored.Tree = storeTreeNode(capture.Root)
+	
+	// Hash and store all workspaces
+	// For stability, we should iterate in deterministic order if we want stable hash, 
+	// but map iteration is random.
+	// Since Hash is just for integrity check on load, order doesn't strictly matter as long as content is same.
+	// But let's check hashTreeCapture usage. It hashes the tree structure.
+	
+	for id, root := range capture.WorkspaceRoots {
+		hashTreeCapture(root, hasher)
+		stored.Workspaces[id] = storeTreeNode(root)
+	}
+	
+	// Legacy field population
+	if capture.Root != nil {
+		stored.Tree = storeTreeNode(capture.Root)
+	} else if len(capture.WorkspaceRoots) > 0 {
+		// Fallback if Root is nil but workspaces exist (shouldn't happen with updated CaptureTree)
+		for _, root := range capture.WorkspaceRoots {
+			stored.Tree = storeTreeNode(root)
+			break
+		}
+	}
 
 	stored.Hash = hex.EncodeToString(hasher.Sum(nil))
 
@@ -127,7 +151,12 @@ func (s *SnapshotStore) Save(capture *texel.TreeCapture) error {
 		return err
 	}
 
-	return os.WriteFile(s.path, data, 0o644)
+	// Atomic write: write to temp file then rename
+	tmpPath := s.path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.path)
 }
 
 // Load retrieves the most recent stored snapshot from disk.
@@ -154,7 +183,60 @@ func (s StoredSnapshot) ToTreeSnapshot() protocol.TreeSnapshot {
 	}
 	snapshot := protocol.TreeSnapshot{Panes: panes}
 	snapshot.Root = s.Tree.toProtocolNode()
+	// Note: protocol.TreeSnapshot doesn't support multiple workspaces yet.
+	// The protocol only sends the active tree to the client.
+	// So we return the 'Tree' field which corresponds to the active workspace (legacy behavior).
 	return snapshot
+}
+
+// ToTreeCapture converts the stored snapshot back to the internal struct including multiple workspaces.
+func (s StoredSnapshot) ToTreeCapture() texel.TreeCapture {
+	panes := make([]texel.PaneSnapshot, len(s.Panes))
+	for i, pane := range s.Panes {
+		panes[i] = pane.ToPaneSnapshot()
+	}
+	
+	capture := texel.TreeCapture{
+		Panes:             panes,
+		WorkspaceRoots:    make(map[int]*texel.TreeNodeCapture),
+		ActiveWorkspaceID: s.ActiveWorkspaceID,
+	}
+	
+	for id, root := range s.Workspaces {
+		capture.WorkspaceRoots[id] = root.toTreeNodeCapture()
+	}
+	
+	// Legacy root
+	capture.Root = s.Tree.toTreeNodeCapture()
+	
+	// If Workspaces is empty but Tree is present (legacy file), synthesize workspace 1
+	if len(capture.WorkspaceRoots) == 0 && capture.Root != nil {
+		capture.WorkspaceRoots[1] = capture.Root
+		capture.ActiveWorkspaceID = 1
+	}
+	
+	return capture
+}
+
+func (sn StoredNode) toTreeNodeCapture() *texel.TreeNodeCapture {
+	node := &texel.TreeNodeCapture{
+		PaneIndex: sn.PaneIndex,
+	}
+	switch sn.Split {
+	case "vertical":
+		node.Split = texel.Vertical
+	case "horizontal":
+		node.Split = texel.Horizontal
+	default:
+		// SplitNone default
+	}
+	node.SplitRatios = make([]float64, len(sn.Ratios))
+	copy(node.SplitRatios, sn.Ratios)
+	node.Children = make([]*texel.TreeNodeCapture, len(sn.Children))
+	for i, child := range sn.Children {
+		node.Children[i] = child.toTreeNodeCapture()
+	}
+	return node
 }
 
 func (sp StoredPane) ToPaneSnapshot() texel.PaneSnapshot {

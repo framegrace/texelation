@@ -181,6 +181,8 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	log.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
 	if p.screen != nil && p.screen.desktop != nil {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
+		// Notify that an app was attached (triggers snapshot persistence)
+		p.screen.desktop.dispatcher.Broadcast(Event{Type: EventAppAttached})
 	}
 	log.Printf("AttachApp: Completed attachment of app '%s'", p.getTitle())
 }

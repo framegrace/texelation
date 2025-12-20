@@ -34,8 +34,10 @@ type Rectangle struct {
 
 // TreeCapture represents a snapshot of the desktop layout tree.
 type TreeCapture struct {
-	Panes []PaneSnapshot
-	Root  *TreeNodeCapture
+	Panes             []PaneSnapshot
+	Root              *TreeNodeCapture            // Deprecated: use WorkspaceRoots
+	WorkspaceRoots    map[int]*TreeNodeCapture    // Map of workspace ID to its tree root
+	ActiveWorkspaceID int
 }
 
 // TreeNodeCapture stores split metadata or references a leaf pane by index.
@@ -48,42 +50,156 @@ type TreeNodeCapture struct {
 
 // SnapshotBuffers collects the current buffers for all panes in the active workspace.
 func (d *DesktopEngine) SnapshotBuffers() []PaneSnapshot {
-	capture := d.CaptureTree()
-	return capture.Panes
+	var panes []PaneSnapshot
+	
+	// Only capture active workspace for rendering
+	if d.activeWorkspace != nil && d.activeWorkspace.tree != nil {
+		// d.recalculateLayout() // REMOVED: This causes race condition with SwitchToWorkspace
+		var collect func(*Node)
+		collect = func(n *Node) {
+			if n == nil {
+				return
+			}
+			if len(n.Children) == 0 {
+				if n.Pane != nil {
+					panes = append(panes, capturePaneSnapshot(n.Pane))
+				}
+			}
+			for _, child := range n.Children {
+				collect(child)
+			}
+		}
+		if d.activeWorkspace.tree.Root != nil {
+			collect(d.activeWorkspace.tree.Root)
+		}
+	}
+
+	// Always include status/floating
+	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
+		panes = append(panes, status...)
+	}
+	if floating := d.captureFloatingPanelSnapshots(); len(floating) > 0 {
+		panes = append(panes, floating...)
+	}
+	return panes
 }
 
-// CaptureTree gathers panes and the layout tree for persistence or transport.
-func (d *DesktopEngine) CaptureTree() TreeCapture {
+// SnapshotForClient captures only the active workspace for sending to the client.
+func (d *DesktopEngine) SnapshotForClient() TreeCapture {
 	var capture TreeCapture
-	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil || d.activeWorkspace.tree.Root == nil {
+	// Default to empty if nothing to capture
+	capture.WorkspaceRoots = make(map[int]*TreeNodeCapture)
+	
+	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil {
 		return capture
 	}
-	d.recalculateLayout()
+	
+	// We do NOT recalculate layout here to avoid the race condition fixed previously
+	// The layout should already be valid from the logic operations (AddApp, etc.)
+	
 	paneIndex := make(map[*pane]int)
 	capture.Panes = make([]PaneSnapshot, 0)
+	capture.ActiveWorkspaceID = d.activeWorkspace.id
+
 	var collect func(*Node)
 	collect = func(n *Node) {
 		if n == nil {
 			return
 		}
 		if len(n.Children) == 0 {
-			// Leaf node - should have a pane with an app
-			if n.Pane == nil {
-				log.Printf("WARNING: CaptureTree found leaf node with nil Pane - tree may be corrupted")
-			} else if n.Pane.app == nil {
-				log.Printf("WARNING: CaptureTree found pane '%s' with nil app - this pane will be EXCLUDED from snapshot (tree corruption risk)", n.Pane.getTitle())
-			} else {
-				paneSnap := capturePaneSnapshot(n.Pane)
-				paneIndex[n.Pane] = len(capture.Panes)
-				capture.Panes = append(capture.Panes, paneSnap)
+			if n.Pane != nil {
+				// Check if already captured
+				if _, exists := paneIndex[n.Pane]; !exists {
+					paneSnap := capturePaneSnapshot(n.Pane)
+					paneIndex[n.Pane] = len(capture.Panes)
+					capture.Panes = append(capture.Panes, paneSnap)
+				}
 			}
 		}
 		for _, child := range n.Children {
 			collect(child)
 		}
 	}
-	collect(d.activeWorkspace.tree.Root)
-	capture.Root = buildTreeCapture(d.activeWorkspace.tree.Root, paneIndex)
+	
+	if d.activeWorkspace.tree.Root != nil {
+		collect(d.activeWorkspace.tree.Root)
+		capture.Root = buildTreeCapture(d.activeWorkspace.tree.Root, paneIndex)
+		// For consistency, also set it in map
+		capture.WorkspaceRoots[d.activeWorkspace.id] = capture.Root
+	}
+
+	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
+		capture.Panes = append(capture.Panes, status...)
+	}
+	if floating := d.captureFloatingPanelSnapshots(); len(floating) > 0 {
+		capture.Panes = append(capture.Panes, floating...)
+	}
+	return capture
+}
+
+// CaptureTree gathers panes and the layout tree for persistence or transport.
+func (d *DesktopEngine) CaptureTree() TreeCapture {
+	var capture TreeCapture
+	// Default to empty if nothing to capture
+	capture.WorkspaceRoots = make(map[int]*TreeNodeCapture)
+	
+	if len(d.workspaces) == 0 {
+		return capture
+	}
+	
+	d.recalculateLayout()
+	paneIndex := make(map[*pane]int)
+	capture.Panes = make([]PaneSnapshot, 0)
+	
+	if d.activeWorkspace != nil {
+		capture.ActiveWorkspaceID = d.activeWorkspace.id
+	}
+
+	// Helper to capture a single tree
+	captureWorkspace := func(ws *Workspace) *TreeNodeCapture {
+		if ws == nil || ws.tree == nil || ws.tree.Root == nil {
+			return nil
+		}
+		
+		var collect func(*Node)
+		collect = func(n *Node) {
+			if n == nil {
+				return
+			}
+			if len(n.Children) == 0 {
+				// Leaf node - should have a pane
+				if n.Pane == nil {
+					log.Printf("WARNING: CaptureTree found leaf node with nil Pane - tree may be corrupted")
+				} else {
+					// Check if already captured (shouldn't happen in tree, but safe to check)
+					if _, exists := paneIndex[n.Pane]; !exists {
+						paneSnap := capturePaneSnapshot(n.Pane)
+						paneIndex[n.Pane] = len(capture.Panes)
+						capture.Panes = append(capture.Panes, paneSnap)
+					}
+				}
+			}
+			for _, child := range n.Children {
+				collect(child)
+			}
+		}
+		
+		collect(ws.tree.Root)
+		return buildTreeCapture(ws.tree.Root, paneIndex)
+	}
+
+	// Capture all workspaces
+	for id, ws := range d.workspaces {
+		if root := captureWorkspace(ws); root != nil {
+			capture.WorkspaceRoots[id] = root
+		}
+	}
+	
+	// Maintain backward compatibility for Root field (set to active workspace)
+	if d.activeWorkspace != nil {
+		capture.Root = capture.WorkspaceRoots[d.activeWorkspace.id]
+	}
+
 	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
 		capture.Panes = append(capture.Panes, status...)
 	}
@@ -107,10 +223,17 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 			Height: p.Height(),
 		},
 	}
-	if provider, ok := p.app.(SnapshotProvider); ok {
-		appType, config := provider.SnapshotMetadata()
-		snap.AppType = appType
-		snap.AppConfig = cloneAppConfig(config)
+	// p.app might be nil if capturing during split before attach, or if app crashed
+	if p.app != nil {
+		if provider, ok := p.app.(SnapshotProvider); ok {
+			appType, config := provider.SnapshotMetadata()
+			snap.AppType = appType
+			snap.AppConfig = cloneAppConfig(config)
+		}
+	} else {
+		// Mark as placeholder
+		snap.AppType = "placeholder"
+		snap.Title = "Loading..."
 	}
 	return snap
 }

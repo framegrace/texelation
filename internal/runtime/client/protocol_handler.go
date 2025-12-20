@@ -46,12 +46,7 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			log.Printf("decode snapshot failed: %v", err)
 			return false
 		}
-		if len(snap.Panes) == 0 {
-			if existing := cache.SortedPanes(); len(existing) > 0 {
-				log.Printf("ignoring empty snapshot; retaining %d cached panes", len(existing))
-				return false
-			}
-		}
+		// Always apply snapshots - empty snapshots clear the cache (e.g., when switching to empty workspace)
 		cache.ApplySnapshot(snap)
 		if state.effects != nil {
 			state.effects.ResetPaneStates(cache.SortedPanes())

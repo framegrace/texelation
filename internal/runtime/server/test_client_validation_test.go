@@ -58,8 +58,14 @@ func setupTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, func
 	socketPath := "/tmp/texel-test-" + t.Name() + ".sock"
 
 	// Create desktop
+	driver := stubDriver{}
+	lifecycle := texel.NoopAppLifecycle{}
 	app := &fakeApp{title: "test"}
 	shellFactory := func() texel.App { return app }
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", &lifecycle)
+	if err != nil {
+		t.Fatalf("failed to create desktop: %v", err)
+	}
 
 	// Create server components
 	mgr := NewManager()
