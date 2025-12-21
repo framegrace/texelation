@@ -212,6 +212,13 @@ func (v *VTerm) IsDisplayBufferEnabled() bool {
 	return v.displayBuf != nil && v.displayBuf.enabled
 }
 
+// SetDisplayBufferDebugLog sets a debug logging function on the display buffer.
+func (v *VTerm) SetDisplayBufferDebugLog(fn func(format string, args ...interface{})) {
+	if v.displayBuf != nil && v.displayBuf.display != nil {
+		v.displayBuf.display.SetDebugLog(fn)
+	}
+}
+
 // displayBufferGrid returns the viewport using the display buffer system.
 func (v *VTerm) displayBufferGrid() [][]Cell {
 	if v.displayBuf == nil || v.displayBuf.display == nil {

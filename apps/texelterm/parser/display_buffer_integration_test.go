@@ -1159,3 +1159,470 @@ func TestDisplayBuffer_WrapWithParser(t *testing.T) {
 		t.Errorf("Expected cursor at (5,1), got (%d,%d)", v.cursorX, v.cursorY)
 	}
 }
+
+// TestDisplayBuffer_DevshellRunnerFlow simulates the exact flow of the devshell runner:
+// 1. HandleKey() sends character to PTY
+// 2. draw() is called BEFORE the PTY echo arrives (should be no-op or harmless)
+// 3. PTY echo arrives, character is processed
+// 4. requestRefresh() triggers another draw()
+// 5. Character should appear on screen
+//
+// This tests for any race condition or state corruption from the early draw() call.
+func TestDisplayBuffer_DevshellRunnerFlow(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Simulate render buffer (like term.go a.buf)
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 10)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	// Simulate exact Render() flow from term.go
+	simulateRender := func() {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 10; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 10; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender()
+
+	// Simulate typing 10 characters with the devshell runner pattern:
+	// For each character:
+	// 1. "HandleKey" - we don't actually send to PTY, just simulate the draw() that happens
+	// 2. draw() BEFORE echo (this is the key part!)
+	// 3. "PTY echo" - actually process the character
+	// 4. draw() after echo
+
+	text := "ABCDEFGHIJ"
+	for i, ch := range text {
+		// Step 1-2: HandleKey sends to PTY, then draw() is called
+		// At this point, the character hasn't been processed yet
+		simulateRender() // This draw() should be harmless
+
+		// Step 3: PTY echo arrives, character is processed
+		p.Parse(ch)
+
+		// Step 4: requestRefresh triggers draw()
+		simulateRender()
+
+		// Verify the character is visible
+		row0 := cellsToStringTest(renderBuf[0])[:i+1]
+		expected := string(text[:i+1])
+		if row0 != expected {
+			t.Errorf("After char %d (%c): renderBuf[0] = %q, expected %q", i+1, ch, row0, expected)
+		}
+	}
+
+	t.Logf("After 10 chars: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
+
+	// Now type the 11th character (K) which triggers wrap
+	// Same devshell runner pattern:
+
+	// Step 1-2: HandleKey, then draw() BEFORE echo
+	t.Logf("Before 'K' echo: cursorY=%d", v.cursorY)
+	simulateRender() // This draw() happens before K is echoed
+
+	// Step 3: PTY echo for 'K'
+	p.Parse('K')
+	t.Logf("After 'K' parsed: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+
+	// Check dirty state before render
+	dirtyLines, allDirty := v.GetDirtyLines()
+	t.Logf("Dirty state after 'K': allDirty=%v, dirtyLines=%v", allDirty, dirtyLines)
+
+	// Step 4: requestRefresh triggers draw()
+	simulateRender()
+
+	// Verify the wrapped character is visible
+	row1Rune := renderBuf[1][0].Rune
+	t.Logf("renderBuf[1][0].Rune = '%c' (expected 'K')", row1Rune)
+
+	if row1Rune != 'K' {
+		t.Errorf("After wrap, renderBuf[1][0] should be 'K', got '%c'", row1Rune)
+		t.Logf("Full renderBuf:")
+		for y := 0; y < 5; y++ {
+			t.Logf("  Row %d: %q", y, cellsToStringTest(renderBuf[y]))
+		}
+		t.Logf("Full Grid:")
+		for y := 0; y < 5; y++ {
+			t.Logf("  Row %d: %q", y, cellsToStringTest(v.Grid()[y]))
+		}
+	}
+
+	// Continue typing a few more characters
+	for _, ch := range "LMNO" {
+		simulateRender() // draw() before echo
+		p.Parse(ch)
+		simulateRender() // draw() after echo
+	}
+
+	// Verify final state
+	row0Final := cellsToStringTest(renderBuf[0])
+	row1Final := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+
+	if row0Final != "ABCDEFGHIJ" {
+		t.Errorf("Final row 0: expected 'ABCDEFGHIJ', got %q", row0Final)
+	}
+	if row1Final != "KLMNO" {
+		t.Errorf("Final row 1: expected 'KLMNO', got %q", row1Final)
+	}
+
+	t.Logf("Final state: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+}
+
+// TestDisplayBuffer_WrapAfterLoadingHistory tests wrapping when history was loaded from disk.
+// This simulates a terminal restart where history exists.
+func TestDisplayBuffer_WrapAfterLoadingHistory(t *testing.T) {
+	tmpDir := t.TempDir()
+	diskPath := tmpDir + "/test.hist2"
+
+	// First, create a terminal and write some history
+	v1 := NewVTerm(10, 5)
+	err := v1.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 100,
+		MarginAbove:    10,
+		MarginBelow:    5,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk failed: %v", err)
+	}
+	p1 := NewParser(v1)
+
+	// Write 3 lines of history
+	for i := 1; i <= 3; i++ {
+		for _, ch := range "Line" {
+			p1.Parse(ch)
+		}
+		p1.Parse(rune('0' + i))
+		p1.Parse('\r')
+		p1.Parse('\n')
+	}
+
+	t.Logf("After writing history: cursorX=%d, cursorY=%d", v1.cursorX, v1.cursorY)
+
+	// Close and flush to disk
+	if err := v1.CloseDisplayBuffer(); err != nil {
+		t.Fatalf("CloseDisplayBuffer failed: %v", err)
+	}
+
+	// Now create a new terminal loading from the same disk
+	v2 := NewVTerm(10, 5)
+	err = v2.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 100,
+		MarginAbove:    10,
+		MarginBelow:    5,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk (reload) failed: %v", err)
+	}
+	p2 := NewParser(v2)
+
+	t.Logf("After loading history: cursorX=%d, cursorY=%d", v2.cursorX, v2.cursorY)
+
+	// Simulate render buffer
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 10)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	simulateRender := func() {
+		vtermGrid := v2.Grid()
+		dirtyLines, allDirty := v2.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 10; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 10; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v2.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender()
+
+	t.Logf("Initial grid after history load:")
+	for y := 0; y < 5; y++ {
+		t.Logf("  Row %d: %q", y, cellsToStringTest(renderBuf[y]))
+	}
+
+	// Now simulate typing at the prompt (after history) with wrapping
+	text := "ABCDEFGHIJ"
+	for _, ch := range text {
+		simulateRender() // draw() before echo
+		p2.Parse(ch)
+		simulateRender() // draw() after echo
+	}
+
+	t.Logf("After 10 chars: cursorX=%d, cursorY=%d, wrapNext=%v", v2.cursorX, v2.cursorY, v2.wrapNext)
+
+	// Type 'K' to trigger wrap
+	simulateRender()
+	p2.Parse('K')
+
+	t.Logf("After 'K': cursorX=%d, cursorY=%d", v2.cursorX, v2.cursorY)
+	dirtyLines, allDirty := v2.GetDirtyLines()
+	t.Logf("Dirty after 'K': allDirty=%v, dirtyLines=%v", allDirty, dirtyLines)
+
+	simulateRender()
+
+	t.Logf("Grid after wrap:")
+	for y := 0; y < 5; y++ {
+		t.Logf("  Row %d: %q", y, cellsToStringTest(renderBuf[y]))
+	}
+
+	// Verify 'K' appears on the wrapped line
+	// With 3 history lines + 2 wrapped lines = 5 lines
+	// The last row should have 'K'
+	row4 := strings.TrimRight(cellsToStringTest(renderBuf[4]), " ")
+	if row4 != "K" {
+		t.Errorf("After wrap, row 4 should have 'K', got %q", row4)
+	}
+}
+
+// TestDisplayBuffer_BashReadlineWrap simulates what bash readline might do when
+// the user types past the end of a line. Readline sends characters and may also
+// send cursor positioning escape sequences.
+func TestDisplayBuffer_BashReadlineWrap(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Simulate render buffer
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 10)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	simulateRender := func() {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 10; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 10; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender()
+
+	// Simulate bash prompt "$ " (2 chars)
+	for _, ch := range "$ " {
+		p.Parse(ch)
+	}
+	simulateRender()
+
+	// User types "ABCDEFGH" (8 chars) - fills up to column 9 (0-indexed)
+	// With prompt, we have 10 chars on the line
+	for _, ch := range "ABCDEFGH" {
+		simulateRender() // draw before echo
+		p.Parse(ch)
+		simulateRender() // draw after echo
+	}
+
+	t.Logf("After 8 chars: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
+
+	// User types 'I' - this goes at column 9 (last column)
+	simulateRender()
+	p.Parse('I')
+	simulateRender()
+
+	t.Logf("After 'I': cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
+
+	// User types 'J' - this triggers wrap
+	simulateRender()
+	p.Parse('J')
+	simulateRender()
+
+	t.Logf("After 'J' (wrap): cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+
+	// Verify content
+	// With 10-column terminal: "$ " (2 chars) + "ABCDEFGH" (8 chars) = 10 chars fill line
+	// 'I' triggers wrap and goes to row 1 column 0
+	// 'J' goes to row 1 column 1
+	row0 := cellsToStringTest(renderBuf[0])
+	row1 := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+
+	if row0 != "$ ABCDEFGH" {
+		t.Errorf("Row 0: expected '$ ABCDEFGH', got %q", row0)
+	}
+	if row1 != "IJ" {
+		t.Errorf("Row 1: expected 'IJ', got %q", row1)
+	}
+
+	t.Logf("Grid after wrap:")
+	for y := 0; y < 3; y++ {
+		t.Logf("  Row %d: %q", y, cellsToStringTest(renderBuf[y]))
+	}
+}
+
+// TestDisplayBuffer_DevshellRunnerFlowWithDisk tests the same flow as DevshellRunnerFlow
+// but with disk persistence enabled, which is what the real terminal uses.
+func TestDisplayBuffer_DevshellRunnerFlowWithDisk(t *testing.T) {
+	// Create a temporary file for persistence
+	tmpDir := t.TempDir()
+	diskPath := tmpDir + "/test.hist2"
+
+	v := NewVTerm(10, 5)
+	err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
+		MaxMemoryLines: 100,
+		MarginAbove:    10,
+		MarginBelow:    5,
+	})
+	if err != nil {
+		t.Fatalf("EnableDisplayBufferWithDisk failed: %v", err)
+	}
+	p := NewParser(v)
+
+	// Simulate render buffer (like term.go a.buf)
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 10)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	// Simulate exact Render() flow from term.go
+	simulateRender := func() {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 10; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 10; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender()
+
+	t.Logf("Initial state: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+
+	// Simulate typing 10 characters with the devshell runner pattern
+	text := "ABCDEFGHIJ"
+	for i, ch := range text {
+		simulateRender() // draw() before echo
+		p.Parse(ch)
+		simulateRender() // draw() after echo
+
+		row0 := cellsToStringTest(renderBuf[0])[:i+1]
+		expected := string(text[:i+1])
+		if row0 != expected {
+			t.Errorf("After char %d (%c): renderBuf[0] = %q, expected %q", i+1, ch, row0, expected)
+		}
+	}
+
+	t.Logf("After 10 chars: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
+
+	// Now type the 11th character (K) which triggers wrap
+	t.Logf("Before 'K' echo: cursorY=%d", v.cursorY)
+	simulateRender() // draw() BEFORE echo
+
+	p.Parse('K')
+	t.Logf("After 'K' parsed: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+
+	// Check dirty state before render
+	dirtyLines, allDirty := v.GetDirtyLines()
+	t.Logf("Dirty state after 'K': allDirty=%v, dirtyLines=%v", allDirty, dirtyLines)
+
+	simulateRender() // draw() after echo
+
+	// Verify the wrapped character is visible
+	row1Rune := renderBuf[1][0].Rune
+	t.Logf("renderBuf[1][0].Rune = '%c' (expected 'K')", row1Rune)
+
+	if row1Rune != 'K' {
+		t.Errorf("After wrap with disk persistence, renderBuf[1][0] should be 'K', got '%c'", row1Rune)
+		t.Logf("Full renderBuf:")
+		for y := 0; y < 5; y++ {
+			t.Logf("  Row %d: %q", y, cellsToStringTest(renderBuf[y]))
+		}
+		t.Logf("Full Grid:")
+		for y := 0; y < 5; y++ {
+			t.Logf("  Row %d: %q", y, cellsToStringTest(v.Grid()[y]))
+		}
+	}
+
+	// Continue typing a few more characters
+	for _, ch := range "LMNO" {
+		simulateRender() // draw() before echo
+		p.Parse(ch)
+		simulateRender() // draw() after echo
+	}
+
+	// Verify final state
+	row0Final := cellsToStringTest(renderBuf[0])
+	row1Final := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+
+	if row0Final != "ABCDEFGHIJ" {
+		t.Errorf("Final row 0: expected 'ABCDEFGHIJ', got %q", row0Final)
+	}
+	if row1Final != "KLMNO" {
+		t.Errorf("Final row 1: expected 'KLMNO', got %q", row1Final)
+	}
+
+	t.Logf("Final state: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+}

@@ -63,6 +63,9 @@ type DisplayBuffer struct {
 
 	// currentLinePhysical is the wrapped version of currentLine at current width.
 	currentLinePhysical []PhysicalLine
+
+	// debugLog is an optional logging function for debugging.
+	debugLog func(format string, args ...interface{})
 }
 
 // DisplayBufferConfig holds configuration for creating a DisplayBuffer.
@@ -109,6 +112,11 @@ func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *D
 	}
 
 	return db
+}
+
+// SetDebugLog sets an optional debug logging function.
+func (db *DisplayBuffer) SetDebugLog(fn func(format string, args ...interface{})) {
+	db.debugLog = fn
 }
 
 // loadInitialHistory loads the bottom portion of history into lines.
@@ -376,6 +384,21 @@ func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
 	viewport := db.GetViewport()
 	result := make([][]Cell, db.height)
 
+	// Debug: log when we have wrapped content on a fresh terminal
+	if db.debugLog != nil && len(db.lines) == 0 && len(db.currentLinePhysical) > 1 {
+		db.debugLog("GetViewportAsCells: currentLinePhysical has %d wrapped lines, viewportTop=%d, height=%d",
+			len(db.currentLinePhysical), db.viewportTop, db.height)
+		for i, pl := range db.currentLinePhysical {
+			var content string
+			for _, c := range pl.Cells {
+				if c.Rune != 0 {
+					content += string(c.Rune)
+				}
+			}
+			db.debugLog("  physical[%d]: %q", i, content)
+		}
+	}
+
 	for y, line := range viewport {
 		row := make([]Cell, db.width)
 		// Fill with spaces
@@ -574,6 +597,12 @@ func (db *DisplayBuffer) scrollToLogicalLine(logicalIdx, wrapOffset int) {
 func (db *DisplayBuffer) SetCell(logicalX int, cell Cell) {
 	db.currentLine.SetCell(logicalX, cell)
 	db.rebuildCurrentLinePhysical()
+
+	// Debug: log when a character would be on a wrapped line
+	if logicalX >= db.width && db.debugLog != nil {
+		db.debugLog("SetCell: logicalX=%d (>= width=%d), char='%c', currentLinePhysical=%d lines, atLiveEdge=%v, viewportTop=%d",
+			logicalX, db.width, cell.Rune, len(db.currentLinePhysical), db.atLiveEdge, db.viewportTop)
+	}
 
 	// Update the visible line in the buffer if at live edge
 	if db.atLiveEdge {
