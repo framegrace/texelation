@@ -490,6 +490,165 @@ func TestDisplayBuffer_FreshTerminalWrap(t *testing.T) {
 	}
 }
 
+// TestDisplayBuffer_CursorRowMatchesContent verifies that Grid()[cursorY] contains
+// the character just typed, especially after wrapping.
+func TestDisplayBuffer_CursorRowMatchesContent(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Type characters, checking after each that the cursor row has the right content
+	text := "ABCDEFGHIJKLMNO"
+	for i, ch := range text {
+		v.placeChar(ch)
+		grid := v.Grid()
+
+		// After placing a character, cursor has already moved past it (cursorX-1 has the char)
+		// When we just wrapped, cursorX might be 1 (we placed at 0, then moved to 1)
+		// Actually, after placeChar, cursor is at the position AFTER the char
+
+		// The important check: Grid()[cursorY] should contain the character we just typed
+		row := grid[v.cursorY]
+		rowStr := cellsToStringTest(row)
+
+		// Find the character in the row
+		found := false
+		for _, c := range row {
+			if c.Rune == ch {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			t.Errorf("After char %d (%c): character not found in Grid()[cursorY=%d]", i+1, ch, v.cursorY)
+			t.Logf("  Row content: %q", rowStr)
+			t.Logf("  Full grid:\n%s", gridToString(grid))
+		}
+	}
+}
+
+// TestDisplayBuffer_WrapContentMatchesCursorRow tests that after wrapping,
+// the cursor row in the Grid contains the wrapped character.
+func TestDisplayBuffer_WrapContentMatchesCursorRow(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Fill the first line exactly
+	for _, ch := range "ABCDEFGHIJ" {
+		v.placeChar(ch)
+	}
+	t.Logf("After 10 chars: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
+
+	// Now type 'K' which should wrap
+	v.placeChar('K')
+	t.Logf("After 'K': cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+
+	grid := v.Grid()
+	t.Logf("Grid after wrap:\n%s", gridToString(grid))
+
+	// The critical check: Grid()[cursorY] should contain 'K'
+	cursorRow := grid[v.cursorY]
+	cursorRowStr := cellsToStringTest(cursorRow)
+	t.Logf("Grid[cursorY=%d] = %q", v.cursorY, cursorRowStr)
+
+	// 'K' should be at position 0 in cursorRow (we just wrapped and typed K at column 0)
+	if cursorRow[0].Rune != 'K' {
+		t.Errorf("Grid[cursorY][0] should be 'K', got '%c'", cursorRow[0].Rune)
+	}
+
+	// Also verify the cursor is at the right position (should be at column 1 after typing K)
+	if v.cursorX != 1 || v.cursorY != 1 {
+		t.Errorf("Expected cursor at (1,1), got (%d,%d)", v.cursorX, v.cursorY)
+	}
+}
+
+// TestDisplayBuffer_RapidWrapWithDirtyClearing simulates rapid input where
+// Render() is called between each character, exactly like the real terminal.
+func TestDisplayBuffer_RapidWrapWithDirtyClearing(t *testing.T) {
+	v := NewVTerm(10, 5)
+	v.EnableDisplayBuffer()
+
+	// Simulate render buffer
+	buf := make([][]Cell, 5)
+	for y := range buf {
+		buf[y] = make([]Cell, 10)
+		for x := range buf[y] {
+			buf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	// Simulate the exact Render() flow from term.go
+	render := func() {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 10; x++ {
+					buf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 10; x++ {
+						buf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	render()
+
+	// Type 10 characters, rendering after each (this fills the line)
+	for _, ch := range "ABCDEFGHIJ" {
+		v.placeChar(ch)
+		render()
+	}
+
+	// Verify row 0 has the characters
+	row0 := cellsToStringTest(buf[0])
+	if row0 != "ABCDEFGHIJ" {
+		t.Errorf("After 10 chars, buf[0] = %q, expected 'ABCDEFGHIJ'", row0)
+	}
+
+	t.Logf("Before wrap: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
+
+	// Type K - this triggers wrap
+	v.placeChar('K')
+	t.Logf("After 'K': cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+	t.Logf("  Dirty before render: %v", func() map[int]bool { d, _ := v.GetDirtyLines(); return d }())
+
+	render()
+
+	// Check what's in buf[1]
+	row1 := cellsToStringTest(buf[1])
+	t.Logf("  buf[1] after render = %q", row1)
+
+	if buf[1][0].Rune != 'K' {
+		t.Errorf("After wrap, buf[1][0] = '%c', expected 'K'", buf[1][0].Rune)
+		t.Logf("Full grid:\n%s", gridToString(v.Grid()))
+		t.Logf("Full buf:")
+		for y := 0; y < 5; y++ {
+			t.Logf("  Row %d: %q", y, cellsToStringTest(buf[y]))
+		}
+	}
+
+	// Continue typing
+	for _, ch := range "LMNO" {
+		v.placeChar(ch)
+		render()
+	}
+
+	row1Final := strings.TrimRight(cellsToStringTest(buf[1]), " ")
+	if row1Final != "KLMNO" {
+		t.Errorf("Final buf[1] = %q, expected 'KLMNO'", row1Final)
+	}
+}
+
 // TestDisplayBuffer_DirtyTrackingOnWrap tests that dirty lines are marked correctly during wrap.
 func TestDisplayBuffer_DirtyTrackingOnWrap(t *testing.T) {
 	v := NewVTerm(10, 5) // 10 columns wide, 5 rows
@@ -709,4 +868,294 @@ func cellsToStringTest(cells []Cell) string {
 		}
 	}
 	return sb.String()
+}
+
+// TestDisplayBuffer_RenderFlowWithWrapAfterHistory tests the rendering flow
+// when there's already committed history lines before wrapping occurs.
+// This matches the real scenario where "input is at the bottom of the screen".
+func TestDisplayBuffer_RenderFlowWithWrapAfterHistory(t *testing.T) {
+	v := NewVTerm(10, 5) // 10 columns wide, 5 rows
+	v.EnableDisplayBuffer()
+
+	// Create a render buffer (simulating term.go's a.buf)
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 10)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	// Simulate rendering function
+	simulateRender := func() {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 10; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 10; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Write 3 committed lines first (simulating shell output)
+	for i := 1; i <= 3; i++ {
+		for _, ch := range "Line" {
+			v.placeChar(ch)
+		}
+		v.placeChar(rune('0' + i))
+		v.CarriageReturn()
+		v.LineFeed()
+		simulateRender()
+	}
+
+	t.Logf("After 3 committed lines: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+	t.Logf("Grid:\n%s", gridToString(v.Grid()))
+
+	// Now simulate user typing at the prompt on row 3
+	// Type 10 characters to fill the line
+	for i, ch := range "ABCDEFGHIJ" {
+		v.placeChar(ch)
+		simulateRender()
+		if i == 9 {
+			t.Logf("After 10 chars: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
+		}
+	}
+
+	// Verify before wrap
+	row3 := cellsToStringTest(renderBuf[3])
+	t.Logf("Row 3 before wrap: %q", row3)
+
+	// Now type 'K' to trigger wrap
+	t.Logf("Typing 'K' to trigger wrap...")
+	v.placeChar('K')
+
+	dirtyLines, allDirty := v.GetDirtyLines()
+	t.Logf("After 'K': cursorX=%d, cursorY=%d, allDirty=%v, dirtyLines=%v",
+		v.cursorX, v.cursorY, allDirty, dirtyLines)
+
+	simulateRender()
+
+	// Check the grid and render buffer
+	vtermGrid := v.Grid()
+	t.Logf("After wrap - vtermGrid:")
+	for y := 0; y < 5; y++ {
+		t.Logf("  Row %d: %q", y, cellsToStringTest(vtermGrid[y]))
+	}
+	t.Logf("After wrap - renderBuf:")
+	for y := 0; y < 5; y++ {
+		t.Logf("  Row %d: %q", y, cellsToStringTest(renderBuf[y]))
+	}
+
+	// The wrapped content should appear
+	// With 3 committed lines + 2 physical lines from currentLine = 5 lines
+	// If scrolling occurred, Line1 would scroll off
+	row4 := strings.TrimRight(cellsToStringTest(renderBuf[4]), " ")
+	if row4 != "K" {
+		t.Errorf("Row 4 should have 'K', got %q", row4)
+	}
+}
+
+// TestDisplayBuffer_RenderFlowWithWrap simulates the exact rendering flow used in term.go
+// to verify that dirty tracking correctly updates the render buffer during wrap.
+func TestDisplayBuffer_RenderFlowWithWrap(t *testing.T) {
+	v := NewVTerm(10, 5) // 10 columns wide, 5 rows
+	v.EnableDisplayBuffer()
+
+	// Create a render buffer (simulating term.go's a.buf)
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 10)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	// Simulate rendering function (like term.go's Render)
+	simulateRender := func() {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 10; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 10; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender()
+	t.Logf("Initial render - buffer is empty")
+
+	// Type first 10 characters (fill first line)
+	for i, ch := range "ABCDEFGHIJ" {
+		v.placeChar(ch)
+		simulateRender()
+		t.Logf("After char %d (%c): cursorX=%d, cursorY=%d", i+1, ch, v.cursorX, v.cursorY)
+	}
+
+	// Verify row 0 in render buffer
+	row0 := cellsToStringTest(renderBuf[0])
+	t.Logf("After 10 chars - Row 0 in renderBuf: %q", row0)
+	if row0 != "ABCDEFGHIJ" {
+		t.Errorf("Row 0: expected 'ABCDEFGHIJ', got %q", row0)
+	}
+
+	// Now type the 11th character - this should wrap
+	t.Logf("About to type 'K' (11th char, should wrap)")
+	t.Logf("  Before: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
+
+	v.placeChar('K')
+
+	t.Logf("  After: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+	dirtyLines, allDirty := v.GetDirtyLines()
+	t.Logf("  dirtyLines=%v, allDirty=%v", dirtyLines, allDirty)
+
+	// Simulate render
+	simulateRender()
+
+	// Check the grid directly
+	vtermGrid := v.Grid()
+	t.Logf("vtermGrid after wrap:")
+	t.Logf("  Row 0: %q", cellsToStringTest(vtermGrid[0]))
+	t.Logf("  Row 1: %q", cellsToStringTest(vtermGrid[1]))
+
+	// Check the render buffer
+	t.Logf("renderBuf after wrap:")
+	t.Logf("  Row 0: %q", cellsToStringTest(renderBuf[0]))
+	t.Logf("  Row 1: %q", cellsToStringTest(renderBuf[1]))
+
+	// Verify row 1 has the wrapped character
+	row1 := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+	if row1 != "K" {
+		t.Errorf("Row 1 in renderBuf: expected 'K', got %q", row1)
+	}
+
+	// Type a few more characters
+	for i, ch := range "LMNO" {
+		v.placeChar(ch)
+		simulateRender()
+		t.Logf("After char %d (%c): cursorX=%d, cursorY=%d", 12+i, ch, v.cursorX, v.cursorY)
+	}
+
+	// Verify final state
+	row0Final := cellsToStringTest(renderBuf[0])
+	row1Final := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+	t.Logf("Final state:")
+	t.Logf("  Row 0: %q", row0Final)
+	t.Logf("  Row 1: %q", row1Final)
+
+	if row0Final != "ABCDEFGHIJ" {
+		t.Errorf("Final Row 0: expected 'ABCDEFGHIJ', got %q", row0Final)
+	}
+	if row1Final != "KLMNO" {
+		t.Errorf("Final Row 1: expected 'KLMNO', got %q", row1Final)
+	}
+}
+
+// TestDisplayBuffer_WrapWithParser tests wrapping using the actual parser.
+// This simulates the exact flow used in the real terminal.
+func TestDisplayBuffer_WrapWithParser(t *testing.T) {
+	v := NewVTerm(10, 5) // 10 columns wide, 5 rows
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Create a render buffer (simulating term.go's a.buf)
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 10)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	// Simulate rendering function
+	simulateRender := func() {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 10; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 10; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender()
+
+	// Parse characters through the parser (like PTY output)
+	text := "ABCDEFGHIJKLMNO" // 15 chars - will wrap
+	for i, ch := range text {
+		p.Parse(ch)
+		simulateRender()
+
+		if i == 9 { // After J (10th char)
+			t.Logf("After char 10: cursorX=%d, cursorY=%d, wrapNext=%v",
+				v.cursorX, v.cursorY, v.wrapNext)
+		}
+		if i == 10 { // After K (11th char, first on wrapped line)
+			t.Logf("After char 11 (K, wrapped): cursorX=%d, cursorY=%d",
+				v.cursorX, v.cursorY)
+			row1 := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+			t.Logf("  renderBuf[1] = %q", row1)
+			if row1 != "K" {
+				t.Errorf("After wrapping, row 1 should have 'K', got %q", row1)
+			}
+		}
+	}
+
+	// Verify final state
+	t.Logf("Final Grid:")
+	for y := 0; y < 5; y++ {
+		t.Logf("  Row %d: %q", y, cellsToStringTest(renderBuf[y]))
+	}
+
+	row0 := cellsToStringTest(renderBuf[0])
+	row1 := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+
+	if row0 != "ABCDEFGHIJ" {
+		t.Errorf("Row 0: expected 'ABCDEFGHIJ', got %q", row0)
+	}
+	if row1 != "KLMNO" {
+		t.Errorf("Row 1: expected 'KLMNO', got %q", row1)
+	}
+
+	// Cursor should be at (5, 1)
+	if v.cursorX != 5 || v.cursorY != 1 {
+		t.Errorf("Expected cursor at (5,1), got (%d,%d)", v.cursorX, v.cursorY)
+	}
 }
