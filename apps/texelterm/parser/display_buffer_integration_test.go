@@ -1626,3 +1626,324 @@ func TestDisplayBuffer_DevshellRunnerFlowWithDisk(t *testing.T) {
 
 	t.Logf("Final state: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
 }
+
+// TestDisplayBuffer_40ColumnWrap tests wrapping on a 40-column terminal with 45 characters.
+// This replicates the exact scenario from the debug log where characters weren't appearing
+// on the wrapped line.
+func TestDisplayBuffer_40ColumnWrap(t *testing.T) {
+	v := NewVTerm(40, 5) // 40 columns wide, 5 rows - matches debug log scenario
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Simulate render buffer (like term.go's a.buf)
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 40)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	simulateRender := func(label string) {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		t.Logf("[%s] cursorX=%d, cursorY=%d, allDirty=%v, dirtyLines=%v",
+			label, v.cursorX, v.cursorY, allDirty, dirtyLines)
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 40; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 40; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender("init")
+
+	// Type exactly 45 characters: HIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmno
+	// This matches the pattern from the debug log (starts with H)
+	// 40 chars fill the first line, 5 chars wrap to second line
+	text := "HIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnop" // 45 chars
+	if len(text) != 45 {
+		t.Fatalf("Test text should be 45 chars, got %d", len(text))
+	}
+
+	for i, ch := range text {
+		// Simulate devshell pattern: draw BEFORE echo, then draw AFTER echo
+		simulateRender("before-" + string(ch))
+		p.Parse(ch)
+		simulateRender("after-" + string(ch))
+
+		// Log key moments
+		if i == 38 { // Character 39 (0-indexed), should be at column 38
+			t.Logf("After char 39 ('%c'): cursorX=%d, cursorY=%d, wrapNext=%v",
+				ch, v.cursorX, v.cursorY, v.wrapNext)
+		}
+		if i == 39 { // Character 40, fills the line, sets wrapNext
+			t.Logf("After char 40 ('%c'): cursorX=%d, cursorY=%d, wrapNext=%v",
+				ch, v.cursorX, v.cursorY, v.wrapNext)
+		}
+		if i == 40 { // Character 41, triggers wrap
+			t.Logf("After char 41 ('%c'): cursorX=%d, cursorY=%d, wrapNext=%v",
+				ch, v.cursorX, v.cursorY, v.wrapNext)
+		}
+	}
+
+	// Final state check
+	t.Logf("Final Grid:")
+	for y := 0; y < 3; y++ {
+		t.Logf("  vtermGrid[%d]: %q", y, cellsToStringTest(v.Grid()[y]))
+		t.Logf("  renderBuf[%d]: %q", y, cellsToStringTest(renderBuf[y]))
+	}
+
+	// Verify row 0 has the first 40 characters
+	row0 := cellsToStringTest(renderBuf[0])
+	expectedRow0 := text[:40] // "HIJKLMNOPQRSTUVWXYZ0123456789abcdefghijk"
+	if row0 != expectedRow0 {
+		t.Errorf("Row 0: expected %q, got %q", expectedRow0, row0)
+	}
+
+	// Verify row 1 has the remaining 5 characters
+	row1 := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+	expectedRow1 := text[40:] // "lmnop"
+	if row1 != expectedRow1 {
+		t.Errorf("Row 1: expected %q, got %q", expectedRow1, row1)
+	}
+
+	// Cursor should be at (5, 1) - after 'p' on row 1
+	if v.cursorX != 5 || v.cursorY != 1 {
+		t.Errorf("Expected cursor at (5,1), got (%d,%d)", v.cursorX, v.cursorY)
+	}
+}
+
+// TestDisplayBuffer_40ColumnWrapWithPrompt tests wrapping on a 40-column terminal
+// with a bash-like prompt that includes escape sequences.
+func TestDisplayBuffer_40ColumnWrapWithPrompt(t *testing.T) {
+	v := NewVTerm(40, 5) // 40 columns wide, 5 rows
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Simulate render buffer
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 40)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	simulateRender := func(label string) {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 40; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 40; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+
+		// Log state
+		t.Logf("[%s] cursorX=%d, cursorY=%d, allDirty=%v, dirtyLines=%v",
+			label, v.cursorX, v.cursorY, allDirty, dirtyLines)
+	}
+
+	// Initial render
+	simulateRender("init")
+
+	// Simulate a bash prompt with color escape sequences: "\e[32m$\e[0m "
+	// This is: ESC [ 3 2 m $ ESC [ 0 m SPACE
+	promptSequence := "\x1b[32m$ \x1b[0m"
+	for _, ch := range promptSequence {
+		p.Parse(ch)
+	}
+	simulateRender("after-prompt")
+
+	t.Logf("After prompt: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
+
+	// Now type enough characters to fill the line and wrap
+	// Prompt is "$ " = 2 chars, so we need 38 more to fill row 0, then more to wrap
+	text := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop" // 42 chars
+	
+	for i, ch := range text {
+		simulateRender("before-" + string(ch))
+		p.Parse(ch)
+		simulateRender("after-" + string(ch))
+
+		// Log wrap moment
+		if v.cursorY > 0 && i < len(text)-1 {
+			t.Logf("Wrap happened at char %d ('%c'): cursorX=%d, cursorY=%d",
+				i+1, ch, v.cursorX, v.cursorY)
+			break // Log just the first wrap
+		}
+	}
+
+	// Parse remaining characters
+	remaining := text[v.cursorX:]
+	for _, ch := range remaining {
+		p.Parse(ch)
+	}
+	simulateRender("final")
+
+	// Final state check
+	t.Logf("Final Grid:")
+	for y := 0; y < 3; y++ {
+		t.Logf("  vtermGrid[%d]: %q", y, cellsToStringTest(v.Grid()[y]))
+		t.Logf("  renderBuf[%d]: %q", y, cellsToStringTest(renderBuf[y]))
+	}
+
+	// Row 0 should have "$ " + 38 chars = 40 chars
+	// Row 1 should have remaining chars
+	row0 := cellsToStringTest(renderBuf[0])
+	row1 := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+
+	if !strings.HasPrefix(row0, "$ ") {
+		t.Errorf("Row 0 should start with '$ ', got %q", row0[:10])
+	}
+
+	if row1 == "" {
+		t.Errorf("Row 1 should have wrapped content, but it's empty")
+	}
+
+	t.Logf("row0 = %q", row0)
+	t.Logf("row1 = %q", row1)
+}
+
+// TestDisplayBuffer_CursorMovementOnWrappedLine tests that cursor movement
+// on a wrapped line correctly updates the logical cursor position.
+func TestDisplayBuffer_CursorMovementOnWrappedLine(t *testing.T) {
+	v := NewVTerm(10, 5) // 10 columns wide
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Simulate render buffer
+	renderBuf := make([][]Cell, 5)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, 10)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	simulateRender := func() {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < 5; y++ {
+				for x := 0; x < 10; x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < 5 {
+					for x := 0; x < 10; x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender()
+
+	// Type 15 characters to wrap to second line
+	// "ABCDEFGHIJ" on row 0, "KLMNO" on row 1
+	for _, ch := range "ABCDEFGHIJKLMNO" {
+		p.Parse(ch)
+	}
+	simulateRender()
+
+	t.Logf("After typing: cursorX=%d, cursorY=%d, logicalX=%d",
+		v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+
+	// Cursor should be at (5, 1) with logicalX=15
+	if v.cursorX != 5 || v.cursorY != 1 {
+		t.Errorf("Expected cursor at (5,1), got (%d,%d)", v.cursorX, v.cursorY)
+	}
+	if v.displayBuf.currentLogicalX != 15 {
+		t.Errorf("Expected logicalX=15, got %d", v.displayBuf.currentLogicalX)
+	}
+
+	// Now move cursor left 3 times (using escape sequence CSI 3 D)
+	// This should move from col 5 to col 2, logicalX from 15 to 12
+	for _, ch := range "\x1b[3D" {
+		p.Parse(ch)
+	}
+
+	t.Logf("After cursor left 3: cursorX=%d, cursorY=%d, logicalX=%d",
+		v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+
+	// BUG: The current implementation sets logicalX = cursorX = 2
+	// But it SHOULD be logicalX = 10 + 2 = 12 (accounting for wrapped content)
+	
+	// For now, document the current behavior
+	if v.cursorX != 2 {
+		t.Errorf("Expected cursorX=2 after move left, got %d", v.cursorX)
+	}
+
+	// Type a character - where does it appear?
+	p.Parse('X')
+	simulateRender()
+
+	t.Logf("After typing 'X': cursorX=%d, cursorY=%d, logicalX=%d",
+		v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+
+	// Check what's in the currentLine (the source of truth for display buffer)
+	currentLineContent := ""
+	for _, c := range v.displayBuf.display.CurrentLine().Cells {
+		if c.Rune != 0 {
+			currentLineContent += string(c.Rune)
+		}
+	}
+	t.Logf("CurrentLine content: %q (len=%d)", currentLineContent, len(currentLineContent))
+
+	// Check what Grid() returns
+	grid := v.Grid()
+	gridRow0 := cellsToStringTest(grid[0])
+	gridRow1 := strings.TrimRight(cellsToStringTest(grid[1]), " ")
+	t.Logf("Grid directly:")
+	t.Logf("  grid[0]: %q", gridRow0)
+	t.Logf("  grid[1]: %q", gridRow1)
+
+	row0 := cellsToStringTest(renderBuf[0])
+	row1 := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+
+	t.Logf("RenderBuf after simulateRender:")
+	t.Logf("  Row 0: %q", row0)
+	t.Logf("  Row 1: %q", row1)
+
+	// With the bug, 'X' would be placed at logical position 2 (or 3 after increment)
+	// which would corrupt row 0 instead of inserting at row 1
+	
+	// Expected correct behavior: 'X' should appear at row 1 col 2, after 'LM'
+	// So row 1 should be "KLXNO" or similar (depending on insert vs overwrite)
+	
+	// Current buggy behavior: logicalX=2, so 'X' goes at position 2 of logical line
+	// This would make row 0 = "ABXDEFGHIJ" (X overwrites C)
+}

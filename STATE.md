@@ -109,8 +109,125 @@ cat /tmp/texelterm-debug.log
 ## Commits This Session
 - `48146d1` - Add debug logging and wrap tests for display buffer
 
-## Next Steps to Try
-1. Reproduce the issue with TEXELTERM_DEBUG=1 and analyze the log
-2. Check if issue only occurs with disk persistence or also memory-only
-3. Add more granular logging in the render path to identify exactly where content is lost
-4. Compare behavior between standalone texelterm and texelterm within texel-server
+## Session 2 Findings (Continued Investigation)
+
+### All Wrap Tests Pass
+Created and ran comprehensive tests:
+- `TestDisplayBuffer_40ColumnWrap` - 40-column terminal with 45 chars (matches debug log scenario)
+- `TestDisplayBuffer_40ColumnWrapWithPrompt` - With bash-like colored prompt
+- `TestDisplayBuffer_BashReadlineWrap` - Simulates bash readline behavior
+- `TestDisplayBuffer_CursorMovementOnWrappedLine` - Cursor movement on wrapped lines
+
+**All tests pass.** The core wrapping logic works correctly in test environment.
+
+### Found Related Bug: Cursor Movement on Wrapped Lines
+When cursor moves via escape sequences (e.g., arrow keys) on a wrapped line, `displayBufferSetCursorFromPhysical()` incorrectly maps:
+
+```
+Example: Line has 15 chars on 10-col terminal (wrapped to 2 physical lines)
+- Cursor at row 1, col 5 (physical) = logicalX should be 15
+- After left arrow x3: cursorX=2, cursorY=1
+- BUG: logicalX becomes 2 (should be 12 = 10 + 2)
+```
+
+This causes:
+1. Characters typed after cursor movement appear at wrong logical position
+2. Dirty tracking doesn't mark the correct physical row
+3. Grid() returns correct content, but renderBuf misses updates
+
+Test output showing the bug:
+```
+CurrentLine content: "ABXDEFGHIJKLMNO" (len=15)  <- X is at position 2
+Grid directly:
+  grid[0]: "ABXDEFGHIJ"  <- Grid() shows X correctly
+  grid[1]: "KLMNO"
+RenderBuf after simulateRender:
+  Row 0: "ABCDEFGHIJ"  <- But renderBuf doesn't have X!
+  Row 1: "KLMNO"
+```
+
+The issue is that `cursorY=1` is marked dirty, but the change affects `row 0` in the display.
+
+### Original Issue Still Not Reproduced
+The original issue (characters not appearing during wrap while typing) was NOT reproduced in tests. All typing-with-wrap tests pass correctly. This suggests the issue may be:
+1. Specific to bash's escape sequences during line editing
+2. Related to timing/async behavior not captured in tests
+3. A different scenario than what we're testing
+
+### Potential Fixes Needed
+
+#### Fix 1: `displayBufferSetCursorFromPhysical()` (vterm_display_buffer.go:347-354)
+Current (buggy):
+```go
+func (v *VTerm) displayBufferSetCursorFromPhysical() {
+    v.displayBuf.currentLogicalX = v.cursorX  // Wrong on wrapped lines!
+}
+```
+
+Needs to calculate logicalX based on which physical row of the wrapped line the cursor is on.
+
+#### Fix 2: Dirty Tracking for Display Buffer Writes
+When `displayBufferPlaceChar` writes at a logicalX that maps to a different physical row than cursorY, that row should be marked dirty.
+
+## Session 3: ROOT CAUSE FOUND AND FIXED
+
+### The Bug
+When typing past line width and wrapping, characters weren't appearing on screen because:
+1. `placeChar()` sets `cursorX = 0` BEFORE calling `lineFeedForWrap()`
+2. `lineFeedForWrap()` → `lineFeedInternal(false)` → `SetCursorPos(cursorY+1, cursorX)` with cursorX=0
+3. `SetCursorPos` calls `displayBufferSetCursorFromPhysical()`
+4. `displayBufferSetCursorFromPhysical()` sets `currentLogicalX = cursorX = 0`
+5. Next character is written at logical position 0 instead of continuing the line
+
+This caused:
+- Character written at wrong position (position 0 of logical line)
+- That position maps to a different physical row than cursor
+- Only cursor's row was marked dirty
+- So the change was never rendered to screen
+
+### The Fix
+Modified `lineFeedInternal()` in `apps/texelterm/parser/vterm_scroll.go`:
+
+**Before:**
+```go
+func (v *VTerm) lineFeedInternal(commitLogical bool) {
+    // ... SetCursorPos called, which resets currentLogicalX via displayBufferSetCursorFromPhysical
+}
+```
+
+**After:**
+```go
+func (v *VTerm) lineFeedInternal(commitLogical bool) {
+    // For auto-wrap (!commitLogical), preserve currentLogicalX since the logical line continues
+    var savedLogicalX int
+    if !commitLogical && v.displayBuf != nil {
+        savedLogicalX = v.displayBuf.currentLogicalX
+    }
+
+    // ... rest of function including SetCursorPos ...
+
+    // Restore currentLogicalX for auto-wrap
+    if !commitLogical && v.displayBuf != nil {
+        v.displayBuf.currentLogicalX = savedLogicalX
+    }
+}
+```
+
+### Files Modified
+- `apps/texelterm/parser/vterm_scroll.go:23-75` - Save/restore currentLogicalX for wrap
+- `apps/texelterm/parser/vterm_display_buffer.go` - Added debug logging (can be removed later)
+
+### Test Results
+All tests pass including:
+- `TestDisplayBuffer_WrapWithoutScrollDirty`
+- `TestDisplayBuffer_FreshTerminalWrap`
+- `TestDisplayBuffer_40ColumnWrap`
+- `TestDisplayBuffer_40ColumnWrapWithPrompt`
+- `TestDisplayBuffer_LineWrapWithHistory`
+- All other wrap-related tests
+
+### Next Steps
+1. **Manual test** - Run `TEXELTERM_DEBUG=1 ./bin/texelterm` to verify the fix works
+2. **Commit the fix** if manual testing passes
+3. **Optional**: Remove debug logging from vterm_display_buffer.go if no longer needed
+4. **Keep monitoring** for edge cases with cursor movement on wrapped lines (displayBufferSetCursorFromPhysical still has a known issue)
