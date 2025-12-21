@@ -1947,3 +1947,224 @@ func TestDisplayBuffer_CursorMovementOnWrappedLine(t *testing.T) {
 	// Current buggy behavior: logicalX=2, so 'X' goes at position 2 of logical line
 	// This would make row 0 = "ABXDEFGHIJ" (X overwrites C)
 }
+
+// TestDisplayBuffer_BashReadlineWrapWithCR tests the exact scenario that was causing
+// the visual glitch: when bash sends CR after a line wrap during readline editing.
+//
+// This test simulates the actual render flow with dirty line tracking, which is
+// critical for catching visual glitches that Grid() alone wouldn't reveal.
+//
+// The bug was:
+// 1. Type past line width -> wrap occurs, cursor moves to new row
+// 2. Bash sends CR for cursor positioning
+// 3. Old bug: CR reset logicalX to 0 instead of start of current physical row
+// 4. Next character written at position 0, corrupting the wrong row
+// 5. Only cursor's row marked dirty, so corruption not rendered -> visual glitch
+func TestDisplayBuffer_BashReadlineWrapWithCR(t *testing.T) {
+	width := 35
+	height := 5
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+
+	// Create render buffer to simulate actual terminal rendering
+	renderBuf := make([][]Cell, height)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, width)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' '}
+		}
+	}
+
+	// Simulate render: only update dirty rows (this is how the real terminal works)
+	simulateRender := func() {
+		dirtyLines, allDirty := v.GetDirtyLines()
+		vtermGrid := v.Grid()
+		if allDirty {
+			for y := 0; y < height; y++ {
+				if y < len(vtermGrid) {
+					copy(renderBuf[y], vtermGrid[y])
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < height && y < len(vtermGrid) {
+					copy(renderBuf[y], vtermGrid[y])
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender()
+
+	// Type exactly 35 characters to fill first row and trigger wrap on next char
+	// This matches the debug log scenario: "❯ 1234567890abcdefghijklmnopqrstABC"
+	inputLine := "12345678901234567890abcdefghijklmno" // 35 chars
+	for _, ch := range inputLine {
+		v.placeChar(ch)
+	}
+	simulateRender()
+
+	// Verify we're at the end of line, wrapNext should be true
+	if !v.wrapNext {
+		t.Errorf("After 35 chars, wrapNext should be true, got false")
+	}
+	if v.cursorX != width-1 {
+		t.Errorf("Expected cursorX=%d, got %d", width-1, v.cursorX)
+	}
+	if v.cursorY != 0 {
+		t.Errorf("Expected cursorY=0, got %d", v.cursorY)
+	}
+
+	// Type one more character to trigger wrap
+	v.placeChar('p')
+	simulateRender()
+
+	// Now cursor should be on row 1
+	if v.cursorY != 1 {
+		t.Errorf("After wrap, expected cursorY=1, got %d", v.cursorY)
+	}
+	logicalXAfterWrap := v.displayBuf.currentLogicalX
+
+	t.Logf("After wrap: cursorX=%d, cursorY=%d, logicalX=%d", v.cursorX, v.cursorY, logicalXAfterWrap)
+
+	// Simulate bash sending CR for cursor positioning (this is what readline does)
+	v.CarriageReturn()
+
+	logicalXAfterCR := v.displayBuf.currentLogicalX
+	t.Logf("After CR: cursorX=%d, cursorY=%d, logicalX=%d", v.cursorX, v.cursorY, logicalXAfterCR)
+
+	// KEY ASSERTION: After CR on the second physical row of a wrapped line,
+	// logicalX should be 35 (start of second physical row), NOT 0
+	expectedLogicalX := width // 35 = start of second physical row
+	if logicalXAfterCR != expectedLogicalX {
+		t.Errorf("After CR on wrapped line, logicalX should be %d (start of physical row), got %d",
+			expectedLogicalX, logicalXAfterCR)
+	}
+
+	// Now type more characters - they should appear on row 1, not row 0
+	v.placeChar('q')
+	v.placeChar('r')
+	v.placeChar('s')
+	simulateRender()
+
+	// Check the render buffer - this is what the user actually sees
+	row0 := cellsToStringTest(renderBuf[0])
+	row1 := strings.TrimRight(cellsToStringTest(renderBuf[1]), " ")
+
+	t.Logf("Render buffer (what user sees):")
+	t.Logf("  Row 0: %q", row0)
+	t.Logf("  Row 1: %q", row1)
+
+	// Row 0 should be the original 35 characters, unchanged
+	expectedRow0 := inputLine
+	if row0 != expectedRow0 {
+		t.Errorf("Row 0 corrupted! Expected %q, got %q", expectedRow0, row0)
+	}
+
+	// Row 1 should have the wrapped characters
+	// After wrap: 'p' at position 0, then CR moves to start, then 'q', 'r', 's'
+	// So row 1 should be "qrs" (q,r,s overwrote p and continued)
+	expectedRow1 := "qrs"
+	if row1 != expectedRow1 {
+		t.Errorf("Row 1 wrong! Expected %q, got %q", expectedRow1, row1)
+	}
+
+	// Also verify Grid() matches renderBuf (they should be in sync after proper dirty tracking)
+	grid := v.Grid()
+	gridRow0 := cellsToStringTest(grid[0])
+	gridRow1 := strings.TrimRight(cellsToStringTest(grid[1]), " ")
+
+	if gridRow0 != row0 || gridRow1 != row1 {
+		t.Errorf("Grid and renderBuf mismatch!\n  Grid:      [%q, %q]\n  RenderBuf: [%q, %q]",
+			gridRow0, gridRow1, row0, row1)
+	}
+}
+
+// TestDisplayBuffer_WrapDirtyTrackingRegression is a regression test that verifies
+// the render buffer matches Grid() after wrap operations. This catches bugs where
+// dirty line tracking fails to mark the correct rows.
+func TestDisplayBuffer_WrapDirtyTrackingRegression(t *testing.T) {
+	width := 10
+	height := 5
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+
+	// Create render buffer
+	renderBuf := make([][]Cell, height)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, width)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' '}
+		}
+	}
+
+	simulateRender := func() {
+		dirtyLines, allDirty := v.GetDirtyLines()
+		vtermGrid := v.Grid()
+		if allDirty {
+			for y := 0; y < height && y < len(vtermGrid); y++ {
+				copy(renderBuf[y], vtermGrid[y])
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < height && y < len(vtermGrid) {
+					copy(renderBuf[y], vtermGrid[y])
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Test sequence: type, wrap, CR, type more
+	// Each step should have renderBuf == Grid()
+	testCases := []struct {
+		action string
+		fn     func()
+	}{
+		{"initial render", func() {}},
+		{"type A-J (10 chars)", func() {
+			for _, ch := range "ABCDEFGHIJ" {
+				v.placeChar(ch)
+			}
+		}},
+		{"type K (triggers wrap)", func() { v.placeChar('K') }},
+		{"type L", func() { v.placeChar('L') }},
+		{"carriage return", func() { v.CarriageReturn() }},
+		{"type M (after CR on wrapped line)", func() { v.placeChar('M') }},
+		{"type N", func() { v.placeChar('N') }},
+	}
+
+	for _, tc := range testCases {
+		tc.fn()
+		simulateRender()
+
+		grid := v.Grid()
+		for y := 0; y < height && y < len(grid); y++ {
+			gridRow := cellsToStringTest(grid[y])
+			bufRow := cellsToStringTest(renderBuf[y])
+			if gridRow != bufRow {
+				t.Errorf("After %q: Row %d mismatch!\n  Grid:      %q\n  RenderBuf: %q",
+					tc.action, y, gridRow, bufRow)
+			}
+		}
+	}
+
+	// Final state verification
+	grid := v.Grid()
+	row0 := cellsToStringTest(grid[0])
+	row1 := strings.TrimRight(cellsToStringTest(grid[1]), " ")
+
+	t.Logf("Final state: row0=%q, row1=%q", row0, row1)
+
+	// After: ABCDEFGHIJ, then K, L, CR (to col 0 of row 1), M, N
+	// Row 0: ABCDEFGHIJ (unchanged)
+	// Row 1: MN (M,N overwrote K,L after CR moved to start of physical row 1)
+	if row0 != "ABCDEFGHIJ" {
+		t.Errorf("Row 0: expected 'ABCDEFGHIJ', got %q", row0)
+	}
+	if row1 != "MN" {
+		t.Errorf("Row 1: expected 'MN', got %q", row1)
+	}
+}
