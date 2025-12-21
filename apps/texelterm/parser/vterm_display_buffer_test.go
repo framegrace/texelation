@@ -1606,3 +1606,188 @@ func TestVTerm_DisplayBufferLoadsFromHistoryManager(t *testing.T) {
 		t.Errorf("expected 'Hello', got '%s'", cellsToString(dbLine0.Cells))
 	}
 }
+
+// TestVTerm_DisplayBufferInsertMode tests that insert mode (IRM) works correctly
+// with the display buffer - when insert mode is enabled, new characters should
+// shift existing content right rather than overwriting.
+func TestVTerm_DisplayBufferInsertMode(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	getGridLine := func() string {
+		grid := v.Grid()
+		if len(grid) == 0 || len(grid[0]) == 0 {
+			return ""
+		}
+		result := ""
+		for x := 0; x < min(10, len(grid[0])); x++ {
+			c := grid[0][x]
+			if c.Rune == 0 || c.Rune == ' ' {
+				result += "_"
+			} else {
+				result += string(c.Rune)
+			}
+		}
+		return result
+	}
+
+	// Type "ABC"
+	for _, r := range "ABC" {
+		p.Parse(r)
+	}
+
+	gridLine := getGridLine()
+	t.Logf("After 'ABC': %s (cursor at %d)", gridLine, v.GetCursorX())
+	if gridLine != "ABC_______" {
+		t.Errorf("expected 'ABC_______', got '%s'", gridLine)
+	}
+
+	// Move cursor back to position 1 (between A and B)
+	p.Parse('\x1b') // ESC
+	p.Parse('[')
+	p.Parse('2')
+	p.Parse('D') // CUB 2 (cursor back 2)
+
+	if v.GetCursorX() != 1 {
+		t.Errorf("expected cursor at 1, got %d", v.GetCursorX())
+	}
+
+	// Enable insert mode (CSI 4 h)
+	p.Parse('\x1b')
+	p.Parse('[')
+	p.Parse('4')
+	p.Parse('h')
+
+	// Verify insert mode is enabled
+	if !v.insertMode {
+		t.Fatal("insert mode should be enabled")
+	}
+
+	// Type "XY" in insert mode - should shift BC right, resulting in "AXYBC"
+	for _, r := range "XY" {
+		p.Parse(r)
+	}
+
+	gridLine = getGridLine()
+	t.Logf("After 'XY' in insert mode: %s (cursor at %d)", gridLine, v.GetCursorX())
+	if gridLine != "AXYBC_____" {
+		t.Errorf("expected 'AXYBC_____', got '%s'", gridLine)
+	}
+
+	// Disable insert mode (CSI 4 l)
+	p.Parse('\x1b')
+	p.Parse('[')
+	p.Parse('4')
+	p.Parse('l')
+
+	// Verify insert mode is disabled
+	if v.insertMode {
+		t.Fatal("insert mode should be disabled")
+	}
+
+	// Type "Z" in replace mode - should overwrite at current position
+	p.Parse('Z')
+
+	gridLine = getGridLine()
+	t.Logf("After 'Z' in replace mode: %s (cursor at %d)", gridLine, v.GetCursorX())
+	if gridLine != "AXYZC_____" {
+		t.Errorf("expected 'AXYZC_____', got '%s'", gridLine)
+	}
+}
+
+// TestVTerm_DisplayBufferInsertModeAtEndOfLine tests insert mode when cursor
+// is at the end of existing content - should effectively be like append.
+func TestVTerm_DisplayBufferInsertModeAtEndOfLine(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	getGridLine := func() string {
+		grid := v.Grid()
+		if len(grid) == 0 || len(grid[0]) == 0 {
+			return ""
+		}
+		result := ""
+		for x := 0; x < min(10, len(grid[0])); x++ {
+			c := grid[0][x]
+			if c.Rune == 0 || c.Rune == ' ' {
+				result += "_"
+			} else {
+				result += string(c.Rune)
+			}
+		}
+		return result
+	}
+
+	// Type "ABC"
+	for _, r := range "ABC" {
+		p.Parse(r)
+	}
+
+	// Enable insert mode
+	p.Parse('\x1b')
+	p.Parse('[')
+	p.Parse('4')
+	p.Parse('h')
+
+	// Type "DEF" at the end - should append
+	for _, r := range "DEF" {
+		p.Parse(r)
+	}
+
+	gridLine := getGridLine()
+	t.Logf("After 'DEF' at end in insert mode: %s", gridLine)
+	if gridLine != "ABCDEF____" {
+		t.Errorf("expected 'ABCDEF____', got '%s'", gridLine)
+	}
+}
+
+// TestVTerm_DisplayBufferInsertModeMatchesHistoryBuffer tests that the display
+// buffer and history buffer stay in sync when using insert mode.
+func TestVTerm_DisplayBufferInsertModeMatchesHistoryBuffer(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Type "ABC"
+	for _, r := range "ABC" {
+		p.Parse(r)
+	}
+
+	// Move cursor back to position 1
+	p.Parse('\x1b')
+	p.Parse('[')
+	p.Parse('2')
+	p.Parse('D')
+
+	// Enable insert mode
+	p.Parse('\x1b')
+	p.Parse('[')
+	p.Parse('4')
+	p.Parse('h')
+
+	// Type "XY"
+	for _, r := range "XY" {
+		p.Parse(r)
+	}
+
+	// Get content from display buffer
+	dbLine := v.displayBufferGetCurrentLine()
+	dbContent := cellsToString(dbLine.Cells)
+
+	// Get content from history buffer
+	histLine := v.getHistoryLine(0)
+	histContent := cellsToString(histLine)
+
+	t.Logf("Display buffer: %q", dbContent)
+	t.Logf("History buffer: %q", histContent)
+
+	if dbContent != histContent {
+		t.Errorf("display buffer (%q) doesn't match history buffer (%q)", dbContent, histContent)
+	}
+
+	if dbContent != "AXYBC" {
+		t.Errorf("expected 'AXYBC', got %q", dbContent)
+	}
+}

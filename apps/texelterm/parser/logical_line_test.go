@@ -208,6 +208,68 @@ func TestLogicalLine_TrimTrailingSpaces(t *testing.T) {
 	}
 }
 
+func TestLogicalLine_InsertCell(t *testing.T) {
+	// Test inserting into existing line
+	line := NewLogicalLineFromCells(makeCells("ABC"))
+
+	line.InsertCell(1, Cell{Rune: 'X', FG: DefaultFG, BG: DefaultBG})
+
+	if line.Len() != 4 {
+		t.Errorf("expected length 4 after insert, got %d", line.Len())
+	}
+	if cellsToString(line.Cells) != "AXBC" {
+		t.Errorf("expected 'AXBC', got '%s'", cellsToString(line.Cells))
+	}
+}
+
+func TestLogicalLine_InsertCell_AtStart(t *testing.T) {
+	line := NewLogicalLineFromCells(makeCells("ABC"))
+
+	line.InsertCell(0, Cell{Rune: 'X', FG: DefaultFG, BG: DefaultBG})
+
+	if cellsToString(line.Cells) != "XABC" {
+		t.Errorf("expected 'XABC', got '%s'", cellsToString(line.Cells))
+	}
+}
+
+func TestLogicalLine_InsertCell_AtEnd(t *testing.T) {
+	line := NewLogicalLineFromCells(makeCells("ABC"))
+
+	line.InsertCell(3, Cell{Rune: 'X', FG: DefaultFG, BG: DefaultBG})
+
+	if cellsToString(line.Cells) != "ABCX" {
+		t.Errorf("expected 'ABCX', got '%s'", cellsToString(line.Cells))
+	}
+}
+
+func TestLogicalLine_InsertCell_BeyondLength(t *testing.T) {
+	line := NewLogicalLineFromCells(makeCells("AB"))
+
+	// Insert at position 5 - should extend line with spaces up to position 5, then place X
+	line.InsertCell(5, Cell{Rune: 'X', FG: DefaultFG, BG: DefaultBG})
+
+	if line.Len() != 6 { // AB + 3 spaces + X
+		t.Errorf("expected length 6, got %d", line.Len())
+	}
+	// After insert at position 5, content should be "AB" + 3 spaces + "X"
+	expected := "AB   X"
+	if cellsToString(line.Cells) != expected {
+		t.Errorf("expected %q, got %q", expected, cellsToString(line.Cells))
+	}
+}
+
+func TestLogicalLine_InsertCell_MultipleInserts(t *testing.T) {
+	// Simulate insert mode: typing "XY" at position 1 in "ABC"
+	line := NewLogicalLineFromCells(makeCells("ABC"))
+
+	line.InsertCell(1, Cell{Rune: 'X', FG: DefaultFG, BG: DefaultBG})
+	line.InsertCell(2, Cell{Rune: 'Y', FG: DefaultFG, BG: DefaultBG})
+
+	if cellsToString(line.Cells) != "AXYBC" {
+		t.Errorf("expected 'AXYBC', got '%s'", cellsToString(line.Cells))
+	}
+}
+
 // Helper to create cells from a string
 func makeCells(s string) []Cell {
 	cells := make([]Cell, len(s))

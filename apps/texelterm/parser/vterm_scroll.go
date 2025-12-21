@@ -24,6 +24,13 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 	v.wrapNext = false // Clear wrapNext flag when moving to new line
 	v.MarkDirty(v.cursorY)
 
+	// For auto-wrap (!commitLogical), preserve currentLogicalX since the logical line continues
+	// SetCursorPos will call displayBufferSetCursorFromPhysical which would wrongly reset it
+	var savedLogicalX int
+	if !commitLogical && v.displayBuf != nil {
+		savedLogicalX = v.displayBuf.currentLogicalX
+	}
+
 	// Check if cursor is outside left/right margins - if so, don't scroll
 	outsideMargins := v.leftRightMarginMode && (v.cursorX < v.marginLeft || v.cursorX > v.marginRight)
 
@@ -59,6 +66,11 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 			v.viewOffset = 0 // Jump to the bottom
 			v.MarkAllDirty()
 		}
+	}
+
+	// Restore currentLogicalX for auto-wrap - the logical line continues on the new physical line
+	if !commitLogical && v.displayBuf != nil {
+		v.displayBuf.currentLogicalX = savedLogicalX
 	}
 }
 

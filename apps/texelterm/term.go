@@ -76,6 +76,9 @@ type TexelTerm struct {
 	closeCh         chan struct{}
 	closeOnce       sync.Once     // Protects closeCh from being closed twice
 	restartCh       chan struct{} // Signal to restart shell after confirmation
+
+	// Debug logging
+	renderDebugLog func(format string, args ...interface{})
 }
 
 var _ texel.CloseRequester = (*TexelTerm)(nil)
@@ -307,6 +310,24 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 	// Only show cursor if it's visible AND we're at the live edge (not scrolled into history)
 	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.GetDirtyLines()
+
+	// Debug: Log render state when TEXELTERM_DEBUG is set
+	if a.renderDebugLog != nil {
+		a.renderDebugLog("Render: cursorX=%d, cursorY=%d, allDirty=%v, dirtyLines=%v",
+			cursorX, cursorY, allDirty, dirtyLines)
+		// Log content of first 3 rows from vtermGrid
+		for y := 0; y < 3 && y < rows; y++ {
+			var content string
+			for x := 0; x < cols && x < 40; x++ {
+				r := vtermGrid[y][x].Rune
+				if r == 0 {
+					r = ' '
+				}
+				content += string(r)
+			}
+			a.renderDebugLog("  vtermGrid[%d]: %q", y, content)
+		}
+	}
 
 	renderLine := func(y int) {
 		for x := 0; x < cols; x++ {
@@ -1400,11 +1421,20 @@ func (a *TexelTerm) runShell() error {
 				a.vterm.EnableDisplayBuffer()
 				log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID)")
 			}
+			// Note: cursor position is automatically synced in EnableDisplayBuffer/EnableDisplayBufferWithDisk
 
-			// Position cursor at bottom if we loaded history
-			totalLines := a.vterm.DisplayBufferGetHistory().TotalLen()
-			if totalLines > int64(rows) {
-				a.vterm.SetCursorPos(rows-1, 0)
+			// Enable debug logging if TEXELTERM_DEBUG env var is set
+			if os.Getenv("TEXELTERM_DEBUG") != "" {
+				debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+				if err == nil {
+					log.Printf("[DEBUG] Writing display buffer debug to /tmp/texelterm-debug.log")
+					a.vterm.SetDisplayBufferDebugLog(func(format string, args ...interface{}) {
+						fmt.Fprintf(debugFile, "[DB] "+format+"\n", args...)
+					})
+					a.renderDebugLog = func(format string, args ...interface{}) {
+						fmt.Fprintf(debugFile, "[RENDER] "+format+"\n", args...)
+					}
+				}
 			}
 		} else if hm != nil && hm.Length() > rows {
 			// Position cursor at bottom if we loaded history (legacy path)
