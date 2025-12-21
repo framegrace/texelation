@@ -47,6 +47,27 @@ func (l *LogicalLine) Append(cell Cell) {
 	l.Cells = append(l.Cells, cell)
 }
 
+// InsertCell inserts a cell at the given position, shifting existing cells right.
+// Used for insert mode (IRM). Extends the line if needed.
+func (l *LogicalLine) InsertCell(x int, cell Cell) {
+	// If inserting at or beyond the end, just extend to that position
+	if x >= len(l.Cells) {
+		// Extend with spaces if needed
+		for len(l.Cells) < x {
+			l.Cells = append(l.Cells, Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG})
+		}
+		// Append the new cell at the end
+		l.Cells = append(l.Cells, cell)
+		return
+	}
+	// Make room for new cell
+	l.Cells = append(l.Cells, Cell{})
+	// Shift cells right
+	copy(l.Cells[x+1:], l.Cells[x:])
+	// Place the new cell
+	l.Cells[x] = cell
+}
+
 // Truncate removes all cells from position x onwards.
 // Used for operations like "erase to end of line" on the current logical line.
 func (l *LogicalLine) Truncate(x int) {

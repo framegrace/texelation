@@ -63,6 +63,9 @@ type DisplayBuffer struct {
 
 	// currentLinePhysical is the wrapped version of currentLine at current width.
 	currentLinePhysical []PhysicalLine
+
+	// debugLog is an optional logging function for debugging.
+	debugLog func(format string, args ...interface{})
 }
 
 // DisplayBufferConfig holds configuration for creating a DisplayBuffer.
@@ -109,6 +112,11 @@ func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *D
 	}
 
 	return db
+}
+
+// SetDebugLog sets an optional debug logging function.
+func (db *DisplayBuffer) SetDebugLog(fn func(format string, args ...interface{})) {
+	db.debugLog = fn
 }
 
 // loadInitialHistory loads the bottom portion of history into lines.
@@ -376,6 +384,21 @@ func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
 	viewport := db.GetViewport()
 	result := make([][]Cell, db.height)
 
+	// Debug: log when we have wrapped content on a fresh terminal
+	if db.debugLog != nil && len(db.lines) == 0 && len(db.currentLinePhysical) > 1 {
+		db.debugLog("GetViewportAsCells: currentLinePhysical has %d wrapped lines, viewportTop=%d, height=%d",
+			len(db.currentLinePhysical), db.viewportTop, db.height)
+		for i, pl := range db.currentLinePhysical {
+			var content string
+			for _, c := range pl.Cells {
+				if c.Rune != 0 {
+					content += string(c.Rune)
+				}
+			}
+			db.debugLog("  physical[%d]: %q", i, content)
+		}
+	}
+
 	for y, line := range viewport {
 		row := make([]Cell, db.width)
 		// Fill with spaces
@@ -422,8 +445,11 @@ func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
 
 	if db.atLiveEdge {
 		// At live edge - keep content at bottom of viewport
-		// viewportTop = totalLines - newHeight (can be negative if content < height)
+		// viewportTop = totalLines - newHeight (clamped to 0 if content < height)
 		db.viewportTop = totalLines - newHeight
+		if db.viewportTop < 0 {
+			db.viewportTop = 0
+		}
 
 		// If we grew and need more lines from history, load them
 		if newHeight > oldHeight && db.viewportTop < db.marginAbove {
@@ -434,6 +460,9 @@ func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
 			// Recalculate after loading
 			totalLines = db.contentLineCount()
 			db.viewportTop = totalLines - newHeight
+			if db.viewportTop < 0 {
+				db.viewportTop = 0
+			}
 		}
 	} else {
 		// Not at live edge - keep the same content at the top of viewport
@@ -569,6 +598,24 @@ func (db *DisplayBuffer) SetCell(logicalX int, cell Cell) {
 	db.currentLine.SetCell(logicalX, cell)
 	db.rebuildCurrentLinePhysical()
 
+	// Debug: log when a character would be on a wrapped line
+	if logicalX >= db.width && db.debugLog != nil {
+		db.debugLog("SetCell: logicalX=%d (>= width=%d), char='%c', currentLinePhysical=%d lines, atLiveEdge=%v, viewportTop=%d",
+			logicalX, db.width, cell.Rune, len(db.currentLinePhysical), db.atLiveEdge, db.viewportTop)
+	}
+
+	// Update the visible line in the buffer if at live edge
+	if db.atLiveEdge {
+		db.scrollToLiveEdge()
+	}
+}
+
+// InsertCell inserts a cell in the current line at the given logical X position,
+// shifting existing cells right. Used for insert mode (IRM).
+func (db *DisplayBuffer) InsertCell(logicalX int, cell Cell) {
+	db.currentLine.InsertCell(logicalX, cell)
+	db.rebuildCurrentLinePhysical()
+
 	// Update the visible line in the buffer if at live edge
 	if db.atLiveEdge {
 		db.scrollToLiveEdge()
@@ -594,4 +641,37 @@ func (db *DisplayBuffer) CanScrollUp() bool {
 // CanScrollDown returns true if there's content below the viewport to scroll to.
 func (db *DisplayBuffer) CanScrollDown() bool {
 	return !db.atLiveEdge
+}
+
+// LiveEdgeRow returns the viewport row where new content will appear.
+// This is where the cursor should be positioned when at the live edge.
+func (db *DisplayBuffer) LiveEdgeRow() int {
+	// The current line appears after all committed lines
+	committedLines := len(db.lines)
+
+	// When content doesn't fill the screen, viewportTop is 0 or negative (clamped to 0).
+	// In this case, the current line appears at row = committedLines.
+	// When content exceeds the screen, viewportTop > 0 and current line is at the bottom.
+
+	// Calculate where current line appears in the viewport
+	// viewportTop is the offset into allLines (lines + currentLinePhysical)
+	// If viewportTop < 0, it's been clamped to 0, but content starts at row 0
+	effectiveViewportTop := db.viewportTop
+	if effectiveViewportTop < 0 {
+		effectiveViewportTop = 0
+	}
+
+	// Current line is at index committedLines in allLines
+	// Its viewport row = committedLines - effectiveViewportTop
+	row := committedLines - effectiveViewportTop
+
+	// Clamp to valid viewport range
+	if row < 0 {
+		row = 0
+	}
+	if row >= db.height {
+		row = db.height - 1
+	}
+
+	return row
 }

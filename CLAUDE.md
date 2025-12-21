@@ -125,6 +125,70 @@ Effect implementations register themselves at import time via `effects.Register(
 - Always pass regression tests before confirming changes
 - Commit after every successful change to enable quick rollback
 
+## Testing Visual Bugs in Texelterm
+
+Visual glitches in texelterm often pass unit tests because `Grid()` returns correct data, but the actual rendered output is wrong due to dirty line tracking issues.
+
+### The Problem
+The terminal only re-renders rows marked as "dirty". If a bug causes:
+1. Content written to the wrong logical position
+2. Which maps to a different physical row than the cursor
+3. Only the cursor's row gets marked dirty
+4. The affected row never gets re-rendered → **visual glitch**
+
+### Solution: Simulate the Render Flow
+Tests must simulate the actual render path with dirty tracking:
+
+```go
+// Create render buffer (what user sees)
+renderBuf := make([][]Cell, height)
+for y := range renderBuf {
+    renderBuf[y] = make([]Cell, width)
+}
+
+// Simulate render: ONLY update dirty rows
+simulateRender := func() {
+    dirtyLines, allDirty := v.GetDirtyLines()
+    vtermGrid := v.Grid()
+    if allDirty {
+        for y := 0; y < height && y < len(vtermGrid); y++ {
+            copy(renderBuf[y], vtermGrid[y])
+        }
+    } else {
+        for y := range dirtyLines {
+            if y >= 0 && y < height && y < len(vtermGrid) {
+                copy(renderBuf[y], vtermGrid[y])
+            }
+        }
+    }
+    v.ClearDirty()
+}
+
+// After each action, verify renderBuf matches Grid()
+simulateRender()
+grid := v.Grid()
+for y := 0; y < height; y++ {
+    if cellsToString(renderBuf[y]) != cellsToString(grid[y]) {
+        t.Errorf("Row %d: renderBuf != Grid (visual glitch!)", y)
+    }
+}
+```
+
+### Manual Debug Testing
+When tests pass but visual bugs persist:
+```bash
+rm -f /tmp/texelterm-debug.log
+TEXELTERM_DEBUG=1 ./bin/texelterm 2>/dev/null
+# Reproduce the issue, then check:
+cat /tmp/texelterm-debug.log | grep -E "(RENDER|LOGICALX)"
+```
+
+### Reference Tests
+See `apps/texelterm/parser/display_buffer_integration_test.go`:
+- `TestDisplayBuffer_BashReadlineWrapWithCR` - Wrap + CR behavior
+- `TestDisplayBuffer_WrapDirtyTrackingRegression` - Step-by-step dirty tracking verification
+- `TestDisplayBuffer_RenderFlowWithWrap` - Basic render flow simulation
+
 ## Git Workflow Rules
 
 - **NEVER commit directly to main** - Always create a feature branch first

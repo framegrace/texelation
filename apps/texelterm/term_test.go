@@ -113,3 +113,53 @@ func rowToString(row []texel.Cell) string {
 	return strings.TrimRight(b.String(), " ")
 }
 
+// TestTexelTermLineWrapOutput tests that long lines wrap correctly.
+func TestTexelTermLineWrapOutput(t *testing.T) {
+	// Output 20 characters on a 10-column wide terminal
+	// Should wrap to 2 lines: "ABCDEFGHIJ" "KLMNOPQRST"
+	// (reduced to 20 chars so we don't have a third line that conflicts with confirmation dialog)
+	script := writeScript(t, "#!/bin/sh\nprintf 'ABCDEFGHIJKLMNOPQRST'\n")
+
+	app := texelterm.New("texelterm", script)
+	app.Resize(10, 10) // 10 columns wide
+	app.SetRefreshNotifier(make(chan bool, 4))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Run()
+	}()
+
+	// Wait for the output to be processed (shorter wait since script is simple)
+	time.Sleep(200 * time.Millisecond)
+
+	// Check buffer BEFORE the confirmation dialog appears
+	buffer := app.Render()
+	if len(buffer) < 2 {
+		t.Fatalf("expected at least 2 rows in buffer, got %d", len(buffer))
+	}
+
+	t.Logf("Buffer contents:")
+	for i := 0; i < 5 && i < len(buffer); i++ {
+		t.Logf("  Row %d: %q", i, rowToString(buffer[i]))
+	}
+
+	// Verify wrapping - the first two rows should have the wrapped content
+	row0 := rowToString(buffer[0])
+	row1 := rowToString(buffer[1])
+
+	if row0 != "ABCDEFGHIJ" {
+		t.Errorf("Row 0: expected 'ABCDEFGHIJ', got %q", row0)
+	}
+	if row1 != "KLMNOPQRST" {
+		t.Errorf("Row 1: expected 'KLMNOPQRST', got %q", row1)
+	}
+
+	app.Stop()
+
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("texelterm did not exit after stop")
+	}
+}
+

@@ -116,6 +116,9 @@ func (v *VTerm) EnableDisplayBuffer() {
 	if v.historyManager != nil && v.historyManager.Length() > 0 {
 		v.loadHistoryManagerIntoDisplayBuffer()
 	}
+
+	// Sync cursor position with display buffer's live edge
+	v.syncCursorWithDisplayBuffer()
 }
 
 // EnableDisplayBufferWithDisk enables the display buffer with disk-backed persistence.
@@ -129,7 +132,27 @@ func (v *VTerm) EnableDisplayBufferWithDisk(diskPath string, opts DisplayBufferO
 	opts.DiskPath = diskPath
 	v.initDisplayBufferWithOptions(opts)
 	v.displayBuf.enabled = true
+
+	// Sync cursor position with display buffer's live edge
+	v.syncCursorWithDisplayBuffer()
+
 	return nil
+}
+
+// syncCursorWithDisplayBuffer positions the cursor to match where new content
+// will appear in the display buffer. Called after loading history.
+func (v *VTerm) syncCursorWithDisplayBuffer() {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+
+	// Get the row where new content will appear
+	liveEdgeRow := v.displayBuf.display.LiveEdgeRow()
+
+	// Position cursor at the live edge
+	v.cursorY = liveEdgeRow
+	v.cursorX = 0
+	v.displayBuf.currentLogicalX = 0
 }
 
 // CloseDisplayBuffer closes the display buffer and its disk backing (if any).
@@ -189,6 +212,37 @@ func (v *VTerm) IsDisplayBufferEnabled() bool {
 	return v.displayBuf != nil && v.displayBuf.enabled
 }
 
+// SetDisplayBufferDebugLog sets a debug logging function on the display buffer.
+func (v *VTerm) SetDisplayBufferDebugLog(fn func(format string, args ...interface{})) {
+	if v.displayBuf != nil && v.displayBuf.display != nil {
+		v.displayBuf.display.SetDebugLog(fn)
+	}
+}
+
+// debugLogCurrentLogicalX logs changes to currentLogicalX for debugging wrap issues.
+func (v *VTerm) debugLogCurrentLogicalX(context string, r rune, oldValue int) {
+	if os.Getenv("TEXELTERM_DEBUG") == "" {
+		return
+	}
+	debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer debugFile.Close()
+
+	newValue := 0
+	if v.displayBuf != nil {
+		newValue = v.displayBuf.currentLogicalX
+	}
+
+	var runeStr string
+	if r != 0 {
+		runeStr = fmt.Sprintf(" rune='%c'", r)
+	}
+	fmt.Fprintf(debugFile, "[LOGICALX] %s:%s oldLogicalX=%d newLogicalX=%d cursorX=%d cursorY=%d\n",
+		context, runeStr, oldValue, newValue, v.cursorX, v.cursorY)
+}
+
 // displayBufferGrid returns the viewport using the display buffer system.
 func (v *VTerm) displayBufferGrid() [][]Cell {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
@@ -199,6 +253,7 @@ func (v *VTerm) displayBufferGrid() [][]Cell {
 
 // displayBufferPlaceChar writes a character using the display buffer system.
 // This performs a dual-write: to the current logical line AND the display buffer.
+// Respects insert mode (IRM) - in insert mode, shifts existing content right.
 func (v *VTerm) displayBufferPlaceChar(r rune) {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return
@@ -207,11 +262,20 @@ func (v *VTerm) displayBufferPlaceChar(r rune) {
 	db := v.displayBuf.display
 	cell := Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
 
+	oldLogicalX := v.displayBuf.currentLogicalX
+	v.debugLogCurrentLogicalX("displayBufferPlaceChar BEFORE", r, oldLogicalX)
+
 	// Write to logical line at currentLogicalX
-	db.SetCell(v.displayBuf.currentLogicalX, cell)
+	// In insert mode, shift existing content right
+	if v.insertMode {
+		db.InsertCell(v.displayBuf.currentLogicalX, cell)
+	} else {
+		db.SetCell(v.displayBuf.currentLogicalX, cell)
+	}
 
 	// Advance logical position
 	v.displayBuf.currentLogicalX++
+	v.debugLogCurrentLogicalX("displayBufferPlaceChar AFTER", r, v.displayBuf.currentLogicalX)
 }
 
 // displayBufferLineFeed commits the current line and starts a new one.
@@ -220,19 +284,36 @@ func (v *VTerm) displayBufferLineFeed() {
 		return
 	}
 
+	oldLogicalX := v.displayBuf.currentLogicalX
+	v.debugLogCurrentLogicalX("displayBufferLineFeed BEFORE", 0, oldLogicalX)
+
 	// Commit current logical line to history
 	v.displayBuf.display.CommitCurrentLine()
 
 	// Reset logical X position for new line
 	v.displayBuf.currentLogicalX = 0
+	v.debugLogCurrentLogicalX("displayBufferLineFeed AFTER (reset to 0)", 0, 0)
 }
 
-// displayBufferCarriageReturn handles CR - resets logical X without committing.
+// displayBufferCarriageReturn handles CR - moves logical X to start of current physical row.
+// For wrapped lines, this is NOT always 0. CR moves to the start of the current
+// physical row within the logical line, which is (logicalX / width) * width.
 func (v *VTerm) displayBufferCarriageReturn() {
 	if v.displayBuf == nil {
 		return
 	}
-	v.displayBuf.currentLogicalX = 0
+	oldLogicalX := v.displayBuf.currentLogicalX
+
+	// Calculate which physical row of the logical line we're on
+	// and set logicalX to the start of that physical row
+	if v.width > 0 {
+		physicalRowWithinLine := v.displayBuf.currentLogicalX / v.width
+		v.displayBuf.currentLogicalX = physicalRowWithinLine * v.width
+	} else {
+		v.displayBuf.currentLogicalX = 0
+	}
+
+	v.debugLogCurrentLogicalX("displayBufferCarriageReturn", 0, oldLogicalX)
 }
 
 // displayBufferScroll handles viewport scrolling.
@@ -262,9 +343,11 @@ func (v *VTerm) displayBufferResize(width, height int) {
 
 	v.displayBuf.display.Resize(width, height)
 
-	// When at live edge, cursor should be at the bottom of the viewport
+	// When at live edge, sync cursor with the actual live edge position
+	// This handles both cases: content fills screen (cursor at bottom) and
+	// content doesn't fill screen (cursor at the row after content)
 	if wasAtLiveEdge && v.displayBuf.display.AtLiveEdge() {
-		v.cursorY = height - 1
+		v.cursorY = v.displayBuf.display.LiveEdgeRow()
 	}
 }
 
@@ -310,9 +393,11 @@ func (v *VTerm) displayBufferSetCursorFromPhysical() {
 	if v.displayBuf == nil {
 		return
 	}
+	oldLogicalX := v.displayBuf.currentLogicalX
 	// For now, assume physical X maps directly to logical X
 	// This works for simple cases; cursor movement within wrapped lines is more complex
 	v.displayBuf.currentLogicalX = v.cursorX
+	v.debugLogCurrentLogicalX(fmt.Sprintf("displayBufferSetCursorFromPhysical (cursorX=%d, cursorY=%d)", v.cursorX, v.cursorY), 0, oldLogicalX)
 }
 
 // displayBufferClear clears the display buffer and history.
