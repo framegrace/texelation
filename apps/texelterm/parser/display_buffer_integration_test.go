@@ -799,7 +799,7 @@ func TestDisplayBuffer_LineWrap(t *testing.T) {
 	t.Logf("  cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
 	t.Logf("  currentLogicalX=%d", v.displayBuf.display.GetCursorOffset())
 	t.Logf("  currentLine.Len()=%d", v.displayBuf.display.CurrentLine().Len())
-	t.Logf("  currentLinePhysical count=%d", len(v.displayBuf.display.currentLinePhysical))
+	t.Logf("  currentLinePhysical count=%d", len(v.displayBuf.display.currentLinePhysical()))
 
 	grid := v.Grid()
 	t.Logf("Grid:\n%s", gridToString(grid))

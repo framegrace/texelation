@@ -211,8 +211,8 @@ func TestVTerm_DisplayBufferCarriageReturn(t *testing.T) {
 		v.placeChar(r)
 	}
 
-	// Carriage return
-	v.displayBufferCarriageReturn()
+	// Carriage return - use the VTerm method which updates cursorX and syncs display buffer
+	v.CarriageReturn()
 
 	// Write "XX" - should overwrite
 	for _, r := range "XX" {
@@ -755,10 +755,11 @@ func TestVTerm_DisplayBufferEraseToEndOfLine(t *testing.T) {
 		v.placeChar(r)
 	}
 
-	        // Move cursor back to position 5 (after "Hello")
-	        v.SetCursorPos(v.cursorY, 5)
-	
-	        // Erase from cursor to end (EL 0)	v.ClearLine(0)
+	// Move cursor back to position 5 (after "Hello")
+	v.SetCursorPos(v.cursorY, 5)
+
+	// Erase from cursor to end (EL 0)
+	v.ClearLine(0)
 
 	line := v.displayBufferGetCurrentLine()
 	got := cellsToString(line.Cells)
@@ -794,10 +795,11 @@ func TestVTerm_DisplayBufferEraseCharacters(t *testing.T) {
 		v.placeChar(r)
 	}
 
-	        // Move cursor to position 0
-	        v.SetCursorPos(v.cursorY, 0)
-	
-	        // Erase 5 characters (ECH 5)	v.EraseCharacters(5)
+	// Move cursor to position 0
+	v.SetCursorPos(v.cursorY, 0)
+
+	// Erase 5 characters (ECH 5)
+	v.EraseCharacters(5)
 
 	line := v.displayBufferGetCurrentLine()
 	got := cellsToString(line.Cells)
@@ -1096,17 +1098,21 @@ func TestVTerm_DisplayBufferEmptyLines(t *testing.T) {
 	v.EnableDisplayBuffer()
 
 	// Write a line, then empty line, then another line
+	// Use CR+LF to properly start at column 0 on each new line
 	for _, r := range "First" {
 		v.placeChar(r)
 	}
+	v.CarriageReturn()
 	v.LineFeed()
 
-	// Empty line (just LF)
+	// Empty line (just CR+LF)
+	v.CarriageReturn()
 	v.LineFeed()
 
 	for _, r := range "Third" {
 		v.placeChar(r)
 	}
+	v.CarriageReturn()
 	v.LineFeed()
 
 	// Should have 3 committed lines (including empty one)

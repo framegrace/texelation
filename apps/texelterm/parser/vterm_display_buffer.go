@@ -295,7 +295,7 @@ func (v *VTerm) displayBufferResize(width, height int) {
         if physX, physY, found := v.displayBuf.display.GetPhysicalCursorPos(); found {
                 v.cursorX = physX
                 v.cursorY = physY
-                v.logDebug("displayBufferResize FOUND logical cursor at %d,%d -> set physical to %d,%d", v.displayBuf.display.cursorLogicalIdx, v.displayBuf.display.cursorOffset, physX, physY)
+                v.logDebug("displayBufferResize FOUND cursor offset=%d -> set physical to %d,%d", v.displayBuf.display.GetCursorOffset(), physX, physY)
         } else if v.displayBuf.display.AtLiveEdge() {
                 // Fallback: if at live edge but cursor not found (e.g. validly scrolled off?), 
                 // snap to live edge row.
