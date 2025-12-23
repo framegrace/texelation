@@ -365,7 +365,7 @@ func TestVTerm_DisplayBufferBackspaceXSync(t *testing.T) {
 		if v.displayBuf == nil {
 			return -1
 		}
-		return v.displayBuf.currentLogicalX
+		return v.displayBuf.display.GetCursorOffset()
 	}
 
 	// Write "Hello"
@@ -755,12 +755,10 @@ func TestVTerm_DisplayBufferEraseToEndOfLine(t *testing.T) {
 		v.placeChar(r)
 	}
 
-	// Move cursor back to position 5 (after "Hello")
-	v.displayBuf.currentLogicalX = 5
-	v.cursorX = 5
-
-	// Erase from cursor to end (EL 0)
-	v.ClearLine(0)
+	        // Move cursor back to position 5 (after "Hello")
+	        v.SetCursorPos(v.cursorY, 5)
+	
+	        // Erase from cursor to end (EL 0)	v.ClearLine(0)
 
 	line := v.displayBufferGetCurrentLine()
 	got := cellsToString(line.Cells)
@@ -796,12 +794,10 @@ func TestVTerm_DisplayBufferEraseCharacters(t *testing.T) {
 		v.placeChar(r)
 	}
 
-	// Move cursor to position 0
-	v.displayBuf.currentLogicalX = 0
-	v.cursorX = 0
-
-	// Erase 5 characters (ECH 5)
-	v.EraseCharacters(5)
+	        // Move cursor to position 0
+	        v.SetCursorPos(v.cursorY, 0)
+	
+	        // Erase 5 characters (ECH 5)	v.EraseCharacters(5)
 
 	line := v.displayBufferGetCurrentLine()
 	got := cellsToString(line.Cells)
@@ -961,16 +957,16 @@ func TestVTerm_DisplayBufferCursorAfterResize(t *testing.T) {
 	}
 
 	// Cursor should be at position 11
-	if v.displayBuf.currentLogicalX != 11 {
-		t.Errorf("expected logicalX 11, got %d", v.displayBuf.currentLogicalX)
+	if v.displayBuf.display.GetCursorOffset() != 11 {
+		t.Errorf("expected logicalX 11, got %d", v.displayBuf.display.GetCursorOffset())
 	}
 
 	// Resize narrower
 	v.Resize(10, 5)
 
 	// Logical X should be unchanged (still position 11 in logical line)
-	if v.displayBuf.currentLogicalX != 11 {
-		t.Errorf("expected logicalX 11 after resize, got %d", v.displayBuf.currentLogicalX)
+	if v.displayBuf.display.GetCursorOffset() != 11 {
+		t.Errorf("expected logicalX 11 after resize, got %d", v.displayBuf.display.GetCursorOffset())
 	}
 }
 

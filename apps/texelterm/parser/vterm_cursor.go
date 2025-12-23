@@ -28,14 +28,18 @@ func (v *VTerm) SetCursorPos(y, x int) {
 		v.wrapNext = false
 	}
 
-	v.prevCursorY = v.cursorY
-	v.cursorX = x
-	v.cursorY = y
-
-	v.MarkDirty(v.prevCursorY)
-	v.MarkDirty(v.cursorY)
-}
-
+	        v.prevCursorY = v.cursorY
+	        v.cursorX = x
+	        v.cursorY = y
+	
+	        // Sync display buffer logical cursor if enabled
+	        if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+	                v.displayBufferSetCursorFromPhysical()
+	        }
+	
+	        v.MarkDirty(v.prevCursorY)
+	        v.MarkDirty(v.cursorY)
+	}
 // GetCursorX returns the current cursor X position
 func (v *VTerm) GetCursorX() int {
 	return v.cursorX
