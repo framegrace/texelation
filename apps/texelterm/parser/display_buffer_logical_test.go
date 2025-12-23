@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -224,4 +225,155 @@ func TestDisplayBuffer_LogicalErase(t *testing.T) {
 	if db.currentLine.Len() != 0 {
 		t.Errorf("After EL 2, len=%d, want 0", db.currentLine.Len())
 	}
+}
+
+// TestDisplayBuffer_ResizeCursorAdjustment verifies cursor X/Y update on resize.
+func TestDisplayBuffer_ResizeCursorAdjustment(t *testing.T) {
+	// Setup: Width 20.
+	db := NewDisplayBuffer(nil, DisplayBufferConfig{Width: 20, Height: 5})
+	
+	// Current Line: 25 chars.
+	// "0123456789012345678901234"
+	// Width 20: 
+	// Row 0: "01234567890123456789" (20 chars)
+	// Row 1: "01234" (5 chars)
+	
+	for i := 0; i < 25; i++ {
+		db.Write(rune('0'+(i%10)), DefaultFG, DefaultBG, 0, false)
+	}
+	// Cursor is at Offset 25 (after last char).
+	// Physical: Row 1, Col 5.
+	
+	// db.SetCursor is NOT called by Resize. vterm calls Resize, then updates cursor.
+	// We need a way to ask DB "Where is the cursor physically now?"
+	
+	// Resize to Width 10.
+	// "0123456789" (Row 0)
+	// "0123456789" (Row 1)
+	// "01234"      (Row 2)
+	// Cursor at Offset 25 -> Row 2, Col 5.
+	
+	db.Resize(10, 5)
+	
+	// We expect a method GetPhysicalCursorPos() to return 5, 2 (relative to viewport top? or relative to current line start?)
+	// It should return viewport coordinates (x, y).
+	
+	// Since we haven't implemented it yet, this test will fail to compile if we try to call it.
+	// I'll comment out the assertion for now or assume the method exists.
+	// Let's assume: x, y, ok := db.GetPhysicalCursorPos()
+	
+	x, y, ok := db.GetPhysicalCursorPos()
+	if !ok {
+		t.Fatalf("GetPhysicalCursorPos returned not found")
+	}
+	// Expected: Offset 25. Width 10.
+	// 0..9 (Row 0)
+	// 10..19 (Row 1)
+	// 20..24 (Row 2)
+	// Offset 25 is start of virtual Row 2? 
+	// No, 20..24 is 5 chars. 20,21,22,23,24.
+	// Offset 25 is after '4'.
+	// So Row 2, Col 5.
+	// Total rows: 3. ViewportTop: 0 (3<5).
+	// So Y=2.
+	
+	if x != 5 || y != 2 {
+		t.Errorf("Want 5,2. Got %d,%d", x, y)
+	}
+}
+
+// TestDisplayBuffer_ResizeReflow_RoundTrip verifies cursor position stability after shrink and expand.
+func TestDisplayBuffer_ResizeReflow_RoundTrip(t *testing.T) {
+	// Setup: Width 20, Height 5.
+	// History: 4 lines (full screen with prompt).
+	// Prompt: "Prompt> " (8 chars).
+	history := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 100})
+	db := NewDisplayBuffer(history, DisplayBufferConfig{Width: 20, Height: 5})
+	
+	// Add 4 lines of history
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 10; j++ { db.Write(rune('0'+i), DefaultFG, DefaultBG, 0, false) }
+		db.CommitCurrentLine()
+	}
+	
+	// Write Prompt
+	for _, r := range "Prompt> " {
+		db.Write(r, DefaultFG, DefaultBG, 0, false)
+	}
+	
+	db.scrollToLiveEdge()
+	
+	// Initial State:
+	// Committed: 4 lines.
+	// Current: 1 line.
+	// Total: 5 lines.
+	// Height: 5.
+	// ViewportTop: 5 - 5 = 0.
+	// Cursor (Offset 8) -> Row 4, Col 8.
+	
+	x, y, found := db.GetPhysicalCursorPos()
+	if !found || x != 8 || y != 4 {
+		t.Fatalf("Initial: Want 8,4. Got %d,%d", x, y)
+	}
+	
+	// Shrink to 10.
+	// History lines (10 chars): wrap to 1 line (exact fit).
+	// Wait, if exact fit (10 chars, width 10), it takes 1 physical line.
+	// Let's make them longer to force wrap.
+	// Actually 10 chars at width 10 fits in 1 line.
+	// Let's assume prompt "Prompt> " (8 chars) wraps? No.
+	
+	// Let's use history lines of 15 chars.
+	// Reset and redo setup for clarity.
+	db = NewDisplayBuffer(history, DisplayBufferConfig{Width: 20, Height: 5})
+	history.Clear()
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 15; j++ { db.Write(rune('0'+i), DefaultFG, DefaultBG, 0, false) }
+		db.CommitCurrentLine()
+	}
+	for _, r := range "Prompt> " { db.Write(r, DefaultFG, DefaultBG, 0, false) }
+	db.scrollToLiveEdge()
+	
+	// Resize to 10.
+	// History (15 chars) -> 2 lines each.
+	// 4 history lines -> 8 physical lines.
+	// Current (8 chars) -> 1 physical line.
+	// Total: 9 lines.
+	// ViewportTop: 9 - 5 = 4.
+	// Rows visible: 4, 5, 6, 7, 8.
+	// Row 8 is Current Line.
+	// Cursor should be at Row 4 (relative to viewport) -> y=4.
+	
+	db.Resize(10, 5)
+	
+	x, y, found = db.GetPhysicalCursorPos()
+	if !found || y != 4 {
+		t.Fatalf("Shrink: Want y=4. Got %d,%d", x, y)
+	}
+	
+	// Expand back to 20.
+	// History -> 1 line each.
+	// Total: 5 lines.
+	// ViewportTop: 0.
+	// Cursor should be at Row 4.
+	
+	db.Resize(20, 5)
+	
+	x, y, found = db.GetPhysicalCursorPos()
+	if !found || y != 4 {
+		t.Errorf("Expand: Want y=4. Got %d,%d. ViewportTop=%d", x, y, db.viewportTop)
+	}
+}
+
+// Helper to stringify cells for testing
+func cellsToStringLogicalTest(cells []Cell) string {
+	var sb strings.Builder
+	for _, c := range cells {
+		if c.Rune == 0 {
+			sb.WriteRune(' ')
+		} else {
+			sb.WriteRune(c.Rune)
+		}
+	}
+	return sb.String()
 }

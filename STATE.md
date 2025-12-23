@@ -14,35 +14,36 @@ We made `DisplayBuffer` the single source of truth for the current line's state.
 
 1.  **Logical Cursor Mapping (`GetLogicalPos`)**:
     - Maps any physical viewport coordinate `(x, y)` to a precise `(LogicalLineIndex, Offset)`.
-    - Handles wrapped lines correctly (e.g., Row 2 Col 0 maps to Offset 80 of the same logical line).
+    - Handles wrapped lines correctly.
 
 2.  **Logical Editor API**:
     - `DisplayBuffer.SetCursor(physX, physY)`: Updates internal logical cursor state.
     - `DisplayBuffer.Write(rune)`: Inserts/overwrites at the logical cursor position.
     - `DisplayBuffer.Erase(mode)`: Handles EL 0/1/2 on the logical line.
-    - `DisplayBuffer.DeleteCharacters(n)` / `EraseCharacters(n)`: Handles DCH/ECH.
 
 3.  **Robust Dirty Tracking**:
-    - Any change to the logical line triggers `RebuildCurrentLine`.
-    - Since re-wrapping can shift content vertically (changing height), we currently use `MarkAllDirty` to ensure correctness. This guarantees the visual state always matches the internal data.
+    - Any change to the logical line triggers `RebuildCurrentLine` and `MarkAllDirty` to ensure correct rendering of wrapped lines.
 
-4.  **Simplified VTerm Integration**:
-    - `vterm_display_buffer.go` now delegates all edits to the Logical Editor.
-    - Removed manual `currentLogicalX` tracking and synchronization logic.
-    - `SetCursorPos` automatically syncs the logical cursor.
+4.  **Cursor Synchronization on Resize**:
+    - Implemented `GetPhysicalCursorPos` to map the logical cursor back to a physical coordinate.
+    - `displayBufferResize` now updates `v.cursorX/Y` to match the logical cursor's new position after reflow.
+    - This fixes the "cursor one line off" and "overwrite" issues during resize.
+
+5.  **Viewport Logic Fix**:
+    - Updated `contentLineCount` to always include the current line (even if empty), ensuring the viewport scrolls correctly to show the prompt.
 
 ### Test Results
 All tests pass, including:
-- New logical mapping tests (`TestDisplayBuffer_GetLogicalPos`, `TestDisplayBuffer_LogicalEditor`)
-- Regression tests for wrapping (`TestDisplayBuffer_WrapDirtyTrackingRegression`)
+- `TestDisplayBuffer_ResizeReflow_RoundTrip`: Verifies cursor consistency after shrink/expand.
+- `TestDisplayBuffer_ResizeCursorAdjustment`: Verifies logical-to-physical mapping.
 - All existing integration tests.
 
 ### Files Modified
-- `apps/texelterm/parser/display_buffer.go`: Added Logical Editor logic.
-- `apps/texelterm/parser/vterm_display_buffer.go`: Simplified to use Logical Editor.
-- `apps/texelterm/parser/vterm_cursor.go`: Added sync call in `SetCursorPos`.
-- `apps/texelterm/parser/vterm_scroll.go`: Removed obsolete sync logic.
-- `apps/texelterm/parser/display_buffer_integration_test.go`: Updated to use new API.
-- `apps/texelterm/parser/vterm_display_buffer_test.go`: Updated to use `SetCursorPos`.
+- `apps/texelterm/parser/display_buffer.go`
+- `apps/texelterm/parser/vterm_display_buffer.go`
+- `apps/texelterm/parser/vterm_cursor.go`
+- `apps/texelterm/parser/vterm_scroll.go`
+- `apps/texelterm/parser/display_buffer_logical_test.go`
+- `apps/texelterm/term.go` (Added logging)
 
-The system is now robust against wrapping edge cases and shell history navigation rewrites.
+The system is now robust against wrapping edge cases, shell history navigation rewrites, and resize operations.

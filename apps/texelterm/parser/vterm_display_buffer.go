@@ -267,24 +267,45 @@ func (v *VTerm) displayBufferScroll(delta int) {
 	}
 }
 
-// displayBufferResize handles terminal resize with proper reflow.
-func (v *VTerm) displayBufferResize(width, height int) {
-	if v.displayBuf == nil || v.displayBuf.display == nil {
-		return
-	}
-
-	wasAtLiveEdge := v.displayBuf.display.AtLiveEdge()
-
-	v.displayBuf.display.Resize(width, height)
-
-	// When at live edge, sync cursor with the actual live edge position
-	// This handles both cases: content fills screen (cursor at bottom) and
-	// content doesn't fill screen (cursor at the row after content)
-	if wasAtLiveEdge && v.displayBuf.display.AtLiveEdge() {
-		v.cursorY = v.displayBuf.display.LiveEdgeRow()
-	}
+// logDebug writes to the debug log if enabled
+func (v *VTerm) logDebug(format string, args ...interface{}) {
+        if os.Getenv("TEXELTERM_DEBUG") == "" {
+                return
+        }
+        debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+        if err != nil {
+                return
+        }
+        defer debugFile.Close()
+        fmt.Fprintf(debugFile, "[VTERM] "+format+"\n", args...)
 }
 
+// displayBufferResize handles terminal resize with proper reflow.
+func (v *VTerm) displayBufferResize(width, height int) {
+        if v.displayBuf == nil || v.displayBuf.display == nil {
+                return
+        }
+
+        oldX, oldY := v.cursorX, v.cursorY
+        v.logDebug("displayBufferResize START width=%d height=%d cursor=%d,%d", width, height, oldX, oldY)
+
+        v.displayBuf.display.Resize(width, height)
+
+        // Update physical cursor to match logical cursor position in the new layout
+        if physX, physY, found := v.displayBuf.display.GetPhysicalCursorPos(); found {
+                v.cursorX = physX
+                v.cursorY = physY
+                v.logDebug("displayBufferResize FOUND logical cursor at %d,%d -> set physical to %d,%d", v.displayBuf.display.cursorLogicalIdx, v.displayBuf.display.cursorOffset, physX, physY)
+        } else if v.displayBuf.display.AtLiveEdge() {
+                // Fallback: if at live edge but cursor not found (e.g. validly scrolled off?), 
+                // snap to live edge row.
+                v.cursorY = v.displayBuf.display.LiveEdgeRow()
+                v.logDebug("displayBufferResize NOT FOUND, snapping to LiveEdgeRow %d", v.cursorY)
+                // Keep cursorX clamped later by SetCursorPos
+        } else {
+                v.logDebug("displayBufferResize NOT FOUND and NOT at live edge")
+        }
+}
 // displayBufferScrollToBottom scrolls to live edge.
 func (v *VTerm) displayBufferScrollToBottom() {
 	if v.displayBuf == nil || v.displayBuf.display == nil {

@@ -1665,12 +1665,14 @@ func clampInt(v, min, max int) int {
 }
 
 func (a *TexelTerm) Resize(cols, rows int) {
-	if cols <= 0 || rows <= 0 {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
+        if cols <= 0 || rows <= 0 {
+                return
+        }
+        if a.renderDebugLog != nil {
+                a.renderDebugLog("App Resize request: %dx%d", cols, rows)
+        }
+        a.mu.Lock()
+        defer a.mu.Unlock()
 	a.width = cols
 	a.height = rows
 
