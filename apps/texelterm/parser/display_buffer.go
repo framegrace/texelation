@@ -61,60 +61,245 @@ type DisplayBuffer struct {
 	// This is always conceptually at the bottom of the display.
 	currentLine *LogicalLine
 
-	// currentLinePhysical is the wrapped version of currentLine at current width.
-	currentLinePhysical []PhysicalLine
-
-	// debugLog is an optional logging function for debugging.
-	debugLog func(format string, args ...interface{})
-}
-
-// DisplayBufferConfig holds configuration for creating a DisplayBuffer.
-type DisplayBufferConfig struct {
-	Width       int
-	Height      int
-	MarginAbove int // Defaults to 200
-	MarginBelow int // Defaults to 50
-}
-
-// NewDisplayBuffer creates a new display buffer attached to the given history.
-func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *DisplayBuffer {
-	if config.MarginAbove <= 0 {
-		config.MarginAbove = 200
+		// currentLinePhysical is the wrapped version of currentLine at current width.
+	        currentLinePhysical []PhysicalLine
+	
+	        // cursorLogicalIdx tracks which logical line the cursor is on.
+	        // -1 means currentLine (uncommitted), >=0 means history index.
+	        cursorLogicalIdx int
+	
+	        // cursorOffset tracks the cursor's character offset within the logical line.
+	        cursorOffset int
+	
+	        // debugLog is an optional logging function for debugging.
+	        debugLog func(format string, args ...interface{})
 	}
-	if config.MarginBelow <= 0 {
-		config.MarginBelow = 50
+	
+	// DisplayBufferConfig holds configuration for creating a DisplayBuffer.
+	type DisplayBufferConfig struct {
+	        Width       int
+	        Height      int
+	        MarginAbove int // Defaults to 200
+	        MarginBelow int // Defaults to 50
 	}
-	if config.Width <= 0 {
-		config.Width = 80
+	
+	// NewDisplayBuffer creates a new display buffer attached to the given history.
+	func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *DisplayBuffer {
+	        if config.MarginAbove <= 0 {
+	                config.MarginAbove = 200
+	        }
+	        if config.MarginBelow <= 0 {
+	                config.MarginBelow = 50
+	        }
+	        if config.Width <= 0 {
+	                config.Width = 80
+	        }
+	        if config.Height <= 0 {
+	                config.Height = 24
+	        }
+	
+	        db := &DisplayBuffer{
+	                lines:            make([]PhysicalLine, 0),
+	                width:            config.Width,
+	                height:           config.Height,
+	                viewportTop:      0,
+	                marginAbove:      config.MarginAbove,
+	                marginBelow:      config.MarginBelow,
+	                atLiveEdge:       true,
+	                history:          history,
+	                globalTopIndex:   0,
+	                currentLine:      NewLogicalLine(),
+	                cursorLogicalIdx: -1, // Start at current line
+	                cursorOffset:     0,
+	        }
+	
+	        db.rebuildCurrentLinePhysical()
+	
+	        // If history has content, load the bottom portion into lines
+	        if history != nil && history.TotalLen() > 0 {
+	                db.loadInitialHistory()
+	        }
+	
+	        return db
 	}
-	if config.Height <= 0 {
-		config.Height = 24
+	
+	        // SetCursor updates the logical cursor position based on physical coordinates.
+	        // This should be called whenever the physical cursor moves.
+	        func (db *DisplayBuffer) SetCursor(physX, physY int) {
+	                lineIdx, offset, found := db.GetLogicalPos(physX, physY)
+	                if found {
+	                        db.cursorLogicalIdx = lineIdx
+	                        db.cursorOffset = offset
+	                } else {
+	                        // Fallback: If out of bounds, assume current line at computed offset?
+	                        // Or just clamp? For now, let's keep previous state or reset to valid if critical.
+	                        // But specifically for "EraseToEnd" etc, we might need a valid pos.
+	                        // If the user resizes, vterm will call SetCursor.
+	                        // If we can't map it, it might be off-screen void.
+	                        // Let's rely on valid calls from vterm.
+	                }
+	        }	// Write writes a rune at the current logical cursor position.
+	// Advances the cursor offset.
+	// If insertMode is true, inserts; otherwise overwrites.
+	func (db *DisplayBuffer) Write(r rune, fg, bg Color, attr Attribute, insertMode bool) {
+	        // We only allow editing the current line (uncommitted)
+	        if db.cursorLogicalIdx != -1 {
+	                // Editing history? For now, ignore or create a split?
+	                // Standard terminal: You can't edit history.
+	                // But you CAN erase it (clear screen).
+	                // "Write" implies typing. If cursor is in history, typing usually
+	                // snaps to bottom OR overwrites history (rare).
+	                // Let's assume we only edit current line for now.
+	                return
+	        }
+	
+	        cell := Cell{Rune: r, FG: fg, BG: bg, Attr: attr}
+	
+	        if insertMode {
+	                db.InsertCell(db.cursorOffset, cell)
+	        } else {
+	                db.SetCell(db.cursorOffset, cell)
+	        }
+	        
+	        db.cursorOffset++
 	}
+	
+	// Erase performs erase operations on the current logical line.
+	// mode 0: Erase from cursor to end (EL 0)
+	// mode 1: Erase from start to cursor (EL 1)
+	// mode 2: Erase entire line (EL 2)
+	func (db *DisplayBuffer) Erase(mode int) {
+	        // Only valid for current line
+	        if db.cursorLogicalIdx != -1 {
+	            return
+	        }
+	
+	        switch mode {
+	        case 0: // Erase to End
+	                db.currentLine.Truncate(db.cursorOffset)
+	                db.RebuildCurrentLine()
+	        case 1: // Erase Start to Cursor
+	                // Replace 0..cursorOffset with spaces
+	                for i := 0; i <= db.cursorOffset && i < db.currentLine.Len(); i++ {
+	                        db.currentLine.Cells[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+	                }
+	                db.RebuildCurrentLine()
+	                        case 2: // Erase All
+	                                db.currentLine.Clear()
+	                                db.cursorOffset = 0
+	                                db.RebuildCurrentLine()
+	                        }
+	                }
+	        
+	                // EraseCharacters replaces n characters at current position with spaces.
+	                func (db *DisplayBuffer) EraseCharacters(n int) {
+	                        if db.cursorLogicalIdx != -1 { return }
+	                        
+	                        for i := 0; i < n; i++ {
+	                                pos := db.cursorOffset + i
+	                                if pos < db.currentLine.Len() {
+	                                        db.currentLine.Cells[pos] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+	                                }
+	                        }
+	                        db.RebuildCurrentLine()
+	                }
+	        
+	                // DeleteCharacters deletes n characters at current position.
+	                func (db *DisplayBuffer) DeleteCharacters(n int) {
+	                        if db.cursorLogicalIdx != -1 { return }
+	                        
+	                        pos := db.cursorOffset
+	                        lineLen := db.currentLine.Len()
+	                        
+	                        if pos >= lineLen { return }
+	                        
+	                        deleteCount := n
+	                        if pos+deleteCount > lineLen {
+	                                deleteCount = lineLen - pos
+	                        }
+	                        
+	                        if pos+deleteCount < lineLen {
+	                                copy(db.currentLine.Cells[pos:], db.currentLine.Cells[pos+deleteCount:])
+	                        }
+	                        
+	                        db.currentLine.Cells = db.currentLine.Cells[:lineLen-deleteCount]
+	                        db.RebuildCurrentLine()
+	                }
+	        
+	                // GetCursorOffset returns the current logical cursor offset.
+        func (db *DisplayBuffer) GetCursorOffset() int {
+                return db.cursorOffset
+        }
 
-	db := &DisplayBuffer{
-		lines:          make([]PhysicalLine, 0),
-		width:          config.Width,
-		height:         config.Height,
-		viewportTop:    0,
-		marginAbove:    config.MarginAbove,
-		marginBelow:    config.MarginBelow,
-		atLiveEdge:     true,
-		history:        history,
-		globalTopIndex: 0,
-		currentLine:    NewLogicalLine(),
-	}
+        // GetPhysicalCursorPos returns the viewport coordinates (x, y) of the logical cursor.
+        // Returns found=false if the cursor is currently scrolled out of view.
+        func (db *DisplayBuffer) GetPhysicalCursorPos() (x, y int, found bool) {
+                // Determine which buffer to search
+                var searchLines []PhysicalLine
+                var searchStartIdx int
+                
+                if db.cursorLogicalIdx == -1 {
+                        searchLines = db.currentLinePhysical
+                        searchStartIdx = len(db.lines)
+                } else {
+                        searchLines = db.lines
+                        searchStartIdx = 0
+                }
+                
+                for i, pl := range searchLines {
+                        // Check if this physical line belongs to the logical line we want
+                        // (For currentLinePhysical, they all do. For lines, check LogicalIndex)
+                        if db.cursorLogicalIdx != -1 && pl.LogicalIndex != db.cursorLogicalIdx {
+                                continue
+                        }
+                        
+                        // Check if cursorOffset falls within this physical line
+                        // Offset is inclusive start.
+                        // We need to know where this line ends.
+                        // If it's a wrapped line, it holds 'width' chars.
+                        // Cursor is on this line if pl.Offset <= cursorOffset.
+                        // AND cursorOffset < pl.Offset + len(Cells) ... unless it's the last line?
+                        // Actually, purely strictly:
+                        // physX = cursorOffset - pl.Offset.
+                        // If physX < 0, we haven't reached it yet (impossible if we iterate in order and logic is correct).
+                        // If physX < len(pl.Cells), it's definitely here.
+                        // If physX == len(pl.Cells):
+                        //    If this is the LAST physical line of the logical line, then cursor is at end (append position).
+                        //    If this is NOT the last physical line (Wrapped=true), then cursor is on start of NEXT line.
+                        
+                        physX := db.cursorOffset - pl.Offset
+                        if physX < 0 { continue }
+                        
+                        isLastPhysical := true
+                        // Check if next physical line belongs to same logical line
+                        if i+1 < len(searchLines) {
+                                nextPl := searchLines[i+1]
+                                if db.cursorLogicalIdx == -1 || nextPl.LogicalIndex == db.cursorLogicalIdx {
+                                        isLastPhysical = false
+                                }
+                        }
+                        
+                        if physX < len(pl.Cells) {
+                                // Found it inside the line
+                                bufferIdx := searchStartIdx + i
+                                viewportY := bufferIdx - db.viewportTop
+                                return physX, viewportY, true
+                        }
+                        
+                        if physX == len(pl.Cells) && isLastPhysical {
+                                // Found it at the end of the line (append position)
+                                bufferIdx := searchStartIdx + i
+                                viewportY := bufferIdx - db.viewportTop
+                                return physX, viewportY, true
+                        }
+                        
+                        // Otherwise, it belongs to the next physical line
+                }
+                
+                return 0, 0, false
+        }
 
-	db.rebuildCurrentLinePhysical()
-
-	// If history has content, load the bottom portion into lines
-	if history != nil && history.TotalLen() > 0 {
-		db.loadInitialHistory()
-	}
-
-	return db
-}
-
-// SetDebugLog sets an optional debug logging function.
+        // SetDebugLog sets an optional debug logging function.
 func (db *DisplayBuffer) SetDebugLog(fn func(format string, args ...interface{})) {
 	db.debugLog = fn
 }
@@ -206,14 +391,19 @@ func (db *DisplayBuffer) CommitCurrentLine() {
 	}
 	db.lines = append(db.lines, committed...)
 
-	// Start fresh current line
-	db.currentLine = NewLogicalLine()
-	db.rebuildCurrentLinePhysical()
-
-	// If at live edge, scroll to keep viewport at bottom
-	if db.atLiveEdge {
-		db.scrollToLiveEdge()
-	}
+	        // Start fresh current line
+	        db.currentLine = NewLogicalLine()
+	        db.cursorLogicalIdx = -1 // Reset to current line
+	        db.cursorOffset = 0      // Reset offset
+	        db.rebuildCurrentLinePhysical()
+	
+	                // If at live edge, scroll to keep viewport at bottom
+	
+	                if db.atLiveEdge {
+	
+	                        db.scrollToLiveEdge()
+	
+	                }
 
 	// Trim excess lines above if needed
 	db.trimAbove()
@@ -233,17 +423,16 @@ func (db *DisplayBuffer) scrollToLiveEdge() {
 	db.atLiveEdge = true
 }
 
-// contentLineCount returns the number of lines that have actual content.
-// Empty current line doesn't count toward content for viewport positioning.
+// contentLineCount returns the number of physical lines in the buffer.
+// Includes current line even if empty, as it occupies visual space.
 func (db *DisplayBuffer) contentLineCount() int {
-	total := len(db.lines)
-	// Only count current line if it has content
-	if db.currentLine != nil && db.currentLine.Len() > 0 {
-		total += len(db.currentLinePhysical)
-	}
-	return total
+        total := len(db.lines)
+        // Always include current line space (even if empty, it consumes a row)
+        if db.currentLine != nil {
+                total += len(db.currentLinePhysical)
+        }
+        return total
 }
-
 // trimAbove removes lines from the top that exceed marginAbove.
 func (db *DisplayBuffer) trimAbove() {
 	excessAbove := db.viewportTop - db.marginAbove
@@ -502,12 +691,21 @@ func (db *DisplayBuffer) rewrap() {
 		anchorWrapOffset = anchorLine.Offset
 	}
 
-	// Rebuild from history
-	db.lines = make([]PhysicalLine, 0)
-	totalLines := db.history.TotalLen()
+	                        // Rebuild from history
 
-	if db.history != nil && totalLines > 0 {
-		// Load a window of history around what we need
+	                        db.lines = make([]PhysicalLine, 0)
+
+	                        var totalLines int64
+
+	                        if db.history != nil {
+
+	                                totalLines = db.history.TotalLen()
+
+	                        }
+
+	                
+
+	                        if db.history != nil && totalLines > 0 {		// Load a window of history around what we need
 		linesNeeded := db.height + db.marginAbove + db.marginBelow
 
 		if anchorLogicalIdx >= 0 {
@@ -646,32 +844,81 @@ func (db *DisplayBuffer) CanScrollDown() bool {
 // LiveEdgeRow returns the viewport row where new content will appear.
 // This is where the cursor should be positioned when at the live edge.
 func (db *DisplayBuffer) LiveEdgeRow() int {
-	// The current line appears after all committed lines
-	committedLines := len(db.lines)
+        // The current line appears after all committed lines
+        committedLines := len(db.lines)
 
-	// When content doesn't fill the screen, viewportTop is 0 or negative (clamped to 0).
-	// In this case, the current line appears at row = committedLines.
-	// When content exceeds the screen, viewportTop > 0 and current line is at the bottom.
+        // When content doesn't fill the screen, viewportTop is 0 or negative (clamped to 0).
+        // In this case, the current line appears at row = committedLines.
+        // When content exceeds the screen, viewportTop > 0 and current line is at the bottom.
 
-	// Calculate where current line appears in the viewport
-	// viewportTop is the offset into allLines (lines + currentLinePhysical)
-	// If viewportTop < 0, it's been clamped to 0, but content starts at row 0
-	effectiveViewportTop := db.viewportTop
-	if effectiveViewportTop < 0 {
-		effectiveViewportTop = 0
-	}
+        // Calculate where current line appears in the viewport
+        // viewportTop is the offset into allLines (lines + currentLinePhysical)
+        // If viewportTop < 0, it's been clamped to 0, but content starts at row 0
+        effectiveViewportTop := db.viewportTop
+        if effectiveViewportTop < 0 {
+                effectiveViewportTop = 0
+        }
 
-	// Current line is at index committedLines in allLines
-	// Its viewport row = committedLines - effectiveViewportTop
-	row := committedLines - effectiveViewportTop
+        // Current line is at index committedLines in allLines
+        // Its viewport row = committedLines - effectiveViewportTop
+        row := committedLines - effectiveViewportTop
 
-	// Clamp to valid viewport range
-	if row < 0 {
-		row = 0
-	}
-	if row >= db.height {
-		row = db.height - 1
-	}
+        // Clamp to valid viewport range
+        if row < 0 {
+                row = 0
+        }
+        if row >= db.height {
+                row = db.height - 1
+        }
 
-	return row
+        return row
+}
+
+// GetLogicalPos maps a physical viewport position (x, y) to a logical line index and offset.
+// Returns:
+//   lineIdx: logical line index (>=0 for committed history, -1 for current uncommitted line)
+//   offset:  offset within that logical line (in cells)
+//   found:   true if the position maps to a valid line within the buffer
+func (db *DisplayBuffer) GetLogicalPos(physX, physY int) (lineIdx int, offset int, found bool) {
+        if physY < 0 || physY >= db.height {
+                return 0, 0, false
+        }
+
+        // Calculate absolute index in the physical line buffer
+        bufferIdx := db.viewportTop + physY
+        
+        // Handle negative viewportTop (when content < screen height)
+        // In this case, row 0 maps to physical line 0
+        // viewportTop is technically negative, so bufferIdx calculation needs care.
+        // Ideally viewportTop should be 0 when not full, but let's check current behavior.
+        // In scrollToLiveEdge: "viewportTop = totalLines - db.height ... if < 0 { viewportTop = 0 }"
+        // So viewportTop is always >= 0.
+        // Wait, if content < height, viewportTop is 0. 
+        // But content starts at row 0.
+        // So bufferIdx = 0 + physY is correct.
+        
+        committedLen := len(db.lines)
+        currentLen := len(db.currentLinePhysical)
+        totalLen := committedLen + currentLen
+
+        if bufferIdx >= totalLen {
+                return 0, 0, false
+        }
+
+        var pl PhysicalLine
+        if bufferIdx < committedLen {
+                pl = db.lines[bufferIdx]
+        } else {
+                pl = db.currentLinePhysical[bufferIdx-committedLen]
+        }
+
+        // Logical Index
+        lineIdx = pl.LogicalIndex
+
+        // Calculate Offset
+        // PhysicalLine.Offset is the start index of this row in the logical line.
+        // We simply add physX to it.
+        offset = pl.Offset + physX
+
+        return lineIdx, offset, true
 }

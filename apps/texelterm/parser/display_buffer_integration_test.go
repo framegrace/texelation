@@ -33,7 +33,7 @@ func TestDisplayBuffer_FreshTerminal(t *testing.T) {
 	// Initial state checks
 	t.Logf("Initial state:")
 	t.Logf("  cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
-	t.Logf("  displayBuf.currentLogicalX=%d", v.displayBuf.currentLogicalX)
+	t.Logf("  displayBuf.currentLogicalX=%d", v.displayBuf.display.GetCursorOffset())
 
 	if v.cursorX != 0 || v.cursorY != 0 {
 		t.Errorf("Expected cursor at (0,0), got (%d,%d)", v.cursorX, v.cursorY)
@@ -46,7 +46,7 @@ func TestDisplayBuffer_FreshTerminal(t *testing.T) {
 
 	t.Logf("After prompt '$ ':")
 	t.Logf("  cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
-	t.Logf("  displayBuf.currentLogicalX=%d", v.displayBuf.currentLogicalX)
+	t.Logf("  displayBuf.currentLogicalX=%d", v.displayBuf.display.GetCursorOffset())
 
 	// Get the grid
 	grid := v.Grid()
@@ -91,7 +91,7 @@ func TestDisplayBuffer_LineFeed(t *testing.T) {
 
 	t.Logf("After CR+LF:")
 	t.Logf("  cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
-	t.Logf("  displayBuf.currentLogicalX=%d", v.displayBuf.currentLogicalX)
+	t.Logf("  displayBuf.currentLogicalX=%d", v.displayBuf.display.GetCursorOffset())
 
 	// Write second line
 	for _, ch := range "Line2" {
@@ -228,12 +228,12 @@ func TestDisplayBuffer_BackspaceErases(t *testing.T) {
 		v.placeChar(ch)
 	}
 
-	t.Logf("After 'ABCD': cursorX=%d, logicalX=%d", v.cursorX, v.displayBuf.currentLogicalX)
+	t.Logf("After 'ABCD': cursorX=%d, logicalX=%d", v.cursorX, v.displayBuf.display.GetCursorOffset())
 
 	// Backspace
 	v.Backspace()
 
-	t.Logf("After BS: cursorX=%d, logicalX=%d", v.cursorX, v.displayBuf.currentLogicalX)
+	t.Logf("After BS: cursorX=%d, logicalX=%d", v.cursorX, v.displayBuf.display.GetCursorOffset())
 
 	// Erase to end of line (what bash does on backspace)
 	v.ClearLine(0) // EL 0
@@ -719,7 +719,7 @@ func TestDisplayBuffer_LineWrapWithScroll(t *testing.T) {
 		v.placeChar(ch)
 		if i == 9 || i == 10 { // Log around the wrap point
 			t.Logf("After char %d (%c): cursorX=%d, cursorY=%d, logicalX=%d",
-				i+1, ch, v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+				i+1, ch, v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
 		}
 	}
 
@@ -757,7 +757,7 @@ func TestDisplayBuffer_LineWrapWithHistory(t *testing.T) {
 	for i, ch := range text {
 		v.placeChar(ch)
 		t.Logf("After char %d (%c): cursorX=%d, cursorY=%d, logicalX=%d",
-			i+1, ch, v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+			i+1, ch, v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
 	}
 
 	grid := v.Grid()
@@ -797,7 +797,7 @@ func TestDisplayBuffer_LineWrap(t *testing.T) {
 
 	t.Logf("After writing 15 chars:")
 	t.Logf("  cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
-	t.Logf("  currentLogicalX=%d", v.displayBuf.currentLogicalX)
+	t.Logf("  currentLogicalX=%d", v.displayBuf.display.GetCursorOffset())
 	t.Logf("  currentLine.Len()=%d", v.displayBuf.display.CurrentLine().Len())
 	t.Logf("  currentLinePhysical count=%d", len(v.displayBuf.display.currentLinePhysical))
 
@@ -1880,14 +1880,14 @@ func TestDisplayBuffer_CursorMovementOnWrappedLine(t *testing.T) {
 	simulateRender()
 
 	t.Logf("After typing: cursorX=%d, cursorY=%d, logicalX=%d",
-		v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
 
 	// Cursor should be at (5, 1) with logicalX=15
 	if v.cursorX != 5 || v.cursorY != 1 {
 		t.Errorf("Expected cursor at (5,1), got (%d,%d)", v.cursorX, v.cursorY)
 	}
-	if v.displayBuf.currentLogicalX != 15 {
-		t.Errorf("Expected logicalX=15, got %d", v.displayBuf.currentLogicalX)
+	if v.displayBuf.display.GetCursorOffset() != 15 {
+		t.Errorf("Expected logicalX=15, got %d", v.displayBuf.display.GetCursorOffset())
 	}
 
 	// Now move cursor left 3 times (using escape sequence CSI 3 D)
@@ -1897,7 +1897,7 @@ func TestDisplayBuffer_CursorMovementOnWrappedLine(t *testing.T) {
 	}
 
 	t.Logf("After cursor left 3: cursorX=%d, cursorY=%d, logicalX=%d",
-		v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
 
 	// BUG: The current implementation sets logicalX = cursorX = 2
 	// But it SHOULD be logicalX = 10 + 2 = 12 (accounting for wrapped content)
@@ -1912,7 +1912,7 @@ func TestDisplayBuffer_CursorMovementOnWrappedLine(t *testing.T) {
 	simulateRender()
 
 	t.Logf("After typing 'X': cursorX=%d, cursorY=%d, logicalX=%d",
-		v.cursorX, v.cursorY, v.displayBuf.currentLogicalX)
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
 
 	// Check what's in the currentLine (the source of truth for display buffer)
 	currentLineContent := ""
@@ -2025,14 +2025,14 @@ func TestDisplayBuffer_BashReadlineWrapWithCR(t *testing.T) {
 	if v.cursorY != 1 {
 		t.Errorf("After wrap, expected cursorY=1, got %d", v.cursorY)
 	}
-	logicalXAfterWrap := v.displayBuf.currentLogicalX
+	logicalXAfterWrap := v.displayBuf.display.GetCursorOffset()
 
 	t.Logf("After wrap: cursorX=%d, cursorY=%d, logicalX=%d", v.cursorX, v.cursorY, logicalXAfterWrap)
 
 	// Simulate bash sending CR for cursor positioning (this is what readline does)
 	v.CarriageReturn()
 
-	logicalXAfterCR := v.displayBuf.currentLogicalX
+	logicalXAfterCR := v.displayBuf.display.GetCursorOffset()
 	t.Logf("After CR: cursorX=%d, cursorY=%d, logicalX=%d", v.cursorX, v.cursorY, logicalXAfterCR)
 
 	// KEY ASSERTION: After CR on the second physical row of a wrapped line,
