@@ -123,24 +123,22 @@ type DisplayBuffer struct {
 	        return db
 	}
 	
-	// SetCursor updates the logical cursor position based on physical coordinates.
-	// This should be called whenever the physical cursor moves.
-	func (db *DisplayBuffer) SetCursor(physX, physY int) {
-	        lineIdx, offset, found := db.GetLogicalPos(physX, physY)
-	        if found {
-	                db.cursorLogicalIdx = lineIdx
-	                db.cursorOffset = offset
-	        } else {
-	                // Fallback: If out of bounds, assume current line at computed offset?
-	                // Or just clamp? For now, let's keep previous state or reset to valid if critical.
-	                // But specifically for "EraseToEnd" etc, we might need a valid pos.
-	                // If the user resizes, vterm will call SetCursor.
-	                // If we can't map it, it might be off-screen void.
-	                // Let's rely on valid calls from vterm.
-	        }
-	}
-	
-	// Write writes a rune at the current logical cursor position.
+	        // SetCursor updates the logical cursor position based on physical coordinates.
+	        // This should be called whenever the physical cursor moves.
+	        func (db *DisplayBuffer) SetCursor(physX, physY int) {
+	                lineIdx, offset, found := db.GetLogicalPos(physX, physY)
+	                if found {
+	                        db.cursorLogicalIdx = lineIdx
+	                        db.cursorOffset = offset
+	                } else {
+	                        // Fallback: If out of bounds, assume current line at computed offset?
+	                        // Or just clamp? For now, let's keep previous state or reset to valid if critical.
+	                        // But specifically for "EraseToEnd" etc, we might need a valid pos.
+	                        // If the user resizes, vterm will call SetCursor.
+	                        // If we can't map it, it might be off-screen void.
+	                        // Let's rely on valid calls from vterm.
+	                }
+	        }	// Write writes a rune at the current logical cursor position.
 	// Advances the cursor offset.
 	// If insertMode is true, inserts; otherwise overwrites.
 	func (db *DisplayBuffer) Write(r rune, fg, bg Color, attr Attribute, insertMode bool) {
@@ -626,12 +624,15 @@ func (db *DisplayBuffer) rewrap() {
 		anchorWrapOffset = anchorLine.Offset
 	}
 
-	// Rebuild from history
-	db.lines = make([]PhysicalLine, 0)
-	totalLines := db.history.TotalLen()
+	                // Rebuild from history
 
-	if db.history != nil && totalLines > 0 {
-		// Load a window of history around what we need
+	                db.lines = make([]PhysicalLine, 0)
+
+	                totalLines := db.history.TotalLen()
+
+	        
+
+	                if db.history != nil && totalLines > 0 {		// Load a window of history around what we need
 		linesNeeded := db.height + db.marginAbove + db.marginBelow
 
 		if anchorLogicalIdx >= 0 {
