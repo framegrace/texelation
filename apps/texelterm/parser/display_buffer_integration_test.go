@@ -3199,3 +3199,340 @@ func TestDisplayBuffer_ICH_AtEndOfLine(t *testing.T) {
 		t.Errorf("Expected %q, got %q", expected, result)
 	}
 }
+
+// TestDisplayBuffer_WrappedLine_CursorMoveAndInsert tests the bug scenario where:
+// 1. User types a line that wraps (logical line spans multiple physical rows)
+// 2. User moves cursor backward to the middle of the line
+// 3. User inserts characters at that position
+// This tests that the logical and physical cursor positions remain synchronized.
+func TestDisplayBuffer_WrappedLine_CursorMoveAndInsert(t *testing.T) {
+	width := 10 // Narrow terminal to force wrapping
+	height := 5
+	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Helper to get the full logical line content
+	getLogicalLine := func() string {
+		line := v.displayBuf.display.CurrentLine()
+		var sb strings.Builder
+		for _, cell := range line.Cells {
+			if cell.Rune != 0 {
+				sb.WriteRune(cell.Rune)
+			}
+		}
+		return sb.String()
+	}
+
+	// Helper to get grid content
+	getGridRows := func() []string {
+		grid := v.Grid()
+		rows := make([]string, len(grid))
+		for y, row := range grid {
+			var sb strings.Builder
+			for _, cell := range row {
+				if cell.Rune == 0 {
+					sb.WriteRune(' ')
+				} else {
+					sb.WriteRune(cell.Rune)
+				}
+			}
+			rows[y] = strings.TrimRight(sb.String(), " ")
+		}
+		return rows
+	}
+
+	// Helper to simulate render and check for visual/logical consistency
+	renderBuf := make([][]Cell, height)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, width)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+	simulateRender := func() {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+		if allDirty {
+			for y := 0; y < height && y < len(vtermGrid); y++ {
+				for x := 0; x < width && x < len(vtermGrid[y]); x++ {
+					renderBuf[y][x] = vtermGrid[y][x]
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < height && y < len(vtermGrid) {
+					for x := 0; x < width && x < len(vtermGrid[y]); x++ {
+						renderBuf[y][x] = vtermGrid[y][x]
+					}
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	checkConsistency := func(step string) {
+		logicalLine := getLogicalLine()
+		gridRows := getGridRows()
+		offset := v.displayBuf.display.GetCursorOffset()
+		physRow, physCol := v.displayBuf.display.liveEditor.GetPhysicalCursor(width)
+
+		t.Logf("%s:", step)
+		t.Logf("  logicalLine=%q (len=%d)", logicalLine, len(logicalLine))
+		t.Logf("  cursorOffset=%d, physRow=%d, physCol=%d", offset, physRow, physCol)
+		t.Logf("  vtermCursor=(%d,%d)", v.cursorX, v.cursorY)
+		t.Logf("  grid[0]=%q, grid[1]=%q", gridRows[0], gridRows[1])
+
+		// Check: rendered content should match logical line when reconstructed
+		reconstructed := ""
+		for _, row := range gridRows {
+			reconstructed += row
+		}
+		reconstructed = strings.TrimRight(reconstructed, " ")
+		if reconstructed != logicalLine {
+			t.Errorf("%s: MISMATCH - logicalLine=%q but grid reconstructs to %q", step, logicalLine, reconstructed)
+		}
+	}
+
+	// Step 1: Type a line that wraps (14 chars on width=10 terminal)
+	for _, ch := range "Hello World!!!" {
+		p.Parse(ch)
+	}
+	simulateRender()
+	checkConsistency("After typing 'Hello World!!!'")
+
+	// Verify: 14 chars should span 2 rows (0-9 on row 0, 10-13 on row 1)
+	logicalLine := getLogicalLine()
+	if logicalLine != "Hello World!!!" {
+		t.Errorf("Expected 'Hello World!!!', got %q", logicalLine)
+	}
+	if v.displayBuf.display.GetCursorOffset() != 14 {
+		t.Errorf("Expected offset=14, got %d", v.displayBuf.display.GetCursorOffset())
+	}
+
+	// Step 2: Move cursor to middle of line using absolute positioning
+	// Use CUP (Cursor Position) to move to row 0, column 6 (after "Hello ")
+	// ESC [ 1 ; 7 H = move to row 1, column 7 (1-based)
+	for _, ch := range "\x1b[1;7H" {
+		p.Parse(ch)
+	}
+	simulateRender()
+	checkConsistency("After CUP to row 1, col 7")
+
+	// Verify cursor position: physical (6,0) = logical offset 6
+	if v.cursorX != 6 || v.cursorY != 0 {
+		t.Errorf("After CUP: expected cursor (6,0), got (%d,%d)", v.cursorX, v.cursorY)
+	}
+	expectedOffset := 6 // "Hello " = 6 chars
+	actualOffset := v.displayBuf.display.GetCursorOffset()
+	if actualOffset != expectedOffset {
+		t.Errorf("After CUP: expected offset=%d, got %d", expectedOffset, actualOffset)
+	}
+
+	// Step 3: Insert "NEW" at position 6
+	for _, ch := range "NEW" {
+		p.Parse(ch)
+	}
+	simulateRender()
+	checkConsistency("After inserting 'NEW'")
+
+	// In non-insert mode (overwrite), the characters after cursor get overwritten
+	// - Original: "Hello World!!!" (14 chars)
+	// - After typing "NEW" at position 6 (overwrite mode):
+	//   Position 6: 'N' replaces 'W'
+	//   Position 7: 'E' replaces 'o'
+	//   Position 8: 'W' replaces 'r'
+	//   Result: "Hello NEWld!!!" (14 chars)
+	expectedLine := "Hello NEWld!!!"
+	actualLine := getLogicalLine()
+	if actualLine != expectedLine {
+		t.Errorf("After inserting 'NEW': expected %q, got %q", expectedLine, actualLine)
+	}
+
+	// Verify grid matches logical
+	gridRows := getGridRows()
+	// "Hello NEWld!!!" = ['H','e','l','l','o',' ','N','E','W','l','d','!','!','!']
+	// Row 0 = chars 0-9 = "Hello NEWl"
+	expectedRow0 := "Hello NEWl"
+	expectedRow1 := "d!!!"
+	if gridRows[0] != expectedRow0 {
+		t.Errorf("Row 0: expected %q, got %q", expectedRow0, gridRows[0])
+	}
+	if gridRows[1] != expectedRow1 {
+		t.Errorf("Row 1: expected %q, got %q", expectedRow1, gridRows[1])
+	}
+
+	// Verify cursor is now at position 9 (after "Hello NEW")
+	if v.displayBuf.display.GetCursorOffset() != 9 {
+		t.Errorf("After typing 'NEW': expected offset=9, got %d", v.displayBuf.display.GetCursorOffset())
+	}
+}
+
+// TestDisplayBuffer_WrappedLine_MoveAcrossWrapBoundary tests cursor movement
+// that crosses the wrap boundary (from second physical row to first).
+func TestDisplayBuffer_WrappedLine_MoveAcrossWrapBoundary(t *testing.T) {
+	width := 10
+	height := 5
+	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Type 15 characters to create a wrapped line
+	for _, ch := range "ABCDEFGHIJKLMNO" {
+		p.Parse(ch)
+	}
+
+	t.Logf("Initial: cursorX=%d, cursorY=%d, offset=%d",
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	// Cursor should be at (5, 1) - after 'O' on second row
+	if v.cursorX != 5 || v.cursorY != 1 {
+		t.Errorf("Initial cursor: expected (5,1), got (%d,%d)", v.cursorX, v.cursorY)
+	}
+	if v.displayBuf.display.GetCursorOffset() != 15 {
+		t.Errorf("Initial offset: expected 15, got %d", v.displayBuf.display.GetCursorOffset())
+	}
+
+	// Move cursor up (to first row) - this crosses the wrap boundary
+	for _, ch := range "\x1b[A" { // CUU 1
+		p.Parse(ch)
+	}
+
+	t.Logf("After CUU: cursorX=%d, cursorY=%d, offset=%d",
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	// Cursor should now be at (5, 0) - same column, previous row
+	if v.cursorX != 5 || v.cursorY != 0 {
+		t.Errorf("After CUU: expected cursor (5,0), got (%d,%d)", v.cursorX, v.cursorY)
+	}
+	// Offset should be 5 (position on first row)
+	if v.displayBuf.display.GetCursorOffset() != 5 {
+		t.Errorf("After CUU: expected offset=5, got %d", v.displayBuf.display.GetCursorOffset())
+	}
+
+	// Now type 'X' - it should replace 'F' (position 5)
+	p.Parse('X')
+
+	logicalLine := v.displayBuf.display.CurrentLine()
+	var result string
+	for _, cell := range logicalLine.Cells {
+		if cell.Rune != 0 {
+			result += string(cell.Rune)
+		}
+	}
+
+	t.Logf("After typing 'X': line=%q, cursorX=%d, offset=%d",
+		result, v.cursorX, v.displayBuf.display.GetCursorOffset())
+
+	// Expected: "ABCDEXGHIJKLMNO" - 'X' replaced 'F' at position 5
+	expected := "ABCDEXGHIJKLMNO"
+	if result != expected {
+		t.Errorf("Expected %q, got %q", expected, result)
+	}
+
+	// Verify grid
+	grid := v.Grid()
+	row0 := cellsToStringTest(grid[0])
+	row1 := strings.TrimRight(cellsToStringTest(grid[1]), " ")
+
+	if row0 != "ABCDEXGHIJ" {
+		t.Errorf("Row 0: expected 'ABCDEXGHIJ', got %q", row0)
+	}
+	if row1 != "KLMNO" {
+		t.Errorf("Row 1: expected 'KLMNO', got %q", row1)
+	}
+}
+
+// TestDisplayBuffer_WrappedLine_InsertModeAcrossWrap tests insert mode when
+// inserting causes content to reflow across wrap boundary.
+func TestDisplayBuffer_WrappedLine_InsertModeAcrossWrap(t *testing.T) {
+	width := 10
+	height := 5
+	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Type exactly 10 characters (fills first row exactly)
+	for _, ch := range "0123456789" {
+		p.Parse(ch)
+	}
+
+	t.Logf("After 10 chars: cursorX=%d, cursorY=%d, offset=%d, wrapNext=%v",
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset(), v.wrapNext)
+
+	// Move cursor to position 5 (middle of line)
+	for _, ch := range "\x1b[5D" { // CUB 5
+		p.Parse(ch)
+	}
+
+	t.Logf("After CUB 5: cursorX=%d, cursorY=%d, offset=%d",
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	// After typing 10 chars, wrapNext was true:
+	// - Physical cursor was at (9,0) but logical offset was 10
+	// - CUB 5 means "move back 5 positions"
+	// - Logically: 10 - 5 = 5
+	// - Physically: cursorX moves from 9 to 4
+	// The offset should track logical position (5), not physical (4)
+	if v.cursorX != 4 {
+		t.Errorf("After CUB 5: expected cursorX=4, got %d", v.cursorX)
+	}
+	if v.displayBuf.display.GetCursorOffset() != 5 {
+		t.Errorf("After CUB 5: expected offset=5, got %d", v.displayBuf.display.GetCursorOffset())
+	}
+
+	// Enable insert mode (CSI 4 h)
+	for _, ch := range "\x1b[4h" {
+		p.Parse(ch)
+	}
+
+	// Insert "XXX" - this should push 56789 to the right
+	for _, ch := range "XXX" {
+		p.Parse(ch)
+	}
+
+	logicalLine := v.displayBuf.display.CurrentLine()
+	var result string
+	for _, cell := range logicalLine.Cells {
+		if cell.Rune != 0 {
+			result += string(cell.Rune)
+		}
+	}
+
+	t.Logf("After inserting 'XXX': line=%q (len=%d)", result, len(result))
+	t.Logf("  cursorX=%d, cursorY=%d, offset=%d",
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	// Expected: "01234XXX56789" (13 chars)
+	// - Original: "0123456789" (10 chars)
+	// - Cursor at position 5 (between '4' and '5')
+	// - Insert "XXX" shifts "56789" right
+	expected := "01234XXX56789"
+	if result != expected {
+		t.Errorf("Expected %q, got %q", expected, result)
+	}
+
+	// Verify grid shows wrapped content correctly
+	grid := v.Grid()
+	row0 := cellsToStringTest(grid[0])
+	row1 := strings.TrimRight(cellsToStringTest(grid[1]), " ")
+
+	t.Logf("Grid: row0=%q, row1=%q", row0, row1)
+
+	// Row 0 should be first 10 chars: "01234XXX56"
+	// Row 1 should be remaining: "789"
+	expectedRow0 := "01234XXX56"
+	expectedRow1 := "789"
+
+	if row0 != expectedRow0 {
+		t.Errorf("Row 0: expected %q, got %q", expectedRow0, row0)
+	}
+	if row1 != expectedRow1 {
+		t.Errorf("Row 1: expected %q, got %q", expectedRow1, row1)
+	}
+
+	// Disable insert mode
+	for _, ch := range "\x1b[4l" {
+		p.Parse(ch)
+	}
+}

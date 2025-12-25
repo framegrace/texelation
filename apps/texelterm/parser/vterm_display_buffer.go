@@ -294,7 +294,8 @@ func (v *VTerm) displayBufferLineFeed() {
 func (v *VTerm) displayBufferCarriageReturn() {
         // vterm.go has already set v.cursorX = 0 before calling this.
         // We just need to sync the logical cursor.
-        v.displayBufferSetCursorFromPhysical()
+        // CR is absolute positioning (column 0), not a relative move.
+        v.displayBufferSetCursorFromPhysical(false)
 }
 // displayBufferScroll handles viewport scrolling.
 // Positive delta = scroll down (view newer content, like pressing Page Down)
@@ -391,12 +392,14 @@ func (v *VTerm) ScrollToLiveEdge() {
 // displayBufferSetCursorFromPhysical syncs the logical cursor position
 // based on the physical cursor position. Used when cursor moves via escape sequences.
 //
-// This handles a subtle issue: when the VTerm cursor is at the right edge (wrapNext=true),
-// the physical position (width-1, y) represents logical offset y*width + (width-1), but
-// the display buffer's cursorOffset may be at y*width + width (one position further).
-// For relative cursor movements (like CUB), we need to calculate the delta from the
-// OLD VTerm physical position, not from the display buffer's logical offset.
-func (v *VTerm) displayBufferSetCursorFromPhysical() {
+// The isRelativeMove parameter indicates whether this was a relative cursor movement
+// (CUB, CUF, HPR) or an absolute positioning command (CHA, CUP, HPA, VPA).
+//
+// For relative movements on the same row, we use delta-based sync to preserve the
+// logical position (important for wrapNext edge cases). For absolute positioning,
+// we always use the full physical-to-logical mapping since the shell is explicitly
+// setting the cursor to a specific screen position.
+func (v *VTerm) displayBufferSetCursorFromPhysical(isRelativeMove bool) {
         if v.displayBuf == nil || v.displayBuf.display == nil {
                 return
         }
@@ -404,30 +407,31 @@ func (v *VTerm) displayBufferSetCursorFromPhysical() {
         oldOffset := v.displayBuf.display.GetCursorOffset()
         oldLineLen := v.displayBuf.display.CurrentLine().Len()
 
-        // Check if this is a same-row movement by comparing with VTerm's previous Y position.
-        // prevCursorY is set by SetCursorPos before updating cursorY.
-        // If the Y position hasn't changed, this is likely a relative horizontal movement
-        // (CUB, CUF, etc.) and we should apply the X delta to the logical offset.
+        // Only use delta-based sync for relative horizontal movements on the same row.
+        // Absolute positioning (CHA, CUP, etc.) should always use physical mapping
+        // because the shell is explicitly setting the cursor to a screen position.
         sameRow := v.prevCursorY == v.cursorY
+        useDelta := isRelativeMove && sameRow
 
-        if sameRow {
-                // Same row movement - apply X delta to preserve logical position.
+        if useDelta {
+                // Same row RELATIVE movement - apply X delta to preserve logical position.
                 //
-                // Key insight: when cursorOffset=12 on width=12, the logical cursor
-                // is conceptually "past" the last character. But VTerm's physical cursor
-                // was at position 11 (rightEdge, with wrapNext=true). When CUB moves
-                // the cursor back, we need to use VTerm's actual previous physical X
-                // to calculate the correct delta, not the display buffer's logical offset.
+                // The delta-based approach tracks the LOGICAL cursor position, not the
+                // physical cursor position. When wrapNext=true, the logical offset is
+                // one ahead of the physical cursor (e.g., offset=10 at cursorX=9 on width=10).
                 //
-                // prevCursorX gives us the VTerm's actual physical X before the move.
+                // CUB N means "move back N positions logically", so:
+                // - offset 10, CUB 5 → offset 5 (not physical position 4)
                 delta := v.cursorX - v.prevCursorX
                 newOffset := oldOffset + delta
+
                 if newOffset < 0 {
                         newOffset = 0
                 }
                 v.displayBuf.display.liveEditor.SetCursorOffset(newOffset)
         } else {
-                // Cross-row or absolute positioning - use the full physical mapping
+                // Cross-row, absolute positioning, or vertical movement
+                // Use the full physical-to-logical mapping
                 v.displayBuf.display.SetCursor(v.cursorX, v.cursorY)
         }
 
@@ -535,7 +539,8 @@ func (v *VTerm) displayBufferEraseToEndOfLine() {
         // IMPORTANT: Sync cursor position before erasing.
         // The VTerm cursor may have moved (e.g., via backspace) without updating
         // the display buffer. We must sync to ensure erase happens at the right position.
-        v.displayBufferSetCursorFromPhysical()
+        // Use absolute mapping (false) since we don't know how cursor got here.
+        v.displayBufferSetCursorFromPhysical(false)
 
         if v.displayBuf.display.debugLog != nil {
                 lineContent := ""
@@ -590,8 +595,9 @@ func (v *VTerm) displayBufferEraseCharacters(n int) {
         if v.displayBuf == nil || v.displayBuf.display == nil {
                 return
         }
-        // Sync cursor position before erasing to ensure we're at the right offset
-        v.displayBufferSetCursorFromPhysical()
+        // Sync cursor position before erasing to ensure we're at the right offset.
+        // Use absolute mapping (false) since we don't know how cursor got here.
+        v.displayBufferSetCursorFromPhysical(false)
         v.displayBuf.display.EraseCharacters(n)
         v.MarkAllDirty()
 }
@@ -602,8 +608,9 @@ func (v *VTerm) displayBufferDeleteCharacters(n int) {
         if v.displayBuf == nil || v.displayBuf.display == nil {
                 return
         }
-        // Sync cursor position before deleting to ensure we're at the right offset
-        v.displayBufferSetCursorFromPhysical()
+        // Sync cursor position before deleting to ensure we're at the right offset.
+        // Use absolute mapping (false) since we don't know how cursor got here.
+        v.displayBufferSetCursorFromPhysical(false)
         v.displayBuf.display.DeleteCharacters(n)
         v.MarkAllDirty()
 }
@@ -616,8 +623,9 @@ func (v *VTerm) displayBufferInsertCharacters(n int) {
         if v.displayBuf == nil || v.displayBuf.display == nil {
                 return
         }
-        // Sync cursor position before inserting to ensure we're at the right offset
-        v.displayBufferSetCursorFromPhysical()
+        // Sync cursor position before inserting to ensure we're at the right offset.
+        // Use absolute mapping (false) since we don't know how cursor got here.
+        v.displayBufferSetCursorFromPhysical(false)
         v.displayBuf.display.InsertCharacters(n, v.currentFG, v.currentBG)
         v.MarkAllDirty()
 }

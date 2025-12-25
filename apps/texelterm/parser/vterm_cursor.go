@@ -23,13 +23,16 @@ func (v *VTerm) SetCursorPos(y, x int) {
 		y = v.height - 1
 	}
 
+	// Save previous state before any changes
+	v.prevCursorX = v.cursorX
+	v.prevCursorY = v.cursorY
+	v.prevWrapNext = v.wrapNext
+
 	// Only clear wrapNext if we're actually moving to a different position
 	if y != v.cursorY || x != v.cursorX {
 		v.wrapNext = false
 	}
 
-	v.prevCursorX = v.cursorX
-	v.prevCursorY = v.cursorY
 	v.cursorX = x
 	v.cursorY = y
 

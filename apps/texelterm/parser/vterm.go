@@ -57,6 +57,7 @@ type VTerm struct {
 	dirtyLines                         map[int]bool
 	allDirty                           bool
 	prevCursorX, prevCursorY           int
+	prevWrapNext                       bool // Was wrapNext true before the last SetCursorPos?
 	InSynchronizedUpdate               bool
 	lastGraphicChar                    rune // Last graphic character written (for REP command)
 	// Shell integration (OSC 133)
@@ -684,15 +685,24 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 		}
 		return defaultVal
 	}
+
+	// Track whether this is a relative movement (delta-based sync)
+	// or absolute positioning (full physical-to-logical mapping).
+	isRelativeMove := false
+
 	switch command {
 	case 'A':
 		v.MoveCursorUp(param(0, 1))
+		// Vertical movements are not "same row" so always use absolute sync
 	case 'B':
 		v.MoveCursorDown(param(0, 1))
+		// Vertical movements are not "same row" so always use absolute sync
 	case 'C':
 		v.MoveCursorForward(param(0, 1))
+		isRelativeMove = true // CUF - relative horizontal movement
 	case 'D':
 		v.MoveCursorBackward(param(0, 1))
+		isRelativeMove = true // CUB - relative horizontal movement
 	case 'E':
 		// CNL - Cursor Next Line: move down N lines and to column 0
 		v.MoveCursorDown(param(0, 1))
@@ -708,6 +718,7 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			col += v.marginLeft
 		}
 		v.SetCursorPos(v.cursorY, col)
+		// ABSOLUTE positioning - do NOT use delta-based sync
 	case 'H', 'f': // CUP - Cursor Position
 		row := param(0, 1) - 1
 		col := param(1, 1) - 1
@@ -717,6 +728,7 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			col += v.marginLeft
 		}
 		v.SetCursorPos(row, col)
+		// ABSOLUTE positioning - do NOT use delta-based sync
 	case 'd': // VPA - Vertical Position Absolute
 		row := param(0, 1) - 1
 		// In origin mode, row is relative to top margin
@@ -724,6 +736,7 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			row += v.marginTop
 		}
 		v.SetCursorPos(row, v.cursorX)
+		// ABSOLUTE positioning - do NOT use delta-based sync
 	case '`': // HPA - Horizontal Position Absolute
 		col := param(0, 1) - 1
 		// In origin mode, column is relative to left margin
@@ -731,6 +744,7 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			col += v.marginLeft
 		}
 		v.SetCursorPos(v.cursorY, col)
+		// ABSOLUTE positioning - do NOT use delta-based sync
 	case 'a': // HPR - Horizontal Position Relative
 		// Move right by n columns (relative, not absolute)
 		n := param(0, 1)
@@ -740,6 +754,7 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			newX = v.width - 1
 		}
 		v.SetCursorPos(v.cursorY, newX)
+		isRelativeMove = true // HPR - relative horizontal movement
 	case 'e': // VPR - Vertical Position Relative
 		// Move down by n rows (relative, not absolute)
 		n := param(0, 1)
@@ -749,13 +764,14 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			newY = v.height - 1
 		}
 		v.SetCursorPos(newY, v.cursorX)
+		// VPR changes rows, so sameRow check won't apply anyway
 	}
 
 	// Sync display buffer cursor after any cursor movement escape sequence.
 	// This is done here rather than in SetCursorPos because placeChar also
 	// calls SetCursorPos, and it already advances the display buffer cursor.
 	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		v.displayBufferSetCursorFromPhysical()
+		v.displayBufferSetCursorFromPhysical(isRelativeMove)
 	}
 }
 

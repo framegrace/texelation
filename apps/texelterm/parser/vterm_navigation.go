@@ -63,7 +63,7 @@ func (v *VTerm) Backspace() {
 		v.SetCursorPos(v.cursorY, v.cursorX-1)
 		// Sync display buffer cursor after SetCursorPos
 		if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-			v.displayBufferSetCursorFromPhysical()
+			v.displayBufferSetCursorFromPhysical(true) // Backspace is a relative move
 		}
 	}
 }
