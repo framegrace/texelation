@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -2380,5 +2381,821 @@ func TestDisplayBuffer_WrapBoundaryEraseIssue(t *testing.T) {
 	row3 := strings.TrimRight(cellsToStringTest(grid[3]), " ")
 	if row3 != "" {
 		t.Errorf("Row 3 should be empty, got %q", row3)
+	}
+}
+
+// TestDisplayBuffer_BashReadlineInsert tests bash's readline insert behavior.
+// When user types in the middle of a line, bash:
+// 1. Writes the new character (overwriting)
+// 2. Redraws all remaining characters (shifted by one position)
+// 3. Repositions cursor
+//
+// This is NOT using terminal insert mode (IRM) - bash handles insertion in software.
+func TestDisplayBuffer_BashReadlineInsert(t *testing.T) {
+	width := 80
+	height := 5
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Type "aaaaaaaaaa" (10 a's)
+	for i := 0; i < 10; i++ {
+		p.Parse('a')
+	}
+
+	// Verify initial state
+	line := v.displayBuf.display.CurrentLine()
+	if line.Len() != 10 {
+		t.Fatalf("Expected line length 10, got %d", line.Len())
+	}
+	t.Logf("Initial: line=%q, len=%d, cursor=%d", cellsToStringTest(line.Cells), line.Len(), v.displayBuf.display.GetCursorOffset())
+
+	// Move cursor left 5 times (CSI 5 D)
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+
+	// Verify cursor moved
+	offset := v.displayBuf.display.GetCursorOffset()
+	if offset != 5 {
+		t.Fatalf("Expected cursor at offset 5 after moving left, got %d", offset)
+	}
+	t.Logf("After cursor left 5: cursor=%d, cursorX=%d", offset, v.cursorX)
+
+	// Now simulate bash readline inserting a 'b':
+	// 1. Write 'b' at current position
+	// 2. Write remaining 'a' characters shifted right
+	// 3. Position cursor back
+
+	// Step 1: Write 'b'
+	p.Parse('b')
+	t.Logf("After 'b': line=%q, len=%d, cursor=%d, cursorX=%d",
+		cellsToStringTest(v.displayBuf.display.CurrentLine().Cells),
+		v.displayBuf.display.CurrentLine().Len(),
+		v.displayBuf.display.GetCursorOffset(),
+		v.cursorX)
+
+	// After writing 'b', line is "aaaaabaaaa" (overwrote position 5), cursor at 6
+
+	// Step 2: Bash redraws remaining chars - this is the key part!
+	// Bash sends the remaining 5 'a' characters at positions 6, 7, 8, 9, 10
+	// Position 10 should EXTEND the line to 11 chars
+	for i := 0; i < 5; i++ {
+		p.Parse('a')
+		t.Logf("After redraw 'a' %d: line=%q, len=%d, cursor=%d, cursorX=%d",
+			i+1,
+			cellsToStringTest(v.displayBuf.display.CurrentLine().Cells),
+			v.displayBuf.display.CurrentLine().Len(),
+			v.displayBuf.display.GetCursorOffset(),
+			v.cursorX)
+	}
+
+	// After redraw, line should be "aaaaabaaaaa" (11 chars)
+	line = v.displayBuf.display.CurrentLine()
+	if line.Len() != 11 {
+		t.Errorf("Expected line length 11 after insert+redraw, got %d", line.Len())
+		t.Errorf("Line content: %q", cellsToStringTest(line.Cells))
+	}
+
+	expectedContent := "aaaaabaaaaa"
+	actualContent := cellsToStringTest(line.Cells)
+	if actualContent != expectedContent {
+		t.Errorf("Expected line content %q, got %q", expectedContent, actualContent)
+	}
+
+	// Step 3: Bash positions cursor back to column 6 (after the inserted 'b')
+	// This simulates CUP or cursor positioning escape sequence
+	for _, ch := range "\x1b[1;7H" { // Move to row 1, column 7 (0-based: 6)
+		p.Parse(ch)
+	}
+
+	// Cursor should be at offset 6
+	offset = v.displayBuf.display.GetCursorOffset()
+	if offset != 6 {
+		t.Errorf("Expected cursor at offset 6 after positioning, got %d", offset)
+	}
+
+	t.Logf("Final: line=%q, len=%d, cursor=%d", cellsToStringTest(line.Cells), line.Len(), offset)
+}
+
+// TestDisplayBuffer_BashReadlineInsertMultiple tests multiple insertions like the user scenario:
+// 1. Type "aaaaaaaaaa" (10 a's)
+// 2. Move left 5
+// 3. Type "bbbbb" (5 b's, each causing bash to redraw)
+// 4. Expected: "aaaaabbbbbaaaaa" (15 chars)
+//
+// This test includes visual rendering simulation to catch display sync issues.
+func TestDisplayBuffer_BashReadlineInsertMultiple(t *testing.T) {
+	width := 80
+	height := 5
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Create render buffer
+	renderBuf := make([][]Cell, height)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, width)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	simulateRender := func(label string) {
+		vtermGrid := v.Grid()
+		dirtyLines, allDirty := v.GetDirtyLines()
+
+		if allDirty {
+			for y := 0; y < height; y++ {
+				copy(renderBuf[y], vtermGrid[y])
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < height {
+					copy(renderBuf[y], vtermGrid[y])
+				}
+			}
+		}
+		v.ClearDirty()
+
+		// Check for visual desync
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				if renderBuf[y][x].Rune != vtermGrid[y][x].Rune {
+					t.Errorf("[%s] Visual desync at (%d,%d): renderBuf='%c', grid='%c'",
+						label, x, y, renderBuf[y][x].Rune, vtermGrid[y][x].Rune)
+				}
+			}
+		}
+	}
+
+	// Initial render
+	simulateRender("initial")
+
+	// Type "aaaaaaaaaa" (10 a's)
+	for i := 0; i < 10; i++ {
+		p.Parse('a')
+		simulateRender(fmt.Sprintf("type 'a' %d", i+1))
+	}
+
+	initialLine := cellsToStringTest(v.displayBuf.display.CurrentLine().Cells)
+	t.Logf("Initial: %q", initialLine)
+
+	// Move cursor left 5 times
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+	simulateRender("cursor left 5")
+
+	// Now insert 5 'b' characters, each with bash-style redraw
+	for b := 0; b < 5; b++ {
+		// Type 'b'
+		p.Parse('b')
+		simulateRender(fmt.Sprintf("type 'b' %d", b+1))
+
+		// Bash redraws remaining chars (shifted right)
+		// After inserting at position (5+b), bash redraws positions (6+b) to end
+		// The number of trailing 'a's to redraw is always 5 (original trailing a's)
+		for i := 0; i < 5; i++ {
+			p.Parse('a')
+			simulateRender(fmt.Sprintf("redraw 'a' %d for 'b' %d", i+1, b+1))
+		}
+
+		// Bash positions cursor back
+		col := 6 + b // 1-indexed: 7+b
+		escSeq := fmt.Sprintf("\x1b[1;%dH", col+1)
+		for _, ch := range escSeq {
+			p.Parse(ch)
+		}
+		simulateRender(fmt.Sprintf("cursor position after 'b' %d", b+1))
+
+		curLine := cellsToStringTest(v.displayBuf.display.CurrentLine().Cells)
+		t.Logf("After 'b' %d: %q (len=%d, cursor=%d)",
+			b+1, curLine, v.displayBuf.display.CurrentLine().Len(),
+			v.displayBuf.display.GetCursorOffset())
+	}
+
+	// Final check
+	line := v.displayBuf.display.CurrentLine()
+	actualContent := cellsToStringTest(line.Cells)
+	expectedContent := "aaaaabbbbbaaaaa" // 5 a's + 5 b's + 5 a's = 15 chars
+
+	if actualContent != expectedContent {
+		t.Errorf("Expected line content %q, got %q", expectedContent, actualContent)
+	}
+
+	if line.Len() != 15 {
+		t.Errorf("Expected line length 15, got %d", line.Len())
+	}
+
+	// Also check the visual output
+	grid := v.Grid()
+	gridRow0 := strings.TrimRight(cellsToStringTest(grid[0]), " ")
+	t.Logf("Grid row 0: %q", gridRow0)
+
+	renderRow0 := strings.TrimRight(cellsToStringTest(renderBuf[0]), " ")
+	t.Logf("RenderBuf row 0: %q", renderRow0)
+
+	if gridRow0 != expectedContent {
+		t.Errorf("Grid row 0: expected %q, got %q", expectedContent, gridRow0)
+	}
+
+	if renderRow0 != expectedContent {
+		t.Errorf("RenderBuf row 0: expected %q, got %q", expectedContent, renderRow0)
+	}
+}
+
+// TestDisplayBuffer_BashReadlineInsertWithHistory tests insertion when there's committed history.
+// This simulates a more realistic scenario with previous shell prompts in history.
+func TestDisplayBuffer_BashReadlineInsertWithHistory(t *testing.T) {
+	width := 80
+	height := 10
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Create some history by typing and pressing enter a few times
+	for lineNum := 0; lineNum < 5; lineNum++ {
+		// Type a line
+		line := fmt.Sprintf("command%d", lineNum)
+		for _, ch := range line {
+			p.Parse(ch)
+		}
+		// Press enter (CR + LF)
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+
+	t.Logf("After creating history: committed lines=%d", len(v.displayBuf.display.lines))
+
+	// Now we're on a new line, type "aaaaaaaaaa"
+	for i := 0; i < 10; i++ {
+		p.Parse('a')
+	}
+
+	initialLine := cellsToStringTest(v.displayBuf.display.CurrentLine().Cells)
+	initialOffset := v.displayBuf.display.GetCursorOffset()
+	t.Logf("Initial: line=%q, len=%d, cursor=%d, cursorX=%d, cursorY=%d",
+		initialLine, v.displayBuf.display.CurrentLine().Len(), initialOffset, v.cursorX, v.cursorY)
+
+	// Move cursor left 5 times
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+
+	afterMoveOffset := v.displayBuf.display.GetCursorOffset()
+	t.Logf("After cursor left 5: cursor=%d, cursorX=%d", afterMoveOffset, v.cursorX)
+
+	if afterMoveOffset != 5 {
+		t.Errorf("Expected cursor at offset 5 after moving left, got %d", afterMoveOffset)
+	}
+
+	// Insert 5 'b' characters with bash-style redraw
+	for b := 0; b < 5; b++ {
+		// Type 'b'
+		p.Parse('b')
+
+		// Bash redraws remaining chars
+		for i := 0; i < 5; i++ {
+			p.Parse('a')
+		}
+
+		// Bash positions cursor back
+		// Note: CUP uses 1-indexed row/column
+		escSeq := fmt.Sprintf("\x1b[%d;%dH", v.cursorY+1, 6+b+1)
+		for _, ch := range escSeq {
+			p.Parse(ch)
+		}
+
+		curLine := cellsToStringTest(v.displayBuf.display.CurrentLine().Cells)
+		t.Logf("After 'b' %d: %q (len=%d, cursor=%d, cursorX=%d)",
+			b+1, curLine, v.displayBuf.display.CurrentLine().Len(),
+			v.displayBuf.display.GetCursorOffset(), v.cursorX)
+	}
+
+	// Final check
+	line := v.displayBuf.display.CurrentLine()
+	actualContent := cellsToStringTest(line.Cells)
+	expectedContent := "aaaaabbbbbaaaaa"
+
+	if actualContent != expectedContent {
+		t.Errorf("Expected line content %q, got %q", expectedContent, actualContent)
+	}
+
+	if line.Len() != 15 {
+		t.Errorf("Expected line length 15, got %d", line.Len())
+	}
+}
+
+// TestDisplayBuffer_BashReadlineInsertNarrowTerminal tests insertion with a narrow terminal
+// where the line might wrap. This uses CR+CUF for cursor positioning, which is closer to
+// what bash actually does for multi-line editing.
+//
+// The test has been updated to properly position the cursor after each redraw, accounting
+// for the fact that with each insertion, the target column increases by 1.
+func TestDisplayBuffer_BashReadlineInsertNarrowTerminal(t *testing.T) {
+	width := 12 // Narrow terminal
+	height := 10
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Type "aaaaaaaaaa" (10 a's) - fits in one row
+	for i := 0; i < 10; i++ {
+		p.Parse('a')
+	}
+
+	initialLine := cellsToStringTest(v.displayBuf.display.CurrentLine().Cells)
+	t.Logf("Initial: line=%q, len=%d, cursor=%d, cursorX=%d, cursorY=%d",
+		initialLine, v.displayBuf.display.CurrentLine().Len(),
+		v.displayBuf.display.GetCursorOffset(), v.cursorX, v.cursorY)
+
+	// Move cursor left 5 times to position 5
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+
+	afterMoveOffset := v.displayBuf.display.GetCursorOffset()
+	t.Logf("After cursor left 5: cursor=%d, cursorX=%d", afterMoveOffset, v.cursorX)
+
+	if afterMoveOffset != 5 {
+		t.Errorf("Expected cursor at offset 5 after moving left, got %d", afterMoveOffset)
+	}
+
+	// Insert 5 'b' characters with bash-style redraw
+	// After each 'b', the line grows by 1 character
+	// After 'b' N, cursor should be at position 5+N (just after the N'th 'b')
+	for b := 0; b < 5; b++ {
+		beforeLen := v.displayBuf.display.CurrentLine().Len()
+		beforeCursor := v.displayBuf.display.GetCursorOffset()
+
+		// Type 'b'
+		p.Parse('b')
+		afterBLen := v.displayBuf.display.CurrentLine().Len()
+		afterBCursor := v.displayBuf.display.GetCursorOffset()
+
+		// Bash redraws remaining chars (5 a's)
+		for i := 0; i < 5; i++ {
+			p.Parse('a')
+		}
+		afterRedrawLen := v.displayBuf.display.CurrentLine().Len()
+		afterRedrawCursor := v.displayBuf.display.GetCursorOffset()
+
+		// Bash positions cursor back to just after the 'b' we typed
+		// Target position is 5 + b + 1 = 6 + b
+		// Current position is 6 + b + 5 = 11 + b (after typing 'b' + 5 'a's)
+		// So we need to go back 5 positions
+		escSeq := "\x1b[5D"
+		for _, ch := range escSeq {
+			p.Parse(ch)
+		}
+		afterPosLen := v.displayBuf.display.CurrentLine().Len()
+		afterPosCursor := v.displayBuf.display.GetCursorOffset()
+
+		curLine := cellsToStringTest(v.displayBuf.display.CurrentLine().Cells)
+		t.Logf("'b' %d: cursor %d->%d->%d->%d, len %d->%d->%d->%d, X=%d Y=%d, line=%q",
+			b+1,
+			beforeCursor, afterBCursor, afterRedrawCursor, afterPosCursor,
+			beforeLen, afterBLen, afterRedrawLen, afterPosLen,
+			v.cursorX, v.cursorY, curLine)
+
+		// Verify cursor is at the right position after positioning
+		expectedCursor := 6 + b
+		if afterPosCursor != expectedCursor {
+			t.Errorf("After 'b' %d, expected cursor at %d, got %d", b+1, expectedCursor, afterPosCursor)
+		}
+	}
+
+	// Final check
+	line := v.displayBuf.display.CurrentLine()
+	actualContent := cellsToStringTest(line.Cells)
+	expectedContent := "aaaaabbbbbaaaaa"
+
+	if actualContent != expectedContent {
+		t.Errorf("Expected line content %q, got %q", expectedContent, actualContent)
+	}
+
+	if line.Len() != 15 {
+		t.Errorf("Expected line length 15, got %d", line.Len())
+	}
+
+	// Check wrapping - at width 12, 15 chars should be 2 rows
+	physLines := line.WrapToWidth(width)
+	t.Logf("Physical lines: %d (should be 2 for 15 chars at width 12)", len(physLines))
+}
+
+// TestDisplayBuffer_SimpleOverwriteAfterCursorMove tests the exact user scenario:
+// Type 10 a's, move back 5, type 5 b's (overwriting), move back 5, type 5 c's.
+// This does NOT simulate bash readline - just raw terminal overwrite behavior.
+func TestDisplayBuffer_SimpleOverwriteAfterCursorMove(t *testing.T) {
+	width := 80
+	height := 24
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Helper to get grid content as string
+	getGridRow := func(row int) string {
+		grid := v.Grid()
+		if row >= len(grid) {
+			return ""
+		}
+		return strings.TrimRight(cellsToStringTest(grid[row]), " ")
+	}
+
+	// Type 10 'a' characters
+	for i := 0; i < 10; i++ {
+		p.Parse('a')
+	}
+	t.Logf("After 10 a's: Grid=%q, cursor=(%d,%d), offset=%d",
+		getGridRow(0), v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	if getGridRow(0) != "aaaaaaaaaa" {
+		t.Errorf("After 10 a's: expected 'aaaaaaaaaa', got %q", getGridRow(0))
+	}
+
+	// Move cursor back 5 positions with CUB (ESC [ 5 D)
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+	t.Logf("After CUB 5: cursor=(%d,%d), offset=%d",
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	if v.cursorX != 5 {
+		t.Errorf("After CUB 5: expected cursorX=5, got %d", v.cursorX)
+	}
+
+	// Type 5 'b' characters - these OVERWRITE the a's (terminal is NOT in insert mode)
+	for i := 0; i < 5; i++ {
+		p.Parse('b')
+	}
+	t.Logf("After 5 b's: Grid=%q, cursor=(%d,%d), offset=%d",
+		getGridRow(0), v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	// Should show "aaaaabbbbb" - the b's overwrote the last 5 a's
+	if getGridRow(0) != "aaaaabbbbb" {
+		t.Errorf("After 5 b's: expected 'aaaaabbbbb', got %q", getGridRow(0))
+	}
+
+	// Move cursor back 5 positions again
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+	t.Logf("After CUB 5 again: cursor=(%d,%d), offset=%d",
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	if v.cursorX != 5 {
+		t.Errorf("After CUB 5 again: expected cursorX=5, got %d", v.cursorX)
+	}
+
+	// Type 5 'c' characters - these OVERWRITE the b's
+	for i := 0; i < 5; i++ {
+		p.Parse('c')
+	}
+	t.Logf("After 5 c's: Grid=%q, cursor=(%d,%d), offset=%d",
+		getGridRow(0), v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	// Should show "aaaaaccccc" - the c's overwrote the b's
+	if getGridRow(0) != "aaaaaccccc" {
+		t.Errorf("After 5 c's: expected 'aaaaaccccc', got %q", getGridRow(0))
+	}
+
+	// Also verify the logical line content matches
+	line := v.displayBuf.display.CurrentLine()
+	lineContent := cellsToStringTest(line.Cells)
+	t.Logf("Logical line: %q, len=%d", lineContent, line.Len())
+
+	if lineContent != "aaaaaccccc" {
+		t.Errorf("Logical line: expected 'aaaaaccccc', got %q", lineContent)
+	}
+}
+
+// TestDisplayBuffer_SimpleOverwriteWithRenderFlow tests the same scenario but
+// with dirty line tracking simulation - exactly what the real renderer does.
+func TestDisplayBuffer_SimpleOverwriteWithRenderFlow(t *testing.T) {
+	width := 80
+	height := 24
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	// Enable debug logging
+	v.SetDisplayBufferDebugLog(func(format string, args ...interface{}) {
+		t.Logf("[DEBUG] "+format, args...)
+	})
+
+	// NOTE: This test simulates OVERWRITE mode where typing 'b' at position 5
+	// just overwrites 'a'. But bash readline does INSERTION - it sends 'b',
+	// then redraws the rest of the line, then moves cursor back.
+	// See TestDisplayBuffer_BashActualInsertionFlow for the real bash behavior.
+
+	// Create render buffer (what user sees)
+	renderBuf := make([][]Cell, height)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, width)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' '}
+		}
+	}
+
+	// Simulate render: ONLY update dirty rows (this is what the real renderer does)
+	simulateRender := func(label string) {
+		dirtyLines, allDirty := v.GetDirtyLines()
+		vtermGrid := v.Grid()
+
+		if allDirty {
+			for y := 0; y < height && y < len(vtermGrid); y++ {
+				copy(renderBuf[y], vtermGrid[y])
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < height && y < len(vtermGrid) {
+					copy(renderBuf[y], vtermGrid[y])
+				}
+			}
+		}
+		v.ClearDirty()
+
+		// Log what we rendered
+		t.Logf("%s: rendered rows %v (allDirty=%v)", label, dirtyLines, allDirty)
+	}
+
+	getRow := func(buf [][]Cell, row int) string {
+		return strings.TrimRight(cellsToStringTest(buf[row]), " ")
+	}
+
+	// Initial render
+	simulateRender("initial")
+
+	// Type 10 'a' characters
+	for i := 0; i < 10; i++ {
+		p.Parse('a')
+	}
+	simulateRender("after 10 a's")
+	t.Logf("RenderBuf after 10 a's: %q", getRow(renderBuf, 0))
+
+	if getRow(renderBuf, 0) != "aaaaaaaaaa" {
+		t.Errorf("RenderBuf after 10 a's: expected 'aaaaaaaaaa', got %q", getRow(renderBuf, 0))
+	}
+
+	// Move cursor back 5 positions with CUB (ESC [ 5 D)
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+	simulateRender("after CUB 5")
+	t.Logf("Cursor after CUB 5: (%d,%d), offset=%d",
+		v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
+
+	// Type 5 'b' characters
+	for i := 0; i < 5; i++ {
+		p.Parse('b')
+		simulateRender(fmt.Sprintf("after b %d", i+1))
+	}
+	t.Logf("RenderBuf after 5 b's: %q", getRow(renderBuf, 0))
+	t.Logf("Grid after 5 b's: %q", getRow(v.Grid(), 0))
+
+	if getRow(renderBuf, 0) != "aaaaabbbbb" {
+		t.Errorf("RenderBuf after 5 b's: expected 'aaaaabbbbb', got %q", getRow(renderBuf, 0))
+	}
+
+	// Move cursor back 5 positions again
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+	simulateRender("after CUB 5 again")
+
+	// Type 5 'c' characters
+	for i := 0; i < 5; i++ {
+		p.Parse('c')
+		simulateRender(fmt.Sprintf("after c %d", i+1))
+	}
+	t.Logf("RenderBuf after 5 c's: %q", getRow(renderBuf, 0))
+	t.Logf("Grid after 5 c's: %q", getRow(v.Grid(), 0))
+
+	if getRow(renderBuf, 0) != "aaaaaccccc" {
+		t.Errorf("RenderBuf after 5 c's: expected 'aaaaaccccc', got %q", getRow(renderBuf, 0))
+	}
+}
+
+// TestDisplayBuffer_BashActualInsertionFlow tests what bash ACTUALLY does when
+// you type a character in the middle of the line. Bash handles insertion internally
+// and redraws the visible text via escape sequences.
+//
+// When you type 'b' at position 5 in "aaaaaaaaaa":
+// 1. bash inserts 'b' in its buffer -> "aaaaabaaaaa" (11 chars)
+// 2. bash echoes 'b' at cursor position 5 (terminal overwrites 'a')
+// 3. bash echoes remaining chars 'aaaaa' at positions 6-10
+// 4. bash moves cursor back to position 6 (just after the 'b')
+//
+// This is the sequence that was failing in the real terminal.
+func TestDisplayBuffer_BashActualInsertionFlow(t *testing.T) {
+	width := 80
+	height := 24
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	v.SetDisplayBufferDebugLog(func(format string, args ...interface{}) {
+		t.Logf("[DEBUG] "+format, args...)
+	})
+
+	getRow := func() string {
+		grid := v.Grid()
+		if len(grid) == 0 {
+			return ""
+		}
+		return strings.TrimRight(cellsToStringTest(grid[0]), " ")
+	}
+
+	// Type 10 'a' characters
+	for i := 0; i < 10; i++ {
+		p.Parse('a')
+	}
+	t.Logf("After 10 a's: Grid=%q, cursorX=%d, offset=%d",
+		getRow(), v.cursorX, v.displayBuf.display.GetCursorOffset())
+
+	if getRow() != "aaaaaaaaaa" {
+		t.Fatalf("Initial line wrong: expected 'aaaaaaaaaa', got %q", getRow())
+	}
+
+	// Move cursor back 5 positions with CUB (ESC [ 5 D)
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+	t.Logf("After CUB 5: cursorX=%d, offset=%d", v.cursorX, v.displayBuf.display.GetCursorOffset())
+
+	if v.cursorX != 5 || v.displayBuf.display.GetCursorOffset() != 5 {
+		t.Fatalf("Cursor position wrong after CUB 5: cursorX=%d, offset=%d",
+			v.cursorX, v.displayBuf.display.GetCursorOffset())
+	}
+
+	// Now simulate what bash does when you type 'b':
+	// 1. Echo 'b' at current position
+	p.Parse('b')
+	t.Logf("After echo 'b': Grid=%q, cursorX=%d, offset=%d",
+		getRow(), v.cursorX, v.displayBuf.display.GetCursorOffset())
+
+	// 2. Echo remaining 5 'a's (bash redraws the rest of the line)
+	for i := 0; i < 5; i++ {
+		p.Parse('a')
+	}
+	t.Logf("After redraw 'aaaaa': Grid=%q, cursorX=%d, offset=%d",
+		getRow(), v.cursorX, v.displayBuf.display.GetCursorOffset())
+
+	// At this point, the line should be "aaaaabaaaaa" (11 chars)
+	// cursorX should be 11, offset should be 11
+	expected := "aaaaabaaaaa"
+	if getRow() != expected {
+		t.Errorf("After bash redraw: expected %q, got %q", expected, getRow())
+	}
+
+	// 3. Bash moves cursor back to position 6 (just after the 'b')
+	for _, ch := range "\x1b[5D" {
+		p.Parse(ch)
+	}
+	t.Logf("After CUB 5 to reposition: Grid=%q, cursorX=%d, offset=%d",
+		getRow(), v.cursorX, v.displayBuf.display.GetCursorOffset())
+
+	// Cursor should be at position 6, offset should be 6
+	if v.cursorX != 6 {
+		t.Errorf("After reposition: expected cursorX=6, got %d", v.cursorX)
+	}
+	if v.displayBuf.display.GetCursorOffset() != 6 {
+		t.Errorf("After reposition: expected offset=6, got %d", v.displayBuf.display.GetCursorOffset())
+	}
+
+	// The grid should still show correct content
+	if getRow() != expected {
+		t.Errorf("Grid corrupted after reposition: expected %q, got %q", expected, getRow())
+	}
+
+	// Now type another 'b' - same sequence
+	p.Parse('b')
+	for i := 0; i < 4; i++ { // Only 4 a's left after 'b'
+		p.Parse('a')
+	}
+	for _, ch := range "\x1b[4D" { // Move back 4
+		p.Parse(ch)
+	}
+	t.Logf("After second 'b': Grid=%q, cursorX=%d, offset=%d",
+		getRow(), v.cursorX, v.displayBuf.display.GetCursorOffset())
+
+	expected2 := "aaaaabbaaaa"
+	if getRow() != expected2 {
+		t.Errorf("After second 'b': expected %q, got %q", expected2, getRow())
+	}
+}
+
+// TestDisplayBuffer_ICH_InsertCharacters tests that ICH (Insert Character - CSI @)
+// properly integrates with the display buffer, shifting existing content right.
+func TestDisplayBuffer_ICH_InsertCharacters(t *testing.T) {
+	width := 40
+	height := 10
+	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v.EnableDisplayBuffer()
+
+	getRow := func() string {
+		grid := v.Grid()
+		if len(grid) == 0 || len(grid[0]) == 0 {
+			return ""
+		}
+		var sb strings.Builder
+		for _, cell := range grid[0] {
+			r := cell.Rune
+			if r == 0 {
+				r = ' '
+			}
+			sb.WriteRune(r)
+		}
+		return strings.TrimRight(sb.String(), " ")
+	}
+
+	// Type "hello world"
+	for _, r := range "hello world" {
+		v.placeChar(r)
+	}
+
+	t.Logf("Initial: line=%q, cursorX=%d", getRow(), v.cursorX)
+
+	// Move cursor back to position 6 (after "hello ")
+	v.MoveCursorBackward(5) // Now at position 6
+
+	t.Logf("After CUB 5: cursorX=%d, offset=%d", v.cursorX, v.displayBuf.display.GetCursorOffset())
+
+	// Use ICH to insert 3 blank characters (CSI 3 @)
+	v.InsertCharacters(3)
+
+	t.Logf("After ICH 3: line=%q, cursorX=%d, offset=%d", getRow(), v.cursorX, v.displayBuf.display.GetCursorOffset())
+
+	// Type "NEW" into the blank space
+	for _, r := range "NEW" {
+		v.placeChar(r)
+	}
+
+	result := getRow()
+	t.Logf("After typing 'NEW': line=%q, cursorX=%d", result, v.cursorX)
+
+	// Expected: "hello NEWworld"
+	// - "hello " (6 chars)
+	// - "NEW" (3 chars we inserted)
+	// - "world" (5 chars shifted right)
+	expected := "hello NEWworld"
+	if result != expected {
+		t.Errorf("Expected %q, got %q", expected, result)
+	}
+
+	// Cursor should be at position 9 (after "hello NEW")
+	if v.cursorX != 9 {
+		t.Errorf("Expected cursorX=9, got %d", v.cursorX)
+	}
+}
+
+// TestDisplayBuffer_ICH_AtEndOfLine tests ICH at the end of a line.
+func TestDisplayBuffer_ICH_AtEndOfLine(t *testing.T) {
+	width := 40
+	height := 10
+	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v.EnableDisplayBuffer()
+
+	getRow := func() string {
+		grid := v.Grid()
+		if len(grid) == 0 || len(grid[0]) == 0 {
+			return ""
+		}
+		var sb strings.Builder
+		for _, cell := range grid[0] {
+			r := cell.Rune
+			if r == 0 {
+				r = ' '
+			}
+			sb.WriteRune(r)
+		}
+		return strings.TrimRight(sb.String(), " ")
+	}
+
+	// Type "hello"
+	for _, r := range "hello" {
+		v.placeChar(r)
+	}
+
+	t.Logf("Initial: line=%q, cursorX=%d", getRow(), v.cursorX)
+
+	// Insert 3 blanks at end
+	v.InsertCharacters(3)
+
+	t.Logf("After ICH 3 at end: line=%q, cursorX=%d", getRow(), v.cursorX)
+
+	// Type "!!!"
+	for _, r := range "!!!" {
+		v.placeChar(r)
+	}
+
+	result := getRow()
+	t.Logf("After typing '!!!': line=%q", result)
+
+	// Expected: "hello!!!"
+	expected := "hello!!!"
+	if result != expected {
+		t.Errorf("Expected %q, got %q", expected, result)
 	}
 }

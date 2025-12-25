@@ -22,11 +22,6 @@ func (v *VTerm) CarriageReturn() {
 
 	v.wrapNext = false // Clear wrapNext when returning to start of line
 
-	// Update display buffer logical X
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		v.displayBufferCarriageReturn()
-	}
-
 	// CR behavior with left/right margins:
 	// - If inside margins: go to left margin
 	// - If left of left margin: go to column 0 (unless in origin mode, then go to left margin)
@@ -46,6 +41,11 @@ func (v *VTerm) CarriageReturn() {
 	} else {
 		v.SetCursorPos(v.cursorY, 0)
 	}
+
+	// Update display buffer logical cursor AFTER SetCursorPos so delta calculation works
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferCarriageReturn()
+	}
 }
 
 // Backspace moves cursor back one column (respecting left margin).
@@ -60,11 +60,11 @@ func (v *VTerm) Backspace() {
 	}
 
 	if v.cursorX > minX {
-		// Update display buffer logical X
-		if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-			v.displayBufferBackspace()
-		}
 		v.SetCursorPos(v.cursorY, v.cursorX-1)
+		// Sync display buffer cursor after SetCursorPos
+		if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+			v.displayBufferSetCursorFromPhysical()
+		}
 	}
 }
 

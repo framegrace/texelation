@@ -56,7 +56,7 @@ type VTerm struct {
 	ScreenRestored                     func()
 	dirtyLines                         map[int]bool
 	allDirty                           bool
-	prevCursorY                        int
+	prevCursorX, prevCursorY           int
 	InSynchronizedUpdate               bool
 	lastGraphicChar                    rune // Last graphic character written (for REP command)
 	// Shell integration (OSC 133)
@@ -267,6 +267,13 @@ func (v *VTerm) placeChar(r rune) {
 			v.wrapNext = true
 		} else if v.cursorX < rightEdge {
 			v.SetCursorPos(v.cursorY, v.cursorX+1)
+			// Sync prevCursor with new cursor position so delta-based sync doesn't see false movement.
+			// The display buffer cursor was already advanced by displayBufferPlaceChar, so
+			// displayBufferSetCursorFromPhysical should not apply another delta.
+			if v.IsDisplayBufferEnabled() {
+				v.prevCursorX = v.cursorX
+				v.prevCursorY = v.cursorY
+			}
 		}
 		// If at the edge and wrapping is disabled, cursor stays at the last column
 	}
@@ -743,6 +750,13 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 		}
 		v.SetCursorPos(newY, v.cursorX)
 	}
+
+	// Sync display buffer cursor after any cursor movement escape sequence.
+	// This is done here rather than in SetCursorPos because placeChar also
+	// calls SetCursorPos, and it already advances the display buffer cursor.
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferSetCursorFromPhysical()
+	}
 }
 
 // Erase operations (ED, EL, ECH): See vterm_erase.go
@@ -805,11 +819,7 @@ func (v *VTerm) MoveCursorForward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
-
-	// Sync display buffer's logical X for horizontal cursor movement
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		v.displayBufferSetCursorFromPhysical()
-	}
+	// Note: displayBufferSetCursorFromPhysical is called by handleCursorMovement
 }
 
 func (v *VTerm) MoveCursorBackward(n int) {
@@ -828,11 +838,7 @@ func (v *VTerm) MoveCursorBackward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
-
-	// Sync display buffer's logical X for horizontal cursor movement
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		v.displayBufferSetCursorFromPhysical()
-	}
+	// Note: displayBufferSetCursorFromPhysical is called by handleCursorMovement
 }
 
 func (v *VTerm) MoveCursorUp(n int) {

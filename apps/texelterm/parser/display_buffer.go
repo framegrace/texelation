@@ -240,7 +240,16 @@ func (db *DisplayBuffer) DeleteCharacters(n int) {
 		db.scrollToLiveEdgeNoShrink()
 	}
 }
-	        
+
+// InsertCharacters inserts n blank characters at current position, shifting content right.
+// Delegates to LiveEditor. Used for ICH (Insert Character) - CSI @.
+func (db *DisplayBuffer) InsertCharacters(n int, fg, bg Color) {
+	db.liveEditor.InsertChars(n, fg, bg)
+	if db.atLiveEdge {
+		db.scrollToLiveEdgeNoShrink()
+	}
+}
+
 // GetCursorOffset returns the current logical cursor offset.
 // Delegates to LiveEditor.
 func (db *DisplayBuffer) GetCursorOffset() int {

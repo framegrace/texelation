@@ -24,6 +24,14 @@ func (v *VTerm) InsertCharacters(n int) {
 		rightBoundary = v.marginRight + 1
 	}
 
+	// Update display buffer if enabled (main screen only)
+	// TODO: ICH with display buffer currently works for non-wrapped lines only.
+	// For wrapped lines, the insertion needs to account for physical row boundaries
+	// and potentially reflow content across multiple physical rows.
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
+		v.displayBufferInsertCharacters(n)
+	}
+
 	if v.inAltScreen {
 		line := v.altBuffer[v.cursorY]
 		// Calculate how many chars to copy and where they should end
