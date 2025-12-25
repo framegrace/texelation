@@ -120,6 +120,8 @@ func (v *VTerm) ClearLine(mode int) {
 		case 2:
 			v.displayBufferEraseLine()
 		}
+	} else if !v.inAltScreen && v.displayBuf != nil && v.displayBuf.display != nil && v.displayBuf.display.debugLog != nil {
+		v.displayBuf.display.debugLog("ClearLine: display buffer SKIPPED (enabled=%v)", v.IsDisplayBufferEnabled())
 	}
 
 	var line []Cell

@@ -2168,3 +2168,217 @@ func TestDisplayBuffer_WrapDirtyTrackingRegression(t *testing.T) {
 		t.Errorf("Row 1: expected 'MN', got %q", row1)
 	}
 }
+
+// TestDisplayBuffer_BashBackspaceRedraw tests the bash readline behavior when
+// backspacing across a wrap boundary. Bash:
+// 1. Moves cursor to start of the editable area
+// 2. Erases to end of line (EL 0)
+// 3. Redraws the updated content
+// This test verifies that the display buffer correctly handles this sequence.
+func TestDisplayBuffer_BashBackspaceRedraw(t *testing.T) {
+	width := 10
+	height := 5
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+
+	// Create render buffer
+	renderBuf := make([][]Cell, height)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, width)
+		for x := range renderBuf[y] {
+			renderBuf[y][x] = Cell{Rune: ' '}
+		}
+	}
+
+	simulateRender := func(desc string) {
+		dirtyLines, allDirty := v.GetDirtyLines()
+		vtermGrid := v.Grid()
+		if allDirty {
+			for y := 0; y < height && y < len(vtermGrid); y++ {
+				copy(renderBuf[y], vtermGrid[y])
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < height && y < len(vtermGrid) {
+					copy(renderBuf[y], vtermGrid[y])
+				}
+			}
+		}
+		v.ClearDirty()
+		t.Logf("%s: cursor=(%d,%d), row0=%q, row1=%q", desc, v.cursorX, v.cursorY,
+			cellsToStringTest(vtermGrid[0]), strings.TrimRight(cellsToStringTest(vtermGrid[1]), " "))
+	}
+
+	// Step 1: Write a prompt line and commit it (simulates git status)
+	for _, ch := range "PROMPT" {
+		v.placeChar(ch)
+	}
+	v.CarriageReturn()
+	v.LineFeed()
+	simulateRender("After prompt + LF")
+
+	// Step 2: Write "$ " (the actual prompt) followed by content that wraps
+	for _, ch := range "$ aaaaaaaa" { // 2 + 8 = 10 chars = full row
+		v.placeChar(ch)
+	}
+	simulateRender("After first row full ($ + 8 a's)")
+
+	// Step 3: Type more to wrap
+	for _, ch := range "bb" { // 2 more chars on row 1
+		v.placeChar(ch)
+	}
+	simulateRender("After wrap (2 b's on row 1)")
+
+	// Verify initial state
+	grid := v.Grid()
+	t.Logf("Before backspace: row1=%q, row2=%q", cellsToStringTest(grid[1]), strings.TrimRight(cellsToStringTest(grid[2]), " "))
+
+	// Step 4: Simulate bash backspace across wrap boundary
+	// Bash moves cursor to the start of the editable content (row 1, col 0)
+	v.SetCursorPos(1, 0) // Move to row 1, col 0 (start of "$ aaaaaaaa")
+	simulateRender("Cursor moved to (0,1)")
+
+	// Step 5: Erase to end of line - this should clear the entire logical line
+	v.ClearLine(0) // EL 0 - Erase to End of Line
+	simulateRender("After EL 0")
+
+	// Step 6: Verify the line is cleared
+	grid = v.Grid()
+	row1 := cellsToStringTest(grid[1])
+	row2 := cellsToStringTest(grid[2])
+	t.Logf("After erase: row1=%q, row2=%q", row1, row2)
+
+	// The LiveEditor line should be cleared (cursor at offset 0, erase to end = empty)
+	liveLen := v.displayBuf.display.CurrentLine().Len()
+	t.Logf("LiveEditor line length after erase: %d", liveLen)
+	if liveLen != 0 {
+		t.Errorf("LiveEditor should be empty after EL 0 at offset 0, got len=%d", liveLen)
+	}
+
+	// Step 7: Bash redraws the remaining content (one less 'b')
+	for _, ch := range "$ aaaaaaaab" { // 2 + 8 + 1 = 11 chars (wraps)
+		v.placeChar(ch)
+	}
+	simulateRender("After redraw ($ + 8 a's + 1 b)")
+
+	// Step 8: Verify the content is correctly displayed
+	grid = v.Grid()
+	row1 = strings.TrimRight(cellsToStringTest(grid[1]), " ")
+	row2 = strings.TrimRight(cellsToStringTest(grid[2]), " ")
+	t.Logf("Final: row1=%q, row2=%q", row1, row2)
+
+	// The redrawn content should wrap with one 'b' on the second row
+	if row1 != "$ aaaaaaaa" {
+		t.Errorf("Row 1: expected '$ aaaaaaaa', got %q", row1)
+	}
+	if row2 != "b" {
+		t.Errorf("Row 2: expected 'b', got %q", row2)
+	}
+
+	// Verify LiveEditor has the correct content
+	liveLen = v.displayBuf.display.CurrentLine().Len()
+	if liveLen != 11 { // "$ aaaaaaaab" = 11 chars
+		t.Errorf("LiveEditor line length: expected 11, got %d", liveLen)
+	}
+}
+
+// TestDisplayBuffer_WrapBoundaryEraseIssue tests the specific issue where
+// content appears in Grid after the LiveEditor has been erased.
+// This happens when the VTerm cursor position doesn't match what we expect.
+func TestDisplayBuffer_WrapBoundaryEraseIssue(t *testing.T) {
+	width := 35 // Match the real terminal width from the debug log
+	height := 5
+	v := NewVTerm(width, height)
+	v.EnableDisplayBuffer()
+
+	// Log db.lines and LiveEditor state
+	logState := func(desc string) {
+		grid := v.Grid()
+		dbLines := len(v.displayBuf.display.lines)
+		liveLen := v.displayBuf.display.CurrentLine().Len()
+		cursorOffset := v.displayBuf.display.GetCursorOffset()
+		t.Logf("%s: cursor=(%d,%d), dbLines=%d, liveLen=%d, cursorOffset=%d",
+			desc, v.cursorX, v.cursorY, dbLines, liveLen, cursorOffset)
+		for y := 0; y < min(3, len(grid)); y++ {
+			t.Logf("  row[%d]: %q", y, cellsToStringTest(grid[y]))
+		}
+	}
+
+	// Step 1: Simulate git status output (2 lines)
+	for _, ch := range "git status line 1" {
+		v.placeChar(ch)
+	}
+	v.CarriageReturn()
+	v.LineFeed()
+	for _, ch := range "git status line 2" {
+		v.placeChar(ch)
+	}
+	v.CarriageReturn()
+	v.LineFeed()
+	logState("After 2 prompt lines")
+
+	// Step 2: Write prompt + content that wraps
+	// "❯ " (2 chars) + 33 'a's = 35 chars (full row)
+	v.placeChar(0x276F) // ❯
+	v.placeChar(' ')
+	for i := 0; i < 33; i++ {
+		v.placeChar('a')
+	}
+	logState("After first row full")
+
+	// Step 3: Write 5 more 'a's (wrap to second row)
+	for i := 0; i < 5; i++ {
+		v.placeChar('a')
+	}
+	logState("After wrap (5 more a's)")
+
+	// Verify LiveEditor content
+	liveLen := v.displayBuf.display.CurrentLine().Len()
+	if liveLen != 40 { // 2 + 33 + 5 = 40
+		t.Errorf("Expected LiveEditor len=40, got %d", liveLen)
+	}
+
+	// Step 4: Simulate cursor movement to start of editable content
+	// In the debug log, this was physY=2 (row index for "❯ aaaaa...")
+	v.SetCursorPos(2, 0) // Row 2, Col 0
+	logState("Cursor at (0, 2)")
+
+	// Step 5: Erase to end of line
+	v.ClearLine(0)
+	logState("After EL 0")
+
+	// Check: LiveEditor should be empty
+	liveLen = v.displayBuf.display.CurrentLine().Len()
+	if liveLen != 0 {
+		t.Errorf("LiveEditor should be empty after EL 0 at row 2 col 0, got len=%d", liveLen)
+	}
+
+	// Check: Grid row 2 should be empty (or spaces)
+	grid := v.Grid()
+	row2 := strings.TrimRight(cellsToStringTest(grid[2]), " ")
+	if row2 != "" {
+		t.Errorf("Grid row 2 should be empty after EL 0, got %q", row2)
+	}
+
+	// Step 6: Redraw the content (without the last character)
+	v.placeChar(0x276F) // ❯
+	v.placeChar(' ')
+	for i := 0; i < 32; i++ { // One less 'a'
+		v.placeChar('a')
+	}
+	logState("After redraw (34 chars)")
+
+	// Step 7: Verify final state
+	grid = v.Grid()
+	row2 = strings.TrimRight(cellsToStringTest(grid[2]), " ")
+	expectedRow2 := "❯ " + strings.Repeat("a", 32) // 34 chars
+	if row2 != expectedRow2 {
+		t.Errorf("Final row 2: expected %q, got %q", expectedRow2, row2)
+	}
+
+	// Row 3 should be empty
+	row3 := strings.TrimRight(cellsToStringTest(grid[3]), " ")
+	if row3 != "" {
+		t.Errorf("Row 3 should be empty, got %q", row3)
+	}
+}

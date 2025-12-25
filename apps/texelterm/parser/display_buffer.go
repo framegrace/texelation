@@ -61,6 +61,10 @@ type DisplayBuffer struct {
 	// It is the single source of truth for cursor position (as logical offset).
 	liveEditor *LiveEditor
 
+	// allowUncommit is set to true after a commit and cleared when content is written.
+	// This prevents uncommitting during normal output progression.
+	allowUncommit bool
+
 	// debugLog is an optional logging function for debugging.
 	debugLog func(format string, args ...interface{})
 	}
@@ -114,24 +118,87 @@ type DisplayBuffer struct {
 func (db *DisplayBuffer) SetCursor(physX, physY int) {
 	// Calculate which physical row of the live editor's content this maps to
 	liveEdgeStartIdx := len(db.lines)
+	globalPhysY := db.viewportTop + physY
 
-	// Check if the cursor is on the live edge (current uncommitted line)
-	if physY >= 0 && db.viewportTop+physY >= liveEdgeStartIdx {
-		// Cursor is on the live editor's line
-		physRowInLiveEditor := (db.viewportTop + physY) - liveEdgeStartIdx
+	// Calculate current line's physical rows for debugging
+	currentPhysRows := len(db.currentLinePhysical())
+
+	// Calculate where the live line appears in the viewport.
+	// The live line starts at buffer index liveEdgeStartIdx.
+	// In viewport coordinates: liveStartInViewport = liveEdgeStartIdx - viewportTop
+	liveStartInViewport := liveEdgeStartIdx - db.viewportTop
+
+	// Check if the cursor is on or near the live edge (current uncommitted line).
+	// We accept the cursor if:
+	// 1. It's on the live line (physY >= liveStartInViewport), OR
+	// 2. It's just 1 row above due to VTerm/DisplayBuffer scroll sync issues
+	//    (this commonly happens during status bar updates or prompt redraws)
+	onLiveLine := physY >= 0 && globalPhysY >= liveEdgeStartIdx
+	nearLiveLine := physY >= 0 && physY >= liveStartInViewport-1 && db.liveEditor.Line().Len() > 0
+
+	if onLiveLine || nearLiveLine {
+		// Cursor is on (or near) the live editor's line
+		// Calculate which physical row within the live line
+		var physRowInLiveEditor int
+		if globalPhysY >= liveEdgeStartIdx {
+			physRowInLiveEditor = globalPhysY - liveEdgeStartIdx
+		} else {
+			// Cursor is 1 row above - treat as row 0 of live line
+			physRowInLiveEditor = 0
+		}
 		db.liveEditor.SetCursorFromPhysical(physRowInLiveEditor, physX, db.width)
+
+		// IMPORTANT: Clamp offset to line length.
+		// When cursor moves to a physical position beyond actual content (e.g., End key
+		// on a wrapped line's partial second row), the raw offset calculation can exceed
+		// the line length. Clamp to lineLen to position cursor at the append position.
+		lineLen := db.liveEditor.Line().Len()
+		if db.liveEditor.GetCursorOffset() > lineLen {
+			db.liveEditor.SetCursorOffset(lineLen)
+		}
+
+		if db.debugLog != nil {
+			db.debugLog("SetCursor: ACCEPTED physX=%d, physY=%d -> liveRow=%d, offset=%d (liveStart=%d, viewportTop=%d, currentPhysRows=%d, lineLen=%d, nearLine=%v)",
+				physX, physY, physRowInLiveEditor, db.liveEditor.GetCursorOffset(),
+				liveEdgeStartIdx, db.viewportTop, currentPhysRows, db.liveEditor.Line().Len(), nearLiveLine && !onLiveLine)
+		}
+	} else if physY >= 0 && db.allowUncommit && db.liveEditor.Line().Len() == 0 && globalPhysY >= 0 {
+		// Cursor is in committed history, but live editor is empty AND we just committed.
+		// This typically happens during bash redraw after a premature commit.
+		// Try to uncommit the line at this position to allow continued editing.
+		if db.uncommitLineAtPhysicalRow(globalPhysY) {
+			// Now the cursor should be on the restored live line
+			newLiveEdgeStartIdx := len(db.lines)
+			if globalPhysY >= newLiveEdgeStartIdx {
+				physRowInLiveEditor := globalPhysY - newLiveEdgeStartIdx
+				db.liveEditor.SetCursorFromPhysical(physRowInLiveEditor, physX, db.width)
+				if db.debugLog != nil {
+					db.debugLog("SetCursor: UNCOMMITTED line, cursor now at physRow=%d, physX=%d, offset=%d",
+						physRowInLiveEditor, physX, db.liveEditor.GetCursorOffset())
+				}
+			}
+		} else if db.debugLog != nil {
+			db.debugLog("SetCursor: IGNORED (in committed history, uncommit failed) physX=%d, physY=%d, liveEdgeStartIdx=%d, viewportTop=%d",
+				physX, physY, liveEdgeStartIdx, db.viewportTop)
+		}
+	} else if db.debugLog != nil {
+		db.debugLog("SetCursor: IGNORED (in committed history) physX=%d, physY=%d, globalPhysY=%d, liveStart=%d, viewportTop=%d, currentPhysRows=%d, lineLen=%d, height=%d",
+			physX, physY, globalPhysY, liveEdgeStartIdx, db.viewportTop, currentPhysRows, db.liveEditor.Line().Len(), db.height)
 	}
-	// If cursor is in committed history, we ignore it (can't edit history)
 }
 
 // Write writes a rune at the current logical cursor position.
 // Advances the cursor offset. Delegates to LiveEditor.
 // If insertMode is true, inserts; otherwise overwrites.
 func (db *DisplayBuffer) Write(r rune, fg, bg Color, attr Attribute, insertMode bool) {
+	// Clear uncommit flag - we're writing new content, not going back to edit
+	db.allowUncommit = false
+
 	db.liveEditor.WriteChar(r, fg, bg, attr, insertMode)
-	// Viewport adjustment if at live edge
+	// Viewport adjustment if at live edge - use NoShrink to prevent viewport from
+	// shrinking during repaint sequences (e.g., bash repainting after wrap crossing)
 	if db.atLiveEdge {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdgeNoShrink()
 	}
 }
 	
@@ -149,9 +216,10 @@ func (db *DisplayBuffer) Erase(mode int) {
 	case 2: // Erase All
 		db.liveEditor.EraseLine()
 	}
-	// Viewport adjustment if at live edge
+	// Viewport adjustment if at live edge - use non-shrinking scroll to avoid
+	// moving the live line to a different viewport row when content shrinks
 	if db.atLiveEdge {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdgeNoShrink()
 	}
 }
 	        
@@ -160,7 +228,7 @@ func (db *DisplayBuffer) Erase(mode int) {
 func (db *DisplayBuffer) EraseCharacters(n int) {
 	db.liveEditor.EraseChars(n, DefaultFG, DefaultBG)
 	if db.atLiveEdge {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdgeNoShrink()
 	}
 }
 
@@ -169,7 +237,7 @@ func (db *DisplayBuffer) EraseCharacters(n int) {
 func (db *DisplayBuffer) DeleteCharacters(n int) {
 	db.liveEditor.DeleteChars(n)
 	if db.atLiveEdge {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdgeNoShrink()
 	}
 }
 	        
@@ -271,9 +339,10 @@ func (db *DisplayBuffer) currentLinePhysical() []PhysicalLine {
 // RebuildCurrentLine triggers a viewport update after line content changes.
 // This is called after editing operations that modify the current line.
 func (db *DisplayBuffer) RebuildCurrentLine() {
-	// Update viewport if at live edge
+	// Update viewport if at live edge - use NoShrink to prevent viewport from
+	// shrinking during repaint sequences (e.g., bash repainting after wrap crossing)
 	if db.atLiveEdge {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdgeNoShrink()
 	}
 }
 
@@ -281,6 +350,12 @@ func (db *DisplayBuffer) RebuildCurrentLine() {
 // This is called when a line feed (LF) occurs.
 // Delegates to LiveEditor for line commitment.
 func (db *DisplayBuffer) CommitCurrentLine() {
+	// Debug: log before commit
+	if db.debugLog != nil {
+		db.debugLog("CommitCurrentLine: BEFORE - line len=%d, len(db.lines)=%d",
+			db.liveEditor.Line().Len(), len(db.lines))
+	}
+
 	// Get the committed line from LiveEditor (this also resets the editor)
 	committedLine := db.liveEditor.Commit()
 
@@ -296,15 +371,90 @@ func (db *DisplayBuffer) CommitCurrentLine() {
 	for i := range committed {
 		committed[i].LogicalIndex = globalIdx
 	}
+	oldLen := len(db.lines)
 	db.lines = append(db.lines, committed...)
 
-	// If at live edge, scroll to keep viewport at bottom
+	// Debug: log after commit
+	if db.debugLog != nil {
+		db.debugLog("CommitCurrentLine: AFTER - len(db.lines) %d -> %d, added %d physical rows",
+			oldLen, len(db.lines), len(committed))
+	}
+
+	// If at live edge, scroll to keep viewport at bottom - use NoShrink to prevent
+	// viewport from shrinking during line editing sequences (commit/uncommit)
 	if db.atLiveEdge {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdgeNoShrink()
 	}
 
 	// Trim excess lines above if needed
 	db.trimAbove()
+
+	// Allow uncommit until new content is written
+	db.allowUncommit = true
+}
+
+// uncommitLineAtPhysicalRow attempts to restore the logical line at the given physical row
+// back to the live editor. This is used when cursor moves into recently committed history
+// during bash redraw sequences. Returns true if successful.
+// Only works for the last committed logical line that's still in our buffer.
+func (db *DisplayBuffer) uncommitLineAtPhysicalRow(physRow int) bool {
+	if len(db.lines) == 0 {
+		return false
+	}
+
+	// Find which logical line this physical row belongs to
+	if physRow < 0 || physRow >= len(db.lines) {
+		return false
+	}
+
+	targetLogicalIdx := db.lines[physRow].LogicalIndex
+
+	// We can only uncommit the LAST logical line in our buffer
+	lastLogicalIdx := db.lines[len(db.lines)-1].LogicalIndex
+	if targetLogicalIdx != lastLogicalIdx {
+		if db.debugLog != nil {
+			db.debugLog("uncommitLineAtPhysicalRow: physRow=%d is logical %d, but last is %d - can only uncommit last",
+				physRow, targetLogicalIdx, lastLogicalIdx)
+		}
+		return false
+	}
+
+	// Try to pop from history
+	if db.history == nil {
+		return false
+	}
+
+	poppedLine := db.history.PopLast()
+	if poppedLine == nil {
+		if db.debugLog != nil {
+			db.debugLog("uncommitLineAtPhysicalRow: PopLast returned nil")
+		}
+		return false
+	}
+
+	// Find where this logical line starts in our physical buffer
+	startPhysRow := 0
+	for i := len(db.lines) - 1; i >= 0; i-- {
+		if db.lines[i].LogicalIndex == targetLogicalIdx {
+			startPhysRow = i
+		} else {
+			break
+		}
+	}
+
+	// Remove physical rows from db.lines
+	numRemoved := len(db.lines) - startPhysRow
+	db.lines = db.lines[:startPhysRow]
+
+	// Restore to live editor
+	db.liveEditor.RestoreLine(poppedLine)
+
+	if db.debugLog != nil {
+		db.debugLog("uncommitLineAtPhysicalRow: SUCCESS - removed %d physical rows, restored line with len=%d",
+			numRemoved, poppedLine.Len())
+	}
+
+	return true
 }
 
 // scrollToLiveEdge adjusts viewportTop so the viewport shows the bottom content.
@@ -318,6 +468,34 @@ func (db *DisplayBuffer) scrollToLiveEdge() {
 	if db.viewportTop < 0 {
 		db.viewportTop = 0
 	}
+	db.atLiveEdge = true
+}
+
+// scrollToLiveEdgeNoShrink is like scrollToLiveEdge but NEVER reduces viewportTop.
+// This is used after erase operations where content may shrink.
+//
+// During line editing (especially backspacing across wrap boundaries), we must keep
+// viewportTop stable. Bash expects the cursor to stay on the same physical row, and
+// if we scroll up (reduce viewportTop), the live line moves to a different viewport
+// row, causing display desync.
+//
+// The only times viewportTop should decrease are:
+// 1. User explicitly scrolls up
+// 2. Terminal resize (which has its own cursor sync logic)
+//
+// Empty rows at the bottom are tolerated - bash will redraw and fill them naturally.
+func (db *DisplayBuffer) scrollToLiveEdgeNoShrink() {
+	totalLines := db.contentLineCount()
+	idealViewportTop := totalLines - db.height
+	if idealViewportTop < 0 {
+		idealViewportTop = 0
+	}
+
+	// ONLY scroll down if content grew (never scroll up during erase)
+	if idealViewportTop > db.viewportTop {
+		db.viewportTop = idealViewportTop
+	}
+
 	db.atLiveEdge = true
 }
 
@@ -469,6 +647,13 @@ func (db *DisplayBuffer) GetViewport() []PhysicalLine {
 func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
 	viewport := db.GetViewport()
 	result := make([][]Cell, db.height)
+
+	// Debug: log viewport composition
+	if db.debugLog != nil {
+		currentPhys := db.currentLinePhysical()
+		db.debugLog("GetViewportAsCells: len(db.lines)=%d, len(currentPhys)=%d, viewportTop=%d, liveEditor.Len()=%d",
+			len(db.lines), len(currentPhys), db.viewportTop, db.liveEditor.Len())
+	}
 
 	// Debug: log when we have wrapped content on a fresh terminal
 	currentPhys := db.currentLinePhysical()
@@ -696,9 +881,9 @@ func (db *DisplayBuffer) SetCell(logicalX int, cell Cell) {
 			logicalX, db.width, cell.Rune, len(db.currentLinePhysical()), db.atLiveEdge, db.viewportTop)
 	}
 
-	// Update the visible line in the buffer if at live edge
+	// Update the visible line in the buffer if at live edge - use NoShrink
 	if db.atLiveEdge {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdgeNoShrink()
 	}
 }
 
@@ -708,9 +893,9 @@ func (db *DisplayBuffer) SetCell(logicalX int, cell Cell) {
 func (db *DisplayBuffer) InsertCell(logicalX int, cell Cell) {
 	db.liveEditor.Line().InsertCell(logicalX, cell)
 
-	// Update the visible line in the buffer if at live edge
+	// Update the visible line in the buffer if at live edge - use NoShrink
 	if db.atLiveEdge {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdgeNoShrink()
 	}
 }
 

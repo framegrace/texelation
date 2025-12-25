@@ -129,7 +129,14 @@ func (v *VTerm) Grid() [][]Cell {
 
 	// Use new display buffer path if enabled
 	if v.IsDisplayBufferEnabled() {
+		if v.displayBuf != nil && v.displayBuf.display != nil && v.displayBuf.display.debugLog != nil {
+			v.displayBuf.display.debugLog("Grid: using displayBufferGrid()")
+		}
 		return v.displayBufferGrid()
+	}
+	// Debug: log when using old path
+	if v.displayBuf != nil && v.displayBuf.display != nil && v.displayBuf.display.debugLog != nil {
+		v.displayBuf.display.debugLog("Grid: using historyManager path (display buffer NOT enabled)")
 	}
 	grid := make([][]Cell, v.height)
 	topHistoryLine := v.getTopHistoryLine()
@@ -189,6 +196,12 @@ func (v *VTerm) placeChar(r rune) {
 		// Also write to display buffer if enabled
 		if v.IsDisplayBufferEnabled() {
 			v.displayBufferPlaceChar(r)
+		} else {
+			// Debug: track when display buffer is skipped
+			if v.displayBuf != nil && v.displayBuf.display != nil && v.displayBuf.display.debugLog != nil {
+				v.displayBuf.display.debugLog("placeChar SKIPPED: displayBuf=%v, enabled=%v, char='%c'",
+					v.displayBuf != nil, v.displayBuf != nil && v.displayBuf.enabled, r)
+			}
 		}
 
 		if v.viewOffset > 0 { // If scrolled up, jump to the bottom on new input

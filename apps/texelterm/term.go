@@ -1395,6 +1395,7 @@ func (a *TexelTerm) runShell() error {
 
 		// Enable new three-level display buffer with disk persistence
 		if displayBufferEnabled {
+			log.Printf("[TEXELTERM] displayBufferEnabled=true, paneIDHex=%q", paneIDHex)
 			// Only enable disk persistence if we have a pane ID
 			if paneIDHex != "" {
 				// Construct disk path for new format (.hist2)
@@ -1419,15 +1420,17 @@ func (a *TexelTerm) runShell() error {
 			} else {
 				// No pane ID - use memory-only display buffer
 				a.vterm.EnableDisplayBuffer()
-				log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID)")
+				log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID), IsEnabled=%v", a.vterm.IsDisplayBufferEnabled())
 			}
 			// Note: cursor position is automatically synced in EnableDisplayBuffer/EnableDisplayBufferWithDisk
 
 			// Enable debug logging if TEXELTERM_DEBUG env var is set
 			if os.Getenv("TEXELTERM_DEBUG") != "" {
+				log.Printf("[DEBUG] TEXELTERM_DEBUG is set, opening debug log file")
 				debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 				if err == nil {
 					log.Printf("[DEBUG] Writing display buffer debug to /tmp/texelterm-debug.log")
+					fmt.Fprintf(debugFile, "[DB] Debug logging initialized\n")
 					a.vterm.SetDisplayBufferDebugLog(func(format string, args ...interface{}) {
 						fmt.Fprintf(debugFile, "[DB] "+format+"\n", args...)
 					})

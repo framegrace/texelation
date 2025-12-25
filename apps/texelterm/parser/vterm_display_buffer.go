@@ -228,17 +228,63 @@ func (v *VTerm) displayBufferPlaceChar(r rune) {
                 return
         }
 
+        // Debug: log every character written
+        if v.displayBuf.display.debugLog != nil {
+                v.displayBuf.display.debugLog("displayBufferPlaceChar: '%c' at offset %d", r, v.displayBuf.display.GetCursorOffset())
+        }
+
         // Use the new logical editor
         v.displayBuf.display.Write(r, v.currentFG, v.currentBG, v.currentAttr, v.insertMode)
-        
+
         // Mark all dirty?
         // Ideally we'd get a dirty range. For now, mark all.
         v.MarkAllDirty()
 }
 // displayBufferLineFeed commits the current line and starts a new one.
+// However, it only commits if:
+// - cursor is at position 0 (typical CR+LF sequence), OR
+// - cursor is at or past the end of line content, OR
+// - cursor is on the last physical row of the line (LF would move beyond line)
+// If cursor is in the MIDDLE of the line AND not on the last row,
+// this is cursor movement (e.g., bash redraw via CR+LF on wrapped lines) - don't commit.
 func (v *VTerm) displayBufferLineFeed() {
         if v.displayBuf == nil || v.displayBuf.display == nil {
                 return
+        }
+
+        cursorOffset := v.displayBuf.display.GetCursorOffset()
+        lineLen := v.displayBuf.display.CurrentLine().Len()
+        width := v.width
+
+        // Calculate which physical row the cursor is on (within the line)
+        cursorPhysRow := 0
+        if width > 0 {
+                cursorPhysRow = cursorOffset / width
+        }
+
+        // Calculate how many physical rows the line occupies
+        numPhysRows := 1
+        if lineLen > 0 && width > 0 {
+                numPhysRows = (lineLen + width - 1) / width
+        }
+
+        // Skip commit only if:
+        // 1. cursor is in the MIDDLE of the line (not at start, not at end), AND
+        // 2. cursor is NOT on the last physical row of the line
+        // If on the last row, LF would move cursor beyond the line, so we should commit.
+        onLastPhysRow := cursorPhysRow >= numPhysRows-1
+        if cursorOffset > 0 && cursorOffset < lineLen && !onLastPhysRow {
+                if v.displayBuf.display.debugLog != nil {
+                        v.displayBuf.display.debugLog("displayBufferLineFeed: SKIPPING commit (cursor in middle: offset=%d, lineLen=%d, physRow=%d/%d)",
+                                cursorOffset, lineLen, cursorPhysRow, numPhysRows)
+                }
+                return
+        }
+
+        // Debug: log before commit
+        if v.displayBuf.display.debugLog != nil {
+                v.displayBuf.display.debugLog("displayBufferLineFeed: COMMITTING line with len=%d (offset=%d, physRow=%d/%d)",
+                        lineLen, cursorOffset, cursorPhysRow, numPhysRows)
         }
 
         // Commit current logical line to history
@@ -348,9 +394,27 @@ func (v *VTerm) displayBufferSetCursorFromPhysical() {
         if v.displayBuf == nil || v.displayBuf.display == nil {
                 return
         }
-        
+
+        oldOffset := v.displayBuf.display.GetCursorOffset()
+        oldLineLen := v.displayBuf.display.CurrentLine().Len()
         // Use the new logical mapping
         v.displayBuf.display.SetCursor(v.cursorX, v.cursorY)
+        newOffset := v.displayBuf.display.GetCursorOffset()
+        newLineLen := v.displayBuf.display.CurrentLine().Len()
+
+        if v.displayBuf.display.debugLog != nil && (oldOffset != newOffset || oldLineLen != newLineLen) {
+                v.displayBuf.display.debugLog("displayBufferSetCursorFromPhysical: physX=%d, physY=%d -> offset %d->%d, lineLen %d->%d",
+                        v.cursorX, v.cursorY, oldOffset, newOffset, oldLineLen, newLineLen)
+        }
+
+        // NOTE: We previously had SYNC logic here that would update VTerm's cursor
+        // based on DisplayBuffer's GetPhysicalCursorPos(). This was removed because:
+        // 1. It caused problems during wrap boundary crossing - when content shrinks
+        //    and the viewport scrolls, the sync would move the cursor to a different
+        //    row, confusing bash's redraw sequence.
+        // 2. The earlier fix (nearLine tolerance in SetCursor) handles the cursor
+        //    drift issue for non-last-line editing without the problematic sync.
+        // 3. Resize already has its own cursor sync logic that works correctly.
 }
 // displayBufferClear clears the display buffer and history.
 func (v *VTerm) displayBufferClear() {
@@ -439,7 +503,33 @@ func (v *VTerm) displayBufferEraseToEndOfLine() {
         if v.displayBuf == nil || v.displayBuf.display == nil {
                 return
         }
+
+        // IMPORTANT: Sync cursor position before erasing.
+        // The VTerm cursor may have moved (e.g., via backspace) without updating
+        // the display buffer. We must sync to ensure erase happens at the right position.
+        v.displayBufferSetCursorFromPhysical()
+
+        if v.displayBuf.display.debugLog != nil {
+                lineContent := ""
+                line := v.displayBuf.display.CurrentLine()
+                for i := 0; i < line.Len() && i < 20; i++ {
+                        if line.Cells[i].Rune != 0 {
+                                lineContent += string(line.Cells[i].Rune)
+                        } else {
+                                lineContent += "."
+                        }
+                }
+                if line.Len() > 20 {
+                        lineContent += "..."
+                }
+                v.displayBuf.display.debugLog("displayBufferEraseToEndOfLine: vtermCursor=(%d,%d), offset=%d, line len=%d, content=%q",
+                        v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset(), line.Len(), lineContent)
+        }
         v.displayBuf.display.Erase(0)
+        if v.displayBuf.display.debugLog != nil {
+                v.displayBuf.display.debugLog("displayBufferEraseToEndOfLine: after erase, line len=%d",
+                        v.displayBuf.display.CurrentLine().Len())
+        }
         v.MarkAllDirty()
 }
 
@@ -458,6 +548,10 @@ func (v *VTerm) displayBufferEraseFromStartOfLine() {
 func (v *VTerm) displayBufferEraseLine() {
         if v.displayBuf == nil || v.displayBuf.display == nil {
                 return
+        }
+        if v.displayBuf.display.debugLog != nil {
+                v.displayBuf.display.debugLog("displayBufferEraseLine (EL 2): CLEARING entire line, was len=%d",
+                        v.displayBuf.display.CurrentLine().Len())
         }
         v.displayBuf.display.Erase(2)
         v.MarkAllDirty()

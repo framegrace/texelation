@@ -11,15 +11,14 @@ APPS := texelterm help
 .PHONY: build install run test lint fmt tidy clean help server client release build-apps
 
 
-build: ## Build texel-server and texel-client binaries into bin/
-
-build-apps: ## Build standalone app binaries into bin/
+build: ## Build texel-server, texel-client, and app binaries into bin/
 	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
 	$(GO_ENV) go build -o $(BIN_DIR)/texelterm ./cmd/texelterm
 	$(GO_ENV) go build -o $(BIN_DIR)/help ./cmd/help
-	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
+
+build-apps: build ## Alias for build
 
 install: ## Install texel binaries into GOPATH/bin
 	@mkdir -p $(CACHE_DIR)

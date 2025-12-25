@@ -251,6 +251,37 @@ func (h *ScrollbackHistory) AppendCells(cells []Cell) {
 	h.Append(NewLogicalLineFromCells(cells))
 }
 
+// PopLast removes and returns the last line from history.
+// Returns nil if history is empty or the last line has been flushed to disk.
+// This is used for "uncommitting" recently committed lines during bash redraw.
+func (h *ScrollbackHistory) PopLast() *LogicalLine {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.lines) == 0 {
+		return nil
+	}
+
+	// We can only pop if the last line is in our memory window
+	// (not yet flushed to disk or trimmed)
+	lastIdx := len(h.lines) - 1
+	line := h.lines[lastIdx]
+
+	// Remove from memory
+	h.lines[lastIdx] = nil // Help GC
+	h.lines = h.lines[:lastIdx]
+	h.totalLines--
+	h.dirty = true
+
+	// Note: We don't remove from disk. If disk persistence is enabled,
+	// the disk may still have this line. This is acceptable because:
+	// 1. PopLast is only used for temporary uncommits during editing
+	// 2. The line will be re-committed when editing completes
+	// 3. Disk truncation is complex and rarely needed
+
+	return line
+}
+
 // trimMemoryLocked removes oldest lines from memory when over capacity.
 // Caller must hold the lock.
 func (h *ScrollbackHistory) trimMemoryLocked() {

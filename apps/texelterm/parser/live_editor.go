@@ -224,6 +224,18 @@ func (e *LiveEditor) Commit() *LogicalLine {
 	return committed
 }
 
+// RestoreLine replaces the current (empty) line with a previously committed line.
+// This is used for "uncommitting" lines during bash redraw sequences.
+// The cursor is placed at the start of the restored line.
+func (e *LiveEditor) RestoreLine(line *LogicalLine) {
+	if line != nil {
+		e.line = line.Clone()
+	} else {
+		e.line = NewLogicalLine()
+	}
+	e.cursorOffset = 0
+}
+
 // Line returns a read-only reference to the current logical line.
 func (e *LiveEditor) Line() *LogicalLine {
 	return e.line
