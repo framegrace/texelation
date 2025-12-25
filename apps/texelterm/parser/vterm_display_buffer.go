@@ -268,12 +268,13 @@ func (v *VTerm) displayBufferLineFeed() {
                 numPhysRows = (lineLen + width - 1) / width
         }
 
-        // Skip commit only if:
-        // 1. cursor is in the MIDDLE of the line (not at start, not at end), AND
-        // 2. cursor is NOT on the last physical row of the line
+        // Skip commit if cursor is NOT at/past the end of the line AND not on the last physical row.
+        // This prevents premature commits when bash repositions cursor during editing on wrapped lines.
+        // - offset < lineLen means we're before the end of the line content
+        // - !onLastPhysRow means LF won't move us past the line
         // If on the last row, LF would move cursor beyond the line, so we should commit.
         onLastPhysRow := cursorPhysRow >= numPhysRows-1
-        if cursorOffset > 0 && cursorOffset < lineLen && !onLastPhysRow {
+        if cursorOffset < lineLen && !onLastPhysRow {
                 if v.displayBuf.display.debugLog != nil {
                         v.displayBuf.display.debugLog("displayBufferLineFeed: SKIPPING commit (cursor in middle: offset=%d, lineLen=%d, physRow=%d/%d)",
                                 cursorOffset, lineLen, cursorPhysRow, numPhysRows)
@@ -425,8 +426,13 @@ func (v *VTerm) displayBufferSetCursorFromPhysical(isRelativeMove bool) {
                 delta := v.cursorX - v.prevCursorX
                 newOffset := oldOffset + delta
 
+                // Clamp to valid range [0, lineLen]
                 if newOffset < 0 {
                         newOffset = 0
+                }
+                lineLen := v.displayBuf.display.CurrentLine().Len()
+                if newOffset > lineLen {
+                        newOffset = lineLen
                 }
                 v.displayBuf.display.liveEditor.SetCursorOffset(newOffset)
         } else {
