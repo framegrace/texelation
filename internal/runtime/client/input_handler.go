@@ -114,7 +114,8 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 	case *tcell.EventResize:
 		cols, rows := screen.Size()
 		state.scheduleResize(writeMu, conn, sessionID, protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
-		screen.Sync()
+		// Trigger render instead of expensive Sync() - tcell handles internal resize sync automatically
+		state.triggerRender()
 	case *tcell.EventInterrupt:
 		// Ignore; used to wake PollEvent for shutdown.
 	case *tcell.EventPaste:

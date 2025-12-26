@@ -23,7 +23,7 @@ import (
 	"texelation/texel/theme"
 )
 
-const resizeDebounce = 45 * time.Millisecond
+const resizeDebounce = 10 * time.Millisecond
 
 // Options configures the remote client runtime.
 type Options struct {
