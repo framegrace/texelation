@@ -40,6 +40,9 @@ func Test_SaveRestoreCursor_MoveToHomeWhenNotSaved(t *testing.T) {
 func Test_SaveRestoreCursor_AltVsMain(t *testing.T) {
 	d := NewDriver(80, 24)
 
+	// Driver starts in alt screen, so exit to main first
+	DECRESET(d, 1049)
+
 	// Save in main screen
 	CUP(d, NewPoint(2, 3))
 	DECSC(d)

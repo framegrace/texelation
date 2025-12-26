@@ -151,6 +151,17 @@ func (v *VTerm) placeChar(r rune) {
 
 	if v.inAltScreen {
 		if v.cursorY >= 0 && v.cursorY < v.height && v.cursorX >= 0 && v.cursorX < v.width {
+			if v.insertMode {
+				// Shift content right from cursor to right edge (or right margin)
+				rightEdge := v.width - 1
+				if v.leftRightMarginMode && v.cursorX >= v.marginLeft && v.cursorX <= v.marginRight {
+					rightEdge = v.marginRight
+				}
+				// Shift right - content at rightEdge is lost
+				for x := rightEdge; x > v.cursorX; x-- {
+					v.altBuffer[v.cursorY][x] = v.altBuffer[v.cursorY][x-1]
+				}
+			}
 			v.altBuffer[v.cursorY][v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
 			v.MarkDirty(v.cursorY)
 		}
