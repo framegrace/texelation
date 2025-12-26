@@ -24,6 +24,12 @@ import (
 func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex) bool {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
+		// Dismiss restart notification on any key press
+		if state.showRestartNotification && !state.restartNotificationDismissed {
+			state.restartNotificationDismissed = true
+			render(state, screen)
+			return true // Consume the event
+		}
 		if state.pasting {
 			consumePasteKey(state, ev)
 			return true

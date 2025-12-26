@@ -27,9 +27,10 @@ const resizeDebounce = 10 * time.Millisecond
 
 // Options configures the remote client runtime.
 type Options struct {
-	Socket    string
-	Reconnect bool
-	PanicLog  string
+	Socket                  string
+	Reconnect               bool
+	PanicLog                string
+	ShowRestartNotification bool // Show notification that server was restarted
 }
 
 func Run(opts Options) error {
@@ -59,14 +60,15 @@ func Run(opts Options) error {
 	log.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 
 	state := &clientState{
-		cache:        client.NewBufferCache(),
-		themeValues:  make(map[string]map[string]interface{}),
-		defaultStyle: tcell.StyleDefault,
-		defaultFg:    tcell.ColorDefault,
-		defaultBg:    tcell.ColorDefault,
-		desktopBg:    tcell.ColorDefault,
-		selectionFg:  tcell.ColorBlack,
-		selectionBg:  tcell.NewRGBColor(232, 217, 255),
+		cache:                   client.NewBufferCache(),
+		themeValues:             make(map[string]map[string]interface{}),
+		defaultStyle:            tcell.StyleDefault,
+		defaultFg:               tcell.ColorDefault,
+		defaultBg:               tcell.ColorDefault,
+		desktopBg:               tcell.ColorDefault,
+		selectionFg:             tcell.ColorBlack,
+		selectionBg:             tcell.NewRGBColor(232, 217, 255),
+		showRestartNotification: opts.ShowRestartNotification,
 	}
 
 	cfg := theme.Get()

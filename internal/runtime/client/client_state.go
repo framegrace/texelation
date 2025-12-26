@@ -55,6 +55,10 @@ type clientState struct {
 	pendingResize        protocol.Resize
 	resizeSeq            uint64
 	selection            selectionState
+
+	// Restart notification state
+	showRestartNotification    bool
+	restartNotificationDismissed bool
 }
 
 func (s *clientState) setRenderChannel(ch chan<- struct{}) {

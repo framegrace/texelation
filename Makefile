@@ -15,12 +15,13 @@ ALL_APPS := texelterm help app-runner texel-stress texelui-demo texelui-demo2
 .PHONY: build install run test lint fmt tidy clean help server client release build-apps
 
 
-build: ## Build texel-server, texel-client, and core app binaries into bin/
+build: ## Build texel-server, texel-client, texelation, and core app binaries into bin/
 	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
 	$(GO_ENV) go build -o $(BIN_DIR)/texelterm ./cmd/texelterm
 	$(GO_ENV) go build -o $(BIN_DIR)/help ./cmd/help
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
+	$(GO_ENV) go build -o $(BIN_DIR)/texelation ./cmd/texelation
 
 build-apps: ## Build ALL app binaries into bin/
 	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
@@ -32,10 +33,11 @@ build-apps: ## Build ALL app binaries into bin/
 	$(GO_ENV) go build -o $(BIN_DIR)/texelui-demo2 ./cmd/texelui-demo2
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
+	$(GO_ENV) go build -o $(BIN_DIR)/texelation ./cmd/texelation
 
 install: ## Install texel binaries into GOPATH/bin
 	@mkdir -p $(CACHE_DIR)
-	$(GO_ENV) go install $(SERVER_PKG) $(CLIENT_PKG)
+	$(GO_ENV) go install $(SERVER_PKG) $(CLIENT_PKG) ./cmd/texelation
 
 run: ## Launch texel-server (for manual smoke testing)
 	@mkdir -p $(CACHE_DIR)

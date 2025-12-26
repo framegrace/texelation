@@ -116,6 +116,11 @@ func render(state *clientState, screen tcell.Screen) {
 		applySelectionHighlight(state, workspaceBuffer, pane, minX, maxX, minY, maxY)
 	}
 
+	// Apply restart notification overlay if needed
+	if state.showRestartNotification && !state.restartNotificationDismissed {
+		renderRestartNotification(workspaceBuffer, width, height)
+	}
+
 	for y, row := range workspaceBuffer {
 		for x, cell := range row {
 			ch := cell.Ch
@@ -131,6 +136,118 @@ func render(state *clientState, screen tcell.Screen) {
 	}
 
 	screen.Show()
+}
+
+// renderRestartNotification overlays a centered modal notification
+func renderRestartNotification(buffer [][]client.Cell, width, height int) {
+	// Modal dimensions
+	modalWidth := 52
+	modalHeight := 9
+
+	// Center the modal
+	startX := (width - modalWidth) / 2
+	startY := (height - modalHeight) / 2
+
+	if startX < 0 || startY < 0 || width == 0 || height == 0 {
+		return // Screen too small
+	}
+
+	// Apply semi-transparent backdrop (dim the entire screen)
+	dimStyle := tcell.StyleDefault.Dim(true)
+	for y := 0; y < len(buffer); y++ {
+		for x := 0; x < len(buffer[y]); x++ {
+			buffer[y][x].Style = dimStyle
+		}
+	}
+
+	// Modal box styles
+	boxBg := tcell.NewRGBColor(45, 45, 55)
+	borderStyle := tcell.StyleDefault.
+		Background(boxBg).
+		Foreground(tcell.NewRGBColor(100, 100, 120))
+	titleStyle := tcell.StyleDefault.
+		Background(boxBg).
+		Foreground(tcell.NewRGBColor(255, 200, 100)).
+		Bold(true)
+	textStyle := tcell.StyleDefault.
+		Background(boxBg).
+		Foreground(tcell.ColorWhite)
+	hintStyle := tcell.StyleDefault.
+		Background(boxBg).
+		Foreground(tcell.NewRGBColor(150, 150, 170))
+
+	// Modal content
+	lines := []struct {
+		text  string
+		style tcell.Style
+	}{
+		{"", borderStyle},
+		{"   Server Restart Notification   ", titleStyle},
+		{"", textStyle},
+		{" The texelation server was unresponsive ", textStyle},
+		{" and has been automatically restarted.  ", textStyle},
+		{"", textStyle},
+		{" Your session has been restored.        ", textStyle},
+		{"", textStyle},
+		{"       Press any key to continue        ", hintStyle},
+	}
+
+	// Draw modal box
+	for dy := 0; dy < modalHeight && startY+dy < len(buffer); dy++ {
+		y := startY + dy
+		if y < 0 || y >= len(buffer) {
+			continue
+		}
+
+		for dx := 0; dx < modalWidth && startX+dx < len(buffer[y]); dx++ {
+			x := startX + dx
+			if x < 0 || x >= len(buffer[y]) {
+				continue
+			}
+
+			ch := ' '
+			style := textStyle
+
+			// Border characters
+			if dy == 0 {
+				if dx == 0 {
+					ch = '╭'
+					style = borderStyle
+				} else if dx == modalWidth-1 {
+					ch = '╮'
+					style = borderStyle
+				} else {
+					ch = '─'
+					style = borderStyle
+				}
+			} else if dy == modalHeight-1 {
+				if dx == 0 {
+					ch = '╰'
+					style = borderStyle
+				} else if dx == modalWidth-1 {
+					ch = '╯'
+					style = borderStyle
+				} else {
+					ch = '─'
+					style = borderStyle
+				}
+			} else if dx == 0 || dx == modalWidth-1 {
+				ch = '│'
+				style = borderStyle
+			} else if dy < len(lines) {
+				// Content
+				contentX := dx - 1 // Adjust for left border
+				if contentX >= 0 && contentX < len(lines[dy].text) {
+					ch = rune(lines[dy].text[contentX])
+					style = lines[dy].style
+				} else {
+					style = textStyle
+				}
+			}
+
+			buffer[y][x] = client.Cell{Ch: ch, Style: style}
+		}
+	}
 }
 
 func applyZoomOverlay(style tcell.Style, intensity float32, state *clientState) tcell.Style {
