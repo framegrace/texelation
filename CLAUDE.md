@@ -6,6 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Texelation is a modular text-based desktop environment running as a client/server pair. The server hosts apps and manages the pane graph, while the client renders buffers and routes user input over a binary protocol.
 
+## CRITICAL: Git Workflow
+
+**NEVER commit directly to main.** Always use feature branches and pull requests:
+
+```bash
+git checkout main && git pull
+git checkout -b feature/my-feature   # or fix/, refactor/
+# ... make changes ...
+git add -A && git commit -m "Description"
+git push -u origin feature/my-feature
+# Create PR on GitHub to merge into main
+```
+
+This rule has no exceptions. All changes must go through PR review.
+
 ## Build and Development Commands
 
 ### Building
@@ -199,19 +214,10 @@ See `apps/texelterm/parser/display_buffer_integration_test.go`:
 
 ## Git Workflow Rules
 
-- **NEVER commit directly to main** - Always create a feature branch first
-- Branch naming: `feature/<description>`, `fix/<description>`, or `refactor/<description>`
-- Create PR to merge into main after review
-- Example workflow:
-  ```bash
-  git checkout main
-  git pull
-  git checkout -b feature/my-new-feature
-  # ... make changes ...
-  git add -A && git commit -m "Description of changes"
-  git push -u origin feature/my-new-feature
-  # Then create PR on GitHub
-  ```
+See **CRITICAL: Git Workflow** at the top of this file. Summary:
+- **NEVER commit directly to main** - Always use feature branches
+- Branch naming: `feature/<desc>`, `fix/<desc>`, or `refactor/<desc>`
+- All changes require PR review before merging to main
 
 ## Documentation
 
