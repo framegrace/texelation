@@ -36,8 +36,8 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
 		}
 	} else {
-		// Commit current logical line to display buffer if enabled
-		// Only commit on explicit LF, not on auto-wrap
+		// Main screen with display buffer: use display buffer for line management.
+		// Only commit on explicit LF, not on auto-wrap.
 		if commitLogical && v.IsDisplayBufferEnabled() {
 			v.displayBufferLineFeed()
 		}
@@ -48,19 +48,14 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 				v.scrollRegion(1, v.marginTop, v.marginBottom)
 			}
 		} else if v.cursorY < v.height-1 {
-			// Only append history lines when cursor will actually move down
-			logicalY := v.cursorY + v.getTopHistoryLine()
-			if logicalY+1 >= v.getHistoryLen() {
-				v.appendHistoryLine(make([]Cell, 0, v.width))
-			}
+			// Move cursor down - display buffer handles line management
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
 		} else {
 			// At bottom of screen but not at scroll region bottom: stay put
-			                        v.viewOffset = 0 // Jump to the bottom
-			                        v.MarkAllDirty()
-			                }
-			        }
-			}
+			v.ScrollToLiveEdge()
+		}
+	}
+}
 // scrollRegion scrolls a portion of the screen buffer up or down.
 func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 	v.wrapNext = false
@@ -85,50 +80,12 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 			}
 		}
 	} else {
-		// Main screen scrolling within margins
-		topHistory := v.getTopHistoryLine()
-		if n > 0 { // Scroll Up
-			for i := 0; i < n; i++ {
-				if top == 0 && v.getHistoryLen() >= v.height {
-					// Scrolling at top with scrollback already present
-					// Appending will shift topHistory, moving visible window up
-					v.appendHistoryLine(make([]Cell, 0, v.width))
-					topHistory = v.getTopHistoryLine()
-					v.viewOffset = 0
-				} else {
-					// Either scrolling within a region (top > 0) or no scrollback yet
-					// Manually shift lines
-					for y := top; y < bottom; y++ {
-						srcLine := v.getHistoryLine(topHistory + y + 1)
-						v.setHistoryLine(topHistory+y, srcLine)
-					}
-					// Clear the bottom line of the region
-					blankLine := make([]Cell, 0, v.width)
-					v.setHistoryLine(topHistory+bottom, blankLine)
-
-					// If scrolling at top, grow history to record the scroll
-					if top == 0 {
-						v.appendHistoryLine(make([]Cell, 0, v.width))
-						// topHistory stays at 0 since histLen < height
-					}
-				}
-			}
-		} else { // Scroll Down
-			// Ensure history buffer has all lines we'll be writing to
-			endLogicalY := topHistory + bottom
-			for v.getHistoryLen() <= endLogicalY {
-				v.appendHistoryLine(make([]Cell, 0, v.width))
-			}
-			for i := 0; i < -n; i++ {
-				// Move all lines in region down by one
-				for y := bottom; y > top; y-- {
-					srcLine := v.getHistoryLine(topHistory + y - 1)
-					v.setHistoryLine(topHistory+y, srcLine)
-				}
-				// Clear the top line
-				blankLine := make([]Cell, 0, v.width)
-				v.setHistoryLine(topHistory+top, blankLine)
-			}
+		// Main screen scrolling with display buffer.
+		// The display buffer handles line management through its own commit system.
+		// For SU/SD (scroll up/down) in the scroll region, we just need to ensure
+		// the display buffer viewport is at the live edge.
+		if v.IsDisplayBufferEnabled() {
+			v.displayBufferScrollToBottom()
 		}
 	}
 	v.MarkAllDirty()
@@ -299,27 +256,7 @@ func (v *VTerm) Scroll(delta int) {
 	if v.inAltScreen {
 		return
 	}
-
-	// Use display buffer scroll if enabled
-	if v.IsDisplayBufferEnabled() {
-		v.displayBufferScroll(delta)
-		v.MarkAllDirty()
-		return
-	}
-
-	v.viewOffset -= delta
-	if v.viewOffset < 0 {
-		v.viewOffset = 0
-	}
-	histLen := v.getHistoryLen()
-	maxOffset := histLen - v.height
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if v.viewOffset > maxOffset {
-		v.viewOffset = maxOffset
-	}
-
+	v.displayBufferScroll(delta)
 	v.MarkAllDirty()
 }
 

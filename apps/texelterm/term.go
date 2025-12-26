@@ -43,10 +43,9 @@ type TexelTerm struct {
 	height             int
 	cmd                *exec.Cmd
 	pty                *os.File
-	vterm              *parser.VTerm
-	parser             *parser.Parser
-	historyManager     *parser.HistoryManager
-	mu                 sync.Mutex
+	vterm  *parser.VTerm
+	parser *parser.Parser
+	mu     sync.Mutex
 	stop               chan struct{}
 	stopOnce           sync.Once
 	refreshChan        chan<- bool
@@ -1332,24 +1331,8 @@ func (a *TexelTerm) runShell() error {
 		histCfg.Compress = cfg.GetBool("texelterm.history", "compress", true)
 		histCfg.Encrypt = cfg.GetBool("texelterm.history", "encrypt", false)
 
-		// Get current working directory
-		workingDir, _ := os.Getwd()
-
-		// Create history manager with pane ID for persistent scrollback (lock already held)
+		// Get pane ID for persistent scrollback (lock already held)
 		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
-
-		// Only create legacy HistoryManager if display buffer is disabled
-		var hm *parser.HistoryManager
-		if !displayBufferEnabled {
-			log.Printf("[HISTORY DEBUG] Creating history manager with paneID=%q, persistDir=%q", paneIDHex, histCfg.PersistDir)
-			var err error
-			hm, err = parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
-			if err != nil {
-				log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
-				hm = nil
-			}
-			a.historyManager = hm
-		}
 
 		a.vterm = parser.NewVTerm(cols, rows,
 			parser.WithTitleChangeHandler(func(newTitle string) {
@@ -1388,8 +1371,6 @@ func (a *TexelTerm) runShell() error {
 			}),
 			parser.WithWrap(wrapEnabled),
 			parser.WithReflow(reflowEnabled),
-			parser.WithHistoryManager(hm),   // nil when displayBufferEnabled
-			parser.WithDisplayBuffer(false), // Don't use old in-memory display buffer
 		)
 		a.parser = parser.NewParser(a.vterm)
 
@@ -1439,9 +1420,6 @@ func (a *TexelTerm) runShell() error {
 					}
 				}
 			}
-		} else if hm != nil && hm.Length() > rows {
-			// Position cursor at bottom if we loaded history (legacy path)
-			a.vterm.SetCursorPos(rows-1, 0)
 		}
 
 		a.mu.Unlock()
@@ -1694,23 +1672,15 @@ func (a *TexelTerm) Stop() {
 		var (
 			cmd *exec.Cmd
 			pty *os.File
-			hm  *parser.HistoryManager
 		)
 		a.mu.Lock()
 		cmd = a.cmd
 		pty = a.pty
-		hm = a.historyManager
 
 		// Close display buffer (flushes to disk if disk-backed)
-		// For legacy path, sync to history manager first
 		if a.vterm != nil {
-			if a.vterm.IsDisplayBufferEnabled() {
-				if err := a.vterm.CloseDisplayBuffer(); err != nil {
-					log.Printf("Error closing display buffer: %v", err)
-				}
-			} else {
-				// Legacy path: sync to history manager
-				a.vterm.SyncDisplayBufferToHistoryManager()
+			if err := a.vterm.CloseDisplayBuffer(); err != nil {
+				log.Printf("Error closing display buffer: %v", err)
 			}
 		}
 
@@ -1728,13 +1698,6 @@ func (a *TexelTerm) Stop() {
 				time.Sleep(500 * time.Millisecond)
 				proc.Signal(syscall.SIGKILL) // Ignore error; process may already be gone.
 			}()
-		}
-
-		// Close history manager (only used in legacy path)
-		if hm != nil {
-			if err := hm.Close(); err != nil {
-				log.Printf("Error closing history manager: %v", err)
-			}
 		}
 	})
 	a.wg.Wait()

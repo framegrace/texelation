@@ -107,11 +107,6 @@ func (v *VTerm) EnableDisplayBuffer() {
 	}
 	v.displayBuf.enabled = true
 
-	// If historyManager already has content (loaded from disk), import it
-	if v.historyManager != nil && v.historyManager.Length() > 0 {
-		v.loadHistoryManagerIntoDisplayBuffer()
-	}
-
 	// Sync cursor position with display buffer's live edge
 	v.syncCursorWithDisplayBuffer()
 }
@@ -155,42 +150,6 @@ func (v *VTerm) CloseDisplayBuffer() error {
 		return nil
 	}
 	return v.displayBuf.history.Close()
-}
-
-// loadHistoryManagerIntoDisplayBuffer converts physical lines from the legacy
-// historyManager and loads them into the display buffer's logical line storage.
-func (v *VTerm) loadHistoryManagerIntoDisplayBuffer() {
-	if v.historyManager == nil || v.displayBuf == nil {
-		return
-	}
-
-	// Extract all physical lines from history manager
-	length := v.historyManager.Length()
-	physical := make([][]Cell, length)
-	for i := 0; i < length; i++ {
-		physical[i] = v.historyManager.GetLine(i)
-	}
-
-	// Convert physical lines to logical lines and load into display buffer
-	logical := ConvertPhysicalToLogical(physical)
-	for _, line := range logical {
-		v.displayBuf.history.Append(line)
-	}
-
-	// Rebuild the display buffer with loaded history
-	v.displayBuf.display = NewDisplayBuffer(v.displayBuf.history, DisplayBufferConfig{
-		Width:       v.width,
-		Height:      v.height,
-		MarginAbove: 200,
-		MarginBelow: 50,
-	})
-
-	// Scroll to live edge
-	v.displayBuf.display.ScrollToBottom()
-
-	// Position cursor at bottom of viewport where new shell output will appear
-	v.cursorY = v.height - 1
-	v.cursorX = 0
 }
 
 // DisableDisplayBuffer switches back to the legacy rendering path.
@@ -372,21 +331,13 @@ func (v *VTerm) displayBufferAtLiveEdge() bool {
 }
 
 // AtLiveEdge returns whether the viewport is at the live edge (bottom of output).
-// When display buffer is disabled, checks the legacy viewOffset.
 func (v *VTerm) AtLiveEdge() bool {
-	if v.IsDisplayBufferEnabled() {
-		return v.displayBufferAtLiveEdge()
-	}
-	return v.viewOffset == 0
+	return v.displayBufferAtLiveEdge()
 }
 
 // ScrollToLiveEdge scrolls the viewport to the live edge (bottom of output).
 func (v *VTerm) ScrollToLiveEdge() {
-	if v.IsDisplayBufferEnabled() {
-		v.displayBufferScrollToBottom()
-	} else {
-		v.viewOffset = 0
-	}
+	v.displayBufferScrollToBottom()
 	v.MarkAllDirty()
 }
 
@@ -636,57 +587,3 @@ func (v *VTerm) displayBufferInsertCharacters(n int) {
         v.MarkAllDirty()
 }
 
-// SyncDisplayBufferToHistoryManager converts the display buffer's logical lines
-// back to physical lines and updates the history manager's buffer.
-// This should be called before closing the history manager to persist changes.
-func (v *VTerm) SyncDisplayBufferToHistoryManager() {
-	if !v.IsDisplayBufferEnabled() || v.historyManager == nil || v.displayBuf == nil {
-		return
-	}
-
-	history := v.displayBuf.history
-	if history == nil || history.Len() == 0 {
-		return
-	}
-
-	// Convert logical lines to physical lines at current width
-	// Include the current (uncommitted) line if it has content
-	var physical [][]Cell
-
-	for i := 0; i < history.Len(); i++ {
-		line := history.Get(i)
-		if line == nil {
-			continue
-		}
-		wrapped := line.WrapToWidth(v.width)
-		for j, pl := range wrapped {
-			// Set Wrapped flag on all but the last physical line of each logical line
-			row := make([]Cell, len(pl.Cells))
-			copy(row, pl.Cells)
-			if j < len(wrapped)-1 && len(row) > 0 {
-				// Mark as wrapped (continuation line)
-				row[len(row)-1].Wrapped = true
-			}
-			physical = append(physical, row)
-		}
-	}
-
-	// Also include the current line if it has content
-	currentLine := v.displayBuf.display.CurrentLine()
-	if currentLine != nil && currentLine.Len() > 0 {
-		wrapped := currentLine.WrapToWidth(v.width)
-		for j, pl := range wrapped {
-			row := make([]Cell, len(pl.Cells))
-			copy(row, pl.Cells)
-			if j < len(wrapped)-1 && len(row) > 0 {
-				row[len(row)-1].Wrapped = true
-			}
-			physical = append(physical, row)
-		}
-	}
-
-	// Replace the history manager's buffer with these physical lines
-	if len(physical) > 0 {
-		v.historyManager.ReplaceBuffer(physical)
-	}
-}

@@ -419,6 +419,45 @@ func (h *ScrollbackHistory) Clear() {
 	h.dirty = true
 }
 
+// ClearScrollback clears all committed history (ED 3 behavior).
+// This removes both in-memory lines and resets the disk history.
+// After this call, the history is empty but ready to receive new content.
+func (h *ScrollbackHistory) ClearScrollback() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Clear memory
+	for i := range h.lines {
+		h.lines[i] = nil
+	}
+	h.lines = h.lines[:0]
+
+	// Reset indices
+	h.windowStart = 0
+	h.totalLines = 0
+	h.dirty = true
+
+	// If we have disk backing, close and recreate it
+	// This effectively truncates the history file
+	if h.disk != nil {
+		diskPath := h.config.DiskPath
+		h.disk.Close()
+		h.disk = nil
+
+		// Recreate empty disk history
+		diskConfig := h.config.DiskConfig
+		if diskConfig.Path == "" {
+			diskConfig.Path = diskPath
+		}
+		disk, err := CreateDiskHistory(diskConfig)
+		if err != nil {
+			fmt.Printf("[SCROLLBACK] Failed to recreate disk history: %v\n", err)
+		} else {
+			h.disk = disk
+		}
+	}
+}
+
 // IsDirty returns whether history has changes since last MarkClean.
 func (h *ScrollbackHistory) IsDirty() bool {
 	h.mu.RLock()

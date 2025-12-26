@@ -148,14 +148,12 @@ func (db *DisplayBuffer) SetCursor(physX, physY int) {
 		}
 		db.liveEditor.SetCursorFromPhysical(physRowInLiveEditor, physX, db.width)
 
-		// IMPORTANT: Clamp offset to line length.
-		// When cursor moves to a physical position beyond actual content (e.g., End key
-		// on a wrapped line's partial second row), the raw offset calculation can exceed
-		// the line length. Clamp to lineLen to position cursor at the append position.
-		lineLen := db.liveEditor.Line().Len()
-		if db.liveEditor.GetCursorOffset() > lineLen {
-			db.liveEditor.SetCursorOffset(lineLen)
-		}
+		// NOTE: We do NOT clamp offset to line length here.
+		// For direct screen positioning (CUP), the terminal should allow cursor
+		// positions beyond current content. SetCell in LogicalLine handles
+		// extending the line with spaces when writing to such positions.
+		// This is essential for VT terminal emulation where programs like esctest
+		// use CUP to position anywhere on screen and expect writes to work.
 
 		if db.debugLog != nil {
 			db.debugLog("SetCursor: ACCEPTED physX=%d, physY=%d -> liveRow=%d, offset=%d (liveStart=%d, viewportTop=%d, currentPhysRows=%d, lineLen=%d, nearLine=%v)",
@@ -917,6 +915,43 @@ func (db *DisplayBuffer) TotalPhysicalLines() int {
 // ViewportTopLine returns the current viewport top position.
 func (db *DisplayBuffer) ViewportTopLine() int {
 	return db.viewportTop
+}
+
+// GlobalViewportStart returns the global logical line index at the top of the viewport.
+// This is useful for mapping viewport positions to history indices.
+func (db *DisplayBuffer) GlobalViewportStart() int64 {
+	return db.globalTopIndex
+}
+
+// ClearViewport clears all visible lines in the viewport (ED 2 behavior).
+// This does not affect scrollback history - only the visible area.
+func (db *DisplayBuffer) ClearViewport() {
+	// Clear committed lines that are visible in the viewport
+	viewportEnd := db.viewportTop + db.height
+	if viewportEnd > len(db.lines) {
+		viewportEnd = len(db.lines)
+	}
+
+	// Clear visible committed lines by replacing with empty cells
+	for i := db.viewportTop; i < viewportEnd && i < len(db.lines); i++ {
+		db.lines[i] = PhysicalLine{
+			Cells:        make([]Cell, 0),
+			LogicalIndex: db.lines[i].LogicalIndex,
+			Offset:       0,
+		}
+	}
+
+	// Clear the current line
+	db.liveEditor.EraseLine()
+}
+
+// ReplaceCurrentLine replaces the current uncommitted line with the given cells.
+// This is used for backwards compatibility with code that modifies lines in place.
+func (db *DisplayBuffer) ReplaceCurrentLine(cells []Cell) {
+	// Create a new logical line from the cells
+	newLine := NewLogicalLineFromCells(cells)
+	// Replace the live editor's line
+	db.liveEditor.RestoreLine(newLine)
 }
 
 // CanScrollUp returns true if there's content above the viewport to scroll to.

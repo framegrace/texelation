@@ -24,12 +24,10 @@ func (v *VTerm) InsertCharacters(n int) {
 		rightBoundary = v.marginRight + 1
 	}
 
-	// Update display buffer if enabled (main screen only)
-	// TODO: ICH with display buffer currently works for non-wrapped lines only.
-	// For wrapped lines, the insertion needs to account for physical row boundaries
-	// and potentially reflow content across multiple physical rows.
+	// For main screen with display buffer, use display buffer operations only.
 	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
 		v.displayBufferInsertCharacters(n)
+		return // Display buffer handles everything, don't fall through to legacy code
 	}
 
 	if v.inAltScreen {
@@ -77,10 +75,16 @@ func (v *VTerm) InsertCharacters(n int) {
 			blanks[i] = Cell{Rune: ' '}
 		}
 
+		// Ensure cursorX is within line bounds
+		cursorX := v.cursorX
+		if cursorX > len(line) {
+			cursorX = len(line)
+		}
+
 		if v.leftRightMarginMode {
 			// With left/right margins: preserve everything outside margins
 			// Build: [before cursor] + [blanks] + [cursor to right margin - n chars] + [after right margin]
-			newLine := append([]Cell{}, line[:v.cursorX]...)
+			newLine := append([]Cell{}, line[:cursorX]...)
 			newLine = append(newLine, blanks...)
 
 			// Add shifted content within margins (up to right boundary - n)
@@ -88,8 +92,8 @@ func (v *VTerm) InsertCharacters(n int) {
 			if copyEnd > len(line) {
 				copyEnd = len(line)
 			}
-			if copyEnd > v.cursorX {
-				newLine = append(newLine, line[v.cursorX:copyEnd]...)
+			if copyEnd > cursorX {
+				newLine = append(newLine, line[cursorX:copyEnd]...)
 			}
 
 			// Preserve everything after the right margin
@@ -100,7 +104,7 @@ func (v *VTerm) InsertCharacters(n int) {
 			v.setHistoryLine(logicalY, newLine)
 		} else {
 			// No margins: insert and shift entire line
-			newLine := append(line[:v.cursorX], append(blanks, line[v.cursorX:]...)...)
+			newLine := append(line[:cursorX], append(blanks, line[cursorX:]...)...)
 			v.setHistoryLine(logicalY, newLine)
 		}
 	}
@@ -123,9 +127,10 @@ func (v *VTerm) DeleteCharacters(n int) {
 		rightBoundary = v.marginRight + 1
 	}
 
-	// Update display buffer if enabled (main screen only)
+	// For main screen with display buffer, use display buffer operations only.
 	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
 		v.displayBufferDeleteCharacters(n)
+		return // Display buffer handles everything, don't fall through to legacy code
 	}
 
 	if v.inAltScreen {
