@@ -1,5 +1,26 @@
 package parser
 
+// Default values for display buffer configuration.
+// These are used across display_buffer.go, vterm_display_buffer.go, and scrollback_history.go.
+const (
+	// DefaultMarginAbove is how many off-screen lines to keep above viewport.
+	DefaultMarginAbove = 200
+
+	// DefaultMarginBelow is how many off-screen lines to keep below viewport.
+	DefaultMarginBelow = 50
+
+	// DefaultMaxMemoryLines is the default number of lines to keep in memory
+	// when no configuration is provided. This is an internal default.
+	// For user-configurable defaults, see DefaultMemoryLines in scrollback_history.go.
+	DefaultMaxMemoryLines = 5000
+
+	// DefaultWidth is the fallback terminal width when none is specified.
+	DefaultWidth = 80
+
+	// DefaultHeight is the fallback terminal height when none is specified.
+	DefaultHeight = 24
+)
+
 // DisplayBuffer manages the physical lines shown in the terminal viewport.
 // It maintains a window of physical lines around the visible area, loading
 // from ScrollbackHistory on demand.
@@ -73,23 +94,23 @@ type DisplayBuffer struct {
 	type DisplayBufferConfig struct {
 	        Width       int
 	        Height      int
-	        MarginAbove int // Defaults to 200
-	        MarginBelow int // Defaults to 50
+	        MarginAbove int // Defaults to DefaultMarginAbove
+	        MarginBelow int // Defaults to DefaultMarginBelow
 	}
-	
+
 	// NewDisplayBuffer creates a new display buffer attached to the given history.
 	func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *DisplayBuffer {
 	        if config.MarginAbove <= 0 {
-	                config.MarginAbove = 200
+	                config.MarginAbove = DefaultMarginAbove
 	        }
 	        if config.MarginBelow <= 0 {
-	                config.MarginBelow = 50
+	                config.MarginBelow = DefaultMarginBelow
 	        }
 	        if config.Width <= 0 {
-	                config.Width = 80
+	                config.Width = DefaultWidth
 	        }
 	        if config.Height <= 0 {
-	                config.Height = 24
+	                config.Height = DefaultHeight
 	        }
 	
 	db := &DisplayBuffer{
@@ -193,10 +214,10 @@ func (db *DisplayBuffer) Write(r rune, fg, bg Color, attr Attribute, insertMode 
 	db.allowUncommit = false
 
 	db.liveEditor.WriteChar(r, fg, bg, attr, insertMode)
-	// Viewport adjustment if at live edge - use NoShrink to prevent viewport from
+	// Viewport adjustment if at live edge - don't shrink to prevent viewport from
 	// shrinking during repaint sequences (e.g., bash repainting after wrap crossing)
 	if db.atLiveEdge {
-		db.scrollToLiveEdgeNoShrink()
+		db.scrollToLiveEdge(false)
 	}
 }
 	
@@ -217,7 +238,7 @@ func (db *DisplayBuffer) Erase(mode int) {
 	// Viewport adjustment if at live edge - use non-shrinking scroll to avoid
 	// moving the live line to a different viewport row when content shrinks
 	if db.atLiveEdge {
-		db.scrollToLiveEdgeNoShrink()
+		db.scrollToLiveEdge(false)
 	}
 }
 	        
@@ -226,7 +247,7 @@ func (db *DisplayBuffer) Erase(mode int) {
 func (db *DisplayBuffer) EraseCharacters(n int) {
 	db.liveEditor.EraseChars(n, DefaultFG, DefaultBG)
 	if db.atLiveEdge {
-		db.scrollToLiveEdgeNoShrink()
+		db.scrollToLiveEdge(false)
 	}
 }
 
@@ -235,7 +256,7 @@ func (db *DisplayBuffer) EraseCharacters(n int) {
 func (db *DisplayBuffer) DeleteCharacters(n int) {
 	db.liveEditor.DeleteChars(n)
 	if db.atLiveEdge {
-		db.scrollToLiveEdgeNoShrink()
+		db.scrollToLiveEdge(false)
 	}
 }
 
@@ -244,7 +265,7 @@ func (db *DisplayBuffer) DeleteCharacters(n int) {
 func (db *DisplayBuffer) InsertCharacters(n int, fg, bg Color) {
 	db.liveEditor.InsertChars(n, fg, bg)
 	if db.atLiveEdge {
-		db.scrollToLiveEdgeNoShrink()
+		db.scrollToLiveEdge(false)
 	}
 }
 
@@ -313,7 +334,7 @@ func (db *DisplayBuffer) loadInitialHistory() {
 	db.lines = db.history.WrapGlobalToWidth(db.globalTopIndex, totalLines, db.width)
 
 	// Position viewport at the live edge (bottom)
-	db.scrollToLiveEdge()
+	db.scrollToLiveEdge(true)
 }
 
 // Width returns the current terminal width.
@@ -349,7 +370,7 @@ func (db *DisplayBuffer) RebuildCurrentLine() {
 	// Update viewport if at live edge - use NoShrink to prevent viewport from
 	// shrinking during repaint sequences (e.g., bash repainting after wrap crossing)
 	if db.atLiveEdge {
-		db.scrollToLiveEdgeNoShrink()
+		db.scrollToLiveEdge(false)
 	}
 }
 
@@ -390,7 +411,7 @@ func (db *DisplayBuffer) CommitCurrentLine() {
 	// If at live edge, scroll to keep viewport at bottom - use NoShrink to prevent
 	// viewport from shrinking during line editing sequences (commit/uncommit)
 	if db.atLiveEdge {
-		db.scrollToLiveEdgeNoShrink()
+		db.scrollToLiveEdge(false)
 	}
 
 	// Trim excess lines above if needed
@@ -467,42 +488,24 @@ func (db *DisplayBuffer) uncommitLineAtPhysicalRow(physRow int) bool {
 // scrollToLiveEdge adjusts viewportTop so the viewport shows the bottom content.
 // When content exceeds viewport height, the latest content is at the bottom.
 // When content is less than viewport height, content starts at the top (row 0).
-func (db *DisplayBuffer) scrollToLiveEdge() {
-	totalLines := db.contentLineCount()
-	// viewportTop = totalLines - height
-	// But never go negative - content starts at top when it doesn't fill the screen
-	db.viewportTop = totalLines - db.height
-	if db.viewportTop < 0 {
-		db.viewportTop = 0
-	}
-	db.atLiveEdge = true
-}
-
-// scrollToLiveEdgeNoShrink is like scrollToLiveEdge but NEVER reduces viewportTop.
-// This is used after erase operations where content may shrink.
 //
-// During line editing (especially backspacing across wrap boundaries), we must keep
-// viewportTop stable. Bash expects the cursor to stay on the same physical row, and
-// if we scroll up (reduce viewportTop), the live line moves to a different viewport
-// row, causing display desync.
+// If allowShrink is false, viewportTop will only increase (scroll down), never decrease.
+// This is used during line editing where we must keep viewportTop stable - bash expects
+// the cursor to stay on the same physical row, and if we scroll up (reduce viewportTop),
+// the live line moves to a different viewport row, causing display desync.
 //
-// The only times viewportTop should decrease are:
-// 1. User explicitly scrolls up
-// 2. Terminal resize (which has its own cursor sync logic)
-//
-// Empty rows at the bottom are tolerated - bash will redraw and fill them naturally.
-func (db *DisplayBuffer) scrollToLiveEdgeNoShrink() {
+// allowShrink=true is used for: loadInitialHistory, ScrollToBottom, resize, rewrap
+// allowShrink=false is used for: Write, Erase, DeleteCharacters, InsertCharacters, RebuildCurrentLine, CommitCurrentLine
+func (db *DisplayBuffer) scrollToLiveEdge(allowShrink bool) {
 	totalLines := db.contentLineCount()
 	idealViewportTop := totalLines - db.height
 	if idealViewportTop < 0 {
 		idealViewportTop = 0
 	}
 
-	// ONLY scroll down if content grew (never scroll up during erase)
-	if idealViewportTop > db.viewportTop {
+	if allowShrink || idealViewportTop > db.viewportTop {
 		db.viewportTop = idealViewportTop
 	}
-
 	db.atLiveEdge = true
 }
 
@@ -620,7 +623,7 @@ func (db *DisplayBuffer) ScrollDown(lines int) int {
 
 // ScrollToBottom scrolls the viewport to the live edge.
 func (db *DisplayBuffer) ScrollToBottom() {
-	db.scrollToLiveEdge()
+	db.scrollToLiveEdge(true)
 }
 
 // GetViewport returns the physical lines currently visible in the viewport.
@@ -829,12 +832,12 @@ func (db *DisplayBuffer) rewrap() {
 
 	// Position viewport
 	if wasAtLiveEdge {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdge(true)
 	} else if anchorLogicalIdx >= 0 {
 		// Try to maintain scroll position based on anchor logical line
 		db.scrollToLogicalLine(anchorLogicalIdx, anchorWrapOffset)
 	} else {
-		db.scrollToLiveEdge()
+		db.scrollToLiveEdge(true)
 	}
 }
 
@@ -874,7 +877,7 @@ func (db *DisplayBuffer) scrollToLogicalLine(logicalIdx, wrapOffset int) {
 	}
 
 	// Logical line not found in buffer - fall back to live edge
-	db.scrollToLiveEdge()
+	db.scrollToLiveEdge(true)
 }
 
 // SetCell sets a cell in the current line at the given logical X position.
@@ -890,7 +893,7 @@ func (db *DisplayBuffer) SetCell(logicalX int, cell Cell) {
 
 	// Update the visible line in the buffer if at live edge - use NoShrink
 	if db.atLiveEdge {
-		db.scrollToLiveEdgeNoShrink()
+		db.scrollToLiveEdge(false)
 	}
 }
 
@@ -902,7 +905,7 @@ func (db *DisplayBuffer) InsertCell(logicalX int, cell Cell) {
 
 	// Update the visible line in the buffer if at live edge - use NoShrink
 	if db.atLiveEdge {
-		db.scrollToLiveEdgeNoShrink()
+		db.scrollToLiveEdge(false)
 	}
 }
 

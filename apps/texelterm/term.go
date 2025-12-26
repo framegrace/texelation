@@ -1321,15 +1321,14 @@ func (a *TexelTerm) runShell() error {
 		reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
 		displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", true) // Default to new three-level architecture
 
-		// Create history configuration
-		histCfg := parser.DefaultHistoryConfig()
-		histCfg.MemoryLines = cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
-		histCfg.PersistEnabled = cfg.GetBool("texelterm.history", "persist_enabled", true)
-		if persistDir := cfg.GetString("texelterm.history", "persist_dir", ""); persistDir != "" {
-			histCfg.PersistDir = persistDir
+		// History configuration
+		historyMemoryLines := cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
+		historyPersistDir := cfg.GetString("texelterm.history", "persist_dir", "")
+		if historyPersistDir == "" {
+			if homeDir, err := os.UserHomeDir(); err == nil {
+				historyPersistDir = filepath.Join(homeDir, ".texelation")
+			}
 		}
-		histCfg.Compress = cfg.GetBool("texelterm.history", "compress", true)
-		histCfg.Encrypt = cfg.GetBool("texelterm.history", "encrypt", false)
 
 		// Get pane ID for persistent scrollback (lock already held)
 		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
@@ -1380,14 +1379,14 @@ func (a *TexelTerm) runShell() error {
 			// Only enable disk persistence if we have a pane ID
 			if paneIDHex != "" {
 				// Construct disk path for new format (.hist2)
-				scrollbackDir := filepath.Join(histCfg.PersistDir, "scrollback")
+				scrollbackDir := filepath.Join(historyPersistDir, "scrollback")
 				if err := os.MkdirAll(scrollbackDir, 0755); err != nil {
 					log.Printf("Failed to create scrollback dir: %v", err)
 				}
 				diskPath := filepath.Join(scrollbackDir, paneIDHex+".hist2")
 
 				err := a.vterm.EnableDisplayBufferWithDisk(diskPath, parser.DisplayBufferOptions{
-					MaxMemoryLines: histCfg.MemoryLines,
+					MaxMemoryLines: historyMemoryLines,
 					MarginAbove:    200,
 					MarginBelow:    50,
 				})

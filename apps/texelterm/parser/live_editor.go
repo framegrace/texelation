@@ -157,7 +157,7 @@ func (e *LiveEditor) GetCursorOffset() int {
 //   - Empty line, cursor at 0 → (row=0, col=0)
 func (e *LiveEditor) GetPhysicalCursor(width int) (row, col int) {
 	if width <= 0 {
-		width = 80 // Fallback
+		width = DefaultWidth
 	}
 
 	// Special case: empty line or cursor at start
@@ -186,7 +186,7 @@ func (e *LiveEditor) GetPhysicalCursor(width int) (row, col int) {
 // The resulting offset may be beyond the current line length (void space).
 func (e *LiveEditor) SetCursorFromPhysical(physRow, physCol, width int) {
 	if width <= 0 {
-		width = 80
+		width = DefaultWidth
 	}
 	if physRow < 0 {
 		physRow = 0
@@ -278,7 +278,7 @@ func (e *LiveEditor) Backspace() bool {
 // If no tab stop is found on the current row, the cursor wraps to the start of the next row.
 func (e *LiveEditor) Tab(tabStops map[int]bool, width int) int {
 	if width <= 0 {
-		width = 80
+		width = DefaultWidth
 	}
 
 	// Get current column within the physical row

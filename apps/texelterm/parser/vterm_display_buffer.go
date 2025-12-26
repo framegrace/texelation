@@ -39,9 +39,9 @@ type DisplayBufferOptions struct {
 // DefaultDisplayBufferOptions returns sensible defaults.
 func DefaultDisplayBufferOptions() DisplayBufferOptions {
 	return DisplayBufferOptions{
-		MaxMemoryLines: 5000,
-		MarginAbove:    200,
-		MarginBelow:    50,
+		MaxMemoryLines: DefaultMaxMemoryLines,
+		MarginAbove:    DefaultMarginAbove,
+		MarginBelow:    DefaultMarginBelow,
 		DiskPath:       "",
 	}
 }
@@ -55,13 +55,13 @@ func (v *VTerm) initDisplayBuffer() {
 // initDisplayBufferWithOptions initializes the display buffer with custom options.
 func (v *VTerm) initDisplayBufferWithOptions(opts DisplayBufferOptions) {
 	if opts.MaxMemoryLines <= 0 {
-		opts.MaxMemoryLines = 5000
+		opts.MaxMemoryLines = DefaultMaxMemoryLines
 	}
 	if opts.MarginAbove <= 0 {
-		opts.MarginAbove = 200
+		opts.MarginAbove = DefaultMarginAbove
 	}
 	if opts.MarginBelow <= 0 {
-		opts.MarginBelow = 50
+		opts.MarginBelow = DefaultMarginBelow
 	}
 
 	var history *ScrollbackHistory
@@ -415,13 +415,9 @@ func (v *VTerm) displayBufferClear() {
 	v.displayBuf.display = NewDisplayBuffer(v.displayBuf.history, DisplayBufferConfig{
 		Width:       v.width,
 		Height:      v.height,
-		                MarginAbove: 200,
-		                MarginBelow: 50,
-		        })
-		}
-// displayBufferBackspace is deprecated. Cursor synchronization is handled by SetCursorPos.
-func (v *VTerm) displayBufferBackspace() {
-        // No-op
+		MarginAbove: DefaultMarginAbove,
+		MarginBelow: DefaultMarginBelow,
+	})
 }
 // displayBufferGetCurrentLine returns the current (uncommitted) logical line.
 func (v *VTerm) displayBufferGetCurrentLine() *LogicalLine {
@@ -462,8 +458,8 @@ func (v *VTerm) displayBufferLoadHistory(lines []*LogicalLine) {
 	v.displayBuf.display = NewDisplayBuffer(v.displayBuf.history, DisplayBufferConfig{
 		Width:       v.width,
 		Height:      v.height,
-		MarginAbove: 200,
-		MarginBelow: 50,
+		MarginAbove: DefaultMarginAbove,
+		MarginBelow: DefaultMarginBelow,
 	})
 
 	// Scroll to live edge
@@ -523,14 +519,26 @@ func (v *VTerm) displayBufferEraseToEndOfLine() {
         v.MarkAllDirty()
 }
 
+// withDisplayBufferOp runs an operation on the display buffer with standard nil checks
+// and dirty marking. If syncCursor is true, syncs cursor position first.
+// This eliminates repetition across display buffer edit operations.
+func (v *VTerm) withDisplayBufferOp(syncCursor bool, op func(*DisplayBuffer)) {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	if syncCursor {
+		v.displayBufferSetCursorFromPhysical(false)
+	}
+	op(v.displayBuf.display)
+	v.MarkAllDirty()
+}
+
 // displayBufferEraseFromStartOfLine clears the current logical line from start to cursor.
 // Used for EL 1 (Erase from start of line to cursor).
 func (v *VTerm) displayBufferEraseFromStartOfLine() {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
-        v.displayBuf.display.Erase(1)
-        v.MarkAllDirty()
+	v.withDisplayBufferOp(false, func(db *DisplayBuffer) {
+		db.Erase(1)
+	})
 }
 
 // displayBufferEraseLine clears the entire current logical line.
@@ -549,27 +557,17 @@ func (v *VTerm) displayBufferEraseLine() {
 // displayBufferEraseCharacters replaces n characters at current position with spaces.
 // Used for ECH (Erase Character).
 func (v *VTerm) displayBufferEraseCharacters(n int) {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
-        // Sync cursor position before erasing to ensure we're at the right offset.
-        // Use absolute mapping (false) since we don't know how cursor got here.
-        v.displayBufferSetCursorFromPhysical(false)
-        v.displayBuf.display.EraseCharacters(n)
-        v.MarkAllDirty()
+	v.withDisplayBufferOp(true, func(db *DisplayBuffer) {
+		db.EraseCharacters(n)
+	})
 }
 
 // displayBufferDeleteCharacters removes n characters at current position, shifting content left.
 // Used for DCH (Delete Character) - CSI P.
 func (v *VTerm) displayBufferDeleteCharacters(n int) {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
-        // Sync cursor position before deleting to ensure we're at the right offset.
-        // Use absolute mapping (false) since we don't know how cursor got here.
-        v.displayBufferSetCursorFromPhysical(false)
-        v.displayBuf.display.DeleteCharacters(n)
-        v.MarkAllDirty()
+	v.withDisplayBufferOp(true, func(db *DisplayBuffer) {
+		db.DeleteCharacters(n)
+	})
 }
 
 // displayBufferInsertCharacters inserts n blank characters at current position, shifting content right.
@@ -577,13 +575,9 @@ func (v *VTerm) displayBufferDeleteCharacters(n int) {
 // TODO: Currently works for non-wrapped lines only. Wrapped lines need special handling
 // to reflow content across physical row boundaries after insertion.
 func (v *VTerm) displayBufferInsertCharacters(n int) {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
-        // Sync cursor position before inserting to ensure we're at the right offset.
-        // Use absolute mapping (false) since we don't know how cursor got here.
-        v.displayBufferSetCursorFromPhysical(false)
-        v.displayBuf.display.InsertCharacters(n, v.currentFG, v.currentBG)
-        v.MarkAllDirty()
+	fg, bg := v.currentFG, v.currentBG // Capture for closure
+	v.withDisplayBufferOp(true, func(db *DisplayBuffer) {
+		db.InsertCharacters(n, fg, bg)
+	})
 }
 

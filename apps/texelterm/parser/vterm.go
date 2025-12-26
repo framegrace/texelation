@@ -870,14 +870,6 @@ func WithReflow(enabled bool) Option {
 	return func(v *VTerm) { v.reflowEnabled = enabled }
 }
 
-// WithDisplayBuffer is deprecated. Display buffer is now always enabled.
-// This option is kept for backward compatibility but has no effect.
-func WithDisplayBuffer(_ bool) Option {
-	return func(_ *VTerm) {
-		// No-op: display buffer is always enabled now
-	}
-}
-
 func (v *VTerm) SetTitle(title string) {
 	if v.TitleChanged != nil {
 		v.TitleChanged(title)

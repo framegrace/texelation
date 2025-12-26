@@ -5,6 +5,10 @@ import (
 	"sync"
 )
 
+// DefaultMemoryLines is the default number of lines to keep in memory for scrollback.
+// This is used by term.go when no config value is specified.
+const DefaultMemoryLines = 100000
+
 // ScrollbackHistoryConfig holds configuration for scrollback history.
 type ScrollbackHistoryConfig struct {
 	// MaxMemoryLines is the maximum logical lines to keep in memory.
@@ -72,13 +76,13 @@ type ScrollbackHistory struct {
 // NewScrollbackHistory creates a new scrollback history with the given configuration.
 func NewScrollbackHistory(config ScrollbackHistoryConfig) *ScrollbackHistory {
 	if config.MaxMemoryLines <= 0 {
-		config.MaxMemoryLines = 5000
+		config.MaxMemoryLines = DefaultMaxMemoryLines
 	}
 	if config.MarginAbove <= 0 {
-		config.MarginAbove = 1000
+		config.MarginAbove = 1000 // History margins differ from display buffer margins
 	}
 	if config.MarginBelow <= 0 {
-		config.MarginBelow = 500
+		config.MarginBelow = 500 // History margins differ from display buffer margins
 	}
 
 	h := &ScrollbackHistory{
@@ -243,7 +247,7 @@ func (h *ScrollbackHistory) Append(line *LogicalLine) {
 	h.dirty = true
 
 	// Trim memory if over capacity
-	h.trimMemoryLocked()
+	h.trimAboveLocked()
 }
 
 // AppendCells is a convenience method that creates a logical line from cells and appends it.
@@ -280,22 +284,6 @@ func (h *ScrollbackHistory) PopLast() *LogicalLine {
 	// 3. Disk truncation is complex and rarely needed
 
 	return line
-}
-
-// trimMemoryLocked removes oldest lines from memory when over capacity.
-// Caller must hold the lock.
-func (h *ScrollbackHistory) trimMemoryLocked() {
-	excess := len(h.lines) - h.config.MaxMemoryLines
-	if excess <= 0 {
-		return
-	}
-
-	// Remove oldest lines from memory (they're still on disk)
-	for i := 0; i < excess; i++ {
-		h.lines[i] = nil // Help GC
-	}
-	h.lines = h.lines[excess:]
-	h.windowStart += int64(excess)
 }
 
 // LoadAbove loads older lines from disk into the memory window.
@@ -596,7 +584,7 @@ func (h *ScrollbackHistory) PhysicalLineCount(width int) int {
 	defer h.mu.RUnlock()
 
 	if width <= 0 {
-		width = 80
+		width = DefaultWidth
 	}
 	count := 0
 	for _, line := range h.lines {
@@ -617,7 +605,7 @@ func (h *ScrollbackHistory) FindLogicalIndexForPhysicalLine(physicalLine, width 
 	defer h.mu.RUnlock()
 
 	if width <= 0 {
-		width = 80
+		width = DefaultWidth
 	}
 	if physicalLine < 0 {
 		return -1, 0

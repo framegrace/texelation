@@ -40,7 +40,7 @@ func TestDisplayBuffer_GetLogicalPos(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		db.CurrentLine().Append(Cell{Rune: rune('a' + i)})
 	}
-	db.scrollToLiveEdge() // Should put us at the bottom
+	db.scrollToLiveEdge(true) // Should put us at the bottom
 
 	tests := []struct {
 		name          string
@@ -109,7 +109,7 @@ func TestDisplayBuffer_GetLogicalPos_Scrolled(t *testing.T) {
 	// Row 0: "A" (History 0)
 	// Row 1: "B" (Current)
 	
-	db.scrollToLiveEdge()
+	db.scrollToLiveEdge(true)
 
 	// Verify live edge mapping
 	idx, off, found := db.GetLogicalPos(0, 0) // "A"
@@ -301,7 +301,7 @@ func TestDisplayBuffer_ResizeReflow_RoundTrip(t *testing.T) {
 		db.Write(r, DefaultFG, DefaultBG, 0, false)
 	}
 	
-	db.scrollToLiveEdge()
+	db.scrollToLiveEdge(true)
 	
 	// Initial State:
 	// Committed: 4 lines.
@@ -332,7 +332,7 @@ func TestDisplayBuffer_ResizeReflow_RoundTrip(t *testing.T) {
 		db.CommitCurrentLine()
 	}
 	for _, r := range "Prompt> " { db.Write(r, DefaultFG, DefaultBG, 0, false) }
-	db.scrollToLiveEdge()
+	db.scrollToLiveEdge(true)
 	
 	// Resize to 10.
 	// History (15 chars) -> 2 lines each.

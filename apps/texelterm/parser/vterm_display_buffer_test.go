@@ -17,20 +17,6 @@ func TestVTerm_DisplayBufferInit(t *testing.T) {
 	}
 }
 
-func TestVTerm_WithDisplayBufferOption(t *testing.T) {
-	// Test that display buffer is enabled regardless of option (deprecated)
-	v := NewVTerm(80, 24, WithDisplayBuffer(true))
-	if !v.IsDisplayBufferEnabled() {
-		t.Error("display buffer should be enabled")
-	}
-
-	// WithDisplayBuffer(false) is now a no-op - display buffer is always enabled
-	v2 := NewVTerm(80, 24, WithDisplayBuffer(false))
-	if !v2.IsDisplayBufferEnabled() {
-		t.Error("display buffer should be enabled (WithDisplayBuffer is deprecated)")
-	}
-}
-
 func TestVTerm_DisplayBufferPlaceChar(t *testing.T) {
 	v := NewVTerm(10, 5)
 	v.EnableDisplayBuffer()

@@ -3091,7 +3091,7 @@ func TestDisplayBuffer_BashActualInsertionFlow(t *testing.T) {
 func TestDisplayBuffer_ICH_InsertCharacters(t *testing.T) {
 	width := 40
 	height := 10
-	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v := NewVTerm(width, height)
 	v.EnableDisplayBuffer()
 
 	getRow := func() string {
@@ -3154,7 +3154,7 @@ func TestDisplayBuffer_ICH_InsertCharacters(t *testing.T) {
 func TestDisplayBuffer_ICH_AtEndOfLine(t *testing.T) {
 	width := 40
 	height := 10
-	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v := NewVTerm(width, height)
 	v.EnableDisplayBuffer()
 
 	getRow := func() string {
@@ -3208,7 +3208,7 @@ func TestDisplayBuffer_ICH_AtEndOfLine(t *testing.T) {
 func TestDisplayBuffer_WrappedLine_CursorMoveAndInsert(t *testing.T) {
 	width := 10 // Narrow terminal to force wrapping
 	height := 5
-	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v := NewVTerm(width, height)
 	v.EnableDisplayBuffer()
 	p := NewParser(v)
 
@@ -3373,7 +3373,7 @@ func TestDisplayBuffer_WrappedLine_CursorMoveAndInsert(t *testing.T) {
 func TestDisplayBuffer_WrappedLine_MoveAcrossWrapBoundary(t *testing.T) {
 	width := 10
 	height := 5
-	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v := NewVTerm(width, height)
 	v.EnableDisplayBuffer()
 	p := NewParser(v)
 
@@ -3448,7 +3448,7 @@ func TestDisplayBuffer_WrappedLine_MoveAcrossWrapBoundary(t *testing.T) {
 func TestDisplayBuffer_WrappedLine_InsertModeAcrossWrap(t *testing.T) {
 	width := 10
 	height := 5
-	v := NewVTerm(width, height, WithDisplayBuffer(false))
+	v := NewVTerm(width, height)
 	v.EnableDisplayBuffer()
 	p := NewParser(v)
 
