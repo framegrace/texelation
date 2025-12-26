@@ -24,10 +24,10 @@ test_*.go
 ss
 
 # Compiled binaries (should be in bin/ or built elsewhere)
-texel-server
-texel-client
-texelterm
-welcome
+/texel-server
+/texel-client
+/texelterm
+/welcome
 
 # Screenshots and debug images
 *.png

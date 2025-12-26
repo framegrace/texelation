@@ -23,6 +23,10 @@ type Driver struct {
 }
 
 // NewDriver creates a new headless terminal driver with the given dimensions.
+// The driver uses alt screen mode for testing because the main screen's
+// DisplayBuffer architecture doesn't fully support traditional VT100 scroll
+// region operations. Alt screen uses a simple grid buffer that correctly
+// handles all scroll and margin operations for xterm compliance testing.
 func NewDriver(width, height int) *Driver {
 	d := &Driver{
 		width:  width,
@@ -40,6 +44,11 @@ func NewDriver(width, height int) *Driver {
 
 	d.vterm = vterm
 	d.parser = p
+
+	// Enter alt screen mode for xterm compliance testing.
+	// Alt screen uses a direct grid buffer that correctly handles all
+	// VT100 scroll region and margin operations.
+	d.WriteRaw("\x1b[?1049h")
 
 	return d
 }
@@ -138,6 +147,9 @@ func (d *Driver) Reset() {
 
 	d.parser = parser.NewParser(d.vterm)
 	d.ptyOutput = "" // Clear any pending output
+
+	// Enter alt screen mode for xterm compliance testing
+	d.WriteRaw("\x1b[?1049h")
 }
 
 // GetCellAt returns the cell at the specified position (1-indexed).

@@ -19,23 +19,8 @@ func (v *VTerm) ClearScreen() {
 		}
 		v.SetCursorPos(0, 0)
 	} else {
-		if v.historyManager != nil {
-			// Append `height` empty lines so the entire visible screen is cleared
-			// This ensures that after clearscreen, the visible area shows all new/empty content
-			// and cursor at (0,0) writes to the first of these new lines
-			for i := 0; i < v.height; i++ {
-				v.historyManager.AppendLine(make([]Cell, 0, v.width))
-			}
-		} else {
-			// Legacy circular buffer
-			v.historyBuffer = make([][]Cell, v.maxHistorySize)
-			v.historyHead = 0
-			v.historyLen = v.height
-			for i := 0; i < v.height && i < v.maxHistorySize; i++ {
-				v.historyBuffer[i] = make([]Cell, 0, v.width)
-			}
-		}
-		v.viewOffset = 0
+		// Use display buffer clear
+		v.displayBufferClear()
 		v.SetCursorPos(0, 0)
 	}
 }

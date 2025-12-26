@@ -134,28 +134,6 @@ func (v *VTerm) insertLinesWithinMargins(n int) {
 	}
 }
 
-// insertHistoryLine inserts a line into the history buffer (legacy circular buffer).
-func (v *VTerm) insertHistoryLine(index int, line []Cell) {
-	if index < 0 || index > v.getHistoryLen() {
-		return
-	}
-	if v.getHistoryLen() < v.maxHistorySize {
-		physicalInsertIndex := (v.historyHead + index) % v.maxHistorySize
-		// Shift existing lines to make room
-		for i := v.getHistoryLen(); i > index; i-- {
-			srcPhysical := (v.historyHead + i - 1 + v.maxHistorySize) % v.maxHistorySize
-			dstPhysical := (v.historyHead + i) % v.maxHistorySize
-			v.historyBuffer[dstPhysical] = v.historyBuffer[srcPhysical]
-		}
-		v.historyBuffer[physicalInsertIndex] = line
-		v.historyLen++
-	} else {
-		// If buffer is full, we can't properly insert in the middle,
-		// so we just overwrite the line at the index.
-		v.setHistoryLine(index, line)
-	}
-}
-
 // DeleteLines handles DL (Delete Line) - deletes n lines at cursor.
 func (v *VTerm) DeleteLines(n int) {
 	v.wrapNext = false
@@ -286,16 +264,3 @@ func (v *VTerm) deleteLinesWithinMargins(n int) {
 	}
 }
 
-// deleteHistoryLine deletes a line from the history buffer (legacy circular buffer).
-func (v *VTerm) deleteHistoryLine(index int) {
-	if index < 0 || index >= v.getHistoryLen() {
-		return
-	}
-	// Shift lines up to fill the gap
-	for i := index; i < v.getHistoryLen()-1; i++ {
-		srcPhysical := (v.historyHead + i + 1) % v.maxHistorySize
-		dstPhysical := (v.historyHead + i) % v.maxHistorySize
-		v.historyBuffer[dstPhysical] = v.historyBuffer[srcPhysical]
-	}
-	v.historyLen--
-}

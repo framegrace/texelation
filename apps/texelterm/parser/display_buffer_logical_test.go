@@ -36,10 +36,11 @@ func TestDisplayBuffer_GetLogicalPos(t *testing.T) {
 	// Create DisplayBuffer
 	db := NewDisplayBuffer(history, DisplayBufferConfig{Width: 10, Height: 10})
 	
-	// Set Current Line
-	for i := 0; i < 5; i++ { db.currentLine.Append(Cell{Rune: rune('a'+i)}) }
-	db.rebuildCurrentLinePhysical()
-	db.scrollToLiveEdge() // Should put us at the bottom
+	// Set Current Line - use the public API to add content
+	for i := 0; i < 5; i++ {
+		db.CurrentLine().Append(Cell{Rune: rune('a' + i)})
+	}
+	db.scrollToLiveEdge(true) // Should put us at the bottom
 
 	tests := []struct {
 		name          string
@@ -102,14 +103,13 @@ func TestDisplayBuffer_GetLogicalPos_Scrolled(t *testing.T) {
 	
 	db := NewDisplayBuffer(history, DisplayBufferConfig{Width: 10, Height: 2})
 	// Current line 'B'
-	db.currentLine.Append(Cell{Rune: 'B'})
-	db.rebuildCurrentLinePhysical()
+	db.CurrentLine().Append(Cell{Rune: 'B'})
 	
 	// Layout:
 	// Row 0: "A" (History 0)
 	// Row 1: "B" (Current)
 	
-	db.scrollToLiveEdge()
+	db.scrollToLiveEdge(true)
 
 	// Verify live edge mapping
 	idx, off, found := db.GetLogicalPos(0, 0) // "A"
@@ -145,8 +145,8 @@ func TestDisplayBuffer_LogicalEditor(t *testing.T) {
 	db.Write('C', DefaultFG, DefaultBG, 0, false)
 	
 	// Should have "ABC" in current line
-	if db.currentLine.Len() != 3 {
-		t.Errorf("After writing ABC, len=%d, want 3", db.currentLine.Len())
+	if db.CurrentLine().Len() != 3 {
+		t.Errorf("After writing ABC, len=%d, want 3", db.CurrentLine().Len())
 	}
 	
 	// 2. Wrap: Write enough to wrap
@@ -158,8 +158,8 @@ func TestDisplayBuffer_LogicalEditor(t *testing.T) {
 	
 	db.Write('K', DefaultFG, DefaultBG, 0, false)
 	// Current Line: "ABCDEFGHIJK"
-	if db.currentLine.Len() != 11 {
-		t.Errorf("After wrap write K, len=%d, want 11", db.currentLine.Len())
+	if db.CurrentLine().Len() != 11 {
+		t.Errorf("After wrap write K, len=%d, want 11", db.CurrentLine().Len())
 	}
 	
 	// 3. Move Cursor Back and Overwrite (Simulate user moving cursor left)
@@ -168,8 +168,8 @@ func TestDisplayBuffer_LogicalEditor(t *testing.T) {
 	db.Write('X', DefaultFG, DefaultBG, 0, false)
 	
 	// Current Line: "XBCDEFGHIJK"
-	if db.currentLine.Cells[0].Rune != 'X' {
-		t.Errorf("Overwrite at 0 failed. Got %c", db.currentLine.Cells[0].Rune)
+	if db.CurrentLine().Cells[0].Rune != 'X' {
+		t.Errorf("Overwrite at 0 failed. Got %c", db.CurrentLine().Cells[0].Rune)
 	}
 	
 	// 4. Move Cursor to Wrapped Row and Overwrite
@@ -178,8 +178,8 @@ func TestDisplayBuffer_LogicalEditor(t *testing.T) {
 	db.Write('Y', DefaultFG, DefaultBG, 0, false)
 	
 	// Current Line: "XBCDEFGHIJY"
-	if db.currentLine.Cells[10].Rune != 'Y' {
-		t.Errorf("Overwrite at wrap 10 failed. Got %c", db.currentLine.Cells[10].Rune)
+	if db.CurrentLine().Cells[10].Rune != 'Y' {
+		t.Errorf("Overwrite at wrap 10 failed. Got %c", db.CurrentLine().Cells[10].Rune)
 	}
 }
 
@@ -201,8 +201,8 @@ func TestDisplayBuffer_LogicalErase(t *testing.T) {
 	db.SetCursor(0, 1)
 	db.Erase(0) // EraseToEnd
 	
-	if db.currentLine.Len() != 10 {
-		t.Errorf("After EL 0 at offset 10, len=%d, want 10", db.currentLine.Len())
+	if db.CurrentLine().Len() != 10 {
+		t.Errorf("After EL 0 at offset 10, len=%d, want 10", db.CurrentLine().Len())
 	}
 	
 	// 2. EL 1 (Start to Cursor) at 5,0 (Offset 5)
@@ -210,20 +210,20 @@ func TestDisplayBuffer_LogicalErase(t *testing.T) {
 	db.SetCursor(5, 0)
 	db.Erase(1) // EraseStart
 	
-	if db.currentLine.Cells[0].Rune != ' ' {
-		t.Errorf("After EL 1, cell 0 is %c, want space", db.currentLine.Cells[0].Rune)
+	if db.CurrentLine().Cells[0].Rune != ' ' {
+		t.Errorf("After EL 1, cell 0 is %c, want space", db.CurrentLine().Cells[0].Rune)
 	}
-	if db.currentLine.Cells[5].Rune != ' ' {
-		t.Errorf("After EL 1, cell 5 is %c, want space", db.currentLine.Cells[5].Rune)
+	if db.CurrentLine().Cells[5].Rune != ' ' {
+		t.Errorf("After EL 1, cell 5 is %c, want space", db.CurrentLine().Cells[5].Rune)
 	}
-	if db.currentLine.Cells[6].Rune != '6' {
-		t.Errorf("After EL 1, cell 6 is %c, want '6'", db.currentLine.Cells[6].Rune)
+	if db.CurrentLine().Cells[6].Rune != '6' {
+		t.Errorf("After EL 1, cell 6 is %c, want '6'", db.CurrentLine().Cells[6].Rune)
 	}
 	
 	// 3. EL 2 (Entire Line)
 	db.Erase(2) // EraseLine
-	if db.currentLine.Len() != 0 {
-		t.Errorf("After EL 2, len=%d, want 0", db.currentLine.Len())
+	if db.CurrentLine().Len() != 0 {
+		t.Errorf("After EL 2, len=%d, want 0", db.CurrentLine().Len())
 	}
 }
 
@@ -301,7 +301,7 @@ func TestDisplayBuffer_ResizeReflow_RoundTrip(t *testing.T) {
 		db.Write(r, DefaultFG, DefaultBG, 0, false)
 	}
 	
-	db.scrollToLiveEdge()
+	db.scrollToLiveEdge(true)
 	
 	// Initial State:
 	// Committed: 4 lines.
@@ -332,7 +332,7 @@ func TestDisplayBuffer_ResizeReflow_RoundTrip(t *testing.T) {
 		db.CommitCurrentLine()
 	}
 	for _, r := range "Prompt> " { db.Write(r, DefaultFG, DefaultBG, 0, false) }
-	db.scrollToLiveEdge()
+	db.scrollToLiveEdge(true)
 	
 	// Resize to 10.
 	// History (15 chars) -> 2 lines each.

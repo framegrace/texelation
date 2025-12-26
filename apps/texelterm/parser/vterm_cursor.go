@@ -23,23 +23,28 @@ func (v *VTerm) SetCursorPos(y, x int) {
 		y = v.height - 1
 	}
 
+	// Save previous state before any changes
+	v.prevCursorX = v.cursorX
+	v.prevCursorY = v.cursorY
+	v.prevWrapNext = v.wrapNext
+
 	// Only clear wrapNext if we're actually moving to a different position
 	if y != v.cursorY || x != v.cursorX {
 		v.wrapNext = false
 	}
 
-	        v.prevCursorY = v.cursorY
-	        v.cursorX = x
-	        v.cursorY = y
-	
-	        // Sync display buffer logical cursor if enabled
-	        if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-	                v.displayBufferSetCursorFromPhysical()
-	        }
-	
-	        v.MarkDirty(v.prevCursorY)
-	        v.MarkDirty(v.cursorY)
-	}
+	v.cursorX = x
+	v.cursorY = y
+
+	// NOTE: We do NOT call displayBufferSetCursorFromPhysical() here.
+	// Character placement (placeChar) already advances the display buffer cursor,
+	// so calling it here would cause double-advancement. Instead, cursor movement
+	// escape sequences (CUB, CUF, CUP, etc.) call displayBufferSetCursorFromPhysical
+	// explicitly via their handlers.
+
+	v.MarkDirty(v.prevCursorY)
+	v.MarkDirty(v.cursorY)
+}
 // GetCursorX returns the current cursor X position
 func (v *VTerm) GetCursorX() int {
 	return v.cursorX

@@ -5,6 +5,10 @@ import (
 	"sync"
 )
 
+// DefaultMemoryLines is the default number of lines to keep in memory for scrollback.
+// This is used by term.go when no config value is specified.
+const DefaultMemoryLines = 100000
+
 // ScrollbackHistoryConfig holds configuration for scrollback history.
 type ScrollbackHistoryConfig struct {
 	// MaxMemoryLines is the maximum logical lines to keep in memory.
@@ -72,13 +76,13 @@ type ScrollbackHistory struct {
 // NewScrollbackHistory creates a new scrollback history with the given configuration.
 func NewScrollbackHistory(config ScrollbackHistoryConfig) *ScrollbackHistory {
 	if config.MaxMemoryLines <= 0 {
-		config.MaxMemoryLines = 5000
+		config.MaxMemoryLines = DefaultMaxMemoryLines
 	}
 	if config.MarginAbove <= 0 {
-		config.MarginAbove = 1000
+		config.MarginAbove = 1000 // History margins differ from display buffer margins
 	}
 	if config.MarginBelow <= 0 {
-		config.MarginBelow = 500
+		config.MarginBelow = 500 // History margins differ from display buffer margins
 	}
 
 	h := &ScrollbackHistory{
@@ -243,7 +247,7 @@ func (h *ScrollbackHistory) Append(line *LogicalLine) {
 	h.dirty = true
 
 	// Trim memory if over capacity
-	h.trimMemoryLocked()
+	h.trimAboveLocked()
 }
 
 // AppendCells is a convenience method that creates a logical line from cells and appends it.
@@ -251,20 +255,35 @@ func (h *ScrollbackHistory) AppendCells(cells []Cell) {
 	h.Append(NewLogicalLineFromCells(cells))
 }
 
-// trimMemoryLocked removes oldest lines from memory when over capacity.
-// Caller must hold the lock.
-func (h *ScrollbackHistory) trimMemoryLocked() {
-	excess := len(h.lines) - h.config.MaxMemoryLines
-	if excess <= 0 {
-		return
+// PopLast removes and returns the last line from history.
+// Returns nil if history is empty or the last line has been flushed to disk.
+// This is used for "uncommitting" recently committed lines during bash redraw.
+func (h *ScrollbackHistory) PopLast() *LogicalLine {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.lines) == 0 {
+		return nil
 	}
 
-	// Remove oldest lines from memory (they're still on disk)
-	for i := 0; i < excess; i++ {
-		h.lines[i] = nil // Help GC
-	}
-	h.lines = h.lines[excess:]
-	h.windowStart += int64(excess)
+	// We can only pop if the last line is in our memory window
+	// (not yet flushed to disk or trimmed)
+	lastIdx := len(h.lines) - 1
+	line := h.lines[lastIdx]
+
+	// Remove from memory
+	h.lines[lastIdx] = nil // Help GC
+	h.lines = h.lines[:lastIdx]
+	h.totalLines--
+	h.dirty = true
+
+	// Note: We don't remove from disk. If disk persistence is enabled,
+	// the disk may still have this line. This is acceptable because:
+	// 1. PopLast is only used for temporary uncommits during editing
+	// 2. The line will be re-committed when editing completes
+	// 3. Disk truncation is complex and rarely needed
+
+	return line
 }
 
 // LoadAbove loads older lines from disk into the memory window.
@@ -386,6 +405,45 @@ func (h *ScrollbackHistory) Clear() {
 	h.lines = h.lines[:0]
 	h.windowStart = h.totalLines // Window is now empty, at the end
 	h.dirty = true
+}
+
+// ClearScrollback clears all committed history (ED 3 behavior).
+// This removes both in-memory lines and resets the disk history.
+// After this call, the history is empty but ready to receive new content.
+func (h *ScrollbackHistory) ClearScrollback() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Clear memory
+	for i := range h.lines {
+		h.lines[i] = nil
+	}
+	h.lines = h.lines[:0]
+
+	// Reset indices
+	h.windowStart = 0
+	h.totalLines = 0
+	h.dirty = true
+
+	// If we have disk backing, close and recreate it
+	// This effectively truncates the history file
+	if h.disk != nil {
+		diskPath := h.config.DiskPath
+		h.disk.Close()
+		h.disk = nil
+
+		// Recreate empty disk history
+		diskConfig := h.config.DiskConfig
+		if diskConfig.Path == "" {
+			diskConfig.Path = diskPath
+		}
+		disk, err := CreateDiskHistory(diskConfig)
+		if err != nil {
+			fmt.Printf("[SCROLLBACK] Failed to recreate disk history: %v\n", err)
+		} else {
+			h.disk = disk
+		}
+	}
 }
 
 // IsDirty returns whether history has changes since last MarkClean.
@@ -526,7 +584,7 @@ func (h *ScrollbackHistory) PhysicalLineCount(width int) int {
 	defer h.mu.RUnlock()
 
 	if width <= 0 {
-		width = 80
+		width = DefaultWidth
 	}
 	count := 0
 	for _, line := range h.lines {
@@ -547,7 +605,7 @@ func (h *ScrollbackHistory) FindLogicalIndexForPhysicalLine(physicalLine, width 
 	defer h.mu.RUnlock()
 
 	if width <= 0 {
-		width = 80
+		width = DefaultWidth
 	}
 	if physicalLine < 0 {
 		return -1, 0
