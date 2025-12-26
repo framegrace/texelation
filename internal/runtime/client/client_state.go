@@ -64,6 +64,16 @@ func (s *clientState) setRenderChannel(ch chan<- struct{}) {
 	}
 }
 
+// triggerRender requests a render on the render channel (non-blocking).
+func (s *clientState) triggerRender() {
+	if s.renderCh != nil {
+		select {
+		case s.renderCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (s *clientState) setThemeValue(section, key string, value interface{}) {
 	if s.themeValues == nil {
 		s.themeValues = make(map[string]map[string]interface{})
