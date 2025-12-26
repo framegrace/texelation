@@ -43,23 +43,11 @@ func (v *VTerm) ClearScreenMode(mode int) {
 					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 				}
 			}
-		} else {
-			// For main screen, clear all lines below cursor by clearing them individually
-			logicalY := v.cursorY + v.getTopHistoryLine()
-			endY := v.getTopHistoryLine() + v.height
-			blankLine := make([]Cell, v.width)
-			for x := 0; x < v.width; x++ {
-				blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-			}
-			// Ensure all lines exist in history up to end of viewport
-			for v.getHistoryLen() < endY {
-				v.appendHistoryLine(make([]Cell, 0, v.width))
-			}
-			// Now clear lines below cursor
-			for y := logicalY + 1; y < endY; y++ {
-				v.setHistoryLine(y, append([]Cell(nil), blankLine...))
-			}
 		}
+		// For main screen with DisplayBuffer, ClearLine(0) already handles erasing
+		// from cursor to end of the logical line. In the DisplayBuffer model, all
+		// content on and below the cursor row is part of the current logical line,
+		// so truncating at cursor offset erases everything "below" as well.
 	case 1: // Erase from beginning of screen to cursor
 		v.ClearLine(1)
 		if v.inAltScreen {
@@ -68,39 +56,16 @@ func (v *VTerm) ClearScreenMode(mode int) {
 					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 				}
 			}
-		} else {
-			logicalY := v.cursorY + v.getTopHistoryLine()
-			blankLine := make([]Cell, v.width)
-			for x := 0; x < v.width; x++ {
-				blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-			}
-			for i := v.getTopHistoryLine(); i < logicalY; i++ {
-				v.setHistoryLine(i, append([]Cell(nil), blankLine...))
-			}
 		}
+		// For main screen with DisplayBuffer, ClearLine(1) already handles erasing
+		// from start to cursor within the current logical line.
 	case 2: // Erase entire visible screen (ED 2)
 		v.ClearVisibleScreen()
 	case 3: // Erase scrollback only, leave visible screen intact (ED 3)
-		if !v.inAltScreen {
-			// Clear scrollback by resetting history to only contain visible screen
-			topHistory := v.getTopHistoryLine()
-			newHistory := make([][]Cell, v.maxHistorySize)
-
-			// Copy visible screen lines to new history buffer starting at position 0
-			for i := 0; i < v.height; i++ {
-				oldLine := v.getHistoryLine(topHistory + i)
-				if oldLine != nil {
-					newHistory[i] = append([]Cell(nil), oldLine...)
-				} else {
-					newHistory[i] = make([]Cell, 0, v.width)
-				}
-			}
-
-			// Replace history buffer and reset pointers
-			v.historyBuffer = newHistory
-			v.historyHead = 0
-			v.historyLen = v.height
-			v.viewOffset = 0
+		if !v.inAltScreen && v.displayBuf != nil && v.displayBuf.history != nil {
+			// Clear scrollback history while preserving the current (uncommitted) line
+			v.displayBuf.history.ClearScrollback()
+			v.MarkAllDirty()
 		}
 		// On alt screen, ED 3 does nothing (no scrollback to clear)
 	}
@@ -110,7 +75,8 @@ func (v *VTerm) ClearScreenMode(mode int) {
 func (v *VTerm) ClearLine(mode int) {
 	v.MarkDirty(v.cursorY)
 
-	// Update display buffer if enabled (only for main screen, current line)
+	// For main screen with display buffer, use display buffer operations only.
+	// The display buffer handles logical lines which may span multiple physical rows.
 	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
 		switch mode {
 		case 0:
@@ -120,23 +86,18 @@ func (v *VTerm) ClearLine(mode int) {
 		case 2:
 			v.displayBufferEraseLine()
 		}
+		return // Display buffer handles everything, don't fall through to legacy code
 	}
 
+	// Alt screen: manipulate altBuffer directly
 	var line []Cell
-	var logicalY int
 	if v.inAltScreen {
 		line = v.altBuffer[v.cursorY]
 	} else {
-		logicalY = v.cursorY + v.getTopHistoryLine()
-		// Ensure line exists
-		for v.getHistoryLen() <= logicalY {
-			v.appendHistoryLine(make([]Cell, 0, v.width))
-		}
-		line = v.getHistoryLine(logicalY)
-		if line == nil {
-			line = make([]Cell, 0, v.width)
-		}
+		// This path should only be reached if display buffer is not enabled
+		return
 	}
+
 	start, end := 0, v.width
 	switch mode {
 	case 0: // Erase from cursor to end
@@ -157,19 +118,13 @@ func (v *VTerm) ClearLine(mode int) {
 	}
 
 	// If we're erasing to the end of line, truncate any content beyond 'end'
-	// This handles cases where the history line is longer than the terminal width
-	if mode == 0 || mode == 2 { // EL 0 (cursor to end) or EL 2 (entire line)
+	if mode == 0 || mode == 2 {
 		if len(line) > end {
 			line = line[:end]
 		}
 	}
 
-	// Write the modified line back to the appropriate buffer
-	if v.inAltScreen {
-		v.altBuffer[v.cursorY] = line
-	} else {
-		v.setHistoryLine(logicalY, line)
-	}
+	v.altBuffer[v.cursorY] = line
 }
 
 // EraseCharacters handles ECH (Erase Character) - replaces n characters with blanks.

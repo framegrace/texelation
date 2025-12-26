@@ -103,7 +103,7 @@ type PhysicalLine struct {
 // lines produce one empty physical line).
 func (l *LogicalLine) WrapToWidth(width int) []PhysicalLine {
 	if width <= 0 {
-		width = 80 // Fallback to reasonable default
+		width = DefaultWidth
 	}
 
 	if len(l.Cells) == 0 {

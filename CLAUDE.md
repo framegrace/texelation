@@ -10,7 +10,8 @@ Texelation is a modular text-based desktop environment running as a client/serve
 
 ### Building
 ```bash
-make build          # Build texel-server and texel-client binaries into bin/
+make build          # Build core binaries (texel-server, texel-client, texelterm, help)
+make build-apps     # Build ALL standalone app binaries (includes demos, stress test, etc.)
 make install        # Install binaries into GOPATH/bin
 make release        # Cross-compile for Linux, macOS, Windows (amd64 + arm64) into dist/
 ```
@@ -54,11 +55,18 @@ make clean          # Remove bin/, dist/, .cache/
 - **Effects** (`internal/effects/`) – Registry-based overlay system (fadeTint, rainbow, flash, zoom); wired through theme JSON bindings
 
 ### Apps
-Located in `apps/`:
-- **texelterm** – Full terminal emulator with VT parser (`apps/texelterm/term.go`, `apps/texelterm/parser/`)
+Located in `apps/`. TexelApps come in two forms:
+
+**Embedded-only apps** – Run only inside texelation server, no standalone binary:
+- **launcher** – App launcher dialog
 - **statusbar** – Status display pane
-- **welcome** – Welcome screen
 - **clock** – Clock widget
+
+**Standalone apps** – Can run inside texelation OR independently via app-runner:
+- **texelterm** – Full terminal emulator with VT parser (`apps/texelterm/term.go`, `apps/texelterm/parser/`)
+- **help** – Help viewer
+
+Standalone apps have a corresponding `cmd/<appname>/main.go` that uses the `app-runner` library to run them outside texelation. Use `make build-apps` to build all standalone binaries.
 
 ### Session Management
 - **DesktopPublisher** (`internal/runtime/server/desktop_publisher.go`) – Bridges Desktop events to protocol messages; generates buffer deltas
@@ -242,6 +250,25 @@ func New() texel.App {
 }
 
 func (a *MyApp) Pipeline() texel.RenderPipeline { return a.pipeline }
+```
+
+**Making an app standalone** (runnable outside texelation):
+1. Create `cmd/<appname>/main.go` that uses the `app-runner` library
+2. Add the build target to `Makefile` under `build-apps`
+3. The app-runner library provides terminal setup, event handling, and lifecycle management
+
+```go
+// cmd/myapp/main.go
+package main
+
+import (
+    "texelation/apps/myapp"
+    "texelation/cmd/app-runner"
+)
+
+func main() {
+    runner.Run(myapp.New())
+}
 ```
 
 ### Adding a New Effect

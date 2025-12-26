@@ -43,10 +43,9 @@ type TexelTerm struct {
 	height             int
 	cmd                *exec.Cmd
 	pty                *os.File
-	vterm              *parser.VTerm
-	parser             *parser.Parser
-	historyManager     *parser.HistoryManager
-	mu                 sync.Mutex
+	vterm  *parser.VTerm
+	parser *parser.Parser
+	mu     sync.Mutex
 	stop               chan struct{}
 	stopOnce           sync.Once
 	refreshChan        chan<- bool
@@ -1322,34 +1321,17 @@ func (a *TexelTerm) runShell() error {
 		reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
 		displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", true) // Default to new three-level architecture
 
-		// Create history configuration
-		histCfg := parser.DefaultHistoryConfig()
-		histCfg.MemoryLines = cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
-		histCfg.PersistEnabled = cfg.GetBool("texelterm.history", "persist_enabled", true)
-		if persistDir := cfg.GetString("texelterm.history", "persist_dir", ""); persistDir != "" {
-			histCfg.PersistDir = persistDir
-		}
-		histCfg.Compress = cfg.GetBool("texelterm.history", "compress", true)
-		histCfg.Encrypt = cfg.GetBool("texelterm.history", "encrypt", false)
-
-		// Get current working directory
-		workingDir, _ := os.Getwd()
-
-		// Create history manager with pane ID for persistent scrollback (lock already held)
-		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
-
-		// Only create legacy HistoryManager if display buffer is disabled
-		var hm *parser.HistoryManager
-		if !displayBufferEnabled {
-			log.Printf("[HISTORY DEBUG] Creating history manager with paneID=%q, persistDir=%q", paneIDHex, histCfg.PersistDir)
-			var err error
-			hm, err = parser.NewHistoryManager(histCfg, a.command, workingDir, paneIDHex)
-			if err != nil {
-				log.Printf("Failed to create history manager: %v (continuing without persistence)", err)
-				hm = nil
+		// History configuration
+		historyMemoryLines := cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
+		historyPersistDir := cfg.GetString("texelterm.history", "persist_dir", "")
+		if historyPersistDir == "" {
+			if homeDir, err := os.UserHomeDir(); err == nil {
+				historyPersistDir = filepath.Join(homeDir, ".texelation")
 			}
-			a.historyManager = hm
 		}
+
+		// Get pane ID for persistent scrollback (lock already held)
+		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
 
 		a.vterm = parser.NewVTerm(cols, rows,
 			parser.WithTitleChangeHandler(func(newTitle string) {
@@ -1388,24 +1370,23 @@ func (a *TexelTerm) runShell() error {
 			}),
 			parser.WithWrap(wrapEnabled),
 			parser.WithReflow(reflowEnabled),
-			parser.WithHistoryManager(hm),   // nil when displayBufferEnabled
-			parser.WithDisplayBuffer(false), // Don't use old in-memory display buffer
 		)
 		a.parser = parser.NewParser(a.vterm)
 
 		// Enable new three-level display buffer with disk persistence
 		if displayBufferEnabled {
+			log.Printf("[TEXELTERM] displayBufferEnabled=true, paneIDHex=%q", paneIDHex)
 			// Only enable disk persistence if we have a pane ID
 			if paneIDHex != "" {
 				// Construct disk path for new format (.hist2)
-				scrollbackDir := filepath.Join(histCfg.PersistDir, "scrollback")
+				scrollbackDir := filepath.Join(historyPersistDir, "scrollback")
 				if err := os.MkdirAll(scrollbackDir, 0755); err != nil {
 					log.Printf("Failed to create scrollback dir: %v", err)
 				}
 				diskPath := filepath.Join(scrollbackDir, paneIDHex+".hist2")
 
 				err := a.vterm.EnableDisplayBufferWithDisk(diskPath, parser.DisplayBufferOptions{
-					MaxMemoryLines: histCfg.MemoryLines,
+					MaxMemoryLines: historyMemoryLines,
 					MarginAbove:    200,
 					MarginBelow:    50,
 				})
@@ -1419,15 +1400,17 @@ func (a *TexelTerm) runShell() error {
 			} else {
 				// No pane ID - use memory-only display buffer
 				a.vterm.EnableDisplayBuffer()
-				log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID)")
+				log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID), IsEnabled=%v", a.vterm.IsDisplayBufferEnabled())
 			}
 			// Note: cursor position is automatically synced in EnableDisplayBuffer/EnableDisplayBufferWithDisk
 
 			// Enable debug logging if TEXELTERM_DEBUG env var is set
 			if os.Getenv("TEXELTERM_DEBUG") != "" {
+				log.Printf("[DEBUG] TEXELTERM_DEBUG is set, opening debug log file")
 				debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 				if err == nil {
 					log.Printf("[DEBUG] Writing display buffer debug to /tmp/texelterm-debug.log")
+					fmt.Fprintf(debugFile, "[DB] Debug logging initialized\n")
 					a.vterm.SetDisplayBufferDebugLog(func(format string, args ...interface{}) {
 						fmt.Fprintf(debugFile, "[DB] "+format+"\n", args...)
 					})
@@ -1436,9 +1419,6 @@ func (a *TexelTerm) runShell() error {
 					}
 				}
 			}
-		} else if hm != nil && hm.Length() > rows {
-			// Position cursor at bottom if we loaded history (legacy path)
-			a.vterm.SetCursorPos(rows-1, 0)
 		}
 
 		a.mu.Unlock()
@@ -1691,23 +1671,15 @@ func (a *TexelTerm) Stop() {
 		var (
 			cmd *exec.Cmd
 			pty *os.File
-			hm  *parser.HistoryManager
 		)
 		a.mu.Lock()
 		cmd = a.cmd
 		pty = a.pty
-		hm = a.historyManager
 
 		// Close display buffer (flushes to disk if disk-backed)
-		// For legacy path, sync to history manager first
 		if a.vterm != nil {
-			if a.vterm.IsDisplayBufferEnabled() {
-				if err := a.vterm.CloseDisplayBuffer(); err != nil {
-					log.Printf("Error closing display buffer: %v", err)
-				}
-			} else {
-				// Legacy path: sync to history manager
-				a.vterm.SyncDisplayBufferToHistoryManager()
+			if err := a.vterm.CloseDisplayBuffer(); err != nil {
+				log.Printf("Error closing display buffer: %v", err)
 			}
 		}
 
@@ -1725,13 +1697,6 @@ func (a *TexelTerm) Stop() {
 				time.Sleep(500 * time.Millisecond)
 				proc.Signal(syscall.SIGKILL) // Ignore error; process may already be gone.
 			}()
-		}
-
-		// Close history manager (only used in legacy path)
-		if hm != nil {
-			if err := hm.Close(); err != nil {
-				log.Printf("Error closing history manager: %v", err)
-			}
 		}
 	})
 	a.wg.Wait()

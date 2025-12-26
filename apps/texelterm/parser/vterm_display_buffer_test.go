@@ -6,41 +6,14 @@ package parser
 import (
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestVTerm_DisplayBufferInit(t *testing.T) {
 	v := NewVTerm(80, 24)
 
-	// Initially disabled
-	if v.IsDisplayBufferEnabled() {
-		t.Error("display buffer should be disabled by default")
-	}
-
-	// Enable
-	v.EnableDisplayBuffer()
+	// Display buffer is always enabled now
 	if !v.IsDisplayBufferEnabled() {
-		t.Error("display buffer should be enabled after EnableDisplayBuffer()")
-	}
-
-	// Disable
-	v.DisableDisplayBuffer()
-	if v.IsDisplayBufferEnabled() {
-		t.Error("display buffer should be disabled after DisableDisplayBuffer()")
-	}
-}
-
-func TestVTerm_WithDisplayBufferOption(t *testing.T) {
-	// Test enabling via option
-	v := NewVTerm(80, 24, WithDisplayBuffer(true))
-	if !v.IsDisplayBufferEnabled() {
-		t.Error("display buffer should be enabled when WithDisplayBuffer(true) is passed")
-	}
-
-	// Test disabling via option (default behavior)
-	v2 := NewVTerm(80, 24, WithDisplayBuffer(false))
-	if v2.IsDisplayBufferEnabled() {
-		t.Error("display buffer should be disabled when WithDisplayBuffer(false) is passed")
+		t.Error("display buffer should be enabled by default")
 	}
 }
 
@@ -211,8 +184,8 @@ func TestVTerm_DisplayBufferCarriageReturn(t *testing.T) {
 		v.placeChar(r)
 	}
 
-	// Carriage return
-	v.displayBufferCarriageReturn()
+	// Carriage return - use the VTerm method which updates cursorX and syncs display buffer
+	v.CarriageReturn()
 
 	// Write "XX" - should overwrite
 	for _, r := range "XX" {
@@ -755,10 +728,11 @@ func TestVTerm_DisplayBufferEraseToEndOfLine(t *testing.T) {
 		v.placeChar(r)
 	}
 
-	        // Move cursor back to position 5 (after "Hello")
-	        v.SetCursorPos(v.cursorY, 5)
-	
-	        // Erase from cursor to end (EL 0)	v.ClearLine(0)
+	// Move cursor back to position 5 (after "Hello")
+	v.SetCursorPos(v.cursorY, 5)
+
+	// Erase from cursor to end (EL 0)
+	v.ClearLine(0)
 
 	line := v.displayBufferGetCurrentLine()
 	got := cellsToString(line.Cells)
@@ -794,10 +768,11 @@ func TestVTerm_DisplayBufferEraseCharacters(t *testing.T) {
 		v.placeChar(r)
 	}
 
-	        // Move cursor to position 0
-	        v.SetCursorPos(v.cursorY, 0)
-	
-	        // Erase 5 characters (ECH 5)	v.EraseCharacters(5)
+	// Move cursor to position 0
+	v.SetCursorPos(v.cursorY, 0)
+
+	// Erase 5 characters (ECH 5)
+	v.EraseCharacters(5)
 
 	line := v.displayBufferGetCurrentLine()
 	got := cellsToString(line.Cells)
@@ -1096,17 +1071,21 @@ func TestVTerm_DisplayBufferEmptyLines(t *testing.T) {
 	v.EnableDisplayBuffer()
 
 	// Write a line, then empty line, then another line
+	// Use CR+LF to properly start at column 0 on each new line
 	for _, r := range "First" {
 		v.placeChar(r)
 	}
+	v.CarriageReturn()
 	v.LineFeed()
 
-	// Empty line (just LF)
+	// Empty line (just CR+LF)
+	v.CarriageReturn()
 	v.LineFeed()
 
 	for _, r := range "Third" {
 		v.placeChar(r)
 	}
+	v.CarriageReturn()
 	v.LineFeed()
 
 	// Should have 3 committed lines (including empty one)
@@ -1478,128 +1457,6 @@ func BenchmarkDisplayBuffer_Scroll(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		v.Scroll(-10) // Scroll up
 		v.Scroll(10)  // Scroll back down
-	}
-}
-
-func TestVTerm_DisplayBufferSyncToHistoryManager(t *testing.T) {
-	// Create a mock history manager config
-	tempDir := t.TempDir()
-
-	hm, err := NewHistoryManager(HistoryConfig{
-		MemoryLines:    1000,
-		PersistEnabled: true,
-		PersistDir:     tempDir,
-		FlushInterval:  time.Second,
-	}, "test-command", "/tmp", "test-pane-id")
-	if err != nil {
-		t.Fatalf("Failed to create history manager: %v", err)
-	}
-
-	// Create VTerm with both history manager and display buffer
-	v := NewVTerm(40, 10,
-		WithHistoryManager(hm),
-		WithDisplayBuffer(true),
-	)
-
-	// Write some content
-	for _, r := range "Hello, World!" {
-		v.placeChar(r)
-	}
-	v.LineFeed()
-
-	for _, r := range "This is a test line that is longer than forty characters to test wrapping behavior" {
-		v.placeChar(r)
-	}
-	v.LineFeed()
-
-	for _, r := range "Third line" {
-		v.placeChar(r)
-	}
-	v.LineFeed()
-
-	// Sync display buffer to history manager
-	v.SyncDisplayBufferToHistoryManager()
-
-	// Verify history manager has the content
-	if hm.Length() == 0 {
-		t.Error("history manager should have content after sync")
-	}
-
-	// Check first line
-	line0 := hm.GetLine(0)
-	if line0 == nil {
-		t.Fatal("line 0 should not be nil")
-	}
-	content0 := ""
-	for _, c := range line0 {
-		if c.Rune >= 32 && c.Rune < 127 {
-			content0 += string(c.Rune)
-		}
-	}
-	if !containsString(content0, "Hello, World!") {
-		t.Errorf("first line should contain 'Hello, World!', got '%s'", content0)
-	}
-
-	// Close history manager (this should persist to disk)
-	if err := hm.Close(); err != nil {
-		t.Fatalf("Failed to close history manager: %v", err)
-	}
-}
-
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && s[:len(substr)] == substr)
-}
-
-func TestVTerm_DisplayBufferLoadsFromHistoryManager(t *testing.T) {
-	// Create a history manager with some content
-	tempDir := t.TempDir()
-
-	hm, err := NewHistoryManager(HistoryConfig{
-		MemoryLines:    1000,
-		PersistEnabled: false, // Memory only for this test
-		PersistDir:     tempDir,
-	}, "test-command", "/tmp", "test-pane-id")
-	if err != nil {
-		t.Fatalf("Failed to create history manager: %v", err)
-	}
-
-	// Add some lines directly to history manager
-	line1 := make([]Cell, 5)
-	for i, r := range "Hello" {
-		line1[i] = Cell{Rune: r, FG: DefaultFG, BG: DefaultBG}
-	}
-	hm.AppendLine(line1)
-
-	line2 := make([]Cell, 5)
-	for i, r := range "World" {
-		line2[i] = Cell{Rune: r, FG: DefaultFG, BG: DefaultBG}
-	}
-	hm.AppendLine(line2)
-
-	// Now create VTerm with this history manager and enable display buffer
-	// The display buffer should load from history manager
-	v := NewVTerm(40, 10,
-		WithHistoryManager(hm),
-		WithDisplayBuffer(true),
-	)
-
-	// Check that display buffer has the content
-	dbHistory := v.DisplayBufferGetHistory()
-	if dbHistory == nil {
-		t.Fatal("display buffer history should not be nil")
-	}
-
-	if dbHistory.Len() != 2 {
-		t.Errorf("expected 2 lines in display buffer history, got %d", dbHistory.Len())
-	}
-
-	// Verify first line
-	dbLine0 := dbHistory.Get(0)
-	if dbLine0 == nil {
-		t.Fatal("display buffer line 0 should not be nil")
-	}
-	if cellsToString(dbLine0.Cells) != "Hello" {
-		t.Errorf("expected 'Hello', got '%s'", cellsToString(dbLine0.Cells))
 	}
 }
 
