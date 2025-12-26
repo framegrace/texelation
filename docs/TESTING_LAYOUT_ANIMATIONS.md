@@ -24,11 +24,8 @@ Edit `~/.config/texelation/theme.json`:
 make clean
 make build
 
-# Terminal 1: Start server
-./bin/texel-server
-
-# Terminal 2: Start client
-./bin/texel-client
+# Start texelation
+./bin/texelation
 ```
 
 ## What to Test

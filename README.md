@@ -2,6 +2,14 @@
 
 **Texelation** is a fast, flexible **text desktop environment** built for terminals. It pairs a headless server with a tcell-powered client, delivering a tmux-like experience with modern features: infinite persistent sessions, smooth animations, and full state restoration across server restarts.
 
+## Requirements
+
+- **Go 1.24+** (for building from source)
+- **Linux** or **macOS** (primary platforms)
+- Any terminal emulator with true color support (recommended)
+
+Windows builds are available but less tested.
+
 ## Key Features
 
 - **Infinite Persistent Sessions** - Terminal output persists to disk with unlimited scrollback. Environment variables, working directory, and command history survive both shell and server restarts.
@@ -28,15 +36,20 @@
 # Build
 make build
 
-# Start server (in one terminal)
-./bin/texel-server
-
-# Connect client (in another terminal)
-./bin/texel-client
+# Start texelation
+./bin/texelation
 ```
 
-**Control mode**: Press `Ctrl+A` then:
-- `|` / `-` - Split vertically / horizontally
+That's it! The `texelation` command automatically:
+- Starts the server as a background daemon (if not already running)
+- Connects your terminal as a client
+- Restores your previous session (or opens the launcher on first run)
+
+**First run**: You'll see the **launcher** - use arrow keys to select an app and press Enter. Choose "texelterm" for a terminal.
+
+**Control mode**: Press `Ctrl+A` to enter control mode, then:
+- `|` - Split left/right (vertical divider)
+- `-` - Split top/bottom (horizontal divider)
 - `x` - Close pane
 - `z` - Zoom/unzoom pane
 - `1-9` - Switch workspace
@@ -44,24 +57,61 @@ make build
 - `h` - Help overlay
 - `Esc` - Exit control mode
 
+**To exit**: Close all panes with `Ctrl+A` then `x`, or run `texelation --stop` from another terminal.
+
+## Startup Options
+
+The `texelation` command supports various options for different use cases:
+
+```bash
+# Normal startup (recommended)
+texelation                     # Auto-start server daemon, connect client
+
+# Server management
+texelation --status            # Show server status (running, PID, etc.)
+texelation --stop              # Stop the server daemon
+texelation --reset-state       # Delete all state and start fresh (with confirmation)
+
+# Advanced options
+texelation --client-only       # Connect without starting/checking server
+texelation --socket PATH       # Use custom socket path
+texelation --from-scratch      # Start fresh, ignore saved snapshot
+texelation --default-app NAME  # Set default app for new panes
+texelation --verbose-logs      # Enable detailed server logging
+texelation --reconnect         # Resume previous session explicitly
+```
+
+**Server-only mode** (for manual daemon management):
+```bash
+texelation --server-only       # Run server in foreground (used internally by daemon)
+```
+
+**Files and paths:**
+- Socket: `/tmp/texelation.sock`
+- PID file: `~/.texelation/texelation.pid`
+- Snapshots: `~/.texelation/snapshot.json`
+- Server logs: `~/.texelation/server.log`
+- Config: `~/.config/texelation/config.json`
+- Theme: `~/.config/texelation/theme.json`
+
 ## Architecture
 
 ```
-┌─────────────────┐         ┌─────────────────┐
-│  texel-client   │◄───────►│  texel-server   │
-│  (tcell render) │  Unix   │  (pane tree,    │
-│                 │  socket │   apps, state)  │
-└─────────────────┘         └────────┬────────┘
-                                     │
-                            ┌────────▼────────┐
-                            │   Persistence   │
-                            │  - Snapshots    │
-                            │  - Scrollback   │
-                            │  - Environment  │
-                            └─────────────────┘
+┌─────────────────┐                           ┌─────────────────┐
+│   texelation    │──starts as daemon────────►│  texel-server   │
+│  (unified cmd)  │                           │  (pane tree,    │
+│                 │◄──────Unix socket────────►│   apps, state)  │
+│  tcell render   │                           └────────┬────────┘
+└─────────────────┘                                    │
+                                              ┌────────▼────────┐
+                                              │   Persistence   │
+                                              │  - Snapshots    │
+                                              │  - Scrollback   │
+                                              │  - Environment  │
+                                              └─────────────────┘
 ```
 
-The server owns all state: pane tree, terminal buffers, app lifecycles. Clients are thin renderers that can reconnect instantly and resume with buffered deltas.
+The server runs as a background daemon and owns all state: pane tree, terminal buffers, app lifecycles. Clients are thin renderers that can reconnect instantly and resume with buffered deltas. Multiple clients can attach to the same session.
 
 ## Terminal Persistence
 
@@ -81,7 +131,19 @@ See [Terminal Persistence Architecture](docs/TERMINAL_PERSISTENCE_ARCHITECTURE.m
 
 ## Configuration
 
-Texelation uses `~/.config/texelation/theme.json` for all configuration:
+Texelation uses two configuration files in `~/.config/texelation/`:
+
+### config.json - Server Settings
+
+```json
+{
+  "defaultApp": "launcher"
+}
+```
+
+- `defaultApp`: App to open on startup and in new panes (`"launcher"`, `"texelterm"`, or `"welcome"`)
+
+### theme.json - Visual Settings
 
 ```json
 {
@@ -101,15 +163,16 @@ Texelation uses `~/.config/texelation/theme.json` for all configuration:
 }
 ```
 
-Hot-reload configuration with `kill -HUP $(pidof texel-server)`.
+Hot-reload theme with `kill -HUP $(pidof texel-server)`. Server settings require restart.
 
 ## Keyboard & Mouse
 
 ### Pane Control (in control mode after Ctrl+A)
-- `|` / `-` - Split vertically / horizontally
+- `|` - Split left/right
+- `-` - Split top/bottom
 - `x` - Close active pane
 - `w` + arrows - Swap panes
-- `z` - Toggle zoom
+- `z` - Toggle zoom (fullscreen current pane)
 - `1-9` - Jump to workspace
 - `Ctrl+Arrow` - Resize panes
 - `Shift+Arrow` - Move focus (works outside control mode too)
@@ -130,20 +193,21 @@ Hot-reload configuration with `kill -HUP $(pidof texel-server)`.
 ## Project Layout
 
 ```
-cmd/texel-server/       Server binary
-client/cmd/texel-client/ Client binary
-apps/texelterm/         Terminal emulator
-apps/*/                 Other apps (statusbar, launcher, etc.)
-texel/                  Core desktop primitives
-protocol/               Binary protocol definitions
-internal/runtime/       Server and client runtime
-internal/effects/       Visual effect implementations
+cmd/texelation/          Unified command (recommended entry point)
+cmd/texel-server/        Server binary (used by texelation daemon)
+client/cmd/texel-client/ Client binary (standalone client)
+apps/texelterm/          Terminal emulator
+apps/*/                  Other apps (statusbar, launcher, etc.)
+texel/                   Core desktop primitives
+protocol/                Binary protocol definitions
+internal/runtime/        Server and client runtime
+internal/effects/        Visual effect implementations
 ```
 
 ## Building
 
 ```bash
-make build        # Build server and client
+make build        # Build texelation, server, and client
 make build-apps   # Build standalone apps too
 make install      # Install to GOPATH/bin
 make release      # Cross-compile for all platforms

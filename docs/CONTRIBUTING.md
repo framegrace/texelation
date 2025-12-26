@@ -25,10 +25,12 @@ writing new apps, or hacking on the protocol.
 
 ## Build & Test Commands
 
-* `make build` – Build `texel-server` and `texel-client` into `./bin`.
+* `make build` – Build `texelation`, `texel-server`, and `texel-client` into `./bin`.
 * `make install` – Install the binaries into `$GOPATH/bin`.
 * `make release` – Cross-compile release artifacts into `./dist`.
-* `make server` / `make client` – Run the server or client harness locally.
+* `./bin/texelation` – Start texelation (auto-manages server daemon).
+* `./bin/texelation --status` – Check server status.
+* `./bin/texelation --stop` – Stop the server daemon.
 * `go test ./...` – Run unit tests across the module.
 * `go test -tags=integration ./internal/runtime/server -run TestOfflineRetentionAndResumeWithMemConn` – Run the offline resume integration test.
 * `go vet ./...` – Standard vet pass before code review.
