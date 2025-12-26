@@ -6,19 +6,32 @@ GO_ENV := CCACHE_DISABLE=1 GOCACHE=$(CACHE_DIR) CGO_ENABLED=0
 CLIENT_PKG := ./client/cmd/texel-client
 SERVER_PKG := ./cmd/texel-server
 
-APPS := texelterm help
+# Core apps needed for normal texelation operation
+CORE_APPS := texelterm help
+
+# All standalone app binaries in cmd/
+ALL_APPS := texelterm help app-runner texel-stress texelui-demo texelui-demo2
 
 .PHONY: build install run test lint fmt tidy clean help server client release build-apps
 
 
-build: ## Build texel-server, texel-client, and app binaries into bin/
+build: ## Build texel-server, texel-client, and core app binaries into bin/
 	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
 	$(GO_ENV) go build -o $(BIN_DIR)/texelterm ./cmd/texelterm
 	$(GO_ENV) go build -o $(BIN_DIR)/help ./cmd/help
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
 
-build-apps: build ## Alias for build
+build-apps: ## Build ALL app binaries into bin/
+	@mkdir -p $(BIN_DIR) $(CACHE_DIR)
+	$(GO_ENV) go build -o $(BIN_DIR)/texelterm ./cmd/texelterm
+	$(GO_ENV) go build -o $(BIN_DIR)/help ./cmd/help
+	$(GO_ENV) go build -o $(BIN_DIR)/app-runner ./cmd/app-runner
+	$(GO_ENV) go build -o $(BIN_DIR)/texel-stress ./cmd/texel-stress
+	$(GO_ENV) go build -o $(BIN_DIR)/texelui-demo ./cmd/texelui-demo
+	$(GO_ENV) go build -o $(BIN_DIR)/texelui-demo2 ./cmd/texelui-demo2
+	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
+	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
 
 install: ## Install texel binaries into GOPATH/bin
 	@mkdir -p $(CACHE_DIR)
