@@ -326,6 +326,31 @@ func (p *pane) StartPreparedApp() {
 // ReplaceWithApp replaces the current app in this pane with a new app from the registry.
 // This is called by control bus handlers when apps signal they want to launch a different app.
 func (p *pane) ReplaceWithApp(name string, config map[string]interface{}) {
+	if p == nil || p.screen == nil || p.screen.desktop == nil {
+		log.Printf("Pane: Cannot replace app - no pane or desktop reference")
+		return
+	}
+
+	// Check if current app wants to show a confirmation dialog before being replaced
+	if p.app != nil {
+		if requester, ok := p.app.(CloseCallbackRequester); ok {
+			// Pass a callback that performs the actual replacement
+			if !requester.RequestCloseWithCallback(func() {
+				p.doReplaceWithApp(name, config)
+			}) {
+				// App is showing confirmation dialog, don't proceed yet
+				log.Printf("Pane: App '%s' is showing close confirmation", p.getTitle())
+				return
+			}
+		}
+	}
+
+	// No confirmation needed or app doesn't implement CloseCallbackRequester
+	p.doReplaceWithApp(name, config)
+}
+
+// doReplaceWithApp performs the actual app replacement after any confirmation.
+func (p *pane) doReplaceWithApp(name string, config map[string]interface{}) {
 	if p.screen == nil || p.screen.desktop == nil {
 		log.Printf("Pane: Cannot replace app - no desktop reference")
 		return
@@ -353,20 +378,12 @@ func (p *pane) ReplaceWithApp(name string, config map[string]interface{}) {
 
 	log.Printf("Pane: Replacing app '%s' with '%s'", p.getTitle(), name)
 
-	// Stop the current app explicitly before attaching the new one
-	// Although AttachApp does this, doing it here ensures clean teardown before new setup
-	// if p.app != nil {
-	// 	 p.screen.appLifecycle.StopApp(p.app)
-	// 	 p.app = nil 
-	// } 
-    // AttachApp handles the stop.
-
 	// Attach the new app (this will stop the old app and start the new one)
 	p.AttachApp(newApp, p.screen.refreshChan)
 
 	// Broadcast state update so the desktop knows about the change
 	p.screen.desktop.broadcastStateUpdate()
-	
+
 	// Force a refresh of the workspace to ensure the new app is rendered
 	if p.screen != nil {
 		p.screen.Refresh()

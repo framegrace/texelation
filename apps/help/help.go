@@ -4,7 +4,7 @@
 // File: apps/help/help.go
 // Summary: Implements help capabilities for the help application.
 // Usage: Presented on new sessions to guide users through the interface.
-// Notes: Displays static content; simple example app.
+// Notes: Displays static content with structured grid layout.
 
 package help
 
@@ -16,17 +16,73 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+// helpEntry represents a key-description pair.
+type helpEntry struct {
+	key  string
+	desc string
+}
+
+// helpSection represents a titled section with entries.
+type helpSection struct {
+	title   string
+	entries []helpEntry
+}
+
 // helpApp is a simple internal widget that displays a static help message.
 type helpApp struct {
 	width, height int
 	mu            sync.RWMutex
 	stop          chan struct{}
 	stopOnce      sync.Once
+	sections      []helpSection
 }
 
 // NewHelpApp returns a simple help display app.
 func NewHelpApp() texel.App {
-	return &helpApp{stop: make(chan struct{})}
+	return &helpApp{
+		stop: make(chan struct{}),
+		sections: []helpSection{
+			{
+				title: "Global Shortcuts",
+				entries: []helpEntry{
+					{"F1", "Show this Help"},
+					{"Ctrl+A L", "Open Launcher"},
+					{"Ctrl+A H", "Show this Help"},
+				},
+			},
+			{
+				title: "Control Mode (Ctrl-A)",
+				entries: []helpEntry{
+					{"|", "Split vertically"},
+					{"-", "Split horizontally"},
+					{"x", "Close active pane"},
+					{"w", "Swap panes (then Arrow keys)"},
+					{"z", "Toggle zoom"},
+					{"1-9", "Switch workspaces"},
+					{"Ctrl+Arrow", "Resize panes"},
+					{"Esc", "Exit control mode"},
+				},
+			},
+			{
+				title: "Anytime",
+				entries: []helpEntry{
+					{"Shift+Arrow", "Move focus"},
+					{"Ctrl+Q", "Quit Texelation"},
+				},
+			},
+			{
+				title: "TexelTerm Tips",
+				entries: []helpEntry{
+					{"Mouse wheel", "Scroll history"},
+					{"Shift+wheel", "Page through history"},
+					{"Alt+wheel", "Scroll history (line)"},
+					{"Alt+PgUp/PgDn", "Scroll history (pane)"},
+					{"Drag mouse", "Select & copy text"},
+					{"Click", "Focus target pane"},
+				},
+			},
+		},
+	}
 }
 
 func (a *helpApp) Run() error {
@@ -55,60 +111,123 @@ func (a *helpApp) Render() [][]texel.Cell {
 	}
 
 	tm := theme.Get()
-	textColor := tm.GetColor("welcome", "text_fg", tcell.ColorPurple)
-	style := tcell.StyleDefault.Background(tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()).Foreground(textColor)
+	bgColor := tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()
+	textColor := tm.GetSemanticColor("text.primary")
+	dimColor := tm.GetSemanticColor("text.secondary")
+	activeColor := tm.GetSemanticColor("text.active")
 
+	baseStyle := tcell.StyleDefault.Background(bgColor).Foreground(textColor)
+	titleStyle := tcell.StyleDefault.Background(bgColor).Foreground(activeColor).Bold(true)
+	keyStyle := tcell.StyleDefault.Background(bgColor).Foreground(activeColor)
+	descStyle := tcell.StyleDefault.Background(bgColor).Foreground(dimColor)
+
+	// Initialize buffer
 	buffer := make([][]texel.Cell, a.height)
 	for i := range buffer {
 		buffer[i] = make([]texel.Cell, a.width)
 		for j := range buffer[i] {
-			buffer[i][j] = texel.Cell{Ch: ' ', Style: style}
+			buffer[i][j] = texel.Cell{Ch: ' ', Style: baseStyle}
 		}
 	}
 
-	messages := []string{
-		"Texelation Help",
-		"",
-		"Global Shortcuts:",
-		"  F1           Show this Help",
-		"  Ctrl+A L     Open Launcher",
-		"  Ctrl+A H     Show this Help",
-		"",
-		"Control Mode (Ctrl-A):",
-		"  |            Split vertically",
-		"  -            Split horizontally",
-		"  x            Close active pane",
-		"  w            Swap panes (then Arrow keys)",
-		"  z            Toggle zoom",
-		"  1-9          Switch workspaces",
-		"  Ctrl+Arrow   Resize panes",
-		"  Esc          Exit control mode",
-		"",
-		"Anytime:",
-		"  Shift+Arrow  Move focus",
-		"  Ctrl+Q       Quit Texelation",
-		"",
-		"TexelTerm Tips:",
-		"  Mouse wheel            Scroll history",
-		"  Shift + wheel          Page through history",
-		"  Alt + wheel            Scroll history (line)",
-		"  Alt + PgUp/PgDn        Scroll history (pane)",
-		"  Drag with mouse        Select & copy text",
-		"  Click to focus panes   Activate target pane",
+	// Calculate total height needed
+	totalLines := 1 // Main title
+	for _, section := range a.sections {
+		totalLines += 2 // Empty line + section title
+		totalLines += len(section.entries)
 	}
 
-	for i, msg := range messages {
-		y := (a.height / 2) - len(messages)/2 + i
-		x := (a.width - len(msg)) / 2
-		if y >= 0 && y < a.height && x >= 0 {
-			for j, ch := range msg {
-				if x+j < a.width {
-					buffer[y][x+j] = texel.Cell{Ch: ch, Style: style}
-				}
+	// Calculate key column width (find longest key)
+	keyWidth := 0
+	for _, section := range a.sections {
+		for _, entry := range section.entries {
+			if len(entry.key) > keyWidth {
+				keyWidth = len(entry.key)
 			}
 		}
 	}
+	keyWidth += 2 // Padding
+
+	// Calculate content width and starting position
+	contentWidth := keyWidth + 30 // key column + description space
+	if contentWidth > a.width-4 {
+		contentWidth = a.width - 4
+	}
+	startX := (a.width - contentWidth) / 2
+	if startX < 2 {
+		startX = 2
+	}
+
+	// Start rendering from vertical center
+	startY := (a.height - totalLines) / 2
+	if startY < 1 {
+		startY = 1
+	}
+	y := startY
+
+	// Draw main title
+	mainTitle := "Texelation Help"
+	a.drawCenteredText(buffer, y, mainTitle, titleStyle)
+	y += 2
+
+	// Draw each section
+	for _, section := range a.sections {
+		if y >= a.height {
+			break
+		}
+
+		// Section title - centered and bold
+		a.drawCenteredText(buffer, y, section.title, titleStyle)
+		y++
+
+		// Draw entries as two-column grid
+		for _, entry := range section.entries {
+			if y >= a.height {
+				break
+			}
+
+			// Key column (right-aligned within its width)
+			keyX := startX + keyWidth - len(entry.key) - 1
+			if keyX < startX {
+				keyX = startX
+			}
+			a.drawText(buffer, keyX, y, entry.key, keyStyle)
+
+			// Description column
+			descX := startX + keyWidth + 1
+			a.drawText(buffer, descX, y, entry.desc, descStyle)
+
+			y++
+		}
+
+		y++ // Extra space between sections
+	}
+
 	return buffer
+}
+
+// drawCenteredText draws text centered horizontally on the given row.
+func (a *helpApp) drawCenteredText(buffer [][]texel.Cell, y int, text string, style tcell.Style) {
+	if y < 0 || y >= a.height {
+		return
+	}
+	x := (a.width - len(text)) / 2
+	if x < 0 {
+		x = 0
+	}
+	a.drawText(buffer, x, y, text, style)
+}
+
+// drawText draws text at the given position.
+func (a *helpApp) drawText(buffer [][]texel.Cell, x, y int, text string, style tcell.Style) {
+	if y < 0 || y >= a.height {
+		return
+	}
+	for i, ch := range text {
+		if x+i >= 0 && x+i < a.width {
+			buffer[y][x+i] = texel.Cell{Ch: ch, Style: style}
+		}
+	}
 }
 
 func (a *helpApp) GetTitle() string {

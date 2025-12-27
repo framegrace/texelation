@@ -78,6 +78,17 @@ type CloseRequester interface {
 	RequestClose() bool
 }
 
+// CloseCallbackRequester extends CloseRequester with callback support.
+// This allows the container to specify what action to take after confirmation,
+// enabling app replacement flows where the action isn't just "stop".
+type CloseCallbackRequester interface {
+	// RequestCloseWithCallback is called when the container wants to close/replace the app.
+	// The onConfirm callback should be called if the user confirms the close.
+	// Returns true if the app is ready to close immediately (callback not needed).
+	// Returns false if the app is showing a confirmation dialog.
+	RequestCloseWithCallback(onConfirm func()) bool
+}
+
 // ControlBusProvider is implemented by apps that expose a control bus for signaling.
 // This allows apps to communicate events (like launcher app selection) without direct coupling.
 type ControlBusProvider interface {

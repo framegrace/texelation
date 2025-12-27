@@ -81,6 +81,7 @@ type TexelTerm struct {
 }
 
 var _ texel.CloseRequester = (*TexelTerm)(nil)
+var _ texel.CloseCallbackRequester = (*TexelTerm)(nil)
 
 // termSelection tracks the current text selection state and multi-click history.
 //
@@ -125,13 +126,17 @@ func New(title, command string) texel.App {
 }
 
 func (a *TexelTerm) RequestClose() bool {
+	return a.RequestCloseWithCallback(func() {
+		// External close confirmed - stop the app
+		a.Stop()
+	})
+}
+
+func (a *TexelTerm) RequestCloseWithCallback(onConfirm func()) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.confirmClose = true
-	a.confirmCallback = func() {
-		// External close confirmed - stop the app
-		a.Stop()
-	}
+	a.confirmCallback = onConfirm
 	a.requestRefresh()
 	return false
 }
