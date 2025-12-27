@@ -34,6 +34,9 @@ var registry = map[string]Builder{
     "texelui-demo2": func(args []string) (texel.App, error) {
         return adapter.NewDualTextEditorApp("TexelUI Dual Demo"), nil
     },
+    "colorpicker-demo": func(args []string) (texel.App, error) {
+        return adapter.NewColorPickerDemoApp("ColorPicker Demo"), nil
+    },
 }
 
 var screenFactory = tcell.NewScreen
