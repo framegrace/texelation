@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: texelui/widgets/colorpicker/semantic.go
-// Summary: Semantic color selection mode.
+// Summary: Semantic color selection mode using ScrollableList widget.
 
 package colorpicker
 
@@ -10,17 +10,19 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"texelation/texel/theme"
 	"texelation/texelui/core"
+	"texelation/texelui/primitives"
 )
 
 // SemanticPicker allows selection from semantic color names.
+// It uses a ScrollableList internally for navigation and rendering.
 type SemanticPicker struct {
 	semanticNames []string
-	selectedIdx   int
+	list          *primitives.ScrollableList
 }
 
 // NewSemanticPicker creates a semantic color picker.
 func NewSemanticPicker() *SemanticPicker {
-	return &SemanticPicker{
+	sp := &SemanticPicker{
 		semanticNames: []string{
 			"accent",
 			"accent_secondary",
@@ -44,157 +46,84 @@ func NewSemanticPicker() *SemanticPicker {
 			"border.focus",
 			"caret",
 		},
-		selectedIdx: 0,
 	}
+
+	// Create list items
+	items := make([]primitives.ListItem, len(sp.semanticNames))
+	for i, name := range sp.semanticNames {
+		items[i] = primitives.ListItem{Text: name, Value: name}
+	}
+
+	// Create scrollable list
+	sp.list = primitives.NewScrollableList(0, 0, 28, 10)
+	sp.list.SetItems(items)
+	sp.list.RenderItem = sp.renderColorItem
+
+	return sp
 }
 
-func (sp *SemanticPicker) Draw(painter *core.Painter, rect core.Rect) {
+// renderColorItem renders a semantic color item with swatch and name.
+func (sp *SemanticPicker) renderColorItem(p *core.Painter, rect core.Rect, item primitives.ListItem, selected bool) {
 	tm := theme.Get()
 	fg := tm.GetSemanticColor("text.primary")
 	bg := tm.GetSemanticColor("bg.surface")
 	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
 
+	style := baseStyle
+	if selected {
+		style = style.Reverse(true)
+	}
+
 	// Fill background
-	painter.Fill(rect, ' ', baseStyle)
+	p.Fill(rect, ' ', style)
 
-	// Calculate scroll offset to center selected item
-	maxVisible := rect.H
-	startIdx := 0
+	name := item.Text
+	color := tm.GetSemanticColor(name)
 
-	if sp.selectedIdx >= maxVisible/2 {
-		startIdx = sp.selectedIdx - maxVisible/2
+	// Draw: [██] semantic.name
+	x := rect.X
+	DrawColorSwatch(p, x, rect.Y, color, style)
+	x += 5 // swatch width (4) + space (1)
+
+	// Truncate name if needed
+	displayName := name
+	maxLen := rect.W - 6
+	if len(displayName) > maxLen && maxLen > 0 {
+		displayName = displayName[:maxLen]
 	}
-	if startIdx+maxVisible > len(sp.semanticNames) {
-		startIdx = len(sp.semanticNames) - maxVisible
-	}
-	if startIdx < 0 {
-		startIdx = 0
-	}
+	p.DrawText(x, rect.Y, displayName, style)
+}
 
-	y := rect.Y
-	for i := startIdx; i < len(sp.semanticNames) && y < rect.Y+rect.H; i++ {
-		name := sp.semanticNames[i]
-		color := tm.GetSemanticColor(name)
+func (sp *SemanticPicker) Draw(painter *core.Painter, rect core.Rect) {
+	// Update list position and size to match provided rect
+	sp.list.SetPosition(rect.X, rect.Y)
+	sp.list.Resize(rect.W, rect.H)
 
-		style := baseStyle
-		if i == sp.selectedIdx {
-			style = style.Reverse(true)
-		}
-
-		// Draw: [██] semantic.name
-		x := rect.X
-		painter.SetCell(x, y, '[', style)
-		x++
-		painter.SetCell(x, y, '█', tcell.StyleDefault.Foreground(color).Background(bg))
-		x++
-		painter.SetCell(x, y, '█', tcell.StyleDefault.Foreground(color).Background(bg))
-		x++
-		painter.SetCell(x, y, ']', style)
-		x += 2
-
-		// Truncate name if needed
-		displayName := name
-		maxLen := rect.W - 6
-		if len(displayName) > maxLen && maxLen > 0 {
-			displayName = displayName[:maxLen]
-		}
-		painter.DrawText(x, y, displayName, style)
-
-		y++
-	}
-
-	// Draw scroll indicators if needed
-	if startIdx > 0 {
-		painter.SetCell(rect.X+rect.W-1, rect.Y, '▲', baseStyle)
-	}
-	if startIdx+maxVisible < len(sp.semanticNames) {
-		painter.SetCell(rect.X+rect.W-1, rect.Y+rect.H-1, '▼', baseStyle)
-	}
+	// Delegate to scrollable list
+	sp.list.Draw(painter)
 }
 
 func (sp *SemanticPicker) HandleKey(ev *tcell.EventKey) bool {
-	switch ev.Key() {
-	case tcell.KeyUp:
-		if sp.selectedIdx > 0 {
-			sp.selectedIdx--
-		}
-		return true
-	case tcell.KeyDown:
-		if sp.selectedIdx < len(sp.semanticNames)-1 {
-			sp.selectedIdx++
-		}
-		return true
-	case tcell.KeyHome:
-		sp.selectedIdx = 0
-		return true
-	case tcell.KeyEnd:
-		sp.selectedIdx = len(sp.semanticNames) - 1
-		return true
-	case tcell.KeyPgUp:
-		sp.selectedIdx -= 5
-		if sp.selectedIdx < 0 {
-			sp.selectedIdx = 0
-		}
-		return true
-	case tcell.KeyPgDn:
-		sp.selectedIdx += 5
-		if sp.selectedIdx >= len(sp.semanticNames) {
-			sp.selectedIdx = len(sp.semanticNames) - 1
-		}
-		return true
-	}
-	return false
+	return sp.list.HandleKey(ev)
 }
 
 func (sp *SemanticPicker) HandleMouse(ev *tcell.EventMouse, rect core.Rect) bool {
-	x, y := ev.Position()
-	if x < rect.X || y < rect.Y || x >= rect.X+rect.W || y >= rect.Y+rect.H {
-		return false
-	}
+	// Update list position and size to match provided rect
+	sp.list.SetPosition(rect.X, rect.Y)
+	sp.list.Resize(rect.W, rect.H)
 
-	if ev.Buttons() == tcell.Button1 {
-		// Calculate which item was clicked
-		maxVisible := rect.H
-		startIdx := 0
-
-		if sp.selectedIdx >= maxVisible/2 {
-			startIdx = sp.selectedIdx - maxVisible/2
-		}
-		if startIdx+maxVisible > len(sp.semanticNames) {
-			startIdx = len(sp.semanticNames) - maxVisible
-		}
-		if startIdx < 0 {
-			startIdx = 0
-		}
-
-		relY := y - rect.Y
-		clickedIdx := startIdx + relY
-		if clickedIdx >= 0 && clickedIdx < len(sp.semanticNames) {
-			sp.selectedIdx = clickedIdx
-			return true
-		}
-	}
-
-	// Handle scroll wheel
-	if ev.Buttons()&tcell.WheelUp != 0 {
-		if sp.selectedIdx > 0 {
-			sp.selectedIdx--
-		}
-		return true
-	}
-	if ev.Buttons()&tcell.WheelDown != 0 {
-		if sp.selectedIdx < len(sp.semanticNames)-1 {
-			sp.selectedIdx++
-		}
-		return true
-	}
-
-	return false
+	return sp.list.HandleMouse(ev)
 }
 
 func (sp *SemanticPicker) GetResult() PickerResult {
 	tm := theme.Get()
-	name := sp.semanticNames[sp.selectedIdx]
+	item := sp.list.SelectedItem()
+	if item == nil {
+		// Fallback to first item
+		name := sp.semanticNames[0]
+		return MakeResult(tm.GetSemanticColor(name), name)
+	}
+	name := item.Text
 	color := tm.GetSemanticColor(name)
 	return MakeResult(color, name)
 }
@@ -210,7 +139,7 @@ func (sp *SemanticPicker) SetColor(color tcell.Color) {
 	tm := theme.Get()
 	for i, name := range sp.semanticNames {
 		if tm.GetSemanticColor(name) == color {
-			sp.selectedIdx = i
+			sp.list.SetSelected(i)
 			return
 		}
 	}
