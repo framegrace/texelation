@@ -21,6 +21,15 @@ type OKLCHControl int
 const (
 	OKLCHControlPlane     OKLCHControl = iota // Hue x Chroma plane
 	OKLCHControlLightness                     // Lightness slider
+	OKLCHControlLoad                          // Load button
+)
+
+// LoadPickerMode identifies which mode is active in the load picker.
+type LoadPickerMode int
+
+const (
+	LoadPickerSemantic LoadPickerMode = iota
+	LoadPickerPalette
 )
 
 // OKLCHPicker provides a custom color picker using OKLCH color space.
@@ -28,6 +37,7 @@ const (
 //   - H×C (hue×chroma) plane: 2D grid (20x10)
 //   - L (lightness) slider: vertical on right
 //   - Live preview at bottom
+//   - Load button to import from semantic/palette colors
 type OKLCHPicker struct {
 	// OKLCH values
 	L float64 // Lightness: 0.0 - 1.0
@@ -40,19 +50,27 @@ type OKLCHPicker struct {
 	planeH        int // Chroma axis height
 	cursorX       int // Cursor X position (hue)
 	cursorY       int // Cursor Y position (chroma)
+
+	// Load picker state
+	showLoadPicker  bool
+	loadPickerMode  LoadPickerMode
+	semanticPicker  *SemanticPicker
+	palettePicker   *PalettePicker
 }
 
 // NewOKLCHPicker creates an OKLCH color picker.
 func NewOKLCHPicker() *OKLCHPicker {
 	return &OKLCHPicker{
-		L:             0.7,  // Mid-high lightness for visibility
-		C:             0.15, // Moderate chroma
-		H:             270,  // Purple hue (like mauve)
-		activeControl: OKLCHControlPlane,
-		planeW:        20,
-		planeH:        10,
-		cursorX:       15, // 270/360 * 20 ≈ 15
-		cursorY:       6,  // (1 - 0.15/0.4) * 10 ≈ 6
+		L:              0.7,  // Mid-high lightness for visibility
+		C:              0.15, // Moderate chroma
+		H:              270,  // Purple hue (like mauve)
+		activeControl:  OKLCHControlPlane,
+		planeW:         20,
+		planeH:         10,
+		cursorX:        15, // 270/360 * 20 ≈ 15
+		cursorY:        6,  // (1 - 0.15/0.4) * 10 ≈ 6
+		semanticPicker: NewSemanticPicker(),
+		palettePicker:  NewPalettePicker(),
 	}
 }
 
@@ -65,11 +83,17 @@ func (op *OKLCHPicker) Draw(painter *core.Painter, rect core.Rect) {
 	// Fill background
 	painter.Fill(rect, ' ', baseStyle)
 
+	// If load picker is active, draw it instead
+	if op.showLoadPicker {
+		op.drawLoadPicker(painter, rect, fg, bg)
+		return
+	}
+
 	// Layout:
 	// [   Hue × Chroma Plane   ] [L]
 	// [     fills available    ] [│]
 	// [        space           ] [│]
-	// [ Preview: [███] OKLCH   ]
+	// [ Preview: [███] OKLCH   ] [Load]
 
 	// Calculate dynamic plane size to fill available space
 	// Reserve: 2 (gap) + 3 (slider) = 5 chars on right
@@ -117,12 +141,58 @@ func (op *OKLCHPicker) Draw(painter *core.Painter, rect core.Rect) {
 	// Draw preview
 	op.drawPreview(painter, previewRect, fg, bg)
 
-	// Draw labels
+	// Draw labels and Load button
 	painter.DrawText(rect.X, rect.Y+op.planeH, "H→", baseStyle)
-	if op.activeControl == OKLCHControlPlane {
-		painter.DrawText(sliderX, rect.Y+op.planeH, "L", baseStyle.Dim(true))
+
+	// L label
+	lStyle := baseStyle
+	if op.activeControl == OKLCHControlLightness {
+		lStyle = lStyle.Bold(true)
 	} else {
-		painter.DrawText(sliderX, rect.Y+op.planeH, "L", baseStyle.Bold(true))
+		lStyle = lStyle.Dim(true)
+	}
+	painter.DrawText(sliderX, rect.Y+op.planeH, "L", lStyle)
+
+	// Load button on the right side of the bottom row
+	loadStyle := baseStyle
+	if op.activeControl == OKLCHControlLoad {
+		loadStyle = loadStyle.Reverse(true)
+	}
+	loadX := rect.X + rect.W - 6
+	painter.DrawText(loadX, rect.Y+op.planeH, "[Load]", loadStyle)
+}
+
+func (op *OKLCHPicker) drawLoadPicker(painter *core.Painter, rect core.Rect, fg, bg tcell.Color) {
+	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
+
+	// Draw title bar with tabs
+	y := rect.Y
+	painter.DrawText(rect.X, y, "Load color from: ", baseStyle)
+
+	// Semantic tab
+	semStyle := baseStyle
+	if op.loadPickerMode == LoadPickerSemantic {
+		semStyle = semStyle.Reverse(true)
+	}
+	painter.DrawText(rect.X+17, y, " Semantic ", semStyle)
+
+	// Palette tab
+	palStyle := baseStyle
+	if op.loadPickerMode == LoadPickerPalette {
+		palStyle = palStyle.Reverse(true)
+	}
+	painter.DrawText(rect.X+28, y, " Palette ", palStyle)
+
+	// Hint
+	hintStyle := baseStyle.Dim(true)
+	painter.DrawText(rect.X, rect.Y+rect.H-1, "Enter=Load  Esc=Cancel  ←→=Switch", hintStyle)
+
+	// Draw the active picker
+	contentRect := core.Rect{X: rect.X, Y: rect.Y + 1, W: rect.W, H: rect.H - 2}
+	if op.loadPickerMode == LoadPickerSemantic {
+		op.semanticPicker.Draw(painter, contentRect)
+	} else {
+		op.palettePicker.Draw(painter, contentRect)
 	}
 }
 
@@ -230,31 +300,117 @@ func (op *OKLCHPicker) drawPreview(painter *core.Painter, rect core.Rect, fg, bg
 }
 
 func (op *OKLCHPicker) HandleKey(ev *tcell.EventKey) bool {
-	// Handle Tab navigation between plane and slider
+	// If load picker is active, handle its keys
+	if op.showLoadPicker {
+		return op.handleLoadPickerKey(ev)
+	}
+
+	// Handle Tab navigation between plane, slider, and load button
 	if ev.Key() == tcell.KeyTab {
 		if ev.Modifiers()&tcell.ModShift != 0 {
-			// Shift+Tab: slider → plane, plane → exit (return false)
-			if op.activeControl == OKLCHControlLightness {
+			// Shift+Tab: load → slider → plane → exit
+			switch op.activeControl {
+			case OKLCHControlLoad:
+				op.activeControl = OKLCHControlLightness
+				return true
+			case OKLCHControlLightness:
 				op.activeControl = OKLCHControlPlane
 				return true
 			}
 			// Already on plane, let parent handle (go to tab bar)
 			return false
 		} else {
-			// Tab: plane → slider, slider → exit (return false)
-			if op.activeControl == OKLCHControlPlane {
+			// Tab: plane → slider → load → exit
+			switch op.activeControl {
+			case OKLCHControlPlane:
 				op.activeControl = OKLCHControlLightness
 				return true
+			case OKLCHControlLightness:
+				op.activeControl = OKLCHControlLoad
+				return true
 			}
-			// Already on slider, let parent handle (go to tab bar)
+			// Already on load, let parent handle (go to tab bar)
 			return false
 		}
 	}
 
-	if op.activeControl == OKLCHControlPlane {
+	switch op.activeControl {
+	case OKLCHControlPlane:
 		return op.handlePlaneKey(ev)
+	case OKLCHControlLightness:
+		return op.handleLightnessKey(ev)
+	case OKLCHControlLoad:
+		return op.handleLoadButtonKey(ev)
 	}
-	return op.handleLightnessKey(ev)
+	return false
+}
+
+func (op *OKLCHPicker) handleLoadButtonKey(ev *tcell.EventKey) bool {
+	switch ev.Key() {
+	case tcell.KeyEnter:
+		// Open the load picker
+		op.showLoadPicker = true
+		op.loadPickerMode = LoadPickerSemantic
+		return true
+	}
+	if ev.Rune() == ' ' {
+		op.showLoadPicker = true
+		op.loadPickerMode = LoadPickerSemantic
+		return true
+	}
+	return false
+}
+
+func (op *OKLCHPicker) handleLoadPickerKey(ev *tcell.EventKey) bool {
+	switch ev.Key() {
+	case tcell.KeyEsc:
+		// Cancel and close load picker
+		op.showLoadPicker = false
+		return true
+
+	case tcell.KeyEnter:
+		// Load the selected color and close
+		var result PickerResult
+		if op.loadPickerMode == LoadPickerSemantic {
+			result = op.semanticPicker.GetResult()
+		} else {
+			result = op.palettePicker.GetResult()
+		}
+		// Convert to OKLCH
+		op.SetColor(result.Color)
+		op.showLoadPicker = false
+		return true
+
+	case tcell.KeyLeft:
+		// Switch to semantic
+		op.loadPickerMode = LoadPickerSemantic
+		return true
+
+	case tcell.KeyRight:
+		// Switch to palette
+		op.loadPickerMode = LoadPickerPalette
+		return true
+
+	case tcell.KeyTab:
+		// Tab switches between modes in load picker
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			if op.loadPickerMode == LoadPickerPalette {
+				op.loadPickerMode = LoadPickerSemantic
+			}
+		} else {
+			if op.loadPickerMode == LoadPickerSemantic {
+				op.loadPickerMode = LoadPickerPalette
+			}
+		}
+		return true
+
+	default:
+		// Delegate to active picker
+		if op.loadPickerMode == LoadPickerSemantic {
+			return op.semanticPicker.HandleKey(ev)
+		}
+		return op.palettePicker.HandleKey(ev)
+	}
 }
 
 func (op *OKLCHPicker) handlePlaneKey(ev *tcell.EventKey) bool {
@@ -395,6 +551,11 @@ func (op *OKLCHPicker) HandleMouse(ev *tcell.EventMouse, rect core.Rect) bool {
 		return false
 	}
 
+	// If load picker is active, handle its mouse events
+	if op.showLoadPicker {
+		return op.handleLoadPickerMouse(ev, rect)
+	}
+
 	planeRect := core.Rect{X: rect.X, Y: rect.Y, W: op.planeW, H: op.planeH}
 	sliderX := rect.X + op.planeW + 2
 	sliderRect := core.Rect{X: sliderX, Y: rect.Y, W: 3, H: op.planeH}
@@ -426,6 +587,44 @@ func (op *OKLCHPicker) HandleMouse(ev *tcell.EventMouse, rect core.Rect) bool {
 			}
 			return true
 		}
+
+		// Check if clicking on Load button (on label row)
+		loadX := rect.X + rect.W - 6
+		if y == rect.Y+op.planeH && x >= loadX && x < loadX+6 {
+			op.activeControl = OKLCHControlLoad
+			op.showLoadPicker = true
+			op.loadPickerMode = LoadPickerSemantic
+			return true
+		}
+	}
+
+	return false
+}
+
+func (op *OKLCHPicker) handleLoadPickerMouse(ev *tcell.EventMouse, rect core.Rect) bool {
+	x, y := ev.Position()
+
+	if ev.Buttons() == tcell.Button1 {
+		// Check if clicking on tabs
+		if y == rect.Y {
+			// Semantic tab: x+17 to x+27
+			if x >= rect.X+17 && x < rect.X+27 {
+				op.loadPickerMode = LoadPickerSemantic
+				return true
+			}
+			// Palette tab: x+28 to x+37
+			if x >= rect.X+28 && x < rect.X+37 {
+				op.loadPickerMode = LoadPickerPalette
+				return true
+			}
+		}
+
+		// Delegate to active picker content
+		contentRect := core.Rect{X: rect.X, Y: rect.Y + 1, W: rect.W, H: rect.H - 2}
+		if op.loadPickerMode == LoadPickerSemantic {
+			return op.semanticPicker.HandleMouse(ev, contentRect)
+		}
+		return op.palettePicker.HandleMouse(ev, contentRect)
 	}
 
 	return false

@@ -383,30 +383,9 @@ func (cp *ColorPicker) HandleKey(ev *tcell.EventKey) bool {
 		return false
 	}
 
-	// Expanded state - global keys
-	switch ev.Key() {
-	case tcell.KeyEsc:
+	// Esc always closes
+	if ev.Key() == tcell.KeyEsc {
 		cp.Collapse()
-		return true
-
-	case tcell.KeyEnter:
-		// Commit current selection
-		if cp.activeMode != nil {
-			r := cp.activeMode.GetResult()
-			cp.result = ColorPickerResult{
-				Color:  r.Color,
-				Mode:   cp.currentMode,
-				Source: r.Source,
-				R:      r.R,
-				G:      r.G,
-				B:      r.B,
-			}
-
-			if cp.OnChange != nil {
-				cp.OnChange(cp.result)
-			}
-			cp.Collapse()
-		}
 		return true
 	}
 
@@ -435,6 +414,8 @@ func (cp *ColorPicker) HandleKey(ev *tcell.EventKey) bool {
 	if cp.focus == focusTabBar {
 		return cp.handleTabBarKey(ev)
 	}
+
+	// Content focus: let mode handle first, then check for commit
 	return cp.handleContentKey(ev)
 }
 
@@ -483,7 +464,7 @@ func (cp *ColorPicker) handleContentKey(ev *tcell.EventKey) bool {
 		}
 	}
 
-	// Mode didn't handle it - check if we should go to tab bar
+	// Mode didn't handle it - check what to do
 	switch ev.Key() {
 	case tcell.KeyTab:
 		// Mode didn't handle Tab, return to tab bar
@@ -495,6 +476,25 @@ func (cp *ColorPicker) handleContentKey(ev *tcell.EventKey) bool {
 		// Mode didn't handle Up, go to tab bar
 		cp.focus = focusTabBar
 		cp.invalidate()
+		return true
+
+	case tcell.KeyEnter:
+		// Mode didn't handle Enter, commit current selection and close
+		if cp.activeMode != nil {
+			r := cp.activeMode.GetResult()
+			cp.result = ColorPickerResult{
+				Color:  r.Color,
+				Mode:   cp.currentMode,
+				Source: r.Source,
+				R:      r.R,
+				G:      r.G,
+				B:      r.B,
+			}
+			if cp.OnChange != nil {
+				cp.OnChange(cp.result)
+			}
+			cp.Collapse()
+		}
 		return true
 	}
 
