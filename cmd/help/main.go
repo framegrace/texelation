@@ -9,7 +9,7 @@ import (
 
 func main() {
 	flag.Parse()
-	if err := devshell.RunApp("welcome", flag.Args()); err != nil {
-		log.Fatalf("welcome: %v", err)
+	if err := devshell.RunApp("help", flag.Args()); err != nil {
+		log.Fatalf("help: %v", err)
 	}
 }

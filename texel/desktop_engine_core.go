@@ -635,6 +635,11 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 	for i := len(d.floatingPanels) - 1; i >= 0; i-- {
 		fp := d.floatingPanels[i]
 		if fp.modal {
+			// ESC closes modal floating panels
+			if key.Key() == tcell.KeyEsc {
+				d.CloseFloatingPanel(fp)
+				return
+			}
 			// Route to pipeline (or app as fallback)
 			if fp.pipeline != nil {
 				fp.pipeline.HandleKey(key)
