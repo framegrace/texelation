@@ -1,6 +1,7 @@
 package core
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
@@ -126,7 +127,25 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
-	// Focus traversal on Tab/Shift-Tab
+	// Check if focused widget is modal - if so, it gets ALL input (including Tab)
+	if u.focused != nil {
+		if modal, ok := u.focused.(Modal); ok && modal.IsModal() {
+			if u.focused.HandleKey(ev) {
+				u.dirtyMu.Lock()
+				if len(u.dirty) == 0 {
+					u.invalidateAllLocked()
+				} else {
+					u.requestRefreshLocked()
+				}
+				u.dirtyMu.Unlock()
+				return true
+			}
+			// Modal widget didn't handle it, but we still don't do focus traversal
+			return false
+		}
+	}
+
+	// Focus traversal on Tab/Shift-Tab (only for non-modal widgets)
 	if ev.Key() == tcell.KeyTab {
 		if ev.Modifiers()&tcell.ModShift != 0 {
 			u.focusPrevDeepLocked()
@@ -150,6 +169,23 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 		u.dirtyMu.Unlock()
 		return true
 	}
+
+	// Up/Down focus traversal if widget didn't handle it
+	if ev.Key() == tcell.KeyUp {
+		u.focusPrevDeepLocked()
+		u.dirtyMu.Lock()
+		u.invalidateAllLocked()
+		u.dirtyMu.Unlock()
+		return true
+	}
+	if ev.Key() == tcell.KeyDown {
+		u.focusNextDeepLocked()
+		u.dirtyMu.Lock()
+		u.invalidateAllLocked()
+		u.dirtyMu.Unlock()
+		return true
+	}
+
 	return false
 }
 
@@ -162,6 +198,20 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 	buttons := ev.Buttons()
 	prevIsDown := u.capture != nil
 	nowDown := buttons&tcell.Button1 != 0
+
+	// Check if focused widget is modal - dismiss on click outside
+	if u.focused != nil && nowDown && !prevIsDown {
+		if modal, ok := u.focused.(Modal); ok && modal.IsModal() {
+			// Check if click is outside the modal widget
+			if !u.focused.HitTest(x, y) {
+				modal.DismissModal()
+				u.dirtyMu.Lock()
+				u.invalidateAllLocked()
+				u.dirtyMu.Unlock()
+				return true
+			}
+		}
+	}
 
 	// Start capture on press over a widget
 	if !prevIsDown && nowDown {
@@ -209,8 +259,10 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 }
 
 func (u *UIManager) topmostAtLocked(x, y int) Widget {
-	for i := len(u.widgets) - 1; i >= 0; i-- {
-		if w := deepHit(u.widgets[i], x, y); w != nil {
+	// Get widgets sorted by z-index, then iterate in reverse to find topmost
+	sorted := u.sortedWidgetsLocked()
+	for i := len(sorted) - 1; i >= 0; i-- {
+		if w := deepHit(sorted[i], x, y); w != nil {
 			return w
 		}
 	}
@@ -350,6 +402,24 @@ func (u *UIManager) ensureBufferLocked() {
 	}
 }
 
+// getZIndex returns the z-index of a widget (0 if not a ZIndexer).
+func getZIndex(w Widget) int {
+	if zi, ok := w.(ZIndexer); ok {
+		return zi.ZIndex()
+	}
+	return 0
+}
+
+// sortedWidgetsLocked returns a copy of widgets sorted by z-index (stable sort).
+func (u *UIManager) sortedWidgetsLocked() []Widget {
+	sorted := make([]Widget, len(u.widgets))
+	copy(sorted, u.widgets)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return getZIndex(sorted[i]) < getZIndex(sorted[j])
+	})
+	return sorted
+}
+
 // Render updates dirty regions and returns the framebuffer.
 func (u *UIManager) Render() [][]texel.Cell {
 	u.mu.Lock()
@@ -363,12 +433,15 @@ func (u *UIManager) Render() [][]texel.Cell {
 	u.dirty = nil // clear it
 	u.dirtyMu.Unlock()
 
+	// Get widgets sorted by z-index for correct draw order
+	sorted := u.sortedWidgetsLocked()
+
 	if len(dirtyCopy) == 0 {
 		// No specific dirty regions requested: compose full frame.
 		full := Rect{X: 0, Y: 0, W: u.W, H: u.H}
 		p := NewPainter(u.buf, full)
 		p.Fill(full, ' ', u.bgStyle)
-		for _, w := range u.widgets {
+		for _, w := range sorted {
 			w.Draw(p)
 		}
 		return u.buf
@@ -400,7 +473,7 @@ func (u *UIManager) Render() [][]texel.Cell {
 		// Clear dirty region
 		p.Fill(clip, ' ', u.bgStyle)
 		// Draw widgets intersecting clip
-		for _, w := range u.widgets {
+		for _, w := range sorted {
 			wx, wy := w.Position()
 			ww, wh := w.Size()
 			wr := Rect{X: wx, Y: wy, W: ww, H: wh}

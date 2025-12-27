@@ -16,16 +16,24 @@ type Widget interface {
 	HitTest(x, y int) bool
 }
 
+// ZIndexer is an optional interface for widgets that need z-ordering control.
+// Widgets with higher ZIndex are drawn on top of widgets with lower ZIndex.
+// Widgets that don't implement this interface default to ZIndex 0.
+type ZIndexer interface {
+	ZIndex() int
+}
+
 // BaseWidget provides common fields/behaviour for widgets.
 type BaseWidget struct {
-    Rect      Rect
-    focused   bool
-    enabled   bool
-    visible   bool
-    focusable bool
-    // Optional focus styling: if enabled, widgets may use FocusedStyle when focused.
-    focusStyleEnabled bool
-    focusedStyle      tcell.Style
+	Rect      Rect
+	focused   bool
+	enabled   bool
+	visible   bool
+	focusable bool
+	zIndex    int // z-ordering: higher values draw on top
+	// Optional focus styling: if enabled, widgets may use FocusedStyle when focused.
+	focusStyleEnabled bool
+	focusedStyle      tcell.Style
 }
 
 func (b *BaseWidget) SetPosition(x, y int) { b.Rect.X, b.Rect.Y = x, y }
@@ -51,6 +59,8 @@ func (b *BaseWidget) Blur()                             { b.focused = false }
 func (b *BaseWidget) IsFocused() bool                   { return b.focused }
 func (b *BaseWidget) HitTest(x, y int) bool             { return b.Rect.Contains(x, y) }
 func (b *BaseWidget) HandleKey(ev *tcell.EventKey) bool { return false }
+func (b *BaseWidget) ZIndex() int                       { return b.zIndex }
+func (b *BaseWidget) SetZIndex(z int)                   { b.zIndex = z }
 
 // SetFocusedStyle enables or disables focused styling and sets the focused style value.
 func (b *BaseWidget) SetFocusedStyle(style tcell.Style, enabled bool) {
@@ -96,6 +106,15 @@ type HitTester interface {
 // containers to query whether a widget is focused.
 type FocusState interface {
     IsFocused() bool
+}
+
+// Modal is an optional interface for widgets that can enter a modal state.
+// When a modal widget is focused and IsModal() returns true:
+// - It receives ALL key events (including Tab, which normally does focus traversal)
+// - Clicks outside the modal widget will call DismissModal()
+type Modal interface {
+	IsModal() bool
+	DismissModal()
 }
 
 // BlinkAware widgets support periodic blink updates (e.g., caret blink).
