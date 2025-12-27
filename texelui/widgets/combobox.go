@@ -100,7 +100,8 @@ func (cb *ComboBox) dropdownRect() core.Rect {
 
 // updateFilter updates the filtered list based on current text.
 func (cb *ComboBox) updateFilter() {
-	if cb.Text == "" {
+	// Non-editable combos don't filter - always show all items
+	if !cb.Editable || cb.Text == "" {
 		cb.filtered = cb.Items
 	} else {
 		cb.filtered = nil
@@ -242,18 +243,33 @@ func (cb *ComboBox) drawDropdown(p *core.Painter) {
 
 	dr := cb.dropdownRect()
 
-	// Fill background
-	p.Fill(dr, ' ', baseStyle)
+	// The dropdown has a top border at dr.Y, items from dr.Y+1, bottom border at dr.Y+dr.H+1
+	topY := dr.Y
+	contentY := dr.Y + 1
+	bottomY := dr.Y + dr.H + 1
 
-	// Draw border
+	// Fill background for content area
+	contentRect := core.Rect{X: dr.X, Y: contentY, W: dr.W, H: dr.H}
+	p.Fill(contentRect, ' ', baseStyle)
+
+	// Draw top border
 	for x := dr.X; x < dr.X+dr.W; x++ {
-		p.SetCell(x, dr.Y+dr.H, '─', borderStyle)
+		p.SetCell(x, topY, '─', borderStyle)
 	}
-	p.SetCell(dr.X, dr.Y+dr.H, '╰', borderStyle)
-	p.SetCell(dr.X+dr.W-1, dr.Y+dr.H, '╯', borderStyle)
+	p.SetCell(dr.X, topY, '├', borderStyle)
+	p.SetCell(dr.X+dr.W-1, topY, '┤', borderStyle)
+
+	// Draw bottom border
+	for x := dr.X; x < dr.X+dr.W; x++ {
+		p.SetCell(x, bottomY, '─', borderStyle)
+	}
+	p.SetCell(dr.X, bottomY, '╰', borderStyle)
+	p.SetCell(dr.X+dr.W-1, bottomY, '╯', borderStyle)
+
+	// Draw side borders
 	for row := 0; row < dr.H; row++ {
-		p.SetCell(dr.X, dr.Y+row, '│', borderStyle)
-		p.SetCell(dr.X+dr.W-1, dr.Y+row, '│', borderStyle)
+		p.SetCell(dr.X, contentY+row, '│', borderStyle)
+		p.SetCell(dr.X+dr.W-1, contentY+row, '│', borderStyle)
 	}
 
 	// Draw items
@@ -272,7 +288,7 @@ func (cb *ComboBox) drawDropdown(p *core.Painter) {
 
 		// Fill row
 		for x := dr.X + 1; x < dr.X+dr.W-1; x++ {
-			p.SetCell(x, dr.Y+i, ' ', style)
+			p.SetCell(x, contentY+i, ' ', style)
 		}
 
 		// Draw item text
@@ -280,16 +296,16 @@ func (cb *ComboBox) drawDropdown(p *core.Painter) {
 			if j >= dr.W-2 {
 				break
 			}
-			p.SetCell(dr.X+1+j, dr.Y+i, ch, style)
+			p.SetCell(dr.X+1+j, contentY+i, ch, style)
 		}
 	}
 
 	// Draw scroll indicators if needed
 	if cb.scrollOffset > 0 {
-		p.SetCell(dr.X+dr.W-2, dr.Y, '▲', baseStyle)
+		p.SetCell(dr.X+dr.W-2, contentY, '▲', baseStyle)
 	}
 	if cb.scrollOffset+dr.H < len(cb.filtered) {
-		p.SetCell(dr.X+dr.W-2, dr.Y+dr.H-1, '▼', baseStyle)
+		p.SetCell(dr.X+dr.W-2, contentY+dr.H-1, '▼', baseStyle)
 	}
 }
 
@@ -469,7 +485,8 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 	// Check if click is on the widget or dropdown
 	inMain := cb.HitTest(x, y)
 	dr := cb.dropdownRect()
-	inDropdown := cb.expanded && x >= dr.X && x < dr.X+dr.W && y >= dr.Y && y < dr.Y+dr.H+1
+	// Dropdown has: top border at dr.Y, content from dr.Y+1 to dr.Y+dr.H, bottom border at dr.Y+dr.H+1
+	inDropdown := cb.expanded && x >= dr.X && x < dr.X+dr.W && y >= dr.Y && y < dr.Y+dr.H+2
 
 	if !inMain && !inDropdown {
 		if cb.expanded {
@@ -502,9 +519,10 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 		}
 	}
 
-	// Click on dropdown
-	if inDropdown && y < dr.Y+dr.H {
-		idx := cb.scrollOffset + (y - dr.Y)
+	// Click on dropdown content area (between top and bottom borders)
+	contentY := dr.Y + 1
+	if inDropdown && y >= contentY && y < contentY+dr.H {
+		idx := cb.scrollOffset + (y - contentY)
 		if idx >= 0 && idx < len(cb.filtered) {
 			cb.Text = cb.filtered[idx]
 			cb.cursorPos = len(cb.Text)
@@ -528,7 +546,8 @@ func (cb *ComboBox) HitTest(x, y int) bool {
 	}
 	if cb.expanded {
 		dr := cb.dropdownRect()
-		if x >= dr.X && x < dr.X+dr.W && y >= dr.Y && y < dr.Y+dr.H+1 {
+		// Dropdown includes: top border at dr.Y, content, bottom border at dr.Y+dr.H+1
+		if x >= dr.X && x < dr.X+dr.W && y >= dr.Y && y < dr.Y+dr.H+2 {
 			return true
 		}
 	}
@@ -561,7 +580,8 @@ func (cb *ComboBox) invalidate() {
 		r := cb.Rect
 		if cb.expanded {
 			dr := cb.dropdownRect()
-			r.H = 1 + dr.H + 1 // Main + dropdown + border
+			// Main (1) + top border (1) + content (dr.H) + bottom border (1)
+			r.H = 1 + 1 + dr.H + 1
 		}
 		cb.inv(r)
 	}
