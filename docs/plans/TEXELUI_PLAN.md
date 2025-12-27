@@ -2,9 +2,11 @@
 
 This document tracks the design and implementation plan for TexelUI — a reusable, text‑only UI library intended to run inside TexelApps (and other tcell‑based apps). Keep this file up to date as work progresses.
 
-Last updated: 2025-11-18 (evening session)
+Last updated: 2025-12-27
 
 ## Current Status & Next Steps
+
+**Primitives Package Added (2025-12-27)**: Reusable primitive components extracted to `texelui/primitives` package. ColorPicker refactored to use these primitives.
 
 **Core Widgets Completed (2025-11-18)**: Priority 1 and 2 widgets from the architecture review have been implemented, tested, and polished.
 
@@ -19,17 +21,24 @@ Last updated: 2025-11-18 (evening session)
 - ✅ HBox layout manager (horizontal row with spacing)
 - ✅ Comprehensive tests (12 test cases, all passing)
 - ✅ Demo application (`texelui/examples/widget_demo.go`)
+- ✅ ScrollableList primitive (vertical list with scrolling, custom renderers)
+- ✅ Grid primitive (2D grid with dynamic columns, custom cell renderers)
+- ✅ TabBar primitive (horizontal tabs with keyboard/mouse navigation)
+- ✅ ColorPicker widget (semantic, palette, OKLCH modes)
+  - ✅ SemanticPicker uses ScrollableList internally
+  - ✅ PalettePicker uses Grid internally
+  - ✅ DrawColorSwatch helper functions
 
 **Ready for Production:**
 The core widget set is now stable and ready for use in forms and applications.
 All widgets have consistent focus behavior (reverse video) and proper keyboard/mouse support.
+The primitives package provides reusable building blocks for complex widgets.
 
 **Next Priority:**
 - RadioButton widget (mutually exclusive groups)
-- Grid layout manager
 - Form helper widget for automatic label/input pairing
 - Validation framework (Required, Email, MinLength, etc.)
-- Advanced container widgets (ScrollPane, Tabs, SplitPane)
+- Advanced container widgets (ScrollPane, SplitPane)
 
 ## Goals
 - Provide a clean widget kernel that can be embedded in any TexelApp/pane.
@@ -135,8 +144,14 @@ All widgets have consistent focus behavior (reverse video) and proper keyboard/m
 - [x] HBox layout manager (horizontal arrangement)
 - [x] Widget tests (12 comprehensive test cases)
 - [x] Demo application (texelui/examples/widget_demo.go)
+- [x] ScrollableList primitive (vertical list with scrolling)
+- [x] Grid primitive (2D grid with dynamic columns)
+- [x] TabBar primitive (horizontal tab navigation)
+- [x] ColorPicker refactored to use primitives
+- [x] Code quality: TextArea legacy theme API fixed
+- [x] Code quality: Removed dead code from TextArea
+- [x] Code quality: Removed unused BaseWidget fields
 - [ ] RadioButton widget (mutually exclusive groups)
-- [ ] Grid layout manager (rows × columns)
 - [ ] Form helper widget
 - [ ] Validation framework
 - [ ] Benchmarks for redraw cost (typing and selection)

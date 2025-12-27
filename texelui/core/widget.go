@@ -27,8 +27,6 @@ type ZIndexer interface {
 type BaseWidget struct {
 	Rect      Rect
 	focused   bool
-	enabled   bool
-	visible   bool
 	focusable bool
 	zIndex    int // z-ordering: higher values draw on top
 	// Optional focus styling: if enabled, widgets may use FocusedStyle when focused.
