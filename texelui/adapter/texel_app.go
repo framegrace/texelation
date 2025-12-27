@@ -97,7 +97,7 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 	return app
 }
 
-// createInputsTab creates the Inputs tab content with Input, TextArea, ColorPicker.
+// createInputsTab creates the Inputs tab content with Input, TextArea, ComboBox, ColorPicker.
 func createInputsTab() *widgets.Pane {
 	pane := widgets.NewPane(0, 0, 80, 20, tcell.StyleDefault)
 
@@ -115,17 +115,41 @@ func createInputsTab() *widgets.Pane {
 	pane.AddChild(emailLabel)
 	pane.AddChild(emailInput)
 
+	// ComboBox (editable) - for country selection with autocomplete
+	countryLabel := widgets.NewLabel(2, 5, 12, 1, "Country:")
+	countries := []string{
+		"Argentina", "Australia", "Austria", "Belgium", "Brazil",
+		"Canada", "Chile", "China", "Denmark", "Egypt",
+		"Finland", "France", "Germany", "Greece", "India",
+		"Ireland", "Italy", "Japan", "Mexico", "Netherlands",
+		"New Zealand", "Norway", "Poland", "Portugal", "Russia",
+		"South Africa", "Spain", "Sweden", "Switzerland",
+		"United Kingdom", "United States",
+	}
+	countryCombo := widgets.NewComboBox(14, 5, 30, countries, true)
+	countryCombo.Placeholder = "Type to search..."
+	pane.AddChild(countryLabel)
+	pane.AddChild(countryCombo)
+
+	// ComboBox (non-editable) - for priority selection
+	priorityLabel := widgets.NewLabel(2, 7, 12, 1, "Priority:")
+	priorities := []string{"Low", "Medium", "High", "Critical"}
+	priorityCombo := widgets.NewComboBox(14, 7, 20, priorities, false)
+	priorityCombo.SetValue("Medium")
+	pane.AddChild(priorityLabel)
+	pane.AddChild(priorityCombo)
+
 	// TextArea
-	notesLabel := widgets.NewLabel(2, 5, 12, 1, "Notes:")
-	notesBorder := widgets.NewBorder(14, 5, 40, 6, tcell.StyleDefault)
-	notesArea := widgets.NewTextArea(0, 0, 38, 4)
+	notesLabel := widgets.NewLabel(2, 9, 12, 1, "Notes:")
+	notesBorder := widgets.NewBorder(14, 9, 40, 5, tcell.StyleDefault)
+	notesArea := widgets.NewTextArea(0, 0, 38, 3)
 	notesBorder.SetChild(notesArea)
 	pane.AddChild(notesLabel)
 	pane.AddChild(notesBorder)
 
 	// ColorPicker
-	colorLabel := widgets.NewLabel(2, 12, 12, 1, "Color:")
-	colorPicker := widgets.NewColorPicker(14, 12, widgets.ColorPickerConfig{
+	colorLabel := widgets.NewLabel(2, 15, 12, 1, "Color:")
+	colorPicker := widgets.NewColorPicker(14, 15, widgets.ColorPickerConfig{
 		EnableSemantic: true,
 		EnablePalette:  true,
 		EnableOKLCH:    true,
@@ -136,7 +160,7 @@ func createInputsTab() *widgets.Pane {
 	pane.AddChild(colorPicker)
 
 	// Help text
-	helpLabel := widgets.NewLabel(2, 14, 60, 1, "Tab: navigate | Enter: expand picker | Esc: close picker")
+	helpLabel := widgets.NewLabel(2, 17, 70, 1, "Tab: navigate | Up/Down: dropdown | Enter: select | Type: filter (editable)")
 	pane.AddChild(helpLabel)
 
 	return pane
