@@ -165,30 +165,39 @@ func (op *OKLCHPicker) Draw(painter *core.Painter, rect core.Rect) {
 func (op *OKLCHPicker) drawLoadPicker(painter *core.Painter, rect core.Rect, fg, bg tcell.Color) {
 	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
 
+	// Fill background first
+	painter.Fill(rect, ' ', baseStyle)
+
+	// Draw border around the entire load picker
+	painter.DrawBorder(rect, baseStyle, [6]rune{'─', '│', '┌', '┐', '└', '┘'})
+
+	// Inner rect (inside border)
+	inner := core.Rect{X: rect.X + 1, Y: rect.Y + 1, W: rect.W - 2, H: rect.H - 2}
+
 	// Draw title bar with tabs
-	y := rect.Y
-	painter.DrawText(rect.X, y, "Load color from: ", baseStyle)
+	y := inner.Y
+	painter.DrawText(inner.X, y, "Load from: ", baseStyle)
 
 	// Semantic tab
 	semStyle := baseStyle
 	if op.loadPickerMode == LoadPickerSemantic {
 		semStyle = semStyle.Reverse(true)
 	}
-	painter.DrawText(rect.X+17, y, " Semantic ", semStyle)
+	painter.DrawText(inner.X+11, y, " Semantic ", semStyle)
 
 	// Palette tab
 	palStyle := baseStyle
 	if op.loadPickerMode == LoadPickerPalette {
 		palStyle = palStyle.Reverse(true)
 	}
-	painter.DrawText(rect.X+28, y, " Palette ", palStyle)
+	painter.DrawText(inner.X+22, y, " Palette ", palStyle)
 
-	// Hint
+	// Hint at bottom
 	hintStyle := baseStyle.Dim(true)
-	painter.DrawText(rect.X, rect.Y+rect.H-1, "Enter=Load  Esc=Cancel  ←→=Switch", hintStyle)
+	painter.DrawText(inner.X, inner.Y+inner.H-1, "Enter=Load  Esc=Cancel  ←→=Switch", hintStyle)
 
 	// Draw the active picker
-	contentRect := core.Rect{X: rect.X, Y: rect.Y + 1, W: rect.W, H: rect.H - 2}
+	contentRect := core.Rect{X: inner.X, Y: inner.Y + 1, W: inner.W, H: inner.H - 2}
 	if op.loadPickerMode == LoadPickerSemantic {
 		op.semanticPicker.Draw(painter, contentRect)
 	} else {
@@ -604,23 +613,26 @@ func (op *OKLCHPicker) HandleMouse(ev *tcell.EventMouse, rect core.Rect) bool {
 func (op *OKLCHPicker) handleLoadPickerMouse(ev *tcell.EventMouse, rect core.Rect) bool {
 	x, y := ev.Position()
 
+	// Inner rect (inside border)
+	inner := core.Rect{X: rect.X + 1, Y: rect.Y + 1, W: rect.W - 2, H: rect.H - 2}
+
 	if ev.Buttons() == tcell.Button1 {
-		// Check if clicking on tabs
-		if y == rect.Y {
-			// Semantic tab: x+17 to x+27
-			if x >= rect.X+17 && x < rect.X+27 {
+		// Check if clicking on tabs (title row is inner.Y)
+		if y == inner.Y {
+			// Semantic tab: inner.X+11 to inner.X+21
+			if x >= inner.X+11 && x < inner.X+21 {
 				op.loadPickerMode = LoadPickerSemantic
 				return true
 			}
-			// Palette tab: x+28 to x+37
-			if x >= rect.X+28 && x < rect.X+37 {
+			// Palette tab: inner.X+22 to inner.X+31
+			if x >= inner.X+22 && x < inner.X+31 {
 				op.loadPickerMode = LoadPickerPalette
 				return true
 			}
 		}
 
 		// Delegate to active picker content
-		contentRect := core.Rect{X: rect.X, Y: rect.Y + 1, W: rect.W, H: rect.H - 2}
+		contentRect := core.Rect{X: inner.X, Y: inner.Y + 1, W: inner.W, H: inner.H - 2}
 		if op.loadPickerMode == LoadPickerSemantic {
 			return op.semanticPicker.HandleMouse(ev, contentRect)
 		}
