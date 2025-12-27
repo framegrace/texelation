@@ -16,7 +16,7 @@ import (
 type PalettePicker struct {
 	paletteNames []string
 	selectedIdx  int
-	cols         int // Number of columns in grid
+	cols         int // Number of columns in grid (updated by Draw based on available width)
 }
 
 // NewPalettePicker creates a palette color picker.
@@ -65,11 +65,32 @@ func (pp *PalettePicker) Draw(painter *core.Painter, rect core.Rect) {
 	// Fill background
 	painter.Fill(rect, ' ', baseStyle)
 
-	// Calculate cell dimensions
-	cellWidth := rect.W / pp.cols
-	if cellWidth < 12 {
-		cellWidth = 12
+	// Find longest name to calculate cell width
+	maxNameLen := 0
+	for _, name := range pp.paletteNames {
+		if len(name) > maxNameLen {
+			maxNameLen = len(name)
+		}
 	}
+
+	// Cell width: [██] + space + name + padding
+	// = 4 (brackets+blocks) + 1 (space) + maxNameLen + 1 (padding between columns)
+	minCellWidth := 6 + maxNameLen
+
+	// Calculate how many columns fit in available width
+	cols := rect.W / minCellWidth
+	if cols < 1 {
+		cols = 1
+	}
+	if cols > 3 {
+		cols = 3 // Max 3 columns
+	}
+
+	// Store for navigation
+	pp.cols = cols
+
+	// Recalculate cell width to use available space evenly
+	cellWidth := rect.W / cols
 
 	x := rect.X
 	y := rect.Y
@@ -98,16 +119,11 @@ func (pp *PalettePicker) Draw(painter *core.Painter, rect core.Rect) {
 		painter.SetCell(cx, y, ']', style)
 		cx += 2
 
-		// Truncate name if needed
-		displayName := name
-		maxLen := cellWidth - 7
-		if len(displayName) > maxLen && maxLen > 0 {
-			displayName = displayName[:maxLen]
-		}
-		painter.DrawText(cx, y, displayName, style)
+		// Draw full name (no truncation needed with proper sizing)
+		painter.DrawText(cx, y, name, style)
 
 		col++
-		if col >= pp.cols {
+		if col >= cols {
 			col = 0
 			x = rect.X
 			y++
@@ -118,30 +134,38 @@ func (pp *PalettePicker) Draw(painter *core.Painter, rect core.Rect) {
 }
 
 func (pp *PalettePicker) HandleKey(ev *tcell.EventKey) bool {
-	rows := (len(pp.paletteNames) + pp.cols - 1) / pp.cols
-	currentRow := pp.selectedIdx / pp.cols
+	cols := pp.cols
+	if cols < 1 {
+		cols = 1
+	}
+	rows := (len(pp.paletteNames) + cols - 1) / cols
+	currentRow := pp.selectedIdx / cols
+	currentCol := pp.selectedIdx % cols
 
 	switch ev.Key() {
 	case tcell.KeyUp:
 		if currentRow > 0 {
-			pp.selectedIdx -= pp.cols
+			pp.selectedIdx -= cols
 		}
 		return true
 	case tcell.KeyDown:
 		if currentRow < rows-1 {
-			newIdx := pp.selectedIdx + pp.cols
+			newIdx := pp.selectedIdx + cols
 			if newIdx < len(pp.paletteNames) {
 				pp.selectedIdx = newIdx
+			} else {
+				// Move to last item if going down from partial last row
+				pp.selectedIdx = len(pp.paletteNames) - 1
 			}
 		}
 		return true
 	case tcell.KeyLeft:
-		if pp.selectedIdx > 0 {
+		if currentCol > 0 {
 			pp.selectedIdx--
 		}
 		return true
 	case tcell.KeyRight:
-		if pp.selectedIdx < len(pp.paletteNames)-1 {
+		if currentCol < cols-1 && pp.selectedIdx < len(pp.paletteNames)-1 {
 			pp.selectedIdx++
 		}
 		return true
@@ -151,6 +175,23 @@ func (pp *PalettePicker) HandleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyEnd:
 		pp.selectedIdx = len(pp.paletteNames) - 1
 		return true
+	case tcell.KeyTab:
+		// Tab: left-to-right, then top-to-bottom
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			// Shift+Tab: go backwards
+			if pp.selectedIdx > 0 {
+				pp.selectedIdx--
+				return true
+			}
+		} else {
+			// Tab: go forwards
+			if pp.selectedIdx < len(pp.paletteNames)-1 {
+				pp.selectedIdx++
+				return true
+			}
+		}
+		// At boundary, let parent handle
+		return false
 	}
 	return false
 }
@@ -162,20 +203,21 @@ func (pp *PalettePicker) HandleMouse(ev *tcell.EventMouse, rect core.Rect) bool 
 	}
 
 	if ev.Buttons() == tcell.Button1 {
-		cellWidth := rect.W / pp.cols
-		if cellWidth < 12 {
-			cellWidth = 12
+		cols := pp.cols
+		if cols < 1 {
+			cols = 1
 		}
+		cellWidth := rect.W / cols
 
 		relX := x - rect.X
 		relY := y - rect.Y
 
 		clickedCol := relX / cellWidth
-		if clickedCol >= pp.cols {
-			clickedCol = pp.cols - 1
+		if clickedCol >= cols {
+			clickedCol = cols - 1
 		}
 		clickedRow := relY
-		clickedIdx := clickedRow*pp.cols + clickedCol
+		clickedIdx := clickedRow*cols + clickedCol
 
 		if clickedIdx >= 0 && clickedIdx < len(pp.paletteNames) {
 			pp.selectedIdx = clickedIdx
@@ -194,10 +236,22 @@ func (pp *PalettePicker) GetResult() PickerResult {
 }
 
 func (pp *PalettePicker) PreferredSize() (int, int) {
-	// 3 columns x ~12 chars each = 36 chars wide
-	// ~9 rows for 26 colors
-	rows := (len(pp.paletteNames) + pp.cols - 1) / pp.cols
-	return 40, rows
+	// Calculate width needed for full names
+	maxNameLen := 0
+	for _, name := range pp.paletteNames {
+		if len(name) > maxNameLen {
+			maxNameLen = len(name)
+		}
+	}
+	// Cell width: [██] + space + name + padding = 6 + maxNameLen
+	cellWidth := 6 + maxNameLen
+	// Request width for 2 columns (will expand to 3 if space available)
+	width := cellWidth * 2
+
+	// Calculate rows based on 2 columns
+	cols := 2
+	rows := (len(pp.paletteNames) + cols - 1) / cols
+	return width, rows
 }
 
 func (pp *PalettePicker) SetColor(color tcell.Color) {
@@ -208,4 +262,9 @@ func (pp *PalettePicker) SetColor(color tcell.Color) {
 			return
 		}
 	}
+}
+
+// ResetFocus is a no-op for palette picker (single focus area).
+func (pp *PalettePicker) ResetFocus() {
+	// No internal tab stops to reset
 }

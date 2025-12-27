@@ -30,6 +30,10 @@ type ModePicker interface {
 
 	// SetColor sets the current color (for initialization).
 	SetColor(color tcell.Color)
+
+	// ResetFocus resets internal focus to the first tab stop.
+	// Called when entering the mode from the tab bar.
+	ResetFocus()
 }
 
 // PickerResult represents a selected color from a mode.

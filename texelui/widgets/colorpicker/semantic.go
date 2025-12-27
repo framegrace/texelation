@@ -215,3 +215,8 @@ func (sp *SemanticPicker) SetColor(color tcell.Color) {
 		}
 	}
 }
+
+// ResetFocus is a no-op for semantic picker (single focus area).
+func (sp *SemanticPicker) ResetFocus() {
+	// No internal tab stops to reset
+}

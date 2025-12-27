@@ -67,9 +67,41 @@ func (op *OKLCHPicker) Draw(painter *core.Painter, rect core.Rect) {
 
 	// Layout:
 	// [   Hue × Chroma Plane   ] [L]
-	// [        20 × 10         ] [│]
-	// [                        ] [│]
+	// [     fills available    ] [│]
+	// [        space           ] [│]
 	// [ Preview: [███] OKLCH   ]
+
+	// Calculate dynamic plane size to fill available space
+	// Reserve: 2 (gap) + 3 (slider) = 5 chars on right
+	// Reserve: 1 (label row) + 2 (preview rows) = 3 rows at bottom
+	dynamicPlaneW := rect.W - 5
+	dynamicPlaneH := rect.H - 3
+	if dynamicPlaneW < 10 {
+		dynamicPlaneW = 10
+	}
+	if dynamicPlaneH < 5 {
+		dynamicPlaneH = 5
+	}
+
+	// Update internal dimensions if they changed (for cursor bounds)
+	if op.planeW != dynamicPlaneW || op.planeH != dynamicPlaneH {
+		// Scale cursor position to new dimensions
+		if op.planeW > 1 && dynamicPlaneW > 1 {
+			op.cursorX = op.cursorX * (dynamicPlaneW - 1) / (op.planeW - 1)
+		}
+		if op.planeH > 1 && dynamicPlaneH > 1 {
+			op.cursorY = op.cursorY * (dynamicPlaneH - 1) / (op.planeH - 1)
+		}
+		op.planeW = dynamicPlaneW
+		op.planeH = dynamicPlaneH
+		// Clamp cursor
+		if op.cursorX >= op.planeW {
+			op.cursorX = op.planeW - 1
+		}
+		if op.cursorY >= op.planeH {
+			op.cursorY = op.planeH - 1
+		}
+	}
 
 	planeRect := core.Rect{X: rect.X, Y: rect.Y, W: op.planeW, H: op.planeH}
 	sliderX := rect.X + op.planeW + 2
@@ -114,12 +146,15 @@ func (op *OKLCHPicker) drawPlane(painter *core.Painter, rect core.Rect, bg tcell
 			cellColor := tcell.NewRGBColor(rgb.R, rgb.G, rgb.B)
 
 			// Determine character
-			ch := '·'
+			// ░ (light shade) for color tiles
+			// █ (full block) for active selection
+			// ▓ (dark shade) for inactive selection
+			ch := '░'
 			if x == op.cursorX && y == op.cursorY {
 				if op.activeControl == OKLCHControlPlane {
-					ch = '●' // Active cursor
+					ch = '█' // Active cursor
 				} else {
-					ch = '○' // Inactive cursor
+					ch = '▓' // Inactive cursor
 				}
 			}
 
@@ -195,15 +230,25 @@ func (op *OKLCHPicker) drawPreview(painter *core.Painter, rect core.Rect, fg, bg
 }
 
 func (op *OKLCHPicker) HandleKey(ev *tcell.EventKey) bool {
-	switch ev.Key() {
-	case tcell.KeyTab, tcell.KeyBacktab:
-		// Toggle between plane and slider
-		if op.activeControl == OKLCHControlPlane {
-			op.activeControl = OKLCHControlLightness
+	// Handle Tab navigation between plane and slider
+	if ev.Key() == tcell.KeyTab {
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			// Shift+Tab: slider → plane, plane → exit (return false)
+			if op.activeControl == OKLCHControlLightness {
+				op.activeControl = OKLCHControlPlane
+				return true
+			}
+			// Already on plane, let parent handle (go to tab bar)
+			return false
 		} else {
-			op.activeControl = OKLCHControlPlane
+			// Tab: plane → slider, slider → exit (return false)
+			if op.activeControl == OKLCHControlPlane {
+				op.activeControl = OKLCHControlLightness
+				return true
+			}
+			// Already on slider, let parent handle (go to tab bar)
+			return false
 		}
-		return true
 	}
 
 	if op.activeControl == OKLCHControlPlane {
@@ -213,27 +258,58 @@ func (op *OKLCHPicker) HandleKey(ev *tcell.EventKey) bool {
 }
 
 func (op *OKLCHPicker) handlePlaneKey(ev *tcell.EventKey) bool {
+	// Check for Shift modifier for fine control
+	fine := ev.Modifiers()&tcell.ModShift != 0
+
 	switch ev.Key() {
 	case tcell.KeyLeft:
-		if op.cursorX > 0 {
+		if fine {
+			// Fine control: decrement H by 1°
+			op.H -= 1.0
+			if op.H < 0 {
+				op.H = 0
+			}
+			op.updateCursorFromValues()
+		} else if op.cursorX > 0 {
 			op.cursorX--
 			op.updateFromCursor()
 		}
 		return true
 	case tcell.KeyRight:
-		if op.cursorX < op.planeW-1 {
+		if fine {
+			// Fine control: increment H by 1°
+			op.H += 1.0
+			if op.H > 360 {
+				op.H = 360
+			}
+			op.updateCursorFromValues()
+		} else if op.cursorX < op.planeW-1 {
 			op.cursorX++
 			op.updateFromCursor()
 		}
 		return true
 	case tcell.KeyUp:
-		if op.cursorY > 0 {
+		if fine {
+			// Fine control: increment C by 0.01
+			op.C += 0.01
+			if op.C > 0.4 {
+				op.C = 0.4
+			}
+			op.updateCursorFromValues()
+		} else if op.cursorY > 0 {
 			op.cursorY--
 			op.updateFromCursor()
 		}
 		return true
 	case tcell.KeyDown:
-		if op.cursorY < op.planeH-1 {
+		if fine {
+			// Fine control: decrement C by 0.01
+			op.C -= 0.01
+			if op.C < 0 {
+				op.C = 0
+			}
+			op.updateCursorFromValues()
+		} else if op.cursorY < op.planeH-1 {
 			op.cursorY++
 			op.updateFromCursor()
 		}
@@ -251,7 +327,12 @@ func (op *OKLCHPicker) handlePlaneKey(ev *tcell.EventKey) bool {
 }
 
 func (op *OKLCHPicker) handleLightnessKey(ev *tcell.EventKey) bool {
+	// Check for Shift modifier for fine control
+	fine := ev.Modifiers()&tcell.ModShift != 0
 	step := 0.05
+	if fine {
+		step = 0.01 // Fine control: 1% increments
+	}
 
 	switch ev.Key() {
 	case tcell.KeyUp:
@@ -283,6 +364,28 @@ func (op *OKLCHPicker) updateFromCursor() {
 	}
 	if op.planeH > 1 {
 		op.C = (1.0 - float64(op.cursorY)/float64(op.planeH-1)) * 0.4
+	}
+}
+
+func (op *OKLCHPicker) updateCursorFromValues() {
+	// Update cursor position from H and C values (reverse of updateFromCursor)
+	if op.planeW > 1 {
+		op.cursorX = int(op.H / 360.0 * float64(op.planeW-1))
+		if op.cursorX < 0 {
+			op.cursorX = 0
+		}
+		if op.cursorX >= op.planeW {
+			op.cursorX = op.planeW - 1
+		}
+	}
+	if op.planeH > 1 {
+		op.cursorY = int((1.0 - op.C/0.4) * float64(op.planeH-1))
+		if op.cursorY < 0 {
+			op.cursorY = 0
+		}
+		if op.cursorY >= op.planeH {
+			op.cursorY = op.planeH - 1
+		}
 	}
 }
 
@@ -369,4 +472,9 @@ func (op *OKLCHPicker) SetColor(c tcell.Color) {
 	if op.cursorY >= op.planeH {
 		op.cursorY = op.planeH - 1
 	}
+}
+
+// ResetFocus resets focus to the plane (first tab stop).
+func (op *OKLCHPicker) ResetFocus() {
+	op.activeControl = OKLCHControlPlane
 }

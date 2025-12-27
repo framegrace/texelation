@@ -52,6 +52,14 @@ type ColorPickerResult struct {
 	R, G, B int32
 }
 
+// focusArea identifies which part of the expanded picker has focus.
+type focusArea int
+
+const (
+	focusTabBar  focusArea = iota // Focus is on the mode tab bar
+	focusContent                  // Focus is on the mode content
+)
+
 // ColorPicker is a comprehensive color selection widget.
 // Collapsed: shows a 2-char color sample + label
 // Expanded: shows tabs for each enabled mode
@@ -63,6 +71,7 @@ type ColorPicker struct {
 	expanded    bool
 	currentMode ColorPickerMode
 	result      ColorPickerResult
+	focus       focusArea // Which area has focus when expanded
 
 	// Mode pickers
 	modes      map[ColorPickerMode]colorpicker.ModePicker
@@ -124,9 +133,10 @@ func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker {
 	}
 
 	// Set initial focused style from theme
+	// Use border.focus for the border line color (foreground), keep bg.surface as background
 	tm := theme.Get()
-	focusFg := tm.GetSemanticColor("text.primary")
-	focusBg := tm.GetSemanticColor("border.focus")
+	focusFg := tm.GetSemanticColor("border.focus")
+	focusBg := tm.GetSemanticColor("bg.surface")
 	cp.SetFocusedStyle(tcell.StyleDefault.Foreground(focusFg).Background(focusBg), true)
 
 	cp.calculateSize()
@@ -201,6 +211,12 @@ func (cp *ColorPicker) GetResult() ColorPickerResult {
 // Toggle expands or collapses the picker.
 func (cp *ColorPicker) Toggle() {
 	cp.expanded = !cp.expanded
+	// When expanded, raise z-index so picker draws on top of other widgets
+	if cp.expanded {
+		cp.SetZIndex(100) // High z-index for overlay
+	} else {
+		cp.SetZIndex(0) // Normal z-index when collapsed
+	}
 	cp.calculateSize()
 	cp.invalidate()
 }
@@ -219,6 +235,18 @@ func (cp *ColorPicker) Collapse() {
 	}
 }
 
+// IsModal returns true when the picker is expanded (modal state).
+// Implements core.Modal interface.
+func (cp *ColorPicker) IsModal() bool {
+	return cp.expanded
+}
+
+// DismissModal collapses the picker when clicking outside.
+// Implements core.Modal interface.
+func (cp *ColorPicker) DismissModal() {
+	cp.Collapse()
+}
+
 // Draw renders the color picker.
 func (cp *ColorPicker) Draw(painter *core.Painter) {
 	if cp.expanded {
@@ -228,7 +256,7 @@ func (cp *ColorPicker) Draw(painter *core.Painter) {
 	}
 }
 
-// drawCollapsed renders: [█A] Label: source
+// drawCollapsed renders: [█A] source
 func (cp *ColorPicker) drawCollapsed(painter *core.Painter) {
 	tm := theme.Get()
 	fg := tm.GetSemanticColor("text.primary")
@@ -263,12 +291,6 @@ func (cp *ColorPicker) drawCollapsed(painter *core.Painter) {
 	painter.SetCell(x, y, ']', style)
 	x += 2
 
-	// Draw label
-	if len(cp.config.Label) > 0 {
-		painter.DrawText(x, y, cp.config.Label+":", style)
-		x += len(cp.config.Label) + 2
-	}
-
 	// Draw source (truncated if needed)
 	source := cp.result.Source
 	maxLen := cp.Rect.W - (x - cp.Rect.X)
@@ -296,13 +318,28 @@ func (cp *ColorPicker) drawExpanded(painter *core.Painter) {
 	x := cp.Rect.X + 2
 	y := cp.Rect.Y
 
+	// When tab bar has focus, show a focus indicator
+	tabBarFocused := cp.focus == focusTabBar
+	if tabBarFocused {
+		painter.SetCell(cp.Rect.X+1, y, '►', baseStyle.Bold(true))
+	}
+
 	for _, mode := range cp.modeOrder {
 		tabName := " " + mode.String() + " "
 		isActive := mode == cp.currentMode
 
 		tabStyle := baseStyle
 		if isActive {
-			tabStyle = tabStyle.Reverse(true)
+			if tabBarFocused {
+				// Active tab with tab bar focus: bold + reverse
+				tabStyle = tabStyle.Reverse(true).Bold(true)
+			} else {
+				// Active tab without tab bar focus: just reverse
+				tabStyle = tabStyle.Reverse(true)
+			}
+		} else if tabBarFocused {
+			// Inactive tabs when tab bar focused: dim
+			tabStyle = tabStyle.Dim(true)
 		}
 
 		painter.DrawText(x, y, tabName, tabStyle)
@@ -340,12 +377,13 @@ func (cp *ColorPicker) HandleKey(ev *tcell.EventKey) bool {
 		// Collapsed: Enter/Space to expand
 		if ev.Key() == tcell.KeyEnter || ev.Rune() == ' ' {
 			cp.Expand()
+			cp.focus = focusTabBar // Start with focus on tab bar
 			return true
 		}
 		return false
 	}
 
-	// Expanded state
+	// Expanded state - global keys
 	switch ev.Key() {
 	case tcell.KeyEsc:
 		cp.Collapse()
@@ -372,7 +410,7 @@ func (cp *ColorPicker) HandleKey(ev *tcell.EventKey) bool {
 		return true
 	}
 
-	// Check for mode switching with number keys
+	// Number keys always switch modes (regardless of focus area)
 	if ev.Key() == tcell.KeyRune {
 		switch ev.Rune() {
 		case '1':
@@ -393,7 +431,51 @@ func (cp *ColorPicker) HandleKey(ev *tcell.EventKey) bool {
 		}
 	}
 
-	// Delegate to active mode
+	// Handle based on focus area
+	if cp.focus == focusTabBar {
+		return cp.handleTabBarKey(ev)
+	}
+	return cp.handleContentKey(ev)
+}
+
+// handleTabBarKey handles keys when focus is on the tab bar.
+func (cp *ColorPicker) handleTabBarKey(ev *tcell.EventKey) bool {
+	switch ev.Key() {
+	case tcell.KeyTab:
+		// Tab moves to content, reset mode focus to first element
+		cp.focus = focusContent
+		if cp.activeMode != nil {
+			cp.activeMode.ResetFocus()
+		}
+		cp.invalidate()
+		return true
+
+	case tcell.KeyLeft:
+		// Previous mode
+		cp.cycleModeBackward()
+		return true
+
+	case tcell.KeyRight:
+		// Next mode
+		cp.cycleModeForward()
+		return true
+
+	case tcell.KeyDown:
+		// Enter content, reset mode focus to first element
+		cp.focus = focusContent
+		if cp.activeMode != nil {
+			cp.activeMode.ResetFocus()
+		}
+		cp.invalidate()
+		return true
+	}
+
+	return false
+}
+
+// handleContentKey handles keys when focus is on the mode content.
+func (cp *ColorPicker) handleContentKey(ev *tcell.EventKey) bool {
+	// Let mode try to handle the key first (including Tab for internal navigation)
 	if cp.activeMode != nil {
 		if cp.activeMode.HandleKey(ev) {
 			cp.invalidate()
@@ -401,7 +483,54 @@ func (cp *ColorPicker) HandleKey(ev *tcell.EventKey) bool {
 		}
 	}
 
+	// Mode didn't handle it - check if we should go to tab bar
+	switch ev.Key() {
+	case tcell.KeyTab:
+		// Mode didn't handle Tab, return to tab bar
+		cp.focus = focusTabBar
+		cp.invalidate()
+		return true
+
+	case tcell.KeyUp:
+		// Mode didn't handle Up, go to tab bar
+		cp.focus = focusTabBar
+		cp.invalidate()
+		return true
+	}
+
 	return false
+}
+
+// cycleModeForward moves to the next mode.
+func (cp *ColorPicker) cycleModeForward() {
+	if len(cp.modeOrder) <= 1 {
+		return
+	}
+	currentIdx := 0
+	for i, m := range cp.modeOrder {
+		if m == cp.currentMode {
+			currentIdx = i
+			break
+		}
+	}
+	nextIdx := (currentIdx + 1) % len(cp.modeOrder)
+	cp.selectMode(cp.modeOrder[nextIdx])
+}
+
+// cycleModeBackward moves to the previous mode.
+func (cp *ColorPicker) cycleModeBackward() {
+	if len(cp.modeOrder) <= 1 {
+		return
+	}
+	currentIdx := 0
+	for i, m := range cp.modeOrder {
+		if m == cp.currentMode {
+			currentIdx = i
+			break
+		}
+	}
+	prevIdx := (currentIdx - 1 + len(cp.modeOrder)) % len(cp.modeOrder)
+	cp.selectMode(cp.modeOrder[prevIdx])
 }
 
 // HandleMouse processes mouse input.
@@ -469,17 +598,24 @@ func (cp *ColorPicker) selectMode(mode ColorPickerMode) {
 // calculateSize updates widget size based on state.
 func (cp *ColorPicker) calculateSize() {
 	if !cp.expanded {
-		// Collapsed: [█A] Label: source
-		w := 5 // [█A]
-		if len(cp.config.Label) > 0 {
-			w += len(cp.config.Label) + 2 // " Label:"
-		}
-		w += len(cp.result.Source) + 1 // " source"
+		// Collapsed: [█A] source
+		w := 5                          // [█A]
+		w += len(cp.result.Source) + 1  // " source"
 		if w < 20 {
 			w = 20
 		}
 		cp.Resize(w, 1)
 	} else {
+		// Calculate minimum width needed for tabs
+		// Format: ┌► Semantic  Palette  Custom ─┐
+		// = 2 (left border + focus indicator) + tabs + 1 (right border)
+		tabsWidth := 2 // Left border + space for focus indicator
+		for _, mode := range cp.modeOrder {
+			tabName := " " + mode.String() + " "
+			tabsWidth += len(tabName) + 1 // tab + spacing
+		}
+		tabsWidth += 1 // Right border
+
 		// Expanded: get preferred size from active mode
 		w, h := 30, 12 // Default minimum
 		if cp.activeMode != nil {
@@ -491,6 +627,12 @@ func (cp *ColorPicker) calculateSize() {
 				h = mh + 2 // +2 for border
 			}
 		}
+
+		// Ensure width is at least enough for all tabs
+		if tabsWidth > w {
+			w = tabsWidth
+		}
+
 		cp.Resize(w, h)
 	}
 }
