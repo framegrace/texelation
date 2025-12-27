@@ -10,7 +10,7 @@ SERVER_PKG := ./cmd/texel-server
 CORE_APPS := texelterm help
 
 # All standalone app binaries in cmd/
-ALL_APPS := texelterm help app-runner texel-stress texelui-demo texelui-demo2 colorpicker-demo
+ALL_APPS := texelterm help app-runner texel-stress texelui-demo
 
 .PHONY: build install run test lint fmt tidy clean help server client release build-apps
 
@@ -30,8 +30,6 @@ build-apps: ## Build ALL app binaries into bin/
 	$(GO_ENV) go build -o $(BIN_DIR)/app-runner ./cmd/app-runner
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-stress ./cmd/texel-stress
 	$(GO_ENV) go build -o $(BIN_DIR)/texelui-demo ./cmd/texelui-demo
-	$(GO_ENV) go build -o $(BIN_DIR)/texelui-demo2 ./cmd/texelui-demo2
-	$(GO_ENV) go build -o $(BIN_DIR)/colorpicker-demo ./cmd/colorpicker-demo
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texelation ./cmd/texelation
