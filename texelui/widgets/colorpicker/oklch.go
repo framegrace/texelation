@@ -374,12 +374,13 @@ func (op *OKLCHPicker) handleLoadButtonKey(ev *tcell.EventKey) bool {
 func (op *OKLCHPicker) handleLoadPickerKey(ev *tcell.EventKey) bool {
 	switch ev.Key() {
 	case tcell.KeyEsc:
-		// Cancel and close load picker
+		// Cancel and close load picker, return to plane
 		op.showLoadPicker = false
+		op.activeControl = OKLCHControlPlane
 		return true
 
 	case tcell.KeyEnter:
-		// Load the selected color and close
+		// Load the selected color and close, return to plane
 		var result PickerResult
 		if op.loadPickerMode == LoadPickerSemantic {
 			result = op.semanticPicker.GetResult()
@@ -389,6 +390,7 @@ func (op *OKLCHPicker) handleLoadPickerKey(ev *tcell.EventKey) bool {
 		// Convert to OKLCH
 		op.SetColor(result.Color)
 		op.showLoadPicker = false
+		op.activeControl = OKLCHControlPlane
 		return true
 
 	case tcell.KeyLeft:
