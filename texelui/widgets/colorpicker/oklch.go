@@ -83,9 +83,10 @@ func (op *OKLCHPicker) Draw(painter *core.Painter, rect core.Rect) {
 	// Fill background
 	painter.Fill(rect, ' ', baseStyle)
 
-	// If load picker is active, draw it instead
+	// If load picker is active, draw it instead with expanded width
 	if op.showLoadPicker {
-		op.drawLoadPicker(painter, rect, fg, bg)
+		loadRect := core.Rect{X: rect.X, Y: rect.Y, W: rect.W + 4, H: rect.H}
+		op.drawLoadPicker(painter, loadRect, fg, bg)
 		return
 	}
 
@@ -556,13 +557,19 @@ func (op *OKLCHPicker) updateCursorFromValues() {
 
 func (op *OKLCHPicker) HandleMouse(ev *tcell.EventMouse, rect core.Rect) bool {
 	x, y := ev.Position()
-	if x < rect.X || y < rect.Y || x >= rect.X+rect.W || y >= rect.Y+rect.H {
-		return false
+
+	// If load picker is active, use expanded rect
+	if op.showLoadPicker {
+		loadRect := core.Rect{X: rect.X, Y: rect.Y, W: rect.W + 4, H: rect.H}
+		if x < loadRect.X || y < loadRect.Y || x >= loadRect.X+loadRect.W || y >= loadRect.Y+loadRect.H {
+			return false
+		}
+		return op.handleLoadPickerMouse(ev, loadRect)
 	}
 
-	// If load picker is active, handle its mouse events
-	if op.showLoadPicker {
-		return op.handleLoadPickerMouse(ev, rect)
+	// Normal bounds check for main picker
+	if x < rect.X || y < rect.Y || x >= rect.X+rect.W || y >= rect.Y+rect.H {
+		return false
 	}
 
 	planeRect := core.Rect{X: rect.X, Y: rect.Y, W: op.planeW, H: op.planeH}
