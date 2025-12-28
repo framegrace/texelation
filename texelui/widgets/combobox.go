@@ -160,19 +160,24 @@ func (cb *ComboBox) Draw(p *core.Painter) {
 	accentFg := tm.GetSemanticColor("accent")
 	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
 	dimStyle := tcell.StyleDefault.Foreground(dimFg).Background(bg)
-	btnStyle := baseStyle
+	btnStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
 
 	focused := cb.IsFocused()
 	if focused {
+		// Add underline to show the input field extent when focused
+		baseStyle = baseStyle.Underline(true)
+		dimStyle = dimStyle.Underline(true)
 		btnStyle = tcell.StyleDefault.Foreground(accentFg).Background(bg)
 	}
 
-	// Fill background
-	p.Fill(cb.Rect, ' ', baseStyle)
+	// Fill background (with underline when focused for input area)
+	inputWidth := cb.Rect.W - 3 // Reserve 3 chars for button " ▼ "
+	p.Fill(core.Rect{X: cb.Rect.X, Y: cb.Rect.Y, W: inputWidth, H: 1}, ' ', baseStyle)
+	// Fill button area without underline
+	p.Fill(core.Rect{X: cb.Rect.X + inputWidth, Y: cb.Rect.Y, W: 3, H: 1}, ' ', btnStyle)
 
 	x := cb.Rect.X
 	y := cb.Rect.Y
-	inputWidth := cb.Rect.W - 3 // Reserve 3 chars for button " ▼ "
 
 	// Draw text input area
 	displayText := cb.Text
@@ -200,11 +205,12 @@ func (cb *ComboBox) Draw(p *core.Painter) {
 
 	// Draw placeholder if empty
 	if displayText == "" && cb.Placeholder != "" && !focused {
+		placeholderStyle := tcell.StyleDefault.Foreground(dimFg).Background(bg)
 		for i, ch := range cb.Placeholder {
 			if i >= inputWidth {
 				break
 			}
-			p.SetCell(x+i, y, ch, dimStyle)
+			p.SetCell(x+i, y, ch, placeholderStyle)
 		}
 	}
 
