@@ -150,16 +150,30 @@ func (p *Pane) HandleKey(ev *tcell.EventKey) bool {
 	return false
 }
 
-// HandleMouse routes mouse events to children.
+// HandleMouse routes mouse events to children, respecting Z-index.
 func (p *Pane) HandleMouse(ev *tcell.EventMouse) bool {
 	x, y := ev.Position()
 	if !p.HitTest(x, y) {
 		return false
 	}
 
-	// Check children in reverse order
-	for i := len(p.children) - 1; i >= 0; i-- {
-		child := p.children[i]
+	// Sort children by Z-index descending (highest first) for mouse routing
+	// This ensures expanded dropdowns and modals receive events first
+	sorted := make([]core.Widget, len(p.children))
+	copy(sorted, p.children)
+	sort.Slice(sorted, func(i, j int) bool {
+		zi, zj := 0, 0
+		if z, ok := sorted[i].(core.ZIndexer); ok {
+			zi = z.ZIndex()
+		}
+		if z, ok := sorted[j].(core.ZIndexer); ok {
+			zj = z.ZIndex()
+		}
+		return zi > zj // Descending order for mouse (highest Z first)
+	})
+
+	// Check children in Z-order (highest first)
+	for _, child := range sorted {
 		if child.HitTest(x, y) {
 			if ma, ok := child.(core.MouseAware); ok {
 				return ma.HandleMouse(ev)
