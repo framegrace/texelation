@@ -62,13 +62,19 @@ func (i *Input) SetInvalidator(fn func(core.Rect)) { i.inv = fn }
 // Draw renders the input field with text and caret.
 func (i *Input) Draw(painter *core.Painter) {
 	style := i.EffectiveStyle(i.Style)
+	focused := i.IsFocused()
 
-	// Fill background
+	// When focused, add underline to show the input field extent
+	if focused {
+		style = style.Underline(true)
+	}
+
+	// Fill background with underline when focused
 	painter.Fill(core.Rect{X: i.Rect.X, Y: i.Rect.Y, W: i.Rect.W, H: 1}, ' ', style)
 
 	// Determine what to display
 	displayText := i.Text
-	if displayText == "" && i.Placeholder != "" && !i.IsFocused() {
+	if displayText == "" && i.Placeholder != "" && !focused {
 		// Show placeholder in dimmed color when not focused and empty
 		_, bg, _ := style.Decompose()
 		// Create a dimmed version by using gray

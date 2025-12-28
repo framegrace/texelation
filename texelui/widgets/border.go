@@ -18,23 +18,27 @@ type Border struct {
 }
 
 func NewBorder(x, y, w, h int, style tcell.Style) *Border {
-    b := &Border{Style: style}
-    // Default focused style from theme (fg override), bg same as base style
-    tm := theme.Get()
-    ffg := tm.GetSemanticColor("border.active")
-    fg, bg, _ := style.Decompose()
-    if bg == tcell.ColorDefault {
-        bg = tm.GetSemanticColor("bg.surface")
-    }
-    b.FocusedStyle = tcell.StyleDefault.Foreground(ffg).Background(bg)
-    // Also set BaseWidget focused style for self-focus (theme defaults)
-    fbg := bg
-    if fg == tcell.ColorDefault {
-        fg = tm.GetSemanticColor("text.primary")
-    }
-    b.SetFocusedStyle(tcell.StyleDefault.Foreground(ffg).Background(fbg), true)
-	// default single-line charset
-	b.Charset = [6]rune{'─', '│', '┌', '┐', '└', '┘'}
+	b := &Border{}
+
+	// Resolve default colors from theme
+	tm := theme.Get()
+	fg, bg, attr := style.Decompose()
+	if fg == tcell.ColorDefault {
+		fg = tm.GetSemanticColor("text.primary")
+	}
+	if bg == tcell.ColorDefault {
+		bg = tm.GetSemanticColor("bg.surface")
+	}
+	// Update style with resolved colors
+	b.Style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attr)
+
+	// Focused style uses border.active foreground
+	ffg := tm.GetSemanticColor("border.active")
+	b.FocusedStyle = tcell.StyleDefault.Foreground(ffg).Background(bg)
+	b.SetFocusedStyle(tcell.StyleDefault.Foreground(ffg).Background(bg), true)
+
+	// Default rounded corner charset
+	b.Charset = [6]rune{'─', '│', '╭', '╮', '╰', '╯'}
 	b.SetPosition(x, y)
 	b.Resize(w, h)
 	return b
@@ -57,6 +61,14 @@ func (b *Border) SetChild(w core.Widget) {
 		if ia, ok := b.Child.(core.InvalidationAware); ok {
 			ia.SetInvalidator(b.invalidate)
 		}
+	}
+}
+
+func (b *Border) SetPosition(x, y int) {
+	b.BaseWidget.SetPosition(x, y)
+	if b.Child != nil {
+		cr := b.ClientRect()
+		b.Child.SetPosition(cr.X, cr.Y)
 	}
 }
 

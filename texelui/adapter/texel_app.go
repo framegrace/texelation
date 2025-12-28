@@ -1,10 +1,13 @@
 package adapter
 
 import (
-    "github.com/gdamore/tcell/v2"
-    "texelation/texel"
-    "texelation/texelui/core"
-    "texelation/texelui/widgets"
+	"fmt"
+
+	"github.com/gdamore/tcell/v2"
+	"texelation/texel"
+	"texelation/texelui/core"
+	"texelation/texelui/primitives"
+	"texelation/texelui/widgets"
 )
 
 // UIApp adapts a TexelUI UIManager to the texel.App interface.
@@ -58,156 +61,220 @@ func (a *UIApp) SetRefreshNotifier(ch chan<- bool) { a.refresh = ch; a.ui.SetRef
 // Expose UI for composition
 func (a *UIApp) UI() *core.UIManager { return a.ui }
 
-// NewTextEditorApp constructs a minimal floating TextArea inside a bordered pane.
-func NewTextEditorApp(title string) *UIApp {
+// NewWidgetShowcaseApp creates a tabbed demo showcasing all TexelUI widgets.
+// This is the unified demo that replaces individual demos.
+func NewWidgetShowcaseApp(title string) *UIApp {
 	ui := core.NewUIManager()
-	// base pane
-	pane := widgets.NewPane(0, 0, 0, 0, tcell.StyleDefault)
-	ui.AddWidget(pane)
-	// border + text area
-	border := widgets.NewBorder(0, 0, 0, 0, tcell.StyleDefault)
-	ta := widgets.NewTextArea(0, 0, 0, 0)
-	border.SetChild(ta)
-	ui.AddWidget(border)
-	ui.Focus(ta)
+
+	// Create tab layout
+	tabs := []primitives.TabItem{
+		{Label: "Inputs", ID: "inputs"},
+		{Label: "Layouts", ID: "layouts"},
+		{Label: "Widgets", ID: "widgets"},
+	}
+	tabLayout := widgets.NewTabLayout(0, 0, 80, 24, tabs)
+
+	// === Inputs Tab ===
+	inputsPane := createInputsTab()
+	tabLayout.SetTabContent(0, inputsPane)
+
+	// === Layouts Tab ===
+	layoutsPane := createLayoutsTab()
+	tabLayout.SetTabContent(1, layoutsPane)
+
+	// === Widgets Tab ===
+	widgetsPane := createWidgetsTab(ui)
+	tabLayout.SetTabContent(2, widgetsPane)
+
+	ui.AddWidget(tabLayout)
+	ui.Focus(tabLayout)
+
 	app := NewUIApp(title, ui)
 	app.onResize = func(w, h int) {
-		pane.SetPosition(0, 0)
-		pane.Resize(w, h)
-		border.SetPosition(0, 0)
-		border.Resize(w, h)
+		tabLayout.SetPosition(0, 0)
+		tabLayout.Resize(w, h)
 	}
 	return app
 }
 
-// NewDualTextEditorApp constructs a UI with two bordered TextAreas side-by-side to test focus.
-func NewDualTextEditorApp(title string) *UIApp {
-    ui := core.NewUIManager()
+// createInputsTab creates the Inputs tab content with Input, TextArea, ComboBox, ColorPicker.
+func createInputsTab() *widgets.Pane {
+	pane := widgets.NewPane(0, 0, 80, 20, tcell.StyleDefault)
 
-    // Base pane background
-    pane := widgets.NewPane(0, 0, 0, 0, tcell.StyleDefault)
-    ui.AddWidget(pane)
+	// Input field
+	nameLabel := widgets.NewLabel(2, 1, 12, 1, "Name:")
+	nameInput := widgets.NewInput(14, 1, 30)
+	nameInput.Placeholder = "Enter your name"
+	pane.AddChild(nameLabel)
+	pane.AddChild(nameInput)
 
-    // Left editor
-    leftBorder := widgets.NewBorder(0, 0, 0, 0, tcell.StyleDefault)
-    leftTA := widgets.NewTextArea(0, 0, 0, 0)
-    leftBorder.SetChild(leftTA)
-    ui.AddWidget(leftBorder)
+	// Email field
+	emailLabel := widgets.NewLabel(2, 3, 12, 1, "Email:")
+	emailInput := widgets.NewInput(14, 3, 30)
+	emailInput.Placeholder = "user@example.com"
+	pane.AddChild(emailLabel)
+	pane.AddChild(emailInput)
 
-    // Right editor
-    rightBorder := widgets.NewBorder(0, 0, 0, 0, tcell.StyleDefault)
-    rightTA := widgets.NewTextArea(0, 0, 0, 0)
-    rightBorder.SetChild(rightTA)
-    ui.AddWidget(rightBorder)
+	// ComboBox (editable) - for country selection with autocomplete
+	countryLabel := widgets.NewLabel(2, 5, 12, 1, "Country:")
+	countries := []string{
+		"Argentina", "Australia", "Austria", "Belgium", "Brazil",
+		"Canada", "Chile", "China", "Denmark", "Egypt",
+		"Finland", "France", "Germany", "Greece", "India",
+		"Ireland", "Italy", "Japan", "Mexico", "Netherlands",
+		"New Zealand", "Norway", "Poland", "Portugal", "Russia",
+		"South Africa", "Spain", "Sweden", "Switzerland",
+		"United Kingdom", "United States",
+	}
+	countryCombo := widgets.NewComboBox(14, 5, 30, countries, true)
+	countryCombo.Placeholder = "Type to search..."
+	pane.AddChild(countryLabel)
+	pane.AddChild(countryCombo)
 
-    // Start focused on left
-    ui.Focus(leftTA)
+	// ComboBox (non-editable) - for priority selection
+	priorityLabel := widgets.NewLabel(2, 7, 12, 1, "Priority:")
+	priorities := []string{"Low", "Medium", "High", "Critical"}
+	priorityCombo := widgets.NewComboBox(14, 7, 20, priorities, false)
+	priorityCombo.SetValue("Medium")
+	pane.AddChild(priorityLabel)
+	pane.AddChild(priorityCombo)
 
-    app := NewUIApp(title, ui)
-    app.onResize = func(w, h int) {
-        pane.SetPosition(0, 0)
-        pane.Resize(w, h)
+	// TextArea
+	notesLabel := widgets.NewLabel(2, 9, 12, 1, "Notes:")
+	notesBorder := widgets.NewBorder(14, 9, 40, 5, tcell.StyleDefault)
+	notesArea := widgets.NewTextArea(0, 0, 38, 3)
+	notesBorder.SetChild(notesArea)
+	pane.AddChild(notesLabel)
+	pane.AddChild(notesBorder)
 
-        // Split vertical into two columns
-        lw := w / 2
-        rw := w - lw
-        leftBorder.SetPosition(0, 0)
-        leftBorder.Resize(lw, h)
-        rightBorder.SetPosition(lw, 0)
-        rightBorder.Resize(rw, h)
-    }
-    return app
+	// ColorPicker
+	colorLabel := widgets.NewLabel(2, 15, 12, 1, "Color:")
+	colorPicker := widgets.NewColorPicker(14, 15, widgets.ColorPickerConfig{
+		EnableSemantic: true,
+		EnablePalette:  true,
+		EnableOKLCH:    true,
+		Label:          "Theme",
+	})
+	colorPicker.SetValue("accent")
+	pane.AddChild(colorLabel)
+	pane.AddChild(colorPicker)
+
+	// Help text
+	helpLabel := widgets.NewLabel(2, 17, 70, 1, "Tab: navigate | Up/Down: dropdown | Enter: select | Type: filter (editable)")
+	pane.AddChild(helpLabel)
+
+	return pane
 }
 
-// NewColorPickerDemoApp constructs a demo for the ColorPicker widget.
-func NewColorPickerDemoApp(title string) *UIApp {
-    ui := core.NewUIManager()
+// createLayoutsTab creates the Layouts tab content demonstrating VBox and HBox.
+func createLayoutsTab() *widgets.Pane {
+	pane := widgets.NewPane(0, 0, 80, 20, tcell.StyleDefault)
 
-    // Base pane background
-    pane := widgets.NewPane(0, 0, 0, 0, tcell.StyleDefault)
-    ui.AddWidget(pane)
+	// Title
+	title := widgets.NewLabel(2, 1, 40, 1, "Layout Managers Demo")
 
-    // Title label
-    titleLabel := widgets.NewLabel(2, 1, 0, 1, "Color Picker Demo - Press Tab to navigate, Enter to select")
-    ui.AddWidget(titleLabel)
+	// VBox demonstration
+	vboxLabel := widgets.NewLabel(2, 3, 20, 1, "VBox (vertical):")
+	vboxBorder := widgets.NewBorder(2, 4, 25, 8, tcell.StyleDefault)
+	vboxPane := widgets.NewPane(0, 0, 23, 6, tcell.StyleDefault)
+	vboxBtn1 := widgets.NewButton(1, 1, 20, 1, "Button 1")
+	vboxBtn2 := widgets.NewButton(1, 2, 20, 1, "Button 2")
+	vboxBtn3 := widgets.NewButton(1, 3, 20, 1, "Button 3")
+	vboxPane.AddChild(vboxBtn1)
+	vboxPane.AddChild(vboxBtn2)
+	vboxPane.AddChild(vboxBtn3)
+	vboxBorder.SetChild(vboxPane)
 
-    // Grid layout: labels on left, pickers on right
-    // Label column starts at x=2, picker column starts at x=16 (after longest label + colon + space)
-    const labelCol = 2
-    const pickerCol = 16
+	// HBox demonstration
+	hboxLabel := widgets.NewLabel(30, 3, 20, 1, "HBox (horizontal):")
+	hboxBorder := widgets.NewBorder(30, 4, 40, 4, tcell.StyleDefault)
+	hboxPane := widgets.NewPane(0, 0, 38, 2, tcell.StyleDefault)
+	hboxBtn1 := widgets.NewButton(1, 0, 10, 1, "Left")
+	hboxBtn2 := widgets.NewButton(13, 0, 10, 1, "Center")
+	hboxBtn3 := widgets.NewButton(25, 0, 10, 1, "Right")
+	hboxPane.AddChild(hboxBtn1)
+	hboxPane.AddChild(hboxBtn2)
+	hboxPane.AddChild(hboxBtn3)
+	hboxBorder.SetChild(hboxPane)
 
-    // Row 1: Accent (all modes)
-    label1 := widgets.NewLabel(labelCol, 3, 12, 1, "Accent:")
-    ui.AddWidget(label1)
-    picker1 := widgets.NewColorPicker(pickerCol, 3, widgets.ColorPickerConfig{
-        EnableSemantic: true,
-        EnablePalette:  true,
-        EnableOKLCH:    true,
-        Label:          "Accent",
-    })
-    picker1.SetValue("accent")
-    ui.AddWidget(picker1)
+	// Help text
+	helpLabel := widgets.NewLabel(2, 13, 60, 1, "Tab: navigate between buttons")
 
-    // Row 2: Text Color (semantic only)
-    label2 := widgets.NewLabel(labelCol, 4, 12, 1, "Text Color:")
-    ui.AddWidget(label2)
-    picker2 := widgets.NewColorPicker(pickerCol, 4, widgets.ColorPickerConfig{
-        EnableSemantic: true,
-        EnablePalette:  false,
-        EnableOKLCH:    false,
-        Label:          "Text",
-    })
-    picker2.SetValue("text.primary")
-    ui.AddWidget(picker2)
+	pane.AddChild(title)
+	pane.AddChild(vboxLabel)
+	pane.AddChild(vboxBorder)
+	pane.AddChild(hboxLabel)
+	pane.AddChild(hboxBorder)
+	pane.AddChild(helpLabel)
 
-    // Row 3: Highlight (palette only)
-    label3 := widgets.NewLabel(labelCol, 5, 12, 1, "Highlight:")
-    ui.AddWidget(label3)
-    picker3 := widgets.NewColorPicker(pickerCol, 5, widgets.ColorPickerConfig{
-        EnableSemantic: false,
-        EnablePalette:  true,
-        EnableOKLCH:    false,
-        Label:          "Highlight",
-    })
-    picker3.SetValue("@mauve")
-    ui.AddWidget(picker3)
+	return pane
+}
 
-    // Row 4: Custom (OKLCH only)
-    label4 := widgets.NewLabel(labelCol, 6, 12, 1, "Custom:")
-    ui.AddWidget(label4)
-    picker4 := widgets.NewColorPicker(pickerCol, 6, widgets.ColorPickerConfig{
-        EnableSemantic: false,
-        EnablePalette:  false,
-        EnableOKLCH:    true,
-        Label:          "Custom",
-    })
-    picker4.SetValue("#ff6b6b")
-    ui.AddWidget(picker4)
+// createWidgetsTab creates the Widgets tab content with Label, Button, Checkbox.
+func createWidgetsTab(ui *core.UIManager) *widgets.Pane {
+	pane := widgets.NewPane(0, 0, 80, 20, tcell.StyleDefault)
 
-    // Status label for showing selection results
-    statusLabel := widgets.NewLabel(2, 8, 0, 1, "Select a color picker and press Enter to expand")
-    ui.AddWidget(statusLabel)
+	// Title
+	title := widgets.NewLabel(2, 1, 40, 1, "Basic Widgets Demo")
 
-    // Set up callbacks to update status
-    updateStatus := func(result widgets.ColorPickerResult) {
-        statusLabel.Text = "Selected: " + result.Source + " (" + result.Mode.String() + ")"
-    }
-    picker1.OnChange = updateStatus
-    picker2.OnChange = updateStatus
-    picker3.OnChange = updateStatus
-    picker4.OnChange = updateStatus
+	// Labels with different alignments
+	labelTitle := widgets.NewLabel(2, 3, 20, 1, "Labels:")
+	leftLabel := widgets.NewLabel(2, 4, 20, 1, "Left aligned")
+	leftLabel.Align = widgets.AlignLeft
+	centerLabel := widgets.NewLabel(2, 5, 20, 1, "Center aligned")
+	centerLabel.Align = widgets.AlignCenter
+	rightLabel := widgets.NewLabel(2, 6, 20, 1, "Right aligned")
+	rightLabel.Align = widgets.AlignRight
 
-    // Focus first picker
-    ui.Focus(picker1)
+	// Buttons
+	buttonTitle := widgets.NewLabel(30, 3, 20, 1, "Buttons:")
+	statusLabel := widgets.NewLabel(30, 8, 40, 1, "Click a button...")
 
-    app := NewUIApp(title, ui)
-    app.onResize = func(w, h int) {
-        pane.SetPosition(0, 0)
-        pane.Resize(w, h)
+	actionBtn := widgets.NewButton(30, 4, 15, 1, "Action")
+	actionBtn.OnClick = func() {
+		statusLabel.Text = "Action button clicked!"
+	}
 
-        // Update title label width
-        titleLabel.Resize(w-4, 1)
-        statusLabel.Resize(w-4, 1)
-    }
-    return app
+	toggleBtn := widgets.NewButton(30, 5, 15, 1, "Toggle")
+	toggleBtn.OnClick = func() {
+		statusLabel.Text = "Toggle button clicked!"
+	}
+
+	// Checkboxes
+	checkTitle := widgets.NewLabel(2, 8, 20, 1, "Checkboxes:")
+	check1 := widgets.NewCheckbox(2, 9, "Option A")
+	check2 := widgets.NewCheckbox(2, 10, "Option B")
+	check3 := widgets.NewCheckbox(2, 11, "Option C (checked)")
+	check3.Checked = true
+
+	// Update status on checkbox change
+	check1.OnChange = func(checked bool) {
+		statusLabel.Text = fmt.Sprintf("Option A: %v", checked)
+	}
+	check2.OnChange = func(checked bool) {
+		statusLabel.Text = fmt.Sprintf("Option B: %v", checked)
+	}
+	check3.OnChange = func(checked bool) {
+		statusLabel.Text = fmt.Sprintf("Option C: %v", checked)
+	}
+
+	// Help text
+	helpLabel := widgets.NewLabel(2, 14, 60, 1, "Tab: navigate | Space/Enter: activate | Esc: quit")
+
+	pane.AddChild(title)
+	pane.AddChild(labelTitle)
+	pane.AddChild(leftLabel)
+	pane.AddChild(centerLabel)
+	pane.AddChild(rightLabel)
+	pane.AddChild(buttonTitle)
+	pane.AddChild(actionBtn)
+	pane.AddChild(toggleBtn)
+	pane.AddChild(statusLabel)
+	pane.AddChild(checkTitle)
+	pane.AddChild(check1)
+	pane.AddChild(check2)
+	pane.AddChild(check3)
+	pane.AddChild(helpLabel)
+
+	return pane
 }
