@@ -507,15 +507,16 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 	x, y := ev.Position()
 
 	// Check if click is on the widget or dropdown
-	inMain := cb.HitTest(x, y)
+	inMainRect := cb.Rect.Contains(x, y)
 	dr := cb.dropdownRect()
 	// Dropdown box is shifted 1 char left
 	boxX := dr.X - 1
 	boxW := dr.W + 1
+	contentY := dr.Y + 1
 	// Dropdown has: top border at dr.Y, content from dr.Y+1 to dr.Y+dr.H, bottom border at dr.Y+dr.H+1
 	inDropdown := cb.expanded && x >= boxX && x < boxX+boxW && y >= dr.Y && y < dr.Y+dr.H+2
 
-	if !inMain && !inDropdown {
+	if !inMainRect && !inDropdown {
 		if cb.expanded {
 			cb.expanded = false
 			cb.invalidate()
@@ -523,12 +524,47 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 		return false
 	}
 
+	// Handle mouse wheel for dropdown scrolling
+	if cb.expanded && inDropdown {
+		if ev.Buttons()&tcell.WheelUp != 0 {
+			if cb.scrollOffset > 0 {
+				cb.scrollOffset--
+				cb.invalidate()
+			}
+			return true
+		}
+		if ev.Buttons()&tcell.WheelDown != 0 {
+			if cb.scrollOffset+dr.H < len(cb.filtered) {
+				cb.scrollOffset++
+				cb.invalidate()
+			}
+			return true
+		}
+	}
+
+	// Only handle left clicks for selection
 	if ev.Buttons() != tcell.Button1 {
 		return true
 	}
 
+	// Click on dropdown content area first (check before main area)
+	if inDropdown && y >= contentY && y < contentY+dr.H {
+		idx := cb.scrollOffset + (y - contentY)
+		if idx >= 0 && idx < len(cb.filtered) {
+			cb.Text = cb.filtered[idx]
+			cb.cursorPos = len(cb.Text)
+			cb.expanded = false
+			cb.updateFilter()
+			cb.invalidate()
+			if cb.OnChange != nil {
+				cb.OnChange(cb.Text)
+			}
+		}
+		return true
+	}
+
 	// Click on main area
-	if inMain {
+	if inMainRect {
 		btnX := cb.Rect.X + cb.Rect.W - 3
 		if x >= btnX {
 			// Click on button - toggle dropdown
@@ -549,23 +585,6 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 			cb.invalidate()
 			return true
 		}
-	}
-
-	// Click on dropdown content area (between top and bottom borders)
-	contentY := dr.Y + 1
-	if inDropdown && y >= contentY && y < contentY+dr.H {
-		idx := cb.scrollOffset + (y - contentY)
-		if idx >= 0 && idx < len(cb.filtered) {
-			cb.Text = cb.filtered[idx]
-			cb.cursorPos = len(cb.Text)
-			cb.expanded = false
-			cb.updateFilter()
-			cb.invalidate()
-			if cb.OnChange != nil {
-				cb.OnChange(cb.Text)
-			}
-		}
-		return true
 	}
 
 	return true
