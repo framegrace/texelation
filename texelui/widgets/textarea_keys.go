@@ -45,6 +45,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
 		t.Lines[t.CaretY+1] = string(tail)
 		t.CaretY++
 		t.CaretX = 0
+		t.onChange()
 		t.invalidateViewport()
 		return true
     case tcell.KeyBackspace, tcell.KeyBackspace2:
@@ -52,6 +53,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             line := []rune(t.Lines[t.CaretY])
             t.Lines[t.CaretY] = string(append(line[:t.CaretX-1], line[t.CaretX:]...))
             t.CaretX--
+            t.onChange()
             t.invalidateViewport()
             return true
         } else if t.CaretY > 0 {
@@ -61,6 +63,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             t.Lines[t.CaretY-1] = prev + cur
             t.Lines = append(t.Lines[:t.CaretY], t.Lines[t.CaretY+1:]...)
             t.CaretY--
+            t.onChange()
             t.invalidateViewport()
             return true
         }
@@ -70,6 +73,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             line := []rune(t.Lines[t.CaretY])
             if t.CaretX >= 0 && t.CaretX < len(line) {
                 t.Lines[t.CaretY] = string(append(line[:t.CaretX], line[t.CaretX+1:]...))
+                t.onChange()
                 t.invalidateViewport()
                 return true
             }
@@ -95,6 +99,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
             t.Lines[t.CaretY] = string(line)
             t.CaretX++
         }
+        t.onChange()
         t.invalidateViewport()
         return true
     default:

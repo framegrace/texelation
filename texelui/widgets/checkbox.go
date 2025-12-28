@@ -14,6 +14,9 @@ type Checkbox struct {
 	Checked  bool
 	Style    tcell.Style
 	OnChange func(checked bool)
+
+	// Invalidation callback
+	inv func(core.Rect)
 }
 
 // NewCheckbox creates a checkbox at the specified position.
@@ -93,7 +96,18 @@ func (c *Checkbox) HandleMouse(ev *tcell.EventMouse) bool {
 // toggle switches the checked state and triggers the OnChange callback.
 func (c *Checkbox) toggle() {
 	c.Checked = !c.Checked
+	c.invalidate()
 	if c.OnChange != nil {
 		c.OnChange(c.Checked)
+	}
+}
+
+// SetInvalidator allows the UI manager to inject a dirty-region invalidator.
+func (c *Checkbox) SetInvalidator(fn func(core.Rect)) { c.inv = fn }
+
+// invalidate marks the widget as needing redraw.
+func (c *Checkbox) invalidate() {
+	if c.inv != nil {
+		c.inv(c.Rect)
 	}
 }

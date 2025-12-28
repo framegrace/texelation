@@ -16,6 +16,9 @@ type Button struct {
 
 	// Visual state
 	pressed bool
+
+	// Invalidation callback
+	inv func(core.Rect)
 }
 
 // NewButton creates a button at the specified position and size.
@@ -124,5 +127,15 @@ func (b *Button) HandleMouse(ev *tcell.EventMouse) bool {
 func (b *Button) activate() {
 	if b.OnClick != nil {
 		b.OnClick()
+	}
+}
+
+// SetInvalidator allows the UI manager to inject a dirty-region invalidator.
+func (b *Button) SetInvalidator(fn func(core.Rect)) { b.inv = fn }
+
+// invalidate marks the widget as needing redraw.
+func (b *Button) invalidate() {
+	if b.inv != nil {
+		b.inv(b.Rect)
 	}
 }
