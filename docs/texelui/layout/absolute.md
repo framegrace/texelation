@@ -280,6 +280,6 @@ func createLayout(w, h int) {
 
 ## See Also
 
-- [VBox](vbox.md) - Automatic vertical stacking
-- [HBox](hbox.md) - Automatic horizontal arrangement
-- [Pane](../widgets/pane.md) - Container for grouping widgets
+- [VBox](/texelui/layout/vbox.md) - Automatic vertical stacking
+- [HBox](/texelui/layout/hbox.md) - Automatic horizontal arrangement
+- [Pane](/texelui/widgets/pane.md) - Container for grouping widgets

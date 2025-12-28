@@ -202,6 +202,6 @@ In replace mode, new characters overwrite existing ones.
 
 ## See Also
 
-- [Input](input.md) - Single-line text entry
-- [Border](border.md) - Border decorator
-- [Pane](pane.md) - Container widget
+- [Input](/texelui/widgets/input.md) - Single-line text entry
+- [Border](/texelui/widgets/border.md) - Border decorator
+- [Pane](/texelui/widgets/pane.md) - Container widget

@@ -378,6 +378,6 @@ If you add custom theme keys, document them:
 
 ## What's Next?
 
-- [Widget Interface](widget-interface.md) - How widgets work
-- [Custom Widget Tutorial](../tutorials/custom-widget.md) - Build themed widgets
-- [Architecture](architecture.md) - System overview
+- [Widget Interface](/texelui/core-concepts/widget-interface.md) - How widgets work
+- [Custom Widget Tutorial](/texelui/tutorials/custom-widget.md) - Build themed widgets
+- [Architecture](/texelui/core-concepts/architecture.md) - System overview

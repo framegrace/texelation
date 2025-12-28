@@ -16,11 +16,11 @@ TexelUI is built on a few core principles:
 
 | Concept | Description |
 |---------|-------------|
-| [Architecture](architecture.md) | Overall system architecture with diagrams |
-| [Widget Interface](widget-interface.md) | The Widget contract all widgets implement |
-| [Focus and Events](focus-and-events.md) | How events are routed and focus is managed |
-| [Rendering](rendering.md) | The drawing pipeline and dirty regions |
-| [Theming](theming.md) | Theme system and semantic colors |
+| [Architecture](/texelui/core-concepts/architecture.md) | Overall system architecture with diagrams |
+| [Widget Interface](/texelui/core-concepts/widget-interface.md) | The Widget contract all widgets implement |
+| [Focus and Events](/texelui/core-concepts/focus-and-events.md) | How events are routed and focus is managed |
+| [Rendering](/texelui/core-concepts/rendering.md) | The drawing pipeline and dirty regions |
+| [Theming](/texelui/core-concepts/theming.md) | Theme system and semantic colors |
 
 ## Quick Reference
 
@@ -195,4 +195,4 @@ type ZIndexer interface {
 
 ## What's Next?
 
-Start with [Architecture](architecture.md) for a complete overview, or jump to specific topics based on your needs.
+Start with [Architecture](/texelui/core-concepts/architecture.md) for a complete overview, or jump to specific topics based on your needs.

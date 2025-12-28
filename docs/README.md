@@ -18,9 +18,7 @@ This directory houses Texelation's supporting documentation. Key entry points:
 - [Programmer guide](programmer/DEVELOPER_GUIDE.md) – TexelUI, cards, effects, integration
 - [Texel app guide](TEXEL_APP_GUIDE.md) – building pipeline-based apps
 - [Effect development guide](EFFECTS_GUIDE.md) – creating visual effects
-- [TexelUI usage & examples](programmer/TEXELUI_USAGE.md)
-- [TexelUI quickstart](TEXELUI_QUICKSTART.md)
-- [TexelUI theme keys](TEXELUI_THEME.md)
+- [TexelUI developer guide](texelui/README.md)
 
 ## Planning & Roadmap
 - [Future roadmap](FUTURE_ROADMAP.md) – backlog and upcoming work

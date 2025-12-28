@@ -7,24 +7,24 @@ Complete reference for all TexelUI widgets.
 ### Input Widgets
 | Widget | Description | Source |
 |--------|-------------|--------|
-| [Input](input.md) | Single-line text entry | `widgets/input.go` |
-| [TextArea](textarea.md) | Multi-line text editor | `widgets/textarea.go` |
-| [Checkbox](checkbox.md) | Boolean toggle | `widgets/checkbox.go` |
-| [ComboBox](combobox.md) | Dropdown with autocomplete | `widgets/combobox.go` |
-| [ColorPicker](colorpicker.md) | Color selection | `widgets/colorpicker.go` |
+| [Input](/texelui/widgets/input.md) | Single-line text entry | `widgets/input.go` |
+| [TextArea](/texelui/widgets/textarea.md) | Multi-line text editor | `widgets/textarea.go` |
+| [Checkbox](/texelui/widgets/checkbox.md) | Boolean toggle | `widgets/checkbox.go` |
+| [ComboBox](/texelui/widgets/combobox.md) | Dropdown with autocomplete | `widgets/combobox.go` |
+| [ColorPicker](/texelui/widgets/colorpicker.md) | Color selection | `widgets/colorpicker.go` |
 
 ### Display Widgets
 | Widget | Description | Source |
 |--------|-------------|--------|
-| [Label](label.md) | Static text display | `widgets/label.go` |
-| [Button](button.md) | Clickable action trigger | `widgets/button.go` |
+| [Label](/texelui/widgets/label.md) | Static text display | `widgets/label.go` |
+| [Button](/texelui/widgets/button.md) | Clickable action trigger | `widgets/button.go` |
 
 ### Container Widgets
 | Widget | Description | Source |
 |--------|-------------|--------|
-| [Pane](pane.md) | Container with background | `widgets/pane.go` |
-| [Border](border.md) | Decorative border | `widgets/border.go` |
-| [TabLayout](tablayout.md) | Tabbed container | `widgets/tablayout.go` |
+| [Pane](/texelui/widgets/pane.md) | Container with background | `widgets/pane.go` |
+| [Border](/texelui/widgets/border.md) | Decorative border | `widgets/border.go` |
+| [TabLayout](/texelui/widgets/tablayout.md) | Tabbed container | `widgets/tablayout.go` |
 
 ## Common Patterns
 
@@ -129,7 +129,7 @@ bg := tm.GetSemanticColor("bg.surface")
 accent := tm.GetSemanticColor("action.primary")
 ```
 
-See [Theming](../core-concepts/theming.md) for details.
+See [Theming](/texelui/core-concepts/theming.md) for details.
 
 ## Quick Examples
 
@@ -188,6 +188,6 @@ combo.OnChange = func(value string) {
 
 Click on any widget name above to see its detailed documentation, or explore:
 
-- [Primitives](../primitives/README.md) - Building blocks for custom widgets
-- [Layout](../layout/README.md) - Automatic widget positioning
-- [Custom Widget Tutorial](../tutorials/custom-widget.md) - Build your own
+- [Primitives](/texelui/primitives/README.md) - Building blocks for custom widgets
+- [Layout](/texelui/layout/README.md) - Automatic widget positioning
+- [Custom Widget Tutorial](/texelui/tutorials/custom-widget.md) - Build your own

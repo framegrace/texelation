@@ -415,6 +415,6 @@ func (b *Button) HandleMouse(ev *tcell.EventMouse) bool {
 
 ## What's Next?
 
-- [Rendering](rendering.md) - The draw pipeline
-- [Theming](theming.md) - Styling with semantic colors
-- [Widget Interface](widget-interface.md) - Widget contracts
+- [Rendering](/texelui/core-concepts/rendering.md) - The draw pipeline
+- [Theming](/texelui/core-concepts/theming.md) - Styling with semantic colors
+- [Widget Interface](/texelui/core-concepts/widget-interface.md) - Widget contracts

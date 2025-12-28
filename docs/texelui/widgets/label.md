@@ -244,6 +244,6 @@ func (l *Label) Draw(painter *core.Painter) {
 
 ## See Also
 
-- [Button](button.md) - Clickable text
-- [Input](input.md) - Editable text
-- [TextArea](textarea.md) - Multi-line text
+- [Button](/texelui/widgets/button.md) - Clickable text
+- [Input](/texelui/widgets/input.md) - Editable text
+- [TextArea](/texelui/widgets/textarea.md) - Multi-line text

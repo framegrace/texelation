@@ -358,6 +358,6 @@ Consider calculating widths to fit, or using a scrollable container.
 
 ## See Also
 
-- [VBox](vbox.md) - Vertical stacking
-- [Absolute](absolute.md) - Manual positioning
-- [Layout Overview](README.md) - When to use each layout
+- [VBox](/texelui/layout/vbox.md) - Vertical stacking
+- [Absolute](/texelui/layout/absolute.md) - Manual positioning
+- [Layout Overview](/texelui/layout/README.md) - When to use each layout

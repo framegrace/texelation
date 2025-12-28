@@ -215,6 +215,6 @@ func (b *Border) childHasFocus() bool {
 
 ## See Also
 
-- [Pane](pane.md) - Container widget
-- [TabLayout](tablayout.md) - Tabbed container
-- [TextArea](textarea.md) - Multi-line editor
+- [Pane](/texelui/widgets/pane.md) - Container widget
+- [TabLayout](/texelui/widgets/tablayout.md) - Tabbed container
+- [TextArea](/texelui/widgets/textarea.md) - Multi-line editor

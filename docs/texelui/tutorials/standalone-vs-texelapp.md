@@ -359,6 +359,6 @@ app.OnResize(func(w, h int) {
 
 ## What's Next?
 
-- [Core Concepts](../core-concepts/README.md) - Understand the architecture
-- [Integration Guide](../integration/README.md) - Deep dive into both modes
-- [Building a Form](building-a-form.md) - Practice with a real example
+- [Core Concepts](/texelui/core-concepts/README.md) - Understand the architecture
+- [Integration Guide](/texelui/integration/README.md) - Deep dive into both modes
+- [Building a Form](/texelui/tutorials/building-a-form.md) - Practice with a real example

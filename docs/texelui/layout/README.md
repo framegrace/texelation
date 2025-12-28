@@ -10,9 +10,9 @@ TexelUI provides layout managers to automatically position widgets. By default, 
 
 | Layout | Description |
 |--------|-------------|
-| [Absolute](absolute.md) | Manual positioning (default) |
-| [VBox](vbox.md) | Vertical stacking |
-| [HBox](hbox.md) | Horizontal arrangement |
+| [Absolute](/texelui/layout/absolute.md) | Manual positioning (default) |
+| [VBox](/texelui/layout/vbox.md) | Vertical stacking |
+| [HBox](/texelui/layout/hbox.md) | Horizontal arrangement |
 
 ## Layout Interface
 
@@ -123,6 +123,6 @@ ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Help"))
 
 ## See Also
 
-- [Architecture](../core-concepts/architecture.md) - How layouts fit in
-- [Widget Interface](../core-concepts/widget-interface.md) - Widget sizing
-- [Pane](../widgets/pane.md) - Container for nested layouts
+- [Architecture](/texelui/core-concepts/architecture.md) - How layouts fit in
+- [Widget Interface](/texelui/core-concepts/widget-interface.md) - Widget sizing
+- [Pane](/texelui/widgets/pane.md) - Container for nested layouts

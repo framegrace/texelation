@@ -161,6 +161,6 @@ list.SetItems([]interface{}{"String", 123, true})
 
 ## See Also
 
-- [Grid](grid.md) - 2D selection grid
-- [TabBar](tabbar.md) - Tab navigation
-- [ColorPicker](../widgets/colorpicker.md) - Uses ScrollableList
+- [Grid](/texelui/primitives/grid.md) - 2D selection grid
+- [TabBar](/texelui/primitives/tabbar.md) - Tab navigation
+- [ColorPicker](/texelui/widgets/colorpicker.md) - Uses ScrollableList

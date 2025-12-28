@@ -257,6 +257,6 @@ func (tl *TabLayout) contentRect() core.Rect {
 
 ## See Also
 
-- [TabBar](../primitives/tabbar.md) - Tab bar primitive
-- [Pane](pane.md) - Container widget
-- [Border](border.md) - Border decorator
+- [TabBar](/texelui/primitives/tabbar.md) - Tab bar primitive
+- [Pane](/texelui/widgets/pane.md) - Container widget
+- [Border](/texelui/widgets/border.md) - Border decorator

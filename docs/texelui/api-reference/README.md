@@ -49,7 +49,7 @@ type Widget interface {
 }
 ```
 
-See [Interfaces Reference](interfaces.md) for all interfaces.
+See [Interfaces Reference](/texelui/api-reference/interfaces.md) for all interfaces.
 
 ### Geometry Types
 
@@ -396,6 +396,6 @@ import "texelation/texelui/adapter"
 
 ## See Also
 
-- [Interfaces Reference](interfaces.md) - All interfaces
-- [Widget Interface](../core-concepts/widget-interface.md) - Detailed explanation
-- [Architecture](../core-concepts/architecture.md) - System overview
+- [Interfaces Reference](/texelui/api-reference/interfaces.md) - All interfaces
+- [Widget Interface](/texelui/core-concepts/widget-interface.md) - Detailed explanation
+- [Architecture](/texelui/core-concepts/architecture.md) - System overview

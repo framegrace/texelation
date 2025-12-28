@@ -432,6 +432,6 @@ func (w *MyWidget) SetValue(v int) {
 
 ## What's Next?
 
-- [Theming](theming.md) - Styling with semantic colors
-- [Widget Interface](widget-interface.md) - Widget contracts
-- [Custom Widget Tutorial](../tutorials/custom-widget.md) - Build your own
+- [Theming](/texelui/core-concepts/theming.md) - Styling with semantic colors
+- [Widget Interface](/texelui/core-concepts/widget-interface.md) - Widget contracts
+- [Custom Widget Tutorial](/texelui/tutorials/custom-widget.md) - Build your own

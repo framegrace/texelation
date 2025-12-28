@@ -218,6 +218,6 @@ func (c *Checkbox) Draw(painter *core.Painter) {
 
 ## See Also
 
-- [Button](button.md) - Action trigger
-- [Input](input.md) - Text entry
-- [ComboBox](combobox.md) - Selection from list
+- [Button](/texelui/widgets/button.md) - Action trigger
+- [Input](/texelui/widgets/input.md) - Text entry
+- [ComboBox](/texelui/widgets/combobox.md) - Selection from list

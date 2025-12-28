@@ -428,6 +428,6 @@ app.SetTheme(th)
 
 ## See Also
 
-- [Theming Concept](../core-concepts/theming.md) - Core concepts
-- [TexelApp Mode](texelapp-mode.md) - App integration
-- [ColorPicker Widget](../widgets/colorpicker.md) - Theme color selection
+- [Theming Concept](/texelui/core-concepts/theming.md) - Core concepts
+- [TexelApp Mode](/texelui/integration/texelapp-mode.md) - App integration
+- [ColorPicker Widget](/texelui/widgets/colorpicker.md) - Theme color selection

@@ -208,6 +208,6 @@ pane.AddChild(overlay)
 
 ## See Also
 
-- [Border](border.md) - Decorative border
-- [TabLayout](tablayout.md) - Tabbed container
-- [Layout](../layout/README.md) - Automatic positioning
+- [Border](/texelui/widgets/border.md) - Decorative border
+- [TabLayout](/texelui/widgets/tablayout.md) - Tabbed container
+- [Layout](/texelui/layout/README.md) - Automatic positioning
