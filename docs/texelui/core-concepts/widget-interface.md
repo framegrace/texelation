@@ -472,6 +472,6 @@ func (w *MyWidget) HandleKey(ev *tcell.EventKey) bool {
 
 ## What's Next?
 
-- [Focus and Events](focus-and-events.md) - Event routing details
-- [Rendering](rendering.md) - The draw pipeline
-- [Custom Widget Tutorial](../tutorials/custom-widget.md) - Build your own widget
+- [Focus and Events](/texelui/core-concepts/focus-and-events.md) - Event routing details
+- [Rendering](/texelui/core-concepts/rendering.md) - The draw pipeline
+- [Custom Widget Tutorial](/texelui/tutorials/custom-widget.md) - Build your own widget

@@ -4,9 +4,9 @@ Welcome to TexelUI! This section will help you get up and running quickly.
 
 ## What You'll Learn
 
-1. **[Installation](installation.md)** - How to install and build TexelUI
-2. **[Quickstart](quickstart.md)** - Create your first app in 5 minutes
-3. **[Hello World](hello-world.md)** - A simple example with full explanation
+1. **[Installation](/texelui/getting-started/installation.md)** - How to install and build TexelUI
+2. **[Quickstart](/texelui/getting-started/quickstart.md)** - Create your first app in 5 minutes
+3. **[Hello World](/texelui/getting-started/hello-world.md)** - A simple example with full explanation
 
 ## Prerequisites
 
@@ -36,17 +36,17 @@ TexelUI supports two runtime modes:
 
 | Mode | Best For | Documentation |
 |------|----------|---------------|
-| **Standalone** | Simple tools, testing, learning | [Standalone Mode](../integration/standalone-mode.md) |
-| **TexelApp** | Full Texelation integration | [TexelApp Mode](../integration/texelapp-mode.md) |
+| **Standalone** | Simple tools, testing, learning | [Standalone Mode](/texelui/integration/standalone-mode.md) |
+| **TexelApp** | Full Texelation integration | [TexelApp Mode](/texelui/integration/texelapp-mode.md) |
 
 If you're just getting started, **standalone mode** is simpler and recommended for learning.
 
 ## Next Steps
 
-1. Start with the [Installation Guide](installation.md)
-2. Follow the [Quickstart](quickstart.md) to build your first app
-3. Explore the [Tutorials](../tutorials/README.md) for more advanced examples
+1. Start with the [Installation Guide](/texelui/getting-started/installation.md)
+2. Follow the [Quickstart](/texelui/getting-started/quickstart.md) to build your first app
+3. Explore the [Tutorials](/texelui/tutorials/README.md) for more advanced examples
 
 ---
 
-**Need help?** Check the [main documentation](../README.md) or file an issue on GitHub.
+**Need help?** Check the [main documentation](/texelui/README.md) or file an issue on GitHub.

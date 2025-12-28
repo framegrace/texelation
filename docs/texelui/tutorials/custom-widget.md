@@ -506,6 +506,6 @@ type Modal interface {
 
 ## What's Next?
 
-- [Widgets Reference](../widgets/README.md) - Study existing widget implementations
-- [Core Concepts](../core-concepts/README.md) - Deep dive into architecture
-- [API Reference](../api-reference/README.md) - Complete interface documentation
+- [Widgets Reference](/texelui/widgets/README.md) - Study existing widget implementations
+- [Core Concepts](/texelui/core-concepts/README.md) - Deep dive into architecture
+- [API Reference](/texelui/api-reference/README.md) - Complete interface documentation

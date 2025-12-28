@@ -35,14 +35,14 @@ TexelUI is the official widget library for building text-based user interfaces i
 
 | Section | Description |
 |---------|-------------|
-| [Getting Started](getting-started/README.md) | Install, build, and run your first app |
-| [Tutorials](tutorials/README.md) | Step-by-step guides for common tasks |
-| [Core Concepts](core-concepts/README.md) | Architecture, events, rendering, theming |
-| [Widgets](widgets/README.md) | Complete reference for all widgets |
-| [Primitives](primitives/README.md) | Reusable building blocks for custom widgets |
-| [Layout](layout/README.md) | Layout managers: VBox, HBox, Absolute |
-| [Integration](integration/README.md) | Standalone mode vs TexelApp embedding |
-| [API Reference](api-reference/README.md) | Interfaces and type documentation |
+| [Getting Started](/texelui/getting-started/README.md) | Install, build, and run your first app |
+| [Tutorials](/texelui/tutorials/README.md) | Step-by-step guides for common tasks |
+| [Core Concepts](/texelui/core-concepts/README.md) | Architecture, events, rendering, theming |
+| [Widgets](/texelui/widgets/README.md) | Complete reference for all widgets |
+| [Primitives](/texelui/primitives/README.md) | Reusable building blocks for custom widgets |
+| [Layout](/texelui/layout/README.md) | Layout managers: VBox, HBox, Absolute |
+| [Integration](/texelui/integration/README.md) | Standalone mode vs TexelApp embedding |
+| [API Reference](/texelui/api-reference/README.md) | Interfaces and type documentation |
 
 ## 5-Minute Quickstart
 
@@ -82,10 +82,13 @@ func main() {
 }
 ```
 
-**3. Learn more:**
-- [Complete Quickstart Guide](getting-started/quickstart.md)
-- [Building a Form Tutorial](tutorials/building-a-form.md)
-- [Standalone vs TexelApp Mode](tutorials/standalone-vs-texelapp.md)
+**3. Next steps:** Follow a full walkthrough or browse common patterns.
+
+Related documentation:
+- [Complete Quickstart Guide](/texelui/getting-started/quickstart.md)
+- [Hello World](/texelui/getting-started/hello-world.md)
+- [Building a Form Tutorial](/texelui/tutorials/building-a-form.md)
+- [Standalone vs TexelApp Mode](/texelui/tutorials/standalone-vs-texelapp.md)
 
 ## Widget Overview
 
@@ -94,31 +97,35 @@ TexelUI provides these widgets out of the box:
 ### Input Widgets
 | Widget | Description |
 |--------|-------------|
-| [Input](widgets/input.md) | Single-line text entry with placeholder and caret |
-| [TextArea](widgets/textarea.md) | Multi-line text editor with scrolling |
-| [Checkbox](widgets/checkbox.md) | Boolean toggle with label |
-| [ComboBox](widgets/combobox.md) | Dropdown with optional autocomplete |
-| [ColorPicker](widgets/colorpicker.md) | Color selection with multiple modes |
+| [Input](/texelui/widgets/input.md) | Single-line text entry with placeholder and caret |
+| [TextArea](/texelui/widgets/textarea.md) | Multi-line text editor with scrolling |
+| [Checkbox](/texelui/widgets/checkbox.md) | Boolean toggle with label |
+| [ComboBox](/texelui/widgets/combobox.md) | Dropdown with optional autocomplete |
+| [ColorPicker](/texelui/widgets/colorpicker.md) | Color selection with multiple modes |
 
 ### Display Widgets
 | Widget | Description |
 |--------|-------------|
-| [Label](widgets/label.md) | Static text with alignment options |
-| [Button](widgets/button.md) | Clickable action trigger |
+| [Label](/texelui/widgets/label.md) | Static text with alignment options |
+| [Button](/texelui/widgets/button.md) | Clickable action trigger |
 
 ### Container Widgets
 | Widget | Description |
 |--------|-------------|
-| [Pane](widgets/pane.md) | Container with background and child support |
-| [Border](widgets/border.md) | Decorative border around content |
-| [TabLayout](widgets/tablayout.md) | Tabbed container with switchable panels |
+| [Pane](/texelui/widgets/pane.md) | Container with background and child support |
+| [Border](/texelui/widgets/border.md) | Decorative border around content |
+| [TabLayout](/texelui/widgets/tablayout.md) | Tabbed container with switchable panels |
 
 ### Primitives (Building Blocks)
 | Primitive | Description |
 |-----------|-------------|
-| [ScrollableList](primitives/scrollablelist.md) | Scrolling list with custom rendering |
-| [Grid](primitives/grid.md) | 2D grid with dynamic columns |
-| [TabBar](primitives/tabbar.md) | Horizontal tab navigation |
+| [ScrollableList](/texelui/primitives/scrollablelist.md) | Scrolling list with custom rendering |
+| [Grid](/texelui/primitives/grid.md) | 2D grid with dynamic columns |
+| [TabBar](/texelui/primitives/tabbar.md) | Horizontal tab navigation |
+
+Related documentation:
+- [Widgets Reference](/texelui/widgets/README.md)
+- [Primitives Reference](/texelui/primitives/README.md)
 
 ## Architecture at a Glance
 
@@ -165,6 +172,14 @@ TexelUI provides these widgets out of the box:
 └──────────────────────────────────────────────────────────────┘
 ```
 
+Related documentation:
+- [Core Concepts Index](/texelui/core-concepts/README.md)
+- [Architecture](/texelui/core-concepts/architecture.md)
+- [Widget Interface](/texelui/core-concepts/widget-interface.md)
+- [Focus and Events](/texelui/core-concepts/focus-and-events.md)
+- [Rendering](/texelui/core-concepts/rendering.md)
+- [Theming](/texelui/core-concepts/theming.md)
+
 ## Running Modes
 
 TexelUI supports two runtime modes:
@@ -186,7 +201,11 @@ registry["my-app"] = func() texel.App {
 ```
 Full integration with workspaces, effects, and the desktop environment.
 
-[Learn more about running modes](tutorials/standalone-vs-texelapp.md)
+Related documentation:
+- [Integration Guide](/texelui/integration/README.md)
+- [Standalone Mode](/texelui/integration/standalone-mode.md)
+- [TexelApp Mode](/texelui/integration/texelapp-mode.md)
+- [Standalone vs TexelApp](/texelui/tutorials/standalone-vs-texelapp.md)
 
 ## Theme Integration
 
@@ -207,14 +226,18 @@ Available semantic colors:
 - `action.primary`, `action.danger` - Action colors
 - `border.active`, `border.focus` - Border colors
 
-[Learn more about theming](core-concepts/theming.md)
+[Learn more about theming](/texelui/core-concepts/theming.md)
+
+Related documentation:
+- [Theme Integration Guide](/texelui/integration/theme-integration.md)
+- [Theming Concepts](/texelui/core-concepts/theming.md)
 
 ## Contributing
 
 TexelUI is part of the Texelation project. To contribute:
 
-1. Read the [CONTRIBUTING.md](../CONTRIBUTING.md) guide
-2. Check the [TEXELUI_PLAN.md](../plans/TEXELUI_PLAN.md) for roadmap
+1. Read the [CONTRIBUTING.md](/CONTRIBUTING.md) guide
+2. Check the [TEXELUI_PLAN.md](/plans/TEXELUI_PLAN.md) for roadmap
 3. Look for widgets marked as "Next Priority"
 
 ## License

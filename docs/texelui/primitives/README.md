@@ -10,9 +10,9 @@ Primitives are lower-level components that provide common functionality for widg
 
 | Primitive | Description | Used By |
 |-----------|-------------|---------|
-| [ScrollableList](scrollablelist.md) | Vertical scrolling list | ColorPicker (Semantic mode) |
-| [Grid](grid.md) | 2D grid with dynamic columns | ColorPicker (Palette mode) |
-| [TabBar](tabbar.md) | Horizontal tab navigation | ColorPicker, TabLayout |
+| [ScrollableList](/texelui/primitives/scrollablelist.md) | Vertical scrolling list | ColorPicker (Semantic mode) |
+| [Grid](/texelui/primitives/grid.md) | 2D grid with dynamic columns | ColorPicker (Palette mode) |
+| [TabBar](/texelui/primitives/tabbar.md) | Horizontal tab navigation | ColorPicker, TabLayout |
 
 ## When to Use Primitives
 
@@ -90,6 +90,6 @@ import "texelation/texelui/primitives"
 
 ## See Also
 
-- [Custom Widget Tutorial](../tutorials/custom-widget.md) - Building widgets
-- [Widget Interface](../core-concepts/widget-interface.md) - Widget contracts
-- [ColorPicker](../widgets/colorpicker.md) - Uses all three primitives
+- [Custom Widget Tutorial](/texelui/tutorials/custom-widget.md) - Building widgets
+- [Widget Interface](/texelui/core-concepts/widget-interface.md) - Widget contracts
+- [ColorPicker](/texelui/widgets/colorpicker.md) - Uses all three primitives

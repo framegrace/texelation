@@ -217,7 +217,7 @@ type ColorPickerResult struct {
 
 ## See Also
 
-- [ComboBox](combobox.md) - Dropdown selection
-- [ScrollableList](../primitives/scrollablelist.md) - List primitive
-- [Grid](../primitives/grid.md) - Grid primitive
-- [Theming](../core-concepts/theming.md) - Theme colors
+- [ComboBox](/texelui/widgets/combobox.md) - Dropdown selection
+- [ScrollableList](/texelui/primitives/scrollablelist.md) - List primitive
+- [Grid](/texelui/primitives/grid.md) - Grid primitive
+- [Theming](/texelui/core-concepts/theming.md) - Theme colors

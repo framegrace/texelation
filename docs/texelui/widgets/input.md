@@ -240,6 +240,6 @@ input.Style = tcell.StyleDefault.
 
 ## See Also
 
-- [TextArea](textarea.md) - Multi-line text editor
-- [Label](label.md) - Static text display
-- [ComboBox](combobox.md) - Input with dropdown
+- [TextArea](/texelui/widgets/textarea.md) - Multi-line text editor
+- [Label](/texelui/widgets/label.md) - Static text display
+- [ComboBox](/texelui/widgets/combobox.md) - Input with dropdown

@@ -252,6 +252,6 @@ return app, nil
 
 ## What's Next?
 
-- **[Quickstart](quickstart.md)** - Build a complete login form
-- **[Building a Form Tutorial](../tutorials/building-a-form.md)** - Advanced form techniques
-- **[Widget Reference](../widgets/README.md)** - All available widgets
+- **[Quickstart](/texelui/getting-started/quickstart.md)** - Build a complete login form
+- **[Building a Form Tutorial](/texelui/tutorials/building-a-form.md)** - Advanced form techniques
+- **[Widget Reference](/texelui/widgets/README.md)** - All available widgets

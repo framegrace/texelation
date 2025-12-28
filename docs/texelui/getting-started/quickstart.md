@@ -28,7 +28,7 @@ A simple login form with:
 
 ## Prerequisites
 
-Make sure you've completed the [Installation](installation.md) steps.
+Make sure you've completed the [Installation](/texelui/getting-started/installation.md) steps.
 
 ## Step 1: Create the Project Structure
 
@@ -277,10 +277,10 @@ ui.AddWidget(loginButton)
 
 ## Next Steps
 
-- **[Hello World](hello-world.md)** - Minimal example with detailed explanation
-- **[Building a Form Tutorial](../tutorials/building-a-form.md)** - More advanced form building
-- **[Widgets Reference](../widgets/README.md)** - All available widgets
-- **[Layout Guide](../layout/README.md)** - Automatic widget positioning
+- **[Hello World](/texelui/getting-started/hello-world.md)** - Minimal example with detailed explanation
+- **[Building a Form Tutorial](/texelui/tutorials/building-a-form.md)** - More advanced form building
+- **[Widgets Reference](/texelui/widgets/README.md)** - All available widgets
+- **[Layout Guide](/texelui/layout/README.md)** - Automatic widget positioning
 
 ## Troubleshooting
 

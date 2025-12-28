@@ -404,6 +404,6 @@ This reduces the number of draw passes and improves performance.
 
 ## What's Next?
 
-- [Widget Interface](widget-interface.md) - Deep dive into widget contracts
-- [Focus and Events](focus-and-events.md) - Event routing details
-- [Rendering](rendering.md) - The draw pipeline
+- [Widget Interface](/texelui/core-concepts/widget-interface.md) - Deep dive into widget contracts
+- [Focus and Events](/texelui/core-concepts/focus-and-events.md) - Event routing details
+- [Rendering](/texelui/core-concepts/rendering.md) - The draw pipeline

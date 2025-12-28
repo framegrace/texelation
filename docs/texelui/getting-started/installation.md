@@ -141,10 +141,10 @@ go test -v ./texelui/...
 
 ## Next Steps
 
-- Continue to [Quickstart](quickstart.md) to build your first app
-- Or jump to [Hello World](hello-world.md) for a minimal example
+- Continue to [Quickstart](/texelui/getting-started/quickstart.md) to build your first app
+- Or jump to [Hello World](/texelui/getting-started/hello-world.md) for a minimal example
 
 ## Related Documentation
 
-- [CLAUDE.md](../../../CLAUDE.md) - Build commands and project overview
-- [Makefile](../../../Makefile) - All available make targets
+- [CLAUDE.md](/CLAUDE.md) - Build commands and project overview
+- [Makefile](/Makefile) - All available make targets

@@ -497,6 +497,6 @@ func (w *MyWidget) IsModal() bool { return w.isOpen }
 
 ## See Also
 
-- [API Reference](README.md) - Full API
-- [Widget Interface](../core-concepts/widget-interface.md) - Deep dive
-- [Custom Widget Tutorial](../tutorials/custom-widget.md) - Building widgets
+- [API Reference](/texelui/api-reference/README.md) - Full API
+- [Widget Interface](/texelui/core-concepts/widget-interface.md) - Deep dive
+- [Custom Widget Tutorial](/texelui/tutorials/custom-widget.md) - Building widgets

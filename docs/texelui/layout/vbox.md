@@ -331,6 +331,6 @@ func (app *MyApp) clearNotifications() {
 
 ## See Also
 
-- [HBox](hbox.md) - Horizontal arrangement
-- [Absolute](absolute.md) - Manual positioning
-- [Layout Overview](README.md) - When to use each layout
+- [HBox](/texelui/layout/hbox.md) - Horizontal arrangement
+- [Absolute](/texelui/layout/absolute.md) - Manual positioning
+- [Layout Overview](/texelui/layout/README.md) - When to use each layout

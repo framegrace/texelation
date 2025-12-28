@@ -6,29 +6,29 @@ Step-by-step guides for building real applications with TexelUI.
 
 | Tutorial | Description | Difficulty |
 |----------|-------------|------------|
-| [Building a Form](building-a-form.md) | Create a complete data entry form with validation | Beginner |
-| [Creating a Custom Widget](custom-widget.md) | Build your own reusable widget | Intermediate |
-| [Standalone vs TexelApp](standalone-vs-texelapp.md) | Understand the two runtime modes | Beginner |
+| [Building a Form](/texelui/tutorials/building-a-form.md) | Create a complete data entry form with validation | Beginner |
+| [Creating a Custom Widget](/texelui/tutorials/custom-widget.md) | Build your own reusable widget | Intermediate |
+| [Standalone vs TexelApp](/texelui/tutorials/standalone-vs-texelapp.md) | Understand the two runtime modes | Beginner |
 
 ## Learning Path
 
 ### For Beginners
 
-1. Start with [Getting Started](../getting-started/README.md)
-2. Follow [Building a Form](building-a-form.md)
-3. Read [Standalone vs TexelApp](standalone-vs-texelapp.md)
-4. Explore the [Widgets Reference](../widgets/README.md)
+1. Start with [Getting Started](/texelui/getting-started/README.md)
+2. Follow [Building a Form](/texelui/tutorials/building-a-form.md)
+3. Read [Standalone vs TexelApp](/texelui/tutorials/standalone-vs-texelapp.md)
+4. Explore the [Widgets Reference](/texelui/widgets/README.md)
 
 ### For Intermediate Users
 
-1. Learn [Core Concepts](../core-concepts/README.md)
-2. Build a [Custom Widget](custom-widget.md)
-3. Understand [Layout Systems](../layout/README.md)
-4. Study the [API Reference](../api-reference/README.md)
+1. Learn [Core Concepts](/texelui/core-concepts/README.md)
+2. Build a [Custom Widget](/texelui/tutorials/custom-widget.md)
+3. Understand [Layout Systems](/texelui/layout/README.md)
+4. Study the [API Reference](/texelui/api-reference/README.md)
 
 ### For Advanced Users
 
-1. Read the [Architecture](../core-concepts/architecture.md) docs
+1. Read the [Architecture](/texelui/core-concepts/architecture.md) docs
 2. Explore the source code in `texelui/`
 3. Study existing widgets for patterns
 4. Contribute to the project
@@ -66,4 +66,4 @@ btn.Style = tcell.StyleDefault.
 
 ## What's Next?
 
-Choose a tutorial that matches your current skill level, or jump to the [Core Concepts](../core-concepts/README.md) if you prefer to understand the fundamentals first.
+Choose a tutorial that matches your current skill level, or jump to the [Core Concepts](/texelui/core-concepts/README.md) if you prefer to understand the fundamentals first.

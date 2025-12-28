@@ -208,6 +208,6 @@ When expanded, the ComboBox sets a high z-index (100) to ensure the dropdown app
 
 ## See Also
 
-- [Input](input.md) - Simple text entry
-- [Checkbox](checkbox.md) - Boolean selection
-- [ColorPicker](colorpicker.md) - Color selection
+- [Input](/texelui/widgets/input.md) - Simple text entry
+- [Checkbox](/texelui/widgets/checkbox.md) - Boolean selection
+- [ColorPicker](/texelui/widgets/colorpicker.md) - Color selection

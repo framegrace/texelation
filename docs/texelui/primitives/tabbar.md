@@ -156,6 +156,6 @@ Tab1   Tab2   Tab3
 
 ## See Also
 
-- [TabLayout](../widgets/tablayout.md) - Full tabbed container
-- [ScrollableList](scrollablelist.md) - Vertical list
-- [Grid](grid.md) - 2D grid
+- [TabLayout](/texelui/widgets/tablayout.md) - Full tabbed container
+- [ScrollableList](/texelui/primitives/scrollablelist.md) - Vertical list
+- [Grid](/texelui/primitives/grid.md) - 2D grid

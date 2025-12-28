@@ -211,6 +211,6 @@ func (b *Button) Draw(painter *core.Painter) {
 
 ## See Also
 
-- [Label](label.md) - Static text display
-- [Checkbox](checkbox.md) - Toggle button
-- [Input](input.md) - Text entry
+- [Label](/texelui/widgets/label.md) - Static text display
+- [Checkbox](/texelui/widgets/checkbox.md) - Toggle button
+- [Input](/texelui/widgets/input.md) - Text entry

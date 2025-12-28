@@ -34,8 +34,8 @@ TexelUI applications can run in two modes:
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| [Standalone](standalone-mode.md) | Direct terminal, full screen | Development, single-purpose tools |
-| [TexelApp](texelapp-mode.md) | Inside Texelation desktop | Multi-app environment, integration |
+| [Standalone](/texelui/integration/standalone-mode.md) | Direct terminal, full screen | Development, single-purpose tools |
+| [TexelApp](/texelui/integration/texelapp-mode.md) | Inside Texelation desktop | Multi-app environment, integration |
 
 ## Quick Comparison
 
@@ -105,9 +105,9 @@ func New() texel.App {
 
 | Topic | Description |
 |-------|-------------|
-| [Standalone Mode](standalone-mode.md) | Running with devshell |
-| [TexelApp Mode](texelapp-mode.md) | Integration with Texelation |
-| [Theme Integration](theme-integration.md) | Using Texelation themes |
+| [Standalone Mode](/texelui/integration/standalone-mode.md) | Running with devshell |
+| [TexelApp Mode](/texelui/integration/texelapp-mode.md) | Integration with Texelation |
+| [Theme Integration](/texelui/integration/theme-integration.md) | Using Texelation themes |
 
 ## Architecture Deep Dive
 
@@ -182,7 +182,7 @@ Start standalone for development, then wrap for Texelation:
 
 ## See Also
 
-- [Standalone Mode](standalone-mode.md) - devshell details
-- [TexelApp Mode](texelapp-mode.md) - adapter details
-- [Theme Integration](theme-integration.md) - theming
-- [Architecture](../core-concepts/architecture.md) - TexelUI internals
+- [Standalone Mode](/texelui/integration/standalone-mode.md) - devshell details
+- [TexelApp Mode](/texelui/integration/texelapp-mode.md) - adapter details
+- [Theme Integration](/texelui/integration/theme-integration.md) - theming
+- [Architecture](/texelui/core-concepts/architecture.md) - TexelUI internals

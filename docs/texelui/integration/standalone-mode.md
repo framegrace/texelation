@@ -369,10 +369,10 @@ Standalone mode doesn't provide:
 - Desktop keyboard shortcuts (workspace switching, etc.)
 - Session persistence
 
-Use [TexelApp Mode](texelapp-mode.md) for these features.
+Use [TexelApp Mode](/texelui/integration/texelapp-mode.md) for these features.
 
 ## See Also
 
-- [TexelApp Mode](texelapp-mode.md) - Running inside Texelation
-- [Theme Integration](theme-integration.md) - Manual theming
-- [Hello World](../getting-started/hello-world.md) - Minimal example
+- [TexelApp Mode](/texelui/integration/texelapp-mode.md) - Running inside Texelation
+- [Theme Integration](/texelui/integration/theme-integration.md) - Manual theming
+- [Hello World](/texelui/getting-started/hello-world.md) - Minimal example

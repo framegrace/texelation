@@ -171,6 +171,6 @@ cellWidth := width / cols  // 36 / 9 = 4
 
 ## See Also
 
-- [ScrollableList](scrollablelist.md) - Vertical list
-- [TabBar](tabbar.md) - Tab navigation
-- [ColorPicker](../widgets/colorpicker.md) - Uses Grid
+- [ScrollableList](/texelui/primitives/scrollablelist.md) - Vertical list
+- [TabBar](/texelui/primitives/tabbar.md) - Tab navigation
+- [ColorPicker](/texelui/widgets/colorpicker.md) - Uses Grid

@@ -241,7 +241,7 @@ func (a *UIApp) applyTheme(th *theme.Theme) {
 }
 ```
 
-See [Theme Integration](theme-integration.md) for details.
+See [Theme Integration](/texelui/integration/theme-integration.md) for details.
 
 ## Optional Interfaces
 
@@ -414,6 +414,6 @@ func (a *UIApp) SetTheme(theme *theme.Theme) {
 
 ## See Also
 
-- [Standalone Mode](standalone-mode.md) - Development mode
-- [Theme Integration](theme-integration.md) - Using Texelation themes
-- [Architecture](../core-concepts/architecture.md) - System overview
+- [Standalone Mode](/texelui/integration/standalone-mode.md) - Development mode
+- [Theme Integration](/texelui/integration/theme-integration.md) - Using Texelation themes
+- [Architecture](/texelui/core-concepts/architecture.md) - System overview

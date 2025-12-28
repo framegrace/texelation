@@ -39,7 +39,7 @@ A user registration form with:
 
 ## Prerequisites
 
-- Completed the [Getting Started](../getting-started/README.md) guide
+- Completed the [Getting Started](/texelui/getting-started/README.md) guide
 - Basic understanding of Go
 - TexelUI built and working
 
@@ -485,6 +485,6 @@ submitBtn.OnClick = func() {
 
 ## What's Next?
 
-- [Creating a Custom Widget](custom-widget.md) - Build your own widgets
-- [Standalone vs TexelApp](standalone-vs-texelapp.md) - Deploy your form
-- [Widgets Reference](../widgets/README.md) - Explore all widget options
+- [Creating a Custom Widget](/texelui/tutorials/custom-widget.md) - Build your own widgets
+- [Standalone vs TexelApp](/texelui/tutorials/standalone-vs-texelapp.md) - Deploy your form
+- [Widgets Reference](/texelui/widgets/README.md) - Explore all widget options
