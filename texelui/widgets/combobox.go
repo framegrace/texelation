@@ -130,6 +130,18 @@ func (cb *ComboBox) ensureSelectedVisible() {
 	}
 }
 
+// selectCurrentValue finds and selects the current Text value in the filtered list.
+func (cb *ComboBox) selectCurrentValue() {
+	cb.selectedIdx = 0
+	for i, item := range cb.filtered {
+		if item == cb.Text {
+			cb.selectedIdx = i
+			break
+		}
+	}
+	cb.ensureSelectedVisible()
+}
+
 // autocompleteMatch returns the best matching item for autocomplete.
 func (cb *ComboBox) autocompleteMatch() string {
 	if cb.Text == "" || len(cb.filtered) == 0 {
@@ -337,8 +349,8 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 			}
 			// Return false to allow focus to cycle to next component
 			return false
-		} else if !cb.expanded {
-			// Accept autocomplete or current value
+		} else if !cb.expanded && cb.Editable {
+			// Editable: Accept autocomplete or current value
 			autocomplete := cb.autocompleteMatch()
 			if autocomplete != "" && len(autocomplete) > len(cb.Text) {
 				cb.Text = autocomplete
@@ -349,9 +361,8 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 					cb.OnChange(cb.Text)
 				}
 			}
-			// Return false to allow focus to cycle to next component
-			return false
 		}
+		// Return false to allow focus to cycle to next component
 		return false
 
 	case tcell.KeyTab:
@@ -377,9 +388,9 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 			}
 			return true
 		} else if len(cb.filtered) > 0 {
-			// Open dropdown and select last matching
+			// Open dropdown and preselect current value
 			cb.expanded = true
-			cb.selectedIdx = 0
+			cb.selectCurrentValue()
 			cb.invalidate()
 			return true
 		}
@@ -394,9 +405,9 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 			}
 			return true
 		} else if len(cb.filtered) > 0 {
-			// Open dropdown
+			// Open dropdown and preselect current value
 			cb.expanded = true
-			cb.selectedIdx = 0
+			cb.selectCurrentValue()
 			cb.invalidate()
 			return true
 		}
@@ -473,8 +484,9 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 			cb.invalidate()
 			return true
 		} else if !cb.expanded {
-			// Non-editable: open dropdown on any key
+			// Non-editable: open dropdown on any key and preselect current value
 			cb.expanded = true
+			cb.selectCurrentValue()
 			cb.invalidate()
 			return true
 		}
@@ -514,7 +526,12 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 		btnX := cb.Rect.X + cb.Rect.W - 3
 		if x >= btnX {
 			// Click on button - toggle dropdown
-			cb.expanded = !cb.expanded
+			if !cb.expanded {
+				cb.expanded = true
+				cb.selectCurrentValue()
+			} else {
+				cb.expanded = false
+			}
 			cb.invalidate()
 			return true
 		} else if cb.Editable {
