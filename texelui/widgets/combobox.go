@@ -575,6 +575,15 @@ func (cb *ComboBox) DismissModal() {
 	cb.invalidate()
 }
 
+// Blur removes focus and closes the dropdown.
+func (cb *ComboBox) Blur() {
+	cb.BaseWidget.Blur()
+	if cb.expanded {
+		cb.expanded = false
+		cb.invalidate()
+	}
+}
+
 // ZIndex returns higher z-index when expanded.
 func (cb *ComboBox) ZIndex() int {
 	if cb.expanded {
