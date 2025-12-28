@@ -207,13 +207,18 @@ checkbox.OnChange func(checked bool)
 ```go
 func NewTextArea(x, y, w, h int) *TextArea
 
+// Methods
+func (t *TextArea) Text() string           // Get all content as string
+func (t *TextArea) SetText(text string)    // Set content from string
+
 // Properties
-textarea.Lines []string    // Text content as lines
+textarea.Lines []string    // Text content as lines (direct access)
 textarea.CaretX int        // Caret column position
 textarea.CaretY int        // Caret line position
 textarea.OffY int          // Vertical scroll offset
 textarea.Style tcell.Style
 textarea.CaretStyle tcell.Style
+textarea.OnChange func(text string)  // Called on content changes
 ```
 
 ### ComboBox

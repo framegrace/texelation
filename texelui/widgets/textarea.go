@@ -1,6 +1,8 @@
 package widgets
 
 import (
+	"strings"
+
 	"github.com/gdamore/tcell/v2"
 	"texelation/texel/theme"
 	"texelation/texelui/core"
@@ -16,6 +18,10 @@ type TextArea struct {
     OffY       int
     Style      tcell.Style
     CaretStyle tcell.Style
+
+	// Optional change callback - called when text content changes
+	OnChange func(text string)
+
 	// local clipboard (paste only for now)
 	clip string
 	// invalidation callback
@@ -48,6 +54,32 @@ func NewTextArea(x, y, w, h int) *TextArea {
 
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
 func (t *TextArea) SetInvalidator(fn func(core.Rect)) { t.inv = fn }
+
+// Text returns all lines joined with newlines.
+func (t *TextArea) Text() string {
+	return strings.Join(t.Lines, "\n")
+}
+
+// SetText replaces the content with the given text.
+func (t *TextArea) SetText(text string) {
+	if text == "" {
+		t.Lines = []string{""}
+	} else {
+		t.Lines = strings.Split(text, "\n")
+	}
+	t.CaretX = 0
+	t.CaretY = 0
+	t.OffY = 0
+	t.onChange()
+	t.invalidateViewport()
+}
+
+// onChange triggers the OnChange callback if set.
+func (t *TextArea) onChange() {
+	if t.OnChange != nil {
+		t.OnChange(t.Text())
+	}
+}
 
 func (t *TextArea) clampCaret() {
 	if t.CaretY < 0 {
@@ -266,6 +298,7 @@ func (t *TextArea) insertText(s string) {
 	}
 	t.clampCaret()
 	t.ensureVisible()
+	t.onChange()
 	t.invalidateViewport()
 }
 func (t *TextArea) invalidateViewport() {

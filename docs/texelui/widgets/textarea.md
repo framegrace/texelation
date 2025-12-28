@@ -34,11 +34,20 @@ func NewTextArea(x, y, w, h int) *TextArea
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Lines` | `[]string` | Text content as lines |
+| `Lines` | `[]string` | Text content as lines (direct access) |
 | `CaretX` | `int` | Caret column position |
 | `CaretY` | `int` | Caret line position |
 | `OffY` | `int` | Vertical scroll offset |
 | `Style` | `tcell.Style` | Text appearance |
+| `OnChange` | `func(text string)` | Called when content changes |
+
+## Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Text()` | `string` | Get all content as single string |
+| `SetText(text string)` | - | Set content from string |
+| `SetInvalidator(fn func(core.Rect))` | - | Set invalidation callback |
 
 ## Example
 
@@ -122,19 +131,32 @@ The text area automatically scrolls to keep the caret visible. Vertical scrollin
 ```go
 textarea := widgets.NewTextArea(0, 0, 40, 10)
 
-// Set content by modifying Lines directly
-textarea.Lines = []string{"Hello", "World"}
+// Set content using SetText (recommended - triggers OnChange)
+textarea.SetText("Hello\nWorld")
 
-// Get content as lines
+// Get content as single string
+text := textarea.Text()  // "Hello\nWorld"
+
+// Direct access to lines is also available
+textarea.Lines = []string{"Hello", "World"}  // Does NOT trigger OnChange
 lines := textarea.Lines  // []string{"Hello", "World"}
-
-// Convert to single string if needed
-import "strings"
-text := strings.Join(textarea.Lines, "\n")  // "Hello\nWorld"
-
-// Set from string
-textarea.Lines = strings.Split("Hello\nWorld", "\n")
 ```
+
+## Change Callback
+
+```go
+textarea := widgets.NewTextArea(0, 0, 40, 10)
+textarea.OnChange = func(text string) {
+    fmt.Printf("Content changed: %s\n", text)
+}
+```
+
+The `OnChange` callback is triggered by:
+- Typing characters
+- Pressing Enter (new line)
+- Backspace/Delete
+- Paste operations
+- `SetText()` method
 
 ## With Border
 

@@ -22,6 +22,9 @@ type Label struct {
 	Text  string
 	Style tcell.Style
 	Align Alignment
+
+	// Invalidation callback
+	inv func(core.Rect)
 }
 
 // NewLabel creates a label at the specified position and size.
@@ -85,4 +88,14 @@ func (l *Label) Draw(painter *core.Painter) {
 	// Render text (center vertically if height > 1)
 	y := l.Rect.Y + l.Rect.H/2
 	painter.DrawText(startX, y, l.Text, style)
+}
+
+// SetInvalidator allows the UI manager to inject a dirty-region invalidator.
+func (l *Label) SetInvalidator(fn func(core.Rect)) { l.inv = fn }
+
+// invalidate marks the widget as needing redraw.
+func (l *Label) invalidate() {
+	if l.inv != nil {
+		l.inv(l.Rect)
+	}
 }
