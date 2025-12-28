@@ -122,14 +122,18 @@ The text area automatically scrolls to keep the caret visible. Vertical scrollin
 ```go
 textarea := widgets.NewTextArea(0, 0, 40, 10)
 
-// Set content
-textarea.SetText("Hello\nWorld")
+// Set content by modifying Lines directly
+textarea.Lines = []string{"Hello", "World"}
 
-// Get content as string
-text := textarea.GetText()  // "Hello\nWorld"
-
-// Access lines directly
+// Get content as lines
 lines := textarea.Lines  // []string{"Hello", "World"}
+
+// Convert to single string if needed
+import "strings"
+text := strings.Join(textarea.Lines, "\n")  // "Hello\nWorld"
+
+// Set from string
+textarea.Lines = strings.Split("Hello\nWorld", "\n")
 ```
 
 ## With Border

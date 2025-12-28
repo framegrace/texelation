@@ -163,8 +163,7 @@ func NewButton(x, y, w, h int, text string) *Button
 // Properties
 button.Text string
 button.Style tcell.Style
-button.FocusStyle tcell.Style
-button.OnActivate func()
+button.OnClick func()
 ```
 
 ### Input
@@ -172,17 +171,13 @@ button.OnActivate func()
 ```go
 func NewInput(x, y, width int) *Input
 
-// Methods
-func (i *Input) Text() string
-func (i *Input) SetText(t string)
-func (i *Input) Clear()
-
 // Properties
+input.Text string          // Current text content
+input.CaretPos int         // Caret position in runes
+input.Placeholder string   // Hint text when empty
 input.Style tcell.Style
-input.FocusStyle tcell.Style
-input.Placeholder string
-input.OnChange func(text string)
-input.OnSubmit func(text string)
+input.CaretStyle tcell.Style
+input.OnChange func(string)
 ```
 
 ### Label
@@ -193,23 +188,17 @@ func NewLabel(x, y, w, h int, text string) *Label
 // Properties
 label.Text string
 label.Style tcell.Style
-label.Align Alignment  // AlignLeft, AlignCenter, AlignRight
 ```
 
 ### Checkbox
 
 ```go
-func NewCheckbox(x, y, w int, label string) *Checkbox
-
-// Methods
-func (c *Checkbox) Checked() bool
-func (c *Checkbox) SetChecked(checked bool)
-func (c *Checkbox) Toggle()
+func NewCheckbox(x, y int, label string) *Checkbox
 
 // Properties
 checkbox.Label string
+checkbox.Checked bool
 checkbox.Style tcell.Style
-checkbox.CheckedStyle tcell.Style
 checkbox.OnChange func(checked bool)
 ```
 
@@ -218,46 +207,43 @@ checkbox.OnChange func(checked bool)
 ```go
 func NewTextArea(x, y, w, h int) *TextArea
 
-// Methods
-func (t *TextArea) Text() string
-func (t *TextArea) SetText(text string)
-func (t *TextArea) AppendText(text string)
-func (t *TextArea) Clear()
-
 // Properties
+textarea.Lines []string    // Text content as lines
+textarea.CaretX int        // Caret column position
+textarea.CaretY int        // Caret line position
+textarea.OffY int          // Vertical scroll offset
 textarea.Style tcell.Style
-textarea.Wrap bool
-textarea.ReadOnly bool
+textarea.CaretStyle tcell.Style
 ```
 
 ### ComboBox
 
 ```go
-func NewComboBox(x, y, w int, options []string) *ComboBox
+func NewComboBox(x, y, w int, items []string, editable bool) *ComboBox
 
 // Methods
-func (c *ComboBox) SelectedIndex() int
-func (c *ComboBox) SetSelectedIndex(idx int)
-func (c *ComboBox) SelectedValue() string
-func (c *ComboBox) SetOptions(options []string)
+func (c *ComboBox) Value() string
+func (c *ComboBox) SetValue(text string)
 
 // Properties
 combobox.Style tcell.Style
-combobox.DropdownStyle tcell.Style
-combobox.OnChange func(index int, value string)
+combobox.OnChange func(ColorPickerResult)
 ```
 
 ### ColorPicker
 
 ```go
-func NewColorPicker(x, y, w, h int) *ColorPicker
+func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker
 
 // Methods
-func (c *ColorPicker) Color() tcell.Color
-func (c *ColorPicker) SetColor(color tcell.Color)
+func (c *ColorPicker) SetValue(colorStr string)
+func (c *ColorPicker) GetResult() ColorPickerResult
+func (c *ColorPicker) Toggle()
+func (c *ColorPicker) Expand()
+func (c *ColorPicker) Collapse()
 
 // Properties
-colorpicker.OnColorChange func(color tcell.Color)
+colorpicker.OnChange func(ColorPickerResult)
 ```
 
 ### Pane
@@ -282,35 +268,28 @@ pane.Layout Layout
 func NewBorder(x, y, w, h int, style tcell.Style) *Border
 
 // Methods
-func (b *Border) SetContent(w Widget)
-func (b *Border) Content() Widget
+func (b *Border) SetChild(w Widget)
 
 // Properties
 border.Style tcell.Style
 border.Title string
-border.BorderType BorderType  // Single, Double, Rounded, etc.
 ```
 
 ### TabLayout
 
 ```go
-func NewTabLayout(x, y, w, h int, tabs []TabItem) *TabLayout
+func NewTabLayout(x, y, w, h int, tabs []primitives.TabItem) *TabLayout
 
 // Methods
-func (t *TabLayout) AddTab(tab TabItem)
-func (t *TabLayout) SetActiveTab(index int)
-func (t *TabLayout) ActiveTab() int
-func (t *TabLayout) SetContent(index int, content Widget)
+func (t *TabLayout) SetTabContent(idx int, w Widget)
+func (t *TabLayout) SetActive(idx int)
+func (t *TabLayout) ActiveIndex() int
 
-// Types
+// Uses primitives.TabItem
 type TabItem struct {
-    Label   string
-    ID      string
-    Content Widget
+    Label string
+    ID    string
 }
-
-// Properties
-tablayout.OnTabChange func(index int)
 ```
 
 ## Primitives
@@ -320,17 +299,21 @@ tablayout.OnTabChange func(index int)
 ```go
 func NewScrollableList(x, y, w, h int) *ScrollableList
 
+// Types
+type ListItem struct {
+    Text  string
+    Value interface{}  // Optional data payload
+}
+
 // Methods
-func (s *ScrollableList) SetItems(items []interface{})
-func (s *ScrollableList) GetItems() []interface{}
-func (s *ScrollableList) SelectedIndex() int
-func (s *ScrollableList) SetSelectedIndex(idx int)
-func (s *ScrollableList) SelectedItem() interface{}
+func (s *ScrollableList) SetItems(items []ListItem)
+func (s *ScrollableList) SetSelected(idx int)
+func (s *ScrollableList) SelectedItem() *ListItem
 
 // Properties
 list.Style tcell.Style
 list.SelectedStyle tcell.Style
-list.Renderer ListItemRenderer
+list.Renderer ListItemRenderer  // func(p *Painter, rect Rect, item ListItem, selected bool)
 ```
 
 ### Grid
@@ -338,25 +321,35 @@ list.Renderer ListItemRenderer
 ```go
 func NewGrid(x, y, w, h int) *Grid
 
+// Types
+type GridItem struct {
+    Text  string
+    Value interface{}  // Optional data payload
+}
+
 // Methods
-func (g *Grid) SetItems(items []interface{})
-func (g *Grid) GetItems() []interface{}
-func (g *Grid) SelectedIndex() int
-func (g *Grid) SetSelectedIndex(idx int)
-func (g *Grid) SelectedItem() interface{}
+func (g *Grid) SetItems(items []GridItem)
+func (g *Grid) SetSelected(idx int)
+func (g *Grid) SelectedItem() *GridItem
 
 // Properties
 grid.MinCellWidth int
 grid.MaxCols int
 grid.Style tcell.Style
 grid.SelectedStyle tcell.Style
-grid.Renderer GridCellRenderer
+grid.Renderer GridCellRenderer  // func(p *Painter, rect Rect, item GridItem, selected bool)
 ```
 
 ### TabBar
 
 ```go
 func NewTabBar(x, y, w int, tabs []TabItem) *TabBar
+
+// Types
+type TabItem struct {
+    Label string
+    ID    string
+}
 
 // Methods
 func (t *TabBar) SetActive(idx int)
@@ -373,20 +366,17 @@ tabbar.ActiveStyle tcell.Style
 ### UIApp
 
 ```go
-func NewUIApp(ui *UIManager, config *Config) *UIApp
-
-// Config
-type Config struct {
-    RefreshRate int
-    OnInit      func(*UIManager)
-}
+func NewUIApp(title string, ui *core.UIManager) *UIApp
 
 // Implements texel.App interface
 func (a *UIApp) Run() error
 func (a *UIApp) Stop()
 func (a *UIApp) Resize(cols, rows int)
-func (a *UIApp) Render() [][]Cell
+func (a *UIApp) Render() [][]texel.Cell
 func (a *UIApp) HandleKey(ev *tcell.EventKey)
+func (a *UIApp) HandleMouse(ev *tcell.EventMouse)
+func (a *UIApp) GetTitle() string
+func (a *UIApp) UI() *core.UIManager
 ```
 
 ## Import Paths
