@@ -6,6 +6,8 @@ Last updated: 2025-12-27
 
 ## Current Status & Next Steps
 
+**TabLayout and Unified Demo Added (2025-12-27)**: TabLayout container widget combines TabBar with switchable content panels. Unified demo app (`texelui-demo`) showcases all widgets in a tabbed interface.
+
 **Primitives Package Added (2025-12-27)**: Reusable primitive components extracted to `texelui/primitives` package. ColorPicker refactored to use these primitives.
 
 **Core Widgets Completed (2025-11-18)**: Priority 1 and 2 widgets from the architecture review have been implemented, tested, and polished.
@@ -20,19 +22,25 @@ Last updated: 2025-12-27
 - ✅ VBox layout manager (vertical stack with spacing)
 - ✅ HBox layout manager (horizontal row with spacing)
 - ✅ Comprehensive tests (12 test cases, all passing)
-- ✅ Demo application (`texelui/examples/widget_demo.go`)
 - ✅ ScrollableList primitive (vertical list with scrolling, custom renderers)
 - ✅ Grid primitive (2D grid with dynamic columns, custom cell renderers)
 - ✅ TabBar primitive (horizontal tabs with keyboard/mouse navigation)
+- ✅ TabLayout widget (container combining TabBar with switchable content)
+- ✅ Pane widget (container with child widget support)
 - ✅ ColorPicker widget (semantic, palette, OKLCH modes)
   - ✅ SemanticPicker uses ScrollableList internally
   - ✅ PalettePicker uses Grid internally
   - ✅ DrawColorSwatch helper functions
+- ✅ Unified demo application (`texelui-demo` via `./bin/texelui-demo`)
+  - Inputs tab: Input, TextArea, ColorPicker
+  - Layouts tab: VBox/HBox demonstration
+  - Widgets tab: Label, Button, Checkbox
 
 **Ready for Production:**
 The core widget set is now stable and ready for use in forms and applications.
 All widgets have consistent focus behavior (reverse video) and proper keyboard/mouse support.
 The primitives package provides reusable building blocks for complex widgets.
+The unified demo showcases all widgets and will be updated as new widgets are added.
 
 **Next Priority:**
 - RadioButton widget (mutually exclusive groups)
@@ -143,7 +151,6 @@ The primitives package provides reusable building blocks for complex widgets.
 - [x] VBox layout manager (vertical stacking)
 - [x] HBox layout manager (horizontal arrangement)
 - [x] Widget tests (12 comprehensive test cases)
-- [x] Demo application (texelui/examples/widget_demo.go)
 - [x] ScrollableList primitive (vertical list with scrolling)
 - [x] Grid primitive (2D grid with dynamic columns)
 - [x] TabBar primitive (horizontal tab navigation)
@@ -151,6 +158,10 @@ The primitives package provides reusable building blocks for complex widgets.
 - [x] Code quality: TextArea legacy theme API fixed
 - [x] Code quality: Removed dead code from TextArea
 - [x] Code quality: Removed unused BaseWidget fields
+- [x] TabLayout widget (TabBar + switchable content panels)
+- [x] Pane widget enhanced (container with child support)
+- [x] Unified demo application (texelui-demo with 3 tabs)
+- [x] Removed old individual demos (texelui-demo2, colorpicker-demo)
 - [ ] RadioButton widget (mutually exclusive groups)
 - [ ] Form helper widget
 - [ ] Validation framework
