@@ -265,6 +265,21 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 			}
 		}
 	}
+
+	// Mouse move events (no buttons pressed) - forward to widget under cursor for hover tracking
+	if buttons == tcell.ButtonNone {
+		if w := u.topmostAtLocked(x, y); w != nil {
+			if mw, ok := w.(MouseAware); ok {
+				if mw.HandleMouse(ev) {
+					u.dirtyMu.Lock()
+					u.requestRefreshLocked()
+					u.dirtyMu.Unlock()
+					return true
+				}
+			}
+		}
+	}
+
 	return false
 }
 

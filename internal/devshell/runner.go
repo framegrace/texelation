@@ -60,7 +60,7 @@ func Run(builder Builder, args []string) error {
 	}
 	defer screen.Fini()
 	screen.Clear()
-	screen.EnableMouse()
+	screen.EnableMouse(tcell.MouseMotionEvents)
 	defer screen.DisableMouse()
 	screen.EnablePaste() // Enable bracketed paste support
 

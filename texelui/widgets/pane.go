@@ -104,14 +104,29 @@ func (p *Pane) VisitChildren(f func(core.Widget)) {
 	}
 }
 
-// WidgetAt implements core.HitTester for mouse event routing.
+// WidgetAt implements core.HitTester for mouse event routing, respecting Z-index.
 func (p *Pane) WidgetAt(x, y int) core.Widget {
 	if !p.HitTest(x, y) {
 		return nil
 	}
-	// Check children in reverse order (top-most first)
-	for i := len(p.children) - 1; i >= 0; i-- {
-		child := p.children[i]
+
+	// Sort children by Z-index descending (highest first)
+	// This ensures expanded dropdowns and modals are found first
+	sorted := make([]core.Widget, len(p.children))
+	copy(sorted, p.children)
+	sort.Slice(sorted, func(i, j int) bool {
+		zi, zj := 0, 0
+		if z, ok := sorted[i].(core.ZIndexer); ok {
+			zi = z.ZIndex()
+		}
+		if z, ok := sorted[j].(core.ZIndexer); ok {
+			zj = z.ZIndex()
+		}
+		return zi > zj // Descending order (highest Z first)
+	})
+
+	// Check children in Z-order (highest first)
+	for _, child := range sorted {
 		if child.HitTest(x, y) {
 			if ht, ok := child.(core.HitTester); ok {
 				if dw := ht.WidgetAt(x, y); dw != nil {

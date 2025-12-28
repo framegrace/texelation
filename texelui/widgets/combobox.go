@@ -38,7 +38,8 @@ type ComboBox struct {
 	expanded     bool
 	cursorPos    int
 	scrollOffset int
-	selectedIdx  int      // Index in filtered list
+	selectedIdx  int      // Index in filtered list (keyboard navigation)
+	hoverIdx     int      // Index under mouse cursor (-1 if none)
 	filtered     []string // Filtered items based on Text
 	inv          func(core.Rect)
 }
@@ -49,6 +50,7 @@ func NewComboBox(x, y, w int, items []string, editable bool) *ComboBox {
 		Items:    items,
 		Editable: editable,
 		filtered: items,
+		hoverIdx: -1,
 	}
 	cb.SetPosition(x, y)
 	cb.Resize(w, 1)
@@ -103,6 +105,10 @@ func (cb *ComboBox) updateFilter() {
 	// Non-editable combos don't filter - always show all items
 	if !cb.Editable || cb.Text == "" {
 		cb.filtered = cb.Items
+		// Reset selection if out of bounds
+		if cb.selectedIdx >= len(cb.filtered) {
+			cb.selectedIdx = 0
+		}
 	} else {
 		cb.filtered = nil
 		lower := strings.ToLower(cb.Text)
@@ -111,10 +117,9 @@ func (cb *ComboBox) updateFilter() {
 				cb.filtered = append(cb.filtered, item)
 			}
 		}
-	}
-	// Reset selection if out of bounds
-	if cb.selectedIdx >= len(cb.filtered) {
+		// Always select first filtered item when filtering (editable mode)
 		cb.selectedIdx = 0
+		cb.scrollOffset = 0
 	}
 	// Adjust scroll
 	cb.ensureSelectedVisible()
@@ -130,16 +135,36 @@ func (cb *ComboBox) ensureSelectedVisible() {
 	}
 }
 
-// selectCurrentValue finds and selects the current Text value in the filtered list.
+// selectCurrentValue shows all items and selects the current Text value, centering it in view.
 func (cb *ComboBox) selectCurrentValue() {
+	// Show all items when opening dropdown (don't filter)
+	cb.filtered = cb.Items
 	cb.selectedIdx = 0
+	cb.hoverIdx = -1 // Reset hover when opening
 	for i, item := range cb.filtered {
 		if item == cb.Text {
 			cb.selectedIdx = i
 			break
 		}
 	}
-	cb.ensureSelectedVisible()
+	cb.centerSelectedVisible()
+}
+
+// centerSelectedVisible scrolls to center the selected item in view.
+func (cb *ComboBox) centerSelectedVisible() {
+	dr := cb.dropdownRect()
+	// Center the selection in the visible area
+	cb.scrollOffset = cb.selectedIdx - dr.H/2
+	if cb.scrollOffset < 0 {
+		cb.scrollOffset = 0
+	}
+	maxScroll := len(cb.filtered) - dr.H
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if cb.scrollOffset > maxScroll {
+		cb.scrollOffset = maxScroll
+	}
 }
 
 // autocompleteMatch returns the best matching item for autocomplete.
@@ -253,10 +278,14 @@ func (cb *ComboBox) drawDropdown(p *core.Painter) {
 	bg := tm.GetSemanticColor("bg.surface")
 	selFg := tm.GetSemanticColor("text.primary")
 	selBg := tm.GetSemanticColor("bg.selection")
+	hoverBg := tm.GetSemanticColor("accent")
 	borderFg := tm.GetSemanticColor("border.default")
 
 	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
-	selStyle := tcell.StyleDefault.Foreground(selFg).Background(selBg)
+	// Committed selection (item matching cb.Text) - accent color (prominent)
+	selStyle := tcell.StyleDefault.Foreground(bg).Background(hoverBg)
+	// Active highlight (mouse hover or keyboard navigation) - selection color
+	hoverStyle := tcell.StyleDefault.Foreground(selFg).Background(selBg)
 	borderStyle := tcell.StyleDefault.Foreground(borderFg).Background(bg)
 
 	dr := cb.dropdownRect()
@@ -301,11 +330,16 @@ func (cb *ComboBox) drawDropdown(p *core.Painter) {
 			break
 		}
 		item := cb.filtered[itemIdx]
-		isSelected := itemIdx == cb.selectedIdx
+		isHovered := itemIdx == cb.hoverIdx || itemIdx == cb.selectedIdx
+		isCommitted := item == cb.Text
 
 		style := baseStyle
-		if isSelected {
+		if isCommitted {
+			// Committed selection wins - use accent color
 			style = selStyle
+		} else if isHovered {
+			// Active highlight (mouse hover or keyboard navigation)
+			style = hoverStyle
 		}
 
 		// Fill row
@@ -337,6 +371,7 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyEsc:
 		if cb.expanded {
 			cb.expanded = false
+			cb.hoverIdx = -1
 			cb.invalidate()
 			return true
 		}
@@ -348,6 +383,7 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 			cb.Text = cb.filtered[cb.selectedIdx]
 			cb.cursorPos = len(cb.Text)
 			cb.expanded = false
+			cb.hoverIdx = -1
 			cb.updateFilter()
 			cb.invalidate()
 			if cb.OnChange != nil {
@@ -389,6 +425,7 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 		if cb.expanded {
 			if cb.selectedIdx > 0 {
 				cb.selectedIdx--
+				cb.hoverIdx = -1 // Keyboard takes priority over mouse
 				cb.ensureSelectedVisible()
 				cb.invalidate()
 			}
@@ -406,6 +443,7 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 		if cb.expanded {
 			if cb.selectedIdx < len(cb.filtered)-1 {
 				cb.selectedIdx++
+				cb.hoverIdx = -1 // Keyboard takes priority over mouse
 				cb.ensureSelectedVisible()
 				cb.invalidate()
 			}
@@ -519,9 +557,24 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 	if !inMainRect && !inDropdown {
 		if cb.expanded {
 			cb.expanded = false
+			cb.hoverIdx = -1
 			cb.invalidate()
 		}
 		return false
+	}
+
+	// Track hover position in dropdown content area
+	if cb.expanded && inDropdown && y >= contentY && y < contentY+dr.H {
+		newHoverIdx := cb.scrollOffset + (y - contentY)
+		if newHoverIdx >= 0 && newHoverIdx < len(cb.filtered) {
+			if cb.hoverIdx != newHoverIdx {
+				cb.hoverIdx = newHoverIdx
+				cb.invalidate()
+			}
+		}
+	} else if cb.hoverIdx != -1 {
+		cb.hoverIdx = -1
+		cb.invalidate()
 	}
 
 	// Handle mouse wheel for dropdown scrolling
@@ -554,6 +607,7 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 			cb.Text = cb.filtered[idx]
 			cb.cursorPos = len(cb.Text)
 			cb.expanded = false
+			cb.hoverIdx = -1
 			cb.updateFilter()
 			cb.invalidate()
 			if cb.OnChange != nil {
@@ -573,6 +627,7 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 				cb.selectCurrentValue()
 			} else {
 				cb.expanded = false
+				cb.hoverIdx = -1
 			}
 			cb.invalidate()
 			return true
@@ -616,6 +671,7 @@ func (cb *ComboBox) IsModal() bool {
 // DismissModal collapses the dropdown.
 func (cb *ComboBox) DismissModal() {
 	cb.expanded = false
+	cb.hoverIdx = -1
 	cb.invalidate()
 }
 
@@ -624,6 +680,7 @@ func (cb *ComboBox) Blur() {
 	cb.BaseWidget.Blur()
 	if cb.expanded {
 		cb.expanded = false
+		cb.hoverIdx = -1
 		cb.invalidate()
 	}
 }
