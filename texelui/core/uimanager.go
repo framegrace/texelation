@@ -158,14 +158,24 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 		return true
 	}
 
+	// Let focused widget handle the key first
 	if u.focused != nil && u.focused.HandleKey(ev) {
-		// Fallback: if widget didn't mark anything dirty, redraw everything
+		// Widget handled it
 		u.dirtyMu.Lock()
 		if len(u.dirty) == 0 {
 			u.invalidateAllLocked()
 		} else {
 			u.requestRefreshLocked()
 		}
+		u.dirtyMu.Unlock()
+		return true
+	}
+
+	// If Enter wasn't handled by widget, cycle focus to next component
+	if ev.Key() == tcell.KeyEnter {
+		u.focusNextDeepLocked()
+		u.dirtyMu.Lock()
+		u.invalidateAllLocked()
 		u.dirtyMu.Unlock()
 		return true
 	}

@@ -326,7 +326,7 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 
 	case tcell.KeyEnter:
 		if cb.expanded && len(cb.filtered) > 0 {
-			// Select current item
+			// Select current item from dropdown
 			cb.Text = cb.filtered[cb.selectedIdx]
 			cb.cursorPos = len(cb.Text)
 			cb.expanded = false
@@ -335,7 +335,8 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 			if cb.OnChange != nil {
 				cb.OnChange(cb.Text)
 			}
-			return true
+			// Return false to allow focus to cycle to next component
+			return false
 		} else if !cb.expanded {
 			// Accept autocomplete or current value
 			autocomplete := cb.autocompleteMatch()
@@ -343,12 +344,13 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 				cb.Text = autocomplete
 				cb.cursorPos = len(cb.Text)
 				cb.updateFilter()
+				cb.invalidate()
+				if cb.OnChange != nil {
+					cb.OnChange(cb.Text)
+				}
 			}
-			cb.invalidate()
-			if cb.OnChange != nil {
-				cb.OnChange(cb.Text)
-			}
-			return true
+			// Return false to allow focus to cycle to next component
+			return false
 		}
 		return false
 
