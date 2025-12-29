@@ -20,6 +20,8 @@ type Input struct {
 
 	// Optional validation/change callback
 	OnChange func(text string)
+	// Optional blur callback
+	OnBlur func(text string)
 
 	// Mouse state
 	mouseDown bool
@@ -58,6 +60,15 @@ func NewInput(x, y, w int) *Input {
 
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
 func (i *Input) SetInvalidator(fn func(core.Rect)) { i.inv = fn }
+
+// Blur removes focus and triggers the OnBlur callback if set.
+func (i *Input) Blur() {
+	wasFocused := i.IsFocused()
+	i.BaseWidget.Blur()
+	if wasFocused && i.OnBlur != nil {
+		i.OnBlur(i.Text)
+	}
+}
 
 // Draw renders the input field with text and caret.
 func (i *Input) Draw(painter *core.Painter) {

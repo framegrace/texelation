@@ -584,10 +584,17 @@ func (e *ConfigEditor) buildField(cfg config.Config, target *configTarget, secti
 		}
 		input := widgets.NewInput(0, 0, 0)
 		input.Text = formatNumber(v)
+		dirty := false
 		input.OnChange = func(text string) {
 			if parsed, err := strconv.ParseFloat(strings.TrimSpace(text), 64); err == nil {
 				updateConfigValue(cfg, sectionKey, key, parsed)
+				dirty = true
+			}
+		}
+		input.OnBlur = func(text string) {
+			if dirty {
 				e.applyTargetConfig(target, apply)
+				dirty = false
 			}
 		}
 		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: input, height: 1})
@@ -595,10 +602,17 @@ func (e *ConfigEditor) buildField(cfg config.Config, target *configTarget, secti
 	case int:
 		input := widgets.NewInput(0, 0, 0)
 		input.Text = strconv.Itoa(v)
+		dirty := false
 		input.OnChange = func(text string) {
 			if parsed, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
 				updateConfigValue(cfg, sectionKey, key, parsed)
+				dirty = true
+			}
+		}
+		input.OnBlur = func(text string) {
+			if dirty {
 				e.applyTargetConfig(target, apply)
+				dirty = false
 			}
 		}
 		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: input, height: 1})
@@ -631,20 +645,34 @@ func (e *ConfigEditor) buildField(cfg config.Config, target *configTarget, secti
 		}
 		input := widgets.NewInput(0, 0, 0)
 		input.Text = v
+		dirty := false
 		input.OnChange = func(text string) {
 			updateConfigValue(cfg, sectionKey, key, text)
-			e.applyTargetConfig(target, apply)
+			dirty = true
+		}
+		input.OnBlur = func(text string) {
+			if dirty {
+				e.applyTargetConfig(target, apply)
+				dirty = false
+			}
 		}
 		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: input, height: 1})
 		return &fieldBinding{section: sectionKey, key: key, kind: fieldString, widget: input}
 	case []interface{}, map[string]interface{}, []string:
 		textarea := widgets.NewTextArea(0, 0, 0, 4)
 		textarea.SetText(formatJSON(value))
+		dirty := false
 		textarea.OnChange = func(text string) {
 			var decoded interface{}
 			if err := json.Unmarshal([]byte(text), &decoded); err == nil {
 				updateConfigValue(cfg, sectionKey, key, decoded)
+				dirty = true
+			}
+		}
+		textarea.OnBlur = func(text string) {
+			if dirty {
 				e.applyTargetConfig(target, apply)
+				dirty = false
 			}
 		}
 		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), height: 1})
@@ -653,9 +681,16 @@ func (e *ConfigEditor) buildField(cfg config.Config, target *configTarget, secti
 	default:
 		input := widgets.NewInput(0, 0, 0)
 		input.Text = fmt.Sprintf("%v", v)
+		dirty := false
 		input.OnChange = func(text string) {
 			updateConfigValue(cfg, sectionKey, key, text)
-			e.applyTargetConfig(target, apply)
+			dirty = true
+		}
+		input.OnBlur = func(text string) {
+			if dirty {
+				e.applyTargetConfig(target, apply)
+				dirty = false
+			}
 		}
 		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: input, height: 1})
 		return &fieldBinding{section: sectionKey, key: key, kind: fieldString, widget: input}
