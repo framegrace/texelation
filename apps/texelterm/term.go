@@ -79,6 +79,9 @@ type TexelTerm struct {
 
 	// Debug logging
 	renderDebugLog func(format string, args ...interface{})
+
+	sizeReady chan struct{}
+	sizeSet   bool
 }
 
 var _ texel.CloseRequester = (*TexelTerm)(nil)
@@ -121,6 +124,7 @@ func New(title, command string) texel.App {
 		closeCh:      make(chan struct{}),
 		restartCh:    make(chan struct{}, 1), // Buffered to avoid blocking
 		controlBus:   texel.NewControlBus(),  // Own control bus, no pipeline needed
+		sizeReady:    make(chan struct{}),
 	}
 
 	return term
@@ -1107,6 +1111,22 @@ func (a *TexelTerm) Run() error {
 	}
 }
 
+func (a *TexelTerm) waitForSize() {
+	a.mu.Lock()
+	ready := a.sizeReady
+	set := a.sizeSet
+	a.mu.Unlock()
+
+	if set || ready == nil {
+		return
+	}
+
+	select {
+	case <-ready:
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
 // injectShellIntegration modifies the shell command to auto-load integration scripts.
 // For interactive shells, we need to modify the command itself, not just env vars.
 func (a *TexelTerm) injectShellIntegration(env []string) []string {
@@ -1228,6 +1248,7 @@ func (a *TexelTerm) ensureShellIntegrationScripts(configDir string) error {
 }
 
 func (a *TexelTerm) runShell() error {
+	a.waitForSize()
 	a.mu.Lock()
 	cols, rows := a.width, a.height
 
@@ -1661,6 +1682,12 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	defer a.mu.Unlock()
 	a.width = cols
 	a.height = rows
+	if !a.sizeSet {
+		a.sizeSet = true
+		if a.sizeReady != nil {
+			close(a.sizeReady)
+		}
+	}
 
 	if a.vterm != nil {
 		a.vterm.Resize(cols, rows)

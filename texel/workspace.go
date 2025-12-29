@@ -199,12 +199,13 @@ func (w *Workspace) AddApp(app App) {
 
 	p := newPane(w)
 	w.tree.SetRoot(p)
-	p.AttachApp(app, w.refreshChan)
+	p.PrepareAppForRestore(app, w.refreshChan)
 
 	// Set initial active state AFTER attaching the app
 	log.Printf("AddApp: Setting pane '%s' as active", p.getTitle())
 	p.SetActive(true)
 	w.recalculateLayout()
+	p.StartPreparedApp()
 	w.notifyFocus()
 	w.desktop.broadcastTreeChanged() // Notify that the tree structure changed
 	w.desktop.broadcastStateUpdate()
