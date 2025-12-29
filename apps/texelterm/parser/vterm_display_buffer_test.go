@@ -199,6 +199,42 @@ func TestVTerm_DisplayBufferCarriageReturn(t *testing.T) {
 	}
 }
 
+func TestVTerm_DisplayBufferRightPromptLineFeed(t *testing.T) {
+	v := NewVTerm(20, 5)
+	v.EnableDisplayBuffer()
+	p := NewParser(v)
+
+	for _, r := range "LEFT" {
+		p.Parse(r)
+	}
+
+	// Move far right (CUF 500), write right prompt, move back left.
+	p.Parse('\x1b')
+	p.Parse('[')
+	p.Parse('5')
+	p.Parse('0')
+	p.Parse('0')
+	p.Parse('C')
+	p.Parse('R')
+	p.Parse('\x1b')
+	p.Parse('[')
+	p.Parse('1')
+	p.Parse('D')
+	p.Parse('\n')
+
+	grid := v.Grid()
+	if len(grid) == 0 || len(grid[0]) < 20 {
+		t.Fatalf("unexpected grid size: %dx%d", len(grid), len(grid[0]))
+	}
+
+	if grid[0][0].Rune != 'L' {
+		t.Errorf("expected left prompt at col 0, got %q", grid[0][0].Rune)
+	}
+	if grid[0][19].Rune != 'R' {
+		t.Errorf("expected right prompt at col 19, got %q", grid[0][19].Rune)
+	}
+}
+
 func TestVTerm_DisplayBufferLoadHistory(t *testing.T) {
 	v := NewVTerm(20, 5)
 	v.EnableDisplayBuffer()
@@ -305,9 +341,9 @@ func TestVTerm_DisplayBufferBackspaceErase(t *testing.T) {
 	}
 
 	// Simulate BS + SPACE + BS (shell's erase sequence)
-	v.Backspace()       // Move cursor left (pos 4)
-	v.placeChar(' ')    // Overwrite 'o' with space (pos 5)
-	v.Backspace()       // Move cursor back (pos 4)
+	v.Backspace()    // Move cursor left (pos 4)
+	v.placeChar(' ') // Overwrite 'o' with space (pos 5)
+	v.Backspace()    // Move cursor back (pos 4)
 
 	// Check the logical line content
 	line = v.displayBufferGetCurrentLine()
