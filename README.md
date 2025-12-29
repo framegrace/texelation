@@ -55,6 +55,7 @@ That's it! The `texelation` command automatically:
 - `1-9` - Switch workspace
 - `l` - Open launcher
 - `h` - Help overlay
+- `f` - Config editor (system)
 - `Esc` - Exit control mode
 
 **To exit**: Close all panes with `Ctrl+A` then `x`, or run `texelation --stop` from another terminal.
@@ -91,7 +92,8 @@ texelation --server-only       # Run server in foreground (used internally by da
 - PID file: `~/.texelation/texelation.pid`
 - Snapshots: `~/.texelation/snapshot.json`
 - Server logs: `~/.texelation/server.log`
-- Config: `~/.config/texelation/config.json`
+- System config: `~/.config/texelation/texelation.json`
+- App configs: `~/.config/texelation/apps/<app>/config.json`
 - Theme: `~/.config/texelation/theme.json`
 
 ## Architecture
@@ -131,25 +133,13 @@ See [Terminal Persistence Architecture](docs/TERMINAL_PERSISTENCE_ARCHITECTURE.m
 
 ## Configuration
 
-Texelation uses two configuration files in `~/.config/texelation/`:
+Texelation uses configuration files in `~/.config/texelation/`:
 
-### config.json - Server Settings
-
-```json
-{
-  "defaultApp": "launcher"
-}
-```
-
-- `defaultApp`: App to open on startup and in new panes (`"launcher"`, `"texelterm"`, or `"welcome"`)
-
-### theme.json - Visual Settings
+### texelation.json - System Settings
 
 ```json
 {
-  "texelterm": {
-    "display_buffer_enabled": true
-  },
+  "defaultApp": "launcher",
   "layout_transitions": {
     "enabled": true,
     "duration_ms": 200,
@@ -163,7 +153,31 @@ Texelation uses two configuration files in `~/.config/texelation/`:
 }
 ```
 
-Hot-reload theme with `kill -HUP $(pidof texel-server)`. Server settings require restart.
+- `defaultApp`: App to open on startup and in new panes (`"launcher"` or `"texelterm"`)
+
+### apps/<app>/config.json - App Settings
+
+```json
+{
+  "texelterm": {
+    "display_buffer_enabled": true
+  },
+  "texelterm.scroll": {
+    "velocity_decay": 0.6,
+    "velocity_increment": 0.6
+  }
+}
+```
+
+### theme.json - Visual Settings
+
+Theme colors and UI defaults live in `theme.json`. Per-app theme overrides live under
+`theme_overrides` in each app config.
+
+Use `Ctrl+A F` to open the system config editor or `Ctrl+F` to open the active app
+config editor. Changes are saved immediately, and the editor will prompt if a
+restart is required. You can also reload theme and config with
+`kill -HUP $(pidof texel-server)`.
 
 ## Keyboard & Mouse
 
@@ -176,6 +190,10 @@ Hot-reload theme with `kill -HUP $(pidof texel-server)`. Server settings require
 - `1-9` - Jump to workspace
 - `Ctrl+Arrow` - Resize panes
 - `Shift+Arrow` - Move focus (works outside control mode too)
+- `f` - Config editor (system)
+
+### Config Editor
+- `Ctrl+F` - Open config editor for active app
 
 ### Terminal Navigation
 - Mouse wheel - Scroll history
@@ -233,7 +251,7 @@ make fmt          # Format code
 
 - Remote networking (server/client on different hosts)
 - Multi-client sessions (collaborative editing)
-- Form-based configuration UI
+- Theme editor for dedicated palette and UI design
 - Rich graphics via Kitty protocol
 - User-configurable key bindings
 

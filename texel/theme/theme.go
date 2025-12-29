@@ -71,9 +71,6 @@ func GetLoadError() error {
 
 // Reload forces a re-read of the theme file and palette.
 func Reload() error {
-	mu.Lock()
-	defer mu.Unlock()
-
 	log.Println("Theme: Reloading configuration...")
 	
 	// Re-create instance to clear old state
@@ -83,18 +80,20 @@ func Reload() error {
 		return err
 	}
 	
-	instance = newInstance
-
 	// Re-load Palette
-	paletteName := instance.GetString("meta", "palette", "mocha")
+	paletteName := newInstance.GetString("meta", "palette", "mocha")
 	if err := LoadPalette(paletteName); err != nil {
 		log.Printf("Theme warning: Could not load palette '%s' (%v), falling back to 'mocha'", paletteName, err)
 		LoadPalette("mocha")
 	}
 
 	// Re-apply defaults
-	instance.LoadStandardSemantics()
-	ApplyDefaults(instance)
+	newInstance.LoadStandardSemantics()
+	ApplyDefaults(newInstance)
+
+	mu.Lock()
+	instance = newInstance
+	mu.Unlock()
 
 	return nil
 }
