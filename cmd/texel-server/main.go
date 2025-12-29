@@ -24,6 +24,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"texelation/apps/configeditor"
 	"texelation/apps/help"
 	"texelation/apps/launcher"
 	"texelation/apps/statusbar"
@@ -50,16 +51,14 @@ func main() {
 
 	server.SetVerboseLogging(*verboseLogs)
 
-	// Load configuration from file
-	cfg, err := config.Load()
-	if err != nil {
-		log.Printf("Warning: Failed to load config: %v, using defaults", err)
-		cfg = config.Default()
+	cfg := config.System()
+	if err := config.Err(); err != nil {
+		log.Printf("Warning: Failed to load system config: %v", err)
 	}
 
-	// Command-line flag overrides config file
+	// Command-line flag overrides config file.
 	if *defaultApp == "" {
-		*defaultApp = cfg.DefaultApp
+		*defaultApp = cfg.GetString("", "defaultApp", "launcher")
 	}
 
 	if *cpuProfile != "" {
@@ -116,6 +115,10 @@ func main() {
 	// Register launcher in registry
 	desktop.Registry().RegisterBuiltIn("launcher", func() interface{} {
 		return launcher.New(desktop.Registry())
+	})
+
+	desktop.Registry().RegisterBuiltIn("config-editor", func() interface{} {
+		return configeditor.New(desktop.Registry())
 	})
 
 	// Register snapshot factory for launcher
@@ -226,6 +229,9 @@ func main() {
 		sig := <-sigCh
 		if sig == syscall.SIGHUP {
 			log.Println("Received SIGHUP, reloading configuration...")
+			if err := config.Reload(); err != nil {
+				log.Printf("Failed to reload system/app config: %v", err)
+			}
 			if err := theme.Reload(); err != nil {
 				log.Printf("Failed to reload theme: %v", err)
 			} else {

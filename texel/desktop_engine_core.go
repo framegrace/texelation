@@ -20,7 +20,9 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
+	"texelation/config"
 	"texelation/registry"
 	"texelation/texel/theme"
 	"time"
@@ -194,27 +196,8 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory AppFactory, in
 	// Note: Other apps (launcher, welcome, etc.) are registered in main.go
 	// after Desktop is created, since launcher needs access to the registry
 
-	// Parse layout transitions config from theme
-	layoutTransitionsConfig := LayoutTransitionConfig{
-		Enabled:      true,
-		DurationMs:   300,
-		Easing:       "smoothstep",
-		MinThreshold: 3,
-	}
-	if section, ok := tm["layout_transitions"]; ok {
-		if enabled, ok := section["enabled"].(bool); ok {
-			layoutTransitionsConfig.Enabled = enabled
-		}
-		if duration, ok := section["duration_ms"].(float64); ok {
-			layoutTransitionsConfig.DurationMs = int(duration)
-		}
-		if easing, ok := section["easing"].(string); ok {
-			layoutTransitionsConfig.Easing = easing
-		}
-		if threshold, ok := section["min_threshold"].(float64); ok {
-			layoutTransitionsConfig.MinThreshold = int(threshold)
-		}
-	}
+	// Parse layout transitions config from system config.
+	layoutTransitionsConfig := loadLayoutTransitionsConfig()
 
 	d := &DesktopEngine{
 		display:            driver,
@@ -283,7 +266,7 @@ func (d *DesktopEngine) ForceRefresh() {
 	// Reload apps
 	d.loadApps()
 
-	// Reload layout transitions configuration from theme
+	// Reload layout transitions configuration from system config.
 	d.reloadLayoutTransitions()
 
 	// Clear style cache to force re-evaluation of colors
@@ -303,41 +286,29 @@ func (d *DesktopEngine) ForceRefresh() {
 	}
 }
 
-// reloadLayoutTransitions reads layout transition config from theme and updates the manager.
+// reloadLayoutTransitions reads layout transition config from system config and updates the manager.
 func (d *DesktopEngine) reloadLayoutTransitions() {
 	if d.layoutTransitions == nil {
 		return
 	}
 
-	tm := theme.Get()
-
-	// Parse layout transitions config from theme (same as initialization)
-	config := LayoutTransitionConfig{
-		Enabled:      true,
-		DurationMs:   300,
-		Easing:       "smoothstep",
-		MinThreshold: 3,
-	}
-
-	if section, ok := tm["layout_transitions"]; ok {
-		if enabled, ok := section["enabled"].(bool); ok {
-			config.Enabled = enabled
-		}
-		if duration, ok := section["duration_ms"].(float64); ok {
-			config.DurationMs = int(duration)
-		}
-		if easing, ok := section["easing"].(string); ok {
-			config.Easing = easing
-		}
-		if threshold, ok := section["min_threshold"].(float64); ok {
-			config.MinThreshold = int(threshold)
-		}
-	}
+	// Parse layout transitions config from system config (same as initialization).
+	config := loadLayoutTransitionsConfig()
 
 	log.Printf("Desktop: Reloading layout transitions config: enabled=%v, duration=%dms, easing=%s",
 		config.Enabled, config.DurationMs, config.Easing)
 
 	d.layoutTransitions.UpdateConfig(config)
+}
+
+func loadLayoutTransitionsConfig() LayoutTransitionConfig {
+	cfg := config.System()
+	return LayoutTransitionConfig{
+		Enabled:      cfg.GetBool("layout_transitions", "enabled", true),
+		DurationMs:   cfg.GetInt("layout_transitions", "duration_ms", 300),
+		Easing:       cfg.GetString("layout_transitions", "easing", "smoothstep"),
+		MinThreshold: cfg.GetInt("layout_transitions", "min_threshold", 3),
+	}
 }
 
 func (d *DesktopEngine) Subscribe(listener Listener) {
@@ -477,7 +448,7 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 	} else {
 		app.Resize(w, h)
 	}
-	
+
 	d.notifyPaneState(panel.id, true, false, ZOrderFloating, false)
 
 	d.recalculateLayout()
@@ -490,7 +461,7 @@ func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
 	if panel == nil {
 		return
 	}
-	
+
 	found := false
 	for i, p := range d.floatingPanels {
 		if p == panel {
@@ -499,7 +470,7 @@ func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
 			break
 		}
 	}
-	
+
 	if found {
 		d.appLifecycle.StopApp(panel.app)
 		d.recalculateLayout()
@@ -587,7 +558,7 @@ func (d *DesktopEngine) recalculateLayout() {
 			sp.app.Resize(sp.size, h-mainY-(h-mainY-mainH))
 		}
 	}
-	
+
 	// Resize floating panels if needed (e.g. ensure they fit?)
 	// For now, leave them as requested.
 
@@ -623,13 +594,13 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 	if !ok {
 		return
 	}
-	
+
 	// Global Shortcuts
 	if key.Key() == tcell.KeyF1 {
 		d.launchHelpOverlay()
 		return
 	}
-	
+
 	// Check floating panels (topmost first)
 	// Iterate in reverse to find topmost modal
 	for i := len(d.floatingPanels) - 1; i >= 0; i-- {
@@ -648,6 +619,11 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 			}
 			return
 		}
+	}
+
+	if key.Key() == tcell.KeyCtrlF {
+		d.launchConfigEditorOverlay(d.activeAppTarget())
+		return
 	}
 
 	if key.Key() == keyControlMode {
@@ -769,6 +745,90 @@ func (d *DesktopEngine) launchHelpOverlay() {
 	y := (vh - h) / 2
 
 	d.ShowFloatingPanel(app, x, y, w, h)
+}
+
+func (d *DesktopEngine) activeAppTarget() string {
+	if d.activeWorkspace == nil {
+		return ""
+	}
+	pane := d.activeWorkspace.ActivePane()
+	if pane == nil || pane.app == nil {
+		return ""
+	}
+	if provider, ok := pane.app.(SnapshotProvider); ok {
+		appType, _ := provider.SnapshotMetadata()
+		return appType
+	}
+	return ""
+}
+
+func (d *DesktopEngine) launchConfigEditorOverlay(target string) {
+	for _, fp := range d.floatingPanels {
+		if fp.app.GetTitle() == "Config Editor" {
+			d.CloseFloatingPanel(fp)
+			return
+		}
+	}
+
+	appInstance := d.registry.CreateApp("config-editor", nil)
+	app, ok := appInstance.(App)
+	if !ok {
+		return
+	}
+
+	if setter, ok := app.(interface{ SetDefaultTarget(string) }); ok && target != "" {
+		setter.SetDefaultTarget(target)
+	}
+
+	if provider, ok := app.(ControlBusProvider); ok {
+		_ = provider.RegisterControl("config-editor.apply", "Apply config changes", func(payload interface{}) error {
+			d.handleConfigEditorApply(payload)
+			return nil
+		})
+	}
+
+	vw, vh := d.viewportSize()
+	w := 80
+	h := 30
+	if w > vw {
+		w = vw - 2
+	}
+	if h > vh {
+		h = vh - 2
+	}
+	if w < 1 || h < 1 {
+		return
+	}
+	x := (vw - w) / 2
+	y := (vh - h) / 2
+
+	d.ShowFloatingPanel(app, x, y, w, h)
+}
+
+func (d *DesktopEngine) handleConfigEditorApply(payload interface{}) {
+	raw, ok := payload.(string)
+	if !ok {
+		return
+	}
+	switch {
+	case raw == "system":
+		d.reloadLayoutTransitions()
+	case raw == "theme":
+		d.applyThemeChange()
+	case strings.HasPrefix(raw, "app-theme:"):
+		d.applyThemeChange()
+	}
+}
+
+func (d *DesktopEngine) applyThemeChange() {
+	d.styleCache = make(map[styleKey]tcell.Style)
+	d.recalculateLayout()
+	d.broadcastStateUpdate()
+	d.broadcastTreeChanged()
+	d.dispatcher.Broadcast(Event{Type: EventThemeChanged})
+	if d.refreshHandler != nil {
+		d.refreshHandler()
+	}
 }
 
 // InjectMouseEvent records the latest mouse event metadata from remote clients.

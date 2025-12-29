@@ -1,0 +1,23 @@
+{
+  "texelterm": {
+    "visual_bell_enabled": false,
+    "wrap_enabled": true,
+    "reflow_enabled": true,
+    "display_buffer_enabled": true
+  },
+  "texelterm.scroll": {
+    "velocity_decay": 0.6,
+    "velocity_increment": 0.6,
+    "max_velocity": 15.0,
+    "debounce_ms": 50,
+    "exponential_curve": 0.8
+  },
+  "texelterm.selection": {
+    "edge_zone": 2,
+    "max_scroll_speed": 15
+  },
+  "texelterm.history": {
+    "memory_lines": 100000,
+    "persist_dir": ""
+  }
+}

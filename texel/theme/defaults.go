@@ -37,12 +37,6 @@ func ApplyDefaults(cfg Config) {
 		changed = true
 	}
 
-	if applySectionDefaults(cfg, "effects", Section{
-		"bindings": defaultEffectBindings(),
-	}) {
-		changed = true
-	}
-
 	if applySectionDefaults(cfg, "statusbar", Section{
 		"base_fg":         "text.primary",
 		"base_bg":         "bg.mantle",
@@ -70,44 +64,26 @@ func ApplyDefaults(cfg Config) {
 		changed = true
 	}
 
-    if applySectionDefaults(cfg, "selection", Section{
-        "highlight_bg": "selection",
-        "highlight_fg": "text.primary",
-    }) {
-        changed = true
-    }
-
-    // TexelUI (TUI widgets) default colors
-    // Most widgets now rely on semantic keys (ui.*), but we can still
-    // populate overrides here if we want specific UI element tweaks.
-    if applySectionDefaults(cfg, "ui", Section{
-        // These map the semantic names (defined in semantics.go) to palette colors.
-        // We re-assert them here just in case, but semantics.go does the heavy lifting.
-        // For specific widget overrides:
-        "button_bg": "action.primary",
-        "button_fg": "text.inverse",
-        
-        // Legacy keys (mapped to new system for backward compat)
-        "surface_bg": "bg.surface",
-        "surface_fg": "text.primary",
-    }) {
-        changed = true
-    }
-
-	if applySectionDefaults(cfg, "texelterm", Section{
-		"visual_bell_enabled": false,
-		"wrap_enabled":        true,
-		"reflow_enabled":      true,
+	if applySectionDefaults(cfg, "selection", Section{
+		"highlight_bg": "selection",
+		"highlight_fg": "text.primary",
 	}) {
 		changed = true
 	}
 
-	if applySectionDefaults(cfg, "texelterm.scroll", Section{
-		"velocity_decay":       0.6,   // Time window (seconds) for velocity accumulation
-		"velocity_increment":   0.6,   // Velocity increase per scroll event
-		"max_velocity":         15.0,  // Maximum velocity (multiplier will be 1 + max_velocity)
-		"debounce_ms":          50,    // Milliseconds to debounce duplicate events
-		"exponential_curve":    0.8,   // Exponential smoothing factor (velocity^curve)
+	// TexelUI (TUI widgets) default colors
+	// Most widgets now rely on semantic keys (ui.*), but we can still
+	// populate overrides here if we want specific UI element tweaks.
+	if applySectionDefaults(cfg, "ui", Section{
+		// These map the semantic names (defined in semantics.go) to palette colors.
+		// We re-assert them here just in case, but semantics.go does the heavy lifting.
+		// For specific widget overrides:
+		"button_bg": "action.primary",
+		"button_fg": "text.inverse",
+
+		// Legacy keys (mapped to new system for backward compat)
+		"surface_bg": "bg.surface",
+		"surface_fg": "text.primary",
 	}) {
 		changed = true
 	}
@@ -135,36 +111,4 @@ func applySectionDefaults(cfg Config, section string, defaults Section) bool {
 		}
 	}
 	return changed
-}
-func defaultEffectBindings() []map[string]interface{} {
-	return []map[string]interface{}{
-		{
-			"event":  "pane.active",
-			"target": "pane",
-			"effect": "fadeTint",
-			"params": map[string]interface{}{
-				"color":       "bg.base", // Use semantic background
-				"intensity":   0.35,
-				"duration_ms": 400,
-			},
-		},
-		{
-			"event":  "pane.resizing",
-			"target": "pane",
-			"effect": "fadeTint",
-			"params": map[string]interface{}{
-				"color":       "border.resizing", // Match resizing border
-				"intensity":   0.2,
-				"duration_ms": 160,
-			},
-		},
-		{
-			"event":  "workspace.control",
-			"target": "workspace",
-			"effect": "rainbow",
-			"params": map[string]interface{}{
-				"speed_hz": 0.5,
-			},
-		},
-	}
 }

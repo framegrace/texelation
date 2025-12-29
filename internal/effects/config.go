@@ -154,6 +154,30 @@ func ParseTrigger(name string) (EffectTriggerType, bool) {
 	}
 }
 
+// TriggerNames returns the supported trigger names for effect bindings.
+func TriggerNames() []string {
+	return []string{
+		"pane.created",
+		"pane.removed",
+		"pane.active",
+		"pane.resizing",
+		"pane.geometry",
+		"pane.title",
+		"pane.zorder",
+		"pane.key",
+		"workspace.control",
+		"workspace.key",
+		"workspace.switch",
+		"workspace.resize",
+		"workspace.layout",
+		"workspace.zoom",
+		"workspace.theme",
+		"clipboard.changed",
+		"clock.tick",
+		"session.state",
+	}
+}
+
 func parseTarget(value string) (Target, bool) {
 	switch strings.ToLower(value) {
 	case "pane", "panes":

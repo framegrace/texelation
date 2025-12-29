@@ -37,12 +37,12 @@ type Launcher struct {
 	controlBus texel.ControlBus
 	storage    texel.AppStorage
 
-	mu           sync.RWMutex
-	apps         []*registry.AppEntry
-	usageCounts  map[string]int
-	selectedIdx  int
-	labels       []*widgets.Label
-	pane         *widgets.Pane
+	mu          sync.RWMutex
+	apps        []*registry.AppEntry
+	usageCounts map[string]int
+	selectedIdx int
+	labels      []*widgets.Label
+	pane        *widgets.Pane
 
 	width, height int
 }
@@ -163,7 +163,7 @@ func (l *Launcher) buildUI() {
 	ui := l.UI()
 
 	// Add background pane
-	tm := theme.Get()
+	tm := theme.ForApp("launcher")
 	bgColor := tm.GetSemanticColor("bg.surface")
 	style := tcell.StyleDefault.Background(bgColor)
 
@@ -196,7 +196,7 @@ func (l *Launcher) buildUI() {
 
 // updateSelection updates the visual style of the selected app.
 func (l *Launcher) updateSelection() {
-	tm := theme.Get()
+	tm := theme.ForApp("launcher")
 	normalFg := tm.GetSemanticColor("text.primary")
 	normalBg := tm.GetSemanticColor("bg.surface")
 	selectedFg := tm.GetSemanticColor("text.inverse")

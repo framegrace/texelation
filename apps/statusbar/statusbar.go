@@ -116,7 +116,7 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 	}
 
 	// Define color schemes
-	tm := theme.Get()
+	tm := theme.ForApp("statusbar")
 	// Base background (Mantle)
 	defbgColor := tm.GetSemanticColor("bg.mantle").TrueColor()
 	deffgColor := tm.GetSemanticColor("text.primary").TrueColor()
@@ -128,14 +128,14 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 	}
 
 	styleBase := tcell.StyleDefault.Background(defbgColor).Foreground(deffgColor)
-	
+
 	// Active Tab: seamless with desktop (bg.base)
 	activeTabBg := a.desktopBgColor.TrueColor() // Should be bg.base
 	activeTabFg := tm.GetSemanticColor("text.primary").TrueColor()
 	styleActiveTab := tcell.StyleDefault.Background(activeTabBg).Foreground(activeTabFg)
 
 	// Inactive Tab: darker (bg.mantle or bg.crust?)
-	inactiveTabBg := tm.GetSemanticColor("bg.crust").TrueColor() 
+	inactiveTabBg := tm.GetSemanticColor("bg.crust").TrueColor()
 	inactiveTabFg := tm.GetSemanticColor("text.muted").TrueColor()
 	styleInactiveTab := tcell.StyleDefault.Background(inactiveTabBg).Foreground(inactiveTabFg)
 

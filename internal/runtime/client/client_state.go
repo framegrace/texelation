@@ -19,6 +19,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"texelation/client"
+	"texelation/config"
 	"texelation/internal/effects"
 	"texelation/protocol"
 )
@@ -57,7 +58,7 @@ type clientState struct {
 	selection            selectionState
 
 	// Restart notification state
-	showRestartNotification    bool
+	showRestartNotification      bool
 	restartNotificationDismissed bool
 }
 
@@ -115,8 +116,15 @@ func (s *clientState) scheduleResize(writeMu *sync.Mutex, conn net.Conn, session
 
 func (s *clientState) applyEffectConfig() {
 	var rawBindings interface{}
-	if section, ok := s.themeValues["effects"]; ok {
-		rawBindings = section["bindings"]
+	if cfg := config.System(); cfg != nil {
+		if section := cfg.Section("effects"); section != nil {
+			rawBindings = section["bindings"]
+		}
+	}
+	if rawBindings == nil {
+		if section, ok := s.themeValues["effects"]; ok {
+			rawBindings = section["bindings"]
+		}
 	}
 	bindings, err := effects.ParseBindings(rawBindings)
 	if err != nil {

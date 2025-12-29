@@ -48,6 +48,7 @@ func NewHelpApp() texel.App {
 					{"F1", "Show this Help"},
 					{"Ctrl+A L", "Open Launcher"},
 					{"Ctrl+A H", "Show this Help"},
+					{"Ctrl+A F", "Open Config Editor"},
 				},
 			},
 			{
@@ -58,6 +59,7 @@ func NewHelpApp() texel.App {
 					{"x", "Close active pane"},
 					{"w", "Swap panes (then Arrow keys)"},
 					{"z", "Toggle zoom"},
+					{"f", "Open Config Editor"},
 					{"1-9", "Switch workspaces"},
 					{"Ctrl+Arrow", "Resize panes"},
 					{"Esc", "Exit control mode"},
@@ -67,6 +69,7 @@ func NewHelpApp() texel.App {
 				title: "Anytime",
 				entries: []helpEntry{
 					{"Shift+Arrow", "Move focus"},
+					{"Ctrl+F", "Edit config for active app"},
 					{"Ctrl+Q", "Quit Texelation"},
 				},
 			},
@@ -110,7 +113,7 @@ func (a *helpApp) Render() [][]texel.Cell {
 		return [][]texel.Cell{}
 	}
 
-	tm := theme.Get()
+	tm := theme.ForApp("help")
 	bgColor := tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()
 	textColor := tm.GetSemanticColor("text.primary")
 	dimColor := tm.GetSemanticColor("text.secondary")

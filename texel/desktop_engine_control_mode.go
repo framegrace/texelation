@@ -117,6 +117,8 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 		d.launchLauncherOverlay()
 	case 'h':
 		d.launchHelpOverlay()
+	case 'f':
+		d.launchConfigEditorOverlay("system")
 	}
 
 	if exitControlMode {

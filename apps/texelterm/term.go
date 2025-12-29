@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"texelation/apps/texelterm/parser"
+	"texelation/config"
 	"texelation/texel"
 	"texelation/texel/theme"
 
@@ -43,9 +44,9 @@ type TexelTerm struct {
 	height             int
 	cmd                *exec.Cmd
 	pty                *os.File
-	vterm  *parser.VTerm
-	parser *parser.Parser
-	mu     sync.Mutex
+	vterm              *parser.VTerm
+	parser             *parser.Parser
+	mu                 sync.Mutex
 	stop               chan struct{}
 	stopOnce           sync.Once
 	refreshChan        chan<- bool
@@ -854,8 +855,8 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 
 	now := time.Now()
 
-	// Read scroll configuration from theme
-	cfg := theme.Get()
+	// Read scroll configuration from app config.
+	cfg := config.App("texelterm")
 	debounceMs := cfg.GetInt("texelterm.scroll", "debounce_ms", 50)
 	debounceThreshold := time.Duration(debounceMs) * time.Millisecond
 
@@ -877,7 +878,7 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 		}
 		lines *= page
 	} else {
-		// Smooth velocity-based acceleration - read parameters from config
+		// Smooth velocity-based acceleration - read parameters from config.
 		velocityDecay := cfg.GetFloat("texelterm.scroll", "velocity_decay", 0.6)
 		velocityIncrement := cfg.GetFloat("texelterm.scroll", "velocity_increment", 0.6)
 		maxVelocity := cfg.GetFloat("texelterm.scroll", "max_velocity", 15.0)
@@ -932,8 +933,8 @@ func (a *TexelTerm) updateAutoScrollLocked(mouseY int) {
 		return
 	}
 
-	// Read config for edge zone threshold
-	cfg := theme.Get()
+	// Read config for edge zone threshold.
+	cfg := config.App("texelterm")
 	edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
 	if edgeZone <= 0 {
 		edgeZone = 2
@@ -1004,8 +1005,8 @@ func (a *TexelTerm) autoScrollLoop() {
 				return
 			}
 
-			// Read config
-			cfg := theme.Get()
+			// Read config.
+			cfg := config.App("texelterm")
 			edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
 			maxSpeed := cfg.GetInt("texelterm.selection", "max_scroll_speed", 15)
 			if edgeZone <= 0 {
@@ -1319,9 +1320,9 @@ func (a *TexelTerm) runShell() error {
 		}
 		a.mu.Unlock()
 	} else {
-		// First run - create vterm and parser
-		// Read wrap/reflow and history configuration from theme
-		cfg := theme.Get()
+		// First run - create vterm and parser.
+		// Read wrap/reflow and history configuration from app config.
+		cfg := config.App("texelterm")
 		wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
 		reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
 		displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", true) // Default to new three-level architecture
@@ -1585,7 +1586,7 @@ func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texel.Cell) {
 		return
 	}
 	top := a.vterm.VisibleTop()
-	cfg := theme.Get()
+	cfg := theme.ForApp("texelterm")
 	defaultBg := tcell.NewRGBColor(232, 217, 255)
 	highlight := cfg.GetColor("selection", "highlight_bg", defaultBg)
 	if !highlight.Valid() {
@@ -1650,14 +1651,14 @@ func clampInt(v, min, max int) int {
 }
 
 func (a *TexelTerm) Resize(cols, rows int) {
-        if cols <= 0 || rows <= 0 {
-                return
-        }
-        if a.renderDebugLog != nil {
-                a.renderDebugLog("App Resize request: %dx%d", cols, rows)
-        }
-        a.mu.Lock()
-        defer a.mu.Unlock()
+	if cols <= 0 || rows <= 0 {
+		return
+	}
+	if a.renderDebugLog != nil {
+		a.renderDebugLog("App Resize request: %dx%d", cols, rows)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.width = cols
 	a.height = rows
 
@@ -1762,7 +1763,7 @@ func If[T any](condition bool, trueVal, falseVal T) T {
 
 func newDefaultPalette() [258]tcell.Color {
 	var p [258]tcell.Color
-	tm := theme.Get()
+	tm := theme.ForApp("texelterm")
 
 	// Standard ANSI colors 0-15 (Mapped to Catppuccin Palette)
 	p[0] = theme.ResolveColorName("surface1")
