@@ -21,9 +21,10 @@ type displayBufferState struct {
 	// display manages the physical viewport with margins
 	display *DisplayBuffer
 
-	        // enabled toggles between old and new rendering paths
-	        enabled bool
-	}
+	// enabled toggles between old and new rendering paths
+	enabled bool
+}
+
 // DisplayBufferOptions configures the display buffer system.
 type DisplayBufferOptions struct {
 	// MaxMemoryLines is the max logical lines to keep in memory (default 5000).
@@ -139,10 +140,11 @@ func (v *VTerm) syncCursorWithDisplayBuffer() {
 	// Get the row where new content will appear
 	liveEdgeRow := v.displayBuf.display.LiveEdgeRow()
 
-	        // Position cursor at the live edge
-	        v.cursorY = liveEdgeRow
-	        v.cursorX = 0
-	}
+	// Position cursor at the live edge
+	v.cursorY = liveEdgeRow
+	v.cursorX = 0
+}
+
 // CloseDisplayBuffer closes the display buffer and its disk backing (if any).
 // Should be called when the terminal is shutting down.
 func (v *VTerm) CloseDisplayBuffer() error {
@@ -166,9 +168,9 @@ func (v *VTerm) IsDisplayBufferEnabled() bool {
 
 // SetDisplayBufferDebugLog sets a debug logging function on the display buffer.
 func (v *VTerm) SetDisplayBufferDebugLog(fn func(format string, args ...interface{})) {
-        if v.displayBuf != nil && v.displayBuf.display != nil {
-                v.displayBuf.display.SetDebugLog(fn)
-        }
+	if v.displayBuf != nil && v.displayBuf.display != nil {
+		v.displayBuf.display.SetDebugLog(fn)
+	}
 }
 
 // displayBufferGrid returns the viewport using the display buffer system.
@@ -183,22 +185,23 @@ func (v *VTerm) displayBufferGrid() [][]Cell {
 // This performs a dual-write: to the current logical line AND the display buffer.
 // Respects insert mode (IRM) - in insert mode, shifts existing content right.
 func (v *VTerm) displayBufferPlaceChar(r rune) {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
 
-        // Debug: log every character written
-        if v.displayBuf.display.debugLog != nil {
-                v.displayBuf.display.debugLog("displayBufferPlaceChar: '%c' at offset %d", r, v.displayBuf.display.GetCursorOffset())
-        }
+	// Debug: log every character written
+	if v.displayBuf.display.debugLog != nil {
+		v.displayBuf.display.debugLog("displayBufferPlaceChar: '%c' at offset %d", r, v.displayBuf.display.GetCursorOffset())
+	}
 
-        // Use the new logical editor
-        v.displayBuf.display.Write(r, v.currentFG, v.currentBG, v.currentAttr, v.insertMode)
+	// Use the new logical editor
+	v.displayBuf.display.Write(r, v.currentFG, v.currentBG, v.currentAttr, v.insertMode)
 
-        // Mark all dirty?
-        // Ideally we'd get a dirty range. For now, mark all.
-        v.MarkAllDirty()
+	// Mark all dirty?
+	// Ideally we'd get a dirty range. For now, mark all.
+	v.MarkAllDirty()
 }
+
 // displayBufferLineFeed commits the current line and starts a new one.
 // However, it only commits if:
 // - cursor is at position 0 (typical CR+LF sequence), OR
@@ -207,56 +210,58 @@ func (v *VTerm) displayBufferPlaceChar(r rune) {
 // If cursor is in the MIDDLE of the line AND not on the last row,
 // this is cursor movement (e.g., bash redraw via CR+LF on wrapped lines) - don't commit.
 func (v *VTerm) displayBufferLineFeed() {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
 
-        cursorOffset := v.displayBuf.display.GetCursorOffset()
-        lineLen := v.displayBuf.display.CurrentLine().Len()
-        width := v.width
+	cursorOffset := v.displayBuf.display.GetCursorOffset()
+	lineLen := v.displayBuf.display.CurrentLine().Len()
+	width := v.width
 
-        // Calculate which physical row the cursor is on (within the line)
-        cursorPhysRow := 0
-        if width > 0 {
-                cursorPhysRow = cursorOffset / width
-        }
+	// Calculate which physical row the cursor is on (within the line)
+	cursorPhysRow := 0
+	if width > 0 {
+		cursorPhysRow = cursorOffset / width
+	}
 
-        // Calculate how many physical rows the line occupies
-        numPhysRows := 1
-        if lineLen > 0 && width > 0 {
-                numPhysRows = (lineLen + width - 1) / width
-        }
+	// Calculate how many physical rows the line occupies
+	numPhysRows := 1
+	if lineLen > 0 && width > 0 {
+		numPhysRows = (lineLen + width - 1) / width
+	}
 
-        // Skip commit if cursor is NOT at/past the end of the line AND not on the last physical row.
-        // This prevents premature commits when bash repositions cursor during editing on wrapped lines.
-        // - offset < lineLen means we're before the end of the line content
-        // - !onLastPhysRow means LF won't move us past the line
-        // If on the last row, LF would move cursor beyond the line, so we should commit.
-        onLastPhysRow := cursorPhysRow >= numPhysRows-1
-        if cursorOffset < lineLen && !onLastPhysRow {
-                if v.displayBuf.display.debugLog != nil {
-                        v.displayBuf.display.debugLog("displayBufferLineFeed: SKIPPING commit (cursor in middle: offset=%d, lineLen=%d, physRow=%d/%d)",
-                                cursorOffset, lineLen, cursorPhysRow, numPhysRows)
-                }
-                return
-        }
+	// Skip commit if cursor is NOT at/past the end of the line AND not on the last physical row.
+	// This prevents premature commits when bash repositions cursor during editing on wrapped lines.
+	// - offset < lineLen means we're before the end of the line content
+	// - !onLastPhysRow means LF won't move us past the line
+	// If on the last row, LF would move cursor beyond the line, so we should commit.
+	onLastPhysRow := cursorPhysRow >= numPhysRows-1
+	if cursorOffset < lineLen && !onLastPhysRow {
+		if v.displayBuf.display.debugLog != nil {
+			v.displayBuf.display.debugLog("displayBufferLineFeed: SKIPPING commit (cursor in middle: offset=%d, lineLen=%d, physRow=%d/%d)",
+				cursorOffset, lineLen, cursorPhysRow, numPhysRows)
+		}
+		return
+	}
 
-        // Debug: log before commit
-        if v.displayBuf.display.debugLog != nil {
-                v.displayBuf.display.debugLog("displayBufferLineFeed: COMMITTING line with len=%d (offset=%d, physRow=%d/%d)",
-                        lineLen, cursorOffset, cursorPhysRow, numPhysRows)
-        }
+	// Debug: log before commit
+	if v.displayBuf.display.debugLog != nil {
+		v.displayBuf.display.debugLog("displayBufferLineFeed: COMMITTING line with len=%d (offset=%d, physRow=%d/%d)",
+			lineLen, cursorOffset, cursorPhysRow, numPhysRows)
+	}
 
-        // Commit current logical line to history
-        v.displayBuf.display.CommitCurrentLine()
+	// Commit current logical line to history
+	v.displayBuf.display.CommitCurrentLine()
 }
+
 // displayBufferCarriageReturn handles CR - syncs logical position with physical position (start of line).
 func (v *VTerm) displayBufferCarriageReturn() {
-        // vterm.go has already set v.cursorX = 0 before calling this.
-        // We just need to sync the logical cursor.
-        // CR is absolute positioning (column 0), not a relative move.
-        v.displayBufferSetCursorFromPhysical(false)
+	// vterm.go has already set v.cursorX = 0 before calling this.
+	// We just need to sync the logical cursor.
+	// CR is absolute positioning (column 0), not a relative move.
+	v.displayBufferSetCursorFromPhysical(false)
 }
+
 // displayBufferScroll handles viewport scrolling.
 // Positive delta = scroll down (view newer content, like pressing Page Down)
 // Negative delta = scroll up (view older content, like pressing Page Up)
@@ -276,43 +281,44 @@ func (v *VTerm) displayBufferScroll(delta int) {
 
 // logDebug writes to the debug log if enabled
 func (v *VTerm) logDebug(format string, args ...interface{}) {
-        if os.Getenv("TEXELTERM_DEBUG") == "" {
-                return
-        }
-        debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-        if err != nil {
-                return
-        }
-        defer debugFile.Close()
-        fmt.Fprintf(debugFile, "[VTERM] "+format+"\n", args...)
+	if os.Getenv("TEXELTERM_DEBUG") == "" {
+		return
+	}
+	debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer debugFile.Close()
+	fmt.Fprintf(debugFile, "[VTERM] "+format+"\n", args...)
 }
 
 // displayBufferResize handles terminal resize with proper reflow.
 func (v *VTerm) displayBufferResize(width, height int) {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
 
-        oldX, oldY := v.cursorX, v.cursorY
-        v.logDebug("displayBufferResize START width=%d height=%d cursor=%d,%d", width, height, oldX, oldY)
+	oldX, oldY := v.cursorX, v.cursorY
+	v.logDebug("displayBufferResize START width=%d height=%d cursor=%d,%d", width, height, oldX, oldY)
 
-        v.displayBuf.display.Resize(width, height)
+	v.displayBuf.display.Resize(width, height)
 
-        // Update physical cursor to match logical cursor position in the new layout
-        if physX, physY, found := v.displayBuf.display.GetPhysicalCursorPos(); found {
-                v.cursorX = physX
-                v.cursorY = physY
-                v.logDebug("displayBufferResize FOUND cursor offset=%d -> set physical to %d,%d", v.displayBuf.display.GetCursorOffset(), physX, physY)
-        } else if v.displayBuf.display.AtLiveEdge() {
-                // Fallback: if at live edge but cursor not found (e.g. validly scrolled off?), 
-                // snap to live edge row.
-                v.cursorY = v.displayBuf.display.LiveEdgeRow()
-                v.logDebug("displayBufferResize NOT FOUND, snapping to LiveEdgeRow %d", v.cursorY)
-                // Keep cursorX clamped later by SetCursorPos
-        } else {
-                v.logDebug("displayBufferResize NOT FOUND and NOT at live edge")
-        }
+	// Update physical cursor to match logical cursor position in the new layout
+	if physX, physY, found := v.displayBuf.display.GetPhysicalCursorPos(); found {
+		v.cursorX = physX
+		v.cursorY = physY
+		v.logDebug("displayBufferResize FOUND cursor offset=%d -> set physical to %d,%d", v.displayBuf.display.GetCursorOffset(), physX, physY)
+	} else if v.displayBuf.display.AtLiveEdge() {
+		// Fallback: if at live edge but cursor not found (e.g. validly scrolled off?),
+		// snap to live edge row.
+		v.cursorY = v.displayBuf.display.LiveEdgeRow()
+		v.logDebug("displayBufferResize NOT FOUND, snapping to LiveEdgeRow %d", v.cursorY)
+		// Keep cursorX clamped later by SetCursorPos
+	} else {
+		v.logDebug("displayBufferResize NOT FOUND and NOT at live edge")
+	}
 }
+
 // displayBufferScrollToBottom scrolls to live edge.
 func (v *VTerm) displayBufferScrollToBottom() {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
@@ -352,59 +358,57 @@ func (v *VTerm) ScrollToLiveEdge() {
 // we always use the full physical-to-logical mapping since the shell is explicitly
 // setting the cursor to a specific screen position.
 func (v *VTerm) displayBufferSetCursorFromPhysical(isRelativeMove bool) {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
 
-        oldOffset := v.displayBuf.display.GetCursorOffset()
-        oldLineLen := v.displayBuf.display.CurrentLine().Len()
+	oldOffset := v.displayBuf.display.GetCursorOffset()
+	oldLineLen := v.displayBuf.display.CurrentLine().Len()
 
-        // Only use delta-based sync for relative horizontal movements on the same row.
-        // Absolute positioning (CHA, CUP, etc.) should always use physical mapping
-        // because the shell is explicitly setting the cursor to a screen position.
-        sameRow := v.prevCursorY == v.cursorY
-        useDelta := isRelativeMove && sameRow
+	// Only use delta-based sync for relative horizontal movements on the same row.
+	// Absolute positioning (CHA, CUP, etc.) should always use physical mapping
+	// because the shell is explicitly setting the cursor to a screen position.
+	sameRow := v.prevCursorY == v.cursorY
+	useDelta := isRelativeMove && sameRow
 
-        if useDelta {
-                // Same row RELATIVE movement - apply X delta to preserve logical position.
-                //
-                // The delta-based approach tracks the LOGICAL cursor position, not the
-                // physical cursor position. When wrapNext=true, the logical offset is
-                // one ahead of the physical cursor (e.g., offset=10 at cursorX=9 on width=10).
-                //
-                // CUB N means "move back N positions logically", so:
-                // - offset 10, CUB 5 → offset 5 (not physical position 4)
-                delta := v.cursorX - v.prevCursorX
-                newOffset := oldOffset + delta
+	if useDelta {
+		// Same row RELATIVE movement - apply X delta to preserve logical position.
+		//
+		// The delta-based approach tracks the LOGICAL cursor position, not the
+		// physical cursor position. When wrapNext=true, the logical offset is
+		// one ahead of the physical cursor (e.g., offset=10 at cursorX=9 on width=10).
+		//
+		// CUB N means "move back N positions logically", so:
+		// - offset 10, CUB 5 → offset 5 (not physical position 4)
+		delta := v.cursorX - v.prevCursorX
+		newOffset := oldOffset + delta
 
-                // Clamp to valid range [0, lineLen]
-                if newOffset < 0 {
-                        newOffset = 0
-                }
-                lineLen := v.displayBuf.display.CurrentLine().Len()
-                if newOffset > lineLen {
-                        newOffset = lineLen
-                }
-                v.displayBuf.display.liveEditor.SetCursorOffset(newOffset)
-        } else {
-                // Cross-row, absolute positioning, or vertical movement
-                // Use the full physical-to-logical mapping
-                v.displayBuf.display.SetCursor(v.cursorX, v.cursorY)
-        }
+		// Clamp to valid range [0, ...]. Allow moves past lineLen to support
+		// prompts that position content in the void (right prompts).
+		if newOffset < 0 {
+			newOffset = 0
+		}
+		v.displayBuf.display.liveEditor.SetCursorOffset(newOffset)
+	} else {
+		// Cross-row, absolute positioning, or vertical movement
+		// Use the full physical-to-logical mapping
+		v.displayBuf.display.SetCursor(v.cursorX, v.cursorY)
+	}
 
-        // Update prevCursorX/Y to current position to prevent double-application
-        // if this function is called again without an intervening SetCursorPos.
-        v.prevCursorX = v.cursorX
-        v.prevCursorY = v.cursorY
+	// Update prevCursorX/Y to current position to prevent double-application
+	// if this function is called again without an intervening SetCursorPos.
+	v.prevCursorX = v.cursorX
+	v.prevCursorY = v.cursorY
 
-        newOffset := v.displayBuf.display.GetCursorOffset()
-        newLineLen := v.displayBuf.display.CurrentLine().Len()
+	newOffset := v.displayBuf.display.GetCursorOffset()
+	newLineLen := v.displayBuf.display.CurrentLine().Len()
 
-        if v.displayBuf.display.debugLog != nil && (oldOffset != newOffset || oldLineLen != newLineLen) {
-                v.displayBuf.display.debugLog("displayBufferSetCursorFromPhysical: physX=%d, physY=%d, prevY=%d, sameRow=%v -> offset %d->%d, lineLen %d->%d",
-                        v.cursorX, v.cursorY, v.prevCursorY, sameRow, oldOffset, newOffset, oldLineLen, newLineLen)
-        }
+	if v.displayBuf.display.debugLog != nil && (oldOffset != newOffset || oldLineLen != newLineLen) {
+		v.displayBuf.display.debugLog("displayBufferSetCursorFromPhysical: physX=%d, physY=%d, prevY=%d, sameRow=%v -> offset %d->%d, lineLen %d->%d",
+			v.cursorX, v.cursorY, v.prevCursorY, sameRow, oldOffset, newOffset, oldLineLen, newLineLen)
+	}
 }
+
 // displayBufferClear clears the display buffer and history.
 func (v *VTerm) displayBufferClear() {
 	if v.displayBuf == nil {
@@ -419,6 +423,7 @@ func (v *VTerm) displayBufferClear() {
 		MarginBelow: DefaultMarginBelow,
 	})
 }
+
 // displayBufferGetCurrentLine returns the current (uncommitted) logical line.
 func (v *VTerm) displayBufferGetCurrentLine() *LogicalLine {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
@@ -485,38 +490,38 @@ func (v *VTerm) DisplayBufferGetHistory() *ScrollbackHistory {
 // displayBufferEraseToEndOfLine truncates the current logical line at the current position.
 // Used for EL 0 (Erase from cursor to end of line).
 func (v *VTerm) displayBufferEraseToEndOfLine() {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
 
-        // IMPORTANT: Sync cursor position before erasing.
-        // The VTerm cursor may have moved (e.g., via backspace) without updating
-        // the display buffer. We must sync to ensure erase happens at the right position.
-        // Use absolute mapping (false) since we don't know how cursor got here.
-        v.displayBufferSetCursorFromPhysical(false)
+	// IMPORTANT: Sync cursor position before erasing.
+	// The VTerm cursor may have moved (e.g., via backspace) without updating
+	// the display buffer. We must sync to ensure erase happens at the right position.
+	// Use absolute mapping (false) since we don't know how cursor got here.
+	v.displayBufferSetCursorFromPhysical(false)
 
-        if v.displayBuf.display.debugLog != nil {
-                lineContent := ""
-                line := v.displayBuf.display.CurrentLine()
-                for i := 0; i < line.Len() && i < 20; i++ {
-                        if line.Cells[i].Rune != 0 {
-                                lineContent += string(line.Cells[i].Rune)
-                        } else {
-                                lineContent += "."
-                        }
-                }
-                if line.Len() > 20 {
-                        lineContent += "..."
-                }
-                v.displayBuf.display.debugLog("displayBufferEraseToEndOfLine: vtermCursor=(%d,%d), offset=%d, line len=%d, content=%q",
-                        v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset(), line.Len(), lineContent)
-        }
-        v.displayBuf.display.Erase(0)
-        if v.displayBuf.display.debugLog != nil {
-                v.displayBuf.display.debugLog("displayBufferEraseToEndOfLine: after erase, line len=%d",
-                        v.displayBuf.display.CurrentLine().Len())
-        }
-        v.MarkAllDirty()
+	if v.displayBuf.display.debugLog != nil {
+		lineContent := ""
+		line := v.displayBuf.display.CurrentLine()
+		for i := 0; i < line.Len() && i < 20; i++ {
+			if line.Cells[i].Rune != 0 {
+				lineContent += string(line.Cells[i].Rune)
+			} else {
+				lineContent += "."
+			}
+		}
+		if line.Len() > 20 {
+			lineContent += "..."
+		}
+		v.displayBuf.display.debugLog("displayBufferEraseToEndOfLine: vtermCursor=(%d,%d), offset=%d, line len=%d, content=%q",
+			v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset(), line.Len(), lineContent)
+	}
+	v.displayBuf.display.Erase(0)
+	if v.displayBuf.display.debugLog != nil {
+		v.displayBuf.display.debugLog("displayBufferEraseToEndOfLine: after erase, line len=%d",
+			v.displayBuf.display.CurrentLine().Len())
+	}
+	v.MarkAllDirty()
 }
 
 // withDisplayBufferOp runs an operation on the display buffer with standard nil checks
@@ -544,16 +549,17 @@ func (v *VTerm) displayBufferEraseFromStartOfLine() {
 // displayBufferEraseLine clears the entire current logical line.
 // Used for EL 2 (Erase entire line).
 func (v *VTerm) displayBufferEraseLine() {
-        if v.displayBuf == nil || v.displayBuf.display == nil {
-                return
-        }
-        if v.displayBuf.display.debugLog != nil {
-                v.displayBuf.display.debugLog("displayBufferEraseLine (EL 2): CLEARING entire line, was len=%d",
-                        v.displayBuf.display.CurrentLine().Len())
-        }
-        v.displayBuf.display.Erase(2)
-        v.MarkAllDirty()
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	if v.displayBuf.display.debugLog != nil {
+		v.displayBuf.display.debugLog("displayBufferEraseLine (EL 2): CLEARING entire line, was len=%d",
+			v.displayBuf.display.CurrentLine().Len())
+	}
+	v.displayBuf.display.Erase(2)
+	v.MarkAllDirty()
 }
+
 // displayBufferEraseCharacters replaces n characters at current position with spaces.
 // Used for ECH (Erase Character).
 func (v *VTerm) displayBufferEraseCharacters(n int) {
@@ -580,4 +586,3 @@ func (v *VTerm) displayBufferInsertCharacters(n int) {
 		db.InsertCharacters(n, fg, bg)
 	})
 }
-
