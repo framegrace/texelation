@@ -82,18 +82,18 @@ func (b *Border) Resize(w, h int) {
 }
 
 func (b *Border) Draw(p *core.Painter) {
-    style := b.Style
-    // If this border or any descendant contains focus, use FocusedStyle
-    if b.isDescendantFocused() {
-        style = b.FocusedStyle
-    } else {
-        // Otherwise apply own focus style if enabled
-        style = b.EffectiveStyle(style)
-    }
-    p.DrawBorder(b.Rect, style, b.Charset)
-    if b.Child != nil {
-        b.Child.Draw(p)
-    }
+	style := b.Style
+	// If this border or any descendant contains focus, use FocusedStyle
+	if b.IsFocused() || core.IsDescendantFocused(b.Child) {
+		style = b.FocusedStyle
+	} else {
+		// Otherwise apply own focus style if enabled
+		style = b.EffectiveStyle(style)
+	}
+	p.DrawBorder(b.Rect, style, b.Charset)
+	if b.Child != nil {
+		b.Child.Draw(p)
+	}
 }
 
 // VisitChildren implements core.ChildContainer for recursive operations.
@@ -136,35 +136,3 @@ func (b *Border) WidgetAt(x, y int) core.Widget {
 	return nil
 }
 
-func (b *Border) isDescendantFocused() bool {
-    // Check self
-    if fs, ok := interface{}(b).(core.FocusState); ok {
-        if fs.IsFocused() { return true }
-    }
-    // Check child recursively
-    if b.Child == nil { return false }
-    if fs, ok := b.Child.(core.FocusState); ok {
-        if fs.IsFocused() { return true }
-    }
-    if cc, ok := b.Child.(core.ChildContainer); ok {
-        focused := false
-        cc.VisitChildren(func(w core.Widget) {
-            if focused { return }
-            if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
-                focused = true
-                return
-            }
-            if ccc, ok := w.(core.ChildContainer); ok {
-                // nested containers
-                ccc.VisitChildren(func(ww core.Widget) {
-                    if focused { return }
-                    if fs2, ok := ww.(core.FocusState); ok && fs2.IsFocused() {
-                        focused = true
-                    }
-                })
-            }
-        })
-        if focused { return true }
-    }
-    return false
-}

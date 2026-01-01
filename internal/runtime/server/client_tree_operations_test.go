@@ -21,6 +21,7 @@ import (
 
 	"texelation/internal/runtime/server/testutil"
 	"texelation/protocol"
+	"texelation/registry"
 	"texelation/texel"
 )
 
@@ -45,7 +46,10 @@ func setupTreeTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, 
 	}
 
 	// Register the test app in the registry so SwitchToWorkspace can create it
-	desktop.Registry().RegisterBuiltIn("testapp", func() interface{} {
+	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
+		Name:        "testapp",
+		DisplayName: "Test App",
+	}, func() interface{} {
 		return shellFactory()
 	})
 

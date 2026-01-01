@@ -113,11 +113,26 @@ func main() {
 	})
 
 	// Register launcher in registry
-	desktop.Registry().RegisterBuiltIn("launcher", func() interface{} {
+	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
+		Name:        "launcher",
+		DisplayName: "Launcher",
+		Description: "Application launcher",
+		Icon:        "🚀",
+		Category:    "system",
+		ThemeSchema: registry.ThemeSchema{
+			"ui": {"bg.surface", "text.primary", "text.inverse", "accent"},
+		},
+	}, func() interface{} {
 		return launcher.New(desktop.Registry())
 	})
 
-	desktop.Registry().RegisterBuiltIn("config-editor", func() interface{} {
+	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
+		Name:        "config-editor",
+		DisplayName: "Settings",
+		Description: "Configuration editor",
+		Icon:        "⚙️",
+		Category:    "system",
+	}, func() interface{} {
 		return configeditor.New(desktop.Registry())
 	})
 
@@ -127,7 +142,17 @@ func main() {
 	})
 
 	// Register help app
-	desktop.Registry().RegisterBuiltIn("help", func() interface{} {
+	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
+		Name:        "help",
+		DisplayName: "Help",
+		Description: "Help viewer",
+		Icon:        "❓",
+		Category:    "system",
+		ThemeSchema: registry.ThemeSchema{
+			"desktop": {"default_bg"},
+			"ui":      {"text.primary", "text.secondary", "text.active"},
+		},
+	}, func() interface{} {
 		return help.NewHelpApp()
 	})
 

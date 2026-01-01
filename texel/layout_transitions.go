@@ -24,6 +24,9 @@ type LayoutTransitionConfig struct {
 	MinThreshold int     `json:"min_threshold"`
 }
 
+// EasingFunctionNames lists all supported easing function names.
+var EasingFunctionNames = []string{"linear", "smoothstep", "ease-in-out", "spring"}
+
 // transitionState tracks an ongoing split ratio animation for a node.
 type transitionState struct {
 	node         *Node
