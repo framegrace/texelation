@@ -35,6 +35,7 @@ func applyAppDefaults(app string, cfg Config) {
 
 // mergeDefaults copies missing keys from defaults into cfg.
 // Existing keys in cfg are preserved.
+// Values are deep-cloned to prevent mutation of cached defaults.
 func mergeDefaults(cfg, defaults Config) {
 	for sectionName, section := range defaults {
 		if section == nil {
@@ -42,14 +43,26 @@ func mergeDefaults(cfg, defaults Config) {
 		}
 		switch s := section.(type) {
 		case Section:
-			cfg.RegisterDefaults(sectionName, s)
+			cfg.RegisterDefaults(sectionName, cloneSection(s))
 		case map[string]interface{}:
-			cfg.RegisterDefaults(sectionName, Section(s))
+			cfg.RegisterDefaults(sectionName, cloneSection(Section(s)))
 		default:
 			// Top-level non-section value (like "defaultApp": "launcher")
 			if _, exists := cfg[sectionName]; !exists {
-				cfg[sectionName] = section
+				cfg[sectionName] = deepCloneValue(section)
 			}
 		}
 	}
+}
+
+// cloneSection creates a deep copy of a Section.
+func cloneSection(s Section) Section {
+	if s == nil {
+		return nil
+	}
+	clone := make(Section, len(s))
+	for k, v := range s {
+		clone[k] = deepCloneValue(v)
+	}
+	return clone
 }
