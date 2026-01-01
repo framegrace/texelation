@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: apps/configeditor/options.go
-// Summary: Provides options registry for combo boxes in the config editor.
+// Summary: Provides option resolvers for combo boxes in the config editor.
 // Usage: Used by the config editor to dynamically retrieve options for fields.
+// Note: This is intentionally a simple switch-based resolver rather than a
+// dynamic registry. External apps don't need to register custom options -
+// they define their fields via ThemeSchema in their manifests.
 
 package configeditor
 

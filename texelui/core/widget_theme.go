@@ -87,7 +87,7 @@ func GetWidgetColors() WidgetColors {
 		BorderFocus:   tm.GetSemanticColor("border.focus"),
 
 		// Selection
-		SelectionBg: tm.GetSemanticColor("bg.selection"),
+		SelectionBg: tm.GetSemanticColor("selection"),
 		SelectionFg: tm.GetSemanticColor("text.primary"),
 
 		// Accent

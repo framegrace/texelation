@@ -120,7 +120,7 @@ func main() {
 		Icon:        "🚀",
 		Category:    "system",
 		ThemeSchema: registry.ThemeSchema{
-			"ui": {"bg.surface", "text.primary", "text.inverse", "accent.primary"},
+			"ui": {"bg.surface", "text.primary", "text.inverse", "accent"},
 		},
 	}, func() interface{} {
 		return launcher.New(desktop.Registry())
