@@ -27,6 +27,7 @@ import (
 	"texelation/client"
 	serverrt "texelation/internal/runtime/server"
 	"texelation/protocol"
+	"texelation/registry"
 	"texelation/texel"
 )
 
@@ -133,7 +134,10 @@ func buildDesktop() (*texel.DesktopEngine, *stressApp) {
 		log.Fatalf("desktop init failed: %v", err)
 	}
 	
-	desktop.Registry().RegisterBuiltIn("welcome", func() interface{} {
+	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
+		Name:        "welcome",
+		DisplayName: "Welcome",
+	}, func() interface{} {
 		return newStressApp("welcome", "loaded")
 	})
 

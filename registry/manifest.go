@@ -85,7 +85,16 @@ type Manifest struct {
 
 	// Homepage is a URL for more information
 	Homepage string `json:"homepage,omitempty"`
+
+	// ThemeSchema defines which theme sections/keys this app can override.
+	// Keys are section names (e.g., "ui", "selection"), values are lists of
+	// field names within that section (e.g., ["bg.surface", "text.primary"]).
+	// Used by the config editor to show theme override fields.
+	ThemeSchema ThemeSchema `json:"theme_schema,omitempty"`
 }
+
+// ThemeSchema maps section names to lists of overridable field names.
+type ThemeSchema map[string][]string
 
 // LoadManifest reads and parses a manifest.json file from the given directory.
 func LoadManifest(dir string) (*Manifest, error) {

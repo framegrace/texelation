@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"texelation/registry"
 	"texelation/texel"
 )
 
@@ -74,7 +75,10 @@ func TestSnapshotSavedOnReplaceWithApp(t *testing.T) {
 	}
 
 	// Register a "RealApp" in the registry that we will switch to
-	desktop.Registry().RegisterBuiltIn("RealApp", func() interface{} {
+	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
+		Name:        "RealApp",
+		DisplayName: "Real App",
+	}, func() interface{} {
 		return &recordingAppReplace{title: "RealApp", appType: "realapp"}
 	})
 

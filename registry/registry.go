@@ -34,9 +34,9 @@ type WrapperFactory func(manifest *Manifest) interface{}
 
 // Registry manages the collection of available applications.
 type Registry struct {
-	mu             sync.RWMutex
-	apps           map[string]*AppEntry // name -> entry
-	builtIn        map[string]AppFactory
+	mu               sync.RWMutex
+	apps             map[string]*AppEntry // name -> entry (external apps)
+	builtIn          map[string]*AppEntry // name -> entry (built-in apps)
 	wrapperFactories map[string]WrapperFactory // wraps -> factory
 }
 
@@ -44,7 +44,7 @@ type Registry struct {
 func New() *Registry {
 	return &Registry{
 		apps:             make(map[string]*AppEntry),
-		builtIn:          make(map[string]AppFactory),
+		builtIn:          make(map[string]*AppEntry),
 		wrapperFactories: make(map[string]WrapperFactory),
 	}
 }
@@ -61,11 +61,17 @@ func (r *Registry) RegisterWrapperFactory(wrapsType string, factory WrapperFacto
 // RegisterBuiltIn registers a built-in app that's compiled into the binary.
 // Built-in apps have priority over external apps with the same name.
 // The factory should return a texel.App instance.
-func (r *Registry) RegisterBuiltIn(name string, factory AppFactory) {
+func (r *Registry) RegisterBuiltIn(manifest *Manifest, factory AppFactory) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.builtIn[name] = factory
-	log.Printf("Registry: Registered built-in app '%s'", name)
+	if manifest.Type == "" {
+		manifest.Type = AppTypeBuiltIn
+	}
+	r.builtIn[manifest.Name] = &AppEntry{
+		Manifest: manifest,
+		Factory:  factory,
+	}
+	log.Printf("Registry: Registered built-in app '%s'", manifest.Name)
 }
 
 // Scan searches for apps in the given directory.
@@ -155,8 +161,8 @@ func (r *Registry) createWrapperFactory(manifest *Manifest) AppFactory {
 		}
 
 		// Fallback: try to use the built-in factory directly
-		wrappedFactory, ok := r.builtIn[manifest.Wraps]
-		if !ok {
+		wrappedEntry, ok := r.builtIn[manifest.Wraps]
+		if !ok || wrappedEntry.Factory == nil {
 			log.Printf("Registry: Wrapped app not found: %s (for %s)",
 				manifest.Wraps, manifest.Name)
 			return nil
@@ -165,7 +171,7 @@ func (r *Registry) createWrapperFactory(manifest *Manifest) AppFactory {
 		// Generic wrapper: just create the wrapped app
 		// This works for apps that don't need parameters
 		log.Printf("Registry: Using generic wrapper for %s -> %s", manifest.Name, manifest.Wraps)
-		return wrappedFactory()
+		return wrappedEntry.Factory()
 	}
 }
 
@@ -176,16 +182,8 @@ func (r *Registry) Get(name string) *AppEntry {
 	defer r.mu.RUnlock()
 
 	// Check built-ins first
-	if factory, ok := r.builtIn[name]; ok {
-		return &AppEntry{
-			Manifest: &Manifest{
-				Name:        name,
-				DisplayName: name,
-				Icon:        "🔧",
-				Category:    "built-in",
-			},
-			Factory: factory,
-		}
+	if entry, ok := r.builtIn[name]; ok {
+		return entry
 	}
 
 	return r.apps[name]
@@ -199,16 +197,8 @@ func (r *Registry) List() []*AppEntry {
 	var entries []*AppEntry
 
 	// Add built-in apps
-	for name, factory := range r.builtIn {
-		entries = append(entries, &AppEntry{
-			Manifest: &Manifest{
-				Name:        name,
-				DisplayName: name,
-				Icon:        "🔧",
-				Category:    "built-in",
-			},
-			Factory: factory,
-		})
+	for _, entry := range r.builtIn {
+		entries = append(entries, entry)
 	}
 
 	// Add external apps
@@ -232,16 +222,7 @@ func (r *Registry) ListByCategory() map[string][]*AppEntry {
 	categories := make(map[string][]*AppEntry)
 
 	// Add built-in apps
-	for name, factory := range r.builtIn {
-		entry := &AppEntry{
-			Manifest: &Manifest{
-				Name:        name,
-				DisplayName: name,
-				Icon:        "🔧",
-				Category:    "built-in",
-			},
-			Factory: factory,
-		}
+	for _, entry := range r.builtIn {
 		category := entry.Manifest.Category
 		if category == "" {
 			category = "other"

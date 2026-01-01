@@ -9,7 +9,6 @@ package configeditor
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -556,145 +555,16 @@ func (e *ConfigEditor) buildSectionPane(target *configTarget, cfg config.Config,
 }
 
 func (e *ConfigEditor) buildField(cfg config.Config, target *configTarget, sectionKey, key string, value interface{}, pane *formPane, forceColor bool, apply applyKind) *fieldBinding {
-	options := comboOptions(target, sectionKey, key)
-	label := humanLabel(key)
-	switch v := value.(type) {
-	case bool:
-		checkbox := widgets.NewCheckbox(0, 0, label)
-		checkbox.Checked = v
-		checkbox.OnChange = func(checked bool) {
-			updateConfigValue(cfg, sectionKey, key, checked)
-			e.applyTargetConfig(target, apply)
-		}
-		pane.AddRow(formRow{field: checkbox, height: 1, fullWidth: true})
-		return &fieldBinding{section: sectionKey, key: key, kind: fieldBool, widget: checkbox}
-	case float64:
-		if v == math.Trunc(v) {
-			return e.buildField(cfg, target, sectionKey, key, int(v), pane, forceColor, apply)
-		}
-		if options != nil {
-			combo := widgets.NewComboBox(0, 0, 0, options, false)
-			combo.SetValue(fmt.Sprintf("%v", v))
-			combo.OnChange = func(value string) {
-				updateConfigValue(cfg, sectionKey, key, value)
-				e.applyTargetConfig(target, apply)
-			}
-			pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: combo, height: 1})
-			return &fieldBinding{section: sectionKey, key: key, kind: fieldCombo, widget: combo}
-		}
-		input := widgets.NewInput(0, 0, 0)
-		input.Text = formatNumber(v)
-		dirty := false
-		input.OnChange = func(text string) {
-			if parsed, err := strconv.ParseFloat(strings.TrimSpace(text), 64); err == nil {
-				updateConfigValue(cfg, sectionKey, key, parsed)
-				dirty = true
-			}
-		}
-		input.OnBlur = func(text string) {
-			if dirty {
-				e.applyTargetConfig(target, apply)
-				dirty = false
-			}
-		}
-		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: input, height: 1})
-		return &fieldBinding{section: sectionKey, key: key, kind: fieldFloat, widget: input}
-	case int:
-		input := widgets.NewInput(0, 0, 0)
-		input.Text = strconv.Itoa(v)
-		dirty := false
-		input.OnChange = func(text string) {
-			if parsed, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
-				updateConfigValue(cfg, sectionKey, key, parsed)
-				dirty = true
-			}
-		}
-		input.OnBlur = func(text string) {
-			if dirty {
-				e.applyTargetConfig(target, apply)
-				dirty = false
-			}
-		}
-		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: input, height: 1})
-		return &fieldBinding{section: sectionKey, key: key, kind: fieldInt, widget: input}
-	case string:
-		if options != nil {
-			combo := widgets.NewComboBox(0, 0, 0, options, false)
-			combo.SetValue(v)
-			combo.OnChange = func(value string) {
-				updateConfigValue(cfg, sectionKey, key, value)
-				e.applyTargetConfig(target, apply)
-			}
-			pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: combo, height: 1})
-			return &fieldBinding{section: sectionKey, key: key, kind: fieldCombo, widget: combo}
-		}
-		if forceColor || looksLikeColor(v) {
-			colorPicker := widgets.NewColorPicker(0, 0, widgets.ColorPickerConfig{
-				EnableSemantic: true,
-				EnablePalette:  true,
-				EnableOKLCH:    true,
-				Label:          label,
-			})
-			colorPicker.SetValue(v)
-			colorPicker.OnChange = func(result widgets.ColorPickerResult) {
-				updateConfigValue(cfg, sectionKey, key, result.Source)
-				e.applyTargetConfig(target, apply)
-			}
-			pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: colorPicker, height: 1})
-			return &fieldBinding{section: sectionKey, key: key, kind: fieldColor, widget: colorPicker}
-		}
-		input := widgets.NewInput(0, 0, 0)
-		input.Text = v
-		dirty := false
-		input.OnChange = func(text string) {
-			updateConfigValue(cfg, sectionKey, key, text)
-			dirty = true
-		}
-		input.OnBlur = func(text string) {
-			if dirty {
-				e.applyTargetConfig(target, apply)
-				dirty = false
-			}
-		}
-		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: input, height: 1})
-		return &fieldBinding{section: sectionKey, key: key, kind: fieldString, widget: input}
-	case []interface{}, map[string]interface{}, []string:
-		textarea := widgets.NewTextArea(0, 0, 0, 4)
-		textarea.SetText(formatJSON(value))
-		dirty := false
-		textarea.OnChange = func(text string) {
-			var decoded interface{}
-			if err := json.Unmarshal([]byte(text), &decoded); err == nil {
-				updateConfigValue(cfg, sectionKey, key, decoded)
-				dirty = true
-			}
-		}
-		textarea.OnBlur = func(text string) {
-			if dirty {
-				e.applyTargetConfig(target, apply)
-				dirty = false
-			}
-		}
-		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), height: 1})
-		pane.AddRow(formRow{field: textarea, height: 4, fullWidth: true})
-		return &fieldBinding{section: sectionKey, key: key, kind: fieldJSON, widget: textarea}
-	default:
-		input := widgets.NewInput(0, 0, 0)
-		input.Text = fmt.Sprintf("%v", v)
-		dirty := false
-		input.OnChange = func(text string) {
-			updateConfigValue(cfg, sectionKey, key, text)
-			dirty = true
-		}
-		input.OnBlur = func(text string) {
-			if dirty {
-				e.applyTargetConfig(target, apply)
-				dirty = false
-			}
-		}
-		pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: input, height: 1})
-		return &fieldBinding{section: sectionKey, key: key, kind: fieldString, widget: input}
-	}
+	fb := NewFieldBuilder(target, cfg, func(kind applyKind) {
+		e.applyTargetConfig(target, kind)
+	})
+	return fb.Build(FieldConfig{
+		Section:    sectionKey,
+		Key:        key,
+		Value:      value,
+		ForceColor: forceColor,
+		ApplyKind:  apply,
+	}, pane)
 }
 
 type effectBinding struct {
@@ -1399,14 +1269,9 @@ func looksLikeColor(value string) bool {
 	return false
 }
 
+// comboOptions is an alias for ComboOptionsFor for internal use.
 func comboOptions(target *configTarget, section, key string) []string {
-	if target.kind == targetSystem && section == "" && key == "defaultApp" {
-		return target.appOptions
-	}
-	if section == "layout_transitions" && key == "easing" {
-		return []string{"linear", "smoothstep", "ease-in-out", "spring"}
-	}
-	return nil
+	return ComboOptionsFor(target, section, key)
 }
 
 func cloneThemeConfig() config.Config {

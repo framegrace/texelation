@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"texelation/registry"
 	"texelation/texel"
 )
 
@@ -62,7 +63,10 @@ func TestSnapshotRemovesCrashedApp(t *testing.T) {
 	desktop.SwitchToWorkspace(1)
 	
 	// Register crashing app factory
-	desktop.Registry().RegisterBuiltIn("CrashApp", func() interface{} {
+	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
+		Name:        "CrashApp",
+		DisplayName: "Crashing App",
+	}, func() interface{} {
 		return &crashingApp{title: "CrashApp"}
 	})
 	

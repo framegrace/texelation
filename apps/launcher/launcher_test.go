@@ -65,13 +65,22 @@ func createTestRegistry() *registry.Registry {
 	reg := registry.New()
 
 	// Register some built-in apps
-	reg.RegisterBuiltIn("app1", func() interface{} {
+	reg.RegisterBuiltIn(&registry.Manifest{
+		Name:        "app1",
+		DisplayName: "App 1",
+	}, func() interface{} {
 		return &mockApp{title: "App 1"}
 	})
-	reg.RegisterBuiltIn("app2", func() interface{} {
+	reg.RegisterBuiltIn(&registry.Manifest{
+		Name:        "app2",
+		DisplayName: "App 2",
+	}, func() interface{} {
 		return &mockApp{title: "App 2"}
 	})
-	reg.RegisterBuiltIn("app3", func() interface{} {
+	reg.RegisterBuiltIn(&registry.Manifest{
+		Name:        "app3",
+		DisplayName: "App 3",
+	}, func() interface{} {
 		return &mockApp{title: "App 3"}
 	})
 

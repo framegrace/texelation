@@ -191,7 +191,17 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory AppFactory, in
 	reg := registry.New()
 
 	// Register built-in shell app (wrap texel.AppFactory to registry.AppFactory)
-	reg.RegisterBuiltIn("texelterm", func() interface{} { return shellFactory() })
+	reg.RegisterBuiltIn(&registry.Manifest{
+		Name:        "texelterm",
+		DisplayName: "Terminal",
+		Description: "Terminal emulator",
+		Icon:        "💻",
+		Category:    "system",
+		ThemeSchema: registry.ThemeSchema{
+			"selection": {"highlight_bg", "highlight_fg"},
+			"ui":        {"text.primary", "bg.base"},
+		},
+	}, func() interface{} { return shellFactory() })
 
 	// Note: Other apps (launcher, welcome, etc.) are registered in main.go
 	// after Desktop is created, since launcher needs access to the registry
