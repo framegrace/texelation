@@ -7,6 +7,7 @@ import (
 	"texelation/texel"
 	"texelation/texelui/core"
 	"texelation/texelui/primitives"
+	"texelation/texelui/scroll"
 	"texelation/texelui/widgets"
 )
 
@@ -71,12 +72,16 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 		{Label: "Inputs", ID: "inputs"},
 		{Label: "Layouts", ID: "layouts"},
 		{Label: "Widgets", ID: "widgets"},
+		{Label: "Scrolling", ID: "scrolling"},
 	}
 	tabLayout := widgets.NewTabLayout(0, 0, 80, 24, tabs)
 
-	// === Inputs Tab ===
+	// === Inputs Tab (wrapped in ScrollPane for tall content) ===
 	inputsPane := createInputsTab()
-	tabLayout.SetTabContent(0, inputsPane)
+	inputsScroll := scroll.NewScrollPane(0, 0, 80, 20, tcell.StyleDefault)
+	inputsScroll.SetChild(inputsPane)
+	inputsScroll.SetContentHeight(30) // Form is taller than viewport
+	tabLayout.SetTabContent(0, inputsScroll)
 
 	// === Layouts Tab ===
 	layoutsPane := createLayoutsTab()
@@ -85,6 +90,10 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 	// === Widgets Tab ===
 	widgetsPane := createWidgetsTab(ui)
 	tabLayout.SetTabContent(2, widgetsPane)
+
+	// === Scrolling Tab (dedicated scroll demo) ===
+	scrollingPane := createScrollingTab()
+	tabLayout.SetTabContent(3, scrollingPane)
 
 	ui.AddWidget(tabLayout)
 	ui.Focus(tabLayout)
@@ -98,8 +107,9 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 }
 
 // createInputsTab creates the Inputs tab content with Input, TextArea, ComboBox, ColorPicker.
+// This form is intentionally tall to demonstrate scrolling in the Inputs tab.
 func createInputsTab() *widgets.Pane {
-	pane := widgets.NewPane(0, 0, 80, 20, tcell.StyleDefault)
+	pane := widgets.NewPane(0, 0, 80, 30, tcell.StyleDefault) // Tall pane for scrolling demo
 
 	// Input field
 	nameLabel := widgets.NewLabel(2, 1, 12, 1, "Name:")
@@ -115,8 +125,15 @@ func createInputsTab() *widgets.Pane {
 	pane.AddChild(emailLabel)
 	pane.AddChild(emailInput)
 
+	// Phone field (new)
+	phoneLabel := widgets.NewLabel(2, 5, 12, 1, "Phone:")
+	phoneInput := widgets.NewInput(14, 5, 30)
+	phoneInput.Placeholder = "+1 (555) 000-0000"
+	pane.AddChild(phoneLabel)
+	pane.AddChild(phoneInput)
+
 	// ComboBox (editable) - for country selection with autocomplete
-	countryLabel := widgets.NewLabel(2, 5, 12, 1, "Country:")
+	countryLabel := widgets.NewLabel(2, 7, 12, 1, "Country:")
 	countries := []string{
 		"Argentina", "Australia", "Austria", "Belgium", "Brazil",
 		"Canada", "Chile", "China", "Denmark", "Egypt",
@@ -126,30 +143,30 @@ func createInputsTab() *widgets.Pane {
 		"South Africa", "Spain", "Sweden", "Switzerland",
 		"United Kingdom", "United States",
 	}
-	countryCombo := widgets.NewComboBox(14, 5, 30, countries, true)
+	countryCombo := widgets.NewComboBox(14, 7, 30, countries, true)
 	countryCombo.Placeholder = "Type to search..."
 	pane.AddChild(countryLabel)
 	pane.AddChild(countryCombo)
 
 	// ComboBox (non-editable) - for priority selection
-	priorityLabel := widgets.NewLabel(2, 7, 12, 1, "Priority:")
+	priorityLabel := widgets.NewLabel(2, 9, 12, 1, "Priority:")
 	priorities := []string{"Low", "Medium", "High", "Critical"}
-	priorityCombo := widgets.NewComboBox(14, 7, 20, priorities, false)
+	priorityCombo := widgets.NewComboBox(14, 9, 20, priorities, false)
 	priorityCombo.SetValue("Medium")
 	pane.AddChild(priorityLabel)
 	pane.AddChild(priorityCombo)
 
 	// TextArea
-	notesLabel := widgets.NewLabel(2, 9, 12, 1, "Notes:")
-	notesBorder := widgets.NewBorder(14, 9, 40, 5, tcell.StyleDefault)
+	notesLabel := widgets.NewLabel(2, 11, 12, 1, "Notes:")
+	notesBorder := widgets.NewBorder(14, 11, 40, 5, tcell.StyleDefault)
 	notesArea := widgets.NewTextArea(0, 0, 38, 3)
 	notesBorder.SetChild(notesArea)
 	pane.AddChild(notesLabel)
 	pane.AddChild(notesBorder)
 
 	// ColorPicker
-	colorLabel := widgets.NewLabel(2, 15, 12, 1, "Color:")
-	colorPicker := widgets.NewColorPicker(14, 15, widgets.ColorPickerConfig{
+	colorLabel := widgets.NewLabel(2, 17, 12, 1, "Color:")
+	colorPicker := widgets.NewColorPicker(14, 17, widgets.ColorPickerConfig{
 		EnableSemantic: true,
 		EnablePalette:  true,
 		EnableOKLCH:    true,
@@ -159,9 +176,34 @@ func createInputsTab() *widgets.Pane {
 	pane.AddChild(colorLabel)
 	pane.AddChild(colorPicker)
 
-	// Help text
-	helpLabel := widgets.NewLabel(2, 17, 70, 1, "Tab: navigate | Up/Down: dropdown | Enter: select | Type: filter (editable)")
-	pane.AddChild(helpLabel)
+	// Additional fields to make form taller (for scrolling demo)
+	website := widgets.NewLabel(2, 19, 12, 1, "Website:")
+	websiteInput := widgets.NewInput(14, 19, 30)
+	websiteInput.Placeholder = "https://example.com"
+	pane.AddChild(website)
+	pane.AddChild(websiteInput)
+
+	company := widgets.NewLabel(2, 21, 12, 1, "Company:")
+	companyInput := widgets.NewInput(14, 21, 30)
+	companyInput.Placeholder = "Company name"
+	pane.AddChild(company)
+	pane.AddChild(companyInput)
+
+	department := widgets.NewLabel(2, 23, 12, 1, "Department:")
+	depts := []string{"Engineering", "Design", "Marketing", "Sales", "Support", "HR"}
+	deptCombo := widgets.NewComboBox(14, 23, 25, depts, false)
+	pane.AddChild(department)
+	pane.AddChild(deptCombo)
+
+	// Checkboxes for preferences
+	prefsLabel := widgets.NewLabel(2, 25, 20, 1, "Preferences:")
+	check1 := widgets.NewCheckbox(2, 26, "Email notifications")
+	check2 := widgets.NewCheckbox(2, 27, "SMS notifications")
+	check3 := widgets.NewCheckbox(2, 28, "Newsletter subscription")
+	pane.AddChild(prefsLabel)
+	pane.AddChild(check1)
+	pane.AddChild(check2)
+	pane.AddChild(check3)
 
 	return pane
 }
@@ -277,4 +319,44 @@ func createWidgetsTab(ui *core.UIManager) *widgets.Pane {
 	pane.AddChild(helpLabel)
 
 	return pane
+}
+
+// createScrollingTab creates the Scrolling tab demonstrating the ScrollPane widget.
+// Returns the ScrollPane directly so it receives key events properly.
+func createScrollingTab() core.Widget {
+	// Create content with title, scrollable area, and instructions
+	// Total height: 1 (title) + 1 (desc) + 1 (gap) + 50 (content) + 1 (gap) + 5 (instructions) = 59 rows
+	contentPane := widgets.NewPane(0, 0, 80, 59, tcell.StyleDefault)
+
+	// Title and description at top
+	title := widgets.NewLabel(2, 0, 40, 1, "ScrollPane Widget Demo")
+	desc := widgets.NewLabel(2, 1, 70, 1, "Scroll to see 50 rows of content. Use mouse wheel or PgUp/PgDn.")
+	contentPane.AddChild(title)
+	contentPane.AddChild(desc)
+
+	// 50 rows of scrollable content
+	for i := 0; i < 50; i++ {
+		label := widgets.NewLabel(4, 3+i, 70, 1, fmt.Sprintf("Row %02d - This is scrollable content that demonstrates the ScrollPane widget", i+1))
+		contentPane.AddChild(label)
+	}
+
+	// Instructions at bottom
+	instructions := []string{
+		"Scroll Controls:",
+		"  Mouse wheel: Scroll up/down (3 rows)",
+		"  PgUp/PgDn: Scroll one page",
+		"  Ctrl+Home: Go to top",
+		"  Ctrl+End: Go to bottom",
+	}
+	for i, text := range instructions {
+		help := widgets.NewLabel(2, 54+i, 70, 1, text)
+		contentPane.AddChild(help)
+	}
+
+	// Wrap everything in a ScrollPane
+	scrollPane := scroll.NewScrollPane(0, 0, 80, 20, tcell.StyleDefault)
+	scrollPane.SetChild(contentPane)
+	scrollPane.SetContentHeight(59)
+
+	return scrollPane
 }

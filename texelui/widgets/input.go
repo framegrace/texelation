@@ -20,6 +20,8 @@ type Input struct {
 
 	// Optional validation/change callback
 	OnChange func(text string)
+	// Optional submit callback (Enter key)
+	OnSubmit func(text string)
 	// Optional blur callback
 	OnBlur func(text string)
 
@@ -175,6 +177,14 @@ func (i *Input) HandleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyEnd:
 		i.CaretPos = textLen
 		i.invalidate()
+		return true
+
+	case tcell.KeyEnter:
+		// Submit the input - triggers OnSubmit callback and signals handled
+		// so UIManager can advance focus if AdvanceFocusOnEnter is enabled
+		if i.OnSubmit != nil {
+			i.OnSubmit(i.Text)
+		}
 		return true
 
 	case tcell.KeyBackspace, tcell.KeyBackspace2:

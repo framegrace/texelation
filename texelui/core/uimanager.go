@@ -22,13 +22,21 @@ type UIManager struct {
 	dirty    []Rect
 	lay      Layout
 	capture  Widget
+
+	// AdvanceFocusOnEnter controls whether pressing Enter in a widget
+	// automatically advances focus to the next widget. Enabled by default.
+	// Useful for form-style data entry.
+	AdvanceFocusOnEnter bool
 }
 
 func NewUIManager() *UIManager {
 	tm := theme.Get()
 	bg := tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
 	fg := tm.GetColor("ui", "surface_fg", tcell.ColorWhite)
-	return &UIManager{bgStyle: tcell.StyleDefault.Background(bg).Foreground(fg)}
+	return &UIManager{
+		bgStyle:             tcell.StyleDefault.Background(bg).Foreground(fg),
+		AdvanceFocusOnEnter: true, // Enable by default for form-style data entry
+	}
 }
 
 func (u *UIManager) SetRefreshNotifier(ch chan<- bool) {
@@ -145,19 +153,6 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 		}
 	}
 
-	// Focus traversal on Tab/Shift-Tab (only for non-modal widgets)
-	if ev.Key() == tcell.KeyTab {
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			u.focusPrevDeepLocked()
-		} else {
-			u.focusNextDeepLocked()
-		}
-		u.dirtyMu.Lock()
-		u.invalidateAllLocked()
-		u.dirtyMu.Unlock()
-		return true
-	}
-
 	// Let focused widget handle the key first
 	if u.focused != nil && u.focused.HandleKey(ev) {
 		// Widget handled it
@@ -168,32 +163,110 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 			u.requestRefreshLocked()
 		}
 		u.dirtyMu.Unlock()
+
+		// Advance focus after Enter for form-style data entry (if container supports it)
+		if u.AdvanceFocusOnEnter && ev.Key() == tcell.KeyEnter {
+			if fc, ok := u.focused.(FocusCycler); ok {
+				fc.CycleFocus(true)
+				u.dirtyMu.Lock()
+				u.invalidateAllLocked()
+				u.dirtyMu.Unlock()
+			}
+		}
+
 		return true
 	}
 
-	// If Enter wasn't handled by widget, cycle focus to next component
-	if ev.Key() == tcell.KeyEnter {
-		u.focusNextDeepLocked()
-		u.dirtyMu.Lock()
-		u.invalidateAllLocked()
-		u.dirtyMu.Unlock()
-		return true
+	// Tab/Shift-Tab: delegate to root container's focus cycling
+	if ev.Key() == tcell.KeyTab || ev.Key() == tcell.KeyBacktab {
+		forward := ev.Key() == tcell.KeyTab && ev.Modifiers()&tcell.ModShift == 0
+		// Find the root container that should handle focus cycling
+		if u.cycleFocusLocked(forward) {
+			u.dirtyMu.Lock()
+			u.invalidateAllLocked()
+			u.dirtyMu.Unlock()
+			return true
+		}
 	}
 
-	// Up/Down focus traversal if widget didn't handle it
-	if ev.Key() == tcell.KeyUp {
-		u.focusPrevDeepLocked()
-		u.dirtyMu.Lock()
-		u.invalidateAllLocked()
-		u.dirtyMu.Unlock()
+	return false
+}
+
+// cycleFocusLocked finds the appropriate FocusCycler and cycles focus.
+// It walks up the widget hierarchy to find a container that can cycle focus.
+func (u *UIManager) cycleFocusLocked(forward bool) bool {
+	// Try focused widget first if it's a FocusCycler
+	if fc, ok := u.focused.(FocusCycler); ok {
+		if fc.CycleFocus(forward) {
+			return true
+		}
+	}
+
+	// Try to find a parent container that can handle focus cycling
+	for _, w := range u.widgets {
+		if fc, ok := w.(FocusCycler); ok {
+			// Check if this container contains the focused widget
+			if u.containsWidgetLocked(w, u.focused) {
+				if fc.CycleFocus(forward) {
+					return true
+				}
+			}
+		}
+	}
+
+	// No container handled it - try cycling among root widgets
+	return u.cycleRootWidgetsLocked(forward)
+}
+
+// containsWidgetLocked checks if container w contains widget target.
+func (u *UIManager) containsWidgetLocked(w, target Widget) bool {
+	if w == target {
 		return true
 	}
-	if ev.Key() == tcell.KeyDown {
-		u.focusNextDeepLocked()
-		u.dirtyMu.Lock()
-		u.invalidateAllLocked()
-		u.dirtyMu.Unlock()
-		return true
+	if cc, ok := w.(ChildContainer); ok {
+		found := false
+		cc.VisitChildren(func(child Widget) {
+			if found {
+				return
+			}
+			if u.containsWidgetLocked(child, target) {
+				found = true
+			}
+		})
+		return found
+	}
+	return false
+}
+
+// cycleRootWidgetsLocked cycles focus among root-level widgets.
+func (u *UIManager) cycleRootWidgetsLocked(forward bool) bool {
+	if len(u.widgets) == 0 {
+		return false
+	}
+
+	// Find current root widget index
+	currentIdx := -1
+	for i, w := range u.widgets {
+		if u.containsWidgetLocked(w, u.focused) {
+			currentIdx = i
+			break
+		}
+	}
+
+	// Find next focusable root widget
+	n := len(u.widgets)
+	for offset := 1; offset <= n; offset++ {
+		var idx int
+		if forward {
+			idx = (currentIdx + offset) % n
+		} else {
+			idx = (currentIdx - offset + n) % n
+		}
+		w := u.widgets[idx]
+		if w.Focusable() {
+			u.focusLocked(w)
+			return true
+		}
 	}
 
 	return false
@@ -318,58 +391,6 @@ func deepHit(w Widget, x, y int) Widget {
 	return nil
 }
 
-// Deep focus traversal across all widgets in z-order (top-level order, then children).
-func (u *UIManager) focusNextDeepLocked() {
-	order := u.flattenFocusableLocked()
-	if len(order) == 0 {
-		return
-	}
-	cur := -1
-	for i, w := range order {
-		if w == u.focused {
-			cur = i
-			break
-		}
-	}
-	next := (cur + 1) % len(order)
-	u.focusLocked(order[next])
-}
-
-func (u *UIManager) focusPrevDeepLocked() {
-	order := u.flattenFocusableLocked()
-	if len(order) == 0 {
-		return
-	}
-	cur := -1
-	for i, w := range order {
-		if w == u.focused {
-			cur = i
-			break
-		}
-	}
-	prev := cur - 1
-	if prev < 0 {
-		prev = len(order) - 1
-	}
-	u.focusLocked(order[prev])
-}
-
-func (u *UIManager) flattenFocusableLocked() []Widget {
-	var out []Widget
-	var visit func(w Widget)
-	visit = func(w Widget) {
-		if w.Focusable() {
-			out = append(out, w)
-		}
-		if cc, ok := w.(ChildContainer); ok {
-			cc.VisitChildren(func(child Widget) { visit(child) })
-		}
-	}
-	for _, w := range u.widgets {
-		visit(w)
-	}
-	return out
-}
 
 // Invalidate marks a region for redraw.
 // Thread-safe.

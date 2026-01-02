@@ -11,6 +11,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
         return false
     }
 
+    // Handle Ctrl key combinations
     if ev.Modifiers()&tcell.ModCtrl != 0 {
         if ev.Rune() == 'v' && t.clip != "" {
             t.insertText(t.clip)
@@ -37,16 +38,7 @@ func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
     case tcell.KeyEnd:
         t.CaretX = 1 << 30
 	case tcell.KeyEnter:
-		line := t.Lines[t.CaretY]
-		head := []rune(line)[:t.CaretX]
-		tail := []rune(line)[t.CaretX:]
-		t.Lines[t.CaretY] = string(head)
-		t.Lines = append(t.Lines[:t.CaretY+1], append([]string{""}, t.Lines[t.CaretY+1:]...)...)
-		t.Lines[t.CaretY+1] = string(tail)
-		t.CaretY++
-		t.CaretX = 0
-		t.onChange()
-		t.invalidateViewport()
+		t.insertNewline()
 		return true
     case tcell.KeyBackspace, tcell.KeyBackspace2:
         if t.CaretX > 0 {

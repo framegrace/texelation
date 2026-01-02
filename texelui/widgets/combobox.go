@@ -389,8 +389,6 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 			if cb.OnChange != nil {
 				cb.OnChange(cb.Text)
 			}
-			// Return false to allow focus to cycle to next component
-			return false
 		} else if !cb.expanded && cb.Editable {
 			// Editable: Accept autocomplete or current value
 			autocomplete := cb.autocompleteMatch()
@@ -404,8 +402,8 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 				}
 			}
 		}
-		// Return false to allow focus to cycle to next component
-		return false
+		// Return true to signal handled; UIManager advances focus if AdvanceFocusOnEnter is set
+		return true
 
 	case tcell.KeyTab:
 		// Accept autocomplete on Tab

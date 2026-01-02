@@ -15,10 +15,16 @@ type Pane struct {
 	Style    tcell.Style
 	children []core.Widget
 	inv      func(core.Rect)
+
+	// Focus cycling support
+	trapsFocus     bool // If true, wraps focus at boundaries instead of returning false
+	lastFocusedIdx int  // Index of last focused child for focus restoration
 }
 
 func NewPane(x, y, w, h int, style tcell.Style) *Pane {
-	p := &Pane{}
+	p := &Pane{
+		lastFocusedIdx: -1, // No child focused yet
+	}
 	p.SetPosition(x, y)
 	p.Resize(w, h)
 
@@ -39,6 +45,17 @@ func NewPane(x, y, w, h int, style tcell.Style) *Pane {
 	ffg := tm.GetSemanticColor("text.primary")
 	p.SetFocusedStyle(tcell.StyleDefault.Background(fbg).Foreground(ffg), true)
 	return p
+}
+
+// SetTrapsFocus sets whether this pane wraps focus at boundaries.
+// Set to true for root containers that should cycle focus internally.
+func (p *Pane) SetTrapsFocus(trap bool) {
+	p.trapsFocus = trap
+}
+
+// TrapsFocus returns whether this pane wraps focus at boundaries.
+func (p *Pane) TrapsFocus() bool {
+	return p.trapsFocus
 }
 
 // AddChild adds a child widget to this pane.
@@ -139,30 +156,161 @@ func (p *Pane) WidgetAt(x, y int) core.Widget {
 	return p
 }
 
-// HandleKey routes key events to the focused child.
-func (p *Pane) HandleKey(ev *tcell.EventKey) bool {
-	// Find focused child and route to it
-	for _, child := range p.children {
-		if fs, ok := child.(core.FocusState); ok && fs.IsFocused() {
-			return child.HandleKey(ev)
+// Focus focuses the first focusable child, or restores last focused child.
+func (p *Pane) Focus() {
+	p.BaseWidget.Focus()
+
+	focusables := p.getFocusableChildren()
+	if len(focusables) == 0 {
+		return
+	}
+
+	// Try to restore last focused child
+	if p.lastFocusedIdx >= 0 && p.lastFocusedIdx < len(focusables) {
+		focusables[p.lastFocusedIdx].Focus()
+		return
+	}
+
+	// Focus first child
+	focusables[0].Focus()
+	p.lastFocusedIdx = 0
+}
+
+// Blur blurs all children and tracks which one was focused.
+func (p *Pane) Blur() {
+	focusables := p.getFocusableChildren()
+	for i, w := range focusables {
+		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+			p.lastFocusedIdx = i
+			w.Blur()
+			break
 		}
-		// Check nested containers
-		if cc, ok := child.(core.ChildContainer); ok {
-			handled := false
-			cc.VisitChildren(func(w core.Widget) {
-				if handled {
-					return
-				}
-				if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
-					handled = child.HandleKey(ev)
-				}
-			})
-			if handled {
-				return true
+	}
+	p.BaseWidget.Blur()
+}
+
+// CycleFocus moves focus to next (forward=true) or previous (forward=false) child.
+// Returns true if focus was successfully cycled, false if at boundary.
+func (p *Pane) CycleFocus(forward bool) bool {
+	focusables := p.getFocusableChildren()
+	if len(focusables) == 0 {
+		return false
+	}
+
+	// Find currently focused widget
+	currentIdx := -1
+	var focusedWidget core.Widget
+	for i, w := range focusables {
+		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+			currentIdx = i
+			focusedWidget = w
+			break
+		}
+	}
+
+	// If nothing focused, focus first/last based on direction
+	if currentIdx < 0 {
+		if forward {
+			focusables[0].Focus()
+			p.lastFocusedIdx = 0
+		} else {
+			focusables[len(focusables)-1].Focus()
+			p.lastFocusedIdx = len(focusables) - 1
+		}
+		if p.inv != nil {
+			p.inv(p.Rect)
+		}
+		return true
+	}
+
+	var nextIdx int
+	if forward {
+		nextIdx = currentIdx + 1
+		if nextIdx >= len(focusables) {
+			if p.trapsFocus {
+				nextIdx = 0 // Wrap around
+			} else {
+				return false // At boundary, let parent handle
+			}
+		}
+	} else {
+		nextIdx = currentIdx - 1
+		if nextIdx < 0 {
+			if p.trapsFocus {
+				nextIdx = len(focusables) - 1 // Wrap around
+			} else {
+				return false // At boundary, let parent handle
 			}
 		}
 	}
-	return false
+
+	focusedWidget.Blur()
+	focusables[nextIdx].Focus()
+	p.lastFocusedIdx = nextIdx
+	if p.inv != nil {
+		p.inv(p.Rect)
+	}
+	return true
+}
+
+// HandleKey routes key events to the focused child.
+// Tab/Shift-Tab is NOT handled here - parent containers should call CycleFocus.
+func (p *Pane) HandleKey(ev *tcell.EventKey) bool {
+	// Find the focused widget
+	focusables := p.getFocusableChildren()
+	var focusedWidget core.Widget
+	var focusedIdx int = -1
+	for i, w := range focusables {
+		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+			focusedWidget = w
+			focusedIdx = i
+			break
+		}
+	}
+
+	if focusedWidget == nil {
+		return false
+	}
+
+	// For Tab/Shift-Tab, only forward to nested containers (not leaf widgets)
+	isTab := ev.Key() == tcell.KeyTab || ev.Key() == tcell.KeyBacktab
+	if isTab {
+		// Check if focused widget is a container that can handle Tab internally
+		if _, isContainer := focusedWidget.(core.FocusCycler); isContainer {
+			if focusedWidget.HandleKey(ev) {
+				return true
+			}
+		}
+		// Leaf widget or container exhausted - return false to let parent handle
+		return false
+	}
+
+	// Route non-Tab keys to focused widget
+	handled := focusedWidget.HandleKey(ev)
+	if handled {
+		p.lastFocusedIdx = focusedIdx
+	}
+	return handled
+}
+
+// getFocusableChildren returns all focusable widgets in this pane (flattened).
+func (p *Pane) getFocusableChildren() []core.Widget {
+	var result []core.Widget
+	var visit func(w core.Widget)
+	visit = func(w core.Widget) {
+		if w.Focusable() {
+			result = append(result, w)
+		}
+		if cc, ok := w.(core.ChildContainer); ok {
+			cc.VisitChildren(func(child core.Widget) {
+				visit(child)
+			})
+		}
+	}
+	for _, child := range p.children {
+		visit(child)
+	}
+	return result
 }
 
 // HandleMouse routes mouse events to children, respecting Z-index.

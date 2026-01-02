@@ -320,14 +320,7 @@ func (t *TextArea) segmentLen(li, start int) int {
 func (t *TextArea) insertText(s string) {
 	for _, r := range s {
 		if r == '\n' {
-			line := t.Lines[t.CaretY]
-			head := []rune(line)[:t.CaretX]
-			tail := []rune(line)[t.CaretX:]
-			t.Lines[t.CaretY] = string(head)
-			t.Lines = append(t.Lines[:t.CaretY+1], append([]string{""}, t.Lines[t.CaretY+1:]...)...)
-			t.Lines[t.CaretY+1] = string(tail)
-			t.CaretY++
-			t.CaretX = 0
+			t.insertNewline()
 		} else {
 			line := []rune(t.Lines[t.CaretY])
 			if t.CaretX < 0 {
@@ -341,6 +334,22 @@ func (t *TextArea) insertText(s string) {
 			t.CaretX++
 		}
 	}
+	t.clampCaret()
+	t.ensureVisible()
+	t.onChange()
+	t.invalidateViewport()
+}
+
+// insertNewline splits the current line at the caret position.
+func (t *TextArea) insertNewline() {
+	line := t.Lines[t.CaretY]
+	head := []rune(line)[:t.CaretX]
+	tail := []rune(line)[t.CaretX:]
+	t.Lines[t.CaretY] = string(head)
+	t.Lines = append(t.Lines[:t.CaretY+1], append([]string{""}, t.Lines[t.CaretY+1:]...)...)
+	t.Lines[t.CaretY+1] = string(tail)
+	t.CaretY++
+	t.CaretX = 0
 	t.clampCaret()
 	t.ensureVisible()
 	t.onChange()

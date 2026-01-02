@@ -76,3 +76,30 @@ func (p *Painter) DrawBorder(rect Rect, style tcell.Style, charset [6]rune) {
 	p.SetCell(x0, y1, bl, style)
 	p.SetCell(x1, y1, br, style)
 }
+
+// WithClip returns a new Painter that clips to the intersection of the
+// current clip and the given rectangle. Useful for scrollable containers.
+// If the intersection is empty or the rectangle has non-positive dimensions,
+// returns a painter with an empty clip (no output will be rendered).
+func (p *Painter) WithClip(rect Rect) *Painter {
+	// Calculate intersection of current clip and new rect
+	left := max(p.clip.X, rect.X)
+	top := max(p.clip.Y, rect.Y)
+	right := min(p.clip.X+p.clip.W, rect.X+rect.W)
+	bottom := min(p.clip.Y+p.clip.H, rect.Y+rect.H)
+
+	// If no valid intersection, return painter with zero-size clip
+	if left >= right || top >= bottom {
+		return &Painter{buf: p.buf, clip: Rect{}}
+	}
+
+	return &Painter{
+		buf: p.buf,
+		clip: Rect{
+			X: left,
+			Y: top,
+			W: right - left,
+			H: bottom - top,
+		},
+	}
+}

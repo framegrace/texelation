@@ -115,6 +115,21 @@ type Modal interface {
 	DismissModal()
 }
 
+// FocusCycler is implemented by containers that manage focus cycling internally.
+// When Tab/Shift-Tab is pressed, the container cycles focus among its children.
+// Returns true if focus was cycled, false if exhausted (at boundary).
+// Root containers should wrap around; nested containers should return false at boundary.
+type FocusCycler interface {
+	// CycleFocus moves focus to next (forward=true) or previous (forward=false) child.
+	// Returns true if focus was successfully cycled, false if at boundary.
+	CycleFocus(forward bool) bool
+
+	// TrapsFocus returns true if this container wraps focus at boundaries
+	// (i.e., is a root container). False means it returns false at boundaries
+	// to let parent handle focus cycling.
+	TrapsFocus() bool
+}
+
 // BlinkAware widgets support periodic blink updates (e.g., caret blink).
 // UI frameworks can call BlinkTick at a fixed interval; the widget should
 // invalidate any regions that need redraw and return immediately.
