@@ -287,15 +287,20 @@ func (tl *TabLayout) HandleMouse(ev *tcell.EventMouse) bool {
 
 	// Check if click is on tab bar
 	if tl.tabBar.HitTest(x, y) {
-		// Focus tab bar
+		// Focus tab bar (always ensure it's focused - may have been blurred by parent)
 		if tl.focusArea != 0 {
 			tl.blurContentFocus()
 			tl.focusArea = 0
+		}
+		if !tl.tabBar.IsFocused() {
 			tl.tabBar.Focus()
 			tl.invalidate()
 		}
 		return tl.tabBar.HandleMouse(ev)
 	}
+
+	// Mouse not on tab bar - clear hover
+	tl.tabBar.ClearHover()
 
 	// Click is on content area
 	activeChild := tl.activeChild()
