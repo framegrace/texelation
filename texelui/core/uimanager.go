@@ -298,12 +298,25 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 
 	// Start capture on press over a widget
 	if !prevIsDown && nowDown {
-		if w := u.topmostAtLocked(x, y); w != nil {
-			u.focusLocked(w)
-			u.capture = w
-			if mw, ok := w.(MouseAware); ok {
+		// Find the root container widget at this position
+		rootWidget := u.rootWidgetAtLocked(x, y)
+		if rootWidget != nil {
+			// Blur the old focused widget before routing to new one
+			if u.focused != nil {
+				u.focused.Blur()
+				u.focused = nil
+			}
+			// Route mouse event through root widget - it will handle focus internally
+			// This allows containers like TabLayout to update their focusArea
+			if mw, ok := rootWidget.(MouseAware); ok {
 				_ = mw.HandleMouse(ev)
 			}
+			// After routing, find what's actually focused and track it
+			deepWidget := u.topmostAtLocked(x, y)
+			if deepWidget != nil && deepWidget.Focusable() {
+				u.focused = deepWidget
+			}
+			u.capture = rootWidget // Capture on root for proper routing
 			u.dirtyMu.Lock()
 			u.invalidateAllLocked()
 			u.dirtyMu.Unlock()
@@ -326,9 +339,9 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 		u.dirtyMu.Unlock()
 		return true
 	}
-	// Wheel-only events over topmost
+	// Wheel-only events over topmost root widget
 	if buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0 {
-		if w := u.topmostAtLocked(x, y); w != nil {
+		if w := u.rootWidgetAtLocked(x, y); w != nil {
 			if mw, ok := w.(MouseAware); ok {
 				_ = mw.HandleMouse(ev)
 				u.dirtyMu.Lock()
@@ -339,9 +352,9 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 		}
 	}
 
-	// Mouse move events (no buttons pressed) - forward to widget under cursor for hover tracking
+	// Mouse move events (no buttons pressed) - forward to root widget for hover tracking
 	if buttons == tcell.ButtonNone {
-		if w := u.topmostAtLocked(x, y); w != nil {
+		if w := u.rootWidgetAtLocked(x, y); w != nil {
 			if mw, ok := w.(MouseAware); ok {
 				if mw.HandleMouse(ev) {
 					u.dirtyMu.Lock()
@@ -354,6 +367,18 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 	}
 
 	return false
+}
+
+// rootWidgetAtLocked finds the topmost root-level widget containing the point.
+// Unlike topmostAtLocked, this returns the root container, not the deepest child.
+func (u *UIManager) rootWidgetAtLocked(x, y int) Widget {
+	sorted := u.sortedWidgetsLocked()
+	for i := len(sorted) - 1; i >= 0; i-- {
+		if sorted[i].HitTest(x, y) {
+			return sorted[i]
+		}
+	}
+	return nil
 }
 
 func (u *UIManager) topmostAtLocked(x, y int) Widget {

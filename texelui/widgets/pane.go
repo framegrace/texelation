@@ -320,6 +320,9 @@ func (p *Pane) HandleMouse(ev *tcell.EventMouse) bool {
 		return false
 	}
 
+	// Only handle focus changes on button press
+	isPress := ev.Buttons()&tcell.Button1 != 0
+
 	// Sort children by Z-index descending (highest first) for mouse routing
 	// This ensures expanded dropdowns and modals receive events first
 	sorted := make([]core.Widget, len(p.children))
@@ -338,6 +341,26 @@ func (p *Pane) HandleMouse(ev *tcell.EventMouse) bool {
 	// Check children in Z-order (highest first)
 	for _, child := range sorted {
 		if child.HitTest(x, y) {
+			// Focus the clicked widget on button press
+			if isPress && child.Focusable() {
+				// Blur currently focused widget
+				focusables := p.getFocusableChildren()
+				for i, w := range focusables {
+					if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+						if w != child {
+							w.Blur()
+						}
+					}
+					if w == child {
+						p.lastFocusedIdx = i
+					}
+				}
+				// Focus the clicked widget
+				child.Focus()
+				if p.inv != nil {
+					p.inv(p.Rect)
+				}
+			}
 			if ma, ok := child.(core.MouseAware); ok {
 				return ma.HandleMouse(ev)
 			}

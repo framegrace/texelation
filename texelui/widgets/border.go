@@ -136,3 +136,30 @@ func (b *Border) WidgetAt(x, y int) core.Widget {
 	return nil
 }
 
+// HandleMouse routes mouse events to child and handles focus on click.
+func (b *Border) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	if !b.HitTest(x, y) {
+		return false
+	}
+
+	// On button press, focus the child if clicked
+	isPress := ev.Buttons()&tcell.Button1 != 0
+	if isPress && b.Child != nil && b.Child.HitTest(x, y) && b.Child.Focusable() {
+		b.Child.Focus()
+		if b.inv != nil {
+			b.inv(b.Rect)
+		}
+	}
+
+	// Forward to child if it handles mouse
+	if b.Child != nil && b.Child.HitTest(x, y) {
+		if ma, ok := b.Child.(core.MouseAware); ok {
+			return ma.HandleMouse(ev)
+		}
+		return true
+	}
+
+	return true
+}
+
