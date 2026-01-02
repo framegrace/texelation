@@ -49,13 +49,19 @@ func NewScrollPane(x, y, w, h int, style tcell.Style) *ScrollPane {
 	}
 	sp.Style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attr)
 
-	// Set indicator style from theme
-	indicatorFg := tm.GetSemanticColor("text.muted")
-	if indicatorFg == tcell.ColorDefault {
-		indicatorFg = fg
+	// Set up scrollbar with text.primary color for thumb
+	thumbStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
+	trackFg := tm.GetSemanticColor("text.muted")
+	if trackFg == tcell.ColorDefault {
+		trackFg = fg
 	}
-	sp.IndicatorStyle = tcell.StyleDefault.Foreground(indicatorFg).Background(bg)
-	sp.indicatorConfig = DefaultIndicatorConfig(sp.IndicatorStyle)
+	trackStyle := tcell.StyleDefault.Foreground(trackFg).Background(bg)
+
+	// Enable scrollbar by default
+	sp.indicatorConfig = DefaultIndicatorConfigWithScrollbar(thumbStyle, trackStyle)
+
+	// Also set IndicatorStyle for backwards compatibility
+	sp.IndicatorStyle = thumbStyle
 
 	return sp
 }

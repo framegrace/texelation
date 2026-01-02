@@ -451,17 +451,48 @@ func TestScrollPane_Draw(t *testing.T) {
 
 	sp.Draw(painter)
 
-	// Should have scroll indicators
-	// Up indicator at top-right corner of scroll pane
-	upX, upY := 5+40-1, 2
-	if ch := getCell(buf, upX, upY); ch != DefaultUpGlyph {
-		t.Errorf("Up indicator at (%d,%d) = %c, want %c", upX, upY, ch, DefaultUpGlyph)
+	// Should have scrollbar with arrows (default behavior)
+	// Layout: [▲][track area (8 rows)][▼]
+	// With content=30, viewport=10, offset=10, trackHeight=8:
+	// - thumbSize = (10 * 8) / 30 = 2 rows
+	// - scrollableContent = 30 - 10 = 20
+	// - scrollableTrack = 8 - 2 = 6
+	// - thumbStart = (10 * 6) / 20 = 3 (within track area)
+	// - thumbEnd = 3 + 2 = 5
+	scrollbarX := 5 + 40 - 1 // Right edge
+
+	// Row 0: Up arrow
+	if ch := getCell(buf, scrollbarX, 2); ch != DefaultUpGlyph {
+		t.Errorf("Up arrow at row 0: got %c, want %c", ch, DefaultUpGlyph)
 	}
 
-	// Down indicator at bottom-right corner
-	downX, downY := 5+40-1, 2+10-1
-	if ch := getCell(buf, downX, downY); ch != DefaultDownGlyph {
-		t.Errorf("Down indicator at (%d,%d) = %c, want %c", downX, downY, ch, DefaultDownGlyph)
+	// Track area rows 0-2 (screen rows 1-3): Track before thumb
+	for row := 1; row <= 3; row++ {
+		y := 2 + row
+		if ch := getCell(buf, scrollbarX, y); ch != DefaultTrackChar {
+			t.Errorf("Track at row %d: got %c, want %c", row, ch, DefaultTrackChar)
+		}
+	}
+
+	// Track area rows 3-4 (screen rows 4-5): Thumb
+	for row := 4; row <= 5; row++ {
+		y := 2 + row
+		if ch := getCell(buf, scrollbarX, y); ch != DefaultThumbChar {
+			t.Errorf("Thumb at row %d: got %c, want %c", row, ch, DefaultThumbChar)
+		}
+	}
+
+	// Track area rows 5-7 (screen rows 6-8): Track after thumb
+	for row := 6; row <= 8; row++ {
+		y := 2 + row
+		if ch := getCell(buf, scrollbarX, y); ch != DefaultTrackChar {
+			t.Errorf("Track at row %d: got %c, want %c", row, ch, DefaultTrackChar)
+		}
+	}
+
+	// Row 9: Down arrow
+	if ch := getCell(buf, scrollbarX, 2+9); ch != DefaultDownGlyph {
+		t.Errorf("Down arrow at row 9: got %c, want %c", ch, DefaultDownGlyph)
 	}
 }
 
@@ -483,6 +514,182 @@ func TestScrollPane_Draw_NoIndicators(t *testing.T) {
 	upX, upY := 5+40-1, 2
 	if ch := getCell(buf, upX, upY); ch == DefaultUpGlyph {
 		t.Error("Up indicator should not be drawn when ShowIndicators is false")
+	}
+}
+
+func TestScrollPane_Draw_ArrowsNotOverwrittenByThumb(t *testing.T) {
+	// Test that arrows are never overwritten by thumb at any scroll position
+	testCases := []struct {
+		name          string
+		contentHeight int
+		viewportH     int
+		scrollOffset  int
+	}{
+		{"at_top", 100, 10, 0},              // Thumb at top, only down arrow
+		{"near_top", 100, 10, 5},            // Thumb near top
+		{"middle", 100, 10, 45},             // Thumb in middle
+		{"near_bottom", 100, 10, 85},        // Thumb near bottom
+		{"at_bottom", 100, 10, 90},          // Thumb at bottom, only up arrow
+		{"small_viewport", 100, 5, 50},      // Small viewport
+		{"large_content", 1000, 20, 500},    // Large content
+		{"minimal_scroll", 15, 10, 3},       // Minimal scrollable content
+		{"tiny_viewport", 50, 3, 25},        // Very small viewport (3 rows)
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := createTestBuffer(50, tc.viewportH+5)
+			painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 50, H: tc.viewportH + 5})
+
+			sp := NewScrollPane(5, 2, 40, tc.viewportH, tcell.StyleDefault)
+			sp.SetContentHeight(tc.contentHeight)
+			sp.ScrollBy(tc.scrollOffset)
+
+			child := newMockWidget(5, 2, 40, tc.contentHeight, false)
+			sp.SetChild(child)
+
+			sp.Draw(painter)
+
+			scrollbarX := 5 + 40 - 1 // Right edge
+			topY := 2
+			bottomY := 2 + tc.viewportH - 1
+
+			// Check that arrows are present when scrollable
+			canScrollUp := tc.scrollOffset > 0
+			canScrollDown := tc.scrollOffset < tc.contentHeight-tc.viewportH
+
+			if canScrollUp {
+				ch := getCell(buf, scrollbarX, topY)
+				if ch != DefaultUpGlyph {
+					t.Errorf("Up arrow at top overwritten: got %c, want %c", ch, DefaultUpGlyph)
+				}
+			}
+
+			if canScrollDown {
+				ch := getCell(buf, scrollbarX, bottomY)
+				if ch != DefaultDownGlyph {
+					t.Errorf("Down arrow at bottom overwritten: got %c, want %c", ch, DefaultDownGlyph)
+				}
+			}
+
+			// Verify thumb never appears at arrow positions
+			if canScrollUp {
+				ch := getCell(buf, scrollbarX, topY)
+				if ch == DefaultThumbChar {
+					t.Error("Thumb character found at up arrow position")
+				}
+			}
+			if canScrollDown {
+				ch := getCell(buf, scrollbarX, bottomY)
+				if ch == DefaultThumbChar {
+					t.Error("Thumb character found at down arrow position")
+				}
+			}
+		})
+	}
+}
+
+func TestScrollPane_Draw_ScrollbarLayout(t *testing.T) {
+	// Visual test - prints the scrollbar layout for debugging
+	buf := createTestBuffer(50, 15)
+	painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 50, H: 15})
+
+	sp := NewScrollPane(5, 2, 40, 10, tcell.StyleDefault)
+	sp.SetContentHeight(100)
+	sp.ScrollBy(45) // Middle position
+
+	child := newMockWidget(5, 2, 40, 100, false)
+	sp.SetChild(child)
+
+	sp.Draw(painter)
+
+	scrollbarX := 5 + 40 - 1 // Right edge
+
+	// Print the scrollbar column for debugging
+	t.Log("Scrollbar layout (viewport rows 0-9):")
+	for row := 0; row < 10; row++ {
+		y := 2 + row
+		ch := getCell(buf, scrollbarX, y)
+		var desc string
+		switch ch {
+		case DefaultUpGlyph:
+			desc = "UP_ARROW"
+		case DefaultDownGlyph:
+			desc = "DOWN_ARROW"
+		case DefaultThumbChar:
+			desc = "THUMB"
+		case DefaultTrackChar:
+			desc = "TRACK"
+		default:
+			desc = "OTHER"
+		}
+		t.Logf("  Row %d (y=%d): %c (%s)", row, y, ch, desc)
+	}
+
+	// Verify structure: should be [▲][track/thumb area][▼]
+	topCh := getCell(buf, scrollbarX, 2)
+	bottomCh := getCell(buf, scrollbarX, 11)
+
+	if topCh != DefaultUpGlyph {
+		t.Errorf("Top should be up arrow, got %c", topCh)
+	}
+	if bottomCh != DefaultDownGlyph {
+		t.Errorf("Bottom should be down arrow, got %c", bottomCh)
+	}
+}
+
+func TestScrollPane_Draw_ThumbAtExtremes(t *testing.T) {
+	// Test that arrows are always shown and thumb never overlaps them
+	testCases := []struct {
+		name   string
+		offset int
+	}{
+		{"at_top", 0},
+		{"at_bottom", 90},
+		{"one_from_top", 1},
+		{"one_from_bottom", 89},
+		{"middle", 45},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := createTestBuffer(50, 15)
+			painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 50, H: 15})
+
+			sp := NewScrollPane(5, 2, 40, 10, tcell.StyleDefault)
+			sp.SetContentHeight(100) // viewport=10, content=100, maxOffset=90
+			sp.ScrollBy(tc.offset)
+
+			child := newMockWidget(5, 2, 40, 100, false)
+			sp.SetChild(child)
+
+			sp.Draw(painter)
+
+			scrollbarX := 5 + 40 - 1 // Right edge
+			topY := 2
+			bottomY := 11
+
+			topCh := getCell(buf, scrollbarX, topY)
+			bottomCh := getCell(buf, scrollbarX, bottomY)
+
+			t.Logf("At offset %d: top=%c bottom=%c", tc.offset, topCh, bottomCh)
+
+			// Arrows should ALWAYS be shown (as click targets)
+			if topCh != DefaultUpGlyph {
+				t.Errorf("Up arrow should always be shown at top, got %c", topCh)
+			}
+			if bottomCh != DefaultDownGlyph {
+				t.Errorf("Down arrow should always be shown at bottom, got %c", bottomCh)
+			}
+
+			// Thumb should never be at arrow positions
+			if topCh == DefaultThumbChar {
+				t.Error("Thumb should never appear at up arrow position")
+			}
+			if bottomCh == DefaultThumbChar {
+				t.Error("Thumb should never appear at down arrow position")
+			}
+		})
 	}
 }
 
