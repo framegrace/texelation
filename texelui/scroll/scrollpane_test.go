@@ -848,3 +848,112 @@ func itoa(n int) string {
 	}
 	return string(digits)
 }
+
+// TestScrollPane_MouseScrollbarArrows verifies clicking arrows scrolls by 1 row.
+func TestScrollPane_MouseScrollbarArrows(t *testing.T) {
+	sp := NewScrollPane(0, 0, 20, 10, tcell.StyleDefault)
+	child := newMockWidget(0, 0, 19, 100, false) // Content height 100
+	sp.SetChild(child)
+	sp.SetContentHeight(100)
+
+	// Scrollbar is at x=19 (rightmost column)
+	scrollbarX := 19
+
+	// Click up arrow at (19, 0) - should scroll up by 1 (but already at 0)
+	sp.HandleMouse(tcell.NewEventMouse(scrollbarX, 0, tcell.Button1, 0))
+	if sp.ScrollOffset() != 0 {
+		t.Errorf("Expected offset 0 after up arrow at top, got %d", sp.ScrollOffset())
+	}
+
+	// Scroll down first
+	sp.ScrollBy(10)
+	if sp.ScrollOffset() != 10 {
+		t.Fatalf("Expected offset 10, got %d", sp.ScrollOffset())
+	}
+
+	// Click up arrow - should scroll to 9
+	sp.HandleMouse(tcell.NewEventMouse(scrollbarX, 0, tcell.Button1, 0))
+	if sp.ScrollOffset() != 9 {
+		t.Errorf("Expected offset 9 after up arrow click, got %d", sp.ScrollOffset())
+	}
+
+	// Click down arrow at (19, 9) - should scroll to 10
+	sp.HandleMouse(tcell.NewEventMouse(scrollbarX, 9, tcell.Button1, 0))
+	if sp.ScrollOffset() != 10 {
+		t.Errorf("Expected offset 10 after down arrow click, got %d", sp.ScrollOffset())
+	}
+}
+
+// TestScrollPane_MouseScrollbarTrack verifies clicking track scrolls by page.
+func TestScrollPane_MouseScrollbarTrack(t *testing.T) {
+	sp := NewScrollPane(0, 0, 20, 10, tcell.StyleDefault)
+	child := newMockWidget(0, 0, 19, 100, false)
+	sp.SetChild(child)
+	sp.SetContentHeight(100)
+
+	scrollbarX := 19
+
+	// Start at middle
+	sp.ScrollBy(50)
+	if sp.ScrollOffset() != 50 {
+		t.Fatalf("Expected offset 50, got %d", sp.ScrollOffset())
+	}
+
+	// Click track above thumb - should page up
+	// Thumb is somewhere in the middle, track row 1 should be above it
+	sp.HandleMouse(tcell.NewEventMouse(scrollbarX, 1, tcell.Button1, 0))
+	if sp.ScrollOffset() >= 50 {
+		t.Errorf("Expected offset < 50 after page up, got %d", sp.ScrollOffset())
+	}
+
+	// Go to top, then click track below thumb - should page down
+	sp.ScrollBy(-100) // Go to top
+	if sp.ScrollOffset() != 0 {
+		t.Fatalf("Expected offset 0, got %d", sp.ScrollOffset())
+	}
+
+	// Click track near bottom (but above down arrow)
+	sp.HandleMouse(tcell.NewEventMouse(scrollbarX, 8, tcell.Button1, 0))
+	if sp.ScrollOffset() == 0 {
+		t.Errorf("Expected offset > 0 after page down, got %d", sp.ScrollOffset())
+	}
+}
+
+// TestScrollPane_MouseScrollbarThumbDrag verifies thumb drag scrolls proportionally.
+func TestScrollPane_MouseScrollbarThumbDrag(t *testing.T) {
+	sp := NewScrollPane(0, 0, 20, 10, tcell.StyleDefault)
+	child := newMockWidget(0, 0, 19, 100, false)
+	sp.SetChild(child)
+	sp.SetContentHeight(100)
+
+	scrollbarX := 19
+
+	// Scrollbar geometry: viewport=10, content=100, track=8 (H-2)
+	// Thumb size = (10 * 8) / 100 = 0.8 -> 1 (min)
+	// At offset 0, thumb is at track row 0
+
+	// Start drag on thumb (row 1, which is track row 0)
+	sp.HandleMouse(tcell.NewEventMouse(scrollbarX, 1, tcell.Button1, 0))
+	if !sp.draggingThumb {
+		t.Fatal("Expected draggingThumb to be true after click on thumb")
+	}
+
+	// Drag down to row 5 (track row 4)
+	sp.HandleMouse(tcell.NewEventMouse(scrollbarX, 5, tcell.Button1, 0))
+	if sp.ScrollOffset() == 0 {
+		t.Errorf("Expected offset > 0 after dragging thumb down, got %d", sp.ScrollOffset())
+	}
+	draggedOffset := sp.ScrollOffset()
+
+	// Drag further down
+	sp.HandleMouse(tcell.NewEventMouse(scrollbarX, 8, tcell.Button1, 0))
+	if sp.ScrollOffset() <= draggedOffset {
+		t.Errorf("Expected offset > %d after dragging more, got %d", draggedOffset, sp.ScrollOffset())
+	}
+
+	// Release button
+	sp.HandleMouse(tcell.NewEventMouse(scrollbarX, 8, 0, 0))
+	if sp.draggingThumb {
+		t.Error("Expected draggingThumb to be false after release")
+	}
+}

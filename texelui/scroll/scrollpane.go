@@ -27,6 +27,11 @@ type ScrollPane struct {
 	indicatorConfig IndicatorConfig
 	lastFocused     core.Widget // Track focused widget for auto-scroll on focus change
 	trapsFocus      bool        // If true, wraps focus at boundaries instead of returning false
+
+	// Scrollbar mouse interaction state
+	draggingThumb   bool // True when thumb is being dragged
+	dragStartY      int  // Y position where drag started
+	dragStartOffset int  // Scroll offset when drag started
 }
 
 // NewScrollPane creates a new scroll pane with the given dimensions and style.
@@ -441,21 +446,131 @@ func (sp *ScrollPane) HandleKey(ev *tcell.EventKey) bool {
 	return false
 }
 
+// scrollbarGeometry returns the scrollbar's X position and thumb start/end rows (relative to rect).
+// Returns scrollbarX, thumbStart, thumbEnd, trackHeight.
+// thumbStart and thumbEnd are relative to the track area (excluding arrows).
+func (sp *ScrollPane) scrollbarGeometry() (scrollbarX, thumbStart, thumbEnd, trackHeight int) {
+	rect := sp.Rect
+	if rect.H < 3 || !sp.state.CanScroll() {
+		return -1, 0, 0, 0 // No scrollbar
+	}
+
+	// Scrollbar X position
+	switch sp.indicatorConfig.Scrollbar.Position {
+	case IndicatorLeft:
+		scrollbarX = rect.X
+	default:
+		scrollbarX = rect.X + rect.W - 1
+	}
+
+	// Track is between arrows (row 1 to H-2)
+	trackHeight = rect.H - 2
+	if trackHeight <= 0 {
+		return scrollbarX, 0, 0, 0
+	}
+
+	// Calculate thumb size (same logic as DrawScrollbar)
+	thumbSize := (sp.state.ViewportHeight * trackHeight) / sp.state.ContentHeight
+	minThumb := sp.indicatorConfig.Scrollbar.MinThumbSize
+	if minThumb <= 0 {
+		minThumb = 1
+	}
+	if thumbSize < minThumb {
+		thumbSize = minThumb
+	}
+	if thumbSize > trackHeight {
+		thumbSize = trackHeight
+	}
+
+	// Calculate thumb position
+	scrollableContent := sp.state.ContentHeight - sp.state.ViewportHeight
+	scrollableTrack := trackHeight - thumbSize
+
+	thumbStart = 0
+	if scrollableContent > 0 && scrollableTrack > 0 {
+		thumbStart = (sp.state.Offset * scrollableTrack) / scrollableContent
+	}
+	if thumbStart < 0 {
+		thumbStart = 0
+	}
+	if thumbStart > scrollableTrack {
+		thumbStart = scrollableTrack
+	}
+	thumbEnd = thumbStart + thumbSize
+
+	return scrollbarX, thumbStart, thumbEnd, trackHeight
+}
+
 // HandleMouse handles mouse input for scrolling.
 func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 	x, y := ev.Position()
+	buttons := ev.Buttons()
+
+	// Handle drag release
+	if sp.draggingThumb && buttons&tcell.Button1 == 0 {
+		sp.draggingThumb = false
+		return true
+	}
+
+	// Handle ongoing thumb drag
+	if sp.draggingThumb && buttons&tcell.Button1 != 0 {
+		sp.handleThumbDrag(y)
+		return true
+	}
+
 	if !sp.HitTest(x, y) {
 		return false
 	}
 
 	// Handle scroll wheel
-	switch ev.Buttons() {
+	switch buttons {
 	case tcell.WheelUp:
 		sp.ScrollBy(-3) // Scroll 3 rows up
 		return true
 	case tcell.WheelDown:
 		sp.ScrollBy(3) // Scroll 3 rows down
 		return true
+	}
+
+	// Check if click is on scrollbar
+	if sp.showIndicators && sp.indicatorConfig.ShowScrollbar && buttons&tcell.Button1 != 0 {
+		scrollbarX, thumbStart, thumbEnd, trackHeight := sp.scrollbarGeometry()
+		if scrollbarX >= 0 && x == scrollbarX {
+			// Convert y to relative position in scrollbar
+			relY := y - sp.Rect.Y
+
+			// Up arrow (row 0)
+			if relY == 0 {
+				sp.ScrollBy(-1)
+				return true
+			}
+
+			// Down arrow (last row)
+			if relY == sp.Rect.H-1 {
+				sp.ScrollBy(1)
+				return true
+			}
+
+			// Track area (between arrows)
+			trackY := relY - 1 // Position within track (0-based)
+			if trackY >= 0 && trackY < trackHeight {
+				if trackY < thumbStart {
+					// Click above thumb - page up
+					sp.ScrollBy(-sp.Rect.H)
+					return true
+				} else if trackY >= thumbEnd {
+					// Click below thumb - page down
+					sp.ScrollBy(sp.Rect.H)
+					return true
+				} else {
+					// Click on thumb - start drag
+					sp.draggingThumb = true
+					sp.dragStartY = y
+					sp.dragStartOffset = sp.state.Offset
+					return true
+				}
+			}
+		}
 	}
 
 	// Route other mouse events to child
@@ -466,6 +581,61 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 	}
 
 	return true
+}
+
+// handleThumbDrag updates scroll position based on thumb drag.
+func (sp *ScrollPane) handleThumbDrag(currentY int) {
+	if !sp.state.CanScroll() {
+		return
+	}
+
+	// Calculate how far the mouse has moved in screen pixels
+	deltaY := currentY - sp.dragStartY
+
+	// Track height (excluding arrows)
+	trackHeight := sp.Rect.H - 2
+	if trackHeight <= 0 {
+		return
+	}
+
+	// Calculate thumb size
+	thumbSize := (sp.state.ViewportHeight * trackHeight) / sp.state.ContentHeight
+	minThumb := sp.indicatorConfig.Scrollbar.MinThumbSize
+	if minThumb <= 0 {
+		minThumb = 1
+	}
+	if thumbSize < minThumb {
+		thumbSize = minThumb
+	}
+	if thumbSize > trackHeight {
+		thumbSize = trackHeight
+	}
+
+	// Scrollable ranges
+	scrollableTrack := trackHeight - thumbSize
+	scrollableContent := sp.state.ContentHeight - sp.state.ViewportHeight
+
+	if scrollableTrack <= 0 || scrollableContent <= 0 {
+		return
+	}
+
+	// Convert mouse delta to content offset delta
+	// deltaOffset / scrollableContent = deltaY / scrollableTrack
+	deltaOffset := (deltaY * scrollableContent) / scrollableTrack
+	newOffset := sp.dragStartOffset + deltaOffset
+
+	// Clamp to valid range
+	if newOffset < 0 {
+		newOffset = 0
+	}
+	if newOffset > scrollableContent {
+		newOffset = scrollableContent
+	}
+
+	if newOffset != sp.state.Offset {
+		sp.state = sp.state.WithOffset(newOffset)
+		sp.invalidate()
+	}
 }
 
 // VisitChildren implements core.ChildContainer for focus traversal.

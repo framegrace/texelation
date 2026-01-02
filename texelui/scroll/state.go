@@ -159,3 +159,10 @@ func (s State) WithViewportHeight(height int) State {
 	result.ViewportHeight = height
 	return result.Clamp()
 }
+
+// WithOffset returns a new state with updated offset.
+func (s State) WithOffset(offset int) State {
+	result := s
+	result.Offset = offset
+	return result.Clamp()
+}
