@@ -105,6 +105,13 @@ func (c *Checkbox) toggle() {
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
 func (c *Checkbox) SetInvalidator(fn func(core.Rect)) { c.inv = fn }
 
+// GetKeyHints implements core.KeyHintsProvider.
+func (c *Checkbox) GetKeyHints() []core.KeyHint {
+	return []core.KeyHint{
+		{Key: "Space", Label: "Toggle"},
+	}
+}
+
 // invalidate marks the widget as needing redraw.
 func (c *Checkbox) invalidate() {
 	if c.inv != nil {

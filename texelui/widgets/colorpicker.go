@@ -3,6 +3,7 @@
 //
 // File: texelui/widgets/colorpicker.go
 // Summary: Color picker widget with semantic, palette, and OKLCH modes.
+// Uses OKLCHEditor widget for custom color selection.
 
 package widgets
 
@@ -73,10 +74,13 @@ type ColorPicker struct {
 	result      ColorPickerResult
 	focus       focusArea // Which area has focus when expanded
 
-	// Mode pickers
+	// Mode pickers (legacy interface for Semantic/Palette)
 	modes      map[ColorPickerMode]colorpicker.ModePicker
 	modeOrder  []ColorPickerMode // Order for tab display
 	activeMode colorpicker.ModePicker
+
+	// New widget-based OKLCH editor
+	oklchEditor *OKLCHEditor
 
 	// Callbacks
 	OnChange func(ColorPickerResult)
@@ -107,30 +111,25 @@ func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker {
 		cp.modeOrder = append(cp.modeOrder, ColorModePalette)
 	}
 	if config.EnableOKLCH {
-		cp.modes[ColorModeOKLCH] = colorpicker.NewOKLCHPicker()
+		// Use new widget-based OKLCHEditor instead of legacy ModePicker
+		cp.oklchEditor = NewOKLCHEditor(0, 0, 25, 10)
 		cp.modeOrder = append(cp.modeOrder, ColorModeOKLCH)
 	}
 
 	// Ensure at least one mode is enabled - default to OKLCH if none specified
 	if len(cp.modeOrder) == 0 {
-		cp.modes[ColorModeOKLCH] = colorpicker.NewOKLCHPicker()
+		cp.oklchEditor = NewOKLCHEditor(0, 0, 25, 10)
 		cp.modeOrder = append(cp.modeOrder, ColorModeOKLCH)
 	}
 
 	// Set initial mode to first available
 	cp.currentMode = cp.modeOrder[0]
-	cp.activeMode = cp.modes[cp.currentMode]
+	if cp.currentMode != ColorModeOKLCH {
+		cp.activeMode = cp.modes[cp.currentMode]
+	}
 
 	// Get initial color from first mode
-	r := cp.activeMode.GetResult()
-	cp.result = ColorPickerResult{
-		Color:  r.Color,
-		Mode:   cp.currentMode,
-		Source: r.Source,
-		R:      r.R,
-		G:      r.G,
-		B:      r.B,
-	}
+	cp.result = cp.getResultFromCurrentMode()
 
 	// Set initial focused style from theme
 	// Use border.focus for the border line color (foreground), keep bg.surface as background
@@ -147,6 +146,37 @@ func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker {
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
 func (cp *ColorPicker) SetInvalidator(fn func(core.Rect)) {
 	cp.inv = fn
+	if cp.oklchEditor != nil {
+		cp.oklchEditor.SetInvalidator(fn)
+	}
+}
+
+// getResultFromCurrentMode returns a ColorPickerResult from the active mode.
+func (cp *ColorPicker) getResultFromCurrentMode() ColorPickerResult {
+	if cp.currentMode == ColorModeOKLCH && cp.oklchEditor != nil {
+		color := cp.oklchEditor.GetColor()
+		r, g, b := color.RGB()
+		return ColorPickerResult{
+			Color:  color,
+			Mode:   ColorModeOKLCH,
+			Source: cp.oklchEditor.GetSource(),
+			R:      r,
+			G:      g,
+			B:      b,
+		}
+	}
+	if cp.activeMode != nil {
+		mr := cp.activeMode.GetResult()
+		return ColorPickerResult{
+			Color:  mr.Color,
+			Mode:   cp.currentMode,
+			Source: mr.Source,
+			R:      mr.R,
+			G:      mr.G,
+			B:      mr.B,
+		}
+	}
+	return ColorPickerResult{}
 }
 
 // SetValue sets the current color by parsing a color string.
@@ -194,7 +224,11 @@ func (cp *ColorPicker) SetValue(colorStr string) {
 	}
 
 	// Switch to appropriate mode if available
-	if _, ok := cp.modes[mode]; ok {
+	if mode == ColorModeOKLCH && cp.oklchEditor != nil {
+		cp.currentMode = mode
+		cp.activeMode = nil
+		cp.oklchEditor.SetColor(resolvedColor)
+	} else if _, ok := cp.modes[mode]; ok {
 		cp.currentMode = mode
 		cp.activeMode = cp.modes[mode]
 		cp.activeMode.SetColor(resolvedColor)
@@ -354,14 +388,19 @@ func (cp *ColorPicker) drawExpanded(painter *core.Painter) {
 		H: cp.Rect.H - 2,
 	}
 
-	if cp.activeMode != nil {
+	if cp.currentMode == ColorModeOKLCH && cp.oklchEditor != nil {
+		// Use new widget-based OKLCHEditor
+		cp.oklchEditor.SetPosition(contentRect.X, contentRect.Y)
+		cp.oklchEditor.Resize(contentRect.W, contentRect.H)
+		cp.oklchEditor.Draw(painter)
+	} else if cp.activeMode != nil {
 		cp.activeMode.Draw(painter, contentRect)
 	}
 
 	// Draw live preview in bottom-left corner
 	previewX := cp.Rect.X + 2
 	previewY := cp.Rect.Y + cp.Rect.H - 1
-	r := cp.activeMode.GetResult()
+	r := cp.getResultFromCurrentMode()
 	globalBg := tm.GetSemanticColor("bg.base")
 
 	// Preview: [█A]
@@ -374,8 +413,8 @@ func (cp *ColorPicker) drawExpanded(painter *core.Painter) {
 // HandleKey processes keyboard input.
 func (cp *ColorPicker) HandleKey(ev *tcell.EventKey) bool {
 	if !cp.expanded {
-		// Collapsed: Enter/Space to expand
-		if ev.Key() == tcell.KeyEnter || ev.Rune() == ' ' {
+		// Collapsed: Space only to expand (Enter validates/cycles, like other widgets)
+		if ev.Rune() == ' ' {
 			cp.Expand()
 			cp.focus = focusTabBar // Start with focus on tab bar
 			return true
@@ -423,12 +462,12 @@ func (cp *ColorPicker) HandleKey(ev *tcell.EventKey) bool {
 func (cp *ColorPicker) handleTabBarKey(ev *tcell.EventKey) bool {
 	switch ev.Key() {
 	case tcell.KeyTab:
-		// Tab moves to content, reset mode focus to first element
-		cp.focus = focusContent
-		if cp.activeMode != nil {
-			cp.activeMode.ResetFocus()
+		// Tab cycles focus - use CycleFocus for consistent behavior
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			cp.CycleFocus(false) // Shift+Tab goes backward
+		} else {
+			cp.CycleFocus(true) // Tab goes forward (to content)
 		}
-		cp.invalidate()
 		return true
 
 	case tcell.KeyLeft:
@@ -444,9 +483,7 @@ func (cp *ColorPicker) handleTabBarKey(ev *tcell.EventKey) bool {
 	case tcell.KeyDown:
 		// Enter content, reset mode focus to first element
 		cp.focus = focusContent
-		if cp.activeMode != nil {
-			cp.activeMode.ResetFocus()
-		}
+		cp.resetContentFocus()
 		cp.invalidate()
 		return true
 	}
@@ -454,47 +491,59 @@ func (cp *ColorPicker) handleTabBarKey(ev *tcell.EventKey) bool {
 	return false
 }
 
+// resetContentFocus resets focus to the first element in the current mode.
+func (cp *ColorPicker) resetContentFocus() {
+	if cp.currentMode == ColorModeOKLCH && cp.oklchEditor != nil {
+		cp.oklchEditor.ResetFocus()
+		cp.oklchEditor.Focus()
+	} else if cp.activeMode != nil {
+		cp.activeMode.ResetFocus()
+	}
+}
+
 // handleContentKey handles keys when focus is on the mode content.
 func (cp *ColorPicker) handleContentKey(ev *tcell.EventKey) bool {
-	// Let mode try to handle the key first (including Tab for internal navigation)
-	if cp.activeMode != nil {
-		if cp.activeMode.HandleKey(ev) {
-			cp.invalidate()
-			return true
+	// Handle Tab specially - cycle focus within picker
+	if ev.Key() == tcell.KeyTab {
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			cp.CycleFocus(false) // Shift+Tab goes backward
+		} else {
+			cp.CycleFocus(true) // Tab goes forward
 		}
+		return true
+	}
+
+	// Let mode try to handle the key first
+	var handled bool
+	if cp.currentMode == ColorModeOKLCH && cp.oklchEditor != nil {
+		handled = cp.oklchEditor.HandleKey(ev)
+	} else if cp.activeMode != nil {
+		handled = cp.activeMode.HandleKey(ev)
+	}
+
+	if handled {
+		cp.invalidate()
+		return true
 	}
 
 	// Mode didn't handle it - check what to do
 	switch ev.Key() {
-	case tcell.KeyTab:
-		// Mode didn't handle Tab, return to tab bar
-		cp.focus = focusTabBar
-		cp.invalidate()
-		return true
-
 	case tcell.KeyUp:
 		// Mode didn't handle Up, go to tab bar
 		cp.focus = focusTabBar
+		if cp.oklchEditor != nil {
+			cp.oklchEditor.Blur()
+		}
 		cp.invalidate()
 		return true
 
 	case tcell.KeyEnter:
 		// Mode didn't handle Enter, commit current selection and close
-		if cp.activeMode != nil {
-			r := cp.activeMode.GetResult()
-			cp.result = ColorPickerResult{
-				Color:  r.Color,
-				Mode:   cp.currentMode,
-				Source: r.Source,
-				R:      r.R,
-				G:      r.G,
-				B:      r.B,
-			}
-			if cp.OnChange != nil {
-				cp.OnChange(cp.result)
-			}
-			cp.Collapse()
+		cp.result = cp.getResultFromCurrentMode()
+		if cp.OnChange != nil {
+			cp.OnChange(cp.result)
 		}
+		cp.Collapse()
 		return true
 	}
 
@@ -569,13 +618,23 @@ func (cp *ColorPicker) HandleMouse(ev *tcell.EventMouse) bool {
 	}
 
 	// Delegate to active mode (content area)
-	if cp.activeMode != nil {
-		contentRect := core.Rect{
-			X: cp.Rect.X + 1,
-			Y: cp.Rect.Y + 1,
-			W: cp.Rect.W - 2,
-			H: cp.Rect.H - 2,
+	contentRect := core.Rect{
+		X: cp.Rect.X + 1,
+		Y: cp.Rect.Y + 1,
+		W: cp.Rect.W - 2,
+		H: cp.Rect.H - 2,
+	}
+
+	if cp.currentMode == ColorModeOKLCH && cp.oklchEditor != nil {
+		// Ensure OKLCHEditor is positioned correctly for hit testing
+		cp.oklchEditor.SetPosition(contentRect.X, contentRect.Y)
+		cp.oklchEditor.Resize(contentRect.W, contentRect.H)
+		if cp.oklchEditor.HandleMouse(ev) {
+			cp.focus = focusContent
+			cp.invalidate()
+			return true
 		}
+	} else if cp.activeMode != nil {
 		if cp.activeMode.HandleMouse(ev, contentRect) {
 			cp.invalidate()
 			return true
@@ -587,7 +646,12 @@ func (cp *ColorPicker) HandleMouse(ev *tcell.EventMouse) bool {
 
 // selectMode switches to a different mode.
 func (cp *ColorPicker) selectMode(mode ColorPickerMode) {
-	if picker, ok := cp.modes[mode]; ok {
+	if mode == ColorModeOKLCH && cp.oklchEditor != nil {
+		cp.currentMode = mode
+		cp.activeMode = nil
+		cp.calculateSize()
+		cp.invalidate()
+	} else if picker, ok := cp.modes[mode]; ok {
 		cp.currentMode = mode
 		cp.activeMode = picker
 		cp.calculateSize()
@@ -599,8 +663,8 @@ func (cp *ColorPicker) selectMode(mode ColorPickerMode) {
 func (cp *ColorPicker) calculateSize() {
 	if !cp.expanded {
 		// Collapsed: [█A] source
-		w := 5                          // [█A]
-		w += len(cp.result.Source) + 1  // " source"
+		w := 5                         // [█A]
+		w += len(cp.result.Source) + 1 // " source"
 		if w < 20 {
 			w = 20
 		}
@@ -617,8 +681,17 @@ func (cp *ColorPicker) calculateSize() {
 		tabsWidth += 1 // Right border
 
 		// Expanded: get preferred size from active mode
-		w, h := 30, 12 // Default minimum
-		if cp.activeMode != nil {
+		w, h := 30, 15 // Default minimum (increased for OKLCHEditor)
+		if cp.currentMode == ColorModeOKLCH && cp.oklchEditor != nil {
+			// OKLCHEditor needs more space for HCPlane + slider + preview
+			mw, mh := 28, 13
+			if mw+2 > w {
+				w = mw + 2 // +2 for border
+			}
+			if mh+2 > h {
+				h = mh + 2 // +2 for border
+			}
+		} else if cp.activeMode != nil {
 			mw, mh := cp.activeMode.PreferredSize()
 			if mw+2 > w {
 				w = mw + 2 // +2 for border
@@ -641,5 +714,96 @@ func (cp *ColorPicker) calculateSize() {
 func (cp *ColorPicker) invalidate() {
 	if cp.inv != nil {
 		cp.inv(cp.Rect)
+	}
+}
+
+// CycleFocus implements core.FocusCycler.
+// When expanded, cycles focus between tab bar and content.
+func (cp *ColorPicker) CycleFocus(forward bool) bool {
+	if !cp.expanded {
+		return false
+	}
+
+	if forward {
+		switch cp.focus {
+		case focusTabBar:
+			// Move to content
+			cp.focus = focusContent
+			cp.resetContentFocus()
+			cp.invalidate()
+			return true
+		case focusContent:
+			// Try to cycle within content first
+			if cp.currentMode == ColorModeOKLCH && cp.oklchEditor != nil {
+				if cp.oklchEditor.CycleFocus(true) {
+					cp.invalidate()
+					return true
+				}
+			}
+			// Content exhausted, wrap to tab bar
+			cp.focus = focusTabBar
+			if cp.oklchEditor != nil {
+				cp.oklchEditor.Blur()
+			}
+			cp.invalidate()
+			return true
+		}
+	} else {
+		switch cp.focus {
+		case focusContent:
+			// Try to cycle backward within content first
+			if cp.currentMode == ColorModeOKLCH && cp.oklchEditor != nil {
+				if cp.oklchEditor.CycleFocus(false) {
+					cp.invalidate()
+					return true
+				}
+			}
+			// Content exhausted, go to tab bar
+			cp.focus = focusTabBar
+			if cp.oklchEditor != nil {
+				cp.oklchEditor.Blur()
+			}
+			cp.invalidate()
+			return true
+		case focusTabBar:
+			// Wrap to content (last element)
+			cp.focus = focusContent
+			cp.resetContentFocus()
+			// Move to last element in content
+			if cp.currentMode == ColorModeOKLCH && cp.oklchEditor != nil {
+				// Move to slider (last element)
+				cp.oklchEditor.CycleFocus(true) // plane -> slider
+			}
+			cp.invalidate()
+			return true
+		}
+	}
+	return true
+}
+
+// TrapsFocus implements core.FocusCycler.
+// Returns true when expanded to trap focus within the picker.
+func (cp *ColorPicker) TrapsFocus() bool {
+	return cp.expanded
+}
+
+// GetKeyHints implements core.KeyHintsProvider.
+func (cp *ColorPicker) GetKeyHints() []core.KeyHint {
+	if !cp.expanded {
+		return []core.KeyHint{
+			{Key: "Space", Label: "Open"},
+		}
+	}
+	if cp.focus == focusTabBar {
+		return []core.KeyHint{
+			{Key: "←→", Label: "Switch"},
+			{Key: "1-3", Label: "Mode"},
+			{Key: "↓/Tab", Label: "Edit"},
+		}
+	}
+	// Content focus
+	return []core.KeyHint{
+		{Key: "Enter", Label: "Apply"},
+		{Key: "Esc", Label: "Close"},
 	}
 }

@@ -276,3 +276,11 @@ func (tb *TabBar) invalidate() {
 		tb.inv(tb.Rect)
 	}
 }
+
+// GetKeyHints implements KeyHintsProvider from core package.
+func (tb *TabBar) GetKeyHints() []core.KeyHint {
+	return []core.KeyHint{
+		{Key: "←→", Label: "Switch"},
+		{Key: "1-9", Label: "Jump"},
+	}
+}

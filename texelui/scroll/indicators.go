@@ -211,16 +211,14 @@ func DrawScrollbar(painter *core.Painter, rect core.Rect, state State, config Sc
 		downArrow = DefaultDownGlyph
 	}
 
-	// Always reserve space for arrows at top and bottom
-	// Track and thumb are always drawn in the space between the arrows
-	trackStart := 1
-	trackEnd := rect.H - 1
-
-	// Always draw arrows (they serve as click targets)
+	// Draw up arrow at top
 	painter.SetCell(x, rect.Y, upArrow, config.ArrowStyle)
+
+	// Draw down arrow at bottom
 	painter.SetCell(x, rect.Y+rect.H-1, downArrow, config.ArrowStyle)
 
-	trackHeight := trackEnd - trackStart
+	// Track area is between arrows (rows 1 to H-2)
+	trackHeight := rect.H - 2
 	if trackHeight <= 0 {
 		return
 	}
@@ -258,9 +256,9 @@ func DrawScrollbar(painter *core.Painter, rect core.Rect, state State, config Sc
 
 	thumbEndRow := thumbStart + thumbSize
 
-	// Draw the scrollbar track and thumb (between the arrows)
+	// Draw the scrollbar track and thumb (between arrows)
 	for row := 0; row < trackHeight; row++ {
-		y := rect.Y + trackStart + row
+		y := rect.Y + 1 + row // +1 to skip up arrow
 		if row >= thumbStart && row < thumbEndRow {
 			// Draw thumb
 			painter.SetCell(x, y, thumbChar, config.ThumbStyle)

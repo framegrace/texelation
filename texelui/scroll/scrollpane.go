@@ -98,7 +98,8 @@ func (sp *ScrollPane) GetChild() core.Widget {
 // Use this when the child widget doesn't report its full height.
 func (sp *ScrollPane) SetContentHeight(h int) {
 	sp.contentHeight = h
-	sp.state = NewState(h, sp.Rect.H)
+	// Preserve existing offset when updating content height
+	sp.state = sp.state.WithContentHeight(h).WithViewportHeight(sp.Rect.H)
 }
 
 // ContentHeight returns the current content height.
@@ -451,7 +452,7 @@ func (sp *ScrollPane) HandleKey(ev *tcell.EventKey) bool {
 // thumbStart and thumbEnd are relative to the track area (excluding arrows).
 func (sp *ScrollPane) scrollbarGeometry() (scrollbarX, thumbStart, thumbEnd, trackHeight int) {
 	rect := sp.Rect
-	if rect.H < 3 || !sp.state.CanScroll() {
+	if rect.H < 1 || !sp.state.CanScroll() {
 		return -1, 0, 0, 0 // No scrollbar
 	}
 
@@ -463,7 +464,7 @@ func (sp *ScrollPane) scrollbarGeometry() (scrollbarX, thumbStart, thumbEnd, tra
 		scrollbarX = rect.X + rect.W - 1
 	}
 
-	// Track is between arrows (row 1 to H-2)
+	// Track area is between arrows (rows 1 to H-2)
 	trackHeight = rect.H - 2
 	if trackHeight <= 0 {
 		return scrollbarX, 0, 0, 0
@@ -522,14 +523,24 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 		return false
 	}
 
-	// Handle scroll wheel
-	switch buttons {
-	case tcell.WheelUp:
-		sp.ScrollBy(-3) // Scroll 3 rows up
-		return true
-	case tcell.WheelDown:
-		sp.ScrollBy(3) // Scroll 3 rows down
-		return true
+	// Handle scroll wheel - but first let child handle it if mouse is over child
+	if buttons&(tcell.WheelUp|tcell.WheelDown) != 0 {
+		// Forward to child first - child might have its own scrollable content
+		if sp.child != nil && sp.child.HitTest(x, y) {
+			if ma, ok := sp.child.(core.MouseAware); ok {
+				if ma.HandleMouse(ev) {
+					return true
+				}
+			}
+		}
+		// Child didn't handle it, we handle it
+		if buttons == tcell.WheelUp {
+			sp.ScrollBy(-3)
+			return true
+		} else if buttons == tcell.WheelDown {
+			sp.ScrollBy(3)
+			return true
+		}
 	}
 
 	// Check if click is on scrollbar
@@ -539,34 +550,34 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 			// Convert y to relative position in scrollbar
 			relY := y - sp.Rect.Y
 
-			// Up arrow (row 0)
+			// Up arrow at row 0
 			if relY == 0 {
 				sp.ScrollBy(-1)
 				return true
 			}
 
-			// Down arrow (last row)
+			// Down arrow at last row
 			if relY == sp.Rect.H-1 {
 				sp.ScrollBy(1)
 				return true
 			}
 
-			// Track area (between arrows)
-			trackY := relY - 1 // Position within track (0-based)
+			// Track area (between arrows, rows 1 to H-2)
+			trackY := relY - 1 // Convert to track-relative position
 			if trackY >= 0 && trackY < trackHeight {
-				if trackY < thumbStart {
-					// Click above thumb - page up
-					sp.ScrollBy(-sp.Rect.H)
-					return true
-				} else if trackY >= thumbEnd {
-					// Click below thumb - page down
-					sp.ScrollBy(sp.Rect.H)
-					return true
-				} else {
+				if trackY >= thumbStart && trackY < thumbEnd {
 					// Click on thumb - start drag
 					sp.draggingThumb = true
 					sp.dragStartY = y
 					sp.dragStartOffset = sp.state.Offset
+					return true
+				} else if trackY < thumbStart {
+					// Click above thumb - page up
+					sp.ScrollBy(-sp.Rect.H)
+					return true
+				} else {
+					// Click below thumb - page down
+					sp.ScrollBy(sp.Rect.H)
 					return true
 				}
 			}
@@ -580,7 +591,9 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 		}
 	}
 
-	return true
+	// Return false if we didn't actually handle the event
+	// This allows parent widgets to handle clicks that weren't on the scrollbar
+	return false
 }
 
 // handleThumbDrag updates scroll position based on thumb drag.
@@ -592,7 +605,7 @@ func (sp *ScrollPane) handleThumbDrag(currentY int) {
 	// Calculate how far the mouse has moved in screen pixels
 	deltaY := currentY - sp.dragStartY
 
-	// Track height (excluding arrows)
+	// Track area is between arrows (rows 1 to H-2)
 	trackHeight := sp.Rect.H - 2
 	if trackHeight <= 0 {
 		return
@@ -645,14 +658,39 @@ func (sp *ScrollPane) VisitChildren(f func(core.Widget)) {
 	}
 }
 
-// WidgetAt implements core.HitTester for mouse event routing.
-// ScrollPane returns itself to ensure it receives mouse events (especially wheel).
-// Child widget delegation is handled in HandleMouse.
+// WidgetAt implements core.HitTester for deep focus traversal.
+// Returns the deepest focusable widget under the point.
 func (sp *ScrollPane) WidgetAt(x, y int) core.Widget {
 	if !sp.HitTest(x, y) {
 		return nil
 	}
-	// Always return self - we handle child routing in HandleMouse
+
+	// Check if click is on scrollbar (rightmost column when scrollbar is shown)
+	if sp.showIndicators && sp.indicatorConfig.ShowScrollbar && sp.state.CanScroll() {
+		scrollbarX := sp.Rect.X + sp.Rect.W - 1
+		if sp.indicatorConfig.Scrollbar.Position == IndicatorLeft {
+			scrollbarX = sp.Rect.X
+		}
+		if x == scrollbarX {
+			// Click on scrollbar - ScrollPane handles it
+			return sp
+		}
+	}
+
+	// Delegate to child for deep hit testing
+	if sp.child != nil && sp.child.HitTest(x, y) {
+		if ht, ok := sp.child.(core.HitTester); ok {
+			if dw := ht.WidgetAt(x, y); dw != nil {
+				return dw
+			}
+		}
+		// Child hit but no deeper widget - return child if focusable
+		if sp.child.Focusable() {
+			return sp.child
+		}
+	}
+
+	// Return self as fallback
 	return sp
 }
 

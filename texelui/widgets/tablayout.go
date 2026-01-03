@@ -503,3 +503,31 @@ func (tl *TabLayout) invalidate() {
 		tl.inv(tl.Rect)
 	}
 }
+
+// GetKeyHints implements core.KeyHintsProvider.
+// Returns hints based on whether tab bar or content has focus.
+func (tl *TabLayout) GetKeyHints() []core.KeyHint {
+	if tl.focusArea == 0 {
+		// Tab bar focused - includes Tab/S-Tab to suppress focus cycler hints
+		// (TabLayout handles these internally for tab bar <-> content navigation)
+		return []core.KeyHint{
+			{Key: "←→", Label: "Switch"},
+			{Key: "1-9", Label: "Jump"},
+			{Key: "Tab", Label: "Content"},
+			{Key: "S-Tab", Label: "Exit"},
+		}
+	}
+	// Content focused - delegate to content widget if it provides hints
+	activeChild := tl.activeChild()
+	if activeChild != nil {
+		if khp, ok := activeChild.(core.KeyHintsProvider); ok {
+			// Get content hints and add S-Tab for returning to tab bar
+			hints := khp.GetKeyHints()
+			hints = append(hints, core.KeyHint{Key: "S-Tab", Label: "Tab Bar"})
+			return hints
+		}
+	}
+	return []core.KeyHint{
+		{Key: "S-Tab", Label: "Tab Bar"},
+	}
+}

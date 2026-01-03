@@ -42,3 +42,29 @@ func (v VBox) Apply(container core.Rect, children []core.Widget) {
 func NewVBox(spacing int) *VBox {
 	return &VBox{Spacing: spacing}
 }
+
+// GetNeighbors implements core.NeighborLayout.
+// For VBox, widgets have top/bottom neighbors based on their position in the list.
+func (v VBox) GetNeighbors(child core.Widget) core.NeighborInfo {
+	return v.GetNeighborsInChildren(child, nil)
+}
+
+// GetNeighborsInChildren returns neighbor info for a child within a given children slice.
+// If children is nil, returns empty NeighborInfo (used when Apply hasn't been called yet).
+func (v VBox) GetNeighborsInChildren(child core.Widget, children []core.Widget) core.NeighborInfo {
+	if children == nil || len(children) == 0 {
+		return core.NeighborInfo{}
+	}
+
+	for i, c := range children {
+		if c == child {
+			return core.NeighborInfo{
+				Top:    i > 0,
+				Bottom: i < len(children)-1,
+				Left:   false,
+				Right:  false,
+			}
+		}
+	}
+	return core.NeighborInfo{}
+}

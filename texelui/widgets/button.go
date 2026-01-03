@@ -133,6 +133,13 @@ func (b *Button) activate() {
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
 func (b *Button) SetInvalidator(fn func(core.Rect)) { b.inv = fn }
 
+// GetKeyHints implements core.KeyHintsProvider.
+func (b *Button) GetKeyHints() []core.KeyHint {
+	return []core.KeyHint{
+		{Key: "Enter/Space", Label: "Activate"},
+	}
+}
+
 // invalidate marks the widget as needing redraw.
 func (b *Button) invalidate() {
 	if b.inv != nil {

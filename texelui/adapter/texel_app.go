@@ -62,6 +62,25 @@ func (a *UIApp) SetRefreshNotifier(ch chan<- bool) { a.refresh = ch; a.ui.SetRef
 // Expose UI for composition
 func (a *UIApp) UI() *core.UIManager { return a.ui }
 
+// EnableStatusBar creates and enables a status bar.
+// Returns the status bar widget for message display.
+// The status bar displays key hints (left) and timed messages (right).
+func (a *UIApp) EnableStatusBar() *widgets.StatusBar {
+	sb := widgets.NewStatusBar(0, 0, 80)
+	a.ui.SetStatusBar(sb)
+	return sb
+}
+
+// StatusBar returns the current status bar widget, or nil if none.
+func (a *UIApp) StatusBar() *widgets.StatusBar {
+	if sbw := a.ui.StatusBar(); sbw != nil {
+		if sb, ok := sbw.(*widgets.StatusBar); ok {
+			return sb
+		}
+	}
+	return nil
+}
+
 // NewWidgetShowcaseApp creates a tabbed demo showcasing all TexelUI widgets.
 // This is the unified demo that replaces individual demos.
 func NewWidgetShowcaseApp(title string) *UIApp {
@@ -76,6 +95,11 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 	}
 	tabLayout := widgets.NewTabLayout(0, 0, 80, 24, tabs)
 
+	app := NewUIApp(title, ui)
+
+	// Enable status bar with key hints and messages
+	statusBar := app.EnableStatusBar()
+
 	// === Inputs Tab (wrapped in ScrollPane for tall content) ===
 	inputsPane := createInputsTab()
 	inputsScroll := scroll.NewScrollPane(0, 0, 80, 20, tcell.StyleDefault)
@@ -88,7 +112,7 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 	tabLayout.SetTabContent(1, layoutsPane)
 
 	// === Widgets Tab ===
-	widgetsPane := createWidgetsTab(ui)
+	widgetsPane := createWidgetsTabWithStatusBar(ui, statusBar)
 	tabLayout.SetTabContent(2, widgetsPane)
 
 	// === Scrolling Tab (dedicated scroll demo) ===
@@ -98,10 +122,10 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 	ui.AddWidget(tabLayout)
 	ui.Focus(tabLayout)
 
-	app := NewUIApp(title, ui)
 	app.onResize = func(w, h int) {
+		contentH := ui.ContentHeight()
 		tabLayout.SetPosition(0, 0)
-		tabLayout.Resize(w, h)
+		tabLayout.Resize(w, contentH)
 	}
 	return app
 }
@@ -156,10 +180,10 @@ func createInputsTab() *widgets.Pane {
 	pane.AddChild(priorityLabel)
 	pane.AddChild(priorityCombo)
 
-	// TextArea
+	// TextArea with internal ScrollPane - just set size, scrolling works automatically
 	notesLabel := widgets.NewLabel(2, 11, 12, 1, "Notes:")
 	notesBorder := widgets.NewBorder(14, 11, 40, 5, tcell.StyleDefault)
-	notesArea := widgets.NewTextArea(0, 0, 38, 3)
+	notesArea := widgets.NewTextArea(0, 0, 38, 3) // Size matches border interior
 	notesBorder.SetChild(notesArea)
 	pane.AddChild(notesLabel)
 	pane.AddChild(notesBorder)
@@ -254,6 +278,11 @@ func createLayoutsTab() *widgets.Pane {
 
 // createWidgetsTab creates the Widgets tab content with Label, Button, Checkbox.
 func createWidgetsTab(ui *core.UIManager) *widgets.Pane {
+	return createWidgetsTabWithStatusBar(ui, nil)
+}
+
+// createWidgetsTabWithStatusBar creates the Widgets tab content with optional status bar integration.
+func createWidgetsTabWithStatusBar(ui *core.UIManager, statusBar *widgets.StatusBar) *widgets.Pane {
 	pane := widgets.NewPane(0, 0, 80, 20, tcell.StyleDefault)
 
 	// Title
@@ -275,11 +304,25 @@ func createWidgetsTab(ui *core.UIManager) *widgets.Pane {
 	actionBtn := widgets.NewButton(30, 4, 15, 1, "Action")
 	actionBtn.OnClick = func() {
 		statusLabel.Text = "Action button clicked!"
+		if statusBar != nil {
+			statusBar.ShowSuccess("Action performed successfully!")
+		}
 	}
 
 	toggleBtn := widgets.NewButton(30, 5, 15, 1, "Toggle")
 	toggleBtn.OnClick = func() {
 		statusLabel.Text = "Toggle button clicked!"
+		if statusBar != nil {
+			statusBar.ShowMessage("Toggle state changed")
+		}
+	}
+
+	errorBtn := widgets.NewButton(30, 6, 15, 1, "Error Demo")
+	errorBtn.OnClick = func() {
+		statusLabel.Text = "Error demo clicked!"
+		if statusBar != nil {
+			statusBar.ShowError("Something went wrong!")
+		}
 	}
 
 	// Checkboxes
@@ -292,16 +335,25 @@ func createWidgetsTab(ui *core.UIManager) *widgets.Pane {
 	// Update status on checkbox change
 	check1.OnChange = func(checked bool) {
 		statusLabel.Text = fmt.Sprintf("Option A: %v", checked)
+		if statusBar != nil {
+			statusBar.ShowMessage(fmt.Sprintf("Option A: %v", checked))
+		}
 	}
 	check2.OnChange = func(checked bool) {
 		statusLabel.Text = fmt.Sprintf("Option B: %v", checked)
+		if statusBar != nil {
+			statusBar.ShowMessage(fmt.Sprintf("Option B: %v", checked))
+		}
 	}
 	check3.OnChange = func(checked bool) {
 		statusLabel.Text = fmt.Sprintf("Option C: %v", checked)
+		if statusBar != nil {
+			statusBar.ShowWarning(fmt.Sprintf("Option C changed: %v", checked))
+		}
 	}
 
-	// Help text
-	helpLabel := widgets.NewLabel(2, 14, 60, 1, "Tab: navigate | Space/Enter: activate | Esc: quit")
+	// Help text - note that status bar shows key hints automatically
+	helpLabel := widgets.NewLabel(2, 14, 60, 1, "Key hints shown in status bar below")
 
 	pane.AddChild(title)
 	pane.AddChild(labelTitle)
@@ -311,6 +363,7 @@ func createWidgetsTab(ui *core.UIManager) *widgets.Pane {
 	pane.AddChild(buttonTitle)
 	pane.AddChild(actionBtn)
 	pane.AddChild(toggleBtn)
+	pane.AddChild(errorBtn)
 	pane.AddChild(statusLabel)
 	pane.AddChild(checkTitle)
 	pane.AddChild(check1)

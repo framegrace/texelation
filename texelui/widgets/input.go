@@ -63,6 +63,15 @@ func NewInput(x, y, w int) *Input {
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
 func (i *Input) SetInvalidator(fn func(core.Rect)) { i.inv = fn }
 
+// GetKeyHints implements core.KeyHintsProvider.
+func (i *Input) GetKeyHints() []core.KeyHint {
+	return []core.KeyHint{
+		{Key: "←→", Label: "Move"},
+		{Key: "Home/End", Label: "Jump"},
+		{Key: "Ins", Label: "Mode"},
+	}
+}
+
 // Blur removes focus and triggers the OnBlur callback if set.
 func (i *Input) Blur() {
 	wasFocused := i.IsFocused()

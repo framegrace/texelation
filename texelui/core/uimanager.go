@@ -9,6 +9,17 @@ import (
 	"texelation/texel/theme"
 )
 
+// StatusBarWidget is an interface for the status bar widget.
+// This avoids import cycles between core and widgets packages.
+type StatusBarWidget interface {
+	Widget
+	InvalidationAware
+	FocusObserver
+	SetRefreshNotifier(ch chan<- bool)
+	Start()
+	Stop()
+}
+
 // UIManager owns a small widget tree (floating for MVP) and composes to a buffer.
 type UIManager struct {
 	mu       sync.Mutex // protects widgets, layout, focus, capture, buffer
@@ -27,6 +38,14 @@ type UIManager struct {
 	// automatically advances focus to the next widget. Enabled by default.
 	// Useful for form-style data entry.
 	AdvanceFocusOnEnter bool
+
+	// Status bar support
+	statusBar        StatusBarWidget
+	statusBarEnabled bool
+	statusBarHeight  int // Height reserved for status bar (default 2: separator + content)
+
+	// Focus observers receive notifications when focus changes
+	focusObservers []FocusObserver
 }
 
 func NewUIManager() *UIManager {
@@ -36,13 +55,151 @@ func NewUIManager() *UIManager {
 	return &UIManager{
 		bgStyle:             tcell.StyleDefault.Background(bg).Foreground(fg),
 		AdvanceFocusOnEnter: true, // Enable by default for form-style data entry
+		statusBarHeight:     2,    // Default: 1 separator + 1 content row
+	}
+}
+
+// SetStatusBar sets the status bar widget.
+// The status bar is automatically enabled when set.
+// Pass nil to disable the status bar.
+func (u *UIManager) SetStatusBar(sb StatusBarWidget) {
+	u.mu.Lock()
+
+	// Stop old status bar if exists
+	if u.statusBar != nil {
+		u.statusBar.Stop()
+		u.removeObserverLocked(u.statusBar)
+	}
+
+	u.statusBar = sb
+	u.statusBarEnabled = sb != nil
+
+	var notifier chan<- bool
+	if sb != nil {
+		// Set up the status bar
+		sb.SetInvalidator(u.Invalidate)
+		u.addObserverLocked(sb)
+
+		// Position status bar at bottom
+		if u.H > u.statusBarHeight {
+			sb.SetPosition(0, u.H-u.statusBarHeight)
+			sb.Resize(u.W, u.statusBarHeight)
+		}
+
+		// Start the status bar background ticker
+		sb.Start()
+	}
+	u.mu.Unlock()
+
+	// Pass refresh notifier (acquire dirtyMu after releasing mu to avoid lock ordering issues)
+	u.dirtyMu.Lock()
+	if sb != nil && u.notifier != nil {
+		notifier = u.notifier
+	}
+	u.invalidateAllLocked()
+	u.dirtyMu.Unlock()
+
+	if notifier != nil {
+		sb.SetRefreshNotifier(notifier)
+	}
+}
+
+// StatusBar returns the current status bar widget, or nil if none.
+func (u *UIManager) StatusBar() StatusBarWidget {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.statusBar
+}
+
+// SetStatusBarEnabled enables or disables the status bar display.
+// The status bar must be set via SetStatusBar first.
+func (u *UIManager) SetStatusBarEnabled(enabled bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.statusBar == nil {
+		return
+	}
+
+	u.statusBarEnabled = enabled
+
+	u.dirtyMu.Lock()
+	u.invalidateAllLocked()
+	u.dirtyMu.Unlock()
+}
+
+// StatusBarEnabled returns whether the status bar is currently enabled.
+func (u *UIManager) StatusBarEnabled() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.statusBarEnabled && u.statusBar != nil
+}
+
+// ContentHeight returns the height available for content (excluding status bar).
+func (u *UIManager) ContentHeight() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.contentHeightLocked()
+}
+
+func (u *UIManager) contentHeightLocked() int {
+	if u.statusBarEnabled && u.statusBar != nil && u.H > u.statusBarHeight {
+		return u.H - u.statusBarHeight
+	}
+	return u.H
+}
+
+// AddFocusObserver adds an observer that will be notified of focus changes.
+func (u *UIManager) AddFocusObserver(obs FocusObserver) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.addObserverLocked(obs)
+}
+
+func (u *UIManager) addObserverLocked(obs FocusObserver) {
+	for _, o := range u.focusObservers {
+		if o == obs {
+			return // Already added
+		}
+	}
+	u.focusObservers = append(u.focusObservers, obs)
+}
+
+// RemoveFocusObserver removes a focus observer.
+func (u *UIManager) RemoveFocusObserver(obs FocusObserver) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.removeObserverLocked(obs)
+}
+
+func (u *UIManager) removeObserverLocked(obs FocusObserver) {
+	for i, o := range u.focusObservers {
+		if o == obs {
+			u.focusObservers = append(u.focusObservers[:i], u.focusObservers[i+1:]...)
+			return
+		}
+	}
+}
+
+// notifyFocusChangedLocked notifies all observers of a focus change.
+// Must be called with u.mu held.
+func (u *UIManager) notifyFocusChangedLocked() {
+	for _, obs := range u.focusObservers {
+		obs.OnFocusChanged(u.focused)
 	}
 }
 
 func (u *UIManager) SetRefreshNotifier(ch chan<- bool) {
 	u.dirtyMu.Lock()
-	defer u.dirtyMu.Unlock()
 	u.notifier = ch
+	u.dirtyMu.Unlock()
+
+	// Also pass to status bar
+	u.mu.Lock()
+	if u.statusBar != nil {
+		u.statusBar.SetRefreshNotifier(ch)
+	}
+	u.mu.Unlock()
 }
 
 func (u *UIManager) RequestRefresh() {
@@ -76,6 +233,13 @@ func (u *UIManager) Resize(w, h int) {
 		h = 0
 	}
 	u.W, u.H = w, h
+
+	// Reposition status bar if enabled
+	if u.statusBar != nil && u.statusBarEnabled && h > u.statusBarHeight {
+		u.statusBar.SetPosition(0, h-u.statusBarHeight)
+		u.statusBar.Resize(w, u.statusBarHeight)
+	}
+
 	// Resize framebuffer and invalidate all
 	u.buf = nil
 	u.invalidateAllLocked()
@@ -129,6 +293,9 @@ func (u *UIManager) focusLocked(w Widget) {
 	if u.focused != nil {
 		u.focused.Focus()
 	}
+
+	// Notify focus observers (e.g., status bar)
+	u.notifyFocusChangedLocked()
 }
 
 func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
@@ -165,12 +332,25 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 		u.dirtyMu.Unlock()
 
 		// Advance focus after Enter for form-style data entry (if container supports it)
+		// Skip for multiline widgets (like TextArea) that use Enter internally
 		if u.AdvanceFocusOnEnter && ev.Key() == tcell.KeyEnter {
-			if fc, ok := u.focused.(FocusCycler); ok {
-				fc.CycleFocus(true)
-				u.dirtyMu.Lock()
-				u.invalidateAllLocked()
-				u.dirtyMu.Unlock()
+			// Find the deeply focused widget (handles containers like Pane, TabLayout)
+			deepWidget := FindDeepFocused(u.focused)
+			if deepWidget == nil {
+				deepWidget = u.focused
+			}
+			// Check if the actual focused widget is multiline (uses Enter for newlines)
+			isMultiline := false
+			if mw, ok := deepWidget.(MultilineWidget); ok {
+				isMultiline = mw.IsMultiline()
+			}
+			if !isMultiline {
+				if fc, ok := u.focused.(FocusCycler); ok {
+					fc.CycleFocus(true)
+					u.dirtyMu.Lock()
+					u.invalidateAllLocked()
+					u.dirtyMu.Unlock()
+				}
 			}
 		}
 
@@ -515,6 +695,8 @@ func (u *UIManager) Render() [][]texel.Cell {
 		for _, w := range sorted {
 			w.Draw(p)
 		}
+		// Draw status bar last (on top)
+		u.drawStatusBarLocked(p)
 		return u.buf
 	}
 
@@ -552,8 +734,29 @@ func (u *UIManager) Render() [][]texel.Cell {
 				w.Draw(p)
 			}
 		}
+		// Draw status bar if it intersects clip
+		u.drawStatusBarLocked(p)
 	}
 	return u.buf
+}
+
+// drawStatusBarLocked draws the status bar if enabled.
+// Must be called with u.mu held.
+func (u *UIManager) drawStatusBarLocked(p *Painter) {
+	if u.statusBar == nil || !u.statusBarEnabled {
+		return
+	}
+
+	// Check if status bar intersects the painter's clip region
+	sbx, sby := u.statusBar.Position()
+	sbw, sbh := u.statusBar.Size()
+	sbRect := Rect{X: sbx, Y: sby, W: sbw, H: sbh}
+
+	// Get painter's clip by checking if any of the status bar is visible
+	// (Painter doesn't expose clip, so we just draw and let it clip)
+	if sbRect.W > 0 && sbRect.H > 0 {
+		u.statusBar.Draw(p)
+	}
 }
 
 func rectsOverlap(a, b Rect) bool {

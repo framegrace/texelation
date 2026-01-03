@@ -130,7 +130,21 @@ type FocusCycler interface {
 	TrapsFocus() bool
 }
 
+// MultilineWidget is implemented by widgets that use Enter internally for newlines.
+// UIManager's AdvanceFocusOnEnter will skip focus advancement for these widgets.
+type MultilineWidget interface {
+	IsMultiline() bool
+}
+
 // BlinkAware widgets support periodic blink updates (e.g., caret blink).
 // UI frameworks can call BlinkTick at a fixed interval; the widget should
 // invalidate any regions that need redraw and return immediately.
 // (Deprecated) BlinkAware was used for caret blinking and is no longer needed.
+
+// FocusObserver receives notifications when focus changes in the UIManager.
+// This allows widgets like StatusBar to react to focus changes without polling.
+type FocusObserver interface {
+	// OnFocusChanged is called when the focused widget changes.
+	// The focused parameter may be nil if no widget has focus.
+	OnFocusChanged(focused Widget)
+}

@@ -554,36 +554,16 @@ func TestScrollPane_Draw_ArrowsNotOverwrittenByThumb(t *testing.T) {
 			topY := 2
 			bottomY := 2 + tc.viewportH - 1
 
-			// Check that arrows are present when scrollable
-			canScrollUp := tc.scrollOffset > 0
-			canScrollDown := tc.scrollOffset < tc.contentHeight-tc.viewportH
-
-			if canScrollUp {
-				ch := getCell(buf, scrollbarX, topY)
-				if ch != DefaultUpGlyph {
-					t.Errorf("Up arrow at top overwritten: got %c, want %c", ch, DefaultUpGlyph)
-				}
+			// Arrows are always drawn on top as visual indicators
+			// Check that arrows are present at top and bottom
+			chTop := getCell(buf, scrollbarX, topY)
+			if chTop != DefaultUpGlyph {
+				t.Errorf("Up arrow at top missing: got %c, want %c", chTop, DefaultUpGlyph)
 			}
 
-			if canScrollDown {
-				ch := getCell(buf, scrollbarX, bottomY)
-				if ch != DefaultDownGlyph {
-					t.Errorf("Down arrow at bottom overwritten: got %c, want %c", ch, DefaultDownGlyph)
-				}
-			}
-
-			// Verify thumb never appears at arrow positions
-			if canScrollUp {
-				ch := getCell(buf, scrollbarX, topY)
-				if ch == DefaultThumbChar {
-					t.Error("Thumb character found at up arrow position")
-				}
-			}
-			if canScrollDown {
-				ch := getCell(buf, scrollbarX, bottomY)
-				if ch == DefaultThumbChar {
-					t.Error("Thumb character found at down arrow position")
-				}
+			chBottom := getCell(buf, scrollbarX, bottomY)
+			if chBottom != DefaultDownGlyph {
+				t.Errorf("Down arrow at bottom missing: got %c, want %c", chBottom, DefaultDownGlyph)
 			}
 		})
 	}

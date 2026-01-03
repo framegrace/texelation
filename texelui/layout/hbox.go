@@ -42,3 +42,29 @@ func (h HBox) Apply(container core.Rect, children []core.Widget) {
 func NewHBox(spacing int) *HBox {
 	return &HBox{Spacing: spacing}
 }
+
+// GetNeighbors implements core.NeighborLayout.
+// For HBox, widgets have left/right neighbors based on their position in the list.
+func (h HBox) GetNeighbors(child core.Widget) core.NeighborInfo {
+	return h.GetNeighborsInChildren(child, nil)
+}
+
+// GetNeighborsInChildren returns neighbor info for a child within a given children slice.
+// If children is nil, returns empty NeighborInfo (used when Apply hasn't been called yet).
+func (h HBox) GetNeighborsInChildren(child core.Widget, children []core.Widget) core.NeighborInfo {
+	if children == nil || len(children) == 0 {
+		return core.NeighborInfo{}
+	}
+
+	for i, c := range children {
+		if c == child {
+			return core.NeighborInfo{
+				Top:    false,
+				Bottom: false,
+				Left:   i > 0,
+				Right:  i < len(children)-1,
+			}
+		}
+	}
+	return core.NeighborInfo{}
+}
