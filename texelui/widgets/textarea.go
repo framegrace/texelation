@@ -6,16 +6,16 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"texelation/texel/theme"
 	"texelation/texelui/core"
+	"texelation/texelui/scroll"
 )
 
-// TextArea is a minimal multiline text editor with viewport.
+// TextArea is a multiline text editor with automatic scrolling.
+// It internally uses a ScrollPane for scroll management.
 type TextArea struct {
 	core.BaseWidget
 	Lines      []string
 	CaretX     int
 	CaretY     int
-	OffX       int
-	OffY       int
 	Style      tcell.Style
 	CaretStyle tcell.Style
 
@@ -28,10 +28,21 @@ type TextArea struct {
 	clip string
 	// invalidation callback
 	inv func(core.Rect)
-	// mouse state
-	mouseDown bool
 	// insert vs replace mode: false=insert (default), true=replace (overwrite)
 	replaceMode bool
+
+	// Internal scroll pane for scrolling support
+	scrollPane *scroll.ScrollPane
+	// Internal content widget
+	content *textAreaContent
+}
+
+// textAreaContent is the internal widget that renders text content.
+// It's managed by the parent TextArea and wrapped in a ScrollPane.
+type textAreaContent struct {
+	core.BaseWidget
+	parent *TextArea
+	Style  tcell.Style
 }
 
 func NewTextArea(x, y, w, h int) *TextArea {
@@ -39,30 +50,106 @@ func NewTextArea(x, y, w, h int) *TextArea {
 	bg := tm.GetSemanticColor("bg.surface")
 	fg := tm.GetSemanticColor("text.primary")
 	caret := tm.GetSemanticColor("caret")
+
 	ta := &TextArea{
 		Lines:      []string{""},
 		Style:      tcell.StyleDefault.Background(bg).Foreground(fg),
 		CaretStyle: tcell.StyleDefault.Foreground(caret),
 	}
-	// Enable focused styling using theme semantic colors
-	fbg := bg
-	ffg := fg
-	ta.SetFocusedStyle(tcell.StyleDefault.Background(fbg).Foreground(ffg), true)
+
+	// Create internal content widget
+	ta.content = &textAreaContent{
+		parent: ta,
+		Style:  ta.Style,
+	}
+	ta.content.SetFocusable(false)
+
+	// Create internal scroll pane
+	ta.scrollPane = scroll.NewScrollPane(0, 0, w, h, ta.Style)
+	ta.scrollPane.SetChild(ta.content)
+	ta.scrollPane.SetFocusable(false) // TextArea handles focus
+
+	// Enable focused styling
+	ta.SetFocusedStyle(tcell.StyleDefault.Background(bg).Foreground(fg), true)
 	ta.SetPosition(x, y)
 	ta.Resize(w, h)
 	ta.SetFocusable(true)
+
 	return ta
 }
 
+// updateContentSize recalculates the content height and updates the scroll pane.
+func (t *TextArea) updateContentSize() {
+	if t.content == nil || t.scrollPane == nil {
+		return
+	}
+	textWidth := t.textWidth()
+	naturalHeight := t.totalVisualRows(textWidth)
+	t.content.Resize(textWidth, naturalHeight)
+	t.scrollPane.SetContentHeight(naturalHeight)
+}
+
+// textWidth returns the width available for text (excluding scrollbar space).
+func (t *TextArea) textWidth() int {
+	// ScrollPane reserves 1 column for scrollbar when needed
+	w := t.Rect.W - 1
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
-func (t *TextArea) SetInvalidator(fn func(core.Rect)) { t.inv = fn }
+func (t *TextArea) SetInvalidator(fn func(core.Rect)) {
+	t.inv = fn
+	if t.scrollPane != nil {
+		t.scrollPane.SetInvalidator(fn)
+	}
+}
+
+// Resize updates the widget size.
+func (t *TextArea) Resize(w, h int) {
+	t.BaseWidget.Resize(w, h)
+	if t.scrollPane != nil {
+		t.scrollPane.Resize(w, h)
+		t.updateContentSize()
+	}
+	t.ensureCaretVisible()
+}
+
+// SetPosition updates the widget position.
+func (t *TextArea) SetPosition(x, y int) {
+	t.BaseWidget.SetPosition(x, y)
+	if t.scrollPane != nil {
+		t.scrollPane.SetPosition(x, y)
+	}
+}
+
+// GetKeyHints implements core.KeyHintsProvider.
+func (t *TextArea) GetKeyHints() []core.KeyHint {
+	return []core.KeyHint{
+		{Key: "↑↓←→", Label: "Move"},
+		{Key: "PgUp/Dn", Label: "Page"},
+		{Key: "Ins", Label: "Mode"},
+	}
+}
+
+// IsMultiline implements core.MultilineWidget.
+func (t *TextArea) IsMultiline() bool {
+	return true
+}
 
 // Blur removes focus and triggers the OnBlur callback if set.
 func (t *TextArea) Blur() {
 	wasFocused := t.IsFocused()
 	t.BaseWidget.Blur()
-	if wasFocused && t.OnBlur != nil {
-		t.OnBlur(t.Text())
+	if wasFocused {
+		// Scroll to top when losing focus
+		t.scrollTo(0)
+		t.invalidate()
+		if t.OnBlur != nil {
+			t.OnBlur(t.Text())
+		}
 	}
 }
 
@@ -80,9 +167,10 @@ func (t *TextArea) SetText(text string) {
 	}
 	t.CaretX = 0
 	t.CaretY = 0
-	t.OffY = 0
+	t.updateContentSize()
+	t.scrollTo(0)
 	t.onChange()
-	t.invalidateViewport()
+	t.invalidate()
 }
 
 // onChange triggers the OnChange callback if set.
@@ -111,104 +199,262 @@ func (t *TextArea) clampCaret() {
 	}
 }
 
-func (t *TextArea) ensureVisible() {
-	// With wrapping, horizontal offset is unused
-	t.OffX = 0
-	// Ensure caret's visual row is within the viewport
+// ensureCaretVisible scrolls to make the caret visible.
+func (t *TextArea) ensureCaretVisible() {
+	if t.scrollPane == nil {
+		return
+	}
 	_, vcy := t.caretVisualPos()
-	if vcy < t.OffY {
-		t.OffY = vcy
+	t.scrollPane.ScrollTo(vcy)
+}
+
+// scrollTo scrolls to the given offset.
+func (t *TextArea) scrollTo(offset int) {
+	if t.scrollPane != nil {
+		// Use ScrollBy to set absolute position
+		current := t.scrollPane.ScrollOffset()
+		t.scrollPane.ScrollBy(offset - current)
 	}
-	if vcy >= t.OffY+t.Rect.H {
-		t.OffY = vcy - t.Rect.H + 1
+}
+
+// scrollOffset returns the current scroll offset.
+func (t *TextArea) scrollOffset() int {
+	if t.scrollPane != nil {
+		return t.scrollPane.ScrollOffset()
 	}
-	if t.OffY < 0 {
-		t.OffY = 0
-	}
+	return 0
 }
 
 func (t *TextArea) Draw(p *core.Painter) {
-	// fill background
-	base := t.EffectiveStyle(t.Style)
-	p.Fill(t.Rect, ' ', base)
-	// draw wrapped content
-	if t.Rect.W <= 0 || t.Rect.H <= 0 {
+	if t.scrollPane == nil {
 		return
 	}
-	globalRow := 0
-	drawnRows := 0
-	for li := 0; li < len(t.Lines) && drawnRows < t.Rect.H; li++ {
-		r := []rune(t.Lines[li])
-		if len(r) == 0 {
-			// empty line still occupies one visual row
-			if globalRow >= t.OffY {
-				// nothing to draw beyond background
-				drawnRows++
-			}
-			globalRow++
-			continue
-		}
-		for start := 0; start < len(r) && drawnRows < t.Rect.H; start += t.Rect.W {
-			end := start + t.Rect.W
-			if end > len(r) {
-				end = len(r)
-			}
-			if globalRow >= t.OffY {
-				row := drawnRows
-				col := 0
-				for i := start; i < end && col < t.Rect.W; i++ {
-					p.SetCell(t.Rect.X+col, t.Rect.Y+row, r[i], base)
-					col++
-				}
-				drawnRows++
-			}
-			globalRow++
-		}
-	}
-	// caret: draw underlying rune; reverse in insert mode, underline in replace mode
-	if t.IsFocused() {
-		cx, cy := t.caretVisualPos()
-		cy = cy - t.OffY
-		if cx >= 0 && cy >= 0 && cx < t.Rect.W && cy < t.Rect.H {
-			ch := ' '
-			if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
-				line := []rune(t.Lines[t.CaretY])
-				if t.CaretX >= 0 && t.CaretX < len(line) {
-					ch = line[t.CaretX]
-				}
-			}
-			// Determine current cell style (no selection styling)
-			baseStyle := base
-			fg, bg, _ := baseStyle.Decompose()
-			var caretStyle tcell.Style
-			if t.replaceMode {
-				// Underline caret in replace mode
-				caretStyle = tcell.StyleDefault.Background(bg).Foreground(fg).Underline(true)
-			} else {
-				// Reverse video caret in insert mode
-				caretStyle = tcell.StyleDefault.Background(fg).Foreground(bg)
-			}
-			p.SetCell(t.Rect.X+cx, t.Rect.Y+cy, ch, caretStyle)
-		}
-	}
+	// Update content before drawing
+	t.updateContentSize()
+	// Draw via scroll pane
+	t.scrollPane.Draw(p)
 }
 
-// caretVisualPos returns the caret position in visual (wrapped) coordinates (x within width, y as visual row index).
+// HandleKey processes keyboard input.
+func (t *TextArea) HandleKey(ev *tcell.EventKey) bool {
+	// Only handle keys when focused
+	if !t.IsFocused() {
+		return false
+	}
+
+	// ESC not handled
+	if ev.Key() == tcell.KeyEsc {
+		return false
+	}
+
+	// Handle Ctrl key combinations
+	if ev.Modifiers()&tcell.ModCtrl != 0 {
+		switch ev.Key() {
+		case tcell.KeyHome:
+			// Ctrl+Home: go to beginning
+			t.CaretY = 0
+			t.CaretX = 0
+			t.clampCaret()
+			t.ensureCaretVisible()
+			t.invalidate()
+			return true
+		case tcell.KeyEnd:
+			// Ctrl+End: go to end
+			t.CaretY = len(t.Lines) - 1
+			if t.CaretY < 0 {
+				t.CaretY = 0
+			}
+			t.CaretX = len([]rune(t.Lines[t.CaretY]))
+			t.clampCaret()
+			t.ensureCaretVisible()
+			t.invalidate()
+			return true
+		}
+		if ev.Rune() == 'v' && t.clip != "" {
+			t.insertText(t.clip)
+			return true
+		}
+	}
+
+	switch ev.Key() {
+	case tcell.KeyPgUp:
+		t.scrollPane.ScrollBy(-t.Rect.H)
+		t.invalidate()
+		return true
+	case tcell.KeyPgDn:
+		t.scrollPane.ScrollBy(t.Rect.H)
+		t.invalidate()
+		return true
+	case tcell.KeyInsert:
+		t.replaceMode = !t.replaceMode
+		t.invalidate()
+		return true
+	case tcell.KeyLeft:
+		t.CaretX--
+		if t.CaretX < 0 && t.CaretY > 0 {
+			t.CaretY--
+			t.CaretX = len([]rune(t.Lines[t.CaretY]))
+		}
+	case tcell.KeyRight:
+		maxX := len([]rune(t.Lines[t.CaretY]))
+		t.CaretX++
+		if t.CaretX > maxX && t.CaretY < len(t.Lines)-1 {
+			t.CaretY++
+			t.CaretX = 0
+		}
+	case tcell.KeyUp:
+		t.CaretY--
+	case tcell.KeyDown:
+		t.CaretY++
+	case tcell.KeyHome:
+		t.CaretX = 0
+	case tcell.KeyEnd:
+		t.CaretX = len([]rune(t.Lines[t.CaretY]))
+	case tcell.KeyEnter:
+		t.insertNewline()
+		return true
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if t.CaretX > 0 {
+			line := []rune(t.Lines[t.CaretY])
+			t.Lines[t.CaretY] = string(append(line[:t.CaretX-1], line[t.CaretX:]...))
+			t.CaretX--
+			t.updateContentSize()
+			t.onChange()
+			t.ensureCaretVisible()
+			t.invalidate()
+			return true
+		} else if t.CaretY > 0 {
+			prev := t.Lines[t.CaretY-1]
+			cur := t.Lines[t.CaretY]
+			t.CaretX = len([]rune(prev))
+			t.Lines[t.CaretY-1] = prev + cur
+			t.Lines = append(t.Lines[:t.CaretY], t.Lines[t.CaretY+1:]...)
+			t.CaretY--
+			t.updateContentSize()
+			t.onChange()
+			t.ensureCaretVisible()
+			t.invalidate()
+			return true
+		}
+		return false
+	case tcell.KeyDelete:
+		if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
+			line := []rune(t.Lines[t.CaretY])
+			if t.CaretX >= 0 && t.CaretX < len(line) {
+				t.Lines[t.CaretY] = string(append(line[:t.CaretX], line[t.CaretX+1:]...))
+				t.updateContentSize()
+				t.onChange()
+				t.invalidate()
+				return true
+			} else if t.CaretY < len(t.Lines)-1 {
+				// Delete at end of line - join with next line
+				t.Lines[t.CaretY] = string(line) + t.Lines[t.CaretY+1]
+				t.Lines = append(t.Lines[:t.CaretY+1], t.Lines[t.CaretY+2:]...)
+				t.updateContentSize()
+				t.onChange()
+				t.invalidate()
+				return true
+			}
+		}
+		return false
+	case tcell.KeyRune:
+		r := ev.Rune()
+		line := []rune(t.Lines[t.CaretY])
+		if t.CaretX < 0 {
+			t.CaretX = 0
+		}
+		if t.CaretX > len(line) {
+			t.CaretX = len(line)
+		}
+		if t.replaceMode && t.CaretX < len(line) {
+			line[t.CaretX] = r
+			t.Lines[t.CaretY] = string(line)
+			t.CaretX++
+		} else {
+			line = append(line[:t.CaretX], append([]rune{r}, line[t.CaretX:]...)...)
+			t.Lines[t.CaretY] = string(line)
+			t.CaretX++
+		}
+		t.updateContentSize()
+		t.onChange()
+		t.ensureCaretVisible()
+		t.invalidate()
+		return true
+	default:
+		return false
+	}
+	t.clampCaret()
+	t.ensureCaretVisible()
+	t.invalidate()
+	return true
+}
+
+// HandleMouse processes mouse input.
+func (t *TextArea) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	if !t.HitTest(x, y) {
+		return false
+	}
+
+	btn := ev.Buttons()
+	lx := x - t.Rect.X
+
+	// Handle wheel events - forward to scroll pane
+	if btn&(tcell.WheelUp|tcell.WheelDown) != 0 {
+		if t.scrollPane != nil {
+			t.scrollPane.HandleMouse(ev)
+			t.invalidate()
+			return true
+		}
+	}
+
+	// Scrollbar area is the rightmost column
+	scrollbarX := t.Rect.W - 1
+	if lx == scrollbarX && t.scrollPane != nil {
+		// Forward scrollbar clicks to scroll pane
+		if t.scrollPane.HandleMouse(ev) {
+			t.invalidate()
+			return true
+		}
+	}
+
+	// Handle text area clicks (not on scrollbar)
+	ly := y - t.Rect.Y
+
+	if btn&tcell.Button1 != 0 {
+		// Click to position caret
+		vrow := t.scrollOffset() + ly
+		li, start := t.visualRowToLogical(vrow)
+		t.CaretY = li
+		segLen := t.segmentLen(li, start)
+		dx := lx
+		if dx > segLen {
+			dx = segLen
+		}
+		t.CaretX = start + dx
+		t.clampCaret()
+		t.invalidate()
+		return true
+	}
+
+	return false
+}
+
+// caretVisualPos returns the caret position in visual coordinates.
 func (t *TextArea) caretVisualPos() (int, int) {
-	if t.Rect.W <= 0 {
+	textWidth := t.textWidth()
+	if textWidth <= 0 {
 		return 0, 0
 	}
 	vrow := 0
 	for li := 0; li < len(t.Lines) && li < t.CaretY; li++ {
 		r := []rune(t.Lines[li])
-		// number of wrapped rows for this line (at least 1)
-		n := (len(r) + t.Rect.W - 1) / t.Rect.W
+		n := (len(r) + textWidth - 1) / textWidth
 		if n == 0 {
 			n = 1
 		}
 		vrow += n
 	}
-	// for current line
 	cx := t.CaretX
 	if cx < 0 {
 		cx = 0
@@ -220,66 +466,44 @@ func (t *TextArea) caretVisualPos() (int, int) {
 	if cx > len(r) {
 		cx = len(r)
 	}
-	vrow += cx / max(1, t.Rect.W)
-	vx := cx % max(1, t.Rect.W)
+	vrow += cx / textWidth
+	vx := cx % textWidth
 	return vx, vrow
 }
 
-func (t *TextArea) HandleMouse(ev *tcell.EventMouse) bool {
-	x, y := ev.Position()
-	lx := x - t.Rect.X
-	ly := y - t.Rect.Y
-	if lx < 0 || ly < 0 || lx >= t.Rect.W || ly >= t.Rect.H {
-		return false
+// totalVisualRows calculates total wrapped rows.
+func (t *TextArea) totalVisualRows(textWidth int) int {
+	if textWidth <= 0 {
+		return len(t.Lines)
 	}
-	btn := ev.Buttons()
-	if btn&(tcell.WheelUp|tcell.WheelDown) != 0 {
-		if btn&tcell.WheelUp != 0 && t.OffY > 0 {
-			t.OffY--
+	total := 0
+	for _, line := range t.Lines {
+		r := []rune(line)
+		if len(r) == 0 {
+			total++
+		} else {
+			total += (len(r) + textWidth - 1) / textWidth
 		}
-		if btn&tcell.WheelDown != 0 {
-			t.OffY++
-		}
-		t.invalidateViewport()
-		return true
 	}
-	if btn&tcell.Button1 != 0 {
-		// simple click-to-caret on wrapped layout
-		vrow := t.OffY + ly
-		// Map visual row to logical line and offset
-		li, start := t.visualRowToLogical(vrow)
-		t.CaretY = li
-		// clamp x to segment length
-		segLen := t.segmentLen(li, start)
-		dx := lx
-		if dx > segLen {
-			dx = segLen
-		}
-		t.CaretX = start + dx
-		t.clampCaret()
-		t.ensureVisible()
-		t.invalidateViewport()
-		return true
-	}
-	return false
+	return total
 }
 
-// visualRowToLogical maps a visual wrapped row index to (logical line, start rune offset of that segment).
+// visualRowToLogical maps visual row to logical line and offset.
 func (t *TextArea) visualRowToLogical(vrow int) (int, int) {
-	if t.Rect.W <= 0 {
+	textWidth := t.textWidth()
+	if textWidth <= 0 {
 		return 0, 0
 	}
 	row := 0
 	for li := 0; li < len(t.Lines); li++ {
 		r := []rune(t.Lines[li])
-		n := (len(r) + t.Rect.W - 1) / t.Rect.W
+		n := (len(r) + textWidth - 1) / textWidth
 		if n == 0 {
 			n = 1
 		}
 		if vrow < row+n {
-			// within this logical line
 			segIdx := vrow - row
-			start := segIdx * t.Rect.W
+			start := segIdx * textWidth
 			if start > len(r) {
 				start = len(r)
 			}
@@ -287,7 +511,6 @@ func (t *TextArea) visualRowToLogical(vrow int) (int, int) {
 		}
 		row += n
 	}
-	// past end: clamp to last line end
 	li := len(t.Lines) - 1
 	if li < 0 {
 		li = 0
@@ -300,7 +523,8 @@ func (t *TextArea) visualRowToLogical(vrow int) (int, int) {
 }
 
 func (t *TextArea) segmentLen(li, start int) int {
-	if li < 0 || li >= len(t.Lines) || t.Rect.W <= 0 {
+	textWidth := t.textWidth()
+	if li < 0 || li >= len(t.Lines) || textWidth <= 0 {
 		return 0
 	}
 	r := []rune(t.Lines[li])
@@ -310,7 +534,7 @@ func (t *TextArea) segmentLen(li, start int) int {
 	if start > len(r) {
 		return 0
 	}
-	end := start + t.Rect.W
+	end := start + textWidth
 	if end > len(r) {
 		end = len(r)
 	}
@@ -320,14 +544,7 @@ func (t *TextArea) segmentLen(li, start int) int {
 func (t *TextArea) insertText(s string) {
 	for _, r := range s {
 		if r == '\n' {
-			line := t.Lines[t.CaretY]
-			head := []rune(line)[:t.CaretX]
-			tail := []rune(line)[t.CaretX:]
-			t.Lines[t.CaretY] = string(head)
-			t.Lines = append(t.Lines[:t.CaretY+1], append([]string{""}, t.Lines[t.CaretY+1:]...)...)
-			t.Lines[t.CaretY+1] = string(tail)
-			t.CaretY++
-			t.CaretX = 0
+			t.insertNewline()
 		} else {
 			line := []rune(t.Lines[t.CaretY])
 			if t.CaretX < 0 {
@@ -342,24 +559,104 @@ func (t *TextArea) insertText(s string) {
 		}
 	}
 	t.clampCaret()
-	t.ensureVisible()
+	t.updateContentSize()
+	t.ensureCaretVisible()
 	t.onChange()
-	t.invalidateViewport()
+	t.invalidate()
 }
-func (t *TextArea) invalidateViewport() {
-	if t.inv == nil {
-		return
+
+func (t *TextArea) insertNewline() {
+	line := t.Lines[t.CaretY]
+	runes := []rune(line)
+	if t.CaretX > len(runes) {
+		t.CaretX = len(runes)
 	}
-	t.inv(t.Rect)
+	head := runes[:t.CaretX]
+	tail := runes[t.CaretX:]
+	t.Lines[t.CaretY] = string(head)
+	t.Lines = append(t.Lines[:t.CaretY+1], append([]string{""}, t.Lines[t.CaretY+1:]...)...)
+	t.Lines[t.CaretY+1] = string(tail)
+	t.CaretY++
+	t.CaretX = 0
+	t.clampCaret()
+	t.updateContentSize()
+	t.ensureCaretVisible()
+	t.onChange()
+	t.invalidate()
 }
-func (t *TextArea) invalidateCaretAt(cx, cy int) {
-	if t.inv == nil {
+
+func (t *TextArea) invalidate() {
+	if t.inv != nil {
+		t.inv(t.Rect)
+	}
+}
+
+// NaturalHeight returns total visual rows (for external use).
+func (t *TextArea) NaturalHeight() int {
+	return t.totalVisualRows(t.textWidth())
+}
+
+// textAreaContent Draw implementation
+func (c *textAreaContent) Draw(p *core.Painter) {
+	if c.parent == nil {
 		return
 	}
-	vx := cx - t.OffX
-	vy := cy - t.OffY
-	if vx < 0 || vy < 0 || vx >= t.Rect.W || vy >= t.Rect.H {
+	t := c.parent
+	base := t.Style
+	if t.IsFocused() {
+		base = t.EffectiveStyle(t.Style)
+	}
+
+	// Fill background
+	p.Fill(c.Rect, ' ', base)
+
+	textWidth := c.Rect.W
+	if textWidth <= 0 {
 		return
 	}
-	t.inv(core.Rect{X: t.Rect.X + vx, Y: t.Rect.Y + vy, W: 1, H: 1})
+
+	// Draw all lines (ScrollPane clips to viewport)
+	globalRow := 0
+	for li := 0; li < len(t.Lines); li++ {
+		r := []rune(t.Lines[li])
+		if len(r) == 0 {
+			globalRow++
+			continue
+		}
+		for start := 0; start < len(r); start += textWidth {
+			end := start + textWidth
+			if end > len(r) {
+				end = len(r)
+			}
+			row := globalRow
+			col := 0
+			for i := start; i < end && col < textWidth; i++ {
+				p.SetCell(c.Rect.X+col, c.Rect.Y+row, r[i], base)
+				col++
+			}
+			globalRow++
+		}
+	}
+
+	// Draw caret
+	if t.IsFocused() {
+		cx, cy := t.caretVisualPos()
+		if cx >= 0 && cy >= 0 && cx < textWidth && cy < c.Rect.H {
+			ch := ' '
+			if t.CaretY >= 0 && t.CaretY < len(t.Lines) {
+				line := []rune(t.Lines[t.CaretY])
+				if t.CaretX >= 0 && t.CaretX < len(line) {
+					ch = line[t.CaretX]
+				}
+			}
+			fg, bg, _ := base.Decompose()
+			var caretStyle tcell.Style
+			if t.replaceMode {
+				caretStyle = tcell.StyleDefault.Background(bg).Foreground(fg).Underline(true)
+			} else {
+				caretStyle = tcell.StyleDefault.Background(fg).Foreground(bg)
+			}
+			p.SetCell(c.Rect.X+cx, c.Rect.Y+cy, ch, caretStyle)
+		}
+	}
 }

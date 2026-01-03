@@ -115,7 +115,36 @@ type Modal interface {
 	DismissModal()
 }
 
+// FocusCycler is implemented by containers that manage focus cycling internally.
+// When Tab/Shift-Tab is pressed, the container cycles focus among its children.
+// Returns true if focus was cycled, false if exhausted (at boundary).
+// Root containers should wrap around; nested containers should return false at boundary.
+type FocusCycler interface {
+	// CycleFocus moves focus to next (forward=true) or previous (forward=false) child.
+	// Returns true if focus was successfully cycled, false if at boundary.
+	CycleFocus(forward bool) bool
+
+	// TrapsFocus returns true if this container wraps focus at boundaries
+	// (i.e., is a root container). False means it returns false at boundaries
+	// to let parent handle focus cycling.
+	TrapsFocus() bool
+}
+
+// MultilineWidget is implemented by widgets that use Enter internally for newlines.
+// UIManager's AdvanceFocusOnEnter will skip focus advancement for these widgets.
+type MultilineWidget interface {
+	IsMultiline() bool
+}
+
 // BlinkAware widgets support periodic blink updates (e.g., caret blink).
 // UI frameworks can call BlinkTick at a fixed interval; the widget should
 // invalidate any regions that need redraw and return immediately.
 // (Deprecated) BlinkAware was used for caret blinking and is no longer needed.
+
+// FocusObserver receives notifications when focus changes in the UIManager.
+// This allows widgets like StatusBar to react to focus changes without polling.
+type FocusObserver interface {
+	// OnFocusChanged is called when the focused widget changes.
+	// The focused parameter may be nil if no widget has focus.
+	OnFocusChanged(focused Widget)
+}

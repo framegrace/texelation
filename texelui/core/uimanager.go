@@ -9,6 +9,17 @@ import (
 	"texelation/texel/theme"
 )
 
+// StatusBarWidget is an interface for the status bar widget.
+// This avoids import cycles between core and widgets packages.
+type StatusBarWidget interface {
+	Widget
+	InvalidationAware
+	FocusObserver
+	SetRefreshNotifier(ch chan<- bool)
+	Start()
+	Stop()
+}
+
 // UIManager owns a small widget tree (floating for MVP) and composes to a buffer.
 type UIManager struct {
 	mu       sync.Mutex // protects widgets, layout, focus, capture, buffer
@@ -22,19 +33,173 @@ type UIManager struct {
 	dirty    []Rect
 	lay      Layout
 	capture  Widget
+
+	// AdvanceFocusOnEnter controls whether pressing Enter in a widget
+	// automatically advances focus to the next widget. Enabled by default.
+	// Useful for form-style data entry.
+	AdvanceFocusOnEnter bool
+
+	// Status bar support
+	statusBar        StatusBarWidget
+	statusBarEnabled bool
+	statusBarHeight  int // Height reserved for status bar (default 2: separator + content)
+
+	// Focus observers receive notifications when focus changes
+	focusObservers []FocusObserver
 }
 
 func NewUIManager() *UIManager {
 	tm := theme.Get()
 	bg := tm.GetColor("ui", "surface_bg", tcell.ColorBlack)
 	fg := tm.GetColor("ui", "surface_fg", tcell.ColorWhite)
-	return &UIManager{bgStyle: tcell.StyleDefault.Background(bg).Foreground(fg)}
+	return &UIManager{
+		bgStyle:             tcell.StyleDefault.Background(bg).Foreground(fg),
+		AdvanceFocusOnEnter: true, // Enable by default for form-style data entry
+		statusBarHeight:     2,    // Default: 1 separator + 1 content row
+	}
+}
+
+// SetStatusBar sets the status bar widget.
+// The status bar is automatically enabled when set.
+// Pass nil to disable the status bar.
+func (u *UIManager) SetStatusBar(sb StatusBarWidget) {
+	u.mu.Lock()
+
+	// Stop old status bar if exists
+	if u.statusBar != nil {
+		u.statusBar.Stop()
+		u.removeObserverLocked(u.statusBar)
+	}
+
+	u.statusBar = sb
+	u.statusBarEnabled = sb != nil
+
+	var notifier chan<- bool
+	if sb != nil {
+		// Set up the status bar
+		sb.SetInvalidator(u.Invalidate)
+		u.addObserverLocked(sb)
+
+		// Position status bar at bottom
+		if u.H > u.statusBarHeight {
+			sb.SetPosition(0, u.H-u.statusBarHeight)
+			sb.Resize(u.W, u.statusBarHeight)
+		}
+
+		// Start the status bar background ticker
+		sb.Start()
+	}
+	u.mu.Unlock()
+
+	// Pass refresh notifier (acquire dirtyMu after releasing mu to avoid lock ordering issues)
+	u.dirtyMu.Lock()
+	if sb != nil && u.notifier != nil {
+		notifier = u.notifier
+	}
+	u.invalidateAllLocked()
+	u.dirtyMu.Unlock()
+
+	if notifier != nil {
+		sb.SetRefreshNotifier(notifier)
+	}
+}
+
+// StatusBar returns the current status bar widget, or nil if none.
+func (u *UIManager) StatusBar() StatusBarWidget {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.statusBar
+}
+
+// SetStatusBarEnabled enables or disables the status bar display.
+// The status bar must be set via SetStatusBar first.
+func (u *UIManager) SetStatusBarEnabled(enabled bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.statusBar == nil {
+		return
+	}
+
+	u.statusBarEnabled = enabled
+
+	u.dirtyMu.Lock()
+	u.invalidateAllLocked()
+	u.dirtyMu.Unlock()
+}
+
+// StatusBarEnabled returns whether the status bar is currently enabled.
+func (u *UIManager) StatusBarEnabled() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.statusBarEnabled && u.statusBar != nil
+}
+
+// ContentHeight returns the height available for content (excluding status bar).
+func (u *UIManager) ContentHeight() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.contentHeightLocked()
+}
+
+func (u *UIManager) contentHeightLocked() int {
+	if u.statusBarEnabled && u.statusBar != nil && u.H > u.statusBarHeight {
+		return u.H - u.statusBarHeight
+	}
+	return u.H
+}
+
+// AddFocusObserver adds an observer that will be notified of focus changes.
+func (u *UIManager) AddFocusObserver(obs FocusObserver) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.addObserverLocked(obs)
+}
+
+func (u *UIManager) addObserverLocked(obs FocusObserver) {
+	for _, o := range u.focusObservers {
+		if o == obs {
+			return // Already added
+		}
+	}
+	u.focusObservers = append(u.focusObservers, obs)
+}
+
+// RemoveFocusObserver removes a focus observer.
+func (u *UIManager) RemoveFocusObserver(obs FocusObserver) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.removeObserverLocked(obs)
+}
+
+func (u *UIManager) removeObserverLocked(obs FocusObserver) {
+	for i, o := range u.focusObservers {
+		if o == obs {
+			u.focusObservers = append(u.focusObservers[:i], u.focusObservers[i+1:]...)
+			return
+		}
+	}
+}
+
+// notifyFocusChangedLocked notifies all observers of a focus change.
+// Must be called with u.mu held.
+func (u *UIManager) notifyFocusChangedLocked() {
+	for _, obs := range u.focusObservers {
+		obs.OnFocusChanged(u.focused)
+	}
 }
 
 func (u *UIManager) SetRefreshNotifier(ch chan<- bool) {
 	u.dirtyMu.Lock()
-	defer u.dirtyMu.Unlock()
 	u.notifier = ch
+	u.dirtyMu.Unlock()
+
+	// Also pass to status bar
+	u.mu.Lock()
+	if u.statusBar != nil {
+		u.statusBar.SetRefreshNotifier(ch)
+	}
+	u.mu.Unlock()
 }
 
 func (u *UIManager) RequestRefresh() {
@@ -68,6 +233,13 @@ func (u *UIManager) Resize(w, h int) {
 		h = 0
 	}
 	u.W, u.H = w, h
+
+	// Reposition status bar if enabled
+	if u.statusBar != nil && u.statusBarEnabled && h > u.statusBarHeight {
+		u.statusBar.SetPosition(0, h-u.statusBarHeight)
+		u.statusBar.Resize(w, u.statusBarHeight)
+	}
+
 	// Resize framebuffer and invalidate all
 	u.buf = nil
 	u.invalidateAllLocked()
@@ -121,6 +293,9 @@ func (u *UIManager) focusLocked(w Widget) {
 	if u.focused != nil {
 		u.focused.Focus()
 	}
+
+	// Notify focus observers (e.g., status bar)
+	u.notifyFocusChangedLocked()
 }
 
 func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
@@ -145,19 +320,6 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 		}
 	}
 
-	// Focus traversal on Tab/Shift-Tab (only for non-modal widgets)
-	if ev.Key() == tcell.KeyTab {
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			u.focusPrevDeepLocked()
-		} else {
-			u.focusNextDeepLocked()
-		}
-		u.dirtyMu.Lock()
-		u.invalidateAllLocked()
-		u.dirtyMu.Unlock()
-		return true
-	}
-
 	// Let focused widget handle the key first
 	if u.focused != nil && u.focused.HandleKey(ev) {
 		// Widget handled it
@@ -168,32 +330,122 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 			u.requestRefreshLocked()
 		}
 		u.dirtyMu.Unlock()
+
+		// Advance focus after Enter for form-style data entry (if container supports it)
+		// Skip for multiline widgets (like TextArea) that use Enter internally
+		if u.AdvanceFocusOnEnter && ev.Key() == tcell.KeyEnter {
+			// Find the deeply focused widget (handles containers like Pane, TabLayout)
+			deepWidget := FindDeepFocused(u.focused)
+			if deepWidget == nil {
+				deepWidget = u.focused
+			}
+			// Check if the actual focused widget is multiline (uses Enter for newlines)
+			isMultiline := false
+			if mw, ok := deepWidget.(MultilineWidget); ok {
+				isMultiline = mw.IsMultiline()
+			}
+			if !isMultiline {
+				if u.cycleFocusLocked(true) {
+					u.dirtyMu.Lock()
+					u.invalidateAllLocked()
+					u.dirtyMu.Unlock()
+				}
+			}
+		}
+
 		return true
 	}
 
-	// If Enter wasn't handled by widget, cycle focus to next component
-	if ev.Key() == tcell.KeyEnter {
-		u.focusNextDeepLocked()
-		u.dirtyMu.Lock()
-		u.invalidateAllLocked()
-		u.dirtyMu.Unlock()
-		return true
+	// Tab/Shift-Tab: delegate to root container's focus cycling
+	if ev.Key() == tcell.KeyTab || ev.Key() == tcell.KeyBacktab {
+		forward := ev.Key() == tcell.KeyTab && ev.Modifiers()&tcell.ModShift == 0
+		// Find the root container that should handle focus cycling
+		if u.cycleFocusLocked(forward) {
+			u.dirtyMu.Lock()
+			u.invalidateAllLocked()
+			u.dirtyMu.Unlock()
+			return true
+		}
 	}
 
-	// Up/Down focus traversal if widget didn't handle it
-	if ev.Key() == tcell.KeyUp {
-		u.focusPrevDeepLocked()
-		u.dirtyMu.Lock()
-		u.invalidateAllLocked()
-		u.dirtyMu.Unlock()
+	return false
+}
+
+// cycleFocusLocked finds the appropriate FocusCycler and cycles focus.
+// It walks up the widget hierarchy to find a container that can cycle focus.
+func (u *UIManager) cycleFocusLocked(forward bool) bool {
+	// Try focused widget first if it's a FocusCycler
+	if fc, ok := u.focused.(FocusCycler); ok {
+		if fc.CycleFocus(forward) {
+			return true
+		}
+	}
+
+	// Try to find a parent container that can handle focus cycling
+	for _, w := range u.widgets {
+		if fc, ok := w.(FocusCycler); ok {
+			// Check if this container contains the focused widget
+			if u.containsWidgetLocked(w, u.focused) {
+				if fc.CycleFocus(forward) {
+					return true
+				}
+			}
+		}
+	}
+
+	// No container handled it - try cycling among root widgets
+	return u.cycleRootWidgetsLocked(forward)
+}
+
+// containsWidgetLocked checks if container w contains widget target.
+func (u *UIManager) containsWidgetLocked(w, target Widget) bool {
+	if w == target {
 		return true
 	}
-	if ev.Key() == tcell.KeyDown {
-		u.focusNextDeepLocked()
-		u.dirtyMu.Lock()
-		u.invalidateAllLocked()
-		u.dirtyMu.Unlock()
-		return true
+	if cc, ok := w.(ChildContainer); ok {
+		found := false
+		cc.VisitChildren(func(child Widget) {
+			if found {
+				return
+			}
+			if u.containsWidgetLocked(child, target) {
+				found = true
+			}
+		})
+		return found
+	}
+	return false
+}
+
+// cycleRootWidgetsLocked cycles focus among root-level widgets.
+func (u *UIManager) cycleRootWidgetsLocked(forward bool) bool {
+	if len(u.widgets) == 0 {
+		return false
+	}
+
+	// Find current root widget index
+	currentIdx := -1
+	for i, w := range u.widgets {
+		if u.containsWidgetLocked(w, u.focused) {
+			currentIdx = i
+			break
+		}
+	}
+
+	// Find next focusable root widget
+	n := len(u.widgets)
+	for offset := 1; offset <= n; offset++ {
+		var idx int
+		if forward {
+			idx = (currentIdx + offset) % n
+		} else {
+			idx = (currentIdx - offset + n) % n
+		}
+		w := u.widgets[idx]
+		if w.Focusable() {
+			u.focusLocked(w)
+			return true
+		}
 	}
 
 	return false
@@ -225,12 +477,25 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 
 	// Start capture on press over a widget
 	if !prevIsDown && nowDown {
-		if w := u.topmostAtLocked(x, y); w != nil {
-			u.focusLocked(w)
-			u.capture = w
-			if mw, ok := w.(MouseAware); ok {
+		// Find the root container widget at this position
+		rootWidget := u.rootWidgetAtLocked(x, y)
+		if rootWidget != nil {
+			// Blur the old focused widget before routing to new one
+			if u.focused != nil {
+				u.focused.Blur()
+				u.focused = nil
+			}
+			// Route mouse event through root widget - it will handle focus internally
+			// This allows containers like TabLayout to update their focusArea
+			if mw, ok := rootWidget.(MouseAware); ok {
 				_ = mw.HandleMouse(ev)
 			}
+			// After routing, find what's actually focused and track it
+			deepWidget := u.topmostAtLocked(x, y)
+			if deepWidget != nil && deepWidget.Focusable() {
+				u.focused = deepWidget
+			}
+			u.capture = rootWidget // Capture on root for proper routing
 			u.dirtyMu.Lock()
 			u.invalidateAllLocked()
 			u.dirtyMu.Unlock()
@@ -253,9 +518,9 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 		u.dirtyMu.Unlock()
 		return true
 	}
-	// Wheel-only events over topmost
+	// Wheel-only events over topmost root widget
 	if buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0 {
-		if w := u.topmostAtLocked(x, y); w != nil {
+		if w := u.rootWidgetAtLocked(x, y); w != nil {
 			if mw, ok := w.(MouseAware); ok {
 				_ = mw.HandleMouse(ev)
 				u.dirtyMu.Lock()
@@ -266,9 +531,9 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 		}
 	}
 
-	// Mouse move events (no buttons pressed) - forward to widget under cursor for hover tracking
+	// Mouse move events (no buttons pressed) - forward to root widget for hover tracking
 	if buttons == tcell.ButtonNone {
-		if w := u.topmostAtLocked(x, y); w != nil {
+		if w := u.rootWidgetAtLocked(x, y); w != nil {
 			if mw, ok := w.(MouseAware); ok {
 				if mw.HandleMouse(ev) {
 					u.dirtyMu.Lock()
@@ -281,6 +546,18 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 	}
 
 	return false
+}
+
+// rootWidgetAtLocked finds the topmost root-level widget containing the point.
+// Unlike topmostAtLocked, this returns the root container, not the deepest child.
+func (u *UIManager) rootWidgetAtLocked(x, y int) Widget {
+	sorted := u.sortedWidgetsLocked()
+	for i := len(sorted) - 1; i >= 0; i-- {
+		if sorted[i].HitTest(x, y) {
+			return sorted[i]
+		}
+	}
+	return nil
 }
 
 func (u *UIManager) topmostAtLocked(x, y int) Widget {
@@ -318,58 +595,6 @@ func deepHit(w Widget, x, y int) Widget {
 	return nil
 }
 
-// Deep focus traversal across all widgets in z-order (top-level order, then children).
-func (u *UIManager) focusNextDeepLocked() {
-	order := u.flattenFocusableLocked()
-	if len(order) == 0 {
-		return
-	}
-	cur := -1
-	for i, w := range order {
-		if w == u.focused {
-			cur = i
-			break
-		}
-	}
-	next := (cur + 1) % len(order)
-	u.focusLocked(order[next])
-}
-
-func (u *UIManager) focusPrevDeepLocked() {
-	order := u.flattenFocusableLocked()
-	if len(order) == 0 {
-		return
-	}
-	cur := -1
-	for i, w := range order {
-		if w == u.focused {
-			cur = i
-			break
-		}
-	}
-	prev := cur - 1
-	if prev < 0 {
-		prev = len(order) - 1
-	}
-	u.focusLocked(order[prev])
-}
-
-func (u *UIManager) flattenFocusableLocked() []Widget {
-	var out []Widget
-	var visit func(w Widget)
-	visit = func(w Widget) {
-		if w.Focusable() {
-			out = append(out, w)
-		}
-		if cc, ok := w.(ChildContainer); ok {
-			cc.VisitChildren(func(child Widget) { visit(child) })
-		}
-	}
-	for _, w := range u.widgets {
-		visit(w)
-	}
-	return out
-}
 
 // Invalidate marks a region for redraw.
 // Thread-safe.
@@ -469,6 +694,8 @@ func (u *UIManager) Render() [][]texel.Cell {
 		for _, w := range sorted {
 			w.Draw(p)
 		}
+		// Draw status bar last (on top)
+		u.drawStatusBarLocked(p)
 		return u.buf
 	}
 
@@ -506,8 +733,29 @@ func (u *UIManager) Render() [][]texel.Cell {
 				w.Draw(p)
 			}
 		}
+		// Draw status bar if it intersects clip
+		u.drawStatusBarLocked(p)
 	}
 	return u.buf
+}
+
+// drawStatusBarLocked draws the status bar if enabled.
+// Must be called with u.mu held.
+func (u *UIManager) drawStatusBarLocked(p *Painter) {
+	if u.statusBar == nil || !u.statusBarEnabled {
+		return
+	}
+
+	// Check if status bar intersects the painter's clip region
+	sbx, sby := u.statusBar.Position()
+	sbw, sbh := u.statusBar.Size()
+	sbRect := Rect{X: sbx, Y: sby, W: sbw, H: sbh}
+
+	// Get painter's clip by checking if any of the status bar is visible
+	// (Painter doesn't expose clip, so we just draw and let it clip)
+	if sbRect.W > 0 && sbRect.H > 0 {
+		u.statusBar.Draw(p)
+	}
 }
 
 func rectsOverlap(a, b Rect) bool {

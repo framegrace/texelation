@@ -15,6 +15,13 @@ type Border struct {
     inv     func(core.Rect)
     // FocusedStyle optionally overrides Style when this border (or a focused descendant) is focused.
     FocusedStyle tcell.Style
+
+    // SeparatorMode when true draws only edges where neighbors exist.
+    // This is useful for status bars and section dividers.
+    SeparatorMode bool
+    // Neighbors specifies which edges have neighboring widgets.
+    // Only used when SeparatorMode is true.
+    Neighbors core.NeighborInfo
 }
 
 func NewBorder(x, y, w, h int, style tcell.Style) *Border {
@@ -90,9 +97,53 @@ func (b *Border) Draw(p *core.Painter) {
 		// Otherwise apply own focus style if enabled
 		style = b.EffectiveStyle(style)
 	}
-	p.DrawBorder(b.Rect, style, b.Charset)
+
+	if b.SeparatorMode {
+		b.drawSeparator(p, style)
+	} else {
+		p.DrawBorder(b.Rect, style, b.Charset)
+	}
+
 	if b.Child != nil {
 		b.Child.Draw(p)
+	}
+}
+
+// drawSeparator draws only the edges where neighbors exist.
+func (b *Border) drawSeparator(p *core.Painter, style tcell.Style) {
+	r := b.Rect
+	hChar := b.Charset[0] // horizontal line character
+
+	// Draw top edge if there's a neighbor above
+	if b.Neighbors.Top {
+		for x := r.X; x < r.X+r.W; x++ {
+			p.SetCell(x, r.Y, hChar, style)
+		}
+	}
+
+	// Draw bottom edge if there's a neighbor below
+	if b.Neighbors.Bottom {
+		bottomY := r.Y + r.H - 1
+		for x := r.X; x < r.X+r.W; x++ {
+			p.SetCell(x, bottomY, hChar, style)
+		}
+	}
+
+	// Draw left edge if there's a neighbor to the left
+	if b.Neighbors.Left {
+		vChar := b.Charset[1] // vertical line character
+		for y := r.Y; y < r.Y+r.H; y++ {
+			p.SetCell(r.X, y, vChar, style)
+		}
+	}
+
+	// Draw right edge if there's a neighbor to the right
+	if b.Neighbors.Right {
+		vChar := b.Charset[1] // vertical line character
+		rightX := r.X + r.W - 1
+		for y := r.Y; y < r.Y+r.H; y++ {
+			p.SetCell(rightX, y, vChar, style)
+		}
 	}
 }
 
@@ -134,5 +185,32 @@ func (b *Border) WidgetAt(x, y int) core.Widget {
 		return b
 	}
 	return nil
+}
+
+// HandleMouse routes mouse events to child and handles focus on click.
+func (b *Border) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	if !b.HitTest(x, y) {
+		return false
+	}
+
+	// On button press, focus the child if clicked
+	isPress := ev.Buttons()&tcell.Button1 != 0
+	if isPress && b.Child != nil && b.Child.HitTest(x, y) && b.Child.Focusable() {
+		b.Child.Focus()
+		if b.inv != nil {
+			b.inv(b.Rect)
+		}
+	}
+
+	// Forward to child if it handles mouse
+	if b.Child != nil && b.Child.HitTest(x, y) {
+		if ma, ok := b.Child.(core.MouseAware); ok {
+			return ma.HandleMouse(ev)
+		}
+		return true
+	}
+
+	return true
 }
 

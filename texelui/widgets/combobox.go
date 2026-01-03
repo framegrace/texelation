@@ -12,6 +12,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"texelation/texel/theme"
 	"texelation/texelui/core"
+	"texelation/texelui/primitives"
 )
 
 // ComboBox combines a text input with a dropdown list.
@@ -35,13 +36,13 @@ type ComboBox struct {
 	OnChange func(string)
 
 	// Internal state
-	expanded     bool
-	cursorPos    int
-	scrollOffset int
-	selectedIdx  int      // Index in filtered list (keyboard navigation)
-	hoverIdx     int      // Index under mouse cursor (-1 if none)
-	filtered     []string // Filtered items based on Text
-	inv          func(core.Rect)
+	expanded  bool
+	cursorPos int
+	filtered  []string // Filtered items based on Text
+	inv       func(core.Rect)
+
+	// Dropdown list widget
+	list *primitives.ScrollableList
 }
 
 // NewComboBox creates a new combo box at the specified position.
@@ -50,7 +51,6 @@ func NewComboBox(x, y, w int, items []string, editable bool) *ComboBox {
 		Items:    items,
 		Editable: editable,
 		filtered: items,
-		hoverIdx: -1,
 	}
 	cb.SetPosition(x, y)
 	cb.Resize(w, 1)
@@ -62,12 +62,90 @@ func NewComboBox(x, y, w int, items []string, editable bool) *ComboBox {
 	bg := tm.GetSemanticColor("bg.surface")
 	cb.SetFocusedStyle(tcell.StyleDefault.Foreground(fg).Background(bg), true)
 
+	// Create dropdown list (position will be set when expanded)
+	cb.list = primitives.NewScrollableList(x, y+1, w, 8)
+	cb.list.RenderItem = cb.renderDropdownItem
+	cb.syncListItems()
+
 	return cb
 }
 
 // SetInvalidator sets the invalidation callback.
 func (cb *ComboBox) SetInvalidator(fn func(core.Rect)) {
 	cb.inv = fn
+	if cb.list != nil {
+		cb.list.SetInvalidator(fn)
+	}
+}
+
+// GetKeyHints implements core.KeyHintsProvider.
+func (cb *ComboBox) GetKeyHints() []core.KeyHint {
+	if cb.expanded {
+		return []core.KeyHint{
+			{Key: "↑↓", Label: "Navigate"},
+			{Key: "Enter", Label: "Select"},
+			{Key: "Esc", Label: "Close"},
+		}
+	}
+	if cb.Editable {
+		return []core.KeyHint{
+			{Key: "↑↓", Label: "Open"},
+			{Key: "Tab", Label: "Complete"},
+			{Key: "←→", Label: "Move"},
+		}
+	}
+	return []core.KeyHint{
+		{Key: "↑↓/Space", Label: "Open"},
+	}
+}
+
+// syncListItems updates the ScrollableList items from filtered.
+func (cb *ComboBox) syncListItems() {
+	items := make([]primitives.ListItem, len(cb.filtered))
+	for i, s := range cb.filtered {
+		items[i] = primitives.ListItem{Text: s, Value: s}
+	}
+	cb.list.SetItems(items)
+
+	// Select the item matching cb.Text if present
+	for i, s := range cb.filtered {
+		if s == cb.Text {
+			cb.list.SetSelected(i)
+			break
+		}
+	}
+}
+
+// renderDropdownItem renders a dropdown item with proper styling.
+func (cb *ComboBox) renderDropdownItem(p *core.Painter, rect core.Rect, item primitives.ListItem, selected bool) {
+	tm := theme.Get()
+	fg := tm.GetSemanticColor("text.primary")
+	bg := tm.GetSemanticColor("bg.surface")
+	commitBg := tm.GetSemanticColor("accent")
+
+	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
+
+	isCommitted := item.Text == cb.Text
+
+	style := baseStyle
+	if isCommitted {
+		// Committed selection (item matching cb.Text) - accent background
+		style = tcell.StyleDefault.Foreground(bg).Background(commitBg)
+	} else if selected {
+		// Active highlight (keyboard navigation) - reverse fg/bg
+		style = baseStyle.Reverse(true)
+	}
+
+	// Fill row
+	p.Fill(rect, ' ', style)
+
+	// Draw item text
+	text := item.Text
+	maxLen := rect.W
+	if len(text) > maxLen && maxLen > 0 {
+		text = text[:maxLen]
+	}
+	p.DrawText(rect.X, rect.Y, text, style)
 }
 
 // SetValue sets the current text value.
@@ -105,10 +183,6 @@ func (cb *ComboBox) updateFilter() {
 	// Non-editable combos don't filter - always show all items
 	if !cb.Editable || cb.Text == "" {
 		cb.filtered = cb.Items
-		// Reset selection if out of bounds
-		if cb.selectedIdx >= len(cb.filtered) {
-			cb.selectedIdx = 0
-		}
 	} else {
 		cb.filtered = nil
 		lower := strings.ToLower(cb.Text)
@@ -117,54 +191,15 @@ func (cb *ComboBox) updateFilter() {
 				cb.filtered = append(cb.filtered, item)
 			}
 		}
-		// Always select first filtered item when filtering (editable mode)
-		cb.selectedIdx = 0
-		cb.scrollOffset = 0
 	}
-	// Adjust scroll
-	cb.ensureSelectedVisible()
+	cb.syncListItems()
 }
 
-// ensureSelectedVisible adjusts scroll to keep selection visible.
-func (cb *ComboBox) ensureSelectedVisible() {
-	dr := cb.dropdownRect()
-	if cb.selectedIdx < cb.scrollOffset {
-		cb.scrollOffset = cb.selectedIdx
-	} else if cb.selectedIdx >= cb.scrollOffset+dr.H {
-		cb.scrollOffset = cb.selectedIdx - dr.H + 1
-	}
-}
-
-// selectCurrentValue shows all items and selects the current Text value, centering it in view.
+// selectCurrentValue shows all items and selects the current Text value.
 func (cb *ComboBox) selectCurrentValue() {
 	// Show all items when opening dropdown (don't filter)
 	cb.filtered = cb.Items
-	cb.selectedIdx = 0
-	cb.hoverIdx = -1 // Reset hover when opening
-	for i, item := range cb.filtered {
-		if item == cb.Text {
-			cb.selectedIdx = i
-			break
-		}
-	}
-	cb.centerSelectedVisible()
-}
-
-// centerSelectedVisible scrolls to center the selected item in view.
-func (cb *ComboBox) centerSelectedVisible() {
-	dr := cb.dropdownRect()
-	// Center the selection in the visible area
-	cb.scrollOffset = cb.selectedIdx - dr.H/2
-	if cb.scrollOffset < 0 {
-		cb.scrollOffset = 0
-	}
-	maxScroll := len(cb.filtered) - dr.H
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if cb.scrollOffset > maxScroll {
-		cb.scrollOffset = maxScroll
-	}
+	cb.syncListItems()
 }
 
 // autocompleteMatch returns the best matching item for autocomplete.
@@ -274,18 +309,8 @@ func (cb *ComboBox) Draw(p *core.Painter) {
 // drawDropdown renders the dropdown list.
 func (cb *ComboBox) drawDropdown(p *core.Painter) {
 	tm := theme.Get()
-	fg := tm.GetSemanticColor("text.primary")
 	bg := tm.GetSemanticColor("bg.surface")
-	selFg := tm.GetSemanticColor("text.primary")
-	selBg := tm.GetSemanticColor("bg.selection")
-	hoverBg := tm.GetSemanticColor("accent")
 	borderFg := tm.GetSemanticColor("border.default")
-
-	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
-	// Committed selection (item matching cb.Text) - accent color (prominent)
-	selStyle := tcell.StyleDefault.Foreground(bg).Background(hoverBg)
-	// Active highlight (mouse hover or keyboard navigation) - selection color
-	hoverStyle := tcell.StyleDefault.Foreground(selFg).Background(selBg)
 	borderStyle := tcell.StyleDefault.Foreground(borderFg).Background(bg)
 
 	dr := cb.dropdownRect()
@@ -294,14 +319,10 @@ func (cb *ComboBox) drawDropdown(p *core.Painter) {
 	boxX := dr.X - 1
 	boxW := dr.W + 1
 
-	// The dropdown has a top border at dr.Y, items from dr.Y+1, bottom border at dr.Y+dr.H+1
+	// The dropdown has a top border at dr.Y, list from dr.Y+1, bottom border at dr.Y+dr.H+1
 	topY := dr.Y
 	contentY := dr.Y + 1
 	bottomY := dr.Y + dr.H + 1
-
-	// Fill background for content area
-	contentRect := core.Rect{X: boxX, Y: contentY, W: boxW, H: dr.H}
-	p.Fill(contentRect, ' ', baseStyle)
 
 	// Draw top border with normal corners
 	for x := boxX; x < boxX+boxW; x++ {
@@ -323,46 +344,10 @@ func (cb *ComboBox) drawDropdown(p *core.Painter) {
 		p.SetCell(boxX+boxW-1, contentY+row, '│', borderStyle)
 	}
 
-	// Draw items - text starts at boxX+1 which aligns with input text at dr.X
-	for i := 0; i < dr.H; i++ {
-		itemIdx := cb.scrollOffset + i
-		if itemIdx >= len(cb.filtered) {
-			break
-		}
-		item := cb.filtered[itemIdx]
-		isHovered := itemIdx == cb.hoverIdx || itemIdx == cb.selectedIdx
-		isCommitted := item == cb.Text
-
-		style := baseStyle
-		if isCommitted {
-			// Committed selection wins - use accent color
-			style = selStyle
-		} else if isHovered {
-			// Active highlight (mouse hover or keyboard navigation)
-			style = hoverStyle
-		}
-
-		// Fill row
-		for x := boxX + 1; x < boxX+boxW-1; x++ {
-			p.SetCell(x, contentY+i, ' ', style)
-		}
-
-		// Draw item text
-		for j, ch := range item {
-			if j >= boxW-2 {
-				break
-			}
-			p.SetCell(boxX+1+j, contentY+i, ch, style)
-		}
-	}
-
-	// Draw scroll indicators if needed
-	if cb.scrollOffset > 0 {
-		p.SetCell(boxX+boxW-2, contentY, '▲', baseStyle)
-	}
-	if cb.scrollOffset+dr.H < len(cb.filtered) {
-		p.SetCell(boxX+boxW-2, contentY+dr.H-1, '▼', baseStyle)
-	}
+	// Position and draw the list inside the borders
+	cb.list.SetPosition(boxX+1, contentY)
+	cb.list.Resize(boxW-2, dr.H)
+	cb.list.Draw(p)
 }
 
 // HandleKey processes keyboard input.
@@ -371,7 +356,6 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyEsc:
 		if cb.expanded {
 			cb.expanded = false
-			cb.hoverIdx = -1
 			cb.invalidate()
 			return true
 		}
@@ -380,17 +364,17 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyEnter:
 		if cb.expanded && len(cb.filtered) > 0 {
 			// Select current item from dropdown
-			cb.Text = cb.filtered[cb.selectedIdx]
-			cb.cursorPos = len(cb.Text)
+			item := cb.list.SelectedItem()
+			if item != nil {
+				cb.Text = item.Text
+				cb.cursorPos = len(cb.Text)
+			}
 			cb.expanded = false
-			cb.hoverIdx = -1
 			cb.updateFilter()
 			cb.invalidate()
 			if cb.OnChange != nil {
 				cb.OnChange(cb.Text)
 			}
-			// Return false to allow focus to cycle to next component
-			return false
 		} else if !cb.expanded && cb.Editable {
 			// Editable: Accept autocomplete or current value
 			autocomplete := cb.autocompleteMatch()
@@ -404,8 +388,8 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 				}
 			}
 		}
-		// Return false to allow focus to cycle to next component
-		return false
+		// Return true to signal handled; UIManager advances focus if AdvanceFocusOnEnter is set
+		return true
 
 	case tcell.KeyTab:
 		// Accept autocomplete on Tab
@@ -421,12 +405,10 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 		}
 		return false
 
-	case tcell.KeyUp:
+	case tcell.KeyUp, tcell.KeyDown, tcell.KeyPgUp, tcell.KeyPgDn:
 		if cb.expanded {
-			if cb.selectedIdx > 0 {
-				cb.selectedIdx--
-				cb.hoverIdx = -1 // Keyboard takes priority over mouse
-				cb.ensureSelectedVisible()
+			// Delegate to list for navigation
+			if cb.list.HandleKey(ev) {
 				cb.invalidate()
 			}
 			return true
@@ -439,19 +421,27 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 		}
 		return false
 
-	case tcell.KeyDown:
+	case tcell.KeyHome:
 		if cb.expanded {
-			if cb.selectedIdx < len(cb.filtered)-1 {
-				cb.selectedIdx++
-				cb.hoverIdx = -1 // Keyboard takes priority over mouse
-				cb.ensureSelectedVisible()
-				cb.invalidate()
-			}
+			cb.list.HandleKey(ev)
+			cb.invalidate()
 			return true
-		} else if len(cb.filtered) > 0 {
-			// Open dropdown and preselect current value
-			cb.expanded = true
-			cb.selectCurrentValue()
+		}
+		if cb.Editable && cb.cursorPos > 0 {
+			cb.cursorPos = 0
+			cb.invalidate()
+			return true
+		}
+		return false
+
+	case tcell.KeyEnd:
+		if cb.expanded {
+			cb.list.HandleKey(ev)
+			cb.invalidate()
+			return true
+		}
+		if cb.Editable && cb.cursorPos < len(cb.Text) {
+			cb.cursorPos = len(cb.Text)
 			cb.invalidate()
 			return true
 		}
@@ -481,22 +471,6 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 				cb.invalidate()
 				return true
 			}
-		}
-		return false
-
-	case tcell.KeyHome:
-		if cb.Editable && cb.cursorPos > 0 {
-			cb.cursorPos = 0
-			cb.invalidate()
-			return true
-		}
-		return false
-
-	case tcell.KeyEnd:
-		if cb.Editable && cb.cursorPos < len(cb.Text) {
-			cb.cursorPos = len(cb.Text)
-			cb.invalidate()
-			return true
 		}
 		return false
 
@@ -543,6 +517,7 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 // HandleMouse processes mouse input.
 func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 	x, y := ev.Position()
+	buttons := ev.Buttons()
 
 	// Check if click is on the widget or dropdown
 	inMainRect := cb.Rect.Contains(x, y)
@@ -553,67 +528,66 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 	contentY := dr.Y + 1
 	// Dropdown has: top border at dr.Y, content from dr.Y+1 to dr.Y+dr.H, bottom border at dr.Y+dr.H+1
 	inDropdown := cb.expanded && x >= boxX && x < boxX+boxW && y >= dr.Y && y < dr.Y+dr.H+2
+	// Check if in list content area specifically
+	inListArea := cb.expanded && x >= boxX+1 && x < boxX+boxW-1 && y >= contentY && y < contentY+dr.H
 
 	if !inMainRect && !inDropdown {
 		if cb.expanded {
 			cb.expanded = false
-			cb.hoverIdx = -1
 			cb.invalidate()
 		}
 		return false
 	}
 
-	// Track hover position in dropdown content area
-	if cb.expanded && inDropdown && y >= contentY && y < contentY+dr.H {
-		newHoverIdx := cb.scrollOffset + (y - contentY)
-		if newHoverIdx >= 0 && newHoverIdx < len(cb.filtered) {
-			if cb.hoverIdx != newHoverIdx {
-				cb.hoverIdx = newHoverIdx
-				cb.invalidate()
-			}
-		}
-	} else if cb.hoverIdx != -1 {
-		cb.hoverIdx = -1
-		cb.invalidate()
-	}
+	// Delegate to list for dropdown interactions (scrollbar, wheel, clicks)
+	if cb.expanded && inListArea {
+		// Update list position for hit testing
+		cb.list.SetPosition(boxX+1, contentY)
+		cb.list.Resize(boxW-2, dr.H)
 
-	// Handle mouse wheel for dropdown scrolling
-	if cb.expanded && inDropdown {
-		if ev.Buttons()&tcell.WheelUp != 0 {
-			if cb.scrollOffset > 0 {
-				cb.scrollOffset--
+		// Handle wheel and scrollbar
+		if buttons&(tcell.WheelUp|tcell.WheelDown) != 0 {
+			if cb.list.HandleMouse(ev) {
 				cb.invalidate()
 			}
 			return true
 		}
-		if ev.Buttons()&tcell.WheelDown != 0 {
-			if cb.scrollOffset+dr.H < len(cb.filtered) {
-				cb.scrollOffset++
-				cb.invalidate()
+
+		// Handle clicks on list items
+		if buttons == tcell.Button1 {
+			oldIdx := cb.list.SelectedIdx
+			if cb.list.HandleMouse(ev) {
+				// If selection changed, commit the selection
+				if cb.list.SelectedIdx != oldIdx || true { // Always commit on click
+					item := cb.list.SelectedItem()
+					if item != nil {
+						cb.Text = item.Text
+						cb.cursorPos = len(cb.Text)
+						cb.expanded = false
+						cb.updateFilter()
+						cb.invalidate()
+						if cb.OnChange != nil {
+							cb.OnChange(cb.Text)
+						}
+					}
+				}
 			}
 			return true
 		}
 	}
 
-	// Only handle left clicks for selection
-	if ev.Buttons() != tcell.Button1 {
+	// Handle wheel on dropdown border area (route to list)
+	if cb.expanded && inDropdown && buttons&(tcell.WheelUp|tcell.WheelDown) != 0 {
+		cb.list.SetPosition(boxX+1, contentY)
+		cb.list.Resize(boxW-2, dr.H)
+		if cb.list.HandleMouse(ev) {
+			cb.invalidate()
+		}
 		return true
 	}
 
-	// Click on dropdown content area first (check before main area)
-	if inDropdown && y >= contentY && y < contentY+dr.H {
-		idx := cb.scrollOffset + (y - contentY)
-		if idx >= 0 && idx < len(cb.filtered) {
-			cb.Text = cb.filtered[idx]
-			cb.cursorPos = len(cb.Text)
-			cb.expanded = false
-			cb.hoverIdx = -1
-			cb.updateFilter()
-			cb.invalidate()
-			if cb.OnChange != nil {
-				cb.OnChange(cb.Text)
-			}
-		}
+	// Only handle left clicks for other areas
+	if buttons != tcell.Button1 {
 		return true
 	}
 
@@ -627,7 +601,6 @@ func (cb *ComboBox) HandleMouse(ev *tcell.EventMouse) bool {
 				cb.selectCurrentValue()
 			} else {
 				cb.expanded = false
-				cb.hoverIdx = -1
 			}
 			cb.invalidate()
 			return true
@@ -671,7 +644,6 @@ func (cb *ComboBox) IsModal() bool {
 // DismissModal collapses the dropdown.
 func (cb *ComboBox) DismissModal() {
 	cb.expanded = false
-	cb.hoverIdx = -1
 	cb.invalidate()
 }
 
@@ -680,7 +652,6 @@ func (cb *ComboBox) Blur() {
 	cb.BaseWidget.Blur()
 	if cb.expanded {
 		cb.expanded = false
-		cb.hoverIdx = -1
 		cb.invalidate()
 	}
 }

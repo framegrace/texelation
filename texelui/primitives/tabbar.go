@@ -29,6 +29,9 @@ type TabBar struct {
 	// Styling
 	ShowFocusMarker bool // Show '►' marker when focused (default true)
 
+	// Mouse hover state
+	hoverIdx int // Index of tab under mouse cursor (-1 if none)
+
 	inv func(core.Rect)
 }
 
@@ -39,6 +42,7 @@ func NewTabBar(x, y, w int, tabs []TabItem) *TabBar {
 		Tabs:            tabs,
 		ActiveIdx:       0,
 		ShowFocusMarker: true,
+		hoverIdx:        -1,
 	}
 
 	tb.SetPosition(x, y)
@@ -91,7 +95,10 @@ func (tb *TabBar) Draw(painter *core.Painter) {
 	tm := theme.Get()
 	fg := tm.GetSemanticColor("text.primary")
 	bg := tm.GetSemanticColor("bg.surface")
+	accent := tm.GetSemanticColor("accent")
 	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
+	// Active tab: accent background with contrasting foreground
+	activeStyle := tcell.StyleDefault.Foreground(bg).Background(accent)
 
 	focused := tb.IsFocused()
 	x := tb.Rect.X
@@ -107,16 +114,18 @@ func (tb *TabBar) Draw(painter *core.Painter) {
 	for i, tab := range tb.Tabs {
 		tabLabel := " " + tab.Label + " "
 		isActive := i == tb.ActiveIdx
+		isHover := i == tb.hoverIdx && !isActive
 
 		tabStyle := baseStyle
 		if isActive {
+			// Active tab: accent background
+			tabStyle = activeStyle
 			if focused {
-				// Active tab with focus: bold + reverse
-				tabStyle = tabStyle.Reverse(true).Bold(true)
-			} else {
-				// Active tab without focus: just reverse
-				tabStyle = tabStyle.Reverse(true)
+				tabStyle = tabStyle.Bold(true)
 			}
+		} else if isHover {
+			// Hover (mouse only): reverse
+			tabStyle = baseStyle.Reverse(true)
 		} else if focused {
 			// Inactive tabs when focused: dim
 			tabStyle = tabStyle.Dim(true)
@@ -192,22 +201,45 @@ func (tb *TabBar) HandleKey(ev *tcell.EventKey) bool {
 	return false
 }
 
-// HandleMouse processes mouse input for tab selection.
+// HandleMouse processes mouse input for tab selection and hover.
 func (tb *TabBar) HandleMouse(ev *tcell.EventMouse) bool {
 	if len(tb.Tabs) == 0 {
 		return false
 	}
 
 	x, y := ev.Position()
+
+	// Check if mouse left the tab bar area
 	if !tb.HitTest(x, y) {
+		if tb.hoverIdx != -1 {
+			tb.hoverIdx = -1
+			tb.invalidate()
+		}
 		return false
 	}
 
-	if ev.Buttons() != tcell.Button1 {
-		return false
+	// Calculate which tab the mouse is over
+	tabIdx := tb.tabAtX(x)
+
+	// Update hover state (only for non-active tabs)
+	if tabIdx != tb.hoverIdx {
+		tb.hoverIdx = tabIdx
+		tb.invalidate()
 	}
 
-	// Calculate which tab was clicked
+	// Handle click for tab selection
+	if ev.Buttons() == tcell.Button1 {
+		if tabIdx >= 0 && tabIdx != tb.ActiveIdx {
+			tb.SetActive(tabIdx)
+		}
+		return true
+	}
+
+	return true
+}
+
+// tabAtX returns the tab index at the given x position, or -1 if none.
+func (tb *TabBar) tabAtX(x int) int {
 	tabX := tb.Rect.X
 	focused := tb.IsFocused()
 
@@ -221,21 +253,34 @@ func (tb *TabBar) HandleMouse(ev *tcell.EventMouse) bool {
 		tabWidth := len(tabLabel)
 
 		if x >= tabX && x < tabX+tabWidth {
-			if i != tb.ActiveIdx {
-				tb.SetActive(i)
-			}
-			return true
+			return i
 		}
 
 		tabX += tabWidth + 1 // +1 for spacing
 	}
 
-	return true
+	return -1
+}
+
+// ClearHover resets the hover state (e.g., when mouse leaves or focus changes).
+func (tb *TabBar) ClearHover() {
+	if tb.hoverIdx != -1 {
+		tb.hoverIdx = -1
+		tb.invalidate()
+	}
 }
 
 // invalidate marks the widget as needing redraw.
 func (tb *TabBar) invalidate() {
 	if tb.inv != nil {
 		tb.inv(tb.Rect)
+	}
+}
+
+// GetKeyHints implements KeyHintsProvider from core package.
+func (tb *TabBar) GetKeyHints() []core.KeyHint {
+	return []core.KeyHint{
+		{Key: "←→", Label: "Switch"},
+		{Key: "1-9", Label: "Jump"},
 	}
 }
