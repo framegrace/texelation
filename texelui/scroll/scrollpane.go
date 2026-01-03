@@ -523,21 +523,25 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 		return false
 	}
 
-	// Handle scroll wheel - but first let child handle it if mouse is over child
+	// Handle scroll wheel - ScrollPane handles wheel directly
+	// Only forward to child if child is itself a scrollable widget
 	if buttons&(tcell.WheelUp|tcell.WheelDown) != 0 {
-		// Forward to child first - child might have its own scrollable content
+		// Check if child is a scrollable widget that might want to handle wheel
 		if sp.child != nil && sp.child.HitTest(x, y) {
-			if ma, ok := sp.child.(core.MouseAware); ok {
-				if ma.HandleMouse(ev) {
-					return true
+			// Only forward to widgets that are explicitly scrollable
+			if scroller, ok := sp.child.(interface{ CanScroll() bool }); ok && scroller.CanScroll() {
+				if ma, ok := sp.child.(core.MouseAware); ok {
+					if ma.HandleMouse(ev) {
+						return true
+					}
 				}
 			}
 		}
-		// Child didn't handle it, we handle it
-		if buttons == tcell.WheelUp {
+		// ScrollPane handles wheel events
+		if buttons&tcell.WheelUp != 0 {
 			sp.ScrollBy(-3)
 			return true
-		} else if buttons == tcell.WheelDown {
+		} else if buttons&tcell.WheelDown != 0 {
 			sp.ScrollBy(3)
 			return true
 		}
@@ -672,7 +676,12 @@ func (sp *ScrollPane) WidgetAt(x, y int) core.Widget {
 			scrollbarX = sp.Rect.X
 		}
 		if x == scrollbarX {
-			// Click on scrollbar - ScrollPane handles it
+			// Click on scrollbar - don't change focus, return currently focused widget
+			// This prevents scrollbar interactions from stealing focus from content
+			if focused := sp.findFocusedWidget(sp.child); focused != nil {
+				return focused
+			}
+			// No focused child, return self
 			return sp
 		}
 	}

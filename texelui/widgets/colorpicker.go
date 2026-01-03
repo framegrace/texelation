@@ -11,6 +11,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"texelation/texel/theme"
 	"texelation/texelui/core"
+	"texelation/texelui/primitives"
 	"texelation/texelui/widgets/colorpicker"
 )
 
@@ -74,9 +75,12 @@ type ColorPicker struct {
 	result      ColorPickerResult
 	focus       focusArea // Which area has focus when expanded
 
+	// Tab bar for mode switching
+	tabBar    *primitives.TabBar
+	modeOrder []ColorPickerMode // Order for tab display (maps to tab indices)
+
 	// Mode pickers (legacy interface for Semantic/Palette)
 	modes      map[ColorPickerMode]colorpicker.ModePicker
-	modeOrder  []ColorPickerMode // Order for tab display
 	activeMode colorpicker.ModePicker
 
 	// New widget-based OKLCH editor
@@ -101,25 +105,38 @@ func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker {
 	cp.SetPosition(x, y)
 	cp.SetFocusable(true)
 
-	// Initialize enabled modes in order
+	// Build tab items and initialize enabled modes in order
+	var tabItems []primitives.TabItem
 	if config.EnableSemantic {
 		cp.modes[ColorModeSemantic] = colorpicker.NewSemanticPicker()
 		cp.modeOrder = append(cp.modeOrder, ColorModeSemantic)
+		tabItems = append(tabItems, primitives.TabItem{Label: ColorModeSemantic.String(), ID: "semantic"})
 	}
 	if config.EnablePalette {
 		cp.modes[ColorModePalette] = colorpicker.NewPalettePicker()
 		cp.modeOrder = append(cp.modeOrder, ColorModePalette)
+		tabItems = append(tabItems, primitives.TabItem{Label: ColorModePalette.String(), ID: "palette"})
 	}
 	if config.EnableOKLCH {
 		// Use new widget-based OKLCHEditor instead of legacy ModePicker
 		cp.oklchEditor = NewOKLCHEditor(0, 0, 25, 10)
 		cp.modeOrder = append(cp.modeOrder, ColorModeOKLCH)
+		tabItems = append(tabItems, primitives.TabItem{Label: ColorModeOKLCH.String(), ID: "oklch"})
 	}
 
 	// Ensure at least one mode is enabled - default to OKLCH if none specified
 	if len(cp.modeOrder) == 0 {
 		cp.oklchEditor = NewOKLCHEditor(0, 0, 25, 10)
 		cp.modeOrder = append(cp.modeOrder, ColorModeOKLCH)
+		tabItems = append(tabItems, primitives.TabItem{Label: ColorModeOKLCH.String(), ID: "oklch"})
+	}
+
+	// Create tab bar
+	cp.tabBar = primitives.NewTabBar(0, 0, 40, tabItems)
+	cp.tabBar.OnChange = func(idx int) {
+		if idx >= 0 && idx < len(cp.modeOrder) {
+			cp.selectModeByIndex(idx)
+		}
 	}
 
 	// Set initial mode to first available
@@ -146,6 +163,9 @@ func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker {
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
 func (cp *ColorPicker) SetInvalidator(fn func(core.Rect)) {
 	cp.inv = fn
+	if cp.tabBar != nil {
+		cp.tabBar.SetInvalidator(fn)
+	}
 	if cp.oklchEditor != nil {
 		cp.oklchEditor.SetInvalidator(fn)
 	}
@@ -348,39 +368,20 @@ func (cp *ColorPicker) drawExpanded(painter *core.Painter) {
 	borderStyle := cp.EffectiveStyle(baseStyle)
 	painter.DrawBorder(cp.Rect, borderStyle, [6]rune{'─', '│', '┌', '┐', '└', '┘'})
 
-	// Draw tabs on top border
-	x := cp.Rect.X + 2
-	y := cp.Rect.Y
-
-	// When tab bar has focus, show a focus indicator
-	tabBarFocused := cp.focus == focusTabBar
-	if tabBarFocused {
-		painter.SetCell(cp.Rect.X+1, y, '►', baseStyle.Bold(true))
-	}
-
-	for _, mode := range cp.modeOrder {
-		tabName := " " + mode.String() + " "
-		isActive := mode == cp.currentMode
-
-		tabStyle := baseStyle
-		if isActive {
-			if tabBarFocused {
-				// Active tab with tab bar focus: bold + reverse
-				tabStyle = tabStyle.Reverse(true).Bold(true)
-			} else {
-				// Active tab without tab bar focus: just reverse
-				tabStyle = tabStyle.Reverse(true)
-			}
-		} else if tabBarFocused {
-			// Inactive tabs when tab bar focused: dim
-			tabStyle = tabStyle.Dim(true)
+	// Position and draw tab bar on top border (after the corner)
+	if cp.tabBar != nil {
+		tabBarFocused := cp.focus == focusTabBar
+		cp.tabBar.SetPosition(cp.Rect.X+1, cp.Rect.Y)
+		cp.tabBar.Resize(cp.Rect.W-2, 1)
+		if tabBarFocused {
+			cp.tabBar.Focus()
+		} else {
+			cp.tabBar.Blur()
 		}
-
-		painter.DrawText(x, y, tabName, tabStyle)
-		x += len(tabName) + 1
+		cp.tabBar.Draw(painter)
 	}
 
-	// Draw mode content inside border
+	// Draw mode content inside border (below tab bar)
 	contentRect := core.Rect{
 		X: cp.Rect.X + 1,
 		Y: cp.Rect.Y + 1,
@@ -428,27 +429,6 @@ func (cp *ColorPicker) HandleKey(ev *tcell.EventKey) bool {
 		return true
 	}
 
-	// Number keys always switch modes (regardless of focus area)
-	if ev.Key() == tcell.KeyRune {
-		switch ev.Rune() {
-		case '1':
-			if len(cp.modeOrder) >= 1 {
-				cp.selectMode(cp.modeOrder[0])
-				return true
-			}
-		case '2':
-			if len(cp.modeOrder) >= 2 {
-				cp.selectMode(cp.modeOrder[1])
-				return true
-			}
-		case '3':
-			if len(cp.modeOrder) >= 3 {
-				cp.selectMode(cp.modeOrder[2])
-				return true
-			}
-		}
-	}
-
 	// Handle based on focus area
 	if cp.focus == focusTabBar {
 		return cp.handleTabBarKey(ev)
@@ -470,20 +450,16 @@ func (cp *ColorPicker) handleTabBarKey(ev *tcell.EventKey) bool {
 		}
 		return true
 
-	case tcell.KeyLeft:
-		// Previous mode
-		cp.cycleModeBackward()
-		return true
-
-	case tcell.KeyRight:
-		// Next mode
-		cp.cycleModeForward()
-		return true
-
 	case tcell.KeyDown:
 		// Enter content, reset mode focus to first element
 		cp.focus = focusContent
 		cp.resetContentFocus()
+		cp.invalidate()
+		return true
+	}
+
+	// Delegate to TabBar for Left/Right/Home/End/number keys
+	if cp.tabBar != nil && cp.tabBar.HandleKey(ev) {
 		cp.invalidate()
 		return true
 	}
@@ -550,37 +526,6 @@ func (cp *ColorPicker) handleContentKey(ev *tcell.EventKey) bool {
 	return false
 }
 
-// cycleModeForward moves to the next mode.
-func (cp *ColorPicker) cycleModeForward() {
-	if len(cp.modeOrder) <= 1 {
-		return
-	}
-	currentIdx := 0
-	for i, m := range cp.modeOrder {
-		if m == cp.currentMode {
-			currentIdx = i
-			break
-		}
-	}
-	nextIdx := (currentIdx + 1) % len(cp.modeOrder)
-	cp.selectMode(cp.modeOrder[nextIdx])
-}
-
-// cycleModeBackward moves to the previous mode.
-func (cp *ColorPicker) cycleModeBackward() {
-	if len(cp.modeOrder) <= 1 {
-		return
-	}
-	currentIdx := 0
-	for i, m := range cp.modeOrder {
-		if m == cp.currentMode {
-			currentIdx = i
-			break
-		}
-	}
-	prevIdx := (currentIdx - 1 + len(cp.modeOrder)) % len(cp.modeOrder)
-	cp.selectMode(cp.modeOrder[prevIdx])
-}
 
 // HandleMouse processes mouse input.
 func (cp *ColorPicker) HandleMouse(ev *tcell.EventMouse) bool {
@@ -599,20 +544,12 @@ func (cp *ColorPicker) HandleMouse(ev *tcell.EventMouse) bool {
 	}
 
 	// Check if clicking on tabs (top border row)
-	if y == cp.Rect.Y {
-		if ev.Buttons() == tcell.Button1 {
-			// Find which tab was clicked
-			tabX := cp.Rect.X + 2
-			for _, mode := range cp.modeOrder {
-				tabName := " " + mode.String() + " "
-				tabWidth := len(tabName) + 1
-
-				if x >= tabX && x < tabX+tabWidth-1 {
-					cp.selectMode(mode)
-					return true
-				}
-				tabX += tabWidth
-			}
+	if y == cp.Rect.Y && cp.tabBar != nil {
+		// Delegate to TabBar
+		if cp.tabBar.HandleMouse(ev) {
+			cp.focus = focusTabBar
+			cp.invalidate()
+			return true
 		}
 		return true
 	}
@@ -644,18 +581,35 @@ func (cp *ColorPicker) HandleMouse(ev *tcell.EventMouse) bool {
 	return true
 }
 
-// selectMode switches to a different mode.
-func (cp *ColorPicker) selectMode(mode ColorPickerMode) {
+// selectModeByIndex switches to a mode by its index in modeOrder.
+// Called by TabBar.OnChange callback.
+func (cp *ColorPicker) selectModeByIndex(idx int) {
+	if idx < 0 || idx >= len(cp.modeOrder) {
+		return
+	}
+	mode := cp.modeOrder[idx]
 	if mode == ColorModeOKLCH && cp.oklchEditor != nil {
 		cp.currentMode = mode
 		cp.activeMode = nil
-		cp.calculateSize()
-		cp.invalidate()
 	} else if picker, ok := cp.modes[mode]; ok {
 		cp.currentMode = mode
 		cp.activeMode = picker
-		cp.calculateSize()
-		cp.invalidate()
+	}
+	cp.calculateSize()
+	cp.invalidate()
+}
+
+// selectMode switches to a different mode.
+func (cp *ColorPicker) selectMode(mode ColorPickerMode) {
+	// Find index of mode and update TabBar
+	for i, m := range cp.modeOrder {
+		if m == mode {
+			if cp.tabBar != nil {
+				cp.tabBar.SetActive(i)
+			}
+			cp.selectModeByIndex(i)
+			return
+		}
 	}
 }
 
@@ -671,14 +625,17 @@ func (cp *ColorPicker) calculateSize() {
 		cp.Resize(w, 1)
 	} else {
 		// Calculate minimum width needed for tabs
-		// Format: ┌► Semantic  Palette  Custom ─┐
-		// = 2 (left border + focus indicator) + tabs + 1 (right border)
-		tabsWidth := 2 // Left border + space for focus indicator
-		for _, mode := range cp.modeOrder {
-			tabName := " " + mode.String() + " "
-			tabsWidth += len(tabName) + 1 // tab + spacing
+		// TabBar format: ► Semantic  Palette  Custom
+		// Plus 2 for left/right borders
+		tabsWidth := 2 // Left and right border
+		if cp.tabBar != nil {
+			// Estimate TabBar width: focus marker + tabs + spacing
+			tabsWidth += 1 // Focus marker
+			for _, mode := range cp.modeOrder {
+				tabName := " " + mode.String() + " "
+				tabsWidth += len(tabName) + 1 // tab + spacing
+			}
 		}
-		tabsWidth += 1 // Right border
 
 		// Expanded: get preferred size from active mode
 		w, h := 30, 15 // Default minimum (increased for OKLCHEditor)
@@ -794,12 +751,11 @@ func (cp *ColorPicker) GetKeyHints() []core.KeyHint {
 			{Key: "Space", Label: "Open"},
 		}
 	}
-	if cp.focus == focusTabBar {
-		return []core.KeyHint{
-			{Key: "←→", Label: "Switch"},
-			{Key: "1-3", Label: "Mode"},
-			{Key: "↓/Tab", Label: "Edit"},
-		}
+	if cp.focus == focusTabBar && cp.tabBar != nil {
+		// Get hints from TabBar and add navigation hint
+		hints := cp.tabBar.GetKeyHints()
+		hints = append(hints, core.KeyHint{Key: "↓/Tab", Label: "Edit"})
+		return hints
 	}
 	// Content focus
 	return []core.KeyHint{
