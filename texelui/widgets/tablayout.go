@@ -453,11 +453,10 @@ func (tl *TabLayout) SetInvalidator(fn func(core.Rect)) {
 }
 
 // VisitChildren implements core.ChildContainer.
-// Note: TabBar is NOT exposed here because TabLayout manages focus between
-// tab bar and content internally via focusArea. Exposing TabBar would cause
-// double focus cycling (once for TabLayout, once for TabBar).
 func (tl *TabLayout) VisitChildren(f func(core.Widget)) {
-	// Only visit active child - tab bar focus is managed internally
+	// Visit tab bar
+	f(tl.tabBar)
+	// Visit active child
 	if activeChild := tl.activeChild(); activeChild != nil {
 		f(activeChild)
 	}

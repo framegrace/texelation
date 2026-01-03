@@ -345,8 +345,7 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 				isMultiline = mw.IsMultiline()
 			}
 			if !isMultiline {
-				if fc, ok := u.focused.(FocusCycler); ok {
-					fc.CycleFocus(true)
+				if u.cycleFocusLocked(true) {
 					u.dirtyMu.Lock()
 					u.invalidateAllLocked()
 					u.dirtyMu.Unlock()

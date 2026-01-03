@@ -208,12 +208,15 @@ func (sp *ScrollPane) Resize(w, h int) {
 }
 
 // ScrollBy scrolls by the given delta (positive = down, negative = up).
-func (sp *ScrollPane) ScrollBy(delta int) {
+// Returns true if the scroll position changed (useful for event bubbling).
+func (sp *ScrollPane) ScrollBy(delta int) bool {
 	oldOffset := sp.state.Offset
 	sp.state = sp.state.ScrollBy(delta)
-	if sp.state.Offset != oldOffset {
+	changed := sp.state.Offset != oldOffset
+	if changed {
 		sp.invalidate()
 	}
+	return changed
 }
 
 // ScrollTo scrolls to make the given row visible with minimal movement.
@@ -543,11 +546,9 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 		}
 		// Child didn't handle it (or no child), ScrollPane handles it
 		if buttons&tcell.WheelUp != 0 {
-			sp.ScrollBy(-3)
-			return true
+			return sp.ScrollBy(-3)
 		} else if buttons&tcell.WheelDown != 0 {
-			sp.ScrollBy(3)
-			return true
+			return sp.ScrollBy(3)
 		}
 	}
 
