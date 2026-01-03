@@ -320,8 +320,9 @@ func (p *Pane) HandleMouse(ev *tcell.EventMouse) bool {
 		return false
 	}
 
-	// Only handle focus changes on button press
-	isPress := ev.Buttons()&tcell.Button1 != 0
+	buttons := ev.Buttons()
+	isPress := buttons&tcell.Button1 != 0
+	isWheel := buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0
 
 	// Sort children by Z-index descending (highest first) for mouse routing
 	// This ensures expanded dropdowns and modals receive events first
@@ -364,10 +365,13 @@ func (p *Pane) HandleMouse(ev *tcell.EventMouse) bool {
 			if ma, ok := child.(core.MouseAware); ok {
 				return ma.HandleMouse(ev)
 			}
-			return true
+			// Child hit but not MouseAware - only claim handled for non-wheel events
+			// Wheel events should bubble up to parent scrollable containers
+			return !isWheel
 		}
 	}
-	return true
+	// No child hit - only claim handled for non-wheel events
+	return !isWheel
 }
 
 // Resize updates all children positions relative to pane position.

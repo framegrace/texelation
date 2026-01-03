@@ -510,12 +510,20 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 	// Handle drag release
 	if sp.draggingThumb && buttons&tcell.Button1 == 0 {
 		sp.draggingThumb = false
+		// Restore focus to content after drag
+		if sp.lastFocused != nil {
+			sp.lastFocused.Focus()
+		}
 		return true
 	}
 
 	// Handle ongoing thumb drag
 	if sp.draggingThumb && buttons&tcell.Button1 != 0 {
 		sp.handleThumbDrag(y)
+		// Maintain focus on content during drag
+		if sp.lastFocused != nil {
+			sp.lastFocused.Focus()
+		}
 		return true
 	}
 
@@ -523,21 +531,17 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 		return false
 	}
 
-	// Handle scroll wheel - ScrollPane handles wheel directly
-	// Only forward to child if child is itself a scrollable widget
+	// Handle scroll wheel - forward to child first, then handle ourselves
 	if buttons&(tcell.WheelUp|tcell.WheelDown) != 0 {
-		// Check if child is a scrollable widget that might want to handle wheel
+		// Forward to child first - nested scrollable content gets priority
 		if sp.child != nil && sp.child.HitTest(x, y) {
-			// Only forward to widgets that are explicitly scrollable
-			if scroller, ok := sp.child.(interface{ CanScroll() bool }); ok && scroller.CanScroll() {
-				if ma, ok := sp.child.(core.MouseAware); ok {
-					if ma.HandleMouse(ev) {
-						return true
-					}
+			if ma, ok := sp.child.(core.MouseAware); ok {
+				if ma.HandleMouse(ev) {
+					return true
 				}
 			}
 		}
-		// ScrollPane handles wheel events
+		// Child didn't handle it (or no child), ScrollPane handles it
 		if buttons&tcell.WheelUp != 0 {
 			sp.ScrollBy(-3)
 			return true
@@ -551,18 +555,28 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 	if sp.showIndicators && sp.indicatorConfig.ShowScrollbar && buttons&tcell.Button1 != 0 {
 		scrollbarX, thumbStart, thumbEnd, trackHeight := sp.scrollbarGeometry()
 		if scrollbarX >= 0 && x == scrollbarX {
+			// Restore focus after scrollbar interaction.
+			// UIManager blurs before routing mouse, so use lastFocused from Draw.
+			restoreFocus := func() {
+				if sp.lastFocused != nil {
+					sp.lastFocused.Focus()
+				}
+			}
+
 			// Convert y to relative position in scrollbar
 			relY := y - sp.Rect.Y
 
 			// Up arrow at row 0
 			if relY == 0 {
 				sp.ScrollBy(-1)
+				restoreFocus()
 				return true
 			}
 
 			// Down arrow at last row
 			if relY == sp.Rect.H-1 {
 				sp.ScrollBy(1)
+				restoreFocus()
 				return true
 			}
 
@@ -574,14 +588,17 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 					sp.draggingThumb = true
 					sp.dragStartY = y
 					sp.dragStartOffset = sp.state.Offset
+					restoreFocus()
 					return true
 				} else if trackY < thumbStart {
 					// Click above thumb - page up
 					sp.ScrollBy(-sp.Rect.H)
+					restoreFocus()
 					return true
 				} else {
 					// Click below thumb - page down
 					sp.ScrollBy(sp.Rect.H)
+					restoreFocus()
 					return true
 				}
 			}
