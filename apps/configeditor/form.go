@@ -32,9 +32,10 @@ type formRow struct {
 
 type formPane struct {
 	core.BaseWidget
-	Style tcell.Style
-	rows  []formRow
-	inv   func(core.Rect)
+	Style          tcell.Style
+	rows           []formRow
+	inv            func(core.Rect)
+	lastFocusedIdx int // Index of last focused field for focus restoration
 }
 
 func newFormPane(x, y, w, h int) *formPane {
@@ -42,10 +43,12 @@ func newFormPane(x, y, w, h int) *formPane {
 	bg := tm.GetSemanticColor("bg.surface")
 	fg := tm.GetSemanticColor("text.primary")
 	p := &formPane{
-		Style: tcell.StyleDefault.Background(bg).Foreground(fg),
+		Style:          tcell.StyleDefault.Background(bg).Foreground(fg),
+		lastFocusedIdx: -1,
 	}
 	p.SetPosition(x, y)
 	p.Resize(w, h)
+	p.SetFocusable(true)
 	return p
 }
 
@@ -106,6 +109,11 @@ func (p *formPane) Resize(w, h int) {
 	p.layout()
 }
 
+func (p *formPane) SetPosition(x, y int) {
+	p.BaseWidget.SetPosition(x, y)
+	p.layout()
+}
+
 func (p *formPane) layout() {
 	x := p.Rect.X + formPaddingX
 	y := p.Rect.Y + formPaddingY
@@ -120,9 +128,18 @@ func (p *formPane) layout() {
 			row.label.Resize(minInt(labelWidth, maxW), 1)
 		}
 		if row.field != nil {
+			// Check if field is expanded (e.g., expanded ColorPicker).
+			// Expanded widgets manage their own size, so skip resizing them.
+			isExpanded := false
+			if exp, ok := row.field.(core.Expandable); ok && exp.IsExpanded() {
+				isExpanded = true
+			}
+
 			if row.fullWidth || row.label == nil {
 				row.field.SetPosition(x, y)
-				row.field.Resize(maxW, row.height)
+				if !isExpanded {
+					row.field.Resize(maxW, row.height)
+				}
 			} else {
 				fieldX := x + labelWidth + 2
 				fieldW := p.Rect.X + p.Rect.W - fieldX - formPaddingX
@@ -130,7 +147,9 @@ func (p *formPane) layout() {
 					fieldW = 1
 				}
 				row.field.SetPosition(fieldX, y)
-				row.field.Resize(fieldW, row.height)
+				if !isExpanded {
+					row.field.Resize(fieldW, row.height)
+				}
 			}
 		}
 		y += row.height + rowSpacing
@@ -176,6 +195,196 @@ func (p *formPane) WidgetAt(x, y int) core.Widget {
 		}
 	}
 	return best
+}
+
+// getFocusableFields returns all focusable field widgets.
+func (p *formPane) getFocusableFields() []core.Widget {
+	var result []core.Widget
+	for _, row := range p.rows {
+		if row.field != nil && row.field.Focusable() {
+			result = append(result, row.field)
+		}
+	}
+	return result
+}
+
+// Focus focuses the first focusable field, or restores last focused field.
+func (p *formPane) Focus() {
+	p.BaseWidget.Focus()
+	fields := p.getFocusableFields()
+	if len(fields) == 0 {
+		return
+	}
+	// Try to restore last focused field
+	if p.lastFocusedIdx >= 0 && p.lastFocusedIdx < len(fields) {
+		fields[p.lastFocusedIdx].Focus()
+		return
+	}
+	// Focus first field
+	fields[0].Focus()
+	p.lastFocusedIdx = 0
+}
+
+// Blur blurs all fields and tracks which one was focused.
+func (p *formPane) Blur() {
+	fields := p.getFocusableFields()
+	for i, w := range fields {
+		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+			p.lastFocusedIdx = i
+			w.Blur()
+			break
+		}
+	}
+	p.BaseWidget.Blur()
+}
+
+// TrapsFocus returns false - formPane doesn't trap focus at boundaries.
+func (p *formPane) TrapsFocus() bool {
+	return false
+}
+
+// CycleFocus moves focus to next (forward=true) or previous (forward=false) field.
+// Returns true if focus was successfully cycled, false if at boundary.
+func (p *formPane) CycleFocus(forward bool) bool {
+	fields := p.getFocusableFields()
+	if len(fields) == 0 {
+		return false
+	}
+
+	// Find currently focused field
+	currentIdx := -1
+	var focusedField core.Widget
+	for i, w := range fields {
+		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+			currentIdx = i
+			focusedField = w
+			break
+		}
+	}
+
+	// If nothing focused, focus first/last based on direction
+	if currentIdx < 0 {
+		if forward {
+			fields[0].Focus()
+			p.lastFocusedIdx = 0
+		} else {
+			fields[len(fields)-1].Focus()
+			p.lastFocusedIdx = len(fields) - 1
+		}
+		if p.inv != nil {
+			p.inv(p.Rect)
+		}
+		return true
+	}
+
+	var nextIdx int
+	if forward {
+		nextIdx = currentIdx + 1
+		if nextIdx >= len(fields) {
+			return false // At boundary, let parent handle
+		}
+	} else {
+		nextIdx = currentIdx - 1
+		if nextIdx < 0 {
+			return false // At boundary, let parent handle
+		}
+	}
+
+	focusedField.Blur()
+	fields[nextIdx].Focus()
+	p.lastFocusedIdx = nextIdx
+	if p.inv != nil {
+		p.inv(p.Rect)
+	}
+	return true
+}
+
+// HandleKey routes key events to the focused field.
+func (p *formPane) HandleKey(ev *tcell.EventKey) bool {
+	fields := p.getFocusableFields()
+	for i, w := range fields {
+		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+			// For Tab/Shift-Tab, only forward to nested containers
+			isTab := ev.Key() == tcell.KeyTab || ev.Key() == tcell.KeyBacktab
+			if isTab {
+				if _, isContainer := w.(core.FocusCycler); isContainer {
+					if w.HandleKey(ev) {
+						return true
+					}
+				}
+				return false // Let parent handle Tab
+			}
+			// Route other keys to focused field
+			if w.HandleKey(ev) {
+				p.lastFocusedIdx = i
+				return true
+			}
+			return false
+		}
+	}
+	return false
+}
+
+// HandleMouse routes mouse events to fields, handling click-to-focus.
+func (p *formPane) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	if !p.HitTest(x, y) {
+		return false
+	}
+
+	buttons := ev.Buttons()
+	isPress := buttons&tcell.Button1 != 0
+	isWheel := buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0
+
+	// Sort fields by Z-index descending for mouse routing
+	type fieldInfo struct {
+		field core.Widget
+		z     int
+		idx   int
+	}
+	var sortedFields []fieldInfo
+	fields := p.getFocusableFields()
+	for i, f := range fields {
+		sortedFields = append(sortedFields, fieldInfo{field: f, z: widgetZ(f), idx: i})
+	}
+	sort.Slice(sortedFields, func(i, j int) bool {
+		return sortedFields[i].z > sortedFields[j].z
+	})
+
+	// Check fields in Z-order
+	for _, fi := range sortedFields {
+		if fi.field.HitTest(x, y) {
+			// Focus the clicked field on button press
+			if isPress {
+				// Blur currently focused field
+				for _, w := range fields {
+					if fs, ok := w.(core.FocusState); ok && fs.IsFocused() && w != fi.field {
+						w.Blur()
+					}
+				}
+				fi.field.Focus()
+				p.lastFocusedIdx = fi.idx
+				if p.inv != nil {
+					p.inv(p.Rect)
+				}
+			}
+			if ma, ok := fi.field.(core.MouseAware); ok {
+				return ma.HandleMouse(ev)
+			}
+			return !isWheel
+		}
+	}
+	return !isWheel
+}
+
+// ContentHeight returns the total height needed to display all rows.
+func (p *formPane) ContentHeight() int {
+	height := formPaddingY
+	for _, row := range p.rows {
+		height += row.height + rowSpacing
+	}
+	height += formPaddingY
+	return height
 }
 
 type drawItem struct {

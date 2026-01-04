@@ -301,6 +301,12 @@ func (cp *ColorPicker) DismissModal() {
 	cp.Collapse()
 }
 
+// IsExpanded returns true when the picker is expanded.
+// Implements core.Expandable interface.
+func (cp *ColorPicker) IsExpanded() bool {
+	return cp.expanded
+}
+
 // Draw renders the color picker.
 func (cp *ColorPicker) Draw(painter *core.Painter) {
 	if cp.expanded {

@@ -333,6 +333,7 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 
 		// Advance focus after Enter for form-style data entry (if container supports it)
 		// Skip for multiline widgets (like TextArea) that use Enter internally
+		// Skip for modal-capable widgets (like ColorPicker) that use Enter to commit/close
 		if u.AdvanceFocusOnEnter && ev.Key() == tcell.KeyEnter {
 			// Find the deeply focused widget (handles containers like Pane, TabLayout)
 			deepWidget := FindDeepFocused(u.focused)
@@ -344,7 +345,12 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 			if mw, ok := deepWidget.(MultilineWidget); ok {
 				isMultiline = mw.IsMultiline()
 			}
-			if !isMultiline {
+			// Check if widget is modal-capable (uses Enter to commit/close)
+			isModalCapable := false
+			if _, ok := deepWidget.(Modal); ok {
+				isModalCapable = true
+			}
+			if !isMultiline && !isModalCapable {
 				if u.cycleFocusLocked(true) {
 					u.dirtyMu.Lock()
 					u.invalidateAllLocked()
@@ -694,6 +700,8 @@ func (u *UIManager) Render() [][]texel.Cell {
 		for _, w := range sorted {
 			w.Draw(p)
 		}
+		// Draw modal overlays on top (unclipped) - handles ColorPicker expansion etc.
+		u.drawModalOverlaysLocked(p)
 		// Draw status bar last (on top)
 		u.drawStatusBarLocked(p)
 		return u.buf
@@ -733,10 +741,42 @@ func (u *UIManager) Render() [][]texel.Cell {
 				w.Draw(p)
 			}
 		}
+		// Draw modal overlays on top (unclipped)
+		u.drawModalOverlaysLocked(p)
 		// Draw status bar if it intersects clip
 		u.drawStatusBarLocked(p)
 	}
 	return u.buf
+}
+
+// drawModalOverlaysLocked finds and redraws any modal widgets as overlays.
+// This ensures expanded ColorPickers etc. are fully visible even inside ScrollPanes.
+// Must be called with u.mu held.
+func (u *UIManager) drawModalOverlaysLocked(p *Painter) {
+	// Create an unclipped painter for overlay drawing
+	full := Rect{X: 0, Y: 0, W: u.W, H: u.H}
+	overlayPainter := NewPainter(u.buf, full)
+
+	// Find all modal widgets in the tree and redraw them
+	for _, w := range u.widgets {
+		u.drawModalWidgetsRecursive(w, overlayPainter)
+	}
+}
+
+// drawModalWidgetsRecursive recursively finds and draws modal widgets.
+func (u *UIManager) drawModalWidgetsRecursive(w Widget, p *Painter) {
+	// Check if this widget is modal
+	if modal, ok := w.(Modal); ok && modal.IsModal() {
+		// Redraw the modal widget with unclipped painter
+		w.Draw(p)
+	}
+
+	// Recurse into children
+	if cc, ok := w.(ChildContainer); ok {
+		cc.VisitChildren(func(child Widget) {
+			u.drawModalWidgetsRecursive(child, p)
+		})
+	}
 }
 
 // drawStatusBarLocked draws the status bar if enabled.

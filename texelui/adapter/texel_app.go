@@ -24,7 +24,9 @@ func NewUIApp(title string, ui *core.UIManager) *UIApp {
 	if ui == nil {
 		ui = core.NewUIManager()
 	}
-	return &UIApp{title: title, ui: ui, stopCh: make(chan struct{})}
+	app := &UIApp{title: title, ui: ui, stopCh: make(chan struct{})}
+	app.EnableStatusBar() // Enable status bar by default
+	return app
 }
 
 func (a *UIApp) Run() error { <-a.stopCh; return nil }
@@ -81,6 +83,11 @@ func (a *UIApp) StatusBar() *widgets.StatusBar {
 	return nil
 }
 
+// DisableStatusBar removes and disables the status bar.
+func (a *UIApp) DisableStatusBar() {
+	a.ui.SetStatusBar(nil)
+}
+
 // NewWidgetShowcaseApp creates a tabbed demo showcasing all TexelUI widgets.
 // This is the unified demo that replaces individual demos.
 func NewWidgetShowcaseApp(title string) *UIApp {
@@ -97,8 +104,8 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 
 	app := NewUIApp(title, ui)
 
-	// Enable status bar with key hints and messages
-	statusBar := app.EnableStatusBar()
+	// Get status bar (enabled by default in NewUIApp)
+	statusBar := app.StatusBar()
 
 	// === Inputs Tab (wrapped in ScrollPane for tall content) ===
 	inputsPane := createInputsTab()
