@@ -213,3 +213,119 @@ func TestTextAreaReplaceModeOverwritesAndUnderlineCaret(t *testing.T) {
 
 // Ensure first Shift+Left moves caret left and selects previous rune inclusively.
 // selection-related tests removed; selection will be reintroduced later
+
+// mockModalWidget is a test widget that can be modal
+type mockModalWidget struct {
+	core.BaseWidget
+	modal bool
+	inv   func(core.Rect)
+}
+
+func newMockModalWidget() *mockModalWidget {
+	w := &mockModalWidget{}
+	w.SetFocusable(true)
+	return w
+}
+
+func (m *mockModalWidget) Draw(p *core.Painter) {
+	if m.Rect.W > 0 && m.Rect.H > 0 {
+		p.Fill(m.Rect, 'X', tcell.StyleDefault)
+	}
+}
+
+func (m *mockModalWidget) IsModal() bool {
+	return m.modal
+}
+
+func (m *mockModalWidget) DismissModal() {
+	m.modal = false
+}
+
+func (m *mockModalWidget) HandleKey(ev *tcell.EventKey) bool {
+	if ev.Key() == tcell.KeyEnter && m.modal {
+		// Simulate Collapse
+		m.modal = false
+		// Invalidate
+		if m.inv != nil {
+			m.inv(m.Rect)
+		}
+		return true
+	}
+	if ev.Key() == tcell.KeyRune && ev.Rune() == ' ' {
+		// Space to expand (become modal)
+		m.modal = true
+		return true
+	}
+	return false
+}
+
+func (m *mockModalWidget) SetInvalidator(fn func(core.Rect)) {
+	m.inv = fn
+}
+
+// TestUIManagerModalWidgetEnter tests that modal widgets handle Enter correctly
+func TestUIManagerModalWidgetEnter(t *testing.T) {
+	ui := core.NewUIManager()
+	ui.Resize(80, 24)
+
+	modal := newMockModalWidget()
+	modal.SetPosition(10, 10)
+	modal.Resize(20, 5)
+	ui.AddWidget(modal)
+	ui.Focus(modal)
+
+	// Make the widget modal
+	modal.modal = true
+	if !modal.IsModal() {
+		t.Fatal("Widget should be modal")
+	}
+
+	// Press Enter - should handle via modal path
+	ev := tcell.NewEventKey(tcell.KeyEnter, 0, 0)
+	handled := ui.HandleKey(ev)
+
+	if !handled {
+		t.Error("Enter should have been handled")
+	}
+
+	// Widget should no longer be modal
+	if modal.IsModal() {
+		t.Error("Widget should not be modal after Enter")
+	}
+
+	// Render should work
+	buf := ui.Render()
+	if buf == nil {
+		t.Error("Render returned nil")
+	}
+}
+
+// TestUIManagerEnterWithAdvanceFocusOnEnter tests AdvanceFocusOnEnter skips modal widgets
+func TestUIManagerEnterWithAdvanceFocusOnEnter(t *testing.T) {
+	ui := core.NewUIManager()
+	ui.Resize(80, 24)
+	ui.AdvanceFocusOnEnter = true
+
+	// Create a modal widget
+	modal := newMockModalWidget()
+	modal.SetPosition(10, 10)
+	modal.Resize(20, 5)
+	ui.AddWidget(modal)
+	ui.Focus(modal)
+
+	// Make it modal
+	modal.modal = true
+
+	// Press Enter - should handle correctly
+	ev := tcell.NewEventKey(tcell.KeyEnter, 0, 0)
+	handled := ui.HandleKey(ev)
+
+	if !handled {
+		t.Error("Enter should have been handled")
+	}
+
+	// Widget should be collapsed
+	if modal.IsModal() {
+		t.Error("Widget should not be modal after Enter")
+	}
+}

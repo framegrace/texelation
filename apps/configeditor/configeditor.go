@@ -23,6 +23,7 @@ import (
 	"texelation/texelui/adapter"
 	"texelation/texelui/core"
 	"texelation/texelui/primitives"
+	"texelation/texelui/scroll"
 	"texelation/texelui/widgets"
 )
 
@@ -103,7 +104,7 @@ func newTargetPanel(title string, showActions bool) *targetPanel {
 		panel.saveBtn = widgets.NewButton(0, 0, 0, 1, "Save")
 		panel.resetBtn = widgets.NewButton(0, 0, 0, 1, "Reload")
 	}
-	panel.SetFocusable(false)
+	panel.SetFocusable(true)
 	return panel
 }
 
@@ -234,9 +235,75 @@ func (p *targetPanel) WidgetAt(x, y int) core.Widget {
 		return p.resetBtn
 	}
 	if p.tabs != nil && p.tabs.HitTest(x, y) {
+		if w := p.tabs.WidgetAt(x, y); w != nil {
+			return w
+		}
 		return p.tabs
 	}
 	return nil
+}
+
+// Focus delegates to the tabs widget.
+func (p *targetPanel) Focus() {
+	p.BaseWidget.Focus()
+	if p.tabs != nil {
+		p.tabs.Focus()
+	}
+}
+
+// Blur delegates to the tabs widget.
+func (p *targetPanel) Blur() {
+	if p.tabs != nil {
+		p.tabs.Blur()
+	}
+	p.BaseWidget.Blur()
+}
+
+// TrapsFocus returns false - targetPanel doesn't trap focus.
+func (p *targetPanel) TrapsFocus() bool {
+	return false
+}
+
+// CycleFocus delegates to the tabs widget.
+func (p *targetPanel) CycleFocus(forward bool) bool {
+	if p.tabs == nil {
+		return false
+	}
+	return p.tabs.CycleFocus(forward)
+}
+
+// HandleKey delegates to the tabs widget.
+func (p *targetPanel) HandleKey(ev *tcell.EventKey) bool {
+	if p.tabs != nil {
+		return p.tabs.HandleKey(ev)
+	}
+	return false
+}
+
+// HandleMouse routes mouse events to buttons and tabs.
+func (p *targetPanel) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	if !p.HitTest(x, y) {
+		return false
+	}
+
+	buttons := ev.Buttons()
+	isWheel := buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0
+
+	// Route to buttons
+	if p.saveBtn != nil && p.saveBtn.HitTest(x, y) {
+		return p.saveBtn.HandleMouse(ev)
+	}
+	if p.resetBtn != nil && p.resetBtn.HitTest(x, y) {
+		return p.resetBtn.HandleMouse(ev)
+	}
+
+	// Route to tabs
+	if p.tabs != nil && p.tabs.HitTest(x, y) {
+		return p.tabs.HandleMouse(ev)
+	}
+
+	return !isWheel
 }
 
 // ConfigEditor is a TexelUI config editor app.
@@ -369,8 +436,9 @@ func (e *ConfigEditor) buildUI() {
 func (e *ConfigEditor) Resize(cols, rows int) {
 	e.UIApp.Resize(cols, rows)
 	if e.rootSwitch != nil {
+		contentH := e.UI().ContentHeight()
 		e.rootSwitch.SetPosition(0, 0)
-		e.rootSwitch.Resize(cols, rows)
+		e.rootSwitch.Resize(cols, contentH)
 	}
 }
 
@@ -551,7 +619,7 @@ func (e *ConfigEditor) buildSectionPane(target *configTarget, cfg config.Config,
 			target.bindings = append(target.bindings, binding)
 		}
 	}
-	return pane
+	return wrapInScrollPane(pane)
 }
 
 func (e *ConfigEditor) buildField(cfg config.Config, target *configTarget, sectionKey, key string, value interface{}, pane *formPane, forceColor bool, apply applyKind) *fieldBinding {
@@ -617,7 +685,7 @@ func (e *ConfigEditor) buildEffectsSection(target *configTarget, values map[stri
 
 		pane.AddRow(formRow{label: label, field: combo, height: 1})
 	}
-	return pane
+	return wrapInScrollPane(pane)
 }
 
 func (e *ConfigEditor) applyTargetConfig(target *configTarget, kind applyKind) {
@@ -661,9 +729,12 @@ func (e *ConfigEditor) emitApply(kind applyKind, target *configTarget) {
 	if payload == "" {
 		return
 	}
-	if err := e.controlBus.Trigger("config-editor.apply", payload); err != nil {
-		return
-	}
+	// Trigger asynchronously to avoid blocking the key handler.
+	// The control bus handler (in Desktop) can do synchronous network I/O,
+	// which would freeze the UI if triggered from within HandleKey.
+	go func() {
+		_ = e.controlBus.Trigger("config-editor.apply", payload)
+	}()
 }
 
 func (e *ConfigEditor) buildGroupedThemePane(target *configTarget, cfg config.Config, sections []string, forceColor bool) core.Widget {
@@ -692,7 +763,7 @@ func (e *ConfigEditor) buildGroupedThemePane(target *configTarget, cfg config.Co
 		}
 		first = false
 	}
-	return pane
+	return wrapInScrollPane(pane)
 }
 
 func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
@@ -706,7 +777,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 	}
 	if len(fields) == 0 {
 		pane.AddRow(formRow{field: widgets.NewLabel(0, 0, 0, 1, "No theme settings for this app."), height: 1, fullWidth: true})
-		return pane
+		return wrapInScrollPane(pane)
 	}
 
 	sectionKeys := make([]string, 0, len(fields))
@@ -756,7 +827,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 		}
 		first = false
 	}
-	return pane
+	return wrapInScrollPane(pane)
 }
 
 func newSectionHeader(text string) *widgets.Label {
@@ -1035,7 +1106,7 @@ type rootSwitcher struct {
 
 func newRootSwitcher(tabs *widgets.TabLayout) *rootSwitcher {
 	rs := &rootSwitcher{tabs: tabs}
-	rs.SetFocusable(false)
+	rs.SetFocusable(true)
 	return rs
 }
 
@@ -1087,6 +1158,37 @@ func (r *rootSwitcher) HandleMouse(ev *tcell.EventMouse) bool {
 	if child := r.activeChild(); child != nil {
 		if mh, ok := child.(core.MouseAware); ok {
 			return mh.HandleMouse(ev)
+		}
+	}
+	return false
+}
+
+// Focus delegates to the active child.
+func (r *rootSwitcher) Focus() {
+	r.BaseWidget.Focus()
+	if child := r.activeChild(); child != nil {
+		child.Focus()
+	}
+}
+
+// Blur delegates to the active child.
+func (r *rootSwitcher) Blur() {
+	if child := r.activeChild(); child != nil {
+		child.Blur()
+	}
+	r.BaseWidget.Blur()
+}
+
+// TrapsFocus returns true - rootSwitcher is a root container that traps focus.
+func (r *rootSwitcher) TrapsFocus() bool {
+	return true
+}
+
+// CycleFocus delegates to the active child.
+func (r *rootSwitcher) CycleFocus(forward bool) bool {
+	if child := r.activeChild(); child != nil {
+		if fc, ok := child.(core.FocusCycler); ok {
+			return fc.CycleFocus(forward)
 		}
 	}
 	return false
@@ -1310,6 +1412,67 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// wrapInScrollPane wraps a formPane in a ScrollPane for scrollable content.
+func wrapInScrollPane(pane *formPane) *scrollableForm {
+	tm := theme.Get()
+	bg := tm.GetSemanticColor("bg.surface")
+	fg := tm.GetSemanticColor("text.primary")
+	style := tcell.StyleDefault.Background(bg).Foreground(fg)
+
+	contentH := pane.ContentHeight()
+	pane.Resize(80, contentH) // Initial reasonable width, will be updated on resize
+
+	sp := scroll.NewScrollPane(0, 0, 1, 1, style)
+	sp.SetChild(pane)
+	sp.SetContentHeight(contentH)
+
+	return &scrollableForm{ScrollPane: sp, form: pane}
+}
+
+// scrollableForm wraps ScrollPane to resize child width on resize.
+type scrollableForm struct {
+	*scroll.ScrollPane
+	form *formPane
+}
+
+func (sf *scrollableForm) Resize(w, h int) {
+	sf.ScrollPane.Resize(w, h)
+	// Resize form width to match viewport, but keep content height
+	if sf.form != nil {
+		sf.form.Resize(w, sf.form.ContentHeight())
+		sf.ScrollPane.SetContentHeight(sf.form.ContentHeight())
+	}
+}
+
+func (sf *scrollableForm) SetPosition(x, y int) {
+	sf.ScrollPane.SetPosition(x, y)
+}
+
+// Focus delegates to the embedded ScrollPane.
+func (sf *scrollableForm) Focus() {
+	sf.ScrollPane.Focus()
+}
+
+// Blur delegates to the embedded ScrollPane.
+func (sf *scrollableForm) Blur() {
+	sf.ScrollPane.Blur()
+}
+
+// CycleFocus delegates to the embedded ScrollPane.
+func (sf *scrollableForm) CycleFocus(forward bool) bool {
+	return sf.ScrollPane.CycleFocus(forward)
+}
+
+// TrapsFocus delegates to the embedded ScrollPane.
+func (sf *scrollableForm) TrapsFocus() bool {
+	return sf.ScrollPane.TrapsFocus()
+}
+
+// VisitChildren delegates to the embedded ScrollPane.
+func (sf *scrollableForm) VisitChildren(f func(core.Widget)) {
+	sf.ScrollPane.VisitChildren(f)
 }
 
 const noneEffectLabel = "(none)"

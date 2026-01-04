@@ -115,6 +115,14 @@ type Modal interface {
 	DismissModal()
 }
 
+// Expandable is an optional interface for widgets that can expand beyond their
+// normal layout size (e.g., dropdown menus, color pickers). When IsExpanded()
+// returns true, parent containers should skip resizing this widget and let it
+// manage its own size.
+type Expandable interface {
+	IsExpanded() bool
+}
+
 // FocusCycler is implemented by containers that manage focus cycling internally.
 // When Tab/Shift-Tab is pressed, the container cycles focus among its children.
 // Returns true if focus was cycled, false if exhausted (at boundary).

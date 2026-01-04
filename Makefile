@@ -30,6 +30,7 @@ build-apps: ## Build ALL app binaries into bin/
 	$(GO_ENV) go build -o $(BIN_DIR)/app-runner ./cmd/app-runner
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-stress ./cmd/texel-stress
 	$(GO_ENV) go build -o $(BIN_DIR)/texelui-demo ./cmd/texelui-demo
+	$(GO_ENV) go build -o $(BIN_DIR)/config-editor ./cmd/config-editor
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texelation ./cmd/texelation
