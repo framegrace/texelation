@@ -46,9 +46,42 @@ type configTarget struct {
 	values         config.Config
 	themeValues    config.Config
 	themeOverrides config.Config
+	content        *targetContent    // Wrapper with header label + sections
 	sections       *widgets.TabLayout
-	panel          *targetPanel
 	bindings       []*fieldBinding
+}
+
+// targetContent wraps a header label and sections TabLayout for each target.
+// Embeds Pane for focus/key/mouse handling, just adds layout on resize.
+type targetContent struct {
+	*widgets.Pane
+	header   *widgets.Label
+	sections *widgets.TabLayout
+}
+
+func newTargetContent(title string, sections *widgets.TabLayout) *targetContent {
+	pane := widgets.NewPane(0, 0, 1, 1, tcell.StyleDefault)
+	header := widgets.NewLabel(0, 0, 1, 1, title)
+	pane.AddChild(header)
+	pane.AddChild(sections)
+	return &targetContent{
+		Pane:     pane,
+		header:   header,
+		sections: sections,
+	}
+}
+
+func (tc *targetContent) Resize(w, h int) {
+	tc.Pane.Resize(w, h)
+	// Layout: header at top, sections below
+	tc.header.SetPosition(tc.Rect.X+2, tc.Rect.Y)
+	tc.header.Resize(w-4, 1)
+	contentH := h - 2
+	if contentH < 1 {
+		contentH = 1
+	}
+	tc.sections.SetPosition(tc.Rect.X, tc.Rect.Y+2)
+	tc.sections.Resize(w, contentH)
 }
 
 type fieldKind int
@@ -80,214 +113,13 @@ type fieldBinding struct {
 	err     error
 }
 
-type targetPanel struct {
-	core.BaseWidget
-	Style    tcell.Style
-	header   *widgets.Label
-	saveBtn  *widgets.Button
-	resetBtn *widgets.Button
-	tabs     *widgets.TabLayout
-	inv      func(core.Rect)
-}
-
-func newTargetPanel(title string, showActions bool) *targetPanel {
-	tm := theme.Get()
-	bg := tm.GetSemanticColor("bg.surface")
-	fg := tm.GetSemanticColor("text.primary")
-	panel := &targetPanel{
-		Style:  tcell.StyleDefault.Background(bg).Foreground(fg),
-		header: widgets.NewLabel(0, 0, 0, 1, title),
-	}
-	if showActions {
-		panel.saveBtn = widgets.NewButton(0, 0, 0, 1, "Save")
-		panel.resetBtn = widgets.NewButton(0, 0, 0, 1, "Reload")
-	}
-	panel.SetFocusable(true)
-	return panel
-}
-
-func (p *targetPanel) SetTabs(tabs *widgets.TabLayout) {
-	p.tabs = tabs
-}
-
-func (p *targetPanel) SetInvalidator(fn func(core.Rect)) {
-	p.inv = fn
-	if p.header != nil {
-		p.header.SetInvalidator(fn)
-	}
-	if p.saveBtn != nil {
-		p.saveBtn.SetInvalidator(fn)
-	}
-	if p.resetBtn != nil {
-		p.resetBtn.SetInvalidator(fn)
-	}
-	if p.tabs != nil {
-		p.tabs.SetInvalidator(fn)
-	}
-}
-
-func (p *targetPanel) Draw(painter *core.Painter) {
-	style := p.EffectiveStyle(p.Style)
-	painter.Fill(p.Rect, ' ', style)
-	if p.header != nil {
-		p.header.Draw(painter)
-	}
-	if p.saveBtn != nil {
-		p.saveBtn.Draw(painter)
-	}
-	if p.resetBtn != nil {
-		p.resetBtn.Draw(painter)
-	}
-	if p.tabs != nil {
-		p.tabs.Draw(painter)
-	}
-}
-
-func (p *targetPanel) Resize(w, h int) {
-	p.BaseWidget.Resize(w, h)
-	p.layout()
-}
-
-func (p *targetPanel) layout() {
-	left := p.Rect.X + 2
-	right := p.Rect.X + p.Rect.W - 2
-	headerY := p.Rect.Y
-	contentY := p.Rect.Y + 2
-	// Content now uses full remaining height (no status row at bottom)
-	contentH := p.Rect.H - 2
-	if contentH < 1 {
-		contentH = 1
-	}
-
-	saveW := 0
-	if p.saveBtn != nil {
-		saveW, _ = p.saveBtn.Size()
-	}
-	resetW := 0
-	if p.resetBtn != nil {
-		resetW, _ = p.resetBtn.Size()
-	}
-
-	if p.header != nil {
-		p.header.SetPosition(left, headerY)
-		p.header.Resize(maxInt(10, p.Rect.W-4), 1)
-	}
-	if p.saveBtn != nil {
-		p.saveBtn.SetPosition(right-saveW, headerY)
-	}
-	if p.resetBtn != nil {
-		p.resetBtn.SetPosition(right-resetW-2-saveW, headerY)
-	}
-	if p.tabs != nil {
-		p.tabs.SetPosition(p.Rect.X, contentY)
-		p.tabs.Resize(p.Rect.W, contentH)
-	}
-}
-
-func (p *targetPanel) VisitChildren(f func(core.Widget)) {
-	if p.header != nil {
-		f(p.header)
-	}
-	if p.saveBtn != nil {
-		f(p.saveBtn)
-	}
-	if p.resetBtn != nil {
-		f(p.resetBtn)
-	}
-	if p.tabs != nil {
-		f(p.tabs)
-	}
-}
-
-func (p *targetPanel) WidgetAt(x, y int) core.Widget {
-	if !p.HitTest(x, y) {
-		return nil
-	}
-	if p.saveBtn != nil && p.saveBtn.HitTest(x, y) {
-		return p.saveBtn
-	}
-	if p.resetBtn != nil && p.resetBtn.HitTest(x, y) {
-		return p.resetBtn
-	}
-	if p.tabs != nil && p.tabs.HitTest(x, y) {
-		if w := p.tabs.WidgetAt(x, y); w != nil {
-			return w
-		}
-		return p.tabs
-	}
-	return nil
-}
-
-// Focus delegates to the tabs widget.
-func (p *targetPanel) Focus() {
-	p.BaseWidget.Focus()
-	if p.tabs != nil {
-		p.tabs.Focus()
-	}
-}
-
-// Blur delegates to the tabs widget.
-func (p *targetPanel) Blur() {
-	if p.tabs != nil {
-		p.tabs.Blur()
-	}
-	p.BaseWidget.Blur()
-}
-
-// TrapsFocus returns false - targetPanel doesn't trap focus.
-func (p *targetPanel) TrapsFocus() bool {
-	return false
-}
-
-// CycleFocus delegates to the tabs widget.
-func (p *targetPanel) CycleFocus(forward bool) bool {
-	if p.tabs == nil {
-		return false
-	}
-	return p.tabs.CycleFocus(forward)
-}
-
-// HandleKey delegates to the tabs widget.
-func (p *targetPanel) HandleKey(ev *tcell.EventKey) bool {
-	if p.tabs != nil {
-		return p.tabs.HandleKey(ev)
-	}
-	return false
-}
-
-// HandleMouse routes mouse events to buttons and tabs.
-func (p *targetPanel) HandleMouse(ev *tcell.EventMouse) bool {
-	x, y := ev.Position()
-	if !p.HitTest(x, y) {
-		return false
-	}
-
-	buttons := ev.Buttons()
-	isWheel := buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0
-
-	// Route to buttons
-	if p.saveBtn != nil && p.saveBtn.HitTest(x, y) {
-		return p.saveBtn.HandleMouse(ev)
-	}
-	if p.resetBtn != nil && p.resetBtn.HitTest(x, y) {
-		return p.resetBtn.HandleMouse(ev)
-	}
-
-	// Route to tabs
-	if p.tabs != nil && p.tabs.HitTest(x, y) {
-		return p.tabs.HandleMouse(ev)
-	}
-
-	return !isWheel
-}
-
 // ConfigEditor is a TexelUI config editor app.
 type ConfigEditor struct {
 	*adapter.UIApp
 	registry      *registry.Registry
 	targets       []*configTarget
 	rootTabs      *widgets.TabLayout
-	rootSwitch    *rootSwitcher
+	activeWidget  core.Widget        // Currently displayed widget (rootTabs or single target.sections)
 	defaultTarget string
 	controlBus    texel.ControlBus
 	autoApply     bool
@@ -404,19 +236,16 @@ func (e *ConfigEditor) appEntries() []appEntry {
 }
 
 func (e *ConfigEditor) buildUI() {
-	ui := e.UI()
 	e.rootTabs = e.buildTabs()
-	e.rootSwitch = newRootSwitcher(e.rootTabs)
-	ui.AddWidget(e.rootSwitch)
 	e.applyRootMode()
 }
 
 func (e *ConfigEditor) Resize(cols, rows int) {
 	e.UIApp.Resize(cols, rows)
-	if e.rootSwitch != nil {
+	if e.activeWidget != nil {
 		contentH := e.UI().ContentHeight()
-		e.rootSwitch.SetPosition(0, 0)
-		e.rootSwitch.Resize(cols, contentH)
+		e.activeWidget.SetPosition(0, 0)
+		e.activeWidget.Resize(cols, contentH)
 	}
 }
 
@@ -427,9 +256,9 @@ func (e *ConfigEditor) buildTabs() *widgets.TabLayout {
 	}
 	tabLayout := widgets.NewTabLayout(0, 0, 1, 1, tabs)
 	for idx, target := range e.targets {
-		panel := e.buildTargetPanel(target)
-		target.panel = panel
-		tabLayout.SetTabContent(idx, panel)
+		target.sections = e.buildSections(target)
+		target.content = newTargetContent(target.label+" Configuration", target.sections)
+		tabLayout.SetTabContent(idx, target.content)
 	}
 	return tabLayout
 }
@@ -447,23 +276,41 @@ func (e *ConfigEditor) selectTarget(name string) {
 }
 
 func (e *ConfigEditor) applyRootMode() {
-	if e.rootSwitch == nil {
+	ui := e.UI()
+
+	// Only add widget on first call (during buildUI)
+	if e.activeWidget != nil {
+		// Already set up, just update focus
+		if e.singleTarget {
+			target := e.targetByName(e.defaultTarget)
+			if target != nil && target.content != nil {
+				ui.Focus(target.content)
+			}
+		} else {
+			e.selectTarget(e.defaultTarget)
+			if e.rootTabs != nil {
+				ui.Focus(e.rootTabs)
+			}
+		}
 		return
 	}
+
 	if e.singleTarget {
 		target := e.targetByName(e.defaultTarget)
-		if target != nil {
-			e.rootSwitch.SetSingleTarget(target.panel, true)
-			if target.sections != nil {
-				e.UI().Focus(target.sections)
-			}
+		if target != nil && target.content != nil {
+			e.activeWidget = target.content
+			ui.AddWidget(e.activeWidget)
+			ui.Focus(target.content)
 			return
 		}
 	}
-	e.rootSwitch.SetSingleTarget(nil, false)
+
+	// Multi-target mode: show root tabs
+	e.activeWidget = e.rootTabs
+	ui.AddWidget(e.activeWidget)
 	e.selectTarget(e.defaultTarget)
 	if e.rootTabs != nil {
-		e.UI().Focus(e.rootTabs)
+		ui.Focus(e.rootTabs)
 	}
 }
 
@@ -477,33 +324,6 @@ func (e *ConfigEditor) targetByName(name string) *configTarget {
 		}
 	}
 	return nil
-}
-
-func (e *ConfigEditor) buildTargetPanel(target *configTarget) *targetPanel {
-	panel := newTargetPanel(target.label+" Configuration", !e.autoApply)
-	if panel.saveBtn != nil {
-		panel.saveBtn.OnClick = func() {
-			if err := e.saveTarget(target); err != nil {
-				e.showError(fmt.Sprintf("Save failed: %v", err))
-			} else {
-				e.showSuccess("Saved.")
-			}
-		}
-	}
-	if panel.resetBtn != nil {
-		panel.resetBtn.OnClick = func() {
-			if err := e.reloadTarget(target); err != nil {
-				e.showError(fmt.Sprintf("Reload failed: %v", err))
-			} else {
-				e.showSuccess("Reloaded.")
-			}
-		}
-	}
-
-	target.sections = e.buildSections(target)
-	panel.SetTabs(target.sections)
-	panel.SetInvalidator(panel.inv)
-	return panel
 }
 
 func (e *ConfigEditor) buildSections(target *configTarget) *widgets.TabLayout {
@@ -1088,151 +908,6 @@ func applyPayload(kind applyKind, target *configTarget) string {
 	return ""
 }
 
-type rootSwitcher struct {
-	core.BaseWidget
-	tabs   *widgets.TabLayout
-	panel  *targetPanel
-	single bool
-	inv    func(core.Rect)
-}
-
-func newRootSwitcher(tabs *widgets.TabLayout) *rootSwitcher {
-	rs := &rootSwitcher{tabs: tabs}
-	rs.SetFocusable(true)
-	return rs
-}
-
-func (r *rootSwitcher) SetSingleTarget(panel *targetPanel, single bool) {
-	r.panel = panel
-	r.single = single
-	r.layout()
-	if r.inv != nil {
-		r.inv(r.Rect)
-	}
-}
-
-func (r *rootSwitcher) SetInvalidator(fn func(core.Rect)) {
-	r.inv = fn
-	if r.tabs != nil {
-		if ia, ok := interface{}(r.tabs).(core.InvalidationAware); ok {
-			ia.SetInvalidator(fn)
-		}
-	}
-	if r.panel != nil {
-		r.panel.SetInvalidator(fn)
-	}
-}
-
-func (r *rootSwitcher) Resize(w, h int) {
-	r.BaseWidget.Resize(w, h)
-	r.layout()
-}
-
-func (r *rootSwitcher) SetPosition(x, y int) {
-	r.BaseWidget.SetPosition(x, y)
-	r.layout()
-}
-
-func (r *rootSwitcher) Draw(p *core.Painter) {
-	if child := r.activeChild(); child != nil {
-		child.Draw(p)
-	}
-}
-
-func (r *rootSwitcher) HandleKey(ev *tcell.EventKey) bool {
-	if child := r.activeChild(); child != nil {
-		return child.HandleKey(ev)
-	}
-	return false
-}
-
-func (r *rootSwitcher) HandleMouse(ev *tcell.EventMouse) bool {
-	if child := r.activeChild(); child != nil {
-		if mh, ok := child.(core.MouseAware); ok {
-			return mh.HandleMouse(ev)
-		}
-	}
-	return false
-}
-
-// Focus delegates to the active child.
-func (r *rootSwitcher) Focus() {
-	r.BaseWidget.Focus()
-	if child := r.activeChild(); child != nil {
-		child.Focus()
-	}
-}
-
-// Blur delegates to the active child.
-func (r *rootSwitcher) Blur() {
-	if child := r.activeChild(); child != nil {
-		child.Blur()
-	}
-	r.BaseWidget.Blur()
-}
-
-// TrapsFocus returns true - rootSwitcher is a root container that traps focus.
-func (r *rootSwitcher) TrapsFocus() bool {
-	return true
-}
-
-// CycleFocus delegates to the active child.
-func (r *rootSwitcher) CycleFocus(forward bool) bool {
-	if child := r.activeChild(); child != nil {
-		if fc, ok := child.(core.FocusCycler); ok {
-			return fc.CycleFocus(forward)
-		}
-	}
-	return false
-}
-
-func (r *rootSwitcher) HitTest(x, y int) bool {
-	if child := r.activeChild(); child != nil {
-		return child.HitTest(x, y)
-	}
-	return false
-}
-
-func (r *rootSwitcher) WidgetAt(x, y int) core.Widget {
-	child := r.activeChild()
-	if child == nil {
-		return nil
-	}
-	if ht, ok := child.(core.HitTester); ok {
-		if w := ht.WidgetAt(x, y); w != nil {
-			return w
-		}
-	}
-	if child.HitTest(x, y) {
-		return child
-	}
-	return nil
-}
-
-func (r *rootSwitcher) VisitChildren(f func(core.Widget)) {
-	if child := r.activeChild(); child != nil {
-		f(child)
-	}
-}
-
-func (r *rootSwitcher) activeChild() core.Widget {
-	if r.single && r.panel != nil {
-		return r.panel
-	}
-	return r.tabs
-}
-
-func (r *rootSwitcher) layout() {
-	if r.tabs != nil {
-		r.tabs.SetPosition(r.Rect.X, r.Rect.Y)
-		r.tabs.Resize(r.Rect.W, r.Rect.H)
-	}
-	if r.panel != nil {
-		r.panel.SetPosition(r.Rect.X, r.Rect.Y)
-		r.panel.Resize(r.Rect.W, r.Rect.H)
-	}
-}
-
 func (e *ConfigEditor) saveTarget(target *configTarget) error {
 	switch target.kind {
 	case targetSystem:
@@ -1285,12 +960,14 @@ func (e *ConfigEditor) reloadTarget(target *configTarget) error {
 		}
 	}
 	target.sections = e.buildSections(target)
-	if target.panel != nil {
-		target.panel.SetTabs(target.sections)
-		target.panel.SetInvalidator(target.panel.inv)
-		target.panel.layout()
-		if target.panel.inv != nil {
-			target.panel.inv(target.panel.Rect)
+	target.content = newTargetContent(target.label+" Configuration", target.sections)
+	// Update the tab content in rootTabs
+	if e.rootTabs != nil {
+		for idx, t := range e.targets {
+			if t == target {
+				e.rootTabs.SetTabContent(idx, target.content)
+				break
+			}
 		}
 	}
 	return nil

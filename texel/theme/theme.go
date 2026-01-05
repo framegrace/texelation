@@ -71,8 +71,6 @@ func GetLoadError() error {
 
 // Reload forces a re-read of the theme file and palette.
 func Reload() error {
-	log.Println("Theme: Reloading configuration...")
-	
 	// Re-create instance to clear old state
 	newInstance := make(Config)
 	if err := newInstance.Load(); err != nil {
