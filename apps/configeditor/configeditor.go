@@ -22,7 +22,6 @@ import (
 	"texelation/texel/theme"
 	"texelation/texelui/adapter"
 	"texelation/texelui/core"
-	"texelation/texelui/primitives"
 	"texelation/texelui/scroll"
 	"texelation/texelui/widgets"
 )
@@ -46,20 +45,20 @@ type configTarget struct {
 	values         config.Config
 	themeValues    config.Config
 	themeOverrides config.Config
-	content        *targetContent    // Wrapper with header label + sections
-	sections       *widgets.TabLayout
+	content        *targetContent   // Wrapper with header label + sections
+	sections       *widgets.TabPanel
 	bindings       []*fieldBinding
 }
 
-// targetContent wraps a header label and sections TabLayout for each target.
+// targetContent wraps a header label and sections TabPanel for each target.
 // Embeds Pane for focus/key/mouse handling, just adds layout on resize.
 type targetContent struct {
 	*widgets.Pane
 	header   *widgets.Label
-	sections *widgets.TabLayout
+	sections *widgets.TabPanel
 }
 
-func newTargetContent(title string, sections *widgets.TabLayout) *targetContent {
+func newTargetContent(title string, sections *widgets.TabPanel) *targetContent {
 	pane := widgets.NewPane(0, 0, 1, 1, tcell.StyleDefault)
 	header := widgets.NewLabel(0, 0, 1, 1, title)
 	pane.AddChild(header)
@@ -118,7 +117,7 @@ type ConfigEditor struct {
 	*adapter.UIApp
 	registry      *registry.Registry
 	targets       []*configTarget
-	rootTabs      *widgets.TabLayout
+	rootTabs      *widgets.TabPanel
 	activeWidget  core.Widget        // Currently displayed widget (rootTabs or single target.sections)
 	defaultTarget string
 	controlBus    texel.ControlBus
@@ -249,18 +248,14 @@ func (e *ConfigEditor) Resize(cols, rows int) {
 	}
 }
 
-func (e *ConfigEditor) buildTabs() *widgets.TabLayout {
-	tabs := make([]primitives.TabItem, 0, len(e.targets))
+func (e *ConfigEditor) buildTabs() *widgets.TabPanel {
+	panel := widgets.NewTabPanel(0, 0, 1, 1)
 	for _, target := range e.targets {
-		tabs = append(tabs, primitives.TabItem{Label: target.label, ID: target.name})
-	}
-	tabLayout := widgets.NewTabLayout(0, 0, 1, 1, tabs)
-	for idx, target := range e.targets {
 		target.sections = e.buildSections(target)
 		target.content = newTargetContent(target.label+" Configuration", target.sections)
-		tabLayout.SetTabContent(idx, target.content)
+		panel.AddTabWithID(target.label, target.name, target.content)
 	}
-	return tabLayout
+	return panel
 }
 
 func (e *ConfigEditor) selectTarget(name string) {
@@ -326,47 +321,40 @@ func (e *ConfigEditor) targetByName(name string) *configTarget {
 	return nil
 }
 
-func (e *ConfigEditor) buildSections(target *configTarget) *widgets.TabLayout {
+func (e *ConfigEditor) buildSections(target *configTarget) *widgets.TabPanel {
 	switch target.kind {
 	case targetSystem:
 		return e.buildSystemSections(target)
 	case targetApp:
 		return e.buildAppSections(target)
 	default:
-		return widgets.NewTabLayout(0, 0, 1, 1, nil)
+		return widgets.NewTabPanel(0, 0, 1, 1)
 	}
 }
 
-func (e *ConfigEditor) buildSystemSections(target *configTarget) *widgets.TabLayout {
-	tabItems := []primitives.TabItem{
-		{Label: "General", ID: "general"},
-		{Label: "Layout Transitions", ID: "layout_transitions"},
-		{Label: "Effects", ID: "effects"},
-		{Label: "Theme", ID: "theme"},
-		{Label: "TexelUI Theme", ID: "texelui_theme"},
-	}
-	tabs := widgets.NewTabLayout(0, 0, 1, 1, tabItems)
+func (e *ConfigEditor) buildSystemSections(target *configTarget) *widgets.TabPanel {
+	panel := widgets.NewTabPanel(0, 0, 1, 1)
 	target.bindings = nil
 
 	generalValues := generalValues(target.values)
-	tabs.SetTabContent(0, e.buildSectionPane(target, target.values, "", generalValues, false, applySystem))
+	panel.AddTab("General", e.buildSectionPane(target, target.values, "", generalValues, false, applySystem))
 
 	layoutValues := sectionValues(target.values, "layout_transitions")
-	tabs.SetTabContent(1, e.buildSectionPane(target, target.values, "layout_transitions", layoutValues, false, applySystem))
+	panel.AddTab("Layout Transitions", e.buildSectionPane(target, target.values, "layout_transitions", layoutValues, false, applySystem))
 
 	effectsValues := sectionValues(target.values, "effects")
-	tabs.SetTabContent(2, e.buildEffectsSection(target, effectsValues))
+	panel.AddTab("Effects", e.buildEffectsSection(target, effectsValues))
 
 	themePane := e.buildGroupedThemePane(target, target.themeValues, systemThemeSections, true)
-	tabs.SetTabContent(3, themePane)
+	panel.AddTab("Theme", themePane)
 
 	uiValues := sectionValues(target.themeValues, "ui")
-	tabs.SetTabContent(4, e.buildSectionPane(target, target.themeValues, "ui", uiValues, true, applyTheme))
+	panel.AddTab("TexelUI Theme", e.buildSectionPane(target, target.themeValues, "ui", uiValues, true, applyTheme))
 
-	return tabs
+	return panel
 }
 
-func (e *ConfigEditor) buildAppSections(target *configTarget) *widgets.TabLayout {
+func (e *ConfigEditor) buildAppSections(target *configTarget) *widgets.TabPanel {
 	sections := splitSections(target.values)
 	delete(sections, "theme_overrides")
 	if len(sections) == 0 {
@@ -378,7 +366,8 @@ func (e *ConfigEditor) buildAppSections(target *configTarget) *widgets.TabLayout
 	}
 	sort.Strings(sectionKeys)
 
-	tabItems := make([]primitives.TabItem, 0, len(sectionKeys)+1)
+	panel := widgets.NewTabPanel(0, 0, 1, 1)
+	target.bindings = nil
 	for _, key := range sectionKeys {
 		label := key
 		if key == "" {
@@ -386,19 +375,12 @@ func (e *ConfigEditor) buildAppSections(target *configTarget) *widgets.TabLayout
 		} else {
 			label = humanLabel(key)
 		}
-		tabItems = append(tabItems, primitives.TabItem{Label: label, ID: key})
-	}
-	tabItems = append(tabItems, primitives.TabItem{Label: "Theme", ID: "theme"})
-
-	tabs := widgets.NewTabLayout(0, 0, 1, 1, tabItems)
-	target.bindings = nil
-	for idx, key := range sectionKeys {
 		pane := e.buildSectionPane(target, target.values, key, sections[key], false, applyApp)
-		tabs.SetTabContent(idx, pane)
+		panel.AddTab(label, pane)
 	}
 	themePane := e.buildAppThemePane(target)
-	tabs.SetTabContent(len(sectionKeys), themePane)
-	return tabs
+	panel.AddTab("Theme", themePane)
+	return panel
 }
 
 func (e *ConfigEditor) buildSectionPane(target *configTarget, cfg config.Config, sectionKey string, values map[string]interface{}, forceColor bool, apply applyKind) core.Widget {
