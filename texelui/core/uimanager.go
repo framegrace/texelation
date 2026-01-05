@@ -46,6 +46,9 @@ type UIManager struct {
 
 	// Focus observers receive notifications when focus changes
 	focusObservers []FocusObserver
+
+	// Root widget that auto-fills the content area (excluding status bar)
+	rootWidget Widget
 }
 
 func NewUIManager() *UIManager {
@@ -240,6 +243,9 @@ func (u *UIManager) Resize(w, h int) {
 		u.statusBar.Resize(w, u.statusBarHeight)
 	}
 
+	// Resize root widget to fill content area
+	u.resizeRootWidgetLocked()
+
 	// Resize framebuffer and invalidate all
 	u.buf = nil
 	u.invalidateAllLocked()
@@ -255,6 +261,78 @@ func (u *UIManager) AddWidget(w Widget) {
 	u.dirtyMu.Lock()
 	u.invalidateAllLocked()
 	u.dirtyMu.Unlock()
+}
+
+// SetRootWidget sets the main content widget that fills the available content area.
+// The widget is automatically resized to fill the content area (excluding status bar).
+// Position is set to (0, 0) and size to (W, ContentHeight).
+// Pass nil to clear the root widget.
+//
+// This eliminates the need for manual resize callbacks in most apps:
+//
+//	Before:
+//	  ui.AddWidget(myWidget)
+//	  app.SetOnResize(func(w, h int) {
+//	      contentH := ui.ContentHeight()
+//	      myWidget.SetPosition(0, 0)
+//	      myWidget.Resize(w, contentH)
+//	  })
+//
+//	After:
+//	  ui.SetRootWidget(myWidget)
+func (u *UIManager) SetRootWidget(w Widget) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	// Remove old root widget from widgets list if present
+	if u.rootWidget != nil {
+		u.removeWidgetLocked(u.rootWidget)
+	}
+
+	u.rootWidget = w
+
+	if w != nil {
+		// Add to widgets list
+		u.widgets = append(u.widgets, w)
+		u.propagateInvalidator(w)
+
+		// Size to fill content area
+		u.resizeRootWidgetLocked()
+
+		// Invalidate
+		u.dirtyMu.Lock()
+		u.invalidateAllLocked()
+		u.dirtyMu.Unlock()
+	}
+}
+
+// RootWidget returns the current root widget, or nil if none.
+func (u *UIManager) RootWidget() Widget {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.rootWidget
+}
+
+// resizeRootWidgetLocked resizes the root widget to fill the content area.
+// Must be called with u.mu held.
+func (u *UIManager) resizeRootWidgetLocked() {
+	if u.rootWidget == nil {
+		return
+	}
+	contentH := u.contentHeightLocked()
+	u.rootWidget.SetPosition(0, 0)
+	u.rootWidget.Resize(u.W, contentH)
+}
+
+// removeWidgetLocked removes a widget from the widgets list.
+// Must be called with u.mu held.
+func (u *UIManager) removeWidgetLocked(target Widget) {
+	for i, w := range u.widgets {
+		if w == target {
+			u.widgets = append(u.widgets[:i], u.widgets[i+1:]...)
+			return
+		}
+	}
 }
 
 func (u *UIManager) propagateInvalidator(w Widget) {
