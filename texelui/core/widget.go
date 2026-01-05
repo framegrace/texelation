@@ -156,3 +156,13 @@ type FocusObserver interface {
 	// The focused parameter may be nil if no widget has focus.
 	OnFocusChanged(focused Widget)
 }
+
+// FocusCycleBlocker is implemented by widgets that may want to prevent
+// automatic focus cycling after Enter even when they handle the key.
+// This is useful for widgets like editable ComboBox that need to validate
+// user input before allowing focus to move to the next widget.
+type FocusCycleBlocker interface {
+	// ShouldBlockFocusCycle returns true if focus cycling should be blocked.
+	// UIManager checks this after a widget handles Enter before cycling focus.
+	ShouldBlockFocusCycle() bool
+}

@@ -380,6 +380,12 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
+	// Find the actual focused widget - Form.CycleFocus may have changed focus
+	// without updating u.focused
+	if actualFocused := u.findDeepestFocusedLocked(); actualFocused != nil {
+		u.focused = actualFocused
+	}
+
 	// Check if focused widget is modal - if so, it gets ALL input (including Tab)
 	if u.focused != nil {
 		if modal, ok := u.focused.(Modal); ok && modal.IsModal() {
@@ -423,12 +429,17 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 			if mw, ok := deepWidget.(MultilineWidget); ok {
 				isMultiline = mw.IsMultiline()
 			}
-			// Check if widget is modal-capable (uses Enter to commit/close)
-			isModalCapable := false
-			if _, ok := deepWidget.(Modal); ok {
-				isModalCapable = true
+			// Check if widget is currently in modal state (uses Enter to commit/close)
+			isModalActive := false
+			if modal, ok := deepWidget.(Modal); ok && modal.IsModal() {
+				isModalActive = true
 			}
-			if !isMultiline && !isModalCapable {
+			// Check if widget wants to block focus cycling (e.g., invalid input)
+			shouldBlock := false
+			if blocker, ok := deepWidget.(FocusCycleBlocker); ok {
+				shouldBlock = blocker.ShouldBlockFocusCycle()
+			}
+			if !isMultiline && !isModalActive && !shouldBlock {
 				if u.cycleFocusLocked(true) {
 					u.dirtyMu.Lock()
 					u.invalidateAllLocked()
@@ -479,6 +490,39 @@ func (u *UIManager) cycleFocusLocked(forward bool) bool {
 
 	// No container handled it - try cycling among root widgets
 	return u.cycleRootWidgetsLocked(forward)
+}
+
+// findDeepestFocusedLocked searches the widget tree for the deepest focused widget.
+// This handles cases where Form.CycleFocus changes focus without updating UIManager.
+func (u *UIManager) findDeepestFocusedLocked() Widget {
+	for _, w := range u.widgets {
+		if found := u.findFocusedInTreeLocked(w); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// findFocusedInTreeLocked recursively finds the deepest focused widget in tree.
+func (u *UIManager) findFocusedInTreeLocked(w Widget) Widget {
+	// First check children for deeper focused widget
+	if cc, ok := w.(ChildContainer); ok {
+		var found Widget
+		cc.VisitChildren(func(child Widget) {
+			if found != nil {
+				return
+			}
+			found = u.findFocusedInTreeLocked(child)
+		})
+		if found != nil {
+			return found
+		}
+	}
+	// No focused child, check if this widget is focused
+	if fs, ok := w.(FocusState); ok && fs.IsFocused() {
+		return w
+	}
+	return nil
 }
 
 // containsWidgetLocked checks if container w contains widget target.
@@ -545,12 +589,20 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 	prevIsDown := u.capture != nil
 	nowDown := buttons&tcell.Button1 != 0
 
-	// Check if focused widget is modal - dismiss on click outside
+	// Check if focused widget is modal - dismiss on click outside, route to modal on click inside
 	if u.focused != nil && nowDown && !prevIsDown {
 		if modal, ok := u.focused.(Modal); ok && modal.IsModal() {
 			// Check if click is outside the modal widget
 			if !u.focused.HitTest(x, y) {
 				modal.DismissModal()
+				u.dirtyMu.Lock()
+				u.invalidateAllLocked()
+				u.dirtyMu.Unlock()
+				return true
+			}
+			// Click is inside modal - route directly to the modal widget
+			if mw, ok := u.focused.(MouseAware); ok {
+				mw.HandleMouse(ev)
 				u.dirtyMu.Lock()
 				u.invalidateAllLocked()
 				u.dirtyMu.Unlock()

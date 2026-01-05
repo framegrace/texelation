@@ -39,15 +39,16 @@ type ScrollableList struct {
 	ShowScrollIndicators bool
 
 	// Internal state
-	scrollOffset    int
-	scrollState     scroll.State
-	indicatorConfig scroll.IndicatorConfig
-	inv             func(core.Rect)
+	scrollPane *scroll.ScrollPane
+	content    *listContent
+	inv        func(core.Rect)
+}
 
-	// Scrollbar mouse interaction state
-	draggingThumb   bool // True when thumb is being dragged
-	dragStartY      int  // Y position where drag started
-	dragStartOffset int  // Scroll offset when drag started
+// listContent is the internal widget that renders list items.
+// It's wrapped by ScrollPane for scrolling support.
+type listContent struct {
+	core.BaseWidget
+	parent *ScrollableList
 }
 
 // NewScrollableList creates a new scrollable list at the specified position and size.
@@ -56,8 +57,14 @@ func NewScrollableList(x, y, w, h int) *ScrollableList {
 		Items:                []ListItem{},
 		SelectedIdx:          0,
 		ShowScrollIndicators: true,
-		scrollOffset:         0,
 	}
+
+	// Create internal content widget
+	sl.content = &listContent{parent: sl}
+
+	// Create scroll pane wrapping the content
+	sl.scrollPane = scroll.NewScrollPane()
+	sl.scrollPane.SetChild(sl.content)
 
 	sl.SetPosition(x, y)
 	sl.Resize(w, h)
@@ -69,21 +76,13 @@ func NewScrollableList(x, y, w, h int) *ScrollableList {
 	bg := tm.GetSemanticColor("bg.surface")
 	sl.SetFocusedStyle(tcell.StyleDefault.Foreground(fg).Background(bg), true)
 
-	// Set up scrollbar with text.primary color for thumb
-	thumbStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
-	trackFg := tm.GetSemanticColor("text.muted")
-	if trackFg == tcell.ColorDefault {
-		trackFg = fg
-	}
-	trackStyle := tcell.StyleDefault.Foreground(trackFg).Background(bg)
-	sl.indicatorConfig = scroll.DefaultIndicatorConfigWithScrollbar(thumbStyle, trackStyle)
-
 	return sl
 }
 
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
 func (sl *ScrollableList) SetInvalidator(fn func(core.Rect)) {
 	sl.inv = fn
+	sl.scrollPane.SetInvalidator(fn)
 }
 
 // SetItems replaces the list items.
@@ -96,6 +95,8 @@ func (sl *ScrollableList) SetItems(items []ListItem) {
 	if sl.SelectedIdx < 0 {
 		sl.SelectedIdx = 0
 	}
+	// Update scroll pane content height
+	sl.updateScrollPaneContentHeight()
 	sl.ensureSelectedVisible()
 	sl.invalidate()
 }
@@ -128,76 +129,122 @@ func (sl *ScrollableList) SelectedItem() *ListItem {
 func (sl *ScrollableList) Clear() {
 	sl.Items = []ListItem{}
 	sl.SelectedIdx = 0
-	sl.scrollOffset = 0
+	sl.updateScrollPaneContentHeight()
 	sl.invalidate()
 }
 
-// ensureSelectedVisible adjusts scroll offset to keep selected item visible.
-// Centers the selected item when possible.
-func (sl *ScrollableList) ensureSelectedVisible() {
-	if len(sl.Items) == 0 || sl.Rect.H <= 0 {
-		sl.scrollOffset = 0
-		sl.scrollState = scroll.NewState(0, sl.Rect.H)
-		return
-	}
-
-	viewportH := sl.Rect.H
-
-	// Center selected item in viewport
-	targetOffset := sl.SelectedIdx - viewportH/2
-	if targetOffset < 0 {
-		targetOffset = 0
-	}
-
-	maxOffset := len(sl.Items) - viewportH
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if targetOffset > maxOffset {
-		targetOffset = maxOffset
-	}
-
-	sl.scrollOffset = targetOffset
-	sl.scrollState = scroll.State{
-		ContentHeight:  len(sl.Items),
-		ViewportHeight: viewportH,
-		Offset:         targetOffset,
-	}
+// Resize updates the list size and recalculates layout.
+func (sl *ScrollableList) Resize(w, h int) {
+	sl.BaseWidget.Resize(w, h)
+	sl.scrollPane.SetPosition(sl.Rect.X, sl.Rect.Y)
+	sl.scrollPane.Resize(w, h)
+	// Update content size
+	sl.content.Resize(w, len(sl.Items))
+	sl.updateScrollPaneContentHeight()
 }
 
-// Draw renders the scrollable list.
+// SetPosition updates the list position.
+func (sl *ScrollableList) SetPosition(x, y int) {
+	sl.BaseWidget.SetPosition(x, y)
+	sl.scrollPane.SetPosition(x, y)
+}
+
+// updateScrollPaneContentHeight updates the scroll pane's content height.
+func (sl *ScrollableList) updateScrollPaneContentHeight() {
+	sl.scrollPane.SetContentHeight(len(sl.Items))
+}
+
+// ensureSelectedVisible scrolls to make the selected item visible.
+func (sl *ScrollableList) ensureSelectedVisible() {
+	if len(sl.Items) == 0 {
+		return
+	}
+	// Center the selected item in the viewport
+	sl.scrollPane.ScrollToCentered(sl.SelectedIdx)
+}
+
+// Draw renders the scrollable list via the scroll pane.
 func (sl *ScrollableList) Draw(painter *core.Painter) {
+	// Ensure content size matches items count
+	sl.content.Resize(sl.Rect.W, len(sl.Items))
+	sl.scrollPane.ShowIndicators(sl.ShowScrollIndicators)
+	sl.scrollPane.Draw(painter)
+}
+
+// ContentHeight implements scroll.ContentHeightProvider for listContent.
+func (lc *listContent) ContentHeight() int {
+	return len(lc.parent.Items)
+}
+
+// HandlePageNavigation implements scroll.PageNavigator for selection-based page navigation.
+// This moves the selected item by a page-worth of items rather than just scrolling the viewport.
+func (lc *listContent) HandlePageNavigation(direction int, pageSize int) bool {
+	sl := lc.parent
+	if len(sl.Items) == 0 {
+		return false
+	}
+
+	if pageSize < 1 {
+		pageSize = 1
+	}
+
+	// Calculate target index
+	targetIdx := sl.SelectedIdx + (direction * pageSize)
+
+	// Clamp to valid range
+	if targetIdx < 0 {
+		targetIdx = 0
+	}
+	if targetIdx >= len(sl.Items) {
+		targetIdx = len(sl.Items) - 1
+	}
+
+	// Only act if we're actually moving
+	if targetIdx == sl.SelectedIdx {
+		return false
+	}
+
+	sl.SetSelected(targetIdx)
+	return true
+}
+
+// Draw renders the list items.
+func (lc *listContent) Draw(painter *core.Painter) {
+	sl := lc.parent
 	tm := theme.Get()
 	fg := tm.GetSemanticColor("text.primary")
 	bg := tm.GetSemanticColor("bg.surface")
 	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
 
-	// Fill background
-	painter.Fill(sl.Rect, ' ', baseStyle)
-
 	if len(sl.Items) == 0 {
 		return
 	}
 
-	viewportH := sl.Rect.H
-
-	// Ensure scroll state is up to date
-	sl.scrollState = scroll.State{
-		ContentHeight:  len(sl.Items),
-		ViewportHeight: viewportH,
-		Offset:         sl.scrollOffset,
-	}
+	// Get scroll offset from parent's scroll pane
+	scrollOffset := sl.scrollPane.ScrollOffset()
 
 	// Calculate content width (leave room for scrollbar if needed)
 	contentW := sl.Rect.W
-	if sl.ShowScrollIndicators && sl.scrollState.CanScroll() {
+	if sl.ShowScrollIndicators && sl.scrollPane.CanScroll() {
 		contentW-- // Reserve 1 column for scrollbar
 	}
 
-	// Draw visible items
-	y := sl.Rect.Y
-	for i := sl.scrollOffset; i < len(sl.Items) && y < sl.Rect.Y+viewportH; i++ {
-		item := sl.Items[i]
+	// Draw items, accounting for scroll offset
+	// Note: Use sl.Rect (parent's rect) for screen positions since ScrollPane
+	// manages clipping. lc.Rect is adjusted by ScrollPane during Draw which
+	// we don't want to use here.
+	for i, item := range sl.Items {
+		// Skip items above viewport
+		if i < scrollOffset {
+			continue
+		}
+		// Stop if below viewport
+		if i >= scrollOffset+sl.Rect.H {
+			break
+		}
+
+		// Calculate screen position relative to parent's viewport
+		y := sl.Rect.Y + (i - scrollOffset)
 		selected := i == sl.SelectedIdx
 
 		itemRect := core.Rect{
@@ -212,20 +259,13 @@ func (sl *ScrollableList) Draw(painter *core.Painter) {
 			sl.RenderItem(painter, itemRect, item, selected)
 		} else {
 			// Default rendering
-			sl.drawDefaultItem(painter, itemRect, item, selected, baseStyle)
+			lc.drawDefaultItem(painter, itemRect, item, selected, baseStyle)
 		}
-
-		y++
-	}
-
-	// Draw scroll indicators if enabled
-	if sl.ShowScrollIndicators {
-		scroll.DrawIndicators(painter, sl.Rect, sl.scrollState, sl.indicatorConfig)
 	}
 }
 
 // drawDefaultItem renders a list item with default styling.
-func (sl *ScrollableList) drawDefaultItem(painter *core.Painter, rect core.Rect, item ListItem, selected bool, baseStyle tcell.Style) {
+func (lc *listContent) drawDefaultItem(painter *core.Painter, rect core.Rect, item ListItem, selected bool, baseStyle tcell.Style) {
 	style := baseStyle
 	if selected {
 		style = style.Reverse(true)
@@ -243,7 +283,6 @@ func (sl *ScrollableList) drawDefaultItem(painter *core.Painter, rect core.Rect,
 
 	painter.DrawText(rect.X, rect.Y, text, style)
 }
-
 
 // HandleKey processes keyboard input for list navigation.
 func (sl *ScrollableList) HandleKey(ev *tcell.EventKey) bool {
@@ -281,35 +320,10 @@ func (sl *ScrollableList) HandleKey(ev *tcell.EventKey) bool {
 		}
 		return false
 
-	case tcell.KeyPgUp:
-		pageSize := sl.Rect.H
-		if pageSize < 1 {
-			pageSize = 1
-		}
-		newIdx := sl.SelectedIdx - pageSize
-		if newIdx < 0 {
-			newIdx = 0
-		}
-		if newIdx != sl.SelectedIdx {
-			sl.SetSelected(newIdx)
-			return true
-		}
-		return false
-
-	case tcell.KeyPgDn:
-		pageSize := sl.Rect.H
-		if pageSize < 1 {
-			pageSize = 1
-		}
-		newIdx := sl.SelectedIdx + pageSize
-		if newIdx >= len(sl.Items) {
-			newIdx = len(sl.Items) - 1
-		}
-		if newIdx != sl.SelectedIdx {
-			sl.SetSelected(newIdx)
-			return true
-		}
-		return false
+	case tcell.KeyPgUp, tcell.KeyPgDn:
+		// Let scroll pane handle page up/down - it will delegate to our
+		// listContent.HandlePageNavigation for selection-based navigation
+		return sl.scrollPane.HandleKey(ev)
 	}
 
 	return false
@@ -320,19 +334,7 @@ func (sl *ScrollableList) HandleMouse(ev *tcell.EventMouse) bool {
 	x, y := ev.Position()
 	buttons := ev.Buttons()
 
-	// Handle drag release
-	if sl.draggingThumb && buttons&tcell.Button1 == 0 {
-		sl.draggingThumb = false
-		return true
-	}
-
-	// Handle ongoing thumb drag
-	if sl.draggingThumb && buttons&tcell.Button1 != 0 {
-		sl.handleThumbDrag(y)
-		return true
-	}
-
-	if len(sl.Items) == 0 {
+	if len(sl.Items) == 0 && buttons&(tcell.WheelUp|tcell.WheelDown) == 0 {
 		return false
 	}
 
@@ -340,7 +342,7 @@ func (sl *ScrollableList) HandleMouse(ev *tcell.EventMouse) bool {
 		return false
 	}
 
-	// Handle scroll wheel
+	// Handle scroll wheel - moves selection, not viewport
 	if buttons&tcell.WheelUp != 0 {
 		if sl.SelectedIdx > 0 {
 			sl.SetSelected(sl.SelectedIdx - 1)
@@ -354,50 +356,16 @@ func (sl *ScrollableList) HandleMouse(ev *tcell.EventMouse) bool {
 		return true
 	}
 
-	// Check if click is on scrollbar
-	if sl.ShowScrollIndicators && sl.scrollState.CanScroll() && buttons&tcell.Button1 != 0 {
-		scrollbarX, thumbStart, thumbEnd, trackHeight := sl.scrollbarGeometry()
-		if scrollbarX >= 0 && x == scrollbarX {
-			relY := y - sl.Rect.Y
-
-			// Up arrow (row 0)
-			if relY == 0 {
-				sl.scrollBy(-1)
-				return true
-			}
-
-			// Down arrow (last row)
-			if relY == sl.Rect.H-1 {
-				sl.scrollBy(1)
-				return true
-			}
-
-			// Track area (between arrows)
-			trackY := relY - 1
-			if trackY >= 0 && trackY < trackHeight {
-				if trackY < thumbStart {
-					// Click above thumb - page up
-					sl.scrollBy(-sl.Rect.H)
-					return true
-				} else if trackY >= thumbEnd {
-					// Click below thumb - page down
-					sl.scrollBy(sl.Rect.H)
-					return true
-				} else {
-					// Click on thumb - start drag
-					sl.draggingThumb = true
-					sl.dragStartY = y
-					sl.dragStartOffset = sl.scrollOffset
-					return true
-				}
-			}
-		}
+	// Let scroll pane handle scrollbar interactions
+	if sl.scrollPane.HandleMouse(ev) {
+		return true
 	}
 
 	// Handle click on list item
 	if buttons == tcell.Button1 {
+		scrollOffset := sl.scrollPane.ScrollOffset()
 		relY := y - sl.Rect.Y
-		clickedIdx := sl.scrollOffset + relY
+		clickedIdx := scrollOffset + relY
 
 		if clickedIdx >= 0 && clickedIdx < len(sl.Items) {
 			if clickedIdx != sl.SelectedIdx {
@@ -408,128 +376,6 @@ func (sl *ScrollableList) HandleMouse(ev *tcell.EventMouse) bool {
 	}
 
 	return false
-}
-
-// scrollbarGeometry returns the scrollbar's X position and thumb start/end rows.
-// Returns scrollbarX, thumbStart, thumbEnd, trackHeight.
-func (sl *ScrollableList) scrollbarGeometry() (scrollbarX, thumbStart, thumbEnd, trackHeight int) {
-	rect := sl.Rect
-	if rect.H < 3 || !sl.scrollState.CanScroll() {
-		return -1, 0, 0, 0
-	}
-
-	// Scrollbar X position (right edge)
-	scrollbarX = rect.X + rect.W - 1
-
-	// Track is between arrows (row 1 to H-2)
-	trackHeight = rect.H - 2
-	if trackHeight <= 0 {
-		return scrollbarX, 0, 0, 0
-	}
-
-	// Calculate thumb size
-	thumbSize := (sl.scrollState.ViewportHeight * trackHeight) / sl.scrollState.ContentHeight
-	minThumb := sl.indicatorConfig.Scrollbar.MinThumbSize
-	if minThumb <= 0 {
-		minThumb = 1
-	}
-	if thumbSize < minThumb {
-		thumbSize = minThumb
-	}
-	if thumbSize > trackHeight {
-		thumbSize = trackHeight
-	}
-
-	// Calculate thumb position
-	scrollableContent := sl.scrollState.ContentHeight - sl.scrollState.ViewportHeight
-	scrollableTrack := trackHeight - thumbSize
-
-	thumbStart = 0
-	if scrollableContent > 0 && scrollableTrack > 0 {
-		thumbStart = (sl.scrollState.Offset * scrollableTrack) / scrollableContent
-	}
-	if thumbStart < 0 {
-		thumbStart = 0
-	}
-	if thumbStart > scrollableTrack {
-		thumbStart = scrollableTrack
-	}
-	thumbEnd = thumbStart + thumbSize
-
-	return scrollbarX, thumbStart, thumbEnd, trackHeight
-}
-
-// handleThumbDrag updates scroll position based on thumb drag.
-func (sl *ScrollableList) handleThumbDrag(currentY int) {
-	if !sl.scrollState.CanScroll() {
-		return
-	}
-
-	deltaY := currentY - sl.dragStartY
-	trackHeight := sl.Rect.H - 2
-	if trackHeight <= 0 {
-		return
-	}
-
-	// Calculate thumb size
-	thumbSize := (sl.scrollState.ViewportHeight * trackHeight) / sl.scrollState.ContentHeight
-	minThumb := sl.indicatorConfig.Scrollbar.MinThumbSize
-	if minThumb <= 0 {
-		minThumb = 1
-	}
-	if thumbSize < minThumb {
-		thumbSize = minThumb
-	}
-	if thumbSize > trackHeight {
-		thumbSize = trackHeight
-	}
-
-	scrollableTrack := trackHeight - thumbSize
-	scrollableContent := sl.scrollState.ContentHeight - sl.scrollState.ViewportHeight
-
-	if scrollableTrack <= 0 || scrollableContent <= 0 {
-		return
-	}
-
-	// Convert mouse delta to content offset delta
-	deltaOffset := (deltaY * scrollableContent) / scrollableTrack
-	newOffset := sl.dragStartOffset + deltaOffset
-
-	// Clamp to valid range
-	if newOffset < 0 {
-		newOffset = 0
-	}
-	if newOffset > scrollableContent {
-		newOffset = scrollableContent
-	}
-
-	if newOffset != sl.scrollOffset {
-		sl.scrollOffset = newOffset
-		sl.scrollState = sl.scrollState.WithOffset(newOffset)
-		sl.invalidate()
-	}
-}
-
-// scrollBy scrolls by delta items (positive = down, negative = up).
-func (sl *ScrollableList) scrollBy(delta int) {
-	maxOffset := len(sl.Items) - sl.Rect.H
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-
-	newOffset := sl.scrollOffset + delta
-	if newOffset < 0 {
-		newOffset = 0
-	}
-	if newOffset > maxOffset {
-		newOffset = maxOffset
-	}
-
-	if newOffset != sl.scrollOffset {
-		sl.scrollOffset = newOffset
-		sl.scrollState = sl.scrollState.WithOffset(newOffset)
-		sl.invalidate()
-	}
 }
 
 // invalidate marks the widget as needing redraw.

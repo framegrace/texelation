@@ -383,7 +383,7 @@ func (e *ConfigEditor) buildAppSections(target *configTarget) *widgets.TabPanel 
 }
 
 func (e *ConfigEditor) buildSectionPane(target *configTarget, cfg config.Config, sectionKey string, values map[string]interface{}, forceColor bool, apply applyKind) core.Widget {
-	pane := newFormPane(0, 0, 1, 1)
+	pane := widgets.NewForm()
 	if values == nil {
 		values = make(map[string]interface{})
 	}
@@ -401,7 +401,7 @@ func (e *ConfigEditor) buildSectionPane(target *configTarget, cfg config.Config,
 	return wrapInScrollPane(pane)
 }
 
-func (e *ConfigEditor) buildField(cfg config.Config, target *configTarget, sectionKey, key string, value interface{}, pane *formPane, forceColor bool, apply applyKind) *fieldBinding {
+func (e *ConfigEditor) buildField(cfg config.Config, target *configTarget, sectionKey, key string, value interface{}, pane *widgets.Form, forceColor bool, apply applyKind) *fieldBinding {
 	fb := NewFieldBuilder(target, cfg, func(kind applyKind) {
 		e.applyTargetConfig(target, kind)
 	})
@@ -422,7 +422,7 @@ type effectBinding struct {
 }
 
 func (e *ConfigEditor) buildEffectsSection(target *configTarget, values map[string]interface{}) core.Widget {
-	pane := newFormPane(0, 0, 1, 1)
+	pane := widgets.NewForm()
 	rawBindings := values["bindings"]
 	bindings := parseEffectBindings(rawBindings)
 
@@ -462,7 +462,7 @@ func (e *ConfigEditor) buildEffectsSection(target *configTarget, values map[stri
 			e.applyTargetConfig(target, applySystem)
 		}
 
-		pane.AddRow(formRow{label: label, field: combo, height: 1})
+		pane.AddRow(widgets.FormRow{Label: label, Field: combo, Height: 1})
 	}
 	return wrapInScrollPane(pane)
 }
@@ -531,7 +531,7 @@ func (e *ConfigEditor) emitApply(kind applyKind, target *configTarget) {
 }
 
 func (e *ConfigEditor) buildGroupedThemePane(target *configTarget, cfg config.Config, sections []string, forceColor bool) core.Widget {
-	pane := newFormPane(0, 0, 1, 1)
+	pane := widgets.NewForm()
 	if cfg == nil {
 		cfg = make(config.Config)
 	}
@@ -542,10 +542,10 @@ func (e *ConfigEditor) buildGroupedThemePane(target *configTarget, cfg config.Co
 			continue
 		}
 		if !first {
-			pane.AddRow(formRow{height: 1})
+			pane.AddSpacer(1)
 		}
 		header := newSectionHeader(humanLabel(sectionKey))
-		pane.AddRow(formRow{field: header, height: 1, fullWidth: true})
+		pane.AddFullWidthField(header, 1)
 		keys := keysSorted(values)
 		for _, key := range keys {
 			value := values[key]
@@ -560,7 +560,7 @@ func (e *ConfigEditor) buildGroupedThemePane(target *configTarget, cfg config.Co
 }
 
 func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
-	pane := newFormPane(0, 0, 1, 1)
+	pane := widgets.NewForm()
 	base := ensureConfig(cloneThemeConfig())
 	effective := mergeThemeConfig(base, target.themeOverrides)
 	fields := appThemeFields(target.name)
@@ -569,7 +569,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 		fields = overrideThemeFields(target.themeOverrides)
 	}
 	if len(fields) == 0 {
-		pane.AddRow(formRow{field: widgets.NewLabel("No theme settings for this app."), height: 1, fullWidth: true})
+		pane.AddFullWidthField(widgets.NewLabel("No theme settings for this app."), 1)
 		return wrapInScrollPane(pane)
 	}
 
@@ -585,10 +585,10 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 			continue
 		}
 		if !first {
-			pane.AddRow(formRow{height: 1})
+			pane.AddSpacer(1)
 		}
 		header := newSectionHeader(humanLabel(sectionKey))
-		pane.AddRow(formRow{field: header, height: 1, fullWidth: true})
+		pane.AddFullWidthField(header, 1)
 		sort.Strings(keys)
 		for _, key := range keys {
 			rawValue, ok := themeValue(effective, sectionKey, key)
@@ -616,7 +616,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 				syncThemeOverrides(target)
 				e.applyTargetConfig(target, applyAppTheme)
 			}
-			pane.AddRow(formRow{label: widgets.NewLabel(label), field: colorPicker, height: 1})
+			pane.AddField(label, colorPicker)
 		}
 		first = false
 	}
@@ -1064,8 +1064,8 @@ func maxInt(a, b int) int {
 	return b
 }
 
-// wrapInScrollPane wraps a formPane in a ScrollPane for scrollable content.
-func wrapInScrollPane(pane *formPane) *scrollableForm {
+// wrapInScrollPane wraps a Form in a ScrollPane for scrollable content.
+func wrapInScrollPane(pane *widgets.Form) *scrollableForm {
 	contentH := pane.ContentHeight()
 	pane.Resize(80, contentH) // Initial reasonable width, will be updated on resize
 
@@ -1079,7 +1079,7 @@ func wrapInScrollPane(pane *formPane) *scrollableForm {
 // scrollableForm wraps ScrollPane to resize child width on resize.
 type scrollableForm struct {
 	*scroll.ScrollPane
-	form *formPane
+	form *widgets.Form
 }
 
 func (sf *scrollableForm) Resize(w, h int) {

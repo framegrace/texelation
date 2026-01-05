@@ -23,9 +23,11 @@ const (
 
 // boxChild holds a child widget with its size hint.
 type boxChild struct {
-	widget core.Widget
-	size   int  // Fixed size (0 = use widget's natural size, -1 = flex)
-	flex   bool // If true, this child expands to fill remaining space
+	widget   core.Widget
+	size     int  // Fixed size (0 = use widget's natural size, -1 = flex)
+	flex     bool // If true, this child expands to fill remaining space
+	naturalW int  // Widget's natural width (captured at add time)
+	naturalH int  // Widget's natural height (captured at add time)
 }
 
 // boxBase is the common implementation for VBox and HBox.
@@ -61,7 +63,8 @@ func newBoxBase(vertical bool) *boxBase {
 
 // AddChild adds a child widget with its natural size.
 func (b *boxBase) AddChild(w core.Widget) {
-	b.children = append(b.children, boxChild{widget: w, size: 0})
+	nw, nh := w.Size() // Capture natural size before layout modifies it
+	b.children = append(b.children, boxChild{widget: w, size: 0, naturalW: nw, naturalH: nh})
 	b.layout()
 	if b.inv != nil {
 		if ia, ok := w.(core.InvalidationAware); ok {
@@ -72,7 +75,8 @@ func (b *boxBase) AddChild(w core.Widget) {
 
 // AddChildWithSize adds a child widget with a fixed size.
 func (b *boxBase) AddChildWithSize(w core.Widget, size int) {
-	b.children = append(b.children, boxChild{widget: w, size: size})
+	nw, nh := w.Size() // Capture natural size before layout modifies it
+	b.children = append(b.children, boxChild{widget: w, size: size, naturalW: nw, naturalH: nh})
 	b.layout()
 	if b.inv != nil {
 		if ia, ok := w.(core.InvalidationAware); ok {
@@ -83,7 +87,8 @@ func (b *boxBase) AddChildWithSize(w core.Widget, size int) {
 
 // AddFlexChild adds a child widget that expands to fill remaining space.
 func (b *boxBase) AddFlexChild(w core.Widget) {
-	b.children = append(b.children, boxChild{widget: w, flex: true})
+	nw, nh := w.Size() // Capture natural size before layout modifies it
+	b.children = append(b.children, boxChild{widget: w, flex: true, naturalW: nw, naturalH: nh})
 	b.layout()
 	if b.inv != nil {
 		if ia, ok := w.(core.InvalidationAware); ok {
@@ -145,13 +150,11 @@ func (b *boxBase) layout() {
 		} else if child.size > 0 {
 			totalFixed += child.size
 		} else {
-			// Use natural size
+			// Use stored natural size (not current widget size which may have been modified)
 			if b.vertical {
-				_, h := child.widget.Size()
-				totalFixed += h
+				totalFixed += child.naturalH
 			} else {
-				w, _ := child.widget.Size()
-				totalFixed += w
+				totalFixed += child.naturalW
 			}
 		}
 	}
@@ -190,10 +193,11 @@ func (b *boxBase) layout() {
 		} else if child.size > 0 {
 			size = child.size
 		} else {
+			// Use stored natural size
 			if b.vertical {
-				_, size = child.widget.Size()
+				size = child.naturalH
 			} else {
-				size, _ = child.widget.Size()
+				size = child.naturalW
 			}
 		}
 
@@ -388,6 +392,60 @@ func (b *boxBase) invalidate() {
 	if b.inv != nil {
 		b.inv(b.Rect)
 	}
+}
+
+// Size returns the natural size of the box based on children.
+// For VBox: width = max child width, height = sum of child heights + spacing.
+// For HBox: width = sum of child widths + spacing, height = max child height.
+// Uses stored natural sizes captured when children were added.
+func (b *boxBase) Size() (int, int) {
+	if len(b.children) == 0 {
+		return b.Rect.W, b.Rect.H
+	}
+
+	var totalMain, maxCross int
+	nonFlexCount := 0
+
+	for _, child := range b.children {
+		var childMain, childCross int
+
+		if child.flex {
+			// Flex children have no natural size in main direction
+			// Skip them for natural size calculation
+			continue
+		} else if child.size > 0 {
+			// Fixed size specified
+			childMain = child.size
+			if b.vertical {
+				childCross = child.naturalW
+			} else {
+				childCross = child.naturalH
+			}
+		} else {
+			// Use child's natural size (stored at add time)
+			if b.vertical {
+				childMain = child.naturalH
+				childCross = child.naturalW
+			} else {
+				childMain = child.naturalW
+				childCross = child.naturalH
+			}
+		}
+
+		totalMain += childMain
+		if nonFlexCount > 0 {
+			totalMain += b.Spacing
+		}
+		nonFlexCount++
+		if childCross > maxCross {
+			maxCross = childCross
+		}
+	}
+
+	if b.vertical {
+		return maxCross, totalMain
+	}
+	return totalMain, maxCross
 }
 
 // VBox is a vertical box container that stacks children from top to bottom.

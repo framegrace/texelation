@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
+	"texelation/texel"
+	"texelation/texelui/core"
 )
 
 func TestScrollableList_NewScrollableList(t *testing.T) {
@@ -332,5 +334,210 @@ func TestScrollableList_ScrollOffset(t *testing.T) {
 	// but we can verify behavior through selection and rendering
 	if sl.SelectedIdx != 5 {
 		t.Errorf("expected selection 5, got %d", sl.SelectedIdx)
+	}
+}
+
+// TestScrollableList_ComboBoxPattern simulates how ComboBox uses ScrollableList:
+// It calls Resize before each Draw, which could cause scroll state issues.
+func TestScrollableList_ComboBoxPattern(t *testing.T) {
+	sl := NewScrollableList(0, 0, 20, 8)
+
+	// Create 50 items (like a countries list)
+	items := make([]ListItem, 50)
+	for i := range items {
+		items[i] = ListItem{Text: string(rune('A'+i/26)) + string(rune('a'+i%26))}
+	}
+	sl.SetItems(items)
+
+	// Simulate ComboBox pattern: resize before each "draw"
+	simulateDraw := func() {
+		sl.SetPosition(1, 2)
+		sl.Resize(18, 8)
+	}
+
+	simulateDraw()
+
+	// Navigate down through all items
+	downKey := tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)
+	for i := 0; i < 49; i++ {
+		simulateDraw()
+		handled := sl.HandleKey(downKey)
+		if !handled {
+			t.Errorf("Down at idx %d was not handled", i)
+		}
+		if sl.SelectedIdx != i+1 {
+			t.Errorf("After down from %d, expected idx %d, got %d", i, i+1, sl.SelectedIdx)
+		}
+
+		// Check scroll offset is valid
+		offset := sl.scrollPane.ScrollOffset()
+		contentHeight := len(sl.Items)
+		viewportHeight := sl.Rect.H
+		maxOffset := contentHeight - viewportHeight
+		if maxOffset < 0 {
+			maxOffset = 0
+		}
+		if offset < 0 || offset > maxOffset {
+			t.Errorf("Invalid scroll offset %d at idx %d (max %d)", offset, sl.SelectedIdx, maxOffset)
+		}
+
+		// Check selected item is visible
+		if sl.SelectedIdx < offset || sl.SelectedIdx >= offset+viewportHeight {
+			t.Errorf("Selected item %d not visible with offset %d, viewport %d",
+				sl.SelectedIdx, offset, viewportHeight)
+		}
+	}
+
+	// Now navigate back up
+	upKey := tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone)
+	for i := 49; i > 0; i-- {
+		simulateDraw()
+		handled := sl.HandleKey(upKey)
+		if !handled {
+			t.Errorf("Up at idx %d was not handled", i)
+		}
+		if sl.SelectedIdx != i-1 {
+			t.Errorf("After up from %d, expected idx %d, got %d", i, i-1, sl.SelectedIdx)
+		}
+
+		// Check scroll offset is valid
+		offset := sl.scrollPane.ScrollOffset()
+		contentHeight := len(sl.Items)
+		viewportHeight := sl.Rect.H
+		maxOffset := contentHeight - viewportHeight
+		if maxOffset < 0 {
+			maxOffset = 0
+		}
+		if offset < 0 || offset > maxOffset {
+			t.Errorf("Invalid scroll offset %d at idx %d (max %d)", offset, sl.SelectedIdx, maxOffset)
+		}
+	}
+}
+
+// TestScrollableList_RenderPositions verifies items are rendered at correct screen positions
+func TestScrollableList_RenderPositions(t *testing.T) {
+	sl := NewScrollableList(5, 10, 20, 4) // Position at (5, 10), viewport 4 rows
+
+	items := make([]ListItem, 10)
+	for i := range items {
+		items[i] = ListItem{Text: string(rune('A' + i))}
+	}
+	sl.SetItems(items)
+
+	// Track what gets drawn
+	type drawnItem struct {
+		x, y int
+		text string
+	}
+	var drawn []drawnItem
+
+	// Set custom renderer to track positions
+	sl.RenderItem = func(p *core.Painter, rect core.Rect, item ListItem, selected bool) {
+		drawn = append(drawn, drawnItem{x: rect.X, y: rect.Y, text: item.Text})
+	}
+
+	// Create a minimal buffer for rendering
+	buf := make([][]texel.Cell, 30)
+	for i := range buf {
+		buf[i] = make([]texel.Cell, 40)
+	}
+	painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 40, H: 30})
+
+	// Initial render - items 0-3 should be visible
+	drawn = nil
+	sl.Draw(painter)
+
+	if len(drawn) != 4 {
+		t.Errorf("Expected 4 items drawn, got %d", len(drawn))
+	}
+	// Check positions: should be at (5, 10), (5, 11), (5, 12), (5, 13)
+	for i, d := range drawn {
+		expectedY := 10 + i
+		if d.y != expectedY {
+			t.Errorf("Item %d at wrong Y: got %d, expected %d", i, d.y, expectedY)
+		}
+		if d.x != 5 {
+			t.Errorf("Item %d at wrong X: got %d, expected 5", i, d.x)
+		}
+	}
+
+	// Navigate to item 6, which should scroll
+	sl.SetSelected(6)
+	drawn = nil
+	sl.Draw(painter)
+
+	// With centering, selected item should be roughly centered
+	// Item 6 centered in viewport of 4 means offset around 4-5
+	if len(drawn) != 4 {
+		t.Errorf("Expected 4 items drawn after scroll, got %d", len(drawn))
+	}
+
+	// Check that items are still rendered at correct screen positions
+	// Screen Y should always start at 10 (the list's Y position)
+	for i, d := range drawn {
+		expectedY := 10 + i
+		if d.y != expectedY {
+			t.Errorf("After scroll, item %d at wrong Y: got %d, expected %d", i, d.y, expectedY)
+		}
+	}
+
+	// Verify item 6 is one of the drawn items
+	found := false
+	for _, d := range drawn {
+		if d.text == "G" { // Item 6 is 'G'
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Selected item 6 ('G') not visible after scroll")
+	}
+}
+
+// TestScrollableList_FilteringPattern simulates filtering behavior (like editable ComboBox)
+func TestScrollableList_FilteringPattern(t *testing.T) {
+	sl := NewScrollableList(0, 0, 20, 8)
+
+	// Start with 50 items
+	items := make([]ListItem, 50)
+	for i := range items {
+		items[i] = ListItem{Text: string(rune('A'+i/26)) + string(rune('a'+i%26))}
+	}
+	sl.SetItems(items)
+
+	// Navigate to item 30
+	sl.SetSelected(30)
+
+	// Verify selected is visible
+	offset := sl.scrollPane.ScrollOffset()
+	if sl.SelectedIdx < offset || sl.SelectedIdx >= offset+sl.Rect.H {
+		t.Errorf("Selected item %d not visible with offset %d before filter", sl.SelectedIdx, offset)
+	}
+
+	// Now simulate filtering to 10 items
+	filteredItems := make([]ListItem, 10)
+	for i := range filteredItems {
+		filteredItems[i] = ListItem{Text: string(rune('A' + i))}
+	}
+	sl.SetItems(filteredItems)
+
+	// Selection should be clamped to valid range
+	if sl.SelectedIdx >= len(filteredItems) {
+		t.Errorf("Selection not clamped: got %d, max valid is %d", sl.SelectedIdx, len(filteredItems)-1)
+	}
+
+	// Check scroll offset is valid for new content
+	offset = sl.scrollPane.ScrollOffset()
+	maxOffset := len(filteredItems) - sl.Rect.H
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if offset < 0 || offset > maxOffset {
+		t.Errorf("Invalid scroll offset %d after filter (max %d)", offset, maxOffset)
+	}
+
+	// Check selected item is visible
+	if sl.SelectedIdx < offset || sl.SelectedIdx >= offset+sl.Rect.H {
+		t.Errorf("Selected item %d not visible with offset %d after filter", sl.SelectedIdx, offset)
 	}
 }

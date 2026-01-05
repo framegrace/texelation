@@ -381,11 +381,19 @@ func (f *Form) CycleFocus(forward bool) bool {
 		return false
 	}
 
-	// Find currently focused field
+	// Find currently focused field (check both direct focus and descendant focus)
 	currentIdx := -1
 	var focusedField core.Widget
 	for i, w := range fields {
+		isFocused := false
 		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+			isFocused = true
+		}
+		// Also check if a descendant is focused (e.g., TextArea inside Border)
+		if !isFocused && core.IsDescendantFocused(w) {
+			isFocused = true
+		}
+		if isFocused {
 			currentIdx = i
 			focusedField = w
 			break
@@ -429,7 +437,15 @@ func (f *Form) CycleFocus(forward bool) bool {
 func (f *Form) HandleKey(ev *tcell.EventKey) bool {
 	fields := f.getFocusableFields()
 	for i, w := range fields {
+		// Check both direct focus and descendant focus (e.g., TextArea inside Border)
+		isFocused := false
 		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+			isFocused = true
+		}
+		if !isFocused && core.IsDescendantFocused(w) {
+			isFocused = true
+		}
+		if isFocused {
 			// For Tab/Shift-Tab, only forward to nested containers
 			isTab := ev.Key() == tcell.KeyTab || ev.Key() == tcell.KeyBacktab
 			if isTab {
@@ -453,52 +469,106 @@ func (f *Form) HandleKey(ev *tcell.EventKey) bool {
 
 // HandleMouse routes mouse events to fields, handling click-to-focus.
 func (f *Form) HandleMouse(ev *tcell.EventMouse) bool {
-	x, y := ev.Position()
-	if !f.HitTest(x, y) {
-		return false
-	}
-
+	_, y := ev.Position()
 	buttons := ev.Buttons()
 	isPress := buttons&tcell.Button1 != 0
 	isWheel := buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0
+
+	// Note: We skip f.HitTest entirely because our position may be offset
+	// due to being inside a ScrollPane. Parent already validated the hit.
 
 	// Sort fields by Z-index descending for mouse routing
 	type fieldInfo struct {
 		field core.Widget
 		z     int
 		idx   int
+		row   int // Row index for position-based matching
 	}
 	var sortedFields []fieldInfo
 	fields := f.getFocusableFields()
-	for i, field := range fields {
-		sortedFields = append(sortedFields, fieldInfo{field: field, z: widgetZIndex(field), idx: i})
+
+	// Build field list with row indices for position matching
+	fieldIdx := 0
+	for rowIdx, row := range f.rows {
+		if row.Field != nil && row.Field.Focusable() {
+			sortedFields = append(sortedFields, fieldInfo{
+				field: row.Field,
+				z:     widgetZIndex(row.Field),
+				idx:   fieldIdx,
+				row:   rowIdx,
+			})
+			fieldIdx++
+		}
 	}
 	sort.Slice(sortedFields, func(i, j int) bool {
 		return sortedFields[i].z > sortedFields[j].z
 	})
 
-	// Check fields in Z-order
-	for _, fi := range sortedFields {
-		if fi.field.HitTest(x, y) {
-			// Focus the clicked field on button press
-			if isPress {
-				// Blur currently focused field
-				for _, w := range fields {
-					if fs, ok := w.(core.FocusState); ok && fs.IsFocused() && w != fi.field {
-						w.Blur()
+	// For wheel events, forward to the focused field (since HitTest is unreliable)
+	if isWheel {
+		for _, fi := range sortedFields {
+			isFocused := false
+			if fs, ok := fi.field.(core.FocusState); ok && fs.IsFocused() {
+				isFocused = true
+			}
+			if !isFocused && core.IsDescendantFocused(fi.field) {
+				isFocused = true
+			}
+			if isFocused {
+				if ma, ok := fi.field.(core.MouseAware); ok {
+					return ma.HandleMouse(ev)
+				}
+			}
+		}
+		// No focused field, let parent handle
+		return false
+	}
+
+	// For click events, find field by checking which row contains the Y coordinate
+	// Use relative Y position since absolute positions may be offset by scroll
+	relY := y - f.Rect.Y - f.Config.PaddingY
+	if relY < 0 {
+		return false
+	}
+
+	// Find which row the click is in (iterate in row order, not z-order)
+	rowY := 0
+	for rowIdx, row := range f.rows {
+		rowEnd := rowY + row.Height + f.Config.RowSpacing
+		if relY >= rowY && relY < rowEnd {
+			// Click is in this row - find the corresponding field
+			if row.Field != nil && row.Field.Focusable() {
+				// Find field index for lastFocusedIdx
+				fieldIdx := 0
+				for i := 0; i < rowIdx; i++ {
+					if f.rows[i].Field != nil && f.rows[i].Field.Focusable() {
+						fieldIdx++
 					}
 				}
-				fi.field.Focus()
-				f.lastFocusedIdx = fi.idx
-				f.invalidate()
+
+				if isPress {
+					// Blur currently focused field
+					for _, w := range fields {
+						if fs, ok := w.(core.FocusState); ok && fs.IsFocused() && w != row.Field {
+							w.Blur()
+						}
+					}
+					row.Field.Focus()
+					f.lastFocusedIdx = fieldIdx
+					f.invalidate()
+				}
+				if ma, ok := row.Field.(core.MouseAware); ok {
+					return ma.HandleMouse(ev)
+				}
+				return true
 			}
-			if ma, ok := fi.field.(core.MouseAware); ok {
-				return ma.HandleMouse(ev)
-			}
-			return !isWheel
+			// Row has no focusable field (spacer?), but we're in it
+			return false
 		}
+		rowY = rowEnd
 	}
-	return !isWheel
+
+	return false
 }
 
 // ContentHeight returns the total height needed to display all rows.

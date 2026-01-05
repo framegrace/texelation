@@ -8,6 +8,7 @@ import (
 
 	"texelation/config"
 	"texelation/texel/theme"
+	"texelation/texelui/widgets"
 )
 
 func TestBuildFieldKinds(t *testing.T) {
@@ -20,7 +21,7 @@ func TestBuildFieldKinds(t *testing.T) {
 		appOptions: []string{"launcher", "texelterm"},
 		values:     make(config.Config),
 	}
-	pane := newFormPane(0, 0, 20, 10)
+	pane := widgets.NewForm()
 
 	binding := editor.buildField(target.values, target, "", "enabled", true, pane, false, applySystem)
 	if binding == nil || binding.kind != fieldBool {
