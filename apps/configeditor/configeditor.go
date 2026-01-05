@@ -84,7 +84,6 @@ type targetPanel struct {
 	core.BaseWidget
 	Style    tcell.Style
 	header   *widgets.Label
-	status   *widgets.Label
 	saveBtn  *widgets.Button
 	resetBtn *widgets.Button
 	tabs     *widgets.TabLayout
@@ -98,7 +97,6 @@ func newTargetPanel(title string, showActions bool) *targetPanel {
 	panel := &targetPanel{
 		Style:  tcell.StyleDefault.Background(bg).Foreground(fg),
 		header: widgets.NewLabel(0, 0, 0, 1, title),
-		status: widgets.NewLabel(0, 0, 0, 1, ""),
 	}
 	if showActions {
 		panel.saveBtn = widgets.NewButton(0, 0, 0, 1, "Save")
@@ -116,9 +114,6 @@ func (p *targetPanel) SetInvalidator(fn func(core.Rect)) {
 	p.inv = fn
 	if p.header != nil {
 		p.header.SetInvalidator(fn)
-	}
-	if p.status != nil {
-		p.status.SetInvalidator(fn)
 	}
 	if p.saveBtn != nil {
 		p.saveBtn.SetInvalidator(fn)
@@ -146,19 +141,6 @@ func (p *targetPanel) Draw(painter *core.Painter) {
 	if p.tabs != nil {
 		p.tabs.Draw(painter)
 	}
-	if p.status != nil {
-		p.status.Draw(painter)
-	}
-}
-
-func (p *targetPanel) setStatus(text string) {
-	if p.status == nil {
-		return
-	}
-	p.status.Text = text
-	if p.inv != nil {
-		p.inv(p.status.Rect)
-	}
 }
 
 func (p *targetPanel) Resize(w, h int) {
@@ -170,9 +152,9 @@ func (p *targetPanel) layout() {
 	left := p.Rect.X + 2
 	right := p.Rect.X + p.Rect.W - 2
 	headerY := p.Rect.Y
-	statusY := p.Rect.Y + p.Rect.H - 1
 	contentY := p.Rect.Y + 2
-	contentH := p.Rect.H - 3
+	// Content now uses full remaining height (no status row at bottom)
+	contentH := p.Rect.H - 2
 	if contentH < 1 {
 		contentH = 1
 	}
@@ -200,10 +182,6 @@ func (p *targetPanel) layout() {
 		p.tabs.SetPosition(p.Rect.X, contentY)
 		p.tabs.Resize(p.Rect.W, contentH)
 	}
-	if p.status != nil {
-		p.status.SetPosition(left, statusY)
-		p.status.Resize(maxInt(10, p.Rect.W-4), 1)
-	}
 }
 
 func (p *targetPanel) VisitChildren(f func(core.Widget)) {
@@ -218,9 +196,6 @@ func (p *targetPanel) VisitChildren(f func(core.Widget)) {
 	}
 	if p.tabs != nil {
 		f(p.tabs)
-	}
-	if p.status != nil {
-		f(p.status)
 	}
 }
 
@@ -317,6 +292,7 @@ type ConfigEditor struct {
 	controlBus    texel.ControlBus
 	autoApply     bool
 	singleTarget  bool
+	statusBar     *widgets.StatusBar // Cached to avoid lock during callbacks
 }
 
 // New creates a config editor app.
@@ -327,13 +303,15 @@ func New(reg *registry.Registry) texel.App {
 // NewWithTarget creates a config editor app with an optional default target.
 func NewWithTarget(reg *registry.Registry, target string) texel.App {
 	ui := core.NewUIManager()
+	uiApp := adapter.NewUIApp("Config Editor", ui)
 	editor := &ConfigEditor{
-		UIApp:         adapter.NewUIApp("Config Editor", ui),
+		UIApp:         uiApp,
 		registry:      reg,
 		defaultTarget: target,
 		controlBus:    texel.NewControlBus(),
 		autoApply:     true,
 		singleTarget:  target != "" && target != "system",
+		statusBar:     uiApp.StatusBar(), // Cache before any locks are held
 	}
 	editor.buildTargets()
 	editor.buildUI()
@@ -506,18 +484,18 @@ func (e *ConfigEditor) buildTargetPanel(target *configTarget) *targetPanel {
 	if panel.saveBtn != nil {
 		panel.saveBtn.OnClick = func() {
 			if err := e.saveTarget(target); err != nil {
-				panel.setStatus(fmt.Sprintf("Save failed: %v", err))
+				e.showError(fmt.Sprintf("Save failed: %v", err))
 			} else {
-				panel.setStatus("Saved.")
+				e.showSuccess("Saved.")
 			}
 		}
 	}
 	if panel.resetBtn != nil {
 		panel.resetBtn.OnClick = func() {
 			if err := e.reloadTarget(target); err != nil {
-				panel.setStatus(fmt.Sprintf("Reload failed: %v", err))
+				e.showError(fmt.Sprintf("Reload failed: %v", err))
 			} else {
-				panel.setStatus("Reloaded.")
+				e.showSuccess("Reloaded.")
 			}
 		}
 	}
@@ -708,16 +686,30 @@ func (e *ConfigEditor) applyTargetConfig(target *configTarget, kind applyKind) {
 		err = config.SaveApp(target.name)
 	}
 
-	if target.panel != nil {
-		if err != nil {
-			target.panel.setStatus(fmt.Sprintf("Apply failed: %v", err))
-		} else {
-			target.panel.setStatus("Saved.")
-		}
+	if err != nil {
+		e.showError(fmt.Sprintf("Apply failed: %v", err))
+	} else {
+		e.showSuccess("Saved.")
 	}
 
 	if err == nil {
 		e.emitApply(kind, target)
+	}
+}
+
+// showSuccess displays a success message in the global StatusBar.
+// Uses cached StatusBar reference to avoid acquiring UIManager.mu during callbacks.
+func (e *ConfigEditor) showSuccess(msg string) {
+	if e.statusBar != nil {
+		e.statusBar.ShowSuccess(msg)
+	}
+}
+
+// showError displays an error message in the global StatusBar.
+// Uses cached StatusBar reference to avoid acquiring UIManager.mu during callbacks.
+func (e *ConfigEditor) showError(msg string) {
+	if e.statusBar != nil {
+		e.statusBar.ShowError(msg)
 	}
 }
 
