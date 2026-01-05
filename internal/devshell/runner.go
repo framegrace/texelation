@@ -10,9 +10,9 @@ import (
 	"texelation/apps/configeditor"
 	"texelation/apps/help"
 	"texelation/apps/texelterm"
+	texeluidemo "texelation/apps/texelui-demo"
 	"texelation/texel"
 	"texelation/texel/theme"
-	"texelation/texelui/adapter"
 )
 
 // Builder constructs a texel.App, optionally using CLI args.
@@ -30,7 +30,7 @@ var registry = map[string]Builder{
 		return help.NewHelpApp(), nil
 	},
 	"texelui-demo": func(args []string) (texel.App, error) {
-		return adapter.NewWidgetShowcaseApp("TexelUI Widget Showcase"), nil
+		return texeluidemo.New(), nil
 	},
 	"config-editor": func(args []string) (texel.App, error) {
 		return configeditor.New(nil), nil
