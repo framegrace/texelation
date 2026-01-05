@@ -14,7 +14,6 @@ import (
 	"texelation/texel"
 	"texelation/texelui/adapter"
 	"texelation/texelui/core"
-	"texelation/texelui/primitives"
 	"texelation/texelui/scroll"
 	"texelation/texelui/widgets"
 )
@@ -22,20 +21,13 @@ import (
 // New creates a new TexelUI widget showcase demo app.
 func New() texel.App {
 	ui := core.NewUIManager()
-
-	// Create tab layout
-	tabs := []primitives.TabItem{
-		{Label: "Inputs", ID: "inputs"},
-		{Label: "Layouts", ID: "layouts"},
-		{Label: "Widgets", ID: "widgets"},
-		{Label: "Scrolling", ID: "scrolling"},
-	}
-	tabLayout := widgets.NewTabLayout(0, 0, 80, 24, tabs)
-
 	app := adapter.NewUIApp("TexelUI Widget Showcase", ui)
 
 	// Get status bar (enabled by default in NewUIApp)
 	statusBar := app.StatusBar()
+
+	// Create tab panel with simple AddTab API
+	tabPanel := widgets.NewTabPanel()
 
 	// === Inputs Tab (wrapped in ScrollPane for tall content) ===
 	inputsPane := createInputsTab()
@@ -43,27 +35,24 @@ func New() texel.App {
 	inputsScroll.Resize(80, 20)
 	inputsScroll.SetChild(inputsPane)
 	inputsScroll.SetContentHeight(30) // Form is taller than viewport
-	tabLayout.SetTabContent(0, inputsScroll)
+	tabPanel.AddTab("Inputs", inputsScroll)
 
 	// === Layouts Tab ===
-	layoutsPane := createLayoutsTab()
-	tabLayout.SetTabContent(1, layoutsPane)
+	tabPanel.AddTab("Layouts", createLayoutsTab())
 
 	// === Widgets Tab ===
-	widgetsPane := createWidgetsTab(statusBar)
-	tabLayout.SetTabContent(2, widgetsPane)
+	tabPanel.AddTab("Widgets", createWidgetsTab(statusBar))
 
 	// === Scrolling Tab (dedicated scroll demo) ===
-	scrollingPane := createScrollingTab()
-	tabLayout.SetTabContent(3, scrollingPane)
+	tabPanel.AddTab("Scrolling", createScrollingTab())
 
-	ui.AddWidget(tabLayout)
-	ui.Focus(tabLayout)
+	ui.AddWidget(tabPanel)
+	ui.Focus(tabPanel)
 
 	app.SetOnResize(func(w, h int) {
 		contentH := ui.ContentHeight()
-		tabLayout.SetPosition(0, 0)
-		tabLayout.Resize(w, contentH)
+		tabPanel.SetPosition(0, 0)
+		tabPanel.Resize(w, contentH)
 	})
 	return app
 }
