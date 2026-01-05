@@ -75,7 +75,8 @@ func (s *StatusBar) Start() {
 		s.mu.Unlock()
 		return // Already started
 	}
-	s.ticker = time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	s.ticker = ticker
 	s.mu.Unlock()
 
 	go func() {
@@ -83,7 +84,7 @@ func (s *StatusBar) Start() {
 			select {
 			case <-s.stopCh:
 				return
-			case <-s.ticker.C:
+			case <-ticker.C:
 				if s.expireMessages() {
 					s.invalidate()
 				}
