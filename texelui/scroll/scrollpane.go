@@ -34,25 +34,20 @@ type ScrollPane struct {
 	dragStartOffset int  // Scroll offset when drag started
 }
 
-// NewScrollPane creates a new scroll pane with the given dimensions and style.
-func NewScrollPane(x, y, w, h int, style tcell.Style) *ScrollPane {
+// NewScrollPane creates a new scroll pane.
+// Position defaults to 0,0 and size defaults to 1x1. Use SetPosition() and Resize() to configure.
+func NewScrollPane() *ScrollPane {
 	sp := &ScrollPane{
 		showIndicators: true,
 	}
-	sp.SetPosition(x, y)
-	sp.Resize(w, h)
+	sp.Resize(1, 1)
 	sp.SetFocusable(true) // ScrollPane must be focusable to receive key events
 
 	// Resolve default colors from theme
 	tm := theme.Get()
-	fg, bg, attr := style.Decompose()
-	if fg == tcell.ColorDefault {
-		fg = tm.GetSemanticColor("text.primary")
-	}
-	if bg == tcell.ColorDefault {
-		bg = tm.GetSemanticColor("bg.surface")
-	}
-	sp.Style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attr)
+	fg := tm.GetSemanticColor("text.primary")
+	bg := tm.GetSemanticColor("bg.surface")
+	sp.Style = tcell.StyleDefault.Foreground(fg).Background(bg)
 
 	// Set up scrollbar with text.primary color for thumb
 	thumbStyle := tcell.StyleDefault.Foreground(fg).Background(bg)

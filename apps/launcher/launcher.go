@@ -165,9 +165,9 @@ func (l *Launcher) buildUI() {
 	// Add background pane
 	tm := theme.ForApp("launcher")
 	bgColor := tm.GetSemanticColor("bg.surface")
-	style := tcell.StyleDefault.Background(bgColor)
 
-	l.pane = widgets.NewPane(0, 0, 1, 1, style)
+	l.pane = widgets.NewPane()
+	l.pane.Style = tcell.StyleDefault.Background(bgColor)
 	ui.AddWidget(l.pane)
 
 	// Create labels for each app
@@ -180,7 +180,8 @@ func (l *Launcher) buildUI() {
 			text += fmt.Sprintf(" - %s", app.Manifest.Description)
 		}
 
-		label := widgets.NewLabel(2, 2+i, 0, 1, text)
+		label := widgets.NewLabel(text)
+		label.SetPosition(2, 2+i)
 		label.SetFocusable(true)
 		l.labels = append(l.labels, label)
 		ui.AddWidget(label)

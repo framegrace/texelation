@@ -35,8 +35,10 @@ type Input struct {
 	inv func(core.Rect)
 }
 
-// NewInput creates a single-line input field at the specified position and size.
-func NewInput(x, y, w int) *Input {
+// NewInput creates a single-line input field.
+// Position defaults to 0,0 and width to 20.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewInput() *Input {
 	tm := theme.Get()
 	bg := tm.GetSemanticColor("bg.surface")
 	fg := tm.GetSemanticColor("text.primary")
@@ -50,11 +52,9 @@ func NewInput(x, y, w int) *Input {
 	}
 
 	// Configure focused style
-	// For now, keep same as default, or allow overrides via theme if needed
 	i.SetFocusedStyle(tcell.StyleDefault.Foreground(fg).Background(bg), true)
 
-	i.SetPosition(x, y)
-	i.Resize(w, 1) // Input is always single-line
+	i.Resize(20, 1) // Default width, always single-line
 	i.SetFocusable(true)
 
 	return i

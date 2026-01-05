@@ -216,7 +216,7 @@ func TestStatusBarAfterHandleKey(t *testing.T) {
 	ui.SetStatusBar(sb)
 
 	// Create a button that shows a message in OnClick
-	btn := widgets.NewButton(10, 10, 20, 1, "Test")
+	btn := widgets.NewButton("Test")
 	btn.OnClick = func() {
 		// This is what happens in the config editor
 		sb.ShowSuccess("Clicked!")
@@ -284,7 +284,7 @@ func TestStatusBarGetterDuringCallback(t *testing.T) {
 	// This test verifies the pattern works with a cached reference.
 	cachedSB := sb // Use the concrete *StatusBar directly (same as ConfigEditor caches)
 
-	btn := widgets.NewButton(10, 10, 20, 1, "Test")
+	btn := widgets.NewButton("Test")
 	btn.OnClick = func() {
 		// Use cached reference instead of calling ui.StatusBar()
 		if cachedSB != nil {

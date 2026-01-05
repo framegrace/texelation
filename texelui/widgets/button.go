@@ -21,10 +21,10 @@ type Button struct {
 	inv func(core.Rect)
 }
 
-// NewButton creates a button at the specified position and size.
-// If w is 0, the button will size to fit the text plus padding.
-// If h is 0, the button will default to height 1.
-func NewButton(x, y, w, h int, text string) *Button {
+// NewButton creates a button with the given text.
+// Position defaults to 0,0 and size auto-fits text with padding.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewButton(text string) *Button {
 	b := &Button{
 		Text: text,
 	}
@@ -40,17 +40,8 @@ func NewButton(x, y, w, h int, text string) *Button {
 	focusBg := tm.GetSemanticColor("border.focus")
 	b.SetFocusedStyle(tcell.StyleDefault.Foreground(focusFg).Background(focusBg), true)
 
-	b.SetPosition(x, y)
-
-	// Auto-size if dimensions are 0
-	if w == 0 {
-		// Add padding: [ Text ]
-		w = len(text) + 4
-	}
-	if h == 0 {
-		h = 1
-	}
-	b.Resize(w, h)
+	// Auto-size with padding: [ Text ]
+	b.Resize(len(text)+4, 1)
 
 	// Buttons are focusable by default
 	b.SetFocusable(true)

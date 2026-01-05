@@ -77,8 +77,25 @@ func (c *mockContainer) VisitChildren(f func(core.Widget)) {
 	}
 }
 
+// newTestScrollPane creates a ScrollPane for testing with the given size at position (0,0).
+func newTestScrollPane(w, h int) *ScrollPane {
+	sp := NewScrollPane()
+	sp.Resize(w, h)
+	return sp
+}
+
+// newTestScrollPaneAt creates a ScrollPane for testing with the given position and size.
+func newTestScrollPaneAt(x, y, w, h int) *ScrollPane {
+	sp := NewScrollPane()
+	sp.SetPosition(x, y)
+	sp.Resize(w, h)
+	return sp
+}
+
 func TestNewScrollPane(t *testing.T) {
-	sp := NewScrollPane(10, 5, 40, 20, tcell.StyleDefault)
+	sp := NewScrollPane()
+	sp.SetPosition(10, 5)
+	sp.Resize(40, 20)
 
 	x, y := sp.Position()
 	if x != 10 || y != 5 {
@@ -100,7 +117,7 @@ func TestNewScrollPane(t *testing.T) {
 }
 
 func TestScrollPane_SetChild(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 
 	// Set child that's taller than viewport
 	child := newMockWidget(0, 0, 40, 30, false)
@@ -120,7 +137,7 @@ func TestScrollPane_SetChild(t *testing.T) {
 }
 
 func TestScrollPane_SetContentHeight(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(50)
 
 	if sp.ContentHeight() != 50 {
@@ -134,7 +151,7 @@ func TestScrollPane_SetContentHeight(t *testing.T) {
 }
 
 func TestScrollPane_ScrollBy(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 
 	// Scroll down
@@ -163,7 +180,7 @@ func TestScrollPane_ScrollBy(t *testing.T) {
 }
 
 func TestScrollPane_ScrollTo(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 
 	// Scroll to row 50
@@ -182,7 +199,7 @@ func TestScrollPane_ScrollTo(t *testing.T) {
 }
 
 func TestScrollPane_ScrollToTopBottom(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 
 	sp.ScrollBy(50) // Scroll to middle
@@ -199,7 +216,7 @@ func TestScrollPane_ScrollToTopBottom(t *testing.T) {
 }
 
 func TestScrollPane_ScrollToCentered(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 
 	sp.ScrollToCentered(50)
@@ -259,7 +276,7 @@ func TestScrollPane_CanScroll(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sp := NewScrollPane(0, 0, 40, tt.viewportH, tcell.StyleDefault)
+			sp := newTestScrollPane(40, tt.viewportH)
 			sp.SetContentHeight(tt.contentH)
 			if tt.scrollTo > 0 {
 				sp.ScrollBy(tt.scrollTo)
@@ -279,7 +296,7 @@ func TestScrollPane_CanScroll(t *testing.T) {
 }
 
 func TestScrollPane_HandleKey_PageUpDown(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 	sp.ScrollBy(50) // Start in middle
 
@@ -303,7 +320,7 @@ func TestScrollPane_HandleKey_PageUpDown(t *testing.T) {
 }
 
 func TestScrollPane_HandleKey_CtrlHomeEnd(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 	sp.ScrollBy(50)
 
@@ -327,7 +344,7 @@ func TestScrollPane_HandleKey_CtrlHomeEnd(t *testing.T) {
 }
 
 func TestScrollPane_HandleMouse_Wheel(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 	sp.ScrollBy(50)
 
@@ -351,7 +368,7 @@ func TestScrollPane_HandleMouse_Wheel(t *testing.T) {
 }
 
 func TestScrollPane_HandleMouse_OutsideBounds(t *testing.T) {
-	sp := NewScrollPane(10, 10, 20, 10, tcell.StyleDefault)
+	sp := newTestScrollPaneAt(10, 10, 20, 10)
 	sp.SetContentHeight(100)
 
 	// Mouse event outside bounds
@@ -362,7 +379,7 @@ func TestScrollPane_HandleMouse_OutsideBounds(t *testing.T) {
 }
 
 func TestScrollPane_EnsureFocusedVisible(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 
 	// Create a container with focusable child at row 50
 	container := newMockContainer(0, 0, 40, 100)
@@ -384,7 +401,7 @@ func TestScrollPane_EnsureFocusedVisible(t *testing.T) {
 }
 
 func TestScrollPane_VisitChildren(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	child := newMockWidget(0, 0, 40, 30, false)
 	sp.SetChild(child)
 
@@ -402,7 +419,7 @@ func TestScrollPane_VisitChildren(t *testing.T) {
 }
 
 func TestScrollPane_VisitChildren_NoChild(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 
 	count := 0
 	sp.VisitChildren(func(w core.Widget) {
@@ -415,7 +432,7 @@ func TestScrollPane_VisitChildren_NoChild(t *testing.T) {
 }
 
 func TestScrollPane_WidgetAt(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	child := newMockWidget(5, 0, 30, 20, false)
 	sp.SetChild(child)
 
@@ -442,7 +459,7 @@ func TestScrollPane_Draw(t *testing.T) {
 	buf := createTestBuffer(50, 20)
 	painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 50, H: 20})
 
-	sp := NewScrollPane(5, 2, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPaneAt(5, 2, 40, 10)
 	sp.SetContentHeight(30)
 	sp.ScrollBy(10) // Scroll down 10 rows
 
@@ -500,7 +517,7 @@ func TestScrollPane_Draw_NoIndicators(t *testing.T) {
 	buf := createTestBuffer(50, 20)
 	painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 50, H: 20})
 
-	sp := NewScrollPane(5, 2, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPaneAt(5, 2, 40, 10)
 	sp.SetContentHeight(30)
 	sp.ScrollBy(10)
 	sp.ShowIndicators(false) // Disable indicators
@@ -541,7 +558,7 @@ func TestScrollPane_Draw_ArrowsNotOverwrittenByThumb(t *testing.T) {
 			buf := createTestBuffer(50, tc.viewportH+5)
 			painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 50, H: tc.viewportH + 5})
 
-			sp := NewScrollPane(5, 2, 40, tc.viewportH, tcell.StyleDefault)
+			sp := newTestScrollPaneAt(5, 2, 40, tc.viewportH)
 			sp.SetContentHeight(tc.contentHeight)
 			sp.ScrollBy(tc.scrollOffset)
 
@@ -574,7 +591,7 @@ func TestScrollPane_Draw_ScrollbarLayout(t *testing.T) {
 	buf := createTestBuffer(50, 15)
 	painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 50, H: 15})
 
-	sp := NewScrollPane(5, 2, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPaneAt(5, 2, 40, 10)
 	sp.SetContentHeight(100)
 	sp.ScrollBy(45) // Middle position
 
@@ -636,7 +653,7 @@ func TestScrollPane_Draw_ThumbAtExtremes(t *testing.T) {
 			buf := createTestBuffer(50, 15)
 			painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 50, H: 15})
 
-			sp := NewScrollPane(5, 2, 40, 10, tcell.StyleDefault)
+			sp := newTestScrollPaneAt(5, 2, 40, 10)
 			sp.SetContentHeight(100) // viewport=10, content=100, maxOffset=90
 			sp.ScrollBy(tc.offset)
 
@@ -674,7 +691,7 @@ func TestScrollPane_Draw_ThumbAtExtremes(t *testing.T) {
 }
 
 func TestScrollPane_Invalidation(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 
 	invalidated := false
@@ -693,7 +710,7 @@ func TestScrollPane_Invalidation(t *testing.T) {
 }
 
 func TestScrollPane_ChildInvalidator(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 
 	invalidatorCalled := false
 	child := newMockWidget(0, 0, 40, 30, false)
@@ -713,7 +730,7 @@ func TestScrollPane_ChildInvalidator(t *testing.T) {
 }
 
 func TestScrollPane_Resize(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 	sp.ScrollBy(50)
 
@@ -738,7 +755,7 @@ func TestScrollPane_Resize(t *testing.T) {
 }
 
 func TestScrollPane_Resize_ClampOffset(t *testing.T) {
-	sp := NewScrollPane(0, 0, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(40, 10)
 	sp.SetContentHeight(100)
 	sp.ScrollToBottom() // offset = 90
 
@@ -764,7 +781,7 @@ func TestScrollPane_IntegrationDraw(t *testing.T) {
 	painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 60, H: 30})
 
 	// ScrollPane at (10, 5) with size 40x10, content height 50
-	sp := NewScrollPane(10, 5, 40, 10, tcell.StyleDefault)
+	sp := newTestScrollPaneAt(10, 5, 40, 10)
 
 	// Create child widget that fills 40x50
 	child := &labelWidget{x: 10, y: 5, w: 40, h: 50}
@@ -831,7 +848,7 @@ func itoa(n int) string {
 
 // TestScrollPane_MouseScrollbarArrows verifies clicking arrows scrolls by 1 row.
 func TestScrollPane_MouseScrollbarArrows(t *testing.T) {
-	sp := NewScrollPane(0, 0, 20, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(20, 10)
 	child := newMockWidget(0, 0, 19, 100, false) // Content height 100
 	sp.SetChild(child)
 	sp.SetContentHeight(100)
@@ -866,7 +883,7 @@ func TestScrollPane_MouseScrollbarArrows(t *testing.T) {
 
 // TestScrollPane_MouseScrollbarTrack verifies clicking track scrolls by page.
 func TestScrollPane_MouseScrollbarTrack(t *testing.T) {
-	sp := NewScrollPane(0, 0, 20, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(20, 10)
 	child := newMockWidget(0, 0, 19, 100, false)
 	sp.SetChild(child)
 	sp.SetContentHeight(100)
@@ -901,7 +918,7 @@ func TestScrollPane_MouseScrollbarTrack(t *testing.T) {
 
 // TestScrollPane_MouseScrollbarThumbDrag verifies thumb drag scrolls proportionally.
 func TestScrollPane_MouseScrollbarThumbDrag(t *testing.T) {
-	sp := NewScrollPane(0, 0, 20, 10, tcell.StyleDefault)
+	sp := newTestScrollPane(20, 10)
 	child := newMockWidget(0, 0, 19, 100, false)
 	sp.SetChild(child)
 	sp.SetContentHeight(100)
