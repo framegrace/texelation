@@ -109,7 +109,8 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 
 	// === Inputs Tab (wrapped in ScrollPane for tall content) ===
 	inputsPane := createInputsTab()
-	inputsScroll := scroll.NewScrollPane(0, 0, 80, 20, tcell.StyleDefault)
+	inputsScroll := scroll.NewScrollPane()
+	inputsScroll.Resize(80, 20)
 	inputsScroll.SetChild(inputsPane)
 	inputsScroll.SetContentHeight(30) // Form is taller than viewport
 	tabLayout.SetTabContent(0, inputsScroll)
@@ -140,31 +141,46 @@ func NewWidgetShowcaseApp(title string) *UIApp {
 // createInputsTab creates the Inputs tab content with Input, TextArea, ComboBox, ColorPicker.
 // This form is intentionally tall to demonstrate scrolling in the Inputs tab.
 func createInputsTab() *widgets.Pane {
-	pane := widgets.NewPane(0, 0, 80, 30, tcell.StyleDefault) // Tall pane for scrolling demo
+	pane := widgets.NewPane()
+	pane.Resize(80, 30) // Tall pane for scrolling demo
+
+	// Helper to position a label
+	posLabel := func(x, y int, text string) *widgets.Label {
+		l := widgets.NewLabel(text)
+		l.SetPosition(x, y)
+		return l
+	}
+	// Helper to position an input
+	posInput := func(x, y, w int) *widgets.Input {
+		i := widgets.NewInput()
+		i.SetPosition(x, y)
+		i.Resize(w, 1)
+		return i
+	}
 
 	// Input field
-	nameLabel := widgets.NewLabel(2, 1, 12, 1, "Name:")
-	nameInput := widgets.NewInput(14, 1, 30)
+	nameLabel := posLabel(2, 1, "Name:")
+	nameInput := posInput(14, 1, 30)
 	nameInput.Placeholder = "Enter your name"
 	pane.AddChild(nameLabel)
 	pane.AddChild(nameInput)
 
 	// Email field
-	emailLabel := widgets.NewLabel(2, 3, 12, 1, "Email:")
-	emailInput := widgets.NewInput(14, 3, 30)
+	emailLabel := posLabel(2, 3, "Email:")
+	emailInput := posInput(14, 3, 30)
 	emailInput.Placeholder = "user@example.com"
 	pane.AddChild(emailLabel)
 	pane.AddChild(emailInput)
 
 	// Phone field (new)
-	phoneLabel := widgets.NewLabel(2, 5, 12, 1, "Phone:")
-	phoneInput := widgets.NewInput(14, 5, 30)
+	phoneLabel := posLabel(2, 5, "Phone:")
+	phoneInput := posInput(14, 5, 30)
 	phoneInput.Placeholder = "+1 (555) 000-0000"
 	pane.AddChild(phoneLabel)
 	pane.AddChild(phoneInput)
 
 	// ComboBox (editable) - for country selection with autocomplete
-	countryLabel := widgets.NewLabel(2, 7, 12, 1, "Country:")
+	countryLabel := posLabel(2, 7, "Country:")
 	countries := []string{
 		"Argentina", "Australia", "Austria", "Belgium", "Brazil",
 		"Canada", "Chile", "China", "Denmark", "Egypt",
@@ -180,7 +196,7 @@ func createInputsTab() *widgets.Pane {
 	pane.AddChild(countryCombo)
 
 	// ComboBox (non-editable) - for priority selection
-	priorityLabel := widgets.NewLabel(2, 9, 12, 1, "Priority:")
+	priorityLabel := posLabel(2, 9, "Priority:")
 	priorities := []string{"Low", "Medium", "High", "Critical"}
 	priorityCombo := widgets.NewComboBox(14, 9, 20, priorities, false)
 	priorityCombo.SetValue("Medium")
@@ -188,15 +204,16 @@ func createInputsTab() *widgets.Pane {
 	pane.AddChild(priorityCombo)
 
 	// TextArea with internal ScrollPane - just set size, scrolling works automatically
-	notesLabel := widgets.NewLabel(2, 11, 12, 1, "Notes:")
+	notesLabel := posLabel(2, 11, "Notes:")
 	notesBorder := widgets.NewBorder(14, 11, 40, 5, tcell.StyleDefault)
-	notesArea := widgets.NewTextArea(0, 0, 38, 3) // Size matches border interior
+	notesArea := widgets.NewTextArea()
+	notesArea.Resize(38, 3) // Size matches border interior
 	notesBorder.SetChild(notesArea)
 	pane.AddChild(notesLabel)
 	pane.AddChild(notesBorder)
 
 	// ColorPicker
-	colorLabel := widgets.NewLabel(2, 17, 12, 1, "Color:")
+	colorLabel := posLabel(2, 17, "Color:")
 	colorPicker := widgets.NewColorPicker(14, 17, widgets.ColorPickerConfig{
 		EnableSemantic: true,
 		EnablePalette:  true,
@@ -208,26 +225,26 @@ func createInputsTab() *widgets.Pane {
 	pane.AddChild(colorPicker)
 
 	// Additional fields to make form taller (for scrolling demo)
-	website := widgets.NewLabel(2, 19, 12, 1, "Website:")
-	websiteInput := widgets.NewInput(14, 19, 30)
+	website := posLabel(2, 19, "Website:")
+	websiteInput := posInput(14, 19, 30)
 	websiteInput.Placeholder = "https://example.com"
 	pane.AddChild(website)
 	pane.AddChild(websiteInput)
 
-	company := widgets.NewLabel(2, 21, 12, 1, "Company:")
-	companyInput := widgets.NewInput(14, 21, 30)
+	company := posLabel(2, 21, "Company:")
+	companyInput := posInput(14, 21, 30)
 	companyInput.Placeholder = "Company name"
 	pane.AddChild(company)
 	pane.AddChild(companyInput)
 
-	department := widgets.NewLabel(2, 23, 12, 1, "Department:")
+	department := posLabel(2, 23, "Department:")
 	depts := []string{"Engineering", "Design", "Marketing", "Sales", "Support", "HR"}
 	deptCombo := widgets.NewComboBox(14, 23, 25, depts, false)
 	pane.AddChild(department)
 	pane.AddChild(deptCombo)
 
 	// Checkboxes for preferences
-	prefsLabel := widgets.NewLabel(2, 25, 20, 1, "Preferences:")
+	prefsLabel := posLabel(2, 25, "Preferences:")
 	check1 := widgets.NewCheckbox(2, 26, "Email notifications")
 	check2 := widgets.NewCheckbox(2, 27, "SMS notifications")
 	check3 := widgets.NewCheckbox(2, 28, "Newsletter subscription")
@@ -241,37 +258,52 @@ func createInputsTab() *widgets.Pane {
 
 // createLayoutsTab creates the Layouts tab content demonstrating VBox and HBox.
 func createLayoutsTab() *widgets.Pane {
-	pane := widgets.NewPane(0, 0, 80, 20, tcell.StyleDefault)
+	pane := widgets.NewPane()
+	pane.Resize(80, 20)
+
+	// Helper functions
+	posLabel := func(x, y int, text string) *widgets.Label {
+		l := widgets.NewLabel(text)
+		l.SetPosition(x, y)
+		return l
+	}
+	posButton := func(x, y int, text string) *widgets.Button {
+		b := widgets.NewButton(text)
+		b.SetPosition(x, y)
+		return b
+	}
 
 	// Title
-	title := widgets.NewLabel(2, 1, 40, 1, "Layout Managers Demo")
+	title := posLabel(2, 1, "Layout Managers Demo")
 
 	// VBox demonstration
-	vboxLabel := widgets.NewLabel(2, 3, 20, 1, "VBox (vertical):")
+	vboxLabel := posLabel(2, 3, "VBox (vertical):")
 	vboxBorder := widgets.NewBorder(2, 4, 25, 8, tcell.StyleDefault)
-	vboxPane := widgets.NewPane(0, 0, 23, 6, tcell.StyleDefault)
-	vboxBtn1 := widgets.NewButton(1, 1, 20, 1, "Button 1")
-	vboxBtn2 := widgets.NewButton(1, 2, 20, 1, "Button 2")
-	vboxBtn3 := widgets.NewButton(1, 3, 20, 1, "Button 3")
+	vboxPane := widgets.NewPane()
+	vboxPane.Resize(23, 6)
+	vboxBtn1 := posButton(1, 1, "Button 1")
+	vboxBtn2 := posButton(1, 2, "Button 2")
+	vboxBtn3 := posButton(1, 3, "Button 3")
 	vboxPane.AddChild(vboxBtn1)
 	vboxPane.AddChild(vboxBtn2)
 	vboxPane.AddChild(vboxBtn3)
 	vboxBorder.SetChild(vboxPane)
 
 	// HBox demonstration
-	hboxLabel := widgets.NewLabel(30, 3, 20, 1, "HBox (horizontal):")
+	hboxLabel := posLabel(30, 3, "HBox (horizontal):")
 	hboxBorder := widgets.NewBorder(30, 4, 40, 4, tcell.StyleDefault)
-	hboxPane := widgets.NewPane(0, 0, 38, 2, tcell.StyleDefault)
-	hboxBtn1 := widgets.NewButton(1, 0, 10, 1, "Left")
-	hboxBtn2 := widgets.NewButton(13, 0, 10, 1, "Center")
-	hboxBtn3 := widgets.NewButton(25, 0, 10, 1, "Right")
+	hboxPane := widgets.NewPane()
+	hboxPane.Resize(38, 2)
+	hboxBtn1 := posButton(1, 0, "Left")
+	hboxBtn2 := posButton(13, 0, "Center")
+	hboxBtn3 := posButton(25, 0, "Right")
 	hboxPane.AddChild(hboxBtn1)
 	hboxPane.AddChild(hboxBtn2)
 	hboxPane.AddChild(hboxBtn3)
 	hboxBorder.SetChild(hboxPane)
 
 	// Help text
-	helpLabel := widgets.NewLabel(2, 13, 60, 1, "Tab: navigate between buttons")
+	helpLabel := posLabel(2, 13, "Tab: navigate between buttons")
 
 	pane.AddChild(title)
 	pane.AddChild(vboxLabel)
@@ -290,25 +322,38 @@ func createWidgetsTab(ui *core.UIManager) *widgets.Pane {
 
 // createWidgetsTabWithStatusBar creates the Widgets tab content with optional status bar integration.
 func createWidgetsTabWithStatusBar(ui *core.UIManager, statusBar *widgets.StatusBar) *widgets.Pane {
-	pane := widgets.NewPane(0, 0, 80, 20, tcell.StyleDefault)
+	pane := widgets.NewPane()
+	pane.Resize(80, 20)
+
+	// Helper functions
+	posLabel := func(x, y int, text string) *widgets.Label {
+		l := widgets.NewLabel(text)
+		l.SetPosition(x, y)
+		return l
+	}
+	posButton := func(x, y int, text string) *widgets.Button {
+		b := widgets.NewButton(text)
+		b.SetPosition(x, y)
+		return b
+	}
 
 	// Title
-	title := widgets.NewLabel(2, 1, 40, 1, "Basic Widgets Demo")
+	title := posLabel(2, 1, "Basic Widgets Demo")
 
 	// Labels with different alignments
-	labelTitle := widgets.NewLabel(2, 3, 20, 1, "Labels:")
-	leftLabel := widgets.NewLabel(2, 4, 20, 1, "Left aligned")
+	labelTitle := posLabel(2, 3, "Labels:")
+	leftLabel := posLabel(2, 4, "Left aligned")
 	leftLabel.Align = widgets.AlignLeft
-	centerLabel := widgets.NewLabel(2, 5, 20, 1, "Center aligned")
+	centerLabel := posLabel(2, 5, "Center aligned")
 	centerLabel.Align = widgets.AlignCenter
-	rightLabel := widgets.NewLabel(2, 6, 20, 1, "Right aligned")
+	rightLabel := posLabel(2, 6, "Right aligned")
 	rightLabel.Align = widgets.AlignRight
 
 	// Buttons
-	buttonTitle := widgets.NewLabel(30, 3, 20, 1, "Buttons:")
-	statusLabel := widgets.NewLabel(30, 8, 40, 1, "Click a button...")
+	buttonTitle := posLabel(30, 3, "Buttons:")
+	statusLabel := posLabel(30, 8, "Click a button...")
 
-	actionBtn := widgets.NewButton(30, 4, 15, 1, "Action")
+	actionBtn := posButton(30, 4, "Action")
 	actionBtn.OnClick = func() {
 		statusLabel.Text = "Action button clicked!"
 		if statusBar != nil {
@@ -316,7 +361,7 @@ func createWidgetsTabWithStatusBar(ui *core.UIManager, statusBar *widgets.Status
 		}
 	}
 
-	toggleBtn := widgets.NewButton(30, 5, 15, 1, "Toggle")
+	toggleBtn := posButton(30, 5, "Toggle")
 	toggleBtn.OnClick = func() {
 		statusLabel.Text = "Toggle button clicked!"
 		if statusBar != nil {
@@ -324,7 +369,7 @@ func createWidgetsTabWithStatusBar(ui *core.UIManager, statusBar *widgets.Status
 		}
 	}
 
-	errorBtn := widgets.NewButton(30, 6, 15, 1, "Error Demo")
+	errorBtn := posButton(30, 6, "Error Demo")
 	errorBtn.OnClick = func() {
 		statusLabel.Text = "Error demo clicked!"
 		if statusBar != nil {
@@ -333,7 +378,7 @@ func createWidgetsTabWithStatusBar(ui *core.UIManager, statusBar *widgets.Status
 	}
 
 	// Checkboxes
-	checkTitle := widgets.NewLabel(2, 8, 20, 1, "Checkboxes:")
+	checkTitle := posLabel(2, 8, "Checkboxes:")
 	check1 := widgets.NewCheckbox(2, 9, "Option A")
 	check2 := widgets.NewCheckbox(2, 10, "Option B")
 	check3 := widgets.NewCheckbox(2, 11, "Option C (checked)")
@@ -360,7 +405,7 @@ func createWidgetsTabWithStatusBar(ui *core.UIManager, statusBar *widgets.Status
 	}
 
 	// Help text - note that status bar shows key hints automatically
-	helpLabel := widgets.NewLabel(2, 14, 60, 1, "Key hints shown in status bar below")
+	helpLabel := posLabel(2, 14, "Key hints shown in status bar below")
 
 	pane.AddChild(title)
 	pane.AddChild(labelTitle)
@@ -384,19 +429,27 @@ func createWidgetsTabWithStatusBar(ui *core.UIManager, statusBar *widgets.Status
 // createScrollingTab creates the Scrolling tab demonstrating the ScrollPane widget.
 // Returns the ScrollPane directly so it receives key events properly.
 func createScrollingTab() core.Widget {
+	// Helper to position a label
+	posLabel := func(x, y int, text string) *widgets.Label {
+		l := widgets.NewLabel(text)
+		l.SetPosition(x, y)
+		return l
+	}
+
 	// Create content with title, scrollable area, and instructions
 	// Total height: 1 (title) + 1 (desc) + 1 (gap) + 50 (content) + 1 (gap) + 5 (instructions) = 59 rows
-	contentPane := widgets.NewPane(0, 0, 80, 59, tcell.StyleDefault)
+	contentPane := widgets.NewPane()
+	contentPane.Resize(80, 59)
 
 	// Title and description at top
-	title := widgets.NewLabel(2, 0, 40, 1, "ScrollPane Widget Demo")
-	desc := widgets.NewLabel(2, 1, 70, 1, "Scroll to see 50 rows of content. Use mouse wheel or PgUp/PgDn.")
+	title := posLabel(2, 0, "ScrollPane Widget Demo")
+	desc := posLabel(2, 1, "Scroll to see 50 rows of content. Use mouse wheel or PgUp/PgDn.")
 	contentPane.AddChild(title)
 	contentPane.AddChild(desc)
 
 	// 50 rows of scrollable content
 	for i := 0; i < 50; i++ {
-		label := widgets.NewLabel(4, 3+i, 70, 1, fmt.Sprintf("Row %02d - This is scrollable content that demonstrates the ScrollPane widget", i+1))
+		label := posLabel(4, 3+i, fmt.Sprintf("Row %02d - This is scrollable content that demonstrates the ScrollPane widget", i+1))
 		contentPane.AddChild(label)
 	}
 
@@ -409,12 +462,13 @@ func createScrollingTab() core.Widget {
 		"  Ctrl+End: Go to bottom",
 	}
 	for i, text := range instructions {
-		help := widgets.NewLabel(2, 54+i, 70, 1, text)
+		help := posLabel(2, 54+i, text)
 		contentPane.AddChild(help)
 	}
 
 	// Wrap everything in a ScrollPane
-	scrollPane := scroll.NewScrollPane(0, 0, 80, 20, tcell.StyleDefault)
+	scrollPane := scroll.NewScrollPane()
+	scrollPane.Resize(80, 20)
 	scrollPane.SetChild(contentPane)
 	scrollPane.SetContentHeight(59)
 

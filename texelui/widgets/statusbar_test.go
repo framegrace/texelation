@@ -20,7 +20,8 @@ func TestStatusBarShowMessageDuringHandleKey(t *testing.T) {
 	ui.SetStatusBar(sb)
 
 	// Create a button that calls StatusBar.ShowSuccess when clicked
-	btn := NewButton(10, 10, 20, 1, "Test")
+	btn := NewButton("Test")
+	btn.SetPosition(10, 10)
 	btn.OnClick = func() {
 		// This simulates what happens when a widget's OnChange calls showSuccess
 		sb.ShowSuccess("Success!")
@@ -65,7 +66,9 @@ func TestStatusBarShowMessageFromCallback(t *testing.T) {
 	ui.SetStatusBar(sb)
 
 	// Create an input that calls StatusBar.ShowSuccess on change
-	input := NewInput(10, 10, 30)
+	input := NewInput()
+	input.SetPosition(10, 10)
+	input.Resize(30, 1)
 	input.OnChange = func(text string) {
 		sb.ShowSuccess("Changed to: " + text)
 	}
@@ -117,7 +120,8 @@ func TestStatusBarTickerDuringHandleKey(t *testing.T) {
 	sb.ShowMessage("Expiring soon")
 
 	// Create a simple focusable widget
-	btn := NewButton(10, 10, 20, 1, "Test")
+	btn := NewButton("Test")
+	btn.SetPosition(10, 10)
 	ui.AddWidget(btn)
 	ui.Focus(btn)
 
@@ -171,7 +175,8 @@ func TestStatusBarRenderDuringShowMessage(t *testing.T) {
 	sb := NewStatusBar(0, 22, 80)
 	ui.SetStatusBar(sb)
 
-	btn := NewButton(10, 10, 20, 1, "Test")
+	btn := NewButton("Test")
+	btn.SetPosition(10, 10)
 	ui.AddWidget(btn)
 	ui.Focus(btn)
 

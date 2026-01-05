@@ -21,29 +21,23 @@ type Pane struct {
 	lastFocusedIdx int  // Index of last focused child for focus restoration
 }
 
-func NewPane(x, y, w, h int, style tcell.Style) *Pane {
+// NewPane creates a pane container with theme default styling.
+// Position defaults to 0,0 and size to 1,1.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewPane() *Pane {
 	p := &Pane{
 		lastFocusedIdx: -1, // No child focused yet
 	}
-	p.SetPosition(x, y)
-	p.Resize(w, h)
+	p.Resize(1, 1)
 
-	// Resolve default colors from theme
+	// Get default colors from theme
 	tm := theme.Get()
-	fg, bg, attr := style.Decompose()
-	if fg == tcell.ColorDefault {
-		fg = tm.GetSemanticColor("text.primary")
-	}
-	if bg == tcell.ColorDefault {
-		bg = tm.GetSemanticColor("bg.surface")
-	}
-	// Update style with resolved colors
-	p.Style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attr)
+	fg := tm.GetSemanticColor("text.primary")
+	bg := tm.GetSemanticColor("bg.surface")
+	p.Style = tcell.StyleDefault.Foreground(fg).Background(bg)
 
 	// Configure focus style
-	fbg := tm.GetSemanticColor("bg.surface")
-	ffg := tm.GetSemanticColor("text.primary")
-	p.SetFocusedStyle(tcell.StyleDefault.Background(fbg).Foreground(ffg), true)
+	p.SetFocusedStyle(tcell.StyleDefault.Background(bg).Foreground(fg), true)
 	return p
 }
 

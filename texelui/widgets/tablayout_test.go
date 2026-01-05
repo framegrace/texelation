@@ -16,16 +16,22 @@ func TestTabLayout_FocusTraversal(t *testing.T) {
 	tl := NewTabLayout(0, 0, 80, 24, tabs)
 
 	// Create content for tab 1 with two focusable inputs
-	pane1 := NewPane(0, 0, 80, 20, tcell.StyleDefault)
-	input1 := NewInput(0, 0, 20)
-	input2 := NewInput(0, 1, 20)
+	pane1 := NewPane()
+	pane1.Resize(80, 20)
+	input1 := NewInput()
+	input1.Resize(20, 1)
+	input2 := NewInput()
+	input2.SetPosition(0, 1)
+	input2.Resize(20, 1)
 	pane1.AddChild(input1)
 	pane1.AddChild(input2)
 	tl.SetTabContent(0, pane1)
 
 	// Create content for tab 2
-	pane2 := NewPane(0, 0, 80, 20, tcell.StyleDefault)
-	input3 := NewInput(0, 0, 20)
+	pane2 := NewPane()
+	pane2.Resize(80, 20)
+	input3 := NewInput()
+	input3.Resize(20, 1)
 	pane2.AddChild(input3)
 	tl.SetTabContent(1, pane2)
 
@@ -189,9 +195,13 @@ func TestTabLayout_UIManagerTraversal(t *testing.T) {
 	}
 	tl := NewTabLayout(0, 0, 80, 24, tabs)
 
-	pane := NewPane(0, 0, 80, 20, tcell.StyleDefault)
-	input1 := NewInput(0, 0, 20)
-	input2 := NewInput(0, 1, 20)
+	pane := NewPane()
+	pane.Resize(80, 20)
+	input1 := NewInput()
+	input1.Resize(20, 1)
+	input2 := NewInput()
+	input2.SetPosition(0, 1)
+	input2.Resize(20, 1)
 	pane.AddChild(input1)
 	pane.AddChild(input2)
 	tl.SetTabContent(0, pane)
@@ -251,8 +261,10 @@ func TestTabLayout_TabBarAlwaysAccessible(t *testing.T) {
 	}
 	tl := NewTabLayout(0, 0, 80, 24, tabs)
 
-	pane := NewPane(0, 0, 80, 20, tcell.StyleDefault)
-	input := NewInput(0, 0, 20)
+	pane := NewPane()
+	pane.Resize(80, 20)
+	input := NewInput()
+	input.Resize(20, 1)
 	pane.AddChild(input)
 	tl.SetTabContent(0, pane)
 

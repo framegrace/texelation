@@ -27,9 +27,10 @@ type Label struct {
 	inv func(core.Rect)
 }
 
-// NewLabel creates a label at the specified position and size.
-// If w or h are 0, the label will size to fit the text.
-func NewLabel(x, y, w, h int, text string) *Label {
+// NewLabel creates a label with the given text.
+// Position defaults to 0,0 and size auto-fits the text.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewLabel(text string) *Label {
 	l := &Label{
 		Text:  text,
 		Align: AlignLeft,
@@ -41,16 +42,8 @@ func NewLabel(x, y, w, h int, text string) *Label {
 	bg := tm.GetSemanticColor("bg.surface")
 	l.Style = tcell.StyleDefault.Foreground(fg).Background(bg)
 
-	l.SetPosition(x, y)
-
-	// Auto-size if dimensions are 0
-	if w == 0 {
-		w = len(text)
-	}
-	if h == 0 {
-		h = 1
-	}
-	l.Resize(w, h)
+	// Auto-size to fit text
+	l.Resize(len(text), 1)
 
 	// Labels are not focusable by default
 	l.SetFocusable(false)

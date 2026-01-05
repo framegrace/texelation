@@ -102,12 +102,12 @@ func (fb *FieldBuilder) buildComboBox(fc FieldConfig, value string, pane *formPa
 		updateConfigValue(fb.cfg, fc.Section, fc.Key, val)
 		fb.onApply(fc.ApplyKind)
 	}
-	pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, fc.Label), field: combo, height: 1})
+	pane.AddRow(formRow{label: widgets.NewLabel(fc.Label), field: combo, height: 1})
 	return &fieldBinding{section: fc.Section, key: fc.Key, kind: fieldCombo, widget: combo}
 }
 
 func (fb *FieldBuilder) buildNumericInput(fc FieldConfig, value float64, pane *formPane) *fieldBinding {
-	input := widgets.NewInput(0, 0, 0)
+	input := widgets.NewInput()
 	input.Text = formatNumber(value)
 	dirty := false
 	input.OnChange = func(text string) {
@@ -122,12 +122,12 @@ func (fb *FieldBuilder) buildNumericInput(fc FieldConfig, value float64, pane *f
 			dirty = false
 		}
 	}
-	pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, fc.Label), field: input, height: 1})
+	pane.AddRow(formRow{label: widgets.NewLabel(fc.Label), field: input, height: 1})
 	return &fieldBinding{section: fc.Section, key: fc.Key, kind: fieldFloat, widget: input}
 }
 
 func (fb *FieldBuilder) buildIntInput(fc FieldConfig, value int, pane *formPane) *fieldBinding {
-	input := widgets.NewInput(0, 0, 0)
+	input := widgets.NewInput()
 	input.Text = strconv.Itoa(value)
 	dirty := false
 	input.OnChange = func(text string) {
@@ -142,7 +142,7 @@ func (fb *FieldBuilder) buildIntInput(fc FieldConfig, value int, pane *formPane)
 			dirty = false
 		}
 	}
-	pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, fc.Label), field: input, height: 1})
+	pane.AddRow(formRow{label: widgets.NewLabel(fc.Label), field: input, height: 1})
 	return &fieldBinding{section: fc.Section, key: fc.Key, kind: fieldInt, widget: input}
 }
 
@@ -158,12 +158,12 @@ func (fb *FieldBuilder) buildColorPicker(fc FieldConfig, value string, pane *for
 		updateConfigValue(fb.cfg, fc.Section, fc.Key, result.Source)
 		fb.onApply(fc.ApplyKind)
 	}
-	pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, fc.Label), field: colorPicker, height: 1})
+	pane.AddRow(formRow{label: widgets.NewLabel(fc.Label), field: colorPicker, height: 1})
 	return &fieldBinding{section: fc.Section, key: fc.Key, kind: fieldColor, widget: colorPicker}
 }
 
 func (fb *FieldBuilder) buildStringInput(fc FieldConfig, value string, pane *formPane) *fieldBinding {
-	input := widgets.NewInput(0, 0, 0)
+	input := widgets.NewInput()
 	input.Text = value
 	dirty := false
 	input.OnChange = func(text string) {
@@ -176,12 +176,13 @@ func (fb *FieldBuilder) buildStringInput(fc FieldConfig, value string, pane *for
 			dirty = false
 		}
 	}
-	pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, fc.Label), field: input, height: 1})
+	pane.AddRow(formRow{label: widgets.NewLabel(fc.Label), field: input, height: 1})
 	return &fieldBinding{section: fc.Section, key: fc.Key, kind: fieldString, widget: input}
 }
 
 func (fb *FieldBuilder) buildTextArea(fc FieldConfig, value interface{}, pane *formPane) *fieldBinding {
-	textarea := widgets.NewTextArea(0, 0, 0, 4)
+	textarea := widgets.NewTextArea()
+	textarea.Resize(0, 4)
 	textarea.SetText(formatJSON(value))
 	dirty := false
 	textarea.OnChange = func(text string) {
@@ -197,7 +198,7 @@ func (fb *FieldBuilder) buildTextArea(fc FieldConfig, value interface{}, pane *f
 			dirty = false
 		}
 	}
-	pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, fc.Label), height: 1})
+	pane.AddRow(formRow{label: widgets.NewLabel(fc.Label), height: 1})
 	pane.AddRow(formRow{field: textarea, height: 4, fullWidth: true})
 	return &fieldBinding{section: fc.Section, key: fc.Key, kind: fieldJSON, widget: textarea}
 }

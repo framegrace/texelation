@@ -17,8 +17,15 @@ func createTestBuffer(w, h int) [][]texel.Cell {
 	return buf
 }
 
+// newTestInput creates an Input for testing with the given width.
+func newTestInput(w int) *Input {
+	input := NewInput()
+	input.Resize(w, 1)
+	return input
+}
+
 func TestLabelCreation(t *testing.T) {
-	label := NewLabel(0, 0, 10, 1, "Test")
+	label := NewLabel("Test")
 	if label.Text != "Test" {
 		t.Errorf("expected text 'Test', got '%s'", label.Text)
 	}
@@ -30,7 +37,8 @@ func TestLabelCreation(t *testing.T) {
 
 func TestLabelDraw(t *testing.T) {
 	buf := createTestBuffer(20, 3)
-	label := NewLabel(0, 0, 10, 1, "Hello")
+	label := NewLabel("Hello")
+	label.Resize(10, 1)
 	painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 20, H: 3})
 	label.Draw(painter)
 
@@ -50,7 +58,7 @@ func TestLabelDraw(t *testing.T) {
 
 func TestButtonCreation(t *testing.T) {
 	clicked := false
-	button := NewButton(0, 0, 10, 1, "Click")
+	button := NewButton("Click")
 	button.OnClick = func() {
 		clicked = true
 	}
@@ -70,7 +78,8 @@ func TestButtonCreation(t *testing.T) {
 
 func TestButtonDraw(t *testing.T) {
 	buf := createTestBuffer(20, 3)
-	button := NewButton(0, 0, 15, 1, "Test")
+	button := NewButton("Test")
+	button.Resize(15, 1)
 	painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 20, H: 3})
 	button.Draw(painter)
 
@@ -89,7 +98,7 @@ func TestButtonDraw(t *testing.T) {
 }
 
 func TestInputCreation(t *testing.T) {
-	input := NewInput(0, 0, 20)
+	input := newTestInput(20)
 	if input.Text != "" {
 		t.Errorf("expected empty text, got '%s'", input.Text)
 	}
@@ -99,7 +108,7 @@ func TestInputCreation(t *testing.T) {
 }
 
 func TestInputTextEntry(t *testing.T) {
-	input := NewInput(0, 0, 20)
+	input := newTestInput(20)
 	input.SetFocusable(true)
 	input.Focus()
 
@@ -119,7 +128,7 @@ func TestInputTextEntry(t *testing.T) {
 }
 
 func TestInputBackspace(t *testing.T) {
-	input := NewInput(0, 0, 20)
+	input := newTestInput(20)
 	input.Text = "Test"
 	input.CaretPos = 4
 
@@ -136,7 +145,7 @@ func TestInputBackspace(t *testing.T) {
 }
 
 func TestInputNavigation(t *testing.T) {
-	input := NewInput(0, 0, 20)
+	input := newTestInput(20)
 	input.Text = "Hello"
 	input.CaretPos = 5
 
@@ -250,7 +259,7 @@ func TestCheckboxDraw(t *testing.T) {
 }
 
 func TestInputInsertReplaceMode(t *testing.T) {
-	input := NewInput(0, 0, 20)
+	input := newTestInput(20)
 	input.Text = "Hello"
 	input.CaretPos = 1
 

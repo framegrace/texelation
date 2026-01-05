@@ -11,10 +11,14 @@ func TestUIManagerRendersPaneAndTextArea(t *testing.T) {
 	ui := core.NewUIManager()
 	ui.Resize(20, 5)
 
-	pane := widgets.NewPane(0, 0, 20, 5, tcell.StyleDefault.Background(tcell.ColorBlack).Foreground(tcell.ColorWhite))
+	pane := widgets.NewPane()
+	pane.Resize(20, 5)
+	pane.Style = tcell.StyleDefault.Background(tcell.ColorBlack).Foreground(tcell.ColorWhite)
 	ui.AddWidget(pane)
 
-	ta := widgets.NewTextArea(1, 1, 18, 3)
+	ta := widgets.NewTextArea()
+	ta.SetPosition(1, 1)
+	ta.Resize(18, 3)
 	b := widgets.NewBorder(0, 0, 20, 5, tcell.StyleDefault.Foreground(tcell.ColorWhite))
 	b.SetChild(ta)
 	ui.AddWidget(b)
@@ -52,7 +56,8 @@ func TestUIManagerDirtyClipsRestrictDraw(t *testing.T) {
 	ui.Resize(10, 4)
 	// Border + TextArea child, ensure invalidator is propagated
 	b := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
-	ta := widgets.NewTextArea(0, 0, 8, 2)
+	ta := widgets.NewTextArea()
+	ta.Resize(8, 2)
 	b.SetChild(ta)
 	ui.AddWidget(b)
 
@@ -72,7 +77,9 @@ func TestClickToFocusInnerWidget(t *testing.T) {
 	ui := core.NewUIManager()
 	ui.Resize(10, 4)
 	b := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
-	ta := widgets.NewTextArea(1, 1, 8, 2)
+	ta := widgets.NewTextArea()
+	ta.SetPosition(1, 1)
+	ta.Resize(8, 2)
 	b.SetChild(ta)
 	ui.AddWidget(b)
 	// Click inside textarea at (1,1) (client origin)
@@ -125,14 +132,16 @@ func TestDualTextAreasClickFocusAndType(t *testing.T) {
     lb := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
     // Make focus color identifiable for the test (left border green)
     lb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorGreen)
-    lta := widgets.NewTextArea(0, 0, 8, 2)
+    lta := widgets.NewTextArea()
+    lta.Resize(8, 2)
     lb.SetChild(lta)
     ui.AddWidget(lb)
 
     // Right border + TA
     rb := widgets.NewBorder(10, 0, 10, 4, tcell.StyleDefault)
     rb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorTeal)
-    rta := widgets.NewTextArea(0, 0, 8, 2)
+    rta := widgets.NewTextArea()
+    rta.Resize(8, 2)
     rb.SetChild(rta)
     ui.AddWidget(rb)
 
@@ -176,7 +185,8 @@ func TestDualTextAreasClickFocusAndType(t *testing.T) {
 func TestTextAreaReplaceModeOverwritesAndUnderlineCaret(t *testing.T) {
     ui := core.NewUIManager()
     ui.Resize(10, 1)
-    ta := widgets.NewTextArea(0, 0, 10, 1)
+    ta := widgets.NewTextArea()
+    ta.Resize(10, 1)
     ui.AddWidget(ta)
     ui.Focus(ta)
 

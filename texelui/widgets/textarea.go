@@ -45,7 +45,9 @@ type textAreaContent struct {
 	Style  tcell.Style
 }
 
-func NewTextArea(x, y, w, h int) *TextArea {
+// NewTextArea creates a multi-line text input widget.
+// Position defaults to 0,0 and size defaults to 20x4. Use SetPosition() and Resize() to configure.
+func NewTextArea() *TextArea {
 	tm := theme.Get()
 	bg := tm.GetSemanticColor("bg.surface")
 	fg := tm.GetSemanticColor("text.primary")
@@ -65,14 +67,13 @@ func NewTextArea(x, y, w, h int) *TextArea {
 	ta.content.SetFocusable(false)
 
 	// Create internal scroll pane
-	ta.scrollPane = scroll.NewScrollPane(0, 0, w, h, ta.Style)
+	ta.scrollPane = scroll.NewScrollPane()
 	ta.scrollPane.SetChild(ta.content)
 	ta.scrollPane.SetFocusable(false) // TextArea handles focus
 
 	// Enable focused styling
 	ta.SetFocusedStyle(tcell.StyleDefault.Background(bg).Foreground(fg), true)
-	ta.SetPosition(x, y)
-	ta.Resize(w, h)
+	ta.Resize(20, 4) // Default size
 	ta.SetFocusable(true)
 
 	return ta

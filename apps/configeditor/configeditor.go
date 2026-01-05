@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gdamore/tcell/v2"
 	"texelation/config"
 	"texelation/internal/effects"
 	"texelation/registry"
@@ -59,8 +58,8 @@ type targetContent struct {
 }
 
 func newTargetContent(title string, sections *widgets.TabPanel) *targetContent {
-	pane := widgets.NewPane(0, 0, 1, 1, tcell.StyleDefault)
-	header := widgets.NewLabel(0, 0, 1, 1, title)
+	pane := widgets.NewPane()
+	header := widgets.NewLabel(title)
 	pane.AddChild(header)
 	pane.AddChild(sections)
 	return &targetContent{
@@ -432,7 +431,7 @@ func (e *ConfigEditor) buildEffectsSection(target *configTarget, values map[stri
 	options := effectOptions()
 
 	for _, event := range events {
-		label := widgets.NewLabel(0, 0, 0, 1, humanLabel(event))
+		label := widgets.NewLabel(humanLabel(event))
 		combo := widgets.NewComboBox(0, 0, 0, options, false)
 
 		selected := noneEffectLabel
@@ -570,7 +569,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 		fields = overrideThemeFields(target.themeOverrides)
 	}
 	if len(fields) == 0 {
-		pane.AddRow(formRow{field: widgets.NewLabel(0, 0, 0, 1, "No theme settings for this app."), height: 1, fullWidth: true})
+		pane.AddRow(formRow{field: widgets.NewLabel("No theme settings for this app."), height: 1, fullWidth: true})
 		return wrapInScrollPane(pane)
 	}
 
@@ -617,7 +616,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 				syncThemeOverrides(target)
 				e.applyTargetConfig(target, applyAppTheme)
 			}
-			pane.AddRow(formRow{label: widgets.NewLabel(0, 0, 0, 1, label), field: colorPicker, height: 1})
+			pane.AddRow(formRow{label: widgets.NewLabel(label), field: colorPicker, height: 1})
 		}
 		first = false
 	}
@@ -625,7 +624,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 }
 
 func newSectionHeader(text string) *widgets.Label {
-	label := widgets.NewLabel(0, 0, 0, 1, text)
+	label := widgets.NewLabel(text)
 	label.Style = label.Style.Bold(true)
 	return label
 }
@@ -1067,15 +1066,10 @@ func maxInt(a, b int) int {
 
 // wrapInScrollPane wraps a formPane in a ScrollPane for scrollable content.
 func wrapInScrollPane(pane *formPane) *scrollableForm {
-	tm := theme.Get()
-	bg := tm.GetSemanticColor("bg.surface")
-	fg := tm.GetSemanticColor("text.primary")
-	style := tcell.StyleDefault.Background(bg).Foreground(fg)
-
 	contentH := pane.ContentHeight()
 	pane.Resize(80, contentH) // Initial reasonable width, will be updated on resize
 
-	sp := scroll.NewScrollPane(0, 0, 1, 1, style)
+	sp := scroll.NewScrollPane()
 	sp.SetChild(pane)
 	sp.SetContentHeight(contentH)
 
