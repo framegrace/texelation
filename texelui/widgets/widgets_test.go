@@ -172,7 +172,7 @@ func TestInputNavigation(t *testing.T) {
 }
 
 func TestCheckboxCreation(t *testing.T) {
-	checkbox := NewCheckbox(0, 0, "Enable feature")
+	checkbox := NewCheckbox("Enable feature")
 	if checkbox.Label != "Enable feature" {
 		t.Errorf("expected label 'Enable feature', got '%s'", checkbox.Label)
 	}
@@ -184,7 +184,7 @@ func TestCheckboxCreation(t *testing.T) {
 func TestCheckboxToggle(t *testing.T) {
 	changeCount := 0
 	var lastState bool
-	checkbox := NewCheckbox(0, 0, "Test")
+	checkbox := NewCheckbox("Test")
 	checkbox.OnChange = func(checked bool) {
 		changeCount++
 		lastState = checked
@@ -219,7 +219,7 @@ func TestCheckboxToggle(t *testing.T) {
 
 func TestCheckboxDraw(t *testing.T) {
 	buf := createTestBuffer(30, 3)
-	checkbox := NewCheckbox(0, 0, "Test option")
+	checkbox := NewCheckbox("Test option")
 	painter := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 30, H: 3})
 
 	// Draw unchecked

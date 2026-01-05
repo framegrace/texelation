@@ -10,7 +10,6 @@ package texeluidemo
 import (
 	"fmt"
 
-	"github.com/gdamore/tcell/v2"
 	"texelation/texel"
 	"texelation/texelui/adapter"
 	"texelation/texelui/core"
@@ -109,7 +108,9 @@ func createInputsTab() *widgets.Pane {
 		"South Africa", "Spain", "Sweden", "Switzerland",
 		"United Kingdom", "United States",
 	}
-	countryCombo := widgets.NewComboBox(14, 7, 30, countries, true)
+	countryCombo := widgets.NewComboBox(countries, true)
+	countryCombo.SetPosition(14, 7)
+	countryCombo.Resize(30, 1)
 	countryCombo.Placeholder = "Type to search..."
 	pane.AddChild(countryLabel)
 	pane.AddChild(countryCombo)
@@ -117,14 +118,18 @@ func createInputsTab() *widgets.Pane {
 	// ComboBox (non-editable) - for priority selection
 	priorityLabel := posLabel(2, 9, "Priority:")
 	priorities := []string{"Low", "Medium", "High", "Critical"}
-	priorityCombo := widgets.NewComboBox(14, 9, 20, priorities, false)
+	priorityCombo := widgets.NewComboBox(priorities, false)
+	priorityCombo.SetPosition(14, 9)
+	priorityCombo.Resize(20, 1)
 	priorityCombo.SetValue("Medium")
 	pane.AddChild(priorityLabel)
 	pane.AddChild(priorityCombo)
 
 	// TextArea with internal ScrollPane - just set size, scrolling works automatically
 	notesLabel := posLabel(2, 11, "Notes:")
-	notesBorder := widgets.NewBorder(14, 11, 40, 5, tcell.StyleDefault)
+	notesBorder := widgets.NewBorder()
+	notesBorder.SetPosition(14, 11)
+	notesBorder.Resize(40, 5)
 	notesArea := widgets.NewTextArea()
 	notesArea.Resize(38, 3) // Size matches border interior
 	notesBorder.SetChild(notesArea)
@@ -133,12 +138,13 @@ func createInputsTab() *widgets.Pane {
 
 	// ColorPicker
 	colorLabel := posLabel(2, 17, "Color:")
-	colorPicker := widgets.NewColorPicker(14, 17, widgets.ColorPickerConfig{
+	colorPicker := widgets.NewColorPicker(widgets.ColorPickerConfig{
 		EnableSemantic: true,
 		EnablePalette:  true,
 		EnableOKLCH:    true,
 		Label:          "Theme",
 	})
+	colorPicker.SetPosition(14, 17)
 	colorPicker.SetValue("accent")
 	pane.AddChild(colorLabel)
 	pane.AddChild(colorPicker)
@@ -158,15 +164,20 @@ func createInputsTab() *widgets.Pane {
 
 	department := posLabel(2, 23, "Department:")
 	depts := []string{"Engineering", "Design", "Marketing", "Sales", "Support", "HR"}
-	deptCombo := widgets.NewComboBox(14, 23, 25, depts, false)
+	deptCombo := widgets.NewComboBox(depts, false)
+	deptCombo.SetPosition(14, 23)
+	deptCombo.Resize(25, 1)
 	pane.AddChild(department)
 	pane.AddChild(deptCombo)
 
 	// Checkboxes for preferences
 	prefsLabel := posLabel(2, 25, "Preferences:")
-	check1 := widgets.NewCheckbox(2, 26, "Email notifications")
-	check2 := widgets.NewCheckbox(2, 27, "SMS notifications")
-	check3 := widgets.NewCheckbox(2, 28, "Newsletter subscription")
+	check1 := widgets.NewCheckbox("Email notifications")
+	check1.SetPosition(2, 26)
+	check2 := widgets.NewCheckbox("SMS notifications")
+	check2.SetPosition(2, 27)
+	check3 := widgets.NewCheckbox("Newsletter subscription")
+	check3.SetPosition(2, 28)
 	pane.AddChild(prefsLabel)
 	pane.AddChild(check1)
 	pane.AddChild(check2)
@@ -197,7 +208,9 @@ func createLayoutsTab() *widgets.Pane {
 
 	// VBox demonstration
 	vboxLabel := posLabel(2, 3, "VBox (vertical):")
-	vboxBorder := widgets.NewBorder(2, 4, 25, 8, tcell.StyleDefault)
+	vboxBorder := widgets.NewBorder()
+	vboxBorder.SetPosition(2, 4)
+	vboxBorder.Resize(25, 8)
 	vboxPane := widgets.NewPane()
 	vboxPane.Resize(23, 6)
 	vboxBtn1 := posButton(1, 1, "Button 1")
@@ -210,7 +223,9 @@ func createLayoutsTab() *widgets.Pane {
 
 	// HBox demonstration
 	hboxLabel := posLabel(30, 3, "HBox (horizontal):")
-	hboxBorder := widgets.NewBorder(30, 4, 40, 4, tcell.StyleDefault)
+	hboxBorder := widgets.NewBorder()
+	hboxBorder.SetPosition(30, 4)
+	hboxBorder.Resize(40, 4)
 	hboxPane := widgets.NewPane()
 	hboxPane.Resize(38, 2)
 	hboxBtn1 := posButton(1, 0, "Left")
@@ -293,9 +308,12 @@ func createWidgetsTab(statusBar *widgets.StatusBar) *widgets.Pane {
 
 	// Checkboxes
 	checkTitle := posLabel(2, 8, "Checkboxes:")
-	check1 := widgets.NewCheckbox(2, 9, "Option A")
-	check2 := widgets.NewCheckbox(2, 10, "Option B")
-	check3 := widgets.NewCheckbox(2, 11, "Option C (checked)")
+	check1 := widgets.NewCheckbox("Option A")
+	check1.SetPosition(2, 9)
+	check2 := widgets.NewCheckbox("Option B")
+	check2.SetPosition(2, 10)
+	check3 := widgets.NewCheckbox("Option C (checked)")
+	check3.SetPosition(2, 11)
 	check3.Checked = true
 
 	// Update status on checkbox change

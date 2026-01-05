@@ -76,7 +76,7 @@ func (a *UIApp) SetOnResize(fn func(w, h int)) { a.onResize = fn }
 // Returns the status bar widget for message display.
 // The status bar displays key hints (left) and timed messages (right).
 func (a *UIApp) EnableStatusBar() *widgets.StatusBar {
-	sb := widgets.NewStatusBar(0, 0, 80)
+	sb := widgets.NewStatusBar()
 	a.ui.SetStatusBar(sb)
 	return sb
 }

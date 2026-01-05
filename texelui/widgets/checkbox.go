@@ -19,9 +19,10 @@ type Checkbox struct {
 	inv func(core.Rect)
 }
 
-// NewCheckbox creates a checkbox at the specified position.
-// Width is calculated automatically based on label length.
-func NewCheckbox(x, y int, label string) *Checkbox {
+// NewCheckbox creates a checkbox with the specified label.
+// Position defaults to 0,0 and width is calculated automatically based on label length.
+// Use SetPosition to adjust after adding to a layout.
+func NewCheckbox(label string) *Checkbox {
 	c := &Checkbox{
 		Label:   label,
 		Checked: false,
@@ -36,7 +37,7 @@ func NewCheckbox(x, y int, label string) *Checkbox {
 	// Configure focused style - reverse colors for clear visibility
 	c.SetFocusedStyle(tcell.StyleDefault.Foreground(bg).Background(fg), true)
 
-	c.SetPosition(x, y)
+	c.SetPosition(0, 0)
 
 	// Width: "[X] " + label = 4 + len(label)
 	w := 4 + len(label)

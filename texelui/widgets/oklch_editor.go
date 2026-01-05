@@ -42,13 +42,15 @@ type OKLCHEditor struct {
 	inv func(core.Rect)
 }
 
-// NewOKLCHEditor creates an OKLCH editor at the given position.
-func NewOKLCHEditor(x, y, w, h int) *OKLCHEditor {
+// NewOKLCHEditor creates an OKLCH editor.
+// Position defaults to 0,0 and size to 25x10 (minimum usable size).
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewOKLCHEditor() *OKLCHEditor {
 	oe := &OKLCHEditor{
 		focus: OKLCHFocusPlane,
 	}
-	oe.SetPosition(x, y)
-	oe.Resize(w, h)
+	oe.SetPosition(0, 0)
+	oe.Resize(25, 10) // Minimum usable size
 	oe.SetFocusable(true)
 
 	// Create child widgets (they will be positioned in Resize)

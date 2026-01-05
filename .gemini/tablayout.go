@@ -27,17 +27,15 @@ type TabLayout struct {
 	trapsFocus bool
 }
 
-// NewTabLayout creates a new tab layout with the specified tabs.
-// Position defaults to 0,0 and size to 1x1.
-// Use SetPosition and Resize to adjust after adding to a layout.
-func NewTabLayout(tabs []primitives.TabItem) *TabLayout {
+// NewTabLayout creates a new tab layout at the specified position.
+func NewTabLayout(x, y, w, h int, tabs []primitives.TabItem) *TabLayout {
 	tl := &TabLayout{
-		tabBar:   primitives.NewTabBar(0, 0, 1, tabs),
+		tabBar:   primitives.NewTabBar(x, y, w, tabs),
 		children: make([]core.Widget, len(tabs)),
 	}
 
-	tl.SetPosition(0, 0)
-	tl.Resize(1, 1)
+	tl.SetPosition(x, y)
+	tl.Resize(w, h)
 	tl.SetFocusable(true)
 
 	// Wire up tab change to trigger redraw
@@ -455,10 +453,11 @@ func (tl *TabLayout) SetInvalidator(fn func(core.Rect)) {
 }
 
 // VisitChildren implements core.ChildContainer.
+// Note: TabBar is NOT exposed here because TabLayout manages focus between
+// tab bar and content internally via focusArea. Exposing TabBar would cause
+// double focus cycling (once for TabLayout, once for TabBar).
 func (tl *TabLayout) VisitChildren(f func(core.Widget)) {
-	// Visit tab bar
-	f(tl.tabBar)
-	// Visit active child
+	// Only visit active child - tab bar focus is managed internally
 	if activeChild := tl.activeChild(); activeChild != nil {
 		f(activeChild)
 	}

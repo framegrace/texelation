@@ -45,15 +45,17 @@ type ComboBox struct {
 	list *primitives.ScrollableList
 }
 
-// NewComboBox creates a new combo box at the specified position.
-func NewComboBox(x, y, w int, items []string, editable bool) *ComboBox {
+// NewComboBox creates a new combo box with the given items.
+// Position defaults to 0,0 and width to 20.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewComboBox(items []string, editable bool) *ComboBox {
 	cb := &ComboBox{
 		Items:    items,
 		Editable: editable,
 		filtered: items,
 	}
-	cb.SetPosition(x, y)
-	cb.Resize(w, 1)
+	cb.SetPosition(0, 0)
+	cb.Resize(20, 1) // Default width 20
 	cb.SetFocusable(true)
 
 	// Configure focus style from theme
@@ -63,7 +65,7 @@ func NewComboBox(x, y, w int, items []string, editable bool) *ComboBox {
 	cb.SetFocusedStyle(tcell.StyleDefault.Foreground(fg).Background(bg), true)
 
 	// Create dropdown list (position will be set when expanded)
-	cb.list = primitives.NewScrollableList(x, y+1, w, 8)
+	cb.list = primitives.NewScrollableList(0, 1, 20, 8)
 	cb.list.RenderItem = cb.renderDropdownItem
 	cb.syncListItems()
 

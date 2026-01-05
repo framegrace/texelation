@@ -143,16 +143,19 @@ func TestColorPickerWithStatusBar(t *testing.T) {
 	ui.Resize(80, 24)
 
 	// Create and set up StatusBar
-	sb := widgets.NewStatusBar(0, 22, 80)
+	sb := widgets.NewStatusBar()
+	sb.SetPosition(0, 22)
+	sb.Resize(80, 2)
 	ui.SetStatusBar(sb)
 
 	// Create a ColorPicker that calls StatusBar on change
-	cp := widgets.NewColorPicker(10, 10, widgets.ColorPickerConfig{
+	cp := widgets.NewColorPicker(widgets.ColorPickerConfig{
 		EnableSemantic: true,
 		EnablePalette:  true,
 		EnableOKLCH:    true,
 		Label:          "Test",
 	})
+	cp.SetPosition(10, 10)
 	cp.SetValue("#ff0000")
 	cp.OnChange = func(result widgets.ColorPickerResult) {
 		// This is what the config editor does
@@ -212,7 +215,9 @@ func TestStatusBarAfterHandleKey(t *testing.T) {
 	ui := core.NewUIManager()
 	ui.Resize(80, 24)
 
-	sb := widgets.NewStatusBar(0, 22, 80)
+	sb := widgets.NewStatusBar()
+	sb.SetPosition(0, 22)
+	sb.Resize(80, 2)
 	ui.SetStatusBar(sb)
 
 	// Create a button that shows a message in OnClick
@@ -271,7 +276,9 @@ func TestStatusBarGetterDuringCallback(t *testing.T) {
 	ui := core.NewUIManager()
 	ui.Resize(80, 24)
 
-	sb := widgets.NewStatusBar(0, 22, 80)
+	sb := widgets.NewStatusBar()
+	sb.SetPosition(0, 22)
+	sb.Resize(80, 2)
 	ui.SetStatusBar(sb)
 
 	// This is the DANGEROUS pattern that caused the original freeze:

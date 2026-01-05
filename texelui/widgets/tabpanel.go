@@ -29,7 +29,7 @@ type TabPanel struct {
 // when the panel is added to a layout.
 func NewTabPanel() *TabPanel {
 	tp := &TabPanel{
-		TabLayout: NewTabLayout(0, 0, 1, 1, nil),
+		TabLayout: NewTabLayout(nil),
 		tabs:      make([]primitives.TabItem, 0),
 	}
 	return tp
@@ -101,7 +101,9 @@ func (tp *TabPanel) rebuildTabBar() {
 	oldChildren := tp.TabLayout.children
 
 	// Create new TabLayout with updated tabs
-	tp.TabLayout = NewTabLayout(rect.X, rect.Y, rect.W, rect.H, tp.tabs)
+	tp.TabLayout = NewTabLayout(tp.tabs)
+	tp.TabLayout.SetPosition(rect.X, rect.Y)
+	tp.TabLayout.Resize(rect.W, rect.H)
 	tp.TabLayout.SetTrapsFocus(trapsFocus)
 	if inv != nil {
 		tp.TabLayout.SetInvalidator(inv)

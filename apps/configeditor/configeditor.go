@@ -432,7 +432,7 @@ func (e *ConfigEditor) buildEffectsSection(target *configTarget, values map[stri
 
 	for _, event := range events {
 		label := widgets.NewLabel(humanLabel(event))
-		combo := widgets.NewComboBox(0, 0, 0, options, false)
+		combo := widgets.NewComboBox(options, false)
 
 		selected := noneEffectLabel
 		if binding, ok := bindings[event]; ok && binding.Effect != "" {
@@ -600,7 +600,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 				continue
 			}
 			label := humanLabel(key)
-			colorPicker := widgets.NewColorPicker(0, 0, widgets.ColorPickerConfig{
+			colorPicker := widgets.NewColorPicker(widgets.ColorPickerConfig{
 				EnableSemantic: true,
 				EnablePalette:  true,
 				EnableOKLCH:    true,

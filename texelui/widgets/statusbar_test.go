@@ -16,7 +16,9 @@ func TestStatusBarShowMessageDuringHandleKey(t *testing.T) {
 	ui.Resize(80, 24)
 
 	// Create and set up StatusBar
-	sb := NewStatusBar(0, 22, 80)
+	sb := NewStatusBar()
+	sb.SetPosition(0, 22)
+	sb.Resize(80, 2)
 	ui.SetStatusBar(sb)
 
 	// Create a button that calls StatusBar.ShowSuccess when clicked
@@ -62,7 +64,9 @@ func TestStatusBarShowMessageFromCallback(t *testing.T) {
 	ui.Resize(80, 24)
 
 	// Create and set up StatusBar
-	sb := NewStatusBar(0, 22, 80)
+	sb := NewStatusBar()
+	sb.SetPosition(0, 22)
+	sb.Resize(80, 2)
 	ui.SetStatusBar(sb)
 
 	// Create an input that calls StatusBar.ShowSuccess on change
@@ -112,7 +116,9 @@ func TestStatusBarTickerDuringHandleKey(t *testing.T) {
 	ui.Resize(80, 24)
 
 	// Create and set up StatusBar with a short message that will expire
-	sb := NewStatusBar(0, 22, 80)
+	sb := NewStatusBar()
+	sb.SetPosition(0, 22)
+	sb.Resize(80, 2)
 	sb.DefaultMessageDuration = 50 * time.Millisecond // Very short duration
 	ui.SetStatusBar(sb)
 
@@ -172,7 +178,9 @@ func TestStatusBarRenderDuringShowMessage(t *testing.T) {
 	ui := core.NewUIManager()
 	ui.Resize(80, 24)
 
-	sb := NewStatusBar(0, 22, 80)
+	sb := NewStatusBar()
+	sb.SetPosition(0, 22)
+	sb.Resize(80, 2)
 	ui.SetStatusBar(sb)
 
 	btn := NewButton("Test")

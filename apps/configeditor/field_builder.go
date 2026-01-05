@@ -85,7 +85,7 @@ func (fb *FieldBuilder) Build(fc FieldConfig, pane *formPane) *fieldBinding {
 }
 
 func (fb *FieldBuilder) buildCheckbox(fc FieldConfig, value bool, pane *formPane) *fieldBinding {
-	checkbox := widgets.NewCheckbox(0, 0, fc.Label)
+	checkbox := widgets.NewCheckbox(fc.Label)
 	checkbox.Checked = value
 	checkbox.OnChange = func(checked bool) {
 		updateConfigValue(fb.cfg, fc.Section, fc.Key, checked)
@@ -96,7 +96,7 @@ func (fb *FieldBuilder) buildCheckbox(fc FieldConfig, value bool, pane *formPane
 }
 
 func (fb *FieldBuilder) buildComboBox(fc FieldConfig, value string, pane *formPane) *fieldBinding {
-	combo := widgets.NewComboBox(0, 0, 0, fc.Options, false)
+	combo := widgets.NewComboBox(fc.Options, false)
 	combo.SetValue(value)
 	combo.OnChange = func(val string) {
 		updateConfigValue(fb.cfg, fc.Section, fc.Key, val)
@@ -147,7 +147,7 @@ func (fb *FieldBuilder) buildIntInput(fc FieldConfig, value int, pane *formPane)
 }
 
 func (fb *FieldBuilder) buildColorPicker(fc FieldConfig, value string, pane *formPane) *fieldBinding {
-	colorPicker := widgets.NewColorPicker(0, 0, widgets.ColorPickerConfig{
+	colorPicker := widgets.NewColorPicker(widgets.ColorPickerConfig{
 		EnableSemantic: true,
 		EnablePalette:  true,
 		EnableOKLCH:    true,
