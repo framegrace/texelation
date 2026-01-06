@@ -61,6 +61,8 @@ func TestSnapshotRemovesCrashedApp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("desktop init failed: %v", err)
 	}
+	defer lifecycle.Wait()
+	defer desktop.Close()
 	desktop.SwitchToWorkspace(1)
 	
 	// Register crashing app factory
@@ -75,6 +77,7 @@ func TestSnapshotRemovesCrashedApp(t *testing.T) {
 	srv := NewServer(sockPath, NewManager())
 	sink := NewDesktopSink(desktop)
 	srv.SetEventSink(sink)
+	defer desktop.Unsubscribe(srv)
 	srv.SetSnapshotStore(NewSnapshotStore(path), 1*time.Hour)
 	
 	go srv.Start()
