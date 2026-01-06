@@ -106,7 +106,8 @@ func (t *TextArea) Resize(w, h int) {
 		t.scrollPane.Resize(w, h)
 	}
 	if t.content != nil {
-		t.content.wrapWidth = w
+		// Reserve 1 char for scrollbar to prevent text from rendering under it
+		t.content.wrapWidth = w - 1
 		if t.content.wrapWidth < 1 {
 			t.content.wrapWidth = 1
 		}
@@ -254,7 +255,8 @@ func (t *TextArea) updateContentSize() {
 func (c *textAreaContent) Draw(p *core.Painter) {
 	base := c.parent.Style
 	if c.parent.IsFocused() {
-		base = c.EffectiveStyle(c.parent.Style)
+		// Use parent's EffectiveStyle since parent holds the focus, not content
+		base = c.parent.EffectiveStyle(c.parent.Style)
 	}
 
 	// Fill background
