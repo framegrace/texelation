@@ -12,11 +12,10 @@ contributors so they can go from idea to shipping app quickly.
 Texel apps are self-contained binaries that can run inside the Texelation
 desktop **or** as standalone executables. The primary way to launch them on
 their own is via the dedicated CLI in `cmd/<app>` (for example,
-`go run ./cmd/texelterm`). The helper `cmd/app-runner` exists for internal
-testing but should not be considered the main entry point. Design your app so it
-operates correctly even outside the desktop; compatibility
-with the card pipeline is treated as an additional perk rather than a hard
-requirement.
+`go run ./cmd/texelterm`). These entrypoints use `github.com/framegrace/texelui/runtime`
+directly. Design your app so it operates correctly even outside the desktop;
+compatibility with the card pipeline is treated as an additional perk rather
+than a hard requirement.
 
 Every app must implement `texel.App` (defined in `github.com/framegrace/texelui/core/app.go` and re-exported by Texelation):
 
@@ -161,8 +160,8 @@ overlays (diagnostics, grids) after colour-based effects so they render on top.
    card behaviours (e.g. ensuring refresh propagation works).
 3. **Integration tests** – use `client/cmd/texel-headless` or `cmd/texel-stress`
    to verify protocol interactions end-to-end.
-4. **Manual runs** – `go run .` for desktop, `go run ./cmd/app-runner -app foo`
-   for standalone app debugging.
+4. **Manual runs** – `go run .` for desktop, `go run ./cmd/<app>` for standalone
+   app debugging.
 5. **Effects** – when adding an effect card, add unit coverage similar to
    `internal/effects/keyflash_test.go` and wire a regression into the
    corresponding app test (as TexelTerm does for BEL).

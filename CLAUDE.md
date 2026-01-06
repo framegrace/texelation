@@ -77,11 +77,11 @@ Located in `apps/`. TexelApps come in two forms:
 - **statusbar** – Status display pane
 - **clock** – Clock widget
 
-**Standalone apps** – Can run inside texelation OR independently via app-runner:
+**Standalone apps** – Can run inside texelation OR independently via `cmd/<app>` entrypoints:
 - **texelterm** – Full terminal emulator with VT parser (`apps/texelterm/term.go`, `apps/texelterm/parser/`)
 - **help** – Help viewer
 
-Standalone apps have a corresponding `cmd/<appname>/main.go` that uses the `app-runner` library to run them outside texelation. Use `make build-apps` to build all standalone binaries.
+Standalone apps have a corresponding `cmd/<appname>/main.go` that uses `github.com/framegrace/texelui/runtime` to run them outside texelation. Use `make build-apps` to build all standalone binaries.
 
 ### Session Management
 - **DesktopPublisher** (`internal/runtime/server/desktop_publisher.go`) – Bridges Desktop events to protocol messages; generates buffer deltas
@@ -259,21 +259,25 @@ func (a *MyApp) Pipeline() texel.RenderPipeline { return a.pipeline }
 ```
 
 **Making an app standalone** (runnable outside texelation):
-1. Create `cmd/<appname>/main.go` that uses the `app-runner` library
+1. Create `cmd/<appname>/main.go` that uses `github.com/framegrace/texelui/runtime`
 2. Add the build target to `Makefile` under `build-apps`
-3. The app-runner library provides terminal setup, event handling, and lifecycle management
+3. The runtime package provides terminal setup, event handling, and lifecycle management
 
 ```go
 // cmd/myapp/main.go
 package main
 
 import (
-    "texelation/apps/myapp"
-    "texelation/cmd/app-runner"
+    "github.com/framegrace/texelation/apps/myapp"
+    "github.com/framegrace/texelui/core"
+    "github.com/framegrace/texelui/runtime"
 )
 
 func main() {
-    runner.Run(myapp.New())
+    builder := func(_ []string) (core.App, error) {
+        return myapp.New(), nil
+    }
+    runtime.Run(builder)
 }
 ```
 

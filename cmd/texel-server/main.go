@@ -32,6 +32,7 @@ import (
 	"github.com/framegrace/texelation/apps/texelterm"
 	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/runtime/server"
+	runtimeadapter "github.com/framegrace/texelation/internal/runtimeadapter"
 	"github.com/framegrace/texelation/registry"
 	"github.com/framegrace/texelation/texel"
 	"github.com/framegrace/texelui/theme"
@@ -115,6 +116,7 @@ func main() {
 
 	// Register built-in apps provided by init-time registration.
 	registry.RegisterBuiltIns(desktop.Registry())
+	desktop.Registry().SetAppWrapper(runtimeadapter.WrapForRegistry(desktop.Registry()))
 
 	// Register snapshot factory for launcher
 	desktop.RegisterSnapshotFactory("launcher", func(title string, config map[string]interface{}) texelcore.App {

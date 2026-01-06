@@ -1,4 +1,4 @@
-package devshell
+package runtimeadapter
 
 import (
 	"fmt"
@@ -11,12 +11,13 @@ import (
 	"github.com/framegrace/texelation/apps/configeditor"
 	"github.com/framegrace/texelation/apps/help"
 	"github.com/framegrace/texelation/apps/texelterm"
+	"github.com/framegrace/texelation/registry"
 )
 
 // Builder constructs a texelcore.App, optionally using CLI args.
 type Builder func(args []string) (texelcore.App, error)
 
-var registry = map[string]Builder{
+var builderRegistry = map[string]Builder{
 	"texelterm": func(args []string) (texelcore.App, error) {
 		shell := "/bin/bash"
 		if len(args) > 0 {
@@ -45,7 +46,7 @@ func Run(builder Builder, args []string) error {
 // RunWithName executes the provided builder inside a local tcell screen with an optional app name.
 func RunWithName(name string, builder Builder, args []string) error {
 	if builder == nil {
-		return fmt.Errorf("devshell: nil builder")
+		return fmt.Errorf("runtime adapter: nil builder")
 	}
 	wrapped := func(runArgs []string) (texelcore.App, error) {
 		app, err := builder(runArgs)
@@ -53,7 +54,7 @@ func RunWithName(name string, builder Builder, args []string) error {
 			return nil, err
 		}
 		if name != "" && name != "config-editor" {
-			app = newToggleApp(name, app)
+			app = newToggleApp(nil, name, app)
 		}
 		return app, nil
 	}
@@ -64,11 +65,37 @@ func RunWithName(name string, builder Builder, args []string) error {
 
 // RunApp finds a registered builder by name and runs it.
 func RunApp(name string, args []string) error {
-	buildApp, ok := registry[name]
+	buildApp, ok := builderRegistry[name]
 	if !ok {
 		return fmt.Errorf("unknown app %q", name)
 	}
 	return RunWithName(name, buildApp, args)
+}
+
+// WrapApp decorates a runtime app with Texelation-specific runtime behavior.
+func WrapApp(name string, app texelcore.App) texelcore.App {
+	return wrapApp(nil, name, app)
+}
+
+// WrapForRegistry returns a registry wrapper that decorates apps as they are created.
+func WrapForRegistry(reg *registry.Registry) registry.AppWrapper {
+	return func(name string, app interface{}) interface{} {
+		typed, ok := app.(texelcore.App)
+		if !ok {
+			return app
+		}
+		return wrapApp(reg, name, typed)
+	}
+}
+
+func wrapApp(reg *registry.Registry, name string, app texelcore.App) texelcore.App {
+	if app == nil {
+		return nil
+	}
+	if name == "" || name == "config-editor" || name == "launcher" {
+		return app
+	}
+	return newToggleApp(reg, name, app)
 }
 
 type toggleApp struct {
@@ -79,8 +106,8 @@ type toggleApp struct {
 	refresh chan<- bool
 }
 
-func newToggleApp(name string, main texelcore.App) texelcore.App {
-	editor := configeditor.NewWithTarget(nil, name)
+func newToggleApp(reg *registry.Registry, name string, main texelcore.App) texelcore.App {
+	editor := configeditor.NewWithTarget(reg, name)
 	return &toggleApp{
 		name:   name,
 		main:   main,
@@ -128,6 +155,16 @@ func (t *toggleApp) HandleKey(ev *tcell.EventKey) {
 	if t.active != nil {
 		t.active.HandleKey(ev)
 	}
+}
+
+func (t *toggleApp) RegisterControl(id, description string, handler func(payload interface{}) error) error {
+	if provider, ok := t.main.(texelcore.ControlBusProvider); ok {
+		return provider.RegisterControl(id, description, handler)
+	}
+	if provider, ok := t.editor.(texelcore.ControlBusProvider); ok {
+		return provider.RegisterControl(id, description, handler)
+	}
+	return fmt.Errorf("runtime adapter: no control bus available")
 }
 
 func (t *toggleApp) HandleMouse(ev *tcell.EventMouse) {

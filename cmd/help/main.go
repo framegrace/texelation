@@ -4,12 +4,19 @@ import (
 	"flag"
 	"log"
 
-	"github.com/framegrace/texelation/internal/devshell"
+	"github.com/framegrace/texelation/apps/help"
+	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/runtime"
 )
 
 func main() {
 	flag.Parse()
-	if err := devshell.RunApp("help", flag.Args()); err != nil {
+
+	builder := func(_ []string) (texelcore.App, error) {
+		return help.NewHelpApp(), nil
+	}
+
+	if err := runtime.Run(builder, flag.Args()...); err != nil {
 		log.Fatalf("help: %v", err)
 	}
 }

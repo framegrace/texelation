@@ -94,7 +94,7 @@ github.com/framegrace/texelation/
 │   ├── messages.go
 │   └── buffer_delta.go
 ├── internal/
-│   ├── devshell/       # Texel-app standalone harness
+│   ├── runtimeadapter/ # Texelation runtime adapter harness
 │   ├── effects/        # Effect registry + implementations
 │   └── runtime/        # Server/client runtime
 │       ├── server/     # Server implementation
@@ -159,7 +159,7 @@ github.com/framegrace/texelation/
 - `config/`
 - `defaults/`
 - `protocol/`
-- `internal/devshell/`
+- `internal/runtimeadapter/`
 - `internal/effects/`
 - `internal/runtime/`
 - `client/`
@@ -240,7 +240,7 @@ Run `./verify-split.sh`:
 1. Build TexelUI independently
 2. Build Texelation with dependency
 3. Run all tests
-4. Verify TexelUI CLI/demo run standalone (no devshell/texel-app deps)
+4. Verify TexelUI CLI/demo run standalone (no runtime adapter/texel-app deps)
 5. Test full desktop + theme defaults creation
 
 ## Scripts

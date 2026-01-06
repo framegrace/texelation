@@ -38,7 +38,7 @@ Decisions made during planning session on 2026-01-04, updated after the TexelUI 
 - Theme defaults/palettes are shipped in both repos; if the theme file is missing, defaults are copied/saved.
 
 ### 7. Cards/Effects/Runtime Location
-**Decision**: Cards, effects, and the devshell runner stay in Texelation.
+**Decision**: Cards, effects, and the runtime adapter stay in Texelation.
 
 **Rationale**: These are texel-app runtime concerns; TexelUI remains a pure TUI library.
 
@@ -47,8 +47,8 @@ Decisions made during planning session on 2026-01-04, updated after the TexelUI 
 
 **Details**:
 - CLI (`texelui`) and bash adaptor are standalone, Texelation-independent.
-- Demo runs as a normal Go app using TexelUI directly (no devshell).
-- Runtime runner lives in TexelUI under `runtime/` (no Texelation devshell dependency).
+- Demo runs as a normal Go app using TexelUI directly (no runtime adapter).
+- Runtime runner lives in TexelUI under `runtime/` (no runtime adapter dependency).
 
 ### 9. Original Repository Fate
 **Decision**: Archive/rename to texelation
@@ -75,7 +75,7 @@ Decisions made during planning session on 2026-01-04, updated after the TexelUI 
 - Buffer management
 - Cards pipeline system
 - Effects system
-- Devshell runner (texel-app harness)
+- Runtime adapter (texel-app harness)
 - All apps (texelterm, help, launcher, etc.)
 - Config system + defaults
 - Protocol

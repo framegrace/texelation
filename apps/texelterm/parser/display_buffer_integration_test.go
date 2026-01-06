@@ -1161,7 +1161,7 @@ func TestDisplayBuffer_WrapWithParser(t *testing.T) {
 	}
 }
 
-// TestDisplayBuffer_DevshellRunnerFlow simulates the exact flow of the devshell runner:
+// TestDisplayBuffer_RuntimeAdapterRunnerFlow simulates the exact flow of the runtime adapter:
 // 1. HandleKey() sends character to PTY
 // 2. draw() is called BEFORE the PTY echo arrives (should be no-op or harmless)
 // 3. PTY echo arrives, character is processed
@@ -1169,7 +1169,7 @@ func TestDisplayBuffer_WrapWithParser(t *testing.T) {
 // 5. Character should appear on screen
 //
 // This tests for any race condition or state corruption from the early draw() call.
-func TestDisplayBuffer_DevshellRunnerFlow(t *testing.T) {
+func TestDisplayBuffer_RuntimeAdapterRunnerFlow(t *testing.T) {
 	v := NewVTerm(10, 5)
 	v.EnableDisplayBuffer()
 	p := NewParser(v)
@@ -1209,7 +1209,7 @@ func TestDisplayBuffer_DevshellRunnerFlow(t *testing.T) {
 	// Initial render
 	simulateRender()
 
-	// Simulate typing 10 characters with the devshell runner pattern:
+	// Simulate typing 10 characters with the runtime adapter runner pattern:
 	// For each character:
 	// 1. "HandleKey" - we don't actually send to PTY, just simulate the draw() that happens
 	// 2. draw() BEFORE echo (this is the key part!)
@@ -1239,7 +1239,7 @@ func TestDisplayBuffer_DevshellRunnerFlow(t *testing.T) {
 	t.Logf("After 10 chars: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
 
 	// Now type the 11th character (K) which triggers wrap
-	// Same devshell runner pattern:
+	// Same runtime adapter runner pattern:
 
 	// Step 1-2: HandleKey, then draw() BEFORE echo
 	t.Logf("Before 'K' echo: cursorY=%d", v.cursorY)
@@ -1507,9 +1507,9 @@ func TestDisplayBuffer_BashReadlineWrap(t *testing.T) {
 	}
 }
 
-// TestDisplayBuffer_DevshellRunnerFlowWithDisk tests the same flow as DevshellRunnerFlow
+// TestDisplayBuffer_RuntimeAdapterRunnerFlowWithDisk tests the same flow as RuntimeAdapterRunnerFlow
 // but with disk persistence enabled, which is what the real terminal uses.
-func TestDisplayBuffer_DevshellRunnerFlowWithDisk(t *testing.T) {
+func TestDisplayBuffer_RuntimeAdapterRunnerFlowWithDisk(t *testing.T) {
 	// Create a temporary file for persistence
 	tmpDir := t.TempDir()
 	diskPath := tmpDir + "/test.hist2"
@@ -1562,7 +1562,7 @@ func TestDisplayBuffer_DevshellRunnerFlowWithDisk(t *testing.T) {
 
 	t.Logf("Initial state: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
 
-	// Simulate typing 10 characters with the devshell runner pattern
+	// Simulate typing 10 characters with the runtime adapter runner pattern
 	text := "ABCDEFGHIJ"
 	for i, ch := range text {
 		simulateRender() // draw() before echo
@@ -1682,7 +1682,7 @@ func TestDisplayBuffer_40ColumnWrap(t *testing.T) {
 	}
 
 	for i, ch := range text {
-		// Simulate devshell pattern: draw BEFORE echo, then draw AFTER echo
+		// Simulate runtime adapter pattern: draw BEFORE echo, then draw AFTER echo
 		simulateRender("before-" + string(ch))
 		p.Parse(ch)
 		simulateRender("after-" + string(ch))
@@ -1787,7 +1787,7 @@ func TestDisplayBuffer_40ColumnWrapWithPrompt(t *testing.T) {
 	// Now type enough characters to fill the line and wrap
 	// Prompt is "$ " = 2 chars, so we need 38 more to fill row 0, then more to wrap
 	text := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop" // 42 chars
-	
+
 	for i, ch := range text {
 		simulateRender("before-" + string(ch))
 		p.Parse(ch)
@@ -1902,7 +1902,7 @@ func TestDisplayBuffer_CursorMovementOnWrappedLine(t *testing.T) {
 
 	// BUG: The current implementation sets logicalX = cursorX = 2
 	// But it SHOULD be logicalX = 10 + 2 = 12 (accounting for wrapped content)
-	
+
 	// For now, document the current behavior
 	if v.cursorX != 2 {
 		t.Errorf("Expected cursorX=2 after move left, got %d", v.cursorX)
@@ -1941,10 +1941,10 @@ func TestDisplayBuffer_CursorMovementOnWrappedLine(t *testing.T) {
 
 	// With the bug, 'X' would be placed at logical position 2 (or 3 after increment)
 	// which would corrupt row 0 instead of inserting at row 1
-	
+
 	// Expected correct behavior: 'X' should appear at row 1 col 2, after 'LM'
 	// So row 1 should be "KLXNO" or similar (depending on insert vs overwrite)
-	
+
 	// Current buggy behavior: logicalX=2, so 'X' goes at position 2 of logical line
 	// This would make row 0 = "ABXDEFGHIJ" (X overwrites C)
 }

@@ -1,11 +1,11 @@
 // Copyright © 2025 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: internal/devshell/runner_test.go
-// Summary: Exercises devshell runner behaviour to ensure the runtime harness remains reliable.
+// File: internal/runtimeadapter/runner_test.go
+// Summary: Exercises the runtime adapter behaviour to ensure the runtime harness remains reliable.
 // Usage: Executed during `go test` to guard against regressions.
 
-package devshell_test
+package runtimeadapter_test
 
 import (
 	"errors"
@@ -16,7 +16,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/framegrace/texelation/internal/devshell"
+	runtimeadapter "github.com/framegrace/texelation/internal/runtimeadapter"
 )
 
 type stubApp struct {
@@ -132,10 +132,10 @@ func (a *stubApp) requestRefresh() {
 }
 
 func TestRunHandlesInputRefreshAndShutdown(t *testing.T) {
-	defer devshell.SetScreenFactory(nil)
+	defer runtimeadapter.SetScreenFactory(nil)
 
 	screen := tcell.NewSimulationScreen("UTF-8")
-	devshell.SetScreenFactory(func() (tcell.Screen, error) {
+	runtimeadapter.SetScreenFactory(func() (tcell.Screen, error) {
 		return screen, nil
 	})
 
@@ -149,7 +149,7 @@ func TestRunHandlesInputRefreshAndShutdown(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- devshell.Run(builder, []string{"demo"})
+		errCh <- runtimeadapter.Run(builder, []string{"demo"})
 	}()
 
 	app.waitRunStarted(t)
@@ -205,7 +205,7 @@ func TestRunHandlesInputRefreshAndShutdown(t *testing.T) {
 }
 
 func TestRunAppUnknownReturnsError(t *testing.T) {
-	if err := devshell.RunApp("does-not-exist", nil); err == nil {
+	if err := runtimeadapter.RunApp("does-not-exist", nil); err == nil {
 		t.Fatal("expected error for unknown app")
 	}
 }

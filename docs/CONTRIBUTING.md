@@ -17,7 +17,7 @@ writing new apps, or hacking on the protocol.
 | `internal/effects/`          | Registry of workspace/pane effects shared by client and cards. |
 | `texel/cards/`               | Card pipeline infrastructure for composing apps/effects. |
 | `protocol/`                  | Binary protocol definitions, encoders/decoders. |
-| `cmd/`                       | Command-line harnesses (server, stress tools, app-runner). |
+| `cmd/`                       | Command-line harnesses (server, stress tools, standalone apps). |
 | `docs/`                      | Architecture references, development guides, and testing plans. |
 | `bin/`, `dist/`              | Build outputs (ignored in Git). |
 

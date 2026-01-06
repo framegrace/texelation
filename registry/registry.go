@@ -20,6 +20,10 @@ import (
 // Returns interface{} which is expected to be a texel.App.
 type AppFactory func() interface{}
 
+// AppWrapper decorates an app instance after it is created.
+// The name is the registry key used to create the app.
+type AppWrapper func(name string, app interface{}) interface{}
+
 // AppEntry represents a discovered application with its metadata and factory.
 type AppEntry struct {
 	Manifest *Manifest
@@ -35,9 +39,10 @@ type WrapperFactory func(manifest *Manifest) interface{}
 // Registry manages the collection of available applications.
 type Registry struct {
 	mu               sync.RWMutex
-	apps             map[string]*AppEntry // name -> entry (external apps)
-	builtIn          map[string]*AppEntry // name -> entry (built-in apps)
+	apps             map[string]*AppEntry      // name -> entry (external apps)
+	builtIn          map[string]*AppEntry      // name -> entry (built-in apps)
 	wrapperFactories map[string]WrapperFactory // wraps -> factory
+	appWrapper       AppWrapper
 }
 
 // New creates a new empty registry.
@@ -72,6 +77,13 @@ func (r *Registry) RegisterBuiltIn(manifest *Manifest, factory AppFactory) {
 		Factory:  factory,
 	}
 	log.Printf("Registry: Registered built-in app '%s'", manifest.Name)
+}
+
+// SetAppWrapper installs a hook to decorate apps after creation.
+func (r *Registry) SetAppWrapper(wrapper AppWrapper) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appWrapper = wrapper
 }
 
 // Scan searches for apps in the given directory.
@@ -265,7 +277,25 @@ func (r *Registry) CreateApp(name string, config map[string]interface{}) interfa
 	}
 
 	// TODO: Pass config to factory when we support app configuration
-	return entry.Factory()
+	app := entry.Factory()
+	return r.wrapApp(name, app)
+}
+
+func (r *Registry) wrapApp(name string, app interface{}) interface{} {
+	if app == nil {
+		return nil
+	}
+	r.mu.RLock()
+	wrapper := r.appWrapper
+	r.mu.RUnlock()
+	if wrapper == nil {
+		return app
+	}
+	wrapped := wrapper(name, app)
+	if wrapped == nil {
+		return app
+	}
+	return wrapped
 }
 
 // Count returns the total number of registered apps.

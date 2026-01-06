@@ -279,16 +279,16 @@ EOF
         fi
     done
 
-    log "Removing texelui-demo from devshell registry..."
-    if [[ -f internal/devshell/runner.go ]]; then
+    log "Removing texelui-demo from runtime adapter registry..."
+    if [[ -f internal/runtimeadapter/runner.go ]]; then
         awk '
             /"texelui-demo":/ {skip=1; next}
             skip && /},/ {skip=0; next}
             skip {next}
             {print}
-        ' internal/devshell/runner.go > internal/devshell/runner.go.tmp
-        mv internal/devshell/runner.go.tmp internal/devshell/runner.go
-        sed -i '/texeluidemo/d' internal/devshell/runner.go
+        ' internal/runtimeadapter/runner.go > internal/runtimeadapter/runner.go.tmp
+        mv internal/runtimeadapter/runner.go.tmp internal/runtimeadapter/runner.go
+        sed -i '/texeluidemo/d' internal/runtimeadapter/runner.go
     fi
 
     log "Cleaning TexelUI targets from Makefile..."
