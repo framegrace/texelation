@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: internal/devshell/runner_test.go
-// Summary: Exercises devshell runner behaviour to ensure the standalone harness remains reliable.
+// Summary: Exercises devshell runner behaviour to ensure the runtime harness remains reliable.
 // Usage: Executed during `go test` to guard against regressions.
 
 package devshell_test

@@ -39,7 +39,7 @@ github.com/framegrace/texelui/
 │   ├── defaults.go     # Default theme
 │   └── overrides.go    # Override system (no per-app overrides)
 ├── adapter/            # UIApp adapter (UIManager → core.App)
-├── standalone/         # Standalone runner (UIManager/core.App)
+├── runtime/            # Runtime runner (UIManager/core.App)
 ├── widgets/            # Button, Input, Checkbox, etc.
 ├── scroll/             # ScrollPane, ScrollState
 ├── layout/             # VBox, HBox layout managers

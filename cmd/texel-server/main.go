@@ -9,10 +9,10 @@
 package main
 
 import (
-	texelcore "github.com/framegrace/texelui/core"
 	"context"
 	"flag"
 	"fmt"
+	texelcore "github.com/framegrace/texelui/core"
 	"log"
 	"os"
 	"os/signal"
@@ -25,8 +25,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/framegrace/texelation/apps/configeditor"
-	"github.com/framegrace/texelation/apps/help"
+	_ "github.com/framegrace/texelation/apps/configeditor"
+	_ "github.com/framegrace/texelation/apps/help"
 	"github.com/framegrace/texelation/apps/launcher"
 	"github.com/framegrace/texelation/apps/statusbar"
 	"github.com/framegrace/texelation/apps/texelterm"
@@ -113,48 +113,12 @@ func main() {
 		return texelterm.New(m.DisplayName, command)
 	})
 
-	// Register launcher in registry
-	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
-		Name:        "launcher",
-		DisplayName: "Launcher",
-		Description: "Application launcher",
-		Icon:        "🚀",
-		Category:    "system",
-		ThemeSchema: registry.ThemeSchema{
-			"ui": {"bg.surface", "text.primary", "text.inverse", "accent"},
-		},
-	}, func() interface{} {
-		return launcher.New(desktop.Registry())
-	})
-
-	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
-		Name:        "config-editor",
-		DisplayName: "Settings",
-		Description: "Configuration editor",
-		Icon:        "⚙️",
-		Category:    "system",
-	}, func() interface{} {
-		return configeditor.New(desktop.Registry())
-	})
+	// Register built-in apps provided by init-time registration.
+	registry.RegisterBuiltIns(desktop.Registry())
 
 	// Register snapshot factory for launcher
 	desktop.RegisterSnapshotFactory("launcher", func(title string, config map[string]interface{}) texelcore.App {
 		return launcher.New(desktop.Registry())
-	})
-
-	// Register help app
-	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
-		Name:        "help",
-		DisplayName: "Help",
-		Description: "Help viewer",
-		Icon:        "❓",
-		Category:    "system",
-		ThemeSchema: registry.ThemeSchema{
-			"desktop": {"default_bg"},
-			"ui":      {"text.primary", "text.secondary", "text.active"},
-		},
-	}, func() interface{} {
-		return help.NewHelpApp()
 	})
 
 	// Register snapshot factory for texelterm

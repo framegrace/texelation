@@ -48,7 +48,7 @@ Decisions made during planning session on 2026-01-04, updated after the TexelUI 
 **Details**:
 - CLI (`texelui`) and bash adaptor are standalone, Texelation-independent.
 - Demo runs as a normal Go app using TexelUI directly (no devshell).
-- Standalone runner lives in TexelUI under `standalone/` (no Texelation devshell dependency).
+- Runtime runner lives in TexelUI under `runtime/` (no Texelation devshell dependency).
 
 ### 9. Original Repository Fate
 **Decision**: Archive/rename to texelation

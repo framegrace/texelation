@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
-	"github.com/framegrace/texelui/theme"
 	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/theme"
 	"github.com/framegrace/texelui/widgets"
+	"github.com/gdamore/tcell/v2"
 )
 
 // TestConfigEditorStatusBarFreeze reproduces the freeze that occurs when
@@ -24,11 +24,11 @@ func TestConfigEditorStatusBarFreeze(t *testing.T) {
 	// Resize to initialize layout
 	editor.Resize(80, 24)
 
-	// Set up a refresh notifier (like standalone runner does)
+	// Set up a refresh notifier (like runtime runner does)
 	refreshCh := make(chan bool, 1)
 	editor.SetRefreshNotifier(refreshCh)
 
-	// Drain refresh channel in background (like standalone runner does)
+	// Drain refresh channel in background (like runtime runner does)
 	stopDrain := make(chan struct{})
 	go func() {
 		for {
@@ -46,7 +46,7 @@ func TestConfigEditorStatusBarFreeze(t *testing.T) {
 		// Call showSuccess directly (simulating what happens during a change)
 		editor.showSuccess("Test message")
 
-		// Then render (like standalone runner does after HandleKey)
+		// Then render (like runtime runner does after HandleKey)
 		editor.Render()
 
 		close(done)
@@ -210,7 +210,7 @@ func TestColorPickerWithStatusBar(t *testing.T) {
 }
 
 // TestStatusBarAfterHandleKey tests the realistic flow where Render is called
-// AFTER HandleKey returns, like the standalone runner does.
+// AFTER HandleKey returns, like the runtime runner does.
 func TestStatusBarAfterHandleKey(t *testing.T) {
 	ui := core.NewUIManager()
 	ui.Resize(80, 24)
@@ -226,7 +226,7 @@ func TestStatusBarAfterHandleKey(t *testing.T) {
 		// This is what happens in the config editor
 		sb.ShowSuccess("Clicked!")
 		// NOTE: We do NOT call Render here - that would be a bug.
-		// The standalone runner calls draw() AFTER HandleKey returns.
+		// The runtime runner calls draw() AFTER HandleKey returns.
 	}
 
 	ui.AddWidget(btn)
@@ -247,7 +247,7 @@ func TestStatusBarAfterHandleKey(t *testing.T) {
 		}
 	}()
 
-	// This is the realistic flow from standalone runner:
+	// This is the realistic flow from runtime runner:
 	// 1. HandleKey (triggers OnClick which calls ShowSuccess)
 	// 2. After HandleKey returns, call Render
 	done := make(chan struct{})

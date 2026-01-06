@@ -164,7 +164,7 @@ if [[ -d docs ]]; then
             "$file"
     done
 fi
-log "Reminder: update docs for standalone runner (standalone imports, RunUI, DisableMouse) and build instructions."
+log "Reminder: update docs for runtime runner (runtime imports, RunUI, DisableMouse) and build instructions."
 
 # Update package declarations where needed
 # core/ files should be package core
@@ -200,16 +200,16 @@ find core -name "*.go" -type f | while read -r file; do
     sed -i 's/texel\.//g' "$file"
 done
 
-log "Adding standalone runner..."
-mkdir -p standalone
-cat > standalone/runner.go << 'EOF'
+log "Adding runtime runner..."
+mkdir -p runtime
+cat > runtime/runner.go << 'EOF'
 // Copyright © 2025 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: standalone/runner.go
-// Summary: Standalone runner for TexelUI apps without Texelation.
+// File: runtime/runner.go
+// Summary: Runtime runner for TexelUI apps without Texelation.
 
-package standalone
+package runtime
 
 import (
 	"fmt"
@@ -224,7 +224,7 @@ import (
 // Builder constructs a core.App, optionally using CLI args.
 type Builder func(args []string) (core.App, error)
 
-// Options controls the standalone runner behavior.
+// Options controls the runtime runner behavior.
 type Options struct {
 	ExitKey      tcell.Key
 	DisableMouse bool
@@ -241,7 +241,7 @@ var (
 	activeExit chan struct{}
 )
 
-// Register adds a builder to the standalone registry.
+// Register adds a builder to the runtime registry.
 func Register(name string, builder Builder) {
 	if name == "" || builder == nil {
 		return
@@ -257,12 +257,12 @@ func RunApp(name string, args []string) error {
 	builder := registry[name]
 	registryMu.RUnlock()
 	if builder == nil {
-		return fmt.Errorf("standalone: unknown app %q", name)
+		return fmt.Errorf("runtime: unknown app %q", name)
 	}
 	return RunWithOptions(builder, Options{}, args...)
 }
 
-// Run runs a core.App builder in a standalone terminal session.
+// Run runs a core.App builder in a runtime terminal session.
 func Run(builder Builder, args ...string) error {
 	return RunWithOptions(builder, Options{}, args...)
 }
@@ -270,7 +270,7 @@ func Run(builder Builder, args ...string) error {
 // RunWithOptions runs a core.App builder with custom options.
 func RunWithOptions(builder Builder, opts Options, args ...string) error {
 	if builder == nil {
-		return fmt.Errorf("standalone: nil builder")
+		return fmt.Errorf("runtime: nil builder")
 	}
 	app, err := builder(args)
 	if err != nil {
@@ -279,7 +279,7 @@ func RunWithOptions(builder Builder, opts Options, args ...string) error {
 	return runApp(app, opts)
 }
 
-// RunUI runs a UIManager directly in a standalone terminal session.
+// RunUI runs a UIManager directly in a runtime terminal session.
 func RunUI(ui *core.UIManager) error {
 	return RunUIWithOptions(ui, Options{})
 }
@@ -464,15 +464,15 @@ import (
 
 	"github.com/framegrace/texelui/apps/texelui-demo"
 	"github.com/framegrace/texelui/core"
-	"github.com/framegrace/texelui/standalone"
+	"github.com/framegrace/texelui/runtime"
 )
 
 func main() {
 	flag.Parse()
-	standalone.Register("texelui-demo", func(args []string) (core.App, error) {
+	runtime.Register("texelui-demo", func(args []string) (core.App, error) {
 		return texeluidemo.New(), nil
 	})
-	if err := standalone.RunApp("texelui-demo", flag.Args()); err != nil {
+	if err := runtime.RunApp("texelui-demo", flag.Args()); err != nil {
 		log.Fatalf("texelui-demo: %v", err)
 	}
 }
@@ -537,7 +537,7 @@ EOF
 
 log "Committing reorganization..."
 git add -A
-git commit -m "Reorganize as standalone TexelUI library
+git commit -m "Reorganize as runtime TexelUI library
 
 - Move core primitives (App, Cell, ControlBus, Storage) to core/
 - Move theme system to theme/

@@ -46,7 +46,7 @@ go 1.24.3
 
 require (
 	github.com/creack/pty v1.1.24
-	github.com/framegrace/texelui v0.1.1
+	github.com/framegrace/texelui v0.2.0
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-runewidth v0.0.16
