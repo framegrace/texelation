@@ -904,6 +904,14 @@ func (d *DesktopEngine) LastMouseModifiers() tcell.ModMask {
 // InjectKeyEvent allows external callers (e.g., remote clients) to deliver key
 // input directly into the desktop event pipeline.
 func (d *DesktopEngine) InjectKeyEvent(key tcell.Key, ch rune, modifiers tcell.ModMask) {
+	if key == tcell.KeyRune {
+		switch ch {
+		case '\n', '\r':
+			key = tcell.KeyEnter
+		case '\t':
+			key = tcell.KeyTab
+		}
+	}
 	event := tcell.NewEventKey(key, ch, modifiers)
 	d.handleEvent(event)
 }
