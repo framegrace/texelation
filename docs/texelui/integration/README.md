@@ -108,6 +108,7 @@ func New() texel.App {
 | [Standalone Mode](/texelui/integration/standalone-mode.md) | Running with devshell |
 | [TexelApp Mode](/texelui/integration/texelapp-mode.md) | Integration with Texelation |
 | [Theme Integration](/texelui/integration/theme-integration.md) | Using Texelation themes |
+| [TexelUI CLI](/texelui/integration/texelui-cli.md) | Driving a TexelUI form from Bash |
 
 ## Architecture Deep Dive
 
@@ -185,4 +186,5 @@ Start standalone for development, then wrap for Texelation:
 - [Standalone Mode](/texelui/integration/standalone-mode.md) - devshell details
 - [TexelApp Mode](/texelui/integration/texelapp-mode.md) - adapter details
 - [Theme Integration](/texelui/integration/theme-integration.md) - theming
+- [TexelUI CLI](/texelui/integration/texelui-cli.md) - Bash-driven UI example
 - [Architecture](/texelui/core-concepts/architecture.md) - TexelUI internals
