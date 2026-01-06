@@ -61,7 +61,6 @@ require (
 	golang.org/x/text v0.27.0 // indirect
 )
 
-replace github.com/veops/go-ansiterm => ./localmods/github.com/veops/go-ansiterm
 EOF
 fi
 

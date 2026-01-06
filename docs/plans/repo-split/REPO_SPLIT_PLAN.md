@@ -266,7 +266,6 @@ After this split:
 
 ## Notes
 
-- The `localmods/` directory with `go-ansiterm` stays in Texelation (used by texelterm)
 - Test files move with their corresponding source files
 - Documentation files (CLAUDE.md, README.md) need to be split appropriately
 - Theme defaults/palettes should exist in both repos and be copied/saved if the user theme file is missing
