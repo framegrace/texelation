@@ -11,7 +11,7 @@ package server
 import (
 	"net"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func readMessageSkippingFocus(conn net.Conn) (protocol.Header, []byte, error) {

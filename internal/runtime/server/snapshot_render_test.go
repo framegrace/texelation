@@ -1,12 +1,13 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"context"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"texelation/texel"
+	"github.com/framegrace/texelation/texel"
 )
 
 func TestSnapshotBuffersOnlyReturnsActiveWorkspace(t *testing.T) {
@@ -17,7 +18,7 @@ func TestSnapshotBuffersOnlyReturnsActiveWorkspace(t *testing.T) {
 	
 	driver := sinkScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
-	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+	shellFactory := func() texelcore.App { return &recordingApp{title: "shell"} }
 	
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
 func TestAltScreenSelection(t *testing.T) {

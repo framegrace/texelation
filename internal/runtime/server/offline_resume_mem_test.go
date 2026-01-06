@@ -12,15 +12,16 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"io"
 	"sync"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/internal/runtime/server/testutil"
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/internal/runtime/server/testutil"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 type offlineScreenDriver struct{}
@@ -42,8 +43,8 @@ type offlineApp struct{ title string }
 func (o *offlineApp) Run() error            { return nil }
 func (o *offlineApp) Stop()                 {}
 func (o *offlineApp) Resize(cols, rows int) {}
-func (o *offlineApp) Render() [][]texel.Cell {
-	return [][]texel.Cell{{{Ch: 'z', Style: tcell.StyleDefault}}}
+func (o *offlineApp) Render() [][]texelcore.Cell {
+	return [][]texelcore.Cell{{{Ch: 'z', Style: tcell.StyleDefault}}}
 }
 func (o *offlineApp) GetTitle() string               { return o.title }
 func (o *offlineApp) HandleKey(ev *tcell.EventKey)   {}
@@ -56,7 +57,7 @@ func TestOfflineRetentionAndResumeWithMemConn(t *testing.T) {
 	driver := offlineScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	app := &offlineApp{title: "welcome"}
-	shellFactory := func() texel.App { return app }
+	shellFactory := func() texelcore.App { return app }
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", &lifecycle)
 	if err != nil {
 		t.Fatalf("failed to create desktop: %v", err)

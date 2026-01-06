@@ -9,8 +9,8 @@
 package help
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
 )
 
 // SimpleHelp is a minimal help app that serves as a base for overlays.
@@ -21,7 +21,7 @@ type SimpleHelp struct {
 }
 
 // NewSimpleHelp creates a new simple help app.
-func NewSimpleHelp() texel.App {
+func NewSimpleHelp() texelcore.App {
 	return &SimpleHelp{
 		title:  "Help",
 		width:  80,
@@ -41,13 +41,13 @@ func (w *SimpleHelp) Resize(cols, rows int) {
 	w.height = rows
 }
 
-func (w *SimpleHelp) Render() [][]texel.Cell {
+func (w *SimpleHelp) Render() [][]texelcore.Cell {
 	// Return empty buffer (will be overlaid by tview)
-	buffer := make([][]texel.Cell, w.height)
+	buffer := make([][]texelcore.Cell, w.height)
 	for y := 0; y < w.height; y++ {
-		buffer[y] = make([]texel.Cell, w.width)
+		buffer[y] = make([]texelcore.Cell, w.width)
 		for x := 0; x < w.width; x++ {
-			buffer[y][x] = texel.Cell{
+			buffer[y][x] = texelcore.Cell{
 				Ch:    ' ',
 				Style: tcell.StyleDefault,
 			}

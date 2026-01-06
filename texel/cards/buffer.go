@@ -1,11 +1,11 @@
 package cards
 
-import "texelation/texel"
+import texelcore "github.com/framegrace/texelui/core"
 
-func cloneBuffer(input [][]texel.Cell) [][]texel.Cell {
-	out := make([][]texel.Cell, len(input))
+func cloneBuffer(input [][]texelcore.Cell) [][]texelcore.Cell {
+	out := make([][]texelcore.Cell, len(input))
 	for i := range input {
-		out[i] = make([]texel.Cell, len(input[i]))
+		out[i] = make([]texelcore.Cell, len(input[i]))
 		copy(out[i], input[i])
 	}
 	return out

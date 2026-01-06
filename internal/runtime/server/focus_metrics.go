@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"texelation/texel"
+	"github.com/framegrace/texelation/texel"
 )
 
 type FocusMetrics struct {

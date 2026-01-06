@@ -22,8 +22,8 @@ import (
 	"syscall"
 	"time"
 
-	"texelation/client"
-	"texelation/protocol"
+	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/protocol"
 )
 
 type headlessState struct {

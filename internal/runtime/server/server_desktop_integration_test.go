@@ -12,6 +12,7 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"errors"
 	"io"
 	"net"
@@ -20,8 +21,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 type integrationScreenDriver struct{}
@@ -46,8 +47,8 @@ type deterministicApp struct {
 func (d *deterministicApp) Run() error            { return nil }
 func (d *deterministicApp) Stop()                 {}
 func (d *deterministicApp) Resize(cols, rows int) {}
-func (d *deterministicApp) Render() [][]texel.Cell {
-	return [][]texel.Cell{{{Ch: 'x', Style: tcell.StyleDefault}}}
+func (d *deterministicApp) Render() [][]texelcore.Cell {
+	return [][]texelcore.Cell{{{Ch: 'x', Style: tcell.StyleDefault}}}
 }
 func (d *deterministicApp) GetTitle() string               { return d.title }
 func (d *deterministicApp) HandleKey(ev *tcell.EventKey)   { d.keyLog = append(d.keyLog, ev.Rune()) }
@@ -61,7 +62,7 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 	driver := integrationScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	app := &deterministicApp{title: "welcome"}
-	shellFactory := func() texel.App { return app }
+	shellFactory := func() texelcore.App { return app }
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", &lifecycle)
 	if err != nil {
 		t.Fatalf("failed to create desktop: %v", err)

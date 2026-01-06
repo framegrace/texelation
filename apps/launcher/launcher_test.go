@@ -4,14 +4,15 @@
 package launcher
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/registry"
-	"texelation/texel"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelation/texel"
 )
 
-// mockControlBus implements texel.ControlBus for testing.
+// mockControlBus implements texelcore.ControlBus for testing.
 type mockControlBus struct {
 	handlers     map[string]texel.ControlHandler
 	triggerCount map[string]int
@@ -56,7 +57,7 @@ type mockApp struct {
 func (m *mockApp) Run() error                                  { return nil }
 func (m *mockApp) Stop()                                       {}
 func (m *mockApp) Resize(cols, rows int)                       {}
-func (m *mockApp) Render() [][]texel.Cell                      { return nil }
+func (m *mockApp) Render() [][]texelcore.Cell                      { return nil }
 func (m *mockApp) GetTitle() string                            { return m.title }
 func (m *mockApp) HandleKey(ev *tcell.EventKey)                {}
 func (m *mockApp) SetRefreshNotifier(refreshChan chan<- bool) {}

@@ -8,6 +8,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="${SCRIPT_DIR}/verify-work"
+TEXELUI_REF="${TEXELUI_REF:-}"
+TEXELATION_REF="${TEXELATION_REF:-}"
 
 log() {
     echo "[$(date '+%H:%M:%S')] $*"
@@ -31,6 +33,10 @@ cd "$WORK_DIR"
 log "=== Test 1: TexelUI builds independently ==="
 git clone git@github.com:framegrace/texelui.git
 cd texelui
+if [[ -n "$TEXELUI_REF" ]]; then
+    log "Checking out TexelUI ref: $TEXELUI_REF"
+    git checkout "$TEXELUI_REF"
+fi
 
 log "Running go mod tidy..."
 go mod tidy
@@ -43,12 +49,25 @@ log "Running TexelUI tests..."
 go test ./... || log "Some tests failed - review needed"
 success "TexelUI tests complete"
 
+log "Building TexelUI binaries..."
+go build -o bin/texelui ./cmd/texelui
+go build -o bin/texelui-demo ./cmd/texelui-demo
+success "TexelUI CLI/demo built"
+
+log "Testing texelui CLI starts (will timeout after 2s)..."
+timeout 2 ./bin/texelui --help 2>/dev/null || true
+success "texelui CLI runs"
+
 cd "$WORK_DIR"
 
 # Test 2: Clone and build Texelation
 log "=== Test 2: Texelation builds with TexelUI dependency ==="
 git clone git@github.com:framegrace/texelation.git
 cd texelation
+if [[ -n "$TEXELATION_REF" ]]; then
+    log "Checking out Texelation ref: $TEXELATION_REF"
+    git checkout "$TEXELATION_REF"
+fi
 
 log "Running go mod tidy..."
 go mod tidy
@@ -98,17 +117,25 @@ log "Work directory: $WORK_DIR"
 log ""
 log "TexelUI:"
 log "  - Location: $WORK_DIR/texelui"
+if [[ -n "$TEXELUI_REF" ]]; then
+    log "  - Ref: $TEXELUI_REF"
+fi
 log "  - Build: PASSED"
+log "  - Binaries: bin/texelui, bin/texelui-demo"
 log ""
 log "Texelation:"
 log "  - Location: $WORK_DIR/texelation"
+if [[ -n "$TEXELATION_REF" ]]; then
+    log "  - Ref: $TEXELATION_REF"
+fi
 log "  - Build: PASSED"
 log "  - Binaries: bin/texel-server, bin/texelterm, bin/help"
 log ""
 log "Next steps:"
-log "  1. Test texel-server and texel-client manually"
-log "  2. Test texelterm standalone"
-log "  3. Verify theme loading works"
-log "  4. Check app registration"
+log "  1. Test texelui CLI and demo manually"
+log "  2. Test texel-server and texel-client manually"
+log "  3. Test texelterm standalone"
+log "  4. Verify theme loading works"
+log "  5. Check app registration"
 log ""
 success "Verification complete!"

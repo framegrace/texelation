@@ -9,6 +9,7 @@
 package main
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"context"
 	"errors"
 	"flag"
@@ -24,11 +25,11 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/client"
-	serverrt "texelation/internal/runtime/server"
-	"texelation/protocol"
-	"texelation/registry"
-	"texelation/texel"
+	"github.com/framegrace/texelation/client"
+	serverrt "github.com/framegrace/texelation/internal/runtime/server"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelation/texel"
 )
 
 func main() {
@@ -127,7 +128,7 @@ func buildDesktop() (*texel.DesktopEngine, *stressApp) {
 	lifecycle := &texel.LocalAppLifecycle{}
 
 	app := newStressApp("stress", "starting")
-	shellFactory := func() texel.App { return app }
+	shellFactory := func() texelcore.App { return app }
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "welcome", lifecycle)
 	if err != nil {
@@ -141,7 +142,7 @@ func buildDesktop() (*texel.DesktopEngine, *stressApp) {
 		return newStressApp("welcome", "loaded")
 	})
 
-	desktop.RegisterSnapshotFactory("stress", func(title string, cfg map[string]interface{}) texel.App {
+	desktop.RegisterSnapshotFactory("stress", func(title string, cfg map[string]interface{}) texelcore.App {
 		msg, _ := cfg["message"].(string)
 		return newStressApp(title, msg)
 	})
@@ -279,14 +280,14 @@ func (a *stressApp) Run() error      { return nil }
 func (a *stressApp) Stop()           {}
 func (a *stressApp) Resize(int, int) {}
 
-func (a *stressApp) Render() [][]texel.Cell {
+func (a *stressApp) Render() [][]texelcore.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	row := make([]texel.Cell, len(a.runes))
+	row := make([]texelcore.Cell, len(a.runes))
 	for i, ch := range a.runes {
-		row[i] = texel.Cell{Ch: ch, Style: tcell.StyleDefault}
+		row[i] = texelcore.Cell{Ch: ch, Style: tcell.StyleDefault}
 	}
-	return [][]texel.Cell{row}
+	return [][]texelcore.Cell{row}
 }
 
 func (a *stressApp) GetTitle() string          { return a.title }

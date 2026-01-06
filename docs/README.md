@@ -18,7 +18,7 @@ This directory houses Texelation's supporting documentation. Key entry points:
 - [Programmer guide](programmer/DEVELOPER_GUIDE.md) – TexelUI, cards, effects, integration
 - [Texel app guide](TEXEL_APP_GUIDE.md) – building pipeline-based apps
 - [Effect development guide](EFFECTS_GUIDE.md) – creating visual effects
-- [TexelUI developer guide](texelui/README.md)
+- TexelUI docs now live in the `github.com/framegrace/texelui` repo.
 
 ## Planning & Roadmap
 - [Future roadmap](FUTURE_ROADMAP.md) – backlog and upcoming work

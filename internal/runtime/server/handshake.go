@@ -13,7 +13,7 @@ import (
 	"errors"
 	"io"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 var (

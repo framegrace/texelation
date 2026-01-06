@@ -52,19 +52,25 @@ git filter-repo \
     --path texel/control_bus.go \
     --path texel/control_bus_test.go \
     --path texel/storage.go \
-    --path texel/storage_test.go \
-    --path texel/cards/ \
     --path texel/theme/ \
-    --path config/ \
     --path texelui/ \
-    --path internal/devshell/ \
-    --path defaults/ \
+    --path apps/texeluicli/ \
+    --path apps/texelui-demo/ \
+    --path cmd/texelui/ \
+    --path cmd/texelui-demo/ \
+    --path docs/texelui/ \
+    --path docs/TEXELUI_ARCHITECTURE_REVIEW.md \
+    --path docs/TEXELUI_QUICKSTART.md \
+    --path docs/TEXELUI_THEME.md \
+    --path texelui_cli_demo.sh \
+    --path LICENSE \
+    --path CODE_OF_CONDUCT.md \
     --force
 
 log "Reorganizing directory structure..."
 
 # Create new directory structure
-mkdir -p core cards theme ui runner
+mkdir -p core theme
 
 # Move core files
 if [[ -f texel/app.go ]]; then
@@ -73,13 +79,6 @@ if [[ -f texel/app.go ]]; then
     mv texel/control_bus.go core/
     [[ -f texel/control_bus_test.go ]] && mv texel/control_bus_test.go core/
     mv texel/storage.go core/
-    [[ -f texel/storage_test.go ]] && mv texel/storage_test.go core/
-fi
-
-# Move cards
-if [[ -d texel/cards ]]; then
-    mv texel/cards/* cards/
-    rmdir texel/cards
 fi
 
 # Move theme
@@ -88,18 +87,22 @@ if [[ -d texel/theme ]]; then
     rmdir texel/theme
 fi
 
+# Drop Texelation-only per-app overrides
+rm -f theme/app_overrides.go
+
 # Clean up empty texel directory
 rmdir texel 2>/dev/null || true
 
-# Move texelui to ui
+# Flatten texelui/* packages into repository root
 if [[ -d texelui ]]; then
-    mv texelui ui
-fi
-
-# Move devshell to runner
-if [[ -d internal/devshell ]]; then
-    mv internal/devshell/* runner/
-    rm -rf internal
+    for dir in core widgets scroll layout primitives adapter color; do
+        if [[ -d "texelui/$dir" ]]; then
+            mkdir -p "$dir"
+            mv "texelui/$dir"/* "$dir"/
+            rmdir "texelui/$dir"
+        fi
+    done
+    rmdir texelui 2>/dev/null || true
 fi
 
 log "Creating go.mod..."
@@ -110,7 +113,6 @@ go 1.24.3
 
 require (
 	github.com/gdamore/tcell/v2 v2.8.1
-	github.com/mattn/go-runewidth v0.0.16
 )
 
 require (
@@ -131,16 +133,16 @@ update_imports() {
     sed -i \
         -e 's|"texelation/texel"|"github.com/framegrace/texelui/core"|g' \
         -e 's|"texelation/texel/theme"|"github.com/framegrace/texelui/theme"|g' \
-        -e 's|"texelation/texel/cards"|"github.com/framegrace/texelui/cards"|g' \
-        -e 's|"texelation/config"|"github.com/framegrace/texelui/config"|g' \
-        -e 's|"texelation/texelui/core"|"github.com/framegrace/texelui/ui/core"|g' \
-        -e 's|"texelation/texelui/widgets"|"github.com/framegrace/texelui/ui/widgets"|g' \
-        -e 's|"texelation/texelui/scroll"|"github.com/framegrace/texelui/ui/scroll"|g' \
-        -e 's|"texelation/texelui/layout"|"github.com/framegrace/texelui/ui/layout"|g' \
-        -e 's|"texelation/texelui/primitives"|"github.com/framegrace/texelui/ui/primitives"|g' \
-        -e 's|"texelation/texelui/adapter"|"github.com/framegrace/texelui/ui/adapter"|g' \
-        -e 's|"texelation/texelui/color"|"github.com/framegrace/texelui/ui/color"|g' \
-        -e 's|"texelation/internal/devshell"|"github.com/framegrace/texelui/runner"|g' \
+        -e 's|"texelation/texelui/core"|"github.com/framegrace/texelui/core"|g' \
+        -e 's|"texelation/texelui/widgets"|"github.com/framegrace/texelui/widgets"|g' \
+        -e 's|"texelation/texelui/scroll"|"github.com/framegrace/texelui/scroll"|g' \
+        -e 's|"texelation/texelui/layout"|"github.com/framegrace/texelui/layout"|g' \
+        -e 's|"texelation/texelui/primitives"|"github.com/framegrace/texelui/primitives"|g' \
+        -e 's|"texelation/texelui/adapter"|"github.com/framegrace/texelui/adapter"|g' \
+        -e 's|"texelation/texelui/color"|"github.com/framegrace/texelui/color"|g' \
+        -e 's|"texelation/texelui/widgets/colorpicker"|"github.com/framegrace/texelui/widgets/colorpicker"|g' \
+        -e 's|"texelation/apps/texeluicli"|"github.com/framegrace/texelui/apps/texeluicli"|g' \
+        -e 's|"texelation/apps/texelui-demo"|"github.com/framegrace/texelui/apps/texelui-demo"|g' \
         "$file"
 }
 
@@ -149,33 +151,342 @@ find . -name "*.go" -type f | while read -r file; do
     update_imports "$file"
 done
 
+log "Deduping core imports..."
+find . -name "*.go" -type f -print0 | xargs -0 perl -0pi -e 's/\n(\s*"github.com\/framegrace\/texelui\/core")\n\s*"github.com\/framegrace\/texelui\/core"/\n$1/g'
+
+log "Updating docs import paths..."
+if [[ -d docs ]]; then
+    find docs -name "*.md" -type f | while read -r file; do
+        sed -i \
+            -e 's|texelation/texelui/|github.com/framegrace/texelui/|g' \
+            -e 's|texelation/texel/theme|github.com/framegrace/texelui/theme|g' \
+            -e 's|texelation/texel|github.com/framegrace/texelui/core|g' \
+            "$file"
+    done
+fi
+log "Reminder: update docs for runtime runner (runtime imports, RunUI, DisableMouse) and build instructions."
+
 # Update package declarations where needed
 # core/ files should be package core
 for file in core/*.go; do
     [[ -f "$file" ]] && sed -i 's/^package texel$/package core/' "$file"
 done
 
-# cards/ files should be package cards (already correct)
 # theme/ files should be package theme (already correct)
-# config/ files should be package config (already correct)
 
-# runner/ files should be package runner
-for file in runner/*.go; do
-    [[ -f "$file" ]] && sed -i 's/^package devshell$/package runner/' "$file"
-done
+log "Ensuring theme defaults are saved on first load..."
+if [[ -f theme/theme.go ]] && ! grep -q "ApplyDefaults(instance)" theme/theme.go; then
+    perl -0pi -e 's/(instance\.LoadStandardSemantics\(\)\n)/$1\n\t\tif loadErr == nil {\n\t\t\tApplyDefaults(instance)\n\t\t}\n/' theme/theme.go
+fi
 
 log "Updating type references..."
-# In adapter and other files, update texel.Cell to core.Cell, texel.App to core.App
-find . -name "*.go" -type f | while read -r file; do
-    sed -i \
-        -e 's/texel\.Cell/core.Cell/g' \
-        -e 's/texel\.App/core.App/g' \
-        -e 's/texel\.ControlBus/core.ControlBus/g' \
-        -e 's/texel\.NewControlBus/core.NewControlBus/g' \
-        -e 's/texel\.AppStorage/core.AppStorage/g' \
-        -e 's/texel\.StorageService/core.StorageService/g' \
-        "$file"
+# Update texel.* references to core.* outside the core package
+find . -name "*.go" -type f ! -path "./core/*" | while read -r file; do
+    sed -i 's/texel\./core./g' "$file"
 done
+
+# Clean up core package self-references/imports
+find core -name "*.go" -type f | while read -r file; do
+    if grep -q '^package core$' "$file"; then
+        sed -i \
+            -e 's/core\.//g' \
+            -e '/"github.com\/framegrace\/texelui\/core"/d' \
+            "$file"
+    fi
+done
+
+# Remove leftover texel.* qualifiers inside core package
+find core -name "*.go" -type f | while read -r file; do
+    sed -i 's/texel\.//g' "$file"
+done
+
+log "Adding runtime runner..."
+mkdir -p runtime
+cat > runtime/runner.go << 'EOF'
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: runtime/runner.go
+// Summary: Runtime runner for TexelUI apps without Texelation.
+
+package runtime
+
+import (
+	"fmt"
+	"sync"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/framegrace/texelui/adapter"
+	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/theme"
+)
+
+// Builder constructs a core.App, optionally using CLI args.
+type Builder func(args []string) (core.App, error)
+
+// Options controls the runtime runner behavior.
+type Options struct {
+	ExitKey      tcell.Key
+	DisableMouse bool
+	OnInit       func(screen tcell.Screen)
+	OnExit       func()
+}
+
+var (
+	screenFactory = tcell.NewScreen
+	registryMu    sync.RWMutex
+	registry      = map[string]Builder{}
+
+	exitMu     sync.Mutex
+	activeExit chan struct{}
+)
+
+// Register adds a builder to the runtime registry.
+func Register(name string, builder Builder) {
+	if name == "" || builder == nil {
+		return
+	}
+	registryMu.Lock()
+	registry[name] = builder
+	registryMu.Unlock()
+}
+
+// RunApp runs a registered app by name.
+func RunApp(name string, args []string) error {
+	registryMu.RLock()
+	builder := registry[name]
+	registryMu.RUnlock()
+	if builder == nil {
+		return fmt.Errorf("runtime: unknown app %q", name)
+	}
+	return RunWithOptions(builder, Options{}, args...)
+}
+
+// Run runs a core.App builder in a runtime terminal session.
+func Run(builder Builder, args ...string) error {
+	return RunWithOptions(builder, Options{}, args...)
+}
+
+// RunWithOptions runs a core.App builder with custom options.
+func RunWithOptions(builder Builder, opts Options, args ...string) error {
+	if builder == nil {
+		return fmt.Errorf("runtime: nil builder")
+	}
+	app, err := builder(args)
+	if err != nil {
+		return err
+	}
+	return runApp(app, opts)
+}
+
+// RunUI runs a UIManager directly in a runtime terminal session.
+func RunUI(ui *core.UIManager) error {
+	return RunUIWithOptions(ui, Options{})
+}
+
+// RunUIWithOptions runs a UIManager with custom options.
+func RunUIWithOptions(ui *core.UIManager, opts Options) error {
+	app := adapter.NewUIApp("", ui)
+	return runApp(app, opts)
+}
+
+// RequestExit signals the active runner (if any) to exit.
+func RequestExit() {
+	exitMu.Lock()
+	ch := activeExit
+	exitMu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+// SetScreenFactory overrides the screen factory used by the runner.
+func SetScreenFactory(factory func() (tcell.Screen, error)) {
+	if factory == nil {
+		screenFactory = tcell.NewScreen
+		return
+	}
+	screenFactory = factory
+}
+
+func normalizeOptions(opts Options) Options {
+	if opts.ExitKey == 0 {
+		opts.ExitKey = tcell.KeyEscape
+	}
+	return opts
+}
+
+func runApp(app core.App, opts Options) error {
+	opts = normalizeOptions(opts)
+
+	exitMu.Lock()
+	activeExit = make(chan struct{}, 1)
+	exitMu.Unlock()
+	defer func() {
+		exitMu.Lock()
+		activeExit = nil
+		exitMu.Unlock()
+	}()
+
+	screen, err := screenFactory()
+	if err != nil {
+		return fmt.Errorf("init screen: %w", err)
+	}
+	if err := screen.Init(); err != nil {
+		return fmt.Errorf("screen init: %w", err)
+	}
+	defer screen.Fini()
+
+	if opts.OnInit != nil {
+		opts.OnInit(screen)
+	}
+	if !opts.DisableMouse {
+		screen.EnableMouse(tcell.MouseMotionEvents)
+		defer screen.DisableMouse()
+	}
+	screen.EnablePaste()
+
+	_ = theme.Get()
+	if err := theme.GetLoadError(); err != nil {
+		return fmt.Errorf("theme: %w", err)
+	}
+
+	width, height := screen.Size()
+	app.Resize(width, height)
+	refreshCh := make(chan bool, 1)
+	app.SetRefreshNotifier(refreshCh)
+
+	draw := func() {
+		screen.Clear()
+		buffer := app.Render()
+		if buffer != nil {
+			for y := 0; y < len(buffer); y++ {
+				row := buffer[y]
+				for x := 0; x < len(row); x++ {
+					cell := row[x]
+					screen.SetContent(x, y, cell.Ch, nil, cell.Style)
+				}
+			}
+		}
+		screen.Show()
+	}
+
+	draw()
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- app.Run()
+	}()
+	defer app.Stop()
+
+	go func() {
+		for range refreshCh {
+			screen.PostEvent(tcell.NewEventInterrupt(nil))
+		}
+	}()
+
+	var pasteBuffer []byte
+	var inPaste bool
+
+	for {
+		select {
+		case err := <-runErr:
+			if opts.OnExit != nil {
+				opts.OnExit()
+			}
+			return err
+		case <-activeExit:
+			if opts.OnExit != nil {
+				opts.OnExit()
+			}
+			return nil
+		default:
+		}
+
+		ev := screen.PollEvent()
+		switch tev := ev.(type) {
+		case *tcell.EventInterrupt:
+			draw()
+		case *tcell.EventResize:
+			w, h := tev.Size()
+			app.Resize(w, h)
+			draw()
+		case *tcell.EventPaste:
+			if tev.Start() {
+				inPaste = true
+				pasteBuffer = nil
+			} else if tev.End() {
+				inPaste = false
+				if ph, ok := app.(interface{ HandlePaste([]byte) }); ok && len(pasteBuffer) > 0 {
+					ph.HandlePaste(pasteBuffer)
+					draw()
+				}
+				pasteBuffer = nil
+			}
+		case *tcell.EventKey:
+			if tev.Key() == opts.ExitKey || tev.Key() == tcell.KeyCtrlC {
+				if opts.OnExit != nil {
+					opts.OnExit()
+				}
+				return nil
+			}
+			if inPaste {
+				if tev.Key() == tcell.KeyRune {
+					pasteBuffer = append(pasteBuffer, []byte(string(tev.Rune()))...)
+				} else if tev.Key() == tcell.KeyEnter || tev.Key() == 10 {
+					pasteBuffer = append(pasteBuffer, '\n')
+				}
+			} else {
+				app.HandleKey(tev)
+				draw()
+			}
+		case *tcell.EventMouse:
+			if mh, ok := app.(interface{ HandleMouse(*tcell.EventMouse) }); ok {
+				mh.HandleMouse(tev)
+				draw()
+			}
+		}
+	}
+}
+EOF
+
+log "Updating texelui-demo entrypoint..."
+cat > cmd/texelui-demo/main.go << 'EOF'
+package main
+
+import (
+	"flag"
+	"log"
+
+	"github.com/framegrace/texelui/apps/texelui-demo"
+	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/runtime"
+)
+
+func main() {
+	flag.Parse()
+	runtime.Register("texelui-demo", func(args []string) (core.App, error) {
+		return texeluidemo.New(), nil
+	})
+	if err := runtime.RunApp("texelui-demo", flag.Args()); err != nil {
+		log.Fatalf("texelui-demo: %v", err)
+	}
+}
+EOF
+
+log "Cleaning duplicate core imports..."
+if [[ -f adapter/texel_app.go ]]; then
+    perl -0pi -e 's/\n\t\"github.com\/framegrace\/texelui\/core\"\n\t\"github.com\/framegrace\/texelui\/core\"/\n\t\"github.com\/framegrace\/texelui\/core\"/s' adapter/texel_app.go
+fi
+
+log "Updating texelui_cli_demo.sh instructions..."
+if [[ -f texelui_cli_demo.sh ]]; then
+    sed -i 's/make build-apps/go build -o bin\\/texelui .\\/cmd\\/texelui/' texelui_cli_demo.sh
+fi
 
 log "Creating README.md..."
 cat > README.md << 'EOF'
@@ -185,14 +496,12 @@ A terminal UI library for building text-based applications in Go.
 
 ## Features
 
-- **Core primitives**: App interface, Cell type, ControlBus for event signaling
-- **Theme system**: Semantic colors, palettes, app-specific overrides
-- **Configuration**: JSON-based config with hot-reload support
+- **Core primitives**: App interface, Cell type, ControlBus, storage interfaces
+- **Theme system**: Semantic colors + palettes, shared config path (`~/.config/texelation/theme.json`)
 - **Widget library**: Button, Input, Checkbox, ComboBox, TextArea, ColorPicker, etc.
-- **Scroll support**: ScrollPane with smooth scrolling
-- **Layout managers**: VBox, HBox for widget positioning
-- **Cards pipeline**: Composable rendering stages with effects
-- **Standalone runner**: Run apps outside the desktop environment
+- **Layouts + scrolling**: VBox, HBox, ScrollPane, primitives
+- **Texelation integration**: UIApp adapter for embedding in the desktop
+- **Standalone tools**: TexelUI CLI + bash adaptor, demo app
 
 ## Installation
 
@@ -202,45 +511,19 @@ go get github.com/framegrace/texelui
 
 ## Quick Start
 
+```bash
+# Run the widget showcase demo
+go run ./cmd/texelui-demo
+
+# Use the CLI (server + bash adaptor)
+go run ./cmd/texelui --help
+```
+
+## Embedding in Texelation
+
 ```go
-package main
-
-import (
-    "github.com/framegrace/texelui/core"
-    "github.com/framegrace/texelui/runner"
-    "github.com/gdamore/tcell/v2"
-)
-
-type MyApp struct {
-    width, height int
-    stopCh        chan struct{}
-    refresh       chan<- bool
-}
-
-func (a *MyApp) Run() error        { <-a.stopCh; return nil }
-func (a *MyApp) Stop()             { close(a.stopCh) }
-func (a *MyApp) Resize(w, h int)   { a.width, a.height = w, h }
-func (a *MyApp) GetTitle() string  { return "My App" }
-func (a *MyApp) SetRefreshNotifier(ch chan<- bool) { a.refresh = ch }
-func (a *MyApp) HandleKey(ev *tcell.EventKey) {}
-func (a *MyApp) Render() [][]core.Cell {
-    // Return a 2D buffer of cells
-    buf := make([][]core.Cell, a.height)
-    for y := range buf {
-        buf[y] = make([]core.Cell, a.width)
-        for x := range buf[y] {
-            buf[y][x] = core.Cell{Ch: ' ', Style: tcell.StyleDefault}
-        }
-    }
-    return buf
-}
-
-func main() {
-    app := &MyApp{stopCh: make(chan struct{})}
-    runner.Run(func(args []string) (core.App, error) {
-        return app, nil
-    }, nil)
-}
+ui := core.NewUIManager()
+app := adapter.NewUIApp("My App", ui)
 ```
 
 ## License
@@ -254,14 +537,13 @@ EOF
 
 log "Committing reorganization..."
 git add -A
-git commit -m "Reorganize as standalone TexelUI library
+git commit -m "Reorganize as runtime TexelUI library
 
 - Move core primitives (App, Cell, ControlBus, Storage) to core/
-- Move cards pipeline to cards/
 - Move theme system to theme/
-- Move config system to config/
-- Move widget library to ui/
-- Move standalone runner to runner/
+- Flatten texelui/* packages to repo root
+- Move TexelUI CLI + demo into this repo
+- Drop Texelation-only theme overrides
 - Update all import paths to github.com/framegrace/texelui
 - Update package declarations
 

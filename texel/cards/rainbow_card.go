@@ -1,12 +1,12 @@
 package cards
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"math"
 	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
 )
 
 // RainbowCard applies a simple rainbow tint to the incoming buffer when enabled.
@@ -52,7 +52,7 @@ func (c *RainbowCard) SetRefreshNotifier(ch chan<- bool) {
 
 // Render tints the buffer when enabled.
 
-func (c *RainbowCard) Render(input [][]texel.Cell) [][]texel.Cell {
+func (c *RainbowCard) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
 	if input == nil {
 		return nil
 	}

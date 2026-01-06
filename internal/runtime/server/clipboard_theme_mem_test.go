@@ -9,15 +9,16 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"io"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/internal/runtime/server/testutil"
-	"texelation/protocol"
-	"texelation/texel"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelation/internal/runtime/server/testutil"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
+	"github.com/framegrace/texelui/theme"
 )
 
 type signalScreenDriver struct{}
@@ -39,8 +40,8 @@ type signalApp struct{ title string }
 func (s *signalApp) Run() error            { return nil }
 func (s *signalApp) Stop()                 {}
 func (s *signalApp) Resize(cols, rows int) {}
-func (s *signalApp) Render() [][]texel.Cell {
-	return [][]texel.Cell{{{Ch: 'x', Style: tcell.StyleDefault}}}
+func (s *signalApp) Render() [][]texelcore.Cell {
+	return [][]texelcore.Cell{{{Ch: 'x', Style: tcell.StyleDefault}}}
 }
 func (s *signalApp) GetTitle() string               { return s.title }
 func (s *signalApp) HandleKey(ev *tcell.EventKey)   {}
@@ -51,7 +52,7 @@ func TestClipboardAndThemeRoundTrip(t *testing.T) {
 	driver := signalScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	app := &signalApp{title: "welcome"}
-	shellFactory := func() texel.App { return app }
+	shellFactory := func() texelcore.App { return app }
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {

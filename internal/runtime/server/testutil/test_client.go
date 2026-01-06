@@ -18,8 +18,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/client"
-	"texelation/protocol"
+	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/protocol"
 )
 
 // TestClient wraps a client connection and provides convenient methods for

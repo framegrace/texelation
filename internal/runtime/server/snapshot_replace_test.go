@@ -1,6 +1,7 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"context"
 	"encoding/json"
 	"os"
@@ -10,8 +11,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/registry"
-	"texelation/texel"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelation/texel"
 )
 
 // recordingAppReplace is a mock app that supports snapshotting
@@ -23,7 +24,7 @@ type recordingAppReplace struct {
 func (r *recordingAppReplace) Run() error                        { return nil }
 func (r *recordingAppReplace) Stop()                             {}
 func (r *recordingAppReplace) Resize(cols, rows int)             {}
-func (r *recordingAppReplace) Render() [][]texel.Cell            { return [][]texel.Cell{{}} }
+func (r *recordingAppReplace) Render() [][]texelcore.Cell            { return [][]texelcore.Cell{{}} }
 func (r *recordingAppReplace) GetTitle() string                  { return r.title }
 func (r *recordingAppReplace) HandleKey(ev *tcell.EventKey)      {}
 func (r *recordingAppReplace) SetRefreshNotifier(ch chan<- bool) {}
@@ -67,7 +68,7 @@ func TestSnapshotSavedOnReplaceWithApp(t *testing.T) {
 	lifecycle := texel.NoopAppLifecycle{}
 
 	// Factory creates "Launcher" initially
-	shellFactory := func() texel.App { return &recordingAppReplace{title: "Launcher", appType: "launcher"} }
+	shellFactory := func() texelcore.App { return &recordingAppReplace{title: "Launcher", appType: "launcher"} }
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {

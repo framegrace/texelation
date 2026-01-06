@@ -11,20 +11,20 @@ package help
 import (
 	"sync"
 
+	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
 )
 
 // SimpleColoredHelp is a static help screen with colors.
 type SimpleColoredHelp struct {
 	width  int
 	height int
-	buffer [][]texel.Cell
+	buffer [][]texelcore.Cell
 	mu     sync.RWMutex
 }
 
 // NewSimpleColoredHelp creates a simple colored help screen.
-func NewSimpleColoredHelp() texel.App {
+func NewSimpleColoredHelp() texelcore.App {
 	return &SimpleColoredHelp{
 		width:  80,
 		height: 24,
@@ -56,14 +56,14 @@ func (w *SimpleColoredHelp) Resize(cols, rows int) {
 func (w *SimpleColoredHelp) renderBuffer() {
 	// Don't render if dimensions are invalid
 	if w.width <= 0 || w.height <= 0 {
-		w.buffer = make([][]texel.Cell, 0)
+		w.buffer = make([][]texelcore.Cell, 0)
 		return
 	}
 
 	// Create buffer
-	w.buffer = make([][]texel.Cell, w.height)
+	w.buffer = make([][]texelcore.Cell, w.height)
 	for y := 0; y < w.height; y++ {
-		w.buffer[y] = make([]texel.Cell, w.width)
+		w.buffer[y] = make([]texelcore.Cell, w.width)
 	}
 
 	// Fill entire buffer with visible pattern to debug rendering issues
@@ -78,7 +78,7 @@ func (w *SimpleColoredHelp) renderBuffer() {
 			} else {
 				ch = ' '
 			}
-			w.buffer[y][x] = texel.Cell{Ch: ch, Style: bgStyle}
+			w.buffer[y][x] = texelcore.Cell{Ch: ch, Style: bgStyle}
 		}
 	}
 
@@ -118,21 +118,21 @@ func (w *SimpleColoredHelp) renderBuffer() {
 			}
 			for i, ch := range line.text {
 				if x+i < w.width && x+i < len(w.buffer[line.y]) {
-					w.buffer[line.y][x+i] = texel.Cell{Ch: ch, Style: line.style}
+					w.buffer[line.y][x+i] = texelcore.Cell{Ch: ch, Style: line.style}
 				}
 			}
 		}
 	}
 }
 
-func (w *SimpleColoredHelp) Render() [][]texel.Cell {
+func (w *SimpleColoredHelp) Render() [][]texelcore.Cell {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
 	if w.buffer == nil {
 		// Can't call renderBuffer here as it needs write lock
 		// Return empty buffer
-		return make([][]texel.Cell, 0)
+		return make([][]texelcore.Cell, 0)
 	}
 	return w.buffer
 }

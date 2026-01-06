@@ -9,12 +9,13 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 type publisherScreenDriver struct{}
@@ -38,8 +39,8 @@ type simpleApp struct {
 func (s *simpleApp) Run() error            { return nil }
 func (s *simpleApp) Stop()                 {}
 func (s *simpleApp) Resize(cols, rows int) {}
-func (s *simpleApp) Render() [][]texel.Cell {
-	return [][]texel.Cell{{{Ch: 'a', Style: tcell.StyleDefault}}}
+func (s *simpleApp) Render() [][]texelcore.Cell {
+	return [][]texelcore.Cell{{{Ch: 'a', Style: tcell.StyleDefault}}}
 }
 func (s *simpleApp) GetTitle() string               { return s.title }
 func (s *simpleApp) HandleKey(ev *tcell.EventKey)   {}
@@ -49,7 +50,7 @@ func TestDesktopPublisherProducesDiffs(t *testing.T) {
 	driver := publisherScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 
-	shellFactory := func() texel.App { return &simpleApp{title: "shell"} }
+	shellFactory := func() texelcore.App { return &simpleApp{title: "shell"} }
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {

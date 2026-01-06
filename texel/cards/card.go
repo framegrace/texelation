@@ -1,8 +1,8 @@
 package cards
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
 )
 
 // Card represents a rendering stage within a Texel application pipeline.
@@ -12,7 +12,7 @@ type Card interface {
 	Run() error
 	Stop()
 	Resize(cols, rows int)
-	Render(input [][]texel.Cell) [][]texel.Cell
+	Render(input [][]texelcore.Cell) [][]texelcore.Cell
 	HandleKey(ev *tcell.EventKey)
 	SetRefreshNotifier(refreshChan chan<- bool)
 }

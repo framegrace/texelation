@@ -4,12 +4,19 @@ import (
 	"flag"
 	"log"
 
-	"texelation/internal/devshell"
+	"github.com/framegrace/texelation/apps/configeditor"
+	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/runtime"
 )
 
 func main() {
 	flag.Parse()
-	if err := devshell.RunApp("config-editor", flag.Args()); err != nil {
+
+	builder := func(_ []string) (texelcore.App, error) {
+		return configeditor.New(nil), nil
+	}
+
+	if err := runtime.Run(builder, flag.Args()...); err != nil {
 		log.Fatalf("config-editor: %v", err)
 	}
 }

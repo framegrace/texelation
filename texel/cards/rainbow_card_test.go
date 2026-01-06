@@ -1,17 +1,17 @@
 package cards
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"testing"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
 )
 
 func TestRainbowCardToggleAndRender(t *testing.T) {
 	card := NewRainbowCard(0.5, 0.6)
 
-	original := [][]texel.Cell{{{
+	original := [][]texelcore.Cell{{{
 		Ch:    'a',
 		Style: tcell.StyleDefault.Foreground(tcell.ColorBlue),
 	}}}

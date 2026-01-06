@@ -9,7 +9,7 @@
 package esctest
 
 import (
-	"texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
 // Driver provides a headless interface to a texelterm instance for testing.

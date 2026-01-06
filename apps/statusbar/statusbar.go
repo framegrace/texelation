@@ -10,11 +10,12 @@ package statusbar
 
 import (
 	"fmt"
+	"github.com/framegrace/texelation/apps/clock"
+	"github.com/framegrace/texelation/internal/theming"
+	"github.com/framegrace/texelation/texel"
+	texelcore "github.com/framegrace/texelui/core"
 	"strings"
 	"sync"
-	"texelation/apps/clock"
-	"texelation/texel"
-	"texelation/texel/theme"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -45,12 +46,12 @@ type StatusBarApp struct {
 	desktopBgColor tcell.Color
 
 	// Internal Clock
-	clockApp  texel.App
+	clockApp  texelcore.App
 	stopClock chan struct{}
 }
 
 // New creates a new StatusBarApp.
-func New() texel.App {
+func New() texelcore.App {
 	return &StatusBarApp{
 		clockApp:      clock.NewClockApp(),
 		stopClock:     make(chan struct{}),
@@ -103,20 +104,20 @@ func (a *StatusBarApp) OnEvent(event texel.Event) {
 	}
 }
 
-func (a *StatusBarApp) Render() [][]texel.Cell {
+func (a *StatusBarApp) Render() [][]texelcore.Cell {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	buf := make([][]texel.Cell, a.height)
+	buf := make([][]texelcore.Cell, a.height)
 	for i := range buf {
-		buf[i] = make([]texel.Cell, a.width)
+		buf[i] = make([]texelcore.Cell, a.width)
 	}
 	if a.height == 0 {
 		return buf
 	}
 
 	// Define color schemes
-	tm := theme.ForApp("statusbar")
+	tm := theming.ForApp("statusbar")
 	// Base background (Mantle)
 	defbgColor := tm.GetSemanticColor("bg.mantle").TrueColor()
 	deffgColor := tm.GetSemanticColor("text.primary").TrueColor()
@@ -144,7 +145,7 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 
 	// Fill the entire bar with the base style first
 	for i := 0; i < a.width; i++ {
-		buf[0][i] = texel.Cell{Ch: ' ', Style: styleBase}
+		buf[0][i] = texelcore.Cell{Ch: ' ', Style: styleBase}
 	}
 
 	// Find the index of the active workspace
@@ -159,9 +160,9 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 	// --- Left-aligned content (Tabs) ---
 	// Draw first char
 	if activeIndex == 0 {
-		buf[0][0] = texel.Cell{Ch: leftTabSeparator, Style: styleActiveTabStart}
+		buf[0][0] = texelcore.Cell{Ch: leftTabSeparator, Style: styleActiveTabStart}
 	} else {
-		buf[0][0] = texel.Cell{Ch: leftTabSeparator, Style: styleInactiveTabStart}
+		buf[0][0] = texelcore.Cell{Ch: leftTabSeparator, Style: styleInactiveTabStart}
 	}
 	col := 1
 	for i, wsID := range a.allWorkspaces {
@@ -178,7 +179,7 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 		wsName := fmt.Sprintf(" %d ", wsID)
 		for _, r := range wsName {
 			if col < a.width {
-				buf[0][col] = texel.Cell{Ch: r, Style: currentStyle}
+				buf[0][col] = texelcore.Cell{Ch: r, Style: currentStyle}
 				col++
 			}
 		}
@@ -225,7 +226,7 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 					}
 				}
 			}
-			buf[0][col] = texel.Cell{Ch: separatorChar, Style: separatorStyle}
+			buf[0][col] = texelcore.Cell{Ch: separatorChar, Style: separatorStyle}
 			col++
 		}
 	}
@@ -248,7 +249,7 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 	// Draw right-aligned string, ensuring it doesn't overwrite other content
 	if rightCol > tabsEndCol {
 		for i, r := range rightStr {
-			buf[0][rightCol+i] = texel.Cell{Ch: r, Style: styleBase}
+			buf[0][rightCol+i] = texelcore.Cell{Ch: r, Style: styleBase}
 		}
 	}
 
@@ -270,14 +271,14 @@ func (a *StatusBarApp) Render() [][]texel.Cell {
 	centerCol := tabsEndCol + 2
 	for _, r := range modeStr {
 		if centerCol < a.width && centerCol < rightCol {
-			buf[0][centerCol] = texel.Cell{Ch: r, Style: modeStyle}
+			buf[0][centerCol] = texelcore.Cell{Ch: r, Style: modeStyle}
 			centerCol++
 		}
 	}
 	// Draw title string right after the mode string
 	for _, r := range titleStr {
 		if centerCol < a.width && centerCol < rightCol {
-			buf[0][centerCol] = texel.Cell{Ch: r, Style: styleBase}
+			buf[0][centerCol] = texelcore.Cell{Ch: r, Style: styleBase}
 			centerCol++
 		}
 	}

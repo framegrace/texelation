@@ -11,9 +11,9 @@ package clock
 import (
 	"fmt"
 	"sync"
-	"texelation/texel"
 	"time"
 
+	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth" // Added for correct wide-character handling
 )
@@ -29,10 +29,10 @@ type clockApp struct {
 	mu            sync.RWMutex
 	stop          chan struct{}
 	refreshChan   chan<- bool
-	buf           [][]texel.Cell
+	buf           [][]texelcore.Cell
 }
 
-func NewClockApp() texel.App {
+func NewClockApp() texelcore.App {
 	return &clockApp{
 		stop: make(chan struct{}),
 	}
@@ -81,24 +81,24 @@ func (a *clockApp) Resize(cols, rows int) {
 	a.width, a.height = cols, rows
 }
 
-func (a *clockApp) Render() [][]texel.Cell {
+func (a *clockApp) Render() [][]texelcore.Cell {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
 	if a.width <= 0 || a.height <= 0 {
-		return [][]texel.Cell{}
+		return [][]texelcore.Cell{}
 	}
 
 	if len(a.buf) != a.height || (a.height > 0 && len(a.buf[0]) != a.width) {
-		a.buf = make([][]texel.Cell, a.height)
+		a.buf = make([][]texelcore.Cell, a.height)
 		for y := 0; y < a.height; y++ {
-			a.buf[y] = make([]texel.Cell, a.width)
+			a.buf[y] = make([]texelcore.Cell, a.width)
 		}
 	}
 
 	for i := range a.buf {
 		for j := range a.buf[i] {
-			a.buf[i][j] = texel.Cell{Ch: ' ', Style: tcell.StyleDefault}
+			a.buf[i][j] = texelcore.Cell{Ch: ' ', Style: tcell.StyleDefault}
 		}
 	}
 
@@ -116,7 +116,7 @@ func (a *clockApp) Render() [][]texel.Cell {
 		col := x
 		for _, ch := range str {
 			if col < a.width {
-				a.buf[y][col] = texel.Cell{Ch: ch, Style: style}
+				a.buf[y][col] = texelcore.Cell{Ch: ch, Style: style}
 				col += runewidth.RuneWidth(ch) // Advance by the character's actual width
 			}
 		}

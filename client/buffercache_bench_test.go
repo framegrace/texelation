@@ -11,7 +11,7 @@ package client
 import (
 	"testing"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func setupDelta(size int) protocol.BufferDelta {

@@ -1,13 +1,13 @@
 package cards
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
 )
 
-// dummyCard wraps a texel.App-like behaviour for smoke tests.
+// dummyCard wraps a texelcore.App-like behaviour for smoke tests.
 type dummyCard struct {
 	title       string
 	width       int
@@ -18,14 +18,14 @@ type dummyCard struct {
 func (d *dummyCard) Run() error            { return nil }
 func (d *dummyCard) Stop()                 {}
 func (d *dummyCard) Resize(cols, rows int) { d.width, d.height = cols, rows }
-func (d *dummyCard) Render(input [][]texel.Cell) [][]texel.Cell {
+func (d *dummyCard) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
 	d.renderCount++
-	buf := make([][]texel.Cell, d.height)
+	buf := make([][]texelcore.Cell, d.height)
 	for i := range buf {
-		buf[i] = make([]texel.Cell, d.width)
+		buf[i] = make([]texelcore.Cell, d.width)
 	}
 	if d.height > 0 && d.width > 0 {
-		buf[0][0] = texel.Cell{Ch: 'X', Style: tcell.StyleDefault.Foreground(tcell.ColorRed)}
+		buf[0][0] = texelcore.Cell{Ch: 'X', Style: tcell.StyleDefault.Foreground(tcell.ColorRed)}
 	}
 	return buf
 }

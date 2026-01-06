@@ -12,7 +12,7 @@ import (
 	"log"
 	"sync"
 
-	"texelation/defaults"
+	"github.com/framegrace/texelation/defaults"
 )
 
 var (

@@ -11,7 +11,7 @@ import (
 	"log"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelui/theme"
 )
 
 // PaneSnapshot captures the render buffer for a pane along with a stable ID.

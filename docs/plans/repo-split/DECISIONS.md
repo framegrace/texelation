@@ -1,6 +1,6 @@
 # Repository Split Decisions
 
-Decisions made during planning session on 2026-01-04.
+Decisions made during planning session on 2026-01-04, updated after the TexelUI refactor.
 
 ## Key Decisions
 
@@ -29,7 +29,28 @@ Decisions made during planning session on 2026-01-04.
 
 **Rationale**: Preserves commit history for files that move to each repo, while excluding unrelated commits.
 
-### 6. Original Repository Fate
+### 6. Theme + Config Ownership
+**Decision**: TexelUI owns the theme API; config files stay in `~/.config/texelation`.
+
+**Details**:
+- TexelUI loads themes from the shared `~/.config/texelation/theme.json`.
+- Per-app theme overrides remain a Texelation-only feature.
+- Theme defaults/palettes are shipped in both repos; if the theme file is missing, defaults are copied/saved.
+
+### 7. Cards/Effects/Runtime Location
+**Decision**: Cards, effects, and the runtime adapter stay in Texelation.
+
+**Rationale**: These are texel-app runtime concerns; TexelUI remains a pure TUI library.
+
+### 8. TexelUI CLI + Demo
+**Decision**: TexelUI CLI and demo move to the TexelUI repo.
+
+**Details**:
+- CLI (`texelui`) and bash adaptor are standalone, Texelation-independent.
+- Demo runs as a normal Go app using TexelUI directly (no runtime adapter).
+- Runtime runner lives in TexelUI under `runtime/` (no runtime adapter dependency).
+
+### 9. Original Repository Fate
 **Decision**: Archive/rename to texelation
 
 **Details**:
@@ -41,19 +62,22 @@ Decisions made during planning session on 2026-01-04.
 
 ### Goes to TexelUI
 - Core primitives: App, Cell, ControlBus, Storage interfaces
-- Cards pipeline system
 - Theme system
-- Config system
 - Widget library (texelui/)
-- Standalone app runner (devshell)
-- Default configuration files
+- TexelUI CLI + bash adaptor (texeluicli + cmd/texelui)
+- TexelUI demo app (standalone)
+- TexelUI docs (docs/texelui + TEXELUI_* guides)
 
 ### Stays in Texelation
 - Desktop engine (Desktop, Pane, Tree, Workspace)
 - EventDispatcher with desktop events
 - StorageService implementation
 - Buffer management
+- Cards pipeline system
+- Effects system
+- Runtime adapter (texel-app harness)
 - All apps (texelterm, help, launcher, etc.)
+- Config system + defaults
 - Protocol
 - Server/Client runtime
 - App registry

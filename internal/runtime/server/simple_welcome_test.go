@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"texelation/apps/help"
+	"github.com/framegrace/texelation/apps/help"
 )
 
 // TestSimpleColoredWelcomeRendersContent verifies that the simple colored welcome

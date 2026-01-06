@@ -14,7 +14,7 @@ package esctest
 
 import (
 	"testing"
-	"texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
 // Test_SGR_Bold tests that bold attribute works.

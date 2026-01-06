@@ -14,7 +14,7 @@ import (
 	"log"
 	"os"
 
-	clientrt "texelation/internal/runtime/client"
+	clientrt "github.com/framegrace/texelation/internal/runtime/client"
 )
 
 var runClient = clientrt.Run

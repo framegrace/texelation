@@ -14,7 +14,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func sendResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, screen tcell.Screen) {

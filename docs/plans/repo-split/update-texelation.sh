@@ -30,7 +30,7 @@ error() {
 [[ -d "texel" ]] || error "texel directory not found"
 
 # Check we're in the right repo
-grep -q "^module texelation$" go.mod || error "This doesn't look like the texelation repo"
+grep -Eq "^module (github.com/framegrace/texelation|texelation)$" go.mod || error "This doesn't look like the texelation repo"
 
 log "Creating feature branch..."
 if [[ "$DRY_RUN" == "false" ]]; then
@@ -46,7 +46,7 @@ go 1.24.3
 
 require (
 	github.com/creack/pty v1.1.24
-	github.com/framegrace/texelui v0.0.0
+	github.com/framegrace/texelui v0.2.0
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-runewidth v0.0.16
@@ -61,7 +61,6 @@ require (
 	golang.org/x/text v0.27.0 // indirect
 )
 
-replace github.com/veops/go-ansiterm => ./localmods/github.com/veops/go-ansiterm
 EOF
 fi
 
@@ -72,12 +71,17 @@ FILES_TO_REMOVE=(
     "texel/control_bus.go"
     "texel/control_bus_test.go"
     "texel/storage.go"
-    "texel/storage_test.go"
-    "texel/cards"
     "texel/theme"
-    "config"
     "texelui"
-    "internal/devshell"
+    "apps/texeluicli"
+    "apps/texelui-demo"
+    "cmd/texelui"
+    "cmd/texelui-demo"
+    "docs/texelui"
+    "docs/TEXELUI_ARCHITECTURE_REVIEW.md"
+    "docs/TEXELUI_QUICKSTART.md"
+    "docs/TEXELUI_THEME.md"
+    "texelui_cli_demo.sh"
 )
 
 for path in "${FILES_TO_REMOVE[@]}"; do
@@ -88,6 +92,55 @@ for path in "${FILES_TO_REMOVE[@]}"; do
         fi
     fi
 done
+
+if [[ "$DRY_RUN" == "false" ]]; then
+    log "Re-exporting TexelUI core types for Texelation internals..."
+    cat > texel/core_aliases.go << 'EOF'
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: texel/core_aliases.go
+// Summary: Re-exports TexelUI core types for Texelation internals.
+
+package texel
+
+import texelcore "github.com/framegrace/texelui/core"
+
+// Core app types.
+type App = texelcore.App
+type Cell = texelcore.Cell
+type PasteHandler = texelcore.PasteHandler
+type SnapshotProvider = texelcore.SnapshotProvider
+type SnapshotFactory = texelcore.SnapshotFactory
+type SelectionHandler = texelcore.SelectionHandler
+type SelectionDeclarer = texelcore.SelectionDeclarer
+type MouseWheelHandler = texelcore.MouseWheelHandler
+type MouseWheelDeclarer = texelcore.MouseWheelDeclarer
+type CloseRequester = texelcore.CloseRequester
+type CloseCallbackRequester = texelcore.CloseCallbackRequester
+type ControlBusProvider = texelcore.ControlBusProvider
+type PaneIDSetter = texelcore.PaneIDSetter
+type RenderPipeline = texelcore.RenderPipeline
+type PipelineProvider = texelcore.PipelineProvider
+
+// Control bus types.
+type ControlHandler = texelcore.ControlHandler
+type ControlCapability = texelcore.ControlCapability
+type ControlBus = texelcore.ControlBus
+type ControlRegistry = texelcore.ControlRegistry
+
+// Storage types.
+type StorageService = texelcore.StorageService
+type AppStorage = texelcore.AppStorage
+type StorageSetter = texelcore.StorageSetter
+type AppStorageSetter = texelcore.AppStorageSetter
+
+// NewControlBus provides a local helper for legacy call sites.
+func NewControlBus() ControlBus {
+	return texelcore.NewControlBus()
+}
+EOF
+fi
 
 log "Updating import paths in all Go files..."
 
@@ -109,16 +162,13 @@ update_texelui_imports() {
     local file="$1"
     sed -i \
         -e 's|"texelation/texel/theme"|"github.com/framegrace/texelui/theme"|g' \
-        -e 's|"texelation/texel/cards"|"github.com/framegrace/texelui/cards"|g' \
-        -e 's|"texelation/config"|"github.com/framegrace/texelui/config"|g' \
-        -e 's|"texelation/texelui/core"|"github.com/framegrace/texelui/ui/core"|g' \
-        -e 's|"texelation/texelui/widgets"|"github.com/framegrace/texelui/ui/widgets"|g' \
-        -e 's|"texelation/texelui/scroll"|"github.com/framegrace/texelui/ui/scroll"|g' \
-        -e 's|"texelation/texelui/layout"|"github.com/framegrace/texelui/ui/layout"|g' \
-        -e 's|"texelation/texelui/primitives"|"github.com/framegrace/texelui/ui/primitives"|g' \
-        -e 's|"texelation/texelui/adapter"|"github.com/framegrace/texelui/ui/adapter"|g' \
-        -e 's|"texelation/texelui/color"|"github.com/framegrace/texelui/ui/color"|g' \
-        -e 's|"texelation/internal/devshell"|"github.com/framegrace/texelui/runner"|g' \
+        -e 's|"texelation/texelui/core"|"github.com/framegrace/texelui/core"|g' \
+        -e 's|"texelation/texelui/widgets"|"github.com/framegrace/texelui/widgets"|g' \
+        -e 's|"texelation/texelui/scroll"|"github.com/framegrace/texelui/scroll"|g' \
+        -e 's|"texelation/texelui/layout"|"github.com/framegrace/texelui/layout"|g' \
+        -e 's|"texelation/texelui/primitives"|"github.com/framegrace/texelui/primitives"|g' \
+        -e 's|"texelation/texelui/adapter"|"github.com/framegrace/texelui/adapter"|g' \
+        -e 's|"texelation/texelui/color"|"github.com/framegrace/texelui/color"|g' \
         "$file"
 }
 
@@ -128,7 +178,7 @@ update_core_references() {
     local file="$1"
 
     # Check if file uses texel.Cell, texel.App, etc.
-    if grep -q 'texel\.Cell\|texel\.App\|texel\.ControlBus\|texel\.NewControlBus\|texel\.AppStorage\|texel\.StorageService' "$file"; then
+    if grep -q 'texel\.Cell\|texel\.App\|texel\.ControlBus\|texel\.NewControlBus\|texel\.AppStorage\|texel\.StorageService\|texel\.StorageSetter\|texel\.AppStorageSetter\|texel\.PasteHandler\|texel\.SelectionHandler\|texel\.SelectionDeclarer\|texel\.MouseWheelHandler\|texel\.MouseWheelDeclarer\|texel\.CloseRequester\|texel\.CloseCallbackRequester\|texel\.ControlBusProvider\|texel\.PaneIDSetter\|texel\.RenderPipeline\|texel\.PipelineProvider\|texel\.SnapshotProvider\|texel\.SnapshotFactory' "$file"; then
         # Need to add texelui/core import and update references
         # This is complex - might need manual review
 
@@ -177,16 +227,85 @@ if [[ "$DRY_RUN" == "false" ]]; then
         update_texelui_imports "$file"
         update_core_references "$file"
     done
+
+    log "Adding Texelation-only theming helper..."
+    mkdir -p internal/theming
+    cat > internal/theming/for_app.go << 'EOF'
+package theming
+
+import (
+	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelui/theme"
+)
+
+// ForApp returns the base theme merged with any per-app overrides.
+func ForApp(app string) theme.Config {
+	base := theme.Get()
+	overrides := overridesForApp(app)
+	if len(overrides) == 0 {
+		return base
+	}
+	return theme.WithOverrides(base, overrides)
+}
+
+func overridesForApp(app string) theme.Config {
+	if app == "" {
+		return nil
+	}
+	cfg := config.App(app)
+	if cfg == nil {
+		return nil
+	}
+	return theme.ParseOverrides(cfg["theme_overrides"])
+}
+EOF
+
+    log "Updating per-app theme calls to use internal/theming..."
+    per_app_files=(
+        "apps/statusbar/statusbar.go"
+        "apps/launcher/launcher.go"
+        "apps/help/help.go"
+        "apps/texelterm/term.go"
+    )
+    for path in "${per_app_files[@]}"; do
+        if [[ -f "$path" ]]; then
+            sed -i 's/theme\.ForApp/theming.ForApp/g' "$path"
+            if ! grep -q '"github.com/framegrace/texelation/internal/theming"' "$path"; then
+                sed -i '/import (/,/)/{/"github.com\/framegrace\/texelui\/theme"/a\
+	"github.com/framegrace/texelation/internal/theming"
+                }' "$path"
+            fi
+        fi
+    done
+
+    log "Removing texelui-demo from runtime adapter registry..."
+    if [[ -f internal/runtimeadapter/runner.go ]]; then
+        awk '
+            /"texelui-demo":/ {skip=1; next}
+            skip && /},/ {skip=0; next}
+            skip {next}
+            {print}
+        ' internal/runtimeadapter/runner.go > internal/runtimeadapter/runner.go.tmp
+        mv internal/runtimeadapter/runner.go.tmp internal/runtimeadapter/runner.go
+        sed -i '/texeluidemo/d' internal/runtimeadapter/runner.go
+    fi
+
+    log "Cleaning TexelUI targets from Makefile..."
+    if [[ -f Makefile ]]; then
+        sed -i '/texelui-demo/d' Makefile
+        sed -i '/texelui /d' Makefile
+    fi
 else
     log "DRY RUN: Would update imports in all .go files"
 fi
 
-log "Files needing manual review (use core types from texel package):"
-grep -rn 'texel\.Cell\|texel\.App\|texel\.ControlBus' --include="*.go" . 2>/dev/null | head -20 || true
+log "Files needing manual review (use core types from texelui/core):"
+grep -rn 'texel\.Cell\|texel\.App\|texel\.ControlBus\|texel\.NewControlBus\|texel\.AppStorage\|texel\.StorageService\|texel\.StorageSetter\|texel\.AppStorageSetter\|texel\.PasteHandler\|texel\.SelectionHandler\|texel\.SelectionDeclarer\|texel\.MouseWheelHandler\|texel\.MouseWheelDeclarer\|texel\.CloseRequester\|texel\.CloseCallbackRequester\|texel\.ControlBusProvider\|texel\.PaneIDSetter\|texel\.RenderPipeline\|texel\.PipelineProvider\|texel\.SnapshotProvider\|texel\.SnapshotFactory' --include="*.go" . 2>/dev/null | head -20 || true
 
-log "Updating defaults directory reference in theme loader..."
-# The theme loader may need to look for defaults in texelui package
-# This will need manual attention based on how defaults are loaded
+log "Reviewing theme defaults copy-on-missing behavior..."
+# Ensure texelui/theme writes defaults when theme.json is missing.
+
+log "Review docs for TexelUI references (docs index, TexelUI usage, demos)."
 
 log "Running go mod tidy..."
 if [[ "$DRY_RUN" == "false" ]]; then

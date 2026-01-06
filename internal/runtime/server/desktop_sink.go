@@ -14,8 +14,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 // DesktopSink forwards key events to a local Desktop instance.

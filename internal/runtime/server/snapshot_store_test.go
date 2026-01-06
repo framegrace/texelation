@@ -9,13 +9,14 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 func TestSnapshotStoreSaveAndLoad(t *testing.T) {
@@ -25,7 +26,7 @@ func TestSnapshotStoreSaveAndLoad(t *testing.T) {
 
 	pane := texel.PaneSnapshot{
 		Title:  "pane",
-		Buffer: [][]texel.Cell{{{Ch: 'A'}, {Ch: 'B'}}},
+		Buffer: [][]texelcore.Cell{{{Ch: 'A'}, {Ch: 'B'}}},
 		Rect:   texel.Rectangle{X: 1, Y: 2, Width: 10, Height: 5},
 	}
 	pane.AppType = "test"

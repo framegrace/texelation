@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 var (

@@ -14,8 +14,8 @@ import (
 	"strconv"
 	"strings"
 
-	"texelation/config"
-	"texelation/texelui/widgets"
+	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelui/widgets"
 )
 
 // FieldConfig holds configuration for building a single field.

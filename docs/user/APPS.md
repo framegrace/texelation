@@ -36,7 +36,4 @@ This guide summarizes the built-in apps, how to open them, and the key behaviour
 - Visual pipeline demo that alternates coloured backgrounds to validate rendering and card composition. Accessible from the launcher.
 
 ### TexelUI Demos
-- Standalone demos for the widget library:
-  - `go run ./cmd/texelui-demo` – bordered TextArea.
-  - `go run ./cmd/texelui-demo2` – dual TextArea focus/resize test.
-  - `go run ./texelui/examples/widget_demo.go` – Label/Input/Checkbox/Button showcase.
+- TexelUI demos and CLI now live in the TexelUI repo (`github.com/framegrace/texelui`).

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"texelation/client"
+	"github.com/framegrace/texelation/client"
 )
 
 // Binding associates an effect instance with a target and trigger.

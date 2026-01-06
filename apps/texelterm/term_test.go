@@ -9,6 +9,7 @@
 package texelterm_test
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,8 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"texelation/apps/texelterm"
-	"texelation/texel"
+	"github.com/framegrace/texelation/apps/texelterm"
 )
 
 func TestTexelTermRunRendersOutput(t *testing.T) {
@@ -101,7 +101,7 @@ func writeScript(t *testing.T, content string) string {
 	return path
 }
 
-func rowToString(row []texel.Cell) string {
+func rowToString(row []texelcore.Cell) string {
 	var b strings.Builder
 	for _, cell := range row {
 		if cell.Ch == 0 {
@@ -162,4 +162,3 @@ func TestTexelTermLineWrapOutput(t *testing.T) {
 		t.Fatal("texelterm did not exit after stop")
 	}
 }
-

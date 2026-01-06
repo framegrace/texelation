@@ -1,10 +1,11 @@
 package cards
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
+	"github.com/framegrace/texelation/texel"
 )
 
 type stubCard struct {
@@ -19,11 +20,11 @@ type stubCard struct {
 func (s *stubCard) Run() error            { return s.runErr }
 func (s *stubCard) Stop()                 { s.stopped = true }
 func (s *stubCard) Resize(cols, rows int) { s.resized = append(s.resized, [2]int{cols, rows}) }
-func (s *stubCard) Render(input [][]texel.Cell) [][]texel.Cell {
+func (s *stubCard) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
 	s.renders = append(s.renders, []int{len(input)})
 	if input == nil {
-		buffer := make([][]texel.Cell, 1)
-		buffer[0] = []texel.Cell{{Ch: 'A'}}
+		buffer := make([][]texelcore.Cell, 1)
+		buffer[0] = []texelcore.Cell{{Ch: 'A'}}
 		return buffer
 	}
 	return input
@@ -36,7 +37,7 @@ type effectCard struct{}
 func (effectCard) Run() error      { return nil }
 func (effectCard) Stop()           {}
 func (effectCard) Resize(int, int) {}
-func (effectCard) Render(input [][]texel.Cell) [][]texel.Cell {
+func (effectCard) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
 	if len(input) == 0 {
 		return input
 	}
@@ -53,7 +54,7 @@ type busCard struct {
 func (b *busCard) Run() error                                 { return nil }
 func (b *busCard) Stop()                                      {}
 func (b *busCard) Resize(int, int)                            {}
-func (b *busCard) Render(input [][]texel.Cell) [][]texel.Cell { return input }
+func (b *busCard) Render(input [][]texelcore.Cell) [][]texelcore.Cell { return input }
 func (b *busCard) HandleKey(*tcell.EventKey)      {}
 func (b *busCard) SetRefreshNotifier(chan<- bool) {}
 func (b *busCard) RegisterControls(reg texel.ControlRegistry) error {

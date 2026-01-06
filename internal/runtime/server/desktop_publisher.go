@@ -15,9 +15,9 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/protocol"
-	"texelation/texel"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
+	"github.com/framegrace/texelui/theme"
 )
 
 // DesktopPublisher captures desktop pane buffers and enqueues them as buffer

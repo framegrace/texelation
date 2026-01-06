@@ -1,6 +1,7 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"context"
 	"os"
 	"path/filepath"
@@ -8,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"texelation/texel"
+	"github.com/framegrace/texelation/texel"
 )
 
 // mockSnapshotStore wraps SnapshotStore to count saves
@@ -57,7 +58,7 @@ func TestSnapshotSavedOnLayoutChange(t *testing.T) {
 		// Create Desktop (but don't add app yet)
 		driver := sinkScreenDriver{}
 		lifecycle := texel.NoopAppLifecycle{}
-		shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+		shellFactory := func() texelcore.App { return &recordingApp{title: "shell"} }
 		desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 		if err != nil {
 			t.Fatalf("desktop init failed: %v", err)

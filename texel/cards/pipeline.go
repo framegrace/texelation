@@ -1,11 +1,12 @@
 package cards
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"fmt"
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
+	"github.com/framegrace/texelation/texel"
 )
 
 // ControlFunc allows the pipeline to intercept key events before the cards see them.
@@ -18,7 +19,7 @@ type ControllableCard interface {
 	RegisterControls(reg texel.ControlRegistry) error
 }
 
-// Pipeline composes multiple cards into a single texel.App implementation.
+// Pipeline composes multiple cards into a single texelcore.App implementation.
 // Cards are executed in order; the output buffer of one card becomes the
 // input buffer for the next card.
 type Pipeline struct {
@@ -28,7 +29,7 @@ type Pipeline struct {
 	height  int
 	refresh chan<- bool
 	control ControlFunc
-	bus     texel.ControlBus
+	bus     texelcore.ControlBus
 
 	runOnce  sync.Once
 	stopOnce sync.Once
@@ -37,20 +38,20 @@ type Pipeline struct {
 	errMu    sync.Mutex
 }
 
-var _ texel.App = (*Pipeline)(nil)
-var _ texel.SelectionHandler = (*Pipeline)(nil)
-var _ texel.SelectionDeclarer = (*Pipeline)(nil)
-var _ texel.MouseWheelHandler = (*Pipeline)(nil)
-var _ texel.MouseWheelDeclarer = (*Pipeline)(nil)
-var _ texel.ControlBusProvider = (*Pipeline)(nil)
+var _ texelcore.App = (*Pipeline)(nil)
+var _ texelcore.SelectionHandler = (*Pipeline)(nil)
+var _ texelcore.SelectionDeclarer = (*Pipeline)(nil)
+var _ texelcore.MouseWheelHandler = (*Pipeline)(nil)
+var _ texelcore.MouseWheelDeclarer = (*Pipeline)(nil)
+var _ texelcore.ControlBusProvider = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
-// Pipeline implements texel.App and can be launched like any other app.
+// Pipeline implements texelcore.App and can be launched like any other app.
 func NewPipeline(control ControlFunc, cards ...Card) *Pipeline {
 	p := &Pipeline{
 		cards:   append([]Card(nil), cards...),
 		control: control,
-		bus:     texel.NewControlBus(),
+		bus:     texelcore.NewControlBus(),
 	}
 	for _, card := range p.cards {
 		if controllable, ok := card.(ControllableCard); ok {
@@ -165,16 +166,16 @@ func (p *Pipeline) Resize(cols, rows int) {
 }
 
 // Render executes the pipeline and returns the final buffer.
-func (p *Pipeline) Render() [][]texel.Cell {
+func (p *Pipeline) Render() [][]texelcore.Cell {
 	cards := p.Cards()
-	var buffer [][]texel.Cell
+	var buffer [][]texelcore.Cell
 	for _, card := range cards {
 		buffer = card.Render(buffer)
 	}
 	return buffer
 }
 
-// GetTitle returns the title of the first card that supports texel.App semantics.
+// GetTitle returns the title of the first card that supports texelcore.App semantics.
 func (p *Pipeline) GetTitle() string {
 	if p == nil {
 		return ""
@@ -220,13 +221,13 @@ func (p *Pipeline) SetRefreshNotifier(ch chan<- bool) {
 }
 
 // selectionHandler finds the first card capable of handling selections.
-func (p *Pipeline) selectionHandler() texel.SelectionHandler {
+func (p *Pipeline) selectionHandler() texelcore.SelectionHandler {
 	cards := p.Cards()
 	for _, card := range cards {
-		if decl, ok := card.(texel.SelectionDeclarer); ok && !decl.SelectionEnabled() {
+		if decl, ok := card.(texelcore.SelectionDeclarer); ok && !decl.SelectionEnabled() {
 			continue
 		}
-		if handler, ok := card.(texel.SelectionHandler); ok {
+		if handler, ok := card.(texelcore.SelectionHandler); ok {
 			return handler
 		}
 		if accessor, ok := card.(AppAccessor); ok {
@@ -234,10 +235,10 @@ func (p *Pipeline) selectionHandler() texel.SelectionHandler {
 			if underlying == nil {
 				continue
 			}
-			if decl, ok := underlying.(texel.SelectionDeclarer); ok && !decl.SelectionEnabled() {
+			if decl, ok := underlying.(texelcore.SelectionDeclarer); ok && !decl.SelectionEnabled() {
 				continue
 			}
-			if handler, ok := underlying.(texel.SelectionHandler); ok {
+			if handler, ok := underlying.(texelcore.SelectionHandler); ok {
 				return handler
 			}
 		}
@@ -275,13 +276,13 @@ func (p *Pipeline) SelectionEnabled() bool {
 	return p.selectionHandler() != nil
 }
 
-func (p *Pipeline) wheelHandler() texel.MouseWheelHandler {
+func (p *Pipeline) wheelHandler() texelcore.MouseWheelHandler {
 	cards := p.Cards()
 	for _, card := range cards {
-		if decl, ok := card.(texel.MouseWheelDeclarer); ok && !decl.MouseWheelEnabled() {
+		if decl, ok := card.(texelcore.MouseWheelDeclarer); ok && !decl.MouseWheelEnabled() {
 			continue
 		}
-		if handler, ok := card.(texel.MouseWheelHandler); ok {
+		if handler, ok := card.(texelcore.MouseWheelHandler); ok {
 			return handler
 		}
 		if accessor, ok := card.(AppAccessor); ok {
@@ -289,10 +290,10 @@ func (p *Pipeline) wheelHandler() texel.MouseWheelHandler {
 			if underlying == nil {
 				continue
 			}
-			if decl, ok := underlying.(texel.MouseWheelDeclarer); ok && !decl.MouseWheelEnabled() {
+			if decl, ok := underlying.(texelcore.MouseWheelDeclarer); ok && !decl.MouseWheelEnabled() {
 				continue
 			}
-			if handler, ok := underlying.(texel.MouseWheelHandler); ok {
+			if handler, ok := underlying.(texelcore.MouseWheelHandler); ok {
 				return handler
 			}
 		}
@@ -338,11 +339,11 @@ func (p *Pipeline) HandlePaste(data []byte) {
 }
 
 // ControlBus exposes the control bus associated with this pipeline.
-func (p *Pipeline) ControlBus() texel.ControlBus {
+func (p *Pipeline) ControlBus() texelcore.ControlBus {
 	return p.bus
 }
 
-// RegisterControl implements texel.ControlBusProvider by forwarding to the pipeline's control bus.
+// RegisterControl implements texelcore.ControlBusProvider by forwarding to the pipeline's control bus.
 // This allows apps wrapped in pipelines to register control handlers without importing the cards package.
 func (p *Pipeline) RegisterControl(id, description string, handler func(payload interface{}) error) error {
 	// Wrap the handler to match ControlHandler type

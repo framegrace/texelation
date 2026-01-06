@@ -8,9 +8,9 @@ package widgets
 
 import (
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel/theme"
-	"texelation/texelui/core"
-	"texelation/texelui/primitives"
+	"github.com/framegrace/texelui/theme"
+	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/primitives"
 )
 
 // TabLayout is a container that combines a TabBar with switchable content panels.

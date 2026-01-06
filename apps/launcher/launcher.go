@@ -10,32 +10,33 @@ package launcher
 import (
 	"encoding/json"
 	"fmt"
+	texelcore "github.com/framegrace/texelui/core"
 	"log"
 	"sort"
 	"sync"
 
+	"github.com/framegrace/texelation/internal/theming"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelation/texel"
+	"github.com/framegrace/texelui/adapter"
+	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/widgets"
 	"github.com/gdamore/tcell/v2"
-	"texelation/registry"
-	"texelation/texel"
-	"texelation/texel/theme"
-	"texelation/texelui/adapter"
-	"texelation/texelui/core"
-	"texelation/texelui/widgets"
 )
 
 // Compile-time interface checks
-var _ texel.App = (*Launcher)(nil)
-var _ texel.AppStorageSetter = (*Launcher)(nil)
-var _ texel.SnapshotProvider = (*Launcher)(nil)
-var _ texel.ControlBusProvider = (*Launcher)(nil)
+var _ texelcore.App = (*Launcher)(nil)
+var _ texelcore.AppStorageSetter = (*Launcher)(nil)
+var _ texelcore.SnapshotProvider = (*Launcher)(nil)
+var _ texelcore.ControlBusProvider = (*Launcher)(nil)
 
 // Launcher displays available apps from the registry and allows launching them.
 type Launcher struct {
 	*adapter.UIApp
 
 	registry   *registry.Registry
-	controlBus texel.ControlBus
-	storage    texel.AppStorage
+	controlBus texelcore.ControlBus
+	storage    texelcore.AppStorage
 
 	mu          sync.RWMutex
 	apps        []*registry.AppEntry
@@ -48,12 +49,12 @@ type Launcher struct {
 }
 
 // New creates a new launcher app that displays apps from the given registry.
-func New(reg *registry.Registry) texel.App {
+func New(reg *registry.Registry) texelcore.App {
 	l := &Launcher{
 		registry:    reg,
 		usageCounts: make(map[string]int),
 		selectedIdx: 0,
-		controlBus:  texel.NewControlBus(), // Own control bus, no pipeline needed
+		controlBus:  texelcore.NewControlBus(), // Own control bus, no pipeline needed
 	}
 
 	// Create TexelUI manager
@@ -69,19 +70,19 @@ func New(reg *registry.Registry) texel.App {
 }
 
 // ControlBus returns the launcher's control bus for external registration.
-func (l *Launcher) ControlBus() texel.ControlBus {
+func (l *Launcher) ControlBus() texelcore.ControlBus {
 	return l.controlBus
 }
 
-// RegisterControl implements texel.ControlBusProvider.
+// RegisterControl implements texelcore.ControlBusProvider.
 // This allows external code to register control handlers on the launcher's bus.
 func (l *Launcher) RegisterControl(id, description string, handler func(payload interface{}) error) error {
 	return l.controlBus.Register(id, description, texel.ControlHandler(handler))
 }
 
-// SetAppStorage implements texel.AppStorageSetter.
+// SetAppStorage implements texelcore.AppStorageSetter.
 // This is called by the pane to inject app-level storage.
-func (l *Launcher) SetAppStorage(storage texel.AppStorage) {
+func (l *Launcher) SetAppStorage(storage texelcore.AppStorage) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.storage = storage
@@ -163,7 +164,7 @@ func (l *Launcher) buildUI() {
 	ui := l.UI()
 
 	// Add background pane
-	tm := theme.ForApp("launcher")
+	tm := theming.ForApp("launcher")
 	bgColor := tm.GetSemanticColor("bg.surface")
 
 	l.pane = widgets.NewPane()
@@ -197,7 +198,7 @@ func (l *Launcher) buildUI() {
 
 // updateSelection updates the visual style of the selected app.
 func (l *Launcher) updateSelection() {
-	tm := theme.ForApp("launcher")
+	tm := theming.ForApp("launcher")
 	normalFg := tm.GetSemanticColor("text.primary")
 	normalBg := tm.GetSemanticColor("bg.surface")
 	selectedFg := tm.GetSemanticColor("text.inverse")
@@ -320,7 +321,7 @@ func (l *Launcher) GetTitle() string {
 	return "Launcher"
 }
 
-// SnapshotMetadata implements texel.SnapshotProvider.
+// SnapshotMetadata implements texelcore.SnapshotProvider.
 // This allows the storage service to use the correct app type.
 func (l *Launcher) SnapshotMetadata() (string, map[string]interface{}) {
 	return "launcher", nil

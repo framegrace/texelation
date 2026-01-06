@@ -15,7 +15,7 @@ package esctest
 
 import (
 	"testing"
-	"texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
 // Test_OSC_SetDefaultForeground tests OSC 10 (set default foreground color).

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 type recordingSink struct {

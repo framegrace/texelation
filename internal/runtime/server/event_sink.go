@@ -8,7 +8,7 @@
 
 package server
 
-import "texelation/protocol"
+import "github.com/framegrace/texelation/protocol"
 
 // EventSink receives events associated with a session.
 type EventSink interface {

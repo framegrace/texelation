@@ -12,7 +12,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/texel/theme"
+	"github.com/framegrace/texelui/theme"
 )
 
 func TestDesktopSplitCreatesNewPane(t *testing.T) {
