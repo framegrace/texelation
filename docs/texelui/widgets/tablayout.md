@@ -1,6 +1,8 @@
 # TabLayout
 
-A tabbed container with switchable content panels.
+A low-level tabbed container with switchable content panels.
+
+> **Note**: For most use cases, consider using [TabPanel](/texelui/widgets/tabpanel.md) instead, which provides a simpler API with `AddTab(label, content)`.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -24,16 +26,15 @@ import (
 ## Constructor
 
 ```go
-func NewTabLayout(x, y, w, h int, tabs []primitives.TabItem) *TabLayout
+func NewTabLayout(tabs []primitives.TabItem) *TabLayout
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `x` | `int` | X position |
-| `y` | `int` | Y position |
-| `w` | `int` | Total width |
-| `h` | `int` | Total height |
 | `tabs` | `[]TabItem` | Tab definitions |
+
+Creates a tabbed container. Position defaults to (0,0) and size to 40x10.
+Use `SetPosition(x, y)` and `Resize(w, h)` to adjust, or place in a layout container.
 
 ### TabItem
 
@@ -60,7 +61,6 @@ package main
 import (
     "log"
 
-    "github.com/gdamore/tcell/v2"
     "texelation/internal/devshell"
     "texelation/texel"
     "texelation/texelui/adapter"
@@ -81,32 +81,32 @@ func main() {
         }
 
         // Create tab layout
-        tabLayout := widgets.NewTabLayout(5, 3, 60, 18, tabs)
+        tabLayout := widgets.NewTabLayout(tabs)
 
-        // Create content for each tab
-        homePane := widgets.NewPane(0, 0, 60, 16, tcell.StyleDefault)
-        homeLabel := widgets.NewLabel(2, 2, 40, 1, "Welcome to the Home tab!")
-        homePane.AddChild(homeLabel)
+        // Create content for each tab using VBox layouts
+        homeVBox := widgets.NewVBox()
+        homeVBox.AddChild(widgets.NewLabel("Welcome to the Home tab!"))
+        tabLayout.SetTabContent(0, homeVBox)
 
-        settingsPane := widgets.NewPane(0, 0, 60, 16, tcell.StyleDefault)
-        settingsLabel := widgets.NewLabel(2, 2, 40, 1, "Settings go here")
-        settingsCheck := widgets.NewCheckbox(2, 4, "Enable feature")
-        settingsPane.AddChild(settingsLabel)
-        settingsPane.AddChild(settingsCheck)
+        settingsVBox := widgets.NewVBox()
+        settingsVBox.Spacing = 1
+        settingsVBox.AddChild(widgets.NewLabel("Settings go here"))
+        settingsVBox.AddChild(widgets.NewCheckbox("Enable feature"))
+        tabLayout.SetTabContent(1, settingsVBox)
 
-        aboutPane := widgets.NewPane(0, 0, 60, 16, tcell.StyleDefault)
-        aboutLabel := widgets.NewLabel(2, 2, 40, 1, "Version 1.0.0")
-        aboutPane.AddChild(aboutLabel)
-
-        // Set content for each tab
-        tabLayout.SetTabContent(0, homePane)
-        tabLayout.SetTabContent(1, settingsPane)
-        tabLayout.SetTabContent(2, aboutPane)
+        aboutVBox := widgets.NewVBox()
+        aboutVBox.AddChild(widgets.NewLabel("Version 1.0.0"))
+        tabLayout.SetTabContent(2, aboutVBox)
 
         ui.AddWidget(tabLayout)
         ui.Focus(tabLayout)
 
-        return adapter.NewUIApp("TabLayout Demo", ui), nil
+        app := adapter.NewUIApp("TabLayout Demo", ui)
+        app.OnResize(func(w, h int) {
+            tabLayout.SetPosition(5, 3)
+            tabLayout.Resize(60, 18)
+        })
+        return app, nil
     }, nil)
 
     if err != nil {
@@ -180,7 +180,7 @@ Content widgets should be sized to fit this area.
 ## Programmatic Tab Switching
 
 ```go
-tabLayout := widgets.NewTabLayout(0, 0, 60, 20, tabs)
+tabLayout := widgets.NewTabLayout(tabs)
 
 // Switch to second tab (index 1)
 tabLayout.SetActive(1)
@@ -203,28 +203,26 @@ tabLayout.SetTabContent(0, myWidget)
 
 ## Complex Tab Content
 
-Each tab can contain complex widget hierarchies:
+Each tab can contain complex widget hierarchies using layout containers:
 
 ```go
-// Create complex settings panel
-settingsPane := widgets.NewPane(0, 0, 58, 15, tcell.StyleDefault)
+// Create complex settings panel with Form widget
+form := widgets.NewForm()
 
-// Add form elements
-themeLabel := widgets.NewLabel(2, 2, 15, 1, "Theme:")
-themeCombo := widgets.NewComboBox(18, 2, 25, themes, false)
+// Add form fields
+themes := []string{"Light", "Dark", "System"}
+form.AddField("Theme:", widgets.NewComboBox(themes, false))
 
-fontLabel := widgets.NewLabel(2, 4, 15, 1, "Font Size:")
-fontInput := widgets.NewInput(18, 4, 10)
+fontInput := widgets.NewInput()
+fontInput.Text = "14"
+form.AddField("Font Size:", fontInput)
 
-saveBtn := widgets.NewButton(2, 8, 12, 1, "Save")
+form.AddSpacer(1)
 
-settingsPane.AddChild(themeLabel)
-settingsPane.AddChild(themeCombo)
-settingsPane.AddChild(fontLabel)
-settingsPane.AddChild(fontInput)
-settingsPane.AddChild(saveBtn)
+saveBtn := widgets.NewButton("Save")
+form.AddFullWidthField(saveBtn, 1)
 
-tabLayout.SetTabContent(1, settingsPane)
+tabLayout.SetTabContent(1, form)
 ```
 
 ## Implementation Details
@@ -257,6 +255,7 @@ func (tl *TabLayout) contentRect() core.Rect {
 
 ## See Also
 
+- [TabPanel](/texelui/widgets/tabpanel.md) - Higher-level tabbed container with simpler API
 - [TabBar](/texelui/primitives/tabbar.md) - Tab bar primitive
 - [Pane](/texelui/widgets/pane.md) - Container widget
 - [Border](/texelui/widgets/border.md) - Border decorator

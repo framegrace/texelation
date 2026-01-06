@@ -1,128 +1,183 @@
 # Layout Reference
 
-Layout managers for automatic widget positioning.
+Layout containers for automatic widget positioning.
 
 ## Overview
 
-TexelUI provides layout managers to automatically position widgets. By default, widgets use absolute positioning (you set x, y, w, h explicitly).
+TexelUI uses **layout containers** (VBox, HBox, ScrollPane) to automatically position child widgets. This is the recommended approach for most UIs.
 
-## Available Layouts
+For special cases requiring pixel-perfect control, you can use manual positioning.
 
-| Layout | Description |
-|--------|-------------|
-| [Absolute](/texelui/layout/absolute.md) | Manual positioning (default) |
-| [VBox](/texelui/layout/vbox.md) | Vertical stacking |
-| [HBox](/texelui/layout/hbox.md) | Horizontal arrangement |
+## Layout Containers
 
-## Layout Interface
+| Container | Description |
+|-----------|-------------|
+| [VBox](/texelui/layout/vbox.md) | Vertical stacking (top to bottom) |
+| [HBox](/texelui/layout/hbox.md) | Horizontal arrangement (left to right) |
+| [ScrollPane](/texelui/layout/scrollpane.md) | Scrollable content with scrollbar |
+| [TabPanel](/texelui/widgets/tabpanel.md) | Tabbed content panels |
 
-```go
-type Layout interface {
-    Apply(container Rect, children []Widget)
-}
-```
-
-Layouts position widgets but don't resize them. Widgets must have their sizes set before layout.
-
-## Using Layouts
-
-### Set Layout on UIManager
+## Quick Start
 
 ```go
-import "texelation/texelui/layout"
+// Create a vertical layout
+form := widgets.NewVBox()
+form.Spacing = 1  // Gap between children
 
-ui := core.NewUIManager()
-ui.SetLayout(layout.NewVBox(1))  // 1-cell spacing
+// Add widgets - no positions needed!
+form.AddChild(widgets.NewLabel("Name:"))
+form.AddChild(widgets.NewInput())
+form.AddChild(widgets.NewButton("Submit"))
+
+// Add to UIManager and set size
+ui.AddWidget(form)
+app.OnResize(func(w, h int) {
+    form.SetPosition(2, 2)
+    form.Resize(w-4, h-4)
+})
 ```
 
-### Layout Application
+## Child Sizing Methods
 
-Layouts are applied during `Resize()` and `Render()`:
+Layout containers offer three ways to add children:
+
+### Natural Size (AddChild)
 
 ```go
-ui.AddWidget(widget1)
-ui.AddWidget(widget2)
-ui.AddWidget(widget3)
-
-// When Resize is called, VBox positions widgets vertically
-ui.Resize(80, 24)
+vbox.AddChild(label)  // Uses label's natural size (text length x 1)
+vbox.AddChild(button) // Uses button's natural size (text + padding)
 ```
 
-## Comparison
+### Fixed Size (AddChildWithSize)
+
+```go
+hbox.AddChildWithSize(label, 15)   // 15 cells wide in HBox
+vbox.AddChildWithSize(header, 3)   // 3 rows tall in VBox
+```
+
+### Flex (AddFlexChild)
+
+```go
+vbox.AddFlexChild(content)  // Expands to fill remaining space
+```
+
+## Layout Comparison
 
 ```
-Absolute (Default):          VBox:                    HBox:
-┌────────────────────┐       ┌────────────────────┐   ┌────────────────────┐
-│ Widget at (5, 3)   │       │ Widget 1           │   │ W1  W2  W3         │
-│                    │       │ Widget 2           │   │                    │
-│    Widget at (20,8)│       │ Widget 3           │   │                    │
-└────────────────────┘       └────────────────────┘   └────────────────────┘
+VBox:                        HBox:
+┌────────────────────┐       ┌────────────────────┐
+│ ┌────────────────┐ │       │ ┌────┐┌────┐┌────┐│
+│ │    Child 1     │ │       │ │ C1 ││ C2 ││ C3 ││
+│ └────────────────┘ │       │ └────┘└────┘└────┘│
+│ ┌────────────────┐ │       └────────────────────┘
+│ │    Child 2     │ │
+│ └────────────────┘ │       ScrollPane:
+│ ┌────────────────┐ │       ┌────────────────┬─┐
+│ │    Child 3     │ │       │ Content        │▲│
+│ └────────────────┘ │       │ (scrollable)   │█│
+└────────────────────┘       │                │▼│
+                             └────────────────┴─┘
+```
+
+## Nesting Containers
+
+Combine layout containers for complex UIs:
+
+```go
+// Main vertical layout
+main := widgets.NewVBox()
+main.Spacing = 1
+
+// Header row
+header := widgets.NewHBox()
+header.AddChild(widgets.NewLabel("Title"))
+header.AddFlexChild(widgets.NewLabel(""))  // Spacer
+header.AddChild(widgets.NewButton("X"))
+main.AddChild(header)
+
+// Content area (expands)
+content := widgets.NewVBox()
+content.AddChild(widgets.NewLabel("Field 1:"))
+content.AddChild(widgets.NewInput())
+main.AddFlexChild(content)
+
+// Button row
+buttons := widgets.NewHBox()
+buttons.Spacing = 2
+buttons.AddChild(widgets.NewButton("OK"))
+buttons.AddChild(widgets.NewButton("Cancel"))
+main.AddChild(buttons)
+```
+
+Result:
+```
+┌─────────────────────────────────┐
+│ Title                       [X] │  <- HBox
+├─────────────────────────────────┤
+│ Field 1:                        │
+│ [________________________]      │  <- VBox (flex)
+│                                 │
+├─────────────────────────────────┤
+│ [ OK ]  [ Cancel ]              │  <- HBox
+└─────────────────────────────────┘
+```
+
+## Properties
+
+### Common Properties
+
+```go
+box.Spacing = 2                    // Gap between children
+box.Align = widgets.BoxAlignStart  // Alignment (Start/Center/End)
+```
+
+### ScrollPane Properties
+
+```go
+sp := scroll.NewScrollPane()
+sp.SetChild(content)
+sp.SetContentHeight(100)           // Total content height
+sp.ShowIndicators(true)            // Show scrollbar
+sp.SetTrapsFocus(true)             // Wrap focus at boundaries
 ```
 
 ## When to Use Each
 
-| Layout | Use Case |
-|--------|----------|
-| **Absolute** | Custom UIs, overlays, pixel-perfect positioning |
-| **VBox** | Forms, vertical lists, stacked content |
-| **HBox** | Button rows, toolbars, horizontal menus |
+| Container | Best For |
+|-----------|----------|
+| **VBox** | Forms, vertical lists, main layouts |
+| **HBox** | Button rows, toolbars, field+label pairs |
+| **ScrollPane** | Long content, forms with many fields |
+| **TabPanel** | Settings, multi-page dialogs |
+| **Manual** | Overlays, custom positioning, animations |
 
-## Combining Layouts
+## Manual Positioning (Advanced)
 
-Layouts apply to UIManager's direct children. For nested layouts, use container widgets:
-
-```go
-// Main UI with horizontal layout
-ui := core.NewUIManager()
-ui.SetLayout(layout.NewHBox(2))
-
-// Left pane (with its own layout)
-leftPane := widgets.NewPane(0, 0, 30, 20, tcell.StyleDefault)
-// Position children within leftPane manually
-
-// Right pane
-rightPane := widgets.NewPane(0, 0, 50, 20, tcell.StyleDefault)
-
-ui.AddWidget(leftPane)
-ui.AddWidget(rightPane)
-```
-
-## Manual vs Automatic
-
-| Approach | Pros | Cons |
-|----------|------|------|
-| **Manual (Absolute)** | Full control, predictable | Tedious, no auto-resize |
-| **VBox/HBox** | Quick, consistent spacing | Limited flexibility |
-| **Mixed** | Best of both | More complex |
-
-## Quick Examples
-
-### Form with VBox
+For cases where automatic layout doesn't fit:
 
 ```go
-ui := core.NewUIManager()
-ui.SetLayout(layout.NewVBox(1))
+// Create widgets with explicit positions
+label := widgets.NewLabel("Status")
+label.SetPosition(5, 10)
+label.Resize(20, 1)
 
-ui.AddWidget(widgets.NewLabel(0, 0, 30, 1, "Username:"))
-ui.AddWidget(widgets.NewInput(0, 0, 30))
-ui.AddWidget(widgets.NewLabel(0, 0, 30, 1, "Password:"))
-ui.AddWidget(widgets.NewInput(0, 0, 30))
-ui.AddWidget(widgets.NewButton(0, 0, 12, 1, "Login"))
+// Or use absolute positioning in OnResize
+app.OnResize(func(w, h int) {
+    // Center a widget manually
+    label.SetPosition(w/2 - 10, h/2)
+})
 ```
 
-### Button Row with HBox
-
-```go
-ui := core.NewUIManager()
-ui.SetLayout(layout.NewHBox(2))
-
-ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Save"))
-ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Cancel"))
-ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Help"))
-```
+Manual positioning is useful for:
+- Floating dialogs/popups
+- Custom animations
+- Precise control over overlap
+- Legacy code migration
 
 ## See Also
 
+- [VBox Reference](/texelui/layout/vbox.md) - Detailed VBox documentation
+- [HBox Reference](/texelui/layout/hbox.md) - Detailed HBox documentation
+- [ScrollPane Reference](/texelui/layout/scrollpane.md) - Scrollable containers
 - [Architecture](/texelui/core-concepts/architecture.md) - How layouts fit in
-- [Widget Interface](/texelui/core-concepts/widget-interface.md) - Widget sizing
-- [Pane](/texelui/widgets/pane.md) - Container for nested layouts
+- [Building a Form](/texelui/tutorials/building-a-form.md) - Practical layout examples

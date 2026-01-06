@@ -1,363 +1,324 @@
-# HBox Layout
+# HBox Container
 
-Horizontal arrangement layout that positions widgets left to right.
+Horizontal layout container that arranges children from left to right.
 
 ## Overview
 
-HBox automatically arranges widgets horizontally, perfect for button rows, toolbars, and side-by-side content.
+HBox is a container widget that automatically positions its children horizontally. Children are arranged from left to right with configurable spacing.
 
 ```
-┌────────────────────────────────────────────────┐
-│  ┌─────────┐   ┌─────────┐   ┌─────────┐      │
-│  │ Widget1 │ → │ Widget2 │ → │ Widget3 │      │
-│  └─────────┘   └─────────┘   └─────────┘      │
-│               spacing                          │
-└────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐         │
+│  │ Child 1  │→ │ Child 2  │→ │ Child 3  │         │
+│  └──────────┘  └──────────┘  └──────────┘         │
+│              spacing       spacing                 │
+└────────────────────────────────────────────────────┘
 ```
 
 ## Import
 
 ```go
-import "texelation/texelui/layout"
+import "texelation/texelui/widgets"
 ```
 
 ## Constructor
 
 ```go
-func NewHBox(spacing int) *HBox
+func NewHBox() *HBox
 ```
 
-**Parameters:**
-- `spacing` - Horizontal gap between widgets (in columns)
+Creates an empty HBox container. Position defaults to (0,0) and size to (1,1).
 
-## Example
+## Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Spacing` | `int` | Horizontal gap between children (columns) |
+| `Align` | `BoxAlign` | Child alignment: `BoxAlignStart`, `BoxAlignCenter`, `BoxAlignEnd` |
+| `Style` | `tcell.Style` | Background style |
+
+## Methods
+
+### Adding Children
+
+```go
+// Add with natural size (widget's preferred dimensions)
+func (h *HBox) AddChild(w Widget)
+
+// Add with fixed width
+func (h *HBox) AddChildWithSize(w Widget, width int)
+
+// Add as flex child (expands to fill remaining space)
+func (h *HBox) AddFlexChild(w Widget)
+
+// Remove all children
+func (h *HBox) ClearChildren()
+```
+
+### Positioning
+
+```go
+func (h *HBox) SetPosition(x, y int)
+func (h *HBox) Resize(w, h int)
+```
+
+## Example: Button Row
 
 ```go
 package main
 
 import (
-    "texelation/texelui/core"
-    "texelation/texelui/layout"
-    "texelation/texelui/widgets"
     "texelation/internal/devshell"
+    "texelation/texel"
+    "texelation/texelui/adapter"
+    "texelation/texelui/core"
+    "texelation/texelui/widgets"
 )
 
 func main() {
-    ui := core.NewUIManager()
+    devshell.Run(func(args []string) (texel.App, error) {
+        ui := core.NewUIManager()
 
-    // Apply HBox layout with 2-column spacing
-    ui.SetLayout(layout.NewHBox(2))
+        // Create horizontal button row
+        buttons := widgets.NewHBox()
+        buttons.Spacing = 2
 
-    // Widgets are arranged horizontally automatically
-    ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Save"))
-    ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Cancel"))
-    ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Help"))
+        buttons.AddChild(widgets.NewButton("Save"))
+        buttons.AddChild(widgets.NewButton("Cancel"))
+        buttons.AddChild(widgets.NewButton("Help"))
 
-    devshell.Run(ui)
+        ui.AddWidget(buttons)
+        ui.Focus(buttons)
+
+        app := adapter.NewUIApp("Buttons", ui)
+        app.OnResize(func(w, h int) {
+            buttons.SetPosition(5, 5)
+            buttons.Resize(w-10, 1)
+        })
+        return app, nil
+    }, nil)
 }
 ```
 
 **Output:**
-
 ```
-[ Save ]  [ Cancel ]  [ Help ]
+     [ Save ]  [ Cancel ]  [ Help ]
 ```
 
-## How It Works
+## Child Sizing
 
-1. HBox iterates through widgets in add order
-2. Each widget is positioned at `x = previous widget right + spacing`
-3. Widget y position is preserved (set in constructor or manually)
-4. Widget dimensions are preserved (HBox doesn't resize widgets)
+HBox offers three ways to size children:
+
+### Natural Size (AddChild)
+
+Uses the widget's natural/preferred width:
 
 ```go
-// Layout algorithm (simplified)
-func (h *HBox) Apply(container Rect, children []Widget) {
-    x := container.X
-    for _, child := range children {
-        pos := child.Position()
-        child.SetPosition(x, pos.Y)
+hbox.AddChild(widgets.NewButton("OK"))      // Width: 8 (text + padding)
+hbox.AddChild(widgets.NewButton("Cancel"))  // Width: 12 (text + padding)
+hbox.AddChild(widgets.NewLabel("Status"))   // Width: 6 (text length)
+```
 
-        x += child.Size().W + h.spacing
-    }
-}
+### Fixed Size (AddChildWithSize)
+
+Specifies an exact width:
+
+```go
+hbox.AddChildWithSize(label, 15)    // 15 columns wide
+hbox.AddChildWithSize(input, 30)    // 30 columns wide
+hbox.AddChildWithSize(button, 10)   // 10 columns wide
+```
+
+### Flex (AddFlexChild)
+
+Expands to fill remaining space:
+
+```go
+hbox.AddChildWithSize(label, 10)   // Fixed 10 columns
+hbox.AddFlexChild(input)           // Fills remaining space
+hbox.AddChild(button)              // Natural size
+```
+
+**Flex distribution:**
+```
+┌─────────────────────────────────────────────────┐
+│ Label (10)  │  Input (FLEX - fills)  │ [Button] │
+└─────────────────────────────────────────────────┘
+```
+
+## Common Patterns
+
+### Label + Input Field
+
+The most common pattern - label with fixed width, input fills remaining space:
+
+```go
+row := widgets.NewHBox()
+row.Spacing = 1
+
+label := widgets.NewLabel("Name:")
+input := widgets.NewInput()
+
+row.AddChildWithSize(label, 12)  // Fixed label width
+row.AddFlexChild(input)          // Input fills remaining space
+```
+
+### Toolbar
+
+```go
+toolbar := widgets.NewHBox()
+toolbar.Spacing = 1
+
+toolbar.AddChild(widgets.NewButton("New"))
+toolbar.AddChild(widgets.NewButton("Open"))
+toolbar.AddChild(widgets.NewButton("Save"))
+toolbar.AddFlexChild(widgets.NewLabel(""))  // Spacer
+toolbar.AddChild(widgets.NewButton("Help"))
+```
+
+**Result:**
+```
+[ New ] [ Open ] [ Save ]              [ Help ]
+```
+
+### Dialog Buttons (Right-Aligned)
+
+```go
+buttonRow := widgets.NewHBox()
+buttonRow.Spacing = 2
+
+// Spacer pushes buttons to the right
+buttonRow.AddFlexChild(widgets.NewLabel(""))
+buttonRow.AddChild(widgets.NewButton("OK"))
+buttonRow.AddChild(widgets.NewButton("Cancel"))
+```
+
+**Result:**
+```
+                              [ OK ]  [ Cancel ]
+```
+
+### Centered Buttons
+
+```go
+buttonRow := widgets.NewHBox()
+buttonRow.Spacing = 2
+
+// Spacers on both sides center the buttons
+buttonRow.AddFlexChild(widgets.NewLabel(""))
+buttonRow.AddChild(widgets.NewButton("OK"))
+buttonRow.AddChild(widgets.NewButton("Cancel"))
+buttonRow.AddFlexChild(widgets.NewLabel(""))
+```
+
+**Result:**
+```
+           [ OK ]  [ Cancel ]
+```
+
+### Status Bar
+
+```go
+statusBar := widgets.NewHBox()
+statusBar.Spacing = 2
+
+statusBar.AddFlexChild(widgets.NewLabel("Ready"))  // Status text (flex)
+statusBar.AddChild(widgets.NewLabel("Ln 1"))       // Line number
+statusBar.AddChild(widgets.NewLabel("Col 1"))      // Column number
+```
+
+**Result:**
+```
+Ready                                    Ln 1  Col 1
 ```
 
 ## Spacing
 
-Control the gap between widgets:
-
 ```go
-// No spacing (widgets touch)
-ui.SetLayout(layout.NewHBox(0))
-
-// 2-column spacing (typical)
-ui.SetLayout(layout.NewHBox(2))
-
-// 4-column spacing (more separation)
-ui.SetLayout(layout.NewHBox(4))
+hbox := widgets.NewHBox()
+hbox.Spacing = 3  // 3 columns between children
 ```
 
 **Visual comparison:**
-
 ```
-Spacing=0:   [Save][Cancel][Help]
-
-Spacing=2:   [Save]  [Cancel]  [Help]
-
-Spacing=4:   [Save]    [Cancel]    [Help]
+Spacing=0:           Spacing=1:           Spacing=2:
+┌───┐┌───┐┌───┐      ┌───┐ ┌───┐ ┌───┐   ┌───┐  ┌───┐  ┌───┐
+│ A ││ B ││ C │      │ A │ │ B │ │ C │   │ A │  │ B │  │ C │
+└───┘└───┘└───┘      └───┘ └───┘ └───┘   └───┘  └───┘  └───┘
 ```
 
-## Widget Sizing
+## Focus Management
 
-HBox positions widgets but **doesn't resize them**. Set dimensions before adding:
+HBox automatically manages focus for its children:
+
+- **Tab** moves to the next focusable child
+- **Shift+Tab** moves to the previous focusable child
+- When HBox receives focus, it focuses its first (or last remembered) focusable child
 
 ```go
-// Different widths
-small := widgets.NewButton(0, 0, 8, 1, "OK")
-medium := widgets.NewButton(0, 0, 12, 1, "Cancel")
-large := widgets.NewButton(0, 0, 20, 1, "More Options...")
+// Focus will cycle through: button1 -> button2 -> button3
+hbox.AddChild(button1)   // Focusable
+hbox.AddChild(button2)   // Focusable
+hbox.AddChild(button3)   // Focusable
+```
 
-ui.AddWidget(small)
-ui.AddWidget(medium)
-ui.AddWidget(large)
+## Nesting with VBox
+
+Create complex layouts by nesting HBox inside VBox:
+
+```go
+main := widgets.NewVBox()
+main.Spacing = 1
+
+// Header row
+header := widgets.NewHBox()
+header.AddChild(widgets.NewLabel("App Title"))
+header.AddFlexChild(widgets.NewLabel(""))
+header.AddChild(widgets.NewButton("X"))
+main.AddChild(header)
+
+// Form fields (each row is an HBox)
+for _, fieldName := range []string{"Name:", "Email:", "Phone:"} {
+    row := widgets.NewHBox()
+    row.Spacing = 1
+    row.AddChildWithSize(widgets.NewLabel(fieldName), 10)
+    row.AddFlexChild(widgets.NewInput())
+    main.AddChild(row)
+}
+
+// Footer with buttons
+footer := widgets.NewHBox()
+footer.Spacing = 2
+footer.AddFlexChild(widgets.NewLabel(""))  // Push buttons right
+footer.AddChild(widgets.NewButton("OK"))
+footer.AddChild(widgets.NewButton("Cancel"))
+main.AddChild(footer)
 ```
 
 **Result:**
-
 ```
-[ OK ]  [ Cancel ]  [ More Options... ]
+┌────────────────────────────────────────┐
+│ App Title                          [X] │
+│ Name:     [___________________________]│
+│ Email:    [___________________________]│
+│ Phone:    [___________________________]│
+│                     [ OK ]  [ Cancel ] │
+└────────────────────────────────────────┘
 ```
-
-## Y Position
-
-Widgets keep their y position. Use this for vertical alignment:
-
-```go
-// All at y=0 (top-aligned)
-ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Top"))
-
-// One lower (y=2)
-ui.AddWidget(widgets.NewButton(0, 2, 10, 3, "Lower"))
-
-// Back to top
-ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Top"))
-```
-
-**Result:**
-
-```
-[ Top ]              [ Top ]
-           ┌────────┐
-           │ Lower  │
-           └────────┘
-```
-
-## Button Row Pattern
-
-Common pattern for dialog buttons:
-
-```go
-func createButtonRow() *core.UIManager {
-    ui := core.NewUIManager()
-    ui.SetLayout(layout.NewHBox(2))
-
-    ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Save"))
-    ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Cancel"))
-    ui.AddWidget(widgets.NewButton(0, 0, 10, 1, "Apply"))
-
-    return ui
-}
-```
-
-## Toolbar Pattern
-
-Horizontal toolbar with icons:
-
-```go
-func createToolbar() *core.UIManager {
-    ui := core.NewUIManager()
-    ui.SetLayout(layout.NewHBox(1))
-
-    tools := []string{"New", "Open", "Save", "|", "Cut", "Copy", "Paste"}
-
-    for _, tool := range tools {
-        if tool == "|" {
-            // Separator
-            ui.AddWidget(widgets.NewLabel(0, 0, 1, 1, "│"))
-        } else {
-            ui.AddWidget(widgets.NewButton(0, 0, len(tool)+2, 1, tool))
-        }
-    }
-
-    return ui
-}
-```
-
-**Result:**
-
-```
-[New] [Open] [Save] │ [Cut] [Copy] [Paste]
-```
-
-## Sidebar Layout Pattern
-
-Two-column layout with HBox:
-
-```go
-func createTwoColumn(totalWidth, height int) *core.UIManager {
-    ui := core.NewUIManager()
-    ui.SetLayout(layout.NewHBox(1))
-
-    sidebarWidth := 20
-    contentWidth := totalWidth - sidebarWidth - 1  // -1 for spacing
-
-    sidebar := widgets.NewPane(0, 0, sidebarWidth, height, sidebarStyle)
-    content := widgets.NewPane(0, 0, contentWidth, height, contentStyle)
-
-    ui.AddWidget(sidebar)
-    ui.AddWidget(content)
-
-    return ui
-}
-```
-
-**Result:**
-
-```
-┌──────────────────┐ ┌──────────────────────────────────────┐
-│    Sidebar       │ │              Content                 │
-│                  │ │                                      │
-│    - Item 1      │ │                                      │
-│    - Item 2      │ │                                      │
-│    - Item 3      │ │                                      │
-└──────────────────┘ └──────────────────────────────────────┘
-```
-
-## Mixed Heights
-
-Widgets with different heights work correctly:
-
-```go
-ui.SetLayout(layout.NewHBox(2))
-
-// Single-line label
-ui.AddWidget(widgets.NewLabel(0, 0, 10, 1, "Status:"))
-
-// Multi-line text area
-ui.AddWidget(widgets.NewTextArea(0, 0, 30, 5))
-
-// Single-line button
-ui.AddWidget(widgets.NewButton(0, 0, 8, 1, "Send"))
-```
-
-**Result:**
-
-```
-Status:   ┌────────────────────────────┐  [Send]
-          │                            │
-          │                            │
-          │                            │
-          └────────────────────────────┘
-```
-
-## Combining Layouts
-
-Use Pane containers for mixed horizontal and vertical layouts:
-
-```go
-ui := core.NewUIManager()
-ui.SetLayout(layout.NewHBox(2))
-
-// Left panel with vertical layout
-leftPane := widgets.NewPane(0, 0, 30, 15, leftStyle)
-// Add vertically-stacked widgets inside leftPane
-
-// Right panel with vertical layout
-rightPane := widgets.NewPane(0, 0, 45, 15, rightStyle)
-// Add vertically-stacked widgets inside rightPane
-
-ui.AddWidget(leftPane)
-ui.AddWidget(rightPane)
-```
-
-## Responsive Width
-
-Calculate widget widths based on available space:
-
-```go
-func createResponsiveRow(totalWidth int) *core.UIManager {
-    ui := core.NewUIManager()
-    ui.SetLayout(layout.NewHBox(2))
-
-    buttonCount := 3
-    spacing := 2
-    totalSpacing := spacing * (buttonCount - 1)  // 4
-    availableWidth := totalWidth - totalSpacing
-    buttonWidth := availableWidth / buttonCount
-
-    ui.AddWidget(widgets.NewButton(0, 0, buttonWidth, 1, "Save"))
-    ui.AddWidget(widgets.NewButton(0, 0, buttonWidth, 1, "Cancel"))
-    ui.AddWidget(widgets.NewButton(0, 0, buttonWidth, 1, "Help"))
-
-    return ui
-}
-```
-
-## Layout Interface
-
-HBox implements the Layout interface:
-
-```go
-type Layout interface {
-    Apply(container Rect, children []Widget)
-}
-```
-
-**When applied:**
-- During `UIManager.Resize()`
-- During `UIManager.Render()`
-
-## Overflow Behavior
-
-If widgets exceed container width, they continue off-screen:
-
-```go
-// Container is 40 wide
-ui.Resize(40, 10)
-ui.SetLayout(layout.NewHBox(2))
-
-// These widgets total 44 columns + spacing
-ui.AddWidget(widgets.NewButton(0, 0, 12, 1, "Button 1"))
-ui.AddWidget(widgets.NewButton(0, 0, 12, 1, "Button 2"))
-ui.AddWidget(widgets.NewButton(0, 0, 12, 1, "Button 3"))
-ui.AddWidget(widgets.NewButton(0, 0, 12, 1, "Button 4"))  // Partially off-screen
-```
-
-Consider calculating widths to fit, or using a scrollable container.
 
 ## Tips
 
-1. **Calculate total width** - `sum(widget widths) + (count-1) * spacing`
+1. **Use flex children for alignment** - Empty labels as spacers push content left/right/center
 
-2. **Use consistent heights** - Same height for button rows looks cleaner
+2. **Fixed widths for labels** - Ensures alignment across multiple rows
 
-3. **Combine with VBox** - Use Pane containers for complex layouts:
-   ```go
-   // Main VBox layout
-   mainUI.SetLayout(layout.NewVBox(2))
-   mainUI.AddWidget(headerRow)      // HBox inside
-   mainUI.AddWidget(contentArea)
-   mainUI.AddWidget(buttonRow)      // HBox inside
-   ```
+3. **Natural size for buttons** - Let buttons size to their text
 
-4. **Visual separators** - Use thin Label widgets for dividers:
-   ```go
-   ui.AddWidget(widgets.NewLabel(0, 0, 1, 1, "│"))
-   ```
+4. **Nest inside VBox** - HBox rows work great in vertical layouts
 
 ## See Also
 
 - [VBox](/texelui/layout/vbox.md) - Vertical stacking
-- [Absolute](/texelui/layout/absolute.md) - Manual positioning
+- [ScrollPane](/texelui/layout/scrollpane.md) - Scrollable containers
 - [Layout Overview](/texelui/layout/README.md) - When to use each layout
+- [Building a Form](/texelui/tutorials/building-a-form.md) - Practical examples

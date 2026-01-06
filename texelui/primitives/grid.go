@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: texelui/primitives/grid.go
-// Summary: 2D grid widget with cell selection and keyboard/mouse navigation.
+// Summary: 2D grid widget with cell selection, keyboard/mouse navigation, and scrolling.
 
 package primitives
 
@@ -10,6 +10,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"texelation/texel/theme"
 	"texelation/texelui/core"
+	"texelation/texelui/scroll"
 )
 
 // GridItem represents a single cell in a Grid.
@@ -24,22 +25,32 @@ type GridCellRenderer func(p *core.Painter, rect core.Rect, item GridItem, selec
 
 // Grid is a 2D grid widget with cell selection and navigation.
 // It dynamically calculates the number of columns based on available width
-// and supports 2D keyboard navigation, Tab sequential navigation, and mouse clicks.
+// and supports 2D keyboard navigation, Tab sequential navigation, mouse clicks,
+// and automatic vertical scrolling when content overflows.
 type Grid struct {
 	core.BaseWidget
 	Items        []GridItem
 	SelectedIdx  int
-	MinCellWidth int // Minimum width per cell (used for column calculation)
-	MaxCols      int // Maximum number of columns (0 = unlimited)
+	MinCellWidth int       // Minimum width per cell (used for column calculation)
+	MaxCols      int       // Maximum number of columns (0 = unlimited)
 	OnChange     func(int) // Called when selection changes
 
 	// Custom rendering (optional)
 	RenderCell GridCellRenderer
 
-	// Internal state (computed during Draw)
-	cols      int
-	cellWidth int
-	inv       func(core.Rect)
+	// Internal state
+	cols       int
+	cellWidth  int
+	scrollPane *scroll.ScrollPane
+	content    *gridContent
+	inv        func(core.Rect)
+}
+
+// gridContent is the internal widget that renders grid items.
+// It's wrapped by ScrollPane for scrolling support.
+type gridContent struct {
+	core.BaseWidget
+	parent *Grid
 }
 
 // NewGrid creates a new grid at the specified position and size.
@@ -51,6 +62,13 @@ func NewGrid(x, y, w, h int) *Grid {
 		MaxCols:      0, // Unlimited
 		cols:         1,
 	}
+
+	// Create internal content widget
+	g.content = &gridContent{parent: g}
+
+	// Create scroll pane wrapping the content
+	g.scrollPane = scroll.NewScrollPane()
+	g.scrollPane.SetChild(g.content)
 
 	g.SetPosition(x, y)
 	g.Resize(w, h)
@@ -68,6 +86,7 @@ func NewGrid(x, y, w, h int) *Grid {
 // SetInvalidator allows the UI manager to inject a dirty-region invalidator.
 func (g *Grid) SetInvalidator(fn func(core.Rect)) {
 	g.inv = fn
+	g.scrollPane.SetInvalidator(fn)
 }
 
 // SetItems replaces the grid items.
@@ -80,6 +99,10 @@ func (g *Grid) SetItems(items []GridItem) {
 	if g.SelectedIdx < 0 {
 		g.SelectedIdx = 0
 	}
+	// Recalculate layout and update scroll pane content height
+	g.calculateLayout()
+	g.updateScrollPaneContentHeight()
+	g.ensureSelectedVisible()
 	g.invalidate()
 }
 
@@ -92,6 +115,7 @@ func (g *Grid) SetSelected(idx int) {
 		return
 	}
 	g.SelectedIdx = idx
+	g.ensureSelectedVisible()
 	g.invalidate()
 	if g.OnChange != nil {
 		g.OnChange(idx)
@@ -109,6 +133,23 @@ func (g *Grid) SelectedItem() *GridItem {
 // Columns returns the calculated number of columns.
 func (g *Grid) Columns() int {
 	return g.cols
+}
+
+// Resize updates the grid size and recalculates layout.
+func (g *Grid) Resize(w, h int) {
+	g.BaseWidget.Resize(w, h)
+	g.scrollPane.SetPosition(g.Rect.X, g.Rect.Y)
+	g.scrollPane.Resize(w, h)
+	g.calculateLayout()
+	// Update content size and scroll pane content height
+	g.content.Resize(w, g.contentHeight())
+	g.updateScrollPaneContentHeight()
+}
+
+// SetPosition updates the grid position.
+func (g *Grid) SetPosition(x, y int) {
+	g.BaseWidget.SetPosition(x, y)
+	g.scrollPane.SetPosition(x, y)
 }
 
 // calculateLayout computes grid layout based on available width.
@@ -149,32 +190,119 @@ func (g *Grid) calculateLayout() {
 	g.cellWidth = cellWidth
 }
 
-// Draw renders the grid.
+// contentHeight returns the number of rows needed for all items.
+func (g *Grid) contentHeight() int {
+	if len(g.Items) == 0 || g.cols < 1 {
+		return 0
+	}
+	return (len(g.Items) + g.cols - 1) / g.cols
+}
+
+// updateScrollPaneContentHeight updates the scroll pane's content height.
+func (g *Grid) updateScrollPaneContentHeight() {
+	g.scrollPane.SetContentHeight(g.contentHeight())
+}
+
+// ensureSelectedVisible scrolls to make the selected item visible.
+func (g *Grid) ensureSelectedVisible() {
+	if len(g.Items) == 0 || g.cols < 1 {
+		return
+	}
+	selectedRow := g.SelectedIdx / g.cols
+	g.scrollPane.EnsureVisible(selectedRow)
+}
+
+// Draw renders the grid via the scroll pane.
 func (g *Grid) Draw(painter *core.Painter) {
+	// Ensure layout is calculated
+	g.calculateLayout()
+	g.content.Resize(g.Rect.W, g.contentHeight())
+	g.scrollPane.Draw(painter)
+}
+
+// ContentHeight implements scroll.ContentHeightProvider for gridContent.
+func (gc *gridContent) ContentHeight() int {
+	return gc.parent.contentHeight()
+}
+
+// HandlePageNavigation implements scroll.PageNavigator for selection-based page navigation.
+// This moves the selected item by a page-worth of rows rather than just scrolling the viewport.
+func (gc *gridContent) HandlePageNavigation(direction int, pageSize int) bool {
+	g := gc.parent
+	if len(g.Items) == 0 || g.cols < 1 {
+		return false
+	}
+
+	currentRow := g.SelectedIdx / g.cols
+	currentCol := g.SelectedIdx % g.cols
+	totalRows := (len(g.Items) + g.cols - 1) / g.cols
+
+	// Calculate target row
+	targetRow := currentRow + (direction * pageSize)
+
+	// Clamp to valid range
+	if targetRow < 0 {
+		targetRow = 0
+	}
+	if targetRow >= totalRows {
+		targetRow = totalRows - 1
+	}
+
+	// Calculate target index (same column, different row)
+	targetIdx := targetRow*g.cols + currentCol
+
+	// Clamp to valid item index (handle partial last row)
+	if targetIdx >= len(g.Items) {
+		targetIdx = len(g.Items) - 1
+	}
+	if targetIdx < 0 {
+		targetIdx = 0
+	}
+
+	// Only act if we're actually moving
+	if targetIdx == g.SelectedIdx {
+		return false
+	}
+
+	g.SetSelected(targetIdx)
+	return true
+}
+
+// Draw renders the grid items.
+func (gc *gridContent) Draw(painter *core.Painter) {
+	g := gc.parent
 	tm := theme.Get()
 	fg := tm.GetSemanticColor("text.primary")
 	bg := tm.GetSemanticColor("bg.surface")
 	baseStyle := tcell.StyleDefault.Foreground(fg).Background(bg)
 
-	// Fill background
-	painter.Fill(g.Rect, ' ', baseStyle)
-
 	if len(g.Items) == 0 {
 		return
 	}
 
-	// Calculate layout
-	g.calculateLayout()
+	// Get scroll offset from parent's scroll pane
+	scrollOffset := g.scrollPane.ScrollOffset()
 
-	// Draw items in grid
-	col := 0
-	x := g.Rect.X
-	y := g.Rect.Y
-
+	// Draw items in grid, accounting for scroll offset
+	// Note: Use g.Rect (parent's rect) for screen positions since ScrollPane
+	// manages clipping. gc.Rect is adjusted by ScrollPane during Draw which
+	// we don't want to use here.
 	for i, item := range g.Items {
-		if y >= g.Rect.Y+g.Rect.H {
-			break // No more rows available
+		row := i / g.cols
+		col := i % g.cols
+
+		// Skip rows above viewport
+		if row < scrollOffset {
+			continue
 		}
+		// Stop if below viewport
+		if row >= scrollOffset+g.Rect.H {
+			break
+		}
+
+		// Calculate screen position relative to parent's viewport
+		x := g.Rect.X + col*g.cellWidth
+		y := g.Rect.Y + (row - scrollOffset)
 
 		selected := i == g.SelectedIdx
 
@@ -190,22 +318,13 @@ func (g *Grid) Draw(painter *core.Painter) {
 			g.RenderCell(painter, cellRect, item, selected)
 		} else {
 			// Default rendering
-			g.drawDefaultCell(painter, cellRect, item, selected, baseStyle)
-		}
-
-		col++
-		if col >= g.cols {
-			col = 0
-			x = g.Rect.X
-			y++
-		} else {
-			x += g.cellWidth
+			gc.drawDefaultCell(painter, cellRect, item, selected, baseStyle)
 		}
 	}
 }
 
 // drawDefaultCell renders a grid cell with default styling.
-func (g *Grid) drawDefaultCell(painter *core.Painter, rect core.Rect, item GridItem, selected bool, baseStyle tcell.Style) {
+func (gc *gridContent) drawDefaultCell(painter *core.Painter, rect core.Rect, item GridItem, selected bool, baseStyle tcell.Style) {
 	style := baseStyle
 	if selected {
 		style = style.Reverse(true)
@@ -293,6 +412,11 @@ func (g *Grid) HandleKey(ev *tcell.EventKey) bool {
 		}
 		return false
 
+	case tcell.KeyPgUp, tcell.KeyPgDn:
+		// Let scroll pane handle page up/down - it will delegate to our
+		// gridContent.HandlePageNavigation for selection-based navigation
+		return g.scrollPane.HandleKey(ev)
+
 	case tcell.KeyTab:
 		// Tab: left-to-right, top-to-bottom sequential navigation
 		if ev.Modifiers()&tcell.ModShift != 0 {
@@ -315,7 +439,7 @@ func (g *Grid) HandleKey(ev *tcell.EventKey) bool {
 	return false
 }
 
-// HandleMouse processes mouse input for cell selection.
+// HandleMouse processes mouse input for cell selection and scrolling.
 func (g *Grid) HandleMouse(ev *tcell.EventMouse) bool {
 	if len(g.Items) == 0 {
 		return false
@@ -326,7 +450,18 @@ func (g *Grid) HandleMouse(ev *tcell.EventMouse) bool {
 		return false
 	}
 
-	if ev.Buttons() != tcell.Button1 {
+	buttons := ev.Buttons()
+
+	// Handle wheel scrolling via scroll pane
+	if buttons&(tcell.WheelUp|tcell.WheelDown) != 0 {
+		if g.scrollPane.HandleMouse(ev) {
+			g.invalidate()
+			return true
+		}
+		return false
+	}
+
+	if buttons != tcell.Button1 {
 		return false
 	}
 
@@ -335,7 +470,8 @@ func (g *Grid) HandleMouse(ev *tcell.EventMouse) bool {
 		g.calculateLayout()
 	}
 
-	// Calculate which cell was clicked
+	// Calculate which cell was clicked, accounting for scroll offset
+	scrollOffset := g.scrollPane.ScrollOffset()
 	relX := x - g.Rect.X
 	relY := y - g.Rect.Y
 
@@ -344,7 +480,7 @@ func (g *Grid) HandleMouse(ev *tcell.EventMouse) bool {
 		clickedCol = g.cols - 1
 	}
 
-	clickedRow := relY
+	clickedRow := relY + scrollOffset
 	clickedIdx := clickedRow*g.cols + clickedCol
 
 	if clickedIdx >= 0 && clickedIdx < len(g.Items) {

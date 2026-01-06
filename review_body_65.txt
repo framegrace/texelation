@@ -1,0 +1,36 @@
+This is a substantial and well-structured PR. The introduction of `FocusCycler`, the new `scroll` package, and the `OKLCHEditor` refactor significantly improve the architecture.
+
+However, I found one critical logic issue regarding tree traversal in `TabLayout` that needs addressing to ensure the new focus system works reliably.
+
+### Critical Issue: `TabLayout` Visibility
+
+**File:** `texelui/widgets/tablayout.go`
+**Line:** 459 (`VisitChildren`)
+
+The current implementation of `VisitChildren` explicitly excludes the `tabBar` widget:
+
+```go
+func (tl *TabLayout) VisitChildren(f func(core.Widget)) {
+    // Only visit active child - tab bar focus is managed internally
+    if activeChild := tl.activeChild(); activeChild != nil {
+        f(activeChild)
+    }
+}
+```
+
+**The Problem:**
+By hiding `tabBar` from `VisitChildren`, you break the `containsWidgetLocked` check in `UIManager`.
+
+1.  When `tabBar` is focused, `UIManager.HandleKey` calls `cycleFocusLocked`.
+2.  `cycleFocusLocked` iterates root widgets and calls `u.containsWidgetLocked(w, u.focused)` to find the active container.
+3.  `containsWidgetLocked` uses `VisitChildren` to search the tree.
+4.  Since `TabLayout` hides `tabBar`, `containsWidgetLocked` returns `false`.
+5.  Consequently, `tl.CycleFocus` is **never called** when the focus is on the tab bar. The `UIManager` falls back to `cycleRootWidgetsLocked`, effectively treating the focus as lost or external, causing it to reset to the first widget instead of cycling effectively.
+
+**Impact:**
+This also breaks `core.IsDescendantFocused` (styling dependency) and `core.FindDeepFocused` (used for key hints and Enter key handling) when the focus is on the tab bar.
+
+**Fix:**
+`VisitChildren` must expose all children, including `tabBar`. The `CycleFocus` implementation in `TabLayout` seems robust enough to handle the focus logic; relying on hiding children from the system traversal is fragile and breaks other tree-dependent features.
+
+-- gemini

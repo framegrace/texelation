@@ -381,3 +381,199 @@ func TestGrid_EmptyGrid(t *testing.T) {
 		t.Error("expected SelectedItem to return nil for empty grid")
 	}
 }
+
+func TestGrid_ScrollingWithManyItems(t *testing.T) {
+	// Grid with height 3, but many items that need scrolling
+	g := NewGrid(0, 0, 30, 3) // Only 3 rows visible
+	g.MinCellWidth = 10       // 3 columns
+
+	// Create 15 items = 5 rows, but only 3 visible at a time
+	items := make([]GridItem, 15)
+	for i := 0; i < 15; i++ {
+		items[i] = GridItem{Text: string('A' + rune(i))}
+	}
+	g.SetItems(items)
+	g.calculateLayout()
+
+	// Verify we have 3 columns and 5 rows
+	if g.cols != 3 {
+		t.Fatalf("expected 3 columns, got %d", g.cols)
+	}
+	totalRows := g.contentHeight()
+	if totalRows != 5 {
+		t.Fatalf("expected 5 rows, got %d", totalRows)
+	}
+
+	// Start at first item
+	g.SetSelected(0)
+
+	// Navigate down to item 12 (row 4, which is outside initial viewport)
+	g.SetSelected(12) // Row 4 (0-indexed)
+
+	// The scroll pane should have scrolled to show the selected row
+	offset := g.scrollPane.ScrollOffset()
+	// Row 4 with viewport height 3 means we need offset >= 2 to see row 4
+	if offset < 2 {
+		t.Errorf("expected scroll offset >= 2 to show row 4, got %d", offset)
+	}
+
+	// Navigate back to first item
+	g.SetSelected(0)
+	offset = g.scrollPane.ScrollOffset()
+	// Should scroll back to top
+	if offset != 0 {
+		t.Errorf("expected scroll offset 0 at top, got %d", offset)
+	}
+}
+
+func TestGrid_WheelScrolling(t *testing.T) {
+	g := NewGrid(0, 0, 30, 3) // Only 3 rows visible
+	g.MinCellWidth = 10
+
+	// Create 15 items = 5 rows
+	items := make([]GridItem, 15)
+	for i := 0; i < 15; i++ {
+		items[i] = GridItem{Text: string('A' + rune(i))}
+	}
+	g.SetItems(items)
+
+	// Wheel down should scroll
+	ev := tcell.NewEventMouse(5, 1, tcell.WheelDown, tcell.ModNone)
+	handled := g.HandleMouse(ev)
+	if !handled {
+		t.Error("expected WheelDown to be handled")
+	}
+
+	offset := g.scrollPane.ScrollOffset()
+	if offset == 0 {
+		t.Error("expected scroll offset > 0 after wheel down")
+	}
+
+	// Wheel up should scroll back
+	ev = tcell.NewEventMouse(5, 1, tcell.WheelUp, tcell.ModNone)
+	g.HandleMouse(ev)
+	g.HandleMouse(ev) // Multiple to scroll back to top
+
+	offset = g.scrollPane.ScrollOffset()
+	if offset != 0 {
+		t.Errorf("expected scroll offset 0 after wheel up, got %d", offset)
+	}
+}
+
+func TestGrid_PageNavigation(t *testing.T) {
+	// Grid with height 3, 3 columns, 15 items = 5 rows
+	g := NewGrid(0, 0, 30, 3)
+	g.MinCellWidth = 10
+
+	items := make([]GridItem, 15)
+	for i := 0; i < 15; i++ {
+		items[i] = GridItem{Text: string('A' + rune(i))}
+	}
+	g.SetItems(items)
+	g.calculateLayout()
+
+	// Start at item 0 (row 0, col 0)
+	g.SetSelected(0)
+
+	// PgDn should move selection down by pageSize (3) rows
+	ev := tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone)
+	handled := g.HandleKey(ev)
+	if !handled {
+		t.Error("expected PgDn to be handled")
+	}
+
+	// Should be at row 3, col 0 = index 9
+	if g.SelectedIdx != 9 {
+		t.Errorf("expected SelectedIdx 9 after PgDn, got %d", g.SelectedIdx)
+	}
+
+	// Another PgDn should go to last row
+	handled = g.HandleKey(ev)
+	if !handled {
+		t.Error("expected second PgDn to be handled")
+	}
+
+	// Should be at row 4, col 0 = index 12
+	if g.SelectedIdx != 12 {
+		t.Errorf("expected SelectedIdx 12 after second PgDn, got %d", g.SelectedIdx)
+	}
+
+	// PgDn at bottom should not change selection
+	handled = g.HandleKey(ev)
+	if handled {
+		t.Error("expected PgDn at bottom to not be handled")
+	}
+
+	// PgUp should move back up
+	ev = tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModNone)
+	handled = g.HandleKey(ev)
+	if !handled {
+		t.Error("expected PgUp to be handled")
+	}
+
+	// Should be at row 1, col 0 = index 3
+	if g.SelectedIdx != 3 {
+		t.Errorf("expected SelectedIdx 3 after PgUp, got %d", g.SelectedIdx)
+	}
+
+	// Another PgUp should go to top
+	handled = g.HandleKey(ev)
+	if !handled {
+		t.Error("expected second PgUp to be handled")
+	}
+
+	// Should be at row 0, col 0 = index 0
+	if g.SelectedIdx != 0 {
+		t.Errorf("expected SelectedIdx 0 after second PgUp, got %d", g.SelectedIdx)
+	}
+}
+
+func TestGrid_PageNavigationMaintainsColumn(t *testing.T) {
+	// Grid with height 2, 3 columns, 9 items = 3 rows
+	g := NewGrid(0, 0, 30, 2)
+	g.MinCellWidth = 10
+
+	items := make([]GridItem, 9)
+	for i := 0; i < 9; i++ {
+		items[i] = GridItem{Text: string('A' + rune(i))}
+	}
+	g.SetItems(items)
+	g.calculateLayout()
+
+	// Start at item 1 (row 0, col 1 - "B")
+	g.SetSelected(1)
+
+	// PgDn should maintain column 1
+	ev := tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone)
+	g.HandleKey(ev)
+
+	// Should be at row 2, col 1 = index 7 ("H")
+	if g.SelectedIdx != 7 {
+		t.Errorf("expected SelectedIdx 7 (row 2, col 1), got %d", g.SelectedIdx)
+	}
+}
+
+func TestGrid_PageNavigationPartialLastRow(t *testing.T) {
+	// Grid with height 2, 3 columns, 7 items = 3 rows (last row has only 1 item)
+	g := NewGrid(0, 0, 30, 2)
+	g.MinCellWidth = 10
+
+	items := make([]GridItem, 7)
+	for i := 0; i < 7; i++ {
+		items[i] = GridItem{Text: string('A' + rune(i))}
+	}
+	g.SetItems(items)
+	g.calculateLayout()
+
+	// Start at item 2 (row 0, col 2 - "C")
+	g.SetSelected(2)
+
+	// PgDn should go to last row, but col 2 doesn't exist there
+	// Should clamp to last item (index 6)
+	ev := tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone)
+	g.HandleKey(ev)
+
+	if g.SelectedIdx != 6 {
+		t.Errorf("expected SelectedIdx 6 (clamped to last item), got %d", g.SelectedIdx)
+	}
+}

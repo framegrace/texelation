@@ -19,35 +19,74 @@ Complete reference for all TexelUI widgets.
 | [Label](/texelui/widgets/label.md) | Static text display | `widgets/label.go` |
 | [Button](/texelui/widgets/button.md) | Clickable action trigger | `widgets/button.go` |
 
+### Layout Containers
+| Widget | Description | Source |
+|--------|-------------|--------|
+| [VBox](/texelui/layout/vbox.md) | Vertical stacking layout | `widgets/box.go` |
+| [HBox](/texelui/layout/hbox.md) | Horizontal stacking layout | `widgets/box.go` |
+| [Form](/texelui/widgets/form.md) | Label/field pairs with alignment | `widgets/form.go` |
+| [TabPanel](/texelui/widgets/tabpanel.md) | High-level tabbed container | `widgets/tabpanel.go` |
+| [ScrollPane](/texelui/layout/scrollpane.md) | Scrollable container | `scroll/scrollpane.go` |
+
 ### Container Widgets
 | Widget | Description | Source |
 |--------|-------------|--------|
 | [Pane](/texelui/widgets/pane.md) | Container with background | `widgets/pane.go` |
 | [Border](/texelui/widgets/border.md) | Decorative border | `widgets/border.go` |
-| [TabLayout](/texelui/widgets/tablayout.md) | Tabbed container | `widgets/tablayout.go` |
+| [TabLayout](/texelui/widgets/tablayout.md) | Low-level tabbed container | `widgets/tablayout.go` |
 
 ## Common Patterns
 
 ### Creating Widgets
 
-All widgets follow the same constructor pattern:
+Widgets use position-less constructors with minimal required parameters:
 
 ```go
-widget := widgets.NewWidgetName(x, y, w, h, ...params)
+label := widgets.NewLabel("Hello")
+button := widgets.NewButton("Click Me")
+input := widgets.NewInput()
+checkbox := widgets.NewCheckbox("Remember me")
 ```
 
-Parameters:
-- `x, y` - Position in terminal cells
-- `w, h` - Size in terminal cells (some widgets auto-size if 0)
-- Additional widget-specific parameters
+Position and size are handled by layout containers or explicit calls:
 
-### Adding to UI
+```go
+// Using layout containers (recommended)
+vbox := widgets.NewVBox()
+vbox.AddChild(label)
+vbox.AddChild(button)
+
+// Or manual positioning (advanced)
+button.SetPosition(10, 5)
+button.Resize(20, 1)
+```
+
+### Adding to UI with Layout Containers
 
 ```go
 ui := core.NewUIManager()
-btn := widgets.NewButton(10, 5, 0, 0, "Click Me")
-ui.AddWidget(btn)
-ui.Focus(btn)  // Set initial focus
+
+// Create a layout container
+vbox := widgets.NewVBox()
+vbox.Spacing = 1
+
+// Add widgets to the container
+label := widgets.NewLabel("Welcome!")
+vbox.AddChild(label)
+
+btn := widgets.NewButton("Click Me")
+vbox.AddChild(btn)
+
+// Add container to UI
+ui.AddWidget(vbox)
+ui.Focus(vbox)
+
+// Size on resize
+app := adapter.NewUIApp("Demo", ui)
+app.OnResize(func(w, h int) {
+    vbox.SetPosition(2, 2)
+    vbox.Resize(w-4, h-4)
+})
 ```
 
 ### Handling Events
@@ -104,12 +143,15 @@ EffectiveStyle(base) Style // Get current style
 - Checkbox
 - ComboBox
 - ColorPicker
-- TabLayout
+- TabPanel / TabLayout
+- Form (manages focus of children)
+- VBox / HBox (manages focus of children)
 
 ### Non-Focusable Widgets
 - Label
 - Pane (container only)
 - Border (container only)
+- ScrollPane (container only, delegates to child)
 
 ### Focus Traversal
 - **Tab** - Next focusable widget
@@ -138,50 +180,94 @@ See [Theming](/texelui/core-concepts/theming.md) for details.
 ```go
 ui := core.NewUIManager()
 
-label := widgets.NewLabel(5, 3, 10, 1, "Name:")
-input := widgets.NewInput(16, 3, 30)
-input.Placeholder = "Enter your name"
+form := widgets.NewVBox()
+form.Spacing = 1
 
-btn := widgets.NewButton(16, 5, 12, 1, "Submit")
+// Create form row with HBox
+row := widgets.NewHBox()
+row.Spacing = 1
+row.AddChildWithSize(widgets.NewLabel("Name:"), 10)
+input := widgets.NewInput()
+input.Placeholder = "Enter your name"
+row.AddFlexChild(input)
+form.AddChild(row)
+
+// Submit button
+btn := widgets.NewButton("Submit")
 btn.OnClick = func() {
     fmt.Printf("Name: %s\n", input.Text)
 }
+form.AddChild(btn)
 
-ui.AddWidget(label)
-ui.AddWidget(input)
-ui.AddWidget(btn)
-ui.Focus(input)
+ui.AddWidget(form)
+ui.Focus(form)
+
+app := adapter.NewUIApp("Form", ui)
+app.OnResize(func(w, h int) {
+    form.SetPosition(5, 3)
+    form.Resize(40, 10)
+})
+```
+
+### Using Form Widget
+
+```go
+ui := core.NewUIManager()
+
+form := widgets.NewForm()
+nameInput := widgets.NewInput()
+form.AddField("Name:", nameInput)
+
+emailInput := widgets.NewInput()
+form.AddField("Email:", emailInput)
+
+form.AddFullWidthField(widgets.NewCheckbox("Subscribe"), 1)
+
+ui.AddWidget(form)
+ui.Focus(form)
 ```
 
 ### Tabbed Interface
 
 ```go
-tabs := []primitives.TabItem{
-    {Label: "Home", ID: "home"},
-    {Label: "Settings", ID: "settings"},
+ui := core.NewUIManager()
+
+tabs := widgets.NewTabPanel()
+
+// Add tabs with content
+homeContent := widgets.NewLabel("Welcome to the home tab!")
+tabs.AddTab("Home", homeContent)
+
+settingsContent := widgets.NewVBox()
+settingsContent.AddChild(widgets.NewCheckbox("Enable dark mode"))
+settingsContent.AddChild(widgets.NewCheckbox("Show notifications"))
+tabs.AddTab("Settings", settingsContent)
+
+tabs.OnTabChange = func(index int) {
+    fmt.Printf("Switched to tab %d\n", index)
 }
-tabLayout := widgets.NewTabLayout(0, 0, 80, 24, tabs)
 
-homePane := widgets.NewPane(0, 0, 80, 22, tcell.StyleDefault)
-settingsPane := widgets.NewPane(0, 0, 80, 22, tcell.StyleDefault)
-
-tabLayout.SetTabContent(0, homePane)
-tabLayout.SetTabContent(1, settingsPane)
-
-ui.AddWidget(tabLayout)
-ui.Focus(tabLayout)
+ui.AddWidget(tabs)
+ui.Focus(tabs)
 ```
 
 ### Dropdown Selection
 
 ```go
 options := []string{"Red", "Green", "Blue", "Yellow"}
-combo := widgets.NewComboBox(10, 5, 20, options, false)
+combo := widgets.NewComboBox(options, false)
 combo.SetValue("Green")
 
 combo.OnChange = func(value string) {
     fmt.Printf("Selected: %s\n", value)
 }
+
+// Add to layout
+vbox := widgets.NewVBox()
+row := widgets.NewHBox()
+row.AddChildWithSize(widgets.NewLabel("Color:"), 10)
+row.AddFlexChild(combo)
+vbox.AddChild(row)
 ```
 
 ## What's Next?

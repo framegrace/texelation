@@ -10,7 +10,6 @@ package main
 import (
 	"log"
 
-	"github.com/gdamore/tcell/v2"
 	"texelation/internal/devshell"
 	"texelation/texel"
 	"texelation/texelui/adapter"
@@ -29,24 +28,36 @@ func createApp(args []string) (texel.App, error) {
 	// 1. Create the UI manager
 	ui := core.NewUIManager()
 
-	// 2. Create a simple label
-	label := widgets.NewLabel(5, 5, 20, 1, "Hello, World!")
+	// 2. Create a vertical layout container
+	vbox := widgets.NewVBox()
+	vbox.Spacing = 1
 
-	// 3. Create a button
-	btn := widgets.NewButton(5, 7, 0, 0, "Click Me!")
+	// 3. Create a simple label
+	label := widgets.NewLabel("Hello, World!")
+
+	// 4. Create a button
+	btn := widgets.NewButton("Click Me!")
 	btn.OnClick = func() {
 		label.Text = "Button clicked!"
 	}
 
-	// 4. Add widgets to the UI
-	ui.AddWidget(label)
-	ui.AddWidget(btn)
+	// 5. Add widgets to the container
+	vbox.AddChild(label)
+	vbox.AddChild(btn)
 
-	// 5. Set initial focus
+	// 6. Add container to the UI
+	ui.AddWidget(vbox)
+
+	// 7. Set initial focus
 	ui.Focus(btn)
 
-	// 6. Create and return the app
-	return adapter.NewUIApp("Hello", ui), nil
+	// 8. Create and return the app with resize handling
+	app := adapter.NewUIApp("Hello", ui)
+	app.OnResize(func(w, h int) {
+		vbox.SetPosition(5, 5)
+		vbox.Resize(w-10, h-10)
+	})
+	return app, nil
 }
 ```
 
@@ -58,7 +69,6 @@ func createApp(args []string) (texel.App, error) {
 import (
 	"log"
 
-	"github.com/gdamore/tcell/v2"           // Terminal cell library
 	"texelation/internal/devshell"           // Standalone runner
 	"texelation/texel"                       // Core texel types
 	"texelation/texelui/adapter"             // texel.App adapter
@@ -67,12 +77,11 @@ import (
 )
 ```
 
-**tcell/v2** - The underlying terminal library that handles screen drawing and input
 **devshell** - Provides standalone execution without needing the Texelation server
 **texel** - Defines the `texel.App` interface that all apps implement
 **adapter** - Bridges TexelUI's `UIManager` to the `texel.App` interface
 **core** - Core TexelUI types: `UIManager`, `Widget`, `Painter`, `Rect`
-**widgets** - Pre-built widgets like `Label`, `Button`, `Input`
+**widgets** - Pre-built widgets like `Label`, `Button`, `Input`, `VBox`, `HBox`
 
 ### The Main Function
 
@@ -104,47 +113,63 @@ The `UIManager` is the heart of TexelUI. It:
 - Routes keyboard and mouse events
 - Orchestrates rendering
 
+### Creating a Layout Container
+
+```go
+vbox := widgets.NewVBox()
+vbox.Spacing = 1
+```
+
+`VBox` is a vertical layout container that stacks children from top to bottom.
+- No position parameters needed - containers manage child positioning
+- `Spacing` controls the gap between children
+
 ### Creating a Label
 
 ```go
-label := widgets.NewLabel(5, 5, 20, 1, "Hello, World!")
-//                        ^  ^  ^^  ^  ^^^^^^^^^^^^^^^
-//                        x  y  w   h  text
+label := widgets.NewLabel("Hello, World!")
 ```
 
-Parameters:
-- **x=5**: Position 5 cells from the left
-- **y=5**: Position 5 cells from the top
-- **w=20**: Width of 20 cells
-- **h=1**: Height of 1 cell (single line)
-- **text**: The text to display
+Labels auto-size to fit their text. No position parameters needed when using layout containers.
+
+To adjust later:
+- `label.SetPosition(x, y)` - Manual positioning
+- `label.Resize(w, h)` - Manual sizing
+- `label.Align = widgets.AlignCenter` - Text alignment
 
 ### Creating a Button
 
 ```go
-btn := widgets.NewButton(5, 7, 0, 0, "Click Me!")
-//                       ^  ^  ^  ^  ^^^^^^^^^^
-//                       x  y  w  h  text
+btn := widgets.NewButton("Click Me!")
 
 btn.OnClick = func() {
 	label.Text = "Button clicked!"
 }
 ```
 
-When width or height is **0**, the button auto-sizes to fit its text.
+Buttons auto-size to fit their text with padding: `[ Text ]`
 
 The `OnClick` callback is called when:
 - User presses Enter or Space while button is focused
 - User clicks the button with the mouse
 
-### Adding Widgets
+### Adding Widgets to Containers
 
 ```go
-ui.AddWidget(label)
-ui.AddWidget(btn)
+vbox.AddChild(label)
+vbox.AddChild(btn)
 ```
 
-Widgets are added in z-order: later widgets are drawn on top.
+Layout containers manage child positioning automatically:
+- `AddChild(w)` - Uses widget's natural size
+- `AddChildWithSize(w, size)` - Fixed size in layout direction
+- `AddFlexChild(w)` - Expands to fill remaining space
+
+### Adding Container to UIManager
+
+```go
+ui.AddWidget(vbox)
+```
 
 When you add a widget, the UIManager:
 1. Adds it to the widget list
@@ -162,11 +187,17 @@ Focus determines which widget receives keyboard input. Only focusable widgets ca
 By default:
 - `Label` is NOT focusable
 - `Button`, `Input`, `TextArea`, `Checkbox` ARE focusable
+- `VBox`, `HBox` delegate focus to their children
 
 ### Creating the App
 
 ```go
-return adapter.NewUIApp("Hello", ui), nil
+app := adapter.NewUIApp("Hello", ui)
+app.OnResize(func(w, h int) {
+	vbox.SetPosition(5, 5)
+	vbox.Resize(w-10, h-10)
+})
+return app, nil
 ```
 
 `UIApp` adapts `UIManager` to the `texel.App` interface:
@@ -188,6 +219,8 @@ return adapter.NewUIApp("Hello", ui), nil
          └───────────────┘
 ```
 
+The `OnResize` callback lets you adjust layout when the terminal size changes.
+
 ## Running the Example
 
 ```bash
@@ -207,47 +240,64 @@ Press Enter or Space to click the button. Press Ctrl+C to exit.
 
 ## Variations
 
-### Add a Background
+### Use HBox for Horizontal Layout
 
 ```go
-// Create a pane first
-bg := widgets.NewPane(0, 0, 40, 12, tcell.StyleDefault)
+// Create a horizontal button row
+hbox := widgets.NewHBox()
+hbox.Spacing = 2
 
-// Add widgets as children
-bg.AddChild(label)
-bg.AddChild(btn)
+okBtn := widgets.NewButton("OK")
+cancelBtn := widgets.NewButton("Cancel")
 
-// Add only the pane to UI
-ui.AddWidget(bg)
+hbox.AddChild(okBtn)
+hbox.AddChild(cancelBtn)
 ```
 
-### Add a Border
+### Add a Border Around Content
 
 ```go
-// Create a bordered container
-border := widgets.NewBorder(3, 3, 34, 8, tcell.StyleDefault)
-
-// Create content pane inside
-content := widgets.NewPane(0, 0, 32, 6, tcell.StyleDefault)
-content.AddChild(label)
-content.AddChild(btn)
-
-// Set pane as border's child
-border.SetChild(content)
+// Borders wrap any content
+border := widgets.NewBorder(0, 0, 40, 10, tcell.StyleDefault)
+border.SetChild(vbox)
 
 ui.AddWidget(border)
 ```
 
-### Handle Resize
+### Use Flex Children for Expansion
 
 ```go
-app := adapter.NewUIApp("Hello", ui)
-app.OnResize(func(w, h int) {
-	// Center the content
-	label.SetPosition(w/2 - 10, h/2 - 1)
-	btn.SetPosition(w/2 - 6, h/2 + 1)
-})
-return app, nil
+vbox := widgets.NewVBox()
+
+header := widgets.NewLabel("Header")
+content := widgets.NewTextArea()
+footer := widgets.NewLabel("Footer")
+
+vbox.AddChild(header)            // Natural size (1 row)
+vbox.AddFlexChild(content)       // Expands to fill remaining space
+vbox.AddChild(footer)            // Natural size (1 row)
+```
+
+### Create a Scrollable Form
+
+```go
+import "texelation/texelui/scroll"
+
+// Create scroll pane for long content
+scrollPane := scroll.NewScrollPane()
+
+// Create form content
+form := widgets.NewVBox()
+form.Spacing = 1
+for i := 0; i < 50; i++ {
+    form.AddChild(widgets.NewLabel(fmt.Sprintf("Field %d:", i)))
+    form.AddChild(widgets.NewInput())
+}
+
+scrollPane.SetChild(form)
+scrollPane.SetContentHeight(100) // Total content height
+
+ui.AddWidget(scrollPane)
 ```
 
 ## What's Next?

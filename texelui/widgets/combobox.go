@@ -45,15 +45,17 @@ type ComboBox struct {
 	list *primitives.ScrollableList
 }
 
-// NewComboBox creates a new combo box at the specified position.
-func NewComboBox(x, y, w int, items []string, editable bool) *ComboBox {
+// NewComboBox creates a new combo box with the given items.
+// Position defaults to 0,0 and width to 20.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewComboBox(items []string, editable bool) *ComboBox {
 	cb := &ComboBox{
 		Items:    items,
 		Editable: editable,
 		filtered: items,
 	}
-	cb.SetPosition(x, y)
-	cb.Resize(w, 1)
+	cb.SetPosition(0, 0)
+	cb.Resize(20, 1) // Default width 20
 	cb.SetFocusable(true)
 
 	// Configure focus style from theme
@@ -63,7 +65,7 @@ func NewComboBox(x, y, w int, items []string, editable bool) *ComboBox {
 	cb.SetFocusedStyle(tcell.StyleDefault.Foreground(fg).Background(bg), true)
 
 	// Create dropdown list (position will be set when expanded)
-	cb.list = primitives.NewScrollableList(x, y+1, w, 8)
+	cb.list = primitives.NewScrollableList(0, 1, 20, 8)
 	cb.list.RenderItem = cb.renderDropdownItem
 	cb.syncListItems()
 
@@ -209,6 +211,29 @@ func (cb *ComboBox) autocompleteMatch() string {
 	}
 	// Return first filtered item as autocomplete suggestion
 	return cb.filtered[0]
+}
+
+// isValidSelection returns true if the current Text matches an item exactly.
+func (cb *ComboBox) isValidSelection() bool {
+	for _, item := range cb.Items {
+		if item == cb.Text {
+			return true
+		}
+	}
+	return false
+}
+
+// ShouldBlockFocusCycle returns true if focus cycling should be blocked.
+// For editable combos, this is true when the text doesn't match any item.
+func (cb *ComboBox) ShouldBlockFocusCycle() bool {
+	if !cb.Editable {
+		return false
+	}
+	// Block cycling if text is not empty and doesn't match any item
+	if cb.Text == "" {
+		return false // Empty is OK - allows tabbing through without selecting
+	}
+	return !cb.isValidSelection()
 }
 
 // Draw renders the combo box.
@@ -392,14 +417,27 @@ func (cb *ComboBox) HandleKey(ev *tcell.EventKey) bool {
 		return true
 
 	case tcell.KeyTab:
-		// Accept autocomplete on Tab
-		if !cb.expanded {
+		// For editable combos, validate or autocomplete before allowing Tab to cycle
+		if !cb.expanded && cb.Editable {
+			// If already a valid selection, allow Tab to cycle
+			if cb.isValidSelection() {
+				return false
+			}
+			// Try autocomplete
 			autocomplete := cb.autocompleteMatch()
-			if autocomplete != "" && len(autocomplete) > len(cb.Text) {
+			if autocomplete != "" {
 				cb.Text = autocomplete
 				cb.cursorPos = len(cb.Text)
 				cb.updateFilter()
 				cb.invalidate()
+				if cb.OnChange != nil {
+					cb.OnChange(cb.Text)
+				}
+				// Now valid - allow Tab to cycle
+				return false
+			}
+			// No valid match and no autocomplete - block Tab if text is non-empty
+			if cb.Text != "" {
 				return true
 			}
 		}
@@ -648,7 +686,21 @@ func (cb *ComboBox) DismissModal() {
 }
 
 // Blur removes focus and closes the dropdown.
+// For editable combos, it commits the autocomplete match if available.
 func (cb *ComboBox) Blur() {
+	// For editable combos, try to commit autocomplete match on blur
+	if cb.Editable && cb.Text != "" && !cb.isValidSelection() {
+		autocomplete := cb.autocompleteMatch()
+		if autocomplete != "" {
+			cb.Text = autocomplete
+			cb.cursorPos = len(cb.Text)
+			cb.updateFilter()
+			if cb.OnChange != nil {
+				cb.OnChange(cb.Text)
+			}
+		}
+	}
+
 	cb.BaseWidget.Blur()
 	if cb.expanded {
 		cb.expanded = false

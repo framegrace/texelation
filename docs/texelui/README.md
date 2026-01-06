@@ -52,32 +52,47 @@ make build-apps
 ./bin/texelui-demo
 ```
 
-**2. Create a simple app:**
+**2. Create a simple app with layout containers:**
 ```go
 package main
 
 import (
     "texelation/internal/devshell"
+    "texelation/texel"
     "texelation/texelui/adapter"
     "texelation/texelui/core"
     "texelation/texelui/widgets"
-    "github.com/gdamore/tcell/v2"
 )
 
 func main() {
     devshell.Run(func(args []string) (texel.App, error) {
         ui := core.NewUIManager()
 
-        // Create a button
-        btn := widgets.NewButton(10, 5, 0, 0, "Hello World!")
-        btn.OnClick = func() {
-            // Button clicked!
-        }
+        // Create a vertical layout container
+        vbox := widgets.NewVBox()
+        vbox.Spacing = 1
 
-        ui.AddWidget(btn)
+        // Add widgets - no positions needed, VBox handles layout
+        label := widgets.NewLabel("Welcome to TexelUI!")
+        vbox.AddChild(label)
+
+        btn := widgets.NewButton("Click Me!")
+        btn.OnClick = func() {
+            label.Text = "Button clicked!"
+        }
+        vbox.AddChild(btn)
+
+        ui.AddWidget(vbox)
         ui.Focus(btn)
 
-        return adapter.NewUIApp("My App", ui), nil
+        // App adapter handles resize automatically
+        app := adapter.NewUIApp("My App", ui)
+        app.OnResize(func(w, h int) {
+            vbox.SetPosition(2, 2)
+            vbox.Resize(w-4, h-4)
+        })
+
+        return app, nil
     }, nil)
 }
 ```
@@ -109,17 +124,25 @@ TexelUI provides these widgets out of the box:
 | [Label](/texelui/widgets/label.md) | Static text with alignment options |
 | [Button](/texelui/widgets/button.md) | Clickable action trigger |
 
+### Layout Containers
+| Widget | Description |
+|--------|-------------|
+| [VBox](/texelui/layout/vbox.md) | Vertical layout - stacks children top to bottom |
+| [HBox](/texelui/layout/hbox.md) | Horizontal layout - arranges children left to right |
+| [ScrollPane](/texelui/layout/scrollpane.md) | Scrollable container with scrollbar |
+| [TabPanel](/texelui/widgets/tabpanel.md) | Tabbed container with simple AddTab API |
+
 ### Container Widgets
 | Widget | Description |
 |--------|-------------|
 | [Pane](/texelui/widgets/pane.md) | Container with background and child support |
 | [Border](/texelui/widgets/border.md) | Decorative border around content |
-| [TabLayout](/texelui/widgets/tablayout.md) | Tabbed container with switchable panels |
+| [TabLayout](/texelui/widgets/tablayout.md) | Low-level tabbed container |
 
 ### Primitives (Building Blocks)
 | Primitive | Description |
 |-----------|-------------|
-| [ScrollableList](/texelui/primitives/scrollablelist.md) | Scrolling list with custom rendering |
+| [ScrollableList](/texelui/primitives/scrollablelist.md) | Scrolling list with selection |
 | [Grid](/texelui/primitives/grid.md) | 2D grid with dynamic columns |
 | [TabBar](/texelui/primitives/tabbar.md) | Horizontal tab navigation |
 
@@ -213,7 +236,7 @@ TexelUI widgets automatically use Texelation's theme system:
 
 ```go
 // Widgets automatically pick up theme colors
-btn := widgets.NewButton(0, 0, 0, 0, "Themed Button")
+btn := widgets.NewButton("Themed Button")
 // Uses: action.primary (background), text.inverse (foreground)
 
 // Theme colors are semantic

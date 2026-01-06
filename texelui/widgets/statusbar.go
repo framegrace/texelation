@@ -55,14 +55,16 @@ type StatusBar struct {
 
 // NewStatusBar creates a new status bar widget.
 // The status bar is 2 rows: 1 for separator line, 1 for content.
-func NewStatusBar(x, y, w int) *StatusBar {
+// Position defaults to 0,0 and width to 1.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewStatusBar() *StatusBar {
 	sb := &StatusBar{
 		messages:               make([]TimedMessage, 0, 10),
 		stopCh:                 make(chan struct{}),
 		DefaultMessageDuration: 3 * time.Second,
 	}
-	sb.SetPosition(x, y)
-	sb.Resize(w, 2) // 1 separator + 1 content row
+	sb.SetPosition(0, 0)
+	sb.Resize(1, 2) // 1 separator + 1 content row
 	sb.SetFocusable(false) // Status bar never receives focus
 	return sb
 }

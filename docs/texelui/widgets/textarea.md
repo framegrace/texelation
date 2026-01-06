@@ -20,15 +20,11 @@ import "texelation/texelui/widgets"
 ## Constructor
 
 ```go
-func NewTextArea(x, y, w, h int) *TextArea
+func NewTextArea() *TextArea
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `x` | `int` | X position |
-| `y` | `int` | Y position |
-| `w` | `int` | Width in cells |
-| `h` | `int` | Height in cells |
+Creates a multi-line text editor. Position defaults to (0,0) and size to 20x5.
+Use `SetPosition(x, y)` and `Resize(w, h)` to adjust, or place in a layout container.
 
 ## Properties
 
@@ -69,15 +65,27 @@ func main() {
     err := devshell.Run(func(args []string) (texel.App, error) {
         ui := core.NewUIManager()
 
-        // Create bordered text area
-        border := widgets.NewBorder(5, 3, 50, 12, tcell.StyleDefault)
-        textarea := widgets.NewTextArea(0, 0, 48, 10)
-        border.SetChild(textarea)
+        // Create a VBox layout
+        vbox := widgets.NewVBox()
+        vbox.Spacing = 1
 
-        ui.AddWidget(border)
-        ui.Focus(textarea)
+        // Add a label
+        label := widgets.NewLabel("Enter your notes:")
+        vbox.AddChild(label)
 
-        return adapter.NewUIApp("TextArea Demo", ui), nil
+        // Create a textarea with height allocation
+        textarea := widgets.NewTextArea()
+        vbox.AddChildWithSize(textarea, 10)
+
+        ui.AddWidget(vbox)
+        ui.Focus(vbox)
+
+        app := adapter.NewUIApp("TextArea Demo", ui)
+        app.OnResize(func(w, h int) {
+            vbox.SetPosition(5, 3)
+            vbox.Resize(50, h-6)
+        })
+        return app, nil
     }, nil)
 
     if err != nil {
@@ -129,7 +137,7 @@ The text area automatically scrolls to keep the caret visible. Vertical scrollin
 ## Getting/Setting Content
 
 ```go
-textarea := widgets.NewTextArea(0, 0, 40, 10)
+textarea := widgets.NewTextArea()
 
 // Set content using SetText (recommended - triggers OnChange)
 textarea.SetText("Hello\nWorld")
@@ -145,7 +153,7 @@ lines := textarea.Lines  // []string{"Hello", "World"}
 ## Change Callback
 
 ```go
-textarea := widgets.NewTextArea(0, 0, 40, 10)
+textarea := widgets.NewTextArea()
 textarea.OnChange = func(text string) {
     fmt.Printf("Content changed: %s\n", text)
 }
@@ -163,12 +171,32 @@ The `OnChange` callback is triggered by:
 TextArea is commonly used with a Border widget:
 
 ```go
-border := widgets.NewBorder(5, 3, 42, 12, tcell.StyleDefault)
-textarea := widgets.NewTextArea(0, 0, 0, 0)  // Size managed by border
+border := widgets.NewBorder(0, 0, 42, 12, tcell.StyleDefault)
+textarea := widgets.NewTextArea()  // Size managed by border
 border.SetChild(textarea)
 
 ui.AddWidget(border)
 ui.Focus(textarea)
+
+// Position and size in OnResize
+app.OnResize(func(w, h int) {
+    border.SetPosition(5, 3)
+})
+```
+
+## In a Form Layout
+
+Using the Form widget for a typical form row:
+
+```go
+form := widgets.NewForm()
+
+// TextArea needs explicit height via AddRow
+form.AddRow(widgets.FormRow{
+    Label:  widgets.NewLabel("Description:"),
+    Field:  widgets.NewTextArea(),
+    Height: 5,
+})
 ```
 
 ## Insert/Replace Mode

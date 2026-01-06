@@ -16,19 +16,18 @@ A decorative border widget that wraps a single child.
 import "texelation/texelui/widgets"
 ```
 
-## Constructor
+## Constructors
 
 ```go
-func NewBorder(x, y, w, h int, style tcell.Style) *Border
+// Create with default style
+func NewBorder() *Border
+
+// Create with custom style
+func NewBorderWithStyle(style tcell.Style) *Border
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `x` | `int` | X position |
-| `y` | `int` | Y position |
-| `w` | `int` | Total width (including border) |
-| `h` | `int` | Total height (including border) |
-| `style` | `tcell.Style` | Border style |
+Creates a decorative border container. Position defaults to (0,0) and size to 20x10.
+Use `SetPosition(x, y)` and `Resize(w, h)` to adjust, or place in a layout container.
 
 ## Properties
 
@@ -60,7 +59,6 @@ package main
 import (
     "log"
 
-    "github.com/gdamore/tcell/v2"
     "texelation/internal/devshell"
     "texelation/texel"
     "texelation/texelui/adapter"
@@ -72,17 +70,20 @@ func main() {
     err := devshell.Run(func(args []string) (texel.App, error) {
         ui := core.NewUIManager()
 
-        // Create border
-        border := widgets.NewBorder(10, 5, 40, 10, tcell.StyleDefault)
-
-        // Create text area as child
-        textarea := widgets.NewTextArea(0, 0, 0, 0)  // Size managed by border
+        // Create border with child
+        border := widgets.NewBorder()
+        textarea := widgets.NewTextArea()
         border.SetChild(textarea)
 
         ui.AddWidget(border)
         ui.Focus(textarea)
 
-        return adapter.NewUIApp("Border Demo", ui), nil
+        app := adapter.NewUIApp("Border Demo", ui)
+        app.OnResize(func(w, h int) {
+            border.SetPosition(10, 5)
+            border.Resize(40, 10)
+        })
+        return app, nil
     }, nil)
 
     if err != nil {
@@ -113,10 +114,11 @@ Total: 40 x 10
 When you set a child, it's automatically positioned and sized to fit:
 
 ```go
-border := widgets.NewBorder(10, 5, 40, 10, tcell.StyleDefault)
-textarea := widgets.NewTextArea(0, 0, 0, 0)  // Initial size doesn't matter
+border := widgets.NewBorder()
+border.Resize(40, 10)
+textarea := widgets.NewTextArea()
 border.SetChild(textarea)
-// textarea is now at (11, 6) with size (38, 8)
+// textarea is now sized to fit the inner area (38, 8)
 ```
 
 ### Focus-Aware Styling
@@ -140,7 +142,7 @@ border.Resize(60, 15)
 ## Custom Border Characters
 
 ```go
-border := widgets.NewBorder(0, 0, 40, 10, tcell.StyleDefault)
+border := widgets.NewBorder()
 
 // Sharp corners
 border.Charset = [6]rune{'─', '│', '┌', '┐', '└', '┘'}
@@ -157,32 +159,46 @@ border.Charset = [6]rune{'-', '|', '+', '+', '+', '+'}
 ### Bordered Input
 
 ```go
-border := widgets.NewBorder(5, 3, 35, 3, tcell.StyleDefault)
-input := widgets.NewInput(0, 0, 0)
+border := widgets.NewBorder()
+input := widgets.NewInput()
 border.SetChild(input)
+
+// Size in OnResize
+app.OnResize(func(w, h int) {
+    border.SetPosition(5, 3)
+    border.Resize(35, 3)
+})
 ```
 
 ### Bordered TextArea
 
 ```go
-border := widgets.NewBorder(5, 3, 50, 12, tcell.StyleDefault)
-textarea := widgets.NewTextArea(0, 0, 0, 0)
+border := widgets.NewBorder()
+textarea := widgets.NewTextArea()
 border.SetChild(textarea)
+
+// Size in OnResize
+app.OnResize(func(w, h int) {
+    border.SetPosition(5, 3)
+    border.Resize(50, 12)
+})
 ```
 
-### Bordered Pane with Multiple Widgets
+### Bordered VBox with Multiple Widgets
 
 ```go
-border := widgets.NewBorder(5, 3, 50, 15, tcell.StyleDefault)
-pane := widgets.NewPane(0, 0, 0, 0, tcell.StyleDefault)
+border := widgets.NewBorder()
+vbox := widgets.NewVBox()
+vbox.Spacing = 1
 
-// Add widgets to pane with relative coordinates
-label := widgets.NewLabel(2, 1, 20, 1, "Title")
-input := widgets.NewInput(2, 3, 30)
-pane.AddChild(label)
-pane.AddChild(input)
+// Add widgets to VBox
+title := widgets.NewLabel("Title")
+vbox.AddChild(title)
 
-border.SetChild(pane)
+input := widgets.NewInput()
+vbox.AddChild(input)
+
+border.SetChild(vbox)
 ```
 
 ## Implementation Details

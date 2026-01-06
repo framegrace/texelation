@@ -93,8 +93,9 @@ type ColorPicker struct {
 	inv func(core.Rect)
 }
 
-// NewColorPicker creates a color picker at (x, y) with the given configuration.
-func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker {
+// NewColorPicker creates a color picker with the given configuration.
+// Position defaults to 0,0. Use SetPosition to adjust after adding to a layout.
+func NewColorPicker(config ColorPickerConfig) *ColorPicker {
 	cp := &ColorPicker{
 		config:    config,
 		expanded:  false,
@@ -102,7 +103,7 @@ func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker {
 		modeOrder: []ColorPickerMode{},
 	}
 
-	cp.SetPosition(x, y)
+	cp.SetPosition(0, 0)
 	cp.SetFocusable(true)
 
 	// Build tab items and initialize enabled modes in order
@@ -119,14 +120,14 @@ func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker {
 	}
 	if config.EnableOKLCH {
 		// Use new widget-based OKLCHEditor instead of legacy ModePicker
-		cp.oklchEditor = NewOKLCHEditor(0, 0, 25, 10)
+		cp.oklchEditor = NewOKLCHEditor()
 		cp.modeOrder = append(cp.modeOrder, ColorModeOKLCH)
 		tabItems = append(tabItems, primitives.TabItem{Label: ColorModeOKLCH.String(), ID: "oklch"})
 	}
 
 	// Ensure at least one mode is enabled - default to OKLCH if none specified
 	if len(cp.modeOrder) == 0 {
-		cp.oklchEditor = NewOKLCHEditor(0, 0, 25, 10)
+		cp.oklchEditor = NewOKLCHEditor()
 		cp.modeOrder = append(cp.modeOrder, ColorModeOKLCH)
 		tabItems = append(tabItems, primitives.TabItem{Label: ColorModeOKLCH.String(), ID: "oklch"})
 	}

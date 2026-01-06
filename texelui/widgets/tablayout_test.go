@@ -13,7 +13,8 @@ func TestTabLayout_FocusTraversal(t *testing.T) {
 		{Label: "Tab1", ID: "tab1"},
 		{Label: "Tab2", ID: "tab2"},
 	}
-	tl := NewTabLayout(0, 0, 80, 24, tabs)
+	tl := NewTabLayout(tabs)
+	tl.Resize(80, 24)
 
 	// Create content for tab 1 with two focusable inputs
 	pane1 := NewPane()
@@ -193,7 +194,8 @@ func TestTabLayout_UIManagerTraversal(t *testing.T) {
 	tabs := []primitives.TabItem{
 		{Label: "Tab1", ID: "tab1"},
 	}
-	tl := NewTabLayout(0, 0, 80, 24, tabs)
+	tl := NewTabLayout(tabs)
+	tl.Resize(80, 24)
 
 	pane := NewPane()
 	pane.Resize(80, 20)
@@ -259,7 +261,8 @@ func TestTabLayout_TabBarAlwaysAccessible(t *testing.T) {
 	tabs := []primitives.TabItem{
 		{Label: "Tab1", ID: "tab1"},
 	}
-	tl := NewTabLayout(0, 0, 80, 24, tabs)
+	tl := NewTabLayout(tabs)
+	tl.Resize(80, 24)
 
 	pane := NewPane()
 	pane.Resize(80, 20)

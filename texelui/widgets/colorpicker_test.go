@@ -8,7 +8,7 @@ import (
 )
 
 func TestColorPickerEnterWithOnChange(t *testing.T) {
-	cp := NewColorPicker(0, 0, ColorPickerConfig{
+	cp := NewColorPicker(ColorPickerConfig{
 		EnableSemantic: true,
 		EnablePalette:  true,
 		EnableOKLCH:    true,
@@ -72,7 +72,7 @@ func TestColorPickerEnterWithOnChange(t *testing.T) {
 }
 
 func TestColorPickerEnterWithSlowOnChange(t *testing.T) {
-	cp := NewColorPicker(0, 0, ColorPickerConfig{
+	cp := NewColorPicker(ColorPickerConfig{
 		EnableSemantic: true,
 		EnablePalette:  true,
 	})

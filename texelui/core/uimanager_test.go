@@ -19,7 +19,9 @@ func TestUIManagerRendersPaneAndTextArea(t *testing.T) {
 	ta := widgets.NewTextArea()
 	ta.SetPosition(1, 1)
 	ta.Resize(18, 3)
-	b := widgets.NewBorder(0, 0, 20, 5, tcell.StyleDefault.Foreground(tcell.ColorWhite))
+	b := widgets.NewBorderWithStyle(tcell.StyleDefault.Foreground(tcell.ColorWhite))
+	b.SetPosition(0, 0)
+	b.Resize(20, 5)
 	b.SetChild(ta)
 	ui.AddWidget(b)
 	ui.Focus(ta)
@@ -55,7 +57,9 @@ func TestUIManagerDirtyClipsRestrictDraw(t *testing.T) {
 	ui := core.NewUIManager()
 	ui.Resize(10, 4)
 	// Border + TextArea child, ensure invalidator is propagated
-	b := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
+	b := widgets.NewBorder()
+	b.SetPosition(0, 0)
+	b.Resize(10, 4)
 	ta := widgets.NewTextArea()
 	ta.Resize(8, 2)
 	b.SetChild(ta)
@@ -76,7 +80,9 @@ func TestUIManagerDirtyClipsRestrictDraw(t *testing.T) {
 func TestClickToFocusInnerWidget(t *testing.T) {
 	ui := core.NewUIManager()
 	ui.Resize(10, 4)
-	b := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
+	b := widgets.NewBorder()
+	b.SetPosition(0, 0)
+	b.Resize(10, 4)
 	ta := widgets.NewTextArea()
 	ta.SetPosition(1, 1)
 	ta.Resize(8, 2)
@@ -129,7 +135,9 @@ func TestDualTextAreasClickFocusAndType(t *testing.T) {
     ui.Resize(20, 4)
 
     // Left border + TA
-    lb := widgets.NewBorder(0, 0, 10, 4, tcell.StyleDefault)
+    lb := widgets.NewBorder()
+    lb.SetPosition(0, 0)
+    lb.Resize(10, 4)
     // Make focus color identifiable for the test (left border green)
     lb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorGreen)
     lta := widgets.NewTextArea()
@@ -138,7 +146,9 @@ func TestDualTextAreasClickFocusAndType(t *testing.T) {
     ui.AddWidget(lb)
 
     // Right border + TA
-    rb := widgets.NewBorder(10, 0, 10, 4, tcell.StyleDefault)
+    rb := widgets.NewBorder()
+    rb.SetPosition(10, 0)
+    rb.Resize(10, 4)
     rb.FocusedStyle = tcell.StyleDefault.Foreground(tcell.ColorTeal)
     rta := widgets.NewTextArea()
     rta.Resize(8, 2)

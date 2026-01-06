@@ -24,7 +24,21 @@ type Border struct {
     Neighbors core.NeighborInfo
 }
 
-func NewBorder(x, y, w, h int, style tcell.Style) *Border {
+// NewBorder creates a border with default theme styling.
+// Position defaults to 0,0 and size to 1,1.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewBorder() *Border {
+	return newBorderWithStyle(tcell.StyleDefault)
+}
+
+// NewBorderWithStyle creates a border with custom styling.
+// Position defaults to 0,0 and size to 1,1.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewBorderWithStyle(style tcell.Style) *Border {
+	return newBorderWithStyle(style)
+}
+
+func newBorderWithStyle(style tcell.Style) *Border {
 	b := &Border{}
 
 	// Resolve default colors from theme
@@ -46,8 +60,8 @@ func NewBorder(x, y, w, h int, style tcell.Style) *Border {
 
 	// Default rounded corner charset
 	b.Charset = [6]rune{'─', '│', '╭', '╮', '╰', '╯'}
-	b.SetPosition(x, y)
-	b.Resize(w, h)
+	b.SetPosition(0, 0)
+	b.Resize(1, 1)
 	return b
 }
 
@@ -187,15 +201,65 @@ func (b *Border) WidgetAt(x, y int) core.Widget {
 	return nil
 }
 
+// Focusable returns true if the child is focusable.
+func (b *Border) Focusable() bool {
+	if b.Child != nil {
+		return b.Child.Focusable()
+	}
+	return false
+}
+
+// Focus delegates focus to the child.
+func (b *Border) Focus() {
+	// Set focusable so BaseWidget.Focus() works correctly
+	if b.Child != nil && b.Child.Focusable() {
+		b.SetFocusable(true)
+	}
+	b.BaseWidget.Focus()
+	if b.Child != nil && b.Child.Focusable() {
+		b.Child.Focus()
+	}
+}
+
+// Blur delegates blur to the child.
+func (b *Border) Blur() {
+	if b.Child != nil {
+		b.Child.Blur()
+	}
+	b.BaseWidget.Blur()
+}
+
+// HandleKey routes key events to the child.
+func (b *Border) HandleKey(ev *tcell.EventKey) bool {
+	if b.Child != nil {
+		return b.Child.HandleKey(ev)
+	}
+	return false
+}
+
 // HandleMouse routes mouse events to child and handles focus on click.
 func (b *Border) HandleMouse(ev *tcell.EventMouse) bool {
 	x, y := ev.Position()
-	if !b.HitTest(x, y) {
+	buttons := ev.Buttons()
+	isPress := buttons&tcell.Button1 != 0
+	isWheel := buttons&(tcell.WheelUp|tcell.WheelDown|tcell.WheelLeft|tcell.WheelRight) != 0
+
+	// For wheel events, skip HitTest - parent already validated and our position
+	// may be offset due to being inside a ScrollPane
+	if !isWheel && !b.HitTest(x, y) {
+		return false
+	}
+
+	// For wheel events, forward directly to child (skip HitTest since positions may be offset)
+	if isWheel && b.Child != nil {
+		if ma, ok := b.Child.(core.MouseAware); ok {
+			return ma.HandleMouse(ev)
+		}
+		// Child doesn't handle mouse - return false to let parent handle
 		return false
 	}
 
 	// On button press, focus the child if clicked
-	isPress := ev.Buttons()&tcell.Button1 != 0
 	if isPress && b.Child != nil && b.Child.HitTest(x, y) && b.Child.Focusable() {
 		b.Child.Focus()
 		if b.inv != nil {
@@ -208,9 +272,11 @@ func (b *Border) HandleMouse(ev *tcell.EventMouse) bool {
 		if ma, ok := b.Child.(core.MouseAware); ok {
 			return ma.HandleMouse(ev)
 		}
+		// Child doesn't handle mouse
 		return true
 	}
 
+	// Mouse is on border edge (not over child)
 	return true
 }
 

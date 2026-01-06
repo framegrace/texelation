@@ -74,28 +74,40 @@ func NewLoginApp() texel.App {
 	// Create the UIManager - the root of our widget tree
 	ui := core.NewUIManager()
 
-	// Create a background pane
-	bg := widgets.NewPane(0, 0, 50, 15, tcell.StyleDefault)
+	// Create main vertical layout
+	form := widgets.NewVBox()
+	form.Spacing = 1
 
 	// Title label (centered)
-	title := widgets.NewLabel(0, 1, 50, 1, "Login Form")
+	title := widgets.NewLabel("Login Form")
 	title.Align = widgets.AlignCenter
+	form.AddChild(title)
 
-	// Username field
-	usernameLabel := widgets.NewLabel(3, 4, 12, 1, "Username:")
-	usernameInput := widgets.NewInput(15, 4, 25)
+	// Username row
+	usernameRow := widgets.NewHBox()
+	usernameRow.Spacing = 1
+	usernameLabel := widgets.NewLabel("Username:")
+	usernameInput := widgets.NewInput()
 	usernameInput.Placeholder = "Enter username"
+	usernameRow.AddChildWithSize(usernameLabel, 12)
+	usernameRow.AddFlexChild(usernameInput)
+	form.AddChild(usernameRow)
 
-	// Password field
-	passwordLabel := widgets.NewLabel(3, 6, 12, 1, "Password:")
-	passwordInput := widgets.NewInput(15, 6, 25)
+	// Password row
+	passwordRow := widgets.NewHBox()
+	passwordRow.Spacing = 1
+	passwordLabel := widgets.NewLabel("Password:")
+	passwordInput := widgets.NewInput()
 	passwordInput.Placeholder = "Enter password"
+	passwordRow.AddChildWithSize(passwordLabel, 12)
+	passwordRow.AddFlexChild(passwordInput)
+	form.AddChild(passwordRow)
 
 	// Status label
-	statusLabel := widgets.NewLabel(3, 10, 44, 1, "Status: Ready")
+	statusLabel := widgets.NewLabel("Status: Ready")
 
 	// Login button
-	loginButton := widgets.NewButton(17, 8, 0, 0, "Login")
+	loginButton := widgets.NewButton("Login")
 	loginButton.OnClick = func() {
 		username := usernameInput.Text
 		password := passwordInput.Text
@@ -106,17 +118,14 @@ func NewLoginApp() texel.App {
 			statusLabel.Text = fmt.Sprintf("Status: Welcome, %s!", username)
 		}
 	}
+	form.AddChild(loginButton)
+	form.AddChild(statusLabel)
 
-	// Add all widgets to the UI (order matters for z-index)
-	bg.AddChild(title)
-	bg.AddChild(usernameLabel)
-	bg.AddChild(usernameInput)
-	bg.AddChild(passwordLabel)
-	bg.AddChild(passwordInput)
-	bg.AddChild(loginButton)
-	bg.AddChild(statusLabel)
+	// Wrap in a border for visual structure
+	border := widgets.NewBorder(0, 0, 50, 12, tcell.StyleDefault)
+	border.SetChild(form)
 
-	ui.AddWidget(bg)
+	ui.AddWidget(border)
 
 	// Set initial focus to the username field
 	ui.Focus(usernameInput)
@@ -124,11 +133,10 @@ func NewLoginApp() texel.App {
 	// Create the app adapter
 	app := adapter.NewUIApp("Login", ui)
 
-	// Handle window resize
+	// Handle window resize - center the form
 	app.OnResize(func(w, h int) {
-		// Center the form in the available space
 		formWidth := 50
-		formHeight := 15
+		formHeight := 12
 		x := (w - formWidth) / 2
 		y := (h - formHeight) / 2
 		if x < 0 {
@@ -137,7 +145,7 @@ func NewLoginApp() texel.App {
 		if y < 0 {
 			y = 0
 		}
-		bg.SetPosition(x, y)
+		border.SetPosition(x, y)
 	})
 
 	return app
@@ -177,39 +185,52 @@ The `UIManager` is the root of your widget tree. It handles:
 - Event routing (keyboard and mouse)
 - Rendering (composing widgets to a buffer)
 
-### 2. Creating Widgets
+### 2. Layout Containers
 
 ```go
-// Labels for static text
-title := widgets.NewLabel(x, y, width, height, "text")
+// VBox stacks children vertically
+form := widgets.NewVBox()
+form.Spacing = 1  // Gap between children
+
+// HBox arranges children horizontally
+row := widgets.NewHBox()
+row.Spacing = 1
+```
+
+Layout containers automatically position their children. No coordinates needed!
+
+### 3. Creating Widgets
+
+```go
+// Labels for static text (auto-sized)
+title := widgets.NewLabel("text")
 title.Align = widgets.AlignCenter
 
-// Input fields for user input
-usernameInput := widgets.NewInput(x, y, width)
+// Input fields for user input (default 20x1)
+usernameInput := widgets.NewInput()
 usernameInput.Placeholder = "hint text"
 
-// Buttons for actions
-loginButton := widgets.NewButton(x, y, width, height, "label")
+// Buttons for actions (auto-sized with padding)
+loginButton := widgets.NewButton("label")
 loginButton.OnClick = func() {
     // Handle click
 }
 ```
 
-### 3. Container Hierarchy
+### 4. Adding Children to Containers
 
 ```go
-// Create a container
-bg := widgets.NewPane(...)
+// Natural size - uses widget's preferred size
+form.AddChild(title)
 
-// Add children (they inherit the container's coordinate space)
-bg.AddChild(title)
-bg.AddChild(usernameInput)
+// Fixed size in layout direction
+row.AddChildWithSize(label, 12)  // 12 cells wide in HBox
 
-// Add container to UIManager
-ui.AddWidget(bg)
+// Flex - expands to fill remaining space
+row.AddFlexChild(input)
 ```
 
-### 4. The Adapter Pattern
+### 5. The Adapter Pattern
 
 ```go
 // UIApp adapts UIManager to the texel.App interface
@@ -217,11 +238,13 @@ app := adapter.NewUIApp("Title", ui)
 
 // OnResize lets you handle window size changes
 app.OnResize(func(w, h int) {
-    // Reposition widgets for new size
+    // Resize root container to fill window
+    border.SetPosition(x, y)
+    border.Resize(w, h)
 })
 ```
 
-### 5. Running with devshell
+### 6. Running with devshell
 
 ```go
 devshell.Run(func(args []string) (texel.App, error) {
@@ -240,39 +263,57 @@ The `devshell.Run` function:
 ### Add More Fields
 
 ```go
-// Add an email field
-emailLabel := widgets.NewLabel(3, 8, 12, 1, "Email:")
-emailInput := widgets.NewInput(15, 8, 25)
+// Add an email row
+emailRow := widgets.NewHBox()
+emailRow.Spacing = 1
+emailLabel := widgets.NewLabel("Email:")
+emailInput := widgets.NewInput()
 emailInput.Placeholder = "user@example.com"
-bg.AddChild(emailLabel)
-bg.AddChild(emailInput)
+emailRow.AddChildWithSize(emailLabel, 12)
+emailRow.AddFlexChild(emailInput)
+form.AddChild(emailRow)
 ```
 
 ### Add a Checkbox
 
 ```go
-rememberMe := widgets.NewCheckbox(15, 10, "Remember me")
+rememberMe := widgets.NewCheckbox("Remember me")
 rememberMe.OnChange = func(checked bool) {
     if checked {
         statusLabel.Text = "Will remember you"
     }
 }
-bg.AddChild(rememberMe)
+form.AddChild(rememberMe)
 ```
 
-### Use VBox Layout
+### Create a Button Row
 
 ```go
-import "texelation/texelui/layout"
+// Horizontal button row
+buttonRow := widgets.NewHBox()
+buttonRow.Spacing = 2
+buttonRow.Align = widgets.BoxAlignCenter
 
-ui := core.NewUIManager()
-ui.SetLayout(layout.NewVBox(1))  // 1 cell spacing
+loginBtn := widgets.NewButton("Login")
+cancelBtn := widgets.NewButton("Cancel")
 
-// Now widgets stack vertically automatically
-ui.AddWidget(title)
-ui.AddWidget(usernameInput)
-ui.AddWidget(passwordInput)
-ui.AddWidget(loginButton)
+buttonRow.AddChild(loginBtn)
+buttonRow.AddChild(cancelBtn)
+form.AddChild(buttonRow)
+```
+
+### Add a ComboBox
+
+```go
+// Country selector
+countryRow := widgets.NewHBox()
+countryRow.Spacing = 1
+countryLabel := widgets.NewLabel("Country:")
+countries := []string{"USA", "Canada", "UK", "Germany", "France"}
+countryCombo := widgets.NewComboBox(countries, true) // editable=true
+countryRow.AddChildWithSize(countryLabel, 12)
+countryRow.AddFlexChild(countryCombo)
+form.AddChild(countryRow)
 ```
 
 ## Next Steps

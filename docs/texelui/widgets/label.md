@@ -15,16 +15,15 @@ import "texelation/texelui/widgets"
 ## Constructor
 
 ```go
-func NewLabel(x, y, w, h int, text string) *Label
+func NewLabel(text string) *Label
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `x` | `int` | X position (cells from left) |
-| `y` | `int` | Y position (cells from top) |
-| `w` | `int` | Width (0 = auto-size to text) |
-| `h` | `int` | Height in cells |
 | `text` | `string` | Display text |
+
+Creates a label that auto-sizes to fit its text. Position defaults to (0,0).
+Use `SetPosition(x, y)` and `Resize(w, h)` to adjust if needed.
 
 ## Properties
 
@@ -62,27 +61,37 @@ func main() {
     err := devshell.Run(func(args []string) (texel.App, error) {
         ui := core.NewUIManager()
 
+        // Create a VBox for vertical layout
+        vbox := widgets.NewVBox()
+        vbox.Spacing = 1
+
         // Left-aligned label (default)
-        leftLabel := widgets.NewLabel(5, 3, 30, 1, "Left aligned")
+        leftLabel := widgets.NewLabel("Left aligned")
+        vbox.AddChild(leftLabel)
 
         // Center-aligned label
-        centerLabel := widgets.NewLabel(5, 5, 30, 1, "Centered text")
+        centerLabel := widgets.NewLabel("Centered text")
         centerLabel.Align = widgets.AlignCenter
+        vbox.AddChild(centerLabel)
 
         // Right-aligned label
-        rightLabel := widgets.NewLabel(5, 7, 30, 1, "Right aligned")
+        rightLabel := widgets.NewLabel("Right aligned")
         rightLabel.Align = widgets.AlignRight
+        vbox.AddChild(rightLabel)
 
-        ui.AddWidget(leftLabel)
-        ui.AddWidget(centerLabel)
-        ui.AddWidget(rightLabel)
+        // Button (labels aren't focusable)
+        btn := widgets.NewButton("OK")
+        vbox.AddChild(btn)
 
-        // Labels are not focusable, so focus something else
-        btn := widgets.NewButton(5, 10, 0, 0, "OK")
-        ui.AddWidget(btn)
+        ui.AddWidget(vbox)
         ui.Focus(btn)
 
-        return adapter.NewUIApp("Label Demo", ui), nil
+        app := adapter.NewUIApp("Label Demo", ui)
+        app.OnResize(func(w, h int) {
+            vbox.SetPosition(5, 3)
+            vbox.Resize(30, h-6)
+        })
+        return app, nil
     }, nil)
 
     if err != nil {

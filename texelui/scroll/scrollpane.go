@@ -95,6 +95,10 @@ func (sp *ScrollPane) SetContentHeight(h int) {
 	sp.contentHeight = h
 	// Preserve existing offset when updating content height
 	sp.state = sp.state.WithContentHeight(h).WithViewportHeight(sp.Rect.H)
+	// Resize child to match viewport width and new content height
+	if sp.child != nil {
+		sp.child.Resize(sp.Rect.W, h)
+	}
 }
 
 // ContentHeight returns the current content height.
@@ -198,8 +202,10 @@ func (sp *ScrollPane) Draw(painter *core.Painter) {
 func (sp *ScrollPane) Resize(w, h int) {
 	sp.BaseWidget.Resize(w, h)
 	sp.state = sp.state.WithViewportHeight(h)
-	// Note: Child widget size is not changed here.
-	// The child determines its own content height.
+	// Resize child width to match viewport; preserve content height for scrolling
+	if sp.child != nil {
+		sp.child.Resize(w, sp.contentHeight)
+	}
 }
 
 // ScrollBy scrolls by the given delta (positive = down, negative = up).
@@ -248,6 +254,12 @@ func (sp *ScrollPane) ScrollToBottom() {
 	if sp.state.Offset != oldOffset {
 		sp.invalidate()
 	}
+}
+
+// EnsureVisible scrolls to make the given row visible with minimal movement.
+// This is an alias for ScrollTo for clarity.
+func (sp *ScrollPane) EnsureVisible(row int) {
+	sp.ScrollTo(row)
 }
 
 // EnsureFocusedVisible scrolls to make the currently focused widget visible.
@@ -412,14 +424,37 @@ func (sp *ScrollPane) findLastFocusable(w core.Widget) core.Widget {
 
 // HandleKey handles keyboard input for scrolling.
 func (sp *ScrollPane) HandleKey(ev *tcell.EventKey) bool {
-	// Handle scroll-specific keys first (these don't trigger auto-scroll back)
+	// Route keys to child first - child widgets (like TextArea) should handle
+	// their own scrolling before ScrollPane tries to scroll the whole form
+	if sp.child != nil {
+		if sp.child.HandleKey(ev) {
+			// After child handles a key, ensure focused widget is visible.
+			// This brings the view back to the focused widget when user types.
+			sp.EnsureFocusedVisible()
+			return true
+		}
+	}
+
+	// Child didn't handle it - handle scroll-specific keys
 	switch ev.Key() {
 	case tcell.KeyPgUp:
-		sp.ScrollBy(-sp.Rect.H)
-		return true
+		// Check if child implements PageNavigator for selection-based navigation
+		if pn, ok := sp.child.(PageNavigator); ok {
+			if pn.HandlePageNavigation(-1, sp.Rect.H) {
+				return true
+			}
+		}
+		// Fall back to viewport scrolling
+		return sp.ScrollBy(-sp.Rect.H)
 	case tcell.KeyPgDn:
-		sp.ScrollBy(sp.Rect.H)
-		return true
+		// Check if child implements PageNavigator for selection-based navigation
+		if pn, ok := sp.child.(PageNavigator); ok {
+			if pn.HandlePageNavigation(1, sp.Rect.H) {
+				return true
+			}
+		}
+		// Fall back to viewport scrolling
+		return sp.ScrollBy(sp.Rect.H)
 	case tcell.KeyHome:
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
 			sp.ScrollToTop()
@@ -428,16 +463,6 @@ func (sp *ScrollPane) HandleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyEnd:
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
 			sp.ScrollToBottom()
-			return true
-		}
-	}
-
-	// Route other keys to child
-	if sp.child != nil {
-		if sp.child.HandleKey(ev) {
-			// After child handles a non-scroll key, ensure focused widget is visible.
-			// This brings the view back to the focused widget when user types.
-			sp.EnsureFocusedVisible()
 			return true
 		}
 	}
@@ -525,14 +550,15 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 		return true
 	}
 
-	if !sp.HitTest(x, y) {
-		return false
-	}
+	isWheel := buttons&(tcell.WheelUp|tcell.WheelDown) != 0
 
 	// Handle scroll wheel - forward to child first, then handle ourselves
-	if buttons&(tcell.WheelUp|tcell.WheelDown) != 0 {
+	// Note: We don't require HitTest for wheel events because:
+	// 1. Our parent already validated the hit before calling us
+	// 2. Child positions may be offset due to scrolling, making child.HitTest unreliable
+	if isWheel {
 		// Forward to child first - nested scrollable content gets priority
-		if sp.child != nil && sp.child.HitTest(x, y) {
+		if sp.child != nil {
 			if ma, ok := sp.child.(core.MouseAware); ok {
 				if ma.HandleMouse(ev) {
 					return true
@@ -542,9 +568,13 @@ func (sp *ScrollPane) HandleMouse(ev *tcell.EventMouse) bool {
 		// Child didn't handle it (or no child), ScrollPane handles it
 		if buttons&tcell.WheelUp != 0 {
 			return sp.ScrollBy(-3)
-		} else if buttons&tcell.WheelDown != 0 {
-			return sp.ScrollBy(3)
 		}
+		return sp.ScrollBy(3)
+	}
+
+	// For non-wheel events, require HitTest
+	if !sp.HitTest(x, y) {
+		return false
 	}
 
 	// Check if click is on scrollbar

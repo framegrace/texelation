@@ -15,14 +15,11 @@ import "texelation/texelui/widgets"
 ## Constructor
 
 ```go
-func NewInput(x, y, w int) *Input
+func NewInput() *Input
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `x` | `int` | X position (cells from left) |
-| `y` | `int` | Y position (cells from top) |
-| `w` | `int` | Width in cells |
+Creates a single-line input field. Position defaults to (0,0) and width to 20.
+Use `SetPosition(x, y)` and `Resize(w, 1)` to adjust size.
 
 Height is always 1 (single-line).
 
@@ -58,23 +55,29 @@ func main() {
     err := devshell.Run(func(args []string) (texel.App, error) {
         ui := core.NewUIManager()
 
-        // Create label
-        label := widgets.NewLabel(5, 5, 10, 1, "Name:")
+        // Create a form row with HBox
+        row := widgets.NewHBox()
+        row.Spacing = 1
 
-        // Create input field
-        input := widgets.NewInput(16, 5, 30)
+        label := widgets.NewLabel("Name:")
+        row.AddChildWithSize(label, 10)
+
+        input := widgets.NewInput()
         input.Placeholder = "Enter your name"
-
-        // Handle text changes
         input.OnChange = func(text string) {
             fmt.Printf("Text: %s\n", text)
         }
+        row.AddFlexChild(input)
 
-        ui.AddWidget(label)
-        ui.AddWidget(input)
+        ui.AddWidget(row)
         ui.Focus(input)
 
-        return adapter.NewUIApp("Input Demo", ui), nil
+        app := adapter.NewUIApp("Input Demo", ui)
+        app.OnResize(func(w, h int) {
+            row.SetPosition(5, 5)
+            row.Resize(w-10, 1)
+        })
+        return app, nil
     }, nil)
 
     if err != nil {

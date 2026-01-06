@@ -26,8 +26,11 @@ import "texelation/texelui/widgets"
 ## Constructor
 
 ```go
-func NewColorPicker(x, y int, config ColorPickerConfig) *ColorPicker
+func NewColorPicker(config ColorPickerConfig) *ColorPicker
 ```
+
+Creates a color picker widget. Position defaults to (0,0).
+Use `SetPosition(x, y)` to adjust, or place in a layout container.
 
 ### ColorPickerConfig
 
@@ -53,10 +56,8 @@ type ColorPickerConfig struct {
 package main
 
 import (
-    "fmt"
     "log"
 
-    "github.com/gdamore/tcell/v2"
     "texelation/internal/devshell"
     "texelation/texel"
     "texelation/texelui/adapter"
@@ -68,19 +69,34 @@ func main() {
     err := devshell.Run(func(args []string) (texel.App, error) {
         ui := core.NewUIManager()
 
-        // Create color picker with all modes
-        picker := widgets.NewColorPicker(10, 5, widgets.ColorPickerConfig{
+        // Create layout
+        vbox := widgets.NewVBox()
+        vbox.Spacing = 1
+
+        // Color picker row
+        row := widgets.NewHBox()
+        row.Spacing = 1
+        row.AddChildWithSize(widgets.NewLabel("Theme Color:"), 14)
+
+        picker := widgets.NewColorPicker(widgets.ColorPickerConfig{
             EnableSemantic: true,
             EnablePalette:  true,
             EnableOKLCH:    true,
             Label:          "Theme Color",
         })
         picker.SetValue("accent")
+        row.AddFlexChild(picker)
+        vbox.AddChild(row)
 
-        ui.AddWidget(picker)
-        ui.Focus(picker)
+        ui.AddWidget(vbox)
+        ui.Focus(vbox)
 
-        return adapter.NewUIApp("ColorPicker Demo", ui), nil
+        app := adapter.NewUIApp("ColorPicker Demo", ui)
+        app.OnResize(func(w, h int) {
+            vbox.SetPosition(5, 3)
+            vbox.Resize(50, h-6)
+        })
+        return app, nil
     }, nil)
 
     if err != nil {
@@ -168,7 +184,7 @@ When expanded, ColorPicker becomes modal and receives all input.
 ## Getting Results
 
 ```go
-picker := widgets.NewColorPicker(0, 0, config)
+picker := widgets.NewColorPicker(config)
 
 // Set initial value
 picker.SetValue("accent")  // Semantic

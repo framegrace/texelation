@@ -27,15 +27,17 @@ type TabLayout struct {
 	trapsFocus bool
 }
 
-// NewTabLayout creates a new tab layout at the specified position.
-func NewTabLayout(x, y, w, h int, tabs []primitives.TabItem) *TabLayout {
+// NewTabLayout creates a new tab layout with the specified tabs.
+// Position defaults to 0,0 and size to 1x1.
+// Use SetPosition and Resize to adjust after adding to a layout.
+func NewTabLayout(tabs []primitives.TabItem) *TabLayout {
 	tl := &TabLayout{
-		tabBar:   primitives.NewTabBar(x, y, w, tabs),
+		tabBar:   primitives.NewTabBar(0, 0, 1, tabs),
 		children: make([]core.Widget, len(tabs)),
 	}
 
-	tl.SetPosition(x, y)
-	tl.Resize(w, h)
+	tl.SetPosition(0, 0)
+	tl.Resize(1, 1)
 	tl.SetFocusable(true)
 
 	// Wire up tab change to trigger redraw

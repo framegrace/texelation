@@ -46,6 +46,9 @@ type UIManager struct {
 
 	// Focus observers receive notifications when focus changes
 	focusObservers []FocusObserver
+
+	// Root widget that auto-fills the content area (excluding status bar)
+	rootWidget Widget
 }
 
 func NewUIManager() *UIManager {
@@ -240,6 +243,9 @@ func (u *UIManager) Resize(w, h int) {
 		u.statusBar.Resize(w, u.statusBarHeight)
 	}
 
+	// Resize root widget to fill content area
+	u.resizeRootWidgetLocked()
+
 	// Resize framebuffer and invalidate all
 	u.buf = nil
 	u.invalidateAllLocked()
@@ -255,6 +261,78 @@ func (u *UIManager) AddWidget(w Widget) {
 	u.dirtyMu.Lock()
 	u.invalidateAllLocked()
 	u.dirtyMu.Unlock()
+}
+
+// SetRootWidget sets the main content widget that fills the available content area.
+// The widget is automatically resized to fill the content area (excluding status bar).
+// Position is set to (0, 0) and size to (W, ContentHeight).
+// Pass nil to clear the root widget.
+//
+// This eliminates the need for manual resize callbacks in most apps:
+//
+//	Before:
+//	  ui.AddWidget(myWidget)
+//	  app.SetOnResize(func(w, h int) {
+//	      contentH := ui.ContentHeight()
+//	      myWidget.SetPosition(0, 0)
+//	      myWidget.Resize(w, contentH)
+//	  })
+//
+//	After:
+//	  ui.SetRootWidget(myWidget)
+func (u *UIManager) SetRootWidget(w Widget) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	// Remove old root widget from widgets list if present
+	if u.rootWidget != nil {
+		u.removeWidgetLocked(u.rootWidget)
+	}
+
+	u.rootWidget = w
+
+	if w != nil {
+		// Add to widgets list
+		u.widgets = append(u.widgets, w)
+		u.propagateInvalidator(w)
+
+		// Size to fill content area
+		u.resizeRootWidgetLocked()
+
+		// Invalidate
+		u.dirtyMu.Lock()
+		u.invalidateAllLocked()
+		u.dirtyMu.Unlock()
+	}
+}
+
+// RootWidget returns the current root widget, or nil if none.
+func (u *UIManager) RootWidget() Widget {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.rootWidget
+}
+
+// resizeRootWidgetLocked resizes the root widget to fill the content area.
+// Must be called with u.mu held.
+func (u *UIManager) resizeRootWidgetLocked() {
+	if u.rootWidget == nil {
+		return
+	}
+	contentH := u.contentHeightLocked()
+	u.rootWidget.SetPosition(0, 0)
+	u.rootWidget.Resize(u.W, contentH)
+}
+
+// removeWidgetLocked removes a widget from the widgets list.
+// Must be called with u.mu held.
+func (u *UIManager) removeWidgetLocked(target Widget) {
+	for i, w := range u.widgets {
+		if w == target {
+			u.widgets = append(u.widgets[:i], u.widgets[i+1:]...)
+			return
+		}
+	}
 }
 
 func (u *UIManager) propagateInvalidator(w Widget) {
@@ -302,6 +380,12 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
+	// Find the actual focused widget - Form.CycleFocus may have changed focus
+	// without updating u.focused
+	if actualFocused := u.findDeepestFocusedLocked(); actualFocused != nil {
+		u.focused = actualFocused
+	}
+
 	// Check if focused widget is modal - if so, it gets ALL input (including Tab)
 	if u.focused != nil {
 		if modal, ok := u.focused.(Modal); ok && modal.IsModal() {
@@ -345,12 +429,17 @@ func (u *UIManager) HandleKey(ev *tcell.EventKey) bool {
 			if mw, ok := deepWidget.(MultilineWidget); ok {
 				isMultiline = mw.IsMultiline()
 			}
-			// Check if widget is modal-capable (uses Enter to commit/close)
-			isModalCapable := false
-			if _, ok := deepWidget.(Modal); ok {
-				isModalCapable = true
+			// Check if widget is currently in modal state (uses Enter to commit/close)
+			isModalActive := false
+			if modal, ok := deepWidget.(Modal); ok && modal.IsModal() {
+				isModalActive = true
 			}
-			if !isMultiline && !isModalCapable {
+			// Check if widget wants to block focus cycling (e.g., invalid input)
+			shouldBlock := false
+			if blocker, ok := deepWidget.(FocusCycleBlocker); ok {
+				shouldBlock = blocker.ShouldBlockFocusCycle()
+			}
+			if !isMultiline && !isModalActive && !shouldBlock {
 				if u.cycleFocusLocked(true) {
 					u.dirtyMu.Lock()
 					u.invalidateAllLocked()
@@ -401,6 +490,39 @@ func (u *UIManager) cycleFocusLocked(forward bool) bool {
 
 	// No container handled it - try cycling among root widgets
 	return u.cycleRootWidgetsLocked(forward)
+}
+
+// findDeepestFocusedLocked searches the widget tree for the deepest focused widget.
+// This handles cases where Form.CycleFocus changes focus without updating UIManager.
+func (u *UIManager) findDeepestFocusedLocked() Widget {
+	for _, w := range u.widgets {
+		if found := u.findFocusedInTreeLocked(w); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// findFocusedInTreeLocked recursively finds the deepest focused widget in tree.
+func (u *UIManager) findFocusedInTreeLocked(w Widget) Widget {
+	// First check children for deeper focused widget
+	if cc, ok := w.(ChildContainer); ok {
+		var found Widget
+		cc.VisitChildren(func(child Widget) {
+			if found != nil {
+				return
+			}
+			found = u.findFocusedInTreeLocked(child)
+		})
+		if found != nil {
+			return found
+		}
+	}
+	// No focused child, check if this widget is focused
+	if fs, ok := w.(FocusState); ok && fs.IsFocused() {
+		return w
+	}
+	return nil
 }
 
 // containsWidgetLocked checks if container w contains widget target.
@@ -467,12 +589,20 @@ func (u *UIManager) HandleMouse(ev *tcell.EventMouse) bool {
 	prevIsDown := u.capture != nil
 	nowDown := buttons&tcell.Button1 != 0
 
-	// Check if focused widget is modal - dismiss on click outside
+	// Check if focused widget is modal - dismiss on click outside, route to modal on click inside
 	if u.focused != nil && nowDown && !prevIsDown {
 		if modal, ok := u.focused.(Modal); ok && modal.IsModal() {
 			// Check if click is outside the modal widget
 			if !u.focused.HitTest(x, y) {
 				modal.DismissModal()
+				u.dirtyMu.Lock()
+				u.invalidateAllLocked()
+				u.dirtyMu.Unlock()
+				return true
+			}
+			// Click is inside modal - route directly to the modal widget
+			if mw, ok := u.focused.(MouseAware); ok {
+				mw.HandleMouse(ev)
 				u.dirtyMu.Lock()
 				u.invalidateAllLocked()
 				u.dirtyMu.Unlock()

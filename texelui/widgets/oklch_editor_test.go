@@ -11,16 +11,16 @@ import (
 )
 
 func TestOKLCHEditor_NewWithDefaults(t *testing.T) {
-	oe := NewOKLCHEditor(10, 20, 30, 15)
+	oe := NewOKLCHEditor()
 
 	x, y := oe.Position()
-	if x != 10 || y != 20 {
-		t.Errorf("position = (%d, %d), want (10, 20)", x, y)
+	if x != 0 || y != 0 {
+		t.Errorf("position = (%d, %d), want (0, 0)", x, y)
 	}
 
 	w, h := oe.Size()
-	if w != 30 || h != 15 {
-		t.Errorf("size = (%d, %d), want (30, 15)", w, h)
+	if w != 25 || h != 10 {
+		t.Errorf("size = (%d, %d), want (25, 10)", w, h)
 	}
 
 	if !oe.Focusable() {
@@ -33,7 +33,7 @@ func TestOKLCHEditor_NewWithDefaults(t *testing.T) {
 }
 
 func TestOKLCHEditor_SetColor(t *testing.T) {
-	oe := NewOKLCHEditor(0, 0, 30, 15)
+	oe := NewOKLCHEditor()
 
 	color := tcell.NewRGBColor(255, 0, 0) // Red
 	oe.SetColor(color)
@@ -49,7 +49,7 @@ func TestOKLCHEditor_SetColor(t *testing.T) {
 }
 
 func TestOKLCHEditor_GetSource(t *testing.T) {
-	oe := NewOKLCHEditor(0, 0, 30, 15)
+	oe := NewOKLCHEditor()
 
 	source := oe.GetSource()
 	if len(source) == 0 {
@@ -63,7 +63,7 @@ func TestOKLCHEditor_GetSource(t *testing.T) {
 }
 
 func TestOKLCHEditor_FocusCycling(t *testing.T) {
-	oe := NewOKLCHEditor(0, 0, 30, 15)
+	oe := NewOKLCHEditor()
 	oe.Focus()
 
 	// Initial focus on plane
@@ -99,7 +99,7 @@ func TestOKLCHEditor_FocusCycling(t *testing.T) {
 }
 
 func TestOKLCHEditor_TabNavigation(t *testing.T) {
-	oe := NewOKLCHEditor(0, 0, 30, 15)
+	oe := NewOKLCHEditor()
 	oe.Focus()
 
 	// Tab should NOT be handled by HandleKey - parent uses CycleFocus
@@ -127,7 +127,7 @@ func TestOKLCHEditor_TabNavigation(t *testing.T) {
 }
 
 func TestOKLCHEditor_MouseClickFocuses(t *testing.T) {
-	oe := NewOKLCHEditor(0, 0, 30, 15)
+	oe := NewOKLCHEditor()
 	oe.Focus()
 
 	// Click on plane first to verify current focus
@@ -149,7 +149,7 @@ func TestOKLCHEditor_MouseClickFocuses(t *testing.T) {
 }
 
 func TestOKLCHEditor_OnChangeCallback(t *testing.T) {
-	oe := NewOKLCHEditor(0, 0, 30, 15)
+	oe := NewOKLCHEditor()
 
 	changeCount := 0
 	oe.OnChange = func(c tcell.Color) {
@@ -174,7 +174,7 @@ func TestOKLCHEditor_OnChangeCallback(t *testing.T) {
 }
 
 func TestOKLCHEditor_ResetFocus(t *testing.T) {
-	oe := NewOKLCHEditor(0, 0, 30, 15)
+	oe := NewOKLCHEditor()
 	oe.focus = OKLCHFocusSlider
 
 	oe.ResetFocus()
@@ -185,7 +185,7 @@ func TestOKLCHEditor_ResetFocus(t *testing.T) {
 }
 
 func TestOKLCHEditor_TrapsFocus(t *testing.T) {
-	oe := NewOKLCHEditor(0, 0, 30, 15)
+	oe := NewOKLCHEditor()
 
 	if oe.TrapsFocus() {
 		t.Error("OKLCHEditor should not trap focus")
@@ -193,7 +193,7 @@ func TestOKLCHEditor_TrapsFocus(t *testing.T) {
 }
 
 func TestOKLCHEditor_VisitChildren(t *testing.T) {
-	oe := NewOKLCHEditor(0, 0, 30, 15)
+	oe := NewOKLCHEditor()
 
 	count := 0
 	oe.VisitChildren(func(w core.Widget) {
