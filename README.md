@@ -17,6 +17,7 @@ Windows builds are available but less tested.
 - **Proper Terminal Reflow** - Resize your terminal and text reflows correctly, preserving logical lines across width changes.
 - **Tiling Pane Manager** - Multi-workspace support with keyboard and mouse control.
 - **Fully Themeable** - Visual effects, colors, and animations all configurable via JSON with hot-reload support.
+- **Built on TexelUI** - App UIs are powered by the [TexelUI](https://github.com/framegrace/texelui) TUI library for reusable widgets across Texelation and standalone apps.
 - **Client/Server Architecture** - Disconnect and reconnect without losing state. Multiple clients can attach to the same session.
 
 ## What Makes It Different
