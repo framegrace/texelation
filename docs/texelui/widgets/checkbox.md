@@ -16,16 +16,15 @@ import "texelation/texelui/widgets"
 ## Constructor
 
 ```go
-func NewCheckbox(x, y int, label string) *Checkbox
+func NewCheckbox(label string) *Checkbox
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `x` | `int` | X position (cells from left) |
-| `y` | `int` | Y position (cells from top) |
 | `label` | `string` | Text label next to checkbox |
 
-Size is determined automatically by the label.
+Creates a checkbox that auto-sizes to fit `[X] label`. Position defaults to (0,0).
+Use `SetPosition(x, y)` to adjust if needed.
 
 ## Properties
 
@@ -57,23 +56,33 @@ func main() {
     err := devshell.Run(func(args []string) (texel.App, error) {
         ui := core.NewUIManager()
 
+        // Create VBox for vertical layout
+        vbox := widgets.NewVBox()
+        vbox.Spacing = 1
+
         // Create checkboxes
-        rememberMe := widgets.NewCheckbox(10, 5, "Remember me")
+        rememberMe := widgets.NewCheckbox("Remember me")
         rememberMe.Checked = true  // Default checked
+        vbox.AddChild(rememberMe)
 
-        newsletter := widgets.NewCheckbox(10, 7, "Subscribe to newsletter")
+        newsletter := widgets.NewCheckbox("Subscribe to newsletter")
+        vbox.AddChild(newsletter)
 
-        terms := widgets.NewCheckbox(10, 9, "I accept the terms")
+        terms := widgets.NewCheckbox("I accept the terms")
         terms.OnChange = func(checked bool) {
             fmt.Printf("Terms accepted: %v\n", checked)
         }
+        vbox.AddChild(terms)
 
-        ui.AddWidget(rememberMe)
-        ui.AddWidget(newsletter)
-        ui.AddWidget(terms)
-        ui.Focus(rememberMe)
+        ui.AddWidget(vbox)
+        ui.Focus(vbox)
 
-        return adapter.NewUIApp("Checkbox Demo", ui), nil
+        app := adapter.NewUIApp("Checkbox Demo", ui)
+        app.OnResize(func(w, h int) {
+            vbox.SetPosition(10, 5)
+            vbox.Resize(40, 10)
+        })
+        return app, nil
     }, nil)
 
     if err != nil {

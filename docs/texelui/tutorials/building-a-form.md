@@ -1,6 +1,6 @@
 # Tutorial: Building a Form
 
-This tutorial walks through building a complete, production-quality data entry form with TexelUI.
+This tutorial walks through building a complete, production-quality data entry form with TexelUI using the Form widget.
 
 ## What We'll Build
 
@@ -62,7 +62,6 @@ package main
 import (
 	"log"
 
-	"github.com/gdamore/tcell/v2"
 	"texelation/internal/devshell"
 	"texelation/texel"
 	"texelation/texelui/adapter"
@@ -82,50 +81,41 @@ func main() {
 func NewRegistrationForm() texel.App {
 	ui := core.NewUIManager()
 
-	// We'll add widgets here
+	// We'll add the form here
 
 	return adapter.NewUIApp("Registration", ui)
 }
 ```
 
-## Step 3: Create the Form Container
+## Step 3: Create the Form Widget
 
-Add a bordered container for the form:
+The Form widget automatically handles label alignment and focus highlighting:
 
 ```go
 func NewRegistrationForm() texel.App {
 	ui := core.NewUIManager()
 
-	// Main form dimensions
-	formWidth := 70
-	formHeight := 22
+	// Create the Form widget
+	form := widgets.NewForm()
 
-	// Create background pane
-	bg := widgets.NewPane(0, 0, formWidth, formHeight, tcell.StyleDefault)
+	// We'll add fields here...
 
-	// Create border for visual structure
-	border := widgets.NewBorder(0, 0, formWidth, formHeight, tcell.StyleDefault)
-
-	// Title
-	title := widgets.NewLabel(0, 1, formWidth, 1, "User Registration")
-	title.Align = widgets.AlignCenter
-
-	// Add to container
-	bg.AddChild(title)
-
-	// Set border's child to the background pane
-	border.SetChild(bg)
+	// Wrap in border for visual structure
+	border := widgets.NewBorder()
+	border.SetChild(form)
 	ui.AddWidget(border)
 
 	// Create adapter with resize handling
 	app := adapter.NewUIApp("Registration", ui)
 	app.OnResize(func(w, h int) {
-		// Center the form
+		formWidth := 70
+		formHeight := 22
 		x := (w - formWidth) / 2
 		y := (h - formHeight) / 2
 		if x < 0 { x = 0 }
 		if y < 0 { y = 0 }
 		border.SetPosition(x, y)
+		border.Resize(formWidth, formHeight)
 	})
 
 	return app
@@ -134,83 +124,82 @@ func NewRegistrationForm() texel.App {
 
 ## Step 4: Add Input Fields
 
-Add the text input fields:
+Use `AddField()` for labeled input fields - the Form widget handles alignment automatically:
 
 ```go
-// Inside NewRegistrationForm(), after the title:
-
 // Full Name field
-nameLabel := widgets.NewLabel(3, 3, 12, 1, "Full Name:")
-nameInput := widgets.NewInput(16, 3, 45)
+nameInput := widgets.NewInput()
 nameInput.Placeholder = "Enter your full name"
-bg.AddChild(nameLabel)
-bg.AddChild(nameInput)
+form.AddField("Full Name:", nameInput)
 
 // Email field
-emailLabel := widgets.NewLabel(3, 5, 12, 1, "Email:")
-emailInput := widgets.NewInput(16, 5, 45)
+emailInput := widgets.NewInput()
 emailInput.Placeholder = "user@example.com"
-bg.AddChild(emailLabel)
-bg.AddChild(emailInput)
+form.AddField("Email:", emailInput)
 ```
+
+The Form widget:
+- Aligns all labels to the same width
+- Highlights the label when its field has focus
+- Manages Tab/Shift+Tab navigation between fields
 
 ## Step 5: Add a ComboBox
 
-Add a country selector:
+Add a country selector the same way:
 
 ```go
-// Country dropdown
-countryLabel := widgets.NewLabel(3, 7, 12, 1, "Country:")
 countries := []string{
 	"Australia", "Brazil", "Canada", "France", "Germany",
 	"India", "Japan", "Mexico", "Spain", "United Kingdom",
 	"United States",
 }
-countryCombo := widgets.NewComboBox(16, 7, 35, countries, true) // editable=true
+countryCombo := widgets.NewComboBox(countries, true) // editable=true
 countryCombo.Placeholder = "Type to search..."
-bg.AddChild(countryLabel)
-bg.AddChild(countryCombo)
+form.AddField("Country:", countryCombo)
 ```
 
 ## Step 6: Add a TextArea
 
-Add a multi-line bio field:
+For multi-line fields, use `AddRow()` with a custom height:
 
 ```go
-// Bio field with border
-bioLabel := widgets.NewLabel(3, 9, 12, 1, "Bio:")
-bioBorder := widgets.NewBorder(16, 9, 47, 5, tcell.StyleDefault)
-bioArea := widgets.NewTextArea(0, 0, 45, 3)
-bioBorder.SetChild(bioArea)
-bg.AddChild(bioLabel)
-bg.AddChild(bioBorder)
+bioArea := widgets.NewTextArea()
+form.AddRow(widgets.FormRow{
+	Label:  widgets.NewLabel("Bio:"),
+	Field:  bioArea,
+	Height: 4, // Give it more height
+})
 ```
 
 ## Step 7: Add Checkboxes
 
-Add the subscription options:
+Use `AddFullWidthField()` for checkboxes that span the full width:
 
 ```go
-// Checkboxes
-subscribeCheck := widgets.NewCheckbox(16, 15, "Subscribe to newsletter")
+form.AddSpacer(1) // Visual separation
+
+subscribeCheck := widgets.NewCheckbox("Subscribe to newsletter")
 subscribeCheck.Checked = true // Default checked
+form.AddFullWidthField(subscribeCheck, 1)
 
-termsCheck := widgets.NewCheckbox(16, 16, "Accept terms and conditions")
-
-bg.AddChild(subscribeCheck)
-bg.AddChild(termsCheck)
+termsCheck := widgets.NewCheckbox("Accept terms and conditions")
+form.AddFullWidthField(termsCheck, 1)
 ```
 
 ## Step 8: Add Buttons
 
-Add the form actions:
+For buttons, use a full-width HBox row:
 
 ```go
 // Status label (for validation feedback)
-statusLabel := widgets.NewLabel(3, 19, 64, 1, "")
+statusLabel := widgets.NewLabel("")
+form.AddFullWidthField(statusLabel, 1)
 
-// Submit button
-submitBtn := widgets.NewButton(20, 18, 12, 1, "Submit")
+// Button row
+buttonRow := widgets.NewHBox()
+buttonRow.Spacing = 2
+
+submitBtn := widgets.NewButton("Submit")
 submitBtn.OnClick = func() {
 	// Validate form
 	if nameInput.Text == "" {
@@ -229,8 +218,7 @@ submitBtn.OnClick = func() {
 	statusLabel.Text = "✓ Registration successful!"
 }
 
-// Cancel button
-cancelBtn := widgets.NewButton(36, 18, 12, 1, "Cancel")
+cancelBtn := widgets.NewButton("Cancel")
 cancelBtn.OnClick = func() {
 	// Clear the form
 	nameInput.Text = ""
@@ -242,9 +230,9 @@ cancelBtn.OnClick = func() {
 	statusLabel.Text = "Form cleared"
 }
 
-bg.AddChild(submitBtn)
-bg.AddChild(cancelBtn)
-bg.AddChild(statusLabel)
+buttonRow.AddChild(submitBtn)
+buttonRow.AddChild(cancelBtn)
+form.AddFullWidthField(buttonRow, 1)
 ```
 
 ## Step 9: Add Validation Helper
@@ -263,20 +251,20 @@ func isValidEmail(email string) bool {
 }
 ```
 
-## Step 10: Set Focus Order
+## Step 10: Set Focus
 
-Set the initial focus:
+Set the initial focus to the form (it will focus the first field):
 
 ```go
 // At the end of NewRegistrationForm(), before creating the app:
-ui.Focus(nameInput)
+ui.Focus(form)
 ```
 
-The default Tab navigation will move through focusable widgets in the order they were added.
+The Form widget handles Tab/Shift+Tab navigation automatically.
 
 ## Complete Code
 
-Here's the complete, runnable code:
+Here's the complete, runnable code using the Form widget:
 
 ```go
 package main
@@ -285,7 +273,6 @@ import (
 	"log"
 	"strings"
 
-	"github.com/gdamore/tcell/v2"
 	"texelation/internal/devshell"
 	"texelation/texel"
 	"texelation/texelui/adapter"
@@ -305,63 +292,57 @@ func main() {
 func NewRegistrationForm() texel.App {
 	ui := core.NewUIManager()
 
-	formWidth := 70
-	formHeight := 22
-
-	// Background pane
-	bg := widgets.NewPane(0, 0, formWidth-2, formHeight-2, tcell.StyleDefault)
-
-	// Title
-	title := widgets.NewLabel(0, 0, formWidth-2, 1, "User Registration")
-	title.Align = widgets.AlignCenter
-	bg.AddChild(title)
+	// Create Form widget
+	form := widgets.NewForm()
 
 	// Full Name
-	nameLabel := widgets.NewLabel(2, 2, 12, 1, "Full Name:")
-	nameInput := widgets.NewInput(15, 2, 45)
+	nameInput := widgets.NewInput()
 	nameInput.Placeholder = "Enter your full name"
-	bg.AddChild(nameLabel)
-	bg.AddChild(nameInput)
+	form.AddField("Full Name:", nameInput)
 
 	// Email
-	emailLabel := widgets.NewLabel(2, 4, 12, 1, "Email:")
-	emailInput := widgets.NewInput(15, 4, 45)
+	emailInput := widgets.NewInput()
 	emailInput.Placeholder = "user@example.com"
-	bg.AddChild(emailLabel)
-	bg.AddChild(emailInput)
+	form.AddField("Email:", emailInput)
 
 	// Country
-	countryLabel := widgets.NewLabel(2, 6, 12, 1, "Country:")
 	countries := []string{
 		"Australia", "Brazil", "Canada", "France", "Germany",
 		"India", "Japan", "Mexico", "Spain", "United Kingdom",
 		"United States",
 	}
-	countryCombo := widgets.NewComboBox(15, 6, 35, countries, true)
+	countryCombo := widgets.NewComboBox(countries, true)
 	countryCombo.Placeholder = "Type to search..."
-	bg.AddChild(countryLabel)
-	bg.AddChild(countryCombo)
+	form.AddField("Country:", countryCombo)
 
-	// Bio
-	bioLabel := widgets.NewLabel(2, 8, 12, 1, "Bio:")
-	bioBorder := widgets.NewBorder(15, 8, 47, 5, tcell.StyleDefault)
-	bioArea := widgets.NewTextArea(0, 0, 45, 3)
-	bioBorder.SetChild(bioArea)
-	bg.AddChild(bioLabel)
-	bg.AddChild(bioBorder)
+	// Bio (multi-line with custom height)
+	bioArea := widgets.NewTextArea()
+	form.AddRow(widgets.FormRow{
+		Label:  widgets.NewLabel("Bio:"),
+		Field:  bioArea,
+		Height: 4,
+	})
 
-	// Checkboxes
-	subscribeCheck := widgets.NewCheckbox(15, 14, "Subscribe to newsletter")
+	// Spacer before checkboxes
+	form.AddSpacer(1)
+
+	// Checkboxes (full-width)
+	subscribeCheck := widgets.NewCheckbox("Subscribe to newsletter")
 	subscribeCheck.Checked = true
-	termsCheck := widgets.NewCheckbox(15, 15, "Accept terms and conditions")
-	bg.AddChild(subscribeCheck)
-	bg.AddChild(termsCheck)
+	form.AddFullWidthField(subscribeCheck, 1)
+
+	termsCheck := widgets.NewCheckbox("Accept terms and conditions")
+	form.AddFullWidthField(termsCheck, 1)
 
 	// Status label
-	statusLabel := widgets.NewLabel(2, 18, 64, 1, "")
+	statusLabel := widgets.NewLabel("")
+	form.AddFullWidthField(statusLabel, 1)
 
-	// Submit button
-	submitBtn := widgets.NewButton(18, 17, 12, 1, "Submit")
+	// Button row
+	buttonRow := widgets.NewHBox()
+	buttonRow.Spacing = 2
+
+	submitBtn := widgets.NewButton("Submit")
 	submitBtn.OnClick = func() {
 		if nameInput.Text == "" {
 			statusLabel.Text = "✗ Please enter your name"
@@ -378,8 +359,7 @@ func NewRegistrationForm() texel.App {
 		statusLabel.Text = "✓ Registration successful!"
 	}
 
-	// Cancel button
-	cancelBtn := widgets.NewButton(34, 17, 12, 1, "Cancel")
+	cancelBtn := widgets.NewButton("Cancel")
 	cancelBtn.OnClick = func() {
 		nameInput.Text = ""
 		emailInput.Text = ""
@@ -390,19 +370,21 @@ func NewRegistrationForm() texel.App {
 		statusLabel.Text = "Form cleared"
 	}
 
-	bg.AddChild(submitBtn)
-	bg.AddChild(cancelBtn)
-	bg.AddChild(statusLabel)
+	buttonRow.AddChild(submitBtn)
+	buttonRow.AddChild(cancelBtn)
+	form.AddFullWidthField(buttonRow, 1)
 
-	// Create border around the whole form
-	border := widgets.NewBorder(0, 0, formWidth, formHeight, tcell.StyleDefault)
-	border.SetChild(bg)
+	// Wrap in border
+	border := widgets.NewBorder()
+	border.SetChild(form)
 	ui.AddWidget(border)
 
 	// Set initial focus
-	ui.Focus(nameInput)
+	ui.Focus(form)
 
 	// Create app with resize handling
+	formWidth := 70
+	formHeight := 20
 	app := adapter.NewUIApp("Registration", ui)
 	app.OnResize(func(w, h int) {
 		x := (w - formWidth) / 2
@@ -414,6 +396,7 @@ func NewRegistrationForm() texel.App {
 			y = 0
 		}
 		border.SetPosition(x, y)
+		border.Resize(formWidth, formHeight)
 	})
 
 	return app
@@ -443,6 +426,52 @@ go build -o bin/registration-form ./cmd/registration-form
 | Type | Enter text / Filter dropdown |
 | Ctrl+C | Exit |
 
+## Form Widget Features
+
+The Form widget provides several advantages over manual VBox/HBox layouts:
+
+| Feature | Form Widget | Manual VBox/HBox |
+|---------|-------------|------------------|
+| Label alignment | Automatic | Manual (AddChildWithSize) |
+| Label highlighting | Automatic on focus | Manual styling |
+| Focus cycling | Built-in | Automatic via container |
+| Multi-line fields | Height parameter | AddChildWithSize |
+| Code simplicity | High | Moderate |
+
+## Custom Form Configuration
+
+You can customize the Form widget's appearance:
+
+```go
+config := widgets.FormConfig{
+	PaddingX:   4,   // Horizontal padding
+	PaddingY:   2,   // Vertical padding
+	LabelWidth: 15,  // Narrower labels
+	RowSpacing: 1,   // Space between rows
+}
+form := widgets.NewFormWithConfig(config)
+```
+
+## Alternative: Manual VBox/HBox Layout
+
+For more control, you can build forms manually with VBox and HBox:
+
+```go
+// Main container
+container := widgets.NewVBox()
+container.Spacing = 1
+
+// Create a form row manually
+row := widgets.NewHBox()
+row.Spacing = 1
+row.AddChildWithSize(widgets.NewLabel("Name:"), 12)
+input := widgets.NewInput()
+row.AddFlexChild(input)
+container.AddChild(row)
+```
+
+This approach gives you full control over layout but requires more code.
+
 ## Enhancements to Try
 
 ### 1. Real-time Validation
@@ -469,22 +498,23 @@ if nameInput.Text == "" {
 }
 ```
 
-### 3. Loading State
+### 3. Scrollable Long Forms
+
+For forms with many fields, wrap in a ScrollPane:
 
 ```go
-submitBtn.OnClick = func() {
-	submitBtn.Text = "Loading..."
-	// Simulate async operation
-	go func() {
-		time.Sleep(time.Second)
-		submitBtn.Text = "Submit"
-		statusLabel.Text = "✓ Done!"
-	}()
-}
+import "texelation/texelui/scroll"
+
+sp := scroll.NewScrollPane()
+sp.SetChild(form)
+sp.SetContentHeight(form.ContentHeight())
+
+border.SetChild(sp)
 ```
 
 ## What's Next?
 
+- [Form Widget Reference](/texelui/widgets/form.md) - Complete Form API
 - [Creating a Custom Widget](/texelui/tutorials/custom-widget.md) - Build your own widgets
 - [Standalone vs TexelApp](/texelui/tutorials/standalone-vs-texelapp.md) - Deploy your form
 - [Widgets Reference](/texelui/widgets/README.md) - Explore all widget options

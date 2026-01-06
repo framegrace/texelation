@@ -21,16 +21,13 @@ import "texelation/texelui/widgets"
 ## Constructor
 
 ```go
-func NewPane(x, y, w, h int, style tcell.Style) *Pane
+func NewPane() *Pane
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `x` | `int` | X position |
-| `y` | `int` | Y position |
-| `w` | `int` | Width |
-| `h` | `int` | Height |
-| `style` | `tcell.Style` | Background style |
+Creates a container widget with background fill. Position defaults to (0,0) and size to 20x10.
+Use `SetPosition(x, y)` and `Resize(w, h)` to adjust, or place in a layout container.
+
+Set the `Style` property to customize the background appearance.
 
 ## Properties
 
@@ -46,6 +43,8 @@ func NewPane(x, y, w, h int, style tcell.Style) *Pane
 | `RemoveChild(w Widget)` | Remove a child widget |
 
 ## Example
+
+Using Pane with VBox for automatic layout:
 
 ```go
 package main
@@ -65,29 +64,41 @@ func main() {
     err := devshell.Run(func(args []string) (texel.App, error) {
         ui := core.NewUIManager()
 
-        // Create background pane
-        pane := widgets.NewPane(5, 3, 50, 15, tcell.StyleDefault)
+        // Create background pane with style
+        pane := widgets.NewPane()
+        pane.Style = tcell.StyleDefault.Background(tcell.ColorDarkBlue)
 
-        // Add child widgets
-        title := widgets.NewLabel(7, 4, 46, 1, "Welcome")
+        // Use VBox for layout inside pane
+        vbox := widgets.NewVBox()
+        vbox.Spacing = 1
+
+        title := widgets.NewLabel("Welcome")
         title.Align = widgets.AlignCenter
+        vbox.AddChild(title)
 
-        nameLabel := widgets.NewLabel(7, 6, 10, 1, "Name:")
-        nameInput := widgets.NewInput(18, 6, 30)
+        row := widgets.NewHBox()
+        row.Spacing = 1
+        row.AddChildWithSize(widgets.NewLabel("Name:"), 10)
+        nameInput := widgets.NewInput()
+        row.AddFlexChild(nameInput)
+        vbox.AddChild(row)
 
-        submitBtn := widgets.NewButton(18, 9, 15, 1, "Submit")
+        submitBtn := widgets.NewButton("Submit")
+        vbox.AddChild(submitBtn)
 
-        // Add children to pane
-        pane.AddChild(title)
-        pane.AddChild(nameLabel)
-        pane.AddChild(nameInput)
-        pane.AddChild(submitBtn)
+        pane.AddChild(vbox)
 
-        // Add pane to UI
         ui.AddWidget(pane)
-        ui.Focus(nameInput)
+        ui.Focus(vbox)
 
-        return adapter.NewUIApp("Pane Demo", ui), nil
+        app := adapter.NewUIApp("Pane Demo", ui)
+        app.OnResize(func(w, h int) {
+            pane.SetPosition(5, 3)
+            pane.Resize(50, 15)
+            vbox.SetPosition(7, 4)
+            vbox.Resize(46, 11)
+        })
+        return app, nil
     }, nil)
 
     if err != nil {
@@ -107,7 +118,8 @@ The pane fills its entire area with the background color from its style.
 Children are drawn on top of the pane's background:
 
 ```go
-pane := widgets.NewPane(0, 0, 60, 20, tcell.StyleDefault)
+pane := widgets.NewPane()
+pane.Resize(60, 20)
 
 // Add widgets
 pane.AddChild(label)
@@ -120,16 +132,20 @@ pane.RemoveChild(label)
 
 ### Relative Positioning
 
-When a pane moves, its children move with it:
+When a pane moves, its children move with it (for manually positioned children):
 
 ```go
-pane := widgets.NewPane(10, 10, 40, 20, tcell.StyleDefault)
-label := widgets.NewLabel(12, 12, 20, 1, "Hello")  // At (12, 12)
+pane := widgets.NewPane()
+pane.SetPosition(10, 10)
+pane.Resize(40, 20)
+
+label := widgets.NewLabel("Hello")
+label.SetPosition(12, 12)  // Relative to parent
 pane.AddChild(label)
 
 // Move pane
 pane.SetPosition(20, 20)
-// Label is now at (22, 22) - moved by same offset
+// Children move with the pane
 ```
 
 ### Z-Order
@@ -152,15 +168,20 @@ Panes can contain other panes for complex layouts:
 
 ```go
 // Main container
-mainPane := widgets.NewPane(0, 0, 80, 24, tcell.StyleDefault)
+mainPane := widgets.NewPane()
+mainPane.Resize(80, 24)
 
 // Sidebar
-sidebar := widgets.NewPane(0, 0, 20, 24, sidebarStyle)
+sidebar := widgets.NewPane()
+sidebar.Style = sidebarStyle
+sidebar.Resize(20, 24)
 mainPane.AddChild(sidebar)
 
-// Content area
-content := widgets.NewPane(22, 0, 58, 24, contentStyle)
-mainPane.AddChild(content)
+// Content area (use HBox for automatic layout instead)
+hbox := widgets.NewHBox()
+hbox.AddChildWithSize(sidebar, 20)
+hbox.AddFlexChild(content)
+mainPane.AddChild(hbox)
 
 ui.AddWidget(mainPane)
 ```
@@ -170,12 +191,14 @@ ui.AddWidget(mainPane)
 Combine Pane with Border for a framed container:
 
 ```go
-border := widgets.NewBorder(5, 3, 50, 15, tcell.StyleDefault)
-pane := widgets.NewPane(0, 0, 48, 13, tcell.StyleDefault)
+border := widgets.NewBorder()
+pane := widgets.NewPane()
 
-// Add widgets to pane
-pane.AddChild(label)
-pane.AddChild(input)
+// Add VBox to pane for layout
+vbox := widgets.NewVBox()
+vbox.AddChild(label)
+vbox.AddChild(input)
+pane.AddChild(vbox)
 
 // Set pane as border's child
 border.SetChild(pane)

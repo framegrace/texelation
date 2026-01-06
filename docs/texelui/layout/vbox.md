@@ -1,23 +1,23 @@
-# VBox Layout
+# VBox Container
 
-Vertical stacking layout that arranges widgets top to bottom.
+Vertical layout container that stacks children from top to bottom.
 
 ## Overview
 
-VBox automatically positions widgets in a vertical stack, perfect for forms, menus, and lists.
+VBox is a container widget that automatically positions its children in a vertical stack. Children are arranged from top to bottom with configurable spacing.
 
 ```
 ┌────────────────────────────────┐
 │  ┌──────────────────────────┐  │
-│  │        Widget 1          │  │
+│  │        Child 1           │  │
 │  └──────────────────────────┘  │
 │              ↓ spacing         │
 │  ┌──────────────────────────┐  │
-│  │        Widget 2          │  │
+│  │        Child 2           │  │
 │  └──────────────────────────┘  │
 │              ↓ spacing         │
 │  ┌──────────────────────────┐  │
-│  │        Widget 3          │  │
+│  │        Child 3           │  │
 │  └──────────────────────────┘  │
 └────────────────────────────────┘
 ```
@@ -25,100 +25,164 @@ VBox automatically positions widgets in a vertical stack, perfect for forms, men
 ## Import
 
 ```go
-import "texelation/texelui/layout"
+import "texelation/texelui/widgets"
 ```
 
 ## Constructor
 
 ```go
-func NewVBox(spacing int) *VBox
+func NewVBox() *VBox
 ```
 
-**Parameters:**
-- `spacing` - Vertical gap between widgets (in rows)
+Creates an empty VBox container. Position defaults to (0,0) and size to (1,1).
 
-## Example
+## Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Spacing` | `int` | Vertical gap between children (rows) |
+| `Align` | `BoxAlign` | Child alignment: `BoxAlignStart`, `BoxAlignCenter`, `BoxAlignEnd` |
+| `Style` | `tcell.Style` | Background style |
+
+## Methods
+
+### Adding Children
+
+```go
+// Add with natural size (widget's preferred dimensions)
+func (v *VBox) AddChild(w Widget)
+
+// Add with fixed height
+func (v *VBox) AddChildWithSize(w Widget, height int)
+
+// Add as flex child (expands to fill remaining space)
+func (v *VBox) AddFlexChild(w Widget)
+
+// Remove all children
+func (v *VBox) ClearChildren()
+```
+
+### Positioning
+
+```go
+func (v *VBox) SetPosition(x, y int)
+func (v *VBox) Resize(w, h int)
+```
+
+## Example: Simple Form
 
 ```go
 package main
 
 import (
-    "texelation/texelui/core"
-    "texelation/texelui/layout"
-    "texelation/texelui/widgets"
     "texelation/internal/devshell"
+    "texelation/texel"
+    "texelation/texelui/adapter"
+    "texelation/texelui/core"
+    "texelation/texelui/widgets"
 )
 
 func main() {
-    ui := core.NewUIManager()
+    devshell.Run(func(args []string) (texel.App, error) {
+        ui := core.NewUIManager()
 
-    // Apply VBox layout with 1-row spacing
-    ui.SetLayout(layout.NewVBox(1))
+        // Create vertical layout
+        form := widgets.NewVBox()
+        form.Spacing = 1
 
-    // Widgets are stacked vertically automatically
-    ui.AddWidget(widgets.NewLabel(0, 0, 30, 1, "Username:"))
-    ui.AddWidget(widgets.NewInput(0, 0, 30))
-    ui.AddWidget(widgets.NewLabel(0, 0, 30, 1, "Password:"))
-    ui.AddWidget(widgets.NewInput(0, 0, 30))
-    ui.AddWidget(widgets.NewButton(0, 0, 12, 1, "Login"))
+        // Add widgets - VBox handles positioning
+        form.AddChild(widgets.NewLabel("Username:"))
+        form.AddChild(widgets.NewInput())
+        form.AddChild(widgets.NewLabel("Password:"))
+        form.AddChild(widgets.NewInput())
+        form.AddChild(widgets.NewButton("Login"))
 
-    devshell.Run(ui)
+        ui.AddWidget(form)
+        ui.Focus(form)
+
+        app := adapter.NewUIApp("Login", ui)
+        app.OnResize(func(w, h int) {
+            form.SetPosition(5, 2)
+            form.Resize(40, h-4)
+        })
+        return app, nil
+    }, nil)
 }
 ```
 
 **Output:**
-
 ```
-Username:
-┌────────────────────────────┐
-│                            │
-└────────────────────────────┘
+     Username:
+     [____________________]
 
-Password:
-┌────────────────────────────┐
-│                            │
-└────────────────────────────┘
+     Password:
+     [____________________]
 
-[ Login ]
+     [ Login ]
 ```
 
-## How It Works
+## Child Sizing
 
-1. VBox iterates through widgets in add order
-2. Each widget is positioned at `y = previous widget bottom + spacing`
-3. Widget x position is preserved (set in constructor or manually)
-4. Widget dimensions are preserved (VBox doesn't resize widgets)
+VBox offers three ways to size children:
+
+### Natural Size (AddChild)
+
+Uses the widget's natural/preferred size:
 
 ```go
-// Layout algorithm (simplified)
-func (v *VBox) Apply(container Rect, children []Widget) {
-    y := container.Y
-    for _, child := range children {
-        pos := child.Position()
-        child.SetPosition(pos.X, y)
+vbox.AddChild(widgets.NewLabel("Name:"))   // Height: 1 (text height)
+vbox.AddChild(widgets.NewButton("OK"))     // Height: 1 (button height)
+vbox.AddChild(widgets.NewTextArea())       // Height: 4 (default)
+```
 
-        y += child.Size().H + v.spacing
-    }
-}
+### Fixed Size (AddChildWithSize)
+
+Specifies an exact height:
+
+```go
+vbox.AddChildWithSize(header, 3)    // 3 rows tall
+vbox.AddChildWithSize(content, 10)  // 10 rows tall
+vbox.AddChildWithSize(footer, 2)    // 2 rows tall
+```
+
+### Flex (AddFlexChild)
+
+Expands to fill remaining space:
+
+```go
+vbox.AddChild(header)           // Natural size (e.g., 1 row)
+vbox.AddFlexChild(content)      // Fills remaining space
+vbox.AddChild(statusBar)        // Natural size (e.g., 1 row)
+```
+
+**Flex distribution:**
+```
+┌────────────────────────────────┐
+│ Header (1 row)                 │
+├────────────────────────────────┤
+│                                │
+│ Content (FLEX - fills space)   │
+│                                │
+├────────────────────────────────┤
+│ Status (1 row)                 │
+└────────────────────────────────┘
+```
+
+Multiple flex children share space equally:
+
+```go
+vbox.AddFlexChild(panel1)  // Gets 50% of remaining space
+vbox.AddFlexChild(panel2)  // Gets 50% of remaining space
 ```
 
 ## Spacing
 
-Control the gap between widgets:
-
 ```go
-// No spacing (widgets touch)
-ui.SetLayout(layout.NewVBox(0))
-
-// 1-row spacing
-ui.SetLayout(layout.NewVBox(1))
-
-// 2-row spacing (more breathing room)
-ui.SetLayout(layout.NewVBox(2))
+vbox := widgets.NewVBox()
+vbox.Spacing = 2  // 2 rows between children
 ```
 
 **Visual comparison:**
-
 ```
 Spacing=0:     Spacing=1:     Spacing=2:
 ┌──────┐       ┌──────┐       ┌──────┐
@@ -134,203 +198,134 @@ Spacing=0:     Spacing=1:     Spacing=2:
                └──────┘       └──────┘
 ```
 
-## Widget Sizing
+## Nesting Layouts
 
-VBox positions widgets but **doesn't resize them**. Set dimensions before adding:
+Combine VBox and HBox for complex layouts:
 
 ```go
-// Width matters - VBox won't change it
-label := widgets.NewLabel(0, 0, 30, 1, "Name:")    // 30 wide
-input := widgets.NewInput(0, 0, 20)                 // 20 wide
-button := widgets.NewButton(0, 0, 10, 1, "Submit") // 10 wide
+// Main vertical layout
+main := widgets.NewVBox()
+main.Spacing = 1
 
-ui.AddWidget(label)
-ui.AddWidget(input)
-ui.AddWidget(button)
+// Field row (horizontal): Label + Input
+fieldRow := widgets.NewHBox()
+fieldRow.Spacing = 1
+fieldRow.AddChildWithSize(widgets.NewLabel("Name:"), 10)
+fieldRow.AddFlexChild(widgets.NewInput())
+main.AddChild(fieldRow)
+
+// Another field row
+emailRow := widgets.NewHBox()
+emailRow.Spacing = 1
+emailRow.AddChildWithSize(widgets.NewLabel("Email:"), 10)
+emailRow.AddFlexChild(widgets.NewInput())
+main.AddChild(emailRow)
+
+// Button row
+buttons := widgets.NewHBox()
+buttons.Spacing = 2
+buttons.AddChild(widgets.NewButton("OK"))
+buttons.AddChild(widgets.NewButton("Cancel"))
+main.AddChild(buttons)
 ```
 
 **Result:**
-
 ```
-┌────────────────────────────────┐
-│Name:                           │  (30 wide)
-├──────────────────────┐         │
-│                      │         │  (20 wide)
-└──────────────────────┘         │
-├────────────┐                   │  (10 wide)
-│  Submit    │                   │
-└────────────┘                   │
+┌────────────────────────────────────┐
+│ Name:     [_______________________]│
+│ Email:    [_______________________]│
+│ [ OK ]  [ Cancel ]                 │
+└────────────────────────────────────┘
 ```
 
-## X Position
+## Focus Management
 
-Widgets keep their x position. Use this for alignment:
+VBox automatically manages focus for its children:
+
+- **Tab** moves to the next focusable child
+- **Shift+Tab** moves to the previous focusable child
+- When VBox receives focus, it focuses its first (or last remembered) focusable child
 
 ```go
-// Left-aligned (x=0)
-label := widgets.NewLabel(0, 0, 30, 1, "Left")
-
-// Indented (x=4)
-input := widgets.NewInput(4, 0, 26)
-
-// Centered (calculated x)
-button := widgets.NewButton(9, 0, 12, 1, "Submit")
-
-ui.AddWidget(label)
-ui.AddWidget(input)
-ui.AddWidget(button)
+// Focus will cycle through: input1 -> input2 -> button
+vbox.AddChild(widgets.NewLabel("Name:"))   // Not focusable
+vbox.AddChild(input1)                       // Focusable
+vbox.AddChild(widgets.NewLabel("Email:"))  // Not focusable
+vbox.AddChild(input2)                       // Focusable
+vbox.AddChild(button)                       // Focusable
 ```
 
-**Result:**
+## Common Patterns
 
-```
-Left
-    ┌────────────────────────┐
-    │                        │
-    └────────────────────────┘
-         [  Submit  ]
-```
-
-## Form Layout Pattern
-
-Build forms with label-input pairs:
+### Form with Labels
 
 ```go
-func createForm() *core.UIManager {
-    ui := core.NewUIManager()
-    ui.SetLayout(layout.NewVBox(1))
+form := widgets.NewVBox()
+form.Spacing = 1
 
-    // Form fields
-    fields := []struct {
-        label   string
-        width   int
-    }{
-        {"Name:", 40},
-        {"Email:", 40},
-        {"Phone:", 20},
-        {"Address:", 50},
-    }
-
-    for _, f := range fields {
-        ui.AddWidget(widgets.NewLabel(0, 0, len(f.label), 1, f.label))
-        ui.AddWidget(widgets.NewInput(0, 0, f.width))
-    }
-
-    // Submit button
-    ui.AddWidget(widgets.NewButton(0, 0, 12, 1, "Submit"))
-
-    return ui
-}
-```
-
-## Menu Pattern
-
-Vertical menus with consistent spacing:
-
-```go
-func createMenu() *core.UIManager {
-    ui := core.NewUIManager()
-    ui.SetLayout(layout.NewVBox(0))  // No spacing for compact menu
-
-    menuItems := []string{
-        "New File",
-        "Open...",
-        "Save",
-        "Save As...",
-        "Exit",
-    }
-
-    for _, item := range menuItems {
-        ui.AddWidget(widgets.NewButton(0, 0, 15, 1, item))
-    }
-
-    return ui
-}
-```
-
-## Combining with Manual Layout
-
-VBox applies to UIManager's direct children. Use containers for nested layouts:
-
-```go
-ui := core.NewUIManager()
-ui.SetLayout(layout.NewVBox(2))
-
-// Header section
-header := widgets.NewLabel(0, 0, 40, 1, "Settings")
-
-// Form section (manually laid out inside Pane)
-formPane := widgets.NewPane(0, 0, 40, 8, style)
-// Add form widgets to formPane with absolute positioning
-
-// Button row (manually laid out inside Pane)
-buttonPane := widgets.NewPane(0, 0, 40, 3, style)
-// Add buttons horizontally inside buttonPane
-
-ui.AddWidget(header)
-ui.AddWidget(formPane)
-ui.AddWidget(buttonPane)
-```
-
-**Result:**
-
-```
-Settings                         (VBox positions this)
-
-┌──────────────────────────────┐ (VBox positions this)
-│  Name: [_______________]     │
-│  Email: [______________]     │  (contents manually
-│                              │   positioned inside)
-└──────────────────────────────┘
-
-┌──────────────────────────────┐ (VBox positions this)
-│  [ Save ]    [ Cancel ]      │  (buttons manually
-└──────────────────────────────┘   positioned inside)
-```
-
-## Layout Interface
-
-VBox implements the Layout interface:
-
-```go
-type Layout interface {
-    Apply(container Rect, children []Widget)
-}
-```
-
-**When applied:**
-- During `UIManager.Resize()`
-- During `UIManager.Render()`
-
-## Dynamic Content
-
-Add or remove widgets dynamically:
-
-```go
-func (app *MyApp) addNotification(msg string) {
-    label := widgets.NewLabel(0, 0, 40, 1, msg)
-    app.ui.AddWidget(label)
-    // VBox will position it on next render
+// Use HBox for each label+field pair
+addField := func(label string) *widgets.Input {
+    row := widgets.NewHBox()
+    row.Spacing = 1
+    row.AddChildWithSize(widgets.NewLabel(label), 12)
+    input := widgets.NewInput()
+    row.AddFlexChild(input)
+    form.AddChild(row)
+    return input
 }
 
-func (app *MyApp) clearNotifications() {
-    app.ui.ClearWidgets()
-    // Re-add permanent widgets
-}
+nameInput := addField("Name:")
+emailInput := addField("Email:")
+phoneInput := addField("Phone:")
+```
+
+### Header + Content + Footer
+
+```go
+layout := widgets.NewVBox()
+
+header := widgets.NewLabel("My Application")
+header.Align = widgets.AlignCenter
+layout.AddChild(header)
+
+content := widgets.NewVBox()
+// ... add content widgets
+layout.AddFlexChild(content)  // Expands
+
+footer := widgets.NewLabel("Status: Ready")
+layout.AddChild(footer)
+```
+
+### Settings Sections
+
+```go
+settings := widgets.NewVBox()
+settings.Spacing = 2
+
+// General section
+settings.AddChild(widgets.NewLabel("=== General ==="))
+settings.AddChild(widgets.NewCheckbox("Enable notifications"))
+settings.AddChild(widgets.NewCheckbox("Start minimized"))
+
+// Appearance section
+settings.AddChild(widgets.NewLabel("=== Appearance ==="))
+settings.AddChild(widgets.NewCheckbox("Dark mode"))
+settings.AddChild(widgets.NewCheckbox("Show toolbar"))
 ```
 
 ## Tips
 
-1. **Set widget widths explicitly** - VBox won't resize widgets horizontally
+1. **Use flex children for expanding content** - Headers/footers stay fixed, content grows
 
-2. **Use spacing consistently** - Same spacing value across the app looks better
+2. **Nest HBox inside VBox** - Label+Input pairs work great in HBox rows
 
-3. **Container widgets for complex layouts** - Use Pane to group widgets that need their own layout
+3. **Set spacing consistently** - Same spacing value across the app looks cleaner
 
-4. **Consider height** - VBox stacks based on widget heights; multi-line widgets work correctly
+4. **Remember to resize the VBox** - Use `OnResize` to give VBox its dimensions
 
 ## See Also
 
 - [HBox](/texelui/layout/hbox.md) - Horizontal arrangement
-- [Absolute](/texelui/layout/absolute.md) - Manual positioning
+- [ScrollPane](/texelui/layout/scrollpane.md) - Scrollable containers
 - [Layout Overview](/texelui/layout/README.md) - When to use each layout
+- [Building a Form](/texelui/tutorials/building-a-form.md) - Practical examples

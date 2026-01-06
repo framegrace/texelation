@@ -15,16 +15,15 @@ import "texelation/texelui/widgets"
 ## Constructor
 
 ```go
-func NewButton(x, y, w, h int, text string) *Button
+func NewButton(text string) *Button
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `x` | `int` | X position (cells from left) |
-| `y` | `int` | Y position (cells from top) |
-| `w` | `int` | Width (0 = auto-size to text) |
-| `h` | `int` | Height (0 = default 1) |
 | `text` | `string` | Button label |
+
+Creates a button that auto-sizes to fit its text. Position defaults to (0,0).
+Use `SetPosition(x, y)` and `Resize(w, h)` to adjust if needed.
 
 ## Properties
 
@@ -55,8 +54,8 @@ func main() {
     err := devshell.Run(func(args []string) (texel.App, error) {
         ui := core.NewUIManager()
 
-        // Create a button with auto-sizing
-        btn := widgets.NewButton(10, 5, 0, 0, "Click Me!")
+        // Create a button (auto-sizes to text)
+        btn := widgets.NewButton("Click Me!")
 
         // Handle clicks
         btn.OnClick = func() {
@@ -66,7 +65,11 @@ func main() {
         ui.AddWidget(btn)
         ui.Focus(btn)
 
-        return adapter.NewUIApp("Button Demo", ui), nil
+        app := adapter.NewUIApp("Button Demo", ui)
+        app.OnResize(func(w, h int) {
+            btn.SetPosition(10, 5)
+        })
+        return app, nil
     }, nil)
 
     if err != nil {
@@ -120,7 +123,7 @@ Uses theme semantic colors:
 ### Custom Style
 
 ```go
-btn := widgets.NewButton(0, 0, 0, 0, "Custom")
+btn := widgets.NewButton("Custom")
 
 // Override style
 btn.Style = tcell.StyleDefault.
@@ -130,11 +133,11 @@ btn.Style = tcell.StyleDefault.
 
 ## Auto-Sizing
 
-When width is 0, button auto-sizes to fit text:
+Buttons auto-size to fit text with padding:
 
 ```go
 // Width = len("Click") + 4 (for "[ " and " ]")
-btn := widgets.NewButton(0, 0, 0, 0, "Click")  // Width = 9
+btn := widgets.NewButton("Click")  // Width = 9
 ```
 
 Formula: `width = len(text) + 4`
@@ -144,36 +147,39 @@ Formula: `width = len(text) + 4`
 ```go
 ui := core.NewUIManager()
 
-saveBtn := widgets.NewButton(10, 5, 12, 1, "Save")
+// Create a button row with HBox
+row := widgets.NewHBox()
+row.Spacing = 2
+
+saveBtn := widgets.NewButton("Save")
 saveBtn.OnClick = func() {
     // Save logic
 }
 
-cancelBtn := widgets.NewButton(25, 5, 12, 1, "Cancel")
+cancelBtn := widgets.NewButton("Cancel")
 cancelBtn.OnClick = func() {
     // Cancel logic
 }
 
-ui.AddWidget(saveBtn)
-ui.AddWidget(cancelBtn)
-ui.Focus(saveBtn)  // Focus first button
+row.AddChild(saveBtn)
+row.AddChild(cancelBtn)
+
+ui.AddWidget(row)
+ui.Focus(row)  // Focus container (will focus first child)
 ```
 
 ## Button Row with HBox
 
 ```go
-import "texelation/texelui/layout"
+// Create horizontal button row
+row := widgets.NewHBox()
+row.Spacing = 2
 
-ui := core.NewUIManager()
-ui.SetLayout(layout.NewHBox(2))  // 2-cell spacing
+row.AddChild(widgets.NewButton("Save"))
+row.AddChild(widgets.NewButton("Cancel"))
+row.AddChild(widgets.NewButton("Help"))
 
-btn1 := widgets.NewButton(0, 0, 12, 1, "Save")
-btn2 := widgets.NewButton(0, 0, 12, 1, "Cancel")
-btn3 := widgets.NewButton(0, 0, 12, 1, "Help")
-
-ui.AddWidget(btn1)
-ui.AddWidget(btn2)
-ui.AddWidget(btn3)
+ui.AddWidget(row)
 ```
 
 ## Implementation Details
