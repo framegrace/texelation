@@ -10,9 +10,9 @@ package help
 
 import (
 	"sync"
-	"texelation/texel"
-	"texelation/texel/theme"
 
+	"github.com/framegrace/texelation/internal/theming"
+	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -38,7 +38,7 @@ type helpApp struct {
 }
 
 // NewHelpApp returns a simple help display app.
-func NewHelpApp() texel.App {
+func NewHelpApp() texelcore.App {
 	return &helpApp{
 		stop: make(chan struct{}),
 		sections: []helpSection{
@@ -105,15 +105,15 @@ func (a *helpApp) Resize(cols, rows int) {
 	a.width, a.height = cols, rows
 }
 
-func (a *helpApp) Render() [][]texel.Cell {
+func (a *helpApp) Render() [][]texelcore.Cell {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
 	if a.width <= 0 || a.height <= 0 {
-		return [][]texel.Cell{}
+		return [][]texelcore.Cell{}
 	}
 
-	tm := theme.ForApp("help")
+	tm := theming.ForApp("help")
 	bgColor := tm.GetColor("desktop", "default_bg", tcell.ColorReset).TrueColor()
 	textColor := tm.GetSemanticColor("text.primary")
 	dimColor := tm.GetSemanticColor("text.secondary")
@@ -125,11 +125,11 @@ func (a *helpApp) Render() [][]texel.Cell {
 	descStyle := tcell.StyleDefault.Background(bgColor).Foreground(dimColor)
 
 	// Initialize buffer
-	buffer := make([][]texel.Cell, a.height)
+	buffer := make([][]texelcore.Cell, a.height)
 	for i := range buffer {
-		buffer[i] = make([]texel.Cell, a.width)
+		buffer[i] = make([]texelcore.Cell, a.width)
 		for j := range buffer[i] {
-			buffer[i][j] = texel.Cell{Ch: ' ', Style: baseStyle}
+			buffer[i][j] = texelcore.Cell{Ch: ' ', Style: baseStyle}
 		}
 	}
 
@@ -210,7 +210,7 @@ func (a *helpApp) Render() [][]texel.Cell {
 }
 
 // drawCenteredText draws text centered horizontally on the given row.
-func (a *helpApp) drawCenteredText(buffer [][]texel.Cell, y int, text string, style tcell.Style) {
+func (a *helpApp) drawCenteredText(buffer [][]texelcore.Cell, y int, text string, style tcell.Style) {
 	if y < 0 || y >= a.height {
 		return
 	}
@@ -222,13 +222,13 @@ func (a *helpApp) drawCenteredText(buffer [][]texel.Cell, y int, text string, st
 }
 
 // drawText draws text at the given position.
-func (a *helpApp) drawText(buffer [][]texel.Cell, x, y int, text string, style tcell.Style) {
+func (a *helpApp) drawText(buffer [][]texelcore.Cell, x, y int, text string, style tcell.Style) {
 	if y < 0 || y >= a.height {
 		return
 	}
 	for i, ch := range text {
 		if x+i >= 0 && x+i < a.width {
-			buffer[y][x+i] = texel.Cell{Ch: ch, Style: style}
+			buffer[y][x+i] = texelcore.Cell{Ch: ch, Style: style}
 		}
 	}
 }

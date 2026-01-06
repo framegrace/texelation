@@ -9,7 +9,7 @@ package core
 
 import (
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelui/theme"
 )
 
 // WidgetColors contains all colors used by TexelUI widgets.

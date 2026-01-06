@@ -4,7 +4,7 @@ import (
 	"flag"
 	"log"
 
-	"texelation/internal/devshell"
+	"github.com/framegrace/texelation/internal/devshell"
 )
 
 func main() {

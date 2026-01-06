@@ -19,8 +19,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/client"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelui/theme"
 )
 
 const resizeDebounce = 10 * time.Millisecond

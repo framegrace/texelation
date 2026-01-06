@@ -1,14 +1,15 @@
 package cards
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/client"
-	"texelation/internal/effects"
-	"texelation/texel"
+	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/internal/effects"
+	"github.com/framegrace/texelation/texel"
 )
 
 const FlashTriggerID = "effects.flash"
@@ -156,7 +157,7 @@ func (c *EffectCard) SetRefreshNotifier(ch chan<- bool) {
 
 // Render applies the wrapped effect to the input buffer. Buffers are cloned
 // so the underlying app output remains untouched.
-func (c *EffectCard) Render(input [][]texel.Cell) [][]texel.Cell {
+func (c *EffectCard) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
 	if len(input) == 0 {
 		return input
 	}
@@ -233,7 +234,7 @@ func (c *EffectCard) requestRefresh() {
 }
 
 // convertToClientCells clones a texel buffer into the client.Cell equivalent.
-func convertToClientCells(buffer [][]texel.Cell) [][]client.Cell {
+func convertToClientCells(buffer [][]texelcore.Cell) [][]client.Cell {
 	if buffer == nil {
 		return nil
 	}
@@ -250,15 +251,15 @@ func convertToClientCells(buffer [][]texel.Cell) [][]client.Cell {
 	return result
 }
 
-func convertToTexelCells(buffer [][]client.Cell) [][]texel.Cell {
+func convertToTexelCells(buffer [][]client.Cell) [][]texelcore.Cell {
 	if buffer == nil {
 		return nil
 	}
-	result := make([][]texel.Cell, len(buffer))
+	result := make([][]texelcore.Cell, len(buffer))
 	for y, row := range buffer {
-		result[y] = make([]texel.Cell, len(row))
+		result[y] = make([]texelcore.Cell, len(row))
 		for x, cell := range row {
-			result[y][x] = texel.Cell{
+			result[y][x] = texelcore.Cell{
 				Ch:    cell.Ch,
 				Style: cell.Style,
 			}

@@ -13,7 +13,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func TestBufferCacheApplyDelta(t *testing.T) {

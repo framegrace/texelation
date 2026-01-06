@@ -9,12 +9,13 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"net"
 	"path/filepath"
 	"testing"
 
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 func TestServerSendsBootSnapshotFallback(t *testing.T) {
@@ -26,7 +27,7 @@ func TestServerSendsBootSnapshotFallback(t *testing.T) {
 	snapshot := []texel.PaneSnapshot{{
 		ID:    paneID,
 		Title: "pane",
-		Buffer: [][]texel.Cell{
+		Buffer: [][]texelcore.Cell{
 			{{Ch: 'h'}, {Ch: 'i'}},
 		},
 		Rect: texel.Rectangle{X: 2, Y: 3, Width: 10, Height: 4},

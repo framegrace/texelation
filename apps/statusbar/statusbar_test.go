@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
+	"github.com/framegrace/texelation/texel"
 )
 
 func TestStatusBarRender(t *testing.T) {

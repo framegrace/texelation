@@ -15,7 +15,7 @@ import (
 	"net"
 	"time"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 // SimpleClient handles connection to the simple texel server for tree persistence

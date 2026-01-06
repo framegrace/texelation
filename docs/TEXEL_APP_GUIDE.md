@@ -18,7 +18,7 @@ operates correctly even outside the desktop; compatibility
 with the card pipeline is treated as an additional perk rather than a hard
 requirement.
 
-Every app must implement `texel.App` (see `texel/app.go`):
+Every app must implement `texel.App` (defined in `github.com/framegrace/texelui/core/app.go` and re-exported by Texelation):
 
 ```go
 type App interface {
@@ -197,9 +197,9 @@ prototype Android-inspired layout features.
 
 | Task                              | Location                               |
 | --------------------------------- | -------------------------------------- |
-| App interface definition          | `texel/app.go`                         |
+| App interface definition          | `github.com/framegrace/texelui/core/app.go` |
 | Card pipeline implementation      | `texel/cards/pipeline.go`              |
-| Control bus helpers               | `texel/cards/control_bus.go`           |
+| Control bus helpers               | `github.com/framegrace/texelui/core/control_bus.go` |
 | Effect card adapter               | `texel/cards/effect_card.go`           |
 | TexelTerm example pipeline        | `apps/texelterm/term.go`               |
 | Standalone app entrypoints        | `cmd/<app>/main.go` (e.g. `cmd/texelterm`) |

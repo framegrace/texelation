@@ -9,6 +9,7 @@
 package texelterm
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"bufio"
 	"fmt"
 	"io"
@@ -22,10 +23,11 @@ import (
 	"syscall"
 	"time"
 
-	"texelation/apps/texelterm/parser"
-	"texelation/config"
-	"texelation/texel"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelation/texel"
+	"github.com/framegrace/texelui/theme"
+	"github.com/framegrace/texelation/internal/theming"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2"
@@ -51,9 +53,9 @@ type TexelTerm struct {
 	stopOnce           sync.Once
 	refreshChan        chan<- bool
 	wg                 sync.WaitGroup
-	buf                [][]texel.Cell
+	buf                [][]texelcore.Cell
 	colorPalette       [258]tcell.Color
-	controlBus         texel.ControlBus
+	controlBus         texelcore.ControlBus
 	selection          termSelection
 	bracketedPasteMode bool // Tracks if application has enabled bracketed paste
 
@@ -81,8 +83,8 @@ type TexelTerm struct {
 	renderDebugLog func(format string, args ...interface{})
 }
 
-var _ texel.CloseRequester = (*TexelTerm)(nil)
-var _ texel.CloseCallbackRequester = (*TexelTerm)(nil)
+var _ texelcore.CloseRequester = (*TexelTerm)(nil)
+var _ texelcore.CloseCallbackRequester = (*TexelTerm)(nil)
 
 // termSelection tracks the current text selection state and multi-click history.
 //
@@ -110,7 +112,7 @@ type termSelection struct {
 	clickCount    int
 }
 
-func New(title, command string) texel.App {
+func New(title, command string) texelcore.App {
 	term := &TexelTerm{
 		title:        title,
 		command:      command,
@@ -120,7 +122,7 @@ func New(title, command string) texel.App {
 		colorPalette: newDefaultPalette(),
 		closeCh:      make(chan struct{}),
 		restartCh:    make(chan struct{}, 1), // Buffered to avoid blocking
-		controlBus:   texel.NewControlBus(),  // Own control bus, no pipeline needed
+		controlBus:   texelcore.NewControlBus(),  // Own control bus, no pipeline needed
 	}
 
 	return term
@@ -142,7 +144,7 @@ func (a *TexelTerm) RequestCloseWithCallback(onConfirm func()) bool {
 	return false
 }
 
-func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
+func (a *TexelTerm) drawConfirmation(buf [][]texelcore.Cell) {
 	if len(buf) == 0 {
 		return
 	}
@@ -176,24 +178,24 @@ func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
 	for r := 0; r < boxH; r++ {
 		for c := 0; c < boxW; c++ {
 			if y+r < height && x+c < width {
-				buf[y+r][x+c] = texel.Cell{Ch: ' ', Style: style}
+				buf[y+r][x+c] = texelcore.Cell{Ch: ' ', Style: style}
 			}
 		}
 	}
 
 	// Borders
 	for c := 0; c < boxW; c++ {
-		buf[y][x+c] = texel.Cell{Ch: tcell.RuneHLine, Style: borderStyle}
-		buf[y+boxH-1][x+c] = texel.Cell{Ch: tcell.RuneHLine, Style: borderStyle}
+		buf[y][x+c] = texelcore.Cell{Ch: tcell.RuneHLine, Style: borderStyle}
+		buf[y+boxH-1][x+c] = texelcore.Cell{Ch: tcell.RuneHLine, Style: borderStyle}
 	}
 	for r := 0; r < boxH; r++ {
-		buf[y+r][x] = texel.Cell{Ch: tcell.RuneVLine, Style: borderStyle}
-		buf[y+r][x+boxW-1] = texel.Cell{Ch: tcell.RuneVLine, Style: borderStyle}
+		buf[y+r][x] = texelcore.Cell{Ch: tcell.RuneVLine, Style: borderStyle}
+		buf[y+r][x+boxW-1] = texelcore.Cell{Ch: tcell.RuneVLine, Style: borderStyle}
 	}
-	buf[y][x] = texel.Cell{Ch: tcell.RuneULCorner, Style: borderStyle}
-	buf[y][x+boxW-1] = texel.Cell{Ch: tcell.RuneURCorner, Style: borderStyle}
-	buf[y+boxH-1][x] = texel.Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
-	buf[y+boxH-1][x+boxW-1] = texel.Cell{Ch: tcell.RuneLRCorner, Style: borderStyle}
+	buf[y][x] = texelcore.Cell{Ch: tcell.RuneULCorner, Style: borderStyle}
+	buf[y][x+boxW-1] = texelcore.Cell{Ch: tcell.RuneURCorner, Style: borderStyle}
+	buf[y+boxH-1][x] = texelcore.Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
+	buf[y+boxH-1][x+boxW-1] = texelcore.Cell{Ch: tcell.RuneLRCorner, Style: borderStyle}
 
 	// Text
 	msg := "Close Terminal? (y/n)"
@@ -203,7 +205,7 @@ func (a *TexelTerm) drawConfirmation(buf [][]texel.Cell) {
 		for i, r := range msg {
 			col := textX + i
 			if col >= 0 && col < width {
-				buf[textY][col] = texel.Cell{Ch: r, Style: style.Bold(true)}
+				buf[textY][col] = texelcore.Cell{Ch: r, Style: style.Bold(true)}
 			}
 		}
 	}
@@ -226,7 +228,7 @@ func (a *TexelTerm) mapParserColorToTCell(c parser.Color) tcell.Color {
 	}
 }
 
-func (a *TexelTerm) applyParserStyle(pCell parser.Cell) texel.Cell {
+func (a *TexelTerm) applyParserStyle(pCell parser.Cell) texelcore.Cell {
 	fgColor := a.mapParserColorToTCell(pCell.FG)
 	var bgColor tcell.Color
 	if pCell.BG.Mode == parser.ColorModeDefault {
@@ -242,7 +244,7 @@ func (a *TexelTerm) applyParserStyle(pCell parser.Cell) texel.Cell {
 		Underline(pCell.Attr&parser.AttrUnderline != 0).
 		Reverse(pCell.Attr&parser.AttrReverse != 0)
 
-	return texel.Cell{
+	return texelcore.Cell{
 		Ch:    pCell.Rune,
 		Style: style,
 	}
@@ -253,11 +255,11 @@ func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 }
 
 // ControlBus returns the terminal's control bus for external registration.
-func (a *TexelTerm) ControlBus() texel.ControlBus {
+func (a *TexelTerm) ControlBus() texelcore.ControlBus {
 	return a.controlBus
 }
 
-// RegisterControl implements texel.ControlBusProvider.
+// RegisterControl implements texelcore.ControlBusProvider.
 func (a *TexelTerm) RegisterControl(id, description string, handler func(payload interface{}) error) error {
 	return a.controlBus.Register(id, description, texel.ControlHandler(handler))
 }
@@ -288,7 +290,7 @@ func colorToHex(c tcell.Color) string {
 	return fmt.Sprintf("#%02X%02X%02X", r&0xFF, g&0xFF, b&0xFF)
 }
 
-func (a *TexelTerm) Render() [][]texel.Cell {
+func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -304,9 +306,9 @@ func (a *TexelTerm) Render() [][]texel.Cell {
 	cols := len(vtermGrid[0])
 
 	if len(a.buf) != rows || (rows > 0 && len(a.buf[0]) != cols) {
-		a.buf = make([][]texel.Cell, rows)
+		a.buf = make([][]texelcore.Cell, rows)
 		for y := range a.buf {
-			a.buf[y] = make([]texel.Cell, cols)
+			a.buf[y] = make([]texelcore.Cell, cols)
 		}
 		a.vterm.MarkAllDirty()
 	}
@@ -683,7 +685,7 @@ func (a *TexelTerm) selectLineAtPositionLocked(line int) {
 	a.selection.currentCol = endCol
 }
 
-// SelectionStart implements texel.SelectionHandler.
+// SelectionStart implements texelcore.SelectionHandler.
 func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -732,7 +734,7 @@ func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers
 	return true
 }
 
-// SelectionUpdate implements texel.SelectionHandler.
+// SelectionUpdate implements texelcore.SelectionHandler.
 func (a *TexelTerm) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -762,7 +764,7 @@ func (a *TexelTerm) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifier
 	a.updateAutoScrollLocked(y)
 }
 
-// SelectionFinish implements texel.SelectionHandler.
+// SelectionFinish implements texelcore.SelectionHandler.
 func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -813,7 +815,7 @@ func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifier
 	return "text/plain", []byte(text), true
 }
 
-// SelectionCancel implements texel.SelectionHandler.
+// SelectionCancel implements texelcore.SelectionHandler.
 func (a *TexelTerm) SelectionCancel() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1577,7 +1579,7 @@ func (a *TexelTerm) buildSelectionTextLocked() string {
 	return strings.Join(lines, "\n")
 }
 
-func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texel.Cell) {
+func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texelcore.Cell) {
 	if a.vterm == nil || !a.selection.rendered || len(buf) == 0 {
 		return
 	}
@@ -1586,7 +1588,7 @@ func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texel.Cell) {
 		return
 	}
 	top := a.vterm.VisibleTop()
-	cfg := theme.ForApp("texelterm")
+	cfg := theming.ForApp("texelterm")
 	defaultBg := tcell.NewRGBColor(232, 217, 255)
 	highlight := cfg.GetColor("selection", "highlight_bg", defaultBg)
 	if !highlight.Valid() {
@@ -1763,7 +1765,7 @@ func If[T any](condition bool, trueVal, falseVal T) T {
 
 func newDefaultPalette() [258]tcell.Color {
 	var p [258]tcell.Color
-	tm := theme.ForApp("texelterm")
+	tm := theming.ForApp("texelterm")
 
 	// Standard ANSI colors 0-15 (Mapped to Catppuccin Palette)
 	p[0] = theme.ResolveColorName("surface1")

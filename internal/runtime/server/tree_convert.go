@@ -9,10 +9,11 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"encoding/json"
 
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 func treeCaptureToProtocol(capture texel.TreeCapture) protocol.TreeSnapshot {
@@ -50,12 +51,12 @@ func treeCaptureToProtocol(capture texel.TreeCapture) protocol.TreeSnapshot {
 func protocolToTreeCapture(snapshot protocol.TreeSnapshot) texel.TreeCapture {
 	capture := texel.TreeCapture{Panes: make([]texel.PaneSnapshot, len(snapshot.Panes))}
 	for i, pane := range snapshot.Panes {
-		buffer := make([][]texel.Cell, len(pane.Rows))
+		buffer := make([][]texelcore.Cell, len(pane.Rows))
 		for y, row := range pane.Rows {
 			runes := []rune(row)
-			buffer[y] = make([]texel.Cell, len(runes))
+			buffer[y] = make([]texelcore.Cell, len(runes))
 			for x, r := range runes {
-				buffer[y][x] = texel.Cell{Ch: r}
+				buffer[y][x] = texelcore.Cell{Ch: r}
 			}
 		}
 		capture.Panes[i] = texel.PaneSnapshot{

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func TestSessionEnqueueAckPending(t *testing.T) {

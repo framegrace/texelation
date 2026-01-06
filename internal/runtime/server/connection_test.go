@@ -9,6 +9,7 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"errors"
 	"io"
 	"net"
@@ -18,8 +19,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 func TestConnectionFlushesPendingDiffsOnNudge(t *testing.T) {
@@ -101,23 +102,23 @@ type staticApp struct {
 func (s *staticApp) Run() error                     { return nil }
 func (s *staticApp) Stop()                          {}
 func (s *staticApp) Resize(cols, rows int)          { s.cols, s.rows = cols, rows }
-func (s *staticApp) Render() [][]texel.Cell         { return makeBuffer(s.cols, s.rows) }
+func (s *staticApp) Render() [][]texelcore.Cell         { return makeBuffer(s.cols, s.rows) }
 func (s *staticApp) GetTitle() string               { return s.title }
 func (s *staticApp) HandleKey(*tcell.EventKey)      {}
 func (s *staticApp) SetRefreshNotifier(chan<- bool) {}
 
-func makeBuffer(cols, rows int) [][]texel.Cell {
+func makeBuffer(cols, rows int) [][]texelcore.Cell {
 	if cols <= 0 {
 		cols = 1
 	}
 	if rows <= 0 {
 		rows = 1
 	}
-	buf := make([][]texel.Cell, rows)
+	buf := make([][]texelcore.Cell, rows)
 	for y := 0; y < rows; y++ {
-		line := make([]texel.Cell, cols)
+		line := make([]texelcore.Cell, cols)
 		for x := 0; x < cols; x++ {
-			line[x] = texel.Cell{Ch: ' '}
+			line[x] = texelcore.Cell{Ch: ' '}
 		}
 		buf[y] = line
 	}
@@ -145,7 +146,7 @@ func newDesktopSink(t *testing.T) (*DesktopSink, *texel.DesktopEngine, func()) {
 	t.Helper()
 	driver := connectionTestDriver{width: 80, height: 24}
 	lifecycle := texel.NoopAppLifecycle{}
-	shellFactory := func() texel.App { return &staticApp{title: "shell"} }
+	shellFactory := func() texelcore.App { return &staticApp{title: "shell"} }
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {

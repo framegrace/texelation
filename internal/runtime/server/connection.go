@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 type connection struct {

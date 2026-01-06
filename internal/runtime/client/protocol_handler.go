@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"texelation/internal/effects"
-	"texelation/protocol"
+	"github.com/framegrace/texelation/internal/effects"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequence *uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) {

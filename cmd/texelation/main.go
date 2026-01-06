@@ -20,8 +20,8 @@ import (
 	"syscall"
 	"time"
 
-	"texelation/cmd/texelation/lifecycle"
-	clientrt "texelation/internal/runtime/client"
+	"github.com/framegrace/texelation/cmd/texelation/lifecycle"
+	clientrt "github.com/framegrace/texelation/internal/runtime/client"
 )
 
 func main() {

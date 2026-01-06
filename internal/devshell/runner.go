@@ -2,37 +2,33 @@ package devshell
 
 import (
 	"fmt"
+	texelcore "github.com/framegrace/texelui/core"
 	"log"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/apps/configeditor"
-	"texelation/apps/help"
-	"texelation/apps/texelterm"
-	texeluidemo "texelation/apps/texelui-demo"
-	"texelation/texel"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelation/apps/configeditor"
+	"github.com/framegrace/texelation/apps/help"
+	"github.com/framegrace/texelation/apps/texelterm"
+	"github.com/framegrace/texelui/theme"
 )
 
-// Builder constructs a texel.App, optionally using CLI args.
-type Builder func(args []string) (texel.App, error)
+// Builder constructs a texelcore.App, optionally using CLI args.
+type Builder func(args []string) (texelcore.App, error)
 
 var registry = map[string]Builder{
-	"texelterm": func(args []string) (texel.App, error) {
+	"texelterm": func(args []string) (texelcore.App, error) {
 		shell := "/bin/bash"
 		if len(args) > 0 {
 			shell = strings.Join(args, " ")
 		}
 		return texelterm.New("texelterm", shell), nil
 	},
-	"help": func(args []string) (texel.App, error) {
+	"help": func(args []string) (texelcore.App, error) {
 		return help.NewHelpApp(), nil
 	},
-	"texelui-demo": func(args []string) (texel.App, error) {
-		return texeluidemo.New(), nil
-	},
-	"config-editor": func(args []string) (texel.App, error) {
+	"config-editor": func(args []string) (texelcore.App, error) {
 		return configeditor.New(nil), nil
 	},
 }
@@ -188,13 +184,13 @@ func RunApp(name string, args []string) error {
 
 type toggleApp struct {
 	name    string
-	main    texel.App
-	editor  texel.App
-	active  texel.App
+	main    texelcore.App
+	editor  texelcore.App
+	active  texelcore.App
 	refresh chan<- bool
 }
 
-func newToggleApp(name string, main texel.App) texel.App {
+func newToggleApp(name string, main texelcore.App) texelcore.App {
 	editor := configeditor.NewWithTarget(nil, name)
 	return &toggleApp{
 		name:   name,
@@ -221,7 +217,7 @@ func (t *toggleApp) Resize(cols, rows int) {
 	t.editor.Resize(cols, rows)
 }
 
-func (t *toggleApp) Render() [][]texel.Cell {
+func (t *toggleApp) Render() [][]texelcore.Cell {
 	if t.active == nil {
 		return nil
 	}

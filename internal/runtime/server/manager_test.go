@@ -11,7 +11,7 @@ package server
 import (
 	"testing"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func TestManagerLifecycle(t *testing.T) {

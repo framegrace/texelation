@@ -11,15 +11,16 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/internal/runtime/server/testutil"
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/internal/runtime/server/testutil"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 // fakeApp is a minimal app implementation for testing.
@@ -30,7 +31,7 @@ type fakeApp struct {
 func (a *fakeApp) Run() error                        { return nil }
 func (a *fakeApp) Stop()                             {}
 func (a *fakeApp) Resize(cols, rows int)             {}
-func (a *fakeApp) Render() [][]texel.Cell            { return [][]texel.Cell{{{Ch: 'x'}}} }
+func (a *fakeApp) Render() [][]texelcore.Cell            { return [][]texelcore.Cell{{{Ch: 'x'}}} }
 func (a *fakeApp) GetTitle() string                  { return a.title }
 func (a *fakeApp) HandleKey(ev *tcell.EventKey)      {}
 func (a *fakeApp) SetRefreshNotifier(ch chan<- bool) {}
@@ -61,7 +62,7 @@ func setupTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, func
 	driver := stubDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
 	app := &fakeApp{title: "test"}
-	shellFactory := func() texel.App { return app }
+	shellFactory := func() texelcore.App { return app }
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", &lifecycle)
 	if err != nil {
 		t.Fatalf("failed to create desktop: %v", err)

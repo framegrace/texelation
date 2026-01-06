@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	clientrt "texelation/internal/runtime/client"
+	clientrt "github.com/framegrace/texelation/internal/runtime/client"
 )
 
 func TestRunParsesFlagsAndInvokesClient(t *testing.T) {

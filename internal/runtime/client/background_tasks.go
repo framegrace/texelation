@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func pingLoop(conn net.Conn, sessionID [16]byte, done <-chan struct{}, stop <-chan struct{}, writeMu *sync.Mutex) {

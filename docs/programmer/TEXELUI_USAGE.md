@@ -5,14 +5,9 @@ TexelUI is a small widget toolkit (Label, Button, Input, Checkbox, TextArea, VBo
 ## Standalone (no desktop)
 
 ```bash
-# Single TextArea with border
+# From the TexelUI repo:
+# Widget showcase (Label/Input/Checkbox/Button + layouts)
 go run ./cmd/texelui-demo
-
-# Dual TextAreas for focus/resize testing
-go run ./cmd/texelui-demo2
-
-# Widget showcase (Label/Input/Checkbox/Button + VBox/HBox)
-go run ./texelui/examples/widget_demo.go
 ```
 
 These open directly in your terminal; no server/client needed.
@@ -22,12 +17,12 @@ These open directly in your terminal; no server/client needed.
 ```go
 import (
     "github.com/gdamore/tcell/v2"
-    "texelation/texelui/adapter"
-    "texelation/texelui/core"
-    "texelation/texelui/widgets"
+    "github.com/framegrace/texelui/adapter"
+    "github.com/framegrace/texelui/core"
+    "github.com/framegrace/texelui/widgets"
 )
 
-func NewNoteApp() texel.App {
+func NewNoteApp() core.App {
     ui := core.NewUIManager()
 
     // Background pane
@@ -54,7 +49,7 @@ func NewNoteApp() texel.App {
 Hooking into the desktop/pipeline:
 ```go
 pipe := cards.NewPipeline(nil, cards.WrapApp(NewNoteApp()))
-return pipe // satisfies texel.App
+return pipe // satisfies core.App
 ```
 
 ## Using VBox/HBox layouts
@@ -62,7 +57,7 @@ return pipe // satisfies texel.App
 UIManager defaults to absolute positioning. You can set a layout to place children automatically:
 
 ```go
-import "texelation/texelui/layout"
+import "github.com/framegrace/texelui/layout"
 
 ui := core.NewUIManager()
 ui.SetLayout(&layout.VBox{Spacing: 1})
@@ -89,7 +84,7 @@ When you `Resize(w,h)`, UIManager will stack the children top-to-bottom with spa
 
 ## Theming
 
-TexelUI uses semantic colours (`bg.surface`, `text.primary`, `action.primary`, etc.). See `docs/TEXELUI_THEME.md` for the keys. No extra config is required; defaults are populated automatically by `texel/theme`.
+TexelUI uses semantic colours (`bg.surface`, `text.primary`, `action.primary`, etc.). See the TexelUI theming docs in `github.com/framegrace/texelui` for the keys. Defaults are populated automatically by `github.com/framegrace/texelui/theme`.
 
 ## Tips
 

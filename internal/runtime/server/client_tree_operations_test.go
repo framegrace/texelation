@@ -12,6 +12,7 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"net"
 	"os"
 	"testing"
@@ -19,10 +20,10 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/internal/runtime/server/testutil"
-	"texelation/protocol"
-	"texelation/registry"
-	"texelation/texel"
+	"github.com/framegrace/texelation/internal/runtime/server/testutil"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelation/texel"
 )
 
 // setupTreeTestServer creates a test server with desktop and shell factory.
@@ -33,7 +34,7 @@ func setupTreeTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, 
 
 	// Create a simple app that returns content
 	appCount := 0
-	shellFactory := func() texel.App {
+	shellFactory := func() texelcore.App {
 		appCount++
 		return &treeTestApp{id: appCount}
 	}
@@ -139,9 +140,9 @@ type treeTestApp struct {
 func (a *treeTestApp) Run() error            { return nil }
 func (a *treeTestApp) Stop()                 {}
 func (a *treeTestApp) Resize(cols, rows int) {}
-func (a *treeTestApp) Render() [][]texel.Cell {
+func (a *treeTestApp) Render() [][]texelcore.Cell {
 	// Return a simple buffer with the app ID
-	return [][]texel.Cell{{{Ch: rune('0' + a.id), Style: tcell.StyleDefault}}}
+	return [][]texelcore.Cell{{{Ch: rune('0' + a.id), Style: tcell.StyleDefault}}}
 }
 func (a *treeTestApp) GetTitle() string {
 	if a.id == 0 {

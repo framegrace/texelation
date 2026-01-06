@@ -8,8 +8,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/client"
-	"texelation/protocol"
+	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func TestClientStateSetRenderChannel(t *testing.T) {

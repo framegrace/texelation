@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"texelation/internal/effects"
+	"github.com/framegrace/texelation/internal/effects"
 )
 
 // LayoutTransitionConfig holds configuration for layout transitions from theme.json.

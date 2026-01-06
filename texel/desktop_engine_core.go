@@ -22,9 +22,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"texelation/config"
-	"texelation/registry"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelui/theme"
 	"time"
 )
 

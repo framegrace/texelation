@@ -12,7 +12,7 @@ import (
 	"net"
 	"testing"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func TestHandleHandshakeCreatesSession(t *testing.T) {

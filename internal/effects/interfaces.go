@@ -11,7 +11,7 @@ package effects
 import (
 	"time"
 
-	"texelation/client"
+	"github.com/framegrace/texelation/client"
 )
 
 // Target identifies where an effect applies its visual changes.

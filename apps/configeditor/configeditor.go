@@ -7,6 +7,7 @@
 package configeditor
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -14,20 +15,20 @@ import (
 	"strconv"
 	"strings"
 
-	"texelation/config"
-	"texelation/internal/effects"
-	"texelation/registry"
-	"texelation/texel"
-	"texelation/texel/theme"
-	"texelation/texelui/adapter"
-	"texelation/texelui/core"
-	"texelation/texelui/scroll"
-	"texelation/texelui/widgets"
+	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelation/internal/effects"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelation/texel"
+	"github.com/framegrace/texelui/theme"
+	"github.com/framegrace/texelui/adapter"
+	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/scroll"
+	"github.com/framegrace/texelui/widgets"
 )
 
 // Compile-time interface checks.
-var _ texel.App = (*ConfigEditor)(nil)
-var _ texel.ControlBusProvider = (*ConfigEditor)(nil)
+var _ texelcore.App = (*ConfigEditor)(nil)
+var _ texelcore.ControlBusProvider = (*ConfigEditor)(nil)
 
 type targetKind int
 
@@ -119,26 +120,26 @@ type ConfigEditor struct {
 	rootTabs      *widgets.TabPanel
 	activeWidget  core.Widget        // Currently displayed widget (rootTabs or single target.sections)
 	defaultTarget string
-	controlBus    texel.ControlBus
+	controlBus    texelcore.ControlBus
 	autoApply     bool
 	singleTarget  bool
 	statusBar     *widgets.StatusBar // Cached to avoid lock during callbacks
 }
 
 // New creates a config editor app.
-func New(reg *registry.Registry) texel.App {
+func New(reg *registry.Registry) texelcore.App {
 	return NewWithTarget(reg, "")
 }
 
 // NewWithTarget creates a config editor app with an optional default target.
-func NewWithTarget(reg *registry.Registry, target string) texel.App {
+func NewWithTarget(reg *registry.Registry, target string) texelcore.App {
 	ui := core.NewUIManager()
 	uiApp := adapter.NewUIApp("Config Editor", ui)
 	editor := &ConfigEditor{
 		UIApp:         uiApp,
 		registry:      reg,
 		defaultTarget: target,
-		controlBus:    texel.NewControlBus(),
+		controlBus:    texelcore.NewControlBus(),
 		autoApply:     true,
 		singleTarget:  target != "" && target != "system",
 		statusBar:     uiApp.StatusBar(), // Cache before any locks are held
@@ -155,10 +156,10 @@ func (e *ConfigEditor) SetDefaultTarget(name string) {
 	e.applyRootMode()
 }
 
-// RegisterControl implements texel.ControlBusProvider.
+// RegisterControl implements texelcore.ControlBusProvider.
 func (e *ConfigEditor) RegisterControl(id, description string, handler func(payload interface{}) error) error {
 	if e.controlBus == nil {
-		e.controlBus = texel.NewControlBus()
+		e.controlBus = texelcore.NewControlBus()
 	}
 	return e.controlBus.Register(id, description, texel.ControlHandler(handler))
 }

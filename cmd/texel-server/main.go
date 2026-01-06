@@ -9,6 +9,7 @@
 package main
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"context"
 	"flag"
 	"fmt"
@@ -24,16 +25,16 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/apps/configeditor"
-	"texelation/apps/help"
-	"texelation/apps/launcher"
-	"texelation/apps/statusbar"
-	"texelation/apps/texelterm"
-	"texelation/config"
-	"texelation/internal/runtime/server"
-	"texelation/registry"
-	"texelation/texel"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelation/apps/configeditor"
+	"github.com/framegrace/texelation/apps/help"
+	"github.com/framegrace/texelation/apps/launcher"
+	"github.com/framegrace/texelation/apps/statusbar"
+	"github.com/framegrace/texelation/apps/texelterm"
+	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelation/internal/runtime/server"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelation/texel"
+	"github.com/framegrace/texelui/theme"
 )
 
 func main() {
@@ -89,7 +90,7 @@ func main() {
 	}
 
 	var shellSeq atomic.Int64
-	shellFactory := func() texel.App {
+	shellFactory := func() texelcore.App {
 		id := shellSeq.Add(1)
 		title := fmt.Sprintf("%s-%d", *title, id)
 		return texelterm.New(title, defaultShell)
@@ -137,7 +138,7 @@ func main() {
 	})
 
 	// Register snapshot factory for launcher
-	desktop.RegisterSnapshotFactory("launcher", func(title string, config map[string]interface{}) texel.App {
+	desktop.RegisterSnapshotFactory("launcher", func(title string, config map[string]interface{}) texelcore.App {
 		return launcher.New(desktop.Registry())
 	})
 
@@ -157,7 +158,7 @@ func main() {
 	})
 
 	// Register snapshot factory for texelterm
-	desktop.RegisterSnapshotFactory("texelterm", func(title string, config map[string]interface{}) texel.App {
+	desktop.RegisterSnapshotFactory("texelterm", func(title string, config map[string]interface{}) texelcore.App {
 		command, _ := config["command"].(string)
 		if command == "" {
 			command = defaultShell

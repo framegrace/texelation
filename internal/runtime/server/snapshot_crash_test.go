@@ -1,6 +1,7 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"context"
 	"errors"
 	"path/filepath"
@@ -8,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/registry"
-	"texelation/texel"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelation/texel"
 )
 
 // crashingApp simulates an app that fails on startup (e.g. invalid command)
@@ -20,7 +21,7 @@ type crashingApp struct {
 func (c *crashingApp) Run() error                        { return errors.New("simulated crash") }
 func (c *crashingApp) Stop()                             {}
 func (c *crashingApp) Resize(cols, rows int)             {}
-func (c *crashingApp) Render() [][]texel.Cell            { return [][]texel.Cell{{}} }
+func (c *crashingApp) Render() [][]texelcore.Cell            { return [][]texelcore.Cell{{}} }
 func (c *crashingApp) GetTitle() string                  { return c.title }
 func (c *crashingApp) HandleKey(ev *tcell.EventKey)      {}
 func (c *crashingApp) SetRefreshNotifier(ch chan<- bool) {}
@@ -54,7 +55,7 @@ func TestSnapshotRemovesCrashedApp(t *testing.T) {
 	driver := sinkScreenDriver{}
 	// Use LocalAppLifecycle so StartApp actually runs the crashing app
 	lifecycle := &texel.LocalAppLifecycle{}
-	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+	shellFactory := func() texelcore.App { return &recordingApp{title: "shell"} }
 	
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {

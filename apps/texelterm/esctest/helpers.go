@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
 // ESC is the escape character.

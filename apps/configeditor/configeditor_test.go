@@ -6,9 +6,9 @@ package configeditor
 import (
 	"testing"
 
-	"texelation/config"
-	"texelation/texel/theme"
-	"texelation/texelui/widgets"
+	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelui/theme"
+	"github.com/framegrace/texelui/widgets"
 )
 
 func TestBuildFieldKinds(t *testing.T) {

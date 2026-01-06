@@ -15,7 +15,7 @@ package esctest
 import (
 	"testing"
 
-	"texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
 // Test_DECSTR_DECSC tests that DECSTR resets saved cursor position to origin.

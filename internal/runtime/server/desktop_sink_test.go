@@ -9,13 +9,14 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/protocol"
-	"texelation/texel"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
+	"github.com/framegrace/texelui/theme"
 )
 
 type sinkScreenDriver struct{}
@@ -41,7 +42,7 @@ type recordingApp struct {
 func (r *recordingApp) Run() error                        { return nil }
 func (r *recordingApp) Stop()                             {}
 func (r *recordingApp) Resize(cols, rows int)             {}
-func (r *recordingApp) Render() [][]texel.Cell            { return [][]texel.Cell{{}} }
+func (r *recordingApp) Render() [][]texelcore.Cell            { return [][]texelcore.Cell{{}} }
 func (r *recordingApp) GetTitle() string                  { return r.title }
 func (r *recordingApp) HandleKey(ev *tcell.EventKey)      { r.keys = append(r.keys, ev) }
 func (r *recordingApp) SetRefreshNotifier(ch chan<- bool) {}
@@ -51,7 +52,7 @@ func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 	recorder := &recordingApp{title: "welcome"}
 
 	lifecycle := texel.NoopAppLifecycle{}
-	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+	shellFactory := func() texelcore.App { return &recordingApp{title: "shell"} }
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
@@ -74,7 +75,7 @@ func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 	driver := sinkScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
-	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+	shellFactory := func() texelcore.App { return &recordingApp{title: "shell"} }
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {
@@ -99,7 +100,7 @@ func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 func TestDesktopSinkHandlesAdditionalEvents(t *testing.T) {
 	driver := sinkScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
-	shellFactory := func() texel.App { return &recordingApp{title: "shell"} }
+	shellFactory := func() texelcore.App { return &recordingApp{title: "shell"} }
 
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
 	if err != nil {

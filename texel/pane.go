@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"log"
-	"texelation/texel/theme"
+	"github.com/framegrace/texelui/theme"
 	"unicode/utf8"
 )
 

@@ -18,10 +18,10 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/client"
-	"texelation/config"
-	"texelation/internal/effects"
-	"texelation/protocol"
+	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelation/internal/effects"
+	"github.com/framegrace/texelation/protocol"
 )
 
 type clientState struct {

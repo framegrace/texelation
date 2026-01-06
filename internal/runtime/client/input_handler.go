@@ -17,8 +17,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/internal/effects"
-	"texelation/protocol"
+	"github.com/framegrace/texelation/internal/effects"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex) bool {

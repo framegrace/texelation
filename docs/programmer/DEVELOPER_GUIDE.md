@@ -5,7 +5,7 @@ A quick starting point for building on Texelation. It links to detailed docs and
 ## Quick Links
 
 - Architecture: `docs/CLIENT_SERVER_ARCHITECTURE.md`
-- TexelUI: `docs/TEXELUI_QUICKSTART.md`, `docs/TEXELUI_THEME.md`, `docs/programmer/TEXELUI_USAGE.md`
+- TexelUI: see `github.com/framegrace/texelui` docs and `docs/programmer/TEXELUI_USAGE.md`
 - Card pipeline: `docs/TEXEL_APP_GUIDE.md`, `docs/cards_control.md`
 - Effects: `docs/EFFECTS_GUIDE.md`
 - Plans: `docs/plans/TEXELUI_PLAN.md`, `docs/plans/LONG_LINE_EDITOR_PLAN.md`
@@ -17,9 +17,9 @@ TexelUI and TexelApps can run **standalone** (`go run ./cmd/<app>`) without the 
 ```go
 import (
     "github.com/gdamore/tcell/v2"
-    "texelation/texelui/adapter"
-    "texelation/texelui/core"
-    "texelation/texelui/widgets"
+    "github.com/framegrace/texelui/adapter"
+    "github.com/framegrace/texelui/core"
+    "github.com/framegrace/texelui/widgets"
 )
 
 ui := core.NewUIManager()
@@ -36,7 +36,7 @@ app := adapter.NewUIApp("My TexelUI App", ui)
 app.Resize(cols, rows) // call from pane resize
 ```
 
-- Widgets are positioned absolutely today; VBox/HBox helpers exist (`texelui/layout/*`) but UIManager still defaults to manual coordinates.
+- Widgets are positioned absolutely today; VBox/HBox helpers exist (`github.com/framegrace/texelui/layout`) but UIManager still defaults to manual coordinates.
 - Theme keys rely on semantic colours such as `bg.surface`, `text.primary`, `action.primary`.
 
 ## Card Pipeline Primer (App-side)
@@ -83,7 +83,7 @@ Follow `docs/EFFECTS_GUIDE.md` for full details. In short:
 
 ## Where to Explore Next
 
-- `texelui/examples/widget_demo.go` – widget usage in a small form.
-- `texelui/adapter` – bridging TexelUI into `texel.App`.
+- `github.com/framegrace/texelui/apps/texelui-demo` – widget usage in a small form.
+- `github.com/framegrace/texelui/adapter` – bridging TexelUI into `texel.App`.
 - `apps/texelterm/term.go` – pipeline composition and BEL-triggered effects.
 - `registry/` – manifest parsing and wrapper factories.

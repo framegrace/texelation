@@ -6,7 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/client"
+	"github.com/framegrace/texelation/client"
 )
 
 func TestIsFakeBackgroundCellMatchesNeighborBackground(t *testing.T) {

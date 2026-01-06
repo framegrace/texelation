@@ -1,10 +1,10 @@
 package cards
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel"
 )
 
 // AlternatingCard wraps another card and renders it only on specific frames
@@ -34,9 +34,9 @@ func (c *AlternatingCard) Run() error {
 	// We should start a ticker in a goroutine if this card is running.
 	// But Card.Run is usually blocking.
 	// Let's defer to wrapped.Run() but add a sidecar ticker.
-	
+
 	// Note: accessing 'c' inside goroutine is safe if config is static.
-	
+
 	// We don't have access to the refresh channel easily here unless we capture it in SetRefreshNotifier.
 	return c.wrapped.Run()
 }
@@ -50,10 +50,10 @@ func (c *AlternatingCard) Resize(cols, rows int) {
 	c.wrapped.Resize(cols, rows)
 }
 
-func (c *AlternatingCard) Render(input [][]texel.Cell) [][]texel.Cell {
+func (c *AlternatingCard) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
 	c.counter++
 	shouldRender := (c.counter % uint64(c.period)) == uint64(c.phase)
-	
+
 	if shouldRender {
 		return c.wrapped.Render(input)
 	}
@@ -77,7 +77,7 @@ type refreshCapturer struct {
 
 func (c *AlternatingCard) SetRefreshNotifier(refreshChan chan<- bool) {
 	c.wrapped.SetRefreshNotifier(refreshChan)
-	
+
 	// Start a ticker to force refresh at ~120fps
 	go func() {
 		ticker := time.NewTicker(8 * time.Millisecond)

@@ -11,8 +11,8 @@
 package configeditor
 
 import (
-	"texelation/internal/effects"
-	"texelation/texel"
+	"github.com/framegrace/texelation/internal/effects"
+	"github.com/framegrace/texelation/texel"
 )
 
 // EasingFunctions returns available easing function names.

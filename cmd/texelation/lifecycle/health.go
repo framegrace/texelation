@@ -12,7 +12,7 @@ import (
 	"net"
 	"time"
 
-	"texelation/protocol"
+	"github.com/framegrace/texelation/protocol"
 )
 
 // HealthChecker verifies the server is responsive

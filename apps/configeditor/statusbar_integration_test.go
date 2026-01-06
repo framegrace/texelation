@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"texelation/texel/theme"
-	"texelation/texelui/core"
-	"texelation/texelui/widgets"
+	"github.com/framegrace/texelui/theme"
+	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/widgets"
 )
 
 // TestConfigEditorStatusBarFreeze reproduces the freeze that occurs when

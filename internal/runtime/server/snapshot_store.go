@@ -9,6 +9,7 @@
 package server
 
 import (
+	texelcore "github.com/framegrace/texelui/core"
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
@@ -19,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"texelation/protocol"
-	"texelation/texel"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 // SnapshotStore persists pane snapshots to disk with a content hash for integrity checks.
@@ -246,12 +247,12 @@ func (sp StoredPane) ToPaneSnapshot() texel.PaneSnapshot {
 		copy(id[:], decoded[:16])
 	}
 
-	buffer := make([][]texel.Cell, len(sp.Rows))
+	buffer := make([][]texelcore.Cell, len(sp.Rows))
 	for i, row := range sp.Rows {
 		runes := []rune(row)
-		buffer[i] = make([]texel.Cell, len(runes))
+		buffer[i] = make([]texelcore.Cell, len(runes))
 		for j, ch := range runes {
-			buffer[i][j] = texel.Cell{Ch: ch}
+			buffer[i][j] = texelcore.Cell{Ch: ch}
 		}
 	}
 

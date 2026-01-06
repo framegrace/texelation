@@ -9,14 +9,14 @@ package devshell_test
 
 import (
 	"errors"
+	texelcore "github.com/framegrace/texelui/core"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
-	"texelation/internal/devshell"
-	"texelation/texel"
+	"github.com/framegrace/texelation/internal/devshell"
 )
 
 type stubApp struct {
@@ -63,11 +63,11 @@ func (a *stubApp) Resize(cols, rows int) {
 	a.mu.Unlock()
 }
 
-func (a *stubApp) Render() [][]texel.Cell {
+func (a *stubApp) Render() [][]texelcore.Cell {
 	a.mu.Lock()
 	a.renderCount++
 	a.mu.Unlock()
-	return [][]texel.Cell{{{Ch: 'X'}}}
+	return [][]texelcore.Cell{{{Ch: 'X'}}}
 }
 
 func (a *stubApp) HandleKey(ev *tcell.EventKey) {
@@ -140,7 +140,7 @@ func TestRunHandlesInputRefreshAndShutdown(t *testing.T) {
 	})
 
 	app := newStubApp()
-	builder := func(args []string) (texel.App, error) {
+	builder := func(args []string) (texelcore.App, error) {
 		if len(args) != 1 || args[0] != "demo" {
 			return nil, errors.New("unexpected args")
 		}

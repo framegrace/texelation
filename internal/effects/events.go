@@ -11,7 +11,7 @@ package effects
 import (
 	"time"
 
-	"texelation/client"
+	"github.com/framegrace/texelation/client"
 )
 
 type EffectTriggerType int
