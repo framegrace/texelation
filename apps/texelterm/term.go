@@ -33,6 +33,22 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+func init() {
+	// Redirect log output away from stderr to avoid mangling terminal display.
+	// If TEXELTERM_DEBUG is set, log to file; otherwise discard.
+	if os.Getenv("TEXELTERM_DEBUG") != "" {
+		logFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err == nil {
+			log.SetOutput(logFile)
+			log.SetFlags(log.Ltime | log.Lmicroseconds)
+		} else {
+			log.SetOutput(io.Discard)
+		}
+	} else {
+		log.SetOutput(io.Discard)
+	}
+}
+
 const (
 	// multiClickTimeout is the maximum time between clicks to be considered a multi-click
 	multiClickTimeout = 500 * time.Millisecond
@@ -322,17 +338,35 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	if a.renderDebugLog != nil {
 		a.renderDebugLog("Render: cursorX=%d, cursorY=%d, allDirty=%v, dirtyLines=%v",
 			cursorX, cursorY, allDirty, dirtyLines)
-		// Log content of first 3 rows from vtermGrid
-		for y := 0; y < 3 && y < rows; y++ {
-			var content string
-			for x := 0; x < cols && x < 40; x++ {
-				r := vtermGrid[y][x].Rune
-				if r == 0 {
-					r = ' '
-				}
-				content += string(r)
+		// Log content of dirty rows (or first 5 if allDirty)
+		rowsToLog := make(map[int]bool)
+		if allDirty {
+			for y := 0; y < 5 && y < rows; y++ {
+				rowsToLog[y] = true
 			}
-			a.renderDebugLog("  vtermGrid[%d]: %q", y, content)
+			// Also log around cursor
+			for y := cursorY - 2; y <= cursorY + 2; y++ {
+				if y >= 0 && y < rows {
+					rowsToLog[y] = true
+				}
+			}
+		} else {
+			for y := range dirtyLines {
+				rowsToLog[y] = true
+			}
+		}
+		for y := 0; y < rows; y++ {
+			if rowsToLog[y] {
+				var content string
+				for x := 0; x < cols && x < 50; x++ {
+					r := vtermGrid[y][x].Rune
+					if r == 0 {
+						r = ' '
+					}
+					content += string(r)
+				}
+				a.renderDebugLog("  vtermGrid[%d]: %q", y, content)
+			}
 		}
 	}
 
@@ -1461,7 +1495,12 @@ func (a *TexelTerm) runShell() error {
 				a.vterm.MarkAllDirty()
 				a.requestRefresh()
 			} else if !a.vterm.InSynchronizedUpdate {
-				a.requestRefresh()
+				// Only request refresh if PTY buffer is empty (read coalescing).
+				// This prevents rendering intermediate states when the app sends
+				// a batch of escape sequences without synchronized updates.
+				if reader.Buffered() == 0 {
+					a.requestRefresh()
+				}
 			}
 		}
 	}()

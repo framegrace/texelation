@@ -149,7 +149,9 @@ func (p *Parser) Parse(r rune) {
 		switch {
 		case r >= '0' && r <= '9':
 			p.currentParam = p.currentParam*10 + int(r-'0')
-		case r == ';':
+		case r == ';', r == ':':
+			// Both semicolon and colon are valid parameter separators.
+			// Colon is used for SGR subparameters (ITU T.416) like 38:2:r:g:b
 			p.params = append(p.params, p.currentParam)
 			p.currentParam = 0
 		case r == '?':

@@ -27,6 +27,16 @@ func (v *VTerm) InsertLines(n int) {
 	} else {
 		v.insertFullLines(n)
 	}
+
+	// Update display buffer if enabled (main screen only, alt screen handles its own buffer)
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
+		// CRITICAL: Sync cursor before display buffer operation - ViewportState uses its own cursor
+		// which may be stale. Without this sync, InsertLines operates at wrong position.
+		v.displayBufferSetCursorFromPhysical(false)
+		v.displayBuf.display.SetEraseColor(v.currentBG)
+		v.displayBuf.display.InsertLines(n, v.marginTop, v.marginBottom)
+	}
+
 	v.MarkAllDirty()
 }
 
@@ -154,6 +164,16 @@ func (v *VTerm) DeleteLines(n int) {
 	} else {
 		v.deleteFullLines(n)
 	}
+
+	// Update display buffer if enabled (main screen only, alt screen handles its own buffer)
+	if !v.inAltScreen && v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
+		// CRITICAL: Sync cursor before display buffer operation - ViewportState uses its own cursor
+		// which may be stale. Without this sync, DeleteLines operates at wrong position.
+		v.displayBufferSetCursorFromPhysical(false)
+		v.displayBuf.display.SetEraseColor(v.currentBG)
+		v.displayBuf.display.DeleteLines(n, v.marginTop, v.marginBottom)
+	}
+
 	v.MarkAllDirty()
 }
 

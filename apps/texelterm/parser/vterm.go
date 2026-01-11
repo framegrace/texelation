@@ -564,12 +564,14 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, privat
 	case 'M':
 		v.DeleteLines(param(0, 1))
 	case 'S': // SU - Scroll Up
+		v.logDebug("[SCROLL] CSI S (Scroll Up): n=%d, margins=%d-%d", param(0, 1), v.marginTop, v.marginBottom)
 		if v.leftRightMarginMode {
 			v.scrollUpWithinMargins(param(0, 1))
 		} else {
 			v.scrollRegion(param(0, 1), v.marginTop, v.marginBottom)
 		}
 	case 'T': // SD - Scroll Down
+		v.logDebug("[SCROLL] CSI T (Scroll Down): n=%d, margins=%d-%d", param(0, 1), v.marginTop, v.marginBottom)
 		if v.leftRightMarginMode {
 			v.scrollDownWithinMargins(param(0, 1))
 		} else {
@@ -596,7 +598,14 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, privat
 			v.SaveCursor()
 		}
 	case 'u':
-		v.RestoreCursor()
+		// CSI u without intermediate = DECRC (Restore Cursor)
+		// CSI > Ps u = Extended keyboard protocol (push mode) - ignore
+		// CSI < u = Extended keyboard protocol (pop mode) - ignore
+		// CSI = Ps u = Extended keyboard protocol (query mode) - ignore
+		if intermediate == 0 {
+			v.RestoreCursor()
+		}
+		// Extended keyboard protocol sequences are silently ignored
 	case 'c': // DA - Primary Device Attributes
 		// Response: CSI ? Ps ; Ps ; ... c
 		// Ps values:
@@ -742,6 +751,7 @@ func (v *VTerm) SetMargins(top, bottom int) {
 	}
 	v.marginTop = top - 1
 	v.marginBottom = bottom - 1
+	v.logDebug("[SCROLL] SetMargins: top=%d, bottom=%d (0-indexed: %d-%d), height=%d", top, bottom, v.marginTop, v.marginBottom, v.height)
 	// Per spec, DECSTBM moves cursor to home position (1,1)
 	v.SetCursorPos(0, 0)
 }

@@ -83,6 +83,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.ClearScreen()
 		case 2026: // START Synchronized Update
 			v.InSynchronizedUpdate = true
+			log.Printf("[SYNC] Synchronized Update START")
 		default:
 			log.Printf("Parser: Unhandled private CSI set mode: ?%d%c", mode, command)
 		}
@@ -129,6 +130,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			}
 		case 2026: // END Synchronized Update
 			v.InSynchronizedUpdate = false
+			log.Printf("[SYNC] Synchronized Update END")
 		default:
 			log.Printf("Parser: Unhandled private CSI reset mode: ?%d%c", mode, command)
 		}
