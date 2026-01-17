@@ -7,8 +7,6 @@
 
 package parser
 
-import "log"
-
 // processANSIMode handles standard ANSI mode setting/resetting (SM/RM).
 func (v *VTerm) processANSIMode(command rune, params []int) {
 	if len(params) == 0 {
@@ -20,15 +18,11 @@ func (v *VTerm) processANSIMode(command rune, params []int) {
 		switch mode {
 		case 4: // IRM - Insert/Replace Mode
 			v.insertMode = true
-		default:
-			log.Printf("Parser: Unhandled ANSI set mode: %d%c", mode, command)
 		}
 	case 'l': // RM - Reset Mode
 		switch mode {
 		case 4: // IRM - Insert/Replace Mode
 			v.insertMode = false
-		default:
-			log.Printf("Parser: Unhandled ANSI reset mode: %d%c", mode, command)
 		}
 	}
 }
@@ -50,9 +44,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.SetCursorPos(v.marginTop, v.marginLeft)
 		case 7:
 			v.autoWrapMode = true
-		case 12: // SET Blinking Cursor
-			// We can just log this for now, as it's a visual preference.
-			log.Println("Parser: Ignoring set blinking cursor (12h)")
+		case 12: // SET Blinking Cursor - ignored
 		case 25:
 			v.SetCursorVisible(true)
 		case 69: // DECLRMM - Enable left/right margin mode
@@ -85,9 +77,6 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.ClearScreen()
 		case 2026: // START Synchronized Update
 			v.InSynchronizedUpdate = true
-			log.Printf("[SYNC] Synchronized Update START")
-		default:
-			log.Printf("Parser: Unhandled private CSI set mode: ?%d%c", mode, command)
 		}
 	case 'l': // RESET
 		switch mode {
@@ -99,9 +88,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.SetCursorPos(0, 0)
 		case 7:
 			v.autoWrapMode = false
-		case 12: // RESET Steady Cursor (Stop Blinking)
-			// We can just log this for now.
-			log.Println("Parser: Ignoring reset steady cursor (12l)")
+		case 12: // RESET Steady Cursor - ignored
 		case 25:
 			v.SetCursorVisible(false)
 		case 69: // DECLRMM - Disable left/right margin mode
@@ -134,9 +121,6 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			}
 		case 2026: // END Synchronized Update
 			v.InSynchronizedUpdate = false
-			log.Printf("[SYNC] Synchronized Update END")
-		default:
-			log.Printf("Parser: Unhandled private CSI reset mode: ?%d%c", mode, command)
 		}
 	}
 }

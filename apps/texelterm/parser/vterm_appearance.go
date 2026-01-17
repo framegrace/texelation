@@ -1,11 +1,88 @@
 // Copyright © 2025 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: apps/texelterm/parser/vterm_sgr.go
-// Summary: SGR (Select Graphic Rendition) - text attributes and colors.
+// File: apps/texelterm/parser/vterm_appearance.go
+// Summary: Visual appearance handling - dirty line tracking, screen clearing, and SGR attributes.
 // Usage: Part of VTerm terminal emulator.
 
 package parser
+
+// --- Dirty Line Tracking ---
+
+// MarkDirty marks a specific line as dirty (needs rerendering).
+func (v *VTerm) MarkDirty(line int) {
+	if line >= 0 && line < v.height {
+		v.dirtyLines[line] = true
+	}
+}
+
+// MarkAllDirty marks all lines as dirty.
+func (v *VTerm) MarkAllDirty() { v.allDirty = true }
+
+// GetDirtyLines returns the dirty line map and the all-dirty flag.
+func (v *VTerm) GetDirtyLines() (map[int]bool, bool) {
+	return v.dirtyLines, v.allDirty
+}
+
+// ClearDirty resets the dirty tracking, but always marks cursor lines.
+func (v *VTerm) ClearDirty() {
+	v.allDirty = false
+	v.dirtyLines = make(map[int]bool)
+	// Always mark cursor lines to handle blinking and movement
+	v.MarkDirty(v.prevCursorY)
+	v.MarkDirty(v.cursorY)
+}
+
+// --- Screen Clearing ---
+
+// ClearScreen clears the entire screen and resets history (for main screen).
+func (v *VTerm) ClearScreen() {
+	v.MarkAllDirty()
+	if v.inAltScreen {
+		// Use default colors, not currentFG/BG which might be from previous content
+		for y := range v.altBuffer {
+			for x := range v.altBuffer[y] {
+				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+			}
+		}
+		v.SetCursorPos(0, 0)
+	} else {
+		// Use display buffer clear
+		v.displayBufferClear()
+		v.SetCursorPos(0, 0)
+	}
+}
+
+// ClearVisibleScreen clears just the visible display (ED 2).
+// Preserves scrollback history and cursor position.
+func (v *VTerm) ClearVisibleScreen() {
+	v.MarkAllDirty()
+	if v.inAltScreen {
+		// Use default colors for cleared cells
+		for y := range v.altBuffer {
+			for x := range v.altBuffer[y] {
+				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
+			}
+		}
+		// Cursor position unchanged
+	} else {
+		// For main screen, clear all visible lines
+		logicalTop := v.getTopHistoryLine()
+		blankLine := make([]Cell, v.width)
+		for x := 0; x < v.width; x++ {
+			blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+		}
+		for y := 0; y < v.height; y++ {
+			logicalY := logicalTop + y
+			if logicalY < v.getHistoryLen() {
+				v.setHistoryLine(logicalY, append([]Cell(nil), blankLine...))
+			}
+		}
+		// Cursor position unchanged
+	}
+}
+
+// --- SGR Attributes ---
 
 // handleSGR processes SGR (Select Graphic Rendition) escape sequences.
 // Handles text attributes (bold, underline, reverse) and colors (standard, 256-color, RGB).

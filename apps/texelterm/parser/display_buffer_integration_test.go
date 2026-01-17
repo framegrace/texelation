@@ -456,7 +456,8 @@ func TestDisplayBuffer_FreshTerminalWrap(t *testing.T) {
 	v.EnableDisplayBuffer()
 
 	// Initial state check
-	t.Logf("Initial: cursorY=%d, LiveEdgeRow=%d", v.cursorY, v.displayBuf.display.LiveEdgeRow())
+	_, cursorRow, _ := v.displayBuf.display.GetPhysicalCursorPos()
+	t.Logf("Initial: cursorY=%d, displayBufCursorRow=%d", v.cursorY, cursorRow)
 
 	// Write a long line that wraps
 	text := "ABCDEFGHIJKLMNO"

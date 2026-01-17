@@ -8,7 +8,7 @@ import (
 )
 
 // TestScrollRegionDirtyTracking tests that scroll regions properly mark lines dirty.
-// This is important for TUI applications like codex that use custom scroll regions.
+// This is important for TUI applications that use custom scroll regions.
 func TestScrollRegionDirtyTracking(t *testing.T) {
 	// Create a recording that simulates TUI-style scroll region usage
 	rec := testutil.NewRecording(40, 10)
@@ -28,7 +28,7 @@ func TestScrollRegionDirtyTracking(t *testing.T) {
 	// Move cursor to row 3 (0-indexed, which is row 4 in 1-indexed)
 	rec.AppendCSI("4;1H")
 
-	// Now do some reverse index operations (ESC M) like codex does
+	// Now do some reverse index operations (ESC M) like TUI apps do
 	rec.AppendSequence([]byte{0x1b, 'M'}) // ESC M = Reverse Index
 	rec.AppendSequence([]byte{0x1b, 'M'}) // Another one
 	rec.AppendText("New") // Write some content
@@ -109,9 +109,9 @@ func TestScrollRegionDirtyTracking(t *testing.T) {
 	t.Log("No dirty tracking issues found with scroll regions")
 }
 
-// TestCodexStyleScrolling simulates the exact scroll pattern codex uses
-func TestCodexStyleScrolling(t *testing.T) {
-	// Create a recording that matches codex's scroll behavior
+// TestTUIStyleScrolling simulates common scroll patterns used by TUI apps.
+func TestTUIStyleScrolling(t *testing.T) {
+	// Create a recording that matches common TUI scroll behavior
 	rec := testutil.NewRecording(80, 24)
 
 	// Initial content
@@ -132,7 +132,7 @@ func TestCodexStyleScrolling(t *testing.T) {
 	rec.AppendCSI("r")       // Reset to full screen
 	rec.AppendCSI("1;24r")   // Full screen scroll region
 
-	// Now set a partial scroll region like codex does
+	// Now set a partial scroll region like TUI apps do
 	rec.AppendCSI("1;8r")    // Scroll region lines 1-8
 
 	// Move to top of region
@@ -153,7 +153,7 @@ func TestCodexStyleScrolling(t *testing.T) {
 
 	// Check for visual mismatches
 	if replayer.HasVisualMismatch() {
-		t.Error("Visual mismatches found in codex-style scrolling:")
+		t.Error("Visual mismatches found in TUI-style scrolling:")
 		mismatches := replayer.FindVisualMismatches()
 		for i, m := range mismatches {
 			if i >= 20 {
@@ -164,6 +164,6 @@ func TestCodexStyleScrolling(t *testing.T) {
 				m.X, m.Y, m.Rendered.Rune, m.Logical.Rune)
 		}
 	} else {
-		t.Log("No visual mismatches - codex-style scrolling works correctly")
+		t.Log("No visual mismatches - TUI-style scrolling works correctly")
 	}
 }

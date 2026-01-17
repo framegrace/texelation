@@ -309,38 +309,32 @@ func (p *ANSIParser) parseSGR(params []int) {
 			p.state.Attr |= parser.AttrUnderline
 		case code == 7:
 			// Reverse
-			p.state.FG = parser.Color{Mode: parser.ColorModeStandard, Value: toUint8Safe(code - 30)}
+			p.state.Attr |= parser.AttrReverse
 		case code == 22:
 			// Not bold
 			p.state.Attr &= ^parser.AttrBold
 		case code == 24:
-				p.state.FG = parser.Color{Mode: parser.ColorMode256, Value: toUint8Safe(params[i+2])}
-				if n >= 0 && n <= 255 {
-					p.state.FG = parser.Color{Mode: parser.ColorMode256, Value: uint8(n)}
-				}
+			// Not underline
 			p.state.Attr &= ^parser.AttrUnderline
 		case code == 27:
-					R:    toUint8Safe(params[i+2]),
-					G:    toUint8Safe(params[i+3]),
-					B:    toUint8Safe(params[i+4]),
-					p.state.FG = parser.Color{
-						Mode: parser.ColorModeRGB,
-						R:    uint8(r),
-						G:    uint8(g),
-						B:    uint8(b),
-					}
+			// Not reverse
+			p.state.Attr &= ^parser.AttrReverse
+		case code >= 30 && code <= 37:
+			// Standard foreground (30-37)
+			p.state.FG = parser.Color{Mode: parser.ColorModeStandard, Value: uint8(code - 30)}
+		case code == 38:
 			// Extended foreground
 			if i+2 < len(params) && params[i+1] == 5 {
 				// 256-color: 38;5;n
-				p.state.FG = parser.Color{Mode: parser.ColorMode256, Value: uint8(params[i+2])}
+				p.state.FG = parser.Color{Mode: parser.ColorMode256, Value: clampToUint8(params[i+2])}
 				i += 2
 			} else if i+4 < len(params) && params[i+1] == 2 {
 				// RGB: 38;2;r;g;b
 				p.state.FG = parser.Color{
 					Mode: parser.ColorModeRGB,
-					R:    uint8(params[i+2]),
-					G:    uint8(params[i+3]),
-					B:    uint8(params[i+4]),
+					R:    clampToUint8(params[i+2]),
+					G:    clampToUint8(params[i+3]),
+					B:    clampToUint8(params[i+4]),
 				}
 				i += 4
 			}
@@ -355,37 +349,14 @@ func (p *ANSIParser) parseSGR(params []int) {
 			if i+2 < len(params) && params[i+1] == 5 {
 				// 256-color: 48;5;n
 				p.state.BG = parser.Color{Mode: parser.ColorMode256, Value: clampToUint8(params[i+2])}
-					p.state.BG = parser.Color{Mode: parser.ColorMode256, Value: clampToUint8(params[i+2])}
-				}
 				i += 2
-				r := params[i+2]
-				g := params[i+3]
+			} else if i+4 < len(params) && params[i+1] == 2 {
+				// RGB: 48;2;r;g;b
+				p.state.BG = parser.Color{
+					Mode: parser.ColorModeRGB,
 					R:    clampToUint8(params[i+2]),
 					G:    clampToUint8(params[i+3]),
 					B:    clampToUint8(params[i+4]),
-				} else if r > 255 {
-					r = 255
-				}
-				if g < 0 {
-					g = 0
-				} else if g > 255 {
-					g = 255
-				}
-			p.state.FG = parser.Color{Mode: parser.ColorModeStandard, Value: clampToUint8(code - 90 + 8)}
-					b = 0
-				} else if b > 255 {
-			p.state.BG = parser.Color{Mode: parser.ColorModeStandard, Value: clampToUint8(code - 100 + 8)}
-				}
-			} else if i+4 < len(params) && params[i+1] == 2 {
-				// RGB: 48;2;r;g;b
-					R:    uint8(r),
-					G:    uint8(g),
-					B:    uint8(b),
-						Mode: parser.ColorModeRGB,
-						R:    uint8(r),
-						G:    uint8(g),
-						B:    uint8(b),
-					}
 				}
 				i += 4
 			}

@@ -9,7 +9,6 @@
 package parser
 
 import (
-	"log"
 	"strconv"
 	"strings"
 )
@@ -77,11 +76,8 @@ func (p *Parser) Parse(r rune) {
 		default:
 			if r >= ' ' && r != '\x7f' {
 				p.vterm.placeChar(r)
-			} else if r == '\x07' {
-				// BEL - ignore (visual bell not implemented)
-			} else {
-				log.Printf("Parser: StateGround unprintable 0x%02x", r)
 			}
+			// Ignore BEL and other unprintable control characters
 		}
 	case StateEscape:
 		switch r {
@@ -142,7 +138,7 @@ func (p *Parser) Parse(r rune) {
 		case '=', '>':
 			p.state = StateGround
 		default:
-			log.Printf("Parser: Unhandled ESC sequence: %q", r)
+			// Ignore unhandled ESC sequences
 			p.state = StateGround
 		}
 	case StateCSI:
@@ -173,15 +169,6 @@ func (p *Parser) Parse(r rune) {
 		}
 	case StateOSC:
 		if r == '\x07' || r == '\x1b' { // Terminated by BEL or another ESC
-			// DEBUG: Log OSC sequences
-			oscStr := string(p.oscBuffer)
-			if len(oscStr) > 0 && oscStr[0] == '1' {
-				maxLen := 50
-				if len(oscStr) < maxLen {
-					maxLen = len(oscStr)
-				}
-				log.Printf("OSC complete: %q (len=%d)", oscStr[:maxLen], len(oscStr))
-			}
 			p.handleOSC(p.oscBuffer)
 			p.state = StateGround
 			if r == '\x1b' {
@@ -189,13 +176,6 @@ func (p *Parser) Parse(r rune) {
 			}
 		} else {
 			p.oscBuffer = append(p.oscBuffer, r)
-			// DEBUG: Log if we're collecting a lot without seeing terminator
-			if len(p.oscBuffer) == 100 {
-				log.Printf("OSC buffer growing (100 chars): %q...", string(p.oscBuffer[:50]))
-			}
-			if len(p.oscBuffer) == 500 {
-				log.Printf("OSC buffer very large (500 chars) - possible missing terminator")
-			}
 		}
 	case StateDCS:
 		if r == '\x1b' {
@@ -232,20 +212,11 @@ func (v *VTerm) handleDCS(payload []rune) {
 	//   - tmux;<escaped_command>          (tmux passthrough)
 
 	payloadStr := string(payload)
-	prefixLen := 20
-	if len(payloadStr) < prefixLen {
-		prefixLen = len(payloadStr)
-	}
-	log.Printf("DCS received: prefix=%q, len=%d", payloadStr[:prefixLen], len(payloadStr))
-
 	if strings.HasPrefix(payloadStr, "texel-env;") {
 		// Extract base64-encoded environment
 		encodedEnv := strings.TrimPrefix(payloadStr, "texel-env;")
-		log.Printf("DCS texel-env: len=%d, calling handler", len(encodedEnv))
 		if v.OnEnvironmentUpdate != nil {
 			v.OnEnvironmentUpdate(encodedEnv)
-		} else {
-			log.Printf("DCS texel-env: WARNING - no handler registered!")
 		}
 	}
 	// Other DCS sequences (like tmux) are ignored for now
@@ -324,51 +295,51 @@ func (p *Parser) handleOSC(sequence []rune) {
 	// B = Prompt end / Input start
 	// C = Input end / Command start
 	// D = Command end [; exitcode]
-	func (p *Parser) handleOSC133(payload string) {
-		parts := strings.Split(payload, ";")
-		if len(parts) == 0 {
-			return
+func (p *Parser) handleOSC133(payload string) {
+	parts := strings.Split(payload, ";")
+	if len(parts) == 0 {
+		return
+	}
+
+	subcommand := strings.TrimSpace(parts[0])
+
+	switch subcommand {
+	case "A":
+		// Prompt start
+		p.vterm.PromptActive = true
+		p.vterm.InputActive = false
+		p.vterm.CommandActive = false
+		if p.vterm.OnPromptStart != nil {
+			p.vterm.OnPromptStart()
 		}
 
-		subcommand := strings.TrimSpace(parts[0])
-		log.Printf("OSC 133 subcommand: %q (payload: %q)", subcommand, payload)
-	
-		switch subcommand {
-		case "A":
-			// Prompt start
-			p.vterm.PromptActive = true
-			p.vterm.InputActive = false
-			p.vterm.CommandActive = false
-			if p.vterm.OnPromptStart != nil {
-				p.vterm.OnPromptStart()
-			}
-	
-		case "B":
-			// Input start (prompt end)
-			p.vterm.PromptActive = false
-			p.vterm.InputActive = true
-			p.vterm.CommandActive = false
-			// Record where input starts (convert screen position to history line index)
-			p.vterm.InputStartLine = p.vterm.getTopHistoryLine() + p.vterm.GetCursorY()
-			p.vterm.InputStartCol = p.vterm.GetCursorX()
-			if p.vterm.OnInputStart != nil {
-				p.vterm.OnInputStart()
-			}
-	
-		case "C":
-			// Command start (input end)
-			p.vterm.PromptActive = false
-			p.vterm.InputActive = false
-			p.vterm.CommandActive = true
-			cmd := ""
-			if len(parts) > 1 {
-				cmd = parts[1]
-			}
-			if p.vterm.OnCommandStart != nil {
-				p.vterm.OnCommandStart(cmd)
-			}
-	
-		case "D":		// Command end
+	case "B":
+		// Input start (prompt end)
+		p.vterm.PromptActive = false
+		p.vterm.InputActive = true
+		p.vterm.CommandActive = false
+		// Record where input starts (convert screen position to history line index)
+		p.vterm.InputStartLine = p.vterm.getTopHistoryLine() + p.vterm.GetCursorY()
+		p.vterm.InputStartCol = p.vterm.GetCursorX()
+		if p.vterm.OnInputStart != nil {
+			p.vterm.OnInputStart()
+		}
+
+	case "C":
+		// Command start (input end)
+		p.vterm.PromptActive = false
+		p.vterm.InputActive = false
+		p.vterm.CommandActive = true
+		cmd := ""
+		if len(parts) > 1 {
+			cmd = parts[1]
+		}
+		if p.vterm.OnCommandStart != nil {
+			p.vterm.OnCommandStart(cmd)
+		}
+
+	case "D":
+		// Command end
 		exitCode := 0
 		if len(parts) >= 2 {
 			if code, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
@@ -378,11 +349,8 @@ func (p *Parser) handleOSC(sequence []rune) {
 		p.vterm.PromptActive = false
 		p.vterm.InputActive = false
 		p.vterm.CommandActive = false
-		log.Printf("OSC 133;D received (exitCode=%d), handler=%v", exitCode, p.vterm.OnCommandEnd != nil)
 		if p.vterm.OnCommandEnd != nil {
 			p.vterm.OnCommandEnd(exitCode)
-		} else {
-			log.Printf("  WARNING: OnCommandEnd handler is nil!")
 		}
 	}
 }

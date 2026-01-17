@@ -138,11 +138,11 @@ func (v *VTerm) syncCursorWithDisplayBuffer() {
 		return
 	}
 
-	// Get the row where new content will appear
-	liveEdgeRow := v.displayBuf.display.LiveEdgeRow()
+	// Get the cursor position from display buffer
+	_, y, _ := v.displayBuf.display.GetPhysicalCursorPos()
 
-	// Position cursor at the live edge
-	v.cursorY = liveEdgeRow
+	// Position cursor at the current row
+	v.cursorY = y
 	v.cursorX = 0
 }
 
@@ -316,9 +316,10 @@ func (v *VTerm) displayBufferResize(width, height int) {
 		v.logDebug("displayBufferResize FOUND cursor offset=%d -> set physical to %d,%d", v.displayBuf.display.GetCursorOffset(), physX, physY)
 	} else if v.displayBuf.display.AtLiveEdge() {
 		// Fallback: if at live edge but cursor not found (e.g. validly scrolled off?),
-		// snap to live edge row.
-		v.cursorY = v.displayBuf.display.LiveEdgeRow()
-		v.logDebug("displayBufferResize NOT FOUND, snapping to LiveEdgeRow %d", v.cursorY)
+		// snap to cursor Y from display buffer.
+		_, y, _ := v.displayBuf.display.GetPhysicalCursorPos()
+		v.cursorY = y
+		v.logDebug("displayBufferResize NOT FOUND, snapping to cursor row %d", v.cursorY)
 		// Keep cursorX clamped later by SetCursorPos
 	} else {
 		v.logDebug("displayBufferResize NOT FOUND and NOT at live edge")
