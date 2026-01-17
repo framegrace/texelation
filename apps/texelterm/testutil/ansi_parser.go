@@ -355,7 +355,7 @@ func (p *ANSIParser) parseSGR(params []int) {
 			if i+2 < len(params) && params[i+1] == 5 {
 				// 256-color: 48;5;n
 				p.state.BG = parser.Color{Mode: parser.ColorMode256, Value: clampToUint8(params[i+2])}
-					p.state.BG = parser.Color{Mode: parser.ColorMode256, Value: uint8(params[i+2])}
+					p.state.BG = parser.Color{Mode: parser.ColorMode256, Value: clampToUint8(params[i+2])}
 				}
 				i += 2
 				r := params[i+2]
