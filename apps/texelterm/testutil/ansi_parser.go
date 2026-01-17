@@ -29,6 +29,18 @@ type ANSIParser struct {
 	state            SGRState
 }
 
+// toUint8Safe converts an int to uint8, clamping the value into the valid range [0, 255].
+// This avoids unexpected wrap-around when parsing SGR parameters from untrusted input.
+func toUint8Safe(v int) uint8 {
+	if v < 0 {
+		return 0
+	}
+	if v > 255 {
+		return 255
+	}
+	return uint8(v)
+}
+
 // clampToUint8 safely converts an int to uint8 by clamping values into [0, 255].
 // This avoids architecture-dependent truncation when parsing SGR parameters.
 func clampToUint8(v int) uint8 {
@@ -297,20 +309,20 @@ func (p *ANSIParser) parseSGR(params []int) {
 			p.state.Attr |= parser.AttrUnderline
 		case code == 7:
 			// Reverse
-			p.state.Attr |= parser.AttrReverse
+			p.state.FG = parser.Color{Mode: parser.ColorModeStandard, Value: toUint8Safe(code - 30)}
 		case code == 22:
 			// Not bold
 			p.state.Attr &= ^parser.AttrBold
 		case code == 24:
-				n := params[i+2]
+				p.state.FG = parser.Color{Mode: parser.ColorMode256, Value: toUint8Safe(params[i+2])}
 				if n >= 0 && n <= 255 {
 					p.state.FG = parser.Color{Mode: parser.ColorMode256, Value: uint8(n)}
 				}
 			p.state.Attr &= ^parser.AttrUnderline
 		case code == 27:
-			// Not reverse
-				r, g, b := params[i+2], params[i+3], params[i+4]
-				if r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255 {
+					R:    toUint8Safe(params[i+2]),
+					G:    toUint8Safe(params[i+3]),
+					B:    toUint8Safe(params[i+4]),
 					p.state.FG = parser.Color{
 						Mode: parser.ColorModeRGB,
 						R:    uint8(r),
