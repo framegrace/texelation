@@ -324,15 +324,20 @@ func (p *ANSIParser) parseSGR(params []int) {
 			// Extended background
 			if i+2 < len(params) && params[i+1] == 5 {
 				// 256-color: 48;5;n
-				p.state.BG = parser.Color{Mode: parser.ColorMode256, Value: uint8(params[i+2])}
+				if params[i+2] >= 0 && params[i+2] <= 255 {
+					p.state.BG = parser.Color{Mode: parser.ColorMode256, Value: uint8(params[i+2])}
+				}
 				i += 2
 			} else if i+4 < len(params) && params[i+1] == 2 {
 				// RGB: 48;2;r;g;b
-				p.state.BG = parser.Color{
-					Mode: parser.ColorModeRGB,
-					R:    uint8(params[i+2]),
-					G:    uint8(params[i+3]),
-					B:    uint8(params[i+4]),
+				r, g, b := params[i+2], params[i+3], params[i+4]
+				if r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255 {
+					p.state.BG = parser.Color{
+						Mode: parser.ColorModeRGB,
+						R:    uint8(r),
+						G:    uint8(g),
+						B:    uint8(b),
+					}
 				}
 				i += 4
 			}
