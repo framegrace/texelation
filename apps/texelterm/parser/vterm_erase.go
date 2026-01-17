@@ -35,32 +35,48 @@ func (v *VTerm) ClearScreenMode(mode int) {
 	v.MarkAllDirty()
 	switch mode {
 	case 0: // Erase from cursor to end of screen
-		v.ClearLine(0) // Clear from cursor to end of current line
 		if v.inAltScreen {
+			// Clear from cursor to end of current line
+			for x := v.cursorX; x < v.width; x++ {
+				v.altBuffer[v.cursorY][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			}
 			// Clear all lines below cursor
 			for y := v.cursorY + 1; y < v.height; y++ {
 				for x := 0; x < v.width; x++ {
 					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 				}
 			}
+		} else if v.IsDisplayBufferEnabled() {
+			// Use the display buffer's screen erase function
+			v.displayBufferEraseScreen(0)
 		}
-		// For main screen with DisplayBuffer, ClearLine(0) already handles erasing
-		// from cursor to end of the logical line. In the DisplayBuffer model, all
-		// content on and below the cursor row is part of the current logical line,
-		// so truncating at cursor offset erases everything "below" as well.
 	case 1: // Erase from beginning of screen to cursor
-		v.ClearLine(1)
 		if v.inAltScreen {
+			// Clear all lines above cursor
 			for y := 0; y < v.cursorY; y++ {
 				for x := 0; x < v.width; x++ {
 					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 				}
 			}
+			// Clear from start to cursor on current line
+			for x := 0; x <= v.cursorX && x < v.width; x++ {
+				v.altBuffer[v.cursorY][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+			}
+		} else if v.IsDisplayBufferEnabled() {
+			// Use the display buffer's screen erase function
+			v.displayBufferEraseScreen(1)
 		}
-		// For main screen with DisplayBuffer, ClearLine(1) already handles erasing
-		// from start to cursor within the current logical line.
 	case 2: // Erase entire visible screen (ED 2)
-		v.ClearVisibleScreen()
+		if v.inAltScreen {
+			for y := range v.altBuffer {
+				for x := range v.altBuffer[y] {
+					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
+				}
+			}
+		} else if v.IsDisplayBufferEnabled() {
+			// Use the display buffer's screen erase function
+			v.displayBufferEraseScreen(2)
+		}
 	case 3: // Erase scrollback only, leave visible screen intact (ED 3)
 		if !v.inAltScreen && v.displayBuf != nil && v.displayBuf.history != nil {
 			// Clear scrollback history while preserving the current (uncommitted) line

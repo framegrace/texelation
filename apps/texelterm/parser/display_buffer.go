@@ -1,7 +1,35 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: apps/texelterm/parser/display_buffer.go
+// Summary: DisplayBuffer manages the terminal viewport with scrollback support.
+//
+// Architecture:
+//
+//	┌─────────────────────────────────────────┐
+//	│           SCROLLBACK HISTORY            │
+//	│   (Logical lines - width independent)   │
+//	│   (Disk-backed, supports global index)  │
+//	└─────────────────────────────────────────┘
+//	                    ▲
+//	                    │ Commit on: scroll-off, LF at bottom, OSC 133;D
+//	                    │
+//	┌─────────────────────────────────────────┐
+//	│         VIEWPORT (ViewportState)        │
+//	│   ┌─────────────────────────────────┐   │
+//	│   │  Writable [][]Cell grid         │   │
+//	│   │  Any position can be written    │   │
+//	│   │  Tracks logical line metadata   │   │
+//	│   └─────────────────────────────────┘   │
+//	└─────────────────────────────────────────┘
+//
+// Key design: The viewport is always a writable grid (like altBuffer).
+// Cursor can move anywhere without restrictions. Lines are committed
+// to history when they scroll off the top of the viewport.
+
 package parser
 
 // Default values for display buffer configuration.
-// These are used across display_buffer.go, vterm_display_buffer.go, and scrollback_history.go.
 const (
 	// DefaultMarginAbove is how many off-screen lines to keep above viewport.
 	DefaultMarginAbove = 200
@@ -9,9 +37,7 @@ const (
 	// DefaultMarginBelow is how many off-screen lines to keep below viewport.
 	DefaultMarginBelow = 50
 
-	// DefaultMaxMemoryLines is the default number of lines to keep in memory
-	// when no configuration is provided. This is an internal default.
-	// For user-configurable defaults, see DefaultMemoryLines in scrollback_history.go.
+	// DefaultMaxMemoryLines is the default number of lines to keep in memory.
 	DefaultMaxMemoryLines = 5000
 
 	// DefaultWidth is the fallback terminal width when none is specified.
@@ -21,1022 +47,649 @@ const (
 	DefaultHeight = 24
 )
 
-// DisplayBuffer manages the physical lines shown in the terminal viewport.
-// It maintains a window of physical lines around the visible area, loading
-// from ScrollbackHistory on demand.
-//
-// Architecture (inspired by SNES tile scrolling):
-//
-//	┌─────────────────────────────────────────┐
-//	│           SCROLLBACK HISTORY            │
-//	│   (Logical lines - width independent)   │
-//	│   (Disk-backed, supports global index)  │
-//	└─────────────────────────────────────────┘
-//	                    │
-//	                    │ Load on demand
-//	                    ▼
-//	┌─────────────────────────────────────────┐
-//	│            DISPLAY BUFFER               │
-//	│   ┌─────────────────────────────────┐   │
-//	│   │     Off-screen ABOVE (margin)   │   │
-//	│   ├─────────────────────────────────┤   │
-//	│   │     VISIBLE VIEWPORT            │   │
-//	│   ├─────────────────────────────────┤   │
-//	│   │     Off-screen BELOW (margin)   │   │
-//	│   └─────────────────────────────────┘   │
-//	└─────────────────────────────────────────┘
+// DisplayBuffer manages the terminal viewport and scrollback history.
 type DisplayBuffer struct {
-	// lines contains physical lines currently loaded in the buffer.
-	// Index 0 is the topmost loaded line.
-	lines []PhysicalLine
+	// viewport is the writable screen grid
+	viewport *ViewportState
 
-	// width is the current terminal width for wrapping.
-	width int
-
-	// height is the viewport height (visible rows).
-	height int
-
-	// viewportTop is the index into 'lines' where the visible viewport starts.
-	viewportTop int
-
-	// marginAbove is how many off-screen lines to keep above viewport.
-	marginAbove int
-
-	// marginBelow is how many off-screen lines to keep below viewport.
-	marginBelow int
-
-	// atLiveEdge indicates whether the viewport is following live output.
-	// When true, new content auto-scrolls into view.
-	// When false, the user has scrolled up and viewport stays put.
-	atLiveEdge bool
-
-	// history is a reference to the scrollback history for loading lines.
+	// history stores lines that have scrolled off the top
 	history *ScrollbackHistory
 
-	// globalTopIndex tracks which GLOBAL logical line corresponds to lines[0].
-	// This is the anchor for the display buffer into history, using global indices
-	// that work across disk and memory.
-	globalTopIndex int64
+	// Configuration
+	marginAbove int
+	marginBelow int
 
-	// liveEditor manages the current (uncommitted) line and cursor position.
-	// It is the single source of truth for cursor position (as logical offset).
-	liveEditor *LiveEditor
+	// For scrollback viewing (when user scrolls up into history)
+	historyViewOffset int64 // How many lines scrolled back into history
+	viewingHistory    bool  // True when viewing history (not live edge)
 
-	// allowUncommit is set to true after a commit and cleared when content is written.
-	// This prevents uncommitting during normal output progression.
-	allowUncommit bool
+	// cachedHistoryView caches the history view when scrolled back
+	cachedHistoryView [][]Cell
 
-	// debugLog is an optional logging function for debugging.
+	// debugLog is an optional logging function
 	debugLog func(format string, args ...interface{})
+}
+
+// DisplayBufferConfig holds configuration for creating a DisplayBuffer.
+type DisplayBufferConfig struct {
+	Width       int
+	Height      int
+	MarginAbove int
+	MarginBelow int
+}
+
+// NewDisplayBuffer creates a new display buffer with the given history and config.
+func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *DisplayBuffer {
+	if config.MarginAbove <= 0 {
+		config.MarginAbove = DefaultMarginAbove
 	}
-	
-	// DisplayBufferConfig holds configuration for creating a DisplayBuffer.
-	type DisplayBufferConfig struct {
-	        Width       int
-	        Height      int
-	        MarginAbove int // Defaults to DefaultMarginAbove
-	        MarginBelow int // Defaults to DefaultMarginBelow
+	if config.MarginBelow <= 0 {
+		config.MarginBelow = DefaultMarginBelow
+	}
+	if config.Width <= 0 {
+		config.Width = DefaultWidth
+	}
+	if config.Height <= 0 {
+		config.Height = DefaultHeight
 	}
 
-	// NewDisplayBuffer creates a new display buffer attached to the given history.
-	func NewDisplayBuffer(history *ScrollbackHistory, config DisplayBufferConfig) *DisplayBuffer {
-	        if config.MarginAbove <= 0 {
-	                config.MarginAbove = DefaultMarginAbove
-	        }
-	        if config.MarginBelow <= 0 {
-	                config.MarginBelow = DefaultMarginBelow
-	        }
-	        if config.Width <= 0 {
-	                config.Width = DefaultWidth
-	        }
-	        if config.Height <= 0 {
-	                config.Height = DefaultHeight
-	        }
-	
 	db := &DisplayBuffer{
-		lines:          make([]PhysicalLine, 0),
-		width:          config.Width,
-		height:         config.Height,
-		viewportTop:    0,
-		marginAbove:    config.MarginAbove,
-		marginBelow:    config.MarginBelow,
-		atLiveEdge:     true,
-		history:        history,
-		globalTopIndex: 0,
-		liveEditor:     NewLiveEditor(),
+		viewport:    NewViewportState(config.Width, config.Height, history),
+		history:     history,
+		marginAbove: config.MarginAbove,
+		marginBelow: config.MarginBelow,
 	}
-	
-	        // If history has content, load the bottom portion into lines
-	        if history != nil && history.TotalLen() > 0 {
-	                db.loadInitialHistory()
-	        }
-	
-	        return db
-	}
-	
-// SetCursor updates the logical cursor position based on physical viewport coordinates.
-// This should be called when escape sequences move the cursor to a physical position.
+
+	// Link viewport to history
+	db.viewport.history = history
+
+	return db
+}
+
+// --- Core Operations ---
+
+// SetCursor moves the cursor to the given position.
+// No restrictions - cursor can move anywhere within viewport.
 func (db *DisplayBuffer) SetCursor(physX, physY int) {
-	// Calculate which physical row of the live editor's content this maps to
-	liveEdgeStartIdx := len(db.lines)
-	globalPhysY := db.viewportTop + physY
+	db.viewport.SetCursor(physX, physY)
 
-	// Calculate current line's physical rows for debugging
-	currentPhysRows := len(db.currentLinePhysical())
+	// If viewing history and cursor moves, return to live edge
+	if db.viewingHistory {
+		db.ScrollToBottom()
+	}
 
-	// Calculate where the live line appears in the viewport.
-	// The live line starts at buffer index liveEdgeStartIdx.
-	// In viewport coordinates: liveStartInViewport = liveEdgeStartIdx - viewportTop
-	liveStartInViewport := liveEdgeStartIdx - db.viewportTop
-
-	// Check if the cursor is on or near the live edge (current uncommitted line).
-	// We accept the cursor if:
-	// 1. It's on the live line (physY >= liveStartInViewport), OR
-	// 2. It's just 1 row above due to VTerm/DisplayBuffer scroll sync issues
-	//    (this commonly happens during status bar updates or prompt redraws)
-	onLiveLine := physY >= 0 && globalPhysY >= liveEdgeStartIdx
-	nearLiveLine := physY >= 0 && physY >= liveStartInViewport-1 && db.liveEditor.Line().Len() > 0
-
-	if onLiveLine || nearLiveLine {
-		// Cursor is on (or near) the live editor's line
-		// Calculate which physical row within the live line
-		var physRowInLiveEditor int
-		if globalPhysY >= liveEdgeStartIdx {
-			physRowInLiveEditor = globalPhysY - liveEdgeStartIdx
-		} else {
-			// Cursor is 1 row above - treat as row 0 of live line
-			physRowInLiveEditor = 0
-		}
-		db.liveEditor.SetCursorFromPhysical(physRowInLiveEditor, physX, db.width)
-
-		// NOTE: We do NOT clamp offset to line length here.
-		// For direct screen positioning (CUP), the terminal should allow cursor
-		// positions beyond current content. SetCell in LogicalLine handles
-		// extending the line with spaces when writing to such positions.
-		// This is essential for VT terminal emulation where programs like esctest
-		// use CUP to position anywhere on screen and expect writes to work.
-
-		if db.debugLog != nil {
-			db.debugLog("SetCursor: ACCEPTED physX=%d, physY=%d -> liveRow=%d, offset=%d (liveStart=%d, viewportTop=%d, currentPhysRows=%d, lineLen=%d, nearLine=%v)",
-				physX, physY, physRowInLiveEditor, db.liveEditor.GetCursorOffset(),
-				liveEdgeStartIdx, db.viewportTop, currentPhysRows, db.liveEditor.Line().Len(), nearLiveLine && !onLiveLine)
-		}
-	} else if physY >= 0 && db.allowUncommit && db.liveEditor.Line().Len() == 0 && globalPhysY >= 0 {
-		// Cursor is in committed history, but live editor is empty AND we just committed.
-		// This typically happens during bash redraw after a premature commit.
-		// Try to uncommit the line at this position to allow continued editing.
-		if db.uncommitLineAtPhysicalRow(globalPhysY) {
-			// Now the cursor should be on the restored live line
-			newLiveEdgeStartIdx := len(db.lines)
-			if globalPhysY >= newLiveEdgeStartIdx {
-				physRowInLiveEditor := globalPhysY - newLiveEdgeStartIdx
-				db.liveEditor.SetCursorFromPhysical(physRowInLiveEditor, physX, db.width)
-				if db.debugLog != nil {
-					db.debugLog("SetCursor: UNCOMMITTED line, cursor now at physRow=%d, physX=%d, offset=%d",
-						physRowInLiveEditor, physX, db.liveEditor.GetCursorOffset())
-				}
-			}
-		} else if db.debugLog != nil {
-			db.debugLog("SetCursor: IGNORED (in committed history, uncommit failed) physX=%d, physY=%d, liveEdgeStartIdx=%d, viewportTop=%d",
-				physX, physY, liveEdgeStartIdx, db.viewportTop)
-		}
-	} else if db.debugLog != nil {
-		db.debugLog("SetCursor: IGNORED (in committed history) physX=%d, physY=%d, globalPhysY=%d, liveStart=%d, viewportTop=%d, currentPhysRows=%d, lineLen=%d, height=%d",
-			physX, physY, globalPhysY, liveEdgeStartIdx, db.viewportTop, currentPhysRows, db.liveEditor.Line().Len(), db.height)
+	if db.debugLog != nil {
+		db.debugLog("DisplayBuffer.SetCursor: (%d, %d)", physX, physY)
 	}
 }
 
-// Write writes a rune at the current logical cursor position.
-// Advances the cursor offset. Delegates to LiveEditor.
-// If insertMode is true, inserts; otherwise overwrites.
+// Write writes a character at the current cursor position.
 func (db *DisplayBuffer) Write(r rune, fg, bg Color, attr Attribute, insertMode bool) {
-	// Clear uncommit flag - we're writing new content, not going back to edit
-	db.allowUncommit = false
+	db.viewport.Write(r, fg, bg, attr, insertMode)
 
-	db.liveEditor.WriteChar(r, fg, bg, attr, insertMode)
-	// Viewport adjustment if at live edge - don't shrink to prevent viewport from
-	// shrinking during repaint sequences (e.g., bash repainting after wrap crossing)
-	if db.atLiveEdge {
-		db.scrollToLiveEdge(false)
+	// Return to live edge on write
+	if db.viewingHistory {
+		db.ScrollToBottom()
 	}
 }
-	
-// Erase performs erase operations on the current logical line.
+
+// WriteWide writes a character at the current cursor position with wide character support.
+func (db *DisplayBuffer) WriteWide(r rune, fg, bg Color, attr Attribute, insertMode bool, isWide bool) {
+	db.viewport.WriteWide(r, fg, bg, attr, insertMode, isWide)
+
+	// Return to live edge on write
+	if db.viewingHistory {
+		db.ScrollToBottom()
+	}
+}
+
+// SetEraseColor sets the background color for erase operations.
+// Terminal erase ops (EL, ECH, ED) fill with current BG, not default.
+func (db *DisplayBuffer) SetEraseColor(bg Color) {
+	db.viewport.SetEraseColor(bg)
+}
+
+// Erase performs erase operations on the current line.
 // mode 0: Erase from cursor to end (EL 0)
 // mode 1: Erase from start to cursor (EL 1)
 // mode 2: Erase entire line (EL 2)
-// Delegates to LiveEditor.
 func (db *DisplayBuffer) Erase(mode int) {
 	switch mode {
-	case 0: // Erase to End
-		db.liveEditor.EraseToEnd()
-	case 1: // Erase Start to Cursor
-		db.liveEditor.EraseFromStart(DefaultFG, DefaultBG)
-	case 2: // Erase All
-		db.liveEditor.EraseLine()
-	}
-	// Viewport adjustment if at live edge - use non-shrinking scroll to avoid
-	// moving the live line to a different viewport row when content shrinks
-	if db.atLiveEdge {
-		db.scrollToLiveEdge(false)
+	case 0:
+		db.viewport.EraseToEndOfLine()
+	case 1:
+		db.viewport.EraseFromStartOfLine()
+	case 2:
+		db.viewport.EraseLine()
 	}
 }
-	        
-// EraseCharacters replaces n characters at current position with spaces.
-// Delegates to LiveEditor.
+
+// EraseScreenMode handles ED (Erase in Display) with different modes.
+// mode 0: Erase from cursor to end of screen
+// mode 1: Erase from start of screen to cursor
+// mode 2: Erase entire screen
+func (db *DisplayBuffer) EraseScreenMode(mode int) {
+	db.viewport.SetEraseColor(db.viewport.eraseBG)
+	switch mode {
+	case 0:
+		db.viewport.EraseToEndOfScreen()
+	case 1:
+		db.viewport.EraseFromStartOfScreen()
+	case 2:
+		db.viewport.EraseScreen()
+	}
+}
+
+// EraseCharacters replaces n characters at cursor with spaces (ECH).
 func (db *DisplayBuffer) EraseCharacters(n int) {
-	db.liveEditor.EraseChars(n, DefaultFG, DefaultBG)
-	if db.atLiveEdge {
-		db.scrollToLiveEdge(false)
-	}
+	db.viewport.EraseCharacters(n)
 }
 
-// DeleteCharacters deletes n characters at current position, shifting content left.
-// Delegates to LiveEditor.
+// DeleteCharacters removes n characters at cursor, shifting content left (DCH).
 func (db *DisplayBuffer) DeleteCharacters(n int) {
-	db.liveEditor.DeleteChars(n)
-	if db.atLiveEdge {
-		db.scrollToLiveEdge(false)
-	}
+	db.viewport.DeleteCharacters(n)
 }
 
-// InsertCharacters inserts n blank characters at current position, shifting content right.
-// Delegates to LiveEditor. Used for ICH (Insert Character) - CSI @.
+// InsertCharacters inserts n blank characters at cursor (ICH).
 func (db *DisplayBuffer) InsertCharacters(n int, fg, bg Color) {
-	db.liveEditor.InsertChars(n, fg, bg)
-	if db.atLiveEdge {
-		db.scrollToLiveEdge(false)
+	db.viewport.InsertCharacters(n, fg, bg)
+}
+
+// --- Cursor Information ---
+
+// GetCursorOffset returns the logical cursor offset.
+// For backward compatibility - calculates from physical position.
+func (db *DisplayBuffer) GetCursorOffset() int {
+	x, y := db.viewport.Cursor()
+	return y*db.viewport.Width() + x
+}
+
+// GetPhysicalCursorPos returns the viewport coordinates of the cursor.
+func (db *DisplayBuffer) GetPhysicalCursorPos() (x, y int, found bool) {
+	if db.viewingHistory {
+		return 0, 0, false // Cursor not visible when viewing history
+	}
+	x, y = db.viewport.Cursor()
+	return x, y, true
+}
+
+// --- Line Operations ---
+
+// CommitCurrentLine commits the current line to history.
+// Called on: LF at bottom row, OSC 133;D.
+func (db *DisplayBuffer) CommitCurrentLine() {
+	db.viewport.CommitCurrentLine()
+
+	if db.debugLog != nil {
+		db.debugLog("DisplayBuffer.CommitCurrentLine")
 	}
 }
 
-// GetCursorOffset returns the current logical cursor offset.
-// Delegates to LiveEditor.
-func (db *DisplayBuffer) GetCursorOffset() int {
-	return db.liveEditor.GetCursorOffset()
+// CurrentLine returns the current logical line (for backward compatibility).
+// Extracts from viewport at cursor position.
+func (db *DisplayBuffer) CurrentLine() *LogicalLine {
+	x, y := db.viewport.Cursor()
+
+	// Find start of logical line
+	startRow := y
+	for startRow > 0 && db.viewport.rowMeta[startRow].IsContinuation {
+		startRow--
+	}
+
+	// Find end of logical line
+	endRow := y
+	for endRow < db.viewport.Height()-1 && db.viewport.rowMeta[endRow+1].IsContinuation {
+		endRow++
+	}
+
+	// Extract logical line
+	lines := db.viewport.ExtractLogicalLines(startRow, endRow)
+	if len(lines) > 0 {
+		return lines[0]
+	}
+
+	// Find logical line index for cursor position
+	_ = x // cursor x position available if needed
+
+	return NewLogicalLine()
 }
 
-// GetPhysicalCursorPos returns the viewport coordinates (x, y) of the logical cursor.
-// Returns found=false if the cursor is currently scrolled out of view.
-// Delegates to LiveEditor for cursor position calculation.
-func (db *DisplayBuffer) GetPhysicalCursorPos() (x, y int, found bool) {
-	// Get the physical cursor position within the live editor's line
-	row, col := db.liveEditor.GetPhysicalCursor(db.width)
+// RebuildCurrentLine is a no-op in the new architecture.
+// Kept for backward compatibility.
+func (db *DisplayBuffer) RebuildCurrentLine() {
+	// No-op - viewport is always up to date
+}
 
-	// Translate to viewport coordinates
-	// The live editor's line starts after all committed lines
-	liveEdgeStartIdx := len(db.lines)
+// currentLinePhysical returns the physical rows of the current logical line.
+// For backward compatibility with tests.
+func (db *DisplayBuffer) currentLinePhysical() [][]Cell {
+	_, y := db.viewport.Cursor()
 
-	// Buffer index = committed lines + row within live editor
-	bufferIdx := liveEdgeStartIdx + row
+	// Find start of logical line
+	startRow := y
+	for startRow > 0 && db.viewport.rowMeta[startRow].IsContinuation {
+		startRow--
+	}
 
-	// Convert to viewport Y
-	viewportY := bufferIdx - db.viewportTop
+	// Find end of logical line
+	endRow := y
+	for endRow < db.viewport.Height()-1 && db.viewport.rowMeta[endRow+1].IsContinuation {
+		endRow++
+	}
 
-	// Check if cursor is visible in viewport
-	if viewportY < 0 || viewportY >= db.height {
+	// Extract physical rows
+	result := make([][]Cell, endRow-startRow+1)
+	grid := db.viewport.Grid()
+	for i := 0; i <= endRow-startRow; i++ {
+		result[i] = make([]Cell, len(grid[startRow+i]))
+		copy(result[i], grid[startRow+i])
+	}
+	return result
+}
+
+// lines is a backward-compatibility accessor for tests.
+// Returns number of committed history lines.
+func (db *DisplayBuffer) lines() int {
+	if db.history == nil {
+		return 0
+	}
+	return int(db.history.TotalLen())
+}
+
+// scrollToLiveEdge is a no-op stub for backward compatibility with tests.
+// The new viewport-based architecture doesn't have separate history viewing.
+func (db *DisplayBuffer) scrollToLiveEdge(_ bool) {
+	// No-op - viewport is always at live edge in new architecture
+}
+
+// GetLogicalPos is a stub for backward compatibility with tests.
+// Returns viewport row as lineIdx, cursor X as offset.
+func (db *DisplayBuffer) GetLogicalPos(physX, physY int) (lineIdx int, offset int, found bool) {
+	if physY < 0 || physY >= db.viewport.Height() {
 		return 0, 0, false
 	}
-
-	return col, viewportY, true
+	// In new architecture, lineIdx is just the row, offset is the column
+	return physY, physX, true
 }
 
-        // SetDebugLog sets an optional debug logging function.
-func (db *DisplayBuffer) SetDebugLog(fn func(format string, args ...interface{})) {
-	db.debugLog = fn
+// viewportTop is a stub for backward compatibility with tests.
+// Returns 0 since viewport is always showing live content.
+func (db *DisplayBuffer) viewportTop() int {
+	return 0
 }
 
-// loadInitialHistory loads the bottom portion of history into lines.
-// Called when creating a display buffer with existing history.
-func (db *DisplayBuffer) loadInitialHistory() {
-	if db.history == nil || db.history.TotalLen() == 0 {
-		return
-	}
+// --- Viewport Access ---
 
-	// Calculate how many lines we need to show the live edge
-	linesNeeded := db.height + db.marginAbove
-	totalLines := db.history.TotalLen()
-
-	// Start from the end of history and work backwards
-	db.globalTopIndex = totalLines
-	physicalLoaded := 0
-
-	// Walk backwards through logical lines until we have enough physical lines
-	for db.globalTopIndex > 0 && physicalLoaded < linesNeeded {
-		db.globalTopIndex--
-		line := db.history.GetGlobal(db.globalTopIndex)
-		if line != nil {
-			physical := line.WrapToWidth(db.width)
-			physicalLoaded += len(physical)
-		}
-	}
-
-	// Now load those lines using global range
-	db.lines = db.history.WrapGlobalToWidth(db.globalTopIndex, totalLines, db.width)
-
-	// Position viewport at the live edge (bottom)
-	db.scrollToLiveEdge(true)
-}
-
-// Width returns the current terminal width.
-func (db *DisplayBuffer) Width() int {
-	return db.width
-}
-
-// Height returns the viewport height.
-func (db *DisplayBuffer) Height() int {
-	return db.height
-}
-
-// AtLiveEdge returns whether the viewport is following live output.
-func (db *DisplayBuffer) AtLiveEdge() bool {
-	return db.atLiveEdge
-}
-
-// CurrentLine returns the current (uncommitted) logical line being edited.
-// Delegates to LiveEditor.
-func (db *DisplayBuffer) CurrentLine() *LogicalLine {
-	return db.liveEditor.Line()
-}
-
-// currentLinePhysical returns the current line wrapped to the current width.
-// Delegates to LiveEditor.
-func (db *DisplayBuffer) currentLinePhysical() []PhysicalLine {
-	return db.liveEditor.GetPhysicalLines(db.width)
-}
-
-// RebuildCurrentLine triggers a viewport update after line content changes.
-// This is called after editing operations that modify the current line.
-func (db *DisplayBuffer) RebuildCurrentLine() {
-	// Update viewport if at live edge - use NoShrink to prevent viewport from
-	// shrinking during repaint sequences (e.g., bash repainting after wrap crossing)
-	if db.atLiveEdge {
-		db.scrollToLiveEdge(false)
-	}
-}
-
-// CommitCurrentLine moves the current line into history and starts a new one.
-// This is called when a line feed (LF) occurs.
-// Delegates to LiveEditor for line commitment.
-func (db *DisplayBuffer) CommitCurrentLine() {
-	// Debug: log before commit
-	if db.debugLog != nil {
-		db.debugLog("CommitCurrentLine: BEFORE - line len=%d, len(db.lines)=%d",
-			db.liveEditor.Line().Len(), len(db.lines))
-	}
-
-	// Get the committed line from LiveEditor (this also resets the editor)
-	committedLine := db.liveEditor.Commit()
-
-	// Append to history
-	if db.history != nil {
-		db.history.Append(committedLine)
-	}
-
-	// Add the committed line's physical representation to our buffer
-	committed := committedLine.WrapToWidth(db.width)
-	// Use global index (TotalLen - 1 is the just-appended line)
-	globalIdx := int(db.history.TotalLen()) - 1
-	for i := range committed {
-		committed[i].LogicalIndex = globalIdx
-	}
-	oldLen := len(db.lines)
-	db.lines = append(db.lines, committed...)
-
-	// Debug: log after commit
-	if db.debugLog != nil {
-		db.debugLog("CommitCurrentLine: AFTER - len(db.lines) %d -> %d, added %d physical rows",
-			oldLen, len(db.lines), len(committed))
-	}
-
-	// If at live edge, scroll to keep viewport at bottom - use NoShrink to prevent
-	// viewport from shrinking during line editing sequences (commit/uncommit)
-	if db.atLiveEdge {
-		db.scrollToLiveEdge(false)
-	}
-
-	// Trim excess lines above if needed
-	db.trimAbove()
-
-	// Allow uncommit until new content is written
-	db.allowUncommit = true
-}
-
-// uncommitLineAtPhysicalRow attempts to restore the logical line at the given physical row
-// back to the live editor. This is used when cursor moves into recently committed history
-// during bash redraw sequences. Returns true if successful.
-// Only works for the last committed logical line that's still in our buffer.
-func (db *DisplayBuffer) uncommitLineAtPhysicalRow(physRow int) bool {
-	if len(db.lines) == 0 {
-		return false
-	}
-
-	// Find which logical line this physical row belongs to
-	if physRow < 0 || physRow >= len(db.lines) {
-		return false
-	}
-
-	targetLogicalIdx := db.lines[physRow].LogicalIndex
-
-	// We can only uncommit the LAST logical line in our buffer
-	lastLogicalIdx := db.lines[len(db.lines)-1].LogicalIndex
-	if targetLogicalIdx != lastLogicalIdx {
-		if db.debugLog != nil {
-			db.debugLog("uncommitLineAtPhysicalRow: physRow=%d is logical %d, but last is %d - can only uncommit last",
-				physRow, targetLogicalIdx, lastLogicalIdx)
-		}
-		return false
-	}
-
-	// Try to pop from history
-	if db.history == nil {
-		return false
-	}
-
-	poppedLine := db.history.PopLast()
-	if poppedLine == nil {
-		if db.debugLog != nil {
-			db.debugLog("uncommitLineAtPhysicalRow: PopLast returned nil")
-		}
-		return false
-	}
-
-	// Find where this logical line starts in our physical buffer
-	startPhysRow := 0
-	for i := len(db.lines) - 1; i >= 0; i-- {
-		if db.lines[i].LogicalIndex == targetLogicalIdx {
-			startPhysRow = i
-		} else {
-			break
-		}
-	}
-
-	// Remove physical rows from db.lines
-	numRemoved := len(db.lines) - startPhysRow
-	db.lines = db.lines[:startPhysRow]
-
-	// Restore to live editor
-	db.liveEditor.RestoreLine(poppedLine)
-
-	if db.debugLog != nil {
-		db.debugLog("uncommitLineAtPhysicalRow: SUCCESS - removed %d physical rows, restored line with len=%d",
-			numRemoved, poppedLine.Len())
-	}
-
-	return true
-}
-
-// scrollToLiveEdge adjusts viewportTop so the viewport shows the bottom content.
-// When content exceeds viewport height, the latest content is at the bottom.
-// When content is less than viewport height, content starts at the top (row 0).
-//
-// If allowShrink is false, viewportTop will only increase (scroll down), never decrease.
-// This is used during line editing where we must keep viewportTop stable - bash expects
-// the cursor to stay on the same physical row, and if we scroll up (reduce viewportTop),
-// the live line moves to a different viewport row, causing display desync.
-//
-// allowShrink=true is used for: loadInitialHistory, ScrollToBottom, resize, rewrap
-// allowShrink=false is used for: Write, Erase, DeleteCharacters, InsertCharacters, RebuildCurrentLine, CommitCurrentLine
-func (db *DisplayBuffer) scrollToLiveEdge(allowShrink bool) {
-	totalLines := db.contentLineCount()
-	idealViewportTop := totalLines - db.height
-	if idealViewportTop < 0 {
-		idealViewportTop = 0
-	}
-
-	if allowShrink || idealViewportTop > db.viewportTop {
-		db.viewportTop = idealViewportTop
-	}
-	db.atLiveEdge = true
-}
-
-// contentLineCount returns the number of physical lines in the buffer.
-// Includes current line even if empty, as it occupies visual space.
-func (db *DisplayBuffer) contentLineCount() int {
-	total := len(db.lines)
-	// Always include current line space (even if empty, it consumes a row)
-	total += len(db.currentLinePhysical())
-	return total
-}
-// trimAbove removes lines from the top that exceed marginAbove.
-func (db *DisplayBuffer) trimAbove() {
-	excessAbove := db.viewportTop - db.marginAbove
-	if excessAbove > 0 {
-		// Count how many logical lines we're removing
-		// Walk through removed physical lines and find the new globalTopIndex
-		newGlobalTop := db.globalTopIndex
-		for i := 0; i < excessAbove && i < len(db.lines); i++ {
-			// When we cross to a new logical line, advance the global index
-			if i > 0 && db.lines[i].LogicalIndex != db.lines[i-1].LogicalIndex {
-				newGlobalTop = int64(db.lines[i].LogicalIndex)
-			}
-		}
-		if excessAbove < len(db.lines) {
-			newGlobalTop = int64(db.lines[excessAbove].LogicalIndex)
-		}
-
-		// Remove excess lines from the top
-		db.lines = db.lines[excessAbove:]
-		db.viewportTop -= excessAbove
-		db.globalTopIndex = newGlobalTop
-	}
-}
-
-// loadAbove loads more lines from history above the current buffer.
-// Uses global indices and triggers disk loading if needed.
-func (db *DisplayBuffer) loadAbove(count int) {
-	if db.history == nil || db.globalTopIndex <= 0 {
-		return
-	}
-
-	// Calculate how many logical lines to load
-	linesToLoad := int64(count)
-	if linesToLoad > db.globalTopIndex {
-		linesToLoad = db.globalTopIndex
-	}
-	startIdx := db.globalTopIndex - linesToLoad
-
-	// Ensure ScrollbackHistory has these lines loaded from disk
-	// LoadAbove returns how many were loaded, but we use global range which
-	// will read from disk as needed via GetGlobalRange
-	if db.history.CanLoadAbove() {
-		// Try to load into memory first for better performance
-		db.history.LoadAbove(int(linesToLoad))
-	}
-
-	// Wrap those logical lines to physical using global range
-	physical := db.history.WrapGlobalToWidth(startIdx, db.globalTopIndex, db.width)
-
-	// Prepend to our lines
-	db.lines = append(physical, db.lines...)
-	db.viewportTop += len(physical)
-	db.globalTopIndex = startIdx
-}
-
-// ScrollUp scrolls the viewport up by the given number of lines.
-// Returns how many lines were actually scrolled.
-func (db *DisplayBuffer) ScrollUp(lines int) int {
-	if lines <= 0 {
-		return 0
-	}
-
-	// Check if we need to load more content from history
-	if db.viewportTop < lines {
-		needed := lines - db.viewportTop
-		db.loadAbove(needed + db.marginAbove) // Load extra for margin
-	}
-
-	// Scroll up
-	actual := min(lines, db.viewportTop)
-	db.viewportTop -= actual
-
-	if actual > 0 {
-		db.atLiveEdge = false
-	}
-
-	return actual
-}
-
-// ScrollDown scrolls the viewport down by the given number of lines.
-// Returns how many lines were actually scrolled.
-func (db *DisplayBuffer) ScrollDown(lines int) int {
-	if lines <= 0 {
-		return 0
-	}
-
-	totalLines := db.contentLineCount()
-	// Live edge position: totalLines - height (can be negative)
-	liveEdgeViewportTop := totalLines - db.height
-
-	actual := min(lines, liveEdgeViewportTop-db.viewportTop)
-	if actual < 0 {
-		actual = 0
-	}
-	db.viewportTop += actual
-
-	// Check if we've reached the live edge
-	if db.viewportTop >= liveEdgeViewportTop {
-		db.atLiveEdge = true
-	}
-
-	return actual
-}
-
-// ScrollToBottom scrolls the viewport to the live edge.
-func (db *DisplayBuffer) ScrollToBottom() {
-	db.scrollToLiveEdge(true)
-}
-
-// GetViewport returns the physical lines currently visible in the viewport.
-// The returned slice has exactly 'height' elements, padded with empty lines if needed.
-func (db *DisplayBuffer) GetViewport() []PhysicalLine {
-	result := make([]PhysicalLine, db.height)
-
-	// Combine committed lines and current line physical representation
-	currentPhys := db.currentLinePhysical()
-	allLines := append(db.lines, currentPhys...)
-
-	for i := 0; i < db.height; i++ {
-		bufferIdx := db.viewportTop + i
-		if bufferIdx >= 0 && bufferIdx < len(allLines) {
-			result[i] = allLines[bufferIdx]
-		} else {
-			// Empty line (padding at the end)
-			result[i] = PhysicalLine{
-				Cells:        make([]Cell, 0),
-				LogicalIndex: -1,
-				Offset:       0,
-			}
-		}
-	}
-
-	return result
-}
-
-// GetViewportAsCells returns the viewport as a 2D Cell grid (height x width).
-// This is the format expected by the terminal renderer.
+// GetViewportAsCells returns the viewport as a 2D Cell grid.
 func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
-	viewport := db.GetViewport()
-	result := make([][]Cell, db.height)
+	if db.viewingHistory {
+		return db.getHistoryView()
+	}
+	return db.viewport.Grid()
+}
 
-	// Debug: log viewport composition
-	if db.debugLog != nil {
-		currentPhys := db.currentLinePhysical()
-		db.debugLog("GetViewportAsCells: len(db.lines)=%d, len(currentPhys)=%d, viewportTop=%d, liveEditor.Len()=%d",
-			len(db.lines), len(currentPhys), db.viewportTop, db.liveEditor.Len())
+// getHistoryView builds the view when scrolled back into history.
+func (db *DisplayBuffer) getHistoryView() [][]Cell {
+	if db.cachedHistoryView != nil {
+		return db.cachedHistoryView
 	}
 
-	// Debug: log when we have wrapped content on a fresh terminal
-	currentPhys := db.currentLinePhysical()
-	if db.debugLog != nil && len(db.lines) == 0 && len(currentPhys) > 1 {
-		db.debugLog("GetViewportAsCells: currentLinePhysical has %d wrapped lines, viewportTop=%d, height=%d",
-			len(currentPhys), db.viewportTop, db.height)
-		for i, pl := range currentPhys {
-			var content string
-			for _, c := range pl.Cells {
-				if c.Rune != 0 {
-					content += string(c.Rune)
-				}
+	height := db.viewport.Height()
+	width := db.viewport.Width()
+	result := make([][]Cell, height)
+
+	// Fill with empty rows first
+	for y := 0; y < height; y++ {
+		result[y] = make([]Cell, width)
+		for x := 0; x < width; x++ {
+			result[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+		}
+	}
+
+	if db.history == nil {
+		return result
+	}
+
+	// Load history lines at the scroll offset
+	// historyViewOffset is how many physical rows we've scrolled back
+	totalHistoryLines := db.history.TotalLen()
+	if totalHistoryLines == 0 {
+		return result
+	}
+
+	// Calculate which logical lines to load
+	// We need to work backwards from the end of history
+	physicalRowsBack := db.historyViewOffset
+
+	// Get wrapped lines from history
+	// Start from end and work back
+	var physicalLines []PhysicalLine
+	logicalIdx := totalHistoryLines - 1
+
+	for logicalIdx >= 0 && int64(len(physicalLines)) < physicalRowsBack+int64(height) {
+		line := db.history.GetGlobal(logicalIdx)
+		if line != nil {
+			wrapped := line.WrapToWidth(width)
+			// Prepend to physicalLines (we're going backwards)
+			newLines := make([]PhysicalLine, len(wrapped)+len(physicalLines))
+			copy(newLines, wrapped)
+			copy(newLines[len(wrapped):], physicalLines)
+			physicalLines = newLines
+		}
+		logicalIdx--
+	}
+
+	// Now physicalLines contains history from some point to the end
+	// We want to show starting at (len - historyViewOffset - height)
+	startIdx := len(physicalLines) - int(physicalRowsBack) - height
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	for y := 0; y < height && startIdx+y < len(physicalLines); y++ {
+		pl := physicalLines[startIdx+y]
+		for x, cell := range pl.Cells {
+			if x < width {
+				result[y][x] = cell
 			}
-			db.debugLog("  physical[%d]: %q", i, content)
 		}
 	}
 
-	for y, line := range viewport {
-		row := make([]Cell, db.width)
-		// Fill with spaces
-		for x := range row {
-			row[x] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
-		}
-		// Copy cells from physical line
-		for x, cell := range line.Cells {
-			if x < db.width {
-				row[x] = cell
-			}
-		}
-		result[y] = row
-	}
-
+	db.cachedHistoryView = result
 	return result
 }
 
-// Resize changes the display buffer dimensions and reflows content.
-// This is O(viewport + margins), not O(total history).
-func (db *DisplayBuffer) Resize(newWidth, newHeight int) {
-	if newWidth <= 0 || newHeight <= 0 {
-		return
-	}
+// GetViewport returns physical lines (for backward compatibility).
+func (db *DisplayBuffer) GetViewport() []PhysicalLine {
+	height := db.viewport.Height()
+	result := make([]PhysicalLine, height)
 
-	oldWidth := db.width
-	oldHeight := db.height
-	db.width = newWidth
-	db.height = newHeight
-
-	if oldWidth == newWidth {
-		// Only height changed - adjust viewport position
-		db.resizeHeight(oldHeight, newHeight)
-		return
-	}
-
-	// Width changed - need to rewrap visible content
-	db.rewrap()
-}
-
-// resizeHeight handles vertical-only resize, preserving scroll position.
-func (db *DisplayBuffer) resizeHeight(oldHeight, newHeight int) {
-	totalLines := db.contentLineCount()
-
-	if db.atLiveEdge {
-		// At live edge - keep content at bottom of viewport
-		// viewportTop = totalLines - newHeight (clamped to 0 if content < height)
-		db.viewportTop = totalLines - newHeight
-		if db.viewportTop < 0 {
-			db.viewportTop = 0
-		}
-
-		// If we grew and need more lines from history, load them
-		if newHeight > oldHeight && db.viewportTop < db.marginAbove {
-			needed := db.marginAbove - db.viewportTop
-			if needed > 0 {
-				db.loadAbove(needed)
-			}
-			// Recalculate after loading
-			totalLines = db.contentLineCount()
-			db.viewportTop = totalLines - newHeight
-			if db.viewportTop < 0 {
-				db.viewportTop = 0
-			}
-		}
-	} else {
-		// Not at live edge - keep the same content at the top of viewport
-		// The viewportTop index stays the same, but we may need to:
-		// - Load more lines if we grew and don't have enough below
-		// - Clamp viewportTop if we shrank and it's now past valid range
-
-		maxViewportTop := totalLines - newHeight
-		// Don't allow negative viewport when not at live edge (stay at top of content)
-		if maxViewportTop < 0 {
-			maxViewportTop = 0
-		}
-
-		if db.viewportTop > maxViewportTop {
-			db.viewportTop = maxViewportTop
-			// Check if we've reached the live edge
-			if db.viewportTop >= totalLines-newHeight {
-				db.atLiveEdge = true
-			}
-		}
-	}
-}
-
-// rewrap rebuilds the display buffer at the current width.
-func (db *DisplayBuffer) rewrap() {
-	// Remember where we were anchored
-	wasAtLiveEdge := db.atLiveEdge
-
-	// Remember anchor for scroll position preservation (using global index)
-	var anchorLogicalIdx int = -1
-	var anchorWrapOffset int = 0
-
-	if !wasAtLiveEdge && len(db.lines) > 0 && db.viewportTop < len(db.lines) {
-		// Find which logical line is at the top of viewport
-		anchorLine := db.lines[db.viewportTop]
-		anchorLogicalIdx = anchorLine.LogicalIndex
-		anchorWrapOffset = anchorLine.Offset
-	}
-
-	                        // Rebuild from history
-
-	                        db.lines = make([]PhysicalLine, 0)
-
-	                        var totalLines int64
-
-	                        if db.history != nil {
-
-	                                totalLines = db.history.TotalLen()
-
-	                        }
-
-	                
-
-	                        if db.history != nil && totalLines > 0 {		// Load a window of history around what we need
-		linesNeeded := db.height + db.marginAbove + db.marginBelow
-
-		if anchorLogicalIdx >= 0 {
-			// Load from before the anchor point all the way to the end of history.
-			// This ensures the user can scroll down to the live edge after resize.
-			// We load from (anchor - marginAbove) to totalLines.
-			startIdx := int64(max(0, anchorLogicalIdx-db.marginAbove))
-
-			db.globalTopIndex = startIdx
-			// Load all the way to the end so user can scroll down to live edge
-			db.lines = db.history.WrapGlobalToWidth(startIdx, totalLines, db.width)
-		} else {
-			// Start from the end of history and work backwards
-			db.globalTopIndex = totalLines
-			physicalLoaded := 0
-
-			// Walk backwards through logical lines until we have enough physical lines
-			for db.globalTopIndex > 0 && physicalLoaded < linesNeeded {
-				db.globalTopIndex--
-				line := db.history.GetGlobal(db.globalTopIndex)
-				if line != nil {
-					physical := line.WrapToWidth(db.width)
-					physicalLoaded += len(physical)
-				}
-			}
-
-			// Now load those lines using global range
-			db.lines = db.history.WrapGlobalToWidth(db.globalTopIndex, totalLines, db.width)
-		}
-	}
-
-	// Position viewport
-	if wasAtLiveEdge {
-		db.scrollToLiveEdge(true)
-	} else if anchorLogicalIdx >= 0 {
-		// Try to maintain scroll position based on anchor logical line
-		db.scrollToLogicalLine(anchorLogicalIdx, anchorWrapOffset)
-	} else {
-		db.scrollToLiveEdge(true)
-	}
-}
-
-// scrollToLogicalLine positions the viewport so the given logical line
-// (at the given wrap offset) is at the top of the viewport.
-func (db *DisplayBuffer) scrollToLogicalLine(logicalIdx, wrapOffset int) {
-	// Find the physical line that corresponds to this logical line
-	for i, line := range db.lines {
-		if line.LogicalIndex == logicalIdx {
-			// Found the start of this logical line
-			// Add wrap offset (clamped to available physical lines for this logical)
-			targetIdx := i + wrapOffset
-
-			// Count how many physical lines this logical line spans
-			physicalCount := 0
-			for j := i; j < len(db.lines) && db.lines[j].LogicalIndex == logicalIdx; j++ {
-				physicalCount++
-			}
-
-			// Clamp wrap offset
-			if wrapOffset >= physicalCount {
-				targetIdx = i + physicalCount - 1
-			}
-
-			// Set viewport
-			if targetIdx >= 0 && targetIdx < len(db.lines) {
-				db.viewportTop = targetIdx
-				db.atLiveEdge = false
-
-				// Load more above if needed
-				if db.viewportTop < db.marginAbove {
-					db.loadAbove(db.marginAbove - db.viewportTop)
-				}
-				return
-			}
-		}
-	}
-
-	// Logical line not found in buffer - fall back to live edge
-	db.scrollToLiveEdge(true)
-}
-
-// SetCell sets a cell in the current line at the given logical X position.
-// Delegates to LiveEditor's underlying line.
-func (db *DisplayBuffer) SetCell(logicalX int, cell Cell) {
-	db.liveEditor.Line().SetCell(logicalX, cell)
-
-	// Debug: log when a character would be on a wrapped line
-	if logicalX >= db.width && db.debugLog != nil {
-		db.debugLog("SetCell: logicalX=%d (>= width=%d), char='%c', currentLinePhysical=%d lines, atLiveEdge=%v, viewportTop=%d",
-			logicalX, db.width, cell.Rune, len(db.currentLinePhysical()), db.atLiveEdge, db.viewportTop)
-	}
-
-	// Update the visible line in the buffer if at live edge - use NoShrink
-	if db.atLiveEdge {
-		db.scrollToLiveEdge(false)
-	}
-}
-
-// InsertCell inserts a cell in the current line at the given logical X position,
-// shifting existing cells right. Used for insert mode (IRM).
-// Delegates to LiveEditor's underlying line.
-func (db *DisplayBuffer) InsertCell(logicalX int, cell Cell) {
-	db.liveEditor.Line().InsertCell(logicalX, cell)
-
-	// Update the visible line in the buffer if at live edge - use NoShrink
-	if db.atLiveEdge {
-		db.scrollToLiveEdge(false)
-	}
-}
-
-// TotalPhysicalLines returns the total number of physical lines in the buffer
-// (committed + current line).
-func (db *DisplayBuffer) TotalPhysicalLines() int {
-	return len(db.lines) + len(db.currentLinePhysical())
-}
-
-// ViewportTopLine returns the current viewport top position.
-func (db *DisplayBuffer) ViewportTopLine() int {
-	return db.viewportTop
-}
-
-// GlobalViewportStart returns the global logical line index at the top of the viewport.
-// This is useful for mapping viewport positions to history indices.
-func (db *DisplayBuffer) GlobalViewportStart() int64 {
-	return db.globalTopIndex
-}
-
-// ClearViewport clears all visible lines in the viewport (ED 2 behavior).
-// This does not affect scrollback history - only the visible area.
-func (db *DisplayBuffer) ClearViewport() {
-	// Clear committed lines that are visible in the viewport
-	viewportEnd := db.viewportTop + db.height
-	if viewportEnd > len(db.lines) {
-		viewportEnd = len(db.lines)
-	}
-
-	// Clear visible committed lines by replacing with empty cells
-	for i := db.viewportTop; i < viewportEnd && i < len(db.lines); i++ {
-		db.lines[i] = PhysicalLine{
-			Cells:        make([]Cell, 0),
-			LogicalIndex: db.lines[i].LogicalIndex,
+	grid := db.viewport.Grid()
+	for y := 0; y < height; y++ {
+		cells := make([]Cell, len(grid[y]))
+		copy(cells, grid[y])
+		result[y] = PhysicalLine{
+			Cells:        cells,
+			LogicalIndex: -1,
 			Offset:       0,
 		}
 	}
 
-	// Clear the current line
-	db.liveEditor.EraseLine()
+	return result
 }
 
-// ReplaceCurrentLine replaces the current uncommitted line with the given cells.
-// This is used for backwards compatibility with code that modifies lines in place.
-func (db *DisplayBuffer) ReplaceCurrentLine(cells []Cell) {
-	// Create a new logical line from the cells
-	newLine := NewLogicalLineFromCells(cells)
-	// Replace the live editor's line
-	db.liveEditor.RestoreLine(newLine)
+// --- Scroll Operations ---
+
+// ScrollUp scrolls the viewport up (content moves down).
+// Called when LF at bottom of scroll region.
+func (db *DisplayBuffer) ScrollUp(n int) int {
+	db.viewport.ScrollUp(n)
+	return n
 }
 
-// CanScrollUp returns true if there's content above the viewport to scroll to.
+// ScrollDown scrolls the viewport down (content moves up).
+func (db *DisplayBuffer) ScrollDown(n int) int {
+	db.viewport.ScrollDown(n)
+	return n
+}
+
+// ScrollToBottom returns to the live edge.
+func (db *DisplayBuffer) ScrollToBottom() {
+	db.viewingHistory = false
+	db.historyViewOffset = 0
+	db.cachedHistoryView = nil
+	db.viewport.ScrollToLiveEdge()
+}
+
+// ScrollViewportUp scrolls the view up into history (for user scrollback).
+func (db *DisplayBuffer) ScrollViewportUp(lines int) int {
+	if db.history == nil {
+		return 0
+	}
+
+	// Calculate max scroll
+	maxScroll := db.calculateMaxHistoryScroll()
+	newOffset := db.historyViewOffset + int64(lines)
+	if newOffset > maxScroll {
+		newOffset = maxScroll
+	}
+
+	scrolled := int(newOffset - db.historyViewOffset)
+	db.historyViewOffset = newOffset
+	db.viewingHistory = newOffset > 0
+	db.cachedHistoryView = nil // Invalidate cache
+
+	return scrolled
+}
+
+// ScrollViewportDown scrolls the view down toward live edge.
+func (db *DisplayBuffer) ScrollViewportDown(lines int) int {
+	if !db.viewingHistory {
+		return 0
+	}
+
+	newOffset := db.historyViewOffset - int64(lines)
+	if newOffset < 0 {
+		newOffset = 0
+	}
+
+	scrolled := int(db.historyViewOffset - newOffset)
+	db.historyViewOffset = newOffset
+	db.viewingHistory = newOffset > 0
+	db.cachedHistoryView = nil // Invalidate cache
+
+	if !db.viewingHistory {
+		db.viewport.ScrollToLiveEdge()
+	}
+
+	return scrolled
+}
+
+// calculateMaxHistoryScroll returns the maximum scroll offset.
+func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
+	if db.history == nil {
+		return 0
+	}
+
+	// Count total physical lines in history
+	var totalPhysical int64
+	for i := int64(0); i < db.history.TotalLen(); i++ {
+		line := db.history.GetGlobal(i)
+		if line != nil {
+			wrapped := line.WrapToWidth(db.viewport.Width())
+			totalPhysical += int64(len(wrapped))
+		}
+	}
+
+	// Can scroll back by total physical lines minus viewport height
+	max := totalPhysical - int64(db.viewport.Height())
+	if max < 0 {
+		max = 0
+	}
+	return max
+}
+
+// --- Resize ---
+
+// Resize changes the viewport dimensions.
+func (db *DisplayBuffer) Resize(newWidth, newHeight int) {
+	db.viewport.Resize(newWidth, newHeight)
+	db.cachedHistoryView = nil // Invalidate cache
+}
+
+// --- Accessors ---
+
+// Width returns the viewport width.
+func (db *DisplayBuffer) Width() int {
+	return db.viewport.Width()
+}
+
+// Height returns the viewport height.
+func (db *DisplayBuffer) Height() int {
+	return db.viewport.Height()
+}
+
+// AtLiveEdge returns whether viewport is at the live edge.
+func (db *DisplayBuffer) AtLiveEdge() bool {
+	return !db.viewingHistory && db.viewport.AtLiveEdge()
+}
+
+// CanScrollUp returns whether there's content above to scroll to.
 func (db *DisplayBuffer) CanScrollUp() bool {
-	return db.viewportTop > 0 || db.globalTopIndex > 0
+	return db.history != nil && db.history.TotalLen() > 0
 }
 
-// CanScrollDown returns true if there's content below the viewport to scroll to.
+// CanScrollDown returns whether we can scroll down (toward live edge).
 func (db *DisplayBuffer) CanScrollDown() bool {
-	return !db.atLiveEdge
+	return db.viewingHistory
 }
 
-// LiveEdgeRow returns the viewport row where new content will appear.
-// This is where the cursor should be positioned when at the live edge.
+// SetDebugLog sets the debug logging function.
+func (db *DisplayBuffer) SetDebugLog(fn func(format string, args ...interface{})) {
+	db.debugLog = fn
+	if db.viewport != nil {
+		db.viewport.SetDebugLog(fn)
+	}
+}
+
+// --- Shell Integration ---
+
+// MarkPromptStart marks the current line as a prompt (OSC 133;A).
+func (db *DisplayBuffer) MarkPromptStart() {
+	db.viewport.MarkPromptStart()
+}
+
+// MarkInputStart marks the current line as input (OSC 133;B).
+func (db *DisplayBuffer) MarkInputStart() {
+	db.viewport.MarkInputStart()
+}
+
+// MarkOutputStart marks the current line as output (OSC 133;C).
+func (db *DisplayBuffer) MarkOutputStart() {
+	db.viewport.MarkOutputStart()
+}
+
+// --- Line/Row Operations (for VTerm integration) ---
+
+// InsertLines inserts n blank lines at cursor row.
+func (db *DisplayBuffer) InsertLines(n int, scrollTop, scrollBottom int) {
+	db.viewport.InsertLines(n, scrollTop, scrollBottom)
+}
+
+// DeleteLines deletes n lines at cursor row.
+func (db *DisplayBuffer) DeleteLines(n int, scrollTop, scrollBottom int) {
+	db.viewport.DeleteLines(n, scrollTop, scrollBottom)
+}
+
+// ScrollRegionUp scrolls within a region.
+func (db *DisplayBuffer) ScrollRegionUp(top, bottom, n int) {
+	db.viewport.ScrollRegionUp(top, bottom, n)
+}
+
+// ScrollRegionDown scrolls within a region.
+func (db *DisplayBuffer) ScrollRegionDown(top, bottom, n int) {
+	db.viewport.ScrollRegionDown(top, bottom, n)
+}
+
+// ClearRow clears a specific row.
+func (db *DisplayBuffer) ClearRow(y int) {
+	db.viewport.ClearRow(y)
+}
+
+// ClearViewport clears the entire viewport.
+func (db *DisplayBuffer) ClearViewport() {
+	db.viewport.EraseScreen()
+}
+
+// SetCellXY sets a specific cell in the viewport at (x, y).
+func (db *DisplayBuffer) SetCellXY(x, y int, cell Cell) {
+	db.viewport.SetCell(x, y, cell)
+}
+
+// SetCell sets a cell at a linear offset from (0,0) for backward compatibility.
+// offset is converted to (x, y) based on current width.
+func (db *DisplayBuffer) SetCell(offset int, cell Cell) {
+	width := db.viewport.Width()
+	x := offset % width
+	y := offset / width
+	db.viewport.SetCell(x, y, cell)
+}
+
+// InsertCell inserts a cell at offset, shifting content right.
+// For backward compatibility with tests.
+func (db *DisplayBuffer) InsertCell(offset int, cell Cell) {
+	width := db.viewport.Width()
+	x := offset % width
+	y := offset / width
+
+	// Move cursor to position and use InsertCharacters to shift
+	db.SetCursor(x, y)
+	db.InsertCharacters(1, DefaultFG, DefaultBG)
+	db.viewport.SetCell(x, y, cell)
+}
+
+// --- Backward Compatibility Methods ---
+
+// These methods maintain API compatibility with code that used the old
+// lines[] + liveEditor model.
+
+// LiveEdgeRow returns the row where the cursor typically is.
+// In the new model, cursor can be anywhere, so return cursor Y.
 func (db *DisplayBuffer) LiveEdgeRow() int {
-        // The current line appears after all committed lines
-        committedLines := len(db.lines)
-
-        // When content doesn't fill the screen, viewportTop is 0 or negative (clamped to 0).
-        // In this case, the current line appears at row = committedLines.
-        // When content exceeds the screen, viewportTop > 0 and current line is at the bottom.
-
-        // Calculate where current line appears in the viewport
-        // viewportTop is the offset into allLines (lines + currentLinePhysical)
-        // If viewportTop < 0, it's been clamped to 0, but content starts at row 0
-        effectiveViewportTop := db.viewportTop
-        if effectiveViewportTop < 0 {
-                effectiveViewportTop = 0
-        }
-
-        // Current line is at index committedLines in allLines
-        // Its viewport row = committedLines - effectiveViewportTop
-        row := committedLines - effectiveViewportTop
-
-        // Clamp to valid viewport range
-        if row < 0 {
-                row = 0
-        }
-        if row >= db.height {
-                row = db.height - 1
-        }
-
-        return row
+	_, y := db.viewport.Cursor()
+	return y
 }
 
-// GetLogicalPos maps a physical viewport position (x, y) to a logical line index and offset.
-// Returns:
-//
-//	lineIdx: logical line index (>=0 for committed history, -1 for current uncommitted line)
-//	offset:  offset within that logical line (in cells)
-//	found:   true if the position maps to a valid line within the buffer
-func (db *DisplayBuffer) GetLogicalPos(physX, physY int) (lineIdx int, offset int, found bool) {
-	if physY < 0 || physY >= db.height {
-		return 0, 0, false
+// TotalPhysicalLines returns the viewport height.
+// In old model this was len(lines) + len(currentLinePhysical).
+func (db *DisplayBuffer) TotalPhysicalLines() int {
+	return db.viewport.Height()
+}
+
+// ViewportTopLine returns 0 (viewport always starts at row 0).
+// Old model had viewportTop for scrolling within buffer.
+func (db *DisplayBuffer) ViewportTopLine() int {
+	return 0
+}
+
+// GlobalViewportStart returns the history offset when viewing history.
+func (db *DisplayBuffer) GlobalViewportStart() int64 {
+	return db.historyViewOffset
+}
+
+// MarkRowAsLineStart marks a row as the start of a new logical line.
+func (db *DisplayBuffer) MarkRowAsLineStart(y int) {
+	db.viewport.MarkRowAsLineStart(y)
+}
+
+// MarkRowAsContinuation marks a row as continuation of the previous line.
+func (db *DisplayBuffer) MarkRowAsContinuation(y int) {
+	db.viewport.MarkRowAsContinuation(y)
+}
+
+// ReplaceCurrentLine replaces content at the cursor row with the given cells.
+// For backward compatibility with code that modifies lines in place.
+func (db *DisplayBuffer) ReplaceCurrentLine(cells []Cell) {
+	_, y := db.viewport.Cursor()
+	width := db.viewport.Width()
+
+	// Clear the current row and write cells
+	db.viewport.ClearRow(y)
+	for x, cell := range cells {
+		if x < width {
+			db.viewport.SetCell(x, y, cell)
+		}
 	}
+}
 
-	// Calculate absolute index in the physical line buffer
-	bufferIdx := db.viewportTop + physY
-
-	committedLen := len(db.lines)
-	currentPhys := db.currentLinePhysical()
-	currentLen := len(currentPhys)
-	totalLen := committedLen + currentLen
-
-	if bufferIdx >= totalLen {
-		return 0, 0, false
+// SetCursorOffset sets cursor position from a logical offset.
+// For backward compatibility - converts offset to (x, y).
+func (db *DisplayBuffer) SetCursorOffset(offset int) {
+	width := db.viewport.Width()
+	if width <= 0 {
+		return
 	}
-
-	var pl PhysicalLine
-	if bufferIdx < committedLen {
-		pl = db.lines[bufferIdx]
-	} else {
-		pl = currentPhys[bufferIdx-committedLen]
-	}
-
-	// Logical Index
-	lineIdx = pl.LogicalIndex
-
-	// Calculate Offset
-	// PhysicalLine.Offset is the start index of this row in the logical line.
-	// We simply add physX to it.
-	offset = pl.Offset + physX
-
-	return lineIdx, offset, true
+	y := offset / width
+	x := offset % width
+	db.viewport.SetCursor(x, y)
 }

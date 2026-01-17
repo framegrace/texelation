@@ -9,6 +9,7 @@ package parser
 
 import (
 	"fmt"
+	"log"
 	"os"
 )
 
@@ -77,7 +78,7 @@ func (v *VTerm) initDisplayBufferWithOptions(opts DisplayBufferOptions) {
 			DiskPath:       opts.DiskPath,
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[DISPLAY_BUFFER] Failed to create disk-backed history: %v, falling back to memory-only\n", err)
+			log.Printf("[DISPLAY_BUFFER] Failed to create disk-backed history: %v, falling back to memory-only", err)
 			history = nil
 		}
 	}
@@ -185,17 +186,22 @@ func (v *VTerm) displayBufferGrid() [][]Cell {
 // This performs a dual-write: to the current logical line AND the display buffer.
 // Respects insert mode (IRM) - in insert mode, shifts existing content right.
 func (v *VTerm) displayBufferPlaceChar(r rune) {
+	v.displayBufferPlaceCharWide(r, false)
+}
+
+// displayBufferPlaceCharWide writes a character with wide character support.
+func (v *VTerm) displayBufferPlaceCharWide(r rune, isWide bool) {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return
 	}
 
 	// Debug: log every character written
 	if v.displayBuf.display.debugLog != nil {
-		v.displayBuf.display.debugLog("displayBufferPlaceChar: '%c' at offset %d", r, v.displayBuf.display.GetCursorOffset())
+		v.displayBuf.display.debugLog("displayBufferPlaceChar: '%c' at offset %d wide=%v", r, v.displayBuf.display.GetCursorOffset(), isWide)
 	}
 
-	// Use the new logical editor
-	v.displayBuf.display.Write(r, v.currentFG, v.currentBG, v.currentAttr, v.insertMode)
+	// Use the new logical editor with wide support
+	v.displayBuf.display.WriteWide(r, v.currentFG, v.currentBG, v.currentAttr, v.insertMode, isWide)
 
 	// Mark all dirty?
 	// Ideally we'd get a dirty range. For now, mark all.
@@ -347,66 +353,21 @@ func (v *VTerm) ScrollToLiveEdge() {
 	v.MarkAllDirty()
 }
 
-// displayBufferSetCursorFromPhysical syncs the logical cursor position
-// based on the physical cursor position. Used when cursor moves via escape sequences.
-//
-// The isRelativeMove parameter indicates whether this was a relative cursor movement
-// (CUB, CUF, HPR) or an absolute positioning command (CHA, CUP, HPA, VPA).
-//
-// For relative movements on the same row, we use delta-based sync to preserve the
-// logical position (important for wrapNext edge cases). For absolute positioning,
-// we always use the full physical-to-logical mapping since the shell is explicitly
-// setting the cursor to a specific screen position.
+// displayBufferSetCursorFromPhysical syncs the display buffer cursor with VTerm's cursor.
+// In the new viewport-based architecture, this is simple: just set the cursor position.
+// The isRelativeMove parameter is kept for API compatibility but no longer affects behavior.
 func (v *VTerm) displayBufferSetCursorFromPhysical(isRelativeMove bool) {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return
 	}
 
-	oldOffset := v.displayBuf.display.GetCursorOffset()
-	oldLineLen := v.displayBuf.display.CurrentLine().Len()
+	// In the new architecture, cursor can move anywhere freely.
+	// Just sync the display buffer cursor to VTerm's cursor position.
+	v.displayBuf.display.SetCursor(v.cursorX, v.cursorY)
 
-	// Only use delta-based sync for relative horizontal movements on the same row.
-	// Absolute positioning (CHA, CUP, etc.) should always use physical mapping
-	// because the shell is explicitly setting the cursor to a screen position.
-	sameRow := v.prevCursorY == v.cursorY
-	useDelta := isRelativeMove && sameRow
-
-	if useDelta {
-		// Same row RELATIVE movement - apply X delta to preserve logical position.
-		//
-		// The delta-based approach tracks the LOGICAL cursor position, not the
-		// physical cursor position. When wrapNext=true, the logical offset is
-		// one ahead of the physical cursor (e.g., offset=10 at cursorX=9 on width=10).
-		//
-		// CUB N means "move back N positions logically", so:
-		// - offset 10, CUB 5 → offset 5 (not physical position 4)
-		delta := v.cursorX - v.prevCursorX
-		newOffset := oldOffset + delta
-
-		// Clamp to valid range [0, ...]. Allow moves past lineLen to support
-		// prompts that position content in the void (right prompts).
-		if newOffset < 0 {
-			newOffset = 0
-		}
-		v.displayBuf.display.liveEditor.SetCursorOffset(newOffset)
-	} else {
-		// Cross-row, absolute positioning, or vertical movement
-		// Use the full physical-to-logical mapping
-		v.displayBuf.display.SetCursor(v.cursorX, v.cursorY)
-	}
-
-	// Update prevCursorX/Y to current position to prevent double-application
-	// if this function is called again without an intervening SetCursorPos.
+	// Update prevCursor tracking
 	v.prevCursorX = v.cursorX
 	v.prevCursorY = v.cursorY
-
-	newOffset := v.displayBuf.display.GetCursorOffset()
-	newLineLen := v.displayBuf.display.CurrentLine().Len()
-
-	if v.displayBuf.display.debugLog != nil && (oldOffset != newOffset || oldLineLen != newLineLen) {
-		v.displayBuf.display.debugLog("displayBufferSetCursorFromPhysical: physX=%d, physY=%d, prevY=%d, sameRow=%v -> offset %d->%d, lineLen %d->%d",
-			v.cursorX, v.cursorY, v.prevCursorY, sameRow, oldOffset, newOffset, oldLineLen, newLineLen)
-	}
 }
 
 // displayBufferClear clears the display buffer and history.
@@ -500,6 +461,9 @@ func (v *VTerm) displayBufferEraseToEndOfLine() {
 	// Use absolute mapping (false) since we don't know how cursor got here.
 	v.displayBufferSetCursorFromPhysical(false)
 
+	// Set erase color to current background (terminal standard behavior)
+	v.displayBuf.display.SetEraseColor(v.currentBG)
+
 	if v.displayBuf.display.debugLog != nil {
 		lineContent := ""
 		line := v.displayBuf.display.CurrentLine()
@@ -541,9 +505,12 @@ func (v *VTerm) withDisplayBufferOp(syncCursor bool, op func(*DisplayBuffer)) {
 // displayBufferEraseFromStartOfLine clears the current logical line from start to cursor.
 // Used for EL 1 (Erase from start of line to cursor).
 func (v *VTerm) displayBufferEraseFromStartOfLine() {
-	v.withDisplayBufferOp(false, func(db *DisplayBuffer) {
-		db.Erase(1)
-	})
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	v.displayBuf.display.SetEraseColor(v.currentBG)
+	v.displayBuf.display.Erase(1)
+	v.MarkAllDirty()
 }
 
 // displayBufferEraseLine clears the entire current logical line.
@@ -552,6 +519,7 @@ func (v *VTerm) displayBufferEraseLine() {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return
 	}
+	v.displayBuf.display.SetEraseColor(v.currentBG)
 	if v.displayBuf.display.debugLog != nil {
 		v.displayBuf.display.debugLog("displayBufferEraseLine (EL 2): CLEARING entire line, was len=%d",
 			v.displayBuf.display.CurrentLine().Len())
@@ -560,20 +528,43 @@ func (v *VTerm) displayBufferEraseLine() {
 	v.MarkAllDirty()
 }
 
+// displayBufferEraseScreen erases parts of the screen (ED command).
+// mode 0: Erase from cursor to end of screen
+// mode 1: Erase from start of screen to cursor
+// mode 2: Erase entire screen
+func (v *VTerm) displayBufferEraseScreen(mode int) {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	// Sync cursor position before erasing
+	v.displayBufferSetCursorFromPhysical(false)
+	v.displayBuf.display.SetEraseColor(v.currentBG)
+	v.displayBuf.display.EraseScreenMode(mode)
+	v.MarkAllDirty()
+}
+
 // displayBufferEraseCharacters replaces n characters at current position with spaces.
 // Used for ECH (Erase Character).
 func (v *VTerm) displayBufferEraseCharacters(n int) {
-	v.withDisplayBufferOp(true, func(db *DisplayBuffer) {
-		db.EraseCharacters(n)
-	})
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	v.displayBufferSetCursorFromPhysical(false)
+	v.displayBuf.display.SetEraseColor(v.currentBG)
+	v.displayBuf.display.EraseCharacters(n)
+	v.MarkAllDirty()
 }
 
 // displayBufferDeleteCharacters removes n characters at current position, shifting content left.
 // Used for DCH (Delete Character) - CSI P.
 func (v *VTerm) displayBufferDeleteCharacters(n int) {
-	v.withDisplayBufferOp(true, func(db *DisplayBuffer) {
-		db.DeleteCharacters(n)
-	})
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	v.displayBufferSetCursorFromPhysical(false)
+	v.displayBuf.display.SetEraseColor(v.currentBG)
+	v.displayBuf.display.DeleteCharacters(n)
+	v.MarkAllDirty()
 }
 
 // displayBufferInsertCharacters inserts n blank characters at current position, shifting content right.

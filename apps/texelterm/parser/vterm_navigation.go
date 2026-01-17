@@ -9,6 +9,8 @@ package parser
 
 // CarriageReturn moves cursor to the start of the current line (column 0 or left margin).
 func (v *VTerm) CarriageReturn() {
+	v.logDebug("[CR] CarriageReturn called: cursorY=%d, cursorX=%d, inAltScreen=%v",
+		v.cursorY, v.cursorX, v.inAltScreen)
 	// If wrapNext is set, clear the Wrapped flag on the current line
 	// because an explicit carriage return means this is a hard line break, not a wrap
 	if v.wrapNext && !v.inAltScreen {

@@ -21,7 +21,9 @@ func (v *VTerm) lineFeedForWrap() {
 // lineFeedInternal handles the actual line feed logic.
 // commitLogical: true if this is an explicit LF (commit line), false if auto-wrap (continue line)
 func (v *VTerm) lineFeedInternal(commitLogical bool) {
-	        v.wrapNext = false // Clear wrapNext flag when moving to new line
+	v.logDebug("[LF] LineFeed called: cursorY=%d, cursorX=%d, commit=%v, marginBottom=%d, inAltScreen=%v",
+		v.cursorY, v.cursorX, commitLogical, v.marginBottom, v.inAltScreen)
+	v.wrapNext = false // Clear wrapNext flag when moving to new line
 	                v.MarkDirty(v.cursorY)
 	        
 	                // Check if cursor is outside left/right margins - if so, don't scroll
@@ -38,7 +40,10 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 	} else {
 		// Main screen with display buffer: use display buffer for line management.
 		// Only commit on explicit LF, not on auto-wrap.
-		if commitLogical && v.IsDisplayBufferEnabled() {
+		// IMPORTANT: Don't commit when using a custom scroll region (TUI apps).
+		// Only commit when margins are at full screen (normal shell operation).
+		isFullScreenMargins := v.marginTop == 0 && v.marginBottom == v.height-1
+		if commitLogical && v.IsDisplayBufferEnabled() && isFullScreenMargins {
 			v.displayBufferLineFeed()
 		}
 
@@ -54,10 +59,16 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 			// At bottom of screen but not at scroll region bottom: stay put
 			v.ScrollToLiveEdge()
 		}
+
+		// Sync display buffer cursor after cursor movement
+		if v.IsDisplayBufferEnabled() {
+			v.displayBufferSetCursorFromPhysical(false)
+		}
 	}
 }
 // scrollRegion scrolls a portion of the screen buffer up or down.
 func (v *VTerm) scrollRegion(n int, top int, bottom int) {
+	v.logDebug("[SCROLL] scrollRegion: n=%d, top=%d, bottom=%d, inAltScreen=%v", n, top, bottom, v.inAltScreen)
 	v.wrapNext = false
 
 	if v.inAltScreen {
@@ -81,11 +92,15 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 		}
 	} else {
 		// Main screen scrolling with display buffer.
-		// The display buffer handles line management through its own commit system.
-		// For SU/SD (scroll up/down) in the scroll region, we just need to ensure
-		// the display buffer viewport is at the live edge.
-		if v.IsDisplayBufferEnabled() {
-			v.displayBufferScrollToBottom()
+		// We need to actually scroll the viewport content within the scroll region.
+		if v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
+			// Set erase color for blank lines created during scroll
+			v.displayBuf.display.SetEraseColor(v.currentBG)
+			if n > 0 { // Scroll Up - content moves up, new line at bottom
+				v.displayBuf.display.ScrollRegionUp(top, bottom, n)
+			} else { // Scroll Down - content moves down, new line at top
+				v.displayBuf.display.ScrollRegionDown(top, bottom, -n)
+			}
 		}
 	}
 	v.MarkAllDirty()
