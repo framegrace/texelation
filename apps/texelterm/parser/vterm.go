@@ -11,6 +11,8 @@ package parser
 import (
 	"fmt"
 	"log"
+
+	"github.com/mattn/go-runewidth"
 )
 
 
@@ -136,6 +138,20 @@ func (v *VTerm) placeChar(r rune) {
 	// Track last graphic character for REP command
 	v.lastGraphicChar = r
 
+	// Get character width (1 for normal chars, 2 for wide chars like emojis)
+	charWidth := runewidth.RuneWidth(r)
+	if charWidth == 0 {
+		// Zero-width characters (combining marks, etc.) - attach to previous cell
+		// For now, just skip them to avoid issues
+		return
+	}
+
+	// Determine the effective right edge for wrapping
+	rightEdge := v.width - 1
+	if v.leftRightMarginMode && v.cursorX >= v.marginLeft && v.cursorX <= v.marginRight {
+		rightEdge = v.marginRight
+	}
+
 	if v.wrapNext {
 		// Wrap to next line for both alt and main screen
 		// If left/right margins are active, wrap to left margin
@@ -149,25 +165,53 @@ func (v *VTerm) placeChar(r rune) {
 		v.wrapNext = false
 	}
 
+	// For wide characters, check if we need to wrap first (no room for 2-cell char)
+	if charWidth == 2 && v.cursorX == rightEdge {
+		// Wide char at right edge - need to wrap first
+		if v.inAltScreen {
+			if v.autoWrapMode {
+				if v.leftRightMarginMode {
+					v.cursorX = v.marginLeft
+				} else {
+					v.cursorX = 0
+				}
+				v.lineFeedForWrap()
+			}
+		} else {
+			if v.wrapEnabled {
+				if v.leftRightMarginMode {
+					v.cursorX = v.marginLeft
+				} else {
+					v.cursorX = 0
+				}
+				v.lineFeedForWrap()
+			}
+		}
+	}
+
+	isWide := charWidth == 2
+
 	if v.inAltScreen {
 		if v.cursorY >= 0 && v.cursorY < v.height && v.cursorX >= 0 && v.cursorX < v.width {
+			v.logDebug("[ALT.Write] '%c' (0x%04X) at (%d,%d) width=%d", r, r, v.cursorX, v.cursorY, charWidth)
 			if v.insertMode {
 				// Shift content right from cursor to right edge (or right margin)
-				rightEdge := v.width - 1
-				if v.leftRightMarginMode && v.cursorX >= v.marginLeft && v.cursorX <= v.marginRight {
-					rightEdge = v.marginRight
-				}
-				// Shift right - content at rightEdge is lost
-				for x := rightEdge; x > v.cursorX; x-- {
-					v.altBuffer[v.cursorY][x] = v.altBuffer[v.cursorY][x-1]
+				shiftAmount := charWidth
+				for x := rightEdge; x >= v.cursorX+shiftAmount; x-- {
+					v.altBuffer[v.cursorY][x] = v.altBuffer[v.cursorY][x-shiftAmount]
 				}
 			}
-			v.altBuffer[v.cursorY][v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr}
+			// Place the main character
+			v.altBuffer[v.cursorY][v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr, Wide: isWide}
+			// For wide characters, place a placeholder in the next cell
+			if isWide && v.cursorX+1 < v.width {
+				v.altBuffer[v.cursorY][v.cursorX+1] = Cell{Rune: 0, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr, Wide: true}
+			}
 			v.MarkDirty(v.cursorY)
 		}
 	} else {
 		// Write to display buffer (the only path for main screen)
-		v.displayBufferPlaceChar(r)
+		v.displayBufferPlaceCharWide(r, isWide)
 
 		// If scrolled up, jump to the bottom on new input
 		if !v.displayBuf.display.AtLiveEdge() {
@@ -177,35 +221,40 @@ func (v *VTerm) placeChar(r rune) {
 		v.MarkDirty(v.cursorY)
 	}
 
-	// Determine the effective right edge for wrapping
-	rightEdge := v.width - 1
-	if v.leftRightMarginMode && v.cursorX >= v.marginLeft && v.cursorX <= v.marginRight {
-		rightEdge = v.marginRight
-	}
+	// Advance cursor by character width
+	newX := v.cursorX + charWidth
 
 	if v.inAltScreen {
-		if v.autoWrapMode && v.cursorX == rightEdge {
+		if v.autoWrapMode && newX > rightEdge {
 			v.wrapNext = true
-		} else if v.cursorX < rightEdge {
-			v.SetCursorPos(v.cursorY, v.cursorX+1)
+			// Position cursor at the edge
+			v.SetCursorPos(v.cursorY, rightEdge)
+		} else if newX <= rightEdge {
+			v.SetCursorPos(v.cursorY, newX)
+		} else {
+			// At edge, no wrap mode - stay at edge
+			v.SetCursorPos(v.cursorY, rightEdge)
 		}
 	} else {
 		// Main screen wrapping logic
-		if v.wrapEnabled && v.cursorX == rightEdge {
+		if v.wrapEnabled && newX > rightEdge {
 			// Set wrapNext instead of wrapping immediately
 			// This allows CR or LF to clear the flag without creating extra lines
 			v.wrapNext = true
-		} else if v.cursorX < rightEdge {
-			v.SetCursorPos(v.cursorY, v.cursorX+1)
+			v.SetCursorPos(v.cursorY, rightEdge)
+		} else if newX <= rightEdge {
+			v.SetCursorPos(v.cursorY, newX)
 			// Sync prevCursor with new cursor position so delta-based sync doesn't see false movement.
-			// The display buffer cursor was already advanced by displayBufferPlaceChar, so
+			// The display buffer cursor was already advanced by displayBufferPlaceCharWide, so
 			// displayBufferSetCursorFromPhysical should not apply another delta.
 			if v.IsDisplayBufferEnabled() {
 				v.prevCursorX = v.cursorX
 				v.prevCursorY = v.cursorY
 			}
+		} else {
+			// At edge, no wrap mode - stay at edge
+			v.SetCursorPos(v.cursorY, rightEdge)
 		}
-		// If at the edge and wrapping is disabled, cursor stays at the last column
 	}
 }
 
@@ -680,6 +729,7 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			row += v.marginTop
 			col += v.marginLeft
 		}
+		v.logDebug("[CUP] Moving cursor to row=%d, col=%d (params=%v)", row, col, params)
 		v.SetCursorPos(row, col)
 		// ABSOLUTE positioning - do NOT use delta-based sync
 	case 'd': // VPA - Vertical Position Absolute

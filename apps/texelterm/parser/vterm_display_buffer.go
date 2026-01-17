@@ -186,17 +186,22 @@ func (v *VTerm) displayBufferGrid() [][]Cell {
 // This performs a dual-write: to the current logical line AND the display buffer.
 // Respects insert mode (IRM) - in insert mode, shifts existing content right.
 func (v *VTerm) displayBufferPlaceChar(r rune) {
+	v.displayBufferPlaceCharWide(r, false)
+}
+
+// displayBufferPlaceCharWide writes a character with wide character support.
+func (v *VTerm) displayBufferPlaceCharWide(r rune, isWide bool) {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return
 	}
 
 	// Debug: log every character written
 	if v.displayBuf.display.debugLog != nil {
-		v.displayBuf.display.debugLog("displayBufferPlaceChar: '%c' at offset %d", r, v.displayBuf.display.GetCursorOffset())
+		v.displayBuf.display.debugLog("displayBufferPlaceChar: '%c' at offset %d wide=%v", r, v.displayBuf.display.GetCursorOffset(), isWide)
 	}
 
-	// Use the new logical editor
-	v.displayBuf.display.Write(r, v.currentFG, v.currentBG, v.currentAttr, v.insertMode)
+	// Use the new logical editor with wide support
+	v.displayBuf.display.WriteWide(r, v.currentFG, v.currentBG, v.currentAttr, v.insertMode, isWide)
 
 	// Mark all dirty?
 	// Ideally we'd get a dirty range. For now, mark all.
@@ -520,6 +525,21 @@ func (v *VTerm) displayBufferEraseLine() {
 			v.displayBuf.display.CurrentLine().Len())
 	}
 	v.displayBuf.display.Erase(2)
+	v.MarkAllDirty()
+}
+
+// displayBufferEraseScreen erases parts of the screen (ED command).
+// mode 0: Erase from cursor to end of screen
+// mode 1: Erase from start of screen to cursor
+// mode 2: Erase entire screen
+func (v *VTerm) displayBufferEraseScreen(mode int) {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	// Sync cursor position before erasing
+	v.displayBufferSetCursorFromPhysical(false)
+	v.displayBuf.display.SetEraseColor(v.currentBG)
+	v.displayBuf.display.EraseScreenMode(mode)
 	v.MarkAllDirty()
 }
 

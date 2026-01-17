@@ -9,6 +9,7 @@ package parser
 
 // SetCursorPos moves the cursor to the specified position, clamping to valid bounds.
 func (v *VTerm) SetCursorPos(y, x int) {
+	v.logDebug("[SETPOS] SetCursorPos(%d, %d) from (%d, %d)", y, x, v.cursorY, v.cursorX)
 	// Clamp coordinates first
 	if x < 0 {
 		x = 0

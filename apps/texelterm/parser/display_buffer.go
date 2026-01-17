@@ -133,6 +133,16 @@ func (db *DisplayBuffer) Write(r rune, fg, bg Color, attr Attribute, insertMode 
 	}
 }
 
+// WriteWide writes a character at the current cursor position with wide character support.
+func (db *DisplayBuffer) WriteWide(r rune, fg, bg Color, attr Attribute, insertMode bool, isWide bool) {
+	db.viewport.WriteWide(r, fg, bg, attr, insertMode, isWide)
+
+	// Return to live edge on write
+	if db.viewingHistory {
+		db.ScrollToBottom()
+	}
+}
+
 // SetEraseColor sets the background color for erase operations.
 // Terminal erase ops (EL, ECH, ED) fill with current BG, not default.
 func (db *DisplayBuffer) SetEraseColor(bg Color) {
@@ -151,6 +161,22 @@ func (db *DisplayBuffer) Erase(mode int) {
 		db.viewport.EraseFromStartOfLine()
 	case 2:
 		db.viewport.EraseLine()
+	}
+}
+
+// EraseScreenMode handles ED (Erase in Display) with different modes.
+// mode 0: Erase from cursor to end of screen
+// mode 1: Erase from start of screen to cursor
+// mode 2: Erase entire screen
+func (db *DisplayBuffer) EraseScreenMode(mode int) {
+	db.viewport.SetEraseColor(db.viewport.eraseBG)
+	switch mode {
+	case 0:
+		db.viewport.EraseToEndOfScreen()
+	case 1:
+		db.viewport.EraseFromStartOfScreen()
+	case 2:
+		db.viewport.EraseScreen()
 	}
 }
 

@@ -21,7 +21,9 @@ func (v *VTerm) lineFeedForWrap() {
 // lineFeedInternal handles the actual line feed logic.
 // commitLogical: true if this is an explicit LF (commit line), false if auto-wrap (continue line)
 func (v *VTerm) lineFeedInternal(commitLogical bool) {
-	        v.wrapNext = false // Clear wrapNext flag when moving to new line
+	v.logDebug("[LF] LineFeed called: cursorY=%d, cursorX=%d, commit=%v, marginBottom=%d, inAltScreen=%v",
+		v.cursorY, v.cursorX, commitLogical, v.marginBottom, v.inAltScreen)
+	v.wrapNext = false // Clear wrapNext flag when moving to new line
 	                v.MarkDirty(v.cursorY)
 	        
 	                // Check if cursor is outside left/right margins - if so, don't scroll

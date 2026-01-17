@@ -40,6 +40,7 @@ type Cell struct {
 	BG      Color
 	Attr    Attribute
 	Wrapped bool // True if this cell is at the end of a line that wraps to the next line
+	Wide    bool // True if this cell contains a wide (2-column) character
 }
 
 // --- Predefined default colors for convenience ---
