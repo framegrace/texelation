@@ -302,15 +302,21 @@ func (p *ANSIParser) parseSGR(params []int) {
 			// Not bold
 			p.state.Attr &= ^parser.AttrBold
 		case code == 24:
-			// Not underline
+				n := params[i+2]
+				if n >= 0 && n <= 255 {
+					p.state.FG = parser.Color{Mode: parser.ColorMode256, Value: uint8(n)}
+				}
 			p.state.Attr &= ^parser.AttrUnderline
 		case code == 27:
 			// Not reverse
-			p.state.Attr &= ^parser.AttrReverse
-		case code >= 30 && code <= 37:
-			// Standard foreground (30-37)
-			p.state.FG = parser.Color{Mode: parser.ColorModeStandard, Value: uint8(code - 30)}
-		case code == 38:
+				r, g, b := params[i+2], params[i+3], params[i+4]
+				if r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255 {
+					p.state.FG = parser.Color{
+						Mode: parser.ColorModeRGB,
+						R:    uint8(r),
+						G:    uint8(g),
+						B:    uint8(b),
+					}
 			// Extended foreground
 			if i+2 < len(params) && params[i+1] == 5 {
 				// 256-color: 38;5;n
