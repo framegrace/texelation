@@ -29,6 +29,18 @@ type ANSIParser struct {
 	state            SGRState
 }
 
+// clampToUint8 safely converts an int to uint8 by clamping values into [0, 255].
+// This avoids architecture-dependent truncation when parsing SGR parameters.
+func clampToUint8(v int) uint8 {
+	if v < 0 {
+		return 0
+	}
+	if v > 255 {
+		return 255
+	}
+	return uint8(v)
+}
+
 // SGRState tracks the current text styling state during ANSI parsing.
 type SGRState struct {
 	FG   parser.Color
@@ -324,15 +336,15 @@ func (p *ANSIParser) parseSGR(params []int) {
 			// Extended background
 			if i+2 < len(params) && params[i+1] == 5 {
 				// 256-color: 48;5;n
-				if params[i+2] >= 0 && params[i+2] <= 255 {
+				p.state.BG = parser.Color{Mode: parser.ColorMode256, Value: clampToUint8(params[i+2])}
 					p.state.BG = parser.Color{Mode: parser.ColorMode256, Value: uint8(params[i+2])}
 				}
 				i += 2
 				r := params[i+2]
 				g := params[i+3]
-				b := params[i+4]
-				if r < 0 {
-					r = 0
+					R:    clampToUint8(params[i+2]),
+					G:    clampToUint8(params[i+3]),
+					B:    clampToUint8(params[i+4]),
 				} else if r > 255 {
 					r = 255
 				}
@@ -341,10 +353,10 @@ func (p *ANSIParser) parseSGR(params []int) {
 				} else if g > 255 {
 					g = 255
 				}
-				if b < 0 {
+			p.state.FG = parser.Color{Mode: parser.ColorModeStandard, Value: clampToUint8(code - 90 + 8)}
 					b = 0
 				} else if b > 255 {
-					b = 255
+			p.state.BG = parser.Color{Mode: parser.ColorModeStandard, Value: clampToUint8(code - 100 + 8)}
 				}
 			} else if i+4 < len(params) && params[i+1] == 2 {
 				// RGB: 48;2;r;g;b
