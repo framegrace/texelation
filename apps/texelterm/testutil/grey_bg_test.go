@@ -10,7 +10,7 @@ import (
 
 // TestGreyBackgroundAfterScroll tests that grey background doesn't persist
 // after scroll operations when the app redraws with default background.
-// This simulates what codex does during its animation.
+// This simulates what TUI apps do during animations.
 func TestGreyBackgroundAfterScroll(t *testing.T) {
 	rec := testutil.NewRecording(50, 24)
 
@@ -92,7 +92,7 @@ func TestGreyBackgroundAfterScroll(t *testing.T) {
 	}
 }
 
-// TestGreyBlocksAfterAnimationEnd simulates the exact codex pattern:
+// TestGreyBlocksAfterAnimationEnd simulates a common TUI pattern:
 // Animation uses grey background, then ends and redraws normally.
 func TestGreyBlocksAfterAnimationEnd(t *testing.T) {
 	rec := testutil.NewRecording(80, 24)

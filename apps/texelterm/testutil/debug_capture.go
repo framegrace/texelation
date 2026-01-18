@@ -6,7 +6,7 @@
 //
 // Usage:
 //   1. Run: TEXELTERM_CAPTURE=/tmp/capture.txrec ./bin/texelterm
-//   2. Run your app (e.g., codex), reproduce the issue
+//   2. Run your app, reproduce the issue
 //   3. Exit texelterm
 //   4. Analyze with: go run ./apps/texelterm/testutil/cmd/analyze /tmp/capture.txrec
 

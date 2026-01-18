@@ -109,8 +109,7 @@ func NewScrollbackHistoryWithDisk(config ScrollbackHistoryConfig) (*ScrollbackHi
 	// Try to open existing history
 	existing, err := OpenDiskHistory(config.DiskPath)
 	if err != nil {
-		// Invalid format - start fresh
-		fmt.Printf("[SCROLLBACK] Old/invalid format, starting fresh: %v\n", err)
+		// Invalid format - start fresh (error is expected for new files)
 	} else if existing != nil {
 		// Valid existing history - use it
 		h.disk = existing
@@ -235,10 +234,8 @@ func (h *ScrollbackHistory) Append(line *LogicalLine) {
 
 	// Write to disk first (if enabled)
 	if h.disk != nil {
-		if err := h.disk.AppendLine(line); err != nil {
-			// Log error but continue with memory-only
-			fmt.Printf("[SCROLLBACK] Disk write error: %v\n", err)
-		}
+		// Ignore disk write errors - continue with memory-only
+		_ = h.disk.AppendLine(line)
 	}
 
 	// Add to memory
@@ -308,7 +305,6 @@ func (h *ScrollbackHistory) LoadAbove(count int) int {
 	// Read from disk
 	lines, err := h.disk.ReadLineRange(loadStart, loadEnd)
 	if err != nil {
-		fmt.Printf("[SCROLLBACK] Failed to load from disk: %v\n", err)
 		return 0
 	}
 
@@ -350,7 +346,6 @@ func (h *ScrollbackHistory) LoadBelow(count int) int {
 	// Read from disk
 	lines, err := h.disk.ReadLineRange(loadStart, loadEnd)
 	if err != nil {
-		fmt.Printf("[SCROLLBACK] Failed to load from disk: %v\n", err)
 		return 0
 	}
 
@@ -438,9 +433,7 @@ func (h *ScrollbackHistory) ClearScrollback() {
 			diskConfig.Path = diskPath
 		}
 		disk, err := CreateDiskHistory(diskConfig)
-		if err != nil {
-			fmt.Printf("[SCROLLBACK] Failed to recreate disk history: %v\n", err)
-		} else {
+		if err == nil {
 			h.disk = disk
 		}
 	}
@@ -516,7 +509,6 @@ func (h *ScrollbackHistory) GetGlobalRange(globalStart, globalEnd int64) []*Logi
 
 	lines, err := h.disk.ReadLineRange(globalStart, globalEnd)
 	if err != nil {
-		fmt.Printf("[SCROLLBACK] Failed to read range from disk: %v\n", err)
 		return nil
 	}
 	return lines

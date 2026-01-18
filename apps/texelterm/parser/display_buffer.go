@@ -296,28 +296,6 @@ func (db *DisplayBuffer) lines() int {
 	return int(db.history.TotalLen())
 }
 
-// scrollToLiveEdge is a no-op stub for backward compatibility with tests.
-// The new viewport-based architecture doesn't have separate history viewing.
-func (db *DisplayBuffer) scrollToLiveEdge(_ bool) {
-	// No-op - viewport is always at live edge in new architecture
-}
-
-// GetLogicalPos is a stub for backward compatibility with tests.
-// Returns viewport row as lineIdx, cursor X as offset.
-func (db *DisplayBuffer) GetLogicalPos(physX, physY int) (lineIdx int, offset int, found bool) {
-	if physY < 0 || physY >= db.viewport.Height() {
-		return 0, 0, false
-	}
-	// In new architecture, lineIdx is just the row, offset is the column
-	return physY, physX, true
-}
-
-// viewportTop is a stub for backward compatibility with tests.
-// Returns 0 since viewport is always showing live content.
-func (db *DisplayBuffer) viewportTop() int {
-	return 0
-}
-
 // --- Viewport Access ---
 
 // GetViewportAsCells returns the viewport as a 2D Cell grid.
@@ -629,28 +607,6 @@ func (db *DisplayBuffer) InsertCell(offset int, cell Cell) {
 }
 
 // --- Backward Compatibility Methods ---
-
-// These methods maintain API compatibility with code that used the old
-// lines[] + liveEditor model.
-
-// LiveEdgeRow returns the row where the cursor typically is.
-// In the new model, cursor can be anywhere, so return cursor Y.
-func (db *DisplayBuffer) LiveEdgeRow() int {
-	_, y := db.viewport.Cursor()
-	return y
-}
-
-// TotalPhysicalLines returns the viewport height.
-// In old model this was len(lines) + len(currentLinePhysical).
-func (db *DisplayBuffer) TotalPhysicalLines() int {
-	return db.viewport.Height()
-}
-
-// ViewportTopLine returns 0 (viewport always starts at row 0).
-// Old model had viewportTop for scrolling within buffer.
-func (db *DisplayBuffer) ViewportTopLine() int {
-	return 0
-}
 
 // GlobalViewportStart returns the history offset when viewing history.
 func (db *DisplayBuffer) GlobalViewportStart() int64 {

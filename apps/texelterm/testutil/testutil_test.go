@@ -377,104 +377,6 @@ func TestFormatSnapshot(t *testing.T) {
 	}
 }
 
-// TestCodexStartupInteractive captures interactive codex startup.
-func TestCodexStartupInteractive(t *testing.T) {
-	// Capture interactive codex startup (will timeout but we get initial sequences)
-	rec, err := CaptureCommand("timeout 2s codex", 80, 24)
-	if err != nil {
-		// Expected to fail due to timeout, but we still get the output
-		t.Logf("Capture returned error (expected): %v", err)
-	}
-
-	if len(rec.Sequences) == 0 {
-		t.Skip("No output captured from codex")
-	}
-
-	t.Logf("Captured %d bytes from interactive codex", len(rec.Sequences))
-	t.Logf("Escape sequence log:\n%s", EscapeSequenceLog(rec.Sequences))
-
-	// Replay through VTerm
-	replayer := NewReplayer(rec)
-	replayer.PlayAndRender()
-
-	// Check what responses the terminal generated
-	responses := replayer.GetResponses()
-	if len(responses) > 0 {
-		t.Logf("Terminal generated %d bytes of responses:\n%s", len(responses), EscapeSequenceLog(responses))
-	}
-
-	// Check for visual mismatches
-	if replayer.HasVisualMismatch() {
-		mismatches := replayer.FindVisualMismatches()
-		t.Errorf("Visual mismatch detected! %d cells differ between Grid and RenderBuf", len(mismatches))
-		for i, m := range mismatches {
-			if i > 10 {
-				t.Logf("... and %d more mismatches", len(mismatches)-10)
-				break
-			}
-			t.Logf("  (%d,%d): rendered=%q, logical=%q", m.X, m.Y, m.Rendered.Rune, m.Logical.Rune)
-		}
-	}
-
-	// Log the final state for debugging
-	snap := replayer.GetSnapshot()
-	t.Logf("Final snapshot:\n%s", FormatSnapshot(snap))
-}
-
-// TestCodexFullSimulation simulates codex startup WITH terminal responses.
-// This tests what happens when codex actually receives responses to its queries.
-func TestCodexFullSimulation(t *testing.T) {
-	// Create synthetic recording of what codex sends at startup
-	rec := NewRecording(80, 24)
-	rec.Metadata.Description = "codex startup simulation"
-
-	// Codex startup sequence (captured from real run):
-	rec.AppendCSI("?2004h")  // Enable bracketed paste
-	rec.AppendString("\x1b[>7u")  // Push keyboard mode (CSI > 7 u)
-	rec.AppendCSI("?1004h")  // Enable focus reporting
-	rec.AppendCSI("6n")      // Query cursor position (DSR)
-
-	// After receiving cursor position, codex draws its UI
-	// Simulating what codex does after getting DSR response:
-	rec.AppendCSI("2J")      // Clear screen
-	rec.AppendCSI("H")       // Move to home
-	rec.AppendCSI("?25l")    // Hide cursor
-
-	// Draw gray prompt area (simplified simulation)
-	rec.AppendCSI("48;5;240m") // Gray background
-	rec.AppendText("  > ")
-	rec.AppendCSI("0m")        // Reset
-
-	replayer := NewReplayer(rec)
-	replayer.PlayAndRender()
-
-	// Check responses
-	responses := replayer.GetResponses()
-	t.Logf("Terminal responses (%d bytes): %s", len(responses), EscapeSequenceLog(responses))
-
-	// The terminal should have responded to DSR with cursor position
-	if len(responses) == 0 {
-		t.Error("Terminal should have responded to DSR query")
-	}
-
-	// Check for visual mismatches
-	if replayer.HasVisualMismatch() {
-		mismatches := replayer.FindVisualMismatches()
-		t.Errorf("Visual mismatch! %d cells differ", len(mismatches))
-	}
-
-	snap := replayer.GetSnapshot()
-	t.Logf("Final snapshot:\n%s", FormatSnapshot(snap))
-
-	// The prompt "> " should be visible on row 0
-	grid := replayer.GetGrid()
-	row0 := CellsToString(grid[0][:10])
-	t.Logf("Row 0 content: %q", row0)
-	if !strings.Contains(row0, ">") {
-		t.Error("Expected prompt '>' to be visible on row 0")
-	}
-}
-
 // TestBidirectionalFlow simulates full app-terminal communication.
 // This tests what happens with queries and responses.
 func TestBidirectionalFlow(t *testing.T) {
@@ -543,7 +445,7 @@ func TestBidirectionalFlow(t *testing.T) {
 }
 
 // Test256ColorBackground verifies 256-color backgrounds are stored correctly.
-// This is important for apps like codex that use colored backgrounds.
+// This is important for apps that use colored backgrounds.
 func Test256ColorBackground(t *testing.T) {
 	rec := NewRecording(20, 5)
 
@@ -574,29 +476,9 @@ func Test256ColorBackground(t *testing.T) {
 	t.Logf("Cell (0,0): rune=%q, BG.Mode=%d, BG.Value=%d", cell.Rune, cell.BG.Mode, cell.BG.Value)
 }
 
-// TestCodexHelp captures codex --help (non-interactive).
-func TestCodexHelp(t *testing.T) {
-	rec, err := CaptureCommand("codex --help", 80, 24)
-	if err != nil {
-		t.Skipf("Could not capture codex: %v", err)
-	}
-
-	t.Logf("Captured %d bytes from codex --help", len(rec.Sequences))
-
-	// Replay through VTerm
-	replayer := NewReplayer(rec)
-	replayer.PlayAndRender()
-
-	// Check for visual mismatches
-	if replayer.HasVisualMismatch() {
-		mismatches := replayer.FindVisualMismatches()
-		t.Errorf("Visual mismatch detected! %d cells differ", len(mismatches))
-	}
-}
-
 // TestTUITakeover tests that a TUI app can draw over committed shell content
-// when positioning the cursor at row 0 or 1. This is essential for apps like
-// codex that draw full-screen UIs without using alternate buffer.
+// when positioning the cursor at row 0 or 1. This is essential for apps that
+// draw full-screen UIs without using alternate buffer.
 func TestTUITakeover(t *testing.T) {
 	rec := NewRecording(40, 10)
 
@@ -644,12 +526,12 @@ func TestTUITakeover(t *testing.T) {
 }
 
 // TestTUITakeoverPartialScreen tests TUI takeover when positioning at row 1
-// (not row 0). This covers the case where codex draws its bordered UI.
+// (not row 0). This covers the case where a TUI draws a bordered UI.
 func TestTUITakeoverPartialScreen(t *testing.T) {
 	rec := NewRecording(40, 10)
 
 	// Simulate bash prompt and command entry
-	rec.AppendText("$ codex")
+	rec.AppendText("$ myapp")
 	rec.AppendCRLF()
 
 	// TUI app positions cursor at row 1 col 0 to draw border
@@ -688,7 +570,7 @@ func TestTUITakeoverPartialScreen(t *testing.T) {
 
 // TestCSIExtendedKeyboardProtocol tests that CSI>u (extended keyboard protocol)
 // does NOT trigger RestoreCursor. This is a regression test for a bug where
-// codex's ESC[>7u sequence would incorrectly move the cursor.
+// an ESC[>7u sequence would incorrectly move the cursor.
 func TestCSIExtendedKeyboardProtocol(t *testing.T) {
 	rec := NewRecording(20, 5)
 
@@ -875,11 +757,11 @@ func TestReferenceFindDivergence(t *testing.T) {
 	}
 }
 
-// TestReferenceCompareAnimationPattern tests the pattern codex uses for animations.
+// TestReferenceCompareAnimationPattern tests common animation patterns used by TUI apps.
 func TestReferenceCompareAnimationPattern(t *testing.T) {
 	rec := NewRecording(80, 24)
 
-	// Simulate codex animation pattern
+	// Simulate a common TUI animation pattern
 	rec.AppendCSI("5;24r")      // Set scroll region
 	rec.AppendCSI("5;1H")       // Move to top of region
 	rec.AppendCSI("M")          // Scroll region down (reverse index / insert line)

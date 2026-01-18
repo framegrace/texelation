@@ -6,7 +6,7 @@
 //
 // Usage:
 //   1. Set TEXELTERM_CAPTURE=/tmp/capture.txrec before running texelterm
-//   2. Run your app (e.g., codex), reproduce the issue
+//   2. Run your app, reproduce the issue
 //   3. Exit texelterm
 //   4. Use the recording with ReferenceComparator for analysis
 //

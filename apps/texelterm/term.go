@@ -1143,14 +1143,6 @@ func (a *TexelTerm) Run() error {
 	}
 }
 
-// injectShellIntegration modifies the shell command to auto-load integration scripts.
-// For interactive shells, we need to modify the command itself, not just env vars.
-func (a *TexelTerm) injectShellIntegration(env []string) []string {
-	// Note: This function only sets up env for now
-	// The actual command modification happens in runShell
-	return env
-}
-
 // getShellCommandSimpleIntegration returns a command that integrates shell monitoring
 // Uses --rcfile approach with simplified integration (no background jobs)
 func (a *TexelTerm) getShellCommandSimpleIntegration(env []string) *exec.Cmd {
@@ -1177,74 +1169,6 @@ func (a *TexelTerm) getShellCommandSimpleIntegration(env []string) *exec.Cmd {
 	// Default: no integration, just run shell normally
 	log.Printf("Shell integration: disabled for %s", shellName)
 	return exec.Command(a.command)
-}
-
-// getShellCommandWithIntegration returns the shell command with integration script loaded
-func (a *TexelTerm) getShellCommandWithIntegration() (string, []string) {
-	// Detect shell type from command
-	shellName := strings.ToLower(filepath.Base(a.command))
-
-	// Get config directory
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Printf("Failed to get home directory: %v", err)
-		return a.command, nil
-	}
-
-	configDir := filepath.Join(homeDir, ".config", "texelation", "shell-integration")
-
-	// Check if integration script exists, create if needed
-	if err := a.ensureShellIntegrationScripts(configDir); err != nil {
-		log.Printf("Failed to ensure shell integration scripts: %v", err)
-		return a.command, nil
-	}
-
-	var integrationScript string
-	var shellCmd string
-	var args []string
-
-	switch {
-	case strings.Contains(shellName, "bash"):
-		integrationScript = filepath.Join(configDir, "bash.sh")
-		userRcFile := filepath.Join(homeDir, ".bashrc")
-
-		// Create a temporary rc file that sources both our integration and user's bashrc
-		tmpRcFile := filepath.Join(configDir, "bash-init.sh")
-		rcContent := fmt.Sprintf("#!/bin/bash\n[[ -f %s ]] && source %s\n[[ -f %s ]] && source %s\n",
-			integrationScript, integrationScript, userRcFile, userRcFile)
-		if err := os.WriteFile(tmpRcFile, []byte(rcContent), 0755); err != nil {
-			log.Printf("Failed to create temp rc file: %v", err)
-			return a.command, nil
-		}
-
-		shellCmd = a.command
-		args = []string{"--rcfile", tmpRcFile, "-i"}
-		log.Printf("Injecting shell integration via: bash --rcfile %s -i", tmpRcFile)
-
-	case strings.Contains(shellName, "zsh"):
-		integrationScript = filepath.Join(configDir, "zsh.sh")
-		userRcFile := filepath.Join(homeDir, ".zshrc")
-
-		sourceCmd := fmt.Sprintf("[[ -f %s ]] && source %s; [[ -f %s ]] && source %s; exec %s",
-			integrationScript, integrationScript, userRcFile, userRcFile, a.command)
-
-		shellCmd = a.command
-		args = []string{"-c", sourceCmd}
-		log.Printf("Injecting shell integration via: zsh -c 'source integration && exec zsh'")
-
-	case strings.Contains(shellName, "fish"):
-		integrationScript = filepath.Join(configDir, "fish.fish")
-		shellCmd = a.command
-		args = []string{"--init-command", fmt.Sprintf("source %s", integrationScript)}
-		log.Printf("Injecting shell integration: fish --init-command source %s", integrationScript)
-
-	default:
-		// Unknown shell, no integration
-		log.Printf("Shell integration not available for: %s", shellName)
-		return a.command, nil
-	}
-
-	return shellCmd, args
 }
 
 // ensureShellIntegrationScripts creates shell integration scripts if they don't exist
@@ -1322,8 +1246,6 @@ func (a *TexelTerm) runShell() error {
 		env = append(env, "TEXEL_PANE_ID="+a.paneID)
 	}
 
-	// Inject shell integration
-	env = a.injectShellIntegration(env)
 	a.mu.Unlock()
 
 	// Get shell command - try simpler integration via ENV

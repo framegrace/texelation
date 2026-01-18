@@ -10,7 +10,6 @@ package parser
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/mattn/go-runewidth"
 )
@@ -673,8 +672,6 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, privat
 		v.ClearTabStop(param(0, 0))
 	case 'q', 't':
 		// Ignore DECSCA, window manipulation
-	default:
-		log.Printf("Parser: Unhandled CSI sequence: %q, params: %v", command, params)
 	}
 }
 
