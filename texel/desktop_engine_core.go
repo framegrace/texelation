@@ -114,6 +114,11 @@ type DesktopEngine struct {
 	viewportHeight       int
 	hasViewport          bool
 
+	// pendingAppStarts tracks panes from snapshot restore that need to be started
+	// once we receive actual viewport dimensions from the client.
+	pendingAppStartsMu sync.Mutex
+	pendingAppStarts   []*pane
+
 	stateMu      sync.Mutex
 	hasLastState bool
 	lastState    StatePayload
@@ -1356,8 +1361,32 @@ func (d *DesktopEngine) SetViewportSize(cols, rows int) {
 	d.hasViewport = cols > 0 && rows > 0
 	d.viewportMu.Unlock()
 	d.recalculateLayout()
+
+	// Start any apps that were waiting for actual viewport dimensions.
+	// This handles the case where snapshot restore prepared apps before
+	// the client sent its viewport size.
+	d.startPendingApps()
+
 	if d.activeWorkspace != nil {
 		d.activeWorkspace.Refresh()
+	}
+}
+
+// startPendingApps starts any apps that were deferred during snapshot restore.
+// Called when we receive actual viewport dimensions from the client.
+func (d *DesktopEngine) startPendingApps() {
+	d.pendingAppStartsMu.Lock()
+	pending := d.pendingAppStarts
+	d.pendingAppStarts = nil
+	d.pendingAppStartsMu.Unlock()
+
+	if len(pending) == 0 {
+		return
+	}
+
+	log.Printf("[RESTORE] Starting %d apps that were waiting for viewport dimensions", len(pending))
+	for _, p := range pending {
+		p.StartPreparedApp()
 	}
 }
 

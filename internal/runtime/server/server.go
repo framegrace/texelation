@@ -151,7 +151,9 @@ func (s *Server) acceptLoop() {
 				_ = publisher.Publish()
 				conn.nudge()
 			}
-			s.sendSnapshot(c, session)
+			// Don't send snapshot here - wait for MsgClientReady from client.
+			// This ensures client has initialized its screen and knows dimensions
+			// before we send the snapshot with correct pane sizes.
 			_ = conn.serve()
 		}(conn)
 	}

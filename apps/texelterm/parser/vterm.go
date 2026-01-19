@@ -213,7 +213,8 @@ func (v *VTerm) placeChar(r rune) {
 		v.displayBufferPlaceCharWide(r, isWide)
 
 		// If scrolled up, jump to the bottom on new input
-		if !v.displayBuf.display.AtLiveEdge() {
+		// But NOT if we're in restored view mode (user was viewing history before restart)
+		if !v.displayBuf.display.AtLiveEdge() && !v.displayBuf.display.InRestoredView() {
 			v.displayBuf.display.ScrollToBottom()
 			v.MarkAllDirty()
 		}

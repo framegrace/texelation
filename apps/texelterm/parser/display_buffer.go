@@ -29,6 +29,8 @@
 
 package parser
 
+import "log"
+
 // Default values for display buffer configuration.
 const (
 	// DefaultMarginAbove is how many off-screen lines to keep above viewport.
@@ -62,6 +64,15 @@ type DisplayBuffer struct {
 	// For scrollback viewing (when user scrolls up into history)
 	historyViewOffset int64 // How many lines scrolled back into history
 	viewingHistory    bool  // True when viewing history (not live edge)
+
+	// restoredView is set when restoring a session to suppress auto-scroll
+	// until the user interacts (types or explicitly scrolls to live edge).
+	// This prevents shell startup (bash clearing screen) from disrupting the view.
+	restoredView bool
+
+	// hasLiveContent is set when the shell writes new content after history
+	// population. When true, Resize skips reflow to preserve live content.
+	hasLiveContent bool
 
 	// cachedHistoryView caches the history view when scrolled back
 	cachedHistoryView [][]Cell
@@ -114,7 +125,8 @@ func (db *DisplayBuffer) SetCursor(physX, physY int) {
 	db.viewport.SetCursor(physX, physY)
 
 	// If viewing history and cursor moves, return to live edge
-	if db.viewingHistory {
+	// unless we're in restored view mode (suppresses auto-scroll until user interacts)
+	if db.viewingHistory && !db.restoredView {
 		db.ScrollToBottom()
 	}
 
@@ -127,8 +139,9 @@ func (db *DisplayBuffer) SetCursor(physX, physY int) {
 func (db *DisplayBuffer) Write(r rune, fg, bg Color, attr Attribute, insertMode bool) {
 	db.viewport.Write(r, fg, bg, attr, insertMode)
 
-	// Return to live edge on write
-	if db.viewingHistory {
+	// Return to live edge on write, unless we're in restored view mode
+	// (which suppresses auto-scroll until user interacts)
+	if db.viewingHistory && !db.restoredView {
 		db.ScrollToBottom()
 	}
 }
@@ -137,8 +150,12 @@ func (db *DisplayBuffer) Write(r rune, fg, bg Color, attr Attribute, insertMode 
 func (db *DisplayBuffer) WriteWide(r rune, fg, bg Color, attr Attribute, insertMode bool, isWide bool) {
 	db.viewport.WriteWide(r, fg, bg, attr, insertMode, isWide)
 
-	// Return to live edge on write
-	if db.viewingHistory {
+	// Mark that we have live content (shell has written since history population)
+	db.hasLiveContent = true
+
+	// Return to live edge on write, unless we're in restored view mode
+	// (which suppresses auto-scroll until user interacts)
+	if db.viewingHistory && !db.restoredView {
 		db.ScrollToBottom()
 	}
 }
@@ -301,7 +318,13 @@ func (db *DisplayBuffer) lines() int {
 // GetViewportAsCells returns the viewport as a 2D Cell grid.
 func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
 	if db.viewingHistory {
+		if db.debugLog != nil {
+			db.debugLog("[GetViewportAsCells] viewingHistory=true, calling getHistoryView")
+		}
 		return db.getHistoryView()
+	}
+	if db.debugLog != nil {
+		db.debugLog("[GetViewportAsCells] viewingHistory=false, returning live viewport")
 	}
 	return db.viewport.Grid()
 }
@@ -309,6 +332,9 @@ func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
 // getHistoryView builds the view when scrolled back into history.
 func (db *DisplayBuffer) getHistoryView() [][]Cell {
 	if db.cachedHistoryView != nil {
+		if db.debugLog != nil {
+			db.debugLog("[getHistoryView] returning cached view")
+		}
 		return db.cachedHistoryView
 	}
 
@@ -325,6 +351,9 @@ func (db *DisplayBuffer) getHistoryView() [][]Cell {
 	}
 
 	if db.history == nil {
+		if db.debugLog != nil {
+			db.debugLog("[getHistoryView] history is nil, returning empty")
+		}
 		return result
 	}
 
@@ -332,7 +361,14 @@ func (db *DisplayBuffer) getHistoryView() [][]Cell {
 	// historyViewOffset is how many physical rows we've scrolled back
 	totalHistoryLines := db.history.TotalLen()
 	if totalHistoryLines == 0 {
+		if db.debugLog != nil {
+			db.debugLog("[getHistoryView] totalHistoryLines=0, returning empty")
+		}
 		return result
+	}
+
+	if db.debugLog != nil {
+		db.debugLog("[getHistoryView] totalHistoryLines=%d, historyViewOffset=%d", totalHistoryLines, db.historyViewOffset)
 	}
 
 	// Calculate which logical lines to load
@@ -412,9 +448,11 @@ func (db *DisplayBuffer) ScrollDown(n int) int {
 }
 
 // ScrollToBottom returns to the live edge.
+// Also clears the restoredView flag since we're now at live edge.
 func (db *DisplayBuffer) ScrollToBottom() {
 	db.viewingHistory = false
 	db.historyViewOffset = 0
+	db.restoredView = false // User explicitly scrolled to bottom, exit restored mode
 	db.cachedHistoryView = nil
 	db.viewport.ScrollToLiveEdge()
 }
@@ -489,10 +527,132 @@ func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
 
 // --- Resize ---
 
-// Resize changes the viewport dimensions.
+// Resize changes the viewport dimensions and reflows content from history.
 func (db *DisplayBuffer) Resize(newWidth, newHeight int) {
+	if newWidth == db.viewport.Width() && newHeight == db.viewport.Height() {
+		return
+	}
+
+	// First resize the viewport structure (simple copy, may truncate)
 	db.viewport.Resize(newWidth, newHeight)
-	db.cachedHistoryView = nil // Invalidate cache
+	db.cachedHistoryView = nil // Invalidate cache on resize
+
+	// Repopulate viewport from history to reflow content at new width.
+	// This re-wraps logical lines from history at the new width.
+	// The shell will redraw its current prompt line via SIGWINCH handling.
+	if db.history != nil && db.history.TotalLen() > 0 {
+		db.PopulateViewportFromHistory()
+	}
+}
+
+// PopulateViewportFromHistory fills the viewport with the last lines from history.
+// This should be called when restoring a session to ensure the viewport matches
+// the end of history, so the shell continues writing where it left off.
+// Returns the cursor position (x, y) that should be at the start of the next line.
+func (db *DisplayBuffer) PopulateViewportFromHistory() (cursorX, cursorY int) {
+	if db.history == nil || db.history.TotalLen() == 0 {
+		return 0, 0
+	}
+
+	height := db.viewport.Height()
+	width := db.viewport.Width()
+
+	// Get the last lines from history that would fill the viewport
+	totalHistoryLines := db.history.TotalLen()
+
+	log.Printf("[PopulateViewportFromHistory] Starting: totalHistoryLines=%d, height=%d, width=%d", totalHistoryLines, height, width)
+
+	// We need to get logical lines and wrap them to physical lines
+	// Work backwards from the end of history to fill the viewport
+	var physicalLines []PhysicalLine
+	logicalIdx := totalHistoryLines - 1
+
+	for len(physicalLines) < height && logicalIdx >= 0 {
+		line := db.history.GetGlobal(logicalIdx)
+		if line == nil {
+			log.Printf("[PopulateViewportFromHistory] GetGlobal(%d) returned nil", logicalIdx)
+			logicalIdx--
+			continue
+		}
+
+		wrapped := line.WrapToWidth(width)
+		log.Printf("[PopulateViewportFromHistory] GetGlobal(%d): len=%d, wrapped to %d physical lines",
+			logicalIdx, line.Len(), len(wrapped))
+		// Prepend wrapped lines (since we're going backwards)
+		physicalLines = append(wrapped, physicalLines...)
+		logicalIdx--
+	}
+
+	log.Printf("[PopulateViewportFromHistory] Collected %d physical lines, will trim to %d", len(physicalLines), height-1)
+
+	// Trim to viewport height - 1, leaving room for shell prompt on last row.
+	// This ensures the cursor is on a fresh row, not overwriting history content.
+	maxLines := height - 1
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	if len(physicalLines) > maxLines {
+		physicalLines = physicalLines[len(physicalLines)-maxLines:]
+	}
+
+	// Clear the viewport first (this also resets row metadata)
+	db.viewport.EraseScreen()
+
+	// Write the physical lines to the viewport with proper row metadata
+	for y, pline := range physicalLines {
+		for x, cell := range pline.Cells {
+			if x < width {
+				db.viewport.SetCell(x, y, cell)
+			}
+		}
+		// Set row metadata based on whether this is start or continuation of logical line
+		// Offset == 0 means first physical row of the logical line
+		if pline.Offset == 0 {
+			db.viewport.MarkRowAsLineStart(y)
+		} else {
+			db.viewport.MarkRowAsContinuation(y)
+		}
+		// Mark as committed to prevent re-committing when these rows scroll off.
+		// This content already exists in the scrollback history.
+		db.viewport.MarkRowAsCommitted(y)
+	}
+
+	// Position cursor at the START of the line AFTER history content.
+	// History lines are complete (they were committed with newlines),
+	// so the shell prompt should start on a fresh line.
+	cursorX = 0
+	cursorY = len(physicalLines) // This is now guaranteed to be < height
+
+	// Actually set the cursor on the viewport
+	db.viewport.SetCursor(cursorX, cursorY)
+
+	// Reset scroll state - we're now at the live edge
+	db.viewingHistory = false
+	db.historyViewOffset = 0
+	db.cachedHistoryView = nil
+
+	// Clear the live content flag - viewport now matches history
+	// Shell will set hasLiveContent=true when it writes
+	db.hasLiveContent = false
+
+	if db.debugLog != nil {
+		db.debugLog("[PopulateViewportFromHistory] Populated %d lines (height=%d), cursor set to (%d,%d)", len(physicalLines), height, cursorX, cursorY)
+		// Log the last few physical lines to debug phantom line issue
+		for i := len(physicalLines) - 3; i < len(physicalLines); i++ {
+			if i >= 0 && i < len(physicalLines) {
+				pline := physicalLines[i]
+				first20 := ""
+				for j := 0; j < 20 && j < len(pline.Cells); j++ {
+					if pline.Cells[j].Rune != 0 {
+						first20 += string(pline.Cells[j].Rune)
+					}
+				}
+				db.debugLog("[PopulateViewportFromHistory] physLine[%d]: offset=%d, len=%d, content=%q", i, pline.Offset, len(pline.Cells), first20)
+			}
+		}
+	}
+
+	return cursorX, cursorY
 }
 
 // --- Accessors ---
@@ -528,6 +688,19 @@ func (db *DisplayBuffer) SetDebugLog(fn func(format string, args ...interface{})
 	if db.viewport != nil {
 		db.viewport.SetDebugLog(fn)
 	}
+}
+
+// SetRestoredView sets the restored view mode flag.
+// When true, auto-scroll to live edge is suppressed on writes and cursor moves,
+// allowing the user to view history even while shell startup runs in the background.
+// This is cleared when the user explicitly scrolls to bottom or types.
+func (db *DisplayBuffer) SetRestoredView(restored bool) {
+	db.restoredView = restored
+}
+
+// InRestoredView returns whether we're in restored view mode.
+func (db *DisplayBuffer) InRestoredView() bool {
+	return db.restoredView
 }
 
 // --- Shell Integration ---

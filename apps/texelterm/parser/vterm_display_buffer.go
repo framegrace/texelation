@@ -268,20 +268,20 @@ func (v *VTerm) displayBufferCarriageReturn() {
 	v.displayBufferSetCursorFromPhysical(false)
 }
 
-// displayBufferScroll handles viewport scrolling.
-// Positive delta = scroll down (view newer content, like pressing Page Down)
-// Negative delta = scroll up (view older content, like pressing Page Up)
+// displayBufferScroll handles viewport scrolling for user scrollback.
+// Positive delta = scroll down (view newer content, toward live edge)
+// Negative delta = scroll up (view older content, into history)
 func (v *VTerm) displayBufferScroll(delta int) {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return
 	}
 
 	if delta > 0 {
-		// Positive delta: scroll down (view newer content)
-		v.displayBuf.display.ScrollDown(delta)
+		// Positive delta: scroll down toward live edge
+		v.displayBuf.display.ScrollViewportDown(delta)
 	} else if delta < 0 {
-		// Negative delta: scroll up (view older content)
-		v.displayBuf.display.ScrollUp(-delta)
+		// Negative delta: scroll up into history
+		v.displayBuf.display.ScrollViewportUp(-delta)
 	}
 }
 
@@ -577,4 +577,60 @@ func (v *VTerm) displayBufferInsertCharacters(n int) {
 	v.withDisplayBufferOp(true, func(db *DisplayBuffer) {
 		db.InsertCharacters(n, fg, bg)
 	})
+}
+
+// --- State Persistence Methods ---
+
+// GetScrollOffset returns the current scroll offset (lines scrolled back from live edge).
+// Returns 0 if at live edge or if display buffer is not enabled.
+// Used for persisting terminal state across server restarts.
+func (v *VTerm) GetScrollOffset() int64 {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return 0
+	}
+	return v.displayBuf.display.GlobalViewportStart()
+}
+
+// SetScrollOffset restores the scroll position to a specific offset from the live edge.
+// If the offset exceeds available history, scrolls to the maximum available.
+// Used for restoring terminal state after server restart.
+func (v *VTerm) SetScrollOffset(offset int64) {
+	if v.displayBuf == nil || v.displayBuf.display == nil || offset <= 0 {
+		log.Printf("[VTERM] SetScrollOffset: early return (displayBuf=%v, display=%v, offset=%d)", v.displayBuf != nil, v.displayBuf != nil && v.displayBuf.display != nil, offset)
+		return
+	}
+	// Scroll up by the offset amount (ScrollViewportUp handles clamping to max)
+	scrolled := v.displayBuf.display.ScrollViewportUp(int(offset))
+	log.Printf("[VTERM] SetScrollOffset: ScrollViewportUp(%d) scrolled %d lines", offset, scrolled)
+	// Mark as restored view to suppress auto-scroll during shell startup.
+	// This keeps the view in history until user explicitly interacts.
+	v.displayBuf.display.SetRestoredView(true)
+	log.Printf("[VTERM] SetScrollOffset: restoredView=true, viewingHistory=%v", v.displayBuf.display.CanScrollDown())
+	v.MarkAllDirty()
+}
+
+// ClearRestoredView clears the restored view flag, allowing auto-scroll on writes.
+// Called when user types to signal they want to return to normal behavior.
+func (v *VTerm) ClearRestoredView() {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	v.displayBuf.display.SetRestoredView(false)
+}
+
+// PopulateViewportFromHistory fills the viewport with the last lines from history.
+// This should be called when restoring a session before starting the shell,
+// so the viewport matches history and the shell continues naturally.
+// Returns the cursor position (x, y) at the end of restored content.
+func (v *VTerm) PopulateViewportFromHistory() (cursorX, cursorY int) {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return 0, 0
+	}
+	cursorX, cursorY = v.displayBuf.display.PopulateViewportFromHistory()
+	// Set VTerm's cursor position to match
+	v.cursorX = cursorX
+	v.cursorY = cursorY
+	v.MarkAllDirty()
+	log.Printf("[VTERM] PopulateViewportFromHistory: cursor set to (%d,%d)", cursorX, cursorY)
+	return cursorX, cursorY
 }

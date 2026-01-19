@@ -36,6 +36,7 @@ type connection struct {
 	readErr             chan error
 	pending             chan struct{}
 	stop                chan struct{}
+	initialSnapshotSent bool // Track if we've sent the first snapshot
 }
 
 type protocolMessage struct {
@@ -322,6 +323,12 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			}
 		}
 		c.nudge()
+	case protocol.MsgClientReady:
+		ready, err := protocol.DecodeClientReady(payload)
+		if err != nil {
+			return err
+		}
+		c.handleClientReady(ready)
 	default:
 		debugLog.Printf("%s ignoring message type %d", prefix, header.Type)
 	}
@@ -522,6 +529,61 @@ func (c *connection) nudge() {
 	}
 }
 
+func (c *connection) handleClientReady(ready protocol.ClientReady) {
+	if c.initialSnapshotSent {
+		return // Already sent initial snapshot
+	}
+
+	sink, ok := c.sink.(*DesktopSink)
+	if !ok {
+		return
+	}
+	desktop := sink.Desktop()
+	if desktop == nil {
+		return
+	}
+
+	// Set viewport size with client's actual dimensions
+	desktop.SetViewportSize(int(ready.Cols), int(ready.Rows))
+
+	// Now send the snapshot with correct dimensions
+	snapshot, err := sink.Snapshot()
+	if err != nil {
+		sink.Publish()
+		c.initialSnapshotSent = true
+		return
+	}
+
+	sink.Publish()
+
+	payload, err := protocol.EncodeTreeSnapshot(snapshot)
+	if err != nil {
+		c.initialSnapshotSent = true
+		return
+	}
+
+	header := protocol.Header{
+		Version:   protocol.Version,
+		Type:      protocol.MsgTreeSnapshot,
+		Flags:     protocol.FlagChecksum,
+		SessionID: c.session.ID(),
+	}
+	if err := c.writeMessage(header, payload); err != nil {
+		c.initialSnapshotSent = true
+		return
+	}
+
+	states := snapshotMergedPaneStates(snapshot, desktop)
+	for _, state := range states {
+		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesSelection)
+	}
+
+	c.initialSnapshotSent = true
+	id := c.session.ID()
+	debugLog.Printf("connection %x: sent initial snapshot after ClientReady (%dx%d)",
+		id[:4], ready.Cols, ready.Rows)
+}
+
 func (c *connection) handleResize(size protocol.Resize) {
 	sink, ok := c.sink.(*DesktopSink)
 	if !ok {
@@ -533,6 +595,15 @@ func (c *connection) handleResize(size protocol.Resize) {
 	}
 
 	desktop.SetViewportSize(int(size.Cols), int(size.Rows))
+
+	// For backward compatibility: if old client sends Resize without ClientReady,
+	// treat this as the initial ready signal and send snapshot.
+	if !c.initialSnapshotSent {
+		c.initialSnapshotSent = true
+		id := c.session.ID()
+		debugLog.Printf("connection %x: sent initial snapshot on first Resize (backward compat)",
+			id[:4])
+	}
 
 	snapshot, err := sink.Snapshot()
 	if err != nil {

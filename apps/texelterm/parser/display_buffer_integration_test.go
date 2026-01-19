@@ -335,22 +335,22 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 	v.EnableDisplayBuffer()
 
 	// Write only 3 lines (less than screen height)
+	// All lines are committed (have LF) so they go to history and can be reflowed.
+	// In real usage, uncommitted content (like shell prompt) is redrawn by shell via SIGWINCH.
 	for i := 1; i <= 3; i++ {
 		for _, ch := range "Line" {
 			v.placeChar(ch)
 		}
 		v.placeChar(rune('0' + i))
-		if i < 3 {
-			v.CarriageReturn()
-			v.LineFeed()
-		}
+		v.CarriageReturn()
+		v.LineFeed()
 	}
 
 	t.Logf("Before resize: cursorY=%d (height=10)", v.cursorY)
 
-	// Cursor should be at row 2 (after Line1, Line2, Line3)
-	if v.cursorY != 2 {
-		t.Errorf("Before resize: expected cursorY=2, got %d", v.cursorY)
+	// Cursor should be at row 3 (after Line1, Line2, Line3 + their newlines)
+	if v.cursorY != 3 {
+		t.Errorf("Before resize: expected cursorY=3, got %d", v.cursorY)
 	}
 
 	// Resize to a larger terminal
@@ -358,10 +358,9 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 
 	t.Logf("After resize to 15 rows: cursorY=%d", v.cursorY)
 
-	// Cursor should still be at row 2 (live edge hasn't moved)
-	// NOT at row 14 (bottom of new screen)
-	if v.cursorY != 2 {
-		t.Errorf("After resize: expected cursorY=2 (live edge), got %d", v.cursorY)
+	// Cursor should be at row 3 (after reflowed history content)
+	if v.cursorY != 3 {
+		t.Errorf("After resize: expected cursorY=3 (after history), got %d", v.cursorY)
 	}
 
 	// Content should still be at rows 0-2
@@ -374,9 +373,7 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 		}
 	}
 
-	// Write more content - it should appear at the cursor position
-	v.CarriageReturn()
-	v.LineFeed()
+	// Write more content - it should appear at the cursor position (row 3)
 	for _, ch := range "NewLine" {
 		v.placeChar(ch)
 	}
@@ -385,7 +382,7 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 	t.Logf("After adding NewLine: cursorY=%d", v.cursorY)
 	t.Logf("Grid:\n%s", gridToString(grid))
 
-	// NewLine should appear at row 3
+	// NewLine should appear at row 3 (where cursor was)
 	row3 := strings.TrimRight(cellsToStringTest(grid[3]), " ")
 	if row3 != "NewLine" {
 		t.Errorf("Expected 'NewLine' at row 3, got %q", row3)

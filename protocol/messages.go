@@ -176,6 +176,13 @@ type Resize struct {
 	Rows uint16
 }
 
+// ClientReady signals the client is ready to receive snapshots.
+// Sent after client initializes its screen and knows its dimensions.
+type ClientReady struct {
+	Cols uint16
+	Rows uint16
+}
+
 // PaneSnapshot describes the full buffer content for a single pane.
 type PaneSnapshot struct {
 	PaneID    [16]byte
@@ -826,6 +833,29 @@ func EncodeResize(r Resize) ([]byte, error) {
 // DecodeResize parses a resize payload.
 func DecodeResize(b []byte) (Resize, error) {
 	var r Resize
+	if len(b) < 4 {
+		return r, errPayloadShort
+	}
+	r.Cols = binary.LittleEndian.Uint16(b[:2])
+	r.Rows = binary.LittleEndian.Uint16(b[2:4])
+	return r, nil
+}
+
+// EncodeClientReady serialises the client ready message.
+func EncodeClientReady(r ClientReady) ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 4))
+	if err := binary.Write(buf, binary.LittleEndian, r.Cols); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, r.Rows); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// DecodeClientReady parses a client ready payload.
+func DecodeClientReady(b []byte) (ClientReady, error) {
+	var r ClientReady
 	if len(b) < 4 {
 		return r, errPayloadShort
 	}

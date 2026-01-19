@@ -200,3 +200,44 @@ func (t *toggleApp) requestRefresh() {
 	default:
 	}
 }
+
+// SnapshotMetadata implements texelcore.SnapshotProvider by delegating to the main app.
+// This is critical for persistence - without it, the app type is not saved to snapshots.
+func (t *toggleApp) SnapshotMetadata() (appType string, config map[string]interface{}) {
+	if provider, ok := t.main.(interface {
+		SnapshotMetadata() (string, map[string]interface{})
+	}); ok {
+		return provider.SnapshotMetadata()
+	}
+	return "", nil
+}
+
+// SetPaneID implements texelcore.PaneIDSetter by delegating to the main app.
+// This is critical for terminal history persistence - without it, texelterm can't find its history file.
+func (t *toggleApp) SetPaneID(id [16]byte) {
+	if setter, ok := t.main.(interface{ SetPaneID([16]byte) }); ok {
+		setter.SetPaneID(id)
+	}
+}
+
+// MouseWheelEnabled implements texelcore.MouseWheelDeclarer by delegating to the main app.
+// This is critical for mouse wheel scrolling in terminals.
+func (t *toggleApp) MouseWheelEnabled() bool {
+	if declarer, ok := t.main.(interface{ MouseWheelEnabled() bool }); ok {
+		return declarer.MouseWheelEnabled()
+	}
+	return false
+}
+
+// HandleMouseWheel implements texelcore.MouseWheelHandler by delegating to the active app.
+// This enables mouse wheel scrolling in terminals wrapped by toggleApp.
+func (t *toggleApp) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {
+	if t.active == nil {
+		return
+	}
+	if handler, ok := t.active.(interface {
+		HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask)
+	}); ok {
+		handler.HandleMouseWheel(x, y, deltaX, deltaY, modifiers)
+	}
+}

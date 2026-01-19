@@ -165,6 +165,14 @@ func (vs *ViewportState) WriteWide(r rune, fg, bg Color, attr Attribute, insertM
 	// Mark row as dirty
 	vs.rowMeta[vs.cursorY].State = LineStateDirty
 
+	// If writing at column 0 and this row was a continuation, break the chain.
+	// This happens when shell starts a new prompt on a row that had history content.
+	// The new content should be a fresh logical line, not a continuation.
+	if vs.cursorX == 0 && vs.rowMeta[vs.cursorY].IsContinuation {
+		vs.rowMeta[vs.cursorY].IsContinuation = false
+		vs.rowMeta[vs.cursorY].IsFirstRow = true
+	}
+
 	// Advance cursor by character width (like old LiveEditor.WriteChar behavior)
 	vs.cursorX += charWidth
 	// Note: wrapping is handled by VTerm, not here
@@ -299,7 +307,13 @@ func (vs *ViewportState) EraseScreen() {
 		for x := 0; x < vs.width; x++ {
 			vs.grid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: vs.eraseBG}
 		}
-		vs.rowMeta[y].State = LineStateDirty
+		// Reset row metadata - each row starts as a fresh line
+		vs.rowMeta[y] = RowMetadata{
+			LogicalLineID:  -1,
+			IsFirstRow:     true,
+			IsContinuation: false,
+			State:          LineStateDirty,
+		}
 	}
 }
 
@@ -402,7 +416,12 @@ func (vs *ViewportState) ScrollUp(n int) {
 	for y := 0; y < vs.height-n; y++ {
 		vs.grid[y] = vs.grid[y+n]
 		vs.rowMeta[y] = vs.rowMeta[y+n]
-		vs.rowMeta[y].State = LineStateDirty // Mark as dirty since content moved
+		// Preserve LineStateCommitted to prevent re-committing history rows.
+		// Committed rows came from history and shouldn't be re-committed when they scroll off.
+		// Other rows get marked dirty since content moved position.
+		if vs.rowMeta[y].State != LineStateCommitted {
+			vs.rowMeta[y].State = LineStateDirty
+		}
 	}
 
 	// Create new blank rows at bottom
@@ -429,7 +448,10 @@ func (vs *ViewportState) ScrollDown(n int) {
 	for y := vs.height - 1; y >= n; y-- {
 		vs.grid[y] = vs.grid[y-n]
 		vs.rowMeta[y] = vs.rowMeta[y-n]
-		vs.rowMeta[y].State = LineStateDirty // Mark as dirty since content moved
+		// Preserve LineStateCommitted to prevent re-committing history rows
+		if vs.rowMeta[y].State != LineStateCommitted {
+			vs.rowMeta[y].State = LineStateDirty
+		}
 	}
 
 	// Create new blank rows at top
@@ -467,7 +489,10 @@ func (vs *ViewportState) ScrollRegionUp(top, bottom, n int) {
 	for y := top; y <= bottom-n; y++ {
 		vs.grid[y] = vs.grid[y+n]
 		vs.rowMeta[y] = vs.rowMeta[y+n]
-		vs.rowMeta[y].State = LineStateDirty // Mark as dirty since content moved
+		// Preserve LineStateCommitted to prevent re-committing history rows
+		if vs.rowMeta[y].State != LineStateCommitted {
+			vs.rowMeta[y].State = LineStateDirty
+		}
 	}
 
 	// Create new blank rows at the bottom of the region
@@ -508,7 +533,10 @@ func (vs *ViewportState) ScrollRegionDown(top, bottom, n int) {
 	for y := bottom; y >= top+n; y-- {
 		vs.grid[y] = vs.grid[y-n]
 		vs.rowMeta[y] = vs.rowMeta[y-n]
-		vs.rowMeta[y].State = LineStateDirty // Mark as dirty since content moved
+		// Preserve LineStateCommitted to prevent re-committing history rows
+		if vs.rowMeta[y].State != LineStateCommitted {
+			vs.rowMeta[y].State = LineStateDirty
+		}
 	}
 
 	// Create new blank rows at the top of the region
@@ -644,6 +672,11 @@ func (vs *ViewportState) commitRow(y int) {
 		return
 	}
 
+	// Skip rows that are already committed (e.g., rows populated from history)
+	if vs.rowMeta[y].State == LineStateCommitted {
+		return
+	}
+
 	// Extract logical line starting from this row
 	lines := vs.ExtractLogicalLines(y, y)
 	for _, line := range lines {
@@ -723,6 +756,16 @@ func (vs *ViewportState) MarkRowAsContinuation(y int) {
 	}
 	vs.rowMeta[y].IsFirstRow = false
 	vs.rowMeta[y].IsContinuation = true
+}
+
+// MarkRowAsCommitted marks a row as already committed to history.
+// Used when populating viewport from history to prevent re-committing
+// the same content when it scrolls off the top.
+func (vs *ViewportState) MarkRowAsCommitted(y int) {
+	if y < 0 || y >= vs.height {
+		return
+	}
+	vs.rowMeta[y].State = LineStateCommitted
 }
 
 // --- Shell Integration ---
