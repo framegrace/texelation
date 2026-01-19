@@ -527,21 +527,123 @@ func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
 
 // --- Resize ---
 
+// physicalOffsetToLogical converts a physical row offset (from the end of history)
+// to a width-independent (logicalIndex, charOffset) coordinate.
+// This is used to preserve scroll position across width changes.
+func (db *DisplayBuffer) physicalOffsetToLogical(physicalOffset int64, width int) (logicalIdx int64, charOffset int) {
+	if db.history == nil || db.history.TotalLen() == 0 {
+		return 0, 0
+	}
+
+	// Count physical rows from the end of history until we reach physicalOffset
+	var physicalCount int64
+	totalLines := db.history.TotalLen()
+
+	for i := totalLines - 1; i >= 0; i-- {
+		line := db.history.GetGlobal(i)
+		if line == nil {
+			continue
+		}
+		wrapped := line.WrapToWidth(width)
+		wrappedLen := int64(len(wrapped))
+
+		// Check if our target offset falls within this logical line
+		if physicalCount+wrappedLen > physicalOffset {
+			// The offset is within this logical line
+			// Calculate which wrapped row within this line
+			rowWithinLine := int(physicalOffset - physicalCount)
+			// Convert to character offset (approximate: row * width)
+			charOffset = rowWithinLine * width
+			return i, charOffset
+		}
+		physicalCount += wrappedLen
+	}
+
+	// If we get here, the offset is beyond history - return start
+	return 0, 0
+}
+
+// logicalToPhysicalOffset converts a (logicalIndex, charOffset) coordinate
+// to a physical row offset at the given width.
+func (db *DisplayBuffer) logicalToPhysicalOffset(logicalIdx int64, charOffset int, width int) int64 {
+	if db.history == nil || db.history.TotalLen() == 0 {
+		return 0
+	}
+
+	var physicalOffset int64
+	totalLines := db.history.TotalLen()
+
+	// Count physical rows from logicalIdx+1 to the end (lines after our anchor)
+	for i := logicalIdx + 1; i < totalLines; i++ {
+		line := db.history.GetGlobal(i)
+		if line != nil {
+			wrapped := line.WrapToWidth(width)
+			physicalOffset += int64(len(wrapped))
+		}
+	}
+
+	// Add the rows within our anchor line (from charOffset to end of line)
+	anchorLine := db.history.GetGlobal(logicalIdx)
+	if anchorLine != nil {
+		wrapped := anchorLine.WrapToWidth(width)
+		// Find which wrapped row corresponds to charOffset
+		rowWithinLine := charOffset / width
+		if rowWithinLine >= len(wrapped) {
+			rowWithinLine = len(wrapped) - 1
+		}
+		if rowWithinLine < 0 {
+			rowWithinLine = 0
+		}
+		// Add remaining rows from this line (from rowWithinLine to end)
+		physicalOffset += int64(len(wrapped) - rowWithinLine - 1)
+	}
+
+	return physicalOffset
+}
+
 // Resize changes the viewport dimensions and reflows content from history.
+// If currently viewing history, it preserves the scroll position across the resize.
 func (db *DisplayBuffer) Resize(newWidth, newHeight int) {
 	if newWidth == db.viewport.Width() && newHeight == db.viewport.Height() {
 		return
 	}
 
-	// First resize the viewport structure (simple copy, may truncate)
+	oldWidth := db.viewport.Width()
+	wasViewingHistory := db.viewingHistory
+	var anchorLogicalIdx int64
+	var anchorCharOffset int
+
+	// If viewing history, save position as (logicalLine, charOffset) before resize
+	if wasViewingHistory && db.history != nil && db.historyViewOffset > 0 {
+		anchorLogicalIdx, anchorCharOffset = db.physicalOffsetToLogical(db.historyViewOffset, oldWidth)
+	}
+
+	// Resize the viewport structure
 	db.viewport.Resize(newWidth, newHeight)
 	db.cachedHistoryView = nil // Invalidate cache on resize
 
-	// Repopulate viewport from history to reflow content at new width.
-	// This re-wraps logical lines from history at the new width.
-	// The shell will redraw its current prompt line via SIGWINCH handling.
 	if db.history != nil && db.history.TotalLen() > 0 {
+		// Always repopulate viewport from history to reflow content at new width.
+		// This ensures the live viewport has correctly wrapped content.
+		// The shell will redraw its current prompt line via SIGWINCH handling.
 		db.PopulateViewportFromHistory()
+
+		// If we were viewing history, restore that state after repopulating
+		if wasViewingHistory {
+			// Recalculate physical offset at new width
+			db.historyViewOffset = db.logicalToPhysicalOffset(anchorLogicalIdx, anchorCharOffset, newWidth)
+
+			// Validate offset doesn't exceed max
+			maxScroll := db.calculateMaxHistoryScroll()
+			if db.historyViewOffset > maxScroll {
+				db.historyViewOffset = maxScroll
+			}
+
+			// Restore viewing history mode and suppress auto-scroll
+			// (shell will redraw via SIGWINCH which triggers SetCursor - we don't want to jump)
+			db.viewingHistory = true
+			db.restoredView = true
+		}
 	}
 }
 

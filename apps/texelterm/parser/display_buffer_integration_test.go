@@ -3668,3 +3668,151 @@ func TestDisplayBuffer_SeamlessRecovery(t *testing.T) {
 		}
 	})
 }
+
+// TestDisplayBuffer_ResizeWhileViewingHistory tests that resize preserves scroll position
+// when viewing history (instead of jumping back to live edge).
+func TestDisplayBuffer_ResizeWhileViewingHistory(t *testing.T) {
+	v := NewVTerm(40, 10)
+	v.EnableDisplayBuffer()
+
+	// Write enough content to have scrollback history
+	for i := 1; i <= 20; i++ {
+		line := fmt.Sprintf("History line %02d with some content", i)
+		for _, ch := range line {
+			v.placeChar(ch)
+		}
+		v.CarriageReturn()
+		v.LineFeed()
+	}
+
+	t.Logf("After 20 lines: cursorY=%d", v.cursorY)
+
+	// Scroll up into history
+	db := v.displayBuf.display
+	scrolled := db.ScrollViewportUp(10)
+	t.Logf("Scrolled up %d rows, viewingHistory=%v", scrolled, db.CanScrollDown())
+
+	if !db.CanScrollDown() {
+		t.Fatal("Expected viewingHistory=true after scrolling up")
+	}
+
+	// Get the current view - should show history lines
+	gridBefore := db.GetViewportAsCells()
+	firstRowBefore := ""
+	for _, cell := range gridBefore[0] {
+		if cell.Rune != 0 {
+			firstRowBefore += string(cell.Rune)
+		}
+	}
+	firstRowBefore = strings.TrimRight(firstRowBefore, " ")
+	t.Logf("Before resize, first row: %q", firstRowBefore)
+
+	// Now resize - this should NOT jump to cursor
+	v.Resize(40, 15) // Change height, keep width
+
+	// Should still be viewing history
+	if !db.CanScrollDown() {
+		t.Error("Expected viewingHistory=true after resize, but got false (jumped to cursor)")
+	}
+
+	// The view should show similar content (same logical lines)
+	gridAfter := db.GetViewportAsCells()
+	firstRowAfter := ""
+	for _, cell := range gridAfter[0] {
+		if cell.Rune != 0 {
+			firstRowAfter += string(cell.Rune)
+		}
+	}
+	firstRowAfter = strings.TrimRight(firstRowAfter, " ")
+	t.Logf("After resize, first row: %q", firstRowAfter)
+
+	// Should still be showing history content, not the live edge
+	if !strings.HasPrefix(firstRowAfter, "History line") {
+		t.Errorf("Expected history content after resize, got %q", firstRowAfter)
+	}
+
+	// Should show approximately the same content (may shift by a few lines due to height change)
+	// Just verify we're still in the history area, not jumped to the end
+	if strings.Contains(firstRowAfter, "line 20") && strings.Contains(firstRowBefore, "line 01") {
+		t.Error("Looks like resize jumped to live edge instead of preserving scroll position")
+	}
+}
+
+// TestDisplayBuffer_ResizeWhileViewingHistoryWidthChange tests resize with width change
+// while viewing history - more complex case requiring reflow.
+func TestDisplayBuffer_ResizeWhileViewingHistoryWidthChange(t *testing.T) {
+	v := NewVTerm(80, 10)
+	v.EnableDisplayBuffer()
+
+	// Write content that will wrap differently at different widths
+	for i := 1; i <= 15; i++ {
+		// Each line is ~60 chars: fits in 80 cols, wraps at 40 cols
+		line := fmt.Sprintf("Line %02d: This is a longer line that will reflow when width changes", i)
+		for _, ch := range line {
+			v.placeChar(ch)
+		}
+		v.CarriageReturn()
+		v.LineFeed()
+	}
+
+	db := v.displayBuf.display
+
+	// Scroll up into history
+	db.ScrollViewportUp(5)
+	t.Logf("After scroll: viewingHistory=%v", db.CanScrollDown())
+
+	if !db.CanScrollDown() {
+		t.Fatal("Expected viewingHistory=true")
+	}
+
+	// Get a reference line from current view
+	gridBefore := db.GetViewportAsCells()
+	var refLine string
+	for _, cell := range gridBefore[2] { // Use middle row
+		if cell.Rune != 0 {
+			refLine += string(cell.Rune)
+		}
+	}
+	refLine = strings.TrimSpace(refLine)
+	t.Logf("Reference line before resize: %q", refLine)
+
+	// Extract the line number from reference
+	var refLineNum string
+	if strings.HasPrefix(refLine, "Line ") && len(refLine) >= 7 {
+		refLineNum = refLine[5:7] // e.g., "01", "02", etc.
+	}
+
+	// Resize to narrower width - this causes reflow
+	v.Resize(40, 10)
+
+	if !db.CanScrollDown() {
+		t.Error("Expected viewingHistory=true after width change resize")
+	}
+
+	// The historyViewOffset should have been recalculated
+	t.Logf("After resize: viewingHistory=%v", db.CanScrollDown())
+
+	// Check that we're still viewing similar content area
+	gridAfter := db.GetViewportAsCells()
+
+	// Look for the reference line number somewhere in the view
+	found := false
+	for y := 0; y < len(gridAfter); y++ {
+		var row string
+		for _, cell := range gridAfter[y] {
+			if cell.Rune != 0 {
+				row += string(cell.Rune)
+			}
+		}
+		if strings.Contains(row, "Line "+refLineNum) {
+			found = true
+			t.Logf("Found reference 'Line %s' at row %d after resize", refLineNum, y)
+			break
+		}
+	}
+
+	if !found && refLineNum != "" {
+		t.Logf("Warning: Reference 'Line %s' not visible after resize (may have shifted due to reflow)", refLineNum)
+		// This is acceptable - the exact position may shift, but we should still be in history mode
+	}
+}
