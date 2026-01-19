@@ -296,18 +296,22 @@ func (a *TexelTerm) SetPaneID(id [16]byte) {
 func (a *TexelTerm) SetStorage(storage texelcore.AppStorage) {
 	a.mu.Lock()
 	a.storage = storage
-	// If vterm is already initialized, load state now
+	// If vterm is already initialized, load and apply state now
+	// Note: This only applies scroll offset; prompt-aware populate is handled in runShell
 	if a.vterm != nil {
-		a.loadStateLocked()
+		savedState := a.loadStateLocked()
+		a.applyRestoredStateLocked(savedState)
 	}
 	a.mu.Unlock()
 }
 
 // terminalState holds the persisted terminal state for server restart recovery.
 type terminalState struct {
-	CursorX      int   `json:"cursorX"`
-	CursorY      int   `json:"cursorY"`
-	ScrollOffset int64 `json:"scrollOffset"`
+	CursorX          int   `json:"cursorX"`
+	CursorY          int   `json:"cursorY"`
+	ScrollOffset     int64 `json:"scrollOffset"`
+	LastPromptLine   int64 `json:"lastPromptLine"`   // Global line index of last prompt (-1 if unknown)
+	LastPromptHeight int   `json:"lastPromptHeight"` // Number of lines in the prompt (default 1)
 }
 
 // saveStateLocked persists state while holding the lock.
@@ -322,12 +326,15 @@ func (a *TexelTerm) saveStateLocked() {
 
 	cursorX, cursorY := a.vterm.Cursor()
 	state := terminalState{
-		CursorX:      cursorX,
-		CursorY:      cursorY,
-		ScrollOffset: a.vterm.GetScrollOffset(),
+		CursorX:          cursorX,
+		CursorY:          cursorY,
+		ScrollOffset:     a.vterm.GetScrollOffset(),
+		LastPromptLine:   a.vterm.GetLastPromptLine(),
+		LastPromptHeight: a.vterm.GetLastPromptHeight(),
 	}
 
-	log.Printf("[TEXELTERM] Saving state: scrollOffset=%d, cursor=(%d,%d)", state.ScrollOffset, cursorX, cursorY)
+	log.Printf("[TEXELTERM] Saving state: scrollOffset=%d, cursor=(%d,%d), lastPromptLine=%d, promptHeight=%d",
+		state.ScrollOffset, cursorX, cursorY, state.LastPromptLine, state.LastPromptHeight)
 	if err := a.storage.Set("state", state); err != nil {
 		log.Printf("[TEXELTERM] Failed to save state: %v", err)
 	}
@@ -335,19 +342,39 @@ func (a *TexelTerm) saveStateLocked() {
 
 // loadStateLocked loads persisted state while holding the lock.
 // Called when storage is set and vterm is ready.
-func (a *TexelTerm) loadStateLocked() {
+// Returns the loaded state (with default values if no saved state exists).
+func (a *TexelTerm) loadStateLocked() terminalState {
+	defaultState := terminalState{LastPromptLine: -1, LastPromptHeight: 1}
+
 	if a.storage == nil || a.vterm == nil {
-		return
+		return defaultState
 	}
 
 	data, err := a.storage.Get("state")
 	if err != nil || data == nil {
-		return // No saved state
+		return defaultState // No saved state
 	}
 
 	var state terminalState
 	if err := json.Unmarshal(data, &state); err != nil {
 		log.Printf("[TEXELTERM] Failed to load state: %v", err)
+		return defaultState
+	}
+
+	// Ensure prompt height has a valid default (for old state files)
+	if state.LastPromptHeight < 1 {
+		state.LastPromptHeight = 1
+	}
+
+	log.Printf("[TEXELTERM] Loaded state: scrollOffset=%d, lastPromptLine=%d, promptHeight=%d",
+		state.ScrollOffset, state.LastPromptLine, state.LastPromptHeight)
+	return state
+}
+
+// applyRestoredStateLocked applies the scroll offset from a loaded state.
+// This should be called after populating the viewport from history.
+func (a *TexelTerm) applyRestoredStateLocked(state terminalState) {
+	if a.vterm == nil {
 		return
 	}
 
@@ -1482,14 +1509,36 @@ func (a *TexelTerm) runShell() error {
 			}
 		}
 
+		// Load persisted state first to get lastPromptLine
+		savedState := a.loadStateLocked()
+
 		// Populate viewport from history so shell continues from where we left off
-		// This must happen before loading scroll offset
+		// Use prompt-aware populate if we have a valid prompt line for seamless recovery
 		if a.vterm.IsDisplayBufferEnabled() {
-			a.vterm.PopulateViewportFromHistory()
+			// Debug: write to debug log if available
+			if a.renderDebugLog != nil {
+				a.renderDebugLog("[RECOVERY] savedState.LastPromptLine=%d, historyLen=%d", savedState.LastPromptLine, a.vterm.HistoryLength())
+			}
+
+			if savedState.LastPromptLine >= 0 {
+				// Seamless recovery: show history up to where the prompt was,
+				// so when the shell redraws its prompt, it appears naturally
+				if a.renderDebugLog != nil {
+					a.renderDebugLog("[RECOVERY] Using seamless recovery with lastPromptLine=%d, promptHeight=%d",
+						savedState.LastPromptLine, savedState.LastPromptHeight)
+				}
+				a.vterm.PopulateViewportFromHistoryToPrompt(savedState.LastPromptLine, savedState.LastPromptHeight)
+			} else {
+				// Fallback: show all history, cursor at end
+				if a.renderDebugLog != nil {
+					a.renderDebugLog("[RECOVERY] Fallback: no valid lastPromptLine")
+				}
+				a.vterm.PopulateViewportFromHistory()
+			}
 		}
 
-		// Load persisted state (scroll offset) if storage is available
-		a.loadStateLocked()
+		// Apply scroll offset from saved state
+		a.applyRestoredStateLocked(savedState)
 
 		a.mu.Unlock()
 	}

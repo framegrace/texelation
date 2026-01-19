@@ -410,6 +410,41 @@ func (v *VTerm) displayBufferHistoryTotalLen() int64 {
 	return v.displayBuf.history.TotalLen()
 }
 
+// GetLastPromptLine returns the global line index of the last prompt.
+// Returns -1 if no prompt position has been recorded.
+func (v *VTerm) GetLastPromptLine() int64 {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return -1
+	}
+	return v.displayBuf.display.LastPromptLine()
+}
+
+// GetLastPromptHeight returns the number of lines in the prompt.
+// Defaults to 1 for single-line prompts.
+func (v *VTerm) GetLastPromptHeight() int {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return 1
+	}
+	return v.displayBuf.display.LastPromptHeight()
+}
+
+// MarkPromptStart marks the current line as a prompt (OSC 133;A).
+// Note: For multiline prompt support, position is recorded in MarkInputStart.
+func (v *VTerm) MarkPromptStart() {
+	if v.displayBuf != nil && v.displayBuf.display != nil {
+		v.displayBuf.display.MarkPromptStart()
+	}
+}
+
+// MarkInputStart marks the current line as input start (OSC 133;B).
+// This records the global line position for seamless recovery after server restart.
+// Called after the full prompt is drawn, supporting multiline prompts.
+func (v *VTerm) MarkInputStart() {
+	if v.displayBuf != nil && v.displayBuf.display != nil {
+		v.displayBuf.display.MarkInputStart()
+	}
+}
+
 // displayBufferLoadHistory loads logical lines into the display buffer history.
 // This is used when restoring from persisted history.
 func (v *VTerm) displayBufferLoadHistory(lines []*LogicalLine) {
@@ -632,5 +667,25 @@ func (v *VTerm) PopulateViewportFromHistory() (cursorX, cursorY int) {
 	v.cursorY = cursorY
 	v.MarkAllDirty()
 	log.Printf("[VTERM] PopulateViewportFromHistory: cursor set to (%d,%d)", cursorX, cursorY)
+	return cursorX, cursorY
+}
+
+// PopulateViewportFromHistoryToPrompt fills the viewport with history up to the prompt line.
+// This enables seamless shell recovery - history is shown up to where the prompt was,
+// so when the shell restarts and draws its prompt, the user sees continuity.
+// promptLine: Global line index where the prompt starts (-1 to fall back)
+// promptHeight: Number of lines in the prompt (used to hide previous prompt from history)
+// If promptLine is -1 or invalid, falls back to PopulateViewportFromHistory.
+func (v *VTerm) PopulateViewportFromHistoryToPrompt(promptLine int64, promptHeight int) (cursorX, cursorY int) {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return 0, 0
+	}
+	cursorX, cursorY = v.displayBuf.display.PopulateViewportFromHistoryToPrompt(promptLine, promptHeight)
+	// Set VTerm's cursor position to match
+	v.cursorX = cursorX
+	v.cursorY = cursorY
+	v.MarkAllDirty()
+	log.Printf("[VTERM] PopulateViewportFromHistoryToPrompt: promptLine=%d, promptHeight=%d, cursor set to (%d,%d)",
+		promptLine, promptHeight, cursorX, cursorY)
 	return cursorX, cursorY
 }

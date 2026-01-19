@@ -545,6 +545,100 @@ func (db *DisplayBuffer) Resize(newWidth, newHeight int) {
 	}
 }
 
+// populateViewportWithCursorAt fills the viewport with history lines, placing the cursor
+// at the specified row. History fills rows 0 to targetCursorY-1, leaving row targetCursorY
+// and below empty for the shell to draw the prompt.
+// skipFromEnd specifies how many logical lines to skip from the end of history (to hide old prompts).
+func (db *DisplayBuffer) populateViewportWithCursorAt(targetCursorY int, skipFromEnd int) (cursorX, cursorY int) {
+	if db.history == nil || db.history.TotalLen() == 0 {
+		return 0, targetCursorY
+	}
+
+	width := db.viewport.Width()
+	totalHistoryLines := db.history.TotalLen()
+
+	// We want to fill rows 0 to targetCursorY-1 with history
+	maxLinesToShow := targetCursorY
+	if maxLinesToShow <= 0 {
+		// No history to show, just position cursor
+		db.viewport.EraseScreen()
+		db.viewport.SetCursor(0, 0)
+		db.viewingHistory = false
+		db.historyViewOffset = 0
+		db.cachedHistoryView = nil
+		db.hasLiveContent = false
+		return 0, 0
+	}
+
+	// Calculate where to start in history (skip lines from end to hide old prompts)
+	startIdx := totalHistoryLines - 1 - int64(skipFromEnd)
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	log.Printf("[populateViewportWithCursorAt] targetCursorY=%d, maxLinesToShow=%d, historyLen=%d, skipFromEnd=%d, startIdx=%d",
+		targetCursorY, maxLinesToShow, totalHistoryLines, skipFromEnd, startIdx)
+
+	// Work backwards from startIdx to collect physical lines
+	var physicalLines []PhysicalLine
+	logicalIdx := startIdx
+
+	for len(physicalLines) < maxLinesToShow && logicalIdx >= 0 {
+		line := db.history.GetGlobal(logicalIdx)
+		if line == nil {
+			logicalIdx--
+			continue
+		}
+
+		wrapped := line.WrapToWidth(width)
+		// Prepend wrapped lines (since we're going backwards)
+		physicalLines = append(wrapped, physicalLines...)
+		logicalIdx--
+	}
+
+	// Trim to maxLinesToShow if we collected more
+	if len(physicalLines) > maxLinesToShow {
+		physicalLines = physicalLines[len(physicalLines)-maxLinesToShow:]
+	}
+
+	// Clear the viewport first
+	db.viewport.EraseScreen()
+
+	// Write the physical lines to the viewport
+	for y, pline := range physicalLines {
+		for x, cell := range pline.Cells {
+			if x < width {
+				db.viewport.SetCell(x, y, cell)
+			}
+		}
+		if pline.Offset == 0 {
+			db.viewport.MarkRowAsLineStart(y)
+		} else {
+			db.viewport.MarkRowAsContinuation(y)
+		}
+		db.viewport.MarkRowAsCommitted(y)
+	}
+
+	// Position cursor at the target row (where shell will draw prompt)
+	cursorX = 0
+	cursorY = len(physicalLines)
+	if cursorY > targetCursorY {
+		cursorY = targetCursorY
+	}
+
+	db.viewport.SetCursor(cursorX, cursorY)
+
+	// Reset scroll state
+	db.viewingHistory = false
+	db.historyViewOffset = 0
+	db.cachedHistoryView = nil
+	db.hasLiveContent = false
+
+	log.Printf("[populateViewportWithCursorAt] Populated %d lines, cursor at (%d,%d)", len(physicalLines), cursorX, cursorY)
+
+	return cursorX, cursorY
+}
+
 // PopulateViewportFromHistory fills the viewport with the last lines from history.
 // This should be called when restoring a session to ensure the viewport matches
 // the end of history, so the shell continues writing where it left off.
@@ -655,6 +749,144 @@ func (db *DisplayBuffer) PopulateViewportFromHistory() (cursorX, cursorY int) {
 	return cursorX, cursorY
 }
 
+// PopulateViewportFromHistoryToPrompt fills the viewport from history up to (but not including)
+// the prompt line. This enables seamless shell recovery - when the shell restarts, it draws
+// its prompt and the user doesn't see a duplicate.
+//
+// promptLine: Global line index where the prompt starts (-1 to fall back to regular populate)
+// promptHeight: Number of lines in the prompt (used to hide the previous prompt from history)
+//
+// If promptLine is -1, falls back to PopulateViewportFromHistory.
+// If promptLine > historyLen (prompt was on viewport, not in history), we calculate the
+// implied viewport row and position the cursor there.
+func (db *DisplayBuffer) PopulateViewportFromHistoryToPrompt(promptLine int64, promptHeight int) (cursorX, cursorY int) {
+	if db.history == nil || db.history.TotalLen() == 0 {
+		return 0, 0
+	}
+
+	totalHistoryLines := db.history.TotalLen()
+	height := db.viewport.Height()
+
+	// If promptLine is negative, fall back to regular behavior
+	if promptLine < 0 {
+		log.Printf("[PopulateViewportFromHistoryToPrompt] Invalid promptLine=%d, falling back", promptLine)
+		return db.PopulateViewportFromHistory()
+	}
+
+	// If promptLine is beyond history, the prompt was on the viewport (not committed yet).
+	// Calculate the implied viewport row where the prompt was.
+	if promptLine >= totalHistoryLines {
+		// promptLine = historyLen_at_save + viewportRow
+		// So: viewportRow = promptLine - historyLen_at_save
+		// But we don't have historyLen_at_save. However, if nothing was committed between
+		// save and restore, historyLen is the same, so:
+		impliedViewportRow := int(promptLine - totalHistoryLines)
+		log.Printf("[PopulateViewportFromHistoryToPrompt] promptLine=%d > historyLen=%d, impliedViewportRow=%d",
+			promptLine, totalHistoryLines, impliedViewportRow)
+
+		// The history contains the PREVIOUS prompt (from the last command cycle).
+		// Skip enough lines to hide it: promptHeight * 2 (current + previous prompt).
+		// Use minimum of 4 to handle common multiline prompts even if detection fails.
+		skipFromEnd := promptHeight * 2
+		if skipFromEnd < 4 {
+			skipFromEnd = 4
+		}
+
+		// Clamp viewport row to valid range
+		if impliedViewportRow < 0 {
+			impliedViewportRow = 0
+		}
+		if impliedViewportRow >= height {
+			impliedViewportRow = height - 1
+		}
+
+		log.Printf("[PopulateViewportFromHistoryToPrompt] impliedViewportRow=%d, skipping %d lines from end of history",
+			impliedViewportRow, skipFromEnd)
+
+		// Fill viewport with history (skipping old prompt), cursor at implied row
+		return db.populateViewportWithCursorAt(impliedViewportRow, skipFromEnd)
+	}
+
+	width := db.viewport.Width()
+
+	log.Printf("[PopulateViewportFromHistoryToPrompt] Starting (within history): promptLine=%d, totalHistoryLines=%d, height=%d, width=%d", promptLine, totalHistoryLines, height, width)
+
+	// We need to show history UP TO the prompt line (exclusive - the prompt line itself is where
+	// the shell will redraw its prompt). So we include lines 0 to promptLine-1.
+	// Work backwards from promptLine-1 to fill the viewport.
+	var physicalLines []PhysicalLine
+	logicalIdx := promptLine - 1
+
+	for len(physicalLines) < height && logicalIdx >= 0 {
+		line := db.history.GetGlobal(logicalIdx)
+		if line == nil {
+			log.Printf("[PopulateViewportFromHistoryToPrompt] GetGlobal(%d) returned nil", logicalIdx)
+			logicalIdx--
+			continue
+		}
+
+		wrapped := line.WrapToWidth(width)
+		log.Printf("[PopulateViewportFromHistoryToPrompt] GetGlobal(%d): len=%d, wrapped to %d physical lines",
+			logicalIdx, line.Len(), len(wrapped))
+		// Prepend wrapped lines (since we're going backwards)
+		physicalLines = append(wrapped, physicalLines...)
+		logicalIdx--
+	}
+
+	log.Printf("[PopulateViewportFromHistoryToPrompt] Collected %d physical lines", len(physicalLines))
+
+	// Trim to viewport height - 1, leaving room for shell prompt on last row.
+	maxLines := height - 1
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	if len(physicalLines) > maxLines {
+		physicalLines = physicalLines[len(physicalLines)-maxLines:]
+	}
+
+	// Clear the viewport first (this also resets row metadata)
+	db.viewport.EraseScreen()
+
+	// Write the physical lines to the viewport with proper row metadata
+	for y, pline := range physicalLines {
+		for x, cell := range pline.Cells {
+			if x < width {
+				db.viewport.SetCell(x, y, cell)
+			}
+		}
+		// Set row metadata based on whether this is start or continuation of logical line
+		if pline.Offset == 0 {
+			db.viewport.MarkRowAsLineStart(y)
+		} else {
+			db.viewport.MarkRowAsContinuation(y)
+		}
+		// Mark as committed to prevent re-committing when these rows scroll off.
+		db.viewport.MarkRowAsCommitted(y)
+	}
+
+	// Position cursor at the START of the line AFTER history content.
+	// The shell will draw its prompt here.
+	cursorX = 0
+	cursorY = len(physicalLines)
+
+	// Actually set the cursor on the viewport
+	db.viewport.SetCursor(cursorX, cursorY)
+
+	// Reset scroll state - we're now at the live edge
+	db.viewingHistory = false
+	db.historyViewOffset = 0
+	db.cachedHistoryView = nil
+
+	// Clear the live content flag
+	db.hasLiveContent = false
+
+	if db.debugLog != nil {
+		db.debugLog("[PopulateViewportFromHistoryToPrompt] Populated %d lines (height=%d), cursor set to (%d,%d)", len(physicalLines), height, cursorX, cursorY)
+	}
+
+	return cursorX, cursorY
+}
+
 // --- Accessors ---
 
 // Width returns the viewport width.
@@ -718,6 +950,18 @@ func (db *DisplayBuffer) MarkInputStart() {
 // MarkOutputStart marks the current line as output (OSC 133;C).
 func (db *DisplayBuffer) MarkOutputStart() {
 	db.viewport.MarkOutputStart()
+}
+
+// LastPromptLine returns the global line index of the last prompt.
+// Returns -1 if no prompt position has been recorded.
+func (db *DisplayBuffer) LastPromptLine() int64 {
+	return db.viewport.LastPromptLine()
+}
+
+// LastPromptHeight returns the number of lines in the prompt.
+// Defaults to 1 for single-line prompts.
+func (db *DisplayBuffer) LastPromptHeight() int {
+	return db.viewport.LastPromptHeight()
 }
 
 // --- Line/Row Operations (for VTerm integration) ---
