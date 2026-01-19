@@ -309,6 +309,9 @@ func (p *Parser) handleOSC133(payload string) {
 		p.vterm.PromptActive = true
 		p.vterm.InputActive = false
 		p.vterm.CommandActive = false
+		// Record prompt START position for seamless recovery
+		// Using A (not B) so multiline prompts are fully excluded from history
+		p.vterm.MarkPromptStart()
 		if p.vterm.OnPromptStart != nil {
 			p.vterm.OnPromptStart()
 		}
@@ -321,6 +324,8 @@ func (p *Parser) handleOSC133(payload string) {
 		// Record where input starts (convert screen position to history line index)
 		p.vterm.InputStartLine = p.vterm.getTopHistoryLine() + p.vterm.GetCursorY()
 		p.vterm.InputStartCol = p.vterm.GetCursorX()
+		// Calculate prompt height (from OSC 133;A to now)
+		p.vterm.MarkInputStart()
 		if p.vterm.OnInputStart != nil {
 			p.vterm.OnInputStart()
 		}

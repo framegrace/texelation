@@ -335,22 +335,22 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 	v.EnableDisplayBuffer()
 
 	// Write only 3 lines (less than screen height)
+	// All lines are committed (have LF) so they go to history and can be reflowed.
+	// In real usage, uncommitted content (like shell prompt) is redrawn by shell via SIGWINCH.
 	for i := 1; i <= 3; i++ {
 		for _, ch := range "Line" {
 			v.placeChar(ch)
 		}
 		v.placeChar(rune('0' + i))
-		if i < 3 {
-			v.CarriageReturn()
-			v.LineFeed()
-		}
+		v.CarriageReturn()
+		v.LineFeed()
 	}
 
 	t.Logf("Before resize: cursorY=%d (height=10)", v.cursorY)
 
-	// Cursor should be at row 2 (after Line1, Line2, Line3)
-	if v.cursorY != 2 {
-		t.Errorf("Before resize: expected cursorY=2, got %d", v.cursorY)
+	// Cursor should be at row 3 (after Line1, Line2, Line3 + their newlines)
+	if v.cursorY != 3 {
+		t.Errorf("Before resize: expected cursorY=3, got %d", v.cursorY)
 	}
 
 	// Resize to a larger terminal
@@ -358,10 +358,9 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 
 	t.Logf("After resize to 15 rows: cursorY=%d", v.cursorY)
 
-	// Cursor should still be at row 2 (live edge hasn't moved)
-	// NOT at row 14 (bottom of new screen)
-	if v.cursorY != 2 {
-		t.Errorf("After resize: expected cursorY=2 (live edge), got %d", v.cursorY)
+	// Cursor should be at row 3 (after reflowed history content)
+	if v.cursorY != 3 {
+		t.Errorf("After resize: expected cursorY=3 (after history), got %d", v.cursorY)
 	}
 
 	// Content should still be at rows 0-2
@@ -374,9 +373,7 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 		}
 	}
 
-	// Write more content - it should appear at the cursor position
-	v.CarriageReturn()
-	v.LineFeed()
+	// Write more content - it should appear at the cursor position (row 3)
 	for _, ch := range "NewLine" {
 		v.placeChar(ch)
 	}
@@ -385,7 +382,7 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 	t.Logf("After adding NewLine: cursorY=%d", v.cursorY)
 	t.Logf("Grid:\n%s", gridToString(grid))
 
-	// NewLine should appear at row 3
+	// NewLine should appear at row 3 (where cursor was)
 	row3 := strings.TrimRight(cellsToStringTest(grid[3]), " ")
 	if row3 != "NewLine" {
 		t.Errorf("Expected 'NewLine' at row 3, got %q", row3)
@@ -3544,4 +3541,130 @@ func TestDisplayBuffer_WrappedLine_InsertModeAcrossWrap(t *testing.T) {
 	for _, ch := range "\x1b[4l" {
 		p.Parse(ch)
 	}
+}
+
+// TestDisplayBuffer_SeamlessRecovery tests the PopulateViewportFromHistoryToPrompt function
+// which enables seamless shell recovery after server restart.
+//
+// This test verifies two scenarios:
+// 1. When prompt line is beyond committed history (fallback to normal populate)
+// 2. When prompt line is within committed history (seamless recovery)
+func TestDisplayBuffer_SeamlessRecovery(t *testing.T) {
+	t.Run("fallback when prompt beyond history", func(t *testing.T) {
+		// This simulates a fresh terminal where prompt is on the viewport
+		// but not yet scrolled into history
+		v := NewVTerm(20, 5)
+		v.EnableDisplayBuffer()
+		p := NewParser(v)
+
+		// Write some lines that commit to history
+		commands := []string{
+			"$ cmd1\r\n",
+			"output1\r\n",
+			"$ cmd2\r\n",
+			"output2\r\n",
+			"$ ", // Prompt without newline (still on viewport)
+		}
+
+		for _, cmd := range commands {
+			for _, ch := range cmd {
+				p.Parse(ch)
+			}
+		}
+
+		// Simulate OSC 133;A (prompt start) which records position for recovery
+		// Using A (not B) so multiline prompts are fully excluded
+		v.MarkPromptStart()
+		lastPromptLine := v.GetLastPromptLine()
+
+		t.Logf("Prompt start line: %d, Committed history: %d", lastPromptLine, v.displayBuf.history.TotalLen())
+
+		// The prompt line (history + cursorY) will be > history.TotalLen()
+		// because the prompt is on the uncommitted viewport
+		// This should fall back to normal populate
+
+		cursorX, cursorY := v.PopulateViewportFromHistoryToPrompt(lastPromptLine, 1) // 1 = single-line prompt
+
+		// Fallback shows all committed history
+		if cursorX != 0 {
+			t.Errorf("Expected cursor X=0, got %d", cursorX)
+		}
+		t.Logf("Cursor after fallback: (%d, %d)", cursorX, cursorY)
+	})
+
+	t.Run("seamless recovery with scrolled history", func(t *testing.T) {
+		// This simulates a terminal with enough history that the prompt
+		// has scrolled into committed history
+		v := NewVTerm(20, 5)
+		v.EnableDisplayBuffer()
+		p := NewParser(v)
+
+		// Fill up more lines than the viewport to force scrolling into history
+		// The viewport is 5 lines, so after line 5 we start scrolling
+		commands := []string{
+			"line1\r\n",
+			"line2\r\n",
+			"line3\r\n",
+			"line4\r\n",
+			"line5\r\n", // This causes scroll
+			"line6\r\n",
+			"line7\r\n",
+		}
+
+		for _, cmd := range commands {
+			for _, ch := range cmd {
+				p.Parse(ch)
+			}
+		}
+
+		// At this point, history has some committed lines
+		historyLen := int64(v.displayBuf.history.TotalLen())
+		t.Logf("History has %d committed lines", historyLen)
+
+		// Mark prompt at a position WITHIN committed history (simulating
+		// what would happen if we saved state and restored)
+		// Use a line that exists in history
+		promptLine := historyLen - 2 // Use line before last committed
+		if promptLine < 0 {
+			promptLine = 0
+		}
+
+		cursorX, cursorY := v.PopulateViewportFromHistoryToPrompt(promptLine, 1) // 1 = single-line prompt
+
+		t.Logf("After PopulateViewportFromHistoryToPrompt(%d):", promptLine)
+		t.Logf("  Cursor: (%d, %d)", cursorX, cursorY)
+
+		// Verify cursor is at column 0
+		if cursorX != 0 {
+			t.Errorf("Expected cursor X=0, got %d", cursorX)
+		}
+
+		// The viewport should show history UP TO the prompt line
+		grid := v.Grid()
+		t.Logf("Viewport after populate:")
+		for y := 0; y < len(grid); y++ {
+			row := ""
+			for x := 0; x < len(grid[y]); x++ {
+				if grid[y][x].Rune != 0 {
+					row += string(grid[y][x].Rune)
+				}
+			}
+			row = strings.TrimRight(row, " ")
+			t.Logf("  Row %d: %q", y, row)
+		}
+
+		// Cursor row should be empty (ready for shell prompt)
+		if cursorY < len(grid) {
+			cursorRow := ""
+			for x := 0; x < len(grid[cursorY]); x++ {
+				if grid[cursorY][x].Rune != 0 && grid[cursorY][x].Rune != ' ' {
+					cursorRow += string(grid[cursorY][x].Rune)
+				}
+			}
+			cursorRow = strings.TrimSpace(cursorRow)
+			if cursorRow != "" {
+				t.Errorf("Expected cursor row to be empty, got %q", cursorRow)
+			}
+		}
+	})
 }

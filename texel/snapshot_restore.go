@@ -97,10 +97,11 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		screen.recalculateLayout()
 	}
 	
-	// 3. Start apps
-	for _, p := range panes {
-		p.StartPreparedApp()
-	}
+	// 3. Defer app starts until we have actual viewport dimensions
+	// Apps start with wrong size if we start them now (workspace has default 80x24)
+	d.pendingAppStartsMu.Lock()
+	d.pendingAppStarts = append(d.pendingAppStarts, panes...)
+	d.pendingAppStartsMu.Unlock()
 	
 	// 4. Activate correct workspace
 	if capture.ActiveWorkspaceID > 0 {

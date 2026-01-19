@@ -124,7 +124,8 @@ func Run(opts Options) error {
 	screen.HideCursor()
 	defer screen.Fini()
 	defer close(pingStop)
-	sendResize(&writeMu, conn, sessionID, screen)
+	// Send ClientReady with our dimensions so server can send properly-sized snapshot
+	sendClientReady(&writeMu, conn, sessionID, screen)
 
 	render(state, screen)
 

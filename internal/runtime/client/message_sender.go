@@ -17,6 +17,22 @@ import (
 	"github.com/framegrace/texelation/protocol"
 )
 
+func sendClientReady(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
+	cols, rows := screen.Size()
+	if cols == 0 || rows == 0 {
+		return
+	}
+	payload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: uint16(cols), Rows: uint16(rows)})
+	if err != nil {
+		log.Printf("encode client ready failed: %v", err)
+		return
+	}
+	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgClientReady, Flags: protocol.FlagChecksum, SessionID: sessionID}
+	if err := writeMessage(writeMu, conn, header, payload); err != nil {
+		log.Printf("send client ready failed: %v", err)
+	}
+}
+
 func sendResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
 	cols, rows := screen.Size()
 	sendResizeMessage(writeMu, conn, sessionID, protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})

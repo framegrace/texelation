@@ -39,6 +39,19 @@ type ViewportState struct {
 	// scrollOffset tracks how far back we've scrolled (0 = live edge)
 	scrollOffset int
 
+	// lastPromptLine is the global history line index where the last prompt started.
+	// Used for seamless recovery - shell restarts at this position.
+	// -1 means no prompt position has been recorded.
+	lastPromptLine int64
+
+	// lastPromptHeight is the number of lines in the prompt (for multiline prompts).
+	// Calculated from OSC 133;A to OSC 133;B. Default is 1.
+	lastPromptHeight int
+
+	// promptStartRow is the viewport row where the current prompt started (OSC 133;A).
+	// Used to calculate prompt height when OSC 133;B fires.
+	promptStartRow int
+
 	// eraseBG is the background color for erase operations
 	eraseBG Color
 
@@ -80,11 +93,14 @@ const (
 // NewViewportState creates a new viewport with the given dimensions.
 func NewViewportState(width, height int, history *ScrollbackHistory) *ViewportState {
 	vs := &ViewportState{
-		width:      width,
-		height:     height,
-		history:    history,
-		atLiveEdge: true,
-		eraseBG:    DefaultBG,
+		width:            width,
+		height:           height,
+		history:          history,
+		atLiveEdge:       true,
+		lastPromptLine:   -1, // No prompt recorded yet
+		lastPromptHeight: 1,  // Default to single-line prompt
+		promptStartRow:   -1, // No prompt in progress
+		eraseBG:          DefaultBG,
 	}
 	vs.initGrid()
 	return vs
@@ -164,6 +180,14 @@ func (vs *ViewportState) WriteWide(r rune, fg, bg Color, attr Attribute, insertM
 
 	// Mark row as dirty
 	vs.rowMeta[vs.cursorY].State = LineStateDirty
+
+	// If writing at column 0 and this row was a continuation, break the chain.
+	// This happens when shell starts a new prompt on a row that had history content.
+	// The new content should be a fresh logical line, not a continuation.
+	if vs.cursorX == 0 && vs.rowMeta[vs.cursorY].IsContinuation {
+		vs.rowMeta[vs.cursorY].IsContinuation = false
+		vs.rowMeta[vs.cursorY].IsFirstRow = true
+	}
 
 	// Advance cursor by character width (like old LiveEditor.WriteChar behavior)
 	vs.cursorX += charWidth
@@ -299,7 +323,13 @@ func (vs *ViewportState) EraseScreen() {
 		for x := 0; x < vs.width; x++ {
 			vs.grid[y][x] = Cell{Rune: ' ', FG: DefaultFG, BG: vs.eraseBG}
 		}
-		vs.rowMeta[y].State = LineStateDirty
+		// Reset row metadata - each row starts as a fresh line
+		vs.rowMeta[y] = RowMetadata{
+			LogicalLineID:  -1,
+			IsFirstRow:     true,
+			IsContinuation: false,
+			State:          LineStateDirty,
+		}
 	}
 }
 
@@ -402,7 +432,12 @@ func (vs *ViewportState) ScrollUp(n int) {
 	for y := 0; y < vs.height-n; y++ {
 		vs.grid[y] = vs.grid[y+n]
 		vs.rowMeta[y] = vs.rowMeta[y+n]
-		vs.rowMeta[y].State = LineStateDirty // Mark as dirty since content moved
+		// Preserve LineStateCommitted to prevent re-committing history rows.
+		// Committed rows came from history and shouldn't be re-committed when they scroll off.
+		// Other rows get marked dirty since content moved position.
+		if vs.rowMeta[y].State != LineStateCommitted {
+			vs.rowMeta[y].State = LineStateDirty
+		}
 	}
 
 	// Create new blank rows at bottom
@@ -429,7 +464,10 @@ func (vs *ViewportState) ScrollDown(n int) {
 	for y := vs.height - 1; y >= n; y-- {
 		vs.grid[y] = vs.grid[y-n]
 		vs.rowMeta[y] = vs.rowMeta[y-n]
-		vs.rowMeta[y].State = LineStateDirty // Mark as dirty since content moved
+		// Preserve LineStateCommitted to prevent re-committing history rows
+		if vs.rowMeta[y].State != LineStateCommitted {
+			vs.rowMeta[y].State = LineStateDirty
+		}
 	}
 
 	// Create new blank rows at top
@@ -467,7 +505,10 @@ func (vs *ViewportState) ScrollRegionUp(top, bottom, n int) {
 	for y := top; y <= bottom-n; y++ {
 		vs.grid[y] = vs.grid[y+n]
 		vs.rowMeta[y] = vs.rowMeta[y+n]
-		vs.rowMeta[y].State = LineStateDirty // Mark as dirty since content moved
+		// Preserve LineStateCommitted to prevent re-committing history rows
+		if vs.rowMeta[y].State != LineStateCommitted {
+			vs.rowMeta[y].State = LineStateDirty
+		}
 	}
 
 	// Create new blank rows at the bottom of the region
@@ -508,7 +549,10 @@ func (vs *ViewportState) ScrollRegionDown(top, bottom, n int) {
 	for y := bottom; y >= top+n; y-- {
 		vs.grid[y] = vs.grid[y-n]
 		vs.rowMeta[y] = vs.rowMeta[y-n]
-		vs.rowMeta[y].State = LineStateDirty // Mark as dirty since content moved
+		// Preserve LineStateCommitted to prevent re-committing history rows
+		if vs.rowMeta[y].State != LineStateCommitted {
+			vs.rowMeta[y].State = LineStateDirty
+		}
 	}
 
 	// Create new blank rows at the top of the region
@@ -644,6 +688,11 @@ func (vs *ViewportState) commitRow(y int) {
 		return
 	}
 
+	// Skip rows that are already committed (e.g., rows populated from history)
+	if vs.rowMeta[y].State == LineStateCommitted {
+		return
+	}
+
 	// Extract logical line starting from this row
 	lines := vs.ExtractLogicalLines(y, y)
 	for _, line := range lines {
@@ -725,16 +774,57 @@ func (vs *ViewportState) MarkRowAsContinuation(y int) {
 	vs.rowMeta[y].IsContinuation = true
 }
 
-// --- Shell Integration ---
-
-// MarkPromptStart marks the current line as a prompt (OSC 133;A).
-func (vs *ViewportState) MarkPromptStart() {
-	// Currently a no-op - could be used for semantic line tracking
+// MarkRowAsCommitted marks a row as already committed to history.
+// Used when populating viewport from history to prevent re-committing
+// the same content when it scrolls off the top.
+func (vs *ViewportState) MarkRowAsCommitted(y int) {
+	if y < 0 || y >= vs.height {
+		return
+	}
+	vs.rowMeta[y].State = LineStateCommitted
 }
 
-// MarkInputStart marks the current line as input (OSC 133;B).
+// --- Shell Integration ---
+
+// MarkPromptStart records the start of a shell prompt (OSC 133;A).
+// Records the global line position for seamless recovery.
+// This fires at the START of the prompt, so for multiline prompts,
+// we exclude the entire prompt from history on recovery.
+func (vs *ViewportState) MarkPromptStart() {
+	// Calculate global line index: history lines + current viewport row
+	historyLines := int64(0)
+	if vs.history != nil {
+		historyLines = vs.history.TotalLen()
+	}
+	vs.lastPromptLine = historyLines + int64(vs.cursorY)
+
+	// Record the viewport row for prompt height calculation
+	vs.promptStartRow = vs.cursorY
+}
+
+// LastPromptLine returns the global line index where the prompt starts.
+// Returns -1 if no position has been recorded.
+func (vs *ViewportState) LastPromptLine() int64 {
+	return vs.lastPromptLine
+}
+
+// LastPromptHeight returns the number of lines in the prompt.
+// Calculated when OSC 133;B fires. Defaults to 1.
+func (vs *ViewportState) LastPromptHeight() int {
+	return vs.lastPromptHeight
+}
+
+// MarkInputStart marks the start of user input (OSC 133;B).
+// This fires after the prompt, so we can calculate prompt height.
 func (vs *ViewportState) MarkInputStart() {
-	// Currently a no-op - could be used for semantic line tracking
+	// Calculate prompt height from prompt start to current position
+	if vs.promptStartRow >= 0 {
+		height := vs.cursorY - vs.promptStartRow + 1
+		if height > 0 {
+			vs.lastPromptHeight = height
+		}
+	}
+	vs.promptStartRow = -1 // Reset for next prompt
 }
 
 // MarkOutputStart marks the current line as output (OSC 133;C).
