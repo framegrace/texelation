@@ -1,0 +1,373 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: apps/texelterm/mouse_coordinator.go
+// Summary: Unified mouse event handling for both standalone and embedded modes.
+
+package texelterm
+
+import (
+	"sync"
+
+	"github.com/framegrace/texelation/apps/texelterm/parser"
+	"github.com/gdamore/tcell/v2"
+)
+
+// MouseWheelHandler is implemented by apps that want to react to mouse wheel input.
+type MouseWheelHandler interface {
+	HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask)
+}
+
+// ClipboardSetter is implemented by contexts that can set clipboard content.
+type ClipboardSetter interface {
+	SetClipboard(mime string, data []byte)
+}
+
+// MouseCoordinator unifies mouse event handling for both standalone and embedded modes.
+// In standalone mode, it receives tcell.EventMouse directly via HandleMouse.
+// In embedded mode, the desktop engine calls SelectionStart/Update/Finish.
+// Both paths converge on the same internal selection logic.
+type MouseCoordinator struct {
+	mu               sync.Mutex
+	clickDetector    *ClickDetector
+	selectionMachine *SelectionStateMachine
+	autoScroll       *AutoScrollManager
+	wheelHandler     MouseWheelHandler
+	clipboardSetter  ClipboardSetter
+	vterm            *parser.VTerm
+	width, height    int
+
+	// Button state tracking for standalone mode
+	lastMouseButtons tcell.ButtonMask
+	lastMouseX       int
+	lastMouseY       int
+
+	// Callbacks
+	onDirty   func() // Called when display needs refresh
+	onRefresh func() // Called to request refresh
+}
+
+// NewMouseCoordinator creates a new mouse coordinator.
+func NewMouseCoordinator(vterm *parser.VTerm, wheelHandler MouseWheelHandler) *MouseCoordinator {
+	coord := &MouseCoordinator{
+		clickDetector:    NewClickDetector(DefaultMultiClickTimeout),
+		selectionMachine: NewSelectionStateMachine(vterm),
+		autoScroll:       NewAutoScrollManager(vterm),
+		wheelHandler:     wheelHandler,
+		vterm:            vterm,
+	}
+
+	return coord
+}
+
+// SetSize updates the terminal dimensions.
+func (m *MouseCoordinator) SetSize(width, height int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.width = width
+	m.height = height
+	m.selectionMachine.SetSize(width, height)
+	m.autoScroll.SetSize(height)
+}
+
+// SetCallbacks configures the callbacks for state changes.
+func (m *MouseCoordinator) SetCallbacks(onDirty, onRefresh func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onDirty = onDirty
+	m.onRefresh = onRefresh
+
+	// Wire auto-scroll callbacks
+	m.autoScroll.SetCallbacks(
+		func(lines int) {
+			if m.vterm != nil {
+				m.vterm.Scroll(lines)
+			}
+		},
+		onRefresh,
+		func(x, y int) (int64, int, int) {
+			return m.resolvePositionLocked(x, y)
+		},
+	)
+}
+
+// SetClipboardSetter sets the clipboard handler for standalone mode.
+func (m *MouseCoordinator) SetClipboardSetter(setter ClipboardSetter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clipboardSetter = setter
+}
+
+// HandleMouse implements mouse event handling for standalone mode.
+// Converts tcell.EventMouse to selection operations.
+func (m *MouseCoordinator) HandleMouse(ev *tcell.EventMouse) bool {
+	if ev == nil {
+		return false
+	}
+
+	x, y := ev.Position()
+	buttons := ev.Buttons()
+	modifiers := ev.Modifiers()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	prevButtons := m.lastMouseButtons
+	m.lastMouseX = x
+	m.lastMouseY = y
+	m.lastMouseButtons = buttons
+
+	// Handle mouse wheel events
+	wheelDX, wheelDY := wheelDeltaFromMask(buttons)
+	if wheelDX != 0 || wheelDY != 0 {
+		m.mu.Unlock()
+		if m.wheelHandler != nil {
+			m.wheelHandler.HandleMouseWheel(x, y, wheelDX, wheelDY, modifiers)
+		}
+		m.mu.Lock()
+		return true
+	}
+
+	// Detect button state transitions
+	start := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0
+	release := buttons&tcell.Button1 == 0 && prevButtons&tcell.Button1 != 0
+	dragging := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 != 0
+
+	if start {
+		// Cancel any existing selection
+		if m.selectionMachine.IsActive() {
+			m.selectionMachine.Cancel()
+			m.autoScroll.Stop()
+		}
+
+		// Start new selection
+		logicalLine, charOffset, viewportRow := m.resolvePositionLocked(x, y)
+		clickType := m.clickDetector.DetectClick(viewportRow, charOffset)
+		m.selectionMachine.Start(logicalLine, charOffset, viewportRow, clickType, modifiers)
+		m.markDirty()
+		return true
+	}
+
+	if dragging && m.selectionMachine.IsActive() {
+		m.autoScroll.UpdatePosition(x, y)
+
+		// Check if we should start/stop auto-scroll
+		if m.autoScroll.ShouldAutoScroll(y, m.height) {
+			if !m.autoScroll.IsActive() {
+				m.autoScroll.Start()
+			}
+		} else {
+			if m.autoScroll.IsActive() {
+				m.autoScroll.Stop()
+			}
+		}
+
+		logicalLine, charOffset, viewportRow := m.resolvePositionLocked(x, y)
+		m.selectionMachine.Update(logicalLine, charOffset, viewportRow, modifiers)
+		m.markDirty()
+		return true
+	}
+
+	if release && m.selectionMachine.IsActive() {
+		m.autoScroll.Stop()
+
+		logicalLine, charOffset, viewportRow := m.resolvePositionLocked(x, y)
+		mime, data, ok := m.selectionMachine.Finish(logicalLine, charOffset, viewportRow, modifiers)
+		m.markDirty()
+
+		// Copy to clipboard
+		if ok && len(data) > 0 && m.clipboardSetter != nil {
+			m.clipboardSetter.SetClipboard(mime, data)
+		}
+		return true
+	}
+
+	// Right-click: cancel selection
+	if buttons&tcell.Button3 != 0 && prevButtons&tcell.Button3 == 0 {
+		if m.selectionMachine.IsActive() || m.selectionMachine.IsRendered() {
+			m.selectionMachine.Cancel()
+			m.autoScroll.Stop()
+			m.markDirty()
+			return true
+		}
+	}
+
+	return false
+}
+
+// SelectionStart implements texelcore.SelectionHandler for embedded mode.
+func (m *MouseCoordinator) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.vterm == nil {
+		return false
+	}
+
+	// Cancel any existing selection
+	if m.selectionMachine.IsActive() {
+		m.selectionMachine.Cancel()
+		m.autoScroll.Stop()
+	}
+
+	logicalLine, charOffset, viewportRow := m.resolvePositionLocked(x, y)
+	clickType := m.clickDetector.DetectClick(viewportRow, charOffset)
+	m.selectionMachine.Start(logicalLine, charOffset, viewportRow, clickType, modifiers)
+	m.markDirty()
+	return true
+}
+
+// SelectionUpdate implements texelcore.SelectionHandler for embedded mode.
+func (m *MouseCoordinator) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.vterm == nil || !m.selectionMachine.IsActive() {
+		return
+	}
+
+	m.lastMouseX = x
+	m.lastMouseY = y
+	m.autoScroll.UpdatePosition(x, y)
+
+	// Check for auto-scroll
+	if m.autoScroll.ShouldAutoScroll(y, m.height) {
+		if !m.autoScroll.IsActive() {
+			m.autoScroll.Start()
+		}
+	} else {
+		if m.autoScroll.IsActive() {
+			m.autoScroll.Stop()
+		}
+	}
+
+	logicalLine, charOffset, viewportRow := m.resolvePositionLocked(x, y)
+	m.selectionMachine.Update(logicalLine, charOffset, viewportRow, modifiers)
+	m.markDirty()
+}
+
+// SelectionFinish implements texelcore.SelectionHandler for embedded mode.
+func (m *MouseCoordinator) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.vterm == nil || !m.selectionMachine.IsActive() {
+		return "", nil, false
+	}
+
+	m.autoScroll.Stop()
+
+	logicalLine, charOffset, viewportRow := m.resolvePositionLocked(x, y)
+	mime, data, ok := m.selectionMachine.Finish(logicalLine, charOffset, viewportRow, modifiers)
+	m.markDirty()
+
+	return mime, data, ok
+}
+
+// SelectionCancel implements texelcore.SelectionHandler for embedded mode.
+func (m *MouseCoordinator) SelectionCancel() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.selectionMachine.IsActive() && !m.selectionMachine.IsRendered() {
+		return
+	}
+
+	m.autoScroll.Stop()
+	m.selectionMachine.Cancel()
+	m.markDirty()
+}
+
+// IsSelectionActive returns true if a selection is in progress.
+func (m *MouseCoordinator) IsSelectionActive() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.selectionMachine.IsActive()
+}
+
+// IsSelectionRendered returns true if a selection should be displayed.
+func (m *MouseCoordinator) IsSelectionRendered() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.selectionMachine.IsRendered()
+}
+
+// GetSelectionRange returns the current selection range for rendering in content coordinates.
+// Returns startLine (int64), startOffset (int), endLine (int64), endOffset (int), ok.
+// The caller should convert to viewport coordinates using vterm.ContentToViewport().
+func (m *MouseCoordinator) GetSelectionRange() (startLine int64, startOffset int, endLine int64, endOffset int, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.selectionMachine.GetSelectionRange()
+}
+
+// resolvePositionLocked converts screen coordinates to content coordinates.
+// Returns (logicalLine, charOffset, viewportRow) for use with selection.
+// logicalLine is -1 for current (uncommitted) line.
+// Must be called with mutex locked.
+func (m *MouseCoordinator) resolvePositionLocked(x, y int) (logicalLine int64, charOffset int, viewportRow int) {
+	if m.vterm == nil {
+		return 0, 0, 0
+	}
+
+	// Clamp Y to viewport bounds
+	viewportRow = y
+	if viewportRow < 0 {
+		viewportRow = 0
+	}
+	if m.height > 0 && viewportRow >= m.height {
+		viewportRow = m.height - 1
+	}
+
+	// Clamp X to valid range
+	col := x
+	if col < 0 {
+		col = 0
+	}
+
+	// Get the grid to find line width for clamping
+	grid := m.vterm.Grid()
+	if grid != nil && viewportRow < len(grid) {
+		lineWidth := len(grid[viewportRow])
+		if col > lineWidth {
+			col = lineWidth
+		}
+	}
+
+	// Convert viewport position to content coordinates
+	logicalLine, charOffset, _, ok := m.vterm.ViewportToContent(viewportRow, col)
+	if !ok {
+		// Fallback: treat as current line
+		return -1, col, viewportRow
+	}
+
+	return logicalLine, charOffset, viewportRow
+}
+
+// markDirty marks the terminal display as needing a refresh.
+func (m *MouseCoordinator) markDirty() {
+	if m.vterm != nil {
+		m.vterm.MarkAllDirty()
+	}
+	if m.onDirty != nil {
+		m.onDirty()
+	}
+}
+
+// wheelDeltaFromMask extracts wheel delta from button mask.
+func wheelDeltaFromMask(mask tcell.ButtonMask) (int, int) {
+	dx, dy := 0, 0
+	if mask&tcell.WheelUp != 0 {
+		dy--
+	}
+	if mask&tcell.WheelDown != 0 {
+		dy++
+	}
+	if mask&tcell.WheelLeft != 0 {
+		dx--
+	}
+	if mask&tcell.WheelRight != 0 {
+		dx++
+	}
+	return dx, dy
+}
