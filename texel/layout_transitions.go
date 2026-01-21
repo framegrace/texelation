@@ -57,7 +57,8 @@ type LayoutTransitionManager struct {
 func NewLayoutTransitionManager(config LayoutTransitionConfig, desktop *DesktopEngine) *LayoutTransitionManager {
 	if !config.Enabled {
 		log.Println("LayoutTransitionManager: Disabled via config")
-		return &LayoutTransitionManager{enabled: false}
+		// Always store desktop pointer so we can enable later via UpdateConfig
+		return &LayoutTransitionManager{enabled: false, desktop: desktop}
 	}
 
 	duration := time.Duration(config.DurationMs) * time.Millisecond
@@ -332,8 +333,7 @@ func (m *LayoutTransitionManager) UpdateConfig(config LayoutTransitionConfig) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	wasEnabled := m.enabled
 	m.enabled = config.Enabled
 
 	if config.DurationMs > 0 {
@@ -343,6 +343,44 @@ func (m *LayoutTransitionManager) UpdateConfig(config LayoutTransitionConfig) {
 	if config.Easing != "" {
 		m.easing = config.Easing
 	}
+
+	// Handle enabling from disabled state
+	if config.Enabled && !wasEnabled {
+		// Initialize resources that were skipped when created disabled
+		if m.animating == nil {
+			m.animating = make(map[*Node]*transitionState)
+		}
+		if m.stopCh == nil {
+			m.stopCh = make(chan struct{})
+		}
+		if m.timeline == nil {
+			m.timeline = effects.NewTimeline(0.0)
+		}
+		// Reset grace period when enabling
+		m.graceStart = time.Now()
+
+		// Start animation loop if not running
+		if m.ticker == nil && m.desktop != nil {
+			m.mu.Unlock()
+			m.startAnimationLoop()
+			m.mu.Lock()
+		}
+		log.Printf("LayoutTransitionManager: Enabled via config update")
+	}
+
+	// Handle disabling from enabled state
+	if !config.Enabled && wasEnabled {
+		// Stop the animation loop
+		if m.ticker != nil {
+			m.ticker.Stop()
+			m.ticker = nil
+		}
+		// Clear any active animations
+		m.animating = make(map[*Node]*transitionState)
+		log.Printf("LayoutTransitionManager: Disabled via config update")
+	}
+
+	m.mu.Unlock()
 
 	log.Printf("LayoutTransitionManager: Config updated (enabled=%v, duration=%v, easing=%s)",
 		m.enabled, m.duration, m.easing)
