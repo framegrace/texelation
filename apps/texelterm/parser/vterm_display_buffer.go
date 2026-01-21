@@ -394,6 +394,22 @@ func (v *VTerm) displayBufferGetCurrentLine() *LogicalLine {
 	return v.displayBuf.display.CurrentLine()
 }
 
+// CurrentLineCells returns a copy of the current (uncommitted) line's cells.
+// Returns nil if display buffer is not enabled or current line is empty.
+func (v *VTerm) CurrentLineCells() []Cell {
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return nil
+	}
+	line := v.displayBuf.display.CurrentLine()
+	if line == nil || len(line.Cells) == 0 {
+		return nil
+	}
+	// Return a copy to avoid mutation
+	cells := make([]Cell, len(line.Cells))
+	copy(cells, line.Cells)
+	return cells
+}
+
 // displayBufferHistoryLen returns the number of committed logical lines in memory.
 func (v *VTerm) displayBufferHistoryLen() int {
 	if v.displayBuf == nil || v.displayBuf.history == nil {

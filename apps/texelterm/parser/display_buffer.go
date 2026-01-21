@@ -1168,3 +1168,372 @@ func (db *DisplayBuffer) SetCursorOffset(offset int) {
 	x := offset % width
 	db.viewport.SetCursor(x, y)
 }
+
+// --- Selection Coordinate Conversion ---
+
+// ViewportToContent converts viewport coordinates (y, x) to content coordinates.
+// Returns (logicalLine, charOffset, isCurrentLine, ok).
+// - logicalLine: the global logical line index in history (-1 if current line)
+// - charOffset: character offset within that logical line
+// - isCurrentLine: true if this is the uncommitted current line
+// - ok: false if coordinates are out of range
+func (db *DisplayBuffer) ViewportToContent(y, x int) (logicalLine int64, charOffset int, isCurrentLine bool, ok bool) {
+	height := db.viewport.Height()
+	width := db.viewport.Width()
+
+	if y < 0 || y >= height || x < 0 {
+		return 0, 0, false, false
+	}
+
+	if db.viewingHistory {
+		// When scrolled back, compute which logical line is at viewport row y
+		return db.viewportToContentHistory(y, x, width, height)
+	}
+
+	// At live edge - viewport shows recent history + current line
+	return db.viewportToContentLive(y, x, width, height)
+}
+
+// viewportToContentHistory handles coordinate conversion when viewing history.
+func (db *DisplayBuffer) viewportToContentHistory(y, x, width, height int) (int64, int, bool, bool) {
+	if db.history == nil {
+		return 0, 0, false, false
+	}
+
+	totalHistoryLines := db.history.TotalLen()
+	if totalHistoryLines == 0 {
+		return 0, 0, false, false
+	}
+
+	// Build physical lines from history (same logic as getHistoryView)
+	physicalRowsBack := db.historyViewOffset
+	var physicalLines []PhysicalLine
+	logicalIdx := totalHistoryLines - 1
+
+	for logicalIdx >= 0 && int64(len(physicalLines)) < physicalRowsBack+int64(height) {
+		line := db.history.GetGlobal(logicalIdx)
+		if line != nil {
+			wrapped := line.WrapToWidth(width)
+			// Set LogicalIndex for each physical line
+			for i := range wrapped {
+				wrapped[i].LogicalIndex = int(logicalIdx)
+			}
+			// Prepend
+			newLines := make([]PhysicalLine, len(wrapped)+len(physicalLines))
+			copy(newLines, wrapped)
+			copy(newLines[len(wrapped):], physicalLines)
+			physicalLines = newLines
+		}
+		logicalIdx--
+	}
+
+	// Calculate which physical line corresponds to viewport row y
+	startIdx := len(physicalLines) - int(physicalRowsBack) - height
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	physIdx := startIdx + y
+	if physIdx < 0 || physIdx >= len(physicalLines) {
+		return 0, 0, false, false
+	}
+
+	pl := physicalLines[physIdx]
+	charOffset := pl.Offset + x
+	if x >= len(pl.Cells) {
+		charOffset = pl.Offset + len(pl.Cells)
+	}
+
+	return int64(pl.LogicalIndex), charOffset, false, true
+}
+
+// viewportToContentLive handles coordinate conversion at live edge.
+func (db *DisplayBuffer) viewportToContentLive(y, x, width, height int) (int64, int, bool, bool) {
+	// At live edge, the viewport shows:
+	// - Recent history lines at top (if any)
+	// - Current uncommitted line at bottom (possibly spanning multiple rows)
+
+	if db.history == nil {
+		// No history - everything is current line
+		charOffset := y*width + x
+		return -1, charOffset, true, true
+	}
+
+	// Get current line info
+	currentLine := db.CurrentLine()
+	currentLineRows := 1
+	if currentLine != nil && len(currentLine.Cells) > 0 {
+		currentLineRows = (len(currentLine.Cells) + width - 1) / width
+	}
+
+	// The current line occupies the bottom currentLineRows of the viewport
+	// History fills the top (height - currentLineRows) rows
+	historyRowsVisible := height - currentLineRows
+	if historyRowsVisible < 0 {
+		historyRowsVisible = 0
+	}
+
+	if y >= historyRowsVisible {
+		// Clicking on current line
+		rowInCurrentLine := y - historyRowsVisible
+		charOffset := rowInCurrentLine*width + x
+		if currentLine != nil && charOffset > len(currentLine.Cells) {
+			charOffset = len(currentLine.Cells)
+		}
+		return -1, charOffset, true, true
+	}
+
+	// Clicking on history portion
+	// Need to figure out which logical line is at viewport row y
+	totalHistoryLines := db.history.TotalLen()
+	if totalHistoryLines == 0 {
+		return -1, y*width + x, true, true
+	}
+
+	// Build physical lines for the visible history portion
+	var physicalLines []PhysicalLine
+	logicalIdx := totalHistoryLines - 1
+
+	for logicalIdx >= 0 && len(physicalLines) < historyRowsVisible {
+		line := db.history.GetGlobal(logicalIdx)
+		if line != nil {
+			wrapped := line.WrapToWidth(width)
+			for i := range wrapped {
+				wrapped[i].LogicalIndex = int(logicalIdx)
+			}
+			// Prepend
+			newLines := make([]PhysicalLine, len(wrapped)+len(physicalLines))
+			copy(newLines, wrapped)
+			copy(newLines[len(wrapped):], physicalLines)
+			physicalLines = newLines
+		}
+		logicalIdx--
+	}
+
+	// Trim to exactly historyRowsVisible from the end
+	if len(physicalLines) > historyRowsVisible {
+		physicalLines = physicalLines[len(physicalLines)-historyRowsVisible:]
+	}
+
+	if y < 0 || y >= len(physicalLines) {
+		return 0, 0, false, false
+	}
+
+	pl := physicalLines[y]
+	charOffset := pl.Offset + x
+	if x >= len(pl.Cells) {
+		charOffset = pl.Offset + len(pl.Cells)
+	}
+
+	return int64(pl.LogicalIndex), charOffset, false, true
+}
+
+// ContentToViewport converts content coordinates back to viewport coordinates.
+// Returns (y, x, visible) where visible is true if the content is currently on screen.
+// For logicalLine == -1, this refers to the current uncommitted line.
+func (db *DisplayBuffer) ContentToViewport(logicalLine int64, charOffset int) (y, x int, visible bool) {
+	height := db.viewport.Height()
+	width := db.viewport.Width()
+
+	if width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+
+	if db.viewingHistory {
+		return db.contentToViewportHistory(logicalLine, charOffset, width, height)
+	}
+
+	return db.contentToViewportLive(logicalLine, charOffset, width, height)
+}
+
+// contentToViewportHistory handles reverse conversion when viewing history.
+func (db *DisplayBuffer) contentToViewportHistory(logicalLine int64, charOffset, width, height int) (int, int, bool) {
+	if logicalLine < 0 {
+		// Current line is not visible when viewing history
+		return 0, 0, false
+	}
+
+	if db.history == nil {
+		return 0, 0, false
+	}
+
+	totalHistoryLines := db.history.TotalLen()
+	if logicalLine >= totalHistoryLines {
+		return 0, 0, false
+	}
+
+	// Build physical lines from history
+	physicalRowsBack := db.historyViewOffset
+	var physicalLines []PhysicalLine
+	logicalIdx := totalHistoryLines - 1
+
+	for logicalIdx >= 0 && int64(len(physicalLines)) < physicalRowsBack+int64(height) {
+		line := db.history.GetGlobal(logicalIdx)
+		if line != nil {
+			wrapped := line.WrapToWidth(width)
+			for i := range wrapped {
+				wrapped[i].LogicalIndex = int(logicalIdx)
+			}
+			newLines := make([]PhysicalLine, len(wrapped)+len(physicalLines))
+			copy(newLines, wrapped)
+			copy(newLines[len(wrapped):], physicalLines)
+			physicalLines = newLines
+		}
+		logicalIdx--
+	}
+
+	startIdx := len(physicalLines) - int(physicalRowsBack) - height
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	// Find the physical line that matches our logical line and offset
+	for viewY := 0; viewY < height && startIdx+viewY < len(physicalLines); viewY++ {
+		pl := physicalLines[startIdx+viewY]
+		if int64(pl.LogicalIndex) == logicalLine {
+			// Check if charOffset falls within this physical line
+			if charOffset >= pl.Offset && charOffset < pl.Offset+width {
+				return viewY, charOffset - pl.Offset, true
+			}
+			// charOffset might be at end of line
+			if charOffset == pl.Offset+len(pl.Cells) && len(pl.Cells) < width {
+				return viewY, len(pl.Cells), true
+			}
+		}
+	}
+
+	return 0, 0, false
+}
+
+// contentToViewportLive handles reverse conversion at live edge.
+func (db *DisplayBuffer) contentToViewportLive(logicalLine int64, charOffset, width, height int) (int, int, bool) {
+	// Get current line info
+	currentLine := db.CurrentLine()
+	currentLineRows := 1
+	if currentLine != nil && len(currentLine.Cells) > 0 {
+		currentLineRows = (len(currentLine.Cells) + width - 1) / width
+	}
+
+	historyRowsVisible := height - currentLineRows
+	if historyRowsVisible < 0 {
+		historyRowsVisible = 0
+	}
+
+	if logicalLine < 0 {
+		// Current line
+		rowInCurrent := charOffset / width
+		col := charOffset % width
+		viewY := historyRowsVisible + rowInCurrent
+		if viewY >= height {
+			return 0, 0, false
+		}
+		return viewY, col, true
+	}
+
+	// History line
+	if db.history == nil {
+		return 0, 0, false
+	}
+
+	totalHistoryLines := db.history.TotalLen()
+	if logicalLine >= totalHistoryLines {
+		return 0, 0, false
+	}
+
+	// Build physical lines for visible history
+	var physicalLines []PhysicalLine
+	logicalIdx := totalHistoryLines - 1
+
+	for logicalIdx >= 0 && len(physicalLines) < historyRowsVisible {
+		line := db.history.GetGlobal(logicalIdx)
+		if line != nil {
+			wrapped := line.WrapToWidth(width)
+			for i := range wrapped {
+				wrapped[i].LogicalIndex = int(logicalIdx)
+			}
+			newLines := make([]PhysicalLine, len(wrapped)+len(physicalLines))
+			copy(newLines, wrapped)
+			copy(newLines[len(wrapped):], physicalLines)
+			physicalLines = newLines
+		}
+		logicalIdx--
+	}
+
+	if len(physicalLines) > historyRowsVisible {
+		physicalLines = physicalLines[len(physicalLines)-historyRowsVisible:]
+	}
+
+	// Find matching physical line
+	for viewY, pl := range physicalLines {
+		if int64(pl.LogicalIndex) == logicalLine {
+			if charOffset >= pl.Offset && charOffset < pl.Offset+width {
+				return viewY, charOffset - pl.Offset, true
+			}
+			if charOffset == pl.Offset+len(pl.Cells) && len(pl.Cells) < width {
+				return viewY, len(pl.Cells), true
+			}
+		}
+	}
+
+	return 0, 0, false
+}
+
+// GetContentText extracts text from a range of content coordinates.
+// For logicalLine == -1, uses the current uncommitted line.
+func (db *DisplayBuffer) GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string {
+	if startLine > endLine || (startLine == endLine && startOffset > endOffset) {
+		// Swap to normalize
+		startLine, endLine = endLine, startLine
+		startOffset, endOffset = endOffset, startOffset
+	}
+
+	var result []rune
+
+	for line := startLine; line <= endLine; line++ {
+		var cells []Cell
+
+		if line < 0 {
+			// Current line
+			currentLine := db.CurrentLine()
+			if currentLine != nil {
+				cells = currentLine.Cells
+			}
+		} else if db.history != nil {
+			logicalLine := db.history.GetGlobal(line)
+			if logicalLine != nil {
+				cells = logicalLine.Cells
+			}
+		}
+
+		lineStart := 0
+		lineEnd := len(cells)
+
+		if line == startLine {
+			lineStart = startOffset
+			if lineStart > lineEnd {
+				lineStart = lineEnd
+			}
+		}
+		if line == endLine {
+			lineEnd = endOffset
+			if lineEnd > len(cells) {
+				lineEnd = len(cells)
+			}
+		}
+
+		for i := lineStart; i < lineEnd; i++ {
+			r := cells[i].Rune
+			if r == 0 {
+				r = ' '
+			}
+			result = append(result, r)
+		}
+
+		// Add newline between logical lines (but not after last)
+		if line < endLine {
+			result = append(result, '\n')
+		}
+	}
+
+	return string(result)
+}

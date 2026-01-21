@@ -389,6 +389,78 @@ func (v *VTerm) HistoryLineCopy(index int) []Cell {
 	return out
 }
 
+// --- Selection Coordinate Conversion ---
+
+// ViewportToContent converts viewport coordinates to content coordinates.
+// Returns (logicalLine, charOffset, isCurrentLine, ok).
+// logicalLine is -1 for the current uncommitted line.
+func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, isCurrentLine bool, ok bool) {
+	if v.inAltScreen {
+		// Alt screen: treat as current line equivalent
+		charOffset = y*v.width + x
+		return -1, charOffset, true, true
+	}
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return 0, 0, false, false
+	}
+	return v.displayBuf.display.ViewportToContent(y, x)
+}
+
+// ContentToViewport converts content coordinates to viewport coordinates.
+// Returns (y, x, visible) where visible is true if content is on screen.
+func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, visible bool) {
+	if v.inAltScreen {
+		// Alt screen: direct mapping
+		if v.width <= 0 {
+			return 0, 0, false
+		}
+		y = charOffset / v.width
+		x = charOffset % v.width
+		visible = y >= 0 && y < v.height
+		return
+	}
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return 0, 0, false
+	}
+	return v.displayBuf.display.ContentToViewport(logicalLine, charOffset)
+}
+
+// GetContentText extracts text from a content coordinate range.
+func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string {
+	if v.inAltScreen {
+		// For alt screen, extract from altBuffer
+		return v.getAltScreenText(startOffset, endOffset)
+	}
+	if v.displayBuf == nil || v.displayBuf.display == nil {
+		return ""
+	}
+	return v.displayBuf.display.GetContentText(startLine, startOffset, endLine, endOffset)
+}
+
+// getAltScreenText extracts text from alt screen buffer.
+func (v *VTerm) getAltScreenText(startOffset, endOffset int) string {
+	if v.width <= 0 {
+		return ""
+	}
+	if startOffset > endOffset {
+		startOffset, endOffset = endOffset, startOffset
+	}
+
+	var result []rune
+	for offset := startOffset; offset < endOffset; offset++ {
+		y := offset / v.width
+		x := offset % v.width
+		if y >= 0 && y < len(v.altBuffer) && x >= 0 && x < len(v.altBuffer[y]) {
+			r := v.altBuffer[y][x].Rune
+			if r == 0 {
+				r = ' '
+			}
+			result = append(result, r)
+		}
+	}
+	return string(result)
+}
+
 // --- Dirty Line Tracking for Optimized Rendering ---
 // See vterm_dirty.go: MarkDirty, MarkAllDirty, GetDirtyLines, ClearDirty
 
