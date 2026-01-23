@@ -23,7 +23,7 @@ func TestVTerm_DisplayBufferPlaceChar(t *testing.T) {
 
 	// Write "Hello"
 	for _, r := range "Hello" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Check the current logical line has the content
@@ -47,7 +47,7 @@ func TestVTerm_DisplayBufferLineFeed(t *testing.T) {
 
 	// Write "Line1" then newline
 	for _, r := range "Line1" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 	v.LineFeed()
 
@@ -65,7 +65,7 @@ func TestVTerm_DisplayBufferLineFeed(t *testing.T) {
 
 	// Write "Line2"
 	for _, r := range "Line2" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 	v.LineFeed()
 
@@ -82,7 +82,7 @@ func TestVTerm_DisplayBufferGrid(t *testing.T) {
 
 	// Write a line
 	for _, r := range "ABC" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Get grid
@@ -117,7 +117,7 @@ func TestVTerm_DisplayBufferResize(t *testing.T) {
 	// Write a long line that will wrap when narrower
 	text := "ABCDEFGHIJ" // 10 chars
 	for _, r := range text {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 	v.LineFeed()
 
@@ -150,7 +150,7 @@ func TestVTerm_DisplayBufferScroll(t *testing.T) {
 	// Add 5 lines to create scrollable content
 	for i := 0; i < 5; i++ {
 		for _, r := range "Line" {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -182,7 +182,7 @@ func TestVTerm_DisplayBufferCarriageReturn(t *testing.T) {
 
 	// Write "Hello"
 	for _, r := range "Hello" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Carriage return - use the VTerm method which updates cursorX and syncs display buffer
@@ -190,7 +190,7 @@ func TestVTerm_DisplayBufferCarriageReturn(t *testing.T) {
 
 	// Write "XX" - should overwrite
 	for _, r := range "XX" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	line := v.displayBufferGetCurrentLine()
@@ -305,7 +305,7 @@ func TestVTerm_DisplayBufferBackspace(t *testing.T) {
 
 	// Write "Hello"
 	for _, r := range "Hello" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Backspace twice
@@ -314,7 +314,7 @@ func TestVTerm_DisplayBufferBackspace(t *testing.T) {
 
 	// Write "XY" - should produce "HelXY"
 	for _, r := range "XY" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	line := v.displayBufferGetCurrentLine()
@@ -333,7 +333,7 @@ func TestVTerm_DisplayBufferBackspaceErase(t *testing.T) {
 
 	// Write "Hello"
 	for _, r := range "Hello" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Verify initial state
@@ -344,7 +344,7 @@ func TestVTerm_DisplayBufferBackspaceErase(t *testing.T) {
 
 	// Simulate BS + SPACE + BS (shell's erase sequence)
 	v.Backspace()    // Move cursor left (pos 4)
-	v.placeChar(' ') // Overwrite 'o' with space (pos 5)
+	v.writeCharWithWrapping(' ') // Overwrite 'o' with space (pos 5)
 	v.Backspace()    // Move cursor back (pos 4)
 
 	// Check the logical line content
@@ -381,10 +381,10 @@ func TestVTerm_DisplayBufferBackspaceXSync(t *testing.T) {
 
 	// Write "Hello"
 	for i, r := range "Hello" {
-		v.placeChar(r)
-		t.Logf("After '%c': cursorX=%d, logicalX=%d", r, v.GetCursorX(), getLogicalX())
-		if v.GetCursorX() != i+1 {
-			t.Errorf("After '%c': expected cursorX=%d, got %d", r, i+1, v.GetCursorX())
+		v.writeCharWithWrapping(r)
+		t.Logf("After '%c': cursorX=%d, logicalX=%d", r, v.CursorX(), getLogicalX())
+		if v.CursorX() != i+1 {
+			t.Errorf("After '%c': expected cursorX=%d, got %d", r, i+1, v.CursorX())
 		}
 		if getLogicalX() != i+1 {
 			t.Errorf("After '%c': expected logicalX=%d, got %d", r, i+1, getLogicalX())
@@ -395,19 +395,19 @@ func TestVTerm_DisplayBufferBackspaceXSync(t *testing.T) {
 
 	// BS should decrement both
 	v.Backspace()
-	t.Logf("After BS: cursorX=%d, logicalX=%d", v.GetCursorX(), getLogicalX())
-	if v.GetCursorX() != 4 {
-		t.Errorf("After BS: expected cursorX=4, got %d", v.GetCursorX())
+	t.Logf("After BS: cursorX=%d, logicalX=%d", v.CursorX(), getLogicalX())
+	if v.CursorX() != 4 {
+		t.Errorf("After BS: expected cursorX=4, got %d", v.CursorX())
 	}
 	if getLogicalX() != 4 {
 		t.Errorf("After BS: expected logicalX=4, got %d", getLogicalX())
 	}
 
 	// SPACE should write at position 4 and advance both to 5
-	v.placeChar(' ')
-	t.Logf("After SPACE: cursorX=%d, logicalX=%d", v.GetCursorX(), getLogicalX())
-	if v.GetCursorX() != 5 {
-		t.Errorf("After SPACE: expected cursorX=5, got %d", v.GetCursorX())
+	v.writeCharWithWrapping(' ')
+	t.Logf("After SPACE: cursorX=%d, logicalX=%d", v.CursorX(), getLogicalX())
+	if v.CursorX() != 5 {
+		t.Errorf("After SPACE: expected cursorX=5, got %d", v.CursorX())
 	}
 	if getLogicalX() != 5 {
 		t.Errorf("After SPACE: expected logicalX=5, got %d", getLogicalX())
@@ -415,9 +415,9 @@ func TestVTerm_DisplayBufferBackspaceXSync(t *testing.T) {
 
 	// BS again
 	v.Backspace()
-	t.Logf("After 2nd BS: cursorX=%d, logicalX=%d", v.GetCursorX(), getLogicalX())
-	if v.GetCursorX() != 4 {
-		t.Errorf("After 2nd BS: expected cursorX=4, got %d", v.GetCursorX())
+	t.Logf("After 2nd BS: cursorX=%d, logicalX=%d", v.CursorX(), getLogicalX())
+	if v.CursorX() != 4 {
+		t.Errorf("After 2nd BS: expected cursorX=4, got %d", v.CursorX())
 	}
 	if getLogicalX() != 4 {
 		t.Errorf("After 2nd BS: expected logicalX=4, got %d", getLogicalX())
@@ -432,7 +432,7 @@ func TestVTerm_DisplayBufferBackspaceEraseCellValues(t *testing.T) {
 
 	// Write "Hello"
 	for _, r := range "Hello" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Get the grid and check the initial Cell values
@@ -445,7 +445,7 @@ func TestVTerm_DisplayBufferBackspaceEraseCellValues(t *testing.T) {
 
 	// Simulate BS + SPACE + BS
 	v.Backspace()
-	v.placeChar(' ')
+	v.writeCharWithWrapping(' ')
 	v.Backspace()
 
 	// Get the grid again and check Cell values
@@ -503,7 +503,7 @@ func TestVTerm_DisplayBufferBackspaceEraseWithParser(t *testing.T) {
 	}
 
 	gridLine := getGridLine()
-	t.Logf("After 'Hello': %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After 'Hello': %s (cursor at %d)", gridLine, v.CursorX())
 	if gridLine != "Hello_____" {
 		t.Errorf("expected 'Hello_____', got '%s'", gridLine)
 	}
@@ -511,15 +511,15 @@ func TestVTerm_DisplayBufferBackspaceEraseWithParser(t *testing.T) {
 	// BS (0x08) through parser
 	p.Parse('\b')
 	gridLine = getGridLine()
-	t.Logf("After BS: %s (cursor at %d)", gridLine, v.GetCursorX())
-	if v.GetCursorX() != 4 {
-		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	t.Logf("After BS: %s (cursor at %d)", gridLine, v.CursorX())
+	if v.CursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.CursorX())
 	}
 
 	// SPACE (0x20) through parser - this erases 'o'
 	p.Parse(' ')
 	gridLine = getGridLine()
-	t.Logf("After SPACE: %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After SPACE: %s (cursor at %d)", gridLine, v.CursorX())
 	if gridLine != "Hell______" {
 		t.Errorf("expected 'Hell______' after SPACE, got '%s'", gridLine)
 	}
@@ -527,12 +527,12 @@ func TestVTerm_DisplayBufferBackspaceEraseWithParser(t *testing.T) {
 	// BS (0x08) through parser
 	p.Parse('\b')
 	gridLine = getGridLine()
-	t.Logf("After final BS: %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After final BS: %s (cursor at %d)", gridLine, v.CursorX())
 	if gridLine != "Hell______" {
 		t.Errorf("expected 'Hell______' after final BS, got '%s'", gridLine)
 	}
-	if v.GetCursorX() != 4 {
-		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	if v.CursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.CursorX())
 	}
 }
 
@@ -561,7 +561,7 @@ func TestVTerm_DisplayBufferBackspaceEraseWithInterleavedGridCalls(t *testing.T)
 
 	// Write "Hello" with Grid() call after each char
 	for _, r := range "Hello" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 		_ = v.Grid() // Simulate render after each char
 	}
 
@@ -575,37 +575,37 @@ func TestVTerm_DisplayBufferBackspaceEraseWithInterleavedGridCalls(t *testing.T)
 	// BS (cursor 5 -> 4)
 	v.Backspace()
 	gridLine = getGridLine()
-	t.Logf("After BS: %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After BS: %s (cursor at %d)", gridLine, v.CursorX())
 	// Content should still be "Hello" but cursor at 4
 	if gridLine != "Hello_____" {
 		t.Errorf("expected 'Hello_____' after BS, got '%s'", gridLine)
 	}
-	if v.GetCursorX() != 4 {
-		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	if v.CursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.CursorX())
 	}
 
 	// SPACE (overwrites 'o' with space, cursor 4 -> 5)
-	v.placeChar(' ')
+	v.writeCharWithWrapping(' ')
 	gridLine = getGridLine()
-	t.Logf("After SPACE: %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After SPACE: %s (cursor at %d)", gridLine, v.CursorX())
 	// Content should now be "Hell " (with trailing space)
 	if gridLine != "Hell______" {
 		t.Errorf("expected 'Hell______' after SPACE, got '%s'", gridLine)
 	}
-	if v.GetCursorX() != 5 {
-		t.Errorf("expected cursor at 5, got %d", v.GetCursorX())
+	if v.CursorX() != 5 {
+		t.Errorf("expected cursor at 5, got %d", v.CursorX())
 	}
 
 	// BS (cursor 5 -> 4)
 	v.Backspace()
 	gridLine = getGridLine()
-	t.Logf("After final BS: %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After final BS: %s (cursor at %d)", gridLine, v.CursorX())
 	// Content should still be "Hell " with cursor at 4
 	if gridLine != "Hell______" {
 		t.Errorf("expected 'Hell______' after final BS, got '%s'", gridLine)
 	}
-	if v.GetCursorX() != 4 {
-		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	if v.CursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.CursorX())
 	}
 }
 
@@ -639,7 +639,7 @@ func TestVTerm_DisplayBufferBackspaceEraseWithEL(t *testing.T) {
 	}
 
 	gridLine := getGridLine()
-	t.Logf("After 'Hello': %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After 'Hello': %s (cursor at %d)", gridLine, v.CursorX())
 	if gridLine != "Hello_____" {
 		t.Errorf("expected 'Hello_____', got '%s'", gridLine)
 	}
@@ -647,9 +647,9 @@ func TestVTerm_DisplayBufferBackspaceEraseWithEL(t *testing.T) {
 	// Simulate backspace using BS + EL 0
 	// First move cursor back with BS
 	p.Parse('\b')
-	t.Logf("After BS: cursor at %d", v.GetCursorX())
-	if v.GetCursorX() != 4 {
-		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	t.Logf("After BS: cursor at %d", v.CursorX())
+	if v.CursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.CursorX())
 	}
 
 	// Then send EL 0 (CSI K) to erase from cursor to end of line
@@ -658,13 +658,13 @@ func TestVTerm_DisplayBufferBackspaceEraseWithEL(t *testing.T) {
 	p.Parse('K')
 
 	gridLine = getGridLine()
-	t.Logf("After EL: %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After EL: %s (cursor at %d)", gridLine, v.CursorX())
 	// EL 0 erases from cursor to end, so 'o' should be gone and we should have "Hell"
 	if gridLine != "Hell______" {
 		t.Errorf("expected 'Hell______' after EL, got '%s'", gridLine)
 	}
-	if v.GetCursorX() != 4 {
-		t.Errorf("expected cursor at 4 after EL, got %d", v.GetCursorX())
+	if v.CursorX() != 4 {
+		t.Errorf("expected cursor at 4 after EL, got %d", v.CursorX())
 	}
 }
 
@@ -698,7 +698,7 @@ func TestVTerm_DisplayBufferBackspaceEraseWithDCH(t *testing.T) {
 	}
 
 	gridLine := getGridLine()
-	t.Logf("After 'Hello': %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After 'Hello': %s (cursor at %d)", gridLine, v.CursorX())
 	if gridLine != "Hello_____" {
 		t.Errorf("expected 'Hello_____', got '%s'", gridLine)
 	}
@@ -706,9 +706,9 @@ func TestVTerm_DisplayBufferBackspaceEraseWithDCH(t *testing.T) {
 	// Simulate bash's backspace using DCH (Delete Character)
 	// First move cursor back with BS
 	p.Parse('\b')
-	t.Logf("After BS: cursor at %d", v.GetCursorX())
-	if v.GetCursorX() != 4 {
-		t.Errorf("expected cursor at 4, got %d", v.GetCursorX())
+	t.Logf("After BS: cursor at %d", v.CursorX())
+	if v.CursorX() != 4 {
+		t.Errorf("expected cursor at 4, got %d", v.CursorX())
 	}
 
 	// Then send DCH (CSI P) to delete the character
@@ -717,13 +717,13 @@ func TestVTerm_DisplayBufferBackspaceEraseWithDCH(t *testing.T) {
 	p.Parse('P')
 
 	gridLine = getGridLine()
-	t.Logf("After DCH: %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After DCH: %s (cursor at %d)", gridLine, v.CursorX())
 	// DCH shifts content left, so 'o' should be gone and we should have "Hell"
 	if gridLine != "Hell______" {
 		t.Errorf("expected 'Hell______' after DCH, got '%s'", gridLine)
 	}
-	if v.GetCursorX() != 4 {
-		t.Errorf("expected cursor at 4 after DCH, got %d", v.GetCursorX())
+	if v.CursorX() != 4 {
+		t.Errorf("expected cursor at 4 after DCH, got %d", v.CursorX())
 	}
 }
 
@@ -763,7 +763,7 @@ func TestVTerm_DisplayBufferEraseToEndOfLine(t *testing.T) {
 
 	// Write "Hello World"
 	for _, r := range "Hello World" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Move cursor back to position 5 (after "Hello")
@@ -785,7 +785,7 @@ func TestVTerm_DisplayBufferEraseEntireLine(t *testing.T) {
 
 	// Write "Hello World"
 	for _, r := range "Hello World" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Erase entire line (EL 2)
@@ -803,7 +803,7 @@ func TestVTerm_DisplayBufferEraseCharacters(t *testing.T) {
 
 	// Write "Hello World"
 	for _, r := range "Hello World" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Move cursor to position 0
@@ -826,13 +826,13 @@ func TestVTerm_DisplayBufferResizeReflowContent(t *testing.T) {
 
 	// Write a line that exactly fills 10 columns
 	for _, r := range "ABCDEFGHIJ" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 	v.LineFeed()
 
 	// Write another line (don't LineFeed at end - keep it as current line)
 	for _, r := range "1234567890" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// At width 10, we have 1 committed line + current line
@@ -866,7 +866,7 @@ func TestVTerm_DisplayBufferResizeWiderUnwraps(t *testing.T) {
 
 	// Write content that wraps at width 5 (keep as current line, no LineFeed)
 	for _, r := range "ABCDEFGHIJ" { // 10 chars = 2 physical lines at width 5
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Current line is not committed yet, history is empty
@@ -900,7 +900,7 @@ func TestVTerm_DisplayBufferMultipleResizes(t *testing.T) {
 	// Write a long line
 	longText := "The quick brown fox jumps over the lazy dog"
 	for _, r := range longText {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 	v.LineFeed()
 
@@ -932,7 +932,7 @@ func TestVTerm_DisplayBufferLongLineWrap(t *testing.T) {
 
 	// Write a line longer than width (should auto-wrap but stay as one logical line)
 	for _, r := range "ABCDEFGHIJKLMNOPQRST" { // 20 chars = 2 wraps at width 10
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Should still be 0 committed lines (current line not committed)
@@ -969,7 +969,7 @@ func TestVTerm_DisplayBufferCursorAfterResize(t *testing.T) {
 
 	// Write some content
 	for _, r := range "Hello World" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Cursor should be at position 11
@@ -996,7 +996,7 @@ func TestVTerm_DisplayBufferResizeWhileScrolledUp(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		text := "Line " + string(rune('A'+i%26))
 		for _, r := range text {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -1047,7 +1047,7 @@ func TestVTerm_DisplayBufferScrollPreservesContent(t *testing.T) {
 	lines := []string{"Line1", "Line2", "Line3", "Line4", "Line5"}
 	for _, line := range lines {
 		for _, r := range line {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -1088,7 +1088,7 @@ func TestVTerm_DisplayBufferScrollRegion(t *testing.T) {
 	// Write some lines first
 	for i := 0; i < 5; i++ {
 		for _, r := range "Line" {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -1117,7 +1117,7 @@ func TestVTerm_DisplayBufferEmptyLines(t *testing.T) {
 	// Write a line, then empty line, then another line
 	// Use CR+LF to properly start at column 0 on each new line
 	for _, r := range "First" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 	v.CarriageReturn()
 	v.LineFeed()
@@ -1127,7 +1127,7 @@ func TestVTerm_DisplayBufferEmptyLines(t *testing.T) {
 	v.LineFeed()
 
 	for _, r := range "Third" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 	v.CarriageReturn()
 	v.LineFeed()
@@ -1167,19 +1167,19 @@ func TestVTerm_DisplayBufferProgressBar(t *testing.T) {
 
 	// Write "Progress: 0%"
 	for _, r := range "Progress: 0%" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// CR and overwrite
 	v.CarriageReturn()
 	for _, r := range "Progress: 50%" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// CR and overwrite again
 	v.CarriageReturn()
 	for _, r := range "Progress: 100%" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	// Should still be on current line (not committed)
@@ -1223,7 +1223,7 @@ func TestVTerm_DisplayBufferLargeHistory(t *testing.T) {
 	for i := 0; i < 10000; i++ {
 		text := "This is line number " + string(rune('0'+i%10))
 		for _, r := range text {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -1288,11 +1288,11 @@ func TestVTerm_DisplayBufferDiskScrolling(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		text := "Line number " + string(rune('A'+(i%26)))
 		for _, r := range text {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		// Pad with index
 		for _, r := range " [" + string(rune('0'+i/10)) + string(rune('0'+i%10)) + "]" {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -1357,7 +1357,7 @@ func TestVTerm_DisplayBufferPersistAndReload(t *testing.T) {
 	// Write 30 lines
 	for i := 0; i < 30; i++ {
 		for _, r := range "Persistent line" {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -1401,7 +1401,7 @@ func TestVTerm_DisplayBufferAppendAfterReload(t *testing.T) {
 	// Write 10 lines
 	for i := 0; i < 10; i++ {
 		for _, r := range "Initial line" {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -1428,7 +1428,7 @@ func TestVTerm_DisplayBufferAppendAfterReload(t *testing.T) {
 	// Append 5 more lines (this was failing before the fix)
 	for i := 0; i < 5; i++ {
 		for _, r := range "New line after reload" {
-			v2.placeChar(r)
+			v2.writeCharWithWrapping(r)
 		}
 		v2.LineFeed()
 	}
@@ -1464,7 +1464,7 @@ func BenchmarkDisplayBuffer_PlaceChar(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		v.placeChar('A')
+		v.writeCharWithWrapping('A')
 		if i%80 == 79 {
 			v.LineFeed()
 		}
@@ -1478,7 +1478,7 @@ func BenchmarkDisplayBuffer_Resize(b *testing.B) {
 	// Write some content first
 	for i := 0; i < 1000; i++ {
 		for _, r := range "Test line content here" {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -1500,7 +1500,7 @@ func BenchmarkDisplayBuffer_Scroll(b *testing.B) {
 	// Write content to create scrollable history
 	for i := 0; i < 1000; i++ {
 		for _, r := range "Test line" {
-			v.placeChar(r)
+			v.writeCharWithWrapping(r)
 		}
 		v.LineFeed()
 	}
@@ -1543,7 +1543,7 @@ func TestVTerm_DisplayBufferInsertMode(t *testing.T) {
 	}
 
 	gridLine := getGridLine()
-	t.Logf("After 'ABC': %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After 'ABC': %s (cursor at %d)", gridLine, v.CursorX())
 	if gridLine != "ABC_______" {
 		t.Errorf("expected 'ABC_______', got '%s'", gridLine)
 	}
@@ -1554,8 +1554,8 @@ func TestVTerm_DisplayBufferInsertMode(t *testing.T) {
 	p.Parse('2')
 	p.Parse('D') // CUB 2 (cursor back 2)
 
-	if v.GetCursorX() != 1 {
-		t.Errorf("expected cursor at 1, got %d", v.GetCursorX())
+	if v.CursorX() != 1 {
+		t.Errorf("expected cursor at 1, got %d", v.CursorX())
 	}
 
 	// Enable insert mode (CSI 4 h)
@@ -1575,7 +1575,7 @@ func TestVTerm_DisplayBufferInsertMode(t *testing.T) {
 	}
 
 	gridLine = getGridLine()
-	t.Logf("After 'XY' in insert mode: %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After 'XY' in insert mode: %s (cursor at %d)", gridLine, v.CursorX())
 	if gridLine != "AXYBC_____" {
 		t.Errorf("expected 'AXYBC_____', got '%s'", gridLine)
 	}
@@ -1595,7 +1595,7 @@ func TestVTerm_DisplayBufferInsertMode(t *testing.T) {
 	p.Parse('Z')
 
 	gridLine = getGridLine()
-	t.Logf("After 'Z' in replace mode: %s (cursor at %d)", gridLine, v.GetCursorX())
+	t.Logf("After 'Z' in replace mode: %s (cursor at %d)", gridLine, v.CursorX())
 	if gridLine != "AXYZC_____" {
 		t.Errorf("expected 'AXYZC_____', got '%s'", gridLine)
 	}

@@ -16,6 +16,31 @@ const (
 	AttrReverse
 )
 
+// String returns a human-readable representation of the attribute flags.
+func (a Attribute) String() string {
+	if a == 0 {
+		return "none"
+	}
+	var parts []string
+	if a&AttrBold != 0 {
+		parts = append(parts, "bold")
+	}
+	if a&AttrUnderline != 0 {
+		parts = append(parts, "underline")
+	}
+	if a&AttrReverse != 0 {
+		parts = append(parts, "reverse")
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	result := parts[0]
+	for i := 1; i < len(parts); i++ {
+		result += "|" + parts[i]
+	}
+	return result
+}
+
 // ColorMode defines the type of color stored.
 type ColorMode int
 

@@ -132,8 +132,8 @@ func (v *VTerm) IsBracketedPasteModeEnabled() bool {
 	return v.bracketedPasteMode
 }
 
-// placeChar puts a rune at the current cursor position, handling wrapping and insert mode.
-func (v *VTerm) placeChar(r rune) {
+// writeCharWithWrapping puts a rune at the current cursor position, handling wrapping and insert mode.
+func (v *VTerm) writeCharWithWrapping(r rune) {
 	// Track last graphic character for REP command
 	v.lastGraphicChar = r
 
@@ -191,23 +191,8 @@ func (v *VTerm) placeChar(r rune) {
 	isWide := charWidth == 2
 
 	if v.inAltScreen {
-		if v.cursorY >= 0 && v.cursorY < v.height && v.cursorX >= 0 && v.cursorX < v.width {
-			v.logDebug("[ALT.Write] '%c' (0x%04X) at (%d,%d) width=%d", r, r, v.cursorX, v.cursorY, charWidth)
-			if v.insertMode {
-				// Shift content right from cursor to right edge (or right margin)
-				shiftAmount := charWidth
-				for x := rightEdge; x >= v.cursorX+shiftAmount; x-- {
-					v.altBuffer[v.cursorY][x] = v.altBuffer[v.cursorY][x-shiftAmount]
-				}
-			}
-			// Place the main character
-			v.altBuffer[v.cursorY][v.cursorX] = Cell{Rune: r, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr, Wide: isWide}
-			// For wide characters, place a placeholder in the next cell
-			if isWide && v.cursorX+1 < v.width {
-				v.altBuffer[v.cursorY][v.cursorX+1] = Cell{Rune: 0, FG: v.currentFG, BG: v.currentBG, Attr: v.currentAttr, Wide: true}
-			}
-			v.MarkDirty(v.cursorY)
-		}
+		// Use consolidated alt buffer write operation
+		v.altBufferWriteCell(r, isWide)
 	} else {
 		// Write to display buffer (the only path for main screen)
 		v.displayBufferPlaceCharWide(r, isWide)
@@ -841,7 +826,7 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 	}
 
 	// Sync display buffer cursor after any cursor movement escape sequence.
-	// This is done here rather than in SetCursorPos because placeChar also
+	// This is done here rather than in SetCursorPos because writeCharWithWrapping also
 	// calls SetCursorPos, and it already advances the display buffer cursor.
 	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
 		v.displayBufferSetCursorFromPhysical(isRelativeMove)

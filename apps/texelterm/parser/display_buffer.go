@@ -319,9 +319,9 @@ func (db *DisplayBuffer) lines() int {
 func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
 	if db.viewingHistory {
 		if db.debugLog != nil {
-			db.debugLog("[GetViewportAsCells] viewingHistory=true, calling getHistoryView")
+			db.debugLog("[GetViewportAsCells] viewingHistory=true, calling buildHistoryViewGrid")
 		}
-		return db.getHistoryView()
+		return db.buildHistoryViewGrid()
 	}
 	if db.debugLog != nil {
 		db.debugLog("[GetViewportAsCells] viewingHistory=false, returning live viewport")
@@ -329,11 +329,11 @@ func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
 	return db.viewport.Grid()
 }
 
-// getHistoryView builds the view when scrolled back into history.
-func (db *DisplayBuffer) getHistoryView() [][]Cell {
+// buildHistoryViewGrid builds the view when scrolled back into history.
+func (db *DisplayBuffer) buildHistoryViewGrid() [][]Cell {
 	if db.cachedHistoryView != nil {
 		if db.debugLog != nil {
-			db.debugLog("[getHistoryView] returning cached view")
+			db.debugLog("[buildHistoryViewGrid] returning cached view")
 		}
 		return db.cachedHistoryView
 	}
@@ -352,7 +352,7 @@ func (db *DisplayBuffer) getHistoryView() [][]Cell {
 
 	if db.history == nil {
 		if db.debugLog != nil {
-			db.debugLog("[getHistoryView] history is nil, returning empty")
+			db.debugLog("[buildHistoryViewGrid] history is nil, returning empty")
 		}
 		return result
 	}
@@ -362,13 +362,13 @@ func (db *DisplayBuffer) getHistoryView() [][]Cell {
 	totalHistoryLines := db.history.TotalLen()
 	if totalHistoryLines == 0 {
 		if db.debugLog != nil {
-			db.debugLog("[getHistoryView] totalHistoryLines=0, returning empty")
+			db.debugLog("[buildHistoryViewGrid] totalHistoryLines=0, returning empty")
 		}
 		return result
 	}
 
 	if db.debugLog != nil {
-		db.debugLog("[getHistoryView] totalHistoryLines=%d, historyViewOffset=%d", totalHistoryLines, db.historyViewOffset)
+		db.debugLog("[buildHistoryViewGrid] totalHistoryLines=%d, historyViewOffset=%d", totalHistoryLines, db.historyViewOffset)
 	}
 
 	// Calculate which logical lines to load
@@ -434,16 +434,17 @@ func (db *DisplayBuffer) GetViewport() []PhysicalLine {
 
 // --- Scroll Operations ---
 
-// ScrollUp scrolls the viewport up (content moves down).
-// Called when LF at bottom of scroll region.
-func (db *DisplayBuffer) ScrollUp(n int) int {
-	db.viewport.ScrollUp(n)
+// ScrollContentUp scrolls content up (content moves up, new blank line at bottom).
+// Called when LF at bottom of scroll region (terminal escape sequence behavior).
+func (db *DisplayBuffer) ScrollContentUp(n int) int {
+	db.viewport.ScrollContentUp(n)
 	return n
 }
 
-// ScrollDown scrolls the viewport down (content moves up).
-func (db *DisplayBuffer) ScrollDown(n int) int {
-	db.viewport.ScrollDown(n)
+// ScrollContentDown scrolls content down (content moves down, new blank line at top).
+// Called for reverse index (terminal escape sequence behavior).
+func (db *DisplayBuffer) ScrollContentDown(n int) int {
+	db.viewport.ScrollContentDown(n)
 	return n
 }
 
@@ -457,8 +458,9 @@ func (db *DisplayBuffer) ScrollToBottom() {
 	db.viewport.ScrollToLiveEdge()
 }
 
-// ScrollViewportUp scrolls the view up into history (for user scrollback).
-func (db *DisplayBuffer) ScrollViewportUp(lines int) int {
+// ScrollViewUp scrolls the view up into history (for user scrollback).
+// This is user navigation, not terminal escape sequences.
+func (db *DisplayBuffer) ScrollViewUp(lines int) int {
 	if db.history == nil {
 		return 0
 	}
@@ -478,8 +480,9 @@ func (db *DisplayBuffer) ScrollViewportUp(lines int) int {
 	return scrolled
 }
 
-// ScrollViewportDown scrolls the view down toward live edge.
-func (db *DisplayBuffer) ScrollViewportDown(lines int) int {
+// ScrollViewDown scrolls the view down toward live edge.
+// This is user navigation, not terminal escape sequences.
+func (db *DisplayBuffer) ScrollViewDown(lines int) int {
 	if !db.viewingHistory {
 		return 0
 	}
@@ -647,11 +650,11 @@ func (db *DisplayBuffer) Resize(newWidth, newHeight int) {
 	}
 }
 
-// populateViewportWithCursorAt fills the viewport with history lines, placing the cursor
+// loadHistoryWithCursorAt fills the viewport with history lines, placing the cursor
 // at the specified row. History fills rows 0 to targetCursorY-1, leaving row targetCursorY
 // and below empty for the shell to draw the prompt.
 // skipFromEnd specifies how many logical lines to skip from the end of history (to hide old prompts).
-func (db *DisplayBuffer) populateViewportWithCursorAt(targetCursorY int, skipFromEnd int) (cursorX, cursorY int) {
+func (db *DisplayBuffer) loadHistoryWithCursorAt(targetCursorY int, skipFromEnd int) (cursorX, cursorY int) {
 	if db.history == nil || db.history.TotalLen() == 0 {
 		return 0, targetCursorY
 	}
@@ -678,7 +681,7 @@ func (db *DisplayBuffer) populateViewportWithCursorAt(targetCursorY int, skipFro
 		startIdx = 0
 	}
 
-	log.Printf("[populateViewportWithCursorAt] targetCursorY=%d, maxLinesToShow=%d, historyLen=%d, skipFromEnd=%d, startIdx=%d",
+	log.Printf("[loadHistoryWithCursorAt] targetCursorY=%d, maxLinesToShow=%d, historyLen=%d, skipFromEnd=%d, startIdx=%d",
 		targetCursorY, maxLinesToShow, totalHistoryLines, skipFromEnd, startIdx)
 
 	// Work backwards from startIdx to collect physical lines
@@ -736,7 +739,7 @@ func (db *DisplayBuffer) populateViewportWithCursorAt(targetCursorY int, skipFro
 	db.cachedHistoryView = nil
 	db.hasLiveContent = false
 
-	log.Printf("[populateViewportWithCursorAt] Populated %d lines, cursor at (%d,%d)", len(physicalLines), cursorX, cursorY)
+	log.Printf("[loadHistoryWithCursorAt] Populated %d lines, cursor at (%d,%d)", len(physicalLines), cursorX, cursorY)
 
 	return cursorX, cursorY
 }
@@ -906,7 +909,7 @@ func (db *DisplayBuffer) PopulateViewportFromHistoryToPrompt(promptLine int64, p
 			impliedViewportRow, skipFromEnd)
 
 		// Fill viewport with history (skipping old prompt), cursor at implied row
-		return db.populateViewportWithCursorAt(impliedViewportRow, skipFromEnd)
+		return db.loadHistoryWithCursorAt(impliedViewportRow, skipFromEnd)
 	}
 
 	width := db.viewport.Width()
@@ -1086,6 +1089,23 @@ func (db *DisplayBuffer) ScrollRegionUp(top, bottom, n int) {
 // ScrollRegionDown scrolls within a region.
 func (db *DisplayBuffer) ScrollRegionDown(top, bottom, n int) {
 	db.viewport.ScrollRegionDown(top, bottom, n)
+}
+
+// ScrollColumnsUp scrolls content up within a column range (for left/right margin scrolling).
+// This is used when left/right margins are set and content needs to scroll within them.
+func (db *DisplayBuffer) ScrollColumnsUp(top, bottom, leftCol, rightCol, n int, clearFG, clearBG Color) {
+	db.viewport.ScrollColumnsUp(top, bottom, leftCol, rightCol, n, clearFG, clearBG)
+}
+
+// ScrollColumnsDown scrolls content down within a column range (for left/right margin scrolling).
+func (db *DisplayBuffer) ScrollColumnsDown(top, bottom, leftCol, rightCol, n int, clearFG, clearBG Color) {
+	db.viewport.ScrollColumnsDown(top, bottom, leftCol, rightCol, n, clearFG, clearBG)
+}
+
+// ScrollColumnsHorizontal scrolls content horizontally within specified bounds.
+// n > 0: shift right (blank at left), n < 0: shift left (blank at right).
+func (db *DisplayBuffer) ScrollColumnsHorizontal(top, bottom, leftCol, rightCol, n int, clearFG, clearBG Color) {
+	db.viewport.ScrollColumnsHorizontal(top, bottom, leftCol, rightCol, n, clearFG, clearBG)
 }
 
 // ClearRow clears a specific row.

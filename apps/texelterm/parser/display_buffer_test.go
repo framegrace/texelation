@@ -151,8 +151,8 @@ func TestDisplayBuffer_Scroll(t *testing.T) {
 		t.Error("should be at live edge")
 	}
 
-	// Scroll up
-	scrolled := db.ScrollUp(2)
+	// Scroll up (user scrollback)
+	scrolled := db.ScrollViewUp(2)
 	if scrolled != 2 {
 		t.Errorf("expected to scroll 2, got %d", scrolled)
 	}
@@ -246,7 +246,7 @@ func TestDisplayBuffer_LiveEdgeBehavior(t *testing.T) {
 	}
 
 	// Scroll up (user is reading history)
-	db.ScrollUp(5)
+	db.ScrollViewUp(5)
 	if db.AtLiveEdge() {
 		t.Error("should not be at live edge after scrolling up")
 	}
@@ -295,8 +295,8 @@ func TestDisplayBuffer_CanScroll(t *testing.T) {
 		t.Error("should not be able to scroll down when at live edge")
 	}
 
-	// Scroll up
-	db.ScrollUp(3)
+	// Scroll up (user scrollback)
+	db.ScrollViewUp(3)
 
 	if !db.CanScrollUp() {
 		t.Error("should still be able to scroll up")
@@ -330,7 +330,7 @@ func TestDisplayBuffer_ResizePreservesScrollPosition(t *testing.T) {
 	}
 
 	// Scroll up to somewhere in the middle (say, 15 lines up)
-	db.ScrollUp(15)
+	db.ScrollViewUp(15)
 	if db.AtLiveEdge() {
 		t.Error("should not be at live edge after scrolling up")
 	}
@@ -424,7 +424,7 @@ func TestDisplayBuffer_VerticalResizePreservesScrollPosition(t *testing.T) {
 	}
 
 	// Scroll up to somewhere in the middle
-	db.ScrollUp(20)
+	db.ScrollViewUp(20)
 	if db.AtLiveEdge() {
 		t.Error("should not be at live edge after scrolling up")
 	}

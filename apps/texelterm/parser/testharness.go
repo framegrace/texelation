@@ -41,7 +41,7 @@ func (h *TestHarness) SendSeq(seq string) {
 // SendText sends printable text (no control sequences).
 func (h *TestHarness) SendText(text string) {
 	for _, r := range text {
-		h.vterm.placeChar(r)
+		h.vterm.writeCharWithWrapping(r)
 	}
 }
 
@@ -119,7 +119,7 @@ func (h *TestHarness) GetLineText(y, maxLen int) string {
 
 // GetCursor returns the current cursor position (0-based).
 func (h *TestHarness) GetCursor() (x, y int) {
-	return h.vterm.GetCursorX(), h.vterm.GetCursorY()
+	return h.vterm.CursorX(), h.vterm.CursorY()
 }
 
 // GetCurrentAttr returns the current text attributes.
@@ -318,7 +318,7 @@ func (h *TestHarness) FillWithPattern(pattern string) {
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			idx := (y*width + x) % len(pattern)
-			h.vterm.placeChar(rune(pattern[idx]))
+			h.vterm.writeCharWithWrapping(rune(pattern[idx]))
 		}
 	}
 

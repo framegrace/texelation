@@ -75,7 +75,7 @@ func (p *Parser) Parse(r rune) {
 			p.vterm.Backspace()
 		default:
 			if r >= ' ' && r != '\x7f' {
-				p.vterm.placeChar(r)
+				p.vterm.writeCharWithWrapping(r)
 			}
 			// Ignore BEL and other unprintable control characters
 		}
@@ -281,20 +281,20 @@ func (p *Parser) handleOSC(sequence []rune) {
 				p.vterm.DefaultBgChanged(color)
 			}
 		}
-			case 0, 1, 2:
-				p.vterm.SetTitle(string(payload))
-			case 133:
-				// OSC 133 - Shell integration (numeric form)
-				p.handleOSC133(payload)
-			}
+	case 0, 1, 2:
+		p.vterm.SetTitle(payload)
+	case 133:
+		// OSC 133 - Shell integration (numeric form)
+		p.handleOSC133(payload)
 	}
-	
-	// handleOSC133 processes OSC 133 shell integration sequences
-	// Format: OSC 133 ; <subcommand> [; <params>] ST
-	// A = Prompt start
-	// B = Prompt end / Input start
-	// C = Input end / Command start
-	// D = Command end [; exitcode]
+}
+
+// handleOSC133 processes OSC 133 shell integration sequences.
+// Format: OSC 133 ; <subcommand> [; <params>] ST
+// A = Prompt start
+// B = Prompt end / Input start
+// C = Input end / Command start
+// D = Command end [; exitcode]
 func (p *Parser) handleOSC133(payload string) {
 	parts := strings.Split(payload, ";")
 	if len(parts) == 0 {
@@ -322,8 +322,8 @@ func (p *Parser) handleOSC133(payload string) {
 		p.vterm.InputActive = true
 		p.vterm.CommandActive = false
 		// Record where input starts (convert screen position to history line index)
-		p.vterm.InputStartLine = p.vterm.getTopHistoryLine() + p.vterm.GetCursorY()
-		p.vterm.InputStartCol = p.vterm.GetCursorX()
+		p.vterm.InputStartLine = p.vterm.getTopHistoryLine() + p.vterm.CursorY()
+		p.vterm.InputStartCol = p.vterm.CursorX()
 		// Calculate prompt height (from OSC 133;A to now)
 		p.vterm.MarkInputStart()
 		if p.vterm.OnInputStart != nil {

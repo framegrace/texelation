@@ -176,7 +176,7 @@ for y := range renderBuf {
 
 // Simulate render: ONLY update dirty rows
 simulateRender := func() {
-    dirtyLines, allDirty := v.GetDirtyLines()
+    dirtyLines, allDirty := v.DirtyLines()
     vtermGrid := v.Grid()
     if allDirty {
         for y := 0; y < height && y < len(vtermGrid); y++ {

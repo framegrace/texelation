@@ -278,10 +278,10 @@ func (v *VTerm) displayBufferScroll(delta int) {
 
 	if delta > 0 {
 		// Positive delta: scroll down toward live edge
-		v.displayBuf.display.ScrollViewportDown(delta)
+		v.displayBuf.display.ScrollViewDown(delta)
 	} else if delta < 0 {
 		// Negative delta: scroll up into history
-		v.displayBuf.display.ScrollViewportUp(-delta)
+		v.displayBuf.display.ScrollViewUp(-delta)
 	}
 }
 
@@ -352,6 +352,22 @@ func (v *VTerm) AtLiveEdge() bool {
 func (v *VTerm) ScrollToLiveEdge() {
 	v.displayBufferScrollToBottom()
 	v.MarkAllDirty()
+}
+
+// EnsureLiveEdge scrolls to live edge if not already there, and clears restored view mode.
+// This is called when the user types or pastes, ensuring they can see what they're doing.
+// Returns true if any scrolling occurred.
+func (v *VTerm) EnsureLiveEdge() bool {
+	if !v.IsDisplayBufferEnabled() {
+		return false
+	}
+	scrolled := false
+	if !v.AtLiveEdge() {
+		v.ScrollToLiveEdge()
+		scrolled = true
+	}
+	v.ClearRestoredView()
+	return scrolled
 }
 
 // displayBufferSetCursorFromPhysical syncs the display buffer cursor with VTerm's cursor.
@@ -426,18 +442,18 @@ func (v *VTerm) displayBufferHistoryTotalLen() int64 {
 	return v.displayBuf.history.TotalLen()
 }
 
-// GetLastPromptLine returns the global line index of the last prompt.
+// LastPromptLine returns the global line index of the last prompt.
 // Returns -1 if no prompt position has been recorded.
-func (v *VTerm) GetLastPromptLine() int64 {
+func (v *VTerm) LastPromptLine() int64 {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return -1
 	}
 	return v.displayBuf.display.LastPromptLine()
 }
 
-// GetLastPromptHeight returns the number of lines in the prompt.
+// LastPromptHeight returns the number of lines in the prompt.
 // Defaults to 1 for single-line prompts.
-func (v *VTerm) GetLastPromptHeight() int {
+func (v *VTerm) LastPromptHeight() int {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return 1
 	}
@@ -632,10 +648,10 @@ func (v *VTerm) displayBufferInsertCharacters(n int) {
 
 // --- State Persistence Methods ---
 
-// GetScrollOffset returns the current scroll offset (lines scrolled back from live edge).
+// ScrollOffset returns the current scroll offset (lines scrolled back from live edge).
 // Returns 0 if at live edge or if display buffer is not enabled.
 // Used for persisting terminal state across server restarts.
-func (v *VTerm) GetScrollOffset() int64 {
+func (v *VTerm) ScrollOffset() int64 {
 	if v.displayBuf == nil || v.displayBuf.display == nil {
 		return 0
 	}
@@ -650,9 +666,9 @@ func (v *VTerm) SetScrollOffset(offset int64) {
 		log.Printf("[VTERM] SetScrollOffset: early return (displayBuf=%v, display=%v, offset=%d)", v.displayBuf != nil, v.displayBuf != nil && v.displayBuf.display != nil, offset)
 		return
 	}
-	// Scroll up by the offset amount (ScrollViewportUp handles clamping to max)
-	scrolled := v.displayBuf.display.ScrollViewportUp(int(offset))
-	log.Printf("[VTERM] SetScrollOffset: ScrollViewportUp(%d) scrolled %d lines", offset, scrolled)
+	// Scroll up by the offset amount (ScrollViewUp handles clamping to max)
+	scrolled := v.displayBuf.display.ScrollViewUp(int(offset))
+	log.Printf("[VTERM] SetScrollOffset: ScrollViewUp(%d) scrolled %d lines", offset, scrolled)
 	// Mark as restored view to suppress auto-scroll during shell startup.
 	// This keeps the view in history until user explicitly interacts.
 	v.displayBuf.display.SetRestoredView(true)
