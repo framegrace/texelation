@@ -204,6 +204,6 @@ func (v *VTerm) RepeatCharacter(n int) {
 
 	// Repeat the character n times
 	for i := 0; i < n; i++ {
-		v.placeChar(v.lastGraphicChar)
+		v.writeCharWithWrapping(v.lastGraphicChar)
 	}
 }

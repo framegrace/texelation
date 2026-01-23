@@ -46,13 +46,14 @@ func (v *VTerm) SetCursorPos(y, x int) {
 	v.MarkDirty(v.prevCursorY)
 	v.MarkDirty(v.cursorY)
 }
-// GetCursorX returns the current cursor X position
-func (v *VTerm) GetCursorX() int {
+
+// CursorX returns the current cursor X position.
+func (v *VTerm) CursorX() int {
 	return v.cursorX
 }
 
-// GetCursorY returns the current cursor Y position
-func (v *VTerm) GetCursorY() int {
+// CursorY returns the current cursor Y position.
+func (v *VTerm) CursorY() int {
 	return v.cursorY
 }
 

@@ -19,8 +19,8 @@ func (v *VTerm) MarkDirty(line int) {
 // MarkAllDirty marks all lines as dirty.
 func (v *VTerm) MarkAllDirty() { v.allDirty = true }
 
-// GetDirtyLines returns the dirty line map and the all-dirty flag.
-func (v *VTerm) GetDirtyLines() (map[int]bool, bool) {
+// DirtyLines returns the dirty line map and the all-dirty flag.
+func (v *VTerm) DirtyLines() (map[int]bool, bool) {
 	return v.dirtyLines, v.allDirty
 }
 
@@ -40,11 +40,7 @@ func (v *VTerm) ClearScreen() {
 	v.MarkAllDirty()
 	if v.inAltScreen {
 		// Use default colors, not currentFG/BG which might be from previous content
-		for y := range v.altBuffer {
-			for x := range v.altBuffer[y] {
-				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
-			}
-		}
+		v.altBufferClearRegion(0, 0, v.width-1, v.height-1, v.defaultFG, v.defaultBG)
 		v.SetCursorPos(0, 0)
 	} else {
 		// Use display buffer clear
@@ -59,24 +55,12 @@ func (v *VTerm) ClearVisibleScreen() {
 	v.MarkAllDirty()
 	if v.inAltScreen {
 		// Use default colors for cleared cells
-		for y := range v.altBuffer {
-			for x := range v.altBuffer[y] {
-				v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
-			}
-		}
+		v.altBufferClearRegion(0, 0, v.width-1, v.height-1, v.defaultFG, v.defaultBG)
 		// Cursor position unchanged
 	} else {
-		// For main screen, clear all visible lines
-		logicalTop := v.getTopHistoryLine()
-		blankLine := make([]Cell, v.width)
-		for x := 0; x < v.width; x++ {
-			blankLine[x] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-		}
-		for y := 0; y < v.height; y++ {
-			logicalY := logicalTop + y
-			if logicalY < v.getHistoryLen() {
-				v.setHistoryLine(logicalY, append([]Cell(nil), blankLine...))
-			}
+		// For main screen, use display buffer to clear visible area
+		if v.IsDisplayBufferEnabled() {
+			v.displayBufferEraseScreen(2)
 		}
 		// Cursor position unchanged
 	}

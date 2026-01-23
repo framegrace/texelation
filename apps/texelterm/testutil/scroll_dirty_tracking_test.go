@@ -50,7 +50,7 @@ func TestScrollRegionDirtyTracking(t *testing.T) {
 
 		// Simulate render
 		grid := replayer.GetGrid()
-		dirtyLines, allDirty := replayer.GetDirtyLines()
+		dirtyLines, allDirty := replayer.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 10 && y < len(grid); y++ {

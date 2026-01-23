@@ -189,7 +189,7 @@ func (r *Replayer) ClearResponses() {
 // From CLAUDE.md:
 // "Tests must simulate the actual render path with dirty tracking"
 func (r *Replayer) SimulateRender() {
-	dirtyLines, allDirty := r.vterm.GetDirtyLines()
+	dirtyLines, allDirty := r.vterm.DirtyLines()
 	vtermGrid := r.vterm.Grid()
 
 	if allDirty {
@@ -239,7 +239,7 @@ func (r *Replayer) PlayAndRenderChunks(chunkSize int) {
 // GetSnapshot captures the current state.
 func (r *Replayer) GetSnapshot() *Snapshot {
 	grid := r.vterm.Grid()
-	dirtyLines, allDirty := r.vterm.GetDirtyLines()
+	dirtyLines, allDirty := r.vterm.DirtyLines()
 
 	// Deep copy grid
 	gridCopy := make([][]parser.Cell, len(grid))
@@ -290,9 +290,9 @@ func (r *Replayer) GetCursor() (x, y int) {
 	return r.vterm.Cursor()
 }
 
-// GetDirtyLines returns the current dirty tracking state.
-func (r *Replayer) GetDirtyLines() (map[int]bool, bool) {
-	return r.vterm.GetDirtyLines()
+// DirtyLines returns the current dirty tracking state.
+func (r *Replayer) DirtyLines() (map[int]bool, bool) {
+	return r.vterm.DirtyLines()
 }
 
 // AtEnd returns true if all bytes have been played.

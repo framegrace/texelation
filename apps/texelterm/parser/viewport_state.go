@@ -417,8 +417,9 @@ func (vs *ViewportState) InsertCharacters(n int, fg, bg Color) {
 
 // --- Scroll Operations ---
 
-// ScrollUp scrolls the viewport up (content moves up, new blank line at bottom).
-func (vs *ViewportState) ScrollUp(n int) {
+// ScrollContentUp scrolls content up (content moves up, new blank line at bottom).
+// This is the terminal escape sequence behavior (LF at bottom of screen).
+func (vs *ViewportState) ScrollContentUp(n int) {
 	if n <= 0 {
 		return
 	}
@@ -454,8 +455,9 @@ func (vs *ViewportState) ScrollUp(n int) {
 	}
 }
 
-// ScrollDown scrolls the viewport down (content moves down, new blank line at top).
-func (vs *ViewportState) ScrollDown(n int) {
+// ScrollContentDown scrolls content down (content moves down, new blank line at top).
+// This is the terminal escape sequence behavior (reverse index).
+func (vs *ViewportState) ScrollContentDown(n int) {
 	if n <= 0 {
 		return
 	}
@@ -571,6 +573,129 @@ func (vs *ViewportState) ScrollRegionDown(top, bottom, n int) {
 		for y := top; y <= bottom; y++ {
 			if len(vs.grid[y]) > 0 {
 				vs.debugLog("[VS]   AFTER row[%d][0] = '%c' (0x%04X)", y, vs.grid[y][0].Rune, vs.grid[y][0].Rune)
+			}
+		}
+	}
+}
+
+// ScrollColumnsUp scrolls content up within a column range [leftCol, rightCol]
+// across row range [top, bottom]. This is for left/right margin scrolling.
+// Content in the column range shifts up by n rows, bottom rows are cleared.
+func (vs *ViewportState) ScrollColumnsUp(top, bottom, leftCol, rightCol, n int, clearFG, clearBG Color) {
+	if n <= 0 || top < 0 || bottom >= vs.height || top > bottom {
+		return
+	}
+	if leftCol < 0 {
+		leftCol = 0
+	}
+	if rightCol >= vs.width {
+		rightCol = vs.width - 1
+	}
+	if leftCol > rightCol {
+		return
+	}
+
+	// Shift content within columns upward
+	for y := top; y <= bottom-n; y++ {
+		srcY := y + n
+		if srcY <= bottom {
+			for x := leftCol; x <= rightCol; x++ {
+				vs.grid[y][x] = vs.grid[srcY][x]
+			}
+			vs.rowMeta[y].State = LineStateDirty
+		}
+	}
+
+	// Clear the bottom n rows' column range
+	clearStart := bottom - n + 1
+	if clearStart < top {
+		clearStart = top
+	}
+	for y := clearStart; y <= bottom; y++ {
+		for x := leftCol; x <= rightCol; x++ {
+			vs.grid[y][x] = Cell{Rune: ' ', FG: clearFG, BG: clearBG}
+		}
+		vs.rowMeta[y].State = LineStateDirty
+	}
+}
+
+// ScrollColumnsDown scrolls content down within a column range [leftCol, rightCol]
+// across row range [top, bottom]. This is for left/right margin scrolling.
+// Content in the column range shifts down by n rows, top rows are cleared.
+func (vs *ViewportState) ScrollColumnsDown(top, bottom, leftCol, rightCol, n int, clearFG, clearBG Color) {
+	if n <= 0 || top < 0 || bottom >= vs.height || top > bottom {
+		return
+	}
+	if leftCol < 0 {
+		leftCol = 0
+	}
+	if rightCol >= vs.width {
+		rightCol = vs.width - 1
+	}
+	if leftCol > rightCol {
+		return
+	}
+
+	// Shift content within columns downward
+	for y := bottom; y >= top+n; y-- {
+		srcY := y - n
+		if srcY >= top {
+			for x := leftCol; x <= rightCol; x++ {
+				vs.grid[y][x] = vs.grid[srcY][x]
+			}
+			vs.rowMeta[y].State = LineStateDirty
+		}
+	}
+
+	// Clear the top n rows' column range
+	clearEnd := top + n - 1
+	if clearEnd > bottom {
+		clearEnd = bottom
+	}
+	for y := top; y <= clearEnd; y++ {
+		for x := leftCol; x <= rightCol; x++ {
+			vs.grid[y][x] = Cell{Rune: ' ', FG: clearFG, BG: clearBG}
+		}
+		vs.rowMeta[y].State = LineStateDirty
+	}
+}
+
+// ScrollColumnsHorizontal scrolls content horizontally within a column range.
+// n > 0: shift right (blank inserted at left), n < 0: shift left (blank at right).
+func (vs *ViewportState) ScrollColumnsHorizontal(top, bottom, leftCol, rightCol, n int, clearFG, clearBG Color) {
+	if n == 0 || top < 0 || bottom >= vs.height || top > bottom {
+		return
+	}
+	if leftCol < 0 {
+		leftCol = 0
+	}
+	if rightCol >= vs.width {
+		rightCol = vs.width - 1
+	}
+	if leftCol > rightCol {
+		return
+	}
+
+	if n > 0 {
+		// Scroll right: shift content right, insert blank at left
+		for i := 0; i < n; i++ {
+			for y := top; y <= bottom; y++ {
+				for x := rightCol; x > leftCol; x-- {
+					vs.grid[y][x] = vs.grid[y][x-1]
+				}
+				vs.grid[y][leftCol] = Cell{Rune: ' ', FG: clearFG, BG: clearBG}
+				vs.rowMeta[y].State = LineStateDirty
+			}
+		}
+	} else {
+		// Scroll left: shift content left, insert blank at right
+		for i := 0; i < -n; i++ {
+			for y := top; y <= bottom; y++ {
+				for x := leftCol; x < rightCol; x++ {
+					vs.grid[y][x] = vs.grid[y][x+1]
+				}
+				vs.grid[y][rightCol] = Cell{Rune: ' ', FG: clearFG, BG: clearBG}
+				vs.rowMeta[y].State = LineStateDirty
 			}
 		}
 	}

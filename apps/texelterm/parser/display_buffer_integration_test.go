@@ -42,7 +42,7 @@ func TestDisplayBuffer_FreshTerminal(t *testing.T) {
 
 	// Simulate shell writing a prompt: "$ "
 	for _, ch := range "$ " {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 
 	t.Logf("After prompt '$ ':")
@@ -80,7 +80,7 @@ func TestDisplayBuffer_LineFeed(t *testing.T) {
 
 	// Write first line
 	for _, ch := range "Line1" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 
 	t.Logf("After 'Line1':")
@@ -96,7 +96,7 @@ func TestDisplayBuffer_LineFeed(t *testing.T) {
 
 	// Write second line
 	for _, ch := range "Line2" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 
 	t.Logf("After 'Line2':")
@@ -128,7 +128,7 @@ func TestDisplayBuffer_CursorMatchesContent(t *testing.T) {
 	v.EnableDisplayBuffer()
 
 	// Write a character
-	v.placeChar('X')
+	v.writeCharWithWrapping('X')
 
 	grid := v.Grid()
 	cursorX, cursorY := v.Cursor()
@@ -157,9 +157,9 @@ func TestDisplayBuffer_MultipleLinesFillScreen(t *testing.T) {
 	// Write 5 lines (exactly filling the screen)
 	for i := 1; i <= 5; i++ {
 		for _, ch := range "Line" {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
-		v.placeChar(rune('0' + i))
+		v.writeCharWithWrapping(rune('0' + i))
 		if i < 5 {
 			v.CarriageReturn()
 			v.LineFeed()
@@ -192,9 +192,9 @@ func TestDisplayBuffer_ScrollOnOverflow(t *testing.T) {
 	// Write 6 lines (one more than screen height)
 	for i := 1; i <= 6; i++ {
 		for _, ch := range "Line" {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
-		v.placeChar(rune('0' + i))
+		v.writeCharWithWrapping(rune('0' + i))
 		if i < 6 {
 			v.CarriageReturn()
 			v.LineFeed()
@@ -226,7 +226,7 @@ func TestDisplayBuffer_BackspaceErases(t *testing.T) {
 
 	// Write "ABCD"
 	for _, ch := range "ABCD" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 
 	t.Logf("After 'ABCD': cursorX=%d, logicalX=%d", v.cursorX, v.displayBuf.display.GetCursorOffset())
@@ -269,9 +269,9 @@ func TestDisplayBuffer_WithDiskPersistence(t *testing.T) {
 	// Write 3 lines
 	for i := 1; i <= 3; i++ {
 		for _, ch := range "Line" {
-			v1.placeChar(ch)
+			v1.writeCharWithWrapping(ch)
 		}
-		v1.placeChar(rune('0' + i))
+		v1.writeCharWithWrapping(rune('0' + i))
 		v1.CarriageReturn()
 		v1.LineFeed()
 	}
@@ -301,7 +301,7 @@ func TestDisplayBuffer_WithDiskPersistence(t *testing.T) {
 
 	// Now write new content - it should appear where the cursor is
 	for _, ch := range "NEW" {
-		v2.placeChar(ch)
+		v2.writeCharWithWrapping(ch)
 	}
 
 	grid = v2.Grid()
@@ -339,9 +339,9 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 	// In real usage, uncommitted content (like shell prompt) is redrawn by shell via SIGWINCH.
 	for i := 1; i <= 3; i++ {
 		for _, ch := range "Line" {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
-		v.placeChar(rune('0' + i))
+		v.writeCharWithWrapping(rune('0' + i))
 		v.CarriageReturn()
 		v.LineFeed()
 	}
@@ -375,7 +375,7 @@ func TestDisplayBuffer_ResizeKeepsLiveEdge(t *testing.T) {
 
 	// Write more content - it should appear at the cursor position (row 3)
 	for _, ch := range "NewLine" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 
 	grid = v.Grid()
@@ -396,7 +396,7 @@ func TestDisplayBuffer_WrapWithoutScrollDirty(t *testing.T) {
 
 	// Write first line and commit it
 	for _, ch := range "Line1" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 	v.CarriageReturn()
 	v.LineFeed()
@@ -408,17 +408,17 @@ func TestDisplayBuffer_WrapWithoutScrollDirty(t *testing.T) {
 
 	// Now write a long line that wraps (but doesn't need to scroll)
 	for i, ch := range "ABCDEFGHIJ" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		if i == 9 {
-			dirtyLines, allDirty := v.GetDirtyLines()
+			dirtyLines, allDirty := v.DirtyLines()
 			t.Logf("After char 10 (J): allDirty=%v, dirtyLines=%v", allDirty, dirtyLines)
 		}
 		v.ClearDirty()
 	}
 
 	// Type the wrap-triggering character
-	v.placeChar('K')
-	dirtyLines, allDirty := v.GetDirtyLines()
+	v.writeCharWithWrapping('K')
+	dirtyLines, allDirty := v.DirtyLines()
 	t.Logf("After 'K' (wrap, no scroll): cursorY=%d, allDirty=%v, dirtyLines=%v",
 		v.cursorY, allDirty, dirtyLines)
 
@@ -459,7 +459,7 @@ func TestDisplayBuffer_FreshTerminalWrap(t *testing.T) {
 	// Write a long line that wraps
 	text := "ABCDEFGHIJKLMNO"
 	for i, ch := range text {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		if i == 9 || i == 10 || i == 14 {
 			grid := v.Grid()
 			t.Logf("After char %d (%c): cursorX=%d, cursorY=%d", i+1, ch, v.cursorX, v.cursorY)
@@ -498,12 +498,12 @@ func TestDisplayBuffer_CursorRowMatchesContent(t *testing.T) {
 	// Type characters, checking after each that the cursor row has the right content
 	text := "ABCDEFGHIJKLMNO"
 	for i, ch := range text {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		grid := v.Grid()
 
 		// After placing a character, cursor has already moved past it (cursorX-1 has the char)
 		// When we just wrapped, cursorX might be 1 (we placed at 0, then moved to 1)
-		// Actually, after placeChar, cursor is at the position AFTER the char
+		// Actually, after writeCharWithWrapping, cursor is at the position AFTER the char
 
 		// The important check: Grid()[cursorY] should contain the character we just typed
 		row := grid[v.cursorY]
@@ -534,12 +534,12 @@ func TestDisplayBuffer_WrapContentMatchesCursorRow(t *testing.T) {
 
 	// Fill the first line exactly
 	for _, ch := range "ABCDEFGHIJ" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 	t.Logf("After 10 chars: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
 
 	// Now type 'K' which should wrap
-	v.placeChar('K')
+	v.writeCharWithWrapping('K')
 	t.Logf("After 'K': cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
 
 	grid := v.Grid()
@@ -579,7 +579,7 @@ func TestDisplayBuffer_RapidWrapWithDirtyClearing(t *testing.T) {
 	// Simulate the exact Render() flow from term.go
 	render := func() {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -604,7 +604,7 @@ func TestDisplayBuffer_RapidWrapWithDirtyClearing(t *testing.T) {
 
 	// Type 10 characters, rendering after each (this fills the line)
 	for _, ch := range "ABCDEFGHIJ" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		render()
 	}
 
@@ -617,9 +617,9 @@ func TestDisplayBuffer_RapidWrapWithDirtyClearing(t *testing.T) {
 	t.Logf("Before wrap: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
 
 	// Type K - this triggers wrap
-	v.placeChar('K')
+	v.writeCharWithWrapping('K')
 	t.Logf("After 'K': cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
-	t.Logf("  Dirty before render: %v", func() map[int]bool { d, _ := v.GetDirtyLines(); return d }())
+	t.Logf("  Dirty before render: %v", func() map[int]bool { d, _ := v.DirtyLines(); return d }())
 
 	render()
 
@@ -638,7 +638,7 @@ func TestDisplayBuffer_RapidWrapWithDirtyClearing(t *testing.T) {
 
 	// Continue typing
 	for _, ch := range "LMNO" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		render()
 	}
 
@@ -656,9 +656,9 @@ func TestDisplayBuffer_DirtyTrackingOnWrap(t *testing.T) {
 	// Fill up the screen
 	for i := 1; i <= 4; i++ {
 		for _, ch := range "Line" {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
-		v.placeChar(rune('0' + i))
+		v.writeCharWithWrapping(rune('0' + i))
 		v.CarriageReturn()
 		v.LineFeed()
 	}
@@ -668,16 +668,16 @@ func TestDisplayBuffer_DirtyTrackingOnWrap(t *testing.T) {
 
 	// Write characters up to the wrap point, simulating Render() after each
 	for i, ch := range "ABCDEFGHIJ" {
-		v.placeChar(ch)
-		dirtyLines, allDirty := v.GetDirtyLines()
+		v.writeCharWithWrapping(ch)
+		dirtyLines, allDirty := v.DirtyLines()
 		t.Logf("After char %d (%c): cursorY=%d, allDirty=%v, dirtyLines=%v",
 			i+1, ch, v.cursorY, allDirty, dirtyLines)
 		v.ClearDirty() // Simulate Render() clearing dirty
 	}
 
 	// Now type the wrap-triggering character
-	v.placeChar('K')
-	dirtyLines, allDirty := v.GetDirtyLines()
+	v.writeCharWithWrapping('K')
+	dirtyLines, allDirty := v.DirtyLines()
 	t.Logf("After 'K' (wrap): cursorY=%d, allDirty=%v, dirtyLines=%v",
 		v.cursorY, allDirty, dirtyLines)
 
@@ -699,9 +699,9 @@ func TestDisplayBuffer_LineWrapWithScroll(t *testing.T) {
 	// Fill up the screen with 4 committed lines
 	for i := 1; i <= 4; i++ {
 		for _, ch := range "Line" {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
-		v.placeChar(rune('0' + i))
+		v.writeCharWithWrapping(rune('0' + i))
 		v.CarriageReturn()
 		v.LineFeed()
 	}
@@ -715,7 +715,7 @@ func TestDisplayBuffer_LineWrapWithScroll(t *testing.T) {
 	// Now write a long line that wraps - this should cause scrolling
 	text := "ABCDEFGHIJKLMNO" // 15 chars = wraps to 2 lines
 	for i, ch := range text {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		if i == 9 || i == 10 { // Log around the wrap point
 			t.Logf("After char %d (%c): cursorX=%d, cursorY=%d, logicalX=%d",
 				i+1, ch, v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
@@ -741,9 +741,9 @@ func TestDisplayBuffer_LineWrapWithHistory(t *testing.T) {
 	// First, write and commit a few lines
 	for i := 1; i <= 2; i++ {
 		for _, ch := range "Line" {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
-		v.placeChar(rune('0' + i))
+		v.writeCharWithWrapping(rune('0' + i))
 		v.CarriageReturn()
 		v.LineFeed()
 	}
@@ -754,7 +754,7 @@ func TestDisplayBuffer_LineWrapWithHistory(t *testing.T) {
 	// Now write a long line that wraps
 	text := "ABCDEFGHIJKLMNO" // 15 chars = wraps to 2 lines
 	for i, ch := range text {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		t.Logf("After char %d (%c): cursorX=%d, cursorY=%d, logicalX=%d",
 			i+1, ch, v.cursorX, v.cursorY, v.displayBuf.display.GetCursorOffset())
 	}
@@ -791,7 +791,7 @@ func TestDisplayBuffer_LineWrap(t *testing.T) {
 	// Write 15 characters - should wrap to second line
 	text := "ABCDEFGHIJKLMNO" // 15 chars
 	for _, ch := range text {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 
 	t.Logf("After writing 15 chars:")
@@ -829,9 +829,9 @@ func TestDisplayBuffer_ResizeWithFullScreen(t *testing.T) {
 	// Write 5 lines (exactly filling the screen)
 	for i := 1; i <= 5; i++ {
 		for _, ch := range "Line" {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
-		v.placeChar(rune('0' + i))
+		v.writeCharWithWrapping(rune('0' + i))
 		if i < 5 {
 			v.CarriageReturn()
 			v.LineFeed()
@@ -888,7 +888,7 @@ func TestDisplayBuffer_RenderFlowWithWrapAfterHistory(t *testing.T) {
 	// Simulate rendering function
 	simulateRender := func() {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -911,9 +911,9 @@ func TestDisplayBuffer_RenderFlowWithWrapAfterHistory(t *testing.T) {
 	// Write 3 committed lines first (simulating shell output)
 	for i := 1; i <= 3; i++ {
 		for _, ch := range "Line" {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
-		v.placeChar(rune('0' + i))
+		v.writeCharWithWrapping(rune('0' + i))
 		v.CarriageReturn()
 		v.LineFeed()
 		simulateRender()
@@ -925,7 +925,7 @@ func TestDisplayBuffer_RenderFlowWithWrapAfterHistory(t *testing.T) {
 	// Now simulate user typing at the prompt on row 3
 	// Type 10 characters to fill the line
 	for i, ch := range "ABCDEFGHIJ" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		simulateRender()
 		if i == 9 {
 			t.Logf("After 10 chars: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
@@ -938,9 +938,9 @@ func TestDisplayBuffer_RenderFlowWithWrapAfterHistory(t *testing.T) {
 
 	// Now type 'K' to trigger wrap
 	t.Logf("Typing 'K' to trigger wrap...")
-	v.placeChar('K')
+	v.writeCharWithWrapping('K')
 
-	dirtyLines, allDirty := v.GetDirtyLines()
+	dirtyLines, allDirty := v.DirtyLines()
 	t.Logf("After 'K': cursorX=%d, cursorY=%d, allDirty=%v, dirtyLines=%v",
 		v.cursorX, v.cursorY, allDirty, dirtyLines)
 
@@ -984,7 +984,7 @@ func TestDisplayBuffer_RenderFlowWithWrap(t *testing.T) {
 	// Simulate rendering function (like term.go's Render)
 	simulateRender := func() {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -1010,7 +1010,7 @@ func TestDisplayBuffer_RenderFlowWithWrap(t *testing.T) {
 
 	// Type first 10 characters (fill first line)
 	for i, ch := range "ABCDEFGHIJ" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		simulateRender()
 		t.Logf("After char %d (%c): cursorX=%d, cursorY=%d", i+1, ch, v.cursorX, v.cursorY)
 	}
@@ -1026,10 +1026,10 @@ func TestDisplayBuffer_RenderFlowWithWrap(t *testing.T) {
 	t.Logf("About to type 'K' (11th char, should wrap)")
 	t.Logf("  Before: cursorX=%d, cursorY=%d, wrapNext=%v", v.cursorX, v.cursorY, v.wrapNext)
 
-	v.placeChar('K')
+	v.writeCharWithWrapping('K')
 
 	t.Logf("  After: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
-	dirtyLines, allDirty := v.GetDirtyLines()
+	dirtyLines, allDirty := v.DirtyLines()
 	t.Logf("  dirtyLines=%v, allDirty=%v", dirtyLines, allDirty)
 
 	// Simulate render
@@ -1054,7 +1054,7 @@ func TestDisplayBuffer_RenderFlowWithWrap(t *testing.T) {
 
 	// Type a few more characters
 	for i, ch := range "LMNO" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 		simulateRender()
 		t.Logf("After char %d (%c): cursorX=%d, cursorY=%d", 12+i, ch, v.cursorX, v.cursorY)
 	}
@@ -1093,7 +1093,7 @@ func TestDisplayBuffer_WrapWithParser(t *testing.T) {
 	// Simulate rendering function
 	simulateRender := func() {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -1184,7 +1184,7 @@ func TestDisplayBuffer_RuntimeAdapterRunnerFlow(t *testing.T) {
 	// Simulate exact Render() flow from term.go
 	simulateRender := func() {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -1248,7 +1248,7 @@ func TestDisplayBuffer_RuntimeAdapterRunnerFlow(t *testing.T) {
 	t.Logf("After 'K' parsed: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
 
 	// Check dirty state before render
-	dirtyLines, allDirty := v.GetDirtyLines()
+	dirtyLines, allDirty := v.DirtyLines()
 	t.Logf("Dirty state after 'K': allDirty=%v, dirtyLines=%v", allDirty, dirtyLines)
 
 	// Step 4: requestRefresh triggers draw()
@@ -1352,7 +1352,7 @@ func TestDisplayBuffer_WrapAfterLoadingHistory(t *testing.T) {
 
 	simulateRender := func() {
 		vtermGrid := v2.Grid()
-		dirtyLines, allDirty := v2.GetDirtyLines()
+		dirtyLines, allDirty := v2.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -1395,7 +1395,7 @@ func TestDisplayBuffer_WrapAfterLoadingHistory(t *testing.T) {
 	p2.Parse('K')
 
 	t.Logf("After 'K': cursorX=%d, cursorY=%d", v2.cursorX, v2.cursorY)
-	dirtyLines, allDirty := v2.GetDirtyLines()
+	dirtyLines, allDirty := v2.DirtyLines()
 	t.Logf("Dirty after 'K': allDirty=%v, dirtyLines=%v", allDirty, dirtyLines)
 
 	simulateRender()
@@ -1433,7 +1433,7 @@ func TestDisplayBuffer_BashReadlineWrap(t *testing.T) {
 
 	simulateRender := func() {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -1536,7 +1536,7 @@ func TestDisplayBuffer_RuntimeAdapterRunnerFlowWithDisk(t *testing.T) {
 	// Simulate exact Render() flow from term.go
 	simulateRender := func() {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -1585,7 +1585,7 @@ func TestDisplayBuffer_RuntimeAdapterRunnerFlowWithDisk(t *testing.T) {
 	t.Logf("After 'K' parsed: cursorX=%d, cursorY=%d", v.cursorX, v.cursorY)
 
 	// Check dirty state before render
-	dirtyLines, allDirty := v.GetDirtyLines()
+	dirtyLines, allDirty := v.DirtyLines()
 	t.Logf("Dirty state after 'K': allDirty=%v, dirtyLines=%v", allDirty, dirtyLines)
 
 	simulateRender() // draw() after echo
@@ -1646,7 +1646,7 @@ func TestDisplayBuffer_40ColumnWrap(t *testing.T) {
 
 	simulateRender := func(label string) {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		t.Logf("[%s] cursorX=%d, cursorY=%d, allDirty=%v, dirtyLines=%v",
 			label, v.cursorX, v.cursorY, allDirty, dirtyLines)
@@ -1746,7 +1746,7 @@ func TestDisplayBuffer_40ColumnWrapWithPrompt(t *testing.T) {
 
 	simulateRender := func(label string) {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -1849,7 +1849,7 @@ func TestDisplayBuffer_CursorMovementOnWrappedLine(t *testing.T) {
 
 	simulateRender := func() {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < 5; y++ {
@@ -1977,7 +1977,7 @@ func TestDisplayBuffer_BashReadlineWrapWithCR(t *testing.T) {
 
 	// Simulate render: only update dirty rows (this is how the real terminal works)
 	simulateRender := func() {
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 		vtermGrid := v.Grid()
 		if allDirty {
 			for y := 0; y < height; y++ {
@@ -2002,7 +2002,7 @@ func TestDisplayBuffer_BashReadlineWrapWithCR(t *testing.T) {
 	// This matches the debug log scenario: "❯ 1234567890abcdefghijklmnopqrstABC"
 	inputLine := "12345678901234567890abcdefghijklmno" // 35 chars
 	for _, ch := range inputLine {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 	simulateRender()
 
@@ -2018,7 +2018,7 @@ func TestDisplayBuffer_BashReadlineWrapWithCR(t *testing.T) {
 	}
 
 	// Type one more character to trigger wrap
-	v.placeChar('p')
+	v.writeCharWithWrapping('p')
 	simulateRender()
 
 	// Now cursor should be on row 1
@@ -2044,9 +2044,9 @@ func TestDisplayBuffer_BashReadlineWrapWithCR(t *testing.T) {
 	}
 
 	// Now type more characters - they should appear on row 1, not row 0
-	v.placeChar('q')
-	v.placeChar('r')
-	v.placeChar('s')
+	v.writeCharWithWrapping('q')
+	v.writeCharWithWrapping('r')
+	v.writeCharWithWrapping('s')
 	simulateRender()
 
 	// Check the render buffer - this is what the user actually sees
@@ -2101,7 +2101,7 @@ func TestDisplayBuffer_WrapDirtyTrackingRegression(t *testing.T) {
 	}
 
 	simulateRender := func() {
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 		vtermGrid := v.Grid()
 		if allDirty {
 			for y := 0; y < height && y < len(vtermGrid); y++ {
@@ -2126,14 +2126,14 @@ func TestDisplayBuffer_WrapDirtyTrackingRegression(t *testing.T) {
 		{"initial render", func() {}},
 		{"type A-J (10 chars)", func() {
 			for _, ch := range "ABCDEFGHIJ" {
-				v.placeChar(ch)
+				v.writeCharWithWrapping(ch)
 			}
 		}},
-		{"type K (triggers wrap)", func() { v.placeChar('K') }},
-		{"type L", func() { v.placeChar('L') }},
+		{"type K (triggers wrap)", func() { v.writeCharWithWrapping('K') }},
+		{"type L", func() { v.writeCharWithWrapping('L') }},
 		{"carriage return", func() { v.CarriageReturn() }},
-		{"type M (after CR on wrapped line)", func() { v.placeChar('M') }},
-		{"type N", func() { v.placeChar('N') }},
+		{"type M (after CR on wrapped line)", func() { v.writeCharWithWrapping('M') }},
+		{"type N", func() { v.writeCharWithWrapping('N') }},
 	}
 
 	for _, tc := range testCases {
@@ -2192,7 +2192,7 @@ func TestDisplayBuffer_BashBackspaceRedraw(t *testing.T) {
 	}
 
 	simulateRender := func(desc string) {
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 		vtermGrid := v.Grid()
 		if allDirty {
 			for y := 0; y < height && y < len(vtermGrid); y++ {
@@ -2212,7 +2212,7 @@ func TestDisplayBuffer_BashBackspaceRedraw(t *testing.T) {
 
 	// Step 1: Write a prompt line and commit it (simulates git status)
 	for _, ch := range "PROMPT" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 	v.CarriageReturn()
 	v.LineFeed()
@@ -2220,13 +2220,13 @@ func TestDisplayBuffer_BashBackspaceRedraw(t *testing.T) {
 
 	// Step 2: Write "$ " (the actual prompt) followed by content that wraps
 	for _, ch := range "$ aaaaaaaa" { // 2 + 8 = 10 chars = full row
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 	simulateRender("After first row full ($ + 8 a's)")
 
 	// Step 3: Type more to wrap
 	for _, ch := range "bb" { // 2 more chars on row 1
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 	simulateRender("After wrap (2 b's on row 1)")
 
@@ -2258,7 +2258,7 @@ func TestDisplayBuffer_BashBackspaceRedraw(t *testing.T) {
 
 	// Step 7: Bash redraws the remaining content (one less 'b')
 	for _, ch := range "$ aaaaaaaab" { // 2 + 8 + 1 = 11 chars (wraps)
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 	simulateRender("After redraw ($ + 8 a's + 1 b)")
 
@@ -2308,12 +2308,12 @@ func TestDisplayBuffer_WrapBoundaryEraseIssue(t *testing.T) {
 
 	// Step 1: Simulate git status output (2 lines)
 	for _, ch := range "git status line 1" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 	v.CarriageReturn()
 	v.LineFeed()
 	for _, ch := range "git status line 2" {
-		v.placeChar(ch)
+		v.writeCharWithWrapping(ch)
 	}
 	v.CarriageReturn()
 	v.LineFeed()
@@ -2321,16 +2321,16 @@ func TestDisplayBuffer_WrapBoundaryEraseIssue(t *testing.T) {
 
 	// Step 2: Write prompt + content that wraps
 	// "❯ " (2 chars) + 33 'a's = 35 chars (full row)
-	v.placeChar(0x276F) // ❯
-	v.placeChar(' ')
+	v.writeCharWithWrapping(0x276F) // ❯
+	v.writeCharWithWrapping(' ')
 	for i := 0; i < 33; i++ {
-		v.placeChar('a')
+		v.writeCharWithWrapping('a')
 	}
 	logState("After first row full")
 
 	// Step 3: Write 5 more 'a's (wrap to second row)
 	for i := 0; i < 5; i++ {
-		v.placeChar('a')
+		v.writeCharWithWrapping('a')
 	}
 	logState("After wrap (5 more a's)")
 
@@ -2363,10 +2363,10 @@ func TestDisplayBuffer_WrapBoundaryEraseIssue(t *testing.T) {
 	}
 
 	// Step 6: Redraw the content (without the last character)
-	v.placeChar(0x276F) // ❯
-	v.placeChar(' ')
+	v.writeCharWithWrapping(0x276F) // ❯
+	v.writeCharWithWrapping(' ')
 	for i := 0; i < 32; i++ { // One less 'a'
-		v.placeChar('a')
+		v.writeCharWithWrapping('a')
 	}
 	logState("After redraw (34 chars)")
 
@@ -2504,7 +2504,7 @@ func TestDisplayBuffer_BashReadlineInsertMultiple(t *testing.T) {
 
 	simulateRender := func(label string) {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 
 		if allDirty {
 			for y := 0; y < height; y++ {
@@ -2903,7 +2903,7 @@ func TestDisplayBuffer_SimpleOverwriteWithRenderFlow(t *testing.T) {
 
 	// Simulate render: ONLY update dirty rows (this is what the real renderer does)
 	simulateRender := func(label string) {
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 		vtermGrid := v.Grid()
 
 		if allDirty {
@@ -3115,7 +3115,7 @@ func TestDisplayBuffer_ICH_InsertCharacters(t *testing.T) {
 
 	// Type "hello world"
 	for _, r := range "hello world" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	t.Logf("Initial: line=%q, cursorX=%d", getRow(), v.cursorX)
@@ -3132,7 +3132,7 @@ func TestDisplayBuffer_ICH_InsertCharacters(t *testing.T) {
 
 	// Type "NEW" into the blank space
 	for _, r := range "NEW" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	result := getRow()
@@ -3178,7 +3178,7 @@ func TestDisplayBuffer_ICH_AtEndOfLine(t *testing.T) {
 
 	// Type "hello"
 	for _, r := range "hello" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	t.Logf("Initial: line=%q, cursorX=%d", getRow(), v.cursorX)
@@ -3190,7 +3190,7 @@ func TestDisplayBuffer_ICH_AtEndOfLine(t *testing.T) {
 
 	// Type "!!!"
 	for _, r := range "!!!" {
-		v.placeChar(r)
+		v.writeCharWithWrapping(r)
 	}
 
 	result := getRow()
@@ -3256,7 +3256,7 @@ func TestDisplayBuffer_WrappedLine_CursorMoveAndInsert(t *testing.T) {
 	}
 	simulateRender := func() {
 		vtermGrid := v.Grid()
-		dirtyLines, allDirty := v.GetDirtyLines()
+		dirtyLines, allDirty := v.DirtyLines()
 		if allDirty {
 			for y := 0; y < height && y < len(vtermGrid); y++ {
 				for x := 0; x < width && x < len(vtermGrid[y]); x++ {
@@ -3575,7 +3575,7 @@ func TestDisplayBuffer_SeamlessRecovery(t *testing.T) {
 		// Simulate OSC 133;A (prompt start) which records position for recovery
 		// Using A (not B) so multiline prompts are fully excluded
 		v.MarkPromptStart()
-		lastPromptLine := v.GetLastPromptLine()
+		lastPromptLine := v.LastPromptLine()
 
 		t.Logf("Prompt start line: %d, Committed history: %d", lastPromptLine, v.displayBuf.history.TotalLen())
 
@@ -3679,7 +3679,7 @@ func TestDisplayBuffer_ResizeWhileViewingHistory(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		line := fmt.Sprintf("History line %02d with some content", i)
 		for _, ch := range line {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
 		v.CarriageReturn()
 		v.LineFeed()
@@ -3689,7 +3689,7 @@ func TestDisplayBuffer_ResizeWhileViewingHistory(t *testing.T) {
 
 	// Scroll up into history
 	db := v.displayBuf.display
-	scrolled := db.ScrollViewportUp(10)
+	scrolled := db.ScrollViewUp(10)
 	t.Logf("Scrolled up %d rows, viewingHistory=%v", scrolled, db.CanScrollDown())
 
 	if !db.CanScrollDown() {
@@ -3749,7 +3749,7 @@ func TestDisplayBuffer_ResizeWhileViewingHistoryWidthChange(t *testing.T) {
 		// Each line is ~60 chars: fits in 80 cols, wraps at 40 cols
 		line := fmt.Sprintf("Line %02d: This is a longer line that will reflow when width changes", i)
 		for _, ch := range line {
-			v.placeChar(ch)
+			v.writeCharWithWrapping(ch)
 		}
 		v.CarriageReturn()
 		v.LineFeed()
@@ -3758,7 +3758,7 @@ func TestDisplayBuffer_ResizeWhileViewingHistoryWidthChange(t *testing.T) {
 	db := v.displayBuf.display
 
 	// Scroll up into history
-	db.ScrollViewportUp(5)
+	db.ScrollViewUp(5)
 	t.Logf("After scroll: viewingHistory=%v", db.CanScrollDown())
 
 	if !db.CanScrollDown() {

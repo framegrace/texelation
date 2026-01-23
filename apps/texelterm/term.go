@@ -9,10 +9,10 @@
 package texelterm
 
 import (
-	texelcore "github.com/framegrace/texelui/core"
 	"bufio"
 	"encoding/json"
 	"fmt"
+	texelcore "github.com/framegrace/texelui/core"
 	"io"
 	"log"
 	"math"
@@ -26,9 +26,9 @@ import (
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelation/texel"
 	"github.com/framegrace/texelui/theme"
-	"github.com/framegrace/texelation/internal/theming"
 
 	"github.com/creack/pty"
 	"github.com/gdamore/tcell/v2"
@@ -50,6 +50,11 @@ func init() {
 	}
 }
 
+const (
+	// multiClickTimeout is the maximum time between clicks to be considered a multi-click
+	multiClickTimeout = 500 * time.Millisecond
+)
+
 type TexelTerm struct {
 	title              string
 	command            string
@@ -68,15 +73,19 @@ type TexelTerm struct {
 	buf                [][]texelcore.Cell
 	colorPalette       [258]tcell.Color
 	controlBus         texelcore.ControlBus
+	selection          termSelection
 	bracketedPasteMode bool // Tracks if application has enabled bracketed paste
-
-	// Mouse and selection handling (unified for standalone and embedded modes)
-	mouseCoordinator *MouseCoordinator
 
 	// Scroll tracking for smooth velocity-based acceleration
 	scrollEventTime time.Time // For debouncing duplicate events
 	lastScrollTime  time.Time // For velocity tracking
 	scrollVelocity  float64   // Accumulated velocity
+
+	// Auto-scroll during selection
+	autoScrollActive bool
+	autoScrollStop   chan struct{}
+	lastMouseY       int
+	lastMouseX       int
 
 	// TODO: Extract confirmation dialog to a reusable cards.DialogCard
 	// that intercepts key events and renders the overlay. This would allow
@@ -107,8 +116,8 @@ func New(title, command string) texelcore.App {
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
 		closeCh:      make(chan struct{}),
-		restartCh:    make(chan struct{}, 1), // Buffered to avoid blocking
-		controlBus:   texelcore.NewControlBus(),  // Own control bus, no pipeline needed
+		restartCh:    make(chan struct{}, 1),    // Buffered to avoid blocking
+		controlBus:   texelcore.NewControlBus(), // Own control bus, no pipeline needed
 	}
 
 	return term
@@ -293,9 +302,9 @@ func (a *TexelTerm) saveStateLocked() {
 	state := terminalState{
 		CursorX:          cursorX,
 		CursorY:          cursorY,
-		ScrollOffset:     a.vterm.GetScrollOffset(),
-		LastPromptLine:   a.vterm.GetLastPromptLine(),
-		LastPromptHeight: a.vterm.GetLastPromptHeight(),
+		ScrollOffset:     a.vterm.ScrollOffset(),
+		LastPromptLine:   a.vterm.LastPromptLine(),
+		LastPromptHeight: a.vterm.LastPromptHeight(),
 	}
 
 	log.Printf("[TEXELTERM] Saving state: scrollOffset=%d, cursor=(%d,%d), lastPromptLine=%d, promptHeight=%d",
@@ -373,6 +382,57 @@ func colorToHex(c tcell.Color) string {
 	return fmt.Sprintf("#%02X%02X%02X", r&0xFF, g&0xFF, b&0xFF)
 }
 
+// logRenderDebug logs render state when TEXELTERM_DEBUG is set.
+// Logs cursor position, dirty lines, and content of rows being rendered.
+func (a *TexelTerm) logRenderDebug(grid [][]parser.Cell, cursorX, cursorY int, dirtyLines map[int]bool, allDirty bool) {
+	if a.renderDebugLog == nil {
+		return
+	}
+
+	rows := len(grid)
+	cols := 0
+	if rows > 0 {
+		cols = len(grid[0])
+	}
+
+	a.renderDebugLog("Render: cursorX=%d, cursorY=%d, allDirty=%v, dirtyLines=%v",
+		cursorX, cursorY, allDirty, dirtyLines)
+
+	// Determine which rows to log
+	rowsToLog := make(map[int]bool)
+	if allDirty {
+		// Log first 5 rows plus rows around cursor
+		for y := 0; y < 5 && y < rows; y++ {
+			rowsToLog[y] = true
+		}
+		for y := cursorY - 2; y <= cursorY+2; y++ {
+			if y >= 0 && y < rows {
+				rowsToLog[y] = true
+			}
+		}
+	} else {
+		for y := range dirtyLines {
+			rowsToLog[y] = true
+		}
+	}
+
+	// Log content of selected rows (first 50 chars)
+	for y := 0; y < rows; y++ {
+		if !rowsToLog[y] {
+			continue
+		}
+		var content string
+		for x := 0; x < cols && x < 50; x++ {
+			r := grid[y][x].Rune
+			if r == 0 {
+				r = ' '
+			}
+			content += string(r)
+		}
+		a.renderDebugLog("  vtermGrid[%d]: %q", y, content)
+	}
+}
+
 func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -399,43 +459,9 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	cursorX, cursorY := a.vterm.Cursor()
 	// Only show cursor if it's visible AND we're at the live edge (not scrolled into history)
 	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
-	dirtyLines, allDirty := a.vterm.GetDirtyLines()
+	dirtyLines, allDirty := a.vterm.DirtyLines()
 
-	// Debug: Log render state when TEXELTERM_DEBUG is set
-	if a.renderDebugLog != nil {
-		a.renderDebugLog("Render: cursorX=%d, cursorY=%d, allDirty=%v, dirtyLines=%v",
-			cursorX, cursorY, allDirty, dirtyLines)
-		// Log content of dirty rows (or first 5 if allDirty)
-		rowsToLog := make(map[int]bool)
-		if allDirty {
-			for y := 0; y < 5 && y < rows; y++ {
-				rowsToLog[y] = true
-			}
-			// Also log around cursor
-			for y := cursorY - 2; y <= cursorY + 2; y++ {
-				if y >= 0 && y < rows {
-					rowsToLog[y] = true
-				}
-			}
-		} else {
-			for y := range dirtyLines {
-				rowsToLog[y] = true
-			}
-		}
-		for y := 0; y < rows; y++ {
-			if rowsToLog[y] {
-				var content string
-				for x := 0; x < cols && x < 50; x++ {
-					r := vtermGrid[y][x].Rune
-					if r == 0 {
-						r = ' '
-					}
-					content += string(r)
-				}
-				a.renderDebugLog("  vtermGrid[%d]: %q", y, content)
-			}
-		}
-	}
+	a.logRenderDebug(vtermGrid, cursorX, cursorY, dirtyLines, allDirty)
 
 	renderLine := func(y int) {
 		for x := 0; x < cols; x++ {
@@ -469,40 +495,122 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	return a.buf
 }
 
-func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
-	a.mu.Lock()
-	if a.confirmClose {
-		if ev.Key() == tcell.KeyRune {
-			r := ev.Rune()
-			if r == 'y' || r == 'Y' {
-				a.confirmClose = false // Dismiss dialog
-				if a.confirmCallback != nil {
-					a.mu.Unlock()
-					a.confirmCallback()
-					return // Callback handles close
-				}
-				// Internal close (PTY exit) - user confirmed, close the pane
-				a.closeOnce.Do(func() {
-					close(a.closeCh)
-				})
-			} else if r == 'n' || r == 'N' {
-				a.confirmClose = false
-				wasExternal := a.confirmCallback != nil
-				a.confirmCallback = nil // Clear callback
-				if a.vterm != nil {
-					a.vterm.MarkAllDirty() // Force full redraw to clear dialog
-				}
-				a.requestRefresh()
-				// If this was an internal close (shell exit), restart the shell
-				if !wasExternal {
-					// Signal restart in non-blocking way
-					select {
-					case a.restartCh <- struct{}{}:
-					default:
-					}
-				}
+// handleConfirmationKey processes key events when the close confirmation dialog is shown.
+// Returns true if the key was handled by the confirmation dialog.
+// Caller must hold a.mu on entry; the lock may be released during callback execution.
+func (a *TexelTerm) handleConfirmationKey(ev *tcell.EventKey) bool {
+	if !a.confirmClose {
+		return false
+	}
+	if ev.Key() != tcell.KeyRune {
+		return true // Absorb non-rune keys while dialog is shown
+	}
+
+	r := ev.Rune()
+	if r == 'y' || r == 'Y' {
+		a.confirmClose = false
+		if a.confirmCallback != nil {
+			a.mu.Unlock()
+			a.confirmCallback()
+			a.mu.Lock()
+			return true
+		}
+		// Internal close (PTY exit) - user confirmed, close the pane
+		a.closeOnce.Do(func() { close(a.closeCh) })
+	} else if r == 'n' || r == 'N' {
+		a.confirmClose = false
+		wasExternal := a.confirmCallback != nil
+		a.confirmCallback = nil
+		if a.vterm != nil {
+			a.vterm.MarkAllDirty()
+		}
+		a.requestRefresh()
+		// If this was an internal close (shell exit), restart the shell
+		if !wasExternal {
+			select {
+			case a.restartCh <- struct{}{}:
+			default:
 			}
 		}
+	}
+	return true
+}
+
+// handleAltScrollKey processes Alt+key combinations for scrollback navigation.
+// Returns true if the key was handled as a scroll operation.
+func (a *TexelTerm) handleAltScrollKey(key tcell.Key) bool {
+	var scrollAmount int
+	switch key {
+	case tcell.KeyPgDn:
+		scrollAmount = a.height
+	case tcell.KeyPgUp:
+		scrollAmount = -a.height
+	case tcell.KeyDown:
+		scrollAmount = 1
+	case tcell.KeyUp:
+		scrollAmount = -1
+	default:
+		return false
+	}
+
+	a.mu.Lock()
+	a.vterm.Scroll(scrollAmount)
+	a.saveStateLocked()
+	a.mu.Unlock()
+
+	a.requestRefresh()
+	return true
+}
+
+// keyToEscapeSequence converts a tcell key event to the appropriate escape sequence.
+// appMode indicates whether the terminal is in application cursor keys mode.
+func (a *TexelTerm) keyToEscapeSequence(ev *tcell.EventKey, appMode bool) []byte {
+	switch ev.Key() {
+	case tcell.KeyUp:
+		return []byte(If(appMode, "\x1bOA", "\x1b[A"))
+	case tcell.KeyDown:
+		return []byte(If(appMode, "\x1bOB", "\x1b[B"))
+	case tcell.KeyRight:
+		return []byte(If(appMode, "\x1bOC", "\x1b[C"))
+	case tcell.KeyLeft:
+		return []byte(If(appMode, "\x1bOD", "\x1b[D"))
+	case tcell.KeyHome:
+		return []byte("\x1b[H")
+	case tcell.KeyEnd:
+		return []byte("\x1b[F")
+	case tcell.KeyInsert:
+		return []byte("\x1b[2~")
+	case tcell.KeyDelete:
+		return []byte("\x1b[3~")
+	case tcell.KeyPgUp:
+		return []byte("\x1b[5~")
+	case tcell.KeyPgDn:
+		return []byte("\x1b[6~")
+	case tcell.KeyF1:
+		return []byte("\x1bOP")
+	case tcell.KeyF2:
+		return []byte("\x1bOQ")
+	case tcell.KeyF3:
+		return []byte("\x1bOR")
+	case tcell.KeyF4:
+		return []byte("\x1bOS")
+	case tcell.KeyEnter:
+		return []byte("\r")
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		return []byte{0x7F}
+	case tcell.KeyTab:
+		return []byte("\t")
+	case tcell.KeyEsc:
+		return []byte("\x1b")
+	default:
+		return []byte(string(ev.Rune()))
+	}
+}
+
+func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
+	// Handle confirmation dialog (if shown)
+	a.mu.Lock()
+	if a.handleConfirmationKey(ev) {
 		a.mu.Unlock()
 		return
 	}
@@ -512,105 +620,22 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
-	a.mu.Lock()
-	appMode := a.vterm.AppCursorKeys()
-	a.mu.Unlock()
-
-	key := ev.Key()
-
+	// Handle Alt+key scroll operations
 	if ev.Modifiers()&tcell.ModAlt != 0 {
-		handled := true
-		switch key {
-		case tcell.KeyPgDn:
-			a.mu.Lock()
-			a.vterm.Scroll(a.height)
-			a.saveStateLocked()
-			a.mu.Unlock()
-		case tcell.KeyPgUp:
-			a.mu.Lock()
-			a.vterm.Scroll(-a.height)
-			a.saveStateLocked()
-			a.mu.Unlock()
-		case tcell.KeyDown:
-			a.mu.Lock()
-			a.vterm.Scroll(1)
-			a.saveStateLocked()
-			a.mu.Unlock()
-		case tcell.KeyUp:
-			a.mu.Lock()
-			a.vterm.Scroll(-1)
-			a.saveStateLocked()
-			a.mu.Unlock()
-		default:
-			handled = false
-		}
-		if handled {
-			if a.refreshChan != nil {
-				select {
-				case a.refreshChan <- true:
-				default:
-				}
-			}
+		if a.handleAltScrollKey(ev.Key()) {
 			return
 		}
 	}
 
-	var keyBytes []byte
-	switch key {
-	case tcell.KeyUp:
-		keyBytes = []byte(If(appMode, "\x1bOA", "\x1b[A"))
-	case tcell.KeyDown:
-		keyBytes = []byte(If(appMode, "\x1bOB", "\x1b[B"))
-	case tcell.KeyRight:
-		keyBytes = []byte(If(appMode, "\x1bOC", "\x1b[C"))
-	case tcell.KeyLeft:
-		keyBytes = []byte(If(appMode, "\x1bOD", "\x1b[D"))
-	case tcell.KeyHome:
-		keyBytes = []byte("\x1b[H")
-	case tcell.KeyEnd:
-		keyBytes = []byte("\x1b[F")
-	case tcell.KeyInsert:
-		keyBytes = []byte("\x1b[2~")
-	case tcell.KeyDelete:
-		keyBytes = []byte("\x1b[3~")
-	case tcell.KeyPgUp:
-		keyBytes = []byte("\x1b[5~")
-	case tcell.KeyPgDn:
-		keyBytes = []byte("\x1b[6~")
-	case tcell.KeyF1:
-		keyBytes = []byte("\x1bOP")
-	case tcell.KeyF2:
-		keyBytes = []byte("\x1bOQ")
-	case tcell.KeyF3:
-		keyBytes = []byte("\x1bOR")
-	case tcell.KeyF4:
-		keyBytes = []byte("\x1bOS")
-	case tcell.KeyEnter:
-		keyBytes = []byte("\r")
-	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		keyBytes = []byte{0x7F}
-	case tcell.KeyTab:
-		keyBytes = []byte("\t")
-	case tcell.KeyEsc:
-		keyBytes = []byte("\x1b")
-	default:
-		keyBytes = []byte(string(ev.Rune()))
-	}
+	// Convert key to escape sequence and send to PTY
+	a.mu.Lock()
+	appMode := a.vterm.AppCursorKeys()
+	a.vterm.EnsureLiveEdge()
+	a.mu.Unlock()
 
-	if keyBytes != nil {
-		// Scroll to live edge when user types (so they can see what they're typing)
-		// Also clear restored view mode so auto-scroll works normally again
-		a.mu.Lock()
-		if a.vterm != nil && a.vterm.IsDisplayBufferEnabled() {
-			if !a.vterm.AtLiveEdge() {
-				a.vterm.ScrollToLiveEdge()
-			}
-			// User typing means they want normal behavior, exit restored view mode
-			a.vterm.ClearRestoredView()
-		}
-		a.mu.Unlock()
-
-		a.pty.Write(keyBytes)
+	keyBytes := a.keyToEscapeSequence(ev, appMode)
+	if _, err := a.pty.Write(keyBytes); err != nil {
+		log.Printf("[TEXELTERM] Failed to write key to PTY: %v", err)
 	}
 }
 
@@ -619,13 +644,10 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 		return
 	}
 
-	// Pasting is a user action - clear restored view mode and scroll to live edge
+	// Pasting is a user action - scroll to live edge
 	a.mu.Lock()
-	if a.vterm != nil && a.vterm.IsDisplayBufferEnabled() {
-		if !a.vterm.AtLiveEdge() {
-			a.vterm.ScrollToLiveEdge()
-		}
-		a.vterm.ClearRestoredView()
+	if a.vterm != nil {
+		a.vterm.EnsureLiveEdge()
 	}
 	a.mu.Unlock()
 
@@ -664,66 +686,6 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	}
 }
 
-// isWordChar determines if a rune is part of a word (alphanumeric, underscore, or dash).
-func isWordChar(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-		(r >= '0' && r <= '9') || r == '_' || r == '-'
-}
-
-// HandleMouse implements mouse event handling for standalone mode.
-// Converts tcell.EventMouse to selection operations.
-func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
-	if a.mouseCoordinator == nil {
-		return
-	}
-	a.mouseCoordinator.HandleMouse(ev)
-	a.requestRefresh()
-}
-
-// SelectionStart implements texelcore.SelectionHandler.
-func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
-	if a.mouseCoordinator == nil {
-		return false
-	}
-	result := a.mouseCoordinator.SelectionStart(x, y, buttons, modifiers)
-	a.requestRefresh()
-	return result
-}
-
-// SelectionUpdate implements texelcore.SelectionHandler.
-func (a *TexelTerm) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
-	if a.mouseCoordinator == nil {
-		return
-	}
-	a.mouseCoordinator.SelectionUpdate(x, y, buttons, modifiers)
-	a.requestRefresh()
-}
-
-// SelectionFinish implements texelcore.SelectionHandler.
-func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
-	if a.mouseCoordinator == nil {
-		return "", nil, false
-	}
-	mime, data, ok := a.mouseCoordinator.SelectionFinish(x, y, buttons, modifiers)
-	a.requestRefresh()
-	return mime, data, ok
-}
-
-// SelectionCancel implements texelcore.SelectionHandler.
-func (a *TexelTerm) SelectionCancel() {
-	if a.mouseCoordinator == nil {
-		return
-	}
-	a.mouseCoordinator.SelectionCancel()
-	a.requestRefresh()
-}
-
-// SetClipboard implements ClipboardSetter for standalone mode.
-// TODO: Clipboard support disabled pending investigation of crash issues.
-// Selection still works visually but doesn't copy to system clipboard.
-func (a *TexelTerm) SetClipboard(mime string, data []byte) {
-	// Disabled for now - clipboard operations were causing crashes
-}
 
 func (a *TexelTerm) MouseWheelEnabled() bool {
 	return true
@@ -800,8 +762,170 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 	a.vterm.Scroll(lines)
 	a.saveStateLocked()
 
+	// If selection is active, update it based on the new scroll position
+	if a.selection.active {
+		line, col := a.screenToHistoryPosition(a.lastMouseX, a.lastMouseY)
+		a.selection.currentLine = line
+		a.selection.currentCol = col
+		a.vterm.MarkAllDirty()
+	}
+
 	a.mu.Unlock()
 	a.requestRefresh()
+}
+
+// manageAutoScrollState checks if the mouse is near the top/bottom edge during selection
+// and starts/stops auto-scroll accordingly. Must be called with a.mu locked.
+func (a *TexelTerm) manageAutoScrollState(mouseY int) {
+	if !a.selection.active {
+		a.stopAutoScrollLocked()
+		return
+	}
+
+	// Read config for edge zone threshold.
+	cfg := config.App("texelterm")
+	edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
+	if edgeZone <= 0 {
+		edgeZone = 2
+	}
+
+	// Check if mouse is in the edge zone
+	nearTop := mouseY < edgeZone
+	nearBottom := mouseY >= a.height-edgeZone
+
+	if nearTop || nearBottom {
+		// Start auto-scroll if not already active
+		if !a.autoScrollActive {
+			a.startAutoScrollLocked()
+		}
+	} else {
+		// Stop auto-scroll if active
+		a.stopAutoScrollLocked()
+	}
+}
+
+// startAutoScrollLocked starts the auto-scroll goroutine. Must be called with a.mu locked.
+func (a *TexelTerm) startAutoScrollLocked() {
+	if a.autoScrollActive {
+		return
+	}
+
+	a.autoScrollActive = true
+	a.autoScrollStop = make(chan struct{})
+
+	// Start auto-scroll goroutine
+	a.wg.Add(1)
+	go a.autoScrollLoop()
+}
+
+// stopAutoScrollLocked stops the auto-scroll goroutine. Must be called with a.mu locked.
+func (a *TexelTerm) stopAutoScrollLocked() {
+	if !a.autoScrollActive {
+		return
+	}
+
+	a.autoScrollActive = false
+	close(a.autoScrollStop)
+	a.autoScrollStop = nil
+}
+
+// calculateAutoScrollSpeed computes scroll velocity based on mouse distance from edge.
+// Returns speed in lines/second (negative=up, positive=down) and whether mouse is in edge zone.
+func (a *TexelTerm) calculateAutoScrollSpeed(mouseY int, elapsed float64) (speed float64, inEdgeZone bool) {
+	cfg := config.App("texelterm")
+	edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
+	maxSpeed := cfg.GetInt("texelterm.selection", "max_scroll_speed", 15)
+	if edgeZone <= 0 {
+		edgeZone = 2
+	}
+	if maxSpeed <= 0 {
+		maxSpeed = 15
+	}
+
+	// Time-based acceleration (ramps up over 3 seconds)
+	timeMultiplier := 1.0 + (elapsed * 2.0)
+	if timeMultiplier > 8.0 {
+		timeMultiplier = 8.0
+	}
+
+	if mouseY < edgeZone {
+		// Near top - scroll up (negative)
+		distance := float64(edgeZone - mouseY)
+		speed = -(distance * float64(maxSpeed) / float64(edgeZone)) * timeMultiplier
+		return speed, true
+	}
+	if mouseY >= a.height-edgeZone {
+		// Near bottom - scroll down (positive)
+		distance := float64(mouseY - (a.height - edgeZone) + 1)
+		speed = (distance * float64(maxSpeed) / float64(edgeZone)) * timeMultiplier
+		return speed, true
+	}
+	return 0, false
+}
+
+// autoScrollLoop runs in a goroutine and performs auto-scrolling during selection drag.
+func (a *TexelTerm) autoScrollLoop() {
+	defer a.wg.Done()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	stopChan := a.autoScrollStop
+	var accumulator float64
+	startTime := time.Now()
+
+	for {
+		select {
+		case <-stopChan:
+			return
+		case <-a.stop:
+			return
+		case <-ticker.C:
+			a.mu.Lock()
+			if !a.selection.active || a.vterm == nil {
+				a.mu.Unlock()
+				return
+			}
+
+			mouseY := a.lastMouseY
+			mouseX := a.lastMouseX
+			elapsed := time.Since(startTime).Seconds()
+
+			speed, inEdgeZone := a.calculateAutoScrollSpeed(mouseY, elapsed)
+			if !inEdgeZone {
+				accumulator = 0
+				a.mu.Unlock()
+				continue
+			}
+
+			// Convert lines/sec to lines/tick (50ms = 20 ticks/sec)
+			accumulator += speed / 20.0
+
+			var scrollLines int
+			if accumulator >= 1.0 || accumulator <= -1.0 {
+				scrollLines = int(accumulator)
+				accumulator -= float64(scrollLines)
+			}
+
+			if scrollLines != 0 {
+				a.vterm.Scroll(scrollLines)
+				a.saveStateLocked()
+
+				// Update selection endpoint
+				line, col := a.screenToHistoryPosition(mouseX, mouseY)
+				if a.selection.active {
+					a.selection.currentLine = line
+					a.selection.currentCol = col
+					a.vterm.MarkAllDirty()
+				}
+			}
+
+			a.mu.Unlock()
+			if scrollLines != 0 {
+				a.requestRefresh()
+			}
+		}
+	}
 }
 func (a *TexelTerm) Run() error {
 	// Main run loop - allows restarting shell after exit
@@ -879,37 +1003,51 @@ func (a *TexelTerm) ensureShellIntegrationScripts(configDir string) error {
 func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
 	cols, rows := a.width, a.height
-	log.Printf("[TEXELTERM] runShell starting: cols=%d, rows=%d", cols, rows)
-
-	// Check if this is a restart (vterm already exists)
 	isRestart := a.vterm != nil
-	a.mu.Unlock()
-
-	// Try to read environment from pane-ID-based file (for both restart and server restart)
-	var env []string
-	var cwd string
-	a.mu.Lock()
 	paneID := a.paneID
 	a.mu.Unlock()
 
+	log.Printf("[TEXELTERM] runShell starting: cols=%d, rows=%d, restart=%v", cols, rows, isRestart)
+
+	// Load environment and working directory from pane-specific file
+	env, cwd := a.loadShellEnvironment(paneID)
+
+	// Start PTY with shell command
+	ptmx, cmd, err := a.startPTY(cols, rows, env, cwd)
+	if err != nil {
+		return err
+	}
+	a.pty = ptmx
+	a.cmd = cmd
+
+	// Initialize or update VTerm
+	if isRestart {
+		a.updatePtyWriterForRestart()
+	} else {
+		a.initializeVTermFirstRun(cols, rows, paneID)
+	}
+
+	// Start PTY reader and wait for exit
+	return a.runPtyReaderLoop(ptmx, cmd)
+}
+
+// loadShellEnvironment loads environment variables and working directory from pane-specific file.
+func (a *TexelTerm) loadShellEnvironment(paneID string) (env []string, cwd string) {
 	if paneID != "" {
-		homeDir, err := os.UserHomeDir()
-		if err == nil {
+		if homeDir, err := os.UserHomeDir(); err == nil {
 			envFile := filepath.Join(homeDir, fmt.Sprintf(".texel-env-%s", paneID))
 			if data, err := os.ReadFile(envFile); err == nil {
-				// Parse env file (one VAR=value per line)
 				lines := strings.Split(string(data), "\n")
 				for _, line := range lines {
 					if line == "" {
 						continue
 					}
-					// Extract working directory (special marker from shell integration)
 					if strings.HasPrefix(line, "__TEXEL_CWD=") {
 						cwd = strings.TrimPrefix(line, "__TEXEL_CWD=")
 						log.Printf("Restored working directory: %s", cwd)
 						continue
 					}
-					// Skip bash functions (BASH_FUNC_*%%) to avoid import errors
+					// Skip bash functions to avoid import errors
 					if strings.HasPrefix(line, "BASH_FUNC_") {
 						continue
 					}
@@ -917,28 +1055,30 @@ func (a *TexelTerm) runShell() error {
 				}
 				log.Printf("Loaded environment from %s: %d variables", envFile, len(env))
 			} else {
-				log.Printf("Could not read env file %s: %v (this is normal on first run)", envFile, err)
+				log.Printf("Could not read env file %s: %v (normal on first run)", envFile, err)
 			}
 		}
 	}
 
-	a.mu.Lock()
 	// Fall back to os.Environ if file read failed
 	if len(env) == 0 {
 		log.Println("No pane-based env file, using os.Environ()")
 		env = os.Environ()
 	}
+
 	// Always set TERM for the shell
 	env = append(env, "TERM=xterm-256color")
 
 	// Set pane ID for per-terminal history isolation
-	if a.paneID != "" {
-		env = append(env, "TEXEL_PANE_ID="+a.paneID)
+	if paneID != "" {
+		env = append(env, "TEXEL_PANE_ID="+paneID)
 	}
 
-	a.mu.Unlock()
+	return env, cwd
+}
 
-	// Get shell command - try simpler integration via ENV
+// startPTY creates and starts the PTY with the shell command.
+func (a *TexelTerm) startPTY(cols, rows int, env []string, cwd string) (*os.File, *exec.Cmd, error) {
 	cmd := a.getShellCommandSimpleIntegration(env)
 	cmd.Env = env
 	if cwd != "" {
@@ -948,177 +1088,176 @@ func (a *TexelTerm) runShell() error {
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	if err != nil {
-		return fmt.Errorf("failed to start pty: %w", err)
+		return nil, nil, fmt.Errorf("failed to start pty: %w", err)
 	}
-	a.pty = ptmx
-	a.cmd = cmd
+	return ptmx, cmd, nil
+}
 
+// updatePtyWriterForRestart updates the PTY writer callback for shell restart.
+func (a *TexelTerm) updatePtyWriterForRestart() {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 
-	if isRestart {
-		// Restarting - just update the PTY writer, keep existing vterm
-		log.Println("Reusing existing vterm for seamless restart")
-		// Update the PTY writer callback to point to new PTY
-		if a.vterm != nil {
-			a.vterm.WriteToPty = func(b []byte) {
-				if a.pty != nil {
-					a.pty.Write(b)
+	log.Println("Reusing existing vterm for seamless restart")
+	if a.vterm != nil {
+		a.vterm.WriteToPty = func(b []byte) {
+			if a.pty != nil {
+				if _, err := a.pty.Write(b); err != nil {
+					log.Printf("[TEXELTERM] Failed to write to PTY: %v", err)
 				}
 			}
 		}
-		a.mu.Unlock()
-	} else {
-		// First run - create vterm and parser.
-		// Read wrap/reflow and history configuration from app config.
-		cfg := config.App("texelterm")
-		wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
-		reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
-		displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", true) // Default to new three-level architecture
+	}
+}
 
-		// History configuration
-		historyMemoryLines := cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
-		historyPersistDir := cfg.GetString("texelterm.history", "persist_dir", "")
-		if historyPersistDir == "" {
-			if homeDir, err := os.UserHomeDir(); err == nil {
-				historyPersistDir = filepath.Join(homeDir, ".texelation")
-			}
-		}
+// initializeVTermFirstRun creates and configures VTerm for first-time shell run.
+func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
-		// Get pane ID for persistent scrollback (lock already held)
-		paneIDHex := a.paneID // Already hex-encoded from SetPaneID
+	cfg := config.App("texelterm")
+	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
+	reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
+	displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", true)
 
-		a.vterm = parser.NewVTerm(cols, rows,
-			parser.WithTitleChangeHandler(func(newTitle string) {
-				a.title = newTitle
+	a.vterm = parser.NewVTerm(cols, rows,
+		parser.WithTitleChangeHandler(func(newTitle string) {
+			a.title = newTitle
+			a.requestRefresh()
+		}),
+		parser.WithCommandStartHandler(func(cmd string) {
+			if cmd != "" {
+				a.title = cmd
 				a.requestRefresh()
-			}),
-			parser.WithCommandStartHandler(func(cmd string) {
-				if cmd != "" {
-					a.title = cmd
-					a.requestRefresh()
-				}
-			}),
-			parser.WithPtyWriter(func(b []byte) {
-				if a.pty != nil {
-					a.pty.Write(b)
-				}
-			}),
-			parser.WithDefaultFgChangeHandler(func(c parser.Color) {
-				a.colorPalette[256] = a.mapParserColorToTCell(c)
-			}),
-			parser.WithDefaultBgChangeHandler(func(c parser.Color) {
-				a.colorPalette[257] = a.mapParserColorToTCell(c)
-			}),
-			parser.WithQueryDefaultFgHandler(func() {
-				a.respondToColorQuery(10)
-			}),
-			parser.WithQueryDefaultBgHandler(func() {
-				a.respondToColorQuery(11)
-			}),
-			parser.WithScreenRestoredHandler(func() {
-				go a.Resize(a.width, a.height)
-			}),
-			parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
-				// Note: bool writes are atomic, no lock needed for simple assignment
-				a.bracketedPasteMode = enabled
-			}),
-			parser.WithWrap(wrapEnabled),
-			parser.WithReflow(reflowEnabled),
-		)
-		a.parser = parser.NewParser(a.vterm)
-
-		// Enable new three-level display buffer with disk persistence
-		if displayBufferEnabled {
-			log.Printf("[TEXELTERM] displayBufferEnabled=true, paneIDHex=%q", paneIDHex)
-			// Only enable disk persistence if we have a pane ID
-			if paneIDHex != "" {
-				// Construct disk path for new format (.hist2)
-				scrollbackDir := filepath.Join(historyPersistDir, "scrollback")
-				if err := os.MkdirAll(scrollbackDir, 0755); err != nil {
-					log.Printf("Failed to create scrollback dir: %v", err)
-				}
-				diskPath := filepath.Join(scrollbackDir, paneIDHex+".hist2")
-
-				err := a.vterm.EnableDisplayBufferWithDisk(diskPath, parser.DisplayBufferOptions{
-					MaxMemoryLines: historyMemoryLines,
-					MarginAbove:    200,
-					MarginBelow:    50,
-				})
-				if err != nil {
-					log.Printf("[DISPLAY_BUFFER] Failed to enable disk-backed display buffer: %v", err)
-					// Fall back to memory-only
-					a.vterm.EnableDisplayBuffer()
-				} else {
-					log.Printf("[DISPLAY_BUFFER] Enabled with disk persistence: %s", diskPath)
-				}
-			} else {
-				// No pane ID - use memory-only display buffer
-				a.vterm.EnableDisplayBuffer()
-				log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID), IsEnabled=%v", a.vterm.IsDisplayBufferEnabled())
 			}
-			// Note: cursor position is automatically synced in EnableDisplayBuffer/EnableDisplayBufferWithDisk
-
-			// Enable debug logging if TEXELTERM_DEBUG env var is set
-			if os.Getenv("TEXELTERM_DEBUG") != "" {
-				log.Printf("[DEBUG] TEXELTERM_DEBUG is set, opening debug log file")
-				debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-				if err == nil {
-					log.Printf("[DEBUG] Writing display buffer debug to /tmp/texelterm-debug.log")
-					fmt.Fprintf(debugFile, "[DB] Debug logging initialized\n")
-					a.vterm.SetDisplayBufferDebugLog(func(format string, args ...interface{}) {
-						fmt.Fprintf(debugFile, "[DB] "+format+"\n", args...)
-					})
-					a.renderDebugLog = func(format string, args ...interface{}) {
-						fmt.Fprintf(debugFile, "[RENDER] "+format+"\n", args...)
-					}
+		}),
+		parser.WithPtyWriter(func(b []byte) {
+			if a.pty != nil {
+				if _, err := a.pty.Write(b); err != nil {
+					log.Printf("[TEXELTERM] Failed to write to PTY: %v", err)
 				}
 			}
-		}
+		}),
+		parser.WithDefaultFgChangeHandler(func(c parser.Color) {
+			a.colorPalette[256] = a.mapParserColorToTCell(c)
+		}),
+		parser.WithDefaultBgChangeHandler(func(c parser.Color) {
+			a.colorPalette[257] = a.mapParserColorToTCell(c)
+		}),
+		parser.WithQueryDefaultFgHandler(func() {
+			a.respondToColorQuery(10)
+		}),
+		parser.WithQueryDefaultBgHandler(func() {
+			a.respondToColorQuery(11)
+		}),
+		parser.WithScreenRestoredHandler(func() {
+			go a.Resize(a.width, a.height)
+		}),
+		parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
+			a.bracketedPasteMode = enabled
+		}),
+		parser.WithWrap(wrapEnabled),
+		parser.WithReflow(reflowEnabled),
+	)
+	a.parser = parser.NewParser(a.vterm)
 
-		// Initialize mouse coordinator for selection handling
-		a.mouseCoordinator = NewMouseCoordinator(a.vterm, a)
-		a.mouseCoordinator.SetSize(cols, rows)
-		a.mouseCoordinator.SetCallbacks(
-			func() { a.vterm.MarkAllDirty() },
-			a.requestRefresh,
-		)
-		a.mouseCoordinator.SetClipboardSetter(a) // Wire up clipboard for standalone mode
-
-		// Load persisted state first to get lastPromptLine
-		savedState := a.loadStateLocked()
-
-		// Populate viewport from history so shell continues from where we left off
-		// Use prompt-aware populate if we have a valid prompt line for seamless recovery
-		if a.vterm.IsDisplayBufferEnabled() {
-			// Debug: write to debug log if available
-			if a.renderDebugLog != nil {
-				a.renderDebugLog("[RECOVERY] savedState.LastPromptLine=%d, historyLen=%d", savedState.LastPromptLine, a.vterm.HistoryLength())
-			}
-
-			if savedState.LastPromptLine >= 0 {
-				// Seamless recovery: show history up to where the prompt was,
-				// so when the shell redraws its prompt, it appears naturally
-				if a.renderDebugLog != nil {
-					a.renderDebugLog("[RECOVERY] Using seamless recovery with lastPromptLine=%d, promptHeight=%d",
-						savedState.LastPromptLine, savedState.LastPromptHeight)
-				}
-				a.vterm.PopulateViewportFromHistoryToPrompt(savedState.LastPromptLine, savedState.LastPromptHeight)
-			} else {
-				// Fallback: show all history, cursor at end
-				if a.renderDebugLog != nil {
-					a.renderDebugLog("[RECOVERY] Fallback: no valid lastPromptLine")
-				}
-				a.vterm.PopulateViewportFromHistory()
-			}
-		}
-
-		// Apply scroll offset from saved state
-		a.applyRestoredStateLocked(savedState)
-
-		a.mu.Unlock()
+	if displayBufferEnabled {
+		a.initializeDisplayBufferLocked(paneID, cfg)
 	}
 
-	// Start PTY reader goroutine (for both first run and restart)
+	// Load and apply persisted state
+	savedState := a.loadStateLocked()
+	a.populateFromHistoryLocked(savedState)
+	a.applyRestoredStateLocked(savedState)
+}
+
+// initializeDisplayBufferLocked sets up the display buffer with optional disk persistence.
+// Must be called with a.mu held.
+func (a *TexelTerm) initializeDisplayBufferLocked(paneID string, cfg config.Config) {
+	historyMemoryLines := cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
+	historyPersistDir := cfg.GetString("texelterm.history", "persist_dir", "")
+	if historyPersistDir == "" {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			historyPersistDir = filepath.Join(homeDir, ".texelation")
+		}
+	}
+
+	log.Printf("[TEXELTERM] displayBufferEnabled=true, paneID=%q", paneID)
+
+	if paneID != "" {
+		scrollbackDir := filepath.Join(historyPersistDir, "scrollback")
+		if err := os.MkdirAll(scrollbackDir, 0755); err != nil {
+			log.Printf("Failed to create scrollback dir: %v", err)
+		}
+		diskPath := filepath.Join(scrollbackDir, paneID+".hist2")
+
+		err := a.vterm.EnableDisplayBufferWithDisk(diskPath, parser.DisplayBufferOptions{
+			MaxMemoryLines: historyMemoryLines,
+			MarginAbove:    200,
+			MarginBelow:    50,
+		})
+		if err != nil {
+			log.Printf("[DISPLAY_BUFFER] Failed to enable disk-backed buffer: %v", err)
+			a.vterm.EnableDisplayBuffer()
+		} else {
+			log.Printf("[DISPLAY_BUFFER] Enabled with disk persistence: %s", diskPath)
+		}
+	} else {
+		a.vterm.EnableDisplayBuffer()
+		log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID)")
+	}
+
+	// Enable debug logging if TEXELTERM_DEBUG env var is set
+	if os.Getenv("TEXELTERM_DEBUG") != "" {
+		a.enableDebugLogging()
+	}
+}
+
+// enableDebugLogging sets up debug logging for display buffer operations.
+func (a *TexelTerm) enableDebugLogging() {
+	log.Printf("[DEBUG] TEXELTERM_DEBUG is set, opening debug log file")
+	debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	log.Printf("[DEBUG] Writing display buffer debug to /tmp/texelterm-debug.log")
+	fmt.Fprintf(debugFile, "[DB] Debug logging initialized\n")
+	a.vterm.SetDisplayBufferDebugLog(func(format string, args ...any) {
+		fmt.Fprintf(debugFile, "[DB] "+format+"\n", args...)
+	})
+	a.renderDebugLog = func(format string, args ...any) {
+		fmt.Fprintf(debugFile, "[RENDER] "+format+"\n", args...)
+	}
+}
+
+// populateFromHistoryLocked populates the viewport from history for session recovery.
+// Must be called with a.mu held.
+func (a *TexelTerm) populateFromHistoryLocked(savedState terminalState) {
+	if !a.vterm.IsDisplayBufferEnabled() {
+		return
+	}
+
+	if a.renderDebugLog != nil {
+		a.renderDebugLog("[RECOVERY] savedState.LastPromptLine=%d, historyLen=%d",
+			savedState.LastPromptLine, a.vterm.HistoryLength())
+	}
+
+	if savedState.LastPromptLine >= 0 {
+		if a.renderDebugLog != nil {
+			a.renderDebugLog("[RECOVERY] Using seamless recovery with lastPromptLine=%d, promptHeight=%d",
+				savedState.LastPromptLine, savedState.LastPromptHeight)
+		}
+		a.vterm.PopulateViewportFromHistoryToPrompt(savedState.LastPromptLine, savedState.LastPromptHeight)
+	} else {
+		if a.renderDebugLog != nil {
+			a.renderDebugLog("[RECOVERY] Fallback: no valid lastPromptLine")
+		}
+		a.vterm.PopulateViewportFromHistory()
+	}
+}
+
+// runPtyReaderLoop reads from PTY, parses output, and handles shell exit.
+func (a *TexelTerm) runPtyReaderLoop(ptmx *os.File, cmd *exec.Cmd) error {
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
@@ -1134,12 +1273,9 @@ func (a *TexelTerm) runShell() error {
 				return
 			}
 
-			// Don't skip BEL - the parser needs it to terminate OSC sequences!
-
 			a.mu.Lock()
 			inSync := a.vterm.InSynchronizedUpdate
 			a.parser.Parse(r)
-			// Check if the sync state *ended* after this rune
 			syncEnded := inSync && !a.vterm.InSynchronizedUpdate
 			a.mu.Unlock()
 
@@ -1147,9 +1283,6 @@ func (a *TexelTerm) runShell() error {
 				a.vterm.MarkAllDirty()
 				a.requestRefresh()
 			} else if !a.vterm.InSynchronizedUpdate {
-				// Only request refresh if PTY buffer is empty (read coalescing).
-				// This prevents rendering intermediate states when the app sends
-				// a batch of escape sequences without synchronized updates.
 				if reader.Buffered() == 0 {
 					a.requestRefresh()
 				}
@@ -1157,121 +1290,77 @@ func (a *TexelTerm) runShell() error {
 		}
 	}()
 
-	err = cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		log.Printf("[TEXELTERM] Shell exited with: %v", err)
+	}
 	a.wg.Wait()
 
-	// PTY exited. Ask for confirmation before closing pane.
+	// PTY exited - ask for confirmation before closing pane
 	a.mu.Lock()
 	a.confirmClose = true
-	a.confirmCallback = nil // Internal close
+	a.confirmCallback = nil
 	a.requestRefresh()
 	a.mu.Unlock()
 
 	select {
 	case <-a.closeCh:
-		// User confirmed close with 'y'
 		return fmt.Errorf("user confirmed close")
 	case <-a.restartCh:
-		// User declined close with 'n' - will restart
 		return nil
 	case <-a.stop:
-		// External stop signal (Stop() was called)
 		return fmt.Errorf("external stop")
 	}
 }
 
-func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texelcore.Cell) {
-	if a.vterm == nil || a.mouseCoordinator == nil || len(buf) == 0 {
-		return
-	}
-	if !a.mouseCoordinator.IsSelectionRendered() {
-		return
-	}
-	// Selection range is in content coordinates (logicalLine, charOffset)
-	startLine, startOffset, endLine, endOffset, ok := a.mouseCoordinator.GetSelectionRange()
-	if !ok {
-		return
+func (a *TexelTerm) screenToHistoryPosition(x, y int) (int, int) {
+	if a.vterm == nil {
+		return 0, 0
 	}
 
-	cfg := theming.ForApp("texelterm")
-	defaultBg := tcell.NewRGBColor(232, 217, 255)
-	highlight := cfg.GetColor("selection", "highlight_bg", defaultBg)
-	if !highlight.Valid() {
-		highlight = defaultBg
-	}
-	highlight = highlight.TrueColor()
-	fgColor := cfg.GetColor("selection", "highlight_fg", tcell.ColorBlack)
-	if !fgColor.Valid() {
-		fgColor = tcell.ColorBlack
-	}
-	fgColor = fgColor.TrueColor()
-
-	// Convert content coordinates to viewport coordinates for rendering
-	startRow, startCol, startVisible := a.vterm.ContentToViewport(startLine, startOffset)
-	endRow, endCol, endVisible := a.vterm.ContentToViewport(endLine, endOffset)
-
-	// If neither endpoint is visible, check if selection spans through viewport
-	if !startVisible && !endVisible {
-		// Selection might still be visible if it spans the entire viewport
-		// Check if startLine is above viewport and endLine is below
-		if startLine < endLine {
-			// Selection spans vertically - highlight entire viewport rows between them
-			// For now, clamp to viewport boundaries
-			startRow = 0
-			startCol = 0
-			endRow = len(buf) - 1
-			endCol = len(buf[endRow])
-		} else {
-			return
+	// In alt screen mode, use screen coordinates directly (no history)
+	if a.vterm.InAltScreen() {
+		line := y
+		if line < 0 {
+			line = 0
+		} else if line >= a.height {
+			line = a.height - 1
 		}
-	} else if !startVisible {
-		// Start is above viewport
-		startRow = 0
-		startCol = 0
-	} else if !endVisible {
-		// End is below viewport
-		endRow = len(buf) - 1
-		if endRow >= 0 {
-			endCol = len(buf[endRow])
+		col := x
+		if col < 0 {
+			col = 0
+		} else if col >= a.width {
+			col = a.width - 1
 		}
+		return line, col
 	}
 
-	// Highlight the selection range
-	for y := 0; y < len(buf); y++ {
-		if y < startRow || y > endRow {
-			continue
-		}
-		row := buf[y]
-		lineStart := 0
-		lineEnd := len(row)
-		if y == startRow {
-			lineStart = clampInt(startCol, 0, lineEnd)
-		}
-		if y == endRow {
-			lineEnd = clampInt(endCol, lineStart, len(row)) // endCol is already exclusive
-		}
-		if y > startRow && y < endRow {
-			lineStart = 0
-			lineEnd = len(row)
-		}
-		if y == startRow && y == endRow {
-			lineEnd = clampInt(endCol, lineStart, len(row))
-		}
-		for x := lineStart; x < lineEnd && x < len(row); x++ {
-			row[x].Style = row[x].Style.Background(highlight).Foreground(fgColor)
+	// Main screen: use history coordinates
+	top := a.vterm.VisibleTop()
+	line := top + y
+	historyLen := a.vterm.HistoryLength()
+	if historyLen <= 0 {
+		line = 0
+	} else {
+		if line < 0 {
+			line = 0
+		} else if line >= historyLen {
+			line = historyLen - 1
 		}
 	}
+	col := x
+	if col < 0 {
+		col = 0
+	}
+	if historyLen > 0 {
+		if cells := a.vterm.HistoryLineCopy(line); cells != nil {
+			if col > len(cells) {
+				col = len(cells)
+			}
+		}
+	}
+	return line, col
 }
 
-func clampInt(v, min, max int) int {
-	if v < min {
-		return min
-	}
-	if v > max {
-		return max
-	}
-	return v
-}
 
 func (a *TexelTerm) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
@@ -1287,10 +1376,6 @@ func (a *TexelTerm) Resize(cols, rows int) {
 
 	if a.vterm != nil {
 		a.vterm.Resize(cols, rows)
-	}
-
-	if a.mouseCoordinator != nil {
-		a.mouseCoordinator.SetSize(cols, rows)
 	}
 
 	if a.pty != nil {
@@ -1372,7 +1457,9 @@ func (a *TexelTerm) respondToColorQuery(code int) {
 	r, g, b := color.RGB()
 	// Scale 8-bit color to 16-bit for response
 	responseStr := fmt.Sprintf("\x1b]%d;rgb:%04x/%04x/%04x\a", code, r*257, g*257, b*257)
-	a.pty.Write([]byte(responseStr))
+	if _, err := a.pty.Write([]byte(responseStr)); err != nil {
+		log.Printf("[TEXELTERM] Failed to write color query response to PTY: %v", err)
+	}
 }
 
 func (a *TexelTerm) requestRefresh() {

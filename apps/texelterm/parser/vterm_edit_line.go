@@ -48,7 +48,7 @@ func (v *VTerm) insertFullLines(n int) {
 
 	for i := 0; i < n; i++ {
 		if v.inAltScreen {
-			// Alt screen: simple array shifting
+			// Alt screen: shift rows down and clear at cursor
 			for y := v.marginBottom - 1; y >= v.cursorY; y-- {
 				if y+1 <= v.marginBottom {
 					v.altBuffer[y+1] = v.altBuffer[y]
@@ -56,9 +56,7 @@ func (v *VTerm) insertFullLines(n int) {
 			}
 			// Create blank line at cursor position
 			v.altBuffer[v.cursorY] = make([]Cell, v.width)
-			for j := range v.altBuffer[v.cursorY] {
-				v.altBuffer[v.cursorY][j] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
-			}
+			v.altBufferClearRow(v.cursorY, v.defaultFG, v.defaultBG)
 		} else {
 			// Main screen: ensure history has enough lines first
 			endLogicalY := topHistory + v.marginBottom
@@ -91,18 +89,15 @@ func (v *VTerm) insertLinesWithinMargins(n int) {
 		for y := v.marginBottom; y >= v.cursorY+n; y-- {
 			srcY := y - n
 			if srcY >= v.cursorY {
-				// Copy the margin region from source line to current line
-				copy(v.altBuffer[y][leftCol:rightCol+1], v.altBuffer[srcY][leftCol:rightCol+1])
+				v.altBufferCopyRow(srcY, y, leftCol, rightCol)
 			}
 		}
 		// Clear the top n lines' margin regions (starting at cursor)
-		for y := v.cursorY; y < v.cursorY+n && y <= v.marginBottom; y++ {
-			if y >= 0 && y < v.height {
-				for x := leftCol; x <= rightCol; x++ {
-					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
-				}
-			}
+		endY := v.cursorY + n - 1
+		if endY > v.marginBottom {
+			endY = v.marginBottom
 		}
+		v.altBufferClearRegion(leftCol, v.cursorY, rightCol, endY, v.defaultFG, v.defaultBG)
 	} else {
 		// Main screen with history buffer
 		topHistory := v.getTopHistoryLine()
@@ -190,9 +185,7 @@ func (v *VTerm) deleteFullLines(n int) {
 			}
 			// Create blank line at bottom of region
 			v.altBuffer[v.marginBottom] = make([]Cell, v.width)
-			for x := range v.altBuffer[v.marginBottom] {
-				v.altBuffer[v.marginBottom][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
-			}
+			v.altBufferClearRow(v.marginBottom, v.defaultFG, v.defaultBG)
 		} else {
 			// Main screen: ensure history has enough lines first
 			endLogicalY := topHistory + v.marginBottom
@@ -223,8 +216,7 @@ func (v *VTerm) deleteLinesWithinMargins(n int) {
 		for y := v.cursorY; y <= v.marginBottom-n; y++ {
 			srcY := y + n
 			if srcY <= v.marginBottom {
-				// Copy the margin region from source line to current line
-				copy(v.altBuffer[y][leftCol:rightCol+1], v.altBuffer[srcY][leftCol:rightCol+1])
+				v.altBufferCopyRow(srcY, y, leftCol, rightCol)
 			}
 		}
 		// Clear the bottom n lines' margin regions (clamped to cursor position)
@@ -232,13 +224,7 @@ func (v *VTerm) deleteLinesWithinMargins(n int) {
 		if clearStart < v.cursorY {
 			clearStart = v.cursorY
 		}
-		for y := clearStart; y <= v.marginBottom; y++ {
-			if y >= 0 && y < v.height {
-				for x := leftCol; x <= rightCol; x++ {
-					v.altBuffer[y][x] = Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG}
-				}
-			}
-		}
+		v.altBufferClearRegion(leftCol, clearStart, rightCol, v.marginBottom, v.defaultFG, v.defaultBG)
 	} else {
 		// Main screen with history buffer
 		topHistory := v.getTopHistoryLine()
