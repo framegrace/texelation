@@ -93,6 +93,8 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 
 // scrollUpWithinMargins scrolls content up within the left/right margins.
 // Similar to deleteLinesWithinMargins but operates on the entire top/bottom region.
+// Note: On main screen, this requires DisplayBuffer to be enabled. Without it,
+// the operation is a no-op because setHistoryLine on committed lines doesn't work.
 func (v *VTerm) scrollUpWithinMargins(n int) {
 	v.wrapNext = false
 	leftCol := v.marginLeft
@@ -113,9 +115,13 @@ func (v *VTerm) scrollUpWithinMargins(n int) {
 		}
 		v.altBufferClearRegion(leftCol, clearStart, rightCol, v.marginBottom, v.defaultFG, v.defaultBG)
 	} else {
-		// Main screen: use DisplayBuffer for proper viewport manipulation
+		// Main screen: use DisplayBuffer for proper viewport manipulation.
+		// Note: Without DisplayBuffer, margin scrolling is not supported on main screen
+		// because setHistoryLine on committed lines is a no-op in the history architecture.
 		if v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
 			v.displayBuf.display.ScrollColumnsUp(v.marginTop, v.marginBottom, leftCol, rightCol, n, v.defaultFG, v.defaultBG)
+		} else {
+			v.logDebug("[SCROLL] scrollUpWithinMargins skipped: DisplayBuffer not enabled")
 		}
 	}
 	v.MarkAllDirty()
@@ -123,6 +129,7 @@ func (v *VTerm) scrollUpWithinMargins(n int) {
 
 // scrollDownWithinMargins scrolls content down within the left/right margins.
 // Similar to insertLinesWithinMargins but operates on the entire top/bottom region.
+// Note: On main screen, this requires DisplayBuffer to be enabled (see scrollUpWithinMargins).
 func (v *VTerm) scrollDownWithinMargins(n int) {
 	v.wrapNext = false
 	leftCol := v.marginLeft
@@ -146,6 +153,8 @@ func (v *VTerm) scrollDownWithinMargins(n int) {
 		// Main screen: use DisplayBuffer for proper viewport manipulation
 		if v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
 			v.displayBuf.display.ScrollColumnsDown(v.marginTop, v.marginBottom, leftCol, rightCol, n, v.defaultFG, v.defaultBG)
+		} else {
+			v.logDebug("[SCROLL] scrollDownWithinMargins skipped: DisplayBuffer not enabled")
 		}
 	}
 	v.MarkAllDirty()
@@ -163,6 +172,7 @@ func (v *VTerm) Scroll(delta int) {
 // scrollHorizontal scrolls content horizontally within specified margins.
 // n > 0: scroll right (content shifts right, blank column inserted at left)
 // n < 0: scroll left (content shifts left, blank column inserted at right)
+// Note: On main screen, this requires DisplayBuffer to be enabled (see scrollUpWithinMargins).
 func (v *VTerm) scrollHorizontal(n int, left int, right int, top int, bottom int) {
 	if v.inAltScreen {
 		v.altBufferScrollColumnsHorizontal(top, bottom, left, right, n, v.currentFG, v.currentBG)
@@ -170,6 +180,8 @@ func (v *VTerm) scrollHorizontal(n int, left int, right int, top int, bottom int
 		// Main screen: use DisplayBuffer for proper viewport manipulation
 		if v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
 			v.displayBuf.display.ScrollColumnsHorizontal(top, bottom, left, right, n, v.currentFG, v.currentBG)
+		} else {
+			v.logDebug("[SCROLL] scrollHorizontal skipped: DisplayBuffer not enabled")
 		}
 	}
 	v.MarkAllDirty()

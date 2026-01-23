@@ -1316,6 +1316,25 @@ func (a *TexelTerm) screenToHistoryPosition(x, y int) (int, int) {
 	if a.vterm == nil {
 		return 0, 0
 	}
+
+	// In alt screen mode, use screen coordinates directly (no history)
+	if a.vterm.InAltScreen() {
+		line := y
+		if line < 0 {
+			line = 0
+		} else if line >= a.height {
+			line = a.height - 1
+		}
+		col := x
+		if col < 0 {
+			col = 0
+		} else if col >= a.width {
+			col = a.width - 1
+		}
+		return line, col
+	}
+
+	// Main screen: use history coordinates
 	top := a.vterm.VisibleTop()
 	line := top + y
 	historyLen := a.vterm.HistoryLength()
