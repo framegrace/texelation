@@ -37,6 +37,12 @@ type VTermProvider interface {
 	HistoryLineCopy(line int) []parser.Cell
 	// ViewportRow returns cells from the given viewport row (0 to height-1).
 	ViewportRow(row int) []parser.Cell
+	// CurrentLineCells returns the cells of the current (uncommitted) line.
+	CurrentLineCells() []parser.Cell
+	// Grid returns the current visible viewport grid.
+	Grid() [][]parser.Cell
+	// GetContentText extracts text from the given content coordinate range.
+	GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string
 }
 
 // ShellAwarePromptStrategy uses OSC 133 shell integration and pattern matching
@@ -199,4 +205,55 @@ func (a *vtermAdapter) ViewportRow(row int) []parser.Cell {
 		return nil
 	}
 	return grid[row]
+}
+
+func (a *vtermAdapter) CurrentLineCells() []parser.Cell {
+	return a.vterm.CurrentLineCells()
+}
+
+func (a *vtermAdapter) Grid() [][]parser.Cell {
+	return a.vterm.Grid()
+}
+
+func (a *vtermAdapter) GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string {
+	return a.vterm.GetContentText(startLine, startOffset, endLine, endOffset)
+}
+
+// vtermGridAdapter wraps a VTerm to implement GridProvider.
+type vtermGridAdapter struct {
+	vterm *parser.VTerm
+}
+
+// NewVTermGridAdapter creates a GridProvider from a VTerm.
+func NewVTermGridAdapter(vterm *parser.VTerm) GridProvider {
+	if vterm == nil {
+		return nil
+	}
+	return &vtermGridAdapter{vterm: vterm}
+}
+
+func (a *vtermGridAdapter) Grid() [][]parser.Cell {
+	if a.vterm == nil {
+		return nil
+	}
+	return a.vterm.Grid()
+}
+
+func (a *vtermGridAdapter) ViewportToContent(row, col int) (int64, int, bool, bool) {
+	if a.vterm == nil {
+		return 0, 0, false, false
+	}
+	return a.vterm.ViewportToContent(row, col)
+}
+
+func (a *vtermGridAdapter) MarkAllDirty() {
+	if a.vterm != nil {
+		a.vterm.MarkAllDirty()
+	}
+}
+
+func (a *vtermGridAdapter) Scroll(lines int) {
+	if a.vterm != nil {
+		a.vterm.Scroll(lines)
+	}
 }

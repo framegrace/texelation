@@ -23,6 +23,22 @@ type ClipboardSetter interface {
 	SetClipboard(mime string, data []byte)
 }
 
+// GridProvider provides access to the viewport grid and coordinate conversion.
+// This interface abstracts VTerm access for MouseCoordinator, enabling testability.
+type GridProvider interface {
+	// Grid returns the current viewport grid (height x width cells).
+	Grid() [][]parser.Cell
+	// ViewportToContent converts viewport coordinates to content coordinates.
+	// Returns (logicalLine, charOffset, isCurrentLine, ok).
+	// logicalLine is -1 for current uncommitted line when isCurrentLine is true.
+	ViewportToContent(row, col int) (logicalLine int64, charOffset int, isCurrentLine bool, ok bool)
+	// MarkAllDirty marks all viewport rows as needing re-render.
+	MarkAllDirty()
+	// Scroll scrolls the viewport by the given number of lines.
+	// Positive values scroll down (show older content), negative scroll up.
+	Scroll(lines int)
+}
+
 // MouseCoordinator unifies mouse event handling for both standalone and embedded modes.
 // In standalone mode, it receives tcell.EventMouse directly via HandleMouse.
 // In embedded mode, the desktop engine calls SelectionStart/Update/Finish.
@@ -34,7 +50,7 @@ type MouseCoordinator struct {
 	autoScroll       *AutoScrollManager
 	wheelHandler     MouseWheelHandler
 	clipboardSetter  ClipboardSetter
-	vterm            *parser.VTerm
+	gridProvider     GridProvider
 	width, height    int
 
 	// Button state tracking for standalone mode
@@ -48,13 +64,21 @@ type MouseCoordinator struct {
 }
 
 // NewMouseCoordinator creates a new mouse coordinator.
-func NewMouseCoordinator(vterm *parser.VTerm, wheelHandler MouseWheelHandler) *MouseCoordinator {
+// vtermProvider is used by SelectionStateMachine for word/line selection.
+// gridProvider is used for viewport access and coordinate conversion.
+// scrollConfig provides auto-scroll settings.
+func NewMouseCoordinator(
+	vtermProvider VTermProvider,
+	gridProvider GridProvider,
+	wheelHandler MouseWheelHandler,
+	scrollConfig AutoScrollConfig,
+) *MouseCoordinator {
 	coord := &MouseCoordinator{
 		clickDetector:    NewClickDetector(DefaultMultiClickTimeout),
-		selectionMachine: NewSelectionStateMachine(vterm),
-		autoScroll:       NewAutoScrollManager(vterm),
+		selectionMachine: NewSelectionStateMachineWithProvider(vtermProvider),
+		autoScroll:       NewAutoScrollManager(scrollConfig),
 		wheelHandler:     wheelHandler,
-		vterm:            vterm,
+		gridProvider:     gridProvider,
 	}
 
 	return coord
@@ -80,8 +104,8 @@ func (m *MouseCoordinator) SetCallbacks(onDirty, onRefresh func()) {
 	// Wire auto-scroll callbacks
 	m.autoScroll.SetCallbacks(
 		func(lines int) {
-			if m.vterm != nil {
-				m.vterm.Scroll(lines)
+			if m.gridProvider != nil {
+				m.gridProvider.Scroll(lines)
 			}
 		},
 		onRefresh,
@@ -200,7 +224,7 @@ func (m *MouseCoordinator) SelectionStart(x, y int, buttons tcell.ButtonMask, mo
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.vterm == nil {
+	if m.gridProvider == nil {
 		return false
 	}
 
@@ -222,7 +246,7 @@ func (m *MouseCoordinator) SelectionUpdate(x, y int, buttons tcell.ButtonMask, m
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.vterm == nil || !m.selectionMachine.IsActive() {
+	if m.gridProvider == nil || !m.selectionMachine.IsActive() {
 		return
 	}
 
@@ -251,7 +275,7 @@ func (m *MouseCoordinator) SelectionFinish(x, y int, buttons tcell.ButtonMask, m
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.vterm == nil || !m.selectionMachine.IsActive() {
+	if m.gridProvider == nil || !m.selectionMachine.IsActive() {
 		return "", nil, false
 	}
 
@@ -306,7 +330,7 @@ func (m *MouseCoordinator) GetSelectionRange() (startLine int64, startOffset int
 // logicalLine is -1 for current (uncommitted) line.
 // Must be called with mutex locked.
 func (m *MouseCoordinator) resolvePositionLocked(x, y int) (logicalLine int64, charOffset int, viewportRow int) {
-	if m.vterm == nil {
+	if m.gridProvider == nil {
 		return 0, 0, 0
 	}
 
@@ -326,7 +350,7 @@ func (m *MouseCoordinator) resolvePositionLocked(x, y int) (logicalLine int64, c
 	}
 
 	// Get the grid to find line width for clamping
-	grid := m.vterm.Grid()
+	grid := m.gridProvider.Grid()
 	if grid != nil && viewportRow < len(grid) {
 		lineWidth := len(grid[viewportRow])
 		if col > lineWidth {
@@ -335,7 +359,7 @@ func (m *MouseCoordinator) resolvePositionLocked(x, y int) (logicalLine int64, c
 	}
 
 	// Convert viewport position to content coordinates
-	logicalLine, charOffset, _, ok := m.vterm.ViewportToContent(viewportRow, col)
+	logicalLine, charOffset, _, ok := m.gridProvider.ViewportToContent(viewportRow, col)
 	if !ok {
 		// Fallback: treat as current line
 		return -1, col, viewportRow
@@ -346,8 +370,8 @@ func (m *MouseCoordinator) resolvePositionLocked(x, y int) (logicalLine int64, c
 
 // markDirty marks the terminal display as needing a refresh.
 func (m *MouseCoordinator) markDirty() {
-	if m.vterm != nil {
-		m.vterm.MarkAllDirty()
+	if m.gridProvider != nil {
+		m.gridProvider.MarkAllDirty()
 	}
 	if m.onDirty != nil {
 		m.onDirty()

@@ -13,6 +13,12 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+// isWordChar determines if a rune is part of a word (alphanumeric, underscore, or dash).
+func isWordChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') || r == '_' || r == '-'
+}
+
 // SelectionState represents the current state of the selection process.
 type SelectionState int
 
@@ -48,16 +54,23 @@ type SelectionStateMachine struct {
 	state         SelectionState
 	selection     Selection
 	vtermProvider VTermProvider
-	vterm         *parser.VTerm
 	width, height int
 }
 
-// NewSelectionStateMachine creates a new selection state machine.
+// NewSelectionStateMachine creates a new selection state machine from a VTerm.
 func NewSelectionStateMachine(vterm *parser.VTerm) *SelectionStateMachine {
 	return &SelectionStateMachine{
 		state:         StateIdle,
 		vtermProvider: NewVTermAdapter(vterm),
-		vterm:         vterm,
+	}
+}
+
+// NewSelectionStateMachineWithProvider creates a new selection state machine with a VTermProvider.
+// This allows for dependency injection and easier testing.
+func NewSelectionStateMachineWithProvider(provider VTermProvider) *SelectionStateMachine {
+	return &SelectionStateMachine{
+		state:         StateIdle,
+		vtermProvider: provider,
 	}
 }
 
@@ -191,7 +204,7 @@ func (s *SelectionStateMachine) GetSelectionRange() (startLine int64, startOffse
 
 // selectWord selects the word at the given content position.
 func (s *SelectionStateMachine) selectWord(logicalLine int64, charOffset int, viewportRow int) {
-	if s.vterm == nil {
+	if s.vtermProvider == nil {
 		return
 	}
 
@@ -199,17 +212,17 @@ func (s *SelectionStateMachine) selectWord(logicalLine int64, charOffset int, vi
 	var cells []parser.Cell
 	if logicalLine < 0 {
 		// Current line - get full line from display buffer
-		cells = s.vterm.CurrentLineCells()
+		cells = s.vtermProvider.CurrentLineCells()
 		if cells == nil {
 			// Fallback to grid if display buffer not available
-			grid := s.vterm.Grid()
+			grid := s.vtermProvider.Grid()
 			if grid != nil && viewportRow >= 0 && viewportRow < len(grid) {
 				cells = grid[viewportRow]
 			}
 		}
 	} else {
 		// Historical line
-		cells = s.vterm.HistoryLineCopy(int(logicalLine))
+		cells = s.vtermProvider.HistoryLineCopy(int(logicalLine))
 	}
 
 	if len(cells) == 0 {
@@ -257,7 +270,7 @@ func (s *SelectionStateMachine) selectWord(logicalLine int64, charOffset int, vi
 
 // selectLine selects the entire logical line at the given position.
 func (s *SelectionStateMachine) selectLine(logicalLine int64, charOffset int, viewportRow int) {
-	if s.vterm == nil {
+	if s.vtermProvider == nil {
 		return
 	}
 
@@ -265,17 +278,17 @@ func (s *SelectionStateMachine) selectLine(logicalLine int64, charOffset int, vi
 	var cells []parser.Cell
 	if logicalLine < 0 {
 		// Current line - get full line from display buffer
-		cells = s.vterm.CurrentLineCells()
+		cells = s.vtermProvider.CurrentLineCells()
 		if cells == nil {
 			// Fallback to grid if display buffer not available
-			grid := s.vterm.Grid()
+			grid := s.vtermProvider.Grid()
 			if grid != nil && viewportRow >= 0 && viewportRow < len(grid) {
 				cells = grid[viewportRow]
 			}
 		}
 	} else {
 		// Historical line
-		cells = s.vterm.HistoryLineCopy(int(logicalLine))
+		cells = s.vtermProvider.HistoryLineCopy(int(logicalLine))
 	}
 
 	// Select entire line from start to end
@@ -287,7 +300,7 @@ func (s *SelectionStateMachine) selectLine(logicalLine int64, charOffset int, vi
 
 // buildSelectionText extracts text from the current selection range.
 func (s *SelectionStateMachine) buildSelectionText() string {
-	if s.vterm == nil {
+	if s.vtermProvider == nil {
 		return ""
 	}
 
@@ -297,7 +310,7 @@ func (s *SelectionStateMachine) buildSelectionText() string {
 	}
 
 	// Use VTerm's GetContentText for proper extraction
-	return s.vterm.GetContentText(startLine, startOffset, endLine, endOffset)
+	return s.vtermProvider.GetContentText(startLine, startOffset, endLine, endOffset)
 }
 
 // cellsToRunes converts a slice of cells to a slice of runes.
