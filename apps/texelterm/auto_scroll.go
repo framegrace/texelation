@@ -9,10 +9,18 @@ package texelterm
 import (
 	"sync"
 	"time"
-
-	"github.com/framegrace/texelation/apps/texelterm/parser"
-	"github.com/framegrace/texelation/config"
 )
+
+// AutoScrollConfig provides configuration values for auto-scroll behavior.
+// This is injected rather than read from global config, enabling testability.
+type AutoScrollConfig struct {
+	// EdgeZone is the number of rows from the edge that trigger auto-scroll.
+	// Default: 2
+	EdgeZone int
+	// MaxScrollSpeed is the maximum scroll speed in lines per second.
+	// Default: 15
+	MaxScrollSpeed int
+}
 
 // AutoScrollManager handles edge-based auto-scrolling during selection.
 // When the mouse is near the top or bottom edge of the terminal during a selection,
@@ -24,17 +32,25 @@ type AutoScrollManager struct {
 	mouseX      int
 	mouseY      int
 	height      int
-	vterm       *parser.VTerm
+	config      AutoScrollConfig
 	wg          sync.WaitGroup
-	onScroll    func(lines int)                    // Callback when scroll occurs
-	onRefresh   func()                             // Callback to request refresh
-	onPosUpdate func(x, y int) (int64, int, int)   // Callback to resolve selection position (logicalLine, charOffset, viewportRow)
+	onScroll    func(lines int)                  // Callback when scroll occurs
+	onRefresh   func()                           // Callback to request refresh
+	onPosUpdate func(x, y int) (int64, int, int) // Callback to resolve selection position (logicalLine, charOffset, viewportRow)
 }
 
-// NewAutoScrollManager creates a new auto-scroll manager.
-func NewAutoScrollManager(vterm *parser.VTerm) *AutoScrollManager {
+// NewAutoScrollManager creates a new auto-scroll manager with the given configuration.
+// If config values are zero/invalid, defaults are applied (EdgeZone=2, MaxScrollSpeed=15).
+func NewAutoScrollManager(config AutoScrollConfig) *AutoScrollManager {
+	// Apply defaults for zero/invalid values
+	if config.EdgeZone <= 0 {
+		config.EdgeZone = 2
+	}
+	if config.MaxScrollSpeed <= 0 {
+		config.MaxScrollSpeed = 15
+	}
 	return &AutoScrollManager{
-		vterm: vterm,
+		config: config,
 	}
 }
 
@@ -75,12 +91,7 @@ func (a *AutoScrollManager) GetPosition() (int, int) {
 
 // ShouldAutoScroll checks if mouse is in the edge zone requiring auto-scroll.
 func (a *AutoScrollManager) ShouldAutoScroll(mouseY, height int) bool {
-	cfg := config.App("texelterm")
-	edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
-	if edgeZone <= 0 {
-		edgeZone = 2
-	}
-
+	edgeZone := a.config.EdgeZone
 	nearTop := mouseY < edgeZone
 	nearBottom := mouseY >= height-edgeZone
 	return nearTop || nearBottom
@@ -154,21 +165,12 @@ func (a *AutoScrollManager) calculateScroll(accumulator *float64, startTime time
 	a.mu.Lock()
 	mouseY := a.mouseY
 	height := a.height
-	vterm := a.vterm
+	edgeZone := a.config.EdgeZone
+	maxSpeed := a.config.MaxScrollSpeed
 	a.mu.Unlock()
 
-	if vterm == nil || height == 0 {
+	if height == 0 {
 		return 0
-	}
-
-	cfg := config.App("texelterm")
-	edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
-	maxSpeed := cfg.GetInt("texelterm.selection", "max_scroll_speed", 15)
-	if edgeZone <= 0 {
-		edgeZone = 2
-	}
-	if maxSpeed <= 0 {
-		maxSpeed = 15
 	}
 
 	// Calculate scroll speed based on distance from edge and elapsed time
@@ -210,16 +212,27 @@ func (a *AutoScrollManager) calculateScroll(accumulator *float64, startTime time
 	return scrollLines
 }
 
-// performScroll executes the scroll and notifies listeners.
+// performScroll executes the scroll, updates selection position, and notifies listeners.
 func (a *AutoScrollManager) performScroll(lines int) {
 	a.mu.Lock()
 	onScroll := a.onScroll
 	onRefresh := a.onRefresh
+	onPosUpdate := a.onPosUpdate
+	mouseX := a.mouseX
+	mouseY := a.mouseY
 	a.mu.Unlock()
 
+	// Scroll the viewport
 	if onScroll != nil {
 		onScroll(lines)
 	}
+
+	// Update selection position after scroll - this extends the selection
+	// as content scrolls under the stationary mouse cursor
+	if onPosUpdate != nil {
+		onPosUpdate(mouseX, mouseY)
+	}
+
 	if onRefresh != nil {
 		onRefresh()
 	}

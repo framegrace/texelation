@@ -37,6 +37,12 @@ type VTermProvider interface {
 	HistoryLineCopy(line int) []parser.Cell
 	// ViewportRow returns cells from the given viewport row (0 to height-1).
 	ViewportRow(row int) []parser.Cell
+	// CurrentLineCells returns the cells of the current (uncommitted) line.
+	CurrentLineCells() []parser.Cell
+	// Grid returns the current visible viewport grid.
+	Grid() [][]parser.Cell
+	// GetContentText extracts text from the given content coordinate range.
+	GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string
 }
 
 // ShellAwarePromptStrategy uses OSC 133 shell integration and pattern matching
@@ -199,4 +205,16 @@ func (a *vtermAdapter) ViewportRow(row int) []parser.Cell {
 		return nil
 	}
 	return grid[row]
+}
+
+func (a *vtermAdapter) CurrentLineCells() []parser.Cell {
+	return a.vterm.CurrentLineCells()
+}
+
+func (a *vtermAdapter) Grid() [][]parser.Cell {
+	return a.vterm.Grid()
+}
+
+func (a *vtermAdapter) GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string {
+	return a.vterm.GetContentText(startLine, startOffset, endLine, endOffset)
 }

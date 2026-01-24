@@ -50,11 +50,6 @@ func init() {
 	}
 }
 
-const (
-	// multiClickTimeout is the maximum time between clicks to be considered a multi-click
-	multiClickTimeout = 500 * time.Millisecond
-)
-
 type TexelTerm struct {
 	title              string
 	command            string
@@ -73,19 +68,15 @@ type TexelTerm struct {
 	buf                [][]texelcore.Cell
 	colorPalette       [258]tcell.Color
 	controlBus         texelcore.ControlBus
-	selection          termSelection
 	bracketedPasteMode bool // Tracks if application has enabled bracketed paste
+
+	// Mouse and selection handling (unified for standalone and embedded modes)
+	mouseCoordinator *MouseCoordinator
 
 	// Scroll tracking for smooth velocity-based acceleration
 	scrollEventTime time.Time // For debouncing duplicate events
 	lastScrollTime  time.Time // For velocity tracking
 	scrollVelocity  float64   // Accumulated velocity
-
-	// Auto-scroll during selection
-	autoScrollActive bool
-	autoScrollStop   chan struct{}
-	lastMouseY       int
-	lastMouseX       int
 
 	// TODO: Extract confirmation dialog to a reusable cards.DialogCard
 	// that intercepts key events and renders the overlay. This would allow
@@ -495,6 +486,122 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	return a.buf
 }
 
+// applySelectionHighlightLocked applies selection highlighting to the render buffer.
+// Must be called with a.mu locked.
+func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texelcore.Cell) {
+	if a.vterm == nil || a.mouseCoordinator == nil || len(buf) == 0 {
+		return
+	}
+	if !a.mouseCoordinator.IsSelectionRendered() {
+		return
+	}
+	// Selection range is in content coordinates (logicalLine, charOffset)
+	startLine, startOffset, endLine, endOffset, ok := a.mouseCoordinator.GetSelectionRange()
+	if !ok {
+		return
+	}
+
+	cfg := theming.ForApp("texelterm")
+	defaultBg := tcell.NewRGBColor(232, 217, 255)
+	highlight := cfg.GetColor("selection", "highlight_bg", defaultBg)
+	if !highlight.Valid() {
+		highlight = defaultBg
+	}
+	highlight = highlight.TrueColor()
+	fgColor := cfg.GetColor("selection", "highlight_fg", tcell.ColorBlack)
+	if !fgColor.Valid() {
+		fgColor = tcell.ColorBlack
+	}
+	fgColor = fgColor.TrueColor()
+
+	// Convert content coordinates to viewport coordinates for rendering
+	startRow, startCol, startVisible := a.vterm.ContentToViewport(startLine, startOffset)
+	endRow, endCol, endVisible := a.vterm.ContentToViewport(endLine, endOffset)
+
+	// If neither endpoint is visible, check if selection spans through viewport
+	if !startVisible && !endVisible {
+		// Selection might still be visible if it spans the entire viewport
+		// Check if startLine is above viewport and endLine is below
+		if startLine < endLine {
+			// Selection spans vertically - highlight entire viewport rows between them
+			// For now, clamp to viewport boundaries
+			startRow = 0
+			startCol = 0
+			endRow = len(buf) - 1
+			endCol = len(buf[endRow])
+		} else {
+			return
+		}
+	} else if !startVisible {
+		// Start is above viewport
+		startRow = 0
+		startCol = 0
+	} else if !endVisible {
+		// End is below viewport
+		endRow = len(buf) - 1
+		if endRow >= 0 {
+			endCol = len(buf[endRow])
+		}
+	}
+
+	// Highlight the selection range
+	for y := 0; y < len(buf); y++ {
+		if y < startRow || y > endRow {
+			continue
+		}
+		row := buf[y]
+		lineStart := 0
+		lineEnd := len(row)
+		if y == startRow {
+			lineStart = clampInt(startCol, 0, lineEnd)
+		}
+		if y == endRow {
+			lineEnd = clampInt(endCol, lineStart, len(row)) // endCol is already exclusive
+		}
+		if y > startRow && y < endRow {
+			lineStart = 0
+			lineEnd = len(row)
+		}
+		if y == startRow && y == endRow {
+			lineEnd = clampInt(endCol, lineStart, len(row))
+		}
+		for x := lineStart; x < lineEnd && x < len(row); x++ {
+			row[x].Style = row[x].Style.Background(highlight).Foreground(fgColor)
+		}
+	}
+}
+
+// clampInt clamps an integer value to the given range.
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+// expandTildePath expands a leading ~ to the user's home directory.
+// Supports "~" alone or "~/path" format.
+func expandTildePath(path string) string {
+	if path == "" {
+		return path
+	}
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
 // handleConfirmationKey processes key events when the close confirmation dialog is shown.
 // Returns true if the key was handled by the confirmation dialog.
 // Caller must hold a.mu on entry; the lock may be released during callback execution.
@@ -686,9 +793,52 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	}
 }
 
-
 func (a *TexelTerm) MouseWheelEnabled() bool {
 	return true
+}
+
+// SetClipboard implements ClipboardSetter for standalone mode.
+// Currently disabled pending investigation of clipboard crash issues.
+func (a *TexelTerm) SetClipboard(mime string, data []byte) {
+	// Disabled for now - clipboard operations were causing crashes
+}
+
+// SelectionStart implements texelcore.SelectionHandler.
+func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
+	if a.mouseCoordinator == nil {
+		return false
+	}
+	result := a.mouseCoordinator.SelectionStart(x, y, buttons, modifiers)
+	a.requestRefresh()
+	return result
+}
+
+// SelectionUpdate implements texelcore.SelectionHandler.
+func (a *TexelTerm) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	if a.mouseCoordinator == nil {
+		return
+	}
+	a.mouseCoordinator.SelectionUpdate(x, y, buttons, modifiers)
+	a.requestRefresh()
+}
+
+// SelectionFinish implements texelcore.SelectionHandler.
+func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
+	if a.mouseCoordinator == nil {
+		return "", nil, false
+	}
+	mime, data, ok := a.mouseCoordinator.SelectionFinish(x, y, buttons, modifiers)
+	a.requestRefresh()
+	return mime, data, ok
+}
+
+// SelectionCancel implements texelcore.SelectionHandler.
+func (a *TexelTerm) SelectionCancel() {
+	if a.mouseCoordinator == nil {
+		return
+	}
+	a.mouseCoordinator.SelectionCancel()
+	a.requestRefresh()
 }
 
 func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {
@@ -762,171 +912,10 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 	a.vterm.Scroll(lines)
 	a.saveStateLocked()
 
-	// If selection is active, update it based on the new scroll position
-	if a.selection.active {
-		line, col := a.screenToHistoryPosition(a.lastMouseX, a.lastMouseY)
-		a.selection.currentLine = line
-		a.selection.currentCol = col
-		a.vterm.MarkAllDirty()
-	}
-
 	a.mu.Unlock()
 	a.requestRefresh()
 }
 
-// manageAutoScrollState checks if the mouse is near the top/bottom edge during selection
-// and starts/stops auto-scroll accordingly. Must be called with a.mu locked.
-func (a *TexelTerm) manageAutoScrollState(mouseY int) {
-	if !a.selection.active {
-		a.stopAutoScrollLocked()
-		return
-	}
-
-	// Read config for edge zone threshold.
-	cfg := config.App("texelterm")
-	edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
-	if edgeZone <= 0 {
-		edgeZone = 2
-	}
-
-	// Check if mouse is in the edge zone
-	nearTop := mouseY < edgeZone
-	nearBottom := mouseY >= a.height-edgeZone
-
-	if nearTop || nearBottom {
-		// Start auto-scroll if not already active
-		if !a.autoScrollActive {
-			a.startAutoScrollLocked()
-		}
-	} else {
-		// Stop auto-scroll if active
-		a.stopAutoScrollLocked()
-	}
-}
-
-// startAutoScrollLocked starts the auto-scroll goroutine. Must be called with a.mu locked.
-func (a *TexelTerm) startAutoScrollLocked() {
-	if a.autoScrollActive {
-		return
-	}
-
-	a.autoScrollActive = true
-	a.autoScrollStop = make(chan struct{})
-
-	// Start auto-scroll goroutine
-	a.wg.Add(1)
-	go a.autoScrollLoop()
-}
-
-// stopAutoScrollLocked stops the auto-scroll goroutine. Must be called with a.mu locked.
-func (a *TexelTerm) stopAutoScrollLocked() {
-	if !a.autoScrollActive {
-		return
-	}
-
-	a.autoScrollActive = false
-	close(a.autoScrollStop)
-	a.autoScrollStop = nil
-}
-
-// calculateAutoScrollSpeed computes scroll velocity based on mouse distance from edge.
-// Returns speed in lines/second (negative=up, positive=down) and whether mouse is in edge zone.
-func (a *TexelTerm) calculateAutoScrollSpeed(mouseY int, elapsed float64) (speed float64, inEdgeZone bool) {
-	cfg := config.App("texelterm")
-	edgeZone := cfg.GetInt("texelterm.selection", "edge_zone", 2)
-	maxSpeed := cfg.GetInt("texelterm.selection", "max_scroll_speed", 15)
-	if edgeZone <= 0 {
-		edgeZone = 2
-	}
-	if maxSpeed <= 0 {
-		maxSpeed = 15
-	}
-
-	// Time-based acceleration (ramps up over 3 seconds)
-	timeMultiplier := 1.0 + (elapsed * 2.0)
-	if timeMultiplier > 8.0 {
-		timeMultiplier = 8.0
-	}
-
-	if mouseY < edgeZone {
-		// Near top - scroll up (negative)
-		distance := float64(edgeZone - mouseY)
-		speed = -(distance * float64(maxSpeed) / float64(edgeZone)) * timeMultiplier
-		return speed, true
-	}
-	if mouseY >= a.height-edgeZone {
-		// Near bottom - scroll down (positive)
-		distance := float64(mouseY - (a.height - edgeZone) + 1)
-		speed = (distance * float64(maxSpeed) / float64(edgeZone)) * timeMultiplier
-		return speed, true
-	}
-	return 0, false
-}
-
-// autoScrollLoop runs in a goroutine and performs auto-scrolling during selection drag.
-func (a *TexelTerm) autoScrollLoop() {
-	defer a.wg.Done()
-
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	stopChan := a.autoScrollStop
-	var accumulator float64
-	startTime := time.Now()
-
-	for {
-		select {
-		case <-stopChan:
-			return
-		case <-a.stop:
-			return
-		case <-ticker.C:
-			a.mu.Lock()
-			if !a.selection.active || a.vterm == nil {
-				a.mu.Unlock()
-				return
-			}
-
-			mouseY := a.lastMouseY
-			mouseX := a.lastMouseX
-			elapsed := time.Since(startTime).Seconds()
-
-			speed, inEdgeZone := a.calculateAutoScrollSpeed(mouseY, elapsed)
-			if !inEdgeZone {
-				accumulator = 0
-				a.mu.Unlock()
-				continue
-			}
-
-			// Convert lines/sec to lines/tick (50ms = 20 ticks/sec)
-			accumulator += speed / 20.0
-
-			var scrollLines int
-			if accumulator >= 1.0 || accumulator <= -1.0 {
-				scrollLines = int(accumulator)
-				accumulator -= float64(scrollLines)
-			}
-
-			if scrollLines != 0 {
-				a.vterm.Scroll(scrollLines)
-				a.saveStateLocked()
-
-				// Update selection endpoint
-				line, col := a.screenToHistoryPosition(mouseX, mouseY)
-				if a.selection.active {
-					a.selection.currentLine = line
-					a.selection.currentCol = col
-					a.vterm.MarkAllDirty()
-				}
-			}
-
-			a.mu.Unlock()
-			if scrollLines != 0 {
-				a.requestRefresh()
-			}
-		}
-	}
-}
 func (a *TexelTerm) Run() error {
 	// Main run loop - allows restarting shell after exit
 	for {
@@ -1165,6 +1154,25 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		a.initializeDisplayBufferLocked(paneID, cfg)
 	}
 
+	// Initialize mouse coordinator for selection handling
+	// Load config values for auto-scroll
+	scrollConfig := AutoScrollConfig{
+		EdgeZone:       cfg.GetInt("texelterm.selection", "edge_zone", 2),
+		MaxScrollSpeed: cfg.GetInt("texelterm.selection", "max_scroll_speed", 15),
+	}
+	a.mouseCoordinator = NewMouseCoordinator(
+		NewVTermAdapter(a.vterm),     // VTermProvider for selection
+		NewVTermGridAdapter(a.vterm), // GridProvider for coordinate conversion
+		a,                            // MouseWheelHandler
+		scrollConfig,
+	)
+	a.mouseCoordinator.SetSize(cols, rows)
+	a.mouseCoordinator.SetCallbacks(
+		func() { a.vterm.MarkAllDirty() },
+		a.requestRefresh,
+	)
+	a.mouseCoordinator.SetClipboardSetter(a) // Wire up clipboard for standalone mode
+
 	// Load and apply persisted state
 	savedState := a.loadStateLocked()
 	a.populateFromHistoryLocked(savedState)
@@ -1175,7 +1183,8 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 // Must be called with a.mu held.
 func (a *TexelTerm) initializeDisplayBufferLocked(paneID string, cfg config.Config) {
 	historyMemoryLines := cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
-	historyPersistDir := cfg.GetString("texelterm.history", "persist_dir", "")
+	historyPersistDir := expandTildePath(cfg.GetString("texelterm.history", "persist_dir", ""))
+
 	if historyPersistDir == "" {
 		if homeDir, err := os.UserHomeDir(); err == nil {
 			historyPersistDir = filepath.Join(homeDir, ".texelation")
@@ -1312,56 +1321,6 @@ func (a *TexelTerm) runPtyReaderLoop(ptmx *os.File, cmd *exec.Cmd) error {
 	}
 }
 
-func (a *TexelTerm) screenToHistoryPosition(x, y int) (int, int) {
-	if a.vterm == nil {
-		return 0, 0
-	}
-
-	// In alt screen mode, use screen coordinates directly (no history)
-	if a.vterm.InAltScreen() {
-		line := y
-		if line < 0 {
-			line = 0
-		} else if line >= a.height {
-			line = a.height - 1
-		}
-		col := x
-		if col < 0 {
-			col = 0
-		} else if col >= a.width {
-			col = a.width - 1
-		}
-		return line, col
-	}
-
-	// Main screen: use history coordinates
-	top := a.vterm.VisibleTop()
-	line := top + y
-	historyLen := a.vterm.HistoryLength()
-	if historyLen <= 0 {
-		line = 0
-	} else {
-		if line < 0 {
-			line = 0
-		} else if line >= historyLen {
-			line = historyLen - 1
-		}
-	}
-	col := x
-	if col < 0 {
-		col = 0
-	}
-	if historyLen > 0 {
-		if cells := a.vterm.HistoryLineCopy(line); cells != nil {
-			if col > len(cells) {
-				col = len(cells)
-			}
-		}
-	}
-	return line, col
-}
-
-
 func (a *TexelTerm) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
@@ -1376,6 +1335,10 @@ func (a *TexelTerm) Resize(cols, rows int) {
 
 	if a.vterm != nil {
 		a.vterm.Resize(cols, rows)
+	}
+
+	if a.mouseCoordinator != nil {
+		a.mouseCoordinator.SetSize(cols, rows)
 	}
 
 	if a.pty != nil {
