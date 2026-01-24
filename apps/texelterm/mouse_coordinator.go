@@ -110,7 +110,13 @@ func (m *MouseCoordinator) SetCallbacks(onDirty, onRefresh func()) {
 		},
 		onRefresh,
 		func(x, y int) (int64, int, int) {
-			return m.resolvePositionLocked(x, y)
+			// Resolve position and update selection to extend it during auto-scroll
+			m.mu.Lock()
+			logicalLine, charOffset, viewportRow := m.resolvePositionLocked(x, y)
+			m.selectionMachine.Update(logicalLine, charOffset, viewportRow, 0)
+			m.mu.Unlock()
+			m.markDirty()
+			return logicalLine, charOffset, viewportRow
 		},
 	)
 }
@@ -394,4 +400,43 @@ func wheelDeltaFromMask(mask tcell.ButtonMask) (int, int) {
 		dx++
 	}
 	return dx, dy
+}
+
+// vtermGridAdapter wraps a VTerm to implement GridProvider.
+type vtermGridAdapter struct {
+	vterm *parser.VTerm
+}
+
+// NewVTermGridAdapter creates a GridProvider from a VTerm.
+func NewVTermGridAdapter(vterm *parser.VTerm) GridProvider {
+	if vterm == nil {
+		return nil
+	}
+	return &vtermGridAdapter{vterm: vterm}
+}
+
+func (a *vtermGridAdapter) Grid() [][]parser.Cell {
+	if a.vterm == nil {
+		return nil
+	}
+	return a.vterm.Grid()
+}
+
+func (a *vtermGridAdapter) ViewportToContent(row, col int) (int64, int, bool, bool) {
+	if a.vterm == nil {
+		return 0, 0, false, false
+	}
+	return a.vterm.ViewportToContent(row, col)
+}
+
+func (a *vtermGridAdapter) MarkAllDirty() {
+	if a.vterm != nil {
+		a.vterm.MarkAllDirty()
+	}
+}
+
+func (a *vtermGridAdapter) Scroll(lines int) {
+	if a.vterm != nil {
+		a.vterm.Scroll(lines)
+	}
 }

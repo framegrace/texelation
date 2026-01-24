@@ -212,16 +212,27 @@ func (a *AutoScrollManager) calculateScroll(accumulator *float64, startTime time
 	return scrollLines
 }
 
-// performScroll executes the scroll and notifies listeners.
+// performScroll executes the scroll, updates selection position, and notifies listeners.
 func (a *AutoScrollManager) performScroll(lines int) {
 	a.mu.Lock()
 	onScroll := a.onScroll
 	onRefresh := a.onRefresh
+	onPosUpdate := a.onPosUpdate
+	mouseX := a.mouseX
+	mouseY := a.mouseY
 	a.mu.Unlock()
 
+	// Scroll the viewport
 	if onScroll != nil {
 		onScroll(lines)
 	}
+
+	// Update selection position after scroll - this extends the selection
+	// as content scrolls under the stationary mouse cursor
+	if onPosUpdate != nil {
+		onPosUpdate(mouseX, mouseY)
+	}
+
 	if onRefresh != nil {
 		onRefresh()
 	}

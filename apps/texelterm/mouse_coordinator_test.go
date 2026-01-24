@@ -433,3 +433,11 @@ func TestMouseCoordinator_MultipleSelections(t *testing.T) {
 		t.Error("expected selection to be active after second start")
 	}
 }
+
+// TestVTermGridAdapter_NilVTerm tests that nil vterm is handled safely.
+func TestVTermGridAdapter_NilVTerm(t *testing.T) {
+	adapter := NewVTermGridAdapter(nil)
+	if adapter != nil {
+		t.Error("expected nil adapter for nil vterm")
+	}
+}

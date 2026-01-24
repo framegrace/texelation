@@ -320,11 +320,3 @@ func TestVTermAdapter_NilVTerm(t *testing.T) {
 		t.Error("expected nil adapter for nil vterm")
 	}
 }
-
-// TestVTermGridAdapter_NilVTerm tests that nil vterm is handled safely.
-func TestVTermGridAdapter_NilVTerm(t *testing.T) {
-	adapter := NewVTermGridAdapter(nil)
-	if adapter != nil {
-		t.Error("expected nil adapter for nil vterm")
-	}
-}

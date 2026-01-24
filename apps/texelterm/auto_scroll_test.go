@@ -410,3 +410,59 @@ func TestAutoScrollConfig_Defaults(t *testing.T) {
 		t.Errorf("expected zero value, got %d", config.MaxScrollSpeed)
 	}
 }
+
+// TestAutoScrollManager_SelectionUpdatedDuringScroll tests that selection is extended
+// when auto-scroll fires. This catches the bug where edge-drag auto-scroll only
+// scrolls the viewport but doesn't update the selection endpoint.
+func TestAutoScrollManager_SelectionUpdatedDuringScroll(t *testing.T) {
+	var mu sync.Mutex
+	scrollCalls := 0
+	posUpdateCalls := 0
+	lastPosX, lastPosY := 0, 0
+
+	asm := NewAutoScrollManager(AutoScrollConfig{EdgeZone: 2, MaxScrollSpeed: 50})
+	asm.SetSize(24)
+	asm.SetCallbacks(
+		func(lines int) {
+			mu.Lock()
+			scrollCalls++
+			mu.Unlock()
+		},
+		func() {},
+		func(x, y int) (int64, int, int) {
+			mu.Lock()
+			posUpdateCalls++
+			lastPosX, lastPosY = x, y
+			mu.Unlock()
+			// Return mock resolved position
+			return int64(y), x, y
+		},
+	)
+
+	// Position at bottom edge (should trigger auto-scroll)
+	asm.UpdatePosition(10, 23)
+	asm.Start()
+
+	// Wait for scroll events
+	time.Sleep(200 * time.Millisecond)
+
+	asm.Stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if scrollCalls == 0 {
+		t.Fatal("expected scroll callbacks to be invoked")
+	}
+
+	// BUG: onPosUpdate should be called after each scroll to update selection
+	// Currently it's never called, so posUpdateCalls will be 0
+	if posUpdateCalls == 0 {
+		t.Error("expected onPosUpdate to be called during auto-scroll to extend selection")
+	}
+
+	// Verify the position passed matches the stored mouse position
+	if posUpdateCalls > 0 && (lastPosX != 10 || lastPosY != 23) {
+		t.Errorf("onPosUpdate called with wrong position: got (%d, %d), want (10, 23)", lastPosX, lastPosY)
+	}
+}
