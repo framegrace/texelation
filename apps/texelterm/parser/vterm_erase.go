@@ -43,6 +43,9 @@ func (v *VTerm) ClearScreenMode(mode int) {
 			}
 		} else if v.IsDisplayBufferEnabled() {
 			v.displayBufferEraseScreen(0)
+			// Clear TUI snapshot on ED 0 - the TUI app is likely exiting
+			// and we don't want stale snapshot content persisting.
+			v.resetTUIMode()
 		}
 	case 1: // Erase from beginning of screen to cursor
 		if v.inAltScreen {
@@ -59,6 +62,9 @@ func (v *VTerm) ClearScreenMode(mode int) {
 			v.altBufferClearRegion(0, 0, v.width-1, v.height-1, v.currentFG, v.currentBG)
 		} else if v.IsDisplayBufferEnabled() {
 			v.displayBufferEraseScreen(2)
+			// Clear TUI snapshot when screen is cleared - the TUI app is likely exiting
+			// or transitioning, so old snapshot content should not persist.
+			v.resetTUIMode()
 		}
 	case 3: // Erase scrollback only, leave visible screen intact (ED 3)
 		if !v.inAltScreen && v.displayBuf != nil && v.displayBuf.history != nil {
