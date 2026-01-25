@@ -14,7 +14,6 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-
 // VTerm represents the state of a virtual terminal, managing both the main screen
 // with a scrollback buffer and an alternate screen for fullscreen applications.
 type VTerm struct {
@@ -64,6 +63,8 @@ type VTerm struct {
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode         bool
 	OnBracketedPasteModeChange func(bool)
+	// TUI mode detection for fixed-width content preservation
+	tuiMode *TUIMode
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -99,6 +100,12 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		v.initDisplayBuffer()
 	}
 	v.displayBuf.enabled = true // Always enabled now
+
+	// Initialize TUI mode detection for fixed-width content preservation
+	v.tuiMode = NewTUIMode(DefaultTUIModeConfig())
+	v.tuiMode.SetCommitCallback(func() {
+		v.captureTUISnapshot()
+	})
 
 	// Set up tab stops
 	for i := 0; i < width; i++ {
@@ -852,11 +859,23 @@ func (v *VTerm) SetMargins(top, bottom int) {
 		// Invalid region, reset to full screen
 		v.marginTop = 0
 		v.marginBottom = v.height - 1
+		// Full screen margins = normal shell mode, reset TUI detection
+		v.resetTUIMode()
 		return
 	}
 	v.marginTop = top - 1
 	v.marginBottom = bottom - 1
 	v.logDebug("[SCROLL] SetMargins: top=%d, bottom=%d (0-indexed: %d-%d), height=%d", top, bottom, v.marginTop, v.marginBottom, v.height)
+
+	// Non-full-screen scroll region is a TUI signal
+	isFullScreen := (top == 1 && bottom == v.height)
+	if !isFullScreen {
+		v.signalTUIMode("scroll_region")
+	} else {
+		// Reset to full screen = shell mode
+		v.resetTUIMode()
+	}
+
 	// Per spec, DECSTBM moves cursor to home position (1,1)
 	v.SetCursorPos(0, 0)
 }
@@ -1098,4 +1117,68 @@ func (v *VTerm) GetAltBufferLine(y int) []Cell {
 
 func (v *VTerm) ScrollMargins() (int, int) {
 	return v.marginTop, v.marginLeft
+}
+
+// --- TUI Mode (Fixed-Width Content Preservation) ---
+
+// captureTUISnapshot captures the current viewport as a TUI snapshot.
+// This REPLACES any existing snapshot, preventing duplicates when TUI apps redraw.
+// The snapshot is stored separately from regular history.
+func (v *VTerm) captureTUISnapshot() {
+	if v.inAltScreen || v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	// Don't capture when user is viewing history (scrolled back).
+	if v.displayBuf.display.viewingHistory {
+		return
+	}
+	v.displayBuf.display.CaptureTUISnapshot()
+}
+
+// commitViewportAsFixedWidth commits the viewport content as fixed-width lines to history.
+// DEPRECATED: Use captureTUISnapshot instead to prevent duplicates.
+func (v *VTerm) commitViewportAsFixedWidth() {
+	if v.inAltScreen || v.displayBuf == nil || v.displayBuf.display == nil {
+		return
+	}
+	if v.displayBuf.display.viewport == nil {
+		return
+	}
+	// Don't commit when user is viewing history (scrolled back).
+	// This prevents duplicating history content when the user scrolls around.
+	if v.displayBuf.display.viewingHistory {
+		return
+	}
+	v.displayBuf.display.viewport.CommitViewportAsFixedWidth()
+}
+
+// signalTUIMode records a TUI signal for fixed-width content preservation.
+// Only signals on main screen (not alt screen) to avoid false positives from
+// fullscreen apps like vim, htop, less that use alt screen.
+// Also doesn't signal when viewing history (scrolled back) since the user is
+// just navigating, not using a TUI app.
+func (v *VTerm) signalTUIMode(signalType string) {
+	if v.inAltScreen || v.tuiMode == nil {
+		return
+	}
+	// Don't signal when viewing history - user is just scrolling
+	if v.displayBuf != nil && v.displayBuf.display != nil && v.displayBuf.display.viewingHistory {
+		return
+	}
+	v.tuiMode.Signal(signalType)
+}
+
+// resetTUIMode resets TUI mode state. Called when returning to normal operation
+// (e.g., scroll region reset to full screen).
+func (v *VTerm) resetTUIMode() {
+	if v.tuiMode != nil {
+		v.tuiMode.Reset()
+	}
+}
+
+// StopTUIMode cleans up TUI mode resources. Should be called when VTerm is destroyed.
+func (v *VTerm) StopTUIMode() {
+	if v.tuiMode != nil {
+		v.tuiMode.Stop()
+	}
 }

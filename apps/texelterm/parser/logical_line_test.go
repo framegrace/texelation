@@ -270,6 +270,170 @@ func TestLogicalLine_InsertCell_MultipleInserts(t *testing.T) {
 	}
 }
 
+// --- FixedWidth Tests ---
+
+func TestLogicalLine_FixedWidth_DefaultZero(t *testing.T) {
+	line := NewLogicalLine()
+	if line.FixedWidth != 0 {
+		t.Errorf("new line should have FixedWidth=0, got %d", line.FixedWidth)
+	}
+
+	line2 := NewLogicalLineFromCells(makeCells("Hello"))
+	if line2.FixedWidth != 0 {
+		t.Errorf("line from cells should have FixedWidth=0, got %d", line2.FixedWidth)
+	}
+}
+
+func TestLogicalLine_ClipOrPadToWidth_Clipping(t *testing.T) {
+	// Line is 10 chars, viewport is 5 - should clip
+	line := &LogicalLine{
+		Cells:      makeCells("1234567890"),
+		FixedWidth: 10,
+	}
+
+	physical := line.ClipOrPadToWidth(5)
+
+	if len(physical.Cells) != 5 {
+		t.Errorf("expected 5 cells (clipped), got %d", len(physical.Cells))
+	}
+	if cellsToString(physical.Cells) != "12345" {
+		t.Errorf("expected '12345', got '%s'", cellsToString(physical.Cells))
+	}
+	if physical.Offset != 0 {
+		t.Errorf("offset should be 0, got %d", physical.Offset)
+	}
+}
+
+func TestLogicalLine_ClipOrPadToWidth_Padding(t *testing.T) {
+	// Line is 5 chars, viewport is 10 - should pad
+	line := &LogicalLine{
+		Cells:      makeCells("Hello"),
+		FixedWidth: 5,
+	}
+
+	physical := line.ClipOrPadToWidth(10)
+
+	if len(physical.Cells) != 10 {
+		t.Errorf("expected 10 cells (padded), got %d", len(physical.Cells))
+	}
+	if cellsToString(physical.Cells) != "Hello     " {
+		t.Errorf("expected 'Hello     ', got '%s'", cellsToString(physical.Cells))
+	}
+}
+
+func TestLogicalLine_ClipOrPadToWidth_ExactMatch(t *testing.T) {
+	// Line is 5 chars, viewport is 5 - no change
+	line := &LogicalLine{
+		Cells:      makeCells("Hello"),
+		FixedWidth: 5,
+	}
+
+	physical := line.ClipOrPadToWidth(5)
+
+	if len(physical.Cells) != 5 {
+		t.Errorf("expected 5 cells, got %d", len(physical.Cells))
+	}
+	if cellsToString(physical.Cells) != "Hello" {
+		t.Errorf("expected 'Hello', got '%s'", cellsToString(physical.Cells))
+	}
+}
+
+func TestLogicalLine_ClipOrPadToWidth_EmptyLine(t *testing.T) {
+	line := &LogicalLine{
+		Cells:      nil,
+		FixedWidth: 10,
+	}
+
+	physical := line.ClipOrPadToWidth(5)
+
+	if len(physical.Cells) != 5 {
+		t.Errorf("expected 5 cells, got %d", len(physical.Cells))
+	}
+	// All spaces
+	for i, c := range physical.Cells {
+		if c.Rune != ' ' {
+			t.Errorf("expected space at position %d, got '%c'", i, c.Rune)
+		}
+	}
+}
+
+func TestLogicalLine_WrapToWidth_RespectsFixedWidth(t *testing.T) {
+	// When FixedWidth > 0, WrapToWidth should use ClipOrPadToWidth
+	line := &LogicalLine{
+		Cells:      makeCells("1234567890"),
+		FixedWidth: 10, // Fixed at 10 columns
+	}
+
+	// Request wrap at 5 columns - should NOT wrap, should clip
+	physical := line.WrapToWidth(5)
+
+	if len(physical) != 1 {
+		t.Errorf("fixed-width line should produce exactly 1 physical line, got %d", len(physical))
+	}
+	if len(physical[0].Cells) != 5 {
+		t.Errorf("expected 5 cells (clipped to viewport), got %d", len(physical[0].Cells))
+	}
+	if cellsToString(physical[0].Cells) != "12345" {
+		t.Errorf("expected '12345', got '%s'", cellsToString(physical[0].Cells))
+	}
+}
+
+func TestLogicalLine_WrapToWidth_FixedWidthPadding(t *testing.T) {
+	line := &LogicalLine{
+		Cells:      makeCells("Hi"),
+		FixedWidth: 5,
+	}
+
+	// Viewport is 10 - should pad to viewport width
+	physical := line.WrapToWidth(10)
+
+	if len(physical) != 1 {
+		t.Errorf("fixed-width line should produce exactly 1 physical line, got %d", len(physical))
+	}
+	if len(physical[0].Cells) != 10 {
+		t.Errorf("expected 10 cells (padded to viewport), got %d", len(physical[0].Cells))
+	}
+}
+
+func TestLogicalLine_WrapToWidth_ZeroFixedWidth(t *testing.T) {
+	// FixedWidth=0 should use normal reflow
+	line := &LogicalLine{
+		Cells:      makeCells("1234567890"),
+		FixedWidth: 0, // Normal reflow
+	}
+
+	physical := line.WrapToWidth(5)
+
+	if len(physical) != 2 {
+		t.Errorf("normal line should wrap to 2 physical lines, got %d", len(physical))
+	}
+	if cellsToString(physical[0].Cells) != "12345" {
+		t.Errorf("first line should be '12345', got '%s'", cellsToString(physical[0].Cells))
+	}
+	if cellsToString(physical[1].Cells) != "67890" {
+		t.Errorf("second line should be '67890', got '%s'", cellsToString(physical[1].Cells))
+	}
+}
+
+func TestLogicalLine_Clone_PreservesFixedWidth(t *testing.T) {
+	line := &LogicalLine{
+		Cells:      makeCells("Hello"),
+		FixedWidth: 80,
+	}
+
+	clone := line.Clone()
+
+	if clone.FixedWidth != 80 {
+		t.Errorf("clone should preserve FixedWidth, expected 80, got %d", clone.FixedWidth)
+	}
+
+	// Modifying original shouldn't affect clone
+	line.FixedWidth = 100
+	if clone.FixedWidth != 80 {
+		t.Error("clone's FixedWidth should be independent")
+	}
+}
+
 // Helper to create cells from a string
 func makeCells(s string) []Cell {
 	cells := make([]Cell, len(s))

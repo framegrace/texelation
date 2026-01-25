@@ -72,7 +72,7 @@ func TestDisplayBuffer_GetViewport(t *testing.T) {
 	})
 
 	// Add content using SetCell (offset converts to x,y)
-	db.SetCell(0, Cell{Rune: 'A'}) // row 0, col 0
+	db.SetCell(0, Cell{Rune: 'A'})  // row 0, col 0
 	db.SetCell(10, Cell{Rune: 'B'}) // row 1, col 0
 	db.SetCell(20, Cell{Rune: 'C'}) // row 2, col 0
 

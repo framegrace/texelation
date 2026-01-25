@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	// TXHIST02 format constants
-	diskHistoryMagic   = "TXHIST02"
-	diskHistoryVersion = 1
+	// TXHIST03 format constants (added FixedWidth support)
+	diskHistoryMagic   = "TXHIST03"
+	diskHistoryVersion = 2
 	diskHeaderSize     = 32 // magic(8) + version(4) + flags(4) + lineCount(8) + indexOffset(8)
 	diskCellSize       = 16 // rune(4) + fg(5) + bg(5) + attr(2)
+	// Line record: cellCount(4) + fixedWidth(4) + cells(cellCount * 16)
 )
 
 // DiskHistoryConfig holds configuration for disk history storage.
@@ -49,17 +50,18 @@ func DefaultDiskHistoryConfig(path string) DiskHistoryConfig {
 // DiskHistory provides indexed disk storage for logical lines.
 // It supports incremental appending and O(1) random access reads.
 //
-// File format (TXHIST02):
+// File format (TXHIST03):
 //
 //	Header (32 bytes):
-//	  Magic: "TXHIST02" (8 bytes)
-//	  Version: uint32 (4 bytes)
+//	  Magic: "TXHIST03" (8 bytes)
+//	  Version: uint32 (4 bytes) - value 2
 //	  Flags: uint32 (4 bytes)
 //	  LineCount: uint64 (8 bytes)
 //	  IndexOffset: uint64 (8 bytes)
 //
 //	Line Data (variable, repeated):
 //	  CellCount: uint32 (4 bytes)
+//	  FixedWidth: uint32 (4 bytes) - 0 for normal reflow, >0 for fixed-width lines
 //	  Cells: CellCount * 16 bytes each
 //
 //	Index (at IndexOffset, written on close):
@@ -349,8 +351,18 @@ func (dh *DiskHistory) rebuildIndex() error {
 			return fmt.Errorf("failed to read cell count at line %d: %w", i, err)
 		}
 
-		// Skip cells
-		lineSize := 4 + uint64(cellCount)*diskCellSize
+		// Skip fixed width (TXHIST03)
+		var fixedWidth uint32
+		if err := binary.Read(reader, binary.LittleEndian, &fixedWidth); err != nil {
+			if err == io.EOF {
+				dh.lineCount = uint64(len(dh.index))
+				break
+			}
+			return fmt.Errorf("failed to read fixed width at line %d: %w", i, err)
+		}
+
+		// Line size: cellCount(4) + fixedWidth(4) + cells
+		lineSize := 4 + 4 + uint64(cellCount)*diskCellSize
 		offset += lineSize
 
 		// Skip the cell data
@@ -382,6 +394,12 @@ func (dh *DiskHistory) AppendLine(line *LogicalLine) error {
 		return fmt.Errorf("failed to write cell count: %w", err)
 	}
 
+	// Write fixed width (TXHIST03)
+	fixedWidth := uint32(line.FixedWidth)
+	if err := binary.Write(dh.writer, binary.LittleEndian, fixedWidth); err != nil {
+		return fmt.Errorf("failed to write fixed width: %w", err)
+	}
+
 	// Write cells
 	cellBuf := make([]byte, diskCellSize)
 	for _, cell := range line.Cells {
@@ -391,8 +409,8 @@ func (dh *DiskHistory) AppendLine(line *LogicalLine) error {
 		}
 	}
 
-	// Update write position
-	dh.writeOffset += 4 + uint64(cellCount)*diskCellSize
+	// Update write position: cellCount(4) + fixedWidth(4) + cells
+	dh.writeOffset += 4 + 4 + uint64(cellCount)*diskCellSize
 	dh.lineCount++
 
 	// Sync if configured
@@ -478,6 +496,12 @@ func (dh *DiskHistory) readLineAt(offset uint64) (*LogicalLine, error) {
 		return nil, fmt.Errorf("failed to read cell count: %w", err)
 	}
 
+	// Read fixed width (TXHIST03)
+	var fixedWidth uint32
+	if err := binary.Read(dh.file, binary.LittleEndian, &fixedWidth); err != nil {
+		return nil, fmt.Errorf("failed to read fixed width: %w", err)
+	}
+
 	// Read cells
 	cells := make([]Cell, cellCount)
 	cellBuf := make([]byte, diskCellSize)
@@ -489,7 +513,7 @@ func (dh *DiskHistory) readLineAt(offset uint64) (*LogicalLine, error) {
 		cells[i] = decodeDiskCell(cellBuf)
 	}
 
-	return &LogicalLine{Cells: cells}, nil
+	return &LogicalLine{Cells: cells, FixedWidth: int(fixedWidth)}, nil
 }
 
 // LineCount returns the number of lines stored.

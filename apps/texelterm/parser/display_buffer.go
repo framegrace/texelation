@@ -79,6 +79,17 @@ type DisplayBuffer struct {
 
 	// debugLog is an optional logging function
 	debugLog func(format string, args ...interface{})
+
+	// TUI Snapshot - stores TUI app viewport state separately from regular history.
+	// This prevents duplicates when TUI apps redraw: the snapshot is REPLACED, not appended.
+	//
+	// tuiSnapshot stores the captured viewport as fixed-width LogicalLines
+	tuiSnapshot []*LogicalLine
+	// tuiSnapshotWidth is the terminal width when the snapshot was taken
+	tuiSnapshotWidth int
+	// tuiSnapshotHistoryPos is the history length when the snapshot was taken.
+	// This determines where the snapshot appears when scrolling back.
+	tuiSnapshotHistoryPos int64
 }
 
 // DisplayBufferConfig holds configuration for creating a DisplayBuffer.
@@ -330,6 +341,7 @@ func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
 }
 
 // buildHistoryViewGrid builds the view when scrolled back into history.
+// This includes both regular history lines and the TUI snapshot (if any).
 func (db *DisplayBuffer) buildHistoryViewGrid() [][]Cell {
 	if db.cachedHistoryView != nil {
 		if db.debugLog != nil {
@@ -350,58 +362,77 @@ func (db *DisplayBuffer) buildHistoryViewGrid() [][]Cell {
 		}
 	}
 
-	if db.history == nil {
-		if db.debugLog != nil {
-			db.debugLog("[buildHistoryViewGrid] history is nil, returning empty")
+	// Collect all physical lines: regular history + TUI snapshot
+	var allPhysicalLines []PhysicalLine
+
+	// Add regular history lines
+	if db.history != nil {
+		totalHistoryLines := db.history.TotalLen()
+
+		// Add history lines up to the snapshot position
+		snapshotLogicalPos := db.tuiSnapshotHistoryPos
+		if len(db.tuiSnapshot) == 0 {
+			snapshotLogicalPos = totalHistoryLines // No snapshot, use all history
 		}
-		return result
+
+		// Add history lines before the snapshot
+		for i := int64(0); i < snapshotLogicalPos && i < totalHistoryLines; i++ {
+			line := db.history.GetGlobal(i)
+			if line != nil {
+				wrapped := line.WrapToWidth(width)
+				allPhysicalLines = append(allPhysicalLines, wrapped...)
+			}
+		}
+
+		// Add TUI snapshot lines (if any)
+		if len(db.tuiSnapshot) > 0 {
+			for _, line := range db.tuiSnapshot {
+				wrapped := line.WrapToWidth(width)
+				allPhysicalLines = append(allPhysicalLines, wrapped...)
+			}
+		}
+
+		// Add history lines after the snapshot
+		for i := snapshotLogicalPos; i < totalHistoryLines; i++ {
+			line := db.history.GetGlobal(i)
+			if line != nil {
+				wrapped := line.WrapToWidth(width)
+				allPhysicalLines = append(allPhysicalLines, wrapped...)
+			}
+		}
+	} else if len(db.tuiSnapshot) > 0 {
+		// No history, but we have a snapshot
+		for _, line := range db.tuiSnapshot {
+			wrapped := line.WrapToWidth(width)
+			allPhysicalLines = append(allPhysicalLines, wrapped...)
+		}
 	}
 
-	// Load history lines at the scroll offset
-	// historyViewOffset is how many physical rows we've scrolled back
-	totalHistoryLines := db.history.TotalLen()
-	if totalHistoryLines == 0 {
+	totalPhysical := len(allPhysicalLines)
+	if totalPhysical == 0 {
 		if db.debugLog != nil {
-			db.debugLog("[buildHistoryViewGrid] totalHistoryLines=0, returning empty")
+			db.debugLog("[buildHistoryViewGrid] no physical lines, returning empty")
 		}
 		return result
 	}
 
 	if db.debugLog != nil {
-		db.debugLog("[buildHistoryViewGrid] totalHistoryLines=%d, historyViewOffset=%d", totalHistoryLines, db.historyViewOffset)
+		db.debugLog("[buildHistoryViewGrid] totalPhysical=%d, historyViewOffset=%d, snapshot=%d lines",
+			totalPhysical, db.historyViewOffset, len(db.tuiSnapshot))
 	}
 
-	// Calculate which logical lines to load
-	// We need to work backwards from the end of history
-	physicalRowsBack := db.historyViewOffset
+	// Calculate which physical lines to show
+	// historyViewOffset is how many physical rows we've scrolled back from the end
+	physicalRowsBack := int(db.historyViewOffset)
 
-	// Get wrapped lines from history
-	// Start from end and work back
-	var physicalLines []PhysicalLine
-	logicalIdx := totalHistoryLines - 1
-
-	for logicalIdx >= 0 && int64(len(physicalLines)) < physicalRowsBack+int64(height) {
-		line := db.history.GetGlobal(logicalIdx)
-		if line != nil {
-			wrapped := line.WrapToWidth(width)
-			// Prepend to physicalLines (we're going backwards)
-			newLines := make([]PhysicalLine, len(wrapped)+len(physicalLines))
-			copy(newLines, wrapped)
-			copy(newLines[len(wrapped):], physicalLines)
-			physicalLines = newLines
-		}
-		logicalIdx--
-	}
-
-	// Now physicalLines contains history from some point to the end
-	// We want to show starting at (len - historyViewOffset - height)
-	startIdx := len(physicalLines) - int(physicalRowsBack) - height
+	// We want to show starting at (total - offset - height)
+	startIdx := totalPhysical - physicalRowsBack - height
 	if startIdx < 0 {
 		startIdx = 0
 	}
 
-	for y := 0; y < height && startIdx+y < len(physicalLines); y++ {
-		pl := physicalLines[startIdx+y]
+	for y := 0; y < height && startIdx+y < totalPhysical; y++ {
+		pl := allPhysicalLines[startIdx+y]
 		for x, cell := range pl.Cells {
 			if x < width {
 				result[y][x] = cell
@@ -506,16 +537,24 @@ func (db *DisplayBuffer) ScrollViewDown(lines int) int {
 
 // calculateMaxHistoryScroll returns the maximum scroll offset.
 func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
-	if db.history == nil {
-		return 0
-	}
+	width := db.viewport.Width()
 
 	// Count total physical lines in history
 	var totalPhysical int64
-	for i := int64(0); i < db.history.TotalLen(); i++ {
-		line := db.history.GetGlobal(i)
-		if line != nil {
-			wrapped := line.WrapToWidth(db.viewport.Width())
+	if db.history != nil {
+		for i := int64(0); i < db.history.TotalLen(); i++ {
+			line := db.history.GetGlobal(i)
+			if line != nil {
+				wrapped := line.WrapToWidth(width)
+				totalPhysical += int64(len(wrapped))
+			}
+		}
+	}
+
+	// Add TUI snapshot lines
+	if len(db.tuiSnapshot) > 0 {
+		for _, line := range db.tuiSnapshot {
+			wrapped := line.WrapToWidth(width)
 			totalPhysical += int64(len(wrapped))
 		}
 	}
@@ -526,6 +565,120 @@ func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
 		max = 0
 	}
 	return max
+}
+
+// --- TUI Snapshot ---
+
+// CaptureTUISnapshot captures the current viewport as a TUI snapshot.
+// This REPLACES any existing snapshot, preventing duplicates when TUI apps redraw.
+// The snapshot is stored separately from regular history and shown at the
+// appropriate position when scrolling back.
+func (db *DisplayBuffer) CaptureTUISnapshot() {
+	if db.viewport == nil {
+		return
+	}
+
+	width := db.viewport.Width()
+	height := db.viewport.Height()
+
+	// Capture the current history position (where this snapshot belongs)
+	historyPos := int64(0)
+	if db.history != nil {
+		historyPos = db.history.TotalLen()
+	}
+
+	// Capture viewport as fixed-width logical lines
+	grid := db.viewport.Grid()
+
+	// First, find the last non-empty row to avoid trailing blank lines
+	lastNonEmpty := -1
+	for y := height - 1; y >= 0; y-- {
+		if y >= len(grid) {
+			continue
+		}
+		// Check if this row has any non-space content
+		for _, cell := range grid[y] {
+			if cell.Rune != ' ' && cell.Rune != 0 {
+				lastNonEmpty = y
+				break
+			}
+		}
+		if lastNonEmpty >= 0 {
+			break
+		}
+	}
+
+	if lastNonEmpty < 0 {
+		// All empty, no snapshot needed
+		db.tuiSnapshot = nil
+		db.tuiSnapshotWidth = 0
+		db.tuiSnapshotHistoryPos = 0
+		db.cachedHistoryView = nil
+		return
+	}
+
+	// Include ALL rows up to and including the last non-empty row
+	// This preserves empty separator lines between content
+	snapshot := make([]*LogicalLine, 0, lastNonEmpty+1)
+	for y := 0; y <= lastNonEmpty; y++ {
+		if y >= len(grid) {
+			break
+		}
+
+		// Create a fixed-width logical line from this row
+		cells := make([]Cell, width)
+		copy(cells, grid[y])
+
+		line := &LogicalLine{
+			Cells:      cells,
+			FixedWidth: width,
+		}
+		line.TrimTrailingSpaces()
+
+		snapshot = append(snapshot, line)
+	}
+
+	// Store the snapshot (replacing any previous)
+	db.tuiSnapshot = snapshot
+	db.tuiSnapshotWidth = width
+	db.tuiSnapshotHistoryPos = historyPos
+
+	// Invalidate cache since history view will change
+	db.cachedHistoryView = nil
+
+	if db.debugLog != nil {
+		db.debugLog("[CaptureTUISnapshot] Captured %d lines at historyPos=%d, width=%d",
+			len(snapshot), historyPos, width)
+	}
+}
+
+// ClearTUISnapshot removes the TUI snapshot.
+// Called when TUI mode ends and content should no longer be shown.
+func (db *DisplayBuffer) ClearTUISnapshot() {
+	db.tuiSnapshot = nil
+	db.tuiSnapshotWidth = 0
+	db.tuiSnapshotHistoryPos = 0
+	db.cachedHistoryView = nil
+}
+
+// HasTUISnapshot returns true if there's a TUI snapshot stored.
+func (db *DisplayBuffer) HasTUISnapshot() bool {
+	return len(db.tuiSnapshot) > 0
+}
+
+// TUISnapshotLineCount returns the number of physical lines in the TUI snapshot
+// when wrapped to the given width.
+func (db *DisplayBuffer) TUISnapshotLineCount(width int) int {
+	if len(db.tuiSnapshot) == 0 {
+		return 0
+	}
+
+	count := 0
+	for _, line := range db.tuiSnapshot {
+		wrapped := line.WrapToWidth(width)
+		count += len(wrapped)
+	}
+	return count
 }
 
 // --- Resize ---

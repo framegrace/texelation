@@ -269,4 +269,3 @@ func (v *VTerm) deleteLinesWithinMargins(n int) {
 		}
 	}
 }
-
