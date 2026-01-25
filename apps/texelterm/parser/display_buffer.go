@@ -80,16 +80,10 @@ type DisplayBuffer struct {
 	// debugLog is an optional logging function
 	debugLog func(format string, args ...interface{})
 
-	// TUI Snapshot - stores TUI app viewport state separately from regular history.
-	// This prevents duplicates when TUI apps redraw: the snapshot is REPLACED, not appended.
-	//
-	// tuiSnapshot stores the captured viewport as fixed-width LogicalLines
-	tuiSnapshot []*LogicalLine
-	// tuiSnapshotWidth is the terminal width when the snapshot was taken
-	tuiSnapshotWidth int
-	// tuiSnapshotHistoryPos is the history length when the snapshot was taken.
-	// This determines where the snapshot appears when scrolling back.
-	tuiSnapshotHistoryPos int64
+	// TUI Content Preservation - frozen lines model.
+	// The TUIViewportManager coordinates frozen line commits for TUI applications.
+	// Content freezes (commits to history) as it scrolls off the top of the viewport.
+	tuiViewportMgr *TUIViewportManager
 }
 
 // DisplayBufferConfig holds configuration for creating a DisplayBuffer.
@@ -362,49 +356,18 @@ func (db *DisplayBuffer) buildHistoryViewGrid() [][]Cell {
 		}
 	}
 
-	// Collect all physical lines: regular history + TUI snapshot
+	// Collect all physical lines from history
+	// Frozen TUI content is now stored directly in history as fixed-width lines
 	var allPhysicalLines []PhysicalLine
 
-	// Add regular history lines
 	if db.history != nil {
 		totalHistoryLines := db.history.TotalLen()
-
-		// Add history lines up to the snapshot position
-		snapshotLogicalPos := db.tuiSnapshotHistoryPos
-		if len(db.tuiSnapshot) == 0 {
-			snapshotLogicalPos = totalHistoryLines // No snapshot, use all history
-		}
-
-		// Add history lines before the snapshot
-		for i := int64(0); i < snapshotLogicalPos && i < totalHistoryLines; i++ {
+		for i := int64(0); i < totalHistoryLines; i++ {
 			line := db.history.GetGlobal(i)
 			if line != nil {
 				wrapped := line.WrapToWidth(width)
 				allPhysicalLines = append(allPhysicalLines, wrapped...)
 			}
-		}
-
-		// Add TUI snapshot lines (if any)
-		if len(db.tuiSnapshot) > 0 {
-			for _, line := range db.tuiSnapshot {
-				wrapped := line.WrapToWidth(width)
-				allPhysicalLines = append(allPhysicalLines, wrapped...)
-			}
-		}
-
-		// Add history lines after the snapshot
-		for i := snapshotLogicalPos; i < totalHistoryLines; i++ {
-			line := db.history.GetGlobal(i)
-			if line != nil {
-				wrapped := line.WrapToWidth(width)
-				allPhysicalLines = append(allPhysicalLines, wrapped...)
-			}
-		}
-	} else if len(db.tuiSnapshot) > 0 {
-		// No history, but we have a snapshot
-		for _, line := range db.tuiSnapshot {
-			wrapped := line.WrapToWidth(width)
-			allPhysicalLines = append(allPhysicalLines, wrapped...)
 		}
 	}
 
@@ -413,12 +376,33 @@ func (db *DisplayBuffer) buildHistoryViewGrid() [][]Cell {
 		if db.debugLog != nil {
 			db.debugLog("[buildHistoryViewGrid] no physical lines, returning empty")
 		}
+		// Reset scroll state if history is empty
+		db.historyViewOffset = 0
+		db.viewingHistory = false
 		return result
 	}
 
+	// Clamp historyViewOffset to valid range.
+	// This handles cases where history was truncated externally (e.g., by TUI mode exit).
+	maxScroll := int64(totalPhysical - height)
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if db.historyViewOffset > maxScroll {
+		if db.debugLog != nil {
+			db.debugLog("[buildHistoryViewGrid] clamping historyViewOffset from %d to %d (history truncated)",
+				db.historyViewOffset, maxScroll)
+		}
+		db.historyViewOffset = maxScroll
+		db.cachedHistoryView = nil // Invalidate any stale cache
+		if db.historyViewOffset == 0 {
+			db.viewingHistory = false
+		}
+	}
+
 	if db.debugLog != nil {
-		db.debugLog("[buildHistoryViewGrid] totalPhysical=%d, historyViewOffset=%d, snapshot=%d lines",
-			totalPhysical, db.historyViewOffset, len(db.tuiSnapshot))
+		db.debugLog("[buildHistoryViewGrid] totalPhysical=%d, historyViewOffset=%d",
+			totalPhysical, db.historyViewOffset)
 	}
 
 	// Calculate which physical lines to show
@@ -540,6 +524,7 @@ func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
 	width := db.viewport.Width()
 
 	// Count total physical lines in history
+	// Frozen TUI content is now stored directly in history, not separately
 	var totalPhysical int64
 	if db.history != nil {
 		for i := int64(0); i < db.history.TotalLen(); i++ {
@@ -551,14 +536,6 @@ func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
 		}
 	}
 
-	// Add TUI snapshot lines
-	if len(db.tuiSnapshot) > 0 {
-		for _, line := range db.tuiSnapshot {
-			wrapped := line.WrapToWidth(width)
-			totalPhysical += int64(len(wrapped))
-		}
-	}
-
 	// Can scroll back by total physical lines minus viewport height
 	max := totalPhysical - int64(db.viewport.Height())
 	if max < 0 {
@@ -567,118 +544,43 @@ func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
 	return max
 }
 
-// --- TUI Snapshot ---
+// --- TUI Viewport Manager Integration ---
 
-// CaptureTUISnapshot captures the current viewport as a TUI snapshot.
-// This REPLACES any existing snapshot, preventing duplicates when TUI apps redraw.
-// The snapshot is stored separately from regular history and shown at the
-// appropriate position when scrolling back.
-func (db *DisplayBuffer) CaptureTUISnapshot() {
-	if db.viewport == nil {
-		return
-	}
-
-	width := db.viewport.Width()
-	height := db.viewport.Height()
-
-	// Capture the current history position (where this snapshot belongs)
-	historyPos := int64(0)
-	if db.history != nil {
-		historyPos = db.history.TotalLen()
-	}
-
-	// Capture viewport as fixed-width logical lines
-	grid := db.viewport.Grid()
-
-	// First, find the last non-empty row to avoid trailing blank lines
-	lastNonEmpty := -1
-	for y := height - 1; y >= 0; y-- {
-		if y >= len(grid) {
-			continue
-		}
-		// Check if this row has any non-space content
-		for _, cell := range grid[y] {
-			if cell.Rune != ' ' && cell.Rune != 0 {
-				lastNonEmpty = y
-				break
-			}
-		}
-		if lastNonEmpty >= 0 {
-			break
-		}
-	}
-
-	if lastNonEmpty < 0 {
-		// All empty, no snapshot needed
-		db.tuiSnapshot = nil
-		db.tuiSnapshotWidth = 0
-		db.tuiSnapshotHistoryPos = 0
-		db.cachedHistoryView = nil
-		return
-	}
-
-	// Include ALL rows up to and including the last non-empty row
-	// This preserves empty separator lines between content
-	snapshot := make([]*LogicalLine, 0, lastNonEmpty+1)
-	for y := 0; y <= lastNonEmpty; y++ {
-		if y >= len(grid) {
-			break
-		}
-
-		// Create a fixed-width logical line from this row
-		cells := make([]Cell, width)
-		copy(cells, grid[y])
-
-		line := &LogicalLine{
-			Cells:      cells,
-			FixedWidth: width,
-		}
-		line.TrimTrailingSpaces()
-
-		snapshot = append(snapshot, line)
-	}
-
-	// Store the snapshot (replacing any previous)
-	db.tuiSnapshot = snapshot
-	db.tuiSnapshotWidth = width
-	db.tuiSnapshotHistoryPos = historyPos
-
-	// Invalidate cache since history view will change
-	db.cachedHistoryView = nil
-
-	if db.debugLog != nil {
-		db.debugLog("[CaptureTUISnapshot] Captured %d lines at historyPos=%d, width=%d",
-			len(snapshot), historyPos, width)
-	}
+// SetTUIViewportManager sets the TUI viewport manager for frozen line coordination.
+func (db *DisplayBuffer) SetTUIViewportManager(mgr *TUIViewportManager) {
+	db.tuiViewportMgr = mgr
 }
 
-// ClearTUISnapshot removes the TUI snapshot.
-// Called when TUI mode ends and content should no longer be shown.
-func (db *DisplayBuffer) ClearTUISnapshot() {
-	db.tuiSnapshot = nil
-	db.tuiSnapshotWidth = 0
-	db.tuiSnapshotHistoryPos = 0
-	db.cachedHistoryView = nil
+// GetTUIViewportManager returns the TUI viewport manager.
+func (db *DisplayBuffer) GetTUIViewportManager() *TUIViewportManager {
+	return db.tuiViewportMgr
 }
 
-// HasTUISnapshot returns true if there's a TUI snapshot stored.
-func (db *DisplayBuffer) HasTUISnapshot() bool {
-	return len(db.tuiSnapshot) > 0
-}
-
-// TUISnapshotLineCount returns the number of physical lines in the TUI snapshot
-// when wrapped to the given width.
-func (db *DisplayBuffer) TUISnapshotLineCount(width int) int {
-	if len(db.tuiSnapshot) == 0 {
+// CommitFrozenLines commits viewport rows as frozen (fixed-width) lines.
+// Uses the truncate+append pattern via the TUIViewportManager.
+// Returns the number of lines committed.
+func (db *DisplayBuffer) CommitFrozenLines() int {
+	if db.tuiViewportMgr == nil {
 		return 0
 	}
+	return db.tuiViewportMgr.CommitLiveViewport()
+}
 
-	count := 0
-	for _, line := range db.tuiSnapshot {
-		wrapped := line.WrapToWidth(width)
-		count += len(wrapped)
+// CommitBeforeScreenClear captures the current viewport state before screen erase.
+// This should be called BEFORE displayBufferEraseScreen() to capture content
+// (like token usage) before it's erased, replacing transient content (like autocomplete menus).
+func (db *DisplayBuffer) CommitBeforeScreenClear() {
+	if db.tuiViewportMgr != nil {
+		db.tuiViewportMgr.CommitBeforeScreenClear()
 	}
-	return count
+}
+
+// FinalizeOnTUIExit commits any remaining live viewport content when TUI mode ends.
+// Called automatically by TUIMode.Reset() via TUIViewportManager.ExitTUIMode().
+func (db *DisplayBuffer) FinalizeOnTUIExit() {
+	if db.tuiViewportMgr != nil {
+		db.tuiViewportMgr.ExitTUIMode()
+	}
 }
 
 // --- Resize ---

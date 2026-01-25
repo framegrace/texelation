@@ -662,3 +662,62 @@ func (h *ScrollbackHistory) Close() error {
 func (h *ScrollbackHistory) Config() ScrollbackHistoryConfig {
 	return h.config
 }
+
+// TruncateTo truncates the in-memory lines to the specified global line index.
+// This is used for TUI mode to clear and replace viewport content.
+// IMPORTANT: Disk content is NOT modified - only memory is truncated.
+// On next load from disk, full history will be restored.
+//
+// This enables the "truncate + append" pattern for TUI content preservation:
+// 1. TruncateTo(liveViewportStart) - clears previous frozen content
+// 2. Append new frozen lines
+// 3. liveViewportStart updated to new end
+func (h *ScrollbackHistory) TruncateTo(newLen int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if newLen < 0 {
+		newLen = 0
+	}
+	if newLen >= h.totalLines {
+		return // Nothing to truncate
+	}
+
+	// Calculate where this falls in the memory window
+	windowEnd := h.windowStart + int64(len(h.lines))
+
+	if newLen <= h.windowStart {
+		// Truncation point is before or at the start of our memory window.
+		// Clear all memory, but can't affect disk.
+		for i := range h.lines {
+			h.lines[i] = nil
+		}
+		h.lines = h.lines[:0]
+		h.totalLines = newLen
+		h.windowStart = newLen
+		h.dirty = true
+		return
+	}
+
+	if newLen >= windowEnd {
+		// Nothing in memory to truncate (truncation point is beyond memory)
+		h.totalLines = newLen
+		h.dirty = true
+		return
+	}
+
+	// Truncation point is within our memory window
+	newMemLen := int(newLen - h.windowStart)
+
+	// Nil out truncated lines for GC
+	for i := newMemLen; i < len(h.lines); i++ {
+		h.lines[i] = nil
+	}
+	h.lines = h.lines[:newMemLen]
+	h.totalLines = newLen
+	h.dirty = true
+
+	// Note: Disk is NOT modified. On reload, full history will be restored.
+	// This is intentional for TUI content preservation - we only truncate
+	// memory to make room for fresh frozen content.
+}

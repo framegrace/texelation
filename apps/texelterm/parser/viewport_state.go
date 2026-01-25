@@ -231,6 +231,15 @@ func (vs *ViewportState) Grid() [][]Cell {
 	return vs.grid
 }
 
+// IsRowCommitted returns true if the row came from history (LineStateCommitted).
+// These rows should NOT be included in TUI snapshots to avoid duplicates.
+func (vs *ViewportState) IsRowCommitted(y int) bool {
+	if y < 0 || y >= len(vs.rowMeta) {
+		return false
+	}
+	return vs.rowMeta[y].State == LineStateCommitted
+}
+
 // Width returns the viewport width.
 func (vs *ViewportState) Width() int {
 	return vs.width
@@ -914,6 +923,16 @@ func (vs *ViewportState) MarkRowAsCommitted(y int) {
 	vs.rowMeta[y].State = LineStateCommitted
 	// Mark as from history to prevent re-committing by CommitViewportAsFixedWidth
 	vs.rowMeta[y].FromHistory = true
+}
+
+// ClearRowCommitted resets a row's committed state to dirty.
+// Used when TUI app redraws content that should be re-committed.
+func (vs *ViewportState) ClearRowCommitted(y int) {
+	if y < 0 || y >= vs.height {
+		return
+	}
+	vs.rowMeta[y].State = LineStateDirty
+	vs.rowMeta[y].FromHistory = false
 }
 
 // --- Shell Integration ---
