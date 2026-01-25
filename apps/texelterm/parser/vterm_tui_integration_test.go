@@ -297,3 +297,51 @@ func TestVTerm_TUISignals_NotWhileViewingHistory(t *testing.T) {
 			initialHistoryLen, v.displayBuf.history.TotalLen())
 	}
 }
+
+func TestVTerm_TUISnapshotClearedOnExit(t *testing.T) {
+	// When a TUI app exits (resets scroll region to full screen),
+	// the TUI snapshot should be cleared so old content doesn't persist.
+	v := NewVTerm(80, 24)
+	defer v.StopTUIMode()
+
+	// Reconfigure with short debounce for test
+	v.tuiMode.Stop()
+	v.tuiMode = NewTUIMode(TUIModeConfig{
+		IdleTimeout:        1 * time.Second,
+		CommitDebounce:     30 * time.Millisecond,
+		MinSignalsToCommit: 2,
+	})
+
+	v.tuiMode.SetCommitCallback(func() {
+		v.displayBuf.display.CaptureTUISnapshot()
+	})
+
+	// Simulate TUI app: set non-full-screen scroll region
+	v.SetMargins(2, 20)
+	v.SetCursorPos(5, 0)
+
+	// Write some content
+	for _, r := range "TUI Content Here" {
+		v.writeCharWithWrapping(r)
+	}
+
+	// Add more signals to trigger commit
+	v.SetCursorPos(10, 5)
+	v.SetCursorVisible(false)
+
+	// Wait for debounce to trigger snapshot capture
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify snapshot was captured
+	if !v.displayBuf.display.HasTUISnapshot() {
+		t.Fatal("TUI snapshot should have been captured")
+	}
+
+	// Now simulate TUI app exit: reset scroll region to full screen
+	v.SetMargins(1, 24)
+
+	// TUI snapshot should be cleared
+	if v.displayBuf.display.HasTUISnapshot() {
+		t.Error("TUI snapshot should be cleared when scroll region resets to full screen")
+	}
+}
