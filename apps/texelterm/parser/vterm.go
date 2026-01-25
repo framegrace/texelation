@@ -1170,15 +1170,15 @@ func (v *VTerm) signalTUIMode(signalType string) {
 
 // resetTUIMode resets TUI mode state. Called when returning to normal operation
 // (e.g., scroll region reset to full screen).
-// Also clears the TUI snapshot so old content doesn't persist after the TUI app exits.
+// Note: We do NOT clear the TUI snapshot here. The snapshot is kept so that:
+// 1. Scrolling continues to work after TUI app exits (content remains visible)
+// 2. The snapshot will be replaced when a new TUI app captures a new snapshot
+// 3. The snapshot is only cleared on explicit terminal clear (ED 3)
 func (v *VTerm) resetTUIMode() {
 	if v.tuiMode != nil {
 		v.tuiMode.Reset()
 	}
-	// Clear the TUI snapshot so it doesn't persist after the app exits
-	if v.displayBuf != nil && v.displayBuf.display != nil {
-		v.displayBuf.display.ClearTUISnapshot()
-	}
+	// Don't clear TUI snapshot - keep it for scrollback history viewing
 }
 
 // StopTUIMode cleans up TUI mode resources. Should be called when VTerm is destroyed.

@@ -298,9 +298,10 @@ func TestVTerm_TUISignals_NotWhileViewingHistory(t *testing.T) {
 	}
 }
 
-func TestVTerm_TUISnapshotClearedOnExit(t *testing.T) {
+func TestVTerm_TUISnapshotPreservedOnExit(t *testing.T) {
 	// When a TUI app exits (resets scroll region to full screen),
-	// the TUI snapshot should be cleared so old content doesn't persist.
+	// the TUI snapshot is PRESERVED so scrollback still works.
+	// The snapshot will be replaced when a new TUI app runs.
 	v := NewVTerm(80, 24)
 	defer v.StopTUIMode()
 
@@ -340,8 +341,8 @@ func TestVTerm_TUISnapshotClearedOnExit(t *testing.T) {
 	// Now simulate TUI app exit: reset scroll region to full screen
 	v.SetMargins(1, 24)
 
-	// TUI snapshot should be cleared
-	if v.displayBuf.display.HasTUISnapshot() {
-		t.Error("TUI snapshot should be cleared when scroll region resets to full screen")
+	// TUI snapshot should STILL be there for scrollback
+	if !v.displayBuf.display.HasTUISnapshot() {
+		t.Error("TUI snapshot should be preserved after TUI app exits for scrollback")
 	}
 }
