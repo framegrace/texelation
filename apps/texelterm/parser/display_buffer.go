@@ -451,7 +451,12 @@ func (db *DisplayBuffer) GetViewport() []PhysicalLine {
 
 // ScrollContentUp scrolls content up (content moves up, new blank line at bottom).
 // Called when LF at bottom of scroll region (terminal escape sequence behavior).
+// In TUI mode, the line scrolling off the top is frozen to history.
 func (db *DisplayBuffer) ScrollContentUp(n int) int {
+	// In TUI mode, freeze the line at row 0 before it scrolls off
+	if db.tuiViewportMgr != nil && db.tuiViewportMgr.IsActive() && n > 0 {
+		db.freezeRowToHistory(0)
+	}
 	db.viewport.ScrollContentUp(n)
 	return n
 }
@@ -573,6 +578,31 @@ func (db *DisplayBuffer) CommitBeforeScreenClear() {
 	if db.tuiViewportMgr != nil {
 		db.tuiViewportMgr.CommitBeforeScreenClear()
 	}
+}
+
+// freezeRowToHistory freezes a single row to history in TUI mode.
+// This is called when a line scrolls off the top of the screen/region.
+func (db *DisplayBuffer) freezeRowToHistory(row int) {
+	if db.tuiViewportMgr == nil || db.viewport == nil {
+		return
+	}
+	if row < 0 || row >= db.viewport.Height() {
+		return
+	}
+	// Skip rows that are already committed (came from history)
+	if db.viewport.IsRowCommitted(row) {
+		return
+	}
+	// Create a LogicalLine from the row
+	width := db.viewport.Width()
+	cells := make([]Cell, width)
+	copy(cells, db.viewport.Grid()[row])
+	line := &LogicalLine{
+		Cells:      cells,
+		FixedWidth: width,
+	}
+	line.TrimTrailingSpaces()
+	db.tuiViewportMgr.FreezeScrolledLines([]*LogicalLine{line})
 }
 
 // FinalizeOnTUIExit commits any remaining live viewport content when TUI mode ends.
@@ -1137,7 +1167,12 @@ func (db *DisplayBuffer) DeleteLines(n int, scrollTop, scrollBottom int) {
 }
 
 // ScrollRegionUp scrolls within a region.
+// In TUI mode, the line at the top of the region is frozen to history before scrolling off.
 func (db *DisplayBuffer) ScrollRegionUp(top, bottom, n int) {
+	// In TUI mode, freeze the line at the top of the scroll region before it scrolls off
+	if db.tuiViewportMgr != nil && db.tuiViewportMgr.IsActive() && n > 0 {
+		db.freezeRowToHistory(top)
+	}
 	db.viewport.ScrollRegionUp(top, bottom, n)
 }
 

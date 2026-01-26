@@ -235,9 +235,14 @@ func (t *TUIViewportManager) FreezeScrolledLines(lines []*LogicalLine) {
 	t.tracker.MarkFrozen(startIdx, endIdx)
 	t.lastFreezeTime = time.Now()
 
+	// Update liveViewportStart to be AFTER the frozen lines.
+	// This ensures frozen lines won't be truncated by debounced commits.
+	// The truncate+append pattern only affects content after liveViewportStart.
+	t.liveViewportStart = t.history.TotalLen()
+
 	if t.debugLog != nil {
-		t.debugLog("[TUIViewportManager] FreezeScrolledLines: froze %d lines [%d, %d]",
-			len(lines), startIdx, endIdx)
+		t.debugLog("[TUIViewportManager] FreezeScrolledLines: froze %d lines [%d, %d], liveViewportStart=%d",
+			len(lines), startIdx, endIdx, t.liveViewportStart)
 	}
 }
 
