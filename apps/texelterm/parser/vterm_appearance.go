@@ -43,8 +43,8 @@ func (v *VTerm) ClearScreen() {
 		v.altBufferClearRegion(0, 0, v.width-1, v.height-1, v.defaultFG, v.defaultBG)
 		v.SetCursorPos(0, 0)
 	} else {
-		// Use display buffer clear
-		v.displayBufferClear()
+		// Use memory buffer erase
+		v.memoryBufferEraseScreen(2)
 		v.SetCursorPos(0, 0)
 	}
 }
@@ -58,10 +58,8 @@ func (v *VTerm) ClearVisibleScreen() {
 		v.altBufferClearRegion(0, 0, v.width-1, v.height-1, v.defaultFG, v.defaultBG)
 		// Cursor position unchanged
 	} else {
-		// For main screen, use display buffer to clear visible area
-		if v.IsDisplayBufferEnabled() {
-			v.displayBufferEraseScreen(2)
-		}
+		// For main screen, use memory buffer to clear visible area
+		v.memoryBufferEraseScreen(2)
 		// Cursor position unchanged
 	}
 }

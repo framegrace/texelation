@@ -24,12 +24,6 @@ func (v *VTerm) InsertCharacters(n int) {
 		rightBoundary = v.marginRight + 1
 	}
 
-	// For main screen with display buffer, use display buffer operations only.
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		v.displayBufferInsertCharacters(n)
-		return // Display buffer handles everything, don't fall through to legacy code
-	}
-
 	if v.inAltScreen {
 		line := v.altBuffer[v.cursorY]
 		// Calculate how many chars to copy and where they should end
@@ -125,12 +119,6 @@ func (v *VTerm) DeleteCharacters(n int) {
 			return
 		}
 		rightBoundary = v.marginRight + 1
-	}
-
-	// For main screen with display buffer, use display buffer operations only.
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		v.displayBufferDeleteCharacters(n)
-		return // Display buffer handles everything, don't fall through to legacy code
 	}
 
 	if v.inAltScreen {

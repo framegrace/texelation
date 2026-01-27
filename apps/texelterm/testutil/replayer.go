@@ -66,7 +66,7 @@ func NewReplayer(recording *Recording) *Replayer {
 	height := recording.Metadata.Height
 
 	vterm := parser.NewVTerm(width, height)
-	vterm.EnableDisplayBuffer()
+	// MemoryBuffer is now enabled by default
 
 	p := parser.NewParser(vterm)
 
@@ -98,7 +98,7 @@ func NewReplayer(recording *Recording) *Replayer {
 // Useful for testing with different terminal sizes than recorded.
 func NewReplayerWithSize(recording *Recording, width, height int) *Replayer {
 	vterm := parser.NewVTerm(width, height)
-	vterm.EnableDisplayBuffer()
+	// MemoryBuffer is now enabled by default
 
 	p := parser.NewParser(vterm)
 
@@ -303,7 +303,7 @@ func (r *Replayer) AtEnd() bool {
 // Reset restarts the replay from the beginning.
 func (r *Replayer) Reset() {
 	r.vterm = parser.NewVTerm(r.width, r.height)
-	r.vterm.EnableDisplayBuffer()
+	// MemoryBuffer is now enabled by default
 	r.parser = parser.NewParser(r.vterm)
 
 	// Re-wire response callback

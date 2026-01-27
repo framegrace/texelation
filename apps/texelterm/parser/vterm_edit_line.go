@@ -28,15 +28,6 @@ func (v *VTerm) InsertLines(n int) {
 		v.insertFullLines(n)
 	}
 
-	// Update display buffer if enabled (main screen only, alt screen handles its own buffer)
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
-		// CRITICAL: Sync cursor before display buffer operation - ViewportState uses its own cursor
-		// which may be stale. Without this sync, InsertLines operates at wrong position.
-		v.displayBufferSetCursorFromPhysical(false)
-		v.displayBuf.display.SetEraseColor(v.currentBG)
-		v.displayBuf.display.InsertLines(n, v.marginTop, v.marginBottom)
-	}
-
 	v.MarkAllDirty()
 }
 
@@ -73,8 +64,8 @@ func (v *VTerm) insertFullLines(n int) {
 					v.setHistoryLine(topHistory+y+1, dstLine)
 				}
 			}
-			// Create blank line at cursor position
-			v.setHistoryLine(topHistory+v.cursorY, make([]Cell, 0, v.width))
+			// Clear line at cursor position
+			v.eraseHistoryLine(topHistory + v.cursorY)
 		}
 	}
 }
@@ -160,15 +151,6 @@ func (v *VTerm) DeleteLines(n int) {
 		v.deleteFullLines(n)
 	}
 
-	// Update display buffer if enabled (main screen only, alt screen handles its own buffer)
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
-		// CRITICAL: Sync cursor before display buffer operation - ViewportState uses its own cursor
-		// which may be stale. Without this sync, DeleteLines operates at wrong position.
-		v.displayBufferSetCursorFromPhysical(false)
-		v.displayBuf.display.SetEraseColor(v.currentBG)
-		v.displayBuf.display.DeleteLines(n, v.marginTop, v.marginBottom)
-	}
-
 	v.MarkAllDirty()
 }
 
@@ -200,8 +182,8 @@ func (v *VTerm) deleteFullLines(n int) {
 				copy(dstLine, srcLine)
 				v.setHistoryLine(topHistory+y, dstLine)
 			}
-			// Create blank line at bottom of region
-			v.setHistoryLine(topHistory+v.marginBottom, make([]Cell, 0, v.width))
+			// Clear bottom line of region
+			v.eraseHistoryLine(topHistory + v.marginBottom)
 		}
 	}
 }

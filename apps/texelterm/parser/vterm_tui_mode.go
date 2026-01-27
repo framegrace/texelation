@@ -59,9 +59,6 @@ type TUIMode struct {
 	// commitCooldown is how long to wait after a commit before allowing another.
 	// This prevents duplicates from TUI apps that briefly reset scroll regions.
 	commitCooldown time.Duration
-
-	// viewportMgr coordinates frozen line commits (optional, for clean architecture)
-	viewportMgr *TUIViewportManager
 }
 
 // TUIModeConfig holds configuration for TUI mode detection.
@@ -124,30 +121,15 @@ func (t *TUIMode) SetCommitCallback(callback func()) {
 	t.commitCallback = callback
 }
 
-// SetViewportManager sets the TUI viewport manager for frozen line coordination.
-// When set, the manager's EnterTUIMode/ExitTUIMode methods are called on
-// TUI mode state transitions.
-func (t *TUIMode) SetViewportManager(mgr *TUIViewportManager) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.viewportMgr = mgr
-}
-
 // Signal records a TUI signal and activates TUI mode.
 // signalType is for debugging/logging (e.g., "scroll_region", "cursor_jump").
 func (t *TUIMode) Signal(signalType string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	wasActive := t.active
 	t.signalCount++
 	t.lastSignal = time.Now()
 	t.active = true
-
-	// Enter TUI mode on first activation
-	if !wasActive && t.viewportMgr != nil {
-		t.viewportMgr.EnterTUIMode()
-	}
 
 	// Schedule a debounced commit
 	t.scheduleCommitLocked()
@@ -161,16 +143,10 @@ func (t *TUIMode) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	wasActive := t.active
 	t.active = false
 	t.signalCount = 0
 	// Note: lastCommitTime intentionally NOT cleared here.
 	// The cooldown period prevents duplicates from brief scroll region changes.
-
-	// Exit TUI mode if we were active
-	if wasActive && t.viewportMgr != nil {
-		t.viewportMgr.ExitTUIMode()
-	}
 
 	if t.commitTimer != nil {
 		t.commitTimer.Stop()

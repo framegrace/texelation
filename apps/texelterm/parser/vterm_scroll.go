@@ -37,33 +37,38 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 		} else if v.cursorY < v.height-1 {
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
 		}
-	} else {
-		// Main screen with display buffer: use display buffer for line management.
-		// Only commit on explicit LF, not on auto-wrap.
-		// IMPORTANT: Don't commit when using a custom scroll region (TUI apps).
-		// Only commit when margins are at full screen (normal shell operation).
+	} else if v.IsMemoryBufferEnabled() {
+		// New Phase 1-3 architecture: use MemoryBuffer for line management.
 		isFullScreenMargins := v.marginTop == 0 && v.marginBottom == v.height-1
-		if commitLogical && v.IsDisplayBufferEnabled() && isFullScreenMargins {
-			v.displayBufferLineFeed()
-		}
 
-		// Main screen: check if we're at bottom margin
 		if v.cursorY == v.marginBottom {
-			if !outsideMargins {
-				v.scrollRegion(1, v.marginTop, v.marginBottom)
+			if isFullScreenMargins {
+				// Full-screen scroll: just advance the viewport, don't copy content.
+				// MemoryBuffer grows with new content; we just show a different window.
+				if commitLogical {
+					v.memoryBufferLineFeed()
+				}
+				// Cursor stays at bottom row - no SetCursorPos needed
+				// Mark all dirty since viewport content shifted
+				v.MarkAllDirty()
+			} else {
+				// Custom scroll region (TUI): need to actually shift content within region
+				if !outsideMargins {
+					v.scrollRegion(1, v.marginTop, v.marginBottom)
+				}
 			}
 		} else if v.cursorY < v.height-1 {
-			// Move cursor down - display buffer handles line management
+			// Not at bottom: ensure next line exists and move cursor down
+			if commitLogical && isFullScreenMargins {
+				v.memoryBufferLineFeed()
+			}
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
 		} else {
-			// At bottom of screen but not at scroll region bottom: stay put
 			v.ScrollToLiveEdge()
 		}
 
-		// Sync display buffer cursor after cursor movement
-		if v.IsDisplayBufferEnabled() {
-			v.displayBufferSetCursorFromPhysical(false)
-		}
+		// Sync memory buffer cursor after cursor movement
+		v.memoryBufferSetCursorFromPhysical()
 	}
 }
 
@@ -79,23 +84,14 @@ func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 			v.altBufferScrollRegionDown(top, bottom, -n, v.currentFG, v.currentBG)
 		}
 	} else {
-		// Main screen scrolling with display buffer
-		if v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
-			v.displayBuf.display.SetEraseColor(v.currentBG)
-			if n > 0 {
-				v.displayBuf.display.ScrollRegionUp(top, bottom, n)
-			} else if n < 0 {
-				v.displayBuf.display.ScrollRegionDown(top, bottom, -n)
-			}
-		}
+		// Use MemoryBuffer scroll region
+		v.memoryBufferScrollRegion(n, top, bottom)
 	}
 	v.MarkAllDirty()
 }
 
 // scrollUpWithinMargins scrolls content up within the left/right margins.
 // Similar to deleteLinesWithinMargins but operates on the entire top/bottom region.
-// Note: On main screen, this requires DisplayBuffer to be enabled. Without it,
-// the operation is a no-op because setHistoryLine on committed lines doesn't work.
 func (v *VTerm) scrollUpWithinMargins(n int) {
 	v.wrapNext = false
 	leftCol := v.marginLeft
@@ -116,21 +112,14 @@ func (v *VTerm) scrollUpWithinMargins(n int) {
 		}
 		v.altBufferClearRegion(leftCol, clearStart, rightCol, v.marginBottom, v.defaultFG, v.defaultBG)
 	} else {
-		// Main screen: use DisplayBuffer for proper viewport manipulation.
-		// Note: Without DisplayBuffer, margin scrolling is not supported on main screen
-		// because setHistoryLine on committed lines is a no-op in the history architecture.
-		if v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
-			v.displayBuf.display.ScrollColumnsUp(v.marginTop, v.marginBottom, leftCol, rightCol, n, v.defaultFG, v.defaultBG)
-		} else {
-			v.logDebug("[SCROLL] scrollUpWithinMargins skipped: DisplayBuffer not enabled")
-		}
+		// Main screen: scroll within margins using MemoryBuffer
+		v.memBufScrollColumnsUp(v.marginTop, v.marginBottom, leftCol, rightCol, n, v.defaultFG, v.defaultBG)
 	}
 	v.MarkAllDirty()
 }
 
 // scrollDownWithinMargins scrolls content down within the left/right margins.
 // Similar to insertLinesWithinMargins but operates on the entire top/bottom region.
-// Note: On main screen, this requires DisplayBuffer to be enabled (see scrollUpWithinMargins).
 func (v *VTerm) scrollDownWithinMargins(n int) {
 	v.wrapNext = false
 	leftCol := v.marginLeft
@@ -151,12 +140,8 @@ func (v *VTerm) scrollDownWithinMargins(n int) {
 		}
 		v.altBufferClearRegion(leftCol, v.marginTop, rightCol, clearEnd, v.defaultFG, v.defaultBG)
 	} else {
-		// Main screen: use DisplayBuffer for proper viewport manipulation
-		if v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
-			v.displayBuf.display.ScrollColumnsDown(v.marginTop, v.marginBottom, leftCol, rightCol, n, v.defaultFG, v.defaultBG)
-		} else {
-			v.logDebug("[SCROLL] scrollDownWithinMargins skipped: DisplayBuffer not enabled")
-		}
+		// Main screen: scroll within margins using MemoryBuffer
+		v.memBufScrollColumnsDown(v.marginTop, v.marginBottom, leftCol, rightCol, n, v.defaultFG, v.defaultBG)
 	}
 	v.MarkAllDirty()
 }
@@ -166,24 +151,136 @@ func (v *VTerm) Scroll(delta int) {
 	if v.inAltScreen {
 		return
 	}
-	v.displayBufferScroll(delta)
+	v.memoryBufferScroll(delta)
 	v.MarkAllDirty()
 }
 
 // scrollHorizontal scrolls content horizontally within specified margins.
 // n > 0: scroll right (content shifts right, blank column inserted at left)
 // n < 0: scroll left (content shifts left, blank column inserted at right)
-// Note: On main screen, this requires DisplayBuffer to be enabled (see scrollUpWithinMargins).
 func (v *VTerm) scrollHorizontal(n int, left int, right int, top int, bottom int) {
 	if v.inAltScreen {
 		v.altBufferScrollColumnsHorizontal(top, bottom, left, right, n, v.currentFG, v.currentBG)
 	} else {
-		// Main screen: use DisplayBuffer for proper viewport manipulation
-		if v.IsDisplayBufferEnabled() && v.displayBuf != nil && v.displayBuf.display != nil {
-			v.displayBuf.display.ScrollColumnsHorizontal(top, bottom, left, right, n, v.currentFG, v.currentBG)
-		} else {
-			v.logDebug("[SCROLL] scrollHorizontal skipped: DisplayBuffer not enabled")
-		}
+		// Main screen: scroll horizontally using MemoryBuffer
+		v.memBufScrollColumnsHorizontal(top, bottom, left, right, n, v.currentFG, v.currentBG)
 	}
 	v.MarkAllDirty()
+}
+
+// memBufScrollColumnsUp scrolls content up within column margins using MemoryBuffer.
+func (v *VTerm) memBufScrollColumnsUp(top, bottom, left, right, n int, fg, bg Color) {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return
+	}
+	baseGlobal := v.memBufState.liveEdgeBase
+
+	// Shift content up within the specified column range
+	for y := top; y <= bottom-n; y++ {
+		srcY := y + n
+		if srcY <= bottom {
+			srcLine := v.memBufState.memBuf.GetLine(baseGlobal + int64(srcY))
+			dstLine := v.memBufState.memBuf.EnsureLine(baseGlobal + int64(y))
+			if srcLine != nil && dstLine != nil {
+				for x := left; x <= right && x < len(srcLine.Cells); x++ {
+					if x < len(dstLine.Cells) {
+						v.memBufState.memBuf.SetCell(baseGlobal+int64(y), x, srcLine.Cells[x])
+					}
+				}
+			}
+		}
+	}
+
+	// Clear the bottom n lines' margin regions
+	clearStart := bottom - n + 1
+	if clearStart < top {
+		clearStart = top
+	}
+	blankCell := Cell{Rune: ' ', FG: fg, BG: bg}
+	for y := clearStart; y <= bottom; y++ {
+		for x := left; x <= right; x++ {
+			v.memBufState.memBuf.SetCell(baseGlobal+int64(y), x, blankCell)
+		}
+	}
+}
+
+// memBufScrollColumnsDown scrolls content down within column margins using MemoryBuffer.
+func (v *VTerm) memBufScrollColumnsDown(top, bottom, left, right, n int, fg, bg Color) {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return
+	}
+	baseGlobal := v.memBufState.liveEdgeBase
+
+	// Shift content down within the specified column range
+	for y := bottom; y >= top+n; y-- {
+		srcY := y - n
+		if srcY >= top {
+			srcLine := v.memBufState.memBuf.GetLine(baseGlobal + int64(srcY))
+			dstLine := v.memBufState.memBuf.EnsureLine(baseGlobal + int64(y))
+			if srcLine != nil && dstLine != nil {
+				for x := left; x <= right && x < len(srcLine.Cells); x++ {
+					if x < len(dstLine.Cells) {
+						v.memBufState.memBuf.SetCell(baseGlobal+int64(y), x, srcLine.Cells[x])
+					}
+				}
+			}
+		}
+	}
+
+	// Clear the top n lines' margin regions
+	clearEnd := top + n - 1
+	if clearEnd > bottom {
+		clearEnd = bottom
+	}
+	blankCell := Cell{Rune: ' ', FG: fg, BG: bg}
+	for y := top; y <= clearEnd; y++ {
+		for x := left; x <= right; x++ {
+			v.memBufState.memBuf.SetCell(baseGlobal+int64(y), x, blankCell)
+		}
+	}
+}
+
+// memBufScrollColumnsHorizontal scrolls content horizontally within margins using MemoryBuffer.
+func (v *VTerm) memBufScrollColumnsHorizontal(top, bottom, left, right, n int, fg, bg Color) {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return
+	}
+	baseGlobal := v.memBufState.liveEdgeBase
+	blankCell := Cell{Rune: ' ', FG: fg, BG: bg}
+
+	for y := top; y <= bottom; y++ {
+		line := v.memBufState.memBuf.EnsureLine(baseGlobal + int64(y))
+		if line == nil {
+			continue
+		}
+
+		if n > 0 {
+			// Scroll right: shift content right, insert blanks at left
+			for x := right; x >= left+n; x-- {
+				srcX := x - n
+				if srcX >= left && srcX < len(line.Cells) && x < len(line.Cells) {
+					v.memBufState.memBuf.SetCell(baseGlobal+int64(y), x, line.Cells[srcX])
+				}
+			}
+			// Clear left side
+			for x := left; x < left+n && x <= right; x++ {
+				v.memBufState.memBuf.SetCell(baseGlobal+int64(y), x, blankCell)
+			}
+		} else if n < 0 {
+			// Scroll left: shift content left, insert blanks at right
+			absN := -n
+			for x := left; x <= right-absN; x++ {
+				srcX := x + absN
+				if srcX <= right && srcX < len(line.Cells) {
+					v.memBufState.memBuf.SetCell(baseGlobal+int64(y), x, line.Cells[srcX])
+				}
+			}
+			// Clear right side
+			for x := right - absN + 1; x <= right; x++ {
+				if x >= left {
+					v.memBufState.memBuf.SetCell(baseGlobal+int64(y), x, blankCell)
+				}
+			}
+		}
+	}
 }

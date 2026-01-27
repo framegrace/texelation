@@ -7,7 +7,7 @@ import (
 func TestCodexExitSequence(t *testing.T) {
 	// Terminal is 25 lines high (as shown in the session)
 	v := NewVTerm(153, 25)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Fill screen with some content to simulate codex UI
@@ -86,7 +86,7 @@ func TestCodexExitSequence(t *testing.T) {
 func TestCodexExitRealisticSequence(t *testing.T) {
 	// Terminal is 25 lines high, 153 columns (as shown in the session)
 	v := NewVTerm(153, 25)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Simulate the shell prompt before codex starts

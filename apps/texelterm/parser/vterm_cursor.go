@@ -47,10 +47,10 @@ func (v *VTerm) SetCursorPos(y, x int) {
 	v.cursorX = x
 	v.cursorY = y
 
-	// NOTE: We do NOT call displayBufferSetCursorFromPhysical() here.
-	// Character placement (placeChar) already advances the display buffer cursor,
+	// NOTE: We do NOT call memoryBufferSetCursorFromPhysical() here.
+	// Character placement (placeChar) already advances the memory buffer cursor,
 	// so calling it here would cause double-advancement. Instead, cursor movement
-	// escape sequences (CUB, CUF, CUP, etc.) call displayBufferSetCursorFromPhysical
+	// escape sequences (CUB, CUF, CUP, etc.) call memoryBufferSetCursorFromPhysical
 	// explicitly via their handlers.
 
 	v.MarkDirty(v.prevCursorY)

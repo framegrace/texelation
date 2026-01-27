@@ -103,7 +103,7 @@ func (l *LogicalLine) Clone() *LogicalLine {
 type PhysicalLine struct {
 	// Cells for this physical row (width-bounded)
 	Cells []Cell
-	// LogicalIndex is the index into ScrollbackHistory for this line's source.
+	// LogicalIndex is the index into the history for this line's source.
 	// -1 means this is part of the "current" uncommitted logical line.
 	LogicalIndex int
 	// Offset is the starting position within the logical line's cells.

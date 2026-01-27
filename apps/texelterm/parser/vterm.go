@@ -24,8 +24,8 @@ type VTerm struct {
 	// Alternate screen buffer (for fullscreen apps like vim, less)
 	inAltScreen bool
 	altBuffer   [][]Cell
-	// Display buffer for scrollback (always enabled, uses 3-layer architecture)
-	displayBuf *displayBufferState
+	// Memory buffer for scrollback (Phase 1-3 architecture)
+	memBufState *memoryBufferState
 	// Terminal state
 	currentFG, currentBG               Color
 	currentAttr                        Attribute
@@ -90,19 +90,16 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		allDirty:            true,
 	}
 
-	// Apply options first (may configure display buffer with disk path)
+	// Apply options first (may configure memory buffer with disk path)
 	for _, opt := range opts {
 		opt(v)
 	}
 
-	// Always initialize display buffer if not already configured by options
-	if v.displayBuf == nil {
-		v.initDisplayBuffer()
+	// Always initialize memory buffer if not already configured by options
+	if v.memBufState == nil {
+		v.initMemoryBuffer()
 	}
-	v.displayBuf.enabled = true // Always enabled now
-
-	// Initialize TUI mode detection for fixed-width content preservation
-	v.tuiMode = NewTUIMode(DefaultTUIModeConfig())
+	v.EnableMemoryBuffer()
 
 	// Set up tab stops
 	for i := 0; i < width; i++ {
@@ -111,37 +108,32 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		}
 	}
 
-	// Only clear screen if we don't have loaded history content
-	// When restoring from snapshot, history is already loaded and we want to show it
-	if v.displayBuf.history == nil || v.displayBuf.history.TotalLen() == 0 {
-		v.ClearScreen()
-	}
-
-	// Initialize TUI viewport manager for frozen lines model AFTER ClearScreen
-	// (ClearScreen creates a new DisplayBuffer which would lose the manager)
-	if v.displayBuf != nil && v.displayBuf.display != nil && v.displayBuf.history != nil {
-		tuiMgr := NewTUIViewportManager(v.displayBuf.display.viewport, v.displayBuf.history)
-		v.displayBuf.display.SetTUIViewportManager(tuiMgr)
-		v.tuiMode.SetViewportManager(tuiMgr)
-	}
-
-	v.tuiMode.SetCommitCallback(func() {
-		v.displayBuf.display.CommitFrozenLines()
-	})
+	// Clear screen to initialize
+	v.ClearScreen()
 
 	return v
+}
+
+// logDebug is a debug logging stub.
+// Set TEXELTERM_DEBUG=1 environment variable for actual debug output.
+// For now, this is a no-op to avoid performance overhead.
+func (v *VTerm) logDebug(format string, args ...interface{}) {
+	// Debug logging disabled for performance.
+	// To enable: check os.Getenv("TEXELTERM_DEBUG") and write to a log file.
+	_ = format
+	_ = args
 }
 
 // --- Buffer & Grid Logic ---
 
 // Grid returns the currently visible 2D buffer of cells.
 // Returns the alternate screen buffer directly if in alt screen mode,
-// otherwise returns the display buffer's viewport.
+// otherwise returns the MemoryBuffer viewport.
 func (v *VTerm) Grid() [][]Cell {
 	if v.inAltScreen {
 		return v.altBuffer
 	}
-	return v.displayBufferGrid()
+	return v.memoryBufferGrid()
 }
 
 // IsBracketedPasteModeEnabled returns whether bracketed paste mode is enabled.
@@ -211,13 +203,12 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 		// Use consolidated alt buffer write operation
 		v.altBufferWriteCell(r, isWide)
 	} else {
-		// Write to display buffer (the only path for main screen)
-		v.displayBufferPlaceCharWide(r, isWide)
+		// Write to MemoryBuffer
+		v.memoryBufferPlaceCharWide(r, isWide)
 
 		// If scrolled up, jump to the bottom on new input
-		// But NOT if we're in restored view mode (user was viewing history before restart)
-		if !v.displayBuf.display.AtLiveEdge() && !v.displayBuf.display.InRestoredView() {
-			v.displayBuf.display.ScrollToBottom()
+		if !v.memoryBufferAtLiveEdge() {
+			v.memoryBufferScrollToBottom()
 			v.MarkAllDirty()
 		}
 		v.MarkDirty(v.cursorY)
@@ -247,12 +238,8 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 		} else if newX <= rightEdge {
 			v.SetCursorPos(v.cursorY, newX)
 			// Sync prevCursor with new cursor position so delta-based sync doesn't see false movement.
-			// The display buffer cursor was already advanced by displayBufferPlaceCharWide, so
-			// displayBufferSetCursorFromPhysical should not apply another delta.
-			if v.IsDisplayBufferEnabled() {
-				v.prevCursorX = v.cursorX
-				v.prevCursorY = v.cursorY
-			}
+			v.prevCursorX = v.cursorX
+			v.prevCursorY = v.cursorY
 		} else {
 			// At edge, no wrap mode - stay at edge
 			v.SetCursorPos(v.cursorY, rightEdge)
@@ -282,90 +269,80 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 
 // --- History and Viewport Management ---
 
-// getHistoryLen returns the current history length (from HistoryManager or legacy buffer).
+// getHistoryLen returns the current history length from MemoryBuffer.
 func (v *VTerm) getHistoryLen() int {
-	if v.displayBuf == nil || v.displayBuf.history == nil {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return 0
 	}
-	// Total committed lines + 1 for current line (if non-empty)
-	total := int(v.displayBuf.history.TotalLen())
-	if v.displayBuf.display != nil && v.displayBuf.display.CurrentLine().Len() > 0 {
-		total++
-	}
-	return total
+	return int(v.memBufState.memBuf.TotalLines())
 }
 
-// getHistoryLine retrieves a specific line from the display buffer history.
-// Returns physical cells (wrapped to current width) for compatibility.
+// getHistoryLine retrieves a specific line from the MemoryBuffer.
+// Returns the cells for the logical line at the given global index.
 func (v *VTerm) getHistoryLine(index int) []Cell {
-	if v.displayBuf == nil || v.displayBuf.history == nil {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return nil
 	}
 
-	totalCommitted := int(v.displayBuf.history.TotalLen())
-
-	// Check if this is the current (uncommitted) line
-	if index == totalCommitted && v.displayBuf.display != nil {
-		// Return cells from current line (may span multiple physical lines at current width)
-		currentLine := v.displayBuf.display.CurrentLine()
-		if currentLine == nil {
-			return nil
-		}
-		return currentLine.Cells
-	}
-
-	// Get from committed history
-	if index < 0 || index >= totalCommitted {
-		return nil
-	}
-
-	line := v.displayBuf.history.GetGlobal(int64(index))
+	line := v.memBufState.memBuf.GetLine(int64(index))
 	if line == nil {
 		return nil
 	}
 	return line.Cells
 }
 
-// setHistoryLine updates a specific line. Only the current (uncommitted) line can be modified.
-// For committed lines, this is a no-op (DisplayBuffer doesn't support modifying history).
-func (v *VTerm) setHistoryLine(index int, line []Cell) {
-	if v.displayBuf == nil || v.displayBuf.display == nil {
+// setHistoryLine updates a specific line in the MemoryBuffer.
+func (v *VTerm) setHistoryLine(index int, cells []Cell) {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return
 	}
 
-	totalCommitted := int(v.displayBuf.history.TotalLen())
-
-	// Can only modify the current (uncommitted) line
-	if index == totalCommitted {
-		v.displayBuf.display.ReplaceCurrentLine(line)
+	// Ensure line exists
+	line := v.memBufState.memBuf.EnsureLine(int64(index))
+	if line == nil {
 		return
 	}
 
-	// Committed lines cannot be modified in the display buffer architecture
-	// This is intentional - history is immutable once committed
-}
-
-// appendHistoryLine adds a new line to the end of the history buffer.
-// Note: In the display buffer architecture, lines are added via CommitCurrentLine()
-// during LineFeed, not via appendHistoryLine. This function is kept for compatibility
-// but is essentially a no-op for the main path.
-func (v *VTerm) appendHistoryLine(line []Cell) {
-	// In the display buffer architecture, lines are appended via CommitCurrentLine().
-	// This function is kept for compatibility with code that calls it directly,
-	// but for the main rendering path, it's not used.
-	if v.displayBuf != nil && v.displayBuf.history != nil {
-		v.displayBuf.history.AppendCells(line)
+	// Update cells
+	for i, cell := range cells {
+		v.memBufState.memBuf.SetCell(int64(index), i, cell)
 	}
 }
 
-// getTopHistoryLine calculates the index of the first visible line in the history buffer.
-// In the display buffer architecture, this returns the global index at the viewport top.
+// eraseHistoryLine clears all content from a line in the MemoryBuffer.
+func (v *VTerm) eraseHistoryLine(index int) {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return
+	}
+	v.memBufState.memBuf.EraseLine(int64(index))
+}
+
+// appendHistoryLine adds a new line to the end of the MemoryBuffer.
+// Note: This is mainly used for compatibility. Normal line creation
+// happens via memoryBufferLineFeed().
+func (v *VTerm) appendHistoryLine(cells []Cell) {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return
+	}
+
+	// Create a new line at the end
+	totalLines := v.memBufState.memBuf.TotalLines()
+	v.memBufState.memBuf.EnsureLine(totalLines)
+
+	// Set the cells
+	for i, cell := range cells {
+		v.memBufState.memBuf.SetCell(totalLines, i, cell)
+	}
+}
+
+// getTopHistoryLine calculates the index of the first visible line in the viewport.
+// Returns the global index at the viewport top.
 func (v *VTerm) getTopHistoryLine() int {
 	if v.inAltScreen {
 		return 0
 	}
-	if v.displayBuf != nil && v.displayBuf.display != nil {
-		return int(v.displayBuf.display.GlobalViewportStart())
+	if v.memBufState != nil {
+		return int(v.memBufState.liveEdgeBase)
 	}
 	return 0
 }
@@ -373,6 +350,27 @@ func (v *VTerm) getTopHistoryLine() int {
 // VisibleTop returns the history index of the first visible line.
 func (v *VTerm) VisibleTop() int {
 	return v.getTopHistoryLine()
+}
+
+// MarkPromptStart records the position where a shell prompt starts.
+// Called when OSC 133;A is received (prompt start marker).
+// This is a stub for future shell integration features.
+func (v *VTerm) MarkPromptStart() {
+	// TODO: Record prompt start position in MemoryBuffer for shell integration
+	// This would enable features like:
+	// - Skipping prompts during selection
+	// - Collapsing command output
+	// - Seamless recovery after reconnect
+}
+
+// MarkInputStart records the position where user input starts.
+// Called when OSC 133;B is received (input start / prompt end marker).
+// This is a stub for future shell integration features.
+func (v *VTerm) MarkInputStart() {
+	// TODO: Record input start position in MemoryBuffer for shell integration
+	// This would enable features like:
+	// - Highlighting user input differently
+	// - Command extraction for history
 }
 
 // HistoryLength exposes the number of lines tracked in history.
@@ -402,10 +400,15 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 		charOffset = y*v.width + x
 		return -1, charOffset, true, true
 	}
-	if v.displayBuf == nil || v.displayBuf.display == nil {
+	// Use MemoryBuffer's viewport to content mapping
+	globalLine, offset, valid := v.memoryBufferViewportToContent(y, x)
+	if !valid {
 		return 0, 0, false, false
 	}
-	return v.displayBuf.display.ViewportToContent(y, x)
+	// Check if this is the current cursor line
+	cursorLine, _ := v.memBufState.memBuf.GetCursor()
+	isCurrentLine = globalLine == cursorLine
+	return globalLine, offset, isCurrentLine, true
 }
 
 // ContentToViewport converts content coordinates to viewport coordinates.
@@ -421,10 +424,8 @@ func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, 
 		visible = y >= 0 && y < v.height
 		return
 	}
-	if v.displayBuf == nil || v.displayBuf.display == nil {
-		return 0, 0, false
-	}
-	return v.displayBuf.display.ContentToViewport(logicalLine, charOffset)
+	// Use MemoryBuffer's content to viewport mapping
+	return v.memoryBufferContentToViewport(logicalLine, charOffset)
 }
 
 // GetContentText extracts text from a content coordinate range.
@@ -433,10 +434,37 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 		// For alt screen, extract from altBuffer
 		return v.getAltScreenText(startOffset, endOffset)
 	}
-	if v.displayBuf == nil || v.displayBuf.display == nil {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return ""
 	}
-	return v.displayBuf.display.GetContentText(startLine, startOffset, endLine, endOffset)
+	// Extract text from MemoryBuffer line range
+	var result []rune
+	for lineIdx := startLine; lineIdx <= endLine; lineIdx++ {
+		line := v.memBufState.memBuf.GetLine(lineIdx)
+		if line == nil {
+			continue
+		}
+		start := 0
+		end := len(line.Cells)
+		if lineIdx == startLine {
+			start = startOffset
+		}
+		if lineIdx == endLine {
+			end = endOffset
+		}
+		for i := start; i < end && i < len(line.Cells); i++ {
+			r := line.Cells[i].Rune
+			if r == 0 {
+				r = ' '
+			}
+			result = append(result, r)
+		}
+		// Add newline between lines (but not at the end)
+		if lineIdx < endLine {
+			result = append(result, '\n')
+		}
+	}
+	return string(result)
 }
 
 // getAltScreenText extracts text from alt screen buffer.
@@ -760,23 +788,15 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 		return defaultVal
 	}
 
-	// Track whether this is a relative movement (delta-based sync)
-	// or absolute positioning (full physical-to-logical mapping).
-	isRelativeMove := false
-
 	switch command {
 	case 'A':
 		v.MoveCursorUp(param(0, 1))
-		// Vertical movements are not "same row" so always use absolute sync
 	case 'B':
 		v.MoveCursorDown(param(0, 1))
-		// Vertical movements are not "same row" so always use absolute sync
 	case 'C':
 		v.MoveCursorForward(param(0, 1))
-		isRelativeMove = true // CUF - relative horizontal movement
 	case 'D':
 		v.MoveCursorBackward(param(0, 1))
-		isRelativeMove = true // CUB - relative horizontal movement
 	case 'E':
 		// CNL - Cursor Next Line: move down N lines and to column 0
 		v.MoveCursorDown(param(0, 1))
@@ -792,7 +812,6 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			col += v.marginLeft
 		}
 		v.SetCursorPos(v.cursorY, col)
-		// ABSOLUTE positioning - do NOT use delta-based sync
 	case 'H', 'f': // CUP - Cursor Position
 		row := param(0, 1) - 1
 		col := param(1, 1) - 1
@@ -803,7 +822,6 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 		}
 		v.logDebug("[CUP] Moving cursor to row=%d, col=%d (params=%v)", row, col, params)
 		v.SetCursorPos(row, col)
-		// ABSOLUTE positioning - do NOT use delta-based sync
 	case 'd': // VPA - Vertical Position Absolute
 		row := param(0, 1) - 1
 		// In origin mode, row is relative to top margin
@@ -811,7 +829,6 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			row += v.marginTop
 		}
 		v.SetCursorPos(row, v.cursorX)
-		// ABSOLUTE positioning - do NOT use delta-based sync
 	case '`': // HPA - Horizontal Position Absolute
 		col := param(0, 1) - 1
 		// In origin mode, column is relative to left margin
@@ -819,7 +836,6 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			col += v.marginLeft
 		}
 		v.SetCursorPos(v.cursorY, col)
-		// ABSOLUTE positioning - do NOT use delta-based sync
 	case 'a': // HPR - Horizontal Position Relative
 		// Move right by n columns (relative, not absolute)
 		n := param(0, 1)
@@ -829,7 +845,6 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			newX = v.width - 1
 		}
 		v.SetCursorPos(v.cursorY, newX)
-		isRelativeMove = true // HPR - relative horizontal movement
 	case 'e': // VPR - Vertical Position Relative
 		// Move down by n rows (relative, not absolute)
 		n := param(0, 1)
@@ -839,14 +854,13 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 			newY = v.height - 1
 		}
 		v.SetCursorPos(newY, v.cursorX)
-		// VPR changes rows, so sameRow check won't apply anyway
 	}
 
-	// Sync display buffer cursor after any cursor movement escape sequence.
+	// Sync memory buffer cursor after any cursor movement escape sequence.
 	// This is done here rather than in SetCursorPos because writeCharWithWrapping also
-	// calls SetCursorPos, and it already advances the display buffer cursor.
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		v.displayBufferSetCursorFromPhysical(isRelativeMove)
+	// calls SetCursorPos, and it already advances the memory buffer cursor.
+	if !v.inAltScreen {
+		v.memoryBufferSetCursorFromPhysical()
 	}
 }
 
@@ -923,9 +937,9 @@ func (v *VTerm) MoveCursorForward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
-	// Sync display buffer cursor for direct calls (not through parser)
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		v.displayBufferSetCursorFromPhysical(true) // Relative horizontal move
+	// Sync memory buffer cursor for direct calls (not through parser)
+	if !v.inAltScreen {
+		v.memoryBufferSetCursorFromPhysical()
 	}
 }
 
@@ -945,9 +959,9 @@ func (v *VTerm) MoveCursorBackward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
-	// Sync display buffer cursor for direct calls (not through parser)
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		v.displayBufferSetCursorFromPhysical(true) // Relative horizontal move
+	// Sync memory buffer cursor for direct calls (not through parser)
+	if !v.inAltScreen {
+		v.memoryBufferSetCursorFromPhysical()
 	}
 }
 
@@ -1067,6 +1081,34 @@ func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
 }
 
+// WithMemoryBuffer enables the new memory buffer system.
+// This replaces the old DisplayBuffer system with the Phase 1-3 architecture.
+func WithMemoryBuffer() Option {
+	return func(v *VTerm) {
+		v.initMemoryBuffer()
+	}
+}
+
+// WithMemoryBufferDisk enables the memory buffer system with disk persistence.
+// The diskPath specifies where to store the history file.
+func WithMemoryBufferDisk(diskPath string, maxLines int) Option {
+	return func(v *VTerm) {
+		opts := MemoryBufferOptions{
+			MaxLines:      maxLines,
+			EvictionBatch: 1000,
+			DiskPath:      diskPath,
+		}
+		v.initMemoryBufferWithOptions(opts)
+	}
+}
+
+// WithMemoryBufferOptions enables the memory buffer system with custom options.
+func WithMemoryBufferOptions(opts MemoryBufferOptions) Option {
+	return func(v *VTerm) {
+		v.initMemoryBufferWithOptions(opts)
+	}
+}
+
 // Resize handles changes to the terminal's dimensions.
 func (v *VTerm) Resize(width, height int) {
 	if width == v.width && height == v.height {
@@ -1089,8 +1131,8 @@ func (v *VTerm) Resize(width, height int) {
 		v.altBuffer = newAltBuffer
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	} else {
-		// Use display buffer reflow - the only path now
-		v.displayBufferResize(width, height)
+		// Use MemoryBuffer/ViewportWindow resize
+		v.memoryBufferResize(width, height)
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	}
 
@@ -1141,20 +1183,17 @@ func (v *VTerm) signalTUIMode(signalType string) {
 		return
 	}
 	// Don't signal when viewing history - user is just scrolling
-	if v.displayBuf != nil && v.displayBuf.display != nil && v.displayBuf.display.viewingHistory {
+	if !v.memoryBufferAtLiveEdge() {
 		return
 	}
 	v.tuiMode.Signal(signalType)
 }
 
-// commitTUIBeforeScreenClear captures TUI content before screen erase.
-// This should be called BEFORE displayBufferEraseScreen() to capture the current
-// viewport state (like token usage) before it's cleared, replacing any transient
-// content (like autocomplete menus) that was previously committed.
+// commitTUIBeforeScreenClear is a stub for TUI content capture.
+// In the MemoryBuffer architecture, screen content is preserved in the buffer.
 func (v *VTerm) commitTUIBeforeScreenClear() {
-	if v.displayBuf != nil && v.displayBuf.display != nil {
-		v.displayBuf.display.CommitBeforeScreenClear()
-	}
+	// In the MemoryBuffer architecture, content is already preserved.
+	// This function is kept for API compatibility.
 }
 
 // resetTUIMode resets TUI mode state. Called when returning to normal operation

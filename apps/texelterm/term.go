@@ -347,7 +347,7 @@ func (a *TexelTerm) applyRestoredStateLocked(state terminalState) {
 	if state.ScrollOffset > 0 {
 		log.Printf("[TEXELTERM] Restoring scroll offset: %d (will set restoredView=true)", state.ScrollOffset)
 		a.vterm.SetScrollOffset(state.ScrollOffset)
-		log.Printf("[TEXELTERM] Restored scroll offset: %d, displayBuf enabled=%v", state.ScrollOffset, a.vterm.IsDisplayBufferEnabled())
+		log.Printf("[TEXELTERM] Restored scroll offset: %d, memoryBuf enabled=%v", state.ScrollOffset, a.vterm.IsMemoryBufferEnabled())
 	} else {
 		log.Printf("[TEXELTERM] No scroll offset to restore (offset=%d)", state.ScrollOffset)
 	}
@@ -1151,7 +1151,8 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	a.parser = parser.NewParser(a.vterm)
 
 	if displayBufferEnabled {
-		a.initializeDisplayBufferLocked(paneID, cfg)
+		// MemoryBuffer is now the only system (DisplayBuffer was removed)
+		a.initializeMemoryBufferLocked(paneID, cfg)
 	}
 
 	// Initialize mouse coordinator for selection handling
@@ -1179,9 +1180,12 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	a.applyRestoredStateLocked(savedState)
 }
 
-// initializeDisplayBufferLocked sets up the display buffer with optional disk persistence.
+// Note: initializeDisplayBufferLocked was removed as part of DisplayBuffer cleanup.
+// MemoryBuffer is now the only scrollback system.
+
+// initializeMemoryBufferLocked sets up the MemoryBuffer system.
 // Must be called with a.mu held.
-func (a *TexelTerm) initializeDisplayBufferLocked(paneID string, cfg config.Config) {
+func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Config) {
 	historyMemoryLines := cfg.GetInt("texelterm.history", "memory_lines", parser.DefaultMemoryLines)
 	historyPersistDir := expandTildePath(cfg.GetString("texelterm.history", "persist_dir", ""))
 
@@ -1191,58 +1195,57 @@ func (a *TexelTerm) initializeDisplayBufferLocked(paneID string, cfg config.Conf
 		}
 	}
 
-	log.Printf("[TEXELTERM] displayBufferEnabled=true, paneID=%q", paneID)
+	log.Printf("[TEXELTERM] memoryBufferEnabled=true, paneID=%q", paneID)
 
 	if paneID != "" {
 		scrollbackDir := filepath.Join(historyPersistDir, "scrollback")
 		if err := os.MkdirAll(scrollbackDir, 0755); err != nil {
 			log.Printf("Failed to create scrollback dir: %v", err)
 		}
-		diskPath := filepath.Join(scrollbackDir, paneID+".hist2")
+		// Use a different extension to distinguish from old format
+		diskPath := filepath.Join(scrollbackDir, paneID+".hist3")
 
-		err := a.vterm.EnableDisplayBufferWithDisk(diskPath, parser.DisplayBufferOptions{
-			MaxMemoryLines: historyMemoryLines,
-			MarginAbove:    200,
-			MarginBelow:    50,
+		err := a.vterm.EnableMemoryBufferWithDisk(diskPath, parser.MemoryBufferOptions{
+			MaxLines:      historyMemoryLines,
+			EvictionBatch: 1000,
+			DiskPath:      diskPath,
 		})
 		if err != nil {
-			log.Printf("[DISPLAY_BUFFER] Failed to enable disk-backed buffer: %v", err)
-			a.vterm.EnableDisplayBuffer()
+			log.Printf("[MEMORY_BUFFER] Failed to enable disk-backed buffer: %v", err)
+			a.vterm.EnableMemoryBuffer()
 		} else {
-			log.Printf("[DISPLAY_BUFFER] Enabled with disk persistence: %s", diskPath)
+			log.Printf("[MEMORY_BUFFER] Enabled with disk persistence: %s", diskPath)
 		}
 	} else {
-		a.vterm.EnableDisplayBuffer()
-		log.Printf("[DISPLAY_BUFFER] Enabled with memory-only (no pane ID)")
+		a.vterm.EnableMemoryBuffer()
+		log.Printf("[MEMORY_BUFFER] Enabled with memory-only (no pane ID)")
 	}
 
 	// Enable debug logging if TEXELTERM_DEBUG env var is set
 	if os.Getenv("TEXELTERM_DEBUG") != "" {
-		a.enableDebugLogging()
+		log.Printf("[DEBUG] TEXELTERM_DEBUG is set - memory buffer debug logging enabled")
 	}
 }
 
-// enableDebugLogging sets up debug logging for display buffer operations.
+// enableDebugLogging sets up debug logging for terminal operations.
 func (a *TexelTerm) enableDebugLogging() {
 	log.Printf("[DEBUG] TEXELTERM_DEBUG is set, opening debug log file")
 	debugFile, err := os.OpenFile("/tmp/texelterm-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
-	log.Printf("[DEBUG] Writing display buffer debug to /tmp/texelterm-debug.log")
-	fmt.Fprintf(debugFile, "[DB] Debug logging initialized\n")
-	a.vterm.SetDisplayBufferDebugLog(func(format string, args ...any) {
-		fmt.Fprintf(debugFile, "[DB] "+format+"\n", args...)
-	})
+	log.Printf("[DEBUG] Writing terminal debug to /tmp/texelterm-debug.log")
+	fmt.Fprintf(debugFile, "[TEXELTERM] Debug logging initialized\n")
 	a.renderDebugLog = func(format string, args ...any) {
 		fmt.Fprintf(debugFile, "[RENDER] "+format+"\n", args...)
 	}
 }
 
-// populateFromHistoryLocked populates the viewport from history for session recovery.
+// populateFromHistoryLocked prepares the viewport for history recovery.
+// With MemoryBuffer, history is automatically available - this just logs the state.
 // Must be called with a.mu held.
 func (a *TexelTerm) populateFromHistoryLocked(savedState terminalState) {
-	if !a.vterm.IsDisplayBufferEnabled() {
+	if !a.vterm.IsMemoryBufferEnabled() {
 		return
 	}
 
@@ -1251,17 +1254,15 @@ func (a *TexelTerm) populateFromHistoryLocked(savedState terminalState) {
 			savedState.LastPromptLine, a.vterm.HistoryLength())
 	}
 
-	if savedState.LastPromptLine >= 0 {
-		if a.renderDebugLog != nil {
-			a.renderDebugLog("[RECOVERY] Using seamless recovery with lastPromptLine=%d, promptHeight=%d",
+	// With MemoryBuffer, history is automatically loaded from disk if available.
+	// The scroll offset is restored in applyRestoredStateLocked.
+	if a.renderDebugLog != nil {
+		if savedState.LastPromptLine >= 0 {
+			a.renderDebugLog("[RECOVERY] Saved prompt line=%d, height=%d",
 				savedState.LastPromptLine, savedState.LastPromptHeight)
+		} else {
+			a.renderDebugLog("[RECOVERY] No saved prompt line")
 		}
-		a.vterm.PopulateViewportFromHistoryToPrompt(savedState.LastPromptLine, savedState.LastPromptHeight)
-	} else {
-		if a.renderDebugLog != nil {
-			a.renderDebugLog("[RECOVERY] Fallback: no valid lastPromptLine")
-		}
-		a.vterm.PopulateViewportFromHistory()
 	}
 }
 
@@ -1361,10 +1362,10 @@ func (a *TexelTerm) Stop() {
 		cmd = a.cmd
 		pty = a.pty
 
-		// Close display buffer (flushes to disk if disk-backed)
+		// Close memory buffer (flushes to disk if disk-backed)
 		if a.vterm != nil {
-			if err := a.vterm.CloseDisplayBuffer(); err != nil {
-				log.Printf("Error closing display buffer: %v", err)
+			if err := a.vterm.CloseMemoryBuffer(); err != nil {
+				log.Printf("Error closing memory buffer: %v", err)
 			}
 		}
 

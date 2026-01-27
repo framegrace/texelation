@@ -22,7 +22,7 @@ import (
 // TestWideCharacter_BasicPlacement tests that wide characters occupy 2 cells.
 func TestWideCharacter_BasicPlacement(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Write: A + wide emoji + B
@@ -68,7 +68,7 @@ func TestWideCharacter_BasicPlacement(t *testing.T) {
 // TestWideCharacter_MultipleEmoji tests multiple wide characters in sequence.
 func TestWideCharacter_MultipleEmoji(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Write: 🎉🎊🎁 (3 emojis = 6 cells)
@@ -102,7 +102,7 @@ func TestWideCharacter_MultipleEmoji(t *testing.T) {
 // TestWideCharacter_AtLineEnd tests wide character at end of line.
 func TestWideCharacter_AtLineEnd(t *testing.T) {
 	v := NewVTerm(10, 5) // 10 columns wide
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Write 9 characters, then a wide character
@@ -116,8 +116,8 @@ func TestWideCharacter_AtLineEnd(t *testing.T) {
 	}
 
 	grid := v.Grid()
-	t.Logf("Row 0: %s", cellsToStringTest(grid[0]))
-	t.Logf("Row 1: %s", cellsToStringTest(grid[1]))
+	t.Logf("Row 0: %s", cellsToString(grid[0]))
+	t.Logf("Row 1: %s", cellsToString(grid[1]))
 
 	// The emoji should either:
 	// 1. Wrap to next line (starts at row 1, col 0)
@@ -135,7 +135,7 @@ func TestWideCharacter_AtLineEnd(t *testing.T) {
 // TestEL0_OnlyErasesCurrentLine tests that EL 0 doesn't affect other lines.
 func TestEL0_OnlyErasesCurrentLine(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Write 3 lines
@@ -172,19 +172,19 @@ func TestEL0_OnlyErasesCurrentLine(t *testing.T) {
 	grid := v.Grid()
 
 	// Line1 should be unchanged
-	line1 := strings.TrimRight(cellsToStringTest(grid[0]), " ")
+	line1 := strings.TrimRight(cellsToString(grid[0]), " ")
 	if line1 != "Line1-Content" {
 		t.Errorf("Line1 was modified: expected 'Line1-Content', got %q", line1)
 	}
 
 	// Line2 should have first 5 chars preserved, rest erased
-	line2 := strings.TrimRight(cellsToStringTest(grid[1]), " ")
+	line2 := strings.TrimRight(cellsToString(grid[1]), " ")
 	if line2 != "Line2" {
 		t.Errorf("Line2 incorrect: expected 'Line2', got %q", line2)
 	}
 
 	// Line3 should be unchanged
-	line3 := strings.TrimRight(cellsToStringTest(grid[2]), " ")
+	line3 := strings.TrimRight(cellsToString(grid[2]), " ")
 	if line3 != "Line3-Content" {
 		t.Errorf("Line3 was modified: expected 'Line3-Content', got %q", line3)
 	}
@@ -193,7 +193,7 @@ func TestEL0_OnlyErasesCurrentLine(t *testing.T) {
 // TestEL1_OnlyErasesCurrentLine tests that EL 1 doesn't affect other lines.
 func TestEL1_OnlyErasesCurrentLine(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Write 3 lines
@@ -224,7 +224,7 @@ func TestEL1_OnlyErasesCurrentLine(t *testing.T) {
 	grid := v.Grid()
 
 	// Line1 should be unchanged
-	line1 := strings.TrimRight(cellsToStringTest(grid[0]), " ")
+	line1 := strings.TrimRight(cellsToString(grid[0]), " ")
 	if line1 != "Line1-Content" {
 		t.Errorf("Line1 was modified: expected 'Line1-Content', got %q", line1)
 	}
@@ -233,7 +233,7 @@ func TestEL1_OnlyErasesCurrentLine(t *testing.T) {
 	// "Line2-Content" (positions 0-12) -> positions 8-12 remain = "ntent"
 	// CSI 2;8H moves to column 8 (1-indexed) = position 7 (0-indexed)
 	// EL 1 erases from start to cursor inclusive (positions 0-7)
-	line2 := cellsToStringTest(grid[1])
+	line2 := cellsToString(grid[1])
 	t.Logf("Line2 after EL 1: %q", line2)
 
 	// First 8 characters (positions 0-7) should be spaces
@@ -250,7 +250,7 @@ func TestEL1_OnlyErasesCurrentLine(t *testing.T) {
 	}
 
 	// Line3 should be unchanged
-	line3 := strings.TrimRight(cellsToStringTest(grid[2]), " ")
+	line3 := strings.TrimRight(cellsToString(grid[2]), " ")
 	if line3 != "Line3-Content" {
 		t.Errorf("Line3 was modified: expected 'Line3-Content', got %q", line3)
 	}
@@ -259,7 +259,7 @@ func TestEL1_OnlyErasesCurrentLine(t *testing.T) {
 // TestEL2_OnlyErasesCurrentLine tests that EL 2 doesn't affect other lines.
 func TestEL2_OnlyErasesCurrentLine(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Write 3 lines
@@ -290,19 +290,19 @@ func TestEL2_OnlyErasesCurrentLine(t *testing.T) {
 	grid := v.Grid()
 
 	// Line1 should be unchanged
-	line1 := strings.TrimRight(cellsToStringTest(grid[0]), " ")
+	line1 := strings.TrimRight(cellsToString(grid[0]), " ")
 	if line1 != "Line1-Content" {
 		t.Errorf("Line1 was modified: expected 'Line1-Content', got %q", line1)
 	}
 
 	// Line2 should be entirely blank
-	line2 := strings.TrimRight(cellsToStringTest(grid[1]), " ")
+	line2 := strings.TrimRight(cellsToString(grid[1]), " ")
 	if line2 != "" {
 		t.Errorf("Line2 should be blank, got %q", line2)
 	}
 
 	// Line3 should be unchanged
-	line3 := strings.TrimRight(cellsToStringTest(grid[2]), " ")
+	line3 := strings.TrimRight(cellsToString(grid[2]), " ")
 	if line3 != "Line3-Content" {
 		t.Errorf("Line3 was modified: expected 'Line3-Content', got %q", line3)
 	}
@@ -315,7 +315,7 @@ func TestEL2_OnlyErasesCurrentLine(t *testing.T) {
 // TestED0_EraseToEndOfScreen tests ED 0 erases from cursor to end of screen.
 func TestED0_EraseToEndOfScreen(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Fill screen with X's
@@ -375,7 +375,7 @@ func TestED0_EraseToEndOfScreen(t *testing.T) {
 // TestED1_EraseFromStartOfScreen tests ED 1 erases from start of screen to cursor.
 func TestED1_EraseFromStartOfScreen(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Fill screen with X's
@@ -435,7 +435,7 @@ func TestED1_EraseFromStartOfScreen(t *testing.T) {
 // TestED2_EraseEntireScreen tests ED 2 erases entire visible screen.
 func TestED2_EraseEntireScreen(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Fill screen with X's
@@ -478,7 +478,7 @@ func TestED2_EraseEntireScreen(t *testing.T) {
 // TestECH_EraseCharacters tests ECH replaces characters with spaces.
 func TestECH_EraseCharacters(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Write ABCDEFGHIJ
@@ -497,7 +497,7 @@ func TestECH_EraseCharacters(t *testing.T) {
 	}
 
 	grid := v.Grid()
-	line := cellsToStringTest(grid[0])
+	line := cellsToString(grid[0])
 	t.Logf("After ECH 3: %q", line)
 
 	// Expected: "ABC   GHIJ" (D,E,F replaced with spaces)
@@ -518,7 +518,7 @@ func TestECH_EraseCharacters(t *testing.T) {
 // TestDCH_DeleteCharacters tests DCH removes characters and shifts left.
 func TestDCH_DeleteCharacters(t *testing.T) {
 	v := NewVTerm(20, 5)
-	v.EnableDisplayBuffer()
+	// MemoryBuffer is enabled by default
 	p := NewParser(v)
 
 	// Write ABCDEFGHIJ
@@ -537,7 +537,7 @@ func TestDCH_DeleteCharacters(t *testing.T) {
 	}
 
 	grid := v.Grid()
-	line := strings.TrimRight(cellsToStringTest(grid[0]), " ")
+	line := strings.TrimRight(cellsToString(grid[0]), " ")
 	t.Logf("After DCH 3: %q", line)
 
 	// Expected: "ABCGHIJ" (DEF deleted, GHIJ shifted left)
