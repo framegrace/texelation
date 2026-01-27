@@ -224,25 +224,8 @@ func decodeColorFromValue(mode ColorMode, value uint32) Color {
 	}
 }
 
-// SaveScrollbackHistory saves a ScrollbackHistory to a file.
-func SaveScrollbackHistory(path string, history *ScrollbackHistory) error {
-	return WriteLogicalLines(path, history.All())
-}
-
-// LoadScrollbackHistory loads lines from a file into a ScrollbackHistory.
-// Appends to any existing lines in the history.
-func LoadScrollbackHistory(path string, history *ScrollbackHistory) error {
-	lines, err := LoadLogicalLines(path)
-	if err != nil {
-		return err
-	}
-
-	for _, line := range lines {
-		history.Append(line)
-	}
-
-	return nil
-}
+// Note: SaveScrollbackHistory and LoadScrollbackHistory were removed
+// as part of the DisplayBuffer cleanup. MemoryBuffer uses its own persistence.
 
 // ConvertPhysicalToLogical converts physical lines (with Wrapped flag) to logical lines.
 // This is used to migrate from the old storage format.

@@ -335,46 +335,5 @@ func TestConvertPhysicalToLogical_EmptyLines(t *testing.T) {
 	}
 }
 
-func TestScrollbackHistory_SaveAndLoad(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "history_test")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	histFile := filepath.Join(tmpDir, "test.lhist")
-
-	// Create a ScrollbackHistory and add lines
-	history := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
-	history.AppendCells(makeCells("Line 1"))
-	history.AppendCells(makeCells("Line 2 is longer"))
-	history.AppendCells(makeCells(""))
-	history.AppendCells(makeCells("Line 4"))
-
-	// Save it
-	err = SaveScrollbackHistory(histFile, history)
-	if err != nil {
-		t.Fatalf("SaveScrollbackHistory failed: %v", err)
-	}
-
-	// Load into a new history
-	newHistory := NewScrollbackHistory(ScrollbackHistoryConfig{MaxMemoryLines: 1000})
-	err = LoadScrollbackHistory(histFile, newHistory)
-	if err != nil {
-		t.Fatalf("LoadScrollbackHistory failed: %v", err)
-	}
-
-	// Verify
-	if newHistory.Len() != 4 {
-		t.Fatalf("expected 4 lines, got %d", newHistory.Len())
-	}
-
-	expected := []string{"Line 1", "Line 2 is longer", "", "Line 4"}
-	for i, exp := range expected {
-		line := newHistory.Get(i)
-		got := cellsToString(line.Cells)
-		if got != exp {
-			t.Errorf("line %d: expected %q, got %q", i, exp, got)
-		}
-	}
-}
+// Note: TestScrollbackHistory_SaveAndLoad was removed as part of DisplayBuffer cleanup.
+// The ScrollbackHistory type has been replaced by MemoryBuffer.

@@ -9,7 +9,7 @@ package parser
 
 // altBufferWriteCell writes a cell to the alt buffer at the current cursor position.
 // Handles insert mode and wide character support.
-// This parallels displayBufferPlaceCharWide for main screen operations.
+// This parallels memoryBufferPlaceCharWide for main screen operations.
 func (v *VTerm) altBufferWriteCell(r rune, isWide bool) {
 	if !v.inAltScreen {
 		return

@@ -29,15 +29,8 @@ func (v *VTerm) SetCursorPos(y, x int) {
 	v.prevCursorY = v.cursorY
 	v.prevWrapNext = v.wrapNext
 
-	// Large cursor jumps (more than 1 row) are a TUI signal.
-	// This indicates absolute cursor positioning typical of TUI apps.
-	rowDelta := y - v.cursorY
-	if rowDelta < 0 {
-		rowDelta = -rowDelta
-	}
-	if rowDelta > 1 {
-		v.signalTUIMode("cursor_jump")
-	}
+	// Notify FixedWidthDetector of cursor movement for TUI detection
+	v.notifyDetectorCursorMove(y)
 
 	// Only clear wrapNext if we're actually moving to a different position
 	if y != v.cursorY || x != v.cursorX {
@@ -47,10 +40,10 @@ func (v *VTerm) SetCursorPos(y, x int) {
 	v.cursorX = x
 	v.cursorY = y
 
-	// NOTE: We do NOT call displayBufferSetCursorFromPhysical() here.
-	// Character placement (placeChar) already advances the display buffer cursor,
+	// NOTE: We do NOT call memoryBufferSetCursorFromPhysical() here.
+	// Character placement (placeChar) already advances the memory buffer cursor,
 	// so calling it here would cause double-advancement. Instead, cursor movement
-	// escape sequences (CUB, CUF, CUP, etc.) call displayBufferSetCursorFromPhysical
+	// escape sequences (CUB, CUF, CUP, etc.) call memoryBufferSetCursorFromPhysical
 	// explicitly via their handlers.
 
 	v.MarkDirty(v.prevCursorY)
@@ -94,8 +87,7 @@ func (v *VTerm) SetCursorVisible(visible bool) {
 	if v.cursorVisible != visible {
 		v.cursorVisible = visible
 		v.MarkDirty(v.cursorY)
-		// Cursor visibility changes are a TUI signal.
-		// TUI apps often hide the cursor during rendering.
-		v.signalTUIMode("cursor_visibility")
+		// Notify FixedWidthDetector for TUI detection
+		v.notifyDetectorCursorVisibility(!visible)
 	}
 }

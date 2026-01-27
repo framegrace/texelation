@@ -41,13 +41,8 @@ func (v *VTerm) ClearScreenMode(mode int) {
 			if v.cursorY+1 < v.height {
 				v.altBufferClearRegion(0, v.cursorY+1, v.width-1, v.height-1, v.currentFG, v.currentBG)
 			}
-		} else if v.IsDisplayBufferEnabled() {
-			// Commit TUI content BEFORE erasing - this captures final state
-			// (like token usage) and replaces transient content (like autocomplete menus)
-			v.commitTUIBeforeScreenClear()
-			v.displayBufferEraseScreen(0)
-			// Reset TUI mode (just deactivates, commit already done above)
-			v.resetTUIMode()
+		} else {
+			v.memoryBufferEraseScreen(0)
 		}
 	case 1: // Erase from beginning of screen to cursor
 		if v.inAltScreen {
@@ -56,23 +51,27 @@ func (v *VTerm) ClearScreenMode(mode int) {
 				v.altBufferClearRegion(0, 0, v.width-1, v.cursorY-1, v.currentFG, v.currentBG)
 			}
 			v.altBufferClearRegion(0, v.cursorY, v.cursorX, v.cursorY, v.currentFG, v.currentBG)
-		} else if v.IsDisplayBufferEnabled() {
-			v.displayBufferEraseScreen(1)
+		} else {
+			v.memoryBufferEraseScreen(1)
 		}
 	case 2: // Erase entire visible screen (ED 2)
 		if v.inAltScreen {
 			v.altBufferClearRegion(0, 0, v.width-1, v.height-1, v.currentFG, v.currentBG)
-		} else if v.IsDisplayBufferEnabled() {
-			// Commit TUI content BEFORE erasing - this captures final state
-			// (like token usage) and replaces transient content (like autocomplete menus)
-			v.commitTUIBeforeScreenClear()
-			v.displayBufferEraseScreen(2)
-			// Reset TUI mode (just deactivates, commit already done above)
-			v.resetTUIMode()
+		} else {
+			v.memoryBufferEraseScreen(2)
 		}
 	case 3: // Erase scrollback only, leave visible screen intact (ED 3)
-		if !v.inAltScreen && v.displayBuf != nil && v.displayBuf.history != nil {
-			v.displayBuf.history.ClearScrollback()
+		if !v.inAltScreen && v.memBufState != nil && v.memBufState.memBuf != nil {
+			mb := v.memBufState.memBuf
+			// Log before clearing scrollback
+			v.logMemBufDebug("[ED3] ClearScreen mode=3 CLEARING SCROLLBACK: before: GlobalOffset=%d GlobalEnd=%d liveEdgeBase=%d TotalLines=%d",
+				mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, mb.TotalLines())
+			// Clear scrollback by evicting all lines except the visible viewport
+			mb.Evict(int(mb.TotalLines()) - v.height)
+			// Ensure liveEdgeBase is consistent after eviction
+			v.ensureLiveEdgeBaseConsistency()
+			v.logMemBufDebug("[ED3] ClearScreen mode=3 CLEARING SCROLLBACK: after: GlobalOffset=%d GlobalEnd=%d liveEdgeBase=%d TotalLines=%d",
+				mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, mb.TotalLines())
 			v.MarkAllDirty()
 		}
 		// On alt screen, ED 3 does nothing (no scrollback to clear)
@@ -82,20 +81,6 @@ func (v *VTerm) ClearScreenMode(mode int) {
 // ClearLine handles EL (Erase in Line) with different modes.
 func (v *VTerm) ClearLine(mode int) {
 	v.MarkDirty(v.cursorY)
-
-	// For main screen with display buffer, use display buffer operations only.
-	// The display buffer handles logical lines which may span multiple physical rows.
-	if !v.inAltScreen && v.IsDisplayBufferEnabled() {
-		switch mode {
-		case 0:
-			v.displayBufferEraseToEndOfLine()
-		case 1:
-			v.displayBufferEraseFromStartOfLine()
-		case 2:
-			v.displayBufferEraseLine()
-		}
-		return
-	}
 
 	// Alt screen: use consolidated alt buffer operations
 	if v.inAltScreen {
@@ -107,6 +92,17 @@ func (v *VTerm) ClearLine(mode int) {
 		case 2: // Erase entire line
 			v.altBufferClearRow(v.cursorY, v.currentFG, v.currentBG)
 		}
+		return
+	}
+
+	// Use MemoryBuffer
+	switch mode {
+	case 0:
+		v.memoryBufferEraseToEndOfLine()
+	case 1:
+		v.memoryBufferEraseFromStartOfLine()
+	case 2:
+		v.memoryBufferEraseLine()
 	}
 }
 
@@ -121,8 +117,8 @@ func (v *VTerm) EraseCharacters(n int) {
 			endX = v.width - 1
 		}
 		v.altBufferClearRegion(v.cursorX, v.cursorY, endX, v.cursorY, v.currentFG, v.currentBG)
-	} else if v.IsDisplayBufferEnabled() {
-		// Main screen: use display buffer operation
-		v.displayBufferEraseCharacters(n)
+	} else {
+		// Use MemoryBuffer
+		v.memoryBufferEraseCharacters(n)
 	}
 }
