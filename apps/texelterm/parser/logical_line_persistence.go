@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	logicalHistoryMagic   = "TXLHIST1" // 8 bytes - different from physical format
-	logicalCellSize       = 16         // rune(4) + fg(5) + bg(5) + attr(1) + reserved(1)
+	logicalHistoryMagic = "TXLHIST1" // 8 bytes - different from physical format
+	logicalCellSize     = 16         // rune(4) + fg(5) + bg(5) + attr(1) + reserved(1)
 )
 
 // WriteLogicalLines writes a slice of LogicalLines to a file.

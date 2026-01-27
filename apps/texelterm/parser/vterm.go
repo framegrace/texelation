@@ -14,7 +14,6 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-
 // VTerm represents the state of a virtual terminal, managing both the main screen
 // with a scrollback buffer and an alternate screen for fullscreen applications.
 type VTerm struct {
@@ -64,6 +63,8 @@ type VTerm struct {
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode         bool
 	OnBracketedPasteModeChange func(bool)
+	// TUI mode detection for fixed-width content preservation
+	tuiMode *TUIMode
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -100,6 +101,9 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	}
 	v.displayBuf.enabled = true // Always enabled now
 
+	// Initialize TUI mode detection for fixed-width content preservation
+	v.tuiMode = NewTUIMode(DefaultTUIModeConfig())
+
 	// Set up tab stops
 	for i := 0; i < width; i++ {
 		if i%8 == 0 {
@@ -112,6 +116,19 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	if v.displayBuf.history == nil || v.displayBuf.history.TotalLen() == 0 {
 		v.ClearScreen()
 	}
+
+	// Initialize TUI viewport manager for frozen lines model AFTER ClearScreen
+	// (ClearScreen creates a new DisplayBuffer which would lose the manager)
+	if v.displayBuf != nil && v.displayBuf.display != nil && v.displayBuf.history != nil {
+		tuiMgr := NewTUIViewportManager(v.displayBuf.display.viewport, v.displayBuf.history)
+		v.displayBuf.display.SetTUIViewportManager(tuiMgr)
+		v.tuiMode.SetViewportManager(tuiMgr)
+	}
+
+	v.tuiMode.SetCommitCallback(func() {
+		v.displayBuf.display.CommitFrozenLines()
+	})
+
 	return v
 }
 
@@ -852,11 +869,23 @@ func (v *VTerm) SetMargins(top, bottom int) {
 		// Invalid region, reset to full screen
 		v.marginTop = 0
 		v.marginBottom = v.height - 1
+		// Full screen margins = normal shell mode, reset TUI detection
+		v.resetTUIMode()
 		return
 	}
 	v.marginTop = top - 1
 	v.marginBottom = bottom - 1
 	v.logDebug("[SCROLL] SetMargins: top=%d, bottom=%d (0-indexed: %d-%d), height=%d", top, bottom, v.marginTop, v.marginBottom, v.height)
+
+	// Non-full-screen scroll region is a TUI signal
+	isFullScreen := (top == 1 && bottom == v.height)
+	if !isFullScreen {
+		v.signalTUIMode("scroll_region")
+	} else {
+		// Reset to full screen = shell mode
+		v.resetTUIMode()
+	}
+
 	// Per spec, DECSTBM moves cursor to home position (1,1)
 	v.SetCursorPos(0, 0)
 }
@@ -1098,4 +1127,55 @@ func (v *VTerm) GetAltBufferLine(y int) []Cell {
 
 func (v *VTerm) ScrollMargins() (int, int) {
 	return v.marginTop, v.marginLeft
+}
+
+// --- TUI Mode (Frozen Lines Model) ---
+
+// signalTUIMode records a TUI signal for fixed-width content preservation.
+// Only signals on main screen (not alt screen) to avoid false positives from
+// fullscreen apps like vim, htop, less that use alt screen.
+// Also doesn't signal when viewing history (scrolled back) since the user is
+// just navigating, not using a TUI app.
+func (v *VTerm) signalTUIMode(signalType string) {
+	if v.inAltScreen || v.tuiMode == nil {
+		return
+	}
+	// Don't signal when viewing history - user is just scrolling
+	if v.displayBuf != nil && v.displayBuf.display != nil && v.displayBuf.display.viewingHistory {
+		return
+	}
+	v.tuiMode.Signal(signalType)
+}
+
+// commitTUIBeforeScreenClear captures TUI content before screen erase.
+// This should be called BEFORE displayBufferEraseScreen() to capture the current
+// viewport state (like token usage) before it's cleared, replacing any transient
+// content (like autocomplete menus) that was previously committed.
+func (v *VTerm) commitTUIBeforeScreenClear() {
+	if v.displayBuf != nil && v.displayBuf.display != nil {
+		v.displayBuf.display.CommitBeforeScreenClear()
+	}
+}
+
+// resetTUIMode resets TUI mode state. Called when returning to normal operation
+// (e.g., scroll region reset to full screen).
+// Note: We do NOT clear the TUI snapshot here. The snapshot is kept so that:
+// 1. Scrolling continues to work after TUI app exits (content remains visible)
+// 2. The snapshot will be replaced when a new TUI app captures a new snapshot
+// 3. The snapshot is only cleared on explicit terminal clear (ED 3)
+func (v *VTerm) resetTUIMode() {
+	// Note: We do NOT capture a final snapshot here. The TUI app is exiting and
+	// the viewport may be in a transitional state. We keep whatever snapshot
+	// was captured during normal operation (with the cooldown=0, it should be fresh).
+	if v.tuiMode != nil {
+		v.tuiMode.Reset()
+	}
+	// Don't clear TUI snapshot - keep it for scrollback history viewing
+}
+
+// StopTUIMode cleans up TUI mode resources. Should be called when VTerm is destroyed.
+func (v *VTerm) StopTUIMode() {
+	if v.tuiMode != nil {
+		v.tuiMode.Stop()
+	}
 }

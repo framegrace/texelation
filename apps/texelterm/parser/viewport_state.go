@@ -76,6 +76,11 @@ type RowMetadata struct {
 
 	// State tracks the line lifecycle
 	State LineState
+
+	// FromHistory is true if this row was populated from scrollback history.
+	// Such rows should never be re-committed by CommitViewportAsFixedWidth()
+	// to avoid creating duplicate entries in history.
+	FromHistory bool
 }
 
 // LineState tracks whether a row's content should be committed to history.
@@ -113,10 +118,10 @@ func (vs *ViewportState) initGrid() {
 	for y := 0; y < vs.height; y++ {
 		vs.grid[y] = vs.makeEmptyRow()
 		vs.rowMeta[y] = RowMetadata{
-			LogicalLineID: -1,
-			IsFirstRow:    true,
+			LogicalLineID:  -1,
+			IsFirstRow:     true,
 			IsContinuation: false,
-			State:         LineStateClean,
+			State:          LineStateClean,
 		}
 	}
 }
@@ -224,6 +229,15 @@ func (vs *ViewportState) Cursor() (x, y int) {
 // Grid returns the viewport grid for rendering.
 func (vs *ViewportState) Grid() [][]Cell {
 	return vs.grid
+}
+
+// IsRowCommitted returns true if the row came from history (LineStateCommitted).
+// These rows should NOT be included in TUI snapshots to avoid duplicates.
+func (vs *ViewportState) IsRowCommitted(y int) bool {
+	if y < 0 || y >= len(vs.rowMeta) {
+		return false
+	}
+	return vs.rowMeta[y].State == LineStateCommitted
 }
 
 // Width returns the viewport width.
@@ -907,6 +921,18 @@ func (vs *ViewportState) MarkRowAsCommitted(y int) {
 		return
 	}
 	vs.rowMeta[y].State = LineStateCommitted
+	// Mark as from history to prevent re-committing by CommitViewportAsFixedWidth
+	vs.rowMeta[y].FromHistory = true
+}
+
+// ClearRowCommitted resets a row's committed state to dirty.
+// Used when TUI app redraws content that should be re-committed.
+func (vs *ViewportState) ClearRowCommitted(y int) {
+	if y < 0 || y >= vs.height {
+		return
+	}
+	vs.rowMeta[y].State = LineStateDirty
+	vs.rowMeta[y].FromHistory = false
 }
 
 // --- Shell Integration ---
@@ -955,4 +981,55 @@ func (vs *ViewportState) MarkInputStart() {
 // MarkOutputStart marks the current line as output (OSC 133;C).
 func (vs *ViewportState) MarkOutputStart() {
 	// Currently a no-op - could be used for semantic line tracking
+}
+
+// --- TUI Content Preservation ---
+
+// CommitViewportAsFixedWidth commits all viewport rows to history as fixed-width lines.
+// Fixed-width lines don't reflow on resize - they are clipped or padded instead.
+// This is used for TUI app content (scroll regions, cursor-addressed output) that
+// should be preserved as-is in scrollback.
+//
+// Returns the number of lines committed. Skips rows already marked as committed.
+func (vs *ViewportState) CommitViewportAsFixedWidth() int {
+	if vs.history == nil {
+		return 0
+	}
+
+	committed := 0
+	for y := 0; y < vs.height; y++ {
+		// Skip rows that are already committed
+		if vs.rowMeta[y].State == LineStateCommitted {
+			continue
+		}
+
+		// Skip rows that came from history to prevent creating duplicate entries.
+		// This handles the case where history content is displayed in viewport
+		// and TUI mode tries to commit it again.
+		if vs.rowMeta[y].FromHistory {
+			continue
+		}
+
+		// Create cells copy for the logical line
+		cells := make([]Cell, vs.width)
+		copy(cells, vs.grid[y])
+
+		// Create logical line with FixedWidth set
+		line := &LogicalLine{
+			Cells:      cells,
+			FixedWidth: vs.width,
+		}
+
+		// Trim trailing spaces for storage efficiency
+		line.TrimTrailingSpaces()
+
+		// Append to history
+		vs.history.Append(line)
+
+		// Mark row as committed
+		vs.rowMeta[y].State = LineStateCommitted
+		committed++
+	}
+
+	return committed
 }

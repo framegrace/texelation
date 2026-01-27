@@ -24,12 +24,12 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 	v.logDebug("[LF] LineFeed called: cursorY=%d, cursorX=%d, commit=%v, marginBottom=%d, inAltScreen=%v",
 		v.cursorY, v.cursorX, commitLogical, v.marginBottom, v.inAltScreen)
 	v.wrapNext = false // Clear wrapNext flag when moving to new line
-	                v.MarkDirty(v.cursorY)
-	        
-	                // Check if cursor is outside left/right margins - if so, don't scroll
-	                outsideMargins := v.leftRightMarginMode && (v.cursorX < v.marginLeft || v.cursorX > v.marginRight)
-	        
-	                if v.inAltScreen {
+	v.MarkDirty(v.cursorY)
+
+	// Check if cursor is outside left/right margins - if so, don't scroll
+	outsideMargins := v.leftRightMarginMode && (v.cursorX < v.marginLeft || v.cursorX > v.marginRight)
+
+	if v.inAltScreen {
 		if v.cursorY == v.marginBottom {
 			if !outsideMargins {
 				v.scrollRegion(1, v.marginTop, v.marginBottom)
@@ -66,6 +66,7 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 		}
 	}
 }
+
 // scrollRegion scrolls a portion of the screen buffer up or down.
 func (v *VTerm) scrollRegion(n int, top int, bottom int) {
 	v.logDebug("[SCROLL] scrollRegion: n=%d, top=%d, bottom=%d, inAltScreen=%v", n, top, bottom, v.inAltScreen)

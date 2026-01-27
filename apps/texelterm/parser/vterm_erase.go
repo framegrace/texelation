@@ -42,7 +42,12 @@ func (v *VTerm) ClearScreenMode(mode int) {
 				v.altBufferClearRegion(0, v.cursorY+1, v.width-1, v.height-1, v.currentFG, v.currentBG)
 			}
 		} else if v.IsDisplayBufferEnabled() {
+			// Commit TUI content BEFORE erasing - this captures final state
+			// (like token usage) and replaces transient content (like autocomplete menus)
+			v.commitTUIBeforeScreenClear()
 			v.displayBufferEraseScreen(0)
+			// Reset TUI mode (just deactivates, commit already done above)
+			v.resetTUIMode()
 		}
 	case 1: // Erase from beginning of screen to cursor
 		if v.inAltScreen {
@@ -58,7 +63,12 @@ func (v *VTerm) ClearScreenMode(mode int) {
 		if v.inAltScreen {
 			v.altBufferClearRegion(0, 0, v.width-1, v.height-1, v.currentFG, v.currentBG)
 		} else if v.IsDisplayBufferEnabled() {
+			// Commit TUI content BEFORE erasing - this captures final state
+			// (like token usage) and replaces transient content (like autocomplete menus)
+			v.commitTUIBeforeScreenClear()
 			v.displayBufferEraseScreen(2)
+			// Reset TUI mode (just deactivates, commit already done above)
+			v.resetTUIMode()
 		}
 	case 3: // Erase scrollback only, leave visible screen intact (ED 3)
 		if !v.inAltScreen && v.displayBuf != nil && v.displayBuf.history != nil {

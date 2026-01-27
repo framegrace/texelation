@@ -392,3 +392,100 @@ func BenchmarkDiskHistory_ReadLine(b *testing.B) {
 		dh2.ReadLine(int64(i % 10000))
 	}
 }
+
+func TestDiskHistory_FixedWidth(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.hist")
+
+	// Create new history
+	config := DefaultDiskHistoryConfig(path)
+	dh, err := CreateDiskHistory(config)
+	if err != nil {
+		t.Fatalf("Failed to create disk history: %v", err)
+	}
+
+	// Write lines with different FixedWidth values
+	lines := []*LogicalLine{
+		{Cells: []Cell{{Rune: 'A'}, {Rune: 'B'}}, FixedWidth: 0},   // Normal reflow
+		{Cells: []Cell{{Rune: 'C'}, {Rune: 'D'}}, FixedWidth: 80},  // Fixed at 80
+		{Cells: []Cell{{Rune: 'E'}, {Rune: 'F'}}, FixedWidth: 120}, // Fixed at 120
+	}
+
+	for _, line := range lines {
+		if err := dh.AppendLine(line); err != nil {
+			t.Fatalf("Failed to append line: %v", err)
+		}
+	}
+
+	if err := dh.Close(); err != nil {
+		t.Fatalf("Failed to close: %v", err)
+	}
+
+	// Reopen and read
+	dh2, err := OpenDiskHistory(path)
+	if err != nil {
+		t.Fatalf("Failed to open: %v", err)
+	}
+	defer dh2.Close()
+
+	// Verify FixedWidth is preserved
+	expectedWidths := []int{0, 80, 120}
+	for i, expected := range expectedWidths {
+		line, err := dh2.ReadLine(int64(i))
+		if err != nil {
+			t.Fatalf("Failed to read line %d: %v", i, err)
+		}
+		if line.FixedWidth != expected {
+			t.Errorf("Line %d: expected FixedWidth=%d, got %d", i, expected, line.FixedWidth)
+		}
+	}
+}
+
+func TestDiskHistory_FixedWidthReflow(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.hist")
+
+	// Create new history
+	config := DefaultDiskHistoryConfig(path)
+	dh, err := CreateDiskHistory(config)
+	if err != nil {
+		t.Fatalf("Failed to create disk history: %v", err)
+	}
+
+	// Write a 20-char fixed-width line
+	cells := make([]Cell, 20)
+	for i := range cells {
+		cells[i] = Cell{Rune: rune('A' + i%26)}
+	}
+	line := &LogicalLine{Cells: cells, FixedWidth: 20}
+
+	if err := dh.AppendLine(line); err != nil {
+		t.Fatalf("Failed to append: %v", err)
+	}
+	dh.Close()
+
+	// Reopen and read
+	dh2, err := OpenDiskHistory(path)
+	if err != nil {
+		t.Fatalf("Failed to open: %v", err)
+	}
+	defer dh2.Close()
+
+	readLine, _ := dh2.ReadLine(0)
+
+	// Verify it doesn't reflow when wrapped to smaller width
+	wrapped := readLine.WrapToWidth(10)
+	if len(wrapped) != 1 {
+		t.Errorf("Fixed-width line should not wrap, got %d physical lines", len(wrapped))
+	}
+	if len(wrapped[0].Cells) != 10 {
+		t.Errorf("Expected 10 cells (clipped), got %d", len(wrapped[0].Cells))
+	}
+
+	// Verify normal line (FixedWidth=0) DOES reflow
+	normalLine := &LogicalLine{Cells: cells, FixedWidth: 0}
+	normalWrapped := normalLine.WrapToWidth(10)
+	if len(normalWrapped) != 2 {
+		t.Errorf("Normal line should wrap to 2 physical lines, got %d", len(normalWrapped))
+	}
+}

@@ -79,6 +79,11 @@ type DisplayBuffer struct {
 
 	// debugLog is an optional logging function
 	debugLog func(format string, args ...interface{})
+
+	// TUI Content Preservation - frozen lines model.
+	// The TUIViewportManager coordinates frozen line commits for TUI applications.
+	// Content freezes (commits to history) as it scrolls off the top of the viewport.
+	tuiViewportMgr *TUIViewportManager
 }
 
 // DisplayBufferConfig holds configuration for creating a DisplayBuffer.
@@ -330,6 +335,7 @@ func (db *DisplayBuffer) GetViewportAsCells() [][]Cell {
 }
 
 // buildHistoryViewGrid builds the view when scrolled back into history.
+// This includes both regular history lines and the TUI snapshot (if any).
 func (db *DisplayBuffer) buildHistoryViewGrid() [][]Cell {
 	if db.cachedHistoryView != nil {
 		if db.debugLog != nil {
@@ -350,58 +356,67 @@ func (db *DisplayBuffer) buildHistoryViewGrid() [][]Cell {
 		}
 	}
 
-	if db.history == nil {
-		if db.debugLog != nil {
-			db.debugLog("[buildHistoryViewGrid] history is nil, returning empty")
+	// Collect all physical lines from history
+	// Frozen TUI content is now stored directly in history as fixed-width lines
+	var allPhysicalLines []PhysicalLine
+
+	if db.history != nil {
+		totalHistoryLines := db.history.TotalLen()
+		for i := int64(0); i < totalHistoryLines; i++ {
+			line := db.history.GetGlobal(i)
+			if line != nil {
+				wrapped := line.WrapToWidth(width)
+				allPhysicalLines = append(allPhysicalLines, wrapped...)
+			}
 		}
+	}
+
+	totalPhysical := len(allPhysicalLines)
+	if totalPhysical == 0 {
+		if db.debugLog != nil {
+			db.debugLog("[buildHistoryViewGrid] no physical lines, returning empty")
+		}
+		// Reset scroll state if history is empty
+		db.historyViewOffset = 0
+		db.viewingHistory = false
 		return result
 	}
 
-	// Load history lines at the scroll offset
-	// historyViewOffset is how many physical rows we've scrolled back
-	totalHistoryLines := db.history.TotalLen()
-	if totalHistoryLines == 0 {
+	// Clamp historyViewOffset to valid range.
+	// This handles cases where history was truncated externally (e.g., by TUI mode exit).
+	maxScroll := int64(totalPhysical - height)
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if db.historyViewOffset > maxScroll {
 		if db.debugLog != nil {
-			db.debugLog("[buildHistoryViewGrid] totalHistoryLines=0, returning empty")
+			db.debugLog("[buildHistoryViewGrid] clamping historyViewOffset from %d to %d (history truncated)",
+				db.historyViewOffset, maxScroll)
 		}
-		return result
+		db.historyViewOffset = maxScroll
+		db.cachedHistoryView = nil // Invalidate any stale cache
+		if db.historyViewOffset == 0 {
+			db.viewingHistory = false
+		}
 	}
 
 	if db.debugLog != nil {
-		db.debugLog("[buildHistoryViewGrid] totalHistoryLines=%d, historyViewOffset=%d", totalHistoryLines, db.historyViewOffset)
+		db.debugLog("[buildHistoryViewGrid] totalPhysical=%d, historyViewOffset=%d",
+			totalPhysical, db.historyViewOffset)
 	}
 
-	// Calculate which logical lines to load
-	// We need to work backwards from the end of history
-	physicalRowsBack := db.historyViewOffset
+	// Calculate which physical lines to show
+	// historyViewOffset is how many physical rows we've scrolled back from the end
+	physicalRowsBack := int(db.historyViewOffset)
 
-	// Get wrapped lines from history
-	// Start from end and work back
-	var physicalLines []PhysicalLine
-	logicalIdx := totalHistoryLines - 1
-
-	for logicalIdx >= 0 && int64(len(physicalLines)) < physicalRowsBack+int64(height) {
-		line := db.history.GetGlobal(logicalIdx)
-		if line != nil {
-			wrapped := line.WrapToWidth(width)
-			// Prepend to physicalLines (we're going backwards)
-			newLines := make([]PhysicalLine, len(wrapped)+len(physicalLines))
-			copy(newLines, wrapped)
-			copy(newLines[len(wrapped):], physicalLines)
-			physicalLines = newLines
-		}
-		logicalIdx--
-	}
-
-	// Now physicalLines contains history from some point to the end
-	// We want to show starting at (len - historyViewOffset - height)
-	startIdx := len(physicalLines) - int(physicalRowsBack) - height
+	// We want to show starting at (total - offset - height)
+	startIdx := totalPhysical - physicalRowsBack - height
 	if startIdx < 0 {
 		startIdx = 0
 	}
 
-	for y := 0; y < height && startIdx+y < len(physicalLines); y++ {
-		pl := physicalLines[startIdx+y]
+	for y := 0; y < height && startIdx+y < totalPhysical; y++ {
+		pl := allPhysicalLines[startIdx+y]
 		for x, cell := range pl.Cells {
 			if x < width {
 				result[y][x] = cell
@@ -436,7 +451,12 @@ func (db *DisplayBuffer) GetViewport() []PhysicalLine {
 
 // ScrollContentUp scrolls content up (content moves up, new blank line at bottom).
 // Called when LF at bottom of scroll region (terminal escape sequence behavior).
+// In TUI mode, the line scrolling off the top is frozen to history.
 func (db *DisplayBuffer) ScrollContentUp(n int) int {
+	// In TUI mode, freeze the line at row 0 before it scrolls off
+	if db.tuiViewportMgr != nil && db.tuiViewportMgr.IsActive() && n > 0 {
+		db.freezeRowToHistory(0)
+	}
 	db.viewport.ScrollContentUp(n)
 	return n
 }
@@ -506,17 +526,18 @@ func (db *DisplayBuffer) ScrollViewDown(lines int) int {
 
 // calculateMaxHistoryScroll returns the maximum scroll offset.
 func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
-	if db.history == nil {
-		return 0
-	}
+	width := db.viewport.Width()
 
 	// Count total physical lines in history
+	// Frozen TUI content is now stored directly in history, not separately
 	var totalPhysical int64
-	for i := int64(0); i < db.history.TotalLen(); i++ {
-		line := db.history.GetGlobal(i)
-		if line != nil {
-			wrapped := line.WrapToWidth(db.viewport.Width())
-			totalPhysical += int64(len(wrapped))
+	if db.history != nil {
+		for i := int64(0); i < db.history.TotalLen(); i++ {
+			line := db.history.GetGlobal(i)
+			if line != nil {
+				wrapped := line.WrapToWidth(width)
+				totalPhysical += int64(len(wrapped))
+			}
 		}
 	}
 
@@ -526,6 +547,70 @@ func (db *DisplayBuffer) calculateMaxHistoryScroll() int64 {
 		max = 0
 	}
 	return max
+}
+
+// --- TUI Viewport Manager Integration ---
+
+// SetTUIViewportManager sets the TUI viewport manager for frozen line coordination.
+func (db *DisplayBuffer) SetTUIViewportManager(mgr *TUIViewportManager) {
+	db.tuiViewportMgr = mgr
+}
+
+// GetTUIViewportManager returns the TUI viewport manager.
+func (db *DisplayBuffer) GetTUIViewportManager() *TUIViewportManager {
+	return db.tuiViewportMgr
+}
+
+// CommitFrozenLines commits viewport rows as frozen (fixed-width) lines.
+// Uses the truncate+append pattern via the TUIViewportManager.
+// Returns the number of lines committed.
+func (db *DisplayBuffer) CommitFrozenLines() int {
+	if db.tuiViewportMgr == nil {
+		return 0
+	}
+	return db.tuiViewportMgr.CommitLiveViewport()
+}
+
+// CommitBeforeScreenClear captures the current viewport state before screen erase.
+// This should be called BEFORE displayBufferEraseScreen() to capture content
+// (like token usage) before it's erased, replacing transient content (like autocomplete menus).
+func (db *DisplayBuffer) CommitBeforeScreenClear() {
+	if db.tuiViewportMgr != nil {
+		db.tuiViewportMgr.CommitBeforeScreenClear()
+	}
+}
+
+// freezeRowToHistory freezes a single row to history in TUI mode.
+// This is called when a line scrolls off the top of the screen/region.
+func (db *DisplayBuffer) freezeRowToHistory(row int) {
+	if db.tuiViewportMgr == nil || db.viewport == nil {
+		return
+	}
+	if row < 0 || row >= db.viewport.Height() {
+		return
+	}
+	// Skip rows that are already committed (came from history)
+	if db.viewport.IsRowCommitted(row) {
+		return
+	}
+	// Create a LogicalLine from the row
+	width := db.viewport.Width()
+	cells := make([]Cell, width)
+	copy(cells, db.viewport.Grid()[row])
+	line := &LogicalLine{
+		Cells:      cells,
+		FixedWidth: width,
+	}
+	line.TrimTrailingSpaces()
+	db.tuiViewportMgr.FreezeScrolledLines([]*LogicalLine{line})
+}
+
+// FinalizeOnTUIExit commits any remaining live viewport content when TUI mode ends.
+// Called automatically by TUIMode.Reset() via TUIViewportManager.ExitTUIMode().
+func (db *DisplayBuffer) FinalizeOnTUIExit() {
+	if db.tuiViewportMgr != nil {
+		db.tuiViewportMgr.ExitTUIMode()
+	}
 }
 
 // --- Resize ---
@@ -1082,7 +1167,12 @@ func (db *DisplayBuffer) DeleteLines(n int, scrollTop, scrollBottom int) {
 }
 
 // ScrollRegionUp scrolls within a region.
+// In TUI mode, the line at the top of the region is frozen to history before scrolling off.
 func (db *DisplayBuffer) ScrollRegionUp(top, bottom, n int) {
+	// In TUI mode, freeze the line at the top of the scroll region before it scrolls off
+	if db.tuiViewportMgr != nil && db.tuiViewportMgr.IsActive() && n > 0 {
+		db.freezeRowToHistory(top)
+	}
 	db.viewport.ScrollRegionUp(top, bottom, n)
 }
 

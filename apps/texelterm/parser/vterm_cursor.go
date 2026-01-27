@@ -29,6 +29,16 @@ func (v *VTerm) SetCursorPos(y, x int) {
 	v.prevCursorY = v.cursorY
 	v.prevWrapNext = v.wrapNext
 
+	// Large cursor jumps (more than 1 row) are a TUI signal.
+	// This indicates absolute cursor positioning typical of TUI apps.
+	rowDelta := y - v.cursorY
+	if rowDelta < 0 {
+		rowDelta = -rowDelta
+	}
+	if rowDelta > 1 {
+		v.signalTUIMode("cursor_jump")
+	}
+
 	// Only clear wrapNext if we're actually moving to a different position
 	if y != v.cursorY || x != v.cursorX {
 		v.wrapNext = false
@@ -84,5 +94,8 @@ func (v *VTerm) SetCursorVisible(visible bool) {
 	if v.cursorVisible != visible {
 		v.cursorVisible = visible
 		v.MarkDirty(v.cursorY)
+		// Cursor visibility changes are a TUI signal.
+		// TUI apps often hide the cursor during rendering.
+		v.signalTUIMode("cursor_visibility")
 	}
 }

@@ -343,9 +343,9 @@ func TestVTerm_DisplayBufferBackspaceErase(t *testing.T) {
 	}
 
 	// Simulate BS + SPACE + BS (shell's erase sequence)
-	v.Backspace()    // Move cursor left (pos 4)
+	v.Backspace()                // Move cursor left (pos 4)
 	v.writeCharWithWrapping(' ') // Overwrite 'o' with space (pos 5)
-	v.Backspace()    // Move cursor back (pos 4)
+	v.Backspace()                // Move cursor back (pos 4)
 
 	// Check the logical line content
 	line = v.displayBufferGetCurrentLine()

@@ -153,9 +153,11 @@ func (p *Parser) Parse(r rune) {
 		case r == '?':
 			// '?' is the DEC private parameter marker (e.g., CSI ? 6 h for DECSET)
 			p.private = true
-		case r == '>':
+		case r == '>' || r == '<' || r == '=':
 			// '>' is used for DA2 and similar queries (CSI > c)
-			// Treat it as an intermediate byte for simplicity
+			// '<' is used for Kitty keyboard protocol pop mode (CSI < u)
+			// '=' is used for Kitty keyboard protocol query mode (CSI = u)
+			// Treat these as intermediate bytes for simplicity
 			p.intermediate = r
 		case r >= ' ' && r <= '/':
 			// Intermediate bytes: space (0x20) through '/' (0x2F)
