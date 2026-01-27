@@ -42,11 +42,7 @@ func (v *VTerm) ClearScreenMode(mode int) {
 				v.altBufferClearRegion(0, v.cursorY+1, v.width-1, v.height-1, v.currentFG, v.currentBG)
 			}
 		} else {
-			// Commit TUI content BEFORE erasing - this captures final state
-			v.commitTUIBeforeScreenClear()
 			v.memoryBufferEraseScreen(0)
-			// Reset TUI mode (just deactivates, commit already done above)
-			v.resetTUIMode()
 		}
 	case 1: // Erase from beginning of screen to cursor
 		if v.inAltScreen {
@@ -62,16 +58,20 @@ func (v *VTerm) ClearScreenMode(mode int) {
 		if v.inAltScreen {
 			v.altBufferClearRegion(0, 0, v.width-1, v.height-1, v.currentFG, v.currentBG)
 		} else {
-			// Commit TUI content BEFORE erasing - this captures final state
-			v.commitTUIBeforeScreenClear()
 			v.memoryBufferEraseScreen(2)
-			// Reset TUI mode (just deactivates, commit already done above)
-			v.resetTUIMode()
 		}
 	case 3: // Erase scrollback only, leave visible screen intact (ED 3)
 		if !v.inAltScreen && v.memBufState != nil && v.memBufState.memBuf != nil {
+			mb := v.memBufState.memBuf
+			// Log before clearing scrollback
+			v.logMemBufDebug("[ED3] ClearScreen mode=3 CLEARING SCROLLBACK: before: GlobalOffset=%d GlobalEnd=%d liveEdgeBase=%d TotalLines=%d",
+				mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, mb.TotalLines())
 			// Clear scrollback by evicting all lines except the visible viewport
-			v.memBufState.memBuf.Evict(int(v.memBufState.memBuf.TotalLines()) - v.height)
+			mb.Evict(int(mb.TotalLines()) - v.height)
+			// Ensure liveEdgeBase is consistent after eviction
+			v.ensureLiveEdgeBaseConsistency()
+			v.logMemBufDebug("[ED3] ClearScreen mode=3 CLEARING SCROLLBACK: after: GlobalOffset=%d GlobalEnd=%d liveEdgeBase=%d TotalLines=%d",
+				mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, mb.TotalLines())
 			v.MarkAllDirty()
 		}
 		// On alt screen, ED 3 does nothing (no scrollback to clear)

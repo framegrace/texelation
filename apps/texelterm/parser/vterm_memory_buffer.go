@@ -45,6 +45,9 @@ type memoryBufferState struct {
 	// diskHistory is needed for persistence (optional)
 	diskHistory *DiskHistory
 
+	// fixedDetector detects TUI patterns and flags lines as fixed-width (Phase 5)
+	fixedDetector *FixedWidthDetector
+
 	// enabled tracks if the new system is active
 	enabled bool
 
@@ -106,12 +109,17 @@ func (v *VTerm) initMemoryBufferWithOptions(opts MemoryBufferOptions) {
 	// Create viewport window
 	viewport := NewViewportWindow(memBuf, v.width, v.height)
 
+	// Create fixed-width detector (Phase 5)
+	fixedDetector := NewFixedWidthDetector(memBuf)
+	fixedDetector.OnResize(v.width, v.height)
+
 	// Create memory buffer state
 	v.memBufState = &memoryBufferState{
-		memBuf:         memBuf,
-		viewport:       viewport,
-		enabled:        false,
-		liveEdgeBase: 0,
+		memBuf:        memBuf,
+		viewport:      viewport,
+		fixedDetector: fixedDetector,
+		enabled:       false,
+		liveEdgeBase:  0,
 	}
 
 	// Set up disk persistence if path provided
@@ -193,6 +201,21 @@ func (v *VTerm) IsMemoryBufferEnabled() bool {
 
 // --- Writing Operations ---
 
+// ensureLiveEdgeBaseConsistency ensures liveEdgeBase >= GlobalOffset.
+// This prevents issues if lines were evicted and liveEdgeBase points to non-existent lines.
+func (v *VTerm) ensureLiveEdgeBaseConsistency() {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return
+	}
+	mb := v.memBufState.memBuf
+	globalOffset := mb.GlobalOffset()
+	if v.memBufState.liveEdgeBase < globalOffset {
+		v.logMemBufDebug("[CONSISTENCY] liveEdgeBase %d < GlobalOffset %d, adjusting to %d",
+			v.memBufState.liveEdgeBase, globalOffset, globalOffset)
+		v.memBufState.liveEdgeBase = globalOffset
+	}
+}
+
 // memoryBufferPlaceChar writes a character at the current cursor position.
 func (v *VTerm) memoryBufferPlaceChar(r rune) {
 	v.memoryBufferPlaceCharWide(r, false)
@@ -203,6 +226,9 @@ func (v *VTerm) memoryBufferPlaceCharWide(r rune, isWide bool) {
 	if !v.IsMemoryBufferEnabled() {
 		return
 	}
+
+	// Ensure liveEdgeBase is consistent with GlobalOffset
+	v.ensureLiveEdgeBaseConsistency()
 
 	mb := v.memBufState.memBuf
 
@@ -225,6 +251,11 @@ func (v *VTerm) memoryBufferPlaceCharWide(r rune, isWide bool) {
 	// Notify persistence layer
 	if v.memBufState.persistence != nil {
 		v.memBufState.persistence.NotifyWrite(globalLine)
+	}
+
+	// Notify fixed-width detector (Phase 5)
+	if v.memBufState.fixedDetector != nil {
+		v.memBufState.fixedDetector.OnWrite(globalLine, mb.TermWidth())
 	}
 
 	// Debug logging
@@ -304,11 +335,25 @@ func (v *VTerm) memoryBufferScroll(delta int) {
 		return
 	}
 
+	mb := v.memBufState.memBuf
+	vw := v.memBufState.viewport
+	beforeOffset := vw.ScrollOffset()
+	totalPhysical := vw.TotalPhysicalLines()
+	viewportHeight := vw.Height()
+	maxScrollOffset := totalPhysical - int64(viewportHeight)
+	if maxScrollOffset < 0 {
+		maxScrollOffset = 0
+	}
+
 	if delta > 0 {
 		v.memBufState.viewport.ScrollDown(delta)
 	} else if delta < 0 {
 		v.memBufState.viewport.ScrollUp(-delta)
 	}
+
+	afterOffset := vw.ScrollOffset()
+	v.logMemBufDebug("[SCROLL] delta=%d: offset %d -> %d (maxScroll=%d, totalPhysical=%d, viewportHeight=%d, globalOffset=%d, globalEnd=%d, liveEdgeBase=%d)",
+		delta, beforeOffset, afterOffset, maxScrollOffset, totalPhysical, viewportHeight, mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase)
 }
 
 // memoryBufferScrollToBottom scrolls to the live edge.
@@ -418,6 +463,11 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 
 	v.memBufState.memBuf.SetTermWidth(width)
 	v.memBufState.viewport.Resize(width, height)
+
+	// Notify fixed-width detector (Phase 5)
+	if v.memBufState.fixedDetector != nil {
+		v.memBufState.fixedDetector.OnResize(width, height)
+	}
 }
 
 // --- Erase Operations ---
@@ -500,6 +550,10 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 	if !v.IsMemoryBufferEnabled() {
 		return
 	}
+
+	mb := v.memBufState.memBuf
+	v.logMemBufDebug("[ERASE] EraseScreen mode=%d: globalOffset=%d, globalEnd=%d, liveEdgeBase=%d, cursorY=%d",
+		mode, mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, v.cursorY)
 
 	switch mode {
 	case 0: // Erase from cursor to end of screen
@@ -676,20 +730,59 @@ func (v *VTerm) logMemBufDebug(format string, args ...interface{}) {
 	fmt.Fprintf(debugFile, "[MEMBUF] "+format+"\n", args...)
 }
 
-// --- Placeholder for FixedWidthDetector (Phase 5) ---
+// --- FixedWidthDetector Access (Phase 5) ---
 
-// FixedWidthDetector will be implemented in Phase 5.
-// These are placeholder hooks for the integration.
+// fixedWidthDetector returns the FixedWidthDetector, or nil if not available.
+// Safe to call even when memory buffer is not enabled.
+func (v *VTerm) fixedWidthDetector() *FixedWidthDetector {
+	if v.memBufState == nil {
+		return nil
+	}
+	return v.memBufState.fixedDetector
+}
 
-type fixedWidthDetectorStub struct{}
+// notifyDetectorCursorMove notifies the detector of cursor movement.
+// Called from SetCursorPos when cursor moves to a new row.
+func (v *VTerm) notifyDetectorCursorMove(newY int) {
+	if d := v.fixedWidthDetector(); d != nil {
+		prevJumps := d.ConsecutiveJumps()
+		d.OnCursorMove(newY)
+		if d.ConsecutiveJumps() > prevJumps {
+			v.logMemBufDebug("[TUI-DETECT] Cursor jump to Y=%d, consecutive=%d, inTUI=%v",
+				newY, d.ConsecutiveJumps(), d.IsInTUIMode())
+		}
+	}
+}
 
-func (d *fixedWidthDetectorStub) OnCursorMove(newY int)                           {}
-func (d *fixedWidthDetectorStub) OnWrite(lineIdx int64, width int)                {}
-func (d *fixedWidthDetectorStub) OnScrollRegionSet(top, bottom, height int)       {}
-func (d *fixedWidthDetectorStub) OnScrollRegionClear()                            {}
-func (d *fixedWidthDetectorStub) OnCursorVisibilityChange(hidden bool)            {}
-func (d *fixedWidthDetectorStub) OnResize(width, height int)                      {}
-func (d *fixedWidthDetectorStub) ForceFixedWidth(lineIdx int64, width int)        {}
-func (d *fixedWidthDetectorStub) ClearFixedWidth(lineIdx int64)                   {}
-func (d *fixedWidthDetectorStub) IsInTUIMode() bool                               { return false }
-func (d *fixedWidthDetectorStub) String() string                                  { return "stub" }
+// notifyDetectorScrollRegion notifies the detector of scroll region changes.
+// Called from SetMargins.
+func (v *VTerm) notifyDetectorScrollRegion(top, bottom, height int) {
+	if d := v.fixedWidthDetector(); d != nil {
+		d.OnScrollRegionSet(top, bottom, height)
+		v.logMemBufDebug("[TUI-DETECT] Scroll region set: top=%d, bottom=%d, height=%d, inTUI=%v",
+			top, bottom, height, d.IsInTUIMode())
+	}
+}
+
+// notifyDetectorScrollRegionClear notifies the detector of scroll region reset.
+// Called from SetMargins when resetting to full screen.
+func (v *VTerm) notifyDetectorScrollRegionClear() {
+	if d := v.fixedWidthDetector(); d != nil {
+		wasInTUI := d.IsInTUIMode()
+		d.OnScrollRegionClear()
+		if wasInTUI {
+			v.logMemBufDebug("[TUI-DETECT] Scroll region cleared, exited TUI mode")
+		}
+	}
+}
+
+// notifyDetectorCursorVisibility notifies the detector of cursor visibility changes.
+// Called from SetCursorVisible.
+func (v *VTerm) notifyDetectorCursorVisibility(hidden bool) {
+	if d := v.fixedWidthDetector(); d != nil {
+		d.OnCursorVisibilityChange(hidden)
+		if hidden {
+			v.logMemBufDebug("[TUI-DETECT] Cursor hidden, signals=%d", d.SignalCount())
+		}
+	}
+}

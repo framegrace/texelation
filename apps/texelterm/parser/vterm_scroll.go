@@ -41,6 +41,14 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 		// New Phase 1-3 architecture: use MemoryBuffer for line management.
 		isFullScreenMargins := v.marginTop == 0 && v.marginBottom == v.height-1
 
+		// Auto-jump to live edge when NEW content is being created (explicit LF at full-screen margins).
+		// This allows staying scrolled back during resize/redraw (which only redraws existing content),
+		// while still jumping to live edge when new output appears (shell commands, background jobs, etc.)
+		if commitLogical && isFullScreenMargins && !v.memoryBufferAtLiveEdge() {
+			v.memoryBufferScrollToBottom()
+			v.MarkAllDirty()
+		}
+
 		if v.cursorY == v.marginBottom {
 			if isFullScreenMargins {
 				// Full-screen scroll: just advance the viewport, don't copy content.

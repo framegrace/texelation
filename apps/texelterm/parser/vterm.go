@@ -63,8 +63,6 @@ type VTerm struct {
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode         bool
 	OnBracketedPasteModeChange func(bool)
-	// TUI mode detection for fixed-width content preservation
-	tuiMode *TUIMode
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -206,11 +204,9 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 		// Write to MemoryBuffer
 		v.memoryBufferPlaceCharWide(r, isWide)
 
-		// If scrolled up, jump to the bottom on new input
-		if !v.memoryBufferAtLiveEdge() {
-			v.memoryBufferScrollToBottom()
-			v.MarkAllDirty()
-		}
+		// Note: We no longer auto-jump to live edge here.
+		// Auto-jump happens in LineFeed when NEW content is created.
+		// This allows staying scrolled back during resize/redraw.
 		v.MarkDirty(v.cursorY)
 	}
 
@@ -883,21 +879,26 @@ func (v *VTerm) SetMargins(top, bottom int) {
 		// Invalid region, reset to full screen
 		v.marginTop = 0
 		v.marginBottom = v.height - 1
-		// Full screen margins = normal shell mode, reset TUI detection
-		v.resetTUIMode()
+		v.notifyDetectorScrollRegionClear()
 		return
 	}
 	v.marginTop = top - 1
 	v.marginBottom = bottom - 1
 	v.logDebug("[SCROLL] SetMargins: top=%d, bottom=%d (0-indexed: %d-%d), height=%d", top, bottom, v.marginTop, v.marginBottom, v.height)
 
-	// Non-full-screen scroll region is a TUI signal
+	// Notify FixedWidthDetector for TUI detection
 	isFullScreen := (top == 1 && bottom == v.height)
 	if !isFullScreen {
-		v.signalTUIMode("scroll_region")
+		v.notifyDetectorScrollRegion(v.marginTop, v.marginBottom, v.height)
 	} else {
-		// Reset to full screen = shell mode
-		v.resetTUIMode()
+		v.notifyDetectorScrollRegionClear()
+	}
+
+	// Enhanced debug logging for scroll region state
+	if v.memBufState != nil && v.memBufState.memBuf != nil {
+		mb := v.memBufState.memBuf
+		v.logMemBufDebug("[MARGINS] SetMargins top=%d bottom=%d isFullScreen=%v: GlobalOffset=%d GlobalEnd=%d liveEdgeBase=%d TotalLines=%d",
+			top, bottom, isFullScreen, mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, mb.TotalLines())
 	}
 
 	// Per spec, DECSTBM moves cursor to home position (1,1)
@@ -1169,52 +1170,4 @@ func (v *VTerm) GetAltBufferLine(y int) []Cell {
 
 func (v *VTerm) ScrollMargins() (int, int) {
 	return v.marginTop, v.marginLeft
-}
-
-// --- TUI Mode (Frozen Lines Model) ---
-
-// signalTUIMode records a TUI signal for fixed-width content preservation.
-// Only signals on main screen (not alt screen) to avoid false positives from
-// fullscreen apps like vim, htop, less that use alt screen.
-// Also doesn't signal when viewing history (scrolled back) since the user is
-// just navigating, not using a TUI app.
-func (v *VTerm) signalTUIMode(signalType string) {
-	if v.inAltScreen || v.tuiMode == nil {
-		return
-	}
-	// Don't signal when viewing history - user is just scrolling
-	if !v.memoryBufferAtLiveEdge() {
-		return
-	}
-	v.tuiMode.Signal(signalType)
-}
-
-// commitTUIBeforeScreenClear is a stub for TUI content capture.
-// In the MemoryBuffer architecture, screen content is preserved in the buffer.
-func (v *VTerm) commitTUIBeforeScreenClear() {
-	// In the MemoryBuffer architecture, content is already preserved.
-	// This function is kept for API compatibility.
-}
-
-// resetTUIMode resets TUI mode state. Called when returning to normal operation
-// (e.g., scroll region reset to full screen).
-// Note: We do NOT clear the TUI snapshot here. The snapshot is kept so that:
-// 1. Scrolling continues to work after TUI app exits (content remains visible)
-// 2. The snapshot will be replaced when a new TUI app captures a new snapshot
-// 3. The snapshot is only cleared on explicit terminal clear (ED 3)
-func (v *VTerm) resetTUIMode() {
-	// Note: We do NOT capture a final snapshot here. The TUI app is exiting and
-	// the viewport may be in a transitional state. We keep whatever snapshot
-	// was captured during normal operation (with the cooldown=0, it should be fresh).
-	if v.tuiMode != nil {
-		v.tuiMode.Reset()
-	}
-	// Don't clear TUI snapshot - keep it for scrollback history viewing
-}
-
-// StopTUIMode cleans up TUI mode resources. Should be called when VTerm is destroyed.
-func (v *VTerm) StopTUIMode() {
-	if v.tuiMode != nil {
-		v.tuiMode.Stop()
-	}
 }
