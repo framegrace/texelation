@@ -461,8 +461,100 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 		return
 	}
 
-	v.memBufState.memBuf.SetTermWidth(width)
+	oldHeight := v.memBufState.viewport.Height()
+	mb := v.memBufState.memBuf
+
+	// Calculate cursor's global line before resize
+	cursorGlobalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
+
+	v.logMemBufDebug("[RESIZE] Before: width=%d->%d, height=%d->%d, liveEdgeBase=%d, cursorY=%d, cursorGlobal=%d, GlobalEnd=%d",
+		v.memBufState.viewport.Width(), width, oldHeight, height,
+		v.memBufState.liveEdgeBase, v.cursorY, cursorGlobalLine, mb.GlobalEnd())
+
+	// Update viewport dimensions
+	mb.SetTermWidth(width)
 	v.memBufState.viewport.Resize(width, height)
+
+	// Adjust liveEdgeBase for vertical resize
+	if height != oldHeight {
+		globalEnd := mb.GlobalEnd()
+		globalOffset := mb.GlobalOffset()
+
+		if height < oldHeight {
+			// Shrinking: Adjust liveEdgeBase so cursor stays visible
+			// The cursor row must be < height
+			if v.cursorY >= height {
+				// Cursor would be off screen - adjust liveEdgeBase to keep cursor visible
+				// New cursor row will be height-1 (bottom of screen)
+				// liveEdgeBase = cursorGlobalLine - (height - 1)
+				newLiveEdgeBase := cursorGlobalLine - int64(height-1)
+				if newLiveEdgeBase < globalOffset {
+					newLiveEdgeBase = globalOffset
+				}
+				v.memBufState.liveEdgeBase = newLiveEdgeBase
+				v.cursorY = int(cursorGlobalLine - newLiveEdgeBase)
+
+				v.logMemBufDebug("[RESIZE] Shrink: cursor off-screen, adjusted liveEdgeBase=%d, cursorY=%d",
+					v.memBufState.liveEdgeBase, v.cursorY)
+			}
+			// If cursor is still on screen after shrink (cursorY < height), no adjustment needed
+		} else {
+			// Growing: Show more scrollback above if available
+			// We want to show more history while keeping the cursor at the same relative position
+			// from the bottom of the content.
+
+			// How many more rows do we have?
+			heightDelta := height - oldHeight
+
+			// Try to move liveEdgeBase back to show more history
+			newLiveEdgeBase := v.memBufState.liveEdgeBase - int64(heightDelta)
+			if newLiveEdgeBase < globalOffset {
+				newLiveEdgeBase = globalOffset
+			}
+
+			// Calculate new cursor Y to point to the same global line
+			newCursorY := int(cursorGlobalLine - newLiveEdgeBase)
+
+			// Make sure cursor is within bounds
+			if newCursorY >= height {
+				newCursorY = height - 1
+			}
+			if newCursorY < 0 {
+				newCursorY = 0
+			}
+
+			// But also make sure we're not showing beyond GlobalEnd
+			// The viewport should show lines from liveEdgeBase to liveEdgeBase + height - 1
+			// This should not exceed GlobalEnd - 1
+			maxLiveEdgeBase := globalEnd - int64(height)
+			if maxLiveEdgeBase < globalOffset {
+				maxLiveEdgeBase = globalOffset
+			}
+			if newLiveEdgeBase > maxLiveEdgeBase {
+				newLiveEdgeBase = maxLiveEdgeBase
+			}
+
+			v.memBufState.liveEdgeBase = newLiveEdgeBase
+			v.cursorY = int(cursorGlobalLine - newLiveEdgeBase)
+
+			// Re-clamp cursor
+			if v.cursorY >= height {
+				v.cursorY = height - 1
+			}
+			if v.cursorY < 0 {
+				v.cursorY = 0
+			}
+
+			v.logMemBufDebug("[RESIZE] Grow: adjusted liveEdgeBase=%d, cursorY=%d",
+				v.memBufState.liveEdgeBase, v.cursorY)
+		}
+	}
+
+	// Ensure consistency
+	v.ensureLiveEdgeBaseConsistency()
+
+	v.logMemBufDebug("[RESIZE] After: liveEdgeBase=%d, cursorY=%d, height=%d",
+		v.memBufState.liveEdgeBase, v.cursorY, height)
 
 	// Notify fixed-width detector (Phase 5)
 	if v.memBufState.fixedDetector != nil {
