@@ -10,6 +10,7 @@ package parser
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/mattn/go-runewidth"
 )
@@ -63,6 +64,11 @@ type VTerm struct {
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode         bool
 	OnBracketedPasteModeChange func(bool)
+	// Deprecated: Use SetOnLineIndexed instead, which is called AFTER persistence.
+	// This callback was called when a line was committed, but BEFORE it was persisted,
+	// which could cause search index entries for content that doesn't exist on disk.
+	// Kept for backward compatibility but no longer used internally.
+	OnLineIndex func(lineIdx int64, timestamp time.Time, cells []Cell, isCommand bool)
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -1080,6 +1086,14 @@ func WithEnvironmentUpdateHandler(handler func(string)) Option {
 
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
+}
+
+// Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.
+// This callback is called BEFORE persistence, which can cause search index entries
+// for content that doesn't exist on disk after a crash.
+// WithLineIndexHandler sets a callback for when lines are committed (e.g., on line feed).
+func WithLineIndexHandler(handler func(lineIdx int64, timestamp time.Time, cells []Cell, isCommand bool)) Option {
+	return func(v *VTerm) { v.OnLineIndex = handler }
 }
 
 // WithMemoryBuffer enables the new memory buffer system.

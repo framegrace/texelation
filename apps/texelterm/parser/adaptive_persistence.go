@@ -32,9 +32,22 @@ package parser
 
 import (
 	"fmt"
+	"log"
 	"slices"
 	"sync"
 	"time"
+)
+
+// Monitoring thresholds for adaptive persistence
+const (
+	// Log warning when pending lines exceed this count
+	pendingLineWarningThreshold = 500
+
+	// Log warning when flush takes longer than this
+	flushSlowThreshold = 100 * time.Millisecond
+
+	// Log info when write rate exceeds this (high activity indicator)
+	highWriteRateThreshold = 50.0 // writes per second
 )
 
 // AdaptivePersistenceConfig holds configuration for the adaptive persistence layer.
@@ -78,10 +91,17 @@ type PersistenceMetrics struct {
 }
 
 // AdaptivePersistence manages disk writes with dynamic rate adjustment.
+// pendingLineInfo stores metadata for a line awaiting flush.
+type pendingLineInfo struct {
+	timestamp time.Time
+	isCommand bool
+}
+
 type AdaptivePersistence struct {
 	config  AdaptivePersistenceConfig
 	memBuf  *MemoryBuffer
-	disk    *DiskHistory
+	disk    *PageStore       // Direct PageStore (legacy mode)
+	wal     *WriteAheadLog   // WAL-based persistence (preferred)
 	nowFunc func() time.Time // For testing; defaults to time.Now
 
 	// Components
@@ -89,9 +109,14 @@ type AdaptivePersistence struct {
 	modeCtrl    *ModeController
 
 	// State
-	currentMode  PersistMode
-	pendingLines map[int64]bool // Lines awaiting flush
-	lastActivity time.Time
+	currentMode     PersistMode
+	pendingLines    map[int64]*pendingLineInfo // Lines awaiting flush with metadata
+	pendingMetadata *ViewportState             // Metadata awaiting flush (written with content)
+	lastActivity    time.Time
+
+	// Callback for search indexing - called AFTER line is persisted to WAL
+	// This ensures search index only has entries for content that exists on disk.
+	OnLineIndexed func(lineIdx int64, line *LogicalLine, timestamp time.Time, isCommand bool)
 
 	// Debounce timer
 	flushTimer *time.Timer
@@ -113,30 +138,71 @@ type AdaptivePersistence struct {
 // Parameters:
 //   - config: Configuration for rate thresholds and timing
 //   - memBuf: MemoryBuffer to read dirty lines from
-//   - disk: DiskHistory to write lines to (passed in for testability)
+//   - disk: PageStore to write lines to (passed in for testability)
 //
 // The background idle monitor is started automatically.
 // Call Close() when done to flush pending writes and stop the monitor.
+//
+// Deprecated: Use NewAdaptivePersistenceWithWAL for crash recovery support.
 func NewAdaptivePersistence(
 	config AdaptivePersistenceConfig,
 	memBuf *MemoryBuffer,
-	disk *DiskHistory,
+	disk *PageStore,
 ) (*AdaptivePersistence, error) {
-	return newAdaptivePersistenceWithNow(config, memBuf, disk, time.Now)
+	return newAdaptivePersistenceWithNow(config, memBuf, disk, nil, time.Now)
+}
+
+// NewAdaptivePersistenceWithWAL creates an adaptive persistence layer with WAL support.
+//
+// Parameters:
+//   - config: Configuration for rate thresholds and timing
+//   - memBuf: MemoryBuffer to read dirty lines from
+//   - walConfig: Configuration for the Write-Ahead Log
+//
+// The WAL provides crash recovery by journaling writes before committing to PageStore.
+// On startup, uncommitted entries are recovered automatically.
+func NewAdaptivePersistenceWithWAL(
+	config AdaptivePersistenceConfig,
+	memBuf *MemoryBuffer,
+	walConfig WALConfig,
+) (*AdaptivePersistence, error) {
+	if memBuf == nil {
+		return nil, fmt.Errorf("memBuf cannot be nil")
+	}
+
+	// Open or create WAL (which owns PageStore)
+	wal, err := OpenWriteAheadLog(walConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open WAL: %w", err)
+	}
+
+	return newAdaptivePersistenceWithWAL(config, memBuf, wal, time.Now)
+}
+
+// newAdaptivePersistenceWithWAL creates persistence with an existing WAL (for testing).
+func newAdaptivePersistenceWithWAL(
+	config AdaptivePersistenceConfig,
+	memBuf *MemoryBuffer,
+	wal *WriteAheadLog,
+	nowFunc func() time.Time,
+) (*AdaptivePersistence, error) {
+	return newAdaptivePersistenceWithNow(config, memBuf, nil, wal, nowFunc)
 }
 
 // newAdaptivePersistenceWithNow allows injecting a custom time function for testing.
+// Either disk or wal must be non-nil. If both are provided, wal takes precedence.
 func newAdaptivePersistenceWithNow(
 	config AdaptivePersistenceConfig,
 	memBuf *MemoryBuffer,
-	disk *DiskHistory,
+	disk *PageStore,
+	wal *WriteAheadLog,
 	nowFunc func() time.Time,
 ) (*AdaptivePersistence, error) {
 	if memBuf == nil {
 		return nil, fmt.Errorf("memBuf cannot be nil")
 	}
-	if disk == nil {
-		return nil, fmt.Errorf("disk cannot be nil")
+	if disk == nil && wal == nil {
+		return nil, fmt.Errorf("either disk or wal must be provided")
 	}
 	if nowFunc == nil {
 		nowFunc = time.Now
@@ -166,11 +232,12 @@ func newAdaptivePersistenceWithNow(
 		config:       config,
 		memBuf:       memBuf,
 		disk:         disk,
+		wal:          wal,
 		nowFunc:      nowFunc,
 		rateMonitor:  NewRateMonitor(config.RateWindowSize),
 		modeCtrl:     NewModeController(config.WriteThroughMaxRate, config.DebouncedMaxRate),
 		currentMode:  PersistWriteThrough,
-		pendingLines: make(map[int64]bool),
+		pendingLines: make(map[int64]*pendingLineInfo),
 		lastActivity: nowFunc(),
 		stopCh:       make(chan struct{}),
 		stopped:      false,
@@ -187,7 +254,15 @@ func newAdaptivePersistenceWithNow(
 
 // NotifyWrite is called when a line changes in MemoryBuffer.
 // It records the write, updates the mode, and handles persistence based on mode.
+// For search indexing support, use NotifyWriteWithMeta to provide timestamp and command flag.
 func (ap *AdaptivePersistence) NotifyWrite(lineIdx int64) {
+	ap.NotifyWriteWithMeta(lineIdx, time.Time{}, false)
+}
+
+// NotifyWriteWithMeta is called when a line changes, with metadata for search indexing.
+// The metadata (timestamp, isCommand) is stored and passed to OnLineIndexed callback
+// AFTER the line is successfully persisted to disk.
+func (ap *AdaptivePersistence) NotifyWriteWithMeta(lineIdx int64, timestamp time.Time, isCommand bool) {
 	ap.mu.Lock()
 	defer ap.mu.Unlock()
 
@@ -195,15 +270,27 @@ func (ap *AdaptivePersistence) NotifyWrite(lineIdx int64) {
 		return
 	}
 
+	// Use current time if not provided
+	if timestamp.IsZero() {
+		timestamp = ap.nowFunc()
+	}
+
 	ap.metrics.TotalWrites++
 	writeRate := ap.updateRateAndModeLocked()
 
+	// Store metadata for this line
+	info := &pendingLineInfo{
+		timestamp: timestamp,
+		isCommand: isCommand,
+	}
+
 	// Handle based on mode
-	ap.handleWriteLocked([]int64{lineIdx}, writeRate)
+	ap.handleWriteLockedWithMeta(lineIdx, info, writeRate)
 }
 
 // NotifyWriteBatch records multiple line writes efficiently.
 // Use this when multiple lines change at once (e.g., scroll operations).
+// All lines get the same timestamp and are marked as non-commands.
 func (ap *AdaptivePersistence) NotifyWriteBatch(lineIndices []int64) {
 	if len(lineIndices) == 0 {
 		return
@@ -216,11 +303,37 @@ func (ap *AdaptivePersistence) NotifyWriteBatch(lineIndices []int64) {
 		return
 	}
 
+	timestamp := ap.nowFunc()
 	ap.metrics.TotalWrites += int64(len(lineIndices))
 	writeRate := ap.updateRateAndModeLocked()
 
-	// Handle based on mode
-	ap.handleWriteLocked(lineIndices, writeRate)
+	// Handle based on mode - batch lines share timestamp
+	for _, idx := range lineIndices {
+		info := &pendingLineInfo{
+			timestamp: timestamp,
+			isCommand: false,
+		}
+		ap.handleWriteLockedWithMeta(idx, info, writeRate)
+	}
+}
+
+// NotifyMetadataChange records a metadata change (scroll position, cursor).
+// Metadata is batched with content and written together on flush, ensuring consistency.
+func (ap *AdaptivePersistence) NotifyMetadataChange(state *ViewportState) {
+	if state == nil {
+		return
+	}
+
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+
+	if ap.stopped {
+		return
+	}
+
+	// Store pending metadata - will be written on next flush
+	ap.pendingMetadata = state
+	ap.lastActivity = ap.nowFunc()
 }
 
 // updateRateAndModeLocked records a write timestamp, calculates rate, and adjusts mode.
@@ -237,9 +350,26 @@ func (ap *AdaptivePersistence) updateRateAndModeLocked() float64 {
 	// Adjust mode based on rate
 	newMode := ap.modeCtrl.DetermineMode(writeRate)
 	if newMode != ap.currentMode {
+		oldMode := ap.currentMode
 		ap.currentMode = newMode
 		ap.metrics.CurrentMode = newMode
 		ap.metrics.ModeChanges++
+
+		// Log mode transitions, especially to BestEffort (high activity)
+		if newMode == PersistBestEffort {
+			log.Printf("[AdaptivePersistence] Mode transition: %s -> %s (rate=%.1f/s, pending=%d) - high activity detected",
+				oldMode, newMode, writeRate, len(ap.pendingLines))
+		} else if oldMode == PersistBestEffort {
+			log.Printf("[AdaptivePersistence] Mode transition: %s -> %s (rate=%.1f/s) - activity normalized",
+				oldMode, newMode, writeRate)
+		}
+	}
+
+	// Warn if write rate is unusually high
+	if writeRate > highWriteRateThreshold && ap.metrics.TotalWrites%100 == 0 {
+		// Log every 100 writes to avoid spamming
+		log.Printf("[AdaptivePersistence] High write rate: %.1f/s (mode=%s, pending=%d)",
+			writeRate, ap.currentMode, len(ap.pendingLines))
 	}
 
 	return writeRate
@@ -247,19 +377,16 @@ func (ap *AdaptivePersistence) updateRateAndModeLocked() float64 {
 
 // handleWriteLocked processes line writes based on current mode.
 // Must be called with ap.mu held.
-func (ap *AdaptivePersistence) handleWriteLocked(lineIndices []int64, writeRate float64) {
+func (ap *AdaptivePersistence) handleWriteLockedWithMeta(lineIdx int64, info *pendingLineInfo, writeRate float64) {
 	switch ap.currentMode {
 	case PersistWriteThrough:
-		// Immediate write for each line
-		for _, idx := range lineIndices {
-			ap.flushLineLocked(idx)
-		}
+		// Immediate write - store info temporarily for the callback
+		ap.pendingLines[lineIdx] = info
+		ap.flushLineLocked(lineIdx)
 
 	case PersistDebounced:
 		// Add to pending and schedule debounced flush with adaptive delay
-		for _, idx := range lineIndices {
-			ap.pendingLines[idx] = true
-		}
+		ap.pendingLines[lineIdx] = info
 		delay := ap.modeCtrl.CalculateDebounceDelay(
 			writeRate,
 			ap.config.DebounceMinDelay,
@@ -269,9 +396,14 @@ func (ap *AdaptivePersistence) handleWriteLocked(lineIndices []int64, writeRate 
 
 	case PersistBestEffort:
 		// Just add to pending; idle monitor will flush
-		for _, idx := range lineIndices {
-			ap.pendingLines[idx] = true
-		}
+		ap.pendingLines[lineIdx] = info
+	}
+
+	// Warn if pending line count is getting high
+	pendingCount := len(ap.pendingLines)
+	if pendingCount > pendingLineWarningThreshold && pendingCount%100 == 0 {
+		log.Printf("[AdaptivePersistence] Warning: %d lines pending flush (mode=%s, rate=%.1f/s)",
+			pendingCount, ap.currentMode, writeRate)
 	}
 }
 
@@ -284,7 +416,7 @@ func (ap *AdaptivePersistence) Flush() error {
 	return ap.flushPendingLocked()
 }
 
-// Close flushes pending writes, stops the idle monitor, and closes the disk.
+// Close flushes pending writes, stops the idle monitor, and closes storage.
 func (ap *AdaptivePersistence) Close() error {
 	ap.mu.Lock()
 
@@ -305,14 +437,19 @@ func (ap *AdaptivePersistence) Close() error {
 	// Stop idle monitor (outside lock to avoid deadlock)
 	ap.stopIdleMonitor()
 
-	// Close disk
-	diskErr := ap.disk.Close()
+	// Close storage (WAL or direct PageStore)
+	var storageErr error
+	if ap.wal != nil {
+		storageErr = ap.wal.Close()
+	} else if ap.disk != nil {
+		storageErr = ap.disk.Close()
+	}
 
 	// Return first error
 	if flushErr != nil {
 		return flushErr
 	}
-	return diskErr
+	return storageErr
 }
 
 // CurrentMode returns the current persistence mode.
@@ -320,6 +457,15 @@ func (ap *AdaptivePersistence) CurrentMode() PersistMode {
 	ap.mu.Lock()
 	defer ap.mu.Unlock()
 	return ap.currentMode
+}
+
+// PageStore returns the underlying PageStore for history access.
+// Returns the WAL's PageStore if using WAL, otherwise the direct PageStore.
+func (ap *AdaptivePersistence) PageStore() *PageStore {
+	if ap.wal != nil {
+		return ap.wal.pageStore
+	}
+	return ap.disk
 }
 
 // Metrics returns a copy of current metrics.
@@ -371,12 +517,16 @@ func (ap *AdaptivePersistence) cancelFlushTimerLocked() {
 	}
 }
 
-// flushPendingLocked writes all pending lines to disk.
+// flushPendingLocked writes all pending lines and metadata to disk.
+// Content and metadata are written together to ensure consistency.
 // Must be called with ap.mu held.
 func (ap *AdaptivePersistence) flushPendingLocked() error {
-	if len(ap.pendingLines) == 0 {
+	if len(ap.pendingLines) == 0 && ap.pendingMetadata == nil {
 		return nil
 	}
+
+	lineCount := len(ap.pendingLines)
+	startTime := ap.nowFunc()
 
 	ap.metrics.TotalFlushes++
 
@@ -398,15 +548,37 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 		}
 	}
 
-	// Clear pending set
-	ap.pendingLines = make(map[int64]bool)
+	// Clear pending lines
+	ap.pendingLines = make(map[int64]*pendingLineInfo)
+
+	// Write metadata AFTER content so they stay consistent
+	// (metadata references content that's now on disk)
+	if ap.pendingMetadata != nil && ap.wal != nil {
+		if err := ap.wal.WriteMetadata(ap.pendingMetadata); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to write metadata: %w", err)
+			}
+		}
+		ap.pendingMetadata = nil
+	}
+
+	// Monitor flush performance
+	elapsed := ap.nowFunc().Sub(startTime)
+	if elapsed > flushSlowThreshold {
+		log.Printf("[AdaptivePersistence] Slow flush: %d lines in %v (%.1f lines/ms)",
+			lineCount, elapsed, float64(lineCount)/float64(elapsed.Milliseconds()))
+	}
 
 	return firstErr
 }
 
-// flushLineLocked writes a single line to disk.
+// flushLineLocked writes a single line to disk (via WAL or direct PageStore).
+// After successful write, calls OnLineIndexed callback for search indexing.
 // Must be called with ap.mu held.
 func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
+	// Get pending info (may be nil for legacy callers)
+	info := ap.pendingLines[lineIdx]
+
 	line := ap.memBuf.GetLine(lineIdx)
 	if line == nil {
 		// Line was evicted from memory - clear dirty and skip
@@ -415,13 +587,29 @@ func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
 		return nil
 	}
 
-	if err := ap.disk.AppendLine(line); err != nil {
+	// Use WAL if available, otherwise direct PageStore
+	var err error
+	if ap.wal != nil {
+		err = ap.wal.Append(lineIdx, line, ap.nowFunc())
+	} else {
+		err = ap.disk.AppendLine(line)
+	}
+
+	if err != nil {
 		// Log error but don't clear dirty (retry on next flush)
 		return fmt.Errorf("failed to write line %d: %w", lineIdx, err)
 	}
 
 	ap.memBuf.ClearDirty(lineIdx)
+	delete(ap.pendingLines, lineIdx)
 	ap.metrics.LinesWritten++
+
+	// Call search index callback AFTER successful write
+	// This ensures search index only has entries for persisted content
+	if ap.OnLineIndexed != nil && info != nil {
+		ap.OnLineIndexed(lineIdx, line, info.timestamp, info.isCommand)
+	}
+
 	return nil
 }
 

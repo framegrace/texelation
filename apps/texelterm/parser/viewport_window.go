@@ -282,6 +282,12 @@ func (vw *ViewportWindow) Height() int {
 	return vw.height
 }
 
+// Builder returns the physical line builder for line wrapping calculations.
+// Used by VTerm.ScrollToGlobalLine to compute scroll offsets.
+func (vw *ViewportWindow) Builder() *PhysicalLineBuilder {
+	return vw.builder
+}
+
 // --- Coordinate Conversion ---
 
 // ViewportToContent converts viewport coordinates (row, col) to content coordinates.

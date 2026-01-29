@@ -92,6 +92,12 @@ type TexelTerm struct {
 
 	// State persistence (via texelation storage service)
 	storage texelcore.AppStorage
+
+	// Search index (Phase 3 - Disk Layer)
+	searchIndex *parser.SQLiteSearchIndex
+
+	// History navigator (Phase 4 - Disk Layer)
+	historyNavigator *HistoryNavigator
 }
 
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
@@ -238,6 +244,9 @@ func (a *TexelTerm) applyParserStyle(pCell parser.Cell) texelcore.Cell {
 
 func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
+	if a.historyNavigator != nil {
+		a.historyNavigator.SetRefreshNotifier(refreshChan)
+	}
 }
 
 // ControlBus returns the terminal's control bus for external registration.
@@ -483,6 +492,11 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.drawConfirmation(a.buf)
 	}
 
+	// Render history navigator overlay (Phase 4 - Disk Layer)
+	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+		a.buf = a.historyNavigator.Render(a.buf)
+	}
+
 	return a.buf
 }
 
@@ -722,6 +736,24 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 	a.mu.Unlock()
+
+	// Handle Ctrl+G to open history navigator (Ctrl+G = "goto" in history)
+	// Note: Ctrl+Shift+F doesn't work reliably (CSI u encoding issues)
+	if ev.Key() == tcell.KeyCtrlG {
+		if a.historyNavigator != nil {
+			log.Printf("[HISTORY_NAV] Opening via Ctrl+G")
+			a.historyNavigator.Show()
+			a.requestRefresh()
+			return
+		}
+	}
+
+	// Route keys to history navigator if visible
+	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+		if a.historyNavigator.HandleKey(ev) {
+			return
+		}
+	}
 
 	if a.pty == nil {
 		return
@@ -989,14 +1021,24 @@ func (a *TexelTerm) ensureShellIntegrationScripts(configDir string) error {
 	return nil
 }
 
+// StandalonePaneID is the fixed pane ID used for standalone texelterm.
+// This ensures standalone sessions have persistent history and search index
+// that survives across sessions, separate from texelation pane IDs.
+const StandalonePaneID = "standalone-texelterm"
+
 func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
 	cols, rows := a.width, a.height
 	isRestart := a.vterm != nil
 	paneID := a.paneID
+	// Use standalone pane ID if not embedded in texelation
+	if paneID == "" {
+		paneID = StandalonePaneID
+		a.paneID = paneID
+	}
 	a.mu.Unlock()
 
-	log.Printf("[TEXELTERM] runShell starting: cols=%d, rows=%d, restart=%v", cols, rows, isRestart)
+	log.Printf("[TEXELTERM] runShell starting: cols=%d, rows=%d, restart=%v, paneID=%s", cols, rows, isRestart, paneID)
 
 	// Load environment and working directory from pane-specific file
 	env, cwd := a.loadShellEnvironment(paneID)
@@ -1195,7 +1237,7 @@ func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Confi
 		}
 	}
 
-	log.Printf("[TEXELTERM] memoryBufferEnabled=true, paneID=%q", paneID)
+	log.Printf("[TEXELTERM] memoryBufferEnabled=true, paneID=%q, historyPersistDir=%q", paneID, historyPersistDir)
 
 	if paneID != "" {
 		scrollbackDir := filepath.Join(historyPersistDir, "scrollback")
@@ -1209,12 +1251,44 @@ func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Confi
 			MaxLines:      historyMemoryLines,
 			EvictionBatch: 1000,
 			DiskPath:      diskPath,
+			TerminalID:    paneID, // Use paneID as terminal ID for persistent history
 		})
 		if err != nil {
 			log.Printf("[MEMORY_BUFFER] Failed to enable disk-backed buffer: %v", err)
 			a.vterm.EnableMemoryBuffer()
 		} else {
 			log.Printf("[MEMORY_BUFFER] Enabled with disk persistence: %s", diskPath)
+		}
+
+		// Initialize search index (Phase 3 - Disk Layer)
+		indexPath := filepath.Join(scrollbackDir, paneID+".index.db")
+		if idx, err := parser.NewSearchIndex(indexPath); err != nil {
+			log.Printf("[SEARCH_INDEX] Failed to initialize: %v", err)
+		} else {
+			a.searchIndex = idx
+			log.Printf("[SEARCH_INDEX] Initialized at %s", indexPath)
+
+			// Wire up the line index callback - called AFTER line is persisted to WAL
+			// This ensures search index only has entries for content that exists on disk
+			a.vterm.SetOnLineIndexed(func(lineIdx int64, line *parser.LogicalLine, timestamp time.Time, isCommand bool) {
+				if line == nil {
+					return
+				}
+				text := parser.ExtractText(line.Cells)
+				if text != "" {
+					a.searchIndex.IndexLine(lineIdx, timestamp, text, isCommand)
+				}
+			})
+
+			// Initialize history navigator (Phase 4 - Disk Layer)
+			a.historyNavigator = NewHistoryNavigator(a.vterm, idx, func() {
+				// Close callback: return to live edge when navigator closes
+				a.vterm.ScrollToLiveEdge()
+				a.requestRefresh()
+			})
+			a.historyNavigator.SetRefreshNotifier(a.refreshChan)
+			a.historyNavigator.Resize(a.width, a.height) // Initialize size
+			log.Printf("[HISTORY_NAV] Initialized with size %dx%d", a.width, a.height)
 		}
 	} else {
 		a.vterm.EnableMemoryBuffer()
@@ -1342,6 +1416,10 @@ func (a *TexelTerm) Resize(cols, rows int) {
 		a.mouseCoordinator.SetSize(cols, rows)
 	}
 
+	if a.historyNavigator != nil {
+		a.historyNavigator.Resize(cols, rows)
+	}
+
 	if a.pty != nil {
 		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	}
@@ -1367,6 +1445,14 @@ func (a *TexelTerm) Stop() {
 			if err := a.vterm.CloseMemoryBuffer(); err != nil {
 				log.Printf("Error closing memory buffer: %v", err)
 			}
+		}
+
+		// Close search index (flushes pending writes)
+		if a.searchIndex != nil {
+			if err := a.searchIndex.Close(); err != nil {
+				log.Printf("Error closing search index: %v", err)
+			}
+			a.searchIndex = nil
 		}
 
 		a.cmd = nil

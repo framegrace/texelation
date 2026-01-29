@@ -8,7 +8,6 @@ package parser
 
 import (
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -227,66 +226,25 @@ func TestModeController_LinearInterpolation(t *testing.T) {
 
 // --- AdaptivePersistence Tests ---
 
-// mockDiskHistory is a test double that records AppendLine calls.
-type mockDiskHistory struct {
-	mu          sync.Mutex
-	appendCalls []int64      // Line indices passed to AppendLine
-	lines       []*LogicalLine // Actual lines appended
-	appendErr   error        // Error to return from AppendLine
-	closed      bool
-}
-
-func newMockDiskHistory() *mockDiskHistory {
-	return &mockDiskHistory{
-		appendCalls: make([]int64, 0),
-		lines:       make([]*LogicalLine, 0),
+// createTestPageStore creates a PageStore for testing.
+func createTestPageStore(t testing.TB, tmpDir string) *PageStore {
+	t.Helper()
+	config := DefaultPageStoreConfig(tmpDir, "test-terminal")
+	ps, err := CreatePageStore(config)
+	if err != nil {
+		t.Fatalf("failed to create page store: %v", err)
 	}
-}
-
-func (m *mockDiskHistory) AppendLine(line *LogicalLine) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.lines = append(m.lines, line)
-	// We don't have line index here, but can track by count
-	return m.appendErr
-}
-
-func (m *mockDiskHistory) LineCount() int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return int64(len(m.lines))
-}
-
-func (m *mockDiskHistory) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.closed = true
-	return nil
-}
-
-func (m *mockDiskHistory) Path() string {
-	return "/mock/path"
-}
-
-func (m *mockDiskHistory) IsClosed() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.closed
+	return ps
 }
 
 func TestAdaptivePersistence_WriteThroughMode(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
-	// Create temp disk file
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -321,11 +279,7 @@ func TestAdaptivePersistence_DebouncedMode(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
 	config.DebounceMinDelay = 10 * time.Millisecond
@@ -334,7 +288,7 @@ func TestAdaptivePersistence_DebouncedMode(t *testing.T) {
 	now := time.Now()
 	currentTime := now
 
-	ap, err := newAdaptivePersistenceWithNow(config, mb, disk, func() time.Time {
+	ap, err := newAdaptivePersistenceWithNow(config, mb, ps, nil, func() time.Time {
 		return currentTime
 	})
 	if err != nil {
@@ -374,11 +328,7 @@ func TestAdaptivePersistence_BestEffortMode(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 1000, EvictionBatch: 100})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
 	config.IdleThreshold = 50 * time.Millisecond
@@ -386,7 +336,7 @@ func TestAdaptivePersistence_BestEffortMode(t *testing.T) {
 	now := time.Now()
 	currentTime := now
 
-	ap, err := newAdaptivePersistenceWithNow(config, mb, disk, func() time.Time {
+	ap, err := newAdaptivePersistenceWithNow(config, mb, ps, nil, func() time.Time {
 		return currentTime
 	})
 	if err != nil {
@@ -425,17 +375,13 @@ func TestAdaptivePersistence_ModeTransitions(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 1000, EvictionBatch: 100})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
 	now := time.Now()
 	currentTime := now
 
-	ap, err := newAdaptivePersistenceWithNow(config, mb, disk, func() time.Time {
+	ap, err := newAdaptivePersistenceWithNow(config, mb, ps, nil, func() time.Time {
 		return currentTime
 	})
 	if err != nil {
@@ -487,16 +433,12 @@ func TestAdaptivePersistence_IdleFlush(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
 	config.IdleThreshold = 100 * time.Millisecond
 
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -530,16 +472,12 @@ func TestAdaptivePersistence_FlushOnClose(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 500, EvictionBatch: 50})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
 	config.IdleThreshold = 10 * time.Second // Long idle to ensure flush happens on Close
 
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -558,16 +496,17 @@ func TestAdaptivePersistence_FlushOnClose(t *testing.T) {
 	}
 
 	// Verify data was persisted by reopening
-	disk2, err := OpenDiskHistory(diskPath)
+	psConfig := DefaultPageStoreConfig(tmpDir, "test-terminal")
+	ps2, err := OpenPageStore(psConfig)
 	if err != nil {
-		t.Fatalf("failed to reopen disk history: %v", err)
+		t.Fatalf("failed to reopen page store: %v", err)
 	}
-	if disk2 == nil {
-		t.Fatal("reopened disk history is nil")
+	if ps2 == nil {
+		t.Fatal("reopened page store is nil")
 	}
-	defer disk2.Close()
+	defer ps2.Close()
 
-	lineCount := disk2.LineCount()
+	lineCount := ps2.LineCount()
 	if lineCount != 200 {
 		t.Errorf("expected 200 lines on disk, got %d", lineCount)
 	}
@@ -578,18 +517,14 @@ func TestAdaptivePersistence_EvictedLine(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 10, EvictionBatch: 5})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
 	// Use BestEffort to accumulate pending lines
 	config.WriteThroughMaxRate = 0.1
 	config.DebouncedMaxRate = 0.2
 
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -620,14 +555,10 @@ func TestAdaptivePersistence_EvictedLine(t *testing.T) {
 
 func TestAdaptivePersistence_NilMemBuf(t *testing.T) {
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
-	defer disk.Close()
+	ps := createTestPageStore(t, tmpDir)
+	defer ps.Close()
 
-	_, err = NewAdaptivePersistence(DefaultAdaptivePersistenceConfig(), nil, disk)
+	_, err := NewAdaptivePersistence(DefaultAdaptivePersistenceConfig(), nil, ps)
 	if err == nil {
 		t.Error("expected error for nil memBuf")
 	}
@@ -646,14 +577,10 @@ func TestAdaptivePersistence_Metrics(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -682,14 +609,10 @@ func TestAdaptivePersistence_String(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -708,14 +631,10 @@ func TestAdaptivePersistence_Concurrency(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 1000, EvictionBatch: 100})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -765,14 +684,10 @@ func TestAdaptivePersistence_DoubleClose(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -794,14 +709,10 @@ func TestAdaptivePersistence_NotifyAfterClose(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -818,14 +729,10 @@ func TestAdaptivePersistence_BatchNotify(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -851,14 +758,10 @@ func TestAdaptivePersistence_EmptyBatchNotify(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
 	tmpDir := t.TempDir()
-	diskPath := filepath.Join(tmpDir, "test.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
-	if err != nil {
-		t.Fatalf("failed to create disk history: %v", err)
-	}
+	ps := createTestPageStore(t, tmpDir)
 
 	config := DefaultAdaptivePersistenceConfig()
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		t.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
@@ -922,14 +825,14 @@ func BenchmarkAdaptivePersistence_NotifyWrite(b *testing.B) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 10000, EvictionBatch: 1000})
 
 	tmpDir := b.TempDir()
-	diskPath := filepath.Join(tmpDir, "bench.txhist")
-	disk, err := CreateDiskHistory(DiskHistoryConfig{Path: diskPath})
+	psConfig := DefaultPageStoreConfig(tmpDir, "bench-terminal")
+	ps, err := CreatePageStore(psConfig)
 	if err != nil {
-		b.Fatalf("failed to create disk history: %v", err)
+		b.Fatalf("failed to create page store: %v", err)
 	}
 
 	config := DefaultAdaptivePersistenceConfig()
-	ap, err := NewAdaptivePersistence(config, mb, disk)
+	ap, err := NewAdaptivePersistence(config, mb, ps)
 	if err != nil {
 		b.Fatalf("failed to create AdaptivePersistence: %v", err)
 	}
