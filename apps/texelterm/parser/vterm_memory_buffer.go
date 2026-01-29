@@ -582,8 +582,7 @@ func (v *VTerm) memoryBufferGrid() [][]Cell {
 // and swaps FG/BG colors to highlight them. It searches across the entire
 // grid as continuous text to handle matches that span wrapped lines.
 func (v *VTerm) applySearchHighlight(grid [][]Cell) {
-	term := strings.ToLower(v.searchHighlight)
-	termRunes := []rune(term)
+	termRunes := []rune(strings.ToLower(v.searchHighlight))
 	termLen := len(termRunes)
 	if termLen == 0 {
 		return
@@ -607,27 +606,23 @@ func (v *VTerm) applySearchHighlight(grid [][]Cell) {
 		}
 	}
 
-	// Search for term in the concatenated runes
-	fullText := string(allRunes)
-	startIdx := 0
-	for {
-		idx := strings.Index(fullText[startIdx:], term)
-		if idx < 0 {
-			break
+	// Search for term using pure rune-based matching (no string conversion)
+	for i := 0; i <= len(allRunes)-termLen; i++ {
+		match := true
+		for j := 0; j < termLen; j++ {
+			if allRunes[i+j] != termRunes[j] {
+				match = false
+				break
+			}
 		}
-		matchStart := startIdx + idx
-
-		// Convert byte index to rune index
-		runeIdx := len([]rune(fullText[:matchStart]))
-
-		// Highlight each cell in the match
-		for i := 0; i < termLen && runeIdx+i < len(positions); i++ {
-			pos := positions[runeIdx+i]
-			cell := &grid[pos.y][pos.x]
-			cell.FG, cell.BG = cell.BG, cell.FG
+		if match {
+			// Highlight each cell in the match
+			for j := 0; j < termLen; j++ {
+				pos := positions[i+j]
+				cell := &grid[pos.y][pos.x]
+				cell.FG, cell.BG = cell.BG, cell.FG
+			}
 		}
-
-		startIdx = matchStart + len(term)
 	}
 }
 
