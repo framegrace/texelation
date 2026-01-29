@@ -30,6 +30,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // memoryBufferState holds the new memory buffer system state.
@@ -578,45 +579,55 @@ func (v *VTerm) memoryBufferGrid() [][]Cell {
 }
 
 // applySearchHighlight finds all occurrences of the search term in the grid
-// and swaps FG/BG colors to highlight them.
+// and swaps FG/BG colors to highlight them. It searches across the entire
+// grid as continuous text to handle matches that span wrapped lines.
 func (v *VTerm) applySearchHighlight(grid [][]Cell) {
 	term := strings.ToLower(v.searchHighlight)
-	termLen := len(term)
+	termRunes := []rune(term)
+	termLen := len(termRunes)
 	if termLen == 0 {
 		return
 	}
 
-	for y := range grid {
-		row := grid[y]
-		// Extract text from this row for searching
-		rowText := make([]rune, len(row))
+	// Build a flat array of all runes and their grid coordinates
+	type cellPos struct {
+		y, x int
+	}
+	var allRunes []rune
+	var positions []cellPos
+
+	for y, row := range grid {
 		for x, cell := range row {
-			if cell.Rune == 0 {
-				rowText[x] = ' '
-			} else {
-				rowText[x] = cell.Rune
+			r := cell.Rune
+			if r == 0 {
+				r = ' '
 			}
+			allRunes = append(allRunes, unicode.ToLower(r))
+			positions = append(positions, cellPos{y, x})
 		}
-		rowStr := strings.ToLower(string(rowText))
+	}
 
-		// Find all occurrences of the term in this row
-		startIdx := 0
-		for {
-			idx := strings.Index(rowStr[startIdx:], term)
-			if idx < 0 {
-				break
-			}
-			matchStart := startIdx + idx
-
-			// Swap FG/BG for each cell in the match
-			for i := 0; i < termLen && matchStart+i < len(row); i++ {
-				cell := &row[matchStart+i]
-				// Swap foreground and background
-				cell.FG, cell.BG = cell.BG, cell.FG
-			}
-
-			startIdx = matchStart + termLen
+	// Search for term in the concatenated runes
+	fullText := string(allRunes)
+	startIdx := 0
+	for {
+		idx := strings.Index(fullText[startIdx:], term)
+		if idx < 0 {
+			break
 		}
+		matchStart := startIdx + idx
+
+		// Convert byte index to rune index
+		runeIdx := len([]rune(fullText[:matchStart]))
+
+		// Highlight each cell in the match
+		for i := 0; i < termLen && runeIdx+i < len(positions); i++ {
+			pos := positions[runeIdx+i]
+			cell := &grid[pos.y][pos.x]
+			cell.FG, cell.BG = cell.BG, cell.FG
+		}
+
+		startIdx = matchStart + len(term)
 	}
 }
 
