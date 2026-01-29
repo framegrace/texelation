@@ -31,6 +31,10 @@ type SearchIndex interface {
 	// Output is queued for batch indexing.
 	IndexLine(lineIdx int64, timestamp time.Time, text string, isCommand bool) error
 
+	// DeleteLine removes a line from the index.
+	// Called when a line is erased/cleared to prevent stale matches.
+	DeleteLine(lineIdx int64) error
+
 	// Search executes an FTS5 search query.
 	// Query uses SQLite FTS5 MATCH syntax (e.g., "docker AND run", "git*").
 	// Returns up to limit results ordered by relevance (BM25).
@@ -344,6 +348,16 @@ func (si *SQLiteSearchIndex) indexSync(entry indexEntry) error {
 		"INSERT OR REPLACE INTO lines (id, timestamp, is_command, content) VALUES (?, ?, ?, ?)",
 		entry.lineIdx, entry.timestamp.UnixNano(), isCmd, entry.text,
 	)
+	return err
+}
+
+// DeleteLine removes a line from the search index.
+// This is called when a line is erased to prevent stale search matches.
+func (si *SQLiteSearchIndex) DeleteLine(lineIdx int64) error {
+	si.mu.Lock()
+	defer si.mu.Unlock()
+
+	_, err := si.db.Exec("DELETE FROM lines WHERE id = ?", lineIdx)
 	return err
 }
 

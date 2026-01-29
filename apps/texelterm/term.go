@@ -1277,6 +1277,9 @@ func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Confi
 				text := parser.ExtractText(line.Cells)
 				if text != "" {
 					a.searchIndex.IndexLine(lineIdx, timestamp, text, isCommand)
+				} else {
+					// Line was erased - remove from index to prevent stale matches
+					a.searchIndex.DeleteLine(lineIdx)
 				}
 			})
 

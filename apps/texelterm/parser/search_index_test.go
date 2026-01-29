@@ -540,3 +540,62 @@ func TestSearchIndex_LargeVolume(t *testing.T) {
 		t.Errorf("expected at least 500 results, got %d", len(results))
 	}
 }
+
+func TestSearchIndex_DeleteLine(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	idx, err := NewSearchIndex(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create index: %v", err)
+	}
+	defer idx.Close()
+
+	now := time.Now()
+
+	// Index three lines
+	idx.IndexLine(0, now, "hello world", true)
+	idx.IndexLine(1, now, "hello again", true)
+	idx.IndexLine(2, now, "goodbye world", true)
+
+	// All three should be searchable
+	results, _ := idx.Search("hello", 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for 'hello', got %d", len(results))
+	}
+
+	results, _ = idx.Search("world", 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for 'world', got %d", len(results))
+	}
+
+	// Delete line 0 (hello world)
+	err = idx.DeleteLine(0)
+	if err != nil {
+		t.Fatalf("failed to delete line: %v", err)
+	}
+
+	// Now only one "hello" result (line 1)
+	results, _ = idx.Search("hello", 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'hello' after delete, got %d", len(results))
+	}
+	if len(results) > 0 && results[0].GlobalLineIdx != 1 {
+		t.Errorf("expected remaining result to be line 1, got line %d", results[0].GlobalLineIdx)
+	}
+
+	// Only one "world" result (line 2)
+	results, _ = idx.Search("world", 10)
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'world' after delete, got %d", len(results))
+	}
+	if len(results) > 0 && results[0].GlobalLineIdx != 2 {
+		t.Errorf("expected remaining result to be line 2, got line %d", results[0].GlobalLineIdx)
+	}
+
+	// Delete non-existent line should not error
+	err = idx.DeleteLine(999)
+	if err != nil {
+		t.Errorf("deleting non-existent line should not error: %v", err)
+	}
+}
