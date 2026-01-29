@@ -48,33 +48,38 @@ func handleResetHistory() error {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
-	scrollbackDir := filepath.Join(homeDir, ".texelation", "scrollback")
+	// Find all history directories (handle legacy double-scrollback path)
+	basePath := filepath.Join(homeDir, ".texelation")
+	var dirsToRemove []string
+	var fileCount, totalSize int64
 
-	// Check if directory exists
-	info, err := os.Stat(scrollbackDir)
-	if os.IsNotExist(err) {
+	// Check both possible scrollback locations
+	possiblePaths := []string{
+		filepath.Join(basePath, "scrollback"),
+	}
+
+	for _, dir := range possiblePaths {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			dirsToRemove = append(dirsToRemove, dir)
+			filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+				if err == nil && !info.IsDir() {
+					fileCount++
+					totalSize += info.Size()
+				}
+				return nil
+			})
+		}
+	}
+
+	if len(dirsToRemove) == 0 {
 		fmt.Println("No history found. Nothing to reset.")
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("cannot access scrollback directory: %w", err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", scrollbackDir)
-	}
-
-	// Count files to give user an idea of what will be deleted
-	var fileCount, totalSize int64
-	filepath.Walk(scrollbackDir, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() {
-			fileCount++
-			totalSize += info.Size()
-		}
-		return nil
-	})
 
 	fmt.Printf("This will permanently delete all scrollback history:\n")
-	fmt.Printf("  Directory: %s\n", scrollbackDir)
+	for _, dir := range dirsToRemove {
+		fmt.Printf("  Directory: %s\n", dir)
+	}
 	fmt.Printf("  Files: %d (%.2f MB)\n", fileCount, float64(totalSize)/(1024*1024))
 	fmt.Printf("\nType 'yes' to confirm: ")
 
@@ -90,9 +95,12 @@ func handleResetHistory() error {
 		return nil
 	}
 
-	// Remove the scrollback directory
-	if err := os.RemoveAll(scrollbackDir); err != nil {
-		return fmt.Errorf("failed to remove scrollback directory: %w", err)
+	// Remove all found directories
+	for _, dir := range dirsToRemove {
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("failed to remove %s: %w", dir, err)
+		}
+		fmt.Printf("Removed: %s\n", dir)
 	}
 
 	fmt.Println("History reset complete.")
