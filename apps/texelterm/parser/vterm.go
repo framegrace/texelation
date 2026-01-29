@@ -64,6 +64,8 @@ type VTerm struct {
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode         bool
 	OnBracketedPasteModeChange func(bool)
+	// Search highlighting - term to highlight with reversed colors (FG↔BG)
+	searchHighlight string
 	// Deprecated: Use SetOnLineIndexed instead, which is called AFTER persistence.
 	// This callback was called when a line was committed, but BEFORE it was persisted,
 	// which could cause search index entries for content that doesn't exist on disk.

@@ -234,6 +234,11 @@ func (h *HistoryNavigator) Hide() {
 	}
 	h.timerMu.Unlock()
 
+	// Clear search highlighting
+	if h.vterm != nil {
+		h.vterm.ClearSearchHighlight()
+	}
+
 	if h.onClose != nil {
 		h.onClose()
 	}
@@ -456,6 +461,12 @@ func (h *HistoryNavigator) performSearch(query string) {
 		h.resultIndex = 0
 		h.counterLbl.Text = ""
 		h.mu.Unlock()
+
+		// Clear search highlighting when query is empty
+		if h.vterm != nil {
+			h.vterm.ClearSearchHighlight()
+		}
+
 		h.requestRefresh()
 		return
 	}
@@ -476,14 +487,20 @@ func (h *HistoryNavigator) performSearch(query string) {
 	h.resultIndex = 0
 	h.updateCounterDisplay()
 	var firstResult *parser.SearchResult
+	searchTerm := h.searchInput.Text // Capture for highlighting
 	if len(results) > 0 {
 		firstResult = &results[0]
 	}
 	h.mu.Unlock()
 
 	// Auto-navigate to first result if any (outside lock)
-	if firstResult != nil && h.vterm != nil {
-		h.vterm.ScrollToGlobalLine(firstResult.GlobalLineIdx)
+	if h.vterm != nil {
+		// Set search highlighting
+		h.vterm.SetSearchHighlight(searchTerm)
+
+		if firstResult != nil {
+			h.vterm.ScrollToGlobalLine(firstResult.GlobalLineIdx)
+		}
 	}
 
 	h.requestRefresh()

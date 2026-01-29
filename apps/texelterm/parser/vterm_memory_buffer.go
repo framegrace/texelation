@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -560,12 +561,63 @@ func (v *VTerm) memoryBufferCarriageReturn() {
 // --- Grid Access ---
 
 // memoryBufferGrid returns the viewport grid from ViewportWindow.
+// If a search term is set, matching text is highlighted with reversed colors.
 func (v *VTerm) memoryBufferGrid() [][]Cell {
 	if !v.IsMemoryBufferEnabled() {
 		return nil
 	}
 
-	return v.memBufState.viewport.GetVisibleGrid()
+	grid := v.memBufState.viewport.GetVisibleGrid()
+
+	// Apply search highlighting if a term is set
+	if v.searchHighlight != "" && len(grid) > 0 {
+		v.applySearchHighlight(grid)
+	}
+
+	return grid
+}
+
+// applySearchHighlight finds all occurrences of the search term in the grid
+// and swaps FG/BG colors to highlight them.
+func (v *VTerm) applySearchHighlight(grid [][]Cell) {
+	term := strings.ToLower(v.searchHighlight)
+	termLen := len(term)
+	if termLen == 0 {
+		return
+	}
+
+	for y := range grid {
+		row := grid[y]
+		// Extract text from this row for searching
+		rowText := make([]rune, len(row))
+		for x, cell := range row {
+			if cell.Rune == 0 {
+				rowText[x] = ' '
+			} else {
+				rowText[x] = cell.Rune
+			}
+		}
+		rowStr := strings.ToLower(string(rowText))
+
+		// Find all occurrences of the term in this row
+		startIdx := 0
+		for {
+			idx := strings.Index(rowStr[startIdx:], term)
+			if idx < 0 {
+				break
+			}
+			matchStart := startIdx + idx
+
+			// Swap FG/BG for each cell in the match
+			for i := 0; i < termLen && matchStart+i < len(row); i++ {
+				cell := &row[matchStart+i]
+				// Swap foreground and background
+				cell.FG, cell.BG = cell.BG, cell.FG
+			}
+
+			startIdx = matchStart + termLen
+		}
+	}
 }
 
 // --- Scrolling ---
@@ -706,6 +758,20 @@ func (v *VTerm) ScrollToGlobalLine(globalLineIdx int64) bool {
 	vw.ScrollToOffset(targetOffset)
 	v.MarkAllDirty()
 	return true
+}
+
+// SetSearchHighlight sets the search term to highlight with reversed colors.
+// The term will be highlighted wherever it appears in the visible grid.
+// Pass empty string to clear highlighting.
+func (v *VTerm) SetSearchHighlight(term string) {
+	v.searchHighlight = term
+	v.MarkAllDirty()
+}
+
+// ClearSearchHighlight removes search term highlighting.
+func (v *VTerm) ClearSearchHighlight() {
+	v.searchHighlight = ""
+	v.MarkAllDirty()
 }
 
 // GlobalOffset returns the global index of the oldest line in the memory buffer.
