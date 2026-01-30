@@ -36,9 +36,9 @@ type SearchIndex interface {
 	// Called when a line is erased/cleared to prevent stale matches.
 	DeleteLine(lineIdx int64) error
 
-	// Search executes an FTS5 search query.
-	// Query uses SQLite FTS5 MATCH syntax (e.g., "docker AND run", "git*").
-	// Returns up to limit results ordered by relevance (BM25).
+	// Search executes a substring search query using trigram matching.
+	// Any substring of the indexed content can be matched (e.g., "ls -ls", "docker").
+	// Returns up to limit results ordered by timestamp (newest first).
 	Search(query string, limit int) ([]SearchResult, error)
 
 	// SearchInRange searches within a time range.

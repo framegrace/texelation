@@ -322,7 +322,7 @@ func TestSearchIndex_EmptyIndex(t *testing.T) {
 	}
 }
 
-func TestSearchIndex_FTS5Wildcard(t *testing.T) {
+func TestSearchIndex_SubstringSearch(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
@@ -337,14 +337,25 @@ func TestSearchIndex_FTS5Wildcard(t *testing.T) {
 	idx.IndexLine(1, now, "docker build", true)
 	idx.IndexLine(2, now, "kubectl apply", true)
 
-	// Wildcard search for "docker*"
-	results, err := idx.Search("docker*", 10)
+	// Trigram tokenizer enables substring search without wildcards.
+	// "docker" matches both "docker-compose up" and "docker build".
+	results, err := idx.Search("docker", 10)
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
 
 	if len(results) != 2 {
-		t.Errorf("expected 2 results for docker*, got %d", len(results))
+		t.Errorf("expected 2 results for docker, got %d", len(results))
+	}
+
+	// Substring search also works for partial matches
+	results, err = idx.Search("compo", 10)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for compo, got %d", len(results))
 	}
 }
 

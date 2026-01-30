@@ -169,8 +169,8 @@ func openWriteAheadLogWithNow(config WALConfig, nowFunc func() time.Time) (*Writ
 		// WAL exists - read header and recover
 		if err := w.readHeader(existingWAL); err != nil {
 			existingWAL.Close()
-			// Corrupted header - start fresh
-			if err := w.createFreshWAL(); err != nil {
+			// Corrupted header - try to preserve existing PageStore data
+			if err := w.createFreshWALPreservingPageStore(); err != nil {
 				return nil, err
 			}
 		} else {
@@ -247,6 +247,57 @@ func (w *WriteAheadLog) createFreshWAL() error {
 		return fmt.Errorf("failed to create PageStore: %w", err)
 	}
 	w.pageStore = ps
+
+	return nil
+}
+
+// createFreshWALPreservingPageStore creates a fresh WAL but preserves existing PageStore data.
+// Used when WAL header is corrupted but PageStore may still have valid data.
+func (w *WriteAheadLog) createFreshWALPreservingPageStore() error {
+	// Create WAL file
+	file, err := os.Create(w.walPath)
+	if err != nil {
+		return fmt.Errorf("failed to create WAL file: %w", err)
+	}
+	w.walFile = file
+
+	// Write header
+	if err := w.writeHeader(); err != nil {
+		w.walFile.Close()
+		os.Remove(w.walPath)
+		return err
+	}
+
+	w.walSize = WALHeaderSize
+
+	// Try to open existing PageStore first to preserve history
+	ps, err := OpenPageStore(w.config.PageStoreConfig)
+	if err != nil {
+		w.walFile.Close()
+		os.Remove(w.walPath)
+		return fmt.Errorf("failed to open PageStore: %w", err)
+	}
+	if ps == nil {
+		// No existing PageStore - create new one
+		ps, err = CreatePageStore(w.config.PageStoreConfig)
+		if err != nil {
+			w.walFile.Close()
+			os.Remove(w.walPath)
+			return fmt.Errorf("failed to create PageStore: %w", err)
+		}
+	}
+	w.pageStore = ps
+
+	// Update checkpoint to match existing PageStore state
+	lineCount := w.pageStore.LineCount()
+	if lineCount > 0 {
+		w.header.LastCheckpoint = uint64(lineCount - 1)
+		w.lastCheckpoint = w.header.LastCheckpoint
+		// Rewrite header with updated checkpoint
+		if err := w.writeHeader(); err != nil {
+			return fmt.Errorf("failed to update header after preserving PageStore: %w", err)
+		}
+	}
 
 	return nil
 }
@@ -571,20 +622,34 @@ func (w *WriteAheadLog) recover() error {
 	}
 
 	// Replay entries to PageStore using two-pass approach (same as checkpoint)
-	// Pass 1: Append all new lines (LineWrite)
+	// IMPORTANT: Check if line already exists to avoid duplication.
+	// This can happen if PageStore was flushed but WAL wasn't checkpointed before crash.
+	pageStoreLineCount := w.pageStore.LineCount()
+
+	// Pass 1: Append only truly new lines (LineWrite with index >= current count)
 	for _, entry := range entries {
 		if entry.Type == EntryTypeLineWrite && entry.Line != nil {
-			if err := w.pageStore.AppendLineWithTimestamp(entry.Line, entry.Timestamp); err != nil {
-				return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
+			lineIdx := int64(entry.GlobalLineIdx)
+			if lineIdx >= pageStoreLineCount {
+				// This is a new line - append it
+				if err := w.pageStore.AppendLineWithTimestamp(entry.Line, entry.Timestamp); err != nil {
+					return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
+				}
+				pageStoreLineCount++ // Track new count for subsequent entries
 			}
+			// If lineIdx < pageStoreLineCount, the line already exists - skip append
+			// (it will be handled in Pass 2 if there's a corresponding LineModify)
 		}
 	}
 
-	// Pass 2: Update modified lines (LineModify)
+	// Pass 2: Update modified lines (LineModify) and any LineWrite entries for existing lines
 	for _, entry := range entries {
-		if entry.Type == EntryTypeLineModify && entry.Line != nil {
-			if err := w.pageStore.UpdateLine(int64(entry.GlobalLineIdx), entry.Line, entry.Timestamp); err != nil {
-				return fmt.Errorf("failed to update line %d in PageStore: %w", entry.GlobalLineIdx, err)
+		lineIdx := int64(entry.GlobalLineIdx)
+		if entry.Line != nil && lineIdx < w.pageStore.LineCount() {
+			if entry.Type == EntryTypeLineModify || entry.Type == EntryTypeLineWrite {
+				if err := w.pageStore.UpdateLine(lineIdx, entry.Line, entry.Timestamp); err != nil {
+					return fmt.Errorf("failed to update line %d in PageStore: %w", entry.GlobalLineIdx, err)
+				}
 			}
 		}
 	}
