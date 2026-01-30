@@ -87,6 +87,9 @@ type HistoryNavigator struct {
 
 	// Debouncing for search
 	searchTimer *time.Timer
+
+	// Callback when search results change (for scrollbar minimap highlighting)
+	onSearchResultsChanged func(results []parser.SearchResult)
 	timerMu     sync.Mutex
 
 	// Scroll animation state
@@ -269,6 +272,14 @@ func (h *HistoryNavigator) IsVisible() bool {
 	return h.visible
 }
 
+// SetSearchResultsCallback sets a callback to be invoked when search results change.
+// Used to notify the scrollbar for minimap highlighting.
+func (h *HistoryNavigator) SetSearchResultsCallback(callback func(results []parser.SearchResult)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onSearchResultsChanged = callback
+}
+
 // Resize adjusts the navigator layout to fit the given dimensions.
 // The navigator uses 2 lines at the bottom.
 func (h *HistoryNavigator) Resize(cols, rows int) {
@@ -276,7 +287,7 @@ func (h *HistoryNavigator) Resize(cols, rows int) {
 	defer h.mu.Unlock()
 
 	h.width = cols
-	h.height = 2 // Navigator is always 2 lines
+	h.height = rows // Store terminal height for mouse hit detection
 
 	// UIManager gets full width but only 2 lines
 	h.ui.Resize(cols, 2)
@@ -435,6 +446,37 @@ func (h *HistoryNavigator) HandleKey(ev *tcell.EventKey) bool {
 	return true
 }
 
+// HandleMouse processes mouse input for the navigator overlay.
+// Returns true if the mouse event was consumed.
+func (h *HistoryNavigator) HandleMouse(ev *tcell.EventMouse) bool {
+	h.mu.Lock()
+	visible := h.visible
+	height := h.height
+	h.mu.Unlock()
+
+	if !visible {
+		return false
+	}
+
+	// The overlay is at the bottom of the screen (last 2 rows)
+	x, y := ev.Position()
+	overlayStartY := height - 2
+	if y < overlayStartY {
+		return false // Click is above the overlay
+	}
+
+	// Adjust y to be relative to the overlay (0 or 1)
+	adjustedEv := tcell.NewEventMouse(
+		x,
+		y-overlayStartY,
+		ev.Buttons(),
+		ev.Modifiers(),
+	)
+
+	// Delegate to UIManager (don't hold lock - ui has its own)
+	return h.ui.HandleMouse(adjustedEv)
+}
+
 // Render draws the 1-line overlay at the bottom of the input buffer.
 func (h *HistoryNavigator) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
 	h.mu.Lock()
@@ -509,7 +551,13 @@ func (h *HistoryNavigator) performSearch(query string) {
 		h.searchResults = nil
 		h.resultIndex = 0
 		h.counterLbl.Text = ""
+		callback := h.onSearchResultsChanged
 		h.mu.Unlock()
+
+		// Notify scrollbar that search results are cleared
+		if callback != nil {
+			callback(nil)
+		}
 
 		// Clear search highlighting when query is empty
 		if h.vterm != nil {
@@ -539,10 +587,16 @@ func (h *HistoryNavigator) performSearch(query string) {
 	searchTerm := h.searchInput.Text // Capture for highlighting
 	selectionColor := h.highlightSelectionColor
 	accentColor := h.highlightAccentColor
+	callback := h.onSearchResultsChanged
 	if len(results) > 0 {
 		firstResult = &results[0]
 	}
 	h.mu.Unlock()
+
+	// Notify scrollbar of new search results
+	if callback != nil {
+		callback(results)
+	}
 
 	// Auto-navigate to first result if any (outside lock)
 	if h.vterm != nil {

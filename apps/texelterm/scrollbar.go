@@ -8,9 +8,9 @@
 package texelterm
 
 import (
-	"log"
 	"math"
 	"sync"
+	"time"
 
 	texelcolor "github.com/framegrace/texelui/color"
 	texelcore "github.com/framegrace/texelui/core"
@@ -18,7 +18,11 @@ import (
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/internal/theming"
+	"github.com/framegrace/texelui/theme"
 )
+
+// Debounce delay for minimap invalidation
+const minimapDebounceDelay = 100 * time.Millisecond
 
 // Braille dot values for building characters
 // Braille is a 2x4 grid:
@@ -60,9 +64,23 @@ type ScrollBar struct {
 	onVisibilityChanged func(visible bool)
 
 	// Styling
-	trackStyle  tcell.Style
-	thumbStyle  tcell.Style
-	borderStyle tcell.Style
+	trackStyle           tcell.Style
+	thumbStyle           tcell.Style
+	borderStyle          tcell.Style
+	accentColor          tcell.Color // For thumb
+	searchHighlightColor tcell.Color // For search result highlighting on minimap
+
+	// Cached minimap data (only recalculated when invalidated)
+	cachedMinimap      []minimapRowData
+	cachedMinimapValid bool
+	cachedTotalLines   int64
+
+	// Search results for highlighting
+	searchResultLines map[int64]bool // Set of global line indices with search results
+
+	// Debounce timer for invalidation
+	invalidateTimer   *time.Timer
+	pendingInvalidate bool
 
 	mu sync.Mutex
 }
@@ -74,13 +92,19 @@ func NewScrollBar(vterm *parser.VTerm, onVisibilityChanged func(visible bool)) *
 	fgColor := tm.GetSemanticColor("text.muted")
 	accentColor := tm.GetSemanticColor("accent.primary")
 
+	// Green from palette for search result highlighting
+	greenColor := theme.ResolveColorName("green")
+
 	return &ScrollBar{
-		vterm:               vterm,
-		visible:             false,
-		onVisibilityChanged: onVisibilityChanged,
-		trackStyle:          tcell.StyleDefault.Foreground(fgColor).Background(bgColor),
-		thumbStyle:          tcell.StyleDefault.Foreground(accentColor).Background(accentColor),
-		borderStyle:         tcell.StyleDefault.Foreground(fgColor).Background(bgColor),
+		vterm:                vterm,
+		visible:              false,
+		onVisibilityChanged:  onVisibilityChanged,
+		trackStyle:           tcell.StyleDefault.Foreground(fgColor).Background(bgColor),
+		thumbStyle:           tcell.StyleDefault.Foreground(accentColor).Background(accentColor),
+		borderStyle:          tcell.StyleDefault.Foreground(fgColor).Background(bgColor),
+		accentColor:          accentColor,
+		searchHighlightColor: greenColor,
+		searchResultLines:    make(map[int64]bool),
 	}
 }
 
@@ -140,7 +164,59 @@ func (s *ScrollBar) IsVisible() bool {
 func (s *ScrollBar) Resize(height int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.height = height
+	if s.height != height {
+		s.height = height
+		s.cachedMinimapValid = false // Invalidate on resize
+	}
+}
+
+// Invalidate marks the minimap cache as stale with debouncing.
+// Call this when terminal content changes (new lines, reflow, etc.)
+// The actual invalidation is debounced to avoid rapid recalculations during fast output.
+func (s *ScrollBar) Invalidate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Mark as pending invalidation
+	s.pendingInvalidate = true
+
+	// Reset or start debounce timer
+	if s.invalidateTimer != nil {
+		s.invalidateTimer.Stop()
+	}
+	s.invalidateTimer = time.AfterFunc(minimapDebounceDelay, func() {
+		s.mu.Lock()
+		if s.pendingInvalidate {
+			s.cachedMinimapValid = false
+			s.pendingInvalidate = false
+		}
+		s.mu.Unlock()
+	})
+}
+
+// SetSearchResults updates the search result line indices for minimap highlighting.
+// Pass nil or empty slice to clear results.
+func (s *ScrollBar) SetSearchResults(results []parser.SearchResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Clear and rebuild the set
+	s.searchResultLines = make(map[int64]bool)
+	for _, r := range results {
+		s.searchResultLines[r.GlobalLineIdx] = true
+	}
+
+	// Invalidate cache since search results affect rendering
+	s.cachedMinimapValid = false
+}
+
+// ClearSearchResults removes all search result highlights from the minimap.
+func (s *ScrollBar) ClearSearchResults() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.searchResultLines = make(map[int64]bool)
+	s.cachedMinimapValid = false
 }
 
 // Render returns the scrollbar grid (ScrollBarWidth x height).
@@ -184,9 +260,10 @@ func (s *ScrollBar) Render() [][]texelcore.Cell {
 
 // minimapSubpixelData holds data for one subpixel row.
 type minimapSubpixelData struct {
-	lineLength float64
-	fg         tcell.Color
-	bg         tcell.Color
+	lineLength      float64
+	fg              tcell.Color
+	bg              tcell.Color
+	hasSearchResult bool // True if this subpixel range contains search results
 }
 
 // minimapRowData holds the computed data for one scrollbar row (4 subpixels).
@@ -195,10 +272,21 @@ type minimapRowData struct {
 }
 
 // calculateBrailleMinimap computes line lengths and colors for braille rendering.
+// Uses cached data if available, otherwise recalculates from all lines.
 // Each scrollbar row shows 4 lines (one per braille subpixel row).
 // The entire history (including disk) is mapped to fit the scrollbar height.
 // Returns data for each row including line lengths and dominant colors.
 func (s *ScrollBar) calculateBrailleMinimap(height int) []minimapRowData {
+	s.mu.Lock()
+	// Return cached data if valid and same height
+	if s.cachedMinimapValid && len(s.cachedMinimap) == height {
+		result := s.cachedMinimap
+		s.mu.Unlock()
+		return result
+	}
+	s.mu.Unlock()
+
+	// Need to recalculate
 	minimap := make([]minimapRowData, height)
 
 	if s.vterm == nil || height <= 0 {
@@ -206,10 +294,9 @@ func (s *ScrollBar) calculateBrailleMinimap(height int) []minimapRowData {
 	}
 
 	// Get ALL lines from disk + memory
-	allLines, totalLines := s.vterm.GetAllLogicalLines()
+	allLines, globalOffset, totalLines := s.vterm.GetAllLogicalLines()
 
 	if totalLines <= 0 || len(allLines) == 0 {
-		log.Printf("[SCROLLBAR] No lines: totalLines=%d, len=%d", totalLines, len(allLines))
 		return minimap
 	}
 
@@ -227,20 +314,30 @@ func (s *ScrollBar) calculateBrailleMinimap(height int) []minimapRowData {
 		linesPerSubpixel = 1
 	}
 
-	log.Printf("[SCROLLBAR] Minimap: totalLines=%d (from array len=%d), linesPerSubpixel=%.2f, height=%d",
-		totalLines, len(allLines), linesPerSubpixel, height)
+	// Get search result lines (thread-safe copy)
+	s.mu.Lock()
+	searchLines := s.searchResultLines
+	s.mu.Unlock()
 
 	for y := 0; y < height; y++ {
 		// Calculate everything for this row from the preloaded lines
-		s.analyzeRowFromLines(y, allLines, totalLines, linesPerSubpixel, termWidth, &minimap[y])
+		s.analyzeRowFromLines(y, allLines, globalOffset, linesPerSubpixel, termWidth, searchLines, &minimap[y])
 	}
+
+	// Cache the result
+	s.mu.Lock()
+	s.cachedMinimap = minimap
+	s.cachedTotalLines = totalLines
+	s.cachedMinimapValid = true
+	s.mu.Unlock()
 
 	return minimap
 }
 
 // analyzeRowFromLines calculates all data for one scrollbar row from preloaded lines.
 // Each subpixel gets its own dominant color from the same lines used for its content.
-func (s *ScrollBar) analyzeRowFromLines(y int, allLines []*parser.LogicalLine, totalLines int64, linesPerSubpixel float64, termWidth int, row *minimapRowData) {
+// searchLines is a set of global line indices that contain search results.
+func (s *ScrollBar) analyzeRowFromLines(y int, allLines []*parser.LogicalLine, globalOffset int64, linesPerSubpixel float64, termWidth int, searchLines map[int64]bool, row *minimapRowData) {
 	// Process each subpixel independently
 	for subRow := 0; subRow < 4; subRow++ {
 		subpixelIdx := y*4 + subRow
@@ -256,6 +353,7 @@ func (s *ScrollBar) analyzeRowFromLines(y int, allLines []*parser.LogicalLine, t
 
 		var totalLength int64
 		var lineCount int64
+		hasSearchResult := false
 
 		// Track colors for THIS subpixel only
 		fgCounts := make(map[tcell.Color]int)
@@ -266,6 +364,12 @@ func (s *ScrollBar) analyzeRowFromLines(y int, allLines []*parser.LogicalLine, t
 			line := allLines[i]
 			if line == nil {
 				continue
+			}
+
+			// Check if this line has a search result
+			globalIdx := globalOffset + int64(i)
+			if searchLines[globalIdx] {
+				hasSearchResult = true
 			}
 
 			// Calculate line length
@@ -300,6 +404,7 @@ func (s *ScrollBar) analyzeRowFromLines(y int, allLines []*parser.LogicalLine, t
 		// Use it as FG only (no background painting)
 		row.subpixels[subRow].fg = s.pickBrightestColor(fgCounts, bgCounts)
 		row.subpixels[subRow].bg = tcell.ColorDefault
+		row.subpixels[subRow].hasSearchResult = hasSearchResult
 	}
 }
 
@@ -375,12 +480,6 @@ func (s *ScrollBar) analyzeLines(startLine, endLine int64, termWidth int) minima
 			maxBgCount = count
 			result.bg = color
 		}
-	}
-
-	// Debug: log details for first few line ranges
-	if startLine < 20 {
-		log.Printf("[SCROLLBAR DEBUG] lines [%d-%d): length=%.2f, fg=%v (count=%d), bg=%v (count=%d), cells=%d, lines=%d",
-			startLine, endLine, result.lineLength, result.fg, maxFgCount, result.bg, maxBgCount, cellCount, lineCount)
 	}
 
 	return result
@@ -499,13 +598,27 @@ func (s *ScrollBar) renderBrailleMinimapRow(row []texelcore.Cell, y int, thumbSt
 		Style: borderStyle,
 	}
 
-	// Minimap content style
+	// Check if any subpixel in this row has a search result
+	hasSearchResult := false
+	for i := 0; i < 4; i++ {
+		if data.subpixels[i].hasSearchResult {
+			hasSearchResult = true
+			break
+		}
+	}
+
+	// Minimap content style - use accent background for search results
 	fg, _ := s.pickDominantSubpixelColor(data)
 	defaultFg, defaultBg, _ := s.trackStyle.Decompose()
 	if fg == tcell.ColorDefault {
 		fg = defaultFg
 	}
-	style := tcell.StyleDefault.Foreground(fg).Background(defaultBg)
+	bg := defaultBg
+	if hasSearchResult {
+		// Use mauve background to highlight search results
+		bg = s.searchHighlightColor
+	}
+	style := tcell.StyleDefault.Foreground(fg).Background(bg)
 
 	// Extract line lengths for braille building
 	var lineLengths [4]float64
@@ -668,10 +781,19 @@ func (s *ScrollBar) calculateThumbPosition(height int) (int, int) {
 		return 0, height * 3
 	}
 
-	// Get scroll metrics - use logical lines to match minimap
+	// Get scroll metrics
 	scrollOffset := s.vterm.ScrollOffset()
-	_, totalLines := s.vterm.GetAllLogicalLines()
 	viewportHeight := int64(s.vterm.Height())
+
+	// Use cached total lines if available, otherwise get fresh count
+	s.mu.Lock()
+	totalLines := s.cachedTotalLines
+	s.mu.Unlock()
+
+	if totalLines <= 0 {
+		// Cache not populated yet, get count (but don't read all content)
+		totalLines = s.vterm.TotalLogicalLines()
+	}
 
 	// Total sub-rows (3x resolution)
 	totalSubRows := height * 3
@@ -713,5 +835,59 @@ func (s *ScrollBar) calculateThumbPosition(height int) (int, int) {
 	}
 
 	return thumbStart, thumbEnd
+}
+
+// HandleClick handles a mouse click on the scrollbar.
+// x is relative to the scrollbar (0 = border column).
+// y is the row clicked.
+// Returns (targetScrollOffset, ok). If ok is false, the click should be ignored.
+func (s *ScrollBar) HandleClick(x, y int) (int64, bool) {
+	s.mu.Lock()
+	visible := s.visible
+	height := s.height
+	s.mu.Unlock()
+
+	if !visible || height <= 0 || s.vterm == nil {
+		return 0, false
+	}
+
+	// Ignore clicks on the border column (x == 0)
+	if x < 1 {
+		return 0, false
+	}
+
+	// Get total lines
+	_, _, totalLines := s.vterm.GetAllLogicalLines()
+	if totalLines <= 0 {
+		return 0, false
+	}
+
+	viewportHeight := int64(s.vterm.Height())
+	if totalLines <= viewportHeight {
+		return 0, false // No scrolling needed
+	}
+
+	// Convert click position to scroll offset
+	// y=0 is top (oldest content, max scroll), y=height-1 is bottom (newest, scroll=0)
+	clickRatio := float64(y) / float64(height-1)
+	maxScroll := totalLines - viewportHeight
+
+	// Invert: top of scrollbar = max scroll, bottom = 0
+	targetOffset := int64(float64(maxScroll) * (1.0 - clickRatio))
+
+	// Clamp
+	if targetOffset < 0 {
+		targetOffset = 0
+	}
+	if targetOffset > maxScroll {
+		targetOffset = maxScroll
+	}
+
+	return targetOffset, true
+}
+
+// Width returns the scrollbar width.
+func (s *ScrollBar) Width() int {
+	return ScrollBarWidth
 }
 

@@ -325,15 +325,17 @@ func (v *VTerm) GetGlobalOffset() int64 {
 
 // GetAllLogicalLines returns all logical lines from both disk and memory.
 // Used by scrollbar minimap. This reads the entire history - optimize later!
-func (v *VTerm) GetAllLogicalLines() ([]*LogicalLine, int64) {
+// Returns (lines, globalOffset, totalLines) where globalOffset is the global
+// index of the first returned line.
+func (v *VTerm) GetAllLogicalLines() ([]*LogicalLine, int64, int64) {
 	if v.memBufState == nil || v.memBufState.viewport == nil {
-		return nil, 0
+		return nil, 0, 0
 	}
 
 	// Use viewport's reader which handles both disk and memory
 	reader := v.memBufState.viewport.Reader()
 	if reader == nil {
-		return nil, 0
+		return nil, 0, 0
 	}
 
 	globalOffset := reader.GlobalOffset()
@@ -341,12 +343,12 @@ func (v *VTerm) GetAllLogicalLines() ([]*LogicalLine, int64) {
 	totalLines := globalEnd - globalOffset
 
 	if totalLines <= 0 {
-		return nil, 0
+		return nil, 0, 0
 	}
 
 	// Read ALL lines (disk + memory)
 	lines := reader.GetLineRange(globalOffset, globalEnd)
-	return lines, totalLines
+	return lines, globalOffset, totalLines
 }
 
 // getHistoryLen returns the current history length from MemoryBuffer.
