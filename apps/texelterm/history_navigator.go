@@ -16,6 +16,7 @@ import (
 	texelcore "github.com/framegrace/texelui/core"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/internal/effects"
 	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/widgets"
@@ -88,8 +89,28 @@ type HistoryNavigator struct {
 	searchTimer *time.Timer
 	timerMu     sync.Mutex
 
+	// Scroll animation state
+	animating     bool
+	animStopCh    chan struct{}
+	animMu        sync.Mutex
+
+	// Scroll animation config
+	ScrollAnimMaxLines  int64         // Max lines for animated scroll (0 = disabled)
+	ScrollAnimMinTime   time.Duration // Min animation duration
+	ScrollAnimMaxTime   time.Duration // Max animation duration
+	ScrollAnimFrameRate int           // Frames per second
+	ScrollAnimEasing    effects.EasingFunc
+
 	mu sync.Mutex
 }
+
+// Scroll animation defaults
+const (
+	defaultScrollAnimMaxLines  = 500
+	defaultScrollAnimMinTime   = 400 * time.Millisecond
+	defaultScrollAnimMaxTime   = 1500 * time.Millisecond
+	defaultScrollAnimFrameRate = 60
+)
 
 // NewHistoryNavigator creates a new history navigator card.
 func NewHistoryNavigator(vterm *parser.VTerm, searchIndex *parser.SQLiteSearchIndex, onClose func()) *HistoryNavigator {
@@ -99,6 +120,12 @@ func NewHistoryNavigator(vterm *parser.VTerm, searchIndex *parser.SQLiteSearchIn
 		searchIndex: searchIndex,
 		onClose:     onClose,
 		stopCh:      make(chan struct{}),
+		// Scroll animation defaults
+		ScrollAnimMaxLines:  defaultScrollAnimMaxLines,
+		ScrollAnimMinTime:   defaultScrollAnimMinTime,
+		ScrollAnimMaxTime:   defaultScrollAnimMaxTime,
+		ScrollAnimFrameRate: defaultScrollAnimFrameRate,
+		ScrollAnimEasing:    effects.EaseOutCubic,
 	}
 
 	// Disable status bar for this compact card
@@ -308,13 +335,13 @@ func (h *HistoryNavigator) updateKeymapHint() {
 	var hint string
 	switch h.focusedWidget {
 	case h.searchInput:
-		hint = "Tab/Enter/^N:Next  S-Tab/^P:Prev  ←→:Focus  Esc:Close"
+		hint = "Tab/^N:Next  S-Tab/^P:Prev  Alt+↑↓:Scroll  ←→:Focus  Esc:Close"
 	case h.prevBtn:
-		hint = "Enter/Space:Prev  Tab/^N:Next  S-Tab/^P:Prev  ←→:Focus  Esc:Close"
+		hint = "Enter:Prev  Tab/^N:Next  S-Tab/^P:Prev  Alt+↑↓:Scroll  Esc:Close"
 	case h.nextBtn:
-		hint = "Enter/Space:Next  Tab/^N:Next  S-Tab/^P:Prev  ←→:Focus  Esc:Close"
+		hint = "Enter:Next  Tab/^N:Next  S-Tab/^P:Prev  Alt+↑↓:Scroll  Esc:Close"
 	default:
-		hint = "Tab/^N:Next  S-Tab/^P:Prev  ←→:Focus  Esc:Close"
+		hint = "Tab/^N:Next  S-Tab/^P:Prev  Alt+↑↓:Scroll  Esc:Close"
 	}
 
 	h.keymapLbl.Text = hint
@@ -329,6 +356,15 @@ func (h *HistoryNavigator) HandleKey(ev *tcell.EventKey) bool {
 
 	if !visible {
 		return false
+	}
+
+	// Pass through Alt+scroll keys to terminal for manual scrolling
+	// This allows browsing around results while navigator is open
+	if ev.Modifiers()&tcell.ModAlt != 0 {
+		switch ev.Key() {
+		case tcell.KeyPgUp, tcell.KeyPgDn, tcell.KeyUp, tcell.KeyDown:
+			return false // Let terminal handle scroll
+		}
 	}
 
 	// Handle Escape or Ctrl+Q to close
@@ -542,9 +578,8 @@ func (h *HistoryNavigator) navigateToNextResult() {
 	if h.vterm != nil {
 		// Update the current highlight line before scrolling
 		h.vterm.UpdateSearchHighlightLine(result.GlobalLineIdx)
-		h.vterm.ScrollToGlobalLine(result.GlobalLineIdx)
+		h.animateScrollToLine(result.GlobalLineIdx)
 	}
-	h.requestRefresh()
 }
 
 // navigateToPrevResult moves to the previous search result.
@@ -567,9 +602,8 @@ func (h *HistoryNavigator) navigateToPrevResult() {
 	if h.vterm != nil {
 		// Update the current highlight line before scrolling
 		h.vterm.UpdateSearchHighlightLine(result.GlobalLineIdx)
-		h.vterm.ScrollToGlobalLine(result.GlobalLineIdx)
+		h.animateScrollToLine(result.GlobalLineIdx)
 	}
-	h.requestRefresh()
 }
 
 // updateCounterDisplay updates the "X/Y" counter label.
@@ -579,6 +613,97 @@ func (h *HistoryNavigator) updateCounterDisplay() {
 	} else {
 		h.counterLbl.Text = fmt.Sprintf("%d/%d", h.resultIndex+1, len(h.searchResults))
 	}
+}
+
+// --- Scroll Animation ---
+
+// animateScrollToLine scrolls to the target line with animation for short distances.
+// For distances > scrollAnimMaxLines, jumps instantly.
+func (h *HistoryNavigator) animateScrollToLine(targetLine int64) {
+	if h.vterm == nil {
+		return
+	}
+
+	// Get current scroll offset
+	startOffset := h.vterm.ScrollOffset()
+
+	// Jump to target to get the target scroll offset
+	if !h.vterm.ScrollToGlobalLine(targetLine) {
+		return // Out of range
+	}
+	targetOffset := h.vterm.ScrollOffset()
+
+	// Calculate distance in scroll offset units
+	distance := targetOffset - startOffset
+	if distance < 0 {
+		distance = -distance
+	}
+
+	// For long distances, no change, or animation disabled, keep the instant jump
+	if h.ScrollAnimMaxLines <= 0 || distance > h.ScrollAnimMaxLines || distance == 0 {
+		h.requestRefresh()
+		return
+	}
+
+	// Restore original position to animate from there
+	h.vterm.SetScrollOffset(startOffset)
+
+	// Stop any existing animation
+	h.animMu.Lock()
+	if h.animating && h.animStopCh != nil {
+		close(h.animStopCh)
+	}
+	h.animStopCh = make(chan struct{})
+	h.animating = true
+	stopCh := h.animStopCh
+	h.animMu.Unlock()
+
+	// Calculate animation duration based on distance (scales linearly)
+	// Short jumps are faster, longer jumps take more time
+	durationRange := h.ScrollAnimMaxTime - h.ScrollAnimMinTime
+	distanceRatio := float64(distance) / float64(h.ScrollAnimMaxLines)
+	duration := h.ScrollAnimMinTime + time.Duration(float64(durationRange)*distanceRatio)
+
+	// Use configured easing function
+	easing := h.ScrollAnimEasing
+	if easing == nil {
+		easing = effects.EaseOutCubic
+	}
+
+	// Animate in a goroutine
+	go func() {
+		startTime := time.Now()
+		ticker := time.NewTicker(time.Second / time.Duration(h.ScrollAnimFrameRate))
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				elapsed := time.Since(startTime)
+				if elapsed >= duration {
+					// Animation complete - ensure we're at exact target
+					h.vterm.SetScrollOffset(targetOffset)
+					h.requestRefresh()
+
+					h.animMu.Lock()
+					h.animating = false
+					h.animMu.Unlock()
+					return
+				}
+
+				// Calculate progress and apply easing
+				progress := float32(elapsed) / float32(duration)
+				easedProgress := easing(progress)
+
+				// Interpolate scroll offset
+				currentOffset := startOffset + int64(float32(targetOffset-startOffset)*easedProgress)
+				h.vterm.SetScrollOffset(currentOffset)
+				h.requestRefresh()
+			}
+		}
+	}()
 }
 
 // --- Lifecycle ---
