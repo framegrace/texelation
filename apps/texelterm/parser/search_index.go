@@ -18,6 +18,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,8 +116,16 @@ type SQLiteSearchIndex struct {
 	mu sync.RWMutex
 }
 
+// Current schema version - increment this when schema changes require reindexing
+const searchIndexSchemaVersion = 2
+
 // SQLite schema for the search index
 const searchIndexSchema = `
+-- Schema version tracking
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY
+);
+
 -- Main content table
 CREATE TABLE IF NOT EXISTS lines (
     id INTEGER PRIMARY KEY,           -- Global line index
@@ -125,12 +134,22 @@ CREATE TABLE IF NOT EXISTS lines (
     content TEXT NOT NULL
 );
 
--- FTS5 virtual table for full-text search
+-- Index for time-based navigation
+CREATE INDEX IF NOT EXISTS idx_lines_timestamp ON lines(timestamp);
+
+-- Index for command filtering
+CREATE INDEX IF NOT EXISTS idx_lines_command ON lines(is_command) WHERE is_command = 1;
+`
+
+// FTS schema - separate so we can rebuild it on version changes
+const searchIndexFTSSchema = `
+-- FTS5 virtual table for full-text search with trigram tokenizer
+-- Trigram enables substring matching (e.g., "ls -ls", partial paths)
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_fts USING fts5(
     content,
     content='lines',
     content_rowid='id',
-    tokenize='unicode61 remove_diacritics 2'
+    tokenize='trigram'
 );
 
 -- Triggers to keep FTS5 in sync
@@ -146,12 +165,6 @@ END;
 CREATE TRIGGER IF NOT EXISTS lines_ad AFTER DELETE ON lines BEGIN
     INSERT INTO lines_fts(lines_fts, rowid, content) VALUES ('delete', old.id, old.content);
 END;
-
--- Index for time-based navigation
-CREATE INDEX IF NOT EXISTS idx_lines_timestamp ON lines(timestamp);
-
--- Index for command filtering
-CREATE INDEX IF NOT EXISTS idx_lines_command ON lines(is_command) WHERE is_command = 1;
 `
 
 // NewSearchIndex creates a new SQLite-backed search index.
@@ -185,10 +198,33 @@ func NewSearchIndexWithConfig(config SearchIndexConfig) (*SQLiteSearchIndex, err
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// Execute schema
+	// Execute base schema (tables and indexes, not FTS)
 	if _, err := db.Exec(searchIndexSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to create schema: %w", err)
+	}
+
+	// Check schema version and migrate if needed
+	needsReindex, err := checkAndMigrateSchema(db)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to check schema version: %w", err)
+	}
+
+	// Create FTS schema
+	if _, err := db.Exec(searchIndexFTSSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create FTS schema: %w", err)
+	}
+
+	// Rebuild FTS index if schema version changed
+	if needsReindex {
+		log.Printf("[SEARCH_INDEX] Schema version changed, rebuilding FTS index...")
+		if err := rebuildFTSIndex(db); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to rebuild FTS index: %w", err)
+		}
+		log.Printf("[SEARCH_INDEX] FTS index rebuild complete")
 	}
 
 	si := &SQLiteSearchIndex{
@@ -204,6 +240,64 @@ func NewSearchIndexWithConfig(config SearchIndexConfig) (*SQLiteSearchIndex, err
 	go si.batchIndexer()
 
 	return si, nil
+}
+
+// checkAndMigrateSchema checks the current schema version and prepares for migration if needed.
+// Returns true if reindexing is needed.
+func checkAndMigrateSchema(db *sql.DB) (bool, error) {
+	// Get current version (0 if not set)
+	var currentVersion int
+	err := db.QueryRow("SELECT version FROM schema_version LIMIT 1").Scan(&currentVersion)
+	if err == sql.ErrNoRows {
+		currentVersion = 0
+	} else if err != nil {
+		// Table might not exist yet, treat as version 0
+		currentVersion = 0
+	}
+
+	if currentVersion == searchIndexSchemaVersion {
+		return false, nil // No migration needed
+	}
+
+	log.Printf("[SEARCH_INDEX] Migrating schema from version %d to %d", currentVersion, searchIndexSchemaVersion)
+
+	// Drop existing FTS table and triggers to rebuild with new schema
+	migrations := []string{
+		"DROP TRIGGER IF EXISTS lines_ai",
+		"DROP TRIGGER IF EXISTS lines_au",
+		"DROP TRIGGER IF EXISTS lines_ad",
+		"DROP TABLE IF EXISTS lines_fts",
+	}
+
+	for _, stmt := range migrations {
+		if _, err := db.Exec(stmt); err != nil {
+			return false, fmt.Errorf("migration failed on '%s': %w", stmt, err)
+		}
+	}
+
+	// Update schema version
+	_, err = db.Exec("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", searchIndexSchemaVersion)
+	if err != nil {
+		return false, fmt.Errorf("failed to update schema version: %w", err)
+	}
+
+	return true, nil // Reindexing needed
+}
+
+// rebuildFTSIndex rebuilds the FTS index from existing data in the lines table.
+func rebuildFTSIndex(db *sql.DB) error {
+	// Count lines for progress logging
+	var count int64
+	db.QueryRow("SELECT COUNT(*) FROM lines").Scan(&count)
+	log.Printf("[SEARCH_INDEX] Rebuilding index for %d lines...", count)
+
+	// Populate FTS from existing data
+	_, err := db.Exec("INSERT INTO lines_fts(rowid, content) SELECT id, content FROM lines")
+	if err != nil {
+		return fmt.Errorf("failed to populate FTS index: %w", err)
+	}
+
+	return nil
 }
 
 // batchIndexer runs in a background goroutine, batching entries and flushing periodically.
@@ -372,6 +466,10 @@ func (si *SQLiteSearchIndex) Search(query string, limit int) ([]SearchResult, er
 	si.mu.RLock()
 	defer si.mu.RUnlock()
 
+	// With trigram tokenizer, wrap query in double quotes for literal substring matching.
+	// This allows searching for patterns like "ls -ls" that contain special characters.
+	quotedQuery := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+
 	// FTS5 query ordered by timestamp (newest first) for history navigation
 	rows, err := si.db.Query(`
 		SELECT l.id, l.timestamp, l.content, l.is_command
@@ -380,7 +478,7 @@ func (si *SQLiteSearchIndex) Search(query string, limit int) ([]SearchResult, er
 		WHERE lines_fts MATCH ?
 		ORDER BY l.timestamp DESC
 		LIMIT ?
-	`, query, limit)
+	`, quotedQuery, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
@@ -398,6 +496,9 @@ func (si *SQLiteSearchIndex) SearchInRange(query string, start, end time.Time, l
 	si.mu.RLock()
 	defer si.mu.RUnlock()
 
+	// With trigram tokenizer, wrap query in double quotes for literal substring matching.
+	quotedQuery := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+
 	rows, err := si.db.Query(`
 		SELECT l.id, l.timestamp, l.content, l.is_command
 		FROM lines_fts
@@ -405,7 +506,7 @@ func (si *SQLiteSearchIndex) SearchInRange(query string, start, end time.Time, l
 		WHERE lines_fts MATCH ? AND l.timestamp >= ? AND l.timestamp <= ?
 		ORDER BY l.timestamp DESC
 		LIMIT ?
-	`, query, start.UnixNano(), end.UnixNano(), limit)
+	`, quotedQuery, start.UnixNano(), end.UnixNano(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
@@ -500,6 +601,69 @@ func (si *SQLiteSearchIndex) Close() error {
 	<-si.doneCh
 
 	return si.db.Close()
+}
+
+// RebuildSearchIndex forces a rebuild of the FTS index for an existing database.
+// This can be used from command line tools for manual reindexing.
+func RebuildSearchIndex(dbPath string) error {
+	// Open database
+	dsn := dbPath +
+		"?_pragma=journal_mode(WAL)" +
+		"&_pragma=synchronous(NORMAL)" +
+		"&_pragma=cache_size(-8000)" +
+		"&_pragma=temp_store(MEMORY)"
+
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	// Test connection
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	// Check if lines table exists
+	var tableExists int
+	err = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lines'").Scan(&tableExists)
+	if err != nil || tableExists == 0 {
+		return fmt.Errorf("no existing search index found at %s", dbPath)
+	}
+
+	log.Printf("[SEARCH_INDEX] Dropping existing FTS index...")
+
+	// Drop existing FTS table and triggers
+	drops := []string{
+		"DROP TRIGGER IF EXISTS lines_ai",
+		"DROP TRIGGER IF EXISTS lines_au",
+		"DROP TRIGGER IF EXISTS lines_ad",
+		"DROP TABLE IF EXISTS lines_fts",
+	}
+	for _, stmt := range drops {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("failed to drop FTS: %w", err)
+		}
+	}
+
+	// Recreate FTS schema
+	log.Printf("[SEARCH_INDEX] Creating new FTS index with trigram tokenizer...")
+	if _, err := db.Exec(searchIndexFTSSchema); err != nil {
+		return fmt.Errorf("failed to create FTS schema: %w", err)
+	}
+
+	// Rebuild index
+	if err := rebuildFTSIndex(db); err != nil {
+		return err
+	}
+
+	// Update schema version
+	if _, err := db.Exec("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", searchIndexSchemaVersion); err != nil {
+		return fmt.Errorf("failed to update schema version: %w", err)
+	}
+
+	log.Printf("[SEARCH_INDEX] Reindex complete")
+	return nil
 }
 
 // Compile-time interface check

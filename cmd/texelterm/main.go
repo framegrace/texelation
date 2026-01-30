@@ -10,18 +10,27 @@ import (
 	"strings"
 
 	"github.com/framegrace/texelation/apps/texelterm"
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/runtime"
 	"github.com/gdamore/tcell/v2"
 )
 
 var resetHistory = flag.Bool("reset-history", false, "Remove all scrollback history and search indexes")
+var reindexSearch = flag.Bool("reindex", false, "Rebuild the search index from existing history")
 
 func main() {
 	flag.Parse()
 
 	if *resetHistory {
 		if err := handleResetHistory(); err != nil {
+			log.Fatalf("texelterm: %v", err)
+		}
+		return
+	}
+
+	if *reindexSearch {
+		if err := handleReindex(); err != nil {
 			log.Fatalf("texelterm: %v", err)
 		}
 		return
@@ -104,5 +113,52 @@ func handleResetHistory() error {
 	}
 
 	fmt.Println("History reset complete.")
+	return nil
+}
+
+func handleReindex() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	// Find all search index databases
+	scrollbackDir := filepath.Join(homeDir, ".texelation", "scrollback")
+	var dbPaths []string
+
+	err = filepath.Walk(scrollbackDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
+		}
+		if !info.IsDir() && strings.HasSuffix(info.Name(), ".index.db") {
+			dbPaths = append(dbPaths, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to scan for databases: %w", err)
+	}
+
+	if len(dbPaths) == 0 {
+		fmt.Println("No search indexes found. Nothing to reindex.")
+		return nil
+	}
+
+	fmt.Printf("Found %d search index(es) to rebuild:\n", len(dbPaths))
+	for _, p := range dbPaths {
+		fmt.Printf("  %s\n", p)
+	}
+	fmt.Println()
+
+	for _, dbPath := range dbPaths {
+		fmt.Printf("Reindexing %s...\n", filepath.Base(filepath.Dir(dbPath)))
+		if err := parser.RebuildSearchIndex(dbPath); err != nil {
+			fmt.Printf("  Error: %v\n", err)
+		} else {
+			fmt.Println("  Done.")
+		}
+	}
+
+	fmt.Println("\nReindex complete.")
 	return nil
 }

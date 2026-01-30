@@ -466,14 +466,49 @@ func (h *HistoryNavigator) HandleMouse(ev *tcell.EventMouse) bool {
 	}
 
 	// Adjust y to be relative to the overlay (0 or 1)
+	adjustedY := y - overlayStartY
+
+	// For clicks on row 0 (search row), handle focus explicitly before delegating
+	// to UIManager. This prevents focus from being lost when clicking on the
+	// search input or empty space.
+	if ev.Buttons()&tcell.Button1 != 0 && adjustedY == 0 {
+		// Get widget bounds
+		inputX, _ := h.searchInput.Position()
+		inputW, _ := h.searchInput.Size()
+		prevX, _ := h.prevBtn.Position()
+		prevW, _ := h.prevBtn.Size()
+		nextX, _ := h.nextBtn.Position()
+		nextW, _ := h.nextBtn.Size()
+
+		if x >= inputX && x < inputX+inputW {
+			// Click on search input
+			h.ui.Focus(h.searchInput)
+			h.requestRefresh()
+			return true
+		} else if x >= prevX && x < prevX+prevW {
+			// Click on prev button
+			h.ui.Focus(h.prevBtn)
+			h.prevBtn.OnClick()
+			h.requestRefresh()
+			return true
+		} else if x >= nextX && x < nextX+nextW {
+			// Click on next button
+			h.ui.Focus(h.nextBtn)
+			h.nextBtn.OnClick()
+			h.requestRefresh()
+			return true
+		}
+		// Click on empty space - keep current focus
+		return true
+	}
+
+	// For non-click events or row 1 (keymap hints), delegate to UIManager
 	adjustedEv := tcell.NewEventMouse(
 		x,
-		y-overlayStartY,
+		adjustedY,
 		ev.Buttons(),
 		ev.Modifiers(),
 	)
-
-	// Delegate to UIManager (don't hold lock - ui has its own)
 	return h.ui.HandleMouse(adjustedEv)
 }
 
