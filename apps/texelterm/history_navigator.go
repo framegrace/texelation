@@ -569,7 +569,8 @@ func (h *HistoryNavigator) performSearch(query string) {
 	}
 
 	// Search outside the lock (SQLite has its own locking)
-	results, err := h.searchIndex.Search(query, 100)
+	// Use high limit to ensure minimap shows all results
+	results, err := h.searchIndex.Search(query, 10000)
 	if err != nil {
 		log.Printf("[HISTORY_NAV] Search error: %v", err)
 		h.mu.Lock()
@@ -667,6 +668,102 @@ func (h *HistoryNavigator) updateCounterDisplay() {
 	} else {
 		h.counterLbl.Text = fmt.Sprintf("%d/%d", h.resultIndex+1, len(h.searchResults))
 	}
+}
+
+// SelectClosestResultInViewport finds the search result closest to the viewport center
+// and makes it the current result. This is used when jumping via scrollbar click.
+// If no results are in the viewport, scrolls to the closest result nearby.
+// Returns true if a result was selected.
+func (h *HistoryNavigator) SelectClosestResultInViewport() bool {
+	if h.vterm == nil {
+		return false
+	}
+
+	h.mu.Lock()
+	if len(h.searchResults) == 0 {
+		h.mu.Unlock()
+		return false
+	}
+
+	// Get viewport bounds using coordinate conversion
+	// This properly handles line wrapping (physical vs logical lines)
+	viewportHeight := h.vterm.Height()
+	centerRow := viewportHeight / 2
+
+	// Get logical line at top of viewport
+	topLine, _, _, topOk := h.vterm.ViewportToContent(0, 0)
+	// Get logical line at bottom of viewport
+	bottomLine, _, _, bottomOk := h.vterm.ViewportToContent(viewportHeight-1, 0)
+	// Get logical line at center of viewport
+	centerLine, _, _, centerOk := h.vterm.ViewportToContent(centerRow, 0)
+
+	if !topOk || !bottomOk {
+		h.mu.Unlock()
+		return false
+	}
+	if !centerOk {
+		centerLine = (topLine + bottomLine) / 2
+	}
+
+	// Find the result closest to center that's in the viewport
+	bestInViewportIdx := -1
+	bestInViewportDistance := int64(1<<62 - 1)
+
+	// Also track the closest result overall (even outside viewport)
+	bestOverallIdx := -1
+	bestOverallDistance := int64(1<<62 - 1)
+
+	for i, result := range h.searchResults {
+		lineIdx := result.GlobalLineIdx
+		distance := lineIdx - centerLine
+		if distance < 0 {
+			distance = -distance
+		}
+
+		// Track closest overall
+		if distance < bestOverallDistance {
+			bestOverallDistance = distance
+			bestOverallIdx = i
+		}
+
+		// Check if result is in viewport (inclusive range)
+		if lineIdx >= topLine && lineIdx <= bottomLine {
+			if distance < bestInViewportDistance {
+				bestInViewportDistance = distance
+				bestInViewportIdx = i
+			}
+		}
+	}
+
+	// Use in-viewport result if found, otherwise use closest overall
+	bestIdx := bestInViewportIdx
+	needsScroll := false
+	if bestIdx < 0 && bestOverallIdx >= 0 {
+		bestIdx = bestOverallIdx
+		needsScroll = true
+	}
+
+	if bestIdx < 0 {
+		h.mu.Unlock()
+		return false
+	}
+
+	// Update the current result
+	h.resultIndex = bestIdx
+	result := h.searchResults[bestIdx]
+	h.updateCounterDisplay()
+	h.mu.Unlock()
+
+	// Update highlighting and scroll if needed (outside lock)
+	if h.vterm != nil {
+		h.vterm.UpdateSearchHighlightLine(result.GlobalLineIdx)
+		if needsScroll {
+			h.vterm.ScrollToGlobalLine(result.GlobalLineIdx)
+		}
+	}
+
+	h.requestRefresh()
+	return true
 }
 
 // --- Scroll Animation ---

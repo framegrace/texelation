@@ -891,8 +891,7 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 			if buttons&tcell.Button1 != 0 {
 				localX := x - scrollbarX
 				if targetOffset, ok := a.scrollbar.HandleClick(localX, y); ok {
-					a.scrollToOffsetAnimated(targetOffset)
-					a.requestRefresh()
+					a.scrollToOffsetWithResultSelection(targetOffset)
 					return
 				}
 			}
@@ -931,8 +930,7 @@ func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers
 			// Handle scrollbar click
 			localX := x - scrollbarX
 			if targetOffset, ok := a.scrollbar.HandleClick(localX, y); ok {
-				a.scrollToOffsetAnimated(targetOffset)
-				a.requestRefresh()
+				a.scrollToOffsetWithResultSelection(targetOffset)
 				return true
 			}
 			return false
@@ -1690,7 +1688,16 @@ func (a *TexelTerm) scrollToOffsetAnimated(targetOffset int64) {
 
 // animateScrollToOffset animates scrolling from current to target offset.
 func (a *TexelTerm) animateScrollToOffset(startOffset, targetOffset int64) {
+	a.animateScrollToOffsetWithDone(startOffset, targetOffset, nil)
+}
+
+// animateScrollToOffsetWithDone animates scrolling and optionally signals completion.
+// If done is non-nil, it will be closed when the animation completes.
+func (a *TexelTerm) animateScrollToOffsetWithDone(startOffset, targetOffset int64, done chan struct{}) {
 	if a.vterm == nil {
+		if done != nil {
+			close(done)
+		}
 		return
 	}
 
@@ -1699,6 +1706,9 @@ func (a *TexelTerm) animateScrollToOffset(startOffset, targetOffset int64) {
 		distance = -distance
 	}
 	if distance == 0 {
+		if done != nil {
+			close(done)
+		}
 		return
 	}
 
@@ -1725,6 +1735,12 @@ func (a *TexelTerm) animateScrollToOffset(startOffset, targetOffset int64) {
 
 	// Animate in a goroutine
 	go func() {
+		defer func() {
+			if done != nil {
+				close(done)
+			}
+		}()
+
 		startTime := time.Now()
 		ticker := time.NewTicker(time.Second / time.Duration(frameRate))
 		defer ticker.Stop()
@@ -1746,6 +1762,49 @@ func (a *TexelTerm) animateScrollToOffset(startOffset, targetOffset int64) {
 			a.requestRefresh()
 		}
 	}()
+}
+
+// scrollToOffsetWithResultSelection scrolls to the target offset with animation
+// and selects the closest search result after animation completes.
+func (a *TexelTerm) scrollToOffsetWithResultSelection(targetOffset int64) {
+	if a.vterm == nil {
+		return
+	}
+
+	currentOffset := a.vterm.ScrollOffset()
+	distance := targetOffset - currentOffset
+	if distance < 0 {
+		distance = -distance
+	}
+
+	maxAnimLines := int64(500)
+	if a.historyNavigator != nil {
+		maxAnimLines = a.historyNavigator.ScrollAnimMaxLines
+	}
+
+	// Callback to select result after scroll completes
+	selectResult := func() {
+		if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+			a.historyNavigator.SelectClosestResultInViewport()
+			a.requestRefresh()
+		}
+	}
+
+	if maxAnimLines > 0 && distance <= maxAnimLines && distance > 0 {
+		// Animate and wait for completion in a goroutine
+		done := make(chan struct{})
+		a.animateScrollToOffsetWithDone(currentOffset, targetOffset, done)
+		go func() {
+			<-done
+			selectResult()
+		}()
+	} else {
+		// Jump directly for long distances
+		a.vterm.SetScrollOffset(targetOffset)
+		selectResult()
+	}
+
+	a.requestRefresh()
 }
 
 func (a *TexelTerm) requestRefresh() {
