@@ -2,17 +2,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: apps/texelterm/history_navigator.go
-// Summary: 2-line overlay card for searching and navigating terminal history.
-// Usage: Opened with Ctrl+Shift+F, provides search and time-based navigation.
+// Summary: 2-line overlay card for searching terminal history.
+// Usage: Opened with Ctrl+Shift+F, provides full-text search with navigation and keymap hints.
 
 package texelterm
 
 import (
 	"fmt"
 	"log"
-	"regexp"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -25,11 +22,29 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-// HistoryNavigator is a 2-line overlay card for searching and navigating terminal history.
+// tcellToParserColor converts a tcell.Color to a parser.Color.
+func tcellToParserColor(c tcell.Color) parser.Color {
+	if c == tcell.ColorDefault {
+		return parser.Color{Mode: parser.ColorModeDefault}
+	}
+	// Check if it's a true color (RGB)
+	if c.IsRGB() {
+		r, g, b := c.RGB()
+		return parser.Color{Mode: parser.ColorModeRGB, R: uint8(r), G: uint8(g), B: uint8(b)}
+	}
+	// Check if it's a 256-color palette index
+	if c <= 255 {
+		return parser.Color{Mode: parser.ColorMode256, Value: uint8(c)}
+	}
+	// Fallback to standard color
+	return parser.Color{Mode: parser.ColorModeStandard, Value: uint8(c % 8)}
+}
+
+// HistoryNavigator is a 2-line overlay card for searching terminal history.
 // It provides:
 //   - Full-text search with prev/next navigation
-//   - Time-based navigation with relative (-1h, +30m) and absolute timestamps
-//   - Keyboard navigation (Tab cycles inputs, Escape closes)
+//   - Context-sensitive keymap hints
+//   - Keyboard navigation (Tab cycles results, arrows cycle widgets, Escape closes)
 type HistoryNavigator struct {
 	// UI components
 	ui *core.UIManager
@@ -46,17 +61,19 @@ type HistoryNavigator struct {
 	nextBtn     *widgets.Button
 	counterLbl  *widgets.Label
 
-	// Widgets - Row 2: Time
-	timeIcon     *widgets.Label
-	timeInput    *widgets.Input
-	minusHourBtn *widgets.Button
-	plusHourBtn  *widgets.Button
-	jumpBtn      *widgets.Button
-	timestampLbl *widgets.Label
+	// Widgets - Row 2: Keymap hints
+	keymapLbl *widgets.Label
+
+	// Focus tracking for keymap hints
+	focusedWidget core.Widget
 
 	// Search state
 	searchResults []parser.SearchResult
 	resultIndex   int
+
+	// Highlight colors (for styled search highlighting)
+	highlightSelectionColor parser.Color // For selected match: used with Reverse
+	highlightAccentColor    parser.Color // For other matches: just FG change
 
 	// Visibility and dimensions
 	visible bool
@@ -93,7 +110,19 @@ func NewHistoryNavigator(vterm *parser.VTerm, searchIndex *parser.SQLiteSearchIn
 	// Set up event handlers
 	h.setupEventHandlers()
 
+	// Register as focus observer to update keymap hints
+	h.ui.AddFocusObserver(h)
+
 	return h
+}
+
+// OnFocusChanged implements core.FocusObserver to update keymap hints when focus changes.
+// Note: This is called from UIManager with its lock held, so we must not acquire h.mu here
+// to avoid deadlock. focusedWidget is only accessed from the UI goroutine so this is safe.
+func (h *HistoryNavigator) OnFocusChanged(focused core.Widget) {
+	h.focusedWidget = focused
+	h.updateKeymapHint()
+	h.requestRefresh()
 }
 
 // createWidgets creates all the UI widgets for the 2-line layout.
@@ -109,7 +138,17 @@ func (h *HistoryNavigator) createWidgets() {
 	mutedStyle := tcell.StyleDefault.Foreground(mutedColor).Background(bgColor)
 	accentStyle := tcell.StyleDefault.Foreground(accentColor).Background(bgColor)
 
-	// Row 1: Search widgets
+	// Initialize highlight colors for search results
+	// Selected match: selection color + Reverse (stands out)
+	// Other matches: muted color + Reverse (subtle)
+	selectionColor := tm.GetSemanticColor("selection.bg")
+	if selectionColor == tcell.ColorDefault {
+		selectionColor = accentColor
+	}
+	h.highlightSelectionColor = tcellToParserColor(selectionColor)
+	h.highlightAccentColor = tcellToParserColor(mutedColor)
+
+	// Search widgets
 	h.searchIcon = widgets.NewLabel("🔍")
 	h.searchIcon.Style = accentStyle
 	h.searchIcon.SetFocusable(false)
@@ -129,28 +168,10 @@ func (h *HistoryNavigator) createWidgets() {
 	h.counterLbl.Style = mutedStyle
 	h.counterLbl.SetFocusable(false)
 
-	// Row 2: Time widgets
-	h.timeIcon = widgets.NewLabel("⏰")
-	h.timeIcon.Style = accentStyle
-	h.timeIcon.SetFocusable(false)
-
-	h.timeInput = widgets.NewInput()
-	h.timeInput.Placeholder = "-1h, 30m, 14:30..."
-	h.timeInput.Style = baseStyle
-	h.timeInput.SetFocusable(true)
-
-	h.minusHourBtn = widgets.NewButton("-1h")
-	h.minusHourBtn.SetFocusable(true)
-
-	h.plusHourBtn = widgets.NewButton("+1h")
-	h.plusHourBtn.SetFocusable(true)
-
-	h.jumpBtn = widgets.NewButton("Jump")
-	h.jumpBtn.SetFocusable(true)
-
-	h.timestampLbl = widgets.NewLabel("")
-	h.timestampLbl.Style = mutedStyle
-	h.timestampLbl.SetFocusable(false)
+	// Row 2: Keymap hints
+	h.keymapLbl = widgets.NewLabel("")
+	h.keymapLbl.Style = mutedStyle
+	h.keymapLbl.SetFocusable(false)
 
 	// Add widgets to UI manager
 	h.ui.AddWidget(h.searchIcon)
@@ -158,12 +179,7 @@ func (h *HistoryNavigator) createWidgets() {
 	h.ui.AddWidget(h.prevBtn)
 	h.ui.AddWidget(h.nextBtn)
 	h.ui.AddWidget(h.counterLbl)
-	h.ui.AddWidget(h.timeIcon)
-	h.ui.AddWidget(h.timeInput)
-	h.ui.AddWidget(h.minusHourBtn)
-	h.ui.AddWidget(h.plusHourBtn)
-	h.ui.AddWidget(h.jumpBtn)
-	h.ui.AddWidget(h.timestampLbl)
+	h.ui.AddWidget(h.keymapLbl)
 }
 
 // setupEventHandlers wires up all widget callbacks.
@@ -184,40 +200,15 @@ func (h *HistoryNavigator) setupEventHandlers() {
 	h.nextBtn.OnClick = func() {
 		h.navigateToNextResult()
 	}
-
-	// Time input - parse and jump on Enter
-	h.timeInput.OnSubmit = func(text string) {
-		h.jumpToTime(text)
-	}
-
-	// Time buttons
-	h.minusHourBtn.OnClick = func() {
-		h.adjustTime(-1 * time.Hour)
-	}
-	h.plusHourBtn.OnClick = func() {
-		h.adjustTime(1 * time.Hour)
-	}
-	h.jumpBtn.OnClick = func() {
-		h.jumpToTime(h.timeInput.Text)
-	}
 }
 
 // Show displays the navigator and focuses the search input.
 func (h *HistoryNavigator) Show() {
-	log.Printf("[HISTORY_NAV] Show: getting lock...")
 	h.mu.Lock()
-	log.Printf("[HISTORY_NAV] Show: setting visible=true")
 	h.visible = true
-	log.Printf("[HISTORY_NAV] Show: focusing search input...")
 	h.ui.Focus(h.searchInput)
-	log.Printf("[HISTORY_NAV] Show: releasing lock...")
 	h.mu.Unlock()
-
-	// Don't update timestamp on show - it will be updated when user navigates
-	// This avoids potential blocking on vterm/sqlite calls
-	log.Printf("[HISTORY_NAV] Show: requesting refresh...")
 	h.requestRefresh()
-	log.Printf("[HISTORY_NAV] Show: done")
 }
 
 // Hide closes the navigator and triggers the onClose callback.
@@ -252,7 +243,7 @@ func (h *HistoryNavigator) IsVisible() bool {
 }
 
 // Resize adjusts the navigator layout to fit the given dimensions.
-// The navigator uses only 2 lines at the bottom.
+// The navigator uses 2 lines at the bottom.
 func (h *HistoryNavigator) Resize(cols, rows int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -305,45 +296,28 @@ func (h *HistoryNavigator) layoutWidgets() {
 	h.counterLbl.SetPosition(x, 0)
 	h.counterLbl.Resize(counterWidth, 1)
 
-	// Row 1: [⏰] [time input.........] [-1h] [+1h] [Jump] [timestamp]
-	x = 0
+	// Row 1: Keymap hints (full width)
+	h.keymapLbl.SetPosition(0, 1)
+	h.keymapLbl.Resize(h.width, 1)
+	h.updateKeymapHint()
+}
 
-	// Time icon
-	h.timeIcon.SetPosition(x, 1)
-	h.timeIcon.Resize(2, 1)
-	x += 3
+// updateKeymapHint updates the keymap label based on the currently focused widget.
+// Assumes h.mu is held or called from a safe context.
+func (h *HistoryNavigator) updateKeymapHint() {
+	var hint string
+	switch h.focusedWidget {
+	case h.searchInput:
+		hint = "Tab/Enter/^N:Next  S-Tab/^P:Prev  ←→:Focus  Esc:Close"
+	case h.prevBtn:
+		hint = "Enter/Space:Prev  Tab/^N:Next  S-Tab/^P:Prev  ←→:Focus  Esc:Close"
+	case h.nextBtn:
+		hint = "Enter/Space:Next  Tab/^N:Next  S-Tab/^P:Prev  ←→:Focus  Esc:Close"
+	default:
+		hint = "Tab/^N:Next  S-Tab/^P:Prev  ←→:Focus  Esc:Close"
+	}
 
-	// Calculate widths from right side
-	// Button width = len(text) + 4 for "[ text ]" display format
-	timestampWidth := 20 // "2025-01-28 14:30:45"
-	smallBtnWidth := 7   // "-1h" or "+1h" (3 chars + 4 padding)
-	jumpBtnWidth := 8    // "Jump" (4 chars + 4 padding)
-	rightWidgets = timestampWidth + smallBtnWidth*2 + jumpBtnWidth + 5
-
-	// Time input gets remaining space
-	inputWidth = max(h.width-x-rightWidgets, 10)
-	h.timeInput.SetPosition(x, 1)
-	h.timeInput.Resize(inputWidth, 1)
-	x += inputWidth + 1
-
-	// -1h button
-	h.minusHourBtn.SetPosition(x, 1)
-	h.minusHourBtn.Resize(smallBtnWidth, 1)
-	x += smallBtnWidth + 1
-
-	// +1h button
-	h.plusHourBtn.SetPosition(x, 1)
-	h.plusHourBtn.Resize(smallBtnWidth, 1)
-	x += smallBtnWidth + 1
-
-	// Jump button
-	h.jumpBtn.SetPosition(x, 1)
-	h.jumpBtn.Resize(jumpBtnWidth, 1)
-	x += jumpBtnWidth + 1
-
-	// Timestamp label
-	h.timestampLbl.SetPosition(x, 1)
-	h.timestampLbl.Resize(timestampWidth, 1)
+	h.keymapLbl.Text = hint
 }
 
 // HandleKey processes keyboard input for the navigator.
@@ -364,9 +338,21 @@ func (h *HistoryNavigator) HandleKey(ev *tcell.EventKey) bool {
 		return true
 	}
 
-	// Let UIManager handle Tab/Shift-Tab for natural focus cycling through all widgets
+	// Tab/Shift+Tab: navigate search results
+	if ev.Key() == tcell.KeyTab {
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			h.navigateToPrevResult()
+		} else {
+			h.navigateToNextResult()
+		}
+		return true
+	}
+	if ev.Key() == tcell.KeyBacktab {
+		h.navigateToPrevResult()
+		return true
+	}
 
-	// Handle Ctrl+N/Ctrl+P for result navigation (vim-style)
+	// Ctrl+N/Ctrl+P: also navigate results (vim-style)
 	if ev.Key() == tcell.KeyCtrlN {
 		h.navigateToNextResult()
 		return true
@@ -376,28 +362,55 @@ func (h *HistoryNavigator) HandleKey(ev *tcell.EventKey) bool {
 		return true
 	}
 
+	// Enter: handle based on focused widget
+	if ev.Key() == tcell.KeyEnter {
+		switch h.focusedWidget {
+		case h.searchInput:
+			h.navigateToNextResult()
+		case h.prevBtn:
+			h.navigateToPrevResult()
+		case h.nextBtn:
+			h.navigateToNextResult()
+		default:
+			h.navigateToNextResult()
+		}
+		return true
+	}
+
+	// Arrow Left/Right: cycle focus between widgets
+	if ev.Key() == tcell.KeyLeft {
+		// Send synthetic BackTab to UIManager for focus cycling
+		syntheticEv := tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone)
+		h.ui.HandleKey(syntheticEv)
+		h.requestRefresh()
+		return true
+	}
+	if ev.Key() == tcell.KeyRight {
+		// Send synthetic Tab to UIManager for focus cycling
+		syntheticEv := tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+		h.ui.HandleKey(syntheticEv)
+		h.requestRefresh()
+		return true
+	}
+
 	// Pass other keys to UIManager (don't hold lock - callbacks may need it)
 	h.ui.HandleKey(ev)
 	h.requestRefresh()
 	return true
 }
 
-// Render draws the 2-line overlay at the bottom of the input buffer.
+// Render draws the 1-line overlay at the bottom of the input buffer.
 func (h *HistoryNavigator) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
-	log.Printf("[HISTORY_NAV] Render called, getting lock...")
 	h.mu.Lock()
 	visible := h.visible
 	h.mu.Unlock()
-	log.Printf("[HISTORY_NAV] Render: visible=%v", visible)
 
 	if !visible || len(input) < 2 {
 		return input
 	}
 
-	log.Printf("[HISTORY_NAV] Render: calling ui.Render()...")
 	// Render UIManager to get the 2-line overlay (don't hold lock - ui has its own)
 	overlay := h.ui.Render()
-	log.Printf("[HISTORY_NAV] Render: ui.Render() returned %d rows", len(overlay))
 
 	// Copy overlay to bottom 2 lines of input buffer
 	termHeight := len(input)
@@ -488,6 +501,8 @@ func (h *HistoryNavigator) performSearch(query string) {
 	h.updateCounterDisplay()
 	var firstResult *parser.SearchResult
 	searchTerm := h.searchInput.Text // Capture for highlighting
+	selectionColor := h.highlightSelectionColor
+	accentColor := h.highlightAccentColor
 	if len(results) > 0 {
 		firstResult = &results[0]
 	}
@@ -495,8 +510,12 @@ func (h *HistoryNavigator) performSearch(query string) {
 
 	// Auto-navigate to first result if any (outside lock)
 	if h.vterm != nil {
-		// Set search highlighting
-		h.vterm.SetSearchHighlight(searchTerm)
+		// Set styled search highlighting with the current line
+		currentLine := int64(-1)
+		if firstResult != nil {
+			currentLine = firstResult.GlobalLineIdx
+		}
+		h.vterm.SetSearchHighlightStyled(searchTerm, currentLine, selectionColor, accentColor)
 
 		if firstResult != nil {
 			h.vterm.ScrollToGlobalLine(firstResult.GlobalLineIdx)
@@ -521,9 +540,9 @@ func (h *HistoryNavigator) navigateToNextResult() {
 
 	// Call vterm outside the lock to avoid deadlock
 	if h.vterm != nil {
-		log.Printf("[HISTORY_NAV] Scrolling to result %d/%d at line %d", h.resultIndex+1, len(h.searchResults), result.GlobalLineIdx)
-		ok := h.vterm.ScrollToGlobalLine(result.GlobalLineIdx)
-		log.Printf("[HISTORY_NAV] ScrollToGlobalLine returned %v", ok)
+		// Update the current highlight line before scrolling
+		h.vterm.UpdateSearchHighlightLine(result.GlobalLineIdx)
+		h.vterm.ScrollToGlobalLine(result.GlobalLineIdx)
 	}
 	h.requestRefresh()
 }
@@ -546,6 +565,8 @@ func (h *HistoryNavigator) navigateToPrevResult() {
 
 	// Call vterm outside the lock to avoid deadlock
 	if h.vterm != nil {
+		// Update the current highlight line before scrolling
+		h.vterm.UpdateSearchHighlightLine(result.GlobalLineIdx)
 		h.vterm.ScrollToGlobalLine(result.GlobalLineIdx)
 	}
 	h.requestRefresh()
@@ -558,259 +579,6 @@ func (h *HistoryNavigator) updateCounterDisplay() {
 	} else {
 		h.counterLbl.Text = fmt.Sprintf("%d/%d", h.resultIndex+1, len(h.searchResults))
 	}
-}
-
-// --- Time Navigation ---
-
-// jumpToTime parses the time input and scrolls to that point in history.
-func (h *HistoryNavigator) jumpToTime(timeStr string) {
-	if h.searchIndex == nil || h.vterm == nil {
-		return
-	}
-
-	targetTime, err := parseTimeInput(timeStr)
-	if err != nil {
-		log.Printf("[HISTORY_NAV] Time parse error: %v", err)
-		return
-	}
-
-	lineIdx, err := h.searchIndex.FindLineAt(targetTime)
-	if err != nil || lineIdx < 0 {
-		log.Printf("[HISTORY_NAV] FindLineAt error: %v (lineIdx=%d)", err, lineIdx)
-		return
-	}
-
-	h.mu.Lock()
-	h.vterm.ScrollToGlobalLine(lineIdx)
-	h.updateTimestampDisplayLocked()
-	h.mu.Unlock()
-	h.requestRefresh()
-}
-
-// adjustTime shifts the current view by the given duration and scrolls.
-func (h *HistoryNavigator) adjustTime(delta time.Duration) {
-	if h.searchIndex == nil || h.vterm == nil {
-		return
-	}
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	// Get current timestamp from scroll position
-	currentTime := h.getCurrentTimestampLocked()
-	if currentTime.IsZero() {
-		currentTime = time.Now()
-	}
-
-	// Apply delta
-	targetTime := currentTime.Add(delta)
-
-	// Find and scroll to the target time
-	lineIdx, err := h.searchIndex.FindLineAt(targetTime)
-	if err != nil || lineIdx < 0 {
-		return
-	}
-
-	h.vterm.ScrollToGlobalLine(lineIdx)
-	h.updateTimestampDisplayLocked()
-	h.requestRefresh()
-}
-
-// updateTimestampDisplay updates the timestamp label with the current view's time.
-// updateTimestampDisplayLocked updates the timestamp label. Assumes h.mu is locked.
-func (h *HistoryNavigator) updateTimestampDisplayLocked() {
-	ts := h.getCurrentTimestampLocked()
-	if ts.IsZero() {
-		h.timestampLbl.Text = ""
-	} else {
-		h.timestampLbl.Text = ts.Format("2006-01-02 15:04:05")
-	}
-}
-
-// getCurrentTimestampLocked returns the timestamp of the current view position.
-// Assumes h.mu is locked.
-func (h *HistoryNavigator) getCurrentTimestampLocked() time.Time {
-	if h.searchIndex == nil || h.vterm == nil {
-		return time.Time{}
-	}
-
-	// Get the global line at the top of the viewport
-	// This is approximate - we use the scroll offset to estimate
-	offset := h.vterm.ScrollOffset()
-	globalEnd := h.vterm.GlobalEnd()
-
-	// Simple estimation: higher scroll offset = older content
-	// This is a rough approximation since scroll offset is in physical lines
-	estimatedLine := max(globalEnd-offset, h.vterm.GlobalOffset())
-
-	ts, err := h.searchIndex.GetTimestamp(estimatedLine)
-	if err != nil {
-		return time.Time{}
-	}
-	return ts
-}
-
-// --- Time Parsing ---
-
-// parseTimeInput parses various time input formats:
-//   - Relative: "5m", "1h", "2h30m", "-1h", "+30m"
-//   - Absolute: "14:30", "14:30:45", "2025-01-28 14:30"
-//   - Natural: "yesterday", "today 3pm" (limited support)
-func parseTimeInput(s string) (time.Time, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return time.Time{}, fmt.Errorf("empty time input")
-	}
-
-	now := time.Now()
-
-	// Try relative time first (most common use case)
-	if dur, err := parseRelativeTime(s); err == nil {
-		return now.Add(dur), nil
-	}
-
-	// Try absolute time formats
-	formats := []string{
-		"2006-01-02 15:04:05",
-		"2006-01-02 15:04",
-		"15:04:05",
-		"15:04",
-		"3:04pm",
-		"3pm",
-	}
-	for _, format := range formats {
-		if t, err := time.Parse(format, s); err == nil {
-			// For time-only formats, use today's date
-			if t.Year() == 0 {
-				t = time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), t.Second(), 0, now.Location())
-			}
-			return t, nil
-		}
-	}
-
-	// Try natural language
-	if t, err := parseNaturalTime(s, now); err == nil {
-		return t, nil
-	}
-
-	return time.Time{}, fmt.Errorf("unrecognized time format: %s", s)
-}
-
-// parseRelativeTime parses relative duration strings.
-// Accepts: "5m", "1h", "2h30m", "-1h", "+30m"
-// By default (no sign), values are interpreted as "ago" (negative).
-func parseRelativeTime(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, fmt.Errorf("empty relative time")
-	}
-
-	// Determine direction
-	negative := true // Default: treat as "X ago"
-	if strings.HasPrefix(s, "+") {
-		negative = false
-		s = s[1:]
-	} else if strings.HasPrefix(s, "-") {
-		negative = true
-		s = s[1:]
-	}
-
-	// Parse duration using Go's time.ParseDuration
-	// It supports: "300ms", "1.5h", "2h45m"
-	dur, err := time.ParseDuration(s)
-	if err != nil {
-		// Try alternative format: "1h30m" without decimal
-		dur, err = parseAlternativeDuration(s)
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	if negative {
-		return -dur, nil
-	}
-	return dur, nil
-}
-
-// parseAlternativeDuration parses duration strings like "1h30m", "2d", "1w"
-func parseAlternativeDuration(s string) (time.Duration, error) {
-	// Pattern: optional number followed by unit, repeated
-	re := regexp.MustCompile(`(\d+)([smhdw])`)
-	matches := re.FindAllStringSubmatch(strings.ToLower(s), -1)
-	if len(matches) == 0 {
-		return 0, fmt.Errorf("invalid duration format")
-	}
-
-	var total time.Duration
-	for _, match := range matches {
-		n, err := strconv.Atoi(match[1])
-		if err != nil {
-			continue
-		}
-		switch match[2] {
-		case "s":
-			total += time.Duration(n) * time.Second
-		case "m":
-			total += time.Duration(n) * time.Minute
-		case "h":
-			total += time.Duration(n) * time.Hour
-		case "d":
-			total += time.Duration(n) * 24 * time.Hour
-		case "w":
-			total += time.Duration(n) * 7 * 24 * time.Hour
-		}
-	}
-
-	if total == 0 {
-		return 0, fmt.Errorf("no valid duration components")
-	}
-	return total, nil
-}
-
-// parseNaturalTime parses natural language time expressions.
-func parseNaturalTime(s string, now time.Time) (time.Time, error) {
-	s = strings.ToLower(strings.TrimSpace(s))
-
-	// Simple natural time expressions
-	switch {
-	case s == "now":
-		return now, nil
-	case s == "today":
-		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()), nil
-	case s == "yesterday":
-		yesterday := now.AddDate(0, 0, -1)
-		return time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, now.Location()), nil
-	case strings.HasPrefix(s, "today "):
-		// "today 3pm", "today 14:30"
-		timeStr := strings.TrimPrefix(s, "today ")
-		t, err := parseTimeOnly(timeStr)
-		if err != nil {
-			return time.Time{}, err
-		}
-		return time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), t.Second(), 0, now.Location()), nil
-	case strings.HasPrefix(s, "yesterday "):
-		// "yesterday 3pm"
-		timeStr := strings.TrimPrefix(s, "yesterday ")
-		t, err := parseTimeOnly(timeStr)
-		if err != nil {
-			return time.Time{}, err
-		}
-		yesterday := now.AddDate(0, 0, -1)
-		return time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), t.Hour(), t.Minute(), t.Second(), 0, yesterday.Location()), nil
-	}
-
-	return time.Time{}, fmt.Errorf("unrecognized natural time: %s", s)
-}
-
-// parseTimeOnly parses time-only strings.
-func parseTimeOnly(s string) (time.Time, error) {
-	formats := []string{"15:04:05", "15:04", "3:04pm", "3pm"}
-	for _, format := range formats {
-		if t, err := time.Parse(format, s); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("invalid time format: %s", s)
 }
 
 // --- Lifecycle ---

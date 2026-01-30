@@ -82,6 +82,27 @@ func NewViewportWindow(memBuf *MemoryBuffer, width, height int) *ViewportWindow 
 	}
 }
 
+// SetPageStore enables disk fallback for evicted lines.
+// When a PageStore is set, the viewport can display lines that have been
+// evicted from the MemoryBuffer by reading them from disk.
+// This enables history navigation beyond the in-memory window.
+func (vw *ViewportWindow) SetPageStore(pageStore *PageStore) {
+	vw.mu.Lock()
+	defer vw.mu.Unlock()
+
+	if mbr, ok := vw.reader.(*MemoryBufferReader); ok {
+		mbr.SetPageStore(pageStore)
+		// Invalidate cache since readable range may have changed
+		vw.cache.Invalidate()
+	}
+}
+
+// Reader returns the content reader used by this viewport.
+// Use this to access content with PageStore fallback support.
+func (vw *ViewportWindow) Reader() ContentReader {
+	return vw.reader
+}
+
 // --- Core Rendering ---
 
 // GetVisibleGrid returns the current viewport as a 2D cell grid.

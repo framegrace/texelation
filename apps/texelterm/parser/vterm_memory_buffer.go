@@ -141,47 +141,22 @@ func (v *VTerm) initMemoryBufferWithOptions(opts MemoryBufferOptions) {
 
 	// Set up disk persistence if path provided
 	if opts.DiskPath != "" {
-		// Use provided terminal ID or generate a random one
 		terminalID := opts.TerminalID
 		if terminalID == "" {
 			terminalID = fmt.Sprintf("term-%d", time.Now().UnixNano())
 		}
 		log.Printf("[MEMORY_BUFFER] Setting up persistence: dir=%s, terminalID=%s", opts.DiskPath, terminalID)
 
-		// Create adaptive persistence with WAL for proper Write vs Update handling
-		// WAL manages its own PageStore internally
 		apConfig := DefaultAdaptivePersistenceConfig()
 		walConfig := DefaultWALConfig(opts.DiskPath, terminalID)
 		persistence, err := NewAdaptivePersistenceWithWAL(apConfig, memBuf, walConfig)
 		if err != nil {
-			log.Printf("[MEMORY_BUFFER] Failed to create adaptive persistence with WAL: %v", err)
-			// Fall back to creating PageStore directly (legacy mode)
-			psConfig := DefaultPageStoreConfig(opts.DiskPath, terminalID)
-			pageStore, psErr := OpenPageStore(psConfig)
-			if psErr != nil {
-				log.Printf("[MEMORY_BUFFER] Failed to open PageStore: %v", psErr)
-			}
-			if pageStore == nil {
-				pageStore, psErr = CreatePageStore(psConfig)
-				if psErr != nil {
-					log.Printf("[MEMORY_BUFFER] Failed to create PageStore: %v, running without persistence", psErr)
-				}
-			}
-			if pageStore != nil {
-				persistence, err = NewAdaptivePersistence(apConfig, memBuf, pageStore)
-				if err != nil {
-					log.Printf("[MEMORY_BUFFER] Failed to create adaptive persistence: %v", err)
-					pageStore.Close()
-				} else {
-					v.memBufState.persistence = persistence
-					v.memBufState.pageStore = pageStore
-					log.Printf("[MEMORY_BUFFER] Using legacy PageStore mode, lineCount=%d", pageStore.LineCount())
-				}
-			}
+			log.Printf("[MEMORY_BUFFER] Failed to create persistence: %v, running without history", err)
 		} else {
 			v.memBufState.persistence = persistence
 			v.memBufState.pageStore = persistence.PageStore()
-			log.Printf("[MEMORY_BUFFER] Using WAL mode, PageStore lineCount=%d", v.memBufState.pageStore.LineCount())
+			v.memBufState.viewport.SetPageStore(v.memBufState.pageStore)
+			log.Printf("[MEMORY_BUFFER] Persistence enabled, lineCount=%d", v.memBufState.pageStore.LineCount())
 		}
 	}
 }
@@ -334,7 +309,7 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 	}
 
 	// Load a window of history: viewport + margin for smoother scrolling
-	// But don't load more than what's available
+	// Older content is accessible via PageStore fallback when scrolling
 	margin := 500
 	windowSize := viewportHeight + margin
 	if int64(windowSize) > lineCount {
@@ -371,7 +346,6 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 	// Now we need to restore these lines into the MemoryBuffer
 	// The MemoryBuffer's globalOffset is already set to lineCount (end of history)
 	// We need to temporarily adjust it to load historical lines
-
 	mb := v.memBufState.memBuf
 
 	// Get current state
@@ -579,14 +553,23 @@ func (v *VTerm) memoryBufferGrid() [][]Cell {
 }
 
 // applySearchHighlight finds all occurrences of the search term in the grid
-// and swaps FG/BG colors to highlight them. It searches across the entire
+// and highlights them with styled colors. It searches across the entire
 // grid as continuous text to handle matches that span wrapped lines.
+//
+// Highlighting style:
+//   - Other matches: FG changed to accent color (subtle)
+//   - Selected match: selection color + Reverse attribute (stands out)
+//
+// If no styled colors are set (Mode == 0), falls back to simple reverse attribute.
 func (v *VTerm) applySearchHighlight(grid [][]Cell) {
 	termRunes := []rune(strings.ToLower(v.searchHighlight))
 	termLen := len(termRunes)
 	if termLen == 0 {
 		return
 	}
+
+	// Check if we have styled highlighting configured
+	hasStyledHighlight := v.searchSelectionColor.Mode != 0 || v.searchAccentColor.Mode != 0
 
 	// Build a flat array of all runes and their grid coordinates
 	type cellPos struct {
@@ -606,21 +589,54 @@ func (v *VTerm) applySearchHighlight(grid [][]Cell) {
 		}
 	}
 
-	// Search for term using pure rune-based matching (no string conversion)
+	// Find all matches first
+	type match struct {
+		start      int
+		isSelected bool
+	}
+	var matches []match
+
 	for i := 0; i <= len(allRunes)-termLen; i++ {
-		match := true
+		found := true
 		for j := 0; j < termLen; j++ {
 			if allRunes[i+j] != termRunes[j] {
-				match = false
+				found = false
 				break
 			}
 		}
-		if match {
-			// Highlight each cell in the match
-			for j := 0; j < termLen; j++ {
-				pos := positions[i+j]
-				cell := &grid[pos.y][pos.x]
-				cell.FG, cell.BG = cell.BG, cell.FG
+		if found {
+			// Determine if this match is on the selected line
+			isSelected := false
+			if hasStyledHighlight && v.searchHighlightLine >= 0 && v.IsMemoryBufferEnabled() {
+				// Check if the first character of the match is on the selected line
+				pos := positions[i]
+				globalLine, _, ok := v.memoryBufferViewportToContent(pos.y, pos.x)
+				if ok && globalLine == v.searchHighlightLine {
+					isSelected = true
+				}
+			}
+			matches = append(matches, match{start: i, isSelected: isSelected})
+		}
+	}
+
+	// Apply highlighting to all matches
+	for _, m := range matches {
+		for j := 0; j < termLen; j++ {
+			pos := positions[m.start+j]
+			cell := &grid[pos.y][pos.x]
+
+			if hasStyledHighlight {
+				if m.isSelected {
+					// Selected match: selection color + Reverse (stands out)
+					cell.FG = v.searchSelectionColor
+				} else {
+					// Other matches: muted/accent color + Reverse (subtle)
+					cell.FG = v.searchAccentColor
+				}
+				cell.Attr |= AttrReverse
+			} else {
+				// Fallback: simple reverse attribute for all matches
+				cell.Attr ^= AttrReverse
 			}
 		}
 	}
@@ -729,12 +745,12 @@ func (v *VTerm) ScrollToGlobalLine(globalLineIdx int64) bool {
 		return false
 	}
 
-	mb := v.memBufState.memBuf
 	vw := v.memBufState.viewport
+	reader := vw.Reader()
 
-	// Check bounds
-	globalStart := mb.GlobalOffset()
-	globalEnd := mb.GlobalEnd()
+	// Check bounds using reader (which supports PageStore fallback)
+	globalStart := reader.GlobalOffset()
+	globalEnd := reader.GlobalEnd()
 	log.Printf("[SCROLL] ScrollToGlobalLine(%d): globalStart=%d, globalEnd=%d", globalLineIdx, globalStart, globalEnd)
 	if globalLineIdx < globalStart || globalLineIdx >= globalEnd {
 		log.Printf("[SCROLL] ScrollToGlobalLine: line %d out of range [%d, %d)", globalLineIdx, globalStart, globalEnd)
@@ -743,13 +759,31 @@ func (v *VTerm) ScrollToGlobalLine(globalLineIdx int64) bool {
 
 	// Count physical lines from the target line to the end.
 	// This gives us the scroll offset (physical lines from bottom).
+	// Use reader.GetLine() for PageStore fallback support.
 	var physicalLinesFromTarget int64
 	builder := vw.Builder()
-	for idx := globalLineIdx; idx < globalEnd; idx++ {
-		line := mb.GetLine(idx)
-		if line != nil {
-			wrapped := builder.BuildLine(line, idx)
-			physicalLinesFromTarget += int64(len(wrapped))
+
+	// For efficiency, estimate disk content (before memory) as 1:1
+	memOffset := reader.MemoryBufferOffset()
+	if globalLineIdx < memOffset {
+		// Target is in disk content - estimate lines from target to memOffset
+		physicalLinesFromTarget += memOffset - globalLineIdx
+		// Then calculate exactly from memOffset to end
+		for idx := memOffset; idx < globalEnd; idx++ {
+			line := reader.GetLine(idx)
+			if line != nil {
+				wrapped := builder.BuildLine(line, idx)
+				physicalLinesFromTarget += int64(len(wrapped))
+			}
+		}
+	} else {
+		// Target is in memory - calculate exactly
+		for idx := globalLineIdx; idx < globalEnd; idx++ {
+			line := reader.GetLine(idx)
+			if line != nil {
+				wrapped := builder.BuildLine(line, idx)
+				physicalLinesFromTarget += int64(len(wrapped))
+			}
 		}
 	}
 
@@ -769,14 +803,42 @@ func (v *VTerm) ScrollToGlobalLine(globalLineIdx int64) bool {
 // SetSearchHighlight sets the search term to highlight with reversed colors.
 // The term will be highlighted wherever it appears in the visible grid.
 // Pass empty string to clear highlighting.
+// This is a simple version - use SetSearchHighlightStyled for styled highlighting.
 func (v *VTerm) SetSearchHighlight(term string) {
 	v.searchHighlight = term
+	v.searchHighlightLine = -1 // No specific line selected
+	v.MarkAllDirty()
+}
+
+// SetSearchHighlightStyled sets up styled search highlighting.
+//
+// Other matches: FG changed to accentColor (subtle highlight)
+// Selected match: selectionColor + Reverse attribute (stands out)
+//
+// Parameters:
+//   - term: the search term to highlight
+//   - currentLine: the line index of the current/selected result (-1 for none)
+//   - selectionColor: color for selected match (used with Reverse)
+//   - accentColor: color for other matches (just FG change)
+func (v *VTerm) SetSearchHighlightStyled(term string, currentLine int64, selectionColor, accentColor Color) {
+	v.searchHighlight = term
+	v.searchHighlightLine = currentLine
+	v.searchSelectionColor = selectionColor
+	v.searchAccentColor = accentColor
+	v.MarkAllDirty()
+}
+
+// UpdateSearchHighlightLine updates just the current line for styled highlighting.
+// Use this when navigating between results to avoid re-setting all colors.
+func (v *VTerm) UpdateSearchHighlightLine(currentLine int64) {
+	v.searchHighlightLine = currentLine
 	v.MarkAllDirty()
 }
 
 // ClearSearchHighlight removes search term highlighting.
 func (v *VTerm) ClearSearchHighlight() {
 	v.searchHighlight = ""
+	v.searchHighlightLine = -1
 	v.MarkAllDirty()
 }
 

@@ -362,6 +362,8 @@ func (si *SQLiteSearchIndex) DeleteLine(lineIdx int64) error {
 }
 
 // Search executes an FTS5 search query.
+// Results are ordered by time (newest first) for intuitive history navigation.
+// Next goes to older results, Prev goes to newer results.
 func (si *SQLiteSearchIndex) Search(query string, limit int) ([]SearchResult, error) {
 	if query == "" {
 		return nil, nil
@@ -370,13 +372,13 @@ func (si *SQLiteSearchIndex) Search(query string, limit int) ([]SearchResult, er
 	si.mu.RLock()
 	defer si.mu.RUnlock()
 
-	// FTS5 query with BM25 ranking, commands prioritized
+	// FTS5 query ordered by timestamp (newest first) for history navigation
 	rows, err := si.db.Query(`
 		SELECT l.id, l.timestamp, l.content, l.is_command
 		FROM lines_fts
 		JOIN lines l ON l.id = lines_fts.rowid
 		WHERE lines_fts MATCH ?
-		ORDER BY l.is_command DESC, bm25(lines_fts)
+		ORDER BY l.timestamp DESC
 		LIMIT ?
 	`, query, limit)
 	if err != nil {
@@ -401,7 +403,7 @@ func (si *SQLiteSearchIndex) SearchInRange(query string, start, end time.Time, l
 		FROM lines_fts
 		JOIN lines l ON l.id = lines_fts.rowid
 		WHERE lines_fts MATCH ? AND l.timestamp >= ? AND l.timestamp <= ?
-		ORDER BY l.is_command DESC, bm25(lines_fts)
+		ORDER BY l.timestamp DESC
 		LIMIT ?
 	`, query, start.UnixNano(), end.UnixNano(), limit)
 	if err != nil {

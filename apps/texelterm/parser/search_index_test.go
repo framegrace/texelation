@@ -148,7 +148,7 @@ func TestSearchIndex_SearchNoResults(t *testing.T) {
 	}
 }
 
-func TestSearchIndex_CommandsPrioritized(t *testing.T) {
+func TestSearchIndex_TimeOrdered(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
@@ -160,29 +160,36 @@ func TestSearchIndex_CommandsPrioritized(t *testing.T) {
 
 	now := time.Now()
 
-	// Index output first (lower line index)
+	// Index oldest first (output)
 	idx.IndexLine(0, now, "docker output line", false)
 	idx.Flush()
 
-	// Index command second (higher line index)
+	// Index middle (command)
 	idx.IndexLine(1, now.Add(time.Second), "docker run nginx", true)
 
-	// Search should return command first (prioritized)
+	// Index newest (output)
+	idx.IndexLine(2, now.Add(2*time.Second), "docker ps output", false)
+	idx.Flush()
+
+	// Search should return results ordered by time (newest first)
 	results, err := idx.Search("docker", 10)
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
 
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 
-	// Command should be first despite being indexed second
-	if !results[0].IsCommand {
-		t.Error("expected first result to be command")
+	// Results should be ordered by timestamp DESC (newest first)
+	if results[0].GlobalLineIdx != 2 {
+		t.Errorf("expected newest result (line 2) first, got line %d", results[0].GlobalLineIdx)
 	}
-	if results[1].IsCommand {
-		t.Error("expected second result to not be command")
+	if results[1].GlobalLineIdx != 1 {
+		t.Errorf("expected middle result (line 1) second, got line %d", results[1].GlobalLineIdx)
+	}
+	if results[2].GlobalLineIdx != 0 {
+		t.Errorf("expected oldest result (line 0) last, got line %d", results[2].GlobalLineIdx)
 	}
 }
 
