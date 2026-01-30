@@ -28,6 +28,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"time"
+	"unicode"
 )
 
 // memoryBufferState holds the new memory buffer system state.
@@ -42,14 +45,23 @@ type memoryBufferState struct {
 	// persistence handles disk writes (optional)
 	persistence *AdaptivePersistence
 
-	// diskHistory is needed for persistence (optional)
-	diskHistory *DiskHistory
+	// pageStore is the page-based disk storage (optional)
+	pageStore *PageStore
 
 	// fixedDetector detects TUI patterns and flags lines as fixed-width (Phase 5)
 	fixedDetector *FixedWidthDetector
 
 	// enabled tracks if the new system is active
 	enabled bool
+
+	// historyLoaded tracks whether startup history has been loaded from disk.
+	// Set to true after first Resize() loads history from PageStore.
+	// This prevents loading history multiple times.
+	historyLoaded bool
+
+	// pendingHistoryLines is the number of historical lines available in PageStore.
+	// Set during initialization, used by first Resize() to load history.
+	pendingHistoryLines int64
 
 	// liveEdgeBase is the global line index at the top of the "live" viewport.
 	// This is where cursor Y=0 maps to during writes.
@@ -70,6 +82,11 @@ type MemoryBufferOptions struct {
 
 	// DiskPath enables disk persistence if non-empty
 	DiskPath string
+
+	// TerminalID is the unique identifier for this terminal session.
+	// If empty, a random ID is generated (history won't persist across sessions).
+	// For standalone texelterm, use a fixed ID like "standalone-texelterm".
+	TerminalID string
 }
 
 // DefaultMemoryBufferOptions returns sensible defaults.
@@ -124,22 +141,22 @@ func (v *VTerm) initMemoryBufferWithOptions(opts MemoryBufferOptions) {
 
 	// Set up disk persistence if path provided
 	if opts.DiskPath != "" {
-		diskConfig := DefaultDiskHistoryConfig(opts.DiskPath)
-		disk, err := CreateDiskHistory(diskConfig)
-		if err != nil {
-			log.Printf("[MEMORY_BUFFER] Failed to create disk history: %v, running without persistence", err)
-		} else {
-			v.memBufState.diskHistory = disk
+		terminalID := opts.TerminalID
+		if terminalID == "" {
+			terminalID = fmt.Sprintf("term-%d", time.Now().UnixNano())
+		}
+		log.Printf("[MEMORY_BUFFER] Setting up persistence: dir=%s, terminalID=%s", opts.DiskPath, terminalID)
 
-			// Create adaptive persistence
-			apConfig := DefaultAdaptivePersistenceConfig()
-			persistence, err := NewAdaptivePersistence(apConfig, memBuf, disk)
-			if err != nil {
-				log.Printf("[MEMORY_BUFFER] Failed to create adaptive persistence: %v", err)
-				disk.Close()
-			} else {
-				v.memBufState.persistence = persistence
-			}
+		apConfig := DefaultAdaptivePersistenceConfig()
+		walConfig := DefaultWALConfig(opts.DiskPath, terminalID)
+		persistence, err := NewAdaptivePersistenceWithWAL(apConfig, memBuf, walConfig)
+		if err != nil {
+			log.Printf("[MEMORY_BUFFER] Failed to create persistence: %v, running without history", err)
+		} else {
+			v.memBufState.persistence = persistence
+			v.memBufState.pageStore = persistence.PageStore()
+			v.memBufState.viewport.SetPageStore(v.memBufState.pageStore)
+			log.Printf("[MEMORY_BUFFER] Persistence enabled, lineCount=%d", v.memBufState.pageStore.LineCount())
 		}
 	}
 }
@@ -162,9 +179,34 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 	v.initMemoryBufferWithOptions(opts)
 	v.memBufState.enabled = true
 
-	// Initialize the first line
+	// Check PageStore for historical content info (for search index continuity)
+	log.Printf("[MEMORY_BUFFER] Checking PageStore: pageStore=%v", v.memBufState.pageStore != nil)
+	if v.memBufState.pageStore != nil {
+		lineCount := v.memBufState.pageStore.LineCount()
+		log.Printf("[MEMORY_BUFFER] PageStore has %d historical lines (searchable)", lineCount)
+
+		// Start new lines AFTER historical content to maintain global index continuity
+		// This ensures search results have valid global indices
+		if lineCount > 0 {
+			v.memBufState.memBuf.SetGlobalOffset(lineCount)
+			v.memBufState.liveEdgeBase = lineCount
+			v.memBufState.memBuf.EnsureLine(lineCount)
+
+			// Load history now since viewport dimensions are already known (v.height)
+			// We can't defer to Resize() because Resize() returns early if dimensions match
+			v.memBufState.pendingHistoryLines = lineCount
+			v.memBufState.historyLoaded = false
+			log.Printf("[MEMORY_BUFFER] %d historical lines available, loading now (height=%d)", lineCount, v.height)
+			v.loadHistoryFromDisk(v.height)
+			v.memBufState.historyLoaded = true
+			return nil
+		}
+	}
+
+	// No disk content - initialize the first line
 	v.memBufState.memBuf.EnsureLine(0)
 	v.memBufState.liveEdgeBase = 0
+	v.memBufState.historyLoaded = true // Nothing to load
 
 	return nil
 }
@@ -177,16 +219,19 @@ func (v *VTerm) CloseMemoryBuffer() error {
 
 	var firstErr error
 
-	// Close persistence first (flushes pending writes)
+	// Save viewport state through WAL before closing (crash-safe)
+	if v.memBufState.persistence != nil && v.memBufState.viewport != nil {
+		v.notifyMetadataChange()
+	}
+
+	// Close persistence first (flushes pending writes, checkpoints WAL, and closes PageStore)
 	if v.memBufState.persistence != nil {
 		if err := v.memBufState.persistence.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
-	}
-
-	// Close disk history
-	if v.memBufState.diskHistory != nil {
-		if err := v.memBufState.diskHistory.Close(); err != nil && firstErr == nil {
+	} else if v.memBufState.pageStore != nil {
+		// Only close PageStore directly if no persistence layer
+		if err := v.memBufState.pageStore.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -197,6 +242,178 @@ func (v *VTerm) CloseMemoryBuffer() error {
 // IsMemoryBufferEnabled returns whether the new system is active.
 func (v *VTerm) IsMemoryBufferEnabled() bool {
 	return v.memBufState != nil && v.memBufState.enabled
+}
+
+// SetOnLineIndexed sets a callback that's invoked AFTER a line is persisted to disk.
+// This is used for search indexing - the callback is only called for lines that
+// have actually been written to WAL, ensuring the search index never has entries
+// for content that doesn't exist on disk.
+//
+// The callback receives:
+//   - lineIdx: global line index
+//   - line: the LogicalLine with cell content
+//   - timestamp: when the line was written
+//   - isCommand: true if this was a shell command (OSC 133)
+func (v *VTerm) SetOnLineIndexed(callback func(lineIdx int64, line *LogicalLine, timestamp time.Time, isCommand bool)) {
+	if v.memBufState != nil && v.memBufState.persistence != nil {
+		v.memBufState.persistence.OnLineIndexed = callback
+	}
+}
+
+// notifyMetadataChange notifies AdaptivePersistence of metadata changes.
+// Metadata is batched with content and written together, ensuring consistency.
+// Called on scroll changes and before close.
+func (v *VTerm) notifyMetadataChange() {
+	if v.memBufState == nil || v.memBufState.persistence == nil || v.memBufState.viewport == nil {
+		return
+	}
+
+	// Build viewport state with cursor position
+	state := &ViewportState{
+		ScrollOffset: v.memBufState.viewport.ScrollOffset(),
+		LiveEdgeBase: v.memBufState.liveEdgeBase,
+		CursorX:      v.cursorX,
+		CursorY:      v.cursorY,
+		SavedAt:      time.Now(),
+	}
+
+	// Notify persistence layer - metadata will be written with content on flush
+	v.memBufState.persistence.NotifyMetadataChange(state)
+}
+
+// --- History Loading ---
+
+// loadHistoryFromDisk loads a window of historical lines from PageStore into MemoryBuffer.
+// Called on first resize when viewport dimensions are known.
+// viewportHeight is used to determine how many lines to load.
+func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
+	if v.memBufState == nil || v.memBufState.pageStore == nil {
+		return
+	}
+
+	if viewportHeight <= 0 {
+		log.Printf("[MEMORY_BUFFER] Invalid viewportHeight: %d, skipping history load", viewportHeight)
+		return
+	}
+
+	lineCount := v.memBufState.pendingHistoryLines
+	if lineCount == 0 {
+		log.Printf("[MEMORY_BUFFER] No history lines to load")
+		return
+	}
+
+	// Monitor: Log warning for very large histories that might impact performance
+	if lineCount > 100000 {
+		log.Printf("[MEMORY_BUFFER] WARNING: Large history detected (%d lines). "+
+			"Consider increasing memory buffer size or archiving old history.", lineCount)
+	}
+
+	// Load a window of history: viewport + margin for smoother scrolling
+	// Older content is accessible via PageStore fallback when scrolling
+	margin := 500
+	windowSize := viewportHeight + margin
+	if int64(windowSize) > lineCount {
+		windowSize = int(lineCount)
+	}
+
+	// Calculate the range to load (last windowSize lines from history)
+	startIdx := lineCount - int64(windowSize)
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	endIdx := lineCount
+
+	log.Printf("[MEMORY_BUFFER] Loading history: range [%d, %d) (%d lines) from %d total",
+		startIdx, endIdx, endIdx-startIdx, lineCount)
+
+	// Monitor: Time the history loading for performance tracking
+	loadStart := time.Now()
+
+	// Read lines from PageStore
+	lines, err := v.memBufState.pageStore.ReadLineRange(startIdx, endIdx)
+	if err != nil {
+		log.Printf("[MEMORY_BUFFER] Failed to read history from PageStore: %v", err)
+		return
+	}
+
+	readDuration := time.Since(loadStart)
+
+	if len(lines) == 0 {
+		log.Printf("[MEMORY_BUFFER] No lines returned from PageStore")
+		return
+	}
+
+	// Now we need to restore these lines into the MemoryBuffer
+	// The MemoryBuffer's globalOffset is already set to lineCount (end of history)
+	// We need to temporarily adjust it to load historical lines
+	mb := v.memBufState.memBuf
+
+	// Get current state
+	currentGlobalOffset := mb.GlobalOffset()
+	log.Printf("[MEMORY_BUFFER] Current globalOffset=%d, loading lines starting at %d", currentGlobalOffset, startIdx)
+
+	// Temporarily set globalOffset to startIdx to allow RestoreLines to work
+	// This is safe because no one is reading from the buffer yet (first resize)
+	mb.SetGlobalOffset(startIdx)
+
+	restoreStart := time.Now()
+
+	// Restore the lines
+	mb.RestoreLines(startIdx, lines)
+
+	// The live edge should still be at the original lineCount (after all history)
+	// The new shell output will start there
+	// Make sure liveEdgeBase is correct
+	v.memBufState.liveEdgeBase = lineCount
+
+	// Ensure the live edge line exists for new shell output
+	mb.EnsureLine(lineCount)
+
+	restoreDuration := time.Since(restoreStart)
+	totalDuration := time.Since(loadStart)
+
+	log.Printf("[MEMORY_BUFFER] History loaded: %d lines, new globalOffset=%d, globalEnd=%d, liveEdgeBase=%d",
+		len(lines), mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase)
+
+	// Monitor: Log performance metrics
+	log.Printf("[MEMORY_BUFFER] Load timing: read=%v, restore=%v, total=%v",
+		readDuration, restoreDuration, totalDuration)
+
+	// Monitor: Warn if loading is slow (> 100ms)
+	if totalDuration > 100*time.Millisecond {
+		log.Printf("[MEMORY_BUFFER] WARNING: History loading took %v (> 100ms). "+
+			"Consider reducing history window size.", totalDuration)
+	}
+
+	// Restore saved viewport state from WAL if available
+	var savedState *ViewportState
+	if v.memBufState.persistence != nil && v.memBufState.persistence.wal != nil {
+		savedState = v.memBufState.persistence.wal.GetRecoveredMetadata()
+		if savedState != nil {
+			log.Printf("[MEMORY_BUFFER] Restoring WAL-recovered metadata: scrollOffset=%d, liveEdgeBase=%d, cursor=(%d,%d) (saved at %v)",
+				savedState.ScrollOffset, savedState.LiveEdgeBase, savedState.CursorX, savedState.CursorY, savedState.SavedAt)
+		}
+	}
+
+	if savedState != nil {
+		// Restore liveEdgeBase if it's valid (within loaded history)
+		if savedState.LiveEdgeBase >= mb.GlobalOffset() && savedState.LiveEdgeBase <= mb.GlobalEnd() {
+			v.memBufState.liveEdgeBase = savedState.LiveEdgeBase
+		}
+
+		// Restore scroll offset through the viewport
+		if v.memBufState.viewport != nil && savedState.ScrollOffset > 0 {
+			v.memBufState.viewport.ScrollToOffset(savedState.ScrollOffset)
+			log.Printf("[MEMORY_BUFFER] Viewport scroll restored to offset %d", savedState.ScrollOffset)
+		}
+
+		// Restore cursor position
+		if savedState.CursorX >= 0 && savedState.CursorY >= 0 {
+			v.cursorX = savedState.CursorX
+			v.cursorY = savedState.CursorY
+			log.Printf("[MEMORY_BUFFER] Cursor position restored to (%d, %d)", savedState.CursorX, savedState.CursorY)
+		}
+	}
 }
 
 // --- Writing Operations ---
@@ -297,9 +514,11 @@ func (v *VTerm) memoryBufferLineFeed() {
 	// Invalidate viewport cache since content shifted
 	v.memBufState.viewport.InvalidateCache()
 
-	// Mark as dirty for persistence
+	// Mark as dirty for persistence with metadata for search indexing
+	// The search index callback (OnLineIndexed) is called by AdaptivePersistence
+	// AFTER the line is successfully persisted to disk, ensuring consistency.
 	if v.memBufState.persistence != nil {
-		v.memBufState.persistence.NotifyWrite(currentGlobal)
+		v.memBufState.persistence.NotifyWriteWithMeta(currentGlobal, time.Now(), v.CommandActive)
 	}
 }
 
@@ -317,12 +536,110 @@ func (v *VTerm) memoryBufferCarriageReturn() {
 // --- Grid Access ---
 
 // memoryBufferGrid returns the viewport grid from ViewportWindow.
+// If a search term is set, matching text is highlighted with reversed colors.
 func (v *VTerm) memoryBufferGrid() [][]Cell {
 	if !v.IsMemoryBufferEnabled() {
 		return nil
 	}
 
-	return v.memBufState.viewport.GetVisibleGrid()
+	grid := v.memBufState.viewport.GetVisibleGrid()
+
+	// Apply search highlighting if a term is set
+	if v.searchHighlight != "" && len(grid) > 0 {
+		v.applySearchHighlight(grid)
+	}
+
+	return grid
+}
+
+// applySearchHighlight finds all occurrences of the search term in the grid
+// and highlights them with styled colors. It searches across the entire
+// grid as continuous text to handle matches that span wrapped lines.
+//
+// Highlighting style:
+//   - Other matches: FG changed to accent color (subtle)
+//   - Selected match: selection color + Reverse attribute (stands out)
+//
+// If no styled colors are set (Mode == 0), falls back to simple reverse attribute.
+func (v *VTerm) applySearchHighlight(grid [][]Cell) {
+	termRunes := []rune(strings.ToLower(v.searchHighlight))
+	termLen := len(termRunes)
+	if termLen == 0 {
+		return
+	}
+
+	// Check if we have styled highlighting configured
+	hasStyledHighlight := v.searchSelectionColor.Mode != 0 || v.searchAccentColor.Mode != 0
+
+	// Build a flat array of all runes and their grid coordinates
+	type cellPos struct {
+		y, x int
+	}
+	var allRunes []rune
+	var positions []cellPos
+
+	for y, row := range grid {
+		for x, cell := range row {
+			r := cell.Rune
+			if r == 0 {
+				r = ' '
+			}
+			allRunes = append(allRunes, unicode.ToLower(r))
+			positions = append(positions, cellPos{y, x})
+		}
+	}
+
+	// Find all matches first
+	type match struct {
+		start      int
+		isSelected bool
+	}
+	var matches []match
+
+	for i := 0; i <= len(allRunes)-termLen; i++ {
+		found := true
+		for j := 0; j < termLen; j++ {
+			if allRunes[i+j] != termRunes[j] {
+				found = false
+				break
+			}
+		}
+		if found {
+			// Determine if this match is on the selected line
+			isSelected := false
+			if hasStyledHighlight && v.searchHighlightLine >= 0 && v.IsMemoryBufferEnabled() {
+				// Check if the first character of the match is on the selected line
+				pos := positions[i]
+				globalLine, _, ok := v.memoryBufferViewportToContent(pos.y, pos.x)
+				if ok && globalLine == v.searchHighlightLine {
+					isSelected = true
+				}
+			}
+			matches = append(matches, match{start: i, isSelected: isSelected})
+		}
+	}
+
+	// Apply highlighting to all matches
+	for _, m := range matches {
+		for j := 0; j < termLen; j++ {
+			pos := positions[m.start+j]
+			cell := &grid[pos.y][pos.x]
+
+			if hasStyledHighlight {
+				if m.isSelected {
+					// Selected match: selection color + Reverse (stands out)
+					cell.FG = v.searchSelectionColor
+				} else {
+					// Other matches: muted/accent color + Reverse (subtle)
+					cell.FG = v.searchAccentColor
+				}
+				cell.Attr |= AttrReverse
+			} else {
+				// Fallback: simple reverse attribute for all matches
+				cell.Attr ^= AttrReverse
+			}
+		}
+	}
 }
 
 // --- Scrolling ---
@@ -354,6 +671,11 @@ func (v *VTerm) memoryBufferScroll(delta int) {
 	afterOffset := vw.ScrollOffset()
 	v.logMemBufDebug("[SCROLL] delta=%d: offset %d -> %d (maxScroll=%d, totalPhysical=%d, viewportHeight=%d, globalOffset=%d, globalEnd=%d, liveEdgeBase=%d)",
 		delta, beforeOffset, afterOffset, maxScrollOffset, totalPhysical, viewportHeight, mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase)
+
+	// Write metadata to WAL for crash recovery (if scroll actually changed)
+	if beforeOffset != afterOffset {
+		v.notifyMetadataChange()
+	}
 }
 
 // memoryBufferScrollToBottom scrolls to the live edge.
@@ -409,6 +731,133 @@ func (v *VTerm) SetScrollOffset(offset int64) {
 		v.memBufState.viewport.ScrollToOffset(offset)
 	}
 	v.MarkAllDirty()
+
+	// Write metadata to WAL for crash recovery
+	v.notifyMetadataChange()
+}
+
+// ScrollToGlobalLine scrolls the viewport to show the specified global line index
+// at approximately the center of the viewport. This is used for search result navigation.
+// Returns false if the line is out of range.
+func (v *VTerm) ScrollToGlobalLine(globalLineIdx int64) bool {
+	if !v.IsMemoryBufferEnabled() {
+		log.Printf("[SCROLL] ScrollToGlobalLine: memory buffer not enabled")
+		return false
+	}
+
+	vw := v.memBufState.viewport
+	reader := vw.Reader()
+
+	// Check bounds using reader (which supports PageStore fallback)
+	globalStart := reader.GlobalOffset()
+	globalEnd := reader.GlobalEnd()
+	log.Printf("[SCROLL] ScrollToGlobalLine(%d): globalStart=%d, globalEnd=%d", globalLineIdx, globalStart, globalEnd)
+	if globalLineIdx < globalStart || globalLineIdx >= globalEnd {
+		log.Printf("[SCROLL] ScrollToGlobalLine: line %d out of range [%d, %d)", globalLineIdx, globalStart, globalEnd)
+		return false
+	}
+
+	// Count physical lines from the target line to the end.
+	// This gives us the scroll offset (physical lines from bottom).
+	// Use reader.GetLine() for PageStore fallback support.
+	var physicalLinesFromTarget int64
+	builder := vw.Builder()
+
+	// For efficiency, estimate disk content (before memory) as 1:1
+	memOffset := reader.MemoryBufferOffset()
+	if globalLineIdx < memOffset {
+		// Target is in disk content - estimate lines from target to memOffset
+		physicalLinesFromTarget += memOffset - globalLineIdx
+		// Then calculate exactly from memOffset to end
+		for idx := memOffset; idx < globalEnd; idx++ {
+			line := reader.GetLine(idx)
+			if line != nil {
+				wrapped := builder.BuildLine(line, idx)
+				physicalLinesFromTarget += int64(len(wrapped))
+			}
+		}
+	} else {
+		// Target is in memory - calculate exactly
+		for idx := globalLineIdx; idx < globalEnd; idx++ {
+			line := reader.GetLine(idx)
+			if line != nil {
+				wrapped := builder.BuildLine(line, idx)
+				physicalLinesFromTarget += int64(len(wrapped))
+			}
+		}
+	}
+
+	// We want the target line to be roughly centered in the viewport.
+	// Subtract half the viewport height to center.
+	viewportHeight := int64(vw.Height())
+	targetOffset := physicalLinesFromTarget - viewportHeight/2
+	if targetOffset < 0 {
+		targetOffset = 0
+	}
+
+	vw.ScrollToOffset(targetOffset)
+	v.MarkAllDirty()
+	return true
+}
+
+// SetSearchHighlight sets the search term to highlight with reversed colors.
+// The term will be highlighted wherever it appears in the visible grid.
+// Pass empty string to clear highlighting.
+// This is a simple version - use SetSearchHighlightStyled for styled highlighting.
+func (v *VTerm) SetSearchHighlight(term string) {
+	v.searchHighlight = term
+	v.searchHighlightLine = -1 // No specific line selected
+	v.MarkAllDirty()
+}
+
+// SetSearchHighlightStyled sets up styled search highlighting.
+//
+// Other matches: FG changed to accentColor (subtle highlight)
+// Selected match: selectionColor + Reverse attribute (stands out)
+//
+// Parameters:
+//   - term: the search term to highlight
+//   - currentLine: the line index of the current/selected result (-1 for none)
+//   - selectionColor: color for selected match (used with Reverse)
+//   - accentColor: color for other matches (just FG change)
+func (v *VTerm) SetSearchHighlightStyled(term string, currentLine int64, selectionColor, accentColor Color) {
+	v.searchHighlight = term
+	v.searchHighlightLine = currentLine
+	v.searchSelectionColor = selectionColor
+	v.searchAccentColor = accentColor
+	v.MarkAllDirty()
+}
+
+// UpdateSearchHighlightLine updates just the current line for styled highlighting.
+// Use this when navigating between results to avoid re-setting all colors.
+func (v *VTerm) UpdateSearchHighlightLine(currentLine int64) {
+	v.searchHighlightLine = currentLine
+	v.MarkAllDirty()
+}
+
+// ClearSearchHighlight removes search term highlighting.
+func (v *VTerm) ClearSearchHighlight() {
+	v.searchHighlight = ""
+	v.searchHighlightLine = -1
+	v.MarkAllDirty()
+}
+
+// GlobalOffset returns the global index of the oldest line in the memory buffer.
+// Used by the history navigator to determine valid search ranges.
+func (v *VTerm) GlobalOffset() int64 {
+	if !v.IsMemoryBufferEnabled() {
+		return 0
+	}
+	return v.memBufState.memBuf.GlobalOffset()
+}
+
+// GlobalEnd returns the global index just past the last line (the live edge).
+// Used by the history navigator to determine valid search ranges.
+func (v *VTerm) GlobalEnd() int64 {
+	if !v.IsMemoryBufferEnabled() {
+		return 0
+	}
+	return v.memBufState.memBuf.GlobalEnd()
 }
 
 // LastPromptLine returns the line index of the last shell prompt.
@@ -459,6 +908,13 @@ func (v *VTerm) memoryBufferAtLiveEdge() bool {
 func (v *VTerm) memoryBufferResize(width, height int) {
 	if !v.IsMemoryBufferEnabled() {
 		return
+	}
+
+	// On first resize after initialization with history, load history from disk.
+	// This is deferred until resize because we need to know the viewport height.
+	if !v.memBufState.historyLoaded && v.memBufState.pageStore != nil {
+		v.loadHistoryFromDisk(height)
+		v.memBufState.historyLoaded = true
 	}
 
 	oldHeight := v.memBufState.viewport.Height()

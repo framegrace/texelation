@@ -92,6 +92,15 @@ type TexelTerm struct {
 
 	// State persistence (via texelation storage service)
 	storage texelcore.AppStorage
+
+	// Search index (Phase 3 - Disk Layer)
+	searchIndex *parser.SQLiteSearchIndex
+
+	// History navigator (Phase 4 - Disk Layer)
+	historyNavigator *HistoryNavigator
+
+	// Scrollbar (non-overlay, resizes terminal)
+	scrollbar *ScrollBar
 }
 
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
@@ -238,6 +247,9 @@ func (a *TexelTerm) applyParserStyle(pCell parser.Cell) texelcore.Cell {
 
 func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
+	if a.historyNavigator != nil {
+		a.historyNavigator.SetRefreshNotifier(refreshChan)
+	}
 }
 
 // ControlBus returns the terminal's control bus for external registration.
@@ -437,12 +449,20 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	if rows == 0 {
 		return nil
 	}
-	cols := len(vtermGrid[0])
+	vtermCols := len(vtermGrid[0])
 
-	if len(a.buf) != rows || (rows > 0 && len(a.buf[0]) != cols) {
+	// Calculate total output width (terminal + scrollbar if visible)
+	totalCols := vtermCols
+	scrollbarVisible := a.scrollbar != nil && a.scrollbar.IsVisible()
+	if scrollbarVisible {
+		totalCols = vtermCols + ScrollBarWidth
+	}
+
+	// Resize buffer if needed
+	if len(a.buf) != rows || (rows > 0 && len(a.buf[0]) != totalCols) {
 		a.buf = make([][]texelcore.Cell, rows)
 		for y := range a.buf {
-			a.buf[y] = make([]texelcore.Cell, cols)
+			a.buf[y] = make([]texelcore.Cell, totalCols)
 		}
 		a.vterm.MarkAllDirty()
 	}
@@ -455,7 +475,7 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.logRenderDebug(vtermGrid, cursorX, cursorY, dirtyLines, allDirty)
 
 	renderLine := func(y int) {
-		for x := 0; x < cols; x++ {
+		for x := 0; x < vtermCols; x++ {
 			parserCell := vtermGrid[y][x]
 			a.buf[y][x] = a.applyParserStyle(parserCell)
 			if cursorVisible && x == cursorX && y == cursorY {
@@ -479,8 +499,26 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.vterm.ClearDirty()
 	a.applySelectionHighlightLocked(a.buf)
 
+	// Composite scrollbar on the right side (non-overlay)
+	if scrollbarVisible {
+		scrollbarGrid := a.scrollbar.Render()
+		if scrollbarGrid != nil {
+			for y := 0; y < rows && y < len(scrollbarGrid); y++ {
+				for x := 0; x < ScrollBarWidth && x < len(scrollbarGrid[y]); x++ {
+					a.buf[y][vtermCols+x] = scrollbarGrid[y][x]
+				}
+			}
+		}
+	}
+
 	if a.confirmClose {
 		a.drawConfirmation(a.buf)
+	}
+
+	// Render history navigator overlay (Phase 4 - Disk Layer)
+	// Note: Navigator overlays the terminal content only, not the scrollbar
+	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+		a.buf = a.historyNavigator.Render(a.buf)
 	}
 
 	return a.buf
@@ -723,6 +761,36 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 	a.mu.Unlock()
 
+	// Handle Ctrl+G to open history navigator (Ctrl+G = "goto" in history)
+	// Note: Ctrl+Shift+F doesn't work reliably (CSI u encoding issues)
+	if ev.Key() == tcell.KeyCtrlG {
+		if a.historyNavigator != nil {
+			log.Printf("[HISTORY_NAV] Opening via Ctrl+G")
+			a.historyNavigator.Show()
+			// Also show scrollbar when navigator opens
+			if a.scrollbar != nil {
+				a.scrollbar.Show()
+			}
+			a.requestRefresh()
+			return
+		}
+	}
+
+	// Route keys to history navigator if visible
+	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+		if a.historyNavigator.HandleKey(ev) {
+			return
+		}
+	}
+
+	// Handle Alt+B to toggle scrollbar
+	if ev.Modifiers()&tcell.ModAlt != 0 && ev.Key() == tcell.KeyRune && ev.Rune() == 'b' {
+		if a.scrollbar != nil {
+			a.scrollbar.Toggle()
+		}
+		return
+	}
+
 	if a.pty == nil {
 		return
 	}
@@ -797,6 +865,47 @@ func (a *TexelTerm) MouseWheelEnabled() bool {
 	return true
 }
 
+// HandleMouse handles mouse events in standalone mode.
+// Handles history navigator, scrollbar clicks, then delegates other events to MouseCoordinator.
+func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
+	if ev == nil {
+		return
+	}
+
+	// Check if history navigator is visible and wants the event
+	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+		if a.historyNavigator.HandleMouse(ev) {
+			a.requestRefresh()
+			return
+		}
+	}
+
+	x, y := ev.Position()
+	buttons := ev.Buttons()
+
+	// Check if click is on the scrollbar
+	if a.scrollbar != nil && a.scrollbar.IsVisible() {
+		scrollbarX := a.width - ScrollBarWidth
+		if x >= scrollbarX {
+			// Handle scrollbar click on button press
+			if buttons&tcell.Button1 != 0 {
+				localX := x - scrollbarX
+				if targetOffset, ok := a.scrollbar.HandleClick(localX, y); ok {
+					a.scrollToOffsetWithResultSelection(targetOffset)
+					return
+				}
+			}
+			return // Ignore other scrollbar events
+		}
+	}
+
+	// Delegate to mouse coordinator for terminal content
+	if a.mouseCoordinator != nil {
+		a.mouseCoordinator.HandleMouse(ev)
+	}
+	a.requestRefresh()
+}
+
 // SetClipboard implements ClipboardSetter for standalone mode.
 // Currently disabled pending investigation of clipboard crash issues.
 func (a *TexelTerm) SetClipboard(mime string, data []byte) {
@@ -805,6 +914,29 @@ func (a *TexelTerm) SetClipboard(mime string, data []byte) {
 
 // SelectionStart implements texelcore.SelectionHandler.
 func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
+	// Check if history navigator is visible and wants the event
+	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+		ev := tcell.NewEventMouse(x, y, buttons, modifiers)
+		if a.historyNavigator.HandleMouse(ev) {
+			a.requestRefresh()
+			return true
+		}
+	}
+
+	// Check if click is on the scrollbar
+	if a.scrollbar != nil && a.scrollbar.IsVisible() {
+		scrollbarX := a.width - ScrollBarWidth
+		if x >= scrollbarX {
+			// Handle scrollbar click
+			localX := x - scrollbarX
+			if targetOffset, ok := a.scrollbar.HandleClick(localX, y); ok {
+				a.scrollToOffsetWithResultSelection(targetOffset)
+				return true
+			}
+			return false
+		}
+	}
+
 	if a.mouseCoordinator == nil {
 		return false
 	}
@@ -989,14 +1121,24 @@ func (a *TexelTerm) ensureShellIntegrationScripts(configDir string) error {
 	return nil
 }
 
+// StandalonePaneID is the fixed pane ID used for standalone texelterm.
+// This ensures standalone sessions have persistent history and search index
+// that survives across sessions, separate from texelation pane IDs.
+const StandalonePaneID = "standalone-texelterm"
+
 func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
 	cols, rows := a.width, a.height
 	isRestart := a.vterm != nil
 	paneID := a.paneID
+	// Use standalone pane ID if not embedded in texelation
+	if paneID == "" {
+		paneID = StandalonePaneID
+		a.paneID = paneID
+	}
 	a.mu.Unlock()
 
-	log.Printf("[TEXELTERM] runShell starting: cols=%d, rows=%d, restart=%v", cols, rows, isRestart)
+	log.Printf("[TEXELTERM] runShell starting: cols=%d, rows=%d, restart=%v, paneID=%s", cols, rows, isRestart, paneID)
 
 	// Load environment and working directory from pane-specific file
 	env, cwd := a.loadShellEnvironment(paneID)
@@ -1155,11 +1297,27 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		a.initializeMemoryBufferLocked(paneID, cfg)
 	}
 
+	// Initialize scrollbar (non-overlay, resizes terminal)
+	// Callback triggers terminal resize when visibility changes
+	a.scrollbar = NewScrollBar(a.vterm, func(visible bool) {
+		// Resize is called from outside the lock, so we need to call it unlocked
+		go func() {
+			a.Resize(a.width, a.height)
+			a.requestRefresh()
+		}()
+	})
+	a.scrollbar.Resize(rows)
+
 	// Initialize mouse coordinator for selection handling
 	// Load config values for auto-scroll
 	scrollConfig := AutoScrollConfig{
 		EdgeZone:       cfg.GetInt("texelterm.selection", "edge_zone", 2),
 		MaxScrollSpeed: cfg.GetInt("texelterm.selection", "max_scroll_speed", 15),
+	}
+	// Calculate terminal width (accounting for scrollbar)
+	termWidth := cols
+	if a.scrollbar.IsVisible() {
+		termWidth = cols - ScrollBarWidth
 	}
 	a.mouseCoordinator = NewMouseCoordinator(
 		NewVTermAdapter(a.vterm),     // VTermProvider for selection
@@ -1167,7 +1325,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		a,                            // MouseWheelHandler
 		scrollConfig,
 	)
-	a.mouseCoordinator.SetSize(cols, rows)
+	a.mouseCoordinator.SetSize(termWidth, rows)
 	a.mouseCoordinator.SetCallbacks(
 		func() { a.vterm.MarkAllDirty() },
 		a.requestRefresh,
@@ -1195,7 +1353,7 @@ func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Confi
 		}
 	}
 
-	log.Printf("[TEXELTERM] memoryBufferEnabled=true, paneID=%q", paneID)
+	log.Printf("[TEXELTERM] memoryBufferEnabled=true, paneID=%q, historyPersistDir=%q", paneID, historyPersistDir)
 
 	if paneID != "" {
 		scrollbackDir := filepath.Join(historyPersistDir, "scrollback")
@@ -1209,12 +1367,60 @@ func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Confi
 			MaxLines:      historyMemoryLines,
 			EvictionBatch: 1000,
 			DiskPath:      diskPath,
+			TerminalID:    paneID, // Use paneID as terminal ID for persistent history
 		})
 		if err != nil {
 			log.Printf("[MEMORY_BUFFER] Failed to enable disk-backed buffer: %v", err)
 			a.vterm.EnableMemoryBuffer()
 		} else {
 			log.Printf("[MEMORY_BUFFER] Enabled with disk persistence: %s", diskPath)
+		}
+
+		// Initialize search index (Phase 3 - Disk Layer)
+		indexPath := filepath.Join(scrollbackDir, paneID+".index.db")
+		if idx, err := parser.NewSearchIndex(indexPath); err != nil {
+			log.Printf("[SEARCH_INDEX] Failed to initialize: %v", err)
+		} else {
+			a.searchIndex = idx
+			log.Printf("[SEARCH_INDEX] Initialized at %s", indexPath)
+
+			// Wire up the line index callback - called AFTER line is persisted to WAL
+			// This ensures search index only has entries for content that exists on disk
+			a.vterm.SetOnLineIndexed(func(lineIdx int64, line *parser.LogicalLine, timestamp time.Time, isCommand bool) {
+				if line == nil {
+					return
+				}
+				text := parser.ExtractText(line.Cells)
+				if text != "" {
+					a.searchIndex.IndexLine(lineIdx, timestamp, text, isCommand)
+				} else {
+					// Line was erased - remove from index to prevent stale matches
+					a.searchIndex.DeleteLine(lineIdx)
+				}
+			})
+
+			// Initialize history navigator (Phase 4 - Disk Layer)
+			a.historyNavigator = NewHistoryNavigator(a.vterm, idx, func() {
+				// Close callback: return to live edge when navigator closes
+				a.vterm.ScrollToLiveEdge()
+				// Hide scrollbar and clear search highlights when navigator closes
+				if a.scrollbar != nil {
+					a.scrollbar.Hide()
+					a.scrollbar.ClearSearchResults()
+				}
+				a.requestRefresh()
+			})
+			a.historyNavigator.SetRefreshNotifier(a.refreshChan)
+			a.historyNavigator.Resize(a.width, a.height) // Initialize size
+			log.Printf("[HISTORY_NAV] Initialized with size %dx%d", a.width, a.height)
+
+			// Wire up search results to scrollbar for minimap highlighting
+			a.historyNavigator.SetSearchResultsCallback(func(results []parser.SearchResult) {
+				if a.scrollbar != nil {
+					a.scrollbar.SetSearchResults(results)
+					a.requestRefresh()
+				}
+			})
 		}
 	} else {
 		a.vterm.EnableMemoryBuffer()
@@ -1291,9 +1497,11 @@ func (a *TexelTerm) runPtyReaderLoop(ptmx *os.File, cmd *exec.Cmd) error {
 
 			if syncEnded {
 				a.vterm.MarkAllDirty()
+				a.invalidateScrollbar()
 				a.requestRefresh()
 			} else if !a.vterm.InSynchronizedUpdate {
 				if reader.Buffered() == 0 {
+					a.invalidateScrollbar()
 					a.requestRefresh()
 				}
 			}
@@ -1334,16 +1542,33 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	a.width = cols
 	a.height = rows
 
+	// Calculate terminal width (accounting for scrollbar if visible)
+	termWidth := cols
+	if a.scrollbar != nil && a.scrollbar.IsVisible() {
+		termWidth = cols - ScrollBarWidth
+		if termWidth < 1 {
+			termWidth = 1
+		}
+	}
+
 	if a.vterm != nil {
-		a.vterm.Resize(cols, rows)
+		a.vterm.Resize(termWidth, rows)
+	}
+
+	if a.scrollbar != nil {
+		a.scrollbar.Resize(rows)
 	}
 
 	if a.mouseCoordinator != nil {
-		a.mouseCoordinator.SetSize(cols, rows)
+		a.mouseCoordinator.SetSize(termWidth, rows)
+	}
+
+	if a.historyNavigator != nil {
+		a.historyNavigator.Resize(termWidth, rows)
 	}
 
 	if a.pty != nil {
-		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(rows), Cols: uint16(termWidth)})
 	}
 }
 
@@ -1367,6 +1592,14 @@ func (a *TexelTerm) Stop() {
 			if err := a.vterm.CloseMemoryBuffer(); err != nil {
 				log.Printf("Error closing memory buffer: %v", err)
 			}
+		}
+
+		// Close search index (flushes pending writes)
+		if a.searchIndex != nil {
+			if err := a.searchIndex.Close(); err != nil {
+				log.Printf("Error closing search index: %v", err)
+			}
+			a.searchIndex = nil
 		}
 
 		a.cmd = nil
@@ -1426,12 +1659,167 @@ func (a *TexelTerm) respondToColorQuery(code int) {
 	}
 }
 
+// scrollToOffsetAnimated scrolls to the target offset with animation for short distances.
+func (a *TexelTerm) scrollToOffsetAnimated(targetOffset int64) {
+	if a.vterm == nil {
+		return
+	}
+
+	currentOffset := a.vterm.ScrollOffset()
+	distance := targetOffset - currentOffset
+	if distance < 0 {
+		distance = -distance
+	}
+
+	// Use history navigator's animation settings if available
+	maxAnimLines := int64(500) // Default threshold
+	if a.historyNavigator != nil {
+		maxAnimLines = a.historyNavigator.ScrollAnimMaxLines
+	}
+
+	// For short distances, animate line by line
+	if maxAnimLines > 0 && distance <= maxAnimLines && distance > 0 {
+		a.animateScrollToOffset(currentOffset, targetOffset)
+	} else {
+		// Jump directly for long distances
+		a.vterm.SetScrollOffset(targetOffset)
+	}
+}
+
+// animateScrollToOffset animates scrolling from current to target offset.
+func (a *TexelTerm) animateScrollToOffset(startOffset, targetOffset int64) {
+	a.animateScrollToOffsetWithDone(startOffset, targetOffset, nil)
+}
+
+// animateScrollToOffsetWithDone animates scrolling and optionally signals completion.
+// If done is non-nil, it will be closed when the animation completes.
+func (a *TexelTerm) animateScrollToOffsetWithDone(startOffset, targetOffset int64, done chan struct{}) {
+	if a.vterm == nil {
+		if done != nil {
+			close(done)
+		}
+		return
+	}
+
+	distance := targetOffset - startOffset
+	if distance < 0 {
+		distance = -distance
+	}
+	if distance == 0 {
+		if done != nil {
+			close(done)
+		}
+		return
+	}
+
+	// Get animation settings from history navigator or use defaults
+	minTime := 100 * time.Millisecond
+	maxTime := 500 * time.Millisecond
+	maxLines := int64(500)
+	frameRate := 60
+
+	if a.historyNavigator != nil {
+		minTime = a.historyNavigator.ScrollAnimMinTime
+		maxTime = a.historyNavigator.ScrollAnimMaxTime
+		maxLines = a.historyNavigator.ScrollAnimMaxLines
+		frameRate = a.historyNavigator.ScrollAnimFrameRate
+	}
+
+	// Calculate duration based on distance
+	durationRange := maxTime - minTime
+	distanceRatio := float64(distance) / float64(maxLines)
+	if distanceRatio > 1 {
+		distanceRatio = 1
+	}
+	duration := minTime + time.Duration(float64(durationRange)*distanceRatio)
+
+	// Animate in a goroutine
+	go func() {
+		defer func() {
+			if done != nil {
+				close(done)
+			}
+		}()
+
+		startTime := time.Now()
+		ticker := time.NewTicker(time.Second / time.Duration(frameRate))
+		defer ticker.Stop()
+
+		for range ticker.C {
+			elapsed := time.Since(startTime)
+			if elapsed >= duration {
+				a.vterm.SetScrollOffset(targetOffset)
+				a.requestRefresh()
+				return
+			}
+
+			// Use ease-out cubic easing
+			t := float64(elapsed) / float64(duration)
+			eased := 1 - (1-t)*(1-t)*(1-t) // ease-out cubic
+
+			currentOffset := startOffset + int64(float64(targetOffset-startOffset)*eased)
+			a.vterm.SetScrollOffset(currentOffset)
+			a.requestRefresh()
+		}
+	}()
+}
+
+// scrollToOffsetWithResultSelection scrolls to the target offset with animation
+// and selects the closest search result after animation completes.
+func (a *TexelTerm) scrollToOffsetWithResultSelection(targetOffset int64) {
+	if a.vterm == nil {
+		return
+	}
+
+	currentOffset := a.vterm.ScrollOffset()
+	distance := targetOffset - currentOffset
+	if distance < 0 {
+		distance = -distance
+	}
+
+	maxAnimLines := int64(500)
+	if a.historyNavigator != nil {
+		maxAnimLines = a.historyNavigator.ScrollAnimMaxLines
+	}
+
+	// Callback to select result after scroll completes
+	selectResult := func() {
+		if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+			a.historyNavigator.SelectClosestResultInViewport()
+			a.requestRefresh()
+		}
+	}
+
+	if maxAnimLines > 0 && distance <= maxAnimLines && distance > 0 {
+		// Animate and wait for completion in a goroutine
+		done := make(chan struct{})
+		a.animateScrollToOffsetWithDone(currentOffset, targetOffset, done)
+		go func() {
+			<-done
+			selectResult()
+		}()
+	} else {
+		// Jump directly for long distances
+		a.vterm.SetScrollOffset(targetOffset)
+		selectResult()
+	}
+
+	a.requestRefresh()
+}
+
 func (a *TexelTerm) requestRefresh() {
 	if a.refreshChan != nil {
 		select {
 		case a.refreshChan <- true:
 		default:
 		}
+	}
+}
+
+// invalidateScrollbar marks the scrollbar minimap cache as stale.
+func (a *TexelTerm) invalidateScrollbar() {
+	if a.scrollbar != nil {
+		a.scrollbar.Invalidate()
 	}
 }
 

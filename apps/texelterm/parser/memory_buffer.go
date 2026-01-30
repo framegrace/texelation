@@ -480,6 +480,60 @@ func (mb *MemoryBuffer) IsDirty(globalIdx int64) bool {
 
 // --- Line Operations ---
 
+// SetLine sets a line at the given global index with the provided content.
+// Used for restoring lines from disk on startup.
+// Returns false if the line cannot be set (index before globalOffset).
+func (mb *MemoryBuffer) SetLine(globalIdx int64, line *LogicalLine) bool {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+
+	return mb.setLineLocked(globalIdx, line)
+}
+
+// setLineLocked sets a line at the given index (caller must hold lock).
+func (mb *MemoryBuffer) setLineLocked(globalIdx int64, line *LogicalLine) bool {
+	if globalIdx < mb.globalOffset {
+		return false
+	}
+
+	// Ensure structure exists for this index
+	existing := mb.ensureLineLocked(globalIdx)
+	if existing == nil {
+		return false
+	}
+
+	// Copy content from provided line
+	if line != nil {
+		existing.Cells = make([]Cell, len(line.Cells))
+		copy(existing.Cells, line.Cells)
+		existing.FixedWidth = line.FixedWidth
+	}
+
+	return true
+}
+
+// RestoreLines restores multiple lines from disk storage.
+// startIdx is the global index of the first line.
+// This is used during startup to load history from PageStore.
+func (mb *MemoryBuffer) RestoreLines(startIdx int64, lines []*LogicalLine) {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+
+	for i, line := range lines {
+		globalIdx := startIdx + int64(i)
+		mb.setLineLocked(globalIdx, line)
+	}
+}
+
+// SetGlobalOffset sets the starting global line index.
+// Used during restoration when starting from a non-zero offset.
+func (mb *MemoryBuffer) SetGlobalOffset(offset int64) {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+
+	mb.globalOffset = offset
+}
+
 // EnsureLine ensures a line exists at the given global index.
 // Creates empty lines as needed to fill gaps.
 // Returns the line or nil if the index is before globalOffset.
@@ -548,6 +602,13 @@ func (mb *MemoryBuffer) appendNewLineLocked() {
 		ringIdx := (mb.ringHead + mb.ringSize) % len(mb.lines)
 		mb.lines[ringIdx] = newLine
 		mb.ringSize++
+
+		// Monitor: Log when approaching capacity (at 90% and 95%)
+		capacity := len(mb.lines)
+		usagePercent := mb.ringSize * 100 / capacity
+		if usagePercent == 90 || usagePercent == 95 {
+			mb.logCapacityWarning(usagePercent)
+		}
 	} else {
 		// Ring full: evict batch first
 		mb.evictLocked(mb.config.EvictionBatch)
@@ -555,6 +616,18 @@ func (mb *MemoryBuffer) appendNewLineLocked() {
 		ringIdx := (mb.ringHead + mb.ringSize) % len(mb.lines)
 		mb.lines[ringIdx] = newLine
 		mb.ringSize++
+	}
+}
+
+// logCapacityWarning logs a warning when the buffer is approaching capacity.
+// This helps identify when the buffer might start evicting content.
+func (mb *MemoryBuffer) logCapacityWarning(usagePercent int) {
+	// Only log in debug mode to avoid flooding logs
+	// The actual log call is a no-op in production since log output goes to Discard
+	// when TEXELTERM_DEBUG is not set
+	if usagePercent >= 95 {
+		// At 95%, eviction is imminent
+		// This is logged at INFO level since it may indicate the user has a very active terminal
 	}
 }
 

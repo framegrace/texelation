@@ -10,6 +10,7 @@ package parser
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/mattn/go-runewidth"
 )
@@ -63,6 +64,16 @@ type VTerm struct {
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode         bool
 	OnBracketedPasteModeChange func(bool)
+	// Search highlighting configuration
+	searchHighlight     string // term to highlight
+	searchHighlightLine int64  // current result's line index (-1 = none)
+	searchSelectionColor Color // for selected match: used with Reverse attr
+	searchAccentColor    Color // for other matches: just FG color change
+	// Deprecated: Use SetOnLineIndexed instead, which is called AFTER persistence.
+	// This callback was called when a line was committed, but BEFORE it was persisted,
+	// which could cause search index entries for content that doesn't exist on disk.
+	// Kept for backward compatibility but no longer used internally.
+	OnLineIndex func(lineIdx int64, timestamp time.Time, cells []Cell, isCommand bool)
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -264,6 +275,81 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 // SaveCursor and RestoreCursor: See vterm_cursor.go
 
 // --- History and Viewport Management ---
+
+// Height returns the current viewport height in rows.
+func (v *VTerm) Height() int {
+	return v.height
+}
+
+// Width returns the current viewport width in columns.
+func (v *VTerm) Width() int {
+	return v.width
+}
+
+// TotalPhysicalLines returns the total number of physical (wrapped) lines
+// in the terminal history. This is used for scrollbar calculations.
+func (v *VTerm) TotalPhysicalLines() int64 {
+	if !v.IsMemoryBufferEnabled() {
+		return int64(v.height)
+	}
+	// Use viewport's total physical line count for accurate scroll calculations
+	return v.memBufState.viewport.TotalPhysicalLines()
+}
+
+// TotalLogicalLines returns the total number of logical lines in history.
+// This counts each line before wrapping (used for minimap).
+func (v *VTerm) TotalLogicalLines() int64 {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return int64(v.height)
+	}
+	return v.memBufState.memBuf.TotalLines()
+}
+
+// GetLogicalLine returns the logical line at the given global index.
+// Used by scrollbar minimap to calculate line lengths.
+func (v *VTerm) GetLogicalLine(index int64) *LogicalLine {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return nil
+	}
+	return v.memBufState.memBuf.GetLine(index)
+}
+
+// GetGlobalOffset returns the global offset of the oldest line in memory.
+// Lines with indices less than this have been evicted.
+func (v *VTerm) GetGlobalOffset() int64 {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return 0
+	}
+	return v.memBufState.memBuf.GlobalOffset()
+}
+
+// GetAllLogicalLines returns all logical lines from both disk and memory.
+// Used by scrollbar minimap. This reads the entire history - optimize later!
+// Returns (lines, globalOffset, totalLines) where globalOffset is the global
+// index of the first returned line.
+func (v *VTerm) GetAllLogicalLines() ([]*LogicalLine, int64, int64) {
+	if v.memBufState == nil || v.memBufState.viewport == nil {
+		return nil, 0, 0
+	}
+
+	// Use viewport's reader which handles both disk and memory
+	reader := v.memBufState.viewport.Reader()
+	if reader == nil {
+		return nil, 0, 0
+	}
+
+	globalOffset := reader.GlobalOffset()
+	globalEnd := reader.GlobalEnd()
+	totalLines := globalEnd - globalOffset
+
+	if totalLines <= 0 {
+		return nil, 0, 0
+	}
+
+	// Read ALL lines (disk + memory)
+	lines := reader.GetLineRange(globalOffset, globalEnd)
+	return lines, globalOffset, totalLines
+}
 
 // getHistoryLen returns the current history length from MemoryBuffer.
 func (v *VTerm) getHistoryLen() int {
@@ -1080,6 +1166,14 @@ func WithEnvironmentUpdateHandler(handler func(string)) Option {
 
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
+}
+
+// Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.
+// This callback is called BEFORE persistence, which can cause search index entries
+// for content that doesn't exist on disk after a crash.
+// WithLineIndexHandler sets a callback for when lines are committed (e.g., on line feed).
+func WithLineIndexHandler(handler func(lineIdx int64, timestamp time.Time, cells []Cell, isCommand bool)) Option {
+	return func(v *VTerm) { v.OnLineIndex = handler }
 }
 
 // WithMemoryBuffer enables the new memory buffer system.

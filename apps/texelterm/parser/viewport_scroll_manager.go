@@ -139,19 +139,27 @@ func (sm *ScrollManager) MaxScrollOffset() int64 {
 }
 
 // TotalPhysicalLines returns the total number of physical lines at current width.
+// For performance, only calculates exact physical lines for in-memory content.
+// Disk content (before MemoryBufferOffset) is estimated at 1 physical line per logical line.
 func (sm *ScrollManager) TotalPhysicalLines() int64 {
-	globalStart := sm.reader.GlobalOffset()
+	globalOffset := sm.reader.GlobalOffset()
+	memOffset := sm.reader.MemoryBufferOffset()
 	globalEnd := sm.reader.GlobalEnd()
 
-	var total int64
-	for idx := globalStart; idx < globalEnd; idx++ {
+	// Estimate disk content (before memory): 1 physical line per logical line
+	diskLines := memOffset - globalOffset
+
+	// Calculate exact physical lines for in-memory content
+	var memPhysical int64
+	for idx := memOffset; idx < globalEnd; idx++ {
 		line := sm.reader.GetLine(idx)
 		if line != nil {
 			wrapped := sm.builder.BuildLine(line, idx)
-			total += int64(len(wrapped))
+			memPhysical += int64(len(wrapped))
 		}
 	}
-	return total
+
+	return diskLines + memPhysical
 }
 
 // VisibleRange returns the global line indices that should be visible.
@@ -162,6 +170,7 @@ func (sm *ScrollManager) TotalPhysicalLines() int64 {
 // The caller must wrap these lines to get the actual physical lines to display.
 func (sm *ScrollManager) VisibleRange(viewportHeight int) (startGlobalIdx, endGlobalIdx int64) {
 	globalOffset := sm.reader.GlobalOffset()
+	memOffset := sm.reader.MemoryBufferOffset()
 	globalEnd := sm.reader.GlobalEnd()
 
 	if globalEnd <= globalOffset {
@@ -169,25 +178,48 @@ func (sm *ScrollManager) VisibleRange(viewportHeight int) (startGlobalIdx, endGl
 		return globalOffset, globalOffset
 	}
 
-	// We need to work backwards from the end to find which logical lines
-	// produce the physical lines we want to display
+	// Calculate total physical lines and target range
 	totalPhysical := sm.TotalPhysicalLines()
-
-	// The last physical line we want to show is at (totalPhysical - scrollOffset - 1)
-	// The first physical line we want to show is that minus viewportHeight
 	physicalEnd := min(totalPhysical-sm.scrollOffset, totalPhysical)
 	physicalStart := max(physicalEnd-int64(viewportHeight), 0)
 
-	// Now find which logical lines contain these physical lines
-	// We need to find the logical line that contains physicalStart
-	// and the logical line that contains physicalEnd-1
+	// Disk content uses 1:1 logical:physical mapping (estimation)
+	diskLines := memOffset - globalOffset
 
+	// If entire visible range is in disk content, use direct mapping
+	if physicalEnd <= diskLines {
+		startGlobalIdx = globalOffset + physicalStart
+		endGlobalIdx = globalOffset + physicalEnd
+		return startGlobalIdx, min(endGlobalIdx, memOffset)
+	}
+
+	// If entire visible range is in memory, use exact calculation
+	if physicalStart >= diskLines {
+		memPhysicalStart := physicalStart - diskLines
+		memPhysicalEnd := physicalEnd - diskLines
+		return sm.findLogicalRangeInMemory(memOffset, globalEnd, memPhysicalStart, memPhysicalEnd)
+	}
+
+	// Range spans disk and memory - handle both parts
+	// Disk part: lines from globalOffset to memOffset
+	startGlobalIdx = globalOffset + physicalStart
+
+	// Memory part: find where physical line (physicalEnd - diskLines) falls
+	memPhysicalEnd := physicalEnd - diskLines
+	_, endGlobalIdx = sm.findLogicalRangeInMemory(memOffset, globalEnd, 0, memPhysicalEnd)
+
+	return startGlobalIdx, endGlobalIdx
+}
+
+// findLogicalRangeInMemory finds which logical lines contain the given physical line range.
+// Only iterates through in-memory content for performance.
+func (sm *ScrollManager) findLogicalRangeInMemory(memStart, memEnd, physicalStart, physicalEnd int64) (startGlobalIdx, endGlobalIdx int64) {
 	var runningPhysical int64
 	startFound := false
-	startGlobalIdx = globalOffset
-	endGlobalIdx = globalEnd
+	startGlobalIdx = memStart
+	endGlobalIdx = memEnd
 
-	for idx := globalOffset; idx < globalEnd; idx++ {
+	for idx := memStart; idx < memEnd; idx++ {
 		line := sm.reader.GetLine(idx)
 		physicalCount := int64(1)
 		if line != nil {
