@@ -98,6 +98,9 @@ type TexelTerm struct {
 
 	// History navigator (Phase 4 - Disk Layer)
 	historyNavigator *HistoryNavigator
+
+	// Scrollbar (non-overlay, resizes terminal)
+	scrollbar *ScrollBar
 }
 
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
@@ -446,12 +449,20 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	if rows == 0 {
 		return nil
 	}
-	cols := len(vtermGrid[0])
+	vtermCols := len(vtermGrid[0])
 
-	if len(a.buf) != rows || (rows > 0 && len(a.buf[0]) != cols) {
+	// Calculate total output width (terminal + scrollbar if visible)
+	totalCols := vtermCols
+	scrollbarVisible := a.scrollbar != nil && a.scrollbar.IsVisible()
+	if scrollbarVisible {
+		totalCols = vtermCols + ScrollBarWidth
+	}
+
+	// Resize buffer if needed
+	if len(a.buf) != rows || (rows > 0 && len(a.buf[0]) != totalCols) {
 		a.buf = make([][]texelcore.Cell, rows)
 		for y := range a.buf {
-			a.buf[y] = make([]texelcore.Cell, cols)
+			a.buf[y] = make([]texelcore.Cell, totalCols)
 		}
 		a.vterm.MarkAllDirty()
 	}
@@ -464,7 +475,7 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.logRenderDebug(vtermGrid, cursorX, cursorY, dirtyLines, allDirty)
 
 	renderLine := func(y int) {
-		for x := 0; x < cols; x++ {
+		for x := 0; x < vtermCols; x++ {
 			parserCell := vtermGrid[y][x]
 			a.buf[y][x] = a.applyParserStyle(parserCell)
 			if cursorVisible && x == cursorX && y == cursorY {
@@ -488,11 +499,24 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.vterm.ClearDirty()
 	a.applySelectionHighlightLocked(a.buf)
 
+	// Composite scrollbar on the right side (non-overlay)
+	if scrollbarVisible {
+		scrollbarGrid := a.scrollbar.Render()
+		if scrollbarGrid != nil {
+			for y := 0; y < rows && y < len(scrollbarGrid); y++ {
+				for x := 0; x < ScrollBarWidth && x < len(scrollbarGrid[y]); x++ {
+					a.buf[y][vtermCols+x] = scrollbarGrid[y][x]
+				}
+			}
+		}
+	}
+
 	if a.confirmClose {
 		a.drawConfirmation(a.buf)
 	}
 
 	// Render history navigator overlay (Phase 4 - Disk Layer)
+	// Note: Navigator overlays the terminal content only, not the scrollbar
 	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
 		a.buf = a.historyNavigator.Render(a.buf)
 	}
@@ -753,6 +777,14 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		if a.historyNavigator.HandleKey(ev) {
 			return
 		}
+	}
+
+	// Handle Alt+B to toggle scrollbar
+	if ev.Modifiers()&tcell.ModAlt != 0 && ev.Key() == tcell.KeyRune && ev.Rune() == 'b' {
+		if a.scrollbar != nil {
+			a.scrollbar.Toggle()
+		}
+		return
 	}
 
 	if a.pty == nil {
@@ -1197,11 +1229,27 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		a.initializeMemoryBufferLocked(paneID, cfg)
 	}
 
+	// Initialize scrollbar (non-overlay, resizes terminal)
+	// Callback triggers terminal resize when visibility changes
+	a.scrollbar = NewScrollBar(a.vterm, func(visible bool) {
+		// Resize is called from outside the lock, so we need to call it unlocked
+		go func() {
+			a.Resize(a.width, a.height)
+			a.requestRefresh()
+		}()
+	})
+	a.scrollbar.Resize(rows)
+
 	// Initialize mouse coordinator for selection handling
 	// Load config values for auto-scroll
 	scrollConfig := AutoScrollConfig{
 		EdgeZone:       cfg.GetInt("texelterm.selection", "edge_zone", 2),
 		MaxScrollSpeed: cfg.GetInt("texelterm.selection", "max_scroll_speed", 15),
+	}
+	// Calculate terminal width (accounting for scrollbar)
+	termWidth := cols
+	if a.scrollbar.IsVisible() {
+		termWidth = cols - ScrollBarWidth
 	}
 	a.mouseCoordinator = NewMouseCoordinator(
 		NewVTermAdapter(a.vterm),     // VTermProvider for selection
@@ -1209,7 +1257,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		a,                            // MouseWheelHandler
 		scrollConfig,
 	)
-	a.mouseCoordinator.SetSize(cols, rows)
+	a.mouseCoordinator.SetSize(termWidth, rows)
 	a.mouseCoordinator.SetCallbacks(
 		func() { a.vterm.MarkAllDirty() },
 		a.requestRefresh,
@@ -1411,20 +1459,33 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	a.width = cols
 	a.height = rows
 
+	// Calculate terminal width (accounting for scrollbar if visible)
+	termWidth := cols
+	if a.scrollbar != nil && a.scrollbar.IsVisible() {
+		termWidth = cols - ScrollBarWidth
+		if termWidth < 1 {
+			termWidth = 1
+		}
+	}
+
 	if a.vterm != nil {
-		a.vterm.Resize(cols, rows)
+		a.vterm.Resize(termWidth, rows)
+	}
+
+	if a.scrollbar != nil {
+		a.scrollbar.Resize(rows)
 	}
 
 	if a.mouseCoordinator != nil {
-		a.mouseCoordinator.SetSize(cols, rows)
+		a.mouseCoordinator.SetSize(termWidth, rows)
 	}
 
 	if a.historyNavigator != nil {
-		a.historyNavigator.Resize(cols, rows)
+		a.historyNavigator.Resize(termWidth, rows)
 	}
 
 	if a.pty != nil {
-		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(rows), Cols: uint16(termWidth)})
 	}
 }
 

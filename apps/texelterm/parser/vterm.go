@@ -276,6 +276,79 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 
 // --- History and Viewport Management ---
 
+// Height returns the current viewport height in rows.
+func (v *VTerm) Height() int {
+	return v.height
+}
+
+// Width returns the current viewport width in columns.
+func (v *VTerm) Width() int {
+	return v.width
+}
+
+// TotalPhysicalLines returns the total number of physical (wrapped) lines
+// in the terminal history. This is used for scrollbar calculations.
+func (v *VTerm) TotalPhysicalLines() int64 {
+	if !v.IsMemoryBufferEnabled() {
+		return int64(v.height)
+	}
+	// Use viewport's total physical line count for accurate scroll calculations
+	return v.memBufState.viewport.TotalPhysicalLines()
+}
+
+// TotalLogicalLines returns the total number of logical lines in history.
+// This counts each line before wrapping (used for minimap).
+func (v *VTerm) TotalLogicalLines() int64 {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return int64(v.height)
+	}
+	return v.memBufState.memBuf.TotalLines()
+}
+
+// GetLogicalLine returns the logical line at the given global index.
+// Used by scrollbar minimap to calculate line lengths.
+func (v *VTerm) GetLogicalLine(index int64) *LogicalLine {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return nil
+	}
+	return v.memBufState.memBuf.GetLine(index)
+}
+
+// GetGlobalOffset returns the global offset of the oldest line in memory.
+// Lines with indices less than this have been evicted.
+func (v *VTerm) GetGlobalOffset() int64 {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return 0
+	}
+	return v.memBufState.memBuf.GlobalOffset()
+}
+
+// GetAllLogicalLines returns all logical lines from both disk and memory.
+// Used by scrollbar minimap. This reads the entire history - optimize later!
+func (v *VTerm) GetAllLogicalLines() ([]*LogicalLine, int64) {
+	if v.memBufState == nil || v.memBufState.viewport == nil {
+		return nil, 0
+	}
+
+	// Use viewport's reader which handles both disk and memory
+	reader := v.memBufState.viewport.Reader()
+	if reader == nil {
+		return nil, 0
+	}
+
+	globalOffset := reader.GlobalOffset()
+	globalEnd := reader.GlobalEnd()
+	totalLines := globalEnd - globalOffset
+
+	if totalLines <= 0 {
+		return nil, 0
+	}
+
+	// Read ALL lines (disk + memory)
+	lines := reader.GetLineRange(globalOffset, globalEnd)
+	return lines, totalLines
+}
+
 // getHistoryLen returns the current history length from MemoryBuffer.
 func (v *VTerm) getHistoryLen() int {
 	if v.memBufState == nil || v.memBufState.memBuf == nil {
