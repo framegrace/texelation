@@ -2,6 +2,8 @@ module github.com/framegrace/texelation
 
 go 1.24.3
 
+replace github.com/framegrace/texelui => ../texelui
+
 require (
 	github.com/creack/pty v1.1.24
 	github.com/framegrace/texelui v0.2.2
