@@ -21,9 +21,7 @@ type appAdapter struct {
 }
 
 var _ Card = (*appAdapter)(nil)
-var _ texelcore.SelectionDeclarer = (*appAdapter)(nil)
-var _ texelcore.MouseWheelHandler = (*appAdapter)(nil)
-var _ texelcore.MouseWheelDeclarer = (*appAdapter)(nil)
+var _ texelcore.MouseHandler = (*appAdapter)(nil)
 
 func (a *appAdapter) Run() error                                     { return a.app.Run() }
 func (a *appAdapter) Stop()                                          { a.app.Stop() }
@@ -32,51 +30,11 @@ func (a *appAdapter) Render(_ [][]texelcore.Cell) [][]texelcore.Cell { return a.
 func (a *appAdapter) HandleKey(ev *tcell.EventKey)                   { a.app.HandleKey(ev) }
 func (a *appAdapter) SetRefreshNotifier(ch chan<- bool)              { a.app.SetRefreshNotifier(ch) }
 
-// Selection handling delegates to the underlying app when available.
-func (a *appAdapter) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
-	if handler, ok := a.app.(texelcore.SelectionHandler); ok {
-		return handler.SelectionStart(x, y, buttons, modifiers)
+// HandleMouse delegates to the underlying app when available.
+func (a *appAdapter) HandleMouse(ev *tcell.EventMouse) {
+	if handler, ok := a.app.(texelcore.MouseHandler); ok {
+		handler.HandleMouse(ev)
 	}
-	return false
-}
-
-func (a *appAdapter) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
-	if handler, ok := a.app.(texelcore.SelectionHandler); ok {
-		handler.SelectionUpdate(x, y, buttons, modifiers)
-	}
-}
-
-func (a *appAdapter) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
-	if handler, ok := a.app.(texelcore.SelectionHandler); ok {
-		return handler.SelectionFinish(x, y, buttons, modifiers)
-	}
-	return "", nil, false
-}
-
-func (a *appAdapter) SelectionCancel() {
-	if handler, ok := a.app.(texelcore.SelectionHandler); ok {
-		handler.SelectionCancel()
-	}
-}
-
-func (a *appAdapter) SelectionEnabled() bool {
-	_, ok := a.app.(texelcore.SelectionHandler)
-	return ok
-}
-
-// Mouse wheel handling delegates to the underlying app when available.
-func (a *appAdapter) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {
-	if handler, ok := a.app.(texelcore.MouseWheelHandler); ok {
-		handler.HandleMouseWheel(x, y, deltaX, deltaY, modifiers)
-	}
-}
-
-func (a *appAdapter) MouseWheelEnabled() bool {
-	if declarer, ok := a.app.(texelcore.MouseWheelDeclarer); ok {
-		return declarer.MouseWheelEnabled()
-	}
-	_, ok := a.app.(texelcore.MouseWheelHandler)
-	return ok
 }
 
 func (a *appAdapter) UnderlyingApp() texelcore.App {

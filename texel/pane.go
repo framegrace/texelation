@@ -36,10 +36,8 @@ type pane struct {
 	prevBuf                    [][]Cell
 	screen                     *Workspace
 	id                         [16]byte
-	selectionHandler           SelectionHandler
-	handlesSelection           bool
-	wheelHandler               MouseWheelHandler
-	handlesWheel               bool
+	mouseHandler               MouseHandler
+	handlesMouse               bool
 
 	// Public state fields
 	IsActive   bool
@@ -112,35 +110,24 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.screen.Subscribe(listener)
 	}
 
-	// Check pipeline for selection/wheel handlers (fallback to app for backwards compat)
-	p.selectionHandler = nil
-	p.handlesSelection = false
+	// Inject clipboard service for apps that need it
+	// Desktop implements ClipboardService, so we pass it directly
+	if p.screen != nil && p.screen.desktop != nil {
+		if aware, ok := app.(ClipboardAware); ok {
+			aware.SetClipboardService(p.screen.desktop)
+		}
+	}
+
+	// Check pipeline for mouse handler (fallback to app for backwards compat)
+	p.mouseHandler = nil
+	p.handlesMouse = false
 	eventSource := interface{}(p.pipeline)
 	if eventSource == nil {
 		eventSource = app
 	}
-	if handler, ok := eventSource.(SelectionHandler); ok {
-		enabled := true
-		if declarer, ok := eventSource.(SelectionDeclarer); ok {
-			enabled = declarer.SelectionEnabled()
-		}
-		if enabled {
-			p.selectionHandler = handler
-			p.handlesSelection = true
-		}
-	}
-
-	p.wheelHandler = nil
-	p.handlesWheel = false
-	if handler, ok := eventSource.(MouseWheelHandler); ok {
-		enabled := true
-		if declarer, ok := eventSource.(MouseWheelDeclarer); ok {
-			enabled = declarer.MouseWheelEnabled()
-		}
-		if enabled {
-			p.wheelHandler = handler
-			p.handlesWheel = true
-		}
+	if handler, ok := eventSource.(MouseHandler); ok {
+		p.mouseHandler = handler
+		p.handlesMouse = true
 	}
 
 	log.Printf("AttachApp: Resizing app '%s' to %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
@@ -180,7 +167,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 
 	log.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
 	if p.screen != nil && p.screen.desktop != nil {
-		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
+		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesMouse)
 		// Notify that an app was attached (triggers snapshot persistence)
 		p.screen.desktop.dispatcher.Broadcast(Event{Type: EventAppAttached})
 	}
@@ -238,35 +225,24 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 		p.screen.Subscribe(listener)
 	}
 
-	// Check pipeline for selection/wheel handlers (fallback to app for backwards compat)
-	p.selectionHandler = nil
-	p.handlesSelection = false
+	// Inject clipboard service for apps that need it
+	// Desktop implements ClipboardService, so we pass it directly
+	if p.screen != nil && p.screen.desktop != nil {
+		if aware, ok := app.(ClipboardAware); ok {
+			aware.SetClipboardService(p.screen.desktop)
+		}
+	}
+
+	// Check pipeline for mouse handler (fallback to app for backwards compat)
+	p.mouseHandler = nil
+	p.handlesMouse = false
 	eventSource := interface{}(p.pipeline)
 	if eventSource == nil {
 		eventSource = app
 	}
-	if handler, ok := eventSource.(SelectionHandler); ok {
-		enabled := true
-		if declarer, ok := eventSource.(SelectionDeclarer); ok {
-			enabled = declarer.SelectionEnabled()
-		}
-		if enabled {
-			p.selectionHandler = handler
-			p.handlesSelection = true
-		}
-	}
-
-	p.wheelHandler = nil
-	p.handlesWheel = false
-	if handler, ok := eventSource.(MouseWheelHandler); ok {
-		enabled := true
-		if declarer, ok := eventSource.(MouseWheelDeclarer); ok {
-			enabled = declarer.MouseWheelEnabled()
-		}
-		if enabled {
-			p.wheelHandler = handler
-			p.handlesWheel = true
-		}
+	if handler, ok := eventSource.(MouseHandler); ok {
+		p.mouseHandler = handler
+		p.handlesMouse = true
 	}
 
 	// NOTE: We intentionally skip Resize and StartApp here.
@@ -318,7 +294,7 @@ func (p *pane) StartPreparedApp() {
 
 	// Notify pane state
 	if p.screen != nil && p.screen.desktop != nil {
-		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
+		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesMouse)
 	}
 	log.Printf("StartPreparedApp: Completed starting app '%s'", p.getTitle())
 }
@@ -420,7 +396,7 @@ func (p *pane) notifyStateChange() {
 	if p.screen == nil || p.screen.desktop == nil {
 		return
 	}
-	p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
+	p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesMouse)
 }
 
 // SetZOrder sets the z-order (layering) of the pane
@@ -432,7 +408,7 @@ func (p *pane) SetZOrder(zOrder int) {
 	p.ZOrder = zOrder
 	log.Printf("SetZOrder: Pane '%s' z-order set to %d", p.getTitle(), zOrder)
 	if p.screen != nil && p.screen.desktop != nil {
-		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesSelection)
+		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesMouse)
 	}
 	if p.screen != nil {
 		p.screen.Refresh() // Trigger redraw
@@ -721,8 +697,8 @@ func (p *pane) contains(x, y int) bool {
 	return true
 }
 
-func (p *pane) handlesSelectionEvents() bool {
-	return p != nil && p.handlesSelection && p.selectionHandler != nil
+func (p *pane) handlesMouseEvents() bool {
+	return p != nil && p.handlesMouse && p.mouseHandler != nil
 }
 
 func (p *pane) contentLocalCoords(x, y int) (int, int) {
@@ -751,14 +727,12 @@ func (p *pane) contentLocalCoords(x, y int) (int, int) {
 	return innerX, innerY
 }
 
-func (p *pane) handlesWheelEvents() bool {
-	return p != nil && p.handlesWheel && p.wheelHandler != nil
-}
-
-func (p *pane) handleMouseWheel(x, y, dx, dy int, modifiers tcell.ModMask) {
-	if !p.handlesWheelEvents() {
+// handleMouse forwards a mouse event to the pane's app with local coordinates.
+func (p *pane) handleMouse(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	if !p.handlesMouseEvents() {
 		return
 	}
 	localX, localY := p.contentLocalCoords(x, y)
-	p.wheelHandler.HandleMouseWheel(localX, localY, dx, dy, modifiers)
+	ev := tcell.NewEventMouse(localX, localY, buttons, modifiers)
+	p.mouseHandler.HandleMouse(ev)
 }

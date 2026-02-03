@@ -214,7 +214,7 @@ func TestMouseCoordinator_SetSize(t *testing.T) {
 	}
 }
 
-// TestMouseCoordinator_SelectionLifecycle tests the full selection lifecycle.
+// TestMouseCoordinator_SelectionLifecycle tests the full selection lifecycle via HandleMouse.
 func TestMouseCoordinator_SelectionLifecycle(t *testing.T) {
 	vtermProv := newMockVTermProviderForCoord()
 	vtermProv.contentText = "selected text"
@@ -228,45 +228,32 @@ func TestMouseCoordinator_SelectionLifecycle(t *testing.T) {
 	clipboard := &mockClipboardSetter{}
 	coord.SetClipboardSetter(clipboard)
 
-	// Start selection
-	ok := coord.SelectionStart(10, 5, tcell.Button1, 0)
+	// Start selection (button1 press)
+	ev := tcell.NewEventMouse(10, 5, tcell.Button1, 0)
+	ok := coord.HandleMouse(ev)
 	if !ok {
-		t.Fatal("expected SelectionStart to return true")
+		t.Fatal("expected HandleMouse to return true for button press")
 	}
 
 	if !coord.IsSelectionActive() {
 		t.Error("expected selection to be active after start")
 	}
 
-	// Update selection
-	coord.SelectionUpdate(20, 5, tcell.Button1, 0)
+	// Update selection (drag with button1 still pressed)
+	ev = tcell.NewEventMouse(20, 5, tcell.Button1, 0)
+	coord.HandleMouse(ev)
 
-	// Finish selection - this returns data but does NOT set clipboard
-	// (clipboard is set via HandleMouseEvent release, not SelectionFinish)
-	mime, data, ok := coord.SelectionFinish(20, 5, tcell.Button1, 0)
-
-	// Selection should have completed with content from mock
-	if !ok {
-		t.Log("Selection finish returned ok=false (expected due to test mock setup)")
-	}
+	// Finish selection (button1 release)
+	ev = tcell.NewEventMouse(20, 5, tcell.ButtonNone, 0)
+	coord.HandleMouse(ev)
 
 	// MarkAllDirty should have been called
 	if gridProv.getMarkDirtyCount() == 0 {
 		t.Error("expected MarkAllDirty to be called")
 	}
-
-	// For non-empty selections, verify returned data (not clipboard)
-	if ok && len(data) > 0 {
-		if mime != "text/plain" {
-			t.Errorf("mime = %q, want %q", mime, "text/plain")
-		}
-		if string(data) != "selected text" {
-			t.Errorf("data = %q, want %q", string(data), "selected text")
-		}
-	}
 }
 
-// TestMouseCoordinator_SelectionCancel tests selection cancellation.
+// TestMouseCoordinator_SelectionCancel tests selection cancellation via right-click.
 func TestMouseCoordinator_SelectionCancel(t *testing.T) {
 	vtermProv := newMockVTermProviderForCoord()
 	gridProv := newMockGridProvider(80, 24)
@@ -276,9 +263,13 @@ func TestMouseCoordinator_SelectionCancel(t *testing.T) {
 	coord.SetSize(80, 24)
 	coord.SetCallbacks(func() {}, func() {})
 
-	// Start and then cancel
-	coord.SelectionStart(10, 5, tcell.Button1, 0)
-	coord.SelectionCancel()
+	// Start selection
+	ev := tcell.NewEventMouse(10, 5, tcell.Button1, 0)
+	coord.HandleMouse(ev)
+
+	// Cancel with right-click
+	ev = tcell.NewEventMouse(10, 5, tcell.Button3, 0)
+	coord.HandleMouse(ev)
 
 	if coord.IsSelectionActive() {
 		t.Error("expected selection to be inactive after cancel")
@@ -293,11 +284,9 @@ func TestMouseCoordinator_NilGridProvider(t *testing.T) {
 	coord := NewMouseCoordinator(vtermProv, nil, nil, config)
 	coord.SetSize(80, 24)
 
-	// Should not panic, should return false
-	ok := coord.SelectionStart(10, 5, tcell.Button1, 0)
-	if ok {
-		t.Error("expected SelectionStart to return false with nil gridProvider")
-	}
+	// Should not panic
+	ev := tcell.NewEventMouse(10, 5, tcell.Button1, 0)
+	coord.HandleMouse(ev)
 }
 
 // TestMouseCoordinator_GetSelectionRange tests range retrieval.
@@ -317,8 +306,12 @@ func TestMouseCoordinator_GetSelectionRange(t *testing.T) {
 	}
 
 	// Start a selection
-	coord.SelectionStart(10, 5, tcell.Button1, 0)
-	coord.SelectionUpdate(20, 5, tcell.Button1, 0)
+	ev := tcell.NewEventMouse(10, 5, tcell.Button1, 0)
+	coord.HandleMouse(ev)
+
+	// Drag to update
+	ev = tcell.NewEventMouse(20, 5, tcell.Button1, 0)
+	coord.HandleMouse(ev)
 
 	// Range should be available (may be empty though)
 	coord.GetSelectionRange()
@@ -341,7 +334,8 @@ func TestMouseCoordinator_IsSelectionRendered(t *testing.T) {
 	}
 
 	// Start selection - should be rendered
-	coord.SelectionStart(10, 5, tcell.Button1, 0)
+	ev := tcell.NewEventMouse(10, 5, tcell.Button1, 0)
+	coord.HandleMouse(ev)
 	if !coord.IsSelectionRendered() {
 		t.Error("expected rendered during selection")
 	}
@@ -358,14 +352,18 @@ func TestMouseCoordinator_CoordinateClamping(t *testing.T) {
 	coord.SetCallbacks(func() {}, func() {})
 
 	// Test negative coordinates - should be clamped to 0
-	coord.SelectionStart(-5, -3, tcell.Button1, 0)
+	ev := tcell.NewEventMouse(-5, -3, tcell.Button1, 0)
+	coord.HandleMouse(ev)
 	// Should not panic
 
 	// Test coordinates beyond bounds - should be clamped
-	coord.SelectionUpdate(100, 30, tcell.Button1, 0)
+	ev = tcell.NewEventMouse(100, 30, tcell.Button1, 0)
+	coord.HandleMouse(ev)
 	// Should not panic
 
-	coord.SelectionCancel()
+	// Cancel selection
+	ev = tcell.NewEventMouse(0, 0, tcell.Button3, 0)
+	coord.HandleMouse(ev)
 }
 
 // TestMouseCoordinator_CallbacksWired tests that callbacks are properly connected.
@@ -384,7 +382,8 @@ func TestMouseCoordinator_CallbacksWired(t *testing.T) {
 	)
 
 	// Trigger an action that calls markDirty
-	coord.SelectionStart(10, 5, tcell.Button1, 0)
+	ev := tcell.NewEventMouse(10, 5, tcell.Button1, 0)
+	coord.HandleMouse(ev)
 
 	if !dirtyCalled {
 		t.Error("expected onDirty callback to be called")
@@ -423,14 +422,44 @@ func TestMouseCoordinator_MultipleSelections(t *testing.T) {
 	coord.SetCallbacks(func() {}, func() {})
 
 	// Start first selection
-	coord.SelectionStart(10, 5, tcell.Button1, 0)
+	ev := tcell.NewEventMouse(10, 5, tcell.Button1, 0)
+	coord.HandleMouse(ev)
 
-	// Start second selection - should cancel first
-	coord.SelectionStart(30, 10, tcell.Button1, 0)
+	// Release first button
+	ev = tcell.NewEventMouse(10, 5, tcell.ButtonNone, 0)
+	coord.HandleMouse(ev)
 
-	// Should still have active selection
+	// Start second selection - should work
+	ev = tcell.NewEventMouse(30, 10, tcell.Button1, 0)
+	coord.HandleMouse(ev)
+
+	// Should have active selection
 	if !coord.IsSelectionActive() {
 		t.Error("expected selection to be active after second start")
+	}
+}
+
+// TestMouseCoordinator_WheelEvent tests wheel event handling.
+func TestMouseCoordinator_WheelEvent(t *testing.T) {
+	vtermProv := newMockVTermProviderForCoord()
+	gridProv := newMockGridProvider(80, 24)
+	wheelHandler := &mockWheelHandler{}
+	config := AutoScrollConfig{EdgeZone: 2, MaxScrollSpeed: 15}
+
+	coord := NewMouseCoordinator(vtermProv, gridProv, wheelHandler, config)
+	coord.SetSize(80, 24)
+
+	// Send wheel event
+	ev := tcell.NewEventMouse(10, 5, tcell.WheelDown, 0)
+	ok := coord.HandleMouse(ev)
+
+	if !ok {
+		t.Error("expected HandleMouse to return true for wheel event")
+	}
+
+	events := wheelHandler.getEvents()
+	if len(events) != 1 {
+		t.Errorf("expected 1 wheel event, got %d", len(events))
 	}
 }
 

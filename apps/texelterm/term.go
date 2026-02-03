@@ -72,6 +72,7 @@ type TexelTerm struct {
 
 	// Mouse and selection handling (unified for standalone and embedded modes)
 	mouseCoordinator *MouseCoordinator
+	clipboard        texelcore.ClipboardService
 
 	// Scroll tracking for smooth velocity-based acceleration
 	scrollEventTime time.Time // For debouncing duplicate events
@@ -106,6 +107,8 @@ type TexelTerm struct {
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
 var _ texelcore.CloseCallbackRequester = (*TexelTerm)(nil)
 var _ texelcore.StorageSetter = (*TexelTerm)(nil)
+var _ texelcore.ClipboardAware = (*TexelTerm)(nil)
+var _ texelcore.MouseHandler = (*TexelTerm)(nil)
 
 func New(title, command string) texelcore.App {
 	term := &TexelTerm{
@@ -861,11 +864,8 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	}
 }
 
-func (a *TexelTerm) MouseWheelEnabled() bool {
-	return true
-}
-
-// HandleMouse handles mouse events in standalone mode.
+// HandleMouse implements texelcore.MouseHandler.
+// Handles history navigator, scrollbar clicks, then delegates other events to MouseCoordinator.
 // Handles history navigator, scrollbar clicks, then delegates other events to MouseCoordinator.
 func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 	if ev == nil {
@@ -906,71 +906,21 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 	a.requestRefresh()
 }
 
-// SetClipboard implements ClipboardSetter for standalone mode.
+// SetClipboard implements ClipboardSetter for internal use by MouseCoordinator.
 // Currently disabled pending investigation of clipboard crash issues.
 func (a *TexelTerm) SetClipboard(mime string, data []byte) {
-	// Disabled for now - clipboard operations were causing crashes
+	// Use clipboard service if available
+	if a.clipboard != nil {
+		a.clipboard.SetClipboard(mime, data)
+	}
 }
 
-// SelectionStart implements texelcore.SelectionHandler.
-func (a *TexelTerm) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
-	// Check if history navigator is visible and wants the event
-	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
-		ev := tcell.NewEventMouse(x, y, buttons, modifiers)
-		if a.historyNavigator.HandleMouse(ev) {
-			a.requestRefresh()
-			return true
-		}
-	}
-
-	// Check if click is on the scrollbar
-	if a.scrollbar != nil && a.scrollbar.IsVisible() {
-		scrollbarX := a.width - ScrollBarWidth
-		if x >= scrollbarX {
-			// Handle scrollbar click
-			localX := x - scrollbarX
-			if targetOffset, ok := a.scrollbar.HandleClick(localX, y); ok {
-				a.scrollToOffsetWithResultSelection(targetOffset)
-				return true
-			}
-			return false
-		}
-	}
-
-	if a.mouseCoordinator == nil {
-		return false
-	}
-	result := a.mouseCoordinator.SelectionStart(x, y, buttons, modifiers)
-	a.requestRefresh()
-	return result
-}
-
-// SelectionUpdate implements texelcore.SelectionHandler.
-func (a *TexelTerm) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
-	if a.mouseCoordinator == nil {
-		return
-	}
-	a.mouseCoordinator.SelectionUpdate(x, y, buttons, modifiers)
-	a.requestRefresh()
-}
-
-// SelectionFinish implements texelcore.SelectionHandler.
-func (a *TexelTerm) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
-	if a.mouseCoordinator == nil {
-		return "", nil, false
-	}
-	mime, data, ok := a.mouseCoordinator.SelectionFinish(x, y, buttons, modifiers)
-	a.requestRefresh()
-	return mime, data, ok
-}
-
-// SelectionCancel implements texelcore.SelectionHandler.
-func (a *TexelTerm) SelectionCancel() {
-	if a.mouseCoordinator == nil {
-		return
-	}
-	a.mouseCoordinator.SelectionCancel()
-	a.requestRefresh()
+// SetClipboardService implements texelcore.ClipboardAware.
+// This is called by the runtime (standalone) or desktop (embedded) to provide clipboard access.
+func (a *TexelTerm) SetClipboardService(clipboard texelcore.ClipboardService) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.clipboard = clipboard
 }
 
 func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {

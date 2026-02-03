@@ -91,19 +91,14 @@ type DesktopEngine struct {
 	resizeSelection *selectedBorder
 	zoomedPane      *Node
 
-	lastMouseX           int
-	lastMouseY           int
-	lastMouseButtons     tcell.ButtonMask
-	lastMouseModifier    tcell.ModMask
-	clipboard            map[string][]byte
-	lastClipboardMime    string
-	selectionMu          sync.Mutex
-	selectionActive      bool
-	selectionPane        *pane
-	selectionHandler     SelectionHandler
-	pendingClipboardMime string
-	pendingClipboardData []byte
-	hasPendingClipboard  bool
+	lastMouseX         int
+	lastMouseY         int
+	lastMouseButtons   tcell.ButtonMask
+	lastMouseModifier  tcell.ModMask
+	clipboardMu        sync.Mutex
+	clipboard          map[string][]byte
+	clipboardMime      string
+	clipboardPending   bool // True when clipboard has changed and needs to be sent to client
 	focusMu              sync.RWMutex
 	focusListeners       []DesktopFocusListener
 	paneStateMu          sync.RWMutex
@@ -155,7 +150,7 @@ type PaneStateSnapshot struct {
 	Active           bool
 	Resizing         bool
 	ZOrder           int
-	HandlesSelection bool
+	HandlesMouse bool
 }
 
 // NewDesktopEngine creates and initializes a new desktop engine.
@@ -851,21 +846,65 @@ func (d *DesktopEngine) InjectMouseEvent(x, y int, buttons tcell.ButtonMask, mod
 	d.processMouseEvent(x, y, buttons, modifiers)
 }
 
-// HandleClipboardSet stores clipboard contents using the provided MIME type.
-func (d *DesktopEngine) HandleClipboardSet(mime string, data []byte) {
+// SetClipboard implements ClipboardService for apps running in the desktop.
+// Also marks the clipboard as pending for broadcast to clients.
+func (d *DesktopEngine) SetClipboard(mime string, data []byte) {
+	d.clipboardMu.Lock()
+	defer d.clipboardMu.Unlock()
 	if d.clipboard == nil {
 		d.clipboard = make(map[string][]byte)
 	}
+	d.clipboardMime = mime
 	d.clipboard[mime] = append([]byte(nil), data...)
+	d.clipboardPending = true
 }
 
-// HandleClipboardGet records the last clipboard lookup.
+// GetClipboard implements ClipboardService for apps running in the desktop.
+func (d *DesktopEngine) GetClipboard() (string, []byte, bool) {
+	d.clipboardMu.Lock()
+	defer d.clipboardMu.Unlock()
+	if d.clipboard == nil || d.clipboardMime == "" {
+		return "", nil, false
+	}
+	data := d.clipboard[d.clipboardMime]
+	if data == nil {
+		return "", nil, false
+	}
+	return d.clipboardMime, append([]byte(nil), data...), true
+}
+
+// HandleClipboardSet is a legacy alias for SetClipboard.
+func (d *DesktopEngine) HandleClipboardSet(mime string, data []byte) {
+	d.SetClipboard(mime, data)
+}
+
+// HandleClipboardGet retrieves clipboard content by MIME type.
 func (d *DesktopEngine) HandleClipboardGet(mime string) []byte {
-	d.lastClipboardMime = mime
+	d.clipboardMu.Lock()
+	defer d.clipboardMu.Unlock()
 	if d.clipboard == nil {
 		return nil
 	}
 	return append([]byte(nil), d.clipboard[mime]...)
+}
+
+// PopPendingClipboard returns clipboard data if it has changed since last pop.
+// Used by the server to send clipboard updates to connected clients.
+func (d *DesktopEngine) PopPendingClipboard() (string, []byte, bool) {
+	d.clipboardMu.Lock()
+	defer d.clipboardMu.Unlock()
+	if !d.clipboardPending {
+		return "", nil, false
+	}
+	d.clipboardPending = false
+	if d.clipboard == nil || d.clipboardMime == "" {
+		return "", nil, false
+	}
+	data := d.clipboard[d.clipboardMime]
+	if data == nil {
+		return "", nil, false
+	}
+	return d.clipboardMime, append([]byte(nil), data...), true
 }
 
 // HandlePaste routes paste data to the active pane.
@@ -932,36 +971,29 @@ func (d *DesktopEngine) handleMouseEvent(ev *tcell.EventMouse) {
 func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
 	prevButtons := d.lastMouseButtons
 
-	wheelDX, wheelDY := wheelDeltaFromMask(buttons)
-	if wheelDX != 0 || wheelDY != 0 {
-		// Update position and modifiers, but keep lastMouseButtons (to preserve drag state)
-		// Wheel events often don't report held buttons correctly.
-		d.lastMouseX = x
-		d.lastMouseY = y
-		d.lastMouseModifier = modifiers
-
-		d.dispatchMouseWheel(x, y, wheelDX, wheelDY, modifiers)
-		return
-	}
-
 	d.lastMouseX = x
 	d.lastMouseY = y
 	d.lastMouseButtons = buttons
 	d.lastMouseModifier = modifiers
 
+	// Handle workspace border resize first
 	if d.activeWorkspace != nil {
 		if d.activeWorkspace.handleMouseResize(x, y, buttons, prevButtons) {
 			return
 		}
 	}
 
-	d.handleAppSelection(x, y, buttons, modifiers, prevButtons)
-
-	buttonPressed := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0
-	if !buttonPressed {
-		return
+	// Forward mouse events to the pane under cursor
+	pane := d.paneAtCoordinates(x, y)
+	if pane != nil && pane.handlesMouseEvents() {
+		pane.handleMouse(x, y, buttons, modifiers)
 	}
-	d.activatePaneAt(x, y)
+
+	// Activate pane on button press
+	buttonPressed := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0
+	if buttonPressed {
+		d.activatePaneAt(x, y)
+	}
 }
 
 func (d *DesktopEngine) paneAtCoordinates(x, y int) *pane {
@@ -975,31 +1007,6 @@ func (d *DesktopEngine) paneAtCoordinates(x, y int) *pane {
 		return node.Pane
 	}
 	return nil
-}
-
-func (d *DesktopEngine) dispatchMouseWheel(x, y, dx, dy int, modifiers tcell.ModMask) {
-	pane := d.paneAtCoordinates(x, y)
-	if pane == nil || !pane.handlesWheelEvents() {
-		return
-	}
-	pane.handleMouseWheel(x, y, dx, dy, modifiers)
-}
-
-func wheelDeltaFromMask(mask tcell.ButtonMask) (int, int) {
-	dx, dy := 0, 0
-	if mask&tcell.WheelUp != 0 {
-		dy--
-	}
-	if mask&tcell.WheelDown != 0 {
-		dy++
-	}
-	if mask&tcell.WheelLeft != 0 {
-		dx--
-	}
-	if mask&tcell.WheelRight != 0 {
-		dx++
-	}
-	return dx, dy
 }
 
 func (d *DesktopEngine) activatePaneAt(x, y int) {
@@ -1025,82 +1032,6 @@ func (d *DesktopEngine) activatePaneAt(x, y int) {
 	if node := ws.nodeAt(x, y); node != nil {
 		ws.activateLeaf(node)
 	}
-}
-
-func (d *DesktopEngine) handleAppSelection(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask, prevButtons tcell.ButtonMask) {
-	d.selectionMu.Lock()
-	defer d.selectionMu.Unlock()
-
-	start := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0
-	release := buttons&tcell.Button1 == 0 && prevButtons&tcell.Button1 != 0
-	dragging := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 != 0
-
-	if start {
-		if d.selectionActive && d.selectionHandler != nil {
-			d.selectionHandler.SelectionCancel()
-		}
-		d.selectionActive = false
-		d.selectionHandler = nil
-		d.selectionPane = nil
-
-		pane := d.paneAtCoordinates(x, y)
-		if pane != nil && pane.handlesSelectionEvents() {
-			localX, localY := pane.contentLocalCoords(x, y)
-			if pane.selectionHandler.SelectionStart(localX, localY, buttons, modifiers) {
-				d.selectionActive = true
-				d.selectionHandler = pane.selectionHandler
-				d.selectionPane = pane
-			}
-		}
-		return
-	}
-
-	if !d.selectionActive || d.selectionHandler == nil || d.selectionPane == nil {
-		return
-	}
-
-	pane := d.selectionPane
-	if dragging {
-		localX, localY := pane.contentLocalCoords(x, y)
-		d.selectionHandler.SelectionUpdate(localX, localY, buttons, modifiers)
-		return
-	}
-
-	if release {
-		localX, localY := pane.contentLocalCoords(x, y)
-		mime, data, ok := d.selectionHandler.SelectionFinish(localX, localY, buttons, modifiers)
-		d.selectionActive = false
-		d.selectionHandler = nil
-		d.selectionPane = nil
-		if ok && len(data) > 0 {
-			d.HandleClipboardSet(mime, data)
-			d.pendingClipboardMime = mime
-			d.pendingClipboardData = append([]byte(nil), data...)
-			d.hasPendingClipboard = true
-		}
-		return
-	}
-
-	if buttons&tcell.Button1 == 0 {
-		d.selectionHandler.SelectionCancel()
-		d.selectionActive = false
-		d.selectionHandler = nil
-		d.selectionPane = nil
-	}
-}
-
-func (d *DesktopEngine) PopPendingClipboard() (string, []byte, bool) {
-	d.selectionMu.Lock()
-	defer d.selectionMu.Unlock()
-	if !d.hasPendingClipboard {
-		return "", nil, false
-	}
-	mime := d.pendingClipboardMime
-	data := append([]byte(nil), d.pendingClipboardData...)
-	d.pendingClipboardMime = ""
-	d.pendingClipboardData = nil
-	d.hasPendingClipboard = false
-	return mime, data, true
 }
 
 // broadcastStateUpdate now broadcasts on the Desktop's dispatcher
@@ -1295,12 +1226,12 @@ func (d *DesktopEngine) notifyFocusNode(node *Node) {
 	d.notifyFocus(node.Pane.ID())
 }
 
-func (d *DesktopEngine) notifyPaneState(id [16]byte, active, resizing bool, z int, handlesSelection bool) {
+func (d *DesktopEngine) notifyPaneState(id [16]byte, active, resizing bool, z int, handlesMouse bool) {
 	d.paneStateMu.RLock()
 	listeners := append([]PaneStateListener(nil), d.paneStateListeners...)
 	d.paneStateMu.RUnlock()
 	for _, l := range listeners {
-		l.PaneStateChanged(id, active, resizing, z, handlesSelection)
+		l.PaneStateChanged(id, active, resizing, z, handlesMouse)
 	}
 }
 
@@ -1337,7 +1268,7 @@ func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 			Active:           p.IsActive,
 			Resizing:         p.IsResizing,
 			ZOrder:           p.ZOrder,
-			HandlesSelection: p.handlesSelectionEvents(),
+			HandlesMouse: p.handlesMouseEvents(),
 		})
 	})
 	for _, fp := range d.floatingPanels {
@@ -1346,7 +1277,7 @@ func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 			Active:           true,
 			Resizing:         false,
 			ZOrder:           ZOrderFloating,
-			HandlesSelection: false,
+			HandlesMouse: false,
 		})
 	}
 	return states

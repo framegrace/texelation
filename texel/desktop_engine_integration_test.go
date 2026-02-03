@@ -217,13 +217,16 @@ func TestDesktopClipboardAndThemeHandling(t *testing.T) {
 	desktop.SwitchToWorkspace(1)
 	desktop.activeWorkspace.AddApp(newFakeApp("initial"))
 
-	desktop.HandleClipboardSet("text/plain", []byte("hello"))
-	data := desktop.HandleClipboardGet("text/plain")
+	desktop.SetClipboard("text/plain", []byte("hello"))
+	mime, data, ok := desktop.GetClipboard()
+	if !ok {
+		t.Fatalf("expected clipboard to have content")
+	}
 	if string(data) != "hello" {
 		t.Fatalf("unexpected clipboard data %q", string(data))
 	}
-	if desktop.lastClipboardMime != "text/plain" {
-		t.Fatalf("expected last clipboard mime recorded")
+	if mime != "text/plain" {
+		t.Fatalf("expected clipboard mime 'text/plain', got %q", mime)
 	}
 
 	desktop.HandleThemeUpdate("pane", "fg", "#ffffff")

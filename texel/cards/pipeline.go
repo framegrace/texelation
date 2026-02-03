@@ -39,10 +39,7 @@ type Pipeline struct {
 }
 
 var _ texelcore.App = (*Pipeline)(nil)
-var _ texelcore.SelectionHandler = (*Pipeline)(nil)
-var _ texelcore.SelectionDeclarer = (*Pipeline)(nil)
-var _ texelcore.MouseWheelHandler = (*Pipeline)(nil)
-var _ texelcore.MouseWheelDeclarer = (*Pipeline)(nil)
+var _ texelcore.MouseHandler = (*Pipeline)(nil)
 var _ texelcore.ControlBusProvider = (*Pipeline)(nil)
 
 // NewPipeline constructs a pipeline with the provided cards. The resulting
@@ -220,14 +217,11 @@ func (p *Pipeline) SetRefreshNotifier(ch chan<- bool) {
 	}
 }
 
-// selectionHandler finds the first card capable of handling selections.
-func (p *Pipeline) selectionHandler() texelcore.SelectionHandler {
+// mouseHandler finds the first card capable of handling mouse events.
+func (p *Pipeline) mouseHandler() texelcore.MouseHandler {
 	cards := p.Cards()
 	for _, card := range cards {
-		if decl, ok := card.(texelcore.SelectionDeclarer); ok && !decl.SelectionEnabled() {
-			continue
-		}
-		if handler, ok := card.(texelcore.SelectionHandler); ok {
+		if handler, ok := card.(texelcore.MouseHandler); ok {
 			return handler
 		}
 		if accessor, ok := card.(AppAccessor); ok {
@@ -235,10 +229,7 @@ func (p *Pipeline) selectionHandler() texelcore.SelectionHandler {
 			if underlying == nil {
 				continue
 			}
-			if decl, ok := underlying.(texelcore.SelectionDeclarer); ok && !decl.SelectionEnabled() {
-				continue
-			}
-			if handler, ok := underlying.(texelcore.SelectionHandler); ok {
+			if handler, ok := underlying.(texelcore.MouseHandler); ok {
 				return handler
 			}
 		}
@@ -246,69 +237,12 @@ func (p *Pipeline) selectionHandler() texelcore.SelectionHandler {
 	return nil
 }
 
-func (p *Pipeline) SelectionStart(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) bool {
-	if handler := p.selectionHandler(); handler != nil {
-		return handler.SelectionStart(x, y, buttons, modifiers)
+// HandleMouse implements texelcore.MouseHandler for the pipeline.
+// Forwards mouse events to the first card or underlying app that handles mouse.
+func (p *Pipeline) HandleMouse(ev *tcell.EventMouse) {
+	if handler := p.mouseHandler(); handler != nil {
+		handler.HandleMouse(ev)
 	}
-	return false
-}
-
-func (p *Pipeline) SelectionUpdate(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
-	if handler := p.selectionHandler(); handler != nil {
-		handler.SelectionUpdate(x, y, buttons, modifiers)
-	}
-}
-
-func (p *Pipeline) SelectionFinish(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) (string, []byte, bool) {
-	if handler := p.selectionHandler(); handler != nil {
-		return handler.SelectionFinish(x, y, buttons, modifiers)
-	}
-	return "", nil, false
-}
-
-func (p *Pipeline) SelectionCancel() {
-	if handler := p.selectionHandler(); handler != nil {
-		handler.SelectionCancel()
-	}
-}
-
-func (p *Pipeline) SelectionEnabled() bool {
-	return p.selectionHandler() != nil
-}
-
-func (p *Pipeline) wheelHandler() texelcore.MouseWheelHandler {
-	cards := p.Cards()
-	for _, card := range cards {
-		if decl, ok := card.(texelcore.MouseWheelDeclarer); ok && !decl.MouseWheelEnabled() {
-			continue
-		}
-		if handler, ok := card.(texelcore.MouseWheelHandler); ok {
-			return handler
-		}
-		if accessor, ok := card.(AppAccessor); ok {
-			underlying := accessor.UnderlyingApp()
-			if underlying == nil {
-				continue
-			}
-			if decl, ok := underlying.(texelcore.MouseWheelDeclarer); ok && !decl.MouseWheelEnabled() {
-				continue
-			}
-			if handler, ok := underlying.(texelcore.MouseWheelHandler); ok {
-				return handler
-			}
-		}
-	}
-	return nil
-}
-
-func (p *Pipeline) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {
-	if handler := p.wheelHandler(); handler != nil {
-		handler.HandleMouseWheel(x, y, deltaX, deltaY, modifiers)
-	}
-}
-
-func (p *Pipeline) MouseWheelEnabled() bool {
-	return p.wheelHandler() != nil
 }
 
 // pasteHandler finds the first card capable of handling paste events.

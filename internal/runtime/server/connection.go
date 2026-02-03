@@ -369,7 +369,7 @@ func (c *connection) sendTreeSnapshot() {
 	_ = c.writeMessage(header, payload)
 	states := snapshotMergedPaneStates(snapshot, sink.Desktop())
 	for _, pane := range states {
-		c.sendPaneState(pane.ID, pane.Active, pane.Resizing, pane.ZOrder, pane.HandlesSelection)
+		c.sendPaneState(pane.ID, pane.Active, pane.Resizing, pane.ZOrder, pane.HandlesMouse)
 	}
 }
 
@@ -497,7 +497,7 @@ func colorToRGB(r, g, b int32) uint32 {
 
 func (c *connection) sendPaneStateSnapshots(states []texel.PaneStateSnapshot) {
 	for _, state := range states {
-		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesSelection)
+		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesMouse)
 	}
 }
 
@@ -575,7 +575,7 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 
 	states := snapshotMergedPaneStates(snapshot, desktop)
 	for _, state := range states {
-		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesSelection)
+		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesMouse)
 	}
 
 	c.initialSnapshotSent = true
@@ -634,7 +634,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 
 	states := snapshotMergedPaneStates(snapshot, desktop)
 	for _, state := range states {
-		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesSelection)
+		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesMouse)
 	}
 }
 
