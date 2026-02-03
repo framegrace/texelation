@@ -110,6 +110,14 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.screen.Subscribe(listener)
 	}
 
+	// Inject clipboard service for apps that need it
+	// Desktop implements ClipboardService, so we pass it directly
+	if p.screen != nil && p.screen.desktop != nil {
+		if aware, ok := app.(ClipboardAware); ok {
+			aware.SetClipboardService(p.screen.desktop)
+		}
+	}
+
 	// Check pipeline for mouse handler (fallback to app for backwards compat)
 	p.mouseHandler = nil
 	p.handlesMouse = false
@@ -215,6 +223,14 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 
 	if listener, ok := app.(Listener); ok {
 		p.screen.Subscribe(listener)
+	}
+
+	// Inject clipboard service for apps that need it
+	// Desktop implements ClipboardService, so we pass it directly
+	if p.screen != nil && p.screen.desktop != nil {
+		if aware, ok := app.(ClipboardAware); ok {
+			aware.SetClipboardService(p.screen.desktop)
+		}
 	}
 
 	// Check pipeline for mouse handler (fallback to app for backwards compat)
