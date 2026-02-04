@@ -559,6 +559,7 @@ func (v *VTerm) memoryBufferGrid() [][]Cell {
 // Highlighting style:
 //   - Other matches: FG changed to accent color (subtle)
 //   - Selected match: selection color + Reverse attribute (stands out)
+//   - Selected line: subtle background tint on the full row
 //
 // If no styled colors are set (Mode == 0), falls back to simple reverse attribute.
 func (v *VTerm) applySearchHighlight(grid [][]Cell) {
@@ -570,6 +571,7 @@ func (v *VTerm) applySearchHighlight(grid [][]Cell) {
 
 	// Check if we have styled highlighting configured
 	hasStyledHighlight := v.searchSelectionColor.Mode != 0 || v.searchAccentColor.Mode != 0
+	hasLineTint := v.searchLineTintColor.Mode != 0 && v.searchLineTintIntensity > 0
 
 	// Build a flat array of all runes and their grid coordinates
 	type cellPos struct {
@@ -596,9 +598,12 @@ func (v *VTerm) applySearchHighlight(grid [][]Cell) {
 	}
 	var matches []match
 
+	// Track viewport rows that contain selected matches (for line tinting)
+	selectedRows := make(map[int]bool)
+
 	for i := 0; i <= len(allRunes)-termLen; i++ {
 		found := true
-		for j := 0; j < termLen; j++ {
+		for j := range termLen {
 			if allRunes[i+j] != termRunes[j] {
 				found = false
 				break
@@ -613,15 +618,34 @@ func (v *VTerm) applySearchHighlight(grid [][]Cell) {
 				globalLine, _, ok := v.memoryBufferViewportToContent(pos.y, pos.x)
 				if ok && globalLine == v.searchHighlightLine {
 					isSelected = true
+					// Track all viewport rows this match spans for line tinting
+					if hasLineTint {
+						for j := range termLen {
+							selectedRows[positions[i+j].y] = true
+						}
+					}
 				}
 			}
 			matches = append(matches, match{start: i, isSelected: isSelected})
 		}
 	}
 
+	// Apply line tint to selected rows FIRST (before match highlighting)
+	// This creates a subtle background tint on the entire row
+	if hasLineTint && len(selectedRows) > 0 {
+		for y := range selectedRows {
+			if y >= 0 && y < len(grid) {
+				for x := range grid[y] {
+					cell := &grid[y][x]
+					cell.BG = BlendColor(cell.BG, v.searchLineTintColor, v.searchLineTintIntensity, v.searchDefaultBG)
+				}
+			}
+		}
+	}
+
 	// Apply highlighting to all matches
 	for _, m := range matches {
-		for j := 0; j < termLen; j++ {
+		for j := range termLen {
 			pos := positions[m.start+j]
 			cell := &grid[pos.y][pos.x]
 
@@ -814,17 +838,24 @@ func (v *VTerm) SetSearchHighlight(term string) {
 //
 // Other matches: FG changed to accentColor (subtle highlight)
 // Selected match: selectionColor + Reverse attribute (stands out)
+// Selected line: subtle background tint with lineTintColor
 //
 // Parameters:
 //   - term: the search term to highlight
 //   - currentLine: the line index of the current/selected result (-1 for none)
 //   - selectionColor: color for selected match (used with Reverse)
 //   - accentColor: color for other matches (just FG change)
-func (v *VTerm) SetSearchHighlightStyled(term string, currentLine int64, selectionColor, accentColor Color) {
+//   - lineTintColor: color for full-line background tint on selected result
+//   - lineTintIntensity: blend intensity for line tint (0.0-1.0, typically 0.12)
+//   - defaultBG: terminal's actual default background color (for proper blending)
+func (v *VTerm) SetSearchHighlightStyled(term string, currentLine int64, selectionColor, accentColor, lineTintColor Color, lineTintIntensity float32, defaultBG Color) {
 	v.searchHighlight = term
 	v.searchHighlightLine = currentLine
 	v.searchSelectionColor = selectionColor
 	v.searchAccentColor = accentColor
+	v.searchLineTintColor = lineTintColor
+	v.searchLineTintIntensity = lineTintIntensity
+	v.searchDefaultBG = defaultBG
 	v.MarkAllDirty()
 }
 
@@ -839,6 +870,9 @@ func (v *VTerm) UpdateSearchHighlightLine(currentLine int64) {
 func (v *VTerm) ClearSearchHighlight() {
 	v.searchHighlight = ""
 	v.searchHighlightLine = -1
+	v.searchLineTintColor = Color{}
+	v.searchLineTintIntensity = 0
+	v.searchDefaultBG = Color{}
 	v.MarkAllDirty()
 }
 

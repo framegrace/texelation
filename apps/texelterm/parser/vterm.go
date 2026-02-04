@@ -65,10 +65,13 @@ type VTerm struct {
 	bracketedPasteMode         bool
 	OnBracketedPasteModeChange func(bool)
 	// Search highlighting configuration
-	searchHighlight     string // term to highlight
-	searchHighlightLine int64  // current result's line index (-1 = none)
-	searchSelectionColor Color // for selected match: used with Reverse attr
-	searchAccentColor    Color // for other matches: just FG color change
+	searchHighlight         string  // term to highlight
+	searchHighlightLine     int64   // current result's line index (-1 = none)
+	searchSelectionColor    Color   // for selected match: used with Reverse attr
+	searchAccentColor       Color   // for other matches: just FG color change
+	searchLineTintColor     Color   // for full-line tint on selected result
+	searchLineTintIntensity float32 // blend intensity (0.0-1.0, default 0.12)
+	searchDefaultBG         Color   // terminal's default background for blending
 	// Deprecated: Use SetOnLineIndexed instead, which is called AFTER persistence.
 	// This callback was called when a line was committed, but BEFORE it was persisted,
 	// which could cause search index entries for content that doesn't exist on disk.
