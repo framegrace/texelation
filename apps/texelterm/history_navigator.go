@@ -19,6 +19,7 @@ import (
 	"github.com/framegrace/texelation/internal/effects"
 	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/theme"
 	"github.com/framegrace/texelui/widgets"
 	"github.com/gdamore/tcell/v2"
 )
@@ -73,8 +74,10 @@ type HistoryNavigator struct {
 	resultIndex   int
 
 	// Highlight colors (for styled search highlighting)
-	highlightSelectionColor parser.Color // For selected match: used with Reverse
-	highlightAccentColor    parser.Color // For other matches: just FG change
+	searchHighlightColor parser.Color // Unified color: selected match, line tint, scrollbar
+	highlightAccentColor parser.Color // For other matches: just FG change
+	lineTintIntensity    float32      // Blend intensity for line tint (default: 0.12)
+	defaultBGColor       parser.Color // Terminal's default background for proper blending
 
 	// Visibility and dimensions
 	visible bool
@@ -180,14 +183,16 @@ func (h *HistoryNavigator) createWidgets() {
 	accentStyle := tcell.StyleDefault.Foreground(accentColor).Background(bgColor)
 
 	// Initialize highlight colors for search results
-	// Selected match: selection color + Reverse (stands out)
-	// Other matches: muted color + Reverse (subtle)
-	selectionColor := tm.GetSemanticColor("selection.bg")
-	if selectionColor == tcell.ColorDefault {
-		selectionColor = accentColor
-	}
-	h.highlightSelectionColor = tcellToParserColor(selectionColor)
+	// Use green from palette as unified search highlight color
+	// This color is used for: selected match text, line tint, scrollbar markers
+	greenColor := theme.ResolveColorName("green")
+	h.searchHighlightColor = tcellToParserColor(greenColor)
 	h.highlightAccentColor = tcellToParserColor(mutedColor)
+	h.lineTintIntensity = 0.12 // Subtle 12% background tint
+
+	// Get actual terminal background for proper blending
+	terminalBG := tm.GetSemanticColor("bg.base")
+	h.defaultBGColor = tcellToParserColor(terminalBG)
 
 	// Search widgets
 	h.searchIcon = widgets.NewLabel("🔍")
@@ -632,8 +637,10 @@ func (h *HistoryNavigator) performSearch(query string) {
 	h.updateCounterDisplay()
 	var firstResult *parser.SearchResult
 	searchTerm := h.searchInput.Text // Capture for highlighting
-	selectionColor := h.highlightSelectionColor
+	highlightColor := h.searchHighlightColor
 	accentColor := h.highlightAccentColor
+	lineTintIntensity := h.lineTintIntensity
+	defaultBG := h.defaultBGColor
 	callback := h.onSearchResultsChanged
 	if len(results) > 0 {
 		firstResult = &results[0]
@@ -648,11 +655,12 @@ func (h *HistoryNavigator) performSearch(query string) {
 	// Auto-navigate to first result if any (outside lock)
 	if h.vterm != nil {
 		// Set styled search highlighting with the current line
+		// Uses unified highlightColor for selected match and line tint
 		currentLine := int64(-1)
 		if firstResult != nil {
 			currentLine = firstResult.GlobalLineIdx
 		}
-		h.vterm.SetSearchHighlightStyled(searchTerm, currentLine, selectionColor, accentColor)
+		h.vterm.SetSearchHighlightStyled(searchTerm, currentLine, highlightColor, accentColor, highlightColor, lineTintIntensity, defaultBG)
 
 		if firstResult != nil {
 			h.vterm.ScrollToGlobalLine(firstResult.GlobalLineIdx)

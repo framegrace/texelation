@@ -108,6 +108,13 @@ func NewScrollBar(vterm *parser.VTerm, onVisibilityChanged func(visible bool)) *
 	}
 }
 
+// SetSearchHighlightColor sets the color used for search result markers on the minimap.
+func (s *ScrollBar) SetSearchHighlightColor(color tcell.Color) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.searchHighlightColor = color
+}
+
 // Show makes the scrollbar visible and triggers a terminal resize.
 func (s *ScrollBar) Show() {
 	s.mu.Lock()
