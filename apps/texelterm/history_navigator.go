@@ -104,15 +104,23 @@ type HistoryNavigator struct {
 	ScrollAnimFrameRate int           // Frames per second
 	ScrollAnimEasing    effects.EasingFunc
 
+	// Long jump edge animation config
+	ScrollAnimEdgeLines      int           // Lines to show at start/end edges (default: 5)
+	ScrollAnimEdgeStartDelay time.Duration // Initial delay between edge lines (default: 80ms)
+	ScrollAnimEdgeEndDelay   time.Duration // Final delay for edge lines (default: 25ms)
+
 	mu sync.Mutex
 }
 
 // Scroll animation defaults
 const (
-	defaultScrollAnimMaxLines  = 500
-	defaultScrollAnimMinTime   = 400 * time.Millisecond
-	defaultScrollAnimMaxTime   = 1500 * time.Millisecond
-	defaultScrollAnimFrameRate = 60
+	defaultScrollAnimMaxLines       = 500
+	defaultScrollAnimMinTime        = 400 * time.Millisecond
+	defaultScrollAnimMaxTime        = 1500 * time.Millisecond
+	defaultScrollAnimFrameRate      = 60
+	defaultScrollAnimEdgeLines      = 5
+	defaultScrollAnimEdgeStartDelay = 80 * time.Millisecond
+	defaultScrollAnimEdgeEndDelay   = 25 * time.Millisecond
 )
 
 // NewHistoryNavigator creates a new history navigator card.
@@ -124,11 +132,14 @@ func NewHistoryNavigator(vterm *parser.VTerm, searchIndex *parser.SQLiteSearchIn
 		onClose:     onClose,
 		stopCh:      make(chan struct{}),
 		// Scroll animation defaults
-		ScrollAnimMaxLines:  defaultScrollAnimMaxLines,
-		ScrollAnimMinTime:   defaultScrollAnimMinTime,
-		ScrollAnimMaxTime:   defaultScrollAnimMaxTime,
-		ScrollAnimFrameRate: defaultScrollAnimFrameRate,
-		ScrollAnimEasing:    effects.EaseOutCubic,
+		ScrollAnimMaxLines:       defaultScrollAnimMaxLines,
+		ScrollAnimMinTime:        defaultScrollAnimMinTime,
+		ScrollAnimMaxTime:        defaultScrollAnimMaxTime,
+		ScrollAnimFrameRate:      defaultScrollAnimFrameRate,
+		ScrollAnimEasing:         effects.EaseInOutCubic,
+		ScrollAnimEdgeLines:      defaultScrollAnimEdgeLines,
+		ScrollAnimEdgeStartDelay: defaultScrollAnimEdgeStartDelay,
+		ScrollAnimEdgeEndDelay:   defaultScrollAnimEdgeEndDelay,
 	}
 
 	// Disable status bar for this compact card
@@ -803,8 +814,22 @@ func (h *HistoryNavigator) SelectClosestResultInViewport() bool {
 
 // --- Scroll Animation ---
 
-// animateScrollToLine scrolls to the target line with animation for short distances.
-// For distances > scrollAnimMaxLines, jumps instantly.
+// lerp interpolates between two durations
+func lerp(a, b time.Duration, t float32) time.Duration {
+	return a + time.Duration(float32(b-a)*t)
+}
+
+// absInt64 returns absolute value of int64
+func absInt64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// animateScrollToLine scrolls to the target line with animation.
+// For short distances (≤ ScrollAnimMaxLines): smooth eased animation.
+// For long distances (> ScrollAnimMaxLines): three-phase animation with visible edge lines.
 func (h *HistoryNavigator) animateScrollToLine(targetLine int64) {
 	if h.vterm == nil {
 		return
@@ -820,13 +845,10 @@ func (h *HistoryNavigator) animateScrollToLine(targetLine int64) {
 	targetOffset := h.vterm.ScrollOffset()
 
 	// Calculate distance in scroll offset units
-	distance := targetOffset - startOffset
-	if distance < 0 {
-		distance = -distance
-	}
+	distance := absInt64(targetOffset - startOffset)
 
-	// For long distances, no change, or animation disabled, keep the instant jump
-	if h.ScrollAnimMaxLines <= 0 || distance > h.ScrollAnimMaxLines || distance == 0 {
+	// For no change or animation disabled, keep the instant jump
+	if h.ScrollAnimMaxLines <= 0 || distance == 0 {
 		h.requestRefresh()
 		return
 	}
@@ -844,6 +866,18 @@ func (h *HistoryNavigator) animateScrollToLine(targetLine int64) {
 	stopCh := h.animStopCh
 	h.animMu.Unlock()
 
+	// Dispatch to appropriate animation handler
+	if distance <= h.ScrollAnimMaxLines {
+		// SHORT JUMP: Use smooth animation with easing
+		h.animateShortJump(startOffset, targetOffset, distance, stopCh)
+	} else {
+		// LONG JUMP: Three-phase animation with visible edge lines
+		h.animateLongJump(startOffset, targetOffset, distance, stopCh)
+	}
+}
+
+// animateShortJump performs smooth eased animation for short distances.
+func (h *HistoryNavigator) animateShortJump(startOffset, targetOffset, distance int64, stopCh chan struct{}) {
 	// Calculate animation duration based on distance (scales linearly)
 	// Short jumps are faster, longer jumps take more time
 	durationRange := h.ScrollAnimMaxTime - h.ScrollAnimMinTime
@@ -853,7 +887,7 @@ func (h *HistoryNavigator) animateScrollToLine(targetLine int64) {
 	// Use configured easing function
 	easing := h.ScrollAnimEasing
 	if easing == nil {
-		easing = effects.EaseOutCubic
+		easing = effects.EaseInOutCubic
 	}
 
 	// Animate in a goroutine
@@ -889,6 +923,122 @@ func (h *HistoryNavigator) animateScrollToLine(targetLine int64) {
 				h.requestRefresh()
 			}
 		}
+	}()
+}
+
+// animateLongJump performs three-phase animation for long distances:
+// Phase 1: Show first N edge lines one-by-one (accelerating)
+// Phase 2: Fast smooth scroll through the middle
+// Phase 3: Show last N edge lines one-by-one (decelerating)
+func (h *HistoryNavigator) animateLongJump(startOffset, targetOffset, distance int64, stopCh chan struct{}) {
+	direction := int64(1)
+	if targetOffset < startOffset {
+		direction = -1
+	}
+
+	edgeLines := int64(h.ScrollAnimEdgeLines)
+
+	// If distance is too short for three phases, fall back to smooth animation
+	if distance <= 2*edgeLines {
+		h.animateShortJump(startOffset, targetOffset, distance, stopCh)
+		return
+	}
+
+	go func() {
+		// PHASE 1: Ease-in (show first N lines one-by-one, accelerating)
+		for i := int64(1); i <= edgeLines; i++ {
+			select {
+			case <-stopCh:
+				return
+			default:
+			}
+
+			// Delay decreases with each line (ease-in effect)
+			var progress float32
+			if edgeLines > 1 {
+				progress = float32(i-1) / float32(edgeLines-1)
+			}
+			delay := lerp(h.ScrollAnimEdgeStartDelay, h.ScrollAnimEdgeEndDelay, progress)
+			time.Sleep(delay)
+
+			h.vterm.SetScrollOffset(startOffset + i*direction)
+			h.requestRefresh()
+		}
+
+		// PHASE 2: Fast middle (smooth animation through bulk)
+		middleStart := startOffset + edgeLines*direction
+		middleEnd := targetOffset - edgeLines*direction
+		middleDistance := absInt64(middleEnd - middleStart)
+
+		if middleDistance > 0 {
+			// Use short duration for middle phase (fast scroll)
+			middleDuration := h.ScrollAnimMinTime / 2
+
+			// Use configured easing function
+			easing := h.ScrollAnimEasing
+			if easing == nil {
+				easing = effects.EaseInOutCubic
+			}
+
+			startTime := time.Now()
+			ticker := time.NewTicker(time.Second / time.Duration(h.ScrollAnimFrameRate))
+
+			for {
+				select {
+				case <-stopCh:
+					ticker.Stop()
+					return
+				case <-ticker.C:
+					elapsed := time.Since(startTime)
+					if elapsed >= middleDuration {
+						// Phase 2 complete
+						h.vterm.SetScrollOffset(middleEnd)
+						h.requestRefresh()
+						ticker.Stop()
+						goto phase3
+					}
+
+					// Calculate progress and apply easing
+					progress := float32(elapsed) / float32(middleDuration)
+					easedProgress := easing(progress)
+
+					// Interpolate scroll offset
+					currentOffset := middleStart + int64(float32(middleEnd-middleStart)*easedProgress)
+					h.vterm.SetScrollOffset(currentOffset)
+					h.requestRefresh()
+				}
+			}
+		}
+
+	phase3:
+		// PHASE 3: Ease-out (show last N lines one-by-one, decelerating)
+		phaseStart := targetOffset - edgeLines*direction
+		for i := int64(1); i <= edgeLines; i++ {
+			select {
+			case <-stopCh:
+				return
+			default:
+			}
+
+			// Delay increases with each line (ease-out effect)
+			var progress float32
+			if edgeLines > 1 {
+				progress = float32(i-1) / float32(edgeLines-1)
+			}
+			delay := lerp(h.ScrollAnimEdgeEndDelay, h.ScrollAnimEdgeStartDelay, progress)
+			time.Sleep(delay)
+
+			h.vterm.SetScrollOffset(phaseStart + i*direction)
+			h.requestRefresh()
+		}
+
+		// Ensure we land exactly on target
+		h.vterm.SetScrollOffset(targetOffset)
+		h.requestRefresh()
+
+		h.animMu.Lock()
+		h.animating = false
+		h.animMu.Unlock()
 	}()
 }
 
