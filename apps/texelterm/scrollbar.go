@@ -246,12 +246,14 @@ func (s *ScrollBar) Render() [][]texelcore.Cell {
 
 	// Get scroll metrics from vterm
 	var thumbStartSub, thumbEndSub int
+	var useSmoothBlocks bool
 	if s.vterm != nil {
-		thumbStartSub, thumbEndSub = s.calculateThumbPosition(height)
+		thumbStartSub, thumbEndSub, useSmoothBlocks = s.calculateThumbPosition(height)
 	} else {
 		// No vterm, show full thumb
 		thumbStartSub = 0
 		thumbEndSub = height * 3
+		useSmoothBlocks = false
 	}
 
 	// Calculate braille minimap data (line lengths + colors per row)
@@ -259,7 +261,7 @@ func (s *ScrollBar) Render() [][]texelcore.Cell {
 
 	// Render each row using braille characters with colors
 	for y := 0; y < height; y++ {
-		s.renderBrailleMinimapRow(grid[y], y, thumbStartSub, thumbEndSub, &minimap[y])
+		s.renderBrailleMinimapRow(grid[y], y, thumbStartSub, thumbEndSub, useSmoothBlocks, &minimap[y])
 	}
 
 	return grid
@@ -586,7 +588,8 @@ const (
 // renderBrailleMinimapRow renders a scrollbar row using braille characters.
 // Each row shows 4 lines as horizontal bars using braille subpixels.
 // thumbStartSub and thumbEndSub are in sub-row units (3 per row).
-func (s *ScrollBar) renderBrailleMinimapRow(row []texelcore.Cell, y int, thumbStartSub, thumbEndSub int, data *minimapRowData) {
+// useSmoothBlocks enables the smooth block trick when raw thumb size < 1 character.
+func (s *ScrollBar) renderBrailleMinimapRow(row []texelcore.Cell, y int, thumbStartSub, thumbEndSub int, useSmoothBlocks bool, data *minimapRowData) {
 	// This row's sub-row range: [y*3, y*3+3)
 	rowSubStart := y * 3
 	rowSubEnd := y*3 + 3
@@ -598,7 +601,7 @@ func (s *ScrollBar) renderBrailleMinimapRow(row []texelcore.Cell, y int, thumbSt
 	borderChar := '│'
 	borderStyle := s.borderStyle
 	if hasThumb {
-		borderChar, borderStyle = s.getThumbBlockChar(thumbStartSub, thumbEndSub)
+		borderChar, borderStyle = s.getThumbBlockChar(thumbStartSub, useSmoothBlocks)
 	}
 	row[0] = texelcore.Cell{
 		Ch:    borderChar,
@@ -648,23 +651,21 @@ func (s *ScrollBar) renderBrailleMinimapRow(row []texelcore.Cell, y int, thumbSt
 }
 
 // getThumbBlockChar returns the block character and style for thumb position.
-// thumbStartSub, thumbEndSub: the sub-row range of the thumb
-func (s *ScrollBar) getThumbBlockChar(thumbStartSub, thumbEndSub int) (rune, tcell.Style) {
+// thumbStartSub: the starting sub-row position of the thumb
+// useSmoothBlocks: true when raw thumb size < 1 character (enables 3x resolution)
+func (s *ScrollBar) getThumbBlockChar(thumbStartSub int, useSmoothBlocks bool) (rune, tcell.Style) {
 	// Use accent color as foreground, border foreground as background for continuity
 	accentFg, _, _ := s.thumbStyle.Decompose()
 	borderFg, _, _ := s.borderStyle.Decompose()
 	style := tcell.StyleDefault.Foreground(accentFg).Background(borderFg)
 
-	// Check if thumb fits in a single row (start and end are in the same row)
-	startRow := thumbStartSub / 3
-	endRow := (thumbEndSub - 1) / 3 // -1 because endSub is exclusive
-
-	// If thumb spans multiple rows, use full block
-	if startRow != endRow {
+	// Only use smooth blocks when raw thumb size < 1 character
+	// This gives 3x resolution for very large histories
+	if !useSmoothBlocks {
 		return blockFull, style
 	}
 
-	// Single row thumb - cycle through top → middle → bottom based on position mod 3
+	// Smooth block mode - cycle through top → middle → bottom based on position mod 3
 	switch thumbStartSub % 3 {
 	case 0:
 		return blockTop, style
@@ -780,38 +781,51 @@ func (s *ScrollBar) buildBrailleRow(lineLengths []float64) [MinimapWidth]rune {
 }
 
 // calculateThumbPosition calculates the thumb position based on scroll state.
-// Returns (thumbStart, thumbEnd) in sub-row coordinates (3x resolution).
+// Returns (thumbStart, thumbEnd, useSmoothBlocks) in sub-row coordinates (3x resolution).
 // Each row has 3 sub-positions: top, middle, bottom.
+// useSmoothBlocks is true when the raw thumb size < 3 (less than one character),
+// enabling the smooth block trick for 3x resolution.
 // Uses logical lines to match the minimap coordinate system.
-func (s *ScrollBar) calculateThumbPosition(height int) (int, int) {
+func (s *ScrollBar) calculateThumbPosition(height int) (int, int, bool) {
 	if s.vterm == nil || height <= 2 {
-		return 0, height * 3
+		return 0, height * 3, false
 	}
 
 	// Get scroll metrics
+	// scrollOffset is in PHYSICAL lines (accounts for line wrapping)
 	scrollOffset := s.vterm.ScrollOffset()
 	viewportHeight := int64(s.vterm.Height())
 
-	// Use cached total lines if available, otherwise get fresh count
+	// Get both logical and physical line counts
+	// - Logical lines: for minimap proportions (search results use logical indices)
+	// - Physical lines: for scroll position (scrollOffset is physical)
 	s.mu.Lock()
-	totalLines := s.cachedTotalLines
+	totalLogicalLines := s.cachedTotalLines
 	s.mu.Unlock()
 
-	if totalLines <= 0 {
-		// Cache not populated yet, get count (but don't read all content)
-		totalLines = s.vterm.TotalLogicalLines()
+	if totalLogicalLines <= 0 {
+		totalLogicalLines = s.vterm.TotalLogicalLines()
 	}
+
+	totalPhysicalLines := s.vterm.TotalPhysicalLines()
 
 	// Total sub-rows (3x resolution)
 	totalSubRows := height * 3
 
 	// If no scrollable content, thumb fills entire track
-	if totalLines <= viewportHeight {
-		return 0, totalSubRows
+	if totalLogicalLines <= viewportHeight {
+		return 0, totalSubRows, false
 	}
 
-	// Calculate thumb size in sub-rows (proportional to viewport/total)
-	thumbSize := int(float64(totalSubRows) * float64(viewportHeight) / float64(totalLines))
+	// Calculate raw thumb size in sub-rows (proportional to viewport/total)
+	// Use logical lines for size to match minimap proportions
+	rawThumbSize := float64(totalSubRows) * float64(viewportHeight) / float64(totalLogicalLines)
+
+	// Use smooth blocks when raw size < 3 (less than one full character)
+	// This gives us 3x resolution for very large histories
+	useSmoothBlocks := rawThumbSize < 3.0
+
+	thumbSize := int(rawThumbSize)
 	if thumbSize < 1 {
 		thumbSize = 1
 	}
@@ -820,10 +834,11 @@ func (s *ScrollBar) calculateThumbPosition(height int) (int, int) {
 	}
 
 	// Calculate thumb position
-	// scrollOffset 0 = at bottom (live edge), higher = scrolled up into history
-	maxScroll := totalLines - viewportHeight
+	// scrollOffset is in PHYSICAL lines, so use physical lines for maxScroll
+	// This ensures thumb position is accurate relative to actual scroll state
+	maxScroll := totalPhysicalLines - viewportHeight
 	if maxScroll <= 0 {
-		return 0, totalSubRows
+		return 0, totalSubRows, false
 	}
 
 	// Position: scrollOffset 0 -> thumb at bottom, maxScroll -> thumb at top
@@ -833,6 +848,20 @@ func (s *ScrollBar) calculateThumbPosition(height int) (int, int) {
 	thumbStart := thumbTop
 	thumbEnd := thumbTop + thumbSize
 
+	// When not using smooth blocks, snap to row boundaries to avoid
+	// the thumb appearing on different number of rows depending on position
+	if !useSmoothBlocks {
+		// Round thumbStart down to row boundary
+		thumbStart = (thumbStart / 3) * 3
+		// Ensure thumbSize is at least one full row
+		if thumbSize < 3 {
+			thumbSize = 3
+		}
+		// Round thumbSize up to full rows
+		thumbSize = ((thumbSize + 2) / 3) * 3
+		thumbEnd = thumbStart + thumbSize
+	}
+
 	// Clamp
 	if thumbStart < 0 {
 		thumbStart = 0
@@ -841,7 +870,7 @@ func (s *ScrollBar) calculateThumbPosition(height int) (int, int) {
 		thumbEnd = totalSubRows
 	}
 
-	return thumbStart, thumbEnd
+	return thumbStart, thumbEnd, useSmoothBlocks
 }
 
 // HandleClick handles a mouse click on the scrollbar.
