@@ -455,9 +455,10 @@ func (si *SQLiteSearchIndex) DeleteLine(lineIdx int64) error {
 	return err
 }
 
-// Search executes an FTS5 search query.
+// Search executes a search query.
 // Results are ordered by time (newest first) for intuitive history navigation.
 // Next goes to older results, Prev goes to newer results.
+// For queries shorter than 3 characters, uses LIKE since trigram tokenizer needs at least 3 chars.
 func (si *SQLiteSearchIndex) Search(query string, limit int) ([]SearchResult, error) {
 	if query == "" {
 		return nil, nil
@@ -466,19 +467,37 @@ func (si *SQLiteSearchIndex) Search(query string, limit int) ([]SearchResult, er
 	si.mu.RLock()
 	defer si.mu.RUnlock()
 
-	// With trigram tokenizer, wrap query in double quotes for literal substring matching.
-	// This allows searching for patterns like "ls -ls" that contain special characters.
-	quotedQuery := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+	var rows *sql.Rows
+	var err error
 
-	// FTS5 query ordered by timestamp (newest first) for history navigation
-	rows, err := si.db.Query(`
-		SELECT l.id, l.timestamp, l.content, l.is_command
-		FROM lines_fts
-		JOIN lines l ON l.id = lines_fts.rowid
-		WHERE lines_fts MATCH ?
-		ORDER BY l.timestamp DESC
-		LIMIT ?
-	`, quotedQuery, limit)
+	// Trigram tokenizer requires at least 3 characters to produce a trigram.
+	// For shorter queries, fall back to LIKE which works for any length.
+	if len(query) < 3 {
+		// Use LIKE for short queries (case-insensitive via LOWER)
+		likePattern := "%" + strings.ReplaceAll(strings.ReplaceAll(query, "%", "\\%"), "_", "\\_") + "%"
+		rows, err = si.db.Query(`
+			SELECT id, timestamp, content, is_command
+			FROM lines
+			WHERE content LIKE ? ESCAPE '\'
+			ORDER BY timestamp DESC
+			LIMIT ?
+		`, likePattern, limit)
+	} else {
+		// With trigram tokenizer, wrap query in double quotes for literal substring matching.
+		// This allows searching for patterns like "ls -ls" that contain special characters.
+		quotedQuery := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+
+		// FTS5 query ordered by timestamp (newest first) for history navigation
+		rows, err = si.db.Query(`
+			SELECT l.id, l.timestamp, l.content, l.is_command
+			FROM lines_fts
+			JOIN lines l ON l.id = lines_fts.rowid
+			WHERE lines_fts MATCH ?
+			ORDER BY l.timestamp DESC
+			LIMIT ?
+		`, quotedQuery, limit)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
@@ -488,6 +507,7 @@ func (si *SQLiteSearchIndex) Search(query string, limit int) ([]SearchResult, er
 }
 
 // SearchInRange searches within a time range.
+// For queries shorter than 3 characters, uses LIKE since trigram tokenizer needs at least 3 chars.
 func (si *SQLiteSearchIndex) SearchInRange(query string, start, end time.Time, limit int) ([]SearchResult, error) {
 	if query == "" {
 		return nil, nil
@@ -496,17 +516,35 @@ func (si *SQLiteSearchIndex) SearchInRange(query string, start, end time.Time, l
 	si.mu.RLock()
 	defer si.mu.RUnlock()
 
-	// With trigram tokenizer, wrap query in double quotes for literal substring matching.
-	quotedQuery := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+	var rows *sql.Rows
+	var err error
 
-	rows, err := si.db.Query(`
-		SELECT l.id, l.timestamp, l.content, l.is_command
-		FROM lines_fts
-		JOIN lines l ON l.id = lines_fts.rowid
-		WHERE lines_fts MATCH ? AND l.timestamp >= ? AND l.timestamp <= ?
-		ORDER BY l.timestamp DESC
-		LIMIT ?
-	`, quotedQuery, start.UnixNano(), end.UnixNano(), limit)
+	// Trigram tokenizer requires at least 3 characters to produce a trigram.
+	// For shorter queries, fall back to LIKE which works for any length.
+	if len(query) < 3 {
+		// Use LIKE for short queries (case-insensitive via LOWER)
+		likePattern := "%" + strings.ReplaceAll(strings.ReplaceAll(query, "%", "\\%"), "_", "\\_") + "%"
+		rows, err = si.db.Query(`
+			SELECT id, timestamp, content, is_command
+			FROM lines
+			WHERE content LIKE ? ESCAPE '\' AND timestamp >= ? AND timestamp <= ?
+			ORDER BY timestamp DESC
+			LIMIT ?
+		`, likePattern, start.UnixNano(), end.UnixNano(), limit)
+	} else {
+		// With trigram tokenizer, wrap query in double quotes for literal substring matching.
+		quotedQuery := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+
+		rows, err = si.db.Query(`
+			SELECT l.id, l.timestamp, l.content, l.is_command
+			FROM lines_fts
+			JOIN lines l ON l.id = lines_fts.rowid
+			WHERE lines_fts MATCH ? AND l.timestamp >= ? AND l.timestamp <= ?
+			ORDER BY l.timestamp DESC
+			LIMIT ?
+		`, quotedQuery, start.UnixNano(), end.UnixNano(), limit)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
