@@ -617,3 +617,60 @@ func TestSearchIndex_DeleteLine(t *testing.T) {
 		t.Errorf("deleting non-existent line should not error: %v", err)
 	}
 }
+
+func TestSearchIndex_ShortQuery(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	idx, err := NewSearchIndex(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create index: %v", err)
+	}
+	defer idx.Close()
+
+	now := time.Now()
+
+	// Index lines containing short patterns
+	idx.IndexLine(0, now, "ls -la", true)
+	idx.IndexLine(1, now.Add(time.Second), "ls command output", true)
+	idx.IndexLine(2, now.Add(2*time.Second), "cd /tmp", true)
+	idx.IndexLine(3, now.Add(3*time.Second), "git status", true)
+	idx.IndexLine(4, now.Add(4*time.Second), "ls /home", true)
+
+	// Test 2-character query "ls" - should use LIKE fallback
+	results, err := idx.Search("ls", 10)
+	if err != nil {
+		t.Fatalf("search for 'ls' failed: %v", err)
+	}
+	if len(results) != 3 {
+		t.Errorf("expected 3 results for 'ls', got %d", len(results))
+	}
+
+	// Test 1-character query - should also use LIKE
+	results, err = idx.Search("l", 10)
+	if err != nil {
+		t.Fatalf("search for 'l' failed: %v", err)
+	}
+	// "l" appears in: "ls -la", "ls command output", "ls /home", "git status" (status)
+	if len(results) < 3 {
+		t.Errorf("expected at least 3 results for 'l', got %d", len(results))
+	}
+
+	// Test 3-character query "git" - should use FTS5 trigram
+	results, err = idx.Search("git", 10)
+	if err != nil {
+		t.Fatalf("search for 'git' failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'git', got %d", len(results))
+	}
+
+	// Test 2-character query "cd" - LIKE fallback
+	results, err = idx.Search("cd", 10)
+	if err != nil {
+		t.Fatalf("search for 'cd' failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected 1 result for 'cd', got %d", len(results))
+	}
+}
