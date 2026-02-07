@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -493,6 +494,257 @@ func TestVTerm_ScrollRegionPreservesScrollback(t *testing.T) {
 	t.Logf("liveEdgeBase=%d, scrollback has %d lines of Codex-like content", liveEdge, liveEdge)
 }
 
+// TestVTerm_ScrollRegionCodexExitSequence simulates the full Codex lifecycle:
+// enter scroll region, scroll content, exit scroll region, resume shell.
+// Verifies that scrollback doesn't have a large gap of empty lines.
+func TestVTerm_ScrollRegionCodexExitSequence(t *testing.T) {
+	width, height := 40, 10
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Phase 1: Pre-Codex shell output
+	parseString(p, "pre-codex-line-1\r\n")
+	parseString(p, "pre-codex-line-2\r\n")
+	parseString(p, "$ codex\r\n")
+
+	// Phase 2: Codex sets up scroll region (header at row 0, footer at row 9)
+	parseString(p, "\x1b[1;1H") // Move to top
+	parseString(p, "=== CODEX HEADER ===")
+	parseString(p, fmt.Sprintf("\x1b[%d;1H", height)) // Move to last row
+	parseString(p, "=== CODEX FOOTER ===")
+	parseString(p, "\x1b[2;9r") // Set scroll region rows 2-9 (0-indexed: 1-8)
+
+	// Phase 3: Write content that scrolls within the region (simulate work)
+	parseString(p, "\x1b[2;1H") // Move to top of region
+	for i := 0; i < 15; i++ {
+		parseString(p, fmt.Sprintf("codex-output-%02d", i))
+		if i < 14 {
+			parseString(p, "\n\r")
+		}
+	}
+
+	scrollsDuringCodex := v.memBufState.liveEdgeBase
+	t.Logf("After Codex session: liveEdgeBase=%d", scrollsDuringCodex)
+
+	// Phase 4: Codex exits — reset scroll region, erase below, print exit message
+	parseString(p, "\x1b[r")    // Reset scroll region to full screen
+	parseString(p, "\x1b[8;1H") // Move cursor near bottom
+	parseString(p, "\x1b[J")    // Erase from cursor to end
+	parseString(p, "Token usage: 1234\r\n")
+
+	// Phase 5: Shell resumes with normal output
+	for i := 0; i < 15; i++ {
+		parseString(p, fmt.Sprintf("post-codex-line-%02d\r\n", i))
+	}
+
+	// Now inspect the scrollback for empty gaps
+	mb := v.memBufState.memBuf
+	liveEdge := v.memBufState.liveEdgeBase
+	t.Logf("After post-codex: liveEdgeBase=%d, GlobalEnd=%d", liveEdge, mb.GlobalEnd())
+
+	// Count consecutive empty lines in the scrollback
+	maxEmptyRun := 0
+	currentEmptyRun := 0
+	for idx := mb.GlobalOffset(); idx < liveEdge; idx++ {
+		line := mb.GetLine(idx)
+		isEmpty := true
+		if line != nil {
+			for _, cell := range line.Cells {
+				if cell.Rune != 0 && cell.Rune != ' ' {
+					isEmpty = false
+					break
+				}
+			}
+		}
+		if isEmpty {
+			currentEmptyRun++
+			if currentEmptyRun > maxEmptyRun {
+				maxEmptyRun = currentEmptyRun
+			}
+		} else {
+			currentEmptyRun = 0
+		}
+	}
+
+	t.Logf("Max consecutive empty lines in scrollback: %d", maxEmptyRun)
+
+	// Also verify the viewport grid scrollback via user scrolling
+	// Simulate scrolling all the way back to verify no empty gap in rendered output
+	totalPhysical := v.memBufState.viewport.TotalPhysicalLines()
+	t.Logf("Total physical lines: %d", totalPhysical)
+
+	// Scroll to top
+	v.memBufState.viewport.ScrollToTop()
+	topGrid := v.memBufState.viewport.GetVisibleGrid()
+
+	// Check first row has content
+	firstRowText := gridRowToString(topGrid[0][:16])
+	t.Logf("First row at scroll top: %q", firstRowText)
+
+	// Scroll back to bottom
+	v.memBufState.viewport.ScrollToBottom()
+
+	// A gap of more than a few lines is the bug
+	if maxEmptyRun > 3 {
+		t.Errorf("Found %d consecutive empty lines in scrollback (expected <= 3). This is the empty space bug.", maxEmptyRun)
+
+		// Print the scrollback for debugging
+		for idx := mb.GlobalOffset(); idx < liveEdge; idx++ {
+			line := mb.GetLine(idx)
+			text := ""
+			if line != nil && len(line.Cells) > 0 {
+				for _, cell := range line.Cells {
+					if cell.Rune == 0 {
+						text += " "
+					} else {
+						text += string(cell.Rune)
+					}
+				}
+			}
+			// Trim trailing spaces for readability
+			trimmed := ""
+			for i := len(text) - 1; i >= 0; i-- {
+				if text[i] != ' ' {
+					trimmed = text[:i+1]
+					break
+				}
+			}
+			t.Logf("  Line %3d: %q", idx, trimmed)
+		}
+	}
+}
+
+// TestVTerm_ScrollRegionPersistRestore tests that scrollback is correct after
+// saving to disk and restoring (simulating texelterm exit and re-open).
+func TestVTerm_ScrollRegionPersistRestore(t *testing.T) {
+	tmpDir := t.TempDir()
+	diskPath := tmpDir + "/test_history.hist3"
+	terminalID := "test-codex-persist"
+	width, height := 40, 10
+
+	// Session 1: Run "Codex" with scroll region
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("EnableMemoryBufferWithDisk failed: %v", err)
+		}
+		p := NewParser(v)
+
+		// Pre-Codex output
+		parseString(p, "$ codex\r\n")
+
+		// Codex: set scroll region, write content
+		parseString(p, "\x1b[1;1H")
+		parseString(p, "HEADER")
+		parseString(p, fmt.Sprintf("\x1b[%d;1H", height))
+		parseString(p, "FOOTER")
+		parseString(p, "\x1b[2;9r") // Scroll region rows 1-8
+
+		parseString(p, "\x1b[2;1H")
+		for i := 0; i < 15; i++ {
+			parseString(p, fmt.Sprintf("codex-out-%02d", i))
+			if i < 14 {
+				parseString(p, "\n\r")
+			}
+		}
+
+		liveEdgeAfterCodex := v.memBufState.liveEdgeBase
+		t.Logf("Session 1 after Codex: liveEdgeBase=%d", liveEdgeAfterCodex)
+
+		// Codex exits: reset margins, shell resumes
+		parseString(p, "\x1b[r")
+		parseString(p, "\x1b[8;1H")
+		parseString(p, "\x1b[J")
+		parseString(p, "post-codex-1\r\n")
+		parseString(p, "post-codex-2\r\n")
+
+		t.Logf("Session 1 final: liveEdgeBase=%d, GlobalEnd=%d",
+			v.memBufState.liveEdgeBase, v.memBufState.memBuf.GlobalEnd())
+
+		v.CloseMemoryBuffer()
+	}
+
+	// Session 2: Restore and check for gaps
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("Restore failed: %v", err)
+		}
+
+		mb := v.memBufState.memBuf
+		t.Logf("Session 2 restored: liveEdgeBase=%d, GlobalOffset=%d, GlobalEnd=%d",
+			v.memBufState.liveEdgeBase, mb.GlobalOffset(), mb.GlobalEnd())
+
+		// Check for empty gaps in scrollback
+		liveEdge := v.memBufState.liveEdgeBase
+		maxEmptyRun := 0
+		currentEmptyRun := 0
+		for idx := mb.GlobalOffset(); idx < liveEdge; idx++ {
+			line := mb.GetLine(idx)
+			isEmpty := true
+			if line != nil {
+				for _, cell := range line.Cells {
+					if cell.Rune != 0 && cell.Rune != ' ' {
+						isEmpty = false
+						break
+					}
+				}
+			}
+			if isEmpty {
+				currentEmptyRun++
+				if currentEmptyRun > maxEmptyRun {
+					maxEmptyRun = currentEmptyRun
+				}
+			} else {
+				currentEmptyRun = 0
+			}
+		}
+
+		t.Logf("Max consecutive empty lines after restore: %d", maxEmptyRun)
+
+		if maxEmptyRun > 3 {
+			t.Errorf("Found %d consecutive empty lines after restore (expected <= 3)", maxEmptyRun)
+			for idx := mb.GlobalOffset(); idx < liveEdge; idx++ {
+				line := mb.GetLine(idx)
+				text := ""
+				if line != nil {
+					for _, cell := range line.Cells {
+						if cell.Rune == 0 {
+							text += " "
+						} else {
+							text += string(cell.Rune)
+						}
+					}
+				}
+				trimmed := ""
+				for i := len(text) - 1; i >= 0; i-- {
+					if text[i] != ' ' {
+						trimmed = text[:i+1]
+						break
+					}
+				}
+				t.Logf("  Line %3d: %q", idx, trimmed)
+			}
+		}
+
+		// Also scroll through the viewport to check rendered content
+		v.memBufState.viewport.ScrollToTop()
+		topGrid := v.memBufState.viewport.GetVisibleGrid()
+		t.Logf("First row at top: %q", gridRowToString(topGrid[0][:20]))
+
+		v.CloseMemoryBuffer()
+	}
+}
+
 // TestVTerm_ScrollRegionNoHeader tests scroll region starting at row 0 (no header).
 func TestVTerm_ScrollRegionNoHeader(t *testing.T) {
 	width, height := 40, 6
@@ -736,6 +988,191 @@ func TestVTerm_ScrollRegionScrollDownUnchanged(t *testing.T) {
 	if liveEdgeAfter != liveEdgeBefore {
 		t.Errorf("liveEdgeBase changed for scroll-down: before=%d, after=%d",
 			liveEdgeBefore, liveEdgeAfter)
+	}
+}
+
+// TestVTerm_EraseDisplayPushesToScrollback verifies that ESC[2J and ESC[H ESC[J
+// push non-empty viewport content to scrollback before clearing, and that
+// leading empty rows are compacted out (no empty gap in scrollback).
+func TestVTerm_EraseDisplayPushesToScrollback(t *testing.T) {
+	width, height := 40, 10
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Phase 1: Shell prompt + "codex" command
+	parseString(p, "$ codex\r\n")
+
+	// Phase 2: Codex sets up scroll region and draws content
+	// Header at row 0, footer at row 9, content in rows 1-8
+	parseString(p, "\x1b[1;1H") // cursor home
+	parseString(p, "=== HEADER ===")
+	parseString(p, fmt.Sprintf("\x1b[%d;1H", height)) // last row
+	parseString(p, "=== FOOTER ===")
+	parseString(p, "\x1b[2;9r") // scroll region rows 2-9 (0-indexed: 1-8)
+
+	// Write enough content to scroll within the region
+	parseString(p, "\x1b[2;1H") // top of region
+	for i := 0; i < 20; i++ {
+		parseString(p, fmt.Sprintf("content-%02d", i))
+		if i < 19 {
+			parseString(p, "\n\r")
+		}
+	}
+
+	liveEdgeBeforeExit := v.memBufState.liveEdgeBase
+	t.Logf("Before Codex exit: liveEdgeBase=%d", liveEdgeBeforeExit)
+
+	// Phase 3: Codex exits — reset scroll region, cursor home, clear screen
+	parseString(p, "\x1b[r")      // reset scroll region
+	parseString(p, "\x1b[H")      // cursor home
+	parseString(p, "\x1b[2J")     // ED 2: erase entire display
+
+	liveEdgeAfterExit := v.memBufState.liveEdgeBase
+	t.Logf("After Codex exit (ED 2): liveEdgeBase=%d (advanced by %d)",
+		liveEdgeAfterExit, liveEdgeAfterExit-liveEdgeBeforeExit)
+
+	// Phase 4: Shell resumes
+	parseString(p, "$ whoami\r\n")
+	parseString(p, "marc\r\n")
+
+	// Verify: scan for empty gaps in scrollback
+	mb := v.memBufState.memBuf
+	liveEdge := v.memBufState.liveEdgeBase
+
+	maxEmptyRun := 0
+	currentEmptyRun := 0
+	for idx := mb.GlobalOffset(); idx < liveEdge; idx++ {
+		line := mb.GetLine(idx)
+		isEmpty := true
+		if line != nil {
+			for _, cell := range line.Cells {
+				if cell.Rune != 0 && cell.Rune != ' ' {
+					isEmpty = false
+					break
+				}
+			}
+		}
+		if isEmpty {
+			currentEmptyRun++
+			if currentEmptyRun > maxEmptyRun {
+				maxEmptyRun = currentEmptyRun
+			}
+		} else {
+			currentEmptyRun = 0
+		}
+	}
+
+	t.Logf("Max consecutive empty lines in scrollback: %d (total scrollback: %d lines)",
+		maxEmptyRun, liveEdge-mb.GlobalOffset())
+
+	// The scrollback should NOT have a large empty gap
+	// Allow 1-2 empty lines (natural blank after "codex" command)
+	if maxEmptyRun > 2 {
+		t.Errorf("Too many consecutive empty lines in scrollback: %d (want <= 2)", maxEmptyRun)
+		// Dump scrollback for debugging
+		for idx := mb.GlobalOffset(); idx < liveEdge && idx < mb.GlobalOffset()+30; idx++ {
+			line := mb.GetLine(idx)
+			text := ""
+			if line != nil {
+				for _, cell := range line.Cells {
+					if cell.Rune == 0 {
+						text += " "
+					} else {
+						text += string(cell.Rune)
+					}
+				}
+			}
+			t.Logf("  Scrollback line %d: %q", idx, strings.TrimRight(text, " "))
+		}
+	}
+
+	// Verify the Codex content (header, content lines, footer) is in scrollback
+	foundHeader := false
+	foundContent := false
+	foundFooter := false
+	for idx := mb.GlobalOffset(); idx < liveEdge; idx++ {
+		line := mb.GetLine(idx)
+		if line == nil {
+			continue
+		}
+		text := ""
+		for _, cell := range line.Cells {
+			if cell.Rune == 0 {
+				break
+			}
+			text += string(cell.Rune)
+		}
+		if strings.Contains(text, "HEADER") {
+			foundHeader = true
+		}
+		if strings.Contains(text, "content-19") {
+			foundContent = true
+		}
+		if strings.Contains(text, "FOOTER") {
+			foundFooter = true
+		}
+	}
+
+	if !foundHeader {
+		t.Error("Codex HEADER not found in scrollback")
+	}
+	if !foundContent {
+		t.Error("Last content line (content-19) not found in scrollback")
+	}
+	if !foundFooter {
+		t.Error("Codex FOOTER not found in scrollback")
+	}
+}
+
+// TestVTerm_EraseFromHomePushesToScrollback verifies ESC[H ESC[J (cursor home +
+// erase to end) also pushes viewport to scrollback.
+func TestVTerm_EraseFromHomePushesToScrollback(t *testing.T) {
+	width, height := 40, 10
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write content that fills the viewport
+	for i := 0; i < height; i++ {
+		parseString(p, fmt.Sprintf("visible-line-%02d\r\n", i))
+	}
+
+	liveEdgeBefore := v.memBufState.liveEdgeBase
+
+	// ESC[H ESC[J: cursor home + erase from cursor to end
+	parseString(p, "\x1b[H\x1b[J")
+
+	liveEdgeAfter := v.memBufState.liveEdgeBase
+	t.Logf("liveEdgeBase: %d → %d (advanced by %d)", liveEdgeBefore, liveEdgeAfter, liveEdgeAfter-liveEdgeBefore)
+
+	// The viewport content should have been pushed to scrollback
+	if liveEdgeAfter <= liveEdgeBefore {
+		t.Error("liveEdgeBase should have advanced (viewport content should be in scrollback)")
+	}
+
+	// Verify content is in scrollback
+	mb := v.memBufState.memBuf
+	found := false
+	for idx := mb.GlobalOffset(); idx < liveEdgeAfter; idx++ {
+		line := mb.GetLine(idx)
+		if line == nil {
+			continue
+		}
+		text := ""
+		for _, cell := range line.Cells {
+			if cell.Rune == 0 {
+				break
+			}
+			text += string(cell.Rune)
+		}
+		if strings.Contains(text, "visible-line-09") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Last visible line not found in scrollback after ESC[H ESC[J")
 	}
 }
 

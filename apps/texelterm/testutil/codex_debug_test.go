@@ -798,6 +798,130 @@ func TestCodexCaptureReplay(t *testing.T) {
 	}
 }
 
+// TestCodexCaptureScrollback replays the FULL codex-capture.log and examines
+// scrollback state to diagnose the "empty space after Codex" bug.
+func TestCodexCaptureScrollback(t *testing.T) {
+	capturePath := ""
+	for _, p := range []string{
+		"../../../../codex-capture.log",
+		"../../../codex-capture.log",
+		"/home/marc/projects/texel/texelation/codex-capture.log",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			capturePath = p
+			break
+		}
+	}
+	if capturePath == "" {
+		t.Skip("codex-capture.log not found")
+	}
+	data, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Skipf("codex-capture.log not found: %v", err)
+	}
+
+	width, height := 150, 44
+
+	// Skip first line (Script header)
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			start = i + 1
+			break
+		}
+	}
+
+	rec := testutil.NewRecording(width, height)
+	rec.Sequences = data[start:]
+
+	// Play the FULL capture
+	replayer := testutil.NewReplayer(rec)
+	replayer.PlayString(string(rec.Sequences))
+	v := replayer.VTerm()
+
+	mb := v.MemoryBuffer()
+	if mb == nil {
+		t.Fatal("MemoryBuffer is nil")
+	}
+
+	liveEdge := v.LiveEdgeBase()
+	t.Logf("After full replay: liveEdgeBase=%d, GlobalOffset=%d, GlobalEnd=%d, TotalLines=%d",
+		liveEdge, mb.GlobalOffset(), mb.GlobalEnd(), mb.TotalLines())
+	t.Logf("marginTop=%d, marginBottom=%d, inAltScreen=%v",
+		v.MarginTop(), v.MarginBottom(), v.InAltScreen())
+
+	// Scan scrollback for empty gaps
+	maxEmptyRun := 0
+	currentEmptyRun := 0
+	emptyRunStart := int64(-1)
+	worstRunStart := int64(-1)
+	for idx := mb.GlobalOffset(); idx < mb.GlobalEnd(); idx++ {
+		line := mb.GetLine(idx)
+		isEmpty := true
+		if line != nil {
+			for _, cell := range line.Cells {
+				if cell.Rune != 0 && cell.Rune != ' ' {
+					isEmpty = false
+					break
+				}
+			}
+		}
+		if isEmpty {
+			if currentEmptyRun == 0 {
+				emptyRunStart = idx
+			}
+			currentEmptyRun++
+			if currentEmptyRun > maxEmptyRun {
+				maxEmptyRun = currentEmptyRun
+				worstRunStart = emptyRunStart
+			}
+		} else {
+			currentEmptyRun = 0
+		}
+	}
+
+	t.Logf("Max consecutive empty lines: %d (starting at line %d)", maxEmptyRun, worstRunStart)
+
+	// Print context around the worst empty run
+	if maxEmptyRun > 3 && worstRunStart >= 0 {
+		contextStart := worstRunStart - 3
+		if contextStart < mb.GlobalOffset() {
+			contextStart = mb.GlobalOffset()
+		}
+		contextEnd := worstRunStart + int64(maxEmptyRun) + 3
+		if contextEnd > mb.GlobalEnd() {
+			contextEnd = mb.GlobalEnd()
+		}
+		for idx := contextStart; idx < contextEnd; idx++ {
+			line := mb.GetLine(idx)
+			text := ""
+			if line != nil {
+				for _, cell := range line.Cells {
+					if cell.Rune == 0 {
+						text += " "
+					} else {
+						text += string(cell.Rune)
+					}
+				}
+			}
+			// Trim trailing spaces
+			trimmed := strings.TrimRight(text, " ")
+			marker := "  "
+			if idx >= worstRunStart && idx < worstRunStart+int64(maxEmptyRun) {
+				marker = ">>"
+			}
+			if idx == liveEdge {
+				marker = "LE"
+			}
+			fixedWidth := 0
+			if line != nil {
+				fixedWidth = line.FixedWidth
+			}
+			t.Logf("%s Line %4d (fw=%d): %q", marker, idx, fixedWidth, trimmed)
+		}
+	}
+}
+
 // TestAltScreenEraseWithGreyBG is a minimal test for ESC[K] preserving BG color.
 func TestAltScreenEraseWithGreyBG(t *testing.T) {
 	width, height := 80, 24
