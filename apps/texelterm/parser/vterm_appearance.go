@@ -80,12 +80,18 @@ func (v *VTerm) handleSGR(params []int) {
 			v.ResetAttributes()
 		case p == 1:
 			v.SetAttribute(AttrBold)
+		case p == 2:
+			v.SetAttribute(AttrDim)
+		case p == 3:
+			v.SetAttribute(AttrItalic)
 		case p == 4:
 			v.SetAttribute(AttrUnderline)
 		case p == 7:
 			v.SetAttribute(AttrReverse)
 		case p == 22:
-			v.ClearAttribute(AttrBold)
+			v.ClearAttribute(AttrBold | AttrDim)
+		case p == 23:
+			v.ClearAttribute(AttrItalic)
 		case p == 24:
 			v.ClearAttribute(AttrUnderline)
 		case p == 27:
@@ -100,7 +106,12 @@ func (v *VTerm) handleSGR(params []int) {
 			v.currentBG = v.defaultBG
 		case p == 38: // Set extended foreground color
 			if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
-				v.currentFG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
+				idx := uint8(params[i+2])
+				if idx < 8 {
+					v.currentFG = Color{Mode: ColorModeStandard, Value: idx}
+				} else {
+					v.currentFG = Color{Mode: ColorMode256, Value: idx}
+				}
 				i += 2
 			} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
 				v.currentFG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
@@ -108,7 +119,12 @@ func (v *VTerm) handleSGR(params []int) {
 			}
 		case p == 48: // Set extended background color
 			if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
-				v.currentBG = Color{Mode: ColorMode256, Value: uint8(params[i+2])}
+				idx := uint8(params[i+2])
+				if idx < 8 {
+					v.currentBG = Color{Mode: ColorModeStandard, Value: idx}
+				} else {
+					v.currentBG = Color{Mode: ColorMode256, Value: idx}
+				}
 				i += 2
 			} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
 				v.currentBG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}

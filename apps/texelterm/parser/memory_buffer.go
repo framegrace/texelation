@@ -710,34 +710,9 @@ func (mb *MemoryBuffer) DeleteLine(globalIdx int64) {
 
 // --- Erase Operations ---
 
-// EraseLine clears all content from a line.
-func (mb *MemoryBuffer) EraseLine(globalIdx int64) {
-	mb.mu.Lock()
-	defer mb.mu.Unlock()
-
-	line := mb.getLineLocked(globalIdx)
-	if line != nil {
-		line.Clear()
-		mb.dirtyTracker.MarkDirty(globalIdx)
-		mb.contentVersion++
-	}
-}
-
-// EraseToEndOfLine clears cells from col to end of line.
-func (mb *MemoryBuffer) EraseToEndOfLine(globalIdx int64, col int) {
-	mb.mu.Lock()
-	defer mb.mu.Unlock()
-
-	line := mb.getLineLocked(globalIdx)
-	if line != nil {
-		line.Truncate(col)
-		mb.dirtyTracker.MarkDirty(globalIdx)
-		mb.contentVersion++
-	}
-}
-
-// EraseFromStartOfLine clears cells from start of line to col (inclusive).
-func (mb *MemoryBuffer) EraseFromStartOfLine(globalIdx int64, col int) {
+// EraseLine clears all content from a line, filling with the given colors.
+// When non-default colors are used, fills to terminal width.
+func (mb *MemoryBuffer) EraseLine(globalIdx int64, fg, bg Color) {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
@@ -746,9 +721,75 @@ func (mb *MemoryBuffer) EraseFromStartOfLine(globalIdx int64, col int) {
 		return
 	}
 
-	// Replace cells 0 through col with default spaces
-	for i := 0; i <= col && i < len(line.Cells); i++ {
-		line.Cells[i] = Cell{Rune: ' ', FG: DefaultFG, BG: DefaultBG}
+	if fg == DefaultFG && bg == DefaultBG {
+		line.Clear()
+	} else {
+		// Fill to terminal width with the specified colors
+		fillEnd := mb.termWidth
+		if fillEnd < len(line.Cells) {
+			fillEnd = len(line.Cells)
+		}
+		line.Cells = make([]Cell, fillEnd)
+		for i := range line.Cells {
+			line.Cells[i] = Cell{Rune: ' ', FG: fg, BG: bg}
+		}
+	}
+	mb.dirtyTracker.MarkDirty(globalIdx)
+	mb.contentVersion++
+}
+
+// EraseToEndOfLine clears cells from col to end of line, filling with the given colors.
+// When non-default colors are used, extends cells to terminal width so the color
+// fills the entire line (matching ESC[K behavior in real terminals).
+func (mb *MemoryBuffer) EraseToEndOfLine(globalIdx int64, col int, fg, bg Color) {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+
+	line := mb.getLineLocked(globalIdx)
+	if line == nil {
+		return
+	}
+
+	if fg == DefaultFG && bg == DefaultBG {
+		// Default colors: just truncate (padding will fill with defaults)
+		line.Truncate(col)
+	} else {
+		// Non-default colors: extend to terminal width and fill with specified colors.
+		// This ensures ESC[K with a colored background fills the entire visible line.
+		fillEnd := len(line.Cells)
+		if mb.termWidth > fillEnd {
+			fillEnd = mb.termWidth
+		}
+		// Extend cells slice if needed
+		for len(line.Cells) < fillEnd {
+			line.Cells = append(line.Cells, Cell{})
+		}
+		for i := col; i < fillEnd; i++ {
+			line.Cells[i] = Cell{Rune: ' ', FG: fg, BG: bg}
+		}
+	}
+	mb.dirtyTracker.MarkDirty(globalIdx)
+	mb.contentVersion++
+}
+
+// EraseFromStartOfLine clears cells from start of line to col (inclusive),
+// filling with the given colors.
+func (mb *MemoryBuffer) EraseFromStartOfLine(globalIdx int64, col int, fg, bg Color) {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+
+	line := mb.getLineLocked(globalIdx)
+	if line == nil {
+		return
+	}
+
+	// Extend cells if needed to cover through col
+	for len(line.Cells) <= col {
+		line.Cells = append(line.Cells, Cell{})
+	}
+
+	for i := 0; i <= col; i++ {
+		line.Cells[i] = Cell{Rune: ' ', FG: fg, BG: bg}
 	}
 
 	mb.dirtyTracker.MarkDirty(globalIdx)

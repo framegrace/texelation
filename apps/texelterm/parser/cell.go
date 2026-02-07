@@ -11,9 +11,11 @@ package parser
 type Attribute uint16
 
 const (
-	AttrBold Attribute = 1 << iota
-	AttrUnderline
-	AttrReverse
+	AttrBold      Attribute = 1 << iota // 1
+	AttrUnderline                       // 2
+	AttrReverse                         // 4
+	AttrDim                             // 8
+	AttrItalic                          // 16
 )
 
 // String returns a human-readable representation of the attribute flags.
@@ -24,6 +26,12 @@ func (a Attribute) String() string {
 	var parts []string
 	if a&AttrBold != 0 {
 		parts = append(parts, "bold")
+	}
+	if a&AttrDim != 0 {
+		parts = append(parts, "dim")
+	}
+	if a&AttrItalic != 0 {
+		parts = append(parts, "italic")
 	}
 	if a&AttrUnderline != 0 {
 		parts = append(parts, "underline")
