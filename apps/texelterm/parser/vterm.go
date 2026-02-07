@@ -1253,6 +1253,28 @@ func (v *VTerm) OriginMode() bool    { return v.originMode }
 // InAltScreen returns true if the terminal is currently showing the alternate screen buffer.
 func (v *VTerm) InAltScreen() bool { return v.inAltScreen }
 
+// LiveEdgeBase returns the current liveEdgeBase (global line index of viewport row 0).
+func (v *VTerm) LiveEdgeBase() int64 {
+	if v.memBufState == nil {
+		return 0
+	}
+	return v.memBufState.liveEdgeBase
+}
+
+// MarginTop returns the current top scroll margin.
+func (v *VTerm) MarginTop() int { return v.marginTop }
+
+// MarginBottom returns the current bottom scroll margin.
+func (v *VTerm) MarginBottom() int { return v.marginBottom }
+
+// MemoryBuffer returns the underlying MemoryBuffer for diagnostic access.
+func (v *VTerm) MemoryBuffer() *MemoryBuffer {
+	if v.memBufState == nil {
+		return nil
+	}
+	return v.memBufState.memBuf
+}
+
 // GetAltBufferLine returns a copy of the specified line from the alternate screen buffer.
 // Returns nil if index is out of bounds or not in alt screen mode.
 func (v *VTerm) GetAltBufferLine(y int) []Cell {
