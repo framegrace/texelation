@@ -235,15 +235,29 @@ func (a *TexelTerm) applyParserStyle(pCell parser.Cell) texelcore.Cell {
 		bgColor = a.mapParserColorToTCell(pCell.BG)
 	}
 
+	// Apply DIM locally by reducing foreground brightness rather than
+	// passing it to tcell as ESC[2m. Some outer terminals apply DIM
+	// to background colors too, causing visual artifacts.
+	if pCell.Attr&parser.AttrDim != 0 && fgColor != tcell.ColorDefault {
+		r, g, b := fgColor.RGB()
+		fgColor = tcell.NewRGBColor(r*6/10, g*6/10, b*6/10)
+	}
+
 	style := tcell.StyleDefault.
 		Foreground(fgColor).
 		Background(bgColor).
 		Bold(pCell.Attr&parser.AttrBold != 0).
+		Italic(pCell.Attr&parser.AttrItalic != 0).
 		Underline(pCell.Attr&parser.AttrUnderline != 0).
 		Reverse(pCell.Attr&parser.AttrReverse != 0)
 
+	ch := pCell.Rune
+	if ch == 0 {
+		ch = ' '
+	}
+
 	return texelcore.Cell{
-		Ch:    pCell.Rune,
+		Ch:    ch,
 		Style: style,
 	}
 }

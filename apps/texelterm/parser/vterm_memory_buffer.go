@@ -1061,7 +1061,7 @@ func (v *VTerm) memoryBufferEraseToEndOfLine() {
 	}
 
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
-	v.memBufState.memBuf.EraseToEndOfLine(globalLine, v.cursorX)
+	v.memBufState.memBuf.EraseToEndOfLine(globalLine, v.cursorX, v.currentFG, v.currentBG)
 
 	// Mark dirty for persistence
 	if v.memBufState.persistence != nil {
@@ -1076,7 +1076,7 @@ func (v *VTerm) memoryBufferEraseFromStartOfLine() {
 	}
 
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
-	v.memBufState.memBuf.EraseFromStartOfLine(globalLine, v.cursorX)
+	v.memBufState.memBuf.EraseFromStartOfLine(globalLine, v.cursorX, v.currentFG, v.currentBG)
 
 	// Mark dirty for persistence
 	if v.memBufState.persistence != nil {
@@ -1091,7 +1091,7 @@ func (v *VTerm) memoryBufferEraseLine() {
 	}
 
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
-	v.memBufState.memBuf.EraseLine(globalLine)
+	v.memBufState.memBuf.EraseLine(globalLine, v.currentFG, v.currentBG)
 
 	// Mark dirty for persistence
 	if v.memBufState.persistence != nil {
@@ -1144,7 +1144,7 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		// Erase all lines below
 		for y := v.cursorY + 1; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
-			v.memBufState.memBuf.EraseLine(globalLine)
+			v.memBufState.memBuf.EraseLine(globalLine, v.currentFG, v.currentBG)
 			if v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
@@ -1154,7 +1154,7 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		// Erase all lines above
 		for y := 0; y < v.cursorY; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
-			v.memBufState.memBuf.EraseLine(globalLine)
+			v.memBufState.memBuf.EraseLine(globalLine, v.currentFG, v.currentBG)
 			if v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
@@ -1165,7 +1165,7 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 	case 2: // Erase entire visible screen
 		for y := 0; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
-			v.memBufState.memBuf.EraseLine(globalLine)
+			v.memBufState.memBuf.EraseLine(globalLine, v.currentFG, v.currentBG)
 			if v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
@@ -1184,30 +1184,83 @@ func (v *VTerm) memoryBufferScrollRegion(n int, top int, bottom int) {
 	}
 
 	mb := v.memBufState.memBuf
+	origN := n // Save original n before scroll-down negates it
 
 	if n > 0 {
-		// Scroll up: delete top lines, insert blank at bottom
+		// Scroll up: preserve scrollback by advancing liveEdgeBase.
+		//
+		// When a scroll region scrolls up on the main screen, we want the
+		// scrolled-off content to become scrollback history. The algorithm:
+		//   1. Clone static header (rows 0..top-1) and footer (rows bottom+1..height-1)
+		//   2. Copy the scrolled-off line (at region top) to row 0 (becomes scrollback)
+		//   3. Advance liveEdgeBase — viewport slides down, region content shifts up
+		//   4. Restore header and footer at their new global positions
+		//   5. Clear the bottom of the scroll region
 		for i := 0; i < n; i++ {
-			// Shift lines up
-			for y := top; y < bottom; y++ {
-				srcGlobal := v.memBufState.liveEdgeBase + int64(y+1)
-				dstGlobal := v.memBufState.liveEdgeBase + int64(y)
-
-				srcLine := mb.GetLine(srcGlobal)
-				dstLine := mb.EnsureLine(dstGlobal)
-
-				if srcLine != nil && dstLine != nil {
-					// Copy content
-					dstLine.Cells = make([]Cell, len(srcLine.Cells))
-					copy(dstLine.Cells, srcLine.Cells)
-					dstLine.FixedWidth = srcLine.FixedWidth
+			// Step 1: Clone header lines (above scroll region)
+			var headerClones []*LogicalLine
+			for y := 0; y < top; y++ {
+				line := mb.GetLine(v.memBufState.liveEdgeBase + int64(y))
+				if line != nil {
+					headerClones = append(headerClones, line.Clone())
+				} else {
+					headerClones = append(headerClones, NewLogicalLine())
 				}
-				mb.MarkDirty(dstGlobal)
 			}
-			// Clear bottom line
+
+			// Step 1b: Clone footer lines (below scroll region)
+			var footerClones []*LogicalLine
+			for y := bottom + 1; y < v.height; y++ {
+				line := mb.GetLine(v.memBufState.liveEdgeBase + int64(y))
+				if line != nil {
+					footerClones = append(footerClones, line.Clone())
+				} else {
+					footerClones = append(footerClones, NewLogicalLine())
+				}
+			}
+
+			// Step 2: Copy the scrolled-off line (top of region) to row 0
+			// so it becomes the line that enters scrollback when liveEdgeBase advances.
+			if top > 0 {
+				scrolledOffLine := mb.GetLine(v.memBufState.liveEdgeBase + int64(top))
+				destLine := mb.EnsureLine(v.memBufState.liveEdgeBase)
+				if scrolledOffLine != nil && destLine != nil {
+					destLine.Cells = make([]Cell, len(scrolledOffLine.Cells))
+					copy(destLine.Cells, scrolledOffLine.Cells)
+					destLine.FixedWidth = scrolledOffLine.FixedWidth
+				}
+			}
+
+			// Step 3: Advance liveEdgeBase — the old row 0 becomes scrollback
+			v.memBufState.liveEdgeBase++
+
+			// Ensure all viewport lines exist at the new positions
+			for y := 0; y < v.height; y++ {
+				mb.EnsureLine(v.memBufState.liveEdgeBase + int64(y))
+			}
+
+			// Step 4a: Restore header at new positions
+			for y := 0; y < top; y++ {
+				globalIdx := v.memBufState.liveEdgeBase + int64(y)
+				mb.SetLine(globalIdx, headerClones[y])
+				mb.MarkDirty(globalIdx)
+			}
+
+			// Step 4b: Clear bottom of scroll region
 			bottomGlobal := v.memBufState.liveEdgeBase + int64(bottom)
-			mb.EraseLine(bottomGlobal)
+			mb.EraseLine(bottomGlobal, DefaultFG, DefaultBG)
 			mb.MarkDirty(bottomGlobal)
+
+			// Step 4c: Restore footer at new positions
+			for y := bottom + 1; y < v.height; y++ {
+				globalIdx := v.memBufState.liveEdgeBase + int64(y)
+				footerIdx := y - (bottom + 1)
+				mb.SetLine(globalIdx, footerClones[footerIdx])
+				mb.MarkDirty(globalIdx)
+			}
+
+			// Invalidate viewport cache since content shifted
+			v.memBufState.viewport.InvalidateCache()
 		}
 	} else if n < 0 {
 		// Scroll down: insert blank at top, delete bottom
@@ -1229,15 +1282,25 @@ func (v *VTerm) memoryBufferScrollRegion(n int, top int, bottom int) {
 				}
 				mb.MarkDirty(dstGlobal)
 			}
-			// Clear top line
+			// Clear top line with default colors (scroll region clears use defaults)
 			topGlobal := v.memBufState.liveEdgeBase + int64(top)
-			mb.EraseLine(topGlobal)
+			mb.EraseLine(topGlobal, DefaultFG, DefaultBG)
 			mb.MarkDirty(topGlobal)
 		}
 	}
 
 	// Notify persistence for all affected lines
 	if v.memBufState.persistence != nil {
+		// For scroll-up, also notify scrollback lines that were just created
+		// (they are at liveEdgeBase-origN through liveEdgeBase-1)
+		if origN > 0 {
+			for i := origN; i > 0; i-- {
+				scrollbackLine := v.memBufState.liveEdgeBase - int64(i)
+				if scrollbackLine >= 0 {
+					v.memBufState.persistence.NotifyWrite(scrollbackLine)
+				}
+			}
+		}
 		for y := top; y <= bottom; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			v.memBufState.persistence.NotifyWrite(globalLine)

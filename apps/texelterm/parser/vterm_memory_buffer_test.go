@@ -376,6 +376,369 @@ func TestVTerm_MemoryBufferTotalLines(t *testing.T) {
 }
 
 // gridRowToString converts a slice of cells to a string for testing.
+// TestVTerm_ScrollRegionPreservesScrollback tests that scroll region operations
+// on the main screen preserve scrolled-off content as scrollback history.
+// This simulates the Codex CLI pattern: static header, scroll region, static footer.
+func TestVTerm_ScrollRegionPreservesScrollback(t *testing.T) {
+	width, height := 40, 10
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write header on row 0
+	parseString(p, "=== HEADER ===")
+
+	// Write footer on row 9
+	parseString(p, fmt.Sprintf("\x1b[%d;1H", height)) // Move to last row
+	parseString(p, "=== FOOTER ===")
+
+	// Set scroll region: rows 2-9 (1-indexed in VT: ESC[2;9r] means rows 1-8 in 0-indexed)
+	// For a 10-row terminal, this leaves row 0 as header and row 9 as footer
+	parseString(p, "\x1b[2;9r") // Scroll region rows 2 through 9 (0-indexed: 1 through 8)
+
+	// Move cursor to top of scroll region
+	parseString(p, "\x1b[2;1H") // Row 2, Col 1 (1-indexed)
+
+	// Write lines that will fill the scroll region and eventually scroll
+	// Scroll region is rows 1-8 (0-indexed), so 8 rows
+	lines := []string{
+		"Line-A content here",
+		"Line-B content here",
+		"Line-C content here",
+		"Line-D content here",
+		"Line-E content here",
+		"Line-F content here",
+		"Line-G content here",
+		"Line-H content here",
+		"Line-I content here", // This should push Line-A into scrollback
+		"Line-J content here", // This should push Line-B into scrollback
+		"Line-K content here", // This should push Line-C into scrollback
+	}
+
+	for i, line := range lines {
+		parseString(p, line)
+		// Only add LF+CR after lines that aren't the last one,
+		// to avoid an extra scroll at the end
+		if i < len(lines)-1 {
+			parseString(p, "\n") // LF triggers scroll when at bottom of region
+			parseString(p, "\r") // CR to column 0
+		}
+	}
+
+	// Now check the visible grid
+	grid := v.Grid()
+
+	// Verify header is still intact at row 0
+	headerRow := gridRowToString(grid[0][:14])
+	if headerRow != "=== HEADER ===" {
+		t.Errorf("Header corrupted: got %q, want %q", headerRow, "=== HEADER ===")
+	}
+
+	// Verify footer is still intact at row 9
+	footerRow := gridRowToString(grid[9][:14])
+	if footerRow != "=== FOOTER ===" {
+		t.Errorf("Footer corrupted: got %q, want %q", footerRow, "=== FOOTER ===")
+	}
+
+	// Verify the scroll region shows the latest lines.
+	// Region is rows 1-8 (8 rows). We wrote 11 lines.
+	// First 8 lines fill the region (A through H). Lines 9-11 (I, J, K)
+	// each trigger a scroll, pushing A, B, C into scrollback.
+	// Visible region: D, E, F, G, H, I, J, K
+	expectedRegion := []string{
+		"Line-D", "Line-E", "Line-F", "Line-G",
+		"Line-H", "Line-I", "Line-J", "Line-K",
+	}
+	for i, expected := range expectedRegion {
+		row := i + 1 // Rows 1-8
+		actual := gridRowToString(grid[row][:6])
+		if actual != expected {
+			t.Errorf("Region row %d: got %q, want %q", row, actual, expected)
+		}
+	}
+
+	// Verify scrollback contains the scrolled-off lines
+	mb := v.memBufState.memBuf
+	liveEdge := v.memBufState.liveEdgeBase
+
+	if liveEdge != 3 {
+		t.Errorf("liveEdgeBase: got %d, want 3 (3 scroll events)", liveEdge)
+	}
+
+	// The scrollback lines are at global indices 0, 1, 2
+	// and should contain "Line-A", "Line-B", "Line-C" respectively
+	expectedScrollback := []string{"Line-A", "Line-B", "Line-C"}
+	for i, expected := range expectedScrollback {
+		globalIdx := int64(i)
+		line := mb.GetLine(globalIdx)
+		if line == nil {
+			t.Fatalf("Scrollback line at global %d is nil (liveEdge=%d)", globalIdx, liveEdge)
+		}
+		actual := ""
+		for _, cell := range line.Cells {
+			if cell.Rune == 0 {
+				break
+			}
+			actual += string(cell.Rune)
+		}
+		if len(actual) < 6 {
+			t.Errorf("Scrollback line at global %d too short: %q", globalIdx, actual)
+			continue
+		}
+		if actual[:6] != expected {
+			t.Errorf("Scrollback line at global %d: got %q, want prefix %q", globalIdx, actual[:6], expected)
+		}
+	}
+
+	t.Logf("liveEdgeBase=%d, scrollback has %d lines of Codex-like content", liveEdge, liveEdge)
+}
+
+// TestVTerm_ScrollRegionNoHeader tests scroll region starting at row 0 (no header).
+func TestVTerm_ScrollRegionNoHeader(t *testing.T) {
+	width, height := 40, 6
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write footer on row 5 (last row)
+	parseString(p, fmt.Sprintf("\x1b[%d;1H", height))
+	parseString(p, "FOOTER")
+
+	// Set scroll region: rows 1-5 (1-indexed), which is rows 0-4 (0-indexed)
+	// This means top=0, bottom=4, footer at row 5
+	parseString(p, "\x1b[1;5r")
+
+	// Move cursor to top of region
+	parseString(p, "\x1b[1;1H")
+
+	// Write 7 lines in 5-row region, causing 2 scrolls
+	for i := 0; i < 7; i++ {
+		parseString(p, fmt.Sprintf("Line-%c", 'A'+rune(i)))
+		if i < 6 {
+			parseString(p, "\n\r")
+		}
+	}
+
+	grid := v.Grid()
+
+	// Footer should be intact at row 5
+	footerRow := gridRowToString(grid[5][:6])
+	if footerRow != "FOOTER" {
+		t.Errorf("Footer corrupted: got %q, want %q", footerRow, "FOOTER")
+	}
+
+	// Verify scrollback exists
+	mb := v.memBufState.memBuf
+	liveEdge := v.memBufState.liveEdgeBase
+	if liveEdge < 2 {
+		t.Errorf("liveEdgeBase should have advanced at least 2, got %d", liveEdge)
+	}
+
+	// Scrollback should contain Line-A and Line-B
+	for i := int64(0); i < liveEdge && i < 2; i++ {
+		line := mb.GetLine(i)
+		if line == nil {
+			t.Errorf("Scrollback line at global %d is nil", i)
+			continue
+		}
+		text := gridRowToString(line.Cells[:6])
+		expected := fmt.Sprintf("Line-%c", 'A'+rune(i))
+		if text != expected {
+			t.Errorf("Scrollback[%d]: got %q, want %q", i, text, expected)
+		}
+	}
+	t.Logf("liveEdgeBase=%d (no header case)", liveEdge)
+}
+
+// TestVTerm_ScrollRegionNoFooter tests scroll region ending at last row (no footer).
+func TestVTerm_ScrollRegionNoFooter(t *testing.T) {
+	width, height := 40, 6
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write header on row 0
+	parseString(p, "HEADER")
+
+	// Set scroll region: rows 2-6 (1-indexed), which is rows 1-5 (0-indexed)
+	// This means top=1, bottom=5=height-1, no footer
+	parseString(p, "\x1b[2;6r")
+
+	// Move cursor to top of region
+	parseString(p, "\x1b[2;1H")
+
+	// Write 7 lines in 5-row region, causing 2 scrolls
+	for i := 0; i < 7; i++ {
+		parseString(p, fmt.Sprintf("Line-%c", 'A'+rune(i)))
+		if i < 6 {
+			parseString(p, "\n\r")
+		}
+	}
+
+	grid := v.Grid()
+
+	// Header should be intact at row 0
+	headerRow := gridRowToString(grid[0][:6])
+	if headerRow != "HEADER" {
+		t.Errorf("Header corrupted: got %q, want %q", headerRow, "HEADER")
+	}
+
+	// Verify scrollback exists
+	mb := v.memBufState.memBuf
+	liveEdge := v.memBufState.liveEdgeBase
+	if liveEdge < 2 {
+		t.Errorf("liveEdgeBase should have advanced at least 2, got %d", liveEdge)
+	}
+
+	// Scrollback should contain Line-A and Line-B
+	for i := int64(0); i < liveEdge && i < 2; i++ {
+		line := mb.GetLine(i)
+		if line == nil {
+			t.Errorf("Scrollback line at global %d is nil", i)
+			continue
+		}
+		text := gridRowToString(line.Cells[:6])
+		expected := fmt.Sprintf("Line-%c", 'A'+rune(i))
+		if text != expected {
+			t.Errorf("Scrollback[%d]: got %q, want %q", i, text, expected)
+		}
+	}
+	t.Logf("liveEdgeBase=%d (no footer case)", liveEdge)
+}
+
+// TestVTerm_ScrollRegionMultipleScrollN tests scrolling by n > 1 at once.
+func TestVTerm_ScrollRegionMultipleScrollN(t *testing.T) {
+	width, height := 40, 8
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write header at row 0
+	parseString(p, "HEADER")
+
+	// Write footer at row 7
+	parseString(p, fmt.Sprintf("\x1b[%d;1H", height))
+	parseString(p, "FOOTER")
+
+	// Set scroll region: rows 2-7 (1-indexed) = rows 1-6 (0-indexed)
+	parseString(p, "\x1b[2;7r")
+
+	// Move to top of region and fill it
+	parseString(p, "\x1b[2;1H")
+	for i := 0; i < 6; i++ {
+		parseString(p, fmt.Sprintf("Line-%c", 'A'+rune(i)))
+		if i < 5 {
+			parseString(p, "\n\r")
+		}
+	}
+
+	liveEdgeBefore := v.memBufState.liveEdgeBase
+
+	// Use CSI 3S to scroll up 3 lines at once
+	parseString(p, "\x1b[3S")
+
+	liveEdgeAfter := v.memBufState.liveEdgeBase
+
+	// liveEdgeBase should have advanced by 3
+	if liveEdgeAfter-liveEdgeBefore != 3 {
+		t.Errorf("liveEdgeBase delta: got %d, want 3", liveEdgeAfter-liveEdgeBefore)
+	}
+
+	grid := v.Grid()
+
+	// Header still intact
+	headerRow := gridRowToString(grid[0][:6])
+	if headerRow != "HEADER" {
+		t.Errorf("Header corrupted after multi-scroll: got %q, want %q", headerRow, "HEADER")
+	}
+
+	// Footer still intact
+	footerRow := gridRowToString(grid[7][:6])
+	if footerRow != "FOOTER" {
+		t.Errorf("Footer corrupted after multi-scroll: got %q, want %q", footerRow, "FOOTER")
+	}
+
+	// Scrollback should contain Line-A, Line-B, Line-C
+	mb := v.memBufState.memBuf
+	for i := 0; i < 3; i++ {
+		globalIdx := liveEdgeBefore + int64(i)
+		line := mb.GetLine(globalIdx)
+		if line == nil {
+			t.Fatalf("Scrollback line at global %d is nil", globalIdx)
+		}
+		text := gridRowToString(line.Cells[:6])
+		expected := fmt.Sprintf("Line-%c", 'A'+rune(i))
+		if text != expected {
+			t.Errorf("Scrollback[%d]: got %q, want %q", globalIdx, text, expected)
+		}
+	}
+
+	t.Logf("Multi-scroll: liveEdge went from %d to %d", liveEdgeBefore, liveEdgeAfter)
+}
+
+// TestVTerm_ScrollRegionFullScreenUnchanged verifies that full-screen margins
+// (no scroll region) continue to work correctly — liveEdgeBase advances through
+// the normal memoryBufferLineFeed path, not the scroll region path.
+func TestVTerm_ScrollRegionFullScreenUnchanged(t *testing.T) {
+	v := NewVTerm(40, 5, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write 8 lines with full-screen margins (default)
+	for i := 0; i < 8; i++ {
+		parseString(p, fmt.Sprintf("Line-%d", i))
+		parseString(p, "\r\n")
+	}
+
+	// liveEdgeBase should have advanced as lines scrolled off
+	liveEdge := v.memBufState.liveEdgeBase
+	if liveEdge == 0 {
+		t.Error("liveEdgeBase should have advanced for full-screen scrolling")
+	}
+
+	// Verify scrollback exists
+	mb := v.memBufState.memBuf
+	line := mb.GetLine(0)
+	if line == nil {
+		t.Fatal("First scrollback line should exist")
+	}
+	actual := gridRowToString(line.Cells[:6])
+	if actual != "Line-0" {
+		t.Errorf("First scrollback line: got %q, want %q", actual, "Line-0")
+	}
+}
+
+// TestVTerm_ScrollRegionScrollDownUnchanged verifies scroll-down within
+// a region still works (in-place shift, no scrollback creation).
+func TestVTerm_ScrollRegionScrollDownUnchanged(t *testing.T) {
+	width, height := 40, 10
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Set scroll region: rows 2-8 (1-indexed)
+	parseString(p, "\x1b[2;8r")
+
+	// Move to top of region and write content
+	parseString(p, "\x1b[2;1H")
+	parseString(p, "AAA\r\n")
+	parseString(p, "BBB\r\n")
+	parseString(p, "CCC")
+
+	// Record liveEdgeBase before scroll-down
+	liveEdgeBefore := v.memBufState.liveEdgeBase
+
+	// Scroll down within region: ESC[T (scroll down)
+	parseString(p, "\x1b[T")
+
+	// liveEdgeBase should NOT have changed for scroll-down
+	liveEdgeAfter := v.memBufState.liveEdgeBase
+	if liveEdgeAfter != liveEdgeBefore {
+		t.Errorf("liveEdgeBase changed for scroll-down: before=%d, after=%d",
+			liveEdgeBefore, liveEdgeAfter)
+	}
+}
+
 func gridRowToString(cells []Cell) string {
 	runes := make([]rune, len(cells))
 	for i, c := range cells {

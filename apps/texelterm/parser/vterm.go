@@ -399,7 +399,7 @@ func (v *VTerm) eraseHistoryLine(index int) {
 	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return
 	}
-	v.memBufState.memBuf.EraseLine(int64(index))
+	v.memBufState.memBuf.EraseLine(int64(index), DefaultFG, DefaultBG)
 }
 
 // appendHistoryLine adds a new line to the end of the MemoryBuffer.

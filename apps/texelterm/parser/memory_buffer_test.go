@@ -423,7 +423,7 @@ func TestMemoryBuffer_EraseOperations(t *testing.T) {
 
 	// Erase to end of line from col 6
 	mb.ClearAllDirty()
-	mb.EraseToEndOfLine(0, 6)
+	mb.EraseToEndOfLine(0, 6, DefaultFG, DefaultBG)
 
 	line := mb.GetLine(0)
 	if line == nil {
@@ -438,7 +438,7 @@ func TestMemoryBuffer_EraseOperations(t *testing.T) {
 
 	// Erase from start of line to col 2
 	mb.ClearAllDirty()
-	mb.EraseFromStartOfLine(0, 2)
+	mb.EraseFromStartOfLine(0, 2, DefaultFG, DefaultBG)
 
 	line = mb.GetLine(0)
 	// First 3 cells should be spaces
@@ -453,7 +453,7 @@ func TestMemoryBuffer_EraseOperations(t *testing.T) {
 	mb.Write('X', DefaultFG, DefaultBG, 0)
 	mb.Write('Y', DefaultFG, DefaultBG, 0)
 
-	mb.EraseLine(1)
+	mb.EraseLine(1, DefaultFG, DefaultBG)
 	line = mb.GetLine(1)
 	if line == nil {
 		t.Fatal("line 1 should exist")
@@ -517,7 +517,7 @@ func TestMemoryBuffer_ContentVersion(t *testing.T) {
 		t.Error("content version should increase after SetLineFixed")
 	}
 
-	mb.EraseLine(0)
+	mb.EraseLine(0, DefaultFG, DefaultBG)
 	v3 := mb.ContentVersion()
 
 	if v3 <= v2 {

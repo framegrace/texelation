@@ -89,6 +89,8 @@ type ColorInfo struct {
 // AttrInfo represents attributes for JSON serialization.
 type AttrInfo struct {
 	Bold      bool   `json:"bold"`
+	Dim       bool   `json:"dim"`
+	Italic    bool   `json:"italic"`
 	Underline bool   `json:"underline"`
 	Reverse   bool   `json:"reverse"`
 	Display   string `json:"display"`
@@ -189,12 +191,20 @@ func ColorToInfo(c parser.Color) ColorInfo {
 func AttrToInfo(a parser.Attribute) AttrInfo {
 	info := AttrInfo{
 		Bold:      a&parser.AttrBold != 0,
+		Dim:       a&parser.AttrDim != 0,
+		Italic:    a&parser.AttrItalic != 0,
 		Underline: a&parser.AttrUnderline != 0,
 		Reverse:   a&parser.AttrReverse != 0,
 	}
 	var parts []string
 	if info.Bold {
 		parts = append(parts, "bold")
+	}
+	if info.Dim {
+		parts = append(parts, "dim")
+	}
+	if info.Italic {
+		parts = append(parts, "italic")
 	}
 	if info.Underline {
 		parts = append(parts, "underline")

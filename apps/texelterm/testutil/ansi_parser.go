@@ -304,6 +304,12 @@ func (p *ANSIParser) parseSGR(params []int) {
 		case code == 1:
 			// Bold
 			p.state.Attr |= parser.AttrBold
+		case code == 2:
+			// Dim/Faint
+			p.state.Attr |= parser.AttrDim
+		case code == 3:
+			// Italic
+			p.state.Attr |= parser.AttrItalic
 		case code == 4:
 			// Underline
 			p.state.Attr |= parser.AttrUnderline
@@ -311,8 +317,11 @@ func (p *ANSIParser) parseSGR(params []int) {
 			// Reverse
 			p.state.Attr |= parser.AttrReverse
 		case code == 22:
-			// Not bold
-			p.state.Attr &= ^parser.AttrBold
+			// Normal intensity (clears bold and dim)
+			p.state.Attr &= ^(parser.AttrBold | parser.AttrDim)
+		case code == 23:
+			// Not italic
+			p.state.Attr &= ^parser.AttrItalic
 		case code == 24:
 			// Not underline
 			p.state.Attr &= ^parser.AttrUnderline

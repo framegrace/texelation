@@ -173,6 +173,12 @@ func AttrToString(attr parser.Attribute) string {
 	if attr&parser.AttrBold != 0 {
 		parts = append(parts, "bold")
 	}
+	if attr&parser.AttrDim != 0 {
+		parts = append(parts, "dim")
+	}
+	if attr&parser.AttrItalic != 0 {
+		parts = append(parts, "italic")
+	}
 	if attr&parser.AttrUnderline != 0 {
 		parts = append(parts, "underline")
 	}
