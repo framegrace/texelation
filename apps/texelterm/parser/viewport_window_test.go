@@ -383,6 +383,77 @@ func TestScrollManager_CanScroll(t *testing.T) {
 	}
 }
 
+func TestScrollManager_VisibleRangeWithWrappingLines(t *testing.T) {
+	// Regression: when physicalEnd falls mid-way through a wrapping logical line,
+	// findLogicalRangeInMemory must include that logical line in the result.
+	// Without the fix, endGlobalIdx was off-by-one, causing line duplication
+	// flicker during resize from the top.
+
+	// Line 0: "Short" = 1 phys, Line 1: 160 chars = 2 phys at w=80, Line 2: "End" = 1 phys
+	// Total physical = 4
+	long := make([]byte, 160)
+	for i := range long {
+		long[i] = 'X'
+	}
+	mb := setupTestBuffer([]string{"Short", string(long), "End"}, 80)
+	reader := NewMemoryBufferReader(mb)
+	builder := NewPhysicalLineBuilder(80)
+	scroll := NewScrollManager(reader, builder)
+
+	// Viewport height 3, scrolled back by 1:
+	// physicalEnd = 4-1 = 3, physicalStart = 3-3 = 0
+	// Physical lines 0,1,2 are visible. Line 1 spans phys 1-2.
+	// physicalEnd=3 falls at the start of line 1's 3rd physical line... wait,
+	// line 1 only has 2 physical lines (phys 1 and 2). physicalEnd=3 is the
+	// start of line 2. So endGlobalIdx should be 2 (exclusive).
+	scroll.SetViewportHeight(3)
+	scroll.ScrollUp(1)
+
+	start, end := scroll.VisibleRange(3)
+	if start != 0 {
+		t.Errorf("expected start=0, got %d", start)
+	}
+	if end != 2 {
+		t.Errorf("expected end=2, got %d", end)
+	}
+
+	// Now test the case where physicalEnd lands INSIDE a wrapping line:
+	// Viewport height 2, scrolled back by 1:
+	// physicalEnd = 4-1 = 3, physicalStart = 3-2 = 1
+	// Physical lines 1,2 visible. Both belong to line 1 (160-char line).
+	// physicalEnd=3 is start of line 2. endGlobalIdx should be 2.
+	scroll.ScrollToBottom()
+	scroll.SetViewportHeight(2)
+	scroll.ScrollUp(1)
+
+	start, end = scroll.VisibleRange(2)
+	if start != 1 {
+		t.Errorf("expected start=1, got %d", start)
+	}
+	if end != 2 {
+		t.Errorf("expected end=2, got %d", end)
+	}
+
+	// Key case: viewport height 2, scrolled back by 2:
+	// physicalEnd = 4-2 = 2, physicalStart = 2-2 = 0
+	// Physical lines 0,1 visible. Phys 0 = line 0, phys 1 = first wrap of line 1.
+	// physicalEnd=2 falls at prefixSum boundary (start of line 1's second phys).
+	// We need line 1 included → endGlobalIdx should be 2.
+	scroll.ScrollToBottom()
+	scroll.ScrollUp(2)
+
+	start, end = scroll.VisibleRange(2)
+	if start != 0 {
+		t.Errorf("expected start=0, got %d", start)
+	}
+	// physicalEnd=2 is at the boundary between line 1's phys lines.
+	// Line 1 starts at prefixSum[1]=1, ends at prefixSum[2]=3.
+	// PhysicalToLogical(2) → line 1, offset 1. offset>0 → end=2. ✓
+	if end != 2 {
+		t.Errorf("expected end=2, got %d", end)
+	}
+}
+
 // --- CoordinateMapper Tests ---
 
 func TestCoordinateMapper_ViewportToContent(t *testing.T) {

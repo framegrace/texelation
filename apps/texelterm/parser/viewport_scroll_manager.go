@@ -262,13 +262,20 @@ func (sm *ScrollManager) findLogicalRangeInMemory(memStart, memEnd, physicalStar
 	// Find the logical line containing physicalStart
 	startGlobalIdx, _ = sm.index.PhysicalToLogical(physicalStart)
 
-	// Find the logical line containing physicalEnd
-	// physicalEnd is exclusive, so we find the line at physicalEnd
-	// and use it as the exclusive end boundary
+	// Find the exclusive end boundary.
+	// physicalEnd is exclusive, so we need the first logical line AFTER the
+	// visible range. PhysicalToLogical returns the line containing physicalEnd.
+	// If physicalEnd falls partway through a logical line (offset > 0),
+	// that line is still needed, so bump the end past it.
 	if physicalEnd >= sm.index.TotalPhysicalLines() {
 		endGlobalIdx = memEnd
 	} else {
-		endGlobalIdx, _ = sm.index.PhysicalToLogical(physicalEnd)
+		endLogical, endOffset := sm.index.PhysicalToLogical(physicalEnd)
+		if endOffset > 0 {
+			endGlobalIdx = endLogical + 1
+		} else {
+			endGlobalIdx = endLogical
+		}
 	}
 
 	// Clamp to valid range
