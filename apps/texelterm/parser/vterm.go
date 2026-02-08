@@ -362,14 +362,29 @@ func (v *VTerm) getHistoryLen() int {
 	return int(v.memBufState.memBuf.TotalLines())
 }
 
-// getHistoryLine retrieves a specific line from the MemoryBuffer.
-// Returns the cells for the logical line at the given global index.
-func (v *VTerm) getHistoryLine(index int) []Cell {
+// getLogicalLine retrieves a logical line by global index, with PageStore fallback.
+// This should be used instead of accessing memBuf.GetLine() directly, as lines
+// scrolled far back may have been evicted from the in-memory ring buffer to disk.
+func (v *VTerm) getLogicalLine(globalIdx int64) *LogicalLine {
 	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return nil
 	}
+	line := v.memBufState.memBuf.GetLine(globalIdx)
+	if line != nil {
+		return line
+	}
+	// Fallback to PageStore for evicted lines
+	if v.memBufState.pageStore != nil {
+		line, _ = v.memBufState.pageStore.ReadLine(globalIdx)
+		return line
+	}
+	return nil
+}
 
-	line := v.memBufState.memBuf.GetLine(int64(index))
+// getHistoryLine retrieves a specific line from the MemoryBuffer.
+// Returns the cells for the logical line at the given global index.
+func (v *VTerm) getHistoryLine(index int) []Cell {
+	line := v.getLogicalLine(int64(index))
 	if line == nil {
 		return nil
 	}
@@ -522,10 +537,10 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return ""
 	}
-	// Extract text from MemoryBuffer line range
+	// Extract text from MemoryBuffer line range (with PageStore fallback for evicted lines)
 	var result []rune
 	for lineIdx := startLine; lineIdx <= endLine; lineIdx++ {
-		line := v.memBufState.memBuf.GetLine(lineIdx)
+		line := v.getLogicalLine(lineIdx)
 		if line == nil {
 			continue
 		}
