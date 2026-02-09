@@ -615,16 +615,14 @@ func (c *connection) handleResize(size protocol.Resize) {
 		return
 	}
 
-	sink.Publish()
-	c.sendPending() // flush buffer deltas to client before tree snapshot
-
-	// Use geometry-only snapshot: row data was already sent via deltas above.
-	// The full snapshot rows are plain text (no colors), so sending them AFTER
-	// the colored deltas would overwrite the client's buffer cache with
-	// colorless data.
+	// Send geometry-only tree snapshot FIRST so the client updates pane
+	// positions before content arrives.  Row data is omitted because the
+	// snapshot rows are plain text (no colors) and would clobber the
+	// client's colored buffer cache.
 	geoSnap := geometryOnlySnapshot(snapshot)
 	payload, err := protocol.EncodeTreeSnapshot(geoSnap)
 	if err != nil {
+		sink.Publish()
 		return
 	}
 
@@ -635,6 +633,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 		SessionID: c.session.ID(),
 	}
 	if err := c.writeMessage(header, payload); err != nil {
+		sink.Publish()
 		return
 	}
 
@@ -642,6 +641,11 @@ func (c *connection) handleResize(size protocol.Resize) {
 	for _, state := range states {
 		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesMouse)
 	}
+
+	// Now publish and flush buffer deltas. The client already has correct
+	// pane positions, so the new content renders at the right location.
+	sink.Publish()
+	c.sendPending()
 }
 
 func geometryOnlySnapshot(snapshot protocol.TreeSnapshot) protocol.TreeSnapshot {
