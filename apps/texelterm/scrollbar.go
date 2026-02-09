@@ -63,6 +63,9 @@ type ScrollBar struct {
 	// Callback when visibility changes (triggers terminal resize)
 	onVisibilityChanged func(visible bool)
 
+	// Callback to request a UI refresh (used after async minimap computation)
+	onRefresh func()
+
 	// Styling
 	trackStyle           tcell.Style
 	thumbStyle           tcell.Style
@@ -74,6 +77,10 @@ type ScrollBar struct {
 	cachedMinimap      []minimapRowData
 	cachedMinimapValid bool
 	cachedTotalLines   int64
+
+	// Async minimap computation
+	computing bool // True while a background goroutine is recomputing
+	computeGeneration uint64 // Incremented on each invalidation; lets goroutine detect staleness
 
 	// Search results for highlighting
 	searchResultLines map[int64]bool // Set of global line indices with search results
@@ -160,6 +167,13 @@ func (s *ScrollBar) Toggle() {
 	}
 }
 
+// SetRefreshCallback sets the callback invoked after async minimap recomputation.
+func (s *ScrollBar) SetRefreshCallback(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRefresh = fn
+}
+
 // IsVisible returns whether the scrollbar is currently visible.
 func (s *ScrollBar) IsVisible() bool {
 	s.mu.Lock()
@@ -173,7 +187,8 @@ func (s *ScrollBar) Resize(height int) {
 	defer s.mu.Unlock()
 	if s.height != height {
 		s.height = height
-		s.cachedMinimapValid = false // Invalidate on resize
+		s.cachedMinimapValid = false
+		s.computeGeneration++ // Cancel any in-flight computation
 	}
 }
 
@@ -195,6 +210,7 @@ func (s *ScrollBar) Invalidate() {
 		s.mu.Lock()
 		if s.pendingInvalidate {
 			s.cachedMinimapValid = false
+			s.computeGeneration++ // Cancel any in-flight computation
 			s.pendingInvalidate = false
 		}
 		s.mu.Unlock()
@@ -215,6 +231,7 @@ func (s *ScrollBar) SetSearchResults(results []parser.SearchResult) {
 
 	// Invalidate cache since search results affect rendering
 	s.cachedMinimapValid = false
+	s.computeGeneration++
 }
 
 // ClearSearchResults removes all search result highlights from the minimap.
@@ -224,6 +241,7 @@ func (s *ScrollBar) ClearSearchResults() {
 
 	s.searchResultLines = make(map[int64]bool)
 	s.cachedMinimapValid = false
+	s.computeGeneration++
 }
 
 // Render returns the scrollbar grid (ScrollBarWidth x height).
@@ -280,67 +298,107 @@ type minimapRowData struct {
 	subpixels [4]minimapSubpixelData
 }
 
-// calculateBrailleMinimap computes line lengths and colors for braille rendering.
-// Uses cached data if available, otherwise recalculates from all lines.
-// Each scrollbar row shows 4 lines (one per braille subpixel row).
-// The entire history (including disk) is mapped to fit the scrollbar height.
-// Returns data for each row including line lengths and dominant colors.
+// calculateBrailleMinimap returns cached minimap data for rendering.
+// If the cache is stale, it kicks off a background recomputation and returns
+// whatever data is currently cached (possibly stale or empty). This ensures
+// the expensive minimap analysis never blocks the render path.
 func (s *ScrollBar) calculateBrailleMinimap(height int) []minimapRowData {
 	s.mu.Lock()
+
 	// Return cached data if valid and same height
 	if s.cachedMinimapValid && len(s.cachedMinimap) == height {
 		result := s.cachedMinimap
 		s.mu.Unlock()
 		return result
 	}
-	s.mu.Unlock()
 
-	// Need to recalculate
-	minimap := make([]minimapRowData, height)
+	// Cache is stale — kick off async recomputation if not already running
+	if !s.computing {
+		s.computing = true
+		gen := s.computeGeneration
+		h := height
+		searchLines := s.searchResultLines
+		s.mu.Unlock()
 
-	if s.vterm == nil || height <= 0 {
-		return minimap
+		go s.recomputeMinimap(h, gen, searchLines)
+	} else {
+		s.mu.Unlock()
 	}
 
-	// Get ALL lines from disk + memory
-	allLines, globalOffset, totalLines := s.vterm.GetAllLogicalLines()
-
-	if totalLines <= 0 || len(allLines) == 0 {
-		return minimap
-	}
-
-	termWidth := s.vterm.Width()
-	if termWidth <= 0 {
-		termWidth = 80
-	}
-
-	// Total subpixel rows = height * 4
-	totalSubpixels := int64(height * 4)
-
-	// Lines per subpixel row (map entire history to scrollbar)
-	linesPerSubpixel := float64(totalLines) / float64(totalSubpixels)
-	if linesPerSubpixel < 1 {
-		linesPerSubpixel = 1
-	}
-
-	// Get search result lines (thread-safe copy)
+	// Return stale cached data (or empty slice if no cache yet)
 	s.mu.Lock()
-	searchLines := s.searchResultLines
+	result := s.cachedMinimap
 	s.mu.Unlock()
-
-	for y := 0; y < height; y++ {
-		// Calculate everything for this row from the preloaded lines
-		s.analyzeRowFromLines(y, allLines, globalOffset, linesPerSubpixel, termWidth, searchLines, &minimap[y])
+	if len(result) == height {
+		return result
 	}
+	return make([]minimapRowData, height)
+}
 
-	// Cache the result
-	s.mu.Lock()
-	s.cachedMinimap = minimap
-	s.cachedTotalLines = totalLines
-	s.cachedMinimapValid = true
-	s.mu.Unlock()
+// recomputeMinimap runs the expensive minimap calculation in a background goroutine.
+// It checks the generation counter to detect if a newer invalidation occurred,
+// in which case it discards its result and retries.
+func (s *ScrollBar) recomputeMinimap(height int, gen uint64, searchLines map[int64]bool) {
+	for {
+		minimap := make([]minimapRowData, height)
 
-	return minimap
+		if s.vterm == nil || height <= 0 {
+			s.mu.Lock()
+			s.computing = false
+			s.mu.Unlock()
+			return
+		}
+
+		// Get ALL lines from disk + memory
+		allLines, globalOffset, totalLines := s.vterm.GetAllLogicalLines()
+
+		if totalLines <= 0 || len(allLines) == 0 {
+			s.mu.Lock()
+			s.computing = false
+			s.mu.Unlock()
+			return
+		}
+
+		termWidth := s.vterm.Width()
+		if termWidth <= 0 {
+			termWidth = 80
+		}
+
+		totalSubpixels := int64(height * 4)
+		linesPerSubpixel := float64(totalLines) / float64(totalSubpixels)
+		if linesPerSubpixel < 1 {
+			linesPerSubpixel = 1
+		}
+
+		for y := 0; y < height; y++ {
+			s.analyzeRowFromLines(y, allLines, globalOffset, linesPerSubpixel, termWidth, searchLines, &minimap[y])
+		}
+
+		// Check if our result is still relevant
+		s.mu.Lock()
+		if s.computeGeneration != gen {
+			// A newer invalidation happened — retry with updated params
+			gen = s.computeGeneration
+			height = s.height
+			searchLines = s.searchResultLines
+			s.mu.Unlock()
+			continue
+		}
+
+		// Result is still current — commit it
+		s.cachedMinimap = minimap
+		s.cachedTotalLines = totalLines
+		s.cachedMinimapValid = true
+		s.computing = false
+		onRefresh := s.onRefresh
+		s.mu.Unlock()
+
+		// Request a repaint so the new minimap becomes visible
+		if onRefresh != nil {
+			onRefresh()
+		}
+		return
+	}
 }
 
 // analyzeRowFromLines calculates all data for one scrollbar row from preloaded lines.
