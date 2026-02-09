@@ -587,12 +587,18 @@ func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
 		return nil
 	}
 
+	// Clone the line before encoding to prevent a data race.
+	// GetLine returns a pointer to the actual LogicalLine in the ring buffer.
+	// In Debounced/BestEffort modes, this flush runs on a background goroutine
+	// while the main goroutine may be writing to the same line's Cells.
+	lineCopy := line.Clone()
+
 	// Use WAL if available, otherwise direct PageStore
 	var err error
 	if ap.wal != nil {
-		err = ap.wal.Append(lineIdx, line, ap.nowFunc())
+		err = ap.wal.Append(lineIdx, lineCopy, ap.nowFunc())
 	} else {
-		err = ap.disk.AppendLine(line)
+		err = ap.disk.AppendLine(lineCopy)
 	}
 
 	if err != nil {
@@ -607,7 +613,7 @@ func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
 	// Call search index callback AFTER successful write
 	// This ensures search index only has entries for persisted content
 	if ap.OnLineIndexed != nil && info != nil {
-		ap.OnLineIndexed(lineIdx, line, info.timestamp, info.isCommand)
+		ap.OnLineIndexed(lineIdx, lineCopy, info.timestamp, info.isCommand)
 	}
 
 	return nil

@@ -841,6 +841,15 @@ func (w *WriteAheadLog) checkpointLocked() error {
 		}
 	}
 
+	// Sync WAL after metadata re-write to ensure it reaches disk.
+	// Without this, Close() → walFile.Close() does NOT guarantee sync on Linux,
+	// and the metadata can be lost if the process exits before OS flushes page cache.
+	// On reload, stale metadata from a previous checkpoint would be used, causing
+	// liveEdgeBase/cursor to be wrong relative to actual content.
+	if err := w.walFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync WAL after checkpoint: %w", err)
+	}
+
 	return nil
 }
 

@@ -1720,9 +1720,9 @@ func TestVTerm_LineCountConsistency(t *testing.T) {
 
 		diskLineCount := ps.LineCount()
 		t.Logf("Disk state:")
-		t.Logf("  lineCount: %d (expected %d)", diskLineCount, len(expectedLines))
+		t.Logf("  lineCount: %d (expected >= %d)", diskLineCount, len(expectedLines))
 
-		// Read all lines from disk
+		// Read all lines from disk (filter empty, like memory side)
 		var diskContent []string
 		for i := int64(0); i < diskLineCount && i < 20; i++ {
 			line, err := ps.ReadLine(i)
@@ -1731,7 +1731,9 @@ func TestVTerm_LineCountConsistency(t *testing.T) {
 			} else if line != nil {
 				content := trimLogicalLine(logicalLineToString(line))
 				t.Logf("  disk[%d]: %q", i, content)
-				diskContent = append(diskContent, content)
+				if content != "" {
+					diskContent = append(diskContent, content)
+				}
 			}
 		}
 
@@ -2135,5 +2137,1534 @@ func TestVTerm_CrashRecoveryWithFlushedData(t *testing.T) {
 		t.Log("SUCCESS: Flushed content and metadata recovered correctly after crash")
 
 		v.CloseMemoryBuffer()
+	}
+}
+
+// trimRight removes trailing spaces from a string.
+func trimRight(s string) string {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] != ' ' {
+			return s[:i+1]
+		}
+	}
+	return ""
+}
+
+// extractAllLines extracts all stored lines as trimmed strings from a memory buffer,
+// from globalOffset to globalEnd.
+func extractAllLines(mb *MemoryBuffer) []string {
+	var result []string
+	for idx := mb.GlobalOffset(); idx < mb.GlobalEnd(); idx++ {
+		line := mb.GetLine(idx)
+		if line == nil {
+			result = append(result, "")
+			continue
+		}
+		result = append(result, trimRight(logicalLineToString(line)))
+	}
+	return result
+}
+
+// TestVTerm_ScrollRegionReloadCorruption is a comprehensive test that checks for
+// content corruption after saving and reloading terminal history that contains
+// TUI-like scroll region content (e.g., Codex CLI running on main screen).
+//
+// The bug: after stop/reload, the scroll region section shows duplicates and
+// repetitions, and sometimes the last lines/prompt disappear.
+// This works fine while the terminal is running but breaks on reload.
+//
+// Tests three layers:
+//  1. Raw MemoryBuffer lines (logical storage)
+//  2. Viewport Grid (what's rendered to screen via GetVisibleGrid)
+//  3. VTerm Grid() (what the client actually sees, including after new writes)
+func TestVTerm_ScrollRegionReloadCorruption(t *testing.T) {
+	tmpDir := t.TempDir()
+	diskPath := tmpDir + "/test_scroll_reload.hist3"
+	terminalID := "test-scroll-reload"
+	width, height := 80, 24
+
+	var session1Lines []string
+	var session1LiveEdge int64
+	var session1GlobalOffset int64
+	var session1GlobalEnd int64
+	var session1Grid []string     // Grid() at live edge before close
+	var session1AllViewport []string // All lines visible through viewport scrolling
+
+	// ========================================================
+	// Session 1: Generate TUI scroll region content + normal content
+	// ========================================================
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("EnableMemoryBufferWithDisk failed: %v", err)
+		}
+		p := NewParser(v)
+
+		// Phase 1: Normal shell output before TUI
+		parseString(p, "$ echo 'before TUI'\r\n")
+		parseString(p, "before TUI\r\n")
+		parseString(p, "$ ls -la\r\n")
+		parseString(p, "total 42\r\n")
+		parseString(p, "drwxr-xr-x  5 user user 4096 Feb  9 file1.txt\r\n")
+		parseString(p, "drwxr-xr-x  3 user user 4096 Feb  9 file2.txt\r\n")
+		parseString(p, "$ codex 'do something'\r\n")
+
+		// Phase 2: TUI sets up scroll region (like Codex CLI)
+		// Header on row 0, footer on last row, scroll region in between
+		parseString(p, "\x1b[1;1H")                       // Move to top-left
+		parseString(p, "\x1b[48;2;65;69;76m")             // Grey BG (Codex style)
+		parseString(p, " Codex (research-preview) ")
+		parseString(p, "\x1b[K")                           // Erase rest of line with BG
+		parseString(p, "\x1b[0m")                          // Reset
+		parseString(p, fmt.Sprintf("\x1b[%d;1H", height)) // Move to last row
+		parseString(p, "\x1b[48;2;65;69;76m")             // Grey BG footer
+		parseString(p, " > Enter a prompt...")
+		parseString(p, "\x1b[K")  // Erase rest of line with BG
+		parseString(p, "\x1b[0m") // Reset
+
+		// Set scroll region: rows 2 through 23 (1-indexed), i.e., 0-indexed 1..22
+		parseString(p, fmt.Sprintf("\x1b[2;%dr", height-1))
+
+		// Phase 3: TUI content that scrolls within the region
+		// Write enough lines to cause scrolling within the region (region is 22 rows)
+		parseString(p, "\x1b[2;1H") // Move to top of scroll region
+		for i := 0; i < 40; i++ {
+			parseString(p, fmt.Sprintf("  codex-output-%03d: Working on task...", i))
+			if i < 39 {
+				parseString(p, "\n\r")
+			}
+		}
+
+		// Phase 4: TUI exits — reset scroll region, cleanup
+		parseString(p, "\x1b[r")                             // Reset scroll region
+		parseString(p, fmt.Sprintf("\x1b[%d;1H", height-2)) // Move near bottom
+		parseString(p, "\x1b[J")                             // Erase from cursor down
+		parseString(p, "Tokens used: 4567 | Cost: $0.12\r\n")
+
+		// Phase 5: Normal shell output after TUI
+		parseString(p, "$ echo 'after TUI'\r\n")
+		parseString(p, "after TUI\r\n")
+		parseString(p, "$ cat results.txt\r\n")
+		for i := 0; i < 10; i++ {
+			parseString(p, fmt.Sprintf("result-line-%03d: data here\r\n", i))
+		}
+		parseString(p, "$ ")
+
+		// Capture all lines before closing
+		mb := v.memBufState.memBuf
+		session1LiveEdge = v.memBufState.liveEdgeBase
+		session1GlobalOffset = mb.GlobalOffset()
+		session1GlobalEnd = mb.GlobalEnd()
+		session1Lines = extractAllLines(mb)
+
+		// Capture Grid() at live edge (what client sees)
+		grid := v.Grid()
+		for y := 0; y < len(grid); y++ {
+			session1Grid = append(session1Grid, trimRight(gridRowToString(grid[y])))
+		}
+
+		// Capture all viewport content by scrolling from top to bottom
+		v.memBufState.viewport.ScrollToTop()
+		seen := make(map[string]bool)
+		for {
+			vgrid := v.memBufState.viewport.GetVisibleGrid()
+			for y := 0; y < len(vgrid); y++ {
+				text := trimRight(gridRowToString(vgrid[y]))
+				key := fmt.Sprintf("%d:%s", len(session1AllViewport)+y, text)
+				if !seen[key] {
+					session1AllViewport = append(session1AllViewport, text)
+					seen[key] = true
+				}
+			}
+			scrolled := v.memBufState.viewport.ScrollDown(height)
+			if scrolled == 0 {
+				break
+			}
+		}
+		v.memBufState.viewport.ScrollToBottom()
+
+		t.Logf("Session 1: globalOffset=%d, globalEnd=%d, liveEdgeBase=%d, totalLines=%d",
+			session1GlobalOffset, session1GlobalEnd, session1LiveEdge, len(session1Lines))
+
+		// Log all content for debugging
+		for i, line := range session1Lines {
+			globalIdx := session1GlobalOffset + int64(i)
+			marker := " "
+			if globalIdx == session1LiveEdge {
+				marker = ">"
+			}
+			if line != "" {
+				t.Logf("  S1[%3d]%s %q", globalIdx, marker, line)
+			}
+		}
+
+		t.Log("--- Session 1 Grid() at live edge ---")
+		for y, row := range session1Grid {
+			if row != "" {
+				t.Logf("  Grid[%2d] %q", y, row)
+			}
+		}
+
+		if err := v.CloseMemoryBuffer(); err != nil {
+			t.Fatalf("CloseMemoryBuffer failed: %v", err)
+		}
+	}
+
+	// ========================================================
+	// Session 2: Reload and compare all three layers
+	// ========================================================
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("EnableMemoryBufferWithDisk (restore) failed: %v", err)
+		}
+
+		mb := v.memBufState.memBuf
+		session2LiveEdge := v.memBufState.liveEdgeBase
+		session2GlobalOffset := mb.GlobalOffset()
+		session2GlobalEnd := mb.GlobalEnd()
+		session2Lines := extractAllLines(mb)
+
+		t.Logf("Session 2: globalOffset=%d, globalEnd=%d, liveEdgeBase=%d, totalLines=%d",
+			session2GlobalOffset, session2GlobalEnd, session2LiveEdge, len(session2Lines))
+
+		// ---- Layer 1: Raw MemoryBuffer line comparison ----
+		t.Log("=== Layer 1: MemoryBuffer line comparison ===")
+
+		s1Start := session1GlobalOffset
+		s2Start := session2GlobalOffset
+		overlapStart := max64(s1Start, s2Start)
+		overlapEnd := min64(session1GlobalEnd, session2GlobalEnd)
+
+		if overlapEnd <= overlapStart {
+			t.Fatalf("No overlapping range between sessions: S1=[%d,%d), S2=[%d,%d)",
+				s1Start, session1GlobalEnd, s2Start, session2GlobalEnd)
+		}
+
+		t.Logf("Comparing overlapping range [%d, %d) = %d lines",
+			overlapStart, overlapEnd, overlapEnd-overlapStart)
+
+		lineMismatches := 0
+		for idx := overlapStart; idx < overlapEnd; idx++ {
+			s1Idx := int(idx - s1Start)
+			s2Idx := int(idx - s2Start)
+
+			var s1Text, s2Text string
+			if s1Idx >= 0 && s1Idx < len(session1Lines) {
+				s1Text = session1Lines[s1Idx]
+			}
+			if s2Idx >= 0 && s2Idx < len(session2Lines) {
+				s2Text = session2Lines[s2Idx]
+			}
+
+			if s1Text != s2Text {
+				lineMismatches++
+				if lineMismatches <= 30 {
+					t.Errorf("Layer1 line %d mismatch:\n  S1: %q\n  S2: %q", idx, s1Text, s2Text)
+				}
+			}
+		}
+		t.Logf("Layer 1: %d line mismatches", lineMismatches)
+
+		// ---- Layer 2: Viewport scrollback comparison ----
+		t.Log("=== Layer 2: Viewport scrollback comparison ===")
+
+		// Collect all unique viewport lines by scrolling top to bottom
+		var session2AllViewport []string
+		v.memBufState.viewport.ScrollToTop()
+		seen := make(map[string]bool)
+		for {
+			vgrid := v.memBufState.viewport.GetVisibleGrid()
+			for y := 0; y < len(vgrid); y++ {
+				text := trimRight(gridRowToString(vgrid[y]))
+				key := fmt.Sprintf("%d:%s", len(session2AllViewport)+y, text)
+				if !seen[key] {
+					session2AllViewport = append(session2AllViewport, text)
+					seen[key] = true
+				}
+			}
+			scrolled := v.memBufState.viewport.ScrollDown(height)
+			if scrolled == 0 {
+				break
+			}
+		}
+		v.memBufState.viewport.ScrollToBottom()
+
+		// Check for duplicate runs in viewport
+		maxDupeRun := 0
+		currentDupeRun := 1
+		dupeText := ""
+		for i := 1; i < len(session2AllViewport); i++ {
+			if session2AllViewport[i] != "" && session2AllViewport[i] == session2AllViewport[i-1] {
+				currentDupeRun++
+				if currentDupeRun > maxDupeRun {
+					maxDupeRun = currentDupeRun
+					dupeText = session2AllViewport[i]
+				}
+			} else {
+				currentDupeRun = 1
+			}
+		}
+		if maxDupeRun > 2 {
+			t.Errorf("Layer2: viewport has %d consecutive duplicate lines: %q", maxDupeRun, dupeText)
+		}
+		t.Logf("Layer 2: max duplicate run = %d", maxDupeRun)
+
+		// ---- Layer 3: VTerm Grid() comparison (what client sees) ----
+		t.Log("=== Layer 3: VTerm Grid() comparison ===")
+
+		session2Grid := v.Grid()
+		var session2GridStrings []string
+		for y := 0; y < len(session2Grid); y++ {
+			session2GridStrings = append(session2GridStrings, trimRight(gridRowToString(session2Grid[y])))
+		}
+
+		t.Log("--- Session 2 Grid() at live edge ---")
+		for y, row := range session2GridStrings {
+			if row != "" {
+				t.Logf("  Grid[%2d] %q", y, row)
+			}
+		}
+
+		// The Grid() after reload should show the same content as before close
+		// (both are at live edge with scrollOffset=0)
+		gridMismatches := 0
+		for y := 0; y < len(session1Grid) && y < len(session2GridStrings); y++ {
+			if session1Grid[y] != session2GridStrings[y] {
+				gridMismatches++
+				t.Errorf("Layer3 Grid row %d mismatch:\n  S1: %q\n  S2: %q", y, session1Grid[y], session2GridStrings[y])
+			}
+		}
+		t.Logf("Layer 3: %d Grid mismatches", gridMismatches)
+
+		// ---- Layer 3b: Write new content after reload and check Grid() ----
+		t.Log("=== Layer 3b: New content after reload ===")
+
+		p := NewParser(v)
+		parseString(p, "echo 'new content after reload'\r\n")
+		parseString(p, "new content after reload\r\n")
+		parseString(p, "$ ")
+
+		newGrid := v.Grid()
+		var newGridStrings []string
+		for y := 0; y < len(newGrid); y++ {
+			newGridStrings = append(newGridStrings, trimRight(gridRowToString(newGrid[y])))
+		}
+
+		// The new content should be visible somewhere in the grid
+		foundNewContent := false
+		foundNewPrompt := false
+		for _, row := range newGridStrings {
+			if strings.Contains(row, "new content after reload") {
+				foundNewContent = true
+			}
+			if strings.Contains(row, "$ ") {
+				foundNewPrompt = true
+			}
+		}
+
+		if !foundNewContent {
+			t.Errorf("Layer3b: new content 'new content after reload' not visible in Grid() after writing")
+			t.Log("Grid after new writes:")
+			for y, row := range newGridStrings {
+				t.Logf("  [%2d] %q", y, row)
+			}
+		}
+		if !foundNewPrompt {
+			t.Errorf("Layer3b: prompt not visible after new writes (typing disappears until 'reset')")
+		}
+
+		// ---- Check key markers are present in scrollback ----
+		markers := []string{
+			"after TUI",
+			"result-line-",
+			"Tokens used:",
+			"codex-output-",
+		}
+		for _, marker := range markers {
+			found := false
+			for _, line := range session2Lines {
+				if strings.Contains(line, marker) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Marker %q not found after reload", marker)
+			}
+		}
+
+		// ---- Check result line ordering ----
+		lastResultSeen := -1
+		for _, line := range session2Lines {
+			for i := 0; i < 10; i++ {
+				expected := fmt.Sprintf("result-line-%03d", i)
+				if strings.Contains(line, expected) {
+					if i <= lastResultSeen {
+						t.Errorf("Result line %d appeared out of order (last seen: %d)", i, lastResultSeen)
+					}
+					lastResultSeen = i
+				}
+			}
+		}
+		if lastResultSeen < 9 {
+			t.Errorf("Only found result lines up to %d (expected 9)", lastResultSeen)
+		}
+
+		// ---- Summary ----
+		hasIssues := lineMismatches > 0 || maxDupeRun > 2 || gridMismatches > 0
+
+		if hasIssues {
+			t.Log("=== Session 2 full content dump ===")
+			for i, line := range session2Lines {
+				globalIdx := session2GlobalOffset + int64(i)
+				marker := " "
+				if globalIdx == session2LiveEdge {
+					marker = ">"
+				}
+				t.Logf("  S2[%3d]%s %q", globalIdx, marker, line)
+			}
+		}
+
+		v.CloseMemoryBuffer()
+	}
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// TestVTerm_ScrollRegionReloadMultipleTUISessions tests reload correctness when
+// multiple TUI sessions (scroll region usage) occur before save/reload.
+// This is a more complex scenario that exercises the scroll region code paths
+// repeatedly before testing persistence.
+func TestVTerm_ScrollRegionReloadMultipleTUISessions(t *testing.T) {
+	tmpDir := t.TempDir()
+	diskPath := tmpDir + "/test_multi_tui.hist3"
+	terminalID := "test-multi-tui"
+	width, height := 80, 24
+
+	var session1Lines []string
+	var session1GlobalOffset int64
+
+	// ========================================================
+	// Session 1: Multiple TUI sessions interspersed with normal content
+	// ========================================================
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("EnableMemoryBufferWithDisk failed: %v", err)
+		}
+		p := NewParser(v)
+
+		// Normal shell output
+		parseString(p, "$ echo 'session start'\r\n")
+		parseString(p, "session start\r\n")
+
+		// First TUI session (short, small scroll region)
+		parseString(p, "$ tui-app-1\r\n")
+		parseString(p, "\x1b[1;1H")
+		parseString(p, "=TUI1-HEADER=")
+		parseString(p, fmt.Sprintf("\x1b[%d;1H", height))
+		parseString(p, "=TUI1-FOOTER=")
+		parseString(p, fmt.Sprintf("\x1b[2;%dr", height-1))
+		parseString(p, "\x1b[2;1H")
+		for i := 0; i < 30; i++ {
+			parseString(p, fmt.Sprintf("tui1-line-%03d", i))
+			if i < 29 {
+				parseString(p, "\n\r")
+			}
+		}
+		parseString(p, "\x1b[r")
+		parseString(p, fmt.Sprintf("\x1b[%d;1H", height-2))
+		parseString(p, "\x1b[J")
+		parseString(p, "TUI1 exited\r\n")
+
+		// Normal content between TUI sessions
+		parseString(p, "$ echo 'between sessions'\r\n")
+		parseString(p, "between sessions\r\n")
+		for i := 0; i < 5; i++ {
+			parseString(p, fmt.Sprintf("normal-line-%03d\r\n", i))
+		}
+
+		// Second TUI session (longer, more scrolling)
+		parseString(p, "$ tui-app-2\r\n")
+		parseString(p, "\x1b[1;1H")
+		parseString(p, "=TUI2-HEADER=")
+		parseString(p, fmt.Sprintf("\x1b[%d;1H", height))
+		parseString(p, "=TUI2-FOOTER=")
+		parseString(p, fmt.Sprintf("\x1b[2;%dr", height-1))
+		parseString(p, "\x1b[2;1H")
+		for i := 0; i < 50; i++ {
+			parseString(p, fmt.Sprintf("tui2-line-%03d: longer content with more detail", i))
+			if i < 49 {
+				parseString(p, "\n\r")
+			}
+		}
+		parseString(p, "\x1b[r")
+		parseString(p, fmt.Sprintf("\x1b[%d;1H", height-2))
+		parseString(p, "\x1b[J")
+		parseString(p, "TUI2 exited\r\n")
+
+		// Final normal content
+		parseString(p, "$ echo 'final output'\r\n")
+		parseString(p, "final output\r\n")
+		parseString(p, "$ ")
+
+		// Capture content
+		mb := v.memBufState.memBuf
+		session1GlobalOffset = mb.GlobalOffset()
+		session1Lines = extractAllLines(mb)
+		t.Logf("Session 1: %d lines, globalOffset=%d, globalEnd=%d, liveEdge=%d",
+			len(session1Lines), session1GlobalOffset, mb.GlobalEnd(), v.memBufState.liveEdgeBase)
+
+		if err := v.CloseMemoryBuffer(); err != nil {
+			t.Fatalf("CloseMemoryBuffer failed: %v", err)
+		}
+	}
+
+	// ========================================================
+	// Session 2: Reload and compare
+	// ========================================================
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("EnableMemoryBufferWithDisk (restore) failed: %v", err)
+		}
+
+		mb := v.memBufState.memBuf
+		session2GlobalOffset := mb.GlobalOffset()
+		session2Lines := extractAllLines(mb)
+		t.Logf("Session 2: %d lines, globalOffset=%d, globalEnd=%d, liveEdge=%d",
+			len(session2Lines), session2GlobalOffset, mb.GlobalEnd(), v.memBufState.liveEdgeBase)
+
+		// Compare overlapping content
+		s1Start := session1GlobalOffset
+		s2Start := session2GlobalOffset
+
+		overlapStart := s1Start
+		if s2Start > overlapStart {
+			overlapStart = s2Start
+		}
+
+		mismatches := 0
+		for idx := overlapStart; idx < session1GlobalOffset+int64(len(session1Lines)); idx++ {
+			s1Idx := int(idx - s1Start)
+			s2Idx := int(idx - s2Start)
+
+			var s1Text, s2Text string
+			if s1Idx >= 0 && s1Idx < len(session1Lines) {
+				s1Text = session1Lines[s1Idx]
+			}
+			if s2Idx >= 0 && s2Idx < len(session2Lines) {
+				s2Text = session2Lines[s2Idx]
+			}
+
+			if s1Text != s2Text {
+				mismatches++
+				if mismatches <= 20 {
+					t.Errorf("Line %d mismatch:\n  S1: %q\n  S2: %q", idx, s1Text, s2Text)
+				}
+			}
+		}
+
+		// Check for duplicate runs after reload
+		maxDupeRun := 0
+		currentDupeRun := 1
+		dupeText := ""
+		for i := 1; i < len(session2Lines); i++ {
+			if session2Lines[i] != "" && session2Lines[i] == session2Lines[i-1] {
+				currentDupeRun++
+				if currentDupeRun > maxDupeRun {
+					maxDupeRun = currentDupeRun
+					dupeText = session2Lines[i]
+				}
+			} else {
+				currentDupeRun = 1
+			}
+		}
+
+		if maxDupeRun > 2 {
+			t.Errorf("Found %d consecutive duplicate lines after reload: %q", maxDupeRun, dupeText)
+		}
+
+		// Check that key markers surviving in scrollback are present
+		// Note: "session start", "between sessions" etc. may be overwritten by TUI header/footer
+		// since TUI uses CUP to write at specific rows, overwriting what was there.
+		// Only check markers that survive as scrollback (scroll region content and post-TUI output).
+		survivingMarkers := []string{
+			"tui1-line-",
+			"tui2-line-",
+			"TUI2 exited",
+			"final output",
+		}
+		for _, marker := range survivingMarkers {
+			found := false
+			for _, line := range session2Lines {
+				if strings.Contains(line, marker) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Marker %q not found after reload", marker)
+			}
+		}
+
+		// Check ordering: tui1 content should come before tui2 content
+		firstTUI1 := -1
+		firstTUI2 := -1
+		lastTUI1 := -1
+		for i, line := range session2Lines {
+			if strings.Contains(line, "tui1-line-") {
+				if firstTUI1 < 0 {
+					firstTUI1 = i
+				}
+				lastTUI1 = i
+			}
+			if strings.Contains(line, "tui2-line-") && firstTUI2 < 0 {
+				firstTUI2 = i
+			}
+		}
+		if firstTUI1 >= 0 && firstTUI2 >= 0 && lastTUI1 >= firstTUI2 {
+			t.Errorf("TUI1 and TUI2 content overlaps: TUI1 range [%d,%d], TUI2 starts at %d",
+				firstTUI1, lastTUI1, firstTUI2)
+		}
+
+		// Check GlobalEnd consistency: reload should not create extra lines
+		if session2GlobalOffset+int64(len(session2Lines)) != session1GlobalOffset+int64(len(session1Lines)) {
+			t.Errorf("GlobalEnd mismatch: session1 had %d total, session2 has %d total (off by %d)",
+				len(session1Lines), len(session2Lines),
+				len(session2Lines)-len(session1Lines))
+		}
+
+		t.Logf("Reload: %d mismatches, %d max consecutive duplicates", mismatches, maxDupeRun)
+
+		if mismatches > 0 || maxDupeRun > 2 {
+			t.Log("=== Session 2 dump ===")
+			for i, line := range session2Lines {
+				globalIdx := session2GlobalOffset + int64(i)
+				if line != "" {
+					t.Logf("  [%3d] %q", globalIdx, line)
+				}
+			}
+		}
+
+		v.CloseMemoryBuffer()
+	}
+}
+
+// emulateLongCodexSession writes a realistic Codex CLI session with multiple
+// scroll zone changes into a VTerm. It uses scroll regions on the main screen
+// (NOT alt screen) with header and footer, and outputs many lines that scroll
+// within the region — just like the real Codex CLI.
+//
+// Parameters:
+//   - p: parser to write into
+//   - width, height: terminal dimensions
+//   - totalOutputLines: total lines of "AI output" to generate (spread across regions)
+//   - regionChanges: number of times the scroll region is reconfigured (simulating
+//     expanding/collapsing panels)
+func emulateLongCodexSession(p *Parser, _, height, totalOutputLines, regionChanges int) {
+	// Initial header
+	parseString(p, "\x1b[1;1H")                       // Home
+	parseString(p, "\x1b[48;2;65;69;76m")             // Grey BG
+	parseString(p, " Codex (research-preview) working on task...")
+	parseString(p, "\x1b[K")                           // Fill rest with BG
+	parseString(p, "\x1b[0m")
+
+	// Initial footer
+	parseString(p, fmt.Sprintf("\x1b[%d;1H", height))
+	parseString(p, "\x1b[48;2;65;69;76m")
+	parseString(p, " > thinking...")
+	parseString(p, "\x1b[K")
+	parseString(p, "\x1b[0m")
+
+	linesPerRegion := totalOutputLines / max(regionChanges, 1)
+	linesEmitted := 0
+
+	for rc := 0; rc < regionChanges; rc++ {
+		// Each region change simulates Codex adjusting its layout
+		// (e.g., expanding output area, showing/hiding tool panels)
+		regionTop := 2 + (rc % 3)                   // Vary header size (rows 2-4)
+		regionBottom := height - 1 - (rc % 2)       // Vary footer size
+
+		if regionTop >= regionBottom {
+			regionTop = 2
+			regionBottom = height - 1
+		}
+
+		// Set scroll region
+		parseString(p, fmt.Sprintf("\x1b[%d;%dr", regionTop, regionBottom))
+
+		// Update header to reflect region change
+		parseString(p, "\x1b[1;1H")
+		parseString(p, "\x1b[48;2;65;69;76m")
+		parseString(p, fmt.Sprintf(" Codex [zone %d] top=%d bot=%d", rc, regionTop, regionBottom))
+		parseString(p, "\x1b[K")
+		parseString(p, "\x1b[0m")
+
+		// Move to start of scroll region
+		parseString(p, fmt.Sprintf("\x1b[%d;1H", regionTop))
+
+		// Emit lines within this scroll region
+		regionLines := linesPerRegion
+		if rc == regionChanges-1 {
+			regionLines = totalOutputLines - linesEmitted // Last region gets remainder
+		}
+
+		for i := 0; i < regionLines; i++ {
+			lineNum := linesEmitted + i
+			// Mix different content patterns (varying lengths)
+			switch lineNum % 5 {
+			case 0:
+				parseString(p, fmt.Sprintf("  [%03d] Reading file src/components/widget_%d.tsx...", lineNum, lineNum))
+			case 1:
+				parseString(p, fmt.Sprintf("  [%03d] Analyzing code patterns and dependencies", lineNum))
+			case 2:
+				parseString(p, fmt.Sprintf("  [%03d] +++ Modified: internal/api/handler.go (line %d)", lineNum, lineNum*3))
+			case 3:
+				parseString(p, fmt.Sprintf("  [%03d] --- Removed: legacy/compat_%d.go", lineNum, lineNum/10))
+			case 4:
+				parseString(p, fmt.Sprintf("  [%03d] Running tests... %d passed, 0 failed", lineNum, lineNum+42))
+			}
+			// Clear rest of line (like real TUI apps do) to prevent
+			// old cell content from leaking when new text is shorter
+			parseString(p, "\x1b[K")
+
+			if i < regionLines-1 {
+				parseString(p, "\r\n")
+			}
+		}
+		linesEmitted += regionLines
+	}
+
+	// Exit TUI: reset scroll region, write summary, clear
+	parseString(p, "\x1b[r") // Reset scroll region
+	parseString(p, fmt.Sprintf("\x1b[%d;1H", height-2))
+	parseString(p, "\x1b[J") // Erase from cursor down
+
+	parseString(p, fmt.Sprintf("Tokens: %d | Cost: $%.2f | Duration: 45s\r\n", totalOutputLines*150, float64(totalOutputLines)*0.003))
+}
+
+// TestVTerm_ScrollRegionReloadLongSession tests reload corruption with a long
+// Codex-style session that produces lots of scrollback through scroll regions,
+// followed by substantial normal shell output. The user reports that the more
+// TUI content is produced, the worse the corruption after reload.
+func TestVTerm_ScrollRegionReloadLongSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	diskPath := tmpDir + "/test_long_codex.hist3"
+	terminalID := "test-long-codex"
+	width, height := 120, 30
+
+	var session1Lines []string
+	var session1GlobalOffset, session1GlobalEnd int64
+	var session1LiveEdge int64
+	var session1Grid []string
+
+	// ========================================================
+	// Session 1: Long Codex session + lots of normal output
+	// ========================================================
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("EnableMemoryBufferWithDisk failed: %v", err)
+		}
+		p := NewParser(v)
+
+		// Pre-TUI shell activity
+		for i := 0; i < 20; i++ {
+			parseString(p, fmt.Sprintf("$ command-%03d --flag=value\r\n", i))
+			parseString(p, fmt.Sprintf("output from command %d\r\n", i))
+		}
+		parseString(p, "$ codex 'implement feature X with full test coverage'\r\n")
+
+		// Long Codex session: 200 output lines, 4 region changes
+		emulateLongCodexSession(p, width, height, 200, 4)
+
+		// Extensive normal shell output AFTER TUI
+		parseString(p, "$ git status\r\n")
+		parseString(p, "On branch feature/x\r\n")
+		parseString(p, "Changes to be committed:\r\n")
+		for i := 0; i < 30; i++ {
+			parseString(p, fmt.Sprintf("  modified: src/file_%03d.go\r\n", i))
+		}
+		parseString(p, "\r\n")
+		parseString(p, "$ go test ./...\r\n")
+		for i := 0; i < 50; i++ {
+			parseString(p, fmt.Sprintf("ok  \tpkg/module_%03d\t%.3fs\r\n", i, float64(i)*0.1+0.05))
+		}
+		parseString(p, "PASS\r\n")
+		parseString(p, "$ echo 'all tests passed'\r\n")
+		parseString(p, "all tests passed\r\n")
+
+		// Another shorter Codex session
+		parseString(p, "$ codex 'add error handling'\r\n")
+		emulateLongCodexSession(p, width, height, 50, 2)
+
+		// Final shell content
+		parseString(p, "$ git diff --stat\r\n")
+		for i := 0; i < 15; i++ {
+			parseString(p, fmt.Sprintf(" src/file_%03d.go | %d +++--\r\n", i, i+3))
+		}
+		parseString(p, " 15 files changed, 234 insertions(+), 89 deletions(-)\r\n")
+		parseString(p, "$ git commit -m 'implement feature X'\r\n")
+		parseString(p, "[feature/x abc1234] implement feature X\r\n")
+		parseString(p, "$ ") // Final prompt
+
+		// Capture session 1 state
+		mb := v.memBufState.memBuf
+		session1LiveEdge = v.memBufState.liveEdgeBase
+		session1GlobalOffset = mb.GlobalOffset()
+		session1GlobalEnd = mb.GlobalEnd()
+		session1Lines = extractAllLines(mb)
+
+		grid := v.Grid()
+		for y := 0; y < len(grid); y++ {
+			session1Grid = append(session1Grid, trimRight(gridRowToString(grid[y])))
+		}
+
+		t.Logf("Session 1: offset=%d, end=%d, liveEdge=%d, lines=%d",
+			session1GlobalOffset, session1GlobalEnd, session1LiveEdge, len(session1Lines))
+
+		if err := v.CloseMemoryBuffer(); err != nil {
+			t.Fatalf("CloseMemoryBuffer failed: %v", err)
+		}
+	}
+
+	// ========================================================
+	// Session 2: Reload and check for corruption
+	// ========================================================
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("EnableMemoryBufferWithDisk (reload) failed: %v", err)
+		}
+
+		mb := v.memBufState.memBuf
+		session2LiveEdge := v.memBufState.liveEdgeBase
+		session2GlobalOffset := mb.GlobalOffset()
+		session2GlobalEnd := mb.GlobalEnd()
+		session2Lines := extractAllLines(mb)
+
+		t.Logf("Session 2: offset=%d, end=%d, liveEdge=%d, lines=%d",
+			session2GlobalOffset, session2GlobalEnd, session2LiveEdge, len(session2Lines))
+
+		// --- Check 1: GlobalEnd consistency ---
+		if session2GlobalEnd != session1GlobalEnd {
+			t.Errorf("GlobalEnd changed: session1=%d, session2=%d (off by %d)",
+				session1GlobalEnd, session2GlobalEnd, session2GlobalEnd-session1GlobalEnd)
+		}
+
+		// --- Check 2: LiveEdgeBase consistency ---
+		if session2LiveEdge != session1LiveEdge {
+			t.Errorf("LiveEdgeBase changed: session1=%d, session2=%d (off by %d)",
+				session1LiveEdge, session2LiveEdge, session2LiveEdge-session1LiveEdge)
+		}
+
+		// --- Check 3: Raw line comparison (overlapping range) ---
+		overlapStart := max64(session1GlobalOffset, session2GlobalOffset)
+		overlapEnd := min64(session1GlobalEnd, session2GlobalEnd)
+
+		lineMismatches := 0
+		for idx := overlapStart; idx < overlapEnd; idx++ {
+			s1Idx := int(idx - session1GlobalOffset)
+			s2Idx := int(idx - session2GlobalOffset)
+			var s1Text, s2Text string
+			if s1Idx >= 0 && s1Idx < len(session1Lines) {
+				s1Text = session1Lines[s1Idx]
+			}
+			if s2Idx >= 0 && s2Idx < len(session2Lines) {
+				s2Text = session2Lines[s2Idx]
+			}
+			if s1Text != s2Text {
+				lineMismatches++
+				if lineMismatches <= 20 {
+					t.Errorf("Line %d mismatch:\n  S1: %q\n  S2: %q", idx, s1Text, s2Text)
+				}
+			}
+		}
+		t.Logf("Raw line mismatches: %d / %d", lineMismatches, overlapEnd-overlapStart)
+
+		// --- Check 4: Grid comparison ---
+		session2Grid := v.Grid()
+		var session2GridStrings []string
+		for y := 0; y < len(session2Grid); y++ {
+			session2GridStrings = append(session2GridStrings, trimRight(gridRowToString(session2Grid[y])))
+		}
+
+		gridMismatches := 0
+		for y := 0; y < min(len(session1Grid), len(session2GridStrings)); y++ {
+			if session1Grid[y] != session2GridStrings[y] {
+				gridMismatches++
+				if gridMismatches <= 10 {
+					t.Errorf("Grid row %d mismatch:\n  S1: %q\n  S2: %q", y, session1Grid[y], session2GridStrings[y])
+				}
+			}
+		}
+		t.Logf("Grid mismatches: %d / %d", gridMismatches, min(len(session1Grid), len(session2GridStrings)))
+
+		// --- Check 5: Duplicate detection in raw lines ---
+		maxDupeRun := 0
+		dupeRun := 1
+		dupeText := ""
+		for i := 1; i < len(session2Lines); i++ {
+			if session2Lines[i] != "" && session2Lines[i] == session2Lines[i-1] {
+				dupeRun++
+				if dupeRun > maxDupeRun {
+					maxDupeRun = dupeRun
+					dupeText = session2Lines[i]
+				}
+			} else {
+				dupeRun = 1
+			}
+		}
+		if maxDupeRun > 2 {
+			t.Errorf("Found %d consecutive duplicate lines: %q", maxDupeRun, dupeText)
+		}
+
+		// --- Check 6: Post-reload typing visibility ---
+		p := NewParser(v)
+		parseString(p, "echo 'post-reload test'\r\n")
+		parseString(p, "post-reload test\r\n")
+		parseString(p, "$ second command\r\n")
+		parseString(p, "second output\r\n")
+		parseString(p, "$ ")
+
+		newGrid := v.Grid()
+		foundPostReload := false
+		foundPrompt := false
+		for y := 0; y < len(newGrid); y++ {
+			row := trimRight(gridRowToString(newGrid[y]))
+			if strings.Contains(row, "post-reload test") {
+				foundPostReload = true
+			}
+			if strings.Contains(row, "$ ") {
+				foundPrompt = true
+			}
+		}
+		if !foundPostReload {
+			t.Errorf("Post-reload content not visible in Grid (typing disappears!)")
+			for y := 0; y < len(newGrid); y++ {
+				row := trimRight(gridRowToString(newGrid[y]))
+				if row != "" {
+					t.Logf("  Grid[%2d] %q", y, row)
+				}
+			}
+		}
+		if !foundPrompt {
+			t.Errorf("Prompt not visible after reload writes (need 'reset' to fix)")
+		}
+
+		// --- Check 7: Key content survival ---
+		// Only check markers that should be in scrollback (i.e., written AFTER the
+		// second TUI and thus not overwritten by its viewport takeover).
+		// "PASS" and "all tests passed" were still on screen when the second Codex
+		// started, so they get overwritten — this is correct terminal behavior.
+		allContent := strings.Join(session2Lines, "\n")
+		criticalMarkers := []string{
+			"implement feature X",
+			"git diff --stat",
+			"15 files changed",
+		}
+		for _, marker := range criticalMarkers {
+			if !strings.Contains(allContent, marker) {
+				t.Errorf("Critical marker %q missing after reload", marker)
+			}
+		}
+
+		// --- Dump on failure ---
+		if t.Failed() {
+			t.Log("=== Session 2 raw dump (non-empty lines) ===")
+			for i, line := range session2Lines {
+				if line != "" {
+					globalIdx := session2GlobalOffset + int64(i)
+					marker := " "
+					if globalIdx == session2LiveEdge {
+						marker = ">"
+					}
+					t.Logf("  [%4d]%s %q", globalIdx, marker, line)
+				}
+			}
+			t.Log("=== Session 2 Grid ===")
+			for y, row := range session2GridStrings {
+				if row != "" {
+					t.Logf("  Grid[%2d] %q", y, row)
+				}
+			}
+		}
+
+		v.CloseMemoryBuffer()
+	}
+}
+
+// TestVTerm_ScrollRegionReloadCorruptionScaling verifies that the reload
+// corruption severity scales with TUI content length. The user reports:
+// "the more TUI content is used, the more error afterwards."
+// This test runs multiple sub-tests with increasing TUI output lengths
+// and checks that each produces identical content after reload.
+func TestVTerm_ScrollRegionReloadCorruptionScaling(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	testCases := []struct {
+		name           string
+		tuiLines       int
+		regionChanges  int
+		postTUILines   int
+	}{
+		{"short_20lines", 20, 1, 10},
+		{"medium_50lines", 50, 2, 20},
+		{"long_100lines", 100, 3, 30},
+		{"verylong_200lines", 200, 4, 50},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			diskPath := tmpDir + "/scaling_test.hist3"
+			width, height := 80, 24
+
+			var s1Lines []string
+			var s1Offset, s1End, s1LiveEdge int64
+			var s1Grid []string
+
+			// Session 1: Generate content
+			{
+				v := NewVTerm(width, height, WithMemoryBuffer())
+				err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+					MaxLines:   50000,
+					TerminalID: "scaling-" + tc.name,
+				})
+				if err != nil {
+					t.Fatalf("EnableMemoryBufferWithDisk: %v", err)
+				}
+				p := NewParser(v)
+
+				// Pre-TUI
+				parseString(p, "$ pre-tui-command\r\n")
+				parseString(p, "pre-tui output\r\n")
+
+				// TUI session
+				parseString(p, "$ codex 'task'\r\n")
+				emulateLongCodexSession(p, width, height, tc.tuiLines, tc.regionChanges)
+
+				// Post-TUI normal content
+				for i := 0; i < tc.postTUILines; i++ {
+					parseString(p, fmt.Sprintf("$ post-tui-cmd-%03d\r\n", i))
+					parseString(p, fmt.Sprintf("post-tui-output-%03d: some data here\r\n", i))
+				}
+				parseString(p, "$ final-prompt ")
+
+				mb := v.memBufState.memBuf
+				s1LiveEdge = v.memBufState.liveEdgeBase
+				s1Offset = mb.GlobalOffset()
+				s1End = mb.GlobalEnd()
+				s1Lines = extractAllLines(mb)
+
+				grid := v.Grid()
+				for y := 0; y < len(grid); y++ {
+					s1Grid = append(s1Grid, trimRight(gridRowToString(grid[y])))
+				}
+
+				if err := v.CloseMemoryBuffer(); err != nil {
+					t.Fatalf("Close: %v", err)
+				}
+			}
+
+			// Session 2: Reload and compare
+			{
+				v := NewVTerm(width, height, WithMemoryBuffer())
+				err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+					MaxLines:   50000,
+					TerminalID: "scaling-" + tc.name,
+				})
+				if err != nil {
+					t.Fatalf("Reload: %v", err)
+				}
+
+				mb := v.memBufState.memBuf
+				s2LiveEdge := v.memBufState.liveEdgeBase
+				s2Offset := mb.GlobalOffset()
+				s2End := mb.GlobalEnd()
+				s2Lines := extractAllLines(mb)
+
+				// Metric 1: GlobalEnd delta
+				endDelta := s2End - s1End
+				if endDelta != 0 {
+					t.Errorf("GlobalEnd off by %d (s1=%d, s2=%d)", endDelta, s1End, s2End)
+				}
+
+				// Metric 2: LiveEdgeBase delta
+				liveDelta := s2LiveEdge - s1LiveEdge
+				if liveDelta != 0 {
+					t.Errorf("LiveEdgeBase off by %d (s1=%d, s2=%d)", liveDelta, s1LiveEdge, s2LiveEdge)
+				}
+
+				// Metric 3: Line mismatches
+				overlapStart := max64(s1Offset, s2Offset)
+				overlapEnd := min64(s1End, s2End)
+				lineMismatches := 0
+				for idx := overlapStart; idx < overlapEnd; idx++ {
+					s1Idx := int(idx - s1Offset)
+					s2Idx := int(idx - s2Offset)
+					var s1Text, s2Text string
+					if s1Idx >= 0 && s1Idx < len(s1Lines) {
+						s1Text = s1Lines[s1Idx]
+					}
+					if s2Idx >= 0 && s2Idx < len(s2Lines) {
+						s2Text = s2Lines[s2Idx]
+					}
+					if s1Text != s2Text {
+						lineMismatches++
+					}
+				}
+
+				// Metric 4: Duplicate run length
+				maxDupeRun := 0
+				dupeRun := 1
+				for i := 1; i < len(s2Lines); i++ {
+					if s2Lines[i] != "" && s2Lines[i] == s2Lines[i-1] {
+						dupeRun++
+						if dupeRun > maxDupeRun {
+							maxDupeRun = dupeRun
+						}
+					} else {
+						dupeRun = 1
+					}
+				}
+
+				// Metric 5: Grid mismatches
+				s2Grid := v.Grid()
+				gridMismatches := 0
+				for y := 0; y < min(len(s1Grid), len(s2Grid)); y++ {
+					s2Row := trimRight(gridRowToString(s2Grid[y]))
+					if s1Grid[y] != s2Row {
+						gridMismatches++
+					}
+				}
+
+				// Metric 6: Post-reload typing
+				p := NewParser(v)
+				parseString(p, "echo 'alive'\r\n")
+				parseString(p, "alive\r\n")
+				parseString(p, "$ ")
+
+				newGrid := v.Grid()
+				typingVisible := false
+				promptVisible := false
+				for y := 0; y < len(newGrid); y++ {
+					row := trimRight(gridRowToString(newGrid[y]))
+					if strings.Contains(row, "alive") {
+						typingVisible = true
+					}
+					if strings.Contains(row, "$ ") {
+						promptVisible = true
+					}
+				}
+
+				t.Logf("TUI=%d lines: endDelta=%d, liveDelta=%d, lineMismatch=%d, maxDupe=%d, gridMismatch=%d, typing=%v, prompt=%v",
+					tc.tuiLines, endDelta, liveDelta, lineMismatches, maxDupeRun, gridMismatches, typingVisible, promptVisible)
+
+				if lineMismatches > 0 {
+					t.Errorf("%d line mismatches (corruption scales with TUI length)", lineMismatches)
+				}
+				if maxDupeRun > 2 {
+					t.Errorf("%d consecutive duplicates found", maxDupeRun)
+				}
+				if gridMismatches > 0 {
+					t.Errorf("%d Grid row mismatches", gridMismatches)
+				}
+				if !typingVisible {
+					t.Error("Typing not visible after reload (ghost terminal)")
+				}
+				if !promptVisible {
+					t.Error("Prompt missing after reload")
+				}
+
+				// Log on failure
+				if t.Failed() {
+					t.Log("=== Session 2 lines (non-empty) ===")
+					for i, line := range s2Lines {
+						if line != "" {
+							globalIdx := s2Offset + int64(i)
+							marker := " "
+							if globalIdx == s2LiveEdge {
+								marker = ">"
+							}
+							t.Logf("  [%4d]%s %q", globalIdx, marker, line)
+						}
+					}
+				}
+
+				v.CloseMemoryBuffer()
+			}
+		})
+	}
+}
+
+// TestVTerm_ScrollRegionMultiCycleReload tests for bugs that only appear after
+// multiple close/reopen cycles with TUI scroll region content. The user reports
+// that after 2-3 cycles of running Codex (TUI on main screen) then doing normal
+// shell commands, empty lines appear after shell output that weren't there before.
+//
+// This happens because each reload cycle may accumulate small offset errors in
+// liveEdgeBase, cursor position, or GlobalEnd that don't manifest until enough
+// cycles compound the error.
+func TestVTerm_ScrollRegionMultiCycleReload(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	diskPath := tmpDir + "/test_multicycle.hist3"
+	terminalID := "test-multicycle"
+	width, height := 120, 30
+
+	// Track grid snapshots from each session to detect empty line insertion
+	type sessionSnapshot struct {
+		globalOffset int64
+		globalEnd    int64
+		liveEdge     int64
+		cursorX      int
+		cursorY      int
+		gridLines    []string // Grid() rows as strings
+		lastContent  []string // last few non-empty raw lines before cursor
+	}
+
+	const numCycles = 4
+	snapshots := make([]sessionSnapshot, numCycles)
+
+	for cycle := 0; cycle < numCycles; cycle++ {
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("Cycle %d: EnableMemoryBufferWithDisk failed: %v", cycle, err)
+		}
+		p := NewParser(v)
+
+		if cycle > 0 {
+			// After reload: the Grid should match the previous session's Grid exactly.
+			// Empty rows between content rows are legitimate (TUI apps may leave gaps
+			// in the viewport). The key is that reload preserves the same state.
+			grid := v.Grid()
+			var gridLines []string
+			for y := range len(grid) {
+				gridLines = append(gridLines, trimRight(gridRowToString(grid[y])))
+			}
+
+			prevSnap := snapshots[cycle-1]
+			mismatches := 0
+			for y := 0; y < min(len(gridLines), len(prevSnap.gridLines)); y++ {
+				if gridLines[y] != prevSnap.gridLines[y] {
+					mismatches++
+					if mismatches <= 5 {
+						t.Errorf("Cycle %d reload Grid row %d mismatch:\n  expected: %q\n  got:      %q",
+							cycle, y, prevSnap.gridLines[y], gridLines[y])
+					}
+				}
+			}
+			if mismatches > 5 {
+				t.Errorf("Cycle %d reload: %d total grid mismatches", cycle, mismatches)
+			}
+		}
+
+		// --- Write content for this cycle ---
+
+		// Normal shell commands
+		for i := 0; i < 5; i++ {
+			parseString(p, fmt.Sprintf("$ cmd-cycle%d-%d\r\n", cycle, i))
+			parseString(p, fmt.Sprintf("output-cycle%d-%d\r\n", cycle, i))
+		}
+
+		// Codex TUI session (shorter each cycle to mix things up)
+		parseString(p, fmt.Sprintf("$ codex 'task for cycle %d'\r\n", cycle))
+		tuiLines := 20 + cycle*10 // 20, 30, 40, 50 lines
+		emulateLongCodexSession(p, width, height, tuiLines, 1+cycle%2)
+
+		// Normal shell after TUI (like the user typing ls)
+		parseString(p, fmt.Sprintf("$ echo 'cycle %d done'\r\n", cycle))
+		parseString(p, fmt.Sprintf("cycle %d done\r\n", cycle))
+		parseString(p, "$ ls\r\n")
+		parseString(p, "file1.txt  file2.txt  file3.txt  README.md  Makefile\r\n")
+		parseString(p, "$ ") // prompt
+
+		// Capture snapshot
+		mb := v.memBufState.memBuf
+		snap := sessionSnapshot{
+			globalOffset: mb.GlobalOffset(),
+			globalEnd:    mb.GlobalEnd(),
+			liveEdge:     v.memBufState.liveEdgeBase,
+			cursorX:      v.cursorX,
+			cursorY:      v.cursorY,
+		}
+
+		grid := v.Grid()
+		for y := 0; y < len(grid); y++ {
+			snap.gridLines = append(snap.gridLines, trimRight(gridRowToString(grid[y])))
+		}
+
+		// Capture last few non-empty lines near the prompt
+		allLines := extractAllLines(mb)
+		nonEmpty := 0
+		for i := len(allLines) - 1; i >= 0 && nonEmpty < 10; i-- {
+			if allLines[i] != "" {
+				snap.lastContent = append([]string{allLines[i]}, snap.lastContent...)
+				nonEmpty++
+			}
+		}
+
+		snapshots[cycle] = snap
+
+		t.Logf("Cycle %d: offset=%d, end=%d, liveEdge=%d, cursor=(%d,%d), totalLines=%d",
+			cycle, snap.globalOffset, snap.globalEnd, snap.liveEdge, snap.cursorX, snap.cursorY, len(allLines))
+
+		if err := v.CloseMemoryBuffer(); err != nil {
+			t.Fatalf("Cycle %d: Close failed: %v", cycle, err)
+		}
+	}
+
+	// --- Final reload: thorough check ---
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("Final reload: %v", err)
+		}
+
+		mb := v.memBufState.memBuf
+		finalEnd := mb.GlobalEnd()
+		finalLiveEdge := v.memBufState.liveEdgeBase
+		lastSnap := snapshots[numCycles-1]
+
+		// Check 1: GlobalEnd should match last session
+		if finalEnd != lastSnap.globalEnd {
+			t.Errorf("Final reload: GlobalEnd=%d, expected %d (off by %d)",
+				finalEnd, lastSnap.globalEnd, finalEnd-lastSnap.globalEnd)
+		}
+
+		// Check 2: LiveEdgeBase should match last session
+		if finalLiveEdge != lastSnap.liveEdge {
+			t.Errorf("Final reload: liveEdge=%d, expected %d (off by %d)",
+				finalLiveEdge, lastSnap.liveEdge, finalLiveEdge-lastSnap.liveEdge)
+		}
+
+		// Check 3: Grid should match last session
+		finalGrid := v.Grid()
+		gridMismatches := 0
+		for y := 0; y < min(len(finalGrid), len(lastSnap.gridLines)); y++ {
+			row := trimRight(gridRowToString(finalGrid[y]))
+			if row != lastSnap.gridLines[y] {
+				gridMismatches++
+				if gridMismatches <= 5 {
+					t.Errorf("Final reload Grid row %d:\n  expected: %q\n  got:      %q", y, lastSnap.gridLines[y], row)
+				}
+			}
+		}
+		if gridMismatches > 0 {
+			t.Logf("Final reload: %d grid mismatches", gridMismatches)
+		}
+
+		// Check 4: No empty line gaps in Grid
+		var gridLines []string
+		for y := 0; y < len(finalGrid); y++ {
+			gridLines = append(gridLines, trimRight(gridRowToString(finalGrid[y])))
+		}
+
+		lastNonEmpty := -1
+		for y := len(gridLines) - 1; y >= 0; y-- {
+			if gridLines[y] != "" {
+				lastNonEmpty = y
+				break
+			}
+		}
+
+		emptyGapCount := 0
+		maxEmptyGap := 0
+		for y := 0; y <= lastNonEmpty; y++ {
+			if gridLines[y] == "" {
+				emptyGapCount++
+			} else {
+				if emptyGapCount > maxEmptyGap {
+					maxEmptyGap = emptyGapCount
+				}
+				emptyGapCount = 0
+			}
+		}
+		if maxEmptyGap > 1 {
+			t.Errorf("Final reload: %d empty line gap in Grid (phantom empty lines)", maxEmptyGap)
+		}
+
+		// Check 5: New content after final reload should work without gaps
+		p := NewParser(v)
+		parseString(p, "echo 'final check'\r\n")
+		parseString(p, "final check\r\n")
+		parseString(p, "$ ")
+
+		postGrid := v.Grid()
+		var postLines []string
+		for y := 0; y < len(postGrid); y++ {
+			postLines = append(postLines, trimRight(gridRowToString(postGrid[y])))
+		}
+
+		// Find "final check" and "$ " — check no empty gap between them
+		finalCheckRow := -1
+		promptRow := -1
+		for y := len(postLines) - 1; y >= 0; y-- {
+			if strings.Contains(postLines[y], "$ ") && promptRow < 0 {
+				promptRow = y
+			}
+			if strings.Contains(postLines[y], "final check") && !strings.Contains(postLines[y], "echo") && finalCheckRow < 0 {
+				finalCheckRow = y
+			}
+		}
+
+		if finalCheckRow >= 0 && promptRow >= 0 {
+			gapBetween := 0
+			for y := finalCheckRow + 1; y < promptRow; y++ {
+				if postLines[y] == "" {
+					gapBetween++
+				}
+			}
+			if gapBetween > 0 {
+				t.Errorf("Final reload: %d empty lines between 'final check' (row %d) and prompt (row %d)",
+					gapBetween, finalCheckRow, promptRow)
+			}
+		}
+
+		if !strings.Contains(postLines[promptRow], "$ ") {
+			t.Error("Prompt not visible after final reload writes")
+		}
+
+		// Dump on failure
+		if t.Failed() {
+			t.Log("=== Final reload Grid ===")
+			for y, row := range gridLines {
+				marker := " "
+				if row == "" {
+					marker = "~"
+				}
+				t.Logf("  [%2d]%s %q", y, marker, row)
+			}
+			t.Log("=== Post-write Grid ===")
+			for y, row := range postLines {
+				marker := " "
+				if row == "" {
+					marker = "~"
+				}
+				t.Logf("  [%2d]%s %q", y, marker, row)
+			}
+		}
+
+		v.CloseMemoryBuffer()
+	}
+}
+
+// --- Auto-wrap tests ---
+//
+// These tests verify that when text wraps at the terminal's right edge,
+// it displays correctly and reflows properly on resize.
+
+// TestAutoWrap_GridRendering verifies that wrapped content displays
+// correctly across multiple physical rows in the Grid().
+func TestAutoWrap_GridRendering(t *testing.T) {
+	width := 10
+	height := 5
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write exactly 15 chars: "AAAAAAAAAABBBBB"
+	parseString(p, strings.Repeat("A", width)+strings.Repeat("B", 5))
+
+	grid := v.Grid()
+
+	// Row 0 should show "AAAAAAAAAA"
+	row0 := gridRowToString(grid[0][:width])
+	expected0 := strings.Repeat("A", width)
+	if row0 != expected0 {
+		t.Errorf("row 0: expected %q, got %q", expected0, row0)
+	}
+
+	// Row 1 should show "BBBBB"
+	row1 := gridRowToString(grid[1][:5])
+	if row1 != "BBBBB" {
+		t.Errorf("row 1: expected %q, got %q", "BBBBB", row1)
+	}
+}
+
+// TestAutoWrap_ResizeReflow verifies that after wrapping at width 10,
+// resizing to width 20 reflows the content to a single physical row.
+func TestAutoWrap_ResizeReflow(t *testing.T) {
+	width := 10
+	height := 5
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write 15 chars at width 10 → wraps to 2 physical rows
+	text := strings.Repeat("A", 10) + strings.Repeat("B", 5)
+	parseString(p, text)
+
+	// Verify wrapping before resize
+	grid := v.Grid()
+	row0 := gridRowToString(grid[0][:10])
+	row1 := gridRowToString(grid[1][:5])
+	if row0 != "AAAAAAAAAA" || row1 != "BBBBB" {
+		t.Fatalf("before resize: expected rows 'AAAAAAAAAA'+'BBBBB', got %q+%q", row0, row1)
+	}
+
+	// Resize to width 20
+	v.Resize(20, height)
+
+	// After resize, content should reflow to a single physical row
+	grid = v.Grid()
+	row0 = gridRowToString(grid[0][:15])
+	expected := strings.Repeat("A", 10) + "BBBBB"
+	if row0 != expected {
+		t.Errorf("after resize to width 20: expected %q on row 0, got %q", expected, row0)
+	}
+
+	// Row 1 should be empty
+	row1Content := strings.TrimRight(gridRowToString(grid[1]), " \x00")
+	if row1Content != "" {
+		t.Errorf("after resize: row 1 should be empty, got %q", row1Content)
 	}
 }
