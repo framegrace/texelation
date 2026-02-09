@@ -10,6 +10,7 @@ package parser
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mattn/go-runewidth"
@@ -18,6 +19,7 @@ import (
 // VTerm represents the state of a virtual terminal, managing both the main screen
 // with a scrollback buffer and an alternate screen for fullscreen applications.
 type VTerm struct {
+	mu                                 sync.RWMutex // protects dimensional state during resize
 	width, height                      int
 	cursorX, cursorY                   int
 	savedMainCursorX, savedMainCursorY int
@@ -142,6 +144,8 @@ func (v *VTerm) logDebug(format string, args ...interface{}) {
 // Returns the alternate screen buffer directly if in alt screen mode,
 // otherwise returns the MemoryBuffer viewport.
 func (v *VTerm) Grid() [][]Cell {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
 	if v.inAltScreen {
 		return v.altBuffer
 	}
@@ -1224,6 +1228,9 @@ func WithMemoryBufferOptions(opts MemoryBufferOptions) Option {
 
 // Resize handles changes to the terminal's dimensions.
 func (v *VTerm) Resize(width, height int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
 	if width == v.width && height == v.height {
 		return
 	}
@@ -1249,11 +1256,11 @@ func (v *VTerm) Resize(width, height int) {
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	}
 
+	v.MarkAllDirty()
 	// Reset margins on resize (without moving cursor)
 	// Note: We can't use SetMargins() because it moves cursor to home per VT spec
 	v.marginTop = 0
 	v.marginBottom = v.height - 1
-	v.MarkAllDirty()
 }
 
 // --- Simple Getters ---

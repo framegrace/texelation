@@ -616,8 +616,14 @@ func (c *connection) handleResize(size protocol.Resize) {
 	}
 
 	sink.Publish()
+	c.sendPending() // flush buffer deltas to client before tree snapshot
 
-	payload, err := protocol.EncodeTreeSnapshot(snapshot)
+	// Use geometry-only snapshot: row data was already sent via deltas above.
+	// The full snapshot rows are plain text (no colors), so sending them AFTER
+	// the colored deltas would overwrite the client's buffer cache with
+	// colorless data.
+	geoSnap := geometryOnlySnapshot(snapshot)
+	payload, err := protocol.EncodeTreeSnapshot(geoSnap)
 	if err != nil {
 		return
 	}
