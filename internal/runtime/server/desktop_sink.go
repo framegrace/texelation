@@ -132,3 +132,13 @@ func (d *DesktopSink) Snapshot() (protocol.TreeSnapshot, error) {
 	log.Printf("DesktopSink.Snapshot: ActiveWS=%d, Panes=%d", capture.ActiveWorkspaceID, len(capture.Panes))
 	return treeCaptureToProtocol(capture), nil
 }
+
+// GeometrySnapshot returns pane positions and tree structure without rendering
+// pane buffers.  Used during resize to send updated geometry cheaply.
+func (d *DesktopSink) GeometrySnapshot() (protocol.TreeSnapshot, error) {
+	if d.desktop == nil {
+		return protocol.TreeSnapshot{}, nil
+	}
+	capture := d.desktop.GeometryForClient()
+	return treeCaptureToProtocol(capture), nil
+}

@@ -1298,9 +1298,12 @@ func (d *DesktopEngine) SetViewportSize(cols, rows int) {
 	// the client sent its viewport size.
 	d.startPendingApps()
 
-	if d.activeWorkspace != nil {
-		d.activeWorkspace.Refresh()
-	}
+	// NOTE: We intentionally do NOT call d.activeWorkspace.Refresh() here.
+	// Both callers (handleResize, handleClientReady) do explicit publishes
+	// after this method returns.  A background refresh would race with the
+	// explicit publish, potentially enqueuing buffer deltas after the
+	// caller's sendPending(), causing the client to render new content at
+	// stale pane positions (border flicker).
 }
 
 // startPendingApps starts any apps that were deferred during snapshot restore.

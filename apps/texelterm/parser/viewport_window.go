@@ -284,6 +284,7 @@ func (vw *ViewportWindow) Resize(newWidth, newHeight int) {
 	vw.height = newHeight
 	vw.builder.SetWidth(newWidth)
 	vw.scroll.SetViewportHeight(newHeight)
+	vw.scroll.InvalidateIndex()
 	vw.cache.Invalidate()
 }
 

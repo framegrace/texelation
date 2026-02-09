@@ -10,6 +10,7 @@ package parser
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mattn/go-runewidth"
@@ -18,6 +19,7 @@ import (
 // VTerm represents the state of a virtual terminal, managing both the main screen
 // with a scrollback buffer and an alternate screen for fullscreen applications.
 type VTerm struct {
+	mu                                 sync.RWMutex // protects dimensional state during resize
 	width, height                      int
 	cursorX, cursorY                   int
 	savedMainCursorX, savedMainCursorY int
@@ -142,6 +144,8 @@ func (v *VTerm) logDebug(format string, args ...interface{}) {
 // Returns the alternate screen buffer directly if in alt screen mode,
 // otherwise returns the MemoryBuffer viewport.
 func (v *VTerm) Grid() [][]Cell {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
 	if v.inAltScreen {
 		return v.altBuffer
 	}
@@ -362,14 +366,29 @@ func (v *VTerm) getHistoryLen() int {
 	return int(v.memBufState.memBuf.TotalLines())
 }
 
-// getHistoryLine retrieves a specific line from the MemoryBuffer.
-// Returns the cells for the logical line at the given global index.
-func (v *VTerm) getHistoryLine(index int) []Cell {
+// getLogicalLine retrieves a logical line by global index, with PageStore fallback.
+// This should be used instead of accessing memBuf.GetLine() directly, as lines
+// scrolled far back may have been evicted from the in-memory ring buffer to disk.
+func (v *VTerm) getLogicalLine(globalIdx int64) *LogicalLine {
 	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return nil
 	}
+	line := v.memBufState.memBuf.GetLine(globalIdx)
+	if line != nil {
+		return line
+	}
+	// Fallback to PageStore for evicted lines
+	if v.memBufState.pageStore != nil {
+		line, _ = v.memBufState.pageStore.ReadLine(globalIdx)
+		return line
+	}
+	return nil
+}
 
-	line := v.memBufState.memBuf.GetLine(int64(index))
+// getHistoryLine retrieves a specific line from the MemoryBuffer.
+// Returns the cells for the logical line at the given global index.
+func (v *VTerm) getHistoryLine(index int) []Cell {
+	line := v.getLogicalLine(int64(index))
 	if line == nil {
 		return nil
 	}
@@ -522,10 +541,10 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return ""
 	}
-	// Extract text from MemoryBuffer line range
+	// Extract text from MemoryBuffer line range (with PageStore fallback for evicted lines)
 	var result []rune
 	for lineIdx := startLine; lineIdx <= endLine; lineIdx++ {
-		line := v.memBufState.memBuf.GetLine(lineIdx)
+		line := v.getLogicalLine(lineIdx)
 		if line == nil {
 			continue
 		}
@@ -1209,6 +1228,9 @@ func WithMemoryBufferOptions(opts MemoryBufferOptions) Option {
 
 // Resize handles changes to the terminal's dimensions.
 func (v *VTerm) Resize(width, height int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
 	if width == v.width && height == v.height {
 		return
 	}
@@ -1234,11 +1256,11 @@ func (v *VTerm) Resize(width, height int) {
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	}
 
+	v.MarkAllDirty()
 	// Reset margins on resize (without moving cursor)
 	// Note: We can't use SetMargins() because it moves cursor to home per VT spec
 	v.marginTop = 0
 	v.marginBottom = v.height - 1
-	v.MarkAllDirty()
 }
 
 // --- Simple Getters ---

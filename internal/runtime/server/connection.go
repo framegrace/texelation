@@ -605,7 +605,10 @@ func (c *connection) handleResize(size protocol.Resize) {
 			id[:4])
 	}
 
-	snapshot, err := sink.Snapshot()
+	// Build a geometry-only tree snapshot (pane positions + tree structure,
+	// no buffer rendering).  This is cheap and avoids the wasteful full
+	// render that sink.Snapshot() would trigger.
+	snapshot, err := sink.GeometrySnapshot()
 	if err != nil {
 		sink.Publish()
 		return
@@ -615,10 +618,11 @@ func (c *connection) handleResize(size protocol.Resize) {
 		return
 	}
 
-	sink.Publish()
-
+	// Send geometry snapshot FIRST so the client updates pane positions
+	// before content arrives.
 	payload, err := protocol.EncodeTreeSnapshot(snapshot)
 	if err != nil {
+		sink.Publish()
 		return
 	}
 
@@ -629,6 +633,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 		SessionID: c.session.ID(),
 	}
 	if err := c.writeMessage(header, payload); err != nil {
+		sink.Publish()
 		return
 	}
 
@@ -636,6 +641,11 @@ func (c *connection) handleResize(size protocol.Resize) {
 	for _, state := range states {
 		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesMouse)
 	}
+
+	// Now publish and flush buffer deltas. The client already has correct
+	// pane positions, so the new content renders at the right location.
+	sink.Publish()
+	c.sendPending()
 }
 
 func geometryOnlySnapshot(snapshot protocol.TreeSnapshot) protocol.TreeSnapshot {

@@ -1270,6 +1270,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 			a.requestRefresh()
 		}()
 	})
+	a.scrollbar.SetRefreshCallback(a.requestRefresh)
 	a.scrollbar.Resize(rows)
 
 	// Initialize mouse coordinator for selection handling

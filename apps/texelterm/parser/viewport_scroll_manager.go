@@ -34,6 +34,10 @@ type ScrollManager struct {
 	// Dependencies
 	reader  ContentReader
 	builder *PhysicalLineBuilder
+
+	// index caches physical line counts for O(1) total and O(log N) lookups.
+	// Lazily initialized on first use.
+	index *PhysicalLineIndex
 }
 
 // NewScrollManager creates a new scroll manager.
@@ -139,27 +143,62 @@ func (sm *ScrollManager) MaxScrollOffset() int64 {
 }
 
 // TotalPhysicalLines returns the total number of physical lines at current width.
-// For performance, only calculates exact physical lines for in-memory content.
+// Uses cached PhysicalLineIndex for O(1) performance.
 // Disk content (before MemoryBufferOffset) is estimated at 1 physical line per logical line.
 func (sm *ScrollManager) TotalPhysicalLines() int64 {
 	globalOffset := sm.reader.GlobalOffset()
 	memOffset := sm.reader.MemoryBufferOffset()
-	globalEnd := sm.reader.GlobalEnd()
 
 	// Estimate disk content (before memory): 1 physical line per logical line
 	diskLines := memOffset - globalOffset
 
-	// Calculate exact physical lines for in-memory content
-	var memPhysical int64
-	for idx := memOffset; idx < globalEnd; idx++ {
-		line := sm.reader.GetLine(idx)
-		if line != nil {
-			wrapped := sm.builder.BuildLine(line, idx)
-			memPhysical += int64(len(wrapped))
-		}
+	sm.ensureIndexValid()
+	return diskLines + sm.index.TotalPhysicalLines()
+}
+
+// ensureIndexValid creates or updates the physical line index as needed.
+func (sm *ScrollManager) ensureIndexValid() {
+	if sm.index == nil {
+		sm.index = NewPhysicalLineIndex(sm.reader, sm.builder.Width())
+		sm.index.Build()
+		return
 	}
 
-	return diskLines + memPhysical
+	// Width change → full rebuild
+	if sm.builder.Width() != sm.index.Width() {
+		sm.index.width = sm.builder.Width()
+		sm.index.Build()
+		return
+	}
+
+	memOffset := sm.reader.MemoryBufferOffset()
+	globalEnd := sm.reader.GlobalEnd()
+
+	// Eviction: memory base moved forward
+	if memOffset > sm.index.BaseOffset() {
+		evicted := int(memOffset - sm.index.BaseOffset())
+		sm.index.HandleEviction(memOffset, evicted)
+	}
+
+	// Append: new lines added
+	indexEnd := sm.index.BaseOffset() + int64(sm.index.Count())
+	if globalEnd > indexEnd {
+		sm.index.HandleAppend(globalEnd)
+	}
+
+	// Content version changed (e.g., line edited in-place) → full rebuild
+	if sm.reader.ContentVersion() != sm.index.ContentVersion() {
+		sm.index.Build()
+	}
+}
+
+// InvalidateIndex marks the physical line index for rebuild.
+// Call this when the terminal width changes to ensure the index
+// is rebuilt before the next render.
+func (sm *ScrollManager) InvalidateIndex() {
+	if sm.index != nil {
+		sm.index.Invalidate()
+	}
 }
 
 // VisibleRange returns the global line indices that should be visible.
@@ -212,34 +251,39 @@ func (sm *ScrollManager) VisibleRange(viewportHeight int) (startGlobalIdx, endGl
 }
 
 // findLogicalRangeInMemory finds which logical lines contain the given physical line range.
-// Only iterates through in-memory content for performance.
+// Uses binary search on the PhysicalLineIndex prefix sum for O(log N) performance.
 func (sm *ScrollManager) findLogicalRangeInMemory(memStart, memEnd, physicalStart, physicalEnd int64) (startGlobalIdx, endGlobalIdx int64) {
-	var runningPhysical int64
-	startFound := false
-	startGlobalIdx = memStart
-	endGlobalIdx = memEnd
+	sm.ensureIndexValid()
 
-	for idx := memStart; idx < memEnd; idx++ {
-		line := sm.reader.GetLine(idx)
-		physicalCount := int64(1)
-		if line != nil {
-			wrapped := sm.builder.BuildLine(line, idx)
-			physicalCount = int64(len(wrapped))
+	if sm.index.Count() == 0 {
+		return memStart, memEnd
+	}
+
+	// Find the logical line containing physicalStart
+	startGlobalIdx, _ = sm.index.PhysicalToLogical(physicalStart)
+
+	// Find the exclusive end boundary.
+	// physicalEnd is exclusive, so we need the first logical line AFTER the
+	// visible range. PhysicalToLogical returns the line containing physicalEnd.
+	// If physicalEnd falls partway through a logical line (offset > 0),
+	// that line is still needed, so bump the end past it.
+	if physicalEnd >= sm.index.TotalPhysicalLines() {
+		endGlobalIdx = memEnd
+	} else {
+		endLogical, endOffset := sm.index.PhysicalToLogical(physicalEnd)
+		if endOffset > 0 {
+			endGlobalIdx = endLogical + 1
+		} else {
+			endGlobalIdx = endLogical
 		}
+	}
 
-		// Check if this logical line contains our start physical line
-		if !startFound && runningPhysical+physicalCount > physicalStart {
-			startGlobalIdx = idx
-			startFound = true
-		}
-
-		// Check if this logical line contains our end physical line
-		if runningPhysical >= physicalEnd {
-			endGlobalIdx = idx
-			break
-		}
-
-		runningPhysical += physicalCount
+	// Clamp to valid range
+	if startGlobalIdx < memStart {
+		startGlobalIdx = memStart
+	}
+	if endGlobalIdx > memEnd {
+		endGlobalIdx = memEnd
 	}
 
 	return startGlobalIdx, endGlobalIdx

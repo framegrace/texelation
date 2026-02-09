@@ -21,6 +21,9 @@ import (
 )
 
 func TestTexelTermRunRendersOutput(t *testing.T) {
+	// Use a temp HOME to avoid loading persisted history from real user data
+	t.Setenv("HOME", t.TempDir())
+
 	script := writeScript(t, "#!/bin/sh\nprintf 'hello texelterm'\n")
 
 	app := texelterm.New("texelterm", script)
@@ -60,6 +63,9 @@ func TestTexelTermRunRendersOutput(t *testing.T) {
 }
 
 func TestTexelTermStopTerminatesProcess(t *testing.T) {
+	// Use a temp HOME to avoid loading/creating persisted state
+	t.Setenv("HOME", t.TempDir())
+
 	script := writeScript(t, "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 1; done\n")
 
 	app := texelterm.New("texelterm", script)
@@ -115,6 +121,9 @@ func rowToString(row []texelcore.Cell) string {
 
 // TestTexelTermLineWrapOutput tests that long lines wrap correctly.
 func TestTexelTermLineWrapOutput(t *testing.T) {
+	// Use a temp HOME to avoid loading persisted history from real user data
+	t.Setenv("HOME", t.TempDir())
+
 	// Output 20 characters on a 10-column wide terminal
 	// Should wrap to 2 lines: "ABCDEFGHIJ" "KLMNOPQRST"
 	// (reduced to 20 chars so we don't have a third line that conflicts with confirmation dialog)

@@ -7,6 +7,7 @@
 package parser
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -383,6 +384,77 @@ func TestScrollManager_CanScroll(t *testing.T) {
 	}
 }
 
+func TestScrollManager_VisibleRangeWithWrappingLines(t *testing.T) {
+	// Regression: when physicalEnd falls mid-way through a wrapping logical line,
+	// findLogicalRangeInMemory must include that logical line in the result.
+	// Without the fix, endGlobalIdx was off-by-one, causing line duplication
+	// flicker during resize from the top.
+
+	// Line 0: "Short" = 1 phys, Line 1: 160 chars = 2 phys at w=80, Line 2: "End" = 1 phys
+	// Total physical = 4
+	long := make([]byte, 160)
+	for i := range long {
+		long[i] = 'X'
+	}
+	mb := setupTestBuffer([]string{"Short", string(long), "End"}, 80)
+	reader := NewMemoryBufferReader(mb)
+	builder := NewPhysicalLineBuilder(80)
+	scroll := NewScrollManager(reader, builder)
+
+	// Viewport height 3, scrolled back by 1:
+	// physicalEnd = 4-1 = 3, physicalStart = 3-3 = 0
+	// Physical lines 0,1,2 are visible. Line 1 spans phys 1-2.
+	// physicalEnd=3 falls at the start of line 1's 3rd physical line... wait,
+	// line 1 only has 2 physical lines (phys 1 and 2). physicalEnd=3 is the
+	// start of line 2. So endGlobalIdx should be 2 (exclusive).
+	scroll.SetViewportHeight(3)
+	scroll.ScrollUp(1)
+
+	start, end := scroll.VisibleRange(3)
+	if start != 0 {
+		t.Errorf("expected start=0, got %d", start)
+	}
+	if end != 2 {
+		t.Errorf("expected end=2, got %d", end)
+	}
+
+	// Now test the case where physicalEnd lands INSIDE a wrapping line:
+	// Viewport height 2, scrolled back by 1:
+	// physicalEnd = 4-1 = 3, physicalStart = 3-2 = 1
+	// Physical lines 1,2 visible. Both belong to line 1 (160-char line).
+	// physicalEnd=3 is start of line 2. endGlobalIdx should be 2.
+	scroll.ScrollToBottom()
+	scroll.SetViewportHeight(2)
+	scroll.ScrollUp(1)
+
+	start, end = scroll.VisibleRange(2)
+	if start != 1 {
+		t.Errorf("expected start=1, got %d", start)
+	}
+	if end != 2 {
+		t.Errorf("expected end=2, got %d", end)
+	}
+
+	// Key case: viewport height 2, scrolled back by 2:
+	// physicalEnd = 4-2 = 2, physicalStart = 2-2 = 0
+	// Physical lines 0,1 visible. Phys 0 = line 0, phys 1 = first wrap of line 1.
+	// physicalEnd=2 falls at prefixSum boundary (start of line 1's second phys).
+	// We need line 1 included → endGlobalIdx should be 2.
+	scroll.ScrollToBottom()
+	scroll.ScrollUp(2)
+
+	start, end = scroll.VisibleRange(2)
+	if start != 0 {
+		t.Errorf("expected start=0, got %d", start)
+	}
+	// physicalEnd=2 is at the boundary between line 1's phys lines.
+	// Line 1 starts at prefixSum[1]=1, ends at prefixSum[2]=3.
+	// PhysicalToLogical(2) → line 1, offset 1. offset>0 → end=2. ✓
+	if end != 2 {
+		t.Errorf("expected end=2, got %d", end)
+	}
+}
+
 // --- CoordinateMapper Tests ---
 
 func TestCoordinateMapper_ViewportToContent(t *testing.T) {
@@ -635,6 +707,200 @@ func TestViewportWindow_Concurrency(t *testing.T) {
 	wg.Wait()
 
 	// If we get here without deadlock or panic, the test passes
+}
+
+// --- Resize Stability Tests ---
+
+// TestViewportWindow_RapidHeightChange_GridStability verifies that the grid
+// produced by GetVisibleGrid() has no duplicate content rows and the bottom
+// content (newest lines) is stable across rapid height changes.
+// This catches regressions in VisibleRange/physicalLinesToGrid math.
+func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
+	// Create a buffer with a mix of short, medium, and wrapping lines.
+	// Each byte is derived from both line index (i) and position (j), making
+	// every physical line unique — even within a single wrapped logical line.
+	width := 40
+	fillLine := func(i, length int) string {
+		line := make([]byte, length)
+		for j := range line {
+			line[j] = byte('!' + (i*7+j)%94) // printable ASCII, unique per (i,j)
+		}
+		return string(line)
+	}
+	var lines []string
+	for i := 0; i < 50; i++ {
+		switch i % 5 {
+		case 0:
+			// Short line (1 physical at w=40)
+			lines = append(lines, fmt.Sprintf("L%02d:Short", i))
+		case 1:
+			// Exactly width chars (1 physical)
+			lines = append(lines, fillLine(i, width))
+		case 2:
+			// Wrapping line: 80 chars = 2 physical at w=40
+			lines = append(lines, fillLine(i, 80))
+		case 3:
+			// Long wrapping: 120 chars = 3 physical at w=40
+			lines = append(lines, fillLine(i, 120))
+		case 4:
+			// Short unique line
+			lines = append(lines, fmt.Sprintf("L%02d:.", i))
+		}
+	}
+
+	mb := setupTestBuffer(lines, width)
+	vw := NewViewportWindow(mb, width, 30)
+
+	// Helper: extract non-empty row content
+	gridContentRows := func(grid [][]Cell) []string {
+		var rows []string
+		for _, row := range grid {
+			s := vwGridRowToString(row)
+			rows = append(rows, s)
+		}
+		return rows
+	}
+
+	// Helper: verify grid matches independently-computed expected output.
+	// This rebuilds the expected grid from scratch using the same components
+	// but without going through GetVisibleGrid's caching layer.
+	checkGridCorrect := func(t *testing.T, grid [][]Cell, height int) {
+		t.Helper()
+		// Independently compute the expected visible range
+		startGlobal, endGlobal := vw.scroll.VisibleRange(height)
+
+		// Build expected physical lines
+		logicalLines := vw.reader.GetLineRange(startGlobal, endGlobal)
+		physical := vw.builder.BuildRange(logicalLines, startGlobal)
+
+		// Bottom-align (same as physicalLinesToGrid)
+		totalPhysical := len(physical)
+		physicalStart := max(totalPhysical-height, 0)
+
+		for y := 0; y < height; y++ {
+			physIdx := physicalStart + y
+			var expected string
+			if physIdx >= 0 && physIdx < totalPhysical {
+				expected = vwGridRowToString(physical[physIdx].Cells)
+			}
+			actual := vwGridRowToString(grid[y])
+			if actual != expected {
+				t.Errorf("height=%d row=%d: got %q, want %q (physIdx=%d, range=[%d,%d))",
+					height, y, actual, expected, physIdx, startGlobal, endGlobal)
+			}
+		}
+	}
+
+	// Helper: check that bottom row is always the last physical line of the last logical line
+	checkBottomStable := func(t *testing.T, grid [][]Cell, height int) {
+		t.Helper()
+		// At live edge, the bottom physical line should always be the last part
+		// of the last logical line (line 49 which is "L49:.")
+		bottomContent := vwGridRowToString(grid[height-1])
+		if bottomContent != "L49:." {
+			t.Errorf("height=%d: bottom row should be 'L49:.' (last logical line), got %q",
+				height, bottomContent)
+		}
+	}
+
+	// Test 1: Shrinking from height=30 to height=10 (simulates resize from top — drag down)
+	t.Run("Shrinking", func(t *testing.T) {
+		for h := 30; h >= 10; h-- {
+			vw.Resize(width, h)
+			grid := vw.GetVisibleGrid()
+
+			if len(grid) != h {
+				t.Fatalf("height=%d: grid has %d rows, expected %d", h, len(grid), h)
+			}
+			if len(grid[0]) != width {
+				t.Fatalf("height=%d: grid row has %d cols, expected %d", h, len(grid[0]), width)
+			}
+
+			checkGridCorrect(t, grid, h)
+			checkBottomStable(t, grid, h)
+		}
+	})
+
+	// Test 2: Growing from height=10 to height=30 (simulates resize from top — drag up)
+	t.Run("Growing", func(t *testing.T) {
+		vw.Resize(width, 10)
+		for h := 10; h <= 30; h++ {
+			vw.Resize(width, h)
+			grid := vw.GetVisibleGrid()
+
+			if len(grid) != h {
+				t.Fatalf("height=%d: grid has %d rows, expected %d", h, len(grid), h)
+			}
+
+			checkGridCorrect(t, grid, h)
+			checkBottomStable(t, grid, h)
+		}
+	})
+
+	// Test 3: Rapid alternation (resize up/down rapidly)
+	t.Run("Alternating", func(t *testing.T) {
+		for i := 0; i < 20; i++ {
+			h := 15 + (i%10)*2 // heights: 15,17,19,21,23,25,27,29,31,33,15,17,...
+			vw.Resize(width, h)
+			grid := vw.GetVisibleGrid()
+
+			if len(grid) != h {
+				t.Fatalf("iter=%d height=%d: grid has %d rows", i, h, len(grid))
+			}
+
+			checkGridCorrect(t, grid, h)
+			checkBottomStable(t, grid, h)
+		}
+	})
+
+	// Test 4: Verify consecutive grids share content (bottom stability)
+	// When height changes by 1, the bottom N-1 rows of the larger grid
+	// should match the bottom N-1 rows of the smaller grid.
+	t.Run("BottomContentStability", func(t *testing.T) {
+		vw.Resize(width, 20)
+		prevGrid := vw.GetVisibleGrid()
+		prevRows := gridContentRows(prevGrid)
+
+		for h := 19; h >= 10; h-- {
+			vw.Resize(width, h)
+			grid := vw.GetVisibleGrid()
+			rows := gridContentRows(grid)
+
+			// The bottom h rows of the previous grid (height h+1) should be
+			// the same as the bottom h rows of the current grid.
+			// Previous grid had h+1 rows, current has h rows.
+			// prevRows[1:] (last h rows) should equal rows (all h rows).
+			for y := 0; y < h; y++ {
+				prevY := y + 1 // offset by 1 since prev had 1 more row
+				if prevY < len(prevRows) && y < len(rows) {
+					if prevRows[prevY] != rows[y] {
+						t.Errorf("height %d→%d: row %d content changed: prev=%q curr=%q",
+							h+1, h, y, prevRows[prevY], rows[y])
+					}
+				}
+			}
+
+			prevGrid = grid
+			prevRows = rows
+		}
+	})
+
+	// Test 5: Cache consistency — two consecutive GetVisibleGrid calls return identical grids
+	t.Run("CacheConsistency", func(t *testing.T) {
+		for h := 10; h <= 30; h += 5 {
+			vw.Resize(width, h)
+			grid1 := vw.GetVisibleGrid()
+			grid2 := vw.GetVisibleGrid()
+
+			for y := 0; y < h; y++ {
+				s1 := vwCellsToString(grid1[y])
+				s2 := vwCellsToString(grid2[y])
+				if s1 != s2 {
+					t.Errorf("height=%d: grid1[%d] != grid2[%d]: %q vs %q", h, y, y, s1, s2)
+				}
+			}
+		}
+	})
 }
 
 // --- Benchmark Tests ---

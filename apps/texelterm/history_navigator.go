@@ -836,7 +836,8 @@ func absInt64(x int64) int64 {
 }
 
 // animateScrollToLine scrolls to the target line with animation.
-// For short distances (≤ ScrollAnimMaxLines): smooth eased animation.
+// For very short distances (≤ half viewport): instant jump.
+// For medium distances (≤ ScrollAnimMaxLines): smooth eased animation.
 // For long distances (> ScrollAnimMaxLines): three-phase animation with visible edge lines.
 func (h *HistoryNavigator) animateScrollToLine(targetLine int64) {
 	if h.vterm == nil {
@@ -861,6 +862,14 @@ func (h *HistoryNavigator) animateScrollToLine(targetLine int64) {
 		return
 	}
 
+	// For very short jumps (within half the viewport), jump instantly.
+	// This avoids sluggish animation when navigating between adjacent results.
+	viewportHeight := int64(h.vterm.Height())
+	if distance <= viewportHeight/2 {
+		h.requestRefresh()
+		return
+	}
+
 	// Restore original position to animate from there
 	h.vterm.SetScrollOffset(startOffset)
 
@@ -876,7 +885,7 @@ func (h *HistoryNavigator) animateScrollToLine(targetLine int64) {
 
 	// Dispatch to appropriate animation handler
 	if distance <= h.ScrollAnimMaxLines {
-		// SHORT JUMP: Use smooth animation with easing
+		// MEDIUM JUMP: Use smooth animation with easing
 		h.animateShortJump(startOffset, targetOffset, distance, stopCh)
 	} else {
 		// LONG JUMP: Three-phase animation with visible edge lines
