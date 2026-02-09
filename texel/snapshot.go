@@ -137,6 +137,66 @@ func (d *DesktopEngine) SnapshotForClient() TreeCapture {
 	return capture
 }
 
+// GeometryForClient captures pane IDs, positions, and tree structure for the
+// active workspace without rendering pane buffers.  Used during resize to send
+// updated pane geometry without the cost of a full render.
+func (d *DesktopEngine) GeometryForClient() TreeCapture {
+	var capture TreeCapture
+	capture.WorkspaceRoots = make(map[int]*TreeNodeCapture)
+
+	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil {
+		return capture
+	}
+
+	paneIndex := make(map[*pane]int)
+	capture.Panes = make([]PaneSnapshot, 0)
+	capture.ActiveWorkspaceID = d.activeWorkspace.id
+
+	var collect func(*Node)
+	collect = func(n *Node) {
+		if n == nil {
+			return
+		}
+		if len(n.Children) == 0 {
+			if n.Pane != nil {
+				if _, exists := paneIndex[n.Pane]; !exists {
+					snap := PaneSnapshot{
+						ID:    n.Pane.ID(),
+						Title: n.Pane.getTitle(),
+						Rect: Rectangle{
+							X:      n.Pane.absX0,
+							Y:      n.Pane.absY0,
+							Width:  n.Pane.Width(),
+							Height: n.Pane.Height(),
+						},
+					}
+					paneIndex[n.Pane] = len(capture.Panes)
+					capture.Panes = append(capture.Panes, snap)
+				}
+			}
+		}
+		for _, child := range n.Children {
+			collect(child)
+		}
+	}
+
+	if d.activeWorkspace.tree.Root != nil {
+		collect(d.activeWorkspace.tree.Root)
+		capture.Root = buildTreeCapture(d.activeWorkspace.tree.Root, paneIndex)
+		capture.WorkspaceRoots[d.activeWorkspace.id] = capture.Root
+	}
+
+	// Status/floating panes still render (they're lightweight) to get correct
+	// positions, which depend on the app's actual row count.
+	if status := d.captureStatusPaneSnapshots(); len(status) > 0 {
+		capture.Panes = append(capture.Panes, status...)
+	}
+	if floating := d.captureFloatingPanelSnapshots(); len(floating) > 0 {
+		capture.Panes = append(capture.Panes, floating...)
+	}
+	return capture
+}
+
 // CaptureTree gathers panes and the layout tree for persistence or transport.
 func (d *DesktopEngine) CaptureTree() TreeCapture {
 	var capture TreeCapture

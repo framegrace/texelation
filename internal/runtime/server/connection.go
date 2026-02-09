@@ -605,7 +605,10 @@ func (c *connection) handleResize(size protocol.Resize) {
 			id[:4])
 	}
 
-	snapshot, err := sink.Snapshot()
+	// Build a geometry-only tree snapshot (pane positions + tree structure,
+	// no buffer rendering).  This is cheap and avoids the wasteful full
+	// render that sink.Snapshot() would trigger.
+	snapshot, err := sink.GeometrySnapshot()
 	if err != nil {
 		sink.Publish()
 		return
@@ -615,12 +618,9 @@ func (c *connection) handleResize(size protocol.Resize) {
 		return
 	}
 
-	// Send geometry-only tree snapshot FIRST so the client updates pane
-	// positions before content arrives.  Row data is omitted because the
-	// snapshot rows are plain text (no colors) and would clobber the
-	// client's colored buffer cache.
-	geoSnap := geometryOnlySnapshot(snapshot)
-	payload, err := protocol.EncodeTreeSnapshot(geoSnap)
+	// Send geometry snapshot FIRST so the client updates pane positions
+	// before content arrives.
+	payload, err := protocol.EncodeTreeSnapshot(snapshot)
 	if err != nil {
 		sink.Publish()
 		return
