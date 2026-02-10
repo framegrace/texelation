@@ -183,6 +183,7 @@ func Run(opts Options) error {
 			return nil
 		}
 		if clip, ok := state.consumeClipboardSync(); ok && len(clip.Data) > 0 {
+			log.Printf("CLIPBOARD DEBUG: Setting system clipboard: len=%d", len(clip.Data))
 			screen.SetClipboard(clip.Data)
 		}
 	}
