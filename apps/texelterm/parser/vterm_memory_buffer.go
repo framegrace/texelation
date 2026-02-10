@@ -224,6 +224,20 @@ func (v *VTerm) CloseMemoryBuffer() error {
 		v.notifyMetadataChange()
 	}
 
+	// Ensure all viewport lines are persisted. Some lines may have been
+	// created by EnsureLine (as side effects of writing to non-adjacent rows)
+	// but never individually written to or notified. Without this, those
+	// lines are lost on reload, creating gaps in the viewport.
+	if v.memBufState.persistence != nil && v.memBufState.memBuf != nil {
+		mb := v.memBufState.memBuf
+		for y := 0; y < v.height; y++ {
+			globalLine := v.memBufState.liveEdgeBase + int64(y)
+			if globalLine >= mb.GlobalOffset() && globalLine < mb.GlobalEnd() {
+				v.memBufState.persistence.NotifyWrite(globalLine)
+			}
+		}
+	}
+
 	// Close persistence first (flushes pending writes, checkpoints WAL, and closes PageStore)
 	if v.memBufState.persistence != nil {
 		if err := v.memBufState.persistence.Close(); err != nil && firstErr == nil {
@@ -366,8 +380,11 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 	// Make sure liveEdgeBase is correct
 	v.memBufState.liveEdgeBase = lineCount
 
-	// Ensure the live edge line exists for new shell output
-	mb.EnsureLine(lineCount)
+	// Note: We do NOT call EnsureLine(lineCount) here because RestoreLines
+	// already populated lines [startIdx, endIdx). Adding lineCount would create
+	// an extra empty line beyond what was saved, causing GlobalEnd to be off by 1.
+	// The cursor's line will be ensured after WAL state is restored below,
+	// and memoryBufferPlaceCharWide also calls EnsureLine before writing.
 
 	restoreDuration := time.Since(restoreStart)
 	totalDuration := time.Since(loadStart)
@@ -433,6 +450,27 @@ func (v *VTerm) ensureLiveEdgeBaseConsistency() {
 	}
 }
 
+// ensureLineNotifyGaps calls EnsureLine and, if intermediate empty lines were
+// created to fill a gap, notifies the persistence layer about them. This ensures
+// lines created as side effects of cursor jumps (e.g., TUI positioning cursor at
+// row 29 when only 21 lines exist) reach disk even without an explicit write.
+// Without this, a crash would lose these lines, causing phantom empty gaps on reload.
+func (v *VTerm) ensureLineNotifyGaps(mb *MemoryBuffer, globalLine int64) {
+	prevEnd := mb.GlobalEnd()
+	mb.EnsureLine(globalLine)
+	newEnd := mb.GlobalEnd()
+
+	// If more than 1 line was created, notify the intermediate (gap) lines.
+	// The target line itself will be notified by the caller after writing.
+	if v.memBufState.persistence != nil && newEnd-prevEnd > 1 {
+		for idx := prevEnd; idx < newEnd; idx++ {
+			if idx != globalLine {
+				v.memBufState.persistence.NotifyWrite(idx)
+			}
+		}
+	}
+}
+
 // memoryBufferPlaceChar writes a character at the current cursor position.
 func (v *VTerm) memoryBufferPlaceChar(r rune) {
 	v.memoryBufferPlaceCharWide(r, false)
@@ -452,8 +490,8 @@ func (v *VTerm) memoryBufferPlaceCharWide(r rune, isWide bool) {
 	// Calculate the global line index from viewport Y
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
 
-	// Ensure the line exists
-	mb.EnsureLine(globalLine)
+	// Ensure the line exists (notifies persistence for any gap lines created)
+	v.ensureLineNotifyGaps(mb, globalLine)
 
 	// Set cursor to correct position
 	mb.SetCursor(globalLine, v.cursorX)
@@ -500,16 +538,18 @@ func (v *VTerm) memoryBufferLineFeed() {
 
 	// When cursor moves to next row, we may need to advance liveEdgeBase
 	// if we're at the bottom of the viewport
+	liveEdgeAdvanced := false
 	if v.cursorY >= v.marginBottom {
 		v.memBufState.liveEdgeBase++
+		liveEdgeAdvanced = true
 	}
 
-	// Ensure the next line exists
+	// Ensure the next line exists (notifies persistence for any gap lines)
 	nextGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
 	if v.cursorY < v.marginBottom {
 		nextGlobal = currentGlobal + 1
 	}
-	v.memBufState.memBuf.EnsureLine(nextGlobal)
+	v.ensureLineNotifyGaps(v.memBufState.memBuf, nextGlobal)
 
 	// Invalidate viewport cache since content shifted
 	v.memBufState.viewport.InvalidateCache()
@@ -519,6 +559,13 @@ func (v *VTerm) memoryBufferLineFeed() {
 	// AFTER the line is successfully persisted to disk, ensuring consistency.
 	if v.memBufState.persistence != nil {
 		v.memBufState.persistence.NotifyWriteWithMeta(currentGlobal, time.Now(), v.CommandActive)
+	}
+
+	// Save metadata when liveEdgeBase advances so that a crash doesn't leave
+	// stale metadata in the WAL. The metadata is batched with content and only
+	// reaches disk on the next flush, so this is cheap.
+	if liveEdgeAdvanced {
+		v.notifyMetadataChange()
 	}
 }
 

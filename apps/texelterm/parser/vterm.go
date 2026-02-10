@@ -245,10 +245,16 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 	} else {
 		// Main screen wrapping logic
 		if v.wrapEnabled && newX > rightEdge {
-			// Set wrapNext instead of wrapping immediately
-			// This allows CR or LF to clear the flag without creating extra lines
-			v.wrapNext = true
-			v.SetCursorPos(v.cursorY, rightEdge)
+			if v.IsMemoryBufferEnabled() {
+				// Memory buffer: let cursorX advance past terminal width.
+				// The LogicalLine extends naturally, and WrapToWidth() handles display.
+				v.cursorX = newX
+			} else {
+				// Set wrapNext instead of wrapping immediately
+				// This allows CR or LF to clear the flag without creating extra lines
+				v.wrapNext = true
+				v.SetCursorPos(v.cursorY, rightEdge)
+			}
 		} else if newX <= rightEdge {
 			v.SetCursorPos(v.cursorY, newX)
 			// Sync prevCursor with new cursor position so delta-based sync doesn't see false movement.
