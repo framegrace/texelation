@@ -81,6 +81,7 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			log.Printf("decode clipboard failed: %v", err)
 			return false
 		}
+		log.Printf("CLIPBOARD DEBUG: Client received MsgClipboardSet: mime=%s, len=%d", clip.MimeType, len(clip.Data))
 		state.setClipboard(protocol.ClipboardData{MimeType: clip.MimeType, Data: clip.Data})
 		return true
 	case protocol.MsgClipboardData:

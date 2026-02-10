@@ -857,6 +857,7 @@ func (d *DesktopEngine) SetClipboard(mime string, data []byte) {
 	d.clipboardMime = mime
 	d.clipboard[mime] = append([]byte(nil), data...)
 	d.clipboardPending = true
+	log.Printf("CLIPBOARD DEBUG: Desktop.SetClipboard called: mime=%s, len=%d, pending=%v", mime, len(data), d.clipboardPending)
 }
 
 // GetClipboard implements ClipboardService for apps running in the desktop.

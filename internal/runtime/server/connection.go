@@ -235,6 +235,7 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		c.sink.HandleMouseEvent(c.session, mouseEvent)
 		if popper, ok := c.sink.(interface{ PopPendingClipboard() (string, []byte, bool) }); ok {
 			if mime, data, ok := popper.PopPendingClipboard(); ok && len(data) > 0 {
+				log.Printf("CLIPBOARD DEBUG: Sending clipboard to client: mime=%s, len=%d", mime, len(data))
 				encoded, err := protocol.EncodeClipboardSet(protocol.ClipboardSet{MimeType: mime, Data: data})
 				if err != nil {
 					return err
@@ -242,6 +243,8 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				if err := c.writeControlMessage(protocol.MsgClipboardSet, encoded); err != nil {
 					return err
 				}
+			} else if ok {
+				log.Printf("CLIPBOARD DEBUG: PopPendingClipboard returned ok=true but empty data")
 			}
 		}
 	case protocol.MsgResize:

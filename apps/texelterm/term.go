@@ -727,6 +727,35 @@ func (a *TexelTerm) handleAltScrollKey(key tcell.Key) bool {
 // keyToEscapeSequence converts a tcell key event to the appropriate escape sequence.
 // appMode indicates whether the terminal is in application cursor keys mode.
 func (a *TexelTerm) keyToEscapeSequence(ev *tcell.EventKey, appMode bool) []byte {
+	// Handle Ctrl+key combinations first (newer tcell sends ev.Key() as ASCII code with ModCtrl)
+	if ev.Modifiers()&tcell.ModCtrl != 0 {
+		r := ev.Rune()
+		// Convert to control character (Ctrl+A = 0x01, Ctrl+B = 0x02, etc.)
+		if r >= 'a' && r <= 'z' {
+			return []byte{byte(r - 'a' + 1)}
+		}
+		if r >= 'A' && r <= 'Z' {
+			return []byte{byte(r - 'A' + 1)}
+		}
+		// Special cases for Ctrl with punctuation
+		switch r {
+		case '@', ' ': // Ctrl+@ or Ctrl+Space = NUL
+			return []byte{0x00}
+		case '[': // Ctrl+[ = ESC
+			return []byte{0x1b}
+		case '\\': // Ctrl+\ = FS
+			return []byte{0x1c}
+		case ']': // Ctrl+] = GS
+			return []byte{0x1d}
+		case '^': // Ctrl+^ = RS
+			return []byte{0x1e}
+		case '_': // Ctrl+_ = US
+			return []byte{0x1f}
+		case '?': // Ctrl+? = DEL
+			return []byte{0x7f}
+		}
+	}
+
 	switch ev.Key() {
 	case tcell.KeyUp:
 		return []byte(If(appMode, "\x1bOA", "\x1b[A"))
@@ -825,7 +854,11 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	a.vterm.EnsureLiveEdge()
 	a.mu.Unlock()
 
+	// Debug logging for key events
+	log.Printf("[KEY DEBUG] Key=%v, Rune=%q (%d), Modifiers=%v", ev.Key(), ev.Rune(), ev.Rune(), ev.Modifiers())
+
 	keyBytes := a.keyToEscapeSequence(ev, appMode)
+	log.Printf("[KEY DEBUG] Sending bytes: %v", keyBytes)
 	if _, err := a.pty.Write(keyBytes); err != nil {
 		log.Printf("[TEXELTERM] Failed to write key to PTY: %v", err)
 	}
@@ -924,8 +957,16 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 // Currently disabled pending investigation of clipboard crash issues.
 func (a *TexelTerm) SetClipboard(mime string, data []byte) {
 	// Use clipboard service if available
-	if a.clipboard != nil {
-		a.clipboard.SetClipboard(mime, data)
+	a.mu.Lock()
+	clipboard := a.clipboard
+	title := a.title
+	a.mu.Unlock()
+
+	if clipboard != nil {
+		log.Printf("CLIPBOARD DEBUG: %s SetClipboard called: mime=%s, len=%d", title, mime, len(data))
+		clipboard.SetClipboard(mime, data)
+	} else {
+		log.Printf("CLIPBOARD DEBUG: %s SetClipboard called but clipboard service is nil! mime=%s, len=%d", title, mime, len(data))
 	}
 }
 
@@ -935,6 +976,7 @@ func (a *TexelTerm) SetClipboardService(clipboard texelcore.ClipboardService) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.clipboard = clipboard
+	log.Printf("CLIPBOARD DEBUG: %s SetClipboardService called: service=%v", a.title, clipboard != nil)
 }
 
 func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.ModMask) {

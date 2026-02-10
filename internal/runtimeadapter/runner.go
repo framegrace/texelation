@@ -241,3 +241,14 @@ func (t *toggleApp) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 		handler.HandleMouseWheel(x, y, deltaX, deltaY, modifiers)
 	}
 }
+
+// SetClipboardService implements texelcore.ClipboardAware by delegating to the main app.
+// This is critical for clipboard operations in terminals wrapped by toggleApp.
+func (t *toggleApp) SetClipboardService(clipboard texelcore.ClipboardService) {
+	if aware, ok := t.main.(interface{ SetClipboardService(texelcore.ClipboardService) }); ok {
+		aware.SetClipboardService(clipboard)
+	}
+	if aware, ok := t.editor.(interface{ SetClipboardService(texelcore.ClipboardService) }); ok {
+		aware.SetClipboardService(clipboard)
+	}
+}
