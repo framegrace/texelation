@@ -10,6 +10,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -550,6 +551,7 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 	if v.memBufState == nil || v.memBufState.memBuf == nil {
 		return ""
 	}
+
 	// Extract text from MemoryBuffer line range (with PageStore fallback for evicted lines)
 	var result []rune
 	for lineIdx := startLine; lineIdx <= endLine; lineIdx++ {
@@ -565,22 +567,32 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 		if lineIdx == endLine {
 			end = endOffset
 		}
+
+		// Extract and trim trailing spaces from each line
+		var lineRunes []rune
 		for i := start; i < end && i < len(line.Cells); i++ {
 			r := line.Cells[i].Rune
 			if r == 0 {
 				r = ' '
 			}
-			result = append(result, r)
+			lineRunes = append(lineRunes, r)
 		}
+
+		// Trim trailing spaces
+		trimmed := strings.TrimRight(string(lineRunes), " ")
+		result = append(result, []rune(trimmed)...)
+
 		// Add newline between lines (but not at the end)
 		if lineIdx < endLine {
 			result = append(result, '\n')
 		}
 	}
+
 	return string(result)
 }
 
 // getAltScreenText extracts text from alt screen buffer.
+// Adds newlines between rows and trims trailing spaces from each row.
 func (v *VTerm) getAltScreenText(startOffset, endOffset int) string {
 	if v.width <= 0 {
 		return ""
@@ -590,9 +602,22 @@ func (v *VTerm) getAltScreenText(startOffset, endOffset int) string {
 	}
 
 	var result []rune
+	prevY := -1
+
 	for offset := startOffset; offset < endOffset; offset++ {
 		y := offset / v.width
 		x := offset % v.width
+
+		// Add newline when we move to a new row
+		if y > prevY && prevY >= 0 {
+			// Trim trailing spaces before adding newline
+			resultStr := strings.TrimRight(string(result), " ")
+			result = []rune(resultStr)
+			result = append(result, '\n')
+		}
+		prevY = y
+
+		// Append character from this position
 		if y >= 0 && y < len(v.altBuffer) && x >= 0 && x < len(v.altBuffer[y]) {
 			r := v.altBuffer[y][x].Rune
 			if r == 0 {
@@ -601,7 +626,9 @@ func (v *VTerm) getAltScreenText(startOffset, endOffset int) string {
 			result = append(result, r)
 		}
 	}
-	return string(result)
+
+	// Trim trailing spaces from the final line
+	return strings.TrimRight(string(result), " ")
 }
 
 // --- Dirty Line Tracking for Optimized Rendering ---

@@ -878,17 +878,28 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 
 	// Check if bracketed paste mode is enabled (bool reads are atomic)
 	if a.bracketedPasteMode {
-		// In bracketed paste mode, send data as-is (preserve LF)
-		// The application knows it's paste data and handles newlines itself
+		// In bracketed paste mode, convert CRLF to LF for Unix-style line endings
+		// The application expects Unix newlines in paste data
+		normalized := make([]byte, 0, len(data))
+		for i := 0; i < len(data); i++ {
+			if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+				// CRLF -> LF
+				normalized = append(normalized, '\n')
+				i++ // skip next byte (LF)
+			} else {
+				normalized = append(normalized, data[i])
+			}
+		}
+
 		prefix := []byte("\x1b[200~")
 		suffix := []byte("\x1b[201~")
 
-		// Write: prefix + data + suffix
+		// Write: prefix + normalized + suffix
 		if _, err := a.pty.Write(prefix); err != nil {
 			log.Printf("TexelTerm: paste prefix write failed: %v", err)
 			return
 		}
-		if _, err := a.pty.Write(data); err != nil {
+		if _, err := a.pty.Write(normalized); err != nil {
 			log.Printf("TexelTerm: paste data write failed: %v", err)
 			return
 		}
@@ -896,13 +907,18 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 			log.Printf("TexelTerm: paste suffix write failed: %v", err)
 		}
 	} else {
-		// No bracketed paste - convert LF to CR (terminal behavior)
-		converted := make([]byte, len(data))
-		for i, b := range data {
-			if b == '\n' {
-				converted[i] = '\r'
+		// No bracketed paste - convert CRLF or LF to CR (terminal behavior)
+		converted := make([]byte, 0, len(data))
+		for i := 0; i < len(data); i++ {
+			if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+				// CRLF -> CR (skip the LF)
+				converted = append(converted, '\r')
+				i++ // skip next byte (LF)
+			} else if data[i] == '\n' {
+				// Lone LF -> CR
+				converted = append(converted, '\r')
 			} else {
-				converted[i] = b
+				converted = append(converted, data[i])
 			}
 		}
 		if _, err := a.pty.Write(converted); err != nil {
@@ -963,8 +979,19 @@ func (a *TexelTerm) SetClipboard(mime string, data []byte) {
 	a.mu.Unlock()
 
 	if clipboard != nil {
-		log.Printf("CLIPBOARD DEBUG: %s SetClipboard called: mime=%s, len=%d", title, mime, len(data))
-		clipboard.SetClipboard(mime, data)
+		// WORKAROUND for Wayland/tcell clipboard issue (tcell v2.13.8 on Wayland):
+		// The clipboard system loses lone LF characters but preserves CRLF.
+		// Convert LF to CRLF before storing to ensure newlines survive clipboard round-trip.
+		converted := make([]byte, 0, len(data)*2)
+		for _, b := range data {
+			if b == '\n' {
+				converted = append(converted, '\r', '\n')
+			} else {
+				converted = append(converted, b)
+			}
+		}
+
+		clipboard.SetClipboard(mime, converted)
 	} else {
 		log.Printf("CLIPBOARD DEBUG: %s SetClipboard called but clipboard service is nil! mime=%s, len=%d", title, mime, len(data))
 	}
