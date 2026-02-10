@@ -1106,9 +1106,17 @@ func (a *TexelTerm) getShellCommandSimpleIntegration(env []string) *exec.Cmd {
 		}
 	}
 
-	// Default: no integration, just run shell normally
+	// Default: no integration, just run command normally
+	// Parse command string to handle commands with arguments (e.g., "k9s --kubeconfig=... --readonly")
 	log.Printf("Shell integration: disabled for %s", shellName)
-	return exec.Command(a.command)
+	parts := strings.Fields(a.command)
+	if len(parts) == 0 {
+		return exec.Command(a.command)
+	}
+	if len(parts) == 1 {
+		return exec.Command(parts[0])
+	}
+	return exec.Command(parts[0], parts[1:]...)
 }
 
 // ensureShellIntegrationScripts creates shell integration scripts if they don't exist
@@ -1244,6 +1252,27 @@ func (a *TexelTerm) updatePtyWriterForRestart() {
 				}
 			}
 		}
+		// Update clipboard callbacks (they reference a.clipboard which might change)
+		a.vterm.OnClipboardSet = func(data []byte) {
+			a.mu.Lock()
+			clipboard := a.clipboard
+			a.mu.Unlock()
+			if clipboard != nil {
+				clipboard.SetClipboard("text/plain", data)
+			}
+		}
+		a.vterm.OnClipboardGet = func() []byte {
+			a.mu.Lock()
+			clipboard := a.clipboard
+			a.mu.Unlock()
+			if clipboard != nil {
+				_, data, ok := clipboard.GetClipboard()
+				if ok {
+					return data
+				}
+			}
+			return nil
+		}
 	}
 }
 
@@ -1292,6 +1321,28 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		}),
 		parser.WithBracketedPasteModeChangeHandler(func(enabled bool) {
 			a.bracketedPasteMode = enabled
+		}),
+		parser.WithClipboardSetHandler(func(data []byte) {
+			// App is setting clipboard via OSC 52
+			a.mu.Lock()
+			clipboard := a.clipboard
+			a.mu.Unlock()
+			if clipboard != nil {
+				clipboard.SetClipboard("text/plain", data)
+			}
+		}),
+		parser.WithClipboardGetHandler(func() []byte {
+			// App is querying clipboard via OSC 52
+			a.mu.Lock()
+			clipboard := a.clipboard
+			a.mu.Unlock()
+			if clipboard != nil {
+				_, data, ok := clipboard.GetClipboard()
+				if ok {
+					return data
+				}
+			}
+			return nil
 		}),
 		parser.WithWrap(wrapEnabled),
 		parser.WithReflow(reflowEnabled),

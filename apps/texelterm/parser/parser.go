@@ -9,6 +9,8 @@
 package parser
 
 import (
+	"encoding/base64"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -285,6 +287,9 @@ func (p *Parser) handleOSC(sequence []rune) {
 		}
 	case 0, 1, 2:
 		p.vterm.SetTitle(payload)
+	case 52:
+		// OSC 52 - Manipulate Selection Data (clipboard)
+		p.handleOSC52(payload)
 	case 133:
 		// OSC 133 - Shell integration (numeric form)
 		p.handleOSC133(payload)
@@ -297,6 +302,51 @@ func (p *Parser) handleOSC(sequence []rune) {
 // B = Prompt end / Input start
 // C = Input end / Command start
 // D = Command end [; exitcode]
+// handleOSC52 processes OSC 52 clipboard manipulation sequences.
+// Format: OSC 52 ; Pc ; Pd ST
+// Pc = selection parameter (c=clipboard, p=primary, s=select, 0-7=cut buffers)
+// Pd = selection data (base64 string, "?" for query, or empty to clear)
+func (p *Parser) handleOSC52(payload string) {
+	// Split into Pc (selection parameter) and Pd (data)
+	parts := strings.SplitN(payload, ";", 2)
+	if len(parts) < 2 {
+		return
+	}
+
+	selectionParam := parts[0]
+	data := parts[1]
+
+	// For now, only handle clipboard (c) and default (empty = s0)
+	// Ignore primary (p), select (s), and cut buffers (0-7)
+	if selectionParam != "c" && selectionParam != "" {
+		return
+	}
+
+	// Handle query
+	if data == "?" {
+		if p.vterm.OnClipboardGet != nil {
+			clipData := p.vterm.OnClipboardGet()
+			if clipData != nil && p.vterm.WriteToPty != nil {
+				// Encode response as base64
+				encoded := base64.StdEncoding.EncodeToString(clipData)
+				// Send response: OSC 52;c;<base64>ST (ST = ESC \)
+				response := fmt.Sprintf("\x1b]52;c;%s\x1b\\", encoded)
+				p.vterm.WriteToPty([]byte(response))
+			}
+		}
+		return
+	}
+
+	// Handle set clipboard
+	if data != "" {
+		decoded, err := base64.StdEncoding.DecodeString(data)
+		if err == nil && p.vterm.OnClipboardSet != nil {
+			p.vterm.OnClipboardSet(decoded)
+		}
+	}
+	// Empty data clears the selection (not implemented yet)
+}
+
 func (p *Parser) handleOSC133(payload string) {
 	parts := strings.Split(payload, ";")
 	if len(parts) == 0 {

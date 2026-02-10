@@ -63,6 +63,9 @@ type VTerm struct {
 	OnCommandStart                func(cmd string)
 	OnCommandEnd                  func(exitCode int)
 	OnEnvironmentUpdate           func(base64Env string)
+	// Clipboard operations (OSC 52)
+	OnClipboardSet func(data []byte) // Called when app sets clipboard via OSC 52
+	OnClipboardGet func() []byte     // Called when app queries clipboard via OSC 52
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode         bool
 	OnBracketedPasteModeChange func(bool)
@@ -1194,6 +1197,14 @@ func WithEnvironmentUpdateHandler(handler func(string)) Option {
 
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
+}
+
+func WithClipboardSetHandler(handler func([]byte)) Option {
+	return func(v *VTerm) { v.OnClipboardSet = handler }
+}
+
+func WithClipboardGetHandler(handler func() []byte) Option {
+	return func(v *VTerm) { v.OnClipboardGet = handler }
 }
 
 // Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.
