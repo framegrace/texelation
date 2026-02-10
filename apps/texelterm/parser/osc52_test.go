@@ -164,3 +164,131 @@ func TestOSC52_SetWithoutHandler(t *testing.T) {
 		p.Parse(r)
 	}
 }
+
+func TestOSC52_QueryNormalizesLineEndings(t *testing.T) {
+	v := NewVTerm(80, 24)
+	p := NewParser(v)
+
+	// Mock clipboard with CRLF line endings (Windows-style)
+	testData := "Line 1\r\nLine 2\r\nLine 3"
+	v.OnClipboardGet = func() []byte {
+		return []byte(testData)
+	}
+
+	// Track PTY writes (responses)
+	var ptyOutput []byte
+	v.WriteToPty = func(b []byte) {
+		ptyOutput = append(ptyOutput, b...)
+	}
+
+	// Send OSC 52 query
+	sequence := "\x1b]52;c;?\x07"
+	for _, r := range sequence {
+		p.Parse(r)
+	}
+
+	// Extract and decode base64 payload
+	response := string(ptyOutput)
+	expectedPrefix := "\x1b]52;c;"
+	expectedSuffix := "\x1b\\"
+	payload := response[len(expectedPrefix) : len(response)-len(expectedSuffix)]
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("Failed to decode base64 response: %v", err)
+	}
+
+	// Verify CRLF was normalized to LF
+	expected := "Line 1\nLine 2\nLine 3"
+	if string(decoded) != expected {
+		t.Errorf("Expected normalized line endings %q, got %q", expected, string(decoded))
+	}
+
+	// Ensure no CRLF sequences remain
+	if strings.Contains(string(decoded), "\r\n") {
+		t.Error("Response still contains CRLF sequences after normalization")
+	}
+}
+
+func TestOSC52_QueryPreservesLoneCarriageReturn(t *testing.T) {
+	v := NewVTerm(80, 24)
+	p := NewParser(v)
+
+	// Test that lone CR (not followed by LF) is preserved
+	testData := "Line 1\rOverwrite\nLine 2"
+	v.OnClipboardGet = func() []byte {
+		return []byte(testData)
+	}
+
+	var ptyOutput []byte
+	v.WriteToPty = func(b []byte) {
+		ptyOutput = append(ptyOutput, b...)
+	}
+
+	sequence := "\x1b]52;c;?\x07"
+	for _, r := range sequence {
+		p.Parse(r)
+	}
+
+	response := string(ptyOutput)
+	payload := response[len("\x1b]52;c;") : len(response)-len("\x1b\\")]
+	decoded, _ := base64.StdEncoding.DecodeString(payload)
+
+	// Lone CR should be preserved (it's not part of CRLF)
+	if string(decoded) != testData {
+		t.Errorf("Expected %q, got %q", testData, string(decoded))
+	}
+}
+
+func TestNormalizeLineEndings(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "CRLF to LF",
+			input:    "Line 1\r\nLine 2\r\nLine 3",
+			expected: "Line 1\nLine 2\nLine 3",
+		},
+		{
+			name:     "Mixed line endings",
+			input:    "Line 1\r\nLine 2\nLine 3\r\nLine 4",
+			expected: "Line 1\nLine 2\nLine 3\nLine 4",
+		},
+		{
+			name:     "Lone CR preserved",
+			input:    "Line 1\rOverwrite",
+			expected: "Line 1\rOverwrite",
+		},
+		{
+			name:     "Only LF unchanged",
+			input:    "Line 1\nLine 2\nLine 3",
+			expected: "Line 1\nLine 2\nLine 3",
+		},
+		{
+			name:     "Empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "No line endings",
+			input:    "Single line",
+			expected: "Single line",
+		},
+		{
+			name:     "CR at end",
+			input:    "Line 1\r\nLine 2\r",
+			expected: "Line 1\nLine 2\r",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeLineEndings([]byte(tt.input))
+			if string(result) != tt.expected {
+				t.Errorf("normalizeLineEndings(%q) = %q, want %q",
+					tt.input, string(result), tt.expected)
+			}
+		})
+	}
+}

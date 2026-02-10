@@ -327,8 +327,11 @@ func (p *Parser) handleOSC52(payload string) {
 		if p.vterm.OnClipboardGet != nil {
 			clipData := p.vterm.OnClipboardGet()
 			if clipData != nil && p.vterm.WriteToPty != nil {
+				// Normalize line endings: CRLF -> LF
+				// Terminal applications expect Unix line endings
+				normalized := normalizeLineEndings(clipData)
 				// Encode response as base64
-				encoded := base64.StdEncoding.EncodeToString(clipData)
+				encoded := base64.StdEncoding.EncodeToString(normalized)
 				// Send response: OSC 52;c;<base64>ST (ST = ESC \)
 				response := fmt.Sprintf("\x1b]52;c;%s\x1b\\", encoded)
 				p.vterm.WriteToPty([]byte(response))
@@ -446,4 +449,22 @@ func splitRunesN(r []rune, sep rune, n int) [][]rune {
 	// whatever remains is the last part
 	res = append(res, r[start:])
 	return res
+}
+
+// normalizeLineEndings converts CRLF (\r\n) to LF (\n) for terminal compatibility.
+// Terminal applications expect Unix-style line endings.
+func normalizeLineEndings(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+
+	result := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+			// Skip CR in CRLF sequence
+			continue
+		}
+		result = append(result, data[i])
+	}
+	return result
 }

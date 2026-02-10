@@ -86,6 +86,7 @@ printf '\033]52;c;?\a'
 1. **Parser** (`apps/texelterm/parser/parser.go`):
    - `handleOSC52()` - Parses OSC 52 sequences
    - Decodes base64 data for SET operations
+   - Normalizes line endings (CRLF → LF) in GET responses
    - Triggers callbacks for GET/SET operations
 
 2. **VTerm** (`apps/texelterm/parser/vterm.go`):
@@ -117,10 +118,20 @@ type ClipboardService interface {
 
 - ✅ Set clipboard via `OSC 52;c;<base64>ST`
 - ✅ Query clipboard via `OSC 52;c;?ST`
+- ✅ Line ending normalization (CRLF → LF) on query
 - ✅ Empty selection parameter (defaults to clipboard)
 - ❌ Primary selection (`p`) - ignored
 - ❌ Cut buffers (`0-7`) - ignored
 - ❌ Clear clipboard (empty `Pd`) - not implemented
+
+### Line Ending Handling
+
+When responding to OSC 52 clipboard queries, texelterm automatically normalizes line endings:
+- **CRLF** (`\r\n`) → **LF** (`\n`)
+- **Lone CR** (`\r`) → preserved (not part of CRLF)
+- **LF** (`\n`) → unchanged
+
+This prevents the "staircase effect" when pasting multi-line text in neovim and other terminal applications that expect Unix-style line endings.
 
 ## Security Considerations
 
