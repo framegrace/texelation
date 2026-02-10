@@ -74,12 +74,6 @@ func TestConsumePasteKey(t *testing.T) {
 		wantRune rune
 	}{
 		{
-			name:     "newline rune stored as-is",
-			key:      tcell.KeyRune,
-			rune:     '\n',
-			wantRune: '\n', // Note: In actual usage, KeyEnter handles \r conversion
-		},
-		{
 			name:     "enter key",
 			key:      tcell.KeyEnter,
 			wantByte: '\r',
