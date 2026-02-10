@@ -156,6 +156,11 @@ func consumePasteKey(state *clientState, ev *tcell.EventKey) {
 	case tcell.KeyEnter:
 		state.pasteBuf = append(state.pasteBuf, '\r')
 		return
+	case tcell.KeyCtrlJ:
+		// Ctrl+J is newline (0x0A = '\n')
+		// In tcell v2.13.x, newlines might be reported as KeyCtrlJ
+		state.pasteBuf = append(state.pasteBuf, '\r')
+		return
 	case tcell.KeyTab:
 		state.pasteBuf = append(state.pasteBuf, '\t')
 		return
