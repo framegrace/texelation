@@ -154,6 +154,10 @@ func (s *clientState) applyEffectConfig() {
 		}
 		manager.RegisterBinding(effects.Binding{Effect: eff, Target: binding.Target, Event: binding.Event})
 	}
+	// Always register the crypt (screen lock) effect regardless of theme bindings.
+	if cryptEff, err := effects.CreateEffect("crypt", nil); err == nil {
+		manager.RegisterBinding(effects.Binding{Effect: cryptEff, Target: effects.TargetWorkspace, Event: effects.TriggerCryptToggle})
+	}
 	if s.renderCh != nil {
 		manager.AttachRenderChannel(s.renderCh)
 	}

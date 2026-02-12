@@ -34,6 +34,16 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 			consumePasteKey(state, ev)
 			return true
 		}
+		if ev.Key() == tcell.KeyCtrlR {
+			if state.effects != nil {
+				state.effects.HandleTrigger(effects.EffectTrigger{
+					Type:      effects.TriggerCryptToggle,
+					Timestamp: time.Now(),
+				})
+			}
+			render(state, screen)
+			return true
+		}
 		if state.controlMode && ev.Modifiers() == 0 {
 			r := ev.Rune()
 			if r == 'q' || r == 'Q' {

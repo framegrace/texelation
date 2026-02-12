@@ -143,6 +143,8 @@ func ParseTrigger(name string) (EffectTriggerType, bool) {
 		return TriggerWorkspaceZoom, true
 	case "workspace.theme":
 		return TriggerWorkspaceTheme, true
+	case "crypt.toggle":
+		return TriggerCryptToggle, true
 	case "clipboard.changed":
 		return TriggerClipboardChanged, true
 	case "clock.tick":
@@ -172,6 +174,7 @@ func TriggerNames() []string {
 		"workspace.layout",
 		"workspace.zoom",
 		"workspace.theme",
+		"crypt.toggle",
 		"clipboard.changed",
 		"clock.tick",
 		"session.state",
