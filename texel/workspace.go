@@ -182,6 +182,10 @@ func (w *Workspace) OnEvent(event Event) {
 	case EventThemeChanged:
 		log.Printf("Workspace %d: Received EventThemeChanged, relaying to apps", w.id)
 		w.dispatcher.Broadcast(event)
+		// Mark all panes dirty so borders re-render with new theme colors.
+		forEachLeafPane(w.tree.Root, func(p *pane) {
+			p.markDirty()
+		})
 	default:
 		// Other Desktop events can be handled here if needed
 	}
@@ -292,6 +296,9 @@ func (w *Workspace) handleEvent(ev *tcell.EventKey) {
 		} else if pane.app != nil {
 			pane.app.HandleKey(ev)
 		}
+		// Mark pane dirty synchronously so the immediate Publish() call
+		// in DesktopSink.HandleKeyEvent sees updated state.
+		pane.markDirty()
 	}
 }
 
