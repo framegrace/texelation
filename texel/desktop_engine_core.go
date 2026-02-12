@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/registry"
 	"github.com/framegrace/texelui/theme"
@@ -120,6 +121,8 @@ type DesktopEngine struct {
 
 	refreshMu      sync.RWMutex
 	refreshHandler func()
+
+	lastPublishNanos atomic.Int64
 }
 
 // FloatingPanel represents an app floating above the workspace.
@@ -1086,6 +1089,11 @@ func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 	d.refreshMu.Unlock()
 }
 
+// SetLastPublishDuration records the duration of the most recent publish cycle.
+func (d *DesktopEngine) SetLastPublishDuration(dur time.Duration) {
+	d.lastPublishNanos.Store(dur.Nanoseconds())
+}
+
 func (d *DesktopEngine) refreshHandlerFunc() func() {
 	d.refreshMu.RLock()
 	defer d.refreshMu.RUnlock()
@@ -1146,14 +1154,15 @@ func (d *DesktopEngine) currentStatePayload(allWsIDs []int, title string) StateP
 		zoomID = d.zoomedPane.Pane.ID()
 	}
 	return StatePayload{
-		AllWorkspaces:  allWsIDs,
-		WorkspaceID:    workspaceID,
-		InControlMode:  d.inControlMode,
-		SubMode:        d.subControlMode,
-		ActiveTitle:    title,
-		DesktopBgColor: d.DefaultBgColor,
-		Zoomed:         zoomed,
-		ZoomedPaneID:   zoomID,
+		AllWorkspaces:       allWsIDs,
+		WorkspaceID:         workspaceID,
+		InControlMode:       d.inControlMode,
+		SubMode:             d.subControlMode,
+		ActiveTitle:         title,
+		DesktopBgColor:      d.DefaultBgColor,
+		Zoomed:              zoomed,
+		ZoomedPaneID:        zoomID,
+		LastPublishDuration: time.Duration(d.lastPublishNanos.Load()),
 	}
 }
 

@@ -7,8 +7,12 @@
 
 package texel
 
-import "sync"
-import "github.com/gdamore/tcell/v2"
+import (
+	"sync"
+	"time"
+
+	"github.com/gdamore/tcell/v2"
+)
 
 // EventType defines the type of an event.
 type EventType int
@@ -43,8 +47,9 @@ type StatePayload struct {
 	SubMode        rune
 	ActiveTitle    string
 	DesktopBgColor tcell.Color // Added: Desktop's default background color
-	Zoomed         bool
-	ZoomedPaneID   [16]byte
+	Zoomed              bool
+	ZoomedPaneID        [16]byte
+	LastPublishDuration time.Duration
 }
 
 func (s StatePayload) equal(other StatePayload) bool {
@@ -64,6 +69,9 @@ func (s StatePayload) equal(other StatePayload) bool {
 		return false
 	}
 	if s.ZoomedPaneID != other.ZoomedPaneID {
+		return false
+	}
+	if s.LastPublishDuration != other.LastPublishDuration {
 		return false
 	}
 	if len(s.AllWorkspaces) != len(other.AllWorkspaces) {

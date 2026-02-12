@@ -324,6 +324,12 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 					}
 				}
 			}
+			if sink, ok := c.sink.(*DesktopSink); ok {
+				if pub := sink.Publisher(); pub != nil {
+					pub.ResetDiffState()
+				}
+				sink.Publish()
+			}
 		}
 		c.nudge()
 	case protocol.MsgClientReady:
@@ -575,6 +581,14 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 		c.initialSnapshotSent = true
 		return
 	}
+
+	// Reset publisher diff state so the next publish sends full frames.
+	// The TreeSnapshot overwrites client rows with unstyled text, so the
+	// follow-up publish must include all rows with correct styles.
+	if pub := sink.Publisher(); pub != nil {
+		pub.ResetDiffState()
+	}
+	sink.Publish()
 
 	states := snapshotMergedPaneStates(snapshot, desktop)
 	for _, state := range states {

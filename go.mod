@@ -4,7 +4,7 @@ go 1.24.3
 
 require (
 	github.com/creack/pty v1.1.24
-	github.com/framegrace/texelui v0.3.1
+	github.com/framegrace/texelui v0.4.0
 	github.com/gdamore/tcell/v2 v2.13.8
 	github.com/mattn/go-runewidth v0.0.16
 	golang.org/x/term v0.37.0
@@ -27,3 +27,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/framegrace/texelui => ../texelui

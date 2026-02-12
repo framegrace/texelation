@@ -95,6 +95,10 @@ func (d *DesktopSink) Desktop() *texel.DesktopEngine {
 	return d.desktop
 }
 
+func (d *DesktopSink) Publisher() *DesktopPublisher {
+	return d.publisher
+}
+
 func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
 	d.publisher = publisher
 	if d.desktop == nil {

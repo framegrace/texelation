@@ -12,10 +12,13 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"fmt"
-	"github.com/gdamore/tcell/v2"
 	"log"
-	"github.com/framegrace/texelui/theme"
 	"unicode/utf8"
+
+	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/theme"
+	"github.com/framegrace/texelui/widgets"
+	"github.com/gdamore/tcell/v2"
 )
 
 // Z-order constants for common layering scenarios
@@ -39,10 +42,16 @@ type pane struct {
 	mouseHandler               MouseHandler
 	handlesMouse               bool
 
+	// Persistent border and buffer widgets (created once, updated each frame).
+	border       *widgets.Border
+	bufferWidget *widgets.BufferWidget
+	wasActive    bool // tracks focus state to avoid redundant Focus/Blur calls
+
 	// Public state fields
-	IsActive   bool
-	IsResizing bool
-	ZOrder     int // Higher values render on top, default is 0
+	IsActive       bool
+	IsResizing     bool
+	RoundedCorners bool
+	ZOrder         int // Higher values render on top, default is 0
 }
 
 // newPane creates a new, empty Pane. The App is attached later.
@@ -56,7 +65,33 @@ func newPane(s *Workspace) *pane {
 		sum := sha1.Sum([]byte(fmt.Sprintf("%p", p)))
 		copy(p.id[:], sum[:])
 	}
+	p.initBorder()
 	return p
+}
+
+// initBorder creates the persistent Border and BufferWidget instances.
+// Called once from newPane; styles are refreshed lazily via refreshBorderStyles.
+func (p *pane) initBorder() {
+	p.bufferWidget = widgets.NewBufferWidget(nil)
+	p.border = widgets.NewBorder()
+	p.border.SetSquareCorners()
+	p.border.SetChild(p.bufferWidget)
+	p.refreshBorderStyles()
+}
+
+// refreshBorderStyles re-reads semantic colors from the theme and updates
+// the border's Style, FocusedStyle, and ResizingStyle. Called at init and
+// whenever prevBuf is nil (layout/theme change signal).
+func (p *pane) refreshBorderStyles() {
+	tm := theme.Get()
+	bg := tm.GetSemanticColor("bg.base").TrueColor()
+	inactiveFG := tm.GetSemanticColor("border.inactive").TrueColor()
+	activeFG := tm.GetSemanticColor("border.active").TrueColor()
+	resizingFG := tm.GetSemanticColor("border.resizing").TrueColor()
+
+	p.border.Style = tcell.StyleDefault.Foreground(inactiveFG).Background(bg)
+	p.border.FocusedStyle = tcell.StyleDefault.Foreground(activeFG).Background(bg)
+	p.border.ResizingStyle = tcell.StyleDefault.Foreground(resizingFG).Background(bg)
 }
 
 // AttachApp connects an application to the pane, gives it its initial size,
@@ -494,6 +529,11 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	log.Printf("Render: Pane '%s' rendering %dx%d (abs: %d,%d-%d,%d)",
 		p.getTitle(), w, h, p.absX0, p.absY0, p.absX1, p.absY1)
 
+	// Refresh theme styles when prevBuf is nil (layout/theme change signal).
+	if p.prevBuf == nil {
+		p.refreshBorderStyles()
+	}
+
 	tm := theme.Get()
 	desktopBg := tm.GetSemanticColor("bg.base").TrueColor()
 	desktopFg := tm.GetSemanticColor("text.primary").TrueColor()
@@ -514,57 +554,6 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 		return buffer
 	}
 
-	// Determine border style based on active state.
-	inactiveBorderFG := tm.GetSemanticColor("border.inactive").TrueColor()
-	inactiveBorderBG := tm.GetSemanticColor("bg.base").TrueColor()
-	activeBorderFG := tm.GetSemanticColor("border.active").TrueColor()
-	activeBorderBG := tm.GetSemanticColor("bg.base").TrueColor()
-	resizingBorderFG := tm.GetSemanticColor("border.resizing").TrueColor()
-
-	borderStyle := defstyle.Foreground(inactiveBorderFG).Background(inactiveBorderBG)
-	if p.IsActive {
-		borderStyle = defstyle.Foreground(activeBorderFG).Background(activeBorderBG)
-	}
-	if p.IsResizing {
-		borderStyle = defstyle.Foreground(resizingBorderFG).Background(activeBorderBG)
-	}
-
-	// Draw borders
-	for x := 0; x < w; x++ {
-		buffer[0][x] = Cell{Ch: tcell.RuneHLine, Style: borderStyle}
-		buffer[h-1][x] = Cell{Ch: tcell.RuneHLine, Style: borderStyle}
-	}
-	for y := 0; y < h; y++ {
-		buffer[y][0] = Cell{Ch: tcell.RuneVLine, Style: borderStyle}
-		buffer[y][w-1] = Cell{Ch: tcell.RuneVLine, Style: borderStyle}
-	}
-	buffer[0][0] = Cell{Ch: tcell.RuneULCorner, Style: borderStyle}
-	buffer[0][w-1] = Cell{Ch: tcell.RuneURCorner, Style: borderStyle}
-	buffer[h-1][0] = Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
-	buffer[h-1][w-1] = Cell{Ch: '╯', Style: borderStyle}
-
-	// Draw Title - with proper bounds checking
-	title := p.getTitle()
-	if title != "" && w > 4 { // Only draw title if we have enough space
-		titleRuneCount := utf8.RuneCountInString(title)
-		maxTitleLength := w - 4 // Space for " " + title + " " + borders
-
-		// Truncate title if it's too long for the pane width.
-		if titleRuneCount > maxTitleLength && maxTitleLength > 0 {
-			titleRunes := []rune(title)
-			if maxTitleLength <= len(titleRunes) {
-				title = string(titleRunes[:maxTitleLength])
-			}
-		}
-
-		titleStr := " " + title + " "
-		for i, ch := range titleStr {
-			if 1+i < w-1 { // Ensure we don't go beyond borders
-				buffer[0][1+i] = Cell{Ch: ch, Style: borderStyle}
-			}
-		}
-	}
-
 	// Render content from pipeline (or app as fallback).
 	var appBuffer [][]Cell
 	if p.pipeline != nil {
@@ -576,18 +565,38 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	if len(appBuffer) > 0 && len(appBuffer[0]) > 0 {
 		log.Printf("ANIM: Render: Pane '%s' buffer size: %dx%d (pane size: %dx%d, drawable: %dx%d)",
 			p.getTitle(), len(appBuffer[0]), len(appBuffer), w, h, p.drawableWidth(), p.drawableHeight())
-
-		for y, row := range appBuffer {
-			for x, cell := range row {
-				if 1+x < w-1 && 1+y < h-1 {
-					buffer[1+y][1+x] = cell
-				}
-			}
-		}
 	} else {
 		log.Printf("ANIM: Render: Pane '%s' returned EMPTY buffer! (pane size: %dx%d, drawable: %dx%d)",
 			p.getTitle(), w, h, p.drawableWidth(), p.drawableHeight())
 	}
+
+	// Update persistent border widget state.
+	p.border.Resize(w, h)
+	p.border.Title = p.getTitle()
+	p.border.IsResizing = p.IsResizing
+	if p.RoundedCorners {
+		p.border.SetRoundedCorners()
+	} else {
+		p.border.SetSquareCorners()
+	}
+
+	// Update focus state only when it changes.
+	if p.IsActive != p.wasActive {
+		if p.IsActive {
+			p.border.SetFocusable(true)
+			p.border.BaseWidget.Focus()
+		} else {
+			p.border.BaseWidget.Blur()
+		}
+		p.wasActive = p.IsActive
+	}
+
+	// Swap buffer reference into the child widget.
+	p.bufferWidget.SetBuffer(appBuffer)
+
+	// Draw through the persistent widget tree.
+	painter := texelcore.NewPainter(buffer, texelcore.Rect{X: 0, Y: 0, W: w, H: h})
+	p.border.Draw(painter)
 
 	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
 	return buffer

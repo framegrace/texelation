@@ -16,6 +16,7 @@ import (
 	texelcore "github.com/framegrace/texelui/core"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -38,16 +39,22 @@ type StatusBarApp struct {
 	refreshChan   chan<- bool
 
 	// State from Desktop
-	allWorkspaces  []int
-	workspaceID    int
-	inControlMode  bool
-	subMode        rune
-	activeTitle    string
-	desktopBgColor tcell.Color
+	allWorkspaces       []int
+	workspaceID         int
+	inControlMode       bool
+	subMode             rune
+	activeTitle         string
+	desktopBgColor      tcell.Color
+	lastPublishDuration time.Duration
 
 	// Internal Clock
 	clockApp  texelcore.App
 	stopClock chan struct{}
+
+	// FPS tracking (EMA-smoothed)
+	lastRenderTime time.Time
+	smoothFPS      float64 // EMA of actual frames per second
+	smoothTheoFPS  float64 // EMA of theoretical frames per second
 }
 
 // New creates a new StatusBarApp.
@@ -99,8 +106,30 @@ func (a *StatusBarApp) OnEvent(event texel.Event) {
 			a.subMode = payload.SubMode
 			a.activeTitle = payload.ActiveTitle
 			a.desktopBgColor = payload.DesktopBgColor
+			a.lastPublishDuration = payload.LastPublishDuration
 			a.mu.Unlock()
 		}
+	}
+}
+
+const fpsEMAAlpha = 0.1 // smoothing factor: lower = smoother, ~10-frame window
+
+// updateFPS updates the EMA-smoothed actual and theoretical FPS values.
+// Must be called with mu held (from Render).
+func (a *StatusBarApp) updateFPS() {
+	now := time.Now()
+	if !a.lastRenderTime.IsZero() {
+		dt := now.Sub(a.lastRenderTime)
+		if dt > 0 {
+			instantFPS := float64(time.Second) / float64(dt)
+			a.smoothFPS = a.smoothFPS + fpsEMAAlpha*(instantFPS-a.smoothFPS)
+		}
+	}
+	a.lastRenderTime = now
+
+	if a.lastPublishDuration > 0 {
+		instantTheo := float64(time.Second) / float64(a.lastPublishDuration)
+		a.smoothTheoFPS = a.smoothTheoFPS + fpsEMAAlpha*(instantTheo-a.smoothTheoFPS)
 	}
 }
 
@@ -233,7 +262,8 @@ func (a *StatusBarApp) Render() [][]texelcore.Cell {
 
 	tabsEndCol := col
 
-	// --- Right-aligned content (Clock) ---
+	// --- Right-aligned content (FPS + Clock) ---
+	a.updateFPS()
 	clockCells := a.clockApp.Render()
 	clockStr := ""
 	if len(clockCells) > 0 && len(clockCells[0]) > 0 {
@@ -243,7 +273,11 @@ func (a *StatusBarApp) Render() [][]texelcore.Cell {
 		}
 		clockStr = strings.TrimSpace(sb.String())
 	}
-	rightStr := fmt.Sprintf(" %s ", clockStr)
+	fpsStr := fmt.Sprintf("%d", int(a.smoothFPS+0.5))
+	if a.smoothTheoFPS > 0 {
+		fpsStr = fmt.Sprintf("%d/%d", int(a.smoothFPS+0.5), int(a.smoothTheoFPS+0.5))
+	}
+	rightStr := fmt.Sprintf(" %s fps  %s ", fpsStr, clockStr)
 	rightCol := a.width - len(rightStr)
 
 	// Draw right-aligned string, ensuring it doesn't overwrite other content
