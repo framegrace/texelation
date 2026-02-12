@@ -12,10 +12,13 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"fmt"
-	"github.com/gdamore/tcell/v2"
 	"log"
-	"github.com/framegrace/texelui/theme"
 	"unicode/utf8"
+
+	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/theme"
+	"github.com/framegrace/texelui/widgets"
+	"github.com/gdamore/tcell/v2"
 )
 
 // Z-order constants for common layering scenarios
@@ -487,6 +490,52 @@ func (p *pane) handlePaste(data []byte) {
 	}
 }
 
+// createBorderWidget builds a Border widget configured to match this pane's
+// visual state (active/inactive/resizing) with the app buffer as its child.
+func (p *pane) createBorderWidget(w, h int, appBuffer [][]Cell) *widgets.Border {
+	tm := theme.Get()
+
+	border := widgets.NewBorder()
+	border.SetPosition(0, 0)
+	border.Resize(w, h)
+	border.Title = p.getTitle()
+	border.IsResizing = p.IsResizing
+
+	// Configure styles from theme semantic colors.
+	bg := tm.GetSemanticColor("bg.base").TrueColor()
+	inactiveFG := tm.GetSemanticColor("border.inactive").TrueColor()
+	activeFG := tm.GetSemanticColor("border.active").TrueColor()
+	resizingFG := tm.GetSemanticColor("border.resizing").TrueColor()
+
+	border.Style = tcell.StyleDefault.Foreground(inactiveFG).Background(bg)
+	border.FocusedStyle = tcell.StyleDefault.Foreground(activeFG).Background(bg)
+	border.ResizingStyle = tcell.StyleDefault.Foreground(resizingFG).Background(bg)
+
+	// Use tcell standard box-drawing characters.
+	border.Charset = [6]rune{
+		tcell.RuneHLine,
+		tcell.RuneVLine,
+		tcell.RuneULCorner,
+		tcell.RuneURCorner,
+		tcell.RuneLLCorner,
+		tcell.RuneLRCorner,
+	}
+
+	// Set active state so Border uses FocusedStyle.
+	if p.IsActive {
+		border.SetFocusable(true)
+		border.BaseWidget.Focus()
+	}
+
+	// Wrap app buffer as a child widget.
+	if len(appBuffer) > 0 {
+		child := widgets.NewBufferWidget(appBuffer)
+		border.SetChild(child)
+	}
+
+	return border
+}
+
 func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	w := p.Width()
 	h := p.Height()
@@ -514,57 +563,6 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 		return buffer
 	}
 
-	// Determine border style based on active state.
-	inactiveBorderFG := tm.GetSemanticColor("border.inactive").TrueColor()
-	inactiveBorderBG := tm.GetSemanticColor("bg.base").TrueColor()
-	activeBorderFG := tm.GetSemanticColor("border.active").TrueColor()
-	activeBorderBG := tm.GetSemanticColor("bg.base").TrueColor()
-	resizingBorderFG := tm.GetSemanticColor("border.resizing").TrueColor()
-
-	borderStyle := defstyle.Foreground(inactiveBorderFG).Background(inactiveBorderBG)
-	if p.IsActive {
-		borderStyle = defstyle.Foreground(activeBorderFG).Background(activeBorderBG)
-	}
-	if p.IsResizing {
-		borderStyle = defstyle.Foreground(resizingBorderFG).Background(activeBorderBG)
-	}
-
-	// Draw borders
-	for x := 0; x < w; x++ {
-		buffer[0][x] = Cell{Ch: tcell.RuneHLine, Style: borderStyle}
-		buffer[h-1][x] = Cell{Ch: tcell.RuneHLine, Style: borderStyle}
-	}
-	for y := 0; y < h; y++ {
-		buffer[y][0] = Cell{Ch: tcell.RuneVLine, Style: borderStyle}
-		buffer[y][w-1] = Cell{Ch: tcell.RuneVLine, Style: borderStyle}
-	}
-	buffer[0][0] = Cell{Ch: tcell.RuneULCorner, Style: borderStyle}
-	buffer[0][w-1] = Cell{Ch: tcell.RuneURCorner, Style: borderStyle}
-	buffer[h-1][0] = Cell{Ch: tcell.RuneLLCorner, Style: borderStyle}
-	buffer[h-1][w-1] = Cell{Ch: '╯', Style: borderStyle}
-
-	// Draw Title - with proper bounds checking
-	title := p.getTitle()
-	if title != "" && w > 4 { // Only draw title if we have enough space
-		titleRuneCount := utf8.RuneCountInString(title)
-		maxTitleLength := w - 4 // Space for " " + title + " " + borders
-
-		// Truncate title if it's too long for the pane width.
-		if titleRuneCount > maxTitleLength && maxTitleLength > 0 {
-			titleRunes := []rune(title)
-			if maxTitleLength <= len(titleRunes) {
-				title = string(titleRunes[:maxTitleLength])
-			}
-		}
-
-		titleStr := " " + title + " "
-		for i, ch := range titleStr {
-			if 1+i < w-1 { // Ensure we don't go beyond borders
-				buffer[0][1+i] = Cell{Ch: ch, Style: borderStyle}
-			}
-		}
-	}
-
 	// Render content from pipeline (or app as fallback).
 	var appBuffer [][]Cell
 	if p.pipeline != nil {
@@ -576,18 +574,15 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	if len(appBuffer) > 0 && len(appBuffer[0]) > 0 {
 		log.Printf("ANIM: Render: Pane '%s' buffer size: %dx%d (pane size: %dx%d, drawable: %dx%d)",
 			p.getTitle(), len(appBuffer[0]), len(appBuffer), w, h, p.drawableWidth(), p.drawableHeight())
-
-		for y, row := range appBuffer {
-			for x, cell := range row {
-				if 1+x < w-1 && 1+y < h-1 {
-					buffer[1+y][1+x] = cell
-				}
-			}
-		}
 	} else {
 		log.Printf("ANIM: Render: Pane '%s' returned EMPTY buffer! (pane size: %dx%d, drawable: %dx%d)",
 			p.getTitle(), w, h, p.drawableWidth(), p.drawableHeight())
 	}
+
+	// Create Border widget with app content as child.
+	border := p.createBorderWidget(w, h, appBuffer)
+	painter := texelcore.NewPainter(buffer, texelcore.Rect{X: 0, Y: 0, W: w, H: h})
+	border.Draw(painter)
 
 	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
 	return buffer
