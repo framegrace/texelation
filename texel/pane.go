@@ -43,9 +43,10 @@ type pane struct {
 	handlesMouse               bool
 
 	// Public state fields
-	IsActive   bool
-	IsResizing bool
-	ZOrder     int // Higher values render on top, default is 0
+	IsActive       bool
+	IsResizing     bool
+	RoundedCorners bool
+	ZOrder         int // Higher values render on top, default is 0
 }
 
 // newPane creates a new, empty Pane. The App is attached later.
@@ -511,14 +512,22 @@ func (p *pane) createBorderWidget(w, h int, appBuffer [][]Cell) *widgets.Border 
 	border.FocusedStyle = tcell.StyleDefault.Foreground(activeFG).Background(bg)
 	border.ResizingStyle = tcell.StyleDefault.Foreground(resizingFG).Background(bg)
 
-	// Use tcell standard box-drawing characters.
-	border.Charset = [6]rune{
-		tcell.RuneHLine,
-		tcell.RuneVLine,
-		tcell.RuneULCorner,
-		tcell.RuneURCorner,
-		tcell.RuneLLCorner,
-		tcell.RuneLRCorner,
+	// Use box-drawing characters: rounded or square corners.
+	if p.RoundedCorners {
+		border.Charset = [6]rune{
+			tcell.RuneHLine,
+			tcell.RuneVLine,
+			'╭', '╮', '╰', '╯',
+		}
+	} else {
+		border.Charset = [6]rune{
+			tcell.RuneHLine,
+			tcell.RuneVLine,
+			tcell.RuneULCorner,
+			tcell.RuneURCorner,
+			tcell.RuneLLCorner,
+			tcell.RuneLRCorner,
+		}
 	}
 
 	// Set active state so Border uses FocusedStyle.
