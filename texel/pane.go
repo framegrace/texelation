@@ -13,6 +13,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"log"
+	"sync/atomic"
 	"unicode/utf8"
 
 	texelcore "github.com/framegrace/texelui/core"
@@ -46,6 +47,11 @@ type pane struct {
 	border       *widgets.Border
 	bufferWidget *widgets.BufferWidget
 	wasActive    bool // tracks focus state to avoid redundant Focus/Blur calls
+
+	// Per-pane dirty tracking for render skipping (Level 2 optimization).
+	needsRender int32          // atomic: 1 = pane needs re-render
+	refreshStop chan struct{}   // stop signal for refresh forwarder goroutine
+	prevTitle   string         // title when prevBuf was last rendered
 
 	// Public state fields
 	IsActive       bool
@@ -94,6 +100,45 @@ func (p *pane) refreshBorderStyles() {
 	p.border.ResizingStyle = tcell.StyleDefault.Foreground(resizingFG).Background(bg)
 }
 
+// markDirty flags this pane for re-render on the next snapshot cycle.
+func (p *pane) markDirty() {
+	atomic.StoreInt32(&p.needsRender, 1)
+}
+
+// setupRefreshForwarder creates a per-pane channel that marks the pane dirty
+// and forwards refresh signals to the workspace-level channel. This enables
+// per-pane render skipping: only panes whose app signalled a refresh (or whose
+// state changed) will be re-rendered.
+func (p *pane) setupRefreshForwarder(target chan<- bool) chan<- bool {
+	if p.refreshStop != nil {
+		close(p.refreshStop)
+	}
+
+	ch := make(chan bool, 1)
+	stop := make(chan struct{})
+	p.refreshStop = stop
+
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+				atomic.StoreInt32(&p.needsRender, 1)
+				select {
+				case target <- true:
+				default:
+				}
+			}
+		}
+	}()
+
+	return ch
+}
+
 // AttachApp connects an application to the pane, gives it its initial size,
 // and starts its main run loop.
 func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
@@ -112,11 +157,17 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		log.Printf("AttachApp: Got pipeline from app '%s'", app.GetTitle())
 	}
 
+	// Create per-pane refresh forwarder that marks this pane dirty
+	// before forwarding to the workspace-level channel.
+	paneRefresh := p.setupRefreshForwarder(refreshChan)
+	p.markDirty()
+	p.prevBuf = nil
+
 	// Set refresh notifier on pipeline (or app as fallback)
 	if p.pipeline != nil {
-		p.pipeline.SetRefreshNotifier(refreshChan)
+		p.pipeline.SetRefreshNotifier(paneRefresh)
 	} else {
-		p.app.SetRefreshNotifier(refreshChan)
+		p.app.SetRefreshNotifier(paneRefresh)
 	}
 	log.Printf("AttachApp: Refresh notifier set")
 
@@ -228,11 +279,17 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 		log.Printf("PrepareAppForRestore: Got pipeline from app '%s'", app.GetTitle())
 	}
 
+	// Create per-pane refresh forwarder that marks this pane dirty
+	// before forwarding to the workspace-level channel.
+	paneRefresh := p.setupRefreshForwarder(refreshChan)
+	p.markDirty()
+	p.prevBuf = nil
+
 	// Set refresh notifier on pipeline (or app as fallback)
 	if p.pipeline != nil {
-		p.pipeline.SetRefreshNotifier(refreshChan)
+		p.pipeline.SetRefreshNotifier(paneRefresh)
 	} else {
-		p.app.SetRefreshNotifier(refreshChan)
+		p.app.SetRefreshNotifier(paneRefresh)
 	}
 
 	// Pass pane ID to apps that need it (e.g., for per-pane history)
@@ -428,6 +485,7 @@ func (p *pane) SetResizing(resizing bool) {
 }
 
 func (p *pane) notifyStateChange() {
+	p.markDirty()
 	if p.screen == nil || p.screen.desktop == nil {
 		return
 	}
@@ -483,6 +541,7 @@ func (p *pane) handlePaste(data []byte) {
 	if p.pipeline != nil {
 		if handler, ok := p.pipeline.(PasteHandler); ok {
 			handler.HandlePaste(data)
+			p.markDirty()
 			return
 		}
 	}
@@ -490,6 +549,7 @@ func (p *pane) handlePaste(data []byte) {
 	if p.app != nil {
 		if handler, ok := p.app.(PasteHandler); ok {
 			handler.HandlePaste(data)
+			p.markDirty()
 			return
 		}
 	}
@@ -520,19 +580,26 @@ func (p *pane) handlePaste(data []byte) {
 			p.app.HandleKey(ev)
 		}
 	}
+	p.markDirty()
 }
 
 func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	w := p.Width()
 	h := p.Height()
 
+	// Return cached buffer when pane hasn't changed (Level 2 optimization).
+	currentTitle := p.getTitle()
+	if atomic.LoadInt32(&p.needsRender) == 0 && p.prevBuf != nil &&
+		len(p.prevBuf) == h && (h == 0 || len(p.prevBuf[0]) == w) &&
+		p.prevTitle == currentTitle {
+		return p.prevBuf
+	}
+
 	log.Printf("Render: Pane '%s' rendering %dx%d (abs: %d,%d-%d,%d)",
 		p.getTitle(), w, h, p.absX0, p.absY0, p.absX1, p.absY1)
 
-	// Refresh theme styles when prevBuf is nil (layout/theme change signal).
-	if p.prevBuf == nil {
-		p.refreshBorderStyles()
-	}
+	// Refresh theme styles each time we actually render.
+	p.refreshBorderStyles()
 
 	tm := theme.Get()
 	desktopBg := tm.GetSemanticColor("bg.base").TrueColor()
@@ -598,6 +665,11 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	painter := texelcore.NewPainter(buffer, texelcore.Rect{X: 0, Y: 0, W: w, H: h})
 	p.border.Draw(painter)
 
+	// Cache the rendered buffer for reuse when pane hasn't changed.
+	p.prevBuf = buffer
+	p.prevTitle = currentTitle
+	atomic.StoreInt32(&p.needsRender, 0)
+
 	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
 	return buffer
 }
@@ -644,6 +716,11 @@ func (p *pane) getTitle() string {
 
 // Close stops the current app and cleans up the pane.
 func (p *pane) Close() {
+	// Stop refresh forwarder goroutine.
+	if p.refreshStop != nil {
+		close(p.refreshStop)
+		p.refreshStop = nil
+	}
 	// Clean up app
 	if listener, ok := p.app.(Listener); ok {
 		p.screen.Unsubscribe(listener)
@@ -670,10 +747,16 @@ func (p *pane) Height() int {
 }
 
 func (p *pane) setDimensions(x0, y0, x1, y1 int) {
+	if p.absX0 == x0 && p.absY0 == y0 && p.absX1 == x1 && p.absY1 == y1 {
+		return
+	}
+
 	log.Printf("ANIM: setDimensions: Pane '%s' set to (%d,%d)-(%d,%d), size %dx%d",
 		p.getTitle(), x0, y0, x1, y1, x1-x0, y1-y0)
 
 	p.absX0, p.absY0, p.absX1, p.absY1 = x0, y0, x1, y1
+	p.prevBuf = nil
+	p.markDirty()
 
 	drawableW := p.drawableWidth()
 	drawableH := p.drawableHeight()
@@ -744,4 +827,7 @@ func (p *pane) handleMouse(x, y int, buttons tcell.ButtonMask, modifiers tcell.M
 	localX, localY := p.contentLocalCoords(x, y)
 	ev := tcell.NewEventMouse(localX, localY, buttons, modifiers)
 	p.mouseHandler.HandleMouse(ev)
+	// Mark dirty synchronously so the immediate Publish() in
+	// DesktopSink.HandleMouseEvent sees updated state.
+	p.markDirty()
 }
