@@ -63,9 +63,10 @@ type pane struct {
 // newPane creates a new, empty Pane. The App is attached later.
 func newPane(s *Workspace) *pane {
 	p := &pane{
-		screen:     s,
-		IsActive:   false,
-		IsResizing: false,
+		screen:         s,
+		IsActive:       false,
+		IsResizing:     false,
+		RoundedCorners: true,
 	}
 	if _, err := rand.Read(p.id[:]); err != nil {
 		sum := sha1.Sum([]byte(fmt.Sprintf("%p", p)))
