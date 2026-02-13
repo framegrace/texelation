@@ -49,9 +49,13 @@ type pane struct {
 	wasActive    bool // tracks focus state to avoid redundant Focus/Blur calls
 
 	// Per-pane dirty tracking for render skipping (Level 2 optimization).
-	needsRender int32          // atomic: 1 = pane needs re-render
-	refreshStop chan struct{}   // stop signal for refresh forwarder goroutine
-	prevTitle   string         // title when prevBuf was last rendered
+	// Uses a generation counter instead of a boolean flag to avoid TOCTOU
+	// races: markDirty increments the counter, renderBuffer records the
+	// value before rendering and only caches when the counter hasn't moved.
+	renderGen     int32          // atomic: monotonically increasing dirty generation
+	lastRendered  int32          // generation when prevBuf was last produced
+	refreshStop   chan struct{}  // stop signal for refresh forwarder goroutine
+	prevTitle     string         // title when prevBuf was last rendered
 
 	// Public state fields
 	IsActive       bool
@@ -102,7 +106,7 @@ func (p *pane) refreshBorderStyles() {
 
 // markDirty flags this pane for re-render on the next snapshot cycle.
 func (p *pane) markDirty() {
-	atomic.StoreInt32(&p.needsRender, 1)
+	atomic.AddInt32(&p.renderGen, 1)
 }
 
 // setupRefreshForwarder creates a per-pane channel that marks the pane dirty
@@ -127,7 +131,7 @@ func (p *pane) setupRefreshForwarder(target chan<- bool) chan<- bool {
 				if !ok {
 					return
 				}
-				atomic.StoreInt32(&p.needsRender, 1)
+				atomic.AddInt32(&p.renderGen, 1)
 				select {
 				case target <- true:
 				default:
@@ -588,8 +592,13 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	h := p.Height()
 
 	// Return cached buffer when pane hasn't changed (Level 2 optimization).
+	// Uses a generation counter: markDirty() increments renderGen, and we
+	// only return the cache when it matches lastRendered. This avoids the
+	// TOCTOU race where a binary flag set during rendering gets clobbered
+	// by the post-render clear.
 	currentTitle := p.getTitle()
-	if atomic.LoadInt32(&p.needsRender) == 0 && p.prevBuf != nil &&
+	gen := atomic.LoadInt32(&p.renderGen)
+	if gen == p.lastRendered && p.prevBuf != nil &&
 		len(p.prevBuf) == h && (h == 0 || len(p.prevBuf[0]) == w) &&
 		p.prevTitle == currentTitle {
 		return p.prevBuf
@@ -668,7 +677,7 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	// Cache the rendered buffer for reuse when pane hasn't changed.
 	p.prevBuf = buffer
 	p.prevTitle = currentTitle
-	atomic.StoreInt32(&p.needsRender, 0)
+	p.lastRendered = gen
 
 	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
 	return buffer
