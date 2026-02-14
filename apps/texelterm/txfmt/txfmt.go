@@ -76,6 +76,7 @@ type Formatter struct {
 	style               *chroma.Style
 	chromaContext        []string              // previous lines kept as lexer context
 	codeLexer           string                // inferred language for modeCode (e.g. "go", "python")
+	codeLexerMethod     string                // detection method (e.g. "shebang", "classifier")
 	insertFunc          func(beforeIdx int64, cells []parser.Cell)
 }
 
@@ -121,6 +122,7 @@ func (f *Formatter) HandleLine(lineIdx int64, line *parser.LogicalLine, isComman
 		f.backlog = f.backlog[:0]
 		f.chromaContext = f.chromaContext[:0]
 		f.codeLexer = ""
+		f.codeLexerMethod = ""
 	}
 	f.wasCommand = effectiveIsCommand
 
@@ -171,8 +173,10 @@ func (f *Formatter) recolorizeBacklog(m mode) {
 	if lexName, ok := chromaLexerName[m]; ok {
 		// For modeCode, infer the specific language from sample content.
 		if m == modeCode {
-			lexName = inferLanguage(f.det.sampleLines)
-			f.codeLexer = lexName
+			result := inferLanguage(f.det.sampleLines)
+			lexName = result.name
+			f.codeLexer = result.name
+			f.codeLexerMethod = result.method
 		}
 		// Batch tokenize all backlog lines together for full context.
 		chromaColorizeLines(lines, lexName, f.style)
@@ -191,9 +195,12 @@ func (f *Formatter) recolorizeBacklog(m mode) {
 
 	// Insert a mode indicator as a new line before the first backlog line.
 	if len(f.backlog) > 0 && m != modePlain {
-		label := string(m)
+		label := "auto-color as: " + string(m)
 		if m == modeCode && f.codeLexer != "" {
-			label = f.codeLexer
+			label = "auto-color as: " + f.codeLexer
+			if f.codeLexerMethod != "" {
+				label += " (" + f.codeLexerMethod + ")"
+			}
 		}
 		f.insertModeIndicator(f.backlog[0].lineIdx, label)
 	}
@@ -238,32 +245,38 @@ var commonLanguages = []string{
 	"Rust", "Scala", "Shell", "Swift", "TypeScript", "Zig",
 }
 
+// langResult holds the detected language and how it was detected.
+type langResult struct {
+	name   string // chroma lexer name (e.g. "go", "python")
+	method string // detection method (e.g. "shebang", "classifier")
+}
+
 // inferLanguage detects the programming language from sample lines using
-// go-enry (GitHub's Linguist port). It uses a three-tier strategy:
-// shebang → Go heuristic → Bayesian classifier with curated candidates.
-func inferLanguage(lines []string) string {
+// go-enry (GitHub's Linguist port). It uses a four-tier strategy:
+// shebang → modeline → Go heuristic → Bayesian classifier.
+func inferLanguage(lines []string) langResult {
 	content := []byte(strings.Join(lines, "\n") + "\n")
 
 	// Tier 1: shebang (high confidence).
 	if lang, safe := enry.GetLanguageByShebang(content); safe {
-		return enryToChroma(lang)
+		return langResult{enryToChroma(lang), "shebang"}
 	}
 	// Tier 2: editor modeline (high confidence).
 	if lang, safe := enry.GetLanguageByModeline(content); safe {
-		return enryToChroma(lang)
+		return langResult{enryToChroma(lang), "modeline"}
 	}
 	// Tier 3: Go heuristic — "package " + "func " is distinctively Go.
 	// The classifier confuses Go with other languages (Golo, R) due to
 	// overlapping token distributions.
 	text := string(content)
 	if strings.Contains(text, "package ") && strings.Contains(text, "func ") {
-		return "go"
+		return langResult{"go", "heuristic"}
 	}
 	// Tier 4: Bayesian classifier with curated candidate set.
 	if lang, _ := enry.GetLanguageByClassifier(content, commonLanguages); lang != "" {
-		return enryToChroma(lang)
+		return langResult{enryToChroma(lang), "classifier"}
 	}
-	return ""
+	return langResult{}
 }
 
 // enryToChroma maps go-enry language names to Chroma lexer aliases.

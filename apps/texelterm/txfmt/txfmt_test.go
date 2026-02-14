@@ -352,7 +352,7 @@ func TestModeIndicator(t *testing.T) {
 		t.Errorf("expected insert before line 0, got %d", insertedIdx)
 	}
 
-	tag := " json "
+	tag := " auto-color as: json "
 	tagRunes := []rune(tag)
 	if len(insertedCells) != len(tagRunes) {
 		t.Fatalf("indicator length: expected %d, got %d", len(tagRunes), len(insertedCells))
@@ -376,9 +376,12 @@ func TestInferLanguage_Go(t *testing.T) {
 		`    fmt.Println("hello")`,
 		"}",
 	}
-	lang := inferLanguage(lines)
-	if lang != "go" {
-		t.Errorf("expected 'go', got %q", lang)
+	r := inferLanguage(lines)
+	if r.name != "go" {
+		t.Errorf("expected 'go', got %q", r.name)
+	}
+	if r.method != "heuristic" {
+		t.Errorf("expected method 'heuristic', got %q", r.method)
 	}
 }
 
@@ -391,9 +394,12 @@ func TestInferLanguage_Python(t *testing.T) {
 		"    def run(self):",
 		"        pass",
 	}
-	lang := inferLanguage(lines)
-	if lang != "python" {
-		t.Errorf("expected 'python', got %q", lang)
+	r := inferLanguage(lines)
+	if r.name != "python" {
+		t.Errorf("expected 'python', got %q", r.name)
+	}
+	if r.method != "classifier" {
+		t.Errorf("expected method 'classifier', got %q", r.method)
 	}
 }
 
@@ -403,9 +409,12 @@ func TestInferLanguage_Shebang(t *testing.T) {
 		"import os",
 		"print('hello')",
 	}
-	lang := inferLanguage(lines)
-	if lang != "python" {
-		t.Errorf("expected 'python', got %q", lang)
+	r := inferLanguage(lines)
+	if r.name != "python" {
+		t.Errorf("expected 'python', got %q", r.name)
+	}
+	if r.method != "shebang" {
+		t.Errorf("expected method 'shebang', got %q", r.method)
 	}
 }
 
@@ -417,9 +426,12 @@ func TestInferLanguage_Rust(t *testing.T) {
 		`    println!("{}", input);`,
 		"}",
 	}
-	lang := inferLanguage(lines)
-	if lang != "rust" {
-		t.Errorf("expected 'rust', got %q", lang)
+	r := inferLanguage(lines)
+	if r.name != "rust" {
+		t.Errorf("expected 'rust', got %q", r.name)
+	}
+	if r.method != "classifier" {
+		t.Errorf("expected method 'classifier', got %q", r.method)
 	}
 }
 
@@ -446,16 +458,20 @@ func TestModeIndicator_ShowsLanguage(t *testing.T) {
 		t.Fatal("expected detector to lock")
 	}
 
-	// Indicator should show " go " not " code "
+	// Indicator should show "auto-color as: go (heuristic)"
 	if insertedCells == nil {
 		t.Fatal("expected indicator line to be inserted")
 	}
-	tag := " go "
+	tag := " auto-color as: go (heuristic) "
 	tagRunes := []rune(tag)
-	for i, r := range tagRunes {
-		if i >= len(insertedCells) {
-			t.Fatalf("indicator too short: %d cells", len(insertedCells))
+	if len(insertedCells) != len(tagRunes) {
+		got := make([]rune, len(insertedCells))
+		for i, c := range insertedCells {
+			got[i] = c.Rune
 		}
+		t.Fatalf("indicator: expected %q, got %q", tag, string(got))
+	}
+	for i, r := range tagRunes {
 		if insertedCells[i].Rune != r {
 			t.Errorf("indicator cell %d: expected %q, got %q", i, r, insertedCells[i].Rune)
 		}
