@@ -3,20 +3,20 @@ module github.com/framegrace/texelation
 go 1.24.3
 
 require (
+	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/creack/pty v1.1.24
 	github.com/framegrace/texelui v0.4.0
 	github.com/gdamore/tcell/v2 v2.13.8
+	github.com/go-enry/go-enry/v2 v2.9.4
 	github.com/mattn/go-runewidth v0.0.16
 	golang.org/x/term v0.37.0
 	modernc.org/sqlite v1.44.3
 )
 
 require (
-	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
-	github.com/go-enry/go-enry/v2 v2.9.4 // indirect
 	github.com/go-enry/go-oniguruma v1.2.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect

@@ -4,6 +4,7 @@
 package txfmt
 
 import (
+	"log"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -117,6 +118,7 @@ func applyChromaTokens(regions []lineRegion, fullText, lexerName string, style *
 
 	tokens, err := chroma.Tokenise(lexer, nil, fullText)
 	if err != nil {
+		log.Printf("[TXFMT] Chroma tokenization failed: %v", err)
 		return
 	}
 

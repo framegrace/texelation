@@ -111,6 +111,7 @@ func BuildPipeline(cfg config.Config) *Pipeline {
 	}
 	entries, ok := rawPipeline.([]interface{})
 	if !ok {
+		log.Printf("[TRANSFORMER] Invalid pipeline config: expected array, got %T", rawPipeline)
 		return nil
 	}
 

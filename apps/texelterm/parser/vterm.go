@@ -1267,10 +1267,12 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 		return
 	}
 	v.memBufState.memBuf.InsertLine(beforeIdx)
-	if line := v.memBufState.memBuf.GetLine(beforeIdx); line != nil {
-		line.Cells = cells
-		line.FixedWidth = len(cells)
+	line := v.memBufState.memBuf.GetLine(beforeIdx)
+	if line == nil {
+		return
 	}
+	line.Cells = cells
+	line.FixedWidth = len(cells)
 	v.commitInsertOffset++
 	// InsertLine shifts all lines from beforeIdx downward. If the insertion
 	// is at or before the cursor's current global position, liveEdgeBase
