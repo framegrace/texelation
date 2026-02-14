@@ -23,6 +23,12 @@ type Transformer interface {
 	NotifyPromptStart()
 }
 
+// LineInserter is an optional interface that transformers can implement
+// to receive a callback for inserting synthetic lines into the buffer.
+type LineInserter interface {
+	SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell))
+}
+
 // Config holds per-transformer configuration.
 type Config map[string]interface{}
 
@@ -60,6 +66,18 @@ func Lookup(id string) (Factory, bool) {
 // Pipeline is an ordered chain of transformers.
 type Pipeline struct {
 	transformers []Transformer
+	insertFunc   func(beforeIdx int64, cells []parser.Cell)
+}
+
+// SetInsertFunc sets the line insertion callback. The pipeline forwards
+// it to any transformer that implements LineInserter.
+func (p *Pipeline) SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell)) {
+	p.insertFunc = fn
+	for _, t := range p.transformers {
+		if li, ok := t.(LineInserter); ok {
+			li.SetInsertFunc(fn)
+		}
+	}
 }
 
 // HandleLine dispatches to each transformer in order.

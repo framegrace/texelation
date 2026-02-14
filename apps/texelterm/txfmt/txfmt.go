@@ -13,13 +13,16 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/alecthomas/chroma/v2"
+	enry "github.com/go-enry/go-enry/v2"
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/apps/texelterm/transformer"
 )
 
 func init() {
 	transformer.Register("txfmt", func(cfg transformer.Config) (transformer.Transformer, error) {
-		return New(), nil
+		styleName, _ := cfg["style"].(string)
+		return New(styleName), nil
 	})
 }
 
@@ -32,7 +35,9 @@ const (
 	modeYAML  mode = "yaml"
 	modeXML   mode = "xml"
 	modeLog   mode = "log"
-	modeTable mode = "table"
+	modeTable    mode = "table"
+	modeCode     mode = "code"
+	modeMarkdown mode = "markdown"
 )
 
 // Color constants as parser.Color values (replacing ANSI escape strings).
@@ -43,7 +48,6 @@ var (
 	colorBlue    = parser.Color{Mode: parser.ColorModeStandard, Value: 4}
 	colorMagenta = parser.Color{Mode: parser.ColorModeStandard, Value: 5}
 	colorCyan    = parser.Color{Mode: parser.ColorModeStandard, Value: 6}
-	colorGray    = parser.Color{Mode: parser.ColorMode256, Value: 8}
 )
 
 var (
@@ -54,6 +58,11 @@ var (
 	reYAMLKey = regexp.MustCompile(`^\s*[\w.-]+\s*:\s+.*$`)
 	reXMLish  = regexp.MustCompile(`^\s*<(/?[\w:-]+)(\s+[^>]*)?>`)
 	reJSONish = regexp.MustCompile(`^\s*[\{\[]`)
+	reCodeTok   = regexp.MustCompile(`\b(func|package|import|class|def|fn|let|const|var|public|private|return|if|else|for|while|switch|case)\b`)
+	reMDHeading = regexp.MustCompile(`^#{1,6}\s+\S`)
+	reMDBold    = regexp.MustCompile(`\*\*[^*]+\*\*|__[^_]+__`)
+	reMDFence   = regexp.MustCompile("^```")
+	reMDList    = regexp.MustCompile(`^(\s*[-*+]|\s*\d+\.)\s`)
 )
 
 // Formatter is the inline output formatter. It detects the format of command
@@ -63,15 +72,33 @@ type Formatter struct {
 	wasCommand          bool
 	hasShellIntegration bool
 	tableLineCount      int
+	backlog             []*backlogEntry       // lines buffered during detection
+	style               *chroma.Style
+	chromaContext        []string              // previous lines kept as lexer context
+	codeLexer           string                // inferred language for modeCode (e.g. "go", "python")
+	insertFunc          func(beforeIdx int64, cells []parser.Cell)
 }
 
-// New creates a new Formatter.
-func New() *Formatter {
+// backlogEntry stores a line and its global index for deferred processing.
+type backlogEntry struct {
+	lineIdx int64
+	line    *parser.LogicalLine
+}
+
+// SetInsertFunc implements transformer.LineInserter.
+func (f *Formatter) SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell)) {
+	f.insertFunc = fn
+}
+
+// New creates a new Formatter. styleName selects the Chroma theme
+// (e.g. "catppuccin-mocha", "dracula"). Empty string uses the default.
+func New(styleName string) *Formatter {
 	return &Formatter{
 		det: detector{
 			maxSampleLines: 20,
 			requiredWins:   2,
 		},
+		style: chromaStyle(styleName),
 	}
 }
 
@@ -83,7 +110,7 @@ func (f *Formatter) NotifyPromptStart() {
 
 // HandleLine is the OnLineCommit callback. It detects and colorizes command
 // output lines in-place.
-func (f *Formatter) HandleLine(_ int64, line *parser.LogicalLine, isCommand bool) {
+func (f *Formatter) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) {
 	// If no shell integration, treat all lines as command output
 	effectiveIsCommand := isCommand || !f.hasShellIntegration
 
@@ -91,6 +118,9 @@ func (f *Formatter) HandleLine(_ int64, line *parser.LogicalLine, isCommand bool
 	if f.wasCommand && !effectiveIsCommand {
 		f.det.reset()
 		f.tableLineCount = 0
+		f.backlog = f.backlog[:0]
+		f.chromaContext = f.chromaContext[:0]
+		f.codeLexer = ""
 	}
 	f.wasCommand = effectiveIsCommand
 
@@ -103,17 +133,77 @@ func (f *Formatter) HandleLine(_ int64, line *parser.LogicalLine, isCommand bool
 		return
 	}
 
-	if !f.det.locked {
+	wasLocked := f.det.locked
+	if !wasLocked {
 		f.det.addSample(plainText)
+		f.backlog = append(f.backlog, &backlogEntry{lineIdx: lineIdx, line: line})
 	}
 
 	m := f.det.current()
-	f.colorize(line, m)
 
-	// Prevent reflow for structured formats where wrapping destroys readability
-	if m == modeLog || m == modeTable {
-		line.FixedWidth = len(line.Cells)
+	if f.det.locked && !wasLocked {
+		// Detection just locked — re-colorize all buffered lines
+		f.recolorizeBacklog(m)
+	} else if f.det.locked {
+		// Normal post-lock path
+		f.colorize(line, m)
+		if m == modeLog || m == modeTable {
+			line.FixedWidth = len(line.Cells)
+		}
 	}
+	// else: still detecting, line is in backlog, no colorization yet
+}
+
+// backlogLines returns just the LogicalLine pointers from the backlog.
+func (f *Formatter) backlogLines() []*parser.LogicalLine {
+	lines := make([]*parser.LogicalLine, len(f.backlog))
+	for i, e := range f.backlog {
+		lines[i] = e.line
+	}
+	return lines
+}
+
+// recolorizeBacklog applies the locked mode to all lines buffered during detection.
+func (f *Formatter) recolorizeBacklog(m mode) {
+	f.tableLineCount = 0
+	lines := f.backlogLines()
+
+	if lexName, ok := chromaLexerName[m]; ok {
+		// For modeCode, infer the specific language from sample content.
+		if m == modeCode {
+			lexName = inferLanguage(f.det.sampleLines)
+			f.codeLexer = lexName
+		}
+		// Batch tokenize all backlog lines together for full context.
+		chromaColorizeLines(lines, lexName, f.style)
+		// Populate chromaContext from backlog for future streaming lines.
+		for _, line := range lines {
+			f.chromaContext = append(f.chromaContext, extractPlainText(line))
+		}
+		if len(f.chromaContext) > maxChromaContext {
+			f.chromaContext = f.chromaContext[len(f.chromaContext)-maxChromaContext:]
+		}
+	} else {
+		for _, line := range lines {
+			f.colorize(line, m)
+		}
+	}
+
+	// Insert a mode indicator as a new line before the first backlog line.
+	if len(f.backlog) > 0 && m != modePlain {
+		label := string(m)
+		if m == modeCode && f.codeLexer != "" {
+			label = f.codeLexer
+		}
+		f.insertModeIndicator(f.backlog[0].lineIdx, label)
+	}
+
+	for _, line := range lines {
+		if m == modeLog || m == modeTable {
+			line.FixedWidth = len(line.Cells)
+		}
+	}
+	f.backlog = f.backlog[:0]
 }
 
 // extractPlainText extracts runes from cells with default FG color.
@@ -128,18 +218,86 @@ func extractPlainText(line *parser.LogicalLine) string {
 	return b.String()
 }
 
+// chromaLexerName maps a detected mode to a Chroma lexer name.
+var chromaLexerName = map[mode]string{
+	modeJSON:     "json",
+	modeYAML:     "yaml",
+	modeXML:      "xml",
+	modeMarkdown: "markdown",
+	modeCode:     "", // resolved at runtime by inferLanguage
+}
+
+// commonLanguages is the curated candidate set for the Bayesian classifier.
+// Keeping this focused avoids false positives from obscure languages (e.g.
+// Golo, GDScript3) that share keywords with common ones.
+var commonLanguages = []string{
+	"C", "C++", "C#", "CSS", "Dart", "Elixir", "Erlang",
+	"Go", "Groovy", "HTML", "Haskell", "Java", "JavaScript",
+	"Kotlin", "Lua", "Markdown", "Objective-C",
+	"PHP", "Perl", "PowerShell", "Python", "R", "Ruby",
+	"Rust", "Scala", "Shell", "Swift", "TypeScript", "Zig",
+}
+
+// inferLanguage detects the programming language from sample lines using
+// go-enry (GitHub's Linguist port). It uses a three-tier strategy:
+// shebang → Go heuristic → Bayesian classifier with curated candidates.
+func inferLanguage(lines []string) string {
+	content := []byte(strings.Join(lines, "\n") + "\n")
+
+	// Tier 1: shebang (high confidence).
+	if lang, safe := enry.GetLanguageByShebang(content); safe {
+		return enryToChroma(lang)
+	}
+	// Tier 2: editor modeline (high confidence).
+	if lang, safe := enry.GetLanguageByModeline(content); safe {
+		return enryToChroma(lang)
+	}
+	// Tier 3: Go heuristic — "package " + "func " is distinctively Go.
+	// The classifier confuses Go with other languages (Golo, R) due to
+	// overlapping token distributions.
+	text := string(content)
+	if strings.Contains(text, "package ") && strings.Contains(text, "func ") {
+		return "go"
+	}
+	// Tier 4: Bayesian classifier with curated candidate set.
+	if lang, _ := enry.GetLanguageByClassifier(content, commonLanguages); lang != "" {
+		return enryToChroma(lang)
+	}
+	return ""
+}
+
+// enryToChroma maps go-enry language names to Chroma lexer aliases.
+// Most names match, but a few differ.
+var enryToChromaMap = map[string]string{
+	"Shell": "bash",
+}
+
+func enryToChroma(enryName string) string {
+	if alias, ok := enryToChromaMap[enryName]; ok {
+		return alias
+	}
+	return strings.ToLower(enryName)
+}
+
 // colorize applies format-specific colorization to cells with default FG.
 func (f *Formatter) colorize(line *parser.LogicalLine, m mode) {
 	switch m {
-	case modeLog, modeYAML:
+	case modeLog:
 		colorizeLogCells(line)
-	case modeJSON:
-		colorizeJSONCells(line)
-	case modeXML:
-		colorizeXMLCells(line)
 	case modeTable:
 		f.tableLineCount++
 		colorizeTableCells(line, f.tableLineCount)
+	case modeJSON, modeYAML, modeXML, modeCode, modeMarkdown:
+		plainText := extractPlainText(line)
+		lexName := chromaLexerName[m]
+		if m == modeCode {
+			lexName = f.codeLexer
+		}
+		chromaColorizeWithContext(line, f.chromaContext, lexName, f.style)
+		f.chromaContext = append(f.chromaContext, plainText)
+		if len(f.chromaContext) > maxChromaContext {
+			f.chromaContext = f.chromaContext[len(f.chromaContext)-maxChromaContext:]
+		}
 	}
 }
 
@@ -193,12 +351,14 @@ func (d *detector) addSample(line string) {
 
 func (d *detector) score() map[mode]float64 {
 	s := map[mode]float64{
-		modePlain: 0.2,
-		modeJSON:  0,
-		modeYAML:  0,
-		modeXML:   0,
-		modeLog:   0,
-		modeTable: 0,
+		modePlain:    0.2,
+		modeJSON:     0,
+		modeYAML:     0,
+		modeXML:      0,
+		modeLog:      0,
+		modeTable:    0,
+		modeCode:     0,
+		modeMarkdown: 0,
 	}
 
 	lines := d.sampleLines
@@ -270,6 +430,42 @@ func (d *detector) score() map[mode]float64 {
 		s[modeLog] += 1.4
 	} else if logHits >= 3 {
 		s[modeLog] += 0.8
+	}
+
+	// Markdown
+	mdHits := 0
+	for _, ln := range lines {
+		if reMDHeading.MatchString(ln) {
+			mdHits += 2
+		}
+		if reMDBold.MatchString(ln) {
+			mdHits++
+		}
+		if reMDFence.MatchString(ln) {
+			mdHits += 2
+		}
+		if reMDList.MatchString(ln) {
+			mdHits++
+		}
+	}
+	if mdHits >= 4 {
+		s[modeMarkdown] += 1.2
+	} else if mdHits >= 2 {
+		s[modeMarkdown] += 0.7
+	}
+
+	// Code
+	codeTok := float64(len(reCodeTok.FindAllString(text, -1)))
+	semi := float64(strings.Count(text, ";"))
+	curly := float64(strings.Count(text, "{") + strings.Count(text, "}"))
+	if codeTok >= 2 {
+		s[modeCode] += 0.9
+	}
+	if curly >= 6 {
+		s[modeCode] += 0.5
+	}
+	if semi >= 4 {
+		s[modeCode] += 0.3
 	}
 
 	// Table
@@ -360,6 +556,24 @@ func setFGAttr(c *parser.Cell, color parser.Color, attr parser.Attribute) {
 	if isDefaultFG(c) {
 		c.FG = color
 		c.Attr |= attr
+	}
+}
+
+// insertModeIndicator inserts a new line before beforeIdx with a reverse-video
+// mode tag. Falls back to prepending cells if no insert function is available.
+func (f *Formatter) insertModeIndicator(beforeIdx int64, label string) {
+	tag := " " + label + " "
+	cells := make([]parser.Cell, len([]rune(tag)))
+	for i, r := range []rune(tag) {
+		cells[i] = parser.Cell{
+			Rune: r,
+			FG:   parser.DefaultFG,
+			BG:   parser.DefaultBG,
+			Attr: parser.AttrReverse | parser.AttrBold,
+		}
+	}
+	if f.insertFunc != nil {
+		f.insertFunc(beforeIdx, cells)
 	}
 }
 
@@ -461,153 +675,6 @@ func applyKVColors(cells []parser.Cell, text string, textToCell []int) {
 // runeIndex converts a byte offset in a string to a rune index.
 func runeIndex(s string, byteOff int) int {
 	return len([]rune(s[:byteOff]))
-}
-
-// colorizeJSONCells applies JSON syntax coloring to cells.
-func colorizeJSONCells(line *parser.LogicalLine) {
-	cells := line.Cells
-	if len(cells) == 0 {
-		return
-	}
-
-	inStr := false
-	esc := false
-	for i := range cells {
-		c := &cells[i]
-		if !isDefaultFG(c) {
-			continue
-		}
-		ch := c.Rune
-
-		if inStr {
-			if esc {
-				esc = false
-				continue
-			}
-			if ch == '\\' {
-				esc = true
-				continue
-			}
-			if ch == '"' {
-				inStr = false
-				setFG(c, colorGreen)
-				continue
-			}
-			setFG(c, colorGreen)
-			continue
-		}
-
-		switch ch {
-		case '"':
-			inStr = true
-			setFG(c, colorGreen)
-		case '{', '}', '[', ']':
-			setFG(c, colorCyan)
-		case ':', ',':
-			setFG(c, colorGray)
-		default:
-			if isJSONKeywordStart(cells, i) {
-				kw := readJSONKeywordCells(cells, i)
-				for j := 0; j < len(kw); j++ {
-					setFG(&cells[i+j], colorMagenta)
-				}
-				// Skip past the keyword (loop will i++ so we go to last char)
-				// Can't modify loop var, so we color in-place above
-			} else if isNumberStartRune(ch) {
-				n := readNumberCells(cells, i)
-				for j := 0; j < n; j++ {
-					setFG(&cells[i+j], colorYellow)
-				}
-			}
-		}
-	}
-}
-
-func isJSONKeywordStart(cells []parser.Cell, i int) bool {
-	remaining := len(cells) - i
-	if remaining >= 4 {
-		s := string([]rune{cells[i].Rune, cells[i+1].Rune, cells[i+2].Rune, cells[i+3].Rune})
-		if s == "true" || s == "null" {
-			return true
-		}
-		if remaining >= 5 {
-			s2 := s + string(cells[i+4].Rune)
-			if s2 == "false" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func readJSONKeywordCells(cells []parser.Cell, i int) string {
-	remaining := len(cells) - i
-	if remaining >= 5 {
-		s := string([]rune{cells[i].Rune, cells[i+1].Rune, cells[i+2].Rune, cells[i+3].Rune, cells[i+4].Rune})
-		if s == "false" {
-			return s
-		}
-	}
-	if remaining >= 4 {
-		s := string([]rune{cells[i].Rune, cells[i+1].Rune, cells[i+2].Rune, cells[i+3].Rune})
-		if s == "true" || s == "null" {
-			return s
-		}
-	}
-	return ""
-}
-
-func isNumberStartRune(r rune) bool {
-	return (r >= '0' && r <= '9') || r == '-'
-}
-
-func readNumberCells(cells []parser.Cell, start int) int {
-	j := start
-	for j < len(cells) {
-		r := cells[j].Rune
-		if (r >= '0' && r <= '9') || r == '-' || r == '+' || r == '.' || r == 'e' || r == 'E' {
-			j++
-			continue
-		}
-		break
-	}
-	return j - start
-}
-
-// colorizeXMLCells applies XML tag coloring to cells.
-func colorizeXMLCells(line *parser.LogicalLine) {
-	cells := line.Cells
-	if len(cells) == 0 {
-		return
-	}
-
-	inTag := false
-	for i := range cells {
-		c := &cells[i]
-		if !isDefaultFG(c) {
-			continue
-		}
-		ch := c.Rune
-
-		if !inTag {
-			if ch == '<' {
-				inTag = true
-				setFG(c, colorCyan)
-			}
-			continue
-		}
-		// Inside tag
-		if ch == '>' {
-			inTag = false
-			setFG(c, colorCyan)
-			continue
-		}
-		if ch == '=' {
-			setFG(c, colorGray)
-			continue
-		}
-		setFG(c, colorCyan)
-	}
 }
 
 // colorizeTableCells applies table colorization. Header (first row) gets bold

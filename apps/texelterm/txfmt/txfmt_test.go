@@ -105,63 +105,31 @@ func TestDetector_Reset(t *testing.T) {
 	}
 }
 
-func TestColorize_JSON(t *testing.T) {
+func TestColorize_JSON_Chroma(t *testing.T) {
 	line := makeCells(`{"key": "val"}`)
-	colorizeJSONCells(line)
+	style := chromaStyle("")
+	chromaColorizeLines([]*parser.LogicalLine{line}, "json", style)
 
-	// { should be cyan
-	if line.Cells[0].FG != colorCyan {
-		t.Errorf("expected '{' to be cyan, got %+v", line.Cells[0].FG)
-	}
-	// " (opening of "key") should be green
-	if line.Cells[1].FG != colorGreen {
-		t.Errorf("expected '\"' to be green, got %+v", line.Cells[1].FG)
-	}
-	// k, e, y should be green (inside string)
-	for i := 2; i <= 4; i++ {
-		if line.Cells[i].FG != colorGreen {
-			t.Errorf("expected cell %d (%c) to be green, got %+v", i, line.Cells[i].Rune, line.Cells[i].FG)
+	// Some cells should be colorized with distinct colors (strings, keys)
+	colored := 0
+	for _, c := range line.Cells {
+		if c.FG.Mode == parser.ColorModeRGB {
+			colored++
 		}
 	}
-	// : should be gray
-	if line.Cells[6].FG != colorGray {
-		t.Errorf("expected ':' to be gray, got %+v", line.Cells[6].FG)
+	if colored == 0 {
+		t.Error("expected Chroma to colorize some cells with RGB")
 	}
-	// } should be cyan
-	last := len(line.Cells) - 1
-	if line.Cells[last].FG != colorCyan {
-		t.Errorf("expected '}' to be cyan, got %+v", line.Cells[last].FG)
+
+	// Punctuation like { and } should remain default FG (base text color skipped)
+	if line.Cells[0].FG.Mode != parser.ColorModeDefault {
+		t.Errorf("expected '{' to remain default FG (base color skip), got mode %d", line.Cells[0].FG.Mode)
 	}
-}
 
-func TestColorize_JSON_Numbers(t *testing.T) {
-	line := makeCells(`{"n": 42}`)
-	colorizeJSONCells(line)
-
-	// 4 and 2 should be yellow
-	for i, c := range line.Cells {
-		if c.Rune == '4' || c.Rune == '2' {
-			if c.FG != colorYellow {
-				t.Errorf("expected cell %d (%c) to be yellow, got %+v", i, c.Rune, c.FG)
-			}
-		}
-	}
-}
-
-func TestColorize_JSON_Keywords(t *testing.T) {
-	line := makeCells(`{"ok": true}`)
-	colorizeJSONCells(line)
-
-	// t, r, u, e should be magenta
-	for i, c := range line.Cells {
-		if c.Rune == 't' || c.Rune == 'r' || c.Rune == 'u' || c.Rune == 'e' {
-			// Only the keyword "true" outside strings
-			if i >= 7 { // after ": "
-				if c.FG != colorMagenta {
-					t.Errorf("expected cell %d (%c) to be magenta, got %+v", i, c.Rune, c.FG)
-				}
-			}
-		}
+	// String content "key" should be colored (not base text color)
+	// Cell 1 is opening quote of "key"
+	if line.Cells[1].FG.Mode != parser.ColorModeRGB {
+		t.Errorf("expected string quote to be RGB, got mode %d", line.Cells[1].FG.Mode)
 	}
 }
 
@@ -171,7 +139,8 @@ func TestColorize_JSON_PreservesExistingColors(t *testing.T) {
 	existingColor := parser.Color{Mode: parser.ColorModeStandard, Value: 1} // red
 	line.Cells[2].FG = existingColor                                        // 'k' in "key"
 
-	colorizeJSONCells(line)
+	style := chromaStyle("")
+	chromaColorizeLines([]*parser.LogicalLine{line}, "json", style)
 
 	// Pre-colored cell should remain red
 	if line.Cells[2].FG != existingColor {
@@ -221,26 +190,20 @@ func TestColorize_Log(t *testing.T) {
 	}
 }
 
-func TestColorize_XML(t *testing.T) {
+func TestColorize_XML_Chroma(t *testing.T) {
 	line := makeCells(`<root attr="val">`)
-	colorizeXMLCells(line)
+	style := chromaStyle("")
+	chromaColorizeLines([]*parser.LogicalLine{line}, "xml", style)
 
-	// < should be cyan
-	if line.Cells[0].FG != colorCyan {
-		t.Errorf("expected '<' to be cyan, got %+v", line.Cells[0].FG)
-	}
-	// > should be cyan
-	last := len(line.Cells) - 1
-	if line.Cells[last].FG != colorCyan {
-		t.Errorf("expected '>' to be cyan, got %+v", line.Cells[last].FG)
-	}
-	// = should be gray
-	for i, c := range line.Cells {
-		if c.Rune == '=' {
-			if c.FG != colorGray {
-				t.Errorf("expected '=' at %d to be gray, got %+v", i, c.FG)
-			}
+	// Chroma should colorize XML elements
+	colored := 0
+	for _, c := range line.Cells {
+		if c.Rune != ' ' && c.FG.Mode != parser.ColorModeDefault {
+			colored++
 		}
+	}
+	if colored == 0 {
+		t.Error("expected Chroma to colorize XML cells")
 	}
 }
 
@@ -275,7 +238,7 @@ func TestColorize_Table(t *testing.T) {
 }
 
 func TestHandleLine_CommandTransition(t *testing.T) {
-	f := New()
+	f := New("")
 	f.NotifyPromptStart() // simulate shell integration
 
 	// Feed some JSON as command output
@@ -302,7 +265,7 @@ func TestHandleLine_CommandTransition(t *testing.T) {
 }
 
 func TestHandleLine_NoShellIntegration(t *testing.T) {
-	f := New()
+	f := New("")
 	// Don't call NotifyPromptStart — no shell integration
 
 	// All lines should be treated as command output even with isCommand=false
@@ -320,7 +283,7 @@ func TestHandleLine_NoShellIntegration(t *testing.T) {
 }
 
 func TestHandleLine_WithShellIntegration(t *testing.T) {
-	f := New()
+	f := New("")
 	f.NotifyPromptStart() // Shell integration is active
 
 	// Lines with isCommand=false should be skipped
@@ -352,6 +315,222 @@ func TestExtractPlainText_WithNulls(t *testing.T) {
 	text := extractPlainText(line)
 	if text != "hi" {
 		t.Errorf("expected 'hi', got %q", text)
+	}
+}
+
+func TestModeIndicator(t *testing.T) {
+	f := New("")
+	f.NotifyPromptStart()
+
+	// Capture inserted indicator line
+	var insertedCells []parser.Cell
+	var insertedIdx int64
+	f.SetInsertFunc(func(beforeIdx int64, cells []parser.Cell) {
+		insertedIdx = beforeIdx
+		insertedCells = cells
+	})
+
+	// Feed enough JSON lines to trigger detection lock
+	lines := []*parser.LogicalLine{
+		makeCells(`{"key": "val"}`),
+		makeCells(`{"key": "val2"}`),
+		makeCells(`{"key": "val3"}`),
+	}
+	for i, line := range lines {
+		f.HandleLine(int64(i), line, true)
+	}
+
+	if !f.det.locked {
+		t.Fatal("expected detector to lock on JSON")
+	}
+
+	// Indicator should have been inserted as a new line before the first backlog line
+	if insertedCells == nil {
+		t.Fatal("expected indicator line to be inserted")
+	}
+	if insertedIdx != 0 {
+		t.Errorf("expected insert before line 0, got %d", insertedIdx)
+	}
+
+	tag := " json "
+	tagRunes := []rune(tag)
+	if len(insertedCells) != len(tagRunes) {
+		t.Fatalf("indicator length: expected %d, got %d", len(tagRunes), len(insertedCells))
+	}
+	for i, r := range tagRunes {
+		c := insertedCells[i]
+		if c.Rune != r {
+			t.Errorf("indicator cell %d: expected %q, got %q", i, r, c.Rune)
+		}
+		if c.Attr&parser.AttrReverse == 0 {
+			t.Errorf("indicator cell %d: expected reverse attribute", i)
+		}
+	}
+}
+
+func TestInferLanguage_Go(t *testing.T) {
+	lines := []string{
+		"package main",
+		`import "fmt"`,
+		"func main() {",
+		`    fmt.Println("hello")`,
+		"}",
+	}
+	lang := inferLanguage(lines)
+	if lang != "go" {
+		t.Errorf("expected 'go', got %q", lang)
+	}
+}
+
+func TestInferLanguage_Python(t *testing.T) {
+	// go-enry's Bayesian classifier detects Python from content
+	// (unlike Chroma's lexers.Analyse which requires filename matching).
+	lines := []string{
+		"import os",
+		"class MyApp:",
+		"    def run(self):",
+		"        pass",
+	}
+	lang := inferLanguage(lines)
+	if lang != "python" {
+		t.Errorf("expected 'python', got %q", lang)
+	}
+}
+
+func TestInferLanguage_Shebang(t *testing.T) {
+	lines := []string{
+		"#!/usr/bin/env python3",
+		"import os",
+		"print('hello')",
+	}
+	lang := inferLanguage(lines)
+	if lang != "python" {
+		t.Errorf("expected 'python', got %q", lang)
+	}
+}
+
+func TestInferLanguage_Rust(t *testing.T) {
+	lines := []string{
+		"use std::io;",
+		"fn main() {",
+		`    let mut input = String::new();`,
+		`    println!("{}", input);`,
+		"}",
+	}
+	lang := inferLanguage(lines)
+	if lang != "rust" {
+		t.Errorf("expected 'rust', got %q", lang)
+	}
+}
+
+func TestModeIndicator_ShowsLanguage(t *testing.T) {
+	f := New("")
+	f.NotifyPromptStart()
+
+	var insertedCells []parser.Cell
+	f.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedCells = cells
+	})
+
+	goCode := []string{
+		"package main",
+		`import "fmt"`,
+		"func main() {",
+		`    fmt.Println("hello")`,
+	}
+	for i, code := range goCode {
+		f.HandleLine(int64(i), makeCells(code), true)
+	}
+
+	if !f.det.locked {
+		t.Fatal("expected detector to lock")
+	}
+
+	// Indicator should show " go " not " code "
+	if insertedCells == nil {
+		t.Fatal("expected indicator line to be inserted")
+	}
+	tag := " go "
+	tagRunes := []rune(tag)
+	for i, r := range tagRunes {
+		if i >= len(insertedCells) {
+			t.Fatalf("indicator too short: %d cells", len(insertedCells))
+		}
+		if insertedCells[i].Rune != r {
+			t.Errorf("indicator cell %d: expected %q, got %q", i, r, insertedCells[i].Rune)
+		}
+	}
+}
+
+func TestColorize_Go_MultiLineContext(t *testing.T) {
+	// Multi-line tokenization should produce significantly more colored tokens
+	// than single-line tokenization for Go code.
+	lines := []*parser.LogicalLine{
+		makeCells(`package main`),
+		makeCells(`import "fmt"`),
+		makeCells(`func main() {`),
+		makeCells(`    fmt.Println("hello")`),
+		makeCells(`}`),
+	}
+	style := chromaStyle("")
+	chromaColorizeLines(lines, "go", style)
+
+	colored := 0
+	for _, line := range lines {
+		for _, c := range line.Cells {
+			if c.FG.Mode == parser.ColorModeRGB {
+				colored++
+			}
+		}
+	}
+	// With full context, Go lexer should color keywords, strings, package names, etc.
+	// Without context (per-line), only 1-2 tokens per line get colored.
+	if colored < 10 {
+		t.Errorf("expected multi-line Go to produce ≥10 colored cells, got %d", colored)
+	}
+}
+
+func TestColorize_WithContext_Streaming(t *testing.T) {
+	// Verify that chromaColorizeWithContext uses previous lines for better results.
+	style := chromaStyle("")
+	context := []string{
+		"package main",
+		`import "fmt"`,
+	}
+	line := makeCells(`func main() {`)
+	chromaColorizeWithContext(line, context, "go", style)
+
+	// "func" should be colored as a keyword with full context
+	colored := 0
+	for _, c := range line.Cells {
+		if c.FG.Mode == parser.ColorModeRGB {
+			colored++
+		}
+	}
+	if colored == 0 {
+		t.Error("expected context-aware tokenization to color Go keywords")
+	}
+}
+
+func TestColorize_Markdown_MultiLine(t *testing.T) {
+	lines := []*parser.LogicalLine{
+		makeCells(`# Heading`),
+		makeCells(`Some text with **bold** words`),
+		makeCells(`- list item`),
+	}
+	style := chromaStyle("")
+	chromaColorizeLines(lines, "markdown", style)
+
+	// Check that heading gets colored or has attributes
+	headingColored := false
+	for _, c := range lines[0].Cells {
+		if c.FG.Mode == parser.ColorModeRGB || c.Attr != 0 {
+			headingColored = true
+			break
+		}
+	}
+	if !headingColored {
+		t.Error("expected markdown heading to be colorized with multi-line context")
 	}
 }
 

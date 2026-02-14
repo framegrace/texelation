@@ -1384,6 +1384,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	if pipeline != nil {
 		a.vterm.OnLineCommit = pipeline.HandleLine
 		a.vterm.OnPromptStart = pipeline.NotifyPromptStart
+		pipeline.SetInsertFunc(a.vterm.RequestLineInsert)
 	}
 
 	a.parser = parser.NewParser(a.vterm)

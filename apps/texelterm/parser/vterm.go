@@ -84,6 +84,9 @@ type VTerm struct {
 	// shell operation). Used by output transformers to colorize lines before
 	// they enter scrollback. Called after cache invalidation, before persistence.
 	OnLineCommit func(lineIdx int64, line *LogicalLine, isCommand bool)
+	// commitInsertOffset tracks lines inserted by OnLineCommit callbacks via
+	// RequestLineInsert. After the callback, currentGlobal is adjusted.
+	commitInsertOffset int64
 	// Deprecated: Use SetOnLineIndexed instead, which is called AFTER persistence.
 	// This callback was called when a line was committed, but BEFORE it was persisted,
 	// which could cause search index entries for content that doesn't exist on disk.
@@ -1251,6 +1254,23 @@ func WithClipboardGetHandler(handler func() []byte) Option {
 // output transformers like txfmt.
 func WithLineCommitHandler(handler func(int64, *LogicalLine, bool)) Option {
 	return func(v *VTerm) { v.OnLineCommit = handler }
+}
+
+// RequestLineInsert inserts a synthetic line at beforeIdx during an
+// OnLineCommit callback. The inserted line shifts all subsequent lines
+// (including currentGlobal) down by 1. The caller's currentGlobal is
+// adjusted automatically after the callback returns.
+//
+// This is safe to call only from within an OnLineCommit handler.
+func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
+	if !v.IsMemoryBufferEnabled() {
+		return
+	}
+	v.memBufState.memBuf.InsertLine(beforeIdx)
+	if line := v.memBufState.memBuf.GetLine(beforeIdx); line != nil {
+		line.Cells = cells
+	}
+	v.commitInsertOffset++
 }
 
 // Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.

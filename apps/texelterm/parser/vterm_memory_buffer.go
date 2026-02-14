@@ -556,9 +556,12 @@ func (v *VTerm) memoryBufferLineFeed() {
 
 	// Colorize the committed line before persistence
 	if v.OnLineCommit != nil {
+		v.commitInsertOffset = 0
 		if line := v.memBufState.memBuf.GetLine(currentGlobal); line != nil {
 			v.OnLineCommit(currentGlobal, line, v.CommandActive)
 		}
+		// Adjust for any lines inserted by the callback via RequestLineInsert.
+		currentGlobal += v.commitInsertOffset
 	}
 
 	// Mark as dirty for persistence with metadata for search indexing
