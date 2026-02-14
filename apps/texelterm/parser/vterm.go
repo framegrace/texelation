@@ -1269,8 +1269,17 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	v.memBufState.memBuf.InsertLine(beforeIdx)
 	if line := v.memBufState.memBuf.GetLine(beforeIdx); line != nil {
 		line.Cells = cells
+		line.FixedWidth = len(cells)
 	}
 	v.commitInsertOffset++
+	// InsertLine shifts all lines from beforeIdx downward. If the insertion
+	// is at or before the cursor's current global position, liveEdgeBase
+	// must be adjusted so that subsequent writes (which use liveEdgeBase +
+	// cursorY) still target the correct line.
+	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	if beforeIdx <= cursorGlobal {
+		v.memBufState.liveEdgeBase++
+	}
 }
 
 // Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.
