@@ -67,6 +67,8 @@ type VTerm struct {
 	// Clipboard operations (OSC 52)
 	OnClipboardSet func(data []byte) // Called when app sets clipboard via OSC 52
 	OnClipboardGet func() []byte     // Called when app queries clipboard via OSC 52
+	// Alt screen change notification (for transformer pipeline bypass)
+	OnAltScreenChange func(inAltScreen bool)
 	// Bracketed paste mode (DECSET 2004)
 	bracketedPasteMode         bool
 	OnBracketedPasteModeChange func(bool)
@@ -78,6 +80,13 @@ type VTerm struct {
 	searchLineTintColor     Color   // for full-line tint on selected result
 	searchLineTintIntensity float32 // blend intensity (0.0-1.0, default 0.12)
 	searchDefaultBG         Color   // terminal's default background for blending
+	// OnLineCommit is called when a line is committed (line feed during normal
+	// shell operation). Used by output transformers to colorize lines before
+	// they enter scrollback. Called after cache invalidation, before persistence.
+	OnLineCommit func(lineIdx int64, line *LogicalLine, isCommand bool)
+	// commitInsertOffset tracks lines inserted by OnLineCommit callbacks via
+	// RequestLineInsert. After the callback, currentGlobal is adjusted.
+	commitInsertOffset int64
 	// Deprecated: Use SetOnLineIndexed instead, which is called AFTER persistence.
 	// This callback was called when a line was committed, but BEFORE it was persisted,
 	// which could cause search index entries for content that doesn't exist on disk.
@@ -1222,6 +1231,10 @@ func WithEnvironmentUpdateHandler(handler func(string)) Option {
 	return func(v *VTerm) { v.OnEnvironmentUpdate = handler }
 }
 
+func WithAltScreenChangeHandler(handler func(bool)) Option {
+	return func(v *VTerm) { v.OnAltScreenChange = handler }
+}
+
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
 }
@@ -1232,6 +1245,43 @@ func WithClipboardSetHandler(handler func([]byte)) Option {
 
 func WithClipboardGetHandler(handler func() []byte) Option {
 	return func(v *VTerm) { v.OnClipboardGet = handler }
+}
+
+// WithLineCommitHandler sets a callback invoked when a line is committed during
+// normal shell operation (full-screen margins). The handler receives the global
+// line index, the logical line (mutable), and whether a command is currently
+// active (from OSC 133 shell integration). This is the hook point for inline
+// output transformers like txfmt.
+func WithLineCommitHandler(handler func(int64, *LogicalLine, bool)) Option {
+	return func(v *VTerm) { v.OnLineCommit = handler }
+}
+
+// RequestLineInsert inserts a synthetic line at beforeIdx during an
+// OnLineCommit callback. The inserted line shifts all subsequent lines
+// (including currentGlobal) down by 1. The caller's currentGlobal is
+// adjusted automatically after the callback returns.
+//
+// This is safe to call only from within an OnLineCommit handler.
+func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
+	if !v.IsMemoryBufferEnabled() {
+		return
+	}
+	v.memBufState.memBuf.InsertLine(beforeIdx)
+	line := v.memBufState.memBuf.GetLine(beforeIdx)
+	if line == nil {
+		return
+	}
+	line.Cells = cells
+	line.FixedWidth = len(cells)
+	v.commitInsertOffset++
+	// InsertLine shifts all lines from beforeIdx downward. If the insertion
+	// is at or before the cursor's current global position, liveEdgeBase
+	// must be adjusted so that subsequent writes (which use liveEdgeBase +
+	// cursorY) still target the correct line.
+	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	if beforeIdx <= cursorGlobal {
+		v.memBufState.liveEdgeBase++
+	}
 }
 
 // Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.

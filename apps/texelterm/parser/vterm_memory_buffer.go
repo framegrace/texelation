@@ -554,6 +554,16 @@ func (v *VTerm) memoryBufferLineFeed() {
 	// Invalidate viewport cache since content shifted
 	v.memBufState.viewport.InvalidateCache()
 
+	// Colorize the committed line before persistence
+	if v.OnLineCommit != nil {
+		v.commitInsertOffset = 0
+		if line := v.memBufState.memBuf.GetLine(currentGlobal); line != nil {
+			v.OnLineCommit(currentGlobal, line, v.CommandActive)
+		}
+		// Adjust for any lines inserted by the callback via RequestLineInsert.
+		currentGlobal += v.commitInsertOffset
+	}
+
 	// Mark as dirty for persistence with metadata for search indexing
 	// The search index callback (OnLineIndexed) is called by AdaptivePersistence
 	// AFTER the line is successfully persisted to disk, ensuring consistency.
