@@ -65,6 +65,9 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			}
 			v.logDebug("[ALT] Entering alt screen (DECSET 1049), saving cursor (%d,%d)", v.cursorX, v.cursorY)
 			v.inAltScreen = true
+			if v.OnAltScreenChange != nil {
+				v.OnAltScreenChange(true)
+			}
 			v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY //+v.getTopHistoryLine()
 			v.altBuffer = make([][]Cell, v.height)
 			for i := range v.altBuffer {
@@ -112,6 +115,9 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			}
 			v.logDebug("[ALT] Exiting alt screen (DECRST 1049), restoring cursor (%d,%d)", v.savedMainCursorX, v.savedMainCursorY)
 			v.inAltScreen = false
+			if v.OnAltScreenChange != nil {
+				v.OnAltScreenChange(false)
+			}
 			v.altBuffer = nil
 			physicalY := v.savedMainCursorY // - v.getTopHistoryLine()
 			v.SetCursorPos(physicalY, v.savedMainCursorX)

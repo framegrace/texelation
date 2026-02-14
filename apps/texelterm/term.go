@@ -25,7 +25,11 @@ import (
 	"time"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/transformer"
 	"github.com/framegrace/texelation/config"
+
+	// Import txfmt for init() side-effect registration.
+	_ "github.com/framegrace/texelation/apps/texelterm/txfmt"
 	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelation/texel"
 	"github.com/framegrace/texelui/theme"
@@ -1374,6 +1378,14 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		parser.WithWrap(wrapEnabled),
 		parser.WithReflow(reflowEnabled),
 	)
+
+	// Wire transformer pipeline from config (txfmt registers via init())
+	pipeline := transformer.BuildPipeline(cfg)
+	if pipeline != nil {
+		a.vterm.OnLineCommit = pipeline.HandleLine
+		a.vterm.OnPromptStart = pipeline.NotifyPromptStart
+	}
+
 	a.parser = parser.NewParser(a.vterm)
 
 	if displayBufferEnabled {
