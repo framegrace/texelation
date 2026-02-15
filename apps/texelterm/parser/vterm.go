@@ -1284,6 +1284,21 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	}
 }
 
+// RequestLineReplace overwrites the content of an existing line in the memory
+// buffer. Used by transformers to replace suppressed (cleared) lines with
+// formatted content without inserting additional lines.
+func (v *VTerm) RequestLineReplace(lineIdx int64, cells []Cell) {
+	if !v.IsMemoryBufferEnabled() {
+		return
+	}
+	line := v.memBufState.memBuf.GetLine(lineIdx)
+	if line == nil {
+		return
+	}
+	line.Cells = cells
+	line.FixedWidth = len(cells)
+}
+
 // Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.
 // This callback is called BEFORE persistence, which can cause search index entries
 // for content that doesn't exist on disk after a crash.

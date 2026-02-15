@@ -28,6 +28,7 @@ func init() {
 var (
 	_ transformer.Transformer    = (*TableFormatter)(nil)
 	_ transformer.LineInserter   = (*TableFormatter)(nil)
+	_ transformer.LineReplacer   = (*TableFormatter)(nil)
 	_ transformer.LineSuppressor = (*TableFormatter)(nil)
 )
 
@@ -64,6 +65,7 @@ type TableFormatter struct {
 	wasCommand          bool
 	hasShellIntegration bool
 	insertFunc          func(beforeIdx int64, cells []parser.Cell)
+	replaceFunc         func(lineIdx int64, cells []parser.Cell)
 	detectors           []detectorThreshold
 	activeDetector      tableDetector
 }
@@ -84,6 +86,11 @@ func New(maxBufferRows int) *TableFormatter {
 // SetInsertFunc implements transformer.LineInserter.
 func (tf *TableFormatter) SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell)) {
 	tf.insertFunc = fn
+}
+
+// SetReplaceFunc implements transformer.LineReplacer.
+func (tf *TableFormatter) SetReplaceFunc(fn func(lineIdx int64, cells []parser.Cell)) {
+	tf.replaceFunc = fn
 }
 
 // NotifyPromptStart signals that shell integration is active.
@@ -152,7 +159,9 @@ func looksLikeTableCandidate(text string, d tableDetector) bool {
 		// Require at least one double-space gap and minimum length.
 		return len(trimmed) >= 20 && strings.Contains(trimmed, "  ")
 	case *csvDetector:
-		return strings.ContainsAny(trimmed, ",\t")
+		// Require at least 2 delimiters (3+ columns) to avoid matching
+		// JSON trailing commas, prose, etc.
+		return strings.Count(trimmed, ",") >= 2 || strings.Count(trimmed, "\t") >= 2
 	}
 	return false
 }
@@ -218,11 +227,8 @@ func (tf *TableFormatter) flush() {
 		ts := bestDetector.Parse(lines)
 		if ts != nil {
 			rendered := renderTable(ts)
-			if rendered != nil && tf.insertFunc != nil {
-				insertAt := tf.buffer[0].lineIdx
-				for _, row := range rendered {
-					tf.insertFunc(insertAt, row)
-				}
+			if rendered != nil {
+				tf.emitRendered(rendered)
 				tf.resetState()
 				return
 			}
@@ -232,9 +238,32 @@ func (tf *TableFormatter) flush() {
 	tf.flushRaw()
 }
 
-// flushRaw emits all buffered lines via insertFunc without any formatting.
+// emitRendered writes rendered table rows into the buffer. Suppressed lines
+// are overwritten via replaceFunc; any extra rows are inserted.
+func (tf *TableFormatter) emitRendered(rendered [][]parser.Cell) {
+	nBuf := len(tf.buffer)
+	insertBase := tf.buffer[nBuf-1].lineIdx + 1
+	extraCount := int64(0)
+	for i, row := range rendered {
+		if i < nBuf && tf.replaceFunc != nil {
+			tf.replaceFunc(tf.buffer[i].lineIdx, row)
+		} else if tf.insertFunc != nil {
+			// Insert extra rows after the last buffered line.
+			// Each insert shifts lines down, so increment position.
+			tf.insertFunc(insertBase+extraCount, row)
+			extraCount++
+		}
+	}
+}
+
+// flushRaw restores all buffered lines without formatting. Suppressed lines
+// are overwritten with their original content via replaceFunc.
 func (tf *TableFormatter) flushRaw() {
-	if tf.insertFunc != nil {
+	if tf.replaceFunc != nil {
+		for _, bl := range tf.buffer {
+			tf.replaceFunc(bl.lineIdx, bl.line.Cells)
+		}
+	} else if tf.insertFunc != nil {
 		for _, bl := range tf.buffer {
 			tf.insertFunc(bl.lineIdx, bl.line.Cells)
 		}
@@ -247,6 +276,14 @@ func (tf *TableFormatter) resetState() {
 	tf.buffer = tf.buffer[:0]
 	tf.state = stateScanning
 	tf.activeDetector = nil
+	// Reset stateful detectors so stale delimiter info doesn't leak
+	// between tables.
+	for _, dt := range tf.detectors {
+		if cd, ok := dt.detector.(*csvDetector); ok {
+			cd.detectedDelim = 0
+			cd.detectedCount = 0
+		}
+	}
 }
 
 // extractPlainText returns the rune content of a logical line as a string.

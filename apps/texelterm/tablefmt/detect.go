@@ -454,9 +454,10 @@ func filterUsableLines(lines []string) []string {
 }
 
 // detectColumnBoundariesFromHeader finds column start positions using the
-// first line as a header. Word-start positions are validated against data lines.
-// Requires that boundary gaps be multi-space (>=2 spaces) in either the header
-// or a majority of data lines to avoid false positives on prose.
+// first line as a header. All word-start positions (space→non-space transitions)
+// are candidates; they are validated against data lines to filter false positives.
+// Single-space header gaps (like ps's "PID TTY") require stronger data line
+// validation (70%) than multi-space gaps (50%).
 func detectColumnBoundariesFromHeader(lines []string) []int {
 	if len(lines) < 3 {
 		return nil
@@ -468,10 +469,12 @@ func detectColumnBoundariesFromHeader(lines []string) []int {
 		return nil
 	}
 
-	// Find word-start positions (space->non-space transitions) where the
-	// preceding gap is at least 2 spaces wide. This filters out normal
-	// prose word boundaries.
-	var wordStarts []int
+	// Find ALL space→non-space transitions with their gap widths.
+	type candidate struct {
+		pos      int
+		gapWidth int
+	}
+	var candidates []candidate
 	for i, r := range headerRunes {
 		if r == ' ' || i == 0 {
 			continue
@@ -479,33 +482,27 @@ func detectColumnBoundariesFromHeader(lines []string) []int {
 		if headerRunes[i-1] != ' ' {
 			continue
 		}
-		// Found a space->non-space transition. Check gap width.
 		gapStart := i - 1
 		for gapStart > 0 && headerRunes[gapStart-1] == ' ' {
 			gapStart--
 		}
-		gapWidth := i - gapStart
-		if gapWidth >= 2 {
-			wordStarts = append(wordStarts, i)
-		}
+		candidates = append(candidates, candidate{pos: i, gapWidth: i - gapStart})
 	}
 	// Always include position 0 as the first column (or the first non-space).
 	firstNonSpace := 0
 	for firstNonSpace < len(headerRunes) && headerRunes[firstNonSpace] == ' ' {
 		firstNonSpace++
 	}
-	if firstNonSpace < len(headerRunes) {
-		wordStarts = append([]int{firstNonSpace}, wordStarts...)
-	}
-	if len(wordStarts) < 2 {
+	if firstNonSpace >= len(headerRunes) || len(candidates) < 1 {
 		return nil
 	}
 
 	// Validate each boundary by checking data lines have a space at the gap.
+	// Single-space header gaps need stronger validation to reject prose.
 	dataLines := lines[1:]
-	validStarts := []int{wordStarts[0]}
-	for k := 1; k < len(wordStarts); k++ {
-		gapPos := wordStarts[k] - 1
+	validStarts := []int{firstNonSpace}
+	for _, c := range candidates {
+		gapPos := c.pos - 1
 		if gapPos < 0 {
 			continue
 		}
@@ -520,8 +517,22 @@ func detectColumnBoundariesFromHeader(lines []string) []int {
 				hasSpace++
 			}
 		}
-		if total >= 2 && hasSpace*100/total >= 50 {
-			validStarts = append(validStarts, wordStarts[k])
+		if total < 2 {
+			continue
+		}
+		// Single-space header gaps need more evidence: 70% threshold and at
+		// least 5 data lines to avoid coincidental alignment in prose.
+		threshold := 50
+		minLines := 2
+		if c.gapWidth < 2 {
+			threshold = 70
+			minLines = 5
+		}
+		if total < minLines {
+			continue
+		}
+		if hasSpace*100/total >= threshold {
+			validStarts = append(validStarts, c.pos)
 		}
 	}
 	if len(validStarts) < 2 {
@@ -578,11 +589,14 @@ func detectColumnBoundariesFromGaps(lines []string) []int {
 		return nil
 	}
 
-	// Refine each bucket into a precise gap range [gapStart, gapEnd).
-	type gapRange struct{ start, end int }
+	// Refine each bucket into a precise gap range.
+	// Track both the full extent [start, maxEnd) and the minimum end (minEnd)
+	// which is where the widest value starts — the safe column boundary for
+	// right-aligned fields.
+	type gapRange struct{ start, minEnd, maxEnd int }
 	gaps := make([]gapRange, 0, len(strongBuckets))
 	for _, bucket := range strongBuckets {
-		gs, ge := 9999, 0
+		gs, minE, maxE := 9999, 9999, 0
 		for _, ln := range lines {
 			ln = strings.TrimRight(ln, "\r\n")
 			runes := []rune(ln)
@@ -601,15 +615,18 @@ func detectColumnBoundariesFromGaps(lines []string) []int {
 						if runStart < gs {
 							gs = runStart
 						}
-						if runEnd > ge {
-							ge = runEnd
+						if runEnd < minE {
+							minE = runEnd
+						}
+						if runEnd > maxE {
+							maxE = runEnd
 						}
 					}
 				}
 			}
 		}
-		if gs < ge {
-			gaps = append(gaps, gapRange{gs, ge})
+		if gs < maxE {
+			gaps = append(gaps, gapRange{gs, minE, maxE})
 		}
 	}
 	if len(gaps) == 0 {
@@ -621,20 +638,41 @@ func detectColumnBoundariesFromGaps(lines []string) []int {
 	merged := []gapRange{gaps[0]}
 	for _, g := range gaps[1:] {
 		last := &merged[len(merged)-1]
-		if g.start <= last.end {
-			if g.end > last.end {
-				last.end = g.end
+		if g.start <= last.maxEnd {
+			if g.maxEnd > last.maxEnd {
+				last.maxEnd = g.maxEnd
+			}
+			if g.minEnd < last.minEnd {
+				last.minEnd = g.minEnd
 			}
 		} else {
 			merged = append(merged, g)
 		}
 	}
 
-	// Build column start positions from gap boundaries.
+	// Build column start positions from gap boundaries. For each gap, scan
+	// ALL lines (including those without double-space gaps) to find the
+	// earliest content start. This handles right-aligned fields like file
+	// sizes where the widest value may have only a single-space separator.
 	starts := make([]int, 0, len(merged)+1)
 	starts = append(starts, 0) // first column always starts at 0
 	for _, g := range merged {
-		starts = append(starts, g.end)
+		colStart := g.minEnd
+		for _, ln := range lines {
+			runes := []rune(strings.TrimRight(ln, "\r\n"))
+			if g.start >= len(runes) || runes[g.start] != ' ' {
+				continue // line doesn't have a gap here
+			}
+			for pos := g.start + 1; pos < len(runes); pos++ {
+				if runes[pos] != ' ' {
+					if pos < colStart {
+						colStart = pos
+					}
+					break
+				}
+			}
+		}
+		starts = append(starts, colStart)
 	}
 	return starts
 }
@@ -775,8 +813,9 @@ func (d *csvDetector) scoreDelim(lines []string, delim byte) float64 {
 			bestFreq = f
 		}
 	}
-	// Need at least 2 columns (1 delimiter).
-	if bestCount < 1 {
+	// Need at least 3 columns (2 delimiters). A single delimiter per line
+	// is too weak a signal — matches JSON trailing commas, prose, etc.
+	if bestCount < 2 {
 		return 0
 	}
 
@@ -790,13 +829,15 @@ func (d *csvDetector) scoreDelim(lines []string, delim byte) float64 {
 }
 
 // Compatible returns true if the line could be part of a CSV/TSV table.
+// Before Score has been called (detectedDelim == 0), falls back to checking
+// for the presence of commas or tabs.
 func (d *csvDetector) Compatible(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	if len(trimmed) == 0 {
 		return true
 	}
 	if d.detectedDelim == 0 {
-		return false
+		return strings.Count(trimmed, ",") >= 2 || strings.Count(trimmed, "\t") >= 2
 	}
 	n := countDelimitersOutsideQuotes(trimmed, d.detectedDelim)
 	diff := n - d.detectedCount

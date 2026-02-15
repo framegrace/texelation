@@ -3,9 +3,8 @@
 //
 // Package txfmt is an inline output formatter for texelterm.
 // It hooks into the line-commit boundary (memoryBufferLineFeed) to colorize
-// command output before it enters scrollback. Detection and colorization
-// logic is ported from cmd/txfmt/main.go, operating directly on parser.Cell
-// slices instead of ANSI escape strings.
+// command output before it enters scrollback, operating directly on parser.Cell
+// slices.
 package txfmt
 
 import (
