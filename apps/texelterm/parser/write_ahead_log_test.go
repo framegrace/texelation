@@ -897,3 +897,31 @@ func TestWAL_MetadataCheckpointClearsRecoveredState(t *testing.T) {
 		t.Errorf("ScrollOffset: got %d, want 25", recovered.ScrollOffset)
 	}
 }
+
+func TestWAL_SyncWAL(t *testing.T) {
+	tmpDir := t.TempDir()
+	config := DefaultWALConfig(tmpDir, "test-sync")
+	config.CheckpointInterval = 0
+
+	wal, err := OpenWriteAheadLog(config)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog failed: %v", err)
+	}
+	defer wal.Close()
+
+	// Write a line
+	line := NewLogicalLineFromCells([]Cell{{Rune: 'A'}})
+	if err := wal.Append(0, line, time.Now()); err != nil {
+		t.Fatalf("Append failed: %v", err)
+	}
+
+	// SyncWAL should succeed (data flushed to disk)
+	if err := wal.SyncWAL(); err != nil {
+		t.Fatalf("SyncWAL failed: %v", err)
+	}
+
+	// SyncWAL on closed WAL should not panic
+	wal.Close()
+	err = wal.SyncWAL()
+	// We just verify it doesn't panic; error is acceptable
+}

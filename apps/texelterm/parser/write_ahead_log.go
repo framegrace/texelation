@@ -1026,6 +1026,18 @@ func (w *WriteAheadLog) WALPath() string {
 	return w.walPath
 }
 
+// SyncWAL forces the WAL file to be synced to disk.
+// This ensures all previously written entries survive a crash.
+func (w *WriteAheadLog) SyncWAL() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.stopped || w.walFile == nil {
+		return nil
+	}
+	return w.walFile.Sync()
+}
+
 // Close performs a final checkpoint and closes the WAL and PageStore.
 func (w *WriteAheadLog) Close() error {
 	w.mu.Lock()
