@@ -607,7 +607,21 @@ func (v *VTerm) memoryBufferLineFeed() {
 	if v.OnLineCommit != nil {
 		v.commitInsertOffset = 0
 		if line := v.memBufState.memBuf.GetLine(currentGlobal); line != nil {
-			v.OnLineCommit(currentGlobal, line, v.CommandActive)
+			if v.OnLineCommit(currentGlobal, line, v.CommandActive) {
+				// Line is being buffered by a transformer.
+				// Original Cells stay intact. Persistence is deferred
+				// until the transformer flushes and calls persistNotifyFunc.
+				//
+				// Contract: a suppressing transformer must NOT also call
+				// RequestLineInsert in the same callback. The insert offset
+				// adjustment below is skipped intentionally because the line
+				// hasn't been committed to scrollback yet.
+				//
+				// liveEdgeBase advancement and NotifyWriteWithMeta are also
+				// skipped — the transformer is responsible for calling
+				// NotifyLinePersist when it flushes the buffered line.
+				return
+			}
 		}
 		// Adjust for any lines inserted by the callback via RequestLineInsert.
 		currentGlobal += v.commitInsertOffset
@@ -1676,4 +1690,20 @@ func (v *VTerm) notifyDetectorCursorVisibility(hidden bool) {
 			v.logMemBufDebug("[TUI-DETECT] Cursor hidden, signals=%d", d.SignalCount())
 		}
 	}
+}
+
+// SetShowOverlay controls whether the viewport displays overlay content or original content.
+func (v *VTerm) SetShowOverlay(show bool) {
+	if v.memBufState == nil || v.memBufState.viewport == nil {
+		return
+	}
+	v.memBufState.viewport.SetShowOverlay(show)
+}
+
+// ShowOverlay returns whether the viewport is currently showing overlay content.
+func (v *VTerm) ShowOverlay() bool {
+	if v.memBufState == nil || v.memBufState.viewport == nil {
+		return true
+	}
+	return v.memBufState.viewport.ShowOverlay()
 }

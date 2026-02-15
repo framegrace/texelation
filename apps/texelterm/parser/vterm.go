@@ -83,7 +83,7 @@ type VTerm struct {
 	// OnLineCommit is called when a line is committed (line feed during normal
 	// shell operation). Used by output transformers to colorize lines before
 	// they enter scrollback. Called after cache invalidation, before persistence.
-	OnLineCommit func(lineIdx int64, line *LogicalLine, isCommand bool)
+	OnLineCommit func(lineIdx int64, line *LogicalLine, isCommand bool) bool
 	// commitInsertOffset tracks lines inserted by OnLineCommit callbacks via
 	// RequestLineInsert. After the callback, currentGlobal is adjusted.
 	commitInsertOffset int64
@@ -568,8 +568,12 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 		if line == nil {
 			continue
 		}
+		cells := line.Cells
+		if line.Overlay != nil && v.ShowOverlay() {
+			cells = line.Overlay
+		}
 		start := 0
-		end := len(line.Cells)
+		end := len(cells)
 		if lineIdx == startLine {
 			start = startOffset
 		}
@@ -579,8 +583,8 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 
 		// Extract and trim trailing spaces from each line
 		var lineRunes []rune
-		for i := start; i < end && i < len(line.Cells); i++ {
-			r := line.Cells[i].Rune
+		for i := start; i < end && i < len(cells); i++ {
+			r := cells[i].Rune
 			if r == 0 {
 				r = ' '
 			}
@@ -1252,7 +1256,7 @@ func WithClipboardGetHandler(handler func() []byte) Option {
 // line index, the logical line (mutable), and whether a command is currently
 // active (from OSC 133 shell integration). This is the hook point for inline
 // output transformers like txfmt.
-func WithLineCommitHandler(handler func(int64, *LogicalLine, bool)) Option {
+func WithLineCommitHandler(handler func(int64, *LogicalLine, bool) bool) Option {
 	return func(v *VTerm) { v.OnLineCommit = handler }
 }
 
@@ -1271,16 +1275,40 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	if line == nil {
 		return
 	}
-	line.Cells = cells
-	line.FixedWidth = len(cells)
+	// Inserted lines are synthetic (transformer-generated).
+	// Content goes in Overlay, not Cells.
+	line.Overlay = cells
+	line.OverlayWidth = len(cells)
+	line.Synthetic = true
 	v.commitInsertOffset++
-	// InsertLine shifts all lines from beforeIdx downward. If the insertion
-	// is at or before the cursor's current global position, liveEdgeBase
-	// must be adjusted so that subsequent writes (which use liveEdgeBase +
-	// cursorY) still target the correct line.
 	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
 	if beforeIdx <= cursorGlobal {
 		v.memBufState.liveEdgeBase++
+	}
+}
+
+// RequestLineOverlay sets overlay content on an existing line without modifying
+// the original Cells. Used by transformers to provide formatted views.
+// The cells slice is cloned defensively to prevent data races with background
+// persistence goroutines.
+func (v *VTerm) RequestLineOverlay(lineIdx int64, cells []Cell) {
+	if !v.IsMemoryBufferEnabled() {
+		return
+	}
+	line := v.memBufState.memBuf.GetLine(lineIdx)
+	if line == nil {
+		return
+	}
+	line.Overlay = make([]Cell, len(cells))
+	copy(line.Overlay, cells)
+	line.OverlayWidth = len(cells)
+}
+
+// NotifyLinePersist notifies the persistence layer that a line is ready for writing.
+// Used by transformers after setting overlay content on previously suppressed lines.
+func (v *VTerm) NotifyLinePersist(lineIdx int64) {
+	if v.memBufState.persistence != nil {
+		v.memBufState.persistence.NotifyWrite(lineIdx)
 	}
 }
 

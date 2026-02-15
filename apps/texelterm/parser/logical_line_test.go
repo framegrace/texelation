@@ -434,6 +434,110 @@ func TestLogicalLine_Clone_PreservesFixedWidth(t *testing.T) {
 	}
 }
 
+// --- Overlay Tests ---
+
+func TestLogicalLine_OverlayFields(t *testing.T) {
+	line := NewLogicalLine()
+	if line.Overlay != nil {
+		t.Error("new line should have nil Overlay")
+	}
+	if line.OverlayWidth != 0 {
+		t.Error("new line should have zero OverlayWidth")
+	}
+	if line.Synthetic {
+		t.Error("new line should not be Synthetic")
+	}
+}
+
+func TestLogicalLine_CloneWithOverlay(t *testing.T) {
+	line := NewLogicalLineFromCells(makeCells("original"))
+	line.Overlay = []Cell{
+		{Rune: 'F', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'M', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'T', FG: DefaultFG, BG: DefaultBG},
+	}
+	line.OverlayWidth = 80
+	line.Synthetic = true
+
+	clone := line.Clone()
+
+	if len(clone.Overlay) != 3 {
+		t.Fatalf("expected overlay len 3, got %d", len(clone.Overlay))
+	}
+	if clone.OverlayWidth != 80 {
+		t.Errorf("expected OverlayWidth 80, got %d", clone.OverlayWidth)
+	}
+	if !clone.Synthetic {
+		t.Error("expected Synthetic=true on clone")
+	}
+
+	// Verify no aliasing
+	clone.Overlay[0].Rune = 'X'
+	if line.Overlay[0].Rune != 'F' {
+		t.Error("overlay should be deep-copied, not aliased")
+	}
+}
+
+func TestLogicalLine_CloneNilOverlay(t *testing.T) {
+	line := NewLogicalLineFromCells(makeCells("no overlay"))
+	clone := line.Clone()
+	if clone.Overlay != nil {
+		t.Error("clone of line without overlay should have nil Overlay")
+	}
+}
+
+// --- ActiveWrapToWidth Tests ---
+
+func TestLogicalLine_ActiveWrapToWidth_NoOverlay(t *testing.T) {
+	line := NewLogicalLineFromCells(makeCells("Hello World"))
+	// showOverlay=true but no overlay → falls back to Cells
+	physical := line.ActiveWrapToWidth(10, true)
+	if len(physical) != 2 {
+		t.Fatalf("expected 2 physical lines (wrap at 10), got %d", len(physical))
+	}
+}
+
+func TestLogicalLine_ActiveWrapToWidth_WithOverlay(t *testing.T) {
+	line := NewLogicalLineFromCells(makeCells("Hello World"))
+	line.Overlay = makeCells("| Hello | World |")
+	line.OverlayWidth = 80
+
+	// showOverlay=true, has overlay → use overlay as fixed-width
+	physical := line.ActiveWrapToWidth(40, true)
+	if len(physical) != 1 {
+		t.Fatalf("overlay should produce 1 physical line (fixed-width), got %d", len(physical))
+	}
+	if len(physical[0].Cells) != 40 {
+		t.Errorf("expected 40 cells (clipped/padded to viewport width), got %d", len(physical[0].Cells))
+	}
+
+	// showOverlay=false → use original Cells (wraps normally)
+	physical = line.ActiveWrapToWidth(6, false)
+	if len(physical) != 2 {
+		t.Fatalf("original should wrap to 2 lines at width 6, got %d", len(physical))
+	}
+}
+
+func TestLogicalLine_ActiveWrapToWidth_Synthetic(t *testing.T) {
+	line := &LogicalLine{
+		Synthetic:    true,
+		Overlay:      makeCells("+---------+"),
+		OverlayWidth: 80,
+	}
+
+	// showOverlay=true → show overlay
+	physical := line.ActiveWrapToWidth(80, true)
+	if len(physical) != 1 {
+		t.Fatalf("expected 1 physical line, got %d", len(physical))
+	}
+
+	// showOverlay=false → synthetic lines return nil
+	physical = line.ActiveWrapToWidth(80, false)
+	if physical != nil {
+		t.Errorf("synthetic lines should return nil when showOverlay=false, got %d lines", len(physical))
+	}
+}
+
 // Helper to create cells from a string
 func makeCells(s string) []Cell {
 	cells := make([]Cell, len(s))

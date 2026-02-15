@@ -335,5 +335,70 @@ func TestConvertPhysicalToLogical_EmptyLines(t *testing.T) {
 	}
 }
 
+func TestLogicalLinePersistence_OverlayRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	histFile := filepath.Join(tmpDir, "test.lhist")
+
+	lines := []*LogicalLine{
+		NewLogicalLineFromCells(makeCells("original only")),
+		func() *LogicalLine {
+			l := NewLogicalLineFromCells(makeCells("raw output"))
+			l.Overlay = makeCells("| raw | output |")
+			l.OverlayWidth = 80
+			return l
+		}(),
+		{
+			Synthetic:    true,
+			Overlay:      makeCells("+------+--------+"),
+			OverlayWidth: 80,
+		},
+	}
+
+	if err := WriteLogicalLines(histFile, lines); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	loaded, err := LoadLogicalLines(histFile)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	if len(loaded) != 3 {
+		t.Fatalf("expected 3 lines, got %d", len(loaded))
+	}
+
+	// Line 0: no overlay
+	if loaded[0].Overlay != nil {
+		t.Error("line 0 should have nil overlay")
+	}
+	if loaded[0].Synthetic {
+		t.Error("line 0 should not be synthetic")
+	}
+
+	// Line 1: has overlay
+	if len(loaded[1].Overlay) != len(lines[1].Overlay) {
+		t.Errorf("line 1 overlay: expected %d cells, got %d", len(lines[1].Overlay), len(loaded[1].Overlay))
+	}
+	if loaded[1].OverlayWidth != 80 {
+		t.Errorf("line 1 OverlayWidth: expected 80, got %d", loaded[1].OverlayWidth)
+	}
+	for i, c := range loaded[1].Overlay {
+		if c.Rune != lines[1].Overlay[i].Rune {
+			t.Errorf("line 1 overlay cell %d: expected %q, got %q", i, lines[1].Overlay[i].Rune, c.Rune)
+		}
+	}
+
+	// Line 2: synthetic with overlay, no cells
+	if !loaded[2].Synthetic {
+		t.Error("line 2 should be Synthetic")
+	}
+	if len(loaded[2].Cells) != 0 {
+		t.Errorf("synthetic line should have 0 cells, got %d", len(loaded[2].Cells))
+	}
+	if len(loaded[2].Overlay) != len(lines[2].Overlay) {
+		t.Errorf("line 2 overlay: expected %d cells, got %d", len(lines[2].Overlay), len(loaded[2].Overlay))
+	}
+}
+
 // Note: TestScrollbackHistory_SaveAndLoad was removed as part of DisplayBuffer cleanup.
 // The ScrollbackHistory type has been replaced by MemoryBuffer.

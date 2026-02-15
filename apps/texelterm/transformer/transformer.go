@@ -21,12 +21,34 @@ type Transformer interface {
 	HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool)
 	// NotifyPromptStart signals that shell integration is active.
 	NotifyPromptStart()
+	// NotifyCommandStart signals the start of a new command from OSC 133;C.
+	NotifyCommandStart(cmd string)
 }
 
 // LineInserter is an optional interface that transformers can implement
 // to receive a callback for inserting synthetic lines into the buffer.
 type LineInserter interface {
 	SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell))
+}
+
+// LineOverlayer is an optional interface that transformers can implement
+// to receive a callback for setting overlay content on existing lines.
+type LineOverlayer interface {
+	SetOverlayFunc(fn func(lineIdx int64, cells []parser.Cell))
+}
+
+// LineSuppressor is an optional interface that transformers can implement
+// to consume a line, preventing further pipeline processing and scrollback
+// persistence. Used by buffering transformers like tablefmt.
+type LineSuppressor interface {
+	ShouldSuppress(lineIdx int64) bool
+}
+
+// LinePersistNotifier is an optional interface that transformers can implement
+// to receive a callback for notifying that lines are ready for persistence.
+// Used after setting overlay content on previously suppressed lines.
+type LinePersistNotifier interface {
+	SetPersistNotifyFunc(fn func(lineIdx int64))
 }
 
 // Config holds per-transformer configuration.
@@ -65,8 +87,10 @@ func Lookup(id string) (Factory, bool) {
 
 // Pipeline is an ordered chain of transformers.
 type Pipeline struct {
-	transformers []Transformer
-	insertFunc   func(beforeIdx int64, cells []parser.Cell)
+	transformers      []Transformer
+	insertFunc        func(beforeIdx int64, cells []parser.Cell)
+	overlayFunc       func(lineIdx int64, cells []parser.Cell)
+	persistNotifyFunc func(lineIdx int64)
 }
 
 // SetInsertFunc sets the line insertion callback. The pipeline forwards
@@ -80,17 +104,52 @@ func (p *Pipeline) SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell)) 
 	}
 }
 
-// HandleLine dispatches to each transformer in order.
-func (p *Pipeline) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) {
+// SetOverlayFunc sets the line overlay callback. The pipeline forwards
+// it to any transformer that implements LineOverlayer.
+func (p *Pipeline) SetOverlayFunc(fn func(lineIdx int64, cells []parser.Cell)) {
+	p.overlayFunc = fn
+	for _, t := range p.transformers {
+		if lo, ok := t.(LineOverlayer); ok {
+			lo.SetOverlayFunc(fn)
+		}
+	}
+}
+
+// SetPersistNotifyFunc sets the persistence notification callback.
+// The pipeline forwards it to any transformer that implements LinePersistNotifier.
+func (p *Pipeline) SetPersistNotifyFunc(fn func(lineIdx int64)) {
+	p.persistNotifyFunc = fn
+	for _, t := range p.transformers {
+		if pn, ok := t.(LinePersistNotifier); ok {
+			pn.SetPersistNotifyFunc(fn)
+		}
+	}
+}
+
+// HandleLine dispatches to each transformer in order. Returns true if a
+// transformer suppressed the line (via LineSuppressor), which signals
+// the caller to skip scrollback persistence for this line.
+func (p *Pipeline) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) bool {
 	for _, t := range p.transformers {
 		t.HandleLine(lineIdx, line, isCommand)
+		if sup, ok := t.(LineSuppressor); ok && sup.ShouldSuppress(lineIdx) {
+			return true
+		}
 	}
+	return false
 }
 
 // NotifyPromptStart dispatches to each transformer in order.
 func (p *Pipeline) NotifyPromptStart() {
 	for _, t := range p.transformers {
 		t.NotifyPromptStart()
+	}
+}
+
+// NotifyCommandStart dispatches the command string to each transformer.
+func (p *Pipeline) NotifyCommandStart(cmd string) {
+	for _, t := range p.transformers {
+		t.NotifyCommandStart(cmd)
 	}
 }
 

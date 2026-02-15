@@ -561,21 +561,35 @@ func (p *Page) rebuildLineDataCache() {
 	}
 }
 
-// encodeLineData serializes a LogicalLine to bytes.
-// Format: CellCount(4) + FixedWidth(4) + Cells(CellCount * 16)
+// encodeLineData serializes a LogicalLine to bytes (v2 format).
+// Format: Flags(1) + CellCount(4) + FixedWidth(4) + Cells(N*16) + [OverlayWidth(4) + OverlayCellCount(4) + OverlayCells(M*16)]
 func encodeLineData(line *LogicalLine) []byte {
+	var flags byte
+	if line.Overlay != nil {
+		flags |= 0x01
+	}
+	if line.Synthetic {
+		flags |= 0x02
+	}
+
 	cellCount := uint32(len(line.Cells))
-	size := 4 + 4 + int(cellCount)*PageCellSize
+	size := 1 + 4 + 4 + int(cellCount)*PageCellSize
+	if flags&0x01 != 0 {
+		size += 4 + 4 + len(line.Overlay)*PageCellSize
+	}
+
 	buf := make([]byte, size)
+	offset := 0
 
-	// CellCount (4 bytes)
-	binary.LittleEndian.PutUint32(buf[0:4], cellCount)
+	buf[offset] = flags
+	offset++
 
-	// FixedWidth (4 bytes)
-	binary.LittleEndian.PutUint32(buf[4:8], uint32(line.FixedWidth))
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], cellCount)
+	offset += 4
 
-	// Cells (CellCount * 16 bytes)
-	offset := 8
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(line.FixedWidth))
+	offset += 4
+
 	cellBuf := make([]byte, PageCellSize)
 	for _, cell := range line.Cells {
 		encodeCell(cell, cellBuf)
@@ -583,28 +597,52 @@ func encodeLineData(line *LogicalLine) []byte {
 		offset += PageCellSize
 	}
 
+	if flags&0x01 != 0 {
+		binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(line.OverlayWidth))
+		offset += 4
+
+		overlayCellCount := uint32(len(line.Overlay))
+		binary.LittleEndian.PutUint32(buf[offset:offset+4], overlayCellCount)
+		offset += 4
+
+		for _, cell := range line.Overlay {
+			encodeCell(cell, cellBuf)
+			copy(buf[offset:offset+PageCellSize], cellBuf)
+			offset += PageCellSize
+		}
+	}
+
 	return buf
 }
 
 // decodeLineData deserializes bytes to a LogicalLine.
+// Tries v2 format first, falls back to v1 for backward compatibility.
 func decodeLineData(data []byte) (*LogicalLine, error) {
 	if len(data) < 8 {
 		return nil, fmt.Errorf("line data too short: %d bytes", len(data))
 	}
 
-	// CellCount (4 bytes)
-	cellCount := binary.LittleEndian.Uint32(data[0:4])
-
-	// FixedWidth (4 bytes)
-	fixedWidth := binary.LittleEndian.Uint32(data[4:8])
-
-	// Validate data length
-	expectedSize := 8 + int(cellCount)*PageCellSize
-	if len(data) < expectedSize {
-		return nil, fmt.Errorf("line data truncated: expected %d, got %d", expectedSize, len(data))
+	if line, err := decodeLineDataV2(data); err == nil {
+		return line, nil
 	}
 
-	// Cells
+	return decodeLineDataV1(data)
+}
+
+// decodeLineDataV1 decodes the original format: CellCount(4) + FixedWidth(4) + Cells
+func decodeLineDataV1(data []byte) (*LogicalLine, error) {
+	if len(data) < 8 {
+		return nil, fmt.Errorf("v1 line data too short: %d bytes", len(data))
+	}
+
+	cellCount := binary.LittleEndian.Uint32(data[0:4])
+	fixedWidth := binary.LittleEndian.Uint32(data[4:8])
+
+	expectedSize := 8 + int(cellCount)*PageCellSize
+	if len(data) != expectedSize {
+		return nil, fmt.Errorf("v1 line data size mismatch: expected %d, got %d", expectedSize, len(data))
+	}
+
 	cells := make([]Cell, cellCount)
 	offset := 8
 	for i := uint32(0); i < cellCount; i++ {
@@ -618,7 +656,76 @@ func decodeLineData(data []byte) (*LogicalLine, error) {
 	}, nil
 }
 
-// lineDataSize calculates the serialized size of a LogicalLine.
+// decodeLineDataV2 decodes v2 format: Flags(1) + CellCount(4) + FixedWidth(4) + Cells + [Overlay]
+func decodeLineDataV2(data []byte) (*LogicalLine, error) {
+	if len(data) < 9 {
+		return nil, fmt.Errorf("v2 line data too short: %d bytes", len(data))
+	}
+
+	flags := data[0]
+	if flags & ^byte(0x03) != 0 {
+		return nil, fmt.Errorf("invalid v2 flags: 0x%02x", flags)
+	}
+
+	offset := 1
+	cellCount := binary.LittleEndian.Uint32(data[offset : offset+4])
+	offset += 4
+
+	fixedWidth := binary.LittleEndian.Uint32(data[offset : offset+4])
+	offset += 4
+
+	cellsEnd := offset + int(cellCount)*PageCellSize
+	if len(data) < cellsEnd {
+		return nil, fmt.Errorf("v2 cells truncated")
+	}
+
+	cells := make([]Cell, cellCount)
+	for i := uint32(0); i < cellCount; i++ {
+		cells[i] = decodeCell(data[offset : offset+PageCellSize])
+		offset += PageCellSize
+	}
+
+	line := &LogicalLine{
+		Cells:      cells,
+		FixedWidth: int(fixedWidth),
+		Synthetic:  flags&0x02 != 0,
+	}
+
+	if flags&0x01 != 0 {
+		if len(data) < offset+8 {
+			return nil, fmt.Errorf("v2 overlay header truncated")
+		}
+
+		line.OverlayWidth = int(binary.LittleEndian.Uint32(data[offset : offset+4]))
+		offset += 4
+
+		overlayCellCount := binary.LittleEndian.Uint32(data[offset : offset+4])
+		offset += 4
+
+		overlayEnd := offset + int(overlayCellCount)*PageCellSize
+		if len(data) < overlayEnd {
+			return nil, fmt.Errorf("v2 overlay cells truncated")
+		}
+
+		line.Overlay = make([]Cell, overlayCellCount)
+		for i := uint32(0); i < overlayCellCount; i++ {
+			line.Overlay[i] = decodeCell(data[offset : offset+PageCellSize])
+			offset += PageCellSize
+		}
+	}
+
+	if offset != len(data) {
+		return nil, fmt.Errorf("v2 size mismatch: consumed %d, data has %d", offset, len(data))
+	}
+
+	return line, nil
+}
+
+// lineDataSize calculates the serialized size of a LogicalLine (v2 format).
 func lineDataSize(line *LogicalLine) int {
-	return 4 + 4 + len(line.Cells)*PageCellSize
+	size := 1 + 4 + 4 + len(line.Cells)*PageCellSize
+	if line.Overlay != nil {
+		size += 4 + 4 + len(line.Overlay)*PageCellSize
+	}
+	return size
 }
