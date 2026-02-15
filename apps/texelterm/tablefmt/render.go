@@ -25,6 +25,7 @@ func renderTable(ts *tableStructure) [][]parser.Cell {
 	}
 
 	result = append(result, makeHBorder(colWidths, '╰', '┴', '╯', '─'))
+	classifyAndColorize(ts, result)
 	return result
 }
 
