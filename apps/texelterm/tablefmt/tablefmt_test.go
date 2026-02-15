@@ -425,3 +425,39 @@ func TestEndToEnd_LowConfidencePassThrough(t *testing.T) {
 		}
 	}
 }
+
+func TestConservativeHints_LowConfidence(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	// Lines with pipes that enter BUFFERING (pipeDetector compatible + candidate)
+	// but don't score above threshold (pipeDetector needs >= 2 lines, threshold 0.7).
+	// Single line with pipes is compatible but scores 0.
+	lines := []string{
+		"a | b | c",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(1, makeCells("$ "), false)
+
+	// Emitted lines should be the originals (no box-drawing)
+	for _, cells := range insertedLines {
+		for _, c := range cells {
+			if c.Rune == '╭' || c.Rune == '│' || c.Rune == '╰' {
+				t.Error("expected no box-drawing for low-confidence table")
+				return
+			}
+		}
+	}
+
+	// Lines should have been emitted (raw passthrough, not dropped)
+	if len(insertedLines) == 0 {
+		t.Error("expected raw lines to be emitted for low-confidence content")
+	}
+}
