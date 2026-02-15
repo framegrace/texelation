@@ -109,32 +109,21 @@ func (vw *ViewportWindow) Reader() ContentReader {
 // This is the primary rendering method. The grid is [height][width] cells.
 // Caches the result; subsequent calls return cached grid if content unchanged.
 func (vw *ViewportWindow) GetVisibleGrid() [][]Cell {
-	vw.mu.RLock()
-	startGlobal, endGlobal := vw.scroll.VisibleRange(vw.height)
-
-	// Try cache first (read-only check)
-	if physical := vw.cache.Get(startGlobal, endGlobal, vw.width); physical != nil {
-		grid := vw.physicalLinesToGrid(physical)
-		vw.mu.RUnlock()
-		return grid
-	}
-	vw.mu.RUnlock()
-
-	// Cache miss - need to rebuild with write lock
+	// Full lock required: VisibleRange calls ensureIndexValid which mutates
+	// the PhysicalLineIndex (Build, HandleAppend, ensurePrefixSum).
 	vw.mu.Lock()
 	defer vw.mu.Unlock()
 
-	// Double-check after acquiring write lock (another goroutine may have rebuilt)
-	startGlobal, endGlobal = vw.scroll.VisibleRange(vw.height)
+	startGlobal, endGlobal := vw.scroll.VisibleRange(vw.height)
+
+	// Try cache first
 	if physical := vw.cache.Get(startGlobal, endGlobal, vw.width); physical != nil {
 		return vw.physicalLinesToGrid(physical)
 	}
 
-	// Build physical lines
+	// Cache miss - rebuild
 	lines := vw.reader.GetLineRange(startGlobal, endGlobal)
 	physical := vw.builder.BuildRange(lines, startGlobal)
-
-	// Update cache
 	vw.cache.Set(startGlobal, endGlobal, vw.width, physical)
 
 	return vw.physicalLinesToGrid(physical)
@@ -222,8 +211,9 @@ func (vw *ViewportWindow) IsAtLiveEdge() bool {
 
 // CanScrollUp returns true if there's older content to scroll to.
 func (vw *ViewportWindow) CanScrollUp() bool {
-	vw.mu.RLock()
-	defer vw.mu.RUnlock()
+	// Full lock: CanScrollUp calls TotalPhysicalLines which mutates the index.
+	vw.mu.Lock()
+	defer vw.mu.Unlock()
 
 	return vw.scroll.CanScrollUp()
 }
@@ -255,8 +245,9 @@ func (vw *ViewportWindow) ScrollToOffset(offset int64) {
 
 // TotalPhysicalLines returns the total number of physical lines at current width.
 func (vw *ViewportWindow) TotalPhysicalLines() int64 {
-	vw.mu.RLock()
-	defer vw.mu.RUnlock()
+	// Full lock: TotalPhysicalLines calls ensureIndexValid which mutates the index.
+	vw.mu.Lock()
+	defer vw.mu.Unlock()
 
 	return vw.scroll.TotalPhysicalLines()
 }
@@ -316,8 +307,9 @@ func (vw *ViewportWindow) Builder() *PhysicalLineBuilder {
 // Returns (globalLineIdx, charOffset, ok).
 // ok is false if coordinates are out of bounds.
 func (vw *ViewportWindow) ViewportToContent(row, col int) (globalLineIdx int64, charOffset int, ok bool) {
-	vw.mu.RLock()
-	defer vw.mu.RUnlock()
+	// Full lock: ViewportToContent calls VisibleRange which mutates the index.
+	vw.mu.Lock()
+	defer vw.mu.Unlock()
 
 	return vw.coordinates.ViewportToContent(row, col, vw.height)
 }
@@ -326,8 +318,9 @@ func (vw *ViewportWindow) ViewportToContent(row, col int) (globalLineIdx int64, 
 // Returns (row, col, visible).
 // visible is false if the content is not currently on screen.
 func (vw *ViewportWindow) ContentToViewport(globalLineIdx int64, charOffset int) (row, col int, visible bool) {
-	vw.mu.RLock()
-	defer vw.mu.RUnlock()
+	// Full lock: ContentToViewport calls VisibleRange which mutates the index.
+	vw.mu.Lock()
+	defer vw.mu.Unlock()
 
 	return vw.coordinates.ContentToViewport(globalLineIdx, charOffset, vw.height)
 }
