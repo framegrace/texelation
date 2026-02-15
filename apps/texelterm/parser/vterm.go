@@ -83,7 +83,7 @@ type VTerm struct {
 	// OnLineCommit is called when a line is committed (line feed during normal
 	// shell operation). Used by output transformers to colorize lines before
 	// they enter scrollback. Called after cache invalidation, before persistence.
-	OnLineCommit func(lineIdx int64, line *LogicalLine, isCommand bool)
+	OnLineCommit func(lineIdx int64, line *LogicalLine, isCommand bool) bool
 	// commitInsertOffset tracks lines inserted by OnLineCommit callbacks via
 	// RequestLineInsert. After the callback, currentGlobal is adjusted.
 	commitInsertOffset int64
@@ -1252,7 +1252,7 @@ func WithClipboardGetHandler(handler func() []byte) Option {
 // line index, the logical line (mutable), and whether a command is currently
 // active (from OSC 133 shell integration). This is the hook point for inline
 // output transformers like txfmt.
-func WithLineCommitHandler(handler func(int64, *LogicalLine, bool)) Option {
+func WithLineCommitHandler(handler func(int64, *LogicalLine, bool) bool) Option {
 	return func(v *VTerm) { v.OnLineCommit = handler }
 }
 

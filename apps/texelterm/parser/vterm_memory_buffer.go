@@ -607,7 +607,12 @@ func (v *VTerm) memoryBufferLineFeed() {
 	if v.OnLineCommit != nil {
 		v.commitInsertOffset = 0
 		if line := v.memBufState.memBuf.GetLine(currentGlobal); line != nil {
-			v.OnLineCommit(currentGlobal, line, v.CommandActive)
+			if v.OnLineCommit(currentGlobal, line, v.CommandActive) {
+				// Line suppressed by transformer — clear it so it doesn't
+				// enter scrollback with stale content.
+				line.Clear()
+				return
+			}
 		}
 		// Adjust for any lines inserted by the callback via RequestLineInsert.
 		currentGlobal += v.commitInsertOffset

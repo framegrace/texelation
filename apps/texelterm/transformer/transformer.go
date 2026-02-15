@@ -29,6 +29,13 @@ type LineInserter interface {
 	SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell))
 }
 
+// LineSuppressor is an optional interface that transformers can implement
+// to consume a line, preventing further pipeline processing and scrollback
+// persistence. Used by buffering transformers like tablefmt.
+type LineSuppressor interface {
+	ShouldSuppress(lineIdx int64) bool
+}
+
 // Config holds per-transformer configuration.
 type Config map[string]interface{}
 
@@ -80,11 +87,17 @@ func (p *Pipeline) SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell)) 
 	}
 }
 
-// HandleLine dispatches to each transformer in order.
-func (p *Pipeline) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) {
+// HandleLine dispatches to each transformer in order. Returns true if a
+// transformer suppressed the line (via LineSuppressor), which signals
+// the caller to skip scrollback persistence for this line.
+func (p *Pipeline) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) bool {
 	for _, t := range p.transformers {
 		t.HandleLine(lineIdx, line, isCommand)
+		if sup, ok := t.(LineSuppressor); ok && sup.ShouldSuppress(lineIdx) {
+			return true
+		}
 	}
+	return false
 }
 
 // NotifyPromptStart dispatches to each transformer in order.

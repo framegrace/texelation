@@ -85,8 +85,11 @@ func TestPipelineHandleLine(t *testing.T) {
 	p := &Pipeline{transformers: []Transformer{s1, s2}}
 
 	line := &parser.LogicalLine{}
-	p.HandleLine(42, line, true)
+	suppressed := p.HandleLine(42, line, true)
 
+	if suppressed {
+		t.Error("expected no suppression from plain stub transformers")
+	}
 	if s1.handleCalls != 1 || s2.handleCalls != 1 {
 		t.Errorf("expected 1 call each, got s1=%d s2=%d", s1.handleCalls, s2.handleCalls)
 	}
@@ -234,6 +237,39 @@ func TestBuildPipelinePassesConfig(t *testing.T) {
 	}
 	if _, ok := receivedCfg["enabled"]; ok {
 		t.Error("config should not contain 'enabled' key")
+	}
+}
+
+// suppressingTransformer suppresses even-numbered lines.
+type suppressingTransformer struct {
+	stubTransformer
+}
+
+func (s *suppressingTransformer) ShouldSuppress(lineIdx int64) bool {
+	return lineIdx%2 == 0
+}
+
+func TestPipelineSuppression(t *testing.T) {
+	sup := &suppressingTransformer{}
+	after := &stubTransformer{id: "after"}
+	p := &Pipeline{transformers: []Transformer{sup, after}}
+
+	line := &parser.LogicalLine{}
+
+	suppressed := p.HandleLine(0, line, true)
+	if !suppressed {
+		t.Error("expected suppressed for even lineIdx")
+	}
+	if after.handleCalls != 0 {
+		t.Error("expected 'after' to not be called for suppressed line")
+	}
+
+	suppressed = p.HandleLine(1, line, true)
+	if suppressed {
+		t.Error("expected not suppressed for odd lineIdx")
+	}
+	if after.handleCalls != 1 {
+		t.Errorf("expected 'after' called once, got %d", after.handleCalls)
 	}
 }
 
