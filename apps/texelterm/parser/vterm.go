@@ -1289,6 +1289,8 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 
 // RequestLineOverlay sets overlay content on an existing line without modifying
 // the original Cells. Used by transformers to provide formatted views.
+// The cells slice is cloned defensively to prevent data races with background
+// persistence goroutines.
 func (v *VTerm) RequestLineOverlay(lineIdx int64, cells []Cell) {
 	if !v.IsMemoryBufferEnabled() {
 		return
@@ -1297,7 +1299,8 @@ func (v *VTerm) RequestLineOverlay(lineIdx int64, cells []Cell) {
 	if line == nil {
 		return
 	}
-	line.Overlay = cells
+	line.Overlay = make([]Cell, len(cells))
+	copy(line.Overlay, cells)
 	line.OverlayWidth = len(cells)
 }
 

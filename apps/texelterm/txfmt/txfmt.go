@@ -611,6 +611,9 @@ func (f *Formatter) insertModeIndicator(beforeIdx int64, label string) {
 // colorizeLogCells applies log/YAML colorization using regex matching on the
 // plain text, then maps matched ranges back to cell indices.
 func colorizeLogCells(line *parser.LogicalLine) {
+	if line.Overlay == nil {
+		prepareOverlay(line)
+	}
 	cells := line.Overlay
 	if len(cells) == 0 {
 		return

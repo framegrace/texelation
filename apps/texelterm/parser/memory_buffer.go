@@ -511,6 +511,9 @@ func (mb *MemoryBuffer) setLineLocked(globalIdx int64, line *LogicalLine) bool {
 			existing.Overlay = make([]Cell, len(line.Overlay))
 			copy(existing.Overlay, line.Overlay)
 			existing.OverlayWidth = line.OverlayWidth
+		} else {
+			existing.Overlay = nil
+			existing.OverlayWidth = 0
 		}
 		existing.Synthetic = line.Synthetic
 	}

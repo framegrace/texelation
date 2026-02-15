@@ -611,6 +611,15 @@ func (v *VTerm) memoryBufferLineFeed() {
 				// Line is being buffered by a transformer.
 				// Original Cells stay intact. Persistence is deferred
 				// until the transformer flushes and calls persistNotifyFunc.
+				//
+				// Contract: a suppressing transformer must NOT also call
+				// RequestLineInsert in the same callback. The insert offset
+				// adjustment below is skipped intentionally because the line
+				// hasn't been committed to scrollback yet.
+				//
+				// liveEdgeBase advancement and NotifyWriteWithMeta are also
+				// skipped — the transformer is responsible for calling
+				// NotifyLinePersist when it flushes the buffered line.
 				return
 			}
 		}
