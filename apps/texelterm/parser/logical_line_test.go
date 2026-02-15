@@ -434,6 +434,58 @@ func TestLogicalLine_Clone_PreservesFixedWidth(t *testing.T) {
 	}
 }
 
+// --- Overlay Tests ---
+
+func TestLogicalLine_OverlayFields(t *testing.T) {
+	line := NewLogicalLine()
+	if line.Overlay != nil {
+		t.Error("new line should have nil Overlay")
+	}
+	if line.OverlayWidth != 0 {
+		t.Error("new line should have zero OverlayWidth")
+	}
+	if line.Synthetic {
+		t.Error("new line should not be Synthetic")
+	}
+}
+
+func TestLogicalLine_CloneWithOverlay(t *testing.T) {
+	line := NewLogicalLineFromCells(makeCells("original"))
+	line.Overlay = []Cell{
+		{Rune: 'F', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'M', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'T', FG: DefaultFG, BG: DefaultBG},
+	}
+	line.OverlayWidth = 80
+	line.Synthetic = true
+
+	clone := line.Clone()
+
+	if len(clone.Overlay) != 3 {
+		t.Fatalf("expected overlay len 3, got %d", len(clone.Overlay))
+	}
+	if clone.OverlayWidth != 80 {
+		t.Errorf("expected OverlayWidth 80, got %d", clone.OverlayWidth)
+	}
+	if !clone.Synthetic {
+		t.Error("expected Synthetic=true on clone")
+	}
+
+	// Verify no aliasing
+	clone.Overlay[0].Rune = 'X'
+	if line.Overlay[0].Rune != 'F' {
+		t.Error("overlay should be deep-copied, not aliased")
+	}
+}
+
+func TestLogicalLine_CloneNilOverlay(t *testing.T) {
+	line := NewLogicalLineFromCells(makeCells("no overlay"))
+	clone := line.Clone()
+	if clone.Overlay != nil {
+		t.Error("clone of line without overlay should have nil Overlay")
+	}
+}
+
 // Helper to create cells from a string
 func makeCells(s string) []Cell {
 	cells := make([]Cell, len(s))
