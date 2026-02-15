@@ -290,6 +290,9 @@ func (vw *ViewportWindow) SetShowOverlay(show bool) {
 	}
 	vw.builder.SetShowOverlay(show)
 	vw.scroll.InvalidateIndex()
+	// Clamp scroll offset: total physical lines changed (synthetic lines
+	// appear/disappear), so the current offset may exceed the new max.
+	vw.scroll.ClampOffset()
 	vw.cache.Invalidate()
 }
 
