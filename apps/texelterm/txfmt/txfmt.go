@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 	enry "github.com/go-enry/go-enry/v2"
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/apps/texelterm/transformer"
@@ -69,6 +70,7 @@ type Formatter struct {
 	det                 detector
 	wasCommand          bool
 	hasShellIntegration bool
+	currentCommand      string
 	backlog             []*backlogEntry       // lines buffered during detection
 	style               *chroma.Style
 	chromaContext        []string              // previous lines kept as lexer context
@@ -106,6 +108,11 @@ func (f *Formatter) NotifyPromptStart() {
 	f.hasShellIntegration = true
 }
 
+// NotifyCommandStart records the current command for filename-based detection.
+func (f *Formatter) NotifyCommandStart(cmd string) {
+	f.currentCommand = cmd
+}
+
 // prepareOverlay clones Cells into Overlay so colorization modifies the copy.
 func prepareOverlay(line *parser.LogicalLine) {
 	if line.Overlay != nil {
@@ -129,6 +136,7 @@ func (f *Formatter) HandleLine(lineIdx int64, line *parser.LogicalLine, isComman
 		f.chromaContext = f.chromaContext[:0]
 		f.codeLexer = ""
 		f.codeLexerMethod = ""
+		f.currentCommand = ""
 	}
 	f.wasCommand = effectiveIsCommand
 
@@ -182,12 +190,18 @@ func (f *Formatter) recolorizeBacklog(m mode) {
 	}
 
 	if lexName, ok := chromaLexerName[m]; ok {
-		// For modeCode, infer the specific language from sample content.
+		// For modeCode, try filename from command first, then infer from content.
 		if m == modeCode {
-			result := inferLanguage(f.det.sampleLines)
-			lexName = result.name
-			f.codeLexer = result.name
-			f.codeLexerMethod = result.method
+			if name := f.lexerFromCommand(); name != "" {
+				lexName = name
+				f.codeLexer = name
+				f.codeLexerMethod = "filename"
+			} else {
+				result := inferLanguage(f.det.sampleLines)
+				lexName = result.name
+				f.codeLexer = result.name
+				f.codeLexerMethod = result.method
+			}
 		}
 		// Batch tokenize all backlog lines together for full context.
 		chromaColorizeLines(lines, lexName, f.style)
@@ -320,6 +334,45 @@ func (f *Formatter) colorize(line *parser.LogicalLine, m mode) {
 			f.chromaContext = f.chromaContext[len(f.chromaContext)-maxChromaContext:]
 		}
 	}
+}
+
+// fileArgsFromCommand extracts non-flag arguments from a shell command string,
+// skipping env vars (FOO=bar), prefix commands (sudo, env, etc.), and flags (-x).
+func fileArgsFromCommand(cmd string) []string {
+	fields := strings.Fields(cmd)
+	var args []string
+	pastCommand := false
+	for _, f := range fields {
+		if !pastCommand {
+			if strings.Contains(f, "=") {
+				continue
+			}
+			switch f {
+			case "sudo", "env", "nice", "nohup", "time", "command":
+				continue
+			}
+			pastCommand = true
+			continue // skip the command itself
+		}
+		if strings.HasPrefix(f, "-") {
+			continue
+		}
+		args = append(args, f)
+	}
+	return args
+}
+
+// lexerFromCommand tries to match a Chroma lexer from filenames in the command.
+func (f *Formatter) lexerFromCommand() string {
+	if f.currentCommand == "" {
+		return ""
+	}
+	for _, arg := range fileArgsFromCommand(f.currentCommand) {
+		if l := lexers.Match(arg); l != nil {
+			return l.Config().Name
+		}
+	}
+	return ""
 }
 
 // ─── Detector ───────────────────────────────────────────────────────────────

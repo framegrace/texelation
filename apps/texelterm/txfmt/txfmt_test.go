@@ -538,6 +538,137 @@ func TestColorize_Markdown_MultiLine(t *testing.T) {
 	}
 }
 
+func TestFileArgsFromCommand(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want []string
+	}{
+		{"cat foo.go", []string{"foo.go"}},
+		{"sudo cat foo.go", []string{"foo.go"}},
+		{"FOO=bar cat foo.go", []string{"foo.go"}},
+		{"cat -n foo.go", []string{"foo.go"}},
+		{"cat -n -v foo.go bar.py", []string{"foo.go", "bar.py"}},
+		{"head -20 file.txt", []string{"file.txt"}},
+		{"ls -la", nil},
+		{"", nil},
+		{"env VAR=1 sudo cat --number foo.go", []string{"foo.go"}},
+	}
+	for _, tt := range tests {
+		got := fileArgsFromCommand(tt.cmd)
+		if len(got) != len(tt.want) {
+			t.Errorf("fileArgsFromCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("fileArgsFromCommand(%q)[%d] = %q, want %q", tt.cmd, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
+func TestLexerFromCommand_GoFile(t *testing.T) {
+	f := New("")
+	f.currentCommand = "cat foo.go"
+	name := f.lexerFromCommand()
+	if name != "Go" {
+		t.Errorf("expected Go lexer, got %q", name)
+	}
+}
+
+func TestLexerFromCommand_PythonFile(t *testing.T) {
+	f := New("")
+	f.currentCommand = "cat script.py"
+	name := f.lexerFromCommand()
+	if name != "Python" {
+		t.Errorf("expected Python lexer, got %q", name)
+	}
+}
+
+func TestLexerFromCommand_NoFile(t *testing.T) {
+	f := New("")
+	f.currentCommand = "ls -la"
+	name := f.lexerFromCommand()
+	if name != "" {
+		t.Errorf("expected empty lexer for ls, got %q", name)
+	}
+}
+
+func TestLexerFromCommand_EmptyCommand(t *testing.T) {
+	f := New("")
+	f.currentCommand = ""
+	name := f.lexerFromCommand()
+	if name != "" {
+		t.Errorf("expected empty lexer for empty command, got %q", name)
+	}
+}
+
+func TestNotifyCommandStart_LanguageDetection(t *testing.T) {
+	f := New("")
+	f.NotifyPromptStart()
+
+	var insertedCells []parser.Cell
+	f.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedCells = cells
+	})
+
+	// Set command to cat foo.py — filename-based detection should win.
+	f.NotifyCommandStart("cat foo.py")
+
+	// Feed Python content.
+	lines := []string{
+		"import os",
+		"class MyApp:",
+		"    def run(self):",
+		"        pass",
+	}
+	for i, code := range lines {
+		f.HandleLine(int64(i), makeCells(code), true)
+	}
+
+	if !f.det.locked {
+		t.Fatal("expected detector to lock on code")
+	}
+	if f.codeLexer != "Python" {
+		t.Errorf("expected codeLexer='Python', got %q", f.codeLexer)
+	}
+	if f.codeLexerMethod != "filename" {
+		t.Errorf("expected codeLexerMethod='filename', got %q", f.codeLexerMethod)
+	}
+
+	// Indicator should mention Python (filename).
+	if insertedCells == nil {
+		t.Fatal("expected indicator line to be inserted")
+	}
+	tag := " auto-color as: Python (filename) "
+	tagRunes := []rune(tag)
+	if len(insertedCells) != len(tagRunes) {
+		got := make([]rune, len(insertedCells))
+		for i, c := range insertedCells {
+			got[i] = c.Rune
+		}
+		t.Fatalf("indicator: expected %q, got %q", tag, string(got))
+	}
+}
+
+func TestNotifyCommandStart_ResetOnPrompt(t *testing.T) {
+	f := New("")
+	f.NotifyPromptStart()
+	f.NotifyCommandStart("cat foo.go")
+
+	if f.currentCommand != "cat foo.go" {
+		t.Errorf("expected currentCommand='cat foo.go', got %q", f.currentCommand)
+	}
+
+	// Feed a command line then a prompt to trigger transition.
+	f.HandleLine(0, makeCells("some text"), true)
+	f.HandleLine(1, makeCells("$ "), false)
+
+	if f.currentCommand != "" {
+		t.Errorf("expected currentCommand cleared on prompt, got %q", f.currentCommand)
+	}
+}
+
 func TestRuneIndex(t *testing.T) {
 	tests := []struct {
 		s       string

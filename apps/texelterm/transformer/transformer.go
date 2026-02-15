@@ -21,6 +21,8 @@ type Transformer interface {
 	HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool)
 	// NotifyPromptStart signals that shell integration is active.
 	NotifyPromptStart()
+	// NotifyCommandStart signals the start of a new command from OSC 133;C.
+	NotifyCommandStart(cmd string)
 }
 
 // LineInserter is an optional interface that transformers can implement
@@ -141,6 +143,13 @@ func (p *Pipeline) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand
 func (p *Pipeline) NotifyPromptStart() {
 	for _, t := range p.transformers {
 		t.NotifyPromptStart()
+	}
+}
+
+// NotifyCommandStart dispatches the command string to each transformer.
+func (p *Pipeline) NotifyCommandStart(cmd string) {
+	for _, t := range p.transformers {
+		t.NotifyCommandStart(cmd)
 	}
 }
 

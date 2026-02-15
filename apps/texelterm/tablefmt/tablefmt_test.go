@@ -426,6 +426,139 @@ func TestEndToEnd_LowConfidencePassThrough(t *testing.T) {
 	}
 }
 
+func TestBaseCommand(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"cat foo", "cat"},
+		{"sudo cat foo", "cat"},
+		{"FOO=bar cat foo", "cat"},
+		{"/usr/bin/cat foo", "cat"},
+		{"sudo FOO=bar /usr/bin/cat foo", "cat"},
+		{"env VAR=1 nice cat foo", "cat"},
+		{"nohup time command cat foo", "cat"},
+		{"ls -la", "ls"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := baseCommand(tt.input)
+		if got != tt.want {
+			t.Errorf("baseCommand(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestCommandHint_FileViewerSkipsSpaceAligned(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	tf.NotifyCommandStart("cat foo.go")
+
+	// Space-aligned table-like content from source code.
+	lines := []string{
+		"NAME                 STATUS    AGE     VERSION",
+		"nginx-pod            Running   5d      1.21.0",
+		"redis-pod            Running   3d      7.0.5",
+		"postgres-pod         Running   10d     15.2",
+	}
+	suppressed := false
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+		if tf.ShouldSuppress(int64(i)) {
+			suppressed = true
+		}
+	}
+	if suppressed {
+		t.Error("expected no suppression for space-aligned content when command is 'cat'")
+	}
+}
+
+func TestCommandHint_LsLR_MultipleTables(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	tf.NotifyCommandStart("ls -lR")
+
+	var overlaid []int64
+	tf.SetOverlayFunc(func(lineIdx int64, _ []parser.Cell) { overlaid = append(overlaid, lineIdx) })
+	var inserted int
+	tf.SetInsertFunc(func(_ int64, _ []parser.Cell) { inserted++ })
+	var persisted []int64
+	tf.SetPersistNotifyFunc(func(lineIdx int64) { persisted = append(persisted, lineIdx) })
+
+	// ls -lR output: directory header, total, file rows, blank, next dir header...
+	lines := []struct {
+		text string
+		cmd  bool
+	}{
+		{"./apps:", true},
+		{"total 24", true},
+		{"drwxr-xr-x.  2 marc marc 4096 Jan  6 20:34 clock", true},
+		{"drwxr-xr-x.  2 marc marc 4096 Jan  6 20:34 configeditor", true},
+		{"drwxr-xr-x.  8 marc marc 4096 Feb 15 20:04 texelterm", true},
+		{"", true},
+		// Directory header should break the first table
+		{"./apps/clock:", true},
+		{"total 8", true},
+		{"-rw-r--r--. 1 marc marc 2762 Jan  6 20:34 clock.go", true},
+		{"-rw-r--r--. 1 marc marc  285 Jan  6 12:06 clock_test.go", true},
+		// Prompt flushes second table
+		{"$ ", false},
+	}
+
+	for i, l := range lines {
+		tf.HandleLine(int64(i), makeCells(l.text), l.cmd)
+	}
+
+	// "drwxr-xr-x" lines should have been buffered and flushed as tables.
+	// "./apps:" and "total 24" are too short / no double-space → pass through.
+	// "./apps/clock:" has no double-space → breaks first table → pass through.
+	if len(overlaid)+inserted == 0 {
+		t.Fatal("expected at least some table formatting output")
+	}
+	t.Logf("overlaid=%d inserts=%d persisted=%d", len(overlaid), inserted, len(persisted))
+}
+
+func TestCommandHint_NonFileViewerStillDetects(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	tf.NotifyCommandStart("kubectl get pods")
+
+	lines := []string{
+		"NAME                 STATUS    AGE     VERSION",
+		"nginx-pod            Running   5d      1.21.0",
+		"redis-pod            Running   3d      7.0.5",
+		"postgres-pod         Running   10d     15.2",
+	}
+	suppressed := false
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+		if tf.ShouldSuppress(int64(i)) {
+			suppressed = true
+		}
+	}
+	if !suppressed {
+		t.Error("expected space-aligned suppression for non-file-viewer command")
+	}
+}
+
+func TestCommandHint_ResetOnPrompt(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	tf.NotifyCommandStart("cat foo.go")
+
+	if tf.currentCommand != "cat foo.go" {
+		t.Errorf("expected currentCommand='cat foo.go', got %q", tf.currentCommand)
+	}
+
+	// Feed a command line then a prompt to trigger transition.
+	tf.HandleLine(0, makeCells("some text"), true)
+	tf.HandleLine(1, makeCells("$ "), false)
+
+	if tf.currentCommand != "" {
+		t.Errorf("expected currentCommand cleared on prompt, got %q", tf.currentCommand)
+	}
+}
+
 func TestConservativeHints_LowConfidence(t *testing.T) {
 	tf := New(1000)
 	tf.NotifyPromptStart()

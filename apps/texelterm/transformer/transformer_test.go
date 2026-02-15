@@ -13,8 +13,10 @@ type stubTransformer struct {
 	id            string
 	handleCalls   int64
 	promptCalls   int64
+	commandCalls  int64
 	lastLineIdx   int64
 	lastIsCommand bool
+	lastCommand   string
 }
 
 func (s *stubTransformer) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) {
@@ -25,6 +27,11 @@ func (s *stubTransformer) HandleLine(lineIdx int64, line *parser.LogicalLine, is
 
 func (s *stubTransformer) NotifyPromptStart() {
 	atomic.AddInt64(&s.promptCalls, 1)
+}
+
+func (s *stubTransformer) NotifyCommandStart(cmd string) {
+	atomic.AddInt64(&s.commandCalls, 1)
+	s.lastCommand = cmd
 }
 
 func TestRegisterAndLookup(t *testing.T) {
@@ -270,6 +277,21 @@ func TestPipelineSuppression(t *testing.T) {
 	}
 	if after.handleCalls != 1 {
 		t.Errorf("expected 'after' called once, got %d", after.handleCalls)
+	}
+}
+
+func TestPipelineNotifyCommandStart(t *testing.T) {
+	s1 := &stubTransformer{id: "a"}
+	s2 := &stubTransformer{id: "b"}
+	p := &Pipeline{transformers: []Transformer{s1, s2}}
+
+	p.NotifyCommandStart("cat foo.go")
+
+	if s1.commandCalls != 1 || s2.commandCalls != 1 {
+		t.Errorf("expected 1 command call each, got s1=%d s2=%d", s1.commandCalls, s2.commandCalls)
+	}
+	if s1.lastCommand != "cat foo.go" || s2.lastCommand != "cat foo.go" {
+		t.Errorf("expected lastCommand='cat foo.go', got s1=%q s2=%q", s1.lastCommand, s2.lastCommand)
 	}
 }
 

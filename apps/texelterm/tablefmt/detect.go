@@ -379,10 +379,12 @@ func (d *spaceAlignedDetector) Score(lines []string) float64 {
 }
 
 // Compatible returns true if the line could be part of a space-aligned table.
-// Rejects short lines and lines that look like source code (braces, keywords).
-// This stops buffering at code lines like "}", "func Foo() {", etc. while
-// allowing legitimate table rows that may lack double-space gaps due to wide
-// column values (e.g., ls -l with large file sizes).
+// Requires either a double-space gap or enough space-separated fields to be a
+// plausible multi-column row. This breaks buffering on non-table lines like
+// directory headers ("./apps/clock:") or summary lines ("total 24") in ls -lR
+// output, enabling each directory listing to be detected as a separate table,
+// while still accepting rows where wide values collapse all gaps to single
+// spaces (e.g., ls -l with large file sizes).
 func (d *spaceAlignedDetector) Compatible(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	if len(trimmed) == 0 {
@@ -391,7 +393,16 @@ func (d *spaceAlignedDetector) Compatible(line string) bool {
 	if len(trimmed) < 10 {
 		return false // too short for a table row
 	}
-	return !looksLikeCode(trimmed)
+	if looksLikeCode(trimmed) {
+		return false
+	}
+	// Double-space gap is the standard signal for column separation.
+	if strings.Contains(trimmed, "  ") {
+		return true
+	}
+	// Fallback: rows with wide values may lose all double-space gaps but
+	// still have many single-space-separated fields (e.g., 9 in ls -l).
+	return len(strings.Fields(trimmed)) >= 4
 }
 
 // Parse extracts a tableStructure from space-aligned lines.

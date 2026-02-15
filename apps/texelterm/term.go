@@ -1404,6 +1404,15 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		pipeline.SetInsertFunc(a.vterm.RequestLineInsert)
 		pipeline.SetOverlayFunc(a.vterm.RequestLineOverlay)
 		pipeline.SetPersistNotifyFunc(a.vterm.NotifyLinePersist)
+
+		// Forward command start to the pipeline for command-aware detection.
+		origHandler := a.vterm.OnCommandStart
+		a.vterm.OnCommandStart = func(cmd string) {
+			if origHandler != nil {
+				origHandler(cmd)
+			}
+			pipeline.NotifyCommandStart(cmd)
+		}
 	}
 
 	a.parser = parser.NewParser(a.vterm)

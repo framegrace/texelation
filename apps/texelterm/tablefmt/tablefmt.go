@@ -8,6 +8,7 @@
 package tablefmt
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
@@ -65,6 +66,7 @@ type TableFormatter struct {
 	suppressed          bool
 	wasCommand          bool
 	hasShellIntegration bool
+	currentCommand      string
 	insertFunc          func(beforeIdx int64, cells []parser.Cell)
 	overlayFunc         func(lineIdx int64, cells []parser.Cell)
 	persistNotifyFunc   func(lineIdx int64)
@@ -105,6 +107,11 @@ func (tf *TableFormatter) NotifyPromptStart() {
 	tf.hasShellIntegration = true
 }
 
+// NotifyCommandStart records the current command for detection hints.
+func (tf *TableFormatter) NotifyCommandStart(cmd string) {
+	tf.currentCommand = cmd
+}
+
 // HandleLine processes a committed line. It tracks command/prompt transitions
 // to know when output starts and ends.
 func (tf *TableFormatter) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) {
@@ -114,6 +121,7 @@ func (tf *TableFormatter) HandleLine(lineIdx int64, line *parser.LogicalLine, is
 	// Command-to-prompt transition: flush any buffered table.
 	if tf.wasCommand && !effectiveIsCommand {
 		tf.flush()
+		tf.currentCommand = ""
 	}
 	tf.wasCommand = effectiveIsCommand
 
@@ -139,7 +147,13 @@ func (tf *TableFormatter) handleScanning(lineIdx int64, line *parser.LogicalLine
 		return
 	}
 
+	skipSpaceAligned := tf.isFileViewerCommand()
 	for _, dt := range tf.detectors {
+		if skipSpaceAligned {
+			if _, ok := dt.detector.(*spaceAlignedDetector); ok {
+				continue
+			}
+		}
 		if dt.detector.Compatible(text) && looksLikeTableCandidate(text, dt.detector) {
 			tf.state = stateBuffering
 			tf.activeDetector = dt.detector
@@ -233,6 +247,10 @@ func (tf *TableFormatter) flush() {
 	if bestDetector != nil {
 		ts := bestDetector.Parse(lines)
 		if ts != nil {
+			ts.originalCells = make([][]parser.Cell, len(tf.buffer))
+			for i, bl := range tf.buffer {
+				ts.originalCells[i] = bl.line.Cells
+			}
 			rendered := renderTable(ts)
 			if rendered != nil {
 				tf.emitRendered(rendered)
@@ -293,6 +311,39 @@ func (tf *TableFormatter) resetState() {
 			cd.detectedCount = 0
 		}
 	}
+}
+
+// baseCommand extracts the base command name from a shell command string,
+// skipping env vars (FOO=bar), prefix commands (sudo, env, etc.), and
+// path prefixes (/usr/bin/cat → cat).
+func baseCommand(cmd string) string {
+	for _, field := range strings.Fields(cmd) {
+		if strings.Contains(field, "=") {
+			continue
+		}
+		switch field {
+		case "sudo", "env", "nice", "nohup", "time", "command":
+			continue
+		}
+		return filepath.Base(field)
+	}
+	return ""
+}
+
+// fileViewerCommands is the set of commands whose output should not be
+// treated as space-aligned tables. File viewers produce source code that
+// triggers false positives from aligned struct fields and indentation.
+var fileViewerCommands = map[string]bool{
+	"cat": true, "bat": true, "head": true, "tail": true,
+	"less": true, "more": true, "tac": true, "nl": true,
+}
+
+// isFileViewerCommand returns true if the current command is a file viewer.
+func (tf *TableFormatter) isFileViewerCommand() bool {
+	if tf.currentCommand == "" {
+		return false
+	}
+	return fileViewerCommands[baseCommand(tf.currentCommand)]
 }
 
 // extractPlainText returns the rune content of a logical line as a string.
