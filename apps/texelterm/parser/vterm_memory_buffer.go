@@ -434,6 +434,14 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 
 	// Repair state after crash: trim blank tail lines that were never synced.
 	v.trimBlankTailLines()
+
+	// Reset terminal drawing state to theme defaults after history reload.
+	// Without this, currentFG/currentBG could be left in an unexpected state,
+	// making new shell output invisible. The shell will re-emit its own
+	// colors on the first prompt.
+	v.currentFG = DefaultFG
+	v.currentBG = DefaultBG
+	v.currentAttr = 0
 }
 
 // trimBlankTailLines scans backward from liveEdgeBase and clamps it to the

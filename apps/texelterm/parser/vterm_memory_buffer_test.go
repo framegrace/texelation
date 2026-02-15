@@ -3740,3 +3740,53 @@ func TestLoadHistory_TrimsBlankTailLines(t *testing.T) {
 			v.memBufState.liveEdgeBase)
 	}
 }
+
+// TestLoadHistory_ResetsTerminalColors verifies that after reloading history
+// from disk, currentFG/currentBG are reset to DefaultFG/DefaultBG (not
+// zero-value Color{} which renders as black, making new shell output invisible).
+func TestLoadHistory_ResetsTerminalColors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	diskPath := tmpDir + "/test_color_reset.hist3"
+	terminalID := "test-color-reset"
+
+	// Session 1: Write some content then close
+	{
+		v := NewVTerm(80, 24, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("EnableMemoryBufferWithDisk failed: %v", err)
+		}
+		p := NewParser(v)
+		parseString(p, "Hello from session 1\r\n")
+		v.CloseMemoryBuffer()
+	}
+
+	// Session 2: Reopen and verify terminal drawing colors are reset
+	{
+		v := NewVTerm(80, 24, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("EnableMemoryBufferWithDisk (reload) failed: %v", err)
+		}
+		defer v.CloseMemoryBuffer()
+
+		// After reload, currentFG/currentBG should be DefaultFG/DefaultBG
+		// (not zero-value Color{} which renders as black)
+		if v.currentFG != DefaultFG {
+			t.Errorf("currentFG after reload: got %v, want DefaultFG (%v)", v.currentFG, DefaultFG)
+		}
+		if v.currentBG != DefaultBG {
+			t.Errorf("currentBG after reload: got %v, want DefaultBG (%v)", v.currentBG, DefaultBG)
+		}
+		if v.currentAttr != 0 {
+			t.Errorf("currentAttr after reload: got %v, want 0", v.currentAttr)
+		}
+	}
+}
