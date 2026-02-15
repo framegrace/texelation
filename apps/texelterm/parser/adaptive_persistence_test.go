@@ -851,6 +851,87 @@ func BenchmarkAdaptivePersistence_NotifyWrite(b *testing.B) {
 	}
 }
 
+func TestAdaptivePersistence_FlushSyncsWAL(t *testing.T) {
+	tmpDir := t.TempDir()
+	walConfig := DefaultWALConfig(tmpDir, "test-flush-sync")
+	walConfig.CheckpointInterval = 0
+
+	wal, err := OpenWriteAheadLog(walConfig)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog failed: %v", err)
+	}
+
+	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
+	mb.EnsureLine(0)
+	line := mb.GetLine(0)
+	line.Cells = []Cell{{Rune: 'X'}}
+
+	config := DefaultAdaptivePersistenceConfig()
+	ap, err := newAdaptivePersistenceWithWAL(config, mb, wal, time.Now)
+	if err != nil {
+		t.Fatalf("failed to create AdaptivePersistence: %v", err)
+	}
+	defer ap.Close()
+
+	// Notify a write and flush
+	ap.NotifyWrite(0)
+	if err := ap.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	// After flush, the WAL file should have content beyond just the header (32 bytes)
+	walPath := wal.WALPath()
+	info, err := os.Stat(walPath)
+	if err != nil {
+		t.Fatalf("WAL file stat failed: %v", err)
+	}
+	if info.Size() <= 32 {
+		t.Errorf("WAL file too small after flush+sync: %d bytes (expected > 32)", info.Size())
+	}
+}
+
+func TestAdaptivePersistence_CloseSyncsBeforeWALClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	walConfig := DefaultWALConfig(tmpDir, "test-close-sync")
+	walConfig.CheckpointInterval = 0
+
+	wal, err := OpenWriteAheadLog(walConfig)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog failed: %v", err)
+	}
+
+	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
+	mb.EnsureLine(0)
+	line := mb.GetLine(0)
+	line.Cells = []Cell{{Rune: 'Z'}}
+
+	config := DefaultAdaptivePersistenceConfig()
+	ap, err := newAdaptivePersistenceWithWAL(config, mb, wal, time.Now)
+	if err != nil {
+		t.Fatalf("failed to create AdaptivePersistence: %v", err)
+	}
+
+	// Notify a write (will be pending)
+	ap.NotifyWrite(0)
+
+	// Close should flush + sync + close WAL without error
+	if err := ap.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// After close, data should be in the PageStore (checkpoint happened)
+	// Reopen to verify
+	wal2, err := OpenWriteAheadLog(walConfig)
+	if err != nil {
+		t.Fatalf("Reopen WAL failed: %v", err)
+	}
+	defer wal2.Close()
+
+	if wal2.LineCount() != 1 {
+		t.Errorf("expected 1 line after close+reopen, got %d", wal2.LineCount())
+	}
+}
+
 func BenchmarkRateMonitor_CalculateRate(b *testing.B) {
 	rm := NewRateMonitor(1000)
 	now := time.Now()

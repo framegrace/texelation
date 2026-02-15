@@ -432,6 +432,14 @@ func (ap *AdaptivePersistence) Close() error {
 	// Flush pending writes
 	flushErr := ap.flushPendingLocked()
 
+	// Explicitly sync WAL before releasing lock. This ensures data reaches
+	// disk even if the process is killed before wal.Close() can checkpoint.
+	if ap.wal != nil {
+		if err := ap.wal.SyncWAL(); err != nil && flushErr == nil {
+			flushErr = err
+		}
+	}
+
 	ap.mu.Unlock()
 
 	// Stop idle monitor (outside lock to avoid deadlock)
@@ -560,6 +568,17 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 			}
 		}
 		ap.pendingMetadata = nil
+	}
+
+	// Sync WAL to disk so data survives process crash.
+	// Without this, written data sits in the OS page cache and may be lost
+	// on SIGKILL or machine shutdown.
+	if ap.wal != nil {
+		if err := ap.wal.SyncWAL(); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to sync WAL after flush: %w", err)
+			}
+		}
 	}
 
 	// Monitor flush performance

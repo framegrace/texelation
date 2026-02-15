@@ -1675,15 +1675,33 @@ func (a *TexelTerm) Stop() {
 		close(a.stop)
 		var (
 			cmd *exec.Cmd
-			pty *os.File
+			ptyFile *os.File
 		)
 		a.mu.Lock()
 
-		// Save terminal state (scroll position) before closing
-		a.saveStateLocked()
-
+		// Extract and nil out cmd/pty first so no new data arrives
 		cmd = a.cmd
-		pty = a.pty
+		ptyFile = a.pty
+		a.cmd = nil
+		a.pty = nil
+
+		// Close PTY to stop new data from arriving before persistence flush
+		if ptyFile != nil {
+			_ = ptyFile.Close()
+		}
+
+		// Signal process to terminate (with deferred SIGKILL fallback)
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			proc := cmd.Process
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				proc.Signal(syscall.SIGKILL) // Ignore error; process may already be gone.
+			}()
+		}
+
+		// Now that no new data can arrive, flush persistence safely
+		a.saveStateLocked()
 
 		// Close memory buffer (flushes to disk if disk-backed)
 		if a.vterm != nil {
@@ -1700,21 +1718,7 @@ func (a *TexelTerm) Stop() {
 			a.searchIndex = nil
 		}
 
-		a.cmd = nil
-		a.pty = nil
 		a.mu.Unlock()
-
-		if pty != nil {
-			_ = pty.Close()
-		}
-		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			proc := cmd.Process
-			go func() {
-				time.Sleep(500 * time.Millisecond)
-				proc.Signal(syscall.SIGKILL) // Ignore error; process may already be gone.
-			}()
-		}
 	})
 	a.wg.Wait()
 }
