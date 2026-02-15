@@ -28,7 +28,8 @@ import (
 	"github.com/framegrace/texelation/apps/texelterm/transformer"
 	"github.com/framegrace/texelation/config"
 
-	// Import txfmt for init() side-effect registration.
+	// Import transformers for init() side-effect registration.
+	_ "github.com/framegrace/texelation/apps/texelterm/tablefmt"
 	_ "github.com/framegrace/texelation/apps/texelterm/txfmt"
 	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelation/texel"
