@@ -11,9 +11,7 @@ package txfmt
 import (
 	"encoding/json"
 	"regexp"
-	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/alecthomas/chroma/v2"
 	enry "github.com/go-enry/go-enry/v2"
@@ -32,40 +30,13 @@ func init() {
 type mode string
 
 const (
-	modePlain mode = "plain"
-	modeJSON  mode = "json"
-	modeYAML  mode = "yaml"
-	modeXML   mode = "xml"
-	modeLog   mode = "log"
-	modeTable    mode = "table"
+	modePlain    mode = "plain"
+	modeJSON     mode = "json"
+	modeYAML     mode = "yaml"
+	modeXML      mode = "xml"
+	modeLog      mode = "log"
 	modeCode     mode = "code"
 	modeMarkdown mode = "markdown"
-)
-
-// columnType classifies a table column for per-column colorization.
-type columnType int
-
-const (
-	colText     columnType = iota // default FG
-	colNumber                     // yellow
-	colDateTime                   // cyan + dim
-	colPath                       // green
-)
-
-// tableColumn describes a detected column boundary and its inferred type.
-type tableColumn struct {
-	start int        // rune index of column start (inclusive)
-	end   int        // rune index of column end (exclusive)
-	ctype columnType // inferred after classification
-}
-
-// borderPosition selects horizontal border style (top, middle, bottom).
-type borderPosition int
-
-const (
-	borderTop    borderPosition = iota // ╭─┬─╮
-	borderMiddle                       // ├─┼─┤
-	borderBottom                       // ╰─┴─╯
 )
 
 // Color constants as parser.Color values (replacing ANSI escape strings).
@@ -91,14 +62,6 @@ var (
 	reMDBold    = regexp.MustCompile(`\*\*[^*]+\*\*|__[^_]+__`)
 	reMDFence   = regexp.MustCompile("^```")
 	reMDList    = regexp.MustCompile(`^(\s*[-*+]|\s*\d+\.)\s`)
-
-	// Column type classification regexes.
-	reColNumber   = regexp.MustCompile(`^-?[0-9][0-9,.]*%?$`)
-	reColDateTime = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}|\d{1,3}[dhms]|<?\d+[dhms](\d+[dhms])*>?|\d{2}:\d{2}(:\d{2})?|\d{1,2}[A-Z][a-z]{2}\d{2,4}|\d+\.\d+[dhms])$`)
-	reColPath     = regexp.MustCompile(`[/\\]|^\.\w+$|^[\w.-]+\.\w{1,5}$`)
-
-	// Non-table summary lines to filter out (e.g. "total N" from ls -l).
-	reNonTableLine = regexp.MustCompile(`^total \d+$`)
 )
 
 // Formatter is the inline output formatter. It detects the format of command
@@ -107,10 +70,6 @@ type Formatter struct {
 	det                 detector
 	wasCommand          bool
 	hasShellIntegration bool
-	tableLineCount      int
-	tableColumns        []tableColumn         // column metadata, persists for streaming lines
-	tableWidth          int                   // max rune width across backlog lines (for borders)
-	tableBordersActive  bool                  // true after top/header borders have been inserted
 	backlog             []*backlogEntry       // lines buffered during detection
 	style               *chroma.Style
 	chromaContext        []string              // previous lines kept as lexer context
@@ -156,16 +115,7 @@ func (f *Formatter) HandleLine(lineIdx int64, line *parser.LogicalLine, isComman
 
 	// Reset detector on command→prompt transition
 	if f.wasCommand && !effectiveIsCommand {
-		// Insert bottom border before the prompt line if table borders are active.
-		if f.tableBordersActive && f.insertFunc != nil && f.tableWidth > 0 {
-			botBorder := makeBorderLine(f.tableWidth, f.tableColumns, borderBottom)
-			f.insertFunc(lineIdx, botBorder)
-		}
 		f.det.reset()
-		f.tableLineCount = 0
-		f.tableColumns = nil
-		f.tableWidth = 0
-		f.tableBordersActive = false
 		f.backlog = f.backlog[:0]
 		f.chromaContext = f.chromaContext[:0]
 		f.codeLexer = ""
@@ -196,7 +146,7 @@ func (f *Formatter) HandleLine(lineIdx int64, line *parser.LogicalLine, isComman
 	} else if f.det.locked {
 		// Normal post-lock path
 		f.colorize(line, m)
-		if m == modeLog || m == modeTable {
+		if m == modeLog {
 			line.FixedWidth = len(line.Cells)
 		}
 	}
@@ -214,7 +164,6 @@ func (f *Formatter) backlogLines() []*parser.LogicalLine {
 
 // recolorizeBacklog applies the locked mode to all lines buffered during detection.
 func (f *Formatter) recolorizeBacklog(m mode) {
-	f.tableLineCount = 0
 	lines := f.backlogLines()
 
 	if lexName, ok := chromaLexerName[m]; ok {
@@ -234,8 +183,6 @@ func (f *Formatter) recolorizeBacklog(m mode) {
 		if len(f.chromaContext) > maxChromaContext {
 			f.chromaContext = f.chromaContext[len(f.chromaContext)-maxChromaContext:]
 		}
-	} else if m == modeTable {
-		f.recolorizeTableBacklog(lines)
 	} else {
 		for _, line := range lines {
 			f.colorize(line, m)
@@ -255,63 +202,11 @@ func (f *Formatter) recolorizeBacklog(m mode) {
 	}
 
 	for _, line := range lines {
-		if m == modeLog || m == modeTable {
+		if m == modeLog {
 			line.FixedWidth = len(line.Cells)
 		}
 	}
 	f.backlog = f.backlog[:0]
-}
-
-// recolorizeTableBacklog handles the full table pipeline: detect columns,
-// classify types, colorize, add borders, and insert border lines.
-func (f *Formatter) recolorizeTableBacklog(lines []*parser.LogicalLine) {
-	// 1. Extract plain text for column detection.
-	plainLines := make([]string, len(lines))
-	for i, line := range lines {
-		plainLines[i] = extractPlainText(line)
-	}
-
-	// 2. Detect columns and classify types.
-	f.tableColumns = detectTableColumns(plainLines)
-	classifyAllColumns(plainLines, f.tableColumns)
-
-	// 3. Compute max line width (in runes).
-	f.tableWidth = 0
-	for _, s := range plainLines {
-		w := utf8.RuneCountInString(s)
-		if w > f.tableWidth {
-			f.tableWidth = w
-		}
-	}
-
-	// 4. Colorize each line with per-column colors.
-	for _, line := range lines {
-		f.tableLineCount++
-		colorizeTableCellsWithColumns(line, f.tableLineCount, f.tableColumns)
-		addTableSideBorders(line, f.tableWidth, f.tableColumns)
-		line.FixedWidth = len(line.Cells)
-	}
-
-	// 5. Insert horizontal border lines (top border + header separator only).
-	// Bottom border is deferred to command→prompt transition since we don't
-	// know where the table ends yet (streaming lines continue after backlog).
-	if f.insertFunc == nil || len(f.backlog) == 0 {
-		return
-	}
-	offset := int64(0)
-
-	// Top border: before the first data line.
-	topBorder := makeBorderLine(f.tableWidth, f.tableColumns, borderTop)
-	f.insertFunc(f.backlog[0].lineIdx+offset, topBorder)
-	offset++
-
-	// Header separator: after the first data line (header).
-	if len(f.backlog) > 1 {
-		midBorder := makeBorderLine(f.tableWidth, f.tableColumns, borderMiddle)
-		f.insertFunc(f.backlog[1].lineIdx+offset, midBorder)
-	}
-
-	f.tableBordersActive = true
 }
 
 // extractPlainText extracts runes from cells with default FG color.
@@ -398,12 +293,6 @@ func (f *Formatter) colorize(line *parser.LogicalLine, m mode) {
 	switch m {
 	case modeLog:
 		colorizeLogCells(line)
-	case modeTable:
-		f.tableLineCount++
-		colorizeTableCellsWithColumns(line, f.tableLineCount, f.tableColumns)
-		if f.tableWidth > 0 {
-			addTableSideBorders(line, f.tableWidth, f.tableColumns)
-		}
 	case modeJSON, modeYAML, modeXML, modeCode, modeMarkdown:
 		plainText := extractPlainText(line)
 		lexName := chromaLexerName[m]
@@ -473,7 +362,6 @@ func (d *detector) score() map[mode]float64 {
 		modeYAML:     0,
 		modeXML:      0,
 		modeLog:      0,
-		modeTable:    0,
 		modeCode:     0,
 		modeMarkdown: 0,
 	}
@@ -585,9 +473,6 @@ func (d *detector) score() map[mode]float64 {
 		s[modeCode] += 0.3
 	}
 
-	// Table
-	s[modeTable] += scoreTable(lines)
-
 	return s
 }
 
@@ -610,484 +495,6 @@ func looksLikeCompleteJSON(trim string) bool {
 	first := trim[0]
 	last := trim[len(trim)-1]
 	return (first == '{' && last == '}') || (first == '[' && last == ']')
-}
-
-func scoreTable(lines []string) float64 {
-	type posKey int
-	counts := map[posKey]int{}
-	usable := 0
-	for _, ln := range lines {
-		ln = strings.TrimRight(ln, "\r\n")
-		if len(strings.TrimSpace(ln)) == 0 || len(ln) < 20 {
-			continue
-		}
-		usable++
-		runes := []rune(ln)
-		for i := 0; i < len(runes)-2; i++ {
-			if runes[i] == ' ' && runes[i+1] == ' ' {
-				bucket := (i / 4) * 4
-				counts[posKey(bucket)]++
-				for i+1 < len(runes) && runes[i+1] == ' ' {
-					i++
-				}
-			}
-		}
-	}
-	if usable < 4 {
-		return 0
-	}
-	strong := 0
-	for _, c := range counts {
-		if c >= usable/2 {
-			strong++
-		}
-	}
-	if strong >= 2 {
-		return 1.0
-	}
-	if strong == 1 {
-		return 0.6
-	}
-	return 0.0
-}
-
-// ─── Table Column Detection & Classification ────────────────────────────────
-
-// detectTableColumns finds column boundaries using a two-strategy approach:
-// 1. Header-based: use the first line's word boundaries, validated against data
-// 2. Gap-based fallback: aligned double-space gaps (for tables without a header)
-func detectTableColumns(lines []string) []tableColumn {
-	// Filter out non-table lines (e.g. "total N" from ls -l).
-	filtered := make([]string, 0, len(lines))
-	for _, ln := range lines {
-		trimmed := strings.TrimSpace(ln)
-		if len(trimmed) > 0 && !reNonTableLine.MatchString(trimmed) {
-			filtered = append(filtered, ln)
-		}
-	}
-	if len(filtered) < 3 {
-		return nil
-	}
-	var cols []tableColumn
-	// Try header-based detection first (handles narrow 1-space gaps like ps -ax).
-	if c := detectColumnsFromHeader(filtered); len(c) >= 2 {
-		cols = c
-	} else {
-		// Fall back to gap-based detection.
-		cols = detectColumnsFromGaps(filtered)
-	}
-	if len(cols) < 2 {
-		return cols
-	}
-	// Refine column ends: set col[i].end to just past the widest actual
-	// content in that column across all lines. This places the separator
-	// right after the left column's content rather than right before the
-	// right column's content — important for right-aligned columns like
-	// file sizes where the gap is variable.
-	refineColumnEnds(cols, filtered)
-	return cols
-}
-
-// refineColumnEnds adjusts col[i].end for non-last columns by finding where
-// the left column's content actually ends. For each line, it finds the first
-// space after the column's non-space content (scanning left to right). This
-// avoids being fooled by right-aligned values from the NEXT column that bleed
-// leftward into the gap (e.g. large file sizes in ls -l).
-func refineColumnEnds(cols []tableColumn, lines []string) {
-	for ci := 0; ci+1 < len(cols); ci++ {
-		maxContentEnd := cols[ci].start
-		for _, ln := range lines {
-			runes := []rune(strings.TrimRight(ln, "\r\n"))
-			limit := cols[ci+1].start
-			if limit > len(runes) {
-				limit = len(runes)
-			}
-			// Scan left-to-right: skip leading spaces (for right-aligned
-			// columns like PID), then find end of first content cluster.
-			j := cols[ci].start
-			// Skip leading spaces.
-			for j < limit && runes[j] == ' ' {
-				j++
-			}
-			// Find end of content (first space after non-space).
-			for j < limit && runes[j] != ' ' {
-				j++
-			}
-			// j is now at the first space after content.
-			if j > maxContentEnd {
-				maxContentEnd = j
-			}
-		}
-		// Don't let content end exceed the next column's start.
-		if maxContentEnd >= cols[ci+1].start {
-			maxContentEnd = cols[ci+1].start - 1
-		}
-		cols[ci].end = maxContentEnd
-	}
-}
-
-// detectColumnsFromHeader detects columns using the first line as a header.
-// It finds word-start positions in the header, then validates each boundary
-// by checking that data lines have a space at that position.
-// This correctly handles narrow gaps (e.g. "PID TTY" with 1 space).
-// Multi-word headers like "CONTAINER ID" are preserved because data lines
-// don't have a space at the intra-header gap.
-func detectColumnsFromHeader(lines []string) []tableColumn {
-	header := strings.TrimRight(lines[0], "\r\n")
-	headerRunes := []rune(header)
-	if len(headerRunes) < 10 {
-		return nil
-	}
-
-	// Find word-start positions in the header (space→non-space transitions).
-	var wordStarts []int
-	for i, r := range headerRunes {
-		if r != ' ' && (i == 0 || headerRunes[i-1] == ' ') {
-			wordStarts = append(wordStarts, i)
-		}
-	}
-	if len(wordStarts) < 2 {
-		return nil
-	}
-
-	// Validate each boundary: for the gap just before each word start,
-	// check that ≥50% of data lines have a space at that position.
-	dataLines := lines[1:]
-	validStarts := []int{wordStarts[0]}
-	for k := 1; k < len(wordStarts); k++ {
-		// The gap position is just before the word start.
-		gapPos := wordStarts[k] - 1
-		if gapPos < 0 {
-			continue
-		}
-		hasSpace, total := 0, 0
-		for _, ln := range dataLines {
-			lnRunes := []rune(strings.TrimRight(ln, "\r\n"))
-			if len(lnRunes) < 10 {
-				continue
-			}
-			total++
-			if gapPos < len(lnRunes) && lnRunes[gapPos] == ' ' {
-				hasSpace++
-			}
-		}
-		if total >= 2 && hasSpace*100/total >= 50 {
-			validStarts = append(validStarts, wordStarts[k])
-		}
-	}
-	if len(validStarts) < 2 {
-		return nil
-	}
-
-	// Find max line width.
-	maxWidth := 0
-	for _, ln := range lines {
-		w := utf8.RuneCountInString(strings.TrimRight(ln, "\r\n"))
-		if w > maxWidth {
-			maxWidth = w
-		}
-	}
-
-	// Build columns: each column spans from its start to the next column's start.
-	cols := make([]tableColumn, len(validStarts))
-	for i, start := range validStarts {
-		end := maxWidth
-		if i+1 < len(validStarts) {
-			end = validStarts[i+1]
-		}
-		cols[i] = tableColumn{start: start, end: end}
-	}
-	// Extend first column to start at 0 if there's leading whitespace
-	// (common for right-aligned numeric columns like PID).
-	if cols[0].start > 0 {
-		cols[0].start = 0
-	}
-	return cols
-}
-
-// detectColumnsFromGaps finds columns using aligned double-space gaps.
-// Used as a fallback when header-based detection fails (e.g. ls -l).
-func detectColumnsFromGaps(lines []string) []tableColumn {
-	type posKey int
-	counts := map[posKey]int{}
-	usable := 0
-	for _, ln := range lines {
-		ln = strings.TrimRight(ln, "\r\n")
-		if len(strings.TrimSpace(ln)) == 0 || utf8.RuneCountInString(ln) < 20 {
-			continue
-		}
-		usable++
-		runes := []rune(ln)
-		for i := 0; i < len(runes)-2; i++ {
-			if runes[i] == ' ' && runes[i+1] == ' ' {
-				bucket := (i / 4) * 4
-				counts[posKey(bucket)]++
-				for i+1 < len(runes) && runes[i+1] == ' ' {
-					i++
-				}
-			}
-		}
-	}
-	if usable < 2 {
-		return nil
-	}
-
-	// Collect strong gap bucket positions (appear in ≥50% of usable lines).
-	threshold := usable / 2
-	if threshold < 1 {
-		threshold = 1
-	}
-	var strongBuckets []int
-	for k, c := range counts {
-		if c >= threshold {
-			strongBuckets = append(strongBuckets, int(k))
-		}
-	}
-	sort.Ints(strongBuckets)
-	if len(strongBuckets) == 0 {
-		return nil
-	}
-
-	// Refine each bucket into a precise gap range [gapStart, gapEnd).
-	type gapRange struct{ start, end int }
-	gaps := make([]gapRange, 0, len(strongBuckets))
-	for _, bucket := range strongBuckets {
-		gs, ge := 9999, 0
-		for _, ln := range lines {
-			ln = strings.TrimRight(ln, "\r\n")
-			runes := []rune(ln)
-			if len(runes) < 20 {
-				continue
-			}
-			for i := 0; i < len(runes)-1; i++ {
-				if runes[i] == ' ' && runes[i+1] == ' ' {
-					runStart := i
-					for i+1 < len(runes) && runes[i+1] == ' ' {
-						i++
-					}
-					runEnd := i + 1
-					b := (runStart / 4) * 4
-					if b == bucket {
-						if runStart < gs {
-							gs = runStart
-						}
-						if runEnd > ge {
-							ge = runEnd
-						}
-					}
-				}
-			}
-		}
-		if gs < ge {
-			gaps = append(gaps, gapRange{gs, ge})
-		}
-	}
-	if len(gaps) == 0 {
-		return nil
-	}
-
-	// Merge overlapping or adjacent gaps.
-	sort.Slice(gaps, func(i, j int) bool { return gaps[i].start < gaps[j].start })
-	merged := []gapRange{gaps[0]}
-	for _, g := range gaps[1:] {
-		last := &merged[len(merged)-1]
-		if g.start <= last.end {
-			if g.end > last.end {
-				last.end = g.end
-			}
-		} else {
-			merged = append(merged, g)
-		}
-	}
-
-	// Find max line width.
-	maxWidth := 0
-	for _, ln := range lines {
-		w := utf8.RuneCountInString(strings.TrimRight(ln, "\r\n"))
-		if w > maxWidth {
-			maxWidth = w
-		}
-	}
-
-	// Build columns from gap boundaries.
-	cols := make([]tableColumn, 0, len(merged)+1)
-	colStart := 0
-	for _, g := range merged {
-		if g.start > colStart {
-			cols = append(cols, tableColumn{start: colStart, end: g.start})
-		}
-		colStart = g.end
-	}
-	if colStart < maxWidth {
-		cols = append(cols, tableColumn{start: colStart, end: maxWidth})
-	}
-	return cols
-}
-
-// classifyColumn infers the type of a column by examining data rows (skipping header).
-func classifyColumn(lines []string, col tableColumn) columnType {
-	numCount, dateCount, pathCount, total := 0, 0, 0, 0
-	for i, ln := range lines {
-		if i == 0 {
-			continue // skip header
-		}
-		runes := []rune(strings.TrimRight(ln, "\r\n"))
-		s := col.start
-		e := col.end
-		if s >= len(runes) {
-			continue
-		}
-		if e > len(runes) {
-			e = len(runes)
-		}
-		val := strings.TrimSpace(string(runes[s:e]))
-		if val == "" || val == "-" || val == "<none>" {
-			continue
-		}
-		total++
-		if reColNumber.MatchString(val) {
-			numCount++
-		} else if reColDateTime.MatchString(val) {
-			dateCount++
-		} else if reColPath.MatchString(val) {
-			pathCount++
-		}
-	}
-	if total == 0 {
-		return colText
-	}
-	if numCount*100/total >= 60 {
-		return colNumber
-	}
-	if dateCount*100/total >= 60 {
-		return colDateTime
-	}
-	if pathCount*100/total >= 40 {
-		return colPath
-	}
-	return colText
-}
-
-// classifyAllColumns sets the ctype field on each column.
-func classifyAllColumns(lines []string, cols []tableColumn) {
-	for i := range cols {
-		cols[i].ctype = classifyColumn(lines, cols[i])
-	}
-}
-
-// ─── Table Border & Coloring Functions ──────────────────────────────────────
-
-// colorizeTableCellsWithColumns applies per-column coloring.
-// Header (lineNum == 1) gets bold cyan; data rows use column type colors.
-func colorizeTableCellsWithColumns(line *parser.LogicalLine, lineNum int, columns []tableColumn) {
-	cells := line.Cells
-	if len(cells) == 0 {
-		return
-	}
-
-	if lineNum == 1 {
-		for i := range cells {
-			setFGAttr(&cells[i], colorCyan, parser.AttrBold)
-		}
-		return
-	}
-
-	if len(columns) == 0 {
-		return // no column info — leave at default FG
-	}
-
-	for ci, col := range columns {
-		var color parser.Color
-		var attr parser.Attribute
-		switch col.ctype {
-		case colNumber:
-			color = colorYellow
-		case colDateTime:
-			color = colorCyan
-			attr = parser.AttrDim
-		case colPath:
-			color = colorGreen
-		default:
-			continue // colText: leave default
-		}
-		s := col.start
-		// Use the full column range up to the next column's start for
-		// coloring. col.end is the refined content-end used for separator
-		// placement, but right-aligned values (like sizes) may extend
-		// beyond col.end into the gap.
-		e := len(cells)
-		if ci+1 < len(columns) {
-			e = columns[ci+1].start
-		}
-		if s >= len(cells) {
-			continue
-		}
-		if e > len(cells) {
-			e = len(cells)
-		}
-		for i := s; i < e; i++ {
-			c := &cells[i]
-			if c.Rune == ' ' {
-				continue // skip whitespace within column
-			}
-			if attr != 0 {
-				setFGAttr(c, color, attr)
-			} else {
-				setFG(c, color)
-			}
-		}
-	}
-}
-
-// addTableSideBorders pads the line to tableWidth and inserts dim │ column
-// separators at col[i-1].end (right after the previous column's content).
-func addTableSideBorders(line *parser.LogicalLine, tableWidth int, columns []tableColumn) {
-	cells := line.Cells
-	spaceCell := parser.Cell{Rune: ' ', FG: parser.DefaultFG, BG: parser.DefaultBG}
-
-	// Pad to tableWidth so all lines are the same width.
-	for len(cells) < tableWidth {
-		cells = append(cells, spaceCell)
-	}
-
-	// Place dim │ at column separator positions, but only if the cell
-	// is a space. Right-aligned columns (like file sizes) may have content
-	// at the separator position for wider values — never overwrite those.
-	for i := 1; i < len(columns); i++ {
-		pos := columns[i-1].end
-		if pos > 0 && pos < len(cells) && cells[pos].Rune == ' ' {
-			cells[pos] = parser.Cell{Rune: '│', FG: parser.DefaultFG, BG: parser.DefaultBG, Attr: parser.AttrDim}
-		}
-	}
-	line.Cells = cells
-}
-
-// makeBorderLine creates a horizontal border line of the given width.
-// No left/right corners — just fill characters with junctions at column gaps.
-func makeBorderLine(width int, columns []tableColumn, pos borderPosition) []parser.Cell {
-	var fill, junction rune
-	switch pos {
-	case borderTop:
-		fill, junction = '─', '┬'
-	case borderMiddle:
-		fill, junction = '─', '┼'
-	case borderBottom:
-		fill, junction = '─', '┴'
-	}
-
-	cells := make([]parser.Cell, width)
-	for i := range cells {
-		cells[i] = parser.Cell{Rune: fill, FG: parser.DefaultFG, BG: parser.DefaultBG, Attr: parser.AttrDim}
-	}
-
-	// Place junctions right after the previous column's content end.
-	for i := 1; i < len(columns); i++ {
-		jPos := columns[i-1].end
-		if jPos > 0 && jPos < width {
-			cells[jPos].Rune = junction
-		}
-	}
-	return cells
 }
 
 // ─── Cell-based colorizers ──────────────────────────────────────────────────
