@@ -215,9 +215,18 @@ func (tf *TableFormatter) flush() {
 	}
 
 	if bestDetector != nil {
-		// Parse the table. Rendering will be wired in a later task;
-		// for now emit the raw lines.
-		_ = bestDetector.Parse(lines)
+		ts := bestDetector.Parse(lines)
+		if ts != nil {
+			rendered := renderTable(ts)
+			if rendered != nil && tf.insertFunc != nil {
+				insertAt := tf.buffer[0].lineIdx
+				for _, row := range rendered {
+					tf.insertFunc(insertAt, row)
+				}
+				tf.resetState()
+				return
+			}
+		}
 	}
 
 	tf.flushRaw()

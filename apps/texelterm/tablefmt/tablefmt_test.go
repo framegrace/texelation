@@ -258,3 +258,170 @@ func TestBuffering_SpaceAligned(t *testing.T) {
 		t.Error("expected at least some lines suppressed for space-aligned table")
 	}
 }
+
+// ─── End-to-End Tests ────────────────────────────────────────────────────────
+
+func TestEndToEnd_MDTable(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	mdLines := []string{
+		"| Name  | Age |",
+		"| ----- | --- |",
+		"| Alice | 30  |",
+		"| Bob   | 25  |",
+	}
+	for i, s := range mdLines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	// Trigger flush with prompt.
+	tf.HandleLine(4, makeCells("$ "), false)
+
+	if len(insertedLines) == 0 {
+		t.Fatal("expected formatted lines to be emitted")
+	}
+
+	// First emitted line should be top border with corner.
+	first := cellsToString(insertedLines[0])
+	if []rune(first)[0] != '╭' {
+		t.Errorf("expected top border starting with ╭, got %c", []rune(first)[0])
+	}
+
+	// Last emitted line should be bottom border with corner.
+	last := cellsToString(insertedLines[len(insertedLines)-1])
+	if []rune(last)[0] != '╰' {
+		t.Errorf("expected bottom border starting with ╰, got %c", []rune(last)[0])
+	}
+
+	// Log rendered output for visual inspection.
+	for i, line := range insertedLines {
+		t.Logf("line %d: %q", i, cellsToString(line))
+	}
+}
+
+func TestEndToEnd_SpaceAligned(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	lines := []string{
+		"NAME                 STATUS    AGE     VERSION",
+		"nginx-pod            Running   5d      1.21.0",
+		"redis-pod            Running   3d      7.0.5",
+		"postgres-pod         Running   10d     15.2",
+		"memcached-pod        Running   2d      1.6.17",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(5, makeCells("$ "), false)
+
+	if len(insertedLines) == 0 {
+		t.Fatal("expected formatted lines to be emitted")
+	}
+
+	first := cellsToString(insertedLines[0])
+	if []rune(first)[0] != '╭' {
+		t.Errorf("expected top border starting with ╭, got %c", []rune(first)[0])
+	}
+
+	last := cellsToString(insertedLines[len(insertedLines)-1])
+	if []rune(last)[0] != '╰' {
+		t.Errorf("expected bottom border starting with ╰, got %c", []rune(last)[0])
+	}
+
+	for i, line := range insertedLines {
+		t.Logf("line %d: %q", i, cellsToString(line))
+	}
+}
+
+func TestEndToEnd_MultipleTables(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	idx := int64(0)
+	emit := func(s string, isCmd bool) {
+		tf.HandleLine(idx, makeCells(s), isCmd)
+		idx++
+	}
+
+	// First markdown table.
+	emit("| Name  | Age |", true)
+	emit("| ----- | --- |", true)
+	emit("| Alice | 30  |", true)
+
+	// Non-table line forces flush of first table (markdown is not compatible
+	// with lines lacking pipes).
+	emit("Some text between tables", true)
+
+	// Second markdown table.
+	emit("| Color | Hex     |", true)
+	emit("| ----- | ------- |", true)
+	emit("| Red   | #FF0000 |", true)
+	emit("| Blue  | #0000FF |", true)
+
+	// Prompt flushes second table.
+	emit("$ ", false)
+
+	topBorders := 0
+	for _, line := range insertedLines {
+		s := cellsToString(line)
+		runes := []rune(s)
+		if len(runes) > 0 && runes[0] == '╭' {
+			topBorders++
+		}
+	}
+	if topBorders < 2 {
+		t.Errorf("expected >= 2 top borders for 2 tables, got %d", topBorders)
+	}
+
+	for i, line := range insertedLines {
+		t.Logf("line %d: %q", i, cellsToString(line))
+	}
+}
+
+func TestEndToEnd_LowConfidencePassThrough(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	// Lines that get buffered (have "  " so spaceAligned Compatible + candidate
+	// returns true) but don't actually form a valid table (too few lines for
+	// space-aligned, which requires >= 3 non-blank lines to score above 0).
+	lines := []string{
+		"This is just some  random text here",
+		"Another line with  some spaces in it",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(2, makeCells("$ "), false)
+
+	// Should have emitted raw lines (no box-drawing).
+	for _, cells := range insertedLines {
+		for _, c := range cells {
+			if c.Rune == '╭' || c.Rune == '╰' || c.Rune == '│' {
+				t.Error("expected raw emission, got box-drawing characters")
+				return
+			}
+		}
+	}
+}
