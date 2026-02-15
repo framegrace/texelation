@@ -69,16 +69,18 @@ func TestConfigMaxBufferRows(t *testing.T) {
 func TestPromptTransitionFlushes(t *testing.T) {
 	f := New(1000)
 	f.NotifyPromptStart()
+	var inserted int
+	f.SetInsertFunc(func(_ int64, _ []parser.Cell) { inserted++ })
 
-	// Feed command output lines (stateScanning, no suppression).
+	// Feed command output lines that look like a space-aligned table.
 	f.HandleLine(0, makeCells("NAME   READY  STATUS"), true)
 	f.HandleLine(1, makeCells("nginx  1/1    Running"), true)
 
-	if f.state != stateScanning {
-		t.Errorf("expected stateScanning, got %d", f.state)
+	if f.state != stateBuffering {
+		t.Errorf("expected stateBuffering for table-like output, got %d", f.state)
 	}
 
-	// Transition to prompt (isCommand=false) should call flush.
+	// Transition to prompt (isCommand=false) should flush the buffer.
 	f.HandleLine(2, makeCells("$ "), false)
 
 	if f.state != stateScanning {
@@ -86,6 +88,9 @@ func TestPromptTransitionFlushes(t *testing.T) {
 	}
 	if len(f.buffer) != 0 {
 		t.Errorf("expected empty buffer after flush, got %d entries", len(f.buffer))
+	}
+	if inserted == 0 {
+		t.Error("expected insertFunc called during prompt flush")
 	}
 }
 
@@ -117,5 +122,139 @@ func TestSetInsertFunc(t *testing.T) {
 	f.insertFunc(0, nil)
 	if !called {
 		t.Error("expected insertFunc to be callable")
+	}
+}
+
+func TestBuffering_MDTable(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	lines := []string{
+		"| Name  | Age |",
+		"| ----- | --- |",
+		"| Alice | 30  |",
+		"| Bob   | 25  |",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+		if !tf.ShouldSuppress(int64(i)) {
+			t.Errorf("line %d: expected suppression during buffering", i)
+		}
+	}
+	if tf.state != stateBuffering {
+		t.Errorf("expected stateBuffering, got %d", tf.state)
+	}
+	if len(tf.buffer) != 4 {
+		t.Errorf("expected 4 buffered lines, got %d", len(tf.buffer))
+	}
+}
+
+func TestBuffering_FlushOnNonTableLine(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	var inserted int
+	tf.SetInsertFunc(func(_ int64, _ []parser.Cell) { inserted++ })
+
+	lines := []string{
+		"| Name  | Age |",
+		"| ----- | --- |",
+		"| Alice | 30  |",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(3, makeCells("This is not a table line"), true)
+
+	if tf.state != stateScanning {
+		t.Errorf("expected stateScanning after flush, got %d", tf.state)
+	}
+	if inserted == 0 {
+		t.Error("expected insertFunc to be called during flush")
+	}
+}
+
+func TestBuffering_FlushOnPrompt(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	var inserted int
+	tf.SetInsertFunc(func(_ int64, _ []parser.Cell) { inserted++ })
+
+	for i, s := range []string{"| A | B |", "| - | - |", "| x | y |"} {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(3, makeCells("$ "), false)
+
+	if tf.state != stateScanning {
+		t.Errorf("expected stateScanning after prompt, got %d", tf.state)
+	}
+	if inserted == 0 {
+		t.Error("expected insertFunc called on prompt flush")
+	}
+}
+
+func TestBuffering_LimitExceeded(t *testing.T) {
+	tf := New(3)
+	tf.NotifyPromptStart()
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	lines := []string{
+		"| A | B |",
+		"| - | - |",
+		"| x | y |",
+		"| z | w |", // 4th line exceeds limit of 3
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+
+	// After exceeding limit, buffer should have been flushed raw.
+	if tf.state == stateBuffering && len(tf.buffer) > 3 {
+		t.Error("buffer should have been flushed when limit exceeded")
+	}
+	// Raw emission should not contain box-drawing characters.
+	for _, cells := range insertedLines {
+		for _, c := range cells {
+			if c.Rune == '\u256d' || c.Rune == '\u2570' {
+				t.Error("expected raw emission, got box-drawing")
+			}
+		}
+	}
+}
+
+func TestScanning_PlainTextPassThrough(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	tf.HandleLine(0, makeCells("just plain text"), true)
+	if tf.ShouldSuppress(0) {
+		t.Error("non-table lines should not be suppressed")
+	}
+	if tf.state != stateScanning {
+		t.Errorf("should remain scanning, got %d", tf.state)
+	}
+}
+
+func TestBuffering_SpaceAligned(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	lines := []string{
+		"NAME                 STATUS    AGE     VERSION",
+		"nginx-pod            Running   5d      1.21.0",
+		"redis-pod            Running   3d      7.0.5",
+		"postgres-pod         Running   10d     15.2",
+	}
+	suppressed := false
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+		if tf.ShouldSuppress(int64(i)) {
+			suppressed = true
+		}
+	}
+	if !suppressed {
+		t.Error("expected at least some lines suppressed for space-aligned table")
 	}
 }
