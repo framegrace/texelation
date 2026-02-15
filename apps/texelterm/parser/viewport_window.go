@@ -124,6 +124,22 @@ func (vw *ViewportWindow) GetVisibleGrid() [][]Cell {
 	// Cache miss - rebuild
 	lines := vw.reader.GetLineRange(startGlobal, endGlobal)
 	physical := vw.builder.BuildRange(lines, startGlobal)
+
+	// When synthetic lines are hidden (original view), BuildRange may produce
+	// fewer physical lines than the viewport expects. Extend the range backwards
+	// to fetch more history so the live edge stays anchored at the bottom.
+	minGlobal := vw.reader.GlobalOffset()
+	for len(physical) < vw.height && startGlobal > minGlobal {
+		deficit := int64(vw.height - len(physical))
+		newStart := max(startGlobal-deficit, minGlobal)
+		if newStart == startGlobal {
+			break
+		}
+		startGlobal = newStart
+		lines = vw.reader.GetLineRange(startGlobal, endGlobal)
+		physical = vw.builder.BuildRange(lines, startGlobal)
+	}
+
 	vw.cache.Set(startGlobal, endGlobal, vw.width, physical)
 
 	return vw.physicalLinesToGrid(physical)
