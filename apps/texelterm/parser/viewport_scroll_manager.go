@@ -112,15 +112,6 @@ func (sm *ScrollManager) ScrollToOffset(offset int64) {
 	sm.scrollOffset = offset
 }
 
-// ClampOffset ensures the scroll offset is within [0, MaxScrollOffset()].
-// Call after changes that reduce total physical lines (e.g. overlay toggle).
-func (sm *ScrollManager) ClampOffset() {
-	maxScroll := sm.MaxScrollOffset()
-	if sm.scrollOffset > maxScroll {
-		sm.scrollOffset = maxScroll
-	}
-}
-
 // Offset returns the current scroll offset (physical lines from bottom).
 func (sm *ScrollManager) Offset() int64 {
 	return sm.scrollOffset
@@ -169,15 +160,13 @@ func (sm *ScrollManager) TotalPhysicalLines() int64 {
 func (sm *ScrollManager) ensureIndexValid() {
 	if sm.index == nil {
 		sm.index = NewPhysicalLineIndex(sm.reader, sm.builder.Width())
-		sm.index.showOverlay = sm.builder.ShowOverlay()
 		sm.index.Build()
 		return
 	}
 
-	// Width or overlay mode change → full rebuild
-	if sm.builder.Width() != sm.index.Width() || sm.builder.ShowOverlay() != sm.index.showOverlay {
+	// Width change → full rebuild
+	if sm.builder.Width() != sm.index.Width() {
 		sm.index.width = sm.builder.Width()
-		sm.index.showOverlay = sm.builder.ShowOverlay()
 		sm.index.Build()
 		return
 	}
