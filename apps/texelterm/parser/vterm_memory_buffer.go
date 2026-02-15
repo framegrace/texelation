@@ -431,6 +431,47 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 			log.Printf("[MEMORY_BUFFER] Cursor position restored to (%d, %d)", savedState.CursorX, savedState.CursorY)
 		}
 	}
+
+	// Repair state after crash: trim blank tail lines that were never synced.
+	v.trimBlankTailLines()
+}
+
+// trimBlankTailLines scans backward from liveEdgeBase and clamps it to the
+// last non-empty line + 1. This repairs state after crashes where metadata
+// was persisted but trailing line content was lost (still in page cache).
+func (v *VTerm) trimBlankTailLines() {
+	mb := v.memBufState.memBuf
+	if mb == nil {
+		return
+	}
+
+	original := v.memBufState.liveEdgeBase
+	for v.memBufState.liveEdgeBase > mb.GlobalOffset() {
+		line := mb.GetLine(v.memBufState.liveEdgeBase - 1)
+		if line != nil && lineHasContent(line) {
+			break
+		}
+		v.memBufState.liveEdgeBase--
+	}
+
+	if trimmed := original - v.memBufState.liveEdgeBase; trimmed > 0 {
+		log.Printf("[MEMORY_BUFFER] Trimmed %d blank tail lines (liveEdgeBase %d → %d)",
+			trimmed, original, v.memBufState.liveEdgeBase)
+	}
+}
+
+// lineHasContent returns true if the line has at least one cell with
+// a non-space rune or non-default colors.
+func lineHasContent(line *LogicalLine) bool {
+	for _, c := range line.Cells {
+		if c.Rune != ' ' && c.Rune != 0 {
+			return true
+		}
+		if c.FG != DefaultFG || c.BG != DefaultBG {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Writing Operations ---

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // parseString is a helper that writes a string to VTerm via the parser.
@@ -3666,5 +3667,76 @@ func TestAutoWrap_ResizeReflow(t *testing.T) {
 	row1Content := strings.TrimRight(gridRowToString(grid[1]), " \x00")
 	if row1Content != "" {
 		t.Errorf("after resize: row 1 should be empty, got %q", row1Content)
+	}
+}
+
+// TestLoadHistory_TrimsBlankTailLines verifies that on reload, blank tail lines
+// (from a crash where metadata was persisted but trailing content was lost) are
+// trimmed and liveEdgeBase is clamped to the last non-empty line + 1.
+func TestLoadHistory_TrimsBlankTailLines(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	terminalID := "test-trim-tail"
+
+	walConfig := DefaultWALConfig(tmpDir, terminalID)
+	walConfig.CheckpointInterval = 0
+
+	// Create WAL with 10 lines: 7 real + 3 blank
+	wal, err := OpenWriteAheadLog(walConfig)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog failed: %v", err)
+	}
+
+	now := time.Now()
+	for i := 0; i < 7; i++ {
+		line := NewLogicalLineFromCells([]Cell{{Rune: rune('A' + i)}})
+		if err := wal.Append(int64(i), line, now); err != nil {
+			t.Fatalf("Append line %d failed: %v", i, err)
+		}
+	}
+	// 3 blank lines (empty cells = whitespace)
+	for i := 7; i < 10; i++ {
+		line := NewLogicalLineFromCells([]Cell{})
+		if err := wal.Append(int64(i), line, now); err != nil {
+			t.Fatalf("Append blank line %d failed: %v", i, err)
+		}
+	}
+
+	// Checkpoint to move content to PageStore
+	if err := wal.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint failed: %v", err)
+	}
+
+	// Write metadata claiming liveEdgeBase=10 (past the blanks)
+	if err := wal.WriteMetadata(&ViewportState{
+		LiveEdgeBase: 10,
+		CursorX:      0,
+		CursorY:      0,
+		SavedAt:      now,
+	}); err != nil {
+		t.Fatalf("WriteMetadata failed: %v", err)
+	}
+
+	if err := wal.Close(); err != nil {
+		t.Fatalf("Close WAL failed: %v", err)
+	}
+
+	// Reopen through normal VTerm path — EnableMemoryBufferWithDisk will
+	// find 10 lines in PageStore and metadata with liveEdgeBase=10.
+	// After trimBlankTailLines(), liveEdgeBase should be clamped to 7.
+	v := NewVTerm(80, 24, WithMemoryBuffer())
+	err = v.EnableMemoryBufferWithDisk(tmpDir, MemoryBufferOptions{
+		MaxLines:   50000,
+		TerminalID: terminalID,
+	})
+	if err != nil {
+		t.Fatalf("EnableMemoryBufferWithDisk failed: %v", err)
+	}
+	defer v.CloseMemoryBuffer()
+
+	// liveEdgeBase should be clamped to 7 (last non-empty line + 1)
+	if v.memBufState.liveEdgeBase != 7 {
+		t.Errorf("liveEdgeBase: got %d, want 7 (should trim 3 blank tail lines)",
+			v.memBufState.liveEdgeBase)
 	}
 }
