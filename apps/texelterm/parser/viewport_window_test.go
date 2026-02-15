@@ -903,6 +903,77 @@ func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
 	})
 }
 
+// --- PhysicalLineBuilder Overlay Tests ---
+
+func TestPhysicalLineBuilder_OverlayMode(t *testing.T) {
+	builder := NewPhysicalLineBuilder(40)
+
+	line := NewLogicalLineFromCells(vwMakeCells("Hello World Original"))
+	line.Overlay = vwMakeCells("| Hello | World |")
+	line.OverlayWidth = 40
+
+	// Overlay mode
+	builder.SetShowOverlay(true)
+	physical := builder.BuildLine(line, 100)
+	if len(physical) != 1 {
+		t.Fatalf("overlay mode: expected 1 physical line, got %d", len(physical))
+	}
+	if physical[0].LogicalIndex != 100 {
+		t.Errorf("expected LogicalIndex 100, got %d", physical[0].LogicalIndex)
+	}
+
+	// Original mode
+	builder.SetShowOverlay(false)
+	physical = builder.BuildLine(line, 100)
+	if len(physical) != 1 { // "Hello World Original" fits in 40
+		t.Fatalf("original mode: expected 1 physical line, got %d", len(physical))
+	}
+}
+
+func TestPhysicalLineBuilder_SkipSyntheticInOriginalMode(t *testing.T) {
+	builder := NewPhysicalLineBuilder(40)
+
+	synthetic := &LogicalLine{
+		Synthetic:    true,
+		Overlay:      vwMakeCells("+--------+"),
+		OverlayWidth: 40,
+	}
+
+	builder.SetShowOverlay(true)
+	physical := builder.BuildLine(synthetic, 100)
+	if len(physical) != 1 {
+		t.Fatalf("overlay mode: expected 1 line for synthetic, got %d", len(physical))
+	}
+
+	builder.SetShowOverlay(false)
+	physical = builder.BuildLine(synthetic, 100)
+	if physical != nil {
+		t.Fatalf("original mode: synthetic should return nil, got %d lines", len(physical))
+	}
+}
+
+func TestPhysicalLineBuilder_BuildRangeSkipsSynthetic(t *testing.T) {
+	builder := NewPhysicalLineBuilder(40)
+	builder.SetShowOverlay(false)
+
+	lines := []*LogicalLine{
+		NewLogicalLineFromCells(vwMakeCells("Line1")),
+		{Synthetic: true, Overlay: vwMakeCells("+---+"), OverlayWidth: 40},
+		NewLogicalLineFromCells(vwMakeCells("Line2")),
+	}
+
+	physical := builder.BuildRange(lines, 100)
+	if len(physical) != 2 {
+		t.Fatalf("expected 2 physical lines (synthetic skipped), got %d", len(physical))
+	}
+	if physical[0].LogicalIndex != 100 {
+		t.Errorf("first line: expected LogicalIndex 100, got %d", physical[0].LogicalIndex)
+	}
+	if physical[1].LogicalIndex != 102 {
+		t.Errorf("second line: expected LogicalIndex 102, got %d", physical[1].LogicalIndex)
+	}
+}
+
 // --- Benchmark Tests ---
 
 func BenchmarkViewportWindow_GetVisibleGrid_CacheHit(b *testing.B) {
