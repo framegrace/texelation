@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
 // ─── Common Types ────────────────────────────────────────────────────────────
@@ -29,10 +31,11 @@ type columnInfo struct {
 
 // tableStructure is the parsed result of a detected table.
 type tableStructure struct {
-	columns   []columnInfo
-	headerRow int        // index of header row in rows (-1 if none)
-	rows      [][]string // cell values per row (includes header)
-	tableType tableType
+	columns       []columnInfo
+	headerRow     int              // index of header row in rows (-1 if none)
+	rows          [][]string       // cell values per row (includes header)
+	originalCells [][]parser.Cell  // original cells per row for color preservation
+	tableType     tableType
 }
 
 // tableType identifies the detected table format.
@@ -354,6 +357,11 @@ func (d *spaceAlignedDetector) Score(lines []string) float64 {
 		return 0
 	}
 
+	// Reject blocks dominated by source code patterns.
+	if codeLineFraction(filtered) > 0.3 {
+		return 0
+	}
+
 	// Try header-based detection first.
 	if cols := detectColumnBoundariesFromHeader(filtered); len(cols) >= 2 {
 		return scoreFromBoundaryCount(len(cols))
@@ -371,9 +379,19 @@ func (d *spaceAlignedDetector) Score(lines []string) float64 {
 }
 
 // Compatible returns true if the line could be part of a space-aligned table.
-// Space-aligned is loose: most non-blank lines are compatible.
+// Rejects short lines and lines that look like source code (braces, keywords).
+// This stops buffering at code lines like "}", "func Foo() {", etc. while
+// allowing legitimate table rows that may lack double-space gaps due to wide
+// column values (e.g., ls -l with large file sizes).
 func (d *spaceAlignedDetector) Compatible(line string) bool {
-	return true
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return true // blank lines are OK inside a table
+	}
+	if len(trimmed) < 10 {
+		return false // too short for a table row
+	}
+	return !looksLikeCode(trimmed)
 }
 
 // Parse extracts a tableStructure from space-aligned lines.
@@ -727,6 +745,48 @@ func scoreFromBoundaryCount(cols int) float64 {
 		score = 0.9
 	}
 	return score
+}
+
+// codeLineFraction returns the fraction of non-blank lines that look like
+// source code. Checks both keyword/brace patterns and tab indentation (terminal
+// command output uses spaces, not leading tabs). Used to reject blocks dominated
+// by code patterns.
+func codeLineFraction(lines []string) float64 {
+	if len(lines) == 0 {
+		return 0
+	}
+	codeCount := 0
+	for _, ln := range lines {
+		trimmed := strings.TrimSpace(ln)
+		if len(trimmed) == 0 {
+			continue
+		}
+		if looksLikeCode(trimmed) || strings.HasPrefix(ln, "\t") {
+			codeCount++
+		}
+	}
+	return float64(codeCount) / float64(len(lines))
+}
+
+// looksLikeCode returns true if a trimmed line matches common source code
+// patterns (braces, keywords like func/return/if/for). Safe for real tables:
+// command output from kubectl, ps, docker, ls -la etc. doesn't contain these.
+func looksLikeCode(trimmed string) bool {
+	// Lone braces
+	if trimmed == "{" || trimmed == "}" || trimmed == "})" || trimmed == ")," {
+		return true
+	}
+	// Lines ending with opening brace (function/struct/if definitions)
+	if strings.HasSuffix(trimmed, "{") {
+		return true
+	}
+	// Common code constructs
+	for _, kw := range []string{":=", "func ", "return ", "if ", "for ", "switch ", "import ", "package "} {
+		if strings.Contains(trimmed, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // maxRuneWidth returns the maximum rune width across all lines.

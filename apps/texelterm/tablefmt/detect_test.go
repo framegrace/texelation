@@ -332,12 +332,24 @@ func TestSpaceAlignedDetector_Score_TooFewLines(t *testing.T) {
 func TestSpaceAlignedDetector_Compatible(t *testing.T) {
 	d := &spaceAlignedDetector{}
 
-	// Compatible is loose — most non-blank lines should pass.
-	if !d.Compatible("") {
-		t.Error("blank lines should be compatible")
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"", true},                                  // blank lines OK
+		{"  ", true},                                // whitespace-only OK
+		{"NAME   READY   STATUS", true},             // tabular line with double-space gaps
+		{"nginx-pod   Running   5d", true},          // data row with double-space gaps
+		{"}", false},                                // lone brace, no double-space
+		{"func NewClockApp() texelcore.App {", false}, // code line, no double-space gap
+		{"return &clockApp{", false},                // code line
+		{"short", false},                            // too short (< 10 chars)
 	}
-	if !d.Compatible("NAME   READY   STATUS") {
-		t.Error("tabular line should be compatible")
+	for _, tt := range tests {
+		got := d.Compatible(tt.line)
+		if got != tt.want {
+			t.Errorf("Compatible(%q) = %v, want %v", tt.line, got, tt.want)
+		}
 	}
 }
 
@@ -395,6 +407,92 @@ func TestSpaceAlignedDetector_Parse_PsAux(t *testing.T) {
 	}
 	if len(ts.rows) != 4 {
 		t.Fatalf("expected 4 rows, got %d", len(ts.rows))
+	}
+}
+
+func TestSpaceAlignedDetector_Score_GoStruct(t *testing.T) {
+	// Go struct field declarations have aligned whitespace that looks tabular,
+	// but should be rejected by the code-pattern penalty.
+	lines := []string{
+		"type clockApp struct {",
+		"	currentTime   string",
+		"	timezone      string",
+		"	format12h     bool",
+		"	width         int",
+		"	height        int",
+		"}",
+	}
+	d := &spaceAlignedDetector{}
+	score := d.Score(lines)
+	if score > 0 {
+		t.Errorf("expected score 0 for Go struct fields, got %f", score)
+	}
+}
+
+func TestSpaceAlignedDetector_Score_GoSourceFile(t *testing.T) {
+	// Mixed Go source code should not be detected as a table.
+	lines := []string{
+		"package clock",
+		"",
+		"import (",
+		"	\"fmt\"",
+		"	\"time\"",
+		")",
+		"",
+		"type clockApp struct {",
+		"	currentTime   string",
+		"	timezone      string",
+		"	format12h     bool",
+		"}",
+		"",
+		"func NewClockApp() texelcore.App {",
+		"	return &clockApp{",
+		"		format12h: true,",
+		"	}",
+		"}",
+		"",
+		"func (c *clockApp) GetTitle() string {",
+		"	return \"Clock\"",
+		"}",
+	}
+	d := &spaceAlignedDetector{}
+	score := d.Score(lines)
+	if score > 0 {
+		t.Errorf("expected score 0 for Go source file, got %f", score)
+	}
+}
+
+func TestSpaceAlignedDetector_Compatible_CodeLines(t *testing.T) {
+	d := &spaceAlignedDetector{}
+
+	// Lines that should break table buffering (incompatible).
+	codeLines := []string{
+		"}",
+		"{",
+		"})",
+		"),",
+		"func NewClockApp() texelcore.App {",
+		"return &clockApp{",
+		"if err != nil {",
+		"for i := 0; i < n; i++ {",
+	}
+	for _, ln := range codeLines {
+		if d.Compatible(ln) {
+			t.Errorf("Compatible(%q) = true, want false (code line should break table)", ln)
+		}
+	}
+
+	// Lines that should continue table buffering (compatible).
+	tableLines := []string{
+		"nginx-pod       Running   5d",
+		"  PID TTY          TIME CMD",
+		"root         1  0.0  0.1 169344 13092 ?        Ss   Feb01   0:03 /sbin/init",
+		"-rwxr-xr-x. 1 marc marc 12302948 Jan 30 19:54 texelterm", // wide size, no double-space gaps
+	}
+	for _, ln := range tableLines {
+		if !d.Compatible(ln) {
+			t.Errorf("Compatible(%q) = false, want true (table line should continue)", ln)
+		}
 	}
 }
 
