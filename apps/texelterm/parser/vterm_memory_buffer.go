@@ -1682,3 +1682,19 @@ func (v *VTerm) notifyDetectorCursorVisibility(hidden bool) {
 		}
 	}
 }
+
+// SetShowOverlay controls whether the viewport displays overlay content or original content.
+func (v *VTerm) SetShowOverlay(show bool) {
+	if v.memBufState == nil || v.memBufState.viewport == nil {
+		return
+	}
+	v.memBufState.viewport.SetShowOverlay(show)
+}
+
+// ShowOverlay returns whether the viewport is currently showing overlay content.
+func (v *VTerm) ShowOverlay() bool {
+	if v.memBufState == nil || v.memBufState.viewport == nil {
+		return true
+	}
+	return v.memBufState.viewport.ShowOverlay()
+}

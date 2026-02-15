@@ -842,6 +842,12 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
+	// Handle Ctrl+T to toggle overlay/original view
+	if ev.Key() == tcell.KeyCtrlT {
+		a.toggleOverlay()
+		return
+	}
+
 	if a.pty == nil {
 		return
 	}
@@ -867,6 +873,16 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	if _, err := a.pty.Write(keyBytes); err != nil {
 		log.Printf("[TEXELTERM] Failed to write key to PTY: %v", err)
 	}
+}
+
+// toggleOverlay toggles between showing overlay content and original content.
+func (a *TexelTerm) toggleOverlay() {
+	if a.vterm == nil {
+		return
+	}
+	current := a.vterm.ShowOverlay()
+	a.vterm.SetShowOverlay(!current)
+	a.vterm.MarkAllDirty()
 }
 
 func (a *TexelTerm) HandlePaste(data []byte) {
