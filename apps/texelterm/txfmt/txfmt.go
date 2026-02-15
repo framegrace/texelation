@@ -106,6 +106,16 @@ func (f *Formatter) NotifyPromptStart() {
 	f.hasShellIntegration = true
 }
 
+// prepareOverlay clones Cells into Overlay so colorization modifies the copy.
+func prepareOverlay(line *parser.LogicalLine) {
+	if line.Overlay != nil {
+		return // already prepared
+	}
+	line.Overlay = make([]parser.Cell, len(line.Cells))
+	copy(line.Overlay, line.Cells)
+	line.OverlayWidth = len(line.Cells)
+}
+
 // HandleLine is the OnLineCommit callback. It detects and colorizes command
 // output lines in-place.
 func (f *Formatter) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) {
@@ -144,6 +154,7 @@ func (f *Formatter) HandleLine(lineIdx int64, line *parser.LogicalLine, isComman
 		f.recolorizeBacklog(m)
 	} else if f.det.locked {
 		// Normal post-lock path
+		prepareOverlay(line)
 		f.colorize(line, m)
 		if m == modeLog {
 			line.FixedWidth = len(line.Cells)
@@ -164,6 +175,11 @@ func (f *Formatter) backlogLines() []*parser.LogicalLine {
 // recolorizeBacklog applies the locked mode to all lines buffered during detection.
 func (f *Formatter) recolorizeBacklog(m mode) {
 	lines := f.backlogLines()
+
+	// Prepare overlays for all lines before colorization
+	for _, line := range lines {
+		prepareOverlay(line)
+	}
 
 	if lexName, ok := chromaLexerName[m]; ok {
 		// For modeCode, infer the specific language from sample content.
@@ -542,7 +558,7 @@ func (f *Formatter) insertModeIndicator(beforeIdx int64, label string) {
 // colorizeLogCells applies log/YAML colorization using regex matching on the
 // plain text, then maps matched ranges back to cell indices.
 func colorizeLogCells(line *parser.LogicalLine) {
-	cells := line.Cells
+	cells := line.Overlay
 	if len(cells) == 0 {
 		return
 	}

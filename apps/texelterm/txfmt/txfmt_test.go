@@ -93,12 +93,13 @@ func TestDetector_Reset(t *testing.T) {
 
 func TestColorize_JSON_Chroma(t *testing.T) {
 	line := makeCells(`{"key": "val"}`)
+	prepareOverlay(line)
 	style := chromaStyle("")
 	chromaColorizeLines([]*parser.LogicalLine{line}, "json", style)
 
-	// Some cells should be colorized with distinct colors (strings, keys)
+	// Some overlay cells should be colorized with distinct colors (strings, keys)
 	colored := 0
-	for _, c := range line.Cells {
+	for _, c := range line.Overlay {
 		if c.FG.Mode == parser.ColorModeRGB {
 			colored++
 		}
@@ -108,48 +109,58 @@ func TestColorize_JSON_Chroma(t *testing.T) {
 	}
 
 	// Punctuation like { and } should remain default FG (base text color skipped)
-	if line.Cells[0].FG.Mode != parser.ColorModeDefault {
-		t.Errorf("expected '{' to remain default FG (base color skip), got mode %d", line.Cells[0].FG.Mode)
+	if line.Overlay[0].FG.Mode != parser.ColorModeDefault {
+		t.Errorf("expected '{' to remain default FG (base color skip), got mode %d", line.Overlay[0].FG.Mode)
 	}
 
 	// String content "key" should be colored (not base text color)
 	// Cell 1 is opening quote of "key"
-	if line.Cells[1].FG.Mode != parser.ColorModeRGB {
-		t.Errorf("expected string quote to be RGB, got mode %d", line.Cells[1].FG.Mode)
+	if line.Overlay[1].FG.Mode != parser.ColorModeRGB {
+		t.Errorf("expected string quote to be RGB, got mode %d", line.Overlay[1].FG.Mode)
+	}
+
+	// Original Cells should be untouched
+	for _, c := range line.Cells {
+		if c.FG.Mode != parser.ColorModeDefault {
+			t.Error("expected original Cells to remain unmodified")
+			break
+		}
 	}
 }
 
 func TestColorize_JSON_PreservesExistingColors(t *testing.T) {
 	line := makeCells(`{"key": "val"}`)
-	// Pre-color some cells
+	// Pre-color some cells in original
 	existingColor := parser.Color{Mode: parser.ColorModeStandard, Value: 1} // red
 	line.Cells[2].FG = existingColor                                        // 'k' in "key"
 
+	prepareOverlay(line)
 	style := chromaStyle("")
 	chromaColorizeLines([]*parser.LogicalLine{line}, "json", style)
 
-	// Pre-colored cell should remain red
-	if line.Cells[2].FG != existingColor {
-		t.Errorf("expected pre-colored cell to be preserved, got %+v", line.Cells[2].FG)
+	// Pre-colored cell in overlay should remain red (inherited from Cells)
+	if line.Overlay[2].FG != existingColor {
+		t.Errorf("expected pre-colored cell to be preserved, got %+v", line.Overlay[2].FG)
 	}
 }
 
 func TestColorize_Log(t *testing.T) {
 	line := makeCells(`2024-01-15T10:30:00Z ERROR Failed host=db.local`)
+	prepareOverlay(line)
 	colorizeLogCells(line)
 
-	// Timestamp should be cyan+dim
-	if line.Cells[0].FG != colorCyan {
-		t.Errorf("expected timestamp cell to be cyan, got %+v", line.Cells[0].FG)
+	// Timestamp should be cyan+dim in overlay
+	if line.Overlay[0].FG != colorCyan {
+		t.Errorf("expected timestamp cell to be cyan, got %+v", line.Overlay[0].FG)
 	}
-	if line.Cells[0].Attr&parser.AttrDim == 0 {
+	if line.Overlay[0].Attr&parser.AttrDim == 0 {
 		t.Error("expected timestamp cell to have dim attribute")
 	}
 
-	// Find ERROR in the line and check it's bold red
-	for i, c := range line.Cells {
-		if c.Rune == 'E' && i+4 < len(line.Cells) {
-			word := string([]rune{line.Cells[i].Rune, line.Cells[i+1].Rune, line.Cells[i+2].Rune, line.Cells[i+3].Rune, line.Cells[i+4].Rune})
+	// Find ERROR in the overlay and check it's bold red
+	for i, c := range line.Overlay {
+		if c.Rune == 'E' && i+4 < len(line.Overlay) {
+			word := string([]rune{line.Overlay[i].Rune, line.Overlay[i+1].Rune, line.Overlay[i+2].Rune, line.Overlay[i+3].Rune, line.Overlay[i+4].Rune})
 			if word == "ERROR" {
 				if c.FG != colorRed {
 					t.Errorf("expected ERROR to be red, got %+v", c.FG)
@@ -162,10 +173,10 @@ func TestColorize_Log(t *testing.T) {
 		}
 	}
 
-	// Find host= and check key is blue, value is yellow
-	for i, c := range line.Cells {
-		if c.Rune == 'h' && i+3 < len(line.Cells) {
-			word := string([]rune{line.Cells[i].Rune, line.Cells[i+1].Rune, line.Cells[i+2].Rune, line.Cells[i+3].Rune})
+	// Find host= and check key is blue, value is yellow in overlay
+	for i, c := range line.Overlay {
+		if c.Rune == 'h' && i+3 < len(line.Overlay) {
+			word := string([]rune{line.Overlay[i].Rune, line.Overlay[i+1].Rune, line.Overlay[i+2].Rune, line.Overlay[i+3].Rune})
 			if word == "host" {
 				if c.FG != colorBlue {
 					t.Errorf("expected 'host' key to be blue, got %+v", c.FG)
@@ -174,16 +185,22 @@ func TestColorize_Log(t *testing.T) {
 			}
 		}
 	}
+
+	// Original Cells should be untouched
+	if line.Cells[0].FG != parser.DefaultFG {
+		t.Error("expected original Cells to remain unmodified")
+	}
 }
 
 func TestColorize_XML_Chroma(t *testing.T) {
 	line := makeCells(`<root attr="val">`)
+	prepareOverlay(line)
 	style := chromaStyle("")
 	chromaColorizeLines([]*parser.LogicalLine{line}, "xml", style)
 
-	// Chroma should colorize XML elements
+	// Chroma should colorize XML elements in overlay
 	colored := 0
-	for _, c := range line.Cells {
+	for _, c := range line.Overlay {
 		if c.Rune != ' ' && c.FG.Mode != parser.ColorModeDefault {
 			colored++
 		}
@@ -452,12 +469,15 @@ func TestColorize_Go_MultiLineContext(t *testing.T) {
 		makeCells(`    fmt.Println("hello")`),
 		makeCells(`}`),
 	}
+	for _, line := range lines {
+		prepareOverlay(line)
+	}
 	style := chromaStyle("")
 	chromaColorizeLines(lines, "go", style)
 
 	colored := 0
 	for _, line := range lines {
-		for _, c := range line.Cells {
+		for _, c := range line.Overlay {
 			if c.FG.Mode == parser.ColorModeRGB {
 				colored++
 			}
@@ -478,11 +498,12 @@ func TestColorize_WithContext_Streaming(t *testing.T) {
 		`import "fmt"`,
 	}
 	line := makeCells(`func main() {`)
+	prepareOverlay(line)
 	chromaColorizeWithContext(line, context, "go", style)
 
 	// "func" should be colored as a keyword with full context
 	colored := 0
-	for _, c := range line.Cells {
+	for _, c := range line.Overlay {
 		if c.FG.Mode == parser.ColorModeRGB {
 			colored++
 		}
@@ -498,12 +519,15 @@ func TestColorize_Markdown_MultiLine(t *testing.T) {
 		makeCells(`Some text with **bold** words`),
 		makeCells(`- list item`),
 	}
+	for _, line := range lines {
+		prepareOverlay(line)
+	}
 	style := chromaStyle("")
 	chromaColorizeLines(lines, "markdown", style)
 
-	// Check that heading gets colored or has attributes
+	// Check that heading gets colored or has attributes in overlay
 	headingColored := false
-	for _, c := range lines[0].Cells {
+	for _, c := range lines[0].Overlay {
 		if c.FG.Mode == parser.ColorModeRGB || c.Attr != 0 {
 			headingColored = true
 			break
