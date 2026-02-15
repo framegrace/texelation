@@ -28,7 +28,7 @@ func init() {
 var (
 	_ transformer.Transformer    = (*TableFormatter)(nil)
 	_ transformer.LineInserter   = (*TableFormatter)(nil)
-	_ transformer.LineReplacer   = (*TableFormatter)(nil)
+	_ transformer.LineOverlayer  = (*TableFormatter)(nil)
 	_ transformer.LineSuppressor = (*TableFormatter)(nil)
 )
 
@@ -65,7 +65,7 @@ type TableFormatter struct {
 	wasCommand          bool
 	hasShellIntegration bool
 	insertFunc          func(beforeIdx int64, cells []parser.Cell)
-	replaceFunc         func(lineIdx int64, cells []parser.Cell)
+	overlayFunc         func(lineIdx int64, cells []parser.Cell)
 	detectors           []detectorThreshold
 	activeDetector      tableDetector
 }
@@ -88,9 +88,9 @@ func (tf *TableFormatter) SetInsertFunc(fn func(beforeIdx int64, cells []parser.
 	tf.insertFunc = fn
 }
 
-// SetReplaceFunc implements transformer.LineReplacer.
-func (tf *TableFormatter) SetReplaceFunc(fn func(lineIdx int64, cells []parser.Cell)) {
-	tf.replaceFunc = fn
+// SetOverlayFunc implements transformer.LineOverlayer.
+func (tf *TableFormatter) SetOverlayFunc(fn func(lineIdx int64, cells []parser.Cell)) {
+	tf.overlayFunc = fn
 }
 
 // NotifyPromptStart signals that shell integration is active.
@@ -239,17 +239,15 @@ func (tf *TableFormatter) flush() {
 }
 
 // emitRendered writes rendered table rows into the buffer. Suppressed lines
-// are overwritten via replaceFunc; any extra rows are inserted.
+// are overlaid via overlayFunc; any extra rows are inserted.
 func (tf *TableFormatter) emitRendered(rendered [][]parser.Cell) {
 	nBuf := len(tf.buffer)
 	insertBase := tf.buffer[nBuf-1].lineIdx + 1
 	extraCount := int64(0)
 	for i, row := range rendered {
-		if i < nBuf && tf.replaceFunc != nil {
-			tf.replaceFunc(tf.buffer[i].lineIdx, row)
+		if i < nBuf && tf.overlayFunc != nil {
+			tf.overlayFunc(tf.buffer[i].lineIdx, row)
 		} else if tf.insertFunc != nil {
-			// Insert extra rows after the last buffered line.
-			// Each insert shifts lines down, so increment position.
 			tf.insertFunc(insertBase+extraCount, row)
 			extraCount++
 		}
@@ -257,11 +255,11 @@ func (tf *TableFormatter) emitRendered(rendered [][]parser.Cell) {
 }
 
 // flushRaw restores all buffered lines without formatting. Suppressed lines
-// are overwritten with their original content via replaceFunc.
+// had their Cells cleared by the pipeline, so we overlay the original content.
 func (tf *TableFormatter) flushRaw() {
-	if tf.replaceFunc != nil {
+	if tf.overlayFunc != nil {
 		for _, bl := range tf.buffer {
-			tf.replaceFunc(bl.lineIdx, bl.line.Cells)
+			tf.overlayFunc(bl.lineIdx, bl.line.Cells)
 		}
 	} else if tf.insertFunc != nil {
 		for _, bl := range tf.buffer {

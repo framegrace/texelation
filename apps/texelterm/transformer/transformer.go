@@ -29,11 +29,10 @@ type LineInserter interface {
 	SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell))
 }
 
-// LineReplacer is an optional interface that transformers can implement
-// to receive a callback for replacing the content of existing lines.
-// Used with LineSuppressor to overwrite suppressed lines with formatted output.
-type LineReplacer interface {
-	SetReplaceFunc(fn func(lineIdx int64, cells []parser.Cell))
+// LineOverlayer is an optional interface that transformers can implement
+// to receive a callback for setting overlay content on existing lines.
+type LineOverlayer interface {
+	SetOverlayFunc(fn func(lineIdx int64, cells []parser.Cell))
 }
 
 // LineSuppressor is an optional interface that transformers can implement
@@ -81,7 +80,7 @@ func Lookup(id string) (Factory, bool) {
 type Pipeline struct {
 	transformers []Transformer
 	insertFunc   func(beforeIdx int64, cells []parser.Cell)
-	replaceFunc  func(lineIdx int64, cells []parser.Cell)
+	overlayFunc  func(lineIdx int64, cells []parser.Cell)
 }
 
 // SetInsertFunc sets the line insertion callback. The pipeline forwards
@@ -95,13 +94,13 @@ func (p *Pipeline) SetInsertFunc(fn func(beforeIdx int64, cells []parser.Cell)) 
 	}
 }
 
-// SetReplaceFunc sets the line replacement callback. The pipeline forwards
-// it to any transformer that implements LineReplacer.
-func (p *Pipeline) SetReplaceFunc(fn func(lineIdx int64, cells []parser.Cell)) {
-	p.replaceFunc = fn
+// SetOverlayFunc sets the line overlay callback. The pipeline forwards
+// it to any transformer that implements LineOverlayer.
+func (p *Pipeline) SetOverlayFunc(fn func(lineIdx int64, cells []parser.Cell)) {
+	p.overlayFunc = fn
 	for _, t := range p.transformers {
-		if lr, ok := t.(LineReplacer); ok {
-			lr.SetReplaceFunc(fn)
+		if lo, ok := t.(LineOverlayer); ok {
+			lo.SetOverlayFunc(fn)
 		}
 	}
 }

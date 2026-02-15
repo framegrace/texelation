@@ -1271,23 +1271,21 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	if line == nil {
 		return
 	}
-	line.Cells = cells
-	line.FixedWidth = len(cells)
+	// Inserted lines are synthetic (transformer-generated).
+	// Content goes in Overlay, not Cells.
+	line.Overlay = cells
+	line.OverlayWidth = len(cells)
+	line.Synthetic = true
 	v.commitInsertOffset++
-	// InsertLine shifts all lines from beforeIdx downward. If the insertion
-	// is at or before the cursor's current global position, liveEdgeBase
-	// must be adjusted so that subsequent writes (which use liveEdgeBase +
-	// cursorY) still target the correct line.
 	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
 	if beforeIdx <= cursorGlobal {
 		v.memBufState.liveEdgeBase++
 	}
 }
 
-// RequestLineReplace overwrites the content of an existing line in the memory
-// buffer. Used by transformers to replace suppressed (cleared) lines with
-// formatted content without inserting additional lines.
-func (v *VTerm) RequestLineReplace(lineIdx int64, cells []Cell) {
+// RequestLineOverlay sets overlay content on an existing line without modifying
+// the original Cells. Used by transformers to provide formatted views.
+func (v *VTerm) RequestLineOverlay(lineIdx int64, cells []Cell) {
 	if !v.IsMemoryBufferEnabled() {
 		return
 	}
@@ -1295,8 +1293,8 @@ func (v *VTerm) RequestLineReplace(lineIdx int64, cells []Cell) {
 	if line == nil {
 		return
 	}
-	line.Cells = cells
-	line.FixedWidth = len(cells)
+	line.Overlay = cells
+	line.OverlayWidth = len(cells)
 }
 
 // Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.
