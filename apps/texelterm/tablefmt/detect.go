@@ -17,7 +17,7 @@ import (
 type alignment int
 
 const (
-	alignLeft   alignment = iota
+	alignLeft alignment = iota
 	alignRight
 	alignCenter
 )
@@ -39,7 +39,7 @@ type tableStructure struct {
 type tableType int
 
 const (
-	tableNone         tableType = iota
+	tableNone tableType = iota
 	tableMarkdown
 	tablePipeSeparated
 	tableSpaceAligned

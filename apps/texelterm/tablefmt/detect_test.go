@@ -475,10 +475,10 @@ func TestCSVDetector_Compatible(t *testing.T) {
 		line string
 		want bool
 	}{
-		{"a,b,c", true},     // count=2, matches exactly
-		{"a,b", true},       // count=1, within +-1
-		{"a,b,c,d", true},   // count=3, within +-1
-		{"", true},          // blank
+		{"a,b,c", true},      // count=2, matches exactly
+		{"a,b", true},        // count=1, within +-1
+		{"a,b,c,d", true},    // count=3, within +-1
+		{"", true},           // blank
 		{"no commas", false}, // count=0, not within +-1 of 2
 	}
 	for _, tt := range tests {
