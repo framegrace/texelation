@@ -199,6 +199,31 @@ func (l *LogicalLine) WrapToWidth(width int) []PhysicalLine {
 	return result
 }
 
+// ActiveWrapToWidth returns physical lines for the active content layer.
+// When showOverlay is true and Overlay is set, renders overlay as fixed-width.
+// When showOverlay is false, renders Cells normally (Synthetic lines return nil).
+func (l *LogicalLine) ActiveWrapToWidth(width int, showOverlay bool) []PhysicalLine {
+	if !showOverlay {
+		if l.Synthetic {
+			return nil
+		}
+		return l.WrapToWidth(width)
+	}
+
+	if l.Overlay != nil {
+		overlay := &LogicalLine{
+			Cells:      l.Overlay,
+			FixedWidth: l.OverlayWidth,
+		}
+		if overlay.FixedWidth == 0 {
+			overlay.FixedWidth = len(l.Overlay)
+		}
+		return overlay.WrapToWidth(width)
+	}
+
+	return l.WrapToWidth(width)
+}
+
 // TrimTrailingSpaces removes trailing space cells from the line.
 // Useful for storage efficiency - trailing spaces don't need to be persisted.
 func (l *LogicalLine) TrimTrailingSpaces() {
