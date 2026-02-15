@@ -26,6 +26,7 @@ func renderTable(ts *tableStructure) [][]parser.Cell {
 
 	result = append(result, makeHBorder(colWidths, '╰', '┴', '╯', '─'))
 	classifyAndColorize(ts, result)
+	transferOriginalColors(ts, result)
 	return result
 }
 
@@ -173,5 +174,61 @@ func contentCell(r rune) parser.Cell {
 		Rune: r,
 		FG:   parser.DefaultFG,
 		BG:   parser.DefaultBG,
+	}
+}
+
+// transferOriginalColors copies non-default FG colors from the original terminal
+// cells to the rendered table output. This preserves colors from commands like
+// `ls --color` (blue for directories, green for executables, etc.) that would
+// otherwise be replaced by tablefmt's inferred column-type colors.
+func transferOriginalColors(ts *tableStructure, renderedLines [][]parser.Cell) {
+	if ts == nil || len(ts.originalCells) == 0 {
+		return
+	}
+
+	dataLineStart := 1 // skip top border
+	dataRowIdx := 0
+	for i := dataLineStart; i < len(renderedLines)-1; i++ {
+		cells := renderedLines[i]
+		if len(cells) > 0 && isBorderLine(cells) {
+			continue
+		}
+		if dataRowIdx >= len(ts.originalCells) {
+			break
+		}
+		origCells := ts.originalCells[dataRowIdx]
+		transferRowColors(cells, origCells)
+		dataRowIdx++
+	}
+}
+
+// transferRowColors walks through a rendered row and its corresponding original
+// cells, matching content characters by rune. When a match is found and the
+// original cell has a non-default FG color, that color is copied to the
+// rendered cell.
+func transferRowColors(rendered []parser.Cell, original []parser.Cell) {
+	origCursor := 0
+	for i := range rendered {
+		c := &rendered[i]
+		// Skip border cells (dim │ characters).
+		if c.Attr&parser.AttrDim != 0 {
+			continue
+		}
+		// Skip padding spaces.
+		if c.Rune == ' ' {
+			continue
+		}
+		// Advance origCursor to find a matching rune in the original cells.
+		for origCursor < len(original) && original[origCursor].Rune != c.Rune {
+			origCursor++
+		}
+		if origCursor >= len(original) {
+			break
+		}
+		// Transfer non-default FG from original.
+		if original[origCursor].FG.Mode != parser.ColorModeDefault {
+			c.FG = original[origCursor].FG
+		}
+		origCursor++
 	}
 }

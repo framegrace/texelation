@@ -217,6 +217,127 @@ func TestRenderTable_MultiColumnStructure(t *testing.T) {
 	}
 }
 
+func TestRenderTable_PreservesOriginalColors(t *testing.T) {
+	blue := parser.Color{Mode: parser.ColorModeStandard, Value: 4}
+	green := parser.Color{Mode: parser.ColorModeStandard, Value: 2}
+
+	// Simulate ls --color output with blue directories and green executables.
+	// Two columns: PERMISSIONS and NAME, space-aligned.
+	ts := &tableStructure{
+		columns:   []columnInfo{{align: alignLeft}, {align: alignLeft}},
+		headerRow: -1,
+		rows:      [][]string{{"drwxr-xr-x", "docs"}, {"-rwxr-xr-x", "run.sh"}},
+		originalCells: [][]parser.Cell{
+			// Row 0: "drwxr-xr-x  docs" with "docs" in blue
+			makeCellsWithColor("drwxr-xr-x  ", parser.DefaultFG, "docs", blue),
+			// Row 1: "-rwxr-xr-x  run.sh" with "run.sh" in green
+			makeCellsWithColor("-rwxr-xr-x  ", parser.DefaultFG, "run.sh", green),
+		},
+		tableType: tableSpaceAligned,
+	}
+	lines := renderTable(ts)
+	if lines == nil {
+		t.Fatal("renderTable returned nil")
+	}
+
+	// Find data rows (non-border lines).
+	var dataRows [][]parser.Cell
+	for _, line := range lines {
+		if !isBorderLine(line) {
+			dataRows = append(dataRows, line)
+		}
+	}
+	if len(dataRows) != 2 {
+		t.Fatalf("expected 2 data rows, got %d", len(dataRows))
+	}
+
+	// In row 0, "docs" characters should have blue FG.
+	// Use 'o' and 'c' which are unique to "docs" (not in "drwxr-xr-x").
+	assertCellColor(t, dataRows[0], 'o', blue, "row 0 'o' of 'docs'")
+	assertCellColor(t, dataRows[0], 'c', blue, "row 0 'c' of 'docs'")
+
+	// In row 1, "run.sh" characters should have green FG.
+	// Use 'u' and 'n' which are unique to "run.sh" (not in "-rwxr-xr-x").
+	assertCellColor(t, dataRows[1], 'u', green, "row 1 'u' of 'run.sh'")
+	assertCellColor(t, dataRows[1], 'n', green, "row 1 'n' of 'run.sh'")
+}
+
+func TestRenderTable_DefaultFGNotOverridden(t *testing.T) {
+	// When original cells have DefaultFG, tablefmt's inferred colors should remain.
+	ts := &tableStructure{
+		columns:   []columnInfo{{align: alignLeft}, {align: alignRight}},
+		headerRow: 0,
+		rows:      [][]string{{"Name", "Score"}, {"Alice", "95"}},
+		originalCells: [][]parser.Cell{
+			makePlainCells("Name   Score"),
+			makePlainCells("Alice  95"),
+		},
+		tableType: tableSpaceAligned,
+	}
+	lines := renderTable(ts)
+	if lines == nil {
+		t.Fatal("renderTable returned nil")
+	}
+
+	// "95" is classified as colNumber → yellow. Since original has DefaultFG,
+	// the yellow should remain.
+	var dataRows [][]parser.Cell
+	for _, line := range lines {
+		if !isBorderLine(line) {
+			dataRows = append(dataRows, line)
+		}
+	}
+	if len(dataRows) < 2 {
+		t.Fatalf("expected at least 2 data rows, got %d", len(dataRows))
+	}
+
+	// Find '9' in the second data row (row index 1, skipping header).
+	yellow := parser.Color{Mode: parser.ColorModeStandard, Value: 3}
+	assertCellColor(t, dataRows[1], '9', yellow, "row 1 '9' should keep yellow from classify")
+}
+
+func TestRenderTable_NoOriginalCells(t *testing.T) {
+	// When originalCells is nil, rendering should work normally (no panic).
+	ts := &tableStructure{
+		columns:   []columnInfo{{align: alignLeft}},
+		headerRow: -1,
+		rows:      [][]string{{"hello"}},
+		tableType: tableMarkdown,
+	}
+	lines := renderTable(ts)
+	if lines == nil {
+		t.Fatal("renderTable returned nil")
+	}
+}
+
+// makeCellsWithColor creates cells where prefix has defaultColor FG and
+// colored has the specified FG color.
+func makeCellsWithColor(prefix string, defaultColor parser.Color, colored string, fg parser.Color) []parser.Cell {
+	var cells []parser.Cell
+	for _, r := range prefix {
+		cells = append(cells, parser.Cell{Rune: r, FG: defaultColor, BG: parser.DefaultBG})
+	}
+	for _, r := range colored {
+		cells = append(cells, parser.Cell{Rune: r, FG: fg, BG: parser.DefaultBG})
+	}
+	return cells
+}
+
+// assertCellColor finds the first cell with the given rune in a rendered row
+// and asserts its FG matches the expected color.
+func assertCellColor(t *testing.T, row []parser.Cell, r rune, expected parser.Color, desc string) {
+	t.Helper()
+	for _, c := range row {
+		if c.Rune == r && c.Attr&parser.AttrDim == 0 {
+			if c.FG != expected {
+				t.Errorf("%s: expected FG %+v, got %+v", desc, expected, c.FG)
+			}
+			return
+		}
+	}
+	t.Errorf("%s: rune %c not found in row", desc, r)
+}
+
 func TestRenderTable_FewerCellsThanColumns(t *testing.T) {
 	ts := &tableStructure{
 		columns:   []columnInfo{{align: alignLeft}, {align: alignLeft}, {align: alignLeft}},

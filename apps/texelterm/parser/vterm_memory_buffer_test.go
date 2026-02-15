@@ -3790,3 +3790,243 @@ func TestLoadHistory_ResetsTerminalColors(t *testing.T) {
 		}
 	}
 }
+
+// TestOverlayPersistenceRoundTrip verifies that overlay data survives a full
+// VTerm close→reopen cycle. This reproduces the user-reported bug where
+// overlay content was lost on restart.
+func TestOverlayPersistenceRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	diskPath := filepath.Join(tmpDir, "test_overlay_persist.hist3")
+	terminalID := "test-overlay-persist"
+
+	width, height := 40, 10
+
+	// Session 1: Write lines, set overlay on some, then close
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("Session 1: EnableMemoryBufferWithDisk failed: %v", err)
+		}
+
+		p := NewParser(v)
+
+		// Write 5 lines
+		for i := 0; i < 5; i++ {
+			parseString(p, fmt.Sprintf("Line %d original content", i))
+			p.Parse('\n')
+			p.Parse('\r')
+		}
+
+		// Set overlay on lines 0, 1, 2 (simulating transformer behavior)
+		mb := v.memBufState.memBuf
+		for i := 0; i < 3; i++ {
+			lineIdx := mb.GlobalOffset() + int64(i)
+			line := mb.GetLine(lineIdx)
+			if line == nil {
+				t.Fatalf("Session 1: GetLine(%d) returned nil", lineIdx)
+			}
+
+			// Create overlay cells (different from original)
+			overlayCells := make([]Cell, 0, 30)
+			overlayText := fmt.Sprintf("Line %d OVERLAY content", i)
+			for _, ch := range overlayText {
+				overlayCells = append(overlayCells, Cell{Rune: ch, FG: DefaultFG, BG: DefaultBG})
+			}
+
+			line.Overlay = overlayCells
+			line.OverlayWidth = len(overlayCells)
+
+			// Notify persistence of the change
+			v.memBufState.persistence.NotifyWrite(lineIdx)
+		}
+
+		// Close (triggers viewport flush + checkpoint)
+		if err := v.CloseMemoryBuffer(); err != nil {
+			t.Fatalf("Session 1: CloseMemoryBuffer failed: %v", err)
+		}
+	}
+
+	// Session 2: Reopen and verify overlay data survived
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("Session 2: EnableMemoryBufferWithDisk failed: %v", err)
+		}
+		defer v.CloseMemoryBuffer()
+
+		mb := v.memBufState.memBuf
+
+		// Check lines 0-2 have overlay
+		for i := 0; i < 3; i++ {
+			lineIdx := mb.GlobalOffset() + int64(i)
+			line := mb.GetLine(lineIdx)
+			if line == nil {
+				t.Errorf("Session 2: GetLine(%d) returned nil", lineIdx)
+				continue
+			}
+
+			if line.Overlay == nil {
+				t.Errorf("Session 2: Line %d overlay is nil (expected overlay content)", i)
+				continue
+			}
+
+			overlayStr := cellsToString(line.Overlay)
+			expected := fmt.Sprintf("Line %d OVERLAY content", i)
+			if !strings.Contains(overlayStr, expected) {
+				t.Errorf("Session 2: Line %d overlay = %q, want containing %q", i, overlayStr, expected)
+			}
+
+			t.Logf("Line %d: Cells=%q, Overlay=%q, OverlayWidth=%d, Synthetic=%v",
+				i, cellsToString(line.Cells), overlayStr, line.OverlayWidth, line.Synthetic)
+		}
+
+		// Lines 3-4 should NOT have overlay
+		for i := 3; i < 5; i++ {
+			lineIdx := mb.GlobalOffset() + int64(i)
+			line := mb.GetLine(lineIdx)
+			if line == nil {
+				continue
+			}
+			if line.Overlay != nil {
+				t.Errorf("Session 2: Line %d unexpectedly has overlay: %q", i, cellsToString(line.Overlay))
+			}
+		}
+
+		// Also check the grid renders correctly with overlay (showOverlay defaults true)
+		grid := v.Grid()
+		if grid != nil && len(grid) > 0 {
+			for i := 0; i < 3; i++ {
+				rowStr := gridRowToString(grid[i])
+				expected := fmt.Sprintf("Line %d OVERLAY content", i)
+				if !strings.Contains(rowStr, expected) {
+					t.Errorf("Session 2: Grid row %d = %q, want containing %q (overlay should render)", i, rowStr, expected)
+				}
+			}
+		}
+	}
+}
+
+// TestGetContentText_PrefersOverlayWhenEnabled verifies that GetContentText
+// returns overlay content only when ShowOverlay is enabled (ctrl-T toggle on),
+// and returns original Cells content when disabled.
+func TestGetContentText_PrefersOverlayWhenEnabled(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 40, 10
+
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write 3 lines of original content
+	parseString(p, "original line 0\r\n")
+	parseString(p, "original line 1\r\n")
+	parseString(p, "original line 2\r\n")
+
+	mb := v.memBufState.memBuf
+
+	// Set overlay on line 1 (simulating transformer like tablefmt)
+	lineIdx := mb.GlobalOffset() + 1
+	line := mb.GetLine(lineIdx)
+	if line == nil {
+		t.Fatalf("GetLine(%d) returned nil", lineIdx)
+	}
+	overlayText := "formatted line 1"
+	overlayCells := make([]Cell, len(overlayText))
+	for i, ch := range overlayText {
+		overlayCells[i] = Cell{Rune: ch, FG: DefaultFG, BG: DefaultBG}
+	}
+	line.Overlay = overlayCells
+	line.OverlayWidth = len(overlayCells)
+
+	line0Idx := mb.GlobalOffset()
+
+	// ShowOverlay defaults to true — should return overlay content
+	if !v.ShowOverlay() {
+		t.Fatal("ShowOverlay should default to true")
+	}
+	got := v.GetContentText(lineIdx, 0, lineIdx, len(overlayCells))
+	if got != overlayText {
+		t.Errorf("overlay ON: got %q, want %q", got, overlayText)
+	}
+
+	// Line without overlay should still return original regardless
+	got0 := v.GetContentText(line0Idx, 0, line0Idx, 40)
+	if !strings.Contains(got0, "original line 0") {
+		t.Errorf("overlay ON, no overlay on line: got %q, want containing %q", got0, "original line 0")
+	}
+
+	// Multi-line: cells for line 0, overlay for line 1
+	gotMulti := v.GetContentText(line0Idx, 0, lineIdx, len(overlayCells))
+	if !strings.Contains(gotMulti, "original line 0") {
+		t.Errorf("overlay ON multi-line: got %q, want containing %q", gotMulti, "original line 0")
+	}
+	if !strings.Contains(gotMulti, "formatted line 1") {
+		t.Errorf("overlay ON multi-line: got %q, want containing %q", gotMulti, "formatted line 1")
+	}
+
+	// Toggle overlay OFF — should return original Cells content
+	v.SetShowOverlay(false)
+
+	gotOff := v.GetContentText(lineIdx, 0, lineIdx, 40)
+	if !strings.Contains(gotOff, "original line 1") {
+		t.Errorf("overlay OFF: got %q, want containing %q", gotOff, "original line 1")
+	}
+	if strings.Contains(gotOff, "formatted") {
+		t.Errorf("overlay OFF: got %q, should not contain overlay content", gotOff)
+	}
+}
+
+// TestGetContentText_SyntheticLineWithOverlay verifies that synthetic lines
+// (inserted by transformers, having Overlay but empty Cells) are included
+// in GetContentText output when overlay is enabled, and skipped when disabled.
+func TestGetContentText_SyntheticLineWithOverlay(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 40, 10
+
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write a line so we have something in the buffer
+	parseString(p, "real line\r\n")
+	parseString(p, "another line\r\n")
+
+	mb := v.memBufState.memBuf
+
+	// Simulate a synthetic line (overlay set, cells empty) on line 0
+	lineIdx := mb.GlobalOffset()
+	line := mb.GetLine(lineIdx)
+	if line == nil {
+		t.Fatalf("GetLine(%d) returned nil", lineIdx)
+	}
+	syntheticText := "--- table border ---"
+	overlayCells := make([]Cell, len(syntheticText))
+	for i, ch := range syntheticText {
+		overlayCells[i] = Cell{Rune: ch, FG: DefaultFG, BG: DefaultBG}
+	}
+	line.Overlay = overlayCells
+	line.OverlayWidth = len(overlayCells)
+	line.Cells = nil // synthetic: no original cells
+
+	// Overlay ON: should return synthetic content
+	got := v.GetContentText(lineIdx, 0, lineIdx, len(overlayCells))
+	if got != syntheticText {
+		t.Errorf("overlay ON synthetic: got %q, want %q", got, syntheticText)
+	}
+
+	// Overlay OFF: synthetic line has no Cells, should produce empty
+	v.SetShowOverlay(false)
+	gotOff := v.GetContentText(lineIdx, 0, lineIdx, len(overlayCells))
+	if gotOff != "" {
+		t.Errorf("overlay OFF synthetic: got %q, want empty", gotOff)
+	}
+}

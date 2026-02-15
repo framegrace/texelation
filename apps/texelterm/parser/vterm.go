@@ -568,8 +568,12 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 		if line == nil {
 			continue
 		}
+		cells := line.Cells
+		if line.Overlay != nil && v.ShowOverlay() {
+			cells = line.Overlay
+		}
 		start := 0
-		end := len(line.Cells)
+		end := len(cells)
 		if lineIdx == startLine {
 			start = startOffset
 		}
@@ -579,8 +583,8 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 
 		// Extract and trim trailing spaces from each line
 		var lineRunes []rune
-		for i := start; i < end && i < len(line.Cells); i++ {
-			r := line.Cells[i].Rune
+		for i := start; i < end && i < len(cells); i++ {
+			r := cells[i].Rune
 			if r == 0 {
 				r = ' '
 			}
