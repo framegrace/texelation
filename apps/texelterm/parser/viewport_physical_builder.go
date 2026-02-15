@@ -24,7 +24,7 @@ func NewPhysicalLineBuilder(width int) *PhysicalLineBuilder {
 	if width <= 0 {
 		width = DefaultWidth
 	}
-	return &PhysicalLineBuilder{width: width}
+	return &PhysicalLineBuilder{width: width, showOverlay: true}
 }
 
 // SetShowOverlay sets whether to render overlay content when available.

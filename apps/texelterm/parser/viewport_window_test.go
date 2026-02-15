@@ -994,13 +994,12 @@ func TestViewportWindow_ToggleOverlay(t *testing.T) {
 
 	vw := NewViewportWindow(mb, 40, 5)
 
-	// Default: showOverlay is false
-	if vw.ShowOverlay() {
-		t.Error("default should be showOverlay=false")
+	// Default: showOverlay is true (design spec)
+	if !vw.ShowOverlay() {
+		t.Error("default should be showOverlay=true")
 	}
 
-	// Enable overlay
-	vw.SetShowOverlay(true)
+	// Overlay is already enabled by default
 	grid1 := vw.GetVisibleGrid()
 	row0text := ""
 	for _, c := range grid1[0] {

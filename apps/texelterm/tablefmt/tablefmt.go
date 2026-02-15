@@ -26,9 +26,9 @@ func init() {
 
 // Compile-time interface verification.
 var (
-	_ transformer.Transformer    = (*TableFormatter)(nil)
-	_ transformer.LineInserter   = (*TableFormatter)(nil)
-	_ transformer.LineOverlayer  = (*TableFormatter)(nil)
+	_ transformer.Transformer         = (*TableFormatter)(nil)
+	_ transformer.LineInserter        = (*TableFormatter)(nil)
+	_ transformer.LineOverlayer       = (*TableFormatter)(nil)
 	_ transformer.LineSuppressor      = (*TableFormatter)(nil)
 	_ transformer.LinePersistNotifier = (*TableFormatter)(nil)
 )

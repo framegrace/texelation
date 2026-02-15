@@ -85,8 +85,8 @@ func Lookup(id string) (Factory, bool) {
 
 // Pipeline is an ordered chain of transformers.
 type Pipeline struct {
-	transformers []Transformer
-	insertFunc   func(beforeIdx int64, cells []parser.Cell)
+	transformers      []Transformer
+	insertFunc        func(beforeIdx int64, cells []parser.Cell)
 	overlayFunc       func(lineIdx int64, cells []parser.Cell)
 	persistNotifyFunc func(lineIdx int64)
 }

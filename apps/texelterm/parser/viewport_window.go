@@ -289,6 +289,7 @@ func (vw *ViewportWindow) SetShowOverlay(show bool) {
 		return
 	}
 	vw.builder.SetShowOverlay(show)
+	vw.scroll.InvalidateIndex()
 	vw.cache.Invalidate()
 }
 
