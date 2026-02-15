@@ -8,6 +8,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -971,6 +972,57 @@ func TestPhysicalLineBuilder_BuildRangeSkipsSynthetic(t *testing.T) {
 	}
 	if physical[1].LogicalIndex != 102 {
 		t.Errorf("second line: expected LogicalIndex 102, got %d", physical[1].LogicalIndex)
+	}
+}
+
+// --- Overlay Toggle Tests ---
+
+func TestViewportWindow_ToggleOverlay(t *testing.T) {
+	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100})
+	mb.SetTermWidth(40)
+
+	// Write content
+	for _, r := range "Hello World" {
+		mb.Write(r, DefaultFG, DefaultBG, 0)
+	}
+	mb.NewLine()
+
+	// Set overlay on line 0
+	line := mb.GetLine(0)
+	line.Overlay = vwMakeCells("| Hello | World |")
+	line.OverlayWidth = 40
+
+	vw := NewViewportWindow(mb, 40, 5)
+
+	// Default: showOverlay is false
+	if vw.ShowOverlay() {
+		t.Error("default should be showOverlay=false")
+	}
+
+	// Enable overlay
+	vw.SetShowOverlay(true)
+	grid1 := vw.GetVisibleGrid()
+	row0text := ""
+	for _, c := range grid1[0] {
+		if c.Rune != 0 && c.Rune != ' ' {
+			row0text += string(c.Rune)
+		}
+	}
+	if !strings.Contains(row0text, "|Hello|World|") {
+		t.Errorf("overlay mode should show overlay content, got: %q", row0text)
+	}
+
+	// Toggle to original
+	vw.SetShowOverlay(false)
+	grid2 := vw.GetVisibleGrid()
+	row0text = ""
+	for _, c := range grid2[0] {
+		if c.Rune != 0 && c.Rune != ' ' {
+			row0text += string(c.Rune)
+		}
+	}
+	if !strings.Contains(row0text, "HelloWorld") {
+		t.Errorf("original mode should show original content, got: %q", row0text)
 	}
 }
 

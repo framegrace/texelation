@@ -279,6 +279,26 @@ func (vw *ViewportWindow) Resize(newWidth, newHeight int) {
 	vw.cache.Invalidate()
 }
 
+// SetShowOverlay toggles between formatted (overlay) and original content.
+// Invalidates the viewport cache since physical line layout changes.
+func (vw *ViewportWindow) SetShowOverlay(show bool) {
+	vw.mu.Lock()
+	defer vw.mu.Unlock()
+
+	if vw.builder.ShowOverlay() == show {
+		return
+	}
+	vw.builder.SetShowOverlay(show)
+	vw.cache.Invalidate()
+}
+
+// ShowOverlay returns the current overlay display state.
+func (vw *ViewportWindow) ShowOverlay() bool {
+	vw.mu.RLock()
+	defer vw.mu.RUnlock()
+	return vw.builder.ShowOverlay()
+}
+
 // Width returns the current viewport width.
 func (vw *ViewportWindow) Width() int {
 	vw.mu.RLock()
