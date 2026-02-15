@@ -1297,6 +1297,14 @@ func (v *VTerm) RequestLineOverlay(lineIdx int64, cells []Cell) {
 	line.OverlayWidth = len(cells)
 }
 
+// NotifyLinePersist notifies the persistence layer that a line is ready for writing.
+// Used by transformers after setting overlay content on previously suppressed lines.
+func (v *VTerm) NotifyLinePersist(lineIdx int64) {
+	if v.memBufState.persistence != nil {
+		v.memBufState.persistence.NotifyWrite(lineIdx)
+	}
+}
+
 // Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.
 // This callback is called BEFORE persistence, which can cause search index entries
 // for content that doesn't exist on disk after a crash.

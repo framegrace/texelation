@@ -608,9 +608,9 @@ func (v *VTerm) memoryBufferLineFeed() {
 		v.commitInsertOffset = 0
 		if line := v.memBufState.memBuf.GetLine(currentGlobal); line != nil {
 			if v.OnLineCommit(currentGlobal, line, v.CommandActive) {
-				// Line suppressed by transformer — clear it so it doesn't
-				// enter scrollback with stale content.
-				line.Clear()
+				// Line is being buffered by a transformer.
+				// Original Cells stay intact. Persistence is deferred
+				// until the transformer flushes and calls persistNotifyFunc.
 				return
 			}
 		}

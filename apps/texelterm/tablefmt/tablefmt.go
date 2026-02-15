@@ -29,7 +29,8 @@ var (
 	_ transformer.Transformer    = (*TableFormatter)(nil)
 	_ transformer.LineInserter   = (*TableFormatter)(nil)
 	_ transformer.LineOverlayer  = (*TableFormatter)(nil)
-	_ transformer.LineSuppressor = (*TableFormatter)(nil)
+	_ transformer.LineSuppressor      = (*TableFormatter)(nil)
+	_ transformer.LinePersistNotifier = (*TableFormatter)(nil)
 )
 
 // detectorThreshold pairs a detector with its minimum score for table parsing.
@@ -66,6 +67,7 @@ type TableFormatter struct {
 	hasShellIntegration bool
 	insertFunc          func(beforeIdx int64, cells []parser.Cell)
 	overlayFunc         func(lineIdx int64, cells []parser.Cell)
+	persistNotifyFunc   func(lineIdx int64)
 	detectors           []detectorThreshold
 	activeDetector      tableDetector
 }
@@ -91,6 +93,11 @@ func (tf *TableFormatter) SetInsertFunc(fn func(beforeIdx int64, cells []parser.
 // SetOverlayFunc implements transformer.LineOverlayer.
 func (tf *TableFormatter) SetOverlayFunc(fn func(lineIdx int64, cells []parser.Cell)) {
 	tf.overlayFunc = fn
+}
+
+// SetPersistNotifyFunc implements transformer.LinePersistNotifier.
+func (tf *TableFormatter) SetPersistNotifyFunc(fn func(lineIdx int64)) {
+	tf.persistNotifyFunc = fn
 }
 
 // NotifyPromptStart signals that shell integration is active.
@@ -247,23 +254,27 @@ func (tf *TableFormatter) emitRendered(rendered [][]parser.Cell) {
 	for i, row := range rendered {
 		if i < nBuf && tf.overlayFunc != nil {
 			tf.overlayFunc(tf.buffer[i].lineIdx, row)
+			if tf.persistNotifyFunc != nil {
+				tf.persistNotifyFunc(tf.buffer[i].lineIdx)
+			}
 		} else if tf.insertFunc != nil {
 			tf.insertFunc(insertBase+extraCount, row)
+			if tf.persistNotifyFunc != nil {
+				tf.persistNotifyFunc(insertBase + extraCount)
+			}
 			extraCount++
 		}
 	}
 }
 
-// flushRaw restores all buffered lines without formatting. Suppressed lines
-// had their Cells cleared by the pipeline, so we overlay the original content.
+// flushRaw restores all buffered lines without formatting. Original Cells were
+// never mutated, so we just notify persistence for each buffered line.
 func (tf *TableFormatter) flushRaw() {
-	if tf.overlayFunc != nil {
+	// Original Cells were never mutated. Notify persistence for each
+	// buffered line so they get written to disk.
+	if tf.persistNotifyFunc != nil {
 		for _, bl := range tf.buffer {
-			tf.overlayFunc(bl.lineIdx, bl.line.Cells)
-		}
-	} else if tf.insertFunc != nil {
-		for _, bl := range tf.buffer {
-			tf.insertFunc(bl.lineIdx, bl.line.Cells)
+			tf.persistNotifyFunc(bl.lineIdx)
 		}
 	}
 	tf.resetState()

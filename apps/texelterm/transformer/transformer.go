@@ -42,6 +42,13 @@ type LineSuppressor interface {
 	ShouldSuppress(lineIdx int64) bool
 }
 
+// LinePersistNotifier is an optional interface that transformers can implement
+// to receive a callback for notifying that lines are ready for persistence.
+// Used after setting overlay content on previously suppressed lines.
+type LinePersistNotifier interface {
+	SetPersistNotifyFunc(fn func(lineIdx int64))
+}
+
 // Config holds per-transformer configuration.
 type Config map[string]interface{}
 
@@ -80,7 +87,8 @@ func Lookup(id string) (Factory, bool) {
 type Pipeline struct {
 	transformers []Transformer
 	insertFunc   func(beforeIdx int64, cells []parser.Cell)
-	overlayFunc  func(lineIdx int64, cells []parser.Cell)
+	overlayFunc       func(lineIdx int64, cells []parser.Cell)
+	persistNotifyFunc func(lineIdx int64)
 }
 
 // SetInsertFunc sets the line insertion callback. The pipeline forwards
@@ -101,6 +109,17 @@ func (p *Pipeline) SetOverlayFunc(fn func(lineIdx int64, cells []parser.Cell)) {
 	for _, t := range p.transformers {
 		if lo, ok := t.(LineOverlayer); ok {
 			lo.SetOverlayFunc(fn)
+		}
+	}
+}
+
+// SetPersistNotifyFunc sets the persistence notification callback.
+// The pipeline forwards it to any transformer that implements LinePersistNotifier.
+func (p *Pipeline) SetPersistNotifyFunc(fn func(lineIdx int64)) {
+	p.persistNotifyFunc = fn
+	for _, t := range p.transformers {
+		if pn, ok := t.(LinePersistNotifier); ok {
+			pn.SetPersistNotifyFunc(fn)
 		}
 	}
 }

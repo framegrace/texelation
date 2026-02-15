@@ -69,8 +69,8 @@ func TestConfigMaxBufferRows(t *testing.T) {
 func TestPromptTransitionFlushes(t *testing.T) {
 	f := New(1000)
 	f.NotifyPromptStart()
-	var inserted int
-	f.SetInsertFunc(func(_ int64, _ []parser.Cell) { inserted++ })
+	var persisted []int64
+	f.SetPersistNotifyFunc(func(lineIdx int64) { persisted = append(persisted, lineIdx) })
 
 	// Feed command output lines that look like a space-aligned table.
 	f.HandleLine(0, makeCells("NAME   READY  STATUS"), true)
@@ -89,8 +89,8 @@ func TestPromptTransitionFlushes(t *testing.T) {
 	if len(f.buffer) != 0 {
 		t.Errorf("expected empty buffer after flush, got %d entries", len(f.buffer))
 	}
-	if inserted == 0 {
-		t.Error("expected insertFunc called during prompt flush")
+	if len(persisted) == 0 {
+		t.Error("expected persistNotifyFunc called during prompt flush")
 	}
 }
 
@@ -430,10 +430,8 @@ func TestConservativeHints_LowConfidence(t *testing.T) {
 	tf := New(1000)
 	tf.NotifyPromptStart()
 
-	var insertedLines [][]parser.Cell
-	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
-		insertedLines = append(insertedLines, cells)
-	})
+	var persisted []int64
+	tf.SetPersistNotifyFunc(func(lineIdx int64) { persisted = append(persisted, lineIdx) })
 
 	// Lines with pipes that enter BUFFERING (pipeDetector compatible + candidate)
 	// but don't score above threshold (pipeDetector needs >= 2 lines, threshold 0.7).
@@ -446,18 +444,9 @@ func TestConservativeHints_LowConfidence(t *testing.T) {
 	}
 	tf.HandleLine(1, makeCells("$ "), false)
 
-	// Emitted lines should be the originals (no box-drawing)
-	for _, cells := range insertedLines {
-		for _, c := range cells {
-			if c.Rune == '╭' || c.Rune == '│' || c.Rune == '╰' {
-				t.Error("expected no box-drawing for low-confidence table")
-				return
-			}
-		}
-	}
-
-	// Lines should have been emitted (raw passthrough, not dropped)
-	if len(insertedLines) == 0 {
-		t.Error("expected raw lines to be emitted for low-confidence content")
+	// Original Cells are never mutated, so flushRaw just notifies persistence.
+	// Lines should have been persisted (not dropped).
+	if len(persisted) == 0 {
+		t.Error("expected persistNotifyFunc called for low-confidence content")
 	}
 }
