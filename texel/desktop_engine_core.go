@@ -657,6 +657,7 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 			} else if d.zoomedPane.Pane.app != nil {
 				d.zoomedPane.Pane.app.HandleKey(key)
 			}
+			d.zoomedPane.Pane.markDirty()
 		}
 	} else if d.activeWorkspace != nil {
 		d.activeWorkspace.handleEvent(key)
