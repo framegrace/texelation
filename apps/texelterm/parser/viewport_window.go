@@ -124,6 +124,22 @@ func (vw *ViewportWindow) GetVisibleGrid() [][]Cell {
 	// Cache miss - rebuild
 	lines := vw.reader.GetLineRange(startGlobal, endGlobal)
 	physical := vw.builder.BuildRange(lines, startGlobal)
+
+	// When synthetic lines are hidden (original view), BuildRange may produce
+	// fewer physical lines than the viewport expects. Extend the range backwards
+	// to fetch more history so the live edge stays anchored at the bottom.
+	minGlobal := vw.reader.GlobalOffset()
+	for len(physical) < vw.height && startGlobal > minGlobal {
+		deficit := int64(vw.height - len(physical))
+		newStart := max(startGlobal-deficit, minGlobal)
+		if newStart == startGlobal {
+			break
+		}
+		startGlobal = newStart
+		lines = vw.reader.GetLineRange(startGlobal, endGlobal)
+		physical = vw.builder.BuildRange(lines, startGlobal)
+	}
+
 	vw.cache.Set(startGlobal, endGlobal, vw.width, physical)
 
 	return vw.physicalLinesToGrid(physical)
@@ -277,6 +293,27 @@ func (vw *ViewportWindow) Resize(newWidth, newHeight int) {
 	vw.scroll.SetViewportHeight(newHeight)
 	vw.scroll.InvalidateIndex()
 	vw.cache.Invalidate()
+}
+
+// SetShowOverlay toggles between formatted (overlay) and original content.
+// Invalidates the viewport cache since physical line layout changes.
+func (vw *ViewportWindow) SetShowOverlay(show bool) {
+	vw.mu.Lock()
+	defer vw.mu.Unlock()
+
+	if vw.builder.ShowOverlay() == show {
+		return
+	}
+	vw.builder.SetShowOverlay(show)
+	vw.scroll.InvalidateIndex()
+	vw.cache.Invalidate()
+}
+
+// ShowOverlay returns the current overlay display state.
+func (vw *ViewportWindow) ShowOverlay() bool {
+	vw.mu.RLock()
+	defer vw.mu.RUnlock()
+	return vw.builder.ShowOverlay()
 }
 
 // Width returns the current viewport width.

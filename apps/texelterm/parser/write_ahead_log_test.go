@@ -470,6 +470,194 @@ func TestWAL_ReadLineRange(t *testing.T) {
 	wal.Close()
 }
 
+func TestWAL_OverlayPersistenceRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	config := DefaultWALConfig(tmpDir, "test-overlay")
+	config.CheckpointInterval = 0
+
+	// Phase 1: Write lines with overlay, close (triggers checkpoint to PageStore)
+	wal, err := OpenWriteAheadLog(config)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog failed: %v", err)
+	}
+
+	now := time.Now()
+
+	// Line 0: no overlay (plain text)
+	line0 := NewLogicalLineFromCells([]Cell{
+		{Rune: 'p', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'l', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'a', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'i', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'n', FG: DefaultFG, BG: DefaultBG},
+	})
+	if err := wal.Append(0, line0, now); err != nil {
+		t.Fatalf("Append line 0 failed: %v", err)
+	}
+
+	// Line 1: with overlay (formatted content)
+	line1 := NewLogicalLineFromCells([]Cell{
+		{Rune: 'o', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'r', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'i', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'g', FG: DefaultFG, BG: DefaultBG},
+	})
+	line1.Overlay = []Cell{
+		{Rune: 'F', FG: Color{Mode: ColorModeStandard, Value: 1}, BG: DefaultBG},
+		{Rune: 'M', FG: Color{Mode: ColorModeStandard, Value: 2}, BG: DefaultBG},
+		{Rune: 'T', FG: Color{Mode: ColorModeStandard, Value: 3}, BG: DefaultBG},
+	}
+	line1.OverlayWidth = 80
+	if err := wal.Append(1, line1, now); err != nil {
+		t.Fatalf("Append line 1 failed: %v", err)
+	}
+
+	// Line 2: synthetic (border line)
+	line2 := &LogicalLine{
+		Synthetic:    true,
+		Overlay:      []Cell{{Rune: '+', FG: DefaultFG, BG: DefaultBG}, {Rune: '-', FG: DefaultFG, BG: DefaultBG}},
+		OverlayWidth: 80,
+	}
+	if err := wal.Append(2, line2, now); err != nil {
+		t.Fatalf("Append line 2 failed: %v", err)
+	}
+
+	// Close triggers checkpoint → WAL entries → PageStore → disk
+	if err := wal.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Phase 2: Reopen and read from PageStore
+	wal2, err := OpenWriteAheadLog(config)
+	if err != nil {
+		t.Fatalf("Reopen WAL failed: %v", err)
+	}
+	defer wal2.Close()
+
+	lines, err := wal2.ReadLineRange(0, 3)
+	if err != nil {
+		t.Fatalf("ReadLineRange failed: %v", err)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("Expected 3 lines, got %d", len(lines))
+	}
+
+	// Verify line 0: no overlay
+	if lines[0].Overlay != nil {
+		t.Errorf("Line 0: expected nil overlay, got %d cells", len(lines[0].Overlay))
+	}
+	if len(lines[0].Cells) != 5 {
+		t.Errorf("Line 0: expected 5 cells, got %d", len(lines[0].Cells))
+	}
+	if lines[0].Cells[0].Rune != 'p' {
+		t.Errorf("Line 0 cell 0: expected 'p', got %q", lines[0].Cells[0].Rune)
+	}
+
+	// Verify line 1: has overlay with colors
+	if lines[1].Overlay == nil {
+		t.Fatal("Line 1: expected overlay, got nil")
+	}
+	if len(lines[1].Overlay) != 3 {
+		t.Errorf("Line 1: expected 3 overlay cells, got %d", len(lines[1].Overlay))
+	}
+	if lines[1].OverlayWidth != 80 {
+		t.Errorf("Line 1: expected OverlayWidth 80, got %d", lines[1].OverlayWidth)
+	}
+	if lines[1].Overlay[0].Rune != 'F' {
+		t.Errorf("Line 1 overlay cell 0: expected 'F', got %q", lines[1].Overlay[0].Rune)
+	}
+	if lines[1].Overlay[0].FG.Value != 1 {
+		t.Errorf("Line 1 overlay cell 0 FG: expected 1, got %d", lines[1].Overlay[0].FG.Value)
+	}
+	// Verify original cells preserved
+	if len(lines[1].Cells) != 4 {
+		t.Errorf("Line 1: expected 4 original cells, got %d", len(lines[1].Cells))
+	}
+	if lines[1].Cells[0].Rune != 'o' {
+		t.Errorf("Line 1 cell 0: expected 'o', got %q", lines[1].Cells[0].Rune)
+	}
+
+	// Verify line 2: synthetic
+	if !lines[2].Synthetic {
+		t.Error("Line 2: expected Synthetic=true")
+	}
+	if lines[2].Overlay == nil {
+		t.Fatal("Line 2: expected overlay, got nil")
+	}
+	if lines[2].Overlay[0].Rune != '+' {
+		t.Errorf("Line 2 overlay cell 0: expected '+', got %q", lines[2].Overlay[0].Rune)
+	}
+}
+
+// TestWAL_OverlayModifyPersistence verifies that a line initially written
+// without overlay, then modified with overlay (like close-time viewport flush),
+// persists the overlay through checkpoint and reload.
+func TestWAL_OverlayModifyPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	config := DefaultWALConfig(tmpDir, "test-overlay-modify")
+	config.CheckpointInterval = 0
+
+	wal, err := OpenWriteAheadLog(config)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog failed: %v", err)
+	}
+
+	now := time.Now()
+
+	// Write line without overlay (simulates initial commit during detection phase)
+	lineNoOverlay := NewLogicalLineFromCells([]Cell{
+		{Rune: 'A', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'B', FG: DefaultFG, BG: DefaultBG},
+	})
+	if err := wal.Append(0, lineNoOverlay, now); err != nil {
+		t.Fatalf("Append without overlay failed: %v", err)
+	}
+
+	// Write same line WITH overlay (simulates close-time viewport flush)
+	lineWithOverlay := NewLogicalLineFromCells([]Cell{
+		{Rune: 'A', FG: DefaultFG, BG: DefaultBG},
+		{Rune: 'B', FG: DefaultFG, BG: DefaultBG},
+	})
+	lineWithOverlay.Overlay = []Cell{
+		{Rune: 'A', FG: Color{Mode: ColorModeStandard, Value: 1}, BG: DefaultBG},
+		{Rune: 'B', FG: Color{Mode: ColorModeStandard, Value: 2}, BG: DefaultBG},
+	}
+	lineWithOverlay.OverlayWidth = 80
+	if err := wal.Append(0, lineWithOverlay, now); err != nil {
+		t.Fatalf("Append with overlay failed: %v", err)
+	}
+
+	// Close → checkpoint → PageStore
+	if err := wal.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Reopen and verify
+	wal2, err := OpenWriteAheadLog(config)
+	if err != nil {
+		t.Fatalf("Reopen failed: %v", err)
+	}
+	defer wal2.Close()
+
+	lines, err := wal2.ReadLineRange(0, 1)
+	if err != nil {
+		t.Fatalf("ReadLineRange failed: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("Expected 1 line, got %d", len(lines))
+	}
+
+	if lines[0].Overlay == nil {
+		t.Fatal("Line 0: expected overlay after modify, got nil")
+	}
+	if len(lines[0].Overlay) != 2 {
+		t.Errorf("Line 0: expected 2 overlay cells, got %d", len(lines[0].Overlay))
+	}
+	if lines[0].Overlay[0].FG.Value != 1 {
+		t.Errorf("Line 0 overlay FG: expected 1, got %d", lines[0].Overlay[0].FG.Value)
+	}
+}
+
 func TestWAL_CRCValidation(t *testing.T) {
 	tmpDir := t.TempDir()
 	config := DefaultWALConfig(tmpDir, "test-terminal")

@@ -28,7 +28,8 @@ import (
 	"github.com/framegrace/texelation/apps/texelterm/transformer"
 	"github.com/framegrace/texelation/config"
 
-	// Import txfmt for init() side-effect registration.
+	// Import transformers for init() side-effect registration.
+	_ "github.com/framegrace/texelation/apps/texelterm/tablefmt"
 	_ "github.com/framegrace/texelation/apps/texelterm/txfmt"
 	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelation/texel"
@@ -841,6 +842,12 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
+	// Handle Ctrl+T to toggle overlay/original view
+	if ev.Key() == tcell.KeyCtrlT {
+		a.toggleOverlay()
+		return
+	}
+
 	if a.pty == nil {
 		return
 	}
@@ -866,6 +873,16 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	if _, err := a.pty.Write(keyBytes); err != nil {
 		log.Printf("[TEXELTERM] Failed to write key to PTY: %v", err)
 	}
+}
+
+// toggleOverlay toggles between showing overlay content and original content.
+func (a *TexelTerm) toggleOverlay() {
+	if a.vterm == nil {
+		return
+	}
+	current := a.vterm.ShowOverlay()
+	a.vterm.SetShowOverlay(!current)
+	a.vterm.MarkAllDirty()
 }
 
 func (a *TexelTerm) HandlePaste(data []byte) {
@@ -1385,6 +1402,17 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		a.vterm.OnLineCommit = pipeline.HandleLine
 		a.vterm.OnPromptStart = pipeline.NotifyPromptStart
 		pipeline.SetInsertFunc(a.vterm.RequestLineInsert)
+		pipeline.SetOverlayFunc(a.vterm.RequestLineOverlay)
+		pipeline.SetPersistNotifyFunc(a.vterm.NotifyLinePersist)
+
+		// Forward command start to the pipeline for command-aware detection.
+		origHandler := a.vterm.OnCommandStart
+		a.vterm.OnCommandStart = func(cmd string) {
+			if origHandler != nil {
+				origHandler(cmd)
+			}
+			pipeline.NotifyCommandStart(cmd)
+		}
 	}
 
 	a.parser = parser.NewParser(a.vterm)

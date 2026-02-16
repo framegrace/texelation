@@ -1,0 +1,585 @@
+// Copyright © 2025 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package tablefmt
+
+import (
+	"testing"
+
+	"github.com/framegrace/texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/transformer"
+)
+
+func makeCells(s string) *parser.LogicalLine {
+	cells := make([]parser.Cell, len([]rune(s)))
+	for i, r := range []rune(s) {
+		cells[i] = parser.Cell{Rune: r, FG: parser.DefaultFG, BG: parser.DefaultBG}
+	}
+	return &parser.LogicalLine{Cells: cells}
+}
+
+func TestRegistration(t *testing.T) {
+	_, ok := transformer.Lookup("tablefmt")
+	if !ok {
+		t.Fatal("tablefmt should be registered via init()")
+	}
+}
+
+func TestPassThrough_Scanning(t *testing.T) {
+	f := New(1000)
+	f.NotifyPromptStart()
+
+	line := makeCells("hello world this is plain text")
+	f.HandleLine(0, line, true)
+
+	if f.ShouldSuppress(0) {
+		t.Error("expected plain text to not be suppressed")
+	}
+}
+
+func TestConfigMaxBufferRows(t *testing.T) {
+	factory, ok := transformer.Lookup("tablefmt")
+	if !ok {
+		t.Fatal("tablefmt not registered")
+	}
+
+	t.Run("default", func(t *testing.T) {
+		tr, err := factory(transformer.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tf := tr.(*TableFormatter)
+		if tf.maxBufferRows != 1000 {
+			t.Errorf("expected default maxBufferRows=1000, got %d", tf.maxBufferRows)
+		}
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		tr, err := factory(transformer.Config{"max_buffer_rows": float64(500)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tf := tr.(*TableFormatter)
+		if tf.maxBufferRows != 500 {
+			t.Errorf("expected maxBufferRows=500, got %d", tf.maxBufferRows)
+		}
+	})
+}
+
+func TestPromptTransitionFlushes(t *testing.T) {
+	f := New(1000)
+	f.NotifyPromptStart()
+	var persisted []int64
+	f.SetPersistNotifyFunc(func(lineIdx int64) { persisted = append(persisted, lineIdx) })
+
+	// Feed command output lines that look like a space-aligned table.
+	f.HandleLine(0, makeCells("NAME   READY  STATUS"), true)
+	f.HandleLine(1, makeCells("nginx  1/1    Running"), true)
+
+	if f.state != stateBuffering {
+		t.Errorf("expected stateBuffering for table-like output, got %d", f.state)
+	}
+
+	// Transition to prompt (isCommand=false) should flush the buffer.
+	f.HandleLine(2, makeCells("$ "), false)
+
+	if f.state != stateScanning {
+		t.Errorf("expected stateScanning after flush, got %d", f.state)
+	}
+	if len(f.buffer) != 0 {
+		t.Errorf("expected empty buffer after flush, got %d entries", len(f.buffer))
+	}
+	if len(persisted) == 0 {
+		t.Error("expected persistNotifyFunc called during prompt flush")
+	}
+}
+
+func TestNoShellIntegration_TreatsAllAsCommand(t *testing.T) {
+	f := New(1000)
+	// Do NOT call NotifyPromptStart — no shell integration.
+
+	line := makeCells("hello world")
+	f.HandleLine(0, line, false)
+
+	// Without shell integration, isCommand is effectively true.
+	// The line should be processed (not skipped).
+	if f.ShouldSuppress(0) {
+		t.Error("expected no suppression for plain text without shell integration")
+	}
+}
+
+func TestSetInsertFunc(t *testing.T) {
+	f := New(1000)
+	called := false
+	f.SetInsertFunc(func(beforeIdx int64, cells []parser.Cell) {
+		called = true
+	})
+
+	if f.insertFunc == nil {
+		t.Error("expected insertFunc to be set")
+	}
+
+	f.insertFunc(0, nil)
+	if !called {
+		t.Error("expected insertFunc to be callable")
+	}
+}
+
+func TestBuffering_MDTable(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	lines := []string{
+		"| Name  | Age |",
+		"| ----- | --- |",
+		"| Alice | 30  |",
+		"| Bob   | 25  |",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+		if !tf.ShouldSuppress(int64(i)) {
+			t.Errorf("line %d: expected suppression during buffering", i)
+		}
+	}
+	if tf.state != stateBuffering {
+		t.Errorf("expected stateBuffering, got %d", tf.state)
+	}
+	if len(tf.buffer) != 4 {
+		t.Errorf("expected 4 buffered lines, got %d", len(tf.buffer))
+	}
+}
+
+func TestBuffering_FlushOnNonTableLine(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	var inserted int
+	tf.SetInsertFunc(func(_ int64, _ []parser.Cell) { inserted++ })
+
+	lines := []string{
+		"| Name  | Age |",
+		"| ----- | --- |",
+		"| Alice | 30  |",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(3, makeCells("This is not a table line"), true)
+
+	if tf.state != stateScanning {
+		t.Errorf("expected stateScanning after flush, got %d", tf.state)
+	}
+	if inserted == 0 {
+		t.Error("expected insertFunc to be called during flush")
+	}
+}
+
+func TestBuffering_FlushOnPrompt(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	var inserted int
+	tf.SetInsertFunc(func(_ int64, _ []parser.Cell) { inserted++ })
+
+	for i, s := range []string{"| A | B |", "| - | - |", "| x | y |"} {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(3, makeCells("$ "), false)
+
+	if tf.state != stateScanning {
+		t.Errorf("expected stateScanning after prompt, got %d", tf.state)
+	}
+	if inserted == 0 {
+		t.Error("expected insertFunc called on prompt flush")
+	}
+}
+
+func TestBuffering_LimitExceeded(t *testing.T) {
+	tf := New(3)
+	tf.NotifyPromptStart()
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	lines := []string{
+		"| A | B |",
+		"| - | - |",
+		"| x | y |",
+		"| z | w |", // 4th line exceeds limit of 3
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+
+	// After exceeding limit, buffer should have been flushed raw.
+	if tf.state == stateBuffering && len(tf.buffer) > 3 {
+		t.Error("buffer should have been flushed when limit exceeded")
+	}
+	// Raw emission should not contain box-drawing characters.
+	for _, cells := range insertedLines {
+		for _, c := range cells {
+			if c.Rune == '\u256d' || c.Rune == '\u2570' {
+				t.Error("expected raw emission, got box-drawing")
+			}
+		}
+	}
+}
+
+func TestScanning_PlainTextPassThrough(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	tf.HandleLine(0, makeCells("just plain text"), true)
+	if tf.ShouldSuppress(0) {
+		t.Error("non-table lines should not be suppressed")
+	}
+	if tf.state != stateScanning {
+		t.Errorf("should remain scanning, got %d", tf.state)
+	}
+}
+
+func TestBuffering_SpaceAligned(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	lines := []string{
+		"NAME                 STATUS    AGE     VERSION",
+		"nginx-pod            Running   5d      1.21.0",
+		"redis-pod            Running   3d      7.0.5",
+		"postgres-pod         Running   10d     15.2",
+	}
+	suppressed := false
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+		if tf.ShouldSuppress(int64(i)) {
+			suppressed = true
+		}
+	}
+	if !suppressed {
+		t.Error("expected at least some lines suppressed for space-aligned table")
+	}
+}
+
+// ─── End-to-End Tests ────────────────────────────────────────────────────────
+
+func TestEndToEnd_MDTable(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	mdLines := []string{
+		"| Name  | Age |",
+		"| ----- | --- |",
+		"| Alice | 30  |",
+		"| Bob   | 25  |",
+	}
+	for i, s := range mdLines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	// Trigger flush with prompt.
+	tf.HandleLine(4, makeCells("$ "), false)
+
+	if len(insertedLines) == 0 {
+		t.Fatal("expected formatted lines to be emitted")
+	}
+
+	// First emitted line should be top border with corner.
+	first := cellsToString(insertedLines[0])
+	if []rune(first)[0] != '╭' {
+		t.Errorf("expected top border starting with ╭, got %c", []rune(first)[0])
+	}
+
+	// Last emitted line should be bottom border with corner.
+	last := cellsToString(insertedLines[len(insertedLines)-1])
+	if []rune(last)[0] != '╰' {
+		t.Errorf("expected bottom border starting with ╰, got %c", []rune(last)[0])
+	}
+
+	// Log rendered output for visual inspection.
+	for i, line := range insertedLines {
+		t.Logf("line %d: %q", i, cellsToString(line))
+	}
+}
+
+func TestEndToEnd_SpaceAligned(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	lines := []string{
+		"NAME                 STATUS    AGE     VERSION",
+		"nginx-pod            Running   5d      1.21.0",
+		"redis-pod            Running   3d      7.0.5",
+		"postgres-pod         Running   10d     15.2",
+		"memcached-pod        Running   2d      1.6.17",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(5, makeCells("$ "), false)
+
+	if len(insertedLines) == 0 {
+		t.Fatal("expected formatted lines to be emitted")
+	}
+
+	first := cellsToString(insertedLines[0])
+	if []rune(first)[0] != '╭' {
+		t.Errorf("expected top border starting with ╭, got %c", []rune(first)[0])
+	}
+
+	last := cellsToString(insertedLines[len(insertedLines)-1])
+	if []rune(last)[0] != '╰' {
+		t.Errorf("expected bottom border starting with ╰, got %c", []rune(last)[0])
+	}
+
+	for i, line := range insertedLines {
+		t.Logf("line %d: %q", i, cellsToString(line))
+	}
+}
+
+func TestEndToEnd_MultipleTables(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	idx := int64(0)
+	emit := func(s string, isCmd bool) {
+		tf.HandleLine(idx, makeCells(s), isCmd)
+		idx++
+	}
+
+	// First markdown table.
+	emit("| Name  | Age |", true)
+	emit("| ----- | --- |", true)
+	emit("| Alice | 30  |", true)
+
+	// Non-table line forces flush of first table (markdown is not compatible
+	// with lines lacking pipes).
+	emit("Some text between tables", true)
+
+	// Second markdown table.
+	emit("| Color | Hex     |", true)
+	emit("| ----- | ------- |", true)
+	emit("| Red   | #FF0000 |", true)
+	emit("| Blue  | #0000FF |", true)
+
+	// Prompt flushes second table.
+	emit("$ ", false)
+
+	topBorders := 0
+	for _, line := range insertedLines {
+		s := cellsToString(line)
+		runes := []rune(s)
+		if len(runes) > 0 && runes[0] == '╭' {
+			topBorders++
+		}
+	}
+	if topBorders < 2 {
+		t.Errorf("expected >= 2 top borders for 2 tables, got %d", topBorders)
+	}
+
+	for i, line := range insertedLines {
+		t.Logf("line %d: %q", i, cellsToString(line))
+	}
+}
+
+func TestEndToEnd_LowConfidencePassThrough(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var insertedLines [][]parser.Cell
+	tf.SetInsertFunc(func(_ int64, cells []parser.Cell) {
+		insertedLines = append(insertedLines, cells)
+	})
+
+	// Lines that get buffered (have "  " so spaceAligned Compatible + candidate
+	// returns true) but don't actually form a valid table (too few lines for
+	// space-aligned, which requires >= 3 non-blank lines to score above 0).
+	lines := []string{
+		"This is just some  random text here",
+		"Another line with  some spaces in it",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(2, makeCells("$ "), false)
+
+	// Should have emitted raw lines (no box-drawing).
+	for _, cells := range insertedLines {
+		for _, c := range cells {
+			if c.Rune == '╭' || c.Rune == '╰' || c.Rune == '│' {
+				t.Error("expected raw emission, got box-drawing characters")
+				return
+			}
+		}
+	}
+}
+
+func TestBaseCommand(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"cat foo", "cat"},
+		{"sudo cat foo", "cat"},
+		{"FOO=bar cat foo", "cat"},
+		{"/usr/bin/cat foo", "cat"},
+		{"sudo FOO=bar /usr/bin/cat foo", "cat"},
+		{"env VAR=1 nice cat foo", "cat"},
+		{"nohup time command cat foo", "cat"},
+		{"ls -la", "ls"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := baseCommand(tt.input)
+		if got != tt.want {
+			t.Errorf("baseCommand(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestCommandHint_FileViewerSkipsSpaceAligned(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	tf.NotifyCommandStart("cat foo.go")
+
+	// Space-aligned table-like content from source code.
+	lines := []string{
+		"NAME                 STATUS    AGE     VERSION",
+		"nginx-pod            Running   5d      1.21.0",
+		"redis-pod            Running   3d      7.0.5",
+		"postgres-pod         Running   10d     15.2",
+	}
+	suppressed := false
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+		if tf.ShouldSuppress(int64(i)) {
+			suppressed = true
+		}
+	}
+	if suppressed {
+		t.Error("expected no suppression for space-aligned content when command is 'cat'")
+	}
+}
+
+func TestCommandHint_LsLR_MultipleTables(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	tf.NotifyCommandStart("ls -lR")
+
+	var overlaid []int64
+	tf.SetOverlayFunc(func(lineIdx int64, _ []parser.Cell) { overlaid = append(overlaid, lineIdx) })
+	var inserted int
+	tf.SetInsertFunc(func(_ int64, _ []parser.Cell) { inserted++ })
+	var persisted []int64
+	tf.SetPersistNotifyFunc(func(lineIdx int64) { persisted = append(persisted, lineIdx) })
+
+	// ls -lR output: directory header, total, file rows, blank, next dir header...
+	lines := []struct {
+		text string
+		cmd  bool
+	}{
+		{"./apps:", true},
+		{"total 24", true},
+		{"drwxr-xr-x.  2 marc marc 4096 Jan  6 20:34 clock", true},
+		{"drwxr-xr-x.  2 marc marc 4096 Jan  6 20:34 configeditor", true},
+		{"drwxr-xr-x.  8 marc marc 4096 Feb 15 20:04 texelterm", true},
+		{"", true},
+		// Directory header should break the first table
+		{"./apps/clock:", true},
+		{"total 8", true},
+		{"-rw-r--r--. 1 marc marc 2762 Jan  6 20:34 clock.go", true},
+		{"-rw-r--r--. 1 marc marc  285 Jan  6 12:06 clock_test.go", true},
+		// Prompt flushes second table
+		{"$ ", false},
+	}
+
+	for i, l := range lines {
+		tf.HandleLine(int64(i), makeCells(l.text), l.cmd)
+	}
+
+	// "drwxr-xr-x" lines should have been buffered and flushed as tables.
+	// "./apps:" and "total 24" are too short / no double-space → pass through.
+	// "./apps/clock:" has no double-space → breaks first table → pass through.
+	if len(overlaid)+inserted == 0 {
+		t.Fatal("expected at least some table formatting output")
+	}
+	t.Logf("overlaid=%d inserts=%d persisted=%d", len(overlaid), inserted, len(persisted))
+}
+
+func TestCommandHint_NonFileViewerStillDetects(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	tf.NotifyCommandStart("kubectl get pods")
+
+	lines := []string{
+		"NAME                 STATUS    AGE     VERSION",
+		"nginx-pod            Running   5d      1.21.0",
+		"redis-pod            Running   3d      7.0.5",
+		"postgres-pod         Running   10d     15.2",
+	}
+	suppressed := false
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+		if tf.ShouldSuppress(int64(i)) {
+			suppressed = true
+		}
+	}
+	if !suppressed {
+		t.Error("expected space-aligned suppression for non-file-viewer command")
+	}
+}
+
+func TestCommandHint_ResetOnPrompt(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+	tf.NotifyCommandStart("cat foo.go")
+
+	if tf.currentCommand != "cat foo.go" {
+		t.Errorf("expected currentCommand='cat foo.go', got %q", tf.currentCommand)
+	}
+
+	// Feed a command line then a prompt to trigger transition.
+	tf.HandleLine(0, makeCells("some text"), true)
+	tf.HandleLine(1, makeCells("$ "), false)
+
+	if tf.currentCommand != "" {
+		t.Errorf("expected currentCommand cleared on prompt, got %q", tf.currentCommand)
+	}
+}
+
+func TestConservativeHints_LowConfidence(t *testing.T) {
+	tf := New(1000)
+	tf.NotifyPromptStart()
+
+	var persisted []int64
+	tf.SetPersistNotifyFunc(func(lineIdx int64) { persisted = append(persisted, lineIdx) })
+
+	// Lines with pipes that enter BUFFERING (pipeDetector compatible + candidate)
+	// but don't score above threshold (pipeDetector needs >= 2 lines, threshold 0.7).
+	// Single line with pipes is compatible but scores 0.
+	lines := []string{
+		"a | b | c",
+	}
+	for i, s := range lines {
+		tf.HandleLine(int64(i), makeCells(s), true)
+	}
+	tf.HandleLine(1, makeCells("$ "), false)
+
+	// Original Cells are never mutated, so flushRaw just notifies persistence.
+	// Lines should have been persisted (not dropped).
+	if len(persisted) == 0 {
+		t.Error("expected persistNotifyFunc called for low-confidence content")
+	}
+}

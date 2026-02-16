@@ -57,7 +57,7 @@ func chromaColorizeLines(lines []*parser.LogicalLine, lexerName string, style *c
 // chromaColorizeWithContext tokenizes a single line using previous lines as
 // lexer context. Only the current line's cells are modified.
 func chromaColorizeWithContext(line *parser.LogicalLine, context []string, lexerName string, style *chroma.Style) {
-	plain, textToCell := buildPlainTextMap(line.Cells)
+	plain, textToCell := buildPlainTextMap(line.Overlay)
 	if len(plain) == 0 {
 		return
 	}
@@ -91,7 +91,7 @@ func buildLineRegions(lines []*parser.LogicalLine) ([]lineRegion, string) {
 	runeOffset := 0
 
 	for _, line := range lines {
-		plain, textToCell := buildPlainTextMap(line.Cells)
+		plain, textToCell := buildPlainTextMap(line.Overlay)
 		if len(plain) == 0 {
 			// Empty line: still emit a \n for proper line counting.
 			sb.WriteByte('\n')
@@ -156,7 +156,7 @@ func applyChromaTokens(regions []lineRegion, fullText, lexerName string, style *
 			}
 
 			ci := r.textToCell[localPos]
-			cells := r.line.Cells
+			cells := r.line.Overlay
 
 			if hasDistinctColor {
 				if attr != 0 {

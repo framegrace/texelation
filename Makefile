@@ -10,9 +10,9 @@ SERVER_PKG := ./cmd/texel-server
 CORE_APPS := texelterm help
 
 # All standalone app binaries in cmd/
-ALL_APPS := texelterm help texel-stress txfmt
+ALL_APPS := texelterm help texel-stress
 
-.PHONY: build install run test lint fmt tidy clean help server client release build-apps install-transformers
+.PHONY: build install run test lint fmt tidy clean help server client release build-apps
 
 
 build: ## Build texel-server, texel-client, texelation, and core app binaries into bin/
@@ -29,7 +29,6 @@ build-apps: ## Build ALL app binaries into bin/
 	$(GO_ENV) go build -o $(BIN_DIR)/help ./cmd/help
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-stress ./cmd/texel-stress
 	$(GO_ENV) go build -o $(BIN_DIR)/config-editor ./cmd/config-editor
-	$(GO_ENV) go build -o $(BIN_DIR)/txfmt ./cmd/txfmt
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texelation ./cmd/texelation
@@ -65,13 +64,6 @@ client: ## Run remote texel client against socket
 	@mkdir -p $(CACHE_DIR)
 	$(GO_ENV) go run $(CLIENT_PKG) --socket /tmp/texelation.sock
 
-TRANSFORMERS_DIR := $(HOME)/.config/texelation/texelterm/transformers
-
-install-transformers: build-apps ## Install transformer plugins to ~/.config/texelation/texelterm/transformers/
-	@mkdir -p $(TRANSFORMERS_DIR)/txfmt
-	cp $(BIN_DIR)/txfmt $(TRANSFORMERS_DIR)/txfmt/txfmt
-	cp apps/texelterm/transformer/plugins/txfmt/manifest.json $(TRANSFORMERS_DIR)/txfmt/manifest.json
-	@echo "Installed txfmt transformer to $(TRANSFORMERS_DIR)/txfmt/"
 
 release: ## Cross-compile binaries for common platforms into dist/
 	./scripts/build-release.sh

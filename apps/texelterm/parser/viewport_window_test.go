@@ -8,6 +8,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -901,6 +902,127 @@ func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
 			}
 		}
 	})
+}
+
+// --- PhysicalLineBuilder Overlay Tests ---
+
+func TestPhysicalLineBuilder_OverlayMode(t *testing.T) {
+	builder := NewPhysicalLineBuilder(40)
+
+	line := NewLogicalLineFromCells(vwMakeCells("Hello World Original"))
+	line.Overlay = vwMakeCells("| Hello | World |")
+	line.OverlayWidth = 40
+
+	// Overlay mode
+	builder.SetShowOverlay(true)
+	physical := builder.BuildLine(line, 100)
+	if len(physical) != 1 {
+		t.Fatalf("overlay mode: expected 1 physical line, got %d", len(physical))
+	}
+	if physical[0].LogicalIndex != 100 {
+		t.Errorf("expected LogicalIndex 100, got %d", physical[0].LogicalIndex)
+	}
+
+	// Original mode
+	builder.SetShowOverlay(false)
+	physical = builder.BuildLine(line, 100)
+	if len(physical) != 1 { // "Hello World Original" fits in 40
+		t.Fatalf("original mode: expected 1 physical line, got %d", len(physical))
+	}
+}
+
+func TestPhysicalLineBuilder_SkipSyntheticInOriginalMode(t *testing.T) {
+	builder := NewPhysicalLineBuilder(40)
+
+	synthetic := &LogicalLine{
+		Synthetic:    true,
+		Overlay:      vwMakeCells("+--------+"),
+		OverlayWidth: 40,
+	}
+
+	builder.SetShowOverlay(true)
+	physical := builder.BuildLine(synthetic, 100)
+	if len(physical) != 1 {
+		t.Fatalf("overlay mode: expected 1 line for synthetic, got %d", len(physical))
+	}
+
+	builder.SetShowOverlay(false)
+	physical = builder.BuildLine(synthetic, 100)
+	if physical != nil {
+		t.Fatalf("original mode: synthetic should return nil, got %d lines", len(physical))
+	}
+}
+
+func TestPhysicalLineBuilder_BuildRangeSkipsSynthetic(t *testing.T) {
+	builder := NewPhysicalLineBuilder(40)
+	builder.SetShowOverlay(false)
+
+	lines := []*LogicalLine{
+		NewLogicalLineFromCells(vwMakeCells("Line1")),
+		{Synthetic: true, Overlay: vwMakeCells("+---+"), OverlayWidth: 40},
+		NewLogicalLineFromCells(vwMakeCells("Line2")),
+	}
+
+	physical := builder.BuildRange(lines, 100)
+	if len(physical) != 2 {
+		t.Fatalf("expected 2 physical lines (synthetic skipped), got %d", len(physical))
+	}
+	if physical[0].LogicalIndex != 100 {
+		t.Errorf("first line: expected LogicalIndex 100, got %d", physical[0].LogicalIndex)
+	}
+	if physical[1].LogicalIndex != 102 {
+		t.Errorf("second line: expected LogicalIndex 102, got %d", physical[1].LogicalIndex)
+	}
+}
+
+// --- Overlay Toggle Tests ---
+
+func TestViewportWindow_ToggleOverlay(t *testing.T) {
+	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100})
+	mb.SetTermWidth(40)
+
+	// Write content
+	for _, r := range "Hello World" {
+		mb.Write(r, DefaultFG, DefaultBG, 0)
+	}
+	mb.NewLine()
+
+	// Set overlay on line 0
+	line := mb.GetLine(0)
+	line.Overlay = vwMakeCells("| Hello | World |")
+	line.OverlayWidth = 40
+
+	vw := NewViewportWindow(mb, 40, 5)
+
+	// Default: showOverlay is true (design spec)
+	if !vw.ShowOverlay() {
+		t.Error("default should be showOverlay=true")
+	}
+
+	// Overlay is already enabled by default
+	grid1 := vw.GetVisibleGrid()
+	row0text := ""
+	for _, c := range grid1[0] {
+		if c.Rune != 0 && c.Rune != ' ' {
+			row0text += string(c.Rune)
+		}
+	}
+	if !strings.Contains(row0text, "|Hello|World|") {
+		t.Errorf("overlay mode should show overlay content, got: %q", row0text)
+	}
+
+	// Toggle to original
+	vw.SetShowOverlay(false)
+	grid2 := vw.GetVisibleGrid()
+	row0text = ""
+	for _, c := range grid2[0] {
+		if c.Rune != 0 && c.Rune != ' ' {
+			row0text += string(c.Rune)
+		}
+	}
+	if !strings.Contains(row0text, "HelloWorld") {
+		t.Errorf("original mode should show original content, got: %q", row0text)
+	}
 }
 
 // --- Benchmark Tests ---

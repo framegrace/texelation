@@ -20,6 +20,18 @@ type LogicalLine struct {
 	// Set by CommitViewportAsFixedWidth() for TUI app content.
 	// 0 means normal reflow behavior.
 	FixedWidth int
+
+	// Overlay holds formatted content set by transformers.
+	// When non-nil, rendering uses Overlay instead of Cells.
+	// nil means no overlay (original content is displayed).
+	Overlay []Cell
+
+	// OverlayWidth is the width the overlay was created at (always fixed-width).
+	OverlayWidth int
+
+	// Synthetic indicates a transformer-inserted line that is hidden
+	// in the original (non-overlay) view.
+	Synthetic bool
 }
 
 // NewLogicalLine creates a new empty logical line.
@@ -95,6 +107,12 @@ func (l *LogicalLine) Clear() {
 func (l *LogicalLine) Clone() *LogicalLine {
 	clone := NewLogicalLineFromCells(l.Cells)
 	clone.FixedWidth = l.FixedWidth
+	clone.Synthetic = l.Synthetic
+	clone.OverlayWidth = l.OverlayWidth
+	if l.Overlay != nil {
+		clone.Overlay = make([]Cell, len(l.Overlay))
+		copy(clone.Overlay, l.Overlay)
+	}
 	return clone
 }
 
@@ -179,6 +197,31 @@ func (l *LogicalLine) WrapToWidth(width int) []PhysicalLine {
 	}
 
 	return result
+}
+
+// ActiveWrapToWidth returns physical lines for the active content layer.
+// When showOverlay is true and Overlay is set, renders overlay as fixed-width.
+// When showOverlay is false, renders Cells normally (Synthetic lines return nil).
+func (l *LogicalLine) ActiveWrapToWidth(width int, showOverlay bool) []PhysicalLine {
+	if !showOverlay {
+		if l.Synthetic {
+			return nil
+		}
+		return l.WrapToWidth(width)
+	}
+
+	if l.Overlay != nil {
+		overlay := &LogicalLine{
+			Cells:      l.Overlay,
+			FixedWidth: l.OverlayWidth,
+		}
+		if overlay.FixedWidth == 0 {
+			overlay.FixedWidth = len(l.Overlay)
+		}
+		return overlay.WrapToWidth(width)
+	}
+
+	return l.WrapToWidth(width)
 }
 
 // TrimTrailingSpaces removes trailing space cells from the line.
