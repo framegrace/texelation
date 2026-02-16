@@ -130,12 +130,15 @@ func assignPanesToWorkspace(node *Node, ws *Workspace) {
 	}
 	if node.Pane != nil {
 		node.Pane.screen = ws
-		// Update refresh notifier
-		if node.Pane.app != nil {
-			node.Pane.app.SetRefreshNotifier(ws.refreshChan)
-		}
+		// Re-create per-pane refresh forwarder targeting the correct workspace.
+		// The forwarder increments renderGen before forwarding to the workspace
+		// channel, which is required for per-pane dirty tracking (Level 2 opt).
+		paneRefresh := node.Pane.setupRefreshForwarder(ws.refreshChan)
+		node.Pane.markDirty()
 		if node.Pane.pipeline != nil {
-			node.Pane.pipeline.SetRefreshNotifier(ws.refreshChan)
+			node.Pane.pipeline.SetRefreshNotifier(paneRefresh)
+		} else if node.Pane.app != nil {
+			node.Pane.app.SetRefreshNotifier(paneRefresh)
 		}
 	}
 	for _, child := range node.Children {
