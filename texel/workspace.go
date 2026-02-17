@@ -83,7 +83,7 @@ func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager
 		id:              id,
 		desktop:         desktop,
 		tree:            NewTree(),
-		refreshChan:     make(chan bool, 1),
+		refreshChan:     make(chan bool, 16),
 		drawChan:        make(chan bool, 1),
 		dispatcher:      NewEventDispatcher(),
 		ShellAppFactory: shellFactory,
@@ -156,6 +156,24 @@ func (w *Workspace) startRefreshMonitor() {
 				case <-w.refreshChan:
 					if handler := w.desktop.refreshHandlerFunc(); handler != nil {
 						handler()
+					}
+					// Drain any notifications that arrived during handler
+					// execution, then re-run handler once more to capture
+					// all pending dirty state.
+					drained := false
+					for {
+						select {
+						case <-w.refreshChan:
+							drained = true
+						default:
+							goto done
+						}
+					}
+				done:
+					if drained {
+						if handler := w.desktop.refreshHandlerFunc(); handler != nil {
+							handler()
+						}
 					}
 				}
 			}
