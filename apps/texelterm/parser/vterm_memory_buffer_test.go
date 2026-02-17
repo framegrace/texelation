@@ -3709,10 +3709,11 @@ func TestLoadHistory_TrimsBlankTailLines(t *testing.T) {
 
 	// Write metadata claiming liveEdgeBase=10 (past the blanks)
 	if err := wal.WriteMetadata(&ViewportState{
-		LiveEdgeBase: 10,
-		CursorX:      0,
-		CursorY:      0,
-		SavedAt:      now,
+		LiveEdgeBase:    10,
+		CursorX:         0,
+		CursorY:         0,
+		SavedAt:         now,
+		PromptStartLine: -1, // unknown prompt position
 	}); err != nil {
 		t.Fatalf("WriteMetadata failed: %v", err)
 	}
@@ -4028,5 +4029,106 @@ func TestGetContentText_SyntheticLineWithOverlay(t *testing.T) {
 	gotOff := v.GetContentText(lineIdx, 0, lineIdx, len(overlayCells))
 	if gotOff != "" {
 		t.Errorf("overlay OFF synthetic: got %q, want empty", gotOff)
+	}
+}
+
+// TestPromptPositionOnReload verifies that after reload, liveEdgeBase is moved
+// to the saved PromptStartLine so the new shell prompt overwrites the old one.
+func TestPromptPositionOnReload(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	diskPath := filepath.Join(tmpDir, "test_prompt_pos.hist3")
+	terminalID := "test-prompt-pos"
+
+	width, height := 80, 24
+
+	// Session 1: Write some lines, mark prompt position, then close
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("Session 1: EnableMemoryBufferWithDisk failed: %v", err)
+		}
+
+		p := NewParser(v)
+
+		// Write some output lines
+		for i := 0; i < 10; i++ {
+			parseString(p, fmt.Sprintf("output line %d", i))
+			p.Parse('\n')
+			p.Parse('\r')
+		}
+
+		// Mark prompt start (simulates OSC 133;A)
+		v.MarkPromptStart()
+		savedPromptLine := v.PromptStartGlobalLine
+
+		// Write a prompt
+		parseString(p, "$ ")
+
+		// Verify prompt line was recorded
+		if savedPromptLine < 0 {
+			t.Fatalf("PromptStartGlobalLine not set: %d", savedPromptLine)
+		}
+
+		// Also set a working directory (simulates OSC 7)
+		v.setWorkingDirectory("file://localhost/tmp/test-session")
+
+		if err := v.CloseMemoryBuffer(); err != nil {
+			t.Fatalf("Session 1: CloseMemoryBuffer failed: %v", err)
+		}
+	}
+
+	// Session 2: Reopen and verify prompt positioning
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("Session 2: EnableMemoryBufferWithDisk failed: %v", err)
+		}
+		defer v.CloseMemoryBuffer()
+
+		// Cursor should be at the prompt's screen row (column 0).
+		// Session 1 wrote 10 lines (indices 0-9) then marked prompt at line 10.
+		// liveEdgeBase = 0 (all fits in viewport), so promptRow = 10.
+		if v.cursorX != 0 || v.cursorY != 10 {
+			t.Errorf("cursor: got (%d, %d), want (0, 10)", v.cursorX, v.cursorY)
+		}
+
+		// CWD should be restored
+		if v.CurrentWorkingDir != "/tmp/test-session" {
+			t.Errorf("CWD: got %q, want %q", v.CurrentWorkingDir, "/tmp/test-session")
+		}
+	}
+}
+
+// TestOSC7_WorkingDirectory tests that OSC 7 parsing sets the working directory.
+func TestOSC7_WorkingDirectory(t *testing.T) {
+	v := NewVTerm(80, 24, WithMemoryBuffer())
+	p := NewParser(v)
+
+	// OSC 7 with hostname: ESC ] 7 ; <uri> BEL
+	parseString(p, "\x1b]7;file://myhost/home/user/projects\x07")
+	if v.CurrentWorkingDir != "/home/user/projects" {
+		t.Errorf("OSC 7 with host: got %q, want %q", v.CurrentWorkingDir, "/home/user/projects")
+	}
+
+	// OSC 7 with empty hostname (file:///path)
+	parseString(p, "\x1b]7;file:///tmp/test\x07")
+	if v.CurrentWorkingDir != "/tmp/test" {
+		t.Errorf("OSC 7 empty host: got %q, want %q", v.CurrentWorkingDir, "/tmp/test")
+	}
+
+	// OSC 7 with invalid URI (no file:// prefix)
+	v.CurrentWorkingDir = ""
+	parseString(p, "\x1b]7;/tmp/bad\x07")
+	if v.CurrentWorkingDir != "" {
+		t.Errorf("OSC 7 invalid URI: got %q, want empty", v.CurrentWorkingDir)
 	}
 }

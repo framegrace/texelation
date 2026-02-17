@@ -284,11 +284,13 @@ func (v *VTerm) notifyMetadataChange() {
 
 	// Build viewport state with cursor position
 	state := &ViewportState{
-		ScrollOffset: v.memBufState.viewport.ScrollOffset(),
-		LiveEdgeBase: v.memBufState.liveEdgeBase,
-		CursorX:      v.cursorX,
-		CursorY:      v.cursorY,
-		SavedAt:      time.Now(),
+		ScrollOffset:    v.memBufState.viewport.ScrollOffset(),
+		LiveEdgeBase:    v.memBufState.liveEdgeBase,
+		CursorX:         v.cursorX,
+		CursorY:         v.cursorY,
+		SavedAt:         time.Now(),
+		PromptStartLine: v.PromptStartGlobalLine,
+		WorkingDir:      v.CurrentWorkingDir,
 	}
 
 	// Notify persistence layer - metadata will be written with content on flush
@@ -429,6 +431,33 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 			v.cursorX = savedState.CursorX
 			v.cursorY = savedState.CursorY
 			log.Printf("[MEMORY_BUFFER] Cursor position restored to (%d, %d)", savedState.CursorX, savedState.CursorY)
+		}
+
+		// Prompt positioning: place cursor at the last prompt's screen row
+		// so the new shell prompt overwrites the old one in-place.
+		// We keep liveEdgeBase unchanged to preserve the screen layout —
+		// previous output stays visible above the prompt, and we erase
+		// from the prompt line down so old content doesn't linger.
+		if savedState.PromptStartLine >= 0 && savedState.PromptStartLine >= v.memBufState.liveEdgeBase && savedState.PromptStartLine <= mb.GlobalEnd() {
+			promptRow := int(savedState.PromptStartLine - v.memBufState.liveEdgeBase)
+			if promptRow >= 0 && promptRow < v.height {
+				log.Printf("[MEMORY_BUFFER] Prompt positioning: cursor to row %d (PromptStartLine=%d, liveEdgeBase=%d)",
+					promptRow, savedState.PromptStartLine, v.memBufState.liveEdgeBase)
+				v.cursorX = 0
+				v.cursorY = promptRow
+				// Erase from prompt line to end of screen so old session
+				// content doesn't show below the new prompt.
+				for y := promptRow; y < v.height; y++ {
+					globalLine := v.memBufState.liveEdgeBase + int64(y)
+					mb.EraseLine(globalLine, DefaultFG, DefaultBG)
+				}
+			}
+		}
+
+		// Restore working directory
+		if savedState.WorkingDir != "" {
+			v.CurrentWorkingDir = savedState.WorkingDir
+			log.Printf("[MEMORY_BUFFER] Working directory restored: %s", savedState.WorkingDir)
 		}
 	}
 

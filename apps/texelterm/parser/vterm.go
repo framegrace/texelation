@@ -64,6 +64,9 @@ type VTerm struct {
 	OnCommandStart                func(cmd string)
 	OnCommandEnd                  func(exitCode int)
 	OnEnvironmentUpdate           func(base64Env string)
+	// Prompt position and CWD tracking (for session restore)
+	PromptStartGlobalLine int64  // Global line index of last prompt start (-1 = unknown)
+	CurrentWorkingDir     string // Last known CWD from OSC 7
 	// Clipboard operations (OSC 52)
 	OnClipboardSet func(data []byte) // Called when app sets clipboard via OSC 52
 	OnClipboardGet func() []byte     // Called when app queries clipboard via OSC 52
@@ -113,8 +116,9 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		leftRightMarginMode: false,
 		defaultFG:           DefaultFG,
 		defaultBG:           DefaultBG,
-		dirtyLines:          make(map[int]bool),
-		allDirty:            true,
+		dirtyLines:            make(map[int]bool),
+		allDirty:              true,
+		PromptStartGlobalLine: -1,
 	}
 
 	// Apply options first (may configure memory buffer with disk path)
@@ -477,13 +481,11 @@ func (v *VTerm) VisibleTop() int {
 
 // MarkPromptStart records the position where a shell prompt starts.
 // Called when OSC 133;A is received (prompt start marker).
-// This is a stub for future shell integration features.
+// Records the global line index so we can position the cursor correctly on reload.
 func (v *VTerm) MarkPromptStart() {
-	// TODO: Record prompt start position in MemoryBuffer for shell integration
-	// This would enable features like:
-	// - Skipping prompts during selection
-	// - Collapsing command output
-	// - Seamless recovery after reconnect
+	if v.memBufState != nil {
+		v.PromptStartGlobalLine = v.memBufState.liveEdgeBase + int64(v.cursorY)
+	}
 }
 
 // MarkInputStart records the position where user input starts.
@@ -494,6 +496,28 @@ func (v *VTerm) MarkInputStart() {
 	// This would enable features like:
 	// - Highlighting user input differently
 	// - Command extraction for history
+}
+
+// setWorkingDirectory parses an OSC 7 file URI and stores the path.
+// Format: file://hostname/path or file:///path
+func (v *VTerm) setWorkingDirectory(uri string) {
+	// Strip "file://" prefix
+	const prefix = "file://"
+	if !strings.HasPrefix(uri, prefix) {
+		return
+	}
+	rest := uri[len(prefix):]
+	// Skip hostname (everything before the first '/' after the prefix)
+	idx := strings.Index(rest, "/")
+	if idx < 0 {
+		return
+	}
+	v.CurrentWorkingDir = rest[idx:]
+}
+
+// GetLastWorkingDir returns the last known working directory from OSC 7.
+func (v *VTerm) GetLastWorkingDir() string {
+	return v.CurrentWorkingDir
 }
 
 // HistoryLength exposes the number of lines tracked in history.

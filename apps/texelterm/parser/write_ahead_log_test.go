@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1112,4 +1113,186 @@ func TestWAL_SyncWAL(t *testing.T) {
 	wal.Close()
 	err = wal.SyncWAL()
 	// We just verify it doesn't panic; error is acceptable
+}
+
+// TestWAL_ViewportStateBackwardCompat tests that old 32-byte metadata decodes correctly.
+func TestWAL_ViewportStateBackwardCompat(t *testing.T) {
+	now := time.Now()
+	// Simulate old 32-byte format (no PromptStartLine, no WorkingDir)
+	buf := make([]byte, 32)
+	binary.LittleEndian.PutUint64(buf[0:8], 42)   // ScrollOffset
+	binary.LittleEndian.PutUint64(buf[8:16], 100)  // LiveEdgeBase
+	binary.LittleEndian.PutUint32(buf[16:20], 5)   // CursorX
+	binary.LittleEndian.PutUint32(buf[20:24], 3)   // CursorY
+	binary.LittleEndian.PutUint64(buf[24:32], uint64(now.UnixNano()))
+
+	state, err := decodeViewportState(buf)
+	if err != nil {
+		t.Fatalf("decodeViewportState failed: %v", err)
+	}
+
+	if state.ScrollOffset != 42 {
+		t.Errorf("ScrollOffset: got %d, want 42", state.ScrollOffset)
+	}
+	if state.LiveEdgeBase != 100 {
+		t.Errorf("LiveEdgeBase: got %d, want 100", state.LiveEdgeBase)
+	}
+	if state.CursorX != 5 {
+		t.Errorf("CursorX: got %d, want 5", state.CursorX)
+	}
+	if state.CursorY != 3 {
+		t.Errorf("CursorY: got %d, want 3", state.CursorY)
+	}
+	// New fields should have defaults for old format
+	if state.PromptStartLine != -1 {
+		t.Errorf("PromptStartLine: got %d, want -1 (default for old format)", state.PromptStartLine)
+	}
+	if state.WorkingDir != "" {
+		t.Errorf("WorkingDir: got %q, want empty (default for old format)", state.WorkingDir)
+	}
+}
+
+// TestWAL_ViewportStateExtendedRoundtrip tests encode/decode of new fields.
+func TestWAL_ViewportStateExtendedRoundtrip(t *testing.T) {
+	now := time.Now()
+	original := &ViewportState{
+		ScrollOffset:    50,
+		LiveEdgeBase:    200,
+		CursorX:         10,
+		CursorY:         5,
+		SavedAt:         now,
+		PromptStartLine: 195,
+		WorkingDir:      "/home/user/projects",
+	}
+
+	encoded, err := encodeViewportState(original)
+	if err != nil {
+		t.Fatalf("encodeViewportState failed: %v", err)
+	}
+
+	decoded, err := decodeViewportState(encoded)
+	if err != nil {
+		t.Fatalf("decodeViewportState failed: %v", err)
+	}
+
+	if decoded.ScrollOffset != original.ScrollOffset {
+		t.Errorf("ScrollOffset: got %d, want %d", decoded.ScrollOffset, original.ScrollOffset)
+	}
+	if decoded.LiveEdgeBase != original.LiveEdgeBase {
+		t.Errorf("LiveEdgeBase: got %d, want %d", decoded.LiveEdgeBase, original.LiveEdgeBase)
+	}
+	if decoded.CursorX != original.CursorX {
+		t.Errorf("CursorX: got %d, want %d", decoded.CursorX, original.CursorX)
+	}
+	if decoded.CursorY != original.CursorY {
+		t.Errorf("CursorY: got %d, want %d", decoded.CursorY, original.CursorY)
+	}
+	if decoded.PromptStartLine != original.PromptStartLine {
+		t.Errorf("PromptStartLine: got %d, want %d", decoded.PromptStartLine, original.PromptStartLine)
+	}
+	if decoded.WorkingDir != original.WorkingDir {
+		t.Errorf("WorkingDir: got %q, want %q", decoded.WorkingDir, original.WorkingDir)
+	}
+}
+
+// TestWAL_MetadataWithPromptAndCWD tests full persistence round-trip of extended metadata.
+func TestWAL_MetadataWithPromptAndCWD(t *testing.T) {
+	tmpDir := t.TempDir()
+	config := DefaultWALConfig(tmpDir, "test-extended-metadata")
+	config.CheckpointInterval = 0
+
+	wal, err := OpenWriteAheadLog(config)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog failed: %v", err)
+	}
+
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		line := NewLogicalLineFromCells([]Cell{{Rune: rune('A' + i)}})
+		if err := wal.Append(int64(i), line, now); err != nil {
+			t.Fatalf("Append failed: %v", err)
+		}
+	}
+
+	state := &ViewportState{
+		ScrollOffset:    0,
+		LiveEdgeBase:    3,
+		CursorX:         0,
+		CursorY:         0,
+		SavedAt:         now,
+		PromptStartLine: 3,
+		WorkingDir:      "/tmp/test-dir",
+	}
+	if err := wal.WriteMetadata(state); err != nil {
+		t.Fatalf("WriteMetadata failed: %v", err)
+	}
+
+	if err := wal.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Reopen and verify extended metadata
+	wal2, err := OpenWriteAheadLog(config)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog (reopen) failed: %v", err)
+	}
+	defer wal2.Close()
+
+	recovered := wal2.GetRecoveredMetadata()
+	if recovered == nil {
+		t.Fatal("Expected recovered metadata, got nil")
+	}
+
+	if recovered.PromptStartLine != 3 {
+		t.Errorf("PromptStartLine: got %d, want 3", recovered.PromptStartLine)
+	}
+	if recovered.WorkingDir != "/tmp/test-dir" {
+		t.Errorf("WorkingDir: got %q, want %q", recovered.WorkingDir, "/tmp/test-dir")
+	}
+}
+
+// TestWAL_ReadWALWorkingDir tests standalone CWD pre-read from WAL.
+func TestWAL_ReadWALWorkingDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	termID := "test-cwd-preread"
+	config := DefaultWALConfig(tmpDir, termID)
+	config.CheckpointInterval = 0
+
+	// Write WAL with CWD metadata
+	wal, err := OpenWriteAheadLog(config)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog failed: %v", err)
+	}
+
+	now := time.Now()
+	line := NewLogicalLineFromCells([]Cell{{Rune: 'X'}})
+	if err := wal.Append(0, line, now); err != nil {
+		t.Fatalf("Append failed: %v", err)
+	}
+
+	state := &ViewportState{
+		LiveEdgeBase:    0,
+		SavedAt:         now,
+		PromptStartLine: -1,
+		WorkingDir:      "/home/user/work",
+	}
+	if err := wal.WriteMetadata(state); err != nil {
+		t.Fatalf("WriteMetadata failed: %v", err)
+	}
+
+	if err := wal.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Pre-read CWD using standalone function
+	cwd := ReadWALWorkingDir(tmpDir, termID)
+	if cwd != "/home/user/work" {
+		t.Errorf("ReadWALWorkingDir: got %q, want %q", cwd, "/home/user/work")
+	}
+
+	// Test with non-existent WAL
+	cwd = ReadWALWorkingDir(tmpDir, "nonexistent")
+	if cwd != "" {
+		t.Errorf("ReadWALWorkingDir (nonexistent): got %q, want empty", cwd)
+	}
 }

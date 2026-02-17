@@ -503,29 +503,135 @@ func (w *WriteAheadLog) encodeMetadataEntry(metadataBytes []byte, timestamp time
 }
 
 // encodeViewportState serializes ViewportState to bytes.
+// Format: 32 bytes (original) + 8 bytes PromptStartLine + 2 bytes CWD length + CWD string.
 func encodeViewportState(state *ViewportState) ([]byte, error) {
-	// Use a simple binary format for efficiency:
-	// ScrollOffset (8 bytes) + LiveEdgeBase (8 bytes) + CursorX (4 bytes) + CursorY (4 bytes) + SavedAt (8 bytes)
-	buf := make([]byte, 32)
+	cwdBytes := []byte(state.WorkingDir)
+	totalSize := 32 + 8 + 2 + len(cwdBytes)
+	buf := make([]byte, totalSize)
+	// Original 32 bytes
 	binary.LittleEndian.PutUint64(buf[0:8], uint64(state.ScrollOffset))
 	binary.LittleEndian.PutUint64(buf[8:16], uint64(state.LiveEdgeBase))
 	binary.LittleEndian.PutUint32(buf[16:20], uint32(state.CursorX))
 	binary.LittleEndian.PutUint32(buf[20:24], uint32(state.CursorY))
 	binary.LittleEndian.PutUint64(buf[24:32], uint64(state.SavedAt.UnixNano()))
+	// New fields
+	binary.LittleEndian.PutUint64(buf[32:40], uint64(state.PromptStartLine))
+	binary.LittleEndian.PutUint16(buf[40:42], uint16(len(cwdBytes)))
+	copy(buf[42:], cwdBytes)
 	return buf, nil
 }
 
 // decodeViewportState deserializes ViewportState from bytes.
+// Backward-compatible: old 32-byte payloads decode with PromptStartLine=-1, WorkingDir="".
 func decodeViewportState(data []byte) (*ViewportState, error) {
 	if len(data) < 32 {
 		return nil, fmt.Errorf("metadata too short: %d bytes", len(data))
 	}
-	return &ViewportState{
-		ScrollOffset: int64(binary.LittleEndian.Uint64(data[0:8])),
-		LiveEdgeBase: int64(binary.LittleEndian.Uint64(data[8:16])),
-		CursorX:      int(binary.LittleEndian.Uint32(data[16:20])),
-		CursorY:      int(binary.LittleEndian.Uint32(data[20:24])),
-		SavedAt:      time.Unix(0, int64(binary.LittleEndian.Uint64(data[24:32]))),
+	state := &ViewportState{
+		ScrollOffset:    int64(binary.LittleEndian.Uint64(data[0:8])),
+		LiveEdgeBase:    int64(binary.LittleEndian.Uint64(data[8:16])),
+		CursorX:         int(binary.LittleEndian.Uint32(data[16:20])),
+		CursorY:         int(binary.LittleEndian.Uint32(data[20:24])),
+		SavedAt:         time.Unix(0, int64(binary.LittleEndian.Uint64(data[24:32]))),
+		PromptStartLine: -1, // default for old format
+	}
+	// Extended fields (bytes 32+)
+	if len(data) >= 40 {
+		state.PromptStartLine = int64(binary.LittleEndian.Uint64(data[32:40]))
+	}
+	if len(data) >= 42 {
+		cwdLen := int(binary.LittleEndian.Uint16(data[40:42]))
+		if len(data) >= 42+cwdLen {
+			state.WorkingDir = string(data[42 : 42+cwdLen])
+		}
+	}
+	return state, nil
+}
+
+// ReadWALWorkingDir reads the last known working directory from a WAL file.
+// This is a standalone read-only function that can be called before the full WAL is opened.
+// Returns empty string if WAL doesn't exist or has no CWD.
+func ReadWALWorkingDir(basePath, terminalID string) string {
+	cfg := DefaultWALConfig(basePath, terminalID)
+	walPath := filepath.Join(cfg.WALDir, "wal.log")
+
+	f, err := os.Open(walPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	// Skip header
+	if _, err := f.Seek(WALHeaderSize, io.SeekStart); err != nil {
+		return ""
+	}
+
+	reader := bufio.NewReader(f)
+	var lastCWD string
+
+	// Scan all entries looking for the last metadata with a CWD
+	for {
+		entry, err := readEntryStandalone(reader)
+		if err != nil {
+			break
+		}
+		if entry.Metadata != nil && entry.Metadata.WorkingDir != "" {
+			lastCWD = entry.Metadata.WorkingDir
+		}
+	}
+	return lastCWD
+}
+
+// readEntryStandalone reads a single WAL entry without requiring a WriteAheadLog instance.
+func readEntryStandalone(r *bufio.Reader) (WALEntry, error) {
+	headerBuf := make([]byte, 21)
+	if _, err := io.ReadFull(r, headerBuf); err != nil {
+		return WALEntry{}, err
+	}
+
+	entryType := headerBuf[0]
+	lineIdx := binary.LittleEndian.Uint64(headerBuf[1:9])
+	timestamp := time.Unix(0, int64(binary.LittleEndian.Uint64(headerBuf[9:17])))
+	dataLen := binary.LittleEndian.Uint32(headerBuf[17:21])
+
+	var lineData []byte
+	if dataLen > 0 {
+		lineData = make([]byte, dataLen)
+		if _, err := io.ReadFull(r, lineData); err != nil {
+			return WALEntry{}, err
+		}
+	}
+
+	// Read and verify CRC
+	crcBuf := make([]byte, 4)
+	if _, err := io.ReadFull(r, crcBuf); err != nil {
+		return WALEntry{}, err
+	}
+	storedCRC := binary.LittleEndian.Uint32(crcBuf)
+
+	totalSize := 21 + int(dataLen) + 4
+	fullEntry := make([]byte, totalSize)
+	copy(fullEntry[0:21], headerBuf)
+	if dataLen > 0 {
+		copy(fullEntry[21:21+dataLen], lineData)
+	}
+	copy(fullEntry[totalSize-4:], crcBuf)
+
+	expectedCRC := crc32.ChecksumIEEE(fullEntry[:totalSize-4])
+	if storedCRC != expectedCRC {
+		return WALEntry{}, fmt.Errorf("CRC mismatch")
+	}
+
+	var metadata *ViewportState
+	if entryType == EntryTypeMetadata && dataLen > 0 {
+		metadata, _ = decodeViewportState(lineData)
+	}
+
+	return WALEntry{
+		Type:          entryType,
+		GlobalLineIdx: lineIdx,
+		Timestamp:     timestamp,
+		Metadata:      metadata,
 	}, nil
 }
 
