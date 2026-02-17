@@ -1205,6 +1205,15 @@ func (a *TexelTerm) runShell() error {
 	// Load environment and working directory from pane-specific file
 	env, cwd := a.loadShellEnvironment(paneID)
 
+	// On first run, try to recover CWD from WAL if not already set
+	if !isRestart && cwd == "" && paneID != "" {
+		walCWD := a.readWALWorkingDir(paneID)
+		if walCWD != "" {
+			cwd = walCWD
+			log.Printf("[TEXELTERM] Using WAL-persisted CWD: %s", walCWD)
+		}
+	}
+
 	// Start PTY with shell command
 	ptmx, cmd, err := a.startPTY(cols, rows, env, cwd)
 	if err != nil {
@@ -1466,6 +1475,23 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 
 // Note: initializeDisplayBufferLocked was removed as part of DisplayBuffer cleanup.
 // MemoryBuffer is now the only scrollback system.
+
+// readWALWorkingDir pre-reads the last known CWD from the WAL before the full VTerm is initialized.
+// This allows the shell to start in the correct directory on reload.
+func (a *TexelTerm) readWALWorkingDir(paneID string) string {
+	cfg := config.App("texelterm")
+	historyPersistDir := expandTildePath(cfg.GetString("texelterm.history", "persist_dir", ""))
+	if historyPersistDir == "" {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			historyPersistDir = filepath.Join(homeDir, ".texelation")
+		}
+	}
+	if historyPersistDir == "" {
+		return ""
+	}
+	diskPath := filepath.Join(historyPersistDir, "scrollback", paneID+".hist3")
+	return parser.ReadWALWorkingDir(diskPath, paneID)
+}
 
 // initializeMemoryBufferLocked sets up the MemoryBuffer system.
 // Must be called with a.mu held.

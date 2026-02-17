@@ -1,4 +1,4 @@
-# Texelation Shell Integration for Bash (V7 - Clean History)
+# Texelation Shell Integration for Bash (V8 - OSC 7 CWD)
 # Source this file in your ~/.bashrc to enable automatic title updates.
 
 # Clean up previous traps
@@ -8,6 +8,8 @@ texel_precmd() {
     local ret="$?"
     # OSC 133;D;ret (Command Finished)
     printf '\033]133;D;%s\007' "$ret"
+    # OSC 7 - Report current working directory
+    printf '\033]7;file://%s%s\007' "$(hostname)" "$PWD"
     # OSC 133;A (Prompt Start)
     printf '\033]133;A\007'
 }

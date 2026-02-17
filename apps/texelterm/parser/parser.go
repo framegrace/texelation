@@ -257,6 +257,8 @@ func (p *Parser) handleOSC(sequence []rune) {
 	payload := string(parts[1])
 
 	switch command {
+	case 7: // Current Working Directory (file://hostname/path)
+		p.vterm.setWorkingDirectory(payload)
 	case 10: // Set/Query Default Foreground Color
 		if payload == "?" {
 			// --- TRIGGER QUERY CALLBACK ---

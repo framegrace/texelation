@@ -48,6 +48,14 @@ type ViewportState struct {
 
 	// SavedAt is when the state was saved.
 	SavedAt time.Time `json:"saved_at"`
+
+	// PromptStartLine is the global line index of the last shell prompt start.
+	// -1 means unknown (e.g., old WAL without this field).
+	PromptStartLine int64 `json:"prompt_start_line"`
+
+	// WorkingDir is the last known working directory from OSC 7.
+	// Empty means unknown.
+	WorkingDir string `json:"working_dir"`
 }
 
 // PageStoreConfig holds configuration for the page store.
