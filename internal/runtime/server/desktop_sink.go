@@ -36,12 +36,6 @@ func (d *DesktopSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) 
 	key := tcell.Key(event.KeyCode)
 	mod := tcell.ModMask(event.Modifiers)
 	d.desktop.InjectKeyEvent(key, event.RuneValue, mod)
-	d.mu.Lock()
-	publisher := d.publisher
-	d.mu.Unlock()
-	if publisher != nil {
-		_ = publisher.Publish()
-	}
 }
 
 func (d *DesktopSink) HandleMouseEvent(session *Session, event protocol.MouseEvent) {
@@ -49,12 +43,6 @@ func (d *DesktopSink) HandleMouseEvent(session *Session, event protocol.MouseEve
 		return
 	}
 	d.desktop.InjectMouseEvent(int(event.X), int(event.Y), tcell.ButtonMask(event.ButtonMask), tcell.ModMask(event.Modifiers))
-	d.mu.Lock()
-	publisher := d.publisher
-	d.mu.Unlock()
-	if publisher != nil {
-		_ = publisher.Publish()
-	}
 }
 
 func (d *DesktopSink) PopPendingClipboard() (string, []byte, bool) {
@@ -92,12 +80,6 @@ func (d *DesktopSink) HandlePaste(session *Session, paste protocol.Paste) {
 		return
 	}
 	d.desktop.HandlePaste(paste.Data)
-	d.mu.Lock()
-	publisher := d.publisher
-	d.mu.Unlock()
-	if publisher != nil {
-		_ = publisher.Publish()
-	}
 }
 
 func (d *DesktopSink) Desktop() *texel.DesktopEngine {
