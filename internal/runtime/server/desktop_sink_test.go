@@ -9,9 +9,10 @@
 package server
 
 import (
-	texelcore "github.com/framegrace/texelui/core"
+	"sync"
 	"testing"
 
+	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/protocol"
@@ -129,4 +130,39 @@ func TestDesktopSinkHandlesAdditionalEvents(t *testing.T) {
 	if section, ok := cfg["pane"]; !ok || section["fg"] != "#123456" {
 		t.Fatalf("theme update not applied")
 	}
+}
+
+func TestDesktopSink_SetPublisherConcurrent(t *testing.T) {
+	// Run with -race to detect data race on d.publisher
+	driver := sinkScreenDriver{}
+	shellFactory := func() texelcore.App { return &recordingApp{title: "shell"} }
+	lifecycle := texel.NoopAppLifecycle{}
+
+	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
+	if err != nil {
+		t.Fatalf("NewDesktopEngineWithDriver: %v", err)
+	}
+	defer desktop.Close()
+	desktop.SwitchToWorkspace(1)
+
+	sink := NewDesktopSink(desktop)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			sink.SetPublisher(nil)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			sink.Publish()
+		}
+	}()
+
+	wg.Wait()
 }

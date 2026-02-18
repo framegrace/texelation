@@ -36,8 +36,11 @@ func (d *DesktopSink) HandleKeyEvent(session *Session, event protocol.KeyEvent) 
 	key := tcell.Key(event.KeyCode)
 	mod := tcell.ModMask(event.Modifiers)
 	d.desktop.InjectKeyEvent(key, event.RuneValue, mod)
-	if d.publisher != nil {
-		_ = d.publisher.Publish()
+	d.mu.Lock()
+	publisher := d.publisher
+	d.mu.Unlock()
+	if publisher != nil {
+		_ = publisher.Publish()
 	}
 }
 
@@ -46,8 +49,11 @@ func (d *DesktopSink) HandleMouseEvent(session *Session, event protocol.MouseEve
 		return
 	}
 	d.desktop.InjectMouseEvent(int(event.X), int(event.Y), tcell.ButtonMask(event.ButtonMask), tcell.ModMask(event.Modifiers))
-	if d.publisher != nil {
-		_ = d.publisher.Publish()
+	d.mu.Lock()
+	publisher := d.publisher
+	d.mu.Unlock()
+	if publisher != nil {
+		_ = publisher.Publish()
 	}
 }
 
@@ -86,8 +92,11 @@ func (d *DesktopSink) HandlePaste(session *Session, paste protocol.Paste) {
 		return
 	}
 	d.desktop.HandlePaste(paste.Data)
-	if d.publisher != nil {
-		_ = d.publisher.Publish()
+	d.mu.Lock()
+	publisher := d.publisher
+	d.mu.Unlock()
+	if publisher != nil {
+		_ = publisher.Publish()
 	}
 }
 
@@ -96,11 +105,16 @@ func (d *DesktopSink) Desktop() *texel.DesktopEngine {
 }
 
 func (d *DesktopSink) Publisher() *DesktopPublisher {
-	return d.publisher
+	d.mu.Lock()
+	publisher := d.publisher
+	d.mu.Unlock()
+	return publisher
 }
 
 func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
+	d.mu.Lock()
 	d.publisher = publisher
+	d.mu.Unlock()
 	if d.desktop == nil {
 		return
 	}
@@ -112,8 +126,11 @@ func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
 }
 
 func (d *DesktopSink) Publish() {
-	if d.publisher != nil {
-		_ = d.publisher.Publish()
+	d.mu.Lock()
+	publisher := d.publisher
+	d.mu.Unlock()
+	if publisher != nil {
+		_ = publisher.Publish()
 	}
 }
 
