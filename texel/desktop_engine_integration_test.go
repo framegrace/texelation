@@ -9,6 +9,7 @@ package texel
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -139,8 +140,11 @@ func TestDesktopInjectKeyEvent(t *testing.T) {
 	}
 
 	desktop.activeWorkspace.PerformSplit(Vertical)
+	go desktop.Run()
+	defer desktop.Close()
 
 	desktop.InjectKeyEvent(tcell.KeyEnter, '\n', tcell.ModMask(0))
+	time.Sleep(50 * time.Millisecond)
 
 	if len(recorder.keys) != 1 {
 		t.Fatalf("expected 1 key event, got %d", len(recorder.keys))
@@ -169,6 +173,8 @@ func TestDesktopInjectMouseEvent(t *testing.T) {
 	}
 
 	ws.PerformSplit(Vertical)
+	go desktop.Run()
+	defer desktop.Close()
 
 	root := ws.tree.Root
 	if len(root.Children) != 2 {
@@ -189,6 +195,7 @@ func TestDesktopInjectMouseEvent(t *testing.T) {
 	clickY := left.Pane.absY0 + left.Pane.Height()/2
 
 	desktop.InjectMouseEvent(clickX, clickY, tcell.Button1, tcell.ModMask(2))
+	time.Sleep(50 * time.Millisecond)
 
 	if desktop.lastMouseX != clickX || desktop.lastMouseY != clickY {
 		t.Fatalf("unexpected mouse position %d,%d", desktop.lastMouseX, desktop.lastMouseY)

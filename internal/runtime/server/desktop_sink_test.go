@@ -11,6 +11,7 @@ package server
 import (
 	"sync"
 	"testing"
+	"time"
 
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
@@ -61,9 +62,12 @@ func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 	}
 	desktop.SwitchToWorkspace(1)
 	desktop.ActiveWorkspace().AddApp(recorder)
+	go desktop.Run()
+	defer desktop.Close()
 
 	sink := NewDesktopSink(desktop)
 	sink.HandleKeyEvent(nil, protocol.KeyEvent{KeyCode: uint32(tcell.KeyEnter), RuneValue: '\n', Modifiers: 0})
+	time.Sleep(50 * time.Millisecond)
 
 	if len(recorder.keys) != 1 {
 		t.Fatalf("expected key event forwarded, got %d", len(recorder.keys))
@@ -90,8 +94,11 @@ func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 
 	sink := NewDesktopSink(desktop)
 	sink.SetPublisher(publisher)
+	go desktop.Run()
+	defer desktop.Close()
 
 	sink.HandleKeyEvent(session, protocol.KeyEvent{KeyCode: uint32(tcell.KeyRune), RuneValue: 'x', Modifiers: 0})
+	time.Sleep(50 * time.Millisecond)
 
 	if len(session.Pending(0)) == 0 {
 		t.Fatalf("expected diffs after key event")
@@ -108,9 +115,13 @@ func TestDesktopSinkHandlesAdditionalEvents(t *testing.T) {
 		t.Fatalf("desktop init failed: %v", err)
 	}
 	desktop.SwitchToWorkspace(1)
+	go desktop.Run()
+	defer desktop.Close()
 
 	sink := NewDesktopSink(desktop)
 	sink.HandleMouseEvent(nil, protocol.MouseEvent{X: 5, Y: 6, ButtonMask: 1, Modifiers: 2})
+	time.Sleep(50 * time.Millisecond)
+
 	x, y := desktop.LastMousePosition()
 	if x != 5 || y != 6 {
 		t.Fatalf("mouse event not recorded")
