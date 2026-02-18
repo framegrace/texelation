@@ -339,6 +339,109 @@ func TestScrollRegionDetailedState(t *testing.T) {
 	}
 }
 
+// TestAltScreenResizeThenExit verifies that resizing the terminal while in alt screen
+// correctly updates the normal screen memory buffer so that exiting alt screen produces
+// a grid with the correct dimensions and cursor position.
+func TestAltScreenResizeThenExit(t *testing.T) {
+	v := NewVTerm(80, 24, WithMemoryBuffer())
+	p := NewParser(v)
+
+	// Write some content on normal screen
+	for i := 0; i < 15; i++ {
+		for _, ch := range "output line\r\n" {
+			p.Parse(ch)
+		}
+	}
+	// Cursor should be around row 15
+	_, curYBefore := v.Cursor()
+	t.Logf("Before alt screen: cursor at row %d", curYBefore)
+
+	// Enter alt screen
+	for _, ch := range "\x1b[?1049h" {
+		p.Parse(ch)
+	}
+	if !v.InAltScreen() {
+		t.Fatal("Should be in alt screen")
+	}
+
+	// Write some alt screen content
+	for _, ch := range "Alt screen app running...\r\n" {
+		p.Parse(ch)
+	}
+
+	// Resize while in alt screen (grow from 24 to 35 rows)
+	v.Resize(80, 35)
+
+	// Exit alt screen
+	for _, ch := range "\x1b[?1049l" {
+		p.Parse(ch)
+	}
+	if v.InAltScreen() {
+		t.Fatal("Should not be in alt screen")
+	}
+
+	// Grid must have the new height
+	grid := v.Grid()
+	if len(grid) != 35 {
+		t.Errorf("Grid rows: got %d, want 35", len(grid))
+	}
+	// Each row must have the correct width
+	for i, row := range grid {
+		if len(row) != 80 {
+			t.Errorf("Grid row %d width: got %d, want 80", i, len(row))
+			break
+		}
+	}
+
+	// Cursor must be within the new dimensions
+	cx, cy := v.Cursor()
+	if cy < 0 || cy >= 35 {
+		t.Errorf("Cursor Y out of bounds: got %d, want 0-%d", cy, 34)
+	}
+	if cx < 0 || cx >= 80 {
+		t.Errorf("Cursor X out of bounds: got %d, want 0-79", cx)
+	}
+}
+
+// TestAltScreenResizeShrinkThenExit verifies shrinking during alt screen also works.
+func TestAltScreenResizeShrinkThenExit(t *testing.T) {
+	v := NewVTerm(80, 30, WithMemoryBuffer())
+	p := NewParser(v)
+
+	// Write enough content to fill the screen
+	for i := 0; i < 25; i++ {
+		for _, ch := range "output line\r\n" {
+			p.Parse(ch)
+		}
+	}
+
+	// Enter alt screen
+	for _, ch := range "\x1b[?1049h" {
+		p.Parse(ch)
+	}
+
+	// Resize: shrink from 30 to 20 rows
+	v.Resize(80, 20)
+
+	// Exit alt screen
+	for _, ch := range "\x1b[?1049l" {
+		p.Parse(ch)
+	}
+
+	grid := v.Grid()
+	if len(grid) != 20 {
+		t.Errorf("Grid rows: got %d, want 20", len(grid))
+	}
+
+	cx, cy := v.Cursor()
+	if cy < 0 || cy >= 20 {
+		t.Errorf("Cursor Y out of bounds: got %d, want 0-%d", cy, 19)
+	}
+	if cx < 0 || cx >= 80 {
+		t.Errorf("Cursor X out of bounds: got %d, want 0-79", cx)
+	}
+}
+
 // Helper to convert grid line to string for debugging
 func gridLineToString(cells []Cell) string {
 	if cells == nil {
