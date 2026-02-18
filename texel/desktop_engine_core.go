@@ -65,6 +65,37 @@ func newStatusPaneID(app App) [16]byte {
 	return id
 }
 
+// eventKind identifies the type of desktop event.
+type eventKind int
+
+const (
+	keyEventKind eventKind = iota
+	mouseEventKind
+	pasteEventKind
+	resizeEventKind
+)
+
+// desktopEvent is a tagged union for all events processed by the desktop event loop.
+type desktopEvent struct {
+	kind    eventKind
+	key     tcell.Key
+	ch      rune
+	mod     tcell.ModMask
+	mx, my  int
+	buttons tcell.ButtonMask
+	paste   []byte
+	width   int
+	height  int
+}
+
+// animationFrame carries interpolated ratios from the animation ticker to the event loop.
+type animationFrame struct {
+	node       *Node
+	ratios     []float64
+	done       bool
+	onComplete func()
+}
+
 // Desktop manages a collection of workspaces (Screens).
 type DesktopEngine struct {
 	display           ScreenDriver
@@ -73,6 +104,9 @@ type DesktopEngine struct {
 	statusPanes       []*StatusPane
 	floatingPanels    []*FloatingPanel
 	quit              chan struct{}
+	eventCh           chan desktopEvent   // Key/mouse/paste/resize from connection goroutine
+	animCh            chan animationFrame // Animation ratio updates from ticker
+	refreshCh         chan struct{}       // Pane dirty signals
 	closeOnce         sync.Once
 	ShellAppFactory   AppFactory
 	InitAppName       string
@@ -218,6 +252,9 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory AppFactory, in
 		statusPanes:        make([]*StatusPane, 0),
 		floatingPanels:     make([]*FloatingPanel, 0),
 		quit:               make(chan struct{}),
+		eventCh:            make(chan desktopEvent, 64),
+		animCh:             make(chan animationFrame, 16),
+		refreshCh:          make(chan struct{}, 16),
 		ShellAppFactory:    shellFactory,
 		InitAppName:        initAppName,
 		styleCache:         make(map[styleKey]tcell.Style),
@@ -1518,4 +1555,104 @@ func initDefaultColors() (tcell.Color, tcell.Color, error) {
 		return tcell.ColorWhite, tcell.ColorBlack, nil
 	}
 	return fg, bg, nil
+}
+
+// Run starts the desktop event loop. This goroutine is the sole accessor of
+// tree state (Root, ActiveLeaf, SplitRatios, pane dimensions). Must be called
+// after NewDesktopEngine and before events are injected.
+func (d *DesktopEngine) Run() {
+	for {
+		select {
+		case ev := <-d.eventCh:
+			d.processDesktopEvent(ev)
+			d.publishIfDirty()
+		case frame := <-d.animCh:
+			d.applyAnimationFrame(frame)
+			d.publishIfDirty()
+		case <-d.refreshCh:
+			d.publishIfDirty()
+		case <-d.quit:
+			return
+		}
+	}
+}
+
+// processDesktopEvent dispatches a desktopEvent to the appropriate handler.
+func (d *DesktopEngine) processDesktopEvent(ev desktopEvent) {
+	switch ev.kind {
+	case keyEventKind:
+		tcellEvent := tcell.NewEventKey(ev.key, ev.ch, ev.mod)
+		d.handleEvent(tcellEvent)
+	case mouseEventKind:
+		d.processMouseEvent(ev.mx, ev.my, ev.buttons, ev.mod)
+	case pasteEventKind:
+		d.handlePasteInternal(ev.paste)
+	case resizeEventKind:
+		d.handleResizeInternal()
+	}
+}
+
+// applyAnimationFrame applies interpolated ratios from the animation ticker.
+func (d *DesktopEngine) applyAnimationFrame(frame animationFrame) {
+	if frame.node != nil {
+		frame.node.SplitRatios = frame.ratios
+	}
+	d.recalculateLayout()
+	d.broadcastTreeChanged()
+	if frame.done && frame.onComplete != nil {
+		frame.onComplete()
+	}
+}
+
+// publishIfDirty calls the refresh handler if one is set.
+func (d *DesktopEngine) publishIfDirty() {
+	if handler := d.refreshHandlerFunc(); handler != nil {
+		handler()
+	}
+}
+
+// SendEvent enqueues an event for the event loop to process.
+// Non-blocking: drops if the event channel is full (unlikely at capacity 64).
+func (d *DesktopEngine) SendEvent(ev desktopEvent) {
+	select {
+	case d.eventCh <- ev:
+	default:
+		log.Printf("[DESKTOP] Event channel full, dropping event kind=%d", ev.kind)
+	}
+}
+
+// SendRefresh signals the event loop that a pane has dirty content.
+func (d *DesktopEngine) SendRefresh() {
+	select {
+	case d.refreshCh <- struct{}{}:
+	default:
+	}
+}
+
+// SendAnimationFrame sends an animation frame to the event loop for tree-safe application.
+func (d *DesktopEngine) SendAnimationFrame(frame animationFrame) {
+	select {
+	case d.animCh <- frame:
+	default:
+		log.Printf("[DESKTOP] Animation channel full, dropping frame")
+	}
+}
+
+// handlePasteInternal routes paste data to the active pane (called from event loop).
+func (d *DesktopEngine) handlePasteInternal(data []byte) {
+	if len(data) == 0 || d.inControlMode {
+		return
+	}
+	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
+		d.zoomedPane.Pane.handlePaste(data)
+		return
+	}
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.handlePaste(data)
+	}
+}
+
+// handleResizeInternal processes resize events (called from event loop).
+func (d *DesktopEngine) handleResizeInternal() {
+	d.recalculateLayout()
 }
