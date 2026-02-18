@@ -495,7 +495,7 @@ func (tc *TestClient) LastSequence() uint64 {
 
 // PaneContains reports whether the cached pane rows contain the substring.
 func (tc *TestClient) PaneContains(paneID [16]byte, substr string) bool {
-	pane := tc.cache.Pane(paneID)
+	pane := tc.cache.PaneByID(paneID)
 	if pane == nil {
 		return false
 	}
