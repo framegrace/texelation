@@ -11,7 +11,6 @@ package server
 import (
 	"sync"
 	"testing"
-	"time"
 
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
@@ -38,16 +37,28 @@ func (sinkScreenDriver) GetContent(x, y int) (rune, []rune, tcell.Style, int) {
 
 type recordingApp struct {
 	title string
+	mu    sync.Mutex
 	keys  []*tcell.EventKey
 }
 
 func (r *recordingApp) Run() error                        { return nil }
 func (r *recordingApp) Stop()                             {}
 func (r *recordingApp) Resize(cols, rows int)             {}
-func (r *recordingApp) Render() [][]texelcore.Cell            { return [][]texelcore.Cell{{}} }
+func (r *recordingApp) Render() [][]texelcore.Cell        { return [][]texelcore.Cell{{}} }
 func (r *recordingApp) GetTitle() string                  { return r.title }
-func (r *recordingApp) HandleKey(ev *tcell.EventKey)      { r.keys = append(r.keys, ev) }
+func (r *recordingApp) HandleKey(ev *tcell.EventKey) {
+	r.mu.Lock()
+	r.keys = append(r.keys, ev)
+	r.mu.Unlock()
+}
 func (r *recordingApp) SetRefreshNotifier(ch chan<- bool) {}
+func (r *recordingApp) getKeys() []*tcell.EventKey {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := make([]*tcell.EventKey, len(r.keys))
+	copy(cp, r.keys)
+	return cp
+}
 
 func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 	driver := sinkScreenDriver{}
@@ -67,13 +78,14 @@ func TestDesktopSinkForwardsKeyEvents(t *testing.T) {
 
 	sink := NewDesktopSink(desktop)
 	sink.HandleKeyEvent(nil, protocol.KeyEvent{KeyCode: uint32(tcell.KeyEnter), RuneValue: '\n', Modifiers: 0})
-	time.Sleep(50 * time.Millisecond)
+	desktop.Barrier()
 
-	if len(recorder.keys) != 1 {
-		t.Fatalf("expected key event forwarded, got %d", len(recorder.keys))
+	keys := recorder.getKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected key event forwarded, got %d", len(keys))
 	}
-	if recorder.keys[0].Key() != tcell.KeyEnter {
-		t.Fatalf("unexpected key received: %v", recorder.keys[0].Key())
+	if keys[0].Key() != tcell.KeyEnter {
+		t.Fatalf("unexpected key received: %v", keys[0].Key())
 	}
 }
 
@@ -98,7 +110,7 @@ func TestDesktopSinkPublishesAfterKeyEvent(t *testing.T) {
 	defer desktop.Close()
 
 	sink.HandleKeyEvent(session, protocol.KeyEvent{KeyCode: uint32(tcell.KeyRune), RuneValue: 'x', Modifiers: 0})
-	time.Sleep(50 * time.Millisecond)
+	desktop.Barrier()
 
 	if len(session.Pending(0)) == 0 {
 		t.Fatalf("expected diffs after key event")
@@ -120,7 +132,7 @@ func TestDesktopSinkHandlesAdditionalEvents(t *testing.T) {
 
 	sink := NewDesktopSink(desktop)
 	sink.HandleMouseEvent(nil, protocol.MouseEvent{X: 5, Y: 6, ButtonMask: 1, Modifiers: 2})
-	time.Sleep(50 * time.Millisecond)
+	desktop.Barrier()
 
 	x, y := desktop.LastMousePosition()
 	if x != 5 || y != 6 {

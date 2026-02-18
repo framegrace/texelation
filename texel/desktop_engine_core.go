@@ -73,6 +73,7 @@ const (
 	mouseEventKind
 	pasteEventKind
 	resizeEventKind
+	syncEventKind
 )
 
 // desktopEvent is a tagged union for all events processed by the desktop event loop.
@@ -86,6 +87,7 @@ type desktopEvent struct {
 	paste   []byte
 	width   int
 	height  int
+	done    chan struct{} // used by syncEventKind
 }
 
 // animationFrame carries interpolated ratios from the animation ticker to the event loop.
@@ -126,6 +128,7 @@ type DesktopEngine struct {
 	resizeSelection *selectedBorder
 	zoomedPane      *Node
 
+	mouseMu            sync.Mutex
 	lastMouseX         int
 	lastMouseY         int
 	lastMouseButtons   tcell.ButtonMask
@@ -970,16 +973,22 @@ func (d *DesktopEngine) HandleThemeUpdate(section, key, value string) {
 
 // LastMousePosition returns the most recently recorded mouse coordinates.
 func (d *DesktopEngine) LastMousePosition() (int, int) {
+	d.mouseMu.Lock()
+	defer d.mouseMu.Unlock()
 	return d.lastMouseX, d.lastMouseY
 }
 
 // LastMouseButtons exposes the last recorded button mask.
 func (d *DesktopEngine) LastMouseButtons() tcell.ButtonMask {
+	d.mouseMu.Lock()
+	defer d.mouseMu.Unlock()
 	return d.lastMouseButtons
 }
 
 // LastMouseModifiers exposes the last recorded modifier mask.
 func (d *DesktopEngine) LastMouseModifiers() tcell.ModMask {
+	d.mouseMu.Lock()
+	defer d.mouseMu.Unlock()
 	return d.lastMouseModifier
 }
 
@@ -1006,12 +1015,13 @@ func (d *DesktopEngine) handleMouseEvent(ev *tcell.EventMouse) {
 }
 
 func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	d.mouseMu.Lock()
 	prevButtons := d.lastMouseButtons
-
 	d.lastMouseX = x
 	d.lastMouseY = y
 	d.lastMouseButtons = buttons
 	d.lastMouseModifier = modifiers
+	d.mouseMu.Unlock()
 
 	// Handle workspace border resize first
 	if d.activeWorkspace != nil {
@@ -1575,6 +1585,8 @@ func (d *DesktopEngine) processDesktopEvent(ev desktopEvent) {
 		d.handlePasteInternal(ev.paste)
 	case resizeEventKind:
 		d.handleResizeInternal()
+	case syncEventKind:
+		close(ev.done)
 	}
 }
 
@@ -1613,6 +1625,14 @@ func (d *DesktopEngine) SendRefresh() {
 	case d.refreshCh <- struct{}{}:
 	default:
 	}
+}
+
+// Barrier blocks until the event loop has processed all previously-queued events.
+// Useful in tests to ensure event-loop state is settled before assertions.
+func (d *DesktopEngine) Barrier() {
+	done := make(chan struct{})
+	d.eventCh <- desktopEvent{kind: syncEventKind, done: done}
+	<-done
 }
 
 // SendAnimationFrame sends an animation frame to the event loop for tree-safe application.
