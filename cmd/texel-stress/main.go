@@ -134,7 +134,8 @@ func buildDesktop() (*texel.DesktopEngine, *stressApp) {
 	if err != nil {
 		log.Fatalf("desktop init failed: %v", err)
 	}
-	
+	go desktop.Run()
+
 	desktop.Registry().RegisterBuiltIn(&registry.Manifest{
 		Name:        "welcome",
 		DisplayName: "Welcome",
