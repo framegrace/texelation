@@ -671,6 +671,42 @@ func (v *VTerm) memoryBufferLineFeed() {
 	}
 }
 
+// markLineWrapped sets Wrapped=true on the last cell of the current logical line.
+// Called when auto-wrap is about to move to the next line, marking that the current
+// line continues on the next one. This enables reflow on resize: consecutive lines
+// with Wrapped=true are joined into a single long logical line before re-wrapping.
+func (v *VTerm) markLineWrapped() {
+	if v.memBufState == nil || v.memBufState.memBuf == nil {
+		return
+	}
+	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	line := v.memBufState.memBuf.GetLine(globalLine)
+	if line != nil && len(line.Cells) > 0 {
+		line.Cells[len(line.Cells)-1].Wrapped = true
+	}
+}
+
+// memoryBufferLineFeedForWrap handles auto-wrap at the bottom of the viewport.
+// Unlike memoryBufferLineFeed, this does NOT commit the line (no OnLineCommit,
+// no persistence notification). It only advances liveEdgeBase and ensures the
+// next logical line exists so that the wrapped content has a place to go.
+func (v *VTerm) memoryBufferLineFeedForWrap() {
+	if !v.IsMemoryBufferEnabled() {
+		return
+	}
+
+	if v.cursorY >= v.marginBottom {
+		v.memBufState.liveEdgeBase++
+	}
+
+	// Ensure the next line exists
+	nextGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	v.ensureLineNotifyGaps(v.memBufState.memBuf, nextGlobal)
+
+	// Invalidate viewport cache since viewport shifted
+	v.memBufState.viewport.InvalidateCache()
+}
+
 // memoryBufferCarriageReturn handles carriage return.
 func (v *VTerm) memoryBufferCarriageReturn() {
 	if !v.IsMemoryBufferEnabled() {

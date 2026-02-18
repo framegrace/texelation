@@ -194,6 +194,12 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 	}
 
 	if v.wrapNext {
+		// Mark last cell of current line as Wrapped (for reflow on resize).
+		// This must happen before the wrap so the current line is still addressable.
+		if !v.inAltScreen {
+			v.markLineWrapped()
+		}
+
 		// Wrap to next line for both alt and main screen
 		// If left/right margins are active, wrap to left margin
 		if v.leftRightMarginMode {
@@ -220,6 +226,8 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 			}
 		} else {
 			if v.wrapEnabled {
+				// Mark line as wrapped for reflow on resize
+				v.markLineWrapped()
 				if v.leftRightMarginMode {
 					v.cursorX = v.marginLeft
 				} else {
@@ -262,16 +270,12 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 	} else {
 		// Main screen wrapping logic
 		if v.wrapEnabled && newX > rightEdge {
-			if v.IsMemoryBufferEnabled() {
-				// Memory buffer: let cursorX advance past terminal width.
-				// The LogicalLine extends naturally, and WrapToWidth() handles display.
-				v.cursorX = newX
-			} else {
-				// Set wrapNext instead of wrapping immediately
-				// This allows CR or LF to clear the flag without creating extra lines
-				v.wrapNext = true
-				v.SetCursorPos(v.cursorY, rightEdge)
-			}
+			// Set wrapNext instead of wrapping immediately.
+			// This allows CR or LF to clear the flag without creating extra lines.
+			// The cursor stays at the right edge; the next character triggers
+			// the actual wrap via lineFeedForWrap().
+			v.wrapNext = true
+			v.SetCursorPos(v.cursorY, rightEdge)
 		} else if newX <= rightEdge {
 			v.SetCursorPos(v.cursorY, newX)
 			// Sync prevCursor with new cursor position so delta-based sync doesn't see false movement.

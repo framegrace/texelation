@@ -55,6 +55,12 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 				// MemoryBuffer grows with new content; we just show a different window.
 				if commitLogical {
 					v.memoryBufferLineFeed()
+				} else {
+					// Auto-wrap at bottom: advance liveEdgeBase to create a new
+					// logical line for the wrapped continuation. Without this,
+					// the next character would overwrite the start of the current
+					// line (globalLine = liveEdgeBase + cursorY, col 0).
+					v.memoryBufferLineFeedForWrap()
 				}
 				// Cursor stays at bottom row - no SetCursorPos needed
 				// Mark all dirty since viewport content shifted
