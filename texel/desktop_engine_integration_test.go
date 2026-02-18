@@ -8,6 +8,7 @@
 package texel
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -108,6 +109,7 @@ func TestDesktopSwitchWorkspaceCreatesNewScreen(t *testing.T) {
 
 type keyRecordingApp struct {
 	title string
+	mu    sync.Mutex
 	keys  []*tcell.EventKey
 }
 
@@ -116,8 +118,19 @@ func (a *keyRecordingApp) Stop()                             {}
 func (a *keyRecordingApp) Resize(cols, rows int)             {}
 func (a *keyRecordingApp) Render() [][]Cell                  { return [][]Cell{{}} }
 func (a *keyRecordingApp) GetTitle() string                  { return a.title }
-func (a *keyRecordingApp) HandleKey(ev *tcell.EventKey)      { a.keys = append(a.keys, ev) }
+func (a *keyRecordingApp) HandleKey(ev *tcell.EventKey) {
+	a.mu.Lock()
+	a.keys = append(a.keys, ev)
+	a.mu.Unlock()
+}
 func (a *keyRecordingApp) SetRefreshNotifier(ch chan<- bool) {}
+func (a *keyRecordingApp) getKeys() []*tcell.EventKey {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cp := make([]*tcell.EventKey, len(a.keys))
+	copy(cp, a.keys)
+	return cp
+}
 
 func TestDesktopInjectKeyEvent(t *testing.T) {
 	driver := &stubScreenDriver{}
@@ -139,14 +152,18 @@ func TestDesktopInjectKeyEvent(t *testing.T) {
 	}
 
 	desktop.activeWorkspace.PerformSplit(Vertical)
+	go desktop.Run()
+	defer desktop.Close()
 
 	desktop.InjectKeyEvent(tcell.KeyEnter, '\n', tcell.ModMask(0))
+	desktop.Barrier()
 
-	if len(recorder.keys) != 1 {
-		t.Fatalf("expected 1 key event, got %d", len(recorder.keys))
+	keys := recorder.getKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key event, got %d", len(keys))
 	}
-	if recorder.keys[0].Key() != tcell.KeyEnter {
-		t.Fatalf("unexpected key %v", recorder.keys[0].Key())
+	if keys[0].Key() != tcell.KeyEnter {
+		t.Fatalf("unexpected key %v", keys[0].Key())
 	}
 }
 
@@ -169,6 +186,8 @@ func TestDesktopInjectMouseEvent(t *testing.T) {
 	}
 
 	ws.PerformSplit(Vertical)
+	go desktop.Run()
+	defer desktop.Close()
 
 	root := ws.tree.Root
 	if len(root.Children) != 2 {
@@ -189,15 +208,17 @@ func TestDesktopInjectMouseEvent(t *testing.T) {
 	clickY := left.Pane.absY0 + left.Pane.Height()/2
 
 	desktop.InjectMouseEvent(clickX, clickY, tcell.Button1, tcell.ModMask(2))
+	desktop.Barrier()
 
-	if desktop.lastMouseX != clickX || desktop.lastMouseY != clickY {
-		t.Fatalf("unexpected mouse position %d,%d", desktop.lastMouseX, desktop.lastMouseY)
+	mx, my := desktop.LastMousePosition()
+	if mx != clickX || my != clickY {
+		t.Fatalf("unexpected mouse position %d,%d", mx, my)
 	}
-	if desktop.lastMouseButtons != tcell.Button1 {
-		t.Fatalf("unexpected buttons %v", desktop.lastMouseButtons)
+	if desktop.LastMouseButtons() != tcell.Button1 {
+		t.Fatalf("unexpected buttons %v", desktop.LastMouseButtons())
 	}
-	if desktop.lastMouseModifier != tcell.ModMask(2) {
-		t.Fatalf("unexpected modifiers %v", desktop.lastMouseModifier)
+	if desktop.LastMouseModifiers() != tcell.ModMask(2) {
+		t.Fatalf("unexpected modifiers %v", desktop.LastMouseModifiers())
 	}
 	if ws.tree.ActiveLeaf != left {
 		t.Fatalf("expected click to activate left pane")

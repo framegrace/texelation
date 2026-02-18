@@ -65,6 +65,39 @@ func newStatusPaneID(app App) [16]byte {
 	return id
 }
 
+// eventKind identifies the type of desktop event.
+type eventKind int
+
+const (
+	keyEventKind eventKind = iota
+	mouseEventKind
+	pasteEventKind
+	resizeEventKind
+	syncEventKind
+)
+
+// desktopEvent is a tagged union for all events processed by the desktop event loop.
+type desktopEvent struct {
+	kind    eventKind
+	key     tcell.Key
+	ch      rune
+	mod     tcell.ModMask
+	mx, my  int
+	buttons tcell.ButtonMask
+	paste   []byte
+	width   int
+	height  int
+	done    chan struct{} // used by syncEventKind
+}
+
+// animationFrame carries interpolated ratios from the animation ticker to the event loop.
+type animationFrame struct {
+	node       *Node
+	ratios     []float64
+	done       bool
+	onComplete func()
+}
+
 // Desktop manages a collection of workspaces (Screens).
 type DesktopEngine struct {
 	display           ScreenDriver
@@ -73,6 +106,9 @@ type DesktopEngine struct {
 	statusPanes       []*StatusPane
 	floatingPanels    []*FloatingPanel
 	quit              chan struct{}
+	eventCh           chan desktopEvent   // Key/mouse/paste/resize from connection goroutine
+	animCh            chan animationFrame // Animation ratio updates from ticker
+	refreshCh         chan struct{}       // Pane dirty signals
 	closeOnce         sync.Once
 	ShellAppFactory   AppFactory
 	InitAppName       string
@@ -92,6 +128,7 @@ type DesktopEngine struct {
 	resizeSelection *selectedBorder
 	zoomedPane      *Node
 
+	mouseMu            sync.Mutex
 	lastMouseX         int
 	lastMouseY         int
 	lastMouseButtons   tcell.ButtonMask
@@ -218,6 +255,9 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory AppFactory, in
 		statusPanes:        make([]*StatusPane, 0),
 		floatingPanels:     make([]*FloatingPanel, 0),
 		quit:               make(chan struct{}),
+		eventCh:            make(chan desktopEvent, 64),
+		animCh:             make(chan animationFrame, 16),
+		refreshCh:          make(chan struct{}, 16),
 		ShellAppFactory:    shellFactory,
 		InitAppName:        initAppName,
 		styleCache:         make(map[styleKey]tcell.Style),
@@ -847,7 +887,7 @@ func (d *DesktopEngine) applyThemeChange() {
 
 // InjectMouseEvent records the latest mouse event metadata from remote clients.
 func (d *DesktopEngine) InjectMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
-	d.processMouseEvent(x, y, buttons, modifiers)
+	d.SendEvent(desktopEvent{kind: mouseEventKind, mx: x, my: y, buttons: buttons, mod: modifiers})
 }
 
 // SetClipboard implements ClipboardService for apps running in the desktop.
@@ -912,18 +952,14 @@ func (d *DesktopEngine) PopPendingClipboard() (string, []byte, bool) {
 	return d.clipboardMime, append([]byte(nil), data...), true
 }
 
-// HandlePaste routes paste data to the active pane.
+// HandlePaste routes paste data to the active pane via the event loop.
 func (d *DesktopEngine) HandlePaste(data []byte) {
-	if len(data) == 0 || d.inControlMode {
+	if len(data) == 0 {
 		return
 	}
-	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
-		d.zoomedPane.Pane.handlePaste(data)
-		return
-	}
-	if d.activeWorkspace != nil {
-		d.activeWorkspace.handlePaste(data)
-	}
+	copied := make([]byte, len(data))
+	copy(copied, data)
+	d.SendEvent(desktopEvent{kind: pasteEventKind, paste: copied})
 }
 
 // HandleThemeUpdate applies runtime theme overrides.
@@ -937,16 +973,22 @@ func (d *DesktopEngine) HandleThemeUpdate(section, key, value string) {
 
 // LastMousePosition returns the most recently recorded mouse coordinates.
 func (d *DesktopEngine) LastMousePosition() (int, int) {
+	d.mouseMu.Lock()
+	defer d.mouseMu.Unlock()
 	return d.lastMouseX, d.lastMouseY
 }
 
 // LastMouseButtons exposes the last recorded button mask.
 func (d *DesktopEngine) LastMouseButtons() tcell.ButtonMask {
+	d.mouseMu.Lock()
+	defer d.mouseMu.Unlock()
 	return d.lastMouseButtons
 }
 
 // LastMouseModifiers exposes the last recorded modifier mask.
 func (d *DesktopEngine) LastMouseModifiers() tcell.ModMask {
+	d.mouseMu.Lock()
+	defer d.mouseMu.Unlock()
 	return d.lastMouseModifier
 }
 
@@ -961,8 +1003,7 @@ func (d *DesktopEngine) InjectKeyEvent(key tcell.Key, ch rune, modifiers tcell.M
 			key = tcell.KeyTab
 		}
 	}
-	event := tcell.NewEventKey(key, ch, modifiers)
-	d.handleEvent(event)
+	d.SendEvent(desktopEvent{kind: keyEventKind, key: key, ch: ch, mod: modifiers})
 }
 
 func (d *DesktopEngine) handleMouseEvent(ev *tcell.EventMouse) {
@@ -974,12 +1015,13 @@ func (d *DesktopEngine) handleMouseEvent(ev *tcell.EventMouse) {
 }
 
 func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	d.mouseMu.Lock()
 	prevButtons := d.lastMouseButtons
-
 	d.lastMouseX = x
 	d.lastMouseY = y
 	d.lastMouseButtons = buttons
 	d.lastMouseModifier = modifiers
+	d.mouseMu.Unlock()
 
 	// Handle workspace border resize first
 	if d.activeWorkspace != nil {
@@ -1080,11 +1122,6 @@ func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 		d.broadcastStateUpdate()
 		if handler != nil {
 			handler()
-		}
-	}
-	for _, ws := range d.workspaces {
-		if ws != nil {
-			ws.startRefreshMonitor()
 		}
 	}
 	d.refreshMu.Unlock()
@@ -1203,10 +1240,6 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 				log.Printf("SwitchToWorkspace: Failed to create init app '%s'", d.InitAppName)
 			}
 		}
-	}
-
-	if handler := d.refreshHandlerFunc(); handler != nil && d.activeWorkspace != nil {
-		d.activeWorkspace.startRefreshMonitor()
 	}
 
 	// Apply current control mode state to the new workspace
@@ -1333,6 +1366,14 @@ func (d *DesktopEngine) startPendingApps() {
 	for _, p := range pending {
 		p.StartPreparedApp()
 	}
+
+	// Schedule a follow-up refresh after a short delay. Apps start in
+	// goroutines, so the shell prompt may arrive after handleClientReady
+	// has already published its initial snapshot. This delayed refresh
+	// ensures any late-arriving content (like the prompt) gets published.
+	time.AfterFunc(250*time.Millisecond, func() {
+		d.SendRefresh()
+	})
 }
 
 func (d *DesktopEngine) notifyFocus(paneID [16]byte) {
@@ -1518,4 +1559,114 @@ func initDefaultColors() (tcell.Color, tcell.Color, error) {
 		return tcell.ColorWhite, tcell.ColorBlack, nil
 	}
 	return fg, bg, nil
+}
+
+// Run starts the desktop event loop. This goroutine is the sole accessor of
+// tree state (Root, ActiveLeaf, SplitRatios, pane dimensions). Must be called
+// after NewDesktopEngine and before events are injected.
+func (d *DesktopEngine) Run() {
+	for {
+		select {
+		case ev := <-d.eventCh:
+			d.processDesktopEvent(ev)
+			d.publishIfDirty()
+		case frame := <-d.animCh:
+			d.applyAnimationFrame(frame)
+			d.publishIfDirty()
+		case <-d.refreshCh:
+			d.publishIfDirty()
+		case <-d.quit:
+			return
+		}
+	}
+}
+
+// processDesktopEvent dispatches a desktopEvent to the appropriate handler.
+func (d *DesktopEngine) processDesktopEvent(ev desktopEvent) {
+	switch ev.kind {
+	case keyEventKind:
+		tcellEvent := tcell.NewEventKey(ev.key, ev.ch, ev.mod)
+		d.handleEvent(tcellEvent)
+	case mouseEventKind:
+		d.processMouseEvent(ev.mx, ev.my, ev.buttons, ev.mod)
+	case pasteEventKind:
+		d.handlePasteInternal(ev.paste)
+	case resizeEventKind:
+		d.handleResizeInternal()
+	case syncEventKind:
+		close(ev.done)
+	}
+}
+
+// applyAnimationFrame applies interpolated ratios from the animation ticker.
+func (d *DesktopEngine) applyAnimationFrame(frame animationFrame) {
+	if frame.node != nil {
+		frame.node.SplitRatios = frame.ratios
+	}
+	d.recalculateLayout()
+	d.broadcastTreeChanged()
+	if frame.done && frame.onComplete != nil {
+		frame.onComplete()
+	}
+}
+
+// publishIfDirty calls the refresh handler if one is set.
+func (d *DesktopEngine) publishIfDirty() {
+	if handler := d.refreshHandlerFunc(); handler != nil {
+		handler()
+	}
+}
+
+// SendEvent enqueues an event for the event loop to process.
+// Non-blocking: drops if the event channel is full (unlikely at capacity 64).
+func (d *DesktopEngine) SendEvent(ev desktopEvent) {
+	select {
+	case d.eventCh <- ev:
+	default:
+		log.Printf("[DESKTOP] Event channel full, dropping event kind=%d", ev.kind)
+	}
+}
+
+// SendRefresh signals the event loop that a pane has dirty content.
+func (d *DesktopEngine) SendRefresh() {
+	select {
+	case d.refreshCh <- struct{}{}:
+	default:
+	}
+}
+
+// Barrier blocks until the event loop has processed all previously-queued events.
+// Useful in tests to ensure event-loop state is settled before assertions.
+func (d *DesktopEngine) Barrier() {
+	done := make(chan struct{})
+	d.eventCh <- desktopEvent{kind: syncEventKind, done: done}
+	<-done
+}
+
+// SendAnimationFrame sends an animation frame to the event loop for tree-safe application.
+func (d *DesktopEngine) SendAnimationFrame(frame animationFrame) {
+	select {
+	case d.animCh <- frame:
+	default:
+		log.Printf("[DESKTOP] Animation channel full, dropping frame")
+	}
+}
+
+// handlePasteInternal routes paste data to the active pane (called from event loop).
+func (d *DesktopEngine) handlePasteInternal(data []byte) {
+	if len(data) == 0 || d.inControlMode {
+		return
+	}
+	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
+		d.zoomedPane.Pane.handlePaste(data)
+		return
+	}
+	if d.activeWorkspace != nil {
+		d.activeWorkspace.handlePaste(data)
+	}
+}
+
+// handleResizeInternal processes resize events (called from event loop).
+func (d *DesktopEngine) handleResizeInternal() {
+	d.recalculateLayout()
 }

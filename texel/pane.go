@@ -111,9 +111,12 @@ func (p *pane) markDirty() {
 }
 
 // setupRefreshForwarder creates a per-pane channel that marks the pane dirty
-// and forwards refresh signals to the workspace-level channel. This enables
-// per-pane render skipping: only panes whose app signalled a refresh (or whose
-// state changed) will be re-rendered.
+// and sends a refresh signal to the desktop event loop. This enables per-pane
+// render skipping: only panes whose app signalled a refresh (or whose state
+// changed) will be re-rendered.
+//
+// The target parameter is kept for backward compatibility (avoids changing
+// AttachApp, PrepareAppForRestore, and all their callers) but is unused.
 func (p *pane) setupRefreshForwarder(target chan<- bool) chan<- bool {
 	if p.refreshStop != nil {
 		close(p.refreshStop)
@@ -133,9 +136,9 @@ func (p *pane) setupRefreshForwarder(target chan<- bool) chan<- bool {
 					return
 				}
 				atomic.AddInt32(&p.renderGen, 1)
-				select {
-				case target <- true:
-				default:
+				// Send to desktop event loop for publishing
+				if p.screen != nil && p.screen.desktop != nil {
+					p.screen.desktop.SendRefresh()
 				}
 			}
 		}

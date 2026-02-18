@@ -10,7 +10,6 @@ package texel
 
 import (
 	"log"
-	"sync"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -70,10 +69,9 @@ type Workspace struct {
 	ShellAppFactory     AppFactory
 	appLifecycle        AppLifecycleManager
 
-	resizeSelection    *selectedBorder
-	mouseResizeBorder  *selectedBorder
-	debugFramesToDump  int
-	refreshMonitorOnce sync.Once
+	resizeSelection   *selectedBorder
+	mouseResizeBorder *selectedBorder
+	debugFramesToDump int
 }
 
 // newWorkspace creates a new workspace with its own tiling pane tree.
@@ -139,44 +137,6 @@ func (w *Workspace) Refresh() {
 	case w.refreshChan <- true:
 	default:
 	}
-}
-
-func (w *Workspace) startRefreshMonitor() {
-	if w == nil || w.refreshChan == nil || w.desktop == nil {
-		return
-	}
-	w.refreshMonitorOnce.Do(func() {
-		go func() {
-			for {
-				select {
-				case <-w.desktop.quit:
-					return
-				case <-w.refreshChan:
-					if handler := w.desktop.refreshHandlerFunc(); handler != nil {
-						handler()
-					}
-					// Drain any notifications that arrived during handler
-					// execution, then re-run handler once more to capture
-					// all pending dirty state.
-					drained := false
-					for {
-						select {
-						case <-w.refreshChan:
-							drained = true
-						default:
-							goto done
-						}
-					}
-				done:
-					if drained {
-						if handler := w.desktop.refreshHandlerFunc(); handler != nil {
-							handler()
-						}
-					}
-				}
-			}
-		}()
-	})
 }
 
 func (w *Workspace) Broadcast(event Event) {

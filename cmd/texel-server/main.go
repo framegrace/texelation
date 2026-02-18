@@ -103,6 +103,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to create desktop: %v\n", err)
 		os.Exit(1)
 	}
+	go desktop.Run()
 
 	// Register wrapper factory for texelterm
 	// This allows wrapper apps to create texelterm instances with custom commands

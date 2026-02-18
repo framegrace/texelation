@@ -217,76 +217,65 @@ func (m *LayoutTransitionManager) animateSplitWithCallback(node *Node, targetRat
 		startRatios, targetRatios, m.duration)
 }
 
-// updateAnimations advances all active animations and broadcasts updates.
+// updateAnimations advances all active animations and sends frames to the event loop.
 func (m *LayoutTransitionManager) updateAnimations() {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if len(m.animating) == 0 {
-		m.mu.Unlock()
 		return
 	}
 
 	now := time.Now()
-	needsBroadcast := false
 	completed := make([]*Node, 0)
-	callbacks := make([]func(), 0)
 
 	for node, state := range m.animating {
 		elapsed := now.Sub(state.startTime)
 		progress := float64(elapsed) / float64(state.duration)
 
+		var ratios []float64
+		var done bool
+		var callback func()
+
 		if progress >= 1.0 {
-			// Animation complete
-			node.SplitRatios = state.targetRatios
+			ratios = state.targetRatios
+			done = true
+			callback = state.onComplete
 			completed = append(completed, node)
-			if state.onComplete != nil {
-				callbacks = append(callbacks, state.onComplete)
-			}
-			needsBroadcast = true
 			log.Printf("LayoutTransitionManager: Animation complete for node (final ratios: %v)", state.targetRatios)
 		} else {
-			// Interpolate ratios
 			t := m.applyEasing(progress, state.easing)
-			node.SplitRatios = make([]float64, len(state.startRatios))
-			for i := range node.SplitRatios {
-				node.SplitRatios[i] = state.startRatios[i] + (state.targetRatios[i]-state.startRatios[i])*t
+			ratios = make([]float64, len(state.startRatios))
+			for i := range ratios {
+				ratios[i] = state.startRatios[i] + (state.targetRatios[i]-state.startRatios[i])*t
 			}
-			needsBroadcast = true
 
-			// For removal animations, complete early if the pane has shrunk to near-zero
-			// This prevents visible "hanging" at the end when pane is 0 pixels but animation continues
+			// Early completion for removal animations
 			if state.onComplete != nil {
-				for i, ratio := range node.SplitRatios {
+				for i, ratio := range ratios {
 					if state.targetRatios[i] < 0.01 && ratio < 0.005 {
-						// Pane has shrunk to essentially nothing, complete animation now
-						node.SplitRatios = state.targetRatios
+						ratios = state.targetRatios
+						done = true
+						callback = state.onComplete
 						completed = append(completed, node)
-						callbacks = append(callbacks, state.onComplete)
-						log.Printf("LayoutTransitionManager: Early completion for removal (ratio %v reached, target was %v)",
-							ratio, state.targetRatios[i])
+						log.Printf("LayoutTransitionManager: Early completion for removal (ratio %v reached)", ratio)
 						break
 					}
 				}
 			}
 		}
+
+		// Send frame to event loop — tree writes happen there, not here
+		m.desktop.SendAnimationFrame(animationFrame{
+			node:       node,
+			ratios:     ratios,
+			done:       done,
+			onComplete: callback,
+		})
 	}
 
-	// Remove completed animations
 	for _, node := range completed {
 		delete(m.animating, node)
-	}
-
-	// Recalculate layout and broadcast if anything changed
-	if needsBroadcast && m.desktop != nil {
-		m.desktop.recalculateLayout()
-		m.desktop.broadcastTreeChanged()
-	}
-
-	m.mu.Unlock()
-
-	// Call completion callbacks AFTER releasing lock to avoid potential deadlocks
-	for _, callback := range callbacks {
-		callback()
 	}
 }
 
