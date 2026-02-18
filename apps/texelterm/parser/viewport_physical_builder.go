@@ -61,6 +61,9 @@ func (b *PhysicalLineBuilder) BuildLine(line *LogicalLine, globalIdx int64) []Ph
 }
 
 // BuildRange converts a range of logical lines to physical lines.
+// Consecutive logical lines where the previous line's last cell has Wrapped=true
+// are joined into a single long logical line before wrapping at the current width.
+// This enables automatic reflow when the terminal is resized.
 // Skips lines that produce nil (synthetic lines hidden in original view).
 func (b *PhysicalLineBuilder) BuildRange(lines []*LogicalLine, startGlobalIdx int64) []PhysicalLine {
 	if len(lines) == 0 {
@@ -69,11 +72,53 @@ func (b *PhysicalLineBuilder) BuildRange(lines []*LogicalLine, startGlobalIdx in
 
 	result := make([]PhysicalLine, 0, len(lines)*2)
 
-	for i, line := range lines {
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
 		globalIdx := startGlobalIdx + int64(i)
-		physical := b.BuildLine(line, globalIdx)
-		if physical != nil {
-			result = append(result, physical...)
+
+		// Check if this line starts a wrap chain (joinable for reflow)
+		if line != nil && !line.Synthetic && line.FixedWidth == 0 && line.Overlay == nil &&
+			len(line.Cells) > 0 && line.Cells[len(line.Cells)-1].Wrapped {
+
+			// Accumulate wrapped lines into one combined logical line
+			combined := make([]Cell, 0, len(line.Cells)*2)
+			combined = append(combined, line.Cells...)
+			// Clear Wrapped flag on the copied cell (not the original)
+			combined[len(combined)-1].Wrapped = false
+
+			j := i + 1
+			for j < len(lines) {
+				next := lines[j]
+				if next == nil || next.Synthetic || next.FixedWidth > 0 || next.Overlay != nil {
+					break
+				}
+				combined = append(combined, next.Cells...)
+				if len(next.Cells) > 0 && next.Cells[len(next.Cells)-1].Wrapped {
+					// Clear Wrapped flag on copied cell and continue chain
+					combined[len(combined)-1].Wrapped = false
+					j++
+				} else {
+					// End of wrap chain
+					j++
+					break
+				}
+			}
+
+			// Build physical lines from the combined content
+			combinedLine := &LogicalLine{Cells: combined}
+			physical := b.BuildLine(combinedLine, globalIdx)
+			if physical != nil {
+				result = append(result, physical...)
+			}
+			i = j
+		} else {
+			// Normal line (or nil/synthetic/fixed) - build directly
+			physical := b.BuildLine(line, globalIdx)
+			if physical != nil {
+				result = append(result, physical...)
+			}
+			i++
 		}
 	}
 
