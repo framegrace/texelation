@@ -884,7 +884,7 @@ func (d *DesktopEngine) applyThemeChange() {
 
 // InjectMouseEvent records the latest mouse event metadata from remote clients.
 func (d *DesktopEngine) InjectMouseEvent(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
-	d.processMouseEvent(x, y, buttons, modifiers)
+	d.SendEvent(desktopEvent{kind: mouseEventKind, mx: x, my: y, buttons: buttons, mod: modifiers})
 }
 
 // SetClipboard implements ClipboardService for apps running in the desktop.
@@ -949,18 +949,14 @@ func (d *DesktopEngine) PopPendingClipboard() (string, []byte, bool) {
 	return d.clipboardMime, append([]byte(nil), data...), true
 }
 
-// HandlePaste routes paste data to the active pane.
+// HandlePaste routes paste data to the active pane via the event loop.
 func (d *DesktopEngine) HandlePaste(data []byte) {
-	if len(data) == 0 || d.inControlMode {
+	if len(data) == 0 {
 		return
 	}
-	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
-		d.zoomedPane.Pane.handlePaste(data)
-		return
-	}
-	if d.activeWorkspace != nil {
-		d.activeWorkspace.handlePaste(data)
-	}
+	copied := make([]byte, len(data))
+	copy(copied, data)
+	d.SendEvent(desktopEvent{kind: pasteEventKind, paste: copied})
 }
 
 // HandleThemeUpdate applies runtime theme overrides.
@@ -998,8 +994,7 @@ func (d *DesktopEngine) InjectKeyEvent(key tcell.Key, ch rune, modifiers tcell.M
 			key = tcell.KeyTab
 		}
 	}
-	event := tcell.NewEventKey(key, ch, modifiers)
-	d.handleEvent(event)
+	d.SendEvent(desktopEvent{kind: keyEventKind, key: key, ch: ch, mod: modifiers})
 }
 
 func (d *DesktopEngine) handleMouseEvent(ev *tcell.EventMouse) {
