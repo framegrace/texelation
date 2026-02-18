@@ -43,7 +43,7 @@ const (
 	MsgPing
 	MsgPong
 	MsgTreeSnapshot
-	MsgTreeDelta
+	_ // was MsgTreeDelta (unused, preserves iota)
 	MsgBufferDelta
 	MsgBufferAck
 	MsgKeyEvent
@@ -52,7 +52,7 @@ const (
 	MsgClipboardGet
 	MsgThemeUpdate
 	MsgError
-	MsgMetricUpdate
+	_ // was MsgMetricUpdate (unused, preserves iota)
 	MsgClipboardData
 	MsgThemeAck
 	MsgPaneFocus
