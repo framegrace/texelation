@@ -879,23 +879,60 @@ func initDefaultColors() (tcell.Color, tcell.Color, error) {
 // after NewDesktopEngine and before events are injected.
 func (d *DesktopEngine) Run() {
 	for {
+		// Block until at least one event arrives.
 		select {
 		case ev := <-d.eventCh:
 			d.processDesktopEvent(ev)
-			d.publishIfDirty()
 		case frame := <-d.animCh:
 			d.applyAnimationFrame(frame)
-			d.publishIfDirty()
 		case <-d.refreshCh:
-			d.publishIfDirty()
+			// App signalled dirty — just break to drain+publish below.
 		case <-d.quit:
 			return
 		}
+
+		// Drain: process all already-queued events before publishing.
+		// Input events have priority over refresh signals so keystrokes
+		// are never delayed by a flood of app refreshes.
+		d.drainPending()
+
+		// Single publish for the entire batch.
+		d.publishIfDirty()
+	}
+}
+
+// drainPending processes all events already sitting in channels without blocking.
+// Events are drained in priority order: input first, then animations, then refreshes.
+func (d *DesktopEngine) drainPending() {
+	for {
+		// Priority 1: user input — always process before refreshes.
+		select {
+		case ev := <-d.eventCh:
+			d.processDesktopEvent(ev)
+			continue
+		default:
+		}
+		// Priority 2: animation frames.
+		select {
+		case frame := <-d.animCh:
+			d.applyAnimationFrame(frame)
+			continue
+		default:
+		}
+		// Priority 3: coalesce refresh signals (just drain, don't publish each).
+		select {
+		case <-d.refreshCh:
+			continue
+		default:
+		}
+		// All channels empty — done draining.
+		return
 	}
 }
 
 // processDesktopEvent dispatches a desktopEvent to the appropriate handler.
-func (d *DesktopEngine) processDesktopEvent(ev desktopEvent) {
+// Returns true if the caller should publish immediately (e.g., barrier sync).
+func (d *DesktopEngine) processDesktopEvent(ev desktopEvent) bool {
 	switch ev.kind {
 	case keyEventKind:
 		tcellEvent := tcell.NewEventKey(ev.key, ev.ch, ev.mod)
@@ -907,8 +944,12 @@ func (d *DesktopEngine) processDesktopEvent(ev desktopEvent) {
 	case resizeEventKind:
 		d.handleResizeInternal()
 	case syncEventKind:
+		// Barrier: publish everything accumulated so far, then unblock caller.
+		d.publishIfDirty()
 		close(ev.done)
+		return true
 	}
+	return false
 }
 
 // applyAnimationFrame applies interpolated ratios from the animation ticker.
