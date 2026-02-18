@@ -31,7 +31,7 @@ func Test_RIS_CursorToOrigin(t *testing.T) {
 
 	RIS(d)
 
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 1))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 1))
 }
 
 // Test_RIS_ResetTabs tests that RIS resets tab stops to default (every 8 columns).
@@ -48,7 +48,7 @@ func Test_RIS_ResetTabs(t *testing.T) {
 
 	// After reset, tab should go to column 9 (default every 8)
 	d.WriteRaw("\t")
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(9, 1))
+	AssertEQ(t, d.CursorPosition(), NewPoint(9, 1))
 }
 
 // Test_RIS_ExitAltScreen tests that RIS exits alt screen and clears both buffers.
@@ -100,13 +100,13 @@ func Test_RIS_RemoveMargins(t *testing.T) {
 	// Margins should be gone, so cursor can move freely
 	CUP(d, NewPoint(3, 4))
 	CUB(d, 1)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 4))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 4))
 	CUU(d, 1)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 3))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 3))
 
 	CUP(d, NewPoint(5, 6))
 	CUF(d, 1)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(6, 6))
+	AssertEQ(t, d.CursorPosition(), NewPoint(6, 6))
 	CUD(d, 1)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(6, 7))
+	AssertEQ(t, d.CursorPosition(), NewPoint(6, 7))
 }

@@ -149,15 +149,15 @@ func TestAutoScrollManager_PositionTracking(t *testing.T) {
 	asm := NewAutoScrollManager(AutoScrollConfig{})
 
 	asm.UpdatePosition(10, 5)
-	x, y := asm.GetPosition()
+	x, y := asm.Position()
 	if x != 10 || y != 5 {
-		t.Errorf("GetPosition() = (%d, %d), want (10, 5)", x, y)
+		t.Errorf("Position() = (%d, %d), want (10, 5)", x, y)
 	}
 
 	asm.UpdatePosition(20, 15)
-	x, y = asm.GetPosition()
+	x, y = asm.Position()
 	if x != 20 || y != 15 {
-		t.Errorf("GetPosition() = (%d, %d), want (20, 15)", x, y)
+		t.Errorf("Position() = (%d, %d), want (20, 15)", x, y)
 	}
 }
 

@@ -84,9 +84,9 @@ func (dt *DirtyTracker) IsDirty(globalIdx int64) bool {
 	return dt.dirty[globalIdx]
 }
 
-// GetDirty returns a sorted slice of all dirty line indices.
+// Dirty returns a sorted slice of all dirty line indices.
 // Sorted order is deterministic and helps with testing.
-func (dt *DirtyTracker) GetDirty() []int64 {
+func (dt *DirtyTracker) Dirty() []int64 {
 	result := make([]int64, 0, len(dt.dirty))
 	for idx := range dt.dirty {
 		result = append(result, idx)
@@ -275,8 +275,8 @@ func (mb *MemoryBuffer) SetCursor(lineIdx int64, col int) {
 	mb.cursor.Col = col
 }
 
-// GetCursor returns the current cursor position.
-func (mb *MemoryBuffer) GetCursor() (lineIdx int64, col int) {
+// Cursor returns the current cursor position.
+func (mb *MemoryBuffer) Cursor() (lineIdx int64, col int) {
 	mb.mu.RLock()
 	defer mb.mu.RUnlock()
 
@@ -438,12 +438,12 @@ func (mb *MemoryBuffer) IsLineFixed(globalIdx int64) bool {
 
 // --- Dirty Tracking ---
 
-// GetDirtyLines returns a sorted slice of global indices for dirty lines.
-func (mb *MemoryBuffer) GetDirtyLines() []int64 {
+// DirtyLines returns a sorted slice of global indices for dirty lines.
+func (mb *MemoryBuffer) DirtyLines() []int64 {
 	mb.mu.RLock()
 	defer mb.mu.RUnlock()
 
-	return mb.dirtyTracker.GetDirty()
+	return mb.dirtyTracker.Dirty()
 }
 
 // ClearDirty removes the dirty flag for a specific line.

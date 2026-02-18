@@ -31,6 +31,6 @@ func Test_HTS_Basic(t *testing.T) {
 	CUP(d, NewPoint(1, 1))
 	d.Write("\t")
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 20)
 }

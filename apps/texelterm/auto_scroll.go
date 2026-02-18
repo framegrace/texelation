@@ -82,8 +82,8 @@ func (a *AutoScrollManager) UpdatePosition(mouseX, mouseY int) {
 	a.mouseY = mouseY
 }
 
-// GetPosition returns the current tracked mouse position.
-func (a *AutoScrollManager) GetPosition() (int, int) {
+// Position returns the current tracked mouse position.
+func (a *AutoScrollManager) Position() (int, int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.mouseX, a.mouseY

@@ -22,7 +22,7 @@ func Test_CUB_DefaultParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CUB(d)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 4)
 	AssertEQ(t, position.Y, 3)
 }
@@ -32,7 +32,7 @@ func Test_CUB_ExplicitParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 4))
 	CUB(d, 2)
-	AssertEQ(t, d.GetCursorPosition().X, 3)
+	AssertEQ(t, d.CursorPosition().X, 3)
 }
 
 // Test_CUB_StopsAtLeftEdge tests that CUB moves the cursor left, stopping at the first column.
@@ -40,7 +40,7 @@ func Test_CUB_StopsAtLeftEdge(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CUB(d, 99)
-	AssertEQ(t, d.GetCursorPosition().X, 1)
+	AssertEQ(t, d.CursorPosition().X, 1)
 }
 
 // Test_CUB_StopsAtLeftEdgeWhenBegunLeftOfScrollRegion tests that when the cursor starts left of
@@ -59,7 +59,7 @@ func Test_CUB_StopsAtLeftEdgeWhenBegunLeftOfScrollRegion(t *testing.T) {
 	CUB(d, 99)
 
 	// Ensure it stopped at the left edge of the screen
-	AssertEQ(t, d.GetCursorPosition().X, 1)
+	AssertEQ(t, d.CursorPosition().X, 1)
 }
 
 // Test_CUB_StopsAtLeftMarginInScrollRegion tests that when the cursor starts within the scroll
@@ -78,5 +78,5 @@ func Test_CUB_StopsAtLeftMarginInScrollRegion(t *testing.T) {
 	CUB(d, 99)
 
 	// Ensure it stopped at the left margin of the scroll region.
-	AssertEQ(t, d.GetCursorPosition().X, 5)
+	AssertEQ(t, d.CursorPosition().X, 5)
 }

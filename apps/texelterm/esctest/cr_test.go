@@ -20,7 +20,7 @@ func Test_CR_Basic(t *testing.T) {
 
 	CUP(d, NewPoint(3, 3))
 	CR(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 3))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 3))
 }
 
 // Test_CR_MovesToLeftMarginWhenRightOfLeftMargin tests that CR moves to left margin when cursor is right of it.
@@ -32,7 +32,7 @@ func Test_CR_MovesToLeftMarginWhenRightOfLeftMargin(t *testing.T) {
 	CUP(d, NewPoint(6, 1))
 	CR(d)
 	DECRESET(d, DECLRMM)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(5, 1))
+	AssertEQ(t, d.CursorPosition(), NewPoint(5, 1))
 }
 
 // Test_CR_MovesToLeftOfScreenWhenLeftOfLeftMargin tests that CR moves to column 1 when cursor starts left of margin.
@@ -44,7 +44,7 @@ func Test_CR_MovesToLeftOfScreenWhenLeftOfLeftMargin(t *testing.T) {
 	CUP(d, NewPoint(4, 1))
 	CR(d)
 	DECRESET(d, DECLRMM)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 1))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 1))
 }
 
 // Test_CR_StaysPutWhenAtLeftMargin tests that CR stays at left margin when already there.
@@ -56,7 +56,7 @@ func Test_CR_StaysPutWhenAtLeftMargin(t *testing.T) {
 	CUP(d, NewPoint(5, 1))
 	CR(d)
 	DECRESET(d, DECLRMM)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(5, 1))
+	AssertEQ(t, d.CursorPosition(), NewPoint(5, 1))
 }
 
 // Test_CR_MovesToLeftMarginWhenLeftOfLeftMarginInOriginMode tests that in origin mode,

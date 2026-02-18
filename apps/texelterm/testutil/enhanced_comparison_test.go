@@ -238,7 +238,7 @@ func TestLiveCaptureBasic(t *testing.T) {
 
 	// "Hello" = 5 bytes, "\x1b[31mRed\x1b[0m" = 12 bytes = 17 total
 	expectedBytes := 5 + len("\x1b[31mRed\x1b[0m")
-	if count := capture.GetByteCount(); count != expectedBytes {
+	if count := capture.ByteCount(); count != expectedBytes {
 		t.Errorf("Expected %d bytes captured, got %d", expectedBytes, count)
 	}
 

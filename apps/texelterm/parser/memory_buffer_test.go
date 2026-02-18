@@ -55,7 +55,7 @@ func TestDirtyTracker_GetDirty(t *testing.T) {
 	dt.MarkDirty(50)
 	dt.MarkDirty(75)
 
-	dirty := dt.GetDirty()
+	dirty := dt.Dirty()
 	if len(dirty) != 3 {
 		t.Fatalf("expected 3 dirty lines, got %d", len(dirty))
 	}
@@ -195,14 +195,14 @@ func TestMemoryBuffer_CursorMovement(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 
 	// Initial position
-	line, col := mb.GetCursor()
+	line, col := mb.Cursor()
 	if line != 0 || col != 0 {
 		t.Errorf("expected (0,0), got (%d,%d)", line, col)
 	}
 
 	// Set cursor
 	mb.SetCursor(5, 10)
-	line, col = mb.GetCursor()
+	line, col = mb.Cursor()
 	if line != 5 || col != 10 {
 		t.Errorf("expected (5,10), got (%d,%d)", line, col)
 	}
@@ -259,7 +259,7 @@ func TestMemoryBuffer_DirtyTracking(t *testing.T) {
 		t.Error("line 0 should be dirty after write")
 	}
 
-	dirty := mb.GetDirtyLines()
+	dirty := mb.DirtyLines()
 	if len(dirty) != 1 || dirty[0] != 0 {
 		t.Errorf("expected [0], got %v", dirty)
 	}
@@ -278,7 +278,7 @@ func TestMemoryBuffer_DirtyTracking(t *testing.T) {
 
 	// Clear all
 	mb.ClearAllDirty()
-	if len(mb.GetDirtyLines()) != 0 {
+	if len(mb.DirtyLines()) != 0 {
 		t.Error("expected no dirty lines after ClearAllDirty")
 	}
 }
@@ -591,7 +591,7 @@ func TestMemoryBuffer_Concurrency(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 100; i++ {
 				_ = mb.GetLine(int64(i))
-				_ = mb.GetDirtyLines()
+				_ = mb.DirtyLines()
 				_ = mb.ContentVersion()
 			}
 		}()
@@ -652,7 +652,7 @@ func TestMemoryBuffer_EvictWithDirty(t *testing.T) {
 	}
 
 	// All should be dirty
-	dirty := mb.GetDirtyLines()
+	dirty := mb.DirtyLines()
 	if len(dirty) != 10 {
 		t.Errorf("expected 10 dirty lines, got %d", len(dirty))
 	}
@@ -664,7 +664,7 @@ func TestMemoryBuffer_EvictWithDirty(t *testing.T) {
 	}
 
 	// Evicted lines should no longer be in dirty list
-	dirty = mb.GetDirtyLines()
+	dirty = mb.DirtyLines()
 	for _, idx := range dirty {
 		if idx < mb.GlobalOffset() {
 			t.Errorf("dirty line %d is below GlobalOffset %d", idx, mb.GlobalOffset())

@@ -261,7 +261,7 @@ func (rc *ReferenceComparator) CompareAtEnd() (*RefComparisonResult, error) {
 	rc.replayer.SimulateRender()
 
 	// Get texelterm output
-	texelGrid := vtermGridToRunes(rc.replayer.GetGrid())
+	texelGrid := vtermGridToRunes(rc.replayer.Grid())
 
 	// Compare
 	return compareRuneGrids(tmuxGrid, texelGrid, rc.width, rc.height), nil
@@ -315,7 +315,7 @@ func (rc *ReferenceComparator) FindFirstDivergence(chunkSize int) (*DivergenceRe
 			return nil, fmt.Errorf("capture at byte %d: %w", endIndex, err)
 		}
 
-		texelGrid := vtermGridToRunes(replayer.GetGrid())
+		texelGrid := vtermGridToRunes(replayer.Grid())
 
 		comparison := compareRuneGrids(tmuxGrid, texelGrid, rc.width, rc.height)
 		if !comparison.Match {
@@ -560,7 +560,7 @@ func (rc *ReferenceComparator) CompareAtEndWithFullDiff() (*EnhancedComparisonRe
 	rc.replayer.SimulateRender()
 
 	// Get texelterm output
-	texelGrid := rc.replayer.GetGrid()
+	texelGrid := rc.replayer.Grid()
 
 	// Compare with full cell info
 	result := EnhancedCompareGrids(tmuxGrid, texelGrid, rc.width, rc.height)
@@ -615,7 +615,7 @@ func (rc *ReferenceComparator) FindFirstDivergenceWithFullDiff(chunkSize int) (*
 		}
 
 		// Get texelterm output
-		texelGrid := replayer.GetGrid()
+		texelGrid := replayer.Grid()
 
 		// Compare with full cell info
 		comparison := EnhancedCompareGrids(tmuxGrid, texelGrid, rc.width, rc.height)

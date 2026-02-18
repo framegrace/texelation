@@ -122,7 +122,7 @@ func TestSelectionStateMachine_DoubleClickSelectsWord(t *testing.T) {
 		t.Errorf("expected StateMultiClickHeld after double click, got %v", sm.State())
 	}
 
-	startLine, startOffset, endLine, endOffset, ok := sm.GetSelectionRange()
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection range")
 	}
@@ -149,7 +149,7 @@ func TestSelectionStateMachine_TripleClickSelectsLine(t *testing.T) {
 		t.Errorf("expected StateMultiClickHeld after triple click, got %v", sm.State())
 	}
 
-	startLine, startOffset, endLine, endOffset, ok := sm.GetSelectionRange()
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection range")
 	}
@@ -201,7 +201,7 @@ func TestSelectionStateMachine_DragForward(t *testing.T) {
 	// Drag to position 8
 	sm.Update(5, 8, 0, 0)
 
-	startLine, startOffset, endLine, endOffset, ok := sm.GetSelectionRange()
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection range")
 	}
@@ -224,11 +224,11 @@ func TestSelectionStateMachine_DragBackward(t *testing.T) {
 	// Drag backward to position 2
 	sm.Update(5, 2, 0, 0)
 
-	_, startOffset, _, endOffset, ok := sm.GetSelectionRange()
+	_, startOffset, _, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection range")
 	}
-	// GetSelectionRange normalizes so start < end
+	// SelectionRange normalizes so start < end
 	if startOffset != 2 || endOffset != 8 {
 		t.Errorf("expected normalized range [2,8], got [%d,%d]", startOffset, endOffset)
 	}
@@ -246,7 +246,7 @@ func TestSelectionStateMachine_DragAcrossLines(t *testing.T) {
 	// Drag to line 6, position 7
 	sm.Update(6, 7, 1, 0)
 
-	startLine, startOffset, endLine, endOffset, ok := sm.GetSelectionRange()
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection range")
 	}
@@ -346,7 +346,7 @@ func TestSelectionStateMachine_WordSelectionAtLineStart(t *testing.T) {
 
 	sm.Start(5, 0, 0, DoubleClick, 0)
 
-	_, startOffset, _, endOffset, ok := sm.GetSelectionRange()
+	_, startOffset, _, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection")
 	}
@@ -363,7 +363,7 @@ func TestSelectionStateMachine_WordSelectionAtLineEnd(t *testing.T) {
 
 	sm.Start(5, 10, 0, DoubleClick, 0) // Click on last 'd' of 'world'
 
-	_, startOffset, _, endOffset, ok := sm.GetSelectionRange()
+	_, startOffset, _, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection")
 	}
@@ -380,7 +380,7 @@ func TestSelectionStateMachine_WordSelectionOnWhitespace(t *testing.T) {
 
 	sm.Start(5, 5, 0, DoubleClick, 0) // Click on space between words
 
-	_, startOffset, _, endOffset, ok := sm.GetSelectionRange()
+	_, startOffset, _, endOffset, ok := sm.SelectionRange()
 	// Clicking on whitespace should result in empty or single-char selection
 	if ok && startOffset != endOffset {
 		t.Errorf("expected no meaningful selection on whitespace, got [%d,%d]", startOffset, endOffset)
@@ -395,7 +395,7 @@ func TestSelectionStateMachine_WordWithUnderscore(t *testing.T) {
 
 	sm.Start(5, 7, 0, DoubleClick, 0) // Click in middle of 'hello_world'
 
-	_, startOffset, _, endOffset, ok := sm.GetSelectionRange()
+	_, startOffset, _, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection")
 	}
@@ -412,7 +412,7 @@ func TestSelectionStateMachine_WordWithDash(t *testing.T) {
 
 	sm.Start(5, 7, 0, DoubleClick, 0) // Click in middle of 'hello-world'
 
-	_, startOffset, _, endOffset, ok := sm.GetSelectionRange()
+	_, startOffset, _, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection")
 	}
@@ -431,12 +431,12 @@ func TestSelectionStateMachine_UpdateIgnoredWhenNotDragging(t *testing.T) {
 
 	// Start with double-click (StateMultiClickHeld, not StateDragging)
 	sm.Start(5, 8, 0, DoubleClick, 0)
-	originalSelection := sm.GetSelection()
+	originalSelection := sm.Selection()
 
 	// Try to update - should be ignored
 	sm.Update(5, 0, 0, 0)
 
-	newSelection := sm.GetSelection()
+	newSelection := sm.Selection()
 	if newSelection.CurrentOffset != originalSelection.CurrentOffset {
 		t.Error("Update should be ignored when not in StateDragging")
 	}
@@ -484,7 +484,7 @@ func TestSelectionStateMachine_SelectWordOnCurrentLine(t *testing.T) {
 	// logicalLine = -1 means current line
 	sm.Start(-1, 10, 0, DoubleClick, 0)
 
-	startLine, startOffset, endLine, endOffset, ok := sm.GetSelectionRange()
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("expected valid selection")
 	}

@@ -53,7 +53,7 @@ func Test_IL_ExplicitParam(t *testing.T) {
 // Test_IL_ScrollsOffBottom tests that lines scroll off the bottom.
 func Test_IL_ScrollsOffBottom(t *testing.T) {
 	d := NewDriver(80, 24)
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 
 	for i := 0; i < height; i++ {
 		CUP(d, NewPoint(1, i+1))

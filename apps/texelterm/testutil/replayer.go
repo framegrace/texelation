@@ -171,10 +171,10 @@ func (r *Replayer) PlayString(s string) {
 	}
 }
 
-// GetResponses returns all terminal responses generated during replay.
+// Responses returns all terminal responses generated during replay.
 // These are responses the terminal would send to the application (DSR, DA, etc.)
 // Useful for verifying the terminal responds correctly to queries.
-func (r *Replayer) GetResponses() []byte {
+func (r *Replayer) Responses() []byte {
 	return r.responseQueue
 }
 
@@ -236,8 +236,8 @@ func (r *Replayer) PlayAndRenderChunks(chunkSize int) {
 	}
 }
 
-// GetSnapshot captures the current state.
-func (r *Replayer) GetSnapshot() *Snapshot {
+// Snapshot captures the current state.
+func (r *Replayer) Snapshot() *Snapshot {
 	grid := r.vterm.Grid()
 	dirtyLines, allDirty := r.vterm.DirtyLines()
 
@@ -275,18 +275,18 @@ func (r *Replayer) GetSnapshot() *Snapshot {
 	}
 }
 
-// GetGrid returns the current logical grid (VTerm's view).
-func (r *Replayer) GetGrid() [][]parser.Cell {
+// Grid returns the current logical grid (VTerm's view).
+func (r *Replayer) Grid() [][]parser.Cell {
 	return r.vterm.Grid()
 }
 
-// GetRenderBuf returns the current render buffer (simulated visual state).
-func (r *Replayer) GetRenderBuf() [][]parser.Cell {
+// RenderBuf returns the current render buffer (simulated visual state).
+func (r *Replayer) RenderBuf() [][]parser.Cell {
 	return r.renderBuf
 }
 
-// GetCursor returns the current cursor position.
-func (r *Replayer) GetCursor() (x, y int) {
+// Cursor returns the current cursor position.
+func (r *Replayer) Cursor() (x, y int) {
 	return r.vterm.Cursor()
 }
 

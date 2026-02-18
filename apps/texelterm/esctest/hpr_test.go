@@ -21,7 +21,7 @@ func Test_HPR_DefaultParams(t *testing.T) {
 	CUP(d, NewPoint(6, 1))
 	HPR(d)
 
-	AssertEQ(t, d.GetCursorPosition().X, 7)
+	AssertEQ(t, d.CursorPosition().X, 7)
 }
 
 // Test_HPR_StopsAtRightEdge tests that HPR won't go past the right edge.
@@ -35,7 +35,7 @@ func Test_HPR_StopsAtRightEdge(t *testing.T) {
 	HPR(d, 80+10)
 
 	// Should be at right edge on same row
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 80)
 	AssertEQ(t, pos.Y, 6)
 }
@@ -47,7 +47,7 @@ func Test_HPR_DoesNotChangeRow(t *testing.T) {
 	CUP(d, NewPoint(5, 6))
 	HPR(d, 2)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 7)
 	AssertEQ(t, pos.Y, 6)
 }

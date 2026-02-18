@@ -31,7 +31,7 @@ func Test_DECSTR_DECSC(t *testing.T) {
 
 	// Restore cursor - should be at origin (1,1) not (5,6)
 	DECRC(d)
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(1, 1))
 }
 
@@ -104,7 +104,7 @@ func Test_DECSTR_DECAWM(t *testing.T) {
 	CUP(d, NewPoint(79, 1))
 	d.WriteRaw("xxx")
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 2) // Should be at column 2 on line 2 (wrapped)
 }
 
@@ -123,7 +123,7 @@ func Test_DECSTR_STBM(t *testing.T) {
 	CR(d)
 	LF(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.Y, 5) // Should be at line 5 (no scroll region constraint)
 }
 
@@ -142,7 +142,7 @@ func Test_DECSTR_DECLRMM(t *testing.T) {
 	CUP(d, NewPoint(5, 5))
 	d.WriteRaw("ab")
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 7) // Should be at column 7 (no left/right margin constraint)
 }
 
@@ -157,7 +157,7 @@ func Test_DECSTR_CursorStaysPut(t *testing.T) {
 	DECSTR(d)
 
 	// Cursor should still be at (5, 6)
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 5)
 	AssertEQ(t, pos.Y, 6)
 }

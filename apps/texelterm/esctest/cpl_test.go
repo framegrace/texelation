@@ -19,7 +19,7 @@ func Test_CPL_DefaultParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CPL(d)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 2)
 }
@@ -29,7 +29,7 @@ func Test_CPL_ExplicitParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(6, 5))
 	CPL(d, 2)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 3)
 }
@@ -38,9 +38,9 @@ func Test_CPL_ExplicitParam(t *testing.T) {
 func Test_CPL_StopsAtTopLine(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(6, 3))
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	CPL(d, height)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 1)
 }
@@ -59,11 +59,11 @@ func Test_CPL_StopsAtTopLineWhenBegunAboveScrollRegion(t *testing.T) {
 	CUP(d, NewPoint(7, 3))
 
 	// Move it up by a lot
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	CPL(d, height)
 
 	// Ensure it stopped at the top of the screen
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.Y, 1)
 	AssertEQ(t, position.X, 1) // CPL always moves to column 1
 }
@@ -85,7 +85,7 @@ func Test_CPL_StopsAtTopMarginInScrollRegion(t *testing.T) {
 	CPL(d, 99)
 
 	// Ensure it stopped at the top of the scroll region.
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.Y, 2)
 	AssertEQ(t, position.X, 1) // CPL always moves to column 1
 }

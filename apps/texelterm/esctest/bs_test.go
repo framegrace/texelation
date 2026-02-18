@@ -23,7 +23,7 @@ func Test_BS_Basic(t *testing.T) {
 	CUP(d, NewPoint(3, 3))
 	BS(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(2, 3))
 }
 
@@ -34,7 +34,7 @@ func Test_BS_NoWrapByDefault(t *testing.T) {
 	CUP(d, NewPoint(1, 3))
 	BS(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(1, 3))
 }
 
@@ -45,7 +45,7 @@ func Test_BS_StopsAtOrigin(t *testing.T) {
 	CUP(d, NewPoint(1, 1))
 	BS(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(1, 1))
 }
 
@@ -59,7 +59,7 @@ func Test_BS_StopsAtLeftMargin(t *testing.T) {
 	BS(d)
 	DECRESET(d, DECLRMM)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(5, 1))
 }
 
@@ -73,7 +73,7 @@ func Test_BS_MovesLeftWhenLeftOfLeftMargin(t *testing.T) {
 	BS(d)
 	DECRESET(d, DECLRMM)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(3, 1))
 }
 
@@ -109,7 +109,7 @@ func Test_BS_MultipleBackspaces(t *testing.T) {
 	BS(d)
 	BS(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(7, 5))
 }
 
@@ -120,7 +120,7 @@ func Test_BS_DoesNotChangeRow(t *testing.T) {
 	CUP(d, NewPoint(1, 5))
 	BS(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.Y, 5) // Row should not change
 	AssertEQ(t, pos.X, 1) // Should stay at column 1
 }

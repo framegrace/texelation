@@ -26,7 +26,7 @@ func Test_DECSTBM_ScrollsOnNewline(t *testing.T) {
 	d.Write("\r\n")
 	AssertScreenCharsInRectEqual(t, d, NewRect(1, 2, 1, 3),
 		[]string{"2", " "})
-	AssertEQ(t, d.GetCursorPosition().Y, 3)
+	AssertEQ(t, d.CursorPosition().Y, 3)
 }
 
 // Test_DECSTBM_NewlineBelowRegion tests that newlines outside the region don't affect it.
@@ -47,8 +47,8 @@ func Test_DECSTBM_MovsCursorToOrigin(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(3, 2))
 	DECSTBM(d, 2, 3)
-	AssertEQ(t, d.GetCursorPosition().X, 1)
-	AssertEQ(t, d.GetCursorPosition().Y, 1)
+	AssertEQ(t, d.CursorPosition().X, 1)
+	AssertEQ(t, d.CursorPosition().Y, 1)
 }
 
 // Test_DECSTBM_TopBelowBottom tests that invalid margins (top == bottom) are rejected.
@@ -98,7 +98,7 @@ func Test_DECSTBM_DefaultRestores(t *testing.T) {
 	AssertScreenCharsInRectEqual(t, d, NewRect(1, 2, 1, 3),
 		[]string{"1", "2"})
 
-	position := NewPoint(d.GetCursorPosition().X, d.GetCursorPosition().Y)
+	position := NewPoint(d.CursorPosition().X, d.CursorPosition().Y)
 	DECSTBM(d, 0, 0) // Reset margins
 	CUP(d, position)
 	d.Write("\r\n")
@@ -106,7 +106,7 @@ func Test_DECSTBM_DefaultRestores(t *testing.T) {
 	// Content should remain since margins are now full screen
 	AssertScreenCharsInRectEqual(t, d, NewRect(1, 2, 1, 3),
 		[]string{"1", "2"})
-	AssertEQ(t, d.GetCursorPosition().Y, 4)
+	AssertEQ(t, d.CursorPosition().Y, 4)
 }
 
 // Test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll tests scrolling outside margins.
@@ -130,7 +130,7 @@ func Test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll(t *testing.T) {
 		[]string{"3"})
 
 	// Cursor should still be at bottom
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 }
 
 // Test_DECSTBM_MaxSizeOfRegionIsPageSize tests that margins beyond screen are clamped.
@@ -153,7 +153,7 @@ func Test_DECSTBM_MaxSizeOfRegionIsPageSize(t *testing.T) {
 		[]string{"x", " "})
 
 	// Cursor should be at last line
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 }
 
 // Test_DECSTBM_TopOfZeroIsTopOfScreen tests that top=0 means screen top.
@@ -191,5 +191,5 @@ func Test_DECSTBM_BottomOfZeroIsBottomOfScreen(t *testing.T) {
 		[]string{"x", " "})
 
 	// Cursor should be at last line
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 }

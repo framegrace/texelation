@@ -64,14 +64,14 @@ func TestReplayerBasic(t *testing.T) {
 	replayer.SimulateRender()
 
 	// Check that "Hello" appears at start of grid
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 	text := CellsToString(grid[0][:5])
 	if text != "Hello" {
 		t.Errorf("Expected 'Hello', got %q", text)
 	}
 
 	// Cursor should be at position 5
-	x, y := replayer.GetCursor()
+	x, y := replayer.Cursor()
 	if x != 5 || y != 0 {
 		t.Errorf("Expected cursor at (5,0), got (%d,%d)", x, y)
 	}
@@ -110,7 +110,7 @@ func TestReplayerLineFeed(t *testing.T) {
 	replayer := NewReplayer(rec)
 	replayer.PlayAndRender()
 
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 
 	line0 := strings.TrimRight(CellsToString(grid[0]), " ")
 	line1 := strings.TrimRight(CellsToString(grid[1]), " ")
@@ -122,7 +122,7 @@ func TestReplayerLineFeed(t *testing.T) {
 		t.Errorf("Row 1: expected 'Line2', got %q", line1)
 	}
 
-	x, y := replayer.GetCursor()
+	x, y := replayer.Cursor()
 	if x != 5 || y != 1 {
 		t.Errorf("Expected cursor at (5,1), got (%d,%d)", x, y)
 	}
@@ -145,7 +145,7 @@ func TestDetectLinefeedOnCharBug(t *testing.T) {
 	replayer := NewReplayer(rec)
 	replayer.PlayAndRender()
 
-	snap := replayer.GetSnapshot()
+	snap := replayer.Snapshot()
 
 	// 5 characters typed, should detect sparse output
 	if !DetectLinefeedOnChar(snap, 5) {
@@ -156,7 +156,7 @@ func TestDetectLinefeedOnCharBug(t *testing.T) {
 	rec2 := NewRecordingFromString("abcde", 20, 10)
 	replayer2 := NewReplayer(rec2)
 	replayer2.PlayAndRender()
-	snap2 := replayer2.GetSnapshot()
+	snap2 := replayer2.Snapshot()
 
 	if DetectLinefeedOnChar(snap2, 5) {
 		t.Error("Should not detect linefeed-on-each-char for normal input")
@@ -245,7 +245,7 @@ func TestCursorMovement(t *testing.T) {
 	replayer := NewReplayer(rec)
 	replayer.PlayAndRender()
 
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 
 	// X should be at (0,0)
 	if grid[0][0].Rune != 'X' {
@@ -258,7 +258,7 @@ func TestCursorMovement(t *testing.T) {
 	}
 
 	// Cursor should be at (10,4)
-	x, y := replayer.GetCursor()
+	x, y := replayer.Cursor()
 	if x != 10 || y != 4 {
 		t.Errorf("Expected cursor at (10,4), got (%d,%d)", x, y)
 	}
@@ -272,14 +272,14 @@ func TestSnapshot(t *testing.T) {
 	replayer.PlayAll()
 
 	// Snapshot before render
-	snap1 := replayer.GetSnapshot()
+	snap1 := replayer.Snapshot()
 	if snap1.RenderCount != 0 {
 		t.Errorf("Expected RenderCount 0, got %d", snap1.RenderCount)
 	}
 
 	// Render and snapshot again
 	replayer.SimulateRender()
-	snap2 := replayer.GetSnapshot()
+	snap2 := replayer.Snapshot()
 	if snap2.RenderCount != 1 {
 		t.Errorf("Expected RenderCount 1, got %d", snap2.RenderCount)
 	}
@@ -303,7 +303,7 @@ func TestStepByStepReplay(t *testing.T) {
 		}
 		replayer.SimulateRender()
 
-		x, _ := replayer.GetCursor()
+		x, _ := replayer.Cursor()
 		if x != i+1 {
 			t.Errorf("Step %d: expected cursor X=%d, got %d", i, i+1, x)
 		}
@@ -326,7 +326,7 @@ func TestReset(t *testing.T) {
 	replayer.PlayAndRender()
 
 	// Verify content exists
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 	if grid[0][0].Rune != 'T' {
 		t.Error("Expected content before reset")
 	}
@@ -339,7 +339,7 @@ func TestReset(t *testing.T) {
 		t.Errorf("Expected ByteIndex 0 after reset, got %d", replayer.ByteIndex())
 	}
 
-	grid = replayer.GetGrid()
+	grid = replayer.Grid()
 	// After reset, the 'T' should be gone (cell may be 0 or space)
 	if grid[0][0].Rune == 'T' {
 		t.Error("Expected 'T' to be cleared after reset")
@@ -347,7 +347,7 @@ func TestReset(t *testing.T) {
 
 	// Should be able to replay again
 	replayer.PlayAndRender()
-	grid = replayer.GetGrid()
+	grid = replayer.Grid()
 	if grid[0][0].Rune != 'T' {
 		t.Error("Expected content after replay")
 	}
@@ -360,7 +360,7 @@ func TestFormatSnapshot(t *testing.T) {
 	replayer := NewReplayer(rec)
 	replayer.PlayAndRender()
 
-	snap := replayer.GetSnapshot()
+	snap := replayer.Snapshot()
 	output := FormatSnapshot(snap)
 
 	if !strings.Contains(output, "Hello") {
@@ -392,7 +392,7 @@ func TestBidirectionalFlow(t *testing.T) {
 	replayer.PlayAll()
 
 	// Check terminal generated DSR response
-	responses := replayer.GetResponses()
+	responses := replayer.Responses()
 	t.Logf("After Phase 1 - responses: %s", EscapeSequenceLog(responses))
 
 	if len(responses) == 0 {
@@ -406,7 +406,7 @@ func TestBidirectionalFlow(t *testing.T) {
 	}
 
 	// Verify cursor didn't move from CSI>7u
-	x, y := replayer.GetCursor()
+	x, y := replayer.Cursor()
 	if x != 0 || y != 0 {
 		t.Errorf("Cursor moved unexpectedly to (%d,%d) - CSI>u bug?", x, y)
 	}
@@ -422,11 +422,11 @@ func TestBidirectionalFlow(t *testing.T) {
 	replayer.SimulateRender()
 
 	// Check final state
-	snap := replayer.GetSnapshot()
+	snap := replayer.Snapshot()
 	t.Logf("Final state:\n%s", FormatSnapshot(snap))
 
 	// Verify prompt is visible
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 	row0 := CellsToString(grid[0][:15])
 	if !strings.Contains(row0, "Prompt>") {
 		t.Errorf("Expected 'Prompt>' on row 0, got: %q", row0)
@@ -457,7 +457,7 @@ func Test256ColorBackground(t *testing.T) {
 	replayer := NewReplayer(rec)
 	replayer.PlayAndRender()
 
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 
 	// Check that the 'G' has background color 240
 	cell := grid[0][0]
@@ -500,7 +500,7 @@ func TestTUITakeover(t *testing.T) {
 	replayer := NewReplayer(rec)
 	replayer.PlayAndRender()
 
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 
 	// Verify TUI header is at row 0 (overwrote bash prompt)
 	row0 := ""
@@ -547,7 +547,7 @@ func TestTUITakeoverPartialScreen(t *testing.T) {
 	replayer.PlayAll()
 	replayer.SimulateRender()
 
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 
 	// Row 1 should have the border
 	if grid[1][0].Rune != '+' {
@@ -593,7 +593,7 @@ func TestCSIExtendedKeyboardProtocol(t *testing.T) {
 	replayer := NewReplayer(rec)
 	replayer.PlayAndRender()
 
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 
 	// Check "A" is at (0,0)
 	if grid[0][0].Rune != 'A' {
@@ -612,7 +612,7 @@ func TestCSIExtendedKeyboardProtocol(t *testing.T) {
 	}
 
 	// Also verify cursor position
-	x, y := replayer.GetCursor()
+	x, y := replayer.Cursor()
 	if x != 7 || y != 2 {
 		t.Errorf("Expected cursor at (7,2), got (%d,%d)", x, y)
 	}

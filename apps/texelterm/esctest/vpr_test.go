@@ -21,7 +21,7 @@ func Test_VPR_DefaultParams(t *testing.T) {
 	CUP(d, NewPoint(1, 6))
 	VPR(d)
 
-	AssertEQ(t, d.GetCursorPosition().Y, 7)
+	AssertEQ(t, d.CursorPosition().Y, 7)
 }
 
 // Test_VPR_StopsAtBottomEdge tests that VPR won't go past the bottom edge.
@@ -35,7 +35,7 @@ func Test_VPR_StopsAtBottomEdge(t *testing.T) {
 	VPR(d, 24+10)
 
 	// Should be at bottom edge on same column
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 5)
 	AssertEQ(t, pos.Y, 24)
 }
@@ -47,7 +47,7 @@ func Test_VPR_DoesNotChangeColumn(t *testing.T) {
 	CUP(d, NewPoint(5, 6))
 	VPR(d, 2)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 5)
 	AssertEQ(t, pos.Y, 8)
 }

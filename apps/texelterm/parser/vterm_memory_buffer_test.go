@@ -577,7 +577,7 @@ func TestVTerm_ScrollRegionCodexExitSequence(t *testing.T) {
 
 	// Scroll to top
 	v.memBufState.viewport.ScrollToTop()
-	topGrid := v.memBufState.viewport.GetVisibleGrid()
+	topGrid := v.memBufState.viewport.VisibleGrid()
 
 	// Check first row has content
 	firstRowText := gridRowToString(topGrid[0][:16])
@@ -739,7 +739,7 @@ func TestVTerm_ScrollRegionPersistRestore(t *testing.T) {
 
 		// Also scroll through the viewport to check rendered content
 		v.memBufState.viewport.ScrollToTop()
-		topGrid := v.memBufState.viewport.GetVisibleGrid()
+		topGrid := v.memBufState.viewport.VisibleGrid()
 		t.Logf("First row at top: %q", gridRowToString(topGrid[0][:20]))
 
 		v.CloseMemoryBuffer()
@@ -2176,7 +2176,7 @@ func extractAllLines(mb *MemoryBuffer) []string {
 //
 // Tests three layers:
 //  1. Raw MemoryBuffer lines (logical storage)
-//  2. Viewport Grid (what's rendered to screen via GetVisibleGrid)
+//  2. Viewport Grid (what's rendered to screen via VisibleGrid)
 //  3. VTerm Grid() (what the client actually sees, including after new writes)
 func TestVTerm_ScrollRegionReloadCorruption(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -2272,7 +2272,7 @@ func TestVTerm_ScrollRegionReloadCorruption(t *testing.T) {
 		v.memBufState.viewport.ScrollToTop()
 		seen := make(map[string]bool)
 		for {
-			vgrid := v.memBufState.viewport.GetVisibleGrid()
+			vgrid := v.memBufState.viewport.VisibleGrid()
 			for y := 0; y < len(vgrid); y++ {
 				text := trimRight(gridRowToString(vgrid[y]))
 				key := fmt.Sprintf("%d:%s", len(session1AllViewport)+y, text)
@@ -2383,7 +2383,7 @@ func TestVTerm_ScrollRegionReloadCorruption(t *testing.T) {
 		v.memBufState.viewport.ScrollToTop()
 		seen := make(map[string]bool)
 		for {
-			vgrid := v.memBufState.viewport.GetVisibleGrid()
+			vgrid := v.memBufState.viewport.VisibleGrid()
 			for y := 0; y < len(vgrid); y++ {
 				text := trimRight(gridRowToString(vgrid[y]))
 				key := fmt.Sprintf("%d:%s", len(session2AllViewport)+y, text)

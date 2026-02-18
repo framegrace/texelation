@@ -19,7 +19,7 @@ func Test_FF_Basic(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	FF(d)
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 5)
 	AssertEQ(t, pos.Y, 4)
 }
@@ -39,12 +39,12 @@ func Test_FF_Scrolls(t *testing.T) {
 
 	// Move down, ensure no scroll yet.
 	FF(d)
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 22, 2, 24), []string{Empty(), "a", "b"})
 
 	// Move down, ensure scroll.
 	FF(d)
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 22, 2, 24), []string{"a", "b", Empty()})
 }
 
@@ -59,7 +59,7 @@ func Test_FF_ScrollsInTopBottomRegionStartingAbove(t *testing.T) {
 	FF(d)
 	FF(d)
 	FF(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 5))
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 4, 2, 5), []string{"x", Empty()})
 }
 
@@ -73,7 +73,7 @@ func Test_FF_ScrollsInTopBottomRegionStartingWithin(t *testing.T) {
 	CUP(d, NewPoint(2, 4))
 	FF(d)
 	FF(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 5))
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 4, 2, 5), []string{"x", Empty()})
 }
 
@@ -90,30 +90,30 @@ func Test_FF_MovesDoesNotScrollOutsideLeftRight(t *testing.T) {
 	CUP(d, NewPoint(6, 5))
 	FF(d)
 	// Cursor won't pass bottom or scroll.
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(6, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(6, 5))
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 
 	// Cursor can move down
 	CUP(d, NewPoint(6, 4))
 	FF(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(6, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(6, 5))
 
 	// Try to move past the bottom of the screen but to the right of the left-right region
 	CUP(d, NewPoint(6, 24))
 	FF(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(6, 24))
+	AssertEQ(t, d.CursorPosition(), NewPoint(6, 24))
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 
 	// Move past bottom margin but to the left of the left-right region
 	CUP(d, NewPoint(1, 5))
 	FF(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 5))
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 
 	// Try to move past the bottom of the screen but to the left of the left-right region
 	CUP(d, NewPoint(1, 24))
 	FF(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 24))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 24))
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 }
 
@@ -134,7 +134,7 @@ func Test_FF_StopsAtBottomLineWhenBegunBelowScrollRegion(t *testing.T) {
 	}
 
 	// Ensure it stopped at the bottom of the screen
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 
 	// Ensure no scroll
 	AssertScreenCharsInRectEqual(t, d, NewRect(1, 6, 1, 6), []string{"x"})

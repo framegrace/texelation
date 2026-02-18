@@ -21,7 +21,7 @@ func Test_CBT_OneTabStopByDefault(t *testing.T) {
 	CUP(d, NewPoint(17, 1))
 	CBT(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 9)
 }
 
@@ -32,7 +32,7 @@ func Test_CBT_ExplicitParameter(t *testing.T) {
 	CUP(d, NewPoint(25, 1))
 	CBT(d, 2)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 9)
 }
 
@@ -43,7 +43,7 @@ func Test_CBT_StopsAtLeftEdge(t *testing.T) {
 	CUP(d, NewPoint(25, 2))
 	CBT(d, 5)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 1)
 	AssertEQ(t, pos.Y, 2)
 }
@@ -62,6 +62,6 @@ func Test_CBT_IgnoresRegion(t *testing.T) {
 	// Tab backwards out of the region
 	CBT(d, 2)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 1)
 }

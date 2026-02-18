@@ -20,7 +20,7 @@ func Test_TBC_Default(t *testing.T) {
 
 	// Tab from column 1 should go to 9
 	d.Write("\t")
-	AssertEQ(t, d.GetCursorPosition().X, 9)
+	AssertEQ(t, d.CursorPosition().X, 9)
 
 	// Clear tab stop at column 9
 	TBC(d)
@@ -28,7 +28,7 @@ func Test_TBC_Default(t *testing.T) {
 	// Move back to column 1 and tab - should skip 9 and go to 17
 	CUP(d, NewPoint(1, 1))
 	d.Write("\t")
-	AssertEQ(t, d.GetCursorPosition().X, 17)
+	AssertEQ(t, d.CursorPosition().X, 17)
 }
 
 // Test_TBC_0 tests that TBC(0) clears tab stop at cursor.
@@ -37,7 +37,7 @@ func Test_TBC_0(t *testing.T) {
 
 	// Tab from column 1 should go to 9
 	d.Write("\t")
-	AssertEQ(t, d.GetCursorPosition().X, 9)
+	AssertEQ(t, d.CursorPosition().X, 9)
 
 	// Clear tab stop at column 9
 	TBC(d, 0)
@@ -45,7 +45,7 @@ func Test_TBC_0(t *testing.T) {
 	// Move back to column 1 and tab - should skip 9 and go to 17
 	CUP(d, NewPoint(1, 1))
 	d.Write("\t")
-	AssertEQ(t, d.GetCursorPosition().X, 17)
+	AssertEQ(t, d.CursorPosition().X, 17)
 }
 
 // Test_TBC_3 tests that TBC(3) clears all tab stops.
@@ -62,7 +62,7 @@ func Test_TBC_3(t *testing.T) {
 	// Move back to column 1 and tab - should go to 30
 	CUP(d, NewPoint(1, 1))
 	d.Write("\t")
-	AssertEQ(t, d.GetCursorPosition().X, 30)
+	AssertEQ(t, d.CursorPosition().X, 30)
 }
 
 // Test_TBC_NoOp tests that clearing nonexistent tab stop does nothing.
@@ -76,7 +76,7 @@ func Test_TBC_NoOp(t *testing.T) {
 	// Tab stops at 9 and 17 should still work
 	CUP(d, NewPoint(1, 1))
 	d.Write("\t")
-	AssertEQ(t, d.GetCursorPosition().X, 9)
+	AssertEQ(t, d.CursorPosition().X, 9)
 	d.Write("\t")
-	AssertEQ(t, d.GetCursorPosition().X, 17)
+	AssertEQ(t, d.CursorPosition().X, 17)
 }

@@ -16,9 +16,9 @@ import (
 )
 
 var (
-	errStringTooLong = errors.New("protocol: string exceeds 64KB limit")
-	errPayloadShort  = errors.New("protocol: payload too short")
-	errExtraBytes    = errors.New("protocol: payload has trailing data")
+	ErrStringTooLong = errors.New("protocol: string exceeds 64KB limit")
+	ErrPayloadShort  = errors.New("protocol: payload too short")
+	ErrExtraBytes    = errors.New("protocol: payload has trailing data")
 )
 
 // Hello initiates the handshake from client to server.
@@ -222,7 +222,7 @@ type TreeSnapshot struct {
 
 func encodeString(buf *bytes.Buffer, value string) error {
 	if len(value) > 0xFFFF {
-		return errStringTooLong
+		return ErrStringTooLong
 	}
 	if err := binary.Write(buf, binary.LittleEndian, uint16(len(value))); err != nil {
 		return err
@@ -237,12 +237,12 @@ func encodeString(buf *bytes.Buffer, value string) error {
 
 func decodeString(b []byte) (string, []byte, error) {
 	if len(b) < 2 {
-		return "", nil, errPayloadShort
+		return "", nil, ErrPayloadShort
 	}
 	length := binary.LittleEndian.Uint16(b[:2])
 	b = b[2:]
 	if uint16(len(b)) < length {
-		return "", nil, errPayloadShort
+		return "", nil, ErrPayloadShort
 	}
 	return string(b[:length]), b[length:], nil
 }
@@ -262,7 +262,7 @@ func EncodeHello(h Hello) ([]byte, error) {
 func DecodeHello(b []byte) (Hello, error) {
 	var h Hello
 	if len(b) < 16 {
-		return h, errPayloadShort
+		return h, ErrPayloadShort
 	}
 	copy(h.ClientID[:], b[:16])
 	b = b[16:]
@@ -272,7 +272,7 @@ func DecodeHello(b []byte) (Hello, error) {
 	}
 	h.ClientName = name
 	if len(rest) < 4 {
-		return h, errPayloadShort
+		return h, ErrPayloadShort
 	}
 	h.Capabilities = binary.LittleEndian.Uint32(rest[:4])
 	return h, nil
@@ -290,7 +290,7 @@ func EncodeWelcome(w Welcome) ([]byte, error) {
 func DecodeWelcome(b []byte) (Welcome, error) {
 	var w Welcome
 	if len(b) < 16 {
-		return w, errPayloadShort
+		return w, ErrPayloadShort
 	}
 	copy(w.SessionID[:], b[:16])
 	name, _, err := decodeString(b[16:])
@@ -308,7 +308,7 @@ func EncodeConnectRequest(c ConnectRequest) ([]byte, error) {
 func DecodeConnectRequest(b []byte) (ConnectRequest, error) {
 	var c ConnectRequest
 	if len(b) < 16 {
-		return c, errPayloadShort
+		return c, ErrPayloadShort
 	}
 	copy(c.SessionID[:], b[:16])
 	return c, nil
@@ -328,7 +328,7 @@ func EncodeConnectAccept(c ConnectAccept) ([]byte, error) {
 func DecodeConnectAccept(b []byte) (ConnectAccept, error) {
 	var c ConnectAccept
 	if len(b) < 17 {
-		return c, errPayloadShort
+		return c, ErrPayloadShort
 	}
 	copy(c.SessionID[:], b[:16])
 	c.ResumeSupported = b[16] != 0
@@ -347,7 +347,7 @@ func EncodeResumeRequest(r ResumeRequest) ([]byte, error) {
 func DecodeResumeRequest(b []byte) (ResumeRequest, error) {
 	var r ResumeRequest
 	if len(b) < 24 {
-		return r, errPayloadShort
+		return r, ErrPayloadShort
 	}
 	copy(r.SessionID[:], b[:16])
 	r.LastSequence = binary.LittleEndian.Uint64(b[16:24])
@@ -367,7 +367,7 @@ func EncodeResumeData(r ResumeData) ([]byte, error) {
 func DecodeResumeData(b []byte) (ResumeData, error) {
 	var r ResumeData
 	if len(b) < 40 {
-		return r, errPayloadShort
+		return r, ErrPayloadShort
 	}
 	copy(r.SessionID[:], b[:16])
 	r.FromSequence = binary.LittleEndian.Uint64(b[16:24])
@@ -389,7 +389,7 @@ func EncodeDisconnectNotice(d DisconnectNotice) ([]byte, error) {
 func DecodeDisconnectNotice(b []byte) (DisconnectNotice, error) {
 	var d DisconnectNotice
 	if len(b) < 2 {
-		return d, errPayloadShort
+		return d, ErrPayloadShort
 	}
 	d.ReasonCode = binary.LittleEndian.Uint16(b[:2])
 	msg, _, err := decodeString(b[2:])
@@ -411,7 +411,7 @@ func EncodePing(p Ping) ([]byte, error) {
 func DecodePing(b []byte) (Ping, error) {
 	var p Ping
 	if len(b) < 8 {
-		return p, errPayloadShort
+		return p, ErrPayloadShort
 	}
 	p.Timestamp = int64(binary.LittleEndian.Uint64(b[:8]))
 	return p, nil
@@ -443,7 +443,7 @@ func EncodeErrorFrame(e ErrorFrame) ([]byte, error) {
 func DecodeErrorFrame(b []byte) (ErrorFrame, error) {
 	var e ErrorFrame
 	if len(b) < 2 {
-		return e, errPayloadShort
+		return e, ErrPayloadShort
 	}
 	e.Code = binary.LittleEndian.Uint16(b[:2])
 	msg, _, err := decodeString(b[2:])
@@ -465,7 +465,7 @@ func EncodeBufferAck(a BufferAck) ([]byte, error) {
 func DecodeBufferAck(b []byte) (BufferAck, error) {
 	var ack BufferAck
 	if len(b) < 8 {
-		return ack, errPayloadShort
+		return ack, ErrPayloadShort
 	}
 	ack.Sequence = binary.LittleEndian.Uint64(b[:8])
 	return ack, nil
@@ -497,7 +497,7 @@ func EncodeMouseEvent(ev MouseEvent) ([]byte, error) {
 func DecodeMouseEvent(b []byte) (MouseEvent, error) {
 	var ev MouseEvent
 	if len(b) < 14 {
-		return ev, errPayloadShort
+		return ev, ErrPayloadShort
 	}
 	ev.X = int16(binary.LittleEndian.Uint16(b[0:2]))
 	ev.Y = int16(binary.LittleEndian.Uint16(b[2:4]))
@@ -514,7 +514,7 @@ func EncodeClipboardSet(msg ClipboardSet) ([]byte, error) {
 		return nil, err
 	}
 	if len(msg.Data) > 0xFFFF {
-		return nil, errStringTooLong
+		return nil, ErrStringTooLong
 	}
 	if err := binary.Write(buf, binary.LittleEndian, uint16(len(msg.Data))); err != nil {
 		return nil, err
@@ -534,12 +534,12 @@ func DecodeClipboardSet(b []byte) (ClipboardSet, error) {
 		return msg, err
 	}
 	if len(rest) < 2 {
-		return msg, errPayloadShort
+		return msg, ErrPayloadShort
 	}
 	dataLen := binary.LittleEndian.Uint16(rest[:2])
 	rest = rest[2:]
 	if len(rest) < int(dataLen) {
-		return msg, errPayloadShort
+		return msg, ErrPayloadShort
 	}
 	msg.MimeType = mime
 	msg.Data = append([]byte(nil), rest[:dataLen]...)
@@ -552,7 +552,7 @@ func EncodeClipboardData(msg ClipboardData) ([]byte, error) {
 		return nil, err
 	}
 	if len(msg.Data) > 0xFFFF {
-		return nil, errStringTooLong
+		return nil, ErrStringTooLong
 	}
 	if err := binary.Write(buf, binary.LittleEndian, uint16(len(msg.Data))); err != nil {
 		return nil, err
@@ -572,12 +572,12 @@ func DecodeClipboardData(b []byte) (ClipboardData, error) {
 		return msg, err
 	}
 	if len(rest) < 2 {
-		return msg, errPayloadShort
+		return msg, ErrPayloadShort
 	}
 	dataLen := binary.LittleEndian.Uint16(rest[:2])
 	rest = rest[2:]
 	if len(rest) < int(dataLen) {
-		return msg, errPayloadShort
+		return msg, ErrPayloadShort
 	}
 	msg.MimeType = mime
 	msg.Data = append([]byte(nil), rest[:dataLen]...)
@@ -618,11 +618,11 @@ func EncodePaste(msg Paste) ([]byte, error) {
 func DecodePaste(b []byte) (Paste, error) {
 	var msg Paste
 	if len(b) < 4 {
-		return msg, errPayloadShort
+		return msg, ErrPayloadShort
 	}
 	dataLen := binary.LittleEndian.Uint32(b[:4])
 	if len(b) < int(4+dataLen) {
-		return msg, errPayloadShort
+		return msg, ErrPayloadShort
 	}
 	if dataLen > 0 {
 		msg.Data = append([]byte(nil), b[4:4+dataLen]...)
@@ -684,7 +684,7 @@ func EncodePaneFocus(focus PaneFocus) ([]byte, error) {
 func DecodePaneFocus(b []byte) (PaneFocus, error) {
 	var focus PaneFocus
 	if len(b) < len(focus.PaneID) {
-		return focus, errPayloadShort
+		return focus, ErrPayloadShort
 	}
 	copy(focus.PaneID[:], b[:len(focus.PaneID)])
 	return focus, nil
@@ -716,7 +716,7 @@ func EncodeStateUpdate(update StateUpdate) ([]byte, error) {
 		return nil, err
 	}
 	if len(update.AllWorkspaces) > 0xFFFF {
-		return nil, errStringTooLong
+		return nil, ErrStringTooLong
 	}
 	if err := binary.Write(buf, binary.LittleEndian, uint16(len(update.AllWorkspaces))); err != nil {
 		return nil, err
@@ -736,44 +736,44 @@ func EncodeStateUpdate(update StateUpdate) ([]byte, error) {
 func DecodeStateUpdate(b []byte) (StateUpdate, error) {
 	var update StateUpdate
 	if len(b) < 4 {
-		return update, errPayloadShort
+		return update, ErrPayloadShort
 	}
 	update.WorkspaceID = int32(binary.LittleEndian.Uint32(b[:4]))
 	b = b[4:]
 	if len(b) < 1 {
-		return update, errPayloadShort
+		return update, ErrPayloadShort
 	}
 	update.InControlMode = b[0] != 0
 	b = b[1:]
 	if len(b) < 4 {
-		return update, errPayloadShort
+		return update, ErrPayloadShort
 	}
 	update.SubMode = rune(binary.LittleEndian.Uint32(b[:4]))
 	b = b[4:]
 	if len(b) < 4 {
-		return update, errPayloadShort
+		return update, ErrPayloadShort
 	}
 	update.DesktopBgRGB = binary.LittleEndian.Uint32(b[:4])
 	b = b[4:]
 	if len(b) < 1 {
-		return update, errPayloadShort
+		return update, ErrPayloadShort
 	}
 	update.Zoomed = b[0] != 0
 	b = b[1:]
 	if len(b) < len(update.ZoomedPaneID) {
-		return update, errPayloadShort
+		return update, ErrPayloadShort
 	}
 	copy(update.ZoomedPaneID[:], b[:len(update.ZoomedPaneID)])
 	b = b[len(update.ZoomedPaneID):]
 	if len(b) < 2 {
-		return update, errPayloadShort
+		return update, ErrPayloadShort
 	}
 	count := binary.LittleEndian.Uint16(b[:2])
 	b = b[2:]
 	update.AllWorkspaces = make([]int32, count)
 	for i := 0; i < int(count); i++ {
 		if len(b) < 4 {
-			return update, errPayloadShort
+			return update, ErrPayloadShort
 		}
 		update.AllWorkspaces[i] = int32(binary.LittleEndian.Uint32(b[:4]))
 		b = b[4:]
@@ -784,7 +784,7 @@ func DecodeStateUpdate(b []byte) (StateUpdate, error) {
 		return update, err
 	}
 	if len(b) != 0 {
-		return update, errExtraBytes
+		return update, ErrExtraBytes
 	}
 	return update, nil
 }
@@ -807,13 +807,13 @@ func DecodePaneState(b []byte) (PaneState, error) {
 	var state PaneState
 	required := len(state.PaneID) + 1 + 4
 	if len(b) < required {
-		return state, errPayloadShort
+		return state, ErrPayloadShort
 	}
 	copy(state.PaneID[:], b[:len(state.PaneID)])
 	state.Flags = PaneStateFlags(b[len(state.PaneID)])
 	state.ZOrder = int32(binary.LittleEndian.Uint32(b[len(state.PaneID)+1 : required]))
 	if len(b) > required {
-		return state, errExtraBytes
+		return state, ErrExtraBytes
 	}
 	return state, nil
 }
@@ -834,7 +834,7 @@ func EncodeResize(r Resize) ([]byte, error) {
 func DecodeResize(b []byte) (Resize, error) {
 	var r Resize
 	if len(b) < 4 {
-		return r, errPayloadShort
+		return r, ErrPayloadShort
 	}
 	r.Cols = binary.LittleEndian.Uint16(b[:2])
 	r.Rows = binary.LittleEndian.Uint16(b[2:4])
@@ -857,7 +857,7 @@ func EncodeClientReady(r ClientReady) ([]byte, error) {
 func DecodeClientReady(b []byte) (ClientReady, error) {
 	var r ClientReady
 	if len(b) < 4 {
-		return r, errPayloadShort
+		return r, ErrPayloadShort
 	}
 	r.Cols = binary.LittleEndian.Uint16(b[:2])
 	r.Rows = binary.LittleEndian.Uint16(b[2:4])
@@ -893,7 +893,7 @@ func EncodeTreeSnapshot(snapshot TreeSnapshot) ([]byte, error) {
 			return nil, err
 		}
 		if len(pane.Rows) > 0xFFFF {
-			return nil, errStringTooLong
+			return nil, ErrStringTooLong
 		}
 		if err := binary.Write(buf, binary.LittleEndian, uint16(len(pane.Rows))); err != nil {
 			return nil, err
@@ -920,14 +920,14 @@ func EncodeTreeSnapshot(snapshot TreeSnapshot) ([]byte, error) {
 func DecodeTreeSnapshot(b []byte) (TreeSnapshot, error) {
 	var snapshot TreeSnapshot
 	if len(b) < 2 {
-		return snapshot, errPayloadShort
+		return snapshot, ErrPayloadShort
 	}
 	count := binary.LittleEndian.Uint16(b[:2])
 	b = b[2:]
 	snapshot.Panes = make([]PaneSnapshot, count)
 	for i := 0; i < int(count); i++ {
 		if len(b) < 20 {
-			return snapshot, errPayloadShort
+			return snapshot, ErrPayloadShort
 		}
 		var pane PaneSnapshot
 		copy(pane.PaneID[:], b[:16])
@@ -939,7 +939,7 @@ func DecodeTreeSnapshot(b []byte) (TreeSnapshot, error) {
 		}
 		pane.Title = title
 		if len(rest) < 18 {
-			return snapshot, errPayloadShort
+			return snapshot, ErrPayloadShort
 		}
 		pane.X = int32(binary.LittleEndian.Uint32(rest[0:4]))
 		pane.Y = int32(binary.LittleEndian.Uint32(rest[4:8]))
@@ -975,7 +975,7 @@ func DecodeTreeSnapshot(b []byte) (TreeSnapshot, error) {
 	}
 	snapshot.Root = node
 	if len(remaining) != 0 {
-		return snapshot, errPayloadShort
+		return snapshot, ErrPayloadShort
 	}
 	return snapshot, nil
 }
@@ -993,7 +993,7 @@ func encodeTreeNode(buf *bytes.Buffer, node TreeNodeSnapshot) error {
 	}
 	if childCount > 0 {
 		if len(node.SplitRatios) != int(childCount) {
-			return errPayloadShort
+			return ErrPayloadShort
 		}
 		for _, ratio := range node.SplitRatios {
 			if err := binary.Write(buf, binary.LittleEndian, ratio); err != nil {
@@ -1012,7 +1012,7 @@ func encodeTreeNode(buf *bytes.Buffer, node TreeNodeSnapshot) error {
 func decodeTreeNode(b []byte) (TreeNodeSnapshot, []byte, error) {
 	var node TreeNodeSnapshot
 	if len(b) < 7 {
-		return node, nil, errPayloadShort
+		return node, nil, ErrPayloadShort
 	}
 	node.PaneIndex = int32(binary.LittleEndian.Uint32(b[:4]))
 	node.Split = SplitKind(b[4])
@@ -1021,7 +1021,7 @@ func decodeTreeNode(b []byte) (TreeNodeSnapshot, []byte, error) {
 	if childCount > 0 {
 		req := int(childCount) * 4
 		if len(b) < req {
-			return node, nil, errPayloadShort
+			return node, nil, ErrPayloadShort
 		}
 		node.SplitRatios = make([]float32, childCount)
 		for i := 0; i < int(childCount); i++ {
@@ -1058,7 +1058,7 @@ func EncodeKeyEvent(ev KeyEvent) ([]byte, error) {
 func DecodeKeyEvent(b []byte) (KeyEvent, error) {
 	var ev KeyEvent
 	if len(b) < 10 {
-		return ev, errPayloadShort
+		return ev, ErrPayloadShort
 	}
 	ev.KeyCode = binary.LittleEndian.Uint32(b[:4])
 	r := binary.LittleEndian.Uint32(b[4:8])

@@ -19,7 +19,7 @@ func Test_CUU_DefaultParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CUU(d)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 5)
 	AssertEQ(t, position.Y, 2)
 }
@@ -29,7 +29,7 @@ func Test_CUU_ExplicitParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(1, 3))
 	CUU(d, 2)
-	AssertEQ(t, d.GetCursorPosition().Y, 1)
+	AssertEQ(t, d.CursorPosition().Y, 1)
 }
 
 // Test_CUU_StopsAtTopLine tests that CUU moves the cursor up, stopping at the first line.
@@ -37,7 +37,7 @@ func Test_CUU_StopsAtTopLine(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(1, 3))
 	CUU(d, 99)
-	AssertEQ(t, d.GetCursorPosition().Y, 1)
+	AssertEQ(t, d.CursorPosition().Y, 1)
 }
 
 // Test_CUU_StopsAtTopLineWhenBegunAboveScrollRegion tests that when the cursor starts above
@@ -55,7 +55,7 @@ func Test_CUU_StopsAtTopLineWhenBegunAboveScrollRegion(t *testing.T) {
 	CUU(d, 99)
 
 	// Ensure it stopped at the top of the screen
-	AssertEQ(t, d.GetCursorPosition().Y, 1)
+	AssertEQ(t, d.CursorPosition().Y, 1)
 }
 
 // Test_CUU_StopsAtTopMarginInScrollRegion tests that when the cursor starts within the scroll
@@ -73,5 +73,5 @@ func Test_CUU_StopsAtTopMarginInScrollRegion(t *testing.T) {
 	CUU(d, 99)
 
 	// Ensure it stopped at the top of the scroll region.
-	AssertEQ(t, d.GetCursorPosition().Y, 2)
+	AssertEQ(t, d.CursorPosition().Y, 2)
 }

@@ -20,7 +20,7 @@ func Test_CHT_OneTabStopByDefault(t *testing.T) {
 
 	CHT(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 9)
 }
 
@@ -30,7 +30,7 @@ func Test_CHT_ExplicitParameter(t *testing.T) {
 
 	CHT(d, 2)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 17)
 }
 
@@ -48,17 +48,17 @@ func Test_CHT_IgnoresScrollingRegion(t *testing.T) {
 
 	// Ensure we can tab within the region
 	CHT(d, 2)
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 17)
 
 	// Ensure that we can't tab out of the region - stops at right margin
 	CHT(d, 2)
-	pos = d.GetCursorPosition()
+	pos = d.CursorPosition()
 	AssertEQ(t, pos.X, 30)
 
 	// Try again, starting before the region
 	CUP(d, NewPoint(1, 9))
 	CHT(d, 9)
-	pos = d.GetCursorPosition()
+	pos = d.CursorPosition()
 	AssertEQ(t, pos.X, 30)
 }

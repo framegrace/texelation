@@ -117,28 +117,28 @@ func (h *TestHarness) GetLineText(y, maxLen int) string {
 	return result.String()
 }
 
-// GetCursor returns the current cursor position (0-based).
-func (h *TestHarness) GetCursor() (x, y int) {
+// Cursor returns the current cursor position (0-based).
+func (h *TestHarness) Cursor() (x, y int) {
 	return h.vterm.CursorX(), h.vterm.CursorY()
 }
 
-// GetCurrentAttr returns the current text attributes.
-func (h *TestHarness) GetCurrentAttr() Attribute {
+// CurrentAttr returns the current text attributes.
+func (h *TestHarness) CurrentAttr() Attribute {
 	return h.vterm.currentAttr
 }
 
-// GetScrollRegion returns the current scrolling region (0-based, inclusive).
-func (h *TestHarness) GetScrollRegion() (top, bottom int) {
+// ScrollRegion returns the current scrolling region (0-based, inclusive).
+func (h *TestHarness) ScrollRegion() (top, bottom int) {
 	return h.vterm.marginTop, h.vterm.marginBottom
 }
 
-// GetSize returns the terminal size.
-func (h *TestHarness) GetSize() (width, height int) {
+// Size returns the terminal size.
+func (h *TestHarness) Size() (width, height int) {
 	return h.vterm.width, h.vterm.height
 }
 
-// GetHistoryLength returns the number of lines in history buffer.
-func (h *TestHarness) GetHistoryLength() int {
+// HistoryLength returns the number of lines in history buffer.
+func (h *TestHarness) HistoryLength() int {
 	return h.vterm.HistoryLength()
 }
 
@@ -189,7 +189,7 @@ func (h *TestHarness) AssertText(t *testing.T, x, y int, expectedText string) {
 // AssertCursor verifies the cursor is at the expected position.
 func (h *TestHarness) AssertCursor(t *testing.T, expectedX, expectedY int) {
 	t.Helper()
-	actualX, actualY := h.GetCursor()
+	actualX, actualY := h.Cursor()
 	if actualX != expectedX || actualY != expectedY {
 		t.Errorf("Cursor position: expected (%d,%d), got (%d,%d)",
 			expectedX, expectedY, actualX, actualY)
@@ -199,7 +199,7 @@ func (h *TestHarness) AssertCursor(t *testing.T, expectedX, expectedY int) {
 // AssertScrollRegion verifies the scrolling region matches expected values.
 func (h *TestHarness) AssertScrollRegion(t *testing.T, expectedTop, expectedBottom int) {
 	t.Helper()
-	actualTop, actualBottom := h.GetScrollRegion()
+	actualTop, actualBottom := h.ScrollRegion()
 	if actualTop != expectedTop || actualBottom != expectedBottom {
 		t.Errorf("Scroll region: expected [%d,%d], got [%d,%d]",
 			expectedTop, expectedBottom, actualTop, actualBottom)
@@ -218,7 +218,7 @@ func (h *TestHarness) AssertBlank(t *testing.T, x, y int) {
 // AssertLineBlank verifies an entire line is blank.
 func (h *TestHarness) AssertLineBlank(t *testing.T, y int) {
 	t.Helper()
-	width, _ := h.GetSize()
+	width, _ := h.Size()
 	for x := 0; x < width; x++ {
 		h.AssertBlank(t, x, y)
 	}
@@ -227,8 +227,8 @@ func (h *TestHarness) AssertLineBlank(t *testing.T, y int) {
 // Dump returns a visual representation of the terminal buffer for debugging.
 // Shows all visible lines with cursor position marked.
 func (h *TestHarness) Dump() string {
-	width, height := h.GetSize()
-	cursorX, cursorY := h.GetCursor()
+	width, height := h.Size()
+	cursorX, cursorY := h.Cursor()
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Terminal %dx%d (cursor at %d,%d)\n", width, height, cursorX, cursorY))
@@ -254,9 +254,9 @@ func (h *TestHarness) Dump() string {
 
 // DumpWithHistory dumps terminal buffer including scrollback history.
 func (h *TestHarness) DumpWithHistory() string {
-	width, _ := h.GetSize()
-	histLen := h.GetHistoryLength()
-	cursorX, cursorY := h.GetCursor()
+	width, _ := h.Size()
+	histLen := h.HistoryLength()
+	cursorX, cursorY := h.Cursor()
 	topLine := h.vterm.getTopHistoryLine()
 
 	var sb strings.Builder
@@ -311,7 +311,7 @@ func (h *TestHarness) Reset() {
 // FillWithPattern fills the terminal with a test pattern.
 // Useful for setting up known initial state.
 func (h *TestHarness) FillWithPattern(pattern string) {
-	width, height := h.GetSize()
+	width, height := h.Size()
 	h.Clear()
 
 	// Fill each line completely - cursor will auto-wrap at width

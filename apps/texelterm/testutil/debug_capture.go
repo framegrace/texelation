@@ -49,8 +49,8 @@ func (cw *CaptureWriter) Close() ([]byte, error) {
 	return cw.captured, err
 }
 
-// GetCaptured returns all captured data so far.
-func (cw *CaptureWriter) GetCaptured() []byte {
+// Captured returns all captured data so far.
+func (cw *CaptureWriter) Captured() []byte {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	result := make([]byte, len(cw.captured))

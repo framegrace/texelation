@@ -57,7 +57,7 @@ func TestGreyBackgroundAfterScroll(t *testing.T) {
 	// Also get our grid for inspection
 	replayer := testutil.NewReplayer(rec)
 	replayer.PlayAll()
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 
 	// Log row 10-15 content and BG colors
 	t.Log("Inspecting rows 10-15:")
@@ -138,7 +138,7 @@ func TestGreyBlocksAfterAnimationEnd(t *testing.T) {
 
 	replayer := testutil.NewReplayer(rec)
 	replayer.PlayAll()
-	grid := replayer.GetGrid()
+	grid := replayer.Grid()
 
 	// Check if cells at animation location still have grey BG
 	greyCount := 0

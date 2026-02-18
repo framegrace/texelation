@@ -74,7 +74,7 @@ type BufferDelta struct {
 
 var (
 	ErrBufferTooLarge = errors.New("protocol: buffer delta exceeds limits")
-	errInvalidSpan    = errors.New("protocol: invalid span")
+	ErrInvalidSpan    = errors.New("protocol: invalid span")
 )
 
 // EncodeBufferDelta serialises the delta into a compact binary representation.
@@ -127,7 +127,7 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 		for _, span := range row.Spans {
 			textBytes := []byte(span.Text)
 			if len(textBytes) > 0xFFFF {
-				return nil, errInvalidSpan
+				return nil, ErrInvalidSpan
 			}
 			if err := binary.Write(buf, binary.LittleEndian, span.StartCol); err != nil {
 				return nil, err
@@ -153,7 +153,7 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 func DecodeBufferDelta(b []byte) (BufferDelta, error) {
 	var delta BufferDelta
 	if len(b) < 21 { // paneID(16)+revision(4)+flags(1)
-		return delta, errPayloadShort
+		return delta, ErrPayloadShort
 	}
 	copy(delta.PaneID[:], b[:16])
 	delta.Revision = binary.LittleEndian.Uint32(b[16:20])
@@ -161,14 +161,14 @@ func DecodeBufferDelta(b []byte) (BufferDelta, error) {
 	b = b[21:]
 
 	if len(b) < 2 {
-		return delta, errPayloadShort
+		return delta, ErrPayloadShort
 	}
 	styleCount := binary.LittleEndian.Uint16(b[:2])
 	b = b[2:]
 	delta.Styles = make([]StyleEntry, styleCount)
 	for i := 0; i < int(styleCount); i++ {
 		if len(b) < 12 { // attr(2) + fgModel(1)+fg(4)+bgModel(1)+bg(4)
-			return delta, errPayloadShort
+			return delta, ErrPayloadShort
 		}
 		delta.Styles[i].AttrFlags = binary.LittleEndian.Uint16(b[:2])
 		delta.Styles[i].FgModel = ColorModel(b[2])
@@ -179,14 +179,14 @@ func DecodeBufferDelta(b []byte) (BufferDelta, error) {
 	}
 
 	if len(b) < 2 {
-		return delta, errPayloadShort
+		return delta, ErrPayloadShort
 	}
 	rowCount := binary.LittleEndian.Uint16(b[:2])
 	b = b[2:]
 	delta.Rows = make([]RowDelta, rowCount)
 	for i := 0; i < int(rowCount); i++ {
 		if len(b) < 4 {
-			return delta, errPayloadShort
+			return delta, ErrPayloadShort
 		}
 		row := binary.LittleEndian.Uint16(b[:2])
 		spanCount := binary.LittleEndian.Uint16(b[2:4])
@@ -194,14 +194,14 @@ func DecodeBufferDelta(b []byte) (BufferDelta, error) {
 		spans := make([]CellSpan, spanCount)
 		for s := 0; s < int(spanCount); s++ {
 			if len(b) < 6 {
-				return delta, errPayloadShort
+				return delta, ErrPayloadShort
 			}
 			startCol := binary.LittleEndian.Uint16(b[:2])
 			textLen := binary.LittleEndian.Uint16(b[2:4])
 			styleIndex := binary.LittleEndian.Uint16(b[4:6])
 			b = b[6:]
 			if len(b) < int(textLen) {
-				return delta, errPayloadShort
+				return delta, ErrPayloadShort
 			}
 			text := string(b[:textLen])
 			b = b[textLen:]

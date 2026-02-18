@@ -144,8 +144,8 @@ func (lc *LiveCapture) SetShell(shell string) {
 	}
 }
 
-// GetByteCount returns the number of bytes captured so far.
-func (lc *LiveCapture) GetByteCount() int {
+// ByteCount returns the number of bytes captured so far.
+func (lc *LiveCapture) ByteCount() int {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 
@@ -196,9 +196,9 @@ func (lc *LiveCapture) IsFinalized() bool {
 	return lc.finalized
 }
 
-// GetRecording returns a copy of the current recording.
+// Recording returns a copy of the current recording.
 // Useful for inspection during capture.
-func (lc *LiveCapture) GetRecording() *Recording {
+func (lc *LiveCapture) Recording() *Recording {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 

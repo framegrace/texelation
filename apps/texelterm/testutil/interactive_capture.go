@@ -262,8 +262,8 @@ func (ic *InteractiveCapture) WaitForOutput(contains string, timeout time.Durati
 	return false
 }
 
-// GetOutput returns the current captured output.
-func (ic *InteractiveCapture) GetOutput() []byte {
+// Output returns the current captured output.
+func (ic *InteractiveCapture) Output() []byte {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 	result := make([]byte, ic.output.Len())
@@ -280,7 +280,7 @@ func (ic *InteractiveCapture) ToRecording() *Recording {
 			Description: "Interactive capture",
 			Timestamp:   time.Now(),
 		},
-		Sequences: ic.GetOutput(),
+		Sequences: ic.Output(),
 	}
 }
 

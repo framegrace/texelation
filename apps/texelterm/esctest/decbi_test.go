@@ -23,7 +23,7 @@ func Test_DECBI_Basic(t *testing.T) {
 	CUP(d, NewPoint(5, 6))
 	DECBI(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(4, 6))
 }
 
@@ -34,7 +34,7 @@ func Test_DECBI_NoWrapOnLeftEdge(t *testing.T) {
 	CUP(d, NewPoint(1, 2))
 	DECBI(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(1, 2))
 }
 
@@ -83,7 +83,7 @@ func Test_DECBI_LeftOfMargin(t *testing.T) {
 	DECBI(d)
 
 	// Should move cursor left to column 1 (no scrolling)
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(1, 1))
 }
 

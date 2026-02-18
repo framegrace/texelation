@@ -30,7 +30,7 @@ func Test_DECFI_Basic(t *testing.T) {
 	CUP(d, NewPoint(5, 6))
 	DECFI(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(6, 6))
 }
 
@@ -41,7 +41,7 @@ func Test_DECFI_NoWrapOnRightEdge(t *testing.T) {
 	CUP(d, NewPoint(80, 2))
 	DECFI(d)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(80, 2))
 }
 
@@ -90,7 +90,7 @@ func Test_DECFI_RightOfMargin(t *testing.T) {
 	DECFI(d)
 
 	// Should move cursor right to column 7 (no scrolling)
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos, NewPoint(7, 1))
 }
 

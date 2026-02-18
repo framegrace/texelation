@@ -514,13 +514,13 @@ func decodeUTF8(data []byte) (rune, int) {
 	return 0, 0 // Invalid
 }
 
-// GetGrid returns the current grid state.
-func (p *ANSIParser) GetGrid() [][]parser.Cell {
+// Grid returns the current grid state.
+func (p *ANSIParser) Grid() [][]parser.Cell {
 	return p.grid
 }
 
-// GetCursor returns the current cursor position.
-func (p *ANSIParser) GetCursor() (x, y int) {
+// Cursor returns the current cursor position.
+func (p *ANSIParser) Cursor() (x, y int) {
 	return p.cursorX, p.cursorY
 }
 

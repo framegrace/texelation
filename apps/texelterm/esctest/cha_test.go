@@ -19,7 +19,7 @@ func Test_CHA_DefaultParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CHA(d)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 3)
 }
@@ -29,7 +29,7 @@ func Test_CHA_ExplicitParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CHA(d, 10)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 10)
 	AssertEQ(t, position.Y, 3)
 }
@@ -39,8 +39,8 @@ func Test_CHA_OutOfBoundsLarge(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CHA(d, 9999)
-	position := d.GetCursorPosition()
-	width := d.GetScreenSize().Width
+	position := d.CursorPosition()
+	width := d.ScreenSize().Width
 	AssertEQ(t, position.X, width)
 	AssertEQ(t, position.Y, 3)
 }
@@ -50,7 +50,7 @@ func Test_CHA_ZeroParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CHA(d, 0)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 3)
 }
@@ -64,7 +64,7 @@ func Test_CHA_IgnoresScrollRegion(t *testing.T) {
 	DECSLRM(d, 5, 10)
 	CUP(d, NewPoint(5, 3))
 	CHA(d, 1)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 3)
 }
@@ -80,7 +80,7 @@ func Test_CHA_RespectsOriginMode(t *testing.T) {
 
 	// Move to center of region
 	CUP(d, NewPoint(7, 9))
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 7)
 	AssertEQ(t, position.Y, 9)
 
@@ -94,7 +94,7 @@ func Test_CHA_RespectsOriginMode(t *testing.T) {
 	CHA(d, 1)
 
 	// Check relative position while still in origin mode.
-	position = d.GetCursorPosition()
+	position = d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 
 	d.Write("X")

@@ -463,9 +463,9 @@ func (w *WriteAheadLog) writeMetadataLocked(state *ViewportState) error {
 	return nil
 }
 
-// GetRecoveredMetadata returns the metadata recovered from WAL replay.
+// RecoveredMetadata returns the metadata recovered from WAL replay.
 // Returns nil if no metadata was found in the WAL.
-func (w *WriteAheadLog) GetRecoveredMetadata() *ViewportState {
+func (w *WriteAheadLog) RecoveredMetadata() *ViewportState {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -914,7 +914,7 @@ func (w *WriteAheadLog) checkpointLocked() error {
 	}
 
 	// Update current metadata from WAL entries if present
-	// This ensures GetRecoveredMetadata returns the right value after checkpoint
+	// This ensures RecoveredMetadata returns the right value after checkpoint
 	if lastMetadata != nil {
 		w.currentMetadata = lastMetadata
 	}
