@@ -145,13 +145,14 @@ type DesktopEngine struct {
 
 // FloatingPanel represents an app floating above the workspace.
 type FloatingPanel struct {
-	app      App
-	pipeline RenderPipeline // For events and rendering (from PipelineProvider)
-	x, y     int
-	width    int
-	height   int
-	modal    bool
-	id       [16]byte
+	app         App
+	pipeline    RenderPipeline // For events and rendering (from PipelineProvider)
+	x, y        int
+	width       int
+	height      int
+	modal       bool
+	id          [16]byte
+	stopRefresh func() // stops the refresh notifier goroutine
 }
 
 func newFloatingPanelID(app App) [16]byte {
@@ -593,7 +594,12 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 	}
 
 	for _, sp := range d.statusPanes {
-		sp.app.SetRefreshNotifier(d.makeRefreshNotifier())
+		if sp.stopRefresh != nil {
+			sp.stopRefresh()
+		}
+		notifier, stop := d.makeRefreshNotifier()
+		sp.stopRefresh = stop
+		sp.app.SetRefreshNotifier(notifier)
 	}
 	d.recalculateLayout()
 	d.broadcastStateUpdate()
@@ -992,7 +998,8 @@ func (d *DesktopEngine) SendRefresh() {
 // makeRefreshNotifier creates a channel suitable for App.SetRefreshNotifier
 // that forwards to the desktop event loop. Use this for status panes and
 // floating panels that don't have a per-pane refresh forwarder.
-func (d *DesktopEngine) makeRefreshNotifier() chan<- bool {
+// The returned stop function closes the channel and terminates the goroutine.
+func (d *DesktopEngine) makeRefreshNotifier() (chan<- bool, func()) {
 	ch := make(chan bool, 1)
 	go func() {
 		for {
@@ -1007,7 +1014,7 @@ func (d *DesktopEngine) makeRefreshNotifier() chan<- bool {
 			}
 		}
 	}()
-	return ch
+	return ch, func() { close(ch) }
 }
 
 // Barrier blocks until the event loop has processed all previously-queued events.
