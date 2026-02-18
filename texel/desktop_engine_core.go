@@ -1114,11 +1114,6 @@ func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 			handler()
 		}
 	}
-	for _, ws := range d.workspaces {
-		if ws != nil {
-			ws.startRefreshMonitor()
-		}
-	}
 	d.refreshMu.Unlock()
 }
 
@@ -1235,10 +1230,6 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 				log.Printf("SwitchToWorkspace: Failed to create init app '%s'", d.InitAppName)
 			}
 		}
-	}
-
-	if handler := d.refreshHandlerFunc(); handler != nil && d.activeWorkspace != nil {
-		d.activeWorkspace.startRefreshMonitor()
 	}
 
 	// Apply current control mode state to the new workspace
