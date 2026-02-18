@@ -593,7 +593,7 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 	}
 
 	for _, sp := range d.statusPanes {
-		sp.app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
+		sp.app.SetRefreshNotifier(d.makeRefreshNotifier())
 	}
 	d.recalculateLayout()
 	d.broadcastStateUpdate()
@@ -946,6 +946,27 @@ func (d *DesktopEngine) SendRefresh() {
 	case d.refreshCh <- struct{}{}:
 	default:
 	}
+}
+
+// makeRefreshNotifier creates a channel suitable for App.SetRefreshNotifier
+// that forwards to the desktop event loop. Use this for status panes and
+// floating panels that don't have a per-pane refresh forwarder.
+func (d *DesktopEngine) makeRefreshNotifier() chan<- bool {
+	ch := make(chan bool, 1)
+	go func() {
+		for {
+			select {
+			case <-d.quit:
+				return
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+				d.SendRefresh()
+			}
+		}
+	}()
+	return ch
 }
 
 // Barrier blocks until the event loop has processed all previously-queued events.

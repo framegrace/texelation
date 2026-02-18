@@ -38,12 +38,11 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 	}
 
 	// Wire refresh notifier to pipeline (or app as fallback)
-	if d.activeWorkspace != nil {
-		if panel.pipeline != nil {
-			panel.pipeline.SetRefreshNotifier(d.activeWorkspace.refreshChan)
-		} else {
-			app.SetRefreshNotifier(d.activeWorkspace.refreshChan)
-		}
+	notifier := d.makeRefreshNotifier()
+	if panel.pipeline != nil {
+		panel.pipeline.SetRefreshNotifier(notifier)
+	} else {
+		app.SetRefreshNotifier(notifier)
 	}
 
 	// Inject app-level storage for floating panels (they don't have pane IDs)
