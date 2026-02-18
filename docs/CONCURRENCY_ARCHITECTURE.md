@@ -19,8 +19,7 @@ below.
 
 | Goroutine | Owner | Purpose |
 |-----------|-------|---------|
-| Event loop | `DesktopEngine` | Processes key/mouse events, modifies tree, renders |
-| Refresh monitor | `Workspace` (one per workspace) | Drains `refreshChan`, calls `refreshHandler` |
+| Event loop | `DesktopEngine` | Processes key/mouse/paste events, animation frames, pane refresh signals |
 | Animation ticker | `LayoutTransitionManager` | Interpolates split ratios at 60 fps |
 | Per-pane forwarder | `pane.setupRefreshForwarder` | Relays app refresh signals to workspace |
 | App goroutine | `AppLifecycleManager.StartApp` | Runs the embedded app (e.g. texelterm) |
@@ -33,14 +32,21 @@ below.
 | Checkpoint timer | `WriteAheadLog` | Periodic WAL→PageStore compaction |
 | Snapshot loop | `Server.startSnapshotLoop` | Periodic tree persistence |
 
+### Desktop Event Loop (`DesktopEngine.Run`)
+- **One per** DesktopEngine
+- **Started by** `go desktop.Run()` in server/standalone main
+- **Stopped by** `desktop.Close()` (sends to `quit` channel)
+- **Purpose**: Sole accessor of tree state. Processes key/mouse/paste events, animation frames, and pane refresh signals via select on eventCh, animCh, refreshCh, quit.
+- **Channels**: eventCh (cap 64), animCh (cap 16), refreshCh (cap 16)
+
 ### Data Flow (Server → Client)
 
 ```
 App writes to VTerm
   → VTerm marks dirty lines
   → pane.markDirty() increments renderGen (atomic)
-  → pane forwarder sends on workspace.refreshChan
-  → refresh monitor calls refreshHandler
+  → pane forwarder sends on desktop.refreshChan
+  → event loop receives on refreshCh
   → DesktopSink.publish()
   → DesktopPublisher.Publish()  [publisher.mu]
     → generates row diffs per pane
@@ -110,6 +116,7 @@ WriteAheadLog.mu  →  PageStore.mu
 | Lock | Type | File | Protects |
 |------|------|------|----------|
 | `TexelTerm.mu` | `sync.Mutex` | `term.go` | VTerm, parser, dimensions, PTY, process, palette, buf |
+| `TexelTerm.clipboardMu` | `sync.Mutex` | `term.go` | Protects `a.clipboard` field. Used by OSC 52 handlers (inside Parse callbacks) and SetClipboardService. Never nested with `a.mu`. |
 | `TexelTerm.stopOnce` | `sync.Once` | `term.go` | Ensures `stop` channel closed once |
 | `TexelTerm.closeOnce` | `sync.Once` | `term.go` | Ensures `closeCh` closed once |
 | `TexelTerm.wg` | `sync.WaitGroup` | `term.go` | Tracks PTY reader goroutine |
@@ -196,7 +203,6 @@ patterns. Documented here for awareness:
 | `lastPublishNanos` | `atomic.Int64` | `desktop_engine_core.go` | Publish duration metric |
 | `renderGen` | `atomic.Int32` | `pane.go` | Per-pane dirty generation counter |
 | `lastRendered` | `int32` | `pane.go` | Last rendered generation (event-loop only) |
-| `refreshMonitorOnce` | `sync.Once` | `workspace.go` | Ensures one monitor goroutine |
 | `transitions.mu` | `sync.Mutex` | `layout_transitions.go` | Animation state map |
 | `dispatcher.mu` | `sync.RWMutex` | `dispatcher.go` | Event listener slice |
 
@@ -204,35 +210,40 @@ patterns. Documented here for awareness:
 
 | Channel | File | Buffer | Purpose |
 |---------|------|--------|---------|
-| `refreshChan` | `workspace.go` | 16 | Pane → refresh monitor signals |
+| `eventCh` | `desktop_engine_core.go` | 64 | Key/mouse/paste events routed to event loop |
+| `animCh` | `desktop_engine_core.go` | 16 | Animation frame signals routed to event loop |
+| `refreshCh` | `desktop_engine_core.go` | 16 | Pane refresh signals routed to event loop |
 | `quit` | `desktop_engine_core.go` | 0 | Desktop shutdown signal |
 | `refreshStop` | `pane.go` | 0 | Per-pane forwarder shutdown |
 | `stopCh` | `layout_transitions.go` | 0 | Animation loop shutdown |
 
-### Single-Threaded Assumptions
+### Event Loop Ownership
 
-The desktop event loop owns these unprotected structures:
+The desktop event loop (`DesktopEngine.Run`) is the **sole owner** of these
+unprotected structures:
 
 - **Tree** (`tree.go`): `Root`, `ActiveLeaf`, `Node` pointers, `SplitRatios`
 - **Pane fields**: `absX0/Y0/X1/Y1`, `app`, `name`, `prevBuf`, `IsActive`
 - **Workspace fields**: `tree`, `resizeSelection`, `mouseResizeBorder`
 
-These are safe **only** because the event loop is the sole accessor.
+All access to these structures is serialized through the event loop. Other
+goroutines interact with the tree exclusively via channels:
+
+- **Key/mouse/paste events** are sent to `eventCh` by connection goroutines.
+  The event loop receives them and dispatches to the appropriate pane/app.
+
+- **Animation frames** are sent to `animCh` by the `LayoutTransitionManager`
+  ticker. The event loop applies ratio updates, recalculates layout, and
+  broadcasts tree snapshots. This eliminates the former race between the
+  animation goroutine and the event loop.
+
+- **Pane refresh signals** are sent to `refreshCh` by per-pane forwarders.
+  The event loop receives them and calls `Publish()`. This replaces the
+  former per-workspace refresh monitor goroutine.
 
 ### Cross-Thread Touchpoints
 
-1. **Refresh monitor** reads tree via `recalculateLayout()` → `resizeNode()`.
-   The event loop also modifies tree. Currently safe because the refresh
-   handler just calls `Publish()` which generates diffs from cached buffers,
-   not from the tree directly.
-
-2. **Animation goroutine** modifies `Node.SplitRatios` from a ticker callback,
-   then calls `recalculateLayout()` and `broadcastTreeChanged()`. The event loop
-   also modifies ratios during manual resize. This is **safe in practice** because
-   animation and manual resize don't overlap (animation is disabled during resize
-   mode), but there is no formal lock.
-
-3. **Per-pane forwarder** only touches `renderGen` (atomic) and `refreshChan`
+1. **Per-pane forwarder** only touches `renderGen` (atomic) and `refreshCh`
    (channel). No shared mutable state.
 
 ### Former Dead Code (Cleaned Up)
@@ -249,7 +260,7 @@ These are safe **only** because the event loop is the sole accessor.
 | Lock | Type | File | Protects |
 |------|------|------|----------|
 | `DesktopPublisher.mu` | `sync.Mutex` | `desktop_publisher.go` | Revisions map, prev buffers, notify callback |
-| `DesktopSink.mu` | `sync.Mutex` | `desktop_sink.go` | Publisher pointer (in `publish()` only) |
+| `DesktopSink.mu` | `sync.Mutex` | `desktop_sink.go` | Publisher pointer (all reads and writes) |
 | `Session.mu` | `sync.Mutex` | `session.go` | Diff queue, sequence counter, closed flag |
 | `Connection.writeMu` | `sync.Mutex` | `connection.go` | Network write serialization |
 | `Manager.mu` | `sync.RWMutex` | `manager.go` | Sessions map |
@@ -285,16 +296,10 @@ Dispatcher.mu (RLock)  →  (event handler callbacks)
 **Rule**: Manager and Publisher are outer locks; Session is inner. Never
 acquire Manager.mu or Publisher.mu while holding Session.mu.
 
-### Known Issue: DesktopSink.SetPublisher Race
+### Former Issue: DesktopSink.SetPublisher Race -- FIXED
 
-`SetPublisher()` writes `d.publisher` without holding `d.mu`. Meanwhile,
-`HandleKeyEvent`, `HandleMouseEvent`, `HandlePaste`, and `Publish` all
-read `d.publisher` without `d.mu`. Only the `publish()` callback (used
-as refresh handler) correctly uses `d.mu`.
-
-**Severity**: Low. `SetPublisher` is called once during server startup
-and once during shutdown. Unlikely to race in practice, but violates Go
-race detector rules.
+All publisher access now goes through `d.mu` (snapshot-under-lock pattern).
+Both `SetPublisher()` writes and method reads of `d.publisher` are protected.
 
 ---
 
@@ -343,49 +348,43 @@ inner lock is only acquired while the outer lock is already held.
 
 ## Known Issues (Severity-Ranked)
 
-### 1. Tree Structure Has No Formal Synchronization (Medium)
+### 1. Tree Structure Has No Formal Synchronization -- FIXED
 
 **Location**: `texel/tree.go`, `texel/workspace.go`, `texel/layout_transitions.go`
 
-The pane tree (`Root`, `ActiveLeaf`, `Node` pointers, `SplitRatios`) is accessed
-from three goroutines without locks:
-1. Event loop (modifications)
-2. Animation ticker (modifies `SplitRatios`)
-3. Refresh monitor (reads via `recalculateLayout`)
+**Was**: The pane tree was accessed from three goroutines (event loop,
+animation ticker, refresh monitor) without locks, relying on implicit
+mutual exclusion invariants.
 
-**Why it works today**: Animation and manual resize are mutually exclusive
-(animation pauses during resize mode). The refresh monitor calls `Publish()`
-which reads cached buffers, not tree geometry. But this relies on implicit
-invariants, not enforced contracts.
+**Fix**: The desktop event loop (`DesktopEngine.Run`) now serializes all
+tree access. Animation frames arrive via `animCh`, refresh signals via
+`refreshCh`, and events via `eventCh`. No goroutine other than the event
+loop touches tree state.
 
-**Risk**: A future change that breaks the mutual exclusion between animation
-and resize, or that makes the refresh monitor touch tree geometry, will
-introduce a data race.
+### 2. DesktopSink.SetPublisher Unsynchronized Write -- FIXED
 
-### 2. DesktopSink.SetPublisher Unsynchronized Write (Low)
+**Location**: `internal/runtime/server/desktop_sink.go`
 
-**Location**: `internal/runtime/server/desktop_sink.go:102`
+**Was**: `SetPublisher()` wrote `d.publisher` without `d.mu`. Other methods
+read it without `d.mu`.
 
-`SetPublisher()` writes `d.publisher` without `d.mu`. Other methods read
-`d.publisher` without `d.mu`. Only `publish()` (the refresh callback)
-correctly uses `d.mu`.
+**Fix**: All publisher access now goes through `d.mu` (snapshot-under-lock
+pattern). Both reads and writes are protected.
 
-### 3. TexelTerm Clipboard Callback May Deadlock (Low)
+### 3. TexelTerm Clipboard Callback May Deadlock -- FIXED
 
-**Location**: `apps/texelterm/term.go` ~lines 1382-1400
+**Location**: `apps/texelterm/term.go`
 
-`initializeVTermFirstRun()` installs clipboard handlers (OSC 52) that call
-`a.mu.Lock()`. The PTY reader loop calls `a.parser.Parse(r)` under `a.mu`.
-If the parser fires clipboard handlers synchronously during `Parse()`, the
-PTY reader goroutine would deadlock re-acquiring `a.mu`.
+**Was**: OSC 52 clipboard handlers called `a.mu.Lock()`, but the PTY reader
+already held `a.mu` when calling `Parse()`. If handlers fired inline during
+`Parse()`, this was a deadlock.
 
-**Why it works today**: Needs verification whether VTerm fires OSC 52
-handlers inline during `Parse()` or defers them. If inline, this is a
-live deadlock bug.
+**Fix**: A dedicated `clipboardMu` protects the `a.clipboard` field. OSC 52
+handlers no longer touch `a.mu`. `clipboardMu` is never nested with `a.mu`.
 
 ### 4. Workspace drawChan Dead Code (Fixed)
 
-Removed in this commit. Was declared and initialized but never used.
+Removed in a prior commit. Was declared and initialized but never used.
 
 ---
 
@@ -395,9 +394,10 @@ Removed in this commit. Was declared and initialized but never used.
    the outer lock first per the diagrams above. If the ordering doesn't work
    for your use case, refactor rather than invert.
 
-2. **Never add a new mutex to protect tree state.** The tree is owned by the
-   event loop. If you need cross-thread access, snapshot the data you need
-   while on the event loop, then pass the snapshot to the other goroutine.
+2. **The tree is owned by the desktop event loop goroutine.**
+   Never access tree state (Root, ActiveLeaf, Node.Children, Node.SplitRatios,
+   pane dimensions) from any goroutine other than the event loop. Use
+   SendEvent/SendRefresh/SendAnimationFrame to route work to the event loop.
 
 3. **Channels for signaling, mutexes for shared state.** Use channels for
    "something happened" notifications (refresh, shutdown, nudge). Use mutexes
