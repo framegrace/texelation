@@ -1386,6 +1386,10 @@ func (v *VTerm) Resize(width, height int) {
 	v.height = height
 
 	if v.inAltScreen {
+		// Save alt-screen cursor before any resize operations
+		altCursorX, altCursorY := v.cursorX, v.cursorY
+
+		// Resize alt buffer
 		newAltBuffer := make([][]Cell, v.height)
 		for i := range newAltBuffer {
 			newAltBuffer[i] = make([]Cell, v.width)
@@ -1395,7 +1399,21 @@ func (v *VTerm) Resize(width, height int) {
 			}
 		}
 		v.altBuffer = newAltBuffer
-		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
+
+		// Also resize the normal screen memory buffer so that when we exit
+		// alt screen, liveEdgeBase and viewport dimensions are consistent.
+		// Temporarily swap in the saved main cursor so memoryBufferResize
+		// adjusts it correctly for the new dimensions.
+		if v.IsMemoryBufferEnabled() {
+			v.cursorX, v.cursorY = v.savedMainCursorX, v.savedMainCursorY
+			v.memoryBufferResize(width, height)
+			v.savedMainCursorX = v.cursorX
+			v.savedMainCursorY = v.cursorY
+		}
+
+		// Restore alt-screen cursor, clamped to new alt buffer size
+		v.cursorX, v.cursorY = altCursorX, altCursorY
+		v.SetCursorPos(v.cursorY, v.cursorX)
 	} else {
 		// Use MemoryBuffer/ViewportWindow resize
 		v.memoryBufferResize(width, height)
