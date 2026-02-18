@@ -66,7 +66,6 @@ type Workspace struct {
 	desktop             *DesktopEngine
 	tree                *Tree
 	refreshChan         chan bool
-	drawChan            chan bool
 	dispatcher          *EventDispatcher
 	ShellAppFactory     AppFactory
 	appLifecycle        AppLifecycleManager
@@ -84,7 +83,6 @@ func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager
 		desktop:         desktop,
 		tree:            NewTree(),
 		refreshChan:     make(chan bool, 16),
-		drawChan:        make(chan bool, 1),
 		dispatcher:      NewEventDispatcher(),
 		ShellAppFactory: shellFactory,
 		appLifecycle:    lifecycle,
