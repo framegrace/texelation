@@ -289,8 +289,8 @@ func TestMouseCoordinator_NilGridProvider(t *testing.T) {
 	coord.HandleMouse(ev)
 }
 
-// TestMouseCoordinator_GetSelectionRange tests range retrieval.
-func TestMouseCoordinator_GetSelectionRange(t *testing.T) {
+// TestMouseCoordinator_SelectionRange tests range retrieval.
+func TestMouseCoordinator_SelectionRange(t *testing.T) {
 	vtermProv := newMockVTermProviderForCoord()
 	gridProv := newMockGridProvider(80, 24)
 	config := AutoScrollConfig{EdgeZone: 2, MaxScrollSpeed: 15}
@@ -300,7 +300,7 @@ func TestMouseCoordinator_GetSelectionRange(t *testing.T) {
 	coord.SetCallbacks(func() {}, func() {})
 
 	// Before any selection
-	_, _, _, _, ok := coord.GetSelectionRange()
+	_, _, _, _, ok := coord.SelectionRange()
 	if ok {
 		t.Error("expected no selection range before start")
 	}
@@ -314,7 +314,7 @@ func TestMouseCoordinator_GetSelectionRange(t *testing.T) {
 	coord.HandleMouse(ev)
 
 	// Range should be available (may be empty though)
-	coord.GetSelectionRange()
+	coord.SelectionRange()
 	// Just verify it doesn't panic
 }
 

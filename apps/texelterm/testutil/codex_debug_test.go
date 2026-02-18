@@ -125,14 +125,14 @@ func TestCodexDirectVsTmux(t *testing.T) {
 	directReplay := testutil.NewReplayer(directRec)
 	directReplay.PlayAll()
 	directReplay.SimulateRender()
-	directGrid := directReplay.GetGrid()
-	directCurX, directCurY := directReplay.GetCursor()
+	directGrid := directReplay.Grid()
+	directCurX, directCurY := directReplay.Cursor()
 
 	tmuxReplay := testutil.NewReplayer(tmuxRec)
 	tmuxReplay.PlayAll()
 	tmuxReplay.SimulateRender()
-	tmuxGrid := tmuxReplay.GetGrid()
-	tmuxCurX, tmuxCurY := tmuxReplay.GetCursor()
+	tmuxGrid := tmuxReplay.Grid()
+	tmuxCurX, tmuxCurY := tmuxReplay.Cursor()
 
 	t.Logf("Direct cursor: (%d,%d)", directCurX, directCurY)
 	t.Logf("Tmux cursor:   (%d,%d)", tmuxCurX, tmuxCurY)
@@ -248,7 +248,7 @@ func TestCodexSavedCompare(t *testing.T) {
 	tmuxReplay.SimulateRender()
 
 	result := testutil.EnhancedCompareGrids(
-		tmuxReplay.GetGrid(), directReplay.GetGrid(),
+		tmuxReplay.Grid(), directReplay.Grid(),
 		directRec.Metadata.Width, directRec.Metadata.Height,
 	)
 
@@ -298,8 +298,8 @@ func TestCodexGridDump(t *testing.T) {
 		replayer.PlayAll()
 		replayer.SimulateRender()
 
-		grid := replayer.GetGrid()
-		x, y := replayer.GetCursor()
+		grid := replayer.Grid()
+		x, y := replayer.Cursor()
 
 		t.Logf("\n=== %s Grid (%dx%d, %d bytes) ===", name,
 			rec.Metadata.Width, rec.Metadata.Height, len(rec.Sequences))
@@ -342,8 +342,8 @@ func TestCodexPromptCellInspection(t *testing.T) {
 	replayer := testutil.NewReplayer(rec)
 	replayer.PlayAll()
 	replayer.SimulateRender()
-	grid := replayer.GetGrid()
-	curX, curY := replayer.GetCursor()
+	grid := replayer.Grid()
+	curX, curY := replayer.Cursor()
 
 	t.Logf("Grid: %dx%d, Cursor: (%d,%d)", rec.Metadata.Width, rec.Metadata.Height, curX, curY)
 
@@ -486,8 +486,8 @@ func TestCodexRenderPipelineTrace(t *testing.T) {
 	replayer := testutil.NewReplayer(rec)
 	replayer.PlayAll()
 	replayer.SimulateRender()
-	grid := replayer.GetGrid()
-	curX, curY := replayer.GetCursor()
+	grid := replayer.Grid()
+	curX, curY := replayer.Cursor()
 
 	t.Logf("Grid: %dx%d, Cursor: (%d,%d)", rec.Metadata.Width, rec.Metadata.Height, curX, curY)
 

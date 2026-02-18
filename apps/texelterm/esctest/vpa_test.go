@@ -19,12 +19,12 @@ func Test_VPA_DefaultParams(t *testing.T) {
 	d := NewDriver(80, 24)
 	VPA(d, 6)
 
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.Y, 6)
 
 	VPA(d)
 
-	position = d.GetCursorPosition()
+	position = d.CursorPosition()
 	AssertEQ(t, position.Y, 1)
 }
 
@@ -35,11 +35,11 @@ func Test_VPA_StopsAtBottomEdge(t *testing.T) {
 	CUP(d, NewPoint(6, 5))
 
 	// Try to move 10 past the bottom edge
-	size := d.GetScreenSize()
+	size := d.ScreenSize()
 	VPA(d, size.Height+10)
 
 	// Ensure at the bottom edge on same column
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 6)
 	AssertEQ(t, position.Y, size.Height)
 }
@@ -50,7 +50,7 @@ func Test_VPA_DoesNotChangeColumn(t *testing.T) {
 	CUP(d, NewPoint(6, 5))
 	VPA(d, 2)
 
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 6)
 	AssertEQ(t, position.Y, 2)
 }
@@ -66,7 +66,7 @@ func Test_VPA_IgnoresOriginMode(t *testing.T) {
 
 	// Move to center of region
 	CUP(d, NewPoint(7, 9))
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.Y, 9)
 	AssertEQ(t, position.X, 7)
 
@@ -76,6 +76,6 @@ func Test_VPA_IgnoresOriginMode(t *testing.T) {
 	// Move to 2nd line
 	VPA(d, 2)
 
-	position = d.GetCursorPosition()
+	position = d.CursorPosition()
 	AssertEQ(t, position.Y, 2)
 }

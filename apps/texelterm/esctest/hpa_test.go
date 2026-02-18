@@ -20,11 +20,11 @@ func Test_HPA_DefaultParams(t *testing.T) {
 
 	// Move to column 6
 	HPA(d, 6)
-	AssertEQ(t, d.GetCursorPosition().X, 6)
+	AssertEQ(t, d.CursorPosition().X, 6)
 
 	// HPA with no params should move to column 1
 	HPA(d)
-	AssertEQ(t, d.GetCursorPosition().X, 1)
+	AssertEQ(t, d.CursorPosition().X, 1)
 }
 
 // Test_HPA_StopsAtRightEdge tests that HPA won't go past the right edge.
@@ -38,7 +38,7 @@ func Test_HPA_StopsAtRightEdge(t *testing.T) {
 	HPA(d, 80+10)
 
 	// Should be at right edge on same row
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 80)
 	AssertEQ(t, pos.Y, 6)
 }
@@ -50,7 +50,7 @@ func Test_HPA_DoesNotChangeRow(t *testing.T) {
 	CUP(d, NewPoint(5, 6))
 	HPA(d, 2)
 
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 2)
 	AssertEQ(t, pos.Y, 6)
 }
@@ -66,7 +66,7 @@ func Test_HPA_IgnoresOriginMode(t *testing.T) {
 
 	// Move to center of region
 	CUP(d, NewPoint(7, 9))
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 7)
 	AssertEQ(t, pos.Y, 9)
 
@@ -76,6 +76,6 @@ func Test_HPA_IgnoresOriginMode(t *testing.T) {
 	// Move to column 2 - should be absolute, not relative to margins
 	HPA(d, 2)
 
-	pos = d.GetCursorPosition()
+	pos = d.CursorPosition()
 	AssertEQ(t, pos.X, 2)
 }

@@ -350,7 +350,7 @@ func (s *ScrollBar) recomputeMinimap(height int, gen uint64, searchLines map[int
 		}
 
 		// Get ALL lines from disk + memory
-		allLines, globalOffset, totalLines := s.vterm.GetAllLogicalLines()
+		allLines, globalOffset, totalLines := s.vterm.AllLogicalLines()
 
 		if totalLines <= 0 || len(allLines) == 0 {
 			s.mu.Lock()
@@ -951,7 +951,7 @@ func (s *ScrollBar) HandleClick(x, y int) (int64, bool) {
 	}
 
 	// Get total lines
-	_, _, totalLines := s.vterm.GetAllLogicalLines()
+	_, _, totalLines := s.vterm.AllLogicalLines()
 	if totalLines <= 0 {
 		return 0, false
 	}

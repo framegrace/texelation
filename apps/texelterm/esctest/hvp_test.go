@@ -19,13 +19,13 @@ func Test_HVP_DefaultParams(t *testing.T) {
 	d := NewDriver(80, 24)
 	HVP(d, NewPoint(6, 3))
 
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 6)
 	AssertEQ(t, position.Y, 3)
 
 	HVP(d)
 
-	position = d.GetCursorPosition()
+	position = d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 1)
 }
@@ -33,10 +33,10 @@ func Test_HVP_DefaultParams(t *testing.T) {
 // Test_HVP_OutOfBoundsParams tests that with overly large parameters, HVP moves as far as possible.
 func Test_HVP_OutOfBoundsParams(t *testing.T) {
 	d := NewDriver(80, 24)
-	size := d.GetScreenSize()
+	size := d.ScreenSize()
 	HVP(d, NewPoint(size.Width+10, size.Height+10))
 
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, size.Width)
 	AssertEQ(t, position.Y, size.Height)
 }
@@ -52,7 +52,7 @@ func Test_HVP_RespectsOriginMode(t *testing.T) {
 
 	// Move to center of region
 	HVP(d, NewPoint(7, 9))
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 7)
 	AssertEQ(t, position.Y, 9)
 
@@ -63,7 +63,7 @@ func Test_HVP_RespectsOriginMode(t *testing.T) {
 	HVP(d, NewPoint(1, 1))
 
 	// Check relative position while still in origin mode.
-	position = d.GetCursorPosition()
+	position = d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 1)
 

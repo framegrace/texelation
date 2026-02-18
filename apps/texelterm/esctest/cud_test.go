@@ -19,7 +19,7 @@ func Test_CUD_DefaultParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CUD(d)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 5)
 	AssertEQ(t, position.Y, 4)
 }
@@ -29,16 +29,16 @@ func Test_CUD_ExplicitParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(1, 3))
 	CUD(d, 2)
-	AssertEQ(t, d.GetCursorPosition().Y, 5)
+	AssertEQ(t, d.CursorPosition().Y, 5)
 }
 
 // Test_CUD_StopsAtBottomLine tests that CUD moves the cursor down, stopping at the last line.
 func Test_CUD_StopsAtBottomLine(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(1, 3))
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	CUD(d, height)
-	AssertEQ(t, d.GetCursorPosition().Y, height)
+	AssertEQ(t, d.CursorPosition().Y, height)
 }
 
 // Test_CUD_StopsAtBottomLineWhenBegunBelowScrollRegion tests that when the cursor starts below
@@ -53,11 +53,11 @@ func Test_CUD_StopsAtBottomLineWhenBegunBelowScrollRegion(t *testing.T) {
 	CUP(d, NewPoint(1, 6))
 
 	// Move it down by a lot
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	CUD(d, height)
 
 	// Ensure it stopped at the bottom of the screen
-	AssertEQ(t, d.GetCursorPosition().Y, height)
+	AssertEQ(t, d.CursorPosition().Y, height)
 }
 
 // Test_CUD_StopsAtBottomMarginInScrollRegion tests that when the cursor starts within the scroll
@@ -75,5 +75,5 @@ func Test_CUD_StopsAtBottomMarginInScrollRegion(t *testing.T) {
 	CUD(d, 99)
 
 	// Ensure it stopped at the bottom of the scroll region.
-	AssertEQ(t, d.GetCursorPosition().Y, 4)
+	AssertEQ(t, d.CursorPosition().Y, 4)
 }

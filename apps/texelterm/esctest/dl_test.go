@@ -19,7 +19,7 @@ import (
 
 // prepare fills the screen with 4-char line numbers (0001, 0002, ...) and places cursor at (1,2).
 func prepare(d *Driver) {
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	for i := 0; i < height; i++ {
 		y := i + 1
 		CUP(d, NewPoint(1, y))
@@ -45,7 +45,7 @@ func Test_DL_DefaultParam(t *testing.T) {
 	prepare(d)
 	DL(d)
 
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	expected := []string{}
 	for y := 1; y <= height; y++ {
 		if y != 2 {
@@ -63,7 +63,7 @@ func Test_DL_ExplicitParam(t *testing.T) {
 	prepare(d)
 	DL(d, 2)
 
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	expected := []string{}
 	for y := 1; y <= height; y++ {
 		if y < 2 || y > 3 {
@@ -80,7 +80,7 @@ func Test_DL_DeleteMoreThanVisible(t *testing.T) {
 	d := NewDriver(80, 24)
 	prepare(d)
 
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	DL(d, height*2)
 
 	expected := []string{"0001"}

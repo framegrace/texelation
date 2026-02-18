@@ -437,7 +437,7 @@ func (d *DesktopEngine) broadcastStateUpdate() {
 			title = d.zoomedPane.Pane.getTitle()
 		}
 	} else {
-		title = d.activeWorkspace.tree.GetActiveTitle()
+		title = d.activeWorkspace.tree.ActiveTitle()
 	}
 
 	allWsIDs := make([]int, 0, len(d.workspaces))
@@ -523,7 +523,7 @@ func (d *DesktopEngine) currentStatePayload(allWsIDs []int, title string) StateP
 				title = d.zoomedPane.Pane.getTitle()
 			}
 		} else if d.activeWorkspace != nil {
-			title = d.activeWorkspace.tree.GetActiveTitle()
+			title = d.activeWorkspace.tree.ActiveTitle()
 		}
 	}
 	workspaceID := 0

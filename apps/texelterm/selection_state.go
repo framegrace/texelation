@@ -166,8 +166,8 @@ func (s *SelectionStateMachine) IsRendered() bool {
 	return s.selection.Rendered && (s.state != StateIdle || s.state == StateFinished)
 }
 
-// GetSelection returns the current selection for rendering.
-func (s *SelectionStateMachine) GetSelection() Selection {
+// Selection returns the current selection for rendering.
+func (s *SelectionStateMachine) Selection() Selection {
 	return s.selection
 }
 
@@ -176,9 +176,9 @@ func (s *SelectionStateMachine) State() SelectionState {
 	return s.state
 }
 
-// GetSelectionRange returns the normalized selection range in content coordinates.
+// SelectionRange returns the normalized selection range in content coordinates.
 // Returns (startLine, startOffset, endLine, endOffset, ok).
-func (s *SelectionStateMachine) GetSelectionRange() (startLine int64, startOffset int, endLine int64, endOffset int, ok bool) {
+func (s *SelectionStateMachine) SelectionRange() (startLine int64, startOffset int, endLine int64, endOffset int, ok bool) {
 	if !s.selection.Rendered {
 		return 0, 0, 0, 0, false
 	}
@@ -304,7 +304,7 @@ func (s *SelectionStateMachine) buildSelectionText() string {
 		return ""
 	}
 
-	startLine, startOffset, endLine, endOffset, ok := s.GetSelectionRange()
+	startLine, startOffset, endLine, endOffset, ok := s.SelectionRange()
 	if !ok {
 		return ""
 	}

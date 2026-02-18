@@ -69,9 +69,9 @@ func (d *Driver) WriteRaw(data string) {
 	}
 }
 
-// GetCursorPosition returns the current cursor position (1-indexed).
+// CursorPosition returns the current cursor position (1-indexed).
 // In origin mode, returns position relative to scroll region margins.
-func (d *Driver) GetCursorPosition() Point {
+func (d *Driver) CursorPosition() Point {
 	// VTerm uses 0-indexed cursor, but VT standards use 1-indexed
 	x, y := d.vterm.Cursor()
 
@@ -85,8 +85,8 @@ func (d *Driver) GetCursorPosition() Point {
 	return NewPoint(x+1, y+1)
 }
 
-// GetScreenSize returns the terminal dimensions in cells.
-func (d *Driver) GetScreenSize() Size {
+// ScreenSize returns the terminal dimensions in cells.
+func (d *Driver) ScreenSize() Size {
 	return NewSize(d.width, d.height)
 }
 

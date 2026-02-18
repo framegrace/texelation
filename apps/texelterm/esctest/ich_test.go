@@ -18,10 +18,10 @@ import "testing"
 func Test_ICH_DefaultParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(1, 1))
-	AssertEQ(t, d.GetCursorPosition().X, 1)
+	AssertEQ(t, d.CursorPosition().X, 1)
 	d.Write("abcdefg")
 	CUP(d, NewPoint(2, 1))
-	AssertEQ(t, d.GetCursorPosition().X, 2)
+	AssertEQ(t, d.CursorPosition().X, 2)
 	ICH(d)
 
 	AssertScreenCharsInRectEqual(t, d, NewRect(1, 1, 8, 1),
@@ -32,10 +32,10 @@ func Test_ICH_DefaultParam(t *testing.T) {
 func Test_ICH_ExplicitParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(1, 1))
-	AssertEQ(t, d.GetCursorPosition().X, 1)
+	AssertEQ(t, d.CursorPosition().X, 1)
 	d.Write("abcdefg")
 	CUP(d, NewPoint(2, 1))
-	AssertEQ(t, d.GetCursorPosition().X, 2)
+	AssertEQ(t, d.CursorPosition().X, 2)
 	ICH(d, 2)
 
 	AssertScreenCharsInRectEqual(t, d, NewRect(1, 1, 9, 1),
@@ -69,7 +69,7 @@ func Test_ICH_IsNoOpWhenCursorBeginsOutsideScrollRegion(t *testing.T) {
 // Test_ICH_ScrollOffRightEdge tests ICH behavior when pushing text off the right edge.
 func Test_ICH_ScrollOffRightEdge(t *testing.T) {
 	d := NewDriver(80, 24)
-	width := d.GetScreenSize().Width
+	width := d.ScreenSize().Width
 	s := "abcdefg"
 	startX := width - len(s) + 1
 	CUP(d, NewPoint(startX, 1))
@@ -86,7 +86,7 @@ func Test_ICH_ScrollOffRightEdge(t *testing.T) {
 // Test_ICH_ScrollEntirelyOffRightEdge tests ICH behavior when pushing all text off the right edge.
 func Test_ICH_ScrollEntirelyOffRightEdge(t *testing.T) {
 	d := NewDriver(80, 24)
-	width := d.GetScreenSize().Width
+	width := d.ScreenSize().Width
 	CUP(d, NewPoint(1, 1))
 	d.Write(Repeat("x", width))
 	CUP(d, NewPoint(1, 1))

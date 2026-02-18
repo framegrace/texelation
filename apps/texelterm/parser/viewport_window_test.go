@@ -504,7 +504,7 @@ func TestViewportWindow_BasicRendering(t *testing.T) {
 	mb := setupTestBuffer([]string{"Hello", "World"}, 80)
 	vw := NewViewportWindow(mb, 80, 24)
 
-	grid := vw.GetVisibleGrid()
+	grid := vw.VisibleGrid()
 
 	if len(grid) != 24 {
 		t.Fatalf("expected height 24, got %d", len(grid))
@@ -521,7 +521,7 @@ func TestViewportWindow_EmptyBuffer(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 	vw := NewViewportWindow(mb, 80, 24)
 
-	grid := vw.GetVisibleGrid()
+	grid := vw.VisibleGrid()
 
 	if len(grid) != 24 {
 		t.Fatalf("expected height 24, got %d", len(grid))
@@ -572,7 +572,7 @@ func TestViewportWindow_Resize(t *testing.T) {
 	vw := NewViewportWindow(mb, 80, 24)
 
 	// Get initial grid
-	grid1 := vw.GetVisibleGrid()
+	grid1 := vw.VisibleGrid()
 
 	// Resize
 	vw.Resize(40, 12)
@@ -585,7 +585,7 @@ func TestViewportWindow_Resize(t *testing.T) {
 	}
 
 	// Get grid after resize
-	grid2 := vw.GetVisibleGrid()
+	grid2 := vw.VisibleGrid()
 
 	if len(grid2) != 12 {
 		t.Fatalf("expected height 12 after resize, got %d", len(grid2))
@@ -609,7 +609,7 @@ func TestViewportWindow_FixedWidthLines(t *testing.T) {
 
 	vw := NewViewportWindow(mb, 40, 10) // Narrower viewport
 
-	grid := vw.GetVisibleGrid()
+	grid := vw.VisibleGrid()
 
 	// Fixed-width lines should clip, not wrap
 	// The grid should have exactly 10 rows (viewport height)
@@ -623,22 +623,22 @@ func TestViewportWindow_CacheInvalidation(t *testing.T) {
 	vw := NewViewportWindow(mb, 80, 24)
 
 	// Get grid (populates cache)
-	_ = vw.GetVisibleGrid()
+	_ = vw.VisibleGrid()
 	hits1, misses1 := vw.CacheStats()
 
 	// Get grid again (should hit cache)
-	_ = vw.GetVisibleGrid()
+	_ = vw.VisibleGrid()
 	hits2, _ := vw.CacheStats()
 
 	if hits2 <= hits1 {
-		t.Error("expected cache hit on second GetVisibleGrid")
+		t.Error("expected cache hit on second VisibleGrid")
 	}
 
 	// Modify content
 	mb.Write('X', DefaultFG, DefaultBG, 0)
 
 	// Get grid (should miss - content changed)
-	_ = vw.GetVisibleGrid()
+	_ = vw.VisibleGrid()
 	_, misses3 := vw.CacheStats()
 
 	if misses3 <= misses1 {
@@ -683,7 +683,7 @@ func TestViewportWindow_Concurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
-				grid := vw.GetVisibleGrid()
+				grid := vw.VisibleGrid()
 				_ = grid
 				_ = vw.IsAtLiveEdge()
 				_ = vw.Width()
@@ -713,7 +713,7 @@ func TestViewportWindow_Concurrency(t *testing.T) {
 // --- Resize Stability Tests ---
 
 // TestViewportWindow_RapidHeightChange_GridStability verifies that the grid
-// produced by GetVisibleGrid() has no duplicate content rows and the bottom
+// produced by VisibleGrid() has no duplicate content rows and the bottom
 // content (newest lines) is stable across rapid height changes.
 // This catches regressions in VisibleRange/physicalLinesToGrid math.
 func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
@@ -764,7 +764,7 @@ func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
 
 	// Helper: verify grid matches independently-computed expected output.
 	// This rebuilds the expected grid from scratch using the same components
-	// but without going through GetVisibleGrid's caching layer.
+	// but without going through VisibleGrid's caching layer.
 	checkGridCorrect := func(t *testing.T, grid [][]Cell, height int) {
 		t.Helper()
 		// Independently compute the expected visible range
@@ -808,7 +808,7 @@ func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
 	t.Run("Shrinking", func(t *testing.T) {
 		for h := 30; h >= 10; h-- {
 			vw.Resize(width, h)
-			grid := vw.GetVisibleGrid()
+			grid := vw.VisibleGrid()
 
 			if len(grid) != h {
 				t.Fatalf("height=%d: grid has %d rows, expected %d", h, len(grid), h)
@@ -827,7 +827,7 @@ func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
 		vw.Resize(width, 10)
 		for h := 10; h <= 30; h++ {
 			vw.Resize(width, h)
-			grid := vw.GetVisibleGrid()
+			grid := vw.VisibleGrid()
 
 			if len(grid) != h {
 				t.Fatalf("height=%d: grid has %d rows, expected %d", h, len(grid), h)
@@ -843,7 +843,7 @@ func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			h := 15 + (i%10)*2 // heights: 15,17,19,21,23,25,27,29,31,33,15,17,...
 			vw.Resize(width, h)
-			grid := vw.GetVisibleGrid()
+			grid := vw.VisibleGrid()
 
 			if len(grid) != h {
 				t.Fatalf("iter=%d height=%d: grid has %d rows", i, h, len(grid))
@@ -859,12 +859,12 @@ func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
 	// should match the bottom N-1 rows of the smaller grid.
 	t.Run("BottomContentStability", func(t *testing.T) {
 		vw.Resize(width, 20)
-		prevGrid := vw.GetVisibleGrid()
+		prevGrid := vw.VisibleGrid()
 		prevRows := gridContentRows(prevGrid)
 
 		for h := 19; h >= 10; h-- {
 			vw.Resize(width, h)
-			grid := vw.GetVisibleGrid()
+			grid := vw.VisibleGrid()
 			rows := gridContentRows(grid)
 
 			// The bottom h rows of the previous grid (height h+1) should be
@@ -886,12 +886,12 @@ func TestViewportWindow_RapidHeightChange_GridStability(t *testing.T) {
 		}
 	})
 
-	// Test 5: Cache consistency — two consecutive GetVisibleGrid calls return identical grids
+	// Test 5: Cache consistency — two consecutive VisibleGrid calls return identical grids
 	t.Run("CacheConsistency", func(t *testing.T) {
 		for h := 10; h <= 30; h += 5 {
 			vw.Resize(width, h)
-			grid1 := vw.GetVisibleGrid()
-			grid2 := vw.GetVisibleGrid()
+			grid1 := vw.VisibleGrid()
+			grid2 := vw.VisibleGrid()
 
 			for y := 0; y < h; y++ {
 				s1 := vwCellsToString(grid1[y])
@@ -1000,7 +1000,7 @@ func TestViewportWindow_ToggleOverlay(t *testing.T) {
 	}
 
 	// Overlay is already enabled by default
-	grid1 := vw.GetVisibleGrid()
+	grid1 := vw.VisibleGrid()
 	row0text := ""
 	for _, c := range grid1[0] {
 		if c.Rune != 0 && c.Rune != ' ' {
@@ -1013,7 +1013,7 @@ func TestViewportWindow_ToggleOverlay(t *testing.T) {
 
 	// Toggle to original
 	vw.SetShowOverlay(false)
-	grid2 := vw.GetVisibleGrid()
+	grid2 := vw.VisibleGrid()
 	row0text = ""
 	for _, c := range grid2[0] {
 		if c.Rune != 0 && c.Rune != ' ' {
@@ -1027,7 +1027,7 @@ func TestViewportWindow_ToggleOverlay(t *testing.T) {
 
 // --- Benchmark Tests ---
 
-func BenchmarkViewportWindow_GetVisibleGrid_CacheHit(b *testing.B) {
+func BenchmarkViewportWindow_VisibleGrid_CacheHit(b *testing.B) {
 	lines := make([]string, 100)
 	for i := range lines {
 		lines[i] = "Benchmark test line content"
@@ -1036,15 +1036,15 @@ func BenchmarkViewportWindow_GetVisibleGrid_CacheHit(b *testing.B) {
 	vw := NewViewportWindow(mb, 80, 24)
 
 	// Warm up cache
-	vw.GetVisibleGrid()
+	vw.VisibleGrid()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = vw.GetVisibleGrid()
+		_ = vw.VisibleGrid()
 	}
 }
 
-func BenchmarkViewportWindow_GetVisibleGrid_CacheMiss(b *testing.B) {
+func BenchmarkViewportWindow_VisibleGrid_CacheMiss(b *testing.B) {
 	lines := make([]string, 100)
 	for i := range lines {
 		lines[i] = "Benchmark test line content"
@@ -1055,7 +1055,7 @@ func BenchmarkViewportWindow_GetVisibleGrid_CacheMiss(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		vw.InvalidateCache()
-		_ = vw.GetVisibleGrid()
+		_ = vw.VisibleGrid()
 	}
 }
 

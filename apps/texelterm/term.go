@@ -557,7 +557,7 @@ func (a *TexelTerm) applySelectionHighlightLocked(buf [][]texelcore.Cell) {
 		return
 	}
 	// Selection range is in content coordinates (logicalLine, charOffset)
-	startLine, startOffset, endLine, endOffset, ok := a.mouseCoordinator.GetSelectionRange()
+	startLine, startOffset, endLine, endOffset, ok := a.mouseCoordinator.SelectionRange()
 	if !ok {
 		return
 	}

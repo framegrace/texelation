@@ -20,7 +20,7 @@ func Test_NEL_Basic(t *testing.T) {
 
 	CUP(d, NewPoint(5, 3))
 	NEL(d)
-	pos := d.GetCursorPosition()
+	pos := d.CursorPosition()
 	AssertEQ(t, pos.X, 1)
 	AssertEQ(t, pos.Y, 4)
 }
@@ -40,12 +40,12 @@ func Test_NEL_Scrolls(t *testing.T) {
 
 	// Move down, ensure no scroll yet
 	NEL(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 24))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 24))
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 22, 2, 24), []string{" ", "a", "b"})
 
 	// Move down, ensure scroll
 	NEL(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 24))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 24))
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 22, 2, 24), []string{"a", "b", " "})
 }
 
@@ -62,7 +62,7 @@ func Test_NEL_ScrollsInTopBottomRegionStartingAbove(t *testing.T) {
 	NEL(d) // To 4
 	NEL(d) // To 5
 	NEL(d) // Stay at 5 and scroll x up one line
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 5))
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 4, 2, 5), []string{"x", " "})
 }
 
@@ -78,7 +78,7 @@ func Test_NEL_ScrollsInTopBottomRegionStartingWithin(t *testing.T) {
 	CUP(d, NewPoint(2, 4))
 	NEL(d) // To 5
 	NEL(d) // Stay at 5 and scroll x up one line
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 5))
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 4, 2, 5), []string{"x", " "})
 }
 
@@ -97,30 +97,30 @@ func Test_NEL_MovesDoesNotScrollOutsideLeftRight(t *testing.T) {
 	CUP(d, NewPoint(6, 5))
 	NEL(d)
 	// Cursor won't pass bottom or scroll
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 5))
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 
 	// Cursor can move down a line without scrolling
 	CUP(d, NewPoint(6, 4))
 	NEL(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 5))
 
 	// Try to move past the bottom of the screen but to the right of the left-right region
 	CUP(d, NewPoint(6, 24))
 	NEL(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 24))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 24))
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 
 	// Move past bottom margin but to the left of the left-right region
 	CUP(d, NewPoint(1, 5))
 	NEL(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 5))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 5))
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 
 	// Try to move past the bottom of the screen but to the left of the left-right region
 	CUP(d, NewPoint(1, 24))
 	NEL(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 24))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 24))
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 }
 
@@ -142,7 +142,7 @@ func Test_NEL_StopsAtBottomLineWhenBegunBelowScrollRegion(t *testing.T) {
 	}
 
 	// Ensure it stopped at the bottom of the screen
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 24))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 24))
 
 	// Ensure no scroll
 	AssertScreenCharsInRectEqual(t, d, NewRect(1, 6, 1, 6), []string{"x"})

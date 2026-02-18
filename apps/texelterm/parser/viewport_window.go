@@ -30,7 +30,7 @@
 // Thread-safety:
 //
 //	All public methods are thread-safe via RWMutex.
-//	Read operations (GetVisibleGrid, coordinate queries) use read locks.
+//	Read operations (VisibleGrid, coordinate queries) use read locks.
 //	Write operations (Scroll, Resize) use write locks.
 
 package parser
@@ -105,10 +105,10 @@ func (vw *ViewportWindow) Reader() ContentReader {
 
 // --- Core Rendering ---
 
-// GetVisibleGrid returns the current viewport as a 2D cell grid.
+// VisibleGrid returns the current viewport as a 2D cell grid.
 // This is the primary rendering method. The grid is [height][width] cells.
 // Caches the result; subsequent calls return cached grid if content unchanged.
-func (vw *ViewportWindow) GetVisibleGrid() [][]Cell {
+func (vw *ViewportWindow) VisibleGrid() [][]Cell {
 	// Full lock required: VisibleRange calls ensureIndexValid which mutates
 	// the PhysicalLineIndex (Build, HandleAppend, ensurePrefixSum).
 	vw.mu.Lock()
@@ -271,7 +271,7 @@ func (vw *ViewportWindow) TotalPhysicalLines() int64 {
 // --- Resize ---
 
 // Resize changes the viewport dimensions.
-// Invalidates cache and triggers reflow on next GetVisibleGrid().
+// Invalidates cache and triggers reflow on next VisibleGrid().
 func (vw *ViewportWindow) Resize(newWidth, newHeight int) {
 	if newWidth <= 0 {
 		newWidth = DefaultWidth
@@ -365,7 +365,7 @@ func (vw *ViewportWindow) ContentToViewport(globalLineIdx int64, charOffset int)
 // --- Cache Management ---
 
 // InvalidateCache clears the cached grid.
-// Next GetVisibleGrid() call will rebuild from MemoryBuffer.
+// Next VisibleGrid() call will rebuild from MemoryBuffer.
 func (vw *ViewportWindow) InvalidateCache() {
 	vw.mu.Lock()
 	defer vw.mu.Unlock()

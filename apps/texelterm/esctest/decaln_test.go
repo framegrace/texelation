@@ -35,7 +35,7 @@ func Test_DECALN_MovesCursorHome(t *testing.T) {
 
 	CUP(d, NewPoint(5, 5))
 	DECALN(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 1))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 1))
 }
 
 // Test_DECALN_ClearsMargins tests that DECALN clears (resets) margins.
@@ -50,20 +50,20 @@ func Test_DECALN_ClearsMargins(t *testing.T) {
 	// Verify we can pass the top margin
 	CUP(d, NewPoint(2, 4))
 	CUU(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 3))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 3))
 
 	// Verify we can pass the bottom margin
 	CUP(d, NewPoint(2, 5))
 	CUD(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 6))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 6))
 
 	// Verify we can pass the left margin
 	CUP(d, NewPoint(2, 4))
 	CUB(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 4))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 4))
 
 	// Verify we can pass the right margin
 	CUP(d, NewPoint(3, 4))
 	CUF(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(4, 4))
+	AssertEQ(t, d.CursorPosition(), NewPoint(4, 4))
 }

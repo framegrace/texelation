@@ -19,7 +19,7 @@ func Test_CUF_DefaultParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CUF(d)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 6)
 	AssertEQ(t, position.Y, 3)
 }
@@ -29,16 +29,16 @@ func Test_CUF_ExplicitParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(1, 2))
 	CUF(d, 2)
-	AssertEQ(t, d.GetCursorPosition().X, 3)
+	AssertEQ(t, d.CursorPosition().X, 3)
 }
 
 // Test_CUF_StopsAtRightSide tests that CUF moves the cursor right, stopping at the right edge.
 func Test_CUF_StopsAtRightSide(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(1, 3))
-	width := d.GetScreenSize().Width
+	width := d.ScreenSize().Width
 	CUF(d, width)
-	AssertEQ(t, d.GetCursorPosition().X, width)
+	AssertEQ(t, d.CursorPosition().X, width)
 }
 
 // Test_CUF_StopsAtRightEdgeWhenBegunRightOfScrollRegion tests that when the cursor starts right of
@@ -52,14 +52,14 @@ func Test_CUF_StopsAtRightEdgeWhenBegunRightOfScrollRegion(t *testing.T) {
 
 	// Position the cursor right of the scroll region
 	CUP(d, NewPoint(12, 3))
-	AssertEQ(t, d.GetCursorPosition().X, 12)
+	AssertEQ(t, d.CursorPosition().X, 12)
 
 	// Move it right by a lot
-	width := d.GetScreenSize().Width
+	width := d.ScreenSize().Width
 	CUF(d, width)
 
 	// Ensure it stopped at the right edge of the screen
-	AssertEQ(t, d.GetCursorPosition().X, width)
+	AssertEQ(t, d.CursorPosition().X, width)
 }
 
 // Test_CUF_StopsAtRightMarginInScrollRegion tests that when the cursor starts within the scroll
@@ -75,9 +75,9 @@ func Test_CUF_StopsAtRightMarginInScrollRegion(t *testing.T) {
 	CUP(d, NewPoint(7, 3))
 
 	// Move it right by a lot
-	width := d.GetScreenSize().Width
+	width := d.ScreenSize().Width
 	CUF(d, width)
 
 	// Ensure it stopped at the right margin
-	AssertEQ(t, d.GetCursorPosition().X, 10)
+	AssertEQ(t, d.CursorPosition().X, 10)
 }

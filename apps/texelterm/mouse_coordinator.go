@@ -239,13 +239,13 @@ func (m *MouseCoordinator) IsSelectionRendered() bool {
 	return m.selectionMachine.IsRendered()
 }
 
-// GetSelectionRange returns the current selection range for rendering in content coordinates.
+// SelectionRange returns the current selection range for rendering in content coordinates.
 // Returns startLine (int64), startOffset (int), endLine (int64), endOffset (int), ok.
 // The caller should convert to viewport coordinates using vterm.ContentToViewport().
-func (m *MouseCoordinator) GetSelectionRange() (startLine int64, startOffset int, endLine int64, endOffset int, ok bool) {
+func (m *MouseCoordinator) SelectionRange() (startLine int64, startOffset int, endLine int64, endOffset int, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.selectionMachine.GetSelectionRange()
+	return m.selectionMachine.SelectionRange()
 }
 
 // resolvePositionLocked converts screen coordinates to content coordinates.

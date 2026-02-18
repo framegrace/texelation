@@ -809,7 +809,7 @@ func TestWAL_MetadataPersistence(t *testing.T) {
 	}
 	defer wal2.Close()
 
-	recovered := wal2.GetRecoveredMetadata()
+	recovered := wal2.RecoveredMetadata()
 	if recovered == nil {
 		t.Fatal("Expected recovered metadata, got nil")
 	}
@@ -880,7 +880,7 @@ func TestWAL_MetadataRecoveryWithoutCheckpoint(t *testing.T) {
 
 	t.Logf("WAL path: %s", walPath)
 
-	recovered := wal2.GetRecoveredMetadata()
+	recovered := wal2.RecoveredMetadata()
 	if recovered == nil {
 		t.Fatal("Expected recovered metadata after crash, got nil")
 	}
@@ -943,7 +943,7 @@ func TestWAL_MetadataLastWins(t *testing.T) {
 	}
 	defer wal2.Close()
 
-	recovered := wal2.GetRecoveredMetadata()
+	recovered := wal2.RecoveredMetadata()
 	if recovered == nil {
 		t.Fatal("Expected recovered metadata, got nil")
 	}
@@ -1011,7 +1011,7 @@ func TestWAL_MetadataContentConsistency(t *testing.T) {
 	}
 
 	// Verify metadata
-	recovered := wal2.GetRecoveredMetadata()
+	recovered := wal2.RecoveredMetadata()
 	if recovered == nil {
 		t.Fatal("Expected recovered metadata, got nil")
 	}
@@ -1076,8 +1076,8 @@ func TestWAL_MetadataCheckpointClearsRecoveredState(t *testing.T) {
 	}
 	defer wal2.Close()
 
-	// GetRecoveredMetadata should find the metadata that was re-written after checkpoint
-	recovered := wal2.GetRecoveredMetadata()
+	// RecoveredMetadata should find the metadata that was re-written after checkpoint
+	recovered := wal2.RecoveredMetadata()
 	if recovered == nil {
 		t.Fatal("Expected metadata to survive checkpoint (re-written to fresh WAL), got nil")
 	}
@@ -1238,7 +1238,7 @@ func TestWAL_MetadataWithPromptAndCWD(t *testing.T) {
 	}
 	defer wal2.Close()
 
-	recovered := wal2.GetRecoveredMetadata()
+	recovered := wal2.RecoveredMetadata()
 	if recovered == nil {
 		t.Fatal("Expected recovered metadata, got nil")
 	}

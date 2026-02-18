@@ -24,7 +24,7 @@ func Test_SaveRestoreCursor_Basic(t *testing.T) {
 	DECSC(d) // Save
 	CUP(d, NewPoint(1, 1))
 	DECRC(d) // Restore
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(5, 6))
+	AssertEQ(t, d.CursorPosition(), NewPoint(5, 6))
 }
 
 // Test_SaveRestoreCursor_MoveToHomeWhenNotSaved tests that restore without save moves to home.
@@ -33,7 +33,7 @@ func Test_SaveRestoreCursor_MoveToHomeWhenNotSaved(t *testing.T) {
 	// Don't save cursor, just try to restore
 	CUP(d, NewPoint(5, 6))
 	DECRC(d) // Restore without save should move to 1,1
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(1, 1))
+	AssertEQ(t, d.CursorPosition(), NewPoint(1, 1))
 }
 
 // Test_SaveRestoreCursor_AltVsMain tests that alternate and main screens have separate saved cursor state.
@@ -59,14 +59,14 @@ func Test_SaveRestoreCursor_AltVsMain(t *testing.T) {
 
 	// Restore in main screen should get main screen's saved position
 	DECRC(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(2, 3))
+	AssertEQ(t, d.CursorPosition(), NewPoint(2, 3))
 
 	// Switch back to alt screen
 	DECSET(d, 1049)
 
 	// Restore in alt screen should get alt screen's saved position
 	DECRC(d)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(6, 7))
+	AssertEQ(t, d.CursorPosition(), NewPoint(6, 7))
 }
 
 // Test_SaveRestoreCursor_ResetsOriginMode tests that restore resets origin mode.
@@ -120,5 +120,5 @@ func Test_SaveRestoreCursor_WorksInLRM(t *testing.T) {
 	DECRC(d)
 
 	// Should restore to most recent save (5, 6)
-	AssertEQ(t, d.GetCursorPosition(), NewPoint(5, 6))
+	AssertEQ(t, d.CursorPosition(), NewPoint(5, 6))
 }

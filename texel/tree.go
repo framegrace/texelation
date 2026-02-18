@@ -261,8 +261,8 @@ func (t *Tree) Traverse(f func(*Node)) {
 	t.traverse(t.Root, f)
 }
 
-// GetActiveTitle returns the title of the active application.
-func (t *Tree) GetActiveTitle() string {
+// ActiveTitle returns the title of the active application.
+func (t *Tree) ActiveTitle() string {
 	if t.ActiveLeaf != nil && t.ActiveLeaf.Pane != nil && t.ActiveLeaf.Pane.app != nil {
 		return t.ActiveLeaf.Pane.app.GetTitle()
 	}

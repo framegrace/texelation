@@ -407,7 +407,7 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 	// Restore saved viewport state from WAL if available
 	var savedState *ViewportState
 	if v.memBufState.persistence != nil && v.memBufState.persistence.wal != nil {
-		savedState = v.memBufState.persistence.wal.GetRecoveredMetadata()
+		savedState = v.memBufState.persistence.wal.RecoveredMetadata()
 		if savedState != nil {
 			log.Printf("[MEMORY_BUFFER] Restoring WAL-recovered metadata: scrollOffset=%d, liveEdgeBase=%d, cursor=(%d,%d) (saved at %v)",
 				savedState.ScrollOffset, savedState.LiveEdgeBase, savedState.CursorX, savedState.CursorY, savedState.SavedAt)
@@ -691,7 +691,7 @@ func (v *VTerm) memoryBufferGrid() [][]Cell {
 		return nil
 	}
 
-	grid := v.memBufState.viewport.GetVisibleGrid()
+	grid := v.memBufState.viewport.VisibleGrid()
 
 	// Apply search highlighting if a term is set
 	if v.searchHighlight != "" && len(grid) > 0 {

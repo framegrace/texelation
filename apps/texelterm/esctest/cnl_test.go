@@ -19,7 +19,7 @@ func Test_CNL_DefaultParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	CNL(d)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 4)
 }
@@ -29,7 +29,7 @@ func Test_CNL_ExplicitParam(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(6, 3))
 	CNL(d, 2)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, 5)
 }
@@ -38,9 +38,9 @@ func Test_CNL_ExplicitParam(t *testing.T) {
 func Test_CNL_StopsAtBottomLine(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(6, 3))
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	CNL(d, height)
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.X, 1)
 	AssertEQ(t, position.Y, height)
 }
@@ -59,11 +59,11 @@ func Test_CNL_StopsAtBottomLineWhenBegunBelowScrollRegion(t *testing.T) {
 	CUP(d, NewPoint(7, 6))
 
 	// Move it down by a lot
-	height := d.GetScreenSize().Height
+	height := d.ScreenSize().Height
 	CNL(d, height)
 
 	// Ensure it stopped at the bottom of the screen
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.Y, height)
 	AssertEQ(t, position.X, 1) // CNL always moves to column 1
 }
@@ -85,7 +85,7 @@ func Test_CNL_StopsAtBottomMarginInScrollRegion(t *testing.T) {
 	CNL(d, 99)
 
 	// Ensure it stopped at the bottom of the scroll region.
-	position := d.GetCursorPosition()
+	position := d.CursorPosition()
 	AssertEQ(t, position.Y, 4)
 	AssertEQ(t, position.X, 1) // CNL always moves to column 1
 }

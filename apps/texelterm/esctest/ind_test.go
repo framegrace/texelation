@@ -21,8 +21,8 @@ func Test_IND_Basic(t *testing.T) {
 	d := NewDriver(80, 24)
 	CUP(d, NewPoint(5, 3))
 	IND(d)
-	AssertEQ(t, d.GetCursorPosition().X, 5)
-	AssertEQ(t, d.GetCursorPosition().Y, 4)
+	AssertEQ(t, d.CursorPosition().X, 5)
+	AssertEQ(t, d.CursorPosition().Y, 4)
 }
 
 // Test_IND_Scrolls tests that IND scrolls when it hits bottom.
@@ -40,13 +40,13 @@ func Test_IND_Scrolls(t *testing.T) {
 
 	// Move down, ensure no scroll yet
 	IND(d)
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 22, 2, 24),
 		[]string{" ", "a", "b"})
 
 	// Move down, ensure scroll
 	IND(d)
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 22, 2, 24),
 		[]string{"a", "b", " "})
 }
@@ -63,8 +63,8 @@ func Test_IND_ScrollsInTopBottomRegionStartingAbove(t *testing.T) {
 	IND(d) // To 5
 	IND(d) // Stay at 5 and scroll x up one line
 
-	AssertEQ(t, d.GetCursorPosition().X, 2)
-	AssertEQ(t, d.GetCursorPosition().Y, 5)
+	AssertEQ(t, d.CursorPosition().X, 2)
+	AssertEQ(t, d.CursorPosition().Y, 5)
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 4, 2, 5),
 		[]string{"x", " "})
 }
@@ -80,8 +80,8 @@ func Test_IND_ScrollsInTopBottomRegionStartingWithin(t *testing.T) {
 	IND(d) // To 5
 	IND(d) // Stay at 5 and scroll x up one line
 
-	AssertEQ(t, d.GetCursorPosition().X, 2)
-	AssertEQ(t, d.GetCursorPosition().Y, 5)
+	AssertEQ(t, d.CursorPosition().X, 2)
+	AssertEQ(t, d.CursorPosition().Y, 5)
 	AssertScreenCharsInRectEqual(t, d, NewRect(2, 4, 2, 5),
 		[]string{"x", " "})
 }
@@ -99,29 +99,29 @@ func Test_IND_MovesDoesNotScrollOutsideLeftRight(t *testing.T) {
 	CUP(d, NewPoint(6, 5))
 	IND(d)
 	// Cursor won't pass bottom or scroll
-	AssertEQ(t, d.GetCursorPosition().X, 6)
-	AssertEQ(t, d.GetCursorPosition().Y, 5)
+	AssertEQ(t, d.CursorPosition().X, 6)
+	AssertEQ(t, d.CursorPosition().Y, 5)
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 
 	// Try to move past bottom of screen but to right of left-right region
 	CUP(d, NewPoint(6, 24))
 	IND(d)
-	AssertEQ(t, d.GetCursorPosition().X, 6)
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().X, 6)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 
 	// Move past bottom margin but to left of left-right region
 	CUP(d, NewPoint(1, 5))
 	IND(d)
-	AssertEQ(t, d.GetCursorPosition().X, 1)
-	AssertEQ(t, d.GetCursorPosition().Y, 5)
+	AssertEQ(t, d.CursorPosition().X, 1)
+	AssertEQ(t, d.CursorPosition().Y, 5)
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 
 	// Try to move past bottom of screen but to left of left-right region
 	CUP(d, NewPoint(1, 24))
 	IND(d)
-	AssertEQ(t, d.GetCursorPosition().X, 1)
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().X, 1)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 	AssertScreenCharsInRectEqual(t, d, NewRect(3, 5, 3, 5), []string{"x"})
 }
 
@@ -141,7 +141,7 @@ func Test_IND_StopsAtBottomLineWhenBegunBelowScrollRegion(t *testing.T) {
 	}
 
 	// Should stop at bottom of screen
-	AssertEQ(t, d.GetCursorPosition().Y, 24)
+	AssertEQ(t, d.CursorPosition().Y, 24)
 
 	// Ensure no scroll - x should still be at line 6
 	AssertScreenCharsInRectEqual(t, d, NewRect(1, 6, 1, 6), []string{"x"})

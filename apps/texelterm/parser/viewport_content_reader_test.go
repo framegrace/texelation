@@ -479,7 +479,7 @@ func TestViewportWindow_WithPageStore_FullHistoryScrolling(t *testing.T) {
 
 	// ScrollToTop should now go to line 0 (on disk via PageStore)
 	viewport.ScrollToTop()
-	grid := viewport.GetVisibleGrid()
+	grid := viewport.VisibleGrid()
 
 	row0 := vwGridRowToString(grid[0])
 	t.Logf("After ScrollToTop, row 0: '%s'", row0)
@@ -491,7 +491,7 @@ func TestViewportWindow_WithPageStore_FullHistoryScrolling(t *testing.T) {
 
 	// ScrollToBottom should show the most recent lines
 	viewport.ScrollToBottom()
-	grid = viewport.GetVisibleGrid()
+	grid = viewport.VisibleGrid()
 
 	// Last row with content should be L24
 	lastRowIdx := len(grid) - 1

@@ -84,9 +84,9 @@ Replays recordings through VTerm with dirty tracking simulation:
 	}
 
 	// Access results
-	grid := replayer.GetGrid()        // Logical state
+	grid := replayer.Grid()        // Logical state
 	x, y := replayer.GetCursor()      // Cursor position
-	snap := replayer.GetSnapshot()    // Full state snapshot
+	snap := replayer.Snapshot()    // Full state snapshot
 
 ## Reference Comparator (reference.go)
 

@@ -52,7 +52,7 @@ func Test_REP_RespectsLeftRightMargins(t *testing.T) {
 // Test_REP_RespectsTopBottomMargins tests that REP respects top/bottom margins.
 func Test_REP_RespectsTopBottomMargins(t *testing.T) {
 	d := NewDriver(80, 24)
-	width := d.GetScreenSize().Width
+	width := d.ScreenSize().Width
 	DECSTBM(d, 2, 4)
 	CUP(d, NewPoint(width-2, 4))
 	d.Write("a")

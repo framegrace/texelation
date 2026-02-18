@@ -344,20 +344,12 @@ func (v *VTerm) GetLogicalLine(index int64) *LogicalLine {
 	return v.memBufState.memBuf.GetLine(index)
 }
 
-// GetGlobalOffset returns the global offset of the oldest line in memory.
-// Lines with indices less than this have been evicted.
-func (v *VTerm) GetGlobalOffset() int64 {
-	if v.memBufState == nil || v.memBufState.memBuf == nil {
-		return 0
-	}
-	return v.memBufState.memBuf.GlobalOffset()
-}
 
-// GetAllLogicalLines returns all logical lines from both disk and memory.
+// AllLogicalLines returns all logical lines from both disk and memory.
 // Used by scrollbar minimap. This reads the entire history - optimize later!
 // Returns (lines, globalOffset, totalLines) where globalOffset is the global
 // index of the first returned line.
-func (v *VTerm) GetAllLogicalLines() ([]*LogicalLine, int64, int64) {
+func (v *VTerm) AllLogicalLines() ([]*LogicalLine, int64, int64) {
 	if v.memBufState == nil || v.memBufState.viewport == nil {
 		return nil, 0, 0
 	}
@@ -515,8 +507,8 @@ func (v *VTerm) setWorkingDirectory(uri string) {
 	v.CurrentWorkingDir = rest[idx:]
 }
 
-// GetLastWorkingDir returns the last known working directory from OSC 7.
-func (v *VTerm) GetLastWorkingDir() string {
+// LastWorkingDir returns the last known working directory from OSC 7.
+func (v *VTerm) LastWorkingDir() string {
 	return v.CurrentWorkingDir
 }
 
@@ -553,7 +545,7 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 		return 0, 0, false, false
 	}
 	// Check if this is the current cursor line
-	cursorLine, _ := v.memBufState.memBuf.GetCursor()
+	cursorLine, _ := v.memBufState.memBuf.Cursor()
 	isCurrentLine = globalLine == cursorLine
 	return globalLine, offset, isCurrentLine, true
 }
