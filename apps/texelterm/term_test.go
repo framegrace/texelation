@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -161,6 +162,101 @@ func TestTexelTermLineWrapOutput(t *testing.T) {
 	}
 	if row1 != "KLMNOPQRST" {
 		t.Errorf("Row 1: expected 'KLMNOPQRST', got %q", row1)
+	}
+
+	app.Stop()
+
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("texelterm did not exit after stop")
+	}
+}
+
+// mockClipboard implements texelcore.ClipboardService for testing.
+type mockClipboard struct {
+	mu   sync.Mutex
+	mime string
+	data []byte
+}
+
+func (m *mockClipboard) SetClipboard(mime string, data []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mime = mime
+	m.data = make([]byte, len(data))
+	copy(m.data, data)
+}
+
+func (m *mockClipboard) GetClipboard() (string, []byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.data == nil {
+		return "", nil, false
+	}
+	return m.mime, m.data, true
+}
+
+// TestClipboardOSC52NoDeadlock verifies that OSC 52 clipboard operations
+// do not deadlock. Before the fix, the PTY reader held a.mu during Parse(),
+// and the clipboard callback tried to re-acquire a.mu, causing a deadlock
+// (Go mutexes are not reentrant). The fix uses a dedicated clipboardMu.
+//
+// If this test hangs (times out), the deadlock is present.
+func TestClipboardOSC52NoDeadlock(t *testing.T) {
+	// Use a temp HOME to avoid loading persisted history from real user data
+	t.Setenv("HOME", t.TempDir())
+
+	// Script outputs an OSC 52 clipboard-set sequence for "hello" (base64: aGVsbG8=).
+	// The sequence is: ESC ] 52 ; c ; aGVsbG8= BEL
+	// This fires OnClipboardSet synchronously during Parse() while a.mu is held.
+	script := writeScript(t, "#!/bin/sh\nprintf '\\033]52;c;aGVsbG8=\\007'\n")
+
+	app := texelterm.New("texelterm", script)
+	app.Resize(40, 10)
+	app.SetRefreshNotifier(make(chan bool, 4))
+
+	// Set clipboard service before running (must type-assert to ClipboardAware)
+	clip := &mockClipboard{}
+	if ca, ok := app.(texelcore.ClipboardAware); ok {
+		ca.SetClipboardService(clip)
+	} else {
+		t.Fatal("TexelTerm does not implement ClipboardAware")
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Run()
+	}()
+
+	// Wait for the script to execute and the OSC 52 sequence to be parsed.
+	// If the deadlock is present, the PTY reader goroutine will hang forever
+	// and this sleep will not help — the test will timeout at 10s.
+	deadline := time.After(5 * time.Second)
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+
+	var clipData []byte
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for clipboard data — likely deadlock in OSC 52 handler")
+		case <-tick.C:
+			clip.mu.Lock()
+			if clip.data != nil {
+				clipData = make([]byte, len(clip.data))
+				copy(clipData, clip.data)
+			}
+			clip.mu.Unlock()
+			if clipData != nil {
+				goto done
+			}
+		}
+	}
+done:
+
+	if string(clipData) != "hello" {
+		t.Errorf("expected clipboard data %q, got %q", "hello", string(clipData))
 	}
 
 	app.Stop()

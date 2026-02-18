@@ -77,6 +77,7 @@ type TexelTerm struct {
 
 	// Mouse and selection handling (unified for standalone and embedded modes)
 	mouseCoordinator *MouseCoordinator
+	clipboardMu      sync.Mutex // Dedicated lock for clipboard to avoid deadlock with a.mu during Parse callbacks
 	clipboard        texelcore.ClipboardService
 
 	// Scroll tracking for smooth velocity-based acceleration
@@ -994,8 +995,10 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 // Currently disabled pending investigation of clipboard crash issues.
 func (a *TexelTerm) SetClipboard(mime string, data []byte) {
 	// Use clipboard service if available
-	a.mu.Lock()
+	a.clipboardMu.Lock()
 	clipboard := a.clipboard
+	a.clipboardMu.Unlock()
+	a.mu.Lock()
 	title := a.title
 	a.mu.Unlock()
 
@@ -1021,9 +1024,9 @@ func (a *TexelTerm) SetClipboard(mime string, data []byte) {
 // SetClipboardService implements texelcore.ClipboardAware.
 // This is called by the runtime (standalone) or desktop (embedded) to provide clipboard access.
 func (a *TexelTerm) SetClipboardService(clipboard texelcore.ClipboardService) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.clipboardMu.Lock()
 	a.clipboard = clipboard
+	a.clipboardMu.Unlock()
 	log.Printf("CLIPBOARD DEBUG: %s SetClipboardService called: service=%v", a.title, clipboard != nil)
 }
 
@@ -1309,19 +1312,21 @@ func (a *TexelTerm) updatePtyWriterForRestart() {
 				}
 			}
 		}
-		// Update clipboard callbacks (they reference a.clipboard which might change)
+		// Update clipboard callbacks (they reference a.clipboard which might change).
+		// These use clipboardMu (not a.mu) because Parse() fires them synchronously
+		// while a.mu is held by the PTY reader — using a.mu here would deadlock.
 		a.vterm.OnClipboardSet = func(data []byte) {
-			a.mu.Lock()
+			a.clipboardMu.Lock()
 			clipboard := a.clipboard
-			a.mu.Unlock()
+			a.clipboardMu.Unlock()
 			if clipboard != nil {
 				clipboard.SetClipboard("text/plain", data)
 			}
 		}
 		a.vterm.OnClipboardGet = func() []byte {
-			a.mu.Lock()
+			a.clipboardMu.Lock()
 			clipboard := a.clipboard
-			a.mu.Unlock()
+			a.clipboardMu.Unlock()
 			if clipboard != nil {
 				_, data, ok := clipboard.GetClipboard()
 				if ok {
@@ -1380,19 +1385,22 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 			a.bracketedPasteMode = enabled
 		}),
 		parser.WithClipboardSetHandler(func(data []byte) {
-			// App is setting clipboard via OSC 52
-			a.mu.Lock()
+			// App is setting clipboard via OSC 52.
+			// Uses clipboardMu (not a.mu) because Parse() fires this synchronously
+			// while a.mu is held by the PTY reader — using a.mu here would deadlock.
+			a.clipboardMu.Lock()
 			clipboard := a.clipboard
-			a.mu.Unlock()
+			a.clipboardMu.Unlock()
 			if clipboard != nil {
 				clipboard.SetClipboard("text/plain", data)
 			}
 		}),
 		parser.WithClipboardGetHandler(func() []byte {
-			// App is querying clipboard via OSC 52
-			a.mu.Lock()
+			// App is querying clipboard via OSC 52.
+			// Uses clipboardMu (not a.mu) — see comment above.
+			a.clipboardMu.Lock()
 			clipboard := a.clipboard
-			a.mu.Unlock()
+			a.clipboardMu.Unlock()
 			if clipboard != nil {
 				_, data, ok := clipboard.GetClipboard()
 				if ok {
