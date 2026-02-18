@@ -1366,6 +1366,14 @@ func (d *DesktopEngine) startPendingApps() {
 	for _, p := range pending {
 		p.StartPreparedApp()
 	}
+
+	// Schedule a follow-up refresh after a short delay. Apps start in
+	// goroutines, so the shell prompt may arrive after handleClientReady
+	// has already published its initial snapshot. This delayed refresh
+	// ensures any late-arriving content (like the prompt) gets published.
+	time.AfterFunc(250*time.Millisecond, func() {
+		d.SendRefresh()
+	})
 }
 
 func (d *DesktopEngine) notifyFocus(paneID [16]byte) {
