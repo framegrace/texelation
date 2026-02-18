@@ -38,7 +38,8 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 	}
 
 	// Wire refresh notifier to pipeline (or app as fallback)
-	notifier := d.makeRefreshNotifier()
+	notifier, stop := d.makeRefreshNotifier()
+	panel.stopRefresh = stop
 	if panel.pipeline != nil {
 		panel.pipeline.SetRefreshNotifier(notifier)
 	} else {
@@ -87,6 +88,9 @@ func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
 	}
 
 	if found {
+		if panel.stopRefresh != nil {
+			panel.stopRefresh()
+		}
 		d.appLifecycle.StopApp(panel.app)
 		d.recalculateLayout()
 		d.broadcastTreeChanged()

@@ -18,10 +18,11 @@ const (
 
 // StatusPane is a special pane with absolute sizing, placed on one side of the screen.
 type StatusPane struct {
-	app  App
-	side Side
-	size int // rows for Top/Bottom, cols for Left/Right
-	id   [16]byte
+	app         App
+	side        Side
+	size        int // rows for Top/Bottom, cols for Left/Right
+	id          [16]byte
+	stopRefresh func() // stops the refresh notifier goroutine
 }
 
 // AddStatusPane adds a new status pane to the desktop.
@@ -38,7 +39,9 @@ func (d *DesktopEngine) AddStatusPane(app App, side Side, size int) {
 		d.Subscribe(listener)
 	}
 
-	app.SetRefreshNotifier(d.makeRefreshNotifier())
+	notifier, stop := d.makeRefreshNotifier()
+	sp.stopRefresh = stop
+	app.SetRefreshNotifier(notifier)
 
 	d.appLifecycle.StartApp(app, nil)
 	d.recalculateLayout()
