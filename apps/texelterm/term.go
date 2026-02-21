@@ -1304,7 +1304,13 @@ const StandalonePaneID = "standalone-texelterm"
 
 func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
-	cols, rows := a.width, a.height
+	cols := a.width
+	// Reserve 2 rows for status bar (consistent with Resize)
+	const statusBarHeight = 2
+	rows := a.height - statusBarHeight
+	if rows < 1 {
+		rows = 1
+	}
 	isRestart := a.vterm != nil
 	paneID := a.paneID
 	// Use standalone pane ID if not embedded in texelation
