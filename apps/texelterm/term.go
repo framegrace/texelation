@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/widgets"
 	"io"
 	"log"
 	"math"
@@ -108,6 +109,18 @@ type TexelTerm struct {
 
 	// Scrollbar (non-overlay, resizes terminal)
 	scrollbar *ScrollBar
+
+	// Status bar with toggle button mode indicators
+	statusBar *widgets.StatusBar
+	tfmToggle *widgets.ToggleButton
+	insToggle *widgets.ToggleButton
+	tuiToggle *widgets.ToggleButton
+	wrpToggle *widgets.ToggleButton
+	rflToggle *widgets.ToggleButton
+	altToggle *widgets.ToggleButton
+
+	// Transformer pipeline reference (for runtime toggle)
+	pipeline *transformer.Pipeline
 }
 
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
@@ -117,6 +130,20 @@ var _ texelcore.ClipboardAware = (*TexelTerm)(nil)
 var _ texelcore.MouseHandler = (*TexelTerm)(nil)
 
 func New(title, command string) texelcore.App {
+	sb := widgets.NewStatusBar()
+
+	tfm := widgets.NewToggleButton("TFM")
+	tfm.Active = true // Transformers on by default
+	ins := widgets.NewToggleButton("INS")
+	ins.Active = true
+	tui := widgets.NewToggleButton("NRM")
+	tui.Active = true
+	wrp := widgets.NewToggleButton("WRP")
+	rfl := widgets.NewToggleButton("RFL")
+	alt := widgets.NewToggleButton("ALT")
+
+	sb.SetLeftWidgets([]texelcore.Widget{tfm, ins, tui, wrp, rfl, alt})
+
 	term := &TexelTerm{
 		title:        title,
 		command:      command,
@@ -125,8 +152,15 @@ func New(title, command string) texelcore.App {
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
 		closeCh:      make(chan struct{}),
-		restartCh:    make(chan struct{}, 1),    // Buffered to avoid blocking
-		controlBus:   texelcore.NewControlBus(), // Own control bus, no pipeline needed
+		restartCh:    make(chan struct{}, 1),
+		controlBus:   texelcore.NewControlBus(),
+		statusBar:    sb,
+		tfmToggle:    tfm,
+		insToggle:    ins,
+		tuiToggle:    tui,
+		wrpToggle:    wrp,
+		rflToggle:    rfl,
+		altToggle:    alt,
 	}
 
 	return term
@@ -272,6 +306,10 @@ func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 	if a.historyNavigator != nil {
 		a.historyNavigator.SetRefreshNotifier(refreshChan)
+	}
+	if a.statusBar != nil {
+		a.statusBar.SetRefreshNotifier(refreshChan)
+		a.statusBar.Start()
 	}
 }
 
@@ -1415,6 +1453,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 
 	// Wire transformer pipeline from config (txfmt registers via init())
 	pipeline := transformer.BuildPipeline(cfg)
+	a.pipeline = pipeline
 	if pipeline != nil {
 		a.vterm.OnLineCommit = pipeline.HandleLine
 		a.vterm.OnPromptStart = pipeline.NotifyPromptStart
@@ -1430,6 +1469,11 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 			}
 			pipeline.NotifyCommandStart(cmd)
 		}
+	}
+
+	// Wire TFM toggle callback (requires pipeline to be set up)
+	a.tfmToggle.OnToggle = func(active bool) {
+		a.toggleOverlay()
 	}
 
 	a.parser = parser.NewParser(a.vterm)
@@ -1738,7 +1782,7 @@ func (a *TexelTerm) Stop() {
 	a.stopOnce.Do(func() {
 		close(a.stop)
 		var (
-			cmd *exec.Cmd
+			cmd     *exec.Cmd
 			ptyFile *os.File
 		)
 		a.mu.Lock()
@@ -1780,6 +1824,10 @@ func (a *TexelTerm) Stop() {
 				log.Printf("Error closing search index: %v", err)
 			}
 			a.searchIndex = nil
+		}
+
+		if a.statusBar != nil {
+			a.statusBar.Stop()
 		}
 
 		a.mu.Unlock()
