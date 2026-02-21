@@ -117,7 +117,6 @@ type TexelTerm struct {
 	tuiToggle *widgets.ToggleButton
 	wrpToggle    *widgets.ToggleButton
 	wrpUserPref  bool // user's preferred wrap state (restored when override clears)
-	rflToggle    *widgets.ToggleButton
 	altToggle    *widgets.ToggleButton
 
 	// Transformer pipeline reference (for runtime toggle)
@@ -142,14 +141,11 @@ func New(title, command string) texelcore.App {
 	wrp := widgets.NewToggleButton("WRP")
 	wrp.Active = true // Wrapping on by default
 	wrp.SetHelpText("Line wrapping")
-	rfl := widgets.NewToggleButton("RFL")
-	rfl.Disabled = true
-	rfl.SetHelpText("Reflow on resize")
 	alt := widgets.NewToggleButton("ALT")
 	alt.Disabled = true
 	alt.SetHelpText("Alternate screen")
 
-	sb.SetLeftWidgets([]texelcore.Widget{tfm, tui, wrp, rfl, alt})
+	sb.SetLeftWidgets([]texelcore.Widget{tfm, tui, wrp, alt})
 
 	term := &TexelTerm{
 		title:        title,
@@ -166,7 +162,6 @@ func New(title, command string) texelcore.App {
 		tuiToggle:    tui,
 		wrpToggle:    wrp,
 		wrpUserPref:  true,
-		rflToggle:    rfl,
 		altToggle:    alt,
 	}
 
@@ -639,8 +634,6 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 		}
 	}
 
-	// RFL - reflow
-	a.rflToggle.Active = a.vterm.ReflowEnabled()
 }
 
 // applySelectionHighlightLocked applies selection highlighting to the render buffer.
