@@ -44,11 +44,11 @@ func TestStatusBarRenderedInOutput(t *testing.T) {
 
 	// Row 11 (content row) should contain toggle button icons
 	contentRow := rowToString(buf[11])
-	if !strings.Contains(contentRow, "\U000F0068") { // nf-md-auto_fix (TFM)
-		t.Errorf("expected transformer icon on status bar content row, got %q", contentRow)
+	if !strings.Contains(contentRow, "\U000F0068") { // nf-md-auto_fix (transformer)
+		t.Errorf("expected transformer icon on status bar, got %q", contentRow)
 	}
-	if !strings.Contains(contentRow, "\U000F0379") { // nf-md-monitor (TUI)
-		t.Errorf("expected monitor icon on status bar content row, got %q", contentRow)
+	if !strings.Contains(contentRow, "\U000F05B6") { // nf-md-wrap
+		t.Errorf("expected wrap icon on status bar, got %q", contentRow)
 	}
 
 	app.Stop()
