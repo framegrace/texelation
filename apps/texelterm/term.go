@@ -137,7 +137,7 @@ func New(title, command string) texelcore.App {
 	tui := widgets.NewToggleButton("NRM")
 	tui.Disabled = true
 	wrp := widgets.NewToggleButton("WRP")
-	wrp.Disabled = true
+	wrp.Active = true // Wrapping on by default
 	rfl := widgets.NewToggleButton("RFL")
 	rfl.Disabled = true
 	alt := widgets.NewToggleButton("ALT")
@@ -1554,6 +1554,23 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		defer a.mu.Unlock()
 		if a.pipeline != nil {
 			a.setTransformerState(active)
+		}
+	}
+
+	// Wire WRP toggle callback
+	a.wrpToggle.OnToggle = func(active bool) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.vterm != nil {
+			a.vterm.SetWrapEnabled(active)
+			a.vterm.MarkAllDirty()
+		}
+		if a.statusBar != nil {
+			if active {
+				a.statusBar.ShowMessage("Line wrapping ON")
+			} else {
+				a.statusBar.ShowMessage("Line wrapping OFF")
+			}
 		}
 	}
 

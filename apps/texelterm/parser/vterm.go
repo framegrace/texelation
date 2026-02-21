@@ -1449,6 +1449,9 @@ func (v *VTerm) ReflowEnabled() bool { return v.reflowEnabled }
 // WrapEnabled returns true if line wrapping is enabled.
 func (v *VTerm) WrapEnabled() bool { return v.wrapEnabled }
 
+// SetWrapEnabled enables or disables line wrapping at runtime.
+func (v *VTerm) SetWrapEnabled(enabled bool) { v.wrapEnabled = enabled }
+
 // LiveEdgeBase returns the current liveEdgeBase (global line index of viewport row 0).
 func (v *VTerm) LiveEdgeBase() int64 {
 	if v.memBufState == nil {
