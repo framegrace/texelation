@@ -131,6 +131,8 @@ var _ texelcore.MouseHandler = (*TexelTerm)(nil)
 
 func New(title, command string) texelcore.App {
 	sb := widgets.NewStatusBar()
+	sb.ShowSeparator = false
+	sb.Resize(1, 1) // No separator = 1 row
 
 	tfm := widgets.NewToggleButton(" \U000F0068 ") // nf-md-auto_fix (magic wand)
 	tfm.Active = true                             // Transformers on by default
@@ -520,7 +522,7 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		totalCols = vtermCols + ScrollBarWidth
 	}
 
-	const statusBarHeight = 2
+	const statusBarHeight = 1
 	totalRows := termRows + statusBarHeight
 
 	// Resize buffer if needed
@@ -1090,7 +1092,7 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 
 	// Check if click is on the status bar
 	if a.statusBar != nil {
-		const statusBarHeight = 2
+		const statusBarHeight = 1
 		termRows := a.height - statusBarHeight
 		if y >= termRows {
 			if a.statusBar.HandleMouse(ev) {
@@ -1311,7 +1313,7 @@ func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
 	cols := a.width
 	// Reserve 2 rows for status bar (consistent with Resize)
-	const statusBarHeight = 2
+	const statusBarHeight = 1
 	rows := a.height - statusBarHeight
 	if rows < 1 {
 		rows = 1
@@ -1855,7 +1857,7 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	a.height = rows
 
 	// Reserve 2 rows for status bar (1 separator + 1 content)
-	const statusBarHeight = 2
+	const statusBarHeight = 1
 	termRows := rows - statusBarHeight
 	if termRows < 1 {
 		termRows = 1

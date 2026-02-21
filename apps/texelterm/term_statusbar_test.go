@@ -9,14 +9,14 @@ import (
 )
 
 // TestStatusBarRenderedInOutput verifies that the render buffer includes
-// the status bar rows at the bottom (separator + toggle buttons).
+// the status bar row at the bottom with toggle button icons.
 func TestStatusBarRenderedInOutput(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	script := writeScript(t, "#!/bin/sh\nprintf 'hello'\n")
 
 	app := texelterm.New("texelterm", script)
-	app.Resize(40, 12) // 10 terminal rows + 2 status bar
+	app.Resize(40, 11) // 10 terminal rows + 1 status bar
 	app.SetRefreshNotifier(make(chan bool, 4))
 
 	errCh := make(chan error, 1)
@@ -31,19 +31,13 @@ func TestStatusBarRenderedInOutput(t *testing.T) {
 		t.Fatal("expected non-nil render buffer")
 	}
 
-	// Buffer should be 12 rows total (10 terminal + 2 status bar)
-	if len(buf) != 12 {
-		t.Fatalf("expected 12 rows, got %d", len(buf))
+	// Buffer should be 11 rows total (10 terminal + 1 status bar)
+	if len(buf) != 11 {
+		t.Fatalf("expected 11 rows, got %d", len(buf))
 	}
 
-	// Row 10 should be the separator line (─ characters)
-	sepRow := rowToString(buf[10])
-	if !strings.Contains(sepRow, "─") {
-		t.Errorf("expected separator '─' on row 10, got %q", sepRow)
-	}
-
-	// Row 11 (content row) should contain toggle button icons
-	contentRow := rowToString(buf[11])
+	// Row 10 (last row) should contain toggle button icons
+	contentRow := rowToString(buf[10])
 	if !strings.Contains(contentRow, "\U000F0068") { // nf-md-auto_fix (transformer)
 		t.Errorf("expected transformer icon on status bar, got %q", contentRow)
 	}
@@ -68,7 +62,7 @@ func TestStatusBarTerminalContentNotTruncated(t *testing.T) {
 	script := writeScript(t, "#!/bin/sh\nprintf 'VISIBLE'\n")
 
 	app := texelterm.New("texelterm", script)
-	app.Resize(40, 12)
+	app.Resize(40, 11) // 10 terminal rows + 1 status bar
 	app.SetRefreshNotifier(make(chan bool, 4))
 
 	errCh := make(chan error, 1)
