@@ -115,9 +115,10 @@ type TexelTerm struct {
 	tfmToggle *widgets.ToggleButton
 
 	tuiToggle *widgets.ToggleButton
-	wrpToggle *widgets.ToggleButton
-	rflToggle *widgets.ToggleButton
-	altToggle *widgets.ToggleButton
+	wrpToggle    *widgets.ToggleButton
+	wrpUserPref  bool // user's preferred wrap state (restored when override clears)
+	rflToggle    *widgets.ToggleButton
+	altToggle    *widgets.ToggleButton
 
 	// Transformer pipeline reference (for runtime toggle)
 	pipeline *transformer.Pipeline
@@ -159,6 +160,7 @@ func New(title, command string) texelcore.App {
 		tfmToggle:    tfm,
 		tuiToggle:    tui,
 		wrpToggle:    wrp,
+		wrpUserPref:  true,
 		rflToggle:    rfl,
 		altToggle:    alt,
 	}
@@ -613,14 +615,27 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 		a.tuiToggle.Active = false
 	}
 
-	// WRP - wrap
-	a.wrpToggle.Active = a.vterm.WrapEnabled()
+	// ALT - alt screen
+	a.altToggle.Active = a.vterm.InAltScreen()
+
+	// WRP - wrap (disabled + forced off during TUI or alt screen)
+	wrapOverride := a.vterm.IsInTUIMode() || a.vterm.InAltScreen()
+	if wrapOverride {
+		a.wrpToggle.Disabled = true
+		a.wrpToggle.Active = false
+		if a.vterm.WrapEnabled() {
+			a.vterm.SetWrapEnabled(false)
+		}
+	} else {
+		a.wrpToggle.Disabled = false
+		a.wrpToggle.Active = a.wrpUserPref
+		if a.vterm.WrapEnabled() != a.wrpUserPref {
+			a.vterm.SetWrapEnabled(a.wrpUserPref)
+		}
+	}
 
 	// RFL - reflow
 	a.rflToggle.Active = a.vterm.ReflowEnabled()
-
-	// ALT - alt screen
-	a.altToggle.Active = a.vterm.InAltScreen()
 }
 
 // applySelectionHighlightLocked applies selection highlighting to the render buffer.
@@ -1561,6 +1576,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	a.wrpToggle.OnToggle = func(active bool) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
+		a.wrpUserPref = active
 		if a.vterm != nil {
 			a.vterm.SetWrapEnabled(active)
 			a.vterm.MarkAllDirty()
