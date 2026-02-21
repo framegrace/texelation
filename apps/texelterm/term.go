@@ -1090,7 +1090,7 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 		}
 	}
 
-	// Check if click is on the status bar
+	// Check if mouse is on the status bar
 	if a.statusBar != nil {
 		const statusBarHeight = 1
 		termRows := a.height - statusBarHeight
@@ -1100,6 +1100,8 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 			}
 			return
 		}
+		// Mouse is outside status bar — clear any hover help
+		a.statusBar.HandleMouse(ev)
 	}
 
 	// Delegate to mouse coordinator for terminal content
