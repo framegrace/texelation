@@ -132,16 +132,16 @@ var _ texelcore.MouseHandler = (*TexelTerm)(nil)
 func New(title, command string) texelcore.App {
 	sb := widgets.NewStatusBar()
 
-	tfm := widgets.NewToggleButton("TFM")
-	tfm.Active = true // Transformers on by default
+	tfm := widgets.NewToggleButton("\U000F0068") // nf-md-auto_fix (magic wand)
+	tfm.Active = true                           // Transformers on by default
 	tfm.SetHelpText("Transformer pipeline (Ctrl+T)")
-	tui := widgets.NewToggleButton("NRM")
+	tui := widgets.NewToggleButton("\U000F0379") // nf-md-monitor
 	tui.Disabled = true
 	tui.SetHelpText("TUI app detection")
-	wrp := widgets.NewToggleButton("WRP")
-	wrp.Active = true // Wrapping on by default
+	wrp := widgets.NewToggleButton("\U000F05B6") // nf-md-wrap
+	wrp.Active = true                            // Wrapping on by default
 	wrp.SetHelpText("Line wrapping")
-	alt := widgets.NewToggleButton("ALT")
+	alt := widgets.NewToggleButton("\U000F0328") // nf-md-layers
 	alt.Disabled = true
 	alt.SetHelpText("Alternate screen")
 
@@ -607,13 +607,7 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 	a.tfmToggle.Active = a.pipeline != nil && a.pipeline.Enabled()
 
 	// TUI/NRM - TUI detection (active = TUI detected)
-	if a.vterm.IsInTUIMode() {
-		a.tuiToggle.Label = "TUI"
-		a.tuiToggle.Active = true
-	} else {
-		a.tuiToggle.Label = "NRM"
-		a.tuiToggle.Active = false
-	}
+	a.tuiToggle.Active = a.vterm.IsInTUIMode()
 
 	// ALT - alt screen
 	a.altToggle.Active = a.vterm.InAltScreen()
