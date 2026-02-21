@@ -113,7 +113,7 @@ type TexelTerm struct {
 	// Status bar with toggle button mode indicators
 	statusBar *widgets.StatusBar
 	tfmToggle *widgets.ToggleButton
-	insToggle *widgets.ToggleButton
+
 	tuiToggle *widgets.ToggleButton
 	wrpToggle *widgets.ToggleButton
 	rflToggle *widgets.ToggleButton
@@ -134,8 +134,6 @@ func New(title, command string) texelcore.App {
 
 	tfm := widgets.NewToggleButton("TFM")
 	tfm.Active = true // Transformers on by default
-	ins := widgets.NewToggleButton("RPL")
-	ins.Disabled = true
 	tui := widgets.NewToggleButton("NRM")
 	tui.Disabled = true
 	wrp := widgets.NewToggleButton("WRP")
@@ -145,7 +143,7 @@ func New(title, command string) texelcore.App {
 	alt := widgets.NewToggleButton("ALT")
 	alt.Disabled = true
 
-	sb.SetLeftWidgets([]texelcore.Widget{tfm, ins, tui, wrp, rfl, alt})
+	sb.SetLeftWidgets([]texelcore.Widget{tfm, tui, wrp, rfl, alt})
 
 	term := &TexelTerm{
 		title:        title,
@@ -159,7 +157,6 @@ func New(title, command string) texelcore.App {
 		controlBus:   texelcore.NewControlBus(),
 		statusBar:    sb,
 		tfmToggle:    tfm,
-		insToggle:    ins,
 		tuiToggle:    tui,
 		wrpToggle:    wrp,
 		rflToggle:    rfl,
@@ -606,15 +603,6 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 
 	// TFM - transformer pipeline
 	a.tfmToggle.Active = a.pipeline != nil && a.pipeline.Enabled()
-
-	// INS/RPL - insert/replace mode
-	if a.vterm.InsertMode() {
-		a.insToggle.Label = "INS"
-		a.insToggle.Active = true
-	} else {
-		a.insToggle.Label = "RPL"
-		a.insToggle.Active = false
-	}
 
 	// TUI/NRM - TUI detection (active = TUI detected)
 	if a.vterm.IsInTUIMode() {
