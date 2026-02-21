@@ -2,40 +2,269 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add a status bar to texelterm showing mode indicators and make Ctrl+T fully disable/enable the transformer pipeline (not just overlay visibility).
+**Goal:** Add a status bar to texelterm with clickable ToggleButton mode indicators, and make Ctrl+T fully disable/enable the transformer pipeline (not just overlay visibility).
 
-**Architecture:** Bridge the existing `texelui/widgets/StatusBar` widget into TexelTerm's render pipeline via `core.Painter`. Extend StatusBar with `StyledSegment` for per-token styling on the left side. Add runtime enable/disable to the transformer `Pipeline`. Store the pipeline reference in TexelTerm for Ctrl+T toggling.
+**Architecture:** Create a new `ToggleButton` widget in texelui. Extend `StatusBar` with `SetLeftWidgets()` to host child widgets (ToggleButtons) on the left side with mouse forwarding. Bridge the StatusBar into TexelTerm's render pipeline via `core.Painter`. Add runtime enable/disable to the transformer `Pipeline`. Route mouse clicks on the status bar area to the StatusBar widget.
 
-**Tech Stack:** Go, texelui (core.Painter, widgets.StatusBar), tcell
+**Tech Stack:** Go, texelui (core.Painter, widgets.StatusBar, widgets.ToggleButton), tcell
 
 ---
 
-### Task 1: Add `StyledSegment` and `SetLeftSegments` to StatusBar widget
+### Task 1: Create ToggleButton widget
 
 **Files:**
-- Modify: `texelui/widgets/statusbar.go:38-54` (struct fields), `:300-405` (Draw method)
-- Test: `texelui/widgets/statusbar_test.go`
+- Create: `texelui/widgets/togglebutton.go`
+- Test: `texelui/widgets/togglebutton_test.go`
 
 **Step 1: Write the failing test**
+
+Create `texelui/widgets/togglebutton_test.go`:
+
+```go
+package widgets
+
+import (
+	"testing"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/framegrace/texelui/core"
+)
+
+func TestToggleButtonDraw(t *testing.T) {
+	tb := NewToggleButton("TFM")
+	tb.SetPosition(0, 0)
+
+	buf := make([][]core.Cell, 1)
+	buf[0] = make([]core.Cell, 10)
+	p := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 10, H: 1})
+
+	// Inactive: normal style (not reversed)
+	tb.Active = false
+	tb.Draw(p)
+
+	got := string([]rune{buf[0][0].Ch, buf[0][1].Ch, buf[0][2].Ch})
+	if got != "TFM" {
+		t.Errorf("expected 'TFM', got %q", got)
+	}
+	fg, bg, _ := buf[0][0].Style.Decompose()
+	if fg == bg {
+		t.Error("inactive style should have distinct fg and bg")
+	}
+
+	// Active: reversed style
+	tb.Active = true
+	tb.Draw(p)
+	fg2, bg2, _ := buf[0][0].Style.Decompose()
+	if fg2 != bg || bg2 != fg {
+		t.Errorf("active style should reverse fg/bg: got fg=%v bg=%v, expected fg=%v bg=%v", fg2, bg2, bg, fg)
+	}
+}
+
+func TestToggleButtonSize(t *testing.T) {
+	tb := NewToggleButton("WRP")
+	if tb.Rect.W != 3 {
+		t.Errorf("expected width=3 for 'WRP', got %d", tb.Rect.W)
+	}
+	if tb.Rect.H != 1 {
+		t.Errorf("expected height=1, got %d", tb.Rect.H)
+	}
+}
+
+func TestToggleButtonClick(t *testing.T) {
+	tb := NewToggleButton("TFM")
+	tb.SetPosition(5, 0)
+
+	var toggled bool
+	var newState bool
+	tb.OnToggle = func(active bool) {
+		toggled = true
+		newState = active
+	}
+
+	// Click inside bounds
+	ev := tcell.NewEventMouse(6, 0, tcell.Button1, 0)
+	handled := tb.HandleMouse(ev)
+
+	if !handled {
+		t.Error("expected click to be handled")
+	}
+	if !toggled {
+		t.Error("expected OnToggle callback to fire")
+	}
+	if !newState {
+		t.Error("expected Active=true after toggle from false")
+	}
+	if !tb.Active {
+		t.Error("expected Active field to be true")
+	}
+}
+
+func TestToggleButtonClickOutside(t *testing.T) {
+	tb := NewToggleButton("TFM")
+	tb.SetPosition(5, 0)
+
+	var toggled bool
+	tb.OnToggle = func(active bool) { toggled = true }
+
+	// Click outside bounds
+	ev := tcell.NewEventMouse(0, 0, tcell.Button1, 0)
+	handled := tb.HandleMouse(ev)
+
+	if handled {
+		t.Error("expected click outside to not be handled")
+	}
+	if toggled {
+		t.Error("expected OnToggle not to fire for click outside")
+	}
+}
+
+func TestToggleButtonNoCallback(t *testing.T) {
+	tb := NewToggleButton("TFM")
+	tb.SetPosition(0, 0)
+
+	// No OnToggle set — should not panic
+	ev := tcell.NewEventMouse(1, 0, tcell.Button1, 0)
+	tb.HandleMouse(ev)
+
+	// Active should still toggle
+	if !tb.Active {
+		t.Error("expected Active=true even without OnToggle callback")
+	}
+}
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `cd /home/marc/projects/texel/texelui && go test ./widgets/ -run TestToggleButton -v`
+Expected: Compilation error — `NewToggleButton` undefined.
+
+**Step 3: Write the implementation**
+
+Create `texelui/widgets/togglebutton.go`:
+
+```go
+package widgets
+
+import (
+	"github.com/gdamore/tcell/v2"
+	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/theme"
+)
+
+// ToggleButton is a compact clickable indicator that shows on/off state.
+// Active = reversed style (FG/BG swapped), Inactive = normal style.
+// Designed for status bar mode indicators (e.g., "TFM", "WRP", "INS").
+type ToggleButton struct {
+	core.BaseWidget
+	Label    string
+	Active   bool
+	OnToggle func(active bool)
+	Style    tcell.Style
+
+	inv func(core.Rect)
+}
+
+// NewToggleButton creates a toggle button with the given label.
+// Width = len(label), height = 1. Not focusable (intended for status bars).
+func NewToggleButton(label string) *ToggleButton {
+	tb := &ToggleButton{
+		Label: label,
+	}
+
+	tm := theme.Get()
+	fg := tm.GetSemanticColor("text.primary")
+	bg := tm.GetSemanticColor("bg.surface")
+	if fg == tcell.ColorDefault {
+		fg = tcell.ColorWhite
+	}
+	if bg == tcell.ColorDefault {
+		bg = tcell.ColorBlack
+	}
+	tb.Style = tcell.StyleDefault.Foreground(fg).Background(bg)
+
+	tb.SetPosition(0, 0)
+	tb.Resize(len([]rune(label)), 1)
+	tb.SetFocusable(false)
+	return tb
+}
+
+// Draw renders the toggle button.
+// Active = reversed style, Inactive = normal style.
+func (tb *ToggleButton) Draw(p *core.Painter) {
+	style := tb.Style
+	if tb.Active {
+		fg, bg, attr := style.Decompose()
+		style = tcell.StyleDefault.Foreground(bg).Background(fg).Attributes(attr)
+	}
+	p.DrawText(tb.Rect.X, tb.Rect.Y, tb.Label, style)
+}
+
+// HandleMouse handles mouse clicks. Left click toggles Active state.
+func (tb *ToggleButton) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	if !tb.HitTest(x, y) {
+		return false
+	}
+	if ev.Buttons()&tcell.Button1 != 0 {
+		tb.Active = !tb.Active
+		tb.invalidate()
+		if tb.OnToggle != nil {
+			tb.OnToggle(tb.Active)
+		}
+		return true
+	}
+	return false
+}
+
+// SetInvalidator implements core.InvalidationAware.
+func (tb *ToggleButton) SetInvalidator(fn func(core.Rect)) {
+	tb.inv = fn
+}
+
+func (tb *ToggleButton) invalidate() {
+	if tb.inv != nil {
+		tb.inv(tb.Rect)
+	}
+}
+```
+
+**Step 4: Run tests to verify they pass**
+
+Run: `cd /home/marc/projects/texel/texelui && go test ./widgets/ -run TestToggleButton -v`
+Expected: All PASS
+
+**Step 5: Commit**
+
+```bash
+cd /home/marc/projects/texel/texelui
+git add widgets/togglebutton.go widgets/togglebutton_test.go
+git commit -m "Add ToggleButton widget for status bar mode indicators"
+```
+
+---
+
+### Task 2: Add `SetLeftWidgets` and `HandleMouse` to StatusBar
+
+**Files:**
+- Modify: `texelui/widgets/statusbar.go`
+- Test: `texelui/widgets/statusbar_test.go`
+
+**Step 1: Write the failing tests**
 
 Add to `texelui/widgets/statusbar_test.go`:
 
 ```go
-func TestStatusBarStyledSegments(t *testing.T) {
+func TestStatusBarLeftWidgets(t *testing.T) {
 	sb := NewStatusBar()
 	sb.SetPosition(0, 0)
 	sb.Resize(40, 2)
 
-	bright := tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
-	dim := tcell.StyleDefault.Foreground(tcell.ColorGray).Background(tcell.ColorBlack)
+	tb1 := NewToggleButton("TFM")
+	tb1.Active = true
+	tb2 := NewToggleButton("INS")
 
-	sb.SetLeftSegments([]StyledSegment{
-		{Text: "TFM", Style: bright},
-		{Text: " ", Style: dim},
-		{Text: "INS", Style: dim},
-	})
+	sb.SetLeftWidgets([]core.Widget{tb1, tb2})
 
-	// Draw into a buffer
 	buf := make([][]core.Cell, 2)
 	for y := range buf {
 		buf[y] = make([]core.Cell, 40)
@@ -43,144 +272,248 @@ func TestStatusBarStyledSegments(t *testing.T) {
 	p := core.NewPainter(buf, core.Rect{X: 0, Y: 0, W: 40, H: 2})
 	sb.Draw(p)
 
-	// Row 1 (content row) should have "TFM INS" starting at x=1
+	// Row 1 (content row): toggle buttons should appear
+	// tb1 "TFM" at x=1, tb2 "INS" at x=5 (after 1-char gap)
 	got := string([]rune{buf[1][1].Ch, buf[1][2].Ch, buf[1][3].Ch})
 	if got != "TFM" {
 		t.Errorf("expected 'TFM' at x=1, got %q", got)
 	}
+	got2 := string([]rune{buf[1][5].Ch, buf[1][6].Ch, buf[1][7].Ch})
+	if got2 != "INS" {
+		t.Errorf("expected 'INS' at x=5, got %q", got2)
+	}
+}
 
-	// TFM should have the bright style's foreground
-	if fg, _, _ := buf[1][1].Style.Decompose(); fg != tcell.ColorWhite {
-		t.Errorf("expected TFM foreground=white, got %v", fg)
+func TestStatusBarHandleMouse(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetPosition(0, 10)
+	sb.Resize(40, 2)
+
+	var toggled bool
+	tb := NewToggleButton("TFM")
+	tb.OnToggle = func(active bool) { toggled = true }
+	sb.SetLeftWidgets([]core.Widget{tb})
+
+	// Force layout (normally done during Draw, but we need positions set)
+	sb.layoutLeftWidgets()
+
+	// Click on the toggle button area (content row = y=11, x=1..3)
+	ev := tcell.NewEventMouse(1, 11, tcell.Button1, 0)
+	handled := sb.HandleMouse(ev)
+
+	if !handled {
+		t.Error("expected mouse click on toggle button to be handled")
+	}
+	if !toggled {
+		t.Error("expected OnToggle to fire")
+	}
+}
+
+func TestStatusBarMouseOutside(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetPosition(0, 10)
+	sb.Resize(40, 2)
+
+	tb := NewToggleButton("TFM")
+	sb.SetLeftWidgets([]core.Widget{tb})
+	sb.layoutLeftWidgets()
+
+	// Click outside status bar
+	ev := tcell.NewEventMouse(0, 5, tcell.Button1, 0)
+	handled := sb.HandleMouse(ev)
+
+	if handled {
+		t.Error("expected mouse click outside status bar to not be handled")
 	}
 }
 ```
 
-**Step 2: Run test to verify it fails**
+**Step 2: Run tests to verify they fail**
 
-Run: `cd /home/marc/projects/texel/texelui && go test ./widgets/ -run TestStatusBarStyledSegments -v`
-Expected: Compilation error — `StyledSegment` and `SetLeftSegments` undefined.
+Run: `cd /home/marc/projects/texel/texelui && go test ./widgets/ -run "TestStatusBarLeftWidgets|TestStatusBarHandleMouse|TestStatusBarMouseOutside" -v`
+Expected: Compilation error — `SetLeftWidgets`, `HandleMouse`, `layoutLeftWidgets` undefined.
 
 **Step 3: Write the implementation**
 
 In `texelui/widgets/statusbar.go`:
 
-1. Add the `StyledSegment` type after the `TimedMessage` struct (after line 33):
+1. Add `leftWidgets` field to the struct (after `leftText` on line 42):
 
 ```go
-// StyledSegment is a text fragment with optional custom styling.
-// Used for mode indicators where each segment needs independent styling.
-type StyledSegment struct {
-	Text  string
-	Style tcell.Style // Zero value = use default hint style (dimmed)
-}
+	leftWidgets []core.Widget // Child widgets for left side (overrides leftText)
 ```
 
-2. Add `leftSegments` field to the `StatusBar` struct (after line 42, alongside `leftText`):
+2. Add `SetLeftWidgets` method:
 
 ```go
-	leftSegments []StyledSegment // Styled left content (overrides leftText when set)
-```
-
-3. Add `SetLeftSegments` method (after `ClearKeyHints`, around line 476):
-
-```go
-// SetLeftSegments sets styled content for the left side of the status bar.
+// SetLeftWidgets sets widgets to display on the left side of the status bar.
+// Widgets are positioned left-to-right with 1-char gaps during Draw.
 // Takes priority over KeyHintsProvider hints when set.
 // Pass nil to clear and revert to KeyHintsProvider behavior.
-func (s *StatusBar) SetLeftSegments(segments []StyledSegment) {
+func (s *StatusBar) SetLeftWidgets(widgets []core.Widget) {
 	s.mu.Lock()
-	s.leftSegments = segments
+	s.leftWidgets = widgets
 	s.mu.Unlock()
 	s.invalidate()
 }
 ```
 
-4. Modify `Draw` method (at line 321-378) to use segments when available. Replace the section that reads `leftText` and draws it. After `s.mu.Lock()` at line 321 and before `s.mu.Unlock()` at line 327, add a check:
+3. Add `layoutLeftWidgets` method that positions widgets sequentially:
+
+```go
+// layoutLeftWidgets positions left-side widgets sequentially on the content row.
+// Returns the total width consumed.
+func (s *StatusBar) layoutLeftWidgets() int {
+	if len(s.leftWidgets) == 0 {
+		return 0
+	}
+	contentY := s.Rect.Y + 1
+	xx := s.Rect.X + 1 // 1-char left padding
+	for i, w := range s.leftWidgets {
+		w.SetPosition(xx, contentY)
+		xx += w.Bounds().W
+		if i < len(s.leftWidgets)-1 {
+			xx++ // 1-char gap between widgets
+		}
+	}
+	return xx - s.Rect.X - 1
+}
+```
+
+Note: `w.Bounds()` should return `core.Rect`. Check if `BaseWidget` has a `Bounds()` method. If not, use the widget's `Rect` field directly — but since `core.Widget` is an interface, we need either a `Bounds()` method or type assertion. Check the `core.Widget` interface. If it doesn't have `Bounds()`, we may need to type-assert to `*ToggleButton` or add `Bounds()` to the interface.
+
+Looking at `core.BaseWidget`, it has a public `Rect` field. But `core.Widget` is an interface. Check if there's a `Bounds()` method:
+- `texelui/core/widget.go` — `BaseWidget.Bounds() Rect` should exist or `Rect` is embedded publicly.
+- If `Widget` interface doesn't expose bounds, use `interface{ Bounds() core.Rect }` type assertion.
+
+If needed, add to `core.Widget` interface or use a helper. The simplest approach: type-assert each widget to check for a `Bounds()` method, or store bounds info alongside the widget.
+
+**Simpler alternative**: Since we control all left widgets (they're ToggleButtons), store position info during layout and use it in mouse handling:
+
+```go
+type leftWidgetEntry struct {
+	widget core.Widget
+	rect   core.Rect
+}
+```
+
+But that adds complexity. Let's check if `BaseWidget` exposes `Rect`:
+
+Looking at the code: `BaseWidget` has `Rect core.Rect` as a public field. And widgets embed `BaseWidget`. So if we type-assert to `interface{ Bounds() core.Rect }` or access the Rect via a method... Let me check.
+
+Actually, looking at the existing Checkbox, Button etc., they all embed `core.BaseWidget` which has public `Rect`. But `core.Widget` is an interface and may not expose `Rect`. Let's use a `BoundsProvider` interface or just use `SetPosition` (which exists on Widget interface via BaseWidget).
+
+**Practical approach**: Use the widget's `Rect` directly by type-asserting to `*ToggleButton`, or better, define a small interface:
+
+```go
+// boundsWidget is a Widget with accessible bounds for positioning.
+type boundsWidget interface {
+	core.Widget
+	GetBounds() core.Rect
+}
+```
+
+But this requires ToggleButton to implement `GetBounds()`. Let me check what BaseWidget provides...
+
+The simplest: just keep track of positions ourselves during layout:
+
+```go
+func (s *StatusBar) layoutLeftWidgets() int {
+	contentY := s.Rect.Y + 1
+	xx := s.Rect.X + 1
+	for i, w := range s.leftWidgets {
+		wb := w.(interface{ GetBounds() core.Rect }).GetBounds()
+		w.SetPosition(xx, contentY)
+		xx += wb.W
+		if i < len(s.leftWidgets)-1 {
+			xx++
+		}
+	}
+	return xx - s.Rect.X - 1
+}
+```
+
+We need to verify `BaseWidget` has `GetBounds()` or equivalent. Check `texelui/core/widget.go`.
+
+4. Modify `Draw` to handle left widgets:
+
+In the `Draw` method, after setting up the content row background, add:
 
 ```go
 	s.mu.Lock()
-	segments := s.leftSegments
-	if segments == nil {
+	leftWidgets := s.leftWidgets
+	if leftWidgets == nil {
 		s.updateKeyHintsLocked()
 	}
 	leftText := s.leftText
 	activeMsg := s.getActiveMessage()
 	s.mu.Unlock()
-```
 
-Then replace the left-side drawing block (lines 371-379) with:
-
-```go
 	// Draw left content
-	if segments != nil {
-		// Draw styled segments
-		xx := s.Rect.X + 1
-		for _, seg := range segments {
-			for _, r := range seg.Text {
-				if xx >= s.Rect.X+s.Rect.W-1 {
-					break
-				}
-				style := seg.Style
-				if style == (tcell.Style{}) {
-					// Zero value: use default hint style
-					hintFg := tm.GetSemanticColor("text.secondary")
-					if hintFg == tcell.ColorDefault {
-						hintFg = tcell.ColorGray
-					}
-					style = tcell.StyleDefault.Foreground(hintFg).Background(bg)
-				}
-				p.SetCell(xx, contentY, r, style)
-				xx++
+	leftWidth := 0
+	if leftWidgets != nil {
+		leftWidth = s.layoutLeftWidgets()
+		for _, w := range leftWidgets {
+			if drawer, ok := w.(interface{ Draw(*core.Painter) }); ok {
+				drawer.Draw(p)
 			}
 		}
 	} else if leftText != "" {
-		hintFg := tm.GetSemanticColor("text.secondary")
-		if hintFg == tcell.ColorDefault {
-			hintFg = tcell.ColorGray
-		}
-		hintStyle := tcell.StyleDefault.Foreground(hintFg).Background(bg)
-		p.DrawText(s.Rect.X+1, contentY, leftText, hintStyle)
+		// ... existing leftText drawing code
+		leftWidth = len([]rune(leftText))
 	}
 ```
 
-Also update the `leftRunes` calculation to account for segments width (for right-side message truncation):
+Use `leftWidth` for right-side message spacing.
+
+5. Add `HandleMouse` method:
 
 ```go
-	// Calculate left content width for message spacing
-	leftWidth := 0
-	if segments != nil {
-		for _, seg := range segments {
-			leftWidth += len([]rune(seg.Text))
-		}
-	} else {
-		leftWidth = len(leftRunes)
+// HandleMouse forwards mouse events to left-side widgets.
+// Returns true if a widget handled the event.
+func (s *StatusBar) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	if !s.Rect.Contains(x, y) {
+		return false
 	}
+
+	s.mu.Lock()
+	widgets := s.leftWidgets
+	s.mu.Unlock()
+
+	for _, w := range widgets {
+		if mh, ok := w.(interface{ HandleMouse(*tcell.EventMouse) bool }); ok {
+			if mh.HandleMouse(ev) {
+				s.invalidate()
+				return true
+			}
+		}
+	}
+	return false
+}
 ```
 
-Use `leftWidth` instead of `len(leftRunes)` in the right-side spacing calculations.
+**Step 4: Run tests to verify they pass**
 
-**Step 4: Run test to verify it passes**
+Run: `cd /home/marc/projects/texel/texelui && go test ./widgets/ -run "TestStatusBarLeftWidgets|TestStatusBarHandleMouse|TestStatusBarMouseOutside" -v`
+Expected: All PASS
 
-Run: `cd /home/marc/projects/texel/texelui && go test ./widgets/ -run TestStatusBarStyledSegments -v`
-Expected: PASS
-
-**Step 5: Run all existing StatusBar tests**
+**Step 5: Run all StatusBar tests**
 
 Run: `cd /home/marc/projects/texel/texelui && go test ./widgets/ -run TestStatusBar -v`
-Expected: All PASS (existing tests use KeyHintsProvider, not affected by new code path)
+Expected: All PASS
 
 **Step 6: Commit**
 
 ```bash
 cd /home/marc/projects/texel/texelui
 git add widgets/statusbar.go widgets/statusbar_test.go
-git commit -m "Add StyledSegment support to StatusBar left side"
+git commit -m "Add SetLeftWidgets and HandleMouse to StatusBar"
 ```
 
 ---
 
-### Task 2: Add runtime enable/disable to transformer Pipeline
+### Task 3: Add runtime enable/disable to transformer Pipeline
 
 **Files:**
 - Modify: `texelation/apps/texelterm/transformer/transformer.go:88-154`
@@ -194,19 +527,16 @@ Add to `texelation/apps/texelterm/transformer/transformer_test.go`:
 func TestPipelineEnabled(t *testing.T) {
 	p := &Pipeline{transformers: []Transformer{&stubTransformer{id: "a"}}}
 
-	// Pipeline should be enabled by default
 	if !p.Enabled() {
 		t.Error("expected pipeline to be enabled by default")
 	}
-
 	p.SetEnabled(false)
 	if p.Enabled() {
-		t.Error("expected pipeline to be disabled after SetEnabled(false)")
+		t.Error("expected disabled after SetEnabled(false)")
 	}
-
 	p.SetEnabled(true)
 	if !p.Enabled() {
-		t.Error("expected pipeline to be re-enabled after SetEnabled(true)")
+		t.Error("expected re-enabled after SetEnabled(true)")
 	}
 }
 
@@ -215,14 +545,12 @@ func TestPipelineDisabledSkipsHandleLine(t *testing.T) {
 	p := &Pipeline{transformers: []Transformer{s}}
 	p.SetEnabled(false)
 
-	line := &parser.LogicalLine{}
-	suppressed := p.HandleLine(1, line, false)
-
+	suppressed := p.HandleLine(1, &parser.LogicalLine{}, false)
 	if suppressed {
-		t.Error("disabled pipeline should return false (no suppression)")
+		t.Error("disabled pipeline should return false")
 	}
 	if s.handleCalls != 0 {
-		t.Errorf("disabled pipeline should not call HandleLine, got %d calls", s.handleCalls)
+		t.Errorf("disabled pipeline should skip HandleLine, got %d calls", s.handleCalls)
 	}
 }
 
@@ -235,10 +563,10 @@ func TestPipelineDisabledSkipsNotify(t *testing.T) {
 	p.NotifyCommandStart("ls")
 
 	if s.promptCalls != 0 {
-		t.Errorf("disabled pipeline should not call NotifyPromptStart, got %d", s.promptCalls)
+		t.Errorf("disabled pipeline should skip NotifyPromptStart, got %d", s.promptCalls)
 	}
 	if s.commandCalls != 0 {
-		t.Errorf("disabled pipeline should not call NotifyCommandStart, got %d", s.commandCalls)
+		t.Errorf("disabled pipeline should skip NotifyCommandStart, got %d", s.commandCalls)
 	}
 }
 ```
@@ -264,43 +592,38 @@ type Pipeline struct {
 }
 ```
 
-2. Add `SetEnabled` and `Enabled` methods (after line 127):
+2. Add methods (after `SetPersistNotifyFunc`, before `HandleLine`):
 
 ```go
 // SetEnabled enables or disables the pipeline at runtime.
-// When disabled, HandleLine, NotifyPromptStart, and NotifyCommandStart are no-ops.
-func (p *Pipeline) SetEnabled(on bool) {
-	p.enabled = on
-}
+func (p *Pipeline) SetEnabled(on bool) { p.enabled = on }
 
 // Enabled returns whether the pipeline is currently enabled.
-func (p *Pipeline) Enabled() bool {
-	return p.enabled
-}
+func (p *Pipeline) Enabled() bool { return p.enabled }
 ```
 
-3. Add early-return guards to `HandleLine` (line 132), `NotifyPromptStart` (line 143), and `NotifyCommandStart` (line 150):
+3. Add early-return guard to `HandleLine`, `NotifyPromptStart`, `NotifyCommandStart`:
 
 ```go
 func (p *Pipeline) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) bool {
 	if !p.enabled {
 		return false
 	}
-	// ... existing logic
+	// ... existing
 }
 
 func (p *Pipeline) NotifyPromptStart() {
 	if !p.enabled {
 		return
 	}
-	// ... existing logic
+	// ... existing
 }
 
 func (p *Pipeline) NotifyCommandStart(cmd string) {
 	if !p.enabled {
 		return
 	}
-	// ... existing logic
+	// ... existing
 }
 ```
 
@@ -312,15 +635,10 @@ func (p *Pipeline) NotifyCommandStart(cmd string) {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/marc/projects/texel/texelation && go test ./apps/texelterm/transformer/ -run "TestPipelineEnabled|TestPipelineDisabledSkips" -v`
-Expected: All PASS
-
-**Step 5: Run all transformer tests**
-
 Run: `cd /home/marc/projects/texel/texelation && go test ./apps/texelterm/transformer/ -v`
 Expected: All PASS
 
-**Step 6: Commit**
+**Step 5: Commit**
 
 ```bash
 cd /home/marc/projects/texel/texelation
@@ -330,47 +648,49 @@ git commit -m "Add runtime enable/disable to transformer Pipeline"
 
 ---
 
-### Task 3: Add VTerm getter methods
+### Task 4: Add VTerm getter methods
 
 **Files:**
 - Modify: `texelation/apps/texelterm/parser/vterm.go:1430-1436`
-- Test: `texelation/apps/texelterm/parser/vterm_test.go` (or inline verification)
+- Test: `texelation/apps/texelterm/parser/vterm_test.go` (or nearby test file)
 
 **Step 1: Write the failing test**
-
-Add to an appropriate test file (e.g., create a small test or add to existing `vterm_test.go`). If `vterm_test.go` doesn't exist, find the right test file:
 
 ```go
 func TestVTermGetters(t *testing.T) {
 	v := NewVTerm(80, 24)
-
-	// insertMode defaults to false
 	if v.InsertMode() {
 		t.Error("expected InsertMode() false by default")
 	}
 
-	// wrapEnabled defaults based on construction
-	// (WithWrap sets it; default NewVTerm does NOT set wrapEnabled)
 	v2 := NewVTerm(80, 24, WithWrap(true))
 	if !v2.WrapEnabled() {
-		t.Error("expected WrapEnabled() true when constructed with WithWrap(true)")
+		t.Error("expected WrapEnabled() true with WithWrap(true)")
 	}
 
 	v3 := NewVTerm(80, 24, WithReflow(true))
 	if !v3.ReflowEnabled() {
-		t.Error("expected ReflowEnabled() true when constructed with WithReflow(true)")
+		t.Error("expected ReflowEnabled() true with WithReflow(true)")
+	}
+}
+
+func TestVTermIsInTUIMode(t *testing.T) {
+	v := NewVTerm(80, 24)
+	// Default: not in TUI mode
+	if v.IsInTUIMode() {
+		t.Error("expected IsInTUIMode() false by default")
 	}
 }
 ```
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /home/marc/projects/texel/texelation && go test ./apps/texelterm/parser/ -run TestVTermGetters -v`
-Expected: Compilation error — `InsertMode`, `WrapEnabled`, `ReflowEnabled` undefined.
+Run: `cd /home/marc/projects/texel/texelation && go test ./apps/texelterm/parser/ -run "TestVTermGetters|TestVTermIsInTUIMode" -v`
+Expected: Compilation error.
 
 **Step 3: Write the implementation**
 
-In `texelation/apps/texelterm/parser/vterm.go`, add after the existing getters block (after line 1436):
+In `texelation/apps/texelterm/parser/vterm.go`, after the existing getters (after line 1436):
 
 ```go
 // InsertMode returns true if the terminal is in insert mode (IRM).
@@ -381,11 +701,17 @@ func (v *VTerm) WrapEnabled() bool { return v.wrapEnabled }
 
 // ReflowEnabled returns true if reflow on resize is enabled.
 func (v *VTerm) ReflowEnabled() bool { return v.reflowEnabled }
+
+// IsInTUIMode returns true if the terminal has detected a TUI application.
+func (v *VTerm) IsInTUIMode() bool {
+	fwd := v.fixedWidthDetector()
+	return fwd != nil && fwd.IsInTUIMode()
+}
 ```
 
-**Step 4: Run test to verify it passes**
+**Step 4: Run tests to verify they pass**
 
-Run: `cd /home/marc/projects/texel/texelation && go test ./apps/texelterm/parser/ -run TestVTermGetters -v`
+Run: `cd /home/marc/projects/texel/texelation && go test ./apps/texelterm/parser/ -run "TestVTermGetters|TestVTermIsInTUIMode" -v`
 Expected: PASS
 
 **Step 5: Commit**
@@ -393,40 +719,60 @@ Expected: PASS
 ```bash
 cd /home/marc/projects/texel/texelation
 git add apps/texelterm/parser/vterm.go apps/texelterm/parser/vterm_test.go
-git commit -m "Add InsertMode, WrapEnabled, ReflowEnabled getters to VTerm"
+git commit -m "Add InsertMode, WrapEnabled, ReflowEnabled, IsInTUIMode getters to VTerm"
 ```
 
 ---
 
-### Task 4: Integrate StatusBar into TexelTerm (struct + init + lifecycle)
+### Task 5: Integrate StatusBar into TexelTerm (struct + init + lifecycle)
 
 **Files:**
-- Modify: `texelation/apps/texelterm/term.go:58-111` (struct), `:119-133` (New), `:1341-1433` (init), `:1737-1776` (Stop)
+- Modify: `texelation/apps/texelterm/term.go`
 
 **Step 1: Add fields to TexelTerm struct**
 
-In `texelation/apps/texelterm/term.go`, add to the struct (around line 110, after scrollbar field):
+After the `scrollbar` field (around line 110):
 
 ```go
-	// Status bar (reuses texelui StatusBar widget)
+	// Status bar (reuses texelui StatusBar widget via Painter bridge)
 	statusBar *widgets.StatusBar
+
+	// Toggle buttons for status bar mode indicators
+	tfmToggle *widgets.ToggleButton
+	insToggle *widgets.ToggleButton
+	tuiToggle *widgets.ToggleButton
+	wrpToggle *widgets.ToggleButton
+	rflToggle *widgets.ToggleButton
+	altToggle *widgets.ToggleButton
 
 	// Transformer pipeline reference (for runtime toggle)
 	pipeline *transformer.Pipeline
 ```
 
-Add the import for `widgets`:
+Add import:
 
 ```go
 	"github.com/framegrace/texelui/widgets"
 ```
 
-**Step 2: Initialize StatusBar in `New()`**
-
-In the `New()` function (line 119-133), create the StatusBar:
+**Step 2: Create toggle buttons and StatusBar in `New()`**
 
 ```go
 func New(title, command string) texelcore.App {
+	sb := widgets.NewStatusBar()
+
+	tfm := widgets.NewToggleButton("TFM")
+	tfm.Active = true // Transformers on by default
+	ins := widgets.NewToggleButton("INS")
+	ins.Active = true // Insert mode is the default
+	tui := widgets.NewToggleButton("NRM")
+	tui.Active = true
+	wrp := widgets.NewToggleButton("WRP")
+	rfl := widgets.NewToggleButton("RFL")
+	alt := widgets.NewToggleButton("ALT")
+
+	sb.SetLeftWidgets([]texelcore.Widget{tfm, ins, tui, wrp, rfl, alt})
+
 	term := &TexelTerm{
 		title:        title,
 		command:      command,
@@ -437,40 +783,53 @@ func New(title, command string) texelcore.App {
 		closeCh:      make(chan struct{}),
 		restartCh:    make(chan struct{}, 1),
 		controlBus:   texelcore.NewControlBus(),
-		statusBar:    widgets.NewStatusBar(),
+		statusBar:    sb,
+		tfmToggle:    tfm,
+		insToggle:    ins,
+		tuiToggle:    tui,
+		wrpToggle:    wrp,
+		rflToggle:    rfl,
+		altToggle:    alt,
 	}
 
 	return term
 }
 ```
 
+**Note:** OnToggle callbacks are wired later in `initializeVTermFirstRun` when the VTerm and pipeline exist. For read-only indicators (INS, TUI, ALT), no OnToggle is set.
+
 **Step 3: Store pipeline reference in `initializeVTermFirstRun`**
 
-In `initializeVTermFirstRun()` (line 1417), store the pipeline:
+At line 1417, store the pipeline and wire the TFM toggle callback:
 
 ```go
 	pipeline := transformer.BuildPipeline(cfg)
-	a.pipeline = pipeline  // Store for runtime toggle
+	a.pipeline = pipeline
 	if pipeline != nil {
-		// ... existing wiring code stays the same
+		a.vterm.OnLineCommit = pipeline.HandleLine
+		a.vterm.OnPromptStart = pipeline.NotifyPromptStart
+		pipeline.SetInsertFunc(a.vterm.RequestLineInsert)
+		pipeline.SetOverlayFunc(a.vterm.RequestLineOverlay)
+		pipeline.SetPersistNotifyFunc(a.vterm.NotifyLinePersist)
+
+		origHandler := a.vterm.OnCommandStart
+		a.vterm.OnCommandStart = func(cmd string) {
+			if origHandler != nil {
+				origHandler(cmd)
+			}
+			pipeline.NotifyCommandStart(cmd)
+		}
+	}
+
+	// Wire toggle button callbacks (requires VTerm + pipeline to be set up)
+	a.tfmToggle.OnToggle = func(active bool) {
+		a.toggleTransformers()
 	}
 ```
 
-**Step 4: Start StatusBar in `Run()` and wire refresh**
+**Step 4: Wire StatusBar refresh notifier and lifecycle**
 
-The StatusBar needs `Start()` for its message expiration ticker. In `Run()` (line 1108), or more precisely, we need to start it when we have a refresh notifier. The best place is in `SetRefreshNotifier`:
-
-Find the existing `SetRefreshNotifier` method:
-
-```go
-func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
-	a.mu.Lock()
-	a.refreshChan = refreshChan
-	a.mu.Unlock()
-}
-```
-
-Add StatusBar wiring:
+In `SetRefreshNotifier`:
 
 ```go
 func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
@@ -484,40 +843,35 @@ func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 }
 ```
 
-**Step 5: Stop StatusBar in `Stop()`**
-
-In `Stop()` (line 1737), add before closing the memory buffer:
+In `Stop()`, before closing memory buffer:
 
 ```go
-	// Stop status bar ticker
 	if a.statusBar != nil {
 		a.statusBar.Stop()
 	}
 ```
 
-**Step 6: Verify compilation**
+**Step 5: Verify compilation**
 
 Run: `cd /home/marc/projects/texel/texelation && go build ./apps/texelterm/`
-Expected: Compiles without errors.
+Expected: Compiles.
 
-**Step 7: Commit**
+**Step 6: Commit**
 
 ```bash
 cd /home/marc/projects/texel/texelation
 git add apps/texelterm/term.go
-git commit -m "Add StatusBar and pipeline fields to TexelTerm with lifecycle wiring"
+git commit -m "Add StatusBar, ToggleButtons, and pipeline fields to TexelTerm"
 ```
 
 ---
 
-### Task 5: Modify Resize to account for status bar height
+### Task 6: Modify Resize to account for status bar height
 
 **Files:**
-- Modify: `texelation/apps/texelterm/term.go:1695-1735` (Resize method)
+- Modify: `texelation/apps/texelterm/term.go:1695-1735`
 
 **Step 1: Modify `Resize()`**
-
-The status bar takes 2 rows. The VTerm and PTY get `rows - 2`. The StatusBar widget gets positioned at the bottom.
 
 ```go
 func (a *TexelTerm) Resize(cols, rows int) {
@@ -539,7 +893,6 @@ func (a *TexelTerm) Resize(cols, rows int) {
 		termRows = 1
 	}
 
-	// Calculate terminal width (accounting for scrollbar if visible)
 	termWidth := cols
 	if a.scrollbar != nil && a.scrollbar.IsVisible() {
 		termWidth = cols - ScrollBarWidth
@@ -551,15 +904,12 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	if a.vterm != nil {
 		a.vterm.Resize(termWidth, termRows)
 	}
-
 	if a.scrollbar != nil {
 		a.scrollbar.Resize(termRows)
 	}
-
 	if a.mouseCoordinator != nil {
 		a.mouseCoordinator.SetSize(termWidth, termRows)
 	}
-
 	if a.historyNavigator != nil {
 		a.historyNavigator.Resize(termWidth, termRows)
 	}
@@ -579,7 +929,6 @@ func (a *TexelTerm) Resize(cols, rows int) {
 **Step 2: Verify compilation**
 
 Run: `cd /home/marc/projects/texel/texelation && go build ./apps/texelterm/`
-Expected: Compiles without errors.
 
 **Step 3: Commit**
 
@@ -591,20 +940,18 @@ git commit -m "Reserve bottom 2 rows for status bar in Resize"
 
 ---
 
-### Task 6: Modify Render to draw StatusBar via Painter bridge
+### Task 7: Modify Render to draw StatusBar via Painter bridge + mode indicator updates
 
 **Files:**
-- Modify: `texelation/apps/texelterm/term.go:462-548` (Render method)
+- Modify: `texelation/apps/texelterm/term.go:462-548` (Render), add `updateModeIndicatorsLocked`
 
 **Step 1: Modify `Render()`**
 
-The render buffer must now include terminal rows + 2 status bar rows. The StatusBar draws into the bottom 2 rows via a Painter.
-
-Replace the current `Render()` method. Key changes:
-- Buffer height is `termRows + statusBarHeight` (= `a.height`)
-- VTerm grid only fills `rows 0..termRows-1`
-- StatusBar draws into `rows termRows..termRows+1` via Painter
-- Update mode indicators before drawing StatusBar
+Key changes from the original:
+- Buffer height = `termRows + statusBarHeight`
+- VTerm grid fills rows `0..termRows-1`
+- StatusBar draws into bottom 2 rows via Painter
+- `updateModeIndicatorsLocked()` updates toggle button Active states before draw
 
 ```go
 func (a *TexelTerm) Render() [][]texelcore.Cell {
@@ -622,18 +969,15 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	}
 	vtermCols := len(vtermGrid[0])
 
-	// Calculate total output width (terminal + scrollbar if visible)
 	totalCols := vtermCols
 	scrollbarVisible := a.scrollbar != nil && a.scrollbar.IsVisible()
 	if scrollbarVisible {
 		totalCols = vtermCols + ScrollBarWidth
 	}
 
-	// Total height includes status bar
 	const statusBarHeight = 2
 	totalRows := termRows + statusBarHeight
 
-	// Resize buffer if needed
 	if len(a.buf) != totalRows || (totalRows > 0 && len(a.buf[0]) != totalCols) {
 		a.buf = make([][]texelcore.Cell, totalRows)
 		for y := range a.buf {
@@ -673,7 +1017,6 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.vterm.ClearDirty()
 	a.applySelectionHighlightLocked(a.buf)
 
-	// Composite scrollbar on the right side (non-overlay)
 	if scrollbarVisible {
 		scrollbarGrid := a.scrollbar.Render()
 		if scrollbarGrid != nil {
@@ -689,7 +1032,6 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.drawConfirmation(a.buf)
 	}
 
-	// Render history navigator overlay (Phase 4 - Disk Layer)
 	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
 		a.buf = a.historyNavigator.Render(a.buf)
 	}
@@ -707,134 +1049,72 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 }
 ```
 
-**Step 2: Add `updateModeIndicatorsLocked` helper**
+**Step 2: Add `updateModeIndicatorsLocked`**
 
-Add after the Render method:
+This updates the Active state of each ToggleButton from current VTerm state:
 
 ```go
-// updateModeIndicatorsLocked rebuilds the status bar mode indicators from current state.
+// updateModeIndicatorsLocked updates toggle button states from current terminal state.
 // Must be called with a.mu held.
 func (a *TexelTerm) updateModeIndicatorsLocked() {
-	if a.statusBar == nil || a.vterm == nil {
+	if a.vterm == nil {
 		return
 	}
 
-	tm := theming.ForApp("texelterm")
-	brightFg := tm.GetSemanticColor("text.primary")
-	dimFg := tm.GetSemanticColor("text.muted")
-	bg := tm.GetSemanticColor("bg.surface")
+	// TFM - transformer pipeline
+	a.tfmToggle.Active = a.pipeline != nil && a.pipeline.Enabled()
 
-	if brightFg == tcell.ColorDefault {
-		brightFg = tcell.ColorWhite
-	}
-	if dimFg == tcell.ColorDefault {
-		dimFg = tcell.ColorGray
-	}
-	if bg == tcell.ColorDefault {
-		bg = tcell.ColorBlack
-	}
-
-	bright := tcell.StyleDefault.Foreground(brightFg).Background(bg)
-	dim := tcell.StyleDefault.Foreground(dimFg).Background(bg)
-	space := widgets.StyledSegment{Text: " ", Style: dim}
-
-	styleFor := func(enabled bool) tcell.Style {
-		if enabled {
-			return bright
-		}
-		return dim
-	}
-
-	var segments []widgets.StyledSegment
-
-	// TFM - Transformer pipeline
-	tfmEnabled := a.pipeline != nil && a.pipeline.Enabled()
-	segments = append(segments, widgets.StyledSegment{Text: "TFM", Style: styleFor(tfmEnabled)})
-	segments = append(segments, space)
-
-	// INS/RPL - Insert/Replace mode
+	// INS/RPL - insert/replace mode
 	if a.vterm.InsertMode() {
-		segments = append(segments, widgets.StyledSegment{Text: "RPL", Style: bright})
+		a.insToggle.Label = "RPL"
+		a.insToggle.Active = true
 	} else {
-		segments = append(segments, widgets.StyledSegment{Text: "INS", Style: bright})
+		a.insToggle.Label = "INS"
+		a.insToggle.Active = true
 	}
-	segments = append(segments, space)
 
 	// TUI/NRM - TUI detection
-	fwd := a.vterm.FixedWidthDetector()
-	if fwd != nil && fwd.IsInTUIMode() {
-		segments = append(segments, widgets.StyledSegment{Text: "TUI", Style: bright})
+	if a.vterm.IsInTUIMode() {
+		a.tuiToggle.Label = "TUI"
+		a.tuiToggle.Active = true
 	} else {
-		segments = append(segments, widgets.StyledSegment{Text: "NRM", Style: bright})
+		a.tuiToggle.Label = "NRM"
+		a.tuiToggle.Active = true
 	}
-	segments = append(segments, space)
 
-	// WRP - Wrap enabled
-	segments = append(segments, widgets.StyledSegment{Text: "WRP", Style: styleFor(a.vterm.WrapEnabled())})
-	segments = append(segments, space)
+	// WRP - wrap
+	a.wrpToggle.Active = a.vterm.WrapEnabled()
 
-	// RFL - Reflow enabled
-	segments = append(segments, widgets.StyledSegment{Text: "RFL", Style: styleFor(a.vterm.ReflowEnabled())})
-	segments = append(segments, space)
+	// RFL - reflow
+	a.rflToggle.Active = a.vterm.ReflowEnabled()
 
-	// ALT - Alt screen
-	segments = append(segments, widgets.StyledSegment{Text: "ALT", Style: styleFor(a.vterm.InAltScreen())})
-
-	a.statusBar.SetLeftSegments(segments)
+	// ALT - alt screen
+	a.altToggle.Active = a.vterm.InAltScreen()
 }
 ```
-
-**Note:** Check if `fixedWidthDetector()` is exported. Based on the codebase exploration, it's lowercase (`fixedWidthDetector()`). We may need to either:
-- Export it: rename to `FixedWidthDetector()` in vterm_memory_buffer.go, or
-- Add a `IsInTUIMode() bool` method directly on VTerm.
-
-Check `vterm_memory_buffer.go:1707` — if `fixedWidthDetector()` is unexported, add a public wrapper:
-
-In `texelation/apps/texelterm/parser/vterm.go` (near the other getters):
-
-```go
-// IsInTUIMode returns true if the terminal has detected a TUI application.
-func (v *VTerm) IsInTUIMode() bool {
-	fwd := v.fixedWidthDetector()
-	return fwd != nil && fwd.IsInTUIMode()
-}
-```
-
-Then in `updateModeIndicatorsLocked`, use `a.vterm.IsInTUIMode()` instead of accessing `fixedWidthDetector()` directly.
 
 **Step 3: Verify compilation**
 
 Run: `cd /home/marc/projects/texel/texelation && go build ./apps/texelterm/`
-Expected: Compiles without errors. Fix any import issues.
 
 **Step 4: Commit**
 
 ```bash
 cd /home/marc/projects/texel/texelation
 git add apps/texelterm/term.go
-git commit -m "Render StatusBar with mode indicators via Painter bridge"
+git commit -m "Render StatusBar with ToggleButton mode indicators via Painter bridge"
 ```
 
 ---
 
-### Task 7: Replace `toggleOverlay` with `toggleTransformers`
+### Task 8: Replace `toggleOverlay` with `toggleTransformers` + mouse routing
 
 **Files:**
-- Modify: `texelation/apps/texelterm/term.go:846-887`
+- Modify: `texelation/apps/texelterm/term.go:846-887` (Ctrl+T handler), `:955-991` (HandleMouse)
 
-**Step 1: Replace the Ctrl+T handler and toggle method**
+**Step 1: Replace toggle method**
 
-Update the Ctrl+T handler (line 846-850) — already calls `toggleOverlay()`, just change the name:
-
-```go
-	// Handle Ctrl+T to toggle transformers + overlay
-	if ev.Key() == tcell.KeyCtrlT {
-		a.toggleTransformers()
-		return
-	}
-```
-
-Replace `toggleOverlay()` (lines 879-887) with:
+Replace `toggleOverlay()` (lines 879-887):
 
 ```go
 // toggleTransformers enables/disables the transformer pipeline and overlay visibility.
@@ -847,6 +1127,7 @@ func (a *TexelTerm) toggleTransformers() {
 		a.pipeline.SetEnabled(newState)
 		a.vterm.SetShowOverlay(newState)
 		a.vterm.MarkAllDirty()
+		a.tfmToggle.Active = newState
 		if a.statusBar != nil {
 			if newState {
 				a.statusBar.ShowMessage("Transformers ON")
@@ -855,7 +1136,7 @@ func (a *TexelTerm) toggleTransformers() {
 			}
 		}
 	} else {
-		// No pipeline configured — just toggle overlay visibility
+		// No pipeline — toggle overlay visibility only
 		current := a.vterm.ShowOverlay()
 		a.vterm.SetShowOverlay(!current)
 		a.vterm.MarkAllDirty()
@@ -863,63 +1144,92 @@ func (a *TexelTerm) toggleTransformers() {
 }
 ```
 
-**Step 2: Verify compilation**
+Update Ctrl+T handler (line 846-850):
+
+```go
+	// Handle Ctrl+T to toggle transformers + overlay
+	if ev.Key() == tcell.KeyCtrlT {
+		a.toggleTransformers()
+		return
+	}
+```
+
+**Step 2: Add mouse routing for status bar**
+
+In `HandleMouse()` (line 955), add status bar check before mouse coordinator:
+
+```go
+func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
+	if ev == nil {
+		return
+	}
+
+	// Check if history navigator is visible and wants the event
+	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+		if a.historyNavigator.HandleMouse(ev) {
+			a.requestRefresh()
+			return
+		}
+	}
+
+	x, y := ev.Position()
+	buttons := ev.Buttons()
+
+	// Check if click is on the scrollbar
+	if a.scrollbar != nil && a.scrollbar.IsVisible() {
+		scrollbarX := a.width - ScrollBarWidth
+		if x >= scrollbarX {
+			if buttons&tcell.Button1 != 0 {
+				localX := x - scrollbarX
+				if targetOffset, ok := a.scrollbar.HandleClick(localX, y); ok {
+					a.scrollToOffsetWithResultSelection(targetOffset)
+					return
+				}
+			}
+			return
+		}
+	}
+
+	// Check if click is on the status bar
+	if a.statusBar != nil {
+		const statusBarHeight = 2
+		termRows := a.height - statusBarHeight
+		if y >= termRows {
+			if a.statusBar.HandleMouse(ev) {
+				a.requestRefresh()
+			}
+			return
+		}
+	}
+
+	// Delegate to mouse coordinator for terminal content
+	if a.mouseCoordinator != nil {
+		a.mouseCoordinator.HandleMouse(ev)
+	}
+	a.requestRefresh()
+}
+```
+
+**Step 3: Verify compilation**
 
 Run: `cd /home/marc/projects/texel/texelation && go build ./apps/texelterm/`
-Expected: Compiles. No references to old `toggleOverlay` remain.
 
-**Step 3: Commit**
+**Step 4: Commit**
 
 ```bash
 cd /home/marc/projects/texel/texelation
 git add apps/texelterm/term.go
-git commit -m "Replace toggleOverlay with toggleTransformers for Ctrl+T"
+git commit -m "Replace toggleOverlay with toggleTransformers, add status bar mouse routing"
 ```
 
 ---
 
-### Task 8: Add VTerm.IsInTUIMode getter (if needed)
+### Task 9: Integration tests
 
 **Files:**
-- Modify: `texelation/apps/texelterm/parser/vterm.go`
+- Create: `texelation/apps/texelterm/term_statusbar_test.go`
 
-This task is only needed if `fixedWidthDetector()` is unexported (lowercase). Based on exploration, it IS unexported.
-
-**Step 1: Add the method**
-
-In `texelation/apps/texelterm/parser/vterm.go`, near the other getters:
-
-```go
-// IsInTUIMode returns true if the terminal has detected a TUI application.
-func (v *VTerm) IsInTUIMode() bool {
-	fwd := v.fixedWidthDetector()
-	return fwd != nil && fwd.IsInTUIMode()
-}
-```
-
-**Step 2: Verify compilation**
-
-Run: `cd /home/marc/projects/texel/texelation && go build ./apps/texelterm/`
-Expected: Compiles.
-
-**Step 3: Commit**
-
-```bash
-cd /home/marc/projects/texel/texelation
-git add apps/texelterm/parser/vterm.go
-git commit -m "Add IsInTUIMode getter to VTerm"
-```
-
----
-
-### Task 9: End-to-end integration test
-
-**Files:**
-- Test: `texelation/apps/texelterm/term_statusbar_test.go` (new)
-
-**Step 1: Write the integration test**
-
-Create `texelation/apps/texelterm/term_statusbar_test.go`:
+**Step 1: Write tests**
 
 ```go
 package texelterm
@@ -927,39 +1237,47 @@ package texelterm
 import (
 	"testing"
 
-	texelcore "github.com/framegrace/texelui/core"
-	"github.com/gdamore/tcell/v2"
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
-func TestStatusBarRendered(t *testing.T) {
+func TestStatusBarRenderOutput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	app := New("test", "/bin/sh").(*TexelTerm)
-	app.Resize(80, 24)
+	app.Resize(80, 26)
 
-	// Set up refresh notifier (starts StatusBar ticker)
 	ch := make(chan bool, 1)
 	app.SetRefreshNotifier(ch)
 	defer app.statusBar.Stop()
 
-	// Without VTerm initialized, Render returns nil
+	// Initialize VTerm manually for testing
+	app.mu.Lock()
+	app.vterm = parser.NewVTerm(80, 24, parser.WithWrap(true), parser.WithReflow(true))
+	app.mu.Unlock()
+
 	buf := app.Render()
-	if buf != nil {
-		t.Fatal("expected nil render before VTerm init")
+	if buf == nil {
+		t.Fatal("expected non-nil render")
+	}
+
+	// Buffer should be 26 rows (24 terminal + 2 status bar)
+	if len(buf) != 26 {
+		t.Errorf("expected 26 rows, got %d", len(buf))
+	}
+
+	// Separator row (row 24) should have '─' characters
+	if buf[24][0].Ch != '─' {
+		t.Errorf("expected separator '─' at row 24, got %q", buf[24][0].Ch)
+	}
+
+	// Content row (row 25) should have toggle button text
+	// First toggle is "TFM" at x=1
+	got := string([]rune{buf[25][1].Ch, buf[25][2].Ch, buf[25][3].Ch})
+	if got != "TFM" {
+		t.Errorf("expected 'TFM' at row 25 x=1, got %q", got)
 	}
 }
 
-func TestStatusBarHeight(t *testing.T) {
-	app := New("test", "/bin/sh").(*TexelTerm)
-	app.Resize(80, 26)
-
-	// The VTerm should be sized to 80x24 (26 - 2 for status bar)
-	// We can't check VTerm directly without Run(), but we can verify
-	// the app's stored dimensions
-	if app.height != 26 {
-		t.Errorf("expected height=26, got %d", app.height)
-	}
-}
-
-func TestToggleTransformersNoopWithoutPipeline(t *testing.T) {
+func TestToggleTransformersNoPipeline(t *testing.T) {
 	app := New("test", "/bin/sh").(*TexelTerm)
 	app.Resize(80, 24)
 
@@ -971,51 +1289,35 @@ func TestToggleTransformersNoopWithoutPipeline(t *testing.T) {
 	app.toggleTransformers()
 }
 
-func TestModeIndicatorSegments(t *testing.T) {
+func TestToggleTransformersWithPipeline(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	app := New("test", "/bin/sh").(*TexelTerm)
-	app.Resize(80, 24)
+	app.Resize(80, 26)
 
 	ch := make(chan bool, 1)
 	app.SetRefreshNotifier(ch)
 	defer app.statusBar.Stop()
 
-	// Initialize a minimal VTerm for testing
+	// Set up VTerm and a mock pipeline
 	app.mu.Lock()
-	app.vterm = newTestVTerm(78, 22) // 80-scrollbar, 24-statusbar
+	app.vterm = parser.NewVTerm(80, 24)
+	// We can't easily build a real pipeline without config, so test the toggle button directly
 	app.mu.Unlock()
 
-	// Build mode indicators
+	// Without pipeline, tfmToggle reflects nil pipeline state
 	app.mu.Lock()
 	app.updateModeIndicatorsLocked()
 	app.mu.Unlock()
 
-	// Render and check that status bar area has content
-	buf := app.Render()
-	if buf == nil {
-		t.Fatal("expected non-nil render")
-	}
-
-	// Status bar is in the last 2 rows
-	statusRow := len(buf) - 1
-	// Check that some cells have non-space content (mode indicators)
-	hasContent := false
-	for x := 0; x < len(buf[statusRow]); x++ {
-		if buf[statusRow][x].Ch != ' ' && buf[statusRow][x].Ch != 0 && buf[statusRow][x].Ch != '─' {
-			hasContent = true
-			break
-		}
-	}
-	if !hasContent {
-		t.Error("expected mode indicator content in status bar row")
+	if app.tfmToggle.Active {
+		t.Error("expected TFM inactive when pipeline is nil")
 	}
 }
 ```
 
-Note: `newTestVTerm` may need to be a simple helper. If `parser.NewVTerm` is accessible, use it directly. The test should be adjusted based on what's possible without spawning a real shell.
+**Step 2: Run tests**
 
-**Step 2: Run the test**
-
-Run: `cd /home/marc/projects/texel/texelation && go test ./apps/texelterm/ -run "TestStatusBar|TestToggleTransformers|TestModeIndicator" -v`
+Run: `cd /home/marc/projects/texel/texelation && go test ./apps/texelterm/ -run "TestStatusBarRender|TestToggleTransformers" -v`
 Expected: All PASS
 
 **Step 3: Commit**
@@ -1028,7 +1330,7 @@ git commit -m "Add integration tests for status bar and transformer toggle"
 
 ---
 
-### Task 10: Run full test suite and verify
+### Task 10: Full test suite + smoke test
 
 **Step 1: Run texelui tests**
 
@@ -1038,20 +1340,15 @@ Expected: All PASS
 **Step 2: Run texelation tests**
 
 Run: `cd /home/marc/projects/texel/texelation && go test ./... -v -timeout 120s`
-Expected: All PASS (or known flaky tests only)
+Expected: All PASS
 
-**Step 3: Run manual smoke test**
+**Step 3: Manual smoke test**
 
 Run texelterm standalone and verify:
-1. Status bar appears at the bottom with mode indicators
-2. `TFM INS NRM WRP RFL ALT` visible (some bright, some dim depending on state)
-3. Press Ctrl+T — message "Transformers OFF" appears, TFM indicator dims
-4. Press Ctrl+T again — message "Transformers ON" appears, TFM indicator brightens
-5. The terminal area is 2 rows shorter than before (status bar takes space)
-
-**Step 4: Final commit (if any fixes needed)**
-
-```bash
-git add -A
-git commit -m "Fix issues found during smoke testing"
-```
+1. Status bar at bottom with toggle buttons: `TFM INS NRM WRP RFL ALT`
+2. Active toggles appear reversed (inverted FG/BG)
+3. Click on `TFM` — toggles transformers, message "Transformers OFF/ON" appears
+4. Press Ctrl+T — same effect as clicking TFM
+5. Terminal content area is 2 rows shorter
+6. `TUI`/`NRM` and `INS`/`RPL` change when running TUI apps or setting insert mode
+7. `ALT` lights up when entering alt screen (e.g., `vim`)

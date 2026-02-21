@@ -1,7 +1,7 @@
 # Texelterm Status Bar & Transformer Toggle Design
 
 **Date:** 2026-02-21
-**Status:** Approved
+**Status:** Approved (rev 2 — ToggleButton widget)
 
 ## Problem
 
@@ -13,12 +13,46 @@
 
 - **Ctrl+T**: Binary ON/OFF toggle for the entire transformer pipeline + overlay visibility. Individual transformer selection stays in config.json.
 - **Status bar**: Steals bottom 2 rows from terminal area (1 separator + 1 content). Always visible, no hide/show toggle.
-- **Mode indicators**: All toggleable modes shown as 3-letter abbreviated labels. Enabled = bright (`text.primary`), disabled = dim (`text.muted`).
+- **Mode indicators**: Clickable `ToggleButton` widgets in the status bar. Active = reversed style, Inactive = normal style. 3-letter labels (TFM, INS, WRP, etc.).
 - **Overlay handling on disable**: Hide existing overlays (`ShowOverlay=false`) but keep them in memory. Re-enabling shows them again instantly.
 - **Status messages**: Show confirmation messages for all toggle actions (e.g., "Transformers OFF").
 - **Widget reuse**: Bridge the existing `texelui/widgets/StatusBar` widget into TexelTerm's render pipeline via `core.Painter`.
 
 ## Architecture
+
+### ToggleButton Widget
+
+New widget in `texelui/widgets/togglebutton.go`:
+
+```go
+type ToggleButton struct {
+    core.BaseWidget
+    Label    string
+    Active   bool
+    OnToggle func(active bool)
+}
+```
+
+- Compact: text only, 1 row, `len(label)` wide, no padding
+- Active = reversed style (swap FG/BG), Inactive = normal style
+- Clickable via `HandleMouse` — left click toggles and fires `OnToggle`
+- Not focusable (lives in status bar, not in tab order)
+
+### StatusBar Left-Side Extension
+
+Replace `KeyHintsProvider` text with hosted child widgets:
+
+```go
+// SetLeftWidgets sets widgets to display on the left side of the status bar.
+// Takes priority over KeyHintsProvider hints when set.
+// Widgets are positioned left-to-right with 1-char gaps.
+func (s *StatusBar) SetLeftWidgets(widgets []core.Widget)
+
+// HandleMouse forwards mouse events to left-side widgets via hit testing.
+func (s *StatusBar) HandleMouse(ev *tcell.EventMouse) bool
+```
+
+During `Draw()`, the StatusBar positions each widget sequentially and calls its `Draw()` method. During `HandleMouse()`, it hit-tests child widgets and forwards clicks.
 
 ### StatusBar Integration (Painter Bridge)
 
@@ -27,26 +61,18 @@ TexelTerm's `Render()` returns `[][]core.Cell`. The StatusBar widget's `Draw()` 
 1. `Resize(cols, rows)` passes `rows - 2` to VTerm, reserves 2 rows for status bar
 2. `Render()` allocates a `height`-row buffer
 3. Rows `0..height-3` filled from VTerm grid (terminal content)
-4. `core.NewPainter(buf, clipRect)` created over bottom 2 rows
-5. `StatusBar.Draw(painter)` renders separator + content into the buffer
+4. `core.NewPainter(buf, clipRect)` created over the full buffer
+5. `StatusBar.Draw(painter)` renders separator + content + toggle buttons into the buffer
 
-### StatusBar Left-Side Extension
+### TexelTerm Mouse Routing
 
-The StatusBar widget currently supports only plain dimmed text on the left (from `KeyHintsProvider`). Mode indicators need per-token styling. Extension:
+In `HandleMouse()`, add status bar check before mouse coordinator delegation:
 
-```go
-// StyledSegment is a text fragment with optional custom styling.
-type StyledSegment struct {
-    Text  string
-    Style tcell.Style // zero value = default hint style (dimmed)
-}
-
-// SetLeftSegments sets styled content for the left side.
-// Takes priority over KeyHintsProvider when set.
-func (s *StatusBar) SetLeftSegments(segments []StyledSegment)
+```
+history navigator → scrollbar → status bar (if y >= termRows) → mouse coordinator
 ```
 
-TexelTerm builds segments per mode indicator, each with bright or dim styling.
+Status bar mouse events are forwarded to `statusBar.HandleMouse()`, which hit-tests its child ToggleButton widgets.
 
 ### Transformer Pipeline Toggle
 
@@ -61,11 +87,6 @@ type Pipeline struct {
 
 func (p *Pipeline) SetEnabled(on bool)
 func (p *Pipeline) Enabled() bool
-
-func (p *Pipeline) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) bool {
-    if !p.enabled { return false }
-    // ... existing logic
-}
 ```
 
 All pipeline methods (`HandleLine`, `NotifyPromptStart`, `NotifyCommandStart`) short-circuit when disabled.
@@ -81,7 +102,7 @@ func (a *TexelTerm) toggleTransformers() {
     a.pipeline.SetEnabled(newState)
     a.vterm.SetShowOverlay(newState)
     a.vterm.MarkAllDirty()
-    a.updateModeIndicators()
+    a.tfmToggle.Active = newState  // Update toggle button state
     if newState {
         a.statusBar.ShowMessage("Transformers ON")
     } else {
@@ -92,28 +113,29 @@ func (a *TexelTerm) toggleTransformers() {
 
 ### Mode Indicators
 
-| Indicator | Source | Meaning |
-|-----------|--------|---------|
-| `TFM` | `pipeline.Enabled()` | Transformer pipeline on/off |
-| `INS`/`RPL` | `vterm.InsertMode()` | Insert vs Replace mode |
-| `TUI`/`NRM` | `fixedWidthDetector.IsInTUIMode()` | TUI app detected vs normal shell |
-| `WRP` | `vterm.WrapEnabled()` | Line wrapping on/off |
-| `RFL` | `vterm.ReflowEnabled()` | Reflow on resize on/off |
-| `ALT` | `vterm.InAltScreen()` | Alt screen active (informational) |
+| Indicator | Source | Clickable | Action |
+|-----------|--------|-----------|--------|
+| `TFM` | `pipeline.Enabled()` | Yes | Toggle transformer pipeline |
+| `INS`/`RPL` | `vterm.InsertMode()` | No (read-only) | Reflects terminal IRM state |
+| `TUI`/`NRM` | `vterm.IsInTUIMode()` | No (read-only) | Reflects TUI detection |
+| `WRP` | `vterm.WrapEnabled()` | Yes | Toggle line wrapping |
+| `RFL` | `vterm.ReflowEnabled()` | Yes | Toggle reflow on resize |
+| `ALT` | `vterm.InAltScreen()` | No (read-only) | Reflects alt screen state |
 
-Rendered as: `TFM INS NRM WRP RFL` with bright/dim per state. Updated on every `Render()` call.
+Read-only indicators still use ToggleButton for visual consistency but have no `OnToggle` callback. Their `Active` state is updated on every `Render()` to reflect current terminal state.
 
 ### VTerm Getter Methods
 
 New exported getters needed on VTerm:
 
 ```go
-func (v *VTerm) InsertMode() bool   { return v.insertMode }
-func (v *VTerm) WrapEnabled() bool  { return v.wrapEnabled }
+func (v *VTerm) InsertMode() bool    { return v.insertMode }
+func (v *VTerm) WrapEnabled() bool   { return v.wrapEnabled }
 func (v *VTerm) ReflowEnabled() bool { return v.reflowEnabled }
+func (v *VTerm) IsInTUIMode() bool   { ... }  // wraps unexported fixedWidthDetector()
 ```
 
-`InAltScreen()` and `fixedWidthDetector()` already exist.
+`InAltScreen()` already exists.
 
 ## Files Changed
 
@@ -121,15 +143,16 @@ func (v *VTerm) ReflowEnabled() bool { return v.reflowEnabled }
 
 | File | Change |
 |------|--------|
-| `widgets/statusbar.go` | Add `StyledSegment` type, `SetLeftSegments()` method, draw logic for styled segments |
+| `widgets/togglebutton.go` | **New**: ToggleButton widget with Active state, reversed styling, HandleMouse |
+| `widgets/statusbar.go` | Add `SetLeftWidgets()` method, `HandleMouse()` forwarding, draw child widgets |
 
 ### Texelation (`texelation/`)
 
 | File | Change |
 |------|--------|
 | `apps/texelterm/transformer/transformer.go` | Add `enabled` field, `SetEnabled()`, `Enabled()` methods; guard all dispatch methods |
-| `apps/texelterm/parser/vterm.go` | Add `InsertMode()`, `WrapEnabled()`, `ReflowEnabled()` getters |
-| `apps/texelterm/term.go` | Store `pipeline` reference; create/start `StatusBar`; modify `Resize()` for status bar height; modify `Render()` for Painter bridge; replace `toggleOverlay()` with `toggleTransformers()`; add `updateModeIndicators()` |
+| `apps/texelterm/parser/vterm.go` | Add `InsertMode()`, `WrapEnabled()`, `ReflowEnabled()`, `IsInTUIMode()` getters |
+| `apps/texelterm/term.go` | Store `pipeline` ref; create ToggleButtons + StatusBar; modify `Resize()` for status bar height; modify `Render()` for Painter bridge; replace `toggleOverlay()` with `toggleTransformers()`; add mouse routing for status bar; add `updateModeIndicatorsLocked()` |
 
 ## Config
 
