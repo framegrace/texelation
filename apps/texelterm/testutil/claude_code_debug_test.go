@@ -25,11 +25,12 @@ import (
 )
 
 const (
-	// Wide terminal to trigger the two-section layout (separate bottom status bar)
-	// that appears at larger widths. The user's screenshot was ~250+ cols.
-	claudeCodeWidth  = 250
-	claudeCodeHeight = 25
-	claudeCodeWait   = 15 * time.Second // Wait after trust prompt for welcome screen to render
+	// Match user's terminal: 228x49 triggers the boxed layout with separate
+	// bottom status bar and narrow right sections. This layout also appears
+	// in Alacritty (correct) but renders incorrectly in texelterm.
+	claudeCodeWidth  = 228
+	claudeCodeHeight = 49
+	claudeCodeWait   = 15 * time.Second
 )
 
 // clearClaudeEnv temporarily unsets CLAUDECODE env var to allow nested capture.
