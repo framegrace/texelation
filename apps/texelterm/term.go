@@ -135,14 +135,19 @@ func New(title, command string) texelcore.App {
 
 	tfm := widgets.NewToggleButton("TFM")
 	tfm.Active = true // Transformers on by default
+	tfm.SetHelpText("Transformer pipeline (Ctrl+T)")
 	tui := widgets.NewToggleButton("NRM")
 	tui.Disabled = true
+	tui.SetHelpText("TUI app detection")
 	wrp := widgets.NewToggleButton("WRP")
 	wrp.Active = true // Wrapping on by default
+	wrp.SetHelpText("Line wrapping")
 	rfl := widgets.NewToggleButton("RFL")
 	rfl.Disabled = true
+	rfl.SetHelpText("Reflow on resize")
 	alt := widgets.NewToggleButton("ALT")
 	alt.Disabled = true
+	alt.SetHelpText("Alternate screen")
 
 	sb.SetLeftWidgets([]texelcore.Widget{tfm, tui, wrp, rfl, alt})
 
