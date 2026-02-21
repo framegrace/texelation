@@ -506,22 +506,24 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	}
 
 	vtermGrid := a.vterm.Grid()
-	rows := len(vtermGrid)
-	if rows == 0 {
+	termRows := len(vtermGrid)
+	if termRows == 0 {
 		return nil
 	}
 	vtermCols := len(vtermGrid[0])
 
-	// Calculate total output width (terminal + scrollbar if visible)
 	totalCols := vtermCols
 	scrollbarVisible := a.scrollbar != nil && a.scrollbar.IsVisible()
 	if scrollbarVisible {
 		totalCols = vtermCols + ScrollBarWidth
 	}
 
+	const statusBarHeight = 2
+	totalRows := termRows + statusBarHeight
+
 	// Resize buffer if needed
-	if len(a.buf) != rows || (rows > 0 && len(a.buf[0]) != totalCols) {
-		a.buf = make([][]texelcore.Cell, rows)
+	if len(a.buf) != totalRows || (totalRows > 0 && len(a.buf[0]) != totalCols) {
+		a.buf = make([][]texelcore.Cell, totalRows)
 		for y := range a.buf {
 			a.buf[y] = make([]texelcore.Cell, totalCols)
 		}
@@ -529,7 +531,6 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	}
 
 	cursorX, cursorY := a.vterm.Cursor()
-	// Only show cursor if it's visible AND we're at the live edge (not scrolled into history)
 	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.DirtyLines()
 
@@ -546,12 +547,12 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	}
 
 	if allDirty {
-		for y := 0; y < rows; y++ {
+		for y := 0; y < termRows; y++ {
 			renderLine(y)
 		}
 	} else {
 		for y := range dirtyLines {
-			if y >= 0 && y < rows {
+			if y >= 0 && y < termRows {
 				renderLine(y)
 			}
 		}
@@ -560,11 +561,11 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.vterm.ClearDirty()
 	a.applySelectionHighlightLocked(a.buf)
 
-	// Composite scrollbar on the right side (non-overlay)
+	// Composite scrollbar on the right side
 	if scrollbarVisible {
 		scrollbarGrid := a.scrollbar.Render()
 		if scrollbarGrid != nil {
-			for y := 0; y < rows && y < len(scrollbarGrid); y++ {
+			for y := 0; y < termRows && y < len(scrollbarGrid); y++ {
 				for x := 0; x < ScrollBarWidth && x < len(scrollbarGrid[y]); x++ {
 					a.buf[y][vtermCols+x] = scrollbarGrid[y][x]
 				}
@@ -576,13 +577,57 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.drawConfirmation(a.buf)
 	}
 
-	// Render history navigator overlay (Phase 4 - Disk Layer)
-	// Note: Navigator overlays the terminal content only, not the scrollbar
+	// Render history navigator overlay
 	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
 		a.buf = a.historyNavigator.Render(a.buf)
 	}
 
+	// Render status bar via Painter bridge
+	if a.statusBar != nil {
+		a.updateModeIndicatorsLocked()
+		p := texelcore.NewPainter(a.buf, texelcore.Rect{
+			X: 0, Y: 0, W: totalCols, H: totalRows,
+		})
+		a.statusBar.Draw(p)
+	}
+
 	return a.buf
+}
+
+// updateModeIndicatorsLocked updates toggle button states from current terminal state.
+// Must be called with a.mu held.
+func (a *TexelTerm) updateModeIndicatorsLocked() {
+	if a.vterm == nil {
+		return
+	}
+
+	// TFM - transformer pipeline
+	a.tfmToggle.Active = a.pipeline != nil && a.pipeline.Enabled()
+
+	// INS/RPL - insert/replace mode
+	if a.vterm.InsertMode() {
+		a.insToggle.Label = "RPL"
+	} else {
+		a.insToggle.Label = "INS"
+	}
+	a.insToggle.Active = true
+
+	// TUI/NRM - TUI detection
+	if a.vterm.IsInTUIMode() {
+		a.tuiToggle.Label = "TUI"
+	} else {
+		a.tuiToggle.Label = "NRM"
+	}
+	a.tuiToggle.Active = true
+
+	// WRP - wrap
+	a.wrpToggle.Active = a.vterm.WrapEnabled()
+
+	// RFL - reflow
+	a.rflToggle.Active = a.vterm.ReflowEnabled()
+
+	// ALT - alt screen
+	a.altToggle.Active = a.vterm.InAltScreen()
 }
 
 // applySelectionHighlightLocked applies selection highlighting to the render buffer.
