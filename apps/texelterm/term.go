@@ -604,21 +604,23 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 	// TFM - transformer pipeline
 	a.tfmToggle.Active = a.pipeline != nil && a.pipeline.Enabled()
 
-	// INS/RPL - insert/replace mode
+	// INS/RPL - insert/replace mode (active = default insert mode)
 	if a.vterm.InsertMode() {
 		a.insToggle.Label = "RPL"
+		a.insToggle.Active = false
 	} else {
 		a.insToggle.Label = "INS"
+		a.insToggle.Active = true
 	}
-	a.insToggle.Active = true
 
-	// TUI/NRM - TUI detection
+	// TUI/NRM - TUI detection (active = TUI detected)
 	if a.vterm.IsInTUIMode() {
 		a.tuiToggle.Label = "TUI"
+		a.tuiToggle.Active = true
 	} else {
 		a.tuiToggle.Label = "NRM"
+		a.tuiToggle.Active = false
 	}
-	a.tuiToggle.Active = true
 
 	// WRP - wrap
 	a.wrpToggle.Active = a.vterm.WrapEnabled()
@@ -959,29 +961,35 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
-// toggleTransformers enables/disables the transformer pipeline and overlay visibility.
+// toggleTransformers flips the transformer pipeline state (Ctrl+T path).
 func (a *TexelTerm) toggleTransformers() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.vterm == nil {
 		return
 	}
 	if a.pipeline != nil {
 		newState := !a.pipeline.Enabled()
-		a.pipeline.SetEnabled(newState)
-		a.vterm.SetShowOverlay(newState)
-		a.vterm.MarkAllDirty()
-		a.tfmToggle.Active = newState
-		if a.statusBar != nil {
-			if newState {
-				a.statusBar.ShowMessage("Transformers ON")
-			} else {
-				a.statusBar.ShowMessage("Transformers OFF")
-			}
-		}
+		a.setTransformerState(newState)
 	} else {
-		// No pipeline — toggle overlay visibility only
 		current := a.vterm.ShowOverlay()
 		a.vterm.SetShowOverlay(!current)
 		a.vterm.MarkAllDirty()
+	}
+}
+
+// setTransformerState sets the pipeline to the given state. Caller must hold a.mu.
+func (a *TexelTerm) setTransformerState(enabled bool) {
+	a.pipeline.SetEnabled(enabled)
+	a.vterm.SetShowOverlay(enabled)
+	a.vterm.MarkAllDirty()
+	a.tfmToggle.Active = enabled
+	if a.statusBar != nil {
+		if enabled {
+			a.statusBar.ShowMessage("Transformers ON")
+		} else {
+			a.statusBar.ShowMessage("Transformers OFF")
+		}
 	}
 }
 
@@ -1049,7 +1057,6 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 }
 
 // HandleMouse implements texelcore.MouseHandler.
-// Handles history navigator, scrollbar clicks, then delegates other events to MouseCoordinator.
 // Handles history navigator, scrollbar clicks, then delegates other events to MouseCoordinator.
 func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 	if ev == nil {
@@ -1552,7 +1559,11 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 
 	// Wire TFM toggle callback (requires pipeline to be set up)
 	a.tfmToggle.OnToggle = func(active bool) {
-		a.toggleTransformers()
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.pipeline != nil {
+			a.setTransformerState(active)
+		}
 	}
 
 	a.parser = parser.NewParser(a.vterm)
