@@ -926,9 +926,9 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
-	// Handle Ctrl+T to toggle overlay/original view
+	// Handle Ctrl+T to toggle transformer pipeline
 	if ev.Key() == tcell.KeyCtrlT {
-		a.toggleOverlay()
+		a.toggleTransformers()
 		return
 	}
 
@@ -959,14 +959,30 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
-// toggleOverlay toggles between showing overlay content and original content.
-func (a *TexelTerm) toggleOverlay() {
+// toggleTransformers enables/disables the transformer pipeline and overlay visibility.
+func (a *TexelTerm) toggleTransformers() {
 	if a.vterm == nil {
 		return
 	}
-	current := a.vterm.ShowOverlay()
-	a.vterm.SetShowOverlay(!current)
-	a.vterm.MarkAllDirty()
+	if a.pipeline != nil {
+		newState := !a.pipeline.Enabled()
+		a.pipeline.SetEnabled(newState)
+		a.vterm.SetShowOverlay(newState)
+		a.vterm.MarkAllDirty()
+		a.tfmToggle.Active = newState
+		if a.statusBar != nil {
+			if newState {
+				a.statusBar.ShowMessage("Transformers ON")
+			} else {
+				a.statusBar.ShowMessage("Transformers OFF")
+			}
+		}
+	} else {
+		// No pipeline — toggle overlay visibility only
+		current := a.vterm.ShowOverlay()
+		a.vterm.SetShowOverlay(!current)
+		a.vterm.MarkAllDirty()
+	}
 }
 
 func (a *TexelTerm) HandlePaste(data []byte) {
@@ -1064,6 +1080,18 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 				}
 			}
 			return // Ignore other scrollbar events
+		}
+	}
+
+	// Check if click is on the status bar
+	if a.statusBar != nil {
+		const statusBarHeight = 2
+		termRows := a.height - statusBarHeight
+		if y >= termRows {
+			if a.statusBar.HandleMouse(ev) {
+				a.requestRefresh()
+			}
+			return
 		}
 	}
 
@@ -1518,7 +1546,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 
 	// Wire TFM toggle callback (requires pipeline to be set up)
 	a.tfmToggle.OnToggle = func(active bool) {
-		a.toggleOverlay()
+		a.toggleTransformers()
 	}
 
 	a.parser = parser.NewParser(a.vterm)
