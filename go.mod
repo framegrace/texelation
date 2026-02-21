@@ -5,7 +5,7 @@ go 1.24.3
 require (
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/creack/pty v1.1.24
-	github.com/framegrace/texelui v0.4.0
+	github.com/framegrace/texelui v0.5.0
 	github.com/gdamore/tcell/v2 v2.13.8
 	github.com/go-enry/go-enry/v2 v2.9.4
 	github.com/mattn/go-runewidth v0.0.16
@@ -31,5 +31,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/framegrace/texelui => /home/marc/projects/texel/texelui
