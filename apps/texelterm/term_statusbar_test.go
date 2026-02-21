@@ -47,8 +47,8 @@ func TestStatusBarRenderedInOutput(t *testing.T) {
 	if !strings.Contains(contentRow, "TFM") {
 		t.Errorf("expected 'TFM' on status bar content row, got %q", contentRow)
 	}
-	if !strings.Contains(contentRow, "INS") {
-		t.Errorf("expected 'INS' on status bar content row, got %q", contentRow)
+	if !strings.Contains(contentRow, "RPL") {
+		t.Errorf("expected 'RPL' on status bar content row, got %q", contentRow)
 	}
 	if !strings.Contains(contentRow, "NRM") {
 		t.Errorf("expected 'NRM' on status bar content row, got %q", contentRow)

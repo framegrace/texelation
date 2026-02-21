@@ -134,13 +134,16 @@ func New(title, command string) texelcore.App {
 
 	tfm := widgets.NewToggleButton("TFM")
 	tfm.Active = true // Transformers on by default
-	ins := widgets.NewToggleButton("INS")
-	ins.Active = true
+	ins := widgets.NewToggleButton("RPL")
+	ins.Disabled = true
 	tui := widgets.NewToggleButton("NRM")
-	tui.Active = true
+	tui.Disabled = true
 	wrp := widgets.NewToggleButton("WRP")
+	wrp.Disabled = true
 	rfl := widgets.NewToggleButton("RFL")
+	rfl.Disabled = true
 	alt := widgets.NewToggleButton("ALT")
+	alt.Disabled = true
 
 	sb.SetLeftWidgets([]texelcore.Widget{tfm, ins, tui, wrp, rfl, alt})
 
@@ -604,13 +607,13 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 	// TFM - transformer pipeline
 	a.tfmToggle.Active = a.pipeline != nil && a.pipeline.Enabled()
 
-	// INS/RPL - insert/replace mode (active = default insert mode)
+	// INS/RPL - insert/replace mode
 	if a.vterm.InsertMode() {
-		a.insToggle.Label = "RPL"
-		a.insToggle.Active = false
-	} else {
 		a.insToggle.Label = "INS"
 		a.insToggle.Active = true
+	} else {
+		a.insToggle.Label = "RPL"
+		a.insToggle.Active = false
 	}
 
 	// TUI/NRM - TUI detection (active = TUI detected)
