@@ -88,10 +88,17 @@ func Lookup(id string) (Factory, bool) {
 // Pipeline is an ordered chain of transformers.
 type Pipeline struct {
 	transformers      []Transformer
+	enabled           bool
 	insertFunc        func(beforeIdx int64, cells []parser.Cell)
 	overlayFunc       func(lineIdx int64, cells []parser.Cell)
 	persistNotifyFunc func(lineIdx int64)
 }
+
+// SetEnabled enables or disables the pipeline at runtime.
+func (p *Pipeline) SetEnabled(on bool) { p.enabled = on }
+
+// Enabled returns whether the pipeline is currently enabled.
+func (p *Pipeline) Enabled() bool { return p.enabled }
 
 // SetInsertFunc sets the line insertion callback. The pipeline forwards
 // it to any transformer that implements LineInserter.
@@ -130,6 +137,9 @@ func (p *Pipeline) SetPersistNotifyFunc(fn func(lineIdx int64)) {
 // transformer suppressed the line (via LineSuppressor), which signals
 // the caller to skip scrollback persistence for this line.
 func (p *Pipeline) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand bool) bool {
+	if !p.enabled {
+		return false
+	}
 	for _, t := range p.transformers {
 		t.HandleLine(lineIdx, line, isCommand)
 		if sup, ok := t.(LineSuppressor); ok && sup.ShouldSuppress(lineIdx) {
@@ -141,6 +151,9 @@ func (p *Pipeline) HandleLine(lineIdx int64, line *parser.LogicalLine, isCommand
 
 // NotifyPromptStart dispatches to each transformer in order.
 func (p *Pipeline) NotifyPromptStart() {
+	if !p.enabled {
+		return
+	}
 	for _, t := range p.transformers {
 		t.NotifyPromptStart()
 	}
@@ -148,6 +161,9 @@ func (p *Pipeline) NotifyPromptStart() {
 
 // NotifyCommandStart dispatches the command string to each transformer.
 func (p *Pipeline) NotifyCommandStart(cmd string) {
+	if !p.enabled {
+		return
+	}
 	for _, t := range p.transformers {
 		t.NotifyCommandStart(cmd)
 	}
@@ -210,5 +226,5 @@ func BuildPipeline(cfg config.Config) *Pipeline {
 	if len(transformers) == 0 {
 		return nil
 	}
-	return &Pipeline{transformers: transformers}
+	return &Pipeline{transformers: transformers, enabled: true}
 }

@@ -89,7 +89,7 @@ func TestLookupMissing(t *testing.T) {
 func TestPipelineHandleLine(t *testing.T) {
 	s1 := &stubTransformer{id: "a"}
 	s2 := &stubTransformer{id: "b"}
-	p := &Pipeline{transformers: []Transformer{s1, s2}}
+	p := &Pipeline{transformers: []Transformer{s1, s2}, enabled: true}
 
 	line := &parser.LogicalLine{}
 	suppressed := p.HandleLine(42, line, true)
@@ -111,7 +111,7 @@ func TestPipelineHandleLine(t *testing.T) {
 func TestPipelineNotifyPromptStart(t *testing.T) {
 	s1 := &stubTransformer{id: "a"}
 	s2 := &stubTransformer{id: "b"}
-	p := &Pipeline{transformers: []Transformer{s1, s2}}
+	p := &Pipeline{transformers: []Transformer{s1, s2}, enabled: true}
 
 	p.NotifyPromptStart()
 
@@ -259,7 +259,7 @@ func (s *suppressingTransformer) ShouldSuppress(lineIdx int64) bool {
 func TestPipelineSuppression(t *testing.T) {
 	sup := &suppressingTransformer{}
 	after := &stubTransformer{id: "after"}
-	p := &Pipeline{transformers: []Transformer{sup, after}}
+	p := &Pipeline{transformers: []Transformer{sup, after}, enabled: true}
 
 	line := &parser.LogicalLine{}
 
@@ -283,7 +283,7 @@ func TestPipelineSuppression(t *testing.T) {
 func TestPipelineNotifyCommandStart(t *testing.T) {
 	s1 := &stubTransformer{id: "a"}
 	s2 := &stubTransformer{id: "b"}
-	p := &Pipeline{transformers: []Transformer{s1, s2}}
+	p := &Pipeline{transformers: []Transformer{s1, s2}, enabled: true}
 
 	p.NotifyCommandStart("cat foo.go")
 
@@ -292,6 +292,74 @@ func TestPipelineNotifyCommandStart(t *testing.T) {
 	}
 	if s1.lastCommand != "cat foo.go" || s2.lastCommand != "cat foo.go" {
 		t.Errorf("expected lastCommand='cat foo.go', got s1=%q s2=%q", s1.lastCommand, s2.lastCommand)
+	}
+}
+
+func TestPipelineEnabled(t *testing.T) {
+	s := &stubTransformer{id: "a"}
+	p := &Pipeline{transformers: []Transformer{s}, enabled: true}
+
+	if !p.Enabled() {
+		t.Error("expected pipeline to be enabled by default")
+	}
+
+	p.SetEnabled(false)
+	if p.Enabled() {
+		t.Error("expected pipeline to be disabled after SetEnabled(false)")
+	}
+
+	p.SetEnabled(true)
+	if !p.Enabled() {
+		t.Error("expected pipeline to be re-enabled after SetEnabled(true)")
+	}
+}
+
+func TestPipelineDisabledSkipsHandleLine(t *testing.T) {
+	s := &stubTransformer{id: "a"}
+	p := &Pipeline{transformers: []Transformer{s}, enabled: true}
+
+	line := &parser.LogicalLine{}
+
+	// Enabled: should dispatch.
+	p.HandleLine(1, line, false)
+	if s.handleCalls != 1 {
+		t.Fatalf("expected 1 handleCall when enabled, got %d", s.handleCalls)
+	}
+
+	// Disable: should skip and return false.
+	p.SetEnabled(false)
+	suppressed := p.HandleLine(2, line, true)
+	if suppressed {
+		t.Error("expected false from HandleLine when disabled")
+	}
+	if s.handleCalls != 1 {
+		t.Errorf("expected handleCalls still 1 when disabled, got %d", s.handleCalls)
+	}
+}
+
+func TestPipelineDisabledSkipsNotify(t *testing.T) {
+	s := &stubTransformer{id: "a"}
+	p := &Pipeline{transformers: []Transformer{s}, enabled: true}
+
+	// Enabled: calls go through.
+	p.NotifyPromptStart()
+	p.NotifyCommandStart("ls")
+	if s.promptCalls != 1 {
+		t.Fatalf("expected 1 promptCall when enabled, got %d", s.promptCalls)
+	}
+	if s.commandCalls != 1 {
+		t.Fatalf("expected 1 commandCall when enabled, got %d", s.commandCalls)
+	}
+
+	// Disable: calls are skipped.
+	p.SetEnabled(false)
+	p.NotifyPromptStart()
+	p.NotifyCommandStart("pwd")
+	if s.promptCalls != 1 {
+		t.Errorf("expected promptCalls still 1 when disabled, got %d", s.promptCalls)
+	}
+	if s.commandCalls != 1 {
+		t.Errorf("expected commandCalls still 1 when disabled, got %d", s.commandCalls)
 	}
 }
 
