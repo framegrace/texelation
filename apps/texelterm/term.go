@@ -1653,10 +1653,12 @@ func (a *TexelTerm) runPtyReaderLoop(ptmx *os.File, cmd *exec.Cmd) error {
 			inSync := a.vterm.InSynchronizedUpdate
 			a.parser.Parse(r)
 			syncEnded := inSync && !a.vterm.InSynchronizedUpdate
+			if syncEnded {
+				a.vterm.MarkAllDirty()
+			}
 			a.mu.Unlock()
 
 			if syncEnded {
-				a.vterm.MarkAllDirty()
 				a.invalidateScrollbar()
 				a.requestRefresh()
 			} else if !a.vterm.InSynchronizedUpdate {

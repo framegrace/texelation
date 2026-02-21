@@ -165,42 +165,114 @@ func escapeToCaretNotation(data []byte) []byte {
 	return result
 }
 
-// handleDSR checks for Device Status Report queries and responds.
-// It writes responses directly to the PTY and tracks them for filtering.
+// handleDSR checks for terminal queries and responds with VT220 capabilities
+// matching texelterm's VTerm parser. This is critical for Claude Code, which uses
+// capability detection (DA1, DA2, DECRQM) to decide its rendering layout.
+// Without VT220 responses, Claude Code renders a simpler layout that doesn't
+// reproduce the rendering bugs seen in texelterm.
 func (ic *InteractiveCapture) handleDSR(data []byte) {
-	// Look for ESC[6n (cursor position query) and ESC[c (device attributes query)
-	for i := 0; i < len(data)-2; i++ {
-		if data[i] == 0x1b && data[i+1] == '[' {
+	for i := range len(data) {
+		if data[i] != 0x1b || i+1 >= len(data) {
+			continue
+		}
+
+		// CSI sequences: ESC [
+		if data[i+1] == '[' {
 			j := i + 2
-			// Skip any parameters
-			for j < len(data) && ((data[j] >= '0' && data[j] <= '9') || data[j] == ';' || data[j] == '?' || data[j] == '>') {
+			// Parameter bytes: 0x30-0x3F (0-9, :, ;, <, =, >, ?)
+			paramStart := j
+			for j < len(data) && data[j] >= 0x30 && data[j] <= 0x3F {
 				j++
 			}
-			if j < len(data) {
-				var response []byte
-				switch data[j] {
-				case 'n':
-					// DSR query - check if it's 6n (cursor position)
-					param := string(data[i+2 : j])
-					if param == "6" {
-						// Respond with cursor position (1;1)
-						response = []byte("\x1b[1;1R")
-					}
-				case 'c':
-					// Device Attributes query - respond with basic VT100
-					param := string(data[i+2 : j])
-					if param == "" || param == "0" || param == ">" || param == ">0" {
-						response = []byte("\x1b[?1;2c")
-					}
-				}
-				if response != nil {
-					// Track the response for filtering echoes
-					ic.responseMu.Lock()
-					ic.pendingResponses = append(ic.pendingResponses, response)
-					ic.responseMu.Unlock()
+			paramEnd := j
+			// Intermediate bytes: 0x20-0x2F (space through /)
+			intermediateStart := j
+			for j < len(data) && data[j] >= 0x20 && data[j] <= 0x2F {
+				j++
+			}
+			intermediateEnd := j
+			// Final byte: 0x40-0x7E (@ through ~)
+			if j >= len(data) || data[j] < 0x40 || data[j] > 0x7E {
+				continue
+			}
 
-					ic.ptmx.Write(response)
+			finalByte := data[j]
+			params := string(data[paramStart:paramEnd])
+			intermediate := string(data[intermediateStart:intermediateEnd])
+
+			var response []byte
+
+			switch {
+			case finalByte == 'c' && intermediate == "" && (params == "" || params == "0"):
+				// DA1: Primary Device Attributes → VT220 with color, selective erase,
+				// horizontal scrolling, and rectangular editing (matches texelterm's VTerm)
+				response = []byte("\x1b[?62;6;21;22;28c")
+
+			case finalByte == 'c' && intermediate == "" && (params == ">" || params == ">0"):
+				// DA2: Secondary Device Attributes → VT220 firmware v1.0.0
+				response = []byte("\x1b[>1;100;0c")
+
+			case finalByte == 'n' && params == "6":
+				// DSR: Cursor Position Report
+				response = []byte("\x1b[1;1R")
+
+			case finalByte == 'p' && intermediate == "$" && len(params) > 1 && params[0] == '?':
+				// DECRQM: Request Mode (DEC private)
+				mode := params[1:]
+				if mode == "2026" {
+					response = []byte("\x1b[?2026;1$y") // Synchronized output: supported, set
+				} else {
+					response = fmt.Appendf(nil, "\x1b[?%s;0$y", mode) // Not recognized
 				}
+
+			case finalByte == 'q' && params == ">":
+				// XTVERSION: Terminal version query → DCS > | name(version) ST
+				response = []byte("\x1bP>|texelterm(1.0.0)\x1b\\")
+			}
+
+			if response != nil {
+				ic.responseMu.Lock()
+				ic.pendingResponses = append(ic.pendingResponses, response)
+				ic.responseMu.Unlock()
+				ic.ptmx.Write(response)
+			}
+			continue
+		}
+
+		// OSC sequences: ESC ]
+		if data[i+1] == ']' {
+			// Look for OSC 10;? and OSC 11;? (foreground/background color queries)
+			// Format: ESC ] <num> ; ? <ST> where ST is ESC \ or BEL
+			j := i + 2
+			// Read the OSC number
+			numStart := j
+			for j < len(data) && data[j] >= '0' && data[j] <= '9' {
+				j++
+			}
+			if j >= len(data) || data[j] != ';' {
+				continue
+			}
+			oscNum := string(data[numStart:j])
+			j++ // skip ;
+			if j >= len(data) || data[j] != '?' {
+				continue
+			}
+
+			var response []byte
+			switch oscNum {
+			case "10":
+				// Foreground color query → respond with light grey
+				response = []byte("\x1b]10;rgb:cccc/cccc/cccc\x1b\\")
+			case "11":
+				// Background color query → respond with dark background
+				response = []byte("\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\")
+			}
+
+			if response != nil {
+				ic.responseMu.Lock()
+				ic.pendingResponses = append(ic.pendingResponses, response)
+				ic.responseMu.Unlock()
+				ic.ptmx.Write(response)
 			}
 		}
 	}
