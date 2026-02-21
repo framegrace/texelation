@@ -1748,7 +1748,13 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	a.width = cols
 	a.height = rows
 
-	// Calculate terminal width (accounting for scrollbar if visible)
+	// Reserve 2 rows for status bar (1 separator + 1 content)
+	const statusBarHeight = 2
+	termRows := rows - statusBarHeight
+	if termRows < 1 {
+		termRows = 1
+	}
+
 	termWidth := cols
 	if a.scrollbar != nil && a.scrollbar.IsVisible() {
 		termWidth = cols - ScrollBarWidth
@@ -1758,23 +1764,26 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	}
 
 	if a.vterm != nil {
-		a.vterm.Resize(termWidth, rows)
+		a.vterm.Resize(termWidth, termRows)
 	}
-
 	if a.scrollbar != nil {
-		a.scrollbar.Resize(rows)
+		a.scrollbar.Resize(termRows)
 	}
-
 	if a.mouseCoordinator != nil {
-		a.mouseCoordinator.SetSize(termWidth, rows)
+		a.mouseCoordinator.SetSize(termWidth, termRows)
+	}
+	if a.historyNavigator != nil {
+		a.historyNavigator.Resize(termWidth, termRows)
 	}
 
-	if a.historyNavigator != nil {
-		a.historyNavigator.Resize(termWidth, rows)
+	// Position status bar at the bottom
+	if a.statusBar != nil {
+		a.statusBar.SetPosition(0, termRows)
+		a.statusBar.Resize(cols, statusBarHeight)
 	}
 
 	if a.pty != nil {
-		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(rows), Cols: uint16(termWidth)})
+		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(termRows), Cols: uint16(termWidth)})
 	}
 }
 
