@@ -42,6 +42,11 @@ func NewEngine(profileDir string) (*Engine, error) {
 		chromedp.UserDataDir(profileDir),
 		chromedp.DisableGPU,
 	)
+	// Send Chrome's stdout/stderr to the log file if available,
+	// otherwise discard to avoid mangling the terminal display.
+	if browseLogFile != nil {
+		opts = append(opts, chromedp.CombinedOutput(browseLogFile))
+	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 
 	// The first context from the allocator owns the browser process.

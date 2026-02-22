@@ -20,17 +20,20 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+// browseLogFile holds the open log file for the package lifetime.
+var browseLogFile *os.File
+
 func init() {
-	// Redirect log output away from stderr to avoid mangling terminal display.
-	// If TEXELBROWSE_DEBUG is set, log to file; otherwise discard.
-	if os.Getenv("TEXELBROWSE_DEBUG") != "" {
-		logFile, err := os.OpenFile("/tmp/texelbrowse-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err == nil {
-			log.SetOutput(logFile)
-			log.SetFlags(log.Ltime | log.Lmicroseconds)
-		} else {
-			log.SetOutput(io.Discard)
-		}
+	// Always redirect log output to a file to avoid mangling terminal display.
+	// Errors from chromedp and CDP will be captured in this file.
+	var err error
+	browseLogFile, err = os.OpenFile("/tmp/texelbrowse.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err == nil {
+		log.SetOutput(browseLogFile)
+		log.SetFlags(log.Ltime | log.Lmicroseconds)
+		// Also redirect stderr so any stray fmt.Fprintf(os.Stderr, ...)
+		// or panic output goes to the log file instead of the terminal.
+		os.Stderr = browseLogFile
 	} else {
 		log.SetOutput(io.Discard)
 	}
