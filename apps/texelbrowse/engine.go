@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
@@ -232,17 +231,21 @@ func (t *Tab) Close() {
 // FetchDocument fetches the accessibility tree from the tab's page and
 // converts it to a Document model. The returned document includes the
 // tab's current URL and title.
+//
+// Uses raw CDP types instead of cdproto's accessibility package to avoid
+// UnmarshalJSON errors when Chrome sends property names or value types
+// that cdproto doesn't know about.
 func (t *Tab) FetchDocument() (*Document, error) {
-	var axNodes []*accessibility.Node
+	var rawNodes []*rawAXNode
 	if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		var err error
-		axNodes, err = accessibility.GetFullAXTree().Do(ctx)
+		rawNodes, err = fetchRawAXTree(ctx)
 		return err
 	})); err != nil {
 		return nil, fmt.Errorf("texelbrowse: fetch AX tree: %w", err)
 	}
 
-	doc := BuildDocument(axNodes)
+	doc := buildDocumentFromRaw(rawNodes)
 
 	t.mu.Lock()
 	doc.URL = t.url
