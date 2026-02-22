@@ -8,9 +8,9 @@ import (
 	"github.com/framegrace/texelation/apps/texelterm"
 )
 
-// TestStatusBarRenderedInOutput verifies that the render buffer includes
-// the status bar row at the bottom with toggle button icons.
-func TestStatusBarRenderedInOutput(t *testing.T) {
+// TestToggleOverlayRenderedInOutput verifies that the render buffer includes
+// the toggle button overlay on row 0 (top-right).
+func TestToggleOverlayRenderedInOutput(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	script := writeScript(t, "#!/bin/sh\nprintf 'hello'\n")
@@ -36,13 +36,13 @@ func TestStatusBarRenderedInOutput(t *testing.T) {
 		t.Fatalf("expected 11 rows, got %d", len(buf))
 	}
 
-	// Row 10 (last row) should contain toggle button icons
-	contentRow := rowToString(buf[10])
+	// Row 0 should contain toggle button icons (overlay at top-right)
+	contentRow := rowToString(buf[0])
 	if !strings.Contains(contentRow, "\U000F0068") { // nf-md-auto_fix (transformer)
-		t.Errorf("expected transformer icon on status bar, got %q", contentRow)
+		t.Errorf("expected transformer icon on overlay row 0, got %q", contentRow)
 	}
 	if !strings.Contains(contentRow, "\U000F05B6") { // nf-md-wrap
-		t.Errorf("expected wrap icon on status bar, got %q", contentRow)
+		t.Errorf("expected wrap icon on overlay row 0, got %q", contentRow)
 	}
 
 	app.Stop()

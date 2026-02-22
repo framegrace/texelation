@@ -118,6 +118,8 @@ type TexelTerm struct {
 	wrpToggle    *widgets.ToggleButton
 	wrpUserPref  bool // user's preferred wrap state (restored when override clears)
 	altToggle    *widgets.ToggleButton
+	searchToggle *widgets.ToggleButton
+	cfgToggle    *widgets.ToggleButton
 
 	// Transformer pipeline reference (for runtime toggle)
 	pipeline *transformer.Pipeline
@@ -146,8 +148,10 @@ func New(title, command string) texelcore.App {
 	alt := widgets.NewToggleButton(" \U000F0328 ") // nf-md-layers
 	alt.Disabled = true
 	alt.SetHelpText("Alternate screen")
-
-	sb.SetLeftWidgets([]texelcore.Widget{tfm, tui, wrp, alt})
+	srch := widgets.NewToggleButton(" \U000F0349 ") // nf-md-magnify
+	srch.SetHelpText("Search history (Ctrl+G)")
+	cfg := widgets.NewToggleButton(" \U000F0493 ") // nf-md-cog
+	cfg.SetHelpText("Configuration")
 
 	term := &TexelTerm{
 		title:        title,
@@ -165,6 +169,27 @@ func New(title, command string) texelcore.App {
 		wrpToggle:    wrp,
 		wrpUserPref:  true,
 		altToggle:    alt,
+		searchToggle: srch,
+		cfgToggle:    cfg,
+	}
+
+	// Wire config toggle (placeholder until config page is integrated)
+	cfg.OnToggle = func(active bool) {
+		if active {
+			if term.statusBar != nil {
+				term.statusBar.ShowMessage("Configuration not yet available")
+			}
+			cfg.Active = false
+		}
+	}
+
+	// Wire search toggle to open/close search
+	srch.OnToggle = func(active bool) {
+		if active {
+			term.openSearch()
+		} else {
+			term.closeSearch()
+		}
 	}
 
 	return term
@@ -565,11 +590,12 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.vterm.ClearDirty()
 	a.applySelectionHighlightLocked(a.buf)
 
-	// Composite scrollbar on the right side
+	// Composite scrollbar on the right side, starting 1 row down
+	// to avoid overlapping the toggle button overlay at top-right.
 	if scrollbarVisible {
 		scrollbarGrid := a.scrollbar.Render()
 		if scrollbarGrid != nil {
-			for y := 0; y < termRows && y < len(scrollbarGrid); y++ {
+			for y := 1; y < termRows && y < len(scrollbarGrid); y++ {
 				for x := 0; x < ScrollBarWidth && x < len(scrollbarGrid[y]); x++ {
 					a.buf[y][vtermCols+x] = scrollbarGrid[y][x]
 				}
@@ -586,9 +612,12 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.buf = a.historyNavigator.Render(a.buf)
 	}
 
+	// Render toggle button overlay at top-right
+	a.updateModeIndicatorsLocked()
+	a.drawToggleOverlay(a.buf, totalCols)
+
 	// Render status bar via Painter bridge
 	if a.statusBar != nil {
-		a.updateModeIndicatorsLocked()
 		p := texelcore.NewPainter(a.buf, texelcore.Rect{
 			X: 0, Y: 0, W: totalCols, H: totalRows,
 		})
@@ -596,40 +625,6 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	}
 
 	return a.buf
-}
-
-// updateModeIndicatorsLocked updates toggle button states from current terminal state.
-// Must be called with a.mu held.
-func (a *TexelTerm) updateModeIndicatorsLocked() {
-	if a.vterm == nil {
-		return
-	}
-
-	// TFM - transformer pipeline
-	a.tfmToggle.Active = a.pipeline != nil && a.pipeline.Enabled()
-
-	// TUI/NRM - TUI detection (active = TUI detected)
-	a.tuiToggle.Active = a.vterm.IsInTUIMode()
-
-	// ALT - alt screen
-	a.altToggle.Active = a.vterm.InAltScreen()
-
-	// WRP - wrap (disabled + forced off during TUI or alt screen)
-	wrapOverride := a.vterm.IsInTUIMode() || a.vterm.InAltScreen()
-	if wrapOverride {
-		a.wrpToggle.Disabled = true
-		a.wrpToggle.Active = false
-		if a.vterm.WrapEnabled() {
-			a.vterm.SetWrapEnabled(false)
-		}
-	} else {
-		a.wrpToggle.Disabled = false
-		a.wrpToggle.Active = a.wrpUserPref
-		if a.vterm.WrapEnabled() != a.wrpUserPref {
-			a.vterm.SetWrapEnabled(a.wrpUserPref)
-		}
-	}
-
 }
 
 // applySelectionHighlightLocked applies selection highlighting to the render buffer.
@@ -898,17 +893,15 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 	a.mu.Unlock()
 
-	// Handle Ctrl+G to open history navigator (Ctrl+G = "goto" in history)
+	// Handle Ctrl+G to toggle history navigator (Ctrl+G = "goto" in history)
 	// Note: Ctrl+Shift+F doesn't work reliably (CSI u encoding issues)
 	if ev.Key() == tcell.KeyCtrlG {
 		if a.historyNavigator != nil {
-			log.Printf("[HISTORY_NAV] Opening via Ctrl+G")
-			a.historyNavigator.Show()
-			// Also show scrollbar when navigator opens
-			if a.scrollbar != nil {
-				a.scrollbar.Show()
+			if a.historyNavigator.IsVisible() {
+				a.closeSearch()
+			} else {
+				a.openSearch()
 			}
-			a.requestRefresh()
 			return
 		}
 	}
@@ -1056,6 +1049,46 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	}
 }
 
+// openSearch activates the search mode: shows the history navigator,
+// sets search widgets in the status bar, and shows the scrollbar.
+func (a *TexelTerm) openSearch() {
+	if a.historyNavigator == nil {
+		return
+	}
+	log.Printf("[HISTORY_NAV] Opening search")
+	a.historyNavigator.Show()
+
+	// Set status bar to search mode
+	if a.statusBar != nil {
+		a.historyNavigator.LayoutSearchWidgets(a.width)
+		a.statusBar.SetLeftWidgets(a.historyNavigator.SearchWidgets())
+		a.statusBar.SetHintText(a.historyNavigator.KeymapHint())
+	}
+
+	// Show scrollbar when navigator opens
+	if a.scrollbar != nil {
+		a.scrollbar.Show()
+	}
+	a.requestRefresh()
+}
+
+// closeSearch deactivates search mode: hides the history navigator,
+// clears status bar search widgets, and hides the scrollbar.
+func (a *TexelTerm) closeSearch() {
+	if a.historyNavigator == nil {
+		return
+	}
+	log.Printf("[HISTORY_NAV] Closing search")
+	a.historyNavigator.Hide()
+
+	// Revert status bar to normal mode
+	if a.statusBar != nil {
+		a.statusBar.SetLeftWidgets(nil)
+		a.statusBar.ClearHintText()
+	}
+	a.requestRefresh()
+}
+
 // HandleMouse implements texelcore.MouseHandler.
 // Handles history navigator, scrollbar clicks, then delegates other events to MouseCoordinator.
 func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
@@ -1074,8 +1107,8 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 	x, y := ev.Position()
 	buttons := ev.Buttons()
 
-	// Check if click is on the scrollbar
-	if a.scrollbar != nil && a.scrollbar.IsVisible() {
+	// Check if click is on the scrollbar (skip row 0 where toggle overlay sits)
+	if a.scrollbar != nil && a.scrollbar.IsVisible() && y > 0 {
 		scrollbarX := a.width - ScrollBarWidth
 		if x >= scrollbarX {
 			// Handle scrollbar click on button press
@@ -1090,6 +1123,11 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 		}
 	}
 
+	// Check if mouse is on the toggle overlay (top-right)
+	if a.handleToggleOverlayMouse(ev) {
+		return
+	}
+
 	// Check if mouse is on the status bar
 	if a.statusBar != nil {
 		const statusBarHeight = 1
@@ -1100,8 +1138,6 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 			}
 			return
 		}
-		// Mouse is outside status bar — clear any hover help
-		a.statusBar.HandleMouse(ev)
 	}
 
 	// Delegate to mouse coordinator for terminal content
@@ -1722,6 +1758,11 @@ func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Confi
 					a.scrollbar.Hide()
 					a.scrollbar.ClearSearchResults()
 				}
+				// Revert status bar to normal mode
+				if a.statusBar != nil {
+					a.statusBar.SetLeftWidgets(nil)
+					a.statusBar.ClearHintText()
+				}
 				a.requestRefresh()
 			})
 			a.historyNavigator.SetRefreshNotifier(a.refreshChan)
@@ -1733,6 +1774,13 @@ func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Confi
 				if a.scrollbar != nil {
 					a.scrollbar.SetSearchResults(results)
 					a.requestRefresh()
+				}
+			})
+
+			// Wire up hint text changes to status bar
+			a.historyNavigator.SetHintChangedCallback(func(hint string) {
+				if a.statusBar != nil {
+					a.statusBar.SetHintText(hint)
 				}
 			})
 		}
@@ -1890,6 +1938,11 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	if a.statusBar != nil {
 		a.statusBar.SetPosition(0, termRows)
 		a.statusBar.Resize(cols, statusBarHeight)
+	}
+
+	// Re-layout search widgets if search is active
+	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+		a.historyNavigator.LayoutSearchWidgets(cols)
 	}
 
 	if a.pty != nil {
