@@ -71,7 +71,7 @@ const (
 	TriggerWorkspaceZoom
 	TriggerWorkspaceTheme
 
-	TriggerCryptToggle
+	TriggerScreensaver
 
 	TriggerClipboardChanged
 	TriggerClockTick

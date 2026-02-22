@@ -30,10 +30,10 @@ func (e *cryptEffect) Active() bool { return e.active }
 func (e *cryptEffect) Update(now time.Time) {}
 
 func (e *cryptEffect) HandleTrigger(trigger EffectTrigger) {
-	if trigger.Type != TriggerCryptToggle {
+	if trigger.Type != TriggerScreensaver {
 		return
 	}
-	e.active = !e.active
+	e.active = trigger.Active
 }
 
 func (e *cryptEffect) ApplyWorkspace(buffer [][]client.Cell) {
