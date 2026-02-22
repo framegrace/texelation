@@ -3,7 +3,8 @@
 //
 // File: internal/effects/crypt.go
 // Summary: Implements crypt screen-scramble effect for the client effect subsystem.
-// Usage: Replaces alphanumeric characters with random block characters while preserving styles.
+// Usage: Replaces alphanumeric characters with random braille characters while preserving styles.
+// Notes: Lifecycle is managed by the screensaver_fade wrapper.
 
 package effects
 
@@ -23,17 +24,16 @@ type cryptEffect struct {
 	active bool
 }
 
-func (e *cryptEffect) ID() string { return "crypt" }
-
+func (e *cryptEffect) ID() string   { return "crypt" }
 func (e *cryptEffect) Active() bool { return e.active }
-
 func (e *cryptEffect) Update(now time.Time) {}
+func (e *cryptEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
 
 func (e *cryptEffect) HandleTrigger(trigger EffectTrigger) {
-	if trigger.Type != TriggerCryptToggle {
+	if trigger.Type != TriggerScreensaver {
 		return
 	}
-	e.active = !e.active
+	e.active = trigger.Active
 }
 
 func (e *cryptEffect) ApplyWorkspace(buffer [][]client.Cell) {
@@ -50,8 +50,6 @@ func (e *cryptEffect) ApplyWorkspace(buffer [][]client.Cell) {
 		}
 	}
 }
-
-func (e *cryptEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
 
 func init() {
 	Register("crypt", func(cfg EffectConfig) (Effect, error) {

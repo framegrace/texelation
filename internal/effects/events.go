@@ -42,6 +42,8 @@ type EffectTrigger struct {
 	Timestamp            time.Time
 	PaneBuffer           [][]client.Cell
 	Ghost                bool
+	FadeIn               time.Duration // Screensaver fade-in duration
+	FadeOut              time.Duration // Screensaver fade-out duration
 
 	// Layout animation fields (Phase 2)
 	SplitOrientation int     // 0=Horizontal, 1=Vertical (matches texel.SplitType)
@@ -71,7 +73,7 @@ const (
 	TriggerWorkspaceZoom
 	TriggerWorkspaceTheme
 
-	TriggerCryptToggle
+	TriggerScreensaver
 
 	TriggerClipboardChanged
 	TriggerClockTick

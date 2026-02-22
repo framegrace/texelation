@@ -55,7 +55,7 @@ func (e *rainbowEffect) Update(now time.Time) {
 }
 
 func (e *rainbowEffect) HandleTrigger(trigger EffectTrigger) {
-	if trigger.Type != TriggerWorkspaceControl {
+	if trigger.Type != TriggerWorkspaceControl && trigger.Type != TriggerScreensaver {
 		return
 	}
 	e.active = trigger.Active

@@ -55,6 +55,7 @@ type clientState struct {
 	pendingResize        protocol.Resize
 	resizeSeq            uint64
 	selection            selectionState
+	idleWatcher          *effects.IdleWatcher
 
 	// Restart notification state
 	showRestartNotification      bool
@@ -153,14 +154,65 @@ func (s *clientState) applyEffectConfig() {
 		}
 		manager.RegisterBinding(effects.Binding{Effect: eff, Target: binding.Target, Event: binding.Event})
 	}
-	// Always register the crypt (screen lock) effect regardless of theme bindings.
-	if cryptEff, err := effects.CreateEffect("crypt", nil); err == nil {
-		manager.RegisterBinding(effects.Binding{Effect: cryptEff, Target: effects.TargetWorkspace, Event: effects.TriggerCryptToggle})
-	}
 	if s.renderCh != nil {
 		manager.AttachRenderChannel(s.renderCh)
 	}
 	s.effects = manager
+
+	// Stop previous idle watcher if any.
+	if s.idleWatcher != nil {
+		s.idleWatcher.Stop()
+		s.idleWatcher = nil
+	}
+
+	// Set up screensaver idle watcher from system config.
+	var screensaverSection map[string]interface{}
+	if cfg := config.System(); cfg != nil {
+		if section := cfg.Section("screensaver"); section != nil {
+			screensaverSection = section
+		}
+	}
+	ssCfg := effects.ParseScreensaverConfig(screensaverSection)
+	if ssCfg.Enabled {
+		var ssWrapper effects.Effect
+		if ssCfg.EffectID == "random" {
+			ssWrapper = effects.NewScreensaverFadeRandom(effects.ScreensaverEffectIDs(), ssCfg.FadeStyle)
+		} else if ssEff, err := effects.CreateEffect(ssCfg.EffectID, nil); err == nil {
+			ssWrapper = effects.NewScreensaverFade(ssEff, ssCfg.FadeStyle)
+		}
+		if ssWrapper != nil {
+			manager.RegisterBinding(effects.Binding{
+				Effect: ssWrapper,
+				Target: effects.TargetWorkspace,
+				Event:  effects.TriggerScreensaver,
+			})
+		}
+		mgr := s.effects
+		fadeIn := ssCfg.FadeIn
+		fadeOut := ssCfg.FadeOut
+		s.idleWatcher = effects.NewIdleWatcher(effects.IdleWatcherConfig{
+			Timeout:     ssCfg.Timeout,
+			EffectID:    ssCfg.EffectID,
+			LockEnabled: ssCfg.LockEnabled,
+			LockTimeout: ssCfg.LockTimeout,
+			OnActivate: func() {
+				mgr.HandleTrigger(effects.EffectTrigger{
+					Type:    effects.TriggerScreensaver,
+					Active:  true,
+					FadeIn:  fadeIn,
+					FadeOut: fadeOut,
+				})
+			},
+			OnDeactivate: func() {
+				mgr.HandleTrigger(effects.EffectTrigger{
+					Type:    effects.TriggerScreensaver,
+					Active:  false,
+					FadeIn:  fadeIn,
+					FadeOut: fadeOut,
+				})
+			},
+		})
+	}
 	if s.cache != nil {
 		s.effects.ResetPaneStates(s.cache.SortedPanes())
 	}

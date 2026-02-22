@@ -121,7 +121,12 @@ func render(state *clientState, screen tcell.Screen) {
 		renderRestartNotification(workspaceBuffer, width, height)
 	}
 
-	for y, row := range workspaceBuffer {
+	showWorkspaceBuffer(screen, workspaceBuffer, state.defaultStyle)
+	screen.Show()
+}
+
+func showWorkspaceBuffer(screen tcell.Screen, buffer [][]client.Cell, defaultStyle tcell.Style) {
+	for y, row := range buffer {
 		for x, cell := range row {
 			ch := cell.Ch
 			if ch == 0 {
@@ -129,13 +134,11 @@ func render(state *clientState, screen tcell.Screen) {
 			}
 			style := cell.Style
 			if style == (tcell.Style{}) {
-				style = state.defaultStyle
+				style = defaultStyle
 			}
 			screen.SetContent(x, y, ch, nil, style)
 		}
 	}
-
-	screen.Show()
 }
 
 // renderRestartNotification overlays a centered modal notification

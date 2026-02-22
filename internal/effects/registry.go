@@ -46,3 +46,11 @@ func RegisteredIDs() []string {
 	}
 	return ids
 }
+
+// screensaverIDs lists effects that work as workspace-level screensavers.
+var screensaverIDs = []string{"crypt", "matrix", "rainbow"}
+
+// ScreensaverEffectIDs returns the list of effects suitable for screensaver use.
+func ScreensaverEffectIDs() []string {
+	return screensaverIDs
+}

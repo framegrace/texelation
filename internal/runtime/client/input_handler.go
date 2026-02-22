@@ -34,14 +34,17 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 			consumePasteKey(state, ev)
 			return true
 		}
-		if ev.Key() == tcell.KeyCtrlR {
-			if state.effects != nil {
-				state.effects.HandleTrigger(effects.EffectTrigger{
-					Type:      effects.TriggerCryptToggle,
-					Timestamp: time.Now(),
-				})
-			}
+		// Screensaver dismissal: any key while active consumes the event.
+		if state.idleWatcher != nil && state.idleWatcher.IsActive() {
+			state.idleWatcher.ResetActivity()
 			render(state, screen)
+			return true
+		}
+		if ev.Key() == tcell.KeyCtrlS {
+			if state.idleWatcher != nil {
+				state.idleWatcher.ActivateNow()
+				render(state, screen)
+			}
 			return true
 		}
 		if state.controlMode && ev.Modifiers() == 0 {
@@ -110,7 +113,16 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 				Timestamp:   now,
 			})
 		}
+		if state.idleWatcher != nil {
+			state.idleWatcher.ResetActivity()
+		}
 	case *tcell.EventMouse:
+		// Screensaver dismissal: any mouse event while active consumes the event.
+		if state.idleWatcher != nil && state.idleWatcher.IsActive() {
+			state.idleWatcher.ResetActivity()
+			render(state, screen)
+			return true
+		}
 		selectionChanged := state.handleSelectionMouse(ev)
 		x, y := ev.Position()
 		mouse := protocol.MouseEvent{X: int16(x), Y: int16(y), ButtonMask: uint32(ev.Buttons()), Modifiers: uint16(ev.Modifiers())}
@@ -126,6 +138,9 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 				screen.SetClipboard(data)
 				sendClipboardSet(writeMu, conn, sessionID, mime, data)
 			}
+		}
+		if state.idleWatcher != nil {
+			state.idleWatcher.ResetActivity()
 		}
 	case *tcell.EventResize:
 		cols, rows := screen.Size()
