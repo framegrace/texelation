@@ -231,3 +231,60 @@ func TestEngine_Callbacks(t *testing.T) {
 
 	t.Logf("navigate callbacks: %d, loading callbacks: %d", navCount, loadCount)
 }
+
+func TestEngine_FetchAXTree(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	profileDir := chromeProfileDir(t)
+	engine, err := NewEngine(profileDir)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	tab, err := engine.NewTab()
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	defer tab.Close()
+
+	if err := tab.Navigate("https://example.com"); err != nil {
+		t.Fatalf("Navigate: %v", err)
+	}
+
+	doc, err := tab.FetchDocument()
+	if err != nil {
+		t.Fatalf("FetchDocument: %v", err)
+	}
+
+	if len(doc.Nodes) == 0 {
+		t.Fatal("expected non-empty document")
+	}
+	if doc.URL == "" {
+		t.Error("expected document to have URL set")
+	}
+	if doc.Title == "" {
+		t.Error("expected document to have title set")
+	}
+
+	// example.com should have at least a heading and a link.
+	var hasHeading, hasLink bool
+	for _, n := range doc.Nodes {
+		switch n.Role {
+		case "heading":
+			hasHeading = true
+			t.Logf("heading: %q (level %d)", n.Name, n.Level)
+		case "link":
+			hasLink = true
+			t.Logf("link: %q", n.Name)
+		}
+	}
+	if !hasHeading {
+		t.Error("expected at least one heading node in example.com AX tree")
+	}
+	if !hasLink {
+		t.Error("expected at least one link node in example.com AX tree")
+	}
+
+	t.Logf("document: %d nodes, url=%q, title=%q", len(doc.Nodes), doc.URL, doc.Title)
+}

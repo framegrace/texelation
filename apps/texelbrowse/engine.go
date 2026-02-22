@@ -3,7 +3,7 @@
 //
 // File: apps/texelbrowse/engine.go
 // Summary: Browser engine layer wrapping chromedp to manage Chromium
-//          lifecycle and tab navigation via CDP.
+//          lifecycle, tab navigation, and AX tree fetching via CDP.
 
 package texelbrowse
 
@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -222,6 +223,29 @@ func (t *Tab) Location() (string, string) {
 func (t *Tab) Close() {
 	t.cancel()
 	t.engine.removeTab(t)
+}
+
+// FetchDocument fetches the accessibility tree from the tab's page and
+// converts it to a Document model. The returned document includes the
+// tab's current URL and title.
+func (t *Tab) FetchDocument() (*Document, error) {
+	var axNodes []*accessibility.Node
+	if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		axNodes, err = accessibility.GetFullAXTree().Do(ctx)
+		return err
+	})); err != nil {
+		return nil, fmt.Errorf("texelbrowse: fetch AX tree: %w", err)
+	}
+
+	doc := BuildDocument(axNodes)
+
+	t.mu.Lock()
+	doc.URL = t.url
+	doc.Title = t.title
+	t.mu.Unlock()
+
+	return doc, nil
 }
 
 // captureLocation fetches the current URL and title from the page
