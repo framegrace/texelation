@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -46,7 +47,14 @@ func NewEngine(profileDir string) (*Engine, error) {
 	// The first context from the allocator owns the browser process.
 	// Cancelling it shuts down Chromium. We keep it alive for the
 	// engine's lifetime and create tabs as child contexts.
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+	//
+	// Redirect chromedp's log/error output through the stdlib log
+	// package so it goes to the debug log file (or is discarded)
+	// rather than mangling the terminal display.
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx,
+		chromedp.WithLogf(log.Printf),
+		chromedp.WithErrorf(log.Printf),
+	)
 	if err := chromedp.Run(browserCtx); err != nil {
 		browserCancel()
 		allocCancel()

@@ -8,6 +8,8 @@
 package texelbrowse
 
 import (
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,6 +19,22 @@ import (
 	"github.com/framegrace/texelui/widgets"
 	"github.com/gdamore/tcell/v2"
 )
+
+func init() {
+	// Redirect log output away from stderr to avoid mangling terminal display.
+	// If TEXELBROWSE_DEBUG is set, log to file; otherwise discard.
+	if os.Getenv("TEXELBROWSE_DEBUG") != "" {
+		logFile, err := os.OpenFile("/tmp/texelbrowse-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err == nil {
+			log.SetOutput(logFile)
+			log.SetFlags(log.Ltime | log.Lmicroseconds)
+		} else {
+			log.SetOutput(io.Discard)
+		}
+	} else {
+		log.SetOutput(io.Discard)
+	}
+}
 
 // ContentPanel is a vertically scrolling container that holds the
 // rendered page widgets. It implements Widget, ChildContainer, and
