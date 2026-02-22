@@ -174,14 +174,22 @@ func (s *clientState) applyEffectConfig() {
 	}
 	ssCfg := effects.ParseScreensaverConfig(screensaverSection)
 	if ssCfg.Enabled {
-		if ssEff, err := effects.CreateEffect(ssCfg.EffectID, nil); err == nil {
+		var ssWrapper effects.Effect
+		if ssCfg.EffectID == "random" {
+			ssWrapper = effects.NewScreensaverFadeRandom(effects.ScreensaverEffectIDs(), ssCfg.FadeStyle)
+		} else if ssEff, err := effects.CreateEffect(ssCfg.EffectID, nil); err == nil {
+			ssWrapper = effects.NewScreensaverFade(ssEff, ssCfg.FadeStyle)
+		}
+		if ssWrapper != nil {
 			manager.RegisterBinding(effects.Binding{
-				Effect: ssEff,
+				Effect: ssWrapper,
 				Target: effects.TargetWorkspace,
 				Event:  effects.TriggerScreensaver,
 			})
 		}
 		mgr := s.effects
+		fadeIn := ssCfg.FadeIn
+		fadeOut := ssCfg.FadeOut
 		s.idleWatcher = effects.NewIdleWatcher(effects.IdleWatcherConfig{
 			Timeout:     ssCfg.Timeout,
 			EffectID:    ssCfg.EffectID,
@@ -189,14 +197,18 @@ func (s *clientState) applyEffectConfig() {
 			LockTimeout: ssCfg.LockTimeout,
 			OnActivate: func() {
 				mgr.HandleTrigger(effects.EffectTrigger{
-					Type:   effects.TriggerScreensaver,
-					Active: true,
+					Type:    effects.TriggerScreensaver,
+					Active:  true,
+					FadeIn:  fadeIn,
+					FadeOut: fadeOut,
 				})
 			},
 			OnDeactivate: func() {
 				mgr.HandleTrigger(effects.EffectTrigger{
-					Type:   effects.TriggerScreensaver,
-					Active: false,
+					Type:    effects.TriggerScreensaver,
+					Active:  false,
+					FadeIn:  fadeIn,
+					FadeOut: fadeOut,
 				})
 			},
 		})

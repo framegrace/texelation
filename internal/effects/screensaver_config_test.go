@@ -52,3 +52,14 @@ func TestParseScreensaverConfig_Custom(t *testing.T) {
 		t.Fatalf("expected 30m, got %v", cfg.LockTimeout)
 	}
 }
+
+func TestParseScreensaverConfig_FractionalMinutes(t *testing.T) {
+	section := map[string]interface{}{
+		"enabled":         true,
+		"timeout_minutes": float64(0.5),
+	}
+	cfg := ParseScreensaverConfig(section)
+	if cfg.Timeout != 30*time.Second {
+		t.Fatalf("expected 30s for 0.5 minutes, got %v", cfg.Timeout)
+	}
+}
