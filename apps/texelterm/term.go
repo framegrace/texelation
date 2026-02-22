@@ -121,6 +121,9 @@ type TexelTerm struct {
 	searchToggle *widgets.ToggleButton
 	cfgToggle    *widgets.ToggleButton
 
+	// Config panel overlay
+	configPanel *ConfigPanel
+
 	// Transformer pipeline reference (for runtime toggle)
 	pipeline *transformer.Pipeline
 }
@@ -173,13 +176,20 @@ func New(title, command string) texelcore.App {
 		cfgToggle:    cfg,
 	}
 
-	// Wire config toggle (placeholder until config page is integrated)
+	// Wire config toggle to open/close config panel
 	cfg.OnToggle = func(active bool) {
-		if active {
-			if term.statusBar != nil {
-				term.statusBar.ShowMessage("Configuration not yet available")
+		if term.configPanel != nil {
+			if active {
+				term.configPanel.Show()
+			} else {
+				term.configPanel.Hide()
 			}
-			cfg.Active = false
+			term.mu.Lock()
+			if term.vterm != nil {
+				term.vterm.MarkAllDirty()
+			}
+			term.mu.Unlock()
+			term.requestRefresh()
 		}
 	}
 
@@ -612,6 +622,11 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.buf = a.historyNavigator.Render(a.buf)
 	}
 
+	// Render config panel overlay
+	if a.configPanel != nil && a.configPanel.IsVisible() {
+		a.configPanel.Render(a.buf)
+	}
+
 	// Render toggle button overlay at top-right
 	a.updateModeIndicatorsLocked()
 	a.drawToggleOverlay(a.buf, totalCols)
@@ -893,6 +908,21 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 	a.mu.Unlock()
 
+	// Route keys to config panel if visible (absorbs all keys)
+	if a.configPanel != nil && a.configPanel.IsVisible() {
+		if a.configPanel.HandleKey(ev) {
+			// Sync toggle state after panel may have been closed
+			a.cfgToggle.Active = a.configPanel.IsVisible()
+			a.mu.Lock()
+			if a.vterm != nil {
+				a.vterm.MarkAllDirty()
+			}
+			a.mu.Unlock()
+			a.requestRefresh()
+			return
+		}
+	}
+
 	// Handle Ctrl+G to toggle history navigator (Ctrl+G = "goto" in history)
 	// Note: Ctrl+Shift+F doesn't work reliably (CSI u encoding issues)
 	if ev.Key() == tcell.KeyCtrlG {
@@ -1094,6 +1124,16 @@ func (a *TexelTerm) closeSearch() {
 func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 	if ev == nil {
 		return
+	}
+
+	// Check if config panel is visible (absorbs all mouse events)
+	if a.configPanel != nil && a.configPanel.IsVisible() {
+		if a.configPanel.HandleMouse(ev) {
+			// Sync toggle state after panel may have been closed
+			a.cfgToggle.Active = a.configPanel.IsVisible()
+			a.requestRefresh()
+			return
+		}
 	}
 
 	// Check if history navigator is visible and wants the event
@@ -1641,6 +1681,18 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	a.scrollbar.SetRefreshCallback(a.requestRefresh)
 	a.scrollbar.Resize(rows)
 
+	// Initialize config panel overlay
+	a.configPanel = NewConfigPanel("texelterm", func(msg string, isErr bool) {
+		if a.statusBar != nil {
+			if isErr {
+				a.statusBar.ShowError(msg)
+			} else {
+				a.statusBar.ShowSuccess(msg)
+			}
+		}
+	}, a.refreshChan)
+	a.configPanel.Resize(cols, rows)
+
 	// Initialize mouse coordinator for selection handling
 	// Load config values for auto-scroll
 	scrollConfig := AutoScrollConfig{
@@ -1932,6 +1984,9 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	}
 	if a.historyNavigator != nil {
 		a.historyNavigator.Resize(termWidth, termRows)
+	}
+	if a.configPanel != nil {
+		a.configPanel.Resize(cols, termRows)
 	}
 
 	// Position status bar at the bottom
