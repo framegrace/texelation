@@ -100,22 +100,22 @@ type VTerm struct {
 // NewVTerm creates and initializes a new virtual terminal.
 func NewVTerm(width, height int, opts ...Option) *VTerm {
 	v := &VTerm{
-		width:               width,
-		height:              height,
-		currentFG:           DefaultFG,
-		currentBG:           DefaultBG,
-		tabStops:            make(map[int]bool),
-		cursorVisible:       true,
-		autoWrapMode:        true,
-		wrapEnabled:         true,
-		reflowEnabled:       true,
-		marginTop:           0,
-		marginBottom:        height - 1,
-		marginLeft:          0,
-		marginRight:         width - 1,
-		leftRightMarginMode: false,
-		defaultFG:           DefaultFG,
-		defaultBG:           DefaultBG,
+		width:                 width,
+		height:                height,
+		currentFG:             DefaultFG,
+		currentBG:             DefaultBG,
+		tabStops:              make(map[int]bool),
+		cursorVisible:         true,
+		autoWrapMode:          true,
+		wrapEnabled:           true,
+		reflowEnabled:         true,
+		marginTop:             0,
+		marginBottom:          height - 1,
+		marginLeft:            0,
+		marginRight:           width - 1,
+		leftRightMarginMode:   false,
+		defaultFG:             DefaultFG,
+		defaultBG:             DefaultBG,
 		dirtyLines:            make(map[int]bool),
 		allDirty:              true,
 		PromptStartGlobalLine: -1,
@@ -347,7 +347,6 @@ func (v *VTerm) GetLogicalLine(index int64) *LogicalLine {
 	}
 	return v.memBufState.memBuf.GetLine(index)
 }
-
 
 // AllLogicalLines returns all logical lines from both disk and memory.
 // Used by scrollbar minimap. This reads the entire history - optimize later!
@@ -1434,6 +1433,24 @@ func (v *VTerm) OriginMode() bool    { return v.originMode }
 
 // InAltScreen returns true if the terminal is currently showing the alternate screen buffer.
 func (v *VTerm) InAltScreen() bool { return v.inAltScreen }
+
+// InsertMode returns true if the terminal is in insert mode (IRM).
+func (v *VTerm) InsertMode() bool { return v.insertMode }
+
+// IsInTUIMode returns true if the terminal has detected a TUI application.
+func (v *VTerm) IsInTUIMode() bool {
+	fwd := v.fixedWidthDetector()
+	return fwd != nil && fwd.IsInTUIMode()
+}
+
+// ReflowEnabled returns true if reflow on resize is enabled.
+func (v *VTerm) ReflowEnabled() bool { return v.reflowEnabled }
+
+// WrapEnabled returns true if line wrapping is enabled.
+func (v *VTerm) WrapEnabled() bool { return v.wrapEnabled }
+
+// SetWrapEnabled enables or disables line wrapping at runtime.
+func (v *VTerm) SetWrapEnabled(enabled bool) { v.wrapEnabled = enabled }
 
 // LiveEdgeBase returns the current liveEdgeBase (global line index of viewport row 0).
 func (v *VTerm) LiveEdgeBase() int64 {

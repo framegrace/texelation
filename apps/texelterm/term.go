@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/widgets"
 	"io"
 	"log"
 	"math"
@@ -108,6 +109,20 @@ type TexelTerm struct {
 
 	// Scrollbar (non-overlay, resizes terminal)
 	scrollbar *ScrollBar
+
+	// Status bar with toggle button mode indicators
+	statusBar *widgets.StatusBar
+	tfmToggle *widgets.ToggleButton
+
+	tuiToggle *widgets.ToggleButton
+	wrpToggle    *widgets.ToggleButton
+	wrpUserPref  bool // user's preferred wrap state (restored when override clears)
+	altToggle    *widgets.ToggleButton
+	searchToggle *widgets.ToggleButton
+	cfgToggle    *widgets.ToggleButton
+
+	// Transformer pipeline reference (for runtime toggle)
+	pipeline *transformer.Pipeline
 }
 
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
@@ -117,6 +132,27 @@ var _ texelcore.ClipboardAware = (*TexelTerm)(nil)
 var _ texelcore.MouseHandler = (*TexelTerm)(nil)
 
 func New(title, command string) texelcore.App {
+	sb := widgets.NewStatusBar()
+	sb.ShowSeparator = false
+	sb.Resize(1, 1) // No separator = 1 row
+
+	tfm := widgets.NewToggleButton(" \U000F0068 ") // nf-md-auto_fix (magic wand)
+	tfm.Active = true                             // Transformers on by default
+	tfm.SetHelpText("Transformer pipeline (Ctrl+T)")
+	tui := widgets.NewToggleButton(" \U000F0379 ") // nf-md-monitor
+	tui.Disabled = true
+	tui.SetHelpText("TUI app detection")
+	wrp := widgets.NewToggleButton(" \U000F05B6 ") // nf-md-wrap
+	wrp.Active = true                              // Wrapping on by default
+	wrp.SetHelpText("Line wrapping")
+	alt := widgets.NewToggleButton(" \U000F0328 ") // nf-md-layers
+	alt.Disabled = true
+	alt.SetHelpText("Alternate screen")
+	srch := widgets.NewToggleButton(" \U000F0349 ") // nf-md-magnify
+	srch.SetHelpText("Search history (Ctrl+G)")
+	cfg := widgets.NewToggleButton(" \U000F0493 ") // nf-md-cog
+	cfg.SetHelpText("Configuration")
+
 	term := &TexelTerm{
 		title:        title,
 		command:      command,
@@ -125,8 +161,35 @@ func New(title, command string) texelcore.App {
 		stop:         make(chan struct{}),
 		colorPalette: newDefaultPalette(),
 		closeCh:      make(chan struct{}),
-		restartCh:    make(chan struct{}, 1),    // Buffered to avoid blocking
-		controlBus:   texelcore.NewControlBus(), // Own control bus, no pipeline needed
+		restartCh:    make(chan struct{}, 1),
+		controlBus:   texelcore.NewControlBus(),
+		statusBar:    sb,
+		tfmToggle:    tfm,
+		tuiToggle:    tui,
+		wrpToggle:    wrp,
+		wrpUserPref:  true,
+		altToggle:    alt,
+		searchToggle: srch,
+		cfgToggle:    cfg,
+	}
+
+	// Wire config toggle (placeholder until config page is integrated)
+	cfg.OnToggle = func(active bool) {
+		if active {
+			if term.statusBar != nil {
+				term.statusBar.ShowMessage("Configuration not yet available")
+			}
+			cfg.Active = false
+		}
+	}
+
+	// Wire search toggle to open/close search
+	srch.OnToggle = func(active bool) {
+		if active {
+			term.openSearch()
+		} else {
+			term.closeSearch()
+		}
 	}
 
 	return term
@@ -272,6 +335,10 @@ func (a *TexelTerm) SetRefreshNotifier(refreshChan chan<- bool) {
 	a.refreshChan = refreshChan
 	if a.historyNavigator != nil {
 		a.historyNavigator.SetRefreshNotifier(refreshChan)
+	}
+	if a.statusBar != nil {
+		a.statusBar.SetRefreshNotifier(refreshChan)
+		a.statusBar.Start()
 	}
 }
 
@@ -468,22 +535,24 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	}
 
 	vtermGrid := a.vterm.Grid()
-	rows := len(vtermGrid)
-	if rows == 0 {
+	termRows := len(vtermGrid)
+	if termRows == 0 {
 		return nil
 	}
 	vtermCols := len(vtermGrid[0])
 
-	// Calculate total output width (terminal + scrollbar if visible)
 	totalCols := vtermCols
 	scrollbarVisible := a.scrollbar != nil && a.scrollbar.IsVisible()
 	if scrollbarVisible {
 		totalCols = vtermCols + ScrollBarWidth
 	}
 
+	const statusBarHeight = 1
+	totalRows := termRows + statusBarHeight
+
 	// Resize buffer if needed
-	if len(a.buf) != rows || (rows > 0 && len(a.buf[0]) != totalCols) {
-		a.buf = make([][]texelcore.Cell, rows)
+	if len(a.buf) != totalRows || (totalRows > 0 && len(a.buf[0]) != totalCols) {
+		a.buf = make([][]texelcore.Cell, totalRows)
 		for y := range a.buf {
 			a.buf[y] = make([]texelcore.Cell, totalCols)
 		}
@@ -491,7 +560,6 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	}
 
 	cursorX, cursorY := a.vterm.Cursor()
-	// Only show cursor if it's visible AND we're at the live edge (not scrolled into history)
 	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.DirtyLines()
 
@@ -508,12 +576,12 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	}
 
 	if allDirty {
-		for y := 0; y < rows; y++ {
+		for y := 0; y < termRows; y++ {
 			renderLine(y)
 		}
 	} else {
 		for y := range dirtyLines {
-			if y >= 0 && y < rows {
+			if y >= 0 && y < termRows {
 				renderLine(y)
 			}
 		}
@@ -522,11 +590,12 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.vterm.ClearDirty()
 	a.applySelectionHighlightLocked(a.buf)
 
-	// Composite scrollbar on the right side (non-overlay)
+	// Composite scrollbar on the right side, starting 1 row down
+	// to avoid overlapping the toggle button overlay at top-right.
 	if scrollbarVisible {
 		scrollbarGrid := a.scrollbar.Render()
 		if scrollbarGrid != nil {
-			for y := 0; y < rows && y < len(scrollbarGrid); y++ {
+			for y := 1; y < termRows && y < len(scrollbarGrid); y++ {
 				for x := 0; x < ScrollBarWidth && x < len(scrollbarGrid[y]); x++ {
 					a.buf[y][vtermCols+x] = scrollbarGrid[y][x]
 				}
@@ -538,10 +607,21 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.drawConfirmation(a.buf)
 	}
 
-	// Render history navigator overlay (Phase 4 - Disk Layer)
-	// Note: Navigator overlays the terminal content only, not the scrollbar
+	// Render history navigator overlay
 	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
 		a.buf = a.historyNavigator.Render(a.buf)
+	}
+
+	// Render toggle button overlay at top-right
+	a.updateModeIndicatorsLocked()
+	a.drawToggleOverlay(a.buf, totalCols)
+
+	// Render status bar via Painter bridge
+	if a.statusBar != nil {
+		p := texelcore.NewPainter(a.buf, texelcore.Rect{
+			X: 0, Y: 0, W: totalCols, H: totalRows,
+		})
+		a.statusBar.Draw(p)
 	}
 
 	return a.buf
@@ -813,17 +893,15 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 	a.mu.Unlock()
 
-	// Handle Ctrl+G to open history navigator (Ctrl+G = "goto" in history)
+	// Handle Ctrl+G to toggle history navigator (Ctrl+G = "goto" in history)
 	// Note: Ctrl+Shift+F doesn't work reliably (CSI u encoding issues)
 	if ev.Key() == tcell.KeyCtrlG {
 		if a.historyNavigator != nil {
-			log.Printf("[HISTORY_NAV] Opening via Ctrl+G")
-			a.historyNavigator.Show()
-			// Also show scrollbar when navigator opens
-			if a.scrollbar != nil {
-				a.scrollbar.Show()
+			if a.historyNavigator.IsVisible() {
+				a.closeSearch()
+			} else {
+				a.openSearch()
 			}
-			a.requestRefresh()
 			return
 		}
 	}
@@ -843,9 +921,9 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
-	// Handle Ctrl+T to toggle overlay/original view
+	// Handle Ctrl+T to toggle transformer pipeline
 	if ev.Key() == tcell.KeyCtrlT {
-		a.toggleOverlay()
+		a.toggleTransformers()
 		return
 	}
 
@@ -876,14 +954,36 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
-// toggleOverlay toggles between showing overlay content and original content.
-func (a *TexelTerm) toggleOverlay() {
+// toggleTransformers flips the transformer pipeline state (Ctrl+T path).
+func (a *TexelTerm) toggleTransformers() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.vterm == nil {
 		return
 	}
-	current := a.vterm.ShowOverlay()
-	a.vterm.SetShowOverlay(!current)
+	if a.pipeline != nil {
+		newState := !a.pipeline.Enabled()
+		a.setTransformerState(newState)
+	} else {
+		current := a.vterm.ShowOverlay()
+		a.vterm.SetShowOverlay(!current)
+		a.vterm.MarkAllDirty()
+	}
+}
+
+// setTransformerState sets the pipeline to the given state. Caller must hold a.mu.
+func (a *TexelTerm) setTransformerState(enabled bool) {
+	a.pipeline.SetEnabled(enabled)
+	a.vterm.SetShowOverlay(enabled)
 	a.vterm.MarkAllDirty()
+	a.tfmToggle.Active = enabled
+	if a.statusBar != nil {
+		if enabled {
+			a.statusBar.ShowMessage("Transformers ON")
+		} else {
+			a.statusBar.ShowMessage("Transformers OFF")
+		}
+	}
 }
 
 func (a *TexelTerm) HandlePaste(data []byte) {
@@ -949,8 +1049,47 @@ func (a *TexelTerm) HandlePaste(data []byte) {
 	}
 }
 
+// openSearch activates the search mode: shows the history navigator,
+// sets search widgets in the status bar, and shows the scrollbar.
+func (a *TexelTerm) openSearch() {
+	if a.historyNavigator == nil {
+		return
+	}
+	log.Printf("[HISTORY_NAV] Opening search")
+	a.historyNavigator.Show()
+
+	// Set status bar to search mode
+	if a.statusBar != nil {
+		a.historyNavigator.LayoutSearchWidgets(a.width)
+		a.statusBar.SetLeftWidgets(a.historyNavigator.SearchWidgets())
+		a.statusBar.SetHintText(a.historyNavigator.KeymapHint())
+	}
+
+	// Show scrollbar when navigator opens
+	if a.scrollbar != nil {
+		a.scrollbar.Show()
+	}
+	a.requestRefresh()
+}
+
+// closeSearch deactivates search mode: hides the history navigator,
+// clears status bar search widgets, and hides the scrollbar.
+func (a *TexelTerm) closeSearch() {
+	if a.historyNavigator == nil {
+		return
+	}
+	log.Printf("[HISTORY_NAV] Closing search")
+	a.historyNavigator.Hide()
+
+	// Revert status bar to normal mode
+	if a.statusBar != nil {
+		a.statusBar.SetLeftWidgets(nil)
+		a.statusBar.ClearHintText()
+	}
+	a.requestRefresh()
+}
+
 // HandleMouse implements texelcore.MouseHandler.
-// Handles history navigator, scrollbar clicks, then delegates other events to MouseCoordinator.
 // Handles history navigator, scrollbar clicks, then delegates other events to MouseCoordinator.
 func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 	if ev == nil {
@@ -968,8 +1107,8 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 	x, y := ev.Position()
 	buttons := ev.Buttons()
 
-	// Check if click is on the scrollbar
-	if a.scrollbar != nil && a.scrollbar.IsVisible() {
+	// Check if click is on the scrollbar (skip row 0 where toggle overlay sits)
+	if a.scrollbar != nil && a.scrollbar.IsVisible() && y > 0 {
 		scrollbarX := a.width - ScrollBarWidth
 		if x >= scrollbarX {
 			// Handle scrollbar click on button press
@@ -981,6 +1120,23 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 				}
 			}
 			return // Ignore other scrollbar events
+		}
+	}
+
+	// Check if mouse is on the toggle overlay (top-right)
+	if a.handleToggleOverlayMouse(ev) {
+		return
+	}
+
+	// Check if mouse is on the status bar
+	if a.statusBar != nil {
+		const statusBarHeight = 1
+		termRows := a.height - statusBarHeight
+		if y >= termRows {
+			if a.statusBar.HandleMouse(ev) {
+				a.requestRefresh()
+			}
+			return
 		}
 	}
 
@@ -1193,7 +1349,13 @@ const StandalonePaneID = "standalone-texelterm"
 
 func (a *TexelTerm) runShell() error {
 	a.mu.Lock()
-	cols, rows := a.width, a.height
+	cols := a.width
+	// Reserve 2 rows for status bar (consistent with Resize)
+	const statusBarHeight = 1
+	rows := a.height - statusBarHeight
+	if rows < 1 {
+		rows = 1
+	}
 	isRestart := a.vterm != nil
 	paneID := a.paneID
 	// Use standalone pane ID if not embedded in texelation
@@ -1415,6 +1577,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 
 	// Wire transformer pipeline from config (txfmt registers via init())
 	pipeline := transformer.BuildPipeline(cfg)
+	a.pipeline = pipeline
 	if pipeline != nil {
 		a.vterm.OnLineCommit = pipeline.HandleLine
 		a.vterm.OnPromptStart = pipeline.NotifyPromptStart
@@ -1429,6 +1592,33 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 				origHandler(cmd)
 			}
 			pipeline.NotifyCommandStart(cmd)
+		}
+	}
+
+	// Wire TFM toggle callback (requires pipeline to be set up)
+	a.tfmToggle.OnToggle = func(active bool) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.pipeline != nil {
+			a.setTransformerState(active)
+		}
+	}
+
+	// Wire WRP toggle callback
+	a.wrpToggle.OnToggle = func(active bool) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.wrpUserPref = active
+		if a.vterm != nil {
+			a.vterm.SetWrapEnabled(active)
+			a.vterm.MarkAllDirty()
+		}
+		if a.statusBar != nil {
+			if active {
+				a.statusBar.ShowMessage("Line wrapping ON")
+			} else {
+				a.statusBar.ShowMessage("Line wrapping OFF")
+			}
 		}
 	}
 
@@ -1568,6 +1758,11 @@ func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Confi
 					a.scrollbar.Hide()
 					a.scrollbar.ClearSearchResults()
 				}
+				// Revert status bar to normal mode
+				if a.statusBar != nil {
+					a.statusBar.SetLeftWidgets(nil)
+					a.statusBar.ClearHintText()
+				}
 				a.requestRefresh()
 			})
 			a.historyNavigator.SetRefreshNotifier(a.refreshChan)
@@ -1579,6 +1774,13 @@ func (a *TexelTerm) initializeMemoryBufferLocked(paneID string, cfg config.Confi
 				if a.scrollbar != nil {
 					a.scrollbar.SetSearchResults(results)
 					a.requestRefresh()
+				}
+			})
+
+			// Wire up hint text changes to status bar
+			a.historyNavigator.SetHintChangedCallback(func(hint string) {
+				if a.statusBar != nil {
+					a.statusBar.SetHintText(hint)
 				}
 			})
 		}
@@ -1704,7 +1906,13 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	a.width = cols
 	a.height = rows
 
-	// Calculate terminal width (accounting for scrollbar if visible)
+	// Reserve 2 rows for status bar (1 separator + 1 content)
+	const statusBarHeight = 1
+	termRows := rows - statusBarHeight
+	if termRows < 1 {
+		termRows = 1
+	}
+
 	termWidth := cols
 	if a.scrollbar != nil && a.scrollbar.IsVisible() {
 		termWidth = cols - ScrollBarWidth
@@ -1714,23 +1922,31 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	}
 
 	if a.vterm != nil {
-		a.vterm.Resize(termWidth, rows)
+		a.vterm.Resize(termWidth, termRows)
 	}
-
 	if a.scrollbar != nil {
-		a.scrollbar.Resize(rows)
+		a.scrollbar.Resize(termRows)
 	}
-
 	if a.mouseCoordinator != nil {
-		a.mouseCoordinator.SetSize(termWidth, rows)
+		a.mouseCoordinator.SetSize(termWidth, termRows)
+	}
+	if a.historyNavigator != nil {
+		a.historyNavigator.Resize(termWidth, termRows)
 	}
 
-	if a.historyNavigator != nil {
-		a.historyNavigator.Resize(termWidth, rows)
+	// Position status bar at the bottom
+	if a.statusBar != nil {
+		a.statusBar.SetPosition(0, termRows)
+		a.statusBar.Resize(cols, statusBarHeight)
+	}
+
+	// Re-layout search widgets if search is active
+	if a.historyNavigator != nil && a.historyNavigator.IsVisible() {
+		a.historyNavigator.LayoutSearchWidgets(cols)
 	}
 
 	if a.pty != nil {
-		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(rows), Cols: uint16(termWidth)})
+		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(termRows), Cols: uint16(termWidth)})
 	}
 }
 
@@ -1738,7 +1954,7 @@ func (a *TexelTerm) Stop() {
 	a.stopOnce.Do(func() {
 		close(a.stop)
 		var (
-			cmd *exec.Cmd
+			cmd     *exec.Cmd
 			ptyFile *os.File
 		)
 		a.mu.Lock()
@@ -1780,6 +1996,10 @@ func (a *TexelTerm) Stop() {
 				log.Printf("Error closing search index: %v", err)
 			}
 			a.searchIndex = nil
+		}
+
+		if a.statusBar != nil {
+			a.statusBar.Stop()
 		}
 
 		a.mu.Unlock()

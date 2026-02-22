@@ -68,6 +68,7 @@ type HistoryNavigator struct {
 
 	// Focus tracking for keymap hints
 	focusedWidget core.Widget
+	onHintChanged func(hint string) // Called when keymap hint text changes
 
 	// Search state
 	searchResults []parser.SearchResult
@@ -160,12 +161,22 @@ func NewHistoryNavigator(vterm *parser.VTerm, searchIndex *parser.SQLiteSearchIn
 	return h
 }
 
+// SetHintChangedCallback sets a callback to be invoked when the keymap hint text changes.
+func (h *HistoryNavigator) SetHintChangedCallback(cb func(hint string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onHintChanged = cb
+}
+
 // OnFocusChanged implements core.FocusObserver to update keymap hints when focus changes.
 // Note: This is called from UIManager with its lock held, so we must not acquire h.mu here
 // to avoid deadlock. focusedWidget is only accessed from the UI goroutine so this is safe.
 func (h *HistoryNavigator) OnFocusChanged(focused core.Widget) {
 	h.focusedWidget = focused
 	h.updateKeymapHint()
+	if h.onHintChanged != nil {
+		h.onHintChanged(h.KeymapHint())
+	}
 	h.requestRefresh()
 }
 
@@ -296,6 +307,26 @@ func (h *HistoryNavigator) SetSearchResultsCallback(callback func(results []pars
 	h.onSearchResultsChanged = callback
 }
 
+// SearchWidgets returns the search row widgets for embedding in an external layout.
+// Order: search icon, search input, prev button, next button, counter label.
+func (h *HistoryNavigator) SearchWidgets() []core.Widget {
+	return []core.Widget{h.searchIcon, h.searchInput, h.prevBtn, h.nextBtn, h.counterLbl}
+}
+
+// KeymapHint returns the current keymap hint text based on the focused widget.
+func (h *HistoryNavigator) KeymapHint() string {
+	switch h.focusedWidget {
+	case h.searchInput:
+		return "Tab:Next  S-Tab:Prev  Esc:Close"
+	case h.prevBtn:
+		return "Enter:Prev  Tab:Next  S-Tab:Prev  Esc:Close"
+	case h.nextBtn:
+		return "Enter:Next  Tab:Next  S-Tab:Prev  Esc:Close"
+	default:
+		return "Tab:Next  S-Tab:Prev  Esc:Close"
+	}
+}
+
 // Resize adjusts the navigator layout to fit the given dimensions.
 // The navigator uses 2 lines at the bottom.
 func (h *HistoryNavigator) Resize(cols, rows int) {
@@ -310,50 +341,45 @@ func (h *HistoryNavigator) Resize(cols, rows int) {
 	h.layoutWidgets()
 }
 
-// layoutWidgets positions widgets in the 2-line layout.
+// layoutWidgets positions widgets in the 2-line layout (legacy overlay mode).
 func (h *HistoryNavigator) layoutWidgets() {
-	if h.width < 40 {
-		return // Too narrow to display
-	}
-
-	// Row 0: [🔍] [search input.........] [◀Prev] [Next▶] [1/42]
-	x := 0
-
-	// Search icon (3 chars: icon + space)
-	h.searchIcon.SetPosition(x, 0)
-	h.searchIcon.Resize(2, 1)
-	x += 3
-
-	// Calculate widths from right side
-	// Button width = len(text) + 4 for "[ text ]" display format
-	counterWidth := 8 // "999/999"
-	btnWidth := 9     // "◀Prev" or "Next▶" (5 chars + 4 padding)
-	rightWidgets := counterWidth + btnWidth*2 + 4
-
-	// Search input gets remaining space
-	inputWidth := max(h.width-x-rightWidgets, 10)
-	h.searchInput.SetPosition(x, 0)
-	h.searchInput.Resize(inputWidth, 1)
-	x += inputWidth + 1
-
-	// Prev button
-	h.prevBtn.SetPosition(x, 0)
-	h.prevBtn.Resize(btnWidth, 1)
-	x += btnWidth + 1
-
-	// Next button
-	h.nextBtn.SetPosition(x, 0)
-	h.nextBtn.Resize(btnWidth, 1)
-	x += btnWidth + 1
-
-	// Counter label
-	h.counterLbl.SetPosition(x, 0)
-	h.counterLbl.Resize(counterWidth, 1)
-
+	h.LayoutSearchWidgets(h.width)
 	// Row 1: Keymap hints (full width)
 	h.keymapLbl.SetPosition(0, 1)
 	h.keymapLbl.Resize(h.width, 1)
 	h.updateKeymapHint()
+}
+
+// LayoutSearchWidgets sizes the search row widgets for the given available width.
+// Called by the status bar host to set widget sizes before drawing.
+// Widget positions are set by the status bar's layoutLeftWidgets.
+func (h *HistoryNavigator) LayoutSearchWidgets(width int) {
+	if width < 30 {
+		return // Too narrow
+	}
+
+	// Reserve space for the right zone (hint text + padding + gap).
+	// Longest hint is ~35 chars; add 5 for padding/gap.
+	rightReserved := 40
+	leftWidth := width - rightReserved
+	if leftWidth < 30 {
+		leftWidth = 30
+	}
+
+	// Widget sizes: [🔍 2] [input flexible] [◀Prev 9] [Next▶ 9] [1/42 8]
+	// Gaps between widgets (1 char each) are added by layoutLeftWidgets.
+	counterWidth := 8
+	btnWidth := 9
+	iconWidth := 2
+	gaps := 4 // 4 gaps between 5 widgets
+	fixedWidth := iconWidth + btnWidth*2 + counterWidth + gaps
+	inputWidth := max(leftWidth-fixedWidth, 10)
+
+	h.searchIcon.Resize(iconWidth, 1)
+	h.searchInput.Resize(inputWidth, 1)
+	h.prevBtn.Resize(btnWidth, 1)
+	h.nextBtn.Resize(btnWidth, 1)
+	h.counterLbl.Resize(counterWidth, 1)
 }
 
 // updateKeymapHint updates the keymap label based on the currently focused widget.
@@ -462,96 +488,49 @@ func (h *HistoryNavigator) HandleKey(ev *tcell.EventKey) bool {
 	return true
 }
 
-// HandleMouse processes mouse input for the navigator overlay.
+// HandleMouse processes mouse clicks on search widgets hosted in the status bar.
+// Widgets are positioned by the status bar, so hit-testing uses their current bounds.
 // Returns true if the mouse event was consumed.
 func (h *HistoryNavigator) HandleMouse(ev *tcell.EventMouse) bool {
 	h.mu.Lock()
 	visible := h.visible
-	height := h.height
 	h.mu.Unlock()
 
 	if !visible {
 		return false
 	}
 
-	// The overlay is at the bottom of the screen (last 2 rows)
-	x, y := ev.Position()
-	overlayStartY := height - 2
-	if y < overlayStartY {
-		return false // Click is above the overlay
+	if ev.Buttons()&tcell.Button1 == 0 {
+		return false
 	}
 
-	// Adjust y to be relative to the overlay (0 or 1)
-	adjustedY := y - overlayStartY
+	x, y := ev.Position()
 
-	// For clicks on row 0 (search row), handle focus explicitly before delegating
-	// to UIManager. This prevents focus from being lost when clicking on the
-	// search input or empty space.
-	if ev.Buttons()&tcell.Button1 != 0 && adjustedY == 0 {
-		// Get widget bounds
-		inputX, _ := h.searchInput.Position()
-		inputW, _ := h.searchInput.Size()
-		prevX, _ := h.prevBtn.Position()
-		prevW, _ := h.prevBtn.Size()
-		nextX, _ := h.nextBtn.Position()
-		nextW, _ := h.nextBtn.Size()
-
-		if x >= inputX && x < inputX+inputW {
-			// Click on search input
-			h.ui.Focus(h.searchInput)
-			h.requestRefresh()
-			return true
-		} else if x >= prevX && x < prevX+prevW {
-			// Click on prev button
-			h.ui.Focus(h.prevBtn)
-			h.prevBtn.OnClick()
-			h.requestRefresh()
-			return true
-		} else if x >= nextX && x < nextX+nextW {
-			// Click on next button
-			h.ui.Focus(h.nextBtn)
-			h.nextBtn.OnClick()
-			h.requestRefresh()
-			return true
-		}
-		// Click on empty space - keep current focus
+	if h.searchInput.HitTest(x, y) {
+		h.ui.Focus(h.searchInput)
+		h.requestRefresh()
+		return true
+	}
+	if h.prevBtn.HitTest(x, y) {
+		h.ui.Focus(h.prevBtn)
+		h.prevBtn.OnClick()
+		h.requestRefresh()
+		return true
+	}
+	if h.nextBtn.HitTest(x, y) {
+		h.ui.Focus(h.nextBtn)
+		h.nextBtn.OnClick()
+		h.requestRefresh()
 		return true
 	}
 
-	// For non-click events or row 1 (keymap hints), delegate to UIManager
-	adjustedEv := tcell.NewEventMouse(
-		x,
-		adjustedY,
-		ev.Buttons(),
-		ev.Modifiers(),
-	)
-	return h.ui.HandleMouse(adjustedEv)
+	return false
 }
 
 // Render draws the 1-line overlay at the bottom of the input buffer.
+// Render is a no-op: search widgets are now hosted by the status bar.
+// The method is kept for interface compatibility.
 func (h *HistoryNavigator) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
-	h.mu.Lock()
-	visible := h.visible
-	h.mu.Unlock()
-
-	if !visible || len(input) < 2 {
-		return input
-	}
-
-	// Render UIManager to get the 2-line overlay (don't hold lock - ui has its own)
-	overlay := h.ui.Render()
-
-	// Copy overlay to bottom 2 lines of input buffer
-	termHeight := len(input)
-	for y := 0; y < 2 && y < len(overlay); y++ {
-		targetY := termHeight - 2 + y
-		if targetY >= 0 && targetY < termHeight {
-			for x := 0; x < len(input[targetY]) && x < len(overlay[y]); x++ {
-				input[targetY][x] = overlay[y][x]
-			}
-		}
-	}
-
 	return input
 }
 
