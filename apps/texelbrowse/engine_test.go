@@ -288,3 +288,93 @@ func TestEngine_FetchAXTree(t *testing.T) {
 
 	t.Logf("document: %d nodes, url=%q, title=%q", len(doc.Nodes), doc.URL, doc.Title)
 }
+
+func TestEngine_ClickAndType(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	profileDir := chromeProfileDir(t)
+	engine, err := NewEngine(profileDir)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	tab, err := engine.NewTab()
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	defer tab.Close()
+
+	// Navigate to a data URI with an input and a button.
+	const page = `data:text/html,<!DOCTYPE html>
+<html><body>
+<input type="text" id="name" aria-label="Name">
+<button id="submit" onclick="document.title='clicked'">Submit</button>
+</body></html>`
+
+	if err := tab.Navigate(page); err != nil {
+		t.Fatalf("Navigate: %v", err)
+	}
+
+	doc, err := tab.FetchDocument()
+	if err != nil {
+		t.Fatalf("FetchDocument: %v", err)
+	}
+
+	// Find the textbox and button in the AX tree.
+	var textboxID, buttonID int64
+	for _, n := range doc.Nodes {
+		if n.Role == "textbox" && n.BackendNodeID != 0 {
+			textboxID = n.BackendNodeID
+			t.Logf("found textbox: backendNodeID=%d, name=%q", textboxID, n.Name)
+		}
+		if n.Role == "button" && n.BackendNodeID != 0 {
+			buttonID = n.BackendNodeID
+			t.Logf("found button: backendNodeID=%d, name=%q", buttonID, n.Name)
+		}
+	}
+
+	if textboxID == 0 {
+		t.Fatal("could not find textbox in AX tree")
+	}
+	if buttonID == 0 {
+		t.Fatal("could not find button in AX tree")
+	}
+
+	// Focus and type into the textbox.
+	if err := tab.FocusNode(textboxID); err != nil {
+		t.Fatalf("FocusNode(textbox): %v", err)
+	}
+	if err := tab.TypeText("hello world"); err != nil {
+		t.Fatalf("TypeText: %v", err)
+	}
+
+	// Click the button.
+	if err := tab.ClickNode(buttonID); err != nil {
+		t.Fatalf("ClickNode(button): %v", err)
+	}
+
+	// Give the click handler a moment to execute.
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify the button's onclick changed the title.
+	if err := tab.captureLocation(); err != nil {
+		t.Fatalf("captureLocation: %v", err)
+	}
+	_, title := tab.Location()
+	if title != "clicked" {
+		t.Errorf("expected title %q after button click, got %q", "clicked", title)
+	}
+
+	// Test SetValue: overwrite the textbox content.
+	if err := tab.SetValue(textboxID, "replaced"); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+
+	// Test PressKey: send Enter.
+	if err := tab.PressKey("Enter", "Enter", 13); err != nil {
+		t.Fatalf("PressKey(Enter): %v", err)
+	}
+
+	t.Log("click and type test passed")
+}

@@ -3,7 +3,8 @@
 //
 // File: apps/texelbrowse/engine.go
 // Summary: Browser engine layer wrapping chromedp to manage Chromium
-//          lifecycle, tab navigation, and AX tree fetching via CDP.
+//          lifecycle, tab navigation, AX tree fetching, and input
+//          dispatch via CDP.
 
 package texelbrowse
 
@@ -15,6 +16,9 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/accessibility"
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -246,6 +250,112 @@ func (t *Tab) FetchDocument() (*Document, error) {
 	t.mu.Unlock()
 
 	return doc, nil
+}
+
+// FocusNode focuses a DOM element by its BackendNodeID.
+func (t *Tab) FocusNode(backendNodeID int64) error {
+	return chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		return dom.Focus().WithBackendNodeID(cdp.BackendNodeID(backendNodeID)).Do(ctx)
+	}))
+}
+
+// ClickNode clicks the center of a DOM element identified by its
+// BackendNodeID. It retrieves the element's box model, computes the
+// center of the content quad, then dispatches mousePressed and
+// mouseReleased events at that position.
+func (t *Tab) ClickNode(backendNodeID int64) error {
+	return chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		model, err := dom.GetBoxModel().WithBackendNodeID(cdp.BackendNodeID(backendNodeID)).Do(ctx)
+		if err != nil {
+			return fmt.Errorf("get box model: %w", err)
+		}
+
+		// Content quad is [x1,y1, x2,y2, x3,y3, x4,y4].
+		// Compute center by averaging all four corners.
+		q := model.Content
+		if len(q) < 8 {
+			return errors.New("texelbrowse: content quad has fewer than 8 values")
+		}
+		cx := (q[0] + q[2] + q[4] + q[6]) / 4
+		cy := (q[1] + q[3] + q[5] + q[7]) / 4
+
+		if err := input.DispatchMouseEvent(input.MousePressed, cx, cy).
+			WithButton(input.Left).
+			WithClickCount(1).
+			Do(ctx); err != nil {
+			return fmt.Errorf("mouse pressed: %w", err)
+		}
+		if err := input.DispatchMouseEvent(input.MouseReleased, cx, cy).
+			WithButton(input.Left).
+			WithClickCount(1).
+			Do(ctx); err != nil {
+			return fmt.Errorf("mouse released: %w", err)
+		}
+		return nil
+	}))
+}
+
+// TypeText types text into the currently focused element using IME-style
+// text insertion.
+func (t *Tab) TypeText(text string) error {
+	return chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		return input.InsertText(text).Do(ctx)
+	}))
+}
+
+// SetValue sets the value of an input element by focusing it, selecting
+// all existing content with Ctrl+A, and inserting the new value.
+func (t *Tab) SetValue(backendNodeID int64, value string) error {
+	if err := t.FocusNode(backendNodeID); err != nil {
+		return fmt.Errorf("texelbrowse: set value focus: %w", err)
+	}
+	// Select all existing content (Ctrl+A).
+	if err := chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := input.DispatchKeyEvent(input.KeyRawDown).
+			WithKey("a").
+			WithCode("KeyA").
+			WithWindowsVirtualKeyCode(65).
+			WithModifiers(input.ModifierCtrl).
+			Do(ctx); err != nil {
+			return err
+		}
+		return input.DispatchKeyEvent(input.KeyUp).
+			WithKey("a").
+			WithCode("KeyA").
+			WithWindowsVirtualKeyCode(65).
+			WithModifiers(input.ModifierCtrl).
+			Do(ctx)
+	})); err != nil {
+		return fmt.Errorf("texelbrowse: set value select all: %w", err)
+	}
+	if err := t.TypeText(value); err != nil {
+		return fmt.Errorf("texelbrowse: set value insert: %w", err)
+	}
+	return nil
+}
+
+// PressKey sends a key press (rawKeyDown + keyUp) to the page.
+// The key parameter is the DOM key value (e.g., "Enter", "Tab", "a"),
+// code is the physical key code (e.g., "Enter", "Tab", "KeyA"),
+// and keyCode is the Windows virtual key code (e.g., 13, 9, 65).
+func (t *Tab) PressKey(key string, code string, keyCode int) error {
+	return chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := input.DispatchKeyEvent(input.KeyRawDown).
+			WithKey(key).
+			WithCode(code).
+			WithWindowsVirtualKeyCode(int64(keyCode)).
+			Do(ctx); err != nil {
+			return fmt.Errorf("key down: %w", err)
+		}
+		if err := input.DispatchKeyEvent(input.KeyUp).
+			WithKey(key).
+			WithCode(code).
+			WithWindowsVirtualKeyCode(int64(keyCode)).
+			Do(ctx); err != nil {
+			return fmt.Errorf("key up: %w", err)
+		}
+		return nil
+	}))
 }
 
 // captureLocation fetches the current URL and title from the page
