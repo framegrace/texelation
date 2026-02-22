@@ -60,6 +60,9 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 
 	// Search - active when history navigator is visible
 	a.searchToggle.Active = a.historyNavigator != nil && a.historyNavigator.IsVisible()
+
+	// Config - active when config panel is visible
+	a.cfgToggle.Active = a.configPanel != nil && a.configPanel.IsVisible()
 }
 
 // toggleOverlayRect returns the bounding rect for the toggle button overlay
