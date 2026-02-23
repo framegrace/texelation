@@ -10,7 +10,7 @@ SERVER_PKG := ./cmd/texel-server
 CORE_APPS := texelterm help
 
 # All standalone app binaries in cmd/
-ALL_APPS := texelterm help texel-stress
+ALL_APPS := texelterm help texel-stress texelbrowse
 
 .PHONY: build install run test lint fmt tidy clean help server client release build-apps
 
@@ -28,6 +28,7 @@ build-apps: ## Build ALL app binaries into bin/
 	$(GO_ENV) go build -o $(BIN_DIR)/texelterm ./cmd/texelterm
 	$(GO_ENV) go build -o $(BIN_DIR)/help ./cmd/help
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-stress ./cmd/texel-stress
+	$(GO_ENV) go build -o $(BIN_DIR)/texelbrowse ./cmd/texelbrowse
 	$(GO_ENV) go build -o $(BIN_DIR)/config-editor ./cmd/config-editor
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-server $(SERVER_PKG)
 	$(GO_ENV) go build -o $(BIN_DIR)/texel-client $(CLIENT_PKG)
