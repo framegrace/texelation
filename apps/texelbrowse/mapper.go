@@ -83,11 +83,16 @@ func (m *Mapper) mapNode(node *DocNode) core.Widget {
 		inp.Placeholder = node.Name
 		inp.Text = node.Value
 		nodeID := node.BackendNodeID
-		inp.OnSubmit = func(text string) {
+		syncToChrome := func(text string) {
 			if m.onTypeNode != nil {
 				m.onTypeNode(nodeID, text)
 			}
 		}
+		// Sync value to Chrome on both Enter and when focus leaves,
+		// so form fields have the correct values when a submit button
+		// is clicked.
+		inp.OnSubmit = syncToChrome
+		inp.OnBlur = syncToChrome
 		return inp
 
 	case "checkbox":

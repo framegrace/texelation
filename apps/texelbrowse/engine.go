@@ -20,6 +20,7 @@ import (
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -275,37 +276,26 @@ func (t *Tab) FocusNode(backendNodeID int64) error {
 	}))
 }
 
-// ClickNode clicks the center of a DOM element identified by its
-// BackendNodeID. It retrieves the element's box model, computes the
-// center of the content quad, then dispatches mousePressed and
-// mouseReleased events at that position.
+// ClickNode clicks a DOM element identified by its BackendNodeID.
+// It resolves the node to a JS object and calls element.click(),
+// which reliably triggers event handlers regardless of element
+// visibility or viewport position.
 func (t *Tab) ClickNode(backendNodeID int64) error {
 	return chromedp.Run(t.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		model, err := dom.GetBoxModel().WithBackendNodeID(cdp.BackendNodeID(backendNodeID)).Do(ctx)
+		// Resolve the backend node to a remote object so we can call
+		// methods on it via JavaScript.
+		obj, err := dom.ResolveNode().WithBackendNodeID(cdp.BackendNodeID(backendNodeID)).Do(ctx)
 		if err != nil {
-			return fmt.Errorf("get box model: %w", err)
+			return fmt.Errorf("resolve node: %w", err)
 		}
 
-		// Content quad is [x1,y1, x2,y2, x3,y3, x4,y4].
-		// Compute center by averaging all four corners.
-		q := model.Content
-		if len(q) < 8 {
-			return errors.New("texelbrowse: content quad has fewer than 8 values")
-		}
-		cx := (q[0] + q[2] + q[4] + q[6]) / 4
-		cy := (q[1] + q[3] + q[5] + q[7]) / 4
-
-		if err := input.DispatchMouseEvent(input.MousePressed, cx, cy).
-			WithButton(input.Left).
-			WithClickCount(1).
-			Do(ctx); err != nil {
-			return fmt.Errorf("mouse pressed: %w", err)
-		}
-		if err := input.DispatchMouseEvent(input.MouseReleased, cx, cy).
-			WithButton(input.Left).
-			WithClickCount(1).
-			Do(ctx); err != nil {
-			return fmt.Errorf("mouse released: %w", err)
+		// Call element.click() via JavaScript — more reliable than
+		// coordinate-based mouse events for off-screen or transformed elements.
+		_, _, err = runtime.CallFunctionOn(`function() { this.click(); }`).
+			WithObjectID(obj.ObjectID).
+			Do(ctx)
+		if err != nil {
+			return fmt.Errorf("click(): %w", err)
 		}
 		return nil
 	}))
