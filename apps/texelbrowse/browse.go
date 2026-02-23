@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/framegrace/texelui/adapter"
 	"github.com/framegrace/texelui/core"
@@ -784,6 +785,8 @@ func (app *BrowseApp) toggleMode() {
 }
 
 // clickNode dispatches a CDP click to the given backend node.
+// After clicking, it waits briefly for any navigation or DOM change,
+// then re-fetches the page to reflect the updated state.
 func (app *BrowseApp) clickNode(backendNodeID int64) {
 	app.mu.Lock()
 	tab := app.tab
@@ -797,7 +800,17 @@ func (app *BrowseApp) clickNode(backendNodeID int64) {
 		if app.statusBar != nil {
 			app.statusBar.ShowError("Click failed: " + err.Error())
 		}
+		return
 	}
+
+	// Wait briefly for JS handlers and potential DOM mutations,
+	// then re-fetch the page. Full navigations are also handled
+	// by the OnLoading callback, but SPA-style updates only
+	// modify the DOM without triggering a load event.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		app.fetchAndRender()
+	}()
 }
 
 // typeNode dispatches text input to the given backend node.
