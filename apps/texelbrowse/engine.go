@@ -42,6 +42,10 @@ func NewEngine(profileDir string) (*Engine, error) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.UserDataDir(profileDir),
 		chromedp.DisableGPU,
+		// Disable automation detection so sites like Google don't
+		// block sign-in with "This browser or app may not be secure".
+		chromedp.Flag("enable-automation", false),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 	)
 	// Send Chrome's stdout/stderr to the log file if available,
 	// otherwise discard to avoid mangling the terminal display.
