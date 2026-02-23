@@ -157,20 +157,38 @@ func Run(opts Options) error {
 		screen.PostEventWait(tcell.NewEventInterrupt(nil))
 	}()
 
+	const frameInterval = 16 * time.Millisecond
+	var lastRender time.Time
+	var pendingRender bool
+
 	for {
 		select {
 		case <-renderCh:
 			// Drain any additional pending render signals to avoid rendering stale frames
-			drainLoop:
+		drainLoop:
 			for {
 				select {
 				case <-renderCh:
-					// Drained one more signal
 				default:
 					break drainLoop
 				}
 			}
-			render(state, screen)
+			now := time.Now()
+			if now.Sub(lastRender) >= frameInterval {
+				pendingRender = false
+				render(state, screen)
+				lastRender = now
+			} else if !pendingRender {
+				// Too soon since last render; schedule one at the next frame boundary.
+				pendingRender = true
+				remaining := frameInterval - now.Sub(lastRender)
+				time.AfterFunc(remaining, func() {
+					select {
+					case renderCh <- struct{}{}:
+					default:
+					}
+				})
+			}
 		case ev, ok := <-events:
 			if !ok {
 				return nil
