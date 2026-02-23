@@ -111,47 +111,81 @@ func (cp *ContentPanel) Draw(p *core.Painter) {
 	}
 }
 
-// HandleKey processes keys: Tab/Shift-Tab cycle focus, Page Up/Down
-// scroll the viewport.
+// HandleKey processes keys: arrow keys scroll line-by-line, Page Up/Down
+// scroll by page, Home/End jump to top/bottom.
 func (cp *ContentPanel) HandleKey(ev *tcell.EventKey) bool {
-	switch ev.Key() {
-	case tcell.KeyPgUp:
-		cp.mu.Lock()
-		_, h := cp.Size()
-		cp.scrollY -= h
-		if cp.scrollY < 0 {
-			cp.scrollY = 0
-		}
-		cp.mu.Unlock()
-		cp.invalidate()
-		return true
-
-	case tcell.KeyPgDn:
-		cp.mu.Lock()
-		_, h := cp.Size()
-		cp.scrollY += h
-		maxScroll := cp.contentHeight() - h
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if cp.scrollY > maxScroll {
-			cp.scrollY = maxScroll
-		}
-		cp.mu.Unlock()
-		cp.invalidate()
-		return true
-	}
-
-	// Delegate to focused child
+	// Delegate to focused child first — if it consumes the key, done.
 	cp.mu.Lock()
 	idx := cp.focusIndex
 	focusables := cp.focusableChildren()
 	cp.mu.Unlock()
 
 	if idx >= 0 && idx < len(focusables) {
-		return focusables[idx].HandleKey(ev)
+		if focusables[idx].HandleKey(ev) {
+			return true
+		}
 	}
+
+	// Scroll commands
+	switch ev.Key() {
+	case tcell.KeyUp:
+		return cp.scrollBy(-1)
+	case tcell.KeyDown:
+		return cp.scrollBy(1)
+	case tcell.KeyPgUp:
+		cp.mu.Lock()
+		_, h := cp.Size()
+		cp.mu.Unlock()
+		return cp.scrollBy(-h)
+	case tcell.KeyPgDn:
+		cp.mu.Lock()
+		_, h := cp.Size()
+		cp.mu.Unlock()
+		return cp.scrollBy(h)
+	case tcell.KeyHome:
+		cp.mu.Lock()
+		cp.scrollY = 0
+		cp.mu.Unlock()
+		cp.invalidate()
+		return true
+	case tcell.KeyEnd:
+		cp.mu.Lock()
+		_, h := cp.Size()
+		maxScroll := cp.contentHeight() - h
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		cp.scrollY = maxScroll
+		cp.mu.Unlock()
+		cp.invalidate()
+		return true
+	}
+
 	return false
+}
+
+// scrollBy adjusts scrollY by delta lines, clamping to valid range.
+func (cp *ContentPanel) scrollBy(delta int) bool {
+	cp.mu.Lock()
+	_, h := cp.Size()
+	prev := cp.scrollY
+	cp.scrollY += delta
+	if cp.scrollY < 0 {
+		cp.scrollY = 0
+	}
+	maxScroll := cp.contentHeight() - h
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if cp.scrollY > maxScroll {
+		cp.scrollY = maxScroll
+	}
+	changed := cp.scrollY != prev
+	cp.mu.Unlock()
+	if changed {
+		cp.invalidate()
+	}
+	return changed
 }
 
 // Focus focuses the panel and restores focus to the previously focused child.
