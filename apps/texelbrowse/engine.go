@@ -9,10 +9,14 @@
 package texelbrowse
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -26,7 +30,13 @@ import (
 
 // Engine manages a Chromium process with a persistent profile directory.
 // It provides tab creation and cleanup for the browser session.
+//
+// Chrome is launched directly via exec.Command (not through chromedp's
+// allocator) to avoid the --enable-automation flag that triggers OIDC
+// providers' bot detection. We connect to it via CDP over a remote
+// debugging port.
 type Engine struct {
+	cmd           *exec.Cmd
 	allocCtx      context.Context
 	allocCancel   context.CancelFunc
 	browserCtx    context.Context
@@ -36,32 +46,90 @@ type Engine struct {
 	tabs []*Tab
 }
 
-// NewEngine launches a headless Chromium instance with the given profile
-// directory for persistent storage (cookies, cache, etc.).
+// NewEngine launches a Chromium instance with the given profile directory
+// for persistent storage (cookies, cache, etc.).
+//
+// Chrome is launched directly via exec.Command to avoid chromedp's
+// default --enable-automation flag, which causes OIDC providers like
+// Google to block sign-in with "This browser or app may not be secure".
 func NewEngine(profileDir string) (*Engine, error) {
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.UserDataDir(profileDir),
-		chromedp.DisableGPU,
-		// Disable automation detection so sites like Google don't
-		// block sign-in with "This browser or app may not be secure".
-		chromedp.Flag("enable-automation", false),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("excludeSwitches", "enable-automation"),
-	)
-	// Send Chrome's stdout/stderr to the log file if available,
-	// otherwise discard to avoid mangling the terminal display.
-	if browseLogFile != nil {
-		opts = append(opts, chromedp.CombinedOutput(browseLogFile))
+	chromePath, err := findChrome()
+	if err != nil {
+		return nil, err
 	}
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 
-	// The first context from the allocator owns the browser process.
-	// Cancelling it shuts down Chromium. We keep it alive for the
-	// engine's lifetime and create tabs as child contexts.
-	//
-	// Redirect chromedp's log/error output through the stdlib log
-	// package so it goes to the debug log file (or is discarded)
-	// rather than mangling the terminal display.
+	// Build Chrome args manually. Notably absent: --enable-automation.
+	// Includes --disable-blink-features=AutomationControlled to prevent
+	// navigator.webdriver from being set true.
+	args := []string{
+		"--headless=new",
+		"--disable-gpu",
+		"--remote-debugging-port=0",
+		"--user-data-dir=" + profileDir,
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--disable-blink-features=AutomationControlled",
+		// Stability/performance flags (from chromedp defaults, minus
+		// --enable-automation):
+		"--disable-background-networking",
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-breakpad",
+		"--disable-component-extensions-with-background-pages",
+		"--disable-component-update",
+		"--disable-default-apps",
+		"--disable-dev-shm-usage",
+		"--disable-extensions",
+		"--disable-features=TranslateUI",
+		"--disable-hang-monitor",
+		"--disable-ipc-flooding-protection",
+		"--disable-popup-blocking",
+		"--disable-prompt-on-repost",
+		"--disable-renderer-backgrounding",
+		"--disable-sync",
+		"--enable-features=NetworkService,NetworkServiceInProcess",
+		"--force-color-profile=srgb",
+		"--metrics-recording-only",
+		"--password-store=basic",
+		"--use-mock-keychain",
+		"--safebrowsing-disable-auto-update",
+		"about:blank",
+	}
+
+	cmd := exec.Command(chromePath, args...)
+
+	// Pipe stderr so we can parse the DevTools WebSocket URL.
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("texelbrowse: stderr pipe: %w", err)
+	}
+	// Send stdout to the log file (or discard).
+	if browseLogFile != nil {
+		cmd.Stdout = browseLogFile
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("texelbrowse: start chrome: %w", err)
+	}
+
+	// Read Chrome's stderr line-by-line to find the DevTools URL.
+	// Uses a buffered reader so we can continue forwarding output after.
+	br := bufio.NewReader(stderrPipe)
+	wsURL, err := parseDevToolsURL(br)
+	if err != nil {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return nil, err
+	}
+	log.Printf("connected to Chrome DevTools: %s", wsURL)
+
+	// Forward remaining Chrome stderr to log in background.
+	go forwardOutput(br)
+
+	// Connect to Chrome via remote CDP.
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(
+		context.Background(), wsURL, chromedp.NoModifyURL,
+	)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx,
 		chromedp.WithLogf(log.Printf),
 		chromedp.WithErrorf(log.Printf),
@@ -69,16 +137,83 @@ func NewEngine(profileDir string) (*Engine, error) {
 	if err := chromedp.Run(browserCtx); err != nil {
 		browserCancel()
 		allocCancel()
-		return nil, fmt.Errorf("texelbrowse: failed to launch chromium: %w", err)
+		cmd.Process.Kill()
+		cmd.Wait()
+		return nil, fmt.Errorf("texelbrowse: connect to chrome CDP: %w", err)
 	}
 
 	return &Engine{
+		cmd:           cmd,
 		allocCtx:      allocCtx,
 		allocCancel:   allocCancel,
 		browserCtx:    browserCtx,
 		browserCancel: browserCancel,
 	}, nil
 }
+
+// findChrome locates the Chrome or Chromium binary in PATH.
+func findChrome() (string, error) {
+	for _, name := range []string{
+		"google-chrome-stable",
+		"google-chrome",
+		"chromium-browser",
+		"chromium",
+	} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, nil
+		}
+	}
+	return "", errors.New("texelbrowse: chrome/chromium not found in PATH")
+}
+
+// parseDevToolsURL reads Chrome's stderr looking for the
+// "DevTools listening on ws://..." line and returns the WebSocket URL.
+func parseDevToolsURL(br *bufio.Reader) (string, error) {
+	prefix := []byte("DevTools listening on ")
+	for {
+		line, err := br.ReadBytes('\n')
+		if browseLogFile != nil && len(line) > 0 {
+			browseLogFile.Write(line)
+		}
+		if bytes.HasPrefix(line, prefix) {
+			return string(bytes.TrimSpace(line[len(prefix):])), nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("texelbrowse: chrome exited without providing DevTools URL")
+		}
+	}
+}
+
+// forwardOutput drains remaining Chrome stderr to the log file.
+func forwardOutput(br *bufio.Reader) {
+	if browseLogFile != nil {
+		io.Copy(browseLogFile, br)
+	} else {
+		io.Copy(io.Discard, br)
+	}
+}
+
+// stealthJS is injected on every new document to mask CDP automation
+// signals that OIDC providers use for bot detection.
+const stealthJS = `
+// Override navigator.webdriver (defense in depth — also disabled via
+// --disable-blink-features=AutomationControlled).
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+// Ensure window.chrome exists (may be absent in some headless modes).
+if (!window.chrome) window.chrome = {};
+if (!window.chrome.runtime) window.chrome.runtime = {};
+
+// Fix Permissions API — in automated Chrome, Notification.permission
+// query behaves differently than in real Chrome.
+(function() {
+  const orig = window.navigator.permissions.query;
+  window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+      ? Promise.resolve({ state: Notification.permission })
+      : orig(parameters);
+})();
+`
 
 // NewTab opens a new browser tab backed by a fresh CDP target.
 func (e *Engine) NewTab() (*Tab, error) {
@@ -96,15 +231,13 @@ func (e *Engine) NewTab() (*Tab, error) {
 	}
 	tab.setupListeners()
 
-	// Remove navigator.webdriver on every new document so sites
-	// don't detect CDP automation.
+	// Inject stealth scripts on every new document to mask
+	// remaining CDP automation signals.
 	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		_, err := page.AddScriptToEvaluateOnNewDocument(
-			`Object.defineProperty(navigator, 'webdriver', {get: () => undefined})`,
-		).Do(ctx)
+		_, err := page.AddScriptToEvaluateOnNewDocument(stealthJS).Do(ctx)
 		return err
 	})); err != nil {
-		log.Printf("warning: failed to inject webdriver override: %v", err)
+		log.Printf("warning: failed to inject stealth scripts: %v", err)
 	}
 
 	e.mu.Lock()
@@ -127,6 +260,12 @@ func (e *Engine) Close() {
 	}
 	e.browserCancel()
 	e.allocCancel()
+
+	// Kill the Chrome process we launched directly.
+	if e.cmd != nil && e.cmd.Process != nil {
+		e.cmd.Process.Kill()
+		e.cmd.Wait()
+	}
 }
 
 // removeTab removes a tab from the engine's tracking list.
