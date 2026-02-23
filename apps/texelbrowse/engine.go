@@ -46,6 +46,7 @@ func NewEngine(profileDir string) (*Engine, error) {
 		// block sign-in with "This browser or app may not be secure".
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("excludeSwitches", "enable-automation"),
 	)
 	// Send Chrome's stdout/stderr to the log file if available,
 	// otherwise discard to avoid mangling the terminal display.
@@ -94,6 +95,17 @@ func (e *Engine) NewTab() (*Tab, error) {
 		engine: e,
 	}
 	tab.setupListeners()
+
+	// Remove navigator.webdriver on every new document so sites
+	// don't detect CDP automation.
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		_, err := page.AddScriptToEvaluateOnNewDocument(
+			`Object.defineProperty(navigator, 'webdriver', {get: () => undefined})`,
+		).Do(ctx)
+		return err
+	})); err != nil {
+		log.Printf("warning: failed to inject webdriver override: %v", err)
+	}
 
 	e.mu.Lock()
 	e.tabs = append(e.tabs, tab)
