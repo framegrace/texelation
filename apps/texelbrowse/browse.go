@@ -75,6 +75,30 @@ func (pb *pageBody) SetChildren(ws []core.Widget) {
 	pb.repositionChildren()
 }
 
+// SetRootWidget replaces the page content with a single root widget.
+// This is used by the grouped layout path where the mapper returns a
+// pre-built VBox tree.
+func (pb *pageBody) SetRootWidget(w core.Widget) {
+	pb.children = []core.Widget{w}
+	pb.positions = []layoutPos{{0, 0}}
+	pb.focusIndex = -1
+	pb.repositionChildren()
+	if pb.inv != nil {
+		if ia, ok := w.(core.InvalidationAware); ok {
+			ia.SetInvalidator(pb.inv)
+		}
+	}
+}
+
+// rootContentHeight returns the natural height of a root widget.
+func (pb *pageBody) rootContentHeight() int {
+	if len(pb.children) != 1 {
+		return pb.contentHeight()
+	}
+	_, h := pb.children[0].Size()
+	return h
+}
+
 // contentHeight returns the total height of all children based on
 // their layout positions.
 func (pb *pageBody) contentHeight() int {
@@ -719,20 +743,22 @@ func (app *BrowseApp) fetchAndRender() {
 		app.mode = mode
 	}
 
-	// Map nodes to widgets
-	ws := app.mapper.MapDocument(doc)
+	// Map nodes to grouped widget tree.
+	rootWidget := app.mapper.MapDocumentGrouped(doc)
 
-	// Layout — use the scroller's viewport width, full virtual height.
+	// Size the root widget to the scroller's viewport width.
 	w, _ := app.scroller.Size()
-	app.layout.Resize(w, 0)
-	app.layout.SetMode(mode)
-	app.layout.Arrange(ws)
+	if rootWidget != nil {
+		rootWidget.Resize(w, 10000) // Large virtual height; VBox uses natural sizes.
+	}
 
 	app.mu.Unlock()
 
 	// Update page body and scroll pane content height.
-	app.body.SetChildren(ws)
-	app.scroller.SetContentHeight(app.body.contentHeight())
+	if rootWidget != nil {
+		app.body.SetRootWidget(rootWidget)
+		app.scroller.SetContentHeight(app.body.rootContentHeight())
+	}
 
 	// Update URL bar text
 	url, title := tab.Location()
