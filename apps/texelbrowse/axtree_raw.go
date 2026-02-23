@@ -14,15 +14,19 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 // rawAXValue mirrors accessibility.Value but uses plain strings for Type
 // so unknown value types don't cause unmarshal errors.
+// Uses jsontext.Value (not json.RawMessage) because chromedp uses jsonv2
+// for unmarshalling CDP responses.
 type rawAXValue struct {
 	Type  string          `json:"type"`
-	Value json.RawMessage `json:"value,omitempty"`
+	Value jsontext.Value  `json:"value,omitempty,omitzero"`
 }
 
 // rawAXProperty mirrors accessibility.Property but uses plain string for Name.
@@ -35,17 +39,17 @@ type rawAXProperty struct {
 type rawAXNode struct {
 	NodeID           string            `json:"nodeId"`
 	Ignored          bool              `json:"ignored"`
-	IgnoredReasons   []*rawAXProperty  `json:"ignoredReasons,omitempty"`
-	Role             *rawAXValue       `json:"role,omitempty"`
-	ChromeRole       *rawAXValue       `json:"chromeRole,omitempty"`
-	Name             *rawAXValue       `json:"name,omitempty"`
-	Description      *rawAXValue       `json:"description,omitempty"`
-	Value            *rawAXValue       `json:"value,omitempty"`
-	Properties       []*rawAXProperty  `json:"properties,omitempty"`
-	ParentID         string            `json:"parentId,omitempty"`
-	ChildIDs         []string          `json:"childIds,omitempty"`
-	BackendDOMNodeID cdp.BackendNodeID `json:"backendDOMNodeId,omitempty"`
-	FrameID          cdp.FrameID       `json:"frameId,omitempty"`
+	IgnoredReasons   []*rawAXProperty  `json:"ignoredReasons,omitempty,omitzero"`
+	Role             *rawAXValue       `json:"role,omitempty,omitzero"`
+	ChromeRole       *rawAXValue       `json:"chromeRole,omitempty,omitzero"`
+	Name             *rawAXValue       `json:"name,omitempty,omitzero"`
+	Description      *rawAXValue       `json:"description,omitempty,omitzero"`
+	Value            *rawAXValue       `json:"value,omitempty,omitzero"`
+	Properties       []*rawAXProperty  `json:"properties,omitempty,omitzero"`
+	ParentID         string            `json:"parentId,omitempty,omitzero"`
+	ChildIDs         []string          `json:"childIds,omitempty,omitzero"`
+	BackendDOMNodeID cdp.BackendNodeID `json:"backendDOMNodeId,omitempty,omitzero"`
+	FrameID          cdp.FrameID       `json:"frameId,omitempty,omitzero"`
 }
 
 // rawGetFullAXTreeReturns is the result struct for Accessibility.getFullAXTree.
@@ -68,12 +72,13 @@ func extractRawValue(v *rawAXValue) string {
 	if v == nil || len(v.Value) == 0 {
 		return ""
 	}
+	raw := []byte(v.Value)
 	var s string
-	if err := json.Unmarshal(v.Value, &s); err == nil {
+	if err := json.Unmarshal(raw, &s); err == nil {
 		return s
 	}
 	// For non-string JSON (numbers, booleans), return raw representation.
-	return string(v.Value)
+	return strings.TrimSpace(string(raw))
 }
 
 // buildDocumentFromRaw converts raw AX nodes into a Document model.
