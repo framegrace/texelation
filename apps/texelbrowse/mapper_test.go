@@ -4,8 +4,10 @@
 package texelbrowse
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/widgets"
 )
 
@@ -372,4 +374,163 @@ func TestMapper_SearchboxToInput(t *testing.T) {
 	if inp.Text != "query" {
 		t.Errorf("expected text %q, got %q", "query", inp.Text)
 	}
+}
+
+func TestMapper_GroupedLinkDedup(t *testing.T) {
+	doc := &Document{
+		Nodes: []*DocNode{
+			{ID: "root", Role: "RootWebArea", Children: []string{"nav"}},
+			{ID: "nav", Role: "navigation", Name: "Menu", Children: []string{"lnk"}},
+			{ID: "lnk", Role: "link", Name: "Home", Children: []string{"st"}},
+			{ID: "st", Role: "StaticText", Name: "Home"},
+		},
+		ByID: make(map[string]*DocNode),
+	}
+	for _, n := range doc.Nodes {
+		doc.ByID[n.ID] = n
+	}
+
+	m := NewMapper(nil)
+	root := m.MapDocumentGrouped(doc)
+	if root == nil {
+		t.Fatal("expected non-nil root widget")
+	}
+
+	count := countWidgetsOfType(root, "*widgets.Link")
+	if count != 1 {
+		t.Errorf("expected 1 Link widget, got %d", count)
+	}
+	labelCount := countWidgetsOfType(root, "*widgets.Label")
+	if labelCount != 0 {
+		t.Errorf("expected 0 Label widgets (dedup), got %d", labelCount)
+	}
+}
+
+func TestMapper_GroupedNestedSections(t *testing.T) {
+	doc := &Document{
+		Nodes: []*DocNode{
+			{ID: "root", Role: "RootWebArea", Children: []string{"main"}},
+			{ID: "main", Role: "main", Children: []string{"h1", "sect"}},
+			{ID: "h1", Role: "heading", Name: "Title", Level: 1},
+			{ID: "sect", Role: "section", Name: "Details", Children: []string{"p1"}},
+			{ID: "p1", Role: "paragraph", Name: "Some text"},
+		},
+		ByID: make(map[string]*DocNode),
+	}
+	for _, n := range doc.Nodes {
+		doc.ByID[n.ID] = n
+	}
+
+	m := NewMapper(nil)
+	root := m.MapDocumentGrouped(doc)
+	if root == nil {
+		t.Fatal("expected non-nil root widget")
+	}
+
+	borders := countWidgetsOfType(root, "*widgets.Border")
+	if borders != 2 {
+		t.Errorf("expected 2 Border widgets (main + section), got %d", borders)
+	}
+}
+
+func TestMapper_GroupedTransparentRoles(t *testing.T) {
+	doc := &Document{
+		Nodes: []*DocNode{
+			{ID: "root", Role: "RootWebArea", Children: []string{"grp"}},
+			{ID: "grp", Role: "group", Children: []string{"txt"}},
+			{ID: "txt", Role: "StaticText", Name: "Hello"},
+		},
+		ByID: make(map[string]*DocNode),
+	}
+	for _, n := range doc.Nodes {
+		doc.ByID[n.ID] = n
+	}
+
+	m := NewMapper(nil)
+	root := m.MapDocumentGrouped(doc)
+	if root == nil {
+		t.Fatal("expected non-nil root widget")
+	}
+
+	borders := countWidgetsOfType(root, "*widgets.Border")
+	if borders != 0 {
+		t.Errorf("expected 0 Border widgets for transparent roles, got %d", borders)
+	}
+}
+
+func TestMapper_GroupedEmptyDocument(t *testing.T) {
+	doc := &Document{Nodes: nil, ByID: map[string]*DocNode{}}
+	m := NewMapper(nil)
+	root := m.MapDocumentGrouped(doc)
+	if root != nil {
+		t.Error("expected nil for empty document")
+	}
+}
+
+func TestMapper_GroupedSectionNameNotDedupedAsLabel(t *testing.T) {
+	// A section named "References" should NOT suppress a child StaticText
+	// named "References" — the section name is a title, not content.
+	doc := &Document{
+		Nodes: []*DocNode{
+			{ID: "root", Role: "RootWebArea", Children: []string{"sect"}},
+			{ID: "sect", Role: "section", Name: "References", Children: []string{"st"}},
+			{ID: "st", Role: "StaticText", Name: "References"},
+		},
+		ByID: make(map[string]*DocNode),
+	}
+	for _, n := range doc.Nodes {
+		doc.ByID[n.ID] = n
+	}
+
+	m := NewMapper(nil)
+	root := m.MapDocumentGrouped(doc)
+	if root == nil {
+		t.Fatal("expected non-nil root")
+	}
+
+	labels := countWidgetsOfType(root, "*widgets.Label")
+	if labels != 1 {
+		t.Errorf("expected 1 Label (StaticText inside section), got %d", labels)
+	}
+}
+
+func TestMapper_GroupedContentHeight(t *testing.T) {
+	doc := &Document{
+		Nodes: []*DocNode{
+			{ID: "root", Role: "RootWebArea", Children: []string{"nav"}},
+			{ID: "nav", Role: "navigation", Name: "Nav", Children: []string{"lnk"}},
+			{ID: "lnk", Role: "link", Name: "Home"},
+		},
+		ByID: make(map[string]*DocNode),
+	}
+	for _, n := range doc.Nodes {
+		doc.ByID[n.ID] = n
+	}
+
+	m := NewMapper(nil)
+	root := m.MapDocumentGrouped(doc)
+	if root == nil {
+		t.Fatal("expected non-nil root")
+	}
+
+	root.Resize(80, 100)
+	_, h := root.Size()
+	if h <= 0 {
+		t.Errorf("expected positive content height, got %d", h)
+	}
+}
+
+// countWidgetsOfType recursively counts widgets matching a type string.
+func countWidgetsOfType(w core.Widget, typeName string) int {
+	count := 0
+	typStr := fmt.Sprintf("%T", w)
+	if typStr == typeName {
+		count++
+	}
+	if cc, ok := w.(core.ChildContainer); ok {
+		cc.VisitChildren(func(child core.Widget) {
+			count += countWidgetsOfType(child, typeName)
+		})
+	}
+	return count
 }
