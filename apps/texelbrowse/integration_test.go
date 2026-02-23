@@ -65,6 +65,18 @@ func TestIntegration_NavigateAndRender(t *testing.T) {
 		}
 	}
 
+	// Verify grouped layout produces a root widget.
+	rootWidget := mapper.MapDocumentGrouped(doc)
+	if rootWidget == nil {
+		t.Error("expected non-nil root widget from MapDocumentGrouped")
+	}
+	rootWidget.Resize(80, 10000)
+	_, rootH := rootWidget.Size()
+	t.Logf("Grouped root height: %d", rootH)
+	if rootH <= 0 {
+		t.Error("expected positive grouped content height")
+	}
+
 	// Navigate to a data URI with a form.
 	formHTML := `data:text/html,<html><body>
 		<h1>Login</h1>
