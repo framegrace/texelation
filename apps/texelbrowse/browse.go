@@ -17,6 +17,7 @@ import (
 
 	"github.com/framegrace/texelui/adapter"
 	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/scroll"
 	"github.com/framegrace/texelui/widgets"
 	"github.com/gdamore/tcell/v2"
 )
@@ -40,190 +41,121 @@ func init() {
 	}
 }
 
-// ContentPanel is a vertically scrolling container that holds the
-// rendered page widgets. It implements Widget, ChildContainer, and
-// FocusCycler so that the UIManager can discover children and cycle
-// focus among them with Tab/Shift-Tab.
-type ContentPanel struct {
+// pageBody is a simple container that holds the rendered page widgets.
+// It does not scroll — scrolling is handled by the parent ScrollPane.
+// It implements ChildContainer, FocusCycler, MouseAware, and HitTester
+// so that ScrollPane can delegate focus, input, and mouse events.
+type pageBody struct {
 	core.BaseWidget
-	mu         sync.Mutex
 	children   []core.Widget
-	scrollY    int
+	positions  []layoutPos // layout positions relative to (0,0)
 	focusIndex int
 	inv        func(core.Rect)
 }
 
-// newContentPanel creates an empty content panel.
-func newContentPanel() *ContentPanel {
-	cp := &ContentPanel{
-		focusIndex: -1,
-	}
-	cp.SetFocusable(true)
-	return cp
+// layoutPos stores a widget's position as set by the LayoutManager.
+type layoutPos struct{ x, y int }
+
+func newPageBody() *pageBody {
+	pb := &pageBody{focusIndex: -1}
+	pb.SetFocusable(true)
+	return pb
 }
 
-// SetChildren replaces all children. Focus and scroll position are reset.
-func (cp *ContentPanel) SetChildren(ws []core.Widget) {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-	cp.children = ws
-	cp.scrollY = 0
-	cp.focusIndex = -1
-	cp.invalidateLocked()
+// SetChildren replaces all children and captures their layout positions.
+// The caller must have already positioned widgets via LayoutManager.Arrange.
+func (pb *pageBody) SetChildren(ws []core.Widget) {
+	pb.children = ws
+	pb.positions = make([]layoutPos, len(ws))
+	for i, w := range ws {
+		x, y := w.Position()
+		pb.positions[i] = layoutPos{x, y}
+	}
+	pb.focusIndex = -1
+	pb.repositionChildren()
+}
+
+// contentHeight returns the total height of all children based on
+// their layout positions.
+func (pb *pageBody) contentHeight() int {
+	maxY := 0
+	for i, w := range pb.children {
+		_, h := w.Size()
+		if end := pb.positions[i].y + h; end > maxY {
+			maxY = end
+		}
+	}
+	return maxY
+}
+
+// SetPosition updates position and repositions all children.
+func (pb *pageBody) SetPosition(x, y int) {
+	pb.BaseWidget.SetPosition(x, y)
+	pb.repositionChildren()
+}
+
+// repositionChildren offsets all children by the body's current position.
+func (pb *pageBody) repositionChildren() {
+	bx, by := pb.Position()
+	for i, w := range pb.children {
+		w.SetPosition(pb.positions[i].x+bx, pb.positions[i].y+by)
+	}
 }
 
 // SetInvalidator implements core.InvalidationAware.
-func (cp *ContentPanel) SetInvalidator(fn func(core.Rect)) {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-	cp.inv = fn
-	for _, w := range cp.children {
+func (pb *pageBody) SetInvalidator(fn func(core.Rect)) {
+	pb.inv = fn
+	for _, w := range pb.children {
 		if ia, ok := w.(core.InvalidationAware); ok {
 			ia.SetInvalidator(fn)
 		}
 	}
 }
 
-// Draw renders visible children offset by scrollY.
-func (cp *ContentPanel) Draw(p *core.Painter) {
-	cp.mu.Lock()
-	children := make([]core.Widget, len(cp.children))
-	copy(children, cp.children)
-	scrollY := cp.scrollY
-	cp.mu.Unlock()
-
-	_, panelH := cp.Size()
-
-	for _, w := range children {
-		_, wy := w.Position()
-		_, wh := w.Size()
-
-		// Apply scroll offset: widget's visual Y = original Y - scrollY + panel Y
-		visY := wy - scrollY + cp.Rect.Y
-		if visY+wh <= cp.Rect.Y || visY >= cp.Rect.Y+panelH {
-			continue // off-screen
-		}
-		// Temporarily adjust position for drawing
-		origX, origY := w.Position()
-		w.SetPosition(origX, visY)
+// Draw renders all children. Clipping is handled by the parent ScrollPane.
+func (pb *pageBody) Draw(p *core.Painter) {
+	for _, w := range pb.children {
 		w.Draw(p)
-		w.SetPosition(origX, origY)
 	}
 }
 
-// HandleKey processes keys: arrow keys scroll line-by-line, Page Up/Down
-// scroll by page, Home/End jump to top/bottom.
-func (cp *ContentPanel) HandleKey(ev *tcell.EventKey) bool {
-	// Delegate to focused child first — if it consumes the key, done.
-	cp.mu.Lock()
-	idx := cp.focusIndex
-	focusables := cp.focusableChildren()
-	cp.mu.Unlock()
-
-	if idx >= 0 && idx < len(focusables) {
-		if focusables[idx].HandleKey(ev) {
-			return true
-		}
+// HandleKey delegates to the focused child.
+func (pb *pageBody) HandleKey(ev *tcell.EventKey) bool {
+	focusables := pb.focusableChildren()
+	if pb.focusIndex >= 0 && pb.focusIndex < len(focusables) {
+		return focusables[pb.focusIndex].HandleKey(ev)
 	}
-
-	// Scroll commands
-	switch ev.Key() {
-	case tcell.KeyUp:
-		return cp.scrollBy(-1)
-	case tcell.KeyDown:
-		return cp.scrollBy(1)
-	case tcell.KeyPgUp:
-		cp.mu.Lock()
-		_, h := cp.Size()
-		cp.mu.Unlock()
-		return cp.scrollBy(-h)
-	case tcell.KeyPgDn:
-		cp.mu.Lock()
-		_, h := cp.Size()
-		cp.mu.Unlock()
-		return cp.scrollBy(h)
-	case tcell.KeyHome:
-		cp.mu.Lock()
-		cp.scrollY = 0
-		cp.mu.Unlock()
-		cp.invalidate()
-		return true
-	case tcell.KeyEnd:
-		cp.mu.Lock()
-		_, h := cp.Size()
-		maxScroll := cp.contentHeight() - h
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		cp.scrollY = maxScroll
-		cp.mu.Unlock()
-		cp.invalidate()
-		return true
-	}
-
 	return false
 }
 
-// scrollBy adjusts scrollY by delta lines, clamping to valid range.
-func (cp *ContentPanel) scrollBy(delta int) bool {
-	cp.mu.Lock()
-	_, h := cp.Size()
-	prev := cp.scrollY
-	cp.scrollY += delta
-	if cp.scrollY < 0 {
-		cp.scrollY = 0
-	}
-	maxScroll := cp.contentHeight() - h
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if cp.scrollY > maxScroll {
-		cp.scrollY = maxScroll
-	}
-	changed := cp.scrollY != prev
-	cp.mu.Unlock()
-	if changed {
-		cp.invalidate()
-	}
-	return changed
-}
-
-// Focus focuses the panel and restores focus to the previously focused child.
-func (cp *ContentPanel) Focus() {
-	cp.BaseWidget.Focus()
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-	focusables := cp.focusableChildren()
+// Focus focuses the previously focused child (or the first one).
+func (pb *pageBody) Focus() {
+	pb.BaseWidget.Focus()
+	focusables := pb.focusableChildren()
 	if len(focusables) == 0 {
 		return
 	}
-	if cp.focusIndex < 0 || cp.focusIndex >= len(focusables) {
-		cp.focusIndex = 0
+	if pb.focusIndex < 0 || pb.focusIndex >= len(focusables) {
+		pb.focusIndex = 0
 	}
-	focusables[cp.focusIndex].Focus()
+	focusables[pb.focusIndex].Focus()
 }
 
-// Blur blurs all children and the panel.
-func (cp *ContentPanel) Blur() {
-	cp.mu.Lock()
-	for _, w := range cp.children {
+// Blur blurs all children.
+func (pb *pageBody) Blur() {
+	for _, w := range pb.children {
 		w.Blur()
 	}
-	cp.mu.Unlock()
-	cp.BaseWidget.Blur()
+	pb.BaseWidget.Blur()
 }
 
 // CycleFocus implements core.FocusCycler.
-func (cp *ContentPanel) CycleFocus(forward bool) bool {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-
-	focusables := cp.focusableChildren()
+func (pb *pageBody) CycleFocus(forward bool) bool {
+	focusables := pb.focusableChildren()
 	if len(focusables) == 0 {
 		return false
 	}
 
-	// Find currently focused
 	currentIdx := -1
 	for i, w := range focusables {
 		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
@@ -233,16 +165,13 @@ func (cp *ContentPanel) CycleFocus(forward bool) bool {
 	}
 
 	if currentIdx < 0 {
-		// Nothing focused, focus first or last
 		if forward {
 			focusables[0].Focus()
-			cp.focusIndex = 0
+			pb.focusIndex = 0
 		} else {
 			focusables[len(focusables)-1].Focus()
-			cp.focusIndex = len(focusables) - 1
+			pb.focusIndex = len(focusables) - 1
 		}
-		cp.ensureVisible(cp.focusIndex)
-		cp.invalidateLocked()
 		return true
 	}
 
@@ -250,45 +179,70 @@ func (cp *ContentPanel) CycleFocus(forward bool) bool {
 	if forward {
 		nextIdx = currentIdx + 1
 		if nextIdx >= len(focusables) {
-			return false // at boundary, let parent handle
+			return false
 		}
 	} else {
 		nextIdx = currentIdx - 1
 		if nextIdx < 0 {
-			return false // at boundary
+			return false
 		}
 	}
 
 	focusables[currentIdx].Blur()
 	focusables[nextIdx].Focus()
-	cp.focusIndex = nextIdx
-	cp.ensureVisible(nextIdx)
-	cp.invalidateLocked()
+	pb.focusIndex = nextIdx
 	return true
 }
 
-// TrapsFocus implements core.FocusCycler. Returns false so that
-// focus can escape back to the URL bar.
-func (cp *ContentPanel) TrapsFocus() bool {
-	return false
-}
+// TrapsFocus implements core.FocusCycler.
+func (pb *pageBody) TrapsFocus() bool { return false }
 
 // VisitChildren implements core.ChildContainer.
-func (cp *ContentPanel) VisitChildren(fn func(core.Widget)) {
-	cp.mu.Lock()
-	children := make([]core.Widget, len(cp.children))
-	copy(children, cp.children)
-	cp.mu.Unlock()
-	for _, w := range children {
+func (pb *pageBody) VisitChildren(fn func(core.Widget)) {
+	for _, w := range pb.children {
 		fn(w)
 	}
 }
 
-// focusableChildren returns all focusable children in order.
-// Must be called with cp.mu held.
-func (cp *ContentPanel) focusableChildren() []core.Widget {
+// HandleMouse routes mouse clicks to child widgets.
+func (pb *pageBody) HandleMouse(ev *tcell.EventMouse) bool {
+	x, y := ev.Position()
+	buttons := ev.Buttons()
+
+	// For wheel events, let parent ScrollPane handle.
+	if buttons&(tcell.WheelUp|tcell.WheelDown) != 0 {
+		return false
+	}
+
+	for _, w := range pb.children {
+		if w.HitTest(x, y) && w.Focusable() {
+			if buttons&tcell.Button1 != 0 {
+				pb.blurAll()
+				w.Focus()
+				pb.updateFocusIndex()
+			}
+			if ma, ok := w.(core.MouseAware); ok {
+				return ma.HandleMouse(ev)
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// WidgetAt implements core.HitTester.
+func (pb *pageBody) WidgetAt(x, y int) core.Widget {
+	for _, w := range pb.children {
+		if w.HitTest(x, y) && w.Focusable() {
+			return w
+		}
+	}
+	return nil
+}
+
+func (pb *pageBody) focusableChildren() []core.Widget {
 	var out []core.Widget
-	for _, w := range cp.children {
+	for _, w := range pb.children {
 		if w.Focusable() {
 			out = append(out, w)
 		}
@@ -296,48 +250,19 @@ func (cp *ContentPanel) focusableChildren() []core.Widget {
 	return out
 }
 
-// contentHeight returns the total height of all children.
-// Must be called with cp.mu held.
-func (cp *ContentPanel) contentHeight() int {
-	maxY := 0
-	for _, w := range cp.children {
-		_, wy := w.Position()
-		_, wh := w.Size()
-		if end := wy + wh; end > maxY {
-			maxY = end
+func (pb *pageBody) blurAll() {
+	for _, w := range pb.children {
+		w.Blur()
+	}
+}
+
+func (pb *pageBody) updateFocusIndex() {
+	focusables := pb.focusableChildren()
+	for i, w := range focusables {
+		if fs, ok := w.(core.FocusState); ok && fs.IsFocused() {
+			pb.focusIndex = i
+			return
 		}
-	}
-	return maxY
-}
-
-// ensureVisible adjusts scrollY so that the widget at focusableIndex
-// is visible. Must be called with cp.mu held.
-func (cp *ContentPanel) ensureVisible(focusableIndex int) {
-	focusables := cp.focusableChildren()
-	if focusableIndex < 0 || focusableIndex >= len(focusables) {
-		return
-	}
-	w := focusables[focusableIndex]
-	_, wy := w.Position()
-	_, wh := w.Size()
-	_, panelH := cp.Size()
-
-	if wy < cp.scrollY {
-		cp.scrollY = wy
-	} else if wy+wh > cp.scrollY+panelH {
-		cp.scrollY = wy + wh - panelH
-	}
-}
-
-func (cp *ContentPanel) invalidate() {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-	cp.invalidateLocked()
-}
-
-func (cp *ContentPanel) invalidateLocked() {
-	if cp.inv != nil {
-		cp.inv(cp.Rect)
 	}
 }
 
@@ -354,7 +279,8 @@ type BrowseApp struct {
 	mapper    *Mapper
 	layout    *LayoutManager
 	urlBar    *widgets.Input
-	content   *ContentPanel
+	body      *pageBody
+	scroller  *scroll.ScrollPane
 	statusBar *widgets.StatusBar
 	mode      DisplayMode
 	modeForce bool
@@ -363,19 +289,20 @@ type BrowseApp struct {
 }
 
 // rootPanel is a simple container that stacks the URL bar (row 0)
-// and content panel (rows 1..N). It implements Widget, ChildContainer,
-// and FocusCycler so the UIManager can traverse between URL bar and content.
+// and scroll pane (rows 1..N). It implements Widget, ChildContainer,
+// FocusCycler, MouseAware, and HitTester so the UIManager can
+// traverse between URL bar and content and route mouse events.
 type rootPanel struct {
 	core.BaseWidget
-	urlBar  *widgets.Input
-	content *ContentPanel
-	inv     func(core.Rect)
+	urlBar   *widgets.Input
+	scroller *scroll.ScrollPane
+	inv      func(core.Rect)
 }
 
-func newRootPanel(urlBar *widgets.Input, content *ContentPanel) *rootPanel {
+func newRootPanel(urlBar *widgets.Input, scroller *scroll.ScrollPane) *rootPanel {
 	rp := &rootPanel{
-		urlBar:  urlBar,
-		content: content,
+		urlBar:   urlBar,
+		scroller: scroller,
 	}
 	rp.SetFocusable(true)
 	return rp
@@ -385,16 +312,16 @@ func newRootPanel(urlBar *widgets.Input, content *ContentPanel) *rootPanel {
 func (rp *rootPanel) SetInvalidator(fn func(core.Rect)) {
 	rp.inv = fn
 	rp.urlBar.SetInvalidator(fn)
-	rp.content.SetInvalidator(fn)
+	rp.scroller.SetInvalidator(fn)
 }
 
-// Draw renders URL bar at the top, then content below.
+// Draw renders URL bar at the top, then scroll pane below.
 func (rp *rootPanel) Draw(p *core.Painter) {
 	rp.urlBar.Draw(p)
-	rp.content.Draw(p)
+	rp.scroller.Draw(p)
 }
 
-// Resize positions URL bar at y=0 (1 row) and content below.
+// Resize positions URL bar at y=0 (1 row) and scroll pane below.
 func (rp *rootPanel) Resize(w, h int) {
 	rp.BaseWidget.Resize(w, h)
 	rp.layoutChildren()
@@ -418,17 +345,48 @@ func (rp *rootPanel) layoutChildren() {
 	if contentH < 0 {
 		contentH = 0
 	}
-	rp.content.SetPosition(x, contentY)
-	rp.content.Resize(w, contentH)
+	rp.scroller.SetPosition(x, contentY)
+	rp.scroller.Resize(w, contentH)
 }
 
 // HandleKey delegates to focused child.
 func (rp *rootPanel) HandleKey(ev *tcell.EventKey) bool {
-	// Route to whichever child is focused
 	if rp.urlBar.IsFocused() {
 		return rp.urlBar.HandleKey(ev)
 	}
-	return rp.content.HandleKey(ev)
+	return rp.scroller.HandleKey(ev)
+}
+
+// HandleMouse routes mouse events to URL bar or scroll pane.
+func (rp *rootPanel) HandleMouse(ev *tcell.EventMouse) bool {
+	_, y := ev.Position()
+	buttons := ev.Buttons()
+
+	// Wheel events go to the scroll pane regardless of position.
+	if buttons&(tcell.WheelUp|tcell.WheelDown) != 0 {
+		return rp.scroller.HandleMouse(ev)
+	}
+
+	// Route clicks by Y position.
+	urlY := rp.urlBar.Rect.Y
+	if y == urlY {
+		return rp.urlBar.HandleMouse(ev)
+	}
+	return rp.scroller.HandleMouse(ev)
+}
+
+// WidgetAt implements core.HitTester for click-to-focus.
+func (rp *rootPanel) WidgetAt(x, y int) core.Widget {
+	if !rp.HitTest(x, y) {
+		return nil
+	}
+	if rp.urlBar.HitTest(x, y) {
+		return rp.urlBar
+	}
+	if dw := rp.scroller.WidgetAt(x, y); dw != nil {
+		return dw
+	}
+	return rp
 }
 
 // Focus focuses the URL bar by default.
@@ -440,76 +398,72 @@ func (rp *rootPanel) Focus() {
 // Blur blurs both children.
 func (rp *rootPanel) Blur() {
 	rp.urlBar.Blur()
-	rp.content.Blur()
+	rp.scroller.Blur()
 	rp.BaseWidget.Blur()
 }
 
 // VisitChildren implements core.ChildContainer.
 func (rp *rootPanel) VisitChildren(fn func(core.Widget)) {
 	fn(rp.urlBar)
-	fn(rp.content)
+	fn(rp.scroller)
 }
 
 // CycleFocus implements core.FocusCycler — toggles between URL bar and content.
 func (rp *rootPanel) CycleFocus(forward bool) bool {
 	urlFocused := rp.urlBar.IsFocused()
-	contentFocused := rp.content.IsFocused() || core.IsDescendantFocused(rp.content)
+	contentFocused := rp.scroller.IsFocused() || core.IsDescendantFocused(rp.scroller)
 
 	if urlFocused {
 		if forward {
 			rp.urlBar.Blur()
-			rp.content.Focus()
+			rp.scroller.Focus()
 			return true
 		}
-		return false // at boundary going backward from URL bar
+		return false
 	}
 
 	if contentFocused {
-		// Try cycling within content first
-		if rp.content.CycleFocus(forward) {
+		if rp.scroller.CycleFocus(forward) {
 			return true
 		}
-		// Content exhausted — move to URL bar if going backward
 		if !forward {
-			rp.content.Blur()
+			rp.scroller.Blur()
 			rp.urlBar.Focus()
 			return true
 		}
-		return false // at boundary going forward past content
+		return false
 	}
 
-	// Nothing focused, focus URL bar
 	rp.urlBar.Focus()
 	return true
 }
 
 // TrapsFocus returns true — this is the root container and wraps focus.
-func (rp *rootPanel) TrapsFocus() bool {
-	return true
-}
+func (rp *rootPanel) TrapsFocus() bool { return true }
 
 // HitTest returns true if the point is within the root panel bounds.
-func (rp *rootPanel) HitTest(x, y int) bool {
-	return rp.Rect.Contains(x, y)
-}
+func (rp *rootPanel) HitTest(x, y int) bool { return rp.Rect.Contains(x, y) }
 
 // New creates a new BrowseApp. If startURL is empty, no page is loaded initially.
 func New(startURL string) core.App {
 	ui := core.NewUIManager()
-	ui.AdvanceFocusOnEnter = false // We handle Enter ourselves for URL bar
+	ui.AdvanceFocusOnEnter = false
 
 	urlBar := widgets.NewInput()
 	urlBar.Placeholder = "Enter URL..."
 	urlBar.SetHelpText("Ctrl+L: Focus URL bar")
 
-	content := newContentPanel()
+	body := newPageBody()
+	scroller := scroll.NewScrollPane()
+	scroller.SetChild(body)
 
-	root := newRootPanel(urlBar, content)
+	root := newRootPanel(urlBar, scroller)
 
 	app := &BrowseApp{
 		startURL: startURL,
 		urlBar:   urlBar,
-		content:  content,
+		body:     body,
+		scroller: scroller,
 		layout:   NewLayoutManager(80, 24),
 	}
 
@@ -521,7 +475,6 @@ func New(startURL string) core.App {
 		app.statusBar.SetHintText("No page loaded")
 	}
 
-	// Mapper: click callback dispatches CDP click in a goroutine
 	app.mapper = NewMapper(func(backendNodeID int64) {
 		go app.clickNode(backendNodeID)
 	})
@@ -529,12 +482,10 @@ func New(startURL string) core.App {
 		go app.typeNode(backendNodeID, text)
 	})
 
-	// Wire URL bar submit
 	urlBar.OnSubmit = func(text string) {
 		go app.navigateTo(normalizeURL(text))
 	}
 
-	// Focus URL bar initially
 	ui.Focus(urlBar)
 
 	return app
@@ -570,7 +521,6 @@ func (app *BrowseApp) Run() error {
 	app.tab = tab
 	app.mu.Unlock()
 
-	// Wire tab callbacks
 	tab.OnNavigate = func(url, title string) {
 		app.urlBar.Text = url
 		app.urlBar.CaretPos = len([]rune(url))
@@ -589,7 +539,6 @@ func (app *BrowseApp) Run() error {
 		}
 	}
 
-	// Navigate to start URL if provided
 	if app.startURL != "" {
 		go app.navigateTo(normalizeURL(app.startURL))
 	}
@@ -650,7 +599,6 @@ func (app *BrowseApp) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
-	// Delegate to UIApp (which delegates to UIManager)
 	app.UIApp.HandleKey(ev)
 }
 
@@ -774,16 +722,17 @@ func (app *BrowseApp) fetchAndRender() {
 	// Map nodes to widgets
 	ws := app.mapper.MapDocument(doc)
 
-	// Layout
-	w, h := app.content.Size()
-	app.layout.Resize(w, h)
+	// Layout — use the scroller's viewport width, full virtual height.
+	w, _ := app.scroller.Size()
+	app.layout.Resize(w, 0)
 	app.layout.SetMode(mode)
 	app.layout.Arrange(ws)
 
 	app.mu.Unlock()
 
-	// Update content panel
-	app.content.SetChildren(ws)
+	// Update page body and scroll pane content height.
+	app.body.SetChildren(ws)
+	app.scroller.SetContentHeight(app.body.contentHeight())
 
 	// Update URL bar text
 	url, title := tab.Location()
