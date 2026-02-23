@@ -38,14 +38,6 @@ type PaneAdapter struct{ Effect }
 // ApplyWorkspace for pane-bound effects is a no-op.
 func (PaneAdapter) ApplyWorkspace(buffer [][]client.Cell) {}
 
-// ContinuousRenderer is an optional interface for effects that need un-throttled
-// rendering (e.g. PWM transparency). When NeedsContinuousRender returns true,
-// the manager bypasses the 16ms frame timer and requests frames as fast as the
-// render loop can produce them.
-type ContinuousRenderer interface {
-	NeedsContinuousRender() bool
-}
-
 // WorkspaceAdapter wraps an effect and suppresses pane application.
 type WorkspaceAdapter struct{ Effect }
 

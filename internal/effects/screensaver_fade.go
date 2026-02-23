@@ -73,14 +73,6 @@ func (e *screensaverFade) Active() bool {
 	return e.active || e.fadingOut
 }
 
-func (e *screensaverFade) NeedsContinuousRender() bool {
-	if !e.active && !e.fadingOut {
-		return false
-	}
-	intensity := e.timeline.GetCached("fade")
-	return intensity > 0 && intensity < 1.0
-}
-
 func (e *screensaverFade) Update(now time.Time) {
 	e.timeline.Update(now)
 	if e.inner != nil {

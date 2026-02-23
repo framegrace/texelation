@@ -93,21 +93,6 @@ func (m *Manager) requestFrame() {
 	m.frameMu.Unlock()
 }
 
-// requestFrameImmediate sends a render signal without the 16ms throttle.
-// Used for effects that need maximum fps (PWM transparency).
-func (m *Manager) requestFrameImmediate() {
-	m.frameMu.Lock()
-	ch := m.renderCh
-	m.frameMu.Unlock()
-	if ch == nil {
-		return
-	}
-	select {
-	case ch <- struct{}{}:
-	default:
-	}
-}
-
 // Update ticks all effects so animations can advance.
 func (m *Manager) Update(now time.Time) {
 	if m == nil {
@@ -119,28 +104,19 @@ func (m *Manager) Update(now time.Time) {
 	m.mu.RUnlock()
 
 	needsFrame := false
-	needsContinuous := false
 	for _, eff := range panes {
 		eff.Update(now)
 		if eff.Active() {
 			needsFrame = true
-			if cr, ok := eff.(ContinuousRenderer); ok && cr.NeedsContinuousRender() {
-				needsContinuous = true
-			}
 		}
 	}
 	for _, eff := range workspaces {
 		eff.Update(now)
 		if eff.Active() {
 			needsFrame = true
-			if cr, ok := eff.(ContinuousRenderer); ok && cr.NeedsContinuousRender() {
-				needsContinuous = true
-			}
 		}
 	}
-	if needsContinuous {
-		m.requestFrameImmediate()
-	} else if needsFrame {
+	if needsFrame {
 		m.requestFrame()
 	}
 }
