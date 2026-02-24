@@ -12,6 +12,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/protocol"
@@ -89,6 +90,6 @@ func sendClipboardSet(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, mi
 func writeMessage(mu *sync.Mutex, conn net.Conn, header protocol.Header, payload []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
-	log.Printf("client tx type=%d seq=%d len=%d", header.Type, header.Sequence, len(payload))
+	debuglog.Printf("client tx type=%d seq=%d len=%d", header.Type, header.Sequence, len(payload))
 	return protocol.WriteMessage(conn, header, payload)
 }

@@ -10,6 +10,8 @@ package texel
 import (
 	"log"
 	"math"
+
+	"github.com/framegrace/texelation/internal/debuglog"
 )
 
 // Rect defines a rectangle using fractional coordinates (0.0 to 1.0).
@@ -56,7 +58,7 @@ func (t *Tree) SetRoot(p *pane) {
 	//		leaf.Pane.IsActive = true
 	//	}
 	// Don't set IsActive here - let the caller handle it
-	log.Printf("Tree.SetRoot: Set root pane '%s', IsActive will be set by caller", p.getTitle())
+	debuglog.Printf("Tree.SetRoot: Set root pane '%s', IsActive will be set by caller", p.getTitle())
 }
 
 // ratiosAreEqual checks if all float values in a slice are effectively equal.
@@ -78,7 +80,7 @@ func ratiosAreEqual(ratios []float64) bool {
 // It now intelligently decides whether to add to the current group or create a new sub-group.
 func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 	if t.ActiveLeaf == nil {
-		log.Printf("SplitActive: No active leaf to split")
+		debuglog.Printf("SplitActive: No active leaf to split")
 		return nil
 	}
 
@@ -87,7 +89,7 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 		splitDirStr = "Horizontal"
 	}
 
-	log.Printf("SplitActive: Splitting active leaf with pane '%s' in %s direction",
+	debuglog.Printf("SplitActive: Splitting active leaf with pane '%s' in %s direction",
 		t.ActiveLeaf.Pane.getTitle(), splitDirStr)
 
 	if t.ActiveLeaf.Pane != nil {
@@ -98,23 +100,23 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 	parent := t.findParentOf(t.Root, nil, nodeToModify)
 	var newActiveNode *Node
 
-	log.Printf("SplitActive: nodeToModify has parent=%v", parent != nil)
+	debuglog.Printf("SplitActive: nodeToModify has parent=%v", parent != nil)
 	if parent != nil {
 		parentSplitStr := "Vertical"
 		if parent.Split == Horizontal {
 			parentSplitStr = "Horizontal"
 		}
-		log.Printf("SplitActive: Parent split=%s, ratios=%v, ratiosEqual=%v",
+		debuglog.Printf("SplitActive: Parent split=%s, ratios=%v, ratiosEqual=%v",
 			parentSplitStr, parent.SplitRatios, ratiosAreEqual(parent.SplitRatios))
 	}
 
 	// Check if we can add to existing group
 	addToExistingGroup := parent != nil && parent.Split == splitDir && ratiosAreEqual(parent.SplitRatios)
-	log.Printf("SplitActive: addToExistingGroup=%v", addToExistingGroup)
+	debuglog.Printf("SplitActive: addToExistingGroup=%v", addToExistingGroup)
 
 	if addToExistingGroup {
 		// CASE 1: Add to existing, equally-sized group.
-		log.Printf("SplitActive: Adding to existing group")
+		debuglog.Printf("SplitActive: Adding to existing group")
 		newNode := &Node{Parent: parent, Pane: newPane}
 		parent.Children = append(parent.Children, newNode)
 
@@ -126,14 +128,14 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 			parent.SplitRatios[i] = equalRatio
 		}
 		newActiveNode = newNode
-		log.Printf("SplitActive: Added to existing group, now %d children with ratio %.3f each",
+		debuglog.Printf("SplitActive: Added to existing group, now %d children with ratio %.3f each",
 			numChildren, equalRatio)
 
 	} else {
 		// CASE 2: Split the current pane into a new group of two.
-		log.Printf("SplitActive: Creating new split group")
+		debuglog.Printf("SplitActive: Creating new split group")
 		originalPane := nodeToModify.Pane
-		log.Printf("SplitActive: Original pane: '%s'", originalPane.getTitle())
+		debuglog.Printf("SplitActive: Original pane: '%s'", originalPane.getTitle())
 
 		nodeToModify.Pane = nil // The leaf becomes an internal node.
 		nodeToModify.Split = splitDir
@@ -144,10 +146,10 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 		nodeToModify.Children = []*Node{child1, child2}
 		newActiveNode = child2
 
-		log.Printf("SplitActive: Created new %s split group:", splitDirStr)
-		log.Printf("  - Child 1: pane '%s'", child1.Pane.getTitle())
-		log.Printf("  - Child 2: pane '%s'", child2.Pane.getTitle())
-		log.Printf("  - Ratios: %v", nodeToModify.SplitRatios)
+		debuglog.Printf("SplitActive: Created new %s split group:", splitDirStr)
+		debuglog.Printf("  - Child 1: pane '%s'", child1.Pane.getTitle())
+		debuglog.Printf("  - Child 2: pane '%s'", child2.Pane.getTitle())
+		debuglog.Printf("  - Ratios: %v", nodeToModify.SplitRatios)
 	}
 
 	t.ActiveLeaf = newActiveNode
@@ -155,10 +157,10 @@ func (t *Tree) SplitActive(splitDir SplitType, newPane *pane) *Node {
 		t.ActiveLeaf.Pane.IsActive = true
 	}
 
-	log.Printf("SplitActive: New active leaf is pane '%s'", t.ActiveLeaf.Pane.getTitle())
+	debuglog.Printf("SplitActive: New active leaf is pane '%s'", t.ActiveLeaf.Pane.getTitle())
 
 	// Debug: traverse the tree to see the final structure
-	log.Printf("SplitActive: Final tree structure:")
+	debuglog.Printf("SplitActive: Final tree structure:")
 	t.debugPrintTree(t.Root, 0)
 
 	return newActiveNode
@@ -414,27 +416,27 @@ func (t *Tree) traverse(n *Node, f func(*Node)) {
 
 // Resize recalculates the dimensions of all panes in the tree.
 func (t *Tree) Resize(x, y, w, h int) {
-	log.Printf("Tree.Resize: Setting root to (%d,%d) size %dx%d", x, y, w, h)
+	debuglog.Printf("Tree.Resize: Setting root to (%d,%d) size %dx%d", x, y, w, h)
 
 	if t.Root != nil {
 		t.resizeNode(t.Root, x, y, w, h)
 	} else {
-		log.Printf("Tree.Resize: Root is nil!")
+		debuglog.Printf("Tree.Resize: Root is nil!")
 	}
 }
 
 // resizeNode is the recursive helper for Resize.
 func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 	if n == nil {
-		log.Printf("resizeNode: node is nil")
+		debuglog.Printf("resizeNode: node is nil")
 		return
 	}
 
-	log.Printf("resizeNode: node at (%d,%d) size %dx%d, hasPane=%v, numChildren=%d",
+	debuglog.Printf("resizeNode: node at (%d,%d) size %dx%d, hasPane=%v, numChildren=%d",
 		x, y, w, h, n.Pane != nil, len(n.Children))
 
 	if len(n.Children) == 0 && n.Pane != nil {
-		log.Printf("resizeNode: Setting pane '%s' dimensions to (%d,%d)-(%d,%d)",
+		debuglog.Printf("resizeNode: Setting pane '%s' dimensions to (%d,%d)-(%d,%d)",
 			n.Pane.getTitle(), x, y, x+w, y+h)
 		n.Pane.setDimensions(x, y, x+w, y+h)
 		// This is the crucial fix: invalidate the previous buffer to force a full redraw.
@@ -449,11 +451,11 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 		return // Not a valid internal node
 	}
 
-	log.Printf("resizeNode: Internal node with %d children, split=%v, ratios=%v",
+	debuglog.Printf("resizeNode: Internal node with %d children, split=%v, ratios=%v",
 		numChildren, n.Split, n.SplitRatios)
 
 	if n.Split == Vertical {
-		log.Printf("resizeNode: Processing vertical split (ratios: %v)", n.SplitRatios)
+		debuglog.Printf("resizeNode: Processing vertical split (ratios: %v)", n.SplitRatios)
 		currentX := x
 		for i, child := range n.Children {
 			// Defensive bounds check to prevent crash on corrupted tree
@@ -473,12 +475,12 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 			if i == numChildren-1 {
 				childW = w - (currentX - x)
 			}
-			log.Printf("resizeNode: Child %d gets (%d,%d) size %dx%d", i, currentX, y, childW, h)
+			debuglog.Printf("resizeNode: Child %d gets (%d,%d) size %dx%d", i, currentX, y, childW, h)
 			t.resizeNode(child, currentX, y, childW, h)
 			currentX += childW
 		}
 	} else { // Horizontal
-		log.Printf("resizeNode: Processing horizontal split (ratios: %v)", n.SplitRatios)
+		debuglog.Printf("resizeNode: Processing horizontal split (ratios: %v)", n.SplitRatios)
 		currentY := y
 		for i, child := range n.Children {
 			// Defensive bounds check to prevent crash on corrupted tree
@@ -498,7 +500,7 @@ func (t *Tree) resizeNode(n *Node, x, y, w, h int) {
 			if i == numChildren-1 {
 				childH = h - (currentY - y)
 			}
-			log.Printf("resizeNode: Child %d gets (%d,%d) size %dx%d", i, x, currentY, w, childH)
+			debuglog.Printf("resizeNode: Child %d gets (%d,%d) size %dx%d", i, x, currentY, w, childH)
 			t.resizeNode(child, x, currentY, w, childH)
 			currentY += childH
 		}
@@ -516,16 +518,16 @@ func (t *Tree) debugPrintTree(node *Node, depth int) {
 	}
 
 	if node.Pane != nil {
-		log.Printf("%sLeaf: '%s' (active=%v)", indent, node.Pane.getTitle(), node.Pane.IsActive)
+		debuglog.Printf("%sLeaf: '%s' (active=%v)", indent, node.Pane.getTitle(), node.Pane.IsActive)
 	} else {
 		splitStr := "Vertical"
 		if node.Split == Horizontal {
 			splitStr = "Horizontal"
 		}
-		log.Printf("%sInternal: %s split, %d children, ratios=%v",
+		debuglog.Printf("%sInternal: %s split, %d children, ratios=%v",
 			indent, splitStr, len(node.Children), node.SplitRatios)
 		for i, child := range node.Children {
-			log.Printf("%s  Child %d:", indent, i)
+			debuglog.Printf("%s  Child %d:", indent, i)
 			t.debugPrintTree(child, depth+2)
 		}
 	}

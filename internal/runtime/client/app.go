@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/framegrace/texelation/internal/debuglog"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -57,7 +59,7 @@ func Run(opts Options) error {
 	defer conn.Close()
 	var writeMu sync.Mutex
 
-	log.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
+	debuglog.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 
 	state := &clientState{
 		cache:                   client.NewBufferCache(),
@@ -201,7 +203,7 @@ func Run(opts Options) error {
 			return nil
 		}
 		if clip, ok := state.consumeClipboardSync(); ok && len(clip.Data) > 0 {
-			log.Printf("CLIPBOARD DEBUG: Setting system clipboard: len=%d", len(clip.Data))
+			debuglog.Printf("CLIPBOARD DEBUG: Setting system clipboard: len=%d", len(clip.Data))
 			screen.SetClipboard(clip.Data)
 		}
 	}

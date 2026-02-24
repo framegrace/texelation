@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"fmt"
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/term"
 	"log"
@@ -274,7 +275,7 @@ func NewDesktopEngineWithDriver(driver ScreenDriver, shellFactory AppFactory, in
 	// Scan for external apps
 	d.loadApps()
 
-	log.Printf("NewDesktop: Created with inControlMode=%v, %d apps registered, InitAppName=%s", d.inControlMode, d.registry.Count(), d.InitAppName)
+	debuglog.Printf("NewDesktop: Created with inControlMode=%v, %d apps registered, InitAppName=%s", d.inControlMode, d.registry.Count(), d.InitAppName)
 
 	return d, nil
 }
@@ -296,7 +297,7 @@ func (d *DesktopEngine) loadApps() {
 // ForceRefresh clears caches and triggers a full repaint.
 // When triggered by SIGHUP, this also reloads theme and apps.
 func (d *DesktopEngine) ForceRefresh() {
-	log.Println("Desktop: ForceRefresh triggered")
+	debuglog.Println("Desktop: ForceRefresh triggered")
 
 	// Reload apps
 	d.loadApps()
@@ -312,7 +313,7 @@ func (d *DesktopEngine) ForceRefresh() {
 	d.broadcastStateUpdate()
 	d.broadcastTreeChanged()
 
-	log.Println("Desktop: Broadcasting EventThemeChanged")
+	debuglog.Println("Desktop: Broadcasting EventThemeChanged")
 	d.dispatcher.Broadcast(Event{Type: EventThemeChanged})
 
 	// Notify refresh handler if one is set (to wake up the loop)
@@ -330,7 +331,7 @@ func (d *DesktopEngine) reloadLayoutTransitions() {
 	// Parse layout transitions config from system config (same as initialization).
 	config := loadLayoutTransitionsConfig()
 
-	log.Printf("Desktop: Reloading layout transitions config: enabled=%v, duration=%dms, easing=%s",
+	debuglog.Printf("Desktop: Reloading layout transitions config: enabled=%v, duration=%dms, easing=%s",
 		config.Enabled, config.DurationMs, config.Easing)
 
 	d.layoutTransitions.UpdateConfig(config)
@@ -690,7 +691,7 @@ func (d *DesktopEngine) startPendingApps() {
 		return
 	}
 
-	log.Printf("[RESTORE] Starting %d apps that were waiting for viewport dimensions", len(pending))
+	debuglog.Printf("[RESTORE] Starting %d apps that were waiting for viewport dimensions", len(pending))
 	for _, p := range pending {
 		p.StartPreparedApp()
 	}
@@ -884,6 +885,10 @@ func initDefaultColors() (tcell.Color, tcell.Color, error) {
 // tree state (Root, ActiveLeaf, SplitRatios, pane dimensions). Must be called
 // after NewDesktopEngine and before events are injected.
 func (d *DesktopEngine) Run() {
+	const publishInterval = 16 * time.Millisecond // ~60fps cap
+	var lastPublish time.Time
+	var publishTimer *time.Timer
+
 	for {
 		// Block until at least one event arrives.
 		select {
@@ -894,6 +899,9 @@ func (d *DesktopEngine) Run() {
 		case <-d.refreshCh:
 			// App signalled dirty — just break to drain+publish below.
 		case <-d.quit:
+			if publishTimer != nil {
+				publishTimer.Stop()
+			}
 			return
 		}
 
@@ -902,8 +910,22 @@ func (d *DesktopEngine) Run() {
 		// are never delayed by a flood of app refreshes.
 		d.drainPending()
 
-		// Single publish for the entire batch.
-		d.publishIfDirty()
+		// Publish at most once per frame interval (~60fps).
+		now := time.Now()
+		if now.Sub(lastPublish) >= publishInterval {
+			d.publishIfDirty()
+			lastPublish = now
+			if publishTimer != nil {
+				publishTimer.Stop()
+				publishTimer = nil
+			}
+		} else if publishTimer == nil {
+			// Schedule a publish at the next frame boundary.
+			remaining := publishInterval - now.Sub(lastPublish)
+			publishTimer = time.AfterFunc(remaining, func() {
+				d.SendRefresh()
+			})
+		}
 	}
 }
 

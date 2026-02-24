@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelation/internal/effects"
 	"github.com/framegrace/texelation/protocol"
 )
@@ -81,7 +82,7 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			log.Printf("decode clipboard failed: %v", err)
 			return false
 		}
-		log.Printf("CLIPBOARD DEBUG: Client received MsgClipboardSet: mime=%s, len=%d", clip.MimeType, len(clip.Data))
+		debuglog.Printf("CLIPBOARD DEBUG: Client received MsgClipboardSet: mime=%s, len=%d", clip.MimeType, len(clip.Data))
 		state.setClipboard(protocol.ClipboardData{MimeType: clip.MimeType, Data: clip.Data})
 		return true
 	case protocol.MsgClipboardData:
@@ -145,7 +146,7 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			log.Printf("decode state update failed: %v", err)
 			return false
 		}
-		log.Printf("state update: control=%v sub=%q zoom=%v", update.InControlMode, update.SubMode, update.Zoomed)
+		debuglog.Printf("state update: control=%v sub=%q zoom=%v", update.InControlMode, update.SubMode, update.Zoomed)
 		state.applyStateUpdate(update)
 		return true
 	}

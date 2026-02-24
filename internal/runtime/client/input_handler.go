@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/internal/effects"
@@ -62,7 +63,7 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 						Timestamp: time.Now(),
 					})
 				}
-				log.Printf("control quit requested; closing client")
+				debuglog.Printf("control quit requested; closing client")
 				return false
 			}
 		}

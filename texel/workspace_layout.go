@@ -9,6 +9,7 @@ package texel
 import (
 	"log"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -37,7 +38,7 @@ func (w *Workspace) removeNode(target *Node, allowRoot bool) {
 		return
 	}
 
-	log.Printf("removeNode: removing pane '%s' (root=%v)", pane.getTitle(), isRoot)
+	debuglog.Printf("removeNode: removing pane '%s' (root=%v)", pane.getTitle(), isRoot)
 
 	wasActive := w.tree.ActiveLeaf == target
 
@@ -72,16 +73,16 @@ func (w *Workspace) removeNode(target *Node, allowRoot bool) {
 
 	// Try to animate the removal if enabled and we have siblings
 	if w.desktop != nil && w.desktop.layoutTransitions != nil && len(parent.Children) > 1 {
-		log.Printf("removeNode: Starting animated removal of pane '%s' at index %d", pane.getTitle(), closingIndex)
+		debuglog.Printf("removeNode: Starting animated removal of pane '%s' at index %d", pane.getTitle(), closingIndex)
 		w.desktop.layoutTransitions.AnimateRemoval(parent, closingIndex, func() {
-			log.Printf("removeNode: Animation complete, performing actual removal of '%s'", pane.getTitle())
+			debuglog.Printf("removeNode: Animation complete, performing actual removal of '%s'", pane.getTitle())
 			w.doRemoveNode(target, parent, closingIndex, wasActive)
 		})
 		return // The callback will finish the job
 	}
 
 	// No animation, do immediate removal
-	log.Printf("removeNode: Performing immediate removal of pane '%s'", pane.getTitle())
+	debuglog.Printf("removeNode: Performing immediate removal of pane '%s'", pane.getTitle())
 	w.doRemoveNode(target, parent, closingIndex, wasActive)
 }
 
@@ -378,18 +379,18 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 		}
 	}
 
-	log.Printf("PerformSplit: Splitting in direction %v", splitDir)
+	debuglog.Printf("PerformSplit: Splitting in direction %v", splitDir)
 
 	// Get current pane for logging
 	var currentTitle string
 	if w.tree.ActiveLeaf.Pane != nil {
 		currentTitle = w.tree.ActiveLeaf.Pane.getTitle()
-		log.Printf("PerformSplit: Current active pane: '%s'", currentTitle)
+		debuglog.Printf("PerformSplit: Current active pane: '%s'", currentTitle)
 	}
 
 	// Create new pane FIRST
 	newPane := newPane(w)
-	log.Printf("PerformSplit: Created new pane")
+	debuglog.Printf("PerformSplit: Created new pane")
 
 	// Check if we'll be adding to existing group or creating new split
 	// This replicates the logic from SplitActive to determine animation type
@@ -397,9 +398,9 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 	parent := w.tree.findParentOf(w.tree.Root, nil, nodeToModify)
 	addToExistingGroup := parent != nil && parent.Split == splitDir && ratiosAreEqual(parent.SplitRatios)
 
-	log.Printf("PerformSplit: addToExistingGroup=%v", addToExistingGroup)
+	debuglog.Printf("PerformSplit: addToExistingGroup=%v", addToExistingGroup)
 	if parent != nil {
-		log.Printf("PerformSplit: Parent has %d children with ratios %v (equal=%v)",
+		debuglog.Printf("PerformSplit: Parent has %d children with ratios %v (equal=%v)",
 			len(parent.Children), parent.SplitRatios, ratiosAreEqual(parent.SplitRatios))
 	}
 
@@ -409,7 +410,7 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 		log.Printf("PerformSplit: Failed to split tree")
 		return
 	}
-	log.Printf("PerformSplit: Tree split completed")
+	debuglog.Printf("PerformSplit: Tree split completed")
 
 	// IMPORTANT: Create and attach the app BEFORE starting animation.
 	// The animation broadcasts tree snapshots at 60fps, and CaptureTree() skips
@@ -426,7 +427,7 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 		newApp = w.ShellAppFactory()
 	}
 	newPane.AttachApp(newApp, w.refreshChan)
-	log.Printf("PerformSplit: Attached app '%s' to new pane (before animation)", newApp.GetTitle())
+	debuglog.Printf("PerformSplit: Attached app '%s' to new pane (before animation)", newApp.GetTitle())
 
 	// Capture the target ratios set by SplitActive, then animate from initial to target
 	var nodeWithRatios *Node
@@ -459,7 +460,7 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 				initialRatios[1] = 0.01
 			}
 			nodeWithRatios.SplitRatios = initialRatios
-			log.Printf("PerformSplit: Set initial ratios %v, will animate to %v", initialRatios, targetRatios)
+			debuglog.Printf("PerformSplit: Set initial ratios %v, will animate to %v", initialRatios, targetRatios)
 
 			// Start animation
 			if w.desktop != nil && w.desktop.layoutTransitions != nil {
@@ -471,13 +472,13 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 	// Set pane states
 	w.tree.Traverse(func(node *Node) {
 		if node.Pane != nil && node != newNode && node != w.tree.ActiveLeaf {
-			log.Printf("PerformSplit: Deactivating old pane '%s'", node.Pane.getTitle())
+			debuglog.Printf("PerformSplit: Deactivating old pane '%s'", node.Pane.getTitle())
 			node.Pane.SetActive(false)
 		}
 	})
 
 	// The new pane should be active
-	log.Printf("PerformSplit: Activating new pane '%s'", newPane.getTitle())
+	debuglog.Printf("PerformSplit: Activating new pane '%s'", newPane.getTitle())
 	newPane.SetActive(true)
 	w.notifyFocus()
 
@@ -486,12 +487,12 @@ func (w *Workspace) PerformSplit(splitDir SplitType) {
 	animating := w.desktop != nil && w.desktop.layoutTransitions != nil && w.desktop.layoutTransitions.IsAnimating()
 	if !animating {
 		w.recalculateLayout()
-		log.Printf("PerformSplit: Split completed successfully (no animation)")
+		debuglog.Printf("PerformSplit: Split completed successfully (no animation)")
 		if w.desktop != nil {
 			w.desktop.broadcastTreeChanged()
 		}
 	} else {
-		log.Printf("PerformSplit: Split completed successfully (animating)")
+		debuglog.Printf("PerformSplit: Split completed successfully (animating)")
 	}
 }
 

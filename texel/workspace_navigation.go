@@ -7,13 +7,12 @@
 package texel
 
 import (
-	"log"
-
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 )
 
 func (w *Workspace) moveActivePane(d Direction) {
-	log.Printf("moveActivePane: Moving in direction %v", d)
+	debuglog.Printf("moveActivePane: Moving in direction %v", d)
 
 	// Get current and target panes
 	var currentPane, targetPane *pane
@@ -33,7 +32,7 @@ func (w *Workspace) moveActivePane(d Direction) {
 
 	// Check if we actually moved
 	if w.tree.ActiveLeaf == oldActiveLeaf {
-		log.Printf("moveActivePane: No movement occurred")
+		debuglog.Printf("moveActivePane: No movement occurred")
 		return
 	}
 
@@ -56,7 +55,7 @@ func (w *Workspace) moveActivePane(d Direction) {
 		targetPane.notifyStateChange()
 	}
 
-	log.Printf("moveActivePane: Moved from '%s' to '%s'", currentTitle, targetTitle)
+	debuglog.Printf("moveActivePane: Moved from '%s' to '%s'", currentTitle, targetTitle)
 
 	w.Broadcast(Event{Type: EventPaneActiveChanged, Payload: w.tree.ActiveLeaf})
 	w.desktop.broadcastStateUpdate()

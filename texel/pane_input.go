@@ -7,9 +7,9 @@
 package texel
 
 import (
-	"log"
 	"unicode/utf8"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -145,7 +145,7 @@ func (p *pane) SetZOrder(zOrder int) {
 		return
 	}
 	p.ZOrder = zOrder
-	log.Printf("SetZOrder: Pane '%s' z-order set to %d", p.getTitle(), zOrder)
+	debuglog.Printf("SetZOrder: Pane '%s' z-order set to %d", p.getTitle(), zOrder)
 	if p.screen != nil && p.screen.desktop != nil {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesMouse)
 	}

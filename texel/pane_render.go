@@ -7,9 +7,9 @@
 package texel
 
 import (
-	"log"
 	"sync/atomic"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
 	"github.com/gdamore/tcell/v2"
@@ -79,9 +79,6 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 		return p.prevBuf
 	}
 
-	log.Printf("Render: Pane '%s' rendering %dx%d (abs: %d,%d-%d,%d)",
-		p.getTitle(), w, h, p.absX0, p.absY0, p.absX1, p.absY1)
-
 	// Refresh theme styles each time we actually render.
 	p.refreshBorderStyles()
 
@@ -101,7 +98,7 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 
 	// Don't draw decorations if the pane is too small.
 	if w < 2 || h < 2 {
-		log.Printf("Render: Pane '%s' too small to draw decorations (%dx%d)", p.getTitle(), w, h)
+		debuglog.Printf("Render: Pane '%s' too small to draw decorations (%dx%d)", p.getTitle(), w, h)
 		return buffer
 	}
 
@@ -111,14 +108,6 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 		appBuffer = p.pipeline.Render()
 	} else if p.app != nil {
 		appBuffer = p.app.Render()
-	}
-
-	if len(appBuffer) > 0 && len(appBuffer[0]) > 0 {
-		log.Printf("ANIM: Render: Pane '%s' buffer size: %dx%d (pane size: %dx%d, drawable: %dx%d)",
-			p.getTitle(), len(appBuffer[0]), len(appBuffer), w, h, p.drawableWidth(), p.drawableHeight())
-	} else {
-		log.Printf("ANIM: Render: Pane '%s' returned EMPTY buffer! (pane size: %dx%d, drawable: %dx%d)",
-			p.getTitle(), w, h, p.drawableWidth(), p.drawableHeight())
 	}
 
 	// Update persistent border widget state.
@@ -154,7 +143,6 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	p.prevTitle = currentTitle
 	p.lastRendered = gen
 
-	log.Printf("Render: Pane '%s' final buffer size: %dx%d", p.getTitle(), len(buffer), len(buffer[0]))
 	return buffer
 }
 
@@ -196,9 +184,6 @@ func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 		return
 	}
 
-	log.Printf("ANIM: setDimensions: Pane '%s' set to (%d,%d)-(%d,%d), size %dx%d",
-		p.getTitle(), x0, y0, x1, y1, x1-x0, y1-y0)
-
 	p.absX0, p.absY0, p.absX1, p.absY1 = x0, y0, x1, y1
 	p.prevBuf = nil
 	p.markDirty()
@@ -208,15 +193,11 @@ func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 
 	// Resize pipeline (or app as fallback)
 	if p.pipeline != nil {
-		log.Printf("ANIM: setDimensions: Pane '%s' calling pipeline.Resize(%d, %d)",
-			p.getTitle(), drawableW, drawableH)
 		p.pipeline.Resize(drawableW, drawableH)
 	} else if p.app != nil {
-		log.Printf("ANIM: setDimensions: Pane '%s' calling app.Resize(%d, %d)",
-			p.getTitle(), drawableW, drawableH)
 		p.app.Resize(drawableW, drawableH)
 	} else {
-		log.Printf("ANIM: setDimensions: Pane '%s' has no app yet!", p.getTitle())
+		debuglog.Printf("setDimensions: Pane '%s' has no app yet!", p.getTitle())
 	}
 }
 
