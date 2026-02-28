@@ -9,6 +9,7 @@ package clientruntime
 
 import (
 	"fmt"
+	"image"
 	"os"
 	"time"
 
@@ -105,6 +106,22 @@ func render(state *clientState, screen tcell.Screen) {
 				}
 				workspaceBuffer[targetY][targetX] = client.Cell{Ch: cell.Ch, Style: style}
 			}
+		}
+	}
+
+	// Render images from each pane's placements
+	for _, pane := range panes {
+		if pane == nil {
+			continue
+		}
+		placements := state.cache.ImageCache().Placements(pane.ID)
+		for _, pl := range placements {
+			img := state.cache.ImageCache().Get(pl.SurfaceID)
+			if img == nil || img.Decoded == nil {
+				continue
+			}
+			renderHalfBlockIntoBuffer(workspaceBuffer, img.Decoded,
+				pane.Rect.X+pl.X, pane.Rect.Y+pl.Y, pl.W, pl.H)
 		}
 	}
 
@@ -344,4 +361,58 @@ func applySelectionHighlight(state *clientState, buffer [][]client.Cell, pane *c
 			row[x] = client.Cell{Ch: cell.Ch, Style: style}
 		}
 	}
+}
+
+// renderHalfBlockIntoBuffer renders an image into the workspace buffer using Unicode half-block characters.
+// Each terminal cell encodes two vertical pixels: the upper half-block (U+2580) uses foreground for the
+// top pixel and background for the bottom pixel.
+func renderHalfBlockIntoBuffer(buf [][]client.Cell, img image.Image, screenX, screenY, w, h int) {
+	imgBounds := img.Bounds()
+	imgW := imgBounds.Dx()
+	imgH := imgBounds.Dy()
+	if imgW == 0 || imgH == 0 || w == 0 || h == 0 {
+		return
+	}
+	// Each cell row represents 2 vertical pixels.
+	pixW := w
+	pixH := h * 2
+
+	for cy := 0; cy < h; cy++ {
+		row := screenY + cy
+		if row < 0 || row >= len(buf) {
+			continue
+		}
+		for cx := 0; cx < w; cx++ {
+			col := screenX + cx
+			if col < 0 || col >= len(buf[row]) {
+				continue
+			}
+			topPixY := cy * 2
+			botPixY := cy*2 + 1
+
+			topR, topG, topB := sampleImageColor(img, cx, topPixY, pixW, pixH, imgW, imgH)
+			botR, botG, botB := sampleImageColor(img, cx, botPixY, pixW, pixH, imgW, imgH)
+
+			style := tcell.StyleDefault.
+				Foreground(tcell.NewRGBColor(int32(topR), int32(topG), int32(topB))).
+				Background(tcell.NewRGBColor(int32(botR), int32(botG), int32(botB)))
+
+			buf[row][col] = client.Cell{Ch: '\u2580', Style: style}
+		}
+	}
+}
+
+// sampleImageColor maps a cell coordinate to the source image using nearest-neighbor sampling.
+func sampleImageColor(img image.Image, cx, py, pixW, pixH, imgW, imgH int) (uint8, uint8, uint8) {
+	imgX := cx * imgW / pixW
+	imgY := py * imgH / pixH
+	if imgX >= imgW {
+		imgX = imgW - 1
+	}
+	if imgY >= imgH {
+		imgY = imgH - 1
+	}
+	bounds := img.Bounds()
+	r, g, b, _ := img.At(bounds.Min.X+imgX, bounds.Min.Y+imgY).RGBA()
+	return uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)
 }
