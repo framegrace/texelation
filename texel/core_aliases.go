@@ -23,6 +23,7 @@ type ControlBusProvider = texelcore.ControlBusProvider
 type PaneIDSetter = texelcore.PaneIDSetter
 type RenderPipeline = texelcore.RenderPipeline
 type PipelineProvider = texelcore.PipelineProvider
+type GraphicsProvider = texelcore.GraphicsProvider
 
 // Control bus types.
 type ControlHandler = texelcore.ControlHandler

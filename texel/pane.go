@@ -15,6 +15,7 @@ import (
 	"log"
 
 	"github.com/framegrace/texelation/internal/debuglog"
+	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
 	"github.com/framegrace/texelui/widgets"
 	"github.com/gdamore/tcell/v2"
@@ -168,6 +169,16 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		}
 	}
 
+	// Inject graphics provider for apps that use UIManager
+	if p.screen != nil && p.screen.desktop != nil && p.screen.desktop.graphicsFactory != nil {
+		if ua, ok := app.(interface{ UI() *texelcore.UIManager }); ok {
+			gp := p.screen.desktop.graphicsFactory(p.id)
+			if gp != nil {
+				ua.UI().SetGraphicsProvider(gp)
+			}
+		}
+	}
+
 	// Check pipeline for mouse handler (fallback to app for backwards compat)
 	p.mouseHandler = nil
 	p.handlesMouse = false
@@ -286,6 +297,16 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 	if p.screen != nil && p.screen.desktop != nil {
 		if aware, ok := app.(ClipboardAware); ok {
 			aware.SetClipboardService(p.screen.desktop)
+		}
+	}
+
+	// Inject graphics provider for apps that use UIManager
+	if p.screen != nil && p.screen.desktop != nil && p.screen.desktop.graphicsFactory != nil {
+		if ua, ok := app.(interface{ UI() *texelcore.UIManager }); ok {
+			gp := p.screen.desktop.graphicsFactory(p.id)
+			if gp != nil {
+				ua.UI().SetGraphicsProvider(gp)
+			}
 		}
 	}
 

@@ -119,6 +119,38 @@ func (s *Session) EnqueueDiff(delta protocol.BufferDelta) error {
 	return nil
 }
 
+// EnqueueImage registers an image protocol message for broadcast to clients.
+func (s *Session) EnqueueImage(msgType uint8, payload []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrSessionClosed
+	}
+
+	seq := s.nextSequence + 1
+	hdr := protocol.Header{
+		Version:   protocol.Version,
+		Type:      protocol.MessageType(msgType),
+		Flags:     protocol.FlagChecksum,
+		SessionID: s.id,
+		Sequence:  seq,
+	}
+
+	s.diffs = append(s.diffs, DiffPacket{
+		Sequence: seq,
+		Payload:  payload,
+		Message:  hdr,
+	})
+	s.nextSequence = seq
+
+	if s.maxDiffs > 0 && len(s.diffs) > s.maxDiffs {
+		drop := len(s.diffs) - s.maxDiffs
+		s.recordDrop(drop)
+		s.diffs = append([]DiffPacket(nil), s.diffs[drop:]...)
+	}
+	return nil
+}
+
 // Ack trims the diff history up to and including the provided sequence.
 func (s *Session) Ack(sequence uint64) {
 	s.mu.Lock()
