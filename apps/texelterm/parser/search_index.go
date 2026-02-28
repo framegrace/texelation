@@ -71,11 +71,14 @@ type SearchIndexConfig struct {
 	// DBPath is the path to the SQLite database file.
 	DBPath string
 
-	// BatchSize is the number of entries to accumulate before flushing.
-	// Default: 100
+	// BatchSize is the max entries flushed per timer tick.
+	// Caps CPU per flush cycle; remaining entries carry over to the next tick.
+	// Default: 500
 	BatchSize int
 
-	// BatchTimeout is how long to wait before flushing a partial batch.
+	// BatchTimeout is the interval between periodic background flushes.
+	// During burst output, entries accumulate in memory and get indexed
+	// gradually in the background rather than all at once.
 	// Default: 5s
 	BatchTimeout time.Duration
 
@@ -88,7 +91,7 @@ type SearchIndexConfig struct {
 func DefaultSearchIndexConfig(dbPath string) SearchIndexConfig {
 	return SearchIndexConfig{
 		DBPath:        dbPath,
-		BatchSize:     100,
+		BatchSize:     500,
 		BatchTimeout:  5 * time.Second,
 		ChannelBuffer: 1000,
 	}
@@ -217,6 +220,13 @@ func NewSearchIndexWithConfig(config SearchIndexConfig) (*SQLiteSearchIndex, err
 		return nil, fmt.Errorf("failed to create FTS schema: %w", err)
 	}
 
+	// Reduce FTS5 merge aggressiveness (default=4, 8=merge less often).
+	// Trigram tokenizer produces many index entries per line, so frequent
+	// merges during batch inserts are expensive.
+	if _, err := db.Exec("INSERT INTO lines_fts(lines_fts, rank) VALUES('automerge', 8)"); err != nil {
+		log.Printf("[SEARCH_INDEX] Warning: failed to set FTS5 automerge: %v", err)
+	}
+
 	// Rebuild FTS index if schema version changed
 	if needsReindex {
 		log.Printf("[SEARCH_INDEX] Schema version changed, rebuilding FTS index...")
@@ -300,7 +310,14 @@ func rebuildFTSIndex(db *sql.DB) error {
 	return nil
 }
 
+// maxPendingIndexEntries caps in-memory accumulation during burst output.
+// Entries beyond this are dropped — rapidly scrolling output is low-value for search.
+const maxPendingIndexEntries = 5000
+
 // batchIndexer runs in a background goroutine, batching entries and flushing periodically.
+// Crucially, it does NOT flush on batch size — only on timer. This prevents FTS5 from
+// hogging CPU during burst output (e.g., ls -lR). Entries accumulate in memory and get
+// indexed in the background during idle periods.
 func (si *SQLiteSearchIndex) batchIndexer() {
 	defer close(si.doneCh)
 
@@ -308,7 +325,23 @@ func (si *SQLiteSearchIndex) batchIndexer() {
 	timer := time.NewTimer(si.config.BatchTimeout)
 	defer timer.Stop()
 
-	flush := func() {
+	// flushN flushes up to n entries to cap CPU per flush cycle.
+	flushN := func(n int) {
+		if len(batch) == 0 {
+			return
+		}
+		if n > len(batch) {
+			n = len(batch)
+		}
+		si.flushBatch(batch[:n])
+		// Compact: keep remaining entries
+		remaining := len(batch) - n
+		copy(batch[:remaining], batch[n:])
+		batch = batch[:remaining]
+	}
+
+	// flushAll flushes every pending entry (used for explicit flush/close).
+	flushAll := func() {
 		if len(batch) == 0 {
 			return
 		}
@@ -319,18 +352,33 @@ func (si *SQLiteSearchIndex) batchIndexer() {
 	for {
 		select {
 		case entry := <-si.batchChan:
-			batch = append(batch, entry)
-			if len(batch) >= si.config.BatchSize {
-				flush()
+			// Accumulate in memory; no flush on batch size.
+			if len(batch) < maxPendingIndexEntries {
+				batch = append(batch, entry)
+			}
+			// Reset timer on every entry — flush only fires after idle period.
+			// During active output (ls -lR), timer keeps resetting = zero FTS5 work.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(si.config.BatchTimeout)
+
+		case <-timer.C:
+			// Idle flush: no entries arrived for BatchTimeout.
+			// Index up to BatchSize entries per tick; remaining carry over.
+			flushN(si.config.BatchSize)
+			if len(batch) > 0 {
+				// More entries pending — schedule another flush soon
+				timer.Reset(500 * time.Millisecond)
+			} else {
 				timer.Reset(si.config.BatchTimeout)
 			}
 
-		case <-timer.C:
-			flush()
-			timer.Reset(si.config.BatchTimeout)
-
 		case done := <-si.flushCh:
-			// Manual flush request - drain channel first
+			// Manual flush request - drain channel then flush all
 			draining := true
 			for draining {
 				select {
@@ -340,17 +388,17 @@ func (si *SQLiteSearchIndex) batchIndexer() {
 					draining = false
 				}
 			}
-			flush()
+			flushAll()
 			close(done)
 
 		case <-si.stopCh:
-			// Drain channel and flush before exit
+			// Drain channel and flush everything before exit
 			for {
 				select {
 				case entry := <-si.batchChan:
 					batch = append(batch, entry)
 				default:
-					flush()
+					flushAll()
 					return
 				}
 			}

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelui/theme"
 	"github.com/framegrace/texelui/widgets"
 	"github.com/gdamore/tcell/v2"
@@ -105,9 +106,9 @@ func (p *pane) refreshBorderStyles() {
 // AttachApp connects an application to the pane, gives it its initial size,
 // and starts its main run loop.
 func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
-	log.Printf("AttachApp: Starting attachment of app '%s'", app.GetTitle())
+	debuglog.Printf("AttachApp: Starting attachment of app '%s'", app.GetTitle())
 	if p.app != nil {
-		log.Printf("AttachApp: Stopping existing app '%s'", p.app.GetTitle())
+		debuglog.Printf("AttachApp: Stopping existing app '%s'", p.app.GetTitle())
 		p.screen.appLifecycle.StopApp(p.app)
 	}
 	p.app = app
@@ -117,7 +118,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	p.pipeline = nil
 	if provider, ok := app.(PipelineProvider); ok {
 		p.pipeline = provider.Pipeline()
-		log.Printf("AttachApp: Got pipeline from app '%s'", app.GetTitle())
+		debuglog.Printf("AttachApp: Got pipeline from app '%s'", app.GetTitle())
 	}
 
 	// Create per-pane refresh forwarder that marks this pane dirty
@@ -132,7 +133,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	} else {
 		p.app.SetRefreshNotifier(paneRefresh)
 	}
-	log.Printf("AttachApp: Refresh notifier set")
+	debuglog.Printf("AttachApp: Refresh notifier set")
 
 	// Pass pane ID to apps that need it (e.g., for per-pane history)
 	if idSetter, ok := app.(PaneIDSetter); ok {
@@ -179,7 +180,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.handlesMouse = true
 	}
 
-	log.Printf("AttachApp: Resizing app '%s' to %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
+	debuglog.Printf("AttachApp: Resizing app '%s' to %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
 	// Resize pipeline (or app as fallback)
 	if p.pipeline != nil {
 		p.pipeline.Resize(p.drawableWidth(), p.drawableHeight())
@@ -187,7 +188,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.app.Resize(p.drawableWidth(), p.drawableHeight())
 	}
 
-	log.Printf("AttachApp: Starting app lifecycle for '%s'", p.getTitle())
+	debuglog.Printf("AttachApp: Starting app lifecycle for '%s'", p.getTitle())
 	currentApp := p.app
 	p.screen.appLifecycle.StartApp(p.app, func(err error) {
 		p.screen.handleAppExit(p, currentApp, err)
@@ -214,22 +215,22 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		}
 	}
 
-	log.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
+	debuglog.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
 	if p.screen != nil && p.screen.desktop != nil {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesMouse)
 		// Notify that an app was attached (triggers snapshot persistence)
 		p.screen.desktop.dispatcher.Broadcast(Event{Type: EventAppAttached})
 	}
-	log.Printf("AttachApp: Completed attachment of app '%s'", p.getTitle())
+	debuglog.Printf("AttachApp: Completed attachment of app '%s'", p.getTitle())
 }
 
 // PrepareAppForRestore connects an application to the pane without starting it.
 // This is used during snapshot restore where we need to set up pane dimensions
 // before starting apps. Call StartPreparedApp after layout is calculated.
 func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
-	log.Printf("PrepareAppForRestore: Preparing app '%s'", app.GetTitle())
+	debuglog.Printf("PrepareAppForRestore: Preparing app '%s'", app.GetTitle())
 	if p.app != nil {
-		log.Printf("PrepareAppForRestore: Stopping existing app '%s'", p.app.GetTitle())
+		debuglog.Printf("PrepareAppForRestore: Stopping existing app '%s'", p.app.GetTitle())
 		p.screen.appLifecycle.StopApp(p.app)
 	}
 	p.app = app
@@ -239,7 +240,7 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 	p.pipeline = nil
 	if provider, ok := app.(PipelineProvider); ok {
 		p.pipeline = provider.Pipeline()
-		log.Printf("PrepareAppForRestore: Got pipeline from app '%s'", app.GetTitle())
+		debuglog.Printf("PrepareAppForRestore: Got pipeline from app '%s'", app.GetTitle())
 	}
 
 	// Create per-pane refresh forwarder that marks this pane dirty
@@ -302,7 +303,7 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 
 	// NOTE: We intentionally skip Resize and StartApp here.
 	// These will be called by StartPreparedApp after layout is calculated.
-	log.Printf("PrepareAppForRestore: App '%s' prepared (will start after layout)", p.getTitle())
+	debuglog.Printf("PrepareAppForRestore: App '%s' prepared (will start after layout)", p.getTitle())
 }
 
 // StartPreparedApp resizes and starts an app that was prepared via PrepareAppForRestore.
@@ -311,7 +312,7 @@ func (p *pane) StartPreparedApp() {
 	if p.app == nil {
 		return
 	}
-	log.Printf("StartPreparedApp: Starting app '%s' with size %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
+	debuglog.Printf("StartPreparedApp: Starting app '%s' with size %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
 
 	// Resize pipeline (or app as fallback)
 	if p.pipeline != nil {
@@ -351,7 +352,7 @@ func (p *pane) StartPreparedApp() {
 	if p.screen != nil && p.screen.desktop != nil {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesMouse)
 	}
-	log.Printf("StartPreparedApp: Completed starting app '%s'", p.getTitle())
+	debuglog.Printf("StartPreparedApp: Completed starting app '%s'", p.getTitle())
 }
 
 // ReplaceWithApp replaces the current app in this pane with a new app from the registry.
@@ -370,7 +371,7 @@ func (p *pane) ReplaceWithApp(name string, config map[string]interface{}) {
 				p.doReplaceWithApp(name, config)
 			}) {
 				// App is showing confirmation dialog, don't proceed yet
-				log.Printf("Pane: App '%s' is showing close confirmation", p.getTitle())
+				debuglog.Printf("Pane: App '%s' is showing close confirmation", p.getTitle())
 				return
 			}
 		}
@@ -407,7 +408,7 @@ func (p *pane) doReplaceWithApp(name string, config map[string]interface{}) {
 		return
 	}
 
-	log.Printf("Pane: Replacing app '%s' with '%s'", p.getTitle(), name)
+	debuglog.Printf("Pane: Replacing app '%s' with '%s'", p.getTitle(), name)
 
 	// Attach the new app (this will stop the old app and start the new one)
 	p.AttachApp(newApp, p.screen.refreshChan)

@@ -27,11 +27,11 @@ func NewPublishLogger(l *log.Logger) *PublishLogger {
 }
 
 func (p *PublishLogger) ObservePublish(session *Session, paneCount int, duration time.Duration) {
-	if p == nil || p.logger == nil || session == nil {
+	if p == nil || session == nil {
 		return
 	}
 	id := session.ID()
-	p.logger.Printf("publish session=%x panes=%d duration=%s", id[:4], paneCount, duration)
+	debugLog.Printf("publish session=%x panes=%d duration=%s", id[:4], paneCount, duration)
 }
 
 // SessionStatsObserver records session queue metrics.
@@ -53,8 +53,8 @@ func NewSessionStatsLogger(l *log.Logger) *SessionStatsLogger {
 }
 
 func (s *SessionStatsLogger) ObserveSessionStats(stats SessionStats) {
-	if s == nil || s.logger == nil {
+	if s == nil {
 		return
 	}
-	s.logger.Printf("session=%x pending=%d dropped=%d last_seq=%d", stats.ID[:4], stats.PendingCount, stats.DroppedDiffs, stats.LastDroppedSeq)
+	debugLog.Printf("session=%x pending=%d dropped=%d last_seq=%d", stats.ID[:4], stats.PendingCount, stats.DroppedDiffs, stats.LastDroppedSeq)
 }

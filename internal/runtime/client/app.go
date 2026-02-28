@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/framegrace/texelation/internal/debuglog"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -57,7 +59,7 @@ func Run(opts Options) error {
 	defer conn.Close()
 	var writeMu sync.Mutex
 
-	log.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
+	debuglog.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 
 	state := &clientState{
 		cache:                   client.NewBufferCache(),
@@ -157,20 +159,38 @@ func Run(opts Options) error {
 		screen.PostEventWait(tcell.NewEventInterrupt(nil))
 	}()
 
+	const frameInterval = 16 * time.Millisecond
+	var lastRender time.Time
+	var pendingRender bool
+
 	for {
 		select {
 		case <-renderCh:
 			// Drain any additional pending render signals to avoid rendering stale frames
-			drainLoop:
+		drainLoop:
 			for {
 				select {
 				case <-renderCh:
-					// Drained one more signal
 				default:
 					break drainLoop
 				}
 			}
-			render(state, screen)
+			now := time.Now()
+			if now.Sub(lastRender) >= frameInterval {
+				pendingRender = false
+				render(state, screen)
+				lastRender = now
+			} else if !pendingRender {
+				// Too soon since last render; schedule one at the next frame boundary.
+				pendingRender = true
+				remaining := frameInterval - now.Sub(lastRender)
+				time.AfterFunc(remaining, func() {
+					select {
+					case renderCh <- struct{}{}:
+					default:
+					}
+				})
+			}
 		case ev, ok := <-events:
 			if !ok {
 				return nil
@@ -183,7 +203,7 @@ func Run(opts Options) error {
 			return nil
 		}
 		if clip, ok := state.consumeClipboardSync(); ok && len(clip.Data) > 0 {
-			log.Printf("CLIPBOARD DEBUG: Setting system clipboard: len=%d", len(clip.Data))
+			debuglog.Printf("CLIPBOARD DEBUG: Setting system clipboard: len=%d", len(clip.Data))
 			screen.SetClipboard(clip.Data)
 		}
 	}

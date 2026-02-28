@@ -17,74 +17,77 @@ import (
 
 func TestRateMonitor_RecordAndCalculate(t *testing.T) {
 	rm := NewRateMonitor(100)
+	start := time.Now()
 
-	now := time.Now()
+	// Establish baseline
+	rm.CalculateRate(start)
 
-	// Record 10 writes in the last second
+	// Record 10 writes
 	for i := 0; i < 10; i++ {
-		rm.RecordWrite(now.Add(-time.Duration(i*100) * time.Millisecond))
+		rm.RecordWrite()
 	}
 
-	// Should calculate approximately 10 writes/sec
-	rate := rm.CalculateRate(now, time.Second)
+	// 10 writes in 1 second = 10/sec
+	rate := rm.CalculateRate(start.Add(time.Second))
 	if rate != 10 {
 		t.Errorf("expected rate 10, got %.2f", rate)
 	}
 }
 
-func TestRateMonitor_SlidingWindow(t *testing.T) {
+func TestRateMonitor_RateOverMultipleSamples(t *testing.T) {
 	rm := NewRateMonitor(100)
+	start := time.Now()
 
-	now := time.Now()
+	// First sample: establish baseline
+	rm.CalculateRate(start)
 
-	// Record 5 writes from 2 seconds ago (outside window) FIRST
-	// These go into the ring buffer first
-	for i := 4; i >= 0; i-- {
-		rm.RecordWrite(now.Add(-2*time.Second - time.Duration(i*100)*time.Millisecond))
+	// 20 writes, sample at 1s
+	for i := 0; i < 20; i++ {
+		rm.RecordWrite()
+	}
+	rate1 := rm.CalculateRate(start.Add(time.Second))
+	if rate1 != 20 {
+		t.Errorf("expected rate 20 at 1s, got %.2f", rate1)
 	}
 
-	// Record 5 writes in the last 500ms SECOND
-	// These go after the old ones, making them "most recent"
-	for i := 4; i >= 0; i-- {
-		rm.RecordWrite(now.Add(-time.Duration(i*100) * time.Millisecond))
+	// 5 more writes over 0.5s — rate should be 10/s for this interval
+	for i := 0; i < 5; i++ {
+		rm.RecordWrite()
 	}
-
-	// Should only count the 5 recent writes (within 1 second window)
-	rate := rm.CalculateRate(now, time.Second)
-	if rate != 5 {
-		t.Errorf("expected rate 5, got %.2f", rate)
+	rate2 := rm.CalculateRate(start.Add(1500 * time.Millisecond))
+	if rate2 != 10 {
+		t.Errorf("expected rate 10 at 1.5s, got %.2f", rate2)
 	}
 }
 
-func TestRateMonitor_RingBufferWrap(t *testing.T) {
-	rm := NewRateMonitor(10) // Small buffer to force wrapping
+func TestRateMonitor_LargeCount(t *testing.T) {
+	rm := NewRateMonitor(10) // windowSize ignored in counter mode
+	start := time.Now()
 
-	now := time.Now()
+	rm.CalculateRate(start)
 
-	// Record 15 writes (forces wrap)
-	for i := 0; i < 15; i++ {
-		rm.RecordWrite(now.Add(-time.Duration(i*50) * time.Millisecond))
+	// Record 1000 writes
+	for i := 0; i < 1000; i++ {
+		rm.RecordWrite()
 	}
 
-	// Should only have last 10 in buffer, but all are within 1 second
-	if rm.Size() != 10 {
-		t.Errorf("expected size 10 after wrap, got %d", rm.Size())
+	if rm.Size() != 1000 {
+		t.Errorf("expected size 1000, got %d", rm.Size())
 	}
 
-	// All 10 should be within 1 second window
-	rate := rm.CalculateRate(now, time.Second)
-	if rate != 10 {
-		t.Errorf("expected rate 10, got %.2f", rate)
+	// 1000 writes in 1 second
+	rate := rm.CalculateRate(start.Add(time.Second))
+	if rate != 1000 {
+		t.Errorf("expected rate 1000, got %.2f", rate)
 	}
 }
 
 func TestRateMonitor_Reset(t *testing.T) {
 	rm := NewRateMonitor(100)
 
-	now := time.Now()
-	rm.RecordWrite(now)
-	rm.RecordWrite(now)
-	rm.RecordWrite(now)
+	rm.RecordWrite()
+	rm.RecordWrite()
+	rm.RecordWrite()
 
 	if rm.Size() != 3 {
 		t.Errorf("expected size 3, got %d", rm.Size())
@@ -96,57 +99,39 @@ func TestRateMonitor_Reset(t *testing.T) {
 		t.Errorf("expected size 0 after reset, got %d", rm.Size())
 	}
 
-	rate := rm.CalculateRate(now, time.Second)
+	// First call after reset establishes baseline
+	rate := rm.CalculateRate(time.Now())
 	if rate != 0 {
 		t.Errorf("expected rate 0 after reset, got %.2f", rate)
 	}
 }
 
-func TestRateMonitor_EmptyBuffer(t *testing.T) {
+func TestRateMonitor_EmptyMonitor(t *testing.T) {
 	rm := NewRateMonitor(100)
 
-	rate := rm.CalculateRate(time.Now(), time.Second)
+	// First call establishes baseline, returns 0
+	rate := rm.CalculateRate(time.Now())
 	if rate != 0 {
-		t.Errorf("expected rate 0 for empty buffer, got %.2f", rate)
+		t.Errorf("expected rate 0 for fresh monitor, got %.2f", rate)
 	}
 }
 
 func TestRateMonitor_RateNotCount(t *testing.T) {
-	// This test verifies CalculateRate returns writes/second, not just count.
-	// With a 500ms window and 5 writes, rate should be 10/sec, not 5.
-	//
-	// If the bug existed (returning count instead of rate), this test would fail
-	// because 5 writes in 0.5s = rate of 10, but count would be 5.
+	// Verifies CalculateRate returns writes/second, not just count.
+	// 5 writes in 0.5s should give 10/sec, not 5.
 	rm := NewRateMonitor(100)
+	start := time.Now()
 
-	now := time.Now()
+	rm.CalculateRate(start)
 
-	// Record 5 writes over the last 200ms (in chronological order - oldest first)
-	// Ring buffer expects timestamps in increasing order for early-exit optimization
-	for i := 4; i >= 0; i-- {
-		rm.RecordWrite(now.Add(-time.Duration(i*50) * time.Millisecond))
+	for i := 0; i < 5; i++ {
+		rm.RecordWrite()
 	}
-	// Now ring buffer has: -200ms, -150ms, -100ms, -50ms, 0ms (most recent last)
 
-	// With 500ms window: 5 writes / 0.5 seconds = 10 writes/sec
-	rate := rm.CalculateRate(now, 500*time.Millisecond)
+	// 5 writes in 0.5 seconds = 10/sec
+	rate := rm.CalculateRate(start.Add(500 * time.Millisecond))
 	if rate != 10 {
 		t.Errorf("expected rate 10 (5 writes in 0.5s), got %.2f", rate)
-	}
-
-	// With 250ms window: all 5 writes fit (200ms, 150ms, 100ms, 50ms, 0ms all <= 250ms)
-	// 5 / 0.25 = 20 writes/sec
-	rate250 := rm.CalculateRate(now, 250*time.Millisecond)
-	if rate250 != 20 {
-		t.Errorf("expected rate 20 (5 writes in 0.25s), got %.2f", rate250)
-	}
-
-	// With 75ms window: 2 writes fit (50ms and 0ms are < 75ms, 100ms is not)
-	// 2 / 0.075 = 26.67 writes/sec
-	rate75 := rm.CalculateRate(now, 75*time.Millisecond)
-	expected := 2.0 / 0.075
-	if rate75 != expected {
-		t.Errorf("expected rate %.2f (2 writes in 0.075s), got %.2f", expected, rate75)
 	}
 }
 
@@ -296,8 +281,9 @@ func TestAdaptivePersistence_DebouncedMode(t *testing.T) {
 	}
 	defer ap.Close()
 
-	// Simulate moderate write rate (50 writes in 1 second)
-	for i := 0; i < 50; i++ {
+	// Simulate moderate write rate (80 writes at 50/s)
+	// Rate recalculation happens every 64 writes, so need >64 to trigger mode change.
+	for i := 0; i < 80; i++ {
 		mb.SetCursor(int64(i), 0)
 		mb.Write('X', DefaultFG, DefaultBG, 0)
 		ap.NotifyWrite(int64(i))
@@ -319,8 +305,8 @@ func TestAdaptivePersistence_DebouncedMode(t *testing.T) {
 
 	// All lines should be written after flush
 	metrics := ap.Metrics()
-	if metrics.LinesWritten != 50 {
-		t.Errorf("expected 50 lines written after flush, got %d", metrics.LinesWritten)
+	if metrics.LinesWritten != 80 {
+		t.Errorf("expected 80 lines written after flush, got %d", metrics.LinesWritten)
 	}
 }
 
@@ -390,6 +376,8 @@ func TestAdaptivePersistence_ModeTransitions(t *testing.T) {
 	defer ap.Close()
 
 	// Start with low rate - should be WriteThrough
+	// Rate recalculation happens every 64 writes, so initial low-rate writes
+	// stay in WriteThrough since no recalc triggers yet.
 	for i := 0; i < 5; i++ {
 		mb.SetCursor(int64(i), 0)
 		mb.Write('A', DefaultFG, DefaultBG, 0)
@@ -401,7 +389,8 @@ func TestAdaptivePersistence_ModeTransitions(t *testing.T) {
 	}
 
 	// Increase to medium rate - should be Debounced
-	for i := 5; i < 55; i++ {
+	// Need >64 total writes for rate recalculation to trigger.
+	for i := 5; i < 75; i++ {
 		mb.SetCursor(int64(i), 0)
 		mb.Write('B', DefaultFG, DefaultBG, 0)
 		ap.NotifyWrite(int64(i))
@@ -412,7 +401,7 @@ func TestAdaptivePersistence_ModeTransitions(t *testing.T) {
 	}
 
 	// Increase to high rate - should be BestEffort
-	for i := 55; i < 255; i++ {
+	for i := 75; i < 275; i++ {
 		mb.SetCursor(int64(i), 0)
 		mb.Write('C', DefaultFG, DefaultBG, 0)
 		ap.NotifyWrite(int64(i))
@@ -932,19 +921,27 @@ func TestAdaptivePersistence_CloseSyncsBeforeWALClose(t *testing.T) {
 	}
 }
 
+func BenchmarkRateMonitor_RecordWrite(b *testing.B) {
+	rm := NewRateMonitor(1000)
+	for i := 0; i < b.N; i++ {
+		rm.RecordWrite()
+	}
+}
+
 func BenchmarkRateMonitor_CalculateRate(b *testing.B) {
 	rm := NewRateMonitor(1000)
 	now := time.Now()
 
-	// Pre-fill with timestamps
 	for i := 0; i < 500; i++ {
-		rm.RecordWrite(now.Add(-time.Duration(i) * time.Millisecond))
+		rm.RecordWrite()
 	}
+	rm.CalculateRate(now) // establish baseline
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		rm.CalculateRate(now, time.Second)
+		rm.RecordWrite()
+		rm.CalculateRate(now.Add(time.Duration(i) * time.Millisecond))
 	}
 }
 

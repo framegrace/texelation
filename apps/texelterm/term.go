@@ -9,7 +9,6 @@
 package texelterm
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	texelcore "github.com/framegrace/texelui/core"
@@ -24,6 +23,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/apps/texelterm/transformer"
@@ -1892,34 +1892,43 @@ func (a *TexelTerm) runPtyReaderLoop(ptmx *os.File, cmd *exec.Cmd) error {
 	go func() {
 		defer a.wg.Done()
 		defer ptmx.Close()
-		reader := bufio.NewReader(ptmx)
+		buf := make([]byte, 4096)
 
 		for {
-			r, _, err := reader.ReadRune()
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				chunk := buf[:n]
+				a.mu.Lock()
+				inSync := a.vterm.InSynchronizedUpdate
+				for len(chunk) > 0 {
+					r, size := utf8.DecodeRune(chunk)
+					if r == utf8.RuneError && size <= 1 {
+						// Incomplete UTF-8 at end of chunk; discard the byte.
+						chunk = chunk[1:]
+						continue
+					}
+					a.parser.Parse(r)
+					chunk = chunk[size:]
+				}
+				syncEnded := inSync && !a.vterm.InSynchronizedUpdate
+				if syncEnded {
+					a.vterm.MarkAllDirty()
+				}
+				a.mu.Unlock()
+
+				if syncEnded {
+					a.invalidateScrollbar()
+					a.requestRefresh()
+				} else if !a.vterm.InSynchronizedUpdate {
+					a.invalidateScrollbar()
+					a.requestRefresh()
+				}
+			}
 			if err != nil {
 				if err != io.EOF {
 					log.Printf("Error reading from PTY: %v", err)
 				}
 				return
-			}
-
-			a.mu.Lock()
-			inSync := a.vterm.InSynchronizedUpdate
-			a.parser.Parse(r)
-			syncEnded := inSync && !a.vterm.InSynchronizedUpdate
-			if syncEnded {
-				a.vterm.MarkAllDirty()
-			}
-			a.mu.Unlock()
-
-			if syncEnded {
-				a.invalidateScrollbar()
-				a.requestRefresh()
-			} else if !a.vterm.InSynchronizedUpdate {
-				if reader.Buffered() == 0 {
-					a.invalidateScrollbar()
-					a.requestRefresh()
-				}
 			}
 		}
 	}()

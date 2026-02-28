@@ -11,6 +11,7 @@ package texel
 import (
 	"log"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -120,7 +121,7 @@ func forEachLeafPane(node *Node, fn func(*pane)) {
 }
 
 func (w *Workspace) SetControlMode(active bool) {
-	log.Printf("SetControlMode called: active=%v", active)
+	debuglog.Printf("SetControlMode called: active=%v", active)
 }
 
 func (w *Workspace) getDefaultBackground() tcell.Color {
@@ -151,7 +152,7 @@ func (w *Workspace) OnEvent(event Event) {
 	// Relay Desktop-level events to all apps in this workspace
 	switch event.Type {
 	case EventThemeChanged:
-		log.Printf("Workspace %d: Received EventThemeChanged, relaying to apps", w.id)
+		debuglog.Printf("Workspace %d: Received EventThemeChanged, relaying to apps", w.id)
 		w.dispatcher.Broadcast(event)
 		// Mark all panes dirty so borders re-render with new theme colors.
 		forEachLeafPane(w.tree.Root, func(p *pane) {
@@ -170,20 +171,20 @@ func (w *Workspace) notifyFocus() {
 }
 
 func (w *Workspace) AddApp(app App) {
-	log.Printf("AddApp: Adding app '%s'", app.GetTitle())
+	debuglog.Printf("AddApp: Adding app '%s'", app.GetTitle())
 
 	p := newPane(w)
 	w.tree.SetRoot(p)
 	p.AttachApp(app, w.refreshChan)
 
 	// Set initial active state AFTER attaching the app
-	log.Printf("AddApp: Setting pane '%s' as active", p.getTitle())
+	debuglog.Printf("AddApp: Setting pane '%s' as active", p.getTitle())
 	p.SetActive(true)
 	w.recalculateLayout()
 	w.notifyFocus()
 	w.desktop.broadcastTreeChanged() // Notify that the tree structure changed
 	w.desktop.broadcastStateUpdate()
-	log.Printf("AddApp: Completed adding app '%s'", app.GetTitle())
+	debuglog.Printf("AddApp: Completed adding app '%s'", app.GetTitle())
 }
 
 func (w *Workspace) handleEvent(ev *tcell.EventKey) {
@@ -241,7 +242,7 @@ func (w *Workspace) handleAppExit(p *pane, exitedApp App, runErr error) {
 
 	// Ignore stale callbacks if the pane has already attached a new app.
 	if exitedApp != nil && p.app != nil && p.app != exitedApp {
-		log.Printf("handleAppExit: ignoring exit for stale app '%s'", exitedApp.GetTitle())
+		debuglog.Printf("handleAppExit: ignoring exit for stale app '%s'", exitedApp.GetTitle())
 		return
 	}
 
@@ -258,12 +259,12 @@ func (w *Workspace) handleAppExit(p *pane, exitedApp App, runErr error) {
 		// without losing the window layout.
 		return
 	} else {
-		log.Printf("handleAppExit: app '%s' exited cleanly", title)
+		debuglog.Printf("handleAppExit: app '%s' exited cleanly", title)
 	}
 
 	node := w.tree.FindNodeWithPane(p)
 	if node == nil {
-		log.Printf("handleAppExit: pane for app '%s' already removed", title)
+		debuglog.Printf("handleAppExit: pane for app '%s' already removed", title)
 		return
 	}
 

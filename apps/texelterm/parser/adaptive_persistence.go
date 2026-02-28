@@ -32,10 +32,11 @@ package parser
 
 import (
 	"fmt"
-	"log"
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/framegrace/texelation/internal/debuglog"
 )
 
 // Monitoring thresholds for adaptive persistence
@@ -228,13 +229,18 @@ func newAdaptivePersistenceWithNow(
 		config.RateWindowSize = 1000
 	}
 
+	rm := NewRateMonitor(config.RateWindowSize)
+	// Establish rate baseline so the first CalculateRate sample (at write 64)
+	// returns a real rate instead of just initializing.
+	rm.CalculateRate(nowFunc())
+
 	ap := &AdaptivePersistence{
 		config:       config,
 		memBuf:       memBuf,
 		disk:         disk,
 		wal:          wal,
 		nowFunc:      nowFunc,
-		rateMonitor:  NewRateMonitor(config.RateWindowSize),
+		rateMonitor:  rm,
 		modeCtrl:     NewModeController(config.WriteThroughMaxRate, config.DebouncedMaxRate),
 		currentMode:  PersistWriteThrough,
 		pendingLines: make(map[int64]*pendingLineInfo),
@@ -270,13 +276,15 @@ func (ap *AdaptivePersistence) NotifyWriteWithMeta(lineIdx int64, timestamp time
 		return
 	}
 
-	// Use current time if not provided
-	if timestamp.IsZero() {
-		timestamp = ap.nowFunc()
-	}
-
 	ap.metrics.TotalWrites++
 	writeRate := ap.updateRateAndModeLocked()
+
+	// Use lastActivity as timestamp when not provided.
+	// lastActivity is set every 64 writes by updateRateAndModeLocked,
+	// which is precise enough for search indexing timestamps.
+	if timestamp.IsZero() {
+		timestamp = ap.lastActivity
+	}
 
 	// Store metadata for this line
 	info := &pendingLineInfo{
@@ -336,15 +344,23 @@ func (ap *AdaptivePersistence) NotifyMetadataChange(state *ViewportState) {
 	ap.lastActivity = ap.nowFunc()
 }
 
-// updateRateAndModeLocked records a write timestamp, calculates rate, and adjusts mode.
+// updateRateAndModeLocked records a write and adjusts mode based on rate.
 // Must be called with ap.mu held.
 func (ap *AdaptivePersistence) updateRateAndModeLocked() float64 {
+	// Record write (just increments a counter — O(1), no time.Now needed)
+	ap.rateMonitor.RecordWrite()
+
+	// Only sample time and calculate rate every 64 writes.
+	// time.Now() is expensive (~7% CPU in profiles) and rate monitoring
+	// doesn't need per-character precision.
+	if ap.metrics.TotalWrites&63 != 0 {
+		return ap.metrics.CurrentWriteRate
+	}
+
 	now := ap.nowFunc()
 	ap.lastActivity = now
 
-	// Record timestamp and calculate rate
-	ap.rateMonitor.RecordWrite(now)
-	writeRate := ap.rateMonitor.CalculateRate(now, time.Second)
+	writeRate := ap.rateMonitor.CalculateRate(now)
 	ap.metrics.CurrentWriteRate = writeRate
 
 	// Adjust mode based on rate
@@ -357,18 +373,17 @@ func (ap *AdaptivePersistence) updateRateAndModeLocked() float64 {
 
 		// Log mode transitions, especially to BestEffort (high activity)
 		if newMode == PersistBestEffort {
-			log.Printf("[AdaptivePersistence] Mode transition: %s -> %s (rate=%.1f/s, pending=%d) - high activity detected",
+			debuglog.Printf("[AdaptivePersistence] Mode transition: %s -> %s (rate=%.1f/s, pending=%d) - high activity detected",
 				oldMode, newMode, writeRate, len(ap.pendingLines))
 		} else if oldMode == PersistBestEffort {
-			log.Printf("[AdaptivePersistence] Mode transition: %s -> %s (rate=%.1f/s) - activity normalized",
+			debuglog.Printf("[AdaptivePersistence] Mode transition: %s -> %s (rate=%.1f/s) - activity normalized",
 				oldMode, newMode, writeRate)
 		}
 	}
 
 	// Warn if write rate is unusually high
 	if writeRate > highWriteRateThreshold && ap.metrics.TotalWrites%100 == 0 {
-		// Log every 100 writes to avoid spamming
-		log.Printf("[AdaptivePersistence] High write rate: %.1f/s (mode=%s, pending=%d)",
+		debuglog.Printf("[AdaptivePersistence] High write rate: %.1f/s (mode=%s, pending=%d)",
 			writeRate, ap.currentMode, len(ap.pendingLines))
 	}
 
@@ -402,7 +417,7 @@ func (ap *AdaptivePersistence) handleWriteLockedWithMeta(lineIdx int64, info *pe
 	// Warn if pending line count is getting high
 	pendingCount := len(ap.pendingLines)
 	if pendingCount > pendingLineWarningThreshold && pendingCount%100 == 0 {
-		log.Printf("[AdaptivePersistence] Warning: %d lines pending flush (mode=%s, rate=%.1f/s)",
+		debuglog.Printf("[AdaptivePersistence] Warning: %d lines pending flush (mode=%s, rate=%.1f/s)",
 			pendingCount, ap.currentMode, writeRate)
 	}
 }
@@ -584,7 +599,7 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 	// Monitor flush performance
 	elapsed := ap.nowFunc().Sub(startTime)
 	if elapsed > flushSlowThreshold {
-		log.Printf("[AdaptivePersistence] Slow flush: %d lines in %v (%.1f lines/ms)",
+		debuglog.Printf("[AdaptivePersistence] Slow flush: %d lines in %v (%.1f lines/ms)",
 			lineCount, elapsed, float64(lineCount)/float64(elapsed.Milliseconds()))
 	}
 

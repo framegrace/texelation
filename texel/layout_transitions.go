@@ -8,11 +8,11 @@
 package texel
 
 import (
-	"log"
 	"math"
 	"sync"
 	"time"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelation/internal/effects"
 )
 
@@ -56,7 +56,7 @@ type LayoutTransitionManager struct {
 // NewLayoutTransitionManager creates a new layout transition manager.
 func NewLayoutTransitionManager(config LayoutTransitionConfig, desktop *DesktopEngine) *LayoutTransitionManager {
 	if !config.Enabled {
-		log.Println("LayoutTransitionManager: Disabled via config")
+		debuglog.Println("LayoutTransitionManager: Disabled via config")
 		// Always store desktop pointer so we can enable later via UpdateConfig
 		return &LayoutTransitionManager{enabled: false, desktop: desktop}
 	}
@@ -84,7 +84,7 @@ func NewLayoutTransitionManager(config LayoutTransitionConfig, desktop *DesktopE
 	// Grace period to avoid animating first panel on startup
 	m.graceStart = time.Now()
 
-	log.Printf("LayoutTransitionManager: Enabled (duration=%v, easing=%s)", duration, easing)
+	debuglog.Printf("LayoutTransitionManager: Enabled (duration=%v, easing=%s)", duration, easing)
 	m.startAnimationLoop()
 	return m
 }
@@ -122,7 +122,7 @@ func (m *LayoutTransitionManager) ResetGracePeriod() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.graceStart = time.Now()
-	log.Println("LayoutTransitionManager: Grace period reset for snapshot restore")
+	debuglog.Println("LayoutTransitionManager: Grace period reset for snapshot restore")
 }
 
 // AnimateSplit starts animating split ratios from current to target values.
@@ -144,7 +144,7 @@ func (m *LayoutTransitionManager) AnimateRemoval(node *Node, closingIndex int, o
 
 	// Grace period: don't animate first removal on startup
 	if time.Since(m.graceStart) < 200*time.Millisecond {
-		log.Println("LayoutTransitionManager: Skipping removal animation (grace period)")
+		debuglog.Println("LayoutTransitionManager: Skipping removal animation (grace period)")
 		if onComplete != nil {
 			onComplete()
 		}
@@ -167,7 +167,7 @@ func (m *LayoutTransitionManager) AnimateRemoval(node *Node, closingIndex int, o
 		targetRatios[closingIndex] = 1.0
 	}
 
-	log.Printf("LayoutTransitionManager: Starting removal animation for index %d (ratios: %v → %v)",
+	debuglog.Printf("LayoutTransitionManager: Starting removal animation for index %d (ratios: %v → %v)",
 		closingIndex, node.SplitRatios, targetRatios)
 	m.animateSplitWithCallback(node, targetRatios, onComplete)
 }
@@ -187,7 +187,7 @@ func (m *LayoutTransitionManager) animateSplitWithCallback(node *Node, targetRat
 
 	// Grace period: don't animate first split on startup
 	if time.Since(m.graceStart) < 200*time.Millisecond {
-		log.Println("LayoutTransitionManager: Skipping animation (grace period)")
+		debuglog.Println("LayoutTransitionManager: Skipping animation (grace period)")
 		node.SplitRatios = targetRatios
 		if onComplete != nil {
 			onComplete()
@@ -213,7 +213,7 @@ func (m *LayoutTransitionManager) animateSplitWithCallback(node *Node, targetRat
 	}
 
 	m.animating[node] = state
-	log.Printf("LayoutTransitionManager: Starting animation for node (ratios: %v → %v, duration=%v)",
+	debuglog.Printf("LayoutTransitionManager: Starting animation for node (ratios: %v → %v, duration=%v)",
 		startRatios, targetRatios, m.duration)
 }
 
@@ -242,7 +242,7 @@ func (m *LayoutTransitionManager) updateAnimations() {
 			done = true
 			callback = state.onComplete
 			completed = append(completed, node)
-			log.Printf("LayoutTransitionManager: Animation complete for node (final ratios: %v)", state.targetRatios)
+			debuglog.Printf("LayoutTransitionManager: Animation complete for node (final ratios: %v)", state.targetRatios)
 		} else {
 			t := m.applyEasing(progress, state.easing)
 			ratios = make([]float64, len(state.startRatios))
@@ -258,7 +258,7 @@ func (m *LayoutTransitionManager) updateAnimations() {
 						done = true
 						callback = state.onComplete
 						completed = append(completed, node)
-						log.Printf("LayoutTransitionManager: Early completion for removal (ratio %v reached)", ratio)
+						debuglog.Printf("LayoutTransitionManager: Early completion for removal (ratio %v reached)", ratio)
 						break
 					}
 				}
@@ -354,7 +354,7 @@ func (m *LayoutTransitionManager) UpdateConfig(config LayoutTransitionConfig) {
 			m.startAnimationLoop()
 			m.mu.Lock()
 		}
-		log.Printf("LayoutTransitionManager: Enabled via config update")
+		debuglog.Printf("LayoutTransitionManager: Enabled via config update")
 	}
 
 	// Handle disabling from enabled state
@@ -366,11 +366,11 @@ func (m *LayoutTransitionManager) UpdateConfig(config LayoutTransitionConfig) {
 		}
 		// Clear any active animations
 		m.animating = make(map[*Node]*transitionState)
-		log.Printf("LayoutTransitionManager: Disabled via config update")
+		debuglog.Printf("LayoutTransitionManager: Disabled via config update")
 	}
 
 	m.mu.Unlock()
 
-	log.Printf("LayoutTransitionManager: Config updated (enabled=%v, duration=%v, easing=%s)",
+	debuglog.Printf("LayoutTransitionManager: Config updated (enabled=%v, duration=%v, easing=%s)",
 		m.enabled, m.duration, m.easing)
 }

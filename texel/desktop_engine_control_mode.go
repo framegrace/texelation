@@ -1,9 +1,9 @@
 package texel
 
 import (
-	"log"
 	"strconv"
 
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -13,7 +13,7 @@ func (d *DesktopEngine) toggleControlMode() {
 	d.inControlMode = !d.inControlMode
 	d.subControlMode = 0
 
-	log.Printf("toggleControlMode: was=%v, now=%v", wasInControlMode, d.inControlMode)
+	debuglog.Printf("toggleControlMode: was=%v, now=%v", wasInControlMode, d.inControlMode)
 
 	if !d.inControlMode && d.resizeSelection != nil {
 		d.activeWorkspace.clearResizeSelection(d.resizeSelection)
@@ -21,10 +21,10 @@ func (d *DesktopEngine) toggleControlMode() {
 	}
 
 	if d.activeWorkspace != nil && wasInControlMode != d.inControlMode {
-		log.Printf("toggleControlMode: State changed, calling SetControlMode(%v)", d.inControlMode)
+		debuglog.Printf("toggleControlMode: State changed, calling SetControlMode(%v)", d.inControlMode)
 		d.activeWorkspace.SetControlMode(d.inControlMode)
 	} else {
-		log.Printf("toggleControlMode: State didn't change or no active workspace")
+		debuglog.Printf("toggleControlMode: State didn't change or no active workspace")
 	}
 
 	var eventType EventType

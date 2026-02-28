@@ -19,5 +19,20 @@
   "texelterm.history": {
     "memory_lines": 100000,
     "persist_dir": ""
+  },
+  "transformers": {
+    "enabled": true,
+    "pipeline": [
+      {
+        "id": "txfmt",
+        "enabled": true,
+        "style": "catppuccin-mocha"
+      },
+      {
+        "id": "tablefmt",
+        "enabled": true,
+        "max_buffer_rows": 1000
+      }
+    ]
   }
 }

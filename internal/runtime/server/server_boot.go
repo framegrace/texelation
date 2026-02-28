@@ -123,7 +123,7 @@ func (s *Server) persistSnapshot() {
 	if err := s.snapshotStore.Save(&capture); err != nil {
 		log.Printf("snapshot save failed: %v", err)
 	} else {
-		log.Printf("Snapshot saved with %d panes", len(capture.Panes))
+		debugLog.Printf("Snapshot saved with %d panes", len(capture.Panes))
 	}
 	s.setBootSnapshot(treeCaptureToProtocol(capture))
 }
