@@ -170,13 +170,8 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	}
 
 	// Inject graphics provider for apps that use UIManager
-	if p.screen != nil && p.screen.desktop != nil && p.screen.desktop.graphicsFactory != nil {
-		if ua, ok := app.(interface{ UI() *texelcore.UIManager }); ok {
-			gp := p.screen.desktop.graphicsFactory(p.id)
-			if gp != nil {
-				ua.UI().SetGraphicsProvider(gp)
-			}
-		}
+	if p.screen != nil && p.screen.desktop != nil {
+		p.injectGraphicsProvider(p.screen.desktop.graphicsFactory)
 	}
 
 	// Check pipeline for mouse handler (fallback to app for backwards compat)
@@ -301,13 +296,8 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 	}
 
 	// Inject graphics provider for apps that use UIManager
-	if p.screen != nil && p.screen.desktop != nil && p.screen.desktop.graphicsFactory != nil {
-		if ua, ok := app.(interface{ UI() *texelcore.UIManager }); ok {
-			gp := p.screen.desktop.graphicsFactory(p.id)
-			if gp != nil {
-				ua.UI().SetGraphicsProvider(gp)
-			}
-		}
+	if p.screen != nil && p.screen.desktop != nil {
+		p.injectGraphicsProvider(p.screen.desktop.graphicsFactory)
 	}
 
 	// Check pipeline for mouse handler (fallback to app for backwards compat)
@@ -466,6 +456,22 @@ func (p *pane) getTitle() string {
 		return p.app.GetTitle()
 	}
 	return p.name
+}
+
+// injectGraphicsProvider sets the graphics provider on the pane's app if it
+// exposes a UIManager. Called from AttachApp/PrepareAppForRestore and from
+// SetGraphicsProviderFactory when the factory becomes available after apps
+// are already running.
+func (p *pane) injectGraphicsProvider(factory func(paneID [16]byte) GraphicsProvider) {
+	if factory == nil || p.app == nil {
+		return
+	}
+	if ua, ok := p.app.(interface{ UI() *texelcore.UIManager }); ok {
+		gp := factory(p.id)
+		if gp != nil {
+			ua.UI().SetGraphicsProvider(gp)
+		}
+	}
 }
 
 // Close stops the current app and cleans up the pane.

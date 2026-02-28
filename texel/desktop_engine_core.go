@@ -482,8 +482,14 @@ func (d *DesktopEngine) SetLastPublishDuration(dur time.Duration) {
 }
 
 // SetGraphicsProviderFactory sets the factory used to create per-pane graphics providers.
+// It also injects the provider into any apps that are already running.
 func (d *DesktopEngine) SetGraphicsProviderFactory(factory func(paneID [16]byte) GraphicsProvider) {
 	d.graphicsFactory = factory
+	if factory != nil {
+		d.forEachPane(func(p *pane) {
+			p.injectGraphicsProvider(factory)
+		})
+	}
 }
 
 func (d *DesktopEngine) refreshHandlerFunc() func() {
