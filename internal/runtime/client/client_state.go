@@ -10,6 +10,7 @@ package clientruntime
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -60,6 +61,10 @@ type clientState struct {
 	// Restart notification state
 	showRestartNotification      bool
 	restartNotificationDismissed bool
+
+	// Kitty graphics output (nil when terminal doesn't support it)
+	kitty     *kittyOutput
+	ttyWriter io.Writer
 }
 
 func (s *clientState) setRenderChannel(ch chan<- struct{}) {

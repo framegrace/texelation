@@ -102,6 +102,17 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 		return buffer
 	}
 
+	// Reset graphics placements before rendering so only visible widgets
+	// re-place their images. This mirrors the standalone runtime's
+	// graphicsProvider.Reset() → app.Render() → Flush() cycle.
+	if p.app != nil {
+		if ua, ok := p.app.(interface{ UI() *texelcore.UIManager }); ok {
+			if gp := ua.UI().GraphicsProvider(); gp != nil {
+				gp.Reset()
+			}
+		}
+	}
+
 	// Render content from pipeline (or app as fallback).
 	var appBuffer [][]Cell
 	if p.pipeline != nil {

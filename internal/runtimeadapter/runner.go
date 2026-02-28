@@ -252,3 +252,11 @@ func (t *toggleApp) SetClipboardService(clipboard texelcore.ClipboardService) {
 		aware.SetClipboardService(clipboard)
 	}
 }
+
+// UI delegates to the main app's UIManager for graphics provider injection.
+func (t *toggleApp) UI() *texelcore.UIManager {
+	if ua, ok := t.main.(interface{ UI() *texelcore.UIManager }); ok {
+		return ua.UI()
+	}
+	return nil
+}

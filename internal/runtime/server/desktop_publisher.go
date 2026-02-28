@@ -17,6 +17,7 @@ import (
 
 	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
+	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
 )
 
@@ -38,12 +39,21 @@ type PublishObserver interface {
 }
 
 func NewDesktopPublisher(desktop *texel.DesktopEngine, session *Session) *DesktopPublisher {
-	return &DesktopPublisher{
+	pub := &DesktopPublisher{
 		desktop:     desktop,
 		session:     session,
 		revisions:   make(map[[16]byte]uint32),
 		prevBuffers: make(map[[16]byte][][]texel.Cell),
 	}
+
+	// Set up graphics provider factory so panes can send image messages
+	desktop.SetGraphicsProviderFactory(func(paneID [16]byte) texelcore.GraphicsProvider {
+		return NewRemoteGraphicsProvider(paneID, func(msgType uint8, payload []byte) {
+			_ = session.EnqueueImage(msgType, payload)
+		})
+	})
+
+	return pub
 }
 
 // SetObserver registers an optional metrics observer invoked after each publish.

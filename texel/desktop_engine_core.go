@@ -142,6 +142,8 @@ type DesktopEngine struct {
 	refreshHandler func()
 
 	lastPublishNanos atomic.Int64
+
+	graphicsFactory func(paneID [16]byte) GraphicsProvider
 }
 
 // FloatingPanel represents an app floating above the workspace.
@@ -477,6 +479,17 @@ func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 // SetLastPublishDuration records the duration of the most recent publish cycle.
 func (d *DesktopEngine) SetLastPublishDuration(dur time.Duration) {
 	d.lastPublishNanos.Store(dur.Nanoseconds())
+}
+
+// SetGraphicsProviderFactory sets the factory used to create per-pane graphics providers.
+// It also injects the provider into any apps that are already running.
+func (d *DesktopEngine) SetGraphicsProviderFactory(factory func(paneID [16]byte) GraphicsProvider) {
+	d.graphicsFactory = factory
+	if factory != nil {
+		d.forEachPane(func(p *pane) {
+			p.injectGraphicsProvider(factory)
+		})
+	}
 }
 
 func (d *DesktopEngine) refreshHandlerFunc() func() {

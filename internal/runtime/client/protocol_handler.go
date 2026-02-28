@@ -149,6 +149,43 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		debuglog.Printf("state update: control=%v sub=%q zoom=%v", update.InControlMode, update.SubMode, update.Zoomed)
 		state.applyStateUpdate(update)
 		return true
+	case protocol.MsgImageUpload:
+		upload, err := protocol.DecodeImageUpload(payload)
+		if err != nil {
+			log.Printf("decode image upload failed: %v", err)
+			return false
+		}
+		cache.ImageCache().Upload(upload.PaneID, upload.SurfaceID,
+			int(upload.Width), int(upload.Height), upload.Data)
+		return true
+	case protocol.MsgImagePlace:
+		place, err := protocol.DecodeImagePlace(payload)
+		if err != nil {
+			log.Printf("decode image place failed: %v", err)
+			return false
+		}
+		cache.ImageCache().Place(place.PaneID, place.SurfaceID,
+			int(place.X), int(place.Y), int(place.W), int(place.H), int(place.ZIndex))
+		return true
+	case protocol.MsgImageDelete:
+		del, err := protocol.DecodeImageDelete(payload)
+		if err != nil {
+			log.Printf("decode image delete failed: %v", err)
+			return false
+		}
+		cache.ImageCache().Delete(del.PaneID, del.SurfaceID)
+		if state.kitty != nil {
+			state.kitty.deleteImage(del.SurfaceID)
+		}
+		return true
+	case protocol.MsgImageReset:
+		reset, err := protocol.DecodeImageReset(payload)
+		if err != nil {
+			log.Printf("decode image reset failed: %v", err)
+			return false
+		}
+		cache.ImageCache().ResetPlacements(reset.PaneID)
+		return true
 	}
 	return false
 }
