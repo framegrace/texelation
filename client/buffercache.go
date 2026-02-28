@@ -96,9 +96,10 @@ func (p *PaneState) RowCells(row int) []Cell {
 
 // BufferCache maintains pane states keyed by pane ID.
 type BufferCache struct {
-	mu    sync.RWMutex
-	panes map[[16]byte]*PaneState
-	order []paneOrder
+	mu         sync.RWMutex
+	panes      map[[16]byte]*PaneState
+	order      []paneOrder
+	imageCache *ImageCache
 }
 
 type paneOrder struct {
@@ -108,8 +109,14 @@ type paneOrder struct {
 
 // NewBufferCache constructs an empty cache.
 func NewBufferCache() *BufferCache {
-	return &BufferCache{panes: make(map[[16]byte]*PaneState)}
+	return &BufferCache{
+		panes:      make(map[[16]byte]*PaneState),
+		imageCache: NewImageCache(),
+	}
 }
+
+// ImageCache returns the cache's image store.
+func (c *BufferCache) ImageCache() *ImageCache { return c.imageCache }
 
 // ApplyDelta merges the buffer delta into the cache and returns the updated pane.
 
