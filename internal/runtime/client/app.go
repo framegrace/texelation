@@ -12,8 +12,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-
-	"github.com/framegrace/texelation/internal/debuglog"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -22,6 +20,9 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/internal/debuglog"
+	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/graphics"
 	"github.com/framegrace/texelui/theme"
 )
 
@@ -126,6 +127,21 @@ func Run(opts Options) error {
 	screen.HideCursor()
 	defer screen.Fini()
 	defer close(pingStop)
+
+	// Initialize Kitty graphics output if the terminal supports it.
+	if graphics.DetectCapability() == texelcore.GraphicsKitty {
+		state.kitty = newKittyOutput()
+		if tty, ok := screen.Tty(); ok {
+			state.ttyWriter = tty
+		}
+		defer func() {
+			if state.ttyWriter != nil {
+				// Clear all Kitty images from terminal on exit.
+				fmt.Fprint(state.ttyWriter, "\x1b_Ga=d,d=a,q=2;\x1b\\")
+			}
+		}()
+	}
+
 	// Send ClientReady with our dimensions so server can send properly-sized snapshot
 	sendClientReady(&writeMu, conn, sessionID, screen)
 

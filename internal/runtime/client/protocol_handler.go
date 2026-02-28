@@ -174,6 +174,9 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			return false
 		}
 		cache.ImageCache().Delete(del.PaneID, del.SurfaceID)
+		if state.kitty != nil {
+			state.kitty.deleteImage(del.SurfaceID)
+		}
 		return true
 	case protocol.MsgImageReset:
 		reset, err := protocol.DecodeImageReset(payload)

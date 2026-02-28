@@ -10,6 +10,7 @@ package clientruntime
 import (
 	"fmt"
 	"image"
+	"log"
 	"os"
 	"time"
 
@@ -109,21 +110,25 @@ func render(state *clientState, screen tcell.Screen) {
 		}
 	}
 
-	// Render images from each pane's placements
-	for _, pane := range panes {
-		if pane == nil {
-			continue
-		}
-		placements := state.cache.ImageCache().Placements(pane.ID)
-		for _, pl := range placements {
-			img := state.cache.ImageCache().Get(pl.SurfaceID)
-			if img == nil || img.Decoded == nil {
+	// Render images: use Kitty protocol if available, otherwise half-block fallback.
+	if state.kitty != nil {
+		state.kitty.prepareFrame(state.cache.ImageCache(), panes)
+	} else {
+		for _, pane := range panes {
+			if pane == nil {
 				continue
 			}
-			// Image placement coordinates are in content space (inside
-		// pane border). Offset by 1 to account for the border.
-		renderHalfBlockIntoBuffer(workspaceBuffer, img.Decoded,
-				pane.Rect.X+1+pl.X, pane.Rect.Y+1+pl.Y, pl.W, pl.H)
+			placements := state.cache.ImageCache().Placements(pane.ID)
+			for _, pl := range placements {
+				img := state.cache.ImageCache().Get(pl.SurfaceID)
+				if img == nil || img.Decoded == nil {
+					continue
+				}
+				// Image placement coordinates are in content space (inside
+				// pane border). Offset by 1 to account for the border.
+				renderHalfBlockIntoBuffer(workspaceBuffer, img.Decoded,
+					pane.Rect.X+1+pl.X, pane.Rect.Y+1+pl.Y, pl.W, pl.H)
+			}
 		}
 	}
 
@@ -142,6 +147,13 @@ func render(state *clientState, screen tcell.Screen) {
 
 	showWorkspaceBuffer(screen, workspaceBuffer, state.defaultStyle)
 	screen.Show()
+
+	// Flush Kitty graphics commands after tcell has flushed its cell buffer.
+	if state.kitty != nil && state.ttyWriter != nil {
+		if err := state.kitty.flush(state.ttyWriter); err != nil {
+			log.Printf("kitty flush: %v", err)
+		}
+	}
 }
 
 func showWorkspaceBuffer(screen tcell.Screen, buffer [][]client.Cell, defaultStyle tcell.Style) {
