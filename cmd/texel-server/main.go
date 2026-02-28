@@ -27,6 +27,7 @@ import (
 
 	_ "github.com/framegrace/texelation/apps/configeditor"
 	_ "github.com/framegrace/texelation/apps/help"
+	_ "github.com/framegrace/texelation/apps/texeluidemo"
 	"github.com/framegrace/texelation/apps/launcher"
 	"github.com/framegrace/texelation/apps/statusbar"
 	"github.com/framegrace/texelation/apps/texelterm"
