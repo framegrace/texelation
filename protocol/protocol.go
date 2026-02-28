@@ -61,6 +61,10 @@ const (
 	MsgResize
 	MsgPaste
 	MsgClientReady
+	MsgImageUpload
+	MsgImagePlace
+	MsgImageDelete
+	MsgImageReset
 )
 
 // Header describes the fixed portion of every frame exchanged over the wire.
