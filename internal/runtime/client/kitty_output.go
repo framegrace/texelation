@@ -19,25 +19,28 @@ import (
 const kittyMaxChunk = 4096 // max base64 bytes per APC sequence
 
 // kittyOutput manages Kitty graphics protocol output for the client.
+// It tracks which images have been transmitted to the terminal and which
+// are currently placed, sending only incremental updates each frame.
 type kittyOutput struct {
 	transmitted map[uint32]bool // surfaceIDs already sent to terminal
+	placed      map[uint32]bool // surfaceIDs currently placed on terminal
 	pending     []string        // queued APC sequences for this frame
 }
 
 func newKittyOutput() *kittyOutput {
 	return &kittyOutput{
 		transmitted: make(map[uint32]bool),
+		placed:      make(map[uint32]bool),
 	}
 }
 
 // prepareFrame queues Kitty commands for all image placements visible
-// in the current frame. It clears previous placements, ensures images
-// are transmitted, and queues put commands at screen-space positions.
+// in the current frame. Uses placement IDs to update positions in-place
+// and removes stale placements for images no longer in the cache.
 func (ko *kittyOutput) prepareFrame(cache *client.ImageCache, panes []*client.PaneState) {
 	ko.pending = ko.pending[:0]
-	// Clear all placements from previous frame (keep cached data).
-	ko.pending = append(ko.pending, "\x1b_Ga=d,d=A,q=2;\x1b\\")
 
+	current := make(map[uint32]bool)
 	for _, pane := range panes {
 		if pane == nil {
 			continue
@@ -48,6 +51,7 @@ func (ko *kittyOutput) prepareFrame(cache *client.ImageCache, panes []*client.Pa
 			if img == nil || len(img.Data) == 0 {
 				continue
 			}
+			current[pl.SurfaceID] = true
 			ko.ensureTransmitted(pl.SurfaceID, img.Data)
 			// Content-space → screen-space: +1 for pane border.
 			screenX := pane.Rect.X + 1 + pl.X
@@ -55,6 +59,16 @@ func (ko *kittyOutput) prepareFrame(cache *client.ImageCache, panes []*client.Pa
 			ko.queuePut(pl.SurfaceID, screenX, screenY, pl.W, pl.H, pl.ZIndex)
 		}
 	}
+
+	// Remove images that were placed last frame but no longer have placements.
+	for sid := range ko.placed {
+		if !current[sid] {
+			ko.pending = append(ko.pending,
+				fmt.Sprintf("\x1b_Ga=d,d=i,i=%d,q=2;\x1b\\", sid))
+			delete(ko.transmitted, sid)
+		}
+	}
+	ko.placed = current
 }
 
 func (ko *kittyOutput) ensureTransmitted(surfaceID uint32, pngData []byte) {
@@ -81,17 +95,19 @@ func (ko *kittyOutput) ensureTransmitted(surfaceID uint32, pngData []byte) {
 }
 
 func (ko *kittyOutput) queuePut(surfaceID uint32, x, y, w, h, zIndex int) {
-	// Move cursor to position (1-based), then place image.
+	// Move cursor to position (1-based), then place image with a stable
+	// placement ID so the terminal replaces the previous placement in-place.
 	ko.pending = append(ko.pending,
-		fmt.Sprintf("\x1b[%d;%dH\x1b_Ga=p,i=%d,c=%d,r=%d,z=%d,q=2;\x1b\\",
-			y+1, x+1, surfaceID, w, h, zIndex))
+		fmt.Sprintf("\x1b[%d;%dH\x1b_Ga=p,i=%d,p=%d,c=%d,r=%d,z=%d,q=2;\x1b\\",
+			y+1, x+1, surfaceID, surfaceID, w, h, zIndex))
 }
 
 // deleteImage removes a cached image from the terminal.
 func (ko *kittyOutput) deleteImage(surfaceID uint32) {
 	delete(ko.transmitted, surfaceID)
+	delete(ko.placed, surfaceID)
 	ko.pending = append(ko.pending,
-		fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,q=2;\x1b\\", surfaceID))
+		fmt.Sprintf("\x1b_Ga=d,d=i,i=%d,q=2;\x1b\\", surfaceID))
 }
 
 // flush writes all queued APC sequences to the writer (typically the TTY).
