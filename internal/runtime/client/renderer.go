@@ -120,8 +120,10 @@ func render(state *clientState, screen tcell.Screen) {
 			if img == nil || img.Decoded == nil {
 				continue
 			}
-			renderHalfBlockIntoBuffer(workspaceBuffer, img.Decoded,
-				pane.Rect.X+pl.X, pane.Rect.Y+pl.Y, pl.W, pl.H)
+			// Image placement coordinates are in content space (inside
+		// pane border). Offset by 1 to account for the border.
+		renderHalfBlockIntoBuffer(workspaceBuffer, img.Decoded,
+				pane.Rect.X+1+pl.X, pane.Rect.Y+1+pl.Y, pl.W, pl.H)
 		}
 	}
 
