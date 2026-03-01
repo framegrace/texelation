@@ -970,3 +970,147 @@ func TestPageStore_UpdateLine_NonExistent(t *testing.T) {
 		t.Error("UpdateLine should fail for non-existent index")
 	}
 }
+
+// --- Cell Wrapped/Wide Round-Trip Tests ---
+
+func TestCellEncoding_WrappedWideRoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		cell    Cell
+		wantW   bool
+		wantWd  bool
+		wantA   Attribute
+	}{
+		{
+			name:  "wrapped only",
+			cell:  Cell{Rune: 'A', Wrapped: true},
+			wantW: true, wantA: 0,
+		},
+		{
+			name:   "wide only",
+			cell:   Cell{Rune: '漢', Wide: true},
+			wantWd: true, wantA: 0,
+		},
+		{
+			name:   "wrapped + wide + attrs",
+			cell:   Cell{Rune: 'X', Attr: AttrBold | AttrDim, Wrapped: true, Wide: true},
+			wantW:  true, wantWd: true, wantA: AttrBold | AttrDim,
+		},
+		{
+			name:  "attrs only, no wrapped/wide",
+			cell:  Cell{Rune: 'Y', Attr: AttrUnderline | AttrReverse},
+			wantA: AttrUnderline | AttrReverse,
+		},
+		{
+			name: "zero cell",
+			cell: Cell{},
+		},
+	}
+
+	buf := make([]byte, PageCellSize)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encodeCell(tt.cell, buf)
+			got := decodeCell(buf)
+			if got.Wrapped != tt.wantW {
+				t.Errorf("Wrapped: got %v, want %v", got.Wrapped, tt.wantW)
+			}
+			if got.Wide != tt.wantWd {
+				t.Errorf("Wide: got %v, want %v", got.Wide, tt.wantWd)
+			}
+			if got.Attr != tt.wantA {
+				t.Errorf("Attr: got %v, want %v", got.Attr, tt.wantA)
+			}
+			if got.Rune != tt.cell.Rune {
+				t.Errorf("Rune: got %c, want %c", got.Rune, tt.cell.Rune)
+			}
+		})
+	}
+}
+
+func TestCellEncoding_BackwardCompat(t *testing.T) {
+	// Old format: bits 5-6 of attr are 0 → Wrapped=false, Wide=false
+	buf := make([]byte, PageCellSize)
+	cell := Cell{Rune: 'Z', Attr: AttrBold | AttrItalic}
+	// Simulate old encoder that writes raw Attr without packing Wrapped/Wide
+	encodeCell(cell, buf)
+	got := decodeCell(buf)
+	if got.Wrapped || got.Wide {
+		t.Errorf("Old format should have Wrapped=false, Wide=false, got Wrapped=%v, Wide=%v",
+			got.Wrapped, got.Wide)
+	}
+	if got.Attr != (AttrBold | AttrItalic) {
+		t.Errorf("Attr should be bold|italic, got %v", got.Attr)
+	}
+}
+
+// --- ResizeSplit Line Encoding Round-Trip Tests ---
+
+func TestLineEncoding_ResizeSplitRoundTrip(t *testing.T) {
+	line := &LogicalLine{
+		Cells:       []Cell{{Rune: 'A'}, {Rune: 'B'}},
+		ResizeSplit: true,
+	}
+	data := encodeLineData(line)
+	got, err := decodeLineData(data)
+	if err != nil {
+		t.Fatalf("decodeLineData: %v", err)
+	}
+	if !got.ResizeSplit {
+		t.Error("ResizeSplit should be true after round-trip")
+	}
+	if got.Synthetic {
+		t.Error("Synthetic should be false")
+	}
+}
+
+func TestLineEncoding_ResizeSplitBackwardCompat(t *testing.T) {
+	// Line without ResizeSplit → bit 2 is 0
+	line := &LogicalLine{
+		Cells:     []Cell{{Rune: 'X'}},
+		Synthetic: true,
+	}
+	data := encodeLineData(line)
+	got, err := decodeLineData(data)
+	if err != nil {
+		t.Fatalf("decodeLineData: %v", err)
+	}
+	if got.ResizeSplit {
+		t.Error("ResizeSplit should be false when not set")
+	}
+	if !got.Synthetic {
+		t.Error("Synthetic should be true")
+	}
+}
+
+func TestPage_ResizeSplitRoundTrip(t *testing.T) {
+	page := NewPage(1, 0)
+	now := time.Now()
+
+	line := &LogicalLine{
+		Cells:       []Cell{{Rune: 'H'}, {Rune: 'i', Wrapped: true}},
+		ResizeSplit: true,
+	}
+	page.AddLine(line, now, 0)
+
+	var buf bytes.Buffer
+	if _, err := page.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+
+	page2 := &Page{}
+	if _, err := page2.ReadFrom(&buf); err != nil {
+		t.Fatalf("ReadFrom: %v", err)
+	}
+
+	if len(page2.Lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(page2.Lines))
+	}
+	got := page2.Lines[0]
+	if !got.ResizeSplit {
+		t.Error("ResizeSplit should survive page round-trip")
+	}
+	if !got.Cells[1].Wrapped {
+		t.Error("Wrapped should survive page round-trip")
+	}
+}

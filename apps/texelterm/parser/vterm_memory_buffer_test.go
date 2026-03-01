@@ -5898,3 +5898,133 @@ func TestResizeWidth_TwoLinePrompt_CharByCharExpand(t *testing.T) {
 		}
 	}
 }
+
+// --- ResizeSplit Tests ---
+
+// TestResizeSplit_FlagSetOnChunks verifies that width-split creates chunks
+// with ResizeSplit=true, and that rejoining clears it.
+func TestResizeSplit_FlagSetOnChunks(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	v := NewVTerm(40, 24, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write a 30-char line
+	parseString(p, "ABCDEFGHIJ0123456789abcdefghij")
+
+	// Resize narrow: 30 chars at width 10 → 3 chunks
+	v.Resize(10, 24)
+	mb := v.memBufState.memBuf
+
+	// All 3 chunks should have ResizeSplit=true
+	for i := mb.GlobalOffset(); i < mb.GlobalEnd(); i++ {
+		line := mb.GetLine(i)
+		if line != nil && len(line.Cells) > 0 {
+			if !line.ResizeSplit {
+				t.Errorf("Line %d should have ResizeSplit=true after width-split", i)
+			}
+		}
+	}
+
+	// Resize back: should rejoin and clear ResizeSplit
+	v.Resize(40, 24)
+	line0 := mb.GetLine(mb.GlobalOffset())
+	if line0 == nil {
+		t.Fatal("line 0 nil after rejoin")
+	}
+	if line0.ResizeSplit {
+		t.Error("ResizeSplit should be false after rejoin")
+	}
+	if len(line0.Cells) != 30 {
+		t.Errorf("Combined line should have 30 cells, got %d", len(line0.Cells))
+	}
+}
+
+// TestResizeSplit_NaturalWrapNotRejoined verifies that natural auto-wrap
+// chains (created by the shell, not by resize) are NOT rejoined.
+func TestResizeSplit_NaturalWrapNotRejoined(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 10, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write more than 10 chars → natural wrap at width 10
+	// "HelloWorld" fills exactly 10, then "!!" wraps to next line
+	parseString(p, "HelloWorld!!")
+
+	mb := v.memBufState.memBuf
+
+	// The cursor's line and the wrapped line should NOT have ResizeSplit
+	for i := mb.GlobalOffset(); i < mb.GlobalEnd(); i++ {
+		line := mb.GetLine(i)
+		if line != nil && line.ResizeSplit {
+			t.Errorf("Line %d should NOT have ResizeSplit (natural wrap, not resize)", i)
+		}
+	}
+
+	// Resize wider → natural wraps should be preserved (not rejoined)
+	v.Resize(40, height)
+
+	// The natural wrap chain should still be two separate logical lines
+	lineCount := 0
+	for i := mb.GlobalOffset(); i < mb.GlobalEnd(); i++ {
+		line := mb.GetLine(i)
+		if line != nil && len(line.Cells) > 0 {
+			lineCount++
+		}
+	}
+	if lineCount < 2 {
+		t.Errorf("Natural wrap should still be 2 lines after resize, got %d", lineCount)
+	}
+}
+
+// TestResizeSplit_CursorPastChain tests the cursor-past-chain case:
+// when absoluteCol % width == 0, cursor ends up on the line AFTER the chain.
+func TestResizeSplit_CursorPastChain(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	v := NewVTerm(40, 24, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write exactly 20 chars → at width 10, absoluteCol=20, 20%10==0
+	// Cursor ends up on line after chain (cursorX=0)
+	parseString(p, "01234567890123456789")
+
+	v.Resize(10, 24)
+
+	// cursorX should be 0 (20 % 10 == 0), cursorY should be 2 (20 / 10 == 2)
+	if v.cursorX != 0 {
+		t.Errorf("After split: cursorX=%d, want 0", v.cursorX)
+	}
+
+	// Now resize back to 40 — should rejoin via cursor-past-chain detection
+	v.Resize(40, 24)
+
+	mb := v.memBufState.memBuf
+	line0 := mb.GetLine(mb.GlobalOffset())
+	if line0 == nil {
+		t.Fatal("line 0 nil after rejoin")
+	}
+	if len(line0.Cells) != 20 {
+		t.Errorf("Combined line should have 20 cells, got %d", len(line0.Cells))
+	}
+	if line0.ResizeSplit {
+		t.Error("ResizeSplit should be cleared after rejoin")
+	}
+
+	// Cursor should be on the line AFTER the combined content (shifted up).
+	// The chain was lines 0-1, cursor was on line 2. After collapsing
+	// chain to line 0 and deleting line 1, cursor shifts to line 1.
+	// The content is on line 0 (row 0 in grid).
+	grid := v.Grid()
+	row0 := cellsToString(grid[0])
+	if !strings.Contains(row0, "01234567890123456789") {
+		t.Errorf("Grid row 0 should contain the full content, got %q", row0)
+	}
+	// Cursor should be one row below content
+	if v.cursorY != 1 {
+		t.Errorf("cursorY should be 1 (past combined line), got %d", v.cursorY)
+	}
+}
+

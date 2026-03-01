@@ -516,6 +516,7 @@ func (mb *MemoryBuffer) setLineLocked(globalIdx int64, line *LogicalLine) bool {
 			existing.OverlayWidth = 0
 		}
 		existing.Synthetic = line.Synthetic
+		existing.ResizeSplit = line.ResizeSplit
 	}
 
 	return true

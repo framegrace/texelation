@@ -32,6 +32,12 @@ type LogicalLine struct {
 	// Synthetic indicates a transformer-inserted line that is hidden
 	// in the original (non-overlay) view.
 	Synthetic bool
+
+	// ResizeSplit indicates this line was created by memoryBufferResize
+	// splitting a long logical line into width-sized chunks. Used by
+	// rejoinResizeSplitChain to identify resize-created chains without
+	// confusing them with natural auto-wrap chains.
+	ResizeSplit bool
 }
 
 // NewLogicalLine creates a new empty logical line.
@@ -108,6 +114,7 @@ func (l *LogicalLine) Clone() *LogicalLine {
 	clone := NewLogicalLineFromCells(l.Cells)
 	clone.FixedWidth = l.FixedWidth
 	clone.Synthetic = l.Synthetic
+	clone.ResizeSplit = l.ResizeSplit
 	clone.OverlayWidth = l.OverlayWidth
 	if l.Overlay != nil {
 		clone.Overlay = make([]Cell, len(l.Overlay))
