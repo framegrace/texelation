@@ -2640,10 +2640,38 @@ func TestVTerm_ScrollRegionReloadMultipleTUISessions(t *testing.T) {
 		session1Lines = extractAllLines(mb)
 		t.Logf("Session 1: %d lines, globalOffset=%d, globalEnd=%d, liveEdge=%d",
 			len(session1Lines), session1GlobalOffset, mb.GlobalEnd(), v.memBufState.liveEdgeBase)
+		t.Log("=== Session 1 dump ===")
+		for i, line := range session1Lines {
+			globalIdx := session1GlobalOffset + int64(i)
+			t.Logf("  [%3d] %q", globalIdx, line)
+		}
 
 		if err := v.CloseMemoryBuffer(); err != nil {
 			t.Fatalf("CloseMemoryBuffer failed: %v", err)
 		}
+	}
+
+	// ========================================================
+	// Verify PageStore directly before reload
+	// ========================================================
+	{
+		config := DefaultPageStoreConfig(diskPath, terminalID)
+		ps, err := OpenPageStore(config)
+		if err != nil {
+			t.Fatalf("OpenPageStore for verification: %v", err)
+		}
+		psLineCount := ps.LineCount()
+		t.Logf("PageStore verification: %d lines on disk", psLineCount)
+		// Dump lines around the missing region
+		for i := int64(0); i < psLineCount && i < 15; i++ {
+			line, err := ps.ReadLine(i)
+			if err != nil {
+				t.Logf("  PS[%d]: error: %v", i, err)
+			} else {
+				t.Logf("  PS[%d]: %q", i, trimRight(logicalLineToString(line)))
+			}
+		}
+		ps.Close()
 	}
 
 	// ========================================================
@@ -2771,9 +2799,7 @@ func TestVTerm_ScrollRegionReloadMultipleTUISessions(t *testing.T) {
 			t.Log("=== Session 2 dump ===")
 			for i, line := range session2Lines {
 				globalIdx := session2GlobalOffset + int64(i)
-				if line != "" {
-					t.Logf("  [%3d] %q", globalIdx, line)
-				}
+				t.Logf("  [%3d] %q", globalIdx, line)
 			}
 		}
 

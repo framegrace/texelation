@@ -528,23 +528,26 @@ func (v *VTerm) ensureLiveEdgeBaseConsistency() {
 	}
 }
 
-// ensureLineNotifyGaps calls EnsureLine and, if intermediate empty lines were
-// created to fill a gap, notifies the persistence layer about them. This ensures
-// lines created as side effects of cursor jumps (e.g., TUI positioning cursor at
-// row 29 when only 21 lines exist) reach disk even without an explicit write.
-// Without this, a crash would lose these lines, causing phantom empty gaps on reload.
+// ensureLineNotifyGaps calls EnsureLine and notifies the persistence layer
+// about ALL newly created lines, including both intermediate gap lines and
+// the target line itself. This ensures every new line gets a LineWrite WAL
+// entry before any other operation can advance nextGlobalIdx past it.
+//
+// Previously, the target line was excluded (only gap lines notified) under
+// the assumption that the caller would persist it. But with adaptive
+// persistence, the caller's write may be deferred (Debounced/BestEffort mode),
+// and by the time it's flushed, nextGlobalIdx has advanced — causing the
+// line to be classified as LineModify instead of LineWrite. During checkpoint,
+// missing LineWrite entries cause the PageStore to have fewer lines than
+// expected, corrupting reload.
 func (v *VTerm) ensureLineNotifyGaps(mb *MemoryBuffer, globalLine int64) {
 	prevEnd := mb.GlobalEnd()
 	mb.EnsureLine(globalLine)
 	newEnd := mb.GlobalEnd()
 
-	// If more than 1 line was created, notify the intermediate (gap) lines.
-	// The target line itself will be notified by the caller after writing.
-	if v.memBufState.persistence != nil && newEnd-prevEnd > 1 {
+	if v.memBufState.persistence != nil && newEnd > prevEnd {
 		for idx := prevEnd; idx < newEnd; idx++ {
-			if idx != globalLine {
-				v.memBufState.persistence.NotifyWrite(idx)
-			}
+			v.memBufState.persistence.NotifyWrite(idx)
 		}
 	}
 }
