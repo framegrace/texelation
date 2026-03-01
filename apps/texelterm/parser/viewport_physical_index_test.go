@@ -260,6 +260,54 @@ func TestPhysicalLineIndex_MatchesBuilderOutput(t *testing.T) {
 	}
 }
 
+func TestPhysicalLineIndex_MatchesBuilderOutput_EdgeCases(t *testing.T) {
+	// Verify physicalLinesFor matches BuildLine for special line types.
+	width := 20
+
+	makeCells := func(n int) []Cell {
+		cells := make([]Cell, n)
+		for i := range cells {
+			cells[i] = Cell{Rune: 'X', FG: DefaultFG, BG: DefaultBG}
+		}
+		return cells
+	}
+
+	tests := []struct {
+		name        string
+		line        *LogicalLine
+		showOverlay bool
+	}{
+		{"nil line", nil, false},
+		{"nil line overlay", nil, true},
+		{"zero cells", &LogicalLine{Cells: []Cell{}}, false},
+		{"zero cells overlay", &LogicalLine{Cells: []Cell{}}, true},
+		{"exactly width", &LogicalLine{Cells: makeCells(width)}, false},
+		{"exactly width overlay", &LogicalLine{Cells: makeCells(width)}, true},
+		{"fixed width", &LogicalLine{Cells: makeCells(200), FixedWidth: 80}, false},
+		{"fixed width overlay", &LogicalLine{Cells: makeCells(200), FixedWidth: 80}, true},
+		{"synthetic hidden", &LogicalLine{Cells: makeCells(10), Synthetic: true}, false},
+		{"synthetic visible", &LogicalLine{Cells: makeCells(10), Synthetic: true}, true},
+		{"overlay hidden", &LogicalLine{Cells: makeCells(10), Overlay: makeCells(5)}, false},
+		{"overlay visible", &LogicalLine{Cells: makeCells(10), Overlay: makeCells(5)}, true},
+		{"overlay with width", &LogicalLine{Cells: makeCells(10), Overlay: makeCells(50), OverlayWidth: 30}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewPhysicalLineBuilder(width)
+			builder.SetShowOverlay(tt.showOverlay)
+
+			builderResult := builder.BuildLine(tt.line, 0)
+			builderCount := len(builderResult) // nil → 0
+			indexCount := physicalLinesFor(tt.line, width, tt.showOverlay)
+
+			if builderCount != indexCount {
+				t.Errorf("builder=%d, physicalLinesFor=%d", builderCount, indexCount)
+			}
+		})
+	}
+}
+
 func TestPhysicalLineIndex_PrefixSumAt(t *testing.T) {
 	// 3 lines: 1 phys + 2 phys + 1 phys
 	long := make([]byte, 160)

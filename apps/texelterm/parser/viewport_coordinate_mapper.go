@@ -52,25 +52,10 @@ func (cm *CoordinateMapper) ViewportToContent(viewportRow, col, viewportHeight i
 	// Get the visible range of logical lines
 	startGlobal, endGlobal := cm.scroll.VisibleRange(viewportHeight)
 
-	// Build physical lines for this range
-	lines := cm.reader.GetLineRange(startGlobal, endGlobal)
-	physical := cm.builder.BuildRange(lines, startGlobal)
-
-	// BuildRange may produce fewer physical lines than the index predicted
-	// (e.g., wrap chains get joined into fewer rows). Extend the range
-	// backward to match what VisibleGrid does, so cursor positions are
-	// consistent with the rendered grid.
-	minGlobal := cm.reader.GlobalOffset()
-	for len(physical) < viewportHeight && startGlobal > minGlobal {
-		deficit := int64(viewportHeight - len(physical))
-		newStart := max(startGlobal-deficit, minGlobal)
-		if newStart == startGlobal {
-			break
-		}
-		startGlobal = newStart
-		lines = cm.reader.GetLineRange(startGlobal, endGlobal)
-		physical = cm.builder.BuildRange(lines, startGlobal)
-	}
+	// Build physical lines, extending backward to match VisibleGrid.
+	startGlobal, physical := cm.builder.BuildRangeExtended(
+		cm.reader, startGlobal, endGlobal, viewportHeight,
+	)
 
 	// Calculate which physical line corresponds to the viewport row
 	// We need to account for scroll offset within the physical lines
@@ -112,25 +97,10 @@ func (cm *CoordinateMapper) ContentToViewport(globalLineIdx int64, charOffset, v
 		return 0, 0, false
 	}
 
-	// Build physical lines for this range
-	lines := cm.reader.GetLineRange(startGlobal, endGlobal)
-	physical := cm.builder.BuildRange(lines, startGlobal)
-
-	// BuildRange may produce fewer physical lines than the index predicted
-	// (e.g., wrap chains get joined into fewer rows). Extend the range
-	// backward to match what VisibleGrid does, so cursor positions are
-	// consistent with the rendered grid.
-	minGlobal := cm.reader.GlobalOffset()
-	for len(physical) < viewportHeight && startGlobal > minGlobal {
-		deficit := int64(viewportHeight - len(physical))
-		newStart := max(startGlobal-deficit, minGlobal)
-		if newStart == startGlobal {
-			break
-		}
-		startGlobal = newStart
-		lines = cm.reader.GetLineRange(startGlobal, endGlobal)
-		physical = cm.builder.BuildRange(lines, startGlobal)
-	}
+	// Build physical lines, extending backward to match VisibleGrid.
+	startGlobal, physical := cm.builder.BuildRangeExtended(
+		cm.reader, startGlobal, endGlobal, viewportHeight,
+	)
 
 	// Calculate the physical line window we're showing
 	totalPhysical := int64(len(physical))

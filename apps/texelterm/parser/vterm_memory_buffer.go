@@ -1129,6 +1129,83 @@ func (v *VTerm) memoryBufferAtLiveEdge() bool {
 
 // --- Resize ---
 
+// findChainStart walks backward from lineIdx to find the first line in a
+// wrap chain. A line belongs to the chain if the previous line's last cell
+// has Wrapped set and the previous line is a normal (non-synthetic,
+// non-overlay, non-fixed-width) line.
+func findChainStart(mb *MemoryBuffer, lineIdx, globalOffset int64) int64 {
+	chainStart := lineIdx
+	for chainStart > globalOffset {
+		prev := mb.GetLine(chainStart - 1)
+		if prev == nil || prev.Synthetic || prev.Overlay != nil || prev.FixedWidth > 0 {
+			break
+		}
+		if len(prev.Cells) == 0 || !prev.Cells[len(prev.Cells)-1].Wrapped {
+			break
+		}
+		chainStart--
+	}
+	return chainStart
+}
+
+// combineAndCollapseChain combines all cells in the wrap chain from chainStart
+// to chainEnd into a single logical line, clears the Wrapped flag on the last
+// cell, and deletes the extra lines. Returns the combined cells.
+func combineAndCollapseChain(mb *MemoryBuffer, chainStart, chainEnd int64) []Cell {
+	combined := make([]Cell, 0)
+	for i := chainStart; i <= chainEnd; i++ {
+		line := mb.GetLine(i)
+		if line != nil {
+			combined = append(combined, line.Cells...)
+		}
+	}
+	if len(combined) > 0 {
+		combined[len(combined)-1].Wrapped = false
+	}
+
+	firstLine := mb.GetLine(chainStart)
+	if firstLine != nil {
+		firstLine.Cells = combined
+	}
+
+	for i := chainEnd; i > chainStart; i-- {
+		mb.DeleteLine(i)
+	}
+	return combined
+}
+
+// clampCursorToHeight adjusts liveEdgeBase so that cursorY stays within
+// [0, height-1]. Called after operations that may push cursorY beyond the
+// viewport (width splits, vertical shrinks). label is used in debug logs.
+func (v *VTerm) clampCursorToHeight(cursorGlobalLine int64, height int, label string) {
+	if v.cursorY < height {
+		return
+	}
+	mb := v.memBufState.memBuf
+	newLiveEdgeBase := cursorGlobalLine - int64(height-1)
+	if newLiveEdgeBase < mb.GlobalOffset() {
+		newLiveEdgeBase = mb.GlobalOffset()
+	}
+	v.memBufState.liveEdgeBase = newLiveEdgeBase
+	v.cursorY = int(cursorGlobalLine - newLiveEdgeBase)
+
+	v.logMemBufDebug("[RESIZE] %s: adjusted liveEdgeBase=%d, cursorY=%d",
+		label, v.memBufState.liveEdgeBase, v.cursorY)
+}
+
+// assertCursorConsistency panics if liveEdgeBase + cursorY != cursorGlobalLine.
+// Only active when TEXELTERM_DEBUG is set. label identifies the assertion site.
+func (v *VTerm) assertCursorConsistency(label string, cursorGlobalLine int64) {
+	if os.Getenv("TEXELTERM_DEBUG") == "" {
+		return
+	}
+	actual := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	if actual != cursorGlobalLine {
+		panic(fmt.Sprintf("[RESIZE] %s: cursor consistency violation: liveEdgeBase(%d) + cursorY(%d) = %d, expected %d",
+			label, v.memBufState.liveEdgeBase, v.cursorY, actual, cursorGlobalLine))
+	}
+}
+
 // rejoinCursorWrapChain undoes wrap chain splits created by previous resizes.
 // When memoryBufferResize decreases the width, it splits the cursor's logical
 // line into multiple logical lines connected by Wrapped flags. If the width
@@ -1142,17 +1219,7 @@ func (v *VTerm) rejoinCursorWrapChain() {
 	globalOffset := mb.GlobalOffset()
 
 	// Walk backward from cursor's line to find the start of any wrap chain.
-	chainStart := cursorGlobal
-	for chainStart > globalOffset {
-		prev := mb.GetLine(chainStart - 1)
-		if prev == nil || prev.Synthetic || prev.Overlay != nil || prev.FixedWidth > 0 {
-			break
-		}
-		if len(prev.Cells) == 0 || !prev.Cells[len(prev.Cells)-1].Wrapped {
-			break
-		}
-		chainStart--
-	}
+	chainStart := findChainStart(mb, cursorGlobal, globalOffset)
 
 	// Walk forward from cursor to find the end of the chain.
 	// The chain continues while the current line's last cell has Wrapped set.
@@ -1187,29 +1254,8 @@ func (v *VTerm) rejoinCursorWrapChain() {
 	}
 	absCol += v.cursorX
 
-	// Combine all cells into one logical line.
-	combined := make([]Cell, 0)
-	for i := chainStart; i <= chainEnd; i++ {
-		line := mb.GetLine(i)
-		if line != nil {
-			combined = append(combined, line.Cells...)
-		}
-	}
-	// Clear Wrapped flag on the last cell of the combined line.
-	if len(combined) > 0 {
-		combined[len(combined)-1].Wrapped = false
-	}
-
-	// Set the combined cells on the first line of the chain.
-	firstLine := mb.GetLine(chainStart)
-	if firstLine != nil {
-		firstLine.Cells = combined
-	}
-
-	// Delete the extra lines (from chain end down to chain start + 1).
-	for i := chainEnd; i > chainStart; i-- {
-		mb.DeleteLine(i)
-	}
+	// Combine all chain lines into one and delete extras.
+	combineAndCollapseChain(mb, chainStart, chainEnd)
 
 	// Adjust cursor position.
 	rowsRemoved := int(cursorGlobal - chainStart)
@@ -1245,44 +1291,15 @@ func (v *VTerm) rejoinPreCursorWrapChain() {
 
 	// Walk backward from prevLine to find the chain start.
 	chainEnd := cursorGlobal - 1
-	chainStart := chainEnd
-	for chainStart > globalOffset {
-		prev := mb.GetLine(chainStart - 1)
-		if prev == nil || prev.Synthetic || prev.Overlay != nil || prev.FixedWidth > 0 {
-			break
-		}
-		if len(prev.Cells) == 0 || !prev.Cells[len(prev.Cells)-1].Wrapped {
-			break
-		}
-		chainStart--
-	}
+	chainStart := findChainStart(mb, chainEnd, globalOffset)
 
 	preChainLen := int(chainEnd - chainStart + 1)
 	if preChainLen <= 1 {
 		return // No multi-line chain before cursor
 	}
 
-	// Combine all chain cells into one line.
-	combined := make([]Cell, 0)
-	for i := chainStart; i <= chainEnd; i++ {
-		line := mb.GetLine(i)
-		if line != nil {
-			combined = append(combined, line.Cells...)
-		}
-	}
-	if len(combined) > 0 {
-		combined[len(combined)-1].Wrapped = false
-	}
-
-	firstLine := mb.GetLine(chainStart)
-	if firstLine != nil {
-		firstLine.Cells = combined
-	}
-
-	// Delete the extra lines.
-	for i := chainEnd; i > chainStart; i-- {
-		mb.DeleteLine(i)
-	}
+	// Combine all chain lines into one and delete extras.
+	combineAndCollapseChain(mb, chainStart, chainEnd)
 
 	// Shift cursor up by the number of deleted lines. The cursor stays on
 	// its own line (which shifted up), NOT on the combined chain line.
@@ -1318,10 +1335,15 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	// BuildRange may rejoin these chains, changing the physical line count
 	// without cursorY being adjusted. By rejoining first, we start each
 	// resize from a clean state: one logical line per original content line.
+	//
+	// ORDERING: rejoinCursorWrapChain mutates the MemoryBuffer via
+	// DeleteLine/InsertLine and must run before viewport.Resize (below)
+	// which rebuilds the PhysicalLineIndex from the buffer's contents.
 	v.rejoinCursorWrapChain()
 
 	// Calculate cursor's global line before resize
 	cursorGlobalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	v.assertCursorConsistency("entry", cursorGlobalLine)
 
 	v.logMemBufDebug("[RESIZE] Before: width=%d->%d, height=%d->%d, liveEdgeBase=%d, cursorY=%d, cursorGlobal=%d, GlobalEnd=%d",
 		oldWidth, width, oldHeight, height,
@@ -1381,17 +1403,7 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	// remains correct after SetCursorPos clamps cursorY to [0, height-1].
 	// Without this, the clamping silently moves the cursor backward by
 	// (cursorY - height + 1) logical lines, causing drift.
-	if v.cursorY >= height {
-		newLiveEdgeBase := cursorGlobalLine - int64(height-1)
-		if newLiveEdgeBase < mb.GlobalOffset() {
-			newLiveEdgeBase = mb.GlobalOffset()
-		}
-		v.memBufState.liveEdgeBase = newLiveEdgeBase
-		v.cursorY = int(cursorGlobalLine - newLiveEdgeBase)
-
-		v.logMemBufDebug("[RESIZE] Width split overflow: adjusted liveEdgeBase=%d, cursorY=%d",
-			v.memBufState.liveEdgeBase, v.cursorY)
-	}
+	v.clampCursorToHeight(cursorGlobalLine, height, "Width split overflow")
 
 	// Update viewport dimensions
 	mb.SetTermWidth(width)
@@ -1403,23 +1415,8 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 		globalOffset := mb.GlobalOffset()
 
 		if height < oldHeight {
-			// Shrinking: Adjust liveEdgeBase so cursor stays visible
-			// The cursor row must be < height
-			if v.cursorY >= height {
-				// Cursor would be off screen - adjust liveEdgeBase to keep cursor visible
-				// New cursor row will be height-1 (bottom of screen)
-				// liveEdgeBase = cursorGlobalLine - (height - 1)
-				newLiveEdgeBase := cursorGlobalLine - int64(height-1)
-				if newLiveEdgeBase < globalOffset {
-					newLiveEdgeBase = globalOffset
-				}
-				v.memBufState.liveEdgeBase = newLiveEdgeBase
-				v.cursorY = int(cursorGlobalLine - newLiveEdgeBase)
-
-				v.logMemBufDebug("[RESIZE] Shrink: cursor off-screen, adjusted liveEdgeBase=%d, cursorY=%d",
-					v.memBufState.liveEdgeBase, v.cursorY)
-			}
-			// If cursor is still on screen after shrink (cursorY < height), no adjustment needed
+			// Shrinking: Adjust liveEdgeBase so cursor stays visible.
+			v.clampCursorToHeight(cursorGlobalLine, height, "Shrink cursor off-screen")
 		} else {
 			// Growing: Show more scrollback above if available
 			// We want to show more history while keeping the cursor at the same relative position
@@ -1477,6 +1474,8 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 
 	v.logMemBufDebug("[RESIZE] After: liveEdgeBase=%d, cursorY=%d, height=%d",
 		v.memBufState.liveEdgeBase, v.cursorY, height)
+
+	v.assertCursorConsistency("exit", v.memBufState.liveEdgeBase+int64(v.cursorY))
 
 	// Notify fixed-width detector (Phase 5)
 	if v.memBufState.fixedDetector != nil {

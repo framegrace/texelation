@@ -125,6 +125,31 @@ func (b *PhysicalLineBuilder) BuildRange(lines []*LogicalLine, startGlobalIdx in
 	return result
 }
 
+// BuildRangeExtended builds physical lines for [startGlobal, endGlobal) and
+// extends the range backward if fewer than minLines physical lines are
+// produced (e.g., when hidden synthetic lines reduce the count). Returns the
+// adjusted start global index and the resulting physical lines.
+func (b *PhysicalLineBuilder) BuildRangeExtended(
+	reader ContentReader, startGlobal, endGlobal int64, minLines int,
+) (int64, []PhysicalLine) {
+	lines := reader.GetLineRange(startGlobal, endGlobal)
+	physical := b.BuildRange(lines, startGlobal)
+
+	minGlobal := reader.GlobalOffset()
+	for len(physical) < minLines && startGlobal > minGlobal {
+		deficit := int64(minLines - len(physical))
+		newStart := max(startGlobal-deficit, minGlobal)
+		if newStart == startGlobal {
+			break
+		}
+		startGlobal = newStart
+		lines = reader.GetLineRange(startGlobal, endGlobal)
+		physical = b.BuildRange(lines, startGlobal)
+	}
+
+	return startGlobal, physical
+}
+
 // SetWidth updates the display width for future builds.
 func (b *PhysicalLineBuilder) SetWidth(width int) {
 	if width <= 0 {
