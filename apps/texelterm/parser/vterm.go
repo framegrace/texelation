@@ -1302,7 +1302,18 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	v.commitInsertOffset++
 	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
 	if beforeIdx <= cursorGlobal {
-		v.memBufState.liveEdgeBase++
+		// The insert shifted the cursor's content down by 1 physical row.
+		// Adjust cursorY to follow it. When the viewport isn't full (early
+		// in a session), adjusting liveEdgeBase instead would create a
+		// disconnect between the cursor's screen row and the viewport's
+		// grid layout — the viewport starts at GlobalOffset (not
+		// liveEdgeBase) when content fits within the viewport height.
+		if v.cursorY < v.marginBottom {
+			v.cursorY++
+		} else {
+			// Cursor already at the bottom — scroll the viewport.
+			v.memBufState.liveEdgeBase++
+		}
 	}
 	// Insertion shifts all subsequent rows — invalidate viewport cache and
 	// mark all rows dirty so the renderer repaints the affected content.

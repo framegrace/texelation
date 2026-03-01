@@ -4109,6 +4109,75 @@ func TestRequestLineOverlay_MarksDirtyAndInvalidatesCache(t *testing.T) {
 	}
 }
 
+// TestRequestLineInsert_CursorPositionNotFullViewport verifies that after
+// inserting lines before the cursor in a not-full viewport, the cursor
+// position matches the content in the grid. This is the "first command after
+// fresh start" scenario where the viewport has fewer lines than its height.
+func TestRequestLineInsert_CursorPositionNotFullViewport(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 40, 24
+
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write a few lines (viewport NOT full — only 6 lines in 24-row viewport)
+	parseString(p, "line 0\r\n")
+	parseString(p, "line 1\r\n")
+	parseString(p, "line 2\r\n")
+	parseString(p, "line 3\r\n")
+	parseString(p, "line 4\r\n")
+	parseString(p, "prompt$ ") // No \n — cursor is on this line
+
+	cursorYBefore := v.cursorY
+	liveEdgeBefore := v.memBufState.liveEdgeBase
+	cursorGlobalBefore := liveEdgeBefore + int64(cursorYBefore)
+
+	// Grid should show "prompt$" at cursorY
+	gridBefore := v.Grid()
+	rowAtCursor := cellsToString(gridBefore[cursorYBefore])
+	if !strings.Contains(rowAtCursor, "prompt$") {
+		t.Fatalf("Before insert: row at cursorY=%d should contain prompt, got %q", cursorYBefore, rowAtCursor)
+	}
+
+	// Insert 2 synthetic lines before the cursor (simulating table border inserts)
+	mb := v.memBufState.memBuf
+	insertAt := mb.GlobalOffset() + 3 // Insert after "line 2"
+	for i := range 2 {
+		cells := makeCells(fmt.Sprintf("--- border %d ---", i))
+		v.RequestLineInsert(insertAt+int64(i), cells)
+	}
+
+	// After insert: cursor should still be on the prompt content
+	cursorYAfter := v.cursorY
+	liveEdgeAfter := v.memBufState.liveEdgeBase
+	cursorGlobalAfter := liveEdgeAfter + int64(cursorYAfter)
+
+	// The cursor's global line should have shifted by 2 (the inserts were before it)
+	if cursorGlobalAfter != cursorGlobalBefore+2 {
+		t.Errorf("Cursor global should shift by 2: before=%d, after=%d (liveEdge=%d, cursorY=%d)",
+			cursorGlobalBefore, cursorGlobalAfter, liveEdgeAfter, cursorYAfter)
+	}
+
+	// The critical check: the grid row at cursorY should show the prompt content
+	gridAfter := v.Grid()
+	rowAtCursorAfter := cellsToString(gridAfter[cursorYAfter])
+	if !strings.Contains(rowAtCursorAfter, "prompt$") {
+		t.Errorf("After insert: grid row at cursorY=%d should contain prompt, got %q", cursorYAfter, rowAtCursorAfter)
+		t.Log("Full grid after insert:")
+		for y := range height {
+			row := cellsToString(gridAfter[y])
+			marker := "  "
+			if y == cursorYAfter {
+				marker = ">>"
+			}
+			if strings.TrimRight(row, " ") != "" {
+				t.Logf("  %s [%2d] %q", marker, y, row)
+			}
+		}
+	}
+}
+
 // TestRequestLineInsert_MarksDirtyAndInvalidatesCache verifies that
 // RequestLineInsert marks all lines dirty and invalidates the viewport cache.
 func TestRequestLineInsert_MarksDirtyAndInvalidatesCache(t *testing.T) {
