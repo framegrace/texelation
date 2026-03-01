@@ -4308,6 +4308,166 @@ func TestPromptPositionOnReload(t *testing.T) {
 	}
 }
 
+// TestPromptPositionAfterTransformerInsert verifies that PromptStartGlobalLine
+// is adjusted when RequestLineInsert inserts synthetic lines before the prompt.
+// Without this fix, the saved prompt position becomes stale and reload erases
+// the wrong lines (including the first line of a multi-line prompt).
+func TestPromptPositionAfterTransformerInsert(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	diskPath := filepath.Join(tmpDir, "test_transformer_prompt.hist3")
+	terminalID := "test-transformer-prompt"
+
+	width, height := 80, 24
+
+	// Session 1: Write output, have transformer insert lines, mark prompt, close
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("Session 1: EnableMemoryBufferWithDisk failed: %v", err)
+		}
+
+		p := NewParser(v)
+
+		// Write some output lines (simulates command output)
+		for i := 0; i < 5; i++ {
+			parseString(p, fmt.Sprintf("output line %d", i))
+			p.Parse('\n')
+			p.Parse('\r')
+		}
+
+		// Mark prompt start (simulates OSC 133;A)
+		v.MarkPromptStart()
+		promptBefore := v.PromptStartGlobalLine
+
+		// Now simulate transformer inserting 3 synthetic lines BEFORE the prompt.
+		// This is what happens when a table transformer flushes its rendered output
+		// during the OnLineCommit callback for the first prompt line.
+		for i := 0; i < 3; i++ {
+			cells := []Cell{{Rune: 'T'}}
+			v.RequestLineInsert(promptBefore+int64(i), cells)
+		}
+
+		promptAfter := v.PromptStartGlobalLine
+
+		// PromptStartGlobalLine should have been shifted by 3
+		if promptAfter != promptBefore+3 {
+			t.Errorf("PromptStartGlobalLine not adjusted: before=%d, after=%d, want %d",
+				promptBefore, promptAfter, promptBefore+3)
+		}
+
+		// Write a 2-line prompt
+		parseString(p, "prompt-line-1")
+		p.Parse('\n')
+		p.Parse('\r')
+		parseString(p, "prompt-line-2 $ ")
+
+		if err := v.CloseMemoryBuffer(); err != nil {
+			t.Fatalf("Session 1: CloseMemoryBuffer failed: %v", err)
+		}
+	}
+
+	// Session 2: Reopen and verify prompt positioning preserves both prompt lines
+	{
+		v := NewVTerm(width, height, WithMemoryBuffer())
+		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+			MaxLines:   50000,
+			TerminalID: terminalID,
+		})
+		if err != nil {
+			t.Fatalf("Session 2: EnableMemoryBufferWithDisk failed: %v", err)
+		}
+		defer v.CloseMemoryBuffer()
+
+		// The prompt was at row 8 (5 output + 3 synthetic).
+		// Cursor should be positioned there, NOT at the stale row 5.
+		expectedPromptRow := 8 // 5 output lines + 3 synthetic lines
+		if v.cursorY != expectedPromptRow {
+			t.Errorf("cursor row: got %d, want %d (prompt should be after synthetic lines)",
+				v.cursorY, expectedPromptRow)
+		}
+
+		// The grid should still have both prompt lines visible above the cursor.
+		// The erase-from-prompt-down happens at promptRow, so lines before that survive.
+		mb := v.memBufState.memBuf
+		promptGlobal := v.memBufState.liveEdgeBase + int64(expectedPromptRow)
+
+		// Lines BEFORE the prompt (output + synthetic) should still have content
+		for i := int64(0); i < int64(expectedPromptRow); i++ {
+			lineIdx := v.memBufState.liveEdgeBase + i
+			line := mb.GetLine(lineIdx)
+			if line == nil {
+				t.Errorf("line %d (global %d) is nil, expected content", i, lineIdx)
+				continue
+			}
+			if !lineHasContent(line) {
+				t.Errorf("line %d (global %d) has no content, expected output or synthetic", i, lineIdx)
+			}
+		}
+
+		// The prompt line itself should have been erased (ready for new shell prompt)
+		promptLine := mb.GetLine(promptGlobal)
+		if promptLine != nil && lineHasContent(promptLine) {
+			t.Logf("prompt line (global %d) still has content (expected erased): %v",
+				promptGlobal, promptLine.Cells)
+		}
+	}
+}
+
+// TestLineHasContent_SyntheticAndOverlay verifies that lineHasContent recognizes
+// synthetic lines and overlay content as non-empty.
+func TestLineHasContent_SyntheticAndOverlay(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     LogicalLine
+		expected bool
+	}{
+		{
+			name:     "empty line",
+			line:     LogicalLine{},
+			expected: false,
+		},
+		{
+			name:     "spaces only",
+			line:     LogicalLine{Cells: []Cell{{Rune: ' '}, {Rune: ' '}}},
+			expected: false,
+		},
+		{
+			name:     "text content",
+			line:     LogicalLine{Cells: []Cell{{Rune: 'a'}}},
+			expected: true,
+		},
+		{
+			name:     "synthetic flag",
+			line:     LogicalLine{Synthetic: true},
+			expected: true,
+		},
+		{
+			name:     "overlay content",
+			line:     LogicalLine{Overlay: []Cell{{Rune: 'T'}}},
+			expected: true,
+		},
+		{
+			name:     "non-default colors",
+			line:     LogicalLine{Cells: []Cell{{Rune: ' ', FG: Color{Mode: ColorMode256, Value: 1}}}},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := lineHasContent(&tt.line)
+			if got != tt.expected {
+				t.Errorf("lineHasContent() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
 // TestOSC7_WorkingDirectory tests that OSC 7 parsing sets the working directory.
 func TestOSC7_WorkingDirectory(t *testing.T) {
 	v := NewVTerm(80, 24, WithMemoryBuffer())
@@ -4720,5 +4880,363 @@ func TestResize_WidthDecreaseIncreaseWrapChainDesync(t *testing.T) {
 		}
 		t.Errorf("CURSOR DESYNC: after width increase, grid[cursorY=%d] should contain prompt, got %q",
 			v.cursorY, row2)
+	}
+}
+
+// TestResize_WithShellRedrawBetweenResizes simulates the real-world scenario:
+// the shell receives SIGWINCH after each resize and redraws the prompt.
+// Between resize events, the shell sends \r (carriage return) followed by
+// the prompt text, which may wrap at the current width. This creates natural
+// wrap chains that interact with the next resize.
+func TestResize_WithShellRedrawBetweenResizes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 80, 23
+
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	prompt := "marc@host:~/projects$ "
+	parseString(p, prompt) // initial prompt
+
+	// Simulate spring animation with shell redraws after each SIGWINCH.
+	// This is what actually happens: resize → shell gets SIGWINCH → shell redraws.
+	widths := []int{60, 40, 30, 20, 15, 20, 30, 40}
+	for _, w := range widths {
+		v.Resize(w, height)
+
+		// Simulate shell redraw: \r (go to column 0) then rewrite prompt
+		parseString(p, "\r"+prompt)
+
+		grid := v.Grid()
+		cy := v.cursorY
+		cx := v.cursorX
+		if cy < 0 || cy >= height {
+			t.Fatalf("width=%d: cursorY=%d out of bounds [0,%d)", w, cy, height)
+		}
+
+		row := cellsToString(grid[cy])
+		// Cursor should be on a row with the end of the prompt
+		hasPromptContent := strings.Contains(row, "$") ||
+			strings.Contains(row, "marc") ||
+			strings.Contains(row, "projects")
+		if !hasPromptContent && cy > 0 {
+			prevRow := cellsToString(grid[cy-1])
+			hasPromptContent = strings.Contains(prevRow, "$")
+		}
+
+		if !hasPromptContent {
+			t.Logf("DESYNC at width=%d: cursorY=%d, cursorX=%d", w, cy, cx)
+			t.Logf("Grid:")
+			for y := range height {
+				s := cellsToString(grid[y])
+				if strings.TrimRight(s, " \x00") != "" {
+					marker := "  "
+					if y == cy {
+						marker = ">>"
+					}
+					t.Logf("  %s [%2d] %q", marker, y, s)
+				}
+			}
+			t.Fatalf("width=%d: grid[cursorY=%d] has no prompt content: %q", w, cy, row)
+		}
+	}
+}
+
+// TestResize_HeightChangeCursorDesync tests cursor sync when height changes
+// (simulating vsplit or pane arrangement changes).
+func TestResize_HeightChangeCursorDesync(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 40, 24
+
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	prompt := "marc@host:~$ "
+	parseString(p, prompt)
+
+	// Verify initial state
+	grid0 := v.Grid()
+	if !strings.Contains(cellsToString(grid0[v.cursorY]), "marc@host") {
+		t.Fatalf("Initial: grid[cursorY=%d] should contain prompt", v.cursorY)
+	}
+
+	// Height decrease then increase
+	v.Resize(width, 12)
+	grid1 := v.Grid()
+	row1 := cellsToString(grid1[v.cursorY])
+	if !strings.Contains(row1, "marc@host") {
+		t.Logf("After height 24→12: cursorY=%d, row=%q", v.cursorY, row1)
+		t.Errorf("DESYNC: grid[cursorY=%d] should contain prompt after height decrease", v.cursorY)
+	}
+
+	v.Resize(width, 24)
+	grid2 := v.Grid()
+	row2 := cellsToString(grid2[v.cursorY])
+	if !strings.Contains(row2, "marc@host") {
+		t.Logf("After height 12→24: cursorY=%d, row=%q", v.cursorY, row2)
+		t.Errorf("DESYNC: grid[cursorY=%d] should contain prompt after height increase", v.cursorY)
+	}
+}
+
+// TestResize_CursorPastWrapChain_PhysicalCursor tests that PhysicalCursor
+// returns the correct grid position when the cursor is past a wrap chain
+// created by a resize split. When absoluteCol % width == 0, the split puts
+// the cursor on the line AFTER the chain. BuildRange joins the chain,
+// changing the physical row count. PhysicalCursor must account for this.
+func TestResize_CursorPastWrapChain_PhysicalCursor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write a prompt that's 15 chars (exact multiple of 3 and 5)
+	prompt := "user@host:~$ X"
+	parseString(p, prompt) // 14 chars, cursor at col 14
+	parseString(p, " ")    // 1 more char, cursor at col 15
+
+	// Verify initial state
+	grid0 := v.Grid()
+	cx0, cy0 := v.PhysicalCursor()
+	row0 := cellsToString(grid0[cy0])
+	if !strings.Contains(row0, "user@host") {
+		t.Fatalf("Initial: grid[cursorY=%d] should contain prompt, got %q", cy0, row0)
+	}
+	if cx0 != 15 || cy0 != 0 {
+		t.Fatalf("Initial: expected cursor (15,0), got (%d,%d)", cx0, cy0)
+	}
+
+	// Resize to width=3. absoluteCol=15, 15%3=0 → cursor lands past chain.
+	v.Resize(3, height)
+	grid1 := v.Grid()
+	cx1, cy1 := v.PhysicalCursor()
+	t.Logf("After 80→3: PhysicalCursor=(%d,%d), cursorX=%d cursorY=%d", cx1, cy1, v.cursorX, v.cursorY)
+
+	// Cursor should be on an empty row right after the visible prompt content
+	if cy1 < 0 || cy1 >= len(grid1) {
+		t.Fatalf("After 80→3: cursor row %d out of bounds [0,%d)", cy1, len(grid1))
+	}
+
+	// Resize back to width=80. This is where the bug manifests:
+	// Without the fix, cursorY=5 stays unchanged because rejoin can't find
+	// the chain. PhysicalCursor would return row 5 when it should be row 1.
+	v.Resize(width, height)
+	grid2 := v.Grid()
+	cx2, cy2 := v.PhysicalCursor()
+	t.Logf("After 3→80: PhysicalCursor=(%d,%d), cursorX=%d cursorY=%d", cx2, cy2, v.cursorX, v.cursorY)
+
+	if cy2 < 0 || cy2 >= len(grid2) {
+		t.Fatalf("After 3→80: cursor row %d out of bounds [0,%d)", cy2, len(grid2))
+	}
+
+	// The prompt should be at row 0 after returning to width 80
+	promptRow := cellsToString(grid2[0])
+	if !strings.Contains(promptRow, "user@host") {
+		t.Errorf("After 3→80: grid[0] should contain prompt, got %q", promptRow)
+	}
+
+	// The cursor should be at the first empty row after the prompt (row 1)
+	// or on the prompt row itself. It must NOT be at row 5 or higher.
+	if cy2 > 1 {
+		t.Errorf("After 3→80: PhysicalCursor row=%d is too far down (expected 0 or 1), grid[%d]=%q",
+			cy2, cy2, cellsToString(grid2[cy2]))
+	}
+
+	// The cursor row should be empty or contain the cursor position
+	cursorRowContent := cellsToString(grid2[cy2])
+	t.Logf("Cursor at (%d,%d), row content: %q", cx2, cy2, cursorRowContent)
+}
+
+// TestResize_SpringAnimation_PhysicalCursorSync tests that PhysicalCursor
+// stays synchronized through a spring animation resize sequence (rapid
+// width shrink then grow) with intermediate widths where absoluteCol % width == 0.
+func TestResize_SpringAnimation_PhysicalCursorSync(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	prompt := "marc@host:~/projects$ "
+	parseString(p, prompt)
+
+	// Simulate spring animation: rapid shrink then recover
+	widths := []int{60, 40, 20, 10, 5, 3, 5, 10, 20, 40, 60, 80}
+	for _, w := range widths {
+		v.Resize(w, height)
+		grid := v.Grid()
+		cx, cy := v.PhysicalCursor()
+
+		if cy < 0 || cy >= len(grid) {
+			t.Fatalf("Width=%d: PhysicalCursor row=%d out of bounds [0,%d)", w, cy, len(grid))
+		}
+
+		// The cursor must always be on a row that's empty or contains the prompt end
+		cursorRow := cellsToString(grid[cy])
+		// Check the cursor row and the row before it (cursor might be one past the prompt)
+		hasPromptNearCursor := strings.Contains(cursorRow, "$") || strings.TrimSpace(cursorRow) == ""
+		if cy > 0 {
+			prevRow := cellsToString(grid[cy-1])
+			hasPromptNearCursor = hasPromptNearCursor || strings.Contains(prevRow, "$")
+		}
+
+		if !hasPromptNearCursor {
+			t.Errorf("Width=%d: PhysicalCursor=(%d,%d), cursor row has unexpected content: %q",
+				w, cx, cy, cursorRow)
+			// Dump a few rows for context
+			for y := max(0, cy-2); y <= min(cy+2, len(grid)-1); y++ {
+				marker := "  "
+				if y == cy {
+					marker = ">>"
+				}
+				t.Logf("  %s grid[%d]: %q", marker, y, cellsToString(grid[y]))
+			}
+		}
+	}
+}
+
+// TestResize_DirtyTrackingAfterWrapChain verifies that characters written
+// after a resize that creates wrap chains are visible in the render buffer.
+// This simulates the actual render flow: only dirty rows are re-rendered.
+// The bug: MarkDirty(cursorY) uses the logical offset, but the content
+// appears at a different physical grid row. The physical row must also be
+// marked dirty for the content to be visible.
+func TestResize_DirtyTrackingAfterWrapChain(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	prompt := "user@host:~$ "
+	parseString(p, prompt) // cursor at col 13
+
+	// Initial render: capture the full grid
+	renderBuf := make([][]Cell, height)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, width)
+	}
+	simulateRender := func() {
+		grid := v.Grid()
+		_, physCursorY := v.PhysicalCursor()
+		dirtyLines, allDirty := v.DirtyLines()
+
+		// Mirror the fix from term.go: always include the physical cursor row
+		if !allDirty && physCursorY >= 0 && physCursorY < height {
+			dirtyLines[physCursorY] = true
+		}
+
+		if allDirty {
+			for y := 0; y < height && y < len(grid); y++ {
+				copy(renderBuf[y], grid[y])
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < height && y < len(grid) {
+					copy(renderBuf[y], grid[y])
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+
+	// Initial render
+	simulateRender()
+
+	// Resize to width=3 (creates wrap chain, cursor past chain)
+	v.Resize(3, height)
+	simulateRender()
+
+	// Resize back to width=80
+	v.Resize(width, height)
+	simulateRender()
+
+	// Now type a character. This is the critical test: the character
+	// must appear in the render buffer at the physical cursor position.
+	parseString(p, "X")
+	simulateRender()
+
+	// Find "X" in the render buffer
+	foundX := false
+	for y := 0; y < height; y++ {
+		row := cellsToString(renderBuf[y])
+		if strings.Contains(row, "X") {
+			foundX = true
+			t.Logf("Found 'X' at render row %d: %q", y, row)
+			break
+		}
+	}
+	if !foundX {
+		t.Errorf("INVISIBLE ECHO: character 'X' not found in render buffer after resize")
+		// Dump render buffer and grid for comparison
+		grid := v.Grid()
+		for y := 0; y < height; y++ {
+			rStr := cellsToString(renderBuf[y])
+			gStr := cellsToString(grid[y])
+			if strings.TrimSpace(rStr) != "" || strings.TrimSpace(gStr) != "" {
+				match := "✓"
+				if rStr != gStr {
+					match = "✗"
+				}
+				t.Logf("  %s row[%d] render=%q grid=%q", match, y, rStr, gStr)
+			}
+		}
+	}
+
+	// Also verify with the WITHOUT-fix path: using raw cursorY for dirty
+	// (this should fail if wrap chains cause logical != physical offset)
+	renderBufNoFix := make([][]Cell, height)
+	for y := range renderBufNoFix {
+		renderBufNoFix[y] = make([]Cell, width)
+	}
+
+	// Reset: resize again to create the problematic state
+	v.Resize(3, height)
+	// Full render to establish baseline
+	grid := v.Grid()
+	for y := 0; y < height && y < len(grid); y++ {
+		copy(renderBufNoFix[y], grid[y])
+	}
+	v.ClearDirty()
+
+	v.Resize(width, height)
+	grid = v.Grid()
+	for y := 0; y < height && y < len(grid); y++ {
+		copy(renderBufNoFix[y], grid[y])
+	}
+	v.ClearDirty()
+
+	// Type a character, render WITHOUT the physical cursor row fix
+	parseString(p, "Y")
+	grid = v.Grid()
+	dirtyLines, allDirty := v.DirtyLines()
+	if allDirty {
+		for y := 0; y < height && y < len(grid); y++ {
+			copy(renderBufNoFix[y], grid[y])
+		}
+	} else {
+		// Raw dirty tracking only (no physical cursor row addition)
+		for y := range dirtyLines {
+			if y >= 0 && y < height && y < len(grid) {
+				copy(renderBufNoFix[y], grid[y])
+			}
+		}
+	}
+
+	// Check if 'Y' is visible without the fix
+	foundY := false
+	for y := 0; y < height; y++ {
+		if strings.Contains(cellsToString(renderBufNoFix[y]), "Y") {
+			foundY = true
+			break
+		}
+	}
+	// Log the comparison (this documents the issue, not a hard failure)
+	if !foundY {
+		t.Logf("NOTE: Without physical cursor row fix, 'Y' is invisible in render buffer (expected)")
+	} else {
+		t.Logf("NOTE: Without physical cursor row fix, 'Y' is still visible (no wrap chain divergence in this path)")
 	}
 }

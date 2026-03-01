@@ -1315,6 +1315,12 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 			v.memBufState.liveEdgeBase++
 		}
 	}
+	// Keep PromptStartGlobalLine pointing at the actual prompt line.
+	// Transformer inserts shift content down; without this adjustment
+	// the saved prompt position becomes stale and reload erases wrong lines.
+	if v.PromptStartGlobalLine >= 0 && beforeIdx <= v.PromptStartGlobalLine {
+		v.PromptStartGlobalLine++
+	}
 	// Insertion shifts all subsequent rows — invalidate viewport cache and
 	// mark all rows dirty so the renderer repaints the affected content.
 	v.memBufState.viewport.InvalidateCache()
@@ -1448,15 +1454,37 @@ func (v *VTerm) Cursor() (int, int)  { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool { return v.cursorVisible }
 
 // PhysicalCursor returns the cursor position mapped to the physical grid.
-// In memory buffer mode, cursorX can exceed the terminal width after a width
-// decrease (the logical line holds content wider than the screen). This method
-// converts that absolute column to a (col, row) pair in the wrapped grid.
-// On alt screen or when cursorX < width, it returns the raw position.
+// In memory buffer mode, wrap chains created by resize splits change the
+// mapping between logical lines and physical rows. This method uses the
+// viewport's coordinate mapper to find the correct grid position, matching
+// the layout produced by Grid()/VisibleGrid().
+// On alt screen, it falls back to simple arithmetic wrapping.
 func (v *VTerm) PhysicalCursor() (physX, physY int) {
-	if v.inAltScreen || v.width <= 0 || v.cursorX < v.width {
+	if v.inAltScreen || v.width <= 0 {
+		if v.cursorX < v.width {
+			return v.cursorX, v.cursorY
+		}
+		physY = v.cursorY + v.cursorX/v.width
+		physX = v.cursorX % v.width
+		return physX, physY
+	}
+
+	// In memory buffer mode, use ContentToViewport for accurate mapping.
+	// This handles wrap chain joining by BuildRange which can change the
+	// physical row count relative to cursorY (a logical line offset).
+	if v.IsMemoryBufferEnabled() {
+		globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
+		row, col, visible := v.memBufState.viewport.ContentToViewport(globalLine, v.cursorX)
+		if visible {
+			return col, row
+		}
+		// Cursor not visible (scrolled away) — fall through to simple mapping
+	}
+
+	// Simple wrapping for non-memory-buffer mode or fallback
+	if v.cursorX < v.width {
 		return v.cursorX, v.cursorY
 	}
-	// Cursor column exceeds terminal width → compute wrapped position.
 	physY = v.cursorY + v.cursorX/v.width
 	physX = v.cursorX % v.width
 	return physX, physY

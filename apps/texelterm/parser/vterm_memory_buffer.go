@@ -498,8 +498,11 @@ func (v *VTerm) trimBlankTailLines() {
 }
 
 // lineHasContent returns true if the line has at least one cell with
-// a non-space rune or non-default colors.
+// a non-space rune or non-default colors, or if it carries overlay/synthetic content.
 func lineHasContent(line *LogicalLine) bool {
+	if line.Synthetic || len(line.Overlay) > 0 {
+		return true
+	}
 	for _, c := range line.Cells {
 		if c.Rune != ' ' && c.Rune != 0 {
 			return true
@@ -1167,7 +1170,11 @@ func (v *VTerm) rejoinCursorWrapChain() {
 
 	chainLen := int(chainEnd - chainStart + 1)
 	if chainLen <= 1 {
-		return // No chain to rejoin
+		// Cursor is not in a multi-line chain. Check if there's a chain
+		// immediately before the cursor. This happens when a previous resize
+		// split put the cursor past the chain end (absoluteCol % width == 0).
+		v.rejoinPreCursorWrapChain()
+		return
 	}
 
 	// Compute absolute cursor column within the chain.
@@ -1211,6 +1218,81 @@ func (v *VTerm) rejoinCursorWrapChain() {
 
 	v.logMemBufDebug("[RESIZE] Rejoin wrap chain: chainStart=%d, chainEnd=%d, chainLen=%d, absCol=%d, cursorY=%d",
 		chainStart, chainEnd, chainLen, absCol, v.cursorY)
+}
+
+// rejoinPreCursorWrapChain handles the case where the cursor is immediately
+// past a wrap chain (not inside it). This occurs when a resize split puts
+// cursorX at 0 on the line after the chain (absoluteCol % width == 0).
+// It finds the chain, combines it into one line, deletes the extras, and
+// moves the cursor onto the combined line at the end of the content.
+func (v *VTerm) rejoinPreCursorWrapChain() {
+	mb := v.memBufState.memBuf
+	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	globalOffset := mb.GlobalOffset()
+
+	if cursorGlobal <= globalOffset {
+		return
+	}
+
+	// The line before the cursor must be the END of a chain (NOT Wrapped).
+	prevLine := mb.GetLine(cursorGlobal - 1)
+	if prevLine == nil || prevLine.Synthetic || prevLine.Overlay != nil || prevLine.FixedWidth > 0 {
+		return
+	}
+	if len(prevLine.Cells) > 0 && prevLine.Cells[len(prevLine.Cells)-1].Wrapped {
+		return // Still a chain middle — the main rejoin should have caught this.
+	}
+
+	// Walk backward from prevLine to find the chain start.
+	chainEnd := cursorGlobal - 1
+	chainStart := chainEnd
+	for chainStart > globalOffset {
+		prev := mb.GetLine(chainStart - 1)
+		if prev == nil || prev.Synthetic || prev.Overlay != nil || prev.FixedWidth > 0 {
+			break
+		}
+		if len(prev.Cells) == 0 || !prev.Cells[len(prev.Cells)-1].Wrapped {
+			break
+		}
+		chainStart--
+	}
+
+	preChainLen := int(chainEnd - chainStart + 1)
+	if preChainLen <= 1 {
+		return // No multi-line chain before cursor
+	}
+
+	// Combine all chain cells into one line.
+	combined := make([]Cell, 0)
+	for i := chainStart; i <= chainEnd; i++ {
+		line := mb.GetLine(i)
+		if line != nil {
+			combined = append(combined, line.Cells...)
+		}
+	}
+	if len(combined) > 0 {
+		combined[len(combined)-1].Wrapped = false
+	}
+
+	firstLine := mb.GetLine(chainStart)
+	if firstLine != nil {
+		firstLine.Cells = combined
+	}
+
+	// Delete the extra lines.
+	for i := chainEnd; i > chainStart; i-- {
+		mb.DeleteLine(i)
+	}
+
+	// Move cursor onto the combined line at the end of the content.
+	// This restores the cursor's absolute position (absoluteCol = len(combined))
+	// so that subsequent splits can re-split correctly at the new width.
+	linesRemoved := preChainLen - 1
+	v.cursorY -= linesRemoved + 1 // Point to the combined line
+	v.cursorX = len(combined)
+
+	v.logMemBufDebug("[RESIZE] Rejoin pre-cursor chain: chainStart=%d, chainEnd=%d, len=%d, absCol=%d, cursorY=%d",
+		chainStart, chainEnd, preChainLen, v.cursorX, v.cursorY)
 }
 
 // memoryBufferResize handles terminal resize.

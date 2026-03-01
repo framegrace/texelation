@@ -577,6 +577,14 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.DirtyLines()
 
+	// Ensure the physical cursor row is always re-rendered. MarkDirty uses
+	// the logical cursorY (offset from liveEdgeBase) which may differ from
+	// the physical grid row when wrap chains change the line-to-row mapping.
+	// Without this, typed characters at the cursor position stay invisible.
+	if !allDirty && cursorVisible && cursorY >= 0 && cursorY < termRows {
+		dirtyLines[cursorY] = true
+	}
+
 	a.logRenderDebug(vtermGrid, cursorX, cursorY, dirtyLines, allDirty)
 
 	renderLine := func(y int) {
