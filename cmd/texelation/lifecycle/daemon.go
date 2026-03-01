@@ -43,13 +43,12 @@ func (s DaemonState) String() string {
 
 // ServerOptions configures server daemon startup
 type ServerOptions struct {
-	SocketPath    string
-	SnapshotPath  string
-	FromScratch   bool
-	DefaultApp    string
-	VerboseLogs   bool
-	LogFilePath   string // Daemon stdout/stderr destination
-	Title         string
+	SocketPath   string
+	SnapshotPath string
+	DefaultApp   string
+	VerboseLogs  bool
+	LogFilePath  string // Daemon stdout/stderr destination
+	Title        string
 }
 
 // DaemonManager handles server process lifecycle
@@ -132,9 +131,6 @@ func (d *standardDaemonManager) Start(ctx context.Context, opts ServerOptions) e
 	}
 	if opts.SnapshotPath != "" {
 		args = append(args, "--snapshot", opts.SnapshotPath)
-	}
-	if opts.FromScratch {
-		args = append(args, "--from-scratch")
 	}
 	if opts.DefaultApp != "" {
 		args = append(args, "--default-app", opts.DefaultApp)

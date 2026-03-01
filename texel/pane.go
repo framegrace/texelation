@@ -467,9 +467,11 @@ func (p *pane) injectGraphicsProvider(factory func(paneID [16]byte) GraphicsProv
 		return
 	}
 	if ua, ok := p.app.(interface{ UI() *texelcore.UIManager }); ok {
-		gp := factory(p.id)
-		if gp != nil {
-			ua.UI().SetGraphicsProvider(gp)
+		if mgr := ua.UI(); mgr != nil {
+			gp := factory(p.id)
+			if gp != nil {
+				mgr.SetGraphicsProvider(gp)
+			}
 		}
 	}
 }

@@ -77,7 +77,6 @@ texelation --reset-state       # Delete all state and start fresh (with confirma
 # Advanced options
 texelation --client-only       # Connect without starting/checking server
 texelation --socket PATH       # Use custom socket path
-texelation --from-scratch      # Start fresh, ignore saved snapshot
 texelation --default-app NAME  # Set default app for new panes
 texelation --verbose-logs      # Enable detailed server logging
 texelation --reconnect         # Resume previous session explicitly
@@ -205,9 +204,9 @@ restart is required. You can also reload theme and config with
 
 ## Sessions & Persistence
 
-- **Snapshots**: Server saves state to `~/.texelation/snapshot.json`. Use `--from-scratch` to start fresh.
+- **Snapshots**: Server saves state to `~/.texelation/snapshot.json`. Use `--reset-state` to delete all state and start fresh.
 - **Reconnect**: Client automatically resumes sessions. Restart the client anytime without losing state.
-- **Environment**: Shell environment and CWD persist via `~/.texel-env-<pane-id>` files.
+- **Environment**: Shell environment and CWD persist via `~/.texelation/scrollback/<pane-id>.env` files.
 
 ## Project Layout
 

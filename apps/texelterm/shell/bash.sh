@@ -1,4 +1,4 @@
-# TEXEL_SHELL_INTEGRATION_VERSION=9
+# TEXEL_SHELL_INTEGRATION_VERSION=10
 # Texelterm Shell Integration for Bash
 # Automatically loaded by texelterm - do not modify
 #
@@ -8,12 +8,18 @@
 # - Per-terminal history isolation
 # - OSC 7 CWD reporting for session restore
 #
-# Environment files (~/.texel-env-$TEXEL_PANE_ID) persist across shell/server restarts.
-# Each pane has its own environment file, stable across process restarts.
+# Per-pane state lives under ~/.texelation/scrollback/<pane-id>.*
+# This keeps env, history, and scrollback together and lets --reset-state nuke everything.
 
 # Per-terminal history file (isolated by pane ID)
 if [[ -n "$TEXEL_PANE_ID" ]]; then
-    export HISTFILE="$HOME/.texel-history-$TEXEL_PANE_ID"
+    _TEXEL_PANE_DIR="$HOME/.texelation/scrollback"
+    [[ -d "$_TEXEL_PANE_DIR" ]] || mkdir -p "$_TEXEL_PANE_DIR"
+    export HISTFILE="$_TEXEL_PANE_DIR/$TEXEL_PANE_ID.bash_history"
+    # Migrate legacy history file if it exists and new one doesn't
+    if [[ ! -f "$HISTFILE" && -f "$HOME/.texel-history-$TEXEL_PANE_ID" ]]; then
+        mv "$HOME/.texel-history-$TEXEL_PANE_ID" "$HISTFILE"
+    fi
 fi
 
 # Enable history append mode (never overwrite)
@@ -42,7 +48,7 @@ _texel_prompt_command() {
             {
                 env
                 echo "__TEXEL_CWD=$PWD"
-            } >| ~/.texel-env-$TEXEL_PANE_ID
+            } >| "$_TEXEL_PANE_DIR/$TEXEL_PANE_ID.env"
         fi
     fi
     # Increment prompt counter

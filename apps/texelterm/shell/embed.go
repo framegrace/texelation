@@ -24,7 +24,7 @@ var scripts embed.FS
 // CurrentVersion is the version stamped into the embedded scripts.
 // Bump this (and the comment in each .sh/.fish file) whenever the
 // scripts change in a way that requires re-installation.
-const CurrentVersion = 9
+const CurrentVersion = 10
 
 // scriptFiles maps installed filenames to their embedded source names.
 var scriptFiles = []string{"bash.sh", "zsh.sh", "fish.fish"}

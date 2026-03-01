@@ -1,4 +1,4 @@
-# TEXEL_SHELL_INTEGRATION_VERSION=9
+# TEXEL_SHELL_INTEGRATION_VERSION=10
 # Texelterm Shell Integration for Fish
 # Automatically loaded by texelterm - do not modify
 #
