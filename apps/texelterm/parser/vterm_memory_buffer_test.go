@@ -4132,3 +4132,262 @@ func TestOSC7_WorkingDirectory(t *testing.T) {
 		t.Errorf("OSC 7 invalid URI: got %q, want empty", v.CurrentWorkingDir)
 	}
 }
+
+// TestVTerm_ResizeBeforeContentCursorSync tests that resizing the terminal
+// before much content is written keeps cursor position in sync with the grid.
+// Bug: After resize, physicalLinesToGrid bottom-aligns content but cursorY
+// stays at 0, causing grid[cursorY] to be empty instead of the prompt.
+func TestVTerm_ResizeBeforeContentCursorSync(t *testing.T) {
+	v := NewVTerm(80, 24, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Simulate bash writing a short prompt
+	parseString(p, "user@host:~$ ")
+
+	// Verify initial state
+	cx, cy := v.Cursor()
+	t.Logf("Before resize: cursor=(%d,%d), liveEdgeBase=%d, GlobalEnd=%d",
+		cx, cy, v.memBufState.liveEdgeBase, v.memBufState.memBuf.GlobalEnd())
+
+	grid := v.Grid()
+	promptRow := strings.TrimRight(gridRowToString(grid[cy]), " ")
+	t.Logf("Before resize: grid[cursorY=%d] = %q", cy, promptRow)
+
+	if promptRow != "user@host:~$" {
+		t.Errorf("Before resize: expected prompt on grid[%d], got %q", cy, promptRow)
+	}
+
+	// Now resize to a larger terminal (this is the trigger)
+	v.Resize(120, 30)
+
+	cx2, cy2 := v.Cursor()
+	t.Logf("After grow to 120x30: cursor=(%d,%d), liveEdgeBase=%d, GlobalEnd=%d",
+		cx2, cy2, v.memBufState.liveEdgeBase, v.memBufState.memBuf.GlobalEnd())
+
+	grid2 := v.Grid()
+
+	// The prompt should still be on the row the cursor points to
+	if cy2 >= 0 && cy2 < len(grid2) {
+		promptRow2 := strings.TrimRight(gridRowToString(grid2[cy2]), " ")
+		t.Logf("After grow: grid[cursorY=%d] = %q", cy2, promptRow2)
+		if promptRow2 != "user@host:~$" {
+			for y, row := range grid2 {
+				s := strings.TrimRight(gridRowToString(row), " ")
+				if s == "user@host:~$" {
+					t.Errorf("CURSOR DESYNC: cursor at Y=%d but prompt is on grid row %d", cy2, y)
+					break
+				}
+			}
+		}
+	} else {
+		t.Errorf("Cursor Y=%d is out of bounds (grid height=%d)", cy2, len(grid2))
+	}
+
+	// Now simulate typing after resize - verify text goes where cursor says
+	parseString(p, "ls -la")
+	cx3, cy3 := v.Cursor()
+	grid3 := v.Grid()
+	t.Logf("After typing: cursor=(%d,%d)", cx3, cy3)
+
+	if cy3 >= 0 && cy3 < len(grid3) {
+		rowContent := strings.TrimRight(gridRowToString(grid3[cy3]), " ")
+		t.Logf("After typing: grid[cursorY=%d] = %q", cy3, rowContent)
+		if !strings.Contains(rowContent, "user@host:~$ ls -la") {
+			for y, row := range grid3 {
+				s := strings.TrimRight(gridRowToString(row), " ")
+				if strings.Contains(s, "ls -la") {
+					if y != cy3 {
+						t.Errorf("CURSOR DESYNC after typing: cursor at Y=%d but content on Y=%d", cy3, y)
+					}
+					break
+				}
+			}
+		}
+	}
+}
+
+// TestVTerm_ResizeShrinkBeforeContentCursorSync tests shrinking the terminal early.
+func TestVTerm_ResizeShrinkBeforeContentCursorSync(t *testing.T) {
+	v := NewVTerm(120, 30, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	parseString(p, "user@host:~$ ")
+
+	cx, cy := v.Cursor()
+	t.Logf("Before resize: cursor=(%d,%d)", cx, cy)
+
+	// Shrink terminal
+	v.Resize(80, 24)
+
+	cx2, cy2 := v.Cursor()
+	t.Logf("After shrink to 80x24: cursor=(%d,%d), liveEdgeBase=%d", cx2, cy2, v.memBufState.liveEdgeBase)
+
+	grid := v.Grid()
+	if cy2 >= 0 && cy2 < len(grid) {
+		row := gridRowToString(grid[cy2][:min(14, len(grid[cy2]))])
+		t.Logf("After shrink: grid[cursorY=%d] = %q", cy2, row)
+		if row != "user@host:~$ " {
+			for y, r := range grid {
+				s := gridRowToString(r[:min(14, len(r))])
+				if s == "user@host:~$ " {
+					t.Errorf("CURSOR DESYNC: cursor at Y=%d but prompt on grid row %d", cy2, y)
+					break
+				}
+			}
+		}
+	}
+}
+
+// TestVTerm_ResizeWidthWrapDiagnostic is a detailed diagnostic test for width change.
+// It traces exactly what happens to cursor and content during width resize.
+func TestVTerm_ResizeWidthWrapDiagnostic(t *testing.T) {
+	v := NewVTerm(80, 24, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write a long prompt that will wrap at narrow width
+	prompt := "user@host:/very/long/path/to/some/directory$ "
+	parseString(p, prompt)
+
+	cx, cy := v.Cursor()
+	mb := v.memBufState.memBuf
+	cursorGlobal := v.memBufState.liveEdgeBase + int64(cy)
+	line := mb.GetLine(cursorGlobal)
+	t.Logf("Before resize (width=80):")
+	t.Logf("  cursor=(%d,%d), liveEdgeBase=%d, GlobalEnd=%d", cx, cy, v.memBufState.liveEdgeBase, mb.GlobalEnd())
+	if line != nil {
+		t.Logf("  logical line %d: %d cells", cursorGlobal, len(line.Cells))
+	}
+
+	// Dump grid
+	grid := v.Grid()
+	for y := 0; y < min(3, len(grid)); y++ {
+		s := strings.TrimRight(gridRowToString(grid[y]), " ")
+		if s != "" {
+			t.Logf("  grid[%d] = %q", y, s)
+		}
+	}
+
+	// Now resize to narrow width
+	v.Resize(30, 24)
+
+	cx2, cy2 := v.Cursor()
+	cursorGlobal2 := v.memBufState.liveEdgeBase + int64(cy2)
+	t.Logf("\nAfter resize (width=30):")
+	t.Logf("  cursor=(%d,%d), liveEdgeBase=%d, GlobalEnd=%d", cx2, cy2, v.memBufState.liveEdgeBase, mb.GlobalEnd())
+	t.Logf("  cursorGlobalLine=%d", cursorGlobal2)
+
+	// Check each logical line
+	for g := v.memBufState.liveEdgeBase; g < mb.GlobalEnd(); g++ {
+		l := mb.GetLine(g)
+		if l != nil {
+			t.Logf("  logical line %d: %d cells, content=%q", g, len(l.Cells), gridRowToString(l.Cells[:min(40, len(l.Cells))]))
+		}
+	}
+
+	// Dump grid
+	grid2 := v.Grid()
+	for y := 0; y < min(5, len(grid2)); y++ {
+		s := strings.TrimRight(gridRowToString(grid2[y]), " ")
+		if s != "" {
+			t.Logf("  grid[%d] = %q", y, s)
+		}
+	}
+
+	// Write "ls" and see where it goes
+	parseString(p, "ls")
+	cx3, cy3 := v.Cursor()
+	cursorGlobal3 := v.memBufState.liveEdgeBase + int64(cy3)
+	t.Logf("\nAfter typing 'ls':")
+	t.Logf("  cursor=(%d,%d), cursorGlobalLine=%d", cx3, cy3, cursorGlobal3)
+
+	// Check logical lines
+	for g := v.memBufState.liveEdgeBase; g < mb.GlobalEnd(); g++ {
+		l := mb.GetLine(g)
+		if l != nil && len(l.Cells) > 0 {
+			t.Logf("  logical line %d: %d cells, content=%q", g, len(l.Cells), gridRowToString(l.Cells[:min(40, len(l.Cells))]))
+		}
+	}
+
+	// Dump grid
+	grid3 := v.Grid()
+	for y := 0; y < min(5, len(grid3)); y++ {
+		s := strings.TrimRight(gridRowToString(grid3[y]), " ")
+		if s != "" {
+			t.Logf("  grid[%d] = %q (cursor here: %v)", y, s, y == cy3)
+		}
+	}
+
+	// The expected physical cursor position at width 30 with 45 chars:
+	// prompt occupies physical rows 0-1 (chars 0-29 on row 0, chars 30-44 on row 1)
+	// cursor should be on physical row 1, column 15
+	expectedPhysRow := len(prompt) / 30 // 45/30 = 1
+	expectedPhysCol := len(prompt) % 30 // 45%30 = 15
+	t.Logf("\nExpected physical cursor: (%d,%d), actual: (%d,%d)",
+		expectedPhysCol, expectedPhysRow, cx2, cy2)
+
+	if cy2 != expectedPhysRow || cx2 != expectedPhysCol {
+		t.Errorf("CURSOR DESYNC: expected physical (%d,%d) but got (%d,%d)",
+			expectedPhysCol, expectedPhysRow, cx2, cy2)
+	}
+}
+
+// TestVTerm_ResizeWidthWrapBeforeContentCursorSync tests width change causing wrap.
+func TestVTerm_ResizeWidthWrapBeforeContentCursorSync(t *testing.T) {
+	v := NewVTerm(80, 24, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write a long prompt that will wrap at narrow width
+	prompt := "user@host:/very/long/path/to/some/directory$ "
+	parseString(p, prompt)
+
+	cx, cy := v.Cursor()
+	t.Logf("Before resize: cursor=(%d,%d), prompt len=%d", cx, cy, len(prompt))
+
+	// Shrink width to cause wrapping
+	v.Resize(30, 24)
+
+	cx2, cy2 := v.Cursor()
+	t.Logf("After resize to 30x24: cursor=(%d,%d), liveEdgeBase=%d", cx2, cy2, v.memBufState.liveEdgeBase)
+
+	grid := v.Grid()
+
+	// Dump first few non-empty grid rows for debugging
+	for y := 0; y < min(5, len(grid)); y++ {
+		s := gridRowToString(grid[y])
+		trimmed := strings.TrimRight(s, " ")
+		if trimmed != "" {
+			t.Logf("  grid[%d] = %q", y, trimmed)
+		}
+	}
+
+	// After wrapping, cursor should be on the last segment of the prompt
+	if cy2 >= 0 && cy2 < len(grid) {
+		row := gridRowToString(grid[cy2])
+		trimmed := strings.TrimRight(row, " ")
+		t.Logf("After wrap: grid[cursorY=%d] = %q", cy2, trimmed)
+
+		// Verify typing after resize goes to the right place
+		parseString(p, "ls")
+		grid4 := v.Grid()
+		_, cy4 := v.Cursor()
+
+		found := false
+		for y, row := range grid4 {
+			s := gridRowToString(row)
+			if strings.Contains(s, "$ ls") || strings.Contains(s, "ls") {
+				if y != cy4 {
+					t.Errorf("CURSOR DESYNC after wrap+type: 'ls' on row %d, cursor on row %d", y, cy4)
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("Could not find 'ls' in grid after typing")
+		}
+	}
+}

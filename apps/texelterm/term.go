@@ -570,7 +570,10 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.vterm.MarkAllDirty()
 	}
 
-	cursorX, cursorY := a.vterm.Cursor()
+	// Use PhysicalCursor to get the grid-relative position. After a width
+	// decrease, the logical cursor column may exceed the terminal width;
+	// PhysicalCursor maps it to the correct wrapped row and column.
+	cursorX, cursorY := a.vterm.PhysicalCursor()
 	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.DirtyLines()
 

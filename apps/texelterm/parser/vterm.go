@@ -1427,6 +1427,21 @@ func (v *VTerm) Resize(width, height int) {
 func (v *VTerm) AppCursorKeys() bool { return v.appCursorKeys }
 func (v *VTerm) Cursor() (int, int)  { return v.cursorX, v.cursorY }
 func (v *VTerm) CursorVisible() bool { return v.cursorVisible }
+
+// PhysicalCursor returns the cursor position mapped to the physical grid.
+// In memory buffer mode, cursorX can exceed the terminal width after a width
+// decrease (the logical line holds content wider than the screen). This method
+// converts that absolute column to a (col, row) pair in the wrapped grid.
+// On alt screen or when cursorX < width, it returns the raw position.
+func (v *VTerm) PhysicalCursor() (physX, physY int) {
+	if v.inAltScreen || v.width <= 0 || v.cursorX < v.width {
+		return v.cursorX, v.cursorY
+	}
+	// Cursor column exceeds terminal width → compute wrapped position.
+	physY = v.cursorY + v.cursorX/v.width
+	physX = v.cursorX % v.width
+	return physX, physY
+}
 func (v *VTerm) DefaultFG() Color    { return v.defaultFG }
 func (v *VTerm) DefaultBG() Color    { return v.defaultBG }
 func (v *VTerm) OriginMode() bool    { return v.originMode }

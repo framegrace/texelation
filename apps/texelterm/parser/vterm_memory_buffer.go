@@ -1136,6 +1136,7 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 		v.memBufState.historyLoaded = true
 	}
 
+	oldWidth := v.memBufState.viewport.Width()
 	oldHeight := v.memBufState.viewport.Height()
 	mb := v.memBufState.memBuf
 
@@ -1143,8 +1144,56 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	cursorGlobalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
 
 	v.logMemBufDebug("[RESIZE] Before: width=%d->%d, height=%d->%d, liveEdgeBase=%d, cursorY=%d, cursorGlobal=%d, GlobalEnd=%d",
-		v.memBufState.viewport.Width(), width, oldHeight, height,
+		oldWidth, width, oldHeight, height,
 		v.memBufState.liveEdgeBase, v.cursorY, cursorGlobalLine, mb.GlobalEnd())
+
+	// When width decreases, the cursor's logical line may be wider than the
+	// new terminal width. Split it into a wrapped chain so that cursorY/cursorX
+	// correctly address the content after the width change.
+	if width > 0 && width < oldWidth && v.cursorX >= width {
+		line := mb.GetLine(cursorGlobalLine)
+		if line != nil && len(line.Cells) > width {
+			absoluteCol := v.cursorX
+			cells := line.Cells
+
+			// Number of physical rows this line occupies at the new width.
+			numChunks := (len(cells) + width - 1) / width
+
+			if numChunks > 1 {
+				// First chunk stays on the original line.
+				firstChunk := make([]Cell, width)
+				copy(firstChunk, cells[:width])
+				firstChunk[width-1].Wrapped = true
+				line.Cells = firstChunk
+
+				// Insert remaining chunks as new wrapped logical lines.
+				for i := 1; i < numChunks; i++ {
+					start := i * width
+					end := min(start+width, len(cells))
+					chunk := make([]Cell, end-start)
+					copy(chunk, cells[start:end])
+					if end < len(cells) {
+						chunk[len(chunk)-1].Wrapped = true
+					}
+
+					insertIdx := cursorGlobalLine + int64(i)
+					mb.InsertLine(insertIdx)
+					mb.SetLine(insertIdx, &LogicalLine{Cells: chunk})
+				}
+
+				// Adjust cursor to the correct split segment.
+				extraRows := absoluteCol / width
+				v.cursorX = absoluteCol % width
+				v.cursorY += extraRows
+
+				v.logMemBufDebug("[RESIZE] Width split: %d-cell line into %d chunks, cursor adjusted to (%d,%d)",
+					len(cells), numChunks, v.cursorX, v.cursorY)
+
+				// Recalculate cursorGlobalLine after adjustment.
+				cursorGlobalLine = v.memBufState.liveEdgeBase + int64(v.cursorY)
+			}
+		}
+	}
 
 	// Update viewport dimensions
 	mb.SetTermWidth(width)
