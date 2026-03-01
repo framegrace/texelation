@@ -26,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/shell"
 	"github.com/framegrace/texelation/apps/texelterm/transformer"
 	"github.com/framegrace/texelation/config"
 
@@ -1366,20 +1367,9 @@ func (a *TexelTerm) getShellCommandSimpleIntegration(env []string) *exec.Cmd {
 	return exec.Command(parts[0], parts[1:]...)
 }
 
-// ensureShellIntegrationScripts creates shell integration scripts if they don't exist
+// ensureShellIntegrationScripts installs or updates shell integration scripts.
 func (a *TexelTerm) ensureShellIntegrationScripts(configDir string) error {
-	// Create directory if it doesn't exist
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// We assume the scripts are already created in the config directory
-	// If not, they would need to be embedded in the binary or copied on first run
-	// For now, we just log and continue
-	log.Printf("Shell integration directory created: %s", configDir)
-	log.Printf("Please ensure integration scripts exist in this directory")
-
-	return nil
+	return shell.EnsureInstalled(configDir)
 }
 
 // StandalonePaneID is the fixed pane ID used for standalone texelterm.
