@@ -107,8 +107,10 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	// graphicsProvider.Reset() → app.Render() → Flush() cycle.
 	if p.app != nil {
 		if ua, ok := p.app.(interface{ UI() *texelcore.UIManager }); ok {
-			if gp := ua.UI().GraphicsProvider(); gp != nil {
-				gp.Reset()
+			if mgr := ua.UI(); mgr != nil {
+				if gp := mgr.GraphicsProvider(); gp != nil {
+					gp.Reset()
+				}
 			}
 		}
 	}

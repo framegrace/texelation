@@ -47,7 +47,6 @@ func run() error {
 
 	// Server flags
 	snapshotPath := fs.String("snapshot", "", "Path to persist pane snapshots (default: ~/.texelation/snapshot.json)")
-	fromScratch := fs.Bool("from-scratch", false, "Start from scratch, ignoring any saved snapshot")
 	defaultApp := fs.String("default-app", "", "Default app for new panes")
 	verboseLogs := fs.Bool("verbose-logs", false, "Enable verbose server logging")
 	title := fs.String("title", "Texel Server", "Title for the main pane")
@@ -101,7 +100,6 @@ func run() error {
 		return handleServerOnly(lifecycle.ServerOptions{
 			SocketPath:   *socketPath,
 			SnapshotPath: *snapshotPath,
-			FromScratch:  *fromScratch,
 			DefaultApp:   *defaultApp,
 			VerboseLogs:  *verboseLogs,
 			LogFilePath:  paths.ServerLogPath,
@@ -120,7 +118,6 @@ func run() error {
 		return handleUnifiedMode(ctx, paths, lifecycle.ServerOptions{
 			SocketPath:   *socketPath,
 			SnapshotPath: *snapshotPath,
-			FromScratch:  *fromScratch,
 			DefaultApp:   *defaultApp,
 			VerboseLogs:  *verboseLogs,
 			LogFilePath:  paths.ServerLogPath,
@@ -195,9 +192,6 @@ func handleServerOnly(opts lifecycle.ServerOptions) error {
 	if opts.SnapshotPath != "" {
 		args = append(args, "--snapshot", opts.SnapshotPath)
 	}
-	if opts.FromScratch {
-		args = append(args, "--from-scratch")
-	}
 	if opts.DefaultApp != "" {
 		args = append(args, "--default-app", opts.DefaultApp)
 	}
@@ -267,10 +261,25 @@ func handleStopServer(ctx context.Context, paths *Paths, socketPath string) erro
 }
 
 func handleResetState(ctx context.Context, paths *Paths, socketPath string) error {
-	fmt.Println("WARNING: This will delete all saved state:")
-	fmt.Printf("  - %s (snapshot)\n", paths.SnapshotPath)
-	fmt.Printf("  - %s (PID file)\n", paths.PIDPath)
-	fmt.Printf("  - %s (server logs)\n", paths.ServerLogPath)
+	// Enumerate what will be deleted
+	fmt.Println("WARNING: This will delete ALL saved state:")
+	fmt.Printf("  - %s/ (scrollback, search indices, env, history, storage, logs, snapshot)\n", paths.ConfigDir)
+
+	// Find legacy env/history files still in ~/
+	homeDir, _ := os.UserHomeDir()
+	var legacyFiles []string
+	if homeDir != "" {
+		envMatches, _ := filepath.Glob(filepath.Join(homeDir, ".texel-env-*"))
+		histMatches, _ := filepath.Glob(filepath.Join(homeDir, ".texel-history-*"))
+		legacyFiles = append(envMatches, histMatches...)
+	}
+	if len(legacyFiles) > 0 {
+		fmt.Printf("  - ~/%s, ~/%s (%d legacy pane files)\n", ".texel-env-*", ".texel-history-*", len(legacyFiles))
+	}
+
+	fmt.Printf("  - %s (socket)\n", socketPath)
+	fmt.Println()
+	fmt.Println("User configuration (~/.config/texelation/) will NOT be deleted.")
 	fmt.Println()
 	fmt.Print("Type 'yes' to confirm: ")
 
@@ -297,19 +306,37 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 		_ = daemon.Stop(ctx) // Best effort
 	}
 
-	// Remove state files
 	removed := 0
-	if err := os.Remove(paths.SnapshotPath); err == nil {
-		removed++
-	}
-	if err := os.Remove(paths.PIDPath); err == nil {
-		removed++
-	}
-	if err := os.Remove(paths.ServerLogPath); err == nil {
+
+	// Remove the entire state directory (~/.texelation/)
+	// This covers: scrollback/*.hist3, scrollback/*.index.db, storage/,
+	// texelbrowse/, snapshot.json, server.log, texelation.pid
+	if err := os.RemoveAll(paths.ConfigDir); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: failed to remove %s: %v\n", paths.ConfigDir, err)
+	} else {
+		fmt.Printf("  removed %s/\n", paths.ConfigDir)
 		removed++
 	}
 
-	fmt.Printf("State reset complete (%d files removed)\n", removed)
+	// Remove legacy per-pane files (~/.texel-env-*, ~/.texel-history-*)
+	for _, f := range legacyFiles {
+		if err := os.Remove(f); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: failed to remove %s: %v\n", f, err)
+		} else {
+			removed++
+		}
+	}
+	if len(legacyFiles) > 0 {
+		fmt.Printf("  removed %d legacy pane files\n", len(legacyFiles))
+	}
+
+	// Remove socket file
+	if err := os.Remove(socketPath); err == nil {
+		fmt.Printf("  removed %s\n", socketPath)
+		removed++
+	}
+
+	fmt.Printf("\nState reset complete (%d items removed)\n", removed)
 	return nil
 }
 

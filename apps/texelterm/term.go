@@ -1432,8 +1432,18 @@ func (a *TexelTerm) runShell() error {
 func (a *TexelTerm) loadShellEnvironment(paneID string) (env []string, cwd string) {
 	if paneID != "" {
 		if homeDir, err := os.UserHomeDir(); err == nil {
-			envFile := filepath.Join(homeDir, fmt.Sprintf(".texel-env-%s", paneID))
-			if data, err := os.ReadFile(envFile); err == nil {
+			// New location: ~/.texelation/scrollback/<pane-id>.env
+			envFile := filepath.Join(homeDir, ".texelation", "scrollback", paneID+".env")
+			data, err := os.ReadFile(envFile)
+			if err != nil {
+				// Fallback to legacy location: ~/.texel-env-<pane-id>
+				legacyFile := filepath.Join(homeDir, fmt.Sprintf(".texel-env-%s", paneID))
+				data, err = os.ReadFile(legacyFile)
+				if err == nil {
+					envFile = legacyFile
+				}
+			}
+			if err == nil {
 				lines := strings.Split(string(data), "\n")
 				for _, line := range lines {
 					if line == "" {
@@ -1452,7 +1462,7 @@ func (a *TexelTerm) loadShellEnvironment(paneID string) (env []string, cwd strin
 				}
 				log.Printf("Loaded environment from %s: %d variables", envFile, len(env))
 			} else {
-				log.Printf("Could not read env file %s: %v (normal on first run)", envFile, err)
+				log.Printf("Could not read env file (normal on first run)")
 			}
 		}
 	}
