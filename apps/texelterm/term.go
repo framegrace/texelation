@@ -1988,6 +1988,9 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	if a.vterm != nil {
 		a.vterm.Resize(termWidth, termRows)
 	}
+	if a.pipeline != nil {
+		a.pipeline.NotifyResize(termWidth, termRows)
+	}
 	if a.scrollbar != nil {
 		a.scrollbar.Resize(termRows)
 	}
