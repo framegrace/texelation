@@ -1284,15 +1284,15 @@ func (v *VTerm) rejoinPreCursorWrapChain() {
 		mb.DeleteLine(i)
 	}
 
-	// Move cursor onto the combined line at the end of the content.
-	// This restores the cursor's absolute position (absoluteCol = len(combined))
-	// so that subsequent splits can re-split correctly at the new width.
+	// Shift cursor up by the number of deleted lines. The cursor stays on
+	// its own line (which shifted up), NOT on the combined chain line.
+	// The combined line will be visually wrapped by the renderer at the new
+	// width — no explicit re-split is needed.
 	linesRemoved := preChainLen - 1
-	v.cursorY -= linesRemoved + 1 // Point to the combined line
-	v.cursorX = len(combined)
+	v.cursorY -= linesRemoved
 
-	v.logMemBufDebug("[RESIZE] Rejoin pre-cursor chain: chainStart=%d, chainEnd=%d, len=%d, absCol=%d, cursorY=%d",
-		chainStart, chainEnd, preChainLen, v.cursorX, v.cursorY)
+	v.logMemBufDebug("[RESIZE] Rejoin pre-cursor chain: chainStart=%d, chainEnd=%d, len=%d, linesRemoved=%d, cursorY=%d",
+		chainStart, chainEnd, preChainLen, linesRemoved, v.cursorY)
 }
 
 // memoryBufferResize handles terminal resize.

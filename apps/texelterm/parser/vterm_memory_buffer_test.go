@@ -5611,3 +5611,290 @@ func TestResizeWidth_FullViewport_CursorGridConsistency(t *testing.T) {
 		}
 	}
 }
+
+// TestResizeWidth_NewPromptAtSmallWidth_ExpandDrift reproduces: shrink terminal
+// to small width (prompt wraps) → press Enter (shell generates new prompt at
+// small width) → expand back → cursor drifts up from the actual prompt row.
+// The desync persists for subsequent prompts too.
+func TestResizeWidth_NewPromptAtSmallWidth_ExpandDrift(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write enough output to FILL the viewport at normal width
+	for i := 0; i < 30; i++ {
+		parseString(p, fmt.Sprintf("output line %02d with content padding here", i))
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+	// Write initial prompt
+	parseString(p, "user@host:~/projects $ ")
+
+	t.Logf("=== Initial state at width=%d ===", width)
+	t.Logf("cursor=(%d,%d) liveEdgeBase=%d", v.cursorX, v.cursorY, v.memBufState.liveEdgeBase)
+
+	// Shrink to very small width — prompt wraps many times
+	smallWidth := 5
+	v.Resize(smallWidth, height)
+	physX, physY := v.PhysicalCursor()
+	t.Logf("=== After shrink to width=%d ===", smallWidth)
+	t.Logf("cursor=(%d,%d) liveEdgeBase=%d physCursor=(%d,%d)",
+		v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, physX, physY)
+
+	// Simulate pressing Enter: shell processes the Enter, outputs a newline,
+	// and then writes a new prompt. At width=10 the new prompt wraps.
+	p.Parse('\r')
+	p.Parse('\n')
+	// Shell writes new prompt at the small width
+	parseString(p, "user@host:~/projects $ ")
+
+	physX, physY = v.PhysicalCursor()
+	t.Logf("=== After new prompt at width=%d ===", smallWidth)
+	t.Logf("cursor=(%d,%d) liveEdgeBase=%d physCursor=(%d,%d)",
+		v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, physX, physY)
+
+	// Dump the logical lines around the cursor
+	mb := v.memBufState.memBuf
+	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	t.Logf("cursorGlobalLine=%d globalEnd=%d", cursorGlobal, mb.GlobalEnd())
+	start := max(int64(0), cursorGlobal-5)
+	end := min(mb.GlobalEnd(), cursorGlobal+3)
+	for i := start; i < end; i++ {
+		line := mb.GetLine(i)
+		if line != nil {
+			wrapped := len(line.Cells) > 0 && line.Cells[len(line.Cells)-1].Wrapped
+			marker := "  "
+			if i == cursorGlobal {
+				marker = "C>"
+			}
+			t.Logf("  %s line[%d]: cells=%d wrapped=%v text=%q",
+				marker, i, len(line.Cells), wrapped, cellsToString(line.Cells))
+		}
+	}
+
+	// Now expand back to normal width
+	v.Resize(width, height)
+	physX, physY = v.PhysicalCursor()
+	grid := v.Grid()
+	t.Logf("=== After expand to width=%d ===", width)
+	t.Logf("cursor=(%d,%d) liveEdgeBase=%d physCursor=(%d,%d)",
+		v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, physX, physY)
+
+	// Dump grid around cursor
+	lastContentRow := -1
+	for y := len(grid) - 1; y >= 0; y-- {
+		if strings.TrimSpace(cellsToString(grid[y])) != "" {
+			lastContentRow = y
+			break
+		}
+	}
+
+	showStart := max(physY-3, 0)
+	showEnd := min(max(lastContentRow+2, physY+2), len(grid))
+	for y := showStart; y < showEnd; y++ {
+		marker := "  "
+		if y == physY {
+			marker = "C>"
+		}
+		if y == lastContentRow && y != physY {
+			marker = "L>"
+		}
+		t.Logf("  %s grid[%d]: %q", marker, y, cellsToString(grid[y]))
+	}
+
+	// Dump ALL logical lines from liveEdgeBase to GlobalEnd
+	cursorGlobal = v.memBufState.liveEdgeBase + int64(v.cursorY)
+	t.Logf("post-expand: liveEdgeBase=%d cursorY=%d cursorGlobal=%d globalEnd=%d",
+		v.memBufState.liveEdgeBase, v.cursorY, cursorGlobal, mb.GlobalEnd())
+	for i := v.memBufState.liveEdgeBase; i < mb.GlobalEnd(); i++ {
+		line := mb.GetLine(i)
+		if line != nil {
+			wrapped := len(line.Cells) > 0 && line.Cells[len(line.Cells)-1].Wrapped
+			marker := "  "
+			if i == cursorGlobal {
+				marker = "C>"
+			}
+			t.Logf("  %s logical[%d]: cells=%d wrapped=%v text=%q",
+				marker, i, len(line.Cells), wrapped, cellsToString(line.Cells))
+		}
+	}
+
+	// Check: cursor should be on the last content row (the prompt)
+	if lastContentRow != physY {
+		drift := lastContentRow - physY
+		t.Errorf("DRIFT=%d: cursor at row %d but last content at row %d after expand",
+			drift, physY, lastContentRow)
+
+		// Also dump the logical lines after expand
+		cursorGlobal = v.memBufState.liveEdgeBase + int64(v.cursorY)
+		t.Logf("post-expand cursorGlobalLine=%d", cursorGlobal)
+		start = max(int64(0), cursorGlobal-3)
+		end = min(mb.GlobalEnd(), cursorGlobal+5)
+		for i := start; i < end; i++ {
+			line := mb.GetLine(i)
+			if line != nil {
+				wrapped := len(line.Cells) > 0 && line.Cells[len(line.Cells)-1].Wrapped
+				marker := "  "
+				if i == cursorGlobal {
+					marker = "C>"
+				}
+				t.Logf("  %s line[%d]: cells=%d wrapped=%v text=%q",
+					marker, i, len(line.Cells), wrapped, cellsToString(line.Cells))
+			}
+		}
+	}
+
+	// Second check: simulate another Enter + prompt at the expanded width
+	// to verify the desync persists
+	if lastContentRow != physY {
+		p.Parse('\r')
+		p.Parse('\n')
+		parseString(p, "user@host:~/projects $ ")
+		physX, physY = v.PhysicalCursor()
+		grid = v.Grid()
+
+		lastContentRow2 := -1
+		for y := len(grid) - 1; y >= 0; y-- {
+			if strings.TrimSpace(cellsToString(grid[y])) != "" {
+				lastContentRow2 = y
+				break
+			}
+		}
+		t.Logf("=== After second prompt at width=%d ===", width)
+		t.Logf("cursor=(%d,%d) physCursor=(%d,%d) lastContent=%d",
+			v.cursorX, v.cursorY, physX, physY, lastContentRow2)
+		if lastContentRow2 != physY {
+			t.Errorf("PERSISTS: drift=%d after second prompt", lastContentRow2-physY)
+		}
+	}
+}
+
+// TestResizeWidth_TwoLinePrompt_CharByCharExpand reproduces the real scenario:
+// 2-line prompt (path + "> "), width=20 so path wraps, press Enter to get new
+// prompt at width=20, then expand char-by-char. The cursor should stay on the
+// "> " line throughout expansion.
+func TestResizeWidth_TwoLinePrompt_CharByCharExpand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Fill viewport with output
+	for i := 0; i < 20; i++ {
+		parseString(p, fmt.Sprintf("output line %02d with some padding content", i))
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+
+	// Write 2-line prompt at width=80 (line 1 = path, line 2 = "> ")
+	// Path is ~28 chars, so it wraps at width=20
+	parseString(p, "user@hostname:~/projects/app")
+	p.Parse('\r')
+	p.Parse('\n')
+	parseString(p, "> ")
+
+	t.Logf("=== Initial at width=%d ===", width)
+	t.Logf("cursor=(%d,%d) liveEdgeBase=%d", v.cursorX, v.cursorY, v.memBufState.liveEdgeBase)
+
+	// Shrink to width=20
+	smallWidth := 20
+	v.Resize(smallWidth, height)
+	t.Logf("=== After shrink to width=%d ===", smallWidth)
+	t.Logf("cursor=(%d,%d) liveEdgeBase=%d", v.cursorX, v.cursorY, v.memBufState.liveEdgeBase)
+
+	// Press Enter + new 2-line prompt at small width (auto-wraps)
+	p.Parse('\r')
+	p.Parse('\n')
+	parseString(p, "user@hostname:~/projects/app")
+	p.Parse('\r')
+	p.Parse('\n')
+	parseString(p, "> ")
+
+	mb := v.memBufState.memBuf
+	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	t.Logf("=== After new prompt at width=%d ===", smallWidth)
+	t.Logf("cursor=(%d,%d) liveEdgeBase=%d cursorGlobal=%d globalEnd=%d",
+		v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, cursorGlobal, mb.GlobalEnd())
+
+	// Dump logical lines near cursor
+	dumpStart := max(int64(0), cursorGlobal-4)
+	for i := dumpStart; i < mb.GlobalEnd(); i++ {
+		line := mb.GetLine(i)
+		if line != nil {
+			wrapped := len(line.Cells) > 0 && line.Cells[len(line.Cells)-1].Wrapped
+			marker := "  "
+			if i == cursorGlobal {
+				marker = "C>"
+			}
+			t.Logf("  %s line[%d]: cells=%d wrapped=%v text=%q",
+				marker, i, len(line.Cells), wrapped, cellsToString(line.Cells))
+		}
+	}
+
+	// Now expand char-by-char from 20 to 40 and check at each step
+	for w := smallWidth + 1; w <= 40; w++ {
+		v.Resize(w, height)
+		_, physY := v.PhysicalCursor()
+		grid := v.Grid()
+
+		// Find last content row
+		lastContentRow := -1
+		for y := len(grid) - 1; y >= 0; y-- {
+			if strings.TrimSpace(cellsToString(grid[y])) != "" {
+				lastContentRow = y
+				break
+			}
+		}
+
+		// The cursor row should have "> " content
+		var cursorRowText string
+		if physY >= 0 && physY < len(grid) {
+			cursorRowText = strings.TrimRight(cellsToString(grid[physY]), "\x00 ")
+		}
+
+		if lastContentRow != physY {
+			drift := lastContentRow - physY
+			t.Errorf("width=%d: DRIFT=%d cursor at row %d, last content at row %d, cursorRow=%q",
+				w, drift, physY, lastContentRow, cursorRowText)
+
+			// Show grid context
+			showFrom := max(physY-1, 0)
+			showTo := min(lastContentRow+1, len(grid))
+			for y := showFrom; y < showTo; y++ {
+				mk := "  "
+				if y == physY {
+					mk = "C>"
+				}
+				if y == lastContentRow && y != physY {
+					mk = "L>"
+				}
+				t.Logf("    %s [%d]: %q", mk, y, cellsToString(grid[y]))
+			}
+
+			// Dump logical lines
+			cg := v.memBufState.liveEdgeBase + int64(v.cursorY)
+			t.Logf("    internal: cursor=(%d,%d) liveEdgeBase=%d cursorGlobal=%d",
+				v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, cg)
+			ds := max(int64(0), cg-2)
+			de := min(mb.GlobalEnd(), cg+3)
+			for i := ds; i < de; i++ {
+				ln := mb.GetLine(i)
+				if ln != nil {
+					wr := len(ln.Cells) > 0 && ln.Cells[len(ln.Cells)-1].Wrapped
+					mk := "  "
+					if i == cg {
+						mk = "C>"
+					}
+					t.Logf("    %s logical[%d]: cells=%d wrapped=%v text=%q",
+						mk, i, len(ln.Cells), wr, cellsToString(ln.Cells))
+				}
+			}
+			break // Stop at first failure to keep output readable
+		}
+	}
+}

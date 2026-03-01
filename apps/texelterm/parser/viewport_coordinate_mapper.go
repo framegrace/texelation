@@ -56,6 +56,22 @@ func (cm *CoordinateMapper) ViewportToContent(viewportRow, col, viewportHeight i
 	lines := cm.reader.GetLineRange(startGlobal, endGlobal)
 	physical := cm.builder.BuildRange(lines, startGlobal)
 
+	// BuildRange may produce fewer physical lines than the index predicted
+	// (e.g., wrap chains get joined into fewer rows). Extend the range
+	// backward to match what VisibleGrid does, so cursor positions are
+	// consistent with the rendered grid.
+	minGlobal := cm.reader.GlobalOffset()
+	for len(physical) < viewportHeight && startGlobal > minGlobal {
+		deficit := int64(viewportHeight - len(physical))
+		newStart := max(startGlobal-deficit, minGlobal)
+		if newStart == startGlobal {
+			break
+		}
+		startGlobal = newStart
+		lines = cm.reader.GetLineRange(startGlobal, endGlobal)
+		physical = cm.builder.BuildRange(lines, startGlobal)
+	}
+
 	// Calculate which physical line corresponds to the viewport row
 	// We need to account for scroll offset within the physical lines
 	totalPhysical := int64(len(physical))
@@ -99,6 +115,22 @@ func (cm *CoordinateMapper) ContentToViewport(globalLineIdx int64, charOffset, v
 	// Build physical lines for this range
 	lines := cm.reader.GetLineRange(startGlobal, endGlobal)
 	physical := cm.builder.BuildRange(lines, startGlobal)
+
+	// BuildRange may produce fewer physical lines than the index predicted
+	// (e.g., wrap chains get joined into fewer rows). Extend the range
+	// backward to match what VisibleGrid does, so cursor positions are
+	// consistent with the rendered grid.
+	minGlobal := cm.reader.GlobalOffset()
+	for len(physical) < viewportHeight && startGlobal > minGlobal {
+		deficit := int64(viewportHeight - len(physical))
+		newStart := max(startGlobal-deficit, minGlobal)
+		if newStart == startGlobal {
+			break
+		}
+		startGlobal = newStart
+		lines = cm.reader.GetLineRange(startGlobal, endGlobal)
+		physical = cm.builder.BuildRange(lines, startGlobal)
+	}
 
 	// Calculate the physical line window we're showing
 	totalPhysical := int64(len(physical))
