@@ -159,14 +159,15 @@ func (sm *ScrollManager) TotalPhysicalLines() int64 {
 // ensureIndexValid creates or updates the physical line index as needed.
 func (sm *ScrollManager) ensureIndexValid() {
 	if sm.index == nil {
-		sm.index = NewPhysicalLineIndex(sm.reader, sm.builder.Width())
+		sm.index = NewPhysicalLineIndex(sm.reader, sm.builder.Width(), sm.builder.ShowOverlay())
 		sm.index.Build()
 		return
 	}
 
-	// Width change → full rebuild
-	if sm.builder.Width() != sm.index.Width() {
+	// Width or overlay mode change → full rebuild
+	if sm.builder.Width() != sm.index.Width() || sm.builder.ShowOverlay() != sm.index.showOverlay {
 		sm.index.width = sm.builder.Width()
+		sm.index.showOverlay = sm.builder.ShowOverlay()
 		sm.index.Build()
 		return
 	}

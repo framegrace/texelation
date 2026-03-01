@@ -11,7 +11,7 @@ import (
 func TestPhysicalLineIndex_BasicCount(t *testing.T) {
 	mb := setupTestBuffer([]string{"Hello", "World", "Test"}, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	// 3 short lines at width 80 = 3 physical lines
@@ -31,7 +31,7 @@ func TestPhysicalLineIndex_LongLineWrapping(t *testing.T) {
 	}
 	mb := setupTestBuffer([]string{string(long), "Short"}, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	// Line 0: 200 chars / 80 = 3 physical lines
@@ -58,7 +58,7 @@ func TestPhysicalLineIndex_FixedWidthLine(t *testing.T) {
 	mb.SetLineFixed(0, 80) // Mark as fixed width
 
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 40) // Narrower viewport
+	idx := NewPhysicalLineIndex(reader, 40, false) // Narrower viewport
 
 	idx.Build()
 
@@ -78,7 +78,7 @@ func TestPhysicalLineIndex_EmptyLine(t *testing.T) {
 	mb.Write('A', DefaultFG, DefaultBG, 0)
 
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	// Empty line = 1 physical line, "A" line = 1 physical line
@@ -96,7 +96,7 @@ func TestPhysicalLineIndex_WidthChange(t *testing.T) {
 	reader := NewMemoryBufferReader(mb)
 
 	// At width 80: ceil(160/80) = 2
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 	if got := idx.TotalPhysicalLines(); got != 2 {
 		t.Errorf("expected 2 at width 80, got %d", got)
@@ -121,7 +121,7 @@ func TestPhysicalLineIndex_Eviction(t *testing.T) {
 	mb := setupTestBuffer(lines, 80)
 	reader := NewMemoryBufferReader(mb)
 
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	if got := idx.TotalPhysicalLines(); got != 10 {
@@ -146,7 +146,7 @@ func TestPhysicalLineIndex_Eviction(t *testing.T) {
 func TestPhysicalLineIndex_EvictionAll(t *testing.T) {
 	mb := setupTestBuffer([]string{"A", "B", "C"}, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	// Evict more than we have — should invalidate
@@ -159,7 +159,7 @@ func TestPhysicalLineIndex_EvictionAll(t *testing.T) {
 func TestPhysicalLineIndex_Append(t *testing.T) {
 	mb := setupTestBuffer([]string{"Hello", "World"}, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	if got := idx.TotalPhysicalLines(); got != 2 {
@@ -192,7 +192,7 @@ func TestPhysicalLineIndex_PhysicalToLogical(t *testing.T) {
 	}
 	mb := setupTestBuffer([]string{"Short", string(long), "End"}, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	// Total: 1 + 2 + 1 = 4 physical lines
@@ -223,7 +223,7 @@ func TestPhysicalLineIndex_PhysicalToLogical(t *testing.T) {
 func TestPhysicalLineIndex_PhysicalToLogicalEmpty(t *testing.T) {
 	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	// Empty index should return baseOffset
@@ -245,7 +245,7 @@ func TestPhysicalLineIndex_MatchesBuilderOutput(t *testing.T) {
 	mb := setupTestBuffer(lines, 80)
 	reader := NewMemoryBufferReader(mb)
 	builder := NewPhysicalLineBuilder(80)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	for i := int64(0); i < reader.GlobalEnd(); i++ {
@@ -268,7 +268,7 @@ func TestPhysicalLineIndex_PrefixSumAt(t *testing.T) {
 	}
 	mb := setupTestBuffer([]string{"A", string(long), "B"}, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	// prefixSum[0] = 0, prefixSum[1] = 1, prefixSum[2] = 3, prefixSum[3] = 4
@@ -295,7 +295,7 @@ func BenchmarkPhysicalLineIndex_Build(b *testing.B) {
 	}
 	mb := setupTestBuffer(lines, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 
 	b.ResetTimer()
 	for range b.N {
@@ -310,7 +310,7 @@ func BenchmarkPhysicalLineIndex_Build_50k(b *testing.B) {
 	}
 	mb := setupTestBuffer(lines, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 
 	b.ResetTimer()
 	for range b.N {
@@ -325,7 +325,7 @@ func BenchmarkPhysicalLineIndex_TotalAfterBuild(b *testing.B) {
 	}
 	mb := setupTestBuffer(lines, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	b.ResetTimer()
@@ -341,7 +341,7 @@ func BenchmarkPhysicalLineIndex_PhysicalToLogical(b *testing.B) {
 	}
 	mb := setupTestBuffer(lines, 80)
 	reader := NewMemoryBufferReader(mb)
-	idx := NewPhysicalLineIndex(reader, 80)
+	idx := NewPhysicalLineIndex(reader, 80, false)
 	idx.Build()
 
 	total := idx.TotalPhysicalLines()

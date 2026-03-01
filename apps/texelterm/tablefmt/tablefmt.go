@@ -32,6 +32,7 @@ var (
 	_ transformer.LineOverlayer       = (*TableFormatter)(nil)
 	_ transformer.LineSuppressor      = (*TableFormatter)(nil)
 	_ transformer.LinePersistNotifier = (*TableFormatter)(nil)
+	_ transformer.Resizer             = (*TableFormatter)(nil)
 )
 
 // detectorThreshold pairs a detector with its minimum score for table parsing.
@@ -110,6 +111,13 @@ func (tf *TableFormatter) NotifyPromptStart() {
 // NotifyCommandStart records the current command for detection hints.
 func (tf *TableFormatter) NotifyCommandStart(cmd string) {
 	tf.currentCommand = cmd
+}
+
+// NotifyResize implements transformer.Resizer. It flushes any buffered
+// lines as raw (unformatted) because their line indices may be invalid
+// after the resize.
+func (tf *TableFormatter) NotifyResize(cols, rows int) {
+	tf.flushRaw()
 }
 
 // HandleLine processes a committed line. It tracks command/prompt transitions

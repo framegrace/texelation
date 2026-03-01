@@ -51,6 +51,14 @@ type LinePersistNotifier interface {
 	SetPersistNotifyFunc(fn func(lineIdx int64))
 }
 
+// Resizer is an optional interface that transformers can implement to be
+// notified when the terminal is resized. Transformers that buffer lines
+// should flush or reset their state because buffered line indices may
+// become invalid after a resize.
+type Resizer interface {
+	NotifyResize(cols, rows int)
+}
+
 // Config holds per-transformer configuration.
 type Config map[string]interface{}
 
@@ -166,6 +174,17 @@ func (p *Pipeline) NotifyCommandStart(cmd string) {
 	}
 	for _, t := range p.transformers {
 		t.NotifyCommandStart(cmd)
+	}
+}
+
+// NotifyResize dispatches a resize event to transformers that implement
+// the Resizer interface. This allows buffering transformers to flush or
+// reset state that depends on line indices or terminal width.
+func (p *Pipeline) NotifyResize(cols, rows int) {
+	for _, t := range p.transformers {
+		if r, ok := t.(Resizer); ok {
+			r.NotifyResize(cols, rows)
+		}
 	}
 }
 

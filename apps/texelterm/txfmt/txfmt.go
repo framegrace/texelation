@@ -113,6 +113,17 @@ func (f *Formatter) NotifyCommandStart(cmd string) {
 	f.currentCommand = cmd
 }
 
+// NotifyResize implements transformer.Resizer. It resets detection state
+// and flushes the backlog because buffered line indices may be invalid
+// after a resize.
+func (f *Formatter) NotifyResize(cols, rows int) {
+	f.det.reset()
+	f.backlog = f.backlog[:0]
+	f.chromaContext = f.chromaContext[:0]
+	f.codeLexer = ""
+	f.codeLexerMethod = ""
+}
+
 // prepareOverlay clones Cells into Overlay so colorization modifies the copy.
 func prepareOverlay(line *parser.LogicalLine) {
 	if line.Overlay != nil {

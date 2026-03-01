@@ -50,9 +50,13 @@ func EnsureInstalled(configDir string) error {
 		}
 	}
 
-	// Generate bash-wrapper.sh dynamically (contains home-dir path)
-	if err := generateBashWrapper(configDir); err != nil {
-		return err
+	// Generate bash-wrapper.sh dynamically (contains home-dir path).
+	// Only regenerated when missing or version is outdated.
+	wrapperPath := filepath.Join(configDir, "bash-wrapper.sh")
+	if needsUpdate(wrapperPath) {
+		if err := generateBashWrapper(configDir, wrapperPath); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -105,7 +109,11 @@ func parseVersionLine(line string) (int, error) {
 // generateBashWrapper writes bash-wrapper.sh which sources the integration
 // script followed by the user's .bashrc. The path is derived from configDir
 // rather than hardcoded to a specific home directory.
-func generateBashWrapper(configDir string) error {
+//
+// Includes a version stamp so needsUpdate() can skip regeneration on
+// subsequent terminal spawns. Uses atomic write (temp file + rename) so
+// concurrent spawns during a version bump never see a truncated wrapper.
+func generateBashWrapper(configDir, wrapperPath string) error {
 	integrationPath := filepath.Join(configDir, "bash.sh")
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -114,15 +122,38 @@ func generateBashWrapper(configDir string) error {
 	bashrc := filepath.Join(homeDir, ".bashrc")
 
 	content := fmt.Sprintf(`#!/bin/bash
+# TEXEL_SHELL_INTEGRATION_VERSION=%d
 # Texelterm shell integration wrapper (auto-generated, do not edit)
 # Loads integration first, then user's bashrc
 [[ -f %s ]] && source %s
 [[ -f %s ]] && source %s
-`, integrationPath, integrationPath, bashrc, bashrc)
+`, CurrentVersion, integrationPath, integrationPath, bashrc, bashrc)
 
-	wrapperPath := filepath.Join(configDir, "bash-wrapper.sh")
-	if err := os.WriteFile(wrapperPath, []byte(content), 0755); err != nil {
-		return fmt.Errorf("shell: write bash-wrapper.sh: %w", err)
+	// Atomic write: write to temp file then rename, so concurrent bash
+	// processes never see a truncated/partial wrapper.
+	tmp, err := os.CreateTemp(configDir, "bash-wrapper-*.tmp")
+	if err != nil {
+		return fmt.Errorf("shell: create temp wrapper: %w", err)
 	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("shell: write temp wrapper: %w", err)
+	}
+	if err := tmp.Chmod(0755); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("shell: chmod temp wrapper: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("shell: close temp wrapper: %w", err)
+	}
+	if err := os.Rename(tmpPath, wrapperPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("shell: rename wrapper: %w", err)
+	}
+	log.Printf("[SHELL] Installed %s (version %d)", wrapperPath, CurrentVersion)
 	return nil
 }

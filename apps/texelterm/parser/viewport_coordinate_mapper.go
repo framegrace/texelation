@@ -56,6 +56,22 @@ func (cm *CoordinateMapper) ViewportToContent(viewportRow, col, viewportHeight i
 	lines := cm.reader.GetLineRange(startGlobal, endGlobal)
 	physical := cm.builder.BuildRange(lines, startGlobal)
 
+	// BuildRange may produce fewer physical lines than the index predicted
+	// (e.g., wrap chains get joined into fewer rows). Extend the range
+	// backward to match what VisibleGrid does, so cursor positions are
+	// consistent with the rendered grid.
+	minGlobal := cm.reader.GlobalOffset()
+	for len(physical) < viewportHeight && startGlobal > minGlobal {
+		deficit := int64(viewportHeight - len(physical))
+		newStart := max(startGlobal-deficit, minGlobal)
+		if newStart == startGlobal {
+			break
+		}
+		startGlobal = newStart
+		lines = cm.reader.GetLineRange(startGlobal, endGlobal)
+		physical = cm.builder.BuildRange(lines, startGlobal)
+	}
+
 	// Calculate which physical line corresponds to the viewport row
 	// We need to account for scroll offset within the physical lines
 	totalPhysical := int64(len(physical))
@@ -100,6 +116,22 @@ func (cm *CoordinateMapper) ContentToViewport(globalLineIdx int64, charOffset, v
 	lines := cm.reader.GetLineRange(startGlobal, endGlobal)
 	physical := cm.builder.BuildRange(lines, startGlobal)
 
+	// BuildRange may produce fewer physical lines than the index predicted
+	// (e.g., wrap chains get joined into fewer rows). Extend the range
+	// backward to match what VisibleGrid does, so cursor positions are
+	// consistent with the rendered grid.
+	minGlobal := cm.reader.GlobalOffset()
+	for len(physical) < viewportHeight && startGlobal > minGlobal {
+		deficit := int64(viewportHeight - len(physical))
+		newStart := max(startGlobal-deficit, minGlobal)
+		if newStart == startGlobal {
+			break
+		}
+		startGlobal = newStart
+		lines = cm.reader.GetLineRange(startGlobal, endGlobal)
+		physical = cm.builder.BuildRange(lines, startGlobal)
+	}
+
 	// Calculate the physical line window we're showing
 	totalPhysical := int64(len(physical))
 	physicalEnd := totalPhysical
@@ -107,18 +139,41 @@ func (cm *CoordinateMapper) ContentToViewport(globalLineIdx int64, charOffset, v
 
 	width := cm.builder.Width()
 
+	// Resolve wrap chain: if globalLineIdx was merged into a chain by
+	// BuildRange, translate to (chainHead, adjustedOffset).
+	searchIdx := globalLineIdx
+	searchOffset := charOffset
+	if !cm.physicalContains(physical, int(physicalStart), int(physicalEnd), searchIdx) {
+		// Walk backward through the lines to find the chain head.
+		// A line belongs to the chain if the previous line's last cell is Wrapped.
+		chainHead := globalLineIdx
+		accumulated := charOffset
+		for chainHead > startGlobal {
+			prev := cm.reader.GetLine(chainHead - 1)
+			if prev == nil || len(prev.Cells) == 0 || !prev.Cells[len(prev.Cells)-1].Wrapped {
+				break
+			}
+			accumulated += len(prev.Cells)
+			chainHead--
+		}
+		if chainHead != globalLineIdx {
+			searchIdx = chainHead
+			searchOffset = accumulated
+		}
+	}
+
 	// Find the physical line that contains our character offset
 	for i := int(physicalStart); i < len(physical) && i < int(physicalEnd); i++ {
 		pl := physical[i]
-		if int64(pl.LogicalIndex) == globalLineIdx {
+		if int64(pl.LogicalIndex) == searchIdx {
 			// Check if charOffset falls within this physical line
-			if charOffset >= pl.Offset && charOffset < pl.Offset+width {
+			if searchOffset >= pl.Offset && searchOffset < pl.Offset+width {
 				viewportRow := i - int(physicalStart)
-				col := charOffset - pl.Offset
+				col := searchOffset - pl.Offset
 				return viewportRow, col, true
 			}
 			// Check for end of line (charOffset at last position)
-			if charOffset == pl.Offset+len(pl.Cells) && len(pl.Cells) < width {
+			if searchOffset == pl.Offset+len(pl.Cells) && len(pl.Cells) < width {
 				viewportRow := i - int(physicalStart)
 				col := len(pl.Cells)
 				return viewportRow, col, true
@@ -127,6 +182,17 @@ func (cm *CoordinateMapper) ContentToViewport(globalLineIdx int64, charOffset, v
 	}
 
 	return 0, 0, false
+}
+
+// physicalContains checks if any physical line in the visible range has the
+// given LogicalIndex.
+func (cm *CoordinateMapper) physicalContains(physical []PhysicalLine, start, end int, logicalIdx int64) bool {
+	for i := start; i < end && i < len(physical); i++ {
+		if int64(physical[i].LogicalIndex) == logicalIdx {
+			return true
+		}
+	}
+	return false
 }
 
 // PhysicalLineAt returns metadata about the physical line at the given viewport row.

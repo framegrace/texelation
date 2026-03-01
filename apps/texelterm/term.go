@@ -570,9 +570,20 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.vterm.MarkAllDirty()
 	}
 
-	cursorX, cursorY := a.vterm.Cursor()
+	// Use PhysicalCursor to get the grid-relative position. After a width
+	// decrease, the logical cursor column may exceed the terminal width;
+	// PhysicalCursor maps it to the correct wrapped row and column.
+	cursorX, cursorY := a.vterm.PhysicalCursor()
 	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.DirtyLines()
+
+	// Ensure the physical cursor row is always re-rendered. MarkDirty uses
+	// the logical cursorY (offset from liveEdgeBase) which may differ from
+	// the physical grid row when wrap chains change the line-to-row mapping.
+	// Without this, typed characters at the cursor position stay invisible.
+	if !allDirty && cursorVisible && cursorY >= 0 && cursorY < termRows {
+		dirtyLines[cursorY] = true
+	}
 
 	a.logRenderDebug(vtermGrid, cursorX, cursorY, dirtyLines, allDirty)
 
@@ -1984,6 +1995,9 @@ func (a *TexelTerm) Resize(cols, rows int) {
 
 	if a.vterm != nil {
 		a.vterm.Resize(termWidth, termRows)
+	}
+	if a.pipeline != nil {
+		a.pipeline.NotifyResize(termWidth, termRows)
 	}
 	if a.scrollbar != nil {
 		a.scrollbar.Resize(termRows)
