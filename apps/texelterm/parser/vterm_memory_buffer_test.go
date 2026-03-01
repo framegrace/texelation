@@ -4591,3 +4591,134 @@ func TestVTerm_ResizeWidthWrapBeforeContentCursorSync(t *testing.T) {
 		}
 	}
 }
+
+// TestResize_SpringAnimationCursorSync simulates the spring animation pattern:
+// the terminal goes through many rapid width changes (narrow→wide) and the
+// cursor must remain in sync with the viewport grid throughout.
+func TestResize_SpringAnimationCursorSync(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 80, 24
+
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	prompt := "marc@host:~/projects$ "
+	parseString(p, prompt) // 22 chars
+
+	// Simulate spring animation: width shrinks rapidly then recovers
+	widths := []int{60, 40, 20, 10, 5, 3, 5, 10, 20, 40, 60, 80}
+	for _, w := range widths {
+		v.Resize(w, height)
+
+		grid := v.Grid()
+		cy := v.cursorY
+		if cy < 0 || cy >= height {
+			t.Fatalf("width=%d: cursorY=%d out of bounds [0,%d)", w, cy, height)
+		}
+
+		row := cellsToString(grid[cy])
+		// At any width, cursor should be on a row with prompt content,
+		// or on the row immediately following the last prompt content
+		// (cursor wraps past the "$" to the next physical row).
+		hasPromptContent := strings.Contains(row, "marc") ||
+			strings.Contains(row, "host") ||
+			strings.Contains(row, "projects") ||
+			strings.Contains(row, "$")
+		if !hasPromptContent && cy > 0 {
+			prevRow := cellsToString(grid[cy-1])
+			hasPromptContent = strings.Contains(prevRow, "$")
+		}
+
+		if !hasPromptContent {
+			t.Logf("DESYNC at width=%d: cursorY=%d, cursorX=%d", w, cy, v.cursorX)
+			t.Logf("Grid:")
+			for y := range height {
+				s := cellsToString(grid[y])
+				if strings.TrimRight(s, " \x00") != "" {
+					marker := "  "
+					if y == cy {
+						marker = ">>"
+					}
+					t.Logf("  %s [%2d] %q", marker, y, s)
+				}
+			}
+			t.Errorf("width=%d: grid[cursorY=%d] has no prompt content: %q", w, cy, row)
+		}
+	}
+}
+
+// TestResize_WidthDecreaseIncreaseWrapChainDesync verifies that after a width
+// decrease (which splits the cursor line into a wrap chain) followed by a width
+// increase (which causes BuildRange to rejoin the chain), the cursor position
+// still points to the correct physical row in the viewport grid.
+//
+// This is the "spring animation resize" scenario: the terminal goes through
+// many width changes, and the cursor must remain in sync with the grid.
+func TestResize_WidthDecreaseIncreaseWrapChainDesync(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 40, 24
+
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write a prompt that's wider than the narrow width we'll resize to
+	prompt := "marc@host:~/projects$ "
+	parseString(p, prompt) // 22 chars, cursor at (0, 22)
+
+	// Verify initial state
+	grid0 := v.Grid()
+	if !strings.Contains(cellsToString(grid0[v.cursorY]), "marc@host") {
+		t.Fatalf("Initial: grid[cursorY=%d] should contain prompt, got %q",
+			v.cursorY, cellsToString(grid0[v.cursorY]))
+	}
+
+	// Step 1: Width decrease → triggers split (22 chars split at width 10)
+	v.Resize(10, height)
+	grid1 := v.Grid()
+	row1 := cellsToString(grid1[v.cursorY])
+	t.Logf("After width 40→10: cursorY=%d, cursorX=%d, row=%q",
+		v.cursorY, v.cursorX, row1)
+
+	// Cursor should be on a row containing "$ " (the end of the prompt)
+	if !strings.Contains(row1, "$ ") {
+		t.Logf("Grid after width decrease:")
+		for y := range height {
+			s := cellsToString(grid1[y])
+			if strings.TrimRight(s, " \x00") != "" {
+				marker := "  "
+				if y == v.cursorY {
+					marker = ">>"
+				}
+				t.Logf("  %s [%2d] %q", marker, y, s)
+			}
+		}
+		t.Fatalf("After width decrease: grid[cursorY=%d] should contain '$ ', got %q",
+			v.cursorY, row1)
+	}
+
+	// Step 2: Width increase → wrap chain rejoined by viewport
+	v.Resize(40, height)
+	grid2 := v.Grid()
+	row2 := cellsToString(grid2[v.cursorY])
+	t.Logf("After width 10→40: cursorY=%d, cursorX=%d, row=%q",
+		v.cursorY, v.cursorX, row2)
+
+	// Critical check: cursor must still be on a row containing the prompt
+	if !strings.Contains(row2, "marc@host") {
+		t.Logf("Grid after width increase:")
+		for y := range height {
+			s := cellsToString(grid2[y])
+			if strings.TrimRight(s, " \x00") != "" {
+				marker := "  "
+				if y == v.cursorY {
+					marker = ">>"
+				}
+				t.Logf("  %s [%2d] %q", marker, y, s)
+			}
+		}
+		t.Errorf("CURSOR DESYNC: after width increase, grid[cursorY=%d] should contain prompt, got %q",
+			v.cursorY, row2)
+	}
+}

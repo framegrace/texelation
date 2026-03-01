@@ -1126,6 +1126,93 @@ func (v *VTerm) memoryBufferAtLiveEdge() bool {
 
 // --- Resize ---
 
+// rejoinCursorWrapChain undoes wrap chain splits created by previous resizes.
+// When memoryBufferResize decreases the width, it splits the cursor's logical
+// line into multiple logical lines connected by Wrapped flags. If the width
+// then changes again, BuildRange may rejoin these lines differently, changing
+// the physical row count without adjusting cursorY. By rejoining the chain
+// back into a single logical line before each resize, we ensure the resize
+// always starts from a clean state.
+func (v *VTerm) rejoinCursorWrapChain() {
+	mb := v.memBufState.memBuf
+	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	globalOffset := mb.GlobalOffset()
+
+	// Walk backward from cursor's line to find the start of any wrap chain.
+	chainStart := cursorGlobal
+	for chainStart > globalOffset {
+		prev := mb.GetLine(chainStart - 1)
+		if prev == nil || prev.Synthetic || prev.Overlay != nil || prev.FixedWidth > 0 {
+			break
+		}
+		if len(prev.Cells) == 0 || !prev.Cells[len(prev.Cells)-1].Wrapped {
+			break
+		}
+		chainStart--
+	}
+
+	// Walk forward from cursor to find the end of the chain.
+	// The chain continues while the current line's last cell has Wrapped set.
+	chainEnd := cursorGlobal
+	for {
+		line := mb.GetLine(chainEnd)
+		if line == nil || line.Synthetic || line.Overlay != nil || line.FixedWidth > 0 {
+			break
+		}
+		if len(line.Cells) == 0 || !line.Cells[len(line.Cells)-1].Wrapped {
+			break
+		}
+		chainEnd++
+	}
+
+	chainLen := int(chainEnd - chainStart + 1)
+	if chainLen <= 1 {
+		return // No chain to rejoin
+	}
+
+	// Compute absolute cursor column within the chain.
+	absCol := 0
+	for i := chainStart; i < cursorGlobal; i++ {
+		line := mb.GetLine(i)
+		if line != nil {
+			absCol += len(line.Cells)
+		}
+	}
+	absCol += v.cursorX
+
+	// Combine all cells into one logical line.
+	combined := make([]Cell, 0)
+	for i := chainStart; i <= chainEnd; i++ {
+		line := mb.GetLine(i)
+		if line != nil {
+			combined = append(combined, line.Cells...)
+		}
+	}
+	// Clear Wrapped flag on the last cell of the combined line.
+	if len(combined) > 0 {
+		combined[len(combined)-1].Wrapped = false
+	}
+
+	// Set the combined cells on the first line of the chain.
+	firstLine := mb.GetLine(chainStart)
+	if firstLine != nil {
+		firstLine.Cells = combined
+	}
+
+	// Delete the extra lines (from chain end down to chain start + 1).
+	for i := chainEnd; i > chainStart; i-- {
+		mb.DeleteLine(i)
+	}
+
+	// Adjust cursor position.
+	rowsRemoved := int(cursorGlobal - chainStart)
+	v.cursorY -= rowsRemoved
+	v.cursorX = absCol
+
+	v.logMemBufDebug("[RESIZE] Rejoin wrap chain: chainStart=%d, chainEnd=%d, chainLen=%d, absCol=%d, cursorY=%d",
+		chainStart, chainEnd, chainLen, absCol, v.cursorY)
+}
+
 // memoryBufferResize handles terminal resize.
 func (v *VTerm) memoryBufferResize(width, height int) {
 	if !v.IsMemoryBufferEnabled() {
@@ -1143,6 +1230,14 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	oldHeight := v.memBufState.viewport.Height()
 	mb := v.memBufState.memBuf
 
+	// Rejoin any wrap chain around the cursor before computing positions.
+	// Previous resize width-decrease splits create wrap chains (multiple
+	// logical lines with Wrapped flags). When the width changes again,
+	// BuildRange may rejoin these chains, changing the physical line count
+	// without cursorY being adjusted. By rejoining first, we start each
+	// resize from a clean state: one logical line per original content line.
+	v.rejoinCursorWrapChain()
+
 	// Calculate cursor's global line before resize
 	cursorGlobalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
 
@@ -1150,10 +1245,11 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 		oldWidth, width, oldHeight, height,
 		v.memBufState.liveEdgeBase, v.cursorY, cursorGlobalLine, mb.GlobalEnd())
 
-	// When width decreases, the cursor's logical line may be wider than the
-	// new terminal width. Split it into a wrapped chain so that cursorY/cursorX
-	// correctly address the content after the width change.
-	if width > 0 && width < oldWidth && v.cursorX >= width {
+	// When the cursor column exceeds the new width, split the cursor's logical
+	// line into a wrapped chain so that cursorY/cursorX correctly address the
+	// content. This triggers on width decrease, or after rejoinCursorWrapChain
+	// restores cursorX to the absolute column in the combined line.
+	if width > 0 && v.cursorX >= width {
 		line := mb.GetLine(cursorGlobalLine)
 		if line != nil && len(line.Cells) > width {
 			absoluteCol := v.cursorX
