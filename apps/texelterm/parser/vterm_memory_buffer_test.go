@@ -4058,6 +4058,111 @@ func TestGetContentText_SyntheticLineWithOverlay(t *testing.T) {
 	}
 }
 
+// TestRequestLineOverlay_MarksDirtyAndInvalidatesCache verifies that
+// RequestLineOverlay marks all lines dirty and invalidates the viewport cache
+// so the renderer repaints the affected rows.
+func TestRequestLineOverlay_MarksDirtyAndInvalidatesCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 40, 10
+
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write several lines
+	parseString(p, "line 0 original\r\n")
+	parseString(p, "line 1 original\r\n")
+	parseString(p, "line 2 original\r\n")
+
+	// Get initial grid (caches it)
+	grid1 := v.Grid()
+	row1Text := cellsToString(grid1[0])
+
+	// Clear dirty state (simulates render cycle completing)
+	v.ClearDirty()
+	_, allDirtyBefore := v.DirtyLines()
+	if allDirtyBefore {
+		t.Fatal("allDirty should be false after ClearDirty")
+	}
+
+	// Now call RequestLineOverlay on line 1 (simulating transformer flush)
+	mb := v.memBufState.memBuf
+	lineIdx := mb.GlobalOffset() + 1
+	overlayText := "FORMATTED LINE 1"
+	overlayCells := make([]Cell, len(overlayText))
+	for i, ch := range overlayText {
+		overlayCells[i] = Cell{Rune: ch, FG: DefaultFG, BG: DefaultBG}
+	}
+	v.RequestLineOverlay(lineIdx, overlayCells)
+
+	// Check 1: allDirty should be set so renderer repaints all rows
+	_, allDirtyAfter := v.DirtyLines()
+	if !allDirtyAfter {
+		t.Error("allDirty should be true after RequestLineOverlay")
+	}
+
+	// Check 2: Grid() should return updated overlay content (cache invalidated)
+	grid2 := v.Grid()
+	row1After := cellsToString(grid2[1])
+	if !strings.Contains(row1After, "FORMATTED") {
+		t.Errorf("Grid after overlay should contain formatted content, got row1=%q (was %q)", row1After, row1Text)
+	}
+}
+
+// TestRequestLineInsert_MarksDirtyAndInvalidatesCache verifies that
+// RequestLineInsert marks all lines dirty and invalidates the viewport cache.
+func TestRequestLineInsert_MarksDirtyAndInvalidatesCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 40, 10
+
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write several lines
+	parseString(p, "line 0\r\n")
+	parseString(p, "line 1\r\n")
+	parseString(p, "line 2\r\n")
+
+	// Get initial grid (caches it) and clear dirty
+	_ = v.Grid()
+	v.ClearDirty()
+
+	// Insert a synthetic line at position 1
+	mb := v.memBufState.memBuf
+	insertIdx := mb.GlobalOffset() + 1
+	insertText := "--- border ---"
+	insertCells := make([]Cell, len(insertText))
+	for i, ch := range insertText {
+		insertCells[i] = Cell{Rune: ch, FG: DefaultFG, BG: DefaultBG}
+	}
+	v.RequestLineInsert(insertIdx, insertCells)
+
+	// Check 1: allDirty should be set
+	_, allDirtyAfter := v.DirtyLines()
+	if !allDirtyAfter {
+		t.Error("allDirty should be true after RequestLineInsert")
+	}
+
+	// Check 2: Grid() should reflect the insertion (cache invalidated)
+	grid := v.Grid()
+	// The inserted line should appear in the grid with its overlay content
+	found := false
+	for y := range height {
+		rowText := cellsToString(grid[y])
+		if strings.Contains(rowText, "border") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Grid after insert should contain the inserted line content")
+		for y := range height {
+			t.Logf("  row %d: %q", y, cellsToString(grid[y]))
+		}
+	}
+}
+
 // TestPromptPositionOnReload verifies that after reload, liveEdgeBase is moved
 // to the saved PromptStartLine so the new shell prompt overwrites the old one.
 func TestPromptPositionOnReload(t *testing.T) {

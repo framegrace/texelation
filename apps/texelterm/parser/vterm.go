@@ -1304,6 +1304,10 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	if beforeIdx <= cursorGlobal {
 		v.memBufState.liveEdgeBase++
 	}
+	// Insertion shifts all subsequent rows — invalidate viewport cache and
+	// mark all rows dirty so the renderer repaints the affected content.
+	v.memBufState.viewport.InvalidateCache()
+	v.MarkAllDirty()
 }
 
 // RequestLineOverlay sets overlay content on an existing line without modifying
@@ -1321,6 +1325,10 @@ func (v *VTerm) RequestLineOverlay(lineIdx int64, cells []Cell) {
 	line.Overlay = make([]Cell, len(cells))
 	copy(line.Overlay, cells)
 	line.OverlayWidth = len(cells)
+	// Invalidate viewport cache so VisibleGrid() rebuilds with the new
+	// overlay, and mark all rows dirty so the renderer repaints.
+	v.memBufState.viewport.InvalidateCache()
+	v.MarkAllDirty()
 }
 
 // NotifyLinePersist notifies the persistence layer that a line is ready for writing.
