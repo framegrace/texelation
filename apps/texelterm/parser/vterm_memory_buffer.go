@@ -1129,25 +1129,6 @@ func (v *VTerm) memoryBufferAtLiveEdge() bool {
 
 // --- Resize ---
 
-// findChainStart walks backward from lineIdx to find the first line in a
-// wrap chain. A line belongs to the chain if the previous line's last cell
-// has Wrapped set and the previous line is a normal (non-synthetic,
-// non-overlay, non-fixed-width) line.
-func findChainStart(mb *MemoryBuffer, lineIdx, globalOffset int64) int64 {
-	chainStart := lineIdx
-	for chainStart > globalOffset {
-		prev := mb.GetLine(chainStart - 1)
-		if prev == nil || prev.Synthetic || prev.Overlay != nil || prev.FixedWidth > 0 {
-			break
-		}
-		if len(prev.Cells) == 0 || !prev.Cells[len(prev.Cells)-1].Wrapped {
-			break
-		}
-		chainStart--
-	}
-	return chainStart
-}
-
 // combineAndCollapseChain combines all cells in the wrap chain from chainStart
 // to chainEnd into a single logical line, clears the Wrapped flag on the last
 // cell, and deletes the extra lines. Returns the combined cells.
@@ -1206,30 +1187,46 @@ func (v *VTerm) assertCursorConsistency(label string, cursorGlobalLine int64) {
 	}
 }
 
-// rejoinCursorWrapChain undoes wrap chain splits created by previous resizes.
-// When memoryBufferResize decreases the width, it splits the cursor's logical
-// line into multiple logical lines connected by Wrapped flags. If the width
-// then changes again, BuildRange may rejoin these lines differently, changing
-// the physical row count without adjusting cursorY. By rejoining the chain
-// back into a single logical line before each resize, we ensure the resize
-// always starts from a clean state.
-func (v *VTerm) rejoinCursorWrapChain() {
+// rejoinResizeSplitChain undoes width-split chains created by previous resizes.
+// Unlike the old rejoinCursorWrapChain which used Wrapped cell flags (confusing
+// resize splits with natural auto-wraps), this uses the ResizeSplit flag on
+// LogicalLine to precisely identify resize-created chains.
+func (v *VTerm) rejoinResizeSplitChain() {
 	mb := v.memBufState.memBuf
 	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
-	globalOffset := mb.GlobalOffset()
 
-	// Walk backward from cursor's line to find the start of any wrap chain.
-	chainStart := findChainStart(mb, cursorGlobal, globalOffset)
+	// Find a resize-split line: either the cursor's line or the previous one
+	// (cursor-past-chain case when absoluteCol % width == 0).
+	var anchor int64
+	cursorLine := mb.GetLine(cursorGlobal)
+	if cursorLine != nil && cursorLine.ResizeSplit {
+		anchor = cursorGlobal
+	} else if cursorGlobal > mb.GlobalOffset() {
+		prevLine := mb.GetLine(cursorGlobal - 1)
+		if prevLine != nil && prevLine.ResizeSplit {
+			anchor = cursorGlobal - 1
+		} else {
+			return // no resize-split chain near cursor
+		}
+	} else {
+		return
+	}
 
-	// Walk forward from cursor to find the end of the chain.
-	// The chain continues while the current line's last cell has Wrapped set.
-	chainEnd := cursorGlobal
-	for {
-		line := mb.GetLine(chainEnd)
-		if line == nil || line.Synthetic || line.Overlay != nil || line.FixedWidth > 0 {
+	// Walk backward to chain start (first ResizeSplit line).
+	chainStart := anchor
+	for chainStart > mb.GlobalOffset() {
+		prev := mb.GetLine(chainStart - 1)
+		if prev == nil || !prev.ResizeSplit {
 			break
 		}
-		if len(line.Cells) == 0 || !line.Cells[len(line.Cells)-1].Wrapped {
+		chainStart--
+	}
+
+	// Walk forward to chain end (last ResizeSplit line).
+	chainEnd := anchor
+	for {
+		next := mb.GetLine(chainEnd + 1)
+		if next == nil || !next.ResizeSplit {
 			break
 		}
 		chainEnd++
@@ -1237,79 +1234,53 @@ func (v *VTerm) rejoinCursorWrapChain() {
 
 	chainLen := int(chainEnd - chainStart + 1)
 	if chainLen <= 1 {
-		// Cursor is not in a multi-line chain. Check if there's a chain
-		// immediately before the cursor. This happens when a previous resize
-		// split put the cursor past the chain end (absoluteCol % width == 0).
-		v.rejoinPreCursorWrapChain()
+		// Single line — just clear ResizeSplit and return.
+		if line := mb.GetLine(chainStart); line != nil {
+			line.ResizeSplit = false
+		}
 		return
 	}
 
 	// Compute absolute cursor column within the chain.
 	absCol := 0
-	for i := chainStart; i < cursorGlobal; i++ {
-		line := mb.GetLine(i)
-		if line != nil {
-			absCol += len(line.Cells)
+	cursorPastChain := cursorGlobal > chainEnd
+	if cursorPastChain {
+		// Cursor is past chain (cursor-past-chain case).
+		for i := chainStart; i <= chainEnd; i++ {
+			if line := mb.GetLine(i); line != nil {
+				absCol += len(line.Cells)
+			}
 		}
+	} else {
+		for i := chainStart; i < cursorGlobal; i++ {
+			if line := mb.GetLine(i); line != nil {
+				absCol += len(line.Cells)
+			}
+		}
+		absCol += v.cursorX
 	}
-	absCol += v.cursorX
 
 	// Combine all chain lines into one and delete extras.
 	combineAndCollapseChain(mb, chainStart, chainEnd)
+
+	// Clear ResizeSplit on the combined line.
+	if firstLine := mb.GetLine(chainStart); firstLine != nil {
+		firstLine.ResizeSplit = false
+	}
 
 	// Adjust cursor position.
-	rowsRemoved := int(cursorGlobal - chainStart)
-	v.cursorY -= rowsRemoved
-	v.cursorX = absCol
-
-	v.logMemBufDebug("[RESIZE] Rejoin wrap chain: chainStart=%d, chainEnd=%d, chainLen=%d, absCol=%d, cursorY=%d",
-		chainStart, chainEnd, chainLen, absCol, v.cursorY)
-}
-
-// rejoinPreCursorWrapChain handles the case where the cursor is immediately
-// past a wrap chain (not inside it). This occurs when a resize split puts
-// cursorX at 0 on the line after the chain (absoluteCol % width == 0).
-// It finds the chain, combines it into one line, deletes the extras, and
-// moves the cursor onto the combined line at the end of the content.
-func (v *VTerm) rejoinPreCursorWrapChain() {
-	mb := v.memBufState.memBuf
-	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
-	globalOffset := mb.GlobalOffset()
-
-	if cursorGlobal <= globalOffset {
-		return
+	if cursorPastChain {
+		// Cursor was past chain — shift up by deleted lines.
+		linesRemoved := chainLen - 1
+		v.cursorY -= linesRemoved
+	} else {
+		rowsRemoved := int(cursorGlobal - chainStart)
+		v.cursorY -= rowsRemoved
+		v.cursorX = absCol
 	}
 
-	// The line before the cursor must be the END of a chain (NOT Wrapped).
-	prevLine := mb.GetLine(cursorGlobal - 1)
-	if prevLine == nil || prevLine.Synthetic || prevLine.Overlay != nil || prevLine.FixedWidth > 0 {
-		return
-	}
-	if len(prevLine.Cells) > 0 && prevLine.Cells[len(prevLine.Cells)-1].Wrapped {
-		return // Still a chain middle — the main rejoin should have caught this.
-	}
-
-	// Walk backward from prevLine to find the chain start.
-	chainEnd := cursorGlobal - 1
-	chainStart := findChainStart(mb, chainEnd, globalOffset)
-
-	preChainLen := int(chainEnd - chainStart + 1)
-	if preChainLen <= 1 {
-		return // No multi-line chain before cursor
-	}
-
-	// Combine all chain lines into one and delete extras.
-	combineAndCollapseChain(mb, chainStart, chainEnd)
-
-	// Shift cursor up by the number of deleted lines. The cursor stays on
-	// its own line (which shifted up), NOT on the combined chain line.
-	// The combined line will be visually wrapped by the renderer at the new
-	// width — no explicit re-split is needed.
-	linesRemoved := preChainLen - 1
-	v.cursorY -= linesRemoved
-
-	v.logMemBufDebug("[RESIZE] Rejoin pre-cursor chain: chainStart=%d, chainEnd=%d, len=%d, linesRemoved=%d, cursorY=%d",
-		chainStart, chainEnd, preChainLen, linesRemoved, v.cursorY)
+	v.logMemBufDebug("[RESIZE] Rejoin resize-split chain: chainStart=%d, chainEnd=%d, chainLen=%d, absCol=%d, cursorPastChain=%v, cursorY=%d",
+		chainStart, chainEnd, chainLen, absCol, cursorPastChain, v.cursorY)
 }
 
 // memoryBufferResize handles terminal resize.
@@ -1329,17 +1300,11 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	oldHeight := v.memBufState.viewport.Height()
 	mb := v.memBufState.memBuf
 
-	// Rejoin any wrap chain around the cursor before computing positions.
-	// Previous resize width-decrease splits create wrap chains (multiple
-	// logical lines with Wrapped flags). When the width changes again,
-	// BuildRange may rejoin these chains, changing the physical line count
-	// without cursorY being adjusted. By rejoining first, we start each
-	// resize from a clean state: one logical line per original content line.
-	//
-	// ORDERING: rejoinCursorWrapChain mutates the MemoryBuffer via
-	// DeleteLine/InsertLine and must run before viewport.Resize (below)
-	// which rebuilds the PhysicalLineIndex from the buffer's contents.
-	v.rejoinCursorWrapChain()
+	// Rejoin any resize-split chain around the cursor before computing positions.
+	// Previous resize width-decrease splits create chains (multiple logical
+	// lines with ResizeSplit=true). When the width changes again, we rejoin
+	// them to start from a clean state: one logical line per original content.
+	v.rejoinResizeSplitChain()
 
 	// Calculate cursor's global line before resize
 	cursorGlobalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
@@ -1351,7 +1316,7 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 
 	// When the cursor column exceeds the new width, split the cursor's logical
 	// line into a wrapped chain so that cursorY/cursorX correctly address the
-	// content. This triggers on width decrease, or after rejoinCursorWrapChain
+	// content. This triggers on width decrease, or after rejoinResizeSplitChain
 	// restores cursorX to the absolute column in the combined line.
 	if width > 0 && v.cursorX >= width {
 		line := mb.GetLine(cursorGlobalLine)
@@ -1368,6 +1333,7 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 				copy(firstChunk, cells[:width])
 				firstChunk[width-1].Wrapped = true
 				line.Cells = firstChunk
+				line.ResizeSplit = true
 
 				// Insert remaining chunks as new wrapped logical lines.
 				for i := 1; i < numChunks; i++ {
@@ -1381,7 +1347,7 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 
 					insertIdx := cursorGlobalLine + int64(i)
 					mb.InsertLine(insertIdx)
-					mb.SetLine(insertIdx, &LogicalLine{Cells: chunk})
+					mb.SetLine(insertIdx, &LogicalLine{Cells: chunk, ResizeSplit: true})
 				}
 
 				// Adjust cursor to the correct split segment.

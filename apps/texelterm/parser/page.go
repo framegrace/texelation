@@ -84,8 +84,15 @@ func encodeCell(cell Cell, buf []byte) {
 	buf[9] = byte(cell.BG.Mode)
 	binary.LittleEndian.PutUint32(buf[10:14], encodeColorValue(cell.BG))
 
-	// Attributes (2 bytes)
-	binary.LittleEndian.PutUint16(buf[14:16], uint16(cell.Attr))
+	// Attributes (2 bytes) - bits 0-4: Attr, bit 5: Wrapped, bit 6: Wide
+	attrBits := uint16(cell.Attr)
+	if cell.Wrapped {
+		attrBits |= 1 << 5
+	}
+	if cell.Wide {
+		attrBits |= 1 << 6
+	}
+	binary.LittleEndian.PutUint16(buf[14:16], attrBits)
 }
 
 // decodeCell reads a Cell from the buffer.
@@ -103,8 +110,11 @@ func decodeCell(buf []byte) Cell {
 	bgMode := ColorMode(buf[9])
 	cell.BG = decodeColorFromValue(bgMode, binary.LittleEndian.Uint32(buf[10:14]))
 
-	// Attributes
-	cell.Attr = Attribute(binary.LittleEndian.Uint16(buf[14:16]))
+	// Attributes - bits 0-4: Attr, bit 5: Wrapped, bit 6: Wide
+	attrBits := binary.LittleEndian.Uint16(buf[14:16])
+	cell.Attr = Attribute(attrBits & 0x1F)
+	cell.Wrapped = attrBits&(1<<5) != 0
+	cell.Wide = attrBits&(1<<6) != 0
 
 	return cell
 }
@@ -571,6 +581,9 @@ func encodeLineData(line *LogicalLine) []byte {
 	if line.Synthetic {
 		flags |= 0x02
 	}
+	if line.ResizeSplit {
+		flags |= 0x04
+	}
 
 	cellCount := uint32(len(line.Cells))
 	size := 1 + 4 + 4 + int(cellCount)*PageCellSize
@@ -663,7 +676,7 @@ func decodeLineDataV2(data []byte) (*LogicalLine, error) {
 	}
 
 	flags := data[0]
-	if flags & ^byte(0x03) != 0 {
+	if flags & ^byte(0x07) != 0 {
 		return nil, fmt.Errorf("invalid v2 flags: 0x%02x", flags)
 	}
 
@@ -686,9 +699,10 @@ func decodeLineDataV2(data []byte) (*LogicalLine, error) {
 	}
 
 	line := &LogicalLine{
-		Cells:      cells,
-		FixedWidth: int(fixedWidth),
-		Synthetic:  flags&0x02 != 0,
+		Cells:       cells,
+		FixedWidth:  int(fixedWidth),
+		Synthetic:   flags&0x02 != 0,
+		ResizeSplit: flags&0x04 != 0,
 	}
 
 	if flags&0x01 != 0 {
