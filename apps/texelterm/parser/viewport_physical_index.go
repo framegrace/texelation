@@ -52,26 +52,46 @@ type PhysicalLineIndex struct {
 	// prefixDirty indicates the prefix sum needs rebuilding.
 	prefixDirty bool
 
+	// showOverlay matches the builder's overlay mode. When true, overlaid
+	// lines are counted as 1 physical line (fixed-width). When false,
+	// synthetic lines are hidden (0 lines) and overlaid lines use original cells.
+	showOverlay bool
+
 	// reader provides access to logical lines.
 	reader ContentReader
 }
 
 // NewPhysicalLineIndex creates a new index for the given reader and width.
-func NewPhysicalLineIndex(reader ContentReader, width int) *PhysicalLineIndex {
+func NewPhysicalLineIndex(reader ContentReader, width int, showOverlay bool) *PhysicalLineIndex {
 	return &PhysicalLineIndex{
-		reader: reader,
-		width:  width,
+		reader:      reader,
+		width:       width,
+		showOverlay: showOverlay,
 	}
 }
 
 // physicalLinesFor computes the number of physical lines a logical line
-// produces at the given width. This is pure arithmetic — no allocations.
-// Mirrors the logic in LogicalLine.WrapToWidth() at logical_line.go:144-182.
-func physicalLinesFor(line *LogicalLine, width int) int {
-	if line == nil || len(line.Cells) == 0 {
+// produces at the given width and overlay mode. This is pure arithmetic —
+// no allocations. Mirrors the logic in LogicalLine.ActiveWrapToWidth().
+func physicalLinesFor(line *LogicalLine, width int, showOverlay bool) int {
+	if line == nil {
 		return 1
 	}
+	if showOverlay {
+		if line.Overlay != nil {
+			// Overlay content always renders as fixed-width (1 physical line).
+			return 1
+		}
+	} else {
+		if line.Synthetic {
+			// Synthetic lines are hidden when overlay is off.
+			return 0
+		}
+	}
 	if line.FixedWidth > 0 {
+		return 1
+	}
+	if len(line.Cells) == 0 {
 		return 1
 	}
 	return (len(line.Cells) + width - 1) / width
@@ -94,7 +114,7 @@ func (idx *PhysicalLineIndex) Build() {
 	var total int64
 	for i := range n {
 		line := idx.reader.GetLine(memOffset + int64(i))
-		c := int16(physicalLinesFor(line, idx.width))
+		c := int16(physicalLinesFor(line, idx.width, idx.showOverlay))
 		idx.perLine[i] = c
 		total += int64(c)
 	}
@@ -174,7 +194,7 @@ func (idx *PhysicalLineIndex) HandleAppend(newEnd int64) {
 	for i := range appendCount {
 		globalIdx := oldEnd + int64(i)
 		line := idx.reader.GetLine(globalIdx)
-		c := int16(physicalLinesFor(line, idx.width))
+		c := int16(physicalLinesFor(line, idx.width, idx.showOverlay))
 
 		idx.perLine = append(idx.perLine, c)
 		idx.cachedTotal += int64(c)

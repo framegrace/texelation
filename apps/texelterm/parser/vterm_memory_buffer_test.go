@@ -5240,3 +5240,374 @@ func TestResize_DirtyTrackingAfterWrapChain(t *testing.T) {
 		t.Logf("NOTE: Without physical cursor row fix, 'Y' is still visible (no wrap chain divergence in this path)")
 	}
 }
+
+// TestSmallTerminal_ResizeDownCursorDrift verifies that when resizing the
+// terminal to very small widths (horizontal only, height stays constant),
+// the cursor stays aligned with the grid row where prompt content actually
+// appears. The bug: each width decrease causes the cursor to drift upward.
+func TestSmallTerminal_ResizeDownCursorDrift(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write some output lines
+	for i := 0; i < 5; i++ {
+		parseString(p, fmt.Sprintf("output line %d with some content", i))
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+
+	// Write a prompt (simulating a typical shell prompt)
+	parseString(p, "user@host:~/projects $ ")
+
+	t.Logf("Before resize: cursor=(%d,%d) liveEdgeBase=%d",
+		v.cursorX, v.cursorY, v.memBufState.liveEdgeBase)
+
+	// Progressively shrink width only — height stays the same
+	for _, newWidth := range []int{40, 20, 15, 10, 8, 5} {
+		v.Resize(newWidth, height)
+		physX, physY := v.PhysicalCursor()
+		grid := v.Grid()
+
+		// The cursor must point to a row that has content
+		var cursorRowContent string
+		if physY >= 0 && physY < len(grid) {
+			cursorRowContent = strings.TrimSpace(cellsToString(grid[physY]))
+		}
+
+		t.Logf("width=%d: physCursor=(%d,%d) cursor=(%d,%d) liveEdgeBase=%d cursorRow=%q",
+			newWidth, physX, physY, v.cursorX, v.cursorY,
+			v.memBufState.liveEdgeBase, cursorRowContent)
+
+		// Check 1: cursor in bounds
+		if physY < 0 || physY >= height {
+			t.Errorf("width=%d: physY=%d out of bounds (height=%d)", newWidth, physY, height)
+			continue
+		}
+
+		// Check 2: cursor row has content (not pointing at empty row)
+		if cursorRowContent == "" {
+			t.Errorf("width=%d: cursor at row %d points to empty row", newWidth, physY)
+			for y := 0; y < height && y < len(grid); y++ {
+				r := cellsToString(grid[y])
+				if strings.TrimSpace(r) != "" {
+					t.Logf("  grid[%d]: %q", y, r)
+				}
+			}
+		}
+
+		// Check 3: typing a char should appear on the cursor's grid row
+		parseString(p, "X")
+		grid = v.Grid()
+		physX, physY = v.PhysicalCursor()
+		if physY >= 0 && physY < len(grid) {
+			row := cellsToString(grid[physY])
+			if !strings.Contains(row, "X") {
+				t.Errorf("width=%d: typed 'X' not on cursor row %d: %q", newWidth, physY, row)
+				for y := 0; y < height && y < len(grid); y++ {
+					r := cellsToString(grid[y])
+					if strings.Contains(r, "X") {
+						t.Logf("  'X' actually on row %d: %q", y, r)
+					}
+				}
+			}
+		}
+		// Backspace the X to not pollute next iteration
+		p.Parse('\b')
+		parseString(p, " ")
+		p.Parse('\b')
+	}
+
+	// Now grow back and verify cursor corrects
+	for _, newWidth := range []int{8, 10, 15, 20, 40, 80} {
+		v.Resize(newWidth, height)
+		physX, physY := v.PhysicalCursor()
+		grid := v.Grid()
+
+		var cursorRowContent string
+		if physY >= 0 && physY < len(grid) {
+			cursorRowContent = strings.TrimSpace(cellsToString(grid[physY]))
+		}
+
+		t.Logf("grow width=%d: physCursor=(%d,%d) cursor=(%d,%d) liveEdgeBase=%d cursorRow=%q",
+			newWidth, physX, physY, v.cursorX, v.cursorY,
+			v.memBufState.liveEdgeBase, cursorRowContent)
+
+		// Type char and verify
+		parseString(p, "Z")
+		grid = v.Grid()
+		physX, physY = v.PhysicalCursor()
+		if physY >= 0 && physY < len(grid) {
+			row := cellsToString(grid[physY])
+			if !strings.Contains(row, "Z") {
+				t.Errorf("grow width=%d: typed 'Z' not on cursor row %d: %q", newWidth, physY, row)
+				for y := 0; y < height && y < len(grid); y++ {
+					r := cellsToString(grid[y])
+					if strings.Contains(r, "Z") {
+						t.Logf("  'Z' actually on row %d: %q", y, r)
+					}
+				}
+			}
+		}
+		p.Parse('\b')
+		parseString(p, " ")
+		p.Parse('\b')
+	}
+}
+
+// TestResizeWidth_TransformerContent_DebugPhysicalLines is a debug helper.
+func TestResizeWidth_TransformerContent_DebugPhysicalLines(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	for i := 0; i < 20; i++ {
+		parseString(p, fmt.Sprintf("output line %02d: some content here padding", i))
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+
+	mb := v.memBufState.memBuf
+
+	// Overlay even output lines
+	for i := 0; i < 20; i += 2 {
+		overlayCells := make([]Cell, 80)
+		text := fmt.Sprintf("  [transformed] output line %02d: colorized content", i)
+		for j, r := range text {
+			if j < 80 {
+				overlayCells[j] = Cell{Rune: r}
+			}
+		}
+		v.RequestLineOverlay(int64(i), overlayCells)
+	}
+
+	// Insert synthetic lines
+	synthCells := make([]Cell, 40)
+	for j, r := range "--- transformer summary ---" {
+		synthCells[j] = Cell{Rune: r}
+	}
+	v.RequestLineInsert(20, synthCells)
+	v.RequestLineInsert(21, synthCells)
+
+	// Write prompt
+	parseString(p, "user@host:~/projects $ ")
+
+	t.Logf("Before resize: cursor=(%d,%d) liveEdgeBase=%d globalEnd=%d",
+		v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, mb.GlobalEnd())
+
+	// Resize to 40
+	v.Resize(40, height)
+
+	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
+	t.Logf("After resize 40: cursor=(%d,%d) liveEdgeBase=%d globalLine=%d",
+		v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, globalLine)
+
+	// Check each line's properties
+	for i := int64(0); i < mb.GlobalEnd(); i++ {
+		line := mb.GetLine(i)
+		if line != nil {
+			hasOverlay := line.Overlay != nil
+			t.Logf("  line %d: cells=%d overlay=%v synthetic=%v fixedWidth=%d overlayWidth=%d",
+				i, len(line.Cells), hasOverlay, line.Synthetic, line.FixedWidth, line.OverlayWidth)
+		}
+	}
+
+	// Call ContentToViewport directly
+	row, col, visible := v.memBufState.viewport.ContentToViewport(globalLine, v.cursorX)
+	t.Logf("ContentToViewport(%d, %d) -> row=%d col=%d visible=%v",
+		globalLine, v.cursorX, row, col, visible)
+
+	physX, physY := v.PhysicalCursor()
+	t.Logf("PhysicalCursor: (%d, %d)", physX, physY)
+
+	grid := v.Grid()
+	for y := 0; y < len(grid); y++ {
+		row := cellsToString(grid[y])
+		if strings.TrimSpace(row) != "" {
+			marker := "  "
+			if y == physY {
+				marker = "C>"
+			}
+			t.Logf("  %s grid[%d]: %q", marker, y, row)
+		}
+	}
+}
+
+// TestResizeWidth_TransformerContent_CursorDrift tests cursor positioning during
+// horizontal resize when the viewport contains transformer-generated content
+// (overlay and synthetic lines). Overlaid lines have FixedWidth and don't wrap,
+// changing the physical-to-logical line ratio compared to plain output.
+func TestResizeWidth_TransformerContent_CursorDrift(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Write output lines (more than height to fill viewport)
+	for i := 0; i < 20; i++ {
+		parseString(p, fmt.Sprintf("output line %02d: some content here padding", i))
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+
+	// Simulate transformer: add overlay on some output lines and insert
+	// synthetic separator/summary lines.
+	mb := v.memBufState.memBuf
+
+	// Overlay some output lines (makes them fixed-width, won't wrap)
+	for i := 0; i < 20; i += 2 {
+		overlayCells := make([]Cell, 80)
+		text := fmt.Sprintf("  [transformed] output line %02d: colorized content", i)
+		for j, r := range text {
+			if j < 80 {
+				overlayCells[j] = Cell{Rune: r}
+			}
+		}
+		v.RequestLineOverlay(int64(i), overlayCells)
+	}
+
+	// Insert a few synthetic lines (transformer-generated summaries)
+	// These go before the prompt, after the output
+	synthCells := make([]Cell, 40)
+	for j, r := range "--- transformer summary ---" {
+		synthCells[j] = Cell{Rune: r}
+	}
+	v.RequestLineInsert(20, synthCells)
+	v.RequestLineInsert(21, synthCells)
+
+	// Write prompt
+	parseString(p, "user@host:~/projects $ ")
+	v.ClearDirty()
+
+	t.Logf("Initial: cursor=(%d,%d) liveEdgeBase=%d globalEnd=%d",
+		v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, mb.GlobalEnd())
+
+	// Simulate spring animation: rapid width changes, height constant
+	widths := []int{70, 60, 50, 40, 35, 30, 25, 20, 18, 15, 12, 10, 8, 6, 5,
+		6, 8, 10, 12, 15, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80}
+
+	for _, w := range widths {
+		v.Resize(w, height)
+		physX, physY := v.PhysicalCursor()
+		grid := v.Grid()
+
+		if physY < 0 || physY >= height || physY >= len(grid) {
+			t.Errorf("width=%d: physY=%d out of bounds (height=%d, gridLen=%d)",
+				w, physY, height, len(grid))
+			continue
+		}
+
+		// The last non-empty grid row should be where the cursor is
+		lastContentRow := -1
+		for y := len(grid) - 1; y >= 0; y-- {
+			if strings.TrimSpace(cellsToString(grid[y])) != "" {
+				lastContentRow = y
+				break
+			}
+		}
+
+		if lastContentRow != physY {
+			t.Errorf("width=%d: cursor at row %d but last content at row %d (drift=%d)",
+				w, physY, lastContentRow, lastContentRow-physY)
+			t.Logf("  cursor=(%d,%d) liveEdgeBase=%d physCursor=(%d,%d)",
+				v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, physX, physY)
+			start := max(physY-2, 0)
+			end := min(lastContentRow+2, len(grid))
+			for y := start; y < end; y++ {
+				marker := "  "
+				if y == physY {
+					marker = "C>"
+				}
+				if y == lastContentRow {
+					marker = "L>"
+				}
+				t.Logf("  %s grid[%d]: %q", marker, y, cellsToString(grid[y]))
+			}
+		}
+	}
+}
+
+// TestResizeWidth_FullViewport_CursorGridConsistency tests rapid horizontal
+// resizing with a full viewport. Verifies that the cursor position from
+// PhysicalCursor always matches the grid row where content is actually rendered.
+// This simulates the spring animation resize path.
+func TestResizeWidth_FullViewport_CursorGridConsistency(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Fill the viewport with content (more than height lines)
+	for i := 0; i < 30; i++ {
+		parseString(p, fmt.Sprintf("output line %02d: some content here padding", i))
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+
+	// Write prompt
+	parseString(p, "user@host:~/projects $ ")
+	v.ClearDirty()
+
+	t.Logf("Initial: cursor=(%d,%d) liveEdgeBase=%d", v.cursorX, v.cursorY, v.memBufState.liveEdgeBase)
+
+	// Simulate spring animation: rapid width changes, height constant
+	widths := []int{70, 60, 50, 40, 35, 30, 25, 20, 18, 15, 12, 10, 8, 6, 5,
+		6, 8, 10, 12, 15, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80}
+
+	for _, w := range widths {
+		v.Resize(w, height)
+		physX, physY := v.PhysicalCursor()
+		grid := v.Grid()
+
+		if physY < 0 || physY >= height || physY >= len(grid) {
+			t.Errorf("width=%d: physY=%d out of bounds", w, physY)
+			continue
+		}
+
+		// The cursor row in the grid should have content
+		cursorRow := cellsToString(grid[physY])
+		if strings.TrimSpace(cursorRow) == "" {
+			t.Errorf("width=%d: cursor row %d is empty, cursor=(%d,%d)", w, physY, v.cursorX, v.cursorY)
+		}
+
+		// The last non-empty grid row should be where the cursor is
+		// (since prompt is the last content)
+		lastContentRow := -1
+		for y := len(grid) - 1; y >= 0; y-- {
+			if strings.TrimSpace(cellsToString(grid[y])) != "" {
+				lastContentRow = y
+				break
+			}
+		}
+
+		if lastContentRow != physY {
+			t.Errorf("width=%d: cursor at row %d but last content at row %d (drift=%d)",
+				w, physY, lastContentRow, lastContentRow-physY)
+			t.Logf("  cursor=(%d,%d) liveEdgeBase=%d physCursor=(%d,%d)",
+				v.cursorX, v.cursorY, v.memBufState.liveEdgeBase, physX, physY)
+			// Show nearby rows
+			start := max(physY-2, 0)
+			end := min(lastContentRow+2, len(grid))
+			for y := start; y < end; y++ {
+				marker := "  "
+				if y == physY {
+					marker = "C>"
+				}
+				if y == lastContentRow {
+					marker = "L>"
+				}
+				t.Logf("  %s grid[%d]: %q", marker, y, cellsToString(grid[y]))
+			}
+		}
+	}
+}

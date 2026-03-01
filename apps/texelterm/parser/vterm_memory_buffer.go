@@ -1376,6 +1376,23 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 		}
 	}
 
+	// Handle cursor overflow from width split. The split may push cursorY
+	// beyond the viewport height. Adjust liveEdgeBase so that cursorGlobalLine
+	// remains correct after SetCursorPos clamps cursorY to [0, height-1].
+	// Without this, the clamping silently moves the cursor backward by
+	// (cursorY - height + 1) logical lines, causing drift.
+	if v.cursorY >= height {
+		newLiveEdgeBase := cursorGlobalLine - int64(height-1)
+		if newLiveEdgeBase < mb.GlobalOffset() {
+			newLiveEdgeBase = mb.GlobalOffset()
+		}
+		v.memBufState.liveEdgeBase = newLiveEdgeBase
+		v.cursorY = int(cursorGlobalLine - newLiveEdgeBase)
+
+		v.logMemBufDebug("[RESIZE] Width split overflow: adjusted liveEdgeBase=%d, cursorY=%d",
+			v.memBufState.liveEdgeBase, v.cursorY)
+	}
+
 	// Update viewport dimensions
 	mb.SetTermWidth(width)
 	v.memBufState.viewport.Resize(width, height)
