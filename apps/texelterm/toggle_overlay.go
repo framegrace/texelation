@@ -33,18 +33,34 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 		return
 	}
 
-	// TFM - transformer pipeline
-	a.tfmToggle.Active = a.pipeline != nil && a.pipeline.Enabled()
-
 	// TUI/NRM - TUI detection (active = TUI detected)
 	a.tuiToggle.Active = a.vterm.IsInTUIMode()
 
 	// ALT - alt screen
 	a.altToggle.Active = a.vterm.InAltScreen()
 
+	// TFM - transformer pipeline (disabled + forced off during TUI or alt screen)
+	tfmOverride := a.vterm.IsInTUIMode() || a.vterm.InAltScreen()
+	if tfmOverride {
+		a.tfmToggle.Disabled = true
+		a.tfmToggle.Active = false
+		if a.pipeline != nil && a.pipeline.Enabled() {
+			a.pipeline.SetEnabled(false)
+			a.vterm.SetShowOverlay(false)
+			a.vterm.MarkAllDirty()
+		}
+	} else {
+		a.tfmToggle.Disabled = false
+		a.tfmToggle.Active = a.tfmUserPref
+		if a.pipeline != nil && a.pipeline.Enabled() != a.tfmUserPref {
+			a.pipeline.SetEnabled(a.tfmUserPref)
+			a.vterm.SetShowOverlay(a.tfmUserPref)
+			a.vterm.MarkAllDirty()
+		}
+	}
+
 	// WRP - wrap (disabled + forced off during TUI or alt screen)
-	wrapOverride := a.vterm.IsInTUIMode() || a.vterm.InAltScreen()
-	if wrapOverride {
+	if tfmOverride {
 		a.wrpToggle.Disabled = true
 		a.wrpToggle.Active = false
 		if a.vterm.WrapEnabled() {
