@@ -44,9 +44,30 @@ func blenderForStyle(style string) fadeBlender {
 		return newSpiralBlender()
 	case "curtain":
 		return newCurtainBlender()
+	case "random":
+		return &randomBlender{}
 	default:
 		return &dissolveBlender{}
 	}
+}
+
+// randomBlender picks a random concrete blender on each Reset().
+type randomBlender struct {
+	inner fadeBlender
+}
+
+var concreteStyles = []string{"dissolve", "curtain", "spiral"}
+
+func (b *randomBlender) Reset() {
+	b.inner = blenderForStyle(concreteStyles[rand.Intn(len(concreteStyles))])
+	b.inner.Reset()
+}
+
+func (b *randomBlender) Blend(orig, dst [][]client.Cell, intensity float32) {
+	if b.inner == nil {
+		b.inner = blenderForStyle(concreteStyles[rand.Intn(len(concreteStyles))])
+	}
+	b.inner.Blend(orig, dst, intensity)
 }
 
 func NewScreensaverFade(inner Effect, fadeStyle string) Effect {
