@@ -118,6 +118,7 @@ type TexelTerm struct {
 	tuiToggle *widgets.ToggleButton
 	wrpToggle    *widgets.ToggleButton
 	wrpUserPref  bool // user's preferred wrap state (restored when override clears)
+	tfmUserPref  bool // user's preferred transformer state (restored when TUI/alt clears)
 	altToggle    *widgets.ToggleButton
 	searchToggle *widgets.ToggleButton
 	cfgToggle    *widgets.ToggleButton
@@ -141,7 +142,7 @@ func New(title, command string) texelcore.App {
 	sb.Resize(1, 1) // No separator = 1 row
 
 	tfm := widgets.NewToggleButton(" \U000F0068 ") // nf-md-auto_fix (magic wand)
-	tfm.Active = true                             // Transformers on by default
+	tfm.Active = false                             // Transformers off by default until detection is more reliable
 	tfm.SetHelpText("Transformer pipeline (Ctrl+T)")
 	tui := widgets.NewToggleButton(" \U000F0379 ") // nf-md-monitor
 	tui.Disabled = true
@@ -172,6 +173,7 @@ func New(title, command string) texelcore.App {
 		tuiToggle:    tui,
 		wrpToggle:    wrp,
 		wrpUserPref:  true,
+		tfmUserPref:  false,
 		altToggle:    alt,
 		searchToggle: srch,
 		cfgToggle:    cfg,
@@ -570,20 +572,9 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.vterm.MarkAllDirty()
 	}
 
-	// Use PhysicalCursor to get the grid-relative position. After a width
-	// decrease, the logical cursor column may exceed the terminal width;
-	// PhysicalCursor maps it to the correct wrapped row and column.
-	cursorX, cursorY := a.vterm.PhysicalCursor()
+	cursorX, cursorY := a.vterm.Cursor()
 	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.DirtyLines()
-
-	// Ensure the physical cursor row is always re-rendered. MarkDirty uses
-	// the logical cursorY (offset from liveEdgeBase) which may differ from
-	// the physical grid row when wrap chains change the line-to-row mapping.
-	// Without this, typed characters at the cursor position stay invisible.
-	if !allDirty && cursorVisible && cursorY >= 0 && cursorY < termRows {
-		dirtyLines[cursorY] = true
-	}
 
 	a.logRenderDebug(vtermGrid, cursorX, cursorY, dirtyLines, allDirty)
 
@@ -986,11 +977,7 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	a.vterm.EnsureLiveEdge()
 	a.mu.Unlock()
 
-	// Debug logging for key events
-	log.Printf("[KEY DEBUG] Key=%v, Rune=%q (%d), Modifiers=%v", ev.Key(), ev.Rune(), ev.Rune(), ev.Modifiers())
-
 	keyBytes := a.keyToEscapeSequence(ev, appMode)
-	log.Printf("[KEY DEBUG] Sending bytes: %v", keyBytes)
 	if _, err := a.pty.Write(keyBytes); err != nil {
 		log.Printf("[TEXELTERM] Failed to write key to PTY: %v", err)
 	}
@@ -1005,6 +992,7 @@ func (a *TexelTerm) toggleTransformers() {
 	}
 	if a.pipeline != nil {
 		newState := !a.pipeline.Enabled()
+		a.tfmUserPref = newState
 		a.setTransformerState(newState)
 	} else {
 		current := a.vterm.ShowOverlay()
@@ -1630,6 +1618,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	pipeline := transformer.BuildPipeline(cfg)
 	a.pipeline = pipeline
 	if pipeline != nil {
+		pipeline.SetEnabled(false) // off by default until user enables via Ctrl+T
 		a.vterm.OnLineCommit = pipeline.HandleLine
 		a.vterm.OnPromptStart = pipeline.NotifyPromptStart
 		pipeline.SetInsertFunc(a.vterm.RequestLineInsert)
@@ -1650,6 +1639,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	a.tfmToggle.OnToggle = func(active bool) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
+		a.tfmUserPref = active
 		if a.pipeline != nil {
 			a.setTransformerState(active)
 		}
