@@ -68,13 +68,24 @@ func (v *VTerm) ClearVisibleScreen() {
 
 // handleSGR processes SGR (Select Graphic Rendition) escape sequences.
 // Handles text attributes (bold, underline, reverse) and colors (standard, 256-color, RGB).
-func (v *VTerm) handleSGR(params []int) {
-	i := 0
+// params is [][]int where each element is a colon-separated group of subparameters.
+// For example, "\e[1;4:3;38:2:255:0:0m" produces:
+//
+//	[[1], [4,3], [38,2,255,0,0]]
+//
+// This correctly distinguishes semicolons (top-level separators) from colons (subparameters).
+func (v *VTerm) handleSGR(params [][]int) {
 	if len(params) == 0 {
-		params = []int{0}
+		params = [][]int{{0}}
 	}
+	i := 0
 	for i < len(params) {
-		p := params[i]
+		group := params[i]
+		if len(group) == 0 {
+			i++
+			continue
+		}
+		p := group[0]
 		switch {
 		case p == 0:
 			v.ResetAttributes()
@@ -85,7 +96,14 @@ func (v *VTerm) handleSGR(params []int) {
 		case p == 3:
 			v.SetAttribute(AttrItalic)
 		case p == 4:
-			v.SetAttribute(AttrUnderline)
+			// SGR 4 = underline. Subparam selects style: 4:0=none, 4:1=single,
+			// 4:2=double, 4:3=curly, 4:4=dotted, 4:5=dashed.
+			// Without subparam (plain SGR 4), default is single underline.
+			if len(group) > 1 && group[1] == 0 {
+				v.ClearAttribute(AttrUnderline) // 4:0 = no underline
+			} else {
+				v.SetAttribute(AttrUnderline) // 4 or 4:1-5 = underline on
+			}
 		case p == 7:
 			v.SetAttribute(AttrReverse)
 		case p == 22:
@@ -105,30 +123,12 @@ func (v *VTerm) handleSGR(params []int) {
 		case p == 49:
 			v.currentBG = v.defaultBG
 		case p == 38: // Set extended foreground color
-			if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
-				idx := uint8(params[i+2])
-				if idx < 8 {
-					v.currentFG = Color{Mode: ColorModeStandard, Value: idx}
-				} else {
-					v.currentFG = Color{Mode: ColorMode256, Value: idx}
-				}
-				i += 2
-			} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
-				v.currentFG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
-				i += 4
+			if v.parseExtendedColor(group, params, i, &v.currentFG, &i) {
+				// i already advanced by parseExtendedColor
 			}
 		case p == 48: // Set extended background color
-			if i+2 < len(params) && params[i+1] == 5 { // 256-color palette
-				idx := uint8(params[i+2])
-				if idx < 8 {
-					v.currentBG = Color{Mode: ColorModeStandard, Value: idx}
-				} else {
-					v.currentBG = Color{Mode: ColorMode256, Value: idx}
-				}
-				i += 2
-			} else if i+4 < len(params) && params[i+1] == 2 { // RGB true-color
-				v.currentBG = Color{Mode: ColorModeRGB, R: uint8(params[i+2]), G: uint8(params[i+3]), B: uint8(params[i+4])}
-				i += 4
+			if v.parseExtendedColor(group, params, i, &v.currentBG, &i) {
+				// i already advanced by parseExtendedColor
 			}
 		case p >= 90 && p <= 97: // Bright foreground
 			v.currentFG = Color{Mode: ColorModeStandard, Value: uint8(p - 90 + 8)}
@@ -137,6 +137,56 @@ func (v *VTerm) handleSGR(params []int) {
 		}
 		i++
 	}
+}
+
+// parseExtendedColor handles extended color sequences for both colon and semicolon forms:
+//   - Colon form (ITU T.416): 38:5:idx or 38:2:r:g:b (all in one group)
+//   - Semicolon form (legacy): 38;5;idx or 38;2;r;g;b (spread across groups)
+//
+// Returns true if a color was parsed. Advances *idx past consumed groups for semicolon form.
+func (v *VTerm) parseExtendedColor(group []int, params [][]int, idx int, target *Color, outIdx *int) bool {
+	// Colon form: everything is in a single group, e.g. [38,5,196] or [38,2,255,0,0]
+	if len(group) >= 3 && group[1] == 5 {
+		val := uint8(group[2])
+		if val < 8 {
+			*target = Color{Mode: ColorModeStandard, Value: val}
+		} else {
+			*target = Color{Mode: ColorMode256, Value: val}
+		}
+		return true
+	}
+	if len(group) >= 5 && group[1] == 2 {
+		*target = Color{Mode: ColorModeRGB, R: uint8(group[2]), G: uint8(group[3]), B: uint8(group[4])}
+		return true
+	}
+
+	// Semicolon form: values are in subsequent groups, e.g. [38],[5],[196]
+	if idx+2 < len(params) && len(params[idx+1]) > 0 && params[idx+1][0] == 5 && len(params[idx+2]) > 0 {
+		val := uint8(params[idx+2][0])
+		if val < 8 {
+			*target = Color{Mode: ColorModeStandard, Value: val}
+		} else {
+			*target = Color{Mode: ColorMode256, Value: val}
+		}
+		*outIdx = idx + 2
+		return true
+	}
+	if idx+4 < len(params) && len(params[idx+1]) > 0 && params[idx+1][0] == 2 {
+		r, g, b := uint8(0), uint8(0), uint8(0)
+		if len(params[idx+2]) > 0 {
+			r = uint8(params[idx+2][0])
+		}
+		if len(params[idx+3]) > 0 {
+			g = uint8(params[idx+3][0])
+		}
+		if len(params[idx+4]) > 0 {
+			b = uint8(params[idx+4][0])
+		}
+		*target = Color{Mode: ColorModeRGB, R: r, G: g, B: b}
+		*outIdx = idx + 4
+		return true
+	}
+	return false
 }
 
 // SetAttribute sets a text attribute (bold, underline, reverse).

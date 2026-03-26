@@ -31,7 +31,8 @@ const (
 type Parser struct {
 	state        State
 	vterm        *VTerm
-	params       []int
+	params       [][]int // Each element is a group of colon-separated subparams
+	currentGroup []int   // Current colon-separated group being built
 	currentParam int
 	private      bool
 	oscBuffer    []rune
@@ -41,11 +42,12 @@ type Parser struct {
 
 func NewParser(v *VTerm) *Parser {
 	return &Parser{
-		state:     StateGround,
-		vterm:     v,
-		params:    make([]int, 0, 16),
-		oscBuffer: make([]rune, 0, 128),
-		dcsBuffer: make([]rune, 0, 128),
+		state:        StateGround,
+		vterm:        v,
+		params:       make([][]int, 0, 16),
+		currentGroup: make([]int, 0, 4),
+		oscBuffer:    make([]rune, 0, 128),
+		dcsBuffer:    make([]rune, 0, 128),
 	}
 }
 
@@ -86,6 +88,7 @@ func (p *Parser) Parse(r rune) {
 		case '[':
 			p.state = StateCSI
 			p.params = p.params[:0]
+			p.currentGroup = p.currentGroup[:0]
 			p.currentParam = 0
 			p.private = false
 			p.intermediate = 0 // Reset intermediate byte
@@ -147,10 +150,16 @@ func (p *Parser) Parse(r rune) {
 		switch {
 		case r >= '0' && r <= '9':
 			p.currentParam = p.currentParam*10 + int(r-'0')
-		case r == ';', r == ':':
-			// Both semicolon and colon are valid parameter separators.
-			// Colon is used for SGR subparameters (ITU T.416) like 38:2:r:g:b
-			p.params = append(p.params, p.currentParam)
+		case r == ':':
+			// Colon separates subparameters within a single parameter group
+			// (ITU T.416) e.g., 4:3 = underline style curly, 38:2:r:g:b = RGB color
+			p.currentGroup = append(p.currentGroup, p.currentParam)
+			p.currentParam = 0
+		case r == ';':
+			// Semicolon separates top-level parameters
+			p.currentGroup = append(p.currentGroup, p.currentParam)
+			p.params = append(p.params, p.currentGroup)
+			p.currentGroup = make([]int, 0, 4)
 			p.currentParam = 0
 		case r == '?':
 			// '?' is the DEC private parameter marker (e.g., CSI ? 6 h for DECSET)
@@ -166,9 +175,11 @@ func (p *Parser) Parse(r rune) {
 			// Includes '!', '\'',' etc.
 			p.intermediate = r
 		case r >= '@' && r <= '~':
-			p.params = append(p.params, p.currentParam)
+			p.currentGroup = append(p.currentGroup, p.currentParam)
+			p.params = append(p.params, p.currentGroup)
 			p.vterm.ProcessCSI(r, p.params, p.intermediate, p.private)
 			p.state = StateGround
+			p.currentGroup = make([]int, 0, 4)
 			p.private = false // Reset for next CSI
 		}
 	case StateOSC:

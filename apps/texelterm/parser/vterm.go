@@ -810,11 +810,25 @@ func (v *VTerm) SoftReset() {
 
 // --- Core CSI Dispatch ---
 
+// flattenParams extracts the first (main) value from each parameter group,
+// discarding colon-separated subparameters. Used by CSI handlers that don't
+// need subparameter awareness (everything except SGR).
+func flattenParams(params [][]int) []int {
+	flat := make([]int, len(params))
+	for i, group := range params {
+		if len(group) > 0 {
+			flat[i] = group[0]
+		}
+	}
+	return flat
+}
+
 // ProcessCSI interprets a parsed CSI sequence and calls the appropriate handler.
-func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, private bool) {
+func (v *VTerm) ProcessCSI(command rune, params [][]int, intermediate rune, private bool) {
+	flat := flattenParams(params)
 	param := func(i int, defaultVal int) int {
-		if i < len(params) && params[i] != 0 {
-			return params[i]
+		if i < len(flat) && flat[i] != 0 {
+			return flat[i]
 		}
 		return defaultVal
 	}
@@ -864,22 +878,39 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, privat
 	// Handle mode setting/resetting (SM/RM for ANSI modes, DECSET/DECRESET for DEC private modes)
 	if command == 'h' || command == 'l' {
 		if private {
-			v.processPrivateCSI(command, params)
+			v.processPrivateCSI(command, flat)
 		} else {
-			v.processANSIMode(command, params)
+			v.processANSIMode(command, flat)
 		}
+		return
+	}
+
+	// All commands below are plain CSI sequences (no intermediate byte).
+	// Sequences with intermediate bytes (CSI > Ps X, CSI $ Ps X, etc.) are
+	// handled above or silently ignored. Without this guard, extended sequences
+	// like CSI > 4 ; 2 m (XTMODKEYS) would be misrouted to handlers like SGR.
+	//
+	// TODO: Implement the following extended CSI sequences:
+	//   CSI > Ps m       — XTMODKEYS: set modifier key encoding level
+	//   CSI > Ps u       — Kitty keyboard protocol: push mode
+	//   CSI < u          — Kitty keyboard protocol: pop mode
+	//   CSI = Ps u       — Kitty keyboard protocol: query mode
+	//   CSI > q          — XTVERSION: report terminal name and version
+	//   CSI > Ps S       — XTSMGRAPHICS: query/set graphics capabilities
+	//   CSI > Ps n       — DECDSR (extended): device status reports
+	if intermediate != 0 {
 		return
 	}
 
 	switch command {
 	case 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'f', 'd', '`', 'a', 'e':
-		v.handleCursorMovement(command, params)
+		v.handleCursorMovement(command, flat)
 	case 'I': // CHT - Cursor Horizontal Tab
 		v.TabForward(param(0, 1))
 	case 'Z': // CBT - Cursor Backward Tab
 		v.TabBackward(param(0, 1))
 	case 'J', 'K', 'P', 'X', 'b':
-		v.handleErase(command, params)
+		v.handleErase(command, flat)
 	case '@':
 		v.InsertCharacters(param(0, 1))
 	case 'L':
@@ -901,7 +932,7 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, privat
 			v.scrollRegion(-param(0, 1), v.marginTop, v.marginBottom)
 		}
 	case 'm':
-		v.handleSGR(params)
+		v.handleSGR(params) // SGR receives full [][]int for subparam awareness
 	case 'n': // DSR - Device Status Report
 		if param(0, 0) == 6 { // Report Cursor Position
 			response := fmt.Sprintf("\x1b[%d;%dR", v.cursorY+1, v.cursorX+1)
@@ -921,14 +952,7 @@ func (v *VTerm) ProcessCSI(command rune, params []int, intermediate rune, privat
 			v.SaveCursor()
 		}
 	case 'u':
-		// CSI u without intermediate = DECRC (Restore Cursor)
-		// CSI > Ps u = Extended keyboard protocol (push mode) - ignore
-		// CSI < u = Extended keyboard protocol (pop mode) - ignore
-		// CSI = Ps u = Extended keyboard protocol (query mode) - ignore
-		if intermediate == 0 {
-			v.RestoreCursor()
-		}
-		// Extended keyboard protocol sequences are silently ignored
+		v.RestoreCursor()
 	case 'c': // DA - Primary Device Attributes
 		// Response: CSI ? Ps ; Ps ; ... c
 		// Ps values:

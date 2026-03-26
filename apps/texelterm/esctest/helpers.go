@@ -568,6 +568,12 @@ func SGR(d *Driver, params ...int) {
 	d.WriteRaw(fmt.Sprintf("%s[%sm", ESC, paramStr))
 }
 
+// SGRRaw sends a raw SGR sequence string, allowing colon-separated subparameters.
+// Example: SGRRaw(d, "4:3") sends CSI 4:3 m (curly underline).
+func SGRRaw(d *Driver, seq string) {
+	d.WriteRaw(fmt.Sprintf("%s[%sm", ESC, seq))
+}
+
 // SGR constants for common attributes
 const (
 	SGR_RESET          = 0

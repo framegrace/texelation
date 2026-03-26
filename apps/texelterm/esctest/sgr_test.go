@@ -300,3 +300,69 @@ func Test_SGR_ResetDoesNotAffectColors(t *testing.T) {
 	AssertCellForegroundColor(t, d, NewPoint(1, 1), parser.DefaultFG, "SGR 0 should reset foreground")
 	AssertCellBackgroundColor(t, d, NewPoint(1, 1), parser.DefaultBG, "SGR 0 should reset background")
 }
+
+// Test_SGR_CurlyUnderlineDoesNotSetItalic tests that colon-separated underline
+// subparameters (e.g., 4:3 for curly underline) do not leak into italic.
+// This was a real bug: the parser treated ':' like ';', so 4:3 was parsed as
+// SGR 4 (underline) + SGR 3 (italic).
+func Test_SGR_CurlyUnderlineDoesNotSetItalic(t *testing.T) {
+	d := NewDriver(80, 24)
+
+	// Send curly underline (4:3) - should set underline, NOT italic
+	SGRRaw(d, "4:3")
+	d.WriteRaw("a")
+
+	AssertCellHasAttribute(t, d, NewPoint(1, 1), parser.AttrUnderline, "4:3 should set underline")
+	AssertCellDoesNotHaveAttribute(t, d, NewPoint(1, 1), parser.AttrItalic, "4:3 should NOT set italic")
+}
+
+// Test_SGR_ColonUnderlineNone tests that 4:0 clears underline.
+func Test_SGR_ColonUnderlineNone(t *testing.T) {
+	d := NewDriver(80, 24)
+
+	SGR(d, SGR_UNDERLINE) // Enable underline
+	SGRRaw(d, "4:0")      // Disable via subparam
+	d.WriteRaw("a")
+
+	AssertCellDoesNotHaveAttribute(t, d, NewPoint(1, 1), parser.AttrUnderline, "4:0 should clear underline")
+}
+
+// Test_SGR_ColonRGBForeground tests colon-separated RGB color (38:2:r:g:b).
+func Test_SGR_ColonRGBForeground(t *testing.T) {
+	d := NewDriver(80, 24)
+
+	// Send RGB foreground via colon syntax: 38:2:255:128:0
+	SGRRaw(d, "38:2:255:128:0")
+	d.WriteRaw("O")
+
+	expectedOrange := parser.Color{Mode: parser.ColorModeRGB, R: 255, G: 128, B: 0}
+	AssertCellForegroundColor(t, d, NewPoint(1, 1), expectedOrange, "Colon RGB should set foreground")
+}
+
+// Test_SGR_Colon256Foreground tests colon-separated 256-color (38:5:idx).
+func Test_SGR_Colon256Foreground(t *testing.T) {
+	d := NewDriver(80, 24)
+
+	SGRRaw(d, "38:5:196")
+	d.WriteRaw("R")
+
+	expectedRed := parser.Color{Mode: parser.ColorMode256, Value: 196}
+	AssertCellForegroundColor(t, d, NewPoint(1, 1), expectedRed, "Colon 256-color should set foreground")
+}
+
+// Test_SGR_MixedColonSemicolon tests sequences mixing colon and semicolon separators.
+// Example: "\e[1;4:3;38:2:255:0:0m" = bold + curly underline + red RGB foreground
+func Test_SGR_MixedColonSemicolon(t *testing.T) {
+	d := NewDriver(80, 24)
+
+	// bold ; curly-underline ; RGB red foreground
+	SGRRaw(d, "1;4:3;38:2:255:0:0")
+	d.WriteRaw("X")
+
+	AssertCellHasAttribute(t, d, NewPoint(1, 1), parser.AttrBold, "Should be bold")
+	AssertCellHasAttribute(t, d, NewPoint(1, 1), parser.AttrUnderline, "Should be underlined")
+	AssertCellDoesNotHaveAttribute(t, d, NewPoint(1, 1), parser.AttrItalic, "Should NOT be italic")
+
+	expectedRed := parser.Color{Mode: parser.ColorModeRGB, R: 255, G: 0, B: 0}
+	AssertCellForegroundColor(t, d, NewPoint(1, 1), expectedRed, "Should have RGB red foreground")
+}
