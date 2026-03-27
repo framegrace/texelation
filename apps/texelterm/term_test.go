@@ -9,7 +9,6 @@
 package texelterm_test
 
 import (
-	texelcore "github.com/framegrace/texelui/core"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +16,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gdamore/tcell/v2"
+
+	texelcore "github.com/framegrace/texelui/core"
 
 	"github.com/framegrace/texelation/apps/texelterm"
 )
@@ -266,4 +269,92 @@ done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("texelterm did not exit after stop")
 	}
+}
+
+// TestRenderCursorPositionAfterHorizontalResize verifies that the rendered
+// cursor (reverse-styled cell) tracks the correct physical row when lines
+// above the cursor wrap due to a width decrease on a new terminal that
+// hasn't filled the viewport yet.
+//
+// Before the fix, Render() used Cursor() (logical row) instead of
+// PhysicalCursor() (physical row), so the cursor stayed at the same
+// viewport row even when wrapping pushed content down.
+func TestRenderCursorPositionAfterHorizontalResize(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Script outputs a long line (51 chars) then a newline, then a short prompt.
+	// At width 80: line 0 = long text, line 1 = "$ " with cursor.
+	// At width 30: line 0 wraps to 2 physical rows, cursor should move to row 2.
+	script := writeScript(t, "#!/bin/sh\nprintf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\n$ '\n")
+
+	app := texelterm.New("texelterm", script)
+	app.Resize(80, 24)
+	app.SetRefreshNotifier(make(chan bool, 4))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Run()
+	}()
+
+	// Wait for output to render
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify cursor is visible at the prompt row before resize
+	buf := app.Render()
+	if len(buf) == 0 {
+		t.Fatal("no render buffer")
+	}
+
+	cursorRowBefore := findCursorRow(buf)
+	if cursorRowBefore < 0 {
+		t.Fatal("cursor not found in initial render")
+	}
+	t.Logf("Before resize: cursor at row %d", cursorRowBefore)
+
+	// Shrink width so the long line wraps
+	app.Resize(30, 24)
+	buf = app.Render()
+
+	cursorRowAfter := findCursorRow(buf)
+	if cursorRowAfter < 0 {
+		t.Fatal("cursor not found after resize")
+	}
+	t.Logf("After resize to width 30: cursor at row %d", cursorRowAfter)
+
+	// The long line (51 chars) wraps to 2 rows at width 30, so the cursor
+	// should have moved down by at least 1 row.
+	if cursorRowAfter <= cursorRowBefore {
+		t.Errorf("cursor did not move down after horizontal shrink: before=%d, after=%d",
+			cursorRowBefore, cursorRowAfter)
+		for y := 0; y < 5 && y < len(buf); y++ {
+			t.Logf("  row %d: %q", y, rowToString(buf[y]))
+		}
+	}
+
+	// Verify the cursor row contains prompt content
+	promptRow := rowToString(buf[cursorRowAfter])
+	if !strings.Contains(promptRow, "$") {
+		t.Errorf("cursor row %d doesn't contain prompt: %q", cursorRowAfter, promptRow)
+	}
+
+	app.Stop()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("texelterm did not exit after stop")
+	}
+}
+
+// findCursorRow returns the row index of the first cell with Reverse style
+// (cursor indicator), or -1 if not found.
+func findCursorRow(buf [][]texelcore.Cell) int {
+	for y, row := range buf {
+		for _, cell := range row {
+			_, _, attrs := cell.Style.Decompose()
+			if attrs&tcell.AttrReverse != 0 {
+				return y
+			}
+		}
+	}
+	return -1
 }

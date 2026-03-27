@@ -572,7 +572,7 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.vterm.MarkAllDirty()
 	}
 
-	cursorX, cursorY := a.vterm.Cursor()
+	cursorX, cursorY := a.vterm.PhysicalCursor()
 	cursorVisible := a.vterm.CursorVisible() && a.vterm.AtLiveEdge()
 	dirtyLines, allDirty := a.vterm.DirtyLines()
 
