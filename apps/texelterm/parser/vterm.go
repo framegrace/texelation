@@ -429,6 +429,11 @@ func (v *VTerm) setHistoryLine(index int, cells []Cell) {
 	for i, cell := range cells {
 		v.memBufState.memBuf.SetCell(int64(index), i, cell)
 	}
+
+	// Truncate any excess cells beyond what we wrote. Without this,
+	// leftover cells from a previous longer write (e.g., reverse search
+	// prompt) cause the viewport to wrap the line, creating ghost rows.
+	line.Truncate(len(cells))
 }
 
 // eraseHistoryLine clears all content from a line in the MemoryBuffer.

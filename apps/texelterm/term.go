@@ -588,7 +588,12 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		}
 	}
 
-	if allDirty {
+	// In memory buffer mode, dirty line indices are logical (cursorY offsets
+	// from liveEdgeBase) but the grid uses physical rows where wrapped lines
+	// shift content down. Always repaint all rows to avoid stale content when
+	// lines above the cursor wrap (e.g., wide multi-line prompts).
+	// On alt screen, logical == physical so dirty tracking is safe.
+	if allDirty || a.vterm.IsMemoryBufferEnabled() {
 		for y := 0; y < termRows; y++ {
 			renderLine(y)
 		}

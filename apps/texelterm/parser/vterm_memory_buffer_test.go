@@ -6028,3 +6028,80 @@ func TestResizeSplit_CursorPastChain(t *testing.T) {
 	}
 }
 
+// TestReverseSearch_RealReadlineSequences replays the actual escape sequences
+// captured from bash readline during reverse-i-search → accept → edit.
+// This uses the EXACT sequences: ICH (\e[1@) for character insertion,
+// DCH (\e[nP) for search prompt removal, and reverse video for match highlight.
+func TestReverseSearch_RealReadlineSequences(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	width, height := 80, 24
+	v := NewVTerm(width, height, WithMemoryBuffer())
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Simulate initial prompt (bash-5.3$ )
+	parseString(p, "bash-5.3$ ")
+
+	renderBuf := make([][]Cell, height)
+	for y := range renderBuf {
+		renderBuf[y] = make([]Cell, width)
+	}
+	simulateRender := func() {
+		dirtyLines, allDirty := v.DirtyLines()
+		grid := v.Grid()
+		if allDirty {
+			for y := 0; y < height && y < len(grid); y++ {
+				copy(renderBuf[y], grid[y])
+			}
+		} else {
+			for y := range dirtyLines {
+				if y >= 0 && y < height && y < len(grid) {
+					copy(renderBuf[y], grid[y])
+				}
+			}
+		}
+		v.ClearDirty()
+	}
+	simulateRender()
+
+	// Type "echo hello world" and press Enter (adds to history)
+	parseString(p, "echo hello world\r\n")
+	parseString(p, "hello world\r\n")
+	parseString(p, "bash-5.3$ ")
+	simulateRender()
+
+	// Ctrl+R: bash enters reverse search mode
+	parseString(p, "\r(reverse-i-search)`': ")
+	simulateRender()
+
+	// Type 'e' in search, match found (with reverse video highlight)
+	parseString(p, "\b\b\be': echo h\x1b[7me\x1b[27mllo world")
+	parseString(p, strings.Repeat("\b", 19))
+	simulateRender()
+
+	// Right arrow to accept (DCH to remove search prefix, then redraw)
+	parseString(p, "\r\x1b[16Pbash-5.3$ echo hello world")
+	parseString(p, strings.Repeat("\b", 12))
+	simulateRender()
+
+	// Ctrl+A: move to beginning of editable area
+	parseString(p, strings.Repeat("\b", v.cursorX-10))
+	simulateRender()
+
+	// Type 'X' using ICH (\e[1@ inserts blank, then X overwrites)
+	parseString(p, "\x1b[1@X")
+	simulateRender()
+
+	// Verify render buffer matches grid
+	grid := v.Grid()
+	gridRow := strings.TrimRight(gridRowToString(grid[v.cursorY]), " ")
+	renderRow := strings.TrimRight(gridRowToString(renderBuf[v.cursorY]), " ")
+
+	if gridRow != renderRow {
+		t.Errorf("Render/Grid mismatch after reverse search edit: render=%q grid=%q", renderRow, gridRow)
+	}
+	if !strings.Contains(gridRow, "Xecho hello world") {
+		t.Errorf("Expected 'Xecho hello world' in grid, got %q", gridRow)
+	}
+}
+
