@@ -97,8 +97,12 @@ func (v *VTerm) InsertCharacters(n int) {
 
 			v.setHistoryLine(logicalY, newLine)
 		} else {
-			// No margins: insert and shift entire line
+			// No margins: insert and shift within terminal width.
+			// Characters pushed past the right edge are discarded (real terminal behavior).
 			newLine := append(line[:cursorX], append(blanks, line[cursorX:]...)...)
+			if len(newLine) > rightBoundary {
+				newLine = newLine[:rightBoundary]
+			}
 			v.setHistoryLine(logicalY, newLine)
 		}
 	}

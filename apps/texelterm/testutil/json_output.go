@@ -235,8 +235,8 @@ func GridToCellInfoGrid(grid [][]parser.Cell) [][]CellInfo {
 // CompareCells compares two cells and returns the diff type.
 func CompareCells(ref, actual parser.Cell) DiffType {
 	charDiff := (ref.Rune != actual.Rune)
-	fgDiff := (ref.FG != actual.FG)
-	bgDiff := (ref.BG != actual.BG)
+	fgDiff := !colorsEquivalent(ref.FG, actual.FG)
+	bgDiff := !colorsEquivalent(ref.BG, actual.BG)
 	attrDiff := (ref.Attr != actual.Attr)
 
 	if !charDiff && !fgDiff && !bgDiff && !attrDiff {
@@ -283,11 +283,11 @@ func DescribeCellDiff(ref, actual parser.Cell) string {
 	if refRune != actRune {
 		parts = append(parts, fmt.Sprintf("char: %q vs %q", refRune, actRune))
 	}
-	if ref.FG != actual.FG {
+	if !colorsEquivalent(ref.FG, actual.FG) {
 		parts = append(parts, fmt.Sprintf("fg: %s vs %s",
 			ColorToInfo(ref.FG).Display, ColorToInfo(actual.FG).Display))
 	}
-	if ref.BG != actual.BG {
+	if !colorsEquivalent(ref.BG, actual.BG) {
 		parts = append(parts, fmt.Sprintf("bg: %s vs %s",
 			ColorToInfo(ref.BG).Display, ColorToInfo(actual.BG).Display))
 	}
@@ -300,6 +300,36 @@ func DescribeCellDiff(ref, actual parser.Cell) string {
 		return "match"
 	}
 	return strings.Join(parts, "; ")
+}
+
+// colorsEquivalent returns true if two colors represent the same visual color.
+// Colors with different modes (e.g., indexed 256-color vs RGB) are compared by
+// their resolved RGB values with a small tolerance to handle palette quantization.
+func colorsEquivalent(a, b parser.Color) bool {
+	if a == b {
+		return true
+	}
+	// Both default = same
+	if a.Mode == parser.ColorModeDefault && b.Mode == parser.ColorModeDefault {
+		return true
+	}
+	// One default, other not = different
+	if a.Mode == parser.ColorModeDefault || b.Mode == parser.ColorModeDefault {
+		return false
+	}
+	// Compare by resolved RGB with tolerance for palette quantization
+	ar, ag, ab := a.ToRGB()
+	br, bg, bb := b.ToRGB()
+	// Tolerance of 26 covers the max quantization error in the 6x6x6 color
+	// cube (steps of 51, so worst-case rounding is 25).
+	return absDiff(ar, br) <= 26 && absDiff(ag, bg) <= 26 && absDiff(ab, bb) <= 26
+}
+
+func absDiff(a, b uint8) uint8 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }
 
 // EnhancedCompareGrids compares two cell grids with full color/attr support.
