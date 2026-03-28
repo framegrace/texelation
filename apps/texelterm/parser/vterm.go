@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
+
 
 	"github.com/mattn/go-runewidth"
 )
@@ -90,11 +90,6 @@ type VTerm struct {
 	// commitInsertOffset tracks lines inserted by OnLineCommit callbacks via
 	// RequestLineInsert. After the callback, currentGlobal is adjusted.
 	commitInsertOffset int64
-	// Deprecated: Use SetOnLineIndexed instead, which is called AFTER persistence.
-	// This callback was called when a line was committed, but BEFORE it was persisted,
-	// which could cause search index entries for content that doesn't exist on disk.
-	// Kept for backward compatibility but no longer used internally.
-	OnLineIndex func(lineIdx int64, timestamp time.Time, cells []Cell, isCommand bool)
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -472,11 +467,6 @@ func (v *VTerm) getTopHistoryLine() int {
 		return int(v.memBufState.liveEdgeBase)
 	}
 	return 0
-}
-
-// VisibleTop returns the history index of the first visible line.
-func (v *VTerm) VisibleTop() int {
-	return v.getTopHistoryLine()
 }
 
 // MarkPromptStart records the position where a shell prompt starts.
@@ -1385,20 +1375,10 @@ func (v *VTerm) NotifyLinePersist(lineIdx int64) {
 	}
 }
 
-// Deprecated: Use SetOnLineIndexed after EnableMemoryBufferWithDisk instead.
-// This callback is called BEFORE persistence, which can cause search index entries
-// for content that doesn't exist on disk after a crash.
-// WithLineIndexHandler sets a callback for when lines are committed (e.g., on line feed).
-func WithLineIndexHandler(handler func(lineIdx int64, timestamp time.Time, cells []Cell, isCommand bool)) Option {
-	return func(v *VTerm) { v.OnLineIndex = handler }
-}
-
-// WithMemoryBuffer enables the new memory buffer system.
-// This replaces the old DisplayBuffer system with the Phase 1-3 architecture.
+// WithMemoryBuffer is a no-op kept for backward compatibility.
+// NewVTerm always initializes the memory buffer unconditionally.
 func WithMemoryBuffer() Option {
-	return func(v *VTerm) {
-		v.initMemoryBuffer()
-	}
+	return func(v *VTerm) {}
 }
 
 // WithMemoryBufferDisk enables the memory buffer system with disk persistence.
