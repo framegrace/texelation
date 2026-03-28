@@ -15,6 +15,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/framegrace/texelui v0.7.0 h1:nagly9P7ljRgRsStasZfGp+h+21tTpsq0MxRUxSWHz4=
 github.com/framegrace/texelui v0.7.0/go.mod h1:6MlXF03E/QstYjj/XPzHiMrMW3ro8EyxuyWoWQNzTms=
+github.com/framegrace/texelui v0.8.0 h1:JTwuxnapblzgUKrx1zxztdVdB+6RNSBdlgVNz6dfopw=
+github.com/framegrace/texelui v0.8.0/go.mod h1:6MlXF03E/QstYjj/XPzHiMrMW3ro8EyxuyWoWQNzTms=
 github.com/gdamore/encoding v1.0.1 h1:YzKZckdBL6jVt2Gc+5p82qhrGiqMdG/eNs6Wy0u3Uhw=
 github.com/gdamore/encoding v1.0.1/go.mod h1:0Z0cMFinngz9kS1QfMjCP8TY7em3bZYeeklsSDPivEo=
 github.com/gdamore/tcell/v2 v2.13.8 h1:Mys/Kl5wfC/GcC5Cx4C2BIQH9dbnhnkPgS9/wF3RlfU=

@@ -15,8 +15,9 @@ import (
 
 	texelcore "github.com/framegrace/texelui/core"
 
+	"github.com/framegrace/texelui/animation"
+
 	"github.com/framegrace/texelation/apps/texelterm/parser"
-	"github.com/framegrace/texelation/internal/effects"
 	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
@@ -106,7 +107,7 @@ type HistoryNavigator struct {
 	ScrollAnimMinTime   time.Duration // Min animation duration
 	ScrollAnimMaxTime   time.Duration // Max animation duration
 	ScrollAnimFrameRate int           // Frames per second
-	ScrollAnimEasing    effects.EasingFunc
+	ScrollAnimEasing    animation.EasingFunc
 
 	// Long jump edge animation config
 	ScrollAnimEdgeLines      int           // Lines to show at start/end edges (default: 5)
@@ -140,7 +141,7 @@ func NewHistoryNavigator(vterm *parser.VTerm, searchIndex *parser.SQLiteSearchIn
 		ScrollAnimMinTime:        defaultScrollAnimMinTime,
 		ScrollAnimMaxTime:        defaultScrollAnimMaxTime,
 		ScrollAnimFrameRate:      defaultScrollAnimFrameRate,
-		ScrollAnimEasing:         effects.EaseInOutCubic,
+		ScrollAnimEasing:         animation.EaseInOutCubic,
 		ScrollAnimEdgeLines:      defaultScrollAnimEdgeLines,
 		ScrollAnimEdgeStartDelay: defaultScrollAnimEdgeStartDelay,
 		ScrollAnimEdgeEndDelay:   defaultScrollAnimEdgeEndDelay,
@@ -883,7 +884,7 @@ func (h *HistoryNavigator) animateShortJump(startOffset, targetOffset, distance 
 	// Use configured easing function
 	easing := h.ScrollAnimEasing
 	if easing == nil {
-		easing = effects.EaseInOutCubic
+		easing = animation.EaseInOutCubic
 	}
 
 	// Animate in a goroutine
@@ -973,7 +974,7 @@ func (h *HistoryNavigator) animateLongJump(startOffset, targetOffset, distance i
 			// Use configured easing function
 			easing := h.ScrollAnimEasing
 			if easing == nil {
-				easing = effects.EaseInOutCubic
+				easing = animation.EaseInOutCubic
 			}
 
 			startTime := time.Now()

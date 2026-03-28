@@ -12,8 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/framegrace/texelui/animation"
+
 	"github.com/framegrace/texelation/internal/debuglog"
-	"github.com/framegrace/texelation/internal/effects"
 )
 
 // LayoutTransitionConfig holds configuration for layout transitions from theme.json.
@@ -45,7 +46,7 @@ type LayoutTransitionManager struct {
 	enabled    bool
 	duration   time.Duration
 	easing     string
-	timeline   *effects.Timeline
+	timeline   *animation.Timeline
 	animating  map[*Node]*transitionState
 	desktop    *DesktopEngine
 	ticker     *time.Ticker
@@ -75,7 +76,7 @@ func NewLayoutTransitionManager(config LayoutTransitionConfig, desktop *DesktopE
 		enabled:   true,
 		duration:  duration,
 		easing:    easing,
-		timeline:  effects.NewTimeline(0.0),
+		timeline:  animation.NewTimeline(0.0),
 		animating: make(map[*Node]*transitionState),
 		desktop:   desktop,
 		stopCh:    make(chan struct{}),
@@ -343,7 +344,7 @@ func (m *LayoutTransitionManager) UpdateConfig(config LayoutTransitionConfig) {
 			m.stopCh = make(chan struct{})
 		}
 		if m.timeline == nil {
-			m.timeline = effects.NewTimeline(0.0)
+			m.timeline = animation.NewTimeline(0.0)
 		}
 		// Reset grace period when enabling
 		m.graceStart = time.Now()
