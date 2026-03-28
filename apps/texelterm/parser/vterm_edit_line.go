@@ -97,8 +97,10 @@ func (v *VTerm) insertLinesWithinMargins(n int) {
 		for y := v.marginBottom; y >= v.cursorY+n; y-- {
 			srcY := y - n
 			if srcY >= v.cursorY {
-				dstLine := v.getHistoryLine(topHistory + y)
-				srcLine := v.getHistoryLine(topHistory + srcY)
+				// Copy slices to avoid mutating MemoryBuffer backing array
+				// directly, which races with the WAL persistence goroutine.
+				dstLine := append([]Cell{}, v.getHistoryLine(topHistory+y)...)
+				srcLine := append([]Cell{}, v.getHistoryLine(topHistory+srcY)...)
 
 				// Ensure lines are wide enough
 				for len(dstLine) <= rightCol {
@@ -117,7 +119,7 @@ func (v *VTerm) insertLinesWithinMargins(n int) {
 		// Clear the top n lines' margin regions
 		for y := v.cursorY; y < v.cursorY+n && y <= v.marginBottom; y++ {
 			if y >= 0 {
-				line := v.getHistoryLine(topHistory + y)
+				line := append([]Cell{}, v.getHistoryLine(topHistory+y)...)
 				for len(line) <= rightCol {
 					line = append(line, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
 				}
@@ -215,8 +217,10 @@ func (v *VTerm) deleteLinesWithinMargins(n int) {
 		for y := v.cursorY; y <= v.marginBottom-n; y++ {
 			srcY := y + n
 			if srcY <= v.marginBottom {
-				dstLine := v.getHistoryLine(topHistory + y)
-				srcLine := v.getHistoryLine(topHistory + srcY)
+				// Copy slices to avoid mutating MemoryBuffer backing array
+				// directly, which races with the WAL persistence goroutine.
+				dstLine := append([]Cell{}, v.getHistoryLine(topHistory+y)...)
+				srcLine := append([]Cell{}, v.getHistoryLine(topHistory+srcY)...)
 
 				// Ensure lines are wide enough
 				for len(dstLine) <= rightCol {
@@ -239,7 +243,7 @@ func (v *VTerm) deleteLinesWithinMargins(n int) {
 		}
 		for y := clearStart; y <= v.marginBottom; y++ {
 			if y >= 0 {
-				line := v.getHistoryLine(topHistory + y)
+				line := append([]Cell{}, v.getHistoryLine(topHistory+y)...)
 				for len(line) <= rightCol {
 					line = append(line, Cell{Rune: ' ', FG: v.defaultFG, BG: v.defaultBG})
 				}

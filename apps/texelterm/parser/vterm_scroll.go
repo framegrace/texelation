@@ -37,8 +37,8 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 		} else if v.cursorY < v.height-1 {
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
 		}
-	} else if v.IsMemoryBufferEnabled() {
-		// New Phase 1-3 architecture: use MemoryBuffer for line management.
+	} else {
+		// Memory buffer mode: use MemoryBuffer for line management.
 		isFullScreenMargins := v.marginTop == 0 && v.marginBottom == v.height-1
 
 		// Auto-jump to live edge when NEW content is being created (explicit LF at full-screen margins).

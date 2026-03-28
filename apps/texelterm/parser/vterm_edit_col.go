@@ -55,10 +55,10 @@ func (v *VTerm) InsertColumns(n int) {
 			buffer[y] = line
 		}
 	} else {
-		// Main screen
+		// Main screen — copy slice to avoid racing WAL persistence goroutine
 		topHistory := v.getTopHistoryLine()
 		for y := v.marginTop; y <= v.marginBottom; y++ {
-			line := v.getHistoryLine(topHistory + y)
+			line := append([]Cell{}, v.getHistoryLine(topHistory+y)...)
 			// Ensure line is wide enough
 			for len(line) <= rightMargin {
 				line = append(line, Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG})
@@ -129,10 +129,10 @@ func (v *VTerm) DeleteColumns(n int) {
 			buffer[y] = line
 		}
 	} else {
-		// Main screen
+		// Main screen — copy slice to avoid racing WAL persistence goroutine
 		topHistory := v.getTopHistoryLine()
 		for y := v.marginTop; y <= v.marginBottom; y++ {
-			line := v.getHistoryLine(topHistory + y)
+			line := append([]Cell{}, v.getHistoryLine(topHistory+y)...)
 			// Ensure line is wide enough
 			for len(line) <= rightMargin {
 				line = append(line, Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG})

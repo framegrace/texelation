@@ -68,7 +68,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			if v.OnAltScreenChange != nil {
 				v.OnAltScreenChange(true)
 			}
-			v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY //+v.getTopHistoryLine()
+			v.savedMainCursorX, v.savedMainCursorY = v.cursorX, v.cursorY
 			v.altBuffer = make([][]Cell, v.height)
 			for i := range v.altBuffer {
 				v.altBuffer[i] = make([]Cell, v.width)
@@ -119,7 +119,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 				v.OnAltScreenChange(false)
 			}
 			v.altBuffer = nil
-			physicalY := v.savedMainCursorY // - v.getTopHistoryLine()
+			physicalY := v.savedMainCursorY
 			v.SetCursorPos(physicalY, v.savedMainCursorX)
 			v.MarkAllDirty()
 			if v.ScreenRestored != nil {
