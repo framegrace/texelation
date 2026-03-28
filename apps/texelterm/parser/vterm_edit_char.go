@@ -183,6 +183,11 @@ func (v *VTerm) DeleteCharacters(n int) {
 			line[i] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
 		}
 
+		// Clamp to terminal width — discard any cells beyond rightBoundary
+		// that may exist from prior wider content (e.g., reverse search prompt).
+		if len(line) > rightBoundary {
+			line = line[:rightBoundary]
+		}
 		v.setHistoryLine(logicalY, line)
 	}
 }

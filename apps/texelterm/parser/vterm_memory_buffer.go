@@ -1497,26 +1497,25 @@ func (v *VTerm) memoryBufferEraseLine() {
 }
 
 // memoryBufferEraseCharacters erases n characters at current position.
+// Uses SetCell to avoid data races with the persistence goroutine and to
+// properly extend lines when non-default colors are used (matching ECH spec).
 func (v *VTerm) memoryBufferEraseCharacters(n int) {
 	if !v.IsMemoryBufferEnabled() {
 		return
 	}
 
+	mb := v.memBufState.memBuf
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
-	line := v.memBufState.memBuf.GetLine(globalLine)
-	if line == nil {
-		return
+
+	// ECH erases within the current line, capped at terminal width.
+	endCol := v.cursorX + n
+	if endCol > v.width {
+		endCol = v.width
 	}
 
-	// Replace n characters at cursor position with spaces
-	for i := 0; i < n; i++ {
-		col := v.cursorX + i
-		if col < len(line.Cells) {
-			line.Cells[col] = Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG}
-		}
+	for col := v.cursorX; col < endCol; col++ {
+		mb.SetCell(globalLine, col, Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG})
 	}
-
-	v.memBufState.memBuf.MarkDirty(globalLine)
 
 	// Mark dirty for persistence
 	if v.memBufState.persistence != nil {
