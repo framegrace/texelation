@@ -19,6 +19,7 @@ import (
 	"github.com/framegrace/texelation/registry"
 	"github.com/framegrace/texelation/texel"
 	"github.com/framegrace/texelui/adapter"
+	"github.com/framegrace/texelui/color"
 	"github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/widgets"
 	"github.com/gdamore/tcell/v2"
@@ -168,7 +169,7 @@ func (l *Launcher) buildUI() {
 	bgColor := tm.GetSemanticColor("bg.surface")
 
 	l.pane = widgets.NewPane()
-	l.pane.Style = tcell.StyleDefault.Background(bgColor)
+	l.pane.Style = color.StyleFrom(tcell.StyleDefault.Background(bgColor))
 	ui.AddWidget(l.pane)
 
 	// Create labels for each app
@@ -206,9 +207,9 @@ func (l *Launcher) updateSelection() {
 
 	for i, label := range l.labels {
 		if i == l.selectedIdx {
-			label.Style = tcell.StyleDefault.Foreground(selectedFg).Background(selectedBg)
+			label.Style = color.StyleFrom(tcell.StyleDefault.Foreground(selectedFg).Background(selectedBg))
 		} else {
-			label.Style = tcell.StyleDefault.Foreground(normalFg).Background(normalBg)
+			label.Style = color.StyleFrom(tcell.StyleDefault.Foreground(normalFg).Background(normalBg))
 		}
 	}
 }

@@ -16,6 +16,7 @@ import (
 	texelcore "github.com/framegrace/texelui/core"
 
 	"github.com/framegrace/texelui/animation"
+	"github.com/framegrace/texelui/color"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/internal/theming"
@@ -208,12 +209,12 @@ func (h *HistoryNavigator) createWidgets() {
 
 	// Search widgets
 	h.searchIcon = widgets.NewLabel("🔍")
-	h.searchIcon.Style = accentStyle
+	h.searchIcon.Style = color.StyleFrom(accentStyle)
 	h.searchIcon.SetFocusable(false)
 
 	h.searchInput = widgets.NewInput()
 	h.searchInput.Placeholder = "Search history..."
-	h.searchInput.Style = baseStyle
+	h.searchInput.Style = color.StyleFrom(baseStyle)
 	h.searchInput.SetFocusable(true)
 
 	h.prevBtn = widgets.NewButton("◀Prev")
@@ -223,12 +224,12 @@ func (h *HistoryNavigator) createWidgets() {
 	h.nextBtn.SetFocusable(true)
 
 	h.counterLbl = widgets.NewLabel("")
-	h.counterLbl.Style = mutedStyle
+	h.counterLbl.Style = color.StyleFrom(mutedStyle)
 	h.counterLbl.SetFocusable(false)
 
 	// Row 2: Keymap hints
 	h.keymapLbl = widgets.NewLabel("")
-	h.keymapLbl.Style = mutedStyle
+	h.keymapLbl.Style = color.StyleFrom(mutedStyle)
 	h.keymapLbl.SetFocusable(false)
 
 	// Add widgets to UI manager

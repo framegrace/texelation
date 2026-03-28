@@ -15,6 +15,7 @@ import (
 	"log"
 
 	"github.com/framegrace/texelation/internal/debuglog"
+	"github.com/framegrace/texelui/color"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
 	"github.com/framegrace/texelui/widgets"
@@ -99,9 +100,9 @@ func (p *pane) refreshBorderStyles() {
 	activeFG := tm.GetSemanticColor("border.active").TrueColor()
 	resizingFG := tm.GetSemanticColor("border.resizing").TrueColor()
 
-	p.border.Style = tcell.StyleDefault.Foreground(inactiveFG).Background(bg)
-	p.border.FocusedStyle = tcell.StyleDefault.Foreground(activeFG).Background(bg)
-	p.border.ResizingStyle = tcell.StyleDefault.Foreground(resizingFG).Background(bg)
+	p.border.Style = color.StyleFrom(tcell.StyleDefault.Foreground(inactiveFG).Background(bg))
+	p.border.FocusedStyle = color.StyleFrom(tcell.StyleDefault.Foreground(activeFG).Background(bg))
+	p.border.ResizingStyle = color.StyleFrom(tcell.StyleDefault.Foreground(resizingFG).Background(bg))
 }
 
 // AttachApp connects an application to the pane, gives it its initial size,

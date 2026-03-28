@@ -24,6 +24,7 @@ import (
 	"github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/scroll"
 	"github.com/framegrace/texelui/widgets"
+	"github.com/gdamore/tcell/v2"
 )
 
 // Compile-time interface checks.
@@ -626,7 +627,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 
 func newSectionHeader(text string) *widgets.Label {
 	label := widgets.NewLabel(text)
-	label.Style = label.Style.Bold(true)
+	label.Style.Attrs |= tcell.AttrBold
 	return label
 }
 
