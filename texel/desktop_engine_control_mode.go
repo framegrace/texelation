@@ -37,7 +37,7 @@ func (d *DesktopEngine) toggleControlMode() {
 	if d.activeWorkspace != nil {
 		d.activeWorkspace.Broadcast(Event{Type: eventType})
 	}
-	d.broadcastStateUpdate()
+	d.broadcastModeChanged()
 }
 
 // toggleZoom collapses or expands the active pane.
@@ -61,7 +61,7 @@ func (d *DesktopEngine) toggleZoom() {
 	}
 
 	d.recalculateLayout()
-	d.broadcastStateUpdate()
+	d.broadcastActivePaneChanged()
 	d.broadcastTreeChanged()
 }
 
@@ -109,7 +109,7 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 		d.activeWorkspace.PerformSplit(Horizontal)
 	case 'w':
 		d.subControlMode = 'w'
-		d.broadcastStateUpdate()
+		d.broadcastModeChanged()
 		exitControlMode = false
 	case 'z':
 		d.toggleZoom()

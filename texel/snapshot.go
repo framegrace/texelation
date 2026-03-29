@@ -32,12 +32,20 @@ type Rectangle struct {
 	Height int
 }
 
+// WorkspaceMetadata carries display metadata for a workspace in a snapshot.
+type WorkspaceMetadata struct {
+	ID    int
+	Name  string
+	Color uint32 // RGB packed: (r<<16)|(g<<8)|b
+}
+
 // TreeCapture represents a snapshot of the desktop layout tree.
 type TreeCapture struct {
-	Panes             []PaneSnapshot
-	Root              *TreeNodeCapture            // Deprecated: use WorkspaceRoots
-	WorkspaceRoots    map[int]*TreeNodeCapture    // Map of workspace ID to its tree root
-	ActiveWorkspaceID int
+	Panes              []PaneSnapshot
+	Root               *TreeNodeCapture         // Deprecated: use WorkspaceRoots
+	WorkspaceRoots     map[int]*TreeNodeCapture // Map of workspace ID to its tree root
+	ActiveWorkspaceID  int
+	WorkspaceMetadata  []WorkspaceMetadata
 }
 
 // TreeNodeCapture stores split metadata or references a leaf pane by index.
@@ -254,7 +262,18 @@ func (d *DesktopEngine) CaptureTree() TreeCapture {
 			capture.WorkspaceRoots[id] = root
 		}
 	}
-	
+
+	// Capture workspace metadata (name and color)
+	for id, ws := range d.workspaces {
+		r32, g32, b32 := ws.Color.RGB()
+		rgb := (uint32(r32)&0xFF)<<16 | (uint32(g32)&0xFF)<<8 | (uint32(b32) & 0xFF)
+		capture.WorkspaceMetadata = append(capture.WorkspaceMetadata, WorkspaceMetadata{
+			ID:    id,
+			Name:  ws.Name,
+			Color: rgb,
+		})
+	}
+
 	// Maintain backward compatibility for Root field (set to active workspace)
 	if d.activeWorkspace != nil {
 		capture.Root = capture.WorkspaceRoots[d.activeWorkspace.id]

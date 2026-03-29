@@ -66,6 +66,17 @@ func (c *connection) sendStateUpdate(state texel.StatePayload) {
 		ActiveTitle:   state.ActiveTitle,
 		DesktopBgRGB:  colorToRGB(r, g, b),
 	}
+	sink, ok := c.sink.(*DesktopSink)
+	if ok && sink.Desktop() != nil {
+		wsInfos := sink.Desktop().WorkspacesInfo()
+		update.WorkspaceNames = make([]string, len(wsInfos))
+		update.WorkspaceColors = make([]uint32, len(wsInfos))
+		for i, ws := range wsInfos {
+			update.WorkspaceNames[i] = ws.Name
+			wr, wg, wb := ws.Color.RGB()
+			update.WorkspaceColors[i] = colorToRGB(wr, wg, wb)
+		}
+	}
 	payload, err := protocol.EncodeStateUpdate(update)
 	if err != nil {
 		return
@@ -152,6 +163,11 @@ func (c *connection) OnEvent(event texel.Event) {
 		c.sendStateUpdate(payload)
 	case texel.EventTreeChanged:
 		c.sendTreeSnapshot()
+	case texel.EventWorkspacesChanged, texel.EventWorkspaceSwitched,
+		texel.EventModeChanged, texel.EventActivePaneChanged,
+		texel.EventPerformanceUpdate, texel.EventToast:
+		// Fine-grained events handled by status bar directly.
+		// Protocol still uses StateUpdate for client sync.
 	}
 }
 

@@ -272,6 +272,79 @@ func TestStateUpdateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateUpdateRoundTripWithWorkspaceMetadata(t *testing.T) {
+	update := StateUpdate{
+		WorkspaceID:     2,
+		AllWorkspaces:   []int32{1, 2, 3},
+		InControlMode:   false,
+		SubMode:         0,
+		ActiveTitle:     "editor",
+		DesktopBgRGB:    0xaabbcc,
+		WorkspaceNames:  []string{"main", "work", "misc"},
+		WorkspaceColors: []uint32{0xff0000, 0x00ff00, 0x0000ff},
+	}
+	payload, err := EncodeStateUpdate(update)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := DecodeStateUpdate(payload)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if len(decoded.WorkspaceNames) != len(update.WorkspaceNames) {
+		t.Fatalf("workspace names length mismatch: %v", decoded.WorkspaceNames)
+	}
+	for i, name := range update.WorkspaceNames {
+		if decoded.WorkspaceNames[i] != name {
+			t.Fatalf("workspace name[%d]: got %q want %q", i, decoded.WorkspaceNames[i], name)
+		}
+	}
+	if len(decoded.WorkspaceColors) != len(update.WorkspaceColors) {
+		t.Fatalf("workspace colors length mismatch: %v", decoded.WorkspaceColors)
+	}
+	for i, c := range update.WorkspaceColors {
+		if decoded.WorkspaceColors[i] != c {
+			t.Fatalf("workspace color[%d]: got %x want %x", i, decoded.WorkspaceColors[i], c)
+		}
+	}
+}
+
+func TestStateUpdateBackwardCompatibilityNoMetadata(t *testing.T) {
+	// Simulate an older message without WorkspaceNames/WorkspaceColors.
+	// Encode a message with new fields empty (zero-count prefix), then strip
+	// the trailing bytes to simulate an older encoder that stops at ActiveTitle.
+	old := StateUpdate{
+		WorkspaceID:   7,
+		AllWorkspaces: []int32{1, 3, 5},
+		InControlMode: true,
+		SubMode:       'w',
+		ActiveTitle:   "shell",
+		DesktopBgRGB:  0x112233,
+	}
+	payload, err := EncodeStateUpdate(old)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	// Strip the trailing 4 bytes (two uint16 zero counts for names+colors).
+	if len(payload) < 4 {
+		t.Fatalf("payload too short: %d", len(payload))
+	}
+	stripped := payload[:len(payload)-4]
+	decoded, err := DecodeStateUpdate(stripped)
+	if err != nil {
+		t.Fatalf("decode old-format failed: %v", err)
+	}
+	if decoded.ActiveTitle != old.ActiveTitle {
+		t.Fatalf("title mismatch: got %q", decoded.ActiveTitle)
+	}
+	if len(decoded.WorkspaceNames) != 0 {
+		t.Fatalf("expected no workspace names, got %v", decoded.WorkspaceNames)
+	}
+	if len(decoded.WorkspaceColors) != 0 {
+		t.Fatalf("expected no workspace colors, got %v", decoded.WorkspaceColors)
+	}
+}
+
 func TestPaneStateRoundTrip(t *testing.T) {
 	state := PaneState{PaneID: [16]byte{1, 2, 3, 4}, Flags: PaneStateActive | PaneStateResizing | PaneStateSelectionDelegated, ZOrder: 42}
 	payload, err := EncodePaneState(state)

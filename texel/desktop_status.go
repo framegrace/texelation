@@ -6,6 +6,14 @@
 
 package texel
 
+// StatusBarActions is the interface that the status bar uses to request
+// workspace operations from the desktop engine. It lives here (not in the
+// statusbar package) to avoid circular imports.
+type StatusBarActions interface {
+	SwitchToWorkspace(id int)
+	RenameWorkspace(id int, name string)
+}
+
 // Side defines the placement of a StatusPane.
 type Side int
 

@@ -47,6 +47,9 @@ func newStatusPaneID(app App) [16]byte {
 	return id
 }
 
+// Compile-time check: DesktopEngine must satisfy StatusBarActions.
+var _ StatusBarActions = (*DesktopEngine)(nil)
+
 // eventKind identifies the type of desktop event.
 type eventKind int
 
@@ -312,7 +315,8 @@ func (d *DesktopEngine) ForceRefresh() {
 
 	// Trigger a full layout and state broadcast
 	d.recalculateLayout()
-	d.broadcastStateUpdate()
+	d.broadcastWorkspacesChanged()
+	d.broadcastWorkspaceSwitched()
 	d.broadcastTreeChanged()
 
 	debuglog.Println("Desktop: Broadcasting EventThemeChanged")
@@ -392,7 +396,7 @@ func (d *DesktopEngine) viewportSize() (int, int) {
 func (d *DesktopEngine) applyThemeChange() {
 	d.styleCache = make(map[styleKey]tcell.Style)
 	d.recalculateLayout()
-	d.broadcastStateUpdate()
+	d.broadcastActivePaneChanged()
 	d.broadcastTreeChanged()
 	d.dispatcher.Broadcast(Event{Type: EventThemeChanged})
 	if d.refreshHandler != nil {
@@ -460,14 +464,12 @@ func (d *DesktopEngine) broadcastStateUpdate() {
 		Type:    EventStateUpdate,
 		Payload: payload,
 	})
-	//	if d.activeWorkspace != nil {
-	//		d.activeWorkspace.Refresh()
-	//	}
 }
 
 func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 	d.refreshMu.Lock()
 	d.refreshHandler = func() {
+		d.broadcastPerformanceUpdate()
 		d.broadcastStateUpdate()
 		if handler != nil {
 			handler()
@@ -522,6 +524,63 @@ func (d *DesktopEngine) storeLastState(payload StatePayload) {
 		d.lastState.AllWorkspaces = append([]int(nil), payload.AllWorkspaces...)
 	}
 	d.hasLastState = true
+}
+
+func (d *DesktopEngine) workspacesChangedPayload() WorkspacesChangedPayload {
+	infos := make([]WorkspaceInfo, 0, len(d.workspaces))
+	for _, ws := range d.workspaces {
+		infos = append(infos, WorkspaceInfo{
+			ID:    ws.id,
+			Name:  ws.Name,
+			Color: ws.Color,
+		})
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
+	activeID := 0
+	if d.activeWorkspace != nil {
+		activeID = d.activeWorkspace.id
+	}
+	return WorkspacesChangedPayload{Workspaces: infos, ActiveID: activeID}
+}
+
+func (d *DesktopEngine) broadcastWorkspacesChanged() {
+	d.dispatcher.Broadcast(Event{Type: EventWorkspacesChanged, Payload: d.workspacesChangedPayload()})
+}
+
+func (d *DesktopEngine) broadcastWorkspaceSwitched() {
+	activeID := 0
+	if d.activeWorkspace != nil {
+		activeID = d.activeWorkspace.id
+	}
+	d.dispatcher.Broadcast(Event{Type: EventWorkspaceSwitched, Payload: WorkspaceSwitchedPayload{ActiveID: activeID}})
+}
+
+func (d *DesktopEngine) broadcastModeChanged() {
+	d.dispatcher.Broadcast(Event{Type: EventModeChanged, Payload: ModeChangedPayload{InControlMode: d.inControlMode, SubMode: d.subControlMode}})
+}
+
+func (d *DesktopEngine) broadcastActivePaneChanged() {
+	var title string
+	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
+		title = d.zoomedPane.Pane.getTitle()
+	} else if d.activeWorkspace != nil {
+		title = d.activeWorkspace.tree.ActiveTitle()
+	}
+	d.dispatcher.Broadcast(Event{Type: EventActivePaneChanged, Payload: ActivePaneChangedPayload{ActiveTitle: title}})
+}
+
+func (d *DesktopEngine) broadcastPerformanceUpdate() {
+	d.dispatcher.Broadcast(Event{Type: EventPerformanceUpdate, Payload: PerformanceUpdatePayload{LastPublishDuration: time.Duration(d.lastPublishNanos.Load())}})
+}
+
+// BroadcastToast sends a toast notification to all subscribers.
+func (d *DesktopEngine) BroadcastToast(message string, severity ToastSeverity, duration time.Duration) {
+	d.dispatcher.Broadcast(Event{Type: EventToast, Payload: ToastPayload{Message: message, Severity: severity, Duration: duration}})
+}
+
+// WorkspacesInfo returns the current workspace list sorted by ID.
+func (d *DesktopEngine) WorkspacesInfo() []WorkspaceInfo {
+	return d.workspacesChangedPayload().Workspaces
 }
 
 func (d *DesktopEngine) currentStatePayload(allWsIDs []int, title string) StatePayload {
@@ -616,9 +675,21 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 		sp.app.SetRefreshNotifier(notifier)
 	}
 	d.recalculateLayout()
-	d.broadcastStateUpdate()
+	d.broadcastWorkspaceSwitched()
+	d.broadcastActivePaneChanged()
 	d.notifyFocusActive()
 	d.broadcastTreeChanged()
+}
+
+// RenameWorkspace sets the display name for the workspace with the given id.
+// Does nothing if no workspace with that id exists.
+func (d *DesktopEngine) RenameWorkspace(id int, name string) {
+	ws, ok := d.workspaces[id]
+	if !ok {
+		return
+	}
+	ws.Name = name
+	d.broadcastWorkspacesChanged()
 }
 
 func (d *DesktopEngine) forEachPane(fn func(*pane)) {

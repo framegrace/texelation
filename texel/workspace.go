@@ -9,10 +9,12 @@
 package texel
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
+	"github.com/framegrace/texelui/theme"
 )
 
 type Direction int
@@ -58,10 +60,24 @@ type selectedBorder struct {
 	index int   // The index of the left/top pane of the border. The border is between child[index] and child[index+1].
 }
 
+var workspaceAccentKeys = [8]string{
+	"workspace.accent.1", "workspace.accent.2", "workspace.accent.3", "workspace.accent.4",
+	"workspace.accent.5", "workspace.accent.6", "workspace.accent.7", "workspace.accent.8",
+}
+
+// WorkspaceAccentColor returns the accent color for a workspace index, cycling through
+// the 8 workspace accent palette entries defined in the theme.
+func WorkspaceAccentColor(index int) tcell.Color {
+	key := workspaceAccentKeys[index%len(workspaceAccentKeys)]
+	return theme.Get().GetSemanticColor(key)
+}
+
 // Workspace represents a single workspace/tab with its own tiling pane tree.
 // Each workspace manages independent pane layout, navigation, and event routing.
 type Workspace struct {
 	id                  int
+	Name                string
+	Color               tcell.Color
 	x, y, width, height int
 	desktop             *DesktopEngine
 	tree                *Tree
@@ -77,8 +93,14 @@ type Workspace struct {
 
 // newWorkspace creates a new workspace with its own tiling pane tree.
 func newWorkspace(id int, shellFactory AppFactory, lifecycle AppLifecycleManager, desktop *DesktopEngine) (*Workspace, error) {
+	name := fmt.Sprintf("%d", id)
+	if id == 1 {
+		name = "default"
+	}
 	w := &Workspace{
 		id:              id,
+		Name:            name,
+		Color:           WorkspaceAccentColor(id - 1),
 		desktop:         desktop,
 		tree:            NewTree(),
 		refreshChan:     make(chan bool, 16),
@@ -183,7 +205,7 @@ func (w *Workspace) AddApp(app App) {
 	w.recalculateLayout()
 	w.notifyFocus()
 	w.desktop.broadcastTreeChanged() // Notify that the tree structure changed
-	w.desktop.broadcastStateUpdate()
+	w.desktop.broadcastActivePaneChanged()
 	debuglog.Printf("AddApp: Completed adding app '%s'", app.GetTitle())
 }
 
@@ -312,7 +334,7 @@ func (w *Workspace) ensureWelcomePane() {
 	w.recalculateLayout()
 	if w.desktop != nil {
 		w.desktop.broadcastTreeChanged()
-		w.desktop.broadcastStateUpdate()
+		w.desktop.broadcastActivePaneChanged()
 	}
 }
 

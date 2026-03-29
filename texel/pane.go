@@ -426,7 +426,7 @@ func (p *pane) doReplaceWithApp(name string, config map[string]interface{}) {
 	p.AttachApp(newApp, p.screen.refreshChan)
 
 	// Broadcast state update so the desktop knows about the change
-	p.screen.desktop.broadcastStateUpdate()
+	p.screen.desktop.broadcastActivePaneChanged()
 	// App identity changed; broadcast tree change so snapshots persist the new app type.
 	p.screen.desktop.broadcastTreeChanged()
 
