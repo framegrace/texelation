@@ -25,6 +25,8 @@ const (
 	EventPaneActiveChanged
 	EventPaneClosed
 	// Workspace/Global Events
+	// Deprecated: EventStateUpdate is used only for protocol client sync.
+	// New code should use EventWorkspacesChanged, EventWorkspaceSwitched, etc.
 	EventStateUpdate
 	EventTreeChanged
 	// Add other event types here as needed
@@ -46,7 +48,8 @@ type Event struct {
 	Payload interface{}
 }
 
-// StatePayload is the data associated with a MsgStateUpdate.
+// Deprecated: StatePayload is used only for protocol client sync.
+// New code should use fine-grained payloads (WorkspacesChangedPayload, etc.).
 type StatePayload struct {
 	AllWorkspaces  []int
 	WorkspaceID    int
