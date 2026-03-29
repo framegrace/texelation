@@ -54,6 +54,13 @@ func (d *DesktopEngine) AddStatusPane(app App, side Side, size int) {
 	d.appLifecycle.StartApp(app, nil)
 	d.recalculateLayout()
 	d.broadcastTreeChanged()
+
+	// Send initial state so the new status pane gets current workspace info.
+	// Without this, status panes added after SwitchToWorkspace miss the events.
+	d.broadcastWorkspacesChanged()
+	d.broadcastWorkspaceSwitched()
+	d.broadcastModeChanged()
+	d.broadcastActivePaneChanged()
 }
 
 func (d *DesktopEngine) getMainArea() (int, int, int, int) {

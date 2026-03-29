@@ -97,14 +97,20 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		screen.recalculateLayout()
 	}
 	
-	// 3. Apply workspace metadata (name and color) from the snapshot
+	// 3. Apply workspace metadata (name and color) from the snapshot.
+	// Skip empty values to preserve defaults from newWorkspace (old snapshots
+	// lack metadata entirely).
 	for _, meta := range capture.WorkspaceMetadata {
 		if ws, exists := d.workspaces[meta.ID]; exists {
-			ws.Name = meta.Name
-			r := int32((meta.Color >> 16) & 0xFF)
-			g := int32((meta.Color >> 8) & 0xFF)
-			b := int32(meta.Color & 0xFF)
-			ws.Color = tcell.NewRGBColor(r, g, b)
+			if meta.Name != "" {
+				ws.Name = meta.Name
+			}
+			if meta.Color != 0 {
+				r := int32((meta.Color >> 16) & 0xFF)
+				g := int32((meta.Color >> 8) & 0xFF)
+				b := int32(meta.Color & 0xFF)
+				ws.Color = tcell.NewRGBColor(r, g, b)
+			}
 		}
 	}
 
