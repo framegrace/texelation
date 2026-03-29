@@ -205,7 +205,7 @@ func (w *Workspace) AddApp(app App) {
 	w.recalculateLayout()
 	w.notifyFocus()
 	w.desktop.broadcastTreeChanged() // Notify that the tree structure changed
-	w.desktop.broadcastStateUpdate()
+	w.desktop.broadcastActivePaneChanged()
 	debuglog.Printf("AddApp: Completed adding app '%s'", app.GetTitle())
 }
 
@@ -334,7 +334,7 @@ func (w *Workspace) ensureWelcomePane() {
 	w.recalculateLayout()
 	if w.desktop != nil {
 		w.desktop.broadcastTreeChanged()
-		w.desktop.broadcastStateUpdate()
+		w.desktop.broadcastActivePaneChanged()
 	}
 }
 

@@ -52,7 +52,6 @@ func (w *Workspace) removeNode(target *Node, allowRoot bool) {
 		w.notifyFocus()
 		if w.desktop != nil {
 			w.desktop.broadcastTreeChanged()
-			w.desktop.broadcastStateUpdate()
 		}
 		w.ensureWelcomePane()
 		return
@@ -183,7 +182,7 @@ func (w *Workspace) doRemoveNode(target *Node, parent *Node, closingIndex int, w
 	w.notifyFocus()
 	if w.desktop != nil {
 		w.desktop.broadcastTreeChanged()
-		w.desktop.broadcastStateUpdate()
+		w.desktop.broadcastActivePaneChanged()
 	}
 	w.ensureWelcomePane()
 }

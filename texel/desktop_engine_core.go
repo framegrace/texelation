@@ -312,7 +312,8 @@ func (d *DesktopEngine) ForceRefresh() {
 
 	// Trigger a full layout and state broadcast
 	d.recalculateLayout()
-	d.broadcastStateUpdate()
+	d.broadcastWorkspacesChanged()
+	d.broadcastWorkspaceSwitched()
 	d.broadcastTreeChanged()
 
 	debuglog.Println("Desktop: Broadcasting EventThemeChanged")
@@ -392,7 +393,7 @@ func (d *DesktopEngine) viewportSize() (int, int) {
 func (d *DesktopEngine) applyThemeChange() {
 	d.styleCache = make(map[styleKey]tcell.Style)
 	d.recalculateLayout()
-	d.broadcastStateUpdate()
+	d.broadcastActivePaneChanged()
 	d.broadcastTreeChanged()
 	d.dispatcher.Broadcast(Event{Type: EventThemeChanged})
 	if d.refreshHandler != nil {
@@ -460,21 +461,12 @@ func (d *DesktopEngine) broadcastStateUpdate() {
 		Type:    EventStateUpdate,
 		Payload: payload,
 	})
-	//	if d.activeWorkspace != nil {
-	//		d.activeWorkspace.Refresh()
-	//	}
-
-	// Dual-emit fine-grained events during migration.
-	d.broadcastWorkspacesChanged()
-	d.broadcastWorkspaceSwitched()
-	d.broadcastModeChanged()
-	d.broadcastActivePaneChanged()
-	d.broadcastPerformanceUpdate()
 }
 
 func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 	d.refreshMu.Lock()
 	d.refreshHandler = func() {
+		d.broadcastPerformanceUpdate()
 		d.broadcastStateUpdate()
 		if handler != nil {
 			handler()
@@ -680,7 +672,8 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 		sp.app.SetRefreshNotifier(notifier)
 	}
 	d.recalculateLayout()
-	d.broadcastStateUpdate()
+	d.broadcastWorkspaceSwitched()
+	d.broadcastActivePaneChanged()
 	d.notifyFocusActive()
 	d.broadcastTreeChanged()
 }
@@ -693,6 +686,7 @@ func (d *DesktopEngine) RenameWorkspace(id int, name string) {
 		return
 	}
 	ws.Name = name
+	d.broadcastWorkspacesChanged()
 }
 
 func (d *DesktopEngine) forEachPane(fn func(*pane)) {

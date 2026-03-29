@@ -152,6 +152,11 @@ func (c *connection) OnEvent(event texel.Event) {
 		c.sendStateUpdate(payload)
 	case texel.EventTreeChanged:
 		c.sendTreeSnapshot()
+	case texel.EventWorkspacesChanged, texel.EventWorkspaceSwitched,
+		texel.EventModeChanged, texel.EventActivePaneChanged,
+		texel.EventPerformanceUpdate, texel.EventToast:
+		// Fine-grained events handled by status bar directly.
+		// Protocol still uses StateUpdate for client sync.
 	}
 }
 

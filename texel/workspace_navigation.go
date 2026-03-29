@@ -58,7 +58,7 @@ func (w *Workspace) moveActivePane(d Direction) {
 	debuglog.Printf("moveActivePane: Moved from '%s' to '%s'", currentTitle, targetTitle)
 
 	w.Broadcast(Event{Type: EventPaneActiveChanged, Payload: w.tree.ActiveLeaf})
-	w.desktop.broadcastStateUpdate()
+	w.desktop.broadcastActivePaneChanged()
 	w.notifyFocus()
 }
 
@@ -107,7 +107,7 @@ func (w *Workspace) activateLeaf(node *Node) bool {
 	w.Broadcast(Event{Type: EventPaneActiveChanged, Payload: node})
 	w.notifyFocus()
 	if w.desktop != nil {
-		w.desktop.broadcastStateUpdate()
+		w.desktop.broadcastActivePaneChanged()
 	}
 	return true
 }
@@ -262,7 +262,7 @@ func (w *Workspace) SwapActivePane(d Direction) {
 		w.Refresh()
 		if w.desktop != nil {
 			w.desktop.broadcastTreeChanged()
-			w.desktop.broadcastStateUpdate()
+			w.desktop.broadcastActivePaneChanged()
 		}
 	}
 }

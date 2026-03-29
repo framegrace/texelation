@@ -120,7 +120,10 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		d.activeWorkspace.Refresh()
 		d.activeWorkspace.notifyFocus()
 	}
-	d.broadcastStateUpdate()
+	d.broadcastWorkspacesChanged()
+	d.broadcastWorkspaceSwitched()
+	d.broadcastModeChanged()
+	d.broadcastActivePaneChanged()
 	return nil
 }
 
