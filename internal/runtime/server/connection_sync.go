@@ -125,6 +125,11 @@ func (c *connection) sendTreeSnapshot() {
 	}
 	// Always send snapshot, even if empty - client needs to clear old panes during workspace switches
 	sink.Publish()
+	// Reset diff state so subsequent incremental diffs compare against the
+	// new workspace's buffers, not stale buffers from the previous workspace.
+	if pub := sink.Publisher(); pub != nil {
+		pub.ResetDiffState()
+	}
 	geometrySnapshot := geometryOnlySnapshot(snapshot)
 
 	payload, err := protocol.EncodeTreeSnapshot(geometrySnapshot)
