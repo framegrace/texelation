@@ -97,13 +97,24 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		screen.recalculateLayout()
 	}
 	
-	// 3. Defer app starts until we have actual viewport dimensions
+	// 3. Apply workspace metadata (name and color) from the snapshot
+	for _, meta := range capture.WorkspaceMetadata {
+		if ws, exists := d.workspaces[meta.ID]; exists {
+			ws.Name = meta.Name
+			r := int32((meta.Color >> 16) & 0xFF)
+			g := int32((meta.Color >> 8) & 0xFF)
+			b := int32(meta.Color & 0xFF)
+			ws.Color = tcell.NewRGBColor(r, g, b)
+		}
+	}
+
+	// 4. Defer app starts until we have actual viewport dimensions
 	// Apps start with wrong size if we start them now (workspace has default 80x24)
 	d.pendingAppStartsMu.Lock()
 	d.pendingAppStarts = append(d.pendingAppStarts, panes...)
 	d.pendingAppStartsMu.Unlock()
 	
-	// 4. Activate correct workspace
+	// 5. Activate correct workspace
 	if capture.ActiveWorkspaceID > 0 {
 		if _, exists := d.workspaces[capture.ActiveWorkspaceID]; exists {
 			d.activeWorkspace = d.workspaces[capture.ActiveWorkspaceID]

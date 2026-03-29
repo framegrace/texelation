@@ -30,14 +30,22 @@ type SnapshotStore struct {
 	mu   sync.Mutex
 }
 
+// StoredWorkspaceMetadata captures the display name and color for a workspace.
+type StoredWorkspaceMetadata struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Color uint32 `json:"color"` // RGB packed: (r<<16)|(g<<8)|b
+}
+
 // StoredSnapshot is the serialized representation written to disk.
 type StoredSnapshot struct {
-	Timestamp         time.Time            `json:"timestamp"`
-	Hash              string               `json:"hash"`
-	Panes             []StoredPane         `json:"panes"`
-	Tree              StoredNode           `json:"tree"` // Deprecated: active workspace root
-	Workspaces        map[int]StoredNode   `json:"workspaces,omitempty"`
-	ActiveWorkspaceID int                  `json:"active_workspace_id"`
+	Timestamp         time.Time                 `json:"timestamp"`
+	Hash              string                    `json:"hash"`
+	Panes             []StoredPane              `json:"panes"`
+	Tree              StoredNode                `json:"tree"` // Deprecated: active workspace root
+	Workspaces        map[int]StoredNode        `json:"workspaces,omitempty"`
+	ActiveWorkspaceID int                       `json:"active_workspace_id"`
+	WorkspaceMetadata []StoredWorkspaceMetadata `json:"workspace_metadata,omitempty"`
 }
 
 // StoredNode captures the persisted tree layout.
@@ -130,6 +138,18 @@ func (s *SnapshotStore) Save(capture *texel.TreeCapture) error {
 		stored.Workspaces[id] = storeTreeNode(root)
 	}
 	
+	// Store workspace metadata (name and color)
+	if len(capture.WorkspaceMetadata) > 0 {
+		stored.WorkspaceMetadata = make([]StoredWorkspaceMetadata, len(capture.WorkspaceMetadata))
+		for i, meta := range capture.WorkspaceMetadata {
+			stored.WorkspaceMetadata[i] = StoredWorkspaceMetadata{
+				ID:    meta.ID,
+				Name:  meta.Name,
+				Color: meta.Color,
+			}
+		}
+	}
+
 	// Legacy field population
 	if capture.Root != nil {
 		stored.Tree = storeTreeNode(capture.Root)
@@ -196,26 +216,38 @@ func (s StoredSnapshot) ToTreeCapture() texel.TreeCapture {
 	for i, pane := range s.Panes {
 		panes[i] = pane.ToPaneSnapshot()
 	}
-	
+
 	capture := texel.TreeCapture{
 		Panes:             panes,
 		WorkspaceRoots:    make(map[int]*texel.TreeNodeCapture),
 		ActiveWorkspaceID: s.ActiveWorkspaceID,
 	}
-	
+
 	for id, root := range s.Workspaces {
 		capture.WorkspaceRoots[id] = root.toTreeNodeCapture()
 	}
-	
+
 	// Legacy root
 	capture.Root = s.Tree.toTreeNodeCapture()
-	
+
 	// If Workspaces is empty but Tree is present (legacy file), synthesize workspace 1
 	if len(capture.WorkspaceRoots) == 0 && capture.Root != nil {
 		capture.WorkspaceRoots[1] = capture.Root
 		capture.ActiveWorkspaceID = 1
 	}
-	
+
+	// Restore workspace metadata
+	if len(s.WorkspaceMetadata) > 0 {
+		capture.WorkspaceMetadata = make([]texel.WorkspaceMetadata, len(s.WorkspaceMetadata))
+		for i, meta := range s.WorkspaceMetadata {
+			capture.WorkspaceMetadata[i] = texel.WorkspaceMetadata{
+				ID:    meta.ID,
+				Name:  meta.Name,
+				Color: meta.Color,
+			}
+		}
+	}
+
 	return capture
 }
 
