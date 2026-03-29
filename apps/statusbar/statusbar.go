@@ -45,10 +45,18 @@ func New() *StatusBarApp {
 	ui := core.NewUIManager()
 	ui.SetStatusBar(nil) // no nested status bar
 
-	tabBar := primitives.NewTabBar(0, 0, 80, []primitives.TabItem{{Label: "default"}})
+	initialColor := texel.WorkspaceAccentColor(0)
+	tabBar := primitives.NewTabBar(0, 0, 80, []primitives.TabItem{
+		{Label: "default", Color: darkenColor(initialColor, 0.5)},
+	})
 	tabBar.Style.NoBlendRow = true
 
 	blendLine := NewBlendInfoLine()
+
+	// Match TabBar colors to blend line so they look seamless.
+	tabBar.Style.ActiveBG = initialColor
+	tabBar.Style.ContentBG = blendLine.contentBG
+	tabBar.Style.BarBG = blendLine.contentBG
 
 	ui.AddWidget(tabBar)
 	ui.AddWidget(blendLine)
@@ -61,7 +69,7 @@ func New() *StatusBarApp {
 		ui:         ui,
 		tabBar:     tabBar,
 		blendLine:  blendLine,
-		workspaces: []texel.WorkspaceInfo{{ID: 1, Name: "default"}},
+		workspaces: []texel.WorkspaceInfo{{ID: 1, Name: "default", Color: initialColor}},
 		activeID:   1,
 		stopClock:  make(chan struct{}),
 	}
@@ -97,7 +105,7 @@ func New() *StatusBarApp {
 		}
 	}
 
-	// Wire resize -> reposition widgets.
+	// Wire resize -> reposition widgets and re-apply accent colors.
 	app.SetOnResize(func(w, h int) {
 		tabBar.SetPosition(0, 0)
 		tabBar.Resize(w, 1)
@@ -184,7 +192,10 @@ func (sb *StatusBarApp) handleWorkspacesChanged(p texel.WorkspacesChangedPayload
 		if label == "" {
 			label = fmt.Sprintf("%d", ws.ID)
 		}
-		tabs[i] = primitives.TabItem{Label: label}
+		tabs[i] = primitives.TabItem{
+			Label: label,
+			Color: darkenColor(ws.Color, 0.5),
+		}
 		if ws.ID == p.ActiveID {
 			activeIdx = i
 		}
@@ -195,7 +206,7 @@ func (sb *StatusBarApp) handleWorkspacesChanged(p texel.WorkspacesChangedPayload
 	// Update accent color from active workspace.
 	for _, ws := range p.Workspaces {
 		if ws.ID == p.ActiveID && ws.Color != 0 {
-			sb.blendLine.SetAccentColor(ws.Color)
+			sb.setAccentColor(ws.Color)
 			break
 		}
 	}
@@ -221,7 +232,7 @@ func (sb *StatusBarApp) handleWorkspaceSwitched(p texel.WorkspaceSwitchedPayload
 		if ws.ID == p.ActiveID {
 			activeIdx = i
 			if ws.Color != 0 {
-				sb.blendLine.SetAccentColor(ws.Color)
+				sb.setAccentColor(ws.Color)
 			}
 			break
 		}
@@ -229,6 +240,23 @@ func (sb *StatusBarApp) handleWorkspaceSwitched(p texel.WorkspaceSwitchedPayload
 	sb.mu.Unlock()
 	sb.tabBar.SetActive(activeIdx)
 	sb.refresh()
+}
+
+// setAccentColor updates both the blend line and the TabBar active/inactive tab colors.
+func (sb *StatusBarApp) setAccentColor(c tcell.Color) {
+	sb.blendLine.SetAccentColor(c)
+	sb.tabBar.Style.ActiveBG = c
+	sb.tabBar.Style.InactiveBG = darkenColor(c, 0.35)
+}
+
+// darkenColor scales an RGB color's channels by the given factor (0.0–1.0).
+func darkenColor(c tcell.Color, factor float64) tcell.Color {
+	r, g, b := c.RGB()
+	return tcell.NewRGBColor(
+		int32(float64(r)*factor),
+		int32(float64(g)*factor),
+		int32(float64(b)*factor),
+	)
 }
 
 // updateFPS uses EMA smoothing for actual and theoretical FPS.
