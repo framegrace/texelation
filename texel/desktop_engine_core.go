@@ -47,6 +47,9 @@ func newStatusPaneID(app App) [16]byte {
 	return id
 }
 
+// Compile-time check: DesktopEngine must satisfy StatusBarActions.
+var _ StatusBarActions = (*DesktopEngine)(nil)
+
 // eventKind identifies the type of desktop event.
 type eventKind int
 

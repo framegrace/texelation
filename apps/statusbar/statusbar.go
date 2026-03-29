@@ -2,320 +2,284 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: apps/statusbar/statusbar.go
-// Summary: Implements statusbar capabilities for the status bar application.
-// Usage: Added to desktops to render workspace and mode metadata.
-// Notes: Works in both local and remote deployments.
+// Summary: Widget-based status bar application using UIApp adapter.
+// Usage: Added to desktops to render workspace tabs and mode/title metadata.
 
 package statusbar
 
 import (
 	"fmt"
-	"github.com/framegrace/texelation/apps/clock"
-	"github.com/framegrace/texelation/internal/theming"
-	"github.com/framegrace/texelation/texel"
-	texelcore "github.com/framegrace/texelui/core"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/framegrace/texelation/texel"
+	"github.com/framegrace/texelui/adapter"
+	"github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/primitives"
 	"github.com/gdamore/tcell/v2"
 )
 
-// Powerline characters for creating the tab effect.
-// Note: These require a Powerline-patched font or a Nerd Font to render correctly.
-const (
-	rightTabSeparator     = '' // Left half circle thick separator
-	leftTabSeparator      = '' // Right half circle thick separator
-	leftLineTabSeparator  = ''
-	rightLineTabSeparator = ''
-	keyboardIcon          = "  "
-	ctrlIcon              = "  "
-)
+const fpsEMAAlpha = 0.1 // smoothing factor: lower = smoother, ~10-frame window
 
-// StatusBarApp displays screen state information.
+// StatusBarApp displays workspace tabs and status information.
 type StatusBarApp struct {
-	width, height int
-	mu            sync.RWMutex
-	refreshChan   chan<- bool
+	app       *adapter.UIApp
+	ui        *core.UIManager
+	tabBar    *primitives.TabBar
+	blendLine *BlendInfoLine
 
-	// State from Desktop
-	allWorkspaces       []int
-	workspaceID         int
-	inControlMode       bool
-	subMode             rune
-	activeTitle         string
-	desktopBgColor      tcell.Color
-	lastPublishDuration time.Duration
+	mu         sync.RWMutex
+	workspaces []texel.WorkspaceInfo
+	activeID   int
+	actions    texel.StatusBarActions
+	stopClock  chan struct{}
 
-	// Internal Clock
-	clockApp  texelcore.App
-	stopClock chan struct{}
-
-	// FPS tracking (EMA-smoothed)
+	// FPS smoothing
 	lastRenderTime time.Time
-	smoothFPS      float64 // EMA of actual frames per second
-	smoothTheoFPS  float64 // EMA of theoretical frames per second
+	smoothFPS      float64
+	smoothTheoFPS  float64
 }
 
 // New creates a new StatusBarApp.
-func New() texelcore.App {
-	return &StatusBarApp{
-		clockApp:      clock.NewClockApp(),
-		stopClock:     make(chan struct{}),
-		allWorkspaces: []int{1}, // Default to 1 workspace initially
+func New() *StatusBarApp {
+	ui := core.NewUIManager()
+	ui.SetStatusBar(nil) // no nested status bar
+
+	tabBar := primitives.NewTabBar(0, 0, 80, []primitives.TabItem{{Label: "default"}})
+	tabBar.Style.NoBlendRow = true
+
+	blendLine := NewBlendInfoLine()
+
+	ui.AddWidget(tabBar)
+	ui.AddWidget(blendLine)
+
+	app := adapter.NewUIApp("Status Bar", ui)
+	app.DisableStatusBar()
+
+	sb := &StatusBarApp{
+		app:        app,
+		ui:         ui,
+		tabBar:     tabBar,
+		blendLine:  blendLine,
+		workspaces: []texel.WorkspaceInfo{{ID: 1, Name: "default"}},
+		activeID:   1,
+		stopClock:  make(chan struct{}),
 	}
+
+	// Wire tab change -> workspace switch.
+	tabBar.OnChange = func(idx int) {
+		sb.mu.RLock()
+		actions := sb.actions
+		var wsID int
+		if idx >= 0 && idx < len(sb.workspaces) {
+			wsID = sb.workspaces[idx].ID
+		}
+		sb.mu.RUnlock()
+		if actions != nil && wsID > 0 {
+			actions.SwitchToWorkspace(wsID)
+		}
+	}
+
+	// Wire tab rename -> workspace rename.
+	tabBar.OnRename = func(index int, newName string) {
+		sb.mu.RLock()
+		actions := sb.actions
+		var wsID int
+		if index >= 0 && index < len(sb.workspaces) {
+			wsID = sb.workspaces[index].ID
+		}
+		sb.mu.RUnlock()
+		if actions != nil && wsID > 0 {
+			if newName == "" {
+				newName = fmt.Sprintf("%d", wsID)
+			}
+			actions.RenameWorkspace(wsID, newName)
+		}
+	}
+
+	// Wire resize -> reposition widgets.
+	app.SetOnResize(func(w, h int) {
+		tabBar.SetPosition(0, 0)
+		tabBar.Resize(w, 1)
+		blendLine.SetPosition(0, 1)
+		blendLine.Resize(w, 1)
+	})
+
+	return sb
 }
 
-func (a *StatusBarApp) SetRefreshNotifier(refreshChan chan<- bool) {
-	a.refreshChan = refreshChan
-	a.clockApp.SetRefreshNotifier(refreshChan)
+// SetActions stores the callback interface for workspace operations.
+func (sb *StatusBarApp) SetActions(actions texel.StatusBarActions) {
+	sb.mu.Lock()
+	sb.actions = actions
+	sb.mu.Unlock()
 }
 
-func (a *StatusBarApp) Run() error {
-	go a.clockApp.Run()
-	<-a.stopClock
-	return nil
+// --- core.App delegation ---
+
+func (sb *StatusBarApp) Run() error {
+	go sb.clockLoop()
+	return sb.app.Run()
 }
 
-func (a *StatusBarApp) Stop() {
-	a.clockApp.Stop()
-	close(a.stopClock)
+func (sb *StatusBarApp) Stop() {
+	close(sb.stopClock)
+	sb.app.Stop()
 }
 
-func (a *StatusBarApp) Resize(cols, rows int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.width, a.height = cols, rows
-	a.clockApp.Resize(cols, rows)
-}
+func (sb *StatusBarApp) Resize(cols, rows int) { sb.app.Resize(cols, rows) }
 
-func (a *StatusBarApp) GetTitle() string {
-	return "Status Bar"
-}
+func (sb *StatusBarApp) GetTitle() string { return sb.app.GetTitle() }
 
-func (a *StatusBarApp) HandleKey(ev *tcell.EventKey) {}
+func (sb *StatusBarApp) HandleKey(ev *tcell.EventKey) { sb.app.HandleKey(ev) }
 
-// OnEvent handles state updates from the screen's dispatcher.
-func (a *StatusBarApp) OnEvent(event texel.Event) {
-	if event.Type == texel.EventStateUpdate {
-		if payload, ok := event.Payload.(texel.StatePayload); ok {
-			a.mu.Lock()
-			a.allWorkspaces = payload.AllWorkspaces
-			a.workspaceID = payload.WorkspaceID
-			a.inControlMode = payload.InControlMode
-			a.subMode = payload.SubMode
-			a.activeTitle = payload.ActiveTitle
-			a.desktopBgColor = payload.DesktopBgColor
-			a.lastPublishDuration = payload.LastPublishDuration
-			a.mu.Unlock()
+func (sb *StatusBarApp) SetRefreshNotifier(ch chan<- bool) { sb.app.SetRefreshNotifier(ch) }
+
+func (sb *StatusBarApp) Render() [][]core.Cell { return sb.app.Render() }
+
+// --- Listener interface ---
+
+// OnEvent handles state updates from the desktop's dispatcher.
+func (sb *StatusBarApp) OnEvent(event texel.Event) {
+	switch event.Type {
+	case texel.EventWorkspacesChanged:
+		if p, ok := event.Payload.(texel.WorkspacesChangedPayload); ok {
+			sb.handleWorkspacesChanged(p)
+		}
+	case texel.EventWorkspaceSwitched:
+		if p, ok := event.Payload.(texel.WorkspaceSwitchedPayload); ok {
+			sb.handleWorkspaceSwitched(p)
+		}
+	case texel.EventModeChanged:
+		if p, ok := event.Payload.(texel.ModeChangedPayload); ok {
+			sb.blendLine.SetMode(p.InControlMode, p.SubMode)
+		}
+	case texel.EventActivePaneChanged:
+		if p, ok := event.Payload.(texel.ActivePaneChangedPayload); ok {
+			sb.blendLine.SetTitle(p.ActiveTitle)
+		}
+	case texel.EventPerformanceUpdate:
+		if p, ok := event.Payload.(texel.PerformanceUpdatePayload); ok {
+			sb.updateFPS(p.LastPublishDuration)
+		}
+	case texel.EventToast:
+		if p, ok := event.Payload.(texel.ToastPayload); ok {
+			sb.blendLine.ShowToast(p.Message, p.Severity, p.Duration)
 		}
 	}
 }
 
-const fpsEMAAlpha = 0.1 // smoothing factor: lower = smoother, ~10-frame window
+// handleWorkspacesChanged rebuilds the tab bar from the workspace list.
+func (sb *StatusBarApp) handleWorkspacesChanged(p texel.WorkspacesChangedPayload) {
+	sb.mu.Lock()
+	prevCount := len(sb.workspaces)
+	sb.workspaces = p.Workspaces
+	sb.activeID = p.ActiveID
 
-// updateFPS updates the EMA-smoothed actual and theoretical FPS values.
-// Must be called with mu held (from Render).
-func (a *StatusBarApp) updateFPS() {
-	now := time.Now()
-	if !a.lastRenderTime.IsZero() {
-		dt := now.Sub(a.lastRenderTime)
-		if dt > 0 {
-			instantFPS := float64(time.Second) / float64(dt)
-			a.smoothFPS = a.smoothFPS + fpsEMAAlpha*(instantFPS-a.smoothFPS)
+	// Rebuild tab items.
+	tabs := make([]primitives.TabItem, len(p.Workspaces))
+	activeIdx := 0
+	for i, ws := range p.Workspaces {
+		label := ws.Name
+		if label == "" {
+			label = fmt.Sprintf("%d", ws.ID)
+		}
+		tabs[i] = primitives.TabItem{Label: label}
+		if ws.ID == p.ActiveID {
+			activeIdx = i
 		}
 	}
-	a.lastRenderTime = now
+	sb.tabBar.Tabs = tabs
+	sb.tabBar.ActiveIdx = activeIdx
 
-	if a.lastPublishDuration > 0 {
-		instantTheo := float64(time.Second) / float64(a.lastPublishDuration)
-		a.smoothTheoFPS = a.smoothTheoFPS + fpsEMAAlpha*(instantTheo-a.smoothTheoFPS)
-	}
-}
-
-func (a *StatusBarApp) Render() [][]texelcore.Cell {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	buf := make([][]texelcore.Cell, a.height)
-	for i := range buf {
-		buf[i] = make([]texelcore.Cell, a.width)
-	}
-	if a.height == 0 {
-		return buf
-	}
-
-	// Define color schemes
-	tm := theming.ForApp("statusbar")
-	// Base background (Mantle)
-	defbgColor := tm.GetSemanticColor("bg.mantle").TrueColor()
-	deffgColor := tm.GetSemanticColor("text.primary").TrueColor()
-
-	if a.inControlMode {
-		// Control Mode -> Danger (Red)
-		defbgColor = tm.GetSemanticColor("action.danger").TrueColor()
-		deffgColor = tm.GetSemanticColor("text.inverse").TrueColor()
-	}
-
-	styleBase := tcell.StyleDefault.Background(defbgColor).Foreground(deffgColor)
-
-	// Active Tab: seamless with desktop (bg.base)
-	activeTabBg := a.desktopBgColor.TrueColor() // Should be bg.base
-	activeTabFg := tm.GetSemanticColor("text.primary").TrueColor()
-	styleActiveTab := tcell.StyleDefault.Background(activeTabBg).Foreground(activeTabFg)
-
-	// Inactive Tab: darker (bg.mantle or bg.crust?)
-	inactiveTabBg := tm.GetSemanticColor("bg.crust").TrueColor()
-	inactiveTabFg := tm.GetSemanticColor("text.muted").TrueColor()
-	styleInactiveTab := tcell.StyleDefault.Background(inactiveTabBg).Foreground(inactiveTabFg)
-
-	styleActiveTabStart := tcell.StyleDefault.Background(defbgColor).Foreground(activeTabBg)
-	styleInactiveTabStart := tcell.StyleDefault.Background(defbgColor).Foreground(inactiveTabBg)
-
-	// Fill the entire bar with the base style first
-	for i := 0; i < a.width; i++ {
-		buf[0][i] = texelcore.Cell{Ch: ' ', Style: styleBase}
-	}
-
-	// Find the index of the active workspace
-	activeIndex := -1
-	for i, wsID := range a.allWorkspaces {
-		if wsID == a.workspaceID {
-			activeIndex = i
+	// Update accent color from active workspace.
+	for _, ws := range p.Workspaces {
+		if ws.ID == p.ActiveID && ws.Color != 0 {
+			sb.blendLine.SetAccentColor(ws.Color)
 			break
 		}
 	}
 
-	// --- Left-aligned content (Tabs) ---
-	// Draw first char
-	if activeIndex == 0 {
-		buf[0][0] = texelcore.Cell{Ch: leftTabSeparator, Style: styleActiveTabStart}
-	} else {
-		buf[0][0] = texelcore.Cell{Ch: leftTabSeparator, Style: styleInactiveTabStart}
-	}
-	col := 1
-	for i, wsID := range a.allWorkspaces {
-		currentIsActive := (i == activeIndex)
-		var currentStyle tcell.Style
-		if currentIsActive {
-			currentStyle = styleActiveTab
-		} else {
-			currentStyle = styleInactiveTab
-		}
-		_, currentBg, _ := currentStyle.Decompose()
+	newCount := len(p.Workspaces)
+	newIdx := newCount - 1
+	sb.mu.Unlock()
 
-		// Draw tab text
-		wsName := fmt.Sprintf(" %d ", wsID)
-		for _, r := range wsName {
-			if col < a.width {
-				buf[0][col] = texelcore.Cell{Ch: r, Style: currentStyle}
-				col++
+	// If a new workspace was added (count increased) and it's not the first, enter edit mode.
+	if newCount > prevCount && newCount > 1 {
+		sb.tabBar.EditTab(newIdx)
+	}
+
+	sb.refresh()
+}
+
+// handleWorkspaceSwitched updates the active tab.
+func (sb *StatusBarApp) handleWorkspaceSwitched(p texel.WorkspaceSwitchedPayload) {
+	sb.mu.Lock()
+	sb.activeID = p.ActiveID
+	activeIdx := 0
+	for i, ws := range sb.workspaces {
+		if ws.ID == p.ActiveID {
+			activeIdx = i
+			if ws.Color != 0 {
+				sb.blendLine.SetAccentColor(ws.Color)
 			}
-		}
-
-		// Draw the separator between this tab and the next one
-		if col < a.width {
-			var nextStyle tcell.Style
-			nextIsActive := (i+1 == activeIndex)
-
-			if i+1 < len(a.allWorkspaces) {
-				if nextIsActive {
-					nextStyle = styleActiveTab
-				} else {
-					nextStyle = styleInactiveTab
-				}
-			} else {
-				nextStyle = styleBase
-			}
-			_, nextBg, _ := nextStyle.Decompose()
-
-			var separatorChar rune
-			var separatorStyle tcell.Style
-
-			if currentIsActive {
-				// The active tab's right edge cuts into the next tab
-				separatorChar = rightTabSeparator
-				separatorStyle = tcell.StyleDefault.Foreground(currentBg).Background(nextBg)
-			} else if nextIsActive {
-				// The next tab (which is active) cuts into the current tab
-				separatorChar = leftTabSeparator
-				separatorStyle = tcell.StyleDefault.Foreground(nextBg).Background(currentBg)
-			} else {
-				// Inactive tabs just sit next to each other, separated by the base color
-				if i < activeIndex {
-					separatorChar = leftLineTabSeparator //' '
-					separatorStyle = styleInactiveTab    // styleBase
-				} else {
-					if i == len(a.allWorkspaces)-1 {
-						separatorChar = rightTabSeparator
-						separatorStyle = styleInactiveTabStart
-					} else {
-						separatorChar = rightLineTabSeparator
-						separatorStyle = styleInactiveTab // styleBase
-					}
-				}
-			}
-			buf[0][col] = texelcore.Cell{Ch: separatorChar, Style: separatorStyle}
-			col++
+			break
 		}
 	}
+	sb.mu.Unlock()
+	sb.tabBar.SetActive(activeIdx)
+	sb.refresh()
+}
 
-	tabsEndCol := col
-
-	// --- Right-aligned content (FPS + Clock) ---
-	a.updateFPS()
-	clockCells := a.clockApp.Render()
-	clockStr := ""
-	if len(clockCells) > 0 && len(clockCells[0]) > 0 {
-		var sb strings.Builder
-		for _, cell := range clockCells[0] {
-			sb.WriteRune(cell.Ch)
-		}
-		clockStr = strings.TrimSpace(sb.String())
-	}
-	fpsStr := fmt.Sprintf("%d", int(a.smoothFPS+0.5))
-	if a.smoothTheoFPS > 0 {
-		fpsStr = fmt.Sprintf("%d/%d", int(a.smoothFPS+0.5), int(a.smoothTheoFPS+0.5))
-	}
-	rightStr := fmt.Sprintf(" %s fps  %s ", fpsStr, clockStr)
-	rightCol := a.width - len(rightStr)
-
-	// Draw right-aligned string, ensuring it doesn't overwrite other content
-	if rightCol > tabsEndCol {
-		for i, r := range rightStr {
-			buf[0][rightCol+i] = texelcore.Cell{Ch: r, Style: styleBase}
+// updateFPS uses EMA smoothing for actual and theoretical FPS.
+func (sb *StatusBarApp) updateFPS(publishDuration time.Duration) {
+	sb.mu.Lock()
+	now := time.Now()
+	if !sb.lastRenderTime.IsZero() {
+		dt := now.Sub(sb.lastRenderTime)
+		if dt > 0 {
+			instantFPS := float64(time.Second) / float64(dt)
+			sb.smoothFPS = sb.smoothFPS + fpsEMAAlpha*(instantFPS-sb.smoothFPS)
 		}
 	}
+	sb.lastRenderTime = now
 
-	// --- Center-aligned content (Mode & Title) ---
-	var modeStr string
-	modeStyle := styleBase
-	if a.inControlMode {
-		if a.subMode != 0 {
-			modeStr = fmt.Sprintf(" [CTRL-A, %c, ?] ", a.subMode)
-		} else {
-			modeStr = ctrlIcon // " [CONTROL] "
-		}
-	} else {
-		modeStr = keyboardIcon //" [INPUT] "
-	}
-	titleStr := fmt.Sprintf(" %s ", a.activeTitle)
-
-	// Draw mode string, starting after the tabs with some padding
-	centerCol := tabsEndCol + 2
-	for _, r := range modeStr {
-		if centerCol < a.width && centerCol < rightCol {
-			buf[0][centerCol] = texelcore.Cell{Ch: r, Style: modeStyle}
-			centerCol++
-		}
-	}
-	// Draw title string right after the mode string
-	for _, r := range titleStr {
-		if centerCol < a.width && centerCol < rightCol {
-			buf[0][centerCol] = texelcore.Cell{Ch: r, Style: styleBase}
-			centerCol++
-		}
+	if publishDuration > 0 {
+		instantTheo := float64(time.Second) / float64(publishDuration)
+		sb.smoothTheoFPS = sb.smoothTheoFPS + fpsEMAAlpha*(instantTheo-sb.smoothTheoFPS)
 	}
 
-	return buf
+	actual := sb.smoothFPS
+	theo := sb.smoothTheoFPS
+	sb.mu.Unlock()
+
+	sb.blendLine.SetFPS(actual, theo)
+	sb.refresh()
+}
+
+// clockLoop ticks every second to update the clock display.
+func (sb *StatusBarApp) clockLoop() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-sb.stopClock:
+			return
+		case t := <-ticker.C:
+			sb.blendLine.SetClock(t.Format("15:04:05"))
+			sb.refresh()
+		}
+	}
+}
+
+// refresh sends a non-blocking signal on the app's refresh channel.
+func (sb *StatusBarApp) refresh() {
+	ch := sb.app.RefreshChan()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- true:
+	default:
+	}
 }

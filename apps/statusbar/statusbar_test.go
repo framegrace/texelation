@@ -4,46 +4,95 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/framegrace/texelation/texel"
+	"github.com/gdamore/tcell/v2"
 )
 
-func TestStatusBarRender(t *testing.T) {
-	app, ok := New().(*StatusBarApp)
-	if !ok {
-		t.Fatalf("expected *StatusBarApp")
-	}
-	app.Resize(40, 1)
-	app.OnEvent(texel.Event{
-		Type: texel.EventStateUpdate,
-		Payload: texel.StatePayload{
-			AllWorkspaces:  []int{1, 2},
-			WorkspaceID:    2,
-			InControlMode:  true,
-			ActiveTitle:    "shell",
-			DesktopBgColor: tcell.ColorGreen,
+func TestStatusBar_ReceivesWorkspacesChanged(t *testing.T) {
+	sb := New()
+	sb.Resize(80, 2)
+
+	sb.OnEvent(texel.Event{
+		Type: texel.EventWorkspacesChanged,
+		Payload: texel.WorkspacesChangedPayload{
+			Workspaces: []texel.WorkspaceInfo{
+				{ID: 1, Name: "main", Color: tcell.ColorGreen},
+				{ID: 2, Name: "dev", Color: tcell.ColorBlue},
+			},
+			ActiveID: 1,
 		},
 	})
 
-	buf := app.Render()
-	if len(buf) != 1 || len(buf[0]) != 40 {
-		t.Fatalf("unexpected buffer dimensions: %dx%d", len(buf), len(buf[0]))
+	buf := sb.Render()
+	if len(buf) < 2 {
+		t.Fatalf("expected at least 2 rows, got %d", len(buf))
 	}
+	if len(buf[0]) != 80 {
+		t.Fatalf("expected 80 cols in row 0, got %d", len(buf[0]))
+	}
+	if len(buf[1]) != 80 {
+		t.Fatalf("expected 80 cols in row 1, got %d", len(buf[1]))
+	}
+}
 
-	space := true
-	for _, cell := range buf[0] {
-		if cell.Ch != ' ' {
-			space = false
-			break
-		}
-	}
-	if space {
-		t.Fatalf("expected status bar to render visible content")
-	}
+func TestStatusBar_ReceivesModeChanged(t *testing.T) {
+	sb := New()
+	sb.Resize(80, 2)
 
+	// Should not panic.
+	sb.OnEvent(texel.Event{
+		Type:    texel.EventModeChanged,
+		Payload: texel.ModeChangedPayload{InControlMode: true, SubMode: 'w'},
+	})
+
+	buf := sb.Render()
+	if len(buf) < 2 {
+		t.Fatalf("expected at least 2 rows, got %d", len(buf))
+	}
+}
+
+func TestStatusBar_ReceivesToast(t *testing.T) {
+	sb := New()
+	sb.Resize(80, 2)
+
+	sb.OnEvent(texel.Event{
+		Type: texel.EventToast,
+		Payload: texel.ToastPayload{
+			Message:  "Snapshot saved",
+			Severity: texel.ToastSuccess,
+			Duration: 3 * time.Second,
+		},
+	})
+
+	buf := sb.Render()
+	if len(buf) < 2 {
+		t.Fatalf("expected at least 2 rows, got %d", len(buf))
+	}
+}
+
+func TestStatusBar_Lifecycle(t *testing.T) {
+	sb := New()
+	sb.Resize(80, 2)
+
+	done := make(chan struct{})
 	go func() {
-		_ = app.Run()
+		_ = sb.Run()
+		close(done)
 	}()
-	time.Sleep(10 * time.Millisecond)
-	app.Stop()
+
+	time.Sleep(20 * time.Millisecond)
+	sb.Stop()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after Stop")
+	}
+}
+
+func TestStatusBar_Title(t *testing.T) {
+	sb := New()
+	if title := sb.GetTitle(); title != "Status Bar" {
+		t.Errorf("expected title %q, got %q", "Status Bar", title)
+	}
 }
