@@ -96,9 +96,16 @@ func (p *pane) initBorder() {
 func (p *pane) refreshBorderStyles() {
 	tm := theme.Get()
 	bg := tm.GetSemanticColor("bg.base").TrueColor()
-	inactiveFG := tm.GetSemanticColor("border.inactive").TrueColor()
 	activeFG := tm.GetSemanticColor("border.active").TrueColor()
 	resizingFG := tm.GetSemanticColor("border.resizing").TrueColor()
+	inactiveFG := tm.GetSemanticColor("border.inactive").TrueColor()
+
+	// Use the workspace's accent color for borders if available.
+	if p.screen != nil && p.screen.Color != 0 {
+		activeFG = p.screen.Color
+		r, g, b := p.screen.Color.RGB()
+		inactiveFG = tcell.NewRGBColor(int32(float64(r)*0.5), int32(float64(g)*0.5), int32(float64(b)*0.5))
+	}
 
 	p.border.Style = color.StyleFrom(tcell.StyleDefault.Foreground(inactiveFG).Background(bg))
 	p.border.FocusedStyle = color.StyleFrom(tcell.StyleDefault.Foreground(activeFG).Background(bg))

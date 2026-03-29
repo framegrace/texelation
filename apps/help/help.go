@@ -35,57 +35,84 @@ type helpApp struct {
 	stop          chan struct{}
 	stopOnce      sync.Once
 	sections      []helpSection
+	title         string
 }
 
 // NewHelpApp returns a simple help display app.
 func NewHelpApp() texelcore.App {
+	return newHelpApp("Help", allSections())
+}
+
+// NewControlHelpApp returns a compact help overlay showing only control mode commands.
+func NewControlHelpApp() texelcore.App {
+	return newHelpApp("Control Mode", controlSections())
+}
+
+func newHelpApp(title string, sections []helpSection) texelcore.App {
 	return &helpApp{
-		stop: make(chan struct{}),
-		sections: []helpSection{
-			{
-				title: "Global Shortcuts",
-				entries: []helpEntry{
-					{"F1", "Show this Help"},
-					{"Ctrl+A L", "Open Launcher"},
-					{"Ctrl+A H", "Show this Help"},
-					{"Ctrl+A F", "Open Config Editor"},
-				},
+		stop:     make(chan struct{}),
+		sections: sections,
+		title:    title,
+	}
+}
+
+func allSections() []helpSection {
+	return []helpSection{
+		{
+			title: "Global Shortcuts",
+			entries: []helpEntry{
+				{"F1", "Show this Help"},
+				{"Alt+Left/Right", "Switch workspace"},
+				{"Shift+Arrow", "Move pane focus"},
+				{"Ctrl+Arrow", "Resize panes"},
+				{"Ctrl+F", "Edit config for active app"},
 			},
-			{
-				title: "Control Mode (Ctrl-A)",
-				entries: []helpEntry{
-					{"|", "Split vertically"},
-					{"-", "Split horizontally"},
-					{"x", "Close active pane"},
-					{"w", "Swap panes (then Arrow keys)"},
-					{"z", "Toggle zoom"},
-					{"f", "Open Config Editor"},
-					{"1-9", "Switch workspaces"},
-					{"Ctrl+Arrow", "Resize panes"},
-					{"Esc", "Exit control mode"},
-				},
+		},
+		controlSection(),
+		{
+			title: "Navigation",
+			entries: []helpEntry{
+				{"Shift+Up", "Focus up (→ tab mode at top)"},
+				{"Shift+Down", "Focus down (exits tab mode)"},
+				{"Shift+Left/Right", "Focus left/right"},
+				{"Click tab", "Switch workspace"},
 			},
-			{
-				title: "Anytime",
-				entries: []helpEntry{
-					{"Shift+Arrow", "Move focus"},
-					{"Ctrl+F", "Edit config for active app"},
-					{"Ctrl+Q", "Quit Texelation"},
-				},
-			},
-			{
-				title: "TexelTerm Tips",
-				entries: []helpEntry{
-					{"Mouse wheel", "Scroll history"},
-					{"Shift+wheel", "Page through history"},
-					{"Alt+wheel", "Scroll history (line)"},
-					{"Alt+PgUp/PgDn", "Scroll history (pane)"},
-					{"Drag mouse", "Select & copy text"},
-					{"Click", "Focus target pane"},
-				},
+		},
+		{
+			title: "TexelTerm Tips",
+			entries: []helpEntry{
+				{"Mouse wheel", "Scroll history"},
+				{"Shift+wheel", "Page through history"},
+				{"Alt+wheel", "Scroll history (line)"},
+				{"Alt+PgUp/PgDn", "Scroll history (pane)"},
+				{"Drag mouse", "Select & copy text"},
+				{"Click", "Focus target pane"},
 			},
 		},
 	}
+}
+
+func controlSection() helpSection {
+	return helpSection{
+		title: "Control Mode (Ctrl-A)",
+		entries: []helpEntry{
+			{"|", "Split vertically"},
+			{"-", "Split horizontally"},
+			{"x", "Close active pane"},
+			{"w", "Swap panes (then Arrow)"},
+			{"z", "Toggle zoom"},
+			{"t", "Tab mode (rename workspaces)"},
+			{"l", "Open Launcher"},
+			{"h", "Show Help"},
+			{"f", "Open Config Editor"},
+			{"1-9", "Switch/create workspace"},
+			{"Esc", "Exit control mode"},
+		},
+	}
+}
+
+func controlSections() []helpSection {
+	return []helpSection{controlSection()}
 }
 
 func (a *helpApp) Run() error {
@@ -234,6 +261,9 @@ func (a *helpApp) drawText(buffer [][]texelcore.Cell, x, y int, text string, sty
 }
 
 func (a *helpApp) GetTitle() string {
+	if a.title != "" {
+		return a.title
+	}
 	return "Help"
 }
 

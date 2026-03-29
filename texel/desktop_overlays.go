@@ -208,6 +208,53 @@ func (d *DesktopEngine) launchHelpOverlay() {
 	d.ShowFloatingPanel(app, x, y, w, h)
 }
 
+const controlHelpTitle = "Control Mode"
+
+func (d *DesktopEngine) launchControlHelpOverlay() {
+	// Check if already open
+	for _, fp := range d.floatingPanels {
+		if fp.app.GetTitle() == controlHelpTitle {
+			return // already showing
+		}
+	}
+
+	appInstance := d.registry.CreateApp("help-control", nil)
+	app, ok := appInstance.(App)
+	if !ok {
+		return
+	}
+
+	if provider, ok := app.(ControlBusProvider); ok {
+		provider.RegisterControl("help.close", "Close help overlay", func(payload interface{}) error {
+			d.closeFloatingPanelByApp(app)
+			return nil
+		})
+	}
+
+	vw, vh := d.viewportSize()
+	w := 45
+	h := 16
+	if w > vw {
+		w = vw - 2
+	}
+	if h > vh {
+		h = vh - 2
+	}
+	x := (vw - w) / 2
+	y := (vh - h) / 2
+
+	d.ShowFloatingPanel(app, x, y, w, h)
+}
+
+func (d *DesktopEngine) closeControlHelpOverlay() {
+	for _, fp := range d.floatingPanels {
+		if fp.app.GetTitle() == controlHelpTitle {
+			d.CloseFloatingPanel(fp)
+			return
+		}
+	}
+}
+
 func (d *DesktopEngine) activeAppTarget() string {
 	if d.activeWorkspace == nil {
 		return ""

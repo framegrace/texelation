@@ -89,7 +89,10 @@ func (p *DesktopPublisher) Publish() error {
 		p.revisions[snap.ID] = rev
 		prev := p.prevBuffers[snap.ID]
 		delta := bufferToDelta(snap, prev, rev)
-		p.prevBuffers[snap.ID] = snap.Buffer
+		// Clone the buffer before storing — Render() may reuse the same
+		// slice, so without a copy prev and current would alias and the
+		// diff would always find zero changes.
+		p.prevBuffers[snap.ID] = cloneBuffer(snap.Buffer)
 		if len(delta.Rows) == 0 {
 			continue
 		}
@@ -106,6 +109,15 @@ func (p *DesktopPublisher) Publish() error {
 		p.notify()
 	}
 	return nil
+}
+
+func cloneBuffer(buf [][]texel.Cell) [][]texel.Cell {
+	clone := make([][]texel.Cell, len(buf))
+	for y, row := range buf {
+		clone[y] = make([]texel.Cell, len(row))
+		copy(clone[y], row)
+	}
+	return clone
 }
 
 func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32) protocol.BufferDelta {

@@ -27,6 +27,13 @@ func (d *DesktopEngine) toggleControlMode() {
 		debuglog.Printf("toggleControlMode: State didn't change or no active workspace")
 	}
 
+	// Show/hide control mode help overlay
+	if d.inControlMode {
+		d.launchControlHelpOverlay()
+	} else {
+		d.closeControlHelpOverlay()
+	}
+
 	var eventType EventType
 	if d.inControlMode {
 		eventType = EventControlOn
@@ -63,6 +70,55 @@ func (d *DesktopEngine) toggleZoom() {
 	d.recalculateLayout()
 	d.broadcastActivePaneChanged()
 	d.broadcastTreeChanged()
+}
+
+// enterTabMode activates tab navigation mode. Control mode is exited first.
+func (d *DesktopEngine) enterTabMode() {
+	d.inTabMode = true
+	for _, sp := range d.statusPanes {
+		if handler, ok := sp.app.(TabModeHandler); ok {
+			handler.EnterTabMode()
+		}
+	}
+	d.broadcastModeChanged()
+}
+
+// exitTabMode leaves tab navigation mode.
+func (d *DesktopEngine) exitTabMode() {
+	d.inTabMode = false
+	// Cancel any active tab edit.
+	for _, sp := range d.statusPanes {
+		if handler, ok := sp.app.(TabModeHandler); ok {
+			handler.ExitTabMode()
+		}
+	}
+	d.broadcastModeChanged()
+}
+
+// handleTabMode routes keys to the status bar's TabBar during tab mode.
+func (d *DesktopEngine) handleTabMode(ev *tcell.EventKey) {
+	if ev.Key() == tcell.KeyEsc {
+		d.exitTabMode()
+		return
+	}
+	// Shift+Down exits tab mode and returns focus to panes.
+	if ev.Key() == tcell.KeyDown && ev.Modifiers()&tcell.ModShift != 0 {
+		d.exitTabMode()
+		return
+	}
+	// Shift+Left/Right also navigates workspaces in tab mode.
+	if ev.Modifiers()&tcell.ModShift != 0 {
+		switch ev.Key() {
+		case tcell.KeyLeft, tcell.KeyRight:
+			// Fall through to status bar handler (same as unshifted arrows)
+		}
+	}
+	for _, sp := range d.statusPanes {
+		if handler, ok := sp.app.(TabModeHandler); ok {
+			handler.HandleTabModeKey(ev)
+			return
+		}
+	}
 }
 
 // handleControlMode processes desktop-level commands when control mode is active.
@@ -119,6 +175,8 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 		d.launchHelpOverlay()
 	case 'f':
 		d.launchConfigEditorOverlay("system")
+	case 't':
+		d.enterTabMode()
 	}
 
 	if exitControlMode {

@@ -11,7 +11,9 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-func (w *Workspace) moveActivePane(d Direction) {
+// moveActivePane moves focus to the neighboring pane in the given direction.
+// Returns true if the focus moved, false if already at the edge.
+func (w *Workspace) moveActivePane(d Direction) bool {
 	debuglog.Printf("moveActivePane: Moving in direction %v", d)
 
 	// Get current and target panes
@@ -23,17 +25,12 @@ func (w *Workspace) moveActivePane(d Direction) {
 		currentTitle = currentPane.getTitle()
 	}
 
-	// We need to find the neighbor manually since findNeighbor is a method on Tree
-	// Let's just proceed with the move and get the result
 	oldActiveLeaf := w.tree.ActiveLeaf
-
-	// Move in tree first
 	w.tree.MoveActive(d)
 
-	// Check if we actually moved
 	if w.tree.ActiveLeaf == oldActiveLeaf {
 		debuglog.Printf("moveActivePane: No movement occurred")
-		return
+		return false
 	}
 
 	// Get the target pane after the move
@@ -60,6 +57,7 @@ func (w *Workspace) moveActivePane(d Direction) {
 	w.Broadcast(Event{Type: EventPaneActiveChanged, Payload: w.tree.ActiveLeaf})
 	w.desktop.broadcastActivePaneChanged()
 	w.notifyFocus()
+	return true
 }
 
 func (w *Workspace) nodeAt(x, y int) *Node {

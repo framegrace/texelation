@@ -6,12 +6,22 @@
 
 package texel
 
+import "github.com/gdamore/tcell/v2"
+
 // StatusBarActions is the interface that the status bar uses to request
 // workspace operations from the desktop engine. It lives here (not in the
 // statusbar package) to avoid circular imports.
 type StatusBarActions interface {
 	SwitchToWorkspace(id int)
 	RenameWorkspace(id int, name string)
+}
+
+// TabModeHandler is implemented by status bar apps that support Tab Mode
+// (Ctrl-A t). The desktop routes keys to this interface while tab mode is active.
+type TabModeHandler interface {
+	EnterTabMode()
+	HandleTabModeKey(ev *tcell.EventKey)
+	ExitTabMode()
 }
 
 // Side defines the placement of a StatusPane.

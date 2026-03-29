@@ -45,11 +45,76 @@ func render(state *clientState, screen tcell.Screen) {
 	}
 
 	panes := state.cache.SortedPanes()
+
+	// Split panes into normal and floating (overlays).
+	// Workspace effects apply only to normal panes; floating panels draw on top.
+	const floatingZOrder = 100
+	var normalPanes, floatingPanes []*client.PaneState
 	for _, pane := range panes {
 		if pane == nil {
 			continue
 		}
+		if pane.ZOrder >= floatingZOrder {
+			floatingPanes = append(floatingPanes, pane)
+		} else {
+			normalPanes = append(normalPanes, pane)
+		}
+	}
 
+	// Pass 1: composite normal panes
+	compositeInto(workspaceBuffer, normalPanes, state, width, height)
+
+	// Render images: use Kitty protocol if available, otherwise half-block fallback.
+	if state.kitty != nil {
+		state.kitty.prepareFrame(state.cache.ImageCache(), panes)
+	} else {
+		for _, pane := range panes {
+			if pane == nil {
+				continue
+			}
+			placements := state.cache.ImageCache().Placements(pane.ID)
+			for _, pl := range placements {
+				img := state.cache.ImageCache().Get(pl.SurfaceID)
+				if img == nil || img.Decoded == nil {
+					continue
+				}
+				renderHalfBlockIntoBuffer(workspaceBuffer, img.Decoded,
+					pane.Rect.X+1+pl.X, pane.Rect.Y+1+pl.Y, pl.W, pl.H)
+			}
+		}
+	}
+
+	// Apply workspace effects (tint) only to the non-floating content.
+	if state.effects != nil {
+		state.effects.ApplyWorkspaceEffects(workspaceBuffer)
+	}
+
+	// Pass 2: composite floating panels on top (unaffected by workspace effects).
+	compositeInto(workspaceBuffer, floatingPanes, state, width, height)
+
+	if pane, minX, maxX, minY, maxY, ok := state.selectionBounds(); ok {
+		applySelectionHighlight(state, workspaceBuffer, pane, minX, maxX, minY, maxY)
+	}
+
+	// Apply restart notification overlay if needed
+	if state.showRestartNotification && !state.restartNotificationDismissed {
+		renderRestartNotification(workspaceBuffer, width, height)
+	}
+
+	showWorkspaceBuffer(screen, workspaceBuffer, state.defaultStyle)
+	screen.Show()
+
+	// Flush Kitty graphics commands after tcell has flushed its cell buffer.
+	if state.kitty != nil && state.ttyWriter != nil {
+		if err := state.kitty.flush(state.ttyWriter); err != nil {
+			log.Printf("kitty flush: %v", err)
+		}
+	}
+}
+
+// compositeInto renders a set of panes into the workspace buffer.
+func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, state *clientState, screenW, screenH int) {
+	for _, pane := range panes {
 		x := pane.Rect.X
 		y := pane.Rect.Y
 		w := pane.Rect.Width
@@ -73,7 +138,6 @@ func render(state *clientState, screen tcell.Screen) {
 				}
 				row[col] = cell
 			}
-			// Fill any remaining cells with default
 			for col := 0; col < w; col++ {
 				if row[col].Ch == 0 {
 					row[col] = client.Cell{Ch: ' ', Style: state.defaultStyle}
@@ -89,69 +153,22 @@ func render(state *clientState, screen tcell.Screen) {
 		zoomOverlay := state.zoomed && pane.ID == state.zoomedPane
 		for rowIdx := 0; rowIdx < h; rowIdx++ {
 			targetY := y + rowIdx
-			if targetY < 0 || targetY >= height {
+			if targetY < 0 || targetY >= screenH {
 				continue
 			}
 			row := paneBuffer[rowIdx]
 			for col := 0; col < w; col++ {
 				targetX := x + col
-				if targetX < 0 || targetX >= width {
+				if targetX < 0 || targetX >= screenW {
 					continue
 				}
-
 				cell := row[col]
 				style := cell.Style
-
 				if zoomOverlay {
 					style = applyZoomOverlay(style, 0.2, state)
 				}
 				workspaceBuffer[targetY][targetX] = client.Cell{Ch: cell.Ch, Style: style}
 			}
-		}
-	}
-
-	// Render images: use Kitty protocol if available, otherwise half-block fallback.
-	if state.kitty != nil {
-		state.kitty.prepareFrame(state.cache.ImageCache(), panes)
-	} else {
-		for _, pane := range panes {
-			if pane == nil {
-				continue
-			}
-			placements := state.cache.ImageCache().Placements(pane.ID)
-			for _, pl := range placements {
-				img := state.cache.ImageCache().Get(pl.SurfaceID)
-				if img == nil || img.Decoded == nil {
-					continue
-				}
-				// Image placement coordinates are in content space (inside
-				// pane border). Offset by 1 to account for the border.
-				renderHalfBlockIntoBuffer(workspaceBuffer, img.Decoded,
-					pane.Rect.X+1+pl.X, pane.Rect.Y+1+pl.Y, pl.W, pl.H)
-			}
-		}
-	}
-
-	if state.effects != nil {
-		state.effects.ApplyWorkspaceEffects(workspaceBuffer)
-	}
-
-	if pane, minX, maxX, minY, maxY, ok := state.selectionBounds(); ok {
-		applySelectionHighlight(state, workspaceBuffer, pane, minX, maxX, minY, maxY)
-	}
-
-	// Apply restart notification overlay if needed
-	if state.showRestartNotification && !state.restartNotificationDismissed {
-		renderRestartNotification(workspaceBuffer, width, height)
-	}
-
-	showWorkspaceBuffer(screen, workspaceBuffer, state.defaultStyle)
-	screen.Show()
-
-	// Flush Kitty graphics commands after tcell has flushed its cell buffer.
-	if state.kitty != nil && state.ttyWriter != nil {
-		if err := state.kitty.flush(state.ttyWriter); err != nil {
-			log.Printf("kitty flush: %v", err)
 		}
 	}
 }

@@ -93,9 +93,11 @@ func DefaultBindings() []BindingSpec {
 		{
 			Event:  TriggerWorkspaceControl,
 			Target: TargetWorkspace,
-			Effect: "rainbow",
+			Effect: "fadeTint",
 			Config: EffectConfig{
-				"speed_hz": 0.5,
+				"color":       "#2a1a3a",
+				"intensity":   0.65,
+				"duration_ms": 200,
 			},
 		},
 		{

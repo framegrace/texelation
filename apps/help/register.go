@@ -24,4 +24,15 @@ func init() {
 				return NewHelpApp()
 			}
 	})
+	registry.RegisterBuiltInProvider(func(_ *registry.Registry) (*registry.Manifest, registry.AppFactory) {
+		return &registry.Manifest{
+				Name:        "help-control",
+				DisplayName: "Control Mode",
+				Description: "Control mode quick reference",
+				Icon:        "⌨",
+				Category:    "system",
+			}, func() interface{} {
+				return NewControlHelpApp()
+			}
+	})
 }

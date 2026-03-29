@@ -48,6 +48,57 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 		return
 	}
 
+	// Alt+Left/Right: switch to previous/next workspace
+	if key.Modifiers()&tcell.ModAlt != 0 {
+		switch key.Key() {
+		case tcell.KeyLeft:
+			d.switchWorkspaceRelative(-1)
+			return
+		case tcell.KeyRight:
+			d.switchWorkspaceRelative(1)
+			return
+		}
+	}
+
+	// Ctrl+Arrows: resize the nearest pane border by 1 character.
+	// Ctrl+Right/Down: grow active pane (move right/bottom border outward)
+	// Ctrl+Left/Up: shrink active pane (move right/bottom border inward)
+	if key.Modifiers()&tcell.ModCtrl != 0 {
+		switch key.Key() {
+		case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown:
+			if d.activeWorkspace != nil {
+				dir := keyToDirection(key)
+				// Always look for the border on the positive side first.
+				// For grow (Right/Down): find right border, move it right.
+				// For shrink (Left/Up): find right border, move it left.
+				searchDir := dir
+				if dir == DirLeft {
+					searchDir = DirRight
+				} else if dir == DirUp {
+					searchDir = DirDown
+				}
+				border := d.activeWorkspace.findBorderToResize(searchDir)
+				if border == nil {
+					// No border on the positive side; try the other side.
+					border = d.activeWorkspace.findBorderToResize(dir)
+				}
+				if border != nil {
+					d.activeWorkspace.adjustBorder(border, dir)
+					d.activeWorkspace.clearResizeSelection(border)
+				}
+			}
+			return
+		}
+	}
+
+	// If in control mode, route keys to control handler (which also manages
+	// the help overlay). This must come before the floating panel check so
+	// ESC exits control mode + closes the help overlay together.
+	if d.inControlMode {
+		d.handleControlMode(key)
+		return
+	}
+
 	// Check floating panels (topmost first)
 	// Iterate in reverse to find topmost modal
 	for i := len(d.floatingPanels) - 1; i >= 0; i-- {
@@ -78,8 +129,8 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 		return
 	}
 
-	if d.inControlMode {
-		d.handleControlMode(key)
+	if d.inTabMode {
+		d.handleTabMode(key)
 		return
 	}
 
@@ -122,6 +173,11 @@ func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, mo
 		}
 	}
 
+	// Check if click is in a status pane area
+	if d.routeClickToStatusPane(x, y, buttons, prevButtons) {
+		return
+	}
+
 	// Forward mouse events to the pane under cursor
 	pane := d.paneAtCoordinates(x, y)
 	if pane != nil && pane.handlesMouseEvents() {
@@ -133,6 +189,38 @@ func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, mo
 	if buttonPressed {
 		d.activatePaneAt(x, y)
 	}
+}
+
+// StatusPaneClickHandler is implemented by status bar apps that handle clicks.
+// The desktop calls this with the local coordinates within the status pane.
+type StatusPaneClickHandler interface {
+	HandleClick(localX, localY int)
+}
+
+// routeMouseToStatusPane checks if a mouse button-down falls within a status
+// pane and forwards a click. Returns true if consumed.
+func (d *DesktopEngine) routeClickToStatusPane(x, y int, buttons, prevButtons tcell.ButtonMask) bool {
+	// Only handle initial button press
+	buttonDown := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 == 0
+	if !buttonDown {
+		return false
+	}
+
+	w, _ := d.viewportSize()
+	offsetY := 0
+	for _, sp := range d.statusPanes {
+		switch sp.side {
+		case SideTop:
+			if x >= 0 && x < w && y >= offsetY && y < offsetY+sp.size {
+				if handler, ok := sp.app.(StatusPaneClickHandler); ok {
+					handler.HandleClick(x, y-offsetY)
+					return true
+				}
+			}
+			offsetY += sp.size
+		}
+	}
+	return false
 }
 
 func (d *DesktopEngine) paneAtCoordinates(x, y int) *pane {

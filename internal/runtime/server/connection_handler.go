@@ -288,6 +288,12 @@ func (c *connection) handleResize(size protocol.Resize) {
 		c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesMouse)
 	}
 
+	// Reset diff state so the publish sends full buffers instead of diffs
+	// against stale pre-resize content.
+	if pub := sink.Publisher(); pub != nil {
+		pub.ResetDiffState()
+	}
+
 	// Now publish and flush buffer deltas. The client already has correct
 	// pane positions, so the new content renders at the right location.
 	sink.Publish()
