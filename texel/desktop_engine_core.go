@@ -621,6 +621,16 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 	d.broadcastTreeChanged()
 }
 
+// RenameWorkspace sets the display name for the workspace with the given id.
+// Does nothing if no workspace with that id exists.
+func (d *DesktopEngine) RenameWorkspace(id int, name string) {
+	ws, ok := d.workspaces[id]
+	if !ok {
+		return
+	}
+	ws.Name = name
+}
+
 func (d *DesktopEngine) forEachPane(fn func(*pane)) {
 	if fn == nil {
 		return
