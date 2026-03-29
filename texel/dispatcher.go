@@ -30,6 +30,13 @@ const (
 	// Add other event types here as needed
 	EventThemeChanged
 	EventAppAttached
+	// Fine-grained status events
+	EventWorkspacesChanged
+	EventWorkspaceSwitched
+	EventModeChanged
+	EventActivePaneChanged
+	EventPerformanceUpdate
+	EventToast
 )
 
 // Event represents a message passed through the system.
@@ -83,6 +90,57 @@ func (s StatePayload) equal(other StatePayload) bool {
 		}
 	}
 	return true
+}
+
+// WorkspaceInfo carries display metadata for a single workspace.
+type WorkspaceInfo struct {
+	ID    int
+	Name  string
+	Color tcell.Color
+}
+
+// WorkspacesChangedPayload is sent when the set of workspaces or their metadata changes.
+type WorkspacesChangedPayload struct {
+	Workspaces []WorkspaceInfo
+	ActiveID   int
+}
+
+// WorkspaceSwitchedPayload is sent when the active workspace changes.
+type WorkspaceSwitchedPayload struct {
+	ActiveID int
+}
+
+// ModeChangedPayload is sent when control mode or sub-mode changes.
+type ModeChangedPayload struct {
+	InControlMode bool
+	SubMode       rune
+}
+
+// ActivePaneChangedPayload is sent when the focused pane changes.
+type ActivePaneChangedPayload struct {
+	ActiveTitle string
+}
+
+// PerformanceUpdatePayload carries render pipeline timing data.
+type PerformanceUpdatePayload struct {
+	LastPublishDuration time.Duration
+}
+
+// ToastSeverity indicates the importance level of a toast notification.
+type ToastSeverity int
+
+const (
+	ToastInfo ToastSeverity = iota
+	ToastSuccess
+	ToastWarning
+	ToastError
+)
+
+// ToastPayload carries a transient notification message.
+type ToastPayload struct {
+	Message  string
+	Severity ToastSeverity
+	Duration time.Duration
 }
 
 // Listener is an interface that any component can implement to receive events.
