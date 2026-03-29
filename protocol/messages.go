@@ -144,14 +144,16 @@ type PaneFocus struct {
 
 // StateUpdate mirrors texel.StatePayload for remote clients.
 type StateUpdate struct {
-	WorkspaceID   int32
-	AllWorkspaces []int32
-	InControlMode bool
-	SubMode       rune
-	ActiveTitle   string
-	DesktopBgRGB  uint32
-	Zoomed        bool
-	ZoomedPaneID  [16]byte
+	WorkspaceID     int32
+	AllWorkspaces   []int32
+	InControlMode   bool
+	SubMode         rune
+	ActiveTitle     string
+	DesktopBgRGB    uint32
+	Zoomed          bool
+	ZoomedPaneID    [16]byte
+	WorkspaceNames  []string // parallel to AllWorkspaces
+	WorkspaceColors []uint32 // parallel to AllWorkspaces, RGB packed
 }
 
 // PaneStateFlags indicate pane state bits.
@@ -729,6 +731,32 @@ func EncodeStateUpdate(update StateUpdate) ([]byte, error) {
 	if err := encodeString(buf, update.ActiveTitle); err != nil {
 		return nil, err
 	}
+	// WorkspaceNames and WorkspaceColors are appended for backward compatibility.
+	// Older decoders stop after ActiveTitle and ignore trailing bytes.
+	nameCount := len(update.WorkspaceNames)
+	if nameCount > 0xFFFF {
+		return nil, ErrStringTooLong
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint16(nameCount)); err != nil {
+		return nil, err
+	}
+	for _, name := range update.WorkspaceNames {
+		if err := encodeString(buf, name); err != nil {
+			return nil, err
+		}
+	}
+	colorCount := len(update.WorkspaceColors)
+	if colorCount > 0xFFFF {
+		return nil, ErrStringTooLong
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint16(colorCount)); err != nil {
+		return nil, err
+	}
+	for _, c := range update.WorkspaceColors {
+		if err := binary.Write(buf, binary.LittleEndian, c); err != nil {
+			return nil, err
+		}
+	}
 	return buf.Bytes(), nil
 }
 
@@ -782,6 +810,38 @@ func DecodeStateUpdate(b []byte) (StateUpdate, error) {
 	update.ActiveTitle, b, err = decodeString(b)
 	if err != nil {
 		return update, err
+	}
+	// WorkspaceNames and WorkspaceColors are optional trailing fields.
+	// Older messages end here; handle gracefully.
+	if len(b) == 0 {
+		return update, nil
+	}
+	if len(b) < 2 {
+		return update, ErrPayloadShort
+	}
+	nameCount := int(binary.LittleEndian.Uint16(b[:2]))
+	b = b[2:]
+	update.WorkspaceNames = make([]string, nameCount)
+	for i := 0; i < nameCount; i++ {
+		var name string
+		name, b, err = decodeString(b)
+		if err != nil {
+			return update, err
+		}
+		update.WorkspaceNames[i] = name
+	}
+	if len(b) < 2 {
+		return update, ErrPayloadShort
+	}
+	colorCount := int(binary.LittleEndian.Uint16(b[:2]))
+	b = b[2:]
+	update.WorkspaceColors = make([]uint32, colorCount)
+	for i := 0; i < colorCount; i++ {
+		if len(b) < 4 {
+			return update, ErrPayloadShort
+		}
+		update.WorkspaceColors[i] = binary.LittleEndian.Uint32(b[:4])
+		b = b[4:]
 	}
 	if len(b) != 0 {
 		return update, ErrExtraBytes
