@@ -92,7 +92,7 @@ func wrapApp(reg *registry.Registry, name string, app texelcore.App) texelcore.A
 	if app == nil {
 		return nil
 	}
-	if name == "" || name == "config-editor" || name == "launcher" {
+	if name == "" || name == "config-editor" || name == "launcher" || name == "statusbar" {
 		return app
 	}
 	return newToggleApp(reg, name, app)

@@ -161,8 +161,11 @@ func main() {
 		desktop.InitAppName = *defaultApp
 	}
 
-	status := statusbar.New()
-	desktop.AddStatusPane(status, texel.SideTop, 1)
+	statusApp := desktop.Registry().CreateApp("statusbar", nil)
+	if sb, ok := statusApp.(*statusbar.StatusBarApp); ok {
+		sb.SetActions(desktop)
+	}
+	desktop.AddStatusPane(statusApp.(texel.App), texel.SideTop, 2)
 
 	srv := server.NewServer(*socketPath, manager)
 	metrics := server.NewFocusMetrics(log.Default())
