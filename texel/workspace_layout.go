@@ -571,7 +571,14 @@ func (w *Workspace) adjustBorder(border *selectedBorder, d Direction) {
 		return
 	}
 
-	transferAmount := ResizeStep
+	// Compute step as 1 character relative to total dimension.
+	var totalSize int
+	if border.node.Split == Vertical {
+		totalSize = w.width
+	} else {
+		totalSize = w.height
+	}
+	transferAmount := 1.0 / float64(max(totalSize, 1))
 	if border.node.SplitRatios[shrinkerIndex]-transferAmount < MinRatio {
 		transferAmount = border.node.SplitRatios[shrinkerIndex] - MinRatio
 	}

@@ -22,6 +22,12 @@ type fadeTintEffect struct {
 	intensity float32
 	defaultFg tcell.Color
 	defaultBg tcell.Color
+	// Workspace-level state (for workspace.control binding)
+	wsActive    bool
+	wsIntensity float32 // current animated intensity
+	wsTarget    float32
+	wsStart     time.Time
+	wsDuration  time.Duration
 }
 
 func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Duration, defaultFg, defaultBg tcell.Color) Effect {
@@ -39,32 +45,67 @@ func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Durat
 		intensity:      intensity,
 		defaultFg:      defaultFg,
 		defaultBg:      defaultBg,
+		wsDuration:     duration,
 	}
 }
 
 func (e *fadeTintEffect) ID() string { return "fadeTint" }
 
-// Active and Update are provided by PaneEffectBase
+func (e *fadeTintEffect) Active() bool {
+	return e.PaneEffectBase.Active() || e.wsIntensity > 0 || e.wsTarget > 0
+}
 
-func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
-	if trigger.Type != TriggerPaneActive && trigger.Type != TriggerPaneResizing {
+func (e *fadeTintEffect) Update(now time.Time) {
+	e.PaneEffectBase.Update(now)
+	// Animate workspace intensity toward target
+	if e.wsDuration <= 0 {
+		e.wsIntensity = e.wsTarget
 		return
 	}
+	elapsed := float32(now.Sub(e.wsStart).Seconds())
+	progress := elapsed / float32(e.wsDuration.Seconds())
+	if progress >= 1 {
+		e.wsIntensity = e.wsTarget
+	} else {
+		// Smoothstep
+		t := progress * progress * (3 - 2*progress)
+		if e.wsTarget > e.wsIntensity {
+			e.wsIntensity = e.wsIntensity + (e.wsTarget-e.wsIntensity)*t
+		} else {
+			start := e.intensity // fade from full intensity
+			if !e.wsActive {
+				start = e.wsIntensity
+			}
+			e.wsIntensity = start + (e.wsTarget-start)*t
+		}
+	}
+}
 
-	target := float32(0)
+func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 	switch trigger.Type {
 	case TriggerPaneActive:
+		target := float32(0)
 		if !trigger.Active {
 			target = e.intensity
 		}
+		e.Animate(trigger.PaneID, target, trigger.Timestamp)
 	case TriggerPaneResizing:
+		target := float32(0)
 		if trigger.Resizing {
 			target = e.intensity
 		}
+		e.Animate(trigger.PaneID, target, trigger.Timestamp)
+	case TriggerWorkspaceControl:
+		e.wsActive = trigger.Active
+		e.wsTarget = 0
+		if trigger.Active {
+			e.wsTarget = e.intensity
+		}
+		e.wsStart = trigger.Timestamp
+		if e.wsStart.IsZero() {
+			e.wsStart = time.Now()
+		}
 	}
-
-	// Use base helper - even simpler now!
-	e.Animate(trigger.PaneID, target, trigger.Timestamp)
 }
 
 func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {
@@ -96,7 +137,25 @@ func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cel
 	}
 }
 
-func (e *fadeTintEffect) ApplyWorkspace(buffer [][]client.Cell) {}
+func (e *fadeTintEffect) ApplyWorkspace(buffer [][]client.Cell) {
+	if e.wsIntensity <= 0 {
+		return
+	}
+	fgFallback := e.defaultFg
+	if fgFallback == tcell.ColorDefault {
+		fgFallback = tcell.ColorWhite
+	}
+	bgFallback := e.defaultBg
+	if bgFallback == tcell.ColorDefault {
+		bgFallback = tcell.ColorBlack
+	}
+	for y := range buffer {
+		for x := range buffer[y] {
+			cell := &buffer[y][x]
+			cell.Style = tintStyle(cell.Style, e.color, e.wsIntensity, false, fgFallback, bgFallback)
+		}
+	}
+}
 
 func init() {
 	Register("fadeTint", func(cfg EffectConfig) (Effect, error) {

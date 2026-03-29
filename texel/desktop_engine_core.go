@@ -110,6 +110,7 @@ type DesktopEngine struct {
 	// Global state now lives on the Desktop
 	inControlMode   bool
 	subControlMode  rune
+	inTabMode       bool
 	resizeSelection *selectedBorder
 	zoomedPane      *Node
 
@@ -679,6 +680,28 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 	d.broadcastActivePaneChanged()
 	d.notifyFocusActive()
 	d.broadcastTreeChanged()
+}
+
+// switchWorkspaceRelative switches to the workspace at the given offset from
+// the current one (e.g. -1 for previous, +1 for next). Wraps around.
+func (d *DesktopEngine) switchWorkspaceRelative(offset int) {
+	if len(d.workspaces) <= 1 || d.activeWorkspace == nil {
+		return
+	}
+	ids := make([]int, 0, len(d.workspaces))
+	for id := range d.workspaces {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	current := 0
+	for i, id := range ids {
+		if id == d.activeWorkspace.id {
+			current = i
+			break
+		}
+	}
+	next := (current + offset + len(ids)) % len(ids)
+	d.SwitchToWorkspace(ids[next])
 }
 
 // RenameWorkspace sets the display name for the workspace with the given id.

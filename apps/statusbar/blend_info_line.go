@@ -30,7 +30,7 @@ type BlendInfoLine struct {
 	inv func(core.Rect)
 
 	// Colors
-	accentColor tcell.Color
+	accentColor color.DynamicColor
 	contentBG   tcell.Color
 
 	// Normal-mode content
@@ -52,7 +52,7 @@ type BlendInfoLine struct {
 func NewBlendInfoLine() *BlendInfoLine {
 	tm := theming.ForApp("statusbar")
 	bil := &BlendInfoLine{
-		accentColor: tm.GetSemanticColor("accent.primary"),
+		accentColor: color.Solid(tm.GetSemanticColor("accent.primary")),
 		contentBG:   tm.GetSemanticColor("bg.base"),
 	}
 	bil.Resize(1, 1)
@@ -75,9 +75,18 @@ func (bil *BlendInfoLine) invalidate() {
 }
 
 // SetAccentColor sets the gradient's left-side accent color.
+// SetAccentColor sets a static accent color for the gradient.
 func (bil *BlendInfoLine) SetAccentColor(c tcell.Color) {
 	bil.mu.Lock()
-	bil.accentColor = c
+	bil.accentColor = color.Solid(c)
+	bil.mu.Unlock()
+	bil.invalidate()
+}
+
+// SetAccentDynamic sets a dynamic accent color (e.g. animated pulse).
+func (bil *BlendInfoLine) SetAccentDynamic(dc color.DynamicColor) {
+	bil.mu.Lock()
+	bil.accentColor = dc
 	bil.mu.Unlock()
 	bil.invalidate()
 }
@@ -180,8 +189,15 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 
 	tm := theming.ForApp("statusbar")
 
+	// Resolve the dynamic accent color for this frame.
+	ctx := color.ColorContext{X: x, Y: y, W: w, H: 1, T: painter.Time()}
+	resolvedAccent := accent.Resolve(ctx)
+	if !accent.IsStatic() {
+		painter.MarkAnimated()
+	}
+
 	// Choose the accent color for the gradient.
-	gradAccent := accent
+	gradAccent := resolvedAccent
 	if toastActive {
 		switch toastSev {
 		case texel.ToastSuccess:
@@ -190,8 +206,6 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 			gradAccent = tm.GetSemanticColor("action.warning")
 		case texel.ToastError:
 			gradAccent = tm.GetSemanticColor("action.danger")
-		default: // ToastInfo
-			gradAccent = accent
 		}
 	}
 
@@ -216,13 +230,7 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 	if darkFG == tcell.ColorDefault {
 		darkFG = tcell.NewRGBColor(30, 30, 46)
 	}
-	mutedFG := tm.GetSemanticColor("text.muted")
-	if mutedFG == tcell.ColorDefault {
-		mutedFG = tm.GetSemanticColor("text.secondary")
-	}
-
 	darkDS := color.DynamicStyle{FG: color.Solid(darkFG), BG: color.Solid(tcell.ColorDefault)}
-	mutedDS := color.DynamicStyle{FG: color.Solid(mutedFG), BG: color.Solid(tcell.ColorDefault)}
 
 	if toastActive {
 		// Toast mode: show message on the left, truncate to fit.
@@ -277,14 +285,15 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 		col++
 	}
 
-	// Draw right text.
+	// Draw right text using the resolved accent color for visibility.
+	accentDS := color.DynamicStyle{FG: color.Solid(resolvedAccent), BG: color.Solid(tcell.ColorDefault)}
 	if rightWidth <= w {
 		col = x + w - rightWidth
 		for _, r := range rightStr {
 			if col >= x+w {
 				break
 			}
-			painter.SetDynamicCellKeepBG(col, y, r, mutedDS)
+			painter.SetDynamicCellKeepBG(col, y, r, accentDS)
 			col++
 		}
 	}
