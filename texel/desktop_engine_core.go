@@ -463,6 +463,13 @@ func (d *DesktopEngine) broadcastStateUpdate() {
 	//	if d.activeWorkspace != nil {
 	//		d.activeWorkspace.Refresh()
 	//	}
+
+	// Dual-emit fine-grained events during migration.
+	d.broadcastWorkspacesChanged()
+	d.broadcastWorkspaceSwitched()
+	d.broadcastModeChanged()
+	d.broadcastActivePaneChanged()
+	d.broadcastPerformanceUpdate()
 }
 
 func (d *DesktopEngine) SetRefreshHandler(handler func()) {
@@ -522,6 +529,63 @@ func (d *DesktopEngine) storeLastState(payload StatePayload) {
 		d.lastState.AllWorkspaces = append([]int(nil), payload.AllWorkspaces...)
 	}
 	d.hasLastState = true
+}
+
+func (d *DesktopEngine) workspacesChangedPayload() WorkspacesChangedPayload {
+	infos := make([]WorkspaceInfo, 0, len(d.workspaces))
+	for _, ws := range d.workspaces {
+		infos = append(infos, WorkspaceInfo{
+			ID:    ws.id,
+			Name:  ws.Name,
+			Color: ws.Color,
+		})
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
+	activeID := 0
+	if d.activeWorkspace != nil {
+		activeID = d.activeWorkspace.id
+	}
+	return WorkspacesChangedPayload{Workspaces: infos, ActiveID: activeID}
+}
+
+func (d *DesktopEngine) broadcastWorkspacesChanged() {
+	d.dispatcher.Broadcast(Event{Type: EventWorkspacesChanged, Payload: d.workspacesChangedPayload()})
+}
+
+func (d *DesktopEngine) broadcastWorkspaceSwitched() {
+	activeID := 0
+	if d.activeWorkspace != nil {
+		activeID = d.activeWorkspace.id
+	}
+	d.dispatcher.Broadcast(Event{Type: EventWorkspaceSwitched, Payload: WorkspaceSwitchedPayload{ActiveID: activeID}})
+}
+
+func (d *DesktopEngine) broadcastModeChanged() {
+	d.dispatcher.Broadcast(Event{Type: EventModeChanged, Payload: ModeChangedPayload{InControlMode: d.inControlMode, SubMode: d.subControlMode}})
+}
+
+func (d *DesktopEngine) broadcastActivePaneChanged() {
+	var title string
+	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
+		title = d.zoomedPane.Pane.getTitle()
+	} else if d.activeWorkspace != nil {
+		title = d.activeWorkspace.tree.ActiveTitle()
+	}
+	d.dispatcher.Broadcast(Event{Type: EventActivePaneChanged, Payload: ActivePaneChangedPayload{ActiveTitle: title}})
+}
+
+func (d *DesktopEngine) broadcastPerformanceUpdate() {
+	d.dispatcher.Broadcast(Event{Type: EventPerformanceUpdate, Payload: PerformanceUpdatePayload{LastPublishDuration: time.Duration(d.lastPublishNanos.Load())}})
+}
+
+// BroadcastToast sends a toast notification to all subscribers.
+func (d *DesktopEngine) BroadcastToast(message string, severity ToastSeverity, duration time.Duration) {
+	d.dispatcher.Broadcast(Event{Type: EventToast, Payload: ToastPayload{Message: message, Severity: severity, Duration: duration}})
+}
+
+// WorkspacesInfo returns the current workspace list sorted by ID.
+func (d *DesktopEngine) WorkspacesInfo() []WorkspaceInfo {
+	return d.workspacesChangedPayload().Workspaces
 }
 
 func (d *DesktopEngine) currentStatePayload(allWsIDs []int, title string) StatePayload {
