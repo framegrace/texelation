@@ -93,6 +93,12 @@ func (m *Manager) requestFrame() {
 	m.frameMu.Unlock()
 }
 
+// RequestFrame schedules a render after one frame interval (~16ms).
+// Safe to call multiple times; only one timer runs at a time.
+func (m *Manager) RequestFrame() {
+	m.requestFrame()
+}
+
 // Update ticks all effects so animations can advance.
 func (m *Manager) Update(now time.Time) {
 	if m == nil {
