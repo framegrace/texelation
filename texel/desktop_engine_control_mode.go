@@ -149,8 +149,11 @@ func (d *DesktopEngine) handleTabMode(ev *tcell.EventKey) {
 	case tcell.KeyRight:
 		d.switchWorkspaceRelative(1)
 	default:
-		// Any other key exits nav mode and is swallowed
+		// Any other key exits nav mode and falls through to normal handling
 		d.exitTabMode()
+		if d.activeWorkspace != nil {
+			d.activeWorkspace.handleEvent(ev)
+		}
 	}
 }
 
