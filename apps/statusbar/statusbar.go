@@ -49,6 +49,8 @@ type StatusBarApp struct {
 	lastRenderTime time.Time
 	smoothFPS      float64
 	smoothTheoFPS  float64
+	lastFPSInt     int
+	lastTheoFPSInt int
 }
 
 // New creates a new StatusBarApp.
@@ -218,9 +220,9 @@ func (sb *StatusBarApp) OnEvent(event texel.Event) {
 			sb.blendLine.SetTitle(p.ActiveTitle)
 		}
 	case texel.EventPerformanceUpdate:
-		if p, ok := event.Payload.(texel.PerformanceUpdatePayload); ok {
-			sb.updateFPS(p.LastPublishDuration)
-		}
+		// Intentionally ignored — FPS display caused 60fps buffer deltas
+		// to the client, starving keyboard input. Will be reimplemented
+		// client-side if needed.
 	case texel.EventToast:
 		if p, ok := event.Payload.(texel.ToastPayload); ok {
 			sb.blendLine.ShowToast(p.Message, p.Severity, p.Duration)
@@ -385,10 +387,20 @@ func (sb *StatusBarApp) updateFPS(publishDuration time.Duration) {
 
 	actual := sb.smoothFPS
 	theo := sb.smoothTheoFPS
+
+	// Only update display when the rounded values change — avoids
+	// producing a new buffer delta every single frame.
+	actualInt := int(actual + 0.5)
+	theoInt := int(theo + 0.5)
+	changed := actualInt != sb.lastFPSInt || theoInt != sb.lastTheoFPSInt
+	sb.lastFPSInt = actualInt
+	sb.lastTheoFPSInt = theoInt
 	sb.mu.Unlock()
 
-	sb.blendLine.SetFPS(actual, theo)
-	sb.refresh()
+	if changed {
+		sb.blendLine.SetFPS(actual, theo)
+		sb.refresh()
+	}
 }
 
 // clockLoop ticks every second to update the clock display.

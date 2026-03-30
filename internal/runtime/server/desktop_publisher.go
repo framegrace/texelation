@@ -89,13 +89,12 @@ func (p *DesktopPublisher) Publish() error {
 		p.revisions[snap.ID] = rev
 		prev := p.prevBuffers[snap.ID]
 		delta := bufferToDelta(snap, prev, rev)
-		// Clone the buffer before storing — Render() may reuse the same
-		// slice, so without a copy prev and current would alias and the
-		// diff would always find zero changes.
-		p.prevBuffers[snap.ID] = cloneBuffer(snap.Buffer)
 		if len(delta.Rows) == 0 {
 			continue
 		}
+		// Only clone when there are actual changes — avoids massive GC
+		// pressure from cloning every pane buffer every frame.
+		p.prevBuffers[snap.ID] = cloneBuffer(snap.Buffer)
 		if err := p.session.EnqueueDiff(delta); err != nil {
 			return err
 		}

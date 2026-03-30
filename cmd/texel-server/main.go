@@ -14,6 +14,8 @@ import (
 	"fmt"
 	texelcore "github.com/framegrace/texelui/core"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -48,6 +50,7 @@ func main() {
 	fromScratch := flag.Bool("from-scratch", false, "Start from scratch, ignoring any saved snapshot")
 	cpuProfile := flag.String("pprof-cpu", "", "Write CPU profile to file")
 	memProfile := flag.String("pprof-mem", "", "Write heap profile to file on exit")
+	pprofAddr := flag.String("pprof-http", "", "Enable live pprof at address (e.g. localhost:6060)")
 	verboseLogs := flag.Bool("verbose-logs", false, "Enable verbose server logging")
 	defaultApp := flag.String("default-app", "", "Default app for new panes (launcher, texelterm, help) - overrides config file")
 	flag.Parse()
@@ -62,6 +65,15 @@ func main() {
 	// Command-line flag overrides config file.
 	if *defaultApp == "" {
 		*defaultApp = cfg.GetString("", "defaultApp", "launcher")
+	}
+
+	if *pprofAddr != "" {
+		go func() {
+			log.Printf("pprof HTTP server at http://%s/debug/pprof/", *pprofAddr)
+			if err := http.ListenAndServe(*pprofAddr, nil); err != nil {
+				log.Printf("pprof HTTP failed: %v", err)
+			}
+		}()
 	}
 
 	if *cpuProfile != "" {
