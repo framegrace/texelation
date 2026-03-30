@@ -470,7 +470,6 @@ func (d *DesktopEngine) broadcastStateUpdate() {
 func (d *DesktopEngine) SetRefreshHandler(handler func()) {
 	d.refreshMu.Lock()
 	d.refreshHandler = func() {
-		d.broadcastPerformanceUpdate()
 		d.broadcastStateUpdate()
 		if handler != nil {
 			handler()

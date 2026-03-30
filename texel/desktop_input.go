@@ -41,7 +41,6 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 	if !ok {
 		return
 	}
-
 	// Global Shortcuts
 	if key.Key() == tcell.KeyF1 {
 		d.launchHelpOverlay()

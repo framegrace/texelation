@@ -81,9 +81,8 @@ func (s StatePayload) equal(other StatePayload) bool {
 	if s.ZoomedPaneID != other.ZoomedPaneID {
 		return false
 	}
-	if s.LastPublishDuration != other.LastPublishDuration {
-		return false
-	}
+	// Note: LastPublishDuration intentionally excluded — it changes every
+	// frame and would defeat deduplication, flooding clients with updates.
 	if len(s.AllWorkspaces) != len(other.AllWorkspaces) {
 		return false
 	}
