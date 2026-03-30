@@ -129,7 +129,8 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 		return
 	}
 
-	if d.inTabMode {
+	// Tab mode must yield to modal floating panels (launcher, help, config editor).
+	if d.inTabMode && len(d.floatingPanels) == 0 {
 		d.handleTabMode(key)
 		return
 	}

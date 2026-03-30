@@ -216,8 +216,8 @@ func (w *Workspace) handleEvent(ev *tcell.EventKey) {
 		switch ev.Key() {
 		case tcell.KeyUp:
 			if !w.moveActivePane(DirUp) {
-				// At top edge — enter workspace navigation (tab mode)
-				w.desktop.enterTabMode()
+				// At top edge — enter tab navigation mode
+				w.desktop.enterTabNavMode()
 			}
 		case tcell.KeyDown:
 			w.moveActivePane(DirDown)
