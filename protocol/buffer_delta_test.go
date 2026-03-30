@@ -129,6 +129,60 @@ func TestBufferDeltaStaticBackwardCompat(t *testing.T) {
 	}
 }
 
+func TestBufferDeltaGradientRoundTrip(t *testing.T) {
+	delta := BufferDelta{
+		PaneID:   [16]byte{1},
+		Revision: 1,
+		Styles: []StyleEntry{
+			{
+				AttrFlags: AttrHasDynamic,
+				FgModel:   ColorModelRGB,
+				FgValue:   0xFFFFFF,
+				BgModel:   ColorModelRGB,
+				BgValue:   0x000000,
+				DynBG: DynColorDesc{
+					Type:   4,
+					Base:   0,
+					Easing: 2,
+					Stops: []DynColorStopDesc{
+						{Position: 0, Color: DynColorDesc{Type: 2, Base: 0x89B4FA, Speed: 6, Min: 0.7, Max: 1.0}},
+						{Position: 0.3, Color: DynColorDesc{Type: 2, Base: 0x89B4FA, Speed: 6, Min: 0.7, Max: 1.0}},
+						{Position: 1.0, Color: DynColorDesc{Type: 1, Base: 0x1E1E2E}},
+					},
+				},
+			},
+		},
+		Rows: []RowDelta{{Row: 0, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}}},
+	}
+	encoded, err := EncodeBufferDelta(delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeBufferDelta(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bg := decoded.Styles[0].DynBG
+	if bg.Type != 4 {
+		t.Fatalf("expected linear gradient type 4, got %d", bg.Type)
+	}
+	if len(bg.Stops) != 3 {
+		t.Fatalf("expected 3 stops, got %d", len(bg.Stops))
+	}
+	if bg.Stops[0].Color.Type != 2 {
+		t.Errorf("stop 0 should be pulse (2), got %d", bg.Stops[0].Color.Type)
+	}
+	if bg.Stops[0].Color.Speed != 6 {
+		t.Errorf("stop 0 speed mismatch: %f", bg.Stops[0].Color.Speed)
+	}
+	if bg.Stops[2].Color.Type != 1 {
+		t.Errorf("stop 2 should be solid (1), got %d", bg.Stops[2].Color.Type)
+	}
+	if bg.Stops[2].Color.Base != 0x1E1E2E {
+		t.Errorf("stop 2 base mismatch: %x", bg.Stops[2].Color.Base)
+	}
+}
+
 func TestBufferDeltaInvalid(t *testing.T) {
 	if _, err := DecodeBufferDelta([]byte("short")); err == nil {
 		t.Fatalf("expected error for short payload")
