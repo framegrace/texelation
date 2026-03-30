@@ -208,7 +208,7 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 
 // protocolDescToColor converts a protocol DynColorDesc to a color.DynamicColorDesc.
 func protocolDescToColor(d protocol.DynColorDesc) color.DynamicColorDesc {
-	return color.DynamicColorDesc{
+	desc := color.DynamicColorDesc{
 		Type:   d.Type,
 		Base:   d.Base,
 		Target: d.Target,
@@ -217,6 +217,19 @@ func protocolDescToColor(d protocol.DynColorDesc) color.DynamicColorDesc {
 		Min:    d.Min,
 		Max:    d.Max,
 	}
+	if len(d.Stops) > 0 {
+		desc.Stops = make([]color.GradientStopDesc, len(d.Stops))
+		for i, s := range d.Stops {
+			desc.Stops[i] = color.GradientStopDesc{
+				Position: s.Position,
+				Color: color.DynamicColorDesc{
+					Type: s.Color.Type, Base: s.Color.Base, Target: s.Color.Target,
+					Easing: s.Color.Easing, Speed: s.Color.Speed, Min: s.Color.Min, Max: s.Color.Max,
+				},
+			}
+		}
+	}
+	return desc
 }
 
 func showWorkspaceBuffer(screen tcell.Screen, buffer [][]client.Cell, defaultStyle tcell.Style) {
