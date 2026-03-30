@@ -638,6 +638,7 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 		d.zoomedPane = nil
 	}
 
+	created := false
 	if ws, exists := d.workspaces[id]; exists {
 		d.activeWorkspace = ws
 	} else {
@@ -648,6 +649,7 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 		}
 		d.workspaces[id] = ws
 		d.activeWorkspace = ws
+		created = true
 
 		if d.InitAppName != "" {
 			if appInstance := d.registry.CreateApp(d.InitAppName, nil); appInstance != nil {
@@ -676,6 +678,9 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 		sp.app.SetRefreshNotifier(notifier)
 	}
 	d.recalculateLayout()
+	if created {
+		d.broadcastWorkspacesChanged()
+	}
 	d.broadcastWorkspaceSwitched()
 	d.broadcastActivePaneChanged()
 	d.notifyFocusActive()
@@ -702,6 +707,67 @@ func (d *DesktopEngine) switchWorkspaceRelative(offset int) {
 	}
 	next := (current + offset + len(ids)) % len(ids)
 	d.SwitchToWorkspace(ids[next])
+}
+
+// CreateWorkspace creates a new workspace with the given name, switches to it,
+// and returns the new workspace ID.
+func (d *DesktopEngine) CreateWorkspace(name string) int {
+	// Find the next available ID.
+	maxID := 0
+	for id := range d.workspaces {
+		if id > maxID {
+			maxID = id
+		}
+	}
+	newID := maxID + 1
+	d.SwitchToWorkspace(newID) // creates + switches
+	if name != "" {
+		d.RenameWorkspace(newID, name)
+	}
+	return newID
+}
+
+// CloseWorkspace closes the workspace with the given ID, stopping all its apps.
+// Cannot close the last remaining workspace.
+func (d *DesktopEngine) CloseWorkspace(id int) {
+	if len(d.workspaces) <= 1 {
+		return // don't close the last workspace
+	}
+	ws, exists := d.workspaces[id]
+	if !exists {
+		return
+	}
+	// Stop all apps in this workspace
+	if ws.tree != nil {
+		var stopAll func(*Node)
+		stopAll = func(n *Node) {
+			if n == nil {
+				return
+			}
+			if n.Pane != nil && n.Pane.app != nil {
+				d.appLifecycle.StopApp(n.Pane.app)
+			}
+			for _, child := range n.Children {
+				stopAll(child)
+			}
+		}
+		stopAll(ws.tree.Root)
+	}
+	delete(d.workspaces, id)
+
+	// Switch to another workspace if this was the active one
+	if d.activeWorkspace == ws {
+		for _, other := range d.workspaces {
+			d.activeWorkspace = other
+			break
+		}
+		d.recalculateLayout()
+		d.broadcastWorkspaceSwitched()
+		d.broadcastActivePaneChanged()
+		d.notifyFocusActive()
+		d.broadcastTreeChanged()
+	}
+	d.broadcastWorkspacesChanged()
 }
 
 // RenameWorkspace sets the display name for the workspace with the given id.

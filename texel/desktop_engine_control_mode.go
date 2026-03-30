@@ -1,8 +1,6 @@
 package texel
 
 import (
-	"strconv"
-
 	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 )
@@ -72,52 +70,87 @@ func (d *DesktopEngine) toggleZoom() {
 	d.broadcastTreeChanged()
 }
 
-// enterTabMode activates tab navigation mode. Control mode is exited first.
-func (d *DesktopEngine) enterTabMode() {
+// startNewTab tells the status bar to create a new tab editor after the current tab.
+// Keys are routed to the editor until Enter (create) or Escape (cancel).
+func (d *DesktopEngine) startNewTab() {
+	// Exit nav mode if active (clean up pulse).
+	if d.inTabMode {
+		d.exitTabMode()
+	}
 	d.inTabMode = true
 	for _, sp := range d.statusPanes {
 		if handler, ok := sp.app.(TabModeHandler); ok {
-			handler.EnterTabMode()
+			handler.StartNewTab()
 		}
 	}
-	d.broadcastModeChanged()
 }
 
-// exitTabMode leaves tab navigation mode.
+// startCloseWorkspace shows a confirmation toast for closing the active workspace.
+// Keys are routed to the status bar for Y/N confirmation.
+func (d *DesktopEngine) startCloseWorkspace() {
+	if len(d.workspaces) <= 1 {
+		return // can't close the last one
+	}
+	d.inTabMode = true
+	for _, sp := range d.statusPanes {
+		if handler, ok := sp.app.(TabModeHandler); ok {
+			handler.StartCloseWorkspace()
+		}
+	}
+}
+
+// enterTabNavMode activates lightweight tab navigation (Shift+Up past top pane).
+// Left/Right switch workspaces, Shift+Down or Escape exits.
+func (d *DesktopEngine) enterTabNavMode() {
+	d.inTabMode = true
+	for _, sp := range d.statusPanes {
+		if handler, ok := sp.app.(TabModeHandler); ok {
+			handler.EnterNavMode()
+		}
+	}
+}
+
+// exitTabMode leaves tab editing mode.
 func (d *DesktopEngine) exitTabMode() {
 	d.inTabMode = false
-	// Cancel any active tab edit.
 	for _, sp := range d.statusPanes {
 		if handler, ok := sp.app.(TabModeHandler); ok {
 			handler.ExitTabMode()
 		}
 	}
-	d.broadcastModeChanged()
 }
 
-// handleTabMode routes keys to the status bar's TabBar during tab mode.
+// handleTabMode routes keys to the status bar's tab editor, or handles
+// lightweight tab navigation (Shift+Up past top pane).
 func (d *DesktopEngine) handleTabMode(ev *tcell.EventKey) {
-	if ev.Key() == tcell.KeyEsc {
-		d.exitTabMode()
-		return
-	}
-	// Shift+Down exits tab mode and returns focus to panes.
-	if ev.Key() == tcell.KeyDown && ev.Modifiers()&tcell.ModShift != 0 {
-		d.exitTabMode()
-		return
-	}
-	// Shift+Left/Right also navigates workspaces in tab mode.
-	if ev.Modifiers()&tcell.ModShift != 0 {
-		switch ev.Key() {
-		case tcell.KeyLeft, tcell.KeyRight:
-			// Fall through to status bar handler (same as unshifted arrows)
-		}
-	}
+	// Check if a status bar handler is actively editing/confirming.
 	for _, sp := range d.statusPanes {
 		if handler, ok := sp.app.(TabModeHandler); ok {
-			handler.HandleTabModeKey(ev)
-			return
+			if handler.IsActive() {
+				handler.HandleTabModeKey(ev)
+				if handler.WantsExitTabMode() {
+					d.exitTabMode()
+				}
+				return
+			}
 		}
+	}
+
+	// Lightweight navigation mode (from Shift+Up past top pane).
+	switch ev.Key() {
+	case tcell.KeyEsc:
+		d.exitTabMode()
+	case tcell.KeyDown:
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			d.exitTabMode()
+		}
+	case tcell.KeyLeft:
+		d.switchWorkspaceRelative(-1)
+	case tcell.KeyRight:
+		d.switchWorkspaceRelative(1)
+	default:
+		// Any other key exits nav mode and is swallowed
+		d.exitTabMode()
 	}
 }
 
@@ -143,13 +176,6 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 	}
 
 	r := ev.Rune()
-	if r >= '1' && r <= '9' {
-		wsID, _ := strconv.Atoi(string(r))
-		d.SwitchToWorkspace(wsID)
-		d.toggleControlMode()
-		return
-	}
-
 	exitControlMode := true
 	switch r {
 	case 'x':
@@ -176,7 +202,9 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 	case 'f':
 		d.launchConfigEditorOverlay("system")
 	case 't':
-		d.enterTabMode()
+		d.startNewTab()
+	case 'X':
+		d.startCloseWorkspace()
 	}
 
 	if exitControlMode {

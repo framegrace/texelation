@@ -101,11 +101,11 @@ func controlSection() helpSection {
 			{"x", "Close active pane"},
 			{"w", "Swap panes (then Arrow)"},
 			{"z", "Toggle zoom"},
-			{"t", "Tab mode (rename workspaces)"},
+			{"t", "New workspace (type name, Enter)"},
+			{"X", "Close workspace (y/n confirm)"},
 			{"l", "Open Launcher"},
 			{"h", "Show Help"},
 			{"f", "Open Config Editor"},
-			{"1-9", "Switch/create workspace"},
 			{"Esc", "Exit control mode"},
 		},
 	}

@@ -35,10 +35,15 @@ type StatusBarApp struct {
 	activeID   int
 	actions    texel.StatusBarActions
 	stopClock  chan struct{}
+	stopOnce   sync.Once
 
-	// Tab mode
-	tabMode    bool
-	accentBase tcell.Color // stored accent for pulsation
+	// Tab creation / deletion / navigation
+	creatingNewWs    bool  // true while editing a newly created tab
+	newTabInsertIdx  int   // where the new tab was inserted
+	pendingDelete    int   // workspace ID awaiting delete confirmation (0 = none)
+	wantsExitTabMode bool  // set when the desktop should exit tab mode
+	navMode          bool  // lightweight navigation with pulse
+	tabOrder         []int // workspace IDs in display order
 
 	// FPS smoothing
 	lastRenderTime time.Time
@@ -94,8 +99,25 @@ func New() *StatusBarApp {
 		}
 	}
 
-	// Wire tab rename -> workspace rename.
+	// Wire tab rename -> workspace rename or creation.
 	tabBar.OnRename = func(index int, newName string) {
+		if sb.creatingNewWs {
+			// Creating a new workspace — confirm with Enter
+			sb.creatingNewWs = false
+			sb.mu.RLock()
+			actions := sb.actions
+			sb.mu.RUnlock()
+			if actions != nil {
+				if newName == "" {
+					newName = fmt.Sprintf("%d", len(sb.tabBar.Tabs))
+				}
+				actions.CreateWorkspace(newName)
+			}
+			// Signal desktop to exit tab mode so user lands on the new workspace
+			sb.wantsExitTabMode = true
+			return
+		}
+		// Renaming an existing workspace
 		sb.mu.RLock()
 		actions := sb.actions
 		var wsID int
@@ -137,7 +159,7 @@ func (sb *StatusBarApp) Run() error {
 }
 
 func (sb *StatusBarApp) Stop() {
-	close(sb.stopClock)
+	sb.stopOnce.Do(func() { close(sb.stopClock) })
 	sb.app.Stop()
 }
 
@@ -206,24 +228,66 @@ func (sb *StatusBarApp) OnEvent(event texel.Event) {
 	}
 }
 
-// handleWorkspacesChanged rebuilds the tab bar from the workspace list.
+// handleWorkspacesChanged rebuilds the tab bar preserving user-defined tab order.
 func (sb *StatusBarApp) handleWorkspacesChanged(p texel.WorkspacesChangedPayload) {
 	sb.mu.Lock()
 	sb.workspaces = p.Workspaces
 	sb.activeID = p.ActiveID
 
-	// Rebuild tab items.
-	tabs := make([]primitives.TabItem, len(p.Workspaces))
+	// Build a lookup of current workspaces.
+	wsMap := make(map[int]texel.WorkspaceInfo, len(p.Workspaces))
+	for _, ws := range p.Workspaces {
+		wsMap[ws.ID] = ws
+	}
+
+	// Update tabOrder: keep existing order, remove deleted, insert new.
+	// Remove IDs that no longer exist.
+	kept := make([]int, 0, len(sb.tabOrder))
+	for _, id := range sb.tabOrder {
+		if _, ok := wsMap[id]; ok {
+			kept = append(kept, id)
+		}
+	}
+	// Find new IDs not in tabOrder.
+	existing := make(map[int]bool, len(kept))
+	for _, id := range kept {
+		existing[id] = true
+	}
+	var newIDs []int
+	for _, ws := range p.Workspaces {
+		if !existing[ws.ID] {
+			newIDs = append(newIDs, ws.ID)
+		}
+	}
+	// Insert new IDs at the recorded insert position, or append.
+	if len(newIDs) > 0 && sb.newTabInsertIdx > 0 && sb.newTabInsertIdx <= len(kept) {
+		order := make([]int, 0, len(kept)+len(newIDs))
+		order = append(order, kept[:sb.newTabInsertIdx]...)
+		order = append(order, newIDs...)
+		order = append(order, kept[sb.newTabInsertIdx:]...)
+		kept = order
+		sb.newTabInsertIdx = 0
+	} else {
+		kept = append(kept, newIDs...)
+	}
+	sb.tabOrder = kept
+
+	// Build tabs in tabOrder sequence.
+	tabs := make([]primitives.TabItem, 0, len(kept))
 	activeIdx := 0
-	for i, ws := range p.Workspaces {
+	for i, id := range kept {
+		ws, ok := wsMap[id]
+		if !ok {
+			continue
+		}
 		label := ws.Name
 		if label == "" {
 			label = fmt.Sprintf("%d", ws.ID)
 		}
-		tabs[i] = primitives.TabItem{
+		tabs = append(tabs, primitives.TabItem{
 			Label: label,
 			Color: dyncolor.Solid(darkenColor(ws.Color, 0.5)),
-		}
+		})
 		if ws.ID == p.ActiveID {
 			activeIdx = i
 		}
@@ -263,10 +327,9 @@ func (sb *StatusBarApp) handleWorkspaceSwitched(p texel.WorkspaceSwitchedPayload
 }
 
 // setAccentColor updates both the blend line and the TabBar active/inactive tab colors.
-// If tab mode is active, the animated colors are rebuilt from the new base.
 func (sb *StatusBarApp) setAccentColor(c tcell.Color) {
-	if sb.tabMode {
-		sb.accentBase = c
+	if sb.navMode {
+		// Rebuild pulse from new color
 		pulse := makePulse(c)
 		sb.tabBar.Style.ActiveBG = pulse
 		sb.blendLine.SetAccentDynamic(pulse)
@@ -277,7 +340,7 @@ func (sb *StatusBarApp) setAccentColor(c tcell.Color) {
 	sb.tabBar.Style.InactiveBG = dyncolor.Solid(darkenColor(c, 0.5))
 }
 
-// makePulse creates a DynamicColor that oscillates a base color between 70% and 100% brightness.
+// makePulse creates a DynamicColor that oscillates brightness between 70% and 100%.
 func makePulse(base tcell.Color) dyncolor.DynamicColor {
 	r, g, b := base.RGB()
 	startTime := time.Now()
@@ -345,89 +408,171 @@ func (sb *StatusBarApp) clockLoop() {
 
 // --- TabModeHandler interface ---
 
-// HandleTabModeKey processes a key event while tab mode is active.
-// Left/Right navigate tabs, Enter toggles edit, Escape is handled by the desktop.
+// StartNewTab inserts a new tab after the current one and opens the editor.
+func (sb *StatusBarApp) StartNewTab() {
+	sb.creatingNewWs = true
+	insertIdx := sb.tabBar.ActiveIdx + 1
+	sb.newTabInsertIdx = insertIdx // remember for handleWorkspacesChanged
+	newColor := texel.WorkspaceAccentColor(len(sb.tabBar.Tabs))
+
+	// Insert tab after the current active one.
+	newTab := primitives.TabItem{
+		Label: "",
+		Color: dyncolor.Solid(darkenColor(newColor, 0.5)),
+	}
+	tabs := make([]primitives.TabItem, 0, len(sb.tabBar.Tabs)+1)
+	tabs = append(tabs, sb.tabBar.Tabs[:insertIdx]...)
+	tabs = append(tabs, newTab)
+	tabs = append(tabs, sb.tabBar.Tabs[insertIdx:]...)
+	sb.tabBar.Tabs = tabs
+	sb.tabBar.SetActive(insertIdx)
+
+	// Set accent color to the new tab's color immediately so it looks right while editing.
+	sb.setAccentColor(newColor)
+
+	sb.tabBar.EditTab(insertIdx)
+	sb.refresh()
+}
+
+// StartCloseWorkspace shows a confirmation toast for closing the active workspace.
+func (sb *StatusBarApp) StartCloseWorkspace() {
+	sb.mu.RLock()
+	var wsID int
+	idx := sb.tabBar.ActiveIdx
+	if idx >= 0 && idx < len(sb.workspaces) {
+		wsID = sb.workspaces[idx].ID
+	}
+	wsCount := len(sb.workspaces)
+	sb.mu.RUnlock()
+
+	if wsCount <= 1 {
+		sb.blendLine.ShowToast("Cannot close the last workspace", texel.ToastWarning, 2*time.Second)
+		sb.wantsExitTabMode = true
+		sb.refresh()
+		return
+	}
+	if wsID > 0 {
+		sb.pendingDelete = wsID
+		name := sb.tabBar.Tabs[idx].Label
+		sb.blendLine.ShowToast(fmt.Sprintf("Close workspace '%s'? (y/n)", name), texel.ToastError, 30*time.Second)
+	}
+	sb.refresh()
+}
+
+// HandleTabModeKey routes keys to the tab editor or delete confirmation.
 func (sb *StatusBarApp) HandleTabModeKey(ev *tcell.EventKey) {
-	// If editing, route to TabBar (which routes to the inline editor)
-	if sb.tabBar.IsEditing() {
-		sb.tabBar.HandleKey(ev)
+	// Handle delete confirmation
+	if sb.pendingDelete > 0 {
+		switch ev.Key() {
+		case tcell.KeyRune:
+			if ev.Rune() == 'y' || ev.Rune() == 'Y' {
+				sb.mu.RLock()
+				actions := sb.actions
+				id := sb.pendingDelete
+				sb.mu.RUnlock()
+				if actions != nil {
+					actions.CloseWorkspace(id)
+				}
+				sb.blendLine.DismissToast()
+			} else {
+				sb.blendLine.DismissToast()
+			}
+		case tcell.KeyEsc:
+			sb.blendLine.DismissToast()
+		}
+		sb.pendingDelete = 0
+		sb.wantsExitTabMode = true
 		sb.refresh()
 		return
 	}
 
-	switch ev.Key() {
-	case tcell.KeyLeft:
-		idx := sb.tabBar.ActiveIdx - 1
-		if idx >= 0 {
-			sb.tabBar.SetActive(idx)
-			sb.switchToTabIdx(idx)
-		}
-	case tcell.KeyRight:
-		idx := sb.tabBar.ActiveIdx + 1
-		if idx < len(sb.tabBar.Tabs) {
-			sb.tabBar.SetActive(idx)
-			sb.switchToTabIdx(idx)
-		}
-	case tcell.KeyEnter:
-		sb.tabBar.EditTab(sb.tabBar.ActiveIdx)
-	}
-	sb.refresh()
-}
-
-// ExitTabMode cancels any active edit, stops pulsation, restores static colors.
-func (sb *StatusBarApp) ExitTabMode() {
+	// Handle tab name editing
 	if sb.tabBar.IsEditing() {
-		sb.tabBar.CancelEdit()
-	}
-	if sb.tabMode {
-		sb.tabMode = false
-		// Restore the active workspace's own accent color (static, stops animation).
-		sb.mu.RLock()
-		for _, ws := range sb.workspaces {
-			if ws.ID == sb.activeID && ws.Color != 0 {
-				sb.setAccentColor(ws.Color)
-				break
+		switch ev.Key() {
+		case tcell.KeyEsc:
+			sb.tabBar.CancelEdit()
+			if sb.creatingNewWs {
+				sb.creatingNewWs = false
+				idx := sb.tabBar.ActiveIdx
+				if idx >= 0 && idx < len(sb.tabBar.Tabs) {
+					sb.tabBar.Tabs = append(sb.tabBar.Tabs[:idx], sb.tabBar.Tabs[idx+1:]...)
+					if sb.tabBar.ActiveIdx >= len(sb.tabBar.Tabs) {
+						sb.tabBar.ActiveIdx = len(sb.tabBar.Tabs) - 1
+					}
+				}
 			}
+			sb.wantsExitTabMode = true
+		default:
+			sb.tabBar.HandleKey(ev)
 		}
-		sb.mu.RUnlock()
+		sb.refresh()
+		return
 	}
+
+	// Nothing active — exit
+	sb.wantsExitTabMode = true
 	sb.refresh()
 }
 
-// EnterTabMode activates pulsating animation on the active tab.
-func (sb *StatusBarApp) EnterTabMode() {
-	sb.tabMode = true
+// EnterNavMode starts pulsating the active tab for visual feedback during navigation.
+func (sb *StatusBarApp) EnterNavMode() {
+	sb.navMode = true
 	sb.mu.RLock()
-	// Find current accent color from active workspace.
+	var accentColor tcell.Color
 	for _, ws := range sb.workspaces {
 		if ws.ID == sb.activeID && ws.Color != 0 {
-			sb.accentBase = ws.Color
+			accentColor = ws.Color
 			break
 		}
 	}
 	sb.mu.RUnlock()
-
-	// Build a pulsating color function from the base accent.
-	pulse := makePulse(sb.accentBase)
-
-	// Apply to both TabBar and blend line.
-	sb.tabBar.Style.ActiveBG = pulse
-	sb.blendLine.SetAccentDynamic(pulse)
-
+	if accentColor != 0 {
+		pulse := makePulse(accentColor)
+		sb.tabBar.Style.ActiveBG = pulse
+		sb.blendLine.SetAccentDynamic(pulse)
+	}
 	sb.refresh()
 }
 
-func (sb *StatusBarApp) switchToTabIdx(idx int) {
+// ExitNavMode stops the pulse and restores static colors.
+func (sb *StatusBarApp) exitNavMode() {
+	if !sb.navMode {
+		return
+	}
+	sb.navMode = false
 	sb.mu.RLock()
-	actions := sb.actions
-	var wsID int
-	if idx >= 0 && idx < len(sb.workspaces) {
-		wsID = sb.workspaces[idx].ID
+	for _, ws := range sb.workspaces {
+		if ws.ID == sb.activeID && ws.Color != 0 {
+			sb.setAccentColor(ws.Color)
+			break
+		}
 	}
 	sb.mu.RUnlock()
-	if actions != nil && wsID > 0 {
-		actions.SwitchToWorkspace(wsID)
+	sb.refresh()
+}
+
+// ExitTabMode cancels any active edit and cleans up.
+func (sb *StatusBarApp) ExitTabMode() {
+	if sb.tabBar.IsEditing() {
+		sb.tabBar.CancelEdit()
 	}
+	sb.creatingNewWs = false
+	sb.exitNavMode()
+	sb.refresh()
+}
+
+// IsActive returns true if the status bar is editing a tab name or awaiting delete confirmation.
+func (sb *StatusBarApp) IsActive() bool {
+	return sb.tabBar.IsEditing() || sb.pendingDelete > 0
+}
+
+// WantsExitTabMode returns true if the status bar wants the desktop to exit tab mode.
+func (sb *StatusBarApp) WantsExitTabMode() bool {
+	if sb.wantsExitTabMode {
+		sb.wantsExitTabMode = false
+		return true
+	}
+	return false
 }
 
 // refresh sends a non-blocking signal on the app's refresh channel.
