@@ -58,6 +58,9 @@ type clientState struct {
 	selection            selectionState
 	idleWatcher          *effects.IdleWatcher
 
+	// Animation time for client-side DynamicColor resolution
+	animStart time.Time
+
 	// Restart notification state
 	showRestartNotification      bool
 	restartNotificationDismissed bool
