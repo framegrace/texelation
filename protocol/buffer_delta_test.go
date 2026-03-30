@@ -55,6 +55,80 @@ func TestBufferDeltaRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBufferDeltaDynamicColorRoundTrip(t *testing.T) {
+	delta := BufferDelta{
+		PaneID:   [16]byte{1},
+		Revision: 1,
+		Styles: []StyleEntry{
+			{
+				AttrFlags: AttrHasDynamic,
+				FgModel:   ColorModelRGB,
+				FgValue:   0xFF0000,
+				BgModel:   ColorModelRGB,
+				BgValue:   0x0000FF,
+				DynBG: DynColorDesc{
+					Type:  2, // pulse
+					Base:  0x89B4FA,
+					Speed: 6,
+					Min:   0.7,
+					Max:   1.0,
+				},
+			},
+		},
+		Rows: []RowDelta{{Row: 0, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}}},
+	}
+	encoded, err := EncodeBufferDelta(delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeBufferDelta(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Styles[0].DynBG.Type != 2 {
+		t.Errorf("expected pulse type 2, got %d", decoded.Styles[0].DynBG.Type)
+	}
+	if decoded.Styles[0].DynBG.Base != 0x89B4FA {
+		t.Errorf("base color mismatch: %x", decoded.Styles[0].DynBG.Base)
+	}
+	if decoded.Styles[0].DynBG.Speed != 6 {
+		t.Errorf("speed mismatch: %f", decoded.Styles[0].DynBG.Speed)
+	}
+	if decoded.Styles[0].DynBG.Min != 0.7 {
+		t.Errorf("min mismatch: %f", decoded.Styles[0].DynBG.Min)
+	}
+	if decoded.Styles[0].DynBG.Max != 1.0 {
+		t.Errorf("max mismatch: %f", decoded.Styles[0].DynBG.Max)
+	}
+	// DynFG should be zero (not set)
+	if decoded.Styles[0].DynFG.Type != 0 {
+		t.Errorf("expected DynFG type 0, got %d", decoded.Styles[0].DynFG.Type)
+	}
+}
+
+func TestBufferDeltaStaticBackwardCompat(t *testing.T) {
+	delta := BufferDelta{
+		PaneID:   [16]byte{1},
+		Revision: 1,
+		Styles:   []StyleEntry{{FgModel: ColorModelRGB, FgValue: 0xFF0000}},
+		Rows:     []RowDelta{{Row: 0, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}}},
+	}
+	encoded, err := EncodeBufferDelta(delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeBufferDelta(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Styles[0].AttrFlags&AttrHasDynamic != 0 {
+		t.Error("static style should not have dynamic flag")
+	}
+	if decoded.Styles[0].DynBG.Type != 0 {
+		t.Error("static style should have zero DynBG")
+	}
+}
+
 func TestBufferDeltaInvalid(t *testing.T) {
 	if _, err := DecodeBufferDelta([]byte("short")); err == nil {
 		t.Fatalf("expected error for short payload")
