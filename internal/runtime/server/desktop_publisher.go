@@ -135,7 +135,7 @@ func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32
 		builders := make([]*strings.Builder, 0)
 
 		for x, cell := range row {
-			key, entry := convertStyle(cell.Style)
+			key, entry := convertCell(cell)
 			index, ok := styleMap[key]
 			if !ok {
 				styles = append(styles, entry)
@@ -172,10 +172,12 @@ type styleKey struct {
 	fgValue   uint32
 	bgModel   protocol.ColorModel
 	bgValue   uint32
+	dynFGType uint8
+	dynBGType uint8
 }
 
-func convertStyle(style tcell.Style) (styleKey, protocol.StyleEntry) {
-	fg, bg, attrs := style.Decompose()
+func convertCell(cell texel.Cell) (styleKey, protocol.StyleEntry) {
+	fg, bg, attrs := cell.Style.Decompose()
 
 	attrFlags := uint16(0)
 	if attrs&tcell.AttrBold != 0 {
@@ -208,6 +210,22 @@ func convertStyle(style tcell.Style) (styleKey, protocol.StyleEntry) {
 		BgModel:   bgModel,
 		BgValue:   bgValue,
 	}
+
+	if cell.DynFG.IsAnimated() || cell.DynBG.IsAnimated() {
+		entry.AttrFlags |= protocol.AttrHasDynamic
+		key.attrFlags |= protocol.AttrHasDynamic
+		entry.DynFG = protocol.DynColorDesc{
+			Type: cell.DynFG.Type, Base: cell.DynFG.Base, Target: cell.DynFG.Target,
+			Easing: cell.DynFG.Easing, Speed: cell.DynFG.Speed, Min: cell.DynFG.Min, Max: cell.DynFG.Max,
+		}
+		entry.DynBG = protocol.DynColorDesc{
+			Type: cell.DynBG.Type, Base: cell.DynBG.Base, Target: cell.DynBG.Target,
+			Easing: cell.DynBG.Easing, Speed: cell.DynBG.Speed, Min: cell.DynBG.Min, Max: cell.DynBG.Max,
+		}
+		key.dynFGType = cell.DynFG.Type
+		key.dynBGType = cell.DynBG.Type
+	}
+
 	return key, entry
 }
 
