@@ -191,38 +191,45 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 
 	// Resolve the dynamic accent color for this frame.
 	ctx := color.ColorContext{X: x, Y: y, W: w, H: 1, T: painter.Time()}
-	resolvedAccent := accent.Resolve(ctx)
 	if !accent.IsStatic() {
 		painter.MarkAnimated()
 	}
 
-	// Choose the accent color for the gradient.
-	gradAccent := resolvedAccent
+	// Choose the accent DynamicColor for the gradient.
+	gradAccent := accent
 	if toastActive {
 		switch toastSev {
 		case texel.ToastSuccess:
-			gradAccent = tm.GetSemanticColor("action.success")
+			gradAccent = color.Solid(tm.GetSemanticColor("action.success"))
 		case texel.ToastWarning:
-			gradAccent = tm.GetSemanticColor("action.warning")
+			gradAccent = color.Solid(tm.GetSemanticColor("action.warning"))
 		case texel.ToastError:
-			gradAccent = tm.GetSemanticColor("action.danger")
+			gradAccent = color.Solid(tm.GetSemanticColor("action.danger"))
 		}
 	}
 
-	// Build gradient: accent → accent (30%) → contentBG.
-	grad := color.Linear(
-		0,
-		color.Stop(0, gradAccent),
-		color.Stop(0.3, gradAccent),
-		color.Stop(1, contentBG),
-	).WithLocal().Build()
-
-	bgStyle := color.DynamicStyle{FG: color.Solid(tcell.ColorDefault), BG: grad}
-
-	// Fill the row with the gradient background.
+	// Accent portion (0-30%): use accent DynamicColor directly so Pulse
+	// descriptors propagate for client-side animation.
+	// Fade portion (30-100%): spatial gradient from accent to contentBG.
 	painter.SetWidgetRect(bil.Rect)
-	for col := x; col < x+w; col++ {
-		painter.SetDynamicCell(col, y, ' ', bgStyle)
+	resolvedAccent := gradAccent.Resolve(ctx)
+	accentEnd := x + int(float32(w)*0.3)
+	gradAccentDS := color.DynamicStyle{FG: color.Solid(tcell.ColorDefault), BG: gradAccent}
+	for col := x; col < accentEnd && col < x+w; col++ {
+		painter.SetDynamicCell(col, y, ' ', gradAccentDS)
+	}
+	if accentEnd < x+w {
+		fadeGrad := color.Linear(0,
+			color.Stop(0, resolvedAccent),
+			color.Stop(1, contentBG),
+		).WithLocal().Build()
+		fadeDS := color.DynamicStyle{FG: color.Solid(tcell.ColorDefault), BG: fadeGrad}
+		fadeRect := core.Rect{X: accentEnd, Y: y, W: x + w - accentEnd, H: 1}
+		painter.SetWidgetRect(fadeRect)
+		for col := accentEnd; col < x+w; col++ {
+			painter.SetDynamicCell(col, y, ' ', fadeDS)
+		}
+		painter.SetWidgetRect(bil.Rect)
 	}
 
 	// Resolve text colors.

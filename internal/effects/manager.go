@@ -82,13 +82,15 @@ func (m *Manager) requestFrame() {
 	}
 	ch := m.renderCh
 	m.frameTimer = time.AfterFunc(16*time.Millisecond, func() {
+		// Clear timer BEFORE sending so RequestFrame() can schedule the
+		// next frame immediately when the render goroutine calls it.
+		m.frameMu.Lock()
+		m.frameTimer = nil
+		m.frameMu.Unlock()
 		select {
 		case ch <- struct{}{}:
 		default:
 		}
-		m.frameMu.Lock()
-		m.frameTimer = nil
-		m.frameMu.Unlock()
 	})
 	m.frameMu.Unlock()
 }

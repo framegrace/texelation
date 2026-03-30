@@ -108,12 +108,7 @@ func render(state *clientState, screen tcell.Screen) {
 	showWorkspaceBuffer(screen, workspaceBuffer, state.defaultStyle)
 	screen.Show()
 
-	// If any dynamic colors were resolved, schedule another frame via the
-	// effects timer. This uses a single 16ms AfterFunc (no feedback loop)
-	// for smooth, regular animation ticks.
-	if hasDynamic && state.effects != nil {
-		state.effects.RequestFrame()
-	}
+	state.dynAnimating = hasDynamic
 
 	// Flush Kitty graphics commands after tcell has flushed its cell buffer.
 	if state.kitty != nil && state.ttyWriter != nil {
