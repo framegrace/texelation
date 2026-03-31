@@ -71,7 +71,6 @@ func Run(opts Options) error {
 		desktopBg:               tcell.ColorDefault,
 		selectionFg:             tcell.ColorBlack,
 		selectionBg:             tcell.NewRGBColor(232, 217, 255),
-		animStart:               time.Now(),
 		showRestartNotification: opts.ShowRestartNotification,
 	}
 
