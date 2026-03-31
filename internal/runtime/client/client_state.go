@@ -58,6 +58,10 @@ type clientState struct {
 	selection            selectionState
 	idleWatcher          *effects.IdleWatcher
 
+	// Animation time for client-side DynamicColor resolution
+	animStart   time.Time
+	dynAnimating bool // true when dynamic cells need continuous rendering
+
 	// Restart notification state
 	showRestartNotification      bool
 	restartNotificationDismissed bool
@@ -83,6 +87,7 @@ func (s *clientState) triggerRender() {
 		}
 	}
 }
+
 
 func (s *clientState) setThemeValue(section, key string, value interface{}) {
 	if s.themeValues == nil {

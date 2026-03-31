@@ -176,6 +176,7 @@ func main() {
 	statusApp := desktop.Registry().CreateApp("statusbar", nil)
 	if sb, ok := statusApp.(*statusbar.StatusBarApp); ok {
 		sb.SetActions(desktop)
+		sb.UI().ClientSideAnimations = true
 	}
 	desktop.AddStatusPane(statusApp.(texel.App), texel.SideTop, 2)
 

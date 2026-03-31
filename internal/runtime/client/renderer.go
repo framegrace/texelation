@@ -14,9 +14,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/framegrace/texelui/color"
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func debugLogRender(msg string) {
@@ -62,7 +64,7 @@ func render(state *clientState, screen tcell.Screen) {
 	}
 
 	// Pass 1: composite normal panes
-	compositeInto(workspaceBuffer, normalPanes, state, width, height)
+	hasDynamic := compositeInto(workspaceBuffer, normalPanes, state, width, height)
 
 	// Render images: use Kitty protocol if available, otherwise half-block fallback.
 	if state.kitty != nil {
@@ -90,7 +92,9 @@ func render(state *clientState, screen tcell.Screen) {
 	}
 
 	// Pass 2: composite floating panels on top (unaffected by workspace effects).
-	compositeInto(workspaceBuffer, floatingPanes, state, width, height)
+	if compositeInto(workspaceBuffer, floatingPanes, state, width, height) {
+		hasDynamic = true
+	}
 
 	if pane, minX, maxX, minY, maxY, ok := state.selectionBounds(); ok {
 		applySelectionHighlight(state, workspaceBuffer, pane, minX, maxX, minY, maxY)
@@ -104,6 +108,8 @@ func render(state *clientState, screen tcell.Screen) {
 	showWorkspaceBuffer(screen, workspaceBuffer, state.defaultStyle)
 	screen.Show()
 
+	state.dynAnimating = hasDynamic
+
 	// Flush Kitty graphics commands after tcell has flushed its cell buffer.
 	if state.kitty != nil && state.ttyWriter != nil {
 		if err := state.kitty.flush(state.ttyWriter); err != nil {
@@ -113,7 +119,10 @@ func render(state *clientState, screen tcell.Screen) {
 }
 
 // compositeInto renders a set of panes into the workspace buffer.
-func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, state *clientState, screenW, screenH int) {
+func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, state *clientState, screenW, screenH int) bool {
+	hasDynamic := false
+	animTime := float32(time.Since(state.animStart).Seconds())
+
 	for _, pane := range panes {
 		x := pane.Rect.X
 		y := pane.Rect.Y
@@ -164,6 +173,29 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 				}
 				cell := row[col]
 				style := cell.Style
+
+				// Resolve dynamic colors client-side
+				if cell.DynBG.Type >= 2 || cell.DynFG.Type >= 2 {
+					ctx := color.ColorContext{
+						X: col, Y: rowIdx,
+						W: w, H: h,
+						PX: x, PY: y,
+						PW: w, PH: h,
+						SX: targetX, SY: targetY,
+						SW: screenW, SH: screenH,
+						T: animTime,
+					}
+					fg, bg, attrs := style.Decompose()
+					if cell.DynBG.Type >= 2 {
+						bg = color.FromDesc(protocolDescToColor(cell.DynBG)).Resolve(ctx)
+					}
+					if cell.DynFG.Type >= 2 {
+						fg = color.FromDesc(protocolDescToColor(cell.DynFG)).Resolve(ctx)
+					}
+					style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attrs)
+					hasDynamic = true
+				}
+
 				if zoomOverlay {
 					style = applyZoomOverlay(style, 0.2, state)
 				}
@@ -171,6 +203,33 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 			}
 		}
 	}
+	return hasDynamic
+}
+
+// protocolDescToColor converts a protocol DynColorDesc to a color.DynamicColorDesc.
+func protocolDescToColor(d protocol.DynColorDesc) color.DynamicColorDesc {
+	desc := color.DynamicColorDesc{
+		Type:   d.Type,
+		Base:   d.Base,
+		Target: d.Target,
+		Easing: d.Easing,
+		Speed:  d.Speed,
+		Min:    d.Min,
+		Max:    d.Max,
+	}
+	if len(d.Stops) > 0 {
+		desc.Stops = make([]color.GradientStopDesc, len(d.Stops))
+		for i, s := range d.Stops {
+			desc.Stops[i] = color.GradientStopDesc{
+				Position: s.Position,
+				Color: color.DynamicColorDesc{
+					Type: s.Color.Type, Base: s.Color.Base, Target: s.Color.Target,
+					Easing: s.Color.Easing, Speed: s.Color.Speed, Min: s.Color.Min, Max: s.Color.Max,
+				},
+			}
+		}
+	}
+	return desc
 }
 
 func showWorkspaceBuffer(screen tcell.Screen, buffer [][]client.Cell, defaultStyle tcell.Style) {

@@ -186,6 +186,13 @@ func (e *screensaverFade) ApplyWorkspace(buffer [][]client.Cell) {
 
 func (e *screensaverFade) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
 
+// cellEqual compares two client.Cell values for equality.
+// client.Cell contains protocol.DynColorDesc which has a slice field (Stops),
+// making it incomparable with ==.
+func cellEqual(a, b client.Cell) bool {
+	return a.Ch == b.Ch && a.Style == b.Style
+}
+
 // dissolveBlender uses per-cell random dithering (the default).
 type dissolveBlender struct{}
 
@@ -196,7 +203,7 @@ func (b *dissolveBlender) Blend(orig, dst [][]client.Cell, intensity float32) {
 		srcRow := orig[y]
 		dstRow := dst[y]
 		for x := range dstRow {
-			if dstRow[x] != srcRow[x] && rand.Float32() >= intensity {
+			if !cellEqual(dstRow[x], srcRow[x]) && rand.Float32() >= intensity {
 				dstRow[x] = srcRow[x]
 			}
 		}

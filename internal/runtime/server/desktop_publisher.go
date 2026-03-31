@@ -17,6 +17,7 @@ import (
 
 	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
+	"github.com/framegrace/texelui/color"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
 )
@@ -135,7 +136,7 @@ func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32
 		builders := make([]*strings.Builder, 0)
 
 		for x, cell := range row {
-			key, entry := convertStyle(cell.Style)
+			key, entry := convertCell(cell)
 			index, ok := styleMap[key]
 			if !ok {
 				styles = append(styles, entry)
@@ -172,10 +173,12 @@ type styleKey struct {
 	fgValue   uint32
 	bgModel   protocol.ColorModel
 	bgValue   uint32
+	dynFGType uint8
+	dynBGType uint8
 }
 
-func convertStyle(style tcell.Style) (styleKey, protocol.StyleEntry) {
-	fg, bg, attrs := style.Decompose()
+func convertCell(cell texel.Cell) (styleKey, protocol.StyleEntry) {
+	fg, bg, attrs := cell.Style.Decompose()
 
 	attrFlags := uint16(0)
 	if attrs&tcell.AttrBold != 0 {
@@ -208,6 +211,16 @@ func convertStyle(style tcell.Style) (styleKey, protocol.StyleEntry) {
 		BgModel:   bgModel,
 		BgValue:   bgValue,
 	}
+
+	if cell.DynFG.IsDynamic() || cell.DynBG.IsDynamic() {
+		entry.AttrFlags |= protocol.AttrHasDynamic
+		key.attrFlags |= protocol.AttrHasDynamic
+		entry.DynFG = convertDynDesc(cell.DynFG)
+		entry.DynBG = convertDynDesc(cell.DynBG)
+		key.dynFGType = cell.DynFG.Type
+		key.dynBGType = cell.DynBG.Type
+	}
+
 	return key, entry
 }
 
@@ -268,6 +281,26 @@ func convertColor(color tcell.Color) (protocol.ColorModel, uint32) {
 
 	r, g, b := color.RGB()
 	return protocol.ColorModelRGB, (uint32(r)&0xff)<<16 | (uint32(g)&0xff)<<8 | (uint32(b) & 0xff)
+}
+
+func convertDynDesc(d color.DynamicColorDesc) protocol.DynColorDesc {
+	pd := protocol.DynColorDesc{
+		Type: d.Type, Base: d.Base, Target: d.Target,
+		Easing: d.Easing, Speed: d.Speed, Min: d.Min, Max: d.Max,
+	}
+	if len(d.Stops) > 0 {
+		pd.Stops = make([]protocol.DynColorStopDesc, len(d.Stops))
+		for i, s := range d.Stops {
+			pd.Stops[i] = protocol.DynColorStopDesc{
+				Position: s.Position,
+				Color: protocol.DynColorDesc{
+					Type: s.Color.Type, Base: s.Color.Base, Target: s.Color.Target,
+					Easing: s.Color.Easing, Speed: s.Color.Speed, Min: s.Color.Min, Max: s.Color.Max,
+				},
+			}
+		}
+	}
+	return pd
 }
 
 func rowsEqual(a, b []texel.Cell) bool {

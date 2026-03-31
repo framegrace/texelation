@@ -9,7 +9,6 @@ package statusbar
 
 import (
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -328,11 +327,16 @@ func (sb *StatusBarApp) handleWorkspaceSwitched(p texel.WorkspaceSwitchedPayload
 	sb.refresh()
 }
 
+// UI returns the underlying UIManager for configuration.
+func (sb *StatusBarApp) UI() *core.UIManager {
+	return sb.ui
+}
+
 // setAccentColor updates both the blend line and the TabBar active/inactive tab colors.
 func (sb *StatusBarApp) setAccentColor(c tcell.Color) {
 	if sb.navMode {
 		// Rebuild pulse from new color
-		pulse := makePulse(c)
+		pulse := dyncolor.Pulse(c, 0.7, 1.0, 6)
 		sb.tabBar.Style.ActiveBG = pulse
 		sb.blendLine.SetAccentDynamic(pulse)
 	} else {
@@ -340,21 +344,6 @@ func (sb *StatusBarApp) setAccentColor(c tcell.Color) {
 		sb.tabBar.Style.ActiveBG = dyncolor.Solid(c)
 	}
 	sb.tabBar.Style.InactiveBG = dyncolor.Solid(darkenColor(c, 0.5))
-}
-
-// makePulse creates a DynamicColor that oscillates brightness between 70% and 100%.
-func makePulse(base tcell.Color) dyncolor.DynamicColor {
-	r, g, b := base.RGB()
-	startTime := time.Now()
-	return dyncolor.Func(func(_ dyncolor.ColorContext) tcell.Color {
-		elapsed := time.Since(startTime).Seconds()
-		factor := 0.7 + 0.3*math.Sin(elapsed*6)
-		return tcell.NewRGBColor(
-			int32(float64(r)*factor),
-			int32(float64(g)*factor),
-			int32(float64(b)*factor),
-		)
-	})
 }
 
 // darkenColor scales an RGB color's channels by the given factor (0.0–1.0).
@@ -539,7 +528,7 @@ func (sb *StatusBarApp) EnterNavMode() {
 	}
 	sb.mu.RUnlock()
 	if accentColor != 0 {
-		pulse := makePulse(accentColor)
+		pulse := dyncolor.Pulse(accentColor, 0.7, 1.0, 6)
 		sb.tabBar.Style.ActiveBG = pulse
 		sb.blendLine.SetAccentDynamic(pulse)
 	}

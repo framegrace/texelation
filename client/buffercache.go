@@ -37,6 +37,8 @@ type PaneState struct {
 type Cell struct {
 	Ch    rune
 	Style tcell.Style
+	DynFG protocol.DynColorDesc // zero Type = static
+	DynBG protocol.DynColorDesc // zero Type = static
 }
 
 type clientRect struct {
@@ -146,11 +148,19 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) {
 			needed := start + len(textRunes)
 			row = ensureRowLength(row, needed)
 			style := tcell.StyleDefault
+			var dynFG, dynBG protocol.DynColorDesc
 			if int(span.StyleIndex) < len(styles) {
 				style = styles[span.StyleIndex]
 			}
+			if int(span.StyleIndex) < len(delta.Styles) {
+				entry := delta.Styles[span.StyleIndex]
+				if entry.AttrFlags&protocol.AttrHasDynamic != 0 {
+					dynFG = entry.DynFG
+					dynBG = entry.DynBG
+				}
+			}
 			for i, r := range textRunes {
-				row[start+i] = Cell{Ch: r, Style: style}
+				row[start+i] = Cell{Ch: r, Style: style, DynFG: dynFG, DynBG: dynBG}
 			}
 		}
 		pane.rows[rowIdx] = row

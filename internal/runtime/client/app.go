@@ -71,6 +71,7 @@ func Run(opts Options) error {
 		desktopBg:               tcell.ColorDefault,
 		selectionFg:             tcell.ColorBlack,
 		selectionBg:             tcell.NewRGBColor(232, 217, 255),
+		animStart:               time.Now(),
 		showRestartNotification: opts.ShowRestartNotification,
 	}
 
@@ -179,7 +180,29 @@ func Run(opts Options) error {
 	var lastRender time.Time
 	var pendingRender bool
 
+	// Animation ticker: started/stopped based on state.dynAnimating.
+	var animTicker *time.Ticker
+	defer func() {
+		if animTicker != nil {
+			animTicker.Stop()
+		}
+	}()
+
 	for {
+		// Start or stop the animation ticker based on whether dynamic cells exist.
+		if state.dynAnimating && animTicker == nil {
+			animTicker = time.NewTicker(frameInterval)
+		} else if !state.dynAnimating && animTicker != nil {
+			animTicker.Stop()
+			animTicker = nil
+		}
+
+		// Build a channel reference for the select — nil channel blocks forever.
+		var animCh <-chan time.Time
+		if animTicker != nil {
+			animCh = animTicker.C
+		}
+
 		select {
 		case <-renderCh:
 			// Drain any additional pending render signals to avoid rendering stale frames
@@ -207,6 +230,11 @@ func Run(opts Options) error {
 					}
 				})
 			}
+		case <-animCh:
+			// Animation tick — render unconditionally at frame interval.
+			pendingRender = false
+			render(state, screen)
+			lastRender = time.Now()
 		case ev, ok := <-events:
 			if !ok {
 				return nil

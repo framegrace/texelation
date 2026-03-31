@@ -5,8 +5,13 @@ package clientruntime
 
 import (
 	"testing"
+	"time"
 
+	"github.com/framegrace/texelui/color"
 	"github.com/gdamore/tcell/v2"
+
+	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/protocol"
 )
 
 func TestBlendColor(t *testing.T) {
@@ -180,6 +185,176 @@ func TestApplyZoomOverlay(t *testing.T) {
 			t.Error("italic attribute should be preserved")
 		}
 	})
+}
+
+// TestDynamicColorFullPipeline exercises the complete path:
+// server-side Pulse → Cell with DynBG → protocol encode/decode → client BufferCache → compositeInto resolution.
+func TestDynamicColorFullPipeline(t *testing.T) {
+	baseColor := tcell.NewRGBColor(137, 180, 250) // Catppuccin blue
+	pulse := color.Pulse(baseColor, 0.7, 1.0, 6)
+
+	// Step 1: Simulate what the Painter does — resolve static + store descriptor
+	ctx := color.ColorContext{}
+	staticBG := pulse.Resolve(ctx)
+	desc := pulse.Describe()
+	if desc.Type != color.DescTypePulse {
+		t.Fatalf("expected DescTypePulse, got %d", desc.Type)
+	}
+
+	// Step 2: Simulate what the Publisher does — build a StyleEntry with dynamic desc
+	_, bgVal := convertColorForTest(staticBG)
+	styleEntry := protocol.StyleEntry{
+		AttrFlags: protocol.AttrHasDynamic,
+		FgModel:   protocol.ColorModelRGB,
+		FgValue:   0xCDD6F4, // white-ish fg
+		BgModel:   protocol.ColorModelRGB,
+		BgValue:   bgVal,
+		DynBG: protocol.DynColorDesc{
+			Type: desc.Type, Base: desc.Base, Target: desc.Target,
+			Easing: desc.Easing, Speed: desc.Speed, Min: desc.Min, Max: desc.Max,
+		},
+	}
+
+	// Step 3: Protocol round-trip
+	delta := protocol.BufferDelta{
+		PaneID:   [16]byte{1, 2, 3},
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{styleEntry},
+		Rows: []protocol.RowDelta{
+			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "Hello", StyleIndex: 0}}},
+		},
+	}
+	encoded, err := protocol.EncodeBufferDelta(delta)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := protocol.DecodeBufferDelta(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Verify dynamic descriptor survived the round-trip
+	if decoded.Styles[0].DynBG.Type != color.DescTypePulse {
+		t.Fatalf("DynBG type lost in round-trip: got %d", decoded.Styles[0].DynBG.Type)
+	}
+	if decoded.Styles[0].DynBG.Speed != 6 {
+		t.Fatalf("DynBG speed lost: got %f", decoded.Styles[0].DynBG.Speed)
+	}
+
+	// Step 4: Apply to BufferCache (simulates client receiving delta)
+	cache := client.NewBufferCache()
+	// Set up pane geometry via snapshot
+	cache.ApplySnapshot(protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: decoded.PaneID,
+			X:      0, Y: 0, Width: 10, Height: 1,
+		}},
+	})
+	cache.ApplyDelta(decoded)
+	pane := cache.PaneByID(decoded.PaneID)
+
+	cells := pane.RowCells(0)
+	if len(cells) < 5 {
+		t.Fatalf("expected at least 5 cells, got %d", len(cells))
+	}
+	if cells[0].DynBG.Type != color.DescTypePulse {
+		t.Fatalf("DynBG not stored on client cell: type=%d", cells[0].DynBG.Type)
+	}
+
+	// Step 5: compositeInto resolves dynamic colors
+	state := &clientState{
+		defaultStyle: tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack),
+		defaultFg:    tcell.ColorWhite,
+		defaultBg:    tcell.ColorBlack,
+		animStart:    time.Now().Add(-500 * time.Millisecond), // pretend 500ms has passed
+	}
+
+	workspaceBuf := make([][]client.Cell, 1)
+	workspaceBuf[0] = make([]client.Cell, 10)
+	for i := range workspaceBuf[0] {
+		workspaceBuf[0][i] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+	}
+
+	hasDynamic := compositeInto(workspaceBuf, []*client.PaneState{pane}, state, 10, 1)
+	if !hasDynamic {
+		t.Error("compositeInto should report hasDynamic=true")
+	}
+
+	// The resolved BG should differ from the static base color
+	// because the pulse modulates brightness over time.
+	_, resolvedBG, _ := workspaceBuf[0][0].Style.Decompose()
+	resolvedR, resolvedG, resolvedB := resolvedBG.RGB()
+	baseR, baseG, baseB := baseColor.RGB()
+
+	t.Logf("Base: (%d,%d,%d), Resolved: (%d,%d,%d)", baseR, baseG, baseB, resolvedR, resolvedG, resolvedB)
+
+	// The pulse oscillates brightness 0.7–1.0. At t=0.5s with speed=6 Hz,
+	// sin(0.5*6) ≈ sin(3) ≈ 0.14, so factor ≈ 0.85 + 0.15*0.14 ≈ 0.87.
+	// The resolved color should be dimmer than the base.
+	if resolvedR == baseR && resolvedG == baseG && resolvedB == baseB {
+		t.Error("resolved BG should differ from base due to pulse modulation")
+	}
+
+	// Verify it's a valid dimmed version (not black or garbage)
+	if resolvedR < 0 || resolvedG < 0 || resolvedB < 0 {
+		t.Error("resolved color has negative components")
+	}
+	if resolvedR > 255 || resolvedG > 255 || resolvedB > 255 {
+		t.Error("resolved color exceeds 255")
+	}
+}
+
+// TestDynamicColorStaticCellsUnaffected verifies that cells without dynamic
+// descriptors pass through compositeInto without modification.
+func TestDynamicColorStaticCellsUnaffected(t *testing.T) {
+	paneID := [16]byte{5}
+	cache := client.NewBufferCache()
+	cache.ApplySnapshot(protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: paneID,
+			X:      0, Y: 0, Width: 5, Height: 1,
+		}},
+	})
+	delta := protocol.BufferDelta{
+		PaneID:   paneID,
+		Revision: 1,
+		Styles: []protocol.StyleEntry{
+			{FgModel: protocol.ColorModelRGB, FgValue: 0xFF0000, BgModel: protocol.ColorModelRGB, BgValue: 0x00FF00},
+		},
+		Rows: []protocol.RowDelta{
+			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "AB", StyleIndex: 0}}},
+		},
+	}
+	cache.ApplyDelta(delta)
+	pane := cache.PaneByID(delta.PaneID)
+
+	state := &clientState{
+		defaultStyle: tcell.StyleDefault,
+		animStart:    time.Now(),
+	}
+
+	workspaceBuf := make([][]client.Cell, 1)
+	workspaceBuf[0] = make([]client.Cell, 5)
+	for i := range workspaceBuf[0] {
+		workspaceBuf[0][i] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+	}
+
+	hasDynamic := compositeInto(workspaceBuf, []*client.PaneState{pane}, state, 5, 1)
+	if hasDynamic {
+		t.Error("static cells should not report hasDynamic")
+	}
+
+	// Verify the cell style is exactly what we sent
+	_, bg, _ := workspaceBuf[0][0].Style.Decompose()
+	r, g, b := bg.RGB()
+	if r != 0 || g != 255 || b != 0 {
+		t.Errorf("static BG should be green: got (%d,%d,%d)", r, g, b)
+	}
+}
+
+func convertColorForTest(c tcell.Color) (protocol.ColorModel, uint32) {
+	r, g, b := c.RGB()
+	return protocol.ColorModelRGB, (uint32(r)&0xFF)<<16 | (uint32(g)&0xFF)<<8 | uint32(b)&0xFF
 }
 
 func TestBlendColorSymmetry(t *testing.T) {

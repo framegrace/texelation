@@ -82,15 +82,23 @@ func (m *Manager) requestFrame() {
 	}
 	ch := m.renderCh
 	m.frameTimer = time.AfterFunc(16*time.Millisecond, func() {
+		// Clear timer BEFORE sending so RequestFrame() can schedule the
+		// next frame immediately when the render goroutine calls it.
+		m.frameMu.Lock()
+		m.frameTimer = nil
+		m.frameMu.Unlock()
 		select {
 		case ch <- struct{}{}:
 		default:
 		}
-		m.frameMu.Lock()
-		m.frameTimer = nil
-		m.frameMu.Unlock()
 	})
 	m.frameMu.Unlock()
+}
+
+// RequestFrame schedules a render after one frame interval (~16ms).
+// Safe to call multiple times; only one timer runs at a time.
+func (m *Manager) RequestFrame() {
+	m.requestFrame()
 }
 
 // Update ticks all effects so animations can advance.

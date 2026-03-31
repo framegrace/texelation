@@ -191,29 +191,32 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 
 	// Resolve the dynamic accent color for this frame.
 	ctx := color.ColorContext{X: x, Y: y, W: w, H: 1, T: painter.Time()}
-	resolvedAccent := accent.Resolve(ctx)
 	if !accent.IsStatic() {
 		painter.MarkAnimated()
 	}
 
 	// Choose the accent color for the gradient.
-	gradAccent := resolvedAccent
+	gradAccent := accent
 	if toastActive {
 		switch toastSev {
 		case texel.ToastSuccess:
-			gradAccent = tm.GetSemanticColor("action.success")
+			gradAccent = color.Solid(tm.GetSemanticColor("action.success"))
 		case texel.ToastWarning:
-			gradAccent = tm.GetSemanticColor("action.warning")
+			gradAccent = color.Solid(tm.GetSemanticColor("action.warning"))
 		case texel.ToastError:
-			gradAccent = tm.GetSemanticColor("action.danger")
+			gradAccent = color.Solid(tm.GetSemanticColor("action.danger"))
 		}
 	}
 
+	resolvedAccent := accent.Resolve(ctx)
+
 	// Build gradient: accent → accent (30%) → contentBG.
+	// Uses DynStop so animated accent (Pulse) descriptors propagate
+	// through the protocol for client-side resolution.
 	grad := color.Linear(
 		0,
-		color.Stop(0, gradAccent),
-		color.Stop(0.3, gradAccent),
+		color.DynStop(0, gradAccent),
+		color.DynStop(0.3, gradAccent),
 		color.Stop(1, contentBG),
 	).WithLocal().Build()
 

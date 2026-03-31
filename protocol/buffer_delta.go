@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"math"
 )
 
 // BufferDeltaFlags describes optional encoding tweaks.
@@ -33,12 +34,32 @@ const (
 
 // StyleEntry captures the styling information applied to spans. Values are raw
 // integers; it is up to higher layers to translate to tcell.Style.
+// DynColorStopDesc describes a single gradient stop in the protocol.
+type DynColorStopDesc struct {
+	Position float32
+	Color    DynColorDesc // always Solid/Pulse/Fade, no nested gradients
+}
+
+// DynColorDesc is the protocol representation of a DynamicColor descriptor.
+type DynColorDesc struct {
+	Type   uint8
+	Base   uint32
+	Target uint32
+	Easing uint8
+	Speed  float32
+	Min    float32
+	Max    float32
+	Stops  []DynColorStopDesc // nil for non-gradient types
+}
+
 type StyleEntry struct {
 	AttrFlags uint16
 	FgModel   ColorModel
 	FgValue   uint32
 	BgModel   ColorModel
 	BgValue   uint32
+	DynFG     DynColorDesc
+	DynBG     DynColorDesc
 }
 
 const (
@@ -49,6 +70,9 @@ const (
 	AttrDim
 	AttrItalic
 )
+
+// AttrHasDynamic indicates dynamic color descriptors follow the base style.
+const AttrHasDynamic uint16 = 1 << 8
 
 // CellSpan covers a contiguous set of cells on a row that share the same style.
 type CellSpan struct {
@@ -108,6 +132,31 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 		}
 		if err := binary.Write(buf, binary.LittleEndian, style.BgValue); err != nil {
 			return nil, err
+		}
+		if style.AttrFlags&AttrHasDynamic != 0 {
+			for _, d := range [2]DynColorDesc{style.DynFG, style.DynBG} {
+				buf.WriteByte(d.Type)
+				binary.Write(buf, binary.LittleEndian, d.Base)
+				binary.Write(buf, binary.LittleEndian, d.Target)
+				buf.WriteByte(d.Easing)
+				binary.Write(buf, binary.LittleEndian, d.Speed)
+				binary.Write(buf, binary.LittleEndian, d.Min)
+				binary.Write(buf, binary.LittleEndian, d.Max)
+				// Gradient stops (variable length, only for Type >= 4)
+				if d.Type >= 4 {
+					buf.WriteByte(uint8(len(d.Stops)))
+					for _, s := range d.Stops {
+						binary.Write(buf, binary.LittleEndian, s.Position)
+						buf.WriteByte(s.Color.Type)
+						binary.Write(buf, binary.LittleEndian, s.Color.Base)
+						binary.Write(buf, binary.LittleEndian, s.Color.Target)
+						buf.WriteByte(s.Color.Easing)
+						binary.Write(buf, binary.LittleEndian, s.Color.Speed)
+						binary.Write(buf, binary.LittleEndian, s.Color.Min)
+						binary.Write(buf, binary.LittleEndian, s.Color.Max)
+					}
+				}
+			}
 		}
 	}
 
@@ -176,6 +225,45 @@ func DecodeBufferDelta(b []byte) (BufferDelta, error) {
 		delta.Styles[i].BgModel = ColorModel(b[7])
 		delta.Styles[i].BgValue = binary.LittleEndian.Uint32(b[8:12])
 		b = b[12:]
+		if delta.Styles[i].AttrFlags&AttrHasDynamic != 0 {
+			if len(b) < 44 {
+				return delta, ErrPayloadShort
+			}
+			for _, d := range [2]*DynColorDesc{&delta.Styles[i].DynFG, &delta.Styles[i].DynBG} {
+				d.Type = b[0]
+				d.Base = binary.LittleEndian.Uint32(b[1:5])
+				d.Target = binary.LittleEndian.Uint32(b[5:9])
+				d.Easing = b[9]
+				d.Speed = math.Float32frombits(binary.LittleEndian.Uint32(b[10:14]))
+				d.Min = math.Float32frombits(binary.LittleEndian.Uint32(b[14:18]))
+				d.Max = math.Float32frombits(binary.LittleEndian.Uint32(b[18:22]))
+				b = b[22:]
+				// Gradient stops
+				if d.Type >= 4 {
+					if len(b) < 1 {
+						return delta, ErrPayloadShort
+					}
+					stopCount := int(b[0])
+					b = b[1:]
+					if len(b) < stopCount*26 {
+						return delta, ErrPayloadShort
+					}
+					d.Stops = make([]DynColorStopDesc, stopCount)
+					for j := 0; j < stopCount; j++ {
+						d.Stops[j].Position = math.Float32frombits(binary.LittleEndian.Uint32(b[:4]))
+						b = b[4:]
+						d.Stops[j].Color.Type = b[0]
+						d.Stops[j].Color.Base = binary.LittleEndian.Uint32(b[1:5])
+						d.Stops[j].Color.Target = binary.LittleEndian.Uint32(b[5:9])
+						d.Stops[j].Color.Easing = b[9]
+						d.Stops[j].Color.Speed = math.Float32frombits(binary.LittleEndian.Uint32(b[10:14]))
+						d.Stops[j].Color.Min = math.Float32frombits(binary.LittleEndian.Uint32(b[14:18]))
+						d.Stops[j].Color.Max = math.Float32frombits(binary.LittleEndian.Uint32(b[18:22]))
+						b = b[22:]
+					}
+				}
+			}
+		}
 	}
 
 	if len(b) < 2 {
