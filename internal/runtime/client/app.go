@@ -175,65 +175,54 @@ func Run(opts Options) error {
 		screen.PostEventWait(tcell.NewEventInterrupt(nil))
 	}()
 
-	const frameInterval = 16 * time.Millisecond
-	var lastRender time.Time
-	var pendingRender bool
+	const dt = 16 * time.Millisecond // ~60fps fixed timestep
 
-	// Animation ticker: started/stopped based on state.dynAnimating.
-	var animTicker *time.Ticker
+	// Unified ticker: started when animations or effects are active, stopped when idle.
+	var ticker *time.Ticker
 	defer func() {
-		if animTicker != nil {
-			animTicker.Stop()
+		if ticker != nil {
+			ticker.Stop()
 		}
 	}()
 
 	for {
-		// Start or stop the animation ticker based on whether dynamic cells exist.
-		if state.dynAnimating && animTicker == nil {
-			animTicker = time.NewTicker(frameInterval)
-		} else if !state.dynAnimating && animTicker != nil {
-			animTicker.Stop()
-			animTicker = nil
+		// Start or stop the unified ticker.
+		animating := state.dynAnimating
+		if state.effects != nil && state.effects.HasActiveAnimations() {
+			animating = true
+		}
+		if animating && ticker == nil {
+			ticker = time.NewTicker(dt)
+		} else if !animating && ticker != nil {
+			ticker.Stop()
+			ticker = nil
 		}
 
-		// Build a channel reference for the select — nil channel blocks forever.
-		var animCh <-chan time.Time
-		if animTicker != nil {
-			animCh = animTicker.C
+		// Build channel ref — nil channel blocks forever in select.
+		var tickCh <-chan time.Time
+		if ticker != nil {
+			tickCh = ticker.C
 		}
 
 		select {
-		case <-renderCh:
-			// Drain any additional pending render signals to avoid rendering stale frames
-		drainLoop:
-			for {
-				select {
-				case <-renderCh:
-				default:
-					break drainLoop
-				}
+		case <-tickCh:
+			// Fixed-timestep tick: advance time, update effects, render.
+			state.tickAccum += dt.Seconds()
+			state.frameDT = float32(dt.Seconds())
+			if state.effects != nil {
+				state.effects.Update(dt)
 			}
-			now := time.Now()
-			if now.Sub(lastRender) >= frameInterval {
-				pendingRender = false
-				render(state, screen)
-				lastRender = now
-			} else if !pendingRender {
-				// Too soon since last render; schedule one at the next frame boundary.
-				pendingRender = true
-				remaining := frameInterval - now.Sub(lastRender)
-				time.AfterFunc(remaining, func() {
-					select {
-					case renderCh <- struct{}{}:
-					default:
-					}
-				})
-			}
-		case <-animCh:
-			// Animation tick — render unconditionally at frame interval.
-			pendingRender = false
 			render(state, screen)
-			lastRender = time.Now()
+			state.frameDT = 0
+
+		case <-renderCh:
+			// Data-driven render: delta/snapshot arrived. Render immediately, no time advance.
+			state.frameDT = 0
+			if state.effects != nil {
+				state.effects.Update(0)
+			}
+			render(state, screen)
+
 		case ev, ok := <-events:
 			if !ok {
 				return nil
@@ -241,10 +230,12 @@ func Run(opts Options) error {
 			if !handleScreenEvent(ev, state, screen, conn, sessionID, &writeMu) {
 				return nil
 			}
+
 		case <-doneCh:
 			fmt.Println("Connection closed")
 			return nil
 		}
+
 		if clip, ok := state.consumeClipboardSync(); ok && len(clip.Data) > 0 {
 			debuglog.Printf("CLIPBOARD DEBUG: Setting system clipboard: len=%d", len(clip.Data))
 			screen.SetClipboard(clip.Data)
