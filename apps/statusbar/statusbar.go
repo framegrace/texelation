@@ -64,6 +64,7 @@ func New() *StatusBarApp {
 	tabBar.Style.NoBlendRow = true
 
 	blendLine := NewBlendInfoLine()
+	blendLine.SetAccentColor(initialColor)
 
 	// Match TabBar colors to blend line so they look seamless.
 	tabBar.Style.ActiveBG = dyncolor.Solid(initialColor)

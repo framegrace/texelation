@@ -31,6 +31,8 @@ type Manager struct {
 	renderCh         chan<- struct{}
 	frameMu          sync.Mutex
 	frameTimer       *time.Timer
+	initializing     bool      // true during initial connect
+	initTimestamp    time.Time // past timestamp for snapping effects
 }
 
 // NewManager constructs an empty effect manager.
@@ -39,6 +41,8 @@ func NewManager() *Manager {
 		bindings:         make(map[EffectTriggerType][]Effect),
 		paneEffects:      make([]Effect, 0),
 		workspaceEffects: make([]Effect, 0),
+		initializing:     true,
+		initTimestamp:    time.Now().Add(-10 * time.Second),
 	}
 }
 
@@ -204,17 +208,45 @@ func (m *Manager) HasActiveWorkspaceEffects() bool {
 	return false
 }
 
+// PaneStateTriggerTimestamp returns the timestamp to use for pane state triggers.
+// During initial connect (before first render completes), returns a past timestamp
+// so effects snap instantly. After that, returns time.Now() for normal animation.
+func (m *Manager) PaneStateTriggerTimestamp() time.Time {
+	if m == nil {
+		return time.Now()
+	}
+	m.frameMu.Lock()
+	defer m.frameMu.Unlock()
+	if m.initializing {
+		return m.initTimestamp
+	}
+	return time.Now()
+}
+
+// FinishInitialization marks the end of the initial connect phase.
+// After this, pane state triggers use real timestamps for animation.
+func (m *Manager) FinishInitialization() {
+	if m == nil {
+		return
+	}
+	m.frameMu.Lock()
+	m.initializing = false
+	m.frameMu.Unlock()
+}
+
 // ResetPaneStates primes pane effects with the current desktop state when the client connects.
+// Uses a timestamp far in the past so animations snap to their target instantly
+// rather than visibly animating on first connect.
 func (m *Manager) ResetPaneStates(panes []*client.PaneState) {
 	if m == nil {
 		return
 	}
-	now := time.Now()
+	past := time.Now().Add(-10 * time.Second)
 	for _, pane := range panes {
 		if pane == nil {
 			continue
 		}
-		m.HandleTrigger(EffectTrigger{Type: TriggerPaneActive, PaneID: pane.ID, Active: pane.Active, Timestamp: now})
-		m.HandleTrigger(EffectTrigger{Type: TriggerPaneResizing, PaneID: pane.ID, Resizing: pane.Resizing, Timestamp: now})
+		m.HandleTrigger(EffectTrigger{Type: TriggerPaneActive, PaneID: pane.ID, Active: pane.Active, Timestamp: past})
+		m.HandleTrigger(EffectTrigger{Type: TriggerPaneResizing, PaneID: pane.ID, Resizing: pane.Resizing, Timestamp: past})
 	}
 }
