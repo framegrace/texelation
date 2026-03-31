@@ -28,6 +28,9 @@ type fadeTintEffect struct {
 	wsTarget    float32
 	wsStart     time.Time
 	wsDuration  time.Duration
+	// Track panes that have been active at least once.
+	// Panes never seen active (e.g., status bar) are not tinted.
+	seenActive map[[16]byte]bool
 }
 
 func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Duration, defaultFg, defaultBg tcell.Color) Effect {
@@ -46,6 +49,7 @@ func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Durat
 		defaultFg:      defaultFg,
 		defaultBg:      defaultBg,
 		wsDuration:     duration,
+		seenActive:     make(map[[16]byte]bool),
 	}
 }
 
@@ -84,6 +88,9 @@ func (e *fadeTintEffect) Update(now time.Time) {
 func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 	switch trigger.Type {
 	case TriggerPaneActive:
+		if trigger.Active {
+			e.seenActive[trigger.PaneID] = true
+		}
 		target := float32(0)
 		if !trigger.Active {
 			target = e.intensity
@@ -116,6 +123,12 @@ func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cel
 	// Get cached value (Update was already called this frame)
 	intensity := e.GetCached(pane.ID)
 	if intensity <= 0 {
+		return
+	}
+
+	// Skip panes that have never been active (e.g., status bar).
+	// Only darken panes that participate in the focus system.
+	if !e.seenActive[pane.ID] {
 		return
 	}
 

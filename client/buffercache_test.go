@@ -278,3 +278,49 @@ func TestBufferCacheLayoutPanesOrdersByGeometry(t *testing.T) {
 		t.Fatalf("expected pane id3 third, got %v", ids[2])
 	}
 }
+
+func TestPaneState_DirtyOnDelta(t *testing.T) {
+	cache := NewBufferCache()
+	paneID := [16]byte{1}
+	cache.ApplySnapshot(protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: paneID, X: 0, Y: 0, Width: 80, Height: 24,
+		}},
+	})
+
+	pane := cache.PaneByID(paneID)
+	if !pane.Dirty {
+		t.Error("expected pane dirty after snapshot")
+	}
+	if pane.DirtyRows != nil {
+		t.Error("expected DirtyRows nil (all dirty) after snapshot")
+	}
+
+	pane.ClearDirty()
+	if pane.Dirty {
+		t.Error("expected pane clean after ClearDirty")
+	}
+
+	cache.ApplyDelta(protocol.BufferDelta{
+		PaneID:   paneID,
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{FgModel: protocol.ColorModelRGB, FgValue: 0xFF0000}},
+		Rows: []protocol.RowDelta{
+			{Row: 5, Spans: []protocol.CellSpan{{StartCol: 0, Text: "hello", StyleIndex: 0}}},
+			{Row: 10, Spans: []protocol.CellSpan{{StartCol: 0, Text: "world", StyleIndex: 0}}},
+		},
+	})
+
+	if !pane.Dirty {
+		t.Error("expected pane dirty after delta")
+	}
+	if pane.DirtyRows == nil {
+		t.Error("expected specific DirtyRows after delta")
+	}
+	if !pane.DirtyRows[5] || !pane.DirtyRows[10] {
+		t.Error("expected rows 5 and 10 dirty")
+	}
+	if pane.DirtyRows[0] {
+		t.Error("row 0 should not be dirty")
+	}
+}

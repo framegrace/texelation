@@ -49,6 +49,7 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		}
 		// Always apply snapshots - empty snapshots clear the cache (e.g., when switching to empty workspace)
 		cache.ApplySnapshot(snap)
+		state.fullRenderNeeded = true
 		if state.effects != nil {
 			state.effects.ResetPaneStates(cache.SortedPanes())
 		}
@@ -135,7 +136,9 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		handlesSelection := paneFlags.Flags&protocol.PaneStateSelectionDelegated != 0
 		state.cache.SetPaneFlags(paneFlags.PaneID, active, resizing, paneFlags.ZOrder, handlesSelection)
 		if state.effects != nil {
-			ts := time.Now()
+			// Use past timestamp during initial connect so effects snap
+			// instantly rather than visibly animating.
+			ts := state.effects.PaneStateTriggerTimestamp()
 			state.effects.HandleTrigger(effects.EffectTrigger{Type: effects.TriggerPaneActive, PaneID: paneFlags.PaneID, Active: active, Timestamp: ts})
 			state.effects.HandleTrigger(effects.EffectTrigger{Type: effects.TriggerPaneResizing, PaneID: paneFlags.PaneID, Resizing: resizing, Timestamp: ts})
 		}
