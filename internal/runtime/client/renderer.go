@@ -28,7 +28,214 @@ func debugLogRender(msg string) {
 	}
 }
 
+// ensurePrevBuffer allocates or resizes state.prevBuffer.
+// Returns true if the buffer was (re)allocated (size changed).
+func ensurePrevBuffer(state *clientState, width, height int) bool {
+	if len(state.prevBuffer) == height && (height == 0 || len(state.prevBuffer[0]) == width) {
+		return false
+	}
+	state.prevBuffer = make([][]client.Cell, height)
+	for y := 0; y < height; y++ {
+		row := make([]client.Cell, width)
+		for x := range row {
+			row[x] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+		}
+		state.prevBuffer[y] = row
+	}
+	return true
+}
+
+// diffAndShow compares current vs previous buffer and only calls
+// screen.SetContent for cells that have changed.
+func diffAndShow(screen tcell.Screen, current, previous [][]client.Cell, defaultStyle tcell.Style) {
+	for y, row := range current {
+		if y >= len(previous) {
+			break
+		}
+		prevRow := previous[y]
+		for x, cell := range row {
+			if x >= len(prevRow) {
+				break
+			}
+			prev := prevRow[x]
+			if cell.Ch == prev.Ch && cell.Style == prev.Style {
+				continue
+			}
+			ch := cell.Ch
+			if ch == 0 {
+				ch = ' '
+			}
+			style := cell.Style
+			if style == (tcell.Style{}) {
+				style = defaultStyle
+			}
+			screen.SetContent(x, y, ch, nil, style)
+		}
+	}
+	screen.Show()
+}
+
+// incrementalComposite updates only dirty panes/rows into state.prevBuffer.
+// Returns true if any cell has dynamic colors that need continuous rendering.
+func incrementalComposite(state *clientState, screenW, screenH int) bool {
+	hasDynamic := false
+	animTime := float32(time.Since(state.animStart).Seconds())
+	panes := state.cache.SortedPanes()
+
+	for _, pane := range panes {
+		if pane == nil {
+			continue
+		}
+		if !pane.Dirty && !pane.HasAnimated {
+			continue
+		}
+
+		x := pane.Rect.X
+		y := pane.Rect.Y
+		w := pane.Rect.Width
+		h := pane.Rect.Height
+
+		if w <= 0 || h <= 0 {
+			pane.ClearDirty()
+			continue
+		}
+
+		// Build a local pane buffer for rows that need updating,
+		// then apply pane effects on the full pane region.
+		paneBuffer := make([][]client.Cell, h)
+		for rowIdx := 0; rowIdx < h; rowIdx++ {
+			if pane.DirtyRows != nil && !pane.DirtyRows[rowIdx] && !pane.HasAnimated {
+				// Copy existing content from prevBuffer for non-dirty rows
+				// so pane effects can be applied uniformly.
+				targetY := y + rowIdx
+				if targetY >= 0 && targetY < screenH {
+					row := make([]client.Cell, w)
+					for col := 0; col < w; col++ {
+						targetX := x + col
+						if targetX >= 0 && targetX < screenW {
+							row[col] = state.prevBuffer[targetY][targetX]
+						} else {
+							row[col] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+						}
+					}
+					paneBuffer[rowIdx] = row
+				} else {
+					row := make([]client.Cell, w)
+					for col := range row {
+						row[col] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+					}
+					paneBuffer[rowIdx] = row
+				}
+				continue
+			}
+
+			row := make([]client.Cell, w)
+			source := pane.RowCells(rowIdx)
+			for col := 0; col < w && col < len(source); col++ {
+				cell := source[col]
+				if cell.Ch == 0 {
+					cell.Ch = ' '
+				}
+				if cell.Style == (tcell.Style{}) {
+					cell.Style = state.defaultStyle
+				}
+				row[col] = cell
+			}
+			for col := 0; col < w; col++ {
+				if row[col].Ch == 0 {
+					row[col] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+				}
+			}
+			paneBuffer[rowIdx] = row
+		}
+
+		if state.effects != nil {
+			state.effects.ApplyPaneEffects(pane, paneBuffer)
+		}
+
+		zoomOverlay := state.zoomed && pane.ID == state.zoomedPane
+		for rowIdx := 0; rowIdx < h; rowIdx++ {
+			targetY := y + rowIdx
+			if targetY < 0 || targetY >= screenH {
+				continue
+			}
+			row := paneBuffer[rowIdx]
+			for col := 0; col < w; col++ {
+				targetX := x + col
+				if targetX < 0 || targetX >= screenW {
+					continue
+				}
+				cell := row[col]
+				style := cell.Style
+
+				if cell.DynBG.Type >= 2 || cell.DynFG.Type >= 2 {
+					ctx := color.ColorContext{
+						X: col, Y: rowIdx,
+						W: w, H: h,
+						PX: x, PY: y,
+						PW: w, PH: h,
+						SX: targetX, SY: targetY,
+						SW: screenW, SH: screenH,
+						T: animTime,
+					}
+					fg, bg, attrs := style.Decompose()
+					if cell.DynBG.Type >= 2 {
+						bg = color.FromDesc(protocolDescToColor(cell.DynBG)).Resolve(ctx)
+					}
+					if cell.DynFG.Type >= 2 {
+						fg = color.FromDesc(protocolDescToColor(cell.DynFG)).Resolve(ctx)
+					}
+					style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attrs)
+					hasDynamic = true
+				}
+
+				if zoomOverlay {
+					style = applyZoomOverlay(style, 0.2, state)
+				}
+				state.prevBuffer[targetY][targetX] = client.Cell{Ch: cell.Ch, Style: style}
+			}
+		}
+
+		pane.ClearDirty()
+	}
+	return hasDynamic
+}
+
+// render dispatches between incremental and full rendering paths.
 func render(state *clientState, screen tcell.Screen) {
+	width, height := screen.Size()
+
+	resized := ensurePrevBuffer(state, width, height)
+	needsFull := state.fullRenderNeeded || resized
+	if !needsFull && state.effects != nil && state.effects.HasActiveWorkspaceEffects() {
+		needsFull = true
+	}
+
+	if needsFull {
+		fullRender(state, screen)
+		state.fullRenderNeeded = false
+		return
+	}
+
+	// Incremental path
+	if state.effects != nil {
+		state.effects.Update(time.Now())
+	}
+
+	// Snapshot prevBuffer for diffing
+	oldBuffer := make([][]client.Cell, height)
+	for y := 0; y < height; y++ {
+		oldBuffer[y] = make([]client.Cell, width)
+		copy(oldBuffer[y], state.prevBuffer[y])
+	}
+
+	hasDynamic := incrementalComposite(state, width, height)
+	diffAndShow(screen, state.prevBuffer, oldBuffer, state.defaultStyle)
+	state.dynAnimating = hasDynamic
+}
+
+// fullRender performs a complete render of all panes (original render path).
+func fullRender(state *clientState, screen tcell.Screen) {
 	width, height := screen.Size()
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
@@ -109,6 +316,17 @@ func render(state *clientState, screen tcell.Screen) {
 	screen.Show()
 
 	state.dynAnimating = hasDynamic
+
+	// Store rendered result for future incremental diffs.
+	ensurePrevBuffer(state, width, height)
+	for y := 0; y < height && y < len(workspaceBuffer); y++ {
+		copy(state.prevBuffer[y], workspaceBuffer[y])
+	}
+
+	// Clear all pane dirty flags after full render.
+	for _, pane := range state.cache.SortedPanes() {
+		pane.ClearDirty()
+	}
 
 	// Flush Kitty graphics commands after tcell has flushed its cell buffer.
 	if state.kitty != nil && state.ttyWriter != nil {
