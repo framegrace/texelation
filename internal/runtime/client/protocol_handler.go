@@ -49,7 +49,6 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		}
 		// Always apply snapshots - empty snapshots clear the cache (e.g., when switching to empty workspace)
 		cache.ApplySnapshot(snap)
-		state.fullRenderNeeded = true
 		if state.effects != nil {
 			state.effects.ResetPaneStates(cache.SortedPanes())
 		}

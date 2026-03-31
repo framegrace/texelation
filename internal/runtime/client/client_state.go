@@ -58,10 +58,6 @@ type clientState struct {
 	selection            selectionState
 	idleWatcher          *effects.IdleWatcher
 
-	// Incremental rendering state
-	prevBuffer       [][]client.Cell
-	fullRenderNeeded bool
-
 	// Animation time for client-side DynamicColor resolution
 	animStart   time.Time
 	dynAnimating bool // true when dynamic cells need continuous rendering
