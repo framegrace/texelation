@@ -357,59 +357,6 @@ func convertColorForTest(c tcell.Color) (protocol.ColorModel, uint32) {
 	return protocol.ColorModelRGB, (uint32(r)&0xFF)<<16 | (uint32(g)&0xFF)<<8 | uint32(b)&0xFF
 }
 
-func TestIncrementalComposite_SkipsCleanPanes(t *testing.T) {
-	paneID := [16]byte{1}
-	cache := client.NewBufferCache()
-	cache.ApplySnapshot(protocol.TreeSnapshot{
-		Panes: []protocol.PaneSnapshot{{
-			PaneID: paneID, X: 0, Y: 0, Width: 10, Height: 2,
-		}},
-	})
-	cache.ApplyDelta(protocol.BufferDelta{
-		PaneID:   paneID,
-		Revision: 1,
-		Styles:   []protocol.StyleEntry{{FgModel: protocol.ColorModelRGB, FgValue: 0xFF0000}},
-		Rows:     []protocol.RowDelta{{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "hello", StyleIndex: 0}}}},
-	})
-
-	state := &clientState{
-		cache:        cache,
-		defaultStyle: tcell.StyleDefault,
-		animStart:    time.Now(),
-	}
-
-	// Allocate prevBuffer
-	ensurePrevBuffer(state, 10, 2)
-
-	// Pane is dirty from delta — incremental composite should update it.
-	pane := cache.PaneByID(paneID)
-	if !pane.Dirty {
-		t.Fatal("pane should be dirty after delta")
-	}
-
-	hasDyn := incrementalComposite(state, 10, 2)
-	if hasDyn {
-		t.Error("no animated cells, should not report hasDynamic")
-	}
-
-	// After composite, pane should be clean.
-	if pane.Dirty {
-		t.Error("pane should be clean after incrementalComposite")
-	}
-
-	// Verify cell was written to prevBuffer.
-	if state.prevBuffer[0][0].Ch != 'h' {
-		t.Errorf("expected 'h' at (0,0), got '%c'", state.prevBuffer[0][0].Ch)
-	}
-
-	// Now apply no new delta — pane stays clean.
-	hasDyn = incrementalComposite(state, 10, 2)
-	// prevBuffer should still have the old content (not cleared).
-	if state.prevBuffer[0][0].Ch != 'h' {
-		t.Errorf("clean pane should preserve prevBuffer content, got '%c'", state.prevBuffer[0][0].Ch)
-	}
-}
-
 func TestBlendColorSymmetry(t *testing.T) {
 	// Test that blending is consistent
 	red := tcell.NewRGBColor(255, 0, 0)

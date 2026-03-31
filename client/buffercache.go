@@ -31,17 +31,6 @@ type PaneState struct {
 	Resizing         bool
 	ZOrder           int
 	HandlesSelection bool
-
-	// Dirty tracking for incremental rendering.
-	Dirty       bool         // true when pane has new content since last render
-	DirtyRows   map[int]bool // nil = all rows dirty; non-nil = only listed rows
-	HasAnimated bool         // true if any cell has animated DynFG/DynBG
-}
-
-// ClearDirty resets the dirty flags after rendering.
-func (p *PaneState) ClearDirty() {
-	p.Dirty = false
-	p.DirtyRows = nil
 }
 
 // Cell mirrors texel.Cell but keeps the remote client decoupled from desktop internals.
@@ -177,28 +166,6 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) {
 		pane.rows[rowIdx] = row
 	}
 	pane.rowsMu.Unlock()
-
-	// Mark pane and specific rows as dirty for incremental rendering.
-	pane.Dirty = true
-	if pane.DirtyRows == nil && len(delta.Rows) < int(pane.Rect.Height) {
-		pane.DirtyRows = make(map[int]bool, len(delta.Rows))
-	}
-	if pane.DirtyRows != nil {
-		for _, rowDelta := range delta.Rows {
-			pane.DirtyRows[int(rowDelta.Row)] = true
-		}
-	}
-
-	// Check if any style in the delta has animated dynamic colors.
-	for _, entry := range delta.Styles {
-		if entry.AttrFlags&protocol.AttrHasDynamic != 0 {
-			if protocolDescIsAnimated(entry.DynFG) || protocolDescIsAnimated(entry.DynBG) {
-				pane.HasAnimated = true
-				break
-			}
-		}
-	}
-
 	pane.Revision = delta.Revision
 	pane.UpdatedAt = time.Now().UTC()
 
@@ -229,8 +196,6 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 		pane.rows = applySnapshotRows(prevRows, paneSnap.Rows, int(paneSnap.Height), int(paneSnap.Width))
 		pane.rowsMu.Unlock()
 		pane.Rect = clientRect{X: int(paneSnap.X), Y: int(paneSnap.Y), Width: int(paneSnap.Width), Height: int(paneSnap.Height)}
-		pane.Dirty = true
-		pane.DirtyRows = nil // nil = all rows dirty
 		c.trackOrderingLocked(paneSnap.PaneID, pane.UpdatedAt)
 		seen[paneSnap.PaneID] = struct{}{}
 	}
@@ -519,18 +484,6 @@ func trimRightSpaces(s string) string {
 		end--
 	}
 	return string(runes[:end])
-}
-
-func protocolDescIsAnimated(d protocol.DynColorDesc) bool {
-	if d.Type >= 2 && d.Type <= 3 {
-		return true
-	}
-	for _, s := range d.Stops {
-		if s.Color.Type >= 2 && s.Color.Type <= 3 {
-			return true
-		}
-	}
-	return false
 }
 
 func compareBytes(a, b []byte) int {
