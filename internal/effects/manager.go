@@ -174,6 +174,21 @@ func (m *Manager) HandleTrigger(trigger EffectTrigger) {
 	}
 }
 
+// HasActiveWorkspaceEffects returns true if any workspace effect is currently active.
+func (m *Manager) HasActiveWorkspaceEffects() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, eff := range m.workspaceEffects {
+		if eff.Active() {
+			return true
+		}
+	}
+	return false
+}
+
 // ResetPaneStates primes pane effects with the current desktop state when the client connects.
 func (m *Manager) ResetPaneStates(panes []*client.PaneState) {
 	if m == nil {
