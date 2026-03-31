@@ -82,6 +82,17 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 	animTime := float32(time.Since(state.animStart).Seconds())
 	panes := state.cache.SortedPanes()
 
+	// If any pane effect is active (fade tint, etc.), mark all panes dirty
+	// so the effect is applied to every pane each frame.
+	if state.effects != nil && state.effects.HasActivePaneEffects() {
+		for _, p := range panes {
+			if p != nil {
+				p.Dirty = true
+				p.DirtyRows = nil // all rows
+			}
+		}
+	}
+
 	for _, pane := range panes {
 		if pane == nil {
 			continue

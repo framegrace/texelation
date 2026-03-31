@@ -129,6 +129,21 @@ func (m *Manager) Update(now time.Time) {
 	}
 }
 
+// HasActivePaneEffects returns true if any pane effect is currently active.
+func (m *Manager) HasActivePaneEffects() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, eff := range m.paneEffects {
+		if eff.Active() {
+			return true
+		}
+	}
+	return false
+}
+
 // ApplyPaneEffects mutates the pane buffer using the configured pane effects.
 func (m *Manager) ApplyPaneEffects(pane *client.PaneState, buffer [][]client.Cell) {
 	if m == nil {
