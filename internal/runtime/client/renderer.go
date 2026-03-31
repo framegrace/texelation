@@ -193,7 +193,9 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 						fg = color.FromDesc(protocolDescToColor(cell.DynFG)).Resolve(ctx)
 					}
 					style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attrs)
-					hasDynamic = true
+					if protocolDescIsAnimated(cell.DynBG) || protocolDescIsAnimated(cell.DynFG) {
+						hasDynamic = true
+					}
 				}
 
 				if zoomOverlay {
@@ -204,6 +206,20 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 		}
 	}
 	return hasDynamic
+}
+
+// protocolDescIsAnimated returns true if the descriptor has time-dependent animation
+// (Pulse, Fade, or a gradient with animated stops). Static gradients return false.
+func protocolDescIsAnimated(d protocol.DynColorDesc) bool {
+	if d.Type >= 2 && d.Type <= 3 { // Pulse or Fade
+		return true
+	}
+	for _, s := range d.Stops {
+		if s.Color.Type >= 2 && s.Color.Type <= 3 {
+			return true
+		}
+	}
+	return false
 }
 
 // protocolDescToColor converts a protocol DynColorDesc to a color.DynamicColorDesc.
