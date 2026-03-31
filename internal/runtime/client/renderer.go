@@ -79,7 +79,7 @@ func diffAndShow(screen tcell.Screen, current, previous [][]client.Cell, default
 // Returns true if any cell has dynamic colors that need continuous rendering.
 func incrementalComposite(state *clientState, screenW, screenH int) bool {
 	hasDynamic := false
-	animTime := float32(time.Since(state.animStart).Seconds())
+	animTime := float32(state.tickAccum)
 	panes := state.cache.SortedPanes()
 
 	for _, pane := range panes {
@@ -176,7 +176,8 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 						PW: w, PH: h,
 						SX: targetX, SY: targetY,
 						SW: screenW, SH: screenH,
-						T: animTime,
+						T:  animTime,
+						DT: state.frameDT,
 					}
 					fg, bg, attrs := style.Decompose()
 					if cell.DynBG.Type >= 2 {
@@ -224,11 +225,6 @@ func render(state *clientState, screen tcell.Screen) {
 		return
 	}
 
-	// Incremental path
-	if state.effects != nil {
-		state.effects.Update(time.Now())
-	}
-
 	// Snapshot prevBuffer for diffing
 	oldBuffer := make([][]client.Cell, height)
 	for y := 0; y < height; y++ {
@@ -246,10 +242,6 @@ func fullRender(state *clientState, screen tcell.Screen) {
 	width, height := screen.Size()
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
-
-	if state.effects != nil {
-		state.effects.Update(time.Now())
-	}
 
 	workspaceBuffer := make([][]client.Cell, height)
 	for y := 0; y < height; y++ {
@@ -345,7 +337,7 @@ func fullRender(state *clientState, screen tcell.Screen) {
 // compositeInto renders a set of panes into the workspace buffer.
 func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, state *clientState, screenW, screenH int) bool {
 	hasDynamic := false
-	animTime := float32(time.Since(state.animStart).Seconds())
+	animTime := float32(state.tickAccum)
 
 	for _, pane := range panes {
 		x := pane.Rect.X
@@ -407,7 +399,8 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 						PW: w, PH: h,
 						SX: targetX, SY: targetY,
 						SW: screenW, SH: screenH,
-						T: animTime,
+						T:  animTime,
+						DT: state.frameDT,
 					}
 					fg, bg, attrs := style.Decompose()
 					if cell.DynBG.Type >= 2 {
