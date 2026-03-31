@@ -186,7 +186,9 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 						fg = color.FromDesc(protocolDescToColor(cell.DynFG)).Resolve(ctx)
 					}
 					style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attrs)
-					hasDynamic = true
+					if protocolDescIsAnimated(cell.DynBG) || protocolDescIsAnimated(cell.DynFG) {
+						hasDynamic = true
+					}
 				}
 
 				if zoomOverlay {
@@ -323,10 +325,9 @@ func fullRender(state *clientState, screen tcell.Screen) {
 		copy(state.prevBuffer[y], workspaceBuffer[y])
 	}
 
-	// Clear all pane dirty flags after full render.
-	for _, pane := range state.cache.SortedPanes() {
-		pane.ClearDirty()
-	}
+	// Don't clear dirty flags here — a delta may have arrived during
+	// fullRender. The next incremental render will re-composite dirty
+	// panes (redundantly but correctly) and clear them then.
 
 	// Flush Kitty graphics commands after tcell has flushed its cell buffer.
 	if state.kitty != nil && state.ttyWriter != nil {
