@@ -77,7 +77,14 @@ func (m *Manager) Update(dt time.Duration) {
 	if m == nil {
 		return
 	}
-	m.effectsClock = m.effectsClock.Add(dt)
+	if dt > 0 {
+		// Tick render: advance by exact fixed timestep.
+		m.effectsClock = m.effectsClock.Add(dt)
+	} else {
+		// Data render: sync to wall clock so timeline's Active() checks
+		// (which use time.Now()) stay consistent with our timestamps.
+		m.effectsClock = time.Now()
+	}
 	now := m.effectsClock
 
 	m.mu.RLock()
