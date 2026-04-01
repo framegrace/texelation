@@ -153,23 +153,28 @@ func (d *DesktopEngine) handleTabMode(ev *tcell.EventKey) {
 	}
 
 	// Lightweight navigation mode (from Shift+Up past top pane).
-	switch ev.Key() {
-	case tcell.KeyEsc:
+	if ev.Key() == tcell.KeyEsc {
 		d.exitTabMode()
-	case tcell.KeyUp:
-		// Already at the top — do nothing (no wrap-around).
-	case tcell.KeyDown:
-		if ev.Modifiers()&tcell.ModShift != 0 {
-			d.exitTabMode()
-		}
-	case tcell.KeyLeft:
-		d.switchWorkspaceRelative(-1)
-	case tcell.KeyRight:
-		d.switchWorkspaceRelative(1)
-	default:
-		// Any other key exits nav mode and is swallowed
-		d.exitTabMode()
+		return
 	}
+
+	// Shift+Arrows: the same navigation gestures that entered tab mode.
+	if ev.Modifiers()&tcell.ModShift != 0 {
+		switch ev.Key() {
+		case tcell.KeyUp:
+			// Already at the top — do nothing.
+		case tcell.KeyDown:
+			d.exitTabMode()
+		case tcell.KeyLeft:
+			d.switchWorkspaceRelative(-1)
+		case tcell.KeyRight:
+			d.switchWorkspaceRelative(1)
+		}
+		return
+	}
+
+	// Any other key exits nav mode and is swallowed.
+	d.exitTabMode()
 }
 
 // handleControlMode processes desktop-level commands when control mode is active.
