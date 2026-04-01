@@ -55,8 +55,8 @@ func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Durat
 
 func (e *fadeTintEffect) ID() string { return "fadeTint" }
 
-func (e *fadeTintEffect) Active() bool {
-	return e.PaneEffectBase.Active() || e.wsIntensity > 0 || e.wsTarget > 0
+func (e *fadeTintEffect) Active(now time.Time) bool {
+	return e.PaneEffectBase.Active(now) || e.wsIntensity > 0 || e.wsTarget > 0
 }
 
 func (e *fadeTintEffect) Update(now time.Time) {

@@ -39,7 +39,7 @@ type matrixEffect struct {
 }
 
 func (e *matrixEffect) ID() string   { return "matrix" }
-func (e *matrixEffect) Active() bool { return e.active }
+func (e *matrixEffect) Active(_ time.Time) bool { return e.active }
 func (e *matrixEffect) Update(now time.Time) {}
 func (e *matrixEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
 

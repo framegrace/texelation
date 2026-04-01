@@ -104,23 +104,7 @@ func (m *Manager) Update(dt time.Duration) {
 	}
 
 	// Cache active state while still under lock
-	m.cachedHasActive = false
-	m.cachedHasPane = false
-	m.cachedHasWorkspace = false
-	for _, eff := range m.paneEffects {
-		if eff.Active() {
-			m.cachedHasActive = true
-			m.cachedHasPane = true
-			break
-		}
-	}
-	for _, eff := range m.workspaceEffects {
-		if eff.Active() {
-			m.cachedHasActive = true
-			m.cachedHasWorkspace = true
-			break
-		}
-	}
+	m.updateActiveCache(now)
 	m.mu.RUnlock()
 }
 
@@ -129,18 +113,23 @@ func (m *Manager) Update(dt time.Duration) {
 func (m *Manager) refreshActiveCache() {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	m.updateActiveCache(m.effectsClock)
+}
+
+// updateActiveCache sets the cached HasActive flags. Must be called under mu lock.
+func (m *Manager) updateActiveCache(now time.Time) {
 	m.cachedHasActive = false
 	m.cachedHasPane = false
 	m.cachedHasWorkspace = false
 	for _, eff := range m.paneEffects {
-		if eff.Active() {
+		if eff.Active(now) {
 			m.cachedHasActive = true
 			m.cachedHasPane = true
 			break
 		}
 	}
 	for _, eff := range m.workspaceEffects {
-		if eff.Active() {
+		if eff.Active(now) {
 			m.cachedHasActive = true
 			m.cachedHasWorkspace = true
 			break
@@ -224,7 +213,7 @@ func (m *Manager) HasActiveWorkspaceEffects() bool {
 
 // PaneStateTriggerTimestamp returns the timestamp to use for pane state triggers.
 // During initial connect (before first render completes), returns a past timestamp
-// so effects snap instantly. After that, returns the effectsClock for normal animation.
+// so effects snap instantly. After that, returns effectsClock for consistent timing.
 func (m *Manager) PaneStateTriggerTimestamp() time.Time {
 	if m == nil {
 		return time.Now()

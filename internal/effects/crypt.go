@@ -27,7 +27,7 @@ type cryptEffect struct {
 }
 
 func (e *cryptEffect) ID() string   { return "crypt" }
-func (e *cryptEffect) Active() bool { return e.active }
+func (e *cryptEffect) Active(_ time.Time) bool { return e.active }
 func (e *cryptEffect) Update(now time.Time) {}
 func (e *cryptEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
 

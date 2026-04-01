@@ -103,10 +103,8 @@ func (e *keyFlashEffect) ApplyWorkspace(buffer [][]client.Cell) {
 	}
 
 	// Auto-fade back to zero after reaching peak
-	// If we're at or near peak and not animating back, start fade-out
-	// Note: We use time.Now() here since this is a state decision, not rendering
-	if baseIntensity >= 0.99 && !e.IsAnimating("flash", time.Now()) {
-		e.Animate("flash", 0.0, time.Now())
+	if baseIntensity >= 0.99 && !e.IsAnimating("flash", e.LastNow) {
+		e.Animate("flash", 0.0, e.LastNow)
 	}
 }
 

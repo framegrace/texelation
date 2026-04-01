@@ -91,7 +91,7 @@ func NewScreensaverFadeRandom(effectIDs []string, fadeStyle string) Effect {
 
 func (e *screensaverFade) ID() string { return "screensaver_fade" }
 
-func (e *screensaverFade) Active() bool {
+func (e *screensaverFade) Active(_ time.Time) bool {
 	return e.active || e.fadingOut
 }
 
