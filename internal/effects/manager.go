@@ -32,6 +32,11 @@ type Manager struct {
 	wakeCh           chan<- struct{}
 	initializing     bool      // true during initial connect
 	initTimestamp    time.Time // past timestamp for snapping effects
+
+	// Cached active state — set by Update(), read by HasActive*() on same goroutine.
+	cachedHasActive    bool
+	cachedHasPane      bool
+	cachedHasWorkspace bool
 }
 
 // NewManager constructs an empty effect manager.
@@ -88,51 +93,50 @@ func (m *Manager) Update(dt time.Duration) {
 	now := m.effectsClock
 
 	m.mu.RLock()
-	panes := append([]Effect(nil), m.paneEffects...)
-	workspaces := append([]Effect(nil), m.workspaceEffects...)
-	m.mu.RUnlock()
-
-	for _, eff := range panes {
+	for _, eff := range m.paneEffects {
 		eff.Update(now)
 	}
-	for _, eff := range workspaces {
+	for _, eff := range m.workspaceEffects {
 		eff.Update(now)
 	}
-}
 
-// HasActiveAnimations returns true if any effect (pane or workspace) is currently active.
-func (m *Manager) HasActiveAnimations() bool {
-	if m == nil {
-		return false
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	// Cache active state while still under lock
+	m.cachedHasActive = false
+	m.cachedHasPane = false
+	m.cachedHasWorkspace = false
 	for _, eff := range m.paneEffects {
 		if eff.Active() {
-			return true
+			m.cachedHasActive = true
+			m.cachedHasPane = true
+			break
 		}
 	}
 	for _, eff := range m.workspaceEffects {
 		if eff.Active() {
-			return true
+			m.cachedHasActive = true
+			m.cachedHasWorkspace = true
+			break
 		}
 	}
-	return false
+	m.mu.RUnlock()
+}
+
+// HasActiveAnimations returns true if any effect (pane or workspace) is currently active.
+// Uses cached state from the last Update() call.
+func (m *Manager) HasActiveAnimations() bool {
+	if m == nil {
+		return false
+	}
+	return m.cachedHasActive
 }
 
 // HasActivePaneEffects returns true if any pane effect is currently active.
+// Uses cached state from the last Update() call.
 func (m *Manager) HasActivePaneEffects() bool {
 	if m == nil {
 		return false
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, eff := range m.paneEffects {
-		if eff.Active() {
-			return true
-		}
-	}
-	return false
+	return m.cachedHasPane
 }
 
 // ApplyPaneEffects mutates the pane buffer using the configured pane effects.
@@ -141,9 +145,8 @@ func (m *Manager) ApplyPaneEffects(pane *client.PaneState, buffer [][]client.Cel
 		return
 	}
 	m.mu.RLock()
-	effects := append([]Effect(nil), m.paneEffects...)
-	m.mu.RUnlock()
-	for _, eff := range effects {
+	defer m.mu.RUnlock()
+	for _, eff := range m.paneEffects {
 		eff.ApplyPane(pane, buffer)
 	}
 }
@@ -154,9 +157,8 @@ func (m *Manager) ApplyWorkspaceEffects(buffer [][]client.Cell) {
 		return
 	}
 	m.mu.RLock()
-	effects := append([]Effect(nil), m.workspaceEffects...)
-	m.mu.RUnlock()
-	for _, eff := range effects {
+	defer m.mu.RUnlock()
+	for _, eff := range m.workspaceEffects {
 		eff.ApplyWorkspace(buffer)
 	}
 }
@@ -170,37 +172,27 @@ func (m *Manager) HandleTrigger(trigger EffectTrigger) {
 		trigger.Timestamp = m.effectsClock
 	}
 	m.mu.RLock()
-	effects := append([]Effect(nil), m.bindings[trigger.Type]...)
+	effects := m.bindings[trigger.Type]
+	ch := m.wakeCh
 	m.mu.RUnlock()
 	for _, eff := range effects {
 		eff.HandleTrigger(trigger)
 	}
-	if len(effects) > 0 {
-		m.mu.RLock()
-		ch := m.wakeCh
-		m.mu.RUnlock()
-		if ch != nil {
-			select {
-			case ch <- struct{}{}:
-			default:
-			}
+	if len(effects) > 0 && ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
 		}
 	}
 }
 
 // HasActiveWorkspaceEffects returns true if any workspace effect is currently active.
+// Uses cached state from the last Update() call.
 func (m *Manager) HasActiveWorkspaceEffects() bool {
 	if m == nil {
 		return false
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, eff := range m.workspaceEffects {
-		if eff.Active() {
-			return true
-		}
-	}
-	return false
+	return m.cachedHasWorkspace
 }
 
 // PaneStateTriggerTimestamp returns the timestamp to use for pane state triggers.

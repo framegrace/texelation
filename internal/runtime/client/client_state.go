@@ -58,8 +58,9 @@ type clientState struct {
 	selection            selectionState
 	idleWatcher          *effects.IdleWatcher
 
-	// Incremental rendering state
+	// Double-buffered rendering
 	prevBuffer       [][]client.Cell
+	renderBuffer     [][]client.Cell
 	fullRenderNeeded bool
 
 	// Fixed-timestep animation state

@@ -82,20 +82,22 @@ func (e *keyFlashEffect) ApplyWorkspace(buffer [][]client.Cell) {
 		intensity = baseIntensity * e.maxIntensity
 	}
 
+	// Pre-compute fallback colors once (invariant across cells).
+	fgFallback := e.defaultFg
+	if fgFallback == tcell.ColorDefault {
+		fgFallback = tcell.ColorWhite
+	}
+	bgFallback := e.defaultBg
+	if bgFallback == tcell.ColorDefault {
+		bgFallback = tcell.ColorBlack
+	}
+
 	// Apply flash tint
 	for y := range buffer {
 		row := buffer[y]
 		for x := range row {
 			cell := &row[x]
 			swap := isFakeBackgroundCell(row, x)
-			fgFallback := e.defaultFg
-			if fgFallback == tcell.ColorDefault {
-				fgFallback = tcell.ColorWhite
-			}
-			bgFallback := e.defaultBg
-			if bgFallback == tcell.ColorDefault {
-				bgFallback = tcell.ColorBlack
-			}
 			cell.Style = tintStyle(cell.Style, e.color, intensity, swap, fgFallback, bgFallback)
 		}
 	}

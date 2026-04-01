@@ -375,8 +375,8 @@ func TestIncrementalComposite_SkipsCleanPanes(t *testing.T) {
 		defaultStyle: tcell.StyleDefault,
 	}
 
-	// Allocate prevBuffer
-	ensurePrevBuffer(state, 10, 2)
+	// Allocate buffers
+	ensureBuffers(state, 10, 2)
 
 	// Pane is dirty from delta — incremental composite should update it.
 	pane := cache.PaneByID(paneID)
