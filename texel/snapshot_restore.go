@@ -89,10 +89,10 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		}
 		screen.tree.Root = root
 		screen.tree.ActiveLeaf = active
-		if active != nil && active.Pane != nil {
-			active.Pane.SetActive(true)
-		}
-		
+		// Don't activate panes here — only the active workspace's pane
+		// should be active. We activate after determining which workspace
+		// is active (step 5 below).
+
 		// Calculate layout for this workspace
 		screen.recalculateLayout()
 	}
@@ -133,7 +133,13 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		}
 	}
 
+	// Activate the focused pane only in the active workspace.
+	// All other workspaces keep their panes deactivated so Shift-arrow
+	// navigation starts from a clean state when switching workspaces.
 	if d.activeWorkspace != nil {
+		if leaf := d.activeWorkspace.tree.ActiveLeaf; leaf != nil && leaf.Pane != nil {
+			leaf.Pane.SetActive(true)
+		}
 		d.activeWorkspace.Refresh()
 		d.activeWorkspace.notifyFocus()
 	}

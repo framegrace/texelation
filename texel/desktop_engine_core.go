@@ -637,6 +637,13 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 		d.zoomedPane = nil
 	}
 
+	// Deactivate the pane in the workspace we're leaving.
+	if d.activeWorkspace != nil && d.activeWorkspace.tree != nil {
+		if leaf := d.activeWorkspace.tree.ActiveLeaf; leaf != nil && leaf.Pane != nil {
+			leaf.Pane.SetActive(false)
+		}
+	}
+
 	created := false
 	if ws, exists := d.workspaces[id]; exists {
 		d.activeWorkspace = ws
@@ -677,6 +684,20 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 		sp.app.SetRefreshNotifier(notifier)
 	}
 	d.recalculateLayout()
+
+	// Activate the pane in the new workspace. If there's an ActiveLeaf
+	// from a previous visit, use it; otherwise pick the first leaf.
+	if d.activeWorkspace != nil && d.activeWorkspace.tree != nil {
+		leaf := d.activeWorkspace.tree.ActiveLeaf
+		if leaf == nil {
+			leaf = findFirstLeaf(d.activeWorkspace.tree.Root)
+			d.activeWorkspace.tree.ActiveLeaf = leaf
+		}
+		if leaf != nil && leaf.Pane != nil {
+			leaf.Pane.SetActive(true)
+		}
+	}
+
 	if created {
 		d.broadcastWorkspacesChanged()
 	}
