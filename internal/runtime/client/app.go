@@ -175,7 +175,7 @@ func Run(opts Options) error {
 		screen.PostEventWait(tcell.NewEventInterrupt(nil))
 	}()
 
-	const dt = 16 * time.Millisecond // ~60fps fixed timestep
+	const dt = 33 * time.Millisecond // ~30fps fixed timestep
 
 	// Unified ticker: started when animations or effects are active, stopped when idle.
 	var ticker *time.Ticker
