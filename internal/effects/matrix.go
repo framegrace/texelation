@@ -30,10 +30,12 @@ type matrixStream struct {
 }
 
 type matrixEffect struct {
-	active  bool
-	streams []matrixStream
-	cols    int
-	rows    int
+	active   bool
+	streams  []matrixStream
+	cols     int
+	rows     int
+	charTable [256]rune // pre-generated random katakana for fast lookup
+	charIdx   uint8     // cycling index into charTable
 }
 
 func (e *matrixEffect) ID() string   { return "matrix" }
@@ -68,6 +70,17 @@ func (e *matrixEffect) initStreams(cols, rows int) {
 	for i := range e.streams {
 		e.streams[i] = e.newStream()
 	}
+	// Pre-generate character lookup table
+	for i := range e.charTable {
+		e.charTable[i] = rune(katakanaBase + rand.Intn(katakanaCount))
+	}
+}
+
+// nextChar returns the next pre-generated character, cycling through the table.
+func (e *matrixEffect) nextChar() rune {
+	ch := e.charTable[e.charIdx]
+	e.charIdx++
+	return ch
 }
 
 func (e *matrixEffect) ApplyWorkspace(buffer [][]client.Cell) {
@@ -128,13 +141,13 @@ func (e *matrixEffect) ApplyWorkspace(buffer [][]client.Cell) {
 			if s.delay > 0 || dist < 0 || dist >= s.length {
 				// Not in a stream: faint random char on black.
 				row[x] = client.Cell{
-					Ch:    rune(katakanaBase + rand.Intn(katakanaCount)),
+					Ch:    e.nextChar(),
 					Style: bgStyle,
 				}
 				continue
 			}
 
-			ch := rune(katakanaBase + rand.Intn(katakanaCount))
+			ch := e.nextChar()
 			frac := float32(dist) / float32(s.length)
 
 			var style tcell.Style
