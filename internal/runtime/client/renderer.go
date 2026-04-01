@@ -21,6 +21,78 @@ import (
 	"github.com/framegrace/texelation/protocol"
 )
 
+// dynColorCacheKey identifies a unique DynamicColor descriptor for caching.
+type dynColorCacheKey struct {
+	Type      uint8
+	Base      uint32
+	Target    uint32
+	Easing    uint8
+	Speed     float32
+	Min       float32
+	Max       float32
+	StopCount uint8 // distinguish gradients with different stop counts
+}
+
+type dynColorCacheEntry struct {
+	key   dynColorCacheKey
+	color color.DynamicColor
+	valid bool
+}
+
+const dynColorCacheSize = 16
+
+type dynColorCache [dynColorCacheSize]dynColorCacheEntry
+
+func keyFromDesc(d protocol.DynColorDesc) dynColorCacheKey {
+	var sc uint8
+	if len(d.Stops) > 0 {
+		sc = uint8(len(d.Stops))
+	}
+	return dynColorCacheKey{
+		Type: d.Type, Base: d.Base, Target: d.Target,
+		Easing: d.Easing, Speed: d.Speed, Min: d.Min, Max: d.Max,
+		StopCount: sc,
+	}
+}
+
+func (c *dynColorCache) get(d protocol.DynColorDesc) (color.DynamicColor, bool) {
+	key := keyFromDesc(d)
+	for i := range c {
+		if c[i].valid && c[i].key == key {
+			return c[i].color, true
+		}
+	}
+	return color.DynamicColor{}, false
+}
+
+func (c *dynColorCache) put(d protocol.DynColorDesc, dc color.DynamicColor) {
+	key := keyFromDesc(d)
+	// Find empty slot or overwrite oldest (slot 0)
+	for i := range c {
+		if !c[i].valid {
+			c[i] = dynColorCacheEntry{key: key, color: dc, valid: true}
+			return
+		}
+	}
+	// Cache full — overwrite first entry
+	c[0] = dynColorCacheEntry{key: key, color: dc, valid: true}
+}
+
+func (c *dynColorCache) clear() {
+	for i := range c {
+		c[i].valid = false
+	}
+}
+
+func resolveDynColor(cache *dynColorCache, d protocol.DynColorDesc, ctx color.ColorContext) tcell.Color {
+	dc, ok := cache.get(d)
+	if !ok {
+		dc = color.FromDesc(protocolDescToColor(d))
+		cache.put(d, dc)
+	}
+	return dc.Resolve(ctx)
+}
+
 func debugLogRender(msg string) {
 	if f, err := os.OpenFile("/tmp/layout_anim_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 		fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05.000"), msg)
@@ -28,19 +100,21 @@ func debugLogRender(msg string) {
 	}
 }
 
-// ensurePrevBuffer allocates or resizes state.prevBuffer.
-// Returns true if the buffer was (re)allocated (size changed).
-func ensurePrevBuffer(state *clientState, width, height int) bool {
+// ensureBuffers allocates or resizes both prevBuffer and renderBuffer.
+// Returns true if the buffers were (re)allocated (size changed).
+func ensureBuffers(state *clientState, width, height int) bool {
 	if len(state.prevBuffer) == height && (height == 0 || len(state.prevBuffer[0]) == width) {
 		return false
 	}
-	state.prevBuffer = make([][]client.Cell, height)
-	for y := 0; y < height; y++ {
-		row := make([]client.Cell, width)
-		for x := range row {
-			row[x] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+	for _, buf := range [2]*[][]client.Cell{&state.prevBuffer, &state.renderBuffer} {
+		*buf = make([][]client.Cell, height)
+		for y := 0; y < height; y++ {
+			row := make([]client.Cell, width)
+			for x := range row {
+				row[x] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+			}
+			(*buf)[y] = row
 		}
-		state.prevBuffer[y] = row
 	}
 	return true
 }
@@ -79,8 +153,9 @@ func diffAndShow(screen tcell.Screen, current, previous [][]client.Cell, default
 // Returns true if any cell has dynamic colors that need continuous rendering.
 func incrementalComposite(state *clientState, screenW, screenH int) bool {
 	hasDynamic := false
-	animTime := float32(time.Since(state.animStart).Seconds())
+	animTime := float32(state.tickAccum)
 	panes := state.cache.SortedPanes()
+	var dcCache dynColorCache
 
 	for _, pane := range panes {
 		if pane == nil {
@@ -176,14 +251,15 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 						PW: w, PH: h,
 						SX: targetX, SY: targetY,
 						SW: screenW, SH: screenH,
-						T: animTime,
+						T:  animTime,
+						DT: state.frameDT,
 					}
 					fg, bg, attrs := style.Decompose()
 					if cell.DynBG.Type >= 2 {
-						bg = color.FromDesc(protocolDescToColor(cell.DynBG)).Resolve(ctx)
+						bg = resolveDynColor(&dcCache, cell.DynBG, ctx)
 					}
 					if cell.DynFG.Type >= 2 {
-						fg = color.FromDesc(protocolDescToColor(cell.DynFG)).Resolve(ctx)
+						fg = resolveDynColor(&dcCache, cell.DynFG, ctx)
 					}
 					style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attrs)
 					if protocolDescIsAnimated(cell.DynBG) || protocolDescIsAnimated(cell.DynFG) {
@@ -207,7 +283,7 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 func render(state *clientState, screen tcell.Screen) {
 	width, height := screen.Size()
 
-	resized := ensurePrevBuffer(state, width, height)
+	resized := ensureBuffers(state, width, height)
 	needsFull := state.fullRenderNeeded || resized
 	if !needsFull && state.effects != nil &&
 		(state.effects.HasActiveWorkspaceEffects() || state.effects.HasActivePaneEffects()) {
@@ -224,20 +300,14 @@ func render(state *clientState, screen tcell.Screen) {
 		return
 	}
 
-	// Incremental path
-	if state.effects != nil {
-		state.effects.Update(time.Now())
-	}
-
-	// Snapshot prevBuffer for diffing
-	oldBuffer := make([][]client.Cell, height)
+	// Copy prevBuffer to renderBuffer (reuse allocation)
 	for y := 0; y < height; y++ {
-		oldBuffer[y] = make([]client.Cell, width)
-		copy(oldBuffer[y], state.prevBuffer[y])
+		copy(state.renderBuffer[y], state.prevBuffer[y])
 	}
 
 	hasDynamic := incrementalComposite(state, width, height)
-	diffAndShow(screen, state.prevBuffer, oldBuffer, state.defaultStyle)
+	// incrementalComposite writes to prevBuffer
+	diffAndShow(screen, state.prevBuffer, state.renderBuffer, state.defaultStyle)
 	state.dynAnimating = hasDynamic
 }
 
@@ -247,17 +317,12 @@ func fullRender(state *clientState, screen tcell.Screen) {
 	screen.SetStyle(state.defaultStyle)
 	screen.Clear()
 
-	if state.effects != nil {
-		state.effects.Update(time.Now())
-	}
-
-	workspaceBuffer := make([][]client.Cell, height)
+	ensureBuffers(state, width, height)
+	workspaceBuffer := state.renderBuffer
 	for y := 0; y < height; y++ {
-		row := make([]client.Cell, width)
-		for x := range row {
-			row[x] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+		for x := range workspaceBuffer[y] {
+			workspaceBuffer[y][x] = client.Cell{Ch: ' ', Style: state.defaultStyle}
 		}
-		workspaceBuffer[y] = row
 	}
 
 	panes := state.cache.SortedPanes()
@@ -325,7 +390,7 @@ func fullRender(state *clientState, screen tcell.Screen) {
 	state.dynAnimating = hasDynamic
 
 	// Store rendered result for future incremental diffs.
-	ensurePrevBuffer(state, width, height)
+	// renderBuffer was used as workspaceBuffer, so copy to prevBuffer.
 	for y := 0; y < height && y < len(workspaceBuffer); y++ {
 		copy(state.prevBuffer[y], workspaceBuffer[y])
 	}
@@ -345,7 +410,8 @@ func fullRender(state *clientState, screen tcell.Screen) {
 // compositeInto renders a set of panes into the workspace buffer.
 func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, state *clientState, screenW, screenH int) bool {
 	hasDynamic := false
-	animTime := float32(time.Since(state.animStart).Seconds())
+	animTime := float32(state.tickAccum)
+	var dcCache dynColorCache
 
 	for _, pane := range panes {
 		x := pane.Rect.X
@@ -407,14 +473,15 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 						PW: w, PH: h,
 						SX: targetX, SY: targetY,
 						SW: screenW, SH: screenH,
-						T: animTime,
+						T:  animTime,
+						DT: state.frameDT,
 					}
 					fg, bg, attrs := style.Decompose()
 					if cell.DynBG.Type >= 2 {
-						bg = color.FromDesc(protocolDescToColor(cell.DynBG)).Resolve(ctx)
+						bg = resolveDynColor(&dcCache, cell.DynBG, ctx)
 					}
 					if cell.DynFG.Type >= 2 {
-						fg = color.FromDesc(protocolDescToColor(cell.DynFG)).Resolve(ctx)
+						fg = resolveDynColor(&dcCache, cell.DynFG, ctx)
 					}
 					style = tcell.StyleDefault.Foreground(fg).Background(bg).Attributes(attrs)
 					if protocolDescIsAnimated(cell.DynBG) || protocolDescIsAnimated(cell.DynFG) {

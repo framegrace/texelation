@@ -5,7 +5,6 @@ package clientruntime
 
 import (
 	"testing"
-	"time"
 
 	"github.com/framegrace/texelui/color"
 	"github.com/gdamore/tcell/v2"
@@ -266,7 +265,7 @@ func TestDynamicColorFullPipeline(t *testing.T) {
 		defaultStyle: tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack),
 		defaultFg:    tcell.ColorWhite,
 		defaultBg:    tcell.ColorBlack,
-		animStart:    time.Now().Add(-500 * time.Millisecond), // pretend 500ms has passed
+		tickAccum: 0.5, // pretend 500ms has passed
 	}
 
 	workspaceBuf := make([][]client.Cell, 1)
@@ -330,7 +329,6 @@ func TestDynamicColorStaticCellsUnaffected(t *testing.T) {
 
 	state := &clientState{
 		defaultStyle: tcell.StyleDefault,
-		animStart:    time.Now(),
 	}
 
 	workspaceBuf := make([][]client.Cell, 1)
@@ -375,11 +373,10 @@ func TestIncrementalComposite_SkipsCleanPanes(t *testing.T) {
 	state := &clientState{
 		cache:        cache,
 		defaultStyle: tcell.StyleDefault,
-		animStart:    time.Now(),
 	}
 
-	// Allocate prevBuffer
-	ensurePrevBuffer(state, 10, 2)
+	// Allocate buffers
+	ensureBuffers(state, 10, 2)
 
 	// Pane is dirty from delta — incremental composite should update it.
 	pane := cache.PaneByID(paneID)

@@ -25,7 +25,7 @@ const (
 // Effect represents a visual overlay that can react to triggers and mutate pane/workspace buffers.
 type Effect interface {
 	ID() string
-	Active() bool
+	Active(now time.Time) bool
 	Update(now time.Time)
 	HandleTrigger(trigger EffectTrigger)
 	ApplyPane(pane *client.PaneState, buffer [][]client.Cell)

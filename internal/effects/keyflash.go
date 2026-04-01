@@ -82,29 +82,29 @@ func (e *keyFlashEffect) ApplyWorkspace(buffer [][]client.Cell) {
 		intensity = baseIntensity * e.maxIntensity
 	}
 
+	// Pre-compute fallback colors once (invariant across cells).
+	fgFallback := e.defaultFg
+	if fgFallback == tcell.ColorDefault {
+		fgFallback = tcell.ColorWhite
+	}
+	bgFallback := e.defaultBg
+	if bgFallback == tcell.ColorDefault {
+		bgFallback = tcell.ColorBlack
+	}
+
 	// Apply flash tint
 	for y := range buffer {
 		row := buffer[y]
 		for x := range row {
 			cell := &row[x]
 			swap := isFakeBackgroundCell(row, x)
-			fgFallback := e.defaultFg
-			if fgFallback == tcell.ColorDefault {
-				fgFallback = tcell.ColorWhite
-			}
-			bgFallback := e.defaultBg
-			if bgFallback == tcell.ColorDefault {
-				bgFallback = tcell.ColorBlack
-			}
 			cell.Style = tintStyle(cell.Style, e.color, intensity, swap, fgFallback, bgFallback)
 		}
 	}
 
 	// Auto-fade back to zero after reaching peak
-	// If we're at or near peak and not animating back, start fade-out
-	// Note: We use time.Now() here since this is a state decision, not rendering
-	if baseIntensity >= 0.99 && !e.IsAnimating("flash", time.Now()) {
-		e.Animate("flash", 0.0, time.Now())
+	if baseIntensity >= 0.99 && !e.IsAnimating("flash", e.LastNow) {
+		e.Animate("flash", 0.0, e.LastNow)
 	}
 }
 

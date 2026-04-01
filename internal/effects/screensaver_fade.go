@@ -29,13 +29,14 @@ type fadeBlender interface {
 }
 
 type screensaverFade struct {
-	inner     Effect
-	effectIDs []string // random mode: pick from these on each activation
-	blender   fadeBlender
-	timeline  *Timeline
-	active    bool
-	fadingOut bool
-	fadeOut   time.Duration
+	inner       Effect
+	effectIDs   []string // random mode: pick from these on each activation
+	blender     fadeBlender
+	timeline    *Timeline
+	active      bool
+	fadingOut   bool
+	fadeOut      time.Duration
+	snapshotBuf [][]client.Cell // pooled buffer for blend snapshot
 }
 
 func blenderForStyle(style string) fadeBlender {
@@ -90,7 +91,7 @@ func NewScreensaverFadeRandom(effectIDs []string, fadeStyle string) Effect {
 
 func (e *screensaverFade) ID() string { return "screensaver_fade" }
 
-func (e *screensaverFade) Active() bool {
+func (e *screensaverFade) Active(_ time.Time) bool {
 	return e.active || e.fadingOut
 }
 
@@ -164,11 +165,15 @@ func (e *screensaverFade) ApplyWorkspace(buffer [][]client.Cell) {
 		return
 	}
 
-	// Snapshot buffer before the inner effect transforms it.
-	orig := make([][]client.Cell, len(buffer))
+	// Snapshot buffer before the inner effect transforms it (reuse pooled buffer).
+	if len(e.snapshotBuf) != len(buffer) {
+		e.snapshotBuf = make([][]client.Cell, len(buffer))
+	}
 	for y := range buffer {
-		orig[y] = make([]client.Cell, len(buffer[y]))
-		copy(orig[y], buffer[y])
+		if len(e.snapshotBuf[y]) != len(buffer[y]) {
+			e.snapshotBuf[y] = make([]client.Cell, len(buffer[y]))
+		}
+		copy(e.snapshotBuf[y], buffer[y])
 	}
 
 	// Let the inner effect transform the buffer at full intensity.
@@ -181,7 +186,7 @@ func (e *screensaverFade) ApplyWorkspace(buffer [][]client.Cell) {
 		return
 	}
 
-	e.blender.Blend(orig, buffer, float32(intensity))
+	e.blender.Blend(e.snapshotBuf, buffer, float32(intensity))
 }
 
 func (e *screensaverFade) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}

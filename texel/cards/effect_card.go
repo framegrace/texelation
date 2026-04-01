@@ -115,8 +115,9 @@ func (c *EffectCard) Run() error {
 				eff := c.effect
 				c.mu.Unlock()
 
-				eff.Update(time.Now())
-				if eff.Active() {
+				now := time.Now()
+				eff.Update(now)
+				if eff.Active(now) {
 					c.requestRefresh()
 				}
 			case <-stop:
@@ -166,7 +167,7 @@ func (c *EffectCard) Render(input [][]texelcore.Cell) [][]texelcore.Cell {
 	eff := c.effect
 	c.mu.Unlock()
 
-	if !eff.Active() {
+	if !eff.Active(time.Now()) {
 		return input
 	}
 

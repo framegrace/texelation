@@ -39,6 +39,7 @@ import (
 type PaneEffectBase struct {
 	timeline *Timeline
 	duration time.Duration
+	LastNow  time.Time // last Update time, for use in Apply* methods
 }
 
 // NewPaneEffectBase creates a new pane effect base with the given animation duration.
@@ -52,6 +53,7 @@ func NewPaneEffectBase(duration time.Duration) PaneEffectBase {
 // Update advances all pane animations to the given time.
 // Call this from your effect's Update method.
 func (b *PaneEffectBase) Update(now time.Time) {
+	b.LastNow = now
 	b.timeline.Update(now)
 }
 
@@ -83,8 +85,8 @@ func (b *PaneEffectBase) IsAnimating(paneID PaneID, now time.Time) bool {
 }
 
 // Active returns true if any pane has an active animation or non-zero value.
-func (b *PaneEffectBase) Active() bool {
-	return b.timeline.HasActiveAnimations()
+func (b *PaneEffectBase) Active(now time.Time) bool {
+	return b.timeline.HasActiveAnimations(now)
 }
 
 // Reset removes the animation state for a pane ID.
@@ -119,6 +121,7 @@ func (b *PaneEffectBase) Reset(paneID PaneID) {
 type WorkspaceEffectBase struct {
 	timeline *Timeline
 	duration time.Duration
+	LastNow  time.Time // last Update time, for use in Apply* methods
 }
 
 // NewWorkspaceEffectBase creates a new workspace effect base with the given animation duration.
@@ -132,6 +135,7 @@ func NewWorkspaceEffectBase(duration time.Duration) WorkspaceEffectBase {
 // Update advances all workspace animations to the given time.
 // Call this from your effect's Update method.
 func (b *WorkspaceEffectBase) Update(now time.Time) {
+	b.LastNow = now
 	b.timeline.Update(now)
 }
 
@@ -163,8 +167,8 @@ func (b *WorkspaceEffectBase) IsAnimating(key interface{}, now time.Time) bool {
 }
 
 // Active returns true if any key has an active animation or non-zero value.
-func (b *WorkspaceEffectBase) Active() bool {
-	return b.timeline.HasActiveAnimations()
+func (b *WorkspaceEffectBase) Active(now time.Time) bool {
+	return b.timeline.HasActiveAnimations(now)
 }
 
 // Reset removes the animation state for a key.

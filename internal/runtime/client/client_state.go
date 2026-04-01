@@ -58,13 +58,15 @@ type clientState struct {
 	selection            selectionState
 	idleWatcher          *effects.IdleWatcher
 
-	// Incremental rendering state
+	// Double-buffered rendering
 	prevBuffer       [][]client.Cell
+	renderBuffer     [][]client.Cell
 	fullRenderNeeded bool
 
-	// Animation time for client-side DynamicColor resolution
-	animStart   time.Time
-	dynAnimating bool // true when dynamic cells need continuous rendering
+	// Fixed-timestep animation state
+	tickAccum    float64 // accumulated animation time in seconds (high precision)
+	frameDT      float32 // delta time for current frame (0 for data-driven renders)
+	dynAnimating bool    // true when dynamic cells need continuous rendering
 
 	// Restart notification state
 	showRestartNotification      bool
@@ -78,7 +80,7 @@ type clientState struct {
 func (s *clientState) setRenderChannel(ch chan<- struct{}) {
 	s.renderCh = ch
 	if s.effects != nil {
-		s.effects.AttachRenderChannel(ch)
+		s.effects.SetWakeChannel(ch)
 	}
 }
 
@@ -169,7 +171,7 @@ func (s *clientState) applyEffectConfig() {
 		manager.RegisterBinding(effects.Binding{Effect: eff, Target: binding.Target, Event: binding.Event})
 	}
 	if s.renderCh != nil {
-		manager.AttachRenderChannel(s.renderCh)
+		manager.SetWakeChannel(s.renderCh)
 	}
 	s.effects = manager
 
@@ -231,9 +233,8 @@ func (s *clientState) applyEffectConfig() {
 		s.effects.ResetPaneStates(s.cache.SortedPanes())
 	}
 	s.effects.HandleTrigger(effects.EffectTrigger{
-		Type:      effects.TriggerWorkspaceControl,
-		Active:    s.controlMode,
-		Timestamp: time.Now(),
+		Type:   effects.TriggerWorkspaceControl,
+		Active: s.controlMode,
 	})
 }
 
@@ -316,9 +317,8 @@ func (s *clientState) applyStateUpdate(update protocol.StateUpdate) {
 	s.recomputeDefaultStyle()
 	if s.effects != nil && prevControl != s.controlMode {
 		s.effects.HandleTrigger(effects.EffectTrigger{
-			Type:      effects.TriggerWorkspaceControl,
-			Active:    s.controlMode,
-			Timestamp: time.Now(),
+			Type:   effects.TriggerWorkspaceControl,
+			Active: s.controlMode,
 		})
 	}
 }

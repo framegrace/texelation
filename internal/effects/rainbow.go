@@ -39,7 +39,7 @@ func newRainbowEffect(speedHz float64, mix float32) Effect {
 
 func (e *rainbowEffect) ID() string { return "rainbow" }
 
-func (e *rainbowEffect) Active() bool { return e.active }
+func (e *rainbowEffect) Active(_ time.Time) bool { return e.active }
 
 func (e *rainbowEffect) Update(now time.Time) {
 	if !e.active {
@@ -59,11 +59,7 @@ func (e *rainbowEffect) HandleTrigger(trigger EffectTrigger) {
 		return
 	}
 	e.active = trigger.Active
-	if trigger.Timestamp.IsZero() {
-		e.lastUpdate = time.Now()
-	} else {
-		e.lastUpdate = trigger.Timestamp
-	}
+	e.lastUpdate = trigger.Timestamp
 }
 
 func (e *rainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {

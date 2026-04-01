@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"time"
 	"unicode/utf8"
 
 	"github.com/framegrace/texelation/internal/debuglog"
@@ -60,8 +59,7 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 					state.effects.HandleTrigger(effects.EffectTrigger{
 						Type:      effects.TriggerWorkspaceControl,
 						Active:    state.controlMode,
-						Timestamp: time.Now(),
-					})
+						})
 				}
 				debuglog.Printf("control quit requested; closing client")
 				return false
@@ -74,7 +72,6 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 				state.effects.HandleTrigger(effects.EffectTrigger{
 					Type:      effects.TriggerWorkspaceControl,
 					Active:    state.controlMode,
-					Timestamp: time.Now(),
 				})
 			}
 			render(state, screen)
@@ -86,7 +83,6 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 				state.effects.HandleTrigger(effects.EffectTrigger{
 					Type:      effects.TriggerWorkspaceControl,
 					Active:    state.controlMode,
-					Timestamp: time.Now(),
 				})
 			}
 			render(state, screen)
@@ -94,7 +90,6 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 		if err := sendKeyEvent(writeMu, conn, sessionID, ev.Key(), ev.Rune(), ev.Modifiers()); err != nil {
 			log.Printf("send key failed: %v", err)
 		} else if state.effects != nil {
-			now := time.Now()
 			r := ev.Rune()
 			mod := uint16(ev.Modifiers())
 			if state.hasFocus {
@@ -103,7 +98,6 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 					PaneID:    state.focus.PaneID,
 					Key:       r,
 					Modifiers: mod,
-					Timestamp: now,
 				})
 			}
 			state.effects.HandleTrigger(effects.EffectTrigger{
@@ -111,7 +105,6 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 				WorkspaceID: state.workspaceID,
 				Key:         r,
 				Modifiers:   mod,
-				Timestamp:   now,
 			})
 		}
 		if state.idleWatcher != nil {

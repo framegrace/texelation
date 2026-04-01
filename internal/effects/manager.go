@@ -28,11 +28,15 @@ type Manager struct {
 	bindings         map[EffectTriggerType][]Effect
 	paneEffects      []Effect
 	workspaceEffects []Effect
-	renderCh         chan<- struct{}
-	frameMu          sync.Mutex
-	frameTimer       *time.Timer
+	effectsClock     time.Time
+	wakeCh           chan<- struct{}
 	initializing     bool      // true during initial connect
 	initTimestamp    time.Time // past timestamp for snapping effects
+
+	// Cached active state — set by Update(), read by HasActive*() on same goroutine.
+	cachedHasActive    bool
+	cachedHasPane      bool
+	cachedHasWorkspace bool
 }
 
 // NewManager constructs an empty effect manager.
@@ -41,20 +45,17 @@ func NewManager() *Manager {
 		bindings:         make(map[EffectTriggerType][]Effect),
 		paneEffects:      make([]Effect, 0),
 		workspaceEffects: make([]Effect, 0),
+		effectsClock:     time.Now(),
 		initializing:     true,
 		initTimestamp:    time.Now().Add(-10 * time.Second),
 	}
 }
 
-// AttachRenderChannel allows the manager to request additional frames for animated effects.
-func (m *Manager) AttachRenderChannel(ch chan<- struct{}) {
-	m.frameMu.Lock()
-	m.renderCh = ch
-	if m.frameTimer != nil {
-		m.frameTimer.Stop()
-		m.frameTimer = nil
-	}
-	m.frameMu.Unlock()
+// SetWakeChannel sets the channel used to wake the game loop when effects need attention.
+func (m *Manager) SetWakeChannel(ch chan<- struct{}) {
+	m.mu.Lock()
+	m.wakeCh = ch
+	m.mu.Unlock()
 }
 
 // RegisterBinding wires an effect to a trigger and target scope.
@@ -74,78 +75,84 @@ func (m *Manager) RegisterBinding(binding Binding) {
 	m.bindings[binding.Event] = append(m.bindings[binding.Event], binding.Effect)
 }
 
-func (m *Manager) requestFrame() {
-	m.frameMu.Lock()
-	if m.renderCh == nil {
-		m.frameMu.Unlock()
-		return
-	}
-	if m.frameTimer != nil {
-		m.frameMu.Unlock()
-		return
-	}
-	ch := m.renderCh
-	m.frameTimer = time.AfterFunc(16*time.Millisecond, func() {
-		// Clear timer BEFORE sending so RequestFrame() can schedule the
-		// next frame immediately when the render goroutine calls it.
-		m.frameMu.Lock()
-		m.frameTimer = nil
-		m.frameMu.Unlock()
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
-	})
-	m.frameMu.Unlock()
-}
-
-// RequestFrame schedules a render after one frame interval (~16ms).
-// Safe to call multiple times; only one timer runs at a time.
-func (m *Manager) RequestFrame() {
-	m.requestFrame()
-}
-
 // Update ticks all effects so animations can advance.
-func (m *Manager) Update(now time.Time) {
+// dt is the elapsed time since the last update; the manager converts it
+// to a synthetic clock value that effects receive via Update(now time.Time).
+func (m *Manager) Update(dt time.Duration) {
 	if m == nil {
 		return
 	}
-	m.mu.RLock()
-	panes := append([]Effect(nil), m.paneEffects...)
-	workspaces := append([]Effect(nil), m.workspaceEffects...)
-	m.mu.RUnlock()
 
-	needsFrame := false
-	for _, eff := range panes {
+	if dt > 0 {
+		// Tick render: advance by exact fixed timestep.
+		m.effectsClock = m.effectsClock.Add(dt)
+	} else {
+		// Data render: don't advance effects (no time passed).
+		// Just refresh cached active state using wall clock for timeline checks.
+		m.refreshActiveCache()
+		return
+	}
+
+	now := m.effectsClock
+
+	m.mu.RLock()
+	for _, eff := range m.paneEffects {
 		eff.Update(now)
-		if eff.Active() {
-			needsFrame = true
+	}
+	for _, eff := range m.workspaceEffects {
+		eff.Update(now)
+	}
+
+	// Cache active state while still under lock
+	m.updateActiveCache(now)
+	m.mu.RUnlock()
+}
+
+// refreshActiveCache updates cached active flags without advancing effects.
+// Used on data-driven renders where no time has passed.
+func (m *Manager) refreshActiveCache() {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	m.updateActiveCache(m.effectsClock)
+}
+
+// updateActiveCache sets the cached HasActive flags. Must be called under mu lock.
+func (m *Manager) updateActiveCache(now time.Time) {
+	m.cachedHasActive = false
+	m.cachedHasPane = false
+	m.cachedHasWorkspace = false
+	for _, eff := range m.paneEffects {
+		if eff.Active(now) {
+			m.cachedHasActive = true
+			m.cachedHasPane = true
+			break
 		}
 	}
-	for _, eff := range workspaces {
-		eff.Update(now)
-		if eff.Active() {
-			needsFrame = true
+	for _, eff := range m.workspaceEffects {
+		if eff.Active(now) {
+			m.cachedHasActive = true
+			m.cachedHasWorkspace = true
+			break
 		}
-	}
-	if needsFrame {
-		m.requestFrame()
 	}
 }
 
+// HasActiveAnimations returns true if any effect (pane or workspace) is currently active.
+// Uses cached state from the last Update() call.
+func (m *Manager) HasActiveAnimations() bool {
+	if m == nil {
+		return false
+	}
+	return m.cachedHasActive
+}
+
 // HasActivePaneEffects returns true if any pane effect is currently active.
+// Uses cached state from the last Update() call.
 func (m *Manager) HasActivePaneEffects() bool {
 	if m == nil {
 		return false
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, eff := range m.paneEffects {
-		if eff.Active() {
-			return true
-		}
-	}
-	return false
+	return m.cachedHasPane
 }
 
 // ApplyPaneEffects mutates the pane buffer using the configured pane effects.
@@ -154,9 +161,8 @@ func (m *Manager) ApplyPaneEffects(pane *client.PaneState, buffer [][]client.Cel
 		return
 	}
 	m.mu.RLock()
-	effects := append([]Effect(nil), m.paneEffects...)
-	m.mu.RUnlock()
-	for _, eff := range effects {
+	defer m.mu.RUnlock()
+	for _, eff := range m.paneEffects {
 		eff.ApplyPane(pane, buffer)
 	}
 }
@@ -167,9 +173,8 @@ func (m *Manager) ApplyWorkspaceEffects(buffer [][]client.Cell) {
 		return
 	}
 	m.mu.RLock()
-	effects := append([]Effect(nil), m.workspaceEffects...)
-	m.mu.RUnlock()
-	for _, eff := range effects {
+	defer m.mu.RUnlock()
+	for _, eff := range m.workspaceEffects {
 		eff.ApplyWorkspace(buffer)
 	}
 }
@@ -180,47 +185,45 @@ func (m *Manager) HandleTrigger(trigger EffectTrigger) {
 		return
 	}
 	if trigger.Timestamp.IsZero() {
-		trigger.Timestamp = time.Now()
+		trigger.Timestamp = m.effectsClock
 	}
 	m.mu.RLock()
-	effects := append([]Effect(nil), m.bindings[trigger.Type]...)
+	effects := m.bindings[trigger.Type]
+	ch := m.wakeCh
 	m.mu.RUnlock()
 	for _, eff := range effects {
 		eff.HandleTrigger(trigger)
 	}
-	if len(effects) > 0 {
-		m.requestFrame()
+	if len(effects) > 0 && ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
 }
 
 // HasActiveWorkspaceEffects returns true if any workspace effect is currently active.
+// Uses cached state from the last Update() call.
 func (m *Manager) HasActiveWorkspaceEffects() bool {
 	if m == nil {
 		return false
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, eff := range m.workspaceEffects {
-		if eff.Active() {
-			return true
-		}
-	}
-	return false
+	return m.cachedHasWorkspace
 }
 
 // PaneStateTriggerTimestamp returns the timestamp to use for pane state triggers.
 // During initial connect (before first render completes), returns a past timestamp
-// so effects snap instantly. After that, returns time.Now() for normal animation.
+// so effects snap instantly. After that, returns effectsClock for consistent timing.
 func (m *Manager) PaneStateTriggerTimestamp() time.Time {
 	if m == nil {
 		return time.Now()
 	}
-	m.frameMu.Lock()
-	defer m.frameMu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if m.initializing {
 		return m.initTimestamp
 	}
-	return time.Now()
+	return m.effectsClock
 }
 
 // FinishInitialization marks the end of the initial connect phase.
@@ -229,9 +232,9 @@ func (m *Manager) FinishInitialization() {
 	if m == nil {
 		return
 	}
-	m.frameMu.Lock()
+	m.mu.Lock()
 	m.initializing = false
-	m.frameMu.Unlock()
+	m.mu.Unlock()
 }
 
 // ResetPaneStates primes pane effects with the current desktop state when the client connects.
