@@ -62,7 +62,8 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 	// Ctrl+Arrows: resize the nearest pane border by 1 character.
 	// Ctrl+Right/Down: grow active pane (move right/bottom border outward)
 	// Ctrl+Left/Up: shrink active pane (move right/bottom border inward)
-	if key.Modifiers()&tcell.ModCtrl != 0 {
+	// Skip when in tab mode — no pane is active to resize.
+	if key.Modifiers()&tcell.ModCtrl != 0 && !d.inTabMode {
 		switch key.Key() {
 		case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown:
 			if d.activeWorkspace != nil {
