@@ -59,11 +59,7 @@ func (e *rainbowEffect) HandleTrigger(trigger EffectTrigger) {
 		return
 	}
 	e.active = trigger.Active
-	if trigger.Timestamp.IsZero() {
-		e.lastUpdate = time.Now()
-	} else {
-		e.lastUpdate = trigger.Timestamp
-	}
+	e.lastUpdate = trigger.Timestamp
 }
 
 func (e *rainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {

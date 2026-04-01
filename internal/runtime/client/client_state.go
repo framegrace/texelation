@@ -233,9 +233,8 @@ func (s *clientState) applyEffectConfig() {
 		s.effects.ResetPaneStates(s.cache.SortedPanes())
 	}
 	s.effects.HandleTrigger(effects.EffectTrigger{
-		Type:      effects.TriggerWorkspaceControl,
-		Active:    s.controlMode,
-		Timestamp: time.Now(),
+		Type:   effects.TriggerWorkspaceControl,
+		Active: s.controlMode,
 	})
 }
 
@@ -318,9 +317,8 @@ func (s *clientState) applyStateUpdate(update protocol.StateUpdate) {
 	s.recomputeDefaultStyle()
 	if s.effects != nil && prevControl != s.controlMode {
 		s.effects.HandleTrigger(effects.EffectTrigger{
-			Type:      effects.TriggerWorkspaceControl,
-			Active:    s.controlMode,
-			Timestamp: time.Now(),
+			Type:   effects.TriggerWorkspaceControl,
+			Active: s.controlMode,
 		})
 	}
 }

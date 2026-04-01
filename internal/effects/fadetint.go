@@ -110,7 +110,7 @@ func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 		}
 		e.wsStart = trigger.Timestamp
 		if e.wsStart.IsZero() {
-			e.wsStart = time.Now()
+			e.wsStart = trigger.Timestamp
 		}
 	}
 }

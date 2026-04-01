@@ -82,14 +82,17 @@ func (m *Manager) Update(dt time.Duration) {
 	if m == nil {
 		return
 	}
+
 	if dt > 0 {
 		// Tick render: advance by exact fixed timestep.
 		m.effectsClock = m.effectsClock.Add(dt)
 	} else {
-		// Data render: sync to wall clock so timeline's Active() checks
-		// (which use time.Now()) stay consistent with our timestamps.
-		m.effectsClock = time.Now()
+		// Data render: don't advance effects (no time passed).
+		// Just refresh cached active state using wall clock for timeline checks.
+		m.refreshActiveCache()
+		return
 	}
+
 	now := m.effectsClock
 
 	m.mu.RLock()
@@ -119,6 +122,30 @@ func (m *Manager) Update(dt time.Duration) {
 		}
 	}
 	m.mu.RUnlock()
+}
+
+// refreshActiveCache updates cached active flags without advancing effects.
+// Used on data-driven renders where no time has passed.
+func (m *Manager) refreshActiveCache() {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	m.cachedHasActive = false
+	m.cachedHasPane = false
+	m.cachedHasWorkspace = false
+	for _, eff := range m.paneEffects {
+		if eff.Active() {
+			m.cachedHasActive = true
+			m.cachedHasPane = true
+			break
+		}
+	}
+	for _, eff := range m.workspaceEffects {
+		if eff.Active() {
+			m.cachedHasActive = true
+			m.cachedHasWorkspace = true
+			break
+		}
+	}
 }
 
 // HasActiveAnimations returns true if any effect (pane or workspace) is currently active.
