@@ -126,11 +126,18 @@ func (d *DesktopEngine) recalculateLayout() {
 	// Resize floating panels if needed (e.g. ensure they fit?)
 	// For now, leave them as requested.
 
-	if d.zoomedPane != nil {
-		if d.zoomedPane.Pane != nil {
-			d.zoomedPane.Pane.setDimensions(mainX, mainY, mainX+mainW, mainY+mainH)
-		}
-	} else if d.activeWorkspace != nil {
-		d.activeWorkspace.setArea(mainX, mainY, mainW, mainH)
+	// Set area for ALL workspaces, not just the active one.
+	// Without this, panes in non-active workspaces start with 0x0 dimensions
+	// during snapshot restore (startPendingApps starts ALL panes but only the
+	// active workspace had correct dimensions). VTerm created at 0x1 corrupts
+	// liveEdgeBase/cursor state from WAL, compounding on each server restart.
+	// setDimensions has a no-change guard, so repeated calls are cheap.
+	for _, ws := range d.workspaces {
+		ws.setArea(mainX, mainY, mainW, mainH)
+	}
+
+	// Override zoomed pane to fill the full main area.
+	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
+		d.zoomedPane.Pane.setDimensions(mainX, mainY, mainX+mainW, mainY+mainH)
 	}
 }
