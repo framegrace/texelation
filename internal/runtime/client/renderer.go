@@ -175,35 +175,12 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 			continue
 		}
 
-		// Build a local pane buffer for rows that need updating,
-		// then apply pane effects on the full pane region.
+		// Build a local pane buffer from RowCells so pane effects are applied
+		// to clean source content. Copying from prevBuffer is intentionally
+		// avoided: prevBuffer already has effects applied from the previous
+		// render, so copying and re-applying would accumulate tint each frame.
 		paneBuffer := make([][]client.Cell, h)
 		for rowIdx := 0; rowIdx < h; rowIdx++ {
-			if pane.DirtyRows != nil && !pane.DirtyRows[rowIdx] && !pane.HasAnimated {
-				// Copy existing content from prevBuffer for non-dirty rows
-				// so pane effects can be applied uniformly.
-				targetY := y + rowIdx
-				if targetY >= 0 && targetY < screenH {
-					row := make([]client.Cell, w)
-					for col := 0; col < w; col++ {
-						targetX := x + col
-						if targetX >= 0 && targetX < screenW {
-							row[col] = state.prevBuffer[targetY][targetX]
-						} else {
-							row[col] = client.Cell{Ch: ' ', Style: state.defaultStyle}
-						}
-					}
-					paneBuffer[rowIdx] = row
-				} else {
-					row := make([]client.Cell, w)
-					for col := range row {
-						row[col] = client.Cell{Ch: ' ', Style: state.defaultStyle}
-					}
-					paneBuffer[rowIdx] = row
-				}
-				continue
-			}
-
 			row := make([]client.Cell, w)
 			source := pane.RowCells(rowIdx)
 			for col := 0; col < w && col < len(source); col++ {
