@@ -101,8 +101,17 @@ func (d *DesktopEngine) startCloseWorkspace() {
 
 // enterTabNavMode activates lightweight tab navigation (Shift+Up past top pane).
 // Left/Right switch workspaces, Shift+Down or Escape exits.
+// Deactivates the current workspace pane so no pane appears focused.
 func (d *DesktopEngine) enterTabNavMode() {
 	d.inTabMode = true
+
+	// Deactivate the current pane so the status bar appears as the focused element.
+	if ws := d.activeWorkspace; ws != nil && ws.tree != nil && ws.tree.ActiveLeaf != nil {
+		if p := ws.tree.ActiveLeaf.Pane; p != nil {
+			p.SetActive(false)
+		}
+	}
+
 	for _, sp := range d.statusPanes {
 		if handler, ok := sp.app.(TabModeHandler); ok {
 			handler.EnterNavMode()
@@ -110,12 +119,19 @@ func (d *DesktopEngine) enterTabNavMode() {
 	}
 }
 
-// exitTabMode leaves tab editing mode.
+// exitTabMode leaves tab editing mode and reactivates the workspace pane.
 func (d *DesktopEngine) exitTabMode() {
 	d.inTabMode = false
 	for _, sp := range d.statusPanes {
 		if handler, ok := sp.app.(TabModeHandler); ok {
 			handler.ExitTabMode()
+		}
+	}
+
+	// Reactivate the workspace's active pane.
+	if ws := d.activeWorkspace; ws != nil && ws.tree != nil && ws.tree.ActiveLeaf != nil {
+		if p := ws.tree.ActiveLeaf.Pane; p != nil {
+			p.SetActive(true)
 		}
 	}
 }
@@ -140,6 +156,8 @@ func (d *DesktopEngine) handleTabMode(ev *tcell.EventKey) {
 	switch ev.Key() {
 	case tcell.KeyEsc:
 		d.exitTabMode()
+	case tcell.KeyUp:
+		// Already at the top — do nothing (no wrap-around).
 	case tcell.KeyDown:
 		if ev.Modifiers()&tcell.ModShift != 0 {
 			d.exitTabMode()
