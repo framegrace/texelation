@@ -23,7 +23,7 @@ const brailleCount = 0x28FF - brailleBase + 1
 type cryptEffect struct {
 	active    bool
 	charTable [256]rune // pre-generated braille chars
-	charIdx   uint8
+	frame     uint32    // frame counter for partial updates
 }
 
 func (e *cryptEffect) ID() string   { return "crypt" }
@@ -43,12 +43,6 @@ func (e *cryptEffect) HandleTrigger(trigger EffectTrigger) {
 	}
 }
 
-func (e *cryptEffect) nextChar() rune {
-	ch := e.charTable[e.charIdx]
-	e.charIdx++
-	return ch
-}
-
 // isAlphanumeric is a fast ASCII-optimized check that falls back to unicode for non-ASCII.
 func isAlphanumeric(ch rune) bool {
 	if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' {
@@ -60,19 +54,45 @@ func isAlphanumeric(ch rune) bool {
 	return unicode.IsLetter(ch) || unicode.IsDigit(ch)
 }
 
+// cellHash returns a pseudo-random but deterministic hash for a cell position.
+// Uses a simple integer hash to avoid diagonal banding artifacts from linear coefficients.
+func cellHash(x, y int) uint8 {
+	h := uint32(x) ^ (uint32(y) * 2654435761) // Knuth multiplicative hash
+	h ^= h >> 16
+	h *= 0x45d9f3b
+	h ^= h >> 16
+	return uint8(h)
+}
+
 func (e *cryptEffect) ApplyWorkspace(buffer [][]client.Cell) {
 	if !e.active {
 		return
 	}
+	e.frame++
+	// Use position-based lookup so each cell gets a stable braille char.
+	// Only re-roll a fraction of cells per frame (~12%) to create a
+	// shimmer effect without forcing SetContent on every cell.
+	frame := uint8(e.frame)
 	for y := range buffer {
 		row := buffer[y]
 		for x := range row {
-			if isAlphanumeric(row[x].Ch) {
-				row[x].Ch = e.nextChar()
+			if !isAlphanumeric(row[x].Ch) {
+				continue
 			}
+			h := cellHash(x, y)
+			// Re-roll this cell when its hash phase matches the frame.
+			// Threshold 100/256 ≈ 39% of cells change per frame.
+			if uint8(h+frame) < 100 {
+				e.charTable[h] = rune(brailleBase + rand.Intn(brailleCount))
+			}
+			row[x].Ch = e.charTable[h]
 		}
 	}
 }
+
+// FrameSkip returns 2 — crypt only changes ~40% of cells per frame,
+// so 15fps is smooth enough.
+func (e *cryptEffect) FrameSkip() int { return 2 }
 
 func init() {
 	Register("crypt", func(cfg EffectConfig) (Effect, error) {

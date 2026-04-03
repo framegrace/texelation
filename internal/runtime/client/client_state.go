@@ -63,10 +63,14 @@ type clientState struct {
 	renderBuffer     [][]client.Cell
 	fullRenderNeeded bool
 
+	// Pooled pane buffer for compositeInto (avoids per-frame allocations)
+	paneBuffer [][]client.Cell
+
 	// Fixed-timestep animation state
-	tickAccum    float64 // accumulated animation time in seconds (high precision)
-	frameDT      float32 // delta time for current frame (0 for data-driven renders)
-	dynAnimating bool    // true when dynamic cells need continuous rendering
+	tickAccum      float64 // accumulated animation time in seconds (high precision)
+	frameDT        float32 // delta time for current frame (0 for data-driven renders)
+	dynAnimating   bool    // true when dynamic cells need continuous rendering
+	animFrameCount uint64  // tick counter for frame skipping
 
 	// Restart notification state
 	showRestartNotification      bool

@@ -211,6 +211,23 @@ func (m *Manager) HasActiveWorkspaceEffects() bool {
 	return m.cachedHasWorkspace
 }
 
+// ActiveFrameSkip returns the frame skip factor for the currently active
+// workspace effect. Returns 1 (no skip) if no effect is active or the
+// effect doesn't implement FrameSkipper.
+func (m *Manager) ActiveFrameSkip() int {
+	if m == nil || !m.cachedHasWorkspace {
+		return 1
+	}
+	for _, eff := range m.workspaceEffects {
+		if eff.Active(time.Time{}) {
+			if fs, ok := eff.(FrameSkipper); ok {
+				return fs.FrameSkip()
+			}
+		}
+	}
+	return 1
+}
+
 // PaneStateTriggerTimestamp returns the timestamp to use for pane state triggers.
 // During initial connect (before first render completes), returns a past timestamp
 // so effects snap instantly. After that, returns effectsClock for consistent timing.

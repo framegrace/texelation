@@ -9,10 +9,11 @@
 package texelterm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	texelcore "github.com/framegrace/texelui/core"
-	"github.com/framegrace/texelui/widgets"
+	"image"
+	"image/png"
 	"io"
 	"log"
 	"math"
@@ -24,6 +25,10 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/graphics/textrender"
+	"github.com/framegrace/texelui/widgets"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/apps/texelterm/shell"
@@ -965,6 +970,12 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
+	// Handle Ctrl+S to take a PNG screenshot
+	if ev.Key() == tcell.KeyCtrlS {
+		a.takeScreenshot()
+		return
+	}
+
 	if a.pty == nil {
 		return
 	}
@@ -986,6 +997,104 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	if _, err := a.pty.Write(keyBytes); err != nil {
 		log.Printf("[TEXELTERM] Failed to write key to PTY: %v", err)
 	}
+}
+
+// takeScreenshot renders the current terminal content to a PNG file.
+func (a *TexelTerm) takeScreenshot() {
+	coreGrid := a.Render()
+	if len(coreGrid) == 0 {
+		return
+	}
+
+	fontPath, err := textrender.DetectFont()
+	if err != nil {
+		log.Printf("[SCREENSHOT] Font detection failed: %v", err)
+		if a.statusBar != nil {
+			a.statusBar.ShowError("Screenshot: font detection failed")
+		}
+		return
+	}
+
+	renderer, err := textrender.New(textrender.Config{FontPath: fontPath})
+	if err != nil {
+		log.Printf("[SCREENSHOT] Renderer creation failed: %v", err)
+		if a.statusBar != nil {
+			a.statusBar.ShowError("Screenshot: renderer failed")
+		}
+		return
+	}
+
+	img := renderer.Render(coreGrid)
+
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".texelation", "screenshots")
+	os.MkdirAll(dir, 0o755)
+	filename := filepath.Join(dir, fmt.Sprintf("screenshot-%s.png", time.Now().Format("2006-01-02_15-04-05")))
+
+	f, err := os.Create(filename)
+	if err != nil {
+		log.Printf("[SCREENSHOT] Failed to create file: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if err := png.Encode(f, img); err != nil {
+		log.Printf("[SCREENSHOT] Failed to encode PNG: %v", err)
+		return
+	}
+
+	log.Printf("[SCREENSHOT] Saved to %s", filename)
+
+	// Copy PNG to system clipboard.
+	// OSC 52 terminal clipboard only supports text, not images.
+	copied := copyImageToClipboard(img, filename)
+
+	if a.statusBar != nil {
+		msg := filepath.Base(filename)
+		if copied {
+			msg += " (copied)"
+		}
+		a.statusBar.ShowSuccess(fmt.Sprintf("Screenshot: %s", msg))
+	}
+}
+
+// copyImageToClipboard copies a PNG image to the system clipboard.
+// Uses wl-copy (Wayland), xclip (X11), or osascript (macOS).
+// The filePath is needed for the macOS osascript approach.
+func copyImageToClipboard(img image.Image, filePath string) bool {
+	// Wayland
+	if path, err := exec.LookPath("wl-copy"); err == nil {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err == nil {
+			cmd := exec.Command(path, "-t", "image/png")
+			cmd.Stdin = &buf
+			if err := cmd.Run(); err == nil {
+				return true
+			}
+		}
+	}
+
+	// X11
+	if path, err := exec.LookPath("xclip"); err == nil {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err == nil {
+			cmd := exec.Command(path, "-selection", "clipboard", "-t", "image/png")
+			cmd.Stdin = &buf
+			if err := cmd.Run(); err == nil {
+				return true
+			}
+		}
+	}
+
+	// macOS — osascript reads the saved file as TIFF picture into clipboard
+	if path, err := exec.LookPath("osascript"); err == nil {
+		script := fmt.Sprintf(`set the clipboard to (read (POSIX file %q) as «class PNGf»)`, filePath)
+		if err := exec.Command(path, "-e", script).Run(); err == nil {
+			return true
+		}
+	}
+
+	return false
 }
 
 // toggleTransformers flips the transformer pipeline state (Ctrl+T path).

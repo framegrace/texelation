@@ -121,25 +121,30 @@ func ensureBuffers(state *clientState, width, height int) bool {
 
 // diffAndShow compares current vs previous buffer and only calls
 // screen.SetContent for cells that have changed.
+// Uses index access instead of range to avoid copying large Cell structs.
 func diffAndShow(screen tcell.Screen, current, previous [][]client.Cell, defaultStyle tcell.Style) {
-	for y, row := range current {
-		if y >= len(previous) {
-			break
-		}
+	height := len(current)
+	if len(previous) < height {
+		height = len(previous)
+	}
+	for y := 0; y < height; y++ {
+		row := current[y]
 		prevRow := previous[y]
-		for x, cell := range row {
-			if x >= len(prevRow) {
-				break
-			}
-			prev := prevRow[x]
-			if cell.Ch == prev.Ch && cell.Style == prev.Style {
+		width := len(row)
+		if len(prevRow) < width {
+			width = len(prevRow)
+		}
+		for x := 0; x < width; x++ {
+			cur := &row[x]
+			prev := &prevRow[x]
+			if cur.Ch == prev.Ch && cur.Style == prev.Style {
 				continue
 			}
-			ch := cell.Ch
+			ch := cur.Ch
 			if ch == 0 {
 				ch = ' '
 			}
-			style := cell.Style
+			style := cur.Style
 			if style == (tcell.Style{}) {
 				style = defaultStyle
 			}
@@ -179,26 +184,25 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 		// to clean source content. Copying from prevBuffer is intentionally
 		// avoided: prevBuffer already has effects applied from the previous
 		// render, so copying and re-applying would accumulate tint each frame.
-		paneBuffer := make([][]client.Cell, h)
+		paneBuffer := ensurePaneBuffer(state, w, h)
+		defaultCell := client.Cell{Ch: ' ', Style: state.defaultStyle}
 		for rowIdx := 0; rowIdx < h; rowIdx++ {
-			row := make([]client.Cell, w)
-			source := pane.RowCells(rowIdx)
-			for col := 0; col < w && col < len(source); col++ {
-				cell := source[col]
-				if cell.Ch == 0 {
-					cell.Ch = ' '
-				}
-				if cell.Style == (tcell.Style{}) {
-					cell.Style = state.defaultStyle
-				}
-				row[col] = cell
-			}
+			row := paneBuffer[rowIdx]
+			source := pane.RowCellsDirect(rowIdx)
 			for col := 0; col < w; col++ {
-				if row[col].Ch == 0 {
-					row[col] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+				if col < len(source) {
+					cell := source[col]
+					if cell.Ch == 0 {
+						cell.Ch = ' '
+					}
+					if cell.Style == (tcell.Style{}) {
+						cell.Style = state.defaultStyle
+					}
+					row[col] = cell
+				} else {
+					row[col] = defaultCell
 				}
 			}
-			paneBuffer[rowIdx] = row
 		}
 
 		if state.effects != nil {
@@ -217,7 +221,7 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 				if targetX < 0 || targetX >= screenW {
 					continue
 				}
-				cell := row[col]
+				cell := &row[col]
 				style := cell.Style
 
 				if cell.DynBG.Type >= 2 || cell.DynFG.Type >= 2 {
@@ -289,16 +293,18 @@ func render(state *clientState, screen tcell.Screen) {
 }
 
 // fullRender performs a complete render of all panes (original render path).
+// Uses diffAndShow to only send changed cells to the terminal instead of
+// clearing and rewriting everything — this lets tcell skip unchanged cells,
+// which is critical for effects/screensavers that run at 30 fps.
 func fullRender(state *clientState, screen tcell.Screen) {
 	width, height := screen.Size()
-	screen.SetStyle(state.defaultStyle)
-	screen.Clear()
 
 	ensureBuffers(state, width, height)
 	workspaceBuffer := state.renderBuffer
+	defaultCell := client.Cell{Ch: ' ', Style: state.defaultStyle}
 	for y := 0; y < height; y++ {
 		for x := range workspaceBuffer[y] {
-			workspaceBuffer[y][x] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+			workspaceBuffer[y][x] = defaultCell
 		}
 	}
 
@@ -361,16 +367,17 @@ func fullRender(state *clientState, screen tcell.Screen) {
 		renderRestartNotification(workspaceBuffer, width, height)
 	}
 
-	showWorkspaceBuffer(screen, workspaceBuffer, state.defaultStyle)
-	screen.Show()
+	// Use diffAndShow to only send changed cells to the terminal.
+	// This is much cheaper than screen.Clear() + showWorkspaceBuffer()
+	// because tcell skips cells that haven't changed between frames.
+	diffAndShow(screen, workspaceBuffer, state.prevBuffer, state.defaultStyle)
 
 	state.dynAnimating = hasDynamic
 
-	// Store rendered result for future incremental diffs.
-	// renderBuffer was used as workspaceBuffer, so copy to prevBuffer.
-	for y := 0; y < height && y < len(workspaceBuffer); y++ {
-		copy(state.prevBuffer[y], workspaceBuffer[y])
-	}
+	// Swap buffers instead of copying. renderBuffer was used as workspaceBuffer;
+	// it becomes prevBuffer for the next frame's diff. The old prevBuffer
+	// becomes the next frame's render target (overwritten completely).
+	state.renderBuffer, state.prevBuffer = state.prevBuffer, state.renderBuffer
 
 	// Don't clear dirty flags here — a delta may have arrived during
 	// fullRender. The next incremental render will re-composite dirty
@@ -382,6 +389,23 @@ func fullRender(state *clientState, screen tcell.Screen) {
 			log.Printf("kitty flush: %v", err)
 		}
 	}
+}
+
+// ensurePaneBuffer returns the pooled pane buffer resized to at least w×h.
+// Reuses existing row slices when large enough to avoid per-frame allocations.
+func ensurePaneBuffer(state *clientState, w, h int) [][]client.Cell {
+	buf := state.paneBuffer
+	if len(buf) < h {
+		buf = make([][]client.Cell, h)
+		copy(buf, state.paneBuffer)
+	}
+	for rowIdx := 0; rowIdx < h; rowIdx++ {
+		if len(buf[rowIdx]) < w {
+			buf[rowIdx] = make([]client.Cell, w)
+		}
+	}
+	state.paneBuffer = buf
+	return buf[:h]
 }
 
 // compositeInto renders a set of panes into the workspace buffer.
@@ -400,26 +424,25 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 			continue
 		}
 
-		paneBuffer := make([][]client.Cell, h)
+		paneBuffer := ensurePaneBuffer(state, w, h)
+		defaultCell := client.Cell{Ch: ' ', Style: state.defaultStyle}
 		for rowIdx := 0; rowIdx < h; rowIdx++ {
-			row := make([]client.Cell, w)
-			source := pane.RowCells(rowIdx)
-			for col := 0; col < w && col < len(source); col++ {
-				cell := source[col]
-				if cell.Ch == 0 {
-					cell.Ch = ' '
-				}
-				if cell.Style == (tcell.Style{}) {
-					cell.Style = state.defaultStyle
-				}
-				row[col] = cell
-			}
+			row := paneBuffer[rowIdx]
+			source := pane.RowCellsDirect(rowIdx)
 			for col := 0; col < w; col++ {
-				if row[col].Ch == 0 {
-					row[col] = client.Cell{Ch: ' ', Style: state.defaultStyle}
+				if col < len(source) {
+					cell := source[col]
+					if cell.Ch == 0 {
+						cell.Ch = ' '
+					}
+					if cell.Style == (tcell.Style{}) {
+						cell.Style = state.defaultStyle
+					}
+					row[col] = cell
+				} else {
+					row[col] = defaultCell
 				}
 			}
-			paneBuffer[rowIdx] = row
 		}
 
 		if state.effects != nil {
@@ -438,7 +461,7 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 				if targetX < 0 || targetX >= screenW {
 					continue
 				}
-				cell := row[col]
+				cell := &row[col]
 				style := cell.Style
 
 				// Resolve dynamic colors client-side
@@ -514,22 +537,6 @@ func protocolDescToColor(d protocol.DynColorDesc) color.DynamicColorDesc {
 		}
 	}
 	return desc
-}
-
-func showWorkspaceBuffer(screen tcell.Screen, buffer [][]client.Cell, defaultStyle tcell.Style) {
-	for y, row := range buffer {
-		for x, cell := range row {
-			ch := cell.Ch
-			if ch == 0 {
-				ch = ' '
-			}
-			style := cell.Style
-			if style == (tcell.Style{}) {
-				style = defaultStyle
-			}
-			screen.SetContent(x, y, ch, nil, style)
-		}
-	}
 }
 
 // renderRestartNotification overlays a centered modal notification
