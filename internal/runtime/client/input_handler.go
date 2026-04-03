@@ -47,6 +47,10 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 			}
 			return true
 		}
+		if ev.Key() == tcell.KeyCtrlP {
+			takeScreenshot(state)
+			return true
+		}
 		if state.controlMode && ev.Modifiers() == 0 {
 			r := ev.Rune()
 			if r == 'q' || r == 'Q' {

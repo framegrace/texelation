@@ -970,8 +970,8 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
-	// Handle Ctrl+S to take a PNG screenshot
-	if ev.Key() == tcell.KeyCtrlS {
+	// Handle Ctrl+P to take a PNG screenshot (P = print screen)
+	if ev.Key() == tcell.KeyCtrlP {
 		a.takeScreenshot()
 		return
 	}
