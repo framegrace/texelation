@@ -11,8 +11,7 @@ package texelterm
 import (
 	"encoding/json"
 	"fmt"
-	texelcore "github.com/framegrace/texelui/core"
-	"github.com/framegrace/texelui/widgets"
+	"image/png"
 	"io"
 	"log"
 	"math"
@@ -24,6 +23,10 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/graphics/textrender"
+	"github.com/framegrace/texelui/widgets"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/apps/texelterm/shell"
@@ -965,6 +968,12 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		return
 	}
 
+	// Handle Ctrl+S to take a PNG screenshot
+	if ev.Key() == tcell.KeyCtrlS {
+		a.takeScreenshot()
+		return
+	}
+
 	if a.pty == nil {
 		return
 	}
@@ -985,6 +994,56 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 	keyBytes := a.keyToEscapeSequence(ev, appMode)
 	if _, err := a.pty.Write(keyBytes); err != nil {
 		log.Printf("[TEXELTERM] Failed to write key to PTY: %v", err)
+	}
+}
+
+// takeScreenshot renders the current terminal content to a PNG file.
+func (a *TexelTerm) takeScreenshot() {
+	coreGrid := a.Render()
+	if len(coreGrid) == 0 {
+		return
+	}
+
+	fontPath, err := textrender.DetectFont()
+	if err != nil {
+		log.Printf("[SCREENSHOT] Font detection failed: %v", err)
+		if a.statusBar != nil {
+			a.statusBar.ShowError("Screenshot: font detection failed")
+		}
+		return
+	}
+
+	renderer, err := textrender.New(textrender.Config{FontPath: fontPath})
+	if err != nil {
+		log.Printf("[SCREENSHOT] Renderer creation failed: %v", err)
+		if a.statusBar != nil {
+			a.statusBar.ShowError("Screenshot: renderer failed")
+		}
+		return
+	}
+
+	img := renderer.Render(coreGrid)
+
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".texelation", "screenshots")
+	os.MkdirAll(dir, 0o755)
+	filename := filepath.Join(dir, fmt.Sprintf("screenshot-%s.png", time.Now().Format("2006-01-02_15-04-05")))
+
+	f, err := os.Create(filename)
+	if err != nil {
+		log.Printf("[SCREENSHOT] Failed to create file: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if err := png.Encode(f, img); err != nil {
+		log.Printf("[SCREENSHOT] Failed to encode PNG: %v", err)
+		return
+	}
+
+	log.Printf("[SCREENSHOT] Saved to %s", filename)
+	if a.statusBar != nil {
+		a.statusBar.ShowSuccess(fmt.Sprintf("Screenshot: %s", filepath.Base(filename)))
 	}
 }
 
