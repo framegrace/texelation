@@ -107,6 +107,19 @@ func (p *PaneState) RowCells(row int) []Cell {
 	return out
 }
 
+// RowCellsDirect returns the internal cell slice without copying.
+// The caller must not modify or retain the slice beyond the current frame.
+// Use only in single-threaded render paths where the row lock is not needed.
+func (p *PaneState) RowCellsDirect(row int) []Cell {
+	if p == nil || p.rows == nil {
+		return nil
+	}
+	p.rowsMu.RLock()
+	src := p.rows[row]
+	p.rowsMu.RUnlock()
+	return src
+}
+
 // BufferCache maintains pane states keyed by pane ID.
 type BufferCache struct {
 	mu         sync.RWMutex

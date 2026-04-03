@@ -63,6 +63,9 @@ type clientState struct {
 	renderBuffer     [][]client.Cell
 	fullRenderNeeded bool
 
+	// Pooled pane buffer for compositeInto (avoids per-frame allocations)
+	paneBuffer [][]client.Cell
+
 	// Fixed-timestep animation state
 	tickAccum    float64 // accumulated animation time in seconds (high precision)
 	frameDT      float32 // delta time for current frame (0 for data-driven renders)
