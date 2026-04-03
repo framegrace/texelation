@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
 	"image/png"
 	"io"
 	"log"
@@ -1044,21 +1045,9 @@ func (a *TexelTerm) takeScreenshot() {
 
 	log.Printf("[SCREENSHOT] Saved to %s", filename)
 
-	// Copy PNG to system clipboard via wl-copy (Wayland) or xclip (X11).
+	// Copy PNG to system clipboard.
 	// OSC 52 terminal clipboard only supports text, not images.
-	copied := false
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err == nil {
-		if copyCmd := findImageClipboardCmd(); copyCmd != "" {
-			cmd := exec.Command(copyCmd, "-t", "image/png")
-			cmd.Stdin = &buf
-			if err := cmd.Run(); err == nil {
-				copied = true
-			} else {
-				log.Printf("[SCREENSHOT] Clipboard copy failed: %v", err)
-			}
-		}
-	}
+	copied := copyImageToClipboard(img, filename)
 
 	if a.statusBar != nil {
 		msg := filepath.Base(filename)
@@ -1069,16 +1058,43 @@ func (a *TexelTerm) takeScreenshot() {
 	}
 }
 
-// findImageClipboardCmd returns the clipboard command for copying images,
-// or "" if none is available. Prefers wl-copy (Wayland) over xclip (X11).
-func findImageClipboardCmd() string {
-	if _, err := exec.LookPath("wl-copy"); err == nil {
-		return "wl-copy"
+// copyImageToClipboard copies a PNG image to the system clipboard.
+// Uses wl-copy (Wayland), xclip (X11), or osascript (macOS).
+// The filePath is needed for the macOS osascript approach.
+func copyImageToClipboard(img image.Image, filePath string) bool {
+	// Wayland
+	if path, err := exec.LookPath("wl-copy"); err == nil {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err == nil {
+			cmd := exec.Command(path, "-t", "image/png")
+			cmd.Stdin = &buf
+			if err := cmd.Run(); err == nil {
+				return true
+			}
+		}
 	}
-	if _, err := exec.LookPath("xclip"); err == nil {
-		return "xclip"
+
+	// X11
+	if path, err := exec.LookPath("xclip"); err == nil {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err == nil {
+			cmd := exec.Command(path, "-selection", "clipboard", "-t", "image/png")
+			cmd.Stdin = &buf
+			if err := cmd.Run(); err == nil {
+				return true
+			}
+		}
 	}
-	return ""
+
+	// macOS — osascript reads the saved file as TIFF picture into clipboard
+	if path, err := exec.LookPath("osascript"); err == nil {
+		script := fmt.Sprintf(`set the clipboard to (read (POSIX file %q) as «class PNGf»)`, filePath)
+		if err := exec.Command(path, "-e", script).Run(); err == nil {
+			return true
+		}
+	}
+
+	return false
 }
 
 // toggleTransformers flips the transformer pipeline state (Ctrl+T path).
