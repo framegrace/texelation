@@ -75,41 +75,45 @@ func (e *rainbowEffect) ApplyWorkspace(buffer [][]client.Cell) {
 		return
 	}
 	mix := e.mix
+
+	// Pre-compute one tint color per diagonal band (x+y).
+	// All cells on the same diagonal share the same hue, so we compute
+	// hsvToRGB once per band instead of once per cell.
+	bands := width + height - 1
+	tints := make([]tcell.Color, bands)
+	for i := 0; i < bands; i++ {
+		offset := float64(i) * 0.1
+		tints[i] = hsvToRGB(float32(e.phase+offset), 1.0, 1.0).TrueColor()
+	}
+
+	defaultFg := defaultInactiveColor.TrueColor()
 	for y := 0; y < height; y++ {
 		row := buffer[y]
 		for x := 0; x < len(row); x++ {
 			cell := &row[x]
-			offset := float64(x+y) * 0.1
-			tint := hsvToRGB(float32(e.phase+offset), 1.0, 1.0).TrueColor()
 			fg, bg, attrs := cell.Style.Decompose()
 			baseFg := fg.TrueColor()
 			if fg == tcell.ColorDefault || !baseFg.Valid() {
-				baseFg = defaultInactiveColor.TrueColor()
+				baseFg = defaultFg
 			}
 
-			// Detect prompt/background hacks that encode background in the foreground colour.
 			if matchesNeighborBackground(baseFg, row, x) {
 				continue
 			}
 
-			mixed := blendColor(baseFg, tint, mix)
-			style := cell.Style.Foreground(mixed)
-			if bg != tcell.ColorDefault {
-				style = style.Background(bg.TrueColor())
-			}
-			style = style.
-				Bold(attrs&tcell.AttrBold != 0).
-				Underline(attrs&tcell.AttrUnderline != 0).
-				Reverse(attrs&tcell.AttrReverse != 0).
-				Blink(attrs&tcell.AttrBlink != 0).
-				Dim(attrs&tcell.AttrDim != 0).
-				Italic(attrs&tcell.AttrItalic != 0)
-			cell.Style = style
+			mixed := blendColor(baseFg, tints[x+y], mix)
+			// Preserve existing attributes using Attributes() instead of
+			// reconstructing each attribute individually.
+			cell.Style = tcell.StyleDefault.Foreground(mixed).Background(bg).Attributes(attrs)
 		}
 	}
 }
 
 func (e *rainbowEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
+
+// FrameSkip returns 3 — rainbow changes every cell's color per frame,
+// so 10fps reduces terminal output significantly.
+func (e *rainbowEffect) FrameSkip() int { return 3 }
 
 func init() {
 	Register("rainbow", func(cfg EffectConfig) (Effect, error) {

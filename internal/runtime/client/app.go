@@ -212,6 +212,16 @@ func Run(opts Options) error {
 			if state.effects != nil {
 				state.effects.Update(dt)
 			}
+			// Skip render frames when the active effect requests it.
+			// Effects update at 30fps for smooth timelines, but heavy
+			// full-screen effects can render less often to reduce terminal
+			// output (which dominates CPU in both client and host terminal).
+			state.animFrameCount++
+			if state.effects != nil {
+				if skip := state.effects.ActiveFrameSkip(); skip > 1 && state.animFrameCount%uint64(skip) != 0 {
+					continue
+				}
+			}
 			render(state, screen)
 			state.frameDT = 0
 

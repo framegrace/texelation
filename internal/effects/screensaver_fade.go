@@ -164,6 +164,15 @@ func (e *screensaverFade) ApplyWorkspace(buffer [][]client.Cell) {
 	if intensity <= 0 {
 		return
 	}
+	if e.inner == nil {
+		return
+	}
+
+	// At full intensity, skip the snapshot — no blending needed.
+	if intensity >= 1.0 {
+		e.inner.ApplyWorkspace(buffer)
+		return
+	}
 
 	// Snapshot buffer before the inner effect transforms it (reuse pooled buffer).
 	if len(e.snapshotBuf) != len(buffer) {
@@ -176,20 +185,23 @@ func (e *screensaverFade) ApplyWorkspace(buffer [][]client.Cell) {
 		copy(e.snapshotBuf[y], buffer[y])
 	}
 
-	// Let the inner effect transform the buffer at full intensity.
-	if e.inner == nil {
-		return
-	}
 	e.inner.ApplyWorkspace(buffer)
-
-	if intensity >= 1.0 {
-		return
-	}
-
 	e.blender.Blend(e.snapshotBuf, buffer, float32(intensity))
 }
 
 func (e *screensaverFade) ApplyPane(pane *client.PaneState, buffer [][]client.Cell) {}
+
+// FrameSkip delegates to the inner effect if it implements FrameSkipper.
+// During fade transitions (intensity < 1), render every frame for smooth blending.
+func (e *screensaverFade) FrameSkip() int {
+	if e.timeline.GetCached("fade") < 1.0 {
+		return 1 // no skip during fade transitions
+	}
+	if fs, ok := e.inner.(FrameSkipper); ok {
+		return fs.FrameSkip()
+	}
+	return 1
+}
 
 // cellEqual compares two client.Cell values for equality.
 // client.Cell contains protocol.DynColorDesc which has a slice field (Stops),

@@ -36,6 +36,13 @@ type matrixEffect struct {
 	rows     int
 	charTable [256]rune // pre-generated random katakana for fast lookup
 	charIdx   uint8     // cycling index into charTable
+
+	// Cached styles (built once on activation, not every frame)
+	headStyle   tcell.Style
+	brightStyle tcell.Style
+	midStyle    tcell.Style
+	dimStyle    tcell.Style
+	bgStyle     tcell.Style
 }
 
 func (e *matrixEffect) ID() string   { return "matrix" }
@@ -50,6 +57,21 @@ func (e *matrixEffect) HandleTrigger(trigger EffectTrigger) {
 	e.active = trigger.Active
 	if trigger.Active {
 		e.streams = nil
+		e.headStyle = tcell.StyleDefault.
+			Foreground(tcell.NewRGBColor(220, 255, 220)).
+			Background(tcell.ColorBlack).Bold(true)
+		e.brightStyle = tcell.StyleDefault.
+			Foreground(tcell.NewRGBColor(0, 230, 0)).
+			Background(tcell.ColorBlack)
+		e.midStyle = tcell.StyleDefault.
+			Foreground(tcell.NewRGBColor(0, 160, 0)).
+			Background(tcell.ColorBlack)
+		e.dimStyle = tcell.StyleDefault.
+			Foreground(tcell.NewRGBColor(0, 90, 0)).
+			Background(tcell.ColorBlack)
+		e.bgStyle = tcell.StyleDefault.
+			Foreground(tcell.NewRGBColor(0, 30, 0)).
+			Background(tcell.ColorBlack)
 	}
 }
 
@@ -113,25 +135,7 @@ func (e *matrixEffect) ApplyWorkspace(buffer [][]client.Cell) {
 		}
 	}
 
-	// Pre-build styles for trail segments.
-	headStyle := tcell.StyleDefault.
-		Foreground(tcell.NewRGBColor(220, 255, 220)).
-		Background(tcell.ColorBlack).
-		Bold(true)
-	brightStyle := tcell.StyleDefault.
-		Foreground(tcell.NewRGBColor(0, 230, 0)).
-		Background(tcell.ColorBlack)
-	midStyle := tcell.StyleDefault.
-		Foreground(tcell.NewRGBColor(0, 160, 0)).
-		Background(tcell.ColorBlack)
-	dimStyle := tcell.StyleDefault.
-		Foreground(tcell.NewRGBColor(0, 90, 0)).
-		Background(tcell.ColorBlack)
-	bgStyle := tcell.StyleDefault.
-		Foreground(tcell.NewRGBColor(0, 30, 0)).
-		Background(tcell.ColorBlack)
-
-	// Paint every cell.
+	// Paint every cell using cached styles.
 	for y := 0; y < rows; y++ {
 		row := buffer[y]
 		for x := 0; x < cols; x++ {
@@ -142,7 +146,7 @@ func (e *matrixEffect) ApplyWorkspace(buffer [][]client.Cell) {
 				// Not in a stream: faint random char on black.
 				row[x] = client.Cell{
 					Ch:    e.nextChar(),
-					Style: bgStyle,
+					Style: e.bgStyle,
 				}
 				continue
 			}
@@ -153,19 +157,23 @@ func (e *matrixEffect) ApplyWorkspace(buffer [][]client.Cell) {
 			var style tcell.Style
 			switch {
 			case dist == 0:
-				style = headStyle
+				style = e.headStyle
 			case frac < 0.25:
-				style = brightStyle
+				style = e.brightStyle
 			case frac < 0.55:
-				style = midStyle
+				style = e.midStyle
 			default:
-				style = dimStyle
+				style = e.dimStyle
 			}
 
 			row[x] = client.Cell{Ch: ch, Style: style}
 		}
 	}
 }
+
+// FrameSkip returns 3 — matrix changes every cell per frame,
+// so 10fps reduces terminal output significantly.
+func (e *matrixEffect) FrameSkip() int { return 3 }
 
 func init() {
 	Register("matrix", func(cfg EffectConfig) (Effect, error) {

@@ -32,6 +32,14 @@ type Effect interface {
 	ApplyWorkspace(buffer [][]client.Cell)
 }
 
+// FrameSkipper is an optional interface for effects that don't need to render
+// every tick. FrameSkip returns N where only 1-in-N ticks produce a render.
+// Effects that change fewer cells per frame can return 1 (no skip) while
+// heavy full-screen effects can return 3 (~10fps) to reduce terminal output.
+type FrameSkipper interface {
+	FrameSkip() int
+}
+
 // PaneAdapter wraps an effect and suppresses workspace application.
 type PaneAdapter struct{ Effect }
 

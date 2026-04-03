@@ -374,11 +374,10 @@ func fullRender(state *clientState, screen tcell.Screen) {
 
 	state.dynAnimating = hasDynamic
 
-	// Store rendered result for future incremental diffs.
-	// renderBuffer was used as workspaceBuffer, so copy to prevBuffer.
-	for y := 0; y < height && y < len(workspaceBuffer); y++ {
-		copy(state.prevBuffer[y], workspaceBuffer[y])
-	}
+	// Swap buffers instead of copying. renderBuffer was used as workspaceBuffer;
+	// it becomes prevBuffer for the next frame's diff. The old prevBuffer
+	// becomes the next frame's render target (overwritten completely).
+	state.renderBuffer, state.prevBuffer = state.prevBuffer, state.renderBuffer
 
 	// Don't clear dirty flags here — a delta may have arrived during
 	// fullRender. The next incremental render will re-composite dirty
