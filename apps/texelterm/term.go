@@ -1044,20 +1044,41 @@ func (a *TexelTerm) takeScreenshot() {
 
 	log.Printf("[SCREENSHOT] Saved to %s", filename)
 
-	// Copy PNG to system clipboard
+	// Copy PNG to system clipboard via wl-copy (Wayland) or xclip (X11).
+	// OSC 52 terminal clipboard only supports text, not images.
+	copied := false
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err == nil {
-		a.clipboardMu.Lock()
-		clipboard := a.clipboard
-		a.clipboardMu.Unlock()
-		if clipboard != nil {
-			clipboard.SetClipboard("image/png", buf.Bytes())
+		if copyCmd := findImageClipboardCmd(); copyCmd != "" {
+			cmd := exec.Command(copyCmd, "-t", "image/png")
+			cmd.Stdin = &buf
+			if err := cmd.Run(); err == nil {
+				copied = true
+			} else {
+				log.Printf("[SCREENSHOT] Clipboard copy failed: %v", err)
+			}
 		}
 	}
 
 	if a.statusBar != nil {
-		a.statusBar.ShowSuccess(fmt.Sprintf("Screenshot: %s (copied)", filepath.Base(filename)))
+		msg := filepath.Base(filename)
+		if copied {
+			msg += " (copied)"
+		}
+		a.statusBar.ShowSuccess(fmt.Sprintf("Screenshot: %s", msg))
 	}
+}
+
+// findImageClipboardCmd returns the clipboard command for copying images,
+// or "" if none is available. Prefers wl-copy (Wayland) over xclip (X11).
+func findImageClipboardCmd() string {
+	if _, err := exec.LookPath("wl-copy"); err == nil {
+		return "wl-copy"
+	}
+	if _, err := exec.LookPath("xclip"); err == nil {
+		return "xclip"
+	}
+	return ""
 }
 
 // toggleTransformers flips the transformer pipeline state (Ctrl+T path).
