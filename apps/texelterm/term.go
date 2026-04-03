@@ -9,6 +9,7 @@
 package texelterm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"image/png"
@@ -1042,8 +1043,20 @@ func (a *TexelTerm) takeScreenshot() {
 	}
 
 	log.Printf("[SCREENSHOT] Saved to %s", filename)
+
+	// Copy PNG to system clipboard
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err == nil {
+		a.clipboardMu.Lock()
+		clipboard := a.clipboard
+		a.clipboardMu.Unlock()
+		if clipboard != nil {
+			clipboard.SetClipboard("image/png", buf.Bytes())
+		}
+	}
+
 	if a.statusBar != nil {
-		a.statusBar.ShowSuccess(fmt.Sprintf("Screenshot: %s", filepath.Base(filename)))
+		a.statusBar.ShowSuccess(fmt.Sprintf("Screenshot: %s (copied)", filepath.Base(filename)))
 	}
 }
 
