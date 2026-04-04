@@ -9,9 +9,10 @@ package defaults
 import (
 	"embed"
 	"fmt"
+	"runtime"
 )
 
-//go:embed texelation.json apps/*/config.json
+//go:embed texelation.json apps/*/config.json keybindings-*.json
 var fs embed.FS
 
 // SystemConfig returns the embedded system config JSON.
@@ -25,4 +26,17 @@ func AppConfig(app string) ([]byte, error) {
 		return nil, fmt.Errorf("app name is required")
 	}
 	return fs.ReadFile(fmt.Sprintf("apps/%s/config.json", app))
+}
+
+// KeybindingsConfig returns the embedded keybindings JSON for the given preset.
+func KeybindingsConfig(preset string) ([]byte, error) {
+	return fs.ReadFile(fmt.Sprintf("keybindings-%s.json", preset))
+}
+
+// DefaultKeybindingsPreset returns "linux" or "mac" based on the runtime OS.
+func DefaultKeybindingsPreset() string {
+	if runtime.GOOS == "darwin" {
+		return "mac"
+	}
+	return "linux"
 }
