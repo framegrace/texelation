@@ -2,6 +2,7 @@ package texel
 
 import (
 	"github.com/framegrace/texelation/internal/debuglog"
+	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -158,19 +159,23 @@ func (d *DesktopEngine) handleTabMode(ev *tcell.EventKey) {
 		return
 	}
 
-	// Shift+Arrows: the same navigation gestures that entered tab mode.
-	if ev.Modifiers()&tcell.ModShift != 0 {
-		switch ev.Key() {
-		case tcell.KeyUp:
+	// Keybinding-based navigation gestures.
+	if d.keybindings != nil {
+		action := d.keybindings.Match(ev)
+		switch action {
+		case keybind.PaneNavUp:
 			// Already at the top — do nothing.
-		case tcell.KeyDown:
+			return
+		case keybind.PaneNavDown:
 			d.exitTabMode()
-		case tcell.KeyLeft:
+			return
+		case keybind.WorkspaceTabPrev:
 			d.switchWorkspaceRelative(-1)
-		case tcell.KeyRight:
+			return
+		case keybind.WorkspaceTabNext:
 			d.switchWorkspaceRelative(1)
+			return
 		}
-		return
 	}
 
 	// Any other key exits nav mode and is swallowed.
@@ -198,36 +203,38 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 		return
 	}
 
-	r := ev.Rune()
+	action := d.keybindings.Match(ev)
 	exitControlMode := true
-	switch r {
-	case 'x':
+	switch action {
+	case keybind.ControlClose:
 		if d.zoomedPane != nil {
 			d.activeWorkspace.CloseActivePane()
 			d.zoomedPane = nil
 		} else {
 			d.activeWorkspace.CloseActivePane()
 		}
-	case '|':
+	case keybind.ControlVSplit:
 		d.activeWorkspace.PerformSplit(Vertical)
-	case '-':
+	case keybind.ControlHSplit:
 		d.activeWorkspace.PerformSplit(Horizontal)
-	case 'w':
+	case keybind.ControlSwap:
 		d.subControlMode = 'w'
 		d.broadcastModeChanged()
 		exitControlMode = false
-	case 'z':
+	case keybind.ControlZoom:
 		d.toggleZoom()
-	case 'l':
+	case keybind.ControlLauncher:
 		d.launchLauncherOverlay()
-	case 'h':
+	case keybind.ControlHelp:
 		d.launchHelpOverlay()
-	case 'f':
+	case keybind.ControlConfig:
 		d.launchConfigEditorOverlay("system")
-	case 't':
+	case keybind.ControlNewTab:
 		d.startNewTab()
-	case 'X':
+	case keybind.ControlCloseTab:
 		d.startCloseWorkspace()
+	default:
+		// Unknown key — still exit control mode
 	}
 
 	if exitControlMode {
