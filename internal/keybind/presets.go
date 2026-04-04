@@ -22,8 +22,6 @@ var linuxPreset = map[Action][]string{
 
 	WorkspaceSwitchPrev: {"alt+left"},
 	WorkspaceSwitchNext: {"alt+right"},
-	WorkspaceTabPrev:    {"shift+left"},
-	WorkspaceTabNext:    {"shift+right"},
 
 	ControlClose:    {"x"},
 	ControlVSplit:   {"|"},
@@ -59,8 +57,6 @@ var macPreset = func() map[Action][]string {
 	m[PaneNavRight] = []string{"alt+right"}
 	m[WorkspaceSwitchPrev] = []string{"alt+["}
 	m[WorkspaceSwitchNext] = []string{"alt+]"}
-	m[WorkspaceTabPrev] = []string{"alt+["}
-	m[WorkspaceTabNext] = []string{"alt+]"}
 	return m
 }()
 

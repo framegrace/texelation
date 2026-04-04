@@ -169,10 +169,10 @@ func (d *DesktopEngine) handleTabMode(ev *tcell.EventKey) {
 		case keybind.PaneNavDown:
 			d.exitTabMode()
 			return
-		case keybind.WorkspaceTabPrev:
+		case keybind.PaneNavLeft:
 			d.switchWorkspaceRelative(-1)
 			return
-		case keybind.WorkspaceTabNext:
+		case keybind.PaneNavRight:
 			d.switchWorkspaceRelative(1)
 			return
 		}

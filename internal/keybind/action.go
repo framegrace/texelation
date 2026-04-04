@@ -42,8 +42,6 @@ const (
 const (
 	WorkspaceSwitchPrev Action = "workspace.switch.prev"
 	WorkspaceSwitchNext Action = "workspace.switch.next"
-	WorkspaceTabPrev    Action = "workspace.tab.prev"
-	WorkspaceTabNext    Action = "workspace.tab.next"
 )
 
 // Control mode actions (after prefix).
@@ -94,8 +92,6 @@ var ActionDescriptions = map[Action]ActionInfo{
 	// Workspace
 	WorkspaceSwitchPrev: {Description: "Switch to previous workspace", Category: "Workspace"},
 	WorkspaceSwitchNext: {Description: "Switch to next workspace", Category: "Workspace"},
-	WorkspaceTabPrev:    {Description: "Previous workspace (tab mode)", Category: "Workspace"},
-	WorkspaceTabNext:    {Description: "Next workspace (tab mode)", Category: "Workspace"},
 
 	// Control
 	ControlClose:    {Description: "Close active pane", Category: "Control"},
