@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/framegrace/texelation/registry"
 	"github.com/framegrace/texelui/theme"
 	"time"
@@ -148,6 +149,8 @@ type DesktopEngine struct {
 	lastPublishNanos atomic.Int64
 
 	graphicsFactory func(paneID [16]byte) GraphicsProvider
+
+	keybindings *keybind.Registry
 }
 
 // FloatingPanel represents an app floating above the workspace.
@@ -171,6 +174,12 @@ func newFloatingPanelID(app App) [16]byte {
 	sum := sha1.Sum([]byte(fingerprint))
 	copy(id[:], sum[:])
 	return id
+}
+
+// SetKeybindings installs a keybinding registry for desktop shortcuts.
+// If r is nil, hardcoded defaults are used as a fallback.
+func (d *DesktopEngine) SetKeybindings(r *keybind.Registry) {
+	d.keybindings = r
 }
 
 // PaneStateSnapshot captures dynamic pane flags for external consumers.

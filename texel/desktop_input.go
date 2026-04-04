@@ -6,7 +6,10 @@
 
 package texel
 
-import "github.com/gdamore/tcell/v2"
+import (
+	"github.com/framegrace/texelation/internal/keybind"
+	"github.com/gdamore/tcell/v2"
+)
 
 // InjectKeyEvent allows external callers (e.g., remote clients) to deliver key
 // input directly into the desktop event pipeline.
@@ -41,53 +44,50 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 	if !ok {
 		return
 	}
-	// Global Shortcuts
-	if key.Key() == tcell.KeyF1 {
-		d.launchHelpOverlay()
-		return
-	}
-
-	// Alt+Left/Right: switch to previous/next workspace
-	if key.Modifiers()&tcell.ModAlt != 0 {
-		switch key.Key() {
-		case tcell.KeyLeft:
+	// Keybinding-driven shortcuts
+	if d.keybindings != nil {
+		action := d.keybindings.Match(key)
+		switch action {
+		case keybind.Help:
+			d.launchHelpOverlay()
+			return
+		case keybind.WorkspaceSwitchPrev:
 			d.switchWorkspaceRelative(-1)
 			return
-		case tcell.KeyRight:
+		case keybind.WorkspaceSwitchNext:
 			d.switchWorkspaceRelative(1)
 			return
-		}
-	}
-
-	// Ctrl+Arrows: resize the nearest pane border by 1 character.
-	// Ctrl+Right/Down: grow active pane (move right/bottom border outward)
-	// Ctrl+Left/Up: shrink active pane (move right/bottom border inward)
-	// Skip when in tab mode — no pane is active to resize.
-	if key.Modifiers()&tcell.ModCtrl != 0 && !d.inTabMode {
-		switch key.Key() {
-		case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown:
-			if d.activeWorkspace != nil {
-				dir := keyToDirection(key)
-				// Always look for the border on the positive side first.
-				// For grow (Right/Down): find right border, move it right.
-				// For shrink (Left/Up): find right border, move it left.
-				searchDir := dir
-				if dir == DirLeft {
-					searchDir = DirRight
-				} else if dir == DirUp {
-					searchDir = DirDown
-				}
-				border := d.activeWorkspace.findBorderToResize(searchDir)
-				if border == nil {
-					// No border on the positive side; try the other side.
-					border = d.activeWorkspace.findBorderToResize(dir)
-				}
-				if border != nil {
-					d.activeWorkspace.adjustBorder(border, dir)
-					d.activeWorkspace.clearResizeSelection(border)
-				}
-			}
+		case keybind.ConfigEditor:
+			d.launchConfigEditorOverlay(d.activeAppTarget())
 			return
+		case keybind.ControlToggle:
+			d.toggleControlMode()
+			return
+		}
+
+		// Pane resize (skip in tab mode)
+		if !d.inTabMode {
+			switch action {
+			case keybind.PaneResizeUp, keybind.PaneResizeDown, keybind.PaneResizeLeft, keybind.PaneResizeRight:
+				if d.activeWorkspace != nil {
+					dir := actionToDirection(action)
+					searchDir := dir
+					if dir == DirLeft {
+						searchDir = DirRight
+					} else if dir == DirUp {
+						searchDir = DirDown
+					}
+					border := d.activeWorkspace.findBorderToResize(searchDir)
+					if border == nil {
+						border = d.activeWorkspace.findBorderToResize(dir)
+					}
+					if border != nil {
+						d.activeWorkspace.adjustBorder(border, dir)
+						d.activeWorkspace.clearResizeSelection(border)
+					}
+				}
+				return
+			}
 		}
 	}
 
@@ -117,16 +117,6 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 			}
 			return
 		}
-	}
-
-	if key.Key() == tcell.KeyCtrlF {
-		d.launchConfigEditorOverlay(d.activeAppTarget())
-		return
-	}
-
-	if key.Key() == keyControlMode {
-		d.toggleControlMode()
-		return
 	}
 
 	// Tab mode must yield to modal floating panels (launcher, help, config editor).
@@ -259,5 +249,21 @@ func (d *DesktopEngine) activatePaneAt(x, y int) {
 
 	if node := ws.nodeAt(x, y); node != nil {
 		ws.activateLeaf(node)
+	}
+}
+
+// actionToDirection maps a pane resize or navigate action to a Direction.
+func actionToDirection(a keybind.Action) Direction {
+	switch a {
+	case keybind.PaneResizeUp, keybind.PaneNavUp:
+		return DirUp
+	case keybind.PaneResizeDown, keybind.PaneNavDown:
+		return DirDown
+	case keybind.PaneResizeLeft, keybind.PaneNavLeft:
+		return DirLeft
+	case keybind.PaneResizeRight, keybind.PaneNavRight:
+		return DirRight
+	default:
+		return DirRight
 	}
 }

@@ -9,6 +9,7 @@
 package clientruntime
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/framegrace/texelation/client"
 	"github.com/framegrace/texelation/internal/debuglog"
+	"github.com/framegrace/texelation/internal/keybind"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/graphics"
 	"github.com/framegrace/texelui/theme"
@@ -73,6 +75,9 @@ func Run(opts Options) error {
 		selectionBg:             tcell.NewRGBColor(232, 217, 255),
 		showRestartNotification: opts.ShowRestartNotification,
 	}
+
+	// Load keybindings from config file or use platform defaults.
+	state.keybindings = loadKeybindings()
 
 	cfg := theme.Get()
 	if err := theme.Err(); err != nil {
@@ -251,6 +256,33 @@ func Run(opts Options) error {
 			screen.SetClipboard(clip.Data)
 		}
 	}
+}
+
+func loadKeybindings() *keybind.Registry {
+	preset := "auto"
+	var extraPreset string
+	var overrides map[string][]string
+
+	home, err := os.UserHomeDir()
+	if err == nil {
+		data, err := os.ReadFile(filepath.Join(home, ".config", "texelation", "keybindings.json"))
+		if err == nil {
+			var cfg struct {
+				Preset      string              `json:"preset"`
+				ExtraPreset string              `json:"extraPreset"`
+				Actions     map[string][]string `json:"actions"`
+			}
+			if json.Unmarshal(data, &cfg) == nil {
+				if cfg.Preset != "" {
+					preset = cfg.Preset
+				}
+				extraPreset = cfg.ExtraPreset
+				overrides = cfg.Actions
+			}
+		}
+	}
+
+	return keybind.NewRegistry(preset, extraPreset, overrides)
 }
 
 func formatPaneID(id [16]byte) string {

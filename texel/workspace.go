@@ -13,6 +13,7 @@ import (
 	"log"
 
 	"github.com/framegrace/texelation/internal/debuglog"
+	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/gdamore/tcell/v2"
 	"github.com/framegrace/texelui/theme"
 )
@@ -40,9 +41,6 @@ type DebuggableApp interface {
 
 type AppFactory func() App
 
-const (
-	keyControlMode = tcell.KeyCtrlA
-)
 
 const (
 	ResizeStep float64 = 0.05 // Resize by 5%
@@ -210,25 +208,27 @@ func (w *Workspace) AddApp(app App) {
 }
 
 func (w *Workspace) handleEvent(ev *tcell.EventKey) {
-	// Handle pane navigation
-	if ev.Modifiers()&tcell.ModShift != 0 {
-		isPaneNavKey := true
-		switch ev.Key() {
-		case tcell.KeyUp:
+	// Handle pane navigation via keybinding registry
+	if w.desktop != nil && w.desktop.keybindings != nil {
+		action := w.desktop.keybindings.Match(ev)
+		switch action {
+		case keybind.PaneNavUp:
 			if !w.moveActivePane(DirUp) {
 				// At top edge — enter tab navigation mode
 				w.desktop.enterTabNavMode()
 			}
-		case tcell.KeyDown:
+			w.Refresh()
+			return
+		case keybind.PaneNavDown:
 			w.moveActivePane(DirDown)
-		case tcell.KeyLeft:
+			w.Refresh()
+			return
+		case keybind.PaneNavLeft:
 			w.moveActivePane(DirLeft)
-		case tcell.KeyRight:
+			w.Refresh()
+			return
+		case keybind.PaneNavRight:
 			w.moveActivePane(DirRight)
-		default:
-			isPaneNavKey = false
-		}
-		if isPaneNavKey {
 			w.Refresh()
 			return
 		}

@@ -34,6 +34,7 @@ import (
 	"github.com/framegrace/texelation/apps/texelterm/shell"
 	"github.com/framegrace/texelation/apps/texelterm/transformer"
 	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelation/internal/keybind"
 
 	// Import transformers for init() side-effect registration.
 	_ "github.com/framegrace/texelation/apps/texelterm/tablefmt"
@@ -133,6 +134,9 @@ type TexelTerm struct {
 
 	// Transformer pipeline reference (for runtime toggle)
 	pipeline *transformer.Pipeline
+
+	// Keybinding registry (injected by desktop; nil in standalone mode)
+	keybindings *keybind.Registry
 }
 
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
@@ -140,6 +144,12 @@ var _ texelcore.CloseCallbackRequester = (*TexelTerm)(nil)
 var _ texelcore.StorageSetter = (*TexelTerm)(nil)
 var _ texelcore.ClipboardAware = (*TexelTerm)(nil)
 var _ texelcore.MouseHandler = (*TexelTerm)(nil)
+
+// SetKeybindings injects the keybinding registry. Called by the desktop when
+// embedding the terminal; nil in standalone mode (defaults apply).
+func (a *TexelTerm) SetKeybindings(r *keybind.Registry) {
+	a.keybindings = r
+}
 
 func New(title, command string) texelcore.App {
 	sb := widgets.NewStatusBar()
@@ -812,6 +822,30 @@ func (a *TexelTerm) handleConfirmationKey(ev *tcell.EventKey) bool {
 	return true
 }
 
+// handleScrollAction scrolls the terminal by the given number of lines and
+// requests a refresh. Positive values scroll up (back in history); negative
+// values scroll down (toward live edge).
+func (a *TexelTerm) handleScrollAction(lines int) {
+	a.mu.Lock()
+	if a.vterm != nil {
+		a.vterm.Scroll(lines)
+		a.saveStateLocked()
+	}
+	a.mu.Unlock()
+	a.requestRefresh()
+}
+
+// termHeight returns the usable terminal height (excluding the status bar row).
+func (a *TexelTerm) termHeight() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	h := a.height - 1 // subtract status bar
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
 // handleAltScrollKey processes Alt+key combinations for scrollback navigation.
 // Returns true if the key was handled as a scroll operation.
 func (a *TexelTerm) handleAltScrollKey(key tcell.Key) bool {
@@ -936,15 +970,40 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		}
 	}
 
-	// Handle Ctrl+G to toggle history navigator (Ctrl+G = "goto" in history)
-	// Note: Ctrl+Shift+F doesn't work reliably (CSI u encoding issues)
-	if ev.Key() == tcell.KeyCtrlG {
-		if a.historyNavigator != nil {
-			if a.historyNavigator.IsVisible() {
-				a.closeSearch()
-			} else {
-				a.openSearch()
+	// Keybinding-driven shortcuts (registry injected by desktop; nil in standalone mode)
+	if a.keybindings != nil {
+		switch a.keybindings.Match(ev) {
+		case keybind.TermSearch:
+			if a.historyNavigator != nil {
+				if a.historyNavigator.IsVisible() {
+					a.closeSearch()
+				} else {
+					a.openSearch()
+				}
+				return
 			}
+		case keybind.TermScrollbar:
+			if a.scrollbar != nil {
+				a.scrollbar.Toggle()
+			}
+			return
+		case keybind.TermTransformer:
+			a.toggleTransformers()
+			return
+		case keybind.TermScreenshot:
+			a.takeScreenshot()
+			return
+		case keybind.TermScrollUp:
+			a.handleScrollAction(1)
+			return
+		case keybind.TermScrollDown:
+			a.handleScrollAction(-1)
+			return
+		case keybind.TermScrollPgUp:
+			a.handleScrollAction(a.termHeight())
+			return
+		case keybind.TermScrollPgDn:
+			a.handleScrollAction(-a.termHeight())
 			return
 		}
 	}
@@ -956,35 +1015,8 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 		}
 	}
 
-	// Handle Alt+B to toggle scrollbar
-	if ev.Modifiers()&tcell.ModAlt != 0 && ev.Key() == tcell.KeyRune && ev.Rune() == 'b' {
-		if a.scrollbar != nil {
-			a.scrollbar.Toggle()
-		}
-		return
-	}
-
-	// Handle Ctrl+T to toggle transformer pipeline
-	if ev.Key() == tcell.KeyCtrlT {
-		a.toggleTransformers()
-		return
-	}
-
-	// Handle Ctrl+P to take a PNG screenshot (P = print screen)
-	if ev.Key() == tcell.KeyCtrlP {
-		a.takeScreenshot()
-		return
-	}
-
 	if a.pty == nil {
 		return
-	}
-
-	// Handle Alt+key scroll operations
-	if ev.Modifiers()&tcell.ModAlt != 0 {
-		if a.handleAltScrollKey(ev.Key()) {
-			return
-		}
 	}
 
 	// Convert key to escape sequence and send to PTY

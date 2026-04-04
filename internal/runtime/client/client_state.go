@@ -21,6 +21,7 @@ import (
 	"github.com/framegrace/texelation/client"
 	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/effects"
+	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -79,6 +80,8 @@ type clientState struct {
 	// Kitty graphics output (nil when terminal doesn't support it)
 	kitty     *kittyOutput
 	ttyWriter io.Writer
+
+	keybindings *keybind.Registry
 }
 
 func (s *clientState) setRenderChannel(ch chan<- struct{}) {

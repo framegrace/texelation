@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-latest
+          - goos: darwin
+            goarch: amd64
+            runner: macos-latest
+          - goos: darwin
+            goarch: arm64
+            runner: macos-latest
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          go build -o dist/texelation ./cmd/texelation
+          go build -o dist/texel-server ./cmd/texel-server
+          go build -o dist/texel-client ./client/cmd/texel-client
+          go build -o dist/texelterm ./cmd/texelterm
+          go build -o dist/help ./cmd/help
+
+      - name: Create archive
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          ARCHIVE="texelation-${REF_NAME}-${TARGET_OS}-${TARGET_ARCH}"
+          tar -czf "${ARCHIVE}.tar.gz" -C dist .
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          ARCHIVE="texelation-${REF_NAME}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
+          gh release upload "$REF_NAME" "$ARCHIVE"
