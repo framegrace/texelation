@@ -18,6 +18,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/internal/effects"
+	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -40,14 +41,14 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 			render(state, screen)
 			return true
 		}
-		if ev.Key() == tcell.KeyCtrlS {
+		switch state.keybindings.Match(ev) {
+		case keybind.Screensaver:
 			if state.idleWatcher != nil {
 				state.idleWatcher.ActivateNow()
 				render(state, screen)
 			}
 			return true
-		}
-		if ev.Key() == tcell.KeyCtrlP {
+		case keybind.Screenshot:
 			takeScreenshot(state)
 			return true
 		}
@@ -69,7 +70,7 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 				return false
 			}
 		}
-		if ev.Key() == tcell.KeyCtrlA {
+		if state.keybindings.Match(ev) == keybind.ControlToggle {
 			state.controlMode = !state.controlMode
 			state.subMode = 0
 			if state.effects != nil {
