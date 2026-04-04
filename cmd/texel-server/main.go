@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	texelcore "github.com/framegrace/texelui/core"
@@ -34,6 +35,7 @@ import (
 	"github.com/framegrace/texelation/apps/statusbar"
 	"github.com/framegrace/texelation/apps/texelterm"
 	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/framegrace/texelation/internal/runtime/server"
 	runtimeadapter "github.com/framegrace/texelation/internal/runtimeadapter"
 	"github.com/framegrace/texelation/registry"
@@ -104,10 +106,15 @@ func main() {
 	}
 
 	var shellSeq atomic.Int64
+	var serverKB *keybind.Registry // set after desktop creation, captured by closures
 	shellFactory := func() texelcore.App {
 		id := shellSeq.Add(1)
 		title := fmt.Sprintf("%s-%d", *title, id)
-		return texelterm.New(title, defaultShell)
+		app := texelterm.New(title, defaultShell)
+		if tt, ok := app.(*texelterm.TexelTerm); ok && serverKB != nil {
+			tt.SetKeybindings(serverKB)
+		}
+		return app
 	}
 
 	// Create desktop first (no help app yet - we'll set it after registry is ready)
@@ -132,6 +139,10 @@ func main() {
 	registry.RegisterBuiltIns(desktop.Registry())
 	desktop.Registry().SetAppWrapper(runtimeadapter.WrapForRegistry(desktop.Registry()))
 
+	// Load keybindings and wire to desktop engine and shell factory.
+	serverKB = loadServerKeybindings()
+	desktop.SetKeybindings(serverKB)
+
 	// Register snapshot factory for launcher
 	desktop.RegisterSnapshotFactory("launcher", func(title string, config map[string]interface{}) texelcore.App {
 		return launcher.New(desktop.Registry())
@@ -143,7 +154,11 @@ func main() {
 		if command == "" {
 			command = defaultShell
 		}
-		return texelterm.New(title, command)
+		app := texelterm.New(title, command)
+		if tt, ok := app.(*texelterm.TexelTerm); ok && serverKB != nil {
+			tt.SetKeybindings(serverKB)
+		}
+		return app
 	})
 
 	// Check if we'll be loading from a snapshot - if so, don't create the initial app
@@ -272,4 +287,32 @@ func main() {
 	}
 
 	fmt.Println("Server stopped")
+}
+
+// loadServerKeybindings loads the keybinding registry from the user's config.
+func loadServerKeybindings() *keybind.Registry {
+	preset := "auto"
+	var extraPreset string
+	var overrides map[string][]string
+
+	home, err := os.UserHomeDir()
+	if err == nil {
+		data, err := os.ReadFile(filepath.Join(home, ".config", "texelation", "keybindings.json"))
+		if err == nil {
+			var cfg struct {
+				Preset      string              `json:"preset"`
+				ExtraPreset string              `json:"extraPreset"`
+				Actions     map[string][]string `json:"actions"`
+			}
+			if json.Unmarshal(data, &cfg) == nil {
+				if cfg.Preset != "" {
+					preset = cfg.Preset
+				}
+				extraPreset = cfg.ExtraPreset
+				overrides = cfg.Actions
+			}
+		}
+	}
+
+	return keybind.NewRegistry(preset, extraPreset, overrides)
 }
