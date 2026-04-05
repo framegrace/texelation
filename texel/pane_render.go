@@ -155,11 +155,7 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	// Update zoom decorator state and draw pill on border.
 	if p.decorator != nil {
 		zoomed := p.screen != nil && p.screen.desktop != nil && p.screen.desktop.zoomedPane != nil
-		zoomIcon := rune('󰊓') // nf-md-fullscreen
-		if zoomed {
-			zoomIcon = '󰊕' // nf-md-fullscreen-exit
-		}
-		p.decorator.UpdateWMAction(DecoratorAction{ID: "zoom", Active: zoomed, Icon: zoomIcon})
+		p.decorator.UpdateWMAction(DecoratorAction{ID: "zoom", Active: zoomed})
 
 		if p.decorator.HasActions() {
 			borderStyle := p.currentBorderStyle()

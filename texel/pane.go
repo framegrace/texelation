@@ -91,7 +91,7 @@ func newPane(s *Workspace) *pane {
 	p.decorator.AddWMAction(DecoratorAction{
 		ID:   "zoom",
 		Icon: '󰊓', // nf-md-fullscreen
-		Help: "Toggle zoom",
+		Help: "Toggle zoom (Ctrl+A z)",
 		OnClick: func() {
 			if p.screen != nil && p.screen.desktop != nil {
 				p.screen.desktop.toggleZoom()
