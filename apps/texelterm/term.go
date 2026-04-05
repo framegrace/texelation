@@ -1885,7 +1885,6 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	cfg := config.App("texelterm")
 	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
 	reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
-	displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", true)
 
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
@@ -2009,10 +2008,8 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 
 	a.parser = parser.NewParser(a.vterm)
 
-	if displayBufferEnabled {
-		// MemoryBuffer is now the only system (DisplayBuffer was removed)
-		a.initializeMemoryBufferLocked(paneID, cfg)
-	}
+	// Initialize MemoryBuffer (scrollback, persistence, search).
+	a.initializeMemoryBufferLocked(paneID, cfg)
 
 	// Initialize scrollbar (non-overlay, resizes terminal)
 	// Callback triggers terminal resize when visibility changes
