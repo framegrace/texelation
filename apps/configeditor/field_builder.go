@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/framegrace/texelation/config"
+	"github.com/framegrace/texelui/primitives"
 	"github.com/framegrace/texelui/widgets"
 )
 
@@ -77,7 +78,12 @@ func (fb *FieldBuilder) Build(fc FieldConfig, pane *widgets.Form) *fieldBinding 
 			return fb.buildColorPicker(fc, v, pane)
 		}
 		return fb.buildStringInput(fc, v, pane)
-	case []interface{}, map[string]interface{}, []string:
+	case []interface{}:
+		if items, ok := asListOfMaps(v); ok && hasMapKey(items, "id") {
+			return fb.buildListEditor(fc, items, pane)
+		}
+		return fb.buildTextArea(fc, v, pane)
+	case map[string]interface{}, []string:
 		return fb.buildTextArea(fc, v, pane)
 	default:
 		return fb.buildStringInput(fc, fmt.Sprintf("%v", v), pane)
@@ -203,4 +209,60 @@ func (fb *FieldBuilder) buildTextArea(fc FieldConfig, value interface{}, pane *w
 	// Add textarea as full-width field
 	pane.AddFullWidthField(textarea, 4)
 	return &fieldBinding{section: fc.Section, key: fc.Key, kind: fieldJSON, widget: textarea}
+}
+
+// asListOfMaps checks if a value is a []interface{} where all elements are maps.
+func asListOfMaps(v interface{}) ([]map[string]interface{}, bool) {
+	arr, ok := v.([]interface{})
+	if !ok {
+		return nil, false
+	}
+	result := make([]map[string]interface{}, 0, len(arr))
+	for _, elem := range arr {
+		m, ok := elem.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		result = append(result, m)
+	}
+	return result, true
+}
+
+// hasMapKey checks if all maps in the list contain the given key.
+func hasMapKey(items []map[string]interface{}, key string) bool {
+	for _, item := range items {
+		if _, ok := item[key]; !ok {
+			return false
+		}
+	}
+	return len(items) > 0
+}
+
+func (fb *FieldBuilder) buildListEditor(fc FieldConfig, items []map[string]interface{}, pane *widgets.Form) *fieldBinding {
+	editor := primitives.NewListEditor(primitives.ListEditorConfig{
+		LabelKey:  "id",
+		ToggleKey: "enabled",
+	})
+	editor.SetItems(items)
+
+	height := len(items) + 1
+	if height > 10 {
+		height = 10
+	}
+	if height < 3 {
+		height = 3
+	}
+
+	editor.OnChange = func(newItems []map[string]interface{}) {
+		arr := make([]interface{}, len(newItems))
+		for i, m := range newItems {
+			arr[i] = m
+		}
+		updateConfigValue(fb.cfg, fc.Section, fc.Key, arr)
+		fb.onApply(fc.ApplyKind)
+	}
+
+	pane.AddRow(widgets.FormRow{Label: widgets.NewLabel(fc.Label), Height: 1})
+	pane.AddFullWidthField(editor, height)
+	return &fieldBinding{section: fc.Section, key: fc.Key, kind: fieldJSON, widget: editor}
 }
