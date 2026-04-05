@@ -66,6 +66,14 @@ func loadSystemLocked() error {
 	system = cfg
 	if readErr == nil && exists {
 		log.Printf("Config: Loaded system config from %s", path)
+		// Validate against defaults — warn about unknown keys.
+		if defs := defaultSystemConfig(); defs != nil {
+			if unknown := ValidateAgainstDefaults(defs, cfg); len(unknown) > 0 {
+				for _, k := range unknown {
+					log.Printf("[CONFIG] Unknown key %q in system config — not in defaults", k)
+				}
+			}
+		}
 	}
 	return readErr
 }

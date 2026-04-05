@@ -1,6 +1,6 @@
 {
   "defaultApp": "launcher",
-  "activeTheme": "mocha",
+  "pane_decorator_expanded": false,
   "layout_transitions": {
     "enabled": true,
     "duration_ms": 300,
@@ -38,5 +38,15 @@
         }
       }
     ]
+  },
+  "screensaver": {
+    "enabled": false,
+    "timeout_minutes": 5,
+    "effect": "crypt",
+    "fade_style": "dissolve",
+    "fade_in_seconds": 5,
+    "fade_out_seconds": 0.5,
+    "lock_enabled": false,
+    "lock_timeout_minutes": 15
   }
 }

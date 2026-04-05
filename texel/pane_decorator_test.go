@@ -12,6 +12,12 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+func init() {
+	// Prevent system config from interfering with decorator tests.
+	f := false
+	decoratorExpandedOverride = &f
+}
+
 func makeTestBuffer(rows, cols int) [][]Cell {
 	buf := make([][]Cell, rows)
 	for y := range buf {

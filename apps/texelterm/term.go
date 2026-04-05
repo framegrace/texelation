@@ -688,15 +688,23 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.configPanel.Render(a.buf)
 	}
 
-	// Visual bell flash: briefly tint the terminal area
+	// Visual bell flash: tint both FG and BG of every cell with the workspace
+	// accent color. Tinting both ensures powerline separators (where FG encodes
+	// a background color) stay consistent with their neighbors.
 	if time.Now().Before(a.bellFlashUntil) {
-		flashColor := tcell.NewRGBColor(255, 255, 255)
+		tm := theming.ForApp("statusbar")
+		flashColor := tm.GetSemanticColor("accent.primary")
+		if flashColor == tcell.ColorDefault {
+			flashColor = tcell.NewRGBColor(255, 255, 255)
+		}
 		for y := 0; y < termRows && y < len(a.buf); y++ {
-			for x := 0; x < totalCols && x < len(a.buf[y]); x++ {
-				fg, bg, attrs := a.buf[y][x].Style.Decompose()
-				_ = fg
-				blendedBG := blendTcellColor(bg, flashColor, 0.15)
-				a.buf[y][x].Style = tcell.StyleDefault.Foreground(flashColor).Background(blendedBG).Attributes(attrs)
+			row := a.buf[y]
+			for x := 0; x < totalCols && x < len(row); x++ {
+				fg, bg, attrs := row[x].Style.Decompose()
+				row[x].Style = tcell.StyleDefault.
+					Foreground(blendTcellColor(fg, flashColor, 0.15)).
+					Background(blendTcellColor(bg, flashColor, 0.15)).
+					Attributes(attrs)
 			}
 		}
 	}
