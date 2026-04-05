@@ -16,6 +16,7 @@ import (
 
 	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/debuglog"
+	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/framegrace/texelui/color"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
@@ -87,11 +88,17 @@ func newPane(s *Workspace) *pane {
 	}
 	p.decorator = NewPaneDecorator(alwaysExpanded)
 
+	// formatDecoratorHelp builds a help string with key shortcut from the registry.
+	// For prefix-based actions (e.g., Ctrl+A z), pass both the prefix and action.
+	// For direct actions, pass the action as both arguments.
+
 	// Window-manager zoom toggle action (right zone).
 	p.decorator.AddWMAction(DecoratorAction{
 		ID:   "zoom",
 		Icon: '󰊓', // nf-md-fullscreen
-		Help: "Toggle zoom (Ctrl+A z)",
+		HelpFunc: func() string {
+			return p.formatDecoratorHelp("Toggle zoom", keybind.ControlToggle, keybind.ControlZoom)
+		},
 		OnClick: func() {
 			if p.screen != nil && p.screen.desktop != nil {
 				p.screen.desktop.toggleZoom()
@@ -104,6 +111,38 @@ func newPane(s *Workspace) *pane {
 
 // initBorder creates the persistent Border and BufferWidget instances.
 // Called once from newPane; styles are refreshed lazily via refreshBorderStyles.
+// formatDecoratorHelp builds a help string like "Toggle zoom (Ctrl+A z)"
+// using the keybinding registry. For prefix+key actions, pass the prefix
+// action and the action itself. Returns just the label if no registry.
+func (p *pane) formatDecoratorHelp(label string, actions ...keybind.Action) string {
+	if p.screen == nil || p.screen.desktop == nil || p.screen.desktop.keybindings == nil {
+		return label
+	}
+	r := p.screen.desktop.keybindings
+	var parts []string
+	for _, a := range actions {
+		keys := r.KeysForAction(a)
+		if len(keys) > 0 {
+			parts = append(parts, keybind.FormatKeyCombo(keys[0]))
+		}
+	}
+	if len(parts) == 0 {
+		return label
+	}
+	return label + " (" + joinStrings(parts, " ") + ")"
+}
+
+func joinStrings(s []string, sep string) string {
+	result := ""
+	for i, v := range s {
+		if i > 0 {
+			result += sep
+		}
+		result += v
+	}
+	return result
+}
+
 func (p *pane) initBorder() {
 	p.bufferWidget = widgets.NewBufferWidget(nil)
 	p.border = widgets.NewBorder()

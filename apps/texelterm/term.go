@@ -1196,13 +1196,26 @@ func (a *TexelTerm) updateDecoratorState() {
 
 // registerDecoratorActions registers texelterm's toggle actions on the pane decorator.
 // Called once from Run() before the shell loop starts.
+// decoratorHelp formats a help string with the key shortcut from the registry.
+func (a *TexelTerm) decoratorHelp(label string, action keybind.Action) string {
+	if a.keybindings == nil {
+		return label
+	}
+	keys := a.keybindings.KeysForAction(action)
+	if len(keys) == 0 {
+		return label
+	}
+	return label + " (" + keybind.FormatKeyCombo(keys[0]) + ")"
+}
+
 func (a *TexelTerm) registerDecoratorActions() {
 	if a.controlBus == nil {
 		return
 	}
 
 	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
-		ID: "cfg", Icon: '\U000F0493', Help: "Configuration (F4)",
+		ID: "cfg", Icon: '\U000F0493',
+		HelpFunc: func() string { return a.decoratorHelp("Configuration", keybind.ConfigEditor) },
 		OnClick: func() {
 			a.mu.Lock()
 			defer a.mu.Unlock()
@@ -1222,14 +1235,15 @@ func (a *TexelTerm) registerDecoratorActions() {
 	})
 
 	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
-		ID: "tfm", Icon: '\U000F0068', Help: "Transformers (F8)",
+		ID: "tfm", Icon: '\U000F0068',
+		HelpFunc: func() string { return a.decoratorHelp("Transformers", keybind.TermTransformer) },
 		OnClick: func() {
 			a.toggleTransformers()
 		},
 	})
 
 	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
-		ID: "wrp", Icon: '\U000F05B6', Help: "Line wrapping",
+		ID: "wrp", Icon: '\U000F05B6', Help: "Line wrapping",  // no keybinding for wrp
 		Active: true,
 		OnClick: func() {
 			a.mu.Lock()
@@ -1252,7 +1266,8 @@ func (a *TexelTerm) registerDecoratorActions() {
 	})
 
 	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
-		ID: "search", Icon: '\U000F0349', Help: "Search (F3)",
+		ID: "search", Icon: '\U000F0349',
+		HelpFunc: func() string { return a.decoratorHelp("Search", keybind.TermSearch) },
 		OnClick: func() {
 			if a.historyNavigator != nil {
 				if a.historyNavigator.IsVisible() {

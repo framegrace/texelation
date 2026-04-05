@@ -25,12 +25,21 @@ const (
 
 // DecoratorAction describes a single clickable icon in the decorator pill.
 type DecoratorAction struct {
-	ID       string  // unique within its zone (app or WM)
-	Icon     rune    // the glyph displayed
-	Help     string  // tooltip / status line text
-	Active   bool    // highlighted with border.active color
-	Disabled bool    // shown with text.muted, OnClick not called
-	OnClick  func()  // called on left-click; may be nil
+	ID       string       // unique within its zone (app or WM)
+	Icon     rune         // the glyph displayed
+	Help     string       // static tooltip text (used if HelpFunc is nil)
+	HelpFunc func() string // dynamic tooltip (called each time, overrides Help)
+	Active   bool         // highlighted with border.active color
+	Disabled bool         // shown with text.muted, OnClick not called
+	OnClick  func()       // called on left-click; may be nil
+}
+
+// helpText returns the help string, preferring HelpFunc if set.
+func (a DecoratorAction) helpText() string {
+	if a.HelpFunc != nil {
+		return a.HelpFunc()
+	}
+	return a.Help
 }
 
 // PaneDecorator manages a pair of action zones — app actions (left) and WM
@@ -332,7 +341,7 @@ func (d *PaneDecorator) HandleMouse(absX, absY int, buttons tcell.ButtonMask, bo
 	for i, a := range app {
 		actionX := col + i*3
 		if absX >= actionX && absX < actionX+3 {
-			help = a.Help
+			help = a.helpText()
 			if buttons&tcell.Button1 != 0 && !a.Disabled && a.OnClick != nil {
 				a.OnClick()
 			}
@@ -353,7 +362,7 @@ func (d *PaneDecorator) HandleMouse(absX, absY int, buttons tcell.ButtonMask, bo
 	for i, a := range wm {
 		actionX := col + i*3
 		if absX >= actionX && absX < actionX+3 {
-			help = a.Help
+			help = a.helpText()
 			if buttons&tcell.Button1 != 0 && !a.Disabled && a.OnClick != nil {
 				a.OnClick()
 			}
