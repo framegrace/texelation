@@ -6,7 +6,11 @@
 
 package texel
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/framegrace/texelation/apps/help"
+)
 
 // ShowFloatingPanel opens a modal floating panel hosting the given app.
 func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
@@ -178,7 +182,12 @@ func (d *DesktopEngine) launchHelpOverlay() {
 		}
 	}
 
-	appInstance := d.registry.CreateApp("help", nil)
+	var appInstance interface{}
+	if d.keybindings != nil {
+		appInstance = help.NewHelpAppWithBindings(d.keybindings)
+	} else {
+		appInstance = d.registry.CreateApp("help", nil)
+	}
 	app, ok := appInstance.(App)
 	if !ok {
 		return

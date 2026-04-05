@@ -11,6 +11,7 @@ package help
 import (
 	"sync"
 
+	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/framegrace/texelation/internal/theming"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
@@ -39,13 +40,25 @@ type helpApp struct {
 }
 
 // NewHelpApp returns a simple help display app.
+// If a keybinding registry is provided, sections are built dynamically
+// from the registry so they reflect the user's actual bindings.
 func NewHelpApp() texelcore.App {
-	return newHelpApp("Help", allSections())
+	return newHelpApp("Help", allSections(nil))
+}
+
+// NewHelpAppWithBindings returns a help display that reflects actual keybindings.
+func NewHelpAppWithBindings(r *keybind.Registry) texelcore.App {
+	return newHelpApp("Help", allSections(r))
 }
 
 // NewControlHelpApp returns a compact help overlay showing only control mode commands.
 func NewControlHelpApp() texelcore.App {
-	return newHelpApp("Control Mode", controlSections())
+	return newHelpApp("Control Mode", controlSections(nil))
+}
+
+// NewControlHelpAppWithBindings returns control help with actual keybindings.
+func NewControlHelpAppWithBindings(r *keybind.Registry) texelcore.App {
+	return newHelpApp("Control Mode", controlSections(r))
 }
 
 func newHelpApp(title string, sections []helpSection) texelcore.App {
@@ -56,63 +69,84 @@ func newHelpApp(title string, sections []helpSection) texelcore.App {
 	}
 }
 
-func allSections() []helpSection {
+// formatKeys returns the key string for an action from the registry,
+// or the provided fallback if no registry is available.
+func formatKeys(r *keybind.Registry, action keybind.Action, fallback string) string {
+	if r == nil {
+		return fallback
+	}
+	keys := r.KeysForAction(action)
+	if len(keys) == 0 {
+		return fallback
+	}
+	s := keybind.FormatKeyCombo(keys[0])
+	if len(keys) > 1 {
+		s += " / " + keybind.FormatKeyCombo(keys[1])
+	}
+	return s
+}
+
+func allSections(r *keybind.Registry) []helpSection {
 	return []helpSection{
 		{
 			title: "Global Shortcuts",
 			entries: []helpEntry{
-				{"F1", "Show this Help"},
-				{"Alt+Left/Right", "Switch workspace"},
-				{"Shift+Arrow", "Move pane focus"},
-				{"Ctrl+Arrow", "Resize panes"},
-				{"Ctrl+F", "Edit config for active app"},
+				{formatKeys(r, keybind.Help, "F1"), "Show this Help"},
+				{formatKeys(r, keybind.WorkspaceSwitchPrev, "Alt+Left") + ", " + formatKeys(r, keybind.WorkspaceSwitchNext, "Alt+Right"), "Switch workspace"},
+				{formatKeys(r, keybind.PaneNavUp, "Shift+Up") + "/Down/Left/Right", "Move pane focus"},
+				{formatKeys(r, keybind.PaneResizeUp, "Ctrl+Up") + "/Down/Left/Right", "Resize panes"},
+				{formatKeys(r, keybind.ConfigEditor, "F4"), "Edit config for active app"},
+				{formatKeys(r, keybind.Screenshot, "F5"), "Save screenshot as PNG"},
+				{formatKeys(r, keybind.Screensaver, "Ctrl+S"), "Activate screensaver"},
 			},
 		},
-		controlSection(),
+		controlSection(r),
 		{
 			title: "Navigation",
 			entries: []helpEntry{
-				{"Shift+Up", "Focus up (→ tab mode at top)"},
-				{"Shift+Down", "Focus down (exits tab mode)"},
-				{"Shift+Left/Right", "Focus left/right"},
+				{formatKeys(r, keybind.PaneNavUp, "Shift+Up"), "Focus up (→ tab mode at top)"},
+				{formatKeys(r, keybind.PaneNavDown, "Shift+Down"), "Focus down (exits tab mode)"},
+				{formatKeys(r, keybind.PaneNavLeft, "Shift+Left") + "/" + formatKeys(r, keybind.PaneNavRight, "Shift+Right"), "Focus left/right (workspace in tab mode)"},
 				{"Click tab", "Switch workspace"},
 			},
 		},
 		{
-			title: "TexelTerm Tips",
+			title: "Terminal",
 			entries: []helpEntry{
+				{formatKeys(r, keybind.TermSearch, "F3"), "Toggle history search"},
+				{formatKeys(r, keybind.TermScrollbar, "F7"), "Toggle scrollbar"},
+				{formatKeys(r, keybind.TermTransformer, "F8"), "Toggle transformers"},
+				{formatKeys(r, keybind.TermScreenshot, "Ctrl+P"), "Save pane screenshot"},
+				{formatKeys(r, keybind.TermScrollPgUp, "Alt+PgUp") + "/" + formatKeys(r, keybind.TermScrollPgDn, "Alt+PgDn"), "Scroll history (page)"},
 				{"Mouse wheel", "Scroll history"},
-				{"Shift+wheel", "Page through history"},
-				{"Alt+wheel", "Scroll history (line)"},
-				{"Alt+PgUp/PgDn", "Scroll history (pane)"},
 				{"Drag mouse", "Select & copy text"},
-				{"Click", "Focus target pane"},
 			},
 		},
 	}
 }
 
-func controlSection() helpSection {
+func controlSection(r *keybind.Registry) helpSection {
+	prefix := formatKeys(r, keybind.ControlToggle, "Ctrl+A")
 	return helpSection{
-		title: "Control Mode (Ctrl-A)",
+		title: "Control Mode (" + prefix + ")",
 		entries: []helpEntry{
-			{"|", "Split vertically"},
-			{"-", "Split horizontally"},
-			{"x", "Close active pane"},
-			{"w", "Swap panes (then Arrow)"},
-			{"z", "Toggle zoom"},
-			{"t", "New workspace (type name, Enter)"},
-			{"X", "Close workspace (y/n confirm)"},
-			{"l", "Open Launcher"},
-			{"h", "Show Help"},
-			{"f", "Open Config Editor"},
+			{formatKeys(r, keybind.ControlVSplit, "|"), "Split vertically"},
+			{formatKeys(r, keybind.ControlHSplit, "-"), "Split horizontally"},
+			{formatKeys(r, keybind.ControlClose, "x"), "Close active pane"},
+			{formatKeys(r, keybind.ControlSwap, "w"), "Swap panes (then Arrow)"},
+			{formatKeys(r, keybind.ControlZoom, "z"), "Toggle zoom"},
+			{formatKeys(r, keybind.ControlNewTab, "t"), "New workspace (type name, Enter)"},
+			{formatKeys(r, keybind.ControlCloseTab, "X"), "Close workspace (y/n confirm)"},
+			{formatKeys(r, keybind.ControlLauncher, "l"), "Open Launcher"},
+			{formatKeys(r, keybind.ControlHelp, "h"), "Show Help"},
+			{formatKeys(r, keybind.ControlConfig, "f"), "Open Config Editor"},
 			{"Esc", "Exit control mode"},
 		},
 	}
 }
 
-func controlSections() []helpSection {
-	return []helpSection{controlSection()}
+func controlSections(r *keybind.Registry) []helpSection {
+	return []helpSection{controlSection(r)}
 }
 
 func (a *helpApp) Run() error {
