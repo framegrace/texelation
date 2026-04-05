@@ -47,6 +47,7 @@ type pane struct {
 	border       *widgets.Border
 	bufferWidget *widgets.BufferWidget
 	wasActive    bool // tracks focus state to avoid redundant Focus/Blur calls
+	decorator    *PaneDecorator
 
 	// Per-pane dirty tracking for render skipping (Level 2 optimization).
 	// Uses a generation counter instead of a boolean flag to avoid TOCTOU
@@ -77,6 +78,7 @@ func newPane(s *Workspace) *pane {
 		copy(p.id[:], sum[:])
 	}
 	p.initBorder()
+	p.decorator = NewPaneDecorator(false)
 	return p
 }
 
@@ -229,6 +231,31 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		}
 	}
 
+	// Register decorator control bus handlers for all apps with a ControlBus.
+	if provider, ok := app.(ControlBusProvider); ok {
+		provider.RegisterControl("decorator.add", "Add decorator action", func(payload interface{}) error {
+			if a, ok := payload.(DecoratorAction); ok {
+				p.decorator.AddAppAction(a)
+				p.markDirty()
+			}
+			return nil
+		})
+		provider.RegisterControl("decorator.remove", "Remove decorator action", func(payload interface{}) error {
+			if id, ok := payload.(string); ok {
+				p.decorator.RemoveAppAction(id)
+				p.markDirty()
+			}
+			return nil
+		})
+		provider.RegisterControl("decorator.update", "Update decorator action state", func(payload interface{}) error {
+			if a, ok := payload.(DecoratorAction); ok {
+				p.decorator.UpdateAppAction(a)
+				p.markDirty()
+			}
+			return nil
+		})
+	}
+
 	debuglog.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
 	if p.screen != nil && p.screen.desktop != nil {
 		p.screen.desktop.notifyPaneState(p.ID(), p.IsActive, p.IsResizing, p.ZOrder, p.handlesMouse)
@@ -365,6 +392,31 @@ func (p *pane) StartPreparedApp() {
 				return nil
 			})
 		}
+	}
+
+	// Register decorator control bus handlers for all apps with a ControlBus.
+	if provider, ok := p.app.(ControlBusProvider); ok {
+		provider.RegisterControl("decorator.add", "Add decorator action", func(payload interface{}) error {
+			if a, ok := payload.(DecoratorAction); ok {
+				p.decorator.AddAppAction(a)
+				p.markDirty()
+			}
+			return nil
+		})
+		provider.RegisterControl("decorator.remove", "Remove decorator action", func(payload interface{}) error {
+			if id, ok := payload.(string); ok {
+				p.decorator.RemoveAppAction(id)
+				p.markDirty()
+			}
+			return nil
+		})
+		provider.RegisterControl("decorator.update", "Update decorator action state", func(payload interface{}) error {
+			if a, ok := payload.(DecoratorAction); ok {
+				p.decorator.UpdateAppAction(a)
+				p.markDirty()
+			}
+			return nil
+		})
 	}
 
 	// Notify pane state

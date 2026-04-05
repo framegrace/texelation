@@ -65,6 +65,15 @@ func (p *pane) handlePaste(data []byte) {
 
 // handleMouse forwards a mouse event to the pane's app with local coordinates.
 func (p *pane) handleMouse(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	// Check if mouse hits the decorator pill on the top border.
+	if p.decorator != nil && p.decorator.HasActions() && y == p.absY0 {
+		_, consumed := p.decorator.HandleMouse(x, y, buttons, p.absX0, p.absX1, p.absY0)
+		if consumed {
+			p.markDirty()
+			return
+		}
+	}
+
 	if !p.handlesMouseEvents() {
 		return
 	}

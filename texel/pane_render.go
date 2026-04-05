@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/framegrace/texelation/internal/debuglog"
+	"github.com/framegrace/texelui/color"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
 	"github.com/gdamore/tcell/v2"
@@ -151,6 +152,12 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	painter := texelcore.NewPainter(buffer, texelcore.Rect{X: 0, Y: 0, W: w, H: h})
 	p.border.Draw(painter)
 
+	// Draw decorator pill on the border's top row.
+	if p.decorator != nil && p.decorator.HasActions() {
+		borderStyle := p.currentBorderStyle()
+		p.decorator.Draw(buffer, 0, w, 0, borderStyle)
+	}
+
 	// Cache the rendered buffer for reuse when pane hasn't changed.
 	p.prevBuf = buffer
 	p.prevTitle = currentTitle
@@ -212,6 +219,23 @@ func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 	} else {
 		debuglog.Printf("setDimensions: Pane '%s' has no app yet!", p.getTitle())
 	}
+}
+
+// currentBorderStyle returns the tcell.Style the border is using based on pane state.
+func (p *pane) currentBorderStyle() tcell.Style {
+	var ds color.DynamicStyle
+	if p.IsResizing {
+		ds = p.border.ResizingStyle
+	} else if p.IsActive {
+		ds = p.border.FocusedStyle
+	} else {
+		ds = p.border.Style
+	}
+	ctx := color.ColorContext{}
+	return tcell.StyleDefault.
+		Foreground(ds.FG.Resolve(ctx)).
+		Background(ds.BG.Resolve(ctx)).
+		Attributes(ds.Attrs)
 }
 
 // contains reports whether the absolute pane bounds include the provided coordinates.
