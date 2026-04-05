@@ -1884,7 +1884,6 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 
 	cfg := config.App("texelterm")
 	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
-	reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
 
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
@@ -1954,7 +1953,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 			}
 		}),
 		parser.WithWrap(wrapEnabled),
-		parser.WithReflow(reflowEnabled),
+		parser.WithReflow(wrapEnabled),
 	)
 
 	// Wire transformer pipeline from config (txfmt registers via init())
