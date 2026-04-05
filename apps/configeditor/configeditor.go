@@ -103,6 +103,7 @@ const (
 	applyTheme
 	applyApp
 	applyAppTheme
+	applyKeybindings
 )
 
 type fieldBinding struct {
@@ -378,6 +379,12 @@ func (e *ConfigEditor) buildSystemSections(target *configTarget) *widgets.TabPan
 
 	uiValues := sectionValues(target.themeValues, "ui")
 	panel.AddTab("TexelUI Theme", e.buildSectionPane(target, target.themeValues, "ui", uiValues, true, applyTheme))
+
+	// Keybindings tab
+	panel.AddTab("Keybindings", buildKeybindingsTab(func() {
+		e.emitApply(applyKeybindings, target)
+		e.showSuccess("Saved (keybindings updated)")
+	}))
 
 	return panel
 }
@@ -940,6 +947,8 @@ func applyPayload(kind applyKind, target *configTarget) string {
 		if target != nil && target.name != "" {
 			return "app-theme:" + target.name
 		}
+	case applyKeybindings:
+		return "keybindings"
 	}
 	return ""
 }
