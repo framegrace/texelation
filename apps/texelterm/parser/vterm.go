@@ -70,6 +70,8 @@ type VTerm struct {
 	// Clipboard operations (OSC 52)
 	OnClipboardSet func(data []byte) // Called when app sets clipboard via OSC 52
 	OnClipboardGet func() []byte     // Called when app queries clipboard via OSC 52
+	// Bell (BEL character, 0x07)
+	OnBell func()
 	// Alt screen change notification (for transformer pipeline bypass)
 	OnAltScreenChange func(inAltScreen bool)
 	// Bracketed paste mode (DECSET 2004)
@@ -1279,6 +1281,10 @@ func WithAltScreenChangeHandler(handler func(bool)) Option {
 
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
+}
+
+func WithBellHandler(handler func()) Option {
+	return func(v *VTerm) { v.OnBell = handler }
 }
 
 func WithClipboardSetHandler(handler func([]byte)) Option {

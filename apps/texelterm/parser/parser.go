@@ -75,13 +75,17 @@ func (p *Parser) Parse(r rune) {
 		case '\f':
 			// FF (Form Feed) - behaves like IND (Index)
 			p.vterm.Index()
+		case '\x07': // BEL
+			if p.vterm.OnBell != nil {
+				p.vterm.OnBell()
+			}
 		case '\x7f': // DEL - treat same as backspace
 			p.vterm.Backspace()
 		default:
 			if r >= ' ' && r != '\x7f' {
 				p.vterm.writeCharWithWrapping(r)
 			}
-			// Ignore BEL and other unprintable control characters
+			// Ignore other unprintable control characters
 		}
 	case StateEscape:
 		switch r {
