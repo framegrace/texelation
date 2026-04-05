@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelui/color"
 	texelcore "github.com/framegrace/texelui/core"
@@ -78,7 +79,13 @@ func newPane(s *Workspace) *pane {
 		copy(p.id[:], sum[:])
 	}
 	p.initBorder()
-	p.decorator = NewPaneDecorator(false)
+	alwaysExpanded := false
+	if cfg := config.System(); cfg != nil {
+		if v, ok := cfg["pane_decorator_expanded"].(bool); ok {
+			alwaysExpanded = v
+		}
+	}
+	p.decorator = NewPaneDecorator(alwaysExpanded)
 
 	// Window-manager zoom toggle action (right zone).
 	p.decorator.AddWMAction(DecoratorAction{

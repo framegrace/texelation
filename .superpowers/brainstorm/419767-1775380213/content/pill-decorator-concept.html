@@ -1,0 +1,72 @@
+<h2>Pane Decorator Pill — Border Integration</h2>
+<p class="subtitle">The pill lives on the pane border, not inside the terminal. Click to select your preferred approach.</p>
+
+<div class="cards">
+  <div class="card" data-choice="collapsed" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family: monospace; font-size: 14px; padding: 16px; background: #1e1e2e; color: #cdd6f4; border-radius: 8px; line-height: 1.5;">
+        <span style="color: #585b70;">╭─</span><span style="color: #89b4fa;"> texelterm-1 </span><span style="color: #585b70;">──────────────────────────────────</span><span style="color: #313244;"></span><span style="background: #313244; color: #6c7086;">≡</span><span style="color: #313244;">╮</span><br>
+        <span style="color: #585b70;">│</span> <span style="color: #a6e3a1;">user@host</span>:<span style="color: #89b4fa;">~/projects</span>$ ls<span style="padding-left: 210px; color: #585b70;">│</span><br>
+        <span style="color: #585b70;">│</span> README.md  src/  docs/  Makefile<span style="padding-left: 160px; color: #585b70;">│</span><br>
+        <span style="color: #585b70;">│</span> <span style="color: #a6e3a1;">user@host</span>:<span style="color: #89b4fa;">~/projects</span>$ <span style="color: #f5e0dc;">█</span><span style="padding-left: 195px; color: #585b70;">│</span><br>
+        <span style="color: #585b70;">╰──────────────────────────────────────────────────╯</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Collapsed — Hamburger on Border</h3>
+      <p>Pill sits on the top-right border corner. Shows just <code>≡</code> (hamburger). Takes zero terminal space — only uses border cells. Title and pill share the top border row.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="expanded" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family: monospace; font-size: 14px; padding: 16px; background: #1e1e2e; color: #cdd6f4; border-radius: 8px; line-height: 1.5;">
+        <span style="color: #585b70;">╭─</span><span style="color: #89b4fa;"> texelterm-1 </span><span style="color: #585b70;">──────────────</span><span style="color: #313244;"></span><span style="background: #313244; color: #f9e2af;"> ⚙ </span><span style="background: #313244; color: #a6e3a1;"> 󰁨 </span><span style="background: #313244; color: #89b4fa;">  </span><span style="background: #313244; color: #cba6f7;"> 󰍉 </span><span style="color: #313244;">╮</span><br>
+        <span style="color: #585b70;">│</span> <span style="color: #a6e3a1;">user@host</span>:<span style="color: #89b4fa;">~/projects</span>$ ls<span style="padding-left: 210px; color: #585b70;">│</span><br>
+        <span style="color: #585b70;">│</span> README.md  src/  docs/  Makefile<span style="padding-left: 160px; color: #585b70;">│</span><br>
+        <span style="color: #585b70;">│</span> <span style="color: #a6e3a1;">user@host</span>:<span style="color: #89b4fa;">~/projects</span>$ <span style="color: #f5e0dc;">█</span><span style="padding-left: 195px; color: #585b70;">│</span><br>
+        <span style="color: #585b70;">╰──────────────────────────────────────────────────╯</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Expanded — Toggle Buttons on Border</h3>
+      <p>On hover, the pill expands to show all toggle buttons. Still on the border — no terminal space used. Powerline caps blend with border corners.</p>
+    </div>
+  </div>
+</div>
+
+<h2 style="margin-top: 40px;">Communication Model</h2>
+<p class="subtitle">How do apps add/remove actions to the pill?</p>
+
+<div class="options">
+  <div class="option" data-choice="controlbus" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>ControlBus Messages</h3>
+      <p>Apps send <code>decorator.add</code> / <code>decorator.remove</code> messages via the existing ControlBus. Texelation's pane receives them and manages the pill. Apps don't know about the pill — they just declare actions.</p>
+      <pre style="background: #181825; padding: 8px; border-radius: 4px; font-size: 12px; color: #cdd6f4;">controlBus.Send("decorator.add", DecoratorAction{
+  ID:    "search",
+  Icon:  "󰍉",
+  Help:  "Toggle search (F3)",
+  OnClick: func() { ... },
+})</pre>
+    </div>
+  </div>
+  <div class="option" data-choice="interface" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>PaneDecorator Interface</h3>
+      <p>Apps implement a <code>PaneDecorator</code> interface. The pane queries the app for its decorator actions on each render. Simpler, no messaging.</p>
+      <pre style="background: #181825; padding: 8px; border-radius: 4px; font-size: 12px; color: #cdd6f4;">type PaneDecorator interface {
+  DecoratorActions() []DecoratorAction
+}</pre>
+    </div>
+  </div>
+  <div class="option" data-choice="direct" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Direct Pane API</h3>
+      <p>Apps call <code>pane.AddDecoratorAction()</code> directly (via a setter interface). Most explicit, but couples apps to the pane concept.</p>
+    </div>
+  </div>
+</div>
