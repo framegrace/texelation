@@ -1314,11 +1314,12 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 		oldWidth, width, oldHeight, height,
 		v.memBufState.liveEdgeBase, v.cursorY, cursorGlobalLine, mb.GlobalEnd())
 
-	// When the cursor column exceeds the new width, split the cursor's logical
-	// line into a wrapped chain so that cursorY/cursorX correctly address the
-	// content. This triggers on width decrease, or after rejoinResizeSplitChain
-	// restores cursorX to the absolute column in the combined line.
-	if width > 0 && v.cursorX >= width {
+	// When the cursor column exceeds the new width AND wrapping is enabled,
+	// split the cursor's logical line into a wrapped chain so that cursorY/cursorX
+	// correctly address the content. When wrap is off, the logical line stays
+	// intact and content past the right edge is simply hidden until the terminal
+	// is widened again.
+	if width > 0 && v.cursorX >= width && v.wrapEnabled {
 		line := mb.GetLine(cursorGlobalLine)
 		if line != nil && len(line.Cells) > width {
 			absoluteCol := v.cursorX

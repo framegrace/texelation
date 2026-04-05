@@ -278,8 +278,11 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 			v.prevCursorX = v.cursorX
 			v.prevCursorY = v.cursorY
 		} else {
-			// At edge, no wrap mode - stay at edge
-			v.SetCursorPos(v.cursorY, rightEdge)
+			// No wrap mode: let cursorX advance past the visible edge so
+			// characters are stored in the logical line (preserving content
+			// for wider resize). The display cursor stays at the right edge
+			// via PhysicalCursor() clamping.
+			v.cursorX = newX
 		}
 	}
 }
