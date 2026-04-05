@@ -1977,7 +1977,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	pipeline := transformer.BuildPipeline(cfg)
 	a.pipeline = pipeline
 	if pipeline != nil {
-		pipeline.SetEnabled(false) // off by default until user enables via Ctrl+T
+		pipeline.SetEnabled(a.tfmUserPref)
 		a.vterm.OnLineCommit = pipeline.HandleLine
 		a.vterm.OnPromptStart = pipeline.NotifyPromptStart
 		pipeline.SetInsertFunc(a.vterm.RequestLineInsert)
