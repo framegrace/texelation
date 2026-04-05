@@ -198,7 +198,6 @@ func (d *PaneDecorator) Draw(buf [][]Cell, borderX0, borderX1, borderY int, bord
 
 	tm := theme.Get()
 	mutedFG := tm.GetSemanticColor("text.muted").TrueColor()
-	activeBG := tm.GetSemanticColor("border.active").TrueColor()
 
 	// Derive cap colors from the border style.
 	borderFG, borderBG, _ := borderStyle.Decompose()
@@ -208,11 +207,13 @@ func (d *PaneDecorator) Draw(buf [][]Cell, borderX0, borderX1, borderY int, bord
 	pillBG := borderFG
 	pillTextFG := borderBG
 
+	// Lighten the pill BG for active actions — blend 40% toward white.
+	activeBG := lightenColor(pillBG, 0.4)
+
 	capStyle := tcell.StyleDefault.Foreground(borderFG).Background(borderBG)
 	innerBase := tcell.StyleDefault.Foreground(pillTextFG).Background(pillBG)
 	mutedStyle := tcell.StyleDefault.Foreground(mutedFG).Background(pillBG)
-	// Active: bright background with contrasting foreground for visibility.
-	activeStyle := tcell.StyleDefault.Foreground(borderBG).Background(activeBG)
+	activeStyle := tcell.StyleDefault.Foreground(pillTextFG).Background(activeBG)
 
 	rect := d.PillRect(borderX0, borderX1, borderY)
 	x := rect.X
@@ -379,4 +380,17 @@ func (d *PaneDecorator) expandedWidth() int {
 		w = 3
 	}
 	return w
+}
+
+// lightenColor blends a color toward white by the given factor (0.0 = unchanged, 1.0 = white).
+func lightenColor(c tcell.Color, factor float64) tcell.Color {
+	r, g, b := c.RGB()
+	blend := func(ch int32) int32 {
+		v := float64(ch) + (255-float64(ch))*factor
+		if v > 255 {
+			v = 255
+		}
+		return int32(v)
+	}
+	return tcell.NewRGBColor(blend(r), blend(g), blend(b))
 }
