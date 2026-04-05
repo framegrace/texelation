@@ -118,16 +118,14 @@ type TexelTerm struct {
 	scrollbar *ScrollBar
 
 	// Status bar with toggle button mode indicators
-	statusBar *widgets.StatusBar
-	tfmToggle *widgets.ToggleButton
-
-	tuiToggle *widgets.ToggleButton
-	wrpToggle    *widgets.ToggleButton
-	wrpUserPref  bool // user's preferred wrap state (restored when override clears)
-	tfmUserPref  bool // user's preferred transformer state (restored when TUI/alt clears)
-	altToggle    *widgets.ToggleButton
-	searchToggle *widgets.ToggleButton
-	cfgToggle    *widgets.ToggleButton
+	statusBar       *widgets.StatusBar
+	tfmToggle       *widgets.ToggleButton
+	wrpToggle       *widgets.ToggleButton
+	wrpUserPref     bool // user's preferred wrap state (restored when override clears)
+	tfmUserPref     bool // user's preferred transformer state (restored when TUI/alt clears)
+	searchToggle    *widgets.ToggleButton
+	cfgToggle       *widgets.ToggleButton
+	overlayExpanded bool // true when mouse is hovering the toggle overlay
 
 	// Config panel overlay
 	configPanel *ConfigPanel
@@ -157,21 +155,15 @@ func New(title, command string) texelcore.App {
 	sb.Resize(1, 1) // No separator = 1 row
 
 	tfm := widgets.NewToggleButton(" \U000F0068 ") // nf-md-auto_fix (magic wand)
-	tfm.Active = false                             // Transformers off by default until detection is more reliable
-	tfm.SetHelpText("Transformer pipeline (Ctrl+T)")
-	tui := widgets.NewToggleButton(" \U000F0379 ") // nf-md-monitor
-	tui.Disabled = true
-	tui.SetHelpText("TUI app detection")
+	tfm.Active = false // Transformers off by default until detection is more reliable
+	tfm.SetHelpText("Transformer pipeline (F8)")
 	wrp := widgets.NewToggleButton(" \U000F05B6 ") // nf-md-wrap
 	wrp.Active = true                              // Wrapping on by default
 	wrp.SetHelpText("Line wrapping")
-	alt := widgets.NewToggleButton(" \U000F0328 ") // nf-md-layers
-	alt.Disabled = true
-	alt.SetHelpText("Alternate screen")
 	srch := widgets.NewToggleButton(" \U000F0349 ") // nf-md-magnify
-	srch.SetHelpText("Search history (Ctrl+G)")
+	srch.SetHelpText("Search history (F3)")
 	cfg := widgets.NewToggleButton(" \U000F0493 ") // nf-md-cog
-	cfg.SetHelpText("Configuration")
+	cfg.SetHelpText("Configuration (F4)")
 
 	term := &TexelTerm{
 		title:        title,
@@ -185,11 +177,9 @@ func New(title, command string) texelcore.App {
 		controlBus:   texelcore.NewControlBus(),
 		statusBar:    sb,
 		tfmToggle:    tfm,
-		tuiToggle:    tui,
 		wrpToggle:    wrp,
 		wrpUserPref:  true,
 		tfmUserPref:  false,
-		altToggle:    alt,
 		searchToggle: srch,
 		cfgToggle:    cfg,
 	}

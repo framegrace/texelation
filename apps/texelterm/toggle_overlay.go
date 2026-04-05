@@ -11,19 +11,12 @@ import (
 const (
 	pillLeftCap  = '\uE0B6' //
 	pillRightCap = '\uE0B4' //
-	pillSep      = '│'      // separator between interactive and indicator groups
+	hamburger    = '\u2261'  // ≡
 )
 
-// overlayToggles returns the ordered list of toggle buttons for the overlay.
-// Interactive (toggleable) buttons come first, then read-only indicators.
+// overlayToggles returns the ordered list of interactive toggle buttons.
 func (a *TexelTerm) overlayToggles() []*widgets.ToggleButton {
-	return []*widgets.ToggleButton{a.cfgToggle, a.tfmToggle, a.wrpToggle, a.searchToggle, a.tuiToggle, a.altToggle}
-}
-
-// overlaySepIndex returns the index in overlayToggles() where the separator
-// should be drawn (after the interactive group, before the indicator group).
-func (a *TexelTerm) overlaySepIndex() int {
-	return 4 // after cfg, tfm, wrp, search; before tui, alt
+	return []*widgets.ToggleButton{a.cfgToggle, a.tfmToggle, a.wrpToggle, a.searchToggle}
 }
 
 // updateModeIndicatorsLocked updates toggle button states from current terminal state.
@@ -32,12 +25,6 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 	if a.vterm == nil {
 		return
 	}
-
-	// TUI/NRM - TUI detection (active = TUI detected)
-	a.tuiToggle.Active = a.vterm.IsInTUIMode()
-
-	// ALT - alt screen
-	a.altToggle.Active = a.vterm.InAltScreen()
 
 	// TFM - transformer pipeline (disabled + forced off during TUI or alt screen)
 	tfmOverride := a.vterm.IsInTUIMode() || a.vterm.InAltScreen()
@@ -81,35 +68,50 @@ func (a *TexelTerm) updateModeIndicatorsLocked() {
 	a.cfgToggle.Active = a.configPanel != nil && a.configPanel.IsVisible()
 }
 
-// toggleOverlayRect returns the bounding rect for the toggle button overlay
-// at the top-right of the terminal, including pill caps. Must be called with a.mu held.
-func (a *TexelTerm) toggleOverlayRect(totalCols int) texelcore.Rect {
-	totalW := 0
+// toggleOverlayExpanded tracks whether the toggle overlay is expanded (mouse hovering).
+// This field should be on the TexelTerm struct — added via the existing struct fields.
+
+// collapsedOverlayWidth returns the width of the collapsed pill (caps + hamburger).
+func collapsedOverlayWidth() int {
+	return 3 // left cap + hamburger + right cap
+}
+
+// expandedOverlayWidth returns the width of the expanded pill with all toggle buttons.
+func (a *TexelTerm) expandedOverlayWidth() int {
+	w := 2 // pill caps
 	for _, tb := range a.overlayToggles() {
-		w, _ := tb.Size()
-		totalW += w
+		bw, _ := tb.Size()
+		w += bw
 	}
-	totalW += 2 // pill caps
-	totalW += 1 // separator between interactive and indicator groups
+	return w
+}
+
+// toggleOverlayRect returns the bounding rect for the toggle overlay.
+// Uses expanded or collapsed width based on hover state.
+func (a *TexelTerm) toggleOverlayRect(totalCols int) texelcore.Rect {
+	var totalW int
+	if a.overlayExpanded {
+		totalW = a.expandedOverlayWidth()
+	} else {
+		totalW = collapsedOverlayWidth()
+	}
 	x := totalCols - totalW
 	return texelcore.Rect{X: x, Y: 0, W: totalW, H: 1}
 }
 
 // drawToggleOverlay renders the toggle buttons as a pill-shaped overlay at the top-right.
-// Skips drawing if the terminal is too narrow to fit the overlay.
+// In collapsed state, shows just a hamburger icon. Expands on hover to show all toggles.
 // Must be called with a.mu held.
 func (a *TexelTerm) drawToggleOverlay(buf [][]texelcore.Cell, totalCols int) {
 	if len(buf) == 0 {
 		return
 	}
 	rect := a.toggleOverlayRect(totalCols)
-	// Don't draw if terminal is too narrow (overlay needs margin + width + 1 char gap)
 	if rect.X < 0 {
 		return
 	}
 	totalRows := len(buf)
 
-	// Get colors for pill caps: fg = overlay BG (bg.surface), bg = terminal BG (bg.base)
 	tm := theme.Get()
 	overlayBG := tm.GetSemanticColor("bg.surface")
 	terminalBG := tm.GetSemanticColor("bg.base")
@@ -123,19 +125,21 @@ func (a *TexelTerm) drawToggleOverlay(buf [][]texelcore.Cell, totalCols int) {
 
 	p := texelcore.NewPainter(buf, texelcore.Rect{X: 0, Y: 0, W: totalCols, H: totalRows})
 
-	// Draw left pill cap
+	if !a.overlayExpanded {
+		// Collapsed: just pill caps + hamburger
+		hamburgerStyle := tcell.StyleDefault.Foreground(tm.GetSemanticColor("text.muted")).Background(overlayBG)
+		p.SetCell(rect.X, 0, pillLeftCap, capStyle)
+		p.SetCell(rect.X+1, 0, hamburger, hamburgerStyle)
+		p.SetCell(rect.X+2, 0, pillRightCap, capStyle)
+		return
+	}
+
+	// Expanded: pill caps + all toggle buttons
 	p.SetCell(rect.X, 0, pillLeftCap, capStyle)
 
-	// Position and draw each toggle button (after left cap), with separator between groups
 	toggles := a.overlayToggles()
-	sepIdx := a.overlaySepIndex()
-	sepStyle := tcell.StyleDefault.Foreground(tm.GetSemanticColor("text.muted")).Background(overlayBG)
 	xx := rect.X + 1
-	for i, tb := range toggles {
-		if i == sepIdx {
-			p.SetCell(xx, 0, pillSep, sepStyle)
-			xx++
-		}
+	for _, tb := range toggles {
 		w, _ := tb.Size()
 		tb.SetPosition(xx, 0)
 		xx += w
@@ -144,30 +148,49 @@ func (a *TexelTerm) drawToggleOverlay(buf [][]texelcore.Cell, totalCols int) {
 		tb.Draw(p)
 	}
 
-	// Draw right pill cap
 	p.SetCell(xx, 0, pillRightCap, capStyle)
 }
 
 // handleToggleOverlayMouse checks if a mouse event hits the toggle overlay.
-// Returns true if the event was consumed by the overlay.
+// Handles hover expand/collapse and click forwarding.
 // Must be called with a.mu held.
 func (a *TexelTerm) handleToggleOverlayMouse(ev *tcell.EventMouse) bool {
-	overlayRect := a.toggleOverlayRect(a.width)
-	if overlayRect.X < 0 {
-		return false
-	}
-
 	x, y := ev.Position()
-	if !overlayRect.Contains(x, y) {
+
+	// Check against the EXPANDED rect to detect hover entry,
+	// and the current rect for actual hit testing.
+	expandedW := a.expandedOverlayWidth()
+	expandedX := a.width - expandedW
+	expandedRect := texelcore.Rect{X: expandedX, Y: 0, W: expandedW, H: 1}
+
+	currentRect := a.toggleOverlayRect(a.width)
+
+	// Check if mouse is in the expanded zone (for hover expansion)
+	inExpandedZone := expandedRect.Contains(x, y)
+	inCurrentRect := currentRect.Contains(x, y)
+
+	if !inExpandedZone && !inCurrentRect {
+		// Mouse left the overlay area
+		if a.overlayExpanded {
+			a.overlayExpanded = false
+			a.requestRefresh()
+		}
 		if a.statusBar != nil {
 			a.statusBar.ClearHoverHelp()
 		}
 		return false
 	}
 
+	// Mouse is in the overlay zone — expand if collapsed
+	if !a.overlayExpanded {
+		a.overlayExpanded = true
+		a.requestRefresh()
+		return true
+	}
+
+	// Expanded state: show hover help and handle clicks
 	toggles := a.overlayToggles()
 
-	// Show hover help for the hovered button
 	helpFound := false
 	for _, tb := range toggles {
 		if tb.HitTest(x, y) {
@@ -182,7 +205,6 @@ func (a *TexelTerm) handleToggleOverlayMouse(ev *tcell.EventMouse) bool {
 		a.statusBar.ClearHoverHelp()
 	}
 
-	// Forward click events to buttons
 	for _, tb := range toggles {
 		if tb.HandleMouse(ev) {
 			a.requestRefresh()

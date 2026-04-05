@@ -36,13 +36,10 @@ func TestToggleOverlayRenderedInOutput(t *testing.T) {
 		t.Fatalf("expected 11 rows, got %d", len(buf))
 	}
 
-	// Row 0 should contain toggle button icons (overlay at top-right)
+	// Row 0 should contain the collapsed toggle overlay (hamburger icon)
 	contentRow := rowToString(buf[0])
-	if !strings.Contains(contentRow, "\U000F0068") { // nf-md-auto_fix (transformer)
-		t.Errorf("expected transformer icon on overlay row 0, got %q", contentRow)
-	}
-	if !strings.Contains(contentRow, "\U000F05B6") { // nf-md-wrap
-		t.Errorf("expected wrap icon on overlay row 0, got %q", contentRow)
+	if !strings.Contains(contentRow, "\u2261") { // ≡ hamburger
+		t.Errorf("expected hamburger icon on overlay row 0, got %q", contentRow)
 	}
 
 	app.Stop()
