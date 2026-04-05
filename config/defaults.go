@@ -33,6 +33,56 @@ func applyAppDefaults(app string, cfg Config) {
 	mergeDefaults(cfg, embedded)
 }
 
+// AppDefaults returns a clone of the embedded default config for the named app.
+// Returns nil if no defaults exist for that app.
+func AppDefaults(app string) Config {
+	return defaultAppConfig(app)
+}
+
+// SystemDefaults returns a clone of the embedded default system config.
+func SystemDefaults() Config {
+	return defaultSystemConfig()
+}
+
+// ValidateAgainstDefaults compares a config against its defaults and returns
+// a list of unknown keys (present in cfg but not in defaults).
+// Keys are formatted as "section.key" for section-level keys.
+func ValidateAgainstDefaults(defaults, cfg Config) []string {
+	if defaults == nil || cfg == nil {
+		return nil
+	}
+	var unknown []string
+	for sectionName, sectionVal := range cfg {
+		defSection, hasDef := defaults[sectionName]
+		if !hasDef {
+			unknown = append(unknown, sectionName)
+			continue
+		}
+		// Both must be maps for key-level comparison
+		cfgMap, cfgOk := toMap(sectionVal)
+		defMap, defOk := toMap(defSection)
+		if !cfgOk || !defOk {
+			continue
+		}
+		for key := range cfgMap {
+			if _, ok := defMap[key]; !ok {
+				unknown = append(unknown, sectionName+"."+key)
+			}
+		}
+	}
+	return unknown
+}
+
+func toMap(v interface{}) (map[string]interface{}, bool) {
+	switch m := v.(type) {
+	case map[string]interface{}:
+		return m, true
+	case Section:
+		return map[string]interface{}(m), true
+	}
+	return nil, false
+}
+
 // mergeDefaults copies missing keys from defaults into cfg.
 // Existing keys in cfg are preserved.
 // Values are deep-cloned to prevent mutation of cached defaults.
