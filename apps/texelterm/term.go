@@ -120,8 +120,6 @@ type TexelTerm struct {
 	// Status bar with toggle button mode indicators
 	statusBar       *widgets.StatusBar
 	tfmToggle       *widgets.ToggleButton
-	wrpToggle       *widgets.ToggleButton
-	wrpUserPref     bool // user's preferred wrap state (restored when override clears)
 	tfmUserPref     bool // user's preferred transformer state (restored when TUI/alt clears)
 	searchToggle    *widgets.ToggleButton
 	cfgToggle       *widgets.ToggleButton
@@ -133,6 +131,9 @@ type TexelTerm struct {
 
 	// Keybinding registry (injected by desktop; nil in standalone mode)
 	keybindings *keybind.Registry
+
+	// Visual bell flash state
+	bellFlashUntil time.Time
 }
 
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
@@ -152,12 +153,11 @@ func New(title, command string) texelcore.App {
 	sb.ShowSeparator = false
 	sb.Resize(1, 1) // No separator = 1 row
 
+	initCfg := config.App("texelterm")
+
 	tfm := widgets.NewToggleButton(" \U000F0068 ") // nf-md-auto_fix (magic wand)
-	tfm.Active = false // Transformers off by default until detection is more reliable
+	tfm.Active = initCfg.GetBool("transformers", "enabled", false)
 	tfm.SetHelpText("Transformer pipeline (F8)")
-	wrp := widgets.NewToggleButton(" \U000F05B6 ") // nf-md-wrap
-	wrp.Active = true                              // Wrapping on by default
-	wrp.SetHelpText("Line wrapping")
 	srch := widgets.NewToggleButton(" \U000F0349 ") // nf-md-magnify
 	srch.SetHelpText("Search history (F3)")
 	cfg := widgets.NewToggleButton(" \U000F0493 ") // nf-md-cog
@@ -175,9 +175,7 @@ func New(title, command string) texelcore.App {
 		controlBus:   texelcore.NewControlBus(),
 		statusBar:    sb,
 		tfmToggle:    tfm,
-		wrpToggle:    wrp,
-		wrpUserPref:  true,
-		tfmUserPref:  false,
+		tfmUserPref:  initCfg.GetBool("transformers", "enabled", false),
 		searchToggle: srch,
 		cfgToggle:    cfg,
 	}
@@ -636,6 +634,19 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 	// Render config panel overlay
 	if a.configPanel != nil && a.configPanel.IsVisible() {
 		a.configPanel.Render(a.buf)
+	}
+
+	// Visual bell flash: briefly tint the terminal area
+	if time.Now().Before(a.bellFlashUntil) {
+		flashColor := tcell.NewRGBColor(255, 255, 255)
+		for y := 0; y < termRows && y < len(a.buf); y++ {
+			for x := 0; x < totalCols && x < len(a.buf[y]); x++ {
+				fg, bg, attrs := a.buf[y][x].Style.Decompose()
+				_ = fg
+				blendedBG := blendTcellColor(bg, flashColor, 0.15)
+				a.buf[y][x].Style = tcell.StyleDefault.Foreground(flashColor).Background(blendedBG).Attributes(attrs)
+			}
+		}
 	}
 
 	// Update decorator pill state via ControlBus
@@ -1117,6 +1128,52 @@ func copyImageToClipboard(img image.Image, filePath string) bool {
 }
 
 // toggleTransformers flips the transformer pipeline state (Ctrl+T path).
+// ReloadConfig applies config changes at runtime. Called by the desktop when
+// the config editor saves changes. Hot-reloadable settings are applied
+// immediately; init-only settings require a terminal restart.
+func (a *TexelTerm) ReloadConfig() {
+	cfg := config.App("texelterm")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Transformer enable — can toggle the pipeline at runtime
+	newTfm := cfg.GetBool("transformers", "enabled", false)
+	if newTfm != a.tfmUserPref {
+		a.tfmUserPref = newTfm
+		if a.pipeline != nil {
+			a.pipeline.SetEnabled(newTfm)
+			if a.vterm != nil {
+				a.vterm.SetShowOverlay(newTfm)
+				a.vterm.MarkAllDirty()
+			}
+		}
+		a.tfmToggle.Active = newTfm
+	}
+
+	a.requestRefresh()
+}
+
+// blendTcellColor blends two tcell colors by the given factor (0=base, 1=overlay).
+func blendTcellColor(base, overlay tcell.Color, factor float64) tcell.Color {
+	br, bg, bb := base.RGB()
+	or, og, ob := overlay.RGB()
+	blend := func(b, o int32) int32 {
+		return int32(float64(b)*(1-factor) + float64(o)*factor)
+	}
+	return tcell.NewRGBColor(blend(br, or), blend(bg, og), blend(bb, ob))
+}
+
+// triggerVisualBell starts a brief flash effect on the terminal.
+func (a *TexelTerm) triggerVisualBell() {
+	a.bellFlashUntil = time.Now().Add(150 * time.Millisecond)
+	a.requestRefresh()
+	// Schedule a refresh after the flash expires to clear it.
+	go func() {
+		time.Sleep(160 * time.Millisecond)
+		a.requestRefresh()
+	}()
+}
+
 func (a *TexelTerm) toggleTransformers() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1170,26 +1227,14 @@ func (a *TexelTerm) updateDecoratorState() {
 		a.vterm.MarkAllDirty()
 	}
 
-	// Wrap state — disable during TUI/alt-screen
-	if tfmOverride {
-		if a.vterm.WrapEnabled() {
-			a.vterm.SetWrapEnabled(false)
-		}
-	} else if a.vterm.WrapEnabled() != a.wrpUserPref {
-		a.vterm.SetWrapEnabled(a.wrpUserPref)
-	}
-
 	// Keep toggle button state in sync (still used by keyboard toggle paths)
 	a.tfmToggle.Active = tfmActive
 	a.tfmToggle.Disabled = tfmOverride
-	a.wrpToggle.Active = a.wrpUserPref && !tfmOverride
-	a.wrpToggle.Disabled = tfmOverride
 	a.searchToggle.Active = a.historyNavigator != nil && a.historyNavigator.IsVisible()
 	a.cfgToggle.Active = a.configPanel != nil && a.configPanel.IsVisible()
 
 	// Send state updates to pane decorator
 	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "tfm", Active: tfmActive, Disabled: tfmOverride})
-	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "wrp", Active: a.wrpUserPref && !tfmOverride, Disabled: tfmOverride})
 	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "search", Active: a.historyNavigator != nil && a.historyNavigator.IsVisible()})
 	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "cfg", Active: a.configPanel != nil && a.configPanel.IsVisible()})
 }
@@ -1239,29 +1284,6 @@ func (a *TexelTerm) registerDecoratorActions() {
 		HelpFunc: func() string { return a.decoratorHelp("Transformers", keybind.TermTransformer) },
 		OnClick: func() {
 			a.toggleTransformers()
-		},
-	})
-
-	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
-		ID: "wrp", Icon: '\U000F05B6', Help: "Line wrapping",  // no keybinding for wrp
-		Active: true,
-		OnClick: func() {
-			a.mu.Lock()
-			defer a.mu.Unlock()
-			a.wrpUserPref = !a.wrpUserPref
-			if a.vterm != nil {
-				a.vterm.SetWrapEnabled(a.wrpUserPref)
-				a.vterm.MarkAllDirty()
-			}
-			a.wrpToggle.Active = a.wrpUserPref
-			if a.statusBar != nil {
-				if a.wrpUserPref {
-					a.statusBar.ShowMessage("Line wrapping ON")
-				} else {
-					a.statusBar.ShowMessage("Line wrapping OFF")
-				}
-			}
-			a.requestRefresh()
 		},
 	})
 
@@ -1808,9 +1830,6 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	defer a.mu.Unlock()
 
 	cfg := config.App("texelterm")
-	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
-	reflowEnabled := cfg.GetBool("texelterm", "reflow_enabled", true)
-	displayBufferEnabled := cfg.GetBool("texelterm", "display_buffer_enabled", true)
 
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
@@ -1873,8 +1892,12 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 			}
 			return nil
 		}),
-		parser.WithWrap(wrapEnabled),
-		parser.WithReflow(reflowEnabled),
+		parser.WithBellHandler(func() {
+			bellEnabled := config.App("texelterm").GetBool("texelterm", "visual_bell_enabled", false)
+			if bellEnabled {
+				a.triggerVisualBell()
+			}
+		}),
 	)
 
 	// Wire transformer pipeline from config (txfmt registers via init())
@@ -1908,30 +1931,10 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		}
 	}
 
-	// Wire WRP toggle callback
-	a.wrpToggle.OnToggle = func(active bool) {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		a.wrpUserPref = active
-		if a.vterm != nil {
-			a.vterm.SetWrapEnabled(active)
-			a.vterm.MarkAllDirty()
-		}
-		if a.statusBar != nil {
-			if active {
-				a.statusBar.ShowMessage("Line wrapping ON")
-			} else {
-				a.statusBar.ShowMessage("Line wrapping OFF")
-			}
-		}
-	}
-
 	a.parser = parser.NewParser(a.vterm)
 
-	if displayBufferEnabled {
-		// MemoryBuffer is now the only system (DisplayBuffer was removed)
-		a.initializeMemoryBufferLocked(paneID, cfg)
-	}
+	// Initialize MemoryBuffer (scrollback, persistence, search).
+	a.initializeMemoryBufferLocked(paneID, cfg)
 
 	// Initialize scrollbar (non-overlay, resizes terminal)
 	// Callback triggers terminal resize when visibility changes

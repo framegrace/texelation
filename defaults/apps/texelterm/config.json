@@ -1,9 +1,6 @@
 {
   "texelterm": {
-    "visual_bell_enabled": false,
-    "wrap_enabled": true,
-    "reflow_enabled": true,
-    "display_buffer_enabled": true
+    "visual_bell_enabled": false
   },
   "texelterm.scroll": {
     "velocity_decay": 0.6,

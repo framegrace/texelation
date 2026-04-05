@@ -36,7 +36,6 @@ type VTerm struct {
 	tabStops                           map[int]bool
 	cursorVisible                      bool
 	wrapNext, autoWrapMode, insertMode bool
-	wrapEnabled, reflowEnabled         bool // Line wrapping for main screen buffer
 	appCursorKeys                      bool
 	TitleChanged                       func(string)
 	WriteToPty                         func([]byte)
@@ -70,6 +69,8 @@ type VTerm struct {
 	// Clipboard operations (OSC 52)
 	OnClipboardSet func(data []byte) // Called when app sets clipboard via OSC 52
 	OnClipboardGet func() []byte     // Called when app queries clipboard via OSC 52
+	// Bell (BEL character, 0x07)
+	OnBell func()
 	// Alt screen change notification (for transformer pipeline bypass)
 	OnAltScreenChange func(inAltScreen bool)
 	// Bracketed paste mode (DECSET 2004)
@@ -102,8 +103,6 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		tabStops:              make(map[int]bool),
 		cursorVisible:         true,
 		autoWrapMode:          true,
-		wrapEnabled:           true,
-		reflowEnabled:         true,
 		marginTop:             0,
 		marginBottom:          height - 1,
 		marginLeft:            0,
@@ -220,16 +219,14 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 				v.lineFeedForWrap()
 			}
 		} else {
-			if v.wrapEnabled {
-				// Mark line as wrapped for reflow on resize
-				v.markLineWrapped()
-				if v.leftRightMarginMode {
-					v.cursorX = v.marginLeft
-				} else {
-					v.cursorX = 0
-				}
-				v.lineFeedForWrap()
+			// Mark line as wrapped for reflow on resize
+			v.markLineWrapped()
+			if v.leftRightMarginMode {
+				v.cursorX = v.marginLeft
+			} else {
+				v.cursorX = 0
 			}
+			v.lineFeedForWrap()
 		}
 	}
 
@@ -264,7 +261,7 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 		}
 	} else {
 		// Main screen wrapping logic
-		if v.wrapEnabled && newX > rightEdge {
+		if newX > rightEdge {
 			// Set wrapNext instead of wrapping immediately.
 			// This allows CR or LF to clear the flag without creating extra lines.
 			// The cursor stays at the right edge; the next character triggers
@@ -277,8 +274,11 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 			v.prevCursorX = v.cursorX
 			v.prevCursorY = v.cursorY
 		} else {
-			// At edge, no wrap mode - stay at edge
-			v.SetCursorPos(v.cursorY, rightEdge)
+			// No wrap mode: let cursorX advance past the visible edge so
+			// characters are stored in the logical line (preserving content
+			// for wider resize). The display cursor stays at the right edge
+			// via PhysicalCursor() clamping.
+			v.cursorX = newX
 		}
 	}
 }
@@ -1227,14 +1227,6 @@ func WithTitleChangeHandler(handler func(string)) Option {
 	return func(v *VTerm) { v.TitleChanged = handler }
 }
 
-func WithWrap(enabled bool) Option {
-	return func(v *VTerm) { v.wrapEnabled = enabled }
-}
-
-func WithReflow(enabled bool) Option {
-	return func(v *VTerm) { v.reflowEnabled = enabled }
-}
-
 func (v *VTerm) SetTitle(title string) {
 	if v.TitleChanged != nil {
 		v.TitleChanged(title)
@@ -1279,6 +1271,10 @@ func WithAltScreenChangeHandler(handler func(bool)) Option {
 
 func WithBracketedPasteModeChangeHandler(handler func(bool)) Option {
 	return func(v *VTerm) { v.OnBracketedPasteModeChange = handler }
+}
+
+func WithBellHandler(handler func()) Option {
+	return func(v *VTerm) { v.OnBell = handler }
 }
 
 func WithClipboardSetHandler(handler func([]byte)) Option {
@@ -1513,15 +1509,6 @@ func (v *VTerm) IsInTUIMode() bool {
 	fwd := v.fixedWidthDetector()
 	return fwd != nil && fwd.IsInTUIMode()
 }
-
-// ReflowEnabled returns true if reflow on resize is enabled.
-func (v *VTerm) ReflowEnabled() bool { return v.reflowEnabled }
-
-// WrapEnabled returns true if line wrapping is enabled.
-func (v *VTerm) WrapEnabled() bool { return v.wrapEnabled }
-
-// SetWrapEnabled enables or disables line wrapping at runtime.
-func (v *VTerm) SetWrapEnabled(enabled bool) { v.wrapEnabled = enabled }
 
 // LiveEdgeBase returns the current liveEdgeBase (global line index of viewport row 0).
 func (v *VTerm) LiveEdgeBase() int64 {

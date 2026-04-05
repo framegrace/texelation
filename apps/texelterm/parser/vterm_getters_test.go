@@ -12,42 +12,6 @@ func TestVTermGetters(t *testing.T) {
 		if v.InsertMode() {
 			t.Error("InsertMode should be false by default")
 		}
-		// wrapEnabled defaults to true in NewVTerm
-		if !v.WrapEnabled() {
-			t.Error("WrapEnabled should be true by default")
-		}
-		// reflowEnabled defaults to true in NewVTerm
-		if !v.ReflowEnabled() {
-			t.Error("ReflowEnabled should be true by default")
-		}
-	})
-
-	t.Run("WithWrap false", func(t *testing.T) {
-		v := NewVTerm(80, 24, WithWrap(false))
-		if v.WrapEnabled() {
-			t.Error("WrapEnabled should be false when created with WithWrap(false)")
-		}
-	})
-
-	t.Run("WithWrap true", func(t *testing.T) {
-		v := NewVTerm(80, 24, WithWrap(true))
-		if !v.WrapEnabled() {
-			t.Error("WrapEnabled should be true when created with WithWrap(true)")
-		}
-	})
-
-	t.Run("WithReflow false", func(t *testing.T) {
-		v := NewVTerm(80, 24, WithReflow(false))
-		if v.ReflowEnabled() {
-			t.Error("ReflowEnabled should be false when created with WithReflow(false)")
-		}
-	})
-
-	t.Run("WithReflow true", func(t *testing.T) {
-		v := NewVTerm(80, 24, WithReflow(true))
-		if !v.ReflowEnabled() {
-			t.Error("ReflowEnabled should be true when created with WithReflow(true)")
-		}
 	})
 }
 

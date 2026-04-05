@@ -37,6 +37,12 @@ type AppStorage = texelcore.AppStorage
 type StorageSetter = texelcore.StorageSetter
 type AppStorageSetter = texelcore.AppStorageSetter
 
+// ConfigReloader is implemented by apps that can react to config changes at runtime.
+// Called by the desktop when the config editor saves changes for the app's config.
+type ConfigReloader interface {
+	ReloadConfig()
+}
+
 // NewControlBus provides a local helper for legacy call sites.
 func NewControlBus() ControlBus {
 	return texelcore.NewControlBus()
