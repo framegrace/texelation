@@ -54,6 +54,7 @@ const (
 	ControlLauncher  Action = "control.launcher"
 	ControlHelp      Action = "control.help"
 	ControlConfig    Action = "control.config"
+	ControlRenameTab Action = "control.rename_tab"
 	ControlNewTab    Action = "control.new_tab"
 	ControlCloseTab  Action = "control.close_tab"
 )
@@ -102,6 +103,7 @@ var ActionDescriptions = map[Action]ActionInfo{
 	ControlLauncher: {Description: "Open app launcher", Category: "Control"},
 	ControlHelp:     {Description: "Open help", Category: "Control"},
 	ControlConfig:   {Description: "Open config editor", Category: "Control"},
+	ControlRenameTab: {Description: "Rename workspace", Category: "Control"},
 	ControlNewTab:   {Description: "Create new workspace", Category: "Control"},
 	ControlCloseTab: {Description: "Close workspace", Category: "Control"},
 

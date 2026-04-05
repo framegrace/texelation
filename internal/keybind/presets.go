@@ -31,8 +31,9 @@ var linuxPreset = map[Action][]string{
 	ControlLauncher: {"l"},
 	ControlHelp:     {"h"},
 	ControlConfig:   {"f"},
-	ControlNewTab:   {"t"},
-	ControlCloseTab: {"X"},
+	ControlRenameTab: {"t"},
+	ControlNewTab:    {"T"},
+	ControlCloseTab:  {"X"},
 
 	TermSearch:      {"f3"},
 	TermScrollbar:   {"f7"},

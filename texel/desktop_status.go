@@ -22,6 +22,7 @@ type StatusBarActions interface {
 // (Ctrl-A t). The desktop routes keys to this interface while tab mode is active.
 type TabModeHandler interface {
 	StartNewTab()                        // insert new tab after current and open editor
+	StartRenameTab()                     // open editor on the current tab for renaming
 	StartCloseWorkspace()                // show delete confirmation toast
 	EnterNavMode()                       // start pulsating for navigation feedback
 	HandleTabModeKey(ev *tcell.EventKey) // route keys to editor or confirmation
