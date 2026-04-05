@@ -66,8 +66,9 @@ func (p *pane) handlePaste(data []byte) {
 
 // handleMouse forwards a mouse event to the pane's app with local coordinates.
 func (p *pane) handleMouse(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
-	// Check if mouse hits the decorator pill on the top border.
-	if p.decorator != nil && p.decorator.HasActions() && y == p.absY0 {
+	// Check decorator pill on the top border. Always forward mouse position
+	// so the pill can collapse when the mouse leaves its zone vertically.
+	if p.decorator != nil && p.decorator.HasActions() {
 		help, consumed := p.decorator.HandleMouse(x, y, buttons, p.absX0, p.absX1, p.absY0)
 		if consumed {
 			if help != "" && p.screen != nil && p.screen.desktop != nil {
