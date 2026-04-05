@@ -124,6 +124,14 @@ func loadAppLocked(name string) (Config, error) {
 
 	if readErr == nil && exists {
 		log.Printf("Config: Loaded app %q config from %s", name, path)
+		// Validate against defaults — warn about unknown keys.
+		if defs := defaultAppConfig(name); defs != nil {
+			if unknown := ValidateAgainstDefaults(defs, cfg); len(unknown) > 0 {
+				for _, k := range unknown {
+					log.Printf("[CONFIG] Unknown key %q in app %q — not in defaults", k, name)
+				}
+			}
+		}
 	}
 	return cfg, readErr
 }

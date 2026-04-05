@@ -358,6 +358,30 @@ func (e *ConfigEditor) buildSystemSections(target *configTarget) *widgets.TabPan
 func (e *ConfigEditor) buildAppSections(target *configTarget) *widgets.TabPanel {
 	sections := splitSections(target.values)
 	delete(sections, "theme_overrides")
+
+	// Filter sections and keys by what's in the embedded defaults.
+	// This prevents stale/unknown keys from appearing in the editor.
+	if defaults := config.AppDefaults(target.name); defaults != nil {
+		defaultSections := splitSections(defaults)
+		filtered := make(map[string]map[string]interface{})
+		for sectionKey, defKeys := range defaultSections {
+			userKeys := sections[sectionKey]
+			if userKeys == nil {
+				userKeys = make(map[string]interface{})
+			}
+			filteredKeys := make(map[string]interface{})
+			for key, defVal := range defKeys {
+				if userVal, ok := userKeys[key]; ok {
+					filteredKeys[key] = userVal
+				} else {
+					filteredKeys[key] = defVal
+				}
+			}
+			filtered[sectionKey] = filteredKeys
+		}
+		sections = filtered
+	}
+
 	if len(sections) == 0 {
 		sections[""] = map[string]interface{}{}
 	}

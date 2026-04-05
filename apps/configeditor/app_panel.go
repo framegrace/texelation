@@ -59,6 +59,29 @@ func NewAppConfigPanel(appName string, onStatus func(msg string, isErr bool)) (c
 func buildAppSectionsStandalone(target *configTarget, onApply func(applyKind)) *widgets.TabPanel {
 	sections := splitSections(target.values)
 	delete(sections, "theme_overrides")
+
+	// Filter by defaults schema — only show known keys.
+	if defaults := config.AppDefaults(target.name); defaults != nil {
+		defaultSections := splitSections(defaults)
+		filtered := make(map[string]map[string]interface{})
+		for sectionKey, defKeys := range defaultSections {
+			userKeys := sections[sectionKey]
+			if userKeys == nil {
+				userKeys = make(map[string]interface{})
+			}
+			filteredKeys := make(map[string]interface{})
+			for key, defVal := range defKeys {
+				if userVal, ok := userKeys[key]; ok {
+					filteredKeys[key] = userVal
+				} else {
+					filteredKeys[key] = defVal
+				}
+			}
+			filtered[sectionKey] = filteredKeys
+		}
+		sections = filtered
+	}
+
 	if len(sections) == 0 {
 		sections[""] = map[string]interface{}{}
 	}
