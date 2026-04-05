@@ -263,13 +263,8 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 		p.app.Resize(p.drawableWidth(), p.drawableHeight())
 	}
 
-	debuglog.Printf("AttachApp: Starting app lifecycle for '%s'", p.getTitle())
-	currentApp := p.app
-	p.screen.appLifecycle.StartApp(p.app, func(err error) {
-		p.screen.handleAppExit(p, currentApp, err)
-	})
-
-	// Register control bus handlers if this is a launcher app in a pane
+	// Register control bus handlers BEFORE StartApp to avoid race conditions.
+	// Run() may call registerDecoratorActions immediately, so handlers must exist.
 	if app.GetTitle() == "Launcher" {
 		if provider, ok := app.(ControlBusProvider); ok {
 			provider.RegisterControl("launcher.select-app", "Launch selected app in this pane", func(payload interface{}) error {
@@ -314,6 +309,13 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 			return nil
 		})
 	}
+
+	// Start the app lifecycle AFTER all ControlBus handlers are registered.
+	debuglog.Printf("AttachApp: Starting app lifecycle for '%s'", p.getTitle())
+	currentApp := p.app
+	p.screen.appLifecycle.StartApp(p.app, func(err error) {
+		p.screen.handleAppExit(p, currentApp, err)
+	})
 
 	debuglog.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
 	if p.screen != nil && p.screen.desktop != nil {
