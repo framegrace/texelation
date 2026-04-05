@@ -10,6 +10,7 @@ package texel
 import (
 	"sync"
 
+	"github.com/framegrace/texelation/config"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
 	"github.com/gdamore/tcell/v2"
@@ -135,8 +136,10 @@ func (d *PaneDecorator) HasActions() bool {
 }
 
 // IsExpanded reports whether the pill is currently in expanded state.
+// Checks pane_decorator_expanded config dynamically so changes take effect
+// without server restart.
 func (d *PaneDecorator) IsExpanded() bool {
-	if d.alwaysExpanded {
+	if d.alwaysExpanded || isDecoratorAlwaysExpanded() {
 		return true
 	}
 	d.mu.RLock()
@@ -144,9 +147,25 @@ func (d *PaneDecorator) IsExpanded() bool {
 	return d.expanded
 }
 
+// isDecoratorAlwaysExpanded reads the system config dynamically.
+func isDecoratorAlwaysExpanded() bool {
+	if decoratorExpandedOverride != nil {
+		return *decoratorExpandedOverride
+	}
+	cfg := config.System()
+	if cfg == nil {
+		return false
+	}
+	v, ok := cfg["pane_decorator_expanded"].(bool)
+	return ok && v
+}
+
+// decoratorExpandedOverride allows tests to override the config check.
+var decoratorExpandedOverride *bool
+
 // SetExpanded manually sets the expanded state.  Ignored when alwaysExpanded.
 func (d *PaneDecorator) SetExpanded(v bool) {
-	if d.alwaysExpanded {
+	if d.alwaysExpanded || isDecoratorAlwaysExpanded() {
 		return
 	}
 	d.mu.Lock()
@@ -311,9 +330,11 @@ func (d *PaneDecorator) HandleMouse(absX, absY int, buttons tcell.ButtonMask, bo
 
 	inZone := hoverRect.Contains(absX, absY)
 
+	alwaysOn := d.alwaysExpanded || isDecoratorAlwaysExpanded()
+
 	if !inZone {
 		// Outside pill zone: collapse if currently expanded.
-		if d.IsExpanded() && !d.alwaysExpanded {
+		if d.IsExpanded() && !alwaysOn {
 			d.mu.Lock()
 			d.expanded = false
 			d.mu.Unlock()
@@ -323,7 +344,7 @@ func (d *PaneDecorator) HandleMouse(absX, absY int, buttons tcell.ButtonMask, bo
 
 	// Inside zone but pill is collapsed: expand and consume.
 	if !d.IsExpanded() {
-		if !d.alwaysExpanded {
+		if !alwaysOn {
 			d.mu.Lock()
 			d.expanded = true
 			d.mu.Unlock()

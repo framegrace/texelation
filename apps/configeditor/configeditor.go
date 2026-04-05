@@ -337,10 +337,37 @@ func (e *ConfigEditor) buildSystemSections(target *configTarget) *widgets.TabPan
 	panel := widgets.NewTabPanel()
 	target.bindings = nil
 
-	generalValues := generalValues(target.values)
-	panel.AddTab("General", e.buildSectionPane(target, target.values, "", generalValues, false, applySystem))
+	// Filter general values by defaults schema.
+	genVals := generalValues(target.values)
+	if defaults := config.SystemDefaults(); defaults != nil {
+		defGen := generalValues(defaults)
+		filtered := make(map[string]interface{})
+		for key, defVal := range defGen {
+			if userVal, ok := genVals[key]; ok {
+				filtered[key] = userVal
+			} else {
+				filtered[key] = defVal
+			}
+		}
+		genVals = filtered
+	}
+	panel.AddTab("General", e.buildSectionPane(target, target.values, "", genVals, false, applySystem))
 
+	// Filter layout_transitions by defaults.
 	layoutValues := sectionValues(target.values, "layout_transitions")
+	if defaults := config.SystemDefaults(); defaults != nil {
+		if defLayout := defaults.Section("layout_transitions"); defLayout != nil {
+			filtered := make(map[string]interface{})
+			for key, defVal := range defLayout {
+				if userVal, ok := layoutValues[key]; ok {
+					filtered[key] = userVal
+				} else {
+					filtered[key] = defVal
+				}
+			}
+			layoutValues = filtered
+		}
+	}
 	panel.AddTab("Layout Transitions", e.buildSectionPane(target, target.values, "layout_transitions", layoutValues, false, applySystem))
 
 	effectsValues := sectionValues(target.values, "effects")
@@ -515,6 +542,8 @@ func (e *ConfigEditor) applyTargetConfig(target *configTarget, kind applyKind) {
 
 	if err != nil {
 		e.showError(fmt.Sprintf("Apply failed: %v", err))
+	} else if kind == applySystem {
+		e.showSuccess("Saved (restart client to apply effects/screensaver)")
 	} else {
 		e.showSuccess("Saved.")
 	}
