@@ -198,7 +198,7 @@ func (d *PaneDecorator) Draw(buf [][]Cell, borderX0, borderX1, borderY int, bord
 
 	tm := theme.Get()
 	mutedFG := tm.GetSemanticColor("text.muted").TrueColor()
-	activeFG := tm.GetSemanticColor("border.active").TrueColor()
+	activeBG := tm.GetSemanticColor("border.active").TrueColor()
 
 	// Derive cap colors from the border style.
 	borderFG, borderBG, _ := borderStyle.Decompose()
@@ -211,7 +211,8 @@ func (d *PaneDecorator) Draw(buf [][]Cell, borderX0, borderX1, borderY int, bord
 	capStyle := tcell.StyleDefault.Foreground(borderFG).Background(borderBG)
 	innerBase := tcell.StyleDefault.Foreground(pillTextFG).Background(pillBG)
 	mutedStyle := tcell.StyleDefault.Foreground(mutedFG).Background(pillBG)
-	activeStyle := tcell.StyleDefault.Foreground(activeFG).Background(pillBG)
+	// Active: bright background with contrasting foreground for visibility.
+	activeStyle := tcell.StyleDefault.Foreground(borderBG).Background(activeBG)
 
 	rect := d.PillRect(borderX0, borderX1, borderY)
 	x := rect.X
