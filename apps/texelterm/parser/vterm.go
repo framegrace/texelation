@@ -36,7 +36,6 @@ type VTerm struct {
 	tabStops                           map[int]bool
 	cursorVisible                      bool
 	wrapNext, autoWrapMode, insertMode bool
-	wrapEnabled bool // Line wrapping and reflow for main screen buffer
 	appCursorKeys                      bool
 	TitleChanged                       func(string)
 	WriteToPty                         func([]byte)
@@ -104,7 +103,6 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		tabStops:              make(map[int]bool),
 		cursorVisible:         true,
 		autoWrapMode:          true,
-		wrapEnabled:           true,
 		marginTop:             0,
 		marginBottom:          height - 1,
 		marginLeft:            0,
@@ -221,16 +219,14 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 				v.lineFeedForWrap()
 			}
 		} else {
-			if v.wrapEnabled {
-				// Mark line as wrapped for reflow on resize
-				v.markLineWrapped()
-				if v.leftRightMarginMode {
-					v.cursorX = v.marginLeft
-				} else {
-					v.cursorX = 0
-				}
-				v.lineFeedForWrap()
+			// Mark line as wrapped for reflow on resize
+			v.markLineWrapped()
+			if v.leftRightMarginMode {
+				v.cursorX = v.marginLeft
+			} else {
+				v.cursorX = 0
 			}
+			v.lineFeedForWrap()
 		}
 	}
 
@@ -265,7 +261,7 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 		}
 	} else {
 		// Main screen wrapping logic
-		if v.wrapEnabled && newX > rightEdge {
+		if newX > rightEdge {
 			// Set wrapNext instead of wrapping immediately.
 			// This allows CR or LF to clear the flag without creating extra lines.
 			// The cursor stays at the right edge; the next character triggers
@@ -1231,16 +1227,6 @@ func WithTitleChangeHandler(handler func(string)) Option {
 	return func(v *VTerm) { v.TitleChanged = handler }
 }
 
-func WithWrap(enabled bool) Option {
-	return func(v *VTerm) { v.wrapEnabled = enabled }
-}
-
-// WithReflow is kept for API compatibility but now just sets wrapEnabled
-// since wrap and reflow are unified under a single setting.
-func WithReflow(enabled bool) Option {
-	return func(v *VTerm) { v.wrapEnabled = enabled }
-}
-
 func (v *VTerm) SetTitle(title string) {
 	if v.TitleChanged != nil {
 		v.TitleChanged(title)
@@ -1522,14 +1508,6 @@ func (v *VTerm) InsertMode() bool { return v.insertMode }
 func (v *VTerm) IsInTUIMode() bool {
 	fwd := v.fixedWidthDetector()
 	return fwd != nil && fwd.IsInTUIMode()
-}
-
-// WrapEnabled returns true if line wrapping (and reflow) is enabled.
-func (v *VTerm) WrapEnabled() bool { return v.wrapEnabled }
-
-// SetWrapEnabled enables or disables line wrapping and reflow at runtime.
-func (v *VTerm) SetWrapEnabled(enabled bool) {
-	v.wrapEnabled = enabled
 }
 
 // LiveEdgeBase returns the current liveEdgeBase (global line index of viewport row 0).

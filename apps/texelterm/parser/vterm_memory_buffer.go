@@ -1319,7 +1319,7 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	// correctly address the content. When wrap is off, the logical line stays
 	// intact and content past the right edge is simply hidden until the terminal
 	// is widened again.
-	if width > 0 && v.cursorX >= width && v.wrapEnabled {
+	if width > 0 && v.cursorX >= width {
 		line := mb.GetLine(cursorGlobalLine)
 		if line != nil && len(line.Cells) > width {
 			absoluteCol := v.cursorX

@@ -120,8 +120,6 @@ type TexelTerm struct {
 	// Status bar with toggle button mode indicators
 	statusBar       *widgets.StatusBar
 	tfmToggle       *widgets.ToggleButton
-	wrpToggle       *widgets.ToggleButton
-	wrpUserPref     bool // user's preferred wrap state (restored when override clears)
 	tfmUserPref     bool // user's preferred transformer state (restored when TUI/alt clears)
 	searchToggle    *widgets.ToggleButton
 	cfgToggle       *widgets.ToggleButton
@@ -160,9 +158,6 @@ func New(title, command string) texelcore.App {
 	tfm := widgets.NewToggleButton(" \U000F0068 ") // nf-md-auto_fix (magic wand)
 	tfm.Active = initCfg.GetBool("transformers", "enabled", false)
 	tfm.SetHelpText("Transformer pipeline (F8)")
-	wrp := widgets.NewToggleButton(" \U000F05B6 ") // nf-md-wrap
-	wrp.Active = initCfg.GetBool("texelterm", "wrap_enabled", true)
-	wrp.SetHelpText("Line wrapping")
 	srch := widgets.NewToggleButton(" \U000F0349 ") // nf-md-magnify
 	srch.SetHelpText("Search history (F3)")
 	cfg := widgets.NewToggleButton(" \U000F0493 ") // nf-md-cog
@@ -180,8 +175,6 @@ func New(title, command string) texelcore.App {
 		controlBus:   texelcore.NewControlBus(),
 		statusBar:    sb,
 		tfmToggle:    tfm,
-		wrpToggle:    wrp,
-		wrpUserPref:  initCfg.GetBool("texelterm", "wrap_enabled", true),
 		tfmUserPref:  initCfg.GetBool("transformers", "enabled", false),
 		searchToggle: srch,
 		cfgToggle:    cfg,
@@ -1143,17 +1136,6 @@ func (a *TexelTerm) ReloadConfig() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Wrap toggle — can be changed at runtime
-	newWrap := cfg.GetBool("texelterm", "wrap_enabled", true)
-	if newWrap != a.wrpUserPref {
-		a.wrpUserPref = newWrap
-		if a.vterm != nil {
-			a.vterm.SetWrapEnabled(newWrap)
-			a.vterm.MarkAllDirty()
-		}
-		a.wrpToggle.Active = newWrap
-	}
-
 	// Transformer enable — can toggle the pipeline at runtime
 	newTfm := cfg.GetBool("transformers", "enabled", false)
 	if newTfm != a.tfmUserPref {
@@ -1245,26 +1227,14 @@ func (a *TexelTerm) updateDecoratorState() {
 		a.vterm.MarkAllDirty()
 	}
 
-	// Wrap state — disable during TUI/alt-screen
-	if tfmOverride {
-		if a.vterm.WrapEnabled() {
-			a.vterm.SetWrapEnabled(false)
-		}
-	} else if a.vterm.WrapEnabled() != a.wrpUserPref {
-		a.vterm.SetWrapEnabled(a.wrpUserPref)
-	}
-
 	// Keep toggle button state in sync (still used by keyboard toggle paths)
 	a.tfmToggle.Active = tfmActive
 	a.tfmToggle.Disabled = tfmOverride
-	a.wrpToggle.Active = a.wrpUserPref && !tfmOverride
-	a.wrpToggle.Disabled = tfmOverride
 	a.searchToggle.Active = a.historyNavigator != nil && a.historyNavigator.IsVisible()
 	a.cfgToggle.Active = a.configPanel != nil && a.configPanel.IsVisible()
 
 	// Send state updates to pane decorator
 	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "tfm", Active: tfmActive, Disabled: tfmOverride})
-	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "wrp", Active: a.wrpUserPref && !tfmOverride, Disabled: tfmOverride})
 	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "search", Active: a.historyNavigator != nil && a.historyNavigator.IsVisible()})
 	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "cfg", Active: a.configPanel != nil && a.configPanel.IsVisible()})
 }
@@ -1314,29 +1284,6 @@ func (a *TexelTerm) registerDecoratorActions() {
 		HelpFunc: func() string { return a.decoratorHelp("Transformers", keybind.TermTransformer) },
 		OnClick: func() {
 			a.toggleTransformers()
-		},
-	})
-
-	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
-		ID: "wrp", Icon: '\U000F05B6', Help: "Line wrapping",  // no keybinding for wrp
-		Active: true,
-		OnClick: func() {
-			a.mu.Lock()
-			defer a.mu.Unlock()
-			a.wrpUserPref = !a.wrpUserPref
-			if a.vterm != nil {
-				a.vterm.SetWrapEnabled(a.wrpUserPref)
-				a.vterm.MarkAllDirty()
-			}
-			a.wrpToggle.Active = a.wrpUserPref
-			if a.statusBar != nil {
-				if a.wrpUserPref {
-					a.statusBar.ShowMessage("Line wrapping ON")
-				} else {
-					a.statusBar.ShowMessage("Line wrapping OFF")
-				}
-			}
-			a.requestRefresh()
 		},
 	})
 
@@ -1883,7 +1830,6 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	defer a.mu.Unlock()
 
 	cfg := config.App("texelterm")
-	wrapEnabled := cfg.GetBool("texelterm", "wrap_enabled", true)
 
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
@@ -1952,7 +1898,6 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 				a.triggerVisualBell()
 			}
 		}),
-		parser.WithWrap(wrapEnabled),
 	)
 
 	// Wire transformer pipeline from config (txfmt registers via init())
@@ -1983,24 +1928,6 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 		a.tfmUserPref = active
 		if a.pipeline != nil {
 			a.setTransformerState(active)
-		}
-	}
-
-	// Wire WRP toggle callback
-	a.wrpToggle.OnToggle = func(active bool) {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		a.wrpUserPref = active
-		if a.vterm != nil {
-			a.vterm.SetWrapEnabled(active)
-			a.vterm.MarkAllDirty()
-		}
-		if a.statusBar != nil {
-			if active {
-				a.statusBar.ShowMessage("Line wrapping ON")
-			} else {
-				a.statusBar.ShowMessage("Line wrapping OFF")
-			}
 		}
 	}
 
