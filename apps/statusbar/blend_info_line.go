@@ -37,6 +37,7 @@ type BlendInfoLine struct {
 	inControlMode bool
 	subMode       rune
 	title         string
+	date          string
 	clock         string
 
 	// Toast state
@@ -106,9 +107,10 @@ func (bil *BlendInfoLine) SetTitle(title string) {
 	bil.invalidate()
 }
 
-// SetClock sets the clock string for the right-side display.
-func (bil *BlendInfoLine) SetClock(t string) {
+// SetClock sets the date and clock strings for the right-side display.
+func (bil *BlendInfoLine) SetClock(date, t string) {
 	bil.mu.Lock()
+	bil.date = date
 	bil.clock = t
 	bil.mu.Unlock()
 	bil.invalidate()
@@ -165,6 +167,7 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 	inControl := bil.inControlMode
 	subMode := bil.subMode
 	title := bil.title
+	date := bil.date
 	clock := bil.clock
 	toastMsg := bil.toastMessage
 	toastSev := bil.toastSeverity
@@ -235,9 +238,10 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 	}
 	leftStr := " " + modeIcon + title + " "
 
-	// --- Right side (clock with icon, no FPS) ---
-	clockIcon := " \U000F0954 " // nf-md-clock-outline
-	rightStr := clockIcon + clock + " "
+	// --- Right side (date + clock with icons) ---
+	calendarIcon := " \U000F00ED " // nf-md-calendar
+	clockIcon := " \U000F0954 "    // nf-md-clock-outline
+	rightStr := calendarIcon + date + clockIcon + clock + " "
 	rightWidth := utf8.RuneCountInString(rightStr)
 
 	// Draw left text (stop before right-side zone).

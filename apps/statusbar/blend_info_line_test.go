@@ -43,7 +43,7 @@ func TestBlendInfoLine_Render(t *testing.T) {
 	bil.Resize(60, 1)
 	bil.SetMode(false, 0)
 	bil.SetTitle("myterm")
-	bil.SetClock("12:34")
+	bil.SetClock("Mon 05 Apr", "12:34")
 	bil.SetAccentColor(tcell.NewRGBColor(100, 120, 200))
 
 	painter, buf := newTestPainter(60)
@@ -136,7 +136,7 @@ func TestBlendInfoLine_ToastCentered(t *testing.T) {
 	bil.Resize(width, 1)
 	bil.SetMode(false, 0)
 	bil.SetTitle("somepane")
-	bil.SetClock("09:00")
+	bil.SetClock("Mon 05 Apr", "09:00")
 
 	toastMsg := "Deployment complete"
 	bil.ShowToast(toastMsg, texel.ToastSuccess, 10*time.Second)
@@ -167,7 +167,7 @@ func TestBlendInfoLine_NormalContent(t *testing.T) {
 	bil.Resize(width, 1)
 	bil.SetMode(false, 0)
 	bil.SetTitle("myshell")
-	bil.SetClock("15:30")
+	bil.SetClock("Mon 05 Apr", "15:30")
 
 	painter, buf := newTestPainter(width)
 	painter.SetWidgetRect(core.Rect{X: 0, Y: 0, W: width, H: 1})

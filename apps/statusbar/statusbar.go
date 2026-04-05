@@ -401,7 +401,7 @@ func (sb *StatusBarApp) clockLoop() {
 		case <-sb.stopClock:
 			return
 		case t := <-ticker.C:
-			sb.blendLine.SetClock(t.Format("15:04:05"))
+			sb.blendLine.SetClock(t.Format("Mon 02 Jan"), t.Format("15:04:05"))
 			sb.refresh()
 		}
 	}
