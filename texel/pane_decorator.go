@@ -110,6 +110,9 @@ func (d *PaneDecorator) UpdateWMAction(a DecoratorAction) {
 		if existing.ID == a.ID {
 			d.wmActions[i].Active = a.Active
 			d.wmActions[i].Disabled = a.Disabled
+			if a.Icon != 0 {
+				d.wmActions[i].Icon = a.Icon
+			}
 			return
 		}
 	}

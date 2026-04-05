@@ -152,10 +152,19 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	painter := texelcore.NewPainter(buffer, texelcore.Rect{X: 0, Y: 0, W: w, H: h})
 	p.border.Draw(painter)
 
-	// Draw decorator pill on the border's top row.
-	if p.decorator != nil && p.decorator.HasActions() {
-		borderStyle := p.currentBorderStyle()
-		p.decorator.Draw(buffer, 0, w, 0, borderStyle)
+	// Update zoom decorator state and draw pill on border.
+	if p.decorator != nil {
+		zoomed := p.screen != nil && p.screen.desktop != nil && p.screen.desktop.zoomedPane != nil
+		zoomIcon := rune('󰊓') // nf-md-fullscreen
+		if zoomed {
+			zoomIcon = '󰊕' // nf-md-fullscreen-exit
+		}
+		p.decorator.UpdateWMAction(DecoratorAction{ID: "zoom", Active: zoomed, Icon: zoomIcon})
+
+		if p.decorator.HasActions() {
+			borderStyle := p.currentBorderStyle()
+			p.decorator.Draw(buffer, 0, w, 0, borderStyle)
+		}
 	}
 
 	// Cache the rendered buffer for reuse when pane hasn't changed.
