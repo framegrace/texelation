@@ -7,6 +7,7 @@
 package texel
 
 import (
+	"time"
 	"unicode/utf8"
 
 	"github.com/framegrace/texelation/internal/debuglog"
@@ -67,8 +68,11 @@ func (p *pane) handlePaste(data []byte) {
 func (p *pane) handleMouse(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
 	// Check if mouse hits the decorator pill on the top border.
 	if p.decorator != nil && p.decorator.HasActions() && y == p.absY0 {
-		_, consumed := p.decorator.HandleMouse(x, y, buttons, p.absX0, p.absX1, p.absY0)
+		help, consumed := p.decorator.HandleMouse(x, y, buttons, p.absX0, p.absX1, p.absY0)
 		if consumed {
+			if help != "" && p.screen != nil && p.screen.desktop != nil {
+				p.screen.desktop.BroadcastToast(help, ToastInfo, 2*time.Second)
+			}
 			p.markDirty()
 			return
 		}
