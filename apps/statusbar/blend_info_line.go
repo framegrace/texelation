@@ -37,8 +37,6 @@ type BlendInfoLine struct {
 	inControlMode bool
 	subMode       rune
 	title         string
-	fpsActual     float64
-	fpsTheo       float64
 	clock         string
 
 	// Toast state
@@ -108,15 +106,6 @@ func (bil *BlendInfoLine) SetTitle(title string) {
 	bil.invalidate()
 }
 
-// SetFPS sets the actual and theoretical fps values for the right-side display.
-func (bil *BlendInfoLine) SetFPS(actual, theoretical float64) {
-	bil.mu.Lock()
-	bil.fpsActual = actual
-	bil.fpsTheo = theoretical
-	bil.mu.Unlock()
-	bil.invalidate()
-}
-
 // SetClock sets the clock string for the right-side display.
 func (bil *BlendInfoLine) SetClock(t string) {
 	bil.mu.Lock()
@@ -176,8 +165,6 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 	inControl := bil.inControlMode
 	subMode := bil.subMode
 	title := bil.title
-	fpsActual := bil.fpsActual
-	fpsTheo := bil.fpsTheo
 	clock := bil.clock
 	toastMsg := bil.toastMessage
 	toastSev := bil.toastSeverity
@@ -235,22 +222,6 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 	}
 	darkDS := color.DynamicStyle{FG: color.Solid(darkFG), BG: color.Solid(tcell.ColorDefault)}
 
-	if toastActive {
-		// Toast mode: show message on the left, truncate to fit.
-		msg := " " + toastMsg
-		col := x
-		for _, r := range msg {
-			if col >= x+w {
-				break
-			}
-			painter.SetDynamicCellKeepBG(col, y, r, darkDS)
-			col++
-		}
-		return
-	}
-
-	// Normal mode: left = mode icon + title, right = fps + clock.
-
 	// --- Left side ---
 	var modeIcon string
 	if inControl {
@@ -264,14 +235,9 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 	}
 	leftStr := " " + modeIcon + title + " "
 
-	// --- Right side ---
-	var fpsStr string
-	if fpsTheo > 0 {
-		fpsStr = fmt.Sprintf("%d/%d", int(fpsActual+0.5), int(fpsTheo+0.5))
-	} else {
-		fpsStr = fmt.Sprintf("%d", int(fpsActual+0.5))
-	}
-	rightStr := fmt.Sprintf(" %s fps  %s ", fpsStr, clock)
+	// --- Right side (clock with icon, no FPS) ---
+	clockIcon := " \U000F0954 " // nf-md-clock-outline
+	rightStr := clockIcon + clock + " "
 	rightWidth := utf8.RuneCountInString(rightStr)
 
 	// Draw left text (stop before right-side zone).
@@ -286,6 +252,27 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 		}
 		painter.SetDynamicCellKeepBG(col, y, r, darkDS)
 		col++
+	}
+
+	// Draw toast centered, overlaying the middle area between left and right.
+	if toastActive {
+		toastRunes := []rune(" " + toastMsg + " ")
+		toastLen := len(toastRunes)
+		toastStart := x + (w-toastLen)/2
+		if toastStart < col {
+			toastStart = col // don't overwrite left side
+		}
+		toastEnd := toastStart + toastLen
+		if toastEnd > x+w-rightWidth {
+			toastEnd = x + w - rightWidth // don't overwrite right side
+		}
+		for i, r := range toastRunes {
+			tc := toastStart + i
+			if tc >= toastEnd {
+				break
+			}
+			painter.SetDynamicCellKeepBG(tc, y, r, darkDS)
+		}
 	}
 
 	// Draw right text using the resolved accent color for visibility.

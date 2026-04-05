@@ -388,7 +388,6 @@ func (sb *StatusBarApp) updateFPS(publishDuration time.Duration) {
 	sb.mu.Unlock()
 
 	if changed {
-		sb.blendLine.SetFPS(actual, theo)
 		sb.refresh()
 	}
 }
