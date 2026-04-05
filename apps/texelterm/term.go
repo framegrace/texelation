@@ -387,6 +387,11 @@ func (a *TexelTerm) SetStorage(storage texelcore.AppStorage) {
 		a.applyRestoredStateLocked(savedState)
 	}
 	a.mu.Unlock()
+
+	// Apply pane config (may differ from global used during construction).
+	// This ensures tfmUserPref and other runtime settings match the pane's
+	// persisted config, not the global defaults.
+	a.ReloadConfig()
 }
 
 // initPaneConfigLocked copies global config to per-pane storage on first run.
@@ -1231,11 +1236,32 @@ func (a *TexelTerm) toggleTransformers() {
 		newState := !a.pipeline.Enabled()
 		a.tfmUserPref = newState
 		a.setTransformerState(newState)
+		// Persist to pane config
+		a.persistConfigKeyLocked("transformers", "enabled", newState)
 	} else {
 		current := a.vterm.ShowOverlay()
 		a.vterm.SetShowOverlay(!current)
 		a.vterm.MarkAllDirty()
 	}
+}
+
+// persistConfigKeyLocked writes a single config key change to pane storage.
+// Must be called with a.mu held.
+func (a *TexelTerm) persistConfigKeyLocked(section, key string, value interface{}) {
+	if a.storage == nil {
+		return
+	}
+	cfg := a.paneConfig()
+	if cfg == nil {
+		return
+	}
+	sec, ok := cfg[section].(map[string]interface{})
+	if !ok {
+		sec = make(map[string]interface{})
+		cfg[section] = sec
+	}
+	sec[key] = value
+	a.savePaneConfig(cfg)
 }
 
 // setTransformerState sets the pipeline to the given state. Caller must hold a.mu.
