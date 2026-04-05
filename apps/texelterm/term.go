@@ -1135,6 +1135,42 @@ func copyImageToClipboard(img image.Image, filePath string) bool {
 }
 
 // toggleTransformers flips the transformer pipeline state (Ctrl+T path).
+// ReloadConfig applies config changes at runtime. Called by the desktop when
+// the config editor saves changes. Hot-reloadable settings are applied
+// immediately; init-only settings require a terminal restart.
+func (a *TexelTerm) ReloadConfig() {
+	cfg := config.App("texelterm")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Wrap toggle — can be changed at runtime
+	newWrap := cfg.GetBool("texelterm", "wrap_enabled", true)
+	if newWrap != a.wrpUserPref {
+		a.wrpUserPref = newWrap
+		if a.vterm != nil {
+			a.vterm.SetWrapEnabled(newWrap)
+			a.vterm.MarkAllDirty()
+		}
+		a.wrpToggle.Active = newWrap
+	}
+
+	// Transformer enable — can toggle the pipeline at runtime
+	newTfm := cfg.GetBool("transformers", "enabled", false)
+	if newTfm != a.tfmUserPref {
+		a.tfmUserPref = newTfm
+		if a.pipeline != nil {
+			a.pipeline.SetEnabled(newTfm)
+			if a.vterm != nil {
+				a.vterm.SetShowOverlay(newTfm)
+				a.vterm.MarkAllDirty()
+			}
+		}
+		a.tfmToggle.Active = newTfm
+	}
+
+	a.requestRefresh()
+}
+
 // blendTcellColor blends two tcell colors by the given factor (0=base, 1=overlay).
 func blendTcellColor(base, overlay tcell.Color, factor float64) tcell.Color {
 	br, bg, bb := base.RGB()

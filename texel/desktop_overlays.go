@@ -345,6 +345,27 @@ func (d *DesktopEngine) handleConfigEditorApply(payload interface{}) {
 		d.applyThemeChange()
 	case strings.HasPrefix(raw, "app-theme:"):
 		d.applyThemeChange()
+	case strings.HasPrefix(raw, "app:"):
+		// Notify all panes whose app implements ConfigReloader.
+		d.notifyAppConfigChanged()
+	}
+}
+
+// notifyAppConfigChanged iterates all panes across all workspaces and calls
+// ReloadConfig on apps that implement ConfigReloader.
+func (d *DesktopEngine) notifyAppConfigChanged() {
+	for _, ws := range d.workspaces {
+		if ws.tree == nil {
+			continue
+		}
+		forEachLeafPane(ws.tree.Root, func(p *pane) {
+			if p.app == nil {
+				return
+			}
+			if reloader, ok := p.app.(ConfigReloader); ok {
+				reloader.ReloadConfig()
+			}
+		})
 	}
 }
 
