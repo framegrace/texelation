@@ -157,6 +157,13 @@ func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, mo
 	d.lastMouseModifier = modifiers
 	d.mouseMu.Unlock()
 
+	// Block mouse events when a modal floating panel is open.
+	for _, fp := range d.floatingPanels {
+		if fp.modal {
+			return
+		}
+	}
+
 	// Handle workspace border resize first
 	if d.activeWorkspace != nil {
 		if d.activeWorkspace.handleMouseResize(x, y, buttons, prevButtons) {

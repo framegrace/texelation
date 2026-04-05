@@ -203,8 +203,8 @@ func (d *DesktopEngine) launchHelpOverlay() {
 	}
 
 	vw, vh := d.viewportSize()
-	w := 60
-	h := 30 // Help needs more height
+	w := 72
+	h := 34
 	if w > vw {
 		w = vw - 2
 	}
