@@ -1953,7 +1953,6 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 			}
 		}),
 		parser.WithWrap(wrapEnabled),
-		parser.WithReflow(wrapEnabled),
 	)
 
 	// Wire transformer pipeline from config (txfmt registers via init())

@@ -16,10 +16,6 @@ func TestVTermGetters(t *testing.T) {
 		if !v.WrapEnabled() {
 			t.Error("WrapEnabled should be true by default")
 		}
-		// reflowEnabled defaults to true in NewVTerm
-		if !v.ReflowEnabled() {
-			t.Error("ReflowEnabled should be true by default")
-		}
 	})
 
 	t.Run("WithWrap false", func(t *testing.T) {
@@ -36,17 +32,10 @@ func TestVTermGetters(t *testing.T) {
 		}
 	})
 
-	t.Run("WithReflow false", func(t *testing.T) {
+	t.Run("WithReflow sets wrapEnabled", func(t *testing.T) {
 		v := NewVTerm(80, 24, WithReflow(false))
-		if v.ReflowEnabled() {
-			t.Error("ReflowEnabled should be false when created with WithReflow(false)")
-		}
-	})
-
-	t.Run("WithReflow true", func(t *testing.T) {
-		v := NewVTerm(80, 24, WithReflow(true))
-		if !v.ReflowEnabled() {
-			t.Error("ReflowEnabled should be true when created with WithReflow(true)")
+		if v.WrapEnabled() {
+			t.Error("WithReflow(false) should disable wrapEnabled")
 		}
 	})
 }

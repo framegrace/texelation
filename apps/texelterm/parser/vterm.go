@@ -36,7 +36,7 @@ type VTerm struct {
 	tabStops                           map[int]bool
 	cursorVisible                      bool
 	wrapNext, autoWrapMode, insertMode bool
-	wrapEnabled, reflowEnabled         bool // Line wrapping for main screen buffer
+	wrapEnabled bool // Line wrapping and reflow for main screen buffer
 	appCursorKeys                      bool
 	TitleChanged                       func(string)
 	WriteToPty                         func([]byte)
@@ -105,7 +105,6 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		cursorVisible:         true,
 		autoWrapMode:          true,
 		wrapEnabled:           true,
-		reflowEnabled:         true,
 		marginTop:             0,
 		marginBottom:          height - 1,
 		marginLeft:            0,
@@ -1233,8 +1232,10 @@ func WithWrap(enabled bool) Option {
 	return func(v *VTerm) { v.wrapEnabled = enabled }
 }
 
+// WithReflow is kept for API compatibility but now just sets wrapEnabled
+// since wrap and reflow are unified under a single setting.
 func WithReflow(enabled bool) Option {
-	return func(v *VTerm) { v.reflowEnabled = enabled }
+	return func(v *VTerm) { v.wrapEnabled = enabled }
 }
 
 func (v *VTerm) SetTitle(title string) {
@@ -1520,14 +1521,13 @@ func (v *VTerm) IsInTUIMode() bool {
 	return fwd != nil && fwd.IsInTUIMode()
 }
 
-// ReflowEnabled returns true if reflow on resize is enabled.
-func (v *VTerm) ReflowEnabled() bool { return v.reflowEnabled }
-
-// WrapEnabled returns true if line wrapping is enabled.
+// WrapEnabled returns true if line wrapping (and reflow) is enabled.
 func (v *VTerm) WrapEnabled() bool { return v.wrapEnabled }
 
-// SetWrapEnabled enables or disables line wrapping at runtime.
-func (v *VTerm) SetWrapEnabled(enabled bool) { v.wrapEnabled = enabled }
+// SetWrapEnabled enables or disables line wrapping and reflow at runtime.
+func (v *VTerm) SetWrapEnabled(enabled bool) {
+	v.wrapEnabled = enabled
+}
 
 // LiveEdgeBase returns the current liveEdgeBase (global line index of viewport row 0).
 func (v *VTerm) LiveEdgeBase() int64 {
