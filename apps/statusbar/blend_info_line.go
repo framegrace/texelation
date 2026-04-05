@@ -181,21 +181,26 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 
 	// Resolve the dynamic accent color for this frame.
 	ctx := color.ColorContext{X: x, Y: y, W: w, H: 1, T: painter.Time()}
-	if !accent.IsStatic() {
+	if !accent.IsStatic() || toastActive {
 		painter.MarkAnimated()
 	}
 
 	// Choose the accent color for the gradient.
+	// When a toast is active, pulse the severity color for attention.
 	gradAccent := accent
 	if toastActive {
+		var toastColor tcell.Color
 		switch toastSev {
 		case texel.ToastSuccess:
-			gradAccent = color.Solid(tm.GetSemanticColor("action.success"))
+			toastColor = tm.GetSemanticColor("action.success")
 		case texel.ToastWarning:
-			gradAccent = color.Solid(tm.GetSemanticColor("action.warning"))
+			toastColor = tm.GetSemanticColor("action.warning")
 		case texel.ToastError:
-			gradAccent = color.Solid(tm.GetSemanticColor("action.danger"))
+			toastColor = tm.GetSemanticColor("action.danger")
+		default:
+			toastColor = tm.GetSemanticColor("accent.primary")
 		}
+		gradAccent = color.Pulse(toastColor, 0.5, 1.0, 6)
 	}
 
 	resolvedAccent := accent.Resolve(ctx)
