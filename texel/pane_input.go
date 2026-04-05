@@ -7,6 +7,7 @@
 package texel
 
 import (
+	"time"
 	"unicode/utf8"
 
 	"github.com/framegrace/texelation/internal/debuglog"
@@ -65,6 +66,19 @@ func (p *pane) handlePaste(data []byte) {
 
 // handleMouse forwards a mouse event to the pane's app with local coordinates.
 func (p *pane) handleMouse(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
+	// Check decorator pill on the top border. Only interactive on the active pane.
+	// Always forward mouse position so the pill can collapse when leaving its zone.
+	if p.decorator != nil && p.decorator.HasActions() && p.IsActive {
+		help, consumed := p.decorator.HandleMouse(x, y, buttons, p.absX0, p.absX1, p.absY0)
+		if consumed {
+			if help != "" && p.screen != nil && p.screen.desktop != nil {
+				p.screen.desktop.BroadcastToast(help, ToastInfo, 2*time.Second)
+			}
+			p.markDirty()
+			return
+		}
+	}
+
 	if !p.handlesMouseEvents() {
 		return
 	}
@@ -112,6 +126,10 @@ func (p *pane) SetActive(active bool) {
 		return
 	}
 	p.IsActive = active
+	// Collapse the decorator pill when the pane loses focus.
+	if !active && p.decorator != nil {
+		p.decorator.SetExpanded(false)
+	}
 	p.notifyStateChange()
 	if p.screen != nil {
 		p.screen.Refresh()

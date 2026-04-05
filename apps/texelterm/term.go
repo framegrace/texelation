@@ -125,8 +125,6 @@ type TexelTerm struct {
 	tfmUserPref     bool // user's preferred transformer state (restored when TUI/alt clears)
 	searchToggle    *widgets.ToggleButton
 	cfgToggle       *widgets.ToggleButton
-	overlayExpanded bool // true when mouse is hovering the toggle overlay
-
 	// Config panel overlay
 	configPanel *ConfigPanel
 
@@ -640,9 +638,8 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		a.configPanel.Render(a.buf)
 	}
 
-	// Render toggle button overlay at top-right
-	a.updateModeIndicatorsLocked()
-	a.drawToggleOverlay(a.buf, totalCols)
+	// Update decorator pill state via ControlBus
+	a.updateDecoratorState()
 
 	// Render status bar via Painter bridge
 	if a.statusBar != nil {
@@ -1152,6 +1149,137 @@ func (a *TexelTerm) setTransformerState(enabled bool) {
 	}
 }
 
+// updateDecoratorState sends decorator.update messages to reflect current terminal state.
+// Must be called with a.mu held.
+func (a *TexelTerm) updateDecoratorState() {
+	if a.vterm == nil || a.controlBus == nil {
+		return
+	}
+
+	tfmOverride := a.vterm.IsInTUIMode() || a.vterm.InAltScreen()
+
+	// Transformer state — disable pipeline during TUI/alt-screen
+	tfmActive := a.tfmUserPref && !tfmOverride
+	if tfmOverride && a.pipeline != nil && a.pipeline.Enabled() {
+		a.pipeline.SetEnabled(false)
+		a.vterm.SetShowOverlay(false)
+		a.vterm.MarkAllDirty()
+	} else if !tfmOverride && a.pipeline != nil && a.pipeline.Enabled() != a.tfmUserPref {
+		a.pipeline.SetEnabled(a.tfmUserPref)
+		a.vterm.SetShowOverlay(a.tfmUserPref)
+		a.vterm.MarkAllDirty()
+	}
+
+	// Wrap state — disable during TUI/alt-screen
+	if tfmOverride {
+		if a.vterm.WrapEnabled() {
+			a.vterm.SetWrapEnabled(false)
+		}
+	} else if a.vterm.WrapEnabled() != a.wrpUserPref {
+		a.vterm.SetWrapEnabled(a.wrpUserPref)
+	}
+
+	// Keep toggle button state in sync (still used by keyboard toggle paths)
+	a.tfmToggle.Active = tfmActive
+	a.tfmToggle.Disabled = tfmOverride
+	a.wrpToggle.Active = a.wrpUserPref && !tfmOverride
+	a.wrpToggle.Disabled = tfmOverride
+	a.searchToggle.Active = a.historyNavigator != nil && a.historyNavigator.IsVisible()
+	a.cfgToggle.Active = a.configPanel != nil && a.configPanel.IsVisible()
+
+	// Send state updates to pane decorator
+	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "tfm", Active: tfmActive, Disabled: tfmOverride})
+	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "wrp", Active: a.wrpUserPref && !tfmOverride, Disabled: tfmOverride})
+	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "search", Active: a.historyNavigator != nil && a.historyNavigator.IsVisible()})
+	a.controlBus.Trigger("decorator.update", texel.DecoratorAction{ID: "cfg", Active: a.configPanel != nil && a.configPanel.IsVisible()})
+}
+
+// registerDecoratorActions registers texelterm's toggle actions on the pane decorator.
+// Called once from Run() before the shell loop starts.
+// decoratorHelp formats a help string with the key shortcut from the registry.
+func (a *TexelTerm) decoratorHelp(label string, action keybind.Action) string {
+	if a.keybindings == nil {
+		return label
+	}
+	keys := a.keybindings.KeysForAction(action)
+	if len(keys) == 0 {
+		return label
+	}
+	return label + " (" + keybind.FormatKeyCombo(keys[0]) + ")"
+}
+
+func (a *TexelTerm) registerDecoratorActions() {
+	if a.controlBus == nil {
+		return
+	}
+
+	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
+		ID: "cfg", Icon: '\U000F0493',
+		HelpFunc: func() string { return a.decoratorHelp("Configuration", keybind.ConfigEditor) },
+		OnClick: func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			if a.configPanel != nil {
+				if a.configPanel.IsVisible() {
+					a.configPanel.Hide()
+				} else {
+					a.configPanel.Show()
+				}
+				a.cfgToggle.Active = a.configPanel.IsVisible()
+				if a.vterm != nil {
+					a.vterm.MarkAllDirty()
+				}
+			}
+			a.requestRefresh()
+		},
+	})
+
+	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
+		ID: "tfm", Icon: '\U000F0068',
+		HelpFunc: func() string { return a.decoratorHelp("Transformers", keybind.TermTransformer) },
+		OnClick: func() {
+			a.toggleTransformers()
+		},
+	})
+
+	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
+		ID: "wrp", Icon: '\U000F05B6', Help: "Line wrapping",  // no keybinding for wrp
+		Active: true,
+		OnClick: func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.wrpUserPref = !a.wrpUserPref
+			if a.vterm != nil {
+				a.vterm.SetWrapEnabled(a.wrpUserPref)
+				a.vterm.MarkAllDirty()
+			}
+			a.wrpToggle.Active = a.wrpUserPref
+			if a.statusBar != nil {
+				if a.wrpUserPref {
+					a.statusBar.ShowMessage("Line wrapping ON")
+				} else {
+					a.statusBar.ShowMessage("Line wrapping OFF")
+				}
+			}
+			a.requestRefresh()
+		},
+	})
+
+	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
+		ID: "search", Icon: '\U000F0349',
+		HelpFunc: func() string { return a.decoratorHelp("Search", keybind.TermSearch) },
+		OnClick: func() {
+			if a.historyNavigator != nil {
+				if a.historyNavigator.IsVisible() {
+					a.closeSearch()
+				} else {
+					a.openSearch()
+				}
+			}
+		},
+	})
+}
+
 func (a *TexelTerm) HandlePaste(data []byte) {
 	if a.pty == nil || len(data) == 0 {
 		return
@@ -1299,11 +1427,6 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 		}
 	}
 
-	// Check if mouse is on the toggle overlay (top-right)
-	if a.handleToggleOverlayMouse(ev) {
-		return
-	}
-
 	// Check if mouse is on the status bar
 	if a.statusBar != nil {
 		const statusBarHeight = 1
@@ -1438,6 +1561,10 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 }
 
 func (a *TexelTerm) Run() error {
+	// Register decorator actions once before starting the shell loop.
+	// The ControlBus handlers on the pane are already registered by this point.
+	a.registerDecoratorActions()
+
 	// Main run loop - allows restarting shell after exit
 	for {
 		// Create a new closeCh for this iteration (in case previous one was closed)

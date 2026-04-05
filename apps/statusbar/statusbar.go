@@ -388,7 +388,6 @@ func (sb *StatusBarApp) updateFPS(publishDuration time.Duration) {
 	sb.mu.Unlock()
 
 	if changed {
-		sb.blendLine.SetFPS(actual, theo)
 		sb.refresh()
 	}
 }
@@ -402,7 +401,7 @@ func (sb *StatusBarApp) clockLoop() {
 		case <-sb.stopClock:
 			return
 		case t := <-ticker.C:
-			sb.blendLine.SetClock(t.Format("15:04:05"))
+			sb.blendLine.SetClock(t.Format("Mon 02 Jan"), t.Format("15:04:05"))
 			sb.refresh()
 		}
 	}

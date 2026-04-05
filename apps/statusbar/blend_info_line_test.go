@@ -43,8 +43,7 @@ func TestBlendInfoLine_Render(t *testing.T) {
 	bil.Resize(60, 1)
 	bil.SetMode(false, 0)
 	bil.SetTitle("myterm")
-	bil.SetFPS(30, 60)
-	bil.SetClock("12:34")
+	bil.SetClock("Mon 05 Apr", "12:34")
 	bil.SetAccentColor(tcell.NewRGBColor(100, 120, 200))
 
 	painter, buf := newTestPainter(60)
@@ -128,17 +127,16 @@ func TestBlendInfoLine_ToastExpiry(t *testing.T) {
 	}
 }
 
-// TestBlendInfoLine_ToastReplacesContent verifies that in toast mode the
-// rendered row contains the toast message text instead of normal title/fps.
-func TestBlendInfoLine_ToastReplacesContent(t *testing.T) {
+// TestBlendInfoLine_ToastCentered verifies that in toast mode the
+// rendered row contains the toast message centered, with title and clock visible.
+func TestBlendInfoLine_ToastCentered(t *testing.T) {
 	const width = 80
 	bil := NewBlendInfoLine()
 	bil.SetPosition(0, 0)
 	bil.Resize(width, 1)
 	bil.SetMode(false, 0)
 	bil.SetTitle("somepane")
-	bil.SetFPS(25, 50)
-	bil.SetClock("09:00")
+	bil.SetClock("Mon 05 Apr", "09:00")
 
 	toastMsg := "Deployment complete"
 	bil.ShowToast(toastMsg, texel.ToastSuccess, 10*time.Second)
@@ -154,9 +152,9 @@ func TestBlendInfoLine_ToastReplacesContent(t *testing.T) {
 		t.Errorf("expected toast message %q in rendered output %q", toastMsg, rendered)
 	}
 
-	// The normal title must NOT appear (toast replaces it).
-	if strings.Contains(rendered, "somepane") {
-		t.Errorf("normal title %q should not appear in toast mode, got %q", "somepane", rendered)
+	// The title should still be visible (toast is centered, not replacing).
+	if !strings.Contains(rendered, "somepane") {
+		t.Errorf("expected title %q to still be visible, got %q", "somepane", rendered)
 	}
 }
 
@@ -169,8 +167,7 @@ func TestBlendInfoLine_NormalContent(t *testing.T) {
 	bil.Resize(width, 1)
 	bil.SetMode(false, 0)
 	bil.SetTitle("myshell")
-	bil.SetFPS(0, 0)
-	bil.SetClock("15:30")
+	bil.SetClock("Mon 05 Apr", "15:30")
 
 	painter, buf := newTestPainter(width)
 	painter.SetWidgetRect(core.Rect{X: 0, Y: 0, W: width, H: 1})
