@@ -374,9 +374,12 @@ func (a *TexelTerm) SetPaneID(id [16]byte) {
 
 // SetStorage implements texelcore.StorageSetter for per-pane state persistence.
 // State is loaded immediately if vterm is already initialized.
+// Also initializes per-pane config: copies global config to storage on first run.
 func (a *TexelTerm) SetStorage(storage texelcore.AppStorage) {
 	a.mu.Lock()
 	a.storage = storage
+	// Initialize per-pane config: copy global config if not already stored.
+	a.initPaneConfigLocked()
 	// If vterm is already initialized, load and apply state now
 	// Note: This only applies scroll offset; prompt-aware populate is handled in runShell
 	if a.vterm != nil {
@@ -384,6 +387,50 @@ func (a *TexelTerm) SetStorage(storage texelcore.AppStorage) {
 		a.applyRestoredStateLocked(savedState)
 	}
 	a.mu.Unlock()
+}
+
+// initPaneConfigLocked copies global config to per-pane storage on first run.
+// Must be called with a.mu held.
+func (a *TexelTerm) initPaneConfigLocked() {
+	if a.storage == nil {
+		return
+	}
+	data, err := a.storage.Get("config")
+	if err == nil && data != nil {
+		return // already has per-pane config
+	}
+	// Copy global config to pane storage
+	globalCfg := config.App("texelterm")
+	if globalCfg != nil {
+		if err := a.storage.Set("config", globalCfg); err != nil {
+			log.Printf("[TEXELTERM] Failed to init pane config: %v", err)
+		}
+	}
+}
+
+// paneConfig returns the per-pane config if available, otherwise the global config.
+// In standalone mode (no storage), returns global config directly.
+func (a *TexelTerm) paneConfig() config.Config {
+	if a.storage != nil {
+		data, err := a.storage.Get("config")
+		if err == nil && data != nil {
+			var cfg config.Config
+			if json.Unmarshal(data, &cfg) == nil {
+				return cfg
+			}
+		}
+	}
+	return config.App("texelterm")
+}
+
+// savePaneConfig writes the current config to per-pane storage.
+func (a *TexelTerm) savePaneConfig(cfg config.Config) {
+	if a.storage == nil {
+		return
+	}
+	if err := a.storage.Set("config", cfg); err != nil {
+		log.Printf("[TEXELTERM] Failed to save pane config: %v", err)
+	}
 }
 
 // terminalState holds the persisted terminal state for server restart recovery.
@@ -1132,7 +1179,7 @@ func copyImageToClipboard(img image.Image, filePath string) bool {
 // the config editor saves changes. Hot-reloadable settings are applied
 // immediately; init-only settings require a terminal restart.
 func (a *TexelTerm) ReloadConfig() {
-	cfg := config.App("texelterm")
+	cfg := a.paneConfig()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -1520,7 +1567,7 @@ func (a *TexelTerm) HandleMouseWheel(x, y, deltaX, deltaY int, modifiers tcell.M
 	now := time.Now()
 
 	// Read scroll configuration from app config.
-	cfg := config.App("texelterm")
+	cfg := a.paneConfig()
 	debounceMs := cfg.GetInt("texelterm.scroll", "debounce_ms", 50)
 	debounceThreshold := time.Duration(debounceMs) * time.Millisecond
 
@@ -1829,7 +1876,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	cfg := config.App("texelterm")
+	cfg := a.paneConfig()
 
 	a.vterm = parser.NewVTerm(cols, rows,
 		parser.WithTitleChangeHandler(func(newTitle string) {
@@ -1893,7 +1940,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 			return nil
 		}),
 		parser.WithBellHandler(func() {
-			bellEnabled := config.App("texelterm").GetBool("texelterm", "visual_bell_enabled", false)
+			bellEnabled := a.paneConfig().GetBool("texelterm", "visual_bell_enabled", false)
 			if bellEnabled {
 				a.triggerVisualBell()
 			}
@@ -1948,8 +1995,8 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	a.scrollbar.SetRefreshCallback(a.requestRefresh)
 	a.scrollbar.Resize(rows)
 
-	// Initialize config panel overlay
-	a.configPanel = NewConfigPanel("texelterm", func(msg string, isErr bool) {
+	// Initialize config panel overlay — use per-pane config if storage available.
+	statusCb := func(msg string, isErr bool) {
 		if a.statusBar != nil {
 			if isErr {
 				a.statusBar.ShowError(msg)
@@ -1957,7 +2004,15 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 				a.statusBar.ShowSuccess(msg)
 			}
 		}
-	}, a.refreshChan)
+	}
+	if a.storage != nil {
+		a.configPanel = NewConfigPanelWithStorage("texelterm", a.paneConfig(), func(cfg config.Config) {
+			a.savePaneConfig(cfg)
+			a.ReloadConfig()
+		}, statusCb, a.refreshChan)
+	} else {
+		a.configPanel = NewConfigPanel("texelterm", statusCb, a.refreshChan)
+	}
 	a.configPanel.Resize(cols, rows)
 
 	// Initialize mouse coordinator for selection handling
@@ -1996,7 +2051,7 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 // readWALWorkingDir pre-reads the last known CWD from the WAL before the full VTerm is initialized.
 // This allows the shell to start in the correct directory on reload.
 func (a *TexelTerm) readWALWorkingDir(paneID string) string {
-	cfg := config.App("texelterm")
+	cfg := a.paneConfig()
 	historyPersistDir := expandTildePath(cfg.GetString("texelterm.history", "persist_dir", ""))
 	if historyPersistDir == "" {
 		if homeDir, err := os.UserHomeDir(); err == nil {

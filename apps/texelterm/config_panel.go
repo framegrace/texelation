@@ -11,6 +11,7 @@ import (
 	"github.com/framegrace/texelui/theme"
 
 	"github.com/framegrace/texelation/apps/configeditor"
+	"github.com/framegrace/texelation/config"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -29,12 +30,47 @@ type ConfigPanel struct {
 // NewConfigPanel creates a config panel for the given app name.
 // onStatus is called with save status messages.
 // refreshChan is used to request screen redraws.
+// In standalone mode (no storage), edits the global config file directly.
 func NewConfigPanel(appName string, onStatus func(msg string, isErr bool), refreshChan chan<- bool) *ConfigPanel {
 	cp := &ConfigPanel{
 		onStatus: onStatus,
 	}
 
 	widget, err := configeditor.NewAppConfigPanel(appName, onStatus)
+	if err != nil {
+		return cp
+	}
+	cp.widget = widget
+
+	ui := texelcore.NewUIManager()
+	ui.SetRootWidget(widget)
+	ui.Focus(widget)
+	if refreshChan != nil {
+		ui.SetRefreshNotifier(refreshChan)
+	}
+	cp.ui = ui
+
+	return cp
+}
+
+// NewConfigPanelWithStorage creates a config panel that reads/writes from
+// per-pane storage instead of the global config file. Includes a "Save as
+// Default" button that copies the pane config to the global file.
+func NewConfigPanelWithStorage(appName string, paneConfig config.Config, onSave func(config.Config), onStatus func(msg string, isErr bool), refreshChan chan<- bool) *ConfigPanel {
+	cp := &ConfigPanel{
+		onStatus: onStatus,
+	}
+
+	onSaveAsDefault := func(cfg config.Config) {
+		config.SetApp(appName, cfg)
+		if err := config.SaveApp(appName); err != nil {
+			if onStatus != nil {
+				onStatus("Save as default failed: "+err.Error(), true)
+			}
+		}
+	}
+
+	widget, err := configeditor.NewAppConfigPanelWithStorage(appName, paneConfig, onSave, onSaveAsDefault, onStatus)
 	if err != nil {
 		return cp
 	}
