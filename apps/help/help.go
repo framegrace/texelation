@@ -149,6 +149,42 @@ func controlSections(r *keybind.Registry) []helpSection {
 	return []helpSection{controlSection(r)}
 }
 
+// RequiredSize returns the width and height needed to display all content
+// without truncation. Callers use this to size the floating panel.
+func (a *helpApp) RequiredSize() (width, height int) {
+	// Calculate height: title + sections + entries + spacing
+	h := 1 // Main title
+	for _, section := range a.sections {
+		h += 2 // blank line + section title
+		h += len(section.entries)
+	}
+	h += 2 // top/bottom padding
+
+	// Calculate width: find longest key + longest desc
+	keyW := 0
+	descW := 0
+	for _, section := range a.sections {
+		if len(section.title) > descW {
+			descW = len(section.title)
+		}
+		for _, entry := range section.entries {
+			if len(entry.key) > keyW {
+				keyW = len(entry.key)
+			}
+			if len(entry.desc) > descW {
+				descW = len(entry.desc)
+			}
+		}
+	}
+	// key column + gap + desc column + side padding
+	w := keyW + 3 + descW + 6
+	if w < 40 {
+		w = 40
+	}
+
+	return w, h
+}
+
 func (a *helpApp) Run() error {
 	<-a.stop
 	return nil
@@ -212,8 +248,17 @@ func (a *helpApp) Render() [][]texelcore.Cell {
 	}
 	keyWidth += 2 // Padding
 
-	// Calculate content width and starting position
-	contentWidth := keyWidth + 30 // key column + description space
+	// Calculate description column width (find longest description)
+	descWidth := 0
+	for _, section := range a.sections {
+		for _, entry := range section.entries {
+			if len(entry.desc) > descWidth {
+				descWidth = len(entry.desc)
+			}
+		}
+	}
+
+	contentWidth := keyWidth + 1 + descWidth
 	if contentWidth > a.width-4 {
 		contentWidth = a.width - 4
 	}

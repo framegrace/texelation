@@ -203,12 +203,16 @@ func (d *DesktopEngine) launchHelpOverlay() {
 	}
 
 	vw, vh := d.viewportSize()
-	w := 72
-	h := 34
-	if w > vw {
+
+	// Use the help app's calculated size if available.
+	w, h := 72, 34
+	if sizer, ok := appInstance.(interface{ RequiredSize() (int, int) }); ok {
+		w, h = sizer.RequiredSize()
+	}
+	if w > vw-2 {
 		w = vw - 2
 	}
-	if h > vh {
+	if h > vh-2 {
 		h = vh - 2
 	}
 	x := (vw - w) / 2
@@ -227,7 +231,12 @@ func (d *DesktopEngine) launchControlHelpOverlay() {
 		}
 	}
 
-	appInstance := d.registry.CreateApp("help-control", nil)
+	var appInstance interface{}
+	if d.keybindings != nil {
+		appInstance = help.NewControlHelpAppWithBindings(d.keybindings)
+	} else {
+		appInstance = d.registry.CreateApp("help-control", nil)
+	}
 	app, ok := appInstance.(App)
 	if !ok {
 		return
@@ -241,12 +250,14 @@ func (d *DesktopEngine) launchControlHelpOverlay() {
 	}
 
 	vw, vh := d.viewportSize()
-	w := 45
-	h := 16
-	if w > vw {
+	w, h := 45, 16
+	if sizer, ok := appInstance.(interface{ RequiredSize() (int, int) }); ok {
+		w, h = sizer.RequiredSize()
+	}
+	if w > vw-2 {
 		w = vw - 2
 	}
-	if h > vh {
+	if h > vh-2 {
 		h = vh - 2
 	}
 	x := (vw - w) / 2
