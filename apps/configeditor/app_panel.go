@@ -55,6 +55,55 @@ func NewAppConfigPanel(appName string, onStatus func(msg string, isErr bool)) (c
 	return content, nil
 }
 
+// NewAppConfigPanelWithStorage builds a config panel that reads/writes from
+// a provided config map instead of the global config. Used for per-pane config.
+// onSave is called with the updated config on each change.
+// onSaveAsDefault is called when the user clicks "Save as Default" (may be nil to hide the button).
+func NewAppConfigPanelWithStorage(appName string, values config.Config, onSave func(config.Config), onSaveAsDefault func(config.Config), onStatus func(msg string, isErr bool)) (core.Widget, error) {
+	if values == nil {
+		values = make(config.Config)
+	}
+	values = ensureConfig(config.Clone(values))
+
+	target := &configTarget{
+		kind:   targetApp,
+		name:   appName,
+		label:  humanLabel(appName),
+		values: values,
+	}
+
+	onApply := func(kind applyKind) {
+		if onSave != nil {
+			onSave(target.values)
+		}
+		if onStatus != nil {
+			onStatus("Saved.", false)
+		}
+	}
+
+	sections := buildAppSectionsStandalone(target, onApply)
+	if sections == nil {
+		return nil, fmt.Errorf("no config sections for app %q", appName)
+	}
+
+	target.sections = sections
+	content := newTargetContent(target.label+" Configuration", sections)
+
+	// Add "Save as Default" button if callback provided
+	if onSaveAsDefault != nil {
+		btn := widgets.NewButton("💾 Save as Default")
+		btn.OnClick = func() {
+			onSaveAsDefault(target.values)
+			if onStatus != nil {
+				onStatus("Saved as default for new terminals.", false)
+			}
+		}
+		content.Pane.AddChild(btn)
+	}
+
+	return content, nil
+}
+
 // buildAppSectionsStandalone builds app config sections without a ConfigEditor.
 func buildAppSectionsStandalone(target *configTarget, onApply func(applyKind)) *widgets.TabPanel {
 	sections := splitSections(target.values)
