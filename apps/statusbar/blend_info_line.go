@@ -265,6 +265,7 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 
 	// Draw toast centered, overlaying the middle area between left and right.
 	if toastActive {
+		toastDS := color.DynamicStyle{FG: color.Solid(tcell.NewRGBColor(255, 255, 255)), BG: color.Solid(tcell.ColorDefault)}
 		toastRunes := []rune(" " + toastMsg + " ")
 		toastLen := len(toastRunes)
 		toastStart := x + (w-toastLen)/2
@@ -280,7 +281,7 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 			if tc >= toastEnd {
 				break
 			}
-			painter.SetDynamicCellKeepBG(tc, y, r, darkDS)
+			painter.SetDynamicCellKeepBG(tc, y, r, toastDS)
 		}
 	}
 
