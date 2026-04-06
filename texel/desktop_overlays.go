@@ -7,9 +7,13 @@
 package texel
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/framegrace/texelation/apps/help"
+	"github.com/framegrace/texelation/internal/keybind"
 )
 
 // ShowFloatingPanel opens a modal floating panel hosting the given app.
@@ -348,7 +352,72 @@ func (d *DesktopEngine) handleConfigEditorApply(payload interface{}) {
 	case strings.HasPrefix(raw, "app:"):
 		// Notify all panes whose app implements ConfigReloader.
 		d.notifyAppConfigChanged()
+	case raw == "keybindings":
+		d.reloadKeybindings()
 	}
+}
+
+// reloadKeybindings rebuilds the keybinding registry from the config file
+// and pushes it to the desktop engine and all texelterm instances.
+func (d *DesktopEngine) reloadKeybindings() {
+	if d.keybindings == nil {
+		return
+	}
+	// Re-read and rebuild. Use the same loading logic as startup.
+	// The keybind package handles preset/extraPreset/overrides merging.
+	newReg := loadKeybindingsFromDisk()
+	if newReg == nil {
+		return
+	}
+	d.SetKeybindings(newReg)
+
+	// Push to all panes
+	for _, ws := range d.workspaces {
+		if ws.tree == nil {
+			continue
+		}
+		forEachLeafPane(ws.tree.Root, func(p *pane) {
+			if p.app == nil {
+				return
+			}
+			if setter, ok := p.app.(KeybindingSetter); ok {
+				setter.SetKeybindings(newReg)
+			}
+		})
+	}
+}
+
+// KeybindingSetter is implemented by apps that accept keybinding registries.
+type KeybindingSetter interface {
+	SetKeybindings(r *keybind.Registry)
+}
+
+// loadKeybindingsFromDisk reads keybindings.json and builds a Registry.
+func loadKeybindingsFromDisk() *keybind.Registry {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	preset := "auto"
+	var extraPreset string
+	var overrides map[string][]string
+
+	data, err := os.ReadFile(filepath.Join(home, ".config", "texelation", "keybindings.json"))
+	if err == nil {
+		var cfg struct {
+			Preset      string              `json:"preset"`
+			ExtraPreset string              `json:"extraPreset"`
+			Actions     map[string][]string `json:"actions"`
+		}
+		if json.Unmarshal(data, &cfg) == nil {
+			if cfg.Preset != "" {
+				preset = cfg.Preset
+			}
+			extraPreset = cfg.ExtraPreset
+			overrides = cfg.Actions
+		}
+	}
+	return keybind.NewRegistry(preset, extraPreset, overrides)
 }
 
 // notifyAppConfigChanged iterates all panes across all workspaces and calls

@@ -435,6 +435,12 @@ func (sb *StatusBarApp) StartNewTab() {
 	sb.refresh()
 }
 
+// StartRenameTab opens the editor on the current active tab for renaming.
+func (sb *StatusBarApp) StartRenameTab() {
+	sb.tabBar.EditTab(sb.tabBar.ActiveIdx)
+	sb.refresh()
+}
+
 // StartCloseWorkspace shows a confirmation toast for closing the active workspace.
 func (sb *StatusBarApp) StartCloseWorkspace() {
 	sb.mu.RLock()

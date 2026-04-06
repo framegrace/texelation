@@ -71,6 +71,19 @@ func (d *DesktopEngine) toggleZoom() {
 	d.broadcastTreeChanged()
 }
 
+// startRenameTab opens the tab editor on the current workspace for renaming.
+func (d *DesktopEngine) startRenameTab() {
+	if d.inTabMode {
+		d.exitTabMode()
+	}
+	d.inTabMode = true
+	for _, sp := range d.statusPanes {
+		if handler, ok := sp.app.(TabModeHandler); ok {
+			handler.StartRenameTab()
+		}
+	}
+}
+
 // startNewTab tells the status bar to create a new tab editor after the current tab.
 // Keys are routed to the editor until Enter (create) or Escape (cancel).
 func (d *DesktopEngine) startNewTab() {
@@ -229,6 +242,8 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 		d.launchHelpOverlay()
 	case keybind.ControlConfig:
 		d.launchConfigEditorOverlay("system")
+	case keybind.ControlRenameTab:
+		d.startRenameTab()
 	case keybind.ControlNewTab:
 		d.startNewTab()
 	case keybind.ControlCloseTab:

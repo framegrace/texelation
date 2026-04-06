@@ -115,7 +115,7 @@ func init() {
 
 // ParseKeyCombo parses a string like "ctrl+a", "shift+up", "f1", "a", "alt+b", "space".
 func ParseKeyCombo(s string) (KeyCombo, error) {
-	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return KeyCombo{}, fmt.Errorf("keybind: empty key combo string")
 	}
@@ -133,7 +133,7 @@ func ParseKeyCombo(s string) (KeyCombo, error) {
 	var mods tcell.ModMask
 	hasCtrl := false
 	for _, mod := range modParts {
-		switch mod {
+		switch strings.ToLower(mod) {
 		case "ctrl":
 			mods |= tcell.ModCtrl
 			hasCtrl = true
@@ -146,25 +146,26 @@ func ParseKeyCombo(s string) (KeyCombo, error) {
 		}
 	}
 
+	lowerKey := strings.ToLower(keyPart)
+
 	// Special: "space" → rune ' '
-	if keyPart == "space" {
+	if lowerKey == "space" {
 		return KeyCombo{Key: tcell.KeyRune, Rune: ' ', Modifiers: mods}, nil
 	}
 
 	// ctrl+<single-letter> with no other special modifiers → use KeyCtrlX
 	if hasCtrl && mods == tcell.ModCtrl && len(keyPart) == 1 {
-		letter := keyPart
-		if ck, ok := ctrlKeys[letter]; ok {
+		if ck, ok := ctrlKeys[lowerKey]; ok {
 			return KeyCombo{Key: ck, Modifiers: mods}, nil
 		}
 	}
 
-	// Named keys (up, down, f1, enter, etc.)
-	if key, ok := keyNames[keyPart]; ok {
+	// Named keys (up, down, f1, enter, etc.) — case-insensitive lookup
+	if key, ok := keyNames[lowerKey]; ok {
 		return KeyCombo{Key: key, Modifiers: mods}, nil
 	}
 
-	// Single character → KeyRune
+	// Single character → KeyRune (preserves case: 't' ≠ 'T')
 	runes := []rune(keyPart)
 	if len(runes) == 1 && unicode.IsPrint(runes[0]) {
 		return KeyCombo{Key: tcell.KeyRune, Rune: runes[0], Modifiers: mods}, nil

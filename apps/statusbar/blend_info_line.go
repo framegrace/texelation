@@ -181,21 +181,26 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 
 	// Resolve the dynamic accent color for this frame.
 	ctx := color.ColorContext{X: x, Y: y, W: w, H: 1, T: painter.Time()}
-	if !accent.IsStatic() {
+	if !accent.IsStatic() || toastActive {
 		painter.MarkAnimated()
 	}
 
 	// Choose the accent color for the gradient.
+	// When a toast is active, pulse the severity color for attention.
 	gradAccent := accent
 	if toastActive {
+		var toastColor tcell.Color
 		switch toastSev {
 		case texel.ToastSuccess:
-			gradAccent = color.Solid(tm.GetSemanticColor("action.success"))
+			toastColor = tm.GetSemanticColor("action.success")
 		case texel.ToastWarning:
-			gradAccent = color.Solid(tm.GetSemanticColor("action.warning"))
+			toastColor = tm.GetSemanticColor("action.warning")
 		case texel.ToastError:
-			gradAccent = color.Solid(tm.GetSemanticColor("action.danger"))
+			toastColor = tm.GetSemanticColor("action.danger")
+		default:
+			toastColor = tm.GetSemanticColor("accent.primary")
 		}
+		gradAccent = color.Pulse(toastColor, 0.5, 1.0, 6)
 	}
 
 	resolvedAccent := accent.Resolve(ctx)
@@ -260,6 +265,7 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 
 	// Draw toast centered, overlaying the middle area between left and right.
 	if toastActive {
+		toastDS := color.DynamicStyle{FG: color.Solid(tcell.NewRGBColor(255, 255, 255)), BG: color.Solid(tcell.ColorDefault)}
 		toastRunes := []rune(" " + toastMsg + " ")
 		toastLen := len(toastRunes)
 		toastStart := x + (w-toastLen)/2
@@ -275,7 +281,7 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 			if tc >= toastEnd {
 				break
 			}
-			painter.SetDynamicCellKeepBG(tc, y, r, darkDS)
+			painter.SetDynamicCellKeepBG(tc, y, r, toastDS)
 		}
 	}
 
