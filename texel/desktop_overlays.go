@@ -18,11 +18,14 @@ import (
 
 // ShowFloatingPanel opens a modal floating panel hosting the given app.
 func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
+	d.showFloatingPanel(app, x, y, w, h, true)
+}
+
+// showFloatingPanel opens a floating panel with the given modal flag.
+func (d *DesktopEngine) showFloatingPanel(app App, x, y, w, h int, modal bool) {
 	if app == nil {
 		return
 	}
-
-	// Check if app is already floating? Maybe not needed for now.
 
 	panel := &FloatingPanel{
 		app:    app,
@@ -30,7 +33,7 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 		y:      y,
 		width:  w,
 		height: h,
-		modal:  true,
+		modal:  modal,
 		id:     newFloatingPanelID(app),
 	}
 
@@ -80,6 +83,16 @@ func (d *DesktopEngine) ShowFloatingPanel(app App, x, y, w, h int) {
 	// d.broadcastStateUpdate() // TODO: Notify focus change if we focus the panel?
 }
 
+// topModalPanel returns the topmost modal floating panel, or nil.
+func (d *DesktopEngine) topModalPanel() *FloatingPanel {
+	for i := len(d.floatingPanels) - 1; i >= 0; i-- {
+		if d.floatingPanels[i].modal {
+			return d.floatingPanels[i]
+		}
+	}
+	return nil
+}
+
 // CloseFloatingPanel removes a floating panel.
 func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
 	if panel == nil {
@@ -102,6 +115,11 @@ func (d *DesktopEngine) CloseFloatingPanel(panel *FloatingPanel) {
 		d.appLifecycle.StopApp(panel.app)
 		d.recalculateLayout()
 		d.broadcastTreeChanged()
+
+		// If control mode is active and no modal panels remain, exit control mode.
+		if d.inControlMode && panel.modal && d.topModalPanel() == nil {
+			d.toggleControlMode()
+		}
 	}
 }
 
@@ -267,7 +285,7 @@ func (d *DesktopEngine) launchControlHelpOverlay() {
 	x := (vw - w) / 2
 	y := (vh - h) / 2
 
-	d.ShowFloatingPanel(app, x, y, w, h)
+	d.showFloatingPanel(app, x, y, w, h, false)
 }
 
 func (d *DesktopEngine) closeControlHelpOverlay() {
@@ -320,7 +338,7 @@ func (d *DesktopEngine) launchConfigEditorOverlay(target string) {
 	}
 
 	vw, vh := d.viewportSize()
-	w := 80
+	w := 90
 	h := 30
 	if w > vw {
 		w = vw - 2

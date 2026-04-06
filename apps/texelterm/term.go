@@ -121,6 +121,7 @@ type TexelTerm struct {
 	statusBar       *widgets.StatusBar
 	tfmToggle       *widgets.ToggleButton
 	tfmUserPref     bool // user's preferred transformer state (restored when TUI/alt clears)
+	tfmPillVisible  bool // whether the transformer pill button is shown on the decorator
 	searchToggle    *widgets.ToggleButton
 	cfgToggle       *widgets.ToggleButton
 	// Config panel overlay
@@ -176,6 +177,7 @@ func New(title, command string) texelcore.App {
 		statusBar:    sb,
 		tfmToggle:    tfm,
 		tfmUserPref:  initCfg.GetBool("transformers", "enabled", false),
+		tfmPillVisible: initCfg.GetBool("transformers", "show_pill_button", true),
 		searchToggle: srch,
 		cfgToggle:    cfg,
 	}
@@ -1210,6 +1212,25 @@ func (a *TexelTerm) ReloadConfig() {
 		a.tfmToggle.Active = newTfm
 	}
 
+	// Transformer pill button visibility — add/remove decorator action
+	newPill := cfg.GetBool("transformers", "show_pill_button", true)
+	if newPill != a.tfmPillVisible {
+		a.tfmPillVisible = newPill
+		if a.controlBus != nil {
+			if newPill {
+				a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
+					ID: "tfm", Icon: '\U000F0068',
+					HelpFunc: func() string { return a.decoratorHelp("Transformers", keybind.TermTransformer) },
+					OnClick: func() {
+						a.toggleTransformers()
+					},
+				})
+			} else {
+				a.controlBus.Trigger("decorator.remove", "tfm")
+			}
+		}
+	}
+
 	a.requestRefresh()
 }
 
@@ -1360,13 +1381,15 @@ func (a *TexelTerm) registerDecoratorActions() {
 		},
 	})
 
-	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
-		ID: "tfm", Icon: '\U000F0068',
-		HelpFunc: func() string { return a.decoratorHelp("Transformers", keybind.TermTransformer) },
-		OnClick: func() {
-			a.toggleTransformers()
-		},
-	})
+	if a.tfmPillVisible {
+		a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
+			ID: "tfm", Icon: '\U000F0068',
+			HelpFunc: func() string { return a.decoratorHelp("Transformers", keybind.TermTransformer) },
+			OnClick: func() {
+				a.toggleTransformers()
+			},
+		})
+	}
 
 	a.controlBus.Trigger("decorator.add", texel.DecoratorAction{
 		ID: "search", Icon: '\U000F0349',

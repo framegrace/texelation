@@ -57,6 +57,7 @@ type targetContent struct {
 	*widgets.Pane
 	header   *widgets.Label
 	sections *widgets.TabPanel
+	footer   core.Widget // optional bottom widget (e.g. "Save as Default" button)
 }
 
 func newTargetContent(title string, sections *widgets.TabPanel) *targetContent {
@@ -73,10 +74,18 @@ func newTargetContent(title string, sections *widgets.TabPanel) *targetContent {
 
 func (tc *targetContent) Resize(w, h int) {
 	tc.Pane.Resize(w, h)
-	// Layout: header at top, sections below
+	// Layout: header at top, sections in the middle, optional footer at bottom.
 	tc.header.SetPosition(tc.Rect.X+2, tc.Rect.Y)
 	tc.header.Resize(w-4, 1)
-	contentH := h - 2
+
+	footerH := 0
+	if tc.footer != nil {
+		footerH = 2 // 1 row padding + 1 row button
+		tc.footer.SetPosition(tc.Rect.X+2, tc.Rect.Y+h-1)
+		tc.footer.Resize(w-4, 1)
+	}
+
+	contentH := h - 2 - footerH
 	if contentH < 1 {
 		contentH = 1
 	}
@@ -254,6 +263,9 @@ func (e *ConfigEditor) buildTabs() *widgets.TabPanel {
 	panel := widgets.NewTabPanel()
 	for _, target := range e.targets {
 		target.sections = e.buildSections(target)
+		if target.sections.TabCount() == 0 {
+			continue
+		}
 		target.content = newTargetContent(target.label+" Configuration", target.sections)
 		panel.AddTabWithID(target.label, target.name, target.content)
 	}
@@ -352,7 +364,9 @@ func (e *ConfigEditor) buildSystemSections(target *configTarget) *widgets.TabPan
 		}
 		genVals = filtered
 	}
-	panel.AddTab("General", e.buildSectionPane(target, target.values, "", genVals, false, applySystem))
+	if len(genVals) > 0 {
+		panel.AddTab("General", e.buildSectionPane(target, target.values, "", genVals, false, applySystem))
+	}
 
 	// Filter layout_transitions by defaults.
 	layoutValues := sectionValues(target.values, "layout_transitions")
@@ -369,16 +383,41 @@ func (e *ConfigEditor) buildSystemSections(target *configTarget) *widgets.TabPan
 			layoutValues = filtered
 		}
 	}
-	panel.AddTab("Layout Transitions", e.buildSectionPane(target, target.values, "layout_transitions", layoutValues, false, applySystem))
+	if len(layoutValues) > 0 {
+		panel.AddTab("Layout Transitions", e.buildSectionPane(target, target.values, "layout_transitions", layoutValues, false, applySystem))
+	}
 
 	effectsValues := sectionValues(target.values, "effects")
-	panel.AddTab("Effects", e.buildEffectsSection(target, effectsValues))
+	if len(effectsValues) > 0 {
+		panel.AddTab("Effects", e.buildEffectsSection(target, effectsValues))
+	}
+
+	// Filter screensaver by defaults.
+	ssValues := sectionValues(target.values, "screensaver")
+	if defaults := config.SystemDefaults(); defaults != nil {
+		if defSS := defaults.Section("screensaver"); defSS != nil {
+			filtered := make(map[string]interface{})
+			for key, defVal := range defSS {
+				if userVal, ok := ssValues[key]; ok {
+					filtered[key] = userVal
+				} else {
+					filtered[key] = defVal
+				}
+			}
+			ssValues = filtered
+		}
+	}
+	if len(ssValues) > 0 {
+		panel.AddTab("Screensaver", e.buildSectionPane(target, target.values, "screensaver", ssValues, false, applySystem))
+	}
 
 	themePane := e.buildGroupedThemePane(target, target.themeValues, systemThemeSections, true)
 	panel.AddTab("Theme", themePane)
 
 	uiValues := sectionValues(target.themeValues, "ui")
-	panel.AddTab("TexelUI Theme", e.buildSectionPane(target, target.themeValues, "ui", uiValues, true, applyTheme))
+	if len(uiValues) > 0 {
+		panel.AddTab("TexelUI Theme", e.buildSectionPane(target, target.themeValues, "ui", uiValues, true, applyTheme))
+	}
 
 	// Keybindings tab
 	panel.AddTab("Keybindings", buildKeybindingsTab(func() {
@@ -416,11 +455,11 @@ func (e *ConfigEditor) buildAppSections(target *configTarget) *widgets.TabPanel 
 		sections = filtered
 	}
 
-	if len(sections) == 0 {
-		sections[""] = map[string]interface{}{}
-	}
 	sectionKeys := make([]string, 0, len(sections))
 	for key := range sections {
+		if len(sections[key]) == 0 {
+			continue
+		}
 		sectionKeys = append(sectionKeys, key)
 	}
 	sort.Strings(sectionKeys)
@@ -437,8 +476,9 @@ func (e *ConfigEditor) buildAppSections(target *configTarget) *widgets.TabPanel 
 		pane := e.buildSectionPane(target, target.values, key, sections[key], false, applyApp)
 		panel.AddTab(label, pane)
 	}
-	themePane := e.buildAppThemePane(target)
-	panel.AddTab("Theme", themePane)
+	if themePane, hasFields := e.buildAppThemePane(target); hasFields {
+		panel.AddTab("Theme", themePane)
+	}
 	return panel
 }
 
@@ -621,7 +661,7 @@ func (e *ConfigEditor) buildGroupedThemePane(target *configTarget, cfg config.Co
 	return wrapInScrollPane(pane)
 }
 
-func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
+func (e *ConfigEditor) buildAppThemePane(target *configTarget) (core.Widget, bool) {
 	pane := widgets.NewForm()
 	base := ensureConfig(cloneThemeConfig())
 	effective := mergeThemeConfig(base, target.themeOverrides)
@@ -631,8 +671,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 		fields = overrideThemeFields(target.themeOverrides)
 	}
 	if len(fields) == 0 {
-		pane.AddFullWidthField(widgets.NewLabel("No theme settings for this app."), 1)
-		return wrapInScrollPane(pane)
+		return nil, false
 	}
 
 	sectionKeys := make([]string, 0, len(fields))
@@ -682,7 +721,7 @@ func (e *ConfigEditor) buildAppThemePane(target *configTarget) core.Widget {
 		}
 		first = false
 	}
-	return wrapInScrollPane(pane)
+	return wrapInScrollPane(pane), true
 }
 
 func newSectionHeader(text string) *widgets.Label {

@@ -19,6 +19,7 @@
   },
   "transformers": {
     "enabled": true,
+    "show_pill_button": true,
     "pipeline": [
       {
         "id": "txfmt",

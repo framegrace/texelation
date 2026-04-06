@@ -33,6 +33,10 @@ func ComboOptionsFor(target *configTarget, section, key string) []string {
 		return target.appOptions
 	case section == "layout_transitions" && key == "easing":
 		return EasingFunctions()
+	case section == "screensaver" && key == "effect":
+		return append(effects.ScreensaverEffectIDs(), "random")
+	case section == "screensaver" && key == "fade_style":
+		return effects.FadeStyleNames()
 	default:
 		return nil
 	}

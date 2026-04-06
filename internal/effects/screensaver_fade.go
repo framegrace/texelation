@@ -59,6 +59,11 @@ type randomBlender struct {
 
 var concreteStyles = []string{"dissolve", "curtain", "spiral"}
 
+// FadeStyleNames returns fade style names including "random".
+func FadeStyleNames() []string {
+	return append(append([]string{}, concreteStyles...), "random")
+}
+
 func (b *randomBlender) Reset() {
 	b.inner = blenderForStyle(concreteStyles[rand.Intn(len(concreteStyles))])
 	b.inner.Reset()

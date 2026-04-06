@@ -89,7 +89,7 @@ func NewAppConfigPanelWithStorage(appName string, values config.Config, onSave f
 	target.sections = sections
 	content := newTargetContent(target.label+" Configuration", sections)
 
-	// Add "Save as Default" button if callback provided
+	// Add "Save as Default" button at the bottom if callback provided.
 	if onSaveAsDefault != nil {
 		btn := widgets.NewButton("💾 Save as Default")
 		btn.OnClick = func() {
@@ -98,6 +98,7 @@ func NewAppConfigPanelWithStorage(appName string, values config.Config, onSave f
 				onStatus("Saved as default for new terminals.", false)
 			}
 		}
+		content.footer = btn
 		content.Pane.AddChild(btn)
 	}
 
@@ -131,14 +132,18 @@ func buildAppSectionsStandalone(target *configTarget, onApply func(applyKind)) *
 		sections = filtered
 	}
 
-	if len(sections) == 0 {
-		sections[""] = map[string]interface{}{}
-	}
 	sectionKeys := make([]string, 0, len(sections))
 	for key := range sections {
+		if len(sections[key]) == 0 {
+			continue
+		}
 		sectionKeys = append(sectionKeys, key)
 	}
 	sort.Strings(sectionKeys)
+
+	if len(sectionKeys) == 0 {
+		return nil
+	}
 
 	panel := widgets.NewTabPanel()
 	for _, key := range sectionKeys {
