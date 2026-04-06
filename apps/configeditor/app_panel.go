@@ -89,7 +89,7 @@ func NewAppConfigPanelWithStorage(appName string, values config.Config, onSave f
 	target.sections = sections
 	content := newTargetContent(target.label+" Configuration", sections)
 
-	// Add "Save as Default" button if callback provided
+	// Add "Save as Default" button at the bottom if callback provided.
 	if onSaveAsDefault != nil {
 		btn := widgets.NewButton("💾 Save as Default")
 		btn.OnClick = func() {
@@ -98,6 +98,7 @@ func NewAppConfigPanelWithStorage(appName string, values config.Config, onSave f
 				onStatus("Saved as default for new terminals.", false)
 			}
 		}
+		content.footer = btn
 		content.Pane.AddChild(btn)
 	}
 

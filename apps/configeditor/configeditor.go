@@ -57,6 +57,7 @@ type targetContent struct {
 	*widgets.Pane
 	header   *widgets.Label
 	sections *widgets.TabPanel
+	footer   core.Widget // optional bottom widget (e.g. "Save as Default" button)
 }
 
 func newTargetContent(title string, sections *widgets.TabPanel) *targetContent {
@@ -73,10 +74,18 @@ func newTargetContent(title string, sections *widgets.TabPanel) *targetContent {
 
 func (tc *targetContent) Resize(w, h int) {
 	tc.Pane.Resize(w, h)
-	// Layout: header at top, sections below
+	// Layout: header at top, sections in the middle, optional footer at bottom.
 	tc.header.SetPosition(tc.Rect.X+2, tc.Rect.Y)
 	tc.header.Resize(w-4, 1)
-	contentH := h - 2
+
+	footerH := 0
+	if tc.footer != nil {
+		footerH = 2 // 1 row padding + 1 row button
+		tc.footer.SetPosition(tc.Rect.X+2, tc.Rect.Y+h-1)
+		tc.footer.Resize(w-4, 1)
+	}
+
+	contentH := h - 2 - footerH
 	if contentH < 1 {
 		contentH = 1
 	}
