@@ -132,14 +132,18 @@ func buildAppSectionsStandalone(target *configTarget, onApply func(applyKind)) *
 		sections = filtered
 	}
 
-	if len(sections) == 0 {
-		sections[""] = map[string]interface{}{}
-	}
 	sectionKeys := make([]string, 0, len(sections))
 	for key := range sections {
+		if len(sections[key]) == 0 {
+			continue
+		}
 		sectionKeys = append(sectionKeys, key)
 	}
 	sort.Strings(sectionKeys)
+
+	if len(sectionKeys) == 0 {
+		return nil
+	}
 
 	panel := widgets.NewTabPanel()
 	for _, key := range sectionKeys {

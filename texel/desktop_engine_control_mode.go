@@ -197,6 +197,23 @@ func (d *DesktopEngine) handleTabMode(ev *tcell.EventKey) {
 
 // handleControlMode processes desktop-level commands when control mode is active.
 func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
+	// When a modal floating panel is open, route keys to it instead of
+	// processing control commands. ESC closes the modal (and exits control
+	// mode when no modals remain).
+	if fp := d.topModalPanel(); fp != nil {
+		if ev.Key() == tcell.KeyEsc {
+			d.CloseFloatingPanel(fp)
+			// CloseFloatingPanel exits control mode when no modals remain.
+			return
+		}
+		if fp.pipeline != nil {
+			fp.pipeline.HandleKey(ev)
+		} else {
+			fp.app.HandleKey(ev)
+		}
+		return
+	}
+
 	if ev.Key() == tcell.KeyEsc {
 		d.toggleControlMode()
 		return
@@ -237,11 +254,17 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 	case keybind.ControlZoom:
 		d.toggleZoom()
 	case keybind.ControlLauncher:
+		d.closeControlHelpOverlay()
 		d.launchLauncherOverlay()
+		exitControlMode = false // stay in control mode while modal is open
 	case keybind.ControlHelp:
+		d.closeControlHelpOverlay()
 		d.launchHelpOverlay()
+		exitControlMode = false
 	case keybind.ControlConfig:
+		d.closeControlHelpOverlay()
 		d.launchConfigEditorOverlay("system")
+		exitControlMode = false
 	case keybind.ControlRenameTab:
 		d.startRenameTab()
 	case keybind.ControlNewTab:
