@@ -72,7 +72,7 @@ func TestServerSendsBootSnapshotFallback(t *testing.T) {
 	if pane.X != 2 || pane.Y != 3 || pane.Width != 10 || pane.Height != 4 {
 		t.Fatalf("unexpected geometry: %+v", pane)
 	}
-	if len(pane.Rows) != 1 || pane.Rows[0] != "hi" {
-		t.Fatalf("unexpected rows: %v", pane.Rows)
+	if len(pane.Rows) != 0 {
+		t.Fatalf("expected empty rows, got %d rows", len(pane.Rows))
 	}
 }

@@ -89,27 +89,13 @@ func (s *SnapshotStore) Save(capture *texel.TreeCapture) error {
 
 	for i, pane := range capture.Panes {
 		id := hex.EncodeToString(pane.ID[:])
-		rows := make([]string, len(pane.Buffer))
-		for y, row := range pane.Buffer {
-			runes := make([]rune, len(row))
-			for x, cell := range row {
-				if cell.Ch == 0 {
-					runes[x] = ' '
-				} else {
-					runes[x] = cell.Ch
-				}
-			}
-			rows[y] = string(runes)
-			hasher.Write([]byte(rows[y]))
-		}
-
 		hasher.Write(pane.ID[:])
 		hasher.Write([]byte(pane.Title))
 
 		stored.Panes[i] = StoredPane{
 			ID:        id,
 			Title:     pane.Title,
-			Rows:      rows,
+			Rows:      nil,
 			X:         pane.Rect.X,
 			Y:         pane.Rect.Y,
 			Width:     pane.Rect.Width,

@@ -541,8 +541,8 @@ func (ap *AdaptivePersistence) cancelFlushTimerLocked() {
 }
 
 // flushPendingLocked writes all pending lines and metadata to disk.
-// Content and metadata are written together to ensure consistency.
-// Must be called with ap.mu held.
+// It releases ap.mu during I/O to avoid blocking NotifyWrite on the parse
+// thread. Must be called with ap.mu held; ap.mu is re-held on return.
 func (ap *AdaptivePersistence) flushPendingLocked() error {
 	if len(ap.pendingLines) == 0 && ap.pendingMetadata == nil {
 		return nil
@@ -553,41 +553,88 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 
 	ap.metrics.TotalFlushes++
 
-	// Collect and sort line indices for deterministic order
+	// --- Collect phase (locked): clone lines and snapshot state ---
+	type flushEntry struct {
+		lineIdx int64
+		line    *LogicalLine
+		info    *pendingLineInfo
+	}
+	entries := make([]flushEntry, 0, len(ap.pendingLines))
 	indices := make([]int64, 0, len(ap.pendingLines))
 	for idx := range ap.pendingLines {
 		indices = append(indices, idx)
 	}
 	slices.Sort(indices)
 
-	var firstErr error
 	for _, idx := range indices {
-		if err := ap.flushLineLocked(idx); err != nil {
+		info := ap.pendingLines[idx]
+		line := ap.memBuf.GetLine(idx)
+		if line == nil {
+			ap.memBuf.ClearDirty(idx)
+			continue
+		}
+		entries = append(entries, flushEntry{
+			lineIdx: idx,
+			line:    line.Clone(),
+			info:    info,
+		})
+		ap.memBuf.ClearDirty(idx)
+	}
+
+	pendingMeta := ap.pendingMetadata
+	ap.pendingMetadata = nil
+	ap.pendingLines = make(map[int64]*pendingLineInfo)
+
+	// --- I/O phase (unlocked): write to WAL without blocking the parser ---
+	ap.mu.Unlock()
+
+	var firstErr error
+	for _, e := range entries {
+		var err error
+		if ap.wal != nil {
+			err = ap.wal.Append(e.lineIdx, e.line, ap.nowFunc())
+		} else {
+			err = ap.disk.AppendLine(e.line)
+		}
+		if err != nil {
 			if firstErr == nil {
-				firstErr = err
+				firstErr = fmt.Errorf("failed to write line %d: %w", e.lineIdx, err)
 			}
 			ap.metrics.FailedWrites++
-			// Log and continue with other lines
+			continue
+		}
+		ap.metrics.LinesWritten++
+		if ap.OnLineIndexed != nil && e.info != nil {
+			ap.OnLineIndexed(e.lineIdx, e.line, e.info.timestamp, e.info.isCommand)
 		}
 	}
 
-	// Clear pending lines
-	ap.pendingLines = make(map[int64]*pendingLineInfo)
-
-	// Write metadata AFTER content so they stay consistent
-	// (metadata references content that's now on disk)
-	if ap.pendingMetadata != nil && ap.wal != nil {
-		if err := ap.wal.WriteMetadata(ap.pendingMetadata); err != nil {
+	if pendingMeta != nil && ap.wal != nil {
+		// Validate metadata against what's actually on disk.
+		// LiveEdgeBase must not exceed the WAL's known line count,
+		// otherwise recovery will have metadata pointing to non-existent lines.
+		walLineCount := ap.wal.NextGlobalIdx()
+		if pendingMeta.LiveEdgeBase > walLineCount {
+			debuglog.Printf("[AdaptivePersistence] Clamping metadata LiveEdgeBase %d → %d (WAL lineCount)",
+				pendingMeta.LiveEdgeBase, walLineCount)
+			pendingMeta.LiveEdgeBase = walLineCount
+		}
+		cursorGlobal := pendingMeta.LiveEdgeBase + int64(pendingMeta.CursorY)
+		if cursorGlobal > walLineCount && walLineCount > 0 {
+			pendingMeta.CursorY = int(walLineCount - pendingMeta.LiveEdgeBase)
+			if pendingMeta.CursorY < 0 {
+				pendingMeta.CursorY = 0
+			}
+			debuglog.Printf("[AdaptivePersistence] Clamped cursor to Y=%d (global line would exceed WAL)",
+				pendingMeta.CursorY)
+		}
+		if err := ap.wal.WriteMetadata(pendingMeta); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("failed to write metadata: %w", err)
 			}
 		}
-		ap.pendingMetadata = nil
 	}
 
-	// Sync WAL to disk so data survives process crash.
-	// Without this, written data sits in the OS page cache and may be lost
-	// on SIGKILL or machine shutdown.
 	if ap.wal != nil {
 		if err := ap.wal.SyncWAL(); err != nil {
 			if firstErr == nil {
@@ -596,7 +643,9 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 		}
 	}
 
-	// Monitor flush performance
+	// --- Re-acquire lock ---
+	ap.mu.Lock()
+
 	elapsed := ap.nowFunc().Sub(startTime)
 	if elapsed > flushSlowThreshold {
 		debuglog.Printf("[AdaptivePersistence] Slow flush: %d lines in %v (%.1f lines/ms)",
