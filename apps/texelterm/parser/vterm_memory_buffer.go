@@ -59,6 +59,13 @@ type memoryBufferState struct {
 	// This prevents loading history multiple times.
 	historyLoaded bool
 
+	// restoredFromDisk is set after history is loaded from disk. It suppresses
+	// memoryBufferPushViewportToScrollback calls to prevent the recovered
+	// viewport content from being pushed into scrollback again (it's already
+	// there from the previous session). Cleared on first real scroll.
+	restoredFromDisk bool
+
+
 	// pendingHistoryLines is the number of historical lines available in PageStore.
 	// Set during initialization, used by first Resize() to load history.
 	pendingHistoryLines int64
@@ -199,6 +206,7 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 			log.Printf("[MEMORY_BUFFER] %d historical lines available, loading now (height=%d)", lineCount, v.height)
 			v.loadHistoryFromDisk(v.height)
 			v.memBufState.historyLoaded = true
+			v.memBufState.restoredFromDisk = true
 			return nil
 		}
 	}
@@ -257,6 +265,7 @@ func (v *VTerm) CloseMemoryBuffer() error {
 func (v *VTerm) IsMemoryBufferEnabled() bool {
 	return v.memBufState != nil && v.memBufState.enabled
 }
+
 
 // SetOnLineIndexed sets a callback that's invoked AFTER a line is persisted to disk.
 // This is used for search indexing - the callback is only called for lines that
@@ -426,11 +435,17 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 			log.Printf("[MEMORY_BUFFER] Viewport scroll restored to offset %d", savedState.ScrollOffset)
 		}
 
-		// Restore cursor position
+		// Restore cursor position, clamped to current viewport height.
+		// The metadata may have been saved when the pane was a different size.
 		if savedState.CursorX >= 0 && savedState.CursorY >= 0 {
 			v.cursorX = savedState.CursorX
 			v.cursorY = savedState.CursorY
-			log.Printf("[MEMORY_BUFFER] Cursor position restored to (%d, %d)", savedState.CursorX, savedState.CursorY)
+			if v.cursorY >= v.height {
+				log.Printf("[MEMORY_BUFFER] Clamping restored cursorY %d to %d (height=%d)",
+					v.cursorY, v.height-1, v.height)
+				v.cursorY = v.height - 1
+			}
+			log.Printf("[MEMORY_BUFFER] Cursor position restored to (%d, %d)", v.cursorX, v.cursorY)
 		}
 
 		// Prompt positioning: place cursor at the last prompt's screen row
@@ -463,6 +478,13 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 
 	// Repair state after crash: trim blank tail lines that were never synced.
 	v.trimBlankTailLines()
+
+	// Note: restoredFromDisk flag is set by the caller. When true, linefeed
+	// at the bottom of the viewport does NOT advance liveEdgeBase — the
+	// shell's startup output (bashrc, oh-my-bash, etc.) overwrites the
+	// viewport in-place instead of scrolling the recovered content away.
+	// The flag is cleared when the shell sends its first prompt marker
+	// (OSC 133;A), at which point normal scrolling resumes.
 
 	// Reset terminal drawing state to theme defaults after history reload.
 	// Without this, currentFG/currentBG could be left in an unexpected state,
@@ -624,6 +646,15 @@ func (v *VTerm) memoryBufferLineFeed() {
 	// if we're at the bottom of the viewport
 	liveEdgeAdvanced := false
 	if v.cursorY >= v.marginBottom {
+		if v.memBufState.restoredFromDisk {
+			// During recovery, suppress liveEdgeBase advance. The shell's
+			// startup output (bashrc, oh-my-bash, env loading) produces many
+			// linefeeds that would scroll the recovered content away. Instead,
+			// let the output overwrite the viewport in-place by wrapping
+			// cursorY back to the top, mimicking a fresh terminal start.
+			v.cursorY = 0
+			return
+		}
 		v.memBufState.liveEdgeBase++
 		liveEdgeAdvanced = true
 	}
@@ -1587,6 +1618,16 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 // compacted to row 0 before advancing liveEdgeBase so no empty prefix enters
 // scrollback.
 func (v *VTerm) memoryBufferPushViewportToScrollback() {
+	// After restoring from disk, the viewport content is already in scrollback.
+	// The first screen clear (from shell startup) should not push it again —
+	// that would advance liveEdgeBase by a full viewport height, making the
+	// screen appear blank with content one scroll-up away.
+	if v.memBufState.restoredFromDisk {
+		log.Printf("[MEMORY_BUFFER] Suppressed pushViewportToScrollback (restored from disk, liveEdgeBase=%d)",
+			v.memBufState.liveEdgeBase)
+		return
+	}
+
 	mb := v.memBufState.memBuf
 
 	// Find first and last rows with visible content

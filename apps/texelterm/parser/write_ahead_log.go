@@ -1132,6 +1132,22 @@ func (w *WriteAheadLog) WALPath() string {
 	return w.walPath
 }
 
+// NextGlobalIdx returns the next line index the WAL expects.
+// This equals the total number of lines written (PageStore + WAL entries).
+func (w *WriteAheadLog) NextGlobalIdx() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	// Include lines already in PageStore
+	psCount := int64(0)
+	if w.pageStore != nil {
+		psCount = w.pageStore.LineCount()
+	}
+	if w.nextGlobalIdx > psCount {
+		return w.nextGlobalIdx
+	}
+	return psCount
+}
+
 // SyncWAL forces the WAL file to be synced to disk.
 // This ensures all previously written entries survive a crash.
 func (w *WriteAheadLog) SyncWAL() error {
