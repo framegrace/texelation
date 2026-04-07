@@ -617,11 +617,14 @@ func (ps *PageStore) ReadLineWithTimestamp(index int64) (*LogicalLine, time.Time
 	return line, ts, nil
 }
 
-// LineCount returns the total number of lines written.
+// LineCount returns the logical end of the global-index space:
+// the highest stored global index plus one (zero if empty).
+// Note: this may exceed the number of stored lines when gaps exist.
+// Use StoredLineCount for the actual stored count.
 func (ps *PageStore) LineCount() int64 {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
-	return ps.totalLineCount
+	return ps.nextGlobalIdx
 }
 
 // StoredLineCount returns the number of lines actually stored.

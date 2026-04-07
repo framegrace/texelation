@@ -40,6 +40,24 @@ func TestPageStore_StoredLineCountVsLineCount(t *testing.T) {
 	}
 }
 
+func TestPageStore_LineCountIsLogicalEnd(t *testing.T) {
+	ps := newTestPageStore(t)
+
+	for i := 0; i < 10; i++ {
+		if err := ps.AppendLineWithTimestamp(mkLine("x"), time.Now()); err != nil {
+			t.Fatalf("AppendLineWithTimestamp: %v", err)
+		}
+	}
+
+	// With dense data, LineCount and StoredLineCount match.
+	if got := ps.LineCount(); got != 10 {
+		t.Errorf("LineCount: got %d, want 10", got)
+	}
+	if got := ps.StoredLineCount(); got != 10 {
+		t.Errorf("StoredLineCount: got %d, want 10", got)
+	}
+}
+
 func TestPageStore_RebuildPopulatesGlobalIdx(t *testing.T) {
 	// Create a store, append some lines via the old API (we'll replace
 	// this in a later task, but for now it works because the data is dense).
