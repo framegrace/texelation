@@ -161,3 +161,84 @@ func TestPageStore_AppendWithGlobalIdx_MustIncrease(t *testing.T) {
 		t.Errorf("expected error on decreasing globalIdx, got nil")
 	}
 }
+
+func TestPageStore_ReadWithGaps(t *testing.T) {
+	ps := newTestPageStore(t)
+
+	for i := int64(0); i < 3; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("early"), time.Now()); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	for i := int64(100); i < 102; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("late"), time.Now()); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+
+	// Stored entries: readable.
+	for _, idx := range []int64{0, 1, 2, 100, 101} {
+		line, err := ps.ReadLine(idx)
+		if err != nil {
+			t.Errorf("ReadLine(%d): unexpected error %v", idx, err)
+		}
+		if line == nil {
+			t.Errorf("ReadLine(%d): got nil, want line", idx)
+		}
+	}
+
+	// Gap entries: return (nil, nil).
+	for _, idx := range []int64{3, 50, 99} {
+		line, err := ps.ReadLine(idx)
+		if err != nil {
+			t.Errorf("ReadLine(%d) gap: unexpected error %v", idx, err)
+		}
+		if line != nil {
+			t.Errorf("ReadLine(%d) gap: got line, want nil", idx)
+		}
+	}
+
+	// Out of range: also (nil, nil).
+	line, err := ps.ReadLine(102)
+	if err != nil || line != nil {
+		t.Errorf("ReadLine(102) OOR: got (%v, %v), want (nil, nil)", line, err)
+	}
+}
+
+func TestPageStore_UpdateWithGaps(t *testing.T) {
+	ps := newTestPageStore(t)
+
+	for i := int64(0); i < 3; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("early"), time.Now()); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	for i := int64(100); i < 102; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("late"), time.Now()); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	// Update an existing line.
+	if err := ps.UpdateLine(101, mkLine("updated"), time.Now()); err != nil {
+		t.Errorf("UpdateLine(101) existing: %v", err)
+	}
+	line, _ := ps.ReadLine(101)
+	if line == nil || string(runesFromCells(line.Cells)) != "updated" {
+		t.Errorf("ReadLine(101) after update: got %q, want \"updated\"",
+			string(runesFromCells(line.Cells)))
+	}
+
+	// Update a gap must fail.
+	if err := ps.UpdateLine(50, mkLine("ghost"), time.Now()); err == nil {
+		t.Errorf("UpdateLine(50) gap: expected error, got nil")
+	}
+}
+
+func runesFromCells(cells []Cell) []rune {
+	out := make([]rune, len(cells))
+	for i, c := range cells {
+		out[i] = c.Rune
+	}
+	return out
+}
