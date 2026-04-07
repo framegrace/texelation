@@ -277,3 +277,36 @@ func runesFromCells(cells []Cell) []rune {
 	}
 	return out
 }
+
+func TestPageStore_PrepareForAppend_GapAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultPageStoreConfig(filepath.Join(dir, "hist"), "prep-test")
+
+	ps, err := CreatePageStore(cfg)
+	if err != nil {
+		t.Fatalf("CreatePageStore: %v", err)
+	}
+	for i := int64(0); i < 3; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("a"), time.Now()); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	ps.Close()
+
+	ps2, err := OpenPageStore(cfg)
+	if err != nil {
+		t.Fatalf("OpenPageStore: %v", err)
+	}
+	t.Cleanup(func() { ps2.Close() })
+
+	// Appending at a gap after reopen must succeed and start a fresh page.
+	if err := ps2.AppendLineWithGlobalIdx(100, mkLine("z"), time.Now()); err != nil {
+		t.Fatalf("AppendLineWithGlobalIdx(100) after reopen: %v", err)
+	}
+	if got := ps2.LineCount(); got != 101 {
+		t.Errorf("LineCount: got %d, want 101", got)
+	}
+	if got := ps2.StoredLineCount(); got != 4 {
+		t.Errorf("StoredLineCount: got %d, want 4", got)
+	}
+}

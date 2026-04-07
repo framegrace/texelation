@@ -754,63 +754,56 @@ func (ps *PageStore) Flush() error {
 	return nil
 }
 
-// GetTimestamp returns the timestamp for a line by global index.
-func (ps *PageStore) GetTimestamp(index int64) (time.Time, error) {
-	_, ts, err := ps.ReadLineWithTimestamp(index)
+// GetTimestamp returns the timestamp for the line at the given global index.
+// Returns zero time if the index is not stored.
+func (ps *PageStore) GetTimestamp(globalIdx int64) (time.Time, error) {
+	_, ts, err := ps.ReadLineWithTimestamp(globalIdx)
 	return ts, err
 }
 
-// FindLineAt returns the global line index closest to the given time.
-// If exact match not found, returns the line just before the time.
+// FindLineAt returns the global index of the stored line closest to (but not
+// after) the given time. Returns -1 if no lines are stored.
 func (ps *PageStore) FindLineAt(t time.Time) (int64, error) {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
-	if ps.totalLineCount == 0 {
+	n := len(ps.pageIndex)
+	if n == 0 {
 		return -1, nil
 	}
 
 	targetNano := t.UnixNano()
-
-	// Binary search for the line
-	low, high := int64(0), ps.totalLineCount-1
-
-	for low < high {
-		mid := (low + high + 1) / 2
-
-		ts, err := ps.getTimestampUnlocked(mid)
+	lo, hi := 0, n-1
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		ts, err := ps.getTimestampAtPosUnlocked(mid)
 		if err != nil {
 			return -1, err
 		}
-
 		if ts.UnixNano() <= targetNano {
-			low = mid
+			lo = mid
 		} else {
-			high = mid - 1
+			hi = mid - 1
 		}
 	}
-
-	return low, nil
+	return ps.pageIndex[lo].globalIdx, nil
 }
 
-// getTimestampUnlocked gets timestamp without locking (caller must hold lock).
-func (ps *PageStore) getTimestampUnlocked(index int64) (time.Time, error) {
-	if index < 0 || index >= ps.totalLineCount {
+// getTimestampAtPosUnlocked returns the timestamp for the pageIndex entry at
+// position `pos` (not by globalIdx). Caller must hold lock.
+func (ps *PageStore) getTimestampAtPosUnlocked(pos int) (time.Time, error) {
+	if pos < 0 || pos >= len(ps.pageIndex) {
 		return time.Time{}, nil
 	}
+	entry := ps.pageIndex[pos]
 
-	entry := ps.pageIndex[index]
-
-	// Check if line is in current page
 	if ps.currentPage != nil && entry.pageID == ps.currentPage.Header.PageID {
 		return ps.currentPage.GetTimestamp(entry.offsetInPage), nil
 	}
 
-	// Load page from disk
 	page, err := ps.loadPage(entry.pageID)
 	if err != nil {
 		return time.Time{}, err
 	}
-
 	return page.GetTimestamp(entry.offsetInPage), nil
 }
