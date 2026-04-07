@@ -614,6 +614,16 @@ func (ps *PageStore) LineCount() int64 {
 	return ps.totalLineCount
 }
 
+// StoredLineCount returns the number of lines actually stored.
+// This may be less than LineCount() when there are gaps in the
+// global-index space (e.g., from LineFeed operations that advanced
+// the live edge without dirtying intermediate lines).
+func (ps *PageStore) StoredLineCount() int64 {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.totalLineCount
+}
+
 // Close flushes the current page and closes the store.
 func (ps *PageStore) Close() error {
 	ps.mu.Lock()
