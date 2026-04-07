@@ -232,17 +232,24 @@ func (v *VTerm) CloseMemoryBuffer() error {
 		v.notifyMetadataChange()
 	}
 
-	// Ensure all viewport lines are persisted. Some lines may have been
-	// created by EnsureLine (as side effects of writing to non-adjacent rows)
-	// but never individually written to or notified. Without this, those
-	// lines are lost on reload, creating gaps in the viewport.
+	// Ensure all viewport lines that have actual content are persisted.
+	// Lines created as side effects of EnsureLine (e.g. from cursor jumps,
+	// LineFeed advancement, or screen-erase reflows) may have no content
+	// and don't need to live on disk — persisting them as blank stored
+	// entries inflates pageStore and produces visible empty bands on
+	// reload. Only flush lines that lineHasContent says are non-blank.
 	if v.memBufState.persistence != nil && v.memBufState.memBuf != nil {
 		mb := v.memBufState.memBuf
 		for y := 0; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
-			if globalLine >= mb.GlobalOffset() && globalLine < mb.GlobalEnd() {
-				v.memBufState.persistence.NotifyWrite(globalLine)
+			if globalLine < mb.GlobalOffset() || globalLine >= mb.GlobalEnd() {
+				continue
 			}
+			line := mb.GetLine(globalLine)
+			if line == nil || !lineHasContent(line) {
+				continue
+			}
+			v.memBufState.persistence.NotifyWrite(globalLine)
 		}
 	}
 
@@ -341,30 +348,12 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 		windowSize = int(lineCount)
 	}
 
-	// Default: last windowSize lines of the logical range.
-	endIdx := lineCount
-
-	// If we have valid recovered metadata, anchor the load window at the
-	// saved viewport instead of the logical tail. This matters when the
-	// logical tail is a sparse gap (many blank indices between the last
-	// visible content and LineCount), which would otherwise load a
-	// window full of blanks and miss the content the user was looking at.
-	if v.memBufState.persistence != nil && v.memBufState.persistence.wal != nil {
-		if saved := v.memBufState.persistence.wal.RecoveredMetadata(); saved != nil {
-			anchor := saved.LiveEdgeBase + int64(viewportHeight)
-			if anchor > lineCount {
-				anchor = lineCount
-			}
-			if anchor > int64(windowSize) {
-				endIdx = anchor
-			}
-		}
-	}
-
-	startIdx := endIdx - int64(windowSize)
+	// Calculate the range to load (last windowSize lines from history)
+	startIdx := lineCount - int64(windowSize)
 	if startIdx < 0 {
 		startIdx = 0
 	}
+	endIdx := lineCount
 
 	log.Printf("[MEMORY_BUFFER] Loading history: range [%d, %d) (%d lines) from %d total",
 		startIdx, endIdx, endIdx-startIdx, lineCount)
@@ -401,15 +390,8 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 
 	restoreStart := time.Now()
 
-	// Restore the lines, skipping nil entries (gaps in sparse PageStore).
-	// Using SetLine per entry so that gap positions are not populated with
-	// bogus blank lines; only lines that were actually stored are loaded.
-	for i, line := range lines {
-		if line == nil {
-			continue
-		}
-		mb.SetLine(startIdx+int64(i), line)
-	}
+	// Restore the lines
+	mb.RestoreLines(startIdx, lines)
 
 	// The live edge should still be at the original lineCount (after all history)
 	// The new shell output will start there
@@ -523,14 +505,6 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 // trimBlankTailLines scans backward from liveEdgeBase and clamps it to the
 // last non-empty line + 1. This repairs state after crashes where metadata
 // was persisted but trailing line content was lost (still in page cache).
-//
-// Bail out without trimming if the scan reaches the load-window floor
-// (mb.GlobalOffset) without finding content. That means the loaded window
-// is positioned above the actual content — probably because the saved
-// metadata points at a viewport that sits further up in the global-index
-// space than the loaded window. In that case, trimming blindly to the
-// floor would drop liveEdgeBase into a region with no loaded content,
-// making the real content invisible.
 func (v *VTerm) trimBlankTailLines() {
 	mb := v.memBufState.memBuf
 	if mb == nil {
@@ -538,28 +512,17 @@ func (v *VTerm) trimBlankTailLines() {
 	}
 
 	original := v.memBufState.liveEdgeBase
-	candidate := original
-	floor := mb.GlobalOffset()
-	foundContent := false
-	for candidate > floor {
-		line := mb.GetLine(candidate - 1)
+	for v.memBufState.liveEdgeBase > mb.GlobalOffset() {
+		line := mb.GetLine(v.memBufState.liveEdgeBase - 1)
 		if line != nil && lineHasContent(line) {
-			foundContent = true
 			break
 		}
-		candidate--
+		v.memBufState.liveEdgeBase--
 	}
 
-	if !foundContent {
-		log.Printf("[MEMORY_BUFFER] Trim skipped: walked liveEdgeBase %d → %d (floor) without finding content — load window does not cover the content area, keeping saved liveEdgeBase",
-			original, floor)
-		return
-	}
-
-	if candidate != original {
-		v.memBufState.liveEdgeBase = candidate
+	if trimmed := original - v.memBufState.liveEdgeBase; trimmed > 0 {
 		log.Printf("[MEMORY_BUFFER] Trimmed %d blank tail lines (liveEdgeBase %d → %d)",
-			original-candidate, original, candidate)
+			trimmed, original, v.memBufState.liveEdgeBase)
 	}
 }
 
@@ -614,6 +577,14 @@ func (v *VTerm) ensureLineNotifyGaps(mb *MemoryBuffer, globalLine int64) {
 	mb.EnsureLine(globalLine)
 	newEnd := mb.GlobalEnd()
 
+	// Notify the persistence layer for every gap line newly created.
+	// This maintains the dense-pendingLines invariant required by the
+	// positional pageStore contract: every globalIdx flushed via
+	// wal.Append must correspond to a real pageStore slot, otherwise
+	// later LineModify entries fall out of bounds during checkpoint.
+	// The cost is phantom blank stored entries on cursor jumps and
+	// reflows. The big accumulation source (\e[2J close-time loop)
+	// is filtered separately in CloseMemoryBuffer and ClearScreenMode.
 	if v.memBufState.persistence != nil && newEnd > prevEnd {
 		for idx := prevEnd; idx < newEnd; idx++ {
 			v.memBufState.persistence.NotifyWrite(idx)
@@ -1609,6 +1580,15 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 	v.logMemBufDebug("[ERASE] EraseScreen mode=%d: globalOffset=%d, globalEnd=%d, liveEdgeBase=%d, cursorY=%d",
 		mode, mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, v.cursorY)
 
+	// Notifying persistence for default-color erased lines creates phantom
+	// blank entries in pageStore — every \e[2J would persist `height` blank
+	// lines, accumulating thousands per session and producing visible empty
+	// bands on reload. Skip notifies when the erase produces a default-color
+	// blank, so cleared regions don't take up scrollback space. If the erase
+	// uses a non-default background (e.g., a colored clear), persistence is
+	// still required so the colored erasure round-trips.
+	notifyErase := v.currentBG != DefaultBG
+
 	switch mode {
 	case 0: // Erase from cursor to end of screen
 		// If cursor is at home, push viewport to scrollback first (like modern terminals)
@@ -1621,7 +1601,7 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		for y := v.cursorY + 1; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
-			if v.memBufState.persistence != nil {
+			if notifyErase && v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
 		}
@@ -1631,7 +1611,7 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		for y := 0; y < v.cursorY; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
-			if v.memBufState.persistence != nil {
+			if notifyErase && v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
 		}
@@ -1645,7 +1625,7 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		for y := 0; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
-			if v.memBufState.persistence != nil {
+			if notifyErase && v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
 		}
