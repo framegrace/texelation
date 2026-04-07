@@ -341,12 +341,30 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 		windowSize = int(lineCount)
 	}
 
-	// Calculate the range to load (last windowSize lines from history)
-	startIdx := lineCount - int64(windowSize)
+	// Default: last windowSize lines of the logical range.
+	endIdx := lineCount
+
+	// If we have valid recovered metadata, anchor the load window at the
+	// saved viewport instead of the logical tail. This matters when the
+	// logical tail is a sparse gap (many blank indices between the last
+	// visible content and LineCount), which would otherwise load a
+	// window full of blanks and miss the content the user was looking at.
+	if v.memBufState.persistence != nil && v.memBufState.persistence.wal != nil {
+		if saved := v.memBufState.persistence.wal.RecoveredMetadata(); saved != nil {
+			anchor := saved.LiveEdgeBase + int64(viewportHeight)
+			if anchor > lineCount {
+				anchor = lineCount
+			}
+			if anchor > int64(windowSize) {
+				endIdx = anchor
+			}
+		}
+	}
+
+	startIdx := endIdx - int64(windowSize)
 	if startIdx < 0 {
 		startIdx = 0
 	}
-	endIdx := lineCount
 
 	log.Printf("[MEMORY_BUFFER] Loading history: range [%d, %d) (%d lines) from %d total",
 		startIdx, endIdx, endIdx-startIdx, lineCount)
@@ -505,6 +523,14 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 // trimBlankTailLines scans backward from liveEdgeBase and clamps it to the
 // last non-empty line + 1. This repairs state after crashes where metadata
 // was persisted but trailing line content was lost (still in page cache).
+//
+// Bail out without trimming if the scan reaches the load-window floor
+// (mb.GlobalOffset) without finding content. That means the loaded window
+// is positioned above the actual content — probably because the saved
+// metadata points at a viewport that sits further up in the global-index
+// space than the loaded window. In that case, trimming blindly to the
+// floor would drop liveEdgeBase into a region with no loaded content,
+// making the real content invisible.
 func (v *VTerm) trimBlankTailLines() {
 	mb := v.memBufState.memBuf
 	if mb == nil {
@@ -512,17 +538,28 @@ func (v *VTerm) trimBlankTailLines() {
 	}
 
 	original := v.memBufState.liveEdgeBase
-	for v.memBufState.liveEdgeBase > mb.GlobalOffset() {
-		line := mb.GetLine(v.memBufState.liveEdgeBase - 1)
+	candidate := original
+	floor := mb.GlobalOffset()
+	foundContent := false
+	for candidate > floor {
+		line := mb.GetLine(candidate - 1)
 		if line != nil && lineHasContent(line) {
+			foundContent = true
 			break
 		}
-		v.memBufState.liveEdgeBase--
+		candidate--
 	}
 
-	if trimmed := original - v.memBufState.liveEdgeBase; trimmed > 0 {
+	if !foundContent {
+		log.Printf("[MEMORY_BUFFER] Trim skipped: walked liveEdgeBase %d → %d (floor) without finding content — load window does not cover the content area, keeping saved liveEdgeBase",
+			original, floor)
+		return
+	}
+
+	if candidate != original {
+		v.memBufState.liveEdgeBase = candidate
 		log.Printf("[MEMORY_BUFFER] Trimmed %d blank tail lines (liveEdgeBase %d → %d)",
-			trimmed, original, v.memBufState.liveEdgeBase)
+			original-candidate, original, candidate)
 	}
 }
 
