@@ -424,9 +424,17 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 	}
 
 	if savedState != nil {
-		// Restore liveEdgeBase if it's valid (within loaded history)
+		// Restore liveEdgeBase only if it's within the loaded history.
+		// If the saved liveEdgeBase is beyond globalEnd, the metadata is
+		// stale (content was in memory when saved but wasn't persisted),
+		// so skip cursor restoration too to keep things consistent.
+		liveEdgeRestored := false
 		if savedState.LiveEdgeBase >= mb.GlobalOffset() && savedState.LiveEdgeBase <= mb.GlobalEnd() {
 			v.memBufState.liveEdgeBase = savedState.LiveEdgeBase
+			liveEdgeRestored = true
+		} else {
+			log.Printf("[MEMORY_BUFFER] Stale metadata: saved liveEdgeBase=%d is out of range [%d, %d] — not restoring cursor",
+				savedState.LiveEdgeBase, mb.GlobalOffset(), mb.GlobalEnd())
 		}
 
 		// Restore scroll offset through the viewport
@@ -435,9 +443,10 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 			log.Printf("[MEMORY_BUFFER] Viewport scroll restored to offset %d", savedState.ScrollOffset)
 		}
 
-		// Restore cursor position, clamped to current viewport height.
-		// The metadata may have been saved when the pane was a different size.
-		if savedState.CursorX >= 0 && savedState.CursorY >= 0 {
+		// Only restore cursor if liveEdgeBase was also restored. Otherwise
+		// the cursor position refers to a different viewport anchor and
+		// would point to inconsistent content.
+		if liveEdgeRestored && savedState.CursorX >= 0 && savedState.CursorY >= 0 {
 			v.cursorX = savedState.CursorX
 			v.cursorY = savedState.CursorY
 			if v.cursorY >= v.height {
@@ -646,15 +655,6 @@ func (v *VTerm) memoryBufferLineFeed() {
 	// if we're at the bottom of the viewport
 	liveEdgeAdvanced := false
 	if v.cursorY >= v.marginBottom {
-		if v.memBufState.restoredFromDisk {
-			// During recovery, suppress liveEdgeBase advance. The shell's
-			// startup output (bashrc, oh-my-bash, env loading) produces many
-			// linefeeds that would scroll the recovered content away. Instead,
-			// let the output overwrite the viewport in-place by wrapping
-			// cursorY back to the top, mimicking a fresh terminal start.
-			v.cursorY = 0
-			return
-		}
 		v.memBufState.liveEdgeBase++
 		liveEdgeAdvanced = true
 	}
