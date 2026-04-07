@@ -44,6 +44,11 @@ type ContentReader interface {
 	// Use this for performance-sensitive calculations.
 	MemoryBufferOffset() int64
 
+	// DiskStoredLinesBelow returns the count of disk-resident lines whose
+	// global index is strictly less than the given index. Used by scroll
+	// math to count scrollable history without counting sparse gaps.
+	DiskStoredLinesBelow(globalIdx int64) int64
+
 	// TotalLines returns the total number of lines currently in memory.
 	TotalLines() int64
 
@@ -176,6 +181,17 @@ func (r *MemoryBufferReader) GlobalOffset() int64 {
 // consider in-memory content (e.g., physical line counting).
 func (r *MemoryBufferReader) MemoryBufferOffset() int64 {
 	return r.buffer.GlobalOffset()
+}
+
+// DiskStoredLinesBelow returns the count of disk-resident lines whose
+// global index is strictly less than the given index. Used by the scroll
+// manager to compute scrollable history without counting sparse gaps.
+// Without a PageStore, returns 0 (no disk content).
+func (r *MemoryBufferReader) DiskStoredLinesBelow(globalIdx int64) int64 {
+	if r.pageStore == nil {
+		return 0
+	}
+	return r.pageStore.StoredLineCountBelow(globalIdx)
 }
 
 // TotalLines returns the total number of lines currently in memory.

@@ -144,13 +144,15 @@ func (sm *ScrollManager) MaxScrollOffset() int64 {
 
 // TotalPhysicalLines returns the total number of physical lines at current width.
 // Uses cached PhysicalLineIndex for O(1) performance.
-// Disk content (before MemoryBufferOffset) is estimated at 1 physical line per logical line.
+// Disk content (before MemoryBufferOffset) is counted via the reader's
+// DiskStoredLinesBelow, which excludes sparse gap indices — without this,
+// scroll math overcounts by every phantom blank in pageStore.
 func (sm *ScrollManager) TotalPhysicalLines() int64 {
-	globalOffset := sm.reader.GlobalOffset()
 	memOffset := sm.reader.MemoryBufferOffset()
 
-	// Estimate disk content (before memory): 1 physical line per logical line
-	diskLines := memOffset - globalOffset
+	// Disk content (before memory): count actually-stored lines, not the
+	// span of the global-index range.
+	diskLines := sm.reader.DiskStoredLinesBelow(memOffset)
 
 	sm.ensureIndexValid()
 	return diskLines + sm.index.TotalPhysicalLines()

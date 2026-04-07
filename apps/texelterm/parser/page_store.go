@@ -676,6 +676,30 @@ func (ps *PageStore) StoredLineCount() int64 {
 	return ps.totalLineCount
 }
 
+// StoredLineCountBelow returns the number of stored lines whose globalIdx
+// is strictly less than the given index. Used by scroll math to count the
+// actual scrollable disk content (excluding sparse gaps), so the viewport
+// doesn't think there are ~60K phantom rows above when most of the
+// global-index range below memBuf is gaps.
+func (ps *PageStore) StoredLineCountBelow(globalIdx int64) int64 {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	// Binary search for the first pageIndex entry with globalIdx >= the
+	// argument. The result's lower bound is the count of entries strictly
+	// less than globalIdx.
+	n := len(ps.pageIndex)
+	lo, hi := 0, n
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if ps.pageIndex[mid].globalIdx < globalIdx {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return int64(lo)
+}
+
 // Close flushes the current page and closes the store.
 func (ps *PageStore) Close() error {
 	ps.mu.Lock()
