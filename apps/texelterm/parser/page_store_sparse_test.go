@@ -40,5 +40,37 @@ func TestPageStore_StoredLineCountVsLineCount(t *testing.T) {
 	}
 }
 
-// Ensure mkLine and time are used by later tasks — suppress unused-import errors.
-var _ = time.Now
+func TestPageStore_RebuildPopulatesGlobalIdx(t *testing.T) {
+	// Create a store, append some lines via the old API (we'll replace
+	// this in a later task, but for now it works because the data is dense).
+	dir := t.TempDir()
+	cfg := DefaultPageStoreConfig(filepath.Join(dir, "hist"), "rebuild-test")
+
+	ps, err := CreatePageStore(cfg)
+	if err != nil {
+		t.Fatalf("CreatePageStore: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := ps.AppendLineWithTimestamp(mkLine("line"), time.Now()); err != nil {
+			t.Fatalf("AppendLineWithTimestamp: %v", err)
+		}
+	}
+	ps.Close()
+
+	// Reopen: rebuildIndex must populate globalIdx on each pageIndexEntry.
+	ps2, err := OpenPageStore(cfg)
+	if err != nil {
+		t.Fatalf("OpenPageStore: %v", err)
+	}
+	t.Cleanup(func() { ps2.Close() })
+
+	if got := ps2.LineCount(); got != 5 {
+		t.Errorf("LineCount after reopen: got %d, want 5", got)
+	}
+	for i := int64(0); i < 5; i++ {
+		if ps2.pageIndex[i].globalIdx != i {
+			t.Errorf("pageIndex[%d].globalIdx: got %d, want %d",
+				i, ps2.pageIndex[i].globalIdx, i)
+		}
+	}
+}

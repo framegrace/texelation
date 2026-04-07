@@ -115,8 +115,9 @@ type PageStore struct {
 	mu sync.RWMutex
 }
 
-// pageIndexEntry tracks which page contains each line.
+// pageIndexEntry tracks which page contains each line, keyed by global index.
 type pageIndexEntry struct {
+	globalIdx    int64  // Global line index this entry represents
 	pageID       uint64 // Page containing this line
 	offsetInPage int    // Line's index within the page (0-based)
 }
@@ -245,9 +246,11 @@ func (ps *PageStore) rebuildIndex() error {
 			return fmt.Errorf("failed to read page %d header: %w", pi.id, err)
 		}
 
+		baseGlobal := int64(page.Header.FirstGlobalIdx)
 		// Add index entries for each line in this page
 		for i := uint32(0); i < page.Header.LineCount; i++ {
 			ps.pageIndex = append(ps.pageIndex, pageIndexEntry{
+				globalIdx:    baseGlobal + int64(i),
 				pageID:       pi.id,
 				offsetInPage: int(i),
 			})
@@ -261,7 +264,13 @@ func (ps *PageStore) rebuildIndex() error {
 		}
 	}
 
-	ps.nextGlobalIdx = ps.totalLineCount
+	// Set nextGlobalIdx to the logical end (highest stored globalIdx + 1).
+	if len(ps.pageIndex) > 0 {
+		last := ps.pageIndex[len(ps.pageIndex)-1]
+		ps.nextGlobalIdx = last.globalIdx + 1
+	} else {
+		ps.nextGlobalIdx = 0
+	}
 
 	return nil
 }
@@ -453,6 +462,7 @@ func (ps *PageStore) AppendLineWithTimestamp(line *LogicalLine, timestamp time.T
 
 	// Update index
 	ps.pageIndex = append(ps.pageIndex, pageIndexEntry{
+		globalIdx:    ps.nextGlobalIdx,
 		pageID:       ps.currentPage.Header.PageID,
 		offsetInPage: int(ps.currentPage.Header.LineCount) - 1,
 	})
