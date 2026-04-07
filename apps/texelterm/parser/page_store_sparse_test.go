@@ -92,3 +92,72 @@ func TestPageStore_RebuildPopulatesGlobalIdx(t *testing.T) {
 		}
 	}
 }
+
+func TestPageStore_AppendWithGlobalIdx_Dense(t *testing.T) {
+	ps := newTestPageStore(t)
+
+	for i := int64(0); i < 5; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("line"), time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx(%d): %v", i, err)
+		}
+	}
+
+	if got := ps.LineCount(); got != 5 {
+		t.Errorf("LineCount: got %d, want 5", got)
+	}
+	if got := ps.StoredLineCount(); got != 5 {
+		t.Errorf("StoredLineCount: got %d, want 5", got)
+	}
+}
+
+func TestPageStore_AppendWithGlobalIdx_Gap(t *testing.T) {
+	ps := newTestPageStore(t)
+
+	// Append 0..2, then jump to 100..101.
+	for i := int64(0); i < 3; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("early"), time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx(%d): %v", i, err)
+		}
+	}
+	for i := int64(100); i < 102; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("late"), time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx(%d): %v", i, err)
+		}
+	}
+
+	if got := ps.LineCount(); got != 102 {
+		t.Errorf("LineCount: got %d, want 102", got)
+	}
+	if got := ps.StoredLineCount(); got != 5 {
+		t.Errorf("StoredLineCount: got %d, want 5", got)
+	}
+
+	// Verify a new page was created at the gap boundary.
+	// We expect pageID 1 holds globalIdx 0..2 and pageID 2 holds 100..101
+	// (or similar — exact pageIDs depend on startNewPage behavior).
+	if len(ps.pageIndex) != 5 {
+		t.Fatalf("pageIndex length: got %d, want 5", len(ps.pageIndex))
+	}
+	if ps.pageIndex[0].pageID == ps.pageIndex[3].pageID {
+		t.Errorf("expected pageID split between idx=2 and idx=100, but both are on page %d",
+			ps.pageIndex[0].pageID)
+	}
+	if ps.pageIndex[3].globalIdx != 100 {
+		t.Errorf("pageIndex[3].globalIdx: got %d, want 100", ps.pageIndex[3].globalIdx)
+	}
+}
+
+func TestPageStore_AppendWithGlobalIdx_MustIncrease(t *testing.T) {
+	ps := newTestPageStore(t)
+
+	if err := ps.AppendLineWithGlobalIdx(10, mkLine("a"), time.Now()); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	// Appending an index <= max stored must fail.
+	if err := ps.AppendLineWithGlobalIdx(10, mkLine("b"), time.Now()); err == nil {
+		t.Errorf("expected error on duplicate globalIdx, got nil")
+	}
+	if err := ps.AppendLineWithGlobalIdx(5, mkLine("c"), time.Now()); err == nil {
+		t.Errorf("expected error on decreasing globalIdx, got nil")
+	}
+}

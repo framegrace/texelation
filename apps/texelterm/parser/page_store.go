@@ -473,6 +473,64 @@ func (ps *PageStore) AppendLineWithTimestamp(line *LogicalLine, timestamp time.T
 	return nil
 }
 
+// AppendLineWithGlobalIdx writes a line at the specified global index.
+// globalIdx must be strictly greater than every previously stored globalIdx.
+// If globalIdx is not contiguous with the current page, the current page is
+// flushed and a new page is started anchored at globalIdx.
+func (ps *PageStore) AppendLineWithGlobalIdx(globalIdx int64, line *LogicalLine, timestamp time.Time) error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	if globalIdx < ps.nextGlobalIdx {
+		return fmt.Errorf("globalIdx %d must be >= nextGlobalIdx %d", globalIdx, ps.nextGlobalIdx)
+	}
+
+	// Determine if we need a fresh page: no current page, or a gap, or we
+	// simply need to start fresh because the current page was flushed.
+	needNewPage := ps.currentPage == nil
+	if !needNewPage {
+		expectedNext := int64(ps.currentPage.Header.FirstGlobalIdx) + int64(ps.currentPage.Header.LineCount)
+		if globalIdx != expectedNext {
+			// Gap — flush and start a new page anchored at globalIdx.
+			if err := ps.flushCurrentPage(); err != nil {
+				return err
+			}
+			needNewPage = true
+		}
+	}
+
+	if needNewPage {
+		ps.currentPage = NewPage(ps.nextPageID, uint64(globalIdx))
+		ps.nextPageID++
+	}
+
+	// Try to add line to current page.
+	if !ps.currentPage.AddLine(line, timestamp, 0) {
+		// Page is full — flush and start a new page anchored at globalIdx.
+		if err := ps.flushCurrentPage(); err != nil {
+			return err
+		}
+		ps.currentPage = NewPage(ps.nextPageID, uint64(globalIdx))
+		ps.nextPageID++
+		if !ps.currentPage.AddLine(line, timestamp, 0) {
+			// Oversized line — add anyway (same behavior as the old path).
+			ps.currentPage.AddLine(line, timestamp, 0)
+		}
+	}
+
+	// Update index.
+	ps.pageIndex = append(ps.pageIndex, pageIndexEntry{
+		globalIdx:    globalIdx,
+		pageID:       ps.currentPage.Header.PageID,
+		offsetInPage: int(ps.currentPage.Header.LineCount) - 1,
+	})
+
+	ps.totalLineCount++
+	ps.nextGlobalIdx = globalIdx + 1
+
+	return nil
+}
+
 // UpdateLine updates an existing line by global index.
 // If the line is in the current (unflushed) page, updates in-place.
 // If the line is in a flushed page, reloads, updates, and rewrites the page atomically.
