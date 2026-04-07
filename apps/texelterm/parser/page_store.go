@@ -239,7 +239,10 @@ func (ps *PageStore) rebuildIndex() error {
 		return pages[i].id < pages[j].id
 	})
 
-	// Read each page header to build index
+	// Read each page header to build index. Pages may be out of pageID-vs-
+	// globalIdx order (out-of-order inserts during writeLineLocked produce
+	// new pages with higher pageIDs but lower anchors), so we sort the
+	// resulting pageIndex by globalIdx after collecting all entries.
 	for _, pi := range pages {
 		page, err := ps.readPageHeader(pi.path)
 		if err != nil {
@@ -247,7 +250,6 @@ func (ps *PageStore) rebuildIndex() error {
 		}
 
 		baseGlobal := int64(page.Header.FirstGlobalIdx)
-		// Add index entries for each line in this page
 		for i := uint32(0); i < page.Header.LineCount; i++ {
 			ps.pageIndex = append(ps.pageIndex, pageIndexEntry{
 				globalIdx:    baseGlobal + int64(i),
@@ -264,7 +266,13 @@ func (ps *PageStore) rebuildIndex() error {
 		}
 	}
 
+	// Sort pageIndex by globalIdx so binary search works.
+	sort.Slice(ps.pageIndex, func(i, j int) bool {
+		return ps.pageIndex[i].globalIdx < ps.pageIndex[j].globalIdx
+	})
+
 	// Set nextGlobalIdx to the logical end (highest stored globalIdx + 1).
+	// After sorting, the last entry has the highest globalIdx.
 	if len(ps.pageIndex) > 0 {
 		last := ps.pageIndex[len(ps.pageIndex)-1]
 		ps.nextGlobalIdx = last.globalIdx + 1
@@ -425,61 +433,104 @@ func (ps *PageStore) pageFilePath(pageID uint64) string {
 }
 
 // AppendLineWithGlobalIdx writes a line at the specified global index.
-// globalIdx must be strictly greater than every previously stored globalIdx.
-// If globalIdx is not contiguous with the current page, the current page is
-// flushed and a new page is started anchored at globalIdx.
+// Supports three cases:
+//   - globalIdx already stored: updates the existing line in place
+//   - globalIdx == currentPage end: appends to current page
+//   - any other globalIdx: flushes current page, creates a new page anchored
+//     at globalIdx, and stores the line there (out-of-order insert)
+//
+// Out-of-order insert support is required by the WAL checkpoint replay path:
+// when a LineModify entry targets an index that was never appended (because
+// ensureLineNotifyGaps no longer pre-creates gap rows), the checkpoint must
+// be able to fall back to creating the line at its true globalIdx.
 func (ps *PageStore) AppendLineWithGlobalIdx(globalIdx int64, line *LogicalLine, timestamp time.Time) error {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+	return ps.writeLineLocked(globalIdx, line, timestamp)
+}
 
-	if globalIdx < ps.nextGlobalIdx {
-		return fmt.Errorf("globalIdx %d must be >= nextGlobalIdx %d", globalIdx, ps.nextGlobalIdx)
+// writeLineLocked is the inner implementation. Caller must hold ps.mu.Lock.
+func (ps *PageStore) writeLineLocked(globalIdx int64, line *LogicalLine, timestamp time.Time) error {
+	// Case 1: globalIdx already exists — update in place.
+	if entry, ok := ps.findByGlobalIdx(globalIdx); ok {
+		if ps.currentPage != nil && entry.pageID == ps.currentPage.Header.PageID {
+			return ps.currentPage.UpdateLine(entry.offsetInPage, line, timestamp)
+		}
+		return ps.updateLineInFlushedPage(entry.pageID, entry.offsetInPage, line, timestamp)
 	}
 
-	// Determine if we need a fresh page: no current page, or a gap, or we
-	// simply need to start fresh because the current page was flushed.
-	needNewPage := ps.currentPage == nil
-	if !needNewPage {
+	// Case 2: contiguous append to current page.
+	if ps.currentPage != nil {
 		expectedNext := int64(ps.currentPage.Header.FirstGlobalIdx) + int64(ps.currentPage.Header.LineCount)
-		if globalIdx != expectedNext {
-			// Gap — flush and start a new page anchored at globalIdx.
-			if err := ps.flushCurrentPage(); err != nil {
-				return err
+		if globalIdx == expectedNext {
+			if !ps.currentPage.AddLine(line, timestamp, 0) {
+				// Page is full — flush and create a new page anchored at globalIdx.
+				if err := ps.flushCurrentPage(); err != nil {
+					return err
+				}
+				ps.currentPage = NewPage(ps.nextPageID, uint64(globalIdx))
+				ps.nextPageID++
+				if !ps.currentPage.AddLine(line, timestamp, 0) {
+					// Oversized line — add anyway (same behavior as the old path).
+					ps.currentPage.AddLine(line, timestamp, 0)
+				}
 			}
-			needNewPage = true
+			ps.recordIndexEntry(globalIdx)
+			return nil
 		}
 	}
 
-	if needNewPage {
-		ps.currentPage = NewPage(ps.nextPageID, uint64(globalIdx))
-		ps.nextPageID++
-	}
-
-	// Try to add line to current page.
-	if !ps.currentPage.AddLine(line, timestamp, 0) {
-		// Page is full — flush and start a new page anchored at globalIdx.
+	// Case 3: out-of-order or gap — flush current page, create a new one anchored
+	// at globalIdx, store the line. The new page will hold this single line until
+	// either a contiguous follow-up extends it or it's flushed by another insert.
+	if ps.currentPage != nil {
 		if err := ps.flushCurrentPage(); err != nil {
 			return err
 		}
-		ps.currentPage = NewPage(ps.nextPageID, uint64(globalIdx))
-		ps.nextPageID++
-		if !ps.currentPage.AddLine(line, timestamp, 0) {
-			// Oversized line — add anyway (same behavior as the old path).
-			ps.currentPage.AddLine(line, timestamp, 0)
-		}
 	}
+	ps.currentPage = NewPage(ps.nextPageID, uint64(globalIdx))
+	ps.nextPageID++
+	if !ps.currentPage.AddLine(line, timestamp, 0) {
+		// Oversized line — add anyway.
+		ps.currentPage.AddLine(line, timestamp, 0)
+	}
+	ps.recordIndexEntry(globalIdx)
+	return nil
+}
 
-	// Update index.
-	ps.pageIndex = append(ps.pageIndex, pageIndexEntry{
+// recordIndexEntry inserts a new entry into pageIndex (sorted by globalIdx)
+// for the line that was just added to ps.currentPage. Caller must hold ps.mu.
+func (ps *PageStore) recordIndexEntry(globalIdx int64) {
+	entry := pageIndexEntry{
 		globalIdx:    globalIdx,
 		pageID:       ps.currentPage.Header.PageID,
 		offsetInPage: int(ps.currentPage.Header.LineCount) - 1,
-	})
+	}
+
+	// Find insertion point via binary search (pageIndex is sorted by globalIdx).
+	n := len(ps.pageIndex)
+	lo, hi := 0, n
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if ps.pageIndex[mid].globalIdx < globalIdx {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+
+	if lo == n {
+		ps.pageIndex = append(ps.pageIndex, entry)
+	} else {
+		ps.pageIndex = append(ps.pageIndex, pageIndexEntry{})
+		copy(ps.pageIndex[lo+1:], ps.pageIndex[lo:])
+		ps.pageIndex[lo] = entry
+	}
 
 	ps.totalLineCount++
-	ps.nextGlobalIdx = globalIdx + 1
-
-	return nil
+	if globalIdx+1 > ps.nextGlobalIdx {
+		ps.nextGlobalIdx = globalIdx + 1
+	}
 }
 
 // findByGlobalIdx does a binary search on pageIndex for the entry matching

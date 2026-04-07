@@ -560,36 +560,29 @@ func (v *VTerm) ensureLiveEdgeBaseConsistency() {
 	}
 }
 
-// ensureLineNotifyGaps calls EnsureLine and notifies the persistence layer
-// about ALL newly created lines, including both intermediate gap lines and
-// the target line itself. This ensures every new line gets a LineWrite WAL
-// entry before any other operation can advance nextGlobalIdx past it.
+// ensureLineNotifyGaps materializes the memBuf slot at globalLine so a
+// subsequent cell write has somewhere to go. memBuf's ring buffer is
+// physically contiguous, so EnsureLine creates intermediate slots as
+// empty placeholders along the way — but those intermediate slots are
+// NOT notified to the persistence layer.
 //
-// Previously, the target line was excluded (only gap lines notified) under
-// the assumption that the caller would persist it. But with adaptive
-// persistence, the caller's write may be deferred (Debounced/BestEffort mode),
-// and by the time it's flushed, nextGlobalIdx has advanced — causing the
-// line to be classified as LineModify instead of LineWrite. During checkpoint,
-// missing LineWrite entries cause the PageStore to have fewer lines than
-// expected, corrupting reload.
+// Historically, this function notified every newly-created gap slot to
+// keep AdaptivePersistence.pendingLines dense and contiguous. The dense
+// invariant was a workaround for the original positional PageStore,
+// which stored lines at sequential slots and required globalIdx to
+// match the slot position. Without dense pendingLines, the
+// LineWrite/LineModify classification at flush time would diverge from
+// pageStore's positional storage and corrupt checkpoint replay.
+//
+// The sparse PageStore refactor decoupled slot position from globalIdx:
+// AppendLineWithGlobalIdx stores by globalIdx, gaps are first-class,
+// and HasLine/UpdateLine handle non-contiguous indices natively. The
+// dense-pendingLines invariant is no longer required, so we no longer
+// persist phantom blank rows for cursor jumps, screen reflows, or
+// LineFeed advancement. The caller's own NotifyWrite (after the cell
+// write) is the only persistence event.
 func (v *VTerm) ensureLineNotifyGaps(mb *MemoryBuffer, globalLine int64) {
-	prevEnd := mb.GlobalEnd()
 	mb.EnsureLine(globalLine)
-	newEnd := mb.GlobalEnd()
-
-	// Notify the persistence layer for every gap line newly created.
-	// This maintains the dense-pendingLines invariant required by the
-	// positional pageStore contract: every globalIdx flushed via
-	// wal.Append must correspond to a real pageStore slot, otherwise
-	// later LineModify entries fall out of bounds during checkpoint.
-	// The cost is phantom blank stored entries on cursor jumps and
-	// reflows. The big accumulation source (\e[2J close-time loop)
-	// is filtered separately in CloseMemoryBuffer and ClearScreenMode.
-	if v.memBufState.persistence != nil && newEnd > prevEnd {
-		for idx := prevEnd; idx < newEnd; idx++ {
-			v.memBufState.persistence.NotifyWrite(idx)
-		}
-	}
 }
 
 // memoryBufferPlaceChar writes a character at the current cursor position.

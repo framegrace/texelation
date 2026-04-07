@@ -727,43 +727,19 @@ func (w *WriteAheadLog) recover() error {
 		return nil // Clean state
 	}
 
-	// Replay entries to PageStore using two-pass approach (same as checkpoint).
-	// Existence is checked per-globalIdx via HasLine: PageStore is sparse, so
-	// "logical end" (LineCount) is not the same as "this index is stored".
-
-	// Pass 1: Append LineWrite entries for indices not yet in PageStore.
-	for _, entry := range entries {
-		if entry.Type != EntryTypeLineWrite || entry.Line == nil {
-			continue
-		}
-		lineIdx := int64(entry.GlobalLineIdx)
-		if w.pageStore.HasLine(lineIdx) {
-			// Already present (from a prior checkpoint); Pass 2 will update it.
-			continue
-		}
-		if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
-			return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
-		}
-	}
-
-	// Pass 2: Update existing lines. Both LineModify and LineWrite entries
-	// targeting an already-stored index are applied here.
+	// Replay entries to PageStore in WAL order using the unified write path.
+	// AppendLineWithGlobalIdx handles append, update-in-place, and out-of-order
+	// insert in one operation, so the LATEST WAL entry for each globalIdx wins.
 	for _, entry := range entries {
 		if entry.Line == nil {
 			continue
 		}
-		if entry.Type != EntryTypeLineModify && entry.Type != EntryTypeLineWrite {
+		if entry.Type != EntryTypeLineWrite && entry.Type != EntryTypeLineModify {
 			continue
 		}
 		lineIdx := int64(entry.GlobalLineIdx)
-		if !w.pageStore.HasLine(lineIdx) {
-			// A LineModify for an index that was never appended (e.g. the
-			// corresponding LineWrite is missing from this WAL segment).
-			// Skipping is safer than aborting recovery.
-			continue
-		}
-		if err := w.pageStore.UpdateLine(lineIdx, entry.Line, entry.Timestamp); err != nil {
-			return fmt.Errorf("failed to update line %d in PageStore: %w", entry.GlobalLineIdx, err)
+		if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
+			return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
 		}
 	}
 
@@ -892,40 +868,21 @@ func (w *WriteAheadLog) checkpointLocked() error {
 		return fmt.Errorf("failed to read WAL entries: %w", err)
 	}
 
-	// Replay entries to PageStore in two passes:
-	// Pass 1: Process all LINE_WRITE entries (append new lines)
-	// Pass 2: Process all LINE_MODIFY entries (update existing lines)
-	// This ensures modifications can always find their target lines.
-
-	// Pass 1: Append LineWrite entries for indices not already in PageStore.
-	// HasLine is checked explicitly because PageStore is sparse — LineCount
-	// is the logical end, not the stored density.
+	// Replay entries to PageStore in WAL order using the unified write
+	// path. AppendLineWithGlobalIdx now supports out-of-order inserts and
+	// updates, so the previous "Pass 1: appends, Pass 2: modifies" split
+	// is unnecessary. Replaying in WAL order means the LATEST entry for
+	// each globalIdx wins, which is the correct semantic.
 	for _, entry := range entries {
-		if entry.Type != EntryTypeLineWrite || entry.Line == nil {
+		if entry.Line == nil {
+			continue
+		}
+		if entry.Type != EntryTypeLineWrite && entry.Type != EntryTypeLineModify {
 			continue
 		}
 		lineIdx := int64(entry.GlobalLineIdx)
-		if w.pageStore.HasLine(lineIdx) {
-			continue
-		}
 		if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
-			return fmt.Errorf("failed to append line %d to PageStore: %w", entry.GlobalLineIdx, err)
-		}
-	}
-
-	// Pass 2: Update modified lines (now all target lines exist).
-	for _, entry := range entries {
-		if entry.Type != EntryTypeLineModify || entry.Line == nil {
-			continue
-		}
-		lineIdx := int64(entry.GlobalLineIdx)
-		if !w.pageStore.HasLine(lineIdx) {
-			// The target was never appended (missing LineWrite). Skip rather
-			// than abort — the modification is lost but recovery proceeds.
-			continue
-		}
-		if err := w.pageStore.UpdateLine(lineIdx, entry.Line, entry.Timestamp); err != nil {
-			return fmt.Errorf("failed to update line %d in PageStore: %w", entry.GlobalLineIdx, err)
+			return fmt.Errorf("failed to write line %d to PageStore: %w", entry.GlobalLineIdx, err)
 		}
 	}
 

@@ -145,18 +145,39 @@ func TestPageStore_AppendWithGlobalIdx_Gap(t *testing.T) {
 	}
 }
 
-func TestPageStore_AppendWithGlobalIdx_MustIncrease(t *testing.T) {
+func TestPageStore_AppendWithGlobalIdx_UpdatesAndOutOfOrder(t *testing.T) {
 	ps := newTestPageStore(t)
 
 	if err := ps.AppendLineWithGlobalIdx(10, mkLine("a"), time.Now()); err != nil {
 		t.Fatalf("first append: %v", err)
 	}
-	// Appending an index <= max stored must fail.
-	if err := ps.AppendLineWithGlobalIdx(10, mkLine("b"), time.Now()); err == nil {
-		t.Errorf("expected error on duplicate globalIdx, got nil")
+
+	// Duplicate globalIdx now updates the existing line in place.
+	if err := ps.AppendLineWithGlobalIdx(10, mkLine("b"), time.Now()); err != nil {
+		t.Errorf("duplicate globalIdx update: %v", err)
 	}
-	if err := ps.AppendLineWithGlobalIdx(5, mkLine("c"), time.Now()); err == nil {
-		t.Errorf("expected error on decreasing globalIdx, got nil")
+	line, _ := ps.ReadLine(10)
+	if line == nil || line.Cells[0].Rune != 'b' {
+		t.Errorf("after update, ReadLine(10) should return %q, got %v", "b", line)
+	}
+
+	// Out-of-order insert at a lower globalIdx now creates a new page anchored
+	// at that index. Required so checkpoint Pass 2 can fall back to creating
+	// lines for LineModify entries whose targets were never appended.
+	if err := ps.AppendLineWithGlobalIdx(5, mkLine("c"), time.Now()); err != nil {
+		t.Errorf("out-of-order insert: %v", err)
+	}
+	line, _ = ps.ReadLine(5)
+	if line == nil || line.Cells[0].Rune != 'c' {
+		t.Errorf("after out-of-order insert, ReadLine(5) should return %q, got %v", "c", line)
+	}
+
+	// LineCount is still the highest stored globalIdx + 1.
+	if got := ps.LineCount(); got != 11 {
+		t.Errorf("LineCount: got %d, want 11", got)
+	}
+	if got := ps.StoredLineCount(); got != 2 {
+		t.Errorf("StoredLineCount: got %d, want 2", got)
 	}
 }
 
