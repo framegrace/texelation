@@ -235,6 +235,41 @@ func TestPageStore_UpdateWithGaps(t *testing.T) {
 	}
 }
 
+func TestPageStore_ReadLineRange_WithGaps(t *testing.T) {
+	ps := newTestPageStore(t)
+
+	for i := int64(0); i < 3; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("early"), time.Now()); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	for i := int64(100); i < 102; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("late"), time.Now()); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+
+	lines, err := ps.ReadLineRange(0, 102)
+	if err != nil {
+		t.Fatalf("ReadLineRange: %v", err)
+	}
+	if len(lines) != 102 {
+		t.Fatalf("ReadLineRange length: got %d, want 102", len(lines))
+	}
+	for i, line := range lines {
+		switch {
+		case i < 3 || i >= 100:
+			if line == nil {
+				t.Errorf("ReadLineRange[%d]: got nil, want line", i)
+			}
+		default:
+			if line != nil {
+				t.Errorf("ReadLineRange[%d]: got line, want nil (gap)", i)
+			}
+		}
+	}
+}
+
 func runesFromCells(cells []Cell) []rune {
 	out := make([]rune, len(cells))
 	for i, c := range cells {

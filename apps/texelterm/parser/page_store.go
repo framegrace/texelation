@@ -613,49 +613,58 @@ func (ps *PageStore) ReadLine(globalIdx int64) (*LogicalLine, error) {
 	return page.GetLine(entry.offsetInPage), nil
 }
 
-// ReadLineRange reads a range of lines [start, end).
-// Returns lines that exist within the range.
+// ReadLineRange reads a range of lines [start, end) by global index.
+// Returns a slice of length (end - start), with nil entries for gaps
+// or out-of-range indices. Caller can index directly as result[globalIdx - start].
 func (ps *PageStore) ReadLineRange(start, end int64) ([]*LogicalLine, error) {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
-	// Clamp range
 	if start < 0 {
 		start = 0
 	}
-	if end > ps.totalLineCount {
-		end = ps.totalLineCount
-	}
-	if start >= end {
+	if end <= start {
 		return nil, nil
 	}
 
-	result := make([]*LogicalLine, 0, end-start)
+	result := make([]*LogicalLine, end-start)
 
-	// Group reads by page for efficiency
+	// Find the first stored entry with globalIdx >= start.
+	lo, hi := 0, len(ps.pageIndex)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if ps.pageIndex[mid].globalIdx < start {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+
+	// Walk entries in order, loading pages lazily and batching reads.
 	var currentPageID uint64
 	var currentPage *Page
-
-	for i := start; i < end; i++ {
+	for i := lo; i < len(ps.pageIndex); i++ {
 		entry := ps.pageIndex[i]
+		if entry.globalIdx >= end {
+			break
+		}
 
-		// Check if line is in current (unflushed) page
+		var line *LogicalLine
 		if ps.currentPage != nil && entry.pageID == ps.currentPage.Header.PageID {
-			result = append(result, ps.currentPage.GetLine(entry.offsetInPage))
-			continue
-		}
-
-		// Load page if needed
-		if currentPage == nil || entry.pageID != currentPageID {
-			var err error
-			currentPage, err = ps.loadPage(entry.pageID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load page %d: %w", entry.pageID, err)
+			line = ps.currentPage.GetLine(entry.offsetInPage)
+		} else {
+			if currentPage == nil || entry.pageID != currentPageID {
+				p, err := ps.loadPage(entry.pageID)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load page %d: %w", entry.pageID, err)
+				}
+				currentPage = p
+				currentPageID = entry.pageID
 			}
-			currentPageID = entry.pageID
+			line = currentPage.GetLine(entry.offsetInPage)
 		}
 
-		result = append(result, currentPage.GetLine(entry.offsetInPage))
+		result[entry.globalIdx-start] = line
 	}
 
 	return result, nil
