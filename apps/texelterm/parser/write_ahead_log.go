@@ -738,7 +738,7 @@ func (w *WriteAheadLog) recover() error {
 			lineIdx := int64(entry.GlobalLineIdx)
 			if lineIdx >= pageStoreLineCount {
 				// This is a new line - append it
-				if err := w.pageStore.AppendLineWithTimestamp(entry.Line, entry.Timestamp); err != nil {
+				if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
 					return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
 				}
 				pageStoreLineCount++ // Track new count for subsequent entries
@@ -893,7 +893,7 @@ func (w *WriteAheadLog) checkpointLocked() error {
 	// Pass 1: Write all new lines
 	for _, entry := range entries {
 		if entry.Type == EntryTypeLineWrite && entry.Line != nil {
-			if err := w.pageStore.AppendLineWithTimestamp(entry.Line, entry.Timestamp); err != nil {
+			if err := w.pageStore.AppendLineWithGlobalIdx(int64(entry.GlobalLineIdx), entry.Line, entry.Timestamp); err != nil {
 				return fmt.Errorf("failed to append line %d to PageStore: %w", entry.GlobalLineIdx, err)
 			}
 		}
@@ -1204,23 +1204,10 @@ func (w *WriteAheadLog) Close() error {
 	return psErr
 }
 
+// AppendLineWithGlobalIdx implements HistoryWriter interface.
+func (w *WriteAheadLog) AppendLineWithGlobalIdx(globalIdx int64, line *LogicalLine, timestamp time.Time) error {
+	return w.Append(globalIdx, line, timestamp)
+}
+
 // Compile-time interface check
-var _ HistoryWriterWithTimestamp = (*WriteAheadLog)(nil)
-
-// AppendLine implements HistoryWriter interface.
-func (w *WriteAheadLog) AppendLine(line *LogicalLine) error {
-	w.mu.Lock()
-	idx := w.nextGlobalIdx
-	w.mu.Unlock()
-
-	return w.Append(idx, line, w.nowFunc())
-}
-
-// AppendLineWithTimestamp implements HistoryWriterWithTimestamp interface.
-func (w *WriteAheadLog) AppendLineWithTimestamp(line *LogicalLine, timestamp time.Time) error {
-	w.mu.Lock()
-	idx := w.nextGlobalIdx
-	w.mu.Unlock()
-
-	return w.Append(idx, line, timestamp)
-}
+var _ HistoryWriter = (*WriteAheadLog)(nil)

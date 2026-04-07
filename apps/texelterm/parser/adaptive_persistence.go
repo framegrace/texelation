@@ -594,7 +594,7 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 		if ap.wal != nil {
 			err = ap.wal.Append(e.lineIdx, e.line, ap.nowFunc())
 		} else {
-			err = ap.disk.AppendLine(e.line)
+			err = ap.diskWriteOrUpdate(e.lineIdx, e.line, ap.nowFunc())
 		}
 		if err != nil {
 			if firstErr == nil {
@@ -681,7 +681,7 @@ func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
 	if ap.wal != nil {
 		err = ap.wal.Append(lineIdx, lineCopy, ap.nowFunc())
 	} else {
-		err = ap.disk.AppendLine(lineCopy)
+		err = ap.diskWriteOrUpdate(lineIdx, lineCopy, ap.nowFunc())
 	}
 
 	if err != nil {
@@ -700,6 +700,26 @@ func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
 	}
 
 	return nil
+}
+
+// diskWriteOrUpdate writes a line to the disk PageStore (no-WAL path).
+// If the line already exists at lineIdx, it is updated via UpdateLine.
+// If lineIdx points to a gap (line count exceeds lineIdx but line is absent),
+// the write is silently skipped — the line was never stored and cannot be
+// back-filled without WAL support.
+func (ap *AdaptivePersistence) diskWriteOrUpdate(lineIdx int64, line *LogicalLine, ts time.Time) error {
+	if lineIdx < ap.disk.LineCount() {
+		existing, err := ap.disk.ReadLine(lineIdx)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			// Gap — line was never stored; skip silently.
+			return nil
+		}
+		return ap.disk.UpdateLine(lineIdx, line, ts)
+	}
+	return ap.disk.AppendLineWithGlobalIdx(lineIdx, line, ts)
 }
 
 // startIdleMonitor starts the background goroutine for idle detection.

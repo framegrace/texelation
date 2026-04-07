@@ -424,55 +424,6 @@ func (ps *PageStore) pageFilePath(pageID uint64) string {
 	return filepath.Join(ps.pagesDir, fmt.Sprintf("%08d.page", pageID))
 }
 
-// AppendLine writes a logical line to the page store.
-// Uses time.Now() as the timestamp.
-func (ps *PageStore) AppendLine(line *LogicalLine) error {
-	return ps.AppendLineWithTimestamp(line, time.Now())
-}
-
-// AppendLineWithTimestamp writes a line with an explicit timestamp.
-func (ps *PageStore) AppendLineWithTimestamp(line *LogicalLine, timestamp time.Time) error {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-
-	// Ensure we have a current page
-	if ps.currentPage == nil {
-		if err := ps.startNewPage(); err != nil {
-			return err
-		}
-	}
-
-	// Try to add line to current page
-	if !ps.currentPage.AddLine(line, timestamp, 0) {
-		// Page is full, flush and start new page
-		if err := ps.flushCurrentPage(); err != nil {
-			return err
-		}
-		if err := ps.startNewPage(); err != nil {
-			return err
-		}
-
-		// Add to new page (should always succeed for a fresh page)
-		if !ps.currentPage.AddLine(line, timestamp, 0) {
-			// Line is too large for a single page - this is a problem
-			// For now, we add it anyway (may exceed 64KB)
-			ps.currentPage.AddLine(line, timestamp, 0)
-		}
-	}
-
-	// Update index
-	ps.pageIndex = append(ps.pageIndex, pageIndexEntry{
-		globalIdx:    ps.nextGlobalIdx,
-		pageID:       ps.currentPage.Header.PageID,
-		offsetInPage: int(ps.currentPage.Header.LineCount) - 1,
-	})
-
-	ps.totalLineCount++
-	ps.nextGlobalIdx++
-
-	return nil
-}
-
 // AppendLineWithGlobalIdx writes a line at the specified global index.
 // globalIdx must be strictly greater than every previously stored globalIdx.
 // If globalIdx is not contiguous with the current page, the current page is

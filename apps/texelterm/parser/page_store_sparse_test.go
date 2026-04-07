@@ -44,8 +44,8 @@ func TestPageStore_LineCountIsLogicalEnd(t *testing.T) {
 	ps := newTestPageStore(t)
 
 	for i := 0; i < 10; i++ {
-		if err := ps.AppendLineWithTimestamp(mkLine("x"), time.Now()); err != nil {
-			t.Fatalf("AppendLineWithTimestamp: %v", err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), mkLine("x"), time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx: %v", err)
 		}
 	}
 
@@ -59,8 +59,6 @@ func TestPageStore_LineCountIsLogicalEnd(t *testing.T) {
 }
 
 func TestPageStore_RebuildPopulatesGlobalIdx(t *testing.T) {
-	// Create a store, append some lines via the old API (we'll replace
-	// this in a later task, but for now it works because the data is dense).
 	dir := t.TempDir()
 	cfg := DefaultPageStoreConfig(filepath.Join(dir, "hist"), "rebuild-test")
 
@@ -68,9 +66,9 @@ func TestPageStore_RebuildPopulatesGlobalIdx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePageStore: %v", err)
 	}
-	for i := 0; i < 5; i++ {
-		if err := ps.AppendLineWithTimestamp(mkLine("line"), time.Now()); err != nil {
-			t.Fatalf("AppendLineWithTimestamp: %v", err)
+	for i := int64(0); i < 5; i++ {
+		if err := ps.AppendLineWithGlobalIdx(i, mkLine("line"), time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx: %v", err)
 		}
 	}
 	ps.Close()

@@ -401,8 +401,8 @@ func TestWAL_HistoryWriterInterface(t *testing.T) {
 	var hw HistoryWriter = wal
 
 	line := NewLogicalLineFromCells([]Cell{{Rune: 'T'}, {Rune: 'e'}, {Rune: 's'}, {Rune: 't'}})
-	if err := hw.AppendLine(line); err != nil {
-		t.Fatalf("AppendLine failed: %v", err)
+	if err := hw.AppendLineWithGlobalIdx(hw.LineCount(), line, time.Now()); err != nil {
+		t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 	}
 
 	// In our WAL design, data is only visible after checkpoint

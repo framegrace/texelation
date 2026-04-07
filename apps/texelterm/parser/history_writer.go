@@ -14,19 +14,21 @@ import "time"
 // HistoryWriter is the interface for disk persistence backends.
 // PageStore is the primary implementation using page-based storage.
 type HistoryWriter interface {
-	// AppendLine writes a logical line to the storage.
-	// Uses the current time as the timestamp.
-	AppendLine(line *LogicalLine) error
+	// AppendLineWithGlobalIdx writes a logical line at the given global index.
+	// The global index must be >= LineCount() (append) or equal to an existing
+	// index (overwrite via UpdateLine). Gaps between LineCount() and globalIdx
+	// are allowed; those slots will read as nil.
+	AppendLineWithGlobalIdx(globalIdx int64, line *LogicalLine, timestamp time.Time) error
 
 	// ReadLine reads a single line by global index.
 	// Returns nil if index is out of bounds.
 	ReadLine(index int64) (*LogicalLine, error)
 
 	// ReadLineRange reads a range of lines [start, end).
-	// Returns lines that exist within the range.
+	// Returns a dense slice of length (end-start) with nil entries for gaps.
 	ReadLineRange(start, end int64) ([]*LogicalLine, error)
 
-	// LineCount returns the total number of lines stored.
+	// LineCount returns the total number of lines stored (logical end index).
 	LineCount() int64
 
 	// Close finalizes storage and releases resources.
@@ -40,9 +42,6 @@ type HistoryWriter interface {
 // PageStore implements this interface.
 type HistoryWriterWithTimestamp interface {
 	HistoryWriter
-
-	// AppendLineWithTimestamp writes a line with an explicit timestamp.
-	AppendLineWithTimestamp(line *LogicalLine, timestamp time.Time) error
 
 	// ReadLineWithTimestamp reads a line and its timestamp.
 	ReadLineWithTimestamp(index int64) (*LogicalLine, time.Time, error)
