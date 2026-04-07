@@ -1448,10 +1448,13 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 				newCursorY = 0
 			}
 
-			// But also make sure we're not showing beyond GlobalEnd
-			// The viewport should show lines from liveEdgeBase to liveEdgeBase + height - 1
-			// This should not exceed GlobalEnd - 1
-			maxLiveEdgeBase := globalEnd - int64(height)
+			// But also make sure we're not showing beyond GlobalEnd.
+			// The viewport shows rows [liveEdgeBase, liveEdgeBase+height).
+			// The bottom row's globalIdx may equal GlobalEnd (the
+			// "next write" position with no backing line yet) — that's
+			// the cursor's resting position when waiting for input.
+			// So the highest valid liveEdgeBase is GlobalEnd - height + 1.
+			maxLiveEdgeBase := globalEnd - int64(height) + 1
 			if maxLiveEdgeBase < globalOffset {
 				maxLiveEdgeBase = globalOffset
 			}
