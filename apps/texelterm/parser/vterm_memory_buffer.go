@@ -383,8 +383,15 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 
 	restoreStart := time.Now()
 
-	// Restore the lines
-	mb.RestoreLines(startIdx, lines)
+	// Restore the lines, skipping nil entries (gaps in sparse PageStore).
+	// Using SetLine per entry so that gap positions are not populated with
+	// bogus blank lines; only lines that were actually stored are loaded.
+	for i, line := range lines {
+		if line == nil {
+			continue
+		}
+		mb.SetLine(startIdx+int64(i), line)
+	}
 
 	// The live edge should still be at the original lineCount (after all history)
 	// The new shell output will start there

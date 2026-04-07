@@ -16,6 +16,11 @@
 
 package parser
 
+// blankLine returns an empty LogicalLine suitable for rendering gap positions.
+func blankLine() *LogicalLine {
+	return &LogicalLine{Cells: nil}
+}
+
 // ContentReader abstracts read access to terminal content.
 // This interface allows ViewportWindow to work with different storage backends.
 type ContentReader interface {
@@ -116,6 +121,11 @@ func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 	// Case 2: Entire range is on disk (before memory)
 	if end <= memOffset {
 		lines, _ := r.pageStore.ReadLineRange(start, end)
+		for i, line := range lines {
+			if line == nil {
+				lines[i] = blankLine()
+			}
+		}
 		return lines
 	}
 
@@ -125,6 +135,11 @@ func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 	// First, get lines from disk (if any)
 	if start < memOffset {
 		diskLines, _ := r.pageStore.ReadLineRange(start, memOffset)
+		for i, line := range diskLines {
+			if line == nil {
+				diskLines[i] = blankLine()
+			}
+		}
 		result = append(result, diskLines...)
 	}
 
