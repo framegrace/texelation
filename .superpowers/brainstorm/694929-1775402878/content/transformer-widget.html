@@ -1,0 +1,83 @@
+<h2>Transformer Pipeline Widget</h2>
+<p class="subtitle">Replace the raw JSON textarea with a proper list editor. Click to select your preferred layout.</p>
+
+<div class="cards">
+  <div class="card" data-choice="list-with-expand" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family: monospace; font-size: 13px; padding: 16px; background: #1e1e2e; color: #cdd6f4; border-radius: 8px; line-height: 1.6;">
+        <div style="color: #89b4fa; font-weight: bold; margin-bottom: 8px;">Transformer Pipeline</div>
+        <div style="display: flex; align-items: center; padding: 4px 8px; background: #313244; border-radius: 4px; margin-bottom: 4px;">
+          <span style="color: #a6e3a1;">☑</span>
+          <span style="margin-left: 8px; color: #cdd6f4; flex: 1;">txfmt</span>
+          <span style="color: #6c7086; font-size: 11px;">catppuccin-mocha</span>
+          <span style="margin-left: 8px; color: #6c7086;">▸</span>
+        </div>
+        <div style="display: flex; align-items: center; padding: 4px 8px; background: #313244; border-radius: 4px; margin-bottom: 4px;">
+          <span style="color: #a6e3a1;">☑</span>
+          <span style="margin-left: 8px; color: #cdd6f4; flex: 1;">tablefmt</span>
+          <span style="color: #6c7086; font-size: 11px;">max_buffer_rows: 1000</span>
+          <span style="margin-left: 8px; color: #6c7086;">▸</span>
+        </div>
+        <div style="margin-top: 8px; color: #6c7086; font-size: 11px;">
+          ▸ expands to show per-transformer settings
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A: List with Expandable Rows</h3>
+      <p>Each transformer is a row with checkbox (enable/disable), name, summary of settings. Click ▸ to expand and show per-transformer fields (style, max_buffer_rows, etc.).</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="simple-toggles" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family: monospace; font-size: 13px; padding: 16px; background: #1e1e2e; color: #cdd6f4; border-radius: 8px; line-height: 1.6;">
+        <div style="color: #89b4fa; font-weight: bold; margin-bottom: 8px;">Transformer Pipeline</div>
+        <div style="padding: 4px 0; border-bottom: 1px solid #313244;">
+          <div style="display: flex; align-items: center;">
+            <span style="color: #a6e3a1;">☑</span>
+            <span style="margin-left: 8px; color: #cdd6f4; font-weight: bold;">txfmt</span>
+          </div>
+          <div style="margin-left: 24px; margin-top: 4px;">
+            <span style="color: #6c7086;">style:</span>
+            <span style="color: #cdd6f4; background: #313244; padding: 1px 6px; border-radius: 3px;">catppuccin-mocha</span>
+          </div>
+        </div>
+        <div style="padding: 4px 0; margin-top: 4px;">
+          <div style="display: flex; align-items: center;">
+            <span style="color: #a6e3a1;">☑</span>
+            <span style="margin-left: 8px; color: #cdd6f4; font-weight: bold;">tablefmt</span>
+          </div>
+          <div style="margin-left: 24px; margin-top: 4px;">
+            <span style="color: #6c7086;">max_buffer_rows:</span>
+            <span style="color: #cdd6f4; background: #313244; padding: 1px 6px; border-radius: 3px;">1000</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B: Flat List — All Settings Visible</h3>
+      <p>Each transformer shown as a section with checkbox, name, and all its settings inline. No expand/collapse — everything visible at once. Simpler, works with only 2-3 transformers.</p>
+    </div>
+  </div>
+</div>
+
+<h2 style="margin-top: 40px;">Scope Question</h2>
+<p class="subtitle">Since we only have 2 transformers (txfmt, tablefmt), how much complexity is needed?</p>
+
+<div class="options">
+  <div class="option" data-choice="minimal" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>Minimal — Just Replace the Textarea</h3>
+      <p>Show each transformer as a form section with enable checkbox + its specific fields. No reorder, no add/remove. Good enough for 2 transformers.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="full" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>Full List Editor</h3>
+      <p>Add/remove transformers, drag to reorder, expand/collapse. Future-proof but overkill for 2 items.</p>
+    </div>
+  </div>
+</div>

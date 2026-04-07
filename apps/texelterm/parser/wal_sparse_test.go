@@ -23,6 +23,86 @@ func newTestWAL(t *testing.T) *WriteAheadLog {
 	return wal
 }
 
+// TestWAL_RecoveryWithGapAfterCheckpoint reproduces the ls -lR startup
+// failure: PageStore has sparse content from a prior checkpoint (gaps inside
+// its logical-end range), and the WAL holds unflushed LineWrite/LineModify
+// entries for some of those gap indices. Recovery must not use LineCount as
+// an existence proxy — it must check HasLine per index.
+func TestWAL_RecoveryWithGapAfterCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultWALConfig(filepath.Join(dir, "hist"), "recover-gap-test")
+	cfg.CheckpointInterval = 0
+	cfg.CheckpointMaxSize = 1 << 30
+
+	// Session 1: write content with a gap, force checkpoint, then write more
+	// LineWrite entries past the gap without a second checkpoint, and close.
+	wal1, err := OpenWriteAheadLog(cfg)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog #1: %v", err)
+	}
+	now := time.Now()
+	for _, idx := range []int64{0, 1, 2} {
+		if err := wal1.Append(idx, mkLine("early"), now); err != nil {
+			t.Fatalf("Append(%d): %v", idx, err)
+		}
+	}
+	// Jump past a gap and checkpoint so PageStore has sparse content.
+	for _, idx := range []int64{100, 101} {
+		if err := wal1.Append(idx, mkLine("mid"), now); err != nil {
+			t.Fatalf("Append(%d): %v", idx, err)
+		}
+	}
+	if err := wal1.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	// Write more entries after checkpoint; these stay in the WAL, not yet in
+	// PageStore. Include a LineModify for an already-checkpointed line.
+	for _, idx := range []int64{200, 201, 202} {
+		if err := wal1.Append(idx, mkLine("late"), now); err != nil {
+			t.Fatalf("Append(%d): %v", idx, err)
+		}
+	}
+	if err := wal1.Append(101, mkLine("updated"), now); err != nil {
+		t.Fatalf("Append modify: %v", err)
+	}
+	if err := wal1.Close(); err != nil {
+		t.Fatalf("wal1.Close: %v", err)
+	}
+
+	// Session 2: reopen. Recovery must succeed even though 200/201/202 fall
+	// inside a gap from PageStore's perspective (LineCount was 102, so the
+	// old heuristic "lineIdx >= LineCount → new" would misclassify).
+	wal2, err := OpenWriteAheadLog(cfg)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog #2: %v", err)
+	}
+	defer wal2.Close()
+
+	if got := wal2.pageStore.LineCount(); got != 203 {
+		t.Errorf("LineCount after recovery: got %d, want 203", got)
+	}
+	if got := wal2.pageStore.StoredLineCount(); got != 8 {
+		t.Errorf("StoredLineCount after recovery: got %d, want 8", got)
+	}
+
+	// Modified line must show the updated content.
+	line, _ := wal2.pageStore.ReadLine(101)
+	if line == nil {
+		t.Fatalf("ReadLine(101) after recovery: nil")
+	}
+	if got := string(runesFromCells(line.Cells)); got != "updated" {
+		t.Errorf("line 101 after recovery: got %q, want \"updated\"", got)
+	}
+
+	// New post-checkpoint lines must be present.
+	for _, idx := range []int64{200, 201, 202} {
+		line, _ := wal2.pageStore.ReadLine(idx)
+		if line == nil {
+			t.Errorf("ReadLine(%d) after recovery: nil", idx)
+		}
+	}
+}
+
 func TestWAL_CheckpointWithGap(t *testing.T) {
 	wal := newTestWAL(t)
 

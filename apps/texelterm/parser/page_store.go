@@ -655,6 +655,17 @@ func (ps *PageStore) LineCount() int64 {
 	return ps.nextGlobalIdx
 }
 
+// HasLine reports whether a line is actually stored at the given global index.
+// Unlike LineCount (which returns the logical end), this checks the sparse
+// storage directly — gap indices return false even though they lie within
+// [0, LineCount()).
+func (ps *PageStore) HasLine(globalIdx int64) bool {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	_, ok := ps.findByGlobalIdx(globalIdx)
+	return ok
+}
+
 // StoredLineCount returns the number of lines actually stored.
 // This may be less than LineCount() when there are gaps in the
 // global-index space (e.g., from LineFeed operations that advanced
