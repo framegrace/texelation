@@ -34,6 +34,7 @@ import (
 	"github.com/framegrace/texelation/apps/launcher"
 	"github.com/framegrace/texelation/apps/statusbar"
 	"github.com/framegrace/texelation/apps/texelterm"
+	lifecyclepkg "github.com/framegrace/texelation/cmd/texelation/lifecycle"
 	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/framegrace/texelation/internal/runtime/server"
@@ -47,6 +48,7 @@ func main() {
 	tcell.SetEncodingFallback(tcell.EncodingFallbackASCII)
 
 	socketPath := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
+	pidFilePath := flag.String("pid-file", "", "PID file path; if set, the server writes its PID here and holds an exclusive flock for its lifetime")
 	title := flag.String("title", "Texel Server", "Title for the main pane")
 	snapshotPath := flag.String("snapshot", "", "Path to persist pane snapshots (default: ~/.texelation/snapshot.json)")
 	fromScratch := flag.Bool("from-scratch", false, "Start from scratch, ignoring any saved snapshot")
@@ -56,6 +58,30 @@ func main() {
 	verboseLogs := flag.Bool("verbose-logs", false, "Enable verbose server logging")
 	defaultApp := flag.String("default-app", "", "Default app for new panes (launcher, texelterm, help) - overrides config file")
 	flag.Parse()
+
+	// Acquire exclusive flock on the PID file before any other setup.
+	// This is the canonical "a server is alive" signal used by the
+	// supervisor in cmd/texelation/lifecycle. Holding the lock for the
+	// entire process lifetime means slow shutdowns (e.g. 20s WAL flushes)
+	// still look "alive" to the supervisor and are not killed mid-flush.
+	// The OS releases the lock automatically on process exit, even on
+	// crash, so stale PID files are self-healing.
+	var pidLock lifecyclepkg.PIDLock
+	if *pidFilePath != "" {
+		pf := lifecyclepkg.NewPIDFile(*pidFilePath)
+		lock, err := pf.AcquireExclusiveLock(os.Getpid())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "texel-server: cannot acquire PID lock at %s: %v\n", *pidFilePath, err)
+			os.Exit(1)
+		}
+		pidLock = lock
+		defer func() {
+			_ = pidLock.Close()
+			// Best-effort remove; OS already released the lock so a
+			// new server can start immediately after us regardless.
+			_ = os.Remove(*pidFilePath)
+		}()
+	}
 
 	server.SetVerboseLogging(*verboseLogs)
 
