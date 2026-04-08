@@ -164,8 +164,11 @@ func (d *DesktopEngine) processMouseEvent(x, y int, buttons tcell.ButtonMask, mo
 		}
 	}
 
-	// Handle workspace border resize first
-	if d.activeWorkspace != nil {
+	// Handle workspace border resize first — but skip it if the cursor
+	// is inside a pane decorator pill's hover zone. Otherwise clicks on
+	// pills that sit on a shared split border would be intercepted as
+	// resize grabs instead of firing the pill action.
+	if d.activeWorkspace != nil && !d.pointInAnyPaneDecoratorZone(x, y) {
 		if d.activeWorkspace.handleMouseResize(x, y, buttons, prevButtons) {
 			return
 		}
@@ -219,6 +222,36 @@ func (d *DesktopEngine) routeClickToStatusPane(x, y int, buttons, prevButtons tc
 		}
 	}
 	return false
+}
+
+// pointInAnyPaneDecoratorZone reports whether (x, y) falls inside any
+// pane's decorator pill hover zone in the active workspace. Used by
+// the mouse dispatcher to give pill interactions priority over border
+// resize — a pill drawn on a shared split border would otherwise be
+// intercepted by the resize grab.
+func (d *DesktopEngine) pointInAnyPaneDecoratorZone(x, y int) bool {
+	ws := d.activeWorkspace
+	if ws == nil || ws.tree == nil {
+		return false
+	}
+	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
+		p := d.zoomedPane.Pane
+		if p.decorator != nil && p.decorator.HoverZoneContains(x, y, p.absX0, p.absX1, p.absY0) {
+			return true
+		}
+		return false
+	}
+	found := false
+	ws.tree.Traverse(func(node *Node) {
+		if found || node == nil || node.Pane == nil {
+			return
+		}
+		p := node.Pane
+		if p.decorator != nil && p.decorator.HoverZoneContains(x, y, p.absX0, p.absX1, p.absY0) {
+			found = true
+		}
+	})
+	return found
 }
 
 func (d *DesktopEngine) paneAtCoordinates(x, y int) *pane {
