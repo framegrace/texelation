@@ -50,6 +50,10 @@ func run() error {
 	defaultApp := fs.String("default-app", "", "Default app for new panes")
 	verboseLogs := fs.Bool("verbose-logs", false, "Enable verbose server logging")
 	title := fs.String("title", "Texel Server", "Title for the main pane")
+	// Internal flag used by the supervisor: tells the server where to
+	// acquire the exclusive PID flock. Accepted at this layer so
+	// --server-only can forward it to the texel-server child.
+	pidFile := fs.String("pid-file", "", "PID file path (internal; forwarded to texel-server)")
 
 	// Client flags
 	reconnect := fs.Bool("reconnect", false, "Attempt to resume previous session")
@@ -104,6 +108,7 @@ func run() error {
 			VerboseLogs:  *verboseLogs,
 			LogFilePath:  paths.ServerLogPath,
 			Title:        *title,
+			PIDFilePath:  *pidFile,
 		})
 
 	case *clientOnly:
@@ -131,6 +136,12 @@ func run() error {
 }
 
 func handleUnifiedMode(ctx context.Context, paths *Paths, srvOpts lifecycle.ServerOptions, clientOpts clientrt.Options) error {
+	// Ensure PIDFilePath is populated so daemon.Start can forward it to
+	// the server child via --pid-file. Fall back to paths.PIDPath to
+	// keep the two sources of truth in sync.
+	if srvOpts.PIDFilePath == "" {
+		srvOpts.PIDFilePath = paths.PIDPath
+	}
 	health := lifecycle.NewSocketHealthChecker(2 * time.Second)
 	pidFile := lifecycle.NewPIDFile(paths.PIDPath)
 	daemon := lifecycle.NewDaemonManager(pidFile, srvOpts.SocketPath, health)
@@ -188,6 +199,12 @@ func handleServerOnly(opts lifecycle.ServerOptions) error {
 	// Build args
 	args := []string{
 		"--socket", opts.SocketPath,
+	}
+	if opts.PIDFilePath != "" {
+		// Forward the PID file path so texel-server can take the
+		// exclusive flock that the supervisor uses as its liveness
+		// signal.
+		args = append(args, "--pid-file", opts.PIDFilePath)
 	}
 	if opts.SnapshotPath != "" {
 		args = append(args, "--snapshot", opts.SnapshotPath)

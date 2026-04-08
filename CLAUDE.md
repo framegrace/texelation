@@ -8,6 +8,20 @@ Texelation is a modular text-based desktop environment running as a client/serve
 
 **External Dependency**: Core UI primitives (App, Cell, Widget, ControlBus) are provided by [TexelUI](https://github.com/framegrace/texelui) and re-exported via `texel/core_aliases.go`.
 
+## The Canonical Binary: `texelation`
+
+**Users run the `texelation` binary, not `texel-server` directly.** `texelation` is a unified launcher in `cmd/texelation/` that:
+
+1. Supervises a background `texel-server` daemon (via a PID file + socket health check in `cmd/texelation/lifecycle/`)
+2. Runs the `texel-client` in the same process
+3. Handles start / stop / restart / status subcommands
+
+When debugging runtime issues ("I ran X and Y happened"), assume the user invoked `texelation`. This matters because:
+
+- Shutdown flows through `texel-server`'s signal handler **as a child process**, not a standalone binary
+- The supervisor may restart a "hung" server based on its health check — so changes to `texel-server`'s shutdown path must keep the server visibly alive (socket responding, flock held) until state is fully persisted
+- Behavior visible via `make server` (standalone `texel-server`) won't surface supervisor-driven issues; reproduce with `texelation` when investigating daemon lifecycle bugs
+
 ## CRITICAL: Git Workflow
 
 **NEVER commit directly to main.** Always use feature branches and pull requests:

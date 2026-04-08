@@ -16,6 +16,11 @@
 
 package parser
 
+// blankLine returns an empty LogicalLine suitable for rendering gap positions.
+func blankLine() *LogicalLine {
+	return &LogicalLine{Cells: nil}
+}
+
 // ContentReader abstracts read access to terminal content.
 // This interface allows ViewportWindow to work with different storage backends.
 type ContentReader interface {
@@ -38,6 +43,17 @@ type ContentReader interface {
 	// MemoryBufferOffset returns the oldest line currently in memory.
 	// Use this for performance-sensitive calculations.
 	MemoryBufferOffset() int64
+
+	// DiskStoredLinesBelow returns the count of disk-resident lines whose
+	// global index is strictly less than the given index. Used by scroll
+	// math to count scrollable history without counting sparse gaps.
+	DiskStoredLinesBelow(globalIdx int64) int64
+
+	// DiskGlobalIdxAtPosition returns the globalIdx of the Nth stored
+	// disk line (0-based). Used by scroll math to map a physical scroll
+	// position to a real sparse globalIdx, skipping gap indices that
+	// have no stored content. Returns -1 if pos is out of range.
+	DiskGlobalIdxAtPosition(pos int64) int64
 
 	// TotalLines returns the total number of lines currently in memory.
 	TotalLines() int64
@@ -98,6 +114,11 @@ func (r *MemoryBufferReader) GetLine(globalIdx int64) *LogicalLine {
 
 // GetLineRange returns lines from start (inclusive) to end (exclusive).
 // Handles ranges that span both memory and disk storage.
+//
+// For the disk portion, only actually-stored lines are returned (sparse
+// gaps are skipped, NOT padded with blank placeholders). This keeps the
+// viewport renderer from materializing thousands of empty rows for the
+// gap regions in the global-index space.
 func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 	if r.pageStore == nil {
 		// No PageStore, use memory buffer directly
@@ -116,16 +137,16 @@ func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 	// Case 2: Entire range is on disk (before memory)
 	if end <= memOffset {
 		lines, _ := r.pageStore.ReadLineRange(start, end)
-		return lines
+		return compactNonNil(lines)
 	}
 
 	// Case 3: Range spans disk and memory
 	result := make([]*LogicalLine, 0, end-start)
 
-	// First, get lines from disk (if any)
+	// First, get lines from disk (if any) — compact, no nil padding.
 	if start < memOffset {
 		diskLines, _ := r.pageStore.ReadLineRange(start, memOffset)
-		result = append(result, diskLines...)
+		result = append(result, compactNonNil(diskLines)...)
 	}
 
 	// Then, get lines from memory
@@ -139,6 +160,19 @@ func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 	}
 
 	return result
+}
+
+// compactNonNil returns the non-nil entries from lines, preserving order.
+// Used to skip sparse gap positions in disk reads so the viewport renderer
+// doesn't produce empty rows for indices that have no stored content.
+func compactNonNil(lines []*LogicalLine) []*LogicalLine {
+	out := make([]*LogicalLine, 0, len(lines))
+	for _, line := range lines {
+		if line != nil {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // GlobalEnd returns the global index just past the last line.
@@ -161,6 +195,26 @@ func (r *MemoryBufferReader) GlobalOffset() int64 {
 // consider in-memory content (e.g., physical line counting).
 func (r *MemoryBufferReader) MemoryBufferOffset() int64 {
 	return r.buffer.GlobalOffset()
+}
+
+// DiskStoredLinesBelow returns the count of disk-resident lines whose
+// global index is strictly less than the given index. Used by the scroll
+// manager to compute scrollable history without counting sparse gaps.
+// Without a PageStore, returns 0 (no disk content).
+func (r *MemoryBufferReader) DiskStoredLinesBelow(globalIdx int64) int64 {
+	if r.pageStore == nil {
+		return 0
+	}
+	return r.pageStore.StoredLineCountBelow(globalIdx)
+}
+
+// DiskGlobalIdxAtPosition returns the globalIdx of the Nth stored disk
+// line (0-based). Without a PageStore, returns -1.
+func (r *MemoryBufferReader) DiskGlobalIdxAtPosition(pos int64) int64 {
+	if r.pageStore == nil {
+		return -1
+	}
+	return r.pageStore.GlobalIdxAtStoredPosition(pos)
 }
 
 // TotalLines returns the total number of lines currently in memory.

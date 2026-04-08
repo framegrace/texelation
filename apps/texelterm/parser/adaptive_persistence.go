@@ -132,6 +132,14 @@ type AdaptivePersistence struct {
 	metrics PersistenceMetrics
 
 	mu sync.Mutex
+
+	// flushIOMu serializes the I/O phase of flushPendingLocked across
+	// concurrent callers (idle monitor vs explicit Close/Flush). Without
+	// this, two flushes can run their I/O loops in parallel: the second
+	// Close can proceed to wal.Close() while the first's idle-monitor
+	// flush is still writing entries, losing the tail of the first's
+	// snapshot when wal.Close truncates.
+	flushIOMu sync.Mutex
 }
 
 // NewAdaptivePersistence creates a new adaptive persistence layer.
@@ -252,10 +260,54 @@ func newAdaptivePersistenceWithNow(
 		},
 	}
 
+	// Install pre-evict callback so memBuf flushes dirty lines before
+	// they leave the ring buffer. Without this, dirty lines that piled
+	// up in pendingLines (e.g. during a BestEffort burst) get silently
+	// dropped when memBuf evicts to make room — flushPendingLocked
+	// later sees mb.GetLine(idx) == nil and skips them, producing huge
+	// gaps in pageStore.
+	memBuf.SetPreEvictCallback(ap.flushEvictedLines)
+
 	// Start idle monitor
 	ap.startIdleMonitor()
 
 	return ap, nil
+}
+
+// flushEvictedLines is invoked by MemoryBuffer.evictLocked just before
+// dirty lines disappear from the ring buffer. The lines arrive as
+// independent clones so we can persist them without re-reading from
+// memBuf (which would deadlock since memBuf is locked during eviction).
+//
+// We must NOT acquire ap.mu here because the persistence flush path
+// may already hold it indirectly via NotifyWrite → memBuf.Write paths.
+// Instead we write directly to the WAL/disk and clear pendingLines
+// entries via a brief lock acquisition at the end.
+func (ap *AdaptivePersistence) flushEvictedLines(lines []EvictedLine) {
+	if len(lines) == 0 {
+		return
+	}
+	for _, e := range lines {
+		var err error
+		if ap.wal != nil {
+			err = ap.wal.Append(e.GlobalIdx, e.Line, ap.nowFunc())
+		} else if ap.disk != nil {
+			err = ap.diskWriteOrUpdate(e.GlobalIdx, e.Line, ap.nowFunc())
+		}
+		if err != nil {
+			ap.metrics.FailedWrites++
+			continue
+		}
+		ap.metrics.LinesWritten++
+	}
+	// Clear pendingLines entries for the evicted lines so a later
+	// flush doesn't try to fetch them from memBuf (where they no
+	// longer exist).
+	ap.mu.Lock()
+	for _, e := range lines {
+		delete(ap.pendingLines, e.GlobalIdx)
+	}
+	ap.mu.Unlock()
 }
 
 // NotifyWrite is called when a line changes in MemoryBuffer.
@@ -586,7 +638,15 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 	ap.pendingLines = make(map[int64]*pendingLineInfo)
 
 	// --- I/O phase (unlocked): write to WAL without blocking the parser ---
+	// Hold flushIOMu to serialize with any other concurrent flush. Without
+	// this, Close can run its own flushPendingLocked while the idle monitor
+	// is still in its I/O loop, then proceed to wal.Close() which
+	// truncates the WAL and drops the idle monitor's remaining entries.
 	ap.mu.Unlock()
+	ap.flushIOMu.Lock()
+	defer func() {
+		ap.flushIOMu.Unlock()
+	}()
 
 	var firstErr error
 	for _, e := range entries {
@@ -594,7 +654,7 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 		if ap.wal != nil {
 			err = ap.wal.Append(e.lineIdx, e.line, ap.nowFunc())
 		} else {
-			err = ap.disk.AppendLine(e.line)
+			err = ap.diskWriteOrUpdate(e.lineIdx, e.line, ap.nowFunc())
 		}
 		if err != nil {
 			if firstErr == nil {
@@ -681,7 +741,7 @@ func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
 	if ap.wal != nil {
 		err = ap.wal.Append(lineIdx, lineCopy, ap.nowFunc())
 	} else {
-		err = ap.disk.AppendLine(lineCopy)
+		err = ap.diskWriteOrUpdate(lineIdx, lineCopy, ap.nowFunc())
 	}
 
 	if err != nil {
@@ -700,6 +760,26 @@ func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
 	}
 
 	return nil
+}
+
+// diskWriteOrUpdate writes a line to the disk PageStore (no-WAL path).
+// If the line already exists at lineIdx, it is updated via UpdateLine.
+// If lineIdx points to a gap (line count exceeds lineIdx but line is absent),
+// the write is silently skipped — the line was never stored and cannot be
+// back-filled without WAL support.
+func (ap *AdaptivePersistence) diskWriteOrUpdate(lineIdx int64, line *LogicalLine, ts time.Time) error {
+	if lineIdx < ap.disk.LineCount() {
+		existing, err := ap.disk.ReadLine(lineIdx)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			// Gap — line was never stored; skip silently.
+			return nil
+		}
+		return ap.disk.UpdateLine(lineIdx, line, ts)
+	}
+	return ap.disk.AppendLineWithGlobalIdx(lineIdx, line, ts)
 }
 
 // startIdleMonitor starts the background goroutine for idle detection.

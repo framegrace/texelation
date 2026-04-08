@@ -9,6 +9,7 @@ package parser
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 // --- Test Helpers ---
@@ -31,7 +32,7 @@ func newTestPageStoreWithContent(t *testing.T, lines []string) *PageStore {
 
 	for _, line := range lines {
 		ll := NewLogicalLineFromCells(vwMakeCells(line))
-		if err := ps.AppendLine(ll); err != nil {
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), ll, time.Now()); err != nil {
 			t.Fatalf("failed to append line: %v", err)
 		}
 	}
@@ -124,7 +125,7 @@ func TestMemoryBufferReader_WithPageStore_EvictedLine(t *testing.T) {
 
 		// Also write to PageStore (simulating persistence)
 		ll := NewLogicalLineFromCells([]Cell{{Rune: r, FG: DefaultFG, BG: DefaultBG}})
-		ps.AppendLine(ll)
+		ps.AppendLineWithGlobalIdx(ps.LineCount(), ll, time.Now())
 
 		if i < 14 {
 			mb.NewLine()
@@ -172,7 +173,7 @@ func TestMemoryBufferReader_WithPageStore_GetLineRange_Split(t *testing.T) {
 		mb.Write(r, DefaultFG, DefaultBG, 0)
 
 		ll := NewLogicalLineFromCells([]Cell{{Rune: r, FG: DefaultFG, BG: DefaultBG}})
-		ps.AppendLine(ll)
+		ps.AppendLineWithGlobalIdx(ps.LineCount(), ll, time.Now())
 
 		if i < 14 {
 			mb.NewLine()
@@ -211,7 +212,7 @@ func TestMemoryBufferReader_WithPageStore_GetLineRange_AllOnDisk(t *testing.T) {
 		mb.Write(r, DefaultFG, DefaultBG, 0)
 
 		ll := NewLogicalLineFromCells([]Cell{{Rune: r, FG: DefaultFG, BG: DefaultBG}})
-		ps.AppendLine(ll)
+		ps.AppendLineWithGlobalIdx(ps.LineCount(), ll, time.Now())
 
 		if i < 14 {
 			mb.NewLine()
@@ -287,7 +288,7 @@ func TestMemoryBufferReader_WithPageStore_TotalLines(t *testing.T) {
 		mb.Write(rune('A'+i), DefaultFG, DefaultBG, 0)
 
 		ll := NewLogicalLineFromCells([]Cell{{Rune: rune('A' + i), FG: DefaultFG, BG: DefaultBG}})
-		ps.AppendLine(ll)
+		ps.AppendLineWithGlobalIdx(ps.LineCount(), ll, time.Now())
 
 		if i < 14 {
 			mb.NewLine()
@@ -397,7 +398,7 @@ func TestViewportWindow_WithPageStore_ReadEvictedContent(t *testing.T) {
 
 		// Also write to PageStore (simulating persistence)
 		ll := NewLogicalLineFromCells(vwMakeCells(lineText))
-		ps.AppendLine(ll)
+		ps.AppendLineWithGlobalIdx(ps.LineCount(), ll, time.Now())
 
 		if i < 29 {
 			mb.NewLine()
@@ -461,7 +462,7 @@ func TestViewportWindow_WithPageStore_FullHistoryScrolling(t *testing.T) {
 		}
 
 		ll := NewLogicalLineFromCells(vwMakeCells(lineText))
-		ps.AppendLine(ll)
+		ps.AppendLineWithGlobalIdx(ps.LineCount(), ll, time.Now())
 
 		if i < 24 {
 			mb.NewLine()

@@ -406,9 +406,8 @@ func (w *WriteAheadLog) Append(lineIdx int64, line *LogicalLine, timestamp time.
 		w.nextGlobalIdx = lineIdx + 1
 	}
 
-	// Check if we should auto-checkpoint due to size
+	// Check if we should auto-checkpoint due to size.
 	if w.config.CheckpointMaxSize > 0 && w.walSize >= w.config.CheckpointMaxSize {
-		// Checkpoint in background to avoid blocking writes
 		go func() {
 			w.Checkpoint()
 		}()
@@ -727,36 +726,19 @@ func (w *WriteAheadLog) recover() error {
 		return nil // Clean state
 	}
 
-	// Replay entries to PageStore using two-pass approach (same as checkpoint)
-	// IMPORTANT: Check if line already exists to avoid duplication.
-	// This can happen if PageStore was flushed but WAL wasn't checkpointed before crash.
-	pageStoreLineCount := w.pageStore.LineCount()
-
-	// Pass 1: Append only truly new lines (LineWrite with index >= current count)
+	// Replay entries to PageStore in WAL order using the unified write path.
+	// AppendLineWithGlobalIdx handles append, update-in-place, and out-of-order
+	// insert in one operation, so the LATEST WAL entry for each globalIdx wins.
 	for _, entry := range entries {
-		if entry.Type == EntryTypeLineWrite && entry.Line != nil {
-			lineIdx := int64(entry.GlobalLineIdx)
-			if lineIdx >= pageStoreLineCount {
-				// This is a new line - append it
-				if err := w.pageStore.AppendLineWithTimestamp(entry.Line, entry.Timestamp); err != nil {
-					return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
-				}
-				pageStoreLineCount++ // Track new count for subsequent entries
-			}
-			// If lineIdx < pageStoreLineCount, the line already exists - skip append
-			// (it will be handled in Pass 2 if there's a corresponding LineModify)
+		if entry.Line == nil {
+			continue
 		}
-	}
-
-	// Pass 2: Update modified lines (LineModify) and any LineWrite entries for existing lines
-	for _, entry := range entries {
+		if entry.Type != EntryTypeLineWrite && entry.Type != EntryTypeLineModify {
+			continue
+		}
 		lineIdx := int64(entry.GlobalLineIdx)
-		if entry.Line != nil && lineIdx < w.pageStore.LineCount() {
-			if entry.Type == EntryTypeLineModify || entry.Type == EntryTypeLineWrite {
-				if err := w.pageStore.UpdateLine(lineIdx, entry.Line, entry.Timestamp); err != nil {
-					return fmt.Errorf("failed to update line %d in PageStore: %w", entry.GlobalLineIdx, err)
-				}
-			}
+		if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
+			return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
 		}
 	}
 
@@ -885,26 +867,21 @@ func (w *WriteAheadLog) checkpointLocked() error {
 		return fmt.Errorf("failed to read WAL entries: %w", err)
 	}
 
-	// Replay entries to PageStore in two passes:
-	// Pass 1: Process all LINE_WRITE entries (append new lines)
-	// Pass 2: Process all LINE_MODIFY entries (update existing lines)
-	// This ensures modifications can always find their target lines.
-
-	// Pass 1: Write all new lines
+	// Replay entries to PageStore in WAL order using the unified write
+	// path. AppendLineWithGlobalIdx now supports out-of-order inserts and
+	// updates, so the previous "Pass 1: appends, Pass 2: modifies" split
+	// is unnecessary. Replaying in WAL order means the LATEST entry for
+	// each globalIdx wins, which is the correct semantic.
 	for _, entry := range entries {
-		if entry.Type == EntryTypeLineWrite && entry.Line != nil {
-			if err := w.pageStore.AppendLineWithTimestamp(entry.Line, entry.Timestamp); err != nil {
-				return fmt.Errorf("failed to append line %d to PageStore: %w", entry.GlobalLineIdx, err)
-			}
+		if entry.Line == nil {
+			continue
 		}
-	}
-
-	// Pass 2: Update modified lines (now all target lines exist)
-	for _, entry := range entries {
-		if entry.Type == EntryTypeLineModify && entry.Line != nil {
-			if err := w.pageStore.UpdateLine(int64(entry.GlobalLineIdx), entry.Line, entry.Timestamp); err != nil {
-				return fmt.Errorf("failed to update line %d in PageStore: %w", entry.GlobalLineIdx, err)
-			}
+		if entry.Type != EntryTypeLineWrite && entry.Type != EntryTypeLineModify {
+			continue
+		}
+		lineIdx := int64(entry.GlobalLineIdx)
+		if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
+			return fmt.Errorf("failed to write line %d to PageStore: %w", entry.GlobalLineIdx, err)
 		}
 	}
 
@@ -1204,23 +1181,10 @@ func (w *WriteAheadLog) Close() error {
 	return psErr
 }
 
+// AppendLineWithGlobalIdx implements HistoryWriter interface.
+func (w *WriteAheadLog) AppendLineWithGlobalIdx(globalIdx int64, line *LogicalLine, timestamp time.Time) error {
+	return w.Append(globalIdx, line, timestamp)
+}
+
 // Compile-time interface check
-var _ HistoryWriterWithTimestamp = (*WriteAheadLog)(nil)
-
-// AppendLine implements HistoryWriter interface.
-func (w *WriteAheadLog) AppendLine(line *LogicalLine) error {
-	w.mu.Lock()
-	idx := w.nextGlobalIdx
-	w.mu.Unlock()
-
-	return w.Append(idx, line, w.nowFunc())
-}
-
-// AppendLineWithTimestamp implements HistoryWriterWithTimestamp interface.
-func (w *WriteAheadLog) AppendLineWithTimestamp(line *LogicalLine, timestamp time.Time) error {
-	w.mu.Lock()
-	idx := w.nextGlobalIdx
-	w.mu.Unlock()
-
-	return w.Append(idx, line, timestamp)
-}
+var _ HistoryWriter = (*WriteAheadLog)(nil)

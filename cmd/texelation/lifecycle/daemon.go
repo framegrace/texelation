@@ -49,6 +49,7 @@ type ServerOptions struct {
 	VerboseLogs  bool
 	LogFilePath  string // Daemon stdout/stderr destination
 	Title        string
+	PIDFilePath  string // Path passed through to texel-server --pid-file for flock
 }
 
 // DaemonManager handles server process lifecycle
@@ -89,18 +90,29 @@ func (d *standardDaemonManager) GetState(ctx context.Context) (DaemonState, erro
 		return StateStopped, nil
 	}
 
-	if !d.pidFile.IsProcessRunning() {
-		return StateStale, nil
+	// Canonical "is a server alive" signal: exclusive flock on the PID
+	// file. The server holds the lock from startup until OS release at
+	// exit, so a slow-flushing server still reports as locked — unlike
+	// socket health, which goes false the moment the listener closes.
+	locked := d.pidFile.IsLocked()
+
+	if !locked {
+		// Lock not held: either no server, or the file is stale from a
+		// pre-flock build or crash. Fall back to the legacy process check.
+		if !d.pidFile.IsProcessRunning() {
+			return StateStale, nil
+		}
+		// Legacy server without flock support — use socket health.
+		healthCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if err := d.health.Check(healthCtx, d.socketPath); err != nil {
+			return StateUnresponsive, nil
+		}
+		return StateRunning, nil
 	}
 
-	// Process exists, check health
-	healthCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	if err := d.health.Check(healthCtx, d.socketPath); err != nil {
-		return StateUnresponsive, nil
-	}
-
+	// Lock held → a server is alive (running or mid-shutdown). Treat as
+	// running and let the connect path decide whether to wait.
 	return StateRunning, nil
 }
 
@@ -124,10 +136,23 @@ func (d *standardDaemonManager) Start(ctx context.Context, opts ServerOptions) e
 		return fmt.Errorf("get executable path: %w", err)
 	}
 
-	// Build server command args
+	// Build server command args. The --pid-file flag tells texel-server
+	// where to acquire its exclusive flock; the server writes its own
+	// PID there under the lock, so supervisors can reliably distinguish
+	// "alive" from "gone" without relying on the socket.
+	//
+	// Note: the intermediate exec path is
+	//     texelation --server-only --pid-file=... --socket=...
+	// → handleServerOnly reads --pid-file and forwards it when
+	// exec'ing the actual texel-server binary.
+	pidPath := opts.PIDFilePath
+	if pidPath == "" {
+		pidPath = d.pidFile.Path()
+	}
 	args := []string{
 		"--server-only",
 		"--socket", opts.SocketPath,
+		"--pid-file", pidPath,
 	}
 	if opts.SnapshotPath != "" {
 		args = append(args, "--snapshot", opts.SnapshotPath)
@@ -169,13 +194,22 @@ func (d *standardDaemonManager) Start(ctx context.Context, opts ServerOptions) e
 		return fmt.Errorf("fork server: %w", err)
 	}
 
-	pid := cmd.Process.Pid
+	// The server writes its own PID under the exclusive flock via
+	// AcquireExclusiveLock, so we do NOT write the PID file here — doing
+	// so would race with the child. Wait briefly for the child to take
+	// the lock so we can report startup failures synchronously.
+	_ = cmd.Process.Pid
 
-	// Write PID file before releasing process
-	if err := d.pidFile.Write(pid); err != nil {
-		// Try to kill the process we just started
+	lockDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(lockDeadline) {
+		if d.pidFile.IsLocked() {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !d.pidFile.IsLocked() {
 		_ = cmd.Process.Kill()
-		return fmt.Errorf("write PID file: %w", err)
+		return fmt.Errorf("server did not acquire PID lock within 3s — likely failed to start")
 	}
 
 	// Detach - don't wait for process
@@ -212,27 +246,35 @@ func (d *standardDaemonManager) Stop(ctx context.Context) error {
 		return fmt.Errorf("send SIGTERM: %w", err)
 	}
 
-	// Wait for graceful shutdown (up to 5 seconds)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			// Context cancelled - force kill
-			_ = process.Kill()
-			d.pidFile.Remove()
-			return ctx.Err()
-		default:
-		}
+	// Wait for the server to release its exclusive flock on the PID file.
+	// The server holds the lock from startup until clean exit, so waiting
+	// for unlock lets slow WAL flushes (tens of seconds for large bursts)
+	// complete without being force-killed mid-write and corrupting the
+	// scrollback. Cap at gracefulStopTimeout; after that, escalate.
+	const gracefulStopTimeout = 60 * time.Second
 
-		if err := process.Signal(syscall.Signal(0)); err != nil {
-			// Process is gone
+	waitErrCh := make(chan error, 1)
+	go func() {
+		waitErrCh <- d.pidFile.WaitForUnlock(gracefulStopTimeout)
+	}()
+
+	select {
+	case err := <-waitErrCh:
+		if err == nil {
+			// Lock released → process has exited cleanly.
 			d.pidFile.Remove()
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		// Timeout: the process is still holding the lock after
+		// gracefulStopTimeout. Fall through to force-kill.
+	case <-ctx.Done():
+		_ = process.Kill()
+		d.pidFile.Remove()
+		return ctx.Err()
 	}
 
-	// Force kill after timeout
+	// Force kill after graceful timeout. This is an escape hatch for
+	// truly hung servers, not the happy-path behavior it used to be.
 	if err := process.Kill(); err != nil {
 		// Ignore errors - process might have exited
 	}

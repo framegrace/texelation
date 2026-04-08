@@ -1164,3 +1164,100 @@ func TestVTermCoherence_LargeVolumeAutoCheckpoint(t *testing.T) {
 
 	v2.CloseMemoryBuffer()
 }
+
+// TestVTermCoherence_StaleMetadataRecovery reproduces the bug where saved
+// metadata has a liveEdgeBase beyond the actual persisted content (e.g. due
+// to a previous write path that advanced liveEdgeBase without persisting
+// the corresponding lines). Recovery must detect the stale state and skip
+// BOTH liveEdgeBase and cursor restoration, not just one of them — otherwise
+// the cursor points to a position relative to a different viewport anchor
+// and the visible content shifts unexpectedly.
+func TestVTermCoherence_StaleMetadataRecovery(t *testing.T) {
+	dir := t.TempDir()
+	id := "vt-stale-metadata"
+	const cols, rows = 80, 24
+
+	// Session 1: write some lines and capture metadata
+	v1 := newTestVTerm(t, cols, rows, dir, id)
+	writeNumberedLines(v1, 0, 100)
+
+	realGlobalEnd := v1.memBufState.memBuf.GlobalEnd()
+	t.Logf("Session 1: globalEnd=%d, liveEdgeBase=%d, cursor=(%d,%d)",
+		realGlobalEnd, v1.memBufState.liveEdgeBase, v1.cursorX, v1.cursorY)
+
+	// Force a metadata save with a liveEdgeBase BEYOND the actual content.
+	// This simulates the exact corruption pattern the old linefeed suppression
+	// was producing: liveEdgeBase claims to be far ahead of globalEnd.
+	ap := v1.memBufState.persistence
+	ap.mu.Lock()
+	staleMetadata := &ViewportState{
+		LiveEdgeBase:    realGlobalEnd + 500, // way beyond actual content
+		CursorX:         10,
+		CursorY:         20, // claims cursor at row 20 relative to stale anchor
+		ScrollOffset:    0,
+		SavedAt:         time.Now(),
+		PromptStartLine: realGlobalEnd + 495,
+		WorkingDir:      "/tmp",
+	}
+	ap.pendingMetadata = staleMetadata
+	ap.mu.Unlock()
+
+	// Bypass the AdaptivePersistence clamping by writing the stale metadata
+	// directly to the WAL. This mimics what the corrupted metadata on disk
+	// looked like in the user's reproduction.
+	if ap.wal != nil {
+		if err := ap.wal.WriteMetadata(staleMetadata); err != nil {
+			t.Fatalf("WriteMetadata: %v", err)
+		}
+		if err := ap.wal.SyncWAL(); err != nil {
+			t.Fatalf("SyncWAL: %v", err)
+		}
+	}
+
+	// Dirty close so the stale metadata is the authoritative last-written
+	// state on disk (no further checkpoints that might clean it up).
+	dirtyClose(v1)
+
+	// Session 2: reopen and verify the recovery handles stale metadata
+	v2 := newTestVTerm(t, cols, rows, dir, id)
+
+	recoveredGlobalEnd := v2.memBufState.memBuf.GlobalEnd()
+	recoveredLEB := v2.memBufState.liveEdgeBase
+	recoveredCursorX := v2.cursorX
+	recoveredCursorY := v2.cursorY
+
+	t.Logf("Session 2 after recovery: globalEnd=%d, liveEdgeBase=%d, cursor=(%d,%d)",
+		recoveredGlobalEnd, recoveredLEB, recoveredCursorX, recoveredCursorY)
+
+	// The stale liveEdgeBase (beyond globalEnd) must NOT be restored.
+	if recoveredLEB > recoveredGlobalEnd {
+		t.Errorf("Stale liveEdgeBase was restored: liveEdgeBase=%d > globalEnd=%d",
+			recoveredLEB, recoveredGlobalEnd)
+	}
+
+	// The cursor must be consistent with the recovered liveEdgeBase.
+	// The stale cursor position (10, 20) was relative to liveEdgeBase=realGlobalEnd+500.
+	// If we restored it naively, cursorGlobal = recoveredLEB + 20, which points
+	// to row 20 of a DIFFERENT viewport anchor and is meaningless.
+	// Since liveEdgeBase restoration was skipped, cursor restoration should
+	// also be skipped — cursor falls back to NewVTerm's default (0, 0).
+	if recoveredCursorX == 10 && recoveredCursorY == 20 {
+		t.Errorf("Cursor was restored without its anchor: got (10, 20) from stale metadata")
+	}
+
+	// The cursor's global line must be within the valid content range.
+	cursorGlobal := recoveredLEB + int64(recoveredCursorY)
+	if cursorGlobal > recoveredGlobalEnd {
+		t.Errorf("Cursor points past end of content: cursorGlobal=%d > globalEnd=%d",
+			cursorGlobal, recoveredGlobalEnd)
+	}
+
+	// Viewport content must be valid (no cursor in undefined territory).
+	mb := v2.memBufState.memBuf
+	if recoveredLEB < mb.GlobalOffset() || recoveredLEB > mb.GlobalEnd() {
+		t.Errorf("liveEdgeBase out of bounds: %d not in [%d, %d]",
+			recoveredLEB, mb.GlobalOffset(), mb.GlobalEnd())
+	}
+
+	v2.CloseMemoryBuffer()
+}

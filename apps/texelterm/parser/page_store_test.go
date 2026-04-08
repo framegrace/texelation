@@ -247,8 +247,8 @@ func TestPageStore_CreateAndWrite(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		if err := ps.AppendLine(line); err != nil {
-			t.Fatalf("AppendLine failed: %v", err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), line, time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 		}
 	}
 
@@ -284,8 +284,8 @@ func TestPageStore_OpenAndRead(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		if err := ps.AppendLine(line); err != nil {
-			t.Fatalf("AppendLine failed: %v", err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), line, time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 		}
 	}
 	ps.Close()
@@ -347,8 +347,8 @@ func TestPageStore_ReadLineRange(t *testing.T) {
 	// Write 10 lines
 	for i := 0; i < 10; i++ {
 		line := NewLogicalLineFromCells([]Cell{{Rune: rune('0' + i)}})
-		if err := ps.AppendLine(line); err != nil {
-			t.Fatalf("AppendLine failed: %v", err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), line, time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 		}
 	}
 	ps.Close()
@@ -387,7 +387,7 @@ func TestPageStore_ReadOutOfBounds(t *testing.T) {
 		t.Fatalf("CreatePageStore failed: %v", err)
 	}
 
-	ps.AppendLine(NewLogicalLineFromCells([]Cell{{Rune: 'X'}}))
+	ps.AppendLineWithGlobalIdx(ps.LineCount(), NewLogicalLineFromCells([]Cell{{Rune: 'X'}}), time.Now())
 	ps.Close()
 
 	ps2, err := OpenPageStore(config)
@@ -413,13 +413,24 @@ func TestPageStore_ReadOutOfBounds(t *testing.T) {
 		t.Errorf("Expected nil for large index")
 	}
 
-	// Range out of bounds (clamped)
+	// Range out of bounds: -5 is clamped to 0, end is 100.
+	// ReadLineRange returns a dense slice of length (end - clampedStart) = 100.
+	// Only index 0 is stored; the rest are nil.
 	lines, err := ps2.ReadLineRange(-5, 100)
 	if err != nil {
 		t.Fatalf("ReadLineRange failed: %v", err)
 	}
-	if len(lines) != 1 {
-		t.Errorf("Expected 1 line (clamped), got %d", len(lines))
+	if len(lines) != 100 {
+		t.Errorf("Expected dense slice of length 100 (clamped), got %d", len(lines))
+	}
+	nonNilCount := 0
+	for _, l := range lines {
+		if l != nil {
+			nonNilCount++
+		}
+	}
+	if nonNilCount != 1 {
+		t.Errorf("Expected exactly 1 non-nil line, got %d", nonNilCount)
 	}
 }
 
@@ -454,8 +465,8 @@ func TestPageStore_Timestamps(t *testing.T) {
 
 	for i, ts := range timestamps {
 		line := NewLogicalLineFromCells([]Cell{{Rune: rune('0' + i)}})
-		if err := ps.AppendLineWithTimestamp(line, ts); err != nil {
-			t.Fatalf("AppendLineWithTimestamp failed: %v", err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), line, ts); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 		}
 	}
 	ps.Close()
@@ -498,8 +509,8 @@ func TestPageStore_64KBBoundary(t *testing.T) {
 	// Add enough lines to create multiple pages (64KB / 16KB = ~4 lines per page)
 	numLines := 20
 	for i := 0; i < numLines; i++ {
-		if err := ps.AppendLine(line); err != nil {
-			t.Fatalf("AppendLine %d failed: %v", i, err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), line, time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx %d failed: %v", i, err)
 		}
 	}
 
@@ -569,8 +580,8 @@ func TestPageStore_FixedWidth(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		if err := ps.AppendLine(line); err != nil {
-			t.Fatalf("AppendLine failed: %v", err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), line, time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 		}
 	}
 	ps.Close()
@@ -611,14 +622,14 @@ func TestPageStore_LargeLines(t *testing.T) {
 	largeLine := NewLogicalLineFromCells(cells)
 
 	// This line exceeds 64KB by itself
-	if err := ps.AppendLine(largeLine); err != nil {
-		t.Fatalf("AppendLine failed: %v", err)
+	if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), largeLine, time.Now()); err != nil {
+		t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 	}
 
 	// Add a normal line after
 	smallLine := NewLogicalLineFromCells([]Cell{{Rune: 'Z'}})
-	if err := ps.AppendLine(smallLine); err != nil {
-		t.Fatalf("AppendLine failed: %v", err)
+	if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), smallLine, time.Now()); err != nil {
+		t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 	}
 
 	ps.Close()
@@ -665,8 +676,8 @@ func TestPageStore_FindLineAt(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		ts := baseTime.Add(time.Duration(i) * time.Hour)
 		line := NewLogicalLineFromCells([]Cell{{Rune: rune('0' + i)}})
-		if err := ps.AppendLineWithTimestamp(line, ts); err != nil {
-			t.Fatalf("AppendLineWithTimestamp failed: %v", err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), line, ts); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 		}
 	}
 	ps.Close()
@@ -720,7 +731,7 @@ func BenchmarkPageStore_AppendLine(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ps.AppendLine(line)
+		ps.AppendLineWithGlobalIdx(ps.LineCount(), line, time.Now())
 	}
 }
 
@@ -741,7 +752,7 @@ func BenchmarkPageStore_ReadLine(b *testing.B) {
 	line := NewLogicalLineFromCells(cells)
 
 	for i := 0; i < 10000; i++ {
-		ps.AppendLine(line)
+		ps.AppendLineWithGlobalIdx(ps.LineCount(), line, time.Now())
 	}
 	ps.Close()
 
@@ -862,8 +873,8 @@ func TestPageStore_UpdateLine_CurrentPage(t *testing.T) {
 		NewLogicalLineFromCells([]Cell{{Rune: 'G'}, {Rune: 'H'}, {Rune: 'I'}}),
 	}
 	for _, line := range lines {
-		if err := ps.AppendLine(line); err != nil {
-			t.Fatalf("AppendLine failed: %v", err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), line, time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 		}
 	}
 
@@ -906,8 +917,8 @@ func TestPageStore_UpdateLine_FlushedPage(t *testing.T) {
 		NewLogicalLineFromCells([]Cell{{Rune: 'G'}, {Rune: 'H'}, {Rune: 'I'}}),
 	}
 	for _, line := range lines {
-		if err := ps.AppendLine(line); err != nil {
-			t.Fatalf("AppendLine failed: %v", err)
+		if err := ps.AppendLineWithGlobalIdx(ps.LineCount(), line, time.Now()); err != nil {
+			t.Fatalf("AppendLineWithGlobalIdx failed: %v", err)
 		}
 	}
 
@@ -962,7 +973,7 @@ func TestPageStore_UpdateLine_NonExistent(t *testing.T) {
 	defer ps.Close()
 
 	// Add one line
-	ps.AppendLine(NewLogicalLineFromCells([]Cell{{Rune: 'A'}}))
+	ps.AppendLineWithGlobalIdx(ps.LineCount(), NewLogicalLineFromCells([]Cell{{Rune: 'A'}}), time.Now())
 
 	// Try to update a non-existent line
 	newLine := NewLogicalLineFromCells([]Cell{{Rune: 'X'}})

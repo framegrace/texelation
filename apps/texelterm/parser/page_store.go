@@ -115,8 +115,9 @@ type PageStore struct {
 	mu sync.RWMutex
 }
 
-// pageIndexEntry tracks which page contains each line.
+// pageIndexEntry tracks which page contains each line, keyed by global index.
 type pageIndexEntry struct {
+	globalIdx    int64  // Global line index this entry represents
 	pageID       uint64 // Page containing this line
 	offsetInPage int    // Line's index within the page (0-based)
 }
@@ -238,16 +239,20 @@ func (ps *PageStore) rebuildIndex() error {
 		return pages[i].id < pages[j].id
 	})
 
-	// Read each page header to build index
+	// Read each page header to build index. Pages may be out of pageID-vs-
+	// globalIdx order (out-of-order inserts during writeLineLocked produce
+	// new pages with higher pageIDs but lower anchors), so we sort the
+	// resulting pageIndex by globalIdx after collecting all entries.
 	for _, pi := range pages {
 		page, err := ps.readPageHeader(pi.path)
 		if err != nil {
 			return fmt.Errorf("failed to read page %d header: %w", pi.id, err)
 		}
 
-		// Add index entries for each line in this page
+		baseGlobal := int64(page.Header.FirstGlobalIdx)
 		for i := uint32(0); i < page.Header.LineCount; i++ {
 			ps.pageIndex = append(ps.pageIndex, pageIndexEntry{
+				globalIdx:    baseGlobal + int64(i),
 				pageID:       pi.id,
 				offsetInPage: int(i),
 			})
@@ -261,7 +266,19 @@ func (ps *PageStore) rebuildIndex() error {
 		}
 	}
 
-	ps.nextGlobalIdx = ps.totalLineCount
+	// Sort pageIndex by globalIdx so binary search works.
+	sort.Slice(ps.pageIndex, func(i, j int) bool {
+		return ps.pageIndex[i].globalIdx < ps.pageIndex[j].globalIdx
+	})
+
+	// Set nextGlobalIdx to the logical end (highest stored globalIdx + 1).
+	// After sorting, the last entry has the highest globalIdx.
+	if len(ps.pageIndex) > 0 {
+		last := ps.pageIndex[len(ps.pageIndex)-1]
+		ps.nextGlobalIdx = last.globalIdx + 1
+	} else {
+		ps.nextGlobalIdx = 0
+	}
 
 	return nil
 }
@@ -415,74 +432,144 @@ func (ps *PageStore) pageFilePath(pageID uint64) string {
 	return filepath.Join(ps.pagesDir, fmt.Sprintf("%08d.page", pageID))
 }
 
-// AppendLine writes a logical line to the page store.
-// Uses time.Now() as the timestamp.
-func (ps *PageStore) AppendLine(line *LogicalLine) error {
-	return ps.AppendLineWithTimestamp(line, time.Now())
-}
-
-// AppendLineWithTimestamp writes a line with an explicit timestamp.
-func (ps *PageStore) AppendLineWithTimestamp(line *LogicalLine, timestamp time.Time) error {
+// AppendLineWithGlobalIdx writes a line at the specified global index.
+// Supports three cases:
+//   - globalIdx already stored: updates the existing line in place
+//   - globalIdx == currentPage end: appends to current page
+//   - any other globalIdx: flushes current page, creates a new page anchored
+//     at globalIdx, and stores the line there (out-of-order insert)
+//
+// Out-of-order insert support is required by the WAL checkpoint replay path:
+// when a LineModify entry targets an index that was never appended (because
+// ensureLineNotifyGaps no longer pre-creates gap rows), the checkpoint must
+// be able to fall back to creating the line at its true globalIdx.
+func (ps *PageStore) AppendLineWithGlobalIdx(globalIdx int64, line *LogicalLine, timestamp time.Time) error {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+	return ps.writeLineLocked(globalIdx, line, timestamp)
+}
 
-	// Ensure we have a current page
-	if ps.currentPage == nil {
-		if err := ps.startNewPage(); err != nil {
-			return err
+// writeLineLocked is the inner implementation. Caller must hold ps.mu.Lock.
+func (ps *PageStore) writeLineLocked(globalIdx int64, line *LogicalLine, timestamp time.Time) error {
+	// Case 1: globalIdx already exists — update in place.
+	if entry, ok := ps.findByGlobalIdx(globalIdx); ok {
+		if ps.currentPage != nil && entry.pageID == ps.currentPage.Header.PageID {
+			return ps.currentPage.UpdateLine(entry.offsetInPage, line, timestamp)
+		}
+		return ps.updateLineInFlushedPage(entry.pageID, entry.offsetInPage, line, timestamp)
+	}
+
+	// Case 2: contiguous append to current page.
+	if ps.currentPage != nil {
+		expectedNext := int64(ps.currentPage.Header.FirstGlobalIdx) + int64(ps.currentPage.Header.LineCount)
+		if globalIdx == expectedNext {
+			if !ps.currentPage.AddLine(line, timestamp, 0) {
+				// Page is full — flush and create a new page anchored at globalIdx.
+				if err := ps.flushCurrentPage(); err != nil {
+					return err
+				}
+				ps.currentPage = NewPage(ps.nextPageID, uint64(globalIdx))
+				ps.nextPageID++
+				if !ps.currentPage.AddLine(line, timestamp, 0) {
+					// Oversized line — add anyway (same behavior as the old path).
+					ps.currentPage.AddLine(line, timestamp, 0)
+				}
+			}
+			ps.recordIndexEntry(globalIdx)
+			return nil
 		}
 	}
 
-	// Try to add line to current page
-	if !ps.currentPage.AddLine(line, timestamp, 0) {
-		// Page is full, flush and start new page
+	// Case 3: out-of-order or gap — flush current page, create a new one anchored
+	// at globalIdx, store the line. The new page will hold this single line until
+	// either a contiguous follow-up extends it or it's flushed by another insert.
+	if ps.currentPage != nil {
 		if err := ps.flushCurrentPage(); err != nil {
 			return err
 		}
-		if err := ps.startNewPage(); err != nil {
-			return err
-		}
-
-		// Add to new page (should always succeed for a fresh page)
-		if !ps.currentPage.AddLine(line, timestamp, 0) {
-			// Line is too large for a single page - this is a problem
-			// For now, we add it anyway (may exceed 64KB)
-			ps.currentPage.AddLine(line, timestamp, 0)
-		}
 	}
-
-	// Update index
-	ps.pageIndex = append(ps.pageIndex, pageIndexEntry{
-		pageID:       ps.currentPage.Header.PageID,
-		offsetInPage: int(ps.currentPage.Header.LineCount) - 1,
-	})
-
-	ps.totalLineCount++
-	ps.nextGlobalIdx++
-
+	ps.currentPage = NewPage(ps.nextPageID, uint64(globalIdx))
+	ps.nextPageID++
+	if !ps.currentPage.AddLine(line, timestamp, 0) {
+		// Oversized line — add anyway.
+		ps.currentPage.AddLine(line, timestamp, 0)
+	}
+	ps.recordIndexEntry(globalIdx)
 	return nil
 }
 
+// recordIndexEntry inserts a new entry into pageIndex (sorted by globalIdx)
+// for the line that was just added to ps.currentPage. Caller must hold ps.mu.
+func (ps *PageStore) recordIndexEntry(globalIdx int64) {
+	entry := pageIndexEntry{
+		globalIdx:    globalIdx,
+		pageID:       ps.currentPage.Header.PageID,
+		offsetInPage: int(ps.currentPage.Header.LineCount) - 1,
+	}
+
+	// Find insertion point via binary search (pageIndex is sorted by globalIdx).
+	n := len(ps.pageIndex)
+	lo, hi := 0, n
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if ps.pageIndex[mid].globalIdx < globalIdx {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+
+	if lo == n {
+		ps.pageIndex = append(ps.pageIndex, entry)
+	} else {
+		ps.pageIndex = append(ps.pageIndex, pageIndexEntry{})
+		copy(ps.pageIndex[lo+1:], ps.pageIndex[lo:])
+		ps.pageIndex[lo] = entry
+	}
+
+	ps.totalLineCount++
+	if globalIdx+1 > ps.nextGlobalIdx {
+		ps.nextGlobalIdx = globalIdx + 1
+	}
+}
+
+// findByGlobalIdx does a binary search on pageIndex for the entry matching
+// globalIdx. Returns (entry, true) if found, (zero, false) otherwise.
+// Caller must hold ps.mu (read or write).
+func (ps *PageStore) findByGlobalIdx(globalIdx int64) (pageIndexEntry, bool) {
+	n := len(ps.pageIndex)
+	lo, hi := 0, n
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if ps.pageIndex[mid].globalIdx < globalIdx {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo < n && ps.pageIndex[lo].globalIdx == globalIdx {
+		return ps.pageIndex[lo], true
+	}
+	return pageIndexEntry{}, false
+}
+
 // UpdateLine updates an existing line by global index.
-// If the line is in the current (unflushed) page, updates in-place.
-// If the line is in a flushed page, reloads, updates, and rewrites the page atomically.
-// Returns error if the index doesn't exist.
-func (ps *PageStore) UpdateLine(index int64, line *LogicalLine, timestamp time.Time) error {
+// Returns an error if the global index is not stored.
+func (ps *PageStore) UpdateLine(globalIdx int64, line *LogicalLine, timestamp time.Time) error {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
-	if index < 0 || index >= ps.totalLineCount {
-		return fmt.Errorf("line index %d out of bounds (0-%d)", index, ps.totalLineCount-1)
+	entry, ok := ps.findByGlobalIdx(globalIdx)
+	if !ok {
+		return fmt.Errorf("line %d not present in PageStore", globalIdx)
 	}
 
-	entry := ps.pageIndex[index]
-
-	// Check if line is in current page (not yet flushed) - easy case
+	// Check if line is in current (unflushed) page.
 	if ps.currentPage != nil && entry.pageID == ps.currentPage.Header.PageID {
 		return ps.currentPage.UpdateLine(entry.offsetInPage, line, timestamp)
 	}
 
-	// Line is in a flushed page - need to reload, update, and rewrite
+	// Line is in a flushed page — reload, update, rewrite atomically.
 	return ps.updateLineInFlushedPage(entry.pageID, entry.offsetInPage, line, timestamp)
 }
 
@@ -505,113 +592,176 @@ func (ps *PageStore) updateLineInFlushedPage(pageID uint64, offsetInPage int, li
 }
 
 // ReadLine reads a single line by global index.
-// Returns nil if index is out of bounds.
-func (ps *PageStore) ReadLine(index int64) (*LogicalLine, error) {
+// Returns (nil, nil) if the global index is not stored (gap or out of range).
+func (ps *PageStore) ReadLine(globalIdx int64) (*LogicalLine, error) {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
-	if index < 0 || index >= ps.totalLineCount {
+	entry, ok := ps.findByGlobalIdx(globalIdx)
+	if !ok {
 		return nil, nil
 	}
 
-	entry := ps.pageIndex[index]
-
-	// Check if line is in current page (not yet flushed)
+	// Check if line is in current page (not yet flushed).
 	if ps.currentPage != nil && entry.pageID == ps.currentPage.Header.PageID {
 		return ps.currentPage.GetLine(entry.offsetInPage), nil
 	}
 
-	// Load page from disk
+	// Load page from disk.
 	page, err := ps.loadPage(entry.pageID)
 	if err != nil {
 		return nil, err
 	}
-
 	return page.GetLine(entry.offsetInPage), nil
 }
 
-// ReadLineRange reads a range of lines [start, end).
-// Returns lines that exist within the range.
+// ReadLineRange reads a range of lines [start, end) by global index.
+// Returns a slice of length (end - start), with nil entries for gaps
+// or out-of-range indices. Caller can index directly as result[globalIdx - start].
 func (ps *PageStore) ReadLineRange(start, end int64) ([]*LogicalLine, error) {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
-	// Clamp range
 	if start < 0 {
 		start = 0
 	}
-	if end > ps.totalLineCount {
-		end = ps.totalLineCount
-	}
-	if start >= end {
+	if end <= start {
 		return nil, nil
 	}
 
-	result := make([]*LogicalLine, 0, end-start)
+	result := make([]*LogicalLine, end-start)
 
-	// Group reads by page for efficiency
+	// Find the first stored entry with globalIdx >= start.
+	lo, hi := 0, len(ps.pageIndex)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if ps.pageIndex[mid].globalIdx < start {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+
+	// Walk entries in order, loading pages lazily and batching reads.
 	var currentPageID uint64
 	var currentPage *Page
-
-	for i := start; i < end; i++ {
+	for i := lo; i < len(ps.pageIndex); i++ {
 		entry := ps.pageIndex[i]
+		if entry.globalIdx >= end {
+			break
+		}
 
-		// Check if line is in current (unflushed) page
+		var line *LogicalLine
 		if ps.currentPage != nil && entry.pageID == ps.currentPage.Header.PageID {
-			result = append(result, ps.currentPage.GetLine(entry.offsetInPage))
-			continue
-		}
-
-		// Load page if needed
-		if currentPage == nil || entry.pageID != currentPageID {
-			var err error
-			currentPage, err = ps.loadPage(entry.pageID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load page %d: %w", entry.pageID, err)
+			line = ps.currentPage.GetLine(entry.offsetInPage)
+		} else {
+			if currentPage == nil || entry.pageID != currentPageID {
+				p, err := ps.loadPage(entry.pageID)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load page %d: %w", entry.pageID, err)
+				}
+				currentPage = p
+				currentPageID = entry.pageID
 			}
-			currentPageID = entry.pageID
+			line = currentPage.GetLine(entry.offsetInPage)
 		}
 
-		result = append(result, currentPage.GetLine(entry.offsetInPage))
+		result[entry.globalIdx-start] = line
 	}
 
 	return result, nil
 }
 
-// ReadLineWithTimestamp reads a line and its timestamp.
-func (ps *PageStore) ReadLineWithTimestamp(index int64) (*LogicalLine, time.Time, error) {
+// ReadLineWithTimestamp reads a line and its timestamp by global index.
+// Returns (nil, zero, nil) if the global index is not stored.
+func (ps *PageStore) ReadLineWithTimestamp(globalIdx int64) (*LogicalLine, time.Time, error) {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
-	if index < 0 || index >= ps.totalLineCount {
+	entry, ok := ps.findByGlobalIdx(globalIdx)
+	if !ok {
 		return nil, time.Time{}, nil
 	}
 
-	entry := ps.pageIndex[index]
-
-	// Check if line is in current page
 	if ps.currentPage != nil && entry.pageID == ps.currentPage.Header.PageID {
 		line := ps.currentPage.GetLine(entry.offsetInPage)
 		ts := ps.currentPage.GetTimestamp(entry.offsetInPage)
 		return line, ts, nil
 	}
 
-	// Load page from disk
 	page, err := ps.loadPage(entry.pageID)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-
-	line := page.GetLine(entry.offsetInPage)
-	ts := page.GetTimestamp(entry.offsetInPage)
-	return line, ts, nil
+	return page.GetLine(entry.offsetInPage), page.GetTimestamp(entry.offsetInPage), nil
 }
 
-// LineCount returns the total number of lines written.
+// LineCount returns the logical end of the global-index space:
+// the highest stored global index plus one (zero if empty).
+// Note: this may exceed the number of stored lines when gaps exist.
+// Use StoredLineCount for the actual stored count.
 func (ps *PageStore) LineCount() int64 {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
+	return ps.nextGlobalIdx
+}
+
+// HasLine reports whether a line is actually stored at the given global index.
+// Unlike LineCount (which returns the logical end), this checks the sparse
+// storage directly — gap indices return false even though they lie within
+// [0, LineCount()).
+func (ps *PageStore) HasLine(globalIdx int64) bool {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	_, ok := ps.findByGlobalIdx(globalIdx)
+	return ok
+}
+
+// StoredLineCount returns the number of lines actually stored.
+// This may be less than LineCount() when there are gaps in the
+// global-index space (e.g., from LineFeed operations that advanced
+// the live edge without dirtying intermediate lines).
+func (ps *PageStore) StoredLineCount() int64 {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
 	return ps.totalLineCount
+}
+
+// GlobalIdxAtStoredPosition returns the globalIdx of the Nth stored line
+// (0-based). Used by scroll math to map a physical-line scroll position
+// to the actual sparse globalIdx, skipping gap indices that have no
+// stored content. Returns -1 if pos is out of range.
+func (ps *PageStore) GlobalIdxAtStoredPosition(pos int64) int64 {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	if pos < 0 || pos >= int64(len(ps.pageIndex)) {
+		return -1
+	}
+	return ps.pageIndex[pos].globalIdx
+}
+
+// StoredLineCountBelow returns the number of stored lines whose globalIdx
+// is strictly less than the given index. Used by scroll math to count the
+// actual scrollable disk content (excluding sparse gaps), so the viewport
+// doesn't think there are ~60K phantom rows above when most of the
+// global-index range below memBuf is gaps.
+func (ps *PageStore) StoredLineCountBelow(globalIdx int64) int64 {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	// Binary search for the first pageIndex entry with globalIdx >= the
+	// argument. The result's lower bound is the count of entries strictly
+	// less than globalIdx.
+	n := len(ps.pageIndex)
+	lo, hi := 0, n
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if ps.pageIndex[mid].globalIdx < globalIdx {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return int64(lo)
 }
 
 // Close flushes the current page and closes the store.
@@ -654,63 +804,56 @@ func (ps *PageStore) Flush() error {
 	return nil
 }
 
-// GetTimestamp returns the timestamp for a line by global index.
-func (ps *PageStore) GetTimestamp(index int64) (time.Time, error) {
-	_, ts, err := ps.ReadLineWithTimestamp(index)
+// GetTimestamp returns the timestamp for the line at the given global index.
+// Returns zero time if the index is not stored.
+func (ps *PageStore) GetTimestamp(globalIdx int64) (time.Time, error) {
+	_, ts, err := ps.ReadLineWithTimestamp(globalIdx)
 	return ts, err
 }
 
-// FindLineAt returns the global line index closest to the given time.
-// If exact match not found, returns the line just before the time.
+// FindLineAt returns the global index of the stored line closest to (but not
+// after) the given time. Returns -1 if no lines are stored.
 func (ps *PageStore) FindLineAt(t time.Time) (int64, error) {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
-	if ps.totalLineCount == 0 {
+	n := len(ps.pageIndex)
+	if n == 0 {
 		return -1, nil
 	}
 
 	targetNano := t.UnixNano()
-
-	// Binary search for the line
-	low, high := int64(0), ps.totalLineCount-1
-
-	for low < high {
-		mid := (low + high + 1) / 2
-
-		ts, err := ps.getTimestampUnlocked(mid)
+	lo, hi := 0, n-1
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		ts, err := ps.getTimestampAtPosUnlocked(mid)
 		if err != nil {
 			return -1, err
 		}
-
 		if ts.UnixNano() <= targetNano {
-			low = mid
+			lo = mid
 		} else {
-			high = mid - 1
+			hi = mid - 1
 		}
 	}
-
-	return low, nil
+	return ps.pageIndex[lo].globalIdx, nil
 }
 
-// getTimestampUnlocked gets timestamp without locking (caller must hold lock).
-func (ps *PageStore) getTimestampUnlocked(index int64) (time.Time, error) {
-	if index < 0 || index >= ps.totalLineCount {
+// getTimestampAtPosUnlocked returns the timestamp for the pageIndex entry at
+// position `pos` (not by globalIdx). Caller must hold lock.
+func (ps *PageStore) getTimestampAtPosUnlocked(pos int) (time.Time, error) {
+	if pos < 0 || pos >= len(ps.pageIndex) {
 		return time.Time{}, nil
 	}
+	entry := ps.pageIndex[pos]
 
-	entry := ps.pageIndex[index]
-
-	// Check if line is in current page
 	if ps.currentPage != nil && entry.pageID == ps.currentPage.Header.PageID {
 		return ps.currentPage.GetTimestamp(entry.offsetInPage), nil
 	}
 
-	// Load page from disk
 	page, err := ps.loadPage(entry.pageID)
 	if err != nil {
 		return time.Time{}, err
 	}
-
 	return page.GetTimestamp(entry.offsetInPage), nil
 }

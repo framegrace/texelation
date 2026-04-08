@@ -227,26 +227,98 @@ func (v *VTerm) CloseMemoryBuffer() error {
 
 	var firstErr error
 
-	// Save viewport state through WAL before closing (crash-safe)
-	if v.memBufState.persistence != nil && v.memBufState.viewport != nil {
-		v.notifyMetadataChange()
-	}
-
-	// Ensure all viewport lines are persisted. Some lines may have been
-	// created by EnsureLine (as side effects of writing to non-adjacent rows)
-	// but never individually written to or notified. Without this, those
-	// lines are lost on reload, creating gaps in the viewport.
+	// Ensure all viewport lines that have actual content are persisted.
+	// Lines created as side effects of EnsureLine (e.g. from cursor jumps,
+	// LineFeed advancement, or screen-erase reflows) may have no content
+	// and don't need to live on disk — persisting them as blank stored
+	// entries inflates pageStore and produces visible empty bands on
+	// reload. Only flush lines that lineHasContent says are non-blank.
 	if v.memBufState.persistence != nil && v.memBufState.memBuf != nil {
 		mb := v.memBufState.memBuf
 		for y := 0; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
-			if globalLine >= mb.GlobalOffset() && globalLine < mb.GlobalEnd() {
-				v.memBufState.persistence.NotifyWrite(globalLine)
+			if globalLine < mb.GlobalOffset() || globalLine >= mb.GlobalEnd() {
+				continue
 			}
+			line := mb.GetLine(globalLine)
+			if line == nil || !lineHasContent(line) {
+				continue
+			}
+			v.memBufState.persistence.NotifyWrite(globalLine)
+		}
+
+		// Sweep ALL of memBuf's dirty tracker for any lines that aren't
+		// already known to the persistence layer. This catches lines that
+		// went through a transformer-suppressed OnLineCommit path
+		// (txfmt/tablefmt buffer collapsing): the line was marked dirty
+		// in memBuf by the cell writes, but memoryBufferLineFeed returned
+		// before NotifyWriteWithMeta because the transformer's
+		// HandleLine returned true. Without this sweep those lines would
+		// stay stuck in memBuf forever and disappear on close.
+		dirty := mb.DirtyLines()
+		for _, idx := range dirty {
+			line := mb.GetLine(idx)
+			if line == nil || !lineHasContent(line) {
+				continue
+			}
+			v.memBufState.persistence.NotifyWrite(idx)
 		}
 	}
 
-	// Close persistence first (flushes pending writes, checkpoints WAL, and closes PageStore)
+	// Flush pending content BEFORE writing metadata. The walLineCount we
+	// clamp against below reflects what's actually stored — if we wrote
+	// metadata first, pending dirty lines wouldn't be counted yet and
+	// we'd clamp liveEdgeBase too aggressively.
+	if v.memBufState.persistence != nil {
+		if err := v.memBufState.persistence.Flush(); err != nil {
+			log.Printf("[MEMORY_BUFFER] Close: pre-metadata flush failed: %v", err)
+		}
+	}
+
+	// Save viewport state through WAL before closing (crash-safe).
+	// Write the metadata DIRECTLY via the WAL instead of routing through
+	// ap.pendingMetadata. The pendingMetadata path is racy: a concurrent
+	// flush (idle monitor) can clear pendingMetadata while Close is
+	// setting it, causing Close's subsequent flushPendingLocked to write
+	// no metadata. On reload, the only metadata in the WAL is from the
+	// intermediate idle flush, which may have captured liveEdgeBase
+	// mid-burst (e.g. 5000 lines in instead of 97000).
+	if v.memBufState.persistence != nil && v.memBufState.viewport != nil &&
+		v.memBufState.persistence.wal != nil {
+		state := &ViewportState{
+			ScrollOffset:    v.memBufState.viewport.ScrollOffset(),
+			LiveEdgeBase:    v.memBufState.liveEdgeBase,
+			CursorX:         v.cursorX,
+			CursorY:         v.cursorY,
+			SavedAt:         time.Now(),
+			PromptStartLine: v.PromptStartGlobalLine,
+			WorkingDir:      v.CurrentWorkingDir,
+		}
+		// Clamp LiveEdgeBase to what actually reached the WAL. Any lines
+		// the parser advanced past but never wrote (e.g. dropped in
+		// eviction races) don't exist on disk; saving a live edge beyond
+		// them leaves a blank band at reload. Better to restore slightly
+		// short and keep the tail of real content visible than to leave
+		// the viewport hovering over a void.
+		walLineCount := v.memBufState.persistence.wal.NextGlobalIdx()
+		if state.LiveEdgeBase > walLineCount {
+			log.Printf("[MEMORY_BUFFER] Close: clamping LiveEdgeBase %d → %d (WAL nextGlobalIdx)",
+				state.LiveEdgeBase, walLineCount)
+			state.LiveEdgeBase = walLineCount
+			cursorGlobal := state.LiveEdgeBase + int64(state.CursorY)
+			if cursorGlobal > walLineCount && walLineCount > 0 {
+				state.CursorY = int(walLineCount - state.LiveEdgeBase)
+				if state.CursorY < 0 {
+					state.CursorY = 0
+				}
+			}
+		}
+		if err := v.memBufState.persistence.wal.WriteMetadata(state); err != nil {
+			log.Printf("[MEMORY_BUFFER] Failed to write final metadata: %v", err)
+		}
+	}
+
+	// Close persistence (stops idle monitor, checkpoints WAL, closes PageStore).
 	if v.memBufState.persistence != nil {
 		if err := v.memBufState.persistence.Close(); err != nil && firstErr == nil {
 			firstErr = err
@@ -333,20 +405,37 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 			"Consider increasing memory buffer size or archiving old history.", lineCount)
 	}
 
-	// Load a window of history: viewport + margin for smoother scrolling
-	// Older content is accessible via PageStore fallback when scrolling
-	margin := 500
-	windowSize := viewportHeight + margin
+	// Load only the live viewport area into memBuf. Historical scrollback
+	// is served on demand from pageStore by the viewport content reader,
+	// which skips sparse gaps. Loading a wider window into memBuf would
+	// materialize empty placeholders for the gap indices in the global-
+	// index space, producing visible blank rows just above the viewport
+	// when the user scrolls back into the loaded range.
+	//
+	// Anchor the load at the saved viewport position when WAL metadata
+	// is available, so the loaded range matches what the cursor expects.
+	windowSize := viewportHeight
 	if int64(windowSize) > lineCount {
 		windowSize = int(lineCount)
 	}
 
-	// Calculate the range to load (last windowSize lines from history)
-	startIdx := lineCount - int64(windowSize)
+	endIdx := lineCount
+	if v.memBufState.persistence != nil && v.memBufState.persistence.wal != nil {
+		if saved := v.memBufState.persistence.wal.RecoveredMetadata(); saved != nil {
+			anchor := saved.LiveEdgeBase + int64(viewportHeight)
+			if anchor > lineCount {
+				anchor = lineCount
+			}
+			if anchor > int64(windowSize) {
+				endIdx = anchor
+			}
+		}
+	}
+
+	startIdx := endIdx - int64(windowSize)
 	if startIdx < 0 {
 		startIdx = 0
 	}
-	endIdx := lineCount
 
 	log.Printf("[MEMORY_BUFFER] Loading history: range [%d, %d) (%d lines) from %d total",
 		startIdx, endIdx, endIdx-startIdx, lineCount)
@@ -424,9 +513,17 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 	}
 
 	if savedState != nil {
-		// Restore liveEdgeBase if it's valid (within loaded history)
+		// Restore liveEdgeBase only if it's within the loaded history.
+		// If the saved liveEdgeBase is beyond globalEnd, the metadata is
+		// stale (content was in memory when saved but wasn't persisted),
+		// so skip cursor restoration too to keep things consistent.
+		liveEdgeRestored := false
 		if savedState.LiveEdgeBase >= mb.GlobalOffset() && savedState.LiveEdgeBase <= mb.GlobalEnd() {
 			v.memBufState.liveEdgeBase = savedState.LiveEdgeBase
+			liveEdgeRestored = true
+		} else {
+			log.Printf("[MEMORY_BUFFER] Stale metadata: saved liveEdgeBase=%d is out of range [%d, %d] — not restoring cursor",
+				savedState.LiveEdgeBase, mb.GlobalOffset(), mb.GlobalEnd())
 		}
 
 		// Restore scroll offset through the viewport
@@ -435,9 +532,10 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 			log.Printf("[MEMORY_BUFFER] Viewport scroll restored to offset %d", savedState.ScrollOffset)
 		}
 
-		// Restore cursor position, clamped to current viewport height.
-		// The metadata may have been saved when the pane was a different size.
-		if savedState.CursorX >= 0 && savedState.CursorY >= 0 {
+		// Only restore cursor if liveEdgeBase was also restored. Otherwise
+		// the cursor position refers to a different viewport anchor and
+		// would point to inconsistent content.
+		if liveEdgeRestored && savedState.CursorX >= 0 && savedState.CursorY >= 0 {
 			v.cursorX = savedState.CursorX
 			v.cursorY = savedState.CursorY
 			if v.cursorY >= v.height {
@@ -498,6 +596,14 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 // trimBlankTailLines scans backward from liveEdgeBase and clamps it to the
 // last non-empty line + 1. This repairs state after crashes where metadata
 // was persisted but trailing line content was lost (still in page cache).
+//
+// Bail out without trimming if the scan reaches the load-window floor
+// (mb.GlobalOffset) without finding content. That means the loaded window
+// is positioned above the actual content — probably because the saved
+// metadata points at a viewport that sits further up in the global-index
+// space than the loaded window. In that case, trimming blindly to the
+// floor would drop liveEdgeBase into a region with no loaded content,
+// making the real content invisible.
 func (v *VTerm) trimBlankTailLines() {
 	mb := v.memBufState.memBuf
 	if mb == nil {
@@ -505,17 +611,28 @@ func (v *VTerm) trimBlankTailLines() {
 	}
 
 	original := v.memBufState.liveEdgeBase
-	for v.memBufState.liveEdgeBase > mb.GlobalOffset() {
-		line := mb.GetLine(v.memBufState.liveEdgeBase - 1)
+	candidate := original
+	floor := mb.GlobalOffset()
+	foundContent := false
+	for candidate > floor {
+		line := mb.GetLine(candidate - 1)
 		if line != nil && lineHasContent(line) {
+			foundContent = true
 			break
 		}
-		v.memBufState.liveEdgeBase--
+		candidate--
 	}
 
-	if trimmed := original - v.memBufState.liveEdgeBase; trimmed > 0 {
+	if !foundContent {
+		log.Printf("[MEMORY_BUFFER] Trim skipped: walked liveEdgeBase %d → %d (floor) without finding content — load window does not cover the content area, keeping saved liveEdgeBase",
+			original, floor)
+		return
+	}
+
+	if candidate != original {
+		v.memBufState.liveEdgeBase = candidate
 		log.Printf("[MEMORY_BUFFER] Trimmed %d blank tail lines (liveEdgeBase %d → %d)",
-			trimmed, original, v.memBufState.liveEdgeBase)
+			original-candidate, original, candidate)
 	}
 }
 
@@ -553,28 +670,29 @@ func (v *VTerm) ensureLiveEdgeBaseConsistency() {
 	}
 }
 
-// ensureLineNotifyGaps calls EnsureLine and notifies the persistence layer
-// about ALL newly created lines, including both intermediate gap lines and
-// the target line itself. This ensures every new line gets a LineWrite WAL
-// entry before any other operation can advance nextGlobalIdx past it.
+// ensureLineNotifyGaps materializes the memBuf slot at globalLine so a
+// subsequent cell write has somewhere to go. memBuf's ring buffer is
+// physically contiguous, so EnsureLine creates intermediate slots as
+// empty placeholders along the way — but those intermediate slots are
+// NOT notified to the persistence layer.
 //
-// Previously, the target line was excluded (only gap lines notified) under
-// the assumption that the caller would persist it. But with adaptive
-// persistence, the caller's write may be deferred (Debounced/BestEffort mode),
-// and by the time it's flushed, nextGlobalIdx has advanced — causing the
-// line to be classified as LineModify instead of LineWrite. During checkpoint,
-// missing LineWrite entries cause the PageStore to have fewer lines than
-// expected, corrupting reload.
+// Historically, this function notified every newly-created gap slot to
+// keep AdaptivePersistence.pendingLines dense and contiguous. The dense
+// invariant was a workaround for the original positional PageStore,
+// which stored lines at sequential slots and required globalIdx to
+// match the slot position. Without dense pendingLines, the
+// LineWrite/LineModify classification at flush time would diverge from
+// pageStore's positional storage and corrupt checkpoint replay.
+//
+// The sparse PageStore refactor decoupled slot position from globalIdx:
+// AppendLineWithGlobalIdx stores by globalIdx, gaps are first-class,
+// and HasLine/UpdateLine handle non-contiguous indices natively. The
+// dense-pendingLines invariant is no longer required, so we no longer
+// persist phantom blank rows for cursor jumps, screen reflows, or
+// LineFeed advancement. The caller's own NotifyWrite (after the cell
+// write) is the only persistence event.
 func (v *VTerm) ensureLineNotifyGaps(mb *MemoryBuffer, globalLine int64) {
-	prevEnd := mb.GlobalEnd()
 	mb.EnsureLine(globalLine)
-	newEnd := mb.GlobalEnd()
-
-	if v.memBufState.persistence != nil && newEnd > prevEnd {
-		for idx := prevEnd; idx < newEnd; idx++ {
-			v.memBufState.persistence.NotifyWrite(idx)
-		}
-	}
 }
 
 // memoryBufferPlaceChar writes a character at the current cursor position.
@@ -646,15 +764,6 @@ func (v *VTerm) memoryBufferLineFeed() {
 	// if we're at the bottom of the viewport
 	liveEdgeAdvanced := false
 	if v.cursorY >= v.marginBottom {
-		if v.memBufState.restoredFromDisk {
-			// During recovery, suppress liveEdgeBase advance. The shell's
-			// startup output (bashrc, oh-my-bash, env loading) produces many
-			// linefeeds that would scroll the recovered content away. Instead,
-			// let the output overwrite the viewport in-place by wrapping
-			// cursorY back to the top, mimicking a fresh terminal start.
-			v.cursorY = 0
-			return
-		}
 		v.memBufState.liveEdgeBase++
 		liveEdgeAdvanced = true
 	}
@@ -1440,10 +1549,13 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 				newCursorY = 0
 			}
 
-			// But also make sure we're not showing beyond GlobalEnd
-			// The viewport should show lines from liveEdgeBase to liveEdgeBase + height - 1
-			// This should not exceed GlobalEnd - 1
-			maxLiveEdgeBase := globalEnd - int64(height)
+			// But also make sure we're not showing beyond GlobalEnd.
+			// The viewport shows rows [liveEdgeBase, liveEdgeBase+height).
+			// The bottom row's globalIdx may equal GlobalEnd (the
+			// "next write" position with no backing line yet) — that's
+			// the cursor's resting position when waiting for input.
+			// So the highest valid liveEdgeBase is GlobalEnd - height + 1.
+			maxLiveEdgeBase := globalEnd - int64(height) + 1
 			if maxLiveEdgeBase < globalOffset {
 				maxLiveEdgeBase = globalOffset
 			}
@@ -1565,6 +1677,15 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 	v.logMemBufDebug("[ERASE] EraseScreen mode=%d: globalOffset=%d, globalEnd=%d, liveEdgeBase=%d, cursorY=%d",
 		mode, mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, v.cursorY)
 
+	// Notifying persistence for default-color erased lines creates phantom
+	// blank entries in pageStore — every \e[2J would persist `height` blank
+	// lines, accumulating thousands per session and producing visible empty
+	// bands on reload. Skip notifies when the erase produces a default-color
+	// blank, so cleared regions don't take up scrollback space. If the erase
+	// uses a non-default background (e.g., a colored clear), persistence is
+	// still required so the colored erasure round-trips.
+	notifyErase := v.currentBG != DefaultBG
+
 	switch mode {
 	case 0: // Erase from cursor to end of screen
 		// If cursor is at home, push viewport to scrollback first (like modern terminals)
@@ -1577,7 +1698,7 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		for y := v.cursorY + 1; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
-			if v.memBufState.persistence != nil {
+			if notifyErase && v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
 		}
@@ -1587,7 +1708,7 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		for y := 0; y < v.cursorY; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
-			if v.memBufState.persistence != nil {
+			if notifyErase && v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
 		}
@@ -1601,7 +1722,7 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		for y := 0; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
-			if v.memBufState.persistence != nil {
+			if notifyErase && v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
 		}
