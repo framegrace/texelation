@@ -235,6 +235,13 @@ func (v *VTerm) CloseMemoryBuffer() error {
 	// reload. Only flush lines that lineHasContent says are non-blank.
 	if v.memBufState.persistence != nil && v.memBufState.memBuf != nil {
 		mb := v.memBufState.memBuf
+		log.Printf("[MEMORY_BUFFER] Close: entering sweep — liveEdgeBase=%d, memBuf range=[%d..%d), ringSize=%d, dirty=%d, walNextIdx=%d, cursor=(%d,%d)",
+			v.memBufState.liveEdgeBase,
+			mb.GlobalOffset(), mb.GlobalEnd(),
+			mb.GlobalEnd()-mb.GlobalOffset(),
+			len(mb.DirtyLines()),
+			v.memBufState.persistence.wal.NextGlobalIdx(),
+			v.cursorX, v.cursorY)
 		for y := 0; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			if globalLine < mb.GlobalOffset() || globalLine >= mb.GlobalEnd() {
@@ -270,9 +277,14 @@ func (v *VTerm) CloseMemoryBuffer() error {
 	// metadata first, pending dirty lines wouldn't be counted yet and
 	// we'd clamp liveEdgeBase too aggressively.
 	if v.memBufState.persistence != nil {
+		before := v.memBufState.persistence.wal.NextGlobalIdx()
+		pendingBefore := v.memBufState.persistence.PendingCount()
 		if err := v.memBufState.persistence.Flush(); err != nil {
 			log.Printf("[MEMORY_BUFFER] Close: pre-metadata flush failed: %v", err)
 		}
+		after := v.memBufState.persistence.wal.NextGlobalIdx()
+		log.Printf("[MEMORY_BUFFER] Close: flush wrote %d lines (pending=%d, walNextIdx %d→%d, liveEdgeBase=%d)",
+			after-before, pendingBefore, before, after, v.memBufState.liveEdgeBase)
 	}
 
 	// Save viewport state through WAL before closing (crash-safe).
@@ -313,6 +325,8 @@ func (v *VTerm) CloseMemoryBuffer() error {
 				}
 			}
 		}
+		log.Printf("[MEMORY_BUFFER] Close: writing final metadata — liveEdgeBase=%d, cursor=(%d,%d), savedAt=%v",
+			state.LiveEdgeBase, state.CursorX, state.CursorY, state.SavedAt.Format(time.RFC3339Nano))
 		if err := v.memBufState.persistence.wal.WriteMetadata(state); err != nil {
 			log.Printf("[MEMORY_BUFFER] Failed to write final metadata: %v", err)
 		}
