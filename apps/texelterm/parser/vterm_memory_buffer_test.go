@@ -1425,9 +1425,13 @@ func TestVTerm_ScrollStatePersistence(t *testing.T) {
 		}
 
 		// Verify sample line is accessible (content verification is separate concern)
-		// The scroll state (offset, liveEdgeBase) is the primary focus of this test
+		// The scroll state (offset, liveEdgeBase) is the primary focus of this test.
+		// Read from pageStore: memBuf only holds the live viewport in the
+		// sparse-aware architecture, scrollback content lives on disk.
 		var restoredSampleLineTxt string
-		if sampleLine := mb.GetLine(sampleLineIdx); sampleLine != nil {
+		if sampleLine, _ := v.memBufState.pageStore.ReadLine(sampleLineIdx); sampleLine != nil {
+			restoredSampleLineTxt = trimLogicalLine(logicalLineToString(sampleLine))
+		} else if sampleLine := mb.GetLine(sampleLineIdx); sampleLine != nil {
 			restoredSampleLineTxt = trimLogicalLine(logicalLineToString(sampleLine))
 		}
 
@@ -1445,13 +1449,14 @@ func TestVTerm_ScrollStatePersistence(t *testing.T) {
 			t.Error("Should be scrolled back in history, not at live edge")
 		}
 
-		// Verify the loaded window contains the expected range
-		// We load viewport height (24) + margin (500) = 524 lines
-		// So globalOffset should be near lineCount - 524
+		// Verify the loaded window contains the live viewport area.
+		// In the sparse-aware architecture memBuf only loads the live
+		// viewport (24 lines), not a wider scrollback margin — historical
+		// content is served directly from pageStore on demand.
 		pageStore := v.memBufState.pageStore
 		totalDiskLines := pageStore.LineCount()
-		expectedMinOffset := totalDiskLines - int64(24+500)
-		if mb.GlobalOffset() > expectedMinOffset+100 {
+		expectedMinOffset := totalDiskLines - int64(24)
+		if mb.GlobalOffset() > expectedMinOffset+24 {
 			t.Errorf("GlobalOffset %d is too far from expected ~%d", mb.GlobalOffset(), expectedMinOffset)
 		}
 
@@ -2113,15 +2118,20 @@ func TestVTerm_CrashRecoveryWithFlushedData(t *testing.T) {
 		recoveredCursorX, recoveredCursorY := v.Cursor()
 		mb := v.memBufState.memBuf
 		recoveredLineCount := mb.GlobalEnd() - mb.GlobalOffset()
+		// pageStore is the source of truth in the sparse-aware
+		// architecture; memBuf only holds the live viewport area.
+		psLineCount := v.memBufState.pageStore.LineCount()
 
 		t.Logf("State after crash recovery:")
-		t.Logf("  lineCount: %d (flushed was %d)", recoveredLineCount, flushedLineCount)
+		t.Logf("  memBuf lineCount: %d", recoveredLineCount)
+		t.Logf("  pageStore lineCount: %d (flushed was %d)", psLineCount, flushedLineCount)
 		t.Logf("  scrollOffset: %d (flushed was %d)", recoveredScrollOffset, flushedScrollOffset)
 		t.Logf("  cursor: (%d, %d) (flushed was (%d, %d))", recoveredCursorX, recoveredCursorY, flushedCursorX, flushedCursorY)
 
-		// Verify content was recovered (should match what was flushed)
-		if recoveredLineCount < flushedLineCount {
-			t.Errorf("Content loss: recovered %d lines, but flushed %d", recoveredLineCount, flushedLineCount)
+		// Verify content was recovered to pageStore (memBuf only holds the
+		// live viewport now; full history lives in pageStore).
+		if psLineCount < flushedLineCount {
+			t.Errorf("Content loss: pageStore has %d lines, but flushed %d", psLineCount, flushedLineCount)
 		}
 
 		// Verify metadata was recovered
@@ -2688,10 +2698,22 @@ func TestVTerm_ScrollRegionReloadMultipleTUISessions(t *testing.T) {
 		}
 
 		mb := v.memBufState.memBuf
-		session2GlobalOffset := mb.GlobalOffset()
-		session2Lines := extractAllLines(mb)
-		t.Logf("Session 2: %d lines, globalOffset=%d, globalEnd=%d, liveEdge=%d",
-			len(session2Lines), session2GlobalOffset, mb.GlobalEnd(), v.memBufState.liveEdgeBase)
+		// In the sparse-aware architecture memBuf only holds the live
+		// viewport. Pull the full session-2 content from pageStore so the
+		// content/marker assertions still see all of session 1's data.
+		ps := v.memBufState.pageStore
+		session2GlobalOffset := int64(0)
+		var session2Lines []string
+		for i := int64(0); i < ps.LineCount(); i++ {
+			line, _ := ps.ReadLine(i)
+			if line == nil {
+				session2Lines = append(session2Lines, "")
+				continue
+			}
+			session2Lines = append(session2Lines, trimLogicalLine(logicalLineToString(line)))
+		}
+		t.Logf("Session 2: %d lines (from pageStore), memBuf globalOffset=%d, memBuf globalEnd=%d, liveEdge=%d",
+			len(session2Lines), mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase)
 
 		// Compare overlapping content
 		s1Start := session1GlobalOffset

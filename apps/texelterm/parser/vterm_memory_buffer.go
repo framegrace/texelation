@@ -340,20 +340,37 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 			"Consider increasing memory buffer size or archiving old history.", lineCount)
 	}
 
-	// Load a window of history: viewport + margin for smoother scrolling
-	// Older content is accessible via PageStore fallback when scrolling
-	margin := 500
-	windowSize := viewportHeight + margin
+	// Load only the live viewport area into memBuf. Historical scrollback
+	// is served on demand from pageStore by the viewport content reader,
+	// which skips sparse gaps. Loading a wider window into memBuf would
+	// materialize empty placeholders for the gap indices in the global-
+	// index space, producing visible blank rows just above the viewport
+	// when the user scrolls back into the loaded range.
+	//
+	// Anchor the load at the saved viewport position when WAL metadata
+	// is available, so the loaded range matches what the cursor expects.
+	windowSize := viewportHeight
 	if int64(windowSize) > lineCount {
 		windowSize = int(lineCount)
 	}
 
-	// Calculate the range to load (last windowSize lines from history)
-	startIdx := lineCount - int64(windowSize)
+	endIdx := lineCount
+	if v.memBufState.persistence != nil && v.memBufState.persistence.wal != nil {
+		if saved := v.memBufState.persistence.wal.RecoveredMetadata(); saved != nil {
+			anchor := saved.LiveEdgeBase + int64(viewportHeight)
+			if anchor > lineCount {
+				anchor = lineCount
+			}
+			if anchor > int64(windowSize) {
+				endIdx = anchor
+			}
+		}
+	}
+
+	startIdx := endIdx - int64(windowSize)
 	if startIdx < 0 {
 		startIdx = 0
 	}
-	endIdx := lineCount
 
 	log.Printf("[MEMORY_BUFFER] Loading history: range [%d, %d) (%d lines) from %d total",
 		startIdx, endIdx, endIdx-startIdx, lineCount)
