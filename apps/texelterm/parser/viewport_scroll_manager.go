@@ -233,10 +233,31 @@ func (sm *ScrollManager) VisibleRange(viewportHeight int) (startGlobalIdx, endGl
 	// stored count) and diskLines would disagree.
 	diskLines := sm.reader.DiskStoredLinesBelow(memOffset)
 
-	// If entire visible range is in disk content, use direct mapping.
+	// Map a stored-position index in the disk portion to its true sparse
+	// globalIdx. With sparse PageStore, position N (0-based) is the Nth
+	// stored line, which lives at some non-contiguous globalIdx — using
+	// (globalOffset + N) here would step through gap indices that have
+	// no stored content, producing empty viewports for many scroll units
+	// followed by sudden full-page jumps when the window crosses into
+	// the next stored cluster.
+	diskGlobalAt := func(pos int64) int64 {
+		idx := sm.reader.DiskGlobalIdxAtPosition(pos)
+		if idx < 0 {
+			return globalOffset
+		}
+		return idx
+	}
+
+	// If entire visible range is in disk content, map both endpoints
+	// through the sparse position lookup.
 	if physicalEnd <= diskLines {
-		startGlobalIdx = globalOffset + physicalStart
-		endGlobalIdx = globalOffset + physicalEnd
+		startGlobalIdx = diskGlobalAt(physicalStart)
+		// endGlobalIdx is exclusive: walk past the last visible line.
+		if physicalEnd >= 1 {
+			endGlobalIdx = diskGlobalAt(physicalEnd-1) + 1
+		} else {
+			endGlobalIdx = startGlobalIdx
+		}
 		return startGlobalIdx, min(endGlobalIdx, memOffset)
 	}
 
@@ -248,8 +269,9 @@ func (sm *ScrollManager) VisibleRange(viewportHeight int) (startGlobalIdx, endGl
 	}
 
 	// Range spans disk and memory - handle both parts.
-	// Disk part: lines from globalOffset to memOffset.
-	startGlobalIdx = globalOffset + physicalStart
+	// Disk part: map the start through the sparse position lookup so
+	// that scrolling behaves linearly across the boundary.
+	startGlobalIdx = diskGlobalAt(physicalStart)
 
 	// Memory part: find where physical line (physicalEnd - diskLines) falls.
 	memPhysicalEnd := physicalEnd - diskLines

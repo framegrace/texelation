@@ -49,6 +49,12 @@ type ContentReader interface {
 	// math to count scrollable history without counting sparse gaps.
 	DiskStoredLinesBelow(globalIdx int64) int64
 
+	// DiskGlobalIdxAtPosition returns the globalIdx of the Nth stored
+	// disk line (0-based). Used by scroll math to map a physical scroll
+	// position to a real sparse globalIdx, skipping gap indices that
+	// have no stored content. Returns -1 if pos is out of range.
+	DiskGlobalIdxAtPosition(pos int64) int64
+
 	// TotalLines returns the total number of lines currently in memory.
 	TotalLines() int64
 
@@ -192,6 +198,15 @@ func (r *MemoryBufferReader) DiskStoredLinesBelow(globalIdx int64) int64 {
 		return 0
 	}
 	return r.pageStore.StoredLineCountBelow(globalIdx)
+}
+
+// DiskGlobalIdxAtPosition returns the globalIdx of the Nth stored disk
+// line (0-based). Without a PageStore, returns -1.
+func (r *MemoryBufferReader) DiskGlobalIdxAtPosition(pos int64) int64 {
+	if r.pageStore == nil {
+		return -1
+	}
+	return r.pageStore.GlobalIdxAtStoredPosition(pos)
 }
 
 // TotalLines returns the total number of lines currently in memory.

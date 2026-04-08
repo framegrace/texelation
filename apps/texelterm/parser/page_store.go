@@ -727,6 +727,19 @@ func (ps *PageStore) StoredLineCount() int64 {
 	return ps.totalLineCount
 }
 
+// GlobalIdxAtStoredPosition returns the globalIdx of the Nth stored line
+// (0-based). Used by scroll math to map a physical-line scroll position
+// to the actual sparse globalIdx, skipping gap indices that have no
+// stored content. Returns -1 if pos is out of range.
+func (ps *PageStore) GlobalIdxAtStoredPosition(pos int64) int64 {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	if pos < 0 || pos >= int64(len(ps.pageIndex)) {
+		return -1
+	}
+	return ps.pageIndex[pos].globalIdx
+}
+
 // StoredLineCountBelow returns the number of stored lines whose globalIdx
 // is strictly less than the given index. Used by scroll math to count the
 // actual scrollable disk content (excluding sparse gaps), so the viewport
