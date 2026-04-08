@@ -150,6 +150,14 @@ type MemoryBuffer struct {
 	// dirtyTracker manages per-line dirty state for persistence.
 	dirtyTracker *DirtyTracker
 
+	// preEvictCallback is invoked before any line is evicted from the
+	// ring buffer. The callback receives a snapshot of every dirty line
+	// in the eviction range, with each LogicalLine cloned so the
+	// callback can persist them without needing to read from memBuf
+	// (which would deadlock since memBuf is locked during eviction).
+	// Set this via SetPreEvictCallback during memBuf construction.
+	preEvictCallback func(lines []EvictedLine)
+
 	mu sync.RWMutex
 }
 
@@ -817,6 +825,13 @@ func (mb *MemoryBuffer) Evict(count int) int {
 	return mb.evictLocked(count)
 }
 
+// EvictedLine bundles a line that's about to leave the ring buffer with
+// its global index, so a pre-evict callback can persist it.
+type EvictedLine struct {
+	GlobalIdx int64
+	Line      *LogicalLine // owned clone, safe to use outside the memBuf lock
+}
+
 // evictLocked performs eviction without locking (caller must hold lock).
 func (mb *MemoryBuffer) evictLocked(count int) int {
 	if count <= 0 || mb.ringSize == 0 {
@@ -824,6 +839,32 @@ func (mb *MemoryBuffer) evictLocked(count int) int {
 	}
 	if count > mb.ringSize {
 		count = mb.ringSize
+	}
+
+	// Snapshot every dirty line about to be evicted into independent
+	// clones, then hand them to the persistence callback so the content
+	// reaches disk before the in-memory copy disappears. Without this
+	// flush, dirty lines that piled up in pendingLines during a burst
+	// get silently dropped when the ring fills — flushPendingLocked
+	// later sees mb.GetLine(idx) == nil and skips them, producing huge
+	// gaps in pageStore that look like missing content.
+	if mb.preEvictCallback != nil {
+		evictedDirty := make([]EvictedLine, 0, count)
+		for i := 0; i < count; i++ {
+			ringIdx := (mb.ringHead + i) % len(mb.lines)
+			line := mb.lines[ringIdx]
+			idx := mb.globalOffset + int64(i)
+			if line == nil || !mb.dirtyTracker.IsDirty(idx) {
+				continue
+			}
+			evictedDirty = append(evictedDirty, EvictedLine{
+				GlobalIdx: idx,
+				Line:      line.Clone(),
+			})
+		}
+		if len(evictedDirty) > 0 {
+			mb.preEvictCallback(evictedDirty)
+		}
 	}
 
 	// Clear evicted line references (help GC)
@@ -841,6 +882,14 @@ func (mb *MemoryBuffer) evictLocked(count int) int {
 	mb.dirtyTracker.RemoveBelow(mb.globalOffset)
 
 	return count
+}
+
+// SetPreEvictCallback installs a function to be called before lines are
+// evicted from the ring buffer. See preEvictCallback field comment.
+func (mb *MemoryBuffer) SetPreEvictCallback(fn func(lines []EvictedLine)) {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+	mb.preEvictCallback = fn
 }
 
 // evictIfNeeded checks capacity and evicts if over limit.

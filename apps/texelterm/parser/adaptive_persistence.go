@@ -252,10 +252,54 @@ func newAdaptivePersistenceWithNow(
 		},
 	}
 
+	// Install pre-evict callback so memBuf flushes dirty lines before
+	// they leave the ring buffer. Without this, dirty lines that piled
+	// up in pendingLines (e.g. during a BestEffort burst) get silently
+	// dropped when memBuf evicts to make room — flushPendingLocked
+	// later sees mb.GetLine(idx) == nil and skips them, producing huge
+	// gaps in pageStore.
+	memBuf.SetPreEvictCallback(ap.flushEvictedLines)
+
 	// Start idle monitor
 	ap.startIdleMonitor()
 
 	return ap, nil
+}
+
+// flushEvictedLines is invoked by MemoryBuffer.evictLocked just before
+// dirty lines disappear from the ring buffer. The lines arrive as
+// independent clones so we can persist them without re-reading from
+// memBuf (which would deadlock since memBuf is locked during eviction).
+//
+// We must NOT acquire ap.mu here because the persistence flush path
+// may already hold it indirectly via NotifyWrite → memBuf.Write paths.
+// Instead we write directly to the WAL/disk and clear pendingLines
+// entries via a brief lock acquisition at the end.
+func (ap *AdaptivePersistence) flushEvictedLines(lines []EvictedLine) {
+	if len(lines) == 0 {
+		return
+	}
+	for _, e := range lines {
+		var err error
+		if ap.wal != nil {
+			err = ap.wal.Append(e.GlobalIdx, e.Line, ap.nowFunc())
+		} else if ap.disk != nil {
+			err = ap.diskWriteOrUpdate(e.GlobalIdx, e.Line, ap.nowFunc())
+		}
+		if err != nil {
+			ap.metrics.FailedWrites++
+			continue
+		}
+		ap.metrics.LinesWritten++
+	}
+	// Clear pendingLines entries for the evicted lines so a later
+	// flush doesn't try to fetch them from memBuf (where they no
+	// longer exist).
+	ap.mu.Lock()
+	for _, e := range lines {
+		delete(ap.pendingLines, e.GlobalIdx)
+	}
+	ap.mu.Unlock()
 }
 
 // NotifyWrite is called when a line changes in MemoryBuffer.
