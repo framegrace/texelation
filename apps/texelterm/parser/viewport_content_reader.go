@@ -114,6 +114,11 @@ func (r *MemoryBufferReader) GetLine(globalIdx int64) *LogicalLine {
 
 // GetLineRange returns lines from start (inclusive) to end (exclusive).
 // Handles ranges that span both memory and disk storage.
+//
+// For the disk portion, only actually-stored lines are returned (sparse
+// gaps are skipped, NOT padded with blank placeholders). This keeps the
+// viewport renderer from materializing thousands of empty rows for the
+// gap regions in the global-index space.
 func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 	if r.pageStore == nil {
 		// No PageStore, use memory buffer directly
@@ -132,26 +137,16 @@ func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 	// Case 2: Entire range is on disk (before memory)
 	if end <= memOffset {
 		lines, _ := r.pageStore.ReadLineRange(start, end)
-		for i, line := range lines {
-			if line == nil {
-				lines[i] = blankLine()
-			}
-		}
-		return lines
+		return compactNonNil(lines)
 	}
 
 	// Case 3: Range spans disk and memory
 	result := make([]*LogicalLine, 0, end-start)
 
-	// First, get lines from disk (if any)
+	// First, get lines from disk (if any) — compact, no nil padding.
 	if start < memOffset {
 		diskLines, _ := r.pageStore.ReadLineRange(start, memOffset)
-		for i, line := range diskLines {
-			if line == nil {
-				diskLines[i] = blankLine()
-			}
-		}
-		result = append(result, diskLines...)
+		result = append(result, compactNonNil(diskLines)...)
 	}
 
 	// Then, get lines from memory
@@ -165,6 +160,19 @@ func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 	}
 
 	return result
+}
+
+// compactNonNil returns the non-nil entries from lines, preserving order.
+// Used to skip sparse gap positions in disk reads so the viewport renderer
+// doesn't produce empty rows for indices that have no stored content.
+func compactNonNil(lines []*LogicalLine) []*LogicalLine {
+	out := make([]*LogicalLine, 0, len(lines))
+	for _, line := range lines {
+		if line != nil {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // GlobalEnd returns the global index just past the last line.
