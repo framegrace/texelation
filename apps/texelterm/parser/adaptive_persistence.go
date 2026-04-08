@@ -66,15 +66,6 @@ type AdaptivePersistenceConfig struct {
 
 	// Ring buffer size for rate calculation
 	RateWindowSize int // Number of timestamps to track (default: 1000)
-
-	// Hard cap on the number of lines buffered in pendingLines before a
-	// synchronous flush is triggered. Bounds the worst-case data loss
-	// window for an uncontrolled crash (SIGKILL, OOM, power loss): at
-	// most MaxPendingLines of the most recent output can be lost — the
-	// rest has been fsynced to the WAL. Without this, BestEffort mode
-	// buffers indefinitely during a fast burst and a crash loses the
-	// entire burst. Default: 5000.
-	MaxPendingLines int
 }
 
 // DefaultAdaptivePersistenceConfig returns sensible default configuration.
@@ -86,7 +77,6 @@ func DefaultAdaptivePersistenceConfig() AdaptivePersistenceConfig {
 		DebounceMaxDelay:    500 * time.Millisecond,
 		IdleThreshold:       1 * time.Second,
 		RateWindowSize:      1000,
-		MaxPendingLines:     5000,
 	}
 }
 
@@ -474,20 +464,6 @@ func (ap *AdaptivePersistence) handleWriteLockedWithMeta(lineIdx int64, info *pe
 	case PersistBestEffort:
 		// Just add to pending; idle monitor will flush
 		ap.pendingLines[lineIdx] = info
-	}
-
-	// Enforce the pendingLines size cap. When BestEffort (or Debounced)
-	// buffering grows past the cap we flush synchronously right here on
-	// the parser goroutine. This bounds crash-loss to at most one cap's
-	// worth of the most recent output: everything below the last
-	// triggered flush has been fsynced to the WAL, so recovery after
-	// SIGKILL / OOM / power loss replays it. The cost is a small, bounded
-	// latency spike on the parser every N writes.
-	if ap.config.MaxPendingLines > 0 && len(ap.pendingLines) >= ap.config.MaxPendingLines {
-		ap.cancelFlushTimerLocked()
-		if err := ap.flushPendingLocked(); err != nil {
-			debuglog.Printf("[AdaptivePersistence] cap-triggered flush failed: %v", err)
-		}
 	}
 
 	// Warn if pending line count is getting high
