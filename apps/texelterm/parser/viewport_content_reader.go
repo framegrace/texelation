@@ -72,13 +72,6 @@ type ContentReader interface {
 type MemoryBufferReader struct {
 	buffer    *MemoryBuffer
 	pageStore *PageStore // optional fallback for evicted lines
-
-	// liveEdgeProvider returns the current live edge globalIdx. When set,
-	// GetLineRange filters blank placeholder lines from memBuf reads that
-	// fall entirely below the live edge (i.e., scrollback). Live-viewport
-	// reads (>= liveEdge) keep blanks so the cursor's current screen
-	// state renders correctly.
-	liveEdgeProvider func() int64
 }
 
 // NewMemoryBufferReader creates a new reader wrapping the given MemoryBuffer.
@@ -99,14 +92,6 @@ func NewMemoryBufferReaderWithPageStore(buffer *MemoryBuffer, pageStore *PageSto
 // when the PageStore becomes available later in initialization.
 func (r *MemoryBufferReader) SetPageStore(pageStore *PageStore) {
 	r.pageStore = pageStore
-}
-
-// SetLiveEdgeProvider supplies a callback that returns the current live
-// edge globalIdx. When set, scrollback memBuf reads (entirely below the
-// live edge) are filtered to skip blank placeholder lines that came from
-// EnsureLine side effects during sparse history load.
-func (r *MemoryBufferReader) SetLiveEdgeProvider(fn func() int64) {
-	r.liveEdgeProvider = fn
 }
 
 // GetLine returns the logical line at the given global index.
@@ -146,17 +131,7 @@ func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 
 	// Case 1: Entire range is in memory
 	if start >= memOffset && end <= memEnd {
-		lines := r.buffer.GetLineRange(start, end)
-		// If the range is entirely below the live edge (i.e. scrollback),
-		// filter out blank placeholder lines from sparse-load gap fills.
-		// Live-viewport ranges (>= liveEdge) keep their blanks because
-		// they represent real screen state.
-		if r.liveEdgeProvider != nil {
-			if end <= r.liveEdgeProvider() {
-				lines = compactNonBlank(lines)
-			}
-		}
-		return lines
+		return r.buffer.GetLineRange(start, end)
 	}
 
 	// Case 2: Entire range is on disk (before memory)
@@ -181,49 +156,10 @@ func (r *MemoryBufferReader) GetLineRange(start, end int64) []*LogicalLine {
 	}
 	if memStart < end {
 		memLines := r.buffer.GetLineRange(memStart, end)
-		// Filter scrollback portion of memBuf reads (below live edge).
-		if r.liveEdgeProvider != nil && end <= r.liveEdgeProvider() {
-			memLines = compactNonBlank(memLines)
-		}
 		result = append(result, memLines...)
 	}
 
 	return result
-}
-
-// compactNonBlank returns lines that have any visible content. Blank
-// placeholder lines (created by EnsureLine side effects during sparse
-// history load) are dropped so they don't render as empty rows in
-// scrollback views.
-func compactNonBlank(lines []*LogicalLine) []*LogicalLine {
-	out := make([]*LogicalLine, 0, len(lines))
-	for _, line := range lines {
-		if line == nil {
-			continue
-		}
-		if !lineLogicalHasContent(line) {
-			continue
-		}
-		out = append(out, line)
-	}
-	return out
-}
-
-// lineLogicalHasContent reports whether a line has any non-default
-// content: a non-space rune, non-default color, overlay, or synthetic flag.
-func lineLogicalHasContent(line *LogicalLine) bool {
-	if line.Synthetic || len(line.Overlay) > 0 {
-		return true
-	}
-	for _, c := range line.Cells {
-		if c.Rune != ' ' && c.Rune != 0 {
-			return true
-		}
-		if c.FG != DefaultFG || c.BG != DefaultBG {
-			return true
-		}
-	}
-	return false
 }
 
 // compactNonNil returns the non-nil entries from lines, preserving order.

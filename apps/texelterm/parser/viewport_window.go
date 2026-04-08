@@ -97,20 +97,6 @@ func (vw *ViewportWindow) SetPageStore(pageStore *PageStore) {
 	}
 }
 
-// SetLiveEdgeProvider supplies the function the reader should call to
-// learn the current live edge globalIdx. This lets scrollback memBuf reads
-// filter out blank placeholder lines from sparse history loads, while
-// keeping live-viewport blanks intact.
-func (vw *ViewportWindow) SetLiveEdgeProvider(fn func() int64) {
-	vw.mu.Lock()
-	defer vw.mu.Unlock()
-
-	if mbr, ok := vw.reader.(*MemoryBufferReader); ok {
-		mbr.SetLiveEdgeProvider(fn)
-		vw.cache.Invalidate()
-	}
-}
-
 // Reader returns the content reader used by this viewport.
 // Use this to access content with PageStore fallback support.
 func (vw *ViewportWindow) Reader() ContentReader {

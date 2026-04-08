@@ -163,13 +163,6 @@ func (v *VTerm) initMemoryBufferWithOptions(opts MemoryBufferOptions) {
 			v.memBufState.persistence = persistence
 			v.memBufState.pageStore = persistence.PageStore()
 			v.memBufState.viewport.SetPageStore(v.memBufState.pageStore)
-			// Provide a live-edge callback so the reader can filter blank
-			// placeholder lines from sparse history loads when serving
-			// scrollback ranges (below the live edge), while leaving the
-			// live viewport (>= live edge) untouched.
-			v.memBufState.viewport.SetLiveEdgeProvider(func() int64 {
-				return v.memBufState.liveEdgeBase
-			})
 			log.Printf("[MEMORY_BUFFER] Persistence enabled, lineCount=%d", v.memBufState.pageStore.LineCount())
 		}
 	}
@@ -355,30 +348,12 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 		windowSize = int(lineCount)
 	}
 
-	// Default: last windowSize lines of the logical range.
-	endIdx := lineCount
-
-	// If we have valid recovered metadata, anchor the load window at the
-	// saved viewport instead of the logical tail. This matters when the
-	// logical tail is a sparse gap (many blank indices between the last
-	// visible content and LineCount), which would otherwise load a
-	// window full of blanks and miss the content the user was looking at.
-	if v.memBufState.persistence != nil && v.memBufState.persistence.wal != nil {
-		if saved := v.memBufState.persistence.wal.RecoveredMetadata(); saved != nil {
-			anchor := saved.LiveEdgeBase + int64(viewportHeight)
-			if anchor > lineCount {
-				anchor = lineCount
-			}
-			if anchor > int64(windowSize) {
-				endIdx = anchor
-			}
-		}
-	}
-
-	startIdx := endIdx - int64(windowSize)
+	// Calculate the range to load (last windowSize lines from history)
+	startIdx := lineCount - int64(windowSize)
 	if startIdx < 0 {
 		startIdx = 0
 	}
+	endIdx := lineCount
 
 	log.Printf("[MEMORY_BUFFER] Loading history: range [%d, %d) (%d lines) from %d total",
 		startIdx, endIdx, endIdx-startIdx, lineCount)
