@@ -251,6 +251,23 @@ func (v *VTerm) CloseMemoryBuffer() error {
 			}
 			v.memBufState.persistence.NotifyWrite(globalLine)
 		}
+
+		// Sweep ALL of memBuf's dirty tracker for any lines that aren't
+		// already known to the persistence layer. This catches lines that
+		// went through a transformer-suppressed OnLineCommit path
+		// (txfmt/tablefmt buffer collapsing): the line was marked dirty
+		// in memBuf by the cell writes, but memoryBufferLineFeed returned
+		// before NotifyWriteWithMeta because the transformer's
+		// HandleLine returned true. Without this sweep those lines would
+		// stay stuck in memBuf forever and disappear on close.
+		dirty := mb.DirtyLines()
+		for _, idx := range dirty {
+			line := mb.GetLine(idx)
+			if line == nil || !lineHasContent(line) {
+				continue
+			}
+			v.memBufState.persistence.NotifyWrite(idx)
+		}
 	}
 
 	// Close persistence first (flushes pending writes, checkpoints WAL, and closes PageStore)
