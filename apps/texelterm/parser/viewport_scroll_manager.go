@@ -220,33 +220,38 @@ func (sm *ScrollManager) VisibleRange(viewportHeight int) (startGlobalIdx, endGl
 		return globalOffset, globalOffset
 	}
 
-	// Calculate total physical lines and target range
+	// Calculate total physical lines and target range.
 	totalPhysical := sm.TotalPhysicalLines()
 	physicalEnd := min(totalPhysical-sm.scrollOffset, totalPhysical)
 	physicalStart := max(physicalEnd-int64(viewportHeight), 0)
 
-	// Disk content uses 1:1 logical:physical mapping (estimation)
-	diskLines := memOffset - globalOffset
+	// Disk-portion line count: actually-stored lines below memOffset, NOT
+	// the span (memOffset - globalOffset). With sparse PageStore the span
+	// can include tens of thousands of gap indices that don't have any
+	// stored content; if we used the span here, the live-edge end would
+	// land deep in scrollback because totalPhysical (which uses the
+	// stored count) and diskLines would disagree.
+	diskLines := sm.reader.DiskStoredLinesBelow(memOffset)
 
-	// If entire visible range is in disk content, use direct mapping
+	// If entire visible range is in disk content, use direct mapping.
 	if physicalEnd <= diskLines {
 		startGlobalIdx = globalOffset + physicalStart
 		endGlobalIdx = globalOffset + physicalEnd
 		return startGlobalIdx, min(endGlobalIdx, memOffset)
 	}
 
-	// If entire visible range is in memory, use exact calculation
+	// If entire visible range is in memory, use exact calculation.
 	if physicalStart >= diskLines {
 		memPhysicalStart := physicalStart - diskLines
 		memPhysicalEnd := physicalEnd - diskLines
 		return sm.findLogicalRangeInMemory(memOffset, globalEnd, memPhysicalStart, memPhysicalEnd)
 	}
 
-	// Range spans disk and memory - handle both parts
-	// Disk part: lines from globalOffset to memOffset
+	// Range spans disk and memory - handle both parts.
+	// Disk part: lines from globalOffset to memOffset.
 	startGlobalIdx = globalOffset + physicalStart
 
-	// Memory part: find where physical line (physicalEnd - diskLines) falls
+	// Memory part: find where physical line (physicalEnd - diskLines) falls.
 	memPhysicalEnd := physicalEnd - diskLines
 	_, endGlobalIdx = sm.findLogicalRangeInMemory(memOffset, globalEnd, 0, memPhysicalEnd)
 
