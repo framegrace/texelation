@@ -2005,9 +2005,12 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	)
 
 	// Wire transformer pipeline from config (txfmt registers via init())
+	// TEMPORARILY DISABLED while debugging persistence issues — the
+	// transformer's buffered/suppressed line path is suspected of
+	// dropping content. Re-enable once persistence is stable.
 	pipeline := transformer.BuildPipeline(cfg)
 	a.pipeline = pipeline
-	if pipeline != nil {
+	if pipeline != nil && false {
 		pipeline.SetEnabled(a.tfmUserPref)
 		a.vterm.OnLineCommit = pipeline.HandleLine
 		a.vterm.OnPromptStart = pipeline.NotifyPromptStart
