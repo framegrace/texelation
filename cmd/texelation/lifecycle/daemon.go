@@ -49,6 +49,7 @@ type ServerOptions struct {
 	VerboseLogs  bool
 	LogFilePath  string // Daemon stdout/stderr destination
 	Title        string
+	PIDFilePath  string // Path passed through to texel-server --pid-file for flock
 }
 
 // DaemonManager handles server process lifecycle
@@ -139,10 +140,19 @@ func (d *standardDaemonManager) Start(ctx context.Context, opts ServerOptions) e
 	// where to acquire its exclusive flock; the server writes its own
 	// PID there under the lock, so supervisors can reliably distinguish
 	// "alive" from "gone" without relying on the socket.
+	//
+	// Note: the intermediate exec path is
+	//     texelation --server-only --pid-file=... --socket=...
+	// → handleServerOnly reads --pid-file and forwards it when
+	// exec'ing the actual texel-server binary.
+	pidPath := opts.PIDFilePath
+	if pidPath == "" {
+		pidPath = d.pidFile.Path()
+	}
 	args := []string{
 		"--server-only",
 		"--socket", opts.SocketPath,
-		"--pid-file", d.pidFile.Path(),
+		"--pid-file", pidPath,
 	}
 	if opts.SnapshotPath != "" {
 		args = append(args, "--snapshot", opts.SnapshotPath)
