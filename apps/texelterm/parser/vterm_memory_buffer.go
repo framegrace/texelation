@@ -227,9 +227,28 @@ func (v *VTerm) CloseMemoryBuffer() error {
 
 	var firstErr error
 
-	// Save viewport state through WAL before closing (crash-safe)
-	if v.memBufState.persistence != nil && v.memBufState.viewport != nil {
-		v.notifyMetadataChange()
+	// Save viewport state through WAL before closing (crash-safe).
+	// Write the metadata DIRECTLY via the WAL instead of routing through
+	// ap.pendingMetadata. The pendingMetadata path is racy: a concurrent
+	// flush (idle monitor) can clear pendingMetadata while Close is
+	// setting it, causing Close's subsequent flushPendingLocked to write
+	// no metadata. On reload, the only metadata in the WAL is from the
+	// intermediate idle flush, which may have captured liveEdgeBase
+	// mid-burst (e.g. 5000 lines in instead of 97000).
+	if v.memBufState.persistence != nil && v.memBufState.viewport != nil &&
+		v.memBufState.persistence.wal != nil {
+		state := &ViewportState{
+			ScrollOffset:    v.memBufState.viewport.ScrollOffset(),
+			LiveEdgeBase:    v.memBufState.liveEdgeBase,
+			CursorX:         v.cursorX,
+			CursorY:         v.cursorY,
+			SavedAt:         time.Now(),
+			PromptStartLine: v.PromptStartGlobalLine,
+			WorkingDir:      v.CurrentWorkingDir,
+		}
+		if err := v.memBufState.persistence.wal.WriteMetadata(state); err != nil {
+			log.Printf("[MEMORY_BUFFER] Failed to write final metadata: %v", err)
+		}
 	}
 
 	// Ensure all viewport lines that have actual content are persisted.
