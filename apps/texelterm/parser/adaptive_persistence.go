@@ -132,6 +132,14 @@ type AdaptivePersistence struct {
 	metrics PersistenceMetrics
 
 	mu sync.Mutex
+
+	// flushIOMu serializes the I/O phase of flushPendingLocked across
+	// concurrent callers (idle monitor vs explicit Close/Flush). Without
+	// this, two flushes can run their I/O loops in parallel: the second
+	// Close can proceed to wal.Close() while the first's idle-monitor
+	// flush is still writing entries, losing the tail of the first's
+	// snapshot when wal.Close truncates.
+	flushIOMu sync.Mutex
 }
 
 // NewAdaptivePersistence creates a new adaptive persistence layer.
@@ -630,7 +638,15 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 	ap.pendingLines = make(map[int64]*pendingLineInfo)
 
 	// --- I/O phase (unlocked): write to WAL without blocking the parser ---
+	// Hold flushIOMu to serialize with any other concurrent flush. Without
+	// this, Close can run its own flushPendingLocked while the idle monitor
+	// is still in its I/O loop, then proceed to wal.Close() which
+	// truncates the WAL and drops the idle monitor's remaining entries.
 	ap.mu.Unlock()
+	ap.flushIOMu.Lock()
+	defer func() {
+		ap.flushIOMu.Unlock()
+	}()
 
 	var firstErr error
 	for _, e := range entries {
