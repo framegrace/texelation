@@ -227,30 +227,6 @@ func (v *VTerm) CloseMemoryBuffer() error {
 
 	var firstErr error
 
-	// Save viewport state through WAL before closing (crash-safe).
-	// Write the metadata DIRECTLY via the WAL instead of routing through
-	// ap.pendingMetadata. The pendingMetadata path is racy: a concurrent
-	// flush (idle monitor) can clear pendingMetadata while Close is
-	// setting it, causing Close's subsequent flushPendingLocked to write
-	// no metadata. On reload, the only metadata in the WAL is from the
-	// intermediate idle flush, which may have captured liveEdgeBase
-	// mid-burst (e.g. 5000 lines in instead of 97000).
-	if v.memBufState.persistence != nil && v.memBufState.viewport != nil &&
-		v.memBufState.persistence.wal != nil {
-		state := &ViewportState{
-			ScrollOffset:    v.memBufState.viewport.ScrollOffset(),
-			LiveEdgeBase:    v.memBufState.liveEdgeBase,
-			CursorX:         v.cursorX,
-			CursorY:         v.cursorY,
-			SavedAt:         time.Now(),
-			PromptStartLine: v.PromptStartGlobalLine,
-			WorkingDir:      v.CurrentWorkingDir,
-		}
-		if err := v.memBufState.persistence.wal.WriteMetadata(state); err != nil {
-			log.Printf("[MEMORY_BUFFER] Failed to write final metadata: %v", err)
-		}
-	}
-
 	// Ensure all viewport lines that have actual content are persisted.
 	// Lines created as side effects of EnsureLine (e.g. from cursor jumps,
 	// LineFeed advancement, or screen-erase reflows) may have no content
@@ -259,6 +235,12 @@ func (v *VTerm) CloseMemoryBuffer() error {
 	// reload. Only flush lines that lineHasContent says are non-blank.
 	if v.memBufState.persistence != nil && v.memBufState.memBuf != nil {
 		mb := v.memBufState.memBuf
+		log.Printf("[MEMORY_BUFFER] Close: entering sweep — liveEdgeBase=%d, memBuf range=[%d..%d), ringSize=%d, dirty=%d, walNextIdx=%d",
+			v.memBufState.liveEdgeBase,
+			mb.GlobalOffset(), mb.GlobalEnd(),
+			mb.GlobalEnd()-mb.GlobalOffset(),
+			len(mb.DirtyLines()),
+			v.memBufState.persistence.wal.NextGlobalIdx())
 		for y := 0; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			if globalLine < mb.GlobalOffset() || globalLine >= mb.GlobalEnd() {
@@ -289,7 +271,65 @@ func (v *VTerm) CloseMemoryBuffer() error {
 		}
 	}
 
-	// Close persistence first (flushes pending writes, checkpoints WAL, and closes PageStore)
+	// Flush pending content BEFORE writing metadata. The walLineCount we
+	// clamp against below reflects what's actually stored — if we wrote
+	// metadata first, pending dirty lines wouldn't be counted yet and
+	// we'd clamp liveEdgeBase too aggressively.
+	if v.memBufState.persistence != nil {
+		before := v.memBufState.persistence.wal.NextGlobalIdx()
+		pendingBefore := v.memBufState.persistence.PendingCount()
+		if err := v.memBufState.persistence.Flush(); err != nil {
+			log.Printf("[MEMORY_BUFFER] Close: pre-metadata flush failed: %v", err)
+		}
+		after := v.memBufState.persistence.wal.NextGlobalIdx()
+		log.Printf("[MEMORY_BUFFER] Close: flush wrote %d lines (pending=%d, walNextIdx %d→%d, liveEdgeBase=%d)",
+			after-before, pendingBefore, before, after, v.memBufState.liveEdgeBase)
+	}
+
+	// Save viewport state through WAL before closing (crash-safe).
+	// Write the metadata DIRECTLY via the WAL instead of routing through
+	// ap.pendingMetadata. The pendingMetadata path is racy: a concurrent
+	// flush (idle monitor) can clear pendingMetadata while Close is
+	// setting it, causing Close's subsequent flushPendingLocked to write
+	// no metadata. On reload, the only metadata in the WAL is from the
+	// intermediate idle flush, which may have captured liveEdgeBase
+	// mid-burst (e.g. 5000 lines in instead of 97000).
+	if v.memBufState.persistence != nil && v.memBufState.viewport != nil &&
+		v.memBufState.persistence.wal != nil {
+		state := &ViewportState{
+			ScrollOffset:    v.memBufState.viewport.ScrollOffset(),
+			LiveEdgeBase:    v.memBufState.liveEdgeBase,
+			CursorX:         v.cursorX,
+			CursorY:         v.cursorY,
+			SavedAt:         time.Now(),
+			PromptStartLine: v.PromptStartGlobalLine,
+			WorkingDir:      v.CurrentWorkingDir,
+		}
+		// Clamp LiveEdgeBase to what actually reached the WAL. Any lines
+		// the parser advanced past but never wrote (e.g. dropped in
+		// eviction races) don't exist on disk; saving a live edge beyond
+		// them leaves a blank band at reload. Better to restore slightly
+		// short and keep the tail of real content visible than to leave
+		// the viewport hovering over a void.
+		walLineCount := v.memBufState.persistence.wal.NextGlobalIdx()
+		if state.LiveEdgeBase > walLineCount {
+			log.Printf("[MEMORY_BUFFER] Close: clamping LiveEdgeBase %d → %d (WAL nextGlobalIdx)",
+				state.LiveEdgeBase, walLineCount)
+			state.LiveEdgeBase = walLineCount
+			cursorGlobal := state.LiveEdgeBase + int64(state.CursorY)
+			if cursorGlobal > walLineCount && walLineCount > 0 {
+				state.CursorY = int(walLineCount - state.LiveEdgeBase)
+				if state.CursorY < 0 {
+					state.CursorY = 0
+				}
+			}
+		}
+		if err := v.memBufState.persistence.wal.WriteMetadata(state); err != nil {
+			log.Printf("[MEMORY_BUFFER] Failed to write final metadata: %v", err)
+		}
+	}
+
+	// Close persistence (stops idle monitor, checkpoints WAL, closes PageStore).
 	if v.memBufState.persistence != nil {
 		if err := v.memBufState.persistence.Close(); err != nil && firstErr == nil {
 			firstErr = err

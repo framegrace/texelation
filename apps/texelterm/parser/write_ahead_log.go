@@ -406,9 +406,8 @@ func (w *WriteAheadLog) Append(lineIdx int64, line *LogicalLine, timestamp time.
 		w.nextGlobalIdx = lineIdx + 1
 	}
 
-	// Check if we should auto-checkpoint due to size
+	// Check if we should auto-checkpoint due to size.
 	if w.config.CheckpointMaxSize > 0 && w.walSize >= w.config.CheckpointMaxSize {
-		// Checkpoint in background to avoid blocking writes
 		go func() {
 			w.Checkpoint()
 		}()

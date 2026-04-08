@@ -53,14 +53,17 @@ func feedAndCount(t *testing.T, name string, height int, payload string) {
 	}
 	defer ps.Close()
 
-	stored := ps.LineCount()
+	logicalEnd := ps.LineCount()
+	storedTotal := ps.StoredLineCount()
 
-	// Count blank vs content lines.
+	// Count blank vs content lines (over the logical range).
 	blank := int64(0)
 	content := int64(0)
-	for i := int64(0); i < stored; i++ {
+	gaps := int64(0)
+	for i := int64(0); i < logicalEnd; i++ {
 		line, _ := ps.ReadLine(i)
 		if line == nil {
+			gaps++
 			continue
 		}
 		hasContent := false
@@ -77,8 +80,8 @@ func feedAndCount(t *testing.T, name string, height int, payload string) {
 		}
 	}
 
-	t.Logf("[%s] input newlines=%d, stored=%d (content=%d, blank=%d), inflation=%d",
-		name, inputLines, stored, content, blank, stored-int64(inputLines))
+	t.Logf("[%s] input=%d  logicalEnd=%d  stored=%d  content=%d  storedBlank=%d  gaps=%d",
+		name, inputLines, logicalEnd, storedTotal, content, blank, gaps)
 }
 
 // TestPhantomGaps_OpenWriteOneClose verifies the close-path overhead in
