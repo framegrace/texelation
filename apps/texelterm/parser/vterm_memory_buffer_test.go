@@ -380,7 +380,10 @@ func TestVTerm_MemoryBufferTotalLines(t *testing.T) {
 // gridRowToString converts a slice of cells to a string for testing.
 // TestVTerm_ScrollRegionPreservesScrollback tests that scroll region operations
 // on the main screen preserve scrolled-off content as scrollback history.
-// This simulates the Codex CLI pattern: static header, scroll region, static footer.
+// TestVTerm_ScrollRegionPreservesScrollback verifies that scroll regions work
+// correctly (content shifts, header/footer preserved) even though no scrollback
+// is created for partial scroll regions on the main screen.
+// This simulates the Codex CLI / claude CLI pattern: static header, scroll region, static footer.
 func TestVTerm_ScrollRegionPreservesScrollback(t *testing.T) {
 	width, height := 40, 10
 	v := NewVTerm(width, height, WithMemoryBuffer())
@@ -459,40 +462,13 @@ func TestVTerm_ScrollRegionPreservesScrollback(t *testing.T) {
 		}
 	}
 
-	// Verify scrollback contains the scrolled-off lines
-	mb := v.memBufState.memBuf
+	// Partial scroll regions do NOT create scrollback (liveEdgeBase stays 0).
+	// Content that scrolls off the top of the region is discarded, not saved.
 	liveEdge := v.memBufState.liveEdgeBase
-
-	if liveEdge != 3 {
-		t.Errorf("liveEdgeBase: got %d, want 3 (3 scroll events)", liveEdge)
+	if liveEdge != 0 {
+		t.Errorf("liveEdgeBase: got %d, want 0 (no scrollback from partial scroll regions)", liveEdge)
 	}
-
-	// The scrollback lines are at global indices 0, 1, 2
-	// and should contain "Line-A", "Line-B", "Line-C" respectively
-	expectedScrollback := []string{"Line-A", "Line-B", "Line-C"}
-	for i, expected := range expectedScrollback {
-		globalIdx := int64(i)
-		line := mb.GetLine(globalIdx)
-		if line == nil {
-			t.Fatalf("Scrollback line at global %d is nil (liveEdge=%d)", globalIdx, liveEdge)
-		}
-		actual := ""
-		for _, cell := range line.Cells {
-			if cell.Rune == 0 {
-				break
-			}
-			actual += string(cell.Rune)
-		}
-		if len(actual) < 6 {
-			t.Errorf("Scrollback line at global %d too short: %q", globalIdx, actual)
-			continue
-		}
-		if actual[:6] != expected {
-			t.Errorf("Scrollback line at global %d: got %q, want prefix %q", globalIdx, actual[:6], expected)
-		}
-	}
-
-	t.Logf("liveEdgeBase=%d, scrollback has %d lines of Codex-like content", liveEdge, liveEdge)
+	t.Logf("liveEdgeBase=%d (no scrollback from partial scroll region, by design)", liveEdge)
 }
 
 // TestVTerm_ScrollRegionCodexExitSequence simulates the full Codex lifecycle:
@@ -747,6 +723,8 @@ func TestVTerm_ScrollRegionPersistRestore(t *testing.T) {
 }
 
 // TestVTerm_ScrollRegionNoHeader tests scroll region starting at row 0 (no header).
+// Verifies footer is preserved and region content shifts correctly.
+// No scrollback is created for partial scroll regions on the main screen.
 func TestVTerm_ScrollRegionNoHeader(t *testing.T) {
 	width, height := 40, 6
 	v := NewVTerm(width, height, WithMemoryBuffer())
@@ -780,30 +758,17 @@ func TestVTerm_ScrollRegionNoHeader(t *testing.T) {
 		t.Errorf("Footer corrupted: got %q, want %q", footerRow, "FOOTER")
 	}
 
-	// Verify scrollback exists
-	mb := v.memBufState.memBuf
+	// Partial scroll regions do NOT advance liveEdgeBase (no scrollback).
 	liveEdge := v.memBufState.liveEdgeBase
-	if liveEdge < 2 {
-		t.Errorf("liveEdgeBase should have advanced at least 2, got %d", liveEdge)
+	if liveEdge != 0 {
+		t.Errorf("liveEdgeBase should stay 0 (no scrollback from partial regions), got %d", liveEdge)
 	}
-
-	// Scrollback should contain Line-A and Line-B
-	for i := int64(0); i < liveEdge && i < 2; i++ {
-		line := mb.GetLine(i)
-		if line == nil {
-			t.Errorf("Scrollback line at global %d is nil", i)
-			continue
-		}
-		text := gridRowToString(line.Cells[:6])
-		expected := fmt.Sprintf("Line-%c", 'A'+rune(i))
-		if text != expected {
-			t.Errorf("Scrollback[%d]: got %q, want %q", i, text, expected)
-		}
-	}
-	t.Logf("liveEdgeBase=%d (no header case)", liveEdge)
+	t.Logf("liveEdgeBase=%d (no header case, no scrollback by design)", liveEdge)
 }
 
 // TestVTerm_ScrollRegionNoFooter tests scroll region ending at last row (no footer).
+// Verifies header is preserved and region content shifts correctly.
+// No scrollback is created for partial scroll regions on the main screen.
 func TestVTerm_ScrollRegionNoFooter(t *testing.T) {
 	width, height := 40, 6
 	v := NewVTerm(width, height, WithMemoryBuffer())
@@ -836,27 +801,12 @@ func TestVTerm_ScrollRegionNoFooter(t *testing.T) {
 		t.Errorf("Header corrupted: got %q, want %q", headerRow, "HEADER")
 	}
 
-	// Verify scrollback exists
-	mb := v.memBufState.memBuf
+	// Partial scroll regions do NOT advance liveEdgeBase (no scrollback).
 	liveEdge := v.memBufState.liveEdgeBase
-	if liveEdge < 2 {
-		t.Errorf("liveEdgeBase should have advanced at least 2, got %d", liveEdge)
+	if liveEdge != 0 {
+		t.Errorf("liveEdgeBase should stay 0 (no scrollback from partial regions), got %d", liveEdge)
 	}
-
-	// Scrollback should contain Line-A and Line-B
-	for i := int64(0); i < liveEdge && i < 2; i++ {
-		line := mb.GetLine(i)
-		if line == nil {
-			t.Errorf("Scrollback line at global %d is nil", i)
-			continue
-		}
-		text := gridRowToString(line.Cells[:6])
-		expected := fmt.Sprintf("Line-%c", 'A'+rune(i))
-		if text != expected {
-			t.Errorf("Scrollback[%d]: got %q, want %q", i, text, expected)
-		}
-	}
-	t.Logf("liveEdgeBase=%d (no footer case)", liveEdge)
+	t.Logf("liveEdgeBase=%d (no footer case, no scrollback by design)", liveEdge)
 }
 
 // TestVTerm_ScrollRegionMultipleScrollN tests scrolling by n > 1 at once.
@@ -885,17 +835,8 @@ func TestVTerm_ScrollRegionMultipleScrollN(t *testing.T) {
 		}
 	}
 
-	liveEdgeBefore := v.memBufState.liveEdgeBase
-
 	// Use CSI 3S to scroll up 3 lines at once
 	parseString(p, "\x1b[3S")
-
-	liveEdgeAfter := v.memBufState.liveEdgeBase
-
-	// liveEdgeBase should have advanced by 3
-	if liveEdgeAfter-liveEdgeBefore != 3 {
-		t.Errorf("liveEdgeBase delta: got %d, want 3", liveEdgeAfter-liveEdgeBefore)
-	}
 
 	grid := v.Grid()
 
@@ -911,22 +852,27 @@ func TestVTerm_ScrollRegionMultipleScrollN(t *testing.T) {
 		t.Errorf("Footer corrupted after multi-scroll: got %q, want %q", footerRow, "FOOTER")
 	}
 
-	// Scrollback should contain Line-A, Line-B, Line-C
-	mb := v.memBufState.memBuf
-	for i := 0; i < 3; i++ {
-		globalIdx := liveEdgeBefore + int64(i)
-		line := mb.GetLine(globalIdx)
-		if line == nil {
-			t.Fatalf("Scrollback line at global %d is nil", globalIdx)
-		}
-		text := gridRowToString(line.Cells[:6])
-		expected := fmt.Sprintf("Line-%c", 'A'+rune(i))
-		if text != expected {
-			t.Errorf("Scrollback[%d]: got %q, want %q", globalIdx, text, expected)
+	// Region rows 1-3 should have shifted content (D, E, F); rows 4-6 should be blank.
+	// Before scroll: rows 1-6 = A, B, C, D, E, F. After scroll up 3: D, E, F, blank, blank, blank.
+	expectedRegion := []string{"Line-D", "Line-E", "Line-F", "", "", ""}
+	for i, expected := range expectedRegion {
+		row := 1 + i
+		actual := gridRowToString(grid[row][:6])
+		if expected == "" {
+			if actual != "      " && actual != "" {
+				t.Errorf("Region row %d: want blank after scroll, got %q", row, actual)
+			}
+		} else if actual != expected {
+			t.Errorf("Region row %d: got %q, want %q", row, actual, expected)
 		}
 	}
 
-	t.Logf("Multi-scroll: liveEdge went from %d to %d", liveEdgeBefore, liveEdgeAfter)
+	// Partial scroll regions do NOT advance liveEdgeBase (no scrollback).
+	liveEdge := v.memBufState.liveEdgeBase
+	if liveEdge != 0 {
+		t.Errorf("liveEdgeBase should stay 0 (no scrollback from partial regions), got %d", liveEdge)
+	}
+	t.Logf("Multi-scroll: liveEdge=%d (no scrollback from partial region, by design)", liveEdge)
 }
 
 // TestVTerm_ScrollRegionFullScreenUnchanged verifies that full-screen margins

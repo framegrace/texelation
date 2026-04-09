@@ -77,6 +77,7 @@ type memoryBufferState struct {
 	// When user scrolls back to view history, liveEdgeBase doesn't change -
 	// cursor writes still go to the live edge.
 	liveEdgeBase int64
+
 }
 
 // MemoryBufferOptions configures the new memory buffer system.
@@ -1832,122 +1833,33 @@ func (v *VTerm) memoryBufferScrollRegion(n int, top int, bottom int) {
 
 	mb := v.memBufState.memBuf
 
-	scrollbackCreated := 0
-
 	if n > 0 {
-		// Scroll up: preserve scrollback by advancing liveEdgeBase, but only
-		// when the scrolled-off line has visible content. Empty lines (from
-		// cleared screens, TUI startup, etc.) are shifted in-place without
-		// creating scrollback, avoiding empty gaps in history.
+		// Scroll up: shift content up within the region, clear the bottom line.
+		// We do NOT advance liveEdgeBase here — partial scroll regions on the
+		// main screen are used by TUI apps that manage their own content model
+		// (claude CLI, codex CLI, etc.). Creating scrollback from these scrolls
+		// produces duplicate history entries whenever the TUI redraws on resize.
+		// Real scrollback is created exclusively by memoryBufferLineFeed, which
+		// handles full-screen LF at the bottom with no active DECSTBM region.
 		for i := 0; i < n; i++ {
-			scrolledOffGlobal := v.memBufState.liveEdgeBase + int64(top)
-			scrolledOffLine := mb.GetLine(scrolledOffGlobal)
-
-			// Check if the scrolled-off line has any visible content
-			hasContent := false
-			if scrolledOffLine != nil {
-				for _, cell := range scrolledOffLine.Cells {
-					if cell.Rune != 0 && cell.Rune != ' ' {
-						hasContent = true
-						break
-					}
+			for y := top; y < bottom; y++ {
+				srcGlobal := v.memBufState.liveEdgeBase + int64(y+1)
+				dstGlobal := v.memBufState.liveEdgeBase + int64(y)
+				srcLine := mb.GetLine(srcGlobal)
+				dstLine := mb.EnsureLine(dstGlobal)
+				if srcLine != nil && dstLine != nil {
+					dstLine.Cells = make([]Cell, len(srcLine.Cells))
+					copy(dstLine.Cells, srcLine.Cells)
+					dstLine.FixedWidth = srcLine.FixedWidth
+				} else if dstLine != nil {
+					dstLine.Cells = nil
+					dstLine.FixedWidth = 0
 				}
+				mb.MarkDirty(dstGlobal)
 			}
-
-			if !hasContent {
-				// Empty line: shift in-place without creating scrollback
-				for y := top; y < bottom; y++ {
-					srcGlobal := v.memBufState.liveEdgeBase + int64(y+1)
-					dstGlobal := v.memBufState.liveEdgeBase + int64(y)
-					srcLine := mb.GetLine(srcGlobal)
-					dstLine := mb.EnsureLine(dstGlobal)
-					if srcLine != nil && dstLine != nil {
-						dstLine.Cells = make([]Cell, len(srcLine.Cells))
-						copy(dstLine.Cells, srcLine.Cells)
-						dstLine.FixedWidth = srcLine.FixedWidth
-					} else if dstLine != nil {
-						dstLine.Cells = nil
-						dstLine.FixedWidth = 0
-					}
-					mb.MarkDirty(dstGlobal)
-				}
-				bottomGlobal := v.memBufState.liveEdgeBase + int64(bottom)
-				mb.EraseLine(bottomGlobal, DefaultFG, DefaultBG)
-				mb.MarkDirty(bottomGlobal)
-				v.memBufState.viewport.InvalidateCache()
-				continue
-			}
-
-			// Content line: advance liveEdgeBase to create scrollback.
-			//   1. Clone static header (rows 0..top-1) and footer (rows bottom+1..height-1)
-			//   2. Copy the scrolled-off line (at region top) to row 0 (becomes scrollback)
-			//   3. Advance liveEdgeBase — viewport slides down, region content shifts up
-			//   4. Restore header and footer at their new global positions
-			//   5. Clear the bottom of the scroll region
-
-			// Step 1: Clone header lines (above scroll region)
-			var headerClones []*LogicalLine
-			for y := 0; y < top; y++ {
-				line := mb.GetLine(v.memBufState.liveEdgeBase + int64(y))
-				if line != nil {
-					headerClones = append(headerClones, line.Clone())
-				} else {
-					headerClones = append(headerClones, NewLogicalLine())
-				}
-			}
-
-			// Step 1b: Clone footer lines (below scroll region)
-			var footerClones []*LogicalLine
-			for y := bottom + 1; y < v.height; y++ {
-				line := mb.GetLine(v.memBufState.liveEdgeBase + int64(y))
-				if line != nil {
-					footerClones = append(footerClones, line.Clone())
-				} else {
-					footerClones = append(footerClones, NewLogicalLine())
-				}
-			}
-
-			// Step 2: Copy the scrolled-off line (top of region) to row 0
-			// so it becomes the line that enters scrollback when liveEdgeBase advances.
-			if top > 0 {
-				destLine := mb.EnsureLine(v.memBufState.liveEdgeBase)
-				if scrolledOffLine != nil && destLine != nil {
-					destLine.Cells = make([]Cell, len(scrolledOffLine.Cells))
-					copy(destLine.Cells, scrolledOffLine.Cells)
-					destLine.FixedWidth = scrolledOffLine.FixedWidth
-				}
-			}
-
-			// Step 3: Advance liveEdgeBase — the old row 0 becomes scrollback
-			v.memBufState.liveEdgeBase++
-			scrollbackCreated++
-
-			// Ensure all viewport lines exist at the new positions
-			for y := 0; y < v.height; y++ {
-				mb.EnsureLine(v.memBufState.liveEdgeBase + int64(y))
-			}
-
-			// Step 4a: Restore header at new positions
-			for y := 0; y < top; y++ {
-				globalIdx := v.memBufState.liveEdgeBase + int64(y)
-				mb.SetLine(globalIdx, headerClones[y])
-				mb.MarkDirty(globalIdx)
-			}
-
-			// Step 4b: Clear bottom of scroll region
 			bottomGlobal := v.memBufState.liveEdgeBase + int64(bottom)
 			mb.EraseLine(bottomGlobal, DefaultFG, DefaultBG)
 			mb.MarkDirty(bottomGlobal)
-
-			// Step 4c: Restore footer at new positions
-			for y := bottom + 1; y < v.height; y++ {
-				globalIdx := v.memBufState.liveEdgeBase + int64(y)
-				footerIdx := y - (bottom + 1)
-				mb.SetLine(globalIdx, footerClones[footerIdx])
-				mb.MarkDirty(globalIdx)
-			}
-
-			// Invalidate viewport cache since content shifted
 			v.memBufState.viewport.InvalidateCache()
 		}
 	} else if n < 0 {
@@ -1977,33 +1889,12 @@ func (v *VTerm) memoryBufferScrollRegion(n int, top int, bottom int) {
 		}
 	}
 
-	// Notify persistence for all affected lines
+	// Notify persistence for all affected lines in the scroll region.
 	if v.memBufState.persistence != nil {
-		if scrollbackCreated > 0 {
-			// Scrollback was created: notify scrollback lines + ALL viewport lines
-			// (header/footer moved to new global positions when liveEdgeBase advanced)
-			for i := scrollbackCreated; i > 0; i-- {
-				scrollbackLine := v.memBufState.liveEdgeBase - int64(i)
-				if scrollbackLine >= 0 {
-					v.memBufState.persistence.NotifyWrite(scrollbackLine)
-				}
-			}
-			for y := 0; y < v.height; y++ {
-				globalLine := v.memBufState.liveEdgeBase + int64(y)
-				v.memBufState.persistence.NotifyWrite(globalLine)
-			}
-		} else {
-			// In-place shift only: notify scroll region lines
-			for y := top; y <= bottom; y++ {
-				globalLine := v.memBufState.liveEdgeBase + int64(y)
-				v.memBufState.persistence.NotifyWrite(globalLine)
-			}
+		for y := top; y <= bottom; y++ {
+			globalLine := v.memBufState.liveEdgeBase + int64(y)
+			v.memBufState.persistence.NotifyWrite(globalLine)
 		}
-	}
-
-	// Save metadata when liveEdgeBase changed (so it's persisted on exit)
-	if scrollbackCreated > 0 {
-		v.notifyMetadataChange()
 	}
 }
 
