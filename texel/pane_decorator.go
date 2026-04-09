@@ -395,6 +395,29 @@ func (d *PaneDecorator) HandleMouse(absX, absY int, buttons tcell.ButtonMask, bo
 	return "", true
 }
 
+// HoverZoneContains reports whether the given absolute screen point
+// would trigger pill interaction (hover-expand or click). The zone is
+// the expanded-width rect along the pane's top border, so the check
+// holds regardless of the pill's current collapsed/expanded state.
+//
+// Used by the mouse dispatch path to give the pill priority over
+// border-resize handling — clicks inside this zone should run the pill
+// action, not start a resize drag on the shared border.
+func (d *PaneDecorator) HoverZoneContains(absX, absY int, borderX0, borderX1, borderY int) bool {
+	if d == nil || !d.HasActions() {
+		return false
+	}
+	if absY != borderY {
+		return false
+	}
+	expandedW := d.expandedWidth()
+	pillX := borderX1 - expandedW - 1
+	if pillX < borderX0+1 {
+		pillX = borderX0 + 1
+	}
+	return absX >= pillX && absX < pillX+expandedW
+}
+
 // expandedWidth returns the pill width as if it were expanded.
 // Used by HandleMouse to determine the hover zone regardless of current state.
 func (d *PaneDecorator) expandedWidth() int {

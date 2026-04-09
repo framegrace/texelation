@@ -66,9 +66,13 @@ func (p *pane) handlePaste(data []byte) {
 
 // handleMouse forwards a mouse event to the pane's app with local coordinates.
 func (p *pane) handleMouse(x, y int, buttons tcell.ButtonMask, modifiers tcell.ModMask) {
-	// Check decorator pill on the top border. Only interactive on the active pane.
-	// Always forward mouse position so the pill can collapse when leaving its zone.
-	if p.decorator != nil && p.decorator.HasActions() && p.IsActive {
+	// Check decorator pill on the top border. The pill is interactive on
+	// any pane — gating this on p.IsActive meant clicks on an inactive
+	// pane's pill fell through to the normal pane mouse path, which
+	// activated the pane (firing the pane.active flash effect) instead
+	// of running the pill action. The pane still activates via
+	// activatePaneAt in processMouseEvent, but now the action runs too.
+	if p.decorator != nil && p.decorator.HasActions() {
 		help, consumed := p.decorator.HandleMouse(x, y, buttons, p.absX0, p.absX1, p.absY0)
 		if consumed {
 			if help != "" && p.screen != nil && p.screen.desktop != nil {
