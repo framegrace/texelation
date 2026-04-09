@@ -1750,6 +1750,16 @@ func (v *VTerm) memoryBufferPushViewportToScrollback() {
 		return
 	}
 
+	// If a partial scroll region (DECSTBM) is active, the app is a TUI managing
+	// its own display model. ESC[2J is part of its redraw cycle — the same content
+	// is about to be redrawn to the screen. Pushing now would duplicate it in
+	// scrollback on every resize. Only push for full-screen margins (the 'clear'
+	// command use case, where a shell prompt is present and content won't return).
+	isFullScreenMargins := v.marginTop == 0 && v.marginBottom == v.height-1
+	if !isFullScreenMargins {
+		return
+	}
+
 	mb := v.memBufState.memBuf
 
 	// Find first and last rows with visible content
