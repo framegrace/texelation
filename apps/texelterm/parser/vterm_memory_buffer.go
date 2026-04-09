@@ -1526,57 +1526,57 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 			// Shrinking: Adjust liveEdgeBase so cursor stays visible.
 			v.clampCursorToHeight(cursorGlobalLine, height, "Shrink cursor off-screen")
 		} else {
-			// Growing: Show more scrollback above if available
-			// We want to show more history while keeping the cursor at the same relative position
-			// from the bottom of the content.
-
-			// How many more rows do we have?
-			heightDelta := height - oldHeight
-
-			// Try to move liveEdgeBase back to show more history
-			newLiveEdgeBase := v.memBufState.liveEdgeBase - int64(heightDelta)
-			if newLiveEdgeBase < globalOffset {
-				newLiveEdgeBase = globalOffset
+			// Growing.
+			//
+			// When at the live edge AND a live shell/app has already run
+			// (restoredFromDisk is false), keep liveEdgeBase stable. The
+			// terminal grows downward — new empty rows appear below the current
+			// content and the app fills them after receiving SIGWINCH. Exposing
+			// scrollback rows here would let the app's SIGWINCH-triggered full
+			// redraw (starting from row 0 in screen coords = liveEdgeBase in
+			// global coords) overwrite that history, producing duplicates and
+			// causing TUI content to jump to the top of the panel.
+			//
+			// When restoredFromDisk is true the session was just recovered and
+			// no live app has run yet — this is the client-reconnect scenario
+			// (server shrank to minimal size, client grows back to real size).
+			// In that case we DO reveal history to restore the previous view.
+			//
+			// When scrolled back (user reading history), always reveal more
+			// history above regardless of restoredFromDisk.
+			liveAndActive := v.memoryBufferAtLiveEdge() && !v.memBufState.restoredFromDisk
+			if liveAndActive {
+				// Stable liveEdgeBase: new rows appear below cursor.
+				if v.cursorY >= height {
+					v.cursorY = height - 1
+				}
+				v.logMemBufDebug("[RESIZE] Grow (live+active): liveEdgeBase unchanged=%d, cursorY=%d",
+					v.memBufState.liveEdgeBase, v.cursorY)
+			} else {
+				// Reconnect or scrolled back: reveal more history above.
+				heightDelta := height - oldHeight
+				newLiveEdgeBase := v.memBufState.liveEdgeBase - int64(heightDelta)
+				if newLiveEdgeBase < globalOffset {
+					newLiveEdgeBase = globalOffset
+				}
+				maxLiveEdgeBase := globalEnd - int64(height) + 1
+				if maxLiveEdgeBase < globalOffset {
+					maxLiveEdgeBase = globalOffset
+				}
+				if newLiveEdgeBase > maxLiveEdgeBase {
+					newLiveEdgeBase = maxLiveEdgeBase
+				}
+				v.memBufState.liveEdgeBase = newLiveEdgeBase
+				v.cursorY = int(cursorGlobalLine - newLiveEdgeBase)
+				if v.cursorY >= height {
+					v.cursorY = height - 1
+				}
+				if v.cursorY < 0 {
+					v.cursorY = 0
+				}
+				v.logMemBufDebug("[RESIZE] Grow (reconnect/scrolled): liveEdgeBase=%d, cursorY=%d",
+					v.memBufState.liveEdgeBase, v.cursorY)
 			}
-
-			// Calculate new cursor Y to point to the same global line
-			newCursorY := int(cursorGlobalLine - newLiveEdgeBase)
-
-			// Make sure cursor is within bounds
-			if newCursorY >= height {
-				newCursorY = height - 1
-			}
-			if newCursorY < 0 {
-				newCursorY = 0
-			}
-
-			// But also make sure we're not showing beyond GlobalEnd.
-			// The viewport shows rows [liveEdgeBase, liveEdgeBase+height).
-			// The bottom row's globalIdx may equal GlobalEnd (the
-			// "next write" position with no backing line yet) — that's
-			// the cursor's resting position when waiting for input.
-			// So the highest valid liveEdgeBase is GlobalEnd - height + 1.
-			maxLiveEdgeBase := globalEnd - int64(height) + 1
-			if maxLiveEdgeBase < globalOffset {
-				maxLiveEdgeBase = globalOffset
-			}
-			if newLiveEdgeBase > maxLiveEdgeBase {
-				newLiveEdgeBase = maxLiveEdgeBase
-			}
-
-			v.memBufState.liveEdgeBase = newLiveEdgeBase
-			v.cursorY = int(cursorGlobalLine - newLiveEdgeBase)
-
-			// Re-clamp cursor
-			if v.cursorY >= height {
-				v.cursorY = height - 1
-			}
-			if v.cursorY < 0 {
-				v.cursorY = 0
-			}
-
-			v.logMemBufDebug("[RESIZE] Grow: adjusted liveEdgeBase=%d, cursorY=%d",
-				v.memBufState.liveEdgeBase, v.cursorY)
 		}
 	}
 
