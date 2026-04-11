@@ -249,3 +249,35 @@ func TestWriteWindow_ResizeShrinkPartialAdvance(t *testing.T) {
 		t.Errorf("CursorRow after partial advance = %d, want 19", got)
 	}
 }
+
+func TestWriteWindow_EraseDisplayClearsWindow(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	// Fill store [0..9] with content, window covers [0..4].
+	for i := int64(0); i < 10; i++ {
+		store.SetLine(i, []parser.Cell{{Rune: 'X'}})
+	}
+	ww.EraseDisplay()
+	// [0..4] cleared; [5..9] preserved.
+	for i := int64(0); i <= 4; i++ {
+		if got := store.GetLine(i); got != nil && len(got) > 0 && got[0].Rune != 0 {
+			t.Errorf("row %d should be cleared, got %v", i, got)
+		}
+	}
+	for i := int64(5); i <= 9; i++ {
+		if got := store.Get(i, 0).Rune; got != 'X' {
+			t.Errorf("row %d should be preserved, got %q", i, got)
+		}
+	}
+}
+
+func TestWriteWindow_EraseLineClearsCurrentRow(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	store.SetLine(2, []parser.Cell{{Rune: 'A'}, {Rune: 'B'}, {Rune: 'C'}})
+	ww.SetCursor(2, 0)
+	ww.EraseLine()
+	if got := store.GetLine(2); got != nil && len(got) > 0 && got[0].Rune != 0 {
+		t.Errorf("row 2 should be cleared, got %v", got)
+	}
+}
