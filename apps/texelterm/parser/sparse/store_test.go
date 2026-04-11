@@ -118,3 +118,31 @@ func TestStore_GetLineReturnsCopy(t *testing.T) {
 		t.Errorf("Store was mutated by caller: Get(0,0) = %q, want A", got)
 	}
 }
+
+func TestStore_ClearRangeRemovesOnlyTargets(t *testing.T) {
+	s := NewStore(10)
+	s.SetLine(0, []parser.Cell{{Rune: 'A'}})
+	s.SetLine(5, []parser.Cell{{Rune: 'B'}})
+	s.SetLine(10, []parser.Cell{{Rune: 'C'}})
+
+	s.ClearRange(3, 7) // inclusive range
+
+	if got := s.GetLine(0); got == nil || got[0].Rune != 'A' {
+		t.Errorf("line 0 should be preserved, got %v", got)
+	}
+	if got := s.GetLine(5); got != nil && len(got) > 0 && got[0].Rune != 0 {
+		t.Errorf("line 5 should be cleared, got %v", got)
+	}
+	if got := s.GetLine(10); got == nil || got[0].Rune != 'C' {
+		t.Errorf("line 10 should be preserved, got %v", got)
+	}
+}
+
+func TestStore_ClearRangeKeepsContentEnd(t *testing.T) {
+	s := NewStore(10)
+	s.SetLine(20, []parser.Cell{{Rune: 'X'}})
+	s.ClearRange(20, 20)
+	if got := s.Max(); got != 20 {
+		t.Errorf("Max() after ClearRange = %d, want 20 (contentEnd never decreases)", got)
+	}
+}

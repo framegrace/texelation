@@ -126,3 +126,17 @@ func (s *Store) SetLine(globalIdx int64, cells []parser.Cell) {
 		s.contentEnd = globalIdx
 	}
 }
+
+// ClearRange removes every line in the closed interval [lo, hi]. Lines
+// outside the interval are untouched. contentEnd is not decreased — a
+// cleared range still counts as "ever been written" for the high-water mark.
+func (s *Store) ClearRange(lo, hi int64) {
+	if lo > hi {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := lo; k <= hi; k++ {
+		delete(s.lines, k)
+	}
+}
