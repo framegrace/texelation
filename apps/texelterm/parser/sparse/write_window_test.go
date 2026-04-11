@@ -83,3 +83,51 @@ func TestWriteWindow_SetCursorClampsToWindow(t *testing.T) {
 		t.Errorf("col clamp: col = %d, want 9", col)
 	}
 }
+
+func TestWriteWindow_NewlineAdvancesCursor(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	ww.WriteCell(parser.Cell{Rune: 'a'})
+	ww.Newline()
+
+	gi, col := ww.Cursor()
+	if gi != 1 || col != 0 {
+		t.Errorf("after Newline from row 0, Cursor() = (%d,%d), want (1,0)", gi, col)
+	}
+	if got := ww.WriteTop(); got != 0 {
+		t.Errorf("WriteTop() should not move; got %d", got)
+	}
+}
+
+func TestWriteWindow_NewlineAtBottomAdvancesWriteTop(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 3)
+	// Park cursor at last row.
+	ww.SetCursor(2, 0)
+	ww.Newline()
+
+	if got := ww.WriteTop(); got != 1 {
+		t.Errorf("WriteTop() after LF at bottom = %d, want 1 (scrolled up)", got)
+	}
+	if got := ww.WriteBottom(); got != 3 {
+		t.Errorf("WriteBottom() = %d, want 3", got)
+	}
+	gi, col := ww.Cursor()
+	if gi != 3 || col != 0 {
+		t.Errorf("Cursor() = (%d,%d), want (3,0)", gi, col)
+	}
+}
+
+func TestWriteWindow_NewlinePreservesContent(t *testing.T) {
+	// Content at oldWriteTop (row 0) must stay in the store even after the
+	// window moves — that's the whole "scrollback is a windowing concept" principle.
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 3)
+	ww.WriteCell(parser.Cell{Rune: 'H'})  // row 0
+	ww.SetCursor(2, 0)
+	ww.Newline() // scrolls
+
+	if got := store.Get(0, 0).Rune; got != 'H' {
+		t.Errorf("after scroll-up, store[0][0] = %q, want H (content survives)", got)
+	}
+}
