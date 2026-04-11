@@ -146,3 +146,31 @@ func TestStore_ClearRangeKeepsContentEnd(t *testing.T) {
 		t.Errorf("Max() after ClearRange = %d, want 20 (contentEnd never decreases)", got)
 	}
 }
+
+func TestStore_ConcurrentReadersWriter(t *testing.T) {
+	s := NewStore(80)
+	const N = 200
+	done := make(chan struct{})
+
+	// One writer filling in lines.
+	go func() {
+		for i := int64(0); i < N; i++ {
+			s.SetLine(i, []parser.Cell{{Rune: 'x'}})
+		}
+		close(done)
+	}()
+
+	// Many readers hammering.
+	for r := 0; r < 8; r++ {
+		go func() {
+			for i := int64(0); i < N; i++ {
+				_ = s.Get(i, 0)
+				_ = s.GetLine(i)
+				_ = s.Max()
+				_ = s.Width()
+			}
+		}()
+	}
+
+	<-done
+}
