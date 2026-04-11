@@ -44,3 +44,42 @@ func TestWriteWindow_WriteCellAdvancesCol(t *testing.T) {
 		t.Errorf("store[0][1] = %q, want i", got)
 	}
 }
+
+func TestWriteWindow_CarriageReturn(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	ww.WriteCell(parser.Cell{Rune: 'h'})
+	ww.WriteCell(parser.Cell{Rune: 'i'})
+	ww.CarriageReturn()
+	gi, col := ww.Cursor()
+	if gi != 0 || col != 0 {
+		t.Errorf("after CR, Cursor() = (%d,%d), want (0,0)", gi, col)
+	}
+}
+
+func TestWriteWindow_SetCursorRelative(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 10)
+	ww.SetCursor(3, 7) // row 3, col 7
+	gi, col := ww.Cursor()
+	if gi != 3 || col != 7 {
+		t.Errorf("SetCursor(3,7): Cursor() = (%d,%d), want (3,7)", gi, col)
+	}
+	if got := ww.CursorRow(); got != 3 {
+		t.Errorf("CursorRow() = %d, want 3", got)
+	}
+}
+
+func TestWriteWindow_SetCursorClampsToWindow(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	ww.SetCursor(100, 100) // way out of range
+	gi, col := ww.Cursor()
+	// Clamp row to [0, height-1] and col to [0, width-1].
+	if gi != 4 {
+		t.Errorf("row clamp: gi = %d, want 4", gi)
+	}
+	if col != 9 {
+		t.Errorf("col clamp: col = %d, want 9", col)
+	}
+}
