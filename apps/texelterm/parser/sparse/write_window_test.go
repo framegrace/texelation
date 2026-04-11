@@ -131,3 +131,41 @@ func TestWriteWindow_NewlinePreservesContent(t *testing.T) {
 		t.Errorf("after scroll-up, store[0][0] = %q, want H (content survives)", got)
 	}
 }
+
+func TestWriteWindow_ResizeGrowRetreatsWriteTop(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	// Scroll down 10 times so writeTop is at 10.
+	for i := 0; i < 10; i++ {
+		ww.SetCursor(4, 0)
+		ww.Newline()
+	}
+	if got := ww.WriteTop(); got != 10 {
+		t.Fatalf("setup: WriteTop = %d, want 10", got)
+	}
+
+	// Grow from 5 to 8. writeTop should retreat by 3 to keep writeBottom pinned.
+	ww.Resize(10, 8)
+	if got := ww.WriteTop(); got != 7 {
+		t.Errorf("after grow 5->8, WriteTop = %d, want 7", got)
+	}
+	if got := ww.WriteBottom(); got != 14 {
+		t.Errorf("after grow, WriteBottom = %d, want 14 (unchanged)", got)
+	}
+	if got := ww.Height(); got != 8 {
+		t.Errorf("Height = %d, want 8", got)
+	}
+}
+
+func TestWriteWindow_ResizeGrowClampsAtZero(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	// writeTop = 0. Grow to 10 — shallow scrollback case.
+	ww.Resize(10, 10)
+	if got := ww.WriteTop(); got != 0 {
+		t.Errorf("after grow from 0, WriteTop = %d, want 0 (clamped)", got)
+	}
+	if got := ww.WriteBottom(); got != 9 {
+		t.Errorf("WriteBottom = %d, want 9 (extended past oldWriteBottom=4)", got)
+	}
+}
