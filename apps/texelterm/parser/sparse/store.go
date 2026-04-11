@@ -93,3 +93,36 @@ func (s *Store) Set(globalIdx int64, col int, cell parser.Cell) {
 		s.contentEnd = globalIdx
 	}
 }
+
+// GetLine returns a copy of the cells at globalIdx. Returns nil if the
+// globalIdx has never been written to. The returned slice is safe to mutate
+// — it does not alias Store internal state.
+func (s *Store) GetLine(globalIdx int64) []parser.Cell {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	line, ok := s.lines[globalIdx]
+	if !ok {
+		return nil
+	}
+	out := make([]parser.Cell, len(line.cells))
+	copy(out, line.cells)
+	return out
+}
+
+// SetLine replaces the cells at globalIdx with a copy of cells. Any existing
+// content at that globalIdx is overwritten in full. To preserve alignment
+// with column 0, callers must pass cells starting at column 0.
+func (s *Store) SetLine(globalIdx int64, cells []parser.Cell) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	line, ok := s.lines[globalIdx]
+	if !ok {
+		line = &storeLine{}
+		s.lines[globalIdx] = line
+	}
+	line.cells = make([]parser.Cell, len(cells))
+	copy(line.cells, cells)
+	if globalIdx > s.contentEnd {
+		s.contentEnd = globalIdx
+	}
+}

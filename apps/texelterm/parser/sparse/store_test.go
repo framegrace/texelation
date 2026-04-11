@@ -69,3 +69,52 @@ func TestStore_MaxNeverDecreases(t *testing.T) {
 		t.Errorf("Max() after writing higher then lower = %d, want 10", got)
 	}
 }
+
+func TestStore_SetLineGetLine(t *testing.T) {
+	s := NewStore(10)
+	line := []parser.Cell{
+		{Rune: 'h'}, {Rune: 'i'}, {Rune: '!'},
+	}
+	s.SetLine(3, line)
+
+	got := s.GetLine(3)
+	if len(got) != 3 {
+		t.Fatalf("GetLine(3) len = %d, want 3", len(got))
+	}
+	if got[0].Rune != 'h' || got[1].Rune != 'i' || got[2].Rune != '!' {
+		t.Errorf("GetLine(3) runes = %q,%q,%q; want h,i,!",
+			got[0].Rune, got[1].Rune, got[2].Rune)
+	}
+}
+
+func TestStore_SetLineOverwritesExistingCells(t *testing.T) {
+	s := NewStore(10)
+	s.Set(0, 5, parser.Cell{Rune: 'X'}) // existing cell at col 5
+	s.SetLine(0, []parser.Cell{{Rune: 'A'}, {Rune: 'B'}})
+
+	line := s.GetLine(0)
+	if len(line) != 2 {
+		t.Fatalf("GetLine(0) len = %d, want 2 (SetLine replaces, not merges)", len(line))
+	}
+}
+
+func TestStore_GetLineDoesNotAffectAdjacent(t *testing.T) {
+	s := NewStore(10)
+	s.SetLine(5, []parser.Cell{{Rune: 'X'}})
+	if got := s.GetLine(4); got != nil && len(got) != 0 {
+		t.Errorf("GetLine(4) = %v, want empty/nil", got)
+	}
+	if got := s.GetLine(6); got != nil && len(got) != 0 {
+		t.Errorf("GetLine(6) = %v, want empty/nil", got)
+	}
+}
+
+func TestStore_GetLineReturnsCopy(t *testing.T) {
+	s := NewStore(10)
+	s.SetLine(0, []parser.Cell{{Rune: 'A'}})
+	line := s.GetLine(0)
+	line[0].Rune = 'Z' // mutate returned slice
+	if got := s.Get(0, 0).Rune; got != 'A' {
+		t.Errorf("Store was mutated by caller: Get(0,0) = %q, want A", got)
+	}
+}
