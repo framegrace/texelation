@@ -2,6 +2,8 @@ package sparse
 
 import (
 	"testing"
+
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
 func TestWriteWindow_NewInitialState(t *testing.T) {
@@ -22,5 +24,23 @@ func TestWriteWindow_NewInitialState(t *testing.T) {
 	gi, col := ww.Cursor()
 	if gi != 0 || col != 0 {
 		t.Errorf("Cursor() = (%d,%d), want (0,0)", gi, col)
+	}
+}
+
+func TestWriteWindow_WriteCellAdvancesCol(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	ww.WriteCell(parser.Cell{Rune: 'h'})
+	ww.WriteCell(parser.Cell{Rune: 'i'})
+
+	gi, col := ww.Cursor()
+	if gi != 0 || col != 2 {
+		t.Errorf("Cursor() after 2 writes = (%d,%d), want (0,2)", gi, col)
+	}
+	if got := store.Get(0, 0).Rune; got != 'h' {
+		t.Errorf("store[0][0] = %q, want h", got)
+	}
+	if got := store.Get(0, 1).Rune; got != 'i' {
+		t.Errorf("store[0][1] = %q, want i", got)
 	}
 }
