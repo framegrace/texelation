@@ -123,7 +123,7 @@ func TestWriteWindow_NewlinePreservesContent(t *testing.T) {
 	// window moves — that's the whole "scrollback is a windowing concept" principle.
 	store := NewStore(10)
 	ww := NewWriteWindow(store, 10, 3)
-	ww.WriteCell(parser.Cell{Rune: 'H'})  // row 0
+	ww.WriteCell(parser.Cell{Rune: 'H'}) // row 0
 	ww.SetCursor(2, 0)
 	ww.Newline() // scrolls
 

@@ -165,9 +165,9 @@ func (w *WriteWindow) Resize(newWidth, newHeight int) {
 	defer w.mu.Unlock()
 
 	if newHeight > w.height {
-		w.resizeGrowLocked(newWidth, newHeight)
+		w.resizeGrowLocked(newHeight)
 	} else if newHeight < w.height {
-		w.resizeShrinkLocked(newWidth, newHeight)
+		w.resizeShrinkLocked(newHeight)
 	}
 	w.width = newWidth
 	w.height = newHeight
@@ -185,7 +185,7 @@ func (w *WriteWindow) Resize(newWidth, newHeight int) {
 }
 
 // resizeGrowLocked assumes w.mu is held.
-func (w *WriteWindow) resizeGrowLocked(newWidth, newHeight int) {
+func (w *WriteWindow) resizeGrowLocked(newHeight int) {
 	delta := int64(newHeight - w.height)
 	newTop := w.writeTop - delta
 	if newTop < 0 {
@@ -196,7 +196,7 @@ func (w *WriteWindow) resizeGrowLocked(newWidth, newHeight int) {
 
 // resizeShrinkLocked implements Rule 5 shrink: cursor-minimum-advance.
 // Preconditions: w.mu held, newHeight < w.height.
-func (w *WriteWindow) resizeShrinkLocked(newWidth, newHeight int) {
+func (w *WriteWindow) resizeShrinkLocked(newHeight int) {
 	oldWriteBottom := w.writeTop + int64(w.height) - 1
 	// Tentative newWriteBottom if writeTop didn't move.
 	tentativeBottom := w.writeTop + int64(newHeight) - 1
@@ -211,12 +211,16 @@ func (w *WriteWindow) resizeShrinkLocked(newWidth, newHeight int) {
 	// Cells [newWriteBottom+1, oldWriteBottom] are scratch space below the
 	// new window. Clear them.
 	if oldWriteBottom > newWriteBottom {
+		// ClearRange is called while w.mu is held (unlike WriteCell/EraseDisplay which
+		// release first). This is intentional: newWriteBottom is derived from the
+		// already-updated w.writeTop, so the mutation and the clear must be atomic
+		// with respect to w.mu. The call order (WriteWindow.mu → Store.mu) is safe
+		// per the design's acyclic lock acquisition rule.
 		w.store.ClearRange(newWriteBottom+1, oldWriteBottom)
 	}
 
 	// Cells in [oldWriteTop, writeTop) (only when advance > 0) stay in the
 	// store. They are now "above the window" — scrollback. No action needed.
-	_ = newWidth
 }
 
 // EraseDisplay clears every cell in the current write window [writeTop,
