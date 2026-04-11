@@ -53,3 +53,43 @@ func (s *Store) Max() int64 {
 	defer s.mu.RUnlock()
 	return s.contentEnd
 }
+
+// Get returns the Cell at (globalIdx, col). Returns a zero-value Cell if the
+// globalIdx has never been written to or if col is outside the line's current
+// length.
+func (s *Store) Get(globalIdx int64, col int) parser.Cell {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	line, ok := s.lines[globalIdx]
+	if !ok {
+		return parser.Cell{}
+	}
+	if col < 0 || col >= len(line.cells) {
+		return parser.Cell{}
+	}
+	return line.cells[col]
+}
+
+// Set writes a single Cell at (globalIdx, col). The target line is
+// automatically extended to cover col if it did not already.
+func (s *Store) Set(globalIdx int64, col int, cell parser.Cell) {
+	if col < 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	line, ok := s.lines[globalIdx]
+	if !ok {
+		line = &storeLine{}
+		s.lines[globalIdx] = line
+	}
+	if col >= len(line.cells) {
+		newCells := make([]parser.Cell, col+1)
+		copy(newCells, line.cells)
+		line.cells = newCells
+	}
+	line.cells[col] = cell
+	if globalIdx > s.contentEnd {
+		s.contentEnd = globalIdx
+	}
+}
