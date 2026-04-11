@@ -40,9 +40,8 @@ func NewStore(width int) *Store {
 }
 
 // Width returns the column width the Store was created with.
+// width is set in NewStore and never mutated, so no lock is needed.
 func (s *Store) Width() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.width
 }
 
@@ -84,9 +83,14 @@ func (s *Store) Set(globalIdx int64, col int, cell parser.Cell) {
 		s.lines[globalIdx] = line
 	}
 	if col >= len(line.cells) {
-		newCells := make([]parser.Cell, col+1)
-		copy(newCells, line.cells)
-		line.cells = newCells
+		needed := col + 1
+		newCap := cap(line.cells) * 2
+		if newCap < needed {
+			newCap = needed
+		}
+		grown := make([]parser.Cell, needed, newCap)
+		copy(grown, line.cells)
+		line.cells = grown
 	}
 	line.cells[col] = cell
 	if globalIdx > s.contentEnd {
@@ -136,6 +140,9 @@ func (s *Store) ClearRange(lo, hi int64) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Iterate the interval directly. This is O(hi-lo+1) rather than O(len(lines)),
+	// which is efficient when the range is dense. If callers need to evict large
+	// sparse ranges, prefer iterating s.lines keys instead.
 	for k := lo; k <= hi; k++ {
 		delete(s.lines, k)
 	}

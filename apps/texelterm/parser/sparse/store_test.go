@@ -1,6 +1,7 @@
 package sparse
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
@@ -150,19 +151,22 @@ func TestStore_ClearRangeKeepsContentEnd(t *testing.T) {
 func TestStore_ConcurrentReadersWriter(t *testing.T) {
 	s := NewStore(80)
 	const N = 200
-	done := make(chan struct{})
+	var wg sync.WaitGroup
 
 	// One writer filling in lines.
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for i := int64(0); i < N; i++ {
 			s.SetLine(i, []parser.Cell{{Rune: 'x'}})
 		}
-		close(done)
 	}()
 
 	// Many readers hammering.
 	for r := 0; r < 8; r++ {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for i := int64(0); i < N; i++ {
 				_ = s.Get(i, 0)
 				_ = s.GetLine(i)
@@ -172,5 +176,5 @@ func TestStore_ConcurrentReadersWriter(t *testing.T) {
 		}()
 	}
 
-	<-done
+	wg.Wait()
 }
