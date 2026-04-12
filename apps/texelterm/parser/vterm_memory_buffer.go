@@ -711,6 +711,16 @@ func (v *VTerm) memoryBufferPlaceCharWide(r rune, isWide bool) {
 		return
 	}
 
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.WriteCell(Cell{
+			Rune: r,
+			FG:   v.currentFG,
+			BG:   v.currentBG,
+			Attr: v.currentAttr,
+		})
+	}
+
 	// Ensure liveEdgeBase is consistent with GlobalOffset
 	v.ensureLiveEdgeBaseConsistency()
 
@@ -760,6 +770,11 @@ func (v *VTerm) memoryBufferLineFeed() {
 	isFullScreenMargins := v.marginTop == 0 && v.marginBottom == v.height-1
 	if !isFullScreenMargins {
 		return
+	}
+
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.Newline()
 	}
 
 	// Calculate current global line
@@ -846,6 +861,11 @@ func (v *VTerm) memoryBufferLineFeedForWrap() {
 		return
 	}
 
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.Newline()
+	}
+
 	if v.cursorY >= v.marginBottom {
 		v.memBufState.liveEdgeBase++
 	}
@@ -862,6 +882,11 @@ func (v *VTerm) memoryBufferLineFeedForWrap() {
 func (v *VTerm) memoryBufferCarriageReturn() {
 	if !v.IsMemoryBufferEnabled() {
 		return
+	}
+
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.CarriageReturn()
 	}
 
 	// Calculate global line and set cursor
@@ -1434,6 +1459,11 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 		return
 	}
 
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.Resize(width, height)
+	}
+
 	// On first resize after initialization with history, load history from disk.
 	// This is deferred until resize because we need to know the viewport height.
 	if !v.memBufState.historyLoaded && v.memBufState.pageStore != nil {
@@ -1636,6 +1666,11 @@ func (v *VTerm) memoryBufferEraseLine() {
 		return
 	}
 
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.EraseLine()
+	}
+
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
 	v.memBufState.memBuf.EraseLine(globalLine, v.currentFG, v.currentBG)
 
@@ -1676,6 +1711,11 @@ func (v *VTerm) memoryBufferEraseCharacters(n int) {
 func (v *VTerm) memoryBufferEraseScreen(mode int) {
 	if !v.IsMemoryBufferEnabled() {
 		return
+	}
+
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.EraseDisplay()
 	}
 
 	mb := v.memBufState.memBuf
@@ -2018,6 +2058,11 @@ func (v *VTerm) memoryBufferScrollRegion(n int, top int, bottom int) {
 func (v *VTerm) memoryBufferSetCursorFromPhysical() {
 	if !v.IsMemoryBufferEnabled() {
 		return
+	}
+
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.SetCursor(v.cursorY, v.cursorX)
 	}
 
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
