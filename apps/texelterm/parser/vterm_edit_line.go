@@ -28,6 +28,7 @@ func (v *VTerm) InsertLines(n int) {
 		v.insertFullLines(n)
 	}
 
+	v.syncEditLineRegionToSparse()
 	v.MarkAllDirty()
 }
 
@@ -153,6 +154,7 @@ func (v *VTerm) DeleteLines(n int) {
 		v.deleteFullLines(n)
 	}
 
+	v.syncEditLineRegionToSparse()
 	v.MarkAllDirty()
 }
 
@@ -252,6 +254,26 @@ func (v *VTerm) deleteLinesWithinMargins(n int) {
 				}
 				v.setHistoryLine(topHistory+y, line)
 			}
+		}
+	}
+}
+
+// syncEditLineRegionToSparse syncs the [marginTop, marginBottom] row range
+// from MemoryBuffer to the sparse mainScreen after IL/DL operations.
+func (v *VTerm) syncEditLineRegionToSparse() {
+	if v.mainScreen == nil || v.inAltScreen || v.memBufState == nil || v.memBufState.memBuf == nil {
+		return
+	}
+	mb := v.memBufState.memBuf
+	for y := v.marginTop; y <= v.marginBottom; y++ {
+		gi := v.memBufState.liveEdgeBase + int64(y)
+		line := mb.GetLine(gi)
+		if line != nil {
+			cells := make([]Cell, len(line.Cells))
+			copy(cells, line.Cells)
+			v.mainScreen.SetLine(gi, cells)
+		} else {
+			v.mainScreen.SetLine(gi, nil)
 		}
 	}
 }

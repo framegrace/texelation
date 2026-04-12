@@ -59,13 +59,6 @@ type memoryBufferState struct {
 	// This prevents loading history multiple times.
 	historyLoaded bool
 
-	// restoredFromDisk is set after history is loaded from disk. It suppresses
-	// memoryBufferPushViewportToScrollback calls to prevent the recovered
-	// viewport content from being pushed into scrollback again (it's already
-	// there from the previous session). Cleared on first real scroll.
-	restoredFromDisk bool
-
-
 	// pendingHistoryLines is the number of historical lines available in PageStore.
 	// Set during initialization, used by first Resize() to load history.
 	pendingHistoryLines int64
@@ -166,6 +159,11 @@ func (v *VTerm) initMemoryBufferWithOptions(opts MemoryBufferOptions) {
 			log.Printf("[MEMORY_BUFFER] Persistence enabled, lineCount=%d", v.memBufState.pageStore.LineCount())
 		}
 	}
+
+	// Create the sparse terminal alongside the legacy buffer for dual-write.
+	if MainScreenFactory != nil {
+		v.mainScreen = MainScreenFactory(v.width, v.height)
+	}
 }
 
 // EnableMemoryBuffer switches to the new memory buffer system.
@@ -206,7 +204,18 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 			log.Printf("[MEMORY_BUFFER] %d historical lines available, loading now (height=%d)", lineCount, v.height)
 			v.loadHistoryFromDisk(v.height)
 			v.memBufState.historyLoaded = true
-			v.memBufState.restoredFromDisk = true
+
+			// Populate sparse store from PageStore so the grid flip has history.
+			if v.mainScreen != nil && v.memBufState.pageStore != nil {
+				if err := v.mainScreen.LoadFromPageStore(v.memBufState.pageStore); err != nil {
+					log.Printf("[MEMORY_BUFFER] sparse LoadFromPageStore failed: %v", err)
+				}
+				// Restore sparse write state to match the reloaded liveEdgeBase.
+				v.mainScreen.RestoreState(v.memBufState.liveEdgeBase, v.memBufState.liveEdgeBase+int64(v.cursorY), v.cursorX)
+				// Overlay any lines that have in-memory overlay content (e.g. transformer-
+				// formatted lines) so the sparse grid reflects the formatted view.
+				v.syncOverlaysToSparse()
+			}
 			return nil
 		}
 	}
@@ -577,13 +586,6 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 	// Repair state after crash: trim blank tail lines that were never synced.
 	v.trimBlankTailLines()
 
-	// Note: restoredFromDisk flag is set by the caller. When true, linefeed
-	// at the bottom of the viewport does NOT advance liveEdgeBase — the
-	// shell's startup output (bashrc, oh-my-bash, etc.) overwrites the
-	// viewport in-place instead of scrolling the recovered content away.
-	// The flag is cleared when the shell sends its first prompt marker
-	// (OSC 133;A), at which point normal scrolling resumes.
-
 	// Reset terminal drawing state to theme defaults after history reload.
 	// Without this, currentFG/currentBG could be left in an unexpected state,
 	// making new shell output invisible. The shell will re-emit its own
@@ -720,6 +722,18 @@ func (v *VTerm) memoryBufferPlaceCharWide(r rune, isWide bool) {
 	// Set cursor to correct position
 	mb.SetCursor(globalLine, v.cursorX)
 
+	// Dual-write to sparse mainScreen (after cursor sync)
+	if v.mainScreen != nil {
+		v.mainScreen.SetCursor(v.cursorY, v.cursorX)
+		v.mainScreen.WriteCell(Cell{
+			Rune: r,
+			FG:   v.currentFG,
+			BG:   v.currentBG,
+			Attr: v.currentAttr,
+			Wide: isWide,
+		})
+	}
+
 	// Write the character
 	if isWide {
 		mb.WriteWide(r, v.currentFG, v.currentBG, v.currentAttr, true)
@@ -755,6 +769,11 @@ func (v *VTerm) memoryBufferLineFeed() {
 	isFullScreenMargins := v.marginTop == 0 && v.marginBottom == v.height-1
 	if !isFullScreenMargins {
 		return
+	}
+
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.Newline()
 	}
 
 	// Calculate current global line
@@ -841,6 +860,11 @@ func (v *VTerm) memoryBufferLineFeedForWrap() {
 		return
 	}
 
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.Newline()
+	}
+
 	if v.cursorY >= v.marginBottom {
 		v.memBufState.liveEdgeBase++
 	}
@@ -859,6 +883,11 @@ func (v *VTerm) memoryBufferCarriageReturn() {
 		return
 	}
 
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.CarriageReturn()
+	}
+
 	// Calculate global line and set cursor
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
 	v.memBufState.memBuf.SetCursor(globalLine, 0)
@@ -866,14 +895,31 @@ func (v *VTerm) memoryBufferCarriageReturn() {
 
 // --- Grid Access ---
 
-// memoryBufferGrid returns the viewport grid from ViewportWindow.
+// memoryBufferGrid returns the viewport grid. When the sparse MainScreen is
+// active, it returns mainScreen.Grid() directly; otherwise falls back to
+// the legacy ViewportWindow.
 // If a search term is set, matching text is highlighted with reversed colors.
 func (v *VTerm) memoryBufferGrid() [][]Cell {
 	if !v.IsMemoryBufferEnabled() {
 		return nil
 	}
 
-	grid := v.memBufState.viewport.VisibleGrid()
+	var grid [][]Cell
+	if v.mainScreen != nil && v.commitInsertOffset == 0 {
+		grid = v.mainScreen.Grid()
+		// Sparse Grid() returns Cell{} (Rune=0) for unwritten/erased cells.
+		// Convert to space so callers see consistent blank cells (matching
+		// the MemoryBuffer viewport's behavior and what VT tests expect).
+		for _, row := range grid {
+			for i, c := range row {
+				if c.Rune == 0 {
+					row[i].Rune = ' '
+				}
+			}
+		}
+	} else {
+		grid = v.memBufState.viewport.VisibleGrid()
+	}
 
 	// Apply search highlighting if a term is set
 	if v.searchHighlight != "" && len(grid) > 0 {
@@ -1267,6 +1313,24 @@ func (v *VTerm) memoryBufferAtLiveEdge() bool {
 	return v.memBufState.viewport.IsAtLiveEdge()
 }
 
+// syncOverlaysToSparse writes any lines in the MemoryBuffer that carry
+// overlay content into the sparse MainScreen store. Called after
+// loadHistoryFromDisk so that the grid flip shows overlay-formatted lines
+// rather than the raw underlying cells loaded from the PageStore.
+func (v *VTerm) syncOverlaysToSparse() {
+	if v.mainScreen == nil || v.memBufState == nil {
+		return
+	}
+	mb := v.memBufState.memBuf
+	for idx := mb.GlobalOffset(); idx < mb.GlobalEnd(); idx++ {
+		line := mb.GetLine(idx)
+		if line == nil || line.Overlay == nil {
+			continue
+		}
+		v.mainScreen.SetLine(idx, line.Overlay)
+	}
+}
+
 // --- Resize ---
 
 // combineAndCollapseChain combines all cells in the wrap chain from chainStart
@@ -1401,11 +1465,20 @@ func (v *VTerm) rejoinResizeSplitChain() {
 	}
 
 	// Combine all chain lines into one and delete extras.
-	combineAndCollapseChain(mb, chainStart, chainEnd)
+	combined := combineAndCollapseChain(mb, chainStart, chainEnd)
 
 	// Clear ResizeSplit on the combined line.
 	if firstLine := mb.GetLine(chainStart); firstLine != nil {
 		firstLine.ResizeSplit = false
+	}
+
+	// Sync rejoin to sparse: write the combined line and clear the deleted
+	// entries so sparse.Grid() sees the same layout as MemoryBuffer.
+	if v.mainScreen != nil && len(combined) > 0 {
+		v.mainScreen.SetLine(chainStart, combined)
+		if chainEnd > chainStart {
+			v.mainScreen.ClearRange(chainStart+1, chainEnd)
+		}
 	}
 
 	// Adjust cursor position.
@@ -1429,11 +1502,27 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 		return
 	}
 
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.Resize(width, height)
+	}
+
 	// On first resize after initialization with history, load history from disk.
 	// This is deferred until resize because we need to know the viewport height.
 	if !v.memBufState.historyLoaded && v.memBufState.pageStore != nil {
 		v.loadHistoryFromDisk(height)
 		v.memBufState.historyLoaded = true
+
+		// Populate sparse store from PageStore so the grid flip has history.
+		if v.mainScreen != nil && v.memBufState.pageStore != nil {
+			if err := v.mainScreen.LoadFromPageStore(v.memBufState.pageStore); err != nil {
+				log.Printf("[MEMORY_BUFFER] sparse LoadFromPageStore failed: %v", err)
+			}
+			// Restore sparse write state to match the reloaded liveEdgeBase.
+			v.mainScreen.RestoreState(v.memBufState.liveEdgeBase, v.memBufState.liveEdgeBase+int64(v.cursorY), v.cursorX)
+			// Overlay any lines that have in-memory overlay content.
+			v.syncOverlaysToSparse()
+		}
 	}
 
 	oldWidth := v.memBufState.viewport.Width()
@@ -1459,6 +1548,7 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	// correctly address the content. When wrap is off, the logical line stays
 	// intact and content past the right edge is simply hidden until the terminal
 	// is widened again.
+	//
 	if width > 0 && v.cursorX >= width {
 		line := mb.GetLine(cursorGlobalLine)
 		if line != nil && len(line.Cells) > width {
@@ -1489,18 +1579,27 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 					insertIdx := cursorGlobalLine + int64(i)
 					mb.InsertLine(insertIdx)
 					mb.SetLine(insertIdx, &LogicalLine{Cells: chunk, ResizeSplit: true})
+
+					// Sync each new chunk into the sparse store so Grid() shows
+					// the wrapped content at the correct globalIdx row.
+					if v.mainScreen != nil {
+						v.mainScreen.SetLine(insertIdx, chunk)
+					}
+				}
+
+				// Sync first chunk to sparse (replaces the full original line).
+				if v.mainScreen != nil {
+					v.mainScreen.SetLine(cursorGlobalLine, firstChunk)
 				}
 
 				// Adjust cursor to the correct split segment.
 				extraRows := absoluteCol / width
 				v.cursorX = absoluteCol % width
 				v.cursorY += extraRows
+				cursorGlobalLine = v.memBufState.liveEdgeBase + int64(v.cursorY)
 
 				v.logMemBufDebug("[RESIZE] Width split: %d-cell line into %d chunks, cursor adjusted to (%d,%d)",
 					len(cells), numChunks, v.cursorX, v.cursorY)
-
-				// Recalculate cursorGlobalLine after adjustment.
-				cursorGlobalLine = v.memBufState.liveEdgeBase + int64(v.cursorY)
 			}
 		}
 	}
@@ -1582,6 +1681,18 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	// Ensure consistency
 	v.ensureLiveEdgeBaseConsistency()
 
+	// Sync sparse write state so its writeTop and cursor match liveEdgeBase.
+	// MemoryBuffer may have advanced liveEdgeBase via split-chain or clamp
+	// operations after the initial mainScreen.Resize() call. Without this
+	// sync, sparse.Grid() is anchored at the wrong viewTop.
+	if v.mainScreen != nil {
+		v.mainScreen.RestoreState(
+			v.memBufState.liveEdgeBase,
+			v.memBufState.liveEdgeBase+int64(v.cursorY),
+			v.cursorX,
+		)
+	}
+
 	v.logMemBufDebug("[RESIZE] After: liveEdgeBase=%d, cursorY=%d, height=%d",
 		v.memBufState.liveEdgeBase, v.cursorY, height)
 
@@ -1601,6 +1712,11 @@ func (v *VTerm) memoryBufferEraseToEndOfLine() {
 		return
 	}
 
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.EraseToEndOfLine(v.cursorX)
+	}
+
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
 	v.memBufState.memBuf.EraseToEndOfLine(globalLine, v.cursorX, v.currentFG, v.currentBG)
 
@@ -1616,6 +1732,11 @@ func (v *VTerm) memoryBufferEraseFromStartOfLine() {
 		return
 	}
 
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.EraseFromStartOfLine(v.cursorX)
+	}
+
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
 	v.memBufState.memBuf.EraseFromStartOfLine(globalLine, v.cursorX, v.currentFG, v.currentBG)
 
@@ -1629,6 +1750,11 @@ func (v *VTerm) memoryBufferEraseFromStartOfLine() {
 func (v *VTerm) memoryBufferEraseLine() {
 	if !v.IsMemoryBufferEnabled() {
 		return
+	}
+
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.EraseLine()
 	}
 
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
@@ -1661,6 +1787,13 @@ func (v *VTerm) memoryBufferEraseCharacters(n int) {
 		mb.SetCell(globalLine, col, Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG})
 	}
 
+	// Dual-write erased cells to sparse so Grid() reflects the erasure.
+	if v.mainScreen != nil {
+		if line := mb.GetLine(globalLine); line != nil {
+			v.mainScreen.SetLine(globalLine, line.Cells)
+		}
+	}
+
 	// Mark dirty for persistence
 	if v.memBufState.persistence != nil {
 		v.memBufState.persistence.NotifyWrite(globalLine)
@@ -1688,16 +1821,15 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 
 	switch mode {
 	case 0: // Erase from cursor to end of screen
-		// If cursor is at home, push viewport to scrollback first (like modern terminals)
-		if v.cursorY == 0 && v.cursorX == 0 {
-			v.memoryBufferPushViewportToScrollback()
-		}
-		// Erase current line from cursor
+		// Erase current line from cursor (includes sparse dual-write)
 		v.memoryBufferEraseToEndOfLine()
 		// Erase all lines below
 		for y := v.cursorY + 1; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
+			if v.mainScreen != nil {
+				v.mainScreen.SetLine(globalLine, nil)
+			}
 			if notifyErase && v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
@@ -1708,17 +1840,20 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		for y := 0; y < v.cursorY; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
+			if v.mainScreen != nil {
+				v.mainScreen.SetLine(globalLine, nil)
+			}
 			if notifyErase && v.memBufState.persistence != nil {
 				v.memBufState.persistence.NotifyWrite(globalLine)
 			}
 		}
-		// Erase current line from start to cursor
+		// Erase current line from start to cursor (includes sparse dual-write)
 		v.memoryBufferEraseFromStartOfLine()
 
 	case 2: // Erase entire visible screen
-		// Push non-empty viewport content to scrollback before clearing,
-		// matching modern terminal behavior (iTerm2, GNOME Terminal).
-		v.memoryBufferPushViewportToScrollback()
+		if v.mainScreen != nil {
+			v.mainScreen.EraseDisplay()
+		}
 		for y := 0; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
@@ -1727,97 +1862,6 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 			}
 		}
 	}
-}
-
-// memoryBufferPushViewportToScrollback advances liveEdgeBase to push non-empty
-// viewport content into scrollback history before a screen clear. This matches
-// the behavior of modern terminals (iTerm2, VTE/GNOME Terminal) which preserve
-// screen content in scrollback when ESC[2J or ESC[H ESC[J is received.
-//
-// Leading and trailing empty rows are trimmed: only the range from the first
-// non-empty row through the last non-empty row is preserved. Content is
-// compacted to row 0 before advancing liveEdgeBase so no empty prefix enters
-// scrollback.
-func (v *VTerm) memoryBufferPushViewportToScrollback() {
-	// After restoring from disk, the viewport content is already in scrollback.
-	// The first screen clear (from shell startup) should not push it again —
-	// that would advance liveEdgeBase by a full viewport height, making the
-	// screen appear blank with content one scroll-up away.
-	if v.memBufState.restoredFromDisk {
-		log.Printf("[MEMORY_BUFFER] Suppressed pushViewportToScrollback (restored from disk, liveEdgeBase=%d)",
-			v.memBufState.liveEdgeBase)
-		return
-	}
-
-	mb := v.memBufState.memBuf
-
-	// Find first and last rows with visible content
-	firstNonEmpty := -1
-	lastNonEmpty := -1
-	for y := 0; y < v.height; y++ {
-		if v.viewportRowHasContent(y) {
-			if firstNonEmpty < 0 {
-				firstNonEmpty = y
-			}
-			lastNonEmpty = y
-		}
-	}
-
-	if firstNonEmpty < 0 {
-		return // viewport is all empty, nothing to push
-	}
-
-	contentLines := lastNonEmpty - firstNonEmpty + 1
-
-	// Compact: copy content to row 0+ so only meaningful lines enter scrollback
-	if firstNonEmpty > 0 {
-		for i := 0; i < contentLines; i++ {
-			srcGlobal := v.memBufState.liveEdgeBase + int64(firstNonEmpty+i)
-			dstGlobal := v.memBufState.liveEdgeBase + int64(i)
-			srcLine := mb.GetLine(srcGlobal)
-			if srcLine != nil {
-				mb.SetLine(dstGlobal, srcLine.Clone())
-			} else {
-				mb.SetLine(dstGlobal, NewLogicalLine())
-			}
-		}
-	}
-
-	// Advance liveEdgeBase by contentLines only
-	advance := int64(contentLines)
-	v.memBufState.liveEdgeBase += advance
-
-	// Ensure new viewport lines exist
-	for y := 0; y < v.height; y++ {
-		mb.EnsureLine(v.memBufState.liveEdgeBase + int64(y))
-	}
-
-	// Notify persistence for the lines that became scrollback
-	if v.memBufState.persistence != nil {
-		for i := advance; i > 0; i-- {
-			scrollbackLine := v.memBufState.liveEdgeBase - i
-			if scrollbackLine >= 0 {
-				v.memBufState.persistence.NotifyWrite(scrollbackLine)
-			}
-		}
-	}
-
-	v.notifyMetadataChange()
-	v.memBufState.viewport.InvalidateCache()
-}
-
-// viewportRowHasContent checks if the given viewport row has any visible content.
-func (v *VTerm) viewportRowHasContent(row int) bool {
-	line := v.memBufState.memBuf.GetLine(v.memBufState.liveEdgeBase + int64(row))
-	if line == nil {
-		return false
-	}
-	for _, cell := range line.Cells {
-		if cell.Rune != 0 && cell.Rune != ' ' {
-			return true
-		}
-	}
-	return false
 }
 
 // --- Scroll Region Operations ---
@@ -2005,6 +2049,38 @@ func (v *VTerm) memoryBufferScrollRegion(n int, top int, bottom int) {
 	if scrollbackCreated > 0 {
 		v.notifyMetadataChange()
 	}
+
+	// Sync sparse mainScreen from the authoritative MemoryBuffer after
+	// the scroll operation. The legacy scroll region logic handles complex
+	// cases (scrollback creation, header/footer preservation, liveEdgeBase
+	// advancement) that are too intertwined to duplicate. Instead we sync
+	// the resulting cells and cursor position.
+	if v.mainScreen != nil {
+		for y := 0; y < v.height; y++ {
+			gi := v.memBufState.liveEdgeBase + int64(y)
+			line := mb.GetLine(gi)
+			if line != nil {
+				cells := make([]Cell, len(line.Cells))
+				copy(cells, line.Cells)
+				v.mainScreen.SetLine(gi, cells)
+			} else {
+				v.mainScreen.SetLine(gi, nil)
+			}
+		}
+		// Also sync any scrollback lines that were just created.
+		for i := scrollbackCreated; i > 0; i-- {
+			gi := v.memBufState.liveEdgeBase - int64(i)
+			if gi >= 0 {
+				line := mb.GetLine(gi)
+				if line != nil {
+					cells := make([]Cell, len(line.Cells))
+					copy(cells, line.Cells)
+					v.mainScreen.SetLine(gi, cells)
+				}
+			}
+		}
+		v.mainScreen.RestoreState(v.memBufState.liveEdgeBase, v.memBufState.liveEdgeBase+int64(v.cursorY), v.cursorX)
+	}
 }
 
 // --- Cursor Sync ---
@@ -2013,6 +2089,11 @@ func (v *VTerm) memoryBufferScrollRegion(n int, top int, bottom int) {
 func (v *VTerm) memoryBufferSetCursorFromPhysical() {
 	if !v.IsMemoryBufferEnabled() {
 		return
+	}
+
+	// Dual-write to sparse mainScreen
+	if v.mainScreen != nil {
+		v.mainScreen.SetCursor(v.cursorY, v.cursorX)
 	}
 
 	globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)

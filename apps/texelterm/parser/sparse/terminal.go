@@ -105,6 +105,29 @@ func (t *Terminal) EraseLine() {
 	t.write.EraseLine()
 }
 
+// EraseToEndOfLine clears cells from col to the end of the cursor's line.
+func (t *Terminal) EraseToEndOfLine(col int) {
+	t.write.EraseToEndOfLine(col)
+}
+
+// EraseFromStartOfLine clears cells from column 0 through col (inclusive).
+func (t *Terminal) EraseFromStartOfLine(col int) {
+	t.write.EraseFromStartOfLine(col)
+}
+
+// SetLine overwrites the cells at the given globalIdx in the store.
+// Used to sync from MemoryBuffer after complex operations (scroll regions).
+func (t *Terminal) SetLine(globalIdx int64, cells []parser.Cell) {
+	t.store.SetLine(globalIdx, cells)
+}
+
+// ClearRange removes all lines in [lo, hi] from the store.
+// Used to sync from MemoryBuffer after resize-split rejoin and similar
+// operations that collapse multiple logical lines back into one.
+func (t *Terminal) ClearRange(lo, hi int64) {
+	t.store.ClearRange(lo, hi)
+}
+
 // ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.
 func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
 	return t.store.GetLine(globalIdx)
@@ -116,6 +139,18 @@ func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
 func (t *Terminal) RestoreWriteState(writeTop, cursorGlobalIdx int64, cursorCol int) {
 	t.write.RestoreState(writeTop, cursorGlobalIdx, cursorCol)
 	t.view.ScrollToBottom(t.write.WriteBottom())
+}
+
+// RestoreState implements MainScreen.RestoreState by delegating to
+// RestoreWriteState.
+func (t *Terminal) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int) {
+	t.RestoreWriteState(writeTop, cursorGlobalIdx, cursorCol)
+}
+
+// LoadFromPageStore loads all lines from the PageStore into the sparse
+// store. Called once on session restore to replay persistent scrollback.
+func (t *Terminal) LoadFromPageStore(ps *parser.PageStore) error {
+	return LoadStore(t.store, ps)
 }
 
 // Grid builds a dense height x width grid from the current view range by

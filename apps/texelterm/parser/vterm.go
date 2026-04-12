@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 
-
 	"github.com/mattn/go-runewidth"
 )
 
@@ -30,6 +29,9 @@ type VTerm struct {
 	altBuffer   [][]Cell
 	// Memory buffer for scrollback (Phase 1-3 architecture)
 	memBufState *memoryBufferState
+	// mainScreen replaces memBufState for the main-screen path. During the
+	// transition, both run in parallel. After integration, memBufState is deleted.
+	mainScreen MainScreen
 	// Terminal state
 	currentFG, currentBG               Color
 	currentAttr                        Attribute
@@ -161,6 +163,33 @@ func (v *VTerm) Grid() [][]Cell {
 		return v.altBuffer
 	}
 	return v.memoryBufferGrid()
+}
+
+// MainScreenGrid returns the sparse MainScreen's grid, or nil if no MainScreen
+// is configured. Used during the dual-write transition for parity testing.
+func (v *VTerm) MainScreenGrid() [][]Cell {
+	if v.mainScreen == nil {
+		return nil
+	}
+	return v.mainScreen.Grid()
+}
+
+// ContentEnd returns the highest globalIdx ever written via the sparse
+// MainScreen, or -1 if empty or no MainScreen is configured.
+func (v *VTerm) ContentEnd() int64 {
+	if v.mainScreen == nil {
+		return -1
+	}
+	return v.mainScreen.ContentEnd()
+}
+
+// WriteTop returns the globalIdx at the top of the sparse write window,
+// or 0 if no MainScreen is configured.
+func (v *VTerm) WriteTop() int64 {
+	if v.mainScreen == nil {
+		return 0
+	}
+	return v.mainScreen.WriteTop()
 }
 
 // IsBracketedPasteModeEnabled returns whether bracketed paste mode is enabled.
@@ -475,9 +504,6 @@ func (v *VTerm) getTopHistoryLine() int {
 func (v *VTerm) MarkPromptStart() {
 	if v.memBufState != nil {
 		v.PromptStartGlobalLine = v.memBufState.liveEdgeBase + int64(v.cursorY)
-		// First prompt after recovery — the shell is ready. Clear the
-		// recovery guard so normal scrolling resumes.
-		v.memBufState.restoredFromDisk = false
 	}
 }
 
@@ -1357,9 +1383,16 @@ func (v *VTerm) RequestLineOverlay(lineIdx int64, cells []Cell) {
 	if line == nil {
 		return
 	}
-	line.Overlay = make([]Cell, len(cells))
-	copy(line.Overlay, cells)
+	cloned := make([]Cell, len(cells))
+	copy(cloned, cells)
+	line.Overlay = cloned
 	line.OverlayWidth = len(cells)
+
+	// Sync overlay to sparse so Grid() reflects the formatted view.
+	if v.mainScreen != nil {
+		v.mainScreen.SetLine(lineIdx, cloned)
+	}
+
 	// Invalidate viewport cache so VisibleGrid() rebuilds with the new
 	// overlay, and mark all rows dirty so the renderer repaints.
 	v.memBufState.viewport.InvalidateCache()
@@ -1477,9 +1510,20 @@ func (v *VTerm) PhysicalCursor() (physX, physY int) {
 		return physX, physY
 	}
 
-	// In memory buffer mode, use ContentToViewport for accurate mapping.
-	// This handles wrap chain joining by BuildRange which can change the
-	// physical row count relative to cursorY (a logical line offset).
+	// In memory buffer mode with sparse mainScreen (and no pending inserts),
+	// the grid is one globalIdx per row (no wrapping). Cursor position is
+	// simply cursorY for the row and cursorX for the column, clamped to width.
+	if v.IsMemoryBufferEnabled() && v.mainScreen != nil && v.commitInsertOffset == 0 {
+		if v.cursorX < v.width {
+			return v.cursorX, v.cursorY
+		}
+		// cursorX past width: clamp to last column (sparse grid truncates)
+		return v.width - 1, v.cursorY
+	}
+
+	// In memory buffer mode without sparse, use ContentToViewport for
+	// accurate mapping. This handles wrap chain joining by BuildRange
+	// which can change the physical row count relative to cursorY.
 	if v.IsMemoryBufferEnabled() {
 		globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
 		row, col, visible := v.memBufState.viewport.ContentToViewport(globalLine, v.cursorX)

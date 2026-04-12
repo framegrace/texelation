@@ -96,6 +96,9 @@ func (v *VTerm) InsertCharacters(n int) {
 			}
 
 			v.setHistoryLine(logicalY, newLine)
+			if v.mainScreen != nil {
+				v.mainScreen.SetLine(int64(logicalY), newLine)
+			}
 		} else {
 			// No margins: insert and shift within terminal width.
 			// Characters pushed past the right edge are discarded (real terminal behavior).
@@ -104,6 +107,9 @@ func (v *VTerm) InsertCharacters(n int) {
 				newLine = newLine[:rightBoundary]
 			}
 			v.setHistoryLine(logicalY, newLine)
+			if v.mainScreen != nil {
+				v.mainScreen.SetLine(int64(logicalY), newLine)
+			}
 		}
 	}
 }
@@ -189,6 +195,9 @@ func (v *VTerm) DeleteCharacters(n int) {
 			line = line[:rightBoundary]
 		}
 		v.setHistoryLine(logicalY, line)
+		if v.mainScreen != nil {
+			v.mainScreen.SetLine(int64(logicalY), line)
+		}
 	}
 }
 

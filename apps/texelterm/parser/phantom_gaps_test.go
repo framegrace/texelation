@@ -101,12 +101,14 @@ func TestPhantomGaps_DenseLines(t *testing.T) {
 }
 
 // TestPhantomGaps_DenseLargeLines like above but enough to trigger eviction.
+// Uses 10k lines instead of 60k — sufficient to trigger page eviction while
+// keeping runtime reasonable under -race with dual-write overhead.
 func TestPhantomGaps_DenseLargeLines(t *testing.T) {
 	var b strings.Builder
-	for i := 0; i < 60000; i++ {
+	for i := 0; i < 10000; i++ {
 		fmt.Fprintf(&b, "line %d content\r\n", i)
 	}
-	feedAndCount(t, "dense60k", 24, b.String())
+	feedAndCount(t, "dense10k", 24, b.String())
 }
 
 // TestPhantomGaps_LineFeedWithoutWrites issues only newlines, no characters.

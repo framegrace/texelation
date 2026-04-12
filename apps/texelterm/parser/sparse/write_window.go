@@ -82,10 +82,20 @@ func (w *WriteWindow) WriteCell(cell parser.Cell) {
 	w.mu.Lock()
 	gi := w.cursorGlobalIdx
 	col := w.cursorCol
-	w.cursorCol++
+	if cell.Wide {
+		w.cursorCol += 2
+	} else {
+		w.cursorCol++
+	}
 	w.mu.Unlock()
 
 	w.store.Set(gi, col, cell)
+	if cell.Wide {
+		// Place a zero-rune placeholder in the adjacent column so the grid
+		// reflects the 2-cell wide character correctly.
+		placeholder := parser.Cell{Rune: 0, FG: cell.FG, BG: cell.BG, Attr: cell.Attr}
+		w.store.Set(gi, col+1, placeholder)
+	}
 }
 
 // CarriageReturn resets the cursor column to 0. The cursor globalIdx is
@@ -239,6 +249,27 @@ func (w *WriteWindow) EraseLine() {
 	gi := w.cursorGlobalIdx
 	w.mu.Unlock()
 	w.store.ClearRange(gi, gi)
+}
+
+// EraseToEndOfLine clears cells from col to the end of the current line.
+func (w *WriteWindow) EraseToEndOfLine(col int) {
+	w.mu.Lock()
+	gi := w.cursorGlobalIdx
+	width := w.width
+	w.mu.Unlock()
+	for x := col; x < width; x++ {
+		w.store.Set(gi, x, parser.Cell{})
+	}
+}
+
+// EraseFromStartOfLine clears cells from column 0 through col (inclusive).
+func (w *WriteWindow) EraseFromStartOfLine(col int) {
+	w.mu.Lock()
+	gi := w.cursorGlobalIdx
+	w.mu.Unlock()
+	for x := 0; x <= col; x++ {
+		w.store.Set(gi, x, parser.Cell{})
+	}
 }
 
 // RestoreState forcibly sets writeTop and cursor, used during session

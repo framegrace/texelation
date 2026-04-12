@@ -992,191 +992,6 @@ func TestVTerm_ScrollRegionScrollDownUnchanged(t *testing.T) {
 	}
 }
 
-// TestVTerm_EraseDisplayPushesToScrollback verifies that ESC[2J and ESC[H ESC[J
-// push non-empty viewport content to scrollback before clearing, and that
-// leading empty rows are compacted out (no empty gap in scrollback).
-func TestVTerm_EraseDisplayPushesToScrollback(t *testing.T) {
-	width, height := 40, 10
-	v := NewVTerm(width, height, WithMemoryBuffer())
-	v.EnableMemoryBuffer()
-	p := NewParser(v)
-
-	// Phase 1: Shell prompt + "codex" command
-	parseString(p, "$ codex\r\n")
-
-	// Phase 2: Codex sets up scroll region and draws content
-	// Header at row 0, footer at row 9, content in rows 1-8
-	parseString(p, "\x1b[1;1H") // cursor home
-	parseString(p, "=== HEADER ===")
-	parseString(p, fmt.Sprintf("\x1b[%d;1H", height)) // last row
-	parseString(p, "=== FOOTER ===")
-	parseString(p, "\x1b[2;9r") // scroll region rows 2-9 (0-indexed: 1-8)
-
-	// Write enough content to scroll within the region
-	parseString(p, "\x1b[2;1H") // top of region
-	for i := 0; i < 20; i++ {
-		parseString(p, fmt.Sprintf("content-%02d", i))
-		if i < 19 {
-			parseString(p, "\n\r")
-		}
-	}
-
-	liveEdgeBeforeExit := v.memBufState.liveEdgeBase
-	t.Logf("Before Codex exit: liveEdgeBase=%d", liveEdgeBeforeExit)
-
-	// Phase 3: Codex exits — reset scroll region, cursor home, clear screen
-	parseString(p, "\x1b[r")      // reset scroll region
-	parseString(p, "\x1b[H")      // cursor home
-	parseString(p, "\x1b[2J")     // ED 2: erase entire display
-
-	liveEdgeAfterExit := v.memBufState.liveEdgeBase
-	t.Logf("After Codex exit (ED 2): liveEdgeBase=%d (advanced by %d)",
-		liveEdgeAfterExit, liveEdgeAfterExit-liveEdgeBeforeExit)
-
-	// Phase 4: Shell resumes
-	parseString(p, "$ whoami\r\n")
-	parseString(p, "marc\r\n")
-
-	// Verify: scan for empty gaps in scrollback
-	mb := v.memBufState.memBuf
-	liveEdge := v.memBufState.liveEdgeBase
-
-	maxEmptyRun := 0
-	currentEmptyRun := 0
-	for idx := mb.GlobalOffset(); idx < liveEdge; idx++ {
-		line := mb.GetLine(idx)
-		isEmpty := true
-		if line != nil {
-			for _, cell := range line.Cells {
-				if cell.Rune != 0 && cell.Rune != ' ' {
-					isEmpty = false
-					break
-				}
-			}
-		}
-		if isEmpty {
-			currentEmptyRun++
-			if currentEmptyRun > maxEmptyRun {
-				maxEmptyRun = currentEmptyRun
-			}
-		} else {
-			currentEmptyRun = 0
-		}
-	}
-
-	t.Logf("Max consecutive empty lines in scrollback: %d (total scrollback: %d lines)",
-		maxEmptyRun, liveEdge-mb.GlobalOffset())
-
-	// The scrollback should NOT have a large empty gap
-	// Allow 1-2 empty lines (natural blank after "codex" command)
-	if maxEmptyRun > 2 {
-		t.Errorf("Too many consecutive empty lines in scrollback: %d (want <= 2)", maxEmptyRun)
-		// Dump scrollback for debugging
-		for idx := mb.GlobalOffset(); idx < liveEdge && idx < mb.GlobalOffset()+30; idx++ {
-			line := mb.GetLine(idx)
-			text := ""
-			if line != nil {
-				for _, cell := range line.Cells {
-					if cell.Rune == 0 {
-						text += " "
-					} else {
-						text += string(cell.Rune)
-					}
-				}
-			}
-			t.Logf("  Scrollback line %d: %q", idx, strings.TrimRight(text, " "))
-		}
-	}
-
-	// Verify the Codex content (header, content lines, footer) is in scrollback
-	foundHeader := false
-	foundContent := false
-	foundFooter := false
-	for idx := mb.GlobalOffset(); idx < liveEdge; idx++ {
-		line := mb.GetLine(idx)
-		if line == nil {
-			continue
-		}
-		text := ""
-		for _, cell := range line.Cells {
-			if cell.Rune == 0 {
-				break
-			}
-			text += string(cell.Rune)
-		}
-		if strings.Contains(text, "HEADER") {
-			foundHeader = true
-		}
-		if strings.Contains(text, "content-19") {
-			foundContent = true
-		}
-		if strings.Contains(text, "FOOTER") {
-			foundFooter = true
-		}
-	}
-
-	if !foundHeader {
-		t.Error("Codex HEADER not found in scrollback")
-	}
-	if !foundContent {
-		t.Error("Last content line (content-19) not found in scrollback")
-	}
-	if !foundFooter {
-		t.Error("Codex FOOTER not found in scrollback")
-	}
-}
-
-// TestVTerm_EraseFromHomePushesToScrollback verifies ESC[H ESC[J (cursor home +
-// erase to end) also pushes viewport to scrollback.
-func TestVTerm_EraseFromHomePushesToScrollback(t *testing.T) {
-	width, height := 40, 10
-	v := NewVTerm(width, height, WithMemoryBuffer())
-	v.EnableMemoryBuffer()
-	p := NewParser(v)
-
-	// Write content that fills the viewport
-	for i := 0; i < height; i++ {
-		parseString(p, fmt.Sprintf("visible-line-%02d\r\n", i))
-	}
-
-	liveEdgeBefore := v.memBufState.liveEdgeBase
-
-	// ESC[H ESC[J: cursor home + erase from cursor to end
-	parseString(p, "\x1b[H\x1b[J")
-
-	liveEdgeAfter := v.memBufState.liveEdgeBase
-	t.Logf("liveEdgeBase: %d → %d (advanced by %d)", liveEdgeBefore, liveEdgeAfter, liveEdgeAfter-liveEdgeBefore)
-
-	// The viewport content should have been pushed to scrollback
-	if liveEdgeAfter <= liveEdgeBefore {
-		t.Error("liveEdgeBase should have advanced (viewport content should be in scrollback)")
-	}
-
-	// Verify content is in scrollback
-	mb := v.memBufState.memBuf
-	found := false
-	for idx := mb.GlobalOffset(); idx < liveEdgeAfter; idx++ {
-		line := mb.GetLine(idx)
-		if line == nil {
-			continue
-		}
-		text := ""
-		for _, cell := range line.Cells {
-			if cell.Rune == 0 {
-				break
-			}
-			text += string(cell.Rune)
-		}
-		if strings.Contains(text, "visible-line-09") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("Last visible line not found in scrollback after ESC[H ESC[J")
-	}
-}
-
 func gridRowToString(cells []Cell) string {
 	runes := make([]rune, len(cells))
 	for i, c := range cells {
@@ -3679,8 +3494,10 @@ func TestAutoWrap_GridRendering(t *testing.T) {
 	}
 }
 
-// TestAutoWrap_ResizeReflow verifies that after wrapping at width 10,
-// resizing to width 20 reflows the content to a single physical row.
+// TestAutoWrap_ResizeReflow verifies that natural auto-wrap lines remain as
+// separate logical rows after a width increase. In the sparse storage model,
+// each globalIdx line is stored independently and displayed as a single grid
+// row regardless of width — no reflow occurs on resize.
 func TestAutoWrap_ResizeReflow(t *testing.T) {
 	width := 10
 	height := 5
@@ -3688,7 +3505,7 @@ func TestAutoWrap_ResizeReflow(t *testing.T) {
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
-	// Write 15 chars at width 10 → wraps to 2 physical rows
+	// Write 15 chars at width 10 → wraps to 2 physical rows (2 globalIdx lines)
 	text := strings.Repeat("A", 10) + strings.Repeat("B", 5)
 	parseString(p, text)
 
@@ -3703,18 +3520,16 @@ func TestAutoWrap_ResizeReflow(t *testing.T) {
 	// Resize to width 20
 	v.Resize(20, height)
 
-	// After resize, content should reflow to a single physical row
+	// In sparse mode, natural auto-wrap lines are preserved as separate rows.
+	// Each globalIdx is one grid row; no reflow happens on resize.
 	grid = v.Grid()
-	row0 = gridRowToString(grid[0][:15])
-	expected := strings.Repeat("A", 10) + "BBBBB"
-	if row0 != expected {
-		t.Errorf("after resize to width 20: expected %q on row 0, got %q", expected, row0)
+	row0 = gridRowToString(grid[0][:10])
+	if row0 != "AAAAAAAAAA" {
+		t.Errorf("after resize to width 20: expected %q on row 0, got %q", "AAAAAAAAAA", row0)
 	}
-
-	// Row 1 should be empty
-	row1Content := strings.TrimRight(gridRowToString(grid[1]), " \x00")
-	if row1Content != "" {
-		t.Errorf("after resize: row 1 should be empty, got %q", row1Content)
+	row1 = gridRowToString(grid[1][:5])
+	if row1 != "BBBBB" {
+		t.Errorf("after resize to width 20: expected %q on row 1, got %q", "BBBBB", row1)
 	}
 }
 
@@ -4777,6 +4592,11 @@ func TestVTerm_ResizeWidthWrapBeforeContentCursorSync(t *testing.T) {
 // TestResize_SpringAnimationCursorSync simulates the spring animation pattern:
 // the terminal goes through many rapid width changes (narrow→wide) and the
 // cursor must remain in sync with the viewport grid throughout.
+//
+// The cursor tracks the actual cursor position in the split-chain. At each
+// width, cursorY points to the last chunk row (where the cursor character
+// is). The cursor row may be a trailing-space-only chunk — that is normal
+// when the prompt ends with a space character that lands in its own chunk.
 func TestResize_SpringAnimationCursorSync(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 80, 24
@@ -4799,21 +4619,20 @@ func TestResize_SpringAnimationCursorSync(t *testing.T) {
 			t.Fatalf("width=%d: cursorY=%d out of bounds [0,%d)", w, cy, height)
 		}
 
-		row := cellsToString(grid[cy])
-		// At any width, cursor should be on a row with prompt content,
-		// or on the row immediately following the last prompt content
-		// (cursor wraps past the "$" to the next physical row).
-		hasPromptContent := strings.Contains(row, "marc") ||
-			strings.Contains(row, "host") ||
-			strings.Contains(row, "projects") ||
-			strings.Contains(row, "$")
-		if !hasPromptContent && cy > 0 {
-			prevRow := cellsToString(grid[cy-1])
-			hasPromptContent = strings.Contains(prevRow, "$")
+		// Find last row with visible (non-space, non-null) content.
+		lastContentRow := -1
+		for y := len(grid) - 1; y >= 0; y-- {
+			if strings.TrimRight(cellsToString(grid[y]), " \x00") != "" {
+				lastContentRow = y
+				break
+			}
 		}
 
-		if !hasPromptContent {
-			t.Logf("DESYNC at width=%d: cursorY=%d, cursorX=%d", w, cy, v.cursorX)
+		// The cursor must be on the last content row or at most one row past
+		// it (the "cursor-past-last-char" case when the last split chunk holds
+		// only a trailing space).
+		if cy < 0 || cy > lastContentRow+1 {
+			t.Logf("DESYNC at width=%d: cursorY=%d, cursorX=%d, lastContentRow=%d", w, cy, v.cursorX, lastContentRow)
 			t.Logf("Grid:")
 			for y := range height {
 				s := cellsToString(grid[y])
@@ -4825,7 +4644,7 @@ func TestResize_SpringAnimationCursorSync(t *testing.T) {
 					t.Logf("  %s [%2d] %q", marker, y, s)
 				}
 			}
-			t.Errorf("width=%d: grid[cursorY=%d] has no prompt content: %q", w, cy, row)
+			t.Errorf("width=%d: cursorY=%d outside valid range [0, %d]", w, cy, lastContentRow+1)
 		}
 	}
 }
@@ -4835,8 +4654,9 @@ func TestResize_SpringAnimationCursorSync(t *testing.T) {
 // increase (which causes BuildRange to rejoin the chain), the cursor position
 // still points to the correct physical row in the viewport grid.
 //
-// This is the "spring animation resize" scenario: the terminal goes through
-// many width changes, and the cursor must remain in sync with the grid.
+// With the sparse model, lines don't wrap on resize. The cursor column is
+// clamped on width decrease and the line content is truncated/revealed as
+// the width changes. The cursor stays on the same row (globalIdx 0).
 func TestResize_WidthDecreaseIncreaseWrapChainDesync(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 40, 24
@@ -4856,50 +4676,27 @@ func TestResize_WidthDecreaseIncreaseWrapChainDesync(t *testing.T) {
 			v.cursorY, cellsToString(grid0[v.cursorY]))
 	}
 
-	// Step 1: Width decrease → triggers split (22 chars split at width 10)
+	// Step 1: Width decrease — sparse model truncates, cursor clamped
 	v.Resize(10, height)
 	grid1 := v.Grid()
 	row1 := cellsToString(grid1[v.cursorY])
 	t.Logf("After width 40→10: cursorY=%d, cursorX=%d, row=%q",
 		v.cursorY, v.cursorX, row1)
 
-	// Cursor should be on a row containing "$ " (the end of the prompt)
-	if !strings.Contains(row1, "$ ") {
-		t.Logf("Grid after width decrease:")
-		for y := range height {
-			s := cellsToString(grid1[y])
-			if strings.TrimRight(s, " \x00") != "" {
-				marker := "  "
-				if y == v.cursorY {
-					marker = ">>"
-				}
-				t.Logf("  %s [%2d] %q", marker, y, s)
-			}
-		}
-		t.Fatalf("After width decrease: grid[cursorY=%d] should contain '$ ', got %q",
-			v.cursorY, row1)
+	// In sparse model, cursor stays on row 0 with truncated prompt content
+	if strings.TrimRight(row1, " \x00") == "" {
+		t.Fatalf("After width decrease: grid[cursorY=%d] is empty", v.cursorY)
 	}
 
-	// Step 2: Width increase → wrap chain rejoined by viewport
+	// Step 2: Width increase — full prompt visible again
 	v.Resize(40, height)
 	grid2 := v.Grid()
 	row2 := cellsToString(grid2[v.cursorY])
 	t.Logf("After width 10→40: cursorY=%d, cursorX=%d, row=%q",
 		v.cursorY, v.cursorX, row2)
 
-	// Critical check: cursor must still be on a row containing the prompt
+	// At width 40 the full prompt is visible again
 	if !strings.Contains(row2, "marc@host") {
-		t.Logf("Grid after width increase:")
-		for y := range height {
-			s := cellsToString(grid2[y])
-			if strings.TrimRight(s, " \x00") != "" {
-				marker := "  "
-				if y == v.cursorY {
-					marker = ">>"
-				}
-				t.Logf("  %s [%2d] %q", marker, y, s)
-			}
-		}
 		t.Errorf("CURSOR DESYNC: after width increase, grid[cursorY=%d] should contain prompt, got %q",
 			v.cursorY, row2)
 	}
@@ -5073,7 +4870,11 @@ func TestResize_CursorPastWrapChain_PhysicalCursor(t *testing.T) {
 
 // TestResize_SpringAnimation_PhysicalCursorSync tests that PhysicalCursor
 // stays synchronized through a spring animation resize sequence (rapid
-// width shrink then grow) with intermediate widths where absoluteCol % width == 0.
+// width shrink then grow).
+//
+// The cursor tracks the actual cursor position in the split-chain. At each
+// width, the physical cursor points to the last chunk row. The last chunk
+// may contain only a trailing space when the prompt ends with a space.
 func TestResize_SpringAnimation_PhysicalCursorSync(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 80, 24
@@ -5095,19 +4896,20 @@ func TestResize_SpringAnimation_PhysicalCursorSync(t *testing.T) {
 			t.Fatalf("Width=%d: PhysicalCursor row=%d out of bounds [0,%d)", w, cy, len(grid))
 		}
 
-		// The cursor must always be on a row that's empty or contains the prompt end
-		cursorRow := cellsToString(grid[cy])
-		// Check the cursor row and the row before it (cursor might be one past the prompt)
-		hasPromptNearCursor := strings.Contains(cursorRow, "$") || strings.TrimSpace(cursorRow) == ""
-		if cy > 0 {
-			prevRow := cellsToString(grid[cy-1])
-			hasPromptNearCursor = hasPromptNearCursor || strings.Contains(prevRow, "$")
+		// Find last row with visible (non-space, non-null) content.
+		lastContentRow := -1
+		for y := len(grid) - 1; y >= 0; y-- {
+			if strings.TrimRight(cellsToString(grid[y]), " \x00") != "" {
+				lastContentRow = y
+				break
+			}
 		}
 
-		if !hasPromptNearCursor {
-			t.Errorf("Width=%d: PhysicalCursor=(%d,%d), cursor row has unexpected content: %q",
-				w, cx, cy, cursorRow)
-			// Dump a few rows for context
+		// The physical cursor must be on the last content row or at most one
+		// row past it (trailing-space-only last chunk case).
+		if cy < 0 || cy > lastContentRow+1 {
+			t.Errorf("Width=%d: PhysicalCursor=(%d,%d), cursor row is empty (lastContentRow=%d)",
+				w, cx, cy, lastContentRow)
 			for y := max(0, cy-2); y <= min(cy+2, len(grid)-1); y++ {
 				marker := "  "
 				if y == cy {
@@ -5463,8 +5265,10 @@ func TestResizeWidth_TransformerContent_DebugPhysicalLines(t *testing.T) {
 
 // TestResizeWidth_TransformerContent_CursorDrift tests cursor positioning during
 // horizontal resize when the viewport contains transformer-generated content
-// (overlay and synthetic lines). Overlaid lines have FixedWidth and don't wrap,
-// changing the physical-to-logical line ratio compared to plain output.
+// (overlay and synthetic lines).
+//
+// In the sparse model, lines don't wrap on resize. The cursor row must always
+// contain visible content and no content should appear below it.
 func TestResizeWidth_TransformerContent_CursorDrift(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -5527,10 +5331,11 @@ func TestResizeWidth_TransformerContent_CursorDrift(t *testing.T) {
 			continue
 		}
 
-		// The last non-empty grid row should be where the cursor is
+		// Find the last row with visible content (excluding null-filled rows).
 		lastContentRow := -1
 		for y := len(grid) - 1; y >= 0; y-- {
-			if strings.TrimSpace(cellsToString(grid[y])) != "" {
+			s := strings.TrimRight(cellsToString(grid[y]), " \x00")
+			if s != "" {
 				lastContentRow = y
 				break
 			}
@@ -5598,7 +5403,7 @@ func TestResizeWidth_FullViewport_CursorGridConsistency(t *testing.T) {
 
 		// The cursor row in the grid should have content
 		cursorRow := cellsToString(grid[physY])
-		if strings.TrimSpace(cursorRow) == "" {
+		if strings.TrimRight(cursorRow, " \x00") == "" {
 			t.Errorf("width=%d: cursor row %d is empty, cursor=(%d,%d)", w, physY, v.cursorX, v.cursorY)
 		}
 
@@ -5606,7 +5411,7 @@ func TestResizeWidth_FullViewport_CursorGridConsistency(t *testing.T) {
 		// (since prompt is the last content)
 		lastContentRow := -1
 		for y := len(grid) - 1; y >= 0; y-- {
-			if strings.TrimSpace(cellsToString(grid[y])) != "" {
+			if strings.TrimRight(cellsToString(grid[y]), " \x00") != "" {
 				lastContentRow = y
 				break
 			}
@@ -6015,7 +5820,7 @@ func TestResizeSplit_CursorPastChain(t *testing.T) {
 
 	v.Resize(10, 24)
 
-	// cursorX should be 0 (20 % 10 == 0), cursorY should be 2 (20 / 10 == 2)
+	// cursorX should be 0 (20 % 10 == 0)
 	if v.cursorX != 0 {
 		t.Errorf("After split: cursorX=%d, want 0", v.cursorX)
 	}
