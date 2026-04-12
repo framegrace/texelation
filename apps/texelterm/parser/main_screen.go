@@ -21,7 +21,19 @@ type MainScreen interface {
 	Resize(newWidth, newHeight int)
 	EraseDisplay()
 	EraseLine()
+	EraseToEndOfLine(col int)
+	EraseFromStartOfLine(col int)
+	SetLine(globalIdx int64, cells []Cell)
 	Grid() [][]Cell
+
+	// LoadFromPageStore populates the main screen with all lines currently
+	// stored in the given PageStore. Used on session restore to replay
+	// persistent scrollback into the sparse store.
+	LoadFromPageStore(ps *PageStore) error
+
+	// RestoreState forcibly sets the write window's cursor and anchor,
+	// used during session restore to match the saved WAL metadata.
+	RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int)
 }
 
 // MainScreenFactory creates a MainScreen for the given dimensions.

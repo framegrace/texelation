@@ -273,18 +273,19 @@ done:
 
 // TestRenderCursorPositionAfterHorizontalResize verifies that the rendered
 // cursor (reverse-styled cell) tracks the correct physical row when lines
-// above the cursor wrap due to a width decrease on a new terminal that
+// above the cursor are affected by a width decrease on a new terminal that
 // hasn't filled the viewport yet.
 //
-// Before the fix, Render() used Cursor() (logical row) instead of
-// PhysicalCursor() (physical row), so the cursor stayed at the same
-// viewport row even when wrapping pushed content down.
+// The sparse viewport model does not wrap long lines on resize — it truncates
+// them to the current width. So the cursor stays on the same logical row
+// (the prompt line) regardless of width changes. The key invariant tested
+// here is that the cursor is always on the row containing the prompt.
 func TestRenderCursorPositionAfterHorizontalResize(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	// Script outputs a long line (51 chars) then a newline, then a short prompt.
 	// At width 80: line 0 = long text, line 1 = "$ " with cursor.
-	// At width 30: line 0 wraps to 2 physical rows, cursor should move to row 2.
+	// At width 30 (sparse model): line 0 = first 30 chars, line 1 = "$ " with cursor.
 	script := writeScript(t, "#!/bin/sh\nprintf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\n$ '\n")
 
 	app := texelterm.New("texelterm", script)
@@ -311,7 +312,7 @@ func TestRenderCursorPositionAfterHorizontalResize(t *testing.T) {
 	}
 	t.Logf("Before resize: cursor at row %d", cursorRowBefore)
 
-	// Shrink width so the long line wraps
+	// Shrink width so the long line is truncated (sparse) or wraps (legacy)
 	app.Resize(30, 24)
 	buf = app.Render()
 
@@ -321,20 +322,14 @@ func TestRenderCursorPositionAfterHorizontalResize(t *testing.T) {
 	}
 	t.Logf("After resize to width 30: cursor at row %d", cursorRowAfter)
 
-	// The long line (51 chars) wraps to 2 rows at width 30, so the cursor
-	// should have moved down by at least 1 row.
-	if cursorRowAfter <= cursorRowBefore {
-		t.Errorf("cursor did not move down after horizontal shrink: before=%d, after=%d",
-			cursorRowBefore, cursorRowAfter)
-		for y := 0; y < 5 && y < len(buf); y++ {
-			t.Logf("  row %d: %q", y, rowToString(buf[y]))
-		}
-	}
-
-	// Verify the cursor row contains prompt content
+	// Verify the cursor row contains prompt content — this is the key
+	// invariant: the cursor must be on the prompt regardless of wrapping model.
 	promptRow := rowToString(buf[cursorRowAfter])
 	if !strings.Contains(promptRow, "$") {
 		t.Errorf("cursor row %d doesn't contain prompt: %q", cursorRowAfter, promptRow)
+		for y := 0; y < 5 && y < len(buf); y++ {
+			t.Logf("  row %d: %q", y, rowToString(buf[y]))
+		}
 	}
 
 	app.Stop()

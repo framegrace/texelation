@@ -1503,9 +1503,20 @@ func (v *VTerm) PhysicalCursor() (physX, physY int) {
 		return physX, physY
 	}
 
-	// In memory buffer mode, use ContentToViewport for accurate mapping.
-	// This handles wrap chain joining by BuildRange which can change the
-	// physical row count relative to cursorY (a logical line offset).
+	// In memory buffer mode with sparse mainScreen, the grid is one
+	// globalIdx per row (no wrapping). Cursor position is simply cursorY
+	// for the row and cursorX for the column, clamped to width.
+	if v.IsMemoryBufferEnabled() && v.mainScreen != nil {
+		if v.cursorX < v.width {
+			return v.cursorX, v.cursorY
+		}
+		// cursorX past width: clamp to last column (sparse grid truncates)
+		return v.width - 1, v.cursorY
+	}
+
+	// In memory buffer mode without sparse, use ContentToViewport for
+	// accurate mapping. This handles wrap chain joining by BuildRange
+	// which can change the physical row count relative to cursorY.
 	if v.IsMemoryBufferEnabled() {
 		globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
 		row, col, visible := v.memBufState.viewport.ContentToViewport(globalLine, v.cursorX)
