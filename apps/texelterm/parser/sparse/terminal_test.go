@@ -83,7 +83,7 @@ func TestTerminal_ResizeFrozenViewStaysPut(t *testing.T) {
 	tm.ScrollUp(20)
 	_, beforeBottom := tm.VisibleRange()
 
-	tm.Resize(80, 30) // grow
+	tm.Resize(80, 30) // shrink; frozen view must not move (Rule 6)
 
 	_, afterBottom := tm.VisibleRange()
 	if afterBottom != beforeBottom {
@@ -174,11 +174,7 @@ func TestTerminal_ShrinkDragDoesNotDuplicateTextContent(t *testing.T) {
 		tm.Resize(80, h)
 		// Clear the old window and redraw at new size.
 		// (In real life, the TUI does this via ESC[2J or scroll region.)
-		top := tm.WriteTop()
-		bottom := tm.WriteBottom()
-		tm.EraseDisplay() // new helper — see below
-		_ = top
-		_ = bottom
+		tm.EraseDisplay()
 		drawUI(h)
 	}
 

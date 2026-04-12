@@ -114,6 +114,11 @@ func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
 // reading the Store. Unwritten cells and short lines are blank-padded.
 //
 // The returned slice is owned by the caller and safe to mutate.
+//
+// Grid acquires each underlying lock separately and does not hold a single
+// consistent snapshot. A concurrent Resize may cause the returned grid to
+// reflect a transient mix of old and new dimensions; the next call will be
+// consistent.
 func (t *Terminal) Grid() [][]parser.Cell {
 	width := t.write.Width()
 	height := t.write.Height()
