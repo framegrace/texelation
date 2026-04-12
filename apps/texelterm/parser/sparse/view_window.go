@@ -60,25 +60,27 @@ func (v *ViewWindow) VisibleRange() (top, bottom int64) {
 	return v.viewBottom - int64(v.height) + 1, v.viewBottom
 }
 
-// OnWriteBottomChanged is called by the WriteWindow observer wiring when the
-// bottom of the write window moves. If autoFollow is true, viewBottom is
-// updated to match.
-func (v *ViewWindow) OnWriteBottomChanged(newBottom int64) {
+// OnWriteBottomChanged is called when the bottom of the write window moves.
+// newWriteBottom is the new WriteWindow.WriteBottom() value. If autoFollow
+// is true, viewBottom is updated to match.
+func (v *ViewWindow) OnWriteBottomChanged(newWriteBottom int64) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.autoFollow {
-		v.viewBottom = newBottom
+		v.viewBottom = newWriteBottom
 	}
 }
 
-// OnWriteTopChanged is called when the WriteWindow retreats its top on grow.
-// If autoFollow is true, viewBottom snaps to the new writeBottom (caller
-// passes the new writeBottom directly, NOT writeTop).
-func (v *ViewWindow) OnWriteTopChanged(newBottom int64) {
+// OnWriteTopChanged is called when the WriteWindow retreats its top on grow
+// (i.e. the write window expands upward). Despite the name referring to the
+// top, callers must pass newWriteBottom — the new WriteWindow.WriteBottom()
+// value — because that is what viewBottom tracks. Both events update the
+// same anchor. If autoFollow is true, viewBottom is updated to match.
+func (v *ViewWindow) OnWriteTopChanged(newWriteBottom int64) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.autoFollow {
-		v.viewBottom = newBottom
+		v.viewBottom = newWriteBottom
 	}
 }
 

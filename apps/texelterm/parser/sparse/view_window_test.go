@@ -102,13 +102,29 @@ func TestViewWindow_ResizeWhileFollowing(t *testing.T) {
 func TestViewWindow_ResizeWhileScrolledBack(t *testing.T) {
 	vw := NewViewWindow(80, 24)
 	vw.OnWriteBottomChanged(100)
-	vw.ScrollUp(30) // viewBottom = 70, autoFollow off
-	vw.Resize(80, 30, 100)  // grow height; writeBottom unchanged
+	vw.ScrollUp(30)        // viewBottom = 70, autoFollow off
+	vw.Resize(80, 30, 100) // grow height; writeBottom unchanged
 	_, bottom := vw.VisibleRange()
 	if bottom != 70 {
 		t.Errorf("frozen view: viewBottom = %d, want 70 (anchored)", bottom)
 	}
 	if got := vw.Height(); got != 30 {
 		t.Errorf("Height = %d, want 30", got)
+	}
+}
+
+func TestViewWindow_OnWriteTopChangedFollows(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	vw.OnWriteTopChanged(50) // called when grow retreats writeTop
+	_, bottom := vw.VisibleRange()
+	if bottom != 50 {
+		t.Errorf("OnWriteTopChanged while following: viewBottom = %d, want 50", bottom)
+	}
+	// Detach and verify it does not follow.
+	vw.ScrollUp(5)
+	vw.OnWriteTopChanged(100)
+	_, bottom = vw.VisibleRange()
+	if bottom != 45 {
+		t.Errorf("OnWriteTopChanged while frozen: viewBottom = %d, want 45", bottom)
 	}
 }
