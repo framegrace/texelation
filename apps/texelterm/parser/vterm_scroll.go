@@ -41,11 +41,16 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 		// Memory buffer mode: use MemoryBuffer for line management.
 		isFullScreenMargins := v.marginTop == 0 && v.marginBottom == v.height-1
 
-		// Auto-jump to live edge when NEW content is being created (explicit LF at full-screen margins).
-		// This allows staying scrolled back during resize/redraw (which only redraws existing content),
-		// while still jumping to live edge when new output appears (shell commands, background jobs, etc.)
+		// Auto-jump the LEGACY viewport to live edge when new content arrives while
+		// scrolled back. The sparse ViewWindow is intentionally NOT jumped here:
+		// autoFollow=false means the user stays where they are (spec Rule 4).
+		// Jumping the sparse view was the root cause of "jumps on shrinking":
+		// new LF → mainScreen.ScrollToBottom() → autoFollow=true → next resize snaps.
 		if commitLogical && isFullScreenMargins && !v.memoryBufferAtLiveEdge() {
-			v.memoryBufferScrollToBottom()
+			if v.memBufState != nil {
+				v.memBufState.viewport.ScrollToBottom()
+			}
+			// Intentionally NO mainScreen.ScrollToBottom() — preserve autoFollow state.
 			v.MarkAllDirty()
 		}
 

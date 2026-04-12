@@ -25,6 +25,14 @@ type MainScreen interface {
 	EraseFromStartOfLine(col int)
 	SetLine(globalIdx int64, cells []Cell)
 	ClearRange(lo, hi int64)
+
+	// IL/DL and partial scroll-region operations. cursorRow, marginTop, and
+	// marginBottom are all relative to WriteTop (i.e., viewport-row indices).
+	InsertLines(n, cursorRow, marginTop, marginBottom int)
+	DeleteLines(n, cursorRow, marginTop, marginBottom int)
+	// NewlineInRegion scrolls [marginTop, marginBottom] up by 1 without
+	// advancing WriteTop. Use Newline() for full-screen line feeds.
+	NewlineInRegion(marginTop, marginBottom int)
 	Grid() [][]Cell
 
 	// Scroll methods keep the sparse ViewWindow in sync with user

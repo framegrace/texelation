@@ -272,6 +272,74 @@ func (w *WriteWindow) EraseFromStartOfLine(col int) {
 	}
 }
 
+// InsertLines inserts n blank lines at cursorRow within [marginTop, marginBottom].
+// Lines from cursorRow..marginBottom-n shift down; bottom n lines are cleared.
+// The write window anchor and cursor are not moved — IL does not scroll.
+// cursorRow, marginTop, marginBottom are all relative to writeTop.
+func (w *WriteWindow) InsertLines(n, cursorRow, marginTop, marginBottom int) {
+	if n <= 0 {
+		return
+	}
+	w.mu.Lock()
+	base := w.writeTop
+	w.mu.Unlock()
+
+	// Shift lines down within [cursorRow, marginBottom].
+	for y := marginBottom; y >= cursorRow+n; y-- {
+		w.store.SetLine(base+int64(y), w.store.GetLine(base+int64(y-n)))
+	}
+	// Clear the inserted rows.
+	for y := cursorRow; y < cursorRow+n && y <= marginBottom; y++ {
+		w.store.ClearRange(base+int64(y), base+int64(y))
+	}
+}
+
+// DeleteLines deletes n lines at cursorRow within [marginTop, marginBottom].
+// Lines from cursorRow+n..marginBottom shift up; bottom n lines are cleared.
+// The write window anchor and cursor are not moved.
+// cursorRow, marginTop, marginBottom are all relative to writeTop.
+func (w *WriteWindow) DeleteLines(n, cursorRow, marginTop, marginBottom int) {
+	if n <= 0 {
+		return
+	}
+	w.mu.Lock()
+	base := w.writeTop
+	w.mu.Unlock()
+
+	// Shift lines up within [cursorRow, marginBottom].
+	for y := cursorRow; y <= marginBottom-n; y++ {
+		w.store.SetLine(base+int64(y), w.store.GetLine(base+int64(y+n)))
+	}
+	// Clear the vacated bottom rows.
+	clearStart := marginBottom - n + 1
+	if clearStart < cursorRow {
+		clearStart = cursorRow
+	}
+	for y := clearStart; y <= marginBottom; y++ {
+		w.store.ClearRange(base+int64(y), base+int64(y))
+	}
+}
+
+// NewlineInRegion handles a line-feed within a partial DECSTBM scroll region
+// [marginTop, marginBottom] (both relative to writeTop). The content within the
+// region scrolls up by 1: line at marginTop is lost, lines shift up, and
+// marginBottom is cleared. writeTop does NOT advance — only content within the
+// region is affected.
+//
+// Call Newline() instead for full-screen (marginTop==0 AND marginBottom==height-1).
+func (w *WriteWindow) NewlineInRegion(marginTop, marginBottom int) {
+	w.mu.Lock()
+	base := w.writeTop
+	w.mu.Unlock()
+
+	// Shift lines up within the region.
+	for y := marginTop; y < marginBottom; y++ {
+		w.store.SetLine(base+int64(y), w.store.GetLine(base+int64(y+1)))
+	}
+	// Clear the bottom line of the region.
+	w.store.ClearRange(base+int64(marginBottom), base+int64(marginBottom))
+}
+
 // RestoreState forcibly sets writeTop and cursor, used during session
 // restore. Do not call during normal operation.
 func (w *WriteWindow) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int) {

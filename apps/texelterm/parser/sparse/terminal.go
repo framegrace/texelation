@@ -115,6 +115,27 @@ func (t *Terminal) EraseFromStartOfLine(col int) {
 	t.write.EraseFromStartOfLine(col)
 }
 
+// InsertLines inserts n blank lines at cursorRow within [marginTop, marginBottom]
+// (all relative to the current writeTop). Lines shift down; bottom n are cleared.
+func (t *Terminal) InsertLines(n, cursorRow, marginTop, marginBottom int) {
+	t.write.InsertLines(n, cursorRow, marginTop, marginBottom)
+}
+
+// DeleteLines deletes n lines at cursorRow within [marginTop, marginBottom]
+// (all relative to the current writeTop). Lines shift up; bottom n are cleared.
+func (t *Terminal) DeleteLines(n, cursorRow, marginTop, marginBottom int) {
+	t.write.DeleteLines(n, cursorRow, marginTop, marginBottom)
+}
+
+// NewlineInRegion handles a LF within a partial DECSTBM scroll region. The
+// region [marginTop, marginBottom] (relative to writeTop) scrolls up by 1.
+// writeTop does NOT advance — only content within the region shifts.
+func (t *Terminal) NewlineInRegion(marginTop, marginBottom int) {
+	t.write.NewlineInRegion(marginTop, marginBottom)
+	// The writeBottom does not change when only content shifts, so no
+	// ViewWindow notification is needed.
+}
+
 // SetLine overwrites the cells at the given globalIdx in the store.
 // Used to sync from MemoryBuffer after complex operations (scroll regions).
 func (t *Terminal) SetLine(globalIdx int64, cells []parser.Cell) {
