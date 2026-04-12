@@ -23,7 +23,6 @@ func TestTerminal_NewInitialState(t *testing.T) {
 	if got := tm.ContentEnd(); got != -1 {
 		t.Errorf("fresh ContentEnd = %d, want -1", got)
 	}
-	_ = parser.Cell{}
 }
 
 func TestTerminal_WriteCellAdvancesFollowingView(t *testing.T) {
