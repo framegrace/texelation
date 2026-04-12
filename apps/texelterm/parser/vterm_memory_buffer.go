@@ -166,6 +166,11 @@ func (v *VTerm) initMemoryBufferWithOptions(opts MemoryBufferOptions) {
 			log.Printf("[MEMORY_BUFFER] Persistence enabled, lineCount=%d", v.memBufState.pageStore.LineCount())
 		}
 	}
+
+	// Create the sparse terminal alongside the legacy buffer for dual-write.
+	if MainScreenFactory != nil {
+		v.mainScreen = MainScreenFactory(v.width, v.height)
+	}
 }
 
 // EnableMemoryBuffer switches to the new memory buffer system.

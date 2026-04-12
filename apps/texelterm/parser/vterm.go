@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 
-
 	"github.com/mattn/go-runewidth"
 )
 
@@ -30,6 +29,9 @@ type VTerm struct {
 	altBuffer   [][]Cell
 	// Memory buffer for scrollback (Phase 1-3 architecture)
 	memBufState *memoryBufferState
+	// mainScreen replaces memBufState for the main-screen path. During the
+	// transition, both run in parallel. After integration, memBufState is deleted.
+	mainScreen MainScreen
 	// Terminal state
 	currentFG, currentBG               Color
 	currentAttr                        Attribute

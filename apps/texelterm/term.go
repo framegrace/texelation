@@ -39,6 +39,9 @@ import (
 	// Import transformers for init() side-effect registration.
 	_ "github.com/framegrace/texelation/apps/texelterm/tablefmt"
 	_ "github.com/framegrace/texelation/apps/texelterm/txfmt"
+
+	// Import sparse for init() side-effect: registers MainScreenFactory.
+	_ "github.com/framegrace/texelation/apps/texelterm/parser/sparse"
 	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelation/texel"
 	"github.com/framegrace/texelui/theme"
