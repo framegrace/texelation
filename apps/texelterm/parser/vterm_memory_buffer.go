@@ -711,16 +711,6 @@ func (v *VTerm) memoryBufferPlaceCharWide(r rune, isWide bool) {
 		return
 	}
 
-	// Dual-write to sparse mainScreen
-	if v.mainScreen != nil {
-		v.mainScreen.WriteCell(Cell{
-			Rune: r,
-			FG:   v.currentFG,
-			BG:   v.currentBG,
-			Attr: v.currentAttr,
-		})
-	}
-
 	// Ensure liveEdgeBase is consistent with GlobalOffset
 	v.ensureLiveEdgeBaseConsistency()
 
@@ -734,6 +724,17 @@ func (v *VTerm) memoryBufferPlaceCharWide(r rune, isWide bool) {
 
 	// Set cursor to correct position
 	mb.SetCursor(globalLine, v.cursorX)
+
+	// Dual-write to sparse mainScreen (after cursor sync)
+	if v.mainScreen != nil {
+		v.mainScreen.SetCursor(v.cursorY, v.cursorX)
+		v.mainScreen.WriteCell(Cell{
+			Rune: r,
+			FG:   v.currentFG,
+			BG:   v.currentBG,
+			Attr: v.currentAttr,
+		})
+	}
 
 	// Write the character
 	if isWide {

@@ -88,6 +88,13 @@ func (s *Store) Set(globalIdx int64, col int, cell parser.Cell) {
 		if newCap < needed {
 			newCap = needed
 		}
+		// Safety clamp: prevent absurd allocations from buggy cursor state
+		if newCap > s.width*4+16 {
+			newCap = s.width*4 + 16
+		}
+		if needed > newCap {
+			return
+		}
 		grown := make([]parser.Cell, needed, newCap)
 		copy(grown, line.cells)
 		line.cells = grown

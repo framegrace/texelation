@@ -165,6 +165,15 @@ func (v *VTerm) Grid() [][]Cell {
 	return v.memoryBufferGrid()
 }
 
+// MainScreenGrid returns the sparse MainScreen's grid, or nil if no MainScreen
+// is configured. Used during the dual-write transition for parity testing.
+func (v *VTerm) MainScreenGrid() [][]Cell {
+	if v.mainScreen == nil {
+		return nil
+	}
+	return v.mainScreen.Grid()
+}
+
 // IsBracketedPasteModeEnabled returns whether bracketed paste mode is enabled.
 func (v *VTerm) IsBracketedPasteModeEnabled() bool {
 	return v.bracketedPasteMode
