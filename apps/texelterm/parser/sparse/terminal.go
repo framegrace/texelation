@@ -121,6 +121,13 @@ func (t *Terminal) SetLine(globalIdx int64, cells []parser.Cell) {
 	t.store.SetLine(globalIdx, cells)
 }
 
+// ClearRange removes all lines in [lo, hi] from the store.
+// Used to sync from MemoryBuffer after resize-split rejoin and similar
+// operations that collapse multiple logical lines back into one.
+func (t *Terminal) ClearRange(lo, hi int64) {
+	t.store.ClearRange(lo, hi)
+}
+
 // ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.
 func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
 	return t.store.GetLine(globalIdx)

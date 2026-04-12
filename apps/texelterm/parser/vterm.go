@@ -1383,9 +1383,16 @@ func (v *VTerm) RequestLineOverlay(lineIdx int64, cells []Cell) {
 	if line == nil {
 		return
 	}
-	line.Overlay = make([]Cell, len(cells))
-	copy(line.Overlay, cells)
+	cloned := make([]Cell, len(cells))
+	copy(cloned, cells)
+	line.Overlay = cloned
 	line.OverlayWidth = len(cells)
+
+	// Sync overlay to sparse so Grid() reflects the formatted view.
+	if v.mainScreen != nil {
+		v.mainScreen.SetLine(lineIdx, cloned)
+	}
+
 	// Invalidate viewport cache so VisibleGrid() rebuilds with the new
 	// overlay, and mark all rows dirty so the renderer repaints.
 	v.memBufState.viewport.InvalidateCache()
@@ -1503,10 +1510,10 @@ func (v *VTerm) PhysicalCursor() (physX, physY int) {
 		return physX, physY
 	}
 
-	// In memory buffer mode with sparse mainScreen, the grid is one
-	// globalIdx per row (no wrapping). Cursor position is simply cursorY
-	// for the row and cursorX for the column, clamped to width.
-	if v.IsMemoryBufferEnabled() && v.mainScreen != nil {
+	// In memory buffer mode with sparse mainScreen (and no pending inserts),
+	// the grid is one globalIdx per row (no wrapping). Cursor position is
+	// simply cursorY for the row and cursorX for the column, clamped to width.
+	if v.IsMemoryBufferEnabled() && v.mainScreen != nil && v.commitInsertOffset == 0 {
 		if v.cursorX < v.width {
 			return v.cursorX, v.cursorY
 		}

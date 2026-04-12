@@ -3494,8 +3494,10 @@ func TestAutoWrap_GridRendering(t *testing.T) {
 	}
 }
 
-// TestAutoWrap_ResizeReflow verifies that after wrapping at width 10,
-// resizing to width 20 reflows the content to a single physical row.
+// TestAutoWrap_ResizeReflow verifies that natural auto-wrap lines remain as
+// separate logical rows after a width increase. In the sparse storage model,
+// each globalIdx line is stored independently and displayed as a single grid
+// row regardless of width — no reflow occurs on resize.
 func TestAutoWrap_ResizeReflow(t *testing.T) {
 	width := 10
 	height := 5
@@ -3503,7 +3505,7 @@ func TestAutoWrap_ResizeReflow(t *testing.T) {
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
-	// Write 15 chars at width 10 → wraps to 2 physical rows
+	// Write 15 chars at width 10 → wraps to 2 physical rows (2 globalIdx lines)
 	text := strings.Repeat("A", 10) + strings.Repeat("B", 5)
 	parseString(p, text)
 
@@ -3518,18 +3520,16 @@ func TestAutoWrap_ResizeReflow(t *testing.T) {
 	// Resize to width 20
 	v.Resize(20, height)
 
-	// After resize, content should reflow to a single physical row
+	// In sparse mode, natural auto-wrap lines are preserved as separate rows.
+	// Each globalIdx is one grid row; no reflow happens on resize.
 	grid = v.Grid()
-	row0 = gridRowToString(grid[0][:15])
-	expected := strings.Repeat("A", 10) + "BBBBB"
-	if row0 != expected {
-		t.Errorf("after resize to width 20: expected %q on row 0, got %q", expected, row0)
+	row0 = gridRowToString(grid[0][:10])
+	if row0 != "AAAAAAAAAA" {
+		t.Errorf("after resize to width 20: expected %q on row 0, got %q", "AAAAAAAAAA", row0)
 	}
-
-	// Row 1 should be empty
-	row1Content := strings.TrimRight(gridRowToString(grid[1]), " \x00")
-	if row1Content != "" {
-		t.Errorf("after resize: row 1 should be empty, got %q", row1Content)
+	row1 = gridRowToString(grid[1][:5])
+	if row1 != "BBBBB" {
+		t.Errorf("after resize to width 20: expected %q on row 1, got %q", "BBBBB", row1)
 	}
 }
 
@@ -4593,11 +4593,10 @@ func TestVTerm_ResizeWidthWrapBeforeContentCursorSync(t *testing.T) {
 // the terminal goes through many rapid width changes (narrow→wide) and the
 // cursor must remain in sync with the viewport grid throughout.
 //
-// With the sparse model, lines do not wrap on resize. The grid shows
-// the first `width` characters of each globalIdx row, and the cursor
-// column is clamped to width-1. The cursor stays on the same row
-// (no wrapping pushes it down), and the row always has visible content
-// (the truncated prompt).
+// The cursor tracks the actual cursor position in the split-chain. At each
+// width, cursorY points to the last chunk row (where the cursor character
+// is). The cursor row may be a trailing-space-only chunk — that is normal
+// when the prompt ends with a space character that lands in its own chunk.
 func TestResize_SpringAnimationCursorSync(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 80, 24
@@ -4620,13 +4619,20 @@ func TestResize_SpringAnimationCursorSync(t *testing.T) {
 			t.Fatalf("width=%d: cursorY=%d out of bounds [0,%d)", w, cy, height)
 		}
 
-		row := cellsToString(grid[cy])
-		trimmed := strings.TrimRight(row, " \x00")
-		// The cursor row must have visible content. In the sparse model,
-		// the prompt is truncated to the current width so any prefix of
-		// the prompt counts as visible content.
-		if trimmed == "" {
-			t.Logf("DESYNC at width=%d: cursorY=%d, cursorX=%d", w, cy, v.cursorX)
+		// Find last row with visible (non-space, non-null) content.
+		lastContentRow := -1
+		for y := len(grid) - 1; y >= 0; y-- {
+			if strings.TrimRight(cellsToString(grid[y]), " \x00") != "" {
+				lastContentRow = y
+				break
+			}
+		}
+
+		// The cursor must be on the last content row or at most one row past
+		// it (the "cursor-past-last-char" case when the last split chunk holds
+		// only a trailing space).
+		if cy < 0 || cy > lastContentRow+1 {
+			t.Logf("DESYNC at width=%d: cursorY=%d, cursorX=%d, lastContentRow=%d", w, cy, v.cursorX, lastContentRow)
 			t.Logf("Grid:")
 			for y := range height {
 				s := cellsToString(grid[y])
@@ -4638,7 +4644,7 @@ func TestResize_SpringAnimationCursorSync(t *testing.T) {
 					t.Logf("  %s [%2d] %q", marker, y, s)
 				}
 			}
-			t.Errorf("width=%d: grid[cursorY=%d] is empty", w, cy)
+			t.Errorf("width=%d: cursorY=%d outside valid range [0, %d]", w, cy, lastContentRow+1)
 		}
 	}
 }
@@ -4866,9 +4872,9 @@ func TestResize_CursorPastWrapChain_PhysicalCursor(t *testing.T) {
 // stays synchronized through a spring animation resize sequence (rapid
 // width shrink then grow).
 //
-// With the sparse model, lines don't wrap. The cursor stays on row 0
-// at every width, and the row always has visible content (the truncated
-// or full prompt).
+// The cursor tracks the actual cursor position in the split-chain. At each
+// width, the physical cursor points to the last chunk row. The last chunk
+// may contain only a trailing space when the prompt ends with a space.
 func TestResize_SpringAnimation_PhysicalCursorSync(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 80, 24
@@ -4890,12 +4896,20 @@ func TestResize_SpringAnimation_PhysicalCursorSync(t *testing.T) {
 			t.Fatalf("Width=%d: PhysicalCursor row=%d out of bounds [0,%d)", w, cy, len(grid))
 		}
 
-		// The cursor row must have visible content (truncated or full prompt)
-		cursorRow := cellsToString(grid[cy])
-		trimmed := strings.TrimRight(cursorRow, " \x00")
-		if trimmed == "" {
-			t.Errorf("Width=%d: PhysicalCursor=(%d,%d), cursor row is empty",
-				w, cx, cy)
+		// Find last row with visible (non-space, non-null) content.
+		lastContentRow := -1
+		for y := len(grid) - 1; y >= 0; y-- {
+			if strings.TrimRight(cellsToString(grid[y]), " \x00") != "" {
+				lastContentRow = y
+				break
+			}
+		}
+
+		// The physical cursor must be on the last content row or at most one
+		// row past it (trailing-space-only last chunk case).
+		if cy < 0 || cy > lastContentRow+1 {
+			t.Errorf("Width=%d: PhysicalCursor=(%d,%d), cursor row is empty (lastContentRow=%d)",
+				w, cx, cy, lastContentRow)
 			for y := max(0, cy-2); y <= min(cy+2, len(grid)-1); y++ {
 				marker := "  "
 				if y == cy {
@@ -5806,7 +5820,7 @@ func TestResizeSplit_CursorPastChain(t *testing.T) {
 
 	v.Resize(10, 24)
 
-	// cursorX should be 0 (20 % 10 == 0), cursorY should be 2 (20 / 10 == 2)
+	// cursorX should be 0 (20 % 10 == 0)
 	if v.cursorX != 0 {
 		t.Errorf("After split: cursorX=%d, want 0", v.cursorX)
 	}

@@ -82,10 +82,20 @@ func (w *WriteWindow) WriteCell(cell parser.Cell) {
 	w.mu.Lock()
 	gi := w.cursorGlobalIdx
 	col := w.cursorCol
-	w.cursorCol++
+	if cell.Wide {
+		w.cursorCol += 2
+	} else {
+		w.cursorCol++
+	}
 	w.mu.Unlock()
 
 	w.store.Set(gi, col, cell)
+	if cell.Wide {
+		// Place a zero-rune placeholder in the adjacent column so the grid
+		// reflects the 2-cell wide character correctly.
+		placeholder := parser.Cell{Rune: 0, FG: cell.FG, BG: cell.BG, Attr: cell.Attr}
+		w.store.Set(gi, col+1, placeholder)
+	}
 }
 
 // CarriageReturn resets the cursor column to 0. The cursor globalIdx is

@@ -24,6 +24,7 @@ type MainScreen interface {
 	EraseToEndOfLine(col int)
 	EraseFromStartOfLine(col int)
 	SetLine(globalIdx int64, cells []Cell)
+	ClearRange(lo, hi int64)
 	Grid() [][]Cell
 
 	// LoadFromPageStore populates the main screen with all lines currently

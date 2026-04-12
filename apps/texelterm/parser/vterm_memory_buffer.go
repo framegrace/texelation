@@ -212,6 +212,9 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 				}
 				// Restore sparse write state to match the reloaded liveEdgeBase.
 				v.mainScreen.RestoreState(v.memBufState.liveEdgeBase, v.memBufState.liveEdgeBase+int64(v.cursorY), v.cursorX)
+				// Overlay any lines that have in-memory overlay content (e.g. transformer-
+				// formatted lines) so the sparse grid reflects the formatted view.
+				v.syncOverlaysToSparse()
 			}
 			return nil
 		}
@@ -727,6 +730,7 @@ func (v *VTerm) memoryBufferPlaceCharWide(r rune, isWide bool) {
 			FG:   v.currentFG,
 			BG:   v.currentBG,
 			Attr: v.currentAttr,
+			Wide: isWide,
 		})
 	}
 
@@ -901,8 +905,18 @@ func (v *VTerm) memoryBufferGrid() [][]Cell {
 	}
 
 	var grid [][]Cell
-	if v.mainScreen != nil {
+	if v.mainScreen != nil && v.commitInsertOffset == 0 {
 		grid = v.mainScreen.Grid()
+		// Sparse Grid() returns Cell{} (Rune=0) for unwritten/erased cells.
+		// Convert to space so callers see consistent blank cells (matching
+		// the MemoryBuffer viewport's behavior and what VT tests expect).
+		for _, row := range grid {
+			for i, c := range row {
+				if c.Rune == 0 {
+					row[i].Rune = ' '
+				}
+			}
+		}
 	} else {
 		grid = v.memBufState.viewport.VisibleGrid()
 	}
@@ -1299,6 +1313,24 @@ func (v *VTerm) memoryBufferAtLiveEdge() bool {
 	return v.memBufState.viewport.IsAtLiveEdge()
 }
 
+// syncOverlaysToSparse writes any lines in the MemoryBuffer that carry
+// overlay content into the sparse MainScreen store. Called after
+// loadHistoryFromDisk so that the grid flip shows overlay-formatted lines
+// rather than the raw underlying cells loaded from the PageStore.
+func (v *VTerm) syncOverlaysToSparse() {
+	if v.mainScreen == nil || v.memBufState == nil {
+		return
+	}
+	mb := v.memBufState.memBuf
+	for idx := mb.GlobalOffset(); idx < mb.GlobalEnd(); idx++ {
+		line := mb.GetLine(idx)
+		if line == nil || line.Overlay == nil {
+			continue
+		}
+		v.mainScreen.SetLine(idx, line.Overlay)
+	}
+}
+
 // --- Resize ---
 
 // combineAndCollapseChain combines all cells in the wrap chain from chainStart
@@ -1433,11 +1465,20 @@ func (v *VTerm) rejoinResizeSplitChain() {
 	}
 
 	// Combine all chain lines into one and delete extras.
-	combineAndCollapseChain(mb, chainStart, chainEnd)
+	combined := combineAndCollapseChain(mb, chainStart, chainEnd)
 
 	// Clear ResizeSplit on the combined line.
 	if firstLine := mb.GetLine(chainStart); firstLine != nil {
 		firstLine.ResizeSplit = false
+	}
+
+	// Sync rejoin to sparse: write the combined line and clear the deleted
+	// entries so sparse.Grid() sees the same layout as MemoryBuffer.
+	if v.mainScreen != nil && len(combined) > 0 {
+		v.mainScreen.SetLine(chainStart, combined)
+		if chainEnd > chainStart {
+			v.mainScreen.ClearRange(chainStart+1, chainEnd)
+		}
 	}
 
 	// Adjust cursor position.
@@ -1479,6 +1520,8 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 			}
 			// Restore sparse write state to match the reloaded liveEdgeBase.
 			v.mainScreen.RestoreState(v.memBufState.liveEdgeBase, v.memBufState.liveEdgeBase+int64(v.cursorY), v.cursorX)
+			// Overlay any lines that have in-memory overlay content.
+			v.syncOverlaysToSparse()
 		}
 	}
 
@@ -1490,10 +1533,7 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	// Previous resize width-decrease splits create chains (multiple logical
 	// lines with ResizeSplit=true). When the width changes again, we rejoin
 	// them to start from a clean state: one logical line per original content.
-	// Skip when sparse mainScreen is active — it doesn't create split chains.
-	if v.mainScreen == nil {
-		v.rejoinResizeSplitChain()
-	}
+	v.rejoinResizeSplitChain()
 
 	// Calculate cursor's global line before resize
 	cursorGlobalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
@@ -1509,14 +1549,7 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	// intact and content past the right edge is simply hidden until the terminal
 	// is widened again.
 	//
-	// When the sparse mainScreen is active, skip wrapping entirely: the sparse
-	// grid truncates lines at the new width (one row per globalIdx, no wrapping).
-	// Just clamp cursorX to the new width boundary.
-	if v.mainScreen != nil {
-		if width > 0 && v.cursorX >= width {
-			v.cursorX = width - 1
-		}
-	} else if width > 0 && v.cursorX >= width {
+	if width > 0 && v.cursorX >= width {
 		line := mb.GetLine(cursorGlobalLine)
 		if line != nil && len(line.Cells) > width {
 			absoluteCol := v.cursorX
@@ -1546,18 +1579,27 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 					insertIdx := cursorGlobalLine + int64(i)
 					mb.InsertLine(insertIdx)
 					mb.SetLine(insertIdx, &LogicalLine{Cells: chunk, ResizeSplit: true})
+
+					// Sync each new chunk into the sparse store so Grid() shows
+					// the wrapped content at the correct globalIdx row.
+					if v.mainScreen != nil {
+						v.mainScreen.SetLine(insertIdx, chunk)
+					}
+				}
+
+				// Sync first chunk to sparse (replaces the full original line).
+				if v.mainScreen != nil {
+					v.mainScreen.SetLine(cursorGlobalLine, firstChunk)
 				}
 
 				// Adjust cursor to the correct split segment.
 				extraRows := absoluteCol / width
 				v.cursorX = absoluteCol % width
 				v.cursorY += extraRows
+				cursorGlobalLine = v.memBufState.liveEdgeBase + int64(v.cursorY)
 
 				v.logMemBufDebug("[RESIZE] Width split: %d-cell line into %d chunks, cursor adjusted to (%d,%d)",
 					len(cells), numChunks, v.cursorX, v.cursorY)
-
-				// Recalculate cursorGlobalLine after adjustment.
-				cursorGlobalLine = v.memBufState.liveEdgeBase + int64(v.cursorY)
 			}
 		}
 	}
@@ -1638,6 +1680,18 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 
 	// Ensure consistency
 	v.ensureLiveEdgeBaseConsistency()
+
+	// Sync sparse write state so its writeTop and cursor match liveEdgeBase.
+	// MemoryBuffer may have advanced liveEdgeBase via split-chain or clamp
+	// operations after the initial mainScreen.Resize() call. Without this
+	// sync, sparse.Grid() is anchored at the wrong viewTop.
+	if v.mainScreen != nil {
+		v.mainScreen.RestoreState(
+			v.memBufState.liveEdgeBase,
+			v.memBufState.liveEdgeBase+int64(v.cursorY),
+			v.cursorX,
+		)
+	}
 
 	v.logMemBufDebug("[RESIZE] After: liveEdgeBase=%d, cursorY=%d, height=%d",
 		v.memBufState.liveEdgeBase, v.cursorY, height)
@@ -1731,6 +1785,13 @@ func (v *VTerm) memoryBufferEraseCharacters(n int) {
 
 	for col := v.cursorX; col < endCol; col++ {
 		mb.SetCell(globalLine, col, Cell{Rune: ' ', FG: v.currentFG, BG: v.currentBG})
+	}
+
+	// Dual-write erased cells to sparse so Grid() reflects the erasure.
+	if v.mainScreen != nil {
+		if line := mb.GetLine(globalLine); line != nil {
+			v.mainScreen.SetLine(globalLine, line.Cells)
+		}
 	}
 
 	// Mark dirty for persistence
