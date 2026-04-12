@@ -87,3 +87,48 @@ func TestPersistence_RestoreTerminal(t *testing.T) {
 		t.Error("restored Terminal should be in autoFollow mode by default")
 	}
 }
+
+func TestPersistence_RoundTripViaPageStore(t *testing.T) {
+	dir := t.TempDir()
+	cfg := parser.DefaultPageStoreConfig(dir, "unit-test")
+	ps1, err := parser.CreatePageStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter1 := NewPersistence(ps1)
+
+	// Build a terminal, write some content, flush all lines.
+	tm := NewTerminal(10, 5)
+	tm.WriteCell(parser.Cell{Rune: 'x'})
+	tm.Newline()
+	tm.WriteCell(parser.Cell{Rune: 'y'})
+	tm.Newline()
+
+	idxs := []int64{0, 1}
+	if err := adapter1.FlushLines(getStore(tm), idxs); err != nil {
+		t.Fatalf("FlushLines: %v", err)
+	}
+	if err := ps1.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	ps1.Close()
+
+	// Reload into a fresh Terminal.
+	ps2, err := parser.OpenPageStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ps2.Close()
+
+	tm2 := NewTerminal(10, 5)
+	if err := LoadStore(getStore(tm2), ps2); err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+
+	if got := getStore(tm2).Get(0, 0).Rune; got != 'x' {
+		t.Errorf("reloaded store[0][0] = %q, want x", got)
+	}
+	if got := getStore(tm2).Get(1, 0).Rune; got != 'y' {
+		t.Errorf("reloaded store[1][0] = %q, want y", got)
+	}
+}
