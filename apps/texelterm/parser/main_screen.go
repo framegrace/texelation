@@ -27,6 +27,19 @@ type MainScreen interface {
 	ClearRange(lo, hi int64)
 	Grid() [][]Cell
 
+	// Scroll methods keep the sparse ViewWindow in sync with user
+	// navigation. Without these, Grid() would always show the live edge.
+	ScrollUp(n int)
+	ScrollDown(n int)
+	ScrollToBottom()
+	OnInput()
+	IsFollowing() bool
+
+	// SyncWriteState updates the write window (writeTop + cursor) to match the
+	// given MemoryBuffer-side state after a resize. Unlike RestoreState, it does
+	// NOT snap the view window to the bottom — user's scroll position is preserved.
+	SyncWriteState(writeTop, cursorGlobalIdx int64, cursorCol int)
+
 	// LoadFromPageStore populates the main screen with all lines currently
 	// stored in the given PageStore. Used on session restore to replay
 	// persistent scrollback into the sparse store.

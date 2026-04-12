@@ -1065,8 +1065,14 @@ func (v *VTerm) memoryBufferScroll(delta int) {
 
 	if delta > 0 {
 		v.memBufState.viewport.ScrollDown(delta)
+		if v.mainScreen != nil {
+			v.mainScreen.ScrollDown(delta)
+		}
 	} else if delta < 0 {
 		v.memBufState.viewport.ScrollUp(-delta)
+		if v.mainScreen != nil {
+			v.mainScreen.ScrollUp(-delta)
+		}
 	}
 
 	afterOffset := vw.ScrollOffset()
@@ -1086,6 +1092,9 @@ func (v *VTerm) memoryBufferScrollToBottom() {
 	}
 
 	v.memBufState.viewport.ScrollToBottom()
+	if v.mainScreen != nil {
+		v.mainScreen.ScrollToBottom()
+	}
 }
 
 // ScrollToLiveEdge scrolls the viewport to show the most recent content.
@@ -1684,9 +1693,11 @@ func (v *VTerm) memoryBufferResize(width, height int) {
 	// Sync sparse write state so its writeTop and cursor match liveEdgeBase.
 	// MemoryBuffer may have advanced liveEdgeBase via split-chain or clamp
 	// operations after the initial mainScreen.Resize() call. Without this
-	// sync, sparse.Grid() is anchored at the wrong viewTop.
+	// sync, sparse.Grid() is anchored at the wrong globalIdx.
+	// Use SyncWriteState (not RestoreState) to preserve the user's view
+	// position — RestoreState always snaps the view to the live edge.
 	if v.mainScreen != nil {
-		v.mainScreen.RestoreState(
+		v.mainScreen.SyncWriteState(
 			v.memBufState.liveEdgeBase,
 			v.memBufState.liveEdgeBase+int64(v.cursorY),
 			v.cursorX,

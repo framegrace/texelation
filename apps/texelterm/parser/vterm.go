@@ -174,6 +174,16 @@ func (v *VTerm) MainScreenGrid() [][]Cell {
 	return v.mainScreen.Grid()
 }
 
+// LegacyGrid returns the ViewportWindow (MemoryBuffer-based) grid directly,
+// bypassing the sparse flip in Grid(). Used during the dual-write transition
+// to compare the legacy and sparse grids independently.
+func (v *VTerm) LegacyGrid() [][]Cell {
+	if v.memBufState == nil || !v.memBufState.enabled {
+		return nil
+	}
+	return v.memBufState.viewport.VisibleGrid()
+}
+
 // ContentEnd returns the highest globalIdx ever written via the sparse
 // MainScreen, or -1 if empty or no MainScreen is configured.
 func (v *VTerm) ContentEnd() int64 {
