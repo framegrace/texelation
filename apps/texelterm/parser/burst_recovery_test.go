@@ -14,14 +14,6 @@ import (
 	"time"
 )
 
-// clearRecoveryGuard clears the restoredFromDisk flag so tests can write
-// lines through the parser without the linefeed suppression interfering.
-func clearRecoveryGuard(v *VTerm) {
-	if v.memBufState != nil {
-		v.memBufState.restoredFromDisk = false
-	}
-}
-
 // dirtyClose simulates a crash: stops the idle monitor and closes file
 // handles without flushing pending writes or checkpointing.
 func dirtyClose(v *VTerm) {
@@ -274,7 +266,7 @@ func TestBurstWriteRecovery_MultipleRestarts(t *testing.T) {
 
 	for restart := 0; restart < numRestarts; restart++ {
 		v := newTestVTerm(t, cols, rows, dir, id)
-		clearRecoveryGuard(v) // allow test writes to scroll normally
+
 		writeLines(v, linesPerSession)
 
 		state := captureState(v)
@@ -560,7 +552,7 @@ func TestBurstWriteRecovery_DirtyClose_MultipleRestartsNoDrift(t *testing.T) {
 
 	for restart := 0; restart < 5; restart++ {
 		v := newTestVTerm(t, cols, rows, dir, id)
-		clearRecoveryGuard(v) // allow test writes to scroll normally
+
 		writeLines(v, linesPerSession)
 
 		// Wait for idle flush
@@ -827,7 +819,6 @@ func TestVTermCoherence_MultipleRestarts(t *testing.T) {
 
 	for restart := 0; restart < 4; restart++ {
 		v := newTestVTerm(t, cols, rows, dir, id)
-		clearRecoveryGuard(v)
 		writeNumberedLines(v, restart*100, 100)
 
 		before := captureState(v)

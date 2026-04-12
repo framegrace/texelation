@@ -486,9 +486,6 @@ func (v *VTerm) getTopHistoryLine() int {
 func (v *VTerm) MarkPromptStart() {
 	if v.memBufState != nil {
 		v.PromptStartGlobalLine = v.memBufState.liveEdgeBase + int64(v.cursorY)
-		// First prompt after recovery — the shell is ready. Clear the
-		// recovery guard so normal scrolling resumes.
-		v.memBufState.restoredFromDisk = false
 	}
 }
 

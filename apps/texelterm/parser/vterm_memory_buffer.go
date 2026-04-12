@@ -59,13 +59,6 @@ type memoryBufferState struct {
 	// This prevents loading history multiple times.
 	historyLoaded bool
 
-	// restoredFromDisk is set after history is loaded from disk. It suppresses
-	// memoryBufferPushViewportToScrollback calls to prevent the recovered
-	// viewport content from being pushed into scrollback again (it's already
-	// there from the previous session). Cleared on first real scroll.
-	restoredFromDisk bool
-
-
 	// pendingHistoryLines is the number of historical lines available in PageStore.
 	// Set during initialization, used by first Resize() to load history.
 	pendingHistoryLines int64
@@ -211,7 +204,6 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 			log.Printf("[MEMORY_BUFFER] %d historical lines available, loading now (height=%d)", lineCount, v.height)
 			v.loadHistoryFromDisk(v.height)
 			v.memBufState.historyLoaded = true
-			v.memBufState.restoredFromDisk = true
 			return nil
 		}
 	}
@@ -581,13 +573,6 @@ func (v *VTerm) loadHistoryFromDisk(viewportHeight int) {
 
 	// Repair state after crash: trim blank tail lines that were never synced.
 	v.trimBlankTailLines()
-
-	// Note: restoredFromDisk flag is set by the caller. When true, linefeed
-	// at the bottom of the viewport does NOT advance liveEdgeBase — the
-	// shell's startup output (bashrc, oh-my-bash, etc.) overwrites the
-	// viewport in-place instead of scrolling the recovered content away.
-	// The flag is cleared when the shell sends its first prompt marker
-	// (OSC 133;A), at which point normal scrolling resumes.
 
 	// Reset terminal drawing state to theme defaults after history reload.
 	// Without this, currentFG/currentBG could be left in an unexpected state,
@@ -1737,10 +1722,6 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 
 	switch mode {
 	case 0: // Erase from cursor to end of screen
-		// If cursor is at home, push viewport to scrollback first (like modern terminals)
-		if v.cursorY == 0 && v.cursorX == 0 {
-			v.memoryBufferPushViewportToScrollback()
-		}
 		// Erase current line from cursor
 		v.memoryBufferEraseToEndOfLine()
 		// Erase all lines below
@@ -1765,9 +1746,6 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 		v.memoryBufferEraseFromStartOfLine()
 
 	case 2: // Erase entire visible screen
-		// Push non-empty viewport content to scrollback before clearing,
-		// matching modern terminal behavior (iTerm2, GNOME Terminal).
-		v.memoryBufferPushViewportToScrollback()
 		for y := 0; y < v.height; y++ {
 			globalLine := v.memBufState.liveEdgeBase + int64(y)
 			mb.EraseLine(globalLine, v.currentFG, v.currentBG)
@@ -1776,97 +1754,6 @@ func (v *VTerm) memoryBufferEraseScreen(mode int) {
 			}
 		}
 	}
-}
-
-// memoryBufferPushViewportToScrollback advances liveEdgeBase to push non-empty
-// viewport content into scrollback history before a screen clear. This matches
-// the behavior of modern terminals (iTerm2, VTE/GNOME Terminal) which preserve
-// screen content in scrollback when ESC[2J or ESC[H ESC[J is received.
-//
-// Leading and trailing empty rows are trimmed: only the range from the first
-// non-empty row through the last non-empty row is preserved. Content is
-// compacted to row 0 before advancing liveEdgeBase so no empty prefix enters
-// scrollback.
-func (v *VTerm) memoryBufferPushViewportToScrollback() {
-	// After restoring from disk, the viewport content is already in scrollback.
-	// The first screen clear (from shell startup) should not push it again —
-	// that would advance liveEdgeBase by a full viewport height, making the
-	// screen appear blank with content one scroll-up away.
-	if v.memBufState.restoredFromDisk {
-		log.Printf("[MEMORY_BUFFER] Suppressed pushViewportToScrollback (restored from disk, liveEdgeBase=%d)",
-			v.memBufState.liveEdgeBase)
-		return
-	}
-
-	mb := v.memBufState.memBuf
-
-	// Find first and last rows with visible content
-	firstNonEmpty := -1
-	lastNonEmpty := -1
-	for y := 0; y < v.height; y++ {
-		if v.viewportRowHasContent(y) {
-			if firstNonEmpty < 0 {
-				firstNonEmpty = y
-			}
-			lastNonEmpty = y
-		}
-	}
-
-	if firstNonEmpty < 0 {
-		return // viewport is all empty, nothing to push
-	}
-
-	contentLines := lastNonEmpty - firstNonEmpty + 1
-
-	// Compact: copy content to row 0+ so only meaningful lines enter scrollback
-	if firstNonEmpty > 0 {
-		for i := 0; i < contentLines; i++ {
-			srcGlobal := v.memBufState.liveEdgeBase + int64(firstNonEmpty+i)
-			dstGlobal := v.memBufState.liveEdgeBase + int64(i)
-			srcLine := mb.GetLine(srcGlobal)
-			if srcLine != nil {
-				mb.SetLine(dstGlobal, srcLine.Clone())
-			} else {
-				mb.SetLine(dstGlobal, NewLogicalLine())
-			}
-		}
-	}
-
-	// Advance liveEdgeBase by contentLines only
-	advance := int64(contentLines)
-	v.memBufState.liveEdgeBase += advance
-
-	// Ensure new viewport lines exist
-	for y := 0; y < v.height; y++ {
-		mb.EnsureLine(v.memBufState.liveEdgeBase + int64(y))
-	}
-
-	// Notify persistence for the lines that became scrollback
-	if v.memBufState.persistence != nil {
-		for i := advance; i > 0; i-- {
-			scrollbackLine := v.memBufState.liveEdgeBase - i
-			if scrollbackLine >= 0 {
-				v.memBufState.persistence.NotifyWrite(scrollbackLine)
-			}
-		}
-	}
-
-	v.notifyMetadataChange()
-	v.memBufState.viewport.InvalidateCache()
-}
-
-// viewportRowHasContent checks if the given viewport row has any visible content.
-func (v *VTerm) viewportRowHasContent(row int) bool {
-	line := v.memBufState.memBuf.GetLine(v.memBufState.liveEdgeBase + int64(row))
-	if line == nil {
-		return false
-	}
-	for _, cell := range line.Cells {
-		if cell.Rune != 0 && cell.Rune != ' ' {
-			return true
-		}
-	}
-	return false
 }
 
 // --- Scroll Region Operations ---
