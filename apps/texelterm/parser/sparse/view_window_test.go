@@ -1,0 +1,28 @@
+package sparse
+
+import "testing"
+
+func TestViewWindow_NewFollowing(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	if !vw.IsFollowing() {
+		t.Error("new ViewWindow should be in autoFollow mode")
+	}
+	if got := vw.Height(); got != 24 {
+		t.Errorf("Height = %d, want 24", got)
+	}
+	if got := vw.Width(); got != 80 {
+		t.Errorf("Width = %d, want 80", got)
+	}
+}
+
+func TestViewWindow_VisibleRangeInitially(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	top, bottom := vw.VisibleRange()
+	// Fresh ViewWindow pretends writeBottom is height-1 until told otherwise.
+	if bottom != 23 {
+		t.Errorf("fresh viewBottom = %d, want 23", bottom)
+	}
+	if top != 0 {
+		t.Errorf("fresh viewTop = %d, want 0", top)
+	}
+}
