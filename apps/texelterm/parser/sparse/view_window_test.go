@@ -49,3 +49,39 @@ func TestViewWindow_DoesNotFollowWhenScrolledBack(t *testing.T) {
 		t.Errorf("frozen viewBottom = %d, want 90 (unchanged)", bottom)
 	}
 }
+
+func TestViewWindow_ScrollDownClampedToWriteBottom(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	vw.OnWriteBottomChanged(100)
+	vw.ScrollUp(30)
+	vw.ScrollDown(100, 100) // n, writeBottom
+	_, bottom := vw.VisibleRange()
+	if bottom != 100 {
+		t.Errorf("ScrollDown clamped at writeBottom: viewBottom = %d, want 100", bottom)
+	}
+}
+
+func TestViewWindow_ScrollToBottomReattaches(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	vw.OnWriteBottomChanged(100)
+	vw.ScrollUp(50)
+	vw.ScrollToBottom(100)
+
+	if !vw.IsFollowing() {
+		t.Error("ScrollToBottom should re-engage autoFollow")
+	}
+	_, bottom := vw.VisibleRange()
+	if bottom != 100 {
+		t.Errorf("viewBottom = %d, want 100", bottom)
+	}
+}
+
+func TestViewWindow_OnInputReattaches(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	vw.OnWriteBottomChanged(100)
+	vw.ScrollUp(50)
+	vw.OnInput(100)
+	if !vw.IsFollowing() {
+		t.Error("OnInput should re-engage autoFollow")
+	}
+}

@@ -98,3 +98,33 @@ func (v *ViewWindow) ScrollUp(n int) {
 		v.viewBottom = minBottom
 	}
 }
+
+// ScrollDown moves viewBottom down by n lines toward the live edge. writeBottom
+// is the current WriteWindow bottom; ScrollDown will not move past it. If
+// viewBottom reaches writeBottom, autoFollow is automatically re-engaged.
+func (v *ViewWindow) ScrollDown(n int, writeBottom int64) {
+	if n <= 0 {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.viewBottom += int64(n)
+	if v.viewBottom >= writeBottom {
+		v.viewBottom = writeBottom
+		v.autoFollow = true
+	}
+}
+
+// ScrollToBottom snaps viewBottom to writeBottom and re-engages autoFollow.
+func (v *ViewWindow) ScrollToBottom(writeBottom int64) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.viewBottom = writeBottom
+	v.autoFollow = true
+}
+
+// OnInput is called when the user types or clicks in the pane. Re-engages
+// autoFollow at the current writeBottom.
+func (v *ViewWindow) OnInput(writeBottom int64) {
+	v.ScrollToBottom(writeBottom)
+}
