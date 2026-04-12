@@ -128,3 +128,28 @@ func (v *ViewWindow) ScrollToBottom(writeBottom int64) {
 func (v *ViewWindow) OnInput(writeBottom int64) {
 	v.ScrollToBottom(writeBottom)
 }
+
+// Resize applies Rule 6 from the design spec.
+//
+// If autoFollow is true, viewBottom is snapped to newWriteBottom so the view
+// follows the (possibly moved) write window.
+//
+// If autoFollow is false, viewBottom is unchanged. viewTop is simply derived
+// from the new height, which may reveal or hide rows above viewBottom.
+func (v *ViewWindow) Resize(newWidth, newHeight int, newWriteBottom int64) {
+	if newWidth <= 0 || newHeight <= 0 {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.width = newWidth
+	v.height = newHeight
+	if v.autoFollow {
+		v.viewBottom = newWriteBottom
+	}
+	// Enforce viewBottom >= height - 1.
+	minBottom := int64(v.height - 1)
+	if v.viewBottom < minBottom {
+		v.viewBottom = minBottom
+	}
+}

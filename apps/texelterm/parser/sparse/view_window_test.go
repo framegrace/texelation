@@ -85,3 +85,30 @@ func TestViewWindow_OnInputReattaches(t *testing.T) {
 		t.Error("OnInput should re-engage autoFollow")
 	}
 }
+
+func TestViewWindow_ResizeWhileFollowing(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	vw.OnWriteBottomChanged(100)
+	vw.Resize(80, 30, 115) // new size, new writeBottom (grew by 15)
+	_, bottom := vw.VisibleRange()
+	if bottom != 115 {
+		t.Errorf("follow-resize: viewBottom = %d, want 115", bottom)
+	}
+	if got := vw.Height(); got != 30 {
+		t.Errorf("Height = %d, want 30", got)
+	}
+}
+
+func TestViewWindow_ResizeWhileScrolledBack(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	vw.OnWriteBottomChanged(100)
+	vw.ScrollUp(30) // viewBottom = 70, autoFollow off
+	vw.Resize(80, 30, 100)  // grow height; writeBottom unchanged
+	_, bottom := vw.VisibleRange()
+	if bottom != 70 {
+		t.Errorf("frozen view: viewBottom = %d, want 70 (anchored)", bottom)
+	}
+	if got := vw.Height(); got != 30 {
+		t.Errorf("Height = %d, want 30", got)
+	}
+}
