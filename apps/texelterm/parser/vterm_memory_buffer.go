@@ -899,6 +899,9 @@ func (v *VTerm) memoryBufferCarriageReturn() {
 
 // memoryBufferGrid returns the viewport grid from ViewportWindow.
 // If a search term is set, matching text is highlighted with reversed colors.
+//
+// During the transition, this uses the legacy ViewportWindow. Once the
+// legacy MemoryBuffer is removed (Task 6.6), this will use mainScreen.Grid().
 func (v *VTerm) memoryBufferGrid() [][]Cell {
 	if !v.IsMemoryBufferEnabled() {
 		return nil
