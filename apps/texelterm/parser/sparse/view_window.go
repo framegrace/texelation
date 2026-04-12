@@ -59,3 +59,42 @@ func (v *ViewWindow) VisibleRange() (top, bottom int64) {
 	defer v.mu.Unlock()
 	return v.viewBottom - int64(v.height) + 1, v.viewBottom
 }
+
+// OnWriteBottomChanged is called by the WriteWindow observer wiring when the
+// bottom of the write window moves. If autoFollow is true, viewBottom is
+// updated to match.
+func (v *ViewWindow) OnWriteBottomChanged(newBottom int64) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.autoFollow {
+		v.viewBottom = newBottom
+	}
+}
+
+// OnWriteTopChanged is called when the WriteWindow retreats its top on grow.
+// If autoFollow is true, viewBottom snaps to the new writeBottom (caller
+// passes the new writeBottom directly, NOT writeTop).
+func (v *ViewWindow) OnWriteTopChanged(newBottom int64) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.autoFollow {
+		v.viewBottom = newBottom
+	}
+}
+
+// ScrollUp detaches from the live edge and moves viewBottom up by n lines.
+// viewBottom is clamped to at least height-1 (can't show negative globalIdxs
+// as the view bottom).
+func (v *ViewWindow) ScrollUp(n int) {
+	if n <= 0 {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.autoFollow = false
+	v.viewBottom -= int64(n)
+	minBottom := int64(v.height - 1)
+	if v.viewBottom < minBottom {
+		v.viewBottom = minBottom
+	}
+}

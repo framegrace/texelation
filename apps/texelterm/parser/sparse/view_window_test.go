@@ -26,3 +26,26 @@ func TestViewWindow_VisibleRangeInitially(t *testing.T) {
 		t.Errorf("fresh viewTop = %d, want 0", top)
 	}
 }
+
+func TestViewWindow_FollowsWriteBottom(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	vw.OnWriteBottomChanged(100)
+	_, bottom := vw.VisibleRange()
+	if bottom != 100 {
+		t.Errorf("autoFollow: viewBottom = %d, want 100", bottom)
+	}
+}
+
+func TestViewWindow_DoesNotFollowWhenScrolledBack(t *testing.T) {
+	vw := NewViewWindow(80, 24)
+	vw.OnWriteBottomChanged(100)
+	vw.ScrollUp(10) // detaches from live edge
+	if vw.IsFollowing() {
+		t.Error("after ScrollUp, should not be following")
+	}
+	vw.OnWriteBottomChanged(200)
+	_, bottom := vw.VisibleRange()
+	if bottom != 90 {
+		t.Errorf("frozen viewBottom = %d, want 90 (unchanged)", bottom)
+	}
+}
