@@ -92,3 +92,27 @@ func (t *Terminal) ScrollToBottom() { t.view.ScrollToBottom(t.write.WriteBottom(
 
 // OnInput re-engages autoFollow after a user keystroke or click.
 func (t *Terminal) OnInput() { t.view.OnInput(t.write.WriteBottom()) }
+
+// Grid builds a dense height x width grid from the current view range by
+// reading the Store. Unwritten cells and short lines are blank-padded.
+//
+// The returned slice is owned by the caller and safe to mutate.
+func (t *Terminal) Grid() [][]parser.Cell {
+	width := t.write.Width()
+	height := t.write.Height()
+	top, _ := t.view.VisibleRange()
+
+	grid := make([][]parser.Cell, height)
+	for y := 0; y < height; y++ {
+		row := make([]parser.Cell, width)
+		gi := top + int64(y)
+		if gi >= 0 {
+			line := t.store.GetLine(gi)
+			for x := 0; x < width && x < len(line); x++ {
+				row[x] = line[x]
+			}
+		}
+		grid[y] = row
+	}
+	return grid
+}
