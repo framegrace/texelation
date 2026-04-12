@@ -25,3 +25,30 @@ func TestTerminal_NewInitialState(t *testing.T) {
 	}
 	_ = parser.Cell{}
 }
+
+func TestTerminal_WriteCellAdvancesFollowingView(t *testing.T) {
+	tm := NewTerminal(10, 5)
+	tm.WriteCell(parser.Cell{Rune: 'h'})
+	tm.Newline()
+	// Cursor should be on row 1 now.
+	gi, col := tm.Cursor()
+	if gi != 1 || col != 0 {
+		t.Errorf("after Newline, Cursor = (%d,%d), want (1,0)", gi, col)
+	}
+	// Because we're following, viewBottom should track writeBottom.
+	_, vbottom := tm.VisibleRange()
+	if vbottom != 4 {
+		t.Errorf("viewBottom = %d, want 4 (writeBottom)", vbottom)
+	}
+}
+
+func TestTerminal_NewlineAtBottomScrollsAndViewFollows(t *testing.T) {
+	tm := NewTerminal(10, 3)
+	tm.SetCursor(2, 0)
+	tm.Newline()
+	// writeTop advanced, writeBottom = 3, following view snaps.
+	_, vbottom := tm.VisibleRange()
+	if vbottom != 3 {
+		t.Errorf("viewBottom = %d, want 3", vbottom)
+	}
+}
