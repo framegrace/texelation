@@ -93,6 +93,23 @@ func (t *Terminal) ScrollToBottom() { t.view.ScrollToBottom(t.write.WriteBottom(
 // OnInput re-engages autoFollow after a user keystroke or click.
 func (t *Terminal) OnInput() { t.view.OnInput(t.write.WriteBottom()) }
 
+// EraseDisplay clears every cell in the current write window. This is
+// the sparse equivalent of ESC[2J on the main screen.
+func (t *Terminal) EraseDisplay() {
+	t.write.EraseDisplay()
+}
+
+// EraseLine clears the cells of the line at the cursor's current globalIdx.
+// This is the sparse equivalent of ESC[2K.
+func (t *Terminal) EraseLine() {
+	t.write.EraseLine()
+}
+
+// ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.
+func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
+	return t.store.GetLine(globalIdx)
+}
+
 // Grid builds a dense height x width grid from the current view range by
 // reading the Store. Unwritten cells and short lines are blank-padded.
 //

@@ -142,3 +142,79 @@ func TestTerminal_GridReflectsScrollback(t *testing.T) {
 		t.Errorf("grid[2][0] = %q, want blank (row 3, unwritten)", grid[2][0].Rune)
 	}
 }
+
+// TestTerminal_ShrinkDragDoesNotDuplicateTextContent simulates claude-like
+// behavior: each shrink step, "redraw" the UI at the new size with a text
+// marker on row 1. Afterward, verify the text marker appears exactly once in
+// the store.
+func TestTerminal_ShrinkDragDoesNotDuplicateTextContent(t *testing.T) {
+	tm := NewTerminal(80, 40)
+	marker := "Claude Code"
+
+	// Initial draw: border on row 0, marker on row 1, cursor parked at
+	// row 37 (input box bottom).
+	drawUI := func(h int) {
+		// Border row 0.
+		tm.SetCursor(0, 0)
+		for _, r := range "┌──────────────┐" {
+			tm.WriteCell(parser.Cell{Rune: r})
+		}
+		// Text row 1.
+		tm.SetCursor(1, 0)
+		for _, r := range marker {
+			tm.WriteCell(parser.Cell{Rune: r})
+		}
+		// Cursor parked at last-row (input box).
+		tm.SetCursor(h-2, 5)
+	}
+
+	drawUI(40)
+
+	// Shrink-drag from 40 -> 20.
+	for h := 39; h >= 20; h-- {
+		tm.Resize(80, h)
+		// Clear the old window and redraw at new size.
+		// (In real life, the TUI does this via ESC[2J or scroll region.)
+		top := tm.WriteTop()
+		bottom := tm.WriteBottom()
+		tm.EraseDisplay() // new helper — see below
+		_ = top
+		_ = bottom
+		drawUI(h)
+	}
+
+	// Count occurrences of the marker across the entire store, from globalIdx 0
+	// up to ContentEnd.
+	count := 0
+	end := tm.ContentEnd()
+	for gi := int64(0); gi <= end; gi++ {
+		line := tm.ReadLine(gi)
+		if containsRunes(line, []rune(marker)) {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("marker %q appears %d times in store; want 1", marker, count)
+	}
+}
+
+// containsRunes reports whether row contains the full sequence needle as a
+// contiguous run of Rune fields.
+func containsRunes(row []parser.Cell, needle []rune) bool {
+	if len(needle) == 0 || len(row) < len(needle) {
+		return false
+	}
+	for start := 0; start+len(needle) <= len(row); start++ {
+		match := true
+		for j, r := range needle {
+			if row[start+j].Rune != r {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
