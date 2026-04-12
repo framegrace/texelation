@@ -110,6 +110,14 @@ func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
 	return t.store.GetLine(globalIdx)
 }
 
+// RestoreWriteState forcibly sets the write window's cursor and anchor,
+// used during session restore. The ViewWindow is re-snapped to the new
+// writeBottom in follow mode.
+func (t *Terminal) RestoreWriteState(writeTop, cursorGlobalIdx int64, cursorCol int) {
+	t.write.RestoreState(writeTop, cursorGlobalIdx, cursorCol)
+	t.view.ScrollToBottom(t.write.WriteBottom())
+}
+
 // Grid builds a dense height x width grid from the current view range by
 // reading the Store. Unwritten cells and short lines are blank-padded.
 //

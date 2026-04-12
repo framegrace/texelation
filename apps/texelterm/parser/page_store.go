@@ -58,6 +58,35 @@ type ViewportState struct {
 	WorkingDir string `json:"working_dir"`
 }
 
+// MainScreenState stores the sparse-model main-screen state for session
+// restoration. Replaces ViewportState when the sparse redesign is active.
+// On load, if only a legacy ViewportState is present, it is discarded and
+// the terminal starts fresh (there is no clean translation between the two
+// models).
+type MainScreenState struct {
+	// WriteTop is the globalIdx of the top row of the write window.
+	WriteTop int64 `json:"write_top"`
+
+	// ContentEnd is the highest globalIdx ever written. -1 means empty.
+	ContentEnd int64 `json:"content_end"`
+
+	// CursorGlobalIdx is the absolute globalIdx where the cursor currently sits.
+	CursorGlobalIdx int64 `json:"cursor_global_idx"`
+
+	// CursorCol is the cursor column position (0-indexed).
+	CursorCol int `json:"cursor_col"`
+
+	// PromptStartLine is the global line index of the last shell prompt start.
+	// -1 means unknown.
+	PromptStartLine int64 `json:"prompt_start_line"`
+
+	// WorkingDir is the last known working directory from OSC 7.
+	WorkingDir string `json:"working_dir"`
+
+	// SavedAt is when the state was saved.
+	SavedAt time.Time `json:"saved_at"`
+}
+
 // PageStoreConfig holds configuration for the page store.
 type PageStoreConfig struct {
 	// BaseDir is the base directory for all history storage.

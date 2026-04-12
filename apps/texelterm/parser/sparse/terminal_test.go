@@ -193,6 +193,9 @@ func TestTerminal_ShrinkDragDoesNotDuplicateTextContent(t *testing.T) {
 	}
 }
 
+// getStore is a test-only accessor for the internal Store.
+func getStore(t *Terminal) *Store { return t.store }
+
 // containsRunes reports whether row contains the full sequence needle as a
 // contiguous run of Rune fields.
 func containsRunes(row []parser.Cell, needle []rune) bool {
