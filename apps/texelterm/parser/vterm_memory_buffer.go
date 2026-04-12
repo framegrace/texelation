@@ -2090,7 +2090,10 @@ func (v *VTerm) memoryBufferScrollRegion(n int, top int, bottom int) {
 				}
 			}
 		}
-		v.mainScreen.RestoreState(v.memBufState.liveEdgeBase, v.memBufState.liveEdgeBase+int64(v.cursorY), v.cursorX)
+		// Use SyncWriteState (not RestoreState) — RestoreState would snap the
+		// view to the live edge on every scroll-region scroll, causing the
+		// "jumps to top" bug when a TUI like Claude uses a partial DECSTBM region.
+		v.mainScreen.SyncWriteState(v.memBufState.liveEdgeBase, v.memBufState.liveEdgeBase+int64(v.cursorY), v.cursorX)
 	}
 }
 
