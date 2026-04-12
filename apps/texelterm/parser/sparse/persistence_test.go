@@ -111,7 +111,9 @@ func TestPersistence_RoundTripViaPageStore(t *testing.T) {
 	if err := ps1.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	ps1.Close()
+	if err := ps1.Close(); err != nil {
+		t.Fatalf("ps1.Close: %v", err)
+	}
 
 	// Reload into a fresh Terminal.
 	ps2, err := parser.OpenPageStore(cfg)

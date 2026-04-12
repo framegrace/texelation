@@ -27,9 +27,9 @@ func NewPersistence(ps *parser.PageStore) *Persistence {
 }
 
 // FlushLines forwards each listed globalIdx's current content in the Store
-// to the PageStore. Missing lines (gaps) are skipped. Lines that already
-// exist in PageStore are updated via UpdateLine; new lines are appended via
-// AppendLineWithGlobalIdx.
+// to the PageStore. Missing lines (gaps in the Store) are skipped.
+// AppendLineWithGlobalIdx handles all three cases internally: update-in-place
+// for existing entries, contiguous append, and out-of-order insert.
 func (p *Persistence) FlushLines(store *Store, globalIdxs []int64) error {
 	now := time.Now()
 	for _, gi := range globalIdxs {
@@ -38,14 +38,8 @@ func (p *Persistence) FlushLines(store *Store, globalIdxs []int64) error {
 			continue
 		}
 		line := &parser.LogicalLine{Cells: cells}
-		if p.page.HasLine(gi) {
-			if err := p.page.UpdateLine(gi, line, now); err != nil {
-				return err
-			}
-		} else {
-			if err := p.page.AppendLineWithGlobalIdx(gi, line, now); err != nil {
-				return err
-			}
+		if err := p.page.AppendLineWithGlobalIdx(gi, line, now); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -76,10 +70,15 @@ func RestoreState(tm *Terminal, state parser.MainScreenState) {
 // given sparse.Store. Used on startup to rebuild the in-memory state from
 // disk. Existing entries in the Store are overwritten when their globalIdx
 // matches; unrelated entries are untouched.
+//
+// Iterates stored positions directly via StoredLineCount +
+// GlobalIdxAtStoredPosition to avoid a linear O(nextGlobalIdx) scan over
+// potentially large gaps.
 func LoadStore(store *Store, ps *parser.PageStore) error {
-	count := ps.LineCount()
-	for gi := int64(0); gi < count; gi++ {
-		if !ps.HasLine(gi) {
+	n := ps.StoredLineCount()
+	for i := int64(0); i < n; i++ {
+		gi := ps.GlobalIdxAtStoredPosition(i)
+		if gi < 0 {
 			continue
 		}
 		line, err := ps.ReadLine(gi)
