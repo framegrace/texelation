@@ -72,3 +72,23 @@ func (t *Terminal) WriteBottom() int64 { return t.write.WriteBottom() }
 
 // VisibleRange returns the (top, bottom) globalIdx pair of the current view.
 func (t *Terminal) VisibleRange() (top, bottom int64) { return t.view.VisibleRange() }
+
+// Resize resizes both the write and view windows. WriteWindow applies
+// Rule 5 first; ViewWindow then applies Rule 6 observing the (possibly
+// moved) writeBottom.
+func (t *Terminal) Resize(newWidth, newHeight int) {
+	t.write.Resize(newWidth, newHeight)
+	t.view.Resize(newWidth, newHeight, t.write.WriteBottom())
+}
+
+// ScrollUp scrolls the view back by n lines and disengages autoFollow.
+func (t *Terminal) ScrollUp(n int) { t.view.ScrollUp(n) }
+
+// ScrollDown scrolls the view forward by n lines toward the live edge.
+func (t *Terminal) ScrollDown(n int) { t.view.ScrollDown(n, t.write.WriteBottom()) }
+
+// ScrollToBottom snaps the view to the live edge and re-engages autoFollow.
+func (t *Terminal) ScrollToBottom() { t.view.ScrollToBottom(t.write.WriteBottom()) }
+
+// OnInput re-engages autoFollow after a user keystroke or click.
+func (t *Terminal) OnInput() { t.view.OnInput(t.write.WriteBottom()) }

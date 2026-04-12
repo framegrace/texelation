@@ -52,3 +52,42 @@ func TestTerminal_NewlineAtBottomScrollsAndViewFollows(t *testing.T) {
 		t.Errorf("viewBottom = %d, want 3", vbottom)
 	}
 }
+
+func TestTerminal_ResizeShrinkShellCase(t *testing.T) {
+	tm := NewTerminal(80, 40)
+	// Fill 40 rows.
+	for i := 0; i < 40; i++ {
+		tm.WriteCell(parser.Cell{Rune: 'X'})
+		tm.Newline()
+	}
+	// cursor is now at row 40 of a scrolled window.
+	tm.SetCursor(39, 0)
+	tm.Resize(80, 20)
+
+	_, vbottom := tm.VisibleRange()
+	_, writeBottom := tm.WriteTop(), tm.WriteBottom()
+	if vbottom != writeBottom {
+		t.Errorf("following view: viewBottom = %d, writeBottom = %d", vbottom, writeBottom)
+	}
+	if got := tm.Height(); got != 20 {
+		t.Errorf("Height = %d, want 20", got)
+	}
+}
+
+func TestTerminal_ResizeFrozenViewStaysPut(t *testing.T) {
+	tm := NewTerminal(80, 40)
+	for i := 0; i < 80; i++ {
+		tm.WriteCell(parser.Cell{Rune: 'X'})
+		tm.Newline()
+	}
+	// Scroll back 20 rows.
+	tm.ScrollUp(20)
+	_, beforeBottom := tm.VisibleRange()
+
+	tm.Resize(80, 30) // grow
+
+	_, afterBottom := tm.VisibleRange()
+	if afterBottom != beforeBottom {
+		t.Errorf("frozen view moved: %d -> %d", beforeBottom, afterBottom)
+	}
+}
