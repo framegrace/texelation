@@ -240,3 +240,13 @@ func (w *WriteWindow) EraseLine() {
 	w.mu.Unlock()
 	w.store.ClearRange(gi, gi)
 }
+
+// RestoreState forcibly sets writeTop and cursor, used during session
+// restore. Do not call during normal operation.
+func (w *WriteWindow) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writeTop = writeTop
+	w.cursorGlobalIdx = cursorGlobalIdx
+	w.cursorCol = cursorCol
+}

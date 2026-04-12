@@ -46,3 +46,44 @@ func TestPersistence_FlushLinesToPageStore(t *testing.T) {
 		t.Errorf("expected terminal dir under %s: %v", dir, err)
 	}
 }
+
+func TestPersistence_SnapshotTerminal(t *testing.T) {
+	tm := NewTerminal(80, 24)
+	tm.WriteCell(parser.Cell{Rune: 'a'})
+	tm.Newline()
+	tm.WriteCell(parser.Cell{Rune: 'b'})
+
+	state := SnapshotState(tm)
+	if state.WriteTop != 0 {
+		t.Errorf("WriteTop = %d, want 0", state.WriteTop)
+	}
+	if state.ContentEnd != 1 {
+		t.Errorf("ContentEnd = %d, want 1 (two rows written)", state.ContentEnd)
+	}
+	if state.CursorGlobalIdx != 1 || state.CursorCol != 1 {
+		t.Errorf("Cursor = (%d,%d), want (1,1)",
+			state.CursorGlobalIdx, state.CursorCol)
+	}
+}
+
+func TestPersistence_RestoreTerminal(t *testing.T) {
+	state := parser.MainScreenState{
+		WriteTop:        50,
+		ContentEnd:      70,
+		CursorGlobalIdx: 65,
+		CursorCol:       3,
+	}
+	tm := NewTerminal(80, 24)
+	RestoreState(tm, state)
+
+	if got := tm.WriteTop(); got != 50 {
+		t.Errorf("restored WriteTop = %d, want 50", got)
+	}
+	gi, col := tm.Cursor()
+	if gi != 65 || col != 3 {
+		t.Errorf("restored Cursor = (%d,%d), want (65,3)", gi, col)
+	}
+	if !tm.IsFollowing() {
+		t.Error("restored Terminal should be in autoFollow mode by default")
+	}
+}
