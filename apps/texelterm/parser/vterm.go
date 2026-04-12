@@ -174,6 +174,24 @@ func (v *VTerm) MainScreenGrid() [][]Cell {
 	return v.mainScreen.Grid()
 }
 
+// ContentEnd returns the highest globalIdx ever written via the sparse
+// MainScreen, or -1 if empty or no MainScreen is configured.
+func (v *VTerm) ContentEnd() int64 {
+	if v.mainScreen == nil {
+		return -1
+	}
+	return v.mainScreen.ContentEnd()
+}
+
+// WriteTop returns the globalIdx at the top of the sparse write window,
+// or 0 if no MainScreen is configured.
+func (v *VTerm) WriteTop() int64 {
+	if v.mainScreen == nil {
+		return 0
+	}
+	return v.mainScreen.WriteTop()
+}
+
 // IsBracketedPasteModeEnabled returns whether bracketed paste mode is enabled.
 func (v *VTerm) IsBracketedPasteModeEnabled() bool {
 	return v.bracketedPasteMode
