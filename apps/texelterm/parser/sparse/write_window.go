@@ -272,50 +272,6 @@ func (w *WriteWindow) EraseFromStartOfLine(col int) {
 	}
 }
 
-// ScrollRegion scrolls content within the region [top, bottom] (viewport-
-// relative rows). n > 0 scrolls up (content moves up, blank lines at
-// bottom); n < 0 scrolls down.
-func (w *WriteWindow) ScrollRegion(n, top, bottom int) {
-	w.mu.Lock()
-	wt := w.writeTop
-	width := w.width
-	w.mu.Unlock()
-
-	if n > 0 {
-		// Scroll up: move rows [top+n .. bottom] to [top .. bottom-n], clear tail.
-		for i := 0; i < n; i++ {
-			for y := top; y < bottom; y++ {
-				src := wt + int64(y+1)
-				dst := wt + int64(y)
-				cells := w.store.GetLine(src)
-				if cells != nil {
-					w.store.SetLine(dst, cells)
-				} else {
-					w.store.ClearRange(dst, dst)
-				}
-			}
-			w.store.ClearRange(wt+int64(bottom), wt+int64(bottom))
-		}
-	} else if n < 0 {
-		// Scroll down: move rows [top .. bottom+n] to [top-n .. bottom], clear head.
-		for i := 0; i < -n; i++ {
-			for y := bottom; y > top; y-- {
-				src := wt + int64(y-1)
-				dst := wt + int64(y)
-				cells := w.store.GetLine(src)
-				if cells != nil {
-					w.store.SetLine(dst, cells)
-				} else {
-					w.store.ClearRange(dst, dst)
-				}
-			}
-			// Clear the top row with blank cells
-			blank := make([]parser.Cell, width)
-			w.store.SetLine(wt+int64(top), blank)
-		}
-	}
-}
-
 // RestoreState forcibly sets writeTop and cursor, used during session
 // restore. Do not call during normal operation.
 func (w *WriteWindow) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int) {
