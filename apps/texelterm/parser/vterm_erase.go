@@ -42,7 +42,7 @@ func (v *VTerm) ClearScreenMode(mode int) {
 				v.altBufferClearRegion(0, v.cursorY+1, v.width-1, v.height-1, v.currentFG, v.currentBG)
 			}
 		} else {
-			v.memoryBufferEraseScreen(0)
+			v.mainScreenEraseScreen(0)
 		}
 	case 1: // Erase from beginning of screen to cursor
 		if v.inAltScreen {
@@ -52,26 +52,21 @@ func (v *VTerm) ClearScreenMode(mode int) {
 			}
 			v.altBufferClearRegion(0, v.cursorY, v.cursorX, v.cursorY, v.currentFG, v.currentBG)
 		} else {
-			v.memoryBufferEraseScreen(1)
+			v.mainScreenEraseScreen(1)
 		}
 	case 2: // Erase entire visible screen (ED 2)
 		if v.inAltScreen {
 			v.altBufferClearRegion(0, 0, v.width-1, v.height-1, v.currentFG, v.currentBG)
 		} else {
-			v.memoryBufferEraseScreen(2)
+			v.mainScreenEraseScreen(2)
 		}
 	case 3: // Erase scrollback only, leave visible screen intact (ED 3)
-		if !v.inAltScreen && v.memBufState != nil && v.memBufState.memBuf != nil {
-			mb := v.memBufState.memBuf
-			// Log before clearing scrollback
-			v.logMemBufDebug("[ED3] ClearScreen mode=3 CLEARING SCROLLBACK: before: GlobalOffset=%d GlobalEnd=%d liveEdgeBase=%d TotalLines=%d",
-				mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, mb.TotalLines())
-			// Clear scrollback by evicting all lines except the visible viewport
-			mb.Evict(int(mb.TotalLines()) - v.height)
-			// Ensure liveEdgeBase is consistent after eviction
-			v.ensureLiveEdgeBaseConsistency()
-			v.logMemBufDebug("[ED3] ClearScreen mode=3 CLEARING SCROLLBACK: after: GlobalOffset=%d GlobalEnd=%d liveEdgeBase=%d TotalLines=%d",
-				mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, mb.TotalLines())
+		if !v.inAltScreen && v.mainScreen != nil {
+			// Clear all history lines before the write window.
+			writeTop := v.mainScreen.WriteTop()
+			if writeTop > 0 {
+				v.mainScreen.ClearRange(0, writeTop-1)
+			}
 			v.MarkAllDirty()
 		}
 		// On alt screen, ED 3 does nothing (no scrollback to clear)
@@ -95,15 +90,8 @@ func (v *VTerm) ClearLine(mode int) {
 		return
 	}
 
-	// Use MemoryBuffer
-	switch mode {
-	case 0:
-		v.memoryBufferEraseToEndOfLine()
-	case 1:
-		v.memoryBufferEraseFromStartOfLine()
-	case 2:
-		v.memoryBufferEraseLine()
-	}
+	// Use sparse main screen
+	v.mainScreenEraseLine(mode)
 }
 
 // EraseCharacters handles ECH (Erase Character) - replaces n characters with blanks.
@@ -118,7 +106,7 @@ func (v *VTerm) EraseCharacters(n int) {
 		}
 		v.altBufferClearRegion(v.cursorX, v.cursorY, endX, v.cursorY, v.currentFG, v.currentBG)
 	} else {
-		// Use MemoryBuffer
-		v.memoryBufferEraseCharacters(n)
+		// Use sparse main screen
+		v.mainScreenEraseCharacters(n)
 	}
 }

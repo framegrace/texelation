@@ -91,6 +91,14 @@ type PersistenceMetrics struct {
 	FailedWrites     int64       // Disk write errors (logged but continued)
 }
 
+// LineStore is the storage backend that AdaptivePersistence reads lines from.
+// It is satisfied by *MemoryBuffer and by sparseLineStoreAdapter.
+type LineStore interface {
+	GetLine(globalIdx int64) *LogicalLine
+	ClearDirty(globalIdx int64)
+	SetPreEvictCallback(func([]EvictedLine))
+}
+
 // AdaptivePersistence manages disk writes with dynamic rate adjustment.
 // pendingLineInfo stores metadata for a line awaiting flush.
 type pendingLineInfo struct {
@@ -100,7 +108,7 @@ type pendingLineInfo struct {
 
 type AdaptivePersistence struct {
 	config  AdaptivePersistenceConfig
-	memBuf  *MemoryBuffer
+	memBuf  LineStore
 	disk    *PageStore       // Direct PageStore (legacy mode)
 	wal     *WriteAheadLog   // WAL-based persistence (preferred)
 	nowFunc func() time.Time // For testing; defaults to time.Now
@@ -112,7 +120,7 @@ type AdaptivePersistence struct {
 	// State
 	currentMode     PersistMode
 	pendingLines    map[int64]*pendingLineInfo // Lines awaiting flush with metadata
-	pendingMetadata *ViewportState             // Metadata awaiting flush (written with content)
+	pendingMetadata *MainScreenState           // Metadata awaiting flush (written with content)
 	lastActivity    time.Time
 
 	// Callback for search indexing - called AFTER line is persisted to WAL
@@ -146,7 +154,7 @@ type AdaptivePersistence struct {
 //
 // Parameters:
 //   - config: Configuration for rate thresholds and timing
-//   - memBuf: MemoryBuffer to read dirty lines from
+//   - memBuf: LineStore to read dirty lines from (e.g. *MemoryBuffer or sparseLineStoreAdapter)
 //   - disk: PageStore to write lines to (passed in for testability)
 //
 // The background idle monitor is started automatically.
@@ -155,7 +163,7 @@ type AdaptivePersistence struct {
 // Deprecated: Use NewAdaptivePersistenceWithWAL for crash recovery support.
 func NewAdaptivePersistence(
 	config AdaptivePersistenceConfig,
-	memBuf *MemoryBuffer,
+	memBuf LineStore,
 	disk *PageStore,
 ) (*AdaptivePersistence, error) {
 	return newAdaptivePersistenceWithNow(config, memBuf, disk, nil, time.Now)
@@ -165,14 +173,14 @@ func NewAdaptivePersistence(
 //
 // Parameters:
 //   - config: Configuration for rate thresholds and timing
-//   - memBuf: MemoryBuffer to read dirty lines from
+//   - memBuf: LineStore to read dirty lines from (e.g. *MemoryBuffer or sparseLineStoreAdapter)
 //   - walConfig: Configuration for the Write-Ahead Log
 //
 // The WAL provides crash recovery by journaling writes before committing to PageStore.
 // On startup, uncommitted entries are recovered automatically.
 func NewAdaptivePersistenceWithWAL(
 	config AdaptivePersistenceConfig,
-	memBuf *MemoryBuffer,
+	memBuf LineStore,
 	walConfig WALConfig,
 ) (*AdaptivePersistence, error) {
 	if memBuf == nil {
@@ -191,7 +199,7 @@ func NewAdaptivePersistenceWithWAL(
 // newAdaptivePersistenceWithWAL creates persistence with an existing WAL (for testing).
 func newAdaptivePersistenceWithWAL(
 	config AdaptivePersistenceConfig,
-	memBuf *MemoryBuffer,
+	memBuf LineStore,
 	wal *WriteAheadLog,
 	nowFunc func() time.Time,
 ) (*AdaptivePersistence, error) {
@@ -202,7 +210,7 @@ func newAdaptivePersistenceWithWAL(
 // Either disk or wal must be non-nil. If both are provided, wal takes precedence.
 func newAdaptivePersistenceWithNow(
 	config AdaptivePersistenceConfig,
-	memBuf *MemoryBuffer,
+	memBuf LineStore,
 	disk *PageStore,
 	wal *WriteAheadLog,
 	nowFunc func() time.Time,
@@ -377,9 +385,9 @@ func (ap *AdaptivePersistence) NotifyWriteBatch(lineIndices []int64) {
 	}
 }
 
-// NotifyMetadataChange records a metadata change (scroll position, cursor).
+// NotifyMetadataChange records a metadata change (write position, cursor).
 // Metadata is batched with content and written together on flush, ensuring consistency.
-func (ap *AdaptivePersistence) NotifyMetadataChange(state *ViewportState) {
+func (ap *AdaptivePersistence) NotifyMetadataChange(state *MainScreenState) {
 	if state == nil {
 		return
 	}
@@ -671,24 +679,20 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 
 	if pendingMeta != nil && ap.wal != nil {
 		// Validate metadata against what's actually on disk.
-		// LiveEdgeBase must not exceed the WAL's known line count,
+		// CursorGlobalIdx must not exceed the WAL's known line count,
 		// otherwise recovery will have metadata pointing to non-existent lines.
 		walLineCount := ap.wal.NextGlobalIdx()
-		if pendingMeta.LiveEdgeBase > walLineCount {
-			debuglog.Printf("[AdaptivePersistence] Clamping metadata LiveEdgeBase %d → %d (WAL lineCount)",
-				pendingMeta.LiveEdgeBase, walLineCount)
-			pendingMeta.LiveEdgeBase = walLineCount
+		if pendingMeta.WriteTop > walLineCount {
+			debuglog.Printf("[AdaptivePersistence] Clamping metadata WriteTop %d → %d (WAL lineCount)",
+				pendingMeta.WriteTop, walLineCount)
+			pendingMeta.WriteTop = walLineCount
 		}
-		cursorGlobal := pendingMeta.LiveEdgeBase + int64(pendingMeta.CursorY)
-		if cursorGlobal > walLineCount && walLineCount > 0 {
-			pendingMeta.CursorY = int(walLineCount - pendingMeta.LiveEdgeBase)
-			if pendingMeta.CursorY < 0 {
-				pendingMeta.CursorY = 0
-			}
-			debuglog.Printf("[AdaptivePersistence] Clamped cursor to Y=%d (global line would exceed WAL)",
-				pendingMeta.CursorY)
+		if pendingMeta.CursorGlobalIdx > walLineCount && walLineCount > 0 {
+			pendingMeta.CursorGlobalIdx = walLineCount
+			debuglog.Printf("[AdaptivePersistence] Clamped CursorGlobalIdx to %d (would exceed WAL)",
+				pendingMeta.CursorGlobalIdx)
 		}
-		if err := ap.wal.WriteMetadata(pendingMeta); err != nil {
+		if err := ap.wal.WriteMainScreenState(pendingMeta); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("failed to write metadata: %w", err)
 			}

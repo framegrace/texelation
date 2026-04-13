@@ -46,10 +46,11 @@ const (
 
 // WAL entry types
 const (
-	EntryTypeLineWrite  uint8 = 0x01
-	EntryTypeLineModify uint8 = 0x02
-	EntryTypeCheckpoint uint8 = 0x03
-	EntryTypeMetadata   uint8 = 0x04 // Viewport state (scroll position, cursor)
+	EntryTypeLineWrite        uint8 = 0x01
+	EntryTypeLineModify       uint8 = 0x02
+	EntryTypeCheckpoint       uint8 = 0x03
+	EntryTypeMetadata         uint8 = 0x04 // Legacy ViewportState (scroll position, cursor)
+	EntryTypeMainScreenState  uint8 = 0x05 // Sparse MainScreenState (writeTop, cursor globalIdx)
 )
 
 // WALConfig holds configuration for the write-ahead log.
@@ -93,11 +94,12 @@ type WALHeader struct {
 
 // WALEntry represents a single entry in the WAL.
 type WALEntry struct {
-	Type          uint8
-	GlobalLineIdx uint64
-	Timestamp     time.Time
-	Line          *LogicalLine   // nil for CHECKPOINT and METADATA entries
-	Metadata      *ViewportState // nil for non-METADATA entries
+	Type            uint8
+	GlobalLineIdx   uint64
+	Timestamp       time.Time
+	Line            *LogicalLine     // nil for CHECKPOINT and METADATA entries
+	Metadata        *ViewportState   // nil for non-METADATA entries
+	MainScreenState *MainScreenState // nil for non-MAIN_SCREEN_STATE entries
 }
 
 // WriteAheadLog provides crash recovery for terminal history.
@@ -122,8 +124,14 @@ type WriteAheadLog struct {
 	// Recovered metadata from WAL replay (nil if no metadata entry found)
 	recoveredMetadata *ViewportState
 
+	// Recovered MainScreenState from WAL replay (nil if no entry found)
+	recoveredMainScreenState *MainScreenState
+
 	// Current metadata (written via WriteMetadata, persisted on checkpoint)
 	currentMetadata *ViewportState
+
+	// Current sparse metadata (written via WriteMainScreenState, persisted on checkpoint)
+	currentMainScreenState *MainScreenState
 
 	// Checkpoint timer
 	checkpointTimer *time.Timer
@@ -213,6 +221,11 @@ func openWriteAheadLogWithNow(config WALConfig, nowFunc func() time.Time) (*Writ
 	}
 
 	return w, nil
+}
+
+// PageStore returns the WAL's owned PageStore.
+func (w *WriteAheadLog) PageStore() *PageStore {
+	return w.pageStore
 }
 
 // copyTerminalIDToHeader converts the string terminal ID to bytes.
@@ -471,6 +484,102 @@ func (w *WriteAheadLog) RecoveredMetadata() *ViewportState {
 	return w.recoveredMetadata
 }
 
+// WriteMainScreenState writes sparse MainScreenState to the WAL.
+// Multiple writes are OK — only the last one matters on recovery.
+func (w *WriteAheadLog) WriteMainScreenState(state *MainScreenState) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.stopped {
+		return fmt.Errorf("WAL is closed")
+	}
+	if state == nil {
+		return nil
+	}
+
+	metadataBytes, err := encodeMainScreenState(state)
+	if err != nil {
+		return fmt.Errorf("failed to encode MainScreenState: %w", err)
+	}
+
+	entryData, err := w.encodeMetadataEntryWithType(EntryTypeMainScreenState, metadataBytes, w.nowFunc())
+	if err != nil {
+		return fmt.Errorf("failed to encode entry: %w", err)
+	}
+
+	if _, err := w.walFile.Write(entryData); err != nil {
+		return fmt.Errorf("failed to write MainScreenState entry: %w", err)
+	}
+
+	w.walSize += int64(len(entryData))
+	w.entriesWritten++
+	w.currentMainScreenState = state
+	return nil
+}
+
+// RecoveredMainScreenState returns the MainScreenState recovered from WAL replay.
+// Returns nil if no MainScreenState entry was found.
+func (w *WriteAheadLog) RecoveredMainScreenState() *MainScreenState {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.recoveredMainScreenState
+}
+
+// encodeMainScreenState serializes MainScreenState to bytes.
+// Layout: WriteTop(8) ContentEnd(8) CursorGlobalIdx(8) CursorCol(4)
+//
+//	PromptStartLine(8) SavedAt(8) CWDLen(2) CWD(variable)
+func encodeMainScreenState(state *MainScreenState) ([]byte, error) {
+	cwdBytes := []byte(state.WorkingDir)
+	totalSize := 8 + 8 + 8 + 4 + 8 + 8 + 2 + len(cwdBytes)
+	buf := make([]byte, totalSize)
+	binary.LittleEndian.PutUint64(buf[0:8], uint64(state.WriteTop))
+	binary.LittleEndian.PutUint64(buf[8:16], uint64(state.ContentEnd))
+	binary.LittleEndian.PutUint64(buf[16:24], uint64(state.CursorGlobalIdx))
+	binary.LittleEndian.PutUint32(buf[24:28], uint32(state.CursorCol))
+	binary.LittleEndian.PutUint64(buf[28:36], uint64(state.PromptStartLine))
+	binary.LittleEndian.PutUint64(buf[36:44], uint64(state.SavedAt.UnixNano()))
+	binary.LittleEndian.PutUint16(buf[44:46], uint16(len(cwdBytes)))
+	copy(buf[46:], cwdBytes)
+	return buf, nil
+}
+
+// decodeMainScreenState deserializes MainScreenState from bytes.
+func decodeMainScreenState(data []byte) (*MainScreenState, error) {
+	if len(data) < 46 {
+		return nil, fmt.Errorf("MainScreenState data too short: %d bytes", len(data))
+	}
+	state := &MainScreenState{
+		WriteTop:        int64(binary.LittleEndian.Uint64(data[0:8])),
+		ContentEnd:      int64(binary.LittleEndian.Uint64(data[8:16])),
+		CursorGlobalIdx: int64(binary.LittleEndian.Uint64(data[16:24])),
+		CursorCol:       int(binary.LittleEndian.Uint32(data[24:28])),
+		PromptStartLine: int64(binary.LittleEndian.Uint64(data[28:36])),
+		SavedAt:         time.Unix(0, int64(binary.LittleEndian.Uint64(data[36:44]))),
+	}
+	cwdLen := int(binary.LittleEndian.Uint16(data[44:46]))
+	if len(data) >= 46+cwdLen {
+		state.WorkingDir = string(data[46 : 46+cwdLen])
+	}
+	return state, nil
+}
+
+// encodeMetadataEntryWithType is like encodeMetadataEntry but uses the given type byte.
+func (w *WriteAheadLog) encodeMetadataEntryWithType(entryType uint8, metadataBytes []byte, timestamp time.Time) ([]byte, error) {
+	totalSize := WALEntryBase + len(metadataBytes)
+	buf := make([]byte, totalSize)
+	buf[0] = entryType
+	binary.LittleEndian.PutUint64(buf[1:9], 0) // GlobalLineIdx reserved=0
+	binary.LittleEndian.PutUint64(buf[9:17], uint64(timestamp.UnixNano()))
+	binary.LittleEndian.PutUint32(buf[17:21], uint32(len(metadataBytes)))
+	if len(metadataBytes) > 0 {
+		copy(buf[21:21+len(metadataBytes)], metadataBytes)
+	}
+	crc := crc32.ChecksumIEEE(buf[:totalSize-4])
+	binary.LittleEndian.PutUint32(buf[totalSize-4:], crc)
+	return buf, nil
+}
+
 // encodeMetadataEntry serializes a metadata WAL entry to bytes.
 func (w *WriteAheadLog) encodeMetadataEntry(metadataBytes []byte, timestamp time.Time) ([]byte, error) {
 	// Calculate total size
@@ -680,7 +789,8 @@ func (w *WriteAheadLog) recover() error {
 	reader := bufio.NewReader(w.walFile)
 	var entries []WALEntry
 	var lastValidPos int64 = WALHeaderSize
-	var lastMetadata *ViewportState // Track last metadata entry
+	var lastMetadata *ViewportState     // Track last legacy metadata entry
+	var lastMainScreenState *MainScreenState // Track last sparse metadata entry
 
 	// Read all entries
 	for {
@@ -700,10 +810,14 @@ func (w *WriteAheadLog) recover() error {
 			// Checkpoint found - clear pending entries and metadata
 			entries = nil
 			lastMetadata = nil
+			lastMainScreenState = nil
 			w.lastCheckpoint = entry.GlobalLineIdx
 		} else if entry.Type == EntryTypeMetadata {
-			// Track metadata entries (last one wins)
+			// Track legacy metadata entries (last one wins)
 			lastMetadata = entry.Metadata
+		} else if entry.Type == EntryTypeMainScreenState {
+			// Track sparse metadata entries (last one wins)
+			lastMainScreenState = entry.MainScreenState
 		} else {
 			entries = append(entries, entry)
 		}
@@ -711,6 +825,7 @@ func (w *WriteAheadLog) recover() error {
 
 	// Store recovered metadata
 	w.recoveredMetadata = lastMetadata
+	w.recoveredMainScreenState = lastMainScreenState
 
 	// Truncate WAL to last valid position (remove corrupted data)
 	if err := w.walFile.Truncate(lastValidPos); err != nil {
@@ -813,6 +928,7 @@ func (w *WriteAheadLog) readEntry(r *bufio.Reader) (WALEntry, int, error) {
 	// Decode data based on entry type
 	var line *LogicalLine
 	var metadata *ViewportState
+	var mainScreenState *MainScreenState
 
 	switch entryType {
 	case EntryTypeLineWrite, EntryTypeLineModify:
@@ -829,16 +945,24 @@ func (w *WriteAheadLog) readEntry(r *bufio.Reader) (WALEntry, int, error) {
 				return WALEntry{}, totalSize, fmt.Errorf("failed to decode metadata: %w", err)
 			}
 		}
+	case EntryTypeMainScreenState:
+		if dataLen > 0 {
+			mainScreenState, err = decodeMainScreenState(lineData)
+			if err != nil {
+				return WALEntry{}, totalSize, fmt.Errorf("failed to decode MainScreenState: %w", err)
+			}
+		}
 	case EntryTypeCheckpoint:
 		// No data to decode
 	}
 
 	return WALEntry{
-		Type:          entryType,
-		GlobalLineIdx: lineIdx,
-		Timestamp:     timestamp,
-		Line:          line,
-		Metadata:      metadata,
+		Type:            entryType,
+		GlobalLineIdx:   lineIdx,
+		Timestamp:       timestamp,
+		Line:            line,
+		Metadata:        metadata,
+		MainScreenState: mainScreenState,
 	}, totalSize, nil
 }
 
@@ -916,11 +1040,22 @@ func (w *WriteAheadLog) checkpointLocked() error {
 	w.entriesWritten = 0
 	w.walSize = WALHeaderSize
 
-	// Re-write current metadata to the fresh WAL so it survives checkpoint
-	// This is necessary because the metadata entries were cleared with the WAL
+	// Re-write current metadata to the fresh WAL so it survives checkpoint.
+	// This is necessary because the metadata entries were cleared with the WAL.
 	if w.currentMetadata != nil {
 		if err := w.writeMetadataLocked(w.currentMetadata); err != nil {
 			return fmt.Errorf("failed to persist metadata after checkpoint: %w", err)
+		}
+	}
+	if w.currentMainScreenState != nil {
+		mssBytes, err := encodeMainScreenState(w.currentMainScreenState)
+		if err == nil {
+			entryData, err2 := w.encodeMetadataEntryWithType(EntryTypeMainScreenState, mssBytes, w.nowFunc())
+			if err2 == nil {
+				_, _ = w.walFile.Write(entryData)
+				w.walSize += int64(len(entryData))
+				w.entriesWritten++
+			}
 		}
 	}
 
@@ -971,12 +1106,20 @@ func (w *WriteAheadLog) readWALEntriesWithMetadata() ([]WALEntry, *ViewportState
 			entries = nil
 			lastMetadata = nil
 		case EntryTypeMetadata:
-			// Track last metadata entry (don't add to entries list)
+			// Track last legacy metadata entry (don't add to entries list)
 			lastMetadata = entry.Metadata
+		case EntryTypeMainScreenState:
+			// Track last sparse metadata entry; also update currentMainScreenState
+			w.currentMainScreenState = entry.MainScreenState
 		default:
 			// LINE_WRITE and LINE_MODIFY entries
 			entries = append(entries, entry)
 		}
+	}
+
+	// Also update lastMetadata with checkpoint-persisted currentMetadata
+	if lastMetadata == nil {
+		lastMetadata = w.currentMetadata
 	}
 
 	// Seek back to end for future appends

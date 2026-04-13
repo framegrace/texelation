@@ -63,13 +63,14 @@ func newAPTestEnv(t *testing.T, dir, id string, numLines int) *apTestEnv {
 	return &apTestEnv{ap: ap, mb: mb, walCfg: walCfg, dir: dir, id: id}
 }
 
-// setMetadata sets viewport metadata on the AdaptivePersistence.
+// setMetadata sets main-screen metadata on the AdaptivePersistence.
+// leb is the write-top (formerly LiveEdgeBase), cx the cursor column, cy the
+// cursor row relative to leb.
 func (env *apTestEnv) setMetadata(leb int64, cx, cy int) {
-	env.ap.NotifyMetadataChange(&ViewportState{
-		LiveEdgeBase: leb,
-		CursorX:      cx,
-		CursorY:      cy,
-		SavedAt:      time.Now(),
+	env.ap.NotifyMetadataChange(&MainScreenState{
+		WriteTop:        leb,
+		CursorGlobalIdx: leb + int64(cy),
+		CursorCol:       cx,
 	})
 }
 
@@ -98,15 +99,15 @@ func (env *apTestEnv) dirtyCloseAP() {
 	}
 }
 
-// reopenWALMetadata reopens the WAL and returns recovered metadata + line count.
-func (env *apTestEnv) reopenWALMetadata(t *testing.T) (*ViewportState, int64) {
+// reopenWALMetadata reopens the WAL and returns recovered MainScreenState + line count.
+func (env *apTestEnv) reopenWALMetadata(t *testing.T) (*MainScreenState, int64) {
 	t.Helper()
 	cfg := env.walCfg
 	wal, err := OpenWriteAheadLog(cfg)
 	if err != nil {
 		t.Fatalf("Reopen WAL: %v", err)
 	}
-	meta := wal.RecoveredMetadata()
+	meta := wal.RecoveredMainScreenState()
 	lineCount := wal.pageStore.LineCount()
 	wal.Close()
 	return meta, lineCount
@@ -114,7 +115,7 @@ func (env *apTestEnv) reopenWALMetadata(t *testing.T) (*ViewportState, int64) {
 
 // verifyConsistency reopens the WAL and checks that the recovered state is
 // internally consistent: metadata references valid lines, no gaps in
-// PageStore, and liveEdgeBase/cursor are within bounds.
+// PageStore, and writeTop/cursor are within bounds.
 func (env *apTestEnv) verifyConsistency(t *testing.T, viewportHeight int) {
 	t.Helper()
 	cfg := env.walCfg
@@ -124,7 +125,7 @@ func (env *apTestEnv) verifyConsistency(t *testing.T, viewportHeight int) {
 	}
 	defer wal.Close()
 
-	meta := wal.RecoveredMetadata()
+	meta := wal.RecoveredMainScreenState()
 	ps := wal.pageStore
 	lineCount := ps.LineCount()
 
@@ -156,40 +157,39 @@ func (env *apTestEnv) verifyConsistency(t *testing.T, viewportHeight int) {
 		return
 	}
 
-	// LiveEdgeBase must be within [0, lineCount]
-	if meta.LiveEdgeBase < 0 {
-		t.Errorf("LiveEdgeBase=%d is negative", meta.LiveEdgeBase)
+	// WriteTop must be within [0, lineCount]
+	if meta.WriteTop < 0 {
+		t.Errorf("WriteTop=%d is negative", meta.WriteTop)
 	}
-	if meta.LiveEdgeBase > lineCount {
-		t.Errorf("LiveEdgeBase=%d exceeds lineCount=%d", meta.LiveEdgeBase, lineCount)
+	if meta.WriteTop > lineCount {
+		t.Errorf("WriteTop=%d exceeds lineCount=%d", meta.WriteTop, lineCount)
 	}
 
-	// CursorY must be within [0, viewportHeight-1]
+	// CursorGlobalIdx must be within [WriteTop, WriteTop+viewportHeight)
+	cursorY := int(meta.CursorGlobalIdx - meta.WriteTop)
 	if viewportHeight > 0 {
-		if meta.CursorY < 0 || meta.CursorY >= viewportHeight {
-			t.Errorf("CursorY=%d out of viewport range [0, %d)", meta.CursorY, viewportHeight)
+		if cursorY < 0 || cursorY >= viewportHeight {
+			t.Errorf("CursorY=%d (relative) out of viewport range [0, %d)", cursorY, viewportHeight)
 		}
 	}
 
-	// CursorX must be non-negative
-	if meta.CursorX < 0 {
-		t.Errorf("CursorX=%d is negative", meta.CursorX)
+	// CursorCol must be non-negative
+	if meta.CursorCol < 0 {
+		t.Errorf("CursorCol=%d is negative", meta.CursorCol)
 	}
 
-	// The cursor's global line (liveEdgeBase + cursorY) must be <= lineCount
-	cursorGlobal := meta.LiveEdgeBase + int64(meta.CursorY)
-	if cursorGlobal > lineCount {
-		t.Errorf("Cursor global line %d (LEB=%d + CY=%d) exceeds lineCount=%d",
-			cursorGlobal, meta.LiveEdgeBase, meta.CursorY, lineCount)
+	// The cursor's global line must be <= lineCount
+	if meta.CursorGlobalIdx > lineCount {
+		t.Errorf("CursorGlobalIdx %d exceeds lineCount=%d", meta.CursorGlobalIdx, lineCount)
 	}
 
-	// The viewport range [liveEdgeBase, liveEdgeBase+viewportHeight) should
+	// The viewport range [writeTop, writeTop+viewportHeight) should
 	// be backed by actual content (lines exist in PageStore)
-	if viewportHeight > 0 && meta.LiveEdgeBase+int64(viewportHeight) <= lineCount {
-		vpLines, err := ps.ReadLineRange(meta.LiveEdgeBase, meta.LiveEdgeBase+int64(viewportHeight))
+	if viewportHeight > 0 && meta.WriteTop+int64(viewportHeight) <= lineCount {
+		vpLines, err := ps.ReadLineRange(meta.WriteTop, meta.WriteTop+int64(viewportHeight))
 		if err != nil {
 			t.Errorf("ReadLineRange for viewport [%d, %d): %v",
-				meta.LiveEdgeBase, meta.LiveEdgeBase+int64(viewportHeight), err)
+				meta.WriteTop, meta.WriteTop+int64(viewportHeight), err)
 		} else {
 			nilVP := 0
 			for _, line := range vpLines {
@@ -199,7 +199,7 @@ func (env *apTestEnv) verifyConsistency(t *testing.T, viewportHeight int) {
 			}
 			if nilVP > 0 {
 				t.Errorf("%d nil lines in viewport range [%d, %d)",
-					nilVP, meta.LiveEdgeBase, meta.LiveEdgeBase+int64(viewportHeight))
+					nilVP, meta.WriteTop, meta.WriteTop+int64(viewportHeight))
 			}
 		}
 	}
@@ -228,14 +228,14 @@ func TestAP_MetadataRoundTrip_CleanClose(t *testing.T) {
 	if meta == nil {
 		t.Fatal("Metadata not recovered after clean close")
 	}
-	if meta.LiveEdgeBase != 30 {
-		t.Errorf("LiveEdgeBase: got %d, want 30", meta.LiveEdgeBase)
+	if meta.WriteTop != 30 {
+		t.Errorf("LiveEdgeBase: got %d, want 30", meta.WriteTop)
 	}
-	if meta.CursorX != 5 {
-		t.Errorf("CursorX: got %d, want 5", meta.CursorX)
+	if meta.CursorCol != 5 {
+		t.Errorf("CursorX: got %d, want 5", meta.CursorCol)
 	}
-	if meta.CursorY != 15 {
-		t.Errorf("CursorY: got %d, want 15", meta.CursorY)
+	if int(meta.CursorGlobalIdx-meta.WriteTop) != 15 {
+		t.Errorf("CursorY: got %d, want 15", int(meta.CursorGlobalIdx-meta.WriteTop))
 	}
 }
 
@@ -263,11 +263,11 @@ func TestAP_MetadataRoundTrip_FlushThenClose(t *testing.T) {
 	if meta == nil {
 		t.Fatal("Metadata not recovered")
 	}
-	if meta.LiveEdgeBase != 30 {
-		t.Errorf("LiveEdgeBase: got %d, want 30 (updated value)", meta.LiveEdgeBase)
+	if meta.WriteTop != 30 {
+		t.Errorf("LiveEdgeBase: got %d, want 30 (updated value)", meta.WriteTop)
 	}
-	if meta.CursorY != 20 {
-		t.Errorf("CursorY: got %d, want 20 (updated value)", meta.CursorY)
+	if int(meta.CursorGlobalIdx-meta.WriteTop) != 20 {
+		t.Errorf("CursorY: got %d, want 20 (updated value)", int(meta.CursorGlobalIdx-meta.WriteTop))
 	}
 }
 
@@ -291,11 +291,11 @@ func TestAP_MetadataRoundTrip_DirtyClose_AfterFlush(t *testing.T) {
 	if meta == nil {
 		t.Fatal("Metadata lost after dirty close (was flushed)")
 	}
-	if meta.LiveEdgeBase != 25 {
-		t.Errorf("LiveEdgeBase: got %d, want 25", meta.LiveEdgeBase)
+	if meta.WriteTop != 25 {
+		t.Errorf("LiveEdgeBase: got %d, want 25", meta.WriteTop)
 	}
-	if meta.CursorY != 12 {
-		t.Errorf("CursorY: got %d, want 12", meta.CursorY)
+	if int(meta.CursorGlobalIdx-meta.WriteTop) != 12 {
+		t.Errorf("CursorY: got %d, want 12", int(meta.CursorGlobalIdx-meta.WriteTop))
 	}
 }
 
@@ -316,7 +316,7 @@ func TestAP_MetadataRoundTrip_DirtyClose_BeforeFlush(t *testing.T) {
 	// with unflushed data, metadata should be nil.
 	if meta != nil {
 		t.Logf("Some metadata recovered (WriteThrough flushed inline): LEB=%d, cursor=(%d,%d)",
-			meta.LiveEdgeBase, meta.CursorX, meta.CursorY)
+			meta.WriteTop, meta.CursorCol, int(meta.CursorGlobalIdx-meta.WriteTop))
 	} else {
 		t.Log("No metadata recovered as expected (dirty close before flush)")
 	}
@@ -342,8 +342,8 @@ func TestAP_MetadataRoundTrip_IdleFlush(t *testing.T) {
 	if meta == nil {
 		t.Fatal("Metadata lost after idle flush + dirty close")
 	}
-	if meta.LiveEdgeBase != 180 {
-		t.Errorf("LiveEdgeBase: got %d, want 180", meta.LiveEdgeBase)
+	if meta.WriteTop != 180 {
+		t.Errorf("LiveEdgeBase: got %d, want 180", meta.WriteTop)
 	}
 }
 
@@ -379,11 +379,11 @@ func TestAP_MetadataNotOverwrittenByStaleFlush(t *testing.T) {
 		t.Fatal("Metadata not recovered")
 	}
 	// The LATEST metadata (26, 2, 23) must be what's recovered
-	if meta.LiveEdgeBase != 26 {
-		t.Errorf("LiveEdgeBase: got %d, want 26 (latest)", meta.LiveEdgeBase)
+	if meta.WriteTop != 26 {
+		t.Errorf("LiveEdgeBase: got %d, want 26 (latest)", meta.WriteTop)
 	}
-	if meta.CursorY != 23 {
-		t.Errorf("CursorY: got %d, want 23 (latest)", meta.CursorY)
+	if int(meta.CursorGlobalIdx-meta.WriteTop) != 23 {
+		t.Errorf("CursorY: got %d, want 23 (latest)", int(meta.CursorGlobalIdx-meta.WriteTop))
 	}
 }
 
@@ -411,14 +411,14 @@ func TestAP_MetadataAfterManyFlushes(t *testing.T) {
 		t.Fatal("Metadata not recovered")
 	}
 	// Last: i=9 → LEB=9, CX=4, CY=9
-	if meta.LiveEdgeBase != 9 {
-		t.Errorf("LiveEdgeBase: got %d, want 9", meta.LiveEdgeBase)
+	if meta.WriteTop != 9 {
+		t.Errorf("LiveEdgeBase: got %d, want 9", meta.WriteTop)
 	}
-	if meta.CursorX != 4 {
-		t.Errorf("CursorX: got %d, want 4", meta.CursorX)
+	if meta.CursorCol != 4 {
+		t.Errorf("CursorX: got %d, want 4", meta.CursorCol)
 	}
-	if meta.CursorY != 9 {
-		t.Errorf("CursorY: got %d, want 9", meta.CursorY)
+	if int(meta.CursorGlobalIdx-meta.WriteTop) != 9 {
+		t.Errorf("CursorY: got %d, want 9", int(meta.CursorGlobalIdx-meta.WriteTop))
 	}
 }
 
@@ -456,10 +456,10 @@ func TestAP_BurstWriteThenClose_MetadataSurvives(t *testing.T) {
 	}
 
 	// Set metadata AFTER burst (simulates the state at time of close)
-	ap.NotifyMetadataChange(&ViewportState{
-		LiveEdgeBase: 1976,
-		CursorX:      0,
-		CursorY:      23,
+	ap.NotifyMetadataChange(&MainScreenState{
+		WriteTop:        1976,
+		CursorGlobalIdx: 1976 + 23,
+		CursorCol:       0,
 	})
 
 	// Close immediately
@@ -472,7 +472,7 @@ func TestAP_BurstWriteThenClose_MetadataSurvives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
-	meta := wal2.RecoveredMetadata()
+	meta := wal2.RecoveredMainScreenState()
 	lineCount := wal2.pageStore.LineCount()
 	wal2.Close()
 
@@ -484,11 +484,11 @@ func TestAP_BurstWriteThenClose_MetadataSurvives(t *testing.T) {
 	if meta == nil {
 		t.Fatal("Metadata lost after burst + close")
 	}
-	if meta.LiveEdgeBase != 1976 {
-		t.Errorf("LiveEdgeBase: got %d, want 1976", meta.LiveEdgeBase)
+	if meta.WriteTop != 1976 {
+		t.Errorf("WriteTop: got %d, want 1976", meta.WriteTop)
 	}
-	if meta.CursorY != 23 {
-		t.Errorf("CursorY: got %d, want 23", meta.CursorY)
+	if int(meta.CursorGlobalIdx-meta.WriteTop) != 23 {
+		t.Errorf("CursorY (relative): got %d, want 23", int(meta.CursorGlobalIdx-meta.WriteTop))
 	}
 }
 
@@ -533,8 +533,8 @@ func TestAP_ConcurrentWritesDuringFlush(t *testing.T) {
 	if meta == nil {
 		t.Fatal("Metadata lost")
 	}
-	if meta.LiveEdgeBase != 176 {
-		t.Errorf("LiveEdgeBase: got %d, want 176 (updated after concurrent writes)", meta.LiveEdgeBase)
+	if meta.WriteTop != 176 {
+		t.Errorf("LiveEdgeBase: got %d, want 176 (updated after concurrent writes)", meta.WriteTop)
 	}
 }
 
@@ -576,10 +576,10 @@ func TestAP_MultipleRestarts_NoDrift(t *testing.T) {
 		}
 
 		expectedLEB = base + 76
-		ap.NotifyMetadataChange(&ViewportState{
-			LiveEdgeBase: expectedLEB,
-			CursorX:      0,
-			CursorY:      23,
+		ap.NotifyMetadataChange(&MainScreenState{
+			WriteTop:        expectedLEB,
+			CursorGlobalIdx: expectedLEB + 23,
+			CursorCol:       0,
 		})
 
 		if err := ap.Close(); err != nil {
@@ -591,14 +591,14 @@ func TestAP_MultipleRestarts_NoDrift(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Restart %d: reopen: %v", restart, err)
 		}
-		meta := wal2.RecoveredMetadata()
+		meta := wal2.RecoveredMainScreenState()
 		lineCount := wal2.pageStore.LineCount()
 		wal2.Close()
 
-		t.Logf("Restart %d: lineCount=%d, meta.LEB=%d (expected %d)",
+		t.Logf("Restart %d: lineCount=%d, meta.WriteTop=%d (expected %d)",
 			restart, lineCount, func() int64 {
 				if meta != nil {
-					return meta.LiveEdgeBase
+					return meta.WriteTop
 				}
 				return -1
 			}(), expectedLEB)
@@ -606,9 +606,9 @@ func TestAP_MultipleRestarts_NoDrift(t *testing.T) {
 		if meta == nil {
 			t.Fatalf("Restart %d: metadata lost", restart)
 		}
-		if meta.LiveEdgeBase != expectedLEB {
-			t.Errorf("Restart %d: LiveEdgeBase drift: got %d, want %d",
-				restart, meta.LiveEdgeBase, expectedLEB)
+		if meta.WriteTop != expectedLEB {
+			t.Errorf("Restart %d: WriteTop drift: got %d, want %d",
+				restart, meta.WriteTop, expectedLEB)
 		}
 	}
 }
@@ -723,8 +723,8 @@ func TestAP_Consistency_AfterMultipleFlushesAndDirtyClose(t *testing.T) {
 	// Additionally verify the metadata matches the LAST flushed state
 	meta, lineCount := env.reopenWALMetadata(t)
 	t.Logf("After multi-flush dirty close: lineCount=%d, meta=%+v", lineCount, meta)
-	if meta != nil && meta.LiveEdgeBase > lineCount {
-		t.Errorf("Inconsistent: LiveEdgeBase=%d > lineCount=%d", meta.LiveEdgeBase, lineCount)
+	if meta != nil && meta.WriteTop > lineCount {
+		t.Errorf("Inconsistent: LiveEdgeBase=%d > lineCount=%d", meta.WriteTop, lineCount)
 	}
 }
 
@@ -782,12 +782,12 @@ func TestAP_Coherence_MetadataMatchesContent(t *testing.T) {
 		ap.NotifyWrite(int64(i))
 	}
 
-	// Set metadata that matches line content: LiveEdgeBase=76 means
+	// Set metadata that matches line content: WriteTop=76 means
 	// the viewport shows lines 76-99, cursor on line 99 (row 23)
-	ap.NotifyMetadataChange(&ViewportState{
-		LiveEdgeBase: 76,
-		CursorX:      0,
-		CursorY:      23,
+	ap.NotifyMetadataChange(&MainScreenState{
+		WriteTop:        76,
+		CursorGlobalIdx: 76 + 23,
+		CursorCol:       0,
 	})
 
 	// Flush and close
@@ -799,7 +799,7 @@ func TestAP_Coherence_MetadataMatchesContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
-	meta := wal2.RecoveredMetadata()
+	meta := wal2.RecoveredMainScreenState()
 	ps := wal2.pageStore
 
 	if meta == nil {
@@ -807,18 +807,18 @@ func TestAP_Coherence_MetadataMatchesContent(t *testing.T) {
 		t.Fatal("Metadata not recovered")
 	}
 
-	t.Logf("Recovered: LEB=%d, cursor=(%d,%d), lineCount=%d",
-		meta.LiveEdgeBase, meta.CursorX, meta.CursorY, ps.LineCount())
+	t.Logf("Recovered: WriteTop=%d, cursor=(col=%d, row=%d), lineCount=%d",
+		meta.WriteTop, meta.CursorCol, int(meta.CursorGlobalIdx-meta.WriteTop), ps.LineCount())
 
 	// Verify the viewport top line content matches what we wrote
-	viewportLines, err := ps.ReadLineRange(meta.LiveEdgeBase, meta.LiveEdgeBase+24)
+	viewportLines, err := ps.ReadLineRange(meta.WriteTop, meta.WriteTop+24)
 	if err != nil {
 		wal2.Close()
 		t.Fatalf("ReadLineRange: %v", err)
 	}
 
 	for row, line := range viewportLines {
-		globalIdx := meta.LiveEdgeBase + int64(row)
+		globalIdx := meta.WriteTop + int64(row)
 		expected := fmt.Sprintf("coherence-line-%04d", globalIdx)
 		got := trimLogicalLine(logicalLineToString(line))
 		if got != expected {
@@ -828,7 +828,7 @@ func TestAP_Coherence_MetadataMatchesContent(t *testing.T) {
 	}
 
 	// Verify the cursor line specifically
-	cursorGlobal := meta.LiveEdgeBase + int64(meta.CursorY)
+	cursorGlobal := meta.CursorGlobalIdx
 	cursorLine, err := ps.ReadLineRange(cursorGlobal, cursorGlobal+1)
 	if err != nil || len(cursorLine) == 0 {
 		wal2.Close()
@@ -877,10 +877,10 @@ func TestAP_Coherence_FlushMidBurst(t *testing.T) {
 		}
 		ap.NotifyWrite(int64(i))
 	}
-	ap.NotifyMetadataChange(&ViewportState{
-		LiveEdgeBase: 76,
-		CursorX:      0,
-		CursorY:      23,
+	ap.NotifyMetadataChange(&MainScreenState{
+		WriteTop:        76,
+		CursorGlobalIdx: 76 + 23,
+		CursorCol:       0,
 	})
 	ap.Flush()
 
@@ -893,10 +893,10 @@ func TestAP_Coherence_FlushMidBurst(t *testing.T) {
 		}
 		ap.NotifyWrite(int64(i))
 	}
-	ap.NotifyMetadataChange(&ViewportState{
-		LiveEdgeBase: 276,
-		CursorX:      0,
-		CursorY:      23,
+	ap.NotifyMetadataChange(&MainScreenState{
+		WriteTop:        276,
+		CursorGlobalIdx: 276 + 23,
+		CursorCol:       0,
 	})
 
 	// Dirty close — phase 2 data is lost
@@ -924,26 +924,30 @@ func TestAP_Coherence_FlushMidBurst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
-	meta := wal2.RecoveredMetadata()
+	meta := wal2.RecoveredMainScreenState()
 	ps := wal2.pageStore
 	lineCount := ps.LineCount()
 
-	t.Logf("Recovered: LEB=%d, cursor=(%d,%d), lineCount=%d",
-		meta.LiveEdgeBase, meta.CursorX, meta.CursorY, lineCount)
+	if meta != nil {
+		t.Logf("Recovered: WriteTop=%d, cursor=(col=%d, row=%d), lineCount=%d",
+			meta.WriteTop, meta.CursorCol, int(meta.CursorGlobalIdx-meta.WriteTop), lineCount)
+	} else {
+		t.Logf("Recovered: meta=nil, lineCount=%d", lineCount)
+	}
 
 	if meta == nil {
 		wal2.Close()
 		t.Fatal("Metadata not recovered")
 	}
 
-	// The metadata must be from phase 1 (LEB=76), NOT phase 2 (LEB=276)
-	if meta.LiveEdgeBase == 276 {
-		t.Errorf("Recovered phase 2 metadata (LEB=276) but phase 2 lines were not flushed — INCOHERENT")
+	// The metadata must be from phase 1 (WriteTop=76), NOT phase 2 (WriteTop=276)
+	if meta.WriteTop == 276 {
+		t.Errorf("Recovered phase 2 metadata (WriteTop=276) but phase 2 lines were not flushed — INCOHERENT")
 	}
 
 	// Lines referenced by metadata must exist and have phase 1 content
-	if meta.LiveEdgeBase+24 <= lineCount {
-		vpLines, err := ps.ReadLineRange(meta.LiveEdgeBase, meta.LiveEdgeBase+24)
+	if meta.WriteTop+24 <= lineCount {
+		vpLines, err := ps.ReadLineRange(meta.WriteTop, meta.WriteTop+24)
 		if err != nil {
 			wal2.Close()
 			t.Fatalf("ReadLineRange: %v", err)
@@ -954,7 +958,7 @@ func TestAP_Coherence_FlushMidBurst(t *testing.T) {
 				continue
 			}
 			got := trimLogicalLine(logicalLineToString(line))
-			globalIdx := meta.LiveEdgeBase + int64(row)
+			globalIdx := meta.WriteTop + int64(row)
 			expected := fmt.Sprintf("phase1-line-%04d", globalIdx)
 			if got != expected {
 				t.Errorf("Viewport row %d (global %d): got %q, want %q (phase 1 content)",
@@ -1004,37 +1008,37 @@ func TestAP_Coherence_MultiSession(t *testing.T) {
 		}
 
 		leb := base + 26
-		ap.NotifyMetadataChange(&ViewportState{
-			LiveEdgeBase: leb,
-			CursorX:      0,
-			CursorY:      23,
+		ap.NotifyMetadataChange(&MainScreenState{
+			WriteTop:        leb,
+			CursorGlobalIdx: leb + 23,
+			CursorCol:       0,
 		})
 
 		ap.Close()
 
-		// Verify: the content at LEB must be from THIS session
+		// Verify: the content at WriteTop must be from THIS session
 		wal2, err := OpenWriteAheadLog(walCfg)
 		if err != nil {
 			t.Fatalf("Session %d: reopen: %v", session, err)
 		}
-		meta := wal2.RecoveredMetadata()
+		meta := wal2.RecoveredMainScreenState()
 		if meta == nil {
 			wal2.Close()
 			t.Fatalf("Session %d: metadata lost", session)
 		}
 
 		// Read the line at LEB
-		lines, err := wal2.pageStore.ReadLineRange(meta.LiveEdgeBase, meta.LiveEdgeBase+1)
+		lines, err := wal2.pageStore.ReadLineRange(meta.WriteTop, meta.WriteTop+1)
 		if err != nil || len(lines) == 0 || lines[0] == nil {
 			wal2.Close()
-			t.Fatalf("Session %d: viewport top line not readable at %d", session, meta.LiveEdgeBase)
+			t.Fatalf("Session %d: viewport top line not readable at %d", session, meta.WriteTop)
 		}
 
 		got := trimLogicalLine(logicalLineToString(lines[0]))
-		expected := fmt.Sprintf("session%d-line-%04d", session, meta.LiveEdgeBase)
+		expected := fmt.Sprintf("session%d-line-%04d", session, meta.WriteTop)
 		if got != expected {
 			t.Errorf("Session %d: viewport top (global %d): got %q, want %q",
-				session, meta.LiveEdgeBase, got, expected)
+				session, meta.WriteTop, got, expected)
 		}
 
 		wal2.Close()

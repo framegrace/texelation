@@ -216,7 +216,7 @@ func TestScrollRegionPreservesScrollback(t *testing.T) {
 	}
 
 	historyLenBefore := v.HistoryLength()
-	t.Logf("Before TUI: HistoryLength=%d, liveEdgeBase=%d", historyLenBefore, v.memBufState.liveEdgeBase)
+	t.Logf("Before TUI: HistoryLength=%d", historyLenBefore)
 
 	// Verify we have scrollback
 	line0Before := v.getHistoryLine(0)
@@ -238,7 +238,7 @@ func TestScrollRegionPreservesScrollback(t *testing.T) {
 		}
 	}
 
-	t.Logf("After codex UI: HistoryLength=%d, liveEdgeBase=%d", v.HistoryLength(), v.memBufState.liveEdgeBase)
+	t.Logf("After codex UI: HistoryLength=%d", v.HistoryLength())
 
 	// Codex exits - clears from cursor to end of screen and resets margins
 	// First, move cursor to row 13 (below the scroll region)
@@ -255,7 +255,7 @@ func TestScrollRegionPreservesScrollback(t *testing.T) {
 	}
 
 	historyLenAfter := v.HistoryLength()
-	t.Logf("After TUI exit: HistoryLength=%d, liveEdgeBase=%d", historyLenAfter, v.memBufState.liveEdgeBase)
+	t.Logf("After TUI exit: HistoryLength=%d", historyLenAfter)
 
 	// *** KEY TEST: Original scrollback should still be accessible ***
 	line0After := v.getHistoryLine(0)
@@ -297,9 +297,7 @@ func TestScrollRegionDetailedState(t *testing.T) {
 		}
 	}
 
-	mb := v.memBufState.memBuf
-	t.Logf("Before TUI: GlobalOffset=%d, GlobalEnd=%d, TotalLines=%d, liveEdgeBase=%d",
-		mb.GlobalOffset(), mb.GlobalEnd(), mb.TotalLines(), v.memBufState.liveEdgeBase)
+	t.Logf("Before TUI: ContentEnd=%d, HistoryLength=%d", v.ContentEnd(), v.HistoryLength())
 
 	// Set scroll region and do some scrolling like codex would
 	for _, ch := range "\x1b[1;12r" {
@@ -316,24 +314,19 @@ func TestScrollRegionDetailedState(t *testing.T) {
 		}
 	}
 
-	t.Logf("After codex activity: GlobalOffset=%d, GlobalEnd=%d, TotalLines=%d, liveEdgeBase=%d",
-		mb.GlobalOffset(), mb.GlobalEnd(), mb.TotalLines(), v.memBufState.liveEdgeBase)
+	t.Logf("After codex activity: ContentEnd=%d, HistoryLength=%d", v.ContentEnd(), v.HistoryLength())
 
 	// Reset scroll region
 	for _, ch := range "\x1b[r" {
 		p.Parse(ch)
 	}
 
-	t.Logf("After scroll region reset: GlobalOffset=%d, GlobalEnd=%d, TotalLines=%d, liveEdgeBase=%d",
-		mb.GlobalOffset(), mb.GlobalEnd(), mb.TotalLines(), v.memBufState.liveEdgeBase)
-
-	// Check viewport state
-	vw := v.memBufState.viewport
-	t.Logf("Viewport: TotalPhysicalLines=%d, IsAtLiveEdge=%v, CanScrollUp=%v",
-		vw.TotalPhysicalLines(), vw.IsAtLiveEdge(), vw.CanScrollUp())
+	t.Logf("After scroll region reset: ContentEnd=%d, HistoryLength=%d, AtLiveEdge=%v",
+		v.ContentEnd(), v.HistoryLength(), v.AtLiveEdge())
 
 	// Try scrolling - should be able to scroll quite a bit
-	totalPhysical := vw.TotalPhysicalLines()
+	totalPhysical := v.TotalPhysicalLines()
+	t.Logf("TotalPhysicalLines=%d, AtLiveEdge=%v", totalPhysical, v.AtLiveEdge())
 	if totalPhysical < 50 {
 		t.Errorf("TotalPhysicalLines should be at least 50 (have 50+ lines), got %d", totalPhysical)
 	}

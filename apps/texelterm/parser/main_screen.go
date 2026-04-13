@@ -56,6 +56,12 @@ type MainScreen interface {
 	// RestoreState forcibly sets the write window's cursor and anchor,
 	// used during session restore to match the saved WAL metadata.
 	RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int)
+
+	// ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.
+	ReadLine(globalIdx int64) []Cell
+
+	// VisibleRange returns the (top, bottom) globalIdx pair of the current view.
+	VisibleRange() (top, bottom int64)
 }
 
 // MainScreenFactory creates a MainScreen for the given dimensions.

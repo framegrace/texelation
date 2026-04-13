@@ -839,14 +839,13 @@ func TestCodexCaptureScrollback(t *testing.T) {
 	replayer.PlayString(string(rec.Sequences))
 	v := replayer.VTerm()
 
-	mb := v.MemoryBuffer()
-	if mb == nil {
-		t.Fatal("MemoryBuffer is nil")
-	}
-
-	liveEdge := v.LiveEdgeBase()
-	t.Logf("After full replay: liveEdgeBase=%d, GlobalOffset=%d, GlobalEnd=%d, TotalLines=%d",
-		liveEdge, mb.GlobalOffset(), mb.GlobalEnd(), mb.TotalLines())
+	// Sparse API: store starts at global index 0; ContentEnd() is the
+	// next-unused line index; WriteTop() is the start of the live viewport.
+	globalOffset := int64(0)
+	globalEnd := v.ContentEnd()
+	liveEdge := v.WriteTop()
+	t.Logf("After full replay: writeTop=%d, GlobalOffset=%d, GlobalEnd=%d, TotalLines=%d",
+		liveEdge, globalOffset, globalEnd, globalEnd-globalOffset)
 	t.Logf("marginTop=%d, marginBottom=%d, inAltScreen=%v",
 		v.MarginTop(), v.MarginBottom(), v.InAltScreen())
 
@@ -855,8 +854,8 @@ func TestCodexCaptureScrollback(t *testing.T) {
 	currentEmptyRun := 0
 	emptyRunStart := int64(-1)
 	worstRunStart := int64(-1)
-	for idx := mb.GlobalOffset(); idx < mb.GlobalEnd(); idx++ {
-		line := mb.GetLine(idx)
+	for idx := globalOffset; idx < globalEnd; idx++ {
+		line := v.GetLogicalLine(idx)
 		isEmpty := true
 		if line != nil {
 			for _, cell := range line.Cells {
@@ -885,15 +884,15 @@ func TestCodexCaptureScrollback(t *testing.T) {
 	// Print context around the worst empty run
 	if maxEmptyRun > 3 && worstRunStart >= 0 {
 		contextStart := worstRunStart - 3
-		if contextStart < mb.GlobalOffset() {
-			contextStart = mb.GlobalOffset()
+		if contextStart < globalOffset {
+			contextStart = globalOffset
 		}
 		contextEnd := worstRunStart + int64(maxEmptyRun) + 3
-		if contextEnd > mb.GlobalEnd() {
-			contextEnd = mb.GlobalEnd()
+		if contextEnd > globalEnd {
+			contextEnd = globalEnd
 		}
 		for idx := contextStart; idx < contextEnd; idx++ {
-			line := mb.GetLine(idx)
+			line := v.GetLogicalLine(idx)
 			text := ""
 			if line != nil {
 				for _, cell := range line.Cells {

@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: apps/texelterm/parser/vterm_memory_buffer_test.go
-// Summary: Integration tests for VTerm with the new MemoryBuffer/ViewportWindow system.
+// Summary: Integration tests for VTerm with the legacy MemoryBuffer/ViewportWindow system.
+//
+// NOTE: This file is excluded from the build because it references the legacy
+// memBufState field which was removed during the sparse-viewport cutover.
+// It is retained as a reference for future migration to the sparse API.
+
+//go:build ignore
 
 package parser
 

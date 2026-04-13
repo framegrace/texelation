@@ -44,9 +44,9 @@ func (v *VTerm) CarriageReturn() {
 		v.SetCursorPos(v.cursorY, 0)
 	}
 
-	// Update memory buffer logical cursor AFTER SetCursorPos so delta calculation works
-	if !v.inAltScreen {
-		v.memoryBufferCarriageReturn()
+	// Sync sparse main screen cursor after SetCursorPos.
+	if !v.inAltScreen && v.mainScreen != nil {
+		v.mainScreen.CarriageReturn()
 	}
 }
 
@@ -63,9 +63,9 @@ func (v *VTerm) Backspace() {
 
 	if v.cursorX > minX {
 		v.SetCursorPos(v.cursorY, v.cursorX-1)
-		// Sync memory buffer cursor after SetCursorPos
-		if !v.inAltScreen {
-			v.memoryBufferSetCursorFromPhysical()
+		// Sync sparse main screen cursor after SetCursorPos.
+		if !v.inAltScreen && v.mainScreen != nil {
+			v.mainScreen.SetCursor(v.cursorY, v.cursorX)
 		}
 	}
 }

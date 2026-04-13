@@ -27,11 +27,12 @@ type VTerm struct {
 	// Alternate screen buffer (for fullscreen apps like vim, less)
 	inAltScreen bool
 	altBuffer   [][]Cell
-	// Memory buffer for scrollback (Phase 1-3 architecture)
-	memBufState *memoryBufferState
-	// mainScreen replaces memBufState for the main-screen path. During the
-	// transition, both run in parallel. After integration, memBufState is deleted.
+	// mainScreen is the sparse-backed main-screen implementation.
 	mainScreen MainScreen
+	// mainScreenPersistence handles disk writes for mainScreen (optional).
+	mainScreenPersistence *AdaptivePersistence
+	// mainScreenPageStore is the page-based disk storage (optional).
+	mainScreenPageStore *PageStore
 	// Terminal state
 	currentFG, currentBG               Color
 	currentAttr                        Attribute
@@ -93,6 +94,11 @@ type VTerm struct {
 	// commitInsertOffset tracks lines inserted by OnLineCommit callbacks via
 	// RequestLineInsert. After the callback, currentGlobal is adjusted.
 	commitInsertOffset int64
+	// fixedWidthDetector tracks TUI patterns for scroll region empty line suppression.
+	fwDetector *FixedWidthDetector
+	// showOverlay controls whether overlay lines (set via SetOverlay) are displayed.
+	// In the sparse model this is always true — overlay writes replace lines directly.
+	showOverlay bool
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -117,16 +123,16 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		PromptStartGlobalLine: -1,
 	}
 
-	// Apply options first (may configure memory buffer with disk path)
+	// Apply options first (may configure main screen with disk path)
 	for _, opt := range opts {
 		opt(v)
 	}
 
-	// Always initialize memory buffer if not already configured by options
-	if v.memBufState == nil {
-		v.initMemoryBuffer()
-	}
 	v.EnableMemoryBuffer()
+
+	// Initialize TUI detector (nil MemoryBuffer — just tracks signals).
+	v.fwDetector = NewFixedWidthDetectorWithConfig(nil, DefaultFixedWidthDetectorConfig())
+	v.showOverlay = true
 
 	// Set up tab stops
 	for i := 0; i < width; i++ {
@@ -139,6 +145,39 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 	v.ClearScreen()
 
 	return v
+}
+
+// fixedWidthDetector returns the TUI pattern detector.
+func (v *VTerm) fixedWidthDetector() *FixedWidthDetector {
+	return v.fwDetector
+}
+
+// notifyDetectorCursorMove notifies the TUI detector of cursor row changes.
+func (v *VTerm) notifyDetectorCursorMove(newY int) {
+	if d := v.fwDetector; d != nil {
+		d.OnCursorMove(newY)
+	}
+}
+
+// notifyDetectorScrollRegion notifies the TUI detector of scroll region changes.
+func (v *VTerm) notifyDetectorScrollRegion(top, bottom, height int) {
+	if d := v.fwDetector; d != nil {
+		d.OnScrollRegionSet(top, bottom, height)
+	}
+}
+
+// notifyDetectorScrollRegionClear notifies the TUI detector of scroll region reset.
+func (v *VTerm) notifyDetectorScrollRegionClear() {
+	if d := v.fwDetector; d != nil {
+		d.OnScrollRegionClear()
+	}
+}
+
+// notifyDetectorCursorVisibility notifies the TUI detector of cursor visibility changes.
+func (v *VTerm) notifyDetectorCursorVisibility(hidden bool) {
+	if d := v.fwDetector; d != nil {
+		d.OnCursorVisibilityChange(hidden)
+	}
 }
 
 // logDebug is a debug logging stub.
@@ -155,18 +194,18 @@ func (v *VTerm) logDebug(format string, args ...interface{}) {
 
 // Grid returns the currently visible 2D buffer of cells.
 // Returns the alternate screen buffer directly if in alt screen mode,
-// otherwise returns the MemoryBuffer viewport.
+// otherwise returns the sparse main-screen grid.
 func (v *VTerm) Grid() [][]Cell {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	if v.inAltScreen {
 		return v.altBuffer
 	}
-	return v.memoryBufferGrid()
+	return v.mainScreenGrid()
 }
 
 // MainScreenGrid returns the sparse MainScreen's grid, or nil if no MainScreen
-// is configured. Used during the dual-write transition for parity testing.
+// is configured.
 func (v *VTerm) MainScreenGrid() [][]Cell {
 	if v.mainScreen == nil {
 		return nil
@@ -174,14 +213,10 @@ func (v *VTerm) MainScreenGrid() [][]Cell {
 	return v.mainScreen.Grid()
 }
 
-// LegacyGrid returns the ViewportWindow (MemoryBuffer-based) grid directly,
-// bypassing the sparse flip in Grid(). Used during the dual-write transition
-// to compare the legacy and sparse grids independently.
+// LegacyGrid returns nil — the legacy MemoryBuffer path has been removed.
+// Kept for API compatibility; callers should use Grid() or MainScreenGrid().
 func (v *VTerm) LegacyGrid() [][]Cell {
-	if v.memBufState == nil || !v.memBufState.enabled {
-		return nil
-	}
-	return v.memBufState.viewport.VisibleGrid()
+	return nil
 }
 
 // ContentEnd returns the highest globalIdx ever written via the sparse
@@ -275,12 +310,8 @@ func (v *VTerm) writeCharWithWrapping(r rune) {
 		// Use consolidated alt buffer write operation
 		v.altBufferWriteCell(r, isWide)
 	} else {
-		// Write to MemoryBuffer
-		v.memoryBufferPlaceCharWide(r, isWide)
-
-		// Note: We no longer auto-jump to live edge here.
-		// Auto-jump happens in LineFeed when NEW content is created.
-		// This allows staying scrolled back during resize/redraw.
+		// Write to sparse main screen.
+		v.mainScreenPlaceChar(r, isWide)
 		v.MarkDirty(v.cursorY)
 	}
 
@@ -354,166 +385,112 @@ func (v *VTerm) Width() int {
 	return v.width
 }
 
-// TotalPhysicalLines returns the total number of physical (wrapped) lines
-// in the terminal history. This is used for scrollbar calculations.
+// TotalPhysicalLines returns the total number of physical lines in the terminal
+// history. Used for scrollbar calculations.
 func (v *VTerm) TotalPhysicalLines() int64 {
-	if !v.IsMemoryBufferEnabled() {
+	if v.mainScreen == nil {
 		return int64(v.height)
 	}
-	// Use viewport's total physical line count for accurate scroll calculations
-	return v.memBufState.viewport.TotalPhysicalLines()
+	end := v.mainScreen.ContentEnd()
+	if end < 0 {
+		return int64(v.height)
+	}
+	return end + 1
 }
 
 // TotalLogicalLines returns the total number of logical lines in history.
 // This counts each line before wrapping (used for minimap).
 func (v *VTerm) TotalLogicalLines() int64 {
-	if v.memBufState == nil || v.memBufState.memBuf == nil {
-		return int64(v.height)
-	}
-	return v.memBufState.memBuf.TotalLines()
+	return v.TotalPhysicalLines()
 }
 
 // GetLogicalLine returns the logical line at the given global index.
 // Used by scrollbar minimap to calculate line lengths.
 func (v *VTerm) GetLogicalLine(index int64) *LogicalLine {
-	if v.memBufState == nil || v.memBufState.memBuf == nil {
+	if v.mainScreen == nil {
 		return nil
 	}
-	return v.memBufState.memBuf.GetLine(index)
+	cells := v.mainScreen.ReadLine(index)
+	if cells == nil {
+		return nil
+	}
+	return &LogicalLine{Cells: cells}
 }
 
-// AllLogicalLines returns all logical lines from both disk and memory.
-// Used by scrollbar minimap. This reads the entire history - optimize later!
+// AllLogicalLines returns all logical lines in the write window.
+// Used by scrollbar minimap.
 // Returns (lines, globalOffset, totalLines) where globalOffset is the global
 // index of the first returned line.
 func (v *VTerm) AllLogicalLines() ([]*LogicalLine, int64, int64) {
-	if v.memBufState == nil || v.memBufState.viewport == nil {
+	if v.mainScreen == nil {
 		return nil, 0, 0
 	}
-
-	// Use viewport's reader which handles both disk and memory
-	reader := v.memBufState.viewport.Reader()
-	if reader == nil {
+	end := v.mainScreen.ContentEnd()
+	if end < 0 {
 		return nil, 0, 0
 	}
-
-	globalOffset := reader.GlobalOffset()
-	globalEnd := reader.GlobalEnd()
-	totalLines := globalEnd - globalOffset
-
-	if totalLines <= 0 {
-		return nil, 0, 0
+	writeTop := v.mainScreen.WriteTop()
+	lines := make([]*LogicalLine, 0, int(end-writeTop+1))
+	for gi := writeTop; gi <= end; gi++ {
+		cells := v.mainScreen.ReadLine(gi)
+		if cells != nil {
+			lines = append(lines, &LogicalLine{Cells: cells})
+		} else {
+			lines = append(lines, &LogicalLine{})
+		}
 	}
-
-	// Read ALL lines (disk + memory)
-	lines := reader.GetLineRange(globalOffset, globalEnd)
-	return lines, globalOffset, totalLines
+	return lines, writeTop, int64(len(lines))
 }
 
-// getHistoryLen returns the current history length from MemoryBuffer.
+// getHistoryLen returns the total number of lines in the sparse store.
 func (v *VTerm) getHistoryLen() int {
-	if v.memBufState == nil || v.memBufState.memBuf == nil {
+	if v.mainScreen == nil {
 		return 0
 	}
-	return int(v.memBufState.memBuf.TotalLines())
+	end := v.mainScreen.ContentEnd()
+	if end < 0 {
+		return 0
+	}
+	return int(end + 1)
 }
 
-// getLogicalLine retrieves a logical line by global index, with PageStore fallback.
-// This should be used instead of accessing memBuf.GetLine() directly, as lines
-// scrolled far back may have been evicted from the in-memory ring buffer to disk.
-func (v *VTerm) getLogicalLine(globalIdx int64) *LogicalLine {
-	if v.memBufState == nil || v.memBufState.memBuf == nil {
-		return nil
-	}
-	line := v.memBufState.memBuf.GetLine(globalIdx)
-	if line != nil {
-		return line
-	}
-	// Fallback to PageStore for evicted lines
-	if v.memBufState.pageStore != nil {
-		line, _ = v.memBufState.pageStore.ReadLine(globalIdx)
-		return line
-	}
-	return nil
-}
-
-// getHistoryLine retrieves a specific line from the MemoryBuffer.
+// getHistoryLine retrieves a specific line from the sparse store.
 // Returns the cells for the logical line at the given global index.
 func (v *VTerm) getHistoryLine(index int) []Cell {
-	line := v.getLogicalLine(int64(index))
-	if line == nil {
-		return nil
-	}
-	return line.Cells
+	return v.mainScreenGetHistoryLine(index)
 }
 
-// setHistoryLine updates a specific line in the MemoryBuffer.
+// setHistoryLine updates a specific line in the sparse store.
 func (v *VTerm) setHistoryLine(index int, cells []Cell) {
-	if v.memBufState == nil || v.memBufState.memBuf == nil {
-		return
-	}
-
-	// Ensure line exists
-	line := v.memBufState.memBuf.EnsureLine(int64(index))
-	if line == nil {
-		return
-	}
-
-	// Update cells
-	for i, cell := range cells {
-		v.memBufState.memBuf.SetCell(int64(index), i, cell)
-	}
-
-	// Truncate any excess cells beyond what we wrote. Without this,
-	// leftover cells from a previous longer write (e.g., reverse search
-	// prompt) cause the viewport to wrap the line, creating ghost rows.
-	line.Truncate(len(cells))
+	v.mainScreenSetHistoryLine(index, cells)
 }
 
-// eraseHistoryLine clears all content from a line in the MemoryBuffer.
+// eraseHistoryLine clears all content from a line in the sparse store.
 func (v *VTerm) eraseHistoryLine(index int) {
-	if v.memBufState == nil || v.memBufState.memBuf == nil {
-		return
-	}
-	v.memBufState.memBuf.EraseLine(int64(index), DefaultFG, DefaultBG)
+	v.mainScreenEraseHistoryLine(index)
 }
 
-// appendHistoryLine adds a new line to the end of the MemoryBuffer.
-// Note: This is mainly used for compatibility. Normal line creation
-// happens via memoryBufferLineFeed().
+// appendHistoryLine is a no-op in the sparse model.
+// Lines are created on write; no explicit append needed.
 func (v *VTerm) appendHistoryLine(cells []Cell) {
-	if v.memBufState == nil || v.memBufState.memBuf == nil {
-		return
-	}
-
-	// Create a new line at the end
-	totalLines := v.memBufState.memBuf.TotalLines()
-	v.memBufState.memBuf.EnsureLine(totalLines)
-
-	// Set the cells
-	for i, cell := range cells {
-		v.memBufState.memBuf.SetCell(totalLines, i, cell)
-	}
+	// In the sparse model, lines are created on demand by WriteCell/SetLine.
 }
 
-// getTopHistoryLine calculates the index of the first visible line in the viewport.
-// Returns the global index at the viewport top.
+// getTopHistoryLine returns the globalIdx at the top of the write window.
 func (v *VTerm) getTopHistoryLine() int {
 	if v.inAltScreen {
 		return 0
 	}
-	if v.memBufState != nil {
-		return int(v.memBufState.liveEdgeBase)
-	}
-	return 0
+	return v.mainScreenGetTopHistoryLine()
 }
 
 // MarkPromptStart records the position where a shell prompt starts.
 // Called when OSC 133;A is received (prompt start marker).
 // Records the global line index so we can position the cursor correctly on reload.
 func (v *VTerm) MarkPromptStart() {
-	if v.memBufState != nil {
-		v.PromptStartGlobalLine = v.memBufState.liveEdgeBase + int64(v.cursorY)
+	if v.mainScreen != nil {
+		gi, _ := v.mainScreen.Cursor()
+		v.PromptStartGlobalLine = gi
 	}
 }
 
@@ -576,15 +553,17 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 		charOffset = y*v.width + x
 		return -1, charOffset, true, true
 	}
-	// Use MemoryBuffer's viewport to content mapping
-	globalLine, offset, valid := v.memoryBufferViewportToContent(y, x)
-	if !valid {
+	if v.mainScreen == nil {
 		return 0, 0, false, false
 	}
-	// Check if this is the current cursor line
-	cursorLine, _ := v.memBufState.memBuf.Cursor()
-	isCurrentLine = globalLine == cursorLine
-	return globalLine, offset, isCurrentLine, true
+	visibleTop, _ := v.mainScreen.VisibleRange()
+	logicalLine = visibleTop + int64(y)
+	charOffset = x
+	// Check if this is the current cursor line.
+	cursorLine, _ := v.mainScreen.Cursor()
+	isCurrentLine = logicalLine == cursorLine
+	ok = true
+	return
 }
 
 // ContentToViewport converts content coordinates to viewport coordinates.
@@ -600,8 +579,18 @@ func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, 
 		visible = y >= 0 && y < v.height
 		return
 	}
-	// Use MemoryBuffer's content to viewport mapping
-	return v.memoryBufferContentToViewport(logicalLine, charOffset)
+	if v.mainScreen == nil {
+		return 0, 0, false
+	}
+	visibleTop, visibleBottom := v.mainScreen.VisibleRange()
+	rowOffset := logicalLine - visibleTop
+	if rowOffset < 0 || rowOffset > visibleBottom-visibleTop {
+		return 0, 0, false
+	}
+	y = int(rowOffset)
+	x = charOffset
+	visible = y >= 0 && y < v.height
+	return
 }
 
 // GetContentText extracts text from a content coordinate range.
@@ -610,20 +599,16 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 		// For alt screen, extract from altBuffer
 		return v.getAltScreenText(startOffset, endOffset)
 	}
-	if v.memBufState == nil || v.memBufState.memBuf == nil {
+	if v.mainScreen == nil {
 		return ""
 	}
 
-	// Extract text from MemoryBuffer line range (with PageStore fallback for evicted lines)
+	// Extract text from sparse store line range.
 	var result []rune
 	for lineIdx := startLine; lineIdx <= endLine; lineIdx++ {
-		line := v.getLogicalLine(lineIdx)
-		if line == nil {
+		cells := v.mainScreen.ReadLine(lineIdx)
+		if cells == nil {
 			continue
-		}
-		cells := line.Cells
-		if line.Overlay != nil && v.ShowOverlay() {
-			cells = line.Overlay
 		}
 		start := 0
 		end := len(cells)
@@ -725,26 +710,18 @@ func (v *VTerm) DECALN() {
 		topHistory := v.getTopHistoryLine()
 		for y := 0; y < v.height; y++ {
 			logicalY := topHistory + y
-			// Ensure line exists
-			for logicalY >= v.getHistoryLen() {
-				v.appendHistoryLine(make([]Cell, 0, v.width))
-			}
 			line := v.getHistoryLine(logicalY)
-			// Resize line if needed
-			if len(line) < v.width {
-				newLine := make([]Cell, v.width)
-				copy(newLine, line)
-				v.setHistoryLine(logicalY, newLine)
-				line = newLine
-			}
+			// Build a full-width line of E's, preserving existing colors
+			newLine := make([]Cell, v.width)
+			copy(newLine, line)
 			for x := 0; x < v.width; x++ {
-				line[x] = Cell{
+				newLine[x] = Cell{
 					Rune: 'E',
 					FG:   v.defaultFG,
 					BG:   v.defaultBG,
 				}
 			}
-			v.setHistoryLine(logicalY, line)
+			v.setHistoryLine(logicalY, newLine)
 		}
 	}
 
@@ -1086,11 +1063,10 @@ func (v *VTerm) handleCursorMovement(command rune, params []int) {
 		v.SetCursorPos(newY, v.cursorX)
 	}
 
-	// Sync memory buffer cursor after any cursor movement escape sequence.
-	// This is done here rather than in SetCursorPos because writeCharWithWrapping also
-	// calls SetCursorPos, and it already advances the memory buffer cursor.
-	if !v.inAltScreen {
-		v.memoryBufferSetCursorFromPhysical()
+	// Sync sparse cursor after cursor movement.
+	// SetCursor is cheap; we call it here to keep sparse in sync.
+	if !v.inAltScreen && v.mainScreen != nil {
+		v.mainScreen.SetCursor(v.cursorY, v.cursorX)
 	}
 }
 
@@ -1128,12 +1104,8 @@ func (v *VTerm) SetMargins(top, bottom int) {
 		v.notifyDetectorScrollRegionClear()
 	}
 
-	// Enhanced debug logging for scroll region state
-	if v.memBufState != nil && v.memBufState.memBuf != nil {
-		mb := v.memBufState.memBuf
-		v.logMemBufDebug("[MARGINS] SetMargins top=%d bottom=%d isFullScreen=%v: GlobalOffset=%d GlobalEnd=%d liveEdgeBase=%d TotalLines=%d",
-			top, bottom, isFullScreen, mb.GlobalOffset(), mb.GlobalEnd(), v.memBufState.liveEdgeBase, mb.TotalLines())
-	}
+	// Debug logging for scroll region state
+	v.logDebug("[MARGINS] SetMargins top=%d bottom=%d isFullScreen=%v", top, bottom, isFullScreen)
 
 	// Per spec, DECSTBM moves cursor to home position (1,1)
 	v.SetCursorPos(0, 0)
@@ -1172,9 +1144,8 @@ func (v *VTerm) MoveCursorForward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
-	// Sync memory buffer cursor for direct calls (not through parser)
-	if !v.inAltScreen {
-		v.memoryBufferSetCursorFromPhysical()
+	if !v.inAltScreen && v.mainScreen != nil {
+		v.mainScreen.SetCursor(v.cursorY, v.cursorX)
 	}
 }
 
@@ -1194,9 +1165,8 @@ func (v *VTerm) MoveCursorBackward(n int) {
 		}
 	}
 	v.SetCursorPos(v.cursorY, newX)
-	// Sync memory buffer cursor for direct calls (not through parser)
-	if !v.inAltScreen {
-		v.memoryBufferSetCursorFromPhysical()
+	if !v.inAltScreen && v.mainScreen != nil {
+		v.mainScreen.SetCursor(v.cursorY, v.cursorX)
 	}
 }
 
@@ -1333,113 +1303,48 @@ func WithLineCommitHandler(handler func(int64, *LogicalLine, bool) bool) Option 
 	return func(v *VTerm) { v.OnLineCommit = handler }
 }
 
-// RequestLineInsert inserts a synthetic line at beforeIdx during an
-// OnLineCommit callback. The inserted line shifts all subsequent lines
-// (including currentGlobal) down by 1. The caller's currentGlobal is
-// adjusted automatically after the callback returns.
-//
-// This is safe to call only from within an OnLineCommit handler.
-func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
-	if !v.IsMemoryBufferEnabled() {
-		return
-	}
-	v.memBufState.memBuf.InsertLine(beforeIdx)
-	line := v.memBufState.memBuf.GetLine(beforeIdx)
-	if line == nil {
-		return
-	}
-	// Inserted lines are synthetic (transformer-generated).
-	// Content goes in Overlay, not Cells.
-	line.Overlay = cells
-	line.OverlayWidth = len(cells)
-	line.Synthetic = true
-	v.commitInsertOffset++
-	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
-	if beforeIdx <= cursorGlobal {
-		// The insert shifted the cursor's content down by 1 physical row.
-		// Adjust cursorY to follow it. When the viewport isn't full (early
-		// in a session), adjusting liveEdgeBase instead would create a
-		// disconnect between the cursor's screen row and the viewport's
-		// grid layout — the viewport starts at GlobalOffset (not
-		// liveEdgeBase) when content fits within the viewport height.
-		if v.cursorY < v.marginBottom {
-			v.cursorY++
-		} else {
-			// Cursor already at the bottom — scroll the viewport.
-			v.memBufState.liveEdgeBase++
-		}
-	}
-	// Keep PromptStartGlobalLine pointing at the actual prompt line.
-	// Transformer inserts shift content down; without this adjustment
-	// the saved prompt position becomes stale and reload erases wrong lines.
-	if v.PromptStartGlobalLine >= 0 && beforeIdx <= v.PromptStartGlobalLine {
-		v.PromptStartGlobalLine++
-	}
-	// Insertion shifts all subsequent rows — invalidate viewport cache and
-	// mark all rows dirty so the renderer repaints the affected content.
-	v.memBufState.viewport.InvalidateCache()
-	v.MarkAllDirty()
-}
-
 // RequestLineOverlay sets overlay content on an existing line without modifying
 // the original Cells. Used by transformers to provide formatted views.
-// The cells slice is cloned defensively to prevent data races with background
-// persistence goroutines.
+// In the sparse model, overlay content is stored directly in the sparse store.
 func (v *VTerm) RequestLineOverlay(lineIdx int64, cells []Cell) {
-	if !v.IsMemoryBufferEnabled() {
-		return
-	}
-	line := v.memBufState.memBuf.GetLine(lineIdx)
-	if line == nil {
-		return
-	}
-	cloned := make([]Cell, len(cells))
-	copy(cloned, cells)
-	line.Overlay = cloned
-	line.OverlayWidth = len(cells)
-
-	// Sync overlay to sparse so Grid() reflects the formatted view.
-	if v.mainScreen != nil {
-		v.mainScreen.SetLine(lineIdx, cloned)
-	}
-
-	// Invalidate viewport cache so VisibleGrid() rebuilds with the new
-	// overlay, and mark all rows dirty so the renderer repaints.
-	v.memBufState.viewport.InvalidateCache()
-	v.MarkAllDirty()
+	v.SetOverlay(lineIdx, cells)
 }
 
 // NotifyLinePersist notifies the persistence layer that a line is ready for writing.
 // Used by transformers after setting overlay content on previously suppressed lines.
 func (v *VTerm) NotifyLinePersist(lineIdx int64) {
-	if v.memBufState.persistence != nil {
-		v.memBufState.persistence.NotifyWrite(lineIdx)
+	if v.mainScreenPersistence != nil {
+		v.mainScreenPersistence.NotifyWrite(lineIdx)
 	}
 }
 
 // WithMemoryBuffer is a no-op kept for backward compatibility.
-// NewVTerm always initializes the memory buffer unconditionally.
+// NewVTerm always initializes the main screen unconditionally.
 func WithMemoryBuffer() Option {
 	return func(v *VTerm) {}
 }
 
-// WithMemoryBufferDisk enables the memory buffer system with disk persistence.
+// WithMemoryBufferDisk enables the main screen with disk persistence.
 // The diskPath specifies where to store the history file.
+// TerminalID is required for cross-session history continuity.
 func WithMemoryBufferDisk(diskPath string, maxLines int) Option {
 	return func(v *VTerm) {
 		opts := MemoryBufferOptions{
-			MaxLines:      maxLines,
-			EvictionBatch: 1000,
-			DiskPath:      diskPath,
+			MaxLines: maxLines,
+			DiskPath: diskPath,
 		}
-		v.initMemoryBufferWithOptions(opts)
+		// Eagerly enable disk persistence. Error is logged inside.
+		v.EnableMemoryBufferWithDisk(diskPath, opts)
 	}
 }
 
-// WithMemoryBufferOptions enables the memory buffer system with custom options.
+// WithMemoryBufferOptions enables the main screen with custom options.
 func WithMemoryBufferOptions(opts MemoryBufferOptions) Option {
 	return func(v *VTerm) {
-		v.initMemoryBufferWithOptions(opts)
+		if opts.DiskPath != "" {
+			v.EnableMemoryBufferWithDisk(opts.DiskPath, opts)
+		}
+		// Non-disk options are handled by EnableMemoryBuffer (called later in NewVTerm).
 	}
 }
 
@@ -1471,13 +1376,12 @@ func (v *VTerm) Resize(width, height int) {
 		}
 		v.altBuffer = newAltBuffer
 
-		// Also resize the normal screen memory buffer so that when we exit
-		// alt screen, liveEdgeBase and viewport dimensions are consistent.
-		// Temporarily swap in the saved main cursor so memoryBufferResize
-		// adjusts it correctly for the new dimensions.
+		// Also resize the main screen so that when we exit alt screen,
+		// the sparse write window dimensions are consistent.
+		// Temporarily swap in the saved main cursor.
 		if v.IsMemoryBufferEnabled() {
 			v.cursorX, v.cursorY = v.savedMainCursorX, v.savedMainCursorY
-			v.memoryBufferResize(width, height)
+			v.mainScreenResize(width, height)
 			v.savedMainCursorX = v.cursorX
 			v.savedMainCursorY = v.cursorY
 		}
@@ -1486,8 +1390,8 @@ func (v *VTerm) Resize(width, height int) {
 		v.cursorX, v.cursorY = altCursorX, altCursorY
 		v.SetCursorPos(v.cursorY, v.cursorX)
 	} else {
-		// Use MemoryBuffer/ViewportWindow resize
-		v.memoryBufferResize(width, height)
+		// Use sparse main-screen resize
+		v.mainScreenResize(width, height)
 		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
 	}
 
@@ -1531,16 +1435,13 @@ func (v *VTerm) PhysicalCursor() (physX, physY int) {
 		return v.width - 1, v.cursorY
 	}
 
-	// In memory buffer mode without sparse, use ContentToViewport for
-	// accurate mapping. This handles wrap chain joining by BuildRange
-	// which can change the physical row count relative to cursorY.
+	// In sparse main screen mode, use simple mapping.
+	// The sparse model has no wrap chains, so cursorX/Y map directly.
 	if v.IsMemoryBufferEnabled() {
-		globalLine := v.memBufState.liveEdgeBase + int64(v.cursorY)
-		row, col, visible := v.memBufState.viewport.ContentToViewport(globalLine, v.cursorX)
-		if visible {
-			return col, row
+		// cursorX should always be in [0, width), but clamp just in case.
+		if v.cursorX < v.width {
+			return v.cursorX, v.cursorY
 		}
-		// Cursor not visible (scrolled away) — fall through to simple mapping
 	}
 
 	// Simple wrapping for non-memory-buffer mode or fallback
@@ -1567,12 +1468,12 @@ func (v *VTerm) IsInTUIMode() bool {
 	return fwd != nil && fwd.IsInTUIMode()
 }
 
-// LiveEdgeBase returns the current liveEdgeBase (global line index of viewport row 0).
+// LiveEdgeBase returns the globalIdx at the top of the sparse write window.
 func (v *VTerm) LiveEdgeBase() int64 {
-	if v.memBufState == nil {
+	if v.mainScreen == nil {
 		return 0
 	}
-	return v.memBufState.liveEdgeBase
+	return v.mainScreen.WriteTop()
 }
 
 // MarginTop returns the current top scroll margin.
@@ -1581,12 +1482,10 @@ func (v *VTerm) MarginTop() int { return v.marginTop }
 // MarginBottom returns the current bottom scroll margin.
 func (v *VTerm) MarginBottom() int { return v.marginBottom }
 
-// MemoryBuffer returns the underlying MemoryBuffer for diagnostic access.
+// MemoryBuffer returns nil — the MemoryBuffer path has been removed.
+// Kept for API compatibility. Callers should use MainScreen() instead.
 func (v *VTerm) MemoryBuffer() *MemoryBuffer {
-	if v.memBufState == nil {
-		return nil
-	}
-	return v.memBufState.memBuf
+	return nil
 }
 
 // GetAltBufferLine returns a copy of the specified line from the alternate screen buffer.

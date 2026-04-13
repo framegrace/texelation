@@ -22,6 +22,15 @@ package parser
 
 import "strconv"
 
+// fixedWidthBuffer is the subset of MemoryBuffer used by FixedWidthDetector.
+// Passing nil is safe — all methods guard with a nil check.
+type fixedWidthBuffer interface {
+	GetLine(lineIdx int64) *LogicalLine
+	SetLineFixed(lineIdx int64, width int)
+	CursorLine() int64
+	TermWidth() int
+}
+
 // FixedWidthDetectorConfig holds configuration for detection behavior.
 type FixedWidthDetectorConfig struct {
 	// JumpThreshold is how many consecutive cursor jumps trigger TUI detection.
@@ -58,7 +67,7 @@ func DefaultFixedWidthDetectorConfig() FixedWidthDetectorConfig {
 // It monitors cursor movements and scroll regions to detect TUI behavior,
 // then marks affected lines in MemoryBuffer as non-reflowable.
 type FixedWidthDetector struct {
-	memBuf *MemoryBuffer
+	memBuf fixedWidthBuffer
 	config FixedWidthDetectorConfig
 
 	// Scroll region state
@@ -78,12 +87,14 @@ type FixedWidthDetector struct {
 }
 
 // NewFixedWidthDetector creates a new detector with default configuration.
-func NewFixedWidthDetector(memBuf *MemoryBuffer) *FixedWidthDetector {
+// Passing nil for memBuf is safe: TUI signal detection still works; line
+// flagging is skipped.
+func NewFixedWidthDetector(memBuf fixedWidthBuffer) *FixedWidthDetector {
 	return NewFixedWidthDetectorWithConfig(memBuf, DefaultFixedWidthDetectorConfig())
 }
 
 // NewFixedWidthDetectorWithConfig creates a new detector with custom configuration.
-func NewFixedWidthDetectorWithConfig(memBuf *MemoryBuffer, config FixedWidthDetectorConfig) *FixedWidthDetector {
+func NewFixedWidthDetectorWithConfig(memBuf fixedWidthBuffer, config FixedWidthDetectorConfig) *FixedWidthDetector {
 	if config.JumpThreshold <= 0 {
 		config.JumpThreshold = 2
 	}

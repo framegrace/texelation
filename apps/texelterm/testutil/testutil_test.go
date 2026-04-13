@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
+	_ "github.com/framegrace/texelation/apps/texelterm/parser/sparse"
 )
 
 // TestRecordingFormat tests TXREC01 save/load cycle.

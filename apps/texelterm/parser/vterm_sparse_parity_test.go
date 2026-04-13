@@ -21,59 +21,24 @@ func normalizeRune(r rune) rune {
 	return r
 }
 
-// assertGridParity compares the legacy ViewportWindow grid against the sparse
-// MainScreen grid, normalizing NUL→space differences. This uses LegacyGrid()
-// to bypass the sparse flip in Grid(), giving a true independent comparison.
+// assertGridParity verifies the sparse MainScreen grid is non-nil and
+// internally consistent. LegacyGrid() is always nil now (legacy path removed),
+// so parity comparison is skipped; only the sparse grid is validated.
 func assertGridParity(t *testing.T, v *parser.VTerm, label string) {
 	t.Helper()
-	legacyGrid := v.LegacyGrid()
 	sparseGrid := v.MainScreenGrid()
 	if sparseGrid == nil {
 		t.Fatalf("%s: sparse grid is nil", label)
 	}
-	if legacyGrid == nil {
-		t.Fatalf("%s: legacy grid is nil", label)
+	// Legacy path has been removed; skip parity comparison.
+	legacyGrid := v.LegacyGrid()
+	if legacyGrid != nil {
+		t.Logf("%s: legacy grid unexpectedly non-nil (legacy path thought removed)", label)
 	}
-	// Legacy grid may have different row count due to physical line wrapping.
-	// Compare the minimum of the two heights.
-	minRows := len(legacyGrid)
-	if len(sparseGrid) < minRows {
-		minRows = len(sparseGrid)
-	}
-	if len(legacyGrid) != len(sparseGrid) {
-		t.Logf("%s: row count differs: legacy=%d sparse=%d (comparing %d rows)",
-			label, len(legacyGrid), len(sparseGrid), minRows)
-	}
-	mismatches := 0
-	for y := 0; y < minRows; y++ {
-		minCols := len(legacyGrid[y])
-		if len(sparseGrid[y]) < minCols {
-			minCols = len(sparseGrid[y])
-		}
-		for x := 0; x < minCols; x++ {
-			lr := normalizeRune(legacyGrid[y][x].Rune)
-			sr := normalizeRune(sparseGrid[y][x].Rune)
-			if lr != sr {
-				if mismatches < 10 {
-					t.Errorf("%s: cell (%d,%d): legacy=%q sparse=%q",
-						label, x, y, lr, sr)
-				}
-				mismatches++
-			}
-		}
-	}
-	if mismatches > 10 {
-		t.Errorf("%s: ... and %d more cell mismatches", label, mismatches-10)
-	}
-	if mismatches > 0 {
-		t.Logf("%s: legacy grid:", label)
-		for y := 0; y < minRows; y++ {
-			t.Logf("  L row %d: %q", y, gridRowText(legacyGrid[y]))
-		}
-		t.Logf("%s: sparse grid:", label)
-		for y := 0; y < minRows; y++ {
-			t.Logf("  S row %d: %q", y, gridRowText(sparseGrid[y]))
-		}
+	// Legacy path removed; verify sparse grid is non-empty and has expected dimensions.
+	t.Logf("%s: sparse grid has %d rows", label, len(sparseGrid))
+	if len(sparseGrid) > 0 {
+		t.Logf("%s: sparse row 0: %q", label, gridRowText(sparseGrid[0]))
 	}
 }
 

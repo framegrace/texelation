@@ -44,7 +44,7 @@ func (v *VTerm) ClearScreen() {
 		v.SetCursorPos(0, 0)
 	} else {
 		// Use memory buffer erase
-		v.memoryBufferEraseScreen(2)
+		v.mainScreenEraseScreen(2)
 		v.SetCursorPos(0, 0)
 	}
 }
@@ -59,7 +59,7 @@ func (v *VTerm) ClearVisibleScreen() {
 		// Cursor position unchanged
 	} else {
 		// For main screen, use memory buffer to clear visible area
-		v.memoryBufferEraseScreen(2)
+		v.mainScreenEraseScreen(2)
 		// Cursor position unchanged
 	}
 }

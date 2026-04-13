@@ -7,6 +7,12 @@
 // where metadata persisted at close time references line indices that
 // never actually reached the WAL, producing a blank band above the
 // viewport at reload.
+//
+// NOTE: Excluded from build — references the legacy memBufState field
+// and helpers defined in burst_recovery_test.go, both removed/ignored
+// during the sparse-viewport cutover. Retained for reference.
+
+//go:build ignore
 
 package parser
 
