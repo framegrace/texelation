@@ -7,7 +7,12 @@
 // server restart causes content loss or incorrect viewport position.
 //
 // NOTE: Excluded from build — references the legacy memBufState field
-// removed during the sparse-viewport cutover. Retained for reference.
+// removed during the sparse-viewport cutover. These are *migration
+// candidates*, not pure reference: the scenarios they cover
+// (LsLR_ExactScenario, ShellStartAfterRestore, StaleMetadataRecovery,
+// LargeVolumeAutoCheckpoint, ResizeAfterRestore, VTermCoherence_*) do
+// not yet have equivalents on the sparse path. Port to sparse-native
+// VTerm integration tests in a follow-up, then delete this file.
 
 //go:build ignore
 

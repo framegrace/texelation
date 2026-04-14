@@ -6,7 +6,11 @@
 //
 // NOTE: This file is excluded from the build because it references the legacy
 // memBufState field which was removed during the sparse-viewport cutover.
-// It is retained as a reference for future migration to the sparse API.
+// These are *migration candidates*, not pure reference: scroll-region
+// preservation, crash/hard-crash recovery, scroll-region reload corruption,
+// autowrap + resize reflow, and overlay persistence all represent
+// practical scenarios that should have sparse-native equivalents before
+// this file is deleted. Port in a follow-up PR.
 
 //go:build ignore
 
