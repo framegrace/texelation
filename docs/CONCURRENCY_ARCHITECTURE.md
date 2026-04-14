@@ -6,6 +6,15 @@ adding new locks, channels, or goroutines.
 
 **Last audited**: 2026-02-18
 
+> **STALE SECTIONS (2026-04-14):** The `MemoryBuffer.mu` and `ViewportWindow.mu`
+> sections below pre-date the sparse-viewport cutover (PR #179). The sparse
+> terminal exposes three separate mutexes (`sparse.Store.mu` RWMutex,
+> `sparse.WriteWindow.mu` Mutex, `sparse.ViewWindow.mu` Mutex) that replace
+> those two entries. The RLock-upgrade caveat that used to apply to
+> ViewportWindow is moot — sparse's view layer has no lazy initialization.
+> The rest of this document (session/publisher/effect locks) is unchanged.
+> A full re-audit is pending.
+
 ---
 
 ## Threading Model Overview

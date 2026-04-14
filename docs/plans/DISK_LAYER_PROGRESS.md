@@ -1,5 +1,11 @@
 # Disk Layer Implementation Progress
 
+> **STATUS (2026-04-14):** Phase tracking below reflects state through the
+> pre-sparse cutover. WAL + PageStore survived the sparse redesign unchanged
+> (Phases 1–4 remain in production). The "MemoryBuffer" references throughout
+> now apply to the sparse main-screen store — see
+> [`docs/TERMINAL_PERSISTENCE_ARCHITECTURE.md`](../TERMINAL_PERSISTENCE_ARCHITECTURE.md).
+
 This file tracks the implementation of the disk layer architecture.
 See `DISK_LAYER_ARCHITECTURE.md` for full design details.
 
