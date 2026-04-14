@@ -226,7 +226,7 @@ cat /tmp/texelterm-debug.log | grep -E "(RENDER|LOGICALX)"
 ```
 
 ### Reference Tests
-The classic wrap + dirty-tracking regression suite (`TestAutoWrap_GridRendering`, `TestAutoWrap_ResizeReflow`, dirty-tracking variants) lives in `apps/texelterm/parser/vterm_memory_buffer_test.go`, currently `//go:build ignore` as a **migration candidate** for sparse-native VTerm tests. See the file header and `project_sparse_test_migration_todo` memory entry for the list of scenarios awaiting ports. Until then, the render-simulation pattern above remains the right shape for new visual-regression tests — VTerm still exposes `DirtyLines()` and `ClearDirty()`.
+Sparse-native dirty-tracking regression tests live alongside the parser sources — see `reverse_search_test.go` (real bash readline escape sequences, ICH/DCH + reverse video) and the `simulateRender` helper pattern it uses. `TestAutoWrap_GridRendering` / `TestAutoWrap_ResizeReflow` and other reflow-based pre-sparse tests were explicitly dropped during the sparse cutover; sparse does not reflow on resize, so those invariants no longer apply. VTerm still exposes `DirtyLines()` and `ClearDirty()` — the render-simulation pattern above remains the right shape for new visual-regression tests.
 
 ### Terminal Comparison Framework (`apps/texelterm/testutil/`)
 
