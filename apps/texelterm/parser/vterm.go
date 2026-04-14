@@ -1380,19 +1380,36 @@ func (v *VTerm) Resize(width, height int) {
 		// the sparse write window dimensions are consistent.
 		// Temporarily swap in the saved main cursor.
 		if v.IsMemoryBufferEnabled() {
-			v.cursorX, v.cursorY = v.savedMainCursorX, v.savedMainCursorY
+			if v.mainScreen != nil {
+				v.mainScreen.SetCursor(v.savedMainCursorY, v.savedMainCursorX)
+			}
 			v.mainScreenResize(width, height)
-			v.savedMainCursorX = v.cursorX
-			v.savedMainCursorY = v.cursorY
+			// Read back the sparse cursor's (possibly clamped) position.
+			if v.mainScreen != nil {
+				v.savedMainCursorY = v.mainScreen.CursorRow()
+				_, v.savedMainCursorX = v.mainScreen.Cursor()
+			}
 		}
 
 		// Restore alt-screen cursor, clamped to new alt buffer size
 		v.cursorX, v.cursorY = altCursorX, altCursorY
 		v.SetCursorPos(v.cursorY, v.cursorX)
 	} else {
-		// Use sparse main-screen resize
+		// Sync sparse cursor BEFORE resize so WriteWindow.Resize clamps
+		// the correct cursorGlobalIdx.
+		if v.mainScreen != nil {
+			v.mainScreen.SetCursor(v.cursorY, v.cursorX)
+		}
 		v.mainScreenResize(width, height)
-		v.SetCursorPos(v.cursorY, v.cursorX) // Re-clamp cursor
+		// Read the sparse cursor's (possibly clamped) position back into
+		// VTerm so the two stay in sync.
+		if v.mainScreen != nil {
+			newRow := v.mainScreen.CursorRow()
+			_, newCol := v.mainScreen.Cursor()
+			v.SetCursorPos(newRow, newCol)
+		} else {
+			v.SetCursorPos(v.cursorY, v.cursorX)
+		}
 	}
 
 	v.MarkAllDirty()
@@ -1424,24 +1441,23 @@ func (v *VTerm) PhysicalCursor() (physX, physY int) {
 		return physX, physY
 	}
 
-	// In memory buffer mode with sparse mainScreen (and no pending inserts),
-	// the grid is one globalIdx per row (no wrapping). Cursor position is
-	// simply cursorY for the row and cursorX for the column, clamped to width.
-	if v.IsMemoryBufferEnabled() && v.mainScreen != nil && v.commitInsertOffset == 0 {
-		if v.cursorX < v.width {
-			return v.cursorX, v.cursorY
+	// Sparse main screen: the cursor's globalIdx must be mapped to the
+	// view's coordinate system, since the view may be offset from the
+	// write window after a resize (viewTop ≠ writeTop).
+	if v.mainScreen != nil {
+		gi, _ := v.mainScreen.Cursor()
+		viewTop, _ := v.mainScreen.VisibleRange()
+		physY = int(gi - viewTop)
+		if physY < 0 {
+			physY = 0
+		} else if physY >= v.height {
+			physY = v.height - 1
 		}
-		// cursorX past width: clamp to last column (sparse grid truncates)
-		return v.width - 1, v.cursorY
-	}
-
-	// In sparse main screen mode, use simple mapping.
-	// The sparse model has no wrap chains, so cursorX/Y map directly.
-	if v.IsMemoryBufferEnabled() {
-		// cursorX should always be in [0, width), but clamp just in case.
-		if v.cursorX < v.width {
-			return v.cursorX, v.cursorY
+		physX = v.cursorX
+		if physX >= v.width {
+			physX = v.width - 1
 		}
+		return physX, physY
 	}
 
 	// Simple wrapping for non-memory-buffer mode or fallback

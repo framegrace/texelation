@@ -39,17 +39,20 @@ func (t *Terminal) IsFollowing() bool { return t.view.IsFollowing() }
 // has been written yet.
 func (t *Terminal) ContentEnd() int64 { return t.store.Max() }
 
-// WriteCell writes one cell and notifies the ViewWindow of any writeBottom
-// change so auto-follow stays coherent.
+// WriteCell writes one cell at the cursor position. The view is NOT
+// notified — WriteCell never creates new rows, so viewBottom is unaffected.
 func (t *Terminal) WriteCell(cell parser.Cell) {
 	t.write.WriteCell(cell)
-	t.view.OnWriteBottomChanged(t.write.WriteBottom())
 }
 
-// Newline advances the cursor (scrolling at bottom) and notifies the view.
+// Newline advances the cursor (scrolling at bottom) and notifies the view
+// with the cursor's new position — the actual content edge. We pass the
+// cursor globalIdx rather than writeBottom because writeBottom is a derived
+// value (writeTop + height - 1) that changes on resize without new content.
 func (t *Terminal) Newline() {
 	t.write.Newline()
-	t.view.OnWriteBottomChanged(t.write.WriteBottom())
+	gi, _ := t.write.Cursor()
+	t.view.OnWriteBottomChanged(gi)
 }
 
 // CarriageReturn resets cursor column to 0.
@@ -73,9 +76,8 @@ func (t *Terminal) WriteBottom() int64 { return t.write.WriteBottom() }
 // VisibleRange returns the (top, bottom) globalIdx pair of the current view.
 func (t *Terminal) VisibleRange() (top, bottom int64) { return t.view.VisibleRange() }
 
-// Resize resizes both the write and view windows. WriteWindow applies
-// Rule 5 first; ViewWindow then applies Rule 6 observing the (possibly
-// moved) writeBottom.
+// Resize resizes both the write and view windows. ViewWindow observes the
+// (possibly extended) writeBottom to update autoFollow.
 func (t *Terminal) Resize(newWidth, newHeight int) {
 	t.write.Resize(newWidth, newHeight)
 	t.view.Resize(newWidth, newHeight, t.write.WriteBottom())

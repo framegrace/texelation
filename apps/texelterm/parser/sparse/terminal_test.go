@@ -61,12 +61,16 @@ func TestTerminal_ResizeShrinkShellCase(t *testing.T) {
 	}
 	// cursor is now at row 40 of a scrolled window.
 	tm.SetCursor(39, 0)
+
+	_, vbottomBefore := tm.VisibleRange()
 	tm.Resize(80, 20)
 
-	_, vbottom := tm.VisibleRange()
-	_, writeBottom := tm.WriteTop(), tm.WriteBottom()
-	if vbottom != writeBottom {
-		t.Errorf("following view: viewBottom = %d, writeBottom = %d", vbottom, writeBottom)
+	// viewBottom stays anchored — shrink hides rows from the top, not the
+	// bottom. writeBottom changes (because height changed) but that's the
+	// write window, not the view.
+	_, vbottomAfter := tm.VisibleRange()
+	if vbottomAfter != vbottomBefore {
+		t.Errorf("viewBottom moved: %d -> %d (should be anchored)", vbottomBefore, vbottomAfter)
 	}
 	if got := tm.Height(); got != 20 {
 		t.Errorf("Height = %d, want 20", got)

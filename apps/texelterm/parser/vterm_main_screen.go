@@ -147,6 +147,11 @@ func (v *VTerm) mainScreenLineFeed() {
 	if v.mainScreen == nil {
 		return
 	}
+	// Sync sparse cursor to VTerm cursor before Newline so that WriteWindow
+	// uses the correct position to decide whether to advance writeTop.
+	// SetCursorPos does NOT sync the sparse cursor, so it can be stale after
+	// any escape-code-driven cursor movement.
+	v.mainScreen.SetCursor(v.cursorY, v.cursorX)
 	oldWriteTop := v.mainScreen.WriteTop()
 	v.mainScreen.Newline()
 	newWriteTop := v.mainScreen.WriteTop()
@@ -180,6 +185,7 @@ func (v *VTerm) mainScreenLineFeedForWrap() {
 	if v.mainScreen == nil {
 		return
 	}
+	v.mainScreen.SetCursor(v.cursorY, v.cursorX)
 	v.mainScreen.Newline()
 }
 
@@ -209,7 +215,10 @@ func (v *VTerm) mainScreenScrollRegion(n, top, bottom int) {
 }
 
 // mainScreenLineFeedInternal is a full-screen Newline that may fire OnLineCommit.
+// Used for CSI S (Scroll Up) where cursor may not be at the bottom — we force
+// the cursor to the write-window bottom so Newline() always advances writeTop.
 func (v *VTerm) mainScreenLineFeedInternal() {
+	v.mainScreen.SetCursor(v.height-1, v.cursorX)
 	oldWriteTop := v.mainScreen.WriteTop()
 	v.mainScreen.Newline()
 	newWriteTop := v.mainScreen.WriteTop()

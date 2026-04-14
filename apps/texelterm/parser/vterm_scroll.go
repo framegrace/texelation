@@ -58,14 +58,12 @@ func (v *VTerm) lineFeedInternal(commitLogical bool) {
 				}
 			}
 		} else if v.cursorY < v.height-1 {
-			// Not at bottom: notify sparse about LF, move cursor down.
-			if commitLogical && isFullScreenMargins {
-				v.mainScreenLineFeed()
-			}
+			// Not at bottom — just move cursor down. No line enters scrollback,
+			// so no Newline() call needed. The sparse cursor sync below handles the rest.
 			v.SetCursorPos(v.cursorY+1, v.cursorX)
-		} else {
-			v.ScrollToLiveEdge()
 		}
+		// else: cursor at height-1 but outside scroll margins — no-op per spec
+		// Rule 2 (TUI cannot affect viewBottom/autoFollow).
 
 		// Sync sparse cursor after movement.
 		if v.mainScreen != nil {
