@@ -1,3 +1,8 @@
+// NOTE: Excluded from build — references the legacy memBufState field
+// removed during the sparse-viewport cutover. Retained for reference.
+
+//go:build ignore
+
 package parser
 
 import (

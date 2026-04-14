@@ -25,7 +25,28 @@ type MainScreen interface {
 	EraseFromStartOfLine(col int)
 	SetLine(globalIdx int64, cells []Cell)
 	ClearRange(lo, hi int64)
+
+	// IL/DL and partial scroll-region operations. cursorRow, marginTop, and
+	// marginBottom are all relative to WriteTop (i.e., viewport-row indices).
+	InsertLines(n, cursorRow, marginTop, marginBottom int)
+	DeleteLines(n, cursorRow, marginTop, marginBottom int)
+	// NewlineInRegion scrolls [marginTop, marginBottom] up by 1 without
+	// advancing WriteTop. Use Newline() for full-screen line feeds.
+	NewlineInRegion(marginTop, marginBottom int)
 	Grid() [][]Cell
+
+	// Scroll methods keep the sparse ViewWindow in sync with user
+	// navigation. Without these, Grid() would always show the live edge.
+	ScrollUp(n int)
+	ScrollDown(n int)
+	ScrollToBottom()
+	OnInput()
+	IsFollowing() bool
+
+	// SyncWriteState updates the write window (writeTop + cursor) to match the
+	// given MemoryBuffer-side state after a resize. Unlike RestoreState, it does
+	// NOT snap the view window to the bottom — user's scroll position is preserved.
+	SyncWriteState(writeTop, cursorGlobalIdx int64, cursorCol int)
 
 	// LoadFromPageStore populates the main screen with all lines currently
 	// stored in the given PageStore. Used on session restore to replay
@@ -35,6 +56,12 @@ type MainScreen interface {
 	// RestoreState forcibly sets the write window's cursor and anchor,
 	// used during session restore to match the saved WAL metadata.
 	RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int)
+
+	// ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.
+	ReadLine(globalIdx int64) []Cell
+
+	// VisibleRange returns the (top, bottom) globalIdx pair of the current view.
+	VisibleRange() (top, bottom int64)
 }
 
 // MainScreenFactory creates a MainScreen for the given dimensions.

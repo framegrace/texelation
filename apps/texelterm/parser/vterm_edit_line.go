@@ -28,7 +28,6 @@ func (v *VTerm) InsertLines(n int) {
 		v.insertFullLines(n)
 	}
 
-	v.syncEditLineRegionToSparse()
 	v.MarkAllDirty()
 }
 
@@ -36,10 +35,9 @@ func (v *VTerm) InsertLines(n int) {
 func (v *VTerm) insertFullLines(n int) {
 	// IL works within the scroll region for both alt and main screens
 	// Shift lines down, starting from bottom to avoid overwriting source data
-	topHistory := v.getTopHistoryLine()
 
-	for i := 0; i < n; i++ {
-		if v.inAltScreen {
+	if v.inAltScreen {
+		for i := 0; i < n; i++ {
 			// Alt screen: shift rows down and clear at cursor
 			for y := v.marginBottom - 1; y >= v.cursorY; y-- {
 				if y+1 <= v.marginBottom {
@@ -49,24 +47,11 @@ func (v *VTerm) insertFullLines(n int) {
 			// Create blank line at cursor position
 			v.altBuffer[v.cursorY] = make([]Cell, v.width)
 			v.altBufferClearRow(v.cursorY, v.defaultFG, v.defaultBG)
-		} else {
-			// Main screen: ensure history has enough lines first
-			endLogicalY := topHistory + v.marginBottom
-			for v.getHistoryLen() <= endLogicalY {
-				v.appendHistoryLine(make([]Cell, 0, v.width))
-			}
-
-			// Shift lines down within the scroll region
-			for y := v.marginBottom - 1; y >= v.cursorY; y-- {
-				if y+1 <= v.marginBottom {
-					srcLine := v.getHistoryLine(topHistory + y)
-					dstLine := make([]Cell, len(srcLine))
-					copy(dstLine, srcLine)
-					v.setHistoryLine(topHistory+y+1, dstLine)
-				}
-			}
-			// Clear line at cursor position
-			v.eraseHistoryLine(topHistory + v.cursorY)
+		}
+	} else {
+		// Main screen: delegate to sparse InsertLines.
+		if v.mainScreen != nil {
+			v.mainScreen.InsertLines(n, v.cursorY, v.marginTop, v.marginBottom)
 		}
 	}
 }
@@ -154,17 +139,15 @@ func (v *VTerm) DeleteLines(n int) {
 		v.deleteFullLines(n)
 	}
 
-	v.syncEditLineRegionToSparse()
 	v.MarkAllDirty()
 }
 
 // deleteFullLines deletes entire lines (traditional DL behavior)
 func (v *VTerm) deleteFullLines(n int) {
 	// DL works within the scroll region for both alt and main screens
-	topHistory := v.getTopHistoryLine()
 
-	for i := 0; i < n; i++ {
-		if v.inAltScreen {
+	if v.inAltScreen {
+		for i := 0; i < n; i++ {
 			// Alt screen: shift lines up
 			for y := v.cursorY; y < v.marginBottom; y++ {
 				v.altBuffer[y] = v.altBuffer[y+1]
@@ -172,22 +155,11 @@ func (v *VTerm) deleteFullLines(n int) {
 			// Create blank line at bottom of region
 			v.altBuffer[v.marginBottom] = make([]Cell, v.width)
 			v.altBufferClearRow(v.marginBottom, v.defaultFG, v.defaultBG)
-		} else {
-			// Main screen: ensure history has enough lines first
-			endLogicalY := topHistory + v.marginBottom
-			for v.getHistoryLen() <= endLogicalY {
-				v.appendHistoryLine(make([]Cell, 0, v.width))
-			}
-
-			// Shift lines up within the scroll region
-			for y := v.cursorY; y < v.marginBottom; y++ {
-				srcLine := v.getHistoryLine(topHistory + y + 1)
-				dstLine := make([]Cell, len(srcLine))
-				copy(dstLine, srcLine)
-				v.setHistoryLine(topHistory+y, dstLine)
-			}
-			// Clear bottom line of region
-			v.eraseHistoryLine(topHistory + v.marginBottom)
+		}
+	} else {
+		// Main screen: delegate to sparse DeleteLines.
+		if v.mainScreen != nil {
+			v.mainScreen.DeleteLines(n, v.cursorY, v.marginTop, v.marginBottom)
 		}
 	}
 }
@@ -258,22 +230,3 @@ func (v *VTerm) deleteLinesWithinMargins(n int) {
 	}
 }
 
-// syncEditLineRegionToSparse syncs the [marginTop, marginBottom] row range
-// from MemoryBuffer to the sparse mainScreen after IL/DL operations.
-func (v *VTerm) syncEditLineRegionToSparse() {
-	if v.mainScreen == nil || v.inAltScreen || v.memBufState == nil || v.memBufState.memBuf == nil {
-		return
-	}
-	mb := v.memBufState.memBuf
-	for y := v.marginTop; y <= v.marginBottom; y++ {
-		gi := v.memBufState.liveEdgeBase + int64(y)
-		line := mb.GetLine(gi)
-		if line != nil {
-			cells := make([]Cell, len(line.Cells))
-			copy(cells, line.Cells)
-			v.mainScreen.SetLine(gi, cells)
-		} else {
-			v.mainScreen.SetLine(gi, nil)
-		}
-	}
-}

@@ -132,7 +132,7 @@ func TestWriteWindow_NewlinePreservesContent(t *testing.T) {
 	}
 }
 
-func TestWriteWindow_ResizeGrowRetreatsWriteTop(t *testing.T) {
+func TestWriteWindow_ResizeGrowAnchorsBottom(t *testing.T) {
 	store := NewStore(10)
 	ww := NewWriteWindow(store, 10, 5)
 	// Scroll down 10 times so writeTop is at 10.
@@ -143,65 +143,73 @@ func TestWriteWindow_ResizeGrowRetreatsWriteTop(t *testing.T) {
 	if got := ww.WriteTop(); got != 10 {
 		t.Fatalf("setup: WriteTop = %d, want 10", got)
 	}
+	// writeBottom = 10 + 5 - 1 = 14.
 
-	// Grow from 5 to 8. writeTop should retreat by 3 to keep writeBottom pinned.
+	// Grow from 5 to 8. writeBottom stays at 14; writeTop retreats to reveal history.
 	ww.Resize(10, 8)
-	if got := ww.WriteTop(); got != 7 {
-		t.Errorf("after grow 5->8, WriteTop = %d, want 7", got)
-	}
 	if got := ww.WriteBottom(); got != 14 {
-		t.Errorf("after grow, WriteBottom = %d, want 14 (unchanged)", got)
+		t.Errorf("after grow, WriteBottom = %d, want 14 (anchored)", got)
+	}
+	if got := ww.WriteTop(); got != 7 {
+		t.Errorf("after grow 5->8, WriteTop = %d, want 7 (retreated)", got)
 	}
 	if got := ww.Height(); got != 8 {
 		t.Errorf("Height = %d, want 8", got)
 	}
 }
 
-func TestWriteWindow_ResizeGrowClampsAtZero(t *testing.T) {
+func TestWriteWindow_ResizeGrowFreshTerminal(t *testing.T) {
 	store := NewStore(10)
 	ww := NewWriteWindow(store, 10, 5)
-	// writeTop = 0. Grow to 10 — shallow scrollback case.
+	// writeTop = 0, writeBottom = 4. Grow to 10.
+	// Bottom-anchor: writeTop = 4 - 10 + 1 = -5, clamped to 0.
+	// No history to reveal, so bottom extends to 9.
 	ww.Resize(10, 10)
 	if got := ww.WriteTop(); got != 0 {
 		t.Errorf("after grow from 0, WriteTop = %d, want 0 (clamped)", got)
 	}
 	if got := ww.WriteBottom(); got != 9 {
-		t.Errorf("WriteBottom = %d, want 9 (extended past oldWriteBottom=4)", got)
+		t.Errorf("WriteBottom = %d, want 9", got)
 	}
 }
 
 func TestWriteWindow_ResizeShrinkShellCase(t *testing.T) {
-	// Shell case: cursor at bottom row. Shrink should advance writeTop by
-	// exactly the shrink delta, keeping the cursor pinned at the new bottom.
+	// Shell case: cursor at bottom row (39). Shrink 40→20.
+	// writeBottom anchored at 39. writeTop advances from 0 to 20.
+	// Cursor at gi=39 stays (within new window [20,39]).
+	// Rows survive in store — TUI/shell redraws after SIGWINCH.
 	store := NewStore(80)
 	ww := NewWriteWindow(store, 80, 40)
-	// Fill some content and park cursor at row 39 (bottom).
 	for i := 0; i < 40; i++ {
-		store.SetLine(int64(i), []parser.Cell{{Rune: 'L'}}) // row marker
+		store.SetLine(int64(i), []parser.Cell{{Rune: 'L'}})
 	}
 	ww.SetCursor(39, 5)
 
 	ww.Resize(80, 20)
 
 	if got := ww.WriteTop(); got != 20 {
-		t.Errorf("shell shrink 40->20: WriteTop = %d, want 20", got)
+		t.Errorf("shell shrink 40->20: WriteTop = %d, want 20 (bottom-anchored)", got)
+	}
+	if got := ww.WriteBottom(); got != 39 {
+		t.Errorf("WriteBottom = %d, want 39 (anchored)", got)
 	}
 	gi, col := ww.Cursor()
 	if gi != 39 || col != 5 {
-		t.Errorf("cursor moved: (%d,%d), want (39,5)", gi, col)
+		t.Errorf("cursor: (%d,%d), want (39,5) — within new window", gi, col)
 	}
-	// Old top rows [0, 20) must still be in the store.
+	// All rows survive in store.
 	if got := store.Get(0, 0).Rune; got != 'L' {
 		t.Errorf("row 0 should survive in store: %q", got)
 	}
-	if got := store.Get(19, 0).Rune; got != 'L' {
-		t.Errorf("row 19 should survive in store: %q", got)
+	if got := store.Get(39, 0).Rune; got != 'L' {
+		t.Errorf("row 39 should survive in store: %q", got)
 	}
 }
 
 func TestWriteWindow_ResizeShrinkCursorNearTop(t *testing.T) {
-	// Full-screen TUI case: cursor at row 2. Shrink from 40 to 20 — cursor
-	// still fits. writeTop unchanged; bottom rows cleared.
+	// Cursor at row 2 (gi=2). Shrink from 40 to 20.
+	// Cursor fits (2 < 20), so writeTop stays at 0. Shrink eats empty
+	// space from bottom: writeBottom drops from 39 to 19.
 	store := NewStore(80)
 	ww := NewWriteWindow(store, 80, 40)
 	for i := 0; i < 40; i++ {
@@ -212,25 +220,31 @@ func TestWriteWindow_ResizeShrinkCursorNearTop(t *testing.T) {
 	ww.Resize(80, 20)
 
 	if got := ww.WriteTop(); got != 0 {
-		t.Errorf("top-cursor shrink: WriteTop = %d, want 0 (no advance)", got)
+		t.Errorf("top-cursor shrink: WriteTop = %d, want 0 (cursor fits, no advance)", got)
 	}
-	// Cells [20, 39] should be cleared from the store.
-	if got := store.GetLine(20); got != nil && len(got) > 0 && got[0].Rune != 0 {
-		t.Errorf("row 20 should be cleared, got %v", got)
+	if got := ww.WriteBottom(); got != 19 {
+		t.Errorf("WriteBottom = %d, want 19 (shrunk from bottom)", got)
 	}
-	if got := store.GetLine(39); got != nil && len(got) > 0 && got[0].Rune != 0 {
-		t.Errorf("row 39 should be cleared, got %v", got)
+	gi, _ := ww.Cursor()
+	if gi != 2 {
+		t.Errorf("cursor globalIdx: %d, want 2 (unchanged)", gi)
 	}
-	// Row 0 still there.
+	// All rows survive in store.
+	if got := store.Get(20, 0).Rune; got != 'L' {
+		t.Errorf("row 20 should survive: %q", got)
+	}
+	if got := store.Get(39, 0).Rune; got != 'L' {
+		t.Errorf("row 39 should survive: %q", got)
+	}
 	if got := store.Get(0, 0).Rune; got != 'L' {
-		t.Errorf("row 0 unchanged: %q", got)
+		t.Errorf("row 0 should survive: %q", got)
 	}
 }
 
-func TestWriteWindow_ResizeShrinkPartialAdvance(t *testing.T) {
-	// Claude case: cursor at row 30 of h=40. Shrink to h=20 — cursor would
-	// otherwise be at row 30 of a 20-row window, outside. Advance should
-	// be exactly 11 (cursor.globalIdx=30 must fit in [newTop, newTop+19]).
+func TestWriteWindow_ResizeShrinkCursorClamped(t *testing.T) {
+	// Cursor at row 30 (gi=30) of h=40. Shrink to h=20.
+	// Cursor doesn't fit (30 >= 20). writeTop advances to keep cursor
+	// at the bottom: writeTop = 30 - 20 + 1 = 11. writeBottom = 30.
 	store := NewStore(80)
 	ww := NewWriteWindow(store, 80, 40)
 	ww.SetCursor(30, 0)
@@ -238,15 +252,17 @@ func TestWriteWindow_ResizeShrinkPartialAdvance(t *testing.T) {
 	ww.Resize(80, 20)
 
 	if got := ww.WriteTop(); got != 11 {
-		t.Errorf("partial-advance shrink: WriteTop = %d, want 11", got)
+		t.Errorf("shrink: WriteTop = %d, want 11 (cursor-anchored)", got)
+	}
+	if got := ww.WriteBottom(); got != 30 {
+		t.Errorf("WriteBottom = %d, want 30", got)
 	}
 	gi, _ := ww.Cursor()
 	if gi != 30 {
-		t.Errorf("cursor globalIdx moved: %d, want 30 (cursor is pinned)", gi)
+		t.Errorf("cursor globalIdx: %d, want 30 (at window bottom)", gi)
 	}
-	// Cursor row within new window = 30 - 11 = 19 (bottom of new window).
 	if got := ww.CursorRow(); got != 19 {
-		t.Errorf("CursorRow after partial advance = %d, want 19", got)
+		t.Errorf("CursorRow = %d, want 19 (bottom of new window)", got)
 	}
 }
 

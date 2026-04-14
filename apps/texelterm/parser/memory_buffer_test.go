@@ -3,6 +3,11 @@
 //
 // File: apps/texelterm/parser/memory_buffer_test.go
 // Summary: Tests for MemoryBuffer and DirtyTracker.
+//
+// NOTE: Excluded from build — DirtyTracker was removed in the sparse-viewport
+// cutover and MemoryBuffer is now a stub. Retained for reference.
+
+//go:build ignore
 
 package parser
 

@@ -89,10 +89,16 @@ func TestViewWindow_OnInputReattaches(t *testing.T) {
 func TestViewWindow_ResizeWhileFollowing(t *testing.T) {
 	vw := NewViewWindow(80, 24)
 	vw.OnWriteBottomChanged(100)
-	vw.Resize(80, 30, 115) // new size, new writeBottom (grew by 15)
+	// Grow height; following view snaps viewBottom to writeBottom (100).
+	// writeBottom is unchanged by expand (bottom-anchored), so viewBottom stays.
+	vw.Resize(80, 30, 100)
 	_, bottom := vw.VisibleRange()
-	if bottom != 115 {
-		t.Errorf("follow-resize: viewBottom = %d, want 115", bottom)
+	if bottom != 100 {
+		t.Errorf("follow-resize: viewBottom = %d, want 100 (snapped to writeBottom)", bottom)
+	}
+	top, _ := vw.VisibleRange()
+	if top != 71 {
+		t.Errorf("viewTop = %d, want 71 (reveals history above)", top)
 	}
 	if got := vw.Height(); got != 30 {
 		t.Errorf("Height = %d, want 30", got)

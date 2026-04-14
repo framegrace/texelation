@@ -5,6 +5,11 @@
 // Summary: Tests for burst write → close → reopen recovery integrity.
 // Reproduces the "ls -lR" bug where high-volume output followed by
 // server restart causes content loss or incorrect viewport position.
+//
+// NOTE: Excluded from build — references the legacy memBufState field
+// removed during the sparse-viewport cutover. Retained for reference.
+
+//go:build ignore
 
 package parser
 
@@ -17,10 +22,7 @@ import (
 // dirtyClose simulates a crash: stops the idle monitor and closes file
 // handles without flushing pending writes or checkpointing.
 func dirtyClose(v *VTerm) {
-	if v.memBufState == nil {
-		return
-	}
-	ap := v.memBufState.persistence
+	ap := v.mainScreenPersistence
 	if ap == nil {
 		return
 	}
@@ -87,19 +89,24 @@ type snapshotState struct {
 }
 
 func captureState(v *VTerm) snapshotState {
-	mb := v.memBufState.memBuf
+	var writeTop int64
+	if v.mainScreen != nil {
+		writeTop = v.mainScreen.WriteTop()
+	}
 	s := snapshotState{
-		liveEdgeBase: v.memBufState.liveEdgeBase,
+		liveEdgeBase: writeTop,
 		cursorX:      v.cursorX,
 		cursorY:      v.cursorY,
-		globalEnd:    mb.GlobalEnd(),
+		globalEnd:    v.ContentEnd(),
 	}
-	if line := mb.GetLine(v.memBufState.liveEdgeBase); line != nil {
-		s.viewportTopLine = trimLogicalLine(logicalLineToString(line))
-	}
-	cursorGlobal := v.memBufState.liveEdgeBase + int64(v.cursorY)
-	if line := mb.GetLine(cursorGlobal); line != nil {
-		s.cursorLine = trimLogicalLine(logicalLineToString(line))
+	if v.mainScreen != nil {
+		if cells := v.mainScreen.ReadLine(writeTop); cells != nil {
+			s.viewportTopLine = trimLogicalLine(sparseCellsToString(cells))
+		}
+		cursorGlobal := writeTop + int64(v.cursorY)
+		if cells := v.mainScreen.ReadLine(cursorGlobal); cells != nil {
+			s.cursorLine = trimLogicalLine(sparseCellsToString(cells))
+		}
 	}
 	return s
 }

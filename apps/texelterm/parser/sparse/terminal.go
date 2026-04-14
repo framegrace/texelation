@@ -39,17 +39,20 @@ func (t *Terminal) IsFollowing() bool { return t.view.IsFollowing() }
 // has been written yet.
 func (t *Terminal) ContentEnd() int64 { return t.store.Max() }
 
-// WriteCell writes one cell and notifies the ViewWindow of any writeBottom
-// change so auto-follow stays coherent.
+// WriteCell writes one cell at the cursor position. The view is NOT
+// notified — WriteCell never creates new rows, so viewBottom is unaffected.
 func (t *Terminal) WriteCell(cell parser.Cell) {
 	t.write.WriteCell(cell)
-	t.view.OnWriteBottomChanged(t.write.WriteBottom())
 }
 
-// Newline advances the cursor (scrolling at bottom) and notifies the view.
+// Newline advances the cursor (scrolling at bottom) and notifies the view
+// with the cursor's new position — the actual content edge. We pass the
+// cursor globalIdx rather than writeBottom because writeBottom is a derived
+// value (writeTop + height - 1) that changes on resize without new content.
 func (t *Terminal) Newline() {
 	t.write.Newline()
-	t.view.OnWriteBottomChanged(t.write.WriteBottom())
+	gi, _ := t.write.Cursor()
+	t.view.OnWriteBottomChanged(gi)
 }
 
 // CarriageReturn resets cursor column to 0.
@@ -73,9 +76,8 @@ func (t *Terminal) WriteBottom() int64 { return t.write.WriteBottom() }
 // VisibleRange returns the (top, bottom) globalIdx pair of the current view.
 func (t *Terminal) VisibleRange() (top, bottom int64) { return t.view.VisibleRange() }
 
-// Resize resizes both the write and view windows. WriteWindow applies
-// Rule 5 first; ViewWindow then applies Rule 6 observing the (possibly
-// moved) writeBottom.
+// Resize resizes both the write and view windows. ViewWindow observes the
+// (possibly extended) writeBottom to update autoFollow.
 func (t *Terminal) Resize(newWidth, newHeight int) {
 	t.write.Resize(newWidth, newHeight)
 	t.view.Resize(newWidth, newHeight, t.write.WriteBottom())
@@ -115,6 +117,27 @@ func (t *Terminal) EraseFromStartOfLine(col int) {
 	t.write.EraseFromStartOfLine(col)
 }
 
+// InsertLines inserts n blank lines at cursorRow within [marginTop, marginBottom]
+// (all relative to the current writeTop). Lines shift down; bottom n are cleared.
+func (t *Terminal) InsertLines(n, cursorRow, marginTop, marginBottom int) {
+	t.write.InsertLines(n, cursorRow, marginTop, marginBottom)
+}
+
+// DeleteLines deletes n lines at cursorRow within [marginTop, marginBottom]
+// (all relative to the current writeTop). Lines shift up; bottom n are cleared.
+func (t *Terminal) DeleteLines(n, cursorRow, marginTop, marginBottom int) {
+	t.write.DeleteLines(n, cursorRow, marginTop, marginBottom)
+}
+
+// NewlineInRegion handles a LF within a partial DECSTBM scroll region. The
+// region [marginTop, marginBottom] (relative to writeTop) scrolls up by 1.
+// writeTop does NOT advance — only content within the region shifts.
+func (t *Terminal) NewlineInRegion(marginTop, marginBottom int) {
+	t.write.NewlineInRegion(marginTop, marginBottom)
+	// The writeBottom does not change when only content shifts, so no
+	// ViewWindow notification is needed.
+}
+
 // SetLine overwrites the cells at the given globalIdx in the store.
 // Used to sync from MemoryBuffer after complex operations (scroll regions).
 func (t *Terminal) SetLine(globalIdx int64, cells []parser.Cell) {
@@ -139,6 +162,16 @@ func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
 func (t *Terminal) RestoreWriteState(writeTop, cursorGlobalIdx int64, cursorCol int) {
 	t.write.RestoreState(writeTop, cursorGlobalIdx, cursorCol)
 	t.view.ScrollToBottom(t.write.WriteBottom())
+}
+
+// SyncWriteState updates the write window (writeTop + cursor) to match an
+// externally-computed anchor. Unlike RestoreWriteState, it preserves the
+// ViewWindow's current scroll position: if the user is scrolled back,
+// viewBottom does not change; if autoFollow is active, viewBottom snaps to
+// the new writeBottom.
+func (t *Terminal) SyncWriteState(writeTop, cursorGlobalIdx int64, cursorCol int) {
+	t.write.RestoreState(writeTop, cursorGlobalIdx, cursorCol)
+	t.view.OnWriteBottomChanged(t.write.WriteBottom())
 }
 
 // RestoreState implements MainScreen.RestoreState by delegating to

@@ -62,11 +62,13 @@ func (v *ViewWindow) VisibleRange() (top, bottom int64) {
 
 // OnWriteBottomChanged is called when the bottom of the write window moves.
 // newWriteBottom is the new WriteWindow.WriteBottom() value. If autoFollow
-// is true, viewBottom is updated to match.
+// is true, viewBottom advances to match — but never retreats. A resize that
+// shrinks writeBottom must not pull viewBottom back; the view stays anchored
+// until new content pushes past the old position.
 func (v *ViewWindow) OnWriteBottomChanged(newWriteBottom int64) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.autoFollow {
+	if v.autoFollow && newWriteBottom > v.viewBottom {
 		v.viewBottom = newWriteBottom
 	}
 }
@@ -74,12 +76,12 @@ func (v *ViewWindow) OnWriteBottomChanged(newWriteBottom int64) {
 // OnWriteTopChanged is called when the WriteWindow retreats its top on grow
 // (i.e. the write window expands upward). Despite the name referring to the
 // top, callers must pass newWriteBottom — the new WriteWindow.WriteBottom()
-// value — because that is what viewBottom tracks. Both events update the
-// same anchor. If autoFollow is true, viewBottom is updated to match.
+// value — because that is what viewBottom tracks. Only advances viewBottom
+// forward, never retreats it.
 func (v *ViewWindow) OnWriteTopChanged(newWriteBottom int64) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.autoFollow {
+	if v.autoFollow && newWriteBottom > v.viewBottom {
 		v.viewBottom = newWriteBottom
 	}
 }
@@ -131,13 +133,11 @@ func (v *ViewWindow) OnInput(writeBottom int64) {
 	v.ScrollToBottom(writeBottom)
 }
 
-// Resize applies Rule 6 from the design spec.
-//
-// If autoFollow is true, viewBottom is snapped to newWriteBottom so the view
-// follows the (possibly moved) write window.
-//
-// If autoFollow is false, viewBottom is unchanged. viewTop is simply derived
-// from the new height, which may reveal or hide rows above viewBottom.
+// Resize changes the viewport dimensions. When autoFollow is active,
+// viewBottom snaps to the write window's bottom so that the view always
+// shows the same range the shell writes into. When scrolled back
+// (autoFollow off), viewBottom stays fixed — the user's scroll position
+// is preserved.
 func (v *ViewWindow) Resize(newWidth, newHeight int, newWriteBottom int64) {
 	if newWidth <= 0 || newHeight <= 0 {
 		return
@@ -149,7 +149,7 @@ func (v *ViewWindow) Resize(newWidth, newHeight int, newWriteBottom int64) {
 	if v.autoFollow {
 		v.viewBottom = newWriteBottom
 	}
-	// Enforce viewBottom >= height - 1.
+	// If expansion would show negative globalIdxs, raise viewBottom.
 	minBottom := int64(v.height - 1)
 	if v.viewBottom < minBottom {
 		v.viewBottom = minBottom

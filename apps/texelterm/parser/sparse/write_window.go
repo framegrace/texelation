@@ -28,15 +28,23 @@ type WriteWindow struct {
 	writeTop        int64
 	cursorGlobalIdx int64
 	cursorCol       int
+
+	// writeBottomHWM is the high-water mark of writeBottom. It tracks the
+	// furthest writeBottom has ever reached through normal operation (Newline
+	// scrolling) or expansion. Shrinking may temporarily drop writeBottom
+	// below HWM (cursor-fits absorbs empty rows), but expansion always
+	// anchors against HWM so that writeTop never retreats into scrollback.
+	writeBottomHWM int64
 }
 
 // NewWriteWindow creates a WriteWindow anchored at globalIdx 0 with the given
 // dimensions. The cursor starts at (writeTop, 0).
 func NewWriteWindow(store *Store, width, height int) *WriteWindow {
 	return &WriteWindow{
-		store:  store,
-		width:  width,
-		height: height,
+		store:          store,
+		width:          width,
+		height:         height,
+		writeBottomHWM: int64(height - 1),
 	}
 }
 
@@ -152,21 +160,26 @@ func (w *WriteWindow) Newline() {
 		w.cursorGlobalIdx++
 	}
 	w.cursorCol = 0
+	// Update HWM after potential scroll.
+	if wb := w.writeTop + int64(w.height) - 1; wb > w.writeBottomHWM {
+		w.writeBottomHWM = wb
+	}
 }
 
-// Resize applies Rule 5 from the design spec.
+// Resize changes the write window dimensions.
 //
-// Grow: writeTop retreats by the grow delta, clamped at 0. No cells are
-// cleared. The new top rows of the window expose whatever is already stored
-// there (old scrollback, or blank if none).
+// Shrink: empty space below the cursor absorbs the shrink first (writeTop
+// stays, writeBottom drops). When the cursor doesn't fit, writeTop advances
+// just enough to keep it at the window's bottom row — this hides history
+// from the top, like moving the top border down.
 //
-// Shrink: cursor-minimum-advance — writeTop advances by the minimum amount
-// needed to keep the cursor inside the new write window. Cells below the
-// new writeBottom are cleared. Cells in [oldWriteTop, newWriteTop) stay in
-// the Store and become "above the window" (scrollback).
+// Expand: anchored against the high-water mark of writeBottom. This ensures
+// writeTop never retreats past the point the window originally occupied,
+// preventing a TUI's ESC[2J from destroying scrollback on expand. When
+// there is no history (writeTop would go negative), it clamps to 0.
 //
-// Pure width changes (newHeight == height) apply only to width without
-// touching writeTop.
+// The cursor is clamped into the new window; the TUI's SIGWINCH handler
+// will reposition it.
 func (w *WriteWindow) Resize(newWidth, newHeight int) {
 	if newWidth <= 0 || newHeight <= 0 {
 		return
@@ -174,15 +187,32 @@ func (w *WriteWindow) Resize(newWidth, newHeight int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if newHeight > w.height {
-		w.resizeGrowLocked(newHeight)
-	} else if newHeight < w.height {
-		w.resizeShrinkLocked(newHeight)
-	}
+	oldHeight := w.height
 	w.width = newWidth
 	w.height = newHeight
 
-	// Keep cursor in bounds.
+	if newHeight < oldHeight {
+		// Shrink: absorb empty space below cursor first.
+		if w.cursorGlobalIdx-w.writeTop >= int64(newHeight) {
+			// Cursor doesn't fit — advance writeTop to keep cursor visible.
+			w.writeTop = w.cursorGlobalIdx - int64(newHeight) + 1
+		}
+		// Otherwise writeTop stays — shrink eats empty space from bottom.
+	} else if newHeight > oldHeight {
+		// Expand: anchor against HWM so writeTop doesn't retreat into
+		// scrollback that a TUI erase would destroy.
+		w.writeTop = w.writeBottomHWM - int64(newHeight) + 1
+		if w.writeTop < 0 {
+			w.writeTop = 0
+		}
+	}
+
+	// Update HWM if the new writeBottom exceeds it.
+	if wb := w.writeTop + int64(w.height) - 1; wb > w.writeBottomHWM {
+		w.writeBottomHWM = wb
+	}
+
+	// Clamp cursor into the new window.
 	if w.cursorGlobalIdx < w.writeTop {
 		w.cursorGlobalIdx = w.writeTop
 	}
@@ -192,45 +222,6 @@ func (w *WriteWindow) Resize(newWidth, newHeight int) {
 	if w.cursorCol >= w.width {
 		w.cursorCol = w.width - 1
 	}
-}
-
-// resizeGrowLocked assumes w.mu is held.
-func (w *WriteWindow) resizeGrowLocked(newHeight int) {
-	delta := int64(newHeight - w.height)
-	newTop := w.writeTop - delta
-	if newTop < 0 {
-		newTop = 0
-	}
-	w.writeTop = newTop
-}
-
-// resizeShrinkLocked implements Rule 5 shrink: cursor-minimum-advance.
-// Preconditions: w.mu held, newHeight < w.height.
-func (w *WriteWindow) resizeShrinkLocked(newHeight int) {
-	oldWriteBottom := w.writeTop + int64(w.height) - 1
-	// Tentative newWriteBottom if writeTop didn't move.
-	tentativeBottom := w.writeTop + int64(newHeight) - 1
-
-	advance := int64(0)
-	if w.cursorGlobalIdx > tentativeBottom {
-		advance = w.cursorGlobalIdx - tentativeBottom
-	}
-	w.writeTop += advance
-	newWriteBottom := w.writeTop + int64(newHeight) - 1
-
-	// Cells [newWriteBottom+1, oldWriteBottom] are scratch space below the
-	// new window. Clear them.
-	if oldWriteBottom > newWriteBottom {
-		// ClearRange is called while w.mu is held (unlike WriteCell/EraseDisplay which
-		// release first). This is intentional: newWriteBottom is derived from the
-		// already-updated w.writeTop, so the mutation and the clear must be atomic
-		// with respect to w.mu. The call order (WriteWindow.mu → Store.mu) is safe
-		// per the design's acyclic lock acquisition rule.
-		w.store.ClearRange(newWriteBottom+1, oldWriteBottom)
-	}
-
-	// Cells in [oldWriteTop, writeTop) (only when advance > 0) stay in the
-	// store. They are now "above the window" — scrollback. No action needed.
 }
 
 // EraseDisplay clears every cell in the current write window [writeTop,
@@ -272,6 +263,74 @@ func (w *WriteWindow) EraseFromStartOfLine(col int) {
 	}
 }
 
+// InsertLines inserts n blank lines at cursorRow within [marginTop, marginBottom].
+// Lines from cursorRow..marginBottom-n shift down; bottom n lines are cleared.
+// The write window anchor and cursor are not moved — IL does not scroll.
+// cursorRow, marginTop, marginBottom are all relative to writeTop.
+func (w *WriteWindow) InsertLines(n, cursorRow, marginTop, marginBottom int) {
+	if n <= 0 {
+		return
+	}
+	w.mu.Lock()
+	base := w.writeTop
+	w.mu.Unlock()
+
+	// Shift lines down within [cursorRow, marginBottom].
+	for y := marginBottom; y >= cursorRow+n; y-- {
+		w.store.SetLine(base+int64(y), w.store.GetLine(base+int64(y-n)))
+	}
+	// Clear the inserted rows.
+	for y := cursorRow; y < cursorRow+n && y <= marginBottom; y++ {
+		w.store.ClearRange(base+int64(y), base+int64(y))
+	}
+}
+
+// DeleteLines deletes n lines at cursorRow within [marginTop, marginBottom].
+// Lines from cursorRow+n..marginBottom shift up; bottom n lines are cleared.
+// The write window anchor and cursor are not moved.
+// cursorRow, marginTop, marginBottom are all relative to writeTop.
+func (w *WriteWindow) DeleteLines(n, cursorRow, marginTop, marginBottom int) {
+	if n <= 0 {
+		return
+	}
+	w.mu.Lock()
+	base := w.writeTop
+	w.mu.Unlock()
+
+	// Shift lines up within [cursorRow, marginBottom].
+	for y := cursorRow; y <= marginBottom-n; y++ {
+		w.store.SetLine(base+int64(y), w.store.GetLine(base+int64(y+n)))
+	}
+	// Clear the vacated bottom rows.
+	clearStart := marginBottom - n + 1
+	if clearStart < cursorRow {
+		clearStart = cursorRow
+	}
+	for y := clearStart; y <= marginBottom; y++ {
+		w.store.ClearRange(base+int64(y), base+int64(y))
+	}
+}
+
+// NewlineInRegion handles a line-feed within a partial DECSTBM scroll region
+// [marginTop, marginBottom] (both relative to writeTop). The content within the
+// region scrolls up by 1: line at marginTop is lost, lines shift up, and
+// marginBottom is cleared. writeTop does NOT advance — only content within the
+// region is affected.
+//
+// Call Newline() instead for full-screen (marginTop==0 AND marginBottom==height-1).
+func (w *WriteWindow) NewlineInRegion(marginTop, marginBottom int) {
+	w.mu.Lock()
+	base := w.writeTop
+	w.mu.Unlock()
+
+	// Shift lines up within the region.
+	for y := marginTop; y < marginBottom; y++ {
+		w.store.SetLine(base+int64(y), w.store.GetLine(base+int64(y+1)))
+	}
+	// Clear the bottom line of the region.
+	w.store.ClearRange(base+int64(marginBottom), base+int64(marginBottom))
+}
+
 // RestoreState forcibly sets writeTop and cursor, used during session
 // restore. Do not call during normal operation.
 func (w *WriteWindow) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int) {
@@ -280,4 +339,7 @@ func (w *WriteWindow) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol in
 	w.writeTop = writeTop
 	w.cursorGlobalIdx = cursorGlobalIdx
 	w.cursorCol = cursorCol
+	if wb := w.writeTop + int64(w.height) - 1; wb > w.writeBottomHWM {
+		w.writeBottomHWM = wb
+	}
 }
