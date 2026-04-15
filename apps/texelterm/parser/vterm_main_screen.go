@@ -62,7 +62,17 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 	pageStoreLineCount := pageStore.LineCount()
 	if recoveredMeta != nil && recoveredMeta.WriteTop <= pageStoreLineCount && recoveredMeta.CursorGlobalIdx <= pageStoreLineCount+int64(v.height) {
 		v.mainScreen.RestoreState(recoveredMeta.WriteTop, recoveredMeta.CursorGlobalIdx, recoveredMeta.CursorCol)
-		v.PromptStartGlobalLine = recoveredMeta.PromptStartLine
+		// Discard a stale PromptStartLine that points past the last persisted
+		// line. The prompt position is only meaningful if the referenced line
+		// exists; otherwise prompt-aware operations (scroll-to-prompt,
+		// erase-to-prompt) would target non-existent rows. -1 means "unknown".
+		if recoveredMeta.PromptStartLine >= 0 && recoveredMeta.PromptStartLine >= pageStoreLineCount {
+			log.Printf("[MAIN_SCREEN] Discarded stale PromptStartLine %d (PageStore end=%d)",
+				recoveredMeta.PromptStartLine, pageStoreLineCount)
+			v.PromptStartGlobalLine = -1
+		} else {
+			v.PromptStartGlobalLine = recoveredMeta.PromptStartLine
+		}
 		v.CurrentWorkingDir = recoveredMeta.WorkingDir
 		// Sync VTerm's cursor to the restored state so the next write
 		// lands at the correct row in the viewport. Without this, VTerm's
