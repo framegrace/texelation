@@ -544,7 +544,9 @@ func encodeMainScreenState(state *MainScreenState) ([]byte, error) {
 	return buf, nil
 }
 
-// decodeMainScreenState deserializes MainScreenState from bytes.
+// decodeMainScreenState deserializes MainScreenState from bytes. The decoded
+// state is validated before returning so malformed WAL data is rejected at the
+// replay boundary rather than propagated into recovery metadata.
 func decodeMainScreenState(data []byte) (*MainScreenState, error) {
 	if len(data) < 46 {
 		return nil, fmt.Errorf("MainScreenState data too short: %d bytes", len(data))
@@ -560,6 +562,9 @@ func decodeMainScreenState(data []byte) (*MainScreenState, error) {
 	cwdLen := int(binary.LittleEndian.Uint16(data[44:46]))
 	if len(data) >= 46+cwdLen {
 		state.WorkingDir = string(data[46 : 46+cwdLen])
+	}
+	if err := state.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid MainScreenState: %w", err)
 	}
 	return state, nil
 }
