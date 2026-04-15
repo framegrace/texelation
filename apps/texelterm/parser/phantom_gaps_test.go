@@ -102,7 +102,7 @@ func TestPhantomGaps_DenseLines(t *testing.T) {
 
 // TestPhantomGaps_DenseLargeLines like above but enough to trigger eviction.
 // Uses 10k lines instead of 60k — sufficient to trigger page eviction while
-// keeping runtime reasonable under -race with dual-write overhead.
+// keeping runtime reasonable under -race.
 func TestPhantomGaps_DenseLargeLines(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 10000; i++ {
