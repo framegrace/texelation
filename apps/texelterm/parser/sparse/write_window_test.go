@@ -266,6 +266,62 @@ func TestWriteWindow_ResizeShrinkCursorClamped(t *testing.T) {
 	}
 }
 
+// TestWriteWindow_ResizeShrinkThenExpandAnchorsOnHWM pins down the reason
+// writeBottomHWM exists in the first place: on expand we re-anchor against
+// the historical maximum writeBottom, not the current one. Without the
+// HWM, a "shrink while cursor is near the top → expand back" round-trip
+// would let writeTop retreat into scrollback, destroying history that a
+// TUI's ESC[2J would blank on its SIGWINCH redraw.
+//
+// Replacing `writeBottomHWM` with `writeBottom` in the expand formula
+// passes every other existing test (they all measure HWM on the same
+// row as writeBottom at shrink time); this test is the one that flips.
+func TestWriteWindow_ResizeShrinkThenExpandAnchorsOnHWM(t *testing.T) {
+	store := NewStore(80)
+	ww := NewWriteWindow(store, 80, 40)
+
+	// Scroll the window so HWM climbs beyond the initial height.
+	for i := 0; i < 100; i++ {
+		ww.Newline()
+	}
+	// State: writeTop=61, cursor=100, writeBottom=100, HWM=100.
+	if got := ww.WriteTop(); got != 61 {
+		t.Fatalf("pre-shrink WriteTop = %d, want 61", got)
+	}
+	if got := ww.WriteBottomHWM(); got != 100 {
+		t.Fatalf("pre-shrink HWM = %d, want 100", got)
+	}
+
+	// Move cursor near the top of the window so a shrink fits it without
+	// advancing writeTop. This is what causes writeBottom to drop below
+	// HWM on the shrink.
+	ww.SetCursor(2, 0)
+
+	ww.Resize(80, 20)
+	// State: writeTop still 61 (cursor fit), writeBottom=80, HWM still 100.
+	if got := ww.WriteTop(); got != 61 {
+		t.Fatalf("shrink kept-cursor: WriteTop = %d, want 61 (stayed)", got)
+	}
+	if got := ww.WriteBottom(); got != 80 {
+		t.Fatalf("shrink kept-cursor: WriteBottom = %d, want 80", got)
+	}
+	if got := ww.WriteBottomHWM(); got != 100 {
+		t.Fatalf("HWM drifted during shrink: %d, want 100 (monotonic)", got)
+	}
+
+	// Expand back. Must re-anchor on HWM (100), not on the current
+	// writeBottom (80). writeTop = 100 - 40 + 1 = 61.
+	ww.Resize(80, 40)
+	if got := ww.WriteTop(); got != 61 {
+		t.Errorf("expand: WriteTop = %d, want 61 (anchored on HWM=100). "+
+			"If this is 41 the expand formula used writeBottom instead of HWM "+
+			"and history between 41..60 would be destroyed by a TUI redraw.", got)
+	}
+	if got := ww.WriteBottom(); got != 100 {
+		t.Errorf("expand: WriteBottom = %d, want 100", got)
+	}
+}
+
 func TestWriteWindow_EraseDisplayClearsWindow(t *testing.T) {
 	store := NewStore(10)
 	ww := NewWriteWindow(store, 10, 5)

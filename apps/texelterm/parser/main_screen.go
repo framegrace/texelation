@@ -5,9 +5,8 @@ package parser
 
 // MainScreen is the interface that sparse.Terminal satisfies. Defined in
 // the parser package to avoid an import cycle (parser -> sparse -> parser).
-// VTerm holds a MainScreen and dual-writes to it during the transition;
-// after integration the legacy memBufState path is deleted and MainScreen
-// becomes the sole main-screen implementation.
+// sparse.Terminal is the sole production implementation; VTerm drives the
+// main-screen state exclusively through this interface.
 type MainScreen interface {
 	WriteCell(cell Cell)
 	Newline()
@@ -23,6 +22,12 @@ type MainScreen interface {
 	EraseLine()
 	EraseToEndOfLine(col int)
 	EraseFromStartOfLine(col int)
+
+	// SetLine and ClearRange are low-level store-manipulation primitives
+	// that bypass the cursor / writeTop / HWM invariants. They exist for
+	// operations outside the cursor-write model (erase, ICH/DCH, overlay
+	// insert, scroll-region rejoin). Callers are responsible for keeping
+	// the write window consistent with whatever they mutate.
 	SetLine(globalIdx int64, cells []Cell)
 	ClearRange(lo, hi int64)
 
@@ -43,19 +48,23 @@ type MainScreen interface {
 	OnInput()
 	IsFollowing() bool
 
-	// SyncWriteState updates the write window (writeTop + cursor) to match the
-	// given MemoryBuffer-side state after a resize. Unlike RestoreState, it does
-	// NOT snap the view window to the bottom — user's scroll position is preserved.
-	SyncWriteState(writeTop, cursorGlobalIdx int64, cursorCol int)
-
 	// LoadFromPageStore populates the main screen with all lines currently
 	// stored in the given PageStore. Used on session restore to replay
 	// persistent scrollback into the sparse store.
 	LoadFromPageStore(ps *PageStore) error
 
 	// RestoreState forcibly sets the write window's cursor and anchor,
-	// used during session restore to match the saved WAL metadata.
-	RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int)
+	// used during session restore to match the saved WAL metadata. hwm
+	// seeds the writeBottom high-water mark; passing 0 or a value less
+	// than writeTop+height-1 is equivalent to "unknown" and the
+	// implementation falls back to deriving HWM from writeTop+height-1.
+	RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int, hwm int64)
+
+	// WriteBottomHWM returns the high-water mark of writeBottom across
+	// the session. Persisted into MainScreenState so that a grown
+	// viewport on reload anchors against the true HWM rather than a
+	// diminished value.
+	WriteBottomHWM() int64
 
 	// ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.
 	ReadLine(globalIdx int64) []Cell
@@ -64,7 +73,9 @@ type MainScreen interface {
 	VisibleRange() (top, bottom int64)
 }
 
-// MainScreenFactory creates a MainScreen for the given dimensions.
-// Set by the sparse package's init or by the application layer.
-// If nil, no MainScreen is created and the legacy path is used alone.
+// MainScreenFactory creates a MainScreen for the given dimensions. Set by
+// the sparse package's init (via `import _ ".../parser/sparse"`). When nil
+// — e.g., in parser-only unit tests that don't import sparse — no
+// MainScreen is created and v.mainScreen stays nil; the MainScreen-gated
+// methods on VTerm short-circuit in that case.
 var MainScreenFactory func(width, height int) MainScreen

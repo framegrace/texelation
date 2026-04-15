@@ -14,7 +14,7 @@ import "testing"
 // CurrentWorkingDir, and that malformed sequences without the file:// prefix
 // are ignored.
 func TestOSC7_WorkingDirectory(t *testing.T) {
-	v := NewVTerm(80, 24, WithMemoryBuffer())
+	v := NewVTerm(80, 24)
 	p := NewParser(v)
 
 	// OSC 7 with hostname: ESC ] 7 ; <uri> BEL

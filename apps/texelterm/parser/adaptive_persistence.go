@@ -109,7 +109,7 @@ type pendingLineInfo struct {
 type AdaptivePersistence struct {
 	config  AdaptivePersistenceConfig
 	memBuf  LineStore
-	disk    *PageStore       // Direct PageStore (legacy mode)
+	disk    *PageStore       // Direct PageStore fallback (when no WAL is supplied)
 	wal     *WriteAheadLog   // WAL-based persistence (preferred)
 	nowFunc func() time.Time // For testing; defaults to time.Now
 

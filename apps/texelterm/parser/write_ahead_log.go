@@ -528,10 +528,14 @@ func (w *WriteAheadLog) RecoveredMainScreenState() *MainScreenState {
 // encodeMainScreenState serializes MainScreenState to bytes.
 // Layout: WriteTop(8) ContentEnd(8) CursorGlobalIdx(8) CursorCol(4)
 //
-//	PromptStartLine(8) SavedAt(8) CWDLen(2) CWD(variable)
+//	PromptStartLine(8) SavedAt(8) CWDLen(2) CWD(variable) WriteBottomHWM(8)
+//
+// WriteBottomHWM is appended as a trailing field so older entries (which
+// end after CWD) decode to WriteBottomHWM=0 and the restore path falls
+// back to derive-from-writeTop behavior.
 func encodeMainScreenState(state *MainScreenState) ([]byte, error) {
 	cwdBytes := []byte(state.WorkingDir)
-	totalSize := 8 + 8 + 8 + 4 + 8 + 8 + 2 + len(cwdBytes)
+	totalSize := 8 + 8 + 8 + 4 + 8 + 8 + 2 + len(cwdBytes) + 8
 	buf := make([]byte, totalSize)
 	binary.LittleEndian.PutUint64(buf[0:8], uint64(state.WriteTop))
 	binary.LittleEndian.PutUint64(buf[8:16], uint64(state.ContentEnd))
@@ -540,11 +544,17 @@ func encodeMainScreenState(state *MainScreenState) ([]byte, error) {
 	binary.LittleEndian.PutUint64(buf[28:36], uint64(state.PromptStartLine))
 	binary.LittleEndian.PutUint64(buf[36:44], uint64(state.SavedAt.UnixNano()))
 	binary.LittleEndian.PutUint16(buf[44:46], uint16(len(cwdBytes)))
-	copy(buf[46:], cwdBytes)
+	copy(buf[46:46+len(cwdBytes)], cwdBytes)
+	binary.LittleEndian.PutUint64(buf[46+len(cwdBytes):46+len(cwdBytes)+8], uint64(state.WriteBottomHWM))
 	return buf, nil
 }
 
-// decodeMainScreenState deserializes MainScreenState from bytes.
+// decodeMainScreenState deserializes MainScreenState from bytes. The decoded
+// state is validated before returning so malformed WAL data is rejected at the
+// replay boundary rather than propagated into recovery metadata.
+//
+// WriteBottomHWM is read from the trailing 8 bytes if present; older
+// entries without those bytes decode to WriteBottomHWM=0.
 func decodeMainScreenState(data []byte) (*MainScreenState, error) {
 	if len(data) < 46 {
 		return nil, fmt.Errorf("MainScreenState data too short: %d bytes", len(data))
@@ -560,6 +570,13 @@ func decodeMainScreenState(data []byte) (*MainScreenState, error) {
 	cwdLen := int(binary.LittleEndian.Uint16(data[44:46]))
 	if len(data) >= 46+cwdLen {
 		state.WorkingDir = string(data[46 : 46+cwdLen])
+	}
+	// Optional trailing WriteBottomHWM (8 bytes). Missing for older entries.
+	if len(data) >= 46+cwdLen+8 {
+		state.WriteBottomHWM = int64(binary.LittleEndian.Uint64(data[46+cwdLen : 46+cwdLen+8]))
+	}
+	if err := state.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid MainScreenState: %w", err)
 	}
 	return state, nil
 }

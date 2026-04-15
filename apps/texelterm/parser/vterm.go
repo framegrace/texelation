@@ -96,9 +96,6 @@ type VTerm struct {
 	commitInsertOffset int64
 	// fixedWidthDetector tracks TUI patterns for scroll region empty line suppression.
 	fwDetector *FixedWidthDetector
-	// showOverlay controls whether overlay lines (set via SetOverlay) are displayed.
-	// In the sparse model this is always true — overlay writes replace lines directly.
-	showOverlay bool
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -130,9 +127,8 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 
 	v.EnableMemoryBuffer()
 
-	// Initialize TUI detector (nil MemoryBuffer — just tracks signals).
+	// Initialize TUI detector (nil storage — just tracks signals).
 	v.fwDetector = NewFixedWidthDetectorWithConfig(nil, DefaultFixedWidthDetectorConfig())
-	v.showOverlay = true
 
 	// Set up tab stops
 	for i := 0; i < width; i++ {
@@ -211,12 +207,6 @@ func (v *VTerm) MainScreenGrid() [][]Cell {
 		return nil
 	}
 	return v.mainScreen.Grid()
-}
-
-// LegacyGrid returns nil — the legacy MemoryBuffer path has been removed.
-// Kept for API compatibility; callers should use Grid() or MainScreenGrid().
-func (v *VTerm) LegacyGrid() [][]Cell {
-	return nil
 }
 
 // ContentEnd returns the highest globalIdx ever written via the sparse
@@ -498,7 +488,7 @@ func (v *VTerm) MarkPromptStart() {
 // Called when OSC 133;B is received (input start / prompt end marker).
 // This is a stub for future shell integration features.
 func (v *VTerm) MarkInputStart() {
-	// TODO: Record input start position in MemoryBuffer for shell integration
+	// TODO: Record input-start globalIdx on the sparse store for shell integration.
 	// This would enable features like:
 	// - Highlighting user input differently
 	// - Command extraction for history
@@ -1318,35 +1308,6 @@ func (v *VTerm) NotifyLinePersist(lineIdx int64) {
 	}
 }
 
-// WithMemoryBuffer is a no-op kept for backward compatibility.
-// NewVTerm always initializes the main screen unconditionally.
-func WithMemoryBuffer() Option {
-	return func(v *VTerm) {}
-}
-
-// WithMemoryBufferDisk enables the main screen with disk persistence.
-// The diskPath specifies where to store the history file.
-// TerminalID is required for cross-session history continuity.
-func WithMemoryBufferDisk(diskPath string, maxLines int) Option {
-	return func(v *VTerm) {
-		opts := MemoryBufferOptions{
-			MaxLines: maxLines,
-			DiskPath: diskPath,
-		}
-		// Eagerly enable disk persistence. Error is logged inside.
-		v.EnableMemoryBufferWithDisk(diskPath, opts)
-	}
-}
-
-// WithMemoryBufferOptions enables the main screen with custom options.
-func WithMemoryBufferOptions(opts MemoryBufferOptions) Option {
-	return func(v *VTerm) {
-		if opts.DiskPath != "" {
-			v.EnableMemoryBufferWithDisk(opts.DiskPath, opts)
-		}
-		// Non-disk options are handled by EnableMemoryBuffer (called later in NewVTerm).
-	}
-}
 
 // Resize handles changes to the terminal's dimensions.
 func (v *VTerm) Resize(width, height int) {
@@ -1484,25 +1445,11 @@ func (v *VTerm) IsInTUIMode() bool {
 	return fwd != nil && fwd.IsInTUIMode()
 }
 
-// LiveEdgeBase returns the globalIdx at the top of the sparse write window.
-func (v *VTerm) LiveEdgeBase() int64 {
-	if v.mainScreen == nil {
-		return 0
-	}
-	return v.mainScreen.WriteTop()
-}
-
 // MarginTop returns the current top scroll margin.
 func (v *VTerm) MarginTop() int { return v.marginTop }
 
 // MarginBottom returns the current bottom scroll margin.
 func (v *VTerm) MarginBottom() int { return v.marginBottom }
-
-// MemoryBuffer returns nil — the MemoryBuffer path has been removed.
-// Kept for API compatibility. Callers should use MainScreen() instead.
-func (v *VTerm) MemoryBuffer() *MemoryBuffer {
-	return nil
-}
 
 // GetAltBufferLine returns a copy of the specified line from the alternate screen buffer.
 // Returns nil if index is out of bounds or not in alt screen mode.

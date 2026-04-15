@@ -33,7 +33,7 @@ import (
 // short content preserves it in the grid at the new dimensions.
 func TestVTerm_MemoryBufferResize_ShortContent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	v := NewVTerm(80, 24, WithMemoryBuffer())
+	v := NewVTerm(80, 24)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -49,7 +49,7 @@ func TestVTerm_MemoryBufferResize_ShortContent(t *testing.T) {
 		t.Errorf("cols: got %d, want 40", len(grid[0]))
 	}
 
-	row0 := strings.TrimRight(gridRowToString(grid[0]), " ")
+	row0 := strings.TrimRight(cellsToString(grid[0]), " ")
 	if row0 != "Hello, World!" {
 		t.Errorf("content lost after resize: row 0 = %q, want 'Hello, World!'", row0)
 	}
@@ -60,7 +60,7 @@ func TestVTerm_MemoryBufferResize_ShortContent(t *testing.T) {
 // same grid row as the prompt.
 func TestVTerm_ResizeBeforeContentCursorSync_Grow(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	v := NewVTerm(80, 24, WithMemoryBuffer())
+	v := NewVTerm(80, 24)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -105,7 +105,7 @@ func TestVTerm_ResizeBeforeContentCursorSync_Grow(t *testing.T) {
 // when shrinking instead of growing.
 func TestVTerm_ResizeBeforeContentCursorSync_Shrink(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	v := NewVTerm(120, 30, WithMemoryBuffer())
+	v := NewVTerm(120, 30)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -138,7 +138,7 @@ func TestVTerm_ResizeBeforeContentCursorSync_Shrink(t *testing.T) {
 func TestResize_HeightChangeCursorDesync(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 40, 24
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -170,7 +170,7 @@ func TestResize_HeightChangeCursorDesync(t *testing.T) {
 func TestResize_HeightChangeCursorDesync_FullViewport(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 40, 24
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 

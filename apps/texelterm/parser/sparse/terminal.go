@@ -138,15 +138,24 @@ func (t *Terminal) NewlineInRegion(marginTop, marginBottom int) {
 	// ViewWindow notification is needed.
 }
 
-// SetLine overwrites the cells at the given globalIdx in the store.
-// Used to sync from MemoryBuffer after complex operations (scroll regions).
+// SetLine overwrites the cells at globalIdx directly in the store,
+// bypassing the WriteWindow's cursor / writeTop invariants. Intended for
+// callers that need to mutate specific lines outside the cursor model:
+// ED / EL erase operations (fill a range with the current FG/BG), ICH /
+// DCH character edits (rewrite a single row in place), and overlay-insert
+// paths that sync cells into a globalIdx chosen by the parser. It does
+// NOT advance writeTop, touch the cursor, or update HWM; callers are
+// responsible for keeping write-window state consistent with whatever
+// they write here.
 func (t *Terminal) SetLine(globalIdx int64, cells []parser.Cell) {
 	t.store.SetLine(globalIdx, cells)
 }
 
-// ClearRange removes all lines in [lo, hi] from the store.
-// Used to sync from MemoryBuffer after resize-split rejoin and similar
-// operations that collapse multiple logical lines back into one.
+// ClearRange removes all lines in [lo, hi] from the store, bypassing the
+// WriteWindow. Same contract as SetLine: callers take on responsibility
+// for keeping writeTop / cursor / HWM consistent. Typical uses are ED J 3
+// (clear scrollback above writeTop), ED-below-cursor (clear tail of the
+// write window), and scroll-region rejoin that collapses logical lines.
 func (t *Terminal) ClearRange(lo, hi int64) {
 	t.store.ClearRange(lo, hi)
 }
@@ -158,26 +167,23 @@ func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
 
 // RestoreWriteState forcibly sets the write window's cursor and anchor,
 // used during session restore. The ViewWindow is re-snapped to the new
-// writeBottom in follow mode.
-func (t *Terminal) RestoreWriteState(writeTop, cursorGlobalIdx int64, cursorCol int) {
-	t.write.RestoreState(writeTop, cursorGlobalIdx, cursorCol)
+// writeBottom in follow mode. hwm seeds writeBottomHWM only when it
+// exceeds writeTop+height-1; smaller values (including zero, as written
+// by older WAL entries that predate this field) fall back to that floor.
+func (t *Terminal) RestoreWriteState(writeTop, cursorGlobalIdx int64, cursorCol int, hwm int64) {
+	t.write.RestoreState(writeTop, cursorGlobalIdx, cursorCol, hwm)
 	t.view.ScrollToBottom(t.write.WriteBottom())
-}
-
-// SyncWriteState updates the write window (writeTop + cursor) to match an
-// externally-computed anchor. Unlike RestoreWriteState, it preserves the
-// ViewWindow's current scroll position: if the user is scrolled back,
-// viewBottom does not change; if autoFollow is active, viewBottom snaps to
-// the new writeBottom.
-func (t *Terminal) SyncWriteState(writeTop, cursorGlobalIdx int64, cursorCol int) {
-	t.write.RestoreState(writeTop, cursorGlobalIdx, cursorCol)
-	t.view.OnWriteBottomChanged(t.write.WriteBottom())
 }
 
 // RestoreState implements MainScreen.RestoreState by delegating to
 // RestoreWriteState.
-func (t *Terminal) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int) {
-	t.RestoreWriteState(writeTop, cursorGlobalIdx, cursorCol)
+func (t *Terminal) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int, hwm int64) {
+	t.RestoreWriteState(writeTop, cursorGlobalIdx, cursorCol, hwm)
+}
+
+// WriteBottomHWM returns the write window's high-water mark for persistence.
+func (t *Terminal) WriteBottomHWM() int64 {
+	return t.write.WriteBottomHWM()
 }
 
 // LoadFromPageStore loads all lines from the PageStore into the sparse

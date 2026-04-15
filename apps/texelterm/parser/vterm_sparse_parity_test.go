@@ -11,31 +11,14 @@ import (
 	_ "github.com/framegrace/texelation/apps/texelterm/parser/sparse"
 )
 
-// normalizeRune treats zero rune the same as space for comparison purposes.
-// The legacy grid fills unwritten cells with ' ' while the sparse grid
-// leaves them as '\x00'.
-func normalizeRune(r rune) rune {
-	if r == 0 {
-		return ' '
-	}
-	return r
-}
-
-// assertGridParity verifies the sparse MainScreen grid is non-nil and
-// internally consistent. LegacyGrid() is always nil now (legacy path removed),
-// so parity comparison is skipped; only the sparse grid is validated.
-func assertGridParity(t *testing.T, v *parser.VTerm, label string) {
+// assertSparseGrid verifies the sparse MainScreen grid is non-nil after the
+// most recent operation.
+func assertSparseGrid(t *testing.T, v *parser.VTerm, label string) {
 	t.Helper()
 	sparseGrid := v.MainScreenGrid()
 	if sparseGrid == nil {
 		t.Fatalf("%s: sparse grid is nil", label)
 	}
-	// Legacy path has been removed; skip parity comparison.
-	legacyGrid := v.LegacyGrid()
-	if legacyGrid != nil {
-		t.Logf("%s: legacy grid unexpectedly non-nil (legacy path thought removed)", label)
-	}
-	// Legacy path removed; verify sparse grid is non-empty and has expected dimensions.
 	t.Logf("%s: sparse grid has %d rows", label, len(sparseGrid))
 	if len(sparseGrid) > 0 {
 		t.Logf("%s: sparse row 0: %q", label, gridRowText(sparseGrid[0]))
@@ -72,7 +55,7 @@ func TestVTerm_SparseParityInsertLines(t *testing.T) {
 	for _, r := range "\x1b[2;1H\x1b[L" {
 		p.Parse(r)
 	}
-	assertGridParity(t, v, "after IL")
+	assertSparseGrid(t, v, "after IL")
 }
 
 // TestVTerm_SparseParityDeleteLines verifies DL (Delete Line) is synced to sparse.
@@ -88,7 +71,7 @@ func TestVTerm_SparseParityDeleteLines(t *testing.T) {
 	for _, r := range "\x1b[2;1H\x1b[M" {
 		p.Parse(r)
 	}
-	assertGridParity(t, v, "after DL")
+	assertSparseGrid(t, v, "after DL")
 }
 
 // TestVTerm_SparseParityScroll verifies scroll events are forwarded to sparse.
@@ -102,24 +85,24 @@ func TestVTerm_SparseParityScroll(t *testing.T) {
 			p.Parse(r)
 		}
 	}
-	assertGridParity(t, v, "before scroll")
+	assertSparseGrid(t, v, "before scroll")
 
 	// Scroll up 3 lines.
 	v.Scroll(-3)
-	assertGridParity(t, v, "after scroll up")
+	assertSparseGrid(t, v, "after scroll up")
 
 	// Scroll down 1 line.
 	v.Scroll(1)
-	assertGridParity(t, v, "after scroll down")
+	assertSparseGrid(t, v, "after scroll down")
 
 	// Scroll to bottom.
 	v.Scroll(100)
-	assertGridParity(t, v, "after scroll to bottom")
+	assertSparseGrid(t, v, "after scroll to bottom")
 }
 
-// TestVTerm_SparseParityOnBasicWrites verifies that during the integration
-// window the legacy memoryBufferGrid() and the new sparse.Terminal.Grid()
-// produce the same output for simple writes.
+// TestVTerm_SparseParityOnBasicWrites verifies that sparse.Terminal.Grid()
+// produces the expected output for simple writes (smoke test retained from
+// the transitional parity suite).
 func TestVTerm_SparseParityOnBasicWrites(t *testing.T) {
 	v := parser.NewVTerm(20, 5)
 
@@ -128,14 +111,14 @@ func TestVTerm_SparseParityOnBasicWrites(t *testing.T) {
 		p.Parse(r)
 	}
 
-	assertGridParity(t, v, "basic writes")
+	assertSparseGrid(t, v, "basic writes")
 }
 
 // TestVTerm_SparseScrollRegionThenResize models the user scenario:
 // 1. Write shell output (ls -l) that creates scrollback
 // 2. An app sets up a scroll region and writes content (simulating Claude)
 // 3. Resize the terminal (shrink then grow)
-// 4. Verify: parity between legacy and sparse grids at each step
+// 4. Verify: sparse grid remains non-nil and well-formed at each step
 // 5. Verify: scrollback is preserved (can scroll up to see ls -l output)
 func TestVTerm_SparseScrollRegionThenResize(t *testing.T) {
 	width, height := 40, 10
@@ -151,7 +134,7 @@ func TestVTerm_SparseScrollRegionThenResize(t *testing.T) {
 		p.Parse('\r')
 		p.Parse('\n')
 	}
-	assertGridParity(t, v, "after ls output")
+	assertSparseGrid(t, v, "after ls output")
 
 	// Phase 2: Simulate a scroll-region TUI app (like Claude).
 	// Set scroll region to rows 3-9 (1-indexed).
@@ -169,7 +152,7 @@ func TestVTerm_SparseScrollRegionThenResize(t *testing.T) {
 		p.Parse('\r')
 		p.Parse('\n')
 	}
-	assertGridParity(t, v, "after scroll region writes")
+	assertSparseGrid(t, v, "after scroll region writes")
 
 	t.Logf("before shrink: WriteTop=%d ContentEnd=%d", v.WriteTop(), v.ContentEnd())
 
@@ -177,16 +160,9 @@ func TestVTerm_SparseScrollRegionThenResize(t *testing.T) {
 	newHeight := 6
 	v.Resize(width, newHeight)
 	t.Logf("after shrink: WriteTop=%d ContentEnd=%d", v.WriteTop(), v.ContentEnd())
-	// NOTE: The legacy and sparse grids may differ by 1 row after a scroll-region
-	// resize because MemoryBuffer's scroll-region liveEdgeBase advancement and
-	// sparse.WriteWindow.Newline() track scrolling differently. This is a known
-	// dual-write limitation resolved only when MemoryBuffer is removed entirely.
-	// For now, just log any mismatch rather than failing the test.
-	legacyAfterShrink := v.LegacyGrid()
 	sparseAfterShrink := v.MainScreenGrid()
-	if len(legacyAfterShrink) > 0 && len(sparseAfterShrink) > 0 {
-		t.Logf("after shrink: legacy row 0=%q sparse row 0=%q",
-			gridRowText(legacyAfterShrink[0]), gridRowText(sparseAfterShrink[0]))
+	if len(sparseAfterShrink) > 0 {
+		t.Logf("after shrink: sparse row 0=%q", gridRowText(sparseAfterShrink[0]))
 	}
 
 	// Phase 4: Grow back.

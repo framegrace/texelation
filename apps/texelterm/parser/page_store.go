@@ -83,8 +83,59 @@ type MainScreenState struct {
 	// WorkingDir is the last known working directory from OSC 7.
 	WorkingDir string `json:"working_dir"`
 
+	// WriteBottomHWM is the high-water mark of writeBottom (writeTop +
+	// height - 1) across the session. Restored on reload so that a grown
+	// viewport anchors against the true HWM rather than the diminished
+	// value implied by a shrunken writeBottom. A zero value is treated as
+	// "unknown" on restore (older WAL entries without this field decode
+	// to zero); the restore path falls back to writeTop + height - 1.
+	WriteBottomHWM int64 `json:"write_bottom_hwm,omitempty"`
+
 	// SavedAt is when the state was saved.
 	SavedAt time.Time `json:"saved_at"`
+}
+
+// Validate reports whether the state satisfies MainScreenState's intrinsic
+// invariants (those that do not depend on external data like the WAL's line
+// count). It is safe to call on any decoded value and is intended for use at
+// serialization boundaries to reject corrupt data before it is trusted as
+// recovery metadata.
+//
+// The checks are:
+//   - WriteTop must be non-negative (globalIdx is a 0-based index).
+//   - ContentEnd must be >= -1 (-1 is the "empty" sentinel).
+//   - CursorCol must be non-negative.
+//   - PromptStartLine must be >= -1 (-1 is the "unknown" sentinel).
+//   - CursorGlobalIdx must be >= WriteTop (the cursor lives inside the write
+//     window, which starts at WriteTop).
+//   - WriteBottomHWM must be non-negative (it is a globalIdx). Zero is
+//     accepted as the "unknown/unset" value for backwards compatibility
+//     with older WAL entries that predate this field.
+//
+// Contextual checks (e.g. CursorGlobalIdx not exceeding the WAL's line count)
+// live with their caller; this method only enforces what the struct can know
+// about itself.
+func (s MainScreenState) Validate() error {
+	if s.WriteTop < 0 {
+		return fmt.Errorf("MainScreenState: WriteTop %d must be non-negative", s.WriteTop)
+	}
+	if s.ContentEnd < -1 {
+		return fmt.Errorf("MainScreenState: ContentEnd %d must be >= -1", s.ContentEnd)
+	}
+	if s.CursorCol < 0 {
+		return fmt.Errorf("MainScreenState: CursorCol %d must be non-negative", s.CursorCol)
+	}
+	if s.PromptStartLine < -1 {
+		return fmt.Errorf("MainScreenState: PromptStartLine %d must be >= -1", s.PromptStartLine)
+	}
+	if s.CursorGlobalIdx < s.WriteTop {
+		return fmt.Errorf("MainScreenState: CursorGlobalIdx %d must be >= WriteTop %d",
+			s.CursorGlobalIdx, s.WriteTop)
+	}
+	if s.WriteBottomHWM < 0 {
+		return fmt.Errorf("MainScreenState: WriteBottomHWM %d must be non-negative", s.WriteBottomHWM)
+	}
+	return nil
 }
 
 // PageStoreConfig holds configuration for the page store.

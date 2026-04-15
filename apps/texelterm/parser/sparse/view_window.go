@@ -73,19 +73,6 @@ func (v *ViewWindow) OnWriteBottomChanged(newWriteBottom int64) {
 	}
 }
 
-// OnWriteTopChanged is called when the WriteWindow retreats its top on grow
-// (i.e. the write window expands upward). Despite the name referring to the
-// top, callers must pass newWriteBottom — the new WriteWindow.WriteBottom()
-// value — because that is what viewBottom tracks. Only advances viewBottom
-// forward, never retreats it.
-func (v *ViewWindow) OnWriteTopChanged(newWriteBottom int64) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.autoFollow && newWriteBottom > v.viewBottom {
-		v.viewBottom = newWriteBottom
-	}
-}
-
 // ScrollUp detaches from the live edge and moves viewBottom up by n lines.
 // viewBottom is clamped to at least height-1 (can't show negative globalIdxs
 // as the view bottom).

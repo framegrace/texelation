@@ -108,8 +108,14 @@ func TestViewWindow_ResizeWhileFollowing(t *testing.T) {
 func TestViewWindow_ResizeWhileScrolledBack(t *testing.T) {
 	vw := NewViewWindow(80, 24)
 	vw.OnWriteBottomChanged(100)
-	vw.ScrollUp(30)        // viewBottom = 70, autoFollow off
-	vw.Resize(80, 30, 100) // grow height; writeBottom unchanged
+	vw.ScrollUp(30) // viewBottom = 70, autoFollow off
+
+	// Pass a writeBottom that retreats below the current frozen viewBottom.
+	// The view must stay anchored at 70 — dropping the `if v.autoFollow`
+	// guard from Resize would corrupt the anchor on a smaller writeBottom,
+	// so this test falsifies that regression (the prior test's value of
+	// 100 matched viewBottom's effective floor and wouldn't have caught it).
+	vw.Resize(80, 30, 50)
 	_, bottom := vw.VisibleRange()
 	if bottom != 70 {
 		t.Errorf("frozen view: viewBottom = %d, want 70 (anchored)", bottom)
@@ -119,18 +125,3 @@ func TestViewWindow_ResizeWhileScrolledBack(t *testing.T) {
 	}
 }
 
-func TestViewWindow_OnWriteTopChangedFollows(t *testing.T) {
-	vw := NewViewWindow(80, 24)
-	vw.OnWriteTopChanged(50) // called when grow retreats writeTop
-	_, bottom := vw.VisibleRange()
-	if bottom != 50 {
-		t.Errorf("OnWriteTopChanged while following: viewBottom = %d, want 50", bottom)
-	}
-	// Detach and verify it does not follow.
-	vw.ScrollUp(5)
-	vw.OnWriteTopChanged(100)
-	_, bottom = vw.VisibleRange()
-	if bottom != 45 {
-		t.Errorf("OnWriteTopChanged while frozen: viewBottom = %d, want 45", bottom)
-	}
-}

@@ -8,22 +8,24 @@
 //
 //	TUI applications like vim, htop, codex use escape sequences that indicate
 //	fixed-width content: scroll regions, cursor jumps, and cursor hiding.
-//	This detector watches for these patterns and flags affected lines in
-//	MemoryBuffer so they won't reflow on terminal resize.
+//	This detector watches for these patterns and flags affected lines in the
+//	backing line store so they won't reflow on terminal resize.
 //
 //	Detection signals:
 //	  - Non-full-screen scroll region (DECSTBM)
 //	  - Large cursor jumps (CUP moving more than 1 row)
 //	  - Cursor visibility changes (DECTCEM)
 //
-//	Lines are flagged immediately via MemoryBuffer.SetLineFixed(lineIdx, width).
+//	Lines are flagged immediately via fixedWidthBuffer.SetLineFixed(lineIdx, width).
 
 package parser
 
 import "strconv"
 
-// fixedWidthBuffer is the subset of MemoryBuffer used by FixedWidthDetector.
-// Passing nil is safe — all methods guard with a nil check.
+// fixedWidthBuffer is the subset of the line-store API used by
+// FixedWidthDetector. Implemented by sparseLineStoreAdapter in production
+// and by MemoryBuffer in tests. Passing nil is safe — all methods guard
+// with a nil check.
 type fixedWidthBuffer interface {
 	GetLine(lineIdx int64) *LogicalLine
 	SetLineFixed(lineIdx int64, width int)
@@ -65,7 +67,7 @@ func DefaultFixedWidthDetectorConfig() FixedWidthDetectorConfig {
 
 // FixedWidthDetector tracks TUI patterns and flags lines as fixed-width.
 // It monitors cursor movements and scroll regions to detect TUI behavior,
-// then marks affected lines in MemoryBuffer as non-reflowable.
+// then marks affected lines in the backing line store as non-reflowable.
 type FixedWidthDetector struct {
 	memBuf fixedWidthBuffer
 	config FixedWidthDetectorConfig

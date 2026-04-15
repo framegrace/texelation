@@ -24,7 +24,7 @@ import (
 func TestReverseSearch_RealReadlineSequences(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 80, 24
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -82,8 +82,8 @@ func TestReverseSearch_RealReadlineSequences(t *testing.T) {
 
 	// renderBuf and Grid must agree on the cursor's row.
 	grid := v.Grid()
-	gridRow := strings.TrimRight(gridRowToString(grid[v.cursorY]), " ")
-	renderRow := strings.TrimRight(gridRowToString(renderBuf[v.cursorY]), " ")
+	gridRow := strings.TrimRight(cellsToString(grid[v.cursorY]), " ")
+	renderRow := strings.TrimRight(cellsToString(renderBuf[v.cursorY]), " ")
 	if gridRow != renderRow {
 		t.Errorf("render/grid mismatch at row %d: render=%q grid=%q", v.cursorY, renderRow, gridRow)
 	}

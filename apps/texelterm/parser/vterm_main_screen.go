@@ -61,8 +61,18 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 	recoveredMeta := wal.RecoveredMainScreenState()
 	pageStoreLineCount := pageStore.LineCount()
 	if recoveredMeta != nil && recoveredMeta.WriteTop <= pageStoreLineCount && recoveredMeta.CursorGlobalIdx <= pageStoreLineCount+int64(v.height) {
-		v.mainScreen.RestoreState(recoveredMeta.WriteTop, recoveredMeta.CursorGlobalIdx, recoveredMeta.CursorCol)
-		v.PromptStartGlobalLine = recoveredMeta.PromptStartLine
+		v.mainScreen.RestoreState(recoveredMeta.WriteTop, recoveredMeta.CursorGlobalIdx, recoveredMeta.CursorCol, recoveredMeta.WriteBottomHWM)
+		// Discard a stale PromptStartLine that points past the last persisted
+		// line. The prompt position is only meaningful if the referenced line
+		// exists; otherwise prompt-aware operations (scroll-to-prompt,
+		// erase-to-prompt) would target non-existent rows. -1 means "unknown".
+		if recoveredMeta.PromptStartLine >= 0 && recoveredMeta.PromptStartLine >= pageStoreLineCount {
+			log.Printf("[MAIN_SCREEN] Discarded stale PromptStartLine %d (PageStore end=%d)",
+				recoveredMeta.PromptStartLine, pageStoreLineCount)
+			v.PromptStartGlobalLine = -1
+		} else {
+			v.PromptStartGlobalLine = recoveredMeta.PromptStartLine
+		}
 		v.CurrentWorkingDir = recoveredMeta.WorkingDir
 		// Sync VTerm's cursor to the restored state so the next write
 		// lands at the correct row in the viewport. Without this, VTerm's
@@ -134,8 +144,17 @@ func (v *VTerm) snapshotMainScreenState() MainScreenState {
 		CursorCol:       col,
 		PromptStartLine: v.PromptStartGlobalLine,
 		WorkingDir:      v.CurrentWorkingDir,
+		WriteBottomHWM:  v.mainScreen.WriteBottomHWM(),
 		SavedAt:         time.Now(),
 	}
+}
+
+// cursorGlobalIdx returns the absolute globalIdx of the cursor's current row,
+// computed as WriteTop + cursorY. Callers MUST ensure v.mainScreen != nil
+// before calling; the helper does not defensive-check so that misuse surfaces
+// as a nil-deref rather than a silent 0.
+func (v *VTerm) cursorGlobalIdx() int64 {
+	return v.mainScreen.WriteTop() + int64(v.cursorY)
 }
 
 // mainScreenPlaceChar writes a rune to the sparse terminal at the current cursor.
@@ -415,10 +434,9 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	// The insert shifted the cursor's content down. Follow it by advancing
 	// cursorY so subsequent writes land at the new logical row. Without
 	// this, a multi-line prompt written after transformer inserts would
-	// overwrite the inserted lines. The cursor is at globalIdx
-	// `writeTop + cursorY`; if the insert happened at or before that, the
-	// row moved down.
-	cursorGlobal := writeTop + int64(v.cursorY)
+	// overwrite the inserted lines. The cursor is at cursorGlobalIdx();
+	// if the insert happened at or before that, the row moved down.
+	cursorGlobal := v.cursorGlobalIdx()
 	if beforeIdx <= cursorGlobal && v.cursorY < v.height-1 {
 		v.cursorY++
 	}
@@ -458,19 +476,6 @@ func lineHasSparseContent(cells []Cell) bool {
 		}
 	}
 	return false
-}
-
-// SetShowOverlay controls whether overlay content is visible.
-// In the sparse model, overlay lines are written directly to the store via SetOverlay;
-// this flag is preserved for API compatibility but has no separate rendering effect.
-func (v *VTerm) SetShowOverlay(show bool) {
-	v.showOverlay = show
-	v.MarkAllDirty()
-}
-
-// ShowOverlay returns whether overlay content is being displayed.
-func (v *VTerm) ShowOverlay() bool {
-	return v.showOverlay
 }
 
 // ScrollToLiveEdge scrolls the viewport to show the most recent content.
@@ -578,8 +583,7 @@ func (v *VTerm) mainScreenEraseCharacters(n int) {
 	if v.mainScreen == nil {
 		return
 	}
-	writeTop := v.mainScreen.WriteTop()
-	globalLine := writeTop + int64(v.cursorY)
+	globalLine := v.cursorGlobalIdx()
 	endCol := v.cursorX + n
 	if endCol > v.width {
 		endCol = v.width
@@ -876,8 +880,7 @@ func (v *VTerm) CurrentLineCells() []Cell {
 	if v.mainScreen == nil {
 		return nil
 	}
-	writeTop := v.mainScreen.WriteTop()
-	return v.mainScreen.ReadLine(writeTop + int64(v.cursorY))
+	return v.mainScreen.ReadLine(v.cursorGlobalIdx())
 }
 
 // markLineWrapped sets the Wrapped flag on the last cell of the current cursor
@@ -887,8 +890,7 @@ func (v *VTerm) markLineWrapped() {
 	if v.mainScreen == nil {
 		return
 	}
-	writeTop := v.mainScreen.WriteTop()
-	globalIdx := writeTop + int64(v.cursorY)
+	globalIdx := v.cursorGlobalIdx()
 	cells := v.mainScreen.ReadLine(globalIdx)
 	if len(cells) == 0 {
 		return
