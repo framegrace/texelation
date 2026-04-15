@@ -138,6 +138,14 @@ func (v *VTerm) snapshotMainScreenState() MainScreenState {
 	}
 }
 
+// cursorGlobalIdx returns the absolute globalIdx of the cursor's current row,
+// computed as WriteTop + cursorY. Callers MUST ensure v.mainScreen != nil
+// before calling; the helper does not defensive-check so that misuse surfaces
+// as a nil-deref rather than a silent 0.
+func (v *VTerm) cursorGlobalIdx() int64 {
+	return v.mainScreen.WriteTop() + int64(v.cursorY)
+}
+
 // mainScreenPlaceChar writes a rune to the sparse terminal at the current cursor.
 func (v *VTerm) mainScreenPlaceChar(r rune, isWide bool) {
 	if v.mainScreen == nil {
@@ -415,10 +423,9 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	// The insert shifted the cursor's content down. Follow it by advancing
 	// cursorY so subsequent writes land at the new logical row. Without
 	// this, a multi-line prompt written after transformer inserts would
-	// overwrite the inserted lines. The cursor is at globalIdx
-	// `writeTop + cursorY`; if the insert happened at or before that, the
-	// row moved down.
-	cursorGlobal := writeTop + int64(v.cursorY)
+	// overwrite the inserted lines. The cursor is at cursorGlobalIdx();
+	// if the insert happened at or before that, the row moved down.
+	cursorGlobal := v.cursorGlobalIdx()
 	if beforeIdx <= cursorGlobal && v.cursorY < v.height-1 {
 		v.cursorY++
 	}
@@ -565,8 +572,7 @@ func (v *VTerm) mainScreenEraseCharacters(n int) {
 	if v.mainScreen == nil {
 		return
 	}
-	writeTop := v.mainScreen.WriteTop()
-	globalLine := writeTop + int64(v.cursorY)
+	globalLine := v.cursorGlobalIdx()
 	endCol := v.cursorX + n
 	if endCol > v.width {
 		endCol = v.width
@@ -863,8 +869,7 @@ func (v *VTerm) CurrentLineCells() []Cell {
 	if v.mainScreen == nil {
 		return nil
 	}
-	writeTop := v.mainScreen.WriteTop()
-	return v.mainScreen.ReadLine(writeTop + int64(v.cursorY))
+	return v.mainScreen.ReadLine(v.cursorGlobalIdx())
 }
 
 // markLineWrapped sets the Wrapped flag on the last cell of the current cursor
@@ -874,8 +879,7 @@ func (v *VTerm) markLineWrapped() {
 	if v.mainScreen == nil {
 		return
 	}
-	writeTop := v.mainScreen.WriteTop()
-	globalIdx := writeTop + int64(v.cursorY)
+	globalIdx := v.cursorGlobalIdx()
 	cells := v.mainScreen.ReadLine(globalIdx)
 	if len(cells) == 0 {
 		return
