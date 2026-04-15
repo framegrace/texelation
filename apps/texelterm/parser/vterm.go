@@ -213,12 +213,6 @@ func (v *VTerm) MainScreenGrid() [][]Cell {
 	return v.mainScreen.Grid()
 }
 
-// LegacyGrid returns nil — the legacy MemoryBuffer path has been removed.
-// Kept for API compatibility; callers should use Grid() or MainScreenGrid().
-func (v *VTerm) LegacyGrid() [][]Cell {
-	return nil
-}
-
 // ContentEnd returns the highest globalIdx ever written via the sparse
 // MainScreen, or -1 if empty or no MainScreen is configured.
 func (v *VTerm) ContentEnd() int64 {
