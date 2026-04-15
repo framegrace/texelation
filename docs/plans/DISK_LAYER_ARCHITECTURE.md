@@ -1,5 +1,14 @@
 # Disk Layer Architecture for Texelterm
 
+> **STATUS (2026-04-14):** Phases 1–4 (PageStore, WAL, SQLite search, history
+> navigator) were implemented and remain in production. The in-memory
+> "MemoryBuffer" layer described below was replaced by the sparse
+> globalIdx-keyed store in the main-screen cutover (PR #179); the WAL +
+> PageStore stack underneath survived unchanged. See
+> [`docs/TERMINAL_PERSISTENCE_ARCHITECTURE.md`](../TERMINAL_PERSISTENCE_ARCHITECTURE.md)
+> for the current end-to-end picture. Phases 5–7 (compression, encryption,
+> cross-terminal search) remain open items.
+
 ## Executive Summary
 
 This document describes a modern, future-proof disk storage layer for texelterm's scrollback history. The design supports:

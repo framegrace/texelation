@@ -226,10 +226,7 @@ cat /tmp/texelterm-debug.log | grep -E "(RENDER|LOGICALX)"
 ```
 
 ### Reference Tests
-See `apps/texelterm/parser/display_buffer_integration_test.go`:
-- `TestDisplayBuffer_BashReadlineWrapWithCR` - Wrap + CR behavior
-- `TestDisplayBuffer_WrapDirtyTrackingRegression` - Step-by-step dirty tracking verification
-- `TestDisplayBuffer_RenderFlowWithWrap` - Basic render flow simulation
+Sparse-native dirty-tracking regression tests live alongside the parser sources — see `reverse_search_test.go` (real bash readline escape sequences, ICH/DCH + reverse video) and the `simulateRender` helper pattern it uses. `TestAutoWrap_GridRendering` / `TestAutoWrap_ResizeReflow` and other reflow-based pre-sparse tests were explicitly dropped during the sparse cutover; sparse does not reflow on resize, so those invariants no longer apply. VTerm still exposes `DirtyLines()` and `ClearDirty()` — the render-simulation pattern above remains the right shape for new visual-regression tests.
 
 ### Terminal Comparison Framework (`apps/texelterm/testutil/`)
 
@@ -478,31 +475,39 @@ Server-side animation system that animates SplitRatios over time, broadcasting t
 
 ---
 
-### Scrollback Reflow (Three-Level Architecture)
-Separates storage from display for efficient reflow on resize. See `docs/TERMINAL_PERSISTENCE_ARCHITECTURE.md` for full architecture.
+### Scrollback Persistence (Sparse Viewport + WAL)
+Sparse globalIdx-keyed cell store with separate write and view cursors, backed by a Write-Ahead Log and chunked PageStore. See `docs/TERMINAL_PERSISTENCE_ARCHITECTURE.md` for full architecture and `docs/superpowers/specs/2026-04-11-sparse-viewport-write-window-split-design.md` for the design spec.
 
 **Architecture**:
 ```
-Disk History (TXHIST02) -> Scrollback History (~5000 lines) -> Display Buffer (viewport)
+sparse.Store (globalIdx -> cells)
+  + sparse.WriteWindow (writeTop, cursor, HWM)
+  + sparse.ViewWindow  (viewBottom, autoFollow)
+        -> AdaptivePersistence (WriteThrough / Debounced / BestEffort)
+        -> WriteAheadLog + PageStore (TXHIST02 chunked)
 ```
 
 **Key Files**:
-- `apps/texelterm/parser/disk_history.go` - TXHIST02 indexed format
-- `apps/texelterm/parser/scrollback_history.go` - Memory window with disk backing
-- `apps/texelterm/parser/display_buffer.go` - Physical lines at current width
-- `apps/texelterm/parser/logical_line.go` - Width-independent line storage
-- `apps/texelterm/parser/vterm_display_buffer.go` - VTerm integration
+- `apps/texelterm/parser/sparse/store.go` - globalIdx-keyed sparse cell store
+- `apps/texelterm/parser/sparse/write_window.go` - TUI-facing cursor + writeTop anchor
+- `apps/texelterm/parser/sparse/view_window.go` - user-facing viewBottom + autoFollow
+- `apps/texelterm/parser/sparse/terminal.go` - Store/WriteWindow/ViewWindow composition
+- `apps/texelterm/parser/sparse/persistence.go` - PageStore <-> Store bridging
+- `apps/texelterm/parser/main_screen.go` - `MainScreen` interface (satisfied by `sparse.Terminal`)
+- `apps/texelterm/parser/vterm_main_screen.go` - VTerm wiring + `sparseLineStoreAdapter`
+- `apps/texelterm/parser/adaptive_persistence.go` - rate-adjusted disk writer
+- `apps/texelterm/parser/write_ahead_log.go` - WAL with crash recovery
+- `apps/texelterm/parser/page_store.go` - chunked TXHIST02 backing store
+- `apps/texelterm/parser/logical_line.go` - width-independent cell container used at the persistence boundary
 
 **Usage**:
 ```go
-err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
-    MaxMemoryLines: 5000,
-    MarginAbove:    200,
-    MarginBelow:    50,
+err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+    TerminalID: "pane-<uuid>",
 })
 ```
 
-**Performance**: Resize is O(viewport) not O(history).
+**Notes**: No reflow on resize — the store is width-set-at-construction and TUIs that rewrite on resize (most of them) emit new content at new globalIdxs. Resize changes what the write/view windows project, not what the store holds.
 
 ## Related Projects
 

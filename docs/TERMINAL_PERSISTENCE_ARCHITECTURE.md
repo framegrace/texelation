@@ -6,7 +6,7 @@ This document describes how texelterm persists terminal state across resizes, sh
 
 Terminal persistence in texelation covers three main areas:
 
-1. **Scrollback History** - Terminal output preserved across resizes with proper reflow
+1. **Scrollback History** - Terminal output preserved across resizes, shell restarts, and server restarts via a sparse globalIdx model backed by a WAL + chunked page store
 2. **Shell Environment** - Environment variables, working directory preserved across shell AND server restarts
 3. **Command History** - Per-terminal bash history isolation
 
@@ -15,11 +15,11 @@ Terminal persistence in texelation covers three main areas:
 │                     TERMINAL PERSISTENCE                        │
 ├─────────────────────┬─────────────────────┬─────────────────────┤
 │  Scrollback History │  Shell Environment  │  Command History    │
-│  (Three-level arch) │  (Pane-ID files)    │  (Per-pane files)   │
+│  (Sparse + WAL)     │  (Pane-ID files)    │  (Per-pane files)   │
 ├─────────────────────┼─────────────────────┼─────────────────────┤
-│  DiskHistory        │  ~/.texel-env-      │  ~/.texel-history-  │
-│  ScrollbackHistory  │  <pane-id>          │  <pane-id>          │
-│  DisplayBuffer      │                     │                     │
+│  sparse.Terminal    │  ~/.texel-env-      │  ~/.texel-history-  │
+│  AdaptivePersist.   │  <pane-id>          │  <pane-id>          │
+│  WAL + PageStore    │                     │                     │
 └─────────────────────┴─────────────────────┴─────────────────────┘
 ```
 
@@ -27,127 +27,152 @@ All persistence is keyed by **pane ID** (stable UUID), enabling seamless restora
 
 ---
 
-## 1. Scrollback History (Three-Level Architecture)
+## 1. Scrollback History (Sparse Viewport + WAL)
 
-**Status**: Complete (2025-12-12)
+**Status**: Main-screen cutover complete (2026-04-14). Design spec: [`docs/superpowers/specs/2026-04-11-sparse-viewport-write-window-split-design.md`](superpowers/specs/2026-04-11-sparse-viewport-write-window-split-design.md).
 
-The scrollback system separates storage from display for efficient reflow on resize, inspired by SNES tile scrolling.
+The scrollback system uses a globalIdx-keyed **sparse cell store** with an explicit split between the **write cursor** (what the TUI controls) and the **user viewport** (what the user scrolls). Persistence is handled by a Write-Ahead Log + chunked PageStore; the viewport can always project any range of globalIdx without reflowing unrelated content.
 
 ### Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│              DISK HISTORY               │
-│   (TXHIST02 format - O(1) random access)│
-│   Unlimited logical lines on disk       │
-└─────────────────────────────────────────┘
-                    │
-                    │ Load/Unload on demand
-                    ▼
-┌─────────────────────────────────────────┐
-│         SCROLLBACK HISTORY              │
-│   (~5000 logical lines in memory)       │
-│   Sliding window with global indices    │
-└─────────────────────────────────────────┘
-                    │
-                    │ Wrap to current width
-                    ▼
-┌─────────────────────────────────────────┐
-│            DISPLAY BUFFER               │
-│   (Physical lines - current width)      │
-│   ┌─────────────────────────────────┐   │
-│   │     Off-screen ABOVE (~200)     │   │
-│   ├─────────────────────────────────┤   │
-│   │     VISIBLE VIEWPORT            │   │
-│   ├─────────────────────────────────┤   │
-│   │     Off-screen BELOW (~50)      │   │
-│   └─────────────────────────────────┘   │
-└─────────────────────────────────────────┘
+           TUI writes                         user scrolls
+               │                                    │
+               ▼                                    ▼
+     ┌──────────────────┐                ┌──────────────────┐
+     │   WriteWindow    │                │    ViewWindow    │
+     │  writeTop, HWM,  │   OnWrite      │  viewBottom,     │
+     │  cursor (gi,col) │ ─ Bottom  ──►  │  autoFollow      │
+     └──────────────────┘                └──────────────────┘
+               │                                    │
+               │  WriteCell(gi, col, cell)          │  VisibleRange() → (top, bot)
+               ▼                                    │
+     ┌────────────────────────────────────────┐     │
+     │            sparse.Store                │ ◄───┘ projects cells via
+     │  map[int64]*storeLine  (globalIdx →    │      Store.Get(gi, col)
+     │  []Cell). Gaps = blank. No viewport,   │
+     │  no scrollback/viewport split.         │
+     └────────────────────────────────────────┘
+                         │
+                         │ sparseLineStoreAdapter.GetLine(gi)
+                         ▼
+     ┌────────────────────────────────────────┐
+     │       AdaptivePersistence              │
+     │  WriteThrough  < 10 w/s                │
+     │  Debounced    10-100 w/s (adaptive)    │
+     │  BestEffort   > 100 w/s (idle flush)   │
+     └────────────────────────────────────────┘
+                         │
+                         ▼
+     ┌────────────────────────────────────────┐
+     │     WriteAheadLog  +  PageStore        │
+     │  WAL journals writes first, PageStore  │
+     │  stores committed pages (TXHIST02      │
+     │  chunked). Recovery replays WAL.       │
+     └────────────────────────────────────────┘
 ```
+
+The key architectural move from the previous three-level model: **there is no scrollback-vs-viewport distinction inside the store**. Every cell lives at some globalIdx. WriteWindow moves writeTop forward on newline; ViewWindow either follows writeBottom (autoFollow) or pins viewBottom in place while the user scrolls. Reads from either window are O(1) map lookups on Store.
 
 ### Key Properties
 
-| Level | Width-dependent | Resize cost | Size | Persistence |
-|-------|-----------------|-------------|------|-------------|
-| Disk History | No | None | Unlimited | Yes |
-| Scrollback History | No | None | ~5000 lines | No (runtime) |
-| Display Buffer | Yes | O(viewport) | ~500 lines | No |
+| Layer | Concurrency | Size bound | Width-aware | Persistence |
+|-------|-------------|------------|-------------|-------------|
+| sparse.Store | RWMutex | Unbounded in memory (bounded in practice by PageStore eviction) | Width set at construction; lines extend on demand | No (sparse.Store is RAM-only) |
+| WriteWindow | Mutex | Fixed to terminal height; HWM tracks high-water | Yes (uses width for cursor bounds) | No (writeTop/cursor persisted separately as metadata) |
+| ViewWindow | Mutex | Fixed to terminal height | Yes | No (user navigation state) |
+| AdaptivePersistence | Internal rate-limited | Pending queue (bounded by flushing) | No | Forwards to WAL |
+| WAL + PageStore | File locking | Unlimited on disk | No | Yes |
 
 ### Data Structures
 
-**LogicalLine** (`parser/logical_line.go`) - Width-independent line storage:
-```go
-type LogicalLine struct {
-    Cells []Cell  // Full unwrapped content, any length
-}
-func (l *LogicalLine) WrapToWidth(width int) []PhysicalLine
-```
+**`sparse.Store`** (`apps/texelterm/parser/sparse/store.go`) — globalIdx → cells, with blank reads for gaps:
 
-**ScrollbackHistory** (`parser/scrollback_history.go`) - In-memory sliding window:
 ```go
-type ScrollbackHistory struct {
-    lines       []*LogicalLine
-    startIndex  int64  // Global index of first line in memory
-    disk        *DiskHistory
+type Store struct {
+    mu         sync.RWMutex
+    width      int
+    lines      map[int64]*storeLine
+    contentEnd int64  // highest globalIdx ever written; -1 means empty
 }
 ```
 
-**DisplayBuffer** (`parser/display_buffer.go`) - Physical lines at current width:
+**`sparse.WriteWindow`** (`apps/texelterm/parser/sparse/write_window.go`) — TUI-facing cursor anchor:
+
 ```go
-type DisplayBuffer struct {
-    lines              []*PhysicalLine
-    currentLine        *LogicalLine
-    width, height      int
-    viewportOffset     int
-    atLiveEdge         bool
+type WriteWindow struct {
+    mu              sync.Mutex
+    store           *Store
+    width, height   int
+    writeTop        int64  // top globalIdx of the addressable viewport
+    cursorGlobalIdx int64
+    cursorCol       int
+    writeBottomHWM  int64  // high-water mark; expansion never retreats past this
 }
 ```
 
-**DiskHistory** (`parser/disk_history.go`) - TXHIST02 indexed format:
+**`sparse.ViewWindow`** (`apps/texelterm/parser/sparse/view_window.go`) — user-facing scroll anchor:
+
 ```go
-type DiskHistory struct {
-    file    *os.File
-    offsets []int64  // Line offset index for O(1) access
+type ViewWindow struct {
+    mu         sync.Mutex
+    width      int
+    height     int
+    viewBottom int64
+    autoFollow bool
 }
 ```
+
+**`sparse.Terminal`** (`apps/texelterm/parser/sparse/terminal.go`) composes the three. It satisfies the parser-package `MainScreen` interface (see `apps/texelterm/parser/main_screen.go`). The parser → sparse → parser import cycle is avoided by declaring `MainScreen` in the parser package.
+
+**`AdaptivePersistence`** (`apps/texelterm/parser/adaptive_persistence.go`) — rate-adjusted disk writer. The concrete `LineStore` it consumes is `sparseLineStoreAdapter` in `vterm_main_screen.go`, which bridges `MainScreen.ReadLine` to the `*LogicalLine` format the persistence layer expects.
+
+**`WriteAheadLog`** (`apps/texelterm/parser/write_ahead_log.go`) + **`PageStore`** (`apps/texelterm/parser/page_store.go`) — journaled durable storage. See the [sparse pagestore design](superpowers/specs/2026-04-07-sparse-pagestore-design.md) for layout details.
 
 ### Usage
 
 ```go
-// Enable disk-backed display buffer
-err := v.EnableDisplayBufferWithDisk(diskPath, DisplayBufferOptions{
-    MaxMemoryLines: 5000,
-    MarginAbove:    200,
-    MarginBelow:    50,
+// Enable sparse main screen with WAL-backed persistence
+err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
+    TerminalID: "pane-<uuid>",
 })
-defer v.CloseDisplayBuffer()
+defer v.CloseMemoryBuffer()
 ```
 
-### Configuration
+`EnableMemoryBufferWithDisk` (in `vterm_main_screen.go`):
+1. Constructs the `sparse.Terminal` via `MainScreenFactory` (registered in `parser/sparse/register.go`)
+2. Opens the WAL, which recovers `writeTop`/`cursor`/`PromptStartLine`/`CWD` from the last flushed metadata
+3. Replays committed pages from PageStore into `sparse.Store` via `LoadFromPageStore`
+4. Wires `AdaptivePersistence` between the sparse adapter and the WAL
 
-Enable in `~/.config/texelation/theme.json`:
-```json
-{
-  "texelterm": {
-    "display_buffer_enabled": true
-  }
-}
-```
-
-### Performance
-
-Benchmarks on AMD Ryzen 9 3950X:
-- **PlaceChar**: ~563ns/op
-- **Resize**: ~146µs/op with 1000 lines (O(viewport) not O(history))
-- **Scroll**: ~8.6ns/op, 0 allocations
+On `CloseMemoryBuffer`, pending viewport lines are flushed, final metadata is written with `Sync()`, and the WAL is closed cleanly (see `project_scrollback_close_clamp` memory for the clamp protocol).
 
 ### Files
 
-- `apps/texelterm/parser/logical_line.go` - LogicalLine with wrapping
-- `apps/texelterm/parser/scrollback_history.go` - Memory window with disk backing
-- `apps/texelterm/parser/display_buffer.go` - Physical line viewport
-- `apps/texelterm/parser/disk_history.go` - TXHIST02 indexed format
-- `apps/texelterm/parser/vterm_display_buffer.go` - VTerm integration layer
+Core sparse types:
+- `apps/texelterm/parser/sparse/store.go` — globalIdx → cells map
+- `apps/texelterm/parser/sparse/write_window.go` — cursor + writeTop anchor
+- `apps/texelterm/parser/sparse/view_window.go` — viewBottom + autoFollow
+- `apps/texelterm/parser/sparse/terminal.go` — composition type
+- `apps/texelterm/parser/sparse/persistence.go` — PageStore ↔ Store bridging
+- `apps/texelterm/parser/sparse/register.go` — installs `MainScreenFactory`
+
+Parser integration:
+- `apps/texelterm/parser/main_screen.go` — `MainScreen` interface + factory hook
+- `apps/texelterm/parser/vterm_main_screen.go` — VTerm wiring + `sparseLineStoreAdapter`
+- `apps/texelterm/parser/legacy_stubs.go` — retained stubs (`MemoryBufferOptions`, `EvictedLine`) kept until the last callers migrate
+
+Persistence:
+- `apps/texelterm/parser/adaptive_persistence.go` — rate-adjusted writer
+- `apps/texelterm/parser/write_ahead_log.go` — WAL with recovery
+- `apps/texelterm/parser/page_store.go` — chunked TXHIST02 backing store
+- `apps/texelterm/parser/logical_line.go` — width-independent cell container (used at the persistence boundary)
+
+### Design notes
+
+- **No reflow on resize.** The store is width-set-at-construction; resize changes what the write/view windows project, not the underlying cells. TUIs that rewrite on resize (most of them) emit new content at new globalIdxs. The sparse model accepts TUI-side duplicates rather than hacking to suppress them (see `feedback_sparse_resize_tui_duplicates`).
+- **writeBottomHWM** guarantees that expansion never retreats writeTop into content the user saw. Shrinking may temporarily drop writeBottom below HWM when the cursor absorbs empty trailing rows.
+- **autoFollow** is the default. User scroll pins `viewBottom` and clears autoFollow; input (via `OnInput`) snaps back to the live edge.
 
 ---
 

@@ -2,14 +2,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: apps/texelterm/parser/burst_recovery_test.go
-// Summary: Tests for burst write → close → reopen recovery integrity.
-// Reproduces the "ls -lR" bug where high-volume output followed by
-// server restart causes content loss or incorrect viewport position.
+// Summary: Tests for burst write → close → reopen recovery integrity on the
+// sparse main-screen path. Reproduces the "ls -lR" bug where high-volume
+// output followed by server restart caused content loss or incorrect
+// viewport position.
 //
-// NOTE: Excluded from build — references the legacy memBufState field
-// removed during the sparse-viewport cutover. Retained for reference.
-
-//go:build ignore
+// These tests exercise the full sparse pipeline: VTerm → sparse.Terminal
+// (Store/WriteWindow/ViewWindow) → AdaptivePersistence → WriteAheadLog →
+// PageStore. Symbols in terms of the sparse model:
+//   - writeTop  (the write-window anchor, replaces the old liveEdgeBase)
+//   - ContentEnd (highest globalIdx ever written; exclusive "end" is +1)
+//   - MainScreenState (persistent metadata, replaces ViewportState)
+//
+// Helpers `logicalLineToString`, `trimLogicalLine`, and `sparseCellsToString`
+// live in test_helpers_test.go.
 
 package parser
 
@@ -20,7 +26,9 @@ import (
 )
 
 // dirtyClose simulates a crash: stops the idle monitor and closes file
-// handles without flushing pending writes or checkpointing.
+// handles without flushing pending writes or checkpointing. The WAL
+// clamping that runs in the normal Flush path is skipped, so whatever
+// was on disk before the crash is what recovery sees.
 func dirtyClose(v *VTerm) {
 	ap := v.mainScreenPersistence
 	if ap == nil {
@@ -50,7 +58,7 @@ func dirtyClose(v *VTerm) {
 	}
 }
 
-// newTestVTerm creates a VTerm with disk-backed memory buffer in the given dir.
+// newTestVTerm creates a VTerm with disk-backed sparse main screen in the given dir.
 func newTestVTerm(t *testing.T, cols, rows int, dir, id string) *VTerm {
 	t.Helper()
 	v := NewVTerm(cols, rows)
@@ -78,11 +86,13 @@ func writeLines(v *VTerm, n int) {
 }
 
 // snapshotState captures the VTerm state we expect to survive recovery.
+// Field names preserve the pre-sparse vocabulary for log readability:
+// `liveEdgeBase` stores the current writeTop; `globalEnd` stores ContentEnd+1.
 type snapshotState struct {
 	liveEdgeBase int64
 	cursorX      int
 	cursorY      int
-	globalEnd    int64
+	globalEnd    int64 // exclusive upper bound (ContentEnd + 1)
 	// Content sample: text of a few lines around the viewport
 	viewportTopLine string
 	cursorLine      string
@@ -97,7 +107,7 @@ func captureState(v *VTerm) snapshotState {
 		liveEdgeBase: writeTop,
 		cursorX:      v.cursorX,
 		cursorY:      v.cursorY,
-		globalEnd:    v.ContentEnd(),
+		globalEnd:    v.ContentEnd() + 1,
 	}
 	if v.mainScreen != nil {
 		if cells := v.mainScreen.ReadLine(writeTop); cells != nil {
@@ -111,8 +121,35 @@ func captureState(v *VTerm) snapshotState {
 	return s
 }
 
+// readSparseLine returns the trimmed text at globalIdx from the sparse store.
+// Returns "" when the position holds no content (gap, trimmed blanks).
+func readSparseLine(v *VTerm, globalIdx int64) string {
+	if v.mainScreen == nil {
+		return ""
+	}
+	cells := v.mainScreen.ReadLine(globalIdx)
+	if cells == nil {
+		return ""
+	}
+	return trimLogicalLine(sparseCellsToString(cells))
+}
+
+// captureViewport reads all viewport lines from the sparse terminal. The
+// viewport is the writeTop .. writeTop+height-1 range (the live edge).
+func captureViewport(v *VTerm) []string {
+	lines := make([]string, v.height)
+	if v.mainScreen == nil {
+		return lines
+	}
+	writeTop := v.mainScreen.WriteTop()
+	for y := 0; y < v.height; y++ {
+		lines[y] = readSparseLine(v, writeTop+int64(y))
+	}
+	return lines
+}
+
 // TestBurstWriteRecovery_BasicIntegrity writes many lines, closes the VTerm,
-// reopens from disk, and verifies that liveEdgeBase, cursor, and content
+// reopens from disk, and verifies that writeTop, cursor, and content
 // are correctly recovered.
 func TestBurstWriteRecovery_BasicIntegrity(t *testing.T) {
 	dir := t.TempDir()
@@ -125,7 +162,7 @@ func TestBurstWriteRecovery_BasicIntegrity(t *testing.T) {
 	writeLines(v1, numLines)
 
 	before := captureState(v1)
-	t.Logf("Before close: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Before close: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		before.liveEdgeBase, before.cursorX, before.cursorY, before.globalEnd)
 	t.Logf("  viewportTopLine: %q", before.viewportTopLine)
 	t.Logf("  cursorLine:      %q", before.cursorLine)
@@ -142,14 +179,14 @@ func TestBurstWriteRecovery_BasicIntegrity(t *testing.T) {
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 
 	after := captureState(v2)
-	t.Logf("After reopen:  liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After reopen:  writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 	t.Logf("  viewportTopLine: %q", after.viewportTopLine)
 	t.Logf("  cursorLine:      %q", after.cursorLine)
 
-	// Verify liveEdgeBase survived
+	// Verify writeTop survived
 	if after.liveEdgeBase != before.liveEdgeBase {
-		t.Errorf("liveEdgeBase mismatch: before=%d, after=%d", before.liveEdgeBase, after.liveEdgeBase)
+		t.Errorf("writeTop mismatch: before=%d, after=%d", before.liveEdgeBase, after.liveEdgeBase)
 	}
 
 	// Verify cursor position survived
@@ -188,7 +225,7 @@ func TestBurstWriteRecovery_LargeVolume(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 
 	before := captureState(v1)
-	t.Logf("Before close: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Before close: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		before.liveEdgeBase, before.cursorX, before.cursorY, before.globalEnd)
 
 	if err := v1.CloseMemoryBuffer(); err != nil {
@@ -197,11 +234,11 @@ func TestBurstWriteRecovery_LargeVolume(t *testing.T) {
 
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
-	t.Logf("After reopen:  liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After reopen:  writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 
 	if after.liveEdgeBase != before.liveEdgeBase {
-		t.Errorf("liveEdgeBase mismatch: before=%d, after=%d", before.liveEdgeBase, after.liveEdgeBase)
+		t.Errorf("writeTop mismatch: before=%d, after=%d", before.liveEdgeBase, after.liveEdgeBase)
 	}
 	if after.cursorX != before.cursorX || after.cursorY != before.cursorY {
 		t.Errorf("cursor mismatch: before=(%d,%d), after=(%d,%d)",
@@ -224,7 +261,7 @@ func TestBurstWriteRecovery_ImmediateClose(t *testing.T) {
 
 	// Close immediately — no idle flush, everything must be flushed by Close
 	before := captureState(v1)
-	t.Logf("Before close: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Before close: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		before.liveEdgeBase, before.cursorX, before.cursorY, before.globalEnd)
 
 	if err := v1.CloseMemoryBuffer(); err != nil {
@@ -233,26 +270,28 @@ func TestBurstWriteRecovery_ImmediateClose(t *testing.T) {
 
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
-	t.Logf("After reopen:  liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After reopen:  writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 
 	if after.liveEdgeBase != before.liveEdgeBase {
-		t.Errorf("liveEdgeBase mismatch: before=%d, after=%d", before.liveEdgeBase, after.liveEdgeBase)
+		t.Errorf("writeTop mismatch: before=%d, after=%d", before.liveEdgeBase, after.liveEdgeBase)
 	}
 	if after.cursorX != before.cursorX || after.cursorY != before.cursorY {
 		t.Errorf("cursor mismatch: before=(%d,%d), after=(%d,%d)",
 			before.cursorX, before.cursorY, after.cursorX, after.cursorY)
 	}
 
-	// Content should not be lost — check that lines near the viewport exist
-	mb2 := v2.memBufState.memBuf
+	// Content should not be lost — check that lines near the viewport exist.
+	// In the sparse model, writeTop is the anchor (equivalent to the old
+	// liveEdgeBase); ContentEnd+1 is the exclusive upper bound.
+	contentEndExcl := v2.ContentEnd() + 1
 	for y := 0; y < rows; y++ {
 		globalLine := after.liveEdgeBase + int64(y)
-		if globalLine >= mb2.GlobalEnd() {
+		if globalLine >= contentEndExcl {
 			break
 		}
-		line := mb2.GetLine(globalLine)
-		if line == nil {
+		cells := v2.mainScreen.ReadLine(globalLine)
+		if cells == nil {
 			t.Errorf("line %d (viewport row %d) is nil after recovery", globalLine, y)
 		}
 	}
@@ -269,7 +308,7 @@ func TestBurstWriteRecovery_MultipleRestarts(t *testing.T) {
 	const linesPerSession = 200
 	const numRestarts = 5
 
-	var lastLiveEdgeBase int64
+	var lastWriteTop int64
 
 	for restart := 0; restart < numRestarts; restart++ {
 		v := newTestVTerm(t, cols, rows, dir, id)
@@ -277,17 +316,17 @@ func TestBurstWriteRecovery_MultipleRestarts(t *testing.T) {
 		writeLines(v, linesPerSession)
 
 		state := captureState(v)
-		t.Logf("Restart %d: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+		t.Logf("Restart %d: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 			restart, state.liveEdgeBase, state.cursorX, state.cursorY, state.globalEnd)
 
 		if restart > 0 {
-			// After first session, liveEdgeBase should grow monotonically
-			if state.liveEdgeBase < lastLiveEdgeBase {
-				t.Errorf("Restart %d: liveEdgeBase went backward: %d -> %d",
-					restart, lastLiveEdgeBase, state.liveEdgeBase)
+			// After first session, writeTop should grow monotonically
+			if state.liveEdgeBase < lastWriteTop {
+				t.Errorf("Restart %d: writeTop went backward: %d -> %d",
+					restart, lastWriteTop, state.liveEdgeBase)
 			}
 		}
-		lastLiveEdgeBase = state.liveEdgeBase
+		lastWriteTop = state.liveEdgeBase
 
 		if err := v.CloseMemoryBuffer(); err != nil {
 			t.Fatalf("Restart %d: CloseMemoryBuffer: %v", restart, err)
@@ -297,7 +336,7 @@ func TestBurstWriteRecovery_MultipleRestarts(t *testing.T) {
 	// Final verification: reopen and check content is accessible
 	vFinal := newTestVTerm(t, cols, rows, dir, id)
 	finalState := captureState(vFinal)
-	t.Logf("Final: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Final: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		finalState.liveEdgeBase, finalState.cursorX, finalState.cursorY, finalState.globalEnd)
 
 	// Should have accumulated lines from all sessions
@@ -320,19 +359,19 @@ func TestBurstWriteRecovery_ContentIntegrity(t *testing.T) {
 	writeLines(v1, numLines)
 
 	// Sample specific lines before close
-	mb1 := v1.memBufState.memBuf
 	type sample struct {
 		idx  int64
 		text string
 	}
 	samples := []sample{}
+	contentEndExcl := v1.ContentEnd() + 1
 	// Sample first, middle, and last few lines
 	for _, idx := range []int64{0, 1, int64(numLines / 2), int64(numLines - 2), int64(numLines - 1)} {
-		if idx < mb1.GlobalOffset() || idx >= mb1.GlobalEnd() {
+		if idx < 0 || idx >= contentEndExcl {
 			continue
 		}
-		if line := mb1.GetLine(idx); line != nil {
-			samples = append(samples, sample{idx, trimLogicalLine(logicalLineToString(line))})
+		if cells := v1.mainScreen.ReadLine(idx); cells != nil {
+			samples = append(samples, sample{idx, trimLogicalLine(sparseCellsToString(cells))})
 		}
 	}
 
@@ -341,14 +380,13 @@ func TestBurstWriteRecovery_ContentIntegrity(t *testing.T) {
 	}
 
 	v2 := newTestVTerm(t, cols, rows, dir, id)
-	mb2 := v2.memBufState.memBuf
 
 	for _, s := range samples {
-		line := mb2.GetLine(s.idx)
-		if line == nil {
-			// Line might be outside the loaded window — try PageStore
-			if v2.memBufState.pageStore != nil {
-				lines, err := v2.memBufState.pageStore.ReadLineRange(s.idx, s.idx+1)
+		cells := v2.mainScreen.ReadLine(s.idx)
+		if cells == nil {
+			// Line might be outside the loaded window — try PageStore directly
+			if v2.mainScreenPageStore != nil {
+				lines, err := v2.mainScreenPageStore.ReadLineRange(s.idx, s.idx+1)
 				if err == nil && len(lines) > 0 {
 					got := trimLogicalLine(logicalLineToString(lines[0]))
 					if got != s.text {
@@ -360,7 +398,7 @@ func TestBurstWriteRecovery_ContentIntegrity(t *testing.T) {
 			t.Errorf("Line %d not found after recovery", s.idx)
 			continue
 		}
-		got := trimLogicalLine(logicalLineToString(line))
+		got := trimLogicalLine(sparseCellsToString(cells))
 		if got != s.text {
 			t.Errorf("Line %d: got %q, want %q", s.idx, got, s.text)
 		}
@@ -381,11 +419,11 @@ func TestBurstWriteRecovery_MetadataNotCorrupted(t *testing.T) {
 	v1 := newTestVTerm(t, cols, rows, dir, id)
 	writeLines(v1, numLines)
 
-	expectedLEB := v1.memBufState.liveEdgeBase
+	expectedWriteTop := v1.mainScreen.WriteTop()
 	expectedCX := v1.cursorX
 	expectedCY := v1.cursorY
 
-	t.Logf("Expected metadata: liveEdgeBase=%d, cursor=(%d,%d)", expectedLEB, expectedCX, expectedCY)
+	t.Logf("Expected metadata: writeTop=%d, cursor=(%d,%d)", expectedWriteTop, expectedCX, expectedCY)
 
 	if err := v1.CloseMemoryBuffer(); err != nil {
 		t.Fatalf("CloseMemoryBuffer: %v", err)
@@ -395,11 +433,11 @@ func TestBurstWriteRecovery_MetadataNotCorrupted(t *testing.T) {
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
 
-	t.Logf("Recovered state: liveEdgeBase=%d, cursor=(%d,%d)",
+	t.Logf("Recovered state: writeTop=%d, cursor=(%d,%d)",
 		after.liveEdgeBase, after.cursorX, after.cursorY)
 
-	if after.liveEdgeBase != expectedLEB {
-		t.Errorf("LiveEdgeBase: got %d, want %d", after.liveEdgeBase, expectedLEB)
+	if after.liveEdgeBase != expectedWriteTop {
+		t.Errorf("WriteTop: got %d, want %d", after.liveEdgeBase, expectedWriteTop)
 	}
 	if after.cursorX != expectedCX {
 		t.Errorf("CursorX: got %d, want %d", after.cursorX, expectedCX)
@@ -426,7 +464,7 @@ func TestBurstWriteRecovery_DirtyClose_AfterIdleFlush(t *testing.T) {
 	writeLines(v1, numLines)
 
 	stateBeforeFlush := captureState(v1)
-	t.Logf("State after write: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("State after write: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		stateBeforeFlush.liveEdgeBase, stateBeforeFlush.cursorX, stateBeforeFlush.cursorY, stateBeforeFlush.globalEnd)
 
 	// Wait for idle flush to fire and persist
@@ -438,12 +476,12 @@ func TestBurstWriteRecovery_DirtyClose_AfterIdleFlush(t *testing.T) {
 	// Reopen
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
-	t.Logf("After dirty reopen: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After dirty reopen: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 
 	// After idle flush, everything should have been persisted
 	if after.liveEdgeBase != stateBeforeFlush.liveEdgeBase {
-		t.Errorf("liveEdgeBase mismatch: expected=%d, got=%d",
+		t.Errorf("writeTop mismatch: expected=%d, got=%d",
 			stateBeforeFlush.liveEdgeBase, after.liveEdgeBase)
 	}
 	if after.cursorY != stateBeforeFlush.cursorY {
@@ -478,18 +516,18 @@ func TestBurstWriteRecovery_DirtyClose_MidBurst(t *testing.T) {
 	// Reopen — should not crash or corrupt
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
-	t.Logf("After dirty reopen: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After dirty reopen: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 
 	// We can't assert exact content since flush didn't complete, but:
 	// 1. No crash
-	// 2. globalEnd should be >= 0
-	// 3. liveEdgeBase should be sane
+	// 2. globalEnd should be >= 0 (ContentEnd starts at -1; globalEnd = ContentEnd+1 >= 0)
+	// 3. writeTop should be sane
 	if after.globalEnd < 0 {
 		t.Errorf("globalEnd should be >= 0, got %d", after.globalEnd)
 	}
 	if after.liveEdgeBase < 0 {
-		t.Errorf("liveEdgeBase should be >= 0, got %d", after.liveEdgeBase)
+		t.Errorf("writeTop should be >= 0, got %d", after.liveEdgeBase)
 	}
 
 	v2.CloseMemoryBuffer()
@@ -508,14 +546,15 @@ func TestBurstWriteRecovery_DirtyClose_WithExplicitFlush(t *testing.T) {
 	// Write first batch and flush
 	writeLines(v1, 200)
 	stateAfterFirstBatch := captureState(v1)
-	t.Logf("After first batch: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After first batch: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		stateAfterFirstBatch.liveEdgeBase, stateAfterFirstBatch.cursorX,
 		stateAfterFirstBatch.cursorY, stateAfterFirstBatch.globalEnd)
 
 	// Force flush to persist everything so far
-	if v1.memBufState.persistence != nil {
-		v1.notifyMetadataChange()
-		if err := v1.memBufState.persistence.Flush(); err != nil {
+	if v1.mainScreenPersistence != nil {
+		state := v1.snapshotMainScreenState()
+		v1.mainScreenPersistence.NotifyMetadataChange(&state)
+		if err := v1.mainScreenPersistence.Flush(); err != nil {
 			t.Fatalf("Flush: %v", err)
 		}
 	}
@@ -523,7 +562,7 @@ func TestBurstWriteRecovery_DirtyClose_WithExplicitFlush(t *testing.T) {
 	// Write more lines (these won't be flushed)
 	writeLines(v1, 300)
 	stateAfterSecondBatch := captureState(v1)
-	t.Logf("After second batch: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After second batch: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		stateAfterSecondBatch.liveEdgeBase, stateAfterSecondBatch.cursorX,
 		stateAfterSecondBatch.cursorY, stateAfterSecondBatch.globalEnd)
 
@@ -533,12 +572,12 @@ func TestBurstWriteRecovery_DirtyClose_WithExplicitFlush(t *testing.T) {
 	// Reopen
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
-	t.Logf("After dirty reopen: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After dirty reopen: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 
 	// The flushed metadata should be from the first batch's flush
 	if after.liveEdgeBase != stateAfterFirstBatch.liveEdgeBase {
-		t.Errorf("liveEdgeBase: expected %d (from explicit flush), got %d",
+		t.Errorf("writeTop: expected %d (from explicit flush), got %d",
 			stateAfterFirstBatch.liveEdgeBase, after.liveEdgeBase)
 	}
 	if after.cursorY != stateAfterFirstBatch.cursorY {
@@ -566,7 +605,7 @@ func TestBurstWriteRecovery_DirtyClose_MultipleRestartsNoDrift(t *testing.T) {
 		time.Sleep(1500 * time.Millisecond)
 
 		state := captureState(v)
-		t.Logf("Restart %d: liveEdgeBase=%d, cursor=(%d,%d), globalEnd=%d",
+		t.Logf("Restart %d: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 			restart, state.liveEdgeBase, state.cursorX, state.cursorY, state.globalEnd)
 
 		// Dirty close after idle flush
@@ -577,7 +616,7 @@ func TestBurstWriteRecovery_DirtyClose_MultipleRestartsNoDrift(t *testing.T) {
 		recovered := captureState(v2)
 
 		if recovered.liveEdgeBase != state.liveEdgeBase {
-			t.Errorf("Restart %d: liveEdgeBase drift: wrote=%d, recovered=%d",
+			t.Errorf("Restart %d: writeTop drift: wrote=%d, recovered=%d",
 				restart, state.liveEdgeBase, recovered.liveEdgeBase)
 		}
 		if recovered.cursorY != state.cursorY {
@@ -617,7 +656,7 @@ func TestBurstWriteRecovery_ConcurrentFlushAndClose(t *testing.T) {
 		after := captureState(v2)
 
 		if after.liveEdgeBase != before.liveEdgeBase {
-			t.Errorf("Attempt %d: liveEdgeBase mismatch: before=%d, after=%d",
+			t.Errorf("Attempt %d: writeTop mismatch: before=%d, after=%d",
 				attempt, before.liveEdgeBase, after.liveEdgeBase)
 		}
 		if after.cursorY != before.cursorY {
@@ -630,9 +669,9 @@ func TestBurstWriteRecovery_ConcurrentFlushAndClose(t *testing.T) {
 }
 
 // --- VTerm-level coherence tests ---
-// These verify that the FULL recovery path (loadHistoryFromDisk + metadata
-// restore + trimBlankTailLines + prompt positioning) produces a state where
-// the viewport content matches what the terminal showed before closing.
+// These verify that the FULL recovery path (LoadFromPageStore + metadata
+// restore + prompt positioning) produces a state where the viewport
+// content matches what the terminal showed before closing.
 
 // writeNumberedLines writes n lines through the VTerm parser with predictable
 // content: "L<number> <padding>" so we can verify exact content on recovery.
@@ -644,26 +683,6 @@ func writeNumberedLines(v *VTerm, start, count int) {
 			p.Parse(r)
 		}
 	}
-}
-
-// getVTermLine reads a line from the VTerm's MemoryBuffer and returns its text.
-func getVTermLine(v *VTerm, globalIdx int64) string {
-	mb := v.memBufState.memBuf
-	line := mb.GetLine(globalIdx)
-	if line == nil {
-		return ""
-	}
-	return trimLogicalLine(logicalLineToString(line))
-}
-
-// captureViewport reads all viewport lines from the VTerm.
-func captureViewport(v *VTerm) []string {
-	lines := make([]string, v.height)
-	for y := 0; y < v.height; y++ {
-		globalIdx := v.memBufState.liveEdgeBase + int64(y)
-		lines[y] = getVTermLine(v, globalIdx)
-	}
-	return lines
 }
 
 // TestVTermCoherence_BasicViewportContent writes numbered lines, closes,
@@ -678,7 +697,7 @@ func TestVTermCoherence_BasicViewportContent(t *testing.T) {
 
 	before := captureState(v1)
 	beforeVP := captureViewport(v1)
-	t.Logf("Before close: LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Before close: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		before.liveEdgeBase, before.cursorX, before.cursorY, before.globalEnd)
 
 	v1.CloseMemoryBuffer()
@@ -686,7 +705,7 @@ func TestVTermCoherence_BasicViewportContent(t *testing.T) {
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
 	afterVP := captureViewport(v2)
-	t.Logf("After reopen: LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After reopen: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 
 	mismatches := 0
@@ -715,7 +734,7 @@ func TestVTermCoherence_LargeOutput(t *testing.T) {
 
 	before := captureState(v1)
 	beforeVP := captureViewport(v1)
-	t.Logf("Before: LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Before: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		before.liveEdgeBase, before.cursorX, before.cursorY, before.globalEnd)
 
 	v1.CloseMemoryBuffer()
@@ -723,11 +742,11 @@ func TestVTermCoherence_LargeOutput(t *testing.T) {
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
 	afterVP := captureViewport(v2)
-	t.Logf("After:  LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After:  writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 
 	if after.liveEdgeBase != before.liveEdgeBase {
-		t.Errorf("LEB mismatch: %d -> %d", before.liveEdgeBase, after.liveEdgeBase)
+		t.Errorf("writeTop mismatch: %d -> %d", before.liveEdgeBase, after.liveEdgeBase)
 	}
 
 	mismatches := 0
@@ -756,14 +775,14 @@ func TestVTermCoherence_DirtyClose_ViewportContent(t *testing.T) {
 
 	before := captureState(v1)
 	beforeVP := captureViewport(v1)
-	t.Logf("Before: LEB=%d, cursor=(%d,%d)", before.liveEdgeBase, before.cursorX, before.cursorY)
+	t.Logf("Before: writeTop=%d, cursor=(%d,%d)", before.liveEdgeBase, before.cursorX, before.cursorY)
 
 	time.Sleep(1600 * time.Millisecond)
 	dirtyClose(v1)
 
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	afterVP := captureViewport(v2)
-	t.Logf("After:  LEB=%d, cursor=(%d,%d)", v2.memBufState.liveEdgeBase, v2.cursorX, v2.cursorY)
+	t.Logf("After:  writeTop=%d, cursor=(%d,%d)", v2.mainScreen.WriteTop(), v2.cursorX, v2.cursorY)
 
 	mismatches := 0
 	for i := 0; i < rows; i++ {
@@ -778,8 +797,8 @@ func TestVTermCoherence_DirtyClose_ViewportContent(t *testing.T) {
 	v2.CloseMemoryBuffer()
 }
 
-// TestVTermCoherence_TrimBlankTailLines verifies that trimBlankTailLines
-// doesn't lose content or produce an all-blank viewport.
+// TestVTermCoherence_TrimBlankTailLines verifies that the recovery doesn't
+// produce an all-blank viewport even when some lines are blank.
 func TestVTermCoherence_TrimBlankTailLines(t *testing.T) {
 	dir := t.TempDir()
 	id := "vt-coherence-trim"
@@ -789,20 +808,20 @@ func TestVTermCoherence_TrimBlankTailLines(t *testing.T) {
 	writeNumberedLines(v1, 0, 50)
 
 	before := captureState(v1)
-	t.Logf("Before: LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Before: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		before.liveEdgeBase, before.cursorX, before.cursorY, before.globalEnd)
 
 	v1.CloseMemoryBuffer()
 
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
-	t.Logf("After:  LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After:  writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 
 	hasContent := false
 	for y := 0; y < rows; y++ {
 		globalIdx := after.liveEdgeBase + int64(y)
-		got := getVTermLine(v2, globalIdx)
+		got := readSparseLine(v2, globalIdx)
 		if got != "" {
 			hasContent = true
 			expected := fmt.Sprintf("L%05d abcdefghijklmnopqrstuvwxyz-padding", globalIdx)
@@ -830,7 +849,7 @@ func TestVTermCoherence_MultipleRestarts(t *testing.T) {
 
 		before := captureState(v)
 		beforeVP := captureViewport(v)
-		t.Logf("Restart %d: LEB=%d, cursor=(%d,%d), VP[0]=%q",
+		t.Logf("Restart %d: writeTop=%d, cursor=(%d,%d), VP[0]=%q",
 			restart, before.liveEdgeBase, before.cursorX, before.cursorY, beforeVP[0])
 
 		v.CloseMemoryBuffer()
@@ -865,7 +884,7 @@ func TestVTermCoherence_LsLR_ExactScenario(t *testing.T) {
 	beforeState := captureState(v1)
 	beforeVP := captureViewport(v1)
 
-	t.Logf("Session 1 state: LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Session 1 state: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		beforeState.liveEdgeBase, beforeState.cursorX, beforeState.cursorY, beforeState.globalEnd)
 	t.Logf("  VP top line: %q", beforeVP[0])
 	t.Logf("  VP bot line: %q", beforeVP[rows-1])
@@ -878,17 +897,17 @@ func TestVTermCoherence_LsLR_ExactScenario(t *testing.T) {
 	afterState := captureState(v2)
 	afterVP := captureViewport(v2)
 
-	t.Logf("Session 2 state: LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Session 2 state: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		afterState.liveEdgeBase, afterState.cursorX, afterState.cursorY, afterState.globalEnd)
 	t.Logf("  VP top line: %q", afterVP[0])
 	t.Logf("  VP bot line: %q", afterVP[rows-1])
 
-	// THE BUG: liveEdgeBase shifted forward by exactly `rows`, making viewport blank
+	// THE BUG: writeTop shifted forward by exactly `rows`, making viewport blank
 	if afterState.liveEdgeBase != beforeState.liveEdgeBase {
 		diff := afterState.liveEdgeBase - beforeState.liveEdgeBase
-		t.Errorf("LEB shifted by %d (before=%d, after=%d)", diff, beforeState.liveEdgeBase, afterState.liveEdgeBase)
+		t.Errorf("writeTop shifted by %d (before=%d, after=%d)", diff, beforeState.liveEdgeBase, afterState.liveEdgeBase)
 		if diff == int64(rows) {
-			t.Error("LEB shifted by EXACTLY viewport height — this is the ls -lR bug!")
+			t.Error("writeTop shifted by EXACTLY viewport height — this is the ls -lR bug!")
 		}
 	}
 
@@ -922,7 +941,7 @@ func TestVTermCoherence_LsLR_ExactScenario(t *testing.T) {
 
 // TestVTermCoherence_ResizeAfterRestore verifies that calling Resize
 // after history recovery (which happens during client reconnect) doesn't
-// shift liveEdgeBase.
+// shift writeTop.
 func TestVTermCoherence_ResizeAfterRestore(t *testing.T) {
 	dir := t.TempDir()
 	id := "vt-resize-after"
@@ -937,18 +956,18 @@ func TestVTermCoherence_ResizeAfterRestore(t *testing.T) {
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	stateAfterLoad := captureState(v2)
 	vpAfterLoad := captureViewport(v2)
-	t.Logf("After load: LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After load: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		stateAfterLoad.liveEdgeBase, stateAfterLoad.cursorX, stateAfterLoad.cursorY, stateAfterLoad.globalEnd)
 
 	// Now simulate what happens during client reconnect: Resize to same size
 	v2.Resize(cols, rows)
 	stateAfterResize := captureState(v2)
 	vpAfterResize := captureViewport(v2)
-	t.Logf("After same-size resize: LEB=%d, cursor=(%d,%d)",
+	t.Logf("After same-size resize: writeTop=%d, cursor=(%d,%d)",
 		stateAfterResize.liveEdgeBase, stateAfterResize.cursorX, stateAfterResize.cursorY)
 
 	if stateAfterResize.liveEdgeBase != stateAfterLoad.liveEdgeBase {
-		t.Errorf("Same-size resize shifted LEB: %d -> %d (diff=%d)",
+		t.Errorf("Same-size resize shifted writeTop: %d -> %d (diff=%d)",
 			stateAfterLoad.liveEdgeBase, stateAfterResize.liveEdgeBase,
 			stateAfterResize.liveEdgeBase-stateAfterLoad.liveEdgeBase)
 	}
@@ -956,16 +975,16 @@ func TestVTermCoherence_ResizeAfterRestore(t *testing.T) {
 	// Also test resize to different size then back
 	v2.Resize(cols, rows+10) // grow
 	stateGrown := captureState(v2)
-	t.Logf("After grow (+10): LEB=%d, cursor=(%d,%d)",
+	t.Logf("After grow (+10): writeTop=%d, cursor=(%d,%d)",
 		stateGrown.liveEdgeBase, stateGrown.cursorX, stateGrown.cursorY)
 
 	v2.Resize(cols, rows) // back to original
 	stateBack := captureState(v2)
-	t.Logf("After shrink back: LEB=%d, cursor=(%d,%d)",
+	t.Logf("After shrink back: writeTop=%d, cursor=(%d,%d)",
 		stateBack.liveEdgeBase, stateBack.cursorX, stateBack.cursorY)
 
 	if stateBack.liveEdgeBase != stateAfterLoad.liveEdgeBase {
-		t.Errorf("Grow+shrink shifted LEB: %d -> %d (diff=%d)",
+		t.Errorf("Grow+shrink shifted writeTop: %d -> %d (diff=%d)",
 			stateAfterLoad.liveEdgeBase, stateBack.liveEdgeBase,
 			stateBack.liveEdgeBase-stateAfterLoad.liveEdgeBase)
 	}
@@ -981,18 +1000,18 @@ func TestVTermCoherence_ResizeAfterRestore(t *testing.T) {
 	}
 
 	// Test resize to 0x0 then back (the server default before client connects)
-	v2.Resize(cols, 1) // near-zero
+	v2.Resize(cols, 1)    // near-zero
 	v2.Resize(cols, rows) // back
 	stateFromZero := captureState(v2)
-	t.Logf("After 1->%d resize: LEB=%d, cursor=(%d,%d)",
+	t.Logf("After 1->%d resize: writeTop=%d, cursor=(%d,%d)",
 		rows, stateFromZero.liveEdgeBase, stateFromZero.cursorX, stateFromZero.cursorY)
 
 	if stateFromZero.liveEdgeBase != stateAfterLoad.liveEdgeBase {
 		diff := stateFromZero.liveEdgeBase - stateAfterLoad.liveEdgeBase
-		t.Errorf("Shrink+grow shifted LEB: %d -> %d (diff=%d)",
+		t.Errorf("Shrink+grow shifted writeTop: %d -> %d (diff=%d)",
 			stateAfterLoad.liveEdgeBase, stateFromZero.liveEdgeBase, diff)
 		if diff == -int64(rows-1) || diff == int64(rows-1) {
-			t.Error("LEB shifted by viewport height — this is the resize bug!")
+			t.Error("writeTop shifted by viewport height — this is the resize bug!")
 		}
 	}
 
@@ -1001,7 +1020,7 @@ func TestVTermCoherence_ResizeAfterRestore(t *testing.T) {
 
 // TestVTermCoherence_ShellStartAfterRestore simulates what happens when
 // a new shell starts after recovery: the cursor is at the restored position,
-// and bash outputs its prompt (with \r\n). Verify liveEdgeBase doesn't jump.
+// and bash outputs its prompt (with \r\n). Verify writeTop doesn't jump.
 func TestVTermCoherence_ShellStartAfterRestore(t *testing.T) {
 	dir := t.TempDir()
 	id := "vt-shell-start"
@@ -1015,7 +1034,7 @@ func TestVTermCoherence_ShellStartAfterRestore(t *testing.T) {
 	// Session 2: reopen
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	stateRestored := captureState(v2)
-	t.Logf("Restored: LEB=%d, cursor=(%d,%d)", stateRestored.liveEdgeBase, stateRestored.cursorX, stateRestored.cursorY)
+	t.Logf("Restored: writeTop=%d, cursor=(%d,%d)", stateRestored.liveEdgeBase, stateRestored.cursorX, stateRestored.cursorY)
 
 	// Simulate bash prompt output (what happens when shell starts)
 	p := NewParser(v2)
@@ -1025,12 +1044,12 @@ func TestVTermCoherence_ShellStartAfterRestore(t *testing.T) {
 		p.Parse(r)
 	}
 	stateAfterPrompt := captureState(v2)
-	t.Logf("After prompt: LEB=%d, cursor=(%d,%d)", stateAfterPrompt.liveEdgeBase, stateAfterPrompt.cursorX, stateAfterPrompt.cursorY)
+	t.Logf("After prompt: writeTop=%d, cursor=(%d,%d)", stateAfterPrompt.liveEdgeBase, stateAfterPrompt.cursorX, stateAfterPrompt.cursorY)
 
-	lebDiff := stateAfterPrompt.liveEdgeBase - stateRestored.liveEdgeBase
-	if lebDiff > 2 {
-		t.Errorf("Shell prompt shifted LEB by %d (before=%d, after=%d)",
-			lebDiff, stateRestored.liveEdgeBase, stateAfterPrompt.liveEdgeBase)
+	shiftDiff := stateAfterPrompt.liveEdgeBase - stateRestored.liveEdgeBase
+	if shiftDiff > 2 {
+		t.Errorf("Shell prompt shifted writeTop by %d (before=%d, after=%d)",
+			shiftDiff, stateRestored.liveEdgeBase, stateAfterPrompt.liveEdgeBase)
 	}
 
 	// Simulate bash outputting more aggressive startup (motd, etc.)
@@ -1041,14 +1060,14 @@ func TestVTermCoherence_ShellStartAfterRestore(t *testing.T) {
 		}
 	}
 	stateAfterMotd := captureState(v2)
-	t.Logf("After MOTD: LEB=%d, cursor=(%d,%d)", stateAfterMotd.liveEdgeBase, stateAfterMotd.cursorX, stateAfterMotd.cursorY)
+	t.Logf("After MOTD: writeTop=%d, cursor=(%d,%d)", stateAfterMotd.liveEdgeBase, stateAfterMotd.cursorX, stateAfterMotd.cursorY)
 
-	lebDiffMotd := stateAfterMotd.liveEdgeBase - stateRestored.liveEdgeBase
-	t.Logf("Total LEB shift from shell start: %d", lebDiffMotd)
+	shiftDiffMotd := stateAfterMotd.liveEdgeBase - stateRestored.liveEdgeBase
+	t.Logf("Total writeTop shift from shell start: %d", shiftDiffMotd)
 
 	// A full height shift would be the bug
-	if lebDiffMotd == int64(rows) {
-		t.Error("Shell startup shifted LEB by exactly viewport height — this is the bug!")
+	if shiftDiffMotd == int64(rows) {
+		t.Error("Shell startup shifted writeTop by exactly viewport height — this is the bug!")
 	}
 
 	// Now simulate a CLEAR SCREEN from bash (ESC[2J ESC[H)
@@ -1056,11 +1075,11 @@ func TestVTermCoherence_ShellStartAfterRestore(t *testing.T) {
 		p.Parse(r)
 	}
 	stateAfterClear := captureState(v2)
-	t.Logf("After clear screen: LEB=%d, cursor=(%d,%d)", stateAfterClear.liveEdgeBase, stateAfterClear.cursorX, stateAfterClear.cursorY)
+	t.Logf("After clear screen: writeTop=%d, cursor=(%d,%d)", stateAfterClear.liveEdgeBase, stateAfterClear.cursorX, stateAfterClear.cursorY)
 
-	lebDiffClear := stateAfterClear.liveEdgeBase - stateRestored.liveEdgeBase
-	if lebDiffClear == int64(rows) {
-		t.Errorf("Clear screen shifted LEB by exactly viewport height (%d)!", rows)
+	shiftDiffClear := stateAfterClear.liveEdgeBase - stateRestored.liveEdgeBase
+	if shiftDiffClear == int64(rows) {
+		t.Errorf("Clear screen shifted writeTop by exactly viewport height (%d)!", rows)
 	}
 
 	v2.CloseMemoryBuffer()
@@ -1079,7 +1098,7 @@ func TestVTermCoherence_CursorHomeEraseToEnd(t *testing.T) {
 
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	restored := captureState(v2)
-	t.Logf("Restored: LEB=%d, cursor=(%d,%d)", restored.liveEdgeBase, restored.cursorX, restored.cursorY)
+	t.Logf("Restored: writeTop=%d, cursor=(%d,%d)", restored.liveEdgeBase, restored.cursorX, restored.cursorY)
 
 	p := NewParser(v2)
 	// ESC[H (cursor home) + ESC[J (erase from cursor to end = ED 0)
@@ -1087,12 +1106,12 @@ func TestVTermCoherence_CursorHomeEraseToEnd(t *testing.T) {
 		p.Parse(r)
 	}
 	after := captureState(v2)
-	t.Logf("After ESC[H ESC[J: LEB=%d, cursor=(%d,%d)", after.liveEdgeBase, after.cursorX, after.cursorY)
+	t.Logf("After ESC[H ESC[J: writeTop=%d, cursor=(%d,%d)", after.liveEdgeBase, after.cursorX, after.cursorY)
 
 	diff := after.liveEdgeBase - restored.liveEdgeBase
-	t.Logf("LEB diff: %d", diff)
+	t.Logf("writeTop diff: %d", diff)
 	if diff == int64(rows) || diff == int64(rows-1) {
-		t.Errorf("ESC[H ESC[J shifted LEB by viewport height (%d) — this causes the blank screen bug!", diff)
+		t.Errorf("ESC[H ESC[J shifted writeTop by viewport height (%d) — this causes the blank screen bug!", diff)
 	}
 
 	// Also test ESC[H ESC[2J (cursor home + full clear)
@@ -1105,9 +1124,9 @@ func TestVTermCoherence_CursorHomeEraseToEnd(t *testing.T) {
 	}
 	after3 := captureState(v3)
 	diff3 := after3.liveEdgeBase - restored3.liveEdgeBase
-	t.Logf("After ESC[H ESC[2J: LEB diff=%d", diff3)
+	t.Logf("After ESC[H ESC[2J: writeTop diff=%d", diff3)
 	if diff3 == int64(rows) || diff3 == int64(rows-1) {
-		t.Errorf("ESC[H ESC[2J shifted LEB by viewport height (%d)!", diff3)
+		t.Errorf("ESC[H ESC[2J shifted writeTop by viewport height (%d)!", diff3)
 	}
 
 	v2.CloseMemoryBuffer()
@@ -1132,7 +1151,7 @@ func TestVTermCoherence_LargeVolumeAutoCheckpoint(t *testing.T) {
 
 	before := captureState(v1)
 	beforeVP := captureViewport(v1)
-	t.Logf("Before: LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("Before: writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		before.liveEdgeBase, before.cursorX, before.cursorY, before.globalEnd)
 
 	v1.CloseMemoryBuffer()
@@ -1140,12 +1159,12 @@ func TestVTermCoherence_LargeVolumeAutoCheckpoint(t *testing.T) {
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 	after := captureState(v2)
 	afterVP := captureViewport(v2)
-	t.Logf("After:  LEB=%d, cursor=(%d,%d), globalEnd=%d",
+	t.Logf("After:  writeTop=%d, cursor=(%d,%d), globalEnd=%d",
 		after.liveEdgeBase, after.cursorX, after.cursorY, after.globalEnd)
 
 	if after.liveEdgeBase != before.liveEdgeBase {
 		diff := after.liveEdgeBase - before.liveEdgeBase
-		t.Errorf("LEB shifted by %d (before=%d, after=%d)", diff, before.liveEdgeBase, after.liveEdgeBase)
+		t.Errorf("writeTop shifted by %d (before=%d, after=%d)", diff, before.liveEdgeBase, after.liveEdgeBase)
 	}
 
 	mismatches := 0
@@ -1164,12 +1183,16 @@ func TestVTermCoherence_LargeVolumeAutoCheckpoint(t *testing.T) {
 }
 
 // TestVTermCoherence_StaleMetadataRecovery reproduces the bug where saved
-// metadata has a liveEdgeBase beyond the actual persisted content (e.g. due
-// to a previous write path that advanced liveEdgeBase without persisting
-// the corresponding lines). Recovery must detect the stale state and skip
-// BOTH liveEdgeBase and cursor restoration, not just one of them — otherwise
-// the cursor points to a position relative to a different viewport anchor
-// and the visible content shifts unexpectedly.
+// metadata has a WriteTop beyond the actual persisted content (e.g. due
+// to a previous write path that advanced WriteTop without persisting
+// the corresponding lines). Recovery must detect the stale state and not
+// leave the write/view window pointing past the end of real content,
+// otherwise the cursor points into empty space and the visible viewport
+// is blank.
+//
+// We bypass AdaptivePersistence's flush-time clamp (which would normally
+// detect this) by writing the stale MainScreenState directly through the
+// WAL, then dirty-closing. This mimics the on-disk corruption pattern.
 func TestVTermCoherence_StaleMetadataRecovery(t *testing.T) {
 	dir := t.TempDir()
 	id := "vt-stale-metadata"
@@ -1179,33 +1202,32 @@ func TestVTermCoherence_StaleMetadataRecovery(t *testing.T) {
 	v1 := newTestVTerm(t, cols, rows, dir, id)
 	writeNumberedLines(v1, 0, 100)
 
-	realGlobalEnd := v1.memBufState.memBuf.GlobalEnd()
-	t.Logf("Session 1: globalEnd=%d, liveEdgeBase=%d, cursor=(%d,%d)",
-		realGlobalEnd, v1.memBufState.liveEdgeBase, v1.cursorX, v1.cursorY)
+	realContentEnd := v1.ContentEnd()
+	realWriteTop := v1.mainScreen.WriteTop()
+	t.Logf("Session 1: ContentEnd=%d, writeTop=%d, cursor=(%d,%d)",
+		realContentEnd, realWriteTop, v1.cursorX, v1.cursorY)
 
-	// Force a metadata save with a liveEdgeBase BEYOND the actual content.
-	// This simulates the exact corruption pattern the old linefeed suppression
-	// was producing: liveEdgeBase claims to be far ahead of globalEnd.
-	ap := v1.memBufState.persistence
-	ap.mu.Lock()
-	staleMetadata := &ViewportState{
-		LiveEdgeBase:    realGlobalEnd + 500, // way beyond actual content
-		CursorX:         10,
-		CursorY:         20, // claims cursor at row 20 relative to stale anchor
-		ScrollOffset:    0,
-		SavedAt:         time.Now(),
-		PromptStartLine: realGlobalEnd + 495,
+	// Force a metadata save with a WriteTop BEYOND the actual content. This
+	// simulates the corruption pattern where the write anchor advances without
+	// the corresponding lines being persisted — recovery must not naively
+	// restore such metadata.
+	ap := v1.mainScreenPersistence
+	staleMetadata := &MainScreenState{
+		WriteTop:        realContentEnd + 500, // way beyond actual content
+		ContentEnd:      realContentEnd + 500,
+		CursorGlobalIdx: realContentEnd + 520, // cursor 20 rows into the stale anchor
+		CursorCol:       10,
+		PromptStartLine: realContentEnd + 495,
 		WorkingDir:      "/tmp",
+		SavedAt:         time.Now(),
 	}
-	ap.pendingMetadata = staleMetadata
-	ap.mu.Unlock()
 
-	// Bypass the AdaptivePersistence clamping by writing the stale metadata
+	// Bypass AdaptivePersistence clamping by writing the stale metadata
 	// directly to the WAL. This mimics what the corrupted metadata on disk
 	// looked like in the user's reproduction.
 	if ap.wal != nil {
-		if err := ap.wal.WriteMetadata(staleMetadata); err != nil {
-			t.Fatalf("WriteMetadata: %v", err)
+		if err := ap.wal.WriteMainScreenState(staleMetadata); err != nil {
+			t.Fatalf("WriteMainScreenState: %v", err)
 		}
 		if err := ap.wal.SyncWAL(); err != nil {
 			t.Fatalf("SyncWAL: %v", err)
@@ -1219,42 +1241,36 @@ func TestVTermCoherence_StaleMetadataRecovery(t *testing.T) {
 	// Session 2: reopen and verify the recovery handles stale metadata
 	v2 := newTestVTerm(t, cols, rows, dir, id)
 
-	recoveredGlobalEnd := v2.memBufState.memBuf.GlobalEnd()
-	recoveredLEB := v2.memBufState.liveEdgeBase
-	recoveredCursorX := v2.cursorX
-	recoveredCursorY := v2.cursorY
+	recoveredContentEnd := v2.ContentEnd()
+	recoveredWriteTop := v2.mainScreen.WriteTop()
+	recoveredCursorGI, recoveredCursorCol := v2.mainScreen.Cursor()
 
-	t.Logf("Session 2 after recovery: globalEnd=%d, liveEdgeBase=%d, cursor=(%d,%d)",
-		recoveredGlobalEnd, recoveredLEB, recoveredCursorX, recoveredCursorY)
+	t.Logf("Session 2 after recovery: ContentEnd=%d, writeTop=%d, cursor=(gi=%d,col=%d)",
+		recoveredContentEnd, recoveredWriteTop, recoveredCursorGI, recoveredCursorCol)
 
-	// The stale liveEdgeBase (beyond globalEnd) must NOT be restored.
-	if recoveredLEB > recoveredGlobalEnd {
-		t.Errorf("Stale liveEdgeBase was restored: liveEdgeBase=%d > globalEnd=%d",
-			recoveredLEB, recoveredGlobalEnd)
+	// The stale WriteTop (beyond ContentEnd) must NOT be restored.
+	if recoveredWriteTop > recoveredContentEnd+1 {
+		t.Errorf("Stale WriteTop was restored: writeTop=%d > ContentEnd+1=%d",
+			recoveredWriteTop, recoveredContentEnd+1)
 	}
 
-	// The cursor must be consistent with the recovered liveEdgeBase.
-	// The stale cursor position (10, 20) was relative to liveEdgeBase=realGlobalEnd+500.
-	// If we restored it naively, cursorGlobal = recoveredLEB + 20, which points
-	// to row 20 of a DIFFERENT viewport anchor and is meaningless.
-	// Since liveEdgeBase restoration was skipped, cursor restoration should
-	// also be skipped — cursor falls back to NewVTerm's default (0, 0).
-	if recoveredCursorX == 10 && recoveredCursorY == 20 {
-		t.Errorf("Cursor was restored without its anchor: got (10, 20) from stale metadata")
+	// The cursor's global position must be within the valid content range.
+	if recoveredCursorGI > recoveredContentEnd+1 {
+		t.Errorf("Cursor points past end of content: cursorGI=%d > ContentEnd+1=%d",
+			recoveredCursorGI, recoveredContentEnd+1)
 	}
 
-	// The cursor's global line must be within the valid content range.
-	cursorGlobal := recoveredLEB + int64(recoveredCursorY)
-	if cursorGlobal > recoveredGlobalEnd {
-		t.Errorf("Cursor points past end of content: cursorGlobal=%d > globalEnd=%d",
-			cursorGlobal, recoveredGlobalEnd)
+	// The stale cursor column (10) combined with a stale globalIdx is the
+	// signature of naive restoration. If both were taken verbatim, that's
+	// the bug.
+	if recoveredCursorGI == realContentEnd+520 && recoveredCursorCol == 10 {
+		t.Errorf("Cursor was restored verbatim from stale metadata: gi=%d col=%d",
+			recoveredCursorGI, recoveredCursorCol)
 	}
 
-	// Viewport content must be valid (no cursor in undefined territory).
-	mb := v2.memBufState.memBuf
-	if recoveredLEB < mb.GlobalOffset() || recoveredLEB > mb.GlobalEnd() {
-		t.Errorf("liveEdgeBase out of bounds: %d not in [%d, %d]",
-			recoveredLEB, mb.GlobalOffset(), mb.GlobalEnd())
+	// WriteTop must be in the valid range [0, ContentEnd+1].
+	if recoveredWriteTop < 0 {
+		t.Errorf("writeTop out of bounds (negative): %d", recoveredWriteTop)
 	}
 
 	v2.CloseMemoryBuffer()

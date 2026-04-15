@@ -53,12 +53,28 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 	v.mainScreenPageStore = pageStore
 
 	// Recover metadata from WAL to restore write position.
+	// Validate against the PageStore's logical end: metadata may have been
+	// written just before a crash without the referenced lines reaching disk.
+	// Restoring a WriteTop past the available content would leave the write
+	// window anchored in empty space. Discard such stale metadata rather
+	// than propagating it into a new session.
 	recoveredMeta := wal.RecoveredMainScreenState()
-	if recoveredMeta != nil {
+	pageStoreLineCount := pageStore.LineCount()
+	if recoveredMeta != nil && recoveredMeta.WriteTop <= pageStoreLineCount && recoveredMeta.CursorGlobalIdx <= pageStoreLineCount+int64(v.height) {
 		v.mainScreen.RestoreState(recoveredMeta.WriteTop, recoveredMeta.CursorGlobalIdx, recoveredMeta.CursorCol)
 		v.PromptStartGlobalLine = recoveredMeta.PromptStartLine
 		v.CurrentWorkingDir = recoveredMeta.WorkingDir
+		// Sync VTerm's cursor to the restored state so the next write
+		// lands at the correct row in the viewport. Without this, VTerm's
+		// cursorY stays 0 and subsequent writes overwrite the top row.
+		v.cursorX = recoveredMeta.CursorCol
+		if cursorY := int(recoveredMeta.CursorGlobalIdx - recoveredMeta.WriteTop); cursorY >= 0 && cursorY < v.height {
+			v.cursorY = cursorY
+		}
 		log.Printf("[MAIN_SCREEN] Restored: writeTop=%d cursor=%d", recoveredMeta.WriteTop, recoveredMeta.CursorGlobalIdx)
+	} else if recoveredMeta != nil {
+		log.Printf("[MAIN_SCREEN] Discarded stale metadata: writeTop=%d cursorGI=%d exceed PageStore end=%d",
+			recoveredMeta.WriteTop, recoveredMeta.CursorGlobalIdx, pageStoreLineCount)
 	}
 
 	// Load historical lines from PageStore into sparse store.
@@ -395,6 +411,22 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	v.mainScreen.InsertLines(1, cursorRow, 0, v.height-1)
 	if cells != nil {
 		v.mainScreen.SetLine(beforeIdx, cells)
+	}
+	// The insert shifted the cursor's content down. Follow it by advancing
+	// cursorY so subsequent writes land at the new logical row. Without
+	// this, a multi-line prompt written after transformer inserts would
+	// overwrite the inserted lines. The cursor is at globalIdx
+	// `writeTop + cursorY`; if the insert happened at or before that, the
+	// row moved down.
+	cursorGlobal := writeTop + int64(v.cursorY)
+	if beforeIdx <= cursorGlobal && v.cursorY < v.height-1 {
+		v.cursorY++
+	}
+	// Keep PromptStartGlobalLine pointing at the actual prompt line.
+	// Transformer inserts shift content down; without this adjustment
+	// the saved prompt position becomes stale and reload erases wrong lines.
+	if v.PromptStartGlobalLine >= 0 && beforeIdx <= v.PromptStartGlobalLine {
+		v.PromptStartGlobalLine++
 	}
 	v.commitInsertOffset++
 	v.MarkAllDirty()

@@ -1,5 +1,15 @@
 # Scroll/Display System Revamp Plan
 
+> **STATUS — HISTORICAL (2026-04-14):** This plan's three-layer design
+> (MemoryBuffer + AdaptivePersistence + ViewportWindow) was implemented and
+> later **superseded by the sparse viewport redesign**. MemoryBuffer and
+> ViewportWindow were removed in the main-screen cutover (PR #179). The
+> current scrollback architecture is documented in
+> [`docs/TERMINAL_PERSISTENCE_ARCHITECTURE.md`](../TERMINAL_PERSISTENCE_ARCHITECTURE.md)
+> and the sparse design spec at
+> [`docs/superpowers/specs/2026-04-11-sparse-viewport-write-window-split-design.md`](../superpowers/specs/2026-04-11-sparse-viewport-write-window-split-design.md).
+> Read this file for historical design context, not as current architecture.
+
 ## Overview
 
 Complete revamp of the terminal scroll/display system with three cleanly separated layers:
