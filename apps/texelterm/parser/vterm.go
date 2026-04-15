@@ -96,9 +96,6 @@ type VTerm struct {
 	commitInsertOffset int64
 	// fixedWidthDetector tracks TUI patterns for scroll region empty line suppression.
 	fwDetector *FixedWidthDetector
-	// showOverlay controls whether overlay lines (set via SetOverlay) are displayed.
-	// In the sparse model this is always true — overlay writes replace lines directly.
-	showOverlay bool
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -130,9 +127,8 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 
 	v.EnableMemoryBuffer()
 
-	// Initialize TUI detector (nil MemoryBuffer — just tracks signals).
+	// Initialize TUI detector (nil storage — just tracks signals).
 	v.fwDetector = NewFixedWidthDetectorWithConfig(nil, DefaultFixedWidthDetectorConfig())
-	v.showOverlay = true
 
 	// Set up tab stops
 	for i := 0; i < width; i++ {

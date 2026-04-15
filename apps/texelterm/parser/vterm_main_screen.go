@@ -460,19 +460,6 @@ func lineHasSparseContent(cells []Cell) bool {
 	return false
 }
 
-// SetShowOverlay controls whether overlay content is visible.
-// In the sparse model, overlay lines are written directly to the store via SetOverlay;
-// this flag is preserved for API compatibility but has no separate rendering effect.
-func (v *VTerm) SetShowOverlay(show bool) {
-	v.showOverlay = show
-	v.MarkAllDirty()
-}
-
-// ShowOverlay returns whether overlay content is being displayed.
-func (v *VTerm) ShowOverlay() bool {
-	return v.showOverlay
-}
-
 // ScrollToLiveEdge scrolls the viewport to show the most recent content.
 func (v *VTerm) ScrollToLiveEdge() {
 	v.mainScreenScrollToBottom()

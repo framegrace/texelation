@@ -1208,7 +1208,6 @@ func (a *TexelTerm) ReloadConfig() {
 		if a.pipeline != nil {
 			a.pipeline.SetEnabled(newTfm)
 			if a.vterm != nil {
-				a.vterm.SetShowOverlay(newTfm)
 				a.vterm.MarkAllDirty()
 			}
 		}
@@ -1271,8 +1270,6 @@ func (a *TexelTerm) toggleTransformers() {
 		// Persist to pane config
 		a.persistConfigKeyLocked("transformers", "enabled", newState)
 	} else {
-		current := a.vterm.ShowOverlay()
-		a.vterm.SetShowOverlay(!current)
 		a.vterm.MarkAllDirty()
 	}
 }
@@ -1299,7 +1296,6 @@ func (a *TexelTerm) persistConfigKeyLocked(section, key string, value interface{
 // setTransformerState sets the pipeline to the given state. Caller must hold a.mu.
 func (a *TexelTerm) setTransformerState(enabled bool) {
 	a.pipeline.SetEnabled(enabled)
-	a.vterm.SetShowOverlay(enabled)
 	a.vterm.MarkAllDirty()
 	a.tfmToggle.Active = enabled
 	if a.statusBar != nil {
@@ -1324,11 +1320,9 @@ func (a *TexelTerm) updateDecoratorState() {
 	tfmActive := a.tfmUserPref && !tfmOverride
 	if tfmOverride && a.pipeline != nil && a.pipeline.Enabled() {
 		a.pipeline.SetEnabled(false)
-		a.vterm.SetShowOverlay(false)
 		a.vterm.MarkAllDirty()
 	} else if !tfmOverride && a.pipeline != nil && a.pipeline.Enabled() != a.tfmUserPref {
 		a.pipeline.SetEnabled(a.tfmUserPref)
-		a.vterm.SetShowOverlay(a.tfmUserPref)
 		a.vterm.MarkAllDirty()
 	}
 
