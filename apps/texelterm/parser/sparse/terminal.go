@@ -164,16 +164,6 @@ func (t *Terminal) RestoreWriteState(writeTop, cursorGlobalIdx int64, cursorCol 
 	t.view.ScrollToBottom(t.write.WriteBottom())
 }
 
-// SyncWriteState updates the write window (writeTop + cursor) to match an
-// externally-computed anchor. Unlike RestoreWriteState, it preserves the
-// ViewWindow's current scroll position: if the user is scrolled back,
-// viewBottom does not change; if autoFollow is active, viewBottom snaps to
-// the new writeBottom.
-func (t *Terminal) SyncWriteState(writeTop, cursorGlobalIdx int64, cursorCol int) {
-	t.write.RestoreState(writeTop, cursorGlobalIdx, cursorCol)
-	t.view.OnWriteBottomChanged(t.write.WriteBottom())
-}
-
 // RestoreState implements MainScreen.RestoreState by delegating to
 // RestoreWriteState.
 func (t *Terminal) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int) {

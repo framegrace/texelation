@@ -1484,25 +1484,11 @@ func (v *VTerm) IsInTUIMode() bool {
 	return fwd != nil && fwd.IsInTUIMode()
 }
 
-// LiveEdgeBase returns the globalIdx at the top of the sparse write window.
-func (v *VTerm) LiveEdgeBase() int64 {
-	if v.mainScreen == nil {
-		return 0
-	}
-	return v.mainScreen.WriteTop()
-}
-
 // MarginTop returns the current top scroll margin.
 func (v *VTerm) MarginTop() int { return v.marginTop }
 
 // MarginBottom returns the current bottom scroll margin.
 func (v *VTerm) MarginBottom() int { return v.marginBottom }
-
-// MemoryBuffer returns nil — the MemoryBuffer path has been removed.
-// Kept for API compatibility. Callers should use MainScreen() instead.
-func (v *VTerm) MemoryBuffer() *MemoryBuffer {
-	return nil
-}
 
 // GetAltBufferLine returns a copy of the specified line from the alternate screen buffer.
 // Returns nil if index is out of bounds or not in alt screen mode.

@@ -43,11 +43,6 @@ type MainScreen interface {
 	OnInput()
 	IsFollowing() bool
 
-	// SyncWriteState updates the write window (writeTop + cursor) to match the
-	// given MemoryBuffer-side state after a resize. Unlike RestoreState, it does
-	// NOT snap the view window to the bottom — user's scroll position is preserved.
-	SyncWriteState(writeTop, cursorGlobalIdx int64, cursorCol int)
-
 	// LoadFromPageStore populates the main screen with all lines currently
 	// stored in the given PageStore. Used on session restore to replay
 	// persistent scrollback into the sparse store.
