@@ -646,11 +646,12 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		}
 	}
 
-	// In memory buffer mode, dirty line indices are logical (cursorY offsets
-	// from liveEdgeBase) but the grid uses physical rows where wrapped lines
-	// shift content down. Always repaint all rows to avoid stale content when
-	// lines above the cursor wrap (e.g., wide multi-line prompts).
-	// On alt screen, logical == physical so dirty tracking is safe.
+	// Always repaint all rows when the sparse main screen is active.
+	// Conservative carryover from the pre-sparse era (dirty row indices
+	// were logical offsets from liveEdgeBase, but the grid had physical
+	// rows that shifted under wrap-induced reflow). The sparse store no
+	// longer reflows on resize, so per-row dirty tracking is likely safe
+	// to re-enable here — kept conservative until re-validated.
 	if allDirty || a.vterm.IsMemoryBufferEnabled() {
 		for y := 0; y < termRows; y++ {
 			renderLine(y)
@@ -2101,9 +2102,6 @@ func (a *TexelTerm) initializeVTermFirstRun(cols, rows int, paneID string) {
 	a.populateFromHistoryLocked(savedState)
 	a.applyRestoredStateLocked(savedState)
 }
-
-// Note: initializeDisplayBufferLocked was removed as part of DisplayBuffer cleanup.
-// MemoryBuffer is now the only scrollback system.
 
 // readWALWorkingDir pre-reads the last known CWD from the WAL before the full VTerm is initialized.
 // This allows the shell to start in the correct directory on reload.

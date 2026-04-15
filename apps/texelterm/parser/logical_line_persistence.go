@@ -298,9 +298,6 @@ func decodeColorFromValue(mode ColorMode, value uint32) Color {
 	}
 }
 
-// Note: SaveScrollbackHistory and LoadScrollbackHistory were removed
-// as part of the DisplayBuffer cleanup. MemoryBuffer uses its own persistence.
-
 // ConvertPhysicalToLogical converts physical lines (with Wrapped flag) to logical lines.
 // This is used to migrate from the old storage format.
 // Lines where Wrapped=true are joined with the following line.

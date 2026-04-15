@@ -488,7 +488,7 @@ func (v *VTerm) MarkPromptStart() {
 // Called when OSC 133;B is received (input start / prompt end marker).
 // This is a stub for future shell integration features.
 func (v *VTerm) MarkInputStart() {
-	// TODO: Record input start position in MemoryBuffer for shell integration
+	// TODO: Record input-start globalIdx on the sparse store for shell integration.
 	// This would enable features like:
 	// - Highlighting user input differently
 	// - Command extraction for history
