@@ -331,15 +331,33 @@ func (w *WriteWindow) NewlineInRegion(marginTop, marginBottom int) {
 	w.store.ClearRange(base+int64(marginBottom), base+int64(marginBottom))
 }
 
+// WriteBottomHWM returns the high-water mark of writeBottom. Exposed so
+// that callers (session save) can persist HWM across reload and prevent
+// a grown viewport from retreating into scrollback. See Resize() for why
+// HWM is load-bearing on expand.
+func (w *WriteWindow) WriteBottomHWM() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writeBottomHWM
+}
+
 // RestoreState forcibly sets writeTop and cursor, used during session
-// restore. Do not call during normal operation.
-func (w *WriteWindow) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int) {
+// restore. Do not call during normal operation. If hwm >= 0 the supplied
+// value seeds writeBottomHWM (the high-water mark cannot move backwards,
+// so a persisted HWM from a prior session must be honored); otherwise
+// HWM is derived from writeTop+height-1 as in fresh construction.
+func (w *WriteWindow) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int, hwm int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.writeTop = writeTop
 	w.cursorGlobalIdx = cursorGlobalIdx
 	w.cursorCol = cursorCol
-	if wb := w.writeTop + int64(w.height) - 1; wb > w.writeBottomHWM {
-		w.writeBottomHWM = wb
+	// Seed HWM: take the max of the restored value and the current
+	// writeBottom so the invariant HWM >= writeBottom always holds.
+	minHWM := w.writeTop + int64(w.height) - 1
+	if hwm > minHWM {
+		w.writeBottomHWM = hwm
+	} else {
+		w.writeBottomHWM = minHWM
 	}
 }

@@ -61,7 +61,7 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 	recoveredMeta := wal.RecoveredMainScreenState()
 	pageStoreLineCount := pageStore.LineCount()
 	if recoveredMeta != nil && recoveredMeta.WriteTop <= pageStoreLineCount && recoveredMeta.CursorGlobalIdx <= pageStoreLineCount+int64(v.height) {
-		v.mainScreen.RestoreState(recoveredMeta.WriteTop, recoveredMeta.CursorGlobalIdx, recoveredMeta.CursorCol)
+		v.mainScreen.RestoreState(recoveredMeta.WriteTop, recoveredMeta.CursorGlobalIdx, recoveredMeta.CursorCol, recoveredMeta.WriteBottomHWM)
 		// Discard a stale PromptStartLine that points past the last persisted
 		// line. The prompt position is only meaningful if the referenced line
 		// exists; otherwise prompt-aware operations (scroll-to-prompt,
@@ -144,6 +144,7 @@ func (v *VTerm) snapshotMainScreenState() MainScreenState {
 		CursorCol:       col,
 		PromptStartLine: v.PromptStartGlobalLine,
 		WorkingDir:      v.CurrentWorkingDir,
+		WriteBottomHWM:  v.mainScreen.WriteBottomHWM(),
 		SavedAt:         time.Now(),
 	}
 }

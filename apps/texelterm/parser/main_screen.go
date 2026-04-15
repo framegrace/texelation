@@ -48,8 +48,17 @@ type MainScreen interface {
 	LoadFromPageStore(ps *PageStore) error
 
 	// RestoreState forcibly sets the write window's cursor and anchor,
-	// used during session restore to match the saved WAL metadata.
-	RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int)
+	// used during session restore to match the saved WAL metadata. hwm
+	// seeds the writeBottom high-water mark; passing 0 or a value less
+	// than writeTop+height-1 is equivalent to "unknown" and the
+	// implementation falls back to deriving HWM from writeTop+height-1.
+	RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int, hwm int64)
+
+	// WriteBottomHWM returns the high-water mark of writeBottom across
+	// the session. Persisted into MainScreenState so that a grown
+	// viewport on reload anchors against the true HWM rather than a
+	// diminished value.
+	WriteBottomHWM() int64
 
 	// ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.
 	ReadLine(globalIdx int64) []Cell

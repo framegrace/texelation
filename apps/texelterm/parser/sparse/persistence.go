@@ -55,15 +55,18 @@ func SnapshotState(tm *Terminal) parser.MainScreenState {
 		CursorGlobalIdx: gi,
 		CursorCol:       col,
 		PromptStartLine: -1,
+		WriteBottomHWM:  tm.WriteBottomHWM(),
 		SavedAt:         time.Now(),
 	}
 }
 
 // RestoreState applies a MainScreenState to an existing Terminal, overwriting
 // cursor and writeTop. The ViewWindow is put into autoFollow mode snapped to
-// the new writeBottom.
+// the new writeBottom. WriteBottomHWM is used only when it exceeds the
+// natural floor writeTop+height-1; smaller values (including zero, as
+// written by older WAL entries) fall back to that floor.
 func RestoreState(tm *Terminal, state parser.MainScreenState) {
-	tm.RestoreWriteState(state.WriteTop, state.CursorGlobalIdx, state.CursorCol)
+	tm.RestoreWriteState(state.WriteTop, state.CursorGlobalIdx, state.CursorCol, state.WriteBottomHWM)
 }
 
 // LoadStore reads every line currently present in the PageStore into the
