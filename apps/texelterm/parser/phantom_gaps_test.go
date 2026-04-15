@@ -21,7 +21,7 @@ func feedAndCount(t *testing.T, name string, height int, payload string) {
 	dir := t.TempDir()
 	terminalID := "phantom-" + name
 
-	v := NewVTerm(80, height, WithMemoryBuffer())
+	v := NewVTerm(80, height)
 	if err := v.EnableMemoryBufferWithDisk(dir, MemoryBufferOptions{
 		MaxLines:   50000,
 		TerminalID: terminalID,
@@ -140,7 +140,7 @@ func TestPhantomGaps_MultiSession_Reload(t *testing.T) {
 	terminalID := "phantom-multisession"
 
 	feed := func(payload string) {
-		v := NewVTerm(80, 24, WithMemoryBuffer())
+		v := NewVTerm(80, 24)
 		if err := v.EnableMemoryBufferWithDisk(dir, MemoryBufferOptions{
 			MaxLines:   50000,
 			TerminalID: terminalID,

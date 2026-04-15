@@ -24,7 +24,7 @@ import (
 func TestReverseSearch_RealReadlineSequences(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 80, 24
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 

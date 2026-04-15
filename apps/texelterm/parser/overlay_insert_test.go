@@ -40,7 +40,7 @@ func TestGetContentText_OverlayWrittenViaSetOverlay(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 40, 10
 
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -86,7 +86,7 @@ func TestRequestLineInsert_CursorPositionNotFullViewport(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	width, height := 40, 24
 
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -152,7 +152,7 @@ func TestRequestLineInsert_CursorPositionNotFullViewport(t *testing.T) {
 // PromptStartGlobalLine must increment PromptStartGlobalLine by 1.
 func TestRequestLineInsert_PromptStartShiftsWithInsertsBeforeIt(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	v := NewVTerm(40, 24, WithMemoryBuffer())
+	v := NewVTerm(40, 24)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 

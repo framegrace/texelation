@@ -43,7 +43,7 @@ func captureGridStrings(v *VTerm) []string {
 // line is overwritten by the rotation, not pushed into scrollback.
 func TestVTerm_ScrollRegion_NoHeader(t *testing.T) {
 	width, height := 40, 6
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -93,7 +93,7 @@ func TestVTerm_ScrollRegion_NoHeader(t *testing.T) {
 // header on row 0.
 func TestVTerm_ScrollRegion_NoFooter(t *testing.T) {
 	width, height := 40, 6
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -138,7 +138,7 @@ func TestVTerm_ScrollRegion_NoFooter(t *testing.T) {
 // a scroll region and verifies the rotation amount without touching writeTop.
 func TestVTerm_ScrollRegion_MultipleScrollN(t *testing.T) {
 	width, height := 40, 8
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -193,7 +193,7 @@ func TestVTerm_ScrollRegion_MultipleScrollN(t *testing.T) {
 // (no DECSTBM margins) advance writeTop, the sole path that pushes lines into
 // scrollback in the sparse model.
 func TestVTerm_ScrollRegion_FullScreenUnchanged(t *testing.T) {
-	v := NewVTerm(40, 5, WithMemoryBuffer())
+	v := NewVTerm(40, 5)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -219,7 +219,7 @@ func TestVTerm_ScrollRegion_FullScreenUnchanged(t *testing.T) {
 // down within region) shifts content down without advancing writeTop.
 func TestVTerm_ScrollRegion_ScrollDownUnchanged(t *testing.T) {
 	width, height := 40, 10
-	v := NewVTerm(width, height, WithMemoryBuffer())
+	v := NewVTerm(width, height)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 

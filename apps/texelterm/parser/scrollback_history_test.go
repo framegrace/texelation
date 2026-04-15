@@ -27,7 +27,7 @@ import (
 // auto-follow mode and ScrollToBottom returns to it, exercising the
 // ViewWindow autoFollow flag.
 func TestVTerm_UserScroll(t *testing.T) {
-	v := NewVTerm(80, 10, WithMemoryBuffer())
+	v := NewVTerm(80, 10)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -56,7 +56,7 @@ func TestVTerm_UserScroll(t *testing.T) {
 // TestVTerm_TotalLines verifies that ContentEnd advances as lines are
 // appended, matching the pre-sparse memoryBufferTotalLines semantics.
 func TestVTerm_TotalLines(t *testing.T) {
-	v := NewVTerm(80, 24, WithMemoryBuffer())
+	v := NewVTerm(80, 24)
 	v.EnableMemoryBuffer()
 	p := NewParser(v)
 
@@ -95,7 +95,7 @@ func TestLoadHistory_ResetsTerminalColors(t *testing.T) {
 	terminalID := "test-color-reset"
 
 	{
-		v := NewVTerm(80, 24, WithMemoryBuffer())
+		v := NewVTerm(80, 24)
 		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
 			MaxLines:   50000,
 			TerminalID: terminalID,
@@ -109,7 +109,7 @@ func TestLoadHistory_ResetsTerminalColors(t *testing.T) {
 	}
 
 	{
-		v := NewVTerm(80, 24, WithMemoryBuffer())
+		v := NewVTerm(80, 24)
 		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
 			MaxLines:   50000,
 			TerminalID: terminalID,
@@ -153,7 +153,7 @@ func TestPromptPositionOnReload(t *testing.T) {
 	var savedPromptLine int64
 
 	{
-		v := NewVTerm(width, height, WithMemoryBuffer())
+		v := NewVTerm(width, height)
 		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
 			MaxLines:   50000,
 			TerminalID: terminalID,
@@ -184,7 +184,7 @@ func TestPromptPositionOnReload(t *testing.T) {
 	}
 
 	{
-		v := NewVTerm(width, height, WithMemoryBuffer())
+		v := NewVTerm(width, height)
 		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
 			MaxLines:   50000,
 			TerminalID: terminalID,
@@ -222,7 +222,7 @@ func TestPromptPositionAfterTransformerInsert(t *testing.T) {
 	width, height := 80, 24
 
 	{
-		v := NewVTerm(width, height, WithMemoryBuffer())
+		v := NewVTerm(width, height)
 		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
 			MaxLines:   50000,
 			TerminalID: terminalID,
@@ -269,7 +269,7 @@ func TestPromptPositionAfterTransformerInsert(t *testing.T) {
 	}
 
 	{
-		v := NewVTerm(width, height, WithMemoryBuffer())
+		v := NewVTerm(width, height)
 		err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
 			MaxLines:   50000,
 			TerminalID: terminalID,

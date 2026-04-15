@@ -336,7 +336,7 @@ func TestScrollRegionDetailedState(t *testing.T) {
 // correctly updates the normal screen memory buffer so that exiting alt screen produces
 // a grid with the correct dimensions and cursor position.
 func TestAltScreenResizeThenExit(t *testing.T) {
-	v := NewVTerm(80, 24, WithMemoryBuffer())
+	v := NewVTerm(80, 24)
 	p := NewParser(v)
 
 	// Write some content on normal screen
@@ -398,7 +398,7 @@ func TestAltScreenResizeThenExit(t *testing.T) {
 
 // TestAltScreenResizeShrinkThenExit verifies shrinking during alt screen also works.
 func TestAltScreenResizeShrinkThenExit(t *testing.T) {
-	v := NewVTerm(80, 30, WithMemoryBuffer())
+	v := NewVTerm(80, 30)
 	p := NewParser(v)
 
 	// Write enough content to fill the screen

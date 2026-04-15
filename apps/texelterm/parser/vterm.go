@@ -1318,35 +1318,6 @@ func (v *VTerm) NotifyLinePersist(lineIdx int64) {
 	}
 }
 
-// WithMemoryBuffer is a no-op kept for backward compatibility.
-// NewVTerm always initializes the main screen unconditionally.
-func WithMemoryBuffer() Option {
-	return func(v *VTerm) {}
-}
-
-// WithMemoryBufferDisk enables the main screen with disk persistence.
-// The diskPath specifies where to store the history file.
-// TerminalID is required for cross-session history continuity.
-func WithMemoryBufferDisk(diskPath string, maxLines int) Option {
-	return func(v *VTerm) {
-		opts := MemoryBufferOptions{
-			MaxLines: maxLines,
-			DiskPath: diskPath,
-		}
-		// Eagerly enable disk persistence. Error is logged inside.
-		v.EnableMemoryBufferWithDisk(diskPath, opts)
-	}
-}
-
-// WithMemoryBufferOptions enables the main screen with custom options.
-func WithMemoryBufferOptions(opts MemoryBufferOptions) Option {
-	return func(v *VTerm) {
-		if opts.DiskPath != "" {
-			v.EnableMemoryBufferWithDisk(opts.DiskPath, opts)
-		}
-		// Non-disk options are handled by EnableMemoryBuffer (called later in NewVTerm).
-	}
-}
 
 // Resize handles changes to the terminal's dimensions.
 func (v *VTerm) Resize(width, height int) {
