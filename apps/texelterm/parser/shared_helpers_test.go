@@ -1,27 +1,18 @@
 // Copyright 2025 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: apps/texelterm/parser/test_helpers_test.go
+// File: apps/texelterm/parser/shared_helpers_test.go
 // Summary: Shared test helper functions used across multiple test files.
 
 package parser
 
-import "strings"
-
-// logicalLineToString converts a LogicalLine to a string.
+// logicalLineToString converts a LogicalLine to a string, mapping null runes
+// to spaces. Returns "" for a nil line.
 func logicalLineToString(line *LogicalLine) string {
 	if line == nil {
 		return ""
 	}
-	runes := make([]rune, len(line.Cells))
-	for i, c := range line.Cells {
-		if c.Rune == 0 {
-			runes[i] = ' '
-		} else {
-			runes[i] = c.Rune
-		}
-	}
-	return string(runes)
+	return cellsToString(line.Cells)
 }
 
 // trimLogicalLine trims trailing spaces and null characters from a line.
@@ -33,33 +24,10 @@ func trimLogicalLine(s string) string {
 	return s[:end]
 }
 
-// sparseCellsToString converts a sparse-terminal []Cell slice to plain text.
-// Note: cellsToString (same signature) is also defined in logical_line_test.go.
-// This alias avoids duplicate declarations while providing the same functionality.
-func sparseCellsToString(cells []Cell) string {
-	var sb strings.Builder
-	for _, c := range cells {
-		if c.Rune == 0 {
-			sb.WriteRune(' ')
-		} else {
-			sb.WriteRune(c.Rune)
-		}
-	}
-	return sb.String()
-}
-
-// parseString feeds every rune of s through p, shorthand for the common
-// `for _, ch := range s { p.Parse(ch) }` test pattern.
-func parseString(p *Parser, s string) {
-	for _, r := range s {
-		p.Parse(r)
-	}
-}
-
-// gridRowToString converts one row of a VTerm grid back to a rune string,
-// replacing the null-rune sentinel with a space so trailing padding prints
-// as blanks rather than NULs.
-func gridRowToString(cells []Cell) string {
+// cellsToString converts a []Cell slice to a rune string, mapping the
+// null-rune sentinel (Rune == 0) to a space so sparse-grid padding prints as
+// blanks rather than NULs.
+func cellsToString(cells []Cell) string {
 	runes := make([]rune, len(cells))
 	for i, c := range cells {
 		if c.Rune == 0 {
@@ -69,6 +37,14 @@ func gridRowToString(cells []Cell) string {
 		}
 	}
 	return string(runes)
+}
+
+// parseString feeds every rune of s through p, shorthand for the common
+// `for _, ch := range s { p.Parse(ch) }` test pattern.
+func parseString(p *Parser, s string) {
+	for _, r := range s {
+		p.Parse(r)
+	}
 }
 
 // trimRight removes trailing whitespace (space, tab, null) from a string.
@@ -99,7 +75,7 @@ func readAllSparseLines(v *VTerm) []string {
 			lines = append(lines, "")
 			continue
 		}
-		lines = append(lines, trimLogicalLine(sparseCellsToString(cells)))
+		lines = append(lines, trimLogicalLine(cellsToString(cells)))
 	}
 	return lines
 }

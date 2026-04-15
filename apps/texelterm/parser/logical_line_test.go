@@ -547,11 +547,3 @@ func makeCells(s string) []Cell {
 	return cells
 }
 
-// Helper to convert cells back to string
-func cellsToString(cells []Cell) string {
-	runes := make([]rune, len(cells))
-	for i, c := range cells {
-		runes[i] = c.Rune
-	}
-	return string(runes)
-}

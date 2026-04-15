@@ -49,7 +49,7 @@ func TestVTerm_MemoryBufferResize_ShortContent(t *testing.T) {
 		t.Errorf("cols: got %d, want 40", len(grid[0]))
 	}
 
-	row0 := strings.TrimRight(gridRowToString(grid[0]), " ")
+	row0 := strings.TrimRight(cellsToString(grid[0]), " ")
 	if row0 != "Hello, World!" {
 		t.Errorf("content lost after resize: row 0 = %q, want 'Hello, World!'", row0)
 	}

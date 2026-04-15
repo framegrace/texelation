@@ -32,7 +32,7 @@ func captureGridStrings(v *VTerm) []string {
 	grid := v.Grid()
 	out := make([]string, len(grid))
 	for y := range grid {
-		out[y] = trimRight(gridRowToString(grid[y]))
+		out[y] = trimRight(cellsToString(grid[y]))
 	}
 	return out
 }
@@ -73,14 +73,14 @@ func TestVTerm_ScrollRegion_NoHeader(t *testing.T) {
 	}
 
 	// Footer preserved at the last row.
-	if got, want := gridRowToString(grid[height-1][:6]), "FOOTER"; got != want {
+	if got, want := cellsToString(grid[height-1][:6]), "FOOTER"; got != want {
 		t.Errorf("Footer corrupted: got %q, want %q", got, want)
 	}
 
 	// Region rotated: after 7 writes in a 5-line region, rows 0..4 should hold
 	// Line-C, Line-D, Line-E, Line-F, Line-G (the first two dropped off the top).
 	for y := 0; y < 5; y++ {
-		got := gridRowToString(grid[y][:6])
+		got := cellsToString(grid[y][:6])
 		want := fmt.Sprintf("Line-%c", 'C'+rune(y))
 		if got != want {
 			t.Errorf("row %d: got %q, want %q", y, got, want)
@@ -120,13 +120,13 @@ func TestVTerm_ScrollRegion_NoFooter(t *testing.T) {
 	}
 
 	// Header preserved.
-	if got, want := gridRowToString(grid[0][:6]), "HEADER"; got != want {
+	if got, want := cellsToString(grid[0][:6]), "HEADER"; got != want {
 		t.Errorf("Header corrupted: got %q, want %q", got, want)
 	}
 
 	// Rows 1..5 hold Line-C..Line-G.
 	for y := 1; y <= 5; y++ {
-		got := gridRowToString(grid[y][:6])
+		got := cellsToString(grid[y][:6])
 		want := fmt.Sprintf("Line-%c", 'C'+rune(y-1))
 		if got != want {
 			t.Errorf("row %d: got %q, want %q", y, got, want)
@@ -165,24 +165,24 @@ func TestVTerm_ScrollRegion_MultipleScrollN(t *testing.T) {
 
 	grid := v.Grid()
 
-	if got, want := gridRowToString(grid[0][:6]), "HEADER"; got != want {
+	if got, want := cellsToString(grid[0][:6]), "HEADER"; got != want {
 		t.Errorf("header corrupted after CSI 3S: got %q, want %q", got, want)
 	}
-	if got, want := gridRowToString(grid[height-1][:6]), "FOOTER"; got != want {
+	if got, want := cellsToString(grid[height-1][:6]), "FOOTER"; got != want {
 		t.Errorf("footer corrupted after CSI 3S: got %q, want %q", got, want)
 	}
 
 	// After rotating up by 3 in a region of 6 rows, rows 1..3 hold
 	// Line-D..Line-F and rows 4..6 are blank.
 	for y := 1; y <= 3; y++ {
-		got := gridRowToString(grid[y][:6])
+		got := cellsToString(grid[y][:6])
 		want := fmt.Sprintf("Line-%c", 'D'+rune(y-1))
 		if got != want {
 			t.Errorf("row %d after CSI 3S: got %q, want %q", y, got, want)
 		}
 	}
 	for y := 4; y <= 6; y++ {
-		got := trimRight(gridRowToString(grid[y]))
+		got := trimRight(cellsToString(grid[y]))
 		if got != "" {
 			t.Errorf("row %d after CSI 3S: expected blank, got %q", y, got)
 		}

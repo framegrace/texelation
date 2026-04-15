@@ -14,8 +14,8 @@
 //   - ContentEnd (highest globalIdx ever written; exclusive "end" is +1)
 //   - MainScreenState (persistent metadata, replaces ViewportState)
 //
-// Helpers `logicalLineToString`, `trimLogicalLine`, and `sparseCellsToString`
-// live in test_helpers_test.go.
+// Helpers `logicalLineToString`, `trimLogicalLine`, and `cellsToString`
+// live in shared_helpers_test.go.
 
 package parser
 
@@ -111,11 +111,11 @@ func captureState(v *VTerm) snapshotState {
 	}
 	if v.mainScreen != nil {
 		if cells := v.mainScreen.ReadLine(writeTop); cells != nil {
-			s.viewportTopLine = trimLogicalLine(sparseCellsToString(cells))
+			s.viewportTopLine = trimLogicalLine(cellsToString(cells))
 		}
 		cursorGlobal := writeTop + int64(v.cursorY)
 		if cells := v.mainScreen.ReadLine(cursorGlobal); cells != nil {
-			s.cursorLine = trimLogicalLine(sparseCellsToString(cells))
+			s.cursorLine = trimLogicalLine(cellsToString(cells))
 		}
 	}
 	return s
@@ -131,7 +131,7 @@ func readSparseLine(v *VTerm, globalIdx int64) string {
 	if cells == nil {
 		return ""
 	}
-	return trimLogicalLine(sparseCellsToString(cells))
+	return trimLogicalLine(cellsToString(cells))
 }
 
 // captureViewport reads all viewport lines from the sparse terminal. The
@@ -371,7 +371,7 @@ func TestBurstWriteRecovery_ContentIntegrity(t *testing.T) {
 			continue
 		}
 		if cells := v1.mainScreen.ReadLine(idx); cells != nil {
-			samples = append(samples, sample{idx, trimLogicalLine(sparseCellsToString(cells))})
+			samples = append(samples, sample{idx, trimLogicalLine(cellsToString(cells))})
 		}
 	}
 
@@ -398,7 +398,7 @@ func TestBurstWriteRecovery_ContentIntegrity(t *testing.T) {
 			t.Errorf("Line %d not found after recovery", s.idx)
 			continue
 		}
-		got := trimLogicalLine(sparseCellsToString(cells))
+		got := trimLogicalLine(cellsToString(cells))
 		if got != s.text {
 			t.Errorf("Line %d: got %q, want %q", s.idx, got, s.text)
 		}
