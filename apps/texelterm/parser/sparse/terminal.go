@@ -138,15 +138,24 @@ func (t *Terminal) NewlineInRegion(marginTop, marginBottom int) {
 	// ViewWindow notification is needed.
 }
 
-// SetLine overwrites the cells at the given globalIdx in the store.
-// Used to sync from MemoryBuffer after complex operations (scroll regions).
+// SetLine overwrites the cells at globalIdx directly in the store,
+// bypassing the WriteWindow's cursor / writeTop invariants. Intended for
+// callers that need to mutate specific lines outside the cursor model:
+// ED / EL erase operations (fill a range with the current FG/BG), ICH /
+// DCH character edits (rewrite a single row in place), and overlay-insert
+// paths that sync cells into a globalIdx chosen by the parser. It does
+// NOT advance writeTop, touch the cursor, or update HWM; callers are
+// responsible for keeping write-window state consistent with whatever
+// they write here.
 func (t *Terminal) SetLine(globalIdx int64, cells []parser.Cell) {
 	t.store.SetLine(globalIdx, cells)
 }
 
-// ClearRange removes all lines in [lo, hi] from the store.
-// Used to sync from MemoryBuffer after resize-split rejoin and similar
-// operations that collapse multiple logical lines back into one.
+// ClearRange removes all lines in [lo, hi] from the store, bypassing the
+// WriteWindow. Same contract as SetLine: callers take on responsibility
+// for keeping writeTop / cursor / HWM consistent. Typical uses are ED J 3
+// (clear scrollback above writeTop), ED-below-cursor (clear tail of the
+// write window), and scroll-region rejoin that collapses logical lines.
 func (t *Terminal) ClearRange(lo, hi int64) {
 	t.store.ClearRange(lo, hi)
 }

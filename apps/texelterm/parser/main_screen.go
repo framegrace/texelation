@@ -22,6 +22,12 @@ type MainScreen interface {
 	EraseLine()
 	EraseToEndOfLine(col int)
 	EraseFromStartOfLine(col int)
+
+	// SetLine and ClearRange are low-level store-manipulation primitives
+	// that bypass the cursor / writeTop / HWM invariants. They exist for
+	// operations outside the cursor-write model (erase, ICH/DCH, overlay
+	// insert, scroll-region rejoin). Callers are responsible for keeping
+	// the write window consistent with whatever they mutate.
 	SetLine(globalIdx int64, cells []Cell)
 	ClearRange(lo, hi int64)
 
