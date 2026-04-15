@@ -5,9 +5,8 @@ package parser
 
 // MainScreen is the interface that sparse.Terminal satisfies. Defined in
 // the parser package to avoid an import cycle (parser -> sparse -> parser).
-// VTerm holds a MainScreen and dual-writes to it during the transition;
-// after integration the legacy memBufState path is deleted and MainScreen
-// becomes the sole main-screen implementation.
+// sparse.Terminal is the sole production implementation; VTerm drives the
+// main-screen state exclusively through this interface.
 type MainScreen interface {
 	WriteCell(cell Cell)
 	Newline()
@@ -59,7 +58,9 @@ type MainScreen interface {
 	VisibleRange() (top, bottom int64)
 }
 
-// MainScreenFactory creates a MainScreen for the given dimensions.
-// Set by the sparse package's init or by the application layer.
-// If nil, no MainScreen is created and the legacy path is used alone.
+// MainScreenFactory creates a MainScreen for the given dimensions. Set by
+// the sparse package's init (via `import _ ".../parser/sparse"`). When nil
+// — e.g., in parser-only unit tests that don't import sparse — no
+// MainScreen is created and v.mainScreen stays nil; the MainScreen-gated
+// methods on VTerm short-circuit in that case.
 var MainScreenFactory func(width, height int) MainScreen

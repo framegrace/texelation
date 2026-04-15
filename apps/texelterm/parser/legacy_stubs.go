@@ -2,20 +2,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: apps/texelterm/parser/legacy_stubs.go
-// Summary: Minimal stub types retained for API compatibility and legacy tests.
+// Summary: Minimal storage types retained for AdaptivePersistence tests.
 //
-// These types were previously defined in memory_buffer.go (deleted during the
-// sparse-viewport cutover). They are kept here so that:
-//   - legacy test files (viewport_window_test, adaptive_persistence_test, …)
-//     continue to compile and exercise low-level storage behaviour;
-//   - the AdaptivePersistence LineStore interface still carries EvictedLine;
-//   - vterm.go can expose MemoryBuffer() and WithMemoryBufferOptions() for
-//     backwards-compatible API callers that inspect the returned nil value.
+// These types were previously defined in memory_buffer.go (deleted during
+// the sparse-viewport cutover). They are kept here so that:
+//   - AdaptivePersistence tests (adaptive_persistence_test,
+//     adaptive_persistence_recovery_test, fixed_width_detector_test) can
+//     supply a MemoryBuffer as the LineStore argument and exercise
+//     eviction semantics that sparse does not model;
+//   - the LineStore interface still carries EvictedLine.
 //
-// MemoryBuffer is a simple in-memory ring-buffer for logical lines.  It does
-// NOT back VTerm's main screen (that is sparse.Terminal).  It is used only by
-// legacy unit tests and by AdaptivePersistence tests that supply it as the
-// LineStore argument.
+// MemoryBuffer is a simple in-memory ring-buffer for logical lines. It
+// does NOT back VTerm's main screen (that is sparse.Terminal in
+// production). It exists purely as a test fixture.
 
 package parser
 

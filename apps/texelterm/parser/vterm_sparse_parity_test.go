@@ -118,7 +118,7 @@ func TestVTerm_SparseParityOnBasicWrites(t *testing.T) {
 // 1. Write shell output (ls -l) that creates scrollback
 // 2. An app sets up a scroll region and writes content (simulating Claude)
 // 3. Resize the terminal (shrink then grow)
-// 4. Verify: parity between legacy and sparse grids at each step
+// 4. Verify: sparse grid remains non-nil and well-formed at each step
 // 5. Verify: scrollback is preserved (can scroll up to see ls -l output)
 func TestVTerm_SparseScrollRegionThenResize(t *testing.T) {
 	width, height := 40, 10
