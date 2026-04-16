@@ -437,3 +437,118 @@ func TestWriteWindow_ResizeZeroDimensionsLogs(t *testing.T) {
 		t.Errorf("Resize(10,0) produced no diagnostic log; got %q", buf.String())
 	}
 }
+
+// TestWriteWindow_RestoreStateClampsNegativeWriteTop covers the corrupt-WAL
+// path where writeTop slips past the basic MainScreenState.Validate check
+// (or arrives from a caller that bypasses decode). A negative writeTop
+// would push the write window into a phantom region; RestoreState must
+// clamp to 0 and log so the symptom is visible.
+func TestWriteWindow_RestoreStateClampsNegativeWriteTop(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	ww.RestoreState(-7, 0, 0, -1)
+
+	if got := ww.WriteTop(); got != 0 {
+		t.Errorf("writeTop not clamped to 0: got %d", got)
+	}
+	if !strings.Contains(buf.String(), "writeTop=-7 clamped to 0") {
+		t.Errorf("no diagnostic for negative writeTop; log = %q", buf.String())
+	}
+}
+
+// TestWriteWindow_RestoreStateClampsCursorOutsideWindow covers the case
+// where cursorGlobalIdx lands above the window bottom. Validate rejects
+// cursors below writeTop; the above-bottom case is width/height-dependent
+// and only reachable here.
+func TestWriteWindow_RestoreStateClampsCursorOutsideWindow(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	// Window is [100, 104]. Cursor at 999 should clamp to 104.
+	ww.RestoreState(100, 999, 0, -1)
+
+	gi, _ := ww.Cursor()
+	if gi != 104 {
+		t.Errorf("cursorGlobalIdx not clamped to writeBottom: got %d, want 104", gi)
+	}
+	if !strings.Contains(buf.String(), "above writeBottom") {
+		t.Errorf("no diagnostic for cursor above bottom; log = %q", buf.String())
+	}
+}
+
+// TestWriteWindow_RestoreStateClampsCursorCol covers out-of-range
+// cursorCol. The WAL-layer Validate accepts any non-negative CursorCol
+// because it doesn't know the window width, so clamping against width
+// has to happen here.
+func TestWriteWindow_RestoreStateClampsCursorCol(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	// width=10 — cursorCol=50 should clamp to 9.
+	ww.RestoreState(0, 0, 50, -1)
+
+	_, col := ww.Cursor()
+	if col != 9 {
+		t.Errorf("cursorCol not clamped to width-1: got %d, want 9", col)
+	}
+	if !strings.Contains(buf.String(), "cursorCol=50") {
+		t.Errorf("no diagnostic for cursorCol above width; log = %q", buf.String())
+	}
+
+	// Negative cursorCol should also clamp (to 0) and log.
+	buf.Reset()
+	ww.RestoreState(0, 0, -3, -1)
+	_, col = ww.Cursor()
+	if col != 0 {
+		t.Errorf("negative cursorCol not clamped to 0: got %d", col)
+	}
+	if !strings.Contains(buf.String(), "cursorCol=-3") {
+		t.Errorf("no diagnostic for negative cursorCol; log = %q", buf.String())
+	}
+}
+
+// TestWriteWindow_RestoreStateValidInputsNoLog confirms the silent path:
+// well-formed restore inputs must not produce any diagnostic log, so the
+// warnings above actually mean something when they appear.
+func TestWriteWindow_RestoreStateValidInputsNoLog(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	// Cursor at writeTop+2 in a height-5 window, col 3 in width 10.
+	ww.RestoreState(100, 102, 3, 200)
+
+	if buf.Len() != 0 {
+		t.Errorf("valid RestoreState produced diagnostic log: %q", buf.String())
+	}
+	if got := ww.WriteTop(); got != 100 {
+		t.Errorf("WriteTop: got %d, want 100", got)
+	}
+	gi, col := ww.Cursor()
+	if gi != 102 || col != 3 {
+		t.Errorf("Cursor: got (%d,%d), want (102,3)", gi, col)
+	}
+	if got := ww.WriteBottomHWM(); got != 200 {
+		t.Errorf("WriteBottomHWM: got %d, want 200", got)
+	}
+}

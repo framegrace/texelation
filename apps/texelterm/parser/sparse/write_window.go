@@ -370,12 +370,46 @@ func (w *WriteWindow) WriteBottomHWM() int64 {
 // value seeds writeBottomHWM (the high-water mark cannot move backwards,
 // so a persisted HWM from a prior session must be honored); otherwise
 // HWM is derived from writeTop+height-1 as in fresh construction.
+//
+// Basic invariants (writeTop >= 0, cursorGlobalIdx >= writeTop) are
+// checked at the WAL decode boundary via MainScreenState.Validate, but
+// width/height-dependent invariants (cursor inside the write window,
+// cursorCol inside [0, width)) live here because Validate has no window
+// dimensions to check against. Out-of-range values are clamped and
+// logged rather than propagated — a corrupt entry that survived decode
+// should leave a trail and then deposit the cursor somewhere safe.
 func (w *WriteWindow) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int, hwm int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if writeTop < 0 {
+		log.Printf("[sparse] WriteWindow.RestoreState: writeTop=%d clamped to 0", writeTop)
+		writeTop = 0
+	}
 	w.writeTop = writeTop
+
+	bottom := writeTop + int64(w.height) - 1
+	if cursorGlobalIdx < writeTop {
+		log.Printf("[sparse] WriteWindow.RestoreState: cursorGlobalIdx=%d below writeTop=%d, clamped to writeTop",
+			cursorGlobalIdx, writeTop)
+		cursorGlobalIdx = writeTop
+	} else if cursorGlobalIdx > bottom {
+		log.Printf("[sparse] WriteWindow.RestoreState: cursorGlobalIdx=%d above writeBottom=%d, clamped to writeBottom",
+			cursorGlobalIdx, bottom)
+		cursorGlobalIdx = bottom
+	}
 	w.cursorGlobalIdx = cursorGlobalIdx
+
+	if cursorCol < 0 {
+		log.Printf("[sparse] WriteWindow.RestoreState: cursorCol=%d clamped to 0", cursorCol)
+		cursorCol = 0
+	} else if cursorCol >= w.width {
+		log.Printf("[sparse] WriteWindow.RestoreState: cursorCol=%d >= width=%d, clamped to width-1",
+			cursorCol, w.width)
+		cursorCol = w.width - 1
+	}
 	w.cursorCol = cursorCol
+
 	// Seed HWM: take the max of the restored value and the current
 	// writeBottom so the invariant HWM >= writeBottom always holds.
 	minHWM := w.writeTop + int64(w.height) - 1
