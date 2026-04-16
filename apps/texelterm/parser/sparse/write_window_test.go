@@ -1,6 +1,9 @@
 package sparse
 
 import (
+	"bytes"
+	"log"
+	"strings"
 	"testing"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
@@ -401,5 +404,36 @@ func TestWriteWindow_InsertLinesDoesNotDriftHWMOnValidMargin(t *testing.T) {
 	ww.InsertLines(1, 0, 0, 4)
 	if got := ww.WriteBottomHWM(); got != 4 {
 		t.Errorf("HWM moved on in-window IL: got %d, want 4", got)
+	}
+}
+
+// TestWriteWindow_ResizeZeroDimensionsLogs covers the silent-early-return
+// diagnostic: a broken SIGWINCH that calls Resize with 0 cols or rows must
+// leave a trail in the log so the symptom can be pinned to this site.
+func TestWriteWindow_ResizeZeroDimensionsLogs(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	ww.Resize(0, 5)
+	if !strings.Contains(buf.String(), "Resize ignored") {
+		t.Errorf("Resize(0,5) produced no diagnostic log; got %q", buf.String())
+	}
+	// State unchanged after the ignored call.
+	if got := ww.Width(); got != 10 {
+		t.Errorf("Resize(0,5) mutated width: got %d, want 10", got)
+	}
+	if got := ww.Height(); got != 5 {
+		t.Errorf("Resize(0,5) mutated height: got %d, want 5", got)
+	}
+
+	buf.Reset()
+	ww.Resize(10, 0)
+	if !strings.Contains(buf.String(), "Resize ignored") {
+		t.Errorf("Resize(10,0) produced no diagnostic log; got %q", buf.String())
 	}
 }

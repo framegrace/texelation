@@ -4,6 +4,7 @@
 package sparse
 
 import (
+	"log"
 	"sync"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
@@ -190,6 +191,12 @@ func (w *WriteWindow) extendHWMLocked(newBottom int64) {
 // will reposition it.
 func (w *WriteWindow) Resize(newWidth, newHeight int) {
 	if newWidth <= 0 || newHeight <= 0 {
+		// Silently ignoring zero dimensions used to be a dead end for
+		// diagnosing broken SIGWINCH propagation — the window stayed at
+		// its previous size with no trail. Log so at least the symptom
+		// shows up in the terminal's own log.
+		log.Printf("[sparse] WriteWindow.Resize ignored: newWidth=%d newHeight=%d (both must be > 0)",
+			newWidth, newHeight)
 		return
 	}
 	w.mu.Lock()
