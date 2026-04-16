@@ -353,3 +353,53 @@ func TestWriteWindow_EraseLineClearsCurrentRow(t *testing.T) {
 		t.Errorf("row 2 should be cleared, got %v", got)
 	}
 }
+
+// The following three tests pin down the defensive HWM bump in IL/DL/NIR.
+// Normal callers pass marginBottom < height, and HWM never drifts. But if a
+// caller violates that invariant (parser bug, misuse), the operation still
+// touches rows past the nominal writeBottom — and HWM must catch up or a
+// later expand-resize will anchor against a stale value. The bump is cheap
+// enough to run unconditionally, so we do.
+
+func TestWriteWindow_InsertLinesExtendsHWMOnOutOfBoundsMargin(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	if got := ww.WriteBottomHWM(); got != 4 {
+		t.Fatalf("initial HWM = %d, want 4 (height-1)", got)
+	}
+	// Call with marginBottom = 20, well past height-1 = 4.
+	ww.InsertLines(1, 0, 0, 20)
+	if got := ww.WriteBottomHWM(); got != 20 {
+		t.Errorf("HWM after IL(marginBottom=20) = %d, want 20 (defensive bump)", got)
+	}
+}
+
+func TestWriteWindow_DeleteLinesExtendsHWMOnOutOfBoundsMargin(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	ww.DeleteLines(1, 0, 0, 30)
+	if got := ww.WriteBottomHWM(); got != 30 {
+		t.Errorf("HWM after DL(marginBottom=30) = %d, want 30 (defensive bump)", got)
+	}
+}
+
+func TestWriteWindow_NewlineInRegionExtendsHWMOnOutOfBoundsMargin(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	ww.NewlineInRegion(0, 12)
+	if got := ww.WriteBottomHWM(); got != 12 {
+		t.Errorf("HWM after NIR(marginBottom=12) = %d, want 12 (defensive bump)", got)
+	}
+}
+
+// And the happy path: with marginBottom < height, HWM doesn't move — the
+// bump is a no-op because writeTop+marginBottom stays inside [writeTop,
+// writeBottom] which is at or below HWM.
+func TestWriteWindow_InsertLinesDoesNotDriftHWMOnValidMargin(t *testing.T) {
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 5)
+	ww.InsertLines(1, 0, 0, 4)
+	if got := ww.WriteBottomHWM(); got != 4 {
+		t.Errorf("HWM moved on in-window IL: got %d, want 4", got)
+	}
+}

@@ -161,8 +161,16 @@ func (w *WriteWindow) Newline() {
 	}
 	w.cursorCol = 0
 	// Update HWM after potential scroll.
-	if wb := w.writeTop + int64(w.height) - 1; wb > w.writeBottomHWM {
-		w.writeBottomHWM = wb
+	w.extendHWMLocked(w.writeTop + int64(w.height) - 1)
+}
+
+// extendHWMLocked advances writeBottomHWM to newBottom if newBottom is
+// greater. Caller must hold w.mu. HWM never moves backwards — a persisted
+// HWM across reload, a grow-on-resize, or a defensive bump from an op that
+// touched a row past the nominal writeBottom all funnel through here.
+func (w *WriteWindow) extendHWMLocked(newBottom int64) {
+	if newBottom > w.writeBottomHWM {
+		w.writeBottomHWM = newBottom
 	}
 }
 
@@ -208,9 +216,7 @@ func (w *WriteWindow) Resize(newWidth, newHeight int) {
 	}
 
 	// Update HWM if the new writeBottom exceeds it.
-	if wb := w.writeTop + int64(w.height) - 1; wb > w.writeBottomHWM {
-		w.writeBottomHWM = wb
-	}
+	w.extendHWMLocked(w.writeTop + int64(w.height) - 1)
 
 	// Clamp cursor into the new window.
 	if w.cursorGlobalIdx < w.writeTop {
@@ -267,12 +273,17 @@ func (w *WriteWindow) EraseFromStartOfLine(col int) {
 // Lines from cursorRow..marginBottom-n shift down; bottom n lines are cleared.
 // The write window anchor and cursor are not moved — IL does not scroll.
 // cursorRow, marginTop, marginBottom are all relative to writeTop.
+//
+// Invariant: marginBottom < height. HWM is bumped defensively to
+// writeTop+marginBottom in case a caller violates that, so the "furthest
+// row the window has touched" stays monotonic even across misuse.
 func (w *WriteWindow) InsertLines(n, cursorRow, marginTop, marginBottom int) {
 	if n <= 0 {
 		return
 	}
 	w.mu.Lock()
 	base := w.writeTop
+	w.extendHWMLocked(base + int64(marginBottom))
 	w.mu.Unlock()
 
 	// Shift lines down within [cursorRow, marginBottom].
@@ -289,12 +300,15 @@ func (w *WriteWindow) InsertLines(n, cursorRow, marginTop, marginBottom int) {
 // Lines from cursorRow+n..marginBottom shift up; bottom n lines are cleared.
 // The write window anchor and cursor are not moved.
 // cursorRow, marginTop, marginBottom are all relative to writeTop.
+//
+// Invariant: marginBottom < height. Defensive HWM bump as in InsertLines.
 func (w *WriteWindow) DeleteLines(n, cursorRow, marginTop, marginBottom int) {
 	if n <= 0 {
 		return
 	}
 	w.mu.Lock()
 	base := w.writeTop
+	w.extendHWMLocked(base + int64(marginBottom))
 	w.mu.Unlock()
 
 	// Shift lines up within [cursorRow, marginBottom].
@@ -318,9 +332,12 @@ func (w *WriteWindow) DeleteLines(n, cursorRow, marginTop, marginBottom int) {
 // region is affected.
 //
 // Call Newline() instead for full-screen (marginTop==0 AND marginBottom==height-1).
+//
+// Invariant: marginBottom < height. Defensive HWM bump as in InsertLines.
 func (w *WriteWindow) NewlineInRegion(marginTop, marginBottom int) {
 	w.mu.Lock()
 	base := w.writeTop
+	w.extendHWMLocked(base + int64(marginBottom))
 	w.mu.Unlock()
 
 	// Shift lines up within the region.
