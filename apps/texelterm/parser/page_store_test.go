@@ -1055,73 +1055,27 @@ func TestCellEncoding_BackwardCompat(t *testing.T) {
 	}
 }
 
-// --- ResizeSplit Line Encoding Round-Trip Tests ---
+// --- Reserved Flag Bit Forward-Compat Test ---
 
-func TestLineEncoding_ResizeSplitRoundTrip(t *testing.T) {
-	line := &LogicalLine{
-		Cells:       []Cell{{Rune: 'A'}, {Rune: 'B'}},
-		ResizeSplit: true,
-	}
-	data := encodeLineData(line)
-	got, err := decodeLineData(data)
-	if err != nil {
-		t.Fatalf("decodeLineData: %v", err)
-	}
-	if !got.ResizeSplit {
-		t.Error("ResizeSplit should be true after round-trip")
-	}
-	if got.Synthetic {
-		t.Error("Synthetic should be false")
-	}
-}
-
-func TestLineEncoding_ResizeSplitBackwardCompat(t *testing.T) {
-	// Line without ResizeSplit → bit 2 is 0
+// Bit 2 of the flags byte was "resize-split" and has been removed; decoder
+// must silently ignore it so old on-disk pages still load without corrupting
+// other fields.
+func TestLineEncoding_IgnoresReservedFlagBit(t *testing.T) {
 	line := &LogicalLine{
 		Cells:     []Cell{{Rune: 'X'}},
 		Synthetic: true,
 	}
 	data := encodeLineData(line)
+	// Flip bit 2 on the first byte (flags) as if an older writer set it.
+	data[0] |= 0x04
 	got, err := decodeLineData(data)
 	if err != nil {
-		t.Fatalf("decodeLineData: %v", err)
-	}
-	if got.ResizeSplit {
-		t.Error("ResizeSplit should be false when not set")
+		t.Fatalf("decodeLineData on line with reserved bit 2 set: %v", err)
 	}
 	if !got.Synthetic {
-		t.Error("Synthetic should be true")
+		t.Error("Synthetic should survive even with reserved bit 2 set")
 	}
-}
-
-func TestPage_ResizeSplitRoundTrip(t *testing.T) {
-	page := NewPage(1, 0)
-	now := time.Now()
-
-	line := &LogicalLine{
-		Cells:       []Cell{{Rune: 'H'}, {Rune: 'i', Wrapped: true}},
-		ResizeSplit: true,
-	}
-	page.AddLine(line, now, 0)
-
-	var buf bytes.Buffer
-	if _, err := page.WriteTo(&buf); err != nil {
-		t.Fatalf("WriteTo: %v", err)
-	}
-
-	page2 := &Page{}
-	if _, err := page2.ReadFrom(&buf); err != nil {
-		t.Fatalf("ReadFrom: %v", err)
-	}
-
-	if len(page2.Lines) != 1 {
-		t.Fatalf("expected 1 line, got %d", len(page2.Lines))
-	}
-	got := page2.Lines[0]
-	if !got.ResizeSplit {
-		t.Error("ResizeSplit should survive page round-trip")
-	}
-	if !got.Cells[1].Wrapped {
-		t.Error("Wrapped should survive page round-trip")
+	if len(got.Cells) != 1 || got.Cells[0].Rune != 'X' {
+		t.Errorf("cell payload corrupted by reserved bit: %+v", got.Cells)
 	}
 }

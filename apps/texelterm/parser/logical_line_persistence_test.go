@@ -400,40 +400,5 @@ func TestLogicalLinePersistence_OverlayRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLogicalLinePersistence_ResizeSplitRoundTrip(t *testing.T) {
-	tmpDir := t.TempDir()
-	histFile := filepath.Join(tmpDir, "test.lhist")
-
-	lines := []*LogicalLine{
-		{Cells: makeCells("normal line"), ResizeSplit: false},
-		{Cells: makeCells("split chunk"), ResizeSplit: true},
-		{Cells: makeCells("synth+split"), Synthetic: true, ResizeSplit: true},
-	}
-
-	if err := WriteLogicalLines(histFile, lines); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-
-	loaded, err := LoadLogicalLines(histFile)
-	if err != nil {
-		t.Fatalf("load failed: %v", err)
-	}
-
-	if len(loaded) != 3 {
-		t.Fatalf("expected 3 lines, got %d", len(loaded))
-	}
-
-	if loaded[0].ResizeSplit {
-		t.Error("line 0 should not be ResizeSplit")
-	}
-	if !loaded[1].ResizeSplit {
-		t.Error("line 1 should be ResizeSplit")
-	}
-	if !loaded[2].ResizeSplit || !loaded[2].Synthetic {
-		t.Errorf("line 2: ResizeSplit=%v (want true), Synthetic=%v (want true)",
-			loaded[2].ResizeSplit, loaded[2].Synthetic)
-	}
-}
-
 // Note: TestScrollbackHistory_SaveAndLoad was removed as part of DisplayBuffer cleanup.
 // The ScrollbackHistory type has been replaced by MemoryBuffer.

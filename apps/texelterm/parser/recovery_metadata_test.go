@@ -239,3 +239,96 @@ func TestRecovery_DiscardsStalePromptStartLine(t *testing.T) {
 		}
 	}
 }
+
+// TestRecovery_HWMSurvivesShrinkCloseExpand is the end-to-end smoke test for
+// HWM persistence: no hand-rolled WAL injection, just the real close / reopen
+// path.
+//
+// Scenario: fill the viewport past the initial height, place the cursor near
+// the top of the window, shrink so the cursor still fits (writeTop stays,
+// writeBottom drops, HWM stays unchanged), clean-close, reopen at the
+// smaller size, then expand back. The HWM-anchored expand must land at the
+// pre-shrink writeTop. Without HWM persistence the new session re-derives
+// HWM from writeTop+height-1 at the smaller height; on expand that smaller
+// derived HWM pulls writeTop back into scrollback and clobbers history.
+func TestRecovery_HWMSurvivesShrinkCloseExpand(t *testing.T) {
+	dir := t.TempDir()
+	id := "vt-recovery-hwm-e2e"
+	const cols = 80
+	const bigRows, smallRows = 40, 20
+	const numLines = 100
+
+	t.Setenv("HOME", t.TempDir())
+
+	// Session 1: fill past the viewport so writeTop and HWM climb, then move
+	// the cursor to a row that will still fit after shrink.
+	v1 := newTestVTerm(t, cols, bigRows, dir, id)
+	writeNumberedLines(v1, 0, numLines)
+
+	// Cursor near top — row 2 fits inside smallRows=20, so the shrink below
+	// exercises the "cursor fits, writeTop stays" branch.
+	v1.SetCursorPos(2, 0)
+	v1.mainScreen.SetCursor(2, 0)
+
+	wantWriteTop := v1.mainScreen.WriteTop()
+	wantHWM := v1.mainScreen.WriteBottomHWM()
+	if wantHWM <= int64(smallRows) {
+		t.Fatalf("precondition: HWM=%d must exceed smallRows=%d for the test to be meaningful",
+			wantHWM, smallRows)
+	}
+
+	// Capture a content sample we can re-verify after reopen+expand. Line at
+	// writeTop has a known number embedded by writeNumberedLines.
+	topLineBefore := trimLogicalLine(cellsToString(v1.mainScreen.ReadLine(wantWriteTop)))
+
+	// Shrink: cursor at row 2 fits in the smaller window, so writeTop must
+	// not move and HWM must not change.
+	v1.Resize(cols, smallRows)
+	if got := v1.mainScreen.WriteTop(); got != wantWriteTop {
+		t.Fatalf("shrink moved writeTop unexpectedly: want %d, got %d (cursor should have fit)",
+			wantWriteTop, got)
+	}
+	if got := v1.mainScreen.WriteBottomHWM(); got != wantHWM {
+		t.Fatalf("shrink changed HWM: want %d, got %d", wantHWM, got)
+	}
+
+	if err := v1.CloseMemoryBuffer(); err != nil {
+		t.Fatalf("CloseMemoryBuffer: %v", err)
+	}
+
+	// Session 2: reopen at the smaller size. Without HWM persistence the
+	// reopened WriteWindow would rebuild HWM = writeTop+smallRows-1, losing
+	// the memory of the earlier taller window.
+	v2 := newTestVTerm(t, cols, smallRows, dir, id)
+	defer v2.CloseMemoryBuffer()
+
+	if got := v2.mainScreen.WriteBottomHWM(); got != wantHWM {
+		t.Errorf("HWM not restored across close/reopen: want %d, got %d", wantHWM, got)
+	}
+	if got := v2.mainScreen.WriteTop(); got != wantWriteTop {
+		t.Errorf("writeTop not restored across close/reopen: want %d, got %d",
+			wantWriteTop, got)
+	}
+
+	// Expand back to the original height. With HWM honored, writeTop slides
+	// back to HWM-bigRows+1 (== original wantWriteTop). Without HWM, it would
+	// anchor against the diminished derived value and retreat further.
+	v2.Resize(cols, bigRows)
+	expectedExpandWriteTop := wantHWM - int64(bigRows) + 1
+	if expectedExpandWriteTop < 0 {
+		expectedExpandWriteTop = 0
+	}
+	if got := v2.mainScreen.WriteTop(); got != expectedExpandWriteTop {
+		t.Errorf("expand did not honor HWM: want writeTop=%d, got %d (HWM=%d bigRows=%d)",
+			expectedExpandWriteTop, got, wantHWM, bigRows)
+	}
+
+	// Content check: the line at the restored writeTop must still carry its
+	// original payload. If HWM were re-derived and writeTop retreated, this
+	// line would be different (or a blank line below the old viewport).
+	topLineAfter := trimLogicalLine(cellsToString(v2.mainScreen.ReadLine(expectedExpandWriteTop)))
+	if topLineAfter != topLineBefore {
+		t.Errorf("content at expanded writeTop drifted after HWM round-trip:\n  before: %q\n  after:  %q",
+			topLineBefore, topLineAfter)
+	}
+}

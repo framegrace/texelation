@@ -64,16 +64,15 @@ func WriteLogicalLines(path string, lines []*LogicalLine) error {
 // writeLogicalLine writes a single logical line in v2 format.
 // Format: [flags:1][cell_count:4][cells...][overlay_width:4][overlay_count:4][overlay_cells...]
 func writeLogicalLine(w io.Writer, line *LogicalLine, cellBuf []byte) error {
-	// Flags byte: bit 0 = has overlay, bit 1 = synthetic, bit 2 = resize-split
+	// Flags byte: bit 0 = has overlay, bit 1 = synthetic.
+	// Bit 2 is reserved (previously "resize-split", removed post-sparse); old
+	// files may have it set and we silently ignore it on decode.
 	var flags byte
 	if line.Overlay != nil {
 		flags |= 0x01
 	}
 	if line.Synthetic {
 		flags |= 0x02
-	}
-	if line.ResizeSplit {
-		flags |= 0x04
 	}
 	if _, err := w.Write([]byte{flags}); err != nil {
 		return err
@@ -230,9 +229,8 @@ func readLogicalLine(r io.Reader, cellBuf []byte, version int) (*LogicalLine, er
 	}
 
 	line := &LogicalLine{
-		Cells:       cells,
-		Synthetic:   flags&0x02 != 0,
-		ResizeSplit: flags&0x04 != 0,
+		Cells:     cells,
+		Synthetic: flags&0x02 != 0,
 	}
 
 	if flags&0x01 != 0 {
