@@ -81,9 +81,19 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 	gi := anchor
 	first := true
 	for len(out) < height {
-		// Past content: stop.
+		// Gap / past content: emit a blank row for this gi and continue.
+		// Live mode may have interior gaps (EL/ED erasing lines inside the
+		// writeTop..writeTop+h-1 window), and the old Grid() path surfaced
+		// them as blank rows. We preserve that behavior and rely on the
+		// caller's viewport bounds (via anchor+height) to stop the walk.
 		if s.GetLine(gi) == nil && !s.RowNoWrap(gi) {
-			break
+			if first {
+				first = false
+				// A skip on an empty first chain is a no-op.
+			}
+			out = append(out, make([]parser.Cell, width))
+			gi++
+			continue
 		}
 		end, nowrap := walkChain(s, gi, maxSteps)
 

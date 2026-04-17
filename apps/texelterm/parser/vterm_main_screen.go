@@ -358,7 +358,7 @@ func (v *VTerm) mainScreenGrid() [][]Cell {
 	if v.mainScreen == nil {
 		return nil
 	}
-	grid := v.mainScreen.Grid()
+	grid := v.mainScreen.RenderReflow()
 	// Sparse Grid() returns Cell{} (Rune=0) for unwritten/erased cells.
 	// Convert to space so callers see consistent blank cells.
 	for _, row := range grid {

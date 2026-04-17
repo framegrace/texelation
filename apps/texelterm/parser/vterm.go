@@ -1412,10 +1412,24 @@ func (v *VTerm) PhysicalCursor() (physX, physY int) {
 		return physX, physY
 	}
 
-	// Sparse main screen: the cursor's globalIdx must be mapped to the
-	// view's coordinate system, since the view may be offset from the
-	// write window after a resize (viewTop ≠ writeTop).
+	// Sparse main screen: prefer the reflow-aware CursorToView mapping so
+	// wrapped lines above the cursor shift its physical row correctly. If the
+	// cursor isn't inside the currently-rendered chain walk (e.g. scrolled
+	// back beyond the anchor), fall back to writeTop-relative projection.
 	if v.mainScreen != nil {
+		if vr, vc, ok := v.mainScreen.CursorToView(); ok {
+			physY = vr
+			physX = vc
+			if physY < 0 {
+				physY = 0
+			} else if physY >= v.height {
+				physY = v.height - 1
+			}
+			if physX >= v.width {
+				physX = v.width - 1
+			}
+			return physX, physY
+		}
 		gi, _ := v.mainScreen.Cursor()
 		viewTop, _ := v.mainScreen.VisibleRange()
 		physY = int(gi - viewTop)

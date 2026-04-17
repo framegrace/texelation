@@ -203,6 +203,16 @@ func (t *Terminal) LoadFromPageStore(ps *parser.PageStore) error {
 	return LoadStore(t.store, ps)
 }
 
+// CursorToView maps the current cursor to its viewport-relative (row, col).
+// Returns ok=false if the cursor's globalIdx is outside the currently-rendered
+// chain walk (e.g. scrolled far back). Callers may fall back to writeTop-
+// relative projection in that case.
+func (t *Terminal) CursorToView() (viewRow, viewCol int, ok bool) {
+	gi, col := t.write.Cursor()
+	t.view.RecomputeLiveAnchor(t.store, gi, col)
+	return t.view.CursorToView(t.store, gi, col)
+}
+
 // RenderReflow produces the viewport via the reflow-aware ViewWindow.Render
 // path. Recomputes the live anchor from the cursor's chain first so that
 // autoFollow keeps the cursor on the bottom row of the viewport. This is the

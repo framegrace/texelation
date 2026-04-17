@@ -40,6 +40,16 @@ type MainScreen interface {
 	NewlineInRegion(marginTop, marginBottom int)
 	Grid() [][]Cell
 
+	// RenderReflow returns the current view reflowed to the viewport width.
+	// Uses chain-walking + NoWrap flags to preserve structured content.
+	RenderReflow() [][]Cell
+
+	// CursorToView maps the current cursor to its viewport-relative (row, col)
+	// in the reflowed view. Returns ok=false if the cursor's globalIdx is not
+	// inside the currently-rendered chain walk, in which case callers should
+	// fall back to writeTop-relative projection.
+	CursorToView() (viewRow, viewCol int, ok bool)
+
 	// Scroll methods keep the sparse ViewWindow in sync with user
 	// navigation. Without these, Grid() would always show the live edge.
 	ScrollUp(n int)
