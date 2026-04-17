@@ -91,3 +91,42 @@ func TestViewWindow_LiveMode_AnchorTracksCursor(t *testing.T) {
 		t.Errorf("live anchor: cursor should be on bottom row; got (%d,%d,%v)", vr, vc, ok)
 	}
 }
+
+func TestViewWindow_ScrollBy_MovesAnchor(t *testing.T) {
+	s := NewStore(80)
+	for gi := int64(0); gi < 20; gi++ {
+		fillRow(s, gi, "x", false)
+	}
+	vw := NewViewWindow(80, 5)
+	vw.SetViewAnchor(15, 0)
+	vw.ScrollBy(s, -3)
+	gi, off := vw.Anchor()
+	if gi != 12 || off != 0 {
+		t.Errorf("ScrollBy(-3) anchor=(%d,%d) want (12,0)", gi, off)
+	}
+}
+
+func TestViewWindow_ScrollBy_ClampsToZero(t *testing.T) {
+	s := NewStore(80)
+	vw := NewViewWindow(80, 5)
+	vw.SetViewAnchor(2, 0)
+	vw.ScrollBy(s, -100)
+	gi, off := vw.Anchor()
+	if gi != 0 || off != 0 {
+		t.Errorf("ScrollBy should clamp to 0; got (%d,%d)", gi, off)
+	}
+}
+
+func TestViewWindow_ScrollBy_DetachesAutoFollow(t *testing.T) {
+	s := NewStore(80)
+	vw := NewViewWindow(80, 5)
+	// Initial autoFollow = true by construction
+	vw.ScrollBy(s, -1)
+	// Verify autoFollow disabled — RecomputeLiveAnchor should be no-op now.
+	vw.SetViewAnchor(0, 0)
+	vw.RecomputeLiveAnchor(s, 10, 0)
+	gi, _ := vw.Anchor()
+	if gi != 0 {
+		t.Errorf("after ScrollBy, autoFollow off; RecomputeLiveAnchor should not move anchor. gi=%d", gi)
+	}
+}

@@ -51,6 +51,28 @@ func (v *ViewWindow) SetViewAnchor(globalIdx int64, offset int) {
 	v.viewAnchorOffset = offset
 }
 
+// Anchor returns the current (viewAnchor, viewAnchorOffset) pair.
+func (v *ViewWindow) Anchor() (int64, int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.viewAnchor, v.viewAnchorOffset
+}
+
+// ScrollBy moves the viewAnchor by dRows (negative scrolls up into history,
+// positive scrolls down toward the live edge). Disables autoFollow so the
+// view stays put instead of snapping back. viewAnchor is clamped to >= 0 and
+// viewAnchorOffset is reset to 0.
+func (v *ViewWindow) ScrollBy(s *Store, dRows int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.autoFollow = false
+	v.viewAnchor += int64(dRows)
+	if v.viewAnchor < 0 {
+		v.viewAnchor = 0
+	}
+	v.viewAnchorOffset = 0
+}
+
 // SetGlobalReflowOff toggles reflow off globally. When true, all chains
 // render 1:1 (clipped), ignoring the Wrapped flag.
 func (v *ViewWindow) SetGlobalReflowOff(off bool) {
