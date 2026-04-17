@@ -507,7 +507,7 @@ err := v.EnableMemoryBufferWithDisk(diskPath, MemoryBufferOptions{
 })
 ```
 
-**Notes**: No reflow on resize — the store is width-set-at-construction and TUIs that rewrite on resize (most of them) emit new content at new globalIdxs. Resize changes what the write/view windows project, not what the store holds.
+**Notes**: Reflow on resize is view-side. The store stays width-independent in structure (cells at `(globalIdx, col)`, `Wrapped` flag on wrap boundaries). `ViewWindow` walks `Wrapped` chains at render time and reflows at current viewport width; widening rejoins, narrowing splits. Per-row `NoWrap` flag (set when DECSTBM has non-default margins at write time) opts structured content out of reflow — that content clips/pads 1:1 instead. A global `globalReflowOff` toggle forces all reflowable rows to 1:1 without affecting NoWrap rows. See `docs/superpowers/specs/2026-04-16-sparse-resize-reflow-design.md`.
 
 ## Related Projects
 
