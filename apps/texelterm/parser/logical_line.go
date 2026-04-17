@@ -32,6 +32,10 @@ type LogicalLine struct {
 	// Synthetic indicates a transformer-inserted line that is hidden
 	// in the original (non-overlay) view.
 	Synthetic bool
+
+	// NoWrap: line should render 1:1 (clip/pad, not reflow). Set for rows
+	// written during DECSTBM or other structured content.
+	NoWrap bool
 }
 
 // NewLogicalLine creates a new empty logical line.
@@ -108,6 +112,7 @@ func (l *LogicalLine) Clone() *LogicalLine {
 	clone := NewLogicalLineFromCells(l.Cells)
 	clone.FixedWidth = l.FixedWidth
 	clone.Synthetic = l.Synthetic
+	clone.NoWrap = l.NoWrap
 	clone.OverlayWidth = l.OverlayWidth
 	if l.Overlay != nil {
 		clone.Overlay = make([]Cell, len(l.Overlay))

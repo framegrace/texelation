@@ -223,6 +223,7 @@ func (v *VTerm) mainScreenLineFeed() {
 			} else {
 				ll = &LogicalLine{}
 			}
+			ll.NoWrap = v.mainScreen.RowNoWrap(committedGlobal)
 			if v.OnLineCommit(committedGlobal, ll, v.CommandActive) {
 				// Transformer is buffering this line; skip persistence for now.
 				return
@@ -286,6 +287,7 @@ func (v *VTerm) mainScreenLineFeedInternal() {
 		if line != nil {
 			ll.Cells = line
 		}
+		ll.NoWrap = v.mainScreen.RowNoWrap(committedGlobal)
 		if v.OnLineCommit(committedGlobal, ll, v.CommandActive) {
 			return
 		}
@@ -993,7 +995,7 @@ func (a *sparseLineStoreAdapter) GetLine(globalIdx int64) *LogicalLine {
 	if cells == nil {
 		return nil
 	}
-	return &LogicalLine{Cells: cells}
+	return &LogicalLine{Cells: cells, NoWrap: a.tm.RowNoWrap(globalIdx)}
 }
 
 func (a *sparseLineStoreAdapter) ClearDirty(globalIdx int64) {
