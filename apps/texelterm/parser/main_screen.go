@@ -69,6 +69,14 @@ type MainScreen interface {
 	// ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.
 	ReadLine(globalIdx int64) []Cell
 
+	// RowNoWrap reports whether the row at globalIdx is marked NoWrap.
+	// Missing rows return false.
+	RowNoWrap(globalIdx int64) bool
+
+	// SetRowNoWrap marks the row at globalIdx as NoWrap. The flag is sticky
+	// (passing false is a no-op). Called when DECSTBM is active.
+	SetRowNoWrap(globalIdx int64, nowrap bool)
+
 	// VisibleRange returns the (top, bottom) globalIdx pair of the current view.
 	VisibleRange() (top, bottom int64)
 }

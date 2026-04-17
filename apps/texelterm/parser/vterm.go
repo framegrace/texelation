@@ -96,6 +96,10 @@ type VTerm struct {
 	commitInsertOffset int64
 	// fixedWidthDetector tracks TUI patterns for scroll region empty line suppression.
 	fwDetector *FixedWidthDetector
+	// decstbmActive reports whether DECSTBM has set non-default margins.
+	// When true, writes mark the target row as NoWrap in the sparse store,
+	// protecting structured TUI content from reflow on resize.
+	decstbmActive bool
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -1079,6 +1083,7 @@ func (v *VTerm) SetMargins(top, bottom int) {
 		// Invalid region, reset to full screen
 		v.marginTop = 0
 		v.marginBottom = v.height - 1
+		v.decstbmActive = false
 		v.notifyDetectorScrollRegionClear()
 		return
 	}
@@ -1086,8 +1091,12 @@ func (v *VTerm) SetMargins(top, bottom int) {
 	v.marginBottom = bottom - 1
 	v.logDebug("[SCROLL] SetMargins: top=%d, bottom=%d (0-indexed: %d-%d), height=%d", top, bottom, v.marginTop, v.marginBottom, v.height)
 
-	// Notify FixedWidthDetector for TUI detection
+	// Track whether a non-default scroll region is active. When true, writes
+	// mark rows as NoWrap so resize-reflow skips structured TUI content.
 	isFullScreen := (top == 1 && bottom == v.height)
+	v.decstbmActive = !isFullScreen
+
+	// Notify FixedWidthDetector for TUI detection
 	if !isFullScreen {
 		v.notifyDetectorScrollRegion(v.marginTop, v.marginBottom, v.height)
 	} else {
@@ -1374,10 +1383,11 @@ func (v *VTerm) Resize(width, height int) {
 	}
 
 	v.MarkAllDirty()
-	// Reset margins on resize (without moving cursor)
-	// Note: We can't use SetMargins() because it moves cursor to home per VT spec
+	// Reset margins on resize (without moving cursor).
+	// Note: We can't use SetMargins() because it moves cursor to home per VT spec.
 	v.marginTop = 0
 	v.marginBottom = v.height - 1
+	v.decstbmActive = false
 }
 
 // --- Simple Getters ---

@@ -157,12 +157,31 @@ func (v *VTerm) cursorGlobalIdx() int64 {
 	return v.mainScreen.WriteTop() + int64(v.cursorY)
 }
 
+// CursorGlobalIdx returns the cursor's (globalIdx, col) for tests and external
+// callers. Returns (0, 0) if no main screen is active.
+func (v *VTerm) CursorGlobalIdx() (int64, int) {
+	if v.mainScreen == nil {
+		return 0, 0
+	}
+	return v.mainScreen.Cursor()
+}
+
+// MainScreenRowNoWrap reports whether the sparse store row at globalIdx is
+// marked NoWrap. Returns false if no main screen is active.
+func (v *VTerm) MainScreenRowNoWrap(globalIdx int64) bool {
+	if v.mainScreen == nil {
+		return false
+	}
+	return v.mainScreen.RowNoWrap(globalIdx)
+}
+
 // mainScreenPlaceChar writes a rune to the sparse terminal at the current cursor.
 func (v *VTerm) mainScreenPlaceChar(r rune, isWide bool) {
 	if v.mainScreen == nil {
 		return
 	}
 	v.mainScreen.SetCursor(v.cursorY, v.cursorX)
+	gi, _ := v.mainScreen.Cursor()
 	v.mainScreen.WriteCell(Cell{
 		Rune: r,
 		FG:   v.currentFG,
@@ -170,8 +189,10 @@ func (v *VTerm) mainScreenPlaceChar(r rune, isWide bool) {
 		Attr: v.currentAttr,
 		Wide: isWide,
 	})
+	if v.decstbmActive {
+		v.mainScreen.SetRowNoWrap(gi, true)
+	}
 	if v.mainScreenPersistence != nil {
-		gi, _ := v.mainScreen.Cursor()
 		v.mainScreenPersistence.NotifyWrite(gi)
 	}
 }

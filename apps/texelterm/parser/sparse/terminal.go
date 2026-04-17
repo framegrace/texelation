@@ -165,6 +165,17 @@ func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
 	return t.store.GetLine(globalIdx)
 }
 
+// RowNoWrap reports whether the row at globalIdx is marked NoWrap.
+func (t *Terminal) RowNoWrap(globalIdx int64) bool {
+	return t.store.RowNoWrap(globalIdx)
+}
+
+// SetRowNoWrap marks the row at globalIdx as NoWrap. The flag is sticky
+// (passing false is a no-op).
+func (t *Terminal) SetRowNoWrap(globalIdx int64, nowrap bool) {
+	t.store.SetRowNoWrap(globalIdx, nowrap)
+}
+
 // RestoreWriteState forcibly sets the write window's cursor and anchor,
 // used during session restore. The ViewWindow is re-snapped to the new
 // writeBottom in follow mode. hwm seeds writeBottomHWM only when it
