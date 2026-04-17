@@ -77,3 +77,17 @@ func TestCursor_RoundTrip_NoWrapChain(t *testing.T) {
 		t.Errorf("NoWrap CursorToView(0,3)=(%d,%d,%v) want (0,3,true)", vr, vc, ok)
 	}
 }
+
+func TestViewWindow_LiveMode_AnchorTracksCursor(t *testing.T) {
+	s := NewStore(80)
+	for gi := int64(0); gi < 10; gi++ {
+		fillRow(s, gi, "x", false)
+	}
+
+	vw := NewViewWindow(80, 3)
+	vw.RecomputeLiveAnchor(s, 9, 0)
+	vr, vc, ok := vw.CursorToView(s, 9, 0)
+	if !ok || vr != 2 {
+		t.Errorf("live anchor: cursor should be on bottom row; got (%d,%d,%v)", vr, vc, ok)
+	}
+}

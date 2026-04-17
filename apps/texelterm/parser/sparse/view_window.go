@@ -123,6 +123,112 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 	return out
 }
 
+// RecomputeLiveAnchor repositions viewAnchor/viewAnchorOffset so that the
+// cursor's chain sits on the bottom of the viewport. Called once per render
+// pass when autoFollow is active: the view is a trailing window over the
+// write activity, and the cursor's chain is what the user needs to see.
+//
+// Algorithm: find the chain containing cursorGI (walk back while the previous
+// row's last cell has Wrapped=true), then walk backward one chain at a time
+// accumulating reflowed rows per chain. Stop when the accumulated total
+// covers the viewport; anchor at that chain with an offset to trim the top.
+func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int) {
+	v.mu.Lock()
+	height := v.height
+	width := v.width
+	reflowOff := v.globalReflowOff
+	autoFollow := v.autoFollow
+	v.mu.Unlock()
+
+	if !autoFollow {
+		return
+	}
+	if height <= 0 || width <= 0 {
+		return
+	}
+
+	maxSteps := 4 * height
+	if maxSteps < 4 {
+		maxSteps = 4
+	}
+
+	// Find the start of the chain containing cursorGI: walk backward while
+	// the prior row's last cell has Wrapped=true and exists.
+	chainStart := cursorGI
+	for steps := 0; steps < maxSteps && chainStart > 0; steps++ {
+		prev := chainStart - 1
+		prevCells := s.GetLine(prev)
+		if len(prevCells) == 0 {
+			break
+		}
+		if !prevCells[len(prevCells)-1].Wrapped {
+			break
+		}
+		chainStart = prev
+	}
+
+	// Walk chains backward, accumulating reflowed row counts.
+	accumulated := 0
+	gi := chainStart
+	for {
+		end, nowrap := walkChain(s, gi, maxSteps)
+		if reflowOff {
+			nowrap = true
+		}
+		var chainRows int
+		if nowrap {
+			chainRows = int(end - gi + 1)
+		} else {
+			total := 0
+			for r := gi; r <= end; r++ {
+				total += len(s.GetLine(r))
+			}
+			if total == 0 {
+				chainRows = 1
+			} else {
+				chainRows = (total + width - 1) / width
+			}
+		}
+		accumulated += chainRows
+		if accumulated >= height {
+			offset := accumulated - height
+			v.mu.Lock()
+			v.viewAnchor = gi
+			v.viewAnchorOffset = offset
+			v.mu.Unlock()
+			return
+		}
+		if gi == 0 {
+			break
+		}
+		// Walk to start of previous chain.
+		prevGI := gi - 1
+		prevCells := s.GetLine(prevGI)
+		if len(prevCells) == 0 {
+			break
+		}
+		prevChainStart := prevGI
+		for steps := 0; steps < maxSteps && prevChainStart > 0; steps++ {
+			pp := prevChainStart - 1
+			ppCells := s.GetLine(pp)
+			if len(ppCells) == 0 {
+				break
+			}
+			if !ppCells[len(ppCells)-1].Wrapped {
+				break
+			}
+			prevChainStart = pp
+		}
+		gi = prevChainStart
+	}
+
+	// Ran out of content: anchor at the top.
+	v.mu.Lock()
+	v.viewAnchor = 0
+	v.viewAnchorOffset = 0
+	v.mu.Unlock()
+}
+
 // CursorToView maps a store (globalIdx, col) to (viewRow, viewCol) within
 // the current view. Returns ok=false if the cursor is not inside the visible
 // chain walk.

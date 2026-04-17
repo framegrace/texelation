@@ -203,6 +203,16 @@ func (t *Terminal) LoadFromPageStore(ps *parser.PageStore) error {
 	return LoadStore(t.store, ps)
 }
 
+// RenderReflow produces the viewport via the reflow-aware ViewWindow.Render
+// path. Recomputes the live anchor from the cursor's chain first so that
+// autoFollow keeps the cursor on the bottom row of the viewport. This is the
+// bridge method; callers switch over from Grid() in a later step.
+func (t *Terminal) RenderReflow() [][]parser.Cell {
+	cursorGI, cursorCol := t.write.Cursor()
+	t.view.RecomputeLiveAnchor(t.store, cursorGI, cursorCol)
+	return t.view.Render(t.store)
+}
+
 // Grid builds a dense height x width grid from the current view range by
 // reading the Store. Unwritten cells and short lines are blank-padded.
 //
