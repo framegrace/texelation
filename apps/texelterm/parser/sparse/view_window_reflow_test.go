@@ -130,3 +130,36 @@ func TestViewWindow_ScrollBy_DetachesAutoFollow(t *testing.T) {
 		t.Errorf("after ScrollBy, autoFollow off; RecomputeLiveAnchor should not move anchor. gi=%d", gi)
 	}
 }
+
+func TestViewWindow_AutoJumpOnInput_ConfigurableOff(t *testing.T) {
+	vw := NewViewWindow(80, 5)
+	vw.SetAutoJumpOnInput(false)
+	vw.SetViewAnchor(3, 0)
+	vw.ScrollBy(nil, -1) // also forces autoFollow=false for deterministic state
+	vw.SetViewAnchor(3, 0)
+	vw.OnInput(99)
+	gi, _ := vw.Anchor()
+	if gi != 3 {
+		t.Errorf("autoJumpOnInput=false: anchor should stay at 3, got %d", gi)
+	}
+	if vw.IsFollowing() {
+		t.Errorf("autoJumpOnInput=false: autoFollow should remain false after OnInput")
+	}
+}
+
+func TestViewWindow_AutoJumpOnInput_DefaultOnSnapsToBottom(t *testing.T) {
+	vw := NewViewWindow(80, 5)
+	// default autoJumpOnInput = true
+	vw.SetViewAnchor(3, 0)
+	vw.ScrollBy(nil, -1)
+	vw.SetViewAnchor(3, 0)
+	if vw.IsFollowing() {
+		t.Fatalf("precondition: autoFollow should be false after ScrollBy")
+	}
+	vw.OnInput(99)
+	// ScrollToBottom re-engages autoFollow and sets viewBottom. The cleanest
+	// observable side effect is IsFollowing() flipping back to true.
+	if !vw.IsFollowing() {
+		t.Errorf("autoJumpOnInput=true: OnInput should re-engage autoFollow")
+	}
+}

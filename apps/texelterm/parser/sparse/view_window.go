@@ -81,6 +81,15 @@ func (v *ViewWindow) SetGlobalReflowOff(off bool) {
 	v.globalReflowOff = off
 }
 
+// SetAutoJumpOnInput controls whether OnInput snaps the view back to the
+// live edge. When false, the user's scroll position is preserved when they
+// type; when true (default), any input re-engages autoFollow at writeBottom.
+func (v *ViewWindow) SetAutoJumpOnInput(enabled bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.autoJumpOnInput = enabled
+}
+
 // Render projects the viewport by walking chains from viewAnchor. Each
 // chain is reflowed to viewWidth (unless NoWrap or globalReflowOff is set,
 // in which case rows render 1:1 via clipRow). Returns exactly viewHeight
@@ -499,8 +508,15 @@ func (v *ViewWindow) ScrollToBottom(writeBottom int64) {
 }
 
 // OnInput is called when the user types or clicks in the pane. Re-engages
-// autoFollow at the current writeBottom.
+// autoFollow at the current writeBottom unless autoJumpOnInput has been
+// disabled, in which case the current scroll position is preserved.
 func (v *ViewWindow) OnInput(writeBottom int64) {
+	v.mu.Lock()
+	jump := v.autoJumpOnInput
+	v.mu.Unlock()
+	if !jump {
+		return
+	}
 	v.ScrollToBottom(writeBottom)
 }
 
