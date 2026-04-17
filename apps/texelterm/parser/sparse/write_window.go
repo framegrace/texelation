@@ -4,6 +4,7 @@
 package sparse
 
 import (
+	"log"
 	"sync"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
@@ -161,8 +162,16 @@ func (w *WriteWindow) Newline() {
 	}
 	w.cursorCol = 0
 	// Update HWM after potential scroll.
-	if wb := w.writeTop + int64(w.height) - 1; wb > w.writeBottomHWM {
-		w.writeBottomHWM = wb
+	w.extendHWMLocked(w.writeTop + int64(w.height) - 1)
+}
+
+// extendHWMLocked advances writeBottomHWM to newBottom if newBottom is
+// greater. Caller must hold w.mu. HWM never moves backwards — a persisted
+// HWM across reload, a grow-on-resize, or a defensive bump from an op that
+// touched a row past the nominal writeBottom all funnel through here.
+func (w *WriteWindow) extendHWMLocked(newBottom int64) {
+	if newBottom > w.writeBottomHWM {
+		w.writeBottomHWM = newBottom
 	}
 }
 
@@ -182,6 +191,12 @@ func (w *WriteWindow) Newline() {
 // will reposition it.
 func (w *WriteWindow) Resize(newWidth, newHeight int) {
 	if newWidth <= 0 || newHeight <= 0 {
+		// Silently ignoring zero dimensions used to be a dead end for
+		// diagnosing broken SIGWINCH propagation — the window stayed at
+		// its previous size with no trail. Log so at least the symptom
+		// shows up in the terminal's own log.
+		log.Printf("[sparse] WriteWindow.Resize ignored: newWidth=%d newHeight=%d (both must be > 0)",
+			newWidth, newHeight)
 		return
 	}
 	w.mu.Lock()
@@ -208,9 +223,7 @@ func (w *WriteWindow) Resize(newWidth, newHeight int) {
 	}
 
 	// Update HWM if the new writeBottom exceeds it.
-	if wb := w.writeTop + int64(w.height) - 1; wb > w.writeBottomHWM {
-		w.writeBottomHWM = wb
-	}
+	w.extendHWMLocked(w.writeTop + int64(w.height) - 1)
 
 	// Clamp cursor into the new window.
 	if w.cursorGlobalIdx < w.writeTop {
@@ -267,12 +280,17 @@ func (w *WriteWindow) EraseFromStartOfLine(col int) {
 // Lines from cursorRow..marginBottom-n shift down; bottom n lines are cleared.
 // The write window anchor and cursor are not moved — IL does not scroll.
 // cursorRow, marginTop, marginBottom are all relative to writeTop.
+//
+// Invariant: marginBottom < height. HWM is bumped defensively to
+// writeTop+marginBottom in case a caller violates that, so the "furthest
+// row the window has touched" stays monotonic even across misuse.
 func (w *WriteWindow) InsertLines(n, cursorRow, marginTop, marginBottom int) {
 	if n <= 0 {
 		return
 	}
 	w.mu.Lock()
 	base := w.writeTop
+	w.extendHWMLocked(base + int64(marginBottom))
 	w.mu.Unlock()
 
 	// Shift lines down within [cursorRow, marginBottom].
@@ -289,12 +307,15 @@ func (w *WriteWindow) InsertLines(n, cursorRow, marginTop, marginBottom int) {
 // Lines from cursorRow+n..marginBottom shift up; bottom n lines are cleared.
 // The write window anchor and cursor are not moved.
 // cursorRow, marginTop, marginBottom are all relative to writeTop.
+//
+// Invariant: marginBottom < height. Defensive HWM bump as in InsertLines.
 func (w *WriteWindow) DeleteLines(n, cursorRow, marginTop, marginBottom int) {
 	if n <= 0 {
 		return
 	}
 	w.mu.Lock()
 	base := w.writeTop
+	w.extendHWMLocked(base + int64(marginBottom))
 	w.mu.Unlock()
 
 	// Shift lines up within [cursorRow, marginBottom].
@@ -318,9 +339,12 @@ func (w *WriteWindow) DeleteLines(n, cursorRow, marginTop, marginBottom int) {
 // region is affected.
 //
 // Call Newline() instead for full-screen (marginTop==0 AND marginBottom==height-1).
+//
+// Invariant: marginBottom < height. Defensive HWM bump as in InsertLines.
 func (w *WriteWindow) NewlineInRegion(marginTop, marginBottom int) {
 	w.mu.Lock()
 	base := w.writeTop
+	w.extendHWMLocked(base + int64(marginBottom))
 	w.mu.Unlock()
 
 	// Shift lines up within the region.
@@ -346,12 +370,46 @@ func (w *WriteWindow) WriteBottomHWM() int64 {
 // value seeds writeBottomHWM (the high-water mark cannot move backwards,
 // so a persisted HWM from a prior session must be honored); otherwise
 // HWM is derived from writeTop+height-1 as in fresh construction.
+//
+// Basic invariants (writeTop >= 0, cursorGlobalIdx >= writeTop) are
+// checked at the WAL decode boundary via MainScreenState.Validate, but
+// width/height-dependent invariants (cursor inside the write window,
+// cursorCol inside [0, width)) live here because Validate has no window
+// dimensions to check against. Out-of-range values are clamped and
+// logged rather than propagated — a corrupt entry that survived decode
+// should leave a trail and then deposit the cursor somewhere safe.
 func (w *WriteWindow) RestoreState(writeTop, cursorGlobalIdx int64, cursorCol int, hwm int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if writeTop < 0 {
+		log.Printf("[sparse] WriteWindow.RestoreState: writeTop=%d clamped to 0", writeTop)
+		writeTop = 0
+	}
 	w.writeTop = writeTop
+
+	bottom := writeTop + int64(w.height) - 1
+	if cursorGlobalIdx < writeTop {
+		log.Printf("[sparse] WriteWindow.RestoreState: cursorGlobalIdx=%d below writeTop=%d, clamped to writeTop",
+			cursorGlobalIdx, writeTop)
+		cursorGlobalIdx = writeTop
+	} else if cursorGlobalIdx > bottom {
+		log.Printf("[sparse] WriteWindow.RestoreState: cursorGlobalIdx=%d above writeBottom=%d, clamped to writeBottom",
+			cursorGlobalIdx, bottom)
+		cursorGlobalIdx = bottom
+	}
 	w.cursorGlobalIdx = cursorGlobalIdx
+
+	if cursorCol < 0 {
+		log.Printf("[sparse] WriteWindow.RestoreState: cursorCol=%d clamped to 0", cursorCol)
+		cursorCol = 0
+	} else if cursorCol >= w.width {
+		log.Printf("[sparse] WriteWindow.RestoreState: cursorCol=%d >= width=%d, clamped to width-1",
+			cursorCol, w.width)
+		cursorCol = w.width - 1
+	}
 	w.cursorCol = cursorCol
+
 	// Seed HWM: take the max of the restored value and the current
 	// writeBottom so the invariant HWM >= writeBottom always holds.
 	minHWM := w.writeTop + int64(w.height) - 1
