@@ -123,6 +123,160 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 	return out
 }
 
+// CursorToView maps a store (globalIdx, col) to (viewRow, viewCol) within
+// the current view. Returns ok=false if the cursor is not inside the visible
+// chain walk.
+func (v *ViewWindow) CursorToView(s *Store, cursorGI int64, cursorCol int) (viewRow, viewCol int, ok bool) {
+	v.mu.Lock()
+	height, width := v.height, v.width
+	anchor, offset := v.viewAnchor, v.viewAnchorOffset
+	reflowOff := v.globalReflowOff
+	v.mu.Unlock()
+
+	emitted := 0
+	gi := anchor
+	maxSteps := 4 * height
+	for emitted < height {
+		end, nowrap := walkChain(s, gi, maxSteps)
+		if reflowOff {
+			nowrap = true
+		}
+		if cursorGI >= gi && cursorGI <= end {
+			// In this chain.
+			if nowrap {
+				rowInChain := int(cursorGI - gi)
+				startAt := 0
+				if gi == anchor {
+					startAt = offset
+				}
+				if rowInChain < startAt {
+					return 0, 0, false
+				}
+				vr := emitted + (rowInChain - startAt)
+				if vr >= height {
+					return 0, 0, false
+				}
+				vc := cursorCol
+				if vc >= width {
+					vc = width - 1
+				}
+				return vr, vc, true
+			}
+			// Reflowed: compute logical column.
+			logicalCol := 0
+			for r := gi; r < cursorGI; r++ {
+				logicalCol += len(s.GetLine(r))
+			}
+			logicalCol += cursorCol
+			rowInChain := logicalCol / width
+			colInRow := logicalCol % width
+			startAt := 0
+			if gi == anchor {
+				startAt = offset
+			}
+			if rowInChain < startAt {
+				return 0, 0, false
+			}
+			vr := emitted + (rowInChain - startAt)
+			if vr >= height {
+				return 0, 0, false
+			}
+			return vr, colInRow, true
+		}
+		// Advance past chain.
+		chainRows := int(end - gi + 1)
+		if !nowrap {
+			total := 0
+			for r := gi; r <= end; r++ {
+				total += len(s.GetLine(r))
+			}
+			if total == 0 {
+				chainRows = 1
+			} else {
+				chainRows = (total + width - 1) / width
+			}
+		}
+		startAt := 0
+		if gi == anchor {
+			startAt = offset
+		}
+		emitted += chainRows - startAt
+		gi = end + 1
+		if s.GetLine(gi) == nil {
+			break
+		}
+	}
+	return 0, 0, false
+}
+
+// ViewToCursor maps (viewRow, viewCol) to (globalIdx, col) in the store.
+// If viewRow is past content end, returns a fabricated "blank area" result
+// (globalIdx beyond writeTop, col=viewCol).
+func (v *ViewWindow) ViewToCursor(s *Store, viewRow, viewCol int) (globalIdx int64, col int, ok bool) {
+	v.mu.Lock()
+	height, width := v.height, v.width
+	anchor, offset := v.viewAnchor, v.viewAnchorOffset
+	reflowOff := v.globalReflowOff
+	v.mu.Unlock()
+
+	if viewRow < 0 || viewRow >= height {
+		return 0, 0, false
+	}
+
+	emitted := 0
+	gi := anchor
+	maxSteps := 4 * height
+	for emitted < height {
+		if s.GetLine(gi) == nil {
+			break
+		}
+		end, nowrap := walkChain(s, gi, maxSteps)
+		if reflowOff {
+			nowrap = true
+		}
+		var chainRows int
+		if nowrap {
+			chainRows = int(end - gi + 1)
+		} else {
+			total := 0
+			for r := gi; r <= end; r++ {
+				total += len(s.GetLine(r))
+			}
+			if total == 0 {
+				chainRows = 1
+			} else {
+				chainRows = (total + width - 1) / width
+			}
+		}
+		startAt := 0
+		if gi == anchor {
+			startAt = offset
+		}
+		rowsFromThisChain := chainRows - startAt
+		if viewRow < emitted+rowsFromThisChain {
+			rowInChain := (viewRow - emitted) + startAt
+			if nowrap {
+				return gi + int64(rowInChain), viewCol, true
+			}
+			// Walk cells to find (gi, col)
+			logicalCol := rowInChain*width + viewCol
+			for r := gi; r <= end; r++ {
+				rowLen := len(s.GetLine(r))
+				if logicalCol < rowLen {
+					return r, logicalCol, true
+				}
+				logicalCol -= rowLen
+			}
+			// viewCol past end of logical — return at end of chain
+			return end, len(s.GetLine(end)), true
+		}
+		emitted += rowsFromThisChain
+		gi = end + 1
+	}
+	// Past content.
+	return gi + int64(viewRow-emitted), viewCol, true
+}
+
 // Width returns the current column width.
 func (v *ViewWindow) Width() int {
 	v.mu.Lock()
