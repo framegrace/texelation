@@ -3,7 +3,11 @@
 
 package sparse
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/framegrace/texelation/apps/texelterm/parser"
+)
 
 // ViewWindow is the user-facing portion of a sparse terminal. It owns the
 // viewBottom anchor and the autoFollow flag, and it responds to write-window
@@ -18,17 +22,105 @@ type ViewWindow struct {
 	height     int
 	viewBottom int64
 	autoFollow bool
+
+	// Reflow state (2026-04-16 resize-reflow)
+	viewAnchor       int64
+	viewAnchorOffset int
+	globalReflowOff  bool
+	autoJumpOnInput  bool
 }
 
 // NewViewWindow creates a ViewWindow in autoFollow mode. viewBottom starts
 // at height-1 so a fresh terminal projects rows [0, height-1].
 func NewViewWindow(width, height int) *ViewWindow {
 	return &ViewWindow{
-		width:      width,
-		height:     height,
-		viewBottom: int64(height - 1),
-		autoFollow: true,
+		width:           width,
+		height:          height,
+		viewBottom:      int64(height - 1),
+		autoFollow:      true,
+		autoJumpOnInput: true,
 	}
+}
+
+// SetViewAnchor sets the chain globalIdx and sub-row offset that the view
+// begins at. offset skips reflowed sub-rows within the first chain.
+func (v *ViewWindow) SetViewAnchor(globalIdx int64, offset int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.viewAnchor = globalIdx
+	v.viewAnchorOffset = offset
+}
+
+// SetGlobalReflowOff toggles reflow off globally. When true, all chains
+// render 1:1 (clipped), ignoring the Wrapped flag.
+func (v *ViewWindow) SetGlobalReflowOff(off bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.globalReflowOff = off
+}
+
+// Render projects the viewport by walking chains from viewAnchor. Each
+// chain is reflowed to viewWidth (unless NoWrap or globalReflowOff is set,
+// in which case rows render 1:1 via clipRow). Returns exactly viewHeight
+// rows, padded with empty cells if content is exhausted.
+func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
+	v.mu.Lock()
+	width := v.width
+	height := v.height
+	anchor := v.viewAnchor
+	skip := v.viewAnchorOffset
+	reflowOff := v.globalReflowOff
+	v.mu.Unlock()
+
+	out := make([][]parser.Cell, 0, height)
+	maxSteps := 4 * height
+	if maxSteps < 4 {
+		maxSteps = 4
+	}
+
+	gi := anchor
+	first := true
+	for len(out) < height {
+		// Past content: stop.
+		if s.GetLine(gi) == nil && !s.RowNoWrap(gi) {
+			break
+		}
+		end, nowrap := walkChain(s, gi, maxSteps)
+
+		var rows [][]parser.Cell
+		if reflowOff || nowrap {
+			for r := gi; r <= end; r++ {
+				rows = append(rows, clipRow(s.GetLine(r), width))
+			}
+		} else {
+			reflowed := reflowChain(s, gi, end, width)
+			for _, row := range reflowed {
+				rows = append(rows, clipRow(row, width))
+			}
+		}
+
+		if first {
+			first = false
+			if skip < len(rows) {
+				rows = rows[skip:]
+			} else {
+				rows = nil
+			}
+		}
+
+		for _, row := range rows {
+			if len(out) >= height {
+				break
+			}
+			out = append(out, row)
+		}
+		gi = end + 1
+	}
+
+	for len(out) < height {
+		out = append(out, make([]parser.Cell, width))
+	}
+	return out
 }
 
 // Width returns the current column width.
