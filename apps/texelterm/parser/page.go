@@ -574,9 +574,9 @@ func (p *Page) rebuildLineDataCache() {
 // encodeLineData serializes a LogicalLine to bytes (v2 format).
 // Format: Flags(1) + CellCount(4) + FixedWidth(4) + Cells(N*16) + [OverlayWidth(4) + OverlayCellCount(4) + OverlayCells(M*16)]
 //
-// Flags byte: bit 0 = has overlay, bit 1 = synthetic. Bit 2 is reserved
-// (previously "resize-split", removed post-sparse); old pages may have it
-// set and we silently ignore it on decode.
+// Flags byte: bit 0 = has overlay, bit 1 = synthetic, bit 3 = no-wrap. Bit 2
+// is reserved (previously "resize-split", removed post-sparse); old pages may
+// have it set and we silently ignore it on decode.
 func encodeLineData(line *LogicalLine) []byte {
 	var flags byte
 	if line.Overlay != nil {
@@ -584,6 +584,9 @@ func encodeLineData(line *LogicalLine) []byte {
 	}
 	if line.Synthetic {
 		flags |= 0x02
+	}
+	if line.NoWrap {
+		flags |= 0x08
 	}
 
 	cellCount := uint32(len(line.Cells))
@@ -677,7 +680,7 @@ func decodeLineDataV2(data []byte) (*LogicalLine, error) {
 	}
 
 	flags := data[0]
-	if flags & ^byte(0x07) != 0 {
+	if flags & ^byte(0x0F) != 0 {
 		return nil, fmt.Errorf("invalid v2 flags: 0x%02x", flags)
 	}
 
@@ -703,6 +706,7 @@ func decodeLineDataV2(data []byte) (*LogicalLine, error) {
 		Cells:      cells,
 		FixedWidth: int(fixedWidth),
 		Synthetic:  flags&0x02 != 0,
+		NoWrap:     flags&0x08 != 0,
 	}
 
 	if flags&0x01 != 0 {
