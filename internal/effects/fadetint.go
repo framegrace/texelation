@@ -9,6 +9,7 @@
 package effects
 
 import (
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -30,6 +31,9 @@ type fadeTintEffect struct {
 	wsDuration  time.Duration
 	// Track panes that have been active at least once.
 	// Panes never seen active (e.g., status bar) are not tinted.
+	// Written from the dispatcher goroutine (HandleTrigger) and read from the
+	// render goroutine (ApplyPane); guarded by seenMu.
+	seenMu     sync.RWMutex
 	seenActive map[[16]byte]bool
 }
 
@@ -89,7 +93,9 @@ func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 	switch trigger.Type {
 	case TriggerPaneActive:
 		if trigger.Active {
+			e.seenMu.Lock()
 			e.seenActive[trigger.PaneID] = true
+			e.seenMu.Unlock()
 		}
 		target := float32(0)
 		if !trigger.Active {
@@ -128,7 +134,10 @@ func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cel
 
 	// Skip panes that have never been active (e.g., status bar).
 	// Only darken panes that participate in the focus system.
-	if !e.seenActive[pane.ID] {
+	e.seenMu.RLock()
+	seen := e.seenActive[pane.ID]
+	e.seenMu.RUnlock()
+	if !seen {
 		return
 	}
 
