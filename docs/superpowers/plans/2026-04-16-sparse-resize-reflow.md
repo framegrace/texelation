@@ -1646,6 +1646,10 @@ git commit -m "sparse: make autoJumpOnInput configurable"
 
 - [ ] **Edge cases:** resize to width 1 briefly — should be slow but correct, not crash. `yes | head -c 1000000` then resize — the `4 × height` cap should keep the UI responsive.
 
+- [ ] **TUI app (Claude) alt-screen + resize.** Launch `claude` inside a texelterm pane, interact, then resize the outer terminal. Entering and exiting the alt screen must preserve main-screen scrollback intact. Resize during alt-screen must not corrupt the main-screen view on exit. Scroll regions set by the TUI should be NoWrap-marked and clip 1:1 on resize. Note: TUI-side duplicated lines on resize are acceptable (ghostty has the same behavior) and not a blocker.
+
+- [ ] **Keyboard and mouse scroll.** In a long history, `<alt-up>`/`<alt-down>` and mouse-wheel should scroll incrementally (single row per tick), not jump to top/bottom. Page-up/page-down should move by viewport height.
+
 If all pass, commit any test/debug hooks removal:
 
 ```bash
