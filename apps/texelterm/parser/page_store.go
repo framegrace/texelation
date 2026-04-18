@@ -80,6 +80,20 @@ type MainScreenState struct {
 	// -1 means unknown.
 	PromptStartLine int64 `json:"prompt_start_line"`
 
+	// InputStartLine is the global line index of the last OSC 133;B (input
+	// start). -1 means unknown. Persisted so that an ED 2 repaint issued
+	// immediately after server restart still rewinds to a precise anchor,
+	// rather than falling back past it to PromptStart+1. Older WAL entries
+	// without this field decode to -1.
+	InputStartLine int64 `json:"input_start_line,omitempty"`
+
+	// CommandStartLine is the global line index of the currently running
+	// foreground command's frame top (OSC 133;C, cleared on 133;D). -1 means
+	// no command in flight. Persisted so that a restart mid-TUI-session (e.g.
+	// Claude) preserves the correct rewind anchor until the TUI's next
+	// OSC 133;C tick. Older WAL entries without this field decode to -1.
+	CommandStartLine int64 `json:"command_start_line,omitempty"`
+
 	// WorkingDir is the last known working directory from OSC 7.
 	WorkingDir string `json:"working_dir"`
 
@@ -106,6 +120,8 @@ type MainScreenState struct {
 //   - ContentEnd must be >= -1 (-1 is the "empty" sentinel).
 //   - CursorCol must be non-negative.
 //   - PromptStartLine must be >= -1 (-1 is the "unknown" sentinel).
+//   - InputStartLine must be >= -1 (-1 is the "unknown" sentinel).
+//   - CommandStartLine must be >= -1 (-1 is the "no command in flight" sentinel).
 //   - CursorGlobalIdx must be >= WriteTop (the cursor lives inside the write
 //     window, which starts at WriteTop).
 //   - WriteBottomHWM must be non-negative (it is a globalIdx). Zero is
@@ -127,6 +143,12 @@ func (s MainScreenState) Validate() error {
 	}
 	if s.PromptStartLine < -1 {
 		return fmt.Errorf("MainScreenState: PromptStartLine %d must be >= -1", s.PromptStartLine)
+	}
+	if s.InputStartLine < -1 {
+		return fmt.Errorf("MainScreenState: InputStartLine %d must be >= -1", s.InputStartLine)
+	}
+	if s.CommandStartLine < -1 {
+		return fmt.Errorf("MainScreenState: CommandStartLine %d must be >= -1", s.CommandStartLine)
 	}
 	if s.CursorGlobalIdx < s.WriteTop {
 		return fmt.Errorf("MainScreenState: CursorGlobalIdx %d must be >= WriteTop %d",
