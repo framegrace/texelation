@@ -185,3 +185,43 @@ func TestScrollUp_ReflowedChainNoFragment(t *testing.T) {
 		t.Errorf("ScrollUp(1) top row = %q; want 40 d's (last reflowed row)", row0)
 	}
 }
+
+// TestScrollUp_MultiRowChainResizeSubRowGranularity is the regression guard for
+// multi-row-chain scroll after a narrowing resize. Chain [0..1] stores 160
+// cells total: 2 reflowed rows at width 80, 4 at width 40. After Resize to the
+// narrower width, each ScrollUp(1) must step exactly one sub-row — not one
+// stored row, not the whole chain. Failure modes this guards: (a) scroll units
+// in globalIdx instead of reflowed rows; (b) anchor offset reset to 0 on any
+// chain-boundary walk.
+func TestScrollUp_MultiRowChainResizeSubRowGranularity(t *testing.T) {
+	s := NewStore(80)
+	fillRow(s, 0, strings.Repeat("a", 80), true)
+	fillRow(s, 1, strings.Repeat("b", 80), false)
+	fillRow(s, 2, "tail", false)
+
+	// Start wide (width 80): chain reflows to 2 rows. Anchor at tail.
+	vw := NewViewWindow(80, 3)
+	vw.SetViewAnchor(2, 0)
+
+	// Resize narrower — chain is now 4 reflowed rows.
+	vw.Resize(40, 3, 2)
+
+	// Pre-conditions: sanity check reflow row counts.
+	if got := chainReflowedRowCount(s, 0, 1, 40, false); got != 4 {
+		t.Fatalf("chain @w40 = %d rows, want 4", got)
+	}
+
+	// Walk back through the chain one sub-row at a time. After each step the
+	// anchor must advance by exactly one reflowed row.
+	wantOffsets := []int{3, 2, 1, 0} // last-sub-row ... first-sub-row
+	for i, wantOff := range wantOffsets {
+		vw.ScrollUpRows(s, 1)
+		gi, off := vw.Anchor()
+		if gi != 0 {
+			t.Fatalf("step %d: anchor gi=%d; want 0 (chain start)", i, gi)
+		}
+		if off != wantOff {
+			t.Fatalf("step %d: anchor offset=%d; want %d", i, off, wantOff)
+		}
+	}
+}

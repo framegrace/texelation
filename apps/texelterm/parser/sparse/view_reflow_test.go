@@ -104,6 +104,39 @@ func TestClipRow_TruncatesAndPads(t *testing.T) {
 	}
 }
 
+// Locks in that a NoWrap chain reports one physical row per stored row
+// regardless of width — matches Render's nowrap branch (clipRow per row).
+// Regression guard: if the short-circuit is replaced by width-based math the
+// count would diverge from Render's output and cause cursor/anchor drift.
+func TestChainReflowedRowCount_NoWrap(t *testing.T) {
+	s := NewStore(200)
+	fillRow(s, 10, "0123456789012345", false) // 16 chars
+	fillRow(s, 11, "abcdefghij", false)       // 10 chars
+	s.SetRowNoWrap(10, true)
+	s.SetRowNoWrap(11, true)
+
+	for _, width := range []int{1, 5, 8, 16, 80} {
+		got := chainReflowedRowCount(s, 10, 11, width, true)
+		if got != 2 {
+			t.Errorf("width=%d: got %d rows, want 2 (one per stored row)", width, got)
+		}
+	}
+}
+
+// Wrapping branch must still grow with narrower widths.
+func TestChainReflowedRowCount_WrapGrowsWithWidth(t *testing.T) {
+	s := NewStore(200)
+	fillRow(s, 0, "0123456789", true)
+	fillRow(s, 1, "abcde", false)
+	// 15 total cells; widths sampled against ceil(15/width).
+	for width, want := range map[int]int{5: 3, 8: 2, 15: 1, 20: 1} {
+		got := chainReflowedRowCount(s, 0, 1, width, false)
+		if got != want {
+			t.Errorf("width=%d: got %d rows, want %d", width, got, want)
+		}
+	}
+}
+
 // Test helper
 func cellsToStringSparse(cells []parser.Cell) string {
 	b := strings.Builder{}

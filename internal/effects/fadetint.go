@@ -23,18 +23,18 @@ type fadeTintEffect struct {
 	intensity float32
 	defaultFg tcell.Color
 	defaultBg tcell.Color
-	// Workspace-level state (for workspace.control binding)
+	// wsDuration is set at construction; never mutated.
+	wsDuration time.Duration
+
+	// mu guards all cross-goroutine state below. HandleTrigger runs on the
+	// dispatcher goroutine; Update / ApplyPane / ApplyWorkspace / Active run
+	// on the render goroutine.
+	mu          sync.Mutex
 	wsActive    bool
 	wsIntensity float32 // current animated intensity
 	wsTarget    float32
 	wsStart     time.Time
-	wsDuration  time.Duration
-	// Track panes that have been active at least once.
-	// Panes never seen active (e.g., status bar) are not tinted.
-	// Written from the dispatcher goroutine (HandleTrigger) and read from the
-	// render goroutine (ApplyPane); guarded by seenMu.
-	seenMu     sync.RWMutex
-	seenActive map[[16]byte]bool
+	seenActive  map[[16]byte]bool
 }
 
 func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Duration, defaultFg, defaultBg tcell.Color) Effect {
@@ -60,11 +60,18 @@ func newFadeTintEffect(color tcell.Color, intensity float32, duration time.Durat
 func (e *fadeTintEffect) ID() string { return "fadeTint" }
 
 func (e *fadeTintEffect) Active(now time.Time) bool {
-	return e.PaneEffectBase.Active(now) || e.wsIntensity > 0 || e.wsTarget > 0
+	if e.PaneEffectBase.Active(now) {
+		return true
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.wsIntensity > 0 || e.wsTarget > 0
 }
 
 func (e *fadeTintEffect) Update(now time.Time) {
 	e.PaneEffectBase.Update(now)
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	// Animate workspace intensity toward target
 	if e.wsDuration <= 0 {
 		e.wsIntensity = e.wsTarget
@@ -93,9 +100,9 @@ func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 	switch trigger.Type {
 	case TriggerPaneActive:
 		if trigger.Active {
-			e.seenMu.Lock()
+			e.mu.Lock()
 			e.seenActive[trigger.PaneID] = true
-			e.seenMu.Unlock()
+			e.mu.Unlock()
 		}
 		target := float32(0)
 		if !trigger.Active {
@@ -109,15 +116,14 @@ func (e *fadeTintEffect) HandleTrigger(trigger EffectTrigger) {
 		}
 		e.Animate(trigger.PaneID, target, trigger.Timestamp)
 	case TriggerWorkspaceControl:
+		e.mu.Lock()
 		e.wsActive = trigger.Active
 		e.wsTarget = 0
 		if trigger.Active {
 			e.wsTarget = e.intensity
 		}
 		e.wsStart = trigger.Timestamp
-		if e.wsStart.IsZero() {
-			e.wsStart = trigger.Timestamp
-		}
+		e.mu.Unlock()
 	}
 }
 
@@ -134,9 +140,9 @@ func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cel
 
 	// Skip panes that have never been active (e.g., status bar).
 	// Only darken panes that participate in the focus system.
-	e.seenMu.RLock()
+	e.mu.Lock()
 	seen := e.seenActive[pane.ID]
-	e.seenMu.RUnlock()
+	e.mu.Unlock()
 	if !seen {
 		return
 	}
@@ -160,7 +166,10 @@ func (e *fadeTintEffect) ApplyPane(pane *client.PaneState, buffer [][]client.Cel
 }
 
 func (e *fadeTintEffect) ApplyWorkspace(buffer [][]client.Cell) {
-	if e.wsIntensity <= 0 {
+	e.mu.Lock()
+	intensity := e.wsIntensity
+	e.mu.Unlock()
+	if intensity <= 0 {
 		return
 	}
 	fgFallback := e.defaultFg
@@ -174,7 +183,7 @@ func (e *fadeTintEffect) ApplyWorkspace(buffer [][]client.Cell) {
 	for y := range buffer {
 		for x := range buffer[y] {
 			cell := &buffer[y][x]
-			cell.Style = tintStyle(cell.Style, e.color, e.wsIntensity, false, fgFallback, bgFallback)
+			cell.Style = tintStyle(cell.Style, e.color, intensity, false, fgFallback, bgFallback)
 		}
 	}
 }

@@ -117,7 +117,7 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 		// writeTop..writeTop+h-1 window), and the old Grid() path surfaced
 		// them as blank rows. We preserve that behavior and rely on the
 		// caller's viewport bounds (via anchor+height) to stop the walk.
-		if s.GetLine(gi) == nil && !s.RowNoWrap(gi) {
+		if len(s.GetLine(gi)) == 0 && !s.RowNoWrap(gi) {
 			if first {
 				first = false
 				// A skip on an empty first chain is a no-op.
@@ -652,13 +652,11 @@ func (v *ViewWindow) ScrollDownRows(s *Store, n int, writeBottom int64) {
 	}
 }
 
-// ScrollUp detaches from the live edge and moves the view back by n rows.
-// Both anchors are moved: viewBottom (legacy, still used by Grid() and
-// VisibleRange()) and viewAnchor (used by Render() / RenderReflow()). When
-// autoFollow was on, viewAnchor was recomputed on the last RenderReflow so it
-// reflects the current live anchor; decrementing from there moves the view
-// back relative to where the user was actually looking.
-func (v *ViewWindow) ScrollUp(n int) {
+// scrollUp is the legacy (globalIdx-unit) scroll-back used by tests only.
+// Production scrolls go through Terminal.ScrollUp -> ScrollUpRows, which works
+// in reflowed-row units and walks wrap chains. Kept private so test helpers
+// can continue to exercise the anchor-decrement path.
+func (v *ViewWindow) scrollUp(n int) {
 	if n <= 0 {
 		return
 	}
@@ -677,12 +675,9 @@ func (v *ViewWindow) ScrollUp(n int) {
 	v.viewAnchorOffset = 0
 }
 
-// ScrollDown moves the view forward by n rows toward the live edge.
-// writeBottom is the current WriteWindow bottom; ScrollDown will not move
-// viewBottom past it. If viewBottom reaches writeBottom, autoFollow is
-// re-engaged — the next RenderReflow pass will recompute viewAnchor via
-// RecomputeLiveAnchor.
-func (v *ViewWindow) ScrollDown(n int, writeBottom int64) {
+// scrollDown is the legacy (globalIdx-unit) scroll-forward used by tests only.
+// Production scrolls go through Terminal.ScrollDown -> ScrollDownRows.
+func (v *ViewWindow) scrollDown(n int, writeBottom int64) {
 	if n <= 0 {
 		return
 	}

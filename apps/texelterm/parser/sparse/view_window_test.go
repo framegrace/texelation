@@ -39,7 +39,7 @@ func TestViewWindow_FollowsWriteBottom(t *testing.T) {
 func TestViewWindow_DoesNotFollowWhenScrolledBack(t *testing.T) {
 	vw := NewViewWindow(80, 24)
 	vw.OnWriteBottomChanged(100)
-	vw.ScrollUp(10) // detaches from live edge
+	vw.scrollUp(10) // detaches from live edge
 	if vw.IsFollowing() {
 		t.Error("after ScrollUp, should not be following")
 	}
@@ -53,8 +53,8 @@ func TestViewWindow_DoesNotFollowWhenScrolledBack(t *testing.T) {
 func TestViewWindow_ScrollDownClampedToWriteBottom(t *testing.T) {
 	vw := NewViewWindow(80, 24)
 	vw.OnWriteBottomChanged(100)
-	vw.ScrollUp(30)
-	vw.ScrollDown(100, 100) // n, writeBottom
+	vw.scrollUp(30)
+	vw.scrollDown(100, 100) // n, writeBottom
 	_, bottom := vw.VisibleRange()
 	if bottom != 100 {
 		t.Errorf("ScrollDown clamped at writeBottom: viewBottom = %d, want 100", bottom)
@@ -64,7 +64,7 @@ func TestViewWindow_ScrollDownClampedToWriteBottom(t *testing.T) {
 func TestViewWindow_ScrollToBottomReattaches(t *testing.T) {
 	vw := NewViewWindow(80, 24)
 	vw.OnWriteBottomChanged(100)
-	vw.ScrollUp(50)
+	vw.scrollUp(50)
 	vw.ScrollToBottom(100)
 
 	if !vw.IsFollowing() {
@@ -79,7 +79,7 @@ func TestViewWindow_ScrollToBottomReattaches(t *testing.T) {
 func TestViewWindow_OnInputReattaches(t *testing.T) {
 	vw := NewViewWindow(80, 24)
 	vw.OnWriteBottomChanged(100)
-	vw.ScrollUp(50)
+	vw.scrollUp(50)
 	vw.OnInput(100)
 	if !vw.IsFollowing() {
 		t.Error("OnInput should re-engage autoFollow")
@@ -108,7 +108,7 @@ func TestViewWindow_ResizeWhileFollowing(t *testing.T) {
 func TestViewWindow_ResizeWhileScrolledBack(t *testing.T) {
 	vw := NewViewWindow(80, 24)
 	vw.OnWriteBottomChanged(100)
-	vw.ScrollUp(30) // viewBottom = 70, autoFollow off
+	vw.scrollUp(30) // viewBottom = 70, autoFollow off
 
 	// Pass a writeBottom that retreats below the current frozen viewBottom.
 	// The view must stay anchored at 70 — dropping the `if v.autoFollow`
