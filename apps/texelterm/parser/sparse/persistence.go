@@ -37,7 +37,7 @@ func (p *Persistence) FlushLines(store *Store, globalIdxs []int64) error {
 		if cells == nil {
 			continue
 		}
-		line := &parser.LogicalLine{Cells: cells}
+		line := &parser.LogicalLine{Cells: cells, NoWrap: store.RowNoWrap(gi)}
 		if err := p.page.AppendLineWithGlobalIdx(gi, line, now); err != nil {
 			return err
 		}
@@ -91,7 +91,11 @@ func LoadStore(store *Store, ps *parser.PageStore) error {
 		if line == nil {
 			continue
 		}
-		store.SetLine(gi, line.Cells)
+		if line.NoWrap {
+			store.SetLineWithNoWrap(gi, line.Cells, true)
+		} else {
+			store.SetLine(gi, line.Cells)
+		}
 	}
 	return nil
 }

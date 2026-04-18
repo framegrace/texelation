@@ -295,7 +295,8 @@ func (w *WriteWindow) InsertLines(n, cursorRow, marginTop, marginBottom int) {
 
 	// Shift lines down within [cursorRow, marginBottom].
 	for y := marginBottom; y >= cursorRow+n; y-- {
-		w.store.SetLine(base+int64(y), w.store.GetLine(base+int64(y-n)))
+		src := base + int64(y-n)
+		w.store.SetLineWithNoWrap(base+int64(y), w.store.GetLine(src), w.store.RowNoWrap(src))
 	}
 	// Clear the inserted rows.
 	for y := cursorRow; y < cursorRow+n && y <= marginBottom; y++ {
@@ -320,7 +321,8 @@ func (w *WriteWindow) DeleteLines(n, cursorRow, marginTop, marginBottom int) {
 
 	// Shift lines up within [cursorRow, marginBottom].
 	for y := cursorRow; y <= marginBottom-n; y++ {
-		w.store.SetLine(base+int64(y), w.store.GetLine(base+int64(y+n)))
+		src := base + int64(y+n)
+		w.store.SetLineWithNoWrap(base+int64(y), w.store.GetLine(src), w.store.RowNoWrap(src))
 	}
 	// Clear the vacated bottom rows.
 	clearStart := marginBottom - n + 1
@@ -349,7 +351,8 @@ func (w *WriteWindow) NewlineInRegion(marginTop, marginBottom int) {
 
 	// Shift lines up within the region.
 	for y := marginTop; y < marginBottom; y++ {
-		w.store.SetLine(base+int64(y), w.store.GetLine(base+int64(y+1)))
+		src := base + int64(y+1)
+		w.store.SetLineWithNoWrap(base+int64(y), w.store.GetLine(src), w.store.RowNoWrap(src))
 	}
 	// Clear the bottom line of the region.
 	w.store.ClearRange(base+int64(marginBottom), base+int64(marginBottom))

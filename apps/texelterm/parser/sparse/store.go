@@ -13,7 +13,8 @@ import (
 // A missing map entry represents "no content at this globalIdx" — reads of
 // missing globalIdxs return blank cells.
 type storeLine struct {
-	cells []parser.Cell
+	cells  []parser.Cell
+	nowrap bool
 }
 
 // Store is a sparse, globalIdx-keyed cell storage.
@@ -106,8 +107,9 @@ func (s *Store) Set(globalIdx int64, col int, cell parser.Cell) {
 }
 
 // GetLine returns a copy of the cells at globalIdx. Returns nil if the
-// globalIdx has never been written to. The returned slice is safe to mutate
-// — it does not alias Store internal state.
+// globalIdx has never been written to. Returns a non-nil (possibly zero-length)
+// slice for a row that exists but has no cells (e.g. created by SetRowNoWrap).
+// The returned slice is safe to mutate — it does not alias Store internal state.
 func (s *Store) GetLine(globalIdx int64) []parser.Cell {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -121,8 +123,10 @@ func (s *Store) GetLine(globalIdx int64) []parser.Cell {
 }
 
 // SetLine replaces the cells at globalIdx with a copy of cells. Any existing
-// content at that globalIdx is overwritten in full. To preserve alignment
-// with column 0, callers must pass cells starting at column 0.
+// content at that globalIdx is overwritten in full. The NoWrap flag is
+// preserved — use SetLineWithNoWrap to set an explicit flag value.
+// To preserve alignment with column 0, callers must pass cells starting at
+// column 0.
 func (s *Store) SetLine(globalIdx int64, cells []parser.Cell) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -133,6 +137,59 @@ func (s *Store) SetLine(globalIdx int64, cells []parser.Cell) {
 	}
 	line.cells = make([]parser.Cell, len(cells))
 	copy(line.cells, cells)
+	if globalIdx > s.contentEnd {
+		s.contentEnd = globalIdx
+	}
+}
+
+// RowNoWrap reports whether the row at globalIdx is marked NoWrap.
+// Missing rows return false.
+func (s *Store) RowNoWrap(globalIdx int64) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	line, ok := s.lines[globalIdx]
+	if !ok {
+		return false
+	}
+	return line.nowrap
+}
+
+// SetRowNoWrap sets the NoWrap flag on the row at globalIdx. The flag is
+// sticky: passing false does NOT clear it. Callers that need to clear must
+// replace the row via SetLineWithNoWrap.
+//
+// If the row does not yet exist, it is created empty so the flag sticks.
+func (s *Store) SetRowNoWrap(globalIdx int64, nowrap bool) {
+	if !nowrap {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	line, ok := s.lines[globalIdx]
+	if !ok {
+		line = &storeLine{}
+		s.lines[globalIdx] = line
+	}
+	line.nowrap = true
+	if globalIdx > s.contentEnd {
+		s.contentEnd = globalIdx
+	}
+}
+
+// SetLineWithNoWrap replaces both cells and the NoWrap flag at globalIdx.
+// Used by IL/DL/scroll shifts that move a row (and its NoWrap semantics)
+// from one globalIdx to another.
+func (s *Store) SetLineWithNoWrap(globalIdx int64, cells []parser.Cell, nowrap bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	line, ok := s.lines[globalIdx]
+	if !ok {
+		line = &storeLine{}
+		s.lines[globalIdx] = line
+	}
+	line.cells = make([]parser.Cell, len(cells))
+	copy(line.cells, cells)
+	line.nowrap = nowrap
 	if globalIdx > s.contentEnd {
 		s.contentEnd = globalIdx
 	}

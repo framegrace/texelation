@@ -83,11 +83,30 @@ func (t *Terminal) Resize(newWidth, newHeight int) {
 	t.view.Resize(newWidth, newHeight, t.write.WriteBottom())
 }
 
-// ScrollUp scrolls the view back by n lines and disengages autoFollow.
-func (t *Terminal) ScrollUp(n int) { t.view.ScrollUp(n) }
+// ScrollUp scrolls the view back by n reflowed rows and disengages autoFollow.
+// If the view was auto-following, the live-edge anchor is first computed from
+// the cursor's chain so the scroll is relative to what the user was looking
+// at — not the stale viewAnchor (which may still be 0 if RenderReflow hasn't
+// run yet, e.g. on session restore via SetScrollOffset). Units are reflowed
+// rows so scrolling through a wrapped chain advances one sub-row at a time.
+func (t *Terminal) ScrollUp(n int) {
+	if t.view.IsFollowing() {
+		gi, col := t.write.Cursor()
+		t.view.RecomputeLiveAnchor(t.store, gi, col)
+	}
+	t.view.ScrollUpRows(t.store, n)
+}
 
-// ScrollDown scrolls the view forward by n lines toward the live edge.
-func (t *Terminal) ScrollDown(n int) { t.view.ScrollDown(n, t.write.WriteBottom()) }
+// ScrollDown scrolls the view forward by n reflowed rows toward the live
+// edge. Same RecomputeLiveAnchor pre-step as ScrollUp for identical reasons:
+// the "from" anchor must be the live-edge anchor when auto-following.
+func (t *Terminal) ScrollDown(n int) {
+	if t.view.IsFollowing() {
+		gi, col := t.write.Cursor()
+		t.view.RecomputeLiveAnchor(t.store, gi, col)
+	}
+	t.view.ScrollDownRows(t.store, n, t.write.WriteBottom())
+}
 
 // ScrollToBottom snaps the view to the live edge and re-engages autoFollow.
 func (t *Terminal) ScrollToBottom() { t.view.ScrollToBottom(t.write.WriteBottom()) }
@@ -165,6 +184,17 @@ func (t *Terminal) ReadLine(globalIdx int64) []parser.Cell {
 	return t.store.GetLine(globalIdx)
 }
 
+// RowNoWrap reports whether the row at globalIdx is marked NoWrap.
+func (t *Terminal) RowNoWrap(globalIdx int64) bool {
+	return t.store.RowNoWrap(globalIdx)
+}
+
+// SetRowNoWrap marks the row at globalIdx as NoWrap. The flag is sticky
+// (passing false is a no-op).
+func (t *Terminal) SetRowNoWrap(globalIdx int64, nowrap bool) {
+	t.store.SetRowNoWrap(globalIdx, nowrap)
+}
+
 // RestoreWriteState forcibly sets the write window's cursor and anchor,
 // used during session restore. The ViewWindow is re-snapped to the new
 // writeBottom in follow mode. hwm seeds writeBottomHWM only when it
@@ -190,6 +220,26 @@ func (t *Terminal) WriteBottomHWM() int64 {
 // store. Called once on session restore to replay persistent scrollback.
 func (t *Terminal) LoadFromPageStore(ps *parser.PageStore) error {
 	return LoadStore(t.store, ps)
+}
+
+// CursorToView maps the current cursor to its viewport-relative (row, col).
+// Returns ok=false if the cursor's globalIdx is outside the currently-rendered
+// chain walk (e.g. scrolled far back). Callers may fall back to writeTop-
+// relative projection in that case.
+func (t *Terminal) CursorToView() (viewRow, viewCol int, ok bool) {
+	gi, col := t.write.Cursor()
+	t.view.RecomputeLiveAnchor(t.store, gi, col)
+	return t.view.CursorToView(t.store, gi, col)
+}
+
+// RenderReflow produces the viewport via the reflow-aware ViewWindow.Render
+// path. Recomputes the live anchor from the cursor's chain first so that
+// autoFollow keeps the cursor on the bottom row of the viewport. This is the
+// bridge method; callers switch over from Grid() in a later step.
+func (t *Terminal) RenderReflow() [][]parser.Cell {
+	cursorGI, cursorCol := t.write.Cursor()
+	t.view.RecomputeLiveAnchor(t.store, cursorGI, cursorCol)
+	return t.view.Render(t.store)
 }
 
 // Grid builds a dense height x width grid from the current view range by

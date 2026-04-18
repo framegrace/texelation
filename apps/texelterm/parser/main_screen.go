@@ -40,6 +40,16 @@ type MainScreen interface {
 	NewlineInRegion(marginTop, marginBottom int)
 	Grid() [][]Cell
 
+	// RenderReflow returns the current view reflowed to the viewport width.
+	// Uses chain-walking + NoWrap flags to preserve structured content.
+	RenderReflow() [][]Cell
+
+	// CursorToView maps the current cursor to its viewport-relative (row, col)
+	// in the reflowed view. Returns ok=false if the cursor's globalIdx is not
+	// inside the currently-rendered chain walk, in which case callers should
+	// fall back to writeTop-relative projection.
+	CursorToView() (viewRow, viewCol int, ok bool)
+
 	// Scroll methods keep the sparse ViewWindow in sync with user
 	// navigation. Without these, Grid() would always show the live edge.
 	ScrollUp(n int)
@@ -68,6 +78,14 @@ type MainScreen interface {
 
 	// ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.
 	ReadLine(globalIdx int64) []Cell
+
+	// RowNoWrap reports whether the row at globalIdx is marked NoWrap.
+	// Missing rows return false.
+	RowNoWrap(globalIdx int64) bool
+
+	// SetRowNoWrap marks the row at globalIdx as NoWrap. The flag is sticky
+	// (passing false is a no-op). Called when DECSTBM is active.
+	SetRowNoWrap(globalIdx int64, nowrap bool)
 
 	// VisibleRange returns the (top, bottom) globalIdx pair of the current view.
 	VisibleRange() (top, bottom int64)

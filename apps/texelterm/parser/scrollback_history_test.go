@@ -53,6 +53,42 @@ func TestVTerm_UserScroll(t *testing.T) {
 	}
 }
 
+// TestVTerm_ScrollSignConvention locks in the VTerm.Scroll sign convention that
+// keybinds and mouse wheel rely on: delta < 0 scrolls back (toward older
+// content); delta > 0 scrolls forward (toward live edge). A prior regression
+// swapped these and alt+up/down moved the view the wrong way.
+func TestVTerm_ScrollSignConvention(t *testing.T) {
+	v := NewVTerm(80, 5)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Fill enough history to scroll through.
+	for i := 0; i < 40; i++ {
+		p.Parse('A' + rune(i%26))
+		p.Parse('\n')
+		p.Parse('\r')
+	}
+
+	_, liveBottom := v.mainScreen.VisibleRange()
+
+	// delta < 0 = scroll back: bottom should decrease.
+	v.Scroll(-3)
+	_, afterBack := v.mainScreen.VisibleRange()
+	if afterBack >= liveBottom {
+		t.Fatalf("Scroll(-3) did not move view back: bottom %d -> %d", liveBottom, afterBack)
+	}
+	if v.mainScreen.IsFollowing() {
+		t.Errorf("Scroll(-3) should disengage autoFollow")
+	}
+
+	// delta > 0 = scroll forward: bottom should increase back toward live.
+	v.Scroll(1)
+	_, afterForward := v.mainScreen.VisibleRange()
+	if afterForward <= afterBack {
+		t.Fatalf("Scroll(+1) did not move view forward: bottom %d -> %d", afterBack, afterForward)
+	}
+}
+
 // TestVTerm_TotalLines verifies that ContentEnd advances as lines are
 // appended, matching the pre-sparse memoryBufferTotalLines semantics.
 func TestVTerm_TotalLines(t *testing.T) {
