@@ -158,6 +158,60 @@ func TestEnableMemoryBuffer_RestoresOSC133Anchors(t *testing.T) {
 	}
 }
 
+// TestED2_RewindAfterRestart_UsesRestoredCommandStart is the full
+// regression for issue #186: it drives OSC 133 anchors in session 1,
+// closes the VTerm (simulating a server shutdown), reopens from disk,
+// overflows the viewport on the reloaded instance, then issues ESC[2J
+// and verifies that writeTop rewinds to the *restored* CommandStart
+// anchor. Without #186 the anchor would have decoded as 0 and the
+// rewind would have landed at globalIdx 0 instead.
+func TestED2_RewindAfterRestart_UsesRestoredCommandStart(t *testing.T) {
+	dir := t.TempDir()
+	id := "anchor-ed2-restart"
+	const cols, rows = 40, 10
+
+	// --- Session 1: set up anchors, then close. ---
+	v1 := newTestVTerm(t, cols, rows, dir, id)
+	p1 := NewParser(v1)
+
+	parseString(p1, "shell banner\r\n")
+	v1.MarkPromptStart()
+	parseString(p1, "prompt> ")
+	v1.MarkInputStart()
+	parseString(p1, "claude\r\n")
+	v1.MarkCommandStart()
+	originalCmd := v1.CommandStartGlobalLine
+	if originalCmd < 0 {
+		t.Fatalf("setup: MarkCommandStart did not set CommandStartGlobalLine")
+	}
+	if err := v1.CloseMemoryBuffer(); err != nil {
+		t.Fatalf("CloseMemoryBuffer: %v", err)
+	}
+
+	// --- Session 2: reload, overflow the viewport, issue ED 2. ---
+	v2 := newTestVTerm(t, cols, rows, dir, id)
+	defer v2.CloseMemoryBuffer()
+
+	if v2.CommandStartGlobalLine != originalCmd {
+		t.Fatalf("CommandStartGlobalLine not restored: got %d, want %d",
+			v2.CommandStartGlobalLine, originalCmd)
+	}
+
+	p2 := NewParser(v2)
+	writeFullFrameOverflow(p2, 30)
+	if got := v2.mainScreen.WriteTop(); got <= originalCmd {
+		t.Fatalf("setup: writeTop=%d did not advance past restored CommandStart=%d",
+			got, originalCmd)
+	}
+
+	parseString(p2, "\x1b[2J")
+
+	if got := v2.mainScreen.WriteTop(); got != originalCmd {
+		t.Errorf("writeTop after ED 2: got %d, want %d (restored CommandStart anchor)",
+			got, originalCmd)
+	}
+}
+
 // TestEnableMemoryBuffer_DiscardsStaleAnchors verifies that the restore path
 // discards InputStart / CommandStart anchors pointing past the last
 // persisted line, matching the existing PromptStartLine behavior. This
