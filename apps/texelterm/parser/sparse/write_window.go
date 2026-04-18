@@ -237,6 +237,31 @@ func (w *WriteWindow) Resize(newWidth, newHeight int) {
 	}
 }
 
+// RewindWriteTop moves writeTop backwards to `to`, typically the globalIdx
+// of the last shell prompt. No-op if writeTop is already at or below `to`.
+// Cursor is clamped into the new window; the caller (a TUI repaint) is
+// expected to reposition it via ESC[H. HWM is not touched — a subsequent
+// expand-resize still anchors against the historical writeBottom.
+//
+// This exists so TUIs that redraw via ESC[2J + content (Claude Code,
+// non-alt-screen editors) can be anchored to a stable row, preventing
+// per-repaint overflow from accumulating in scrollback.
+func (w *WriteWindow) RewindWriteTop(to int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if to < 0 || to >= w.writeTop {
+		return
+	}
+	w.writeTop = to
+	bottom := w.writeTop + int64(w.height) - 1
+	if w.cursorGlobalIdx > bottom {
+		w.cursorGlobalIdx = bottom
+	}
+	if w.cursorGlobalIdx < w.writeTop {
+		w.cursorGlobalIdx = w.writeTop
+	}
+}
+
 // EraseDisplay clears every cell in the current write window [writeTop,
 // writeBottom]. Cells outside the window are not touched.
 func (w *WriteWindow) EraseDisplay() {

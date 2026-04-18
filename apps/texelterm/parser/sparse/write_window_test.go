@@ -87,6 +87,58 @@ func TestWriteWindow_SetCursorClampsToWindow(t *testing.T) {
 	}
 }
 
+func TestWriteWindow_RewindWriteTop(t *testing.T) {
+	// Simulate a non-alt-screen TUI doing ESC[2J + 5 newlines in a height=3
+	// window. WriteTop naturally advances past the prompt anchor (globalIdx=0).
+	// After a rewind back to 0, writeTop is at 0, HWM remains monotonic,
+	// cursor is clamped into the new window.
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 3)
+	// Fill past the bottom to force writeTop advancement.
+	for i := 0; i < 5; i++ {
+		ww.SetCursor(2, 0) // park at last row
+		ww.Newline()       // scroll: writeTop += 1
+	}
+	if ww.WriteTop() < 5 {
+		t.Fatalf("setup: expected writeTop >= 5 after 5 scrolls, got %d", ww.WriteTop())
+	}
+	hwmBefore := ww.WriteBottomHWM()
+
+	ww.RewindWriteTop(0)
+
+	if got := ww.WriteTop(); got != 0 {
+		t.Errorf("after Rewind(0), WriteTop = %d, want 0", got)
+	}
+	if got := ww.WriteBottomHWM(); got != hwmBefore {
+		t.Errorf("HWM must be monotonic: before=%d after=%d", hwmBefore, got)
+	}
+	gi, _ := ww.Cursor()
+	if gi < 0 || gi > 2 {
+		t.Errorf("cursor after rewind must be in new window [0,2]; gi=%d", gi)
+	}
+}
+
+func TestWriteWindow_RewindWriteTopNoOpIfAhead(t *testing.T) {
+	// Rewinding to a value >= current writeTop must be a no-op. Callers pass
+	// the last-prompt globalIdx; if the window hasn't drifted past it yet,
+	// nothing should move.
+	store := NewStore(10)
+	ww := NewWriteWindow(store, 10, 3)
+	ww.SetCursor(1, 3)
+	before := ww.WriteTop()
+	beforeGi, beforeCol := ww.Cursor()
+
+	ww.RewindWriteTop(5) // ahead of writeTop
+	if got := ww.WriteTop(); got != before {
+		t.Errorf("Rewind(5) when writeTop=%d should be no-op; got %d", before, got)
+	}
+	gi, col := ww.Cursor()
+	if gi != beforeGi || col != beforeCol {
+		t.Errorf("cursor should be unchanged; before=(%d,%d) after=(%d,%d)",
+			beforeGi, beforeCol, gi, col)
+	}
+}
+
 func TestWriteWindow_NewlineAdvancesCursor(t *testing.T) {
 	store := NewStore(10)
 	ww := NewWriteWindow(store, 10, 5)

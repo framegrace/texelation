@@ -411,6 +411,7 @@ func (p *Parser) handleOSC133(payload string) {
 		if len(parts) > 1 {
 			cmd = parts[1]
 		}
+		p.vterm.MarkCommandStart()
 		if p.vterm.OnCommandStart != nil {
 			p.vterm.OnCommandStart(cmd)
 		}
@@ -426,6 +427,7 @@ func (p *Parser) handleOSC133(payload string) {
 		p.vterm.PromptActive = false
 		p.vterm.InputActive = false
 		p.vterm.CommandActive = false
+		p.vterm.CommandStartGlobalLine = -1
 		if p.vterm.OnCommandEnd != nil {
 			p.vterm.OnCommandEnd(exitCode)
 		}

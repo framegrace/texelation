@@ -332,6 +332,45 @@ func (v *VTerm) mainScreenEraseScreen(mode int) {
 		}
 		v.mainScreen.EraseFromStartOfLine(v.cursorX)
 	case 2: // entire screen
+		// If the last shell prompt is known and writeTop has drifted past
+		// it (TUI repaint scrolled content), rewind writeTop to anchor at
+		// the prompt. This turns "clear + repaint" into an overwrite of a
+		// stable region instead of accumulating per-repaint overflow in
+		// scrollback. Non-alt-screen TUIs like Claude Code are the
+		// motivating case.
+		if !v.inAltScreen {
+			// Pick the tightest available "top of current foreground output"
+			// anchor, in descending order of preference:
+			//   1. CommandStartGlobalLine: writeTop when the currently-running
+			//      command started (OSC 133;C, cleared on 133;D). Tracks
+			//      long-running TUIs like Claude correctly — the shell's
+			//      prompt may be many scrollback rows above the current frame.
+			//   2. InputStartGlobalLine+1: one row past OSC 133;B (input
+			//      start). Precise for bash-in-place repaints with multi-line
+			//      prompts.
+			//   3. PromptStartGlobalLine+1: fallback for shells that emit
+			//      only 133;A. Preserves a 1-row prompt; an extra row of a
+			//      taller prompt may be overwritten.
+			anchor := int64(-1)
+			switch {
+			case v.CommandStartGlobalLine >= 0:
+				anchor = v.CommandStartGlobalLine
+			case v.InputStartGlobalLine >= 0:
+				anchor = v.InputStartGlobalLine + 1
+			case v.PromptStartGlobalLine >= 0:
+				anchor = v.PromptStartGlobalLine + 1
+			}
+			if anchor >= 0 {
+				curTop := v.mainScreen.WriteTop()
+				if curTop > anchor {
+					v.mainScreen.RewindWriteTop(anchor)
+					// Clear [anchor, HWM] so leftover rows from the previous
+					// repaint's overflow don't linger in scrollback once the
+					// user scrolls up through the just-rewound area.
+					v.mainScreen.ClearRange(anchor, v.mainScreen.WriteBottomHWM())
+				}
+			}
+		}
 		v.mainScreen.EraseDisplay()
 	case 3: // clear scrollback
 		if writeTop > 0 {
@@ -468,6 +507,12 @@ func (v *VTerm) RequestLineInsert(beforeIdx int64, cells []Cell) {
 	// the saved prompt position becomes stale and reload erases wrong lines.
 	if v.PromptStartGlobalLine >= 0 && beforeIdx <= v.PromptStartGlobalLine {
 		v.PromptStartGlobalLine++
+	}
+	if v.InputStartGlobalLine >= 0 && beforeIdx <= v.InputStartGlobalLine {
+		v.InputStartGlobalLine++
+	}
+	if v.CommandStartGlobalLine >= 0 && beforeIdx <= v.CommandStartGlobalLine {
+		v.CommandStartGlobalLine++
 	}
 	v.commitInsertOffset++
 	v.MarkAllDirty()

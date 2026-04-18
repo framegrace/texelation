@@ -92,7 +92,7 @@ func (t *Terminal) Resize(newWidth, newHeight int) {
 func (t *Terminal) ScrollUp(n int) {
 	if t.view.IsFollowing() {
 		gi, col := t.write.Cursor()
-		t.view.RecomputeLiveAnchor(t.store, gi, col)
+		t.view.RecomputeLiveAnchor(t.store, gi, col, t.write.WriteTop())
 	}
 	t.view.ScrollUpRows(t.store, n)
 }
@@ -103,7 +103,7 @@ func (t *Terminal) ScrollUp(n int) {
 func (t *Terminal) ScrollDown(n int) {
 	if t.view.IsFollowing() {
 		gi, col := t.write.Cursor()
-		t.view.RecomputeLiveAnchor(t.store, gi, col)
+		t.view.RecomputeLiveAnchor(t.store, gi, col, t.write.WriteTop())
 	}
 	t.view.ScrollDownRows(t.store, n, t.write.WriteBottom())
 }
@@ -118,6 +118,15 @@ func (t *Terminal) OnInput() { t.view.OnInput(t.write.WriteBottom()) }
 // the sparse equivalent of ESC[2J on the main screen.
 func (t *Terminal) EraseDisplay() {
 	t.write.EraseDisplay()
+}
+
+// RewindWriteTop forwards to the WriteWindow and resyncs the ViewWindow so
+// viewBottom doesn't drift above the new writeBottom. Without the resync,
+// ScrollOffset reports nonzero immediately after a rewind and input-triggered
+// auto-scroll-to-bottom misbehaves. See WriteWindow.RewindWriteTop.
+func (t *Terminal) RewindWriteTop(to int64) {
+	t.write.RewindWriteTop(to)
+	t.view.ScrollToBottom(t.write.WriteBottom())
 }
 
 // EraseLine clears the cells of the line at the cursor's current globalIdx.
@@ -228,7 +237,7 @@ func (t *Terminal) LoadFromPageStore(ps *parser.PageStore) error {
 // relative projection in that case.
 func (t *Terminal) CursorToView() (viewRow, viewCol int, ok bool) {
 	gi, col := t.write.Cursor()
-	t.view.RecomputeLiveAnchor(t.store, gi, col)
+	t.view.RecomputeLiveAnchor(t.store, gi, col, t.write.WriteTop())
 	return t.view.CursorToView(t.store, gi, col)
 }
 
@@ -238,7 +247,7 @@ func (t *Terminal) CursorToView() (viewRow, viewCol int, ok bool) {
 // bridge method; callers switch over from Grid() in a later step.
 func (t *Terminal) RenderReflow() [][]parser.Cell {
 	cursorGI, cursorCol := t.write.Cursor()
-	t.view.RecomputeLiveAnchor(t.store, cursorGI, cursorCol)
+	t.view.RecomputeLiveAnchor(t.store, cursorGI, cursorCol, t.write.WriteTop())
 	return t.view.Render(t.store)
 }
 
