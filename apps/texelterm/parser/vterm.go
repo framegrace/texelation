@@ -490,6 +490,11 @@ func (v *VTerm) MarkPromptStart() {
 		gi, _ := v.mainScreen.Cursor()
 		v.PromptStartGlobalLine = gi
 	}
+	// A new prompt is definitional proof the previous command has ended.
+	// Clearing here covers the crash / SIGKILL case where OSC 133;D never
+	// arrives — without it, CommandStartGlobalLine would stick forever and
+	// the next ED 2 would rewind to a dead command's frame top.
+	v.CommandStartGlobalLine = -1
 }
 
 // MarkInputStart records the position where user input starts.

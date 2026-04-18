@@ -2457,7 +2457,9 @@ func (a *TexelTerm) flushSetsize() {
 	if ptyFile == nil {
 		return
 	}
-	pty.Setsize(ptyFile, &ws)
+	if err := pty.Setsize(ptyFile, &ws); err != nil {
+		log.Printf("[TEXELTERM] pty.Setsize(%d,%d) failed: %v", ws.Cols, ws.Rows, err)
+	}
 	a.captureWriteResize(int(ws.Cols), int(ws.Rows))
 }
 

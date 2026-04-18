@@ -120,9 +120,13 @@ func (t *Terminal) EraseDisplay() {
 	t.write.EraseDisplay()
 }
 
-// RewindWriteTop forwards to the WriteWindow. See WriteWindow.RewindWriteTop.
+// RewindWriteTop forwards to the WriteWindow and resyncs the ViewWindow so
+// viewBottom doesn't drift above the new writeBottom. Without the resync,
+// ScrollOffset reports nonzero immediately after a rewind and input-triggered
+// auto-scroll-to-bottom misbehaves. See WriteWindow.RewindWriteTop.
 func (t *Terminal) RewindWriteTop(to int64) {
 	t.write.RewindWriteTop(to)
+	t.view.ScrollToBottom(t.write.WriteBottom())
 }
 
 // EraseLine clears the cells of the line at the cursor's current globalIdx.

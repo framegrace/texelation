@@ -302,3 +302,68 @@ func TestRequestLineInsert_PromptStartShiftsWithInsertsBeforeIt(t *testing.T) {
 		t.Errorf("PromptStartGlobalLine: insert after prompt shifted it: got %d, want %d", got, before+2)
 	}
 }
+
+// TestRequestLineInsert_InputStartShiftsWithInsertsBeforeIt mirrors the prompt
+// shift invariant for OSC 133;B (InputStartGlobalLine). Inserts at or before
+// the input-start anchor must shift it by 1; inserts after must not.
+func TestRequestLineInsert_InputStartShiftsWithInsertsBeforeIt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	v := NewVTerm(40, 24)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	for i := 0; i < 3; i++ {
+		parseString(p, fmt.Sprintf("output %d\r\n", i))
+	}
+
+	v.MarkInputStart()
+	before := v.InputStartGlobalLine
+	if before < 0 {
+		t.Fatalf("InputStartGlobalLine not set after MarkInputStart")
+	}
+
+	for i := 0; i < 2; i++ {
+		v.RequestLineInsert(v.InputStartGlobalLine, makeCells("S"))
+	}
+	if got := v.InputStartGlobalLine; got != before+2 {
+		t.Errorf("InputStartGlobalLine: got %d, want %d", got, before+2)
+	}
+
+	v.RequestLineInsert(v.InputStartGlobalLine+1, makeCells("X"))
+	if got := v.InputStartGlobalLine; got != before+2 {
+		t.Errorf("InputStartGlobalLine: insert after shifted it: got %d, want %d", got, before+2)
+	}
+}
+
+// TestRequestLineInsert_CommandStartShiftsWithInsertsBeforeIt mirrors the
+// same invariant for OSC 133;C (CommandStartGlobalLine). Without this shift
+// the ED-2 rewind anchor drifts off the current command's frame top after a
+// synthetic line insert, causing subsequent repaints to rewind too far.
+func TestRequestLineInsert_CommandStartShiftsWithInsertsBeforeIt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	v := NewVTerm(40, 24)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	for i := 0; i < 3; i++ {
+		parseString(p, fmt.Sprintf("output %d\r\n", i))
+	}
+
+	v.MarkCommandStart()
+	before := v.CommandStartGlobalLine
+	if before < 0 {
+		t.Fatalf("CommandStartGlobalLine not set after MarkCommandStart")
+	}
+
+	for i := 0; i < 2; i++ {
+		v.RequestLineInsert(v.CommandStartGlobalLine, makeCells("S"))
+	}
+	if got := v.CommandStartGlobalLine; got != before+2 {
+		t.Errorf("CommandStartGlobalLine: got %d, want %d", got, before+2)
+	}
+
+	v.RequestLineInsert(v.CommandStartGlobalLine+1, makeCells("X"))
+	if got := v.CommandStartGlobalLine; got != before+2 {
+		t.Errorf("CommandStartGlobalLine: insert after shifted it: got %d, want %d", got, before+2)
+	}
+}
