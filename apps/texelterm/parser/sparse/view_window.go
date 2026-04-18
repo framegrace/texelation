@@ -208,28 +208,37 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 		chainStart = prev
 	}
 
-	// Walk chains backward, accumulating reflowed row counts.
+	// Walk chains backward, accumulating reflowed row counts. Empty rows
+	// (blank-line separators in plain output like `ls -lR`, or erased lines)
+	// are not chain starts, but they still occupy one physical row. Treat them
+	// as 1-row "chains" and continue walking rather than bailing — bailing on
+	// the first blank above the cursor would pin the viewport to the top of
+	// history on perfectly ordinary output.
 	accumulated := 0
 	gi := chainStart
 	for {
+		cells := s.GetLine(gi)
+		if len(cells) == 0 && !s.RowNoWrap(gi) {
+			accumulated++
+			if accumulated >= height {
+				offset := accumulated - height
+				v.mu.Lock()
+				v.viewAnchor = gi
+				v.viewAnchorOffset = offset
+				v.mu.Unlock()
+				return
+			}
+			if gi == 0 {
+				break
+			}
+			gi--
+			continue
+		}
 		end, nowrap := walkChain(s, gi, maxSteps)
 		if reflowOff {
 			nowrap = true
 		}
-		var chainRows int
-		if nowrap {
-			chainRows = int(end - gi + 1)
-		} else {
-			total := 0
-			for r := gi; r <= end; r++ {
-				total += len(s.GetLine(r))
-			}
-			if total == 0 {
-				chainRows = 1
-			} else {
-				chainRows = (total + width - 1) / width
-			}
-		}
+		chainRows := chainReflowedRowCount(s, gi, end, width, nowrap)
 		accumulated += chainRows
 		if accumulated >= height {
 			offset := accumulated - height
@@ -242,11 +251,14 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 		if gi == 0 {
 			break
 		}
-		// Walk to start of previous chain.
+		// Walk to the start of the previous chain. An empty prev row is
+		// itself the "previous chain" — fall through to the top of the loop
+		// to count it as 1 row.
 		prevGI := gi - 1
 		prevCells := s.GetLine(prevGI)
 		if len(prevCells) == 0 {
-			break
+			gi = prevGI
+			continue
 		}
 		prevChainStart := prevGI
 		for steps := 0; steps < maxSteps && prevChainStart > 0; steps++ {
@@ -309,6 +321,47 @@ func (v *ViewWindow) CursorToView(s *Store, cursorGI int64, cursorCol int) (view
 				}
 				return vr, vc, true
 			}
+			// Reflowed path. If the cursor sits on an empty trailing row
+			// (cursorGI > chain head and cursorGI's line is empty), the
+			// logical-column calculation can't express its position — at
+			// widths where the preceding content fits without wrapping, every
+			// post-content row would collapse to logicalCol/width = 0. Compute
+			// the row as contentRows + (count of empty rows before cursorGI).
+			if cursorGI > gi && len(s.GetLine(cursorGI)) == 0 {
+				total := 0
+				for r := gi; r < cursorGI; r++ {
+					total += len(s.GetLine(r))
+				}
+				contentRows := 0
+				if total == 0 {
+					contentRows = 1
+				} else {
+					contentRows = (total + width - 1) / width
+				}
+				emptiesBefore := 0
+				for r := gi + 1; r < cursorGI; r++ {
+					if len(s.GetLine(r)) == 0 {
+						emptiesBefore++
+					}
+				}
+				rowInChain := contentRows + emptiesBefore
+				startAt := 0
+				if gi == anchor {
+					startAt = offset
+				}
+				if rowInChain < startAt {
+					return 0, 0, false
+				}
+				vr := emitted + (rowInChain - startAt)
+				if vr >= height {
+					return 0, 0, false
+				}
+				vc := cursorCol
+				if vc >= width {
+					vc = width - 1
+				}
+				return vr, vc, true
+			}
 			// Reflowed: compute logical column.
 			logicalCol := 0
 			for r := gi; r < cursorGI; r++ {
@@ -331,18 +384,7 @@ func (v *ViewWindow) CursorToView(s *Store, cursorGI int64, cursorCol int) (view
 			return vr, colInRow, true
 		}
 		// Advance past chain.
-		chainRows := int(end - gi + 1)
-		if !nowrap {
-			total := 0
-			for r := gi; r <= end; r++ {
-				total += len(s.GetLine(r))
-			}
-			if total == 0 {
-				chainRows = 1
-			} else {
-				chainRows = (total + width - 1) / width
-			}
-		}
+		chainRows := chainReflowedRowCount(s, gi, end, width, nowrap)
 		startAt := 0
 		if gi == anchor {
 			startAt = offset
@@ -381,20 +423,7 @@ func (v *ViewWindow) ViewToCursor(s *Store, viewRow, viewCol int) (globalIdx int
 		if reflowOff {
 			nowrap = true
 		}
-		var chainRows int
-		if nowrap {
-			chainRows = int(end - gi + 1)
-		} else {
-			total := 0
-			for r := gi; r <= end; r++ {
-				total += len(s.GetLine(r))
-			}
-			if total == 0 {
-				chainRows = 1
-			} else {
-				chainRows = (total + width - 1) / width
-			}
-		}
+		chainRows := chainReflowedRowCount(s, gi, end, width, nowrap)
 		startAt := 0
 		if gi == anchor {
 			startAt = offset
@@ -466,9 +495,169 @@ func (v *ViewWindow) OnWriteBottomChanged(newWriteBottom int64) {
 	}
 }
 
-// ScrollUp detaches from the live edge and moves viewBottom up by n lines.
-// viewBottom is clamped to at least height-1 (can't show negative globalIdxs
-// as the view bottom).
+// ScrollUpRows detaches from the live edge and moves the view back by n
+// reflowed rows. Unlike ScrollUp (which decrements viewAnchor by n globalIdx
+// units and so can land mid-chain, producing a partial-chain fragment at the
+// top of the viewport), ScrollUpRows walks chains in reflowed-row units so
+// viewAnchor always lands at a chain start with viewAnchorOffset tracking the
+// sub-row position. viewBottom is decremented by the number of rows actually
+// walked — NOT by n — so a clamped scroll (viewAnchor hit 0 with remaining > 0)
+// doesn't push viewBottom into a stale state that lets a subsequent
+// ScrollDownRows with velocity snap prematurely to the live edge.
+func (v *ViewWindow) ScrollUpRows(s *Store, n int) {
+	if n <= 0 {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.autoFollow = false
+
+	remaining := n
+	walked := 0
+	if v.viewAnchorOffset >= remaining {
+		v.viewAnchorOffset -= remaining
+		walked = remaining
+		v.viewBottom -= int64(walked)
+		v.clampViewBottom()
+		return
+	}
+	walked += v.viewAnchorOffset
+	remaining -= v.viewAnchorOffset
+	v.viewAnchorOffset = 0
+
+	width := v.width
+	reflowOff := v.globalReflowOff
+	maxSteps := 4 * v.height
+	if maxSteps < 4 {
+		maxSteps = 4
+	}
+	for remaining > 0 && v.viewAnchor > 0 {
+		prevGI := v.viewAnchor - 1
+		prevStart := findChainStart(s, prevGI, maxSteps)
+		end, nowrap := walkChain(s, prevStart, maxSteps)
+		if reflowOff {
+			nowrap = true
+		}
+		rows := chainReflowedRowCount(s, prevStart, end, width, nowrap)
+		if rows > remaining {
+			v.viewAnchor = prevStart
+			v.viewAnchorOffset = rows - remaining
+			walked += remaining
+			v.viewBottom -= int64(walked)
+			v.clampViewBottom()
+			return
+		}
+		remaining -= rows
+		walked += rows
+		v.viewAnchor = prevStart
+	}
+	// Loop exits either because remaining == 0 (scrolled the full requested
+	// amount and viewAnchor is now at a correct chain start) or because we
+	// ran off the top of history. Only in the latter case do we pin to 0;
+	// otherwise preserve the viewAnchor the loop computed.
+	if remaining > 0 {
+		v.viewAnchor = 0
+		v.viewAnchorOffset = 0
+	}
+	v.viewBottom -= int64(walked)
+	v.clampViewBottom()
+}
+
+// clampViewBottom enforces viewBottom >= height-1. Must be called with mu held.
+func (v *ViewWindow) clampViewBottom() {
+	minBottom := int64(v.height - 1)
+	if v.viewBottom < minBottom {
+		v.viewBottom = minBottom
+	}
+}
+
+// ScrollDownRows moves the view forward by n reflowed rows toward the live
+// edge. Walks chains the same way ScrollUpRows does but in the forward
+// direction. Live-edge detection is based on how far we're currently scrolled
+// back (writeBottom - viewBottom), not on incrementing viewBottom by n
+// up-front — a velocity-multiplied n would otherwise overshoot and snap to the
+// live edge after a single click. Only when the viewAnchor walk reaches a
+// position that covers writeBottom do we re-engage autoFollow.
+func (v *ViewWindow) ScrollDownRows(s *Store, n int, writeBottom int64) {
+	if n <= 0 {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	// Cap n to however many rows we're currently scrolled back. Anything
+	// beyond that is a snap to live edge.
+	scrolledBack := writeBottom - v.viewBottom
+	if scrolledBack < 0 {
+		scrolledBack = 0
+	}
+	capped := int64(n)
+	snapToLive := false
+	if capped >= scrolledBack {
+		capped = scrolledBack
+		snapToLive = true
+	}
+
+	width := v.width
+	reflowOff := v.globalReflowOff
+	maxSteps := 4 * v.height
+	if maxSteps < 4 {
+		maxSteps = 4
+	}
+	remaining := int(capped)
+	walked := 0
+	for remaining > 0 {
+		cells := s.GetLine(v.viewAnchor)
+		if len(cells) == 0 && !s.RowNoWrap(v.viewAnchor) {
+			// 1-row empty chain.
+			avail := 1 - v.viewAnchorOffset
+			if avail <= 0 {
+				v.viewAnchor++
+				v.viewAnchorOffset = 0
+				continue
+			}
+			if remaining < avail {
+				v.viewAnchorOffset += remaining
+				walked += remaining
+				remaining = 0
+				break
+			}
+			remaining -= avail
+			walked += avail
+			v.viewAnchor++
+			v.viewAnchorOffset = 0
+			continue
+		}
+		end, nowrap := walkChain(s, v.viewAnchor, maxSteps)
+		if reflowOff {
+			nowrap = true
+		}
+		rows := chainReflowedRowCount(s, v.viewAnchor, end, width, nowrap)
+		avail := rows - v.viewAnchorOffset
+		if remaining < avail {
+			v.viewAnchorOffset += remaining
+			walked += remaining
+			remaining = 0
+			break
+		}
+		remaining -= avail
+		walked += avail
+		v.viewAnchor = end + 1
+		v.viewAnchorOffset = 0
+	}
+	v.viewBottom += int64(walked)
+	if snapToLive {
+		v.viewBottom = writeBottom
+		v.autoFollow = true
+	}
+}
+
+// ScrollUp detaches from the live edge and moves the view back by n rows.
+// Both anchors are moved: viewBottom (legacy, still used by Grid() and
+// VisibleRange()) and viewAnchor (used by Render() / RenderReflow()). When
+// autoFollow was on, viewAnchor was recomputed on the last RenderReflow so it
+// reflects the current live anchor; decrementing from there moves the view
+// back relative to where the user was actually looking.
 func (v *ViewWindow) ScrollUp(n int) {
 	if n <= 0 {
 		return
@@ -481,11 +670,18 @@ func (v *ViewWindow) ScrollUp(n int) {
 	if v.viewBottom < minBottom {
 		v.viewBottom = minBottom
 	}
+	v.viewAnchor -= int64(n)
+	if v.viewAnchor < 0 {
+		v.viewAnchor = 0
+	}
+	v.viewAnchorOffset = 0
 }
 
-// ScrollDown moves viewBottom down by n lines toward the live edge. writeBottom
-// is the current WriteWindow bottom; ScrollDown will not move past it. If
-// viewBottom reaches writeBottom, autoFollow is automatically re-engaged.
+// ScrollDown moves the view forward by n rows toward the live edge.
+// writeBottom is the current WriteWindow bottom; ScrollDown will not move
+// viewBottom past it. If viewBottom reaches writeBottom, autoFollow is
+// re-engaged — the next RenderReflow pass will recompute viewAnchor via
+// RecomputeLiveAnchor.
 func (v *ViewWindow) ScrollDown(n int, writeBottom int64) {
 	if n <= 0 {
 		return
@@ -493,6 +689,8 @@ func (v *ViewWindow) ScrollDown(n int, writeBottom int64) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.viewBottom += int64(n)
+	v.viewAnchor += int64(n)
+	v.viewAnchorOffset = 0
 	if v.viewBottom >= writeBottom {
 		v.viewBottom = writeBottom
 		v.autoFollow = true
@@ -500,6 +698,9 @@ func (v *ViewWindow) ScrollDown(n int, writeBottom int64) {
 }
 
 // ScrollToBottom snaps viewBottom to writeBottom and re-engages autoFollow.
+// viewAnchor is left alone here — the next RenderReflow will call
+// RecomputeLiveAnchor (which now runs because autoFollow is true) and
+// reposition the anchor to the cursor's chain.
 func (v *ViewWindow) ScrollToBottom(writeBottom int64) {
 	v.mu.Lock()
 	defer v.mu.Unlock()

@@ -887,8 +887,9 @@ func (a *TexelTerm) handleConfirmationKey(ev *tcell.EventKey) bool {
 }
 
 // handleScrollAction scrolls the terminal by the given number of lines and
-// requests a refresh. Positive values scroll up (back in history); negative
-// values scroll down (toward live edge).
+// requests a refresh. Negative values scroll up (back in history); positive
+// values scroll down (toward live edge). Matches VTerm.Scroll's convention
+// and mouse-wheel delta sign (wheel up is -1).
 func (a *TexelTerm) handleScrollAction(lines int) {
 	a.mu.Lock()
 	if a.vterm != nil {
@@ -1058,16 +1059,16 @@ func (a *TexelTerm) HandleKey(ev *tcell.EventKey) {
 			a.takeScreenshot()
 			return
 		case keybind.TermScrollUp:
-			a.handleScrollAction(1)
-			return
-		case keybind.TermScrollDown:
 			a.handleScrollAction(-1)
 			return
+		case keybind.TermScrollDown:
+			a.handleScrollAction(1)
+			return
 		case keybind.TermScrollPgUp:
-			a.handleScrollAction(a.termHeight())
+			a.handleScrollAction(-a.termHeight())
 			return
 		case keybind.TermScrollPgDn:
-			a.handleScrollAction(-a.termHeight())
+			a.handleScrollAction(a.termHeight())
 			return
 		}
 	}

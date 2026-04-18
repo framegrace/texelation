@@ -36,7 +36,10 @@ func walkChain(s *Store, startGI int64, maxSteps int) (end int64, nowrap bool) {
 // at viewWidth. Each returned slice has length ≤ viewWidth (the caller pads
 // to viewWidth via clipRow as needed).
 //
-// Concatenates all cells in the chain, then slices at viewWidth.
+// Concatenates all cells in the chain, then slices at viewWidth. Trailing
+// empty rows within the chain (wrap continuations the cursor sits on before
+// any content has been written) are emitted as explicit blank rows so the
+// chain's reflowed row count matches its physical-row footprint.
 func reflowChain(s *Store, startGI, endGI int64, viewWidth int) [][]parser.Cell {
 	if viewWidth <= 0 {
 		return nil
@@ -45,7 +48,8 @@ func reflowChain(s *Store, startGI, endGI int64, viewWidth int) [][]parser.Cell 
 	for gi := startGI; gi <= endGI; gi++ {
 		logical = append(logical, s.GetLine(gi)...)
 	}
-	if len(logical) == 0 {
+	trailing := trailingEmptyRows(s, startGI, endGI)
+	if len(logical) == 0 && trailing == 0 {
 		return [][]parser.Cell{nil}
 	}
 	var rows [][]parser.Cell
@@ -58,7 +62,69 @@ func reflowChain(s *Store, startGI, endGI int64, viewWidth int) [][]parser.Cell 
 		copy(row, logical[off:end])
 		rows = append(rows, row)
 	}
+	for i := 0; i < trailing; i++ {
+		rows = append(rows, nil)
+	}
 	return rows
+}
+
+// trailingEmptyRows counts empty rows at the tail of the chain [start..end].
+// Only counts rows strictly after start (start itself is the chain head and
+// may legitimately be empty). These represent wrap continuations where the
+// cursor has newlined past a Wrapped full row but hasn't written any cell.
+func trailingEmptyRows(s *Store, start, end int64) int {
+	n := 0
+	for r := end; r > start; r-- {
+		if len(s.GetLine(r)) > 0 {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// chainReflowedRowCount returns the number of physical rows the chain
+// [start..end] occupies when reflowed at width. Matches reflowChain's output
+// row count, including trailing empty continuation rows.
+func chainReflowedRowCount(s *Store, start, end int64, width int, nowrap bool) int {
+	if nowrap {
+		return int(end - start + 1)
+	}
+	total := 0
+	for r := start; r <= end; r++ {
+		total += len(s.GetLine(r))
+	}
+	var rows int
+	if total == 0 {
+		rows = 1
+	} else {
+		rows = (total + width - 1) / width
+	}
+	return rows + trailingEmptyRows(s, start, end)
+}
+
+// findChainStart walks backward from gi to the head of its wrap chain. A
+// chain head is a globalIdx whose predecessor is either absent, empty, or
+// does not have Wrapped=true on its last cell. Empty rows are themselves
+// chain starts.
+func findChainStart(s *Store, gi int64, maxSteps int) int64 {
+	cells := s.GetLine(gi)
+	if len(cells) == 0 {
+		return gi
+	}
+	start := gi
+	for steps := 0; steps < maxSteps && start > 0; steps++ {
+		prev := start - 1
+		prevCells := s.GetLine(prev)
+		if len(prevCells) == 0 {
+			break
+		}
+		if !prevCells[len(prevCells)-1].Wrapped {
+			break
+		}
+		start = prev
+	}
+	return start
 }
 
 // clipRow returns cells truncated or padded to viewWidth. Used for NoWrap

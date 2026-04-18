@@ -83,11 +83,30 @@ func (t *Terminal) Resize(newWidth, newHeight int) {
 	t.view.Resize(newWidth, newHeight, t.write.WriteBottom())
 }
 
-// ScrollUp scrolls the view back by n lines and disengages autoFollow.
-func (t *Terminal) ScrollUp(n int) { t.view.ScrollUp(n) }
+// ScrollUp scrolls the view back by n reflowed rows and disengages autoFollow.
+// If the view was auto-following, the live-edge anchor is first computed from
+// the cursor's chain so the scroll is relative to what the user was looking
+// at — not the stale viewAnchor (which may still be 0 if RenderReflow hasn't
+// run yet, e.g. on session restore via SetScrollOffset). Units are reflowed
+// rows so scrolling through a wrapped chain advances one sub-row at a time.
+func (t *Terminal) ScrollUp(n int) {
+	if t.view.IsFollowing() {
+		gi, col := t.write.Cursor()
+		t.view.RecomputeLiveAnchor(t.store, gi, col)
+	}
+	t.view.ScrollUpRows(t.store, n)
+}
 
-// ScrollDown scrolls the view forward by n lines toward the live edge.
-func (t *Terminal) ScrollDown(n int) { t.view.ScrollDown(n, t.write.WriteBottom()) }
+// ScrollDown scrolls the view forward by n reflowed rows toward the live
+// edge. Same RecomputeLiveAnchor pre-step as ScrollUp for identical reasons:
+// the "from" anchor must be the live-edge anchor when auto-following.
+func (t *Terminal) ScrollDown(n int) {
+	if t.view.IsFollowing() {
+		gi, col := t.write.Cursor()
+		t.view.RecomputeLiveAnchor(t.store, gi, col)
+	}
+	t.view.ScrollDownRows(t.store, n, t.write.WriteBottom())
+}
 
 // ScrollToBottom snaps the view to the live edge and re-engages autoFollow.
 func (t *Terminal) ScrollToBottom() { t.view.ScrollToBottom(t.write.WriteBottom()) }
