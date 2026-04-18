@@ -529,13 +529,14 @@ func (w *WriteAheadLog) RecoveredMainScreenState() *MainScreenState {
 // Layout: WriteTop(8) ContentEnd(8) CursorGlobalIdx(8) CursorCol(4)
 //
 //	PromptStartLine(8) SavedAt(8) CWDLen(2) CWD(variable) WriteBottomHWM(8)
+//	InputStartLine(8) CommandStartLine(8)
 //
-// WriteBottomHWM is appended as a trailing field so older entries (which
-// end after CWD) decode to WriteBottomHWM=0 and the restore path falls
-// back to derive-from-writeTop behavior.
+// WriteBottomHWM, InputStartLine, and CommandStartLine are appended as
+// trailing fields. Older entries missing any of them decode to the field's
+// "unknown" sentinel (0 for HWM, -1 for the two anchors).
 func encodeMainScreenState(state *MainScreenState) ([]byte, error) {
 	cwdBytes := []byte(state.WorkingDir)
-	totalSize := 8 + 8 + 8 + 4 + 8 + 8 + 2 + len(cwdBytes) + 8
+	totalSize := 8 + 8 + 8 + 4 + 8 + 8 + 2 + len(cwdBytes) + 8 + 8 + 8
 	buf := make([]byte, totalSize)
 	binary.LittleEndian.PutUint64(buf[0:8], uint64(state.WriteTop))
 	binary.LittleEndian.PutUint64(buf[8:16], uint64(state.ContentEnd))
@@ -545,7 +546,10 @@ func encodeMainScreenState(state *MainScreenState) ([]byte, error) {
 	binary.LittleEndian.PutUint64(buf[36:44], uint64(state.SavedAt.UnixNano()))
 	binary.LittleEndian.PutUint16(buf[44:46], uint16(len(cwdBytes)))
 	copy(buf[46:46+len(cwdBytes)], cwdBytes)
-	binary.LittleEndian.PutUint64(buf[46+len(cwdBytes):46+len(cwdBytes)+8], uint64(state.WriteBottomHWM))
+	off := 46 + len(cwdBytes)
+	binary.LittleEndian.PutUint64(buf[off:off+8], uint64(state.WriteBottomHWM))
+	binary.LittleEndian.PutUint64(buf[off+8:off+16], uint64(state.InputStartLine))
+	binary.LittleEndian.PutUint64(buf[off+16:off+24], uint64(state.CommandStartLine))
 	return buf, nil
 }
 
@@ -553,27 +557,36 @@ func encodeMainScreenState(state *MainScreenState) ([]byte, error) {
 // state is validated before returning so malformed WAL data is rejected at the
 // replay boundary rather than propagated into recovery metadata.
 //
-// WriteBottomHWM is read from the trailing 8 bytes if present; older
-// entries without those bytes decode to WriteBottomHWM=0.
+// Optional trailing fields are read when present; missing fields decode to
+// their "unknown" sentinels: WriteBottomHWM=0, InputStartLine=-1,
+// CommandStartLine=-1.
 func decodeMainScreenState(data []byte) (*MainScreenState, error) {
 	if len(data) < 46 {
 		return nil, fmt.Errorf("MainScreenState data too short: %d bytes", len(data))
 	}
 	state := &MainScreenState{
-		WriteTop:        int64(binary.LittleEndian.Uint64(data[0:8])),
-		ContentEnd:      int64(binary.LittleEndian.Uint64(data[8:16])),
-		CursorGlobalIdx: int64(binary.LittleEndian.Uint64(data[16:24])),
-		CursorCol:       int(binary.LittleEndian.Uint32(data[24:28])),
-		PromptStartLine: int64(binary.LittleEndian.Uint64(data[28:36])),
-		SavedAt:         time.Unix(0, int64(binary.LittleEndian.Uint64(data[36:44]))),
+		WriteTop:         int64(binary.LittleEndian.Uint64(data[0:8])),
+		ContentEnd:       int64(binary.LittleEndian.Uint64(data[8:16])),
+		CursorGlobalIdx:  int64(binary.LittleEndian.Uint64(data[16:24])),
+		CursorCol:        int(binary.LittleEndian.Uint32(data[24:28])),
+		PromptStartLine:  int64(binary.LittleEndian.Uint64(data[28:36])),
+		SavedAt:          time.Unix(0, int64(binary.LittleEndian.Uint64(data[36:44]))),
+		InputStartLine:   -1,
+		CommandStartLine: -1,
 	}
 	cwdLen := int(binary.LittleEndian.Uint16(data[44:46]))
 	if len(data) >= 46+cwdLen {
 		state.WorkingDir = string(data[46 : 46+cwdLen])
 	}
-	// Optional trailing WriteBottomHWM (8 bytes). Missing for older entries.
-	if len(data) >= 46+cwdLen+8 {
-		state.WriteBottomHWM = int64(binary.LittleEndian.Uint64(data[46+cwdLen : 46+cwdLen+8]))
+	off := 46 + cwdLen
+	if len(data) >= off+8 {
+		state.WriteBottomHWM = int64(binary.LittleEndian.Uint64(data[off : off+8]))
+	}
+	if len(data) >= off+16 {
+		state.InputStartLine = int64(binary.LittleEndian.Uint64(data[off+8 : off+16]))
+	}
+	if len(data) >= off+24 {
+		state.CommandStartLine = int64(binary.LittleEndian.Uint64(data[off+16 : off+24]))
 	}
 	if err := state.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid MainScreenState: %w", err)

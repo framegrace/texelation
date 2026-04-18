@@ -66,12 +66,34 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 		// line. The prompt position is only meaningful if the referenced line
 		// exists; otherwise prompt-aware operations (scroll-to-prompt,
 		// erase-to-prompt) would target non-existent rows. -1 means "unknown".
-		if recoveredMeta.PromptStartLine >= 0 && recoveredMeta.PromptStartLine >= pageStoreLineCount {
+		// An anchor exactly at pageStoreLineCount is the first unwritten line
+		// — legitimate when the last write ended with \r\n and the anchor is
+		// the starting point for the next input/command. Only anchors strictly
+		// past the stored content are considered dangling.
+		if recoveredMeta.PromptStartLine >= 0 && recoveredMeta.PromptStartLine > pageStoreLineCount {
 			log.Printf("[MAIN_SCREEN] Discarded stale PromptStartLine %d (PageStore end=%d)",
 				recoveredMeta.PromptStartLine, pageStoreLineCount)
 			v.PromptStartGlobalLine = -1
 		} else {
 			v.PromptStartGlobalLine = recoveredMeta.PromptStartLine
+		}
+		// Same stale-discard rule for the OSC 133 input/command anchors: if
+		// they point strictly past the last persisted line the reference is
+		// dangling and any ED-2 rewind driven by them would land on
+		// non-existent rows.
+		if recoveredMeta.InputStartLine >= 0 && recoveredMeta.InputStartLine > pageStoreLineCount {
+			log.Printf("[MAIN_SCREEN] Discarded stale InputStartLine %d (PageStore end=%d)",
+				recoveredMeta.InputStartLine, pageStoreLineCount)
+			v.InputStartGlobalLine = -1
+		} else {
+			v.InputStartGlobalLine = recoveredMeta.InputStartLine
+		}
+		if recoveredMeta.CommandStartLine >= 0 && recoveredMeta.CommandStartLine > pageStoreLineCount {
+			log.Printf("[MAIN_SCREEN] Discarded stale CommandStartLine %d (PageStore end=%d)",
+				recoveredMeta.CommandStartLine, pageStoreLineCount)
+			v.CommandStartGlobalLine = -1
+		} else {
+			v.CommandStartGlobalLine = recoveredMeta.CommandStartLine
 		}
 		v.CurrentWorkingDir = recoveredMeta.WorkingDir
 		// Sync VTerm's cursor to the restored state so the next write
@@ -138,14 +160,16 @@ func (v *VTerm) CloseMemoryBuffer() error {
 func (v *VTerm) snapshotMainScreenState() MainScreenState {
 	gi, col := v.mainScreen.Cursor()
 	return MainScreenState{
-		WriteTop:        v.mainScreen.WriteTop(),
-		ContentEnd:      v.mainScreen.ContentEnd(),
-		CursorGlobalIdx: gi,
-		CursorCol:       col,
-		PromptStartLine: v.PromptStartGlobalLine,
-		WorkingDir:      v.CurrentWorkingDir,
-		WriteBottomHWM:  v.mainScreen.WriteBottomHWM(),
-		SavedAt:         time.Now(),
+		WriteTop:         v.mainScreen.WriteTop(),
+		ContentEnd:       v.mainScreen.ContentEnd(),
+		CursorGlobalIdx:  gi,
+		CursorCol:        col,
+		PromptStartLine:  v.PromptStartGlobalLine,
+		InputStartLine:   v.InputStartGlobalLine,
+		CommandStartLine: v.CommandStartGlobalLine,
+		WorkingDir:       v.CurrentWorkingDir,
+		WriteBottomHWM:   v.mainScreen.WriteBottomHWM(),
+		SavedAt:          time.Now(),
 	}
 }
 

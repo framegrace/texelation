@@ -82,6 +82,24 @@ func TestMainScreenState_Validate(t *testing.T) {
 			wantErr: "PromptStartLine -2",
 		},
 		{
+			name:   "unknown input-start sentinel",
+			mutate: func(s *MainScreenState) { s.InputStartLine = -1 },
+		},
+		{
+			name:   "unknown command-start sentinel",
+			mutate: func(s *MainScreenState) { s.CommandStartLine = -1 },
+		},
+		{
+			name:    "InputStartLine below -1 sentinel",
+			mutate:  func(s *MainScreenState) { s.InputStartLine = -2 },
+			wantErr: "InputStartLine -2",
+		},
+		{
+			name:    "CommandStartLine below -1 sentinel",
+			mutate:  func(s *MainScreenState) { s.CommandStartLine = -2 },
+			wantErr: "CommandStartLine -2",
+		},
+		{
 			name:    "cursor above WriteTop",
 			mutate:  func(s *MainScreenState) { s.CursorGlobalIdx = s.WriteTop - 1 },
 			wantErr: "CursorGlobalIdx 99 must be >= WriteTop 100",
