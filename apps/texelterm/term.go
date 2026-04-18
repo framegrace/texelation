@@ -108,6 +108,27 @@ type TexelTerm struct {
 	// Debug logging
 	renderDebugLog func(format string, args ...interface{})
 
+	// Raw PTY capture (TEXELTERM_CAPTURE env var). Minimal diagnostic for
+	// resize-reproduction: writes all PTY bytes into <path>.bytes and resize
+	// events into <path>.events, with a byte offset marker so the .bytes
+	// stream can be replayed against a VTerm and Resize() calls inserted at
+	// the recorded offsets. Nil when unset.
+	captureMu        sync.Mutex
+	captureBytesFile *os.File
+	captureEvtsFile  *os.File
+	captureByteCount int64
+
+	// Debounced PTY setsize. Rapid UI resizes (a drag) call Resize() many
+	// times in quick succession; forwarding each one as a SIGWINCH makes
+	// full-screen TUIs (Claude Code, etc.) repaint per step and overflow
+	// scrollback. We coalesce: local vterm still resizes synchronously so
+	// the pane rendering tracks the drag; pty.Setsize only fires once the
+	// drag settles.
+	ptySetsizeMu     sync.Mutex
+	ptySetsizeTimer  *time.Timer
+	ptySetsizeLatest pty.Winsize
+	ptySetsizeDirty  bool
+
 	// State persistence (via texelation storage service)
 	storage texelcore.AppStorage
 
@@ -1804,6 +1825,8 @@ func (a *TexelTerm) runShell() error {
 	a.pty = ptmx
 	a.cmd = cmd
 
+	a.startCapture(cols, rows)
+
 	// Initialize or update VTerm
 	if isRestart {
 		a.updatePtyWriterForRestart()
@@ -2276,6 +2299,7 @@ func (a *TexelTerm) runPtyReaderLoop(ptmx *os.File, cmd *exec.Cmd) error {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
 				chunk := buf[:n]
+				a.captureWriteBytes(chunk)
 				a.mu.Lock()
 				inSync := a.vterm.InSynchronizedUpdate
 				for len(chunk) > 0 {
@@ -2391,8 +2415,50 @@ func (a *TexelTerm) Resize(cols, rows int) {
 	}
 
 	if a.pty != nil {
-		pty.Setsize(a.pty, &pty.Winsize{Rows: uint16(termRows), Cols: uint16(termWidth)})
+		a.scheduleSetsize(uint16(termWidth), uint16(termRows))
 	}
+}
+
+// ptySetsizeDebounce is how long Resize() waits after the last call before
+// forwarding a SIGWINCH to the child. Tuned to absorb mouse-drag resize
+// floods without adding perceptible lag to single-shot resizes.
+const ptySetsizeDebounce = 50 * time.Millisecond
+
+// scheduleSetsize coalesces rapid resize events into a single SIGWINCH.
+// The latest requested size wins; intermediate sizes during a drag are
+// never forwarded to the child process.
+func (a *TexelTerm) scheduleSetsize(cols, rows uint16) {
+	a.ptySetsizeMu.Lock()
+	defer a.ptySetsizeMu.Unlock()
+	a.ptySetsizeLatest = pty.Winsize{Rows: rows, Cols: cols}
+	a.ptySetsizeDirty = true
+	if a.ptySetsizeTimer == nil {
+		a.ptySetsizeTimer = time.AfterFunc(ptySetsizeDebounce, a.flushSetsize)
+	} else {
+		a.ptySetsizeTimer.Reset(ptySetsizeDebounce)
+	}
+}
+
+// flushSetsize forwards the latest pending size to the PTY, if any. Safe
+// to call from the debounce timer or from Stop().
+func (a *TexelTerm) flushSetsize() {
+	a.ptySetsizeMu.Lock()
+	if !a.ptySetsizeDirty {
+		a.ptySetsizeMu.Unlock()
+		return
+	}
+	a.ptySetsizeDirty = false
+	ws := a.ptySetsizeLatest
+	a.ptySetsizeMu.Unlock()
+
+	a.mu.Lock()
+	ptyFile := a.pty
+	a.mu.Unlock()
+	if ptyFile == nil {
+		return
+	}
+	pty.Setsize(ptyFile, &ws)
+	a.captureWriteResize(int(ws.Cols), int(ws.Rows))
 }
 
 func (a *TexelTerm) Stop() {
@@ -2414,6 +2480,17 @@ func (a *TexelTerm) Stop() {
 		if ptyFile != nil {
 			_ = ptyFile.Close()
 		}
+
+		// Cancel any pending debounced SIGWINCH; the PTY is closed anyway.
+		a.ptySetsizeMu.Lock()
+		if a.ptySetsizeTimer != nil {
+			a.ptySetsizeTimer.Stop()
+			a.ptySetsizeTimer = nil
+		}
+		a.ptySetsizeDirty = false
+		a.ptySetsizeMu.Unlock()
+
+		a.stopCapture()
 
 		// Signal process to terminate (with deferred SIGKILL fallback)
 		if cmd != nil && cmd.Process != nil {
@@ -2713,4 +2790,76 @@ func newDefaultPalette() [258]tcell.Color {
 	p[256] = tm.GetSemanticColor("text.primary")
 	p[257] = tm.GetSemanticColor("bg.base")
 	return p
+}
+
+// startCapture opens the capture files if TEXELTERM_CAPTURE is set in the
+// environment. Produces <path>.bytes (raw PTY stream) and <path>.events
+// (text log: "START cols=X rows=Y\n" then "RESIZE offset=<N> cols=X rows=Y\n").
+// Replaying the .bytes through a VTerm and issuing Resize() at the recorded
+// offsets reproduces the original session deterministically.
+func (a *TexelTerm) startCapture(cols, rows int) {
+	path := os.Getenv("TEXELTERM_CAPTURE")
+	if path == "" {
+		return
+	}
+	bytesFile, err := os.Create(path + ".bytes")
+	if err != nil {
+		log.Printf("[TEXELTERM] capture: cannot create %s.bytes: %v", path, err)
+		return
+	}
+	evtsFile, err := os.Create(path + ".events")
+	if err != nil {
+		log.Printf("[TEXELTERM] capture: cannot create %s.events: %v", path, err)
+		bytesFile.Close()
+		return
+	}
+	a.captureMu.Lock()
+	a.captureBytesFile = bytesFile
+	a.captureEvtsFile = evtsFile
+	a.captureByteCount = 0
+	fmt.Fprintf(evtsFile, "START cols=%d rows=%d\n", cols, rows)
+	a.captureMu.Unlock()
+	log.Printf("[TEXELTERM] capture enabled: %s.{bytes,events}", path)
+}
+
+// captureWriteBytes records a PTY read chunk to the capture stream.
+// No-op when capture is disabled.
+func (a *TexelTerm) captureWriteBytes(data []byte) {
+	a.captureMu.Lock()
+	defer a.captureMu.Unlock()
+	if a.captureBytesFile == nil {
+		return
+	}
+	n, err := a.captureBytesFile.Write(data)
+	if err != nil {
+		log.Printf("[TEXELTERM] capture: write bytes failed: %v", err)
+		return
+	}
+	a.captureByteCount += int64(n)
+}
+
+// captureWriteResize records a resize event with the current byte offset.
+// No-op when capture is disabled.
+func (a *TexelTerm) captureWriteResize(cols, rows int) {
+	a.captureMu.Lock()
+	defer a.captureMu.Unlock()
+	if a.captureEvtsFile == nil {
+		return
+	}
+	fmt.Fprintf(a.captureEvtsFile, "RESIZE offset=%d cols=%d rows=%d\n",
+		a.captureByteCount, cols, rows)
+}
+
+// stopCapture flushes and closes capture files.
+func (a *TexelTerm) stopCapture() {
+	a.captureMu.Lock()
+	defer a.captureMu.Unlock()
+	if a.captureBytesFile != nil {
+		a.captureBytesFile.Close()
+		a.captureBytesFile = nil
+	}
+	if a.captureEvtsFile != nil {
+		a.captureEvtsFile.Close()
+		a.captureEvtsFile = nil
+	}
 }

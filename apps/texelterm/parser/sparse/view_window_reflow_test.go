@@ -85,7 +85,7 @@ func TestViewWindow_LiveMode_AnchorTracksCursor(t *testing.T) {
 	}
 
 	vw := NewViewWindow(80, 3)
-	vw.RecomputeLiveAnchor(s, 9, 0)
+	vw.RecomputeLiveAnchor(s, 9, 0, 0)
 	vr, vc, ok := vw.CursorToView(s, 9, 0)
 	if !ok || vr != 2 {
 		t.Errorf("live anchor: cursor should be on bottom row; got (%d,%d,%v)", vr, vc, ok)
@@ -124,7 +124,7 @@ func TestViewWindow_ScrollBy_DetachesAutoFollow(t *testing.T) {
 	vw.ScrollBy(s, -1)
 	// Verify autoFollow disabled — RecomputeLiveAnchor should be no-op now.
 	vw.SetViewAnchor(0, 0)
-	vw.RecomputeLiveAnchor(s, 10, 0)
+	vw.RecomputeLiveAnchor(s, 10, 0, 0)
 	gi, _ := vw.Anchor()
 	if gi != 0 {
 		t.Errorf("after ScrollBy, autoFollow off; RecomputeLiveAnchor should not move anchor. gi=%d", gi)

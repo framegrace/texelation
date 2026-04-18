@@ -67,8 +67,10 @@ type VTerm struct {
 	OnCommandEnd                  func(exitCode int)
 	OnEnvironmentUpdate           func(base64Env string)
 	// Prompt position and CWD tracking (for session restore)
-	PromptStartGlobalLine int64  // Global line index of last prompt start (-1 = unknown)
-	CurrentWorkingDir     string // Last known CWD from OSC 7
+	PromptStartGlobalLine  int64  // Global line index of last prompt start (-1 = unknown)
+	InputStartGlobalLine   int64  // Global line index of last OSC 133;B (input start); -1 = unknown
+	CommandStartGlobalLine int64  // Global line index of last OSC 133;C while a command is running; -1 = not in-command
+	CurrentWorkingDir      string // Last known CWD from OSC 7
 	// Clipboard operations (OSC 52)
 	OnClipboardSet func(data []byte) // Called when app sets clipboard via OSC 52
 	OnClipboardGet func() []byte     // Called when app queries clipboard via OSC 52
@@ -121,7 +123,9 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		defaultBG:             DefaultBG,
 		dirtyLines:            make(map[int]bool),
 		allDirty:              true,
-		PromptStartGlobalLine: -1,
+		PromptStartGlobalLine:  -1,
+		InputStartGlobalLine:   -1,
+		CommandStartGlobalLine: -1,
 	}
 
 	// Apply options first (may configure main screen with disk path)
@@ -490,12 +494,25 @@ func (v *VTerm) MarkPromptStart() {
 
 // MarkInputStart records the position where user input starts.
 // Called when OSC 133;B is received (input start / prompt end marker).
-// This is a stub for future shell integration features.
+// Captures the cursor's globalIdx so ED 2 can rewind writeTop past a
+// multi-line prompt (Claude-style repaints would otherwise overwrite it).
 func (v *VTerm) MarkInputStart() {
-	// TODO: Record input-start globalIdx on the sparse store for shell integration.
-	// This would enable features like:
-	// - Highlighting user input differently
-	// - Command extraction for history
+	if v.mainScreen != nil {
+		gi, _ := v.mainScreen.Cursor()
+		v.InputStartGlobalLine = gi
+	}
+}
+
+// MarkCommandStart records cursor globalIdx at OSC 133;C (command start).
+// While a long-running foreground command is executing (no 133;D yet), this
+// pins the top of the command's output region so ED-2 repaints from a TUI
+// like Claude rewind to the command's own frame top rather than back to
+// bash's prompt, which may be far above in scrollback.
+func (v *VTerm) MarkCommandStart() {
+	if v.mainScreen != nil {
+		gi, _ := v.mainScreen.Cursor()
+		v.CommandStartGlobalLine = gi
+	}
 }
 
 // setWorkingDirectory parses an OSC 7 file URI and stores the path.

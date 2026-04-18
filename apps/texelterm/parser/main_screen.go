@@ -89,6 +89,13 @@ type MainScreen interface {
 
 	// VisibleRange returns the (top, bottom) globalIdx pair of the current view.
 	VisibleRange() (top, bottom int64)
+
+	// RewindWriteTop moves writeTop back to `to` (expected: last-known
+	// prompt-start globalIdx). No-op if writeTop is already at or below
+	// `to`. HWM stays monotonic so later grow-resize still anchors
+	// against historical writeBottom. Used on ED 2 to anchor TUI
+	// repaints, preventing per-repaint overflow from accumulating.
+	RewindWriteTop(to int64)
 }
 
 // MainScreenFactory creates a MainScreen for the given dimensions. Set by

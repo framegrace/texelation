@@ -173,7 +173,12 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 // row's last cell has Wrapped=true), then walk backward one chain at a time
 // accumulating reflowed rows per chain. Stop when the accumulated total
 // covers the viewport; anchor at that chain with an offset to trim the top.
-func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int) {
+//
+// writeTop is the globalIdx of the top of the live write window; the backward
+// walk clamps at writeTop so scrollback never leaks into the live viewport on
+// horizontal widening (where old wrapped chains reflow smaller and the walk
+// would otherwise reach past writeTop to fill height). See #48.
+func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int, writeTop int64) {
 	v.mu.Lock()
 	height := v.height
 	width := v.width
@@ -194,9 +199,11 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 	}
 
 	// Find the start of the chain containing cursorGI: walk backward while
-	// the prior row's last cell has Wrapped=true and exists.
+	// the prior row's last cell has Wrapped=true and exists. Clamp at
+	// writeTop so a chain that spans writeTop renders as its live-side
+	// portion only (scrollback side stays in scrollback).
 	chainStart := cursorGI
-	for steps := 0; steps < maxSteps && chainStart > 0; steps++ {
+	for steps := 0; steps < maxSteps && chainStart > writeTop; steps++ {
 		prev := chainStart - 1
 		prevCells := s.GetLine(prev)
 		if len(prevCells) == 0 {
@@ -228,7 +235,7 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 				v.mu.Unlock()
 				return
 			}
-			if gi == 0 {
+			if gi <= writeTop {
 				break
 			}
 			gi--
@@ -248,12 +255,14 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 			v.mu.Unlock()
 			return
 		}
-		if gi == 0 {
+		if gi <= writeTop {
 			break
 		}
 		// Walk to the start of the previous chain. An empty prev row is
 		// itself the "previous chain" — fall through to the top of the loop
-		// to count it as 1 row.
+		// to count it as 1 row. Clamp the chain-start walk at writeTop so a
+		// chain that spans writeTop doesn't pull its scrollback portion into
+		// the live viewport.
 		prevGI := gi - 1
 		prevCells := s.GetLine(prevGI)
 		if len(prevCells) == 0 {
@@ -261,7 +270,7 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 			continue
 		}
 		prevChainStart := prevGI
-		for steps := 0; steps < maxSteps && prevChainStart > 0; steps++ {
+		for steps := 0; steps < maxSteps && prevChainStart > writeTop; steps++ {
 			pp := prevChainStart - 1
 			ppCells := s.GetLine(pp)
 			if len(ppCells) == 0 {
@@ -275,9 +284,11 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 		gi = prevChainStart
 	}
 
-	// Ran out of content: anchor at the top.
+	// Ran out of content (or hit writeTop): anchor at writeTop so Render
+	// starts from the live window's top. For a fresh session (writeTop=0)
+	// this degenerates to the old "anchor at top" behavior.
 	v.mu.Lock()
-	v.viewAnchor = 0
+	v.viewAnchor = writeTop
 	v.viewAnchorOffset = 0
 	v.mu.Unlock()
 }
