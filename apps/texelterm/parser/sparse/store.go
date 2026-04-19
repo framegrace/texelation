@@ -12,9 +12,20 @@ import (
 // storeLine is the wrapper around a row of cells in the sparse Store.
 // A missing map entry represents "no content at this globalIdx" — reads of
 // missing globalIdxs return blank cells.
+//
+// written tracks which cells were placed by an explicit write (Set or SetLine
+// with content from the shell) versus filled implicitly when Set extended the
+// slice past its old length. This distinguishes typed content from positional
+// gaps left by CUF/CUP cursor jumps and lets the reflow logic skip slicing
+// rows whose only "wide" extent is positional padding (issue #193 / #197).
+//
+// written and cells are kept the same length. WrittenCount caches the popcount
+// for O(1) WrittenExtent queries.
 type storeLine struct {
-	cells  []parser.Cell
-	nowrap bool
+	cells        []parser.Cell
+	written      []bool
+	writtenCount int
+	nowrap       bool
 }
 
 // Store is a sparse, globalIdx-keyed cell storage.
@@ -71,7 +82,9 @@ func (s *Store) Get(globalIdx int64, col int) parser.Cell {
 }
 
 // Set writes a single Cell at (globalIdx, col). The target line is
-// automatically extended to cover col if it did not already.
+// automatically extended to cover col if it did not already; intermediate
+// cells (positional gap from a cursor jump) stay marked unwritten so the
+// reflow layer can distinguish them from typed content.
 func (s *Store) Set(globalIdx int64, col int, cell parser.Cell) {
 	if col < 0 {
 		return
@@ -99,8 +112,15 @@ func (s *Store) Set(globalIdx int64, col int, cell parser.Cell) {
 		grown := make([]parser.Cell, needed, newCap)
 		copy(grown, line.cells)
 		line.cells = grown
+		grownWritten := make([]bool, needed, newCap)
+		copy(grownWritten, line.written)
+		line.written = grownWritten
 	}
 	line.cells[col] = cell
+	if !line.written[col] {
+		line.written[col] = true
+		line.writtenCount++
+	}
 	if globalIdx > s.contentEnd {
 		s.contentEnd = globalIdx
 	}
@@ -127,6 +147,10 @@ func (s *Store) GetLine(globalIdx int64) []parser.Cell {
 // preserved — use SetLineWithNoWrap to set an explicit flag value.
 // To preserve alignment with column 0, callers must pass cells starting at
 // column 0.
+//
+// Every cell in the replacement is marked written — SetLine is the bulk-replace
+// API used by reflow shifts and persistence reload, neither of which produce
+// positional gaps.
 func (s *Store) SetLine(globalIdx int64, cells []parser.Cell) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,6 +161,11 @@ func (s *Store) SetLine(globalIdx int64, cells []parser.Cell) {
 	}
 	line.cells = make([]parser.Cell, len(cells))
 	copy(line.cells, cells)
+	line.written = make([]bool, len(cells))
+	for i := range line.written {
+		line.written[i] = true
+	}
+	line.writtenCount = len(cells)
 	if globalIdx > s.contentEnd {
 		s.contentEnd = globalIdx
 	}
@@ -178,7 +207,8 @@ func (s *Store) SetRowNoWrap(globalIdx int64, nowrap bool) {
 
 // SetLineWithNoWrap replaces both cells and the NoWrap flag at globalIdx.
 // Used by IL/DL/scroll shifts that move a row (and its NoWrap semantics)
-// from one globalIdx to another.
+// from one globalIdx to another. Like SetLine, every replacement cell is
+// marked written.
 func (s *Store) SetLineWithNoWrap(globalIdx int64, cells []parser.Cell, nowrap bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -189,9 +219,64 @@ func (s *Store) SetLineWithNoWrap(globalIdx int64, cells []parser.Cell, nowrap b
 	}
 	line.cells = make([]parser.Cell, len(cells))
 	copy(line.cells, cells)
+	line.written = make([]bool, len(cells))
+	for i := range line.written {
+		line.written[i] = true
+	}
+	line.writtenCount = len(cells)
 	line.nowrap = nowrap
 	if globalIdx > s.contentEnd {
 		s.contentEnd = globalIdx
+	}
+}
+
+// WrittenExtent returns (writtenCount, lastWrittenCol) for the row at
+// globalIdx. writtenCount is the number of cells placed by Set or SetLine;
+// lastWrittenCol is the highest column index that was written, or -1 when
+// no cells were written. Missing rows return (0, -1).
+//
+// rowHasPositionalGap uses this to detect rows with cursor-positioned
+// fillers — cells whose len(cells) extends past actual typed content.
+func (s *Store) WrittenExtent(globalIdx int64) (count int, lastCol int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	line, ok := s.lines[globalIdx]
+	if !ok {
+		return 0, -1
+	}
+	last := -1
+	for i := len(line.written) - 1; i >= 0; i-- {
+		if line.written[i] {
+			last = i
+			break
+		}
+	}
+	return line.writtenCount, last
+}
+
+// EraseCell clears the cell at (globalIdx, col), unmarking it as written.
+// Unlike Set, EraseCell never extends the row past its current length —
+// erasing a column that was never written is a no-op. The supplied cell
+// value is stored verbatim (so callers can preserve a colored background)
+// but the written bit is cleared so reflow's gap detector treats the cell
+// as positional padding rather than typed content.
+func (s *Store) EraseCell(globalIdx int64, col int, cell parser.Cell) {
+	if col < 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	line, ok := s.lines[globalIdx]
+	if !ok {
+		return
+	}
+	if col >= len(line.cells) {
+		return
+	}
+	line.cells[col] = cell
+	if line.written[col] {
+		line.written[col] = false
+		line.writtenCount--
 	}
 }
 

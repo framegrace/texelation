@@ -281,23 +281,27 @@ func (w *WriteWindow) EraseLine() {
 }
 
 // EraseToEndOfLine clears cells from col to the end of the current line.
+// Erase uses Store.EraseCell so cleared cells are unmarked as written —
+// reflow's gap detector treats them as positional padding rather than
+// typed content (issue #193 / #197).
 func (w *WriteWindow) EraseToEndOfLine(col int) {
 	w.mu.Lock()
 	gi := w.cursorGlobalIdx
 	width := w.width
 	w.mu.Unlock()
 	for x := col; x < width; x++ {
-		w.store.Set(gi, x, parser.Cell{})
+		w.store.EraseCell(gi, x, parser.Cell{})
 	}
 }
 
 // EraseFromStartOfLine clears cells from column 0 through col (inclusive).
+// See EraseToEndOfLine for the written-mask rationale.
 func (w *WriteWindow) EraseFromStartOfLine(col int) {
 	w.mu.Lock()
 	gi := w.cursorGlobalIdx
 	w.mu.Unlock()
 	for x := 0; x <= col; x++ {
-		w.store.Set(gi, x, parser.Cell{})
+		w.store.EraseCell(gi, x, parser.Cell{})
 	}
 }
 

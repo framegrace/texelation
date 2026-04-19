@@ -18,7 +18,8 @@ import (
 )
 
 // powerlineTailFromCapture is the byte-for-byte tail of the right-aligned
-// prompt segment from /tmp/prompt-resize.txrec.bytes (offsets 0x110..0x186):
+// prompt segment from /tmp/prompt-resize.txrec.bytes (offsets 0x110..0x186),
+// trailing CR/CR/LF included exactly as the shell emitted them.
 //
 //	ESC[500C ESC[17D <SGR> <chevron> <SGR> " 21:45:14 " <SGR>
 //	<SGR> <chevron> <SGR> " marc " <SGR><SGR><SGR> CR CR LF
@@ -28,11 +29,14 @@ const powerlineTailFromCapture = "\x1b[500C\x1b[17D" +
 	"\x1b[38;5;240m\ue0b2\x1b[0m" +
 	"\x1b[48;5;240m 21:45:14 \x1b[0m\x1b[m\x1b[0m" +
 	"\x1b[38;5;32;48;5;240m\ue0b2\x1b[0m" +
-	"\x1b[48;5;32m marc \x1b[0m\x1b[m\x1b[0m\r\r\n"
+	"\x1b[48;5;32m marc \x1b[0m\x1b[m\x1b[0m" +
+	"\r\r\n"
 
 // TestIssue193_PowerlinePromptDoesNotWrapOnShrink: write a powerline
 // right-aligned prompt at width 107, then resize narrower. The single
-// logical row must stay a single physical row.
+// logical row must stay a single physical row regardless of where the
+// cursor ends up — the row's positional gap (cells 0..88 unwritten,
+// 89..106 written) is detected from the row itself.
 func TestIssue193_PowerlinePromptDoesNotWrapOnShrink(t *testing.T) {
 	const initialWidth = 107
 	const height = 36
@@ -43,6 +47,8 @@ func TestIssue193_PowerlinePromptDoesNotWrapOnShrink(t *testing.T) {
 
 	parseString(p, powerlineTailFromCapture)
 
+	// The trailing CR/LF moves the cursor down one row; the prompt row is
+	// the row above the cursor.
 	gi, _ := v.CursorGlobalIdx()
 	promptRow := gi - 1
 	cells := v.mainScreen.ReadLine(promptRow)
@@ -50,7 +56,7 @@ func TestIssue193_PowerlinePromptDoesNotWrapOnShrink(t *testing.T) {
 		t.Fatalf("prompt row %d empty after write", promptRow)
 	}
 	if cells[len(cells)-1].Wrapped {
-		t.Errorf("prompt row %d last cell has Wrapped=true after CR/LF (should be cleared)", promptRow)
+		t.Errorf("prompt row %d last cell has Wrapped=true; the powerline write should not have set Wrapped on its tail cell", promptRow)
 	}
 	t.Logf("prompt row %d: %d cells, last.Wrapped=%v", promptRow, len(cells), cells[len(cells)-1].Wrapped)
 
