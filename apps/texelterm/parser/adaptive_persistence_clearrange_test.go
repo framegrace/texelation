@@ -285,3 +285,102 @@ func TestAdaptivePersistence_NotifyClearRangeBestEffortQueues(t *testing.T) {
 		t.Errorf("WAL ops after Flush = %v, want %v", got, want)
 	}
 }
+
+// TestAdaptivePersistence_NotifyClearRangeSingleLine verifies that a single-line
+// range (lo == hi) deletes exactly that line and leaves adjacent lines intact.
+//
+// Call sequence: W4, W5, W6, ClearRange(5,5), Flush()
+// W4 and W6 are outside [5,5] and must survive in the WAL.
+// W5 is swept by the clear; only the Delete tombstone appears for line 5.
+// Expected WAL: W4, W6, D5-5.
+func TestAdaptivePersistence_NotifyClearRangeSingleLine(t *testing.T) {
+	ap, wal := newTestAdaptivePersistenceBestEffort(t)
+
+	ap.NotifyWrite(4)
+	ap.NotifyWrite(5)
+	ap.NotifyWrite(6)
+	ap.NotifyClearRange(5, 5)
+
+	if err := ap.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	got := walOps(t, wal)
+	want := []walOp{
+		{kind: "W", lo: 4, hi: 4},
+		{kind: "W", lo: 6, hi: 6},
+		{kind: "D", lo: 5, hi: 5},
+	}
+	if !equalWalOps(got, want) {
+		t.Errorf("WAL ops = %v, want %v", got, want)
+	}
+}
+
+// TestAdaptivePersistence_NotifyClearRangeInvalidRangeIsNoop verifies that
+// NotifyClearRange is a no-op when given an invalid range (negative lo or hi < lo).
+// No delete op must appear in the WAL after Flush.
+func TestAdaptivePersistence_NotifyClearRangeInvalidRangeIsNoop(t *testing.T) {
+	cases := []struct {
+		name string
+		lo   int64
+		hi   int64
+	}{
+		{"negative lo", -1, 5},
+		{"hi less than lo", 10, 5},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ap, wal := newTestAdaptivePersistenceBestEffort(t)
+
+			// Seed a write so there is something to not-sweep.
+			ap.NotifyWrite(3)
+			ap.NotifyClearRange(tc.lo, tc.hi)
+
+			if err := ap.Flush(); err != nil {
+				t.Fatalf("Flush: %v", err)
+			}
+
+			got := walOps(t, wal)
+			// The write must appear; no Delete entry must be present.
+			for _, op := range got {
+				if op.kind == "D" {
+					t.Errorf("case %q: unexpected Delete op in WAL: %v (all ops: %v)", tc.name, op, got)
+				}
+			}
+			if len(got) != 1 || got[0].kind != "W" || got[0].lo != 3 {
+				t.Errorf("case %q: WAL ops = %v, want [W(3,3)]", tc.name, got)
+			}
+		})
+	}
+}
+
+// TestAdaptivePersistence_NotifyClearRangeMultipleOverlapping verifies that two
+// overlapping clear ranges both produce Delete tombstones in FIFO order, and that
+// no write ops appear (all three writes are swept by one clear or the other).
+//
+// Call sequence: W5, W6, W7, ClearRange(5,6), ClearRange(6,7), Flush()
+// Both clears overlap on line 6. W5 is swept by first clear, W6 by first clear,
+// W7 by second clear. No writes survive. Expected WAL: D5-6, D6-7.
+func TestAdaptivePersistence_NotifyClearRangeMultipleOverlapping(t *testing.T) {
+	ap, wal := newTestAdaptivePersistenceBestEffort(t)
+
+	ap.NotifyWrite(5)
+	ap.NotifyWrite(6)
+	ap.NotifyWrite(7)
+	ap.NotifyClearRange(5, 6)
+	ap.NotifyClearRange(6, 7)
+
+	if err := ap.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	got := walOps(t, wal)
+	want := []walOp{
+		{kind: "D", lo: 5, hi: 6},
+		{kind: "D", lo: 6, hi: 7},
+	}
+	if !equalWalOps(got, want) {
+		t.Errorf("WAL ops = %v, want %v", got, want)
+	}
+}
