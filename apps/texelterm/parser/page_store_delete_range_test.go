@@ -73,17 +73,21 @@ func TestPageStore_DeleteRangeWholeStore(t *testing.T) {
 }
 
 func TestPageStore_DeleteRangeInvalid(t *testing.T) {
+	// Validation lives in AppendDelete / DeleteRange (public entry points),
+	// not in deleteRangeNoWAL. Use the WAL.DeleteRange path to exercise it.
 	dir := t.TempDir()
-	ps, err := CreatePageStore(DefaultPageStoreConfig(dir, "term-x"))
+	cfg := DefaultWALConfig(dir, "term-invalid")
+	cfg.CheckpointInterval = 0
+	wal, err := OpenWriteAheadLog(cfg)
 	if err != nil {
-		t.Fatalf("CreatePageStore: %v", err)
+		t.Fatalf("OpenWriteAheadLog: %v", err)
 	}
-	defer ps.Close()
-	if err := ps.deleteRangeNoWAL(5, 3); err == nil {
-		t.Error("deleteRangeNoWAL(5, 3) = nil, want error")
+	defer wal.Close()
+	if err := wal.DeleteRange(5, 3); err == nil {
+		t.Error("DeleteRange(5, 3) = nil, want error")
 	}
-	if err := ps.deleteRangeNoWAL(-1, 3); err == nil {
-		t.Error("deleteRangeNoWAL(-1, 3) = nil, want error")
+	if err := wal.DeleteRange(-1, 3); err == nil {
+		t.Error("DeleteRange(-1, 3) = nil, want error")
 	}
 }
 
