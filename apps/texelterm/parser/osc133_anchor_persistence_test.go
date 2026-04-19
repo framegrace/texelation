@@ -212,6 +212,154 @@ func TestED2_RewindAfterRestart_UsesRestoredCommandStart(t *testing.T) {
 	}
 }
 
+// TestEnableMemoryBuffer_BlanksLiveViewportOnRestore_MidCommand guards
+// the "stale frame bleed-through" bug: when a TUI like Claude is running
+// at server shutdown (OSC 133;C fired, no 133;D yet), the sparse store
+// holds the last-drawn frame cells at the restored live range
+// [writeTop, max(writeTop+height-1, HWM)]. On reload, the respawned
+// shell only writes the cells it actually draws (prompt, a new command
+// line), so every untouched cell — blank rows, trailing columns past
+// the command — would show the old TUI frame. The restore path must
+// blank this range so the new session starts on a clean canvas.
+// Scrollback above writeTop must NOT be cleared.
+func TestEnableMemoryBuffer_BlanksLiveViewportOnRestore_MidCommand(t *testing.T) {
+	dir := t.TempDir()
+	id := "restore-blank-viewport-midcmd"
+	const cols, rows = 40, 10
+
+	// --- Session 1: shell session with a running TUI command. ---
+	v1 := newTestVTerm(t, cols, rows, dir, id)
+	p1 := NewParser(v1)
+
+	// Scrollback we want preserved.
+	parseString(p1, "scrollback line A\r\n")
+	parseString(p1, "scrollback line B\r\n")
+	scrollbackEnd := v1.mainScreen.WriteTop() + int64(v1.cursorY) - 1
+
+	// Bash prompt + input + command-start (simulates `claude` launching).
+	v1.MarkPromptStart()
+	parseString(p1, "prompt> ")
+	v1.MarkInputStart()
+	parseString(p1, "claude\r\n")
+	v1.MarkCommandStart()
+	if v1.CommandStartGlobalLine < 0 {
+		t.Fatalf("setup: MarkCommandStart did not set CommandStartGlobalLine")
+	}
+
+	// Fill the remaining viewport rows with "TUI" content that must NOT
+	// survive restore — these are cells Claude drew in its last frame.
+	for i := 0; i < rows; i++ {
+		parseString(p1, fmt.Sprintf("tui-frame-row-%02d padded %s\r\n", i, "zzzzzzz"))
+	}
+	writeTopBefore := v1.mainScreen.WriteTop()
+	hwmBefore := v1.mainScreen.WriteBottomHWM()
+	if hwmBefore < writeTopBefore+int64(rows)-1 {
+		t.Fatalf("setup: HWM %d did not reach end of viewport (writeTop=%d, rows=%d)",
+			hwmBefore, writeTopBefore, rows)
+	}
+
+	if err := v1.CloseMemoryBuffer(); err != nil {
+		t.Fatalf("CloseMemoryBuffer: %v", err)
+	}
+
+	// --- Session 2: reload. ---
+	v2 := newTestVTerm(t, cols, rows, dir, id)
+	defer v2.CloseMemoryBuffer()
+
+	writeTopAfter := v2.mainScreen.WriteTop()
+	if writeTopAfter != writeTopBefore {
+		t.Fatalf("writeTop not restored: got %d, want %d", writeTopAfter, writeTopBefore)
+	}
+
+	// Live range [writeTop, HWM] must be fully blank so the new session
+	// doesn't see stale TUI content bleeding through.
+	for gi := writeTopAfter; gi <= hwmBefore; gi++ {
+		cells := v2.mainScreen.ReadLine(gi)
+		if cells != nil && lineHasSparseContent(cells) {
+			t.Errorf("live-range line %d still has content after restore: %q",
+				gi, cellsPreview(cells))
+		}
+	}
+
+	// Scrollback above writeTop must be preserved.
+	for gi := int64(0); gi <= scrollbackEnd; gi++ {
+		cells := v2.mainScreen.ReadLine(gi)
+		if cells == nil || !lineHasSparseContent(cells) {
+			t.Errorf("scrollback line %d was wrongly cleared", gi)
+		}
+	}
+}
+
+// TestEnableMemoryBuffer_PreservesViewportOnRestore_IdleShell is the
+// counterpart: when no command is running at shutdown (CommandStart
+// < 0), the viewport holds legitimate plain-text output the user wants
+// to see on reload. The restore path must NOT blank it.
+func TestEnableMemoryBuffer_PreservesViewportOnRestore_IdleShell(t *testing.T) {
+	dir := t.TempDir()
+	id := "restore-preserve-viewport-idle"
+	const cols, rows = 40, 10
+
+	v1 := newTestVTerm(t, cols, rows, dir, id)
+	p1 := NewParser(v1)
+
+	// Plain output — no OSC 133;C. Think `ls` output followed by a
+	// returned shell prompt.
+	const contentLines = 8
+	for i := 0; i < contentLines; i++ {
+		parseString(p1, fmt.Sprintf("output-line-%02d\r\n", i))
+	}
+
+	// Snapshot the populated lines as session 1 saw them so session 2
+	// can be compared cell-for-cell.
+	writeTopBefore := v1.mainScreen.WriteTop()
+	before := make([][]Cell, contentLines)
+	for i := 0; i < contentLines; i++ {
+		before[i] = v1.mainScreen.ReadLine(writeTopBefore + int64(i))
+		if before[i] == nil || !lineHasSparseContent(before[i]) {
+			t.Fatalf("setup: line %d has no content in session 1", i)
+		}
+	}
+
+	if err := v1.CloseMemoryBuffer(); err != nil {
+		t.Fatalf("CloseMemoryBuffer: %v", err)
+	}
+
+	v2 := newTestVTerm(t, cols, rows, dir, id)
+	defer v2.CloseMemoryBuffer()
+
+	if v2.CommandStartGlobalLine >= 0 {
+		t.Fatalf("setup invariant: CommandStartGlobalLine should be -1, got %d",
+			v2.CommandStartGlobalLine)
+	}
+
+	for i := 0; i < contentLines; i++ {
+		got := v2.mainScreen.ReadLine(writeTopBefore + int64(i))
+		if got == nil || !lineHasSparseContent(got) {
+			t.Errorf("idle-shell line %d (globalIdx %d) was wrongly cleared on restore",
+				i, writeTopBefore+int64(i))
+		}
+	}
+}
+
+// cellsPreview turns a cell slice into a short printable string for
+// failure messages. Intentionally tiny — we just need to see which TUI
+// content bled through when a test fails.
+func cellsPreview(cells []Cell) string {
+	const max = 20
+	out := make([]rune, 0, max)
+	for i, c := range cells {
+		if i >= max {
+			break
+		}
+		if c.Rune == 0 {
+			out = append(out, ' ')
+		} else {
+			out = append(out, c.Rune)
+		}
+	}
+	return string(out)
+}
+
 // TestEnableMemoryBuffer_DiscardsStaleAnchors verifies that the restore path
 // discards InputStart / CommandStart anchors pointing past the last
 // persisted line, matching the existing PromptStartLine behavior. This

@@ -60,7 +60,9 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 	// than propagating it into a new session.
 	recoveredMeta := wal.RecoveredMainScreenState()
 	pageStoreLineCount := pageStore.LineCount()
+	restored := false
 	if recoveredMeta != nil && recoveredMeta.WriteTop <= pageStoreLineCount && recoveredMeta.CursorGlobalIdx <= pageStoreLineCount+int64(v.height) {
+		restored = true
 		v.mainScreen.RestoreState(recoveredMeta.WriteTop, recoveredMeta.CursorGlobalIdx, recoveredMeta.CursorCol, recoveredMeta.WriteBottomHWM)
 		// Discard a stale PromptStartLine that points past the last persisted
 		// line. The prompt position is only meaningful if the referenced line
@@ -112,6 +114,27 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 	// Load historical lines from PageStore into sparse store.
 	if err := v.mainScreen.LoadFromPageStore(pageStore); err != nil {
 		log.Printf("[MAIN_SCREEN] LoadFromPageStore failed: %v", err)
+	}
+
+	// If a foreground command was running at shutdown (OSC 133;C fired,
+	// no 133;D yet), the live range [writeTop, max(writeTop+height-1,
+	// HWM)] holds that command's in-flight frame. After a server restart
+	// the command (Claude, htop, vim, ...) is gone; the respawned shell
+	// only writes cells for its new prompt, so everything the shell
+	// doesn't overwrite would show the stale frame bleeding through.
+	// Blank the live range so the new session starts on a clean canvas.
+	// Scrollback above writeTop is preserved.
+	//
+	// Idle / between-commands sessions (CommandStart < 0) keep viewport
+	// content intact — that path is a plain-text scrollback of the prior
+	// session's output that users legitimately want to see on reload.
+	if restored && v.CommandStartGlobalLine >= 0 {
+		writeTop := v.mainScreen.WriteTop()
+		hi := writeTop + int64(v.height) - 1
+		if hwm := v.mainScreen.WriteBottomHWM(); hwm > hi {
+			hi = hwm
+		}
+		v.mainScreen.ClearRange(writeTop, hi)
 	}
 
 	// Create persistence adapter.
