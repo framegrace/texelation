@@ -32,7 +32,6 @@ package parser
 
 import (
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -99,13 +98,27 @@ type LineStore interface {
 	SetPreEvictCallback(func([]EvictedLine))
 }
 
-// AdaptivePersistence manages disk writes with dynamic rate adjustment.
-// pendingLineInfo stores metadata for a line awaiting flush.
-type pendingLineInfo struct {
-	timestamp time.Time
-	isCommand bool
+// opKind identifies the kind of pending persistence operation.
+type opKind uint8
+
+const (
+	opWrite  opKind = 1
+	opDelete opKind = 2
+)
+
+// pendingOp is one entry in the FIFO ops list maintained by AdaptivePersistence.
+// For writes: lo == hi == lineIdx.
+// For deletes (added by Task 6): lo..hi is the deleted range.
+// dropped is set when a later write for the same lineIdx supersedes this op.
+type pendingOp struct {
+	kind    opKind
+	lo, hi  int64
+	ts      time.Time
+	isCmd   bool // writes only
+	dropped bool // superseded by a later write or swallowed by a delete
 }
 
+// AdaptivePersistence manages disk writes with dynamic rate adjustment.
 type AdaptivePersistence struct {
 	config  AdaptivePersistenceConfig
 	memBuf  LineStore
@@ -119,8 +132,9 @@ type AdaptivePersistence struct {
 
 	// State
 	currentMode     PersistMode
-	pendingLines    map[int64]*pendingLineInfo // Lines awaiting flush with metadata
-	pendingMetadata *MainScreenState           // Metadata awaiting flush (written with content)
+	pendingOps      []pendingOp      // FIFO list of pending operations
+	pendingSet      map[int64]int    // lineIdx -> index in pendingOps for most recent write op
+	pendingMetadata *MainScreenState // Metadata awaiting flush (written with content)
 	lastActivity    time.Time
 
 	// Callback for search indexing - called AFTER line is persisted to WAL
@@ -251,18 +265,19 @@ func newAdaptivePersistenceWithNow(
 	rm.CalculateRate(nowFunc())
 
 	ap := &AdaptivePersistence{
-		config:       config,
-		memBuf:       memBuf,
-		disk:         disk,
-		wal:          wal,
-		nowFunc:      nowFunc,
-		rateMonitor:  rm,
-		modeCtrl:     NewModeController(config.WriteThroughMaxRate, config.DebouncedMaxRate),
-		currentMode:  PersistWriteThrough,
-		pendingLines: make(map[int64]*pendingLineInfo),
+		config:      config,
+		memBuf:      memBuf,
+		disk:        disk,
+		wal:         wal,
+		nowFunc:     nowFunc,
+		rateMonitor: rm,
+		modeCtrl:    NewModeController(config.WriteThroughMaxRate, config.DebouncedMaxRate),
+		currentMode: PersistWriteThrough,
+		pendingOps:  nil,
+		pendingSet:  make(map[int64]int),
 		lastActivity: nowFunc(),
-		stopCh:       make(chan struct{}),
-		stopped:      false,
+		stopCh:      make(chan struct{}),
+		stopped:     false,
 		metrics: PersistenceMetrics{
 			CurrentMode: PersistWriteThrough,
 		},
@@ -270,7 +285,7 @@ func newAdaptivePersistenceWithNow(
 
 	// Install pre-evict callback so memBuf flushes dirty lines before
 	// they leave the ring buffer. Without this, dirty lines that piled
-	// up in pendingLines (e.g. during a BestEffort burst) get silently
+	// up in pendingOps (e.g. during a BestEffort burst) get silently
 	// dropped when memBuf evicts to make room — flushPendingLocked
 	// later sees mb.GetLine(idx) == nil and skips them, producing huge
 	// gaps in pageStore.
@@ -289,8 +304,8 @@ func newAdaptivePersistenceWithNow(
 //
 // We must NOT acquire ap.mu here because the persistence flush path
 // may already hold it indirectly via NotifyWrite → memBuf.Write paths.
-// Instead we write directly to the WAL/disk and clear pendingLines
-// entries via a brief lock acquisition at the end.
+// Instead we write directly to the WAL/disk and mark pendingOps entries
+// dropped via a brief lock acquisition at the end.
 func (ap *AdaptivePersistence) flushEvictedLines(lines []EvictedLine) {
 	if len(lines) == 0 {
 		return
@@ -308,12 +323,14 @@ func (ap *AdaptivePersistence) flushEvictedLines(lines []EvictedLine) {
 		}
 		ap.metrics.LinesWritten++
 	}
-	// Clear pendingLines entries for the evicted lines so a later
-	// flush doesn't try to fetch them from memBuf (where they no
-	// longer exist).
+	// Mark any pending write ops for evicted lines as dropped so a later
+	// flush doesn't try to fetch them from memBuf (where they no longer exist).
 	ap.mu.Lock()
 	for _, e := range lines {
-		delete(ap.pendingLines, e.GlobalIdx)
+		if idx, ok := ap.pendingSet[e.GlobalIdx]; ok {
+			ap.pendingOps[idx].dropped = true
+			delete(ap.pendingSet, e.GlobalIdx)
+		}
 	}
 	ap.mu.Unlock()
 }
@@ -346,14 +363,8 @@ func (ap *AdaptivePersistence) NotifyWriteWithMeta(lineIdx int64, timestamp time
 		timestamp = ap.lastActivity
 	}
 
-	// Store metadata for this line
-	info := &pendingLineInfo{
-		timestamp: timestamp,
-		isCommand: isCommand,
-	}
-
 	// Handle based on mode
-	ap.handleWriteLockedWithMeta(lineIdx, info, writeRate)
+	ap.handleWriteLockedWithMeta(lineIdx, timestamp, isCommand, writeRate)
 }
 
 // NotifyWriteBatch records multiple line writes efficiently.
@@ -377,11 +388,7 @@ func (ap *AdaptivePersistence) NotifyWriteBatch(lineIndices []int64) {
 
 	// Handle based on mode - batch lines share timestamp
 	for _, idx := range lineIndices {
-		info := &pendingLineInfo{
-			timestamp: timestamp,
-			isCommand: false,
-		}
-		ap.handleWriteLockedWithMeta(idx, info, writeRate)
+		ap.handleWriteLockedWithMeta(idx, timestamp, false, writeRate)
 	}
 }
 
@@ -434,7 +441,7 @@ func (ap *AdaptivePersistence) updateRateAndModeLocked() float64 {
 		// Log mode transitions, especially to BestEffort (high activity)
 		if newMode == PersistBestEffort {
 			debuglog.Printf("[AdaptivePersistence] Mode transition: %s -> %s (rate=%.1f/s, pending=%d) - high activity detected",
-				oldMode, newMode, writeRate, len(ap.pendingLines))
+				oldMode, newMode, writeRate, len(ap.pendingSet))
 		} else if oldMode == PersistBestEffort {
 			debuglog.Printf("[AdaptivePersistence] Mode transition: %s -> %s (rate=%.1f/s) - activity normalized",
 				oldMode, newMode, writeRate)
@@ -444,24 +451,37 @@ func (ap *AdaptivePersistence) updateRateAndModeLocked() float64 {
 	// Warn if write rate is unusually high
 	if writeRate > highWriteRateThreshold && ap.metrics.TotalWrites%100 == 0 {
 		debuglog.Printf("[AdaptivePersistence] High write rate: %.1f/s (mode=%s, pending=%d)",
-			writeRate, ap.currentMode, len(ap.pendingLines))
+			writeRate, ap.currentMode, len(ap.pendingSet))
 	}
 
 	return writeRate
 }
 
-// handleWriteLocked processes line writes based on current mode.
+// handleWriteLockedWithMeta processes line writes based on current mode.
 // Must be called with ap.mu held.
-func (ap *AdaptivePersistence) handleWriteLockedWithMeta(lineIdx int64, info *pendingLineInfo, writeRate float64) {
+func (ap *AdaptivePersistence) handleWriteLockedWithMeta(lineIdx int64, ts time.Time, isCmd bool, writeRate float64) {
+	// Supersede any earlier pending write for this line: mark it dropped so
+	// the FIFO flush skips it. The new op takes the tail position (call order).
+	if prev, ok := ap.pendingSet[lineIdx]; ok {
+		ap.pendingOps[prev].dropped = true
+	}
+	newIdx := len(ap.pendingOps)
+	ap.pendingOps = append(ap.pendingOps, pendingOp{
+		kind:  opWrite,
+		lo:    lineIdx,
+		hi:    lineIdx,
+		ts:    ts,
+		isCmd: isCmd,
+	})
+	ap.pendingSet[lineIdx] = newIdx
+
 	switch ap.currentMode {
 	case PersistWriteThrough:
-		// Immediate write - store info temporarily for the callback
-		ap.pendingLines[lineIdx] = info
+		// Immediate write: flush the single op we just enqueued.
 		ap.flushLineLocked(lineIdx)
 
 	case PersistDebounced:
-		// Add to pending and schedule debounced flush with adaptive delay
-		ap.pendingLines[lineIdx] = info
+		// Schedule debounced flush with adaptive delay.
 		delay := ap.modeCtrl.CalculateDebounceDelay(
 			writeRate,
 			ap.config.DebounceMinDelay,
@@ -470,14 +490,13 @@ func (ap *AdaptivePersistence) handleWriteLockedWithMeta(lineIdx int64, info *pe
 		ap.scheduleFlushLocked(delay)
 
 	case PersistBestEffort:
-		// Just add to pending; idle monitor will flush
-		ap.pendingLines[lineIdx] = info
+		// Just leave in pending; idle monitor will flush.
 	}
 
-	// Warn if pending line count is getting high
-	pendingCount := len(ap.pendingLines)
+	// Warn if pending op count is getting high.
+	pendingCount := len(ap.pendingOps)
 	if pendingCount > pendingLineWarningThreshold && pendingCount%100 == 0 {
-		debuglog.Printf("[AdaptivePersistence] Warning: %d lines pending flush (mode=%s, rate=%.1f/s)",
+		debuglog.Printf("[AdaptivePersistence] Warning: %d ops pending flush (mode=%s, rate=%.1f/s)",
 			pendingCount, ap.currentMode, writeRate)
 	}
 }
@@ -558,11 +577,11 @@ func (ap *AdaptivePersistence) Metrics() PersistenceMetrics {
 	return ap.metrics
 }
 
-// PendingCount returns the number of lines awaiting flush.
+// PendingCount returns the number of unique lines awaiting flush.
 func (ap *AdaptivePersistence) PendingCount() int {
 	ap.mu.Lock()
 	defer ap.mu.Unlock()
-	return len(ap.pendingLines)
+	return len(ap.pendingSet)
 }
 
 // String returns debug information.
@@ -571,7 +590,7 @@ func (ap *AdaptivePersistence) String() string {
 	defer ap.mu.Unlock()
 
 	return fmt.Sprintf("AdaptivePersistence{mode=%s, rate=%.2f/s, pending=%d, writes=%d, flushes=%d}",
-		ap.currentMode, ap.metrics.CurrentWriteRate, len(ap.pendingLines),
+		ap.currentMode, ap.metrics.CurrentWriteRate, len(ap.pendingSet),
 		ap.metrics.TotalWrites, ap.metrics.TotalFlushes)
 }
 
@@ -604,46 +623,51 @@ func (ap *AdaptivePersistence) cancelFlushTimerLocked() {
 // It releases ap.mu during I/O to avoid blocking NotifyWrite on the parse
 // thread. Must be called with ap.mu held; ap.mu is re-held on return.
 func (ap *AdaptivePersistence) flushPendingLocked() error {
-	if len(ap.pendingLines) == 0 && ap.pendingMetadata == nil {
+	if len(ap.pendingOps) == 0 && ap.pendingMetadata == nil {
 		return nil
 	}
 
-	lineCount := len(ap.pendingLines)
+	lineCount := len(ap.pendingOps)
 	startTime := ap.nowFunc()
 
 	ap.metrics.TotalFlushes++
 
 	// --- Collect phase (locked): clone lines and snapshot state ---
+	// Walk the FIFO ops list in enqueue order, skipping dropped entries.
 	type flushEntry struct {
 		lineIdx int64
 		line    *LogicalLine
-		info    *pendingLineInfo
+		ts      time.Time
+		isCmd   bool
 	}
-	entries := make([]flushEntry, 0, len(ap.pendingLines))
-	indices := make([]int64, 0, len(ap.pendingLines))
-	for idx := range ap.pendingLines {
-		indices = append(indices, idx)
-	}
-	slices.Sort(indices)
+	entries := make([]flushEntry, 0, len(ap.pendingOps))
 
-	for _, idx := range indices {
-		info := ap.pendingLines[idx]
-		line := ap.memBuf.GetLine(idx)
+	for _, op := range ap.pendingOps {
+		if op.dropped {
+			continue
+		}
+		if op.kind != opWrite {
+			// opDelete handled by Task 6; skip for now.
+			continue
+		}
+		line := ap.memBuf.GetLine(op.lo)
 		if line == nil {
-			ap.memBuf.ClearDirty(idx)
+			ap.memBuf.ClearDirty(op.lo)
 			continue
 		}
 		entries = append(entries, flushEntry{
-			lineIdx: idx,
+			lineIdx: op.lo,
 			line:    line.Clone(),
-			info:    info,
+			ts:      op.ts,
+			isCmd:   op.isCmd,
 		})
-		ap.memBuf.ClearDirty(idx)
+		ap.memBuf.ClearDirty(op.lo)
 	}
 
 	pendingMeta := ap.pendingMetadata
 	ap.pendingMetadata = nil
-	ap.pendingLines = make(map[int64]*pendingLineInfo)
+	ap.pendingOps = nil
+	ap.pendingSet = make(map[int64]int)
 
 	// --- I/O phase (unlocked): write to WAL without blocking the parser ---
 	// Hold flushIOMu to serialize with any other concurrent flush. Without
@@ -672,8 +696,8 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 			continue
 		}
 		ap.metrics.LinesWritten++
-		if ap.OnLineIndexed != nil && e.info != nil {
-			ap.OnLineIndexed(e.lineIdx, e.line, e.info.timestamp, e.info.isCommand)
+		if ap.OnLineIndexed != nil {
+			ap.OnLineIndexed(e.lineIdx, e.line, e.ts, e.isCmd)
 		}
 	}
 
@@ -720,17 +744,28 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 }
 
 // flushLineLocked writes a single line to disk (via WAL or direct PageStore).
-// After successful write, calls OnLineIndexed callback for search indexing.
+// This is the WriteThrough fast path: the op was just appended to pendingOps
+// at position pendingSet[lineIdx], so we read the op's metadata from there,
+// write to disk, then mark the op dropped and remove it from pendingSet.
 // Must be called with ap.mu held.
 func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
-	// Get pending info (may be nil for legacy callers)
-	info := ap.pendingLines[lineIdx]
+	// Get the pending op for this line (set by handleWriteLockedWithMeta just before).
+	opIdx, ok := ap.pendingSet[lineIdx]
+	var ts time.Time
+	var isCmd bool
+	if ok {
+		op := &ap.pendingOps[opIdx]
+		ts = op.ts
+		isCmd = op.isCmd
+		// Mark as dropped so flushPendingLocked won't re-write it.
+		op.dropped = true
+		delete(ap.pendingSet, lineIdx)
+	}
 
 	line := ap.memBuf.GetLine(lineIdx)
 	if line == nil {
 		// Line was evicted from memory - clear dirty and skip
 		ap.memBuf.ClearDirty(lineIdx)
-		delete(ap.pendingLines, lineIdx)
 		return nil
 	}
 
@@ -754,13 +789,12 @@ func (ap *AdaptivePersistence) flushLineLocked(lineIdx int64) error {
 	}
 
 	ap.memBuf.ClearDirty(lineIdx)
-	delete(ap.pendingLines, lineIdx)
 	ap.metrics.LinesWritten++
 
 	// Call search index callback AFTER successful write
 	// This ensures search index only has entries for persisted content
-	if ap.OnLineIndexed != nil && info != nil {
-		ap.OnLineIndexed(lineIdx, lineCopy, info.timestamp, info.isCommand)
+	if ap.OnLineIndexed != nil && ok {
+		ap.OnLineIndexed(lineIdx, lineCopy, ts, isCmd)
 	}
 
 	return nil
@@ -821,7 +855,7 @@ func (ap *AdaptivePersistence) checkIdle() {
 	ap.mu.Lock()
 	defer ap.mu.Unlock()
 
-	if ap.stopped || len(ap.pendingLines) == 0 {
+	if ap.stopped || len(ap.pendingOps) == 0 {
 		return
 	}
 
