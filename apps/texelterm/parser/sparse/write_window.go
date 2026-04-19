@@ -281,14 +281,14 @@ func (w *WriteWindow) EraseLine() {
 }
 
 // EraseToEndOfLine clears cells from col to the end of the current line.
-// Implemented as a truncation so the stored line length reflects the actual
-// content width; padding with Cell{} would inflate the line to the full
-// viewport width and cause resize reflow to treat trailing blanks as content.
 func (w *WriteWindow) EraseToEndOfLine(col int) {
 	w.mu.Lock()
 	gi := w.cursorGlobalIdx
+	width := w.width
 	w.mu.Unlock()
-	w.store.TruncateLine(gi, col)
+	for x := col; x < width; x++ {
+		w.store.Set(gi, x, parser.Cell{})
+	}
 }
 
 // EraseFromStartOfLine clears cells from column 0 through col (inclusive).
