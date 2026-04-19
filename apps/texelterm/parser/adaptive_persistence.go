@@ -546,8 +546,10 @@ func (ap *AdaptivePersistence) NotifyClearRange(lo, hi int64) {
 		ap.flushPendingLocked()
 
 	case PersistDebounced:
-		// Use minimum delay for a single delete — responsiveness matters more
-		// than batching here since deletes are rare ops.
+		// Deletes are rare, high-priority tombstone ops where responsiveness
+		// matters more than batching. Hardcoding DebounceMinDelay ensures
+		// prompt propagation to disk even during high-write-rate bursts that
+		// would otherwise push the adaptive delay toward DebounceMaxDelay.
 		ap.scheduleFlushLocked(ap.config.DebounceMinDelay)
 
 	case PersistBestEffort:
