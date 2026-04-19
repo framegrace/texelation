@@ -71,7 +71,7 @@ func TestOSC133_ED2_TombstonesPersistToDisk(t *testing.T) {
 
 	// Write 10 lines of phantom output — more than the viewport height (5)
 	// so writeTop advances past cmdAnchor, setting up the rewind condition.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		parseString(p, fmt.Sprintf("phantom output line %d\r\n", i))
 	}
 
