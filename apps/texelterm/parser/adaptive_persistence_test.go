@@ -947,12 +947,12 @@ func BenchmarkRateMonitor_CalculateRate(b *testing.B) {
 
 // --- FIFO flush-order test helpers ---
 
-// newTestAdaptivePersistenceWriteThrough creates an AdaptivePersistence backed
+// newTestAdaptivePersistenceBestEffort creates an AdaptivePersistence backed
 // by a WAL in a temp directory, locked into BestEffort mode so writes
 // accumulate in the pending list and are only flushed when Flush() is called.
 // This lets tests control exactly when the flush happens and verify flush order.
 // The returned *WriteAheadLog is used by walAppendedOrder to inspect flush order.
-func newTestAdaptivePersistenceWriteThrough(t testing.TB) (*AdaptivePersistence, *WriteAheadLog) {
+func newTestAdaptivePersistenceBestEffort(t testing.TB) (*AdaptivePersistence, *WriteAheadLog) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	walConfig := DefaultWALConfig(tmpDir, "test-order")
@@ -1022,7 +1022,7 @@ func equalInt64(a, b []int64) bool {
 }
 
 func TestAdaptivePersistence_FlushesInCallOrder(t *testing.T) {
-	ap, wal := newTestAdaptivePersistenceWriteThrough(t)
+	ap, wal := newTestAdaptivePersistenceBestEffort(t)
 	ap.NotifyWrite(3)
 	ap.NotifyWrite(7)
 	ap.NotifyWrite(5)
