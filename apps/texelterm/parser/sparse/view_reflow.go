@@ -40,9 +40,23 @@ func walkChain(s *Store, startGI int64, maxSteps int) (end int64, nowrap bool) {
 // empty rows within the chain (wrap continuations the cursor sits on before
 // any content has been written) are emitted as explicit blank rows so the
 // chain's reflowed row count matches its physical-row footprint.
+//
+// Single-row "chains" whose last cell is NOT Wrapped (i.e., the row never
+// auto-wrapped) render as exactly one row. This handles content placed past
+// the previous cursor via CUF/CUP — e.g., a powerline prompt's right-aligned
+// segment via `ESC[500C ESC[17D` writes cells past the visible viewport
+// when the terminal later shrinks. Without this guard, the row's stored
+// cell count would be sliced into multiple physical rows on shrink, scrolling
+// older content up by an extra row each event (issue #193).
 func reflowChain(s *Store, startGI, endGI int64, viewWidth int) [][]parser.Cell {
 	if viewWidth <= 0 {
 		return nil
+	}
+	if startGI == endGI {
+		cells := s.GetLine(startGI)
+		if len(cells) == 0 || !cells[len(cells)-1].Wrapped {
+			return [][]parser.Cell{cells}
+		}
 	}
 	var logical []parser.Cell
 	for gi := startGI; gi <= endGI; gi++ {
@@ -89,6 +103,12 @@ func trailingEmptyRows(s *Store, start, end int64) int {
 func chainReflowedRowCount(s *Store, start, end int64, width int, nowrap bool) int {
 	if nowrap {
 		return int(end - start + 1)
+	}
+	if start == end {
+		cells := s.GetLine(start)
+		if len(cells) == 0 || !cells[len(cells)-1].Wrapped {
+			return 1
+		}
 	}
 	total := 0
 	for r := start; r <= end; r++ {
