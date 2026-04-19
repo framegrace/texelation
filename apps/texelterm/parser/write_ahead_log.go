@@ -457,6 +457,15 @@ func (w *WriteAheadLog) AppendDelete(lo, hi int64, timestamp time.Time) error {
 	return nil
 }
 
+// DeleteRange emits a range-delete tombstone to the WAL and applies the delete
+// to the owned PageStore. One WAL entry per range, not one per line.
+func (w *WriteAheadLog) DeleteRange(lo, hi int64) error {
+	if err := w.AppendDelete(lo, hi, w.nowFunc()); err != nil {
+		return err
+	}
+	return w.pageStore.deleteRangeNoWAL(lo, hi)
+}
+
 // encodeDeleteEntry builds a 33-byte WAL entry for a range tombstone:
 // type(1) + lo(8, GlobalLineIdx) + timestamp(8) + dataLen(4, =8) + hi(8) + crc32(4).
 func (w *WriteAheadLog) encodeDeleteEntry(lo, hi uint64, timestamp time.Time) ([]byte, error) {
@@ -919,15 +928,21 @@ func (w *WriteAheadLog) recover() error {
 	// AppendLineWithGlobalIdx handles append, update-in-place, and out-of-order
 	// insert in one operation, so the LATEST WAL entry for each globalIdx wins.
 	for _, entry := range entries {
-		if entry.Line == nil {
-			continue
-		}
-		if entry.Type != EntryTypeLineWrite && entry.Type != EntryTypeLineModify {
-			continue
-		}
-		lineIdx := int64(entry.GlobalLineIdx)
-		if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
-			return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
+		switch entry.Type {
+		case EntryTypeLineWrite, EntryTypeLineModify:
+			if entry.Line == nil {
+				continue
+			}
+			lineIdx := int64(entry.GlobalLineIdx)
+			if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
+				return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
+			}
+		case EntryTypeLineDelete:
+			lo := int64(entry.GlobalLineIdx)
+			hi := entry.DeleteHi
+			if err := w.pageStore.deleteRangeNoWAL(lo, hi); err != nil {
+				return fmt.Errorf("failed to replay delete [%d, %d]: %w", lo, hi, err)
+			}
 		}
 	}
 

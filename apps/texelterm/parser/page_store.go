@@ -635,6 +635,44 @@ func (ps *PageStore) recordIndexEntry(globalIdx int64) {
 	}
 }
 
+// deleteRangeNoWAL removes all pageIndex entries whose globalIdx falls in the
+// closed interval [lo, hi] and decrements totalLineCount. Does NOT emit a WAL
+// entry — that is the caller's responsibility. Used by WriteAheadLog.DeleteRange
+// (after emitting) and by WAL recover() replay (on-disk tombstone already
+// exists). Page-file bytes are not reclaimed; correctness depends on pageIndex
+// absence.
+func (ps *PageStore) deleteRangeNoWAL(lo, hi int64) error {
+	if lo < 0 || hi < lo {
+		return fmt.Errorf("invalid delete range [%d, %d]", lo, hi)
+	}
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	start := sort.Search(len(ps.pageIndex), func(i int) bool {
+		return ps.pageIndex[i].globalIdx >= lo
+	})
+	end := start
+	for end < len(ps.pageIndex) && ps.pageIndex[end].globalIdx <= hi {
+		end++
+	}
+	if end > start {
+		ps.pageIndex = append(ps.pageIndex[:start], ps.pageIndex[end:]...)
+		ps.totalLineCount -= int64(end - start)
+		if ps.totalLineCount < 0 {
+			ps.totalLineCount = 0
+		}
+	}
+	// Drop the current unflushed page if its range falls entirely in [lo, hi].
+	if ps.currentPage != nil && ps.currentPage.Header.LineCount > 0 {
+		first := int64(ps.currentPage.Header.FirstGlobalIdx)
+		last := first + int64(ps.currentPage.Header.LineCount) - 1
+		if first >= lo && last <= hi {
+			ps.currentPage = nil
+		}
+	}
+	return nil
+}
+
 // findByGlobalIdx does a binary search on pageIndex for the entry matching
 // globalIdx. Returns (entry, true) if found, (zero, false) otherwise.
 // Caller must hold ps.mu (read or write).
