@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+func TestWAL_HeaderVersionIs2(t *testing.T) {
+	if WALVersion != 2 {
+		t.Errorf("WALVersion = %d, want 2", WALVersion)
+	}
+}
+
 func TestWAL_CreateAndClose(t *testing.T) {
 	tmpDir := t.TempDir()
 	config := DefaultWALConfig(tmpDir, "test-terminal-123")

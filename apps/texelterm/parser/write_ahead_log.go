@@ -7,12 +7,12 @@
 // WAL Format:
 //   Header (32 bytes):
 //     Magic: "TXWAL001" (8 bytes)
-//     Version: uint32 (4 bytes) - value 1
+//     Version: uint32 (4 bytes) - value 2
 //     TerminalID: [16]byte (UUID bytes)
 //     LastCheckpoint: uint64 (8 bytes) - global line index
 //
 //   Entry (variable, repeated):
-//     EntryType: uint8 (1 byte) - LINE_WRITE=0x01, LINE_MODIFY=0x02, CHECKPOINT=0x03
+//     EntryType: uint8 (1 byte) - LINE_WRITE=0x01, LINE_MODIFY=0x02, CHECKPOINT=0x03, METADATA=0x04, MAIN_SCREEN_STATE=0x05, LINE_DELETE=0x06
 //     GlobalLineIdx: uint64 (8 bytes)
 //     Timestamp: int64 (8 bytes) - UnixNano
 //     DataLen: uint32 (4 bytes)
@@ -39,18 +39,19 @@ import (
 // WAL format constants
 const (
 	WALMagic      = "TXWAL001"
-	WALVersion    = uint32(1)
+	WALVersion    = uint32(2)
 	WALHeaderSize = 32
 	WALEntryBase  = 1 + 8 + 8 + 4 + 4 // type + lineIdx + timestamp + dataLen + crc32 (no data)
 )
 
 // WAL entry types
 const (
-	EntryTypeLineWrite        uint8 = 0x01
-	EntryTypeLineModify       uint8 = 0x02
-	EntryTypeCheckpoint       uint8 = 0x03
-	EntryTypeMetadata         uint8 = 0x04 // Legacy ViewportState (scroll position, cursor)
-	EntryTypeMainScreenState  uint8 = 0x05 // Sparse MainScreenState (writeTop, cursor globalIdx)
+	EntryTypeLineWrite       uint8 = 0x01
+	EntryTypeLineModify      uint8 = 0x02
+	EntryTypeCheckpoint      uint8 = 0x03
+	EntryTypeMetadata        uint8 = 0x04 // Legacy ViewportState (scroll position, cursor)
+	EntryTypeMainScreenState uint8 = 0x05 // Sparse MainScreenState (writeTop, cursor globalIdx)
+	EntryTypeLineDelete      uint8 = 0x06 // Range tombstone: [lo, hi] inclusive
 )
 
 // WALConfig holds configuration for the write-ahead log.
