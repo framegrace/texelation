@@ -24,38 +24,50 @@ func newDeleteTestWAL(t *testing.T) (*WriteAheadLog, string, string) {
 }
 
 func TestWAL_AppendDeleteRoundTrip(t *testing.T) {
-	wal, walPath, _ := newDeleteTestWAL(t)
-	ts := time.Unix(1700000000, 0)
-	if err := wal.AppendDelete(5, 10, ts); err != nil {
-		t.Fatalf("AppendDelete: %v", err)
+	tests := []struct {
+		name   string
+		lo, hi int64
+	}{
+		{"multi-line", 5, 10},
+		{"single-line", 5, 5},
 	}
-	// Sync to disk without triggering a checkpoint (which would truncate the WAL).
-	if err := wal.SyncWAL(); err != nil {
-		t.Fatalf("SyncWAL: %v", err)
-	}
-	defer wal.Close()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wal, walPath, _ := newDeleteTestWAL(t)
+			defer wal.Close()
 
-	// Read the raw entry off disk via readEntry.
-	f, err := os.Open(walPath)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer f.Close()
-	if _, err := f.Seek(int64(WALHeaderSize), 0); err != nil {
-		t.Fatalf("Seek: %v", err)
-	}
-	entry, _, err := (&WriteAheadLog{}).readEntry(bufio.NewReader(f))
-	if err != nil {
-		t.Fatalf("readEntry: %v", err)
-	}
-	if entry.Type != EntryTypeLineDelete {
-		t.Errorf("Type = %#x, want %#x", entry.Type, EntryTypeLineDelete)
-	}
-	if entry.GlobalLineIdx != 5 {
-		t.Errorf("lo = %d, want 5", entry.GlobalLineIdx)
-	}
-	if entry.DeleteHi != 10 {
-		t.Errorf("hi = %d, want 10", entry.DeleteHi)
+			ts := time.Unix(1700000000, 0)
+			if err := wal.AppendDelete(tc.lo, tc.hi, ts); err != nil {
+				t.Fatalf("AppendDelete: %v", err)
+			}
+			// Sync to disk without triggering a checkpoint (which would truncate the WAL).
+			if err := wal.SyncWAL(); err != nil {
+				t.Fatalf("SyncWAL: %v", err)
+			}
+
+			// Read the raw entry off disk via readEntry.
+			f, err := os.Open(walPath)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer f.Close()
+			if _, err := f.Seek(int64(WALHeaderSize), 0); err != nil {
+				t.Fatalf("Seek: %v", err)
+			}
+			entry, _, err := (&WriteAheadLog{}).readEntry(bufio.NewReader(f))
+			if err != nil {
+				t.Fatalf("readEntry: %v", err)
+			}
+			if entry.Type != EntryTypeLineDelete {
+				t.Errorf("Type = %#x, want %#x", entry.Type, EntryTypeLineDelete)
+			}
+			if int64(entry.GlobalLineIdx) != tc.lo {
+				t.Errorf("lo = %d, want %d", entry.GlobalLineIdx, tc.lo)
+			}
+			if entry.DeleteHi != tc.hi {
+				t.Errorf("hi = %d, want %d", entry.DeleteHi, tc.hi)
+			}
+		})
 	}
 }
 
