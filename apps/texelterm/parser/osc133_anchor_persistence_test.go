@@ -212,131 +212,95 @@ func TestED2_RewindAfterRestart_UsesRestoredCommandStart(t *testing.T) {
 	}
 }
 
-// TestEnableMemoryBuffer_BlanksLiveViewportOnRestore_MidCommand guards
-// the "stale frame bleed-through" bug: when a TUI like Claude is running
-// at server shutdown (OSC 133;C fired, no 133;D yet), the sparse store
-// holds the last-drawn frame cells at the restored live range
-// [writeTop, max(writeTop+height-1, HWM)]. On reload, the respawned
-// shell only writes the cells it actually draws (prompt, a new command
-// line), so every untouched cell — blank rows, trailing columns past
-// the command — would show the old TUI frame. The restore path must
-// blank this range so the new session starts on a clean canvas.
-// Scrollback above writeTop must NOT be cleared.
-func TestEnableMemoryBuffer_BlanksLiveViewportOnRestore_MidCommand(t *testing.T) {
-	dir := t.TempDir()
-	id := "restore-blank-viewport-midcmd"
+// TestED2_ClearsOverflowPastViewport guards the "phantom scrollback"
+// bug: an earlier TUI in the session wrote cells past the current
+// viewport (HWM > writeTop+height-1). When a later "homing" ED 2 fires
+// — the canonical TUI-launch signal — those overflow cells linger as
+// stale scrollback and bleed through once the new frame scrolls or the
+// user scrolls down, even across a server restart that persists them.
+// ED 2 must wipe [writeTop+height, HWM] in addition to the viewport.
+func TestED2_ClearsOverflowPastViewport(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	const cols, rows = 40, 10
+	v := NewVTerm(cols, rows)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
 
-	// --- Session 1: shell session with a running TUI command. ---
-	v1 := newTestVTerm(t, cols, rows, dir, id)
-	p1 := NewParser(v1)
+	// Fill the sparse store with distinctive TUI-style content spanning
+	// well past a single viewport's worth of rows. Plain writes advance
+	// writeTop with the cursor, so HWM stays equal to the viewport
+	// bottom — that's the "no overflow yet" baseline.
+	for i := 0; i < rows*3; i++ {
+		parseString(p, fmt.Sprintf("tui1-row-%02d %s\r\n", i, "yyyyyyy"))
+	}
+	hwmBefore := v.mainScreen.WriteBottomHWM()
 
-	// Scrollback we want preserved.
-	parseString(p1, "scrollback line A\r\n")
-	parseString(p1, "scrollback line B\r\n")
-	scrollbackEnd := v1.mainScreen.WriteTop() + int64(v1.cursorY) - 1
-
-	// Bash prompt + input + command-start (simulates `claude` launching).
-	v1.MarkPromptStart()
-	parseString(p1, "prompt> ")
-	v1.MarkInputStart()
-	parseString(p1, "claude\r\n")
-	v1.MarkCommandStart()
-	if v1.CommandStartGlobalLine < 0 {
-		t.Fatalf("setup: MarkCommandStart did not set CommandStartGlobalLine")
+	// Force writeTop backward to simulate the post-restore condition:
+	// persisted HWM points past the shell's current viewport, so
+	// whatever the old TUI wrote in [rewind+rows, HWM] is now phantom
+	// scrollback the new shell won't overwrite. RewindWriteTop keeps
+	// HWM monotonic — exactly the asymmetry the ED 2 clear must handle.
+	rewindTo := hwmBefore - int64(rows*2)
+	if rewindTo < 0 {
+		t.Fatalf("setup: hwmBefore %d too small to rewind", hwmBefore)
+	}
+	v.mainScreen.RewindWriteTop(rewindTo)
+	writeTop := v.mainScreen.WriteTop()
+	if writeTop != rewindTo {
+		t.Fatalf("setup: writeTop %d != rewindTo %d", writeTop, rewindTo)
+	}
+	if hwm := v.mainScreen.WriteBottomHWM(); hwm <= writeTop+int64(rows)-1 {
+		t.Fatalf("setup: HWM %d not past viewport bottom %d after rewind",
+			hwm, writeTop+int64(rows)-1)
 	}
 
-	// Fill the remaining viewport rows with "TUI" content that must NOT
-	// survive restore — these are cells Claude drew in its last frame.
-	for i := 0; i < rows; i++ {
-		parseString(p1, fmt.Sprintf("tui-frame-row-%02d padded %s\r\n", i, "zzzzzzz"))
-	}
-	writeTopBefore := v1.mainScreen.WriteTop()
-	hwmBefore := v1.mainScreen.WriteBottomHWM()
-	if hwmBefore < writeTopBefore+int64(rows)-1 {
-		t.Fatalf("setup: HWM %d did not reach end of viewport (writeTop=%d, rows=%d)",
-			hwmBefore, writeTopBefore, rows)
-	}
+	// New TUI homes with ED 2. No OSC 133 anchors are set, so the
+	// anchor-rewind branch is a no-op — the overflow clean-slate pass
+	// is the only thing standing between the old TUI's cells and the
+	// user's scrollback.
+	parseString(p, "\x1b[2J")
 
-	if err := v1.CloseMemoryBuffer(); err != nil {
-		t.Fatalf("CloseMemoryBuffer: %v", err)
-	}
-
-	// --- Session 2: reload. ---
-	v2 := newTestVTerm(t, cols, rows, dir, id)
-	defer v2.CloseMemoryBuffer()
-
-	writeTopAfter := v2.mainScreen.WriteTop()
-	if writeTopAfter != writeTopBefore {
-		t.Fatalf("writeTop not restored: got %d, want %d", writeTopAfter, writeTopBefore)
-	}
-
-	// Live range [writeTop, HWM] must be fully blank so the new session
-	// doesn't see stale TUI content bleeding through.
-	for gi := writeTopAfter; gi <= hwmBefore; gi++ {
-		cells := v2.mainScreen.ReadLine(gi)
+	writeTopAfter := v.mainScreen.WriteTop()
+	for gi := writeTopAfter + int64(rows); gi <= hwmBefore; gi++ {
+		cells := v.mainScreen.ReadLine(gi)
 		if cells != nil && lineHasSparseContent(cells) {
-			t.Errorf("live-range line %d still has content after restore: %q",
+			t.Errorf("overflow line %d still has content after ED 2: %q",
 				gi, cellsPreview(cells))
-		}
-	}
-
-	// Scrollback above writeTop must be preserved.
-	for gi := int64(0); gi <= scrollbackEnd; gi++ {
-		cells := v2.mainScreen.ReadLine(gi)
-		if cells == nil || !lineHasSparseContent(cells) {
-			t.Errorf("scrollback line %d was wrongly cleared", gi)
 		}
 	}
 }
 
-// TestEnableMemoryBuffer_PreservesViewportOnRestore_IdleShell is the
-// counterpart: when no command is running at shutdown (CommandStart
-// < 0), the viewport holds legitimate plain-text output the user wants
-// to see on reload. The restore path must NOT blank it.
-func TestEnableMemoryBuffer_PreservesViewportOnRestore_IdleShell(t *testing.T) {
-	dir := t.TempDir()
-	id := "restore-preserve-viewport-idle"
+// TestED2_PreservesScrollbackAboveViewport is the counterpart guarantee:
+// only overflow rows *past* the viewport get wiped by ED 2's new
+// clean-slate pass. Legitimate scrollback above writeTop (prior shell
+// output the user wants to see when scrolling up) must stay intact.
+func TestED2_PreservesScrollbackAboveViewport(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	const cols, rows = 40, 10
+	v := NewVTerm(cols, rows)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
 
-	v1 := newTestVTerm(t, cols, rows, dir, id)
-	p1 := NewParser(v1)
-
-	// Plain output — no OSC 133;C. Think `ls` output followed by a
-	// returned shell prompt.
-	const contentLines = 8
-	for i := 0; i < contentLines; i++ {
-		parseString(p1, fmt.Sprintf("output-line-%02d\r\n", i))
+	// Plain scrollback that should survive ED 2. Enough lines to push
+	// writeTop well past 0.
+	const scrollbackLines = 25
+	for i := 0; i < scrollbackLines; i++ {
+		parseString(p, fmt.Sprintf("scroll-%02d\r\n", i))
+	}
+	writeTopBefore := v.mainScreen.WriteTop()
+	if writeTopBefore == 0 {
+		t.Fatalf("setup: writeTop did not advance; test needs scrollback")
 	}
 
-	// Snapshot the populated lines as session 1 saw them so session 2
-	// can be compared cell-for-cell.
-	writeTopBefore := v1.mainScreen.WriteTop()
-	before := make([][]Cell, contentLines)
-	for i := 0; i < contentLines; i++ {
-		before[i] = v1.mainScreen.ReadLine(writeTopBefore + int64(i))
-		if before[i] == nil || !lineHasSparseContent(before[i]) {
-			t.Fatalf("setup: line %d has no content in session 1", i)
-		}
-	}
+	parseString(p, "\x1b[2J")
 
-	if err := v1.CloseMemoryBuffer(); err != nil {
-		t.Fatalf("CloseMemoryBuffer: %v", err)
-	}
-
-	v2 := newTestVTerm(t, cols, rows, dir, id)
-	defer v2.CloseMemoryBuffer()
-
-	if v2.CommandStartGlobalLine >= 0 {
-		t.Fatalf("setup invariant: CommandStartGlobalLine should be -1, got %d",
-			v2.CommandStartGlobalLine)
-	}
-
-	for i := 0; i < contentLines; i++ {
-		got := v2.mainScreen.ReadLine(writeTopBefore + int64(i))
-		if got == nil || !lineHasSparseContent(got) {
-			t.Errorf("idle-shell line %d (globalIdx %d) was wrongly cleared on restore",
-				i, writeTopBefore+int64(i))
+	// Every row above the new writeTop that had content before must
+	// still have content.
+	writeTopAfter := v.mainScreen.WriteTop()
+	for gi := int64(0); gi < writeTopAfter; gi++ {
+		cells := v.mainScreen.ReadLine(gi)
+		if cells == nil || !lineHasSparseContent(cells) {
+			t.Errorf("scrollback line %d wrongly cleared by ED 2", gi)
 		}
 	}
 }
