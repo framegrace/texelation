@@ -110,3 +110,49 @@ func TestWAL_CorruptDeleteEntryTruncates(t *testing.T) {
 		t.Errorf("WAL size after corrupted-entry recover = %d, want %d (header only)", info2.Size(), WALHeaderSize)
 	}
 }
+
+func TestWAL_RecoverAppliesDelete(t *testing.T) {
+	wal, walPath, baseDir := newDeleteTestWAL(t)
+	// Seed 5 lines and append a tombstone for [1, 3] BEFORE any checkpoint.
+	ll := func(text string) *LogicalLine {
+		cells := make([]Cell, len(text))
+		for i, r := range text {
+			cells[i] = Cell{Rune: r}
+		}
+		return &LogicalLine{Cells: cells}
+	}
+	for i := 0; i < 5; i++ {
+		if err := wal.Append(int64(i), ll("line"), time.Now()); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+	if err := wal.AppendDelete(1, 3, time.Now()); err != nil {
+		t.Fatalf("AppendDelete: %v", err)
+	}
+	// Flush bytes to disk but DO NOT Close (Close checkpoints which rewrites WAL).
+	if err := wal.SyncWAL(); err != nil {
+		t.Fatalf("SyncWAL: %v", err)
+	}
+	// Abandon the WAL without closing — simulate crash.
+	wal.walFile.Close()
+	_ = walPath
+
+	// Reopen; recover should replay writes + delete.
+	cfg := DefaultWALConfig(baseDir, "test-term")
+	cfg.CheckpointInterval = 0
+	wal2, err := OpenWriteAheadLog(cfg)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer wal2.Close()
+	ps := wal2.PageStore()
+	if got := ps.StoredLineCount(); got != 2 {
+		t.Errorf("StoredLineCount = %d, want 2 (lines 0 and 4)", got)
+	}
+	if gi := ps.GlobalIdxAtStoredPosition(0); gi != 0 {
+		t.Errorf("first stored globalIdx = %d, want 0", gi)
+	}
+	if gi := ps.GlobalIdxAtStoredPosition(1); gi != 4 {
+		t.Errorf("second stored globalIdx = %d, want 4", gi)
+	}
+}
