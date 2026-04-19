@@ -7,7 +7,7 @@ import (
 
 func seedLines(t *testing.T, ps *PageStore, n int) {
 	t.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ll := &LogicalLine{Cells: []Cell{{Rune: 'x'}}}
 		if err := ps.AppendLineWithGlobalIdx(int64(i), ll, time.Now()); err != nil {
 			t.Fatalf("seed %d: %v", i, err)

@@ -128,7 +128,7 @@ func TestWAL_RecoverAppliesDelete(t *testing.T) {
 		}
 		return &LogicalLine{Cells: cells}
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := wal.Append(int64(i), ll("line"), time.Now()); err != nil {
 			t.Fatalf("Append %d: %v", i, err)
 		}
