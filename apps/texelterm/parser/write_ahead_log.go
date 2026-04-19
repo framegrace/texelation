@@ -98,9 +98,10 @@ type WALEntry struct {
 	Type            uint8
 	GlobalLineIdx   uint64
 	Timestamp       time.Time
-	Line            *LogicalLine     // nil for CHECKPOINT and METADATA entries
+	Line            *LogicalLine     // nil for CHECKPOINT / METADATA / DELETE entries
 	Metadata        *ViewportState   // nil for non-METADATA entries
 	MainScreenState *MainScreenState // nil for non-MAIN_SCREEN_STATE entries
+	DeleteHi        int64            // valid only for EntryTypeLineDelete (inclusive upper bound)
 }
 
 // WriteAheadLog provides crash recovery for terminal history.
@@ -428,6 +429,48 @@ func (w *WriteAheadLog) Append(lineIdx int64, line *LogicalLine, timestamp time.
 	}
 
 	return nil
+}
+
+// AppendDelete writes a range-delete tombstone [lo, hi] to the WAL. Emits one
+// entry, not one per line. Caller (PageStore.DeleteRange) applies the delete
+// to the in-memory page index after this returns successfully.
+func (w *WriteAheadLog) AppendDelete(lo, hi int64, timestamp time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.stopped {
+		return fmt.Errorf("WAL is closed")
+	}
+	if lo < 0 || hi < lo {
+		return fmt.Errorf("invalid delete range [%d, %d]", lo, hi)
+	}
+
+	entryData, err := w.encodeDeleteEntry(uint64(lo), uint64(hi), timestamp)
+	if err != nil {
+		return fmt.Errorf("failed to encode delete entry: %w", err)
+	}
+	if _, err := w.walFile.Write(entryData); err != nil {
+		return fmt.Errorf("failed to write delete entry: %w", err)
+	}
+	w.walSize += int64(len(entryData))
+	w.entriesWritten++
+	return nil
+}
+
+// encodeDeleteEntry builds a 33-byte WAL entry for a range tombstone:
+// type(1) + lo(8, GlobalLineIdx) + timestamp(8) + dataLen(4, =8) + hi(8) + crc32(4).
+func (w *WriteAheadLog) encodeDeleteEntry(lo, hi uint64, timestamp time.Time) ([]byte, error) {
+	const dataLen = 8
+	totalSize := WALEntryBase + dataLen
+	buf := make([]byte, totalSize)
+	buf[0] = EntryTypeLineDelete
+	binary.LittleEndian.PutUint64(buf[1:9], lo)
+	binary.LittleEndian.PutUint64(buf[9:17], uint64(timestamp.UnixNano()))
+	binary.LittleEndian.PutUint32(buf[17:21], dataLen)
+	binary.LittleEndian.PutUint64(buf[21:29], hi)
+	crc := crc32.ChecksumIEEE(buf[:totalSize-4])
+	binary.LittleEndian.PutUint32(buf[totalSize-4:], crc)
+	return buf, nil
 }
 
 // WriteMetadata writes viewport state (scroll position, cursor) to the WAL.
@@ -985,6 +1028,17 @@ func (w *WriteAheadLog) readEntry(r *bufio.Reader) (WALEntry, int, error) {
 		}
 	case EntryTypeCheckpoint:
 		// No data to decode
+	case EntryTypeLineDelete:
+		if dataLen != 8 {
+			return WALEntry{}, totalSize, fmt.Errorf("delete entry dataLen = %d, want 8", dataLen)
+		}
+		hi := int64(binary.LittleEndian.Uint64(lineData))
+		return WALEntry{
+			Type:          entryType,
+			GlobalLineIdx: lineIdx,
+			Timestamp:     timestamp,
+			DeleteHi:      hi,
+		}, totalSize, nil
 	}
 
 	return WALEntry{
