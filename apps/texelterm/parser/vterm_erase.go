@@ -65,7 +65,7 @@ func (v *VTerm) ClearScreenMode(mode int) {
 			// Clear all history lines before the write window.
 			writeTop := v.mainScreen.WriteTop()
 			if writeTop > 0 {
-				v.mainScreen.ClearRange(0, writeTop-1)
+				v.mainScreen.ClearRangePersistent(0, writeTop-1)
 			}
 			v.MarkAllDirty()
 		}
