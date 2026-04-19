@@ -195,27 +195,6 @@ func (s *Store) SetLineWithNoWrap(globalIdx int64, cells []parser.Cell, nowrap b
 	}
 }
 
-// TruncateLine drops cells at or past col from the line at globalIdx, so the
-// line's stored length becomes min(col, currentLen). No-op if the line is
-// absent or already no longer than col. Used by EraseToEndOfLine to avoid
-// inflating the stored line width — absent cells read back as blank anyway,
-// but stored length is what reflow measures as "content".
-func (s *Store) TruncateLine(globalIdx int64, col int) {
-	if col < 0 {
-		col = 0
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	line, ok := s.lines[globalIdx]
-	if !ok {
-		return
-	}
-	if len(line.cells) <= col {
-		return
-	}
-	line.cells = line.cells[:col]
-}
-
 // ClearRange removes every line in the closed interval [lo, hi]. Lines
 // outside the interval are untouched. contentEnd is not decreased — a
 // cleared range still counts as "ever been written" for the high-water mark.
