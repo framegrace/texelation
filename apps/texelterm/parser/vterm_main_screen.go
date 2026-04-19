@@ -124,6 +124,7 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 		return nil
 	}
 	v.mainScreenPersistence = persistence
+	v.mainScreen.SetClearNotifier(persistence)
 
 	log.Printf("[MAIN_SCREEN] Persistence enabled, history lines=%d", pageStore.LineCount())
 	return nil

@@ -557,6 +557,16 @@ func (ap *AdaptivePersistence) NotifyClearRange(lo, hi int64) {
 	}
 }
 
+// PendingOpCount returns the number of queued persistence operations that have
+// not yet been flushed. Test-only introspection helper; not safe to rely on in
+// production code because the count can change immediately after the call
+// returns.
+func (ap *AdaptivePersistence) PendingOpCount() int {
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+	return len(ap.pendingOps)
+}
+
 // Flush forces immediate flush of all pending writes.
 func (ap *AdaptivePersistence) Flush() error {
 	ap.mu.Lock()
