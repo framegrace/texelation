@@ -945,6 +945,97 @@ func BenchmarkRateMonitor_CalculateRate(b *testing.B) {
 	}
 }
 
+// --- FIFO flush-order test helpers ---
+
+// newTestAdaptivePersistenceBestEffort creates an AdaptivePersistence backed
+// by a WAL in a temp directory, locked into BestEffort mode so writes
+// accumulate in the pending list and are only flushed when Flush() is called.
+// This lets tests control exactly when the flush happens and verify flush order.
+// The returned *WriteAheadLog is used by walAppendedOrder to inspect flush order.
+func newTestAdaptivePersistenceBestEffort(t testing.TB) (*AdaptivePersistence, *WriteAheadLog) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	walConfig := DefaultWALConfig(tmpDir, "test-order")
+	walConfig.CheckpointInterval = 0 // disable auto-checkpoint
+
+	wal, err := OpenWriteAheadLog(walConfig)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog: %v", err)
+	}
+
+	mb := NewMemoryBuffer(MemoryBufferConfig{MaxLines: 100, EvictionBatch: 10})
+	// Ensure lines 0-9 exist in the memory buffer so GetLine returns non-nil.
+	for i := int64(0); i < 10; i++ {
+		mb.EnsureLine(i)
+		mb.GetLine(i).Cells = []Cell{{Rune: 'X'}}
+	}
+
+	config := DefaultAdaptivePersistenceConfig()
+	// Force BestEffort mode so writes accumulate and are only flushed on
+	// explicit Flush() — this exercises flushPendingLocked's ordering.
+	config.WriteThroughMaxRate = 0
+	config.DebouncedMaxRate = 0
+	// Long idle threshold so idle monitor doesn't flush during test.
+	config.IdleThreshold = 1 * time.Hour
+
+	ap, err := newAdaptivePersistenceWithWAL(config, mb, wal, time.Now)
+	if err != nil {
+		t.Fatalf("newAdaptivePersistenceWithWAL: %v", err)
+	}
+	t.Cleanup(func() { ap.Close() })
+
+	// Force BestEffort mode immediately so writes accumulate rather than
+	// flushing individually. Mode normally only changes every 64 writes.
+	ap.mu.Lock()
+	ap.currentMode = PersistBestEffort
+	ap.mu.Unlock()
+
+	return ap, wal
+}
+
+// walAppendedOrder reads the WAL entries in file order and returns their
+// GlobalLineIdx values. This reflects the order lines were flushed to disk.
+func walAppendedOrder(t testing.TB, wal *WriteAheadLog) []int64 {
+	t.Helper()
+	entries, err := wal.readWALEntries()
+	if err != nil {
+		t.Fatalf("readWALEntries: %v", err)
+	}
+	order := make([]int64, 0, len(entries))
+	for _, e := range entries {
+		order = append(order, int64(e.GlobalLineIdx))
+	}
+	return order
+}
+
+// equalInt64 returns true if two slices have the same contents.
+func equalInt64(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestAdaptivePersistence_FlushesInCallOrder(t *testing.T) {
+	ap, wal := newTestAdaptivePersistenceBestEffort(t)
+	ap.NotifyWrite(3)
+	ap.NotifyWrite(7)
+	ap.NotifyWrite(5)
+	if err := ap.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	got := walAppendedOrder(t, wal)
+	want := []int64{3, 7, 5}
+	if !equalInt64(got, want) {
+		t.Errorf("append order = %v, want %v", got, want)
+	}
+}
+
 // TestMain can be used for setup/teardown if needed
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())

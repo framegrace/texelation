@@ -635,6 +635,169 @@ func (ps *PageStore) recordIndexEntry(globalIdx int64) {
 	}
 }
 
+// deleteRangeNoWAL removes all entries whose globalIdx falls in the closed
+// interval [lo, hi] from both the in-memory pageIndex AND the on-disk page
+// files. Does NOT emit a WAL entry — that is the caller's responsibility.
+// Used by WriteAheadLog.DeleteRange (after emitting) and by WAL recover()
+// replay (on-disk tombstone already exists).
+//
+// On-disk rewriting is mandatory: rebuildIndex() on reopen rescans raw page
+// files, so phantom bytes left in those files would resurrect deleted lines.
+// For each affected page:
+//   - Fully inside [lo, hi] → the page file is removed.
+//   - Prefix kept, tail deleted → rewritten in place with fewer lines, same
+//     pageID and FirstGlobalIdx.
+//   - Suffix kept, head deleted → rewritten in place, same pageID, with
+//     FirstGlobalIdx advanced to the first surviving line.
+//   - Split (middle deleted) → prefix stays in the original page, suffix
+//     spills into a newly-allocated page with a new pageID.
+//
+// currentPage (in-flight, not yet on disk) is flushed first so the rewrite
+// logic can treat all overlapping regions uniformly as on-disk pages. A
+// fresh empty currentPage is started afterward so subsequent appends have
+// somewhere to go.
+func (ps *PageStore) deleteRangeNoWAL(lo, hi int64) error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	if lo < 0 || hi < lo {
+		return nil
+	}
+
+	// Fast path: no content at all.
+	if ps.currentPage == nil && len(ps.pageIndex) == 0 {
+		return nil
+	}
+
+	// Flush currentPage so every line lives in a concrete page file. This
+	// keeps the rewrite logic below purely about on-disk pages.
+	if ps.currentPage != nil && ps.currentPage.Header.LineCount > 0 {
+		if err := ps.flushCurrentPage(); err != nil {
+			return fmt.Errorf("flush current page before delete: %w", err)
+		}
+	}
+	ps.currentPage = nil
+
+	// Collect the distinct pageIDs that contain at least one globalIdx in [lo, hi].
+	start := sort.Search(len(ps.pageIndex), func(i int) bool {
+		return ps.pageIndex[i].globalIdx >= lo
+	})
+	end := start
+	for end < len(ps.pageIndex) && ps.pageIndex[end].globalIdx <= hi {
+		end++
+	}
+	if end == start {
+		// Nothing to delete, but we still need a fresh currentPage.
+		return ps.startNewPage()
+	}
+	affectedIDs := make(map[uint64]struct{}, end-start)
+	for i := start; i < end; i++ {
+		affectedIDs[ps.pageIndex[i].pageID] = struct{}{}
+	}
+
+	// Remember nextGlobalIdx before we rebuild the index — globalIdx is
+	// monotonic and must never regress past the high-water mark, even if we
+	// delete the most recently written lines.
+	savedNextGlobalIdx := ps.nextGlobalIdx
+
+	// Rewrite each affected page on disk.
+	for pageID := range affectedIDs {
+		if err := ps.rewritePageForDelete(pageID, lo, hi); err != nil {
+			return fmt.Errorf("rewrite page %d: %w", pageID, err)
+		}
+	}
+
+	// Fully rebuild pageIndex from the new on-disk state. This is simpler
+	// and less error-prone than surgical updates when pages get split into
+	// two files with renumbered offsets.
+	ps.pageIndex = ps.pageIndex[:0]
+	ps.totalLineCount = 0
+	ps.nextGlobalIdx = 0
+	// Note: we do NOT reset nextPageID — rewritePageForDelete already bumped
+	// it for any split pages, and rebuildIndex treats nextPageID as a running
+	// max, so preserving the current value is safe.
+	if err := ps.rebuildIndex(); err != nil {
+		return fmt.Errorf("rebuild index after delete: %w", err)
+	}
+	if savedNextGlobalIdx > ps.nextGlobalIdx {
+		ps.nextGlobalIdx = savedNextGlobalIdx
+	}
+
+	return ps.startNewPage()
+}
+
+// rewritePageForDelete loads the page with pageID, removes any lines whose
+// globalIdx falls inside [lo, hi], and writes the surviving lines back to
+// disk. Caller must hold ps.mu. May allocate a new pageID from ps.nextPageID
+// when a middle-delete splits the page into two.
+func (ps *PageStore) rewritePageForDelete(pageID uint64, lo, hi int64) error {
+	page, err := ps.loadPage(pageID)
+	if err != nil {
+		return err
+	}
+	first := int64(page.Header.FirstGlobalIdx)
+	n := int(page.Header.LineCount)
+	last := first + int64(n) - 1
+	path := ps.pageFilePath(pageID)
+
+	// Fully contained in [lo, hi] → delete the file.
+	if first >= lo && last <= hi {
+		return os.Remove(path)
+	}
+
+	// Local indices of the delete range inside this page.
+	loLocal := max(int(lo-first), 0)
+	hiLocal := min(int(hi-first), n-1)
+	hasPrefix := loLocal > 0
+	hasSuffix := hiLocal < n-1
+
+	switch {
+	case hasPrefix && hasSuffix:
+		// Middle delete: keep prefix in original page, spill suffix to a new one.
+		prefix := buildPageFromRange(page, 0, loLocal, uint64(first), pageID)
+		if err := ps.writePageToDisk(prefix, path); err != nil {
+			return err
+		}
+		suffixPageID := ps.nextPageID
+		ps.nextPageID++
+		suffixFirstGI := uint64(first + int64(hiLocal+1))
+		suffix := buildPageFromRange(page, hiLocal+1, n, suffixFirstGI, suffixPageID)
+		return ps.writePageToDisk(suffix, ps.pageFilePath(suffixPageID))
+	case hasPrefix:
+		// Tail deleted: same pageID, same FirstGlobalIdx, fewer lines.
+		prefix := buildPageFromRange(page, 0, loLocal, uint64(first), pageID)
+		return ps.writePageToDisk(prefix, path)
+	case hasSuffix:
+		// Head deleted: same pageID, FirstGlobalIdx advances past the deletion.
+		survivorFirstGI := uint64(first + int64(hiLocal+1))
+		suffix := buildPageFromRange(page, hiLocal+1, n, survivorFirstGI, pageID)
+		return ps.writePageToDisk(suffix, path)
+	default:
+		// No survivors — handled by the fully-contained branch above.
+		return nil
+	}
+}
+
+// buildPageFromRange returns a new Page containing src.Lines[start:end],
+// anchored at firstGI and numbered pageID. Timestamps and per-line flags are
+// preserved; AddLine re-derives LineFlagFixedWidth from the line itself.
+func buildPageFromRange(src *Page, start, end int, firstGI, pageID uint64) *Page {
+	out := NewPage(pageID, firstGI)
+	for i := start; i < end; i++ {
+		line := src.GetLine(i)
+		if line == nil {
+			continue
+		}
+		ts := src.GetTimestamp(i)
+		flags := src.Index[i].Flags &^ LineFlagFixedWidth
+		if !out.AddLine(line, ts, flags) {
+			// Oversized — AddLine's second call force-adds regardless.
+			out.AddLine(line, ts, flags)
+		}
+	}
+	return out
+}
+
 // findByGlobalIdx does a binary search on pageIndex for the entry matching
 // globalIdx. Returns (entry, true) if found, (zero, false) otherwise.
 // Caller must hold ps.mu (read or write).

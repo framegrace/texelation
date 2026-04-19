@@ -3,6 +3,15 @@
 
 package parser
 
+// ClearNotifier is the minimal interface the persistence layer must implement
+// so that the MainScreen can propagate range clears (tombstones) to disk.
+// AdaptivePersistence satisfies this interface via its NotifyClearRange method.
+// Defined in the parser package so both the MainScreen interface and its
+// implementations (sparse.Terminal) can reference it without import cycles.
+type ClearNotifier interface {
+	NotifyClearRange(lo, hi int64)
+}
+
 // MainScreen is the interface that sparse.Terminal satisfies. Defined in
 // the parser package to avoid an import cycle (parser -> sparse -> parser).
 // sparse.Terminal is the sole production implementation; VTerm drives the
@@ -30,6 +39,18 @@ type MainScreen interface {
 	// the write window consistent with whatever they mutate.
 	SetLine(globalIdx int64, cells []Cell)
 	ClearRange(lo, hi int64)
+
+	// ClearRangePersistent removes lines [lo, hi] from the in-memory store AND
+	// notifies the persistence layer so the range is tombstoned on disk. Use
+	// this for ED / invalidate operations that must be durable. WriteWindow
+	// scroll / newline / scroll-region clears should use ClearRange (in-memory
+	// only).
+	ClearRangePersistent(lo, hi int64)
+
+	// SetClearNotifier wires the persistence-layer callback for range clears.
+	// Must be called after the persistence layer is created (e.g. in
+	// EnableMemoryBufferWithDisk). Passing nil disables notifications.
+	SetClearNotifier(n ClearNotifier)
 
 	// IL/DL and partial scroll-region operations. cursorRow, marginTop, and
 	// marginBottom are all relative to WriteTop (i.e., viewport-row indices).

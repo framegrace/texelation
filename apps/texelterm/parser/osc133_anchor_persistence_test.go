@@ -212,6 +212,118 @@ func TestED2_RewindAfterRestart_UsesRestoredCommandStart(t *testing.T) {
 	}
 }
 
+// TestED2_ClearsOverflowPastViewport guards the "phantom scrollback"
+// bug: an earlier TUI in the session wrote cells past the current
+// viewport (HWM > writeTop+height-1). When a later "homing" ED 2 fires
+// — the canonical TUI-launch signal — those overflow cells linger as
+// stale scrollback and bleed through once the new frame scrolls or the
+// user scrolls down, even across a server restart that persists them.
+// ED 2 must wipe [writeTop+height, HWM] in addition to the viewport.
+func TestED2_ClearsOverflowPastViewport(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const cols, rows = 40, 10
+	v := NewVTerm(cols, rows)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Fill the sparse store with distinctive TUI-style content spanning
+	// well past a single viewport's worth of rows. Plain writes advance
+	// writeTop with the cursor, so HWM stays equal to the viewport
+	// bottom — that's the "no overflow yet" baseline.
+	for i := 0; i < rows*3; i++ {
+		parseString(p, fmt.Sprintf("tui1-row-%02d %s\r\n", i, "yyyyyyy"))
+	}
+	hwmBefore := v.mainScreen.WriteBottomHWM()
+
+	// Force writeTop backward to simulate the post-restore condition:
+	// persisted HWM points past the shell's current viewport, so
+	// whatever the old TUI wrote in [rewind+rows, HWM] is now phantom
+	// scrollback the new shell won't overwrite. RewindWriteTop keeps
+	// HWM monotonic — exactly the asymmetry the ED 2 clear must handle.
+	rewindTo := hwmBefore - int64(rows*2)
+	if rewindTo < 0 {
+		t.Fatalf("setup: hwmBefore %d too small to rewind", hwmBefore)
+	}
+	v.mainScreen.RewindWriteTop(rewindTo)
+	writeTop := v.mainScreen.WriteTop()
+	if writeTop != rewindTo {
+		t.Fatalf("setup: writeTop %d != rewindTo %d", writeTop, rewindTo)
+	}
+	if hwm := v.mainScreen.WriteBottomHWM(); hwm <= writeTop+int64(rows)-1 {
+		t.Fatalf("setup: HWM %d not past viewport bottom %d after rewind",
+			hwm, writeTop+int64(rows)-1)
+	}
+
+	// New TUI homes with ED 2. No OSC 133 anchors are set, so the
+	// anchor-rewind branch is a no-op — the overflow clean-slate pass
+	// is the only thing standing between the old TUI's cells and the
+	// user's scrollback.
+	parseString(p, "\x1b[2J")
+
+	writeTopAfter := v.mainScreen.WriteTop()
+	for gi := writeTopAfter + int64(rows); gi <= hwmBefore; gi++ {
+		cells := v.mainScreen.ReadLine(gi)
+		if cells != nil && lineHasSparseContent(cells) {
+			t.Errorf("overflow line %d still has content after ED 2: %q",
+				gi, cellsPreview(cells))
+		}
+	}
+}
+
+// TestED2_PreservesScrollbackAboveViewport is the counterpart guarantee:
+// only overflow rows *past* the viewport get wiped by ED 2's new
+// clean-slate pass. Legitimate scrollback above writeTop (prior shell
+// output the user wants to see when scrolling up) must stay intact.
+func TestED2_PreservesScrollbackAboveViewport(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const cols, rows = 40, 10
+	v := NewVTerm(cols, rows)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Plain scrollback that should survive ED 2. Enough lines to push
+	// writeTop well past 0.
+	const scrollbackLines = 25
+	for i := 0; i < scrollbackLines; i++ {
+		parseString(p, fmt.Sprintf("scroll-%02d\r\n", i))
+	}
+	writeTopBefore := v.mainScreen.WriteTop()
+	if writeTopBefore == 0 {
+		t.Fatalf("setup: writeTop did not advance; test needs scrollback")
+	}
+
+	parseString(p, "\x1b[2J")
+
+	// Every row above the new writeTop that had content before must
+	// still have content.
+	writeTopAfter := v.mainScreen.WriteTop()
+	for gi := int64(0); gi < writeTopAfter; gi++ {
+		cells := v.mainScreen.ReadLine(gi)
+		if cells == nil || !lineHasSparseContent(cells) {
+			t.Errorf("scrollback line %d wrongly cleared by ED 2", gi)
+		}
+	}
+}
+
+// cellsPreview turns a cell slice into a short printable string for
+// failure messages. Intentionally tiny — we just need to see which TUI
+// content bled through when a test fails.
+func cellsPreview(cells []Cell) string {
+	const max = 20
+	out := make([]rune, 0, max)
+	for i, c := range cells {
+		if i >= max {
+			break
+		}
+		if c.Rune == 0 {
+			out = append(out, ' ')
+		} else {
+			out = append(out, c.Rune)
+		}
+	}
+	return string(out)
+}
+
 // TestEnableMemoryBuffer_DiscardsStaleAnchors verifies that the restore path
 // discards InputStart / CommandStart anchors pointing past the last
 // persisted line, matching the existing PromptStartLine behavior. This

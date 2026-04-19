@@ -5,6 +5,15 @@ package sparse
 
 import "github.com/framegrace/texelation/apps/texelterm/parser"
 
+// ClearNotifier is an alias for parser.ClearNotifier, re-exported from the
+// sparse package so callers that work exclusively with sparse types do not need
+// to import the parser package just to pass a notifier. Both types are
+// structurally identical; Go's structural typing means any value that satisfies
+// one also satisfies the other.
+//
+// Deprecated: prefer parser.ClearNotifier in new code.
+type ClearNotifier = parser.ClearNotifier
+
 // Terminal is a thin composition of Store, WriteWindow, and ViewWindow. It
 // exposes the API that VTerm's main-screen path calls into.
 //
@@ -12,9 +21,10 @@ import "github.com/framegrace/texelation/apps/texelterm/parser"
 // that no method has to lazy-init anything. This keeps the locking strategy
 // simple — reads never upgrade to writes.
 type Terminal struct {
-	store *Store
-	write *WriteWindow
-	view  *ViewWindow
+	store    *Store
+	write    *WriteWindow
+	view     *ViewWindow
+	notifier parser.ClearNotifier
 }
 
 // NewTerminal creates a Terminal with the given dimensions. ViewWindow starts
@@ -186,6 +196,25 @@ func (t *Terminal) SetLine(globalIdx int64, cells []parser.Cell) {
 // write window), and scroll-region rejoin that collapses logical lines.
 func (t *Terminal) ClearRange(lo, hi int64) {
 	t.store.ClearRange(lo, hi)
+}
+
+// SetClearNotifier wires a persistence-layer callback for range clears.
+// Passing nil disables notifications. Thread-safety: callers must not race
+// with ClearRangePersistent; in practice this is set once during VTerm
+// EnableMemoryBuffer.
+func (t *Terminal) SetClearNotifier(n parser.ClearNotifier) {
+	t.notifier = n
+}
+
+// ClearRangePersistent removes lines [lo, hi] from the in-memory store AND
+// notifies the persistence layer so the range is tombstoned on disk. Used by
+// VTerm ED 0/1/2 and single-line invalidate. WriteWindow scroll / newline /
+// scroll-region clears keep calling ClearRange (in-memory only).
+func (t *Terminal) ClearRangePersistent(lo, hi int64) {
+	t.store.ClearRange(lo, hi)
+	if t.notifier != nil {
+		t.notifier.NotifyClearRange(lo, hi)
+	}
 }
 
 // ReadLine returns a copy of the cells at globalIdx. Returns nil for gaps.

@@ -7,12 +7,12 @@
 // WAL Format:
 //   Header (32 bytes):
 //     Magic: "TXWAL001" (8 bytes)
-//     Version: uint32 (4 bytes) - value 1
+//     Version: uint32 (4 bytes) - value 2
 //     TerminalID: [16]byte (UUID bytes)
 //     LastCheckpoint: uint64 (8 bytes) - global line index
 //
 //   Entry (variable, repeated):
-//     EntryType: uint8 (1 byte) - LINE_WRITE=0x01, LINE_MODIFY=0x02, CHECKPOINT=0x03
+//     EntryType: uint8 (1 byte) - LINE_WRITE=0x01, LINE_MODIFY=0x02, CHECKPOINT=0x03, METADATA=0x04, MAIN_SCREEN_STATE=0x05, LINE_DELETE=0x06
 //     GlobalLineIdx: uint64 (8 bytes)
 //     Timestamp: int64 (8 bytes) - UnixNano
 //     DataLen: uint32 (4 bytes)
@@ -39,18 +39,19 @@ import (
 // WAL format constants
 const (
 	WALMagic      = "TXWAL001"
-	WALVersion    = uint32(1)
+	WALVersion    = uint32(2)
 	WALHeaderSize = 32
 	WALEntryBase  = 1 + 8 + 8 + 4 + 4 // type + lineIdx + timestamp + dataLen + crc32 (no data)
 )
 
 // WAL entry types
 const (
-	EntryTypeLineWrite        uint8 = 0x01
-	EntryTypeLineModify       uint8 = 0x02
-	EntryTypeCheckpoint       uint8 = 0x03
-	EntryTypeMetadata         uint8 = 0x04 // Legacy ViewportState (scroll position, cursor)
-	EntryTypeMainScreenState  uint8 = 0x05 // Sparse MainScreenState (writeTop, cursor globalIdx)
+	EntryTypeLineWrite       uint8 = 0x01
+	EntryTypeLineModify      uint8 = 0x02
+	EntryTypeCheckpoint      uint8 = 0x03
+	EntryTypeMetadata        uint8 = 0x04 // Legacy ViewportState (scroll position, cursor)
+	EntryTypeMainScreenState uint8 = 0x05 // Sparse MainScreenState (writeTop, cursor globalIdx)
+	EntryTypeLineDelete      uint8 = 0x06 // Range tombstone: [lo, hi] inclusive
 )
 
 // WALConfig holds configuration for the write-ahead log.
@@ -97,9 +98,10 @@ type WALEntry struct {
 	Type            uint8
 	GlobalLineIdx   uint64
 	Timestamp       time.Time
-	Line            *LogicalLine     // nil for CHECKPOINT and METADATA entries
+	Line            *LogicalLine     // nil for CHECKPOINT / METADATA / DELETE entries
 	Metadata        *ViewportState   // nil for non-METADATA entries
 	MainScreenState *MainScreenState // nil for non-MAIN_SCREEN_STATE entries
+	DeleteHi        int64            // valid only for EntryTypeLineDelete (inclusive upper bound)
 }
 
 // WriteAheadLog provides crash recovery for terminal history.
@@ -427,6 +429,65 @@ func (w *WriteAheadLog) Append(lineIdx int64, line *LogicalLine, timestamp time.
 	}
 
 	return nil
+}
+
+// AppendDelete writes a range-delete tombstone [lo, hi] to the WAL. Emits one
+// entry, not one per line. Caller (PageStore.DeleteRange) applies the delete
+// to the in-memory page index after this returns successfully.
+func (w *WriteAheadLog) AppendDelete(lo, hi int64, timestamp time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.stopped {
+		return fmt.Errorf("WAL is closed")
+	}
+	if lo < 0 || hi < lo {
+		return fmt.Errorf("invalid delete range [%d, %d]", lo, hi)
+	}
+
+	entryData, err := w.encodeDeleteEntry(uint64(lo), uint64(hi), timestamp)
+	if err != nil {
+		return fmt.Errorf("failed to encode delete entry: %w", err)
+	}
+	if _, err := w.walFile.Write(entryData); err != nil {
+		return fmt.Errorf("failed to write delete entry: %w", err)
+	}
+	w.walSize += int64(len(entryData))
+	w.entriesWritten++
+	return nil
+}
+
+// DeleteRange emits a range-delete tombstone to the WAL and applies the delete
+// to the owned PageStore. One WAL entry per range, not one per line.
+//
+// Locking note: AppendDelete acquires and releases w.mu; deleteRangeNoWAL
+// acquires and releases ps.mu separately. The two locks are never held
+// simultaneously. This matches the established pattern used by Append
+// (w.mu) + AppendLineWithGlobalIdx (ps.mu): the WAL journal and the
+// PageStore state advance sequentially, not atomically. A crash between the
+// two steps is safe because recover() replays the WAL tombstone and
+// re-applies it to PageStore on the next open.
+func (w *WriteAheadLog) DeleteRange(lo, hi int64) error {
+	if err := w.AppendDelete(lo, hi, w.nowFunc()); err != nil {
+		return err
+	}
+	return w.pageStore.deleteRangeNoWAL(lo, hi)
+}
+
+// encodeDeleteEntry builds a 33-byte WAL entry for a range tombstone:
+// type(1) + lo(8, GlobalLineIdx) + timestamp(8) + dataLen(4, =8) + hi(8) + crc32(4).
+func (w *WriteAheadLog) encodeDeleteEntry(lo, hi uint64, timestamp time.Time) ([]byte, error) {
+	const dataLen = 8
+	totalSize := WALEntryBase + dataLen
+	buf := make([]byte, totalSize)
+	buf[0] = EntryTypeLineDelete
+	binary.LittleEndian.PutUint64(buf[1:9], lo)
+	binary.LittleEndian.PutUint64(buf[9:17], uint64(timestamp.UnixNano()))
+	binary.LittleEndian.PutUint32(buf[17:21], dataLen)
+	binary.LittleEndian.PutUint64(buf[21:29], hi)
+	crc := crc32.ChecksumIEEE(buf[:totalSize-4])
+	binary.LittleEndian.PutUint32(buf[totalSize-4:], crc)
+	return buf, nil
 }
 
 // WriteMetadata writes viewport state (scroll position, cursor) to the WAL.
@@ -875,15 +936,21 @@ func (w *WriteAheadLog) recover() error {
 	// AppendLineWithGlobalIdx handles append, update-in-place, and out-of-order
 	// insert in one operation, so the LATEST WAL entry for each globalIdx wins.
 	for _, entry := range entries {
-		if entry.Line == nil {
-			continue
-		}
-		if entry.Type != EntryTypeLineWrite && entry.Type != EntryTypeLineModify {
-			continue
-		}
-		lineIdx := int64(entry.GlobalLineIdx)
-		if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
-			return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
+		switch entry.Type {
+		case EntryTypeLineWrite, EntryTypeLineModify:
+			if entry.Line == nil {
+				continue
+			}
+			lineIdx := int64(entry.GlobalLineIdx)
+			if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
+				return fmt.Errorf("failed to replay line %d: %w", entry.GlobalLineIdx, err)
+			}
+		case EntryTypeLineDelete:
+			lo := int64(entry.GlobalLineIdx)
+			hi := entry.DeleteHi
+			if err := w.pageStore.deleteRangeNoWAL(lo, hi); err != nil {
+				return fmt.Errorf("failed to replay delete [%d, %d]: %w", lo, hi, err)
+			}
 		}
 	}
 
@@ -984,6 +1051,17 @@ func (w *WriteAheadLog) readEntry(r *bufio.Reader) (WALEntry, int, error) {
 		}
 	case EntryTypeCheckpoint:
 		// No data to decode
+	case EntryTypeLineDelete:
+		if dataLen != 8 {
+			return WALEntry{}, totalSize, fmt.Errorf("delete entry dataLen = %d, want 8", dataLen)
+		}
+		hi := int64(binary.LittleEndian.Uint64(lineData))
+		return WALEntry{
+			Type:          entryType,
+			GlobalLineIdx: lineIdx,
+			Timestamp:     timestamp,
+			DeleteHi:      hi,
+		}, totalSize, nil
 	}
 
 	return WALEntry{
@@ -1021,19 +1099,46 @@ func (w *WriteAheadLog) checkpointLocked() error {
 		return fmt.Errorf("failed to read WAL entries: %w", err)
 	}
 
-	// Replay entries to PageStore in WAL order using the unified write
-	// path. AppendLineWithGlobalIdx now supports out-of-order inserts and
-	// updates, so the previous "Pass 1: appends, Pass 2: modifies" split
-	// is unnecessary. Replaying in WAL order means the LATEST entry for
-	// each globalIdx wins, which is the correct semantic.
-	for _, entry := range entries {
-		if entry.Line == nil {
+	// Build a map: globalIdx → WAL position of the most recent delete that
+	// covers it. A delete entry at position P marks all globalIdxs in [lo, hi]
+	// as deleted-at-P. A write entry at position Q > P for the same globalIdx
+	// "un-deletes" it (the write wins and will be replayed). Writes at Q ≤ P
+	// are shadowed by the tombstone and must be skipped.
+	//
+	// deleteRangeNoWAL only removes from the in-memory pageIndex. It does NOT
+	// remove data from currentPage, so when all replay-writes land in a single
+	// in-flight currentPage (common for small sessions), partial-overlap deletes
+	// leave the deleted data in currentPage, and Flush() bakes it onto disk.
+	// rebuildIndex() then resurrects those lines on the next reopen.
+	// Filtering writes at the source is simpler and more robust.
+	deleteEpoch := make(map[int64]int) // globalIdx → entry-slice index of last delete that covers it
+	for i, entry := range entries {
+		if entry.Type != EntryTypeLineDelete {
 			continue
 		}
+		lo := int64(entry.GlobalLineIdx)
+		hi := entry.DeleteHi
+		for gi := lo; gi <= hi; gi++ {
+			deleteEpoch[gi] = i
+		}
+	}
+
+	// Replay entries to PageStore in WAL order. For each write, check whether a
+	// later delete tombstone covers the same globalIdx — if so, skip it. If the
+	// write was emitted AFTER the last delete that covers its idx (entry index >
+	// deleteEpoch[idx]), the write is alive and must be replayed.
+	for i, entry := range entries {
 		if entry.Type != EntryTypeLineWrite && entry.Type != EntryTypeLineModify {
 			continue
 		}
+		if entry.Line == nil {
+			continue
+		}
 		lineIdx := int64(entry.GlobalLineIdx)
+		// Skip if a later (or same-position) delete tombstone covers this idx.
+		if epoch, deleted := deleteEpoch[lineIdx]; deleted && i <= epoch {
+			continue
+		}
 		if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
 			return fmt.Errorf("failed to write line %d to PageStore: %w", entry.GlobalLineIdx, err)
 		}

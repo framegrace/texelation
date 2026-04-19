@@ -124,6 +124,7 @@ func (v *VTerm) EnableMemoryBufferWithDisk(diskPath string, opts MemoryBufferOpt
 		return nil
 	}
 	v.mainScreenPersistence = persistence
+	v.mainScreen.SetClearNotifier(persistence)
 
 	log.Printf("[MAIN_SCREEN] Persistence enabled, history lines=%d", pageStore.LineCount())
 	return nil
@@ -348,11 +349,11 @@ func (v *VTerm) mainScreenEraseScreen(mode int) {
 	case 0: // cursor to end of screen
 		v.mainScreen.EraseToEndOfLine(v.cursorX)
 		if v.cursorY < v.height-1 {
-			v.mainScreen.ClearRange(writeTop+int64(v.cursorY+1), writeTop+int64(v.height-1))
+			v.mainScreen.ClearRangePersistent(writeTop+int64(v.cursorY+1), writeTop+int64(v.height-1))
 		}
 	case 1: // start of screen to cursor
 		if v.cursorY > 0 {
-			v.mainScreen.ClearRange(writeTop, writeTop+int64(v.cursorY-1))
+			v.mainScreen.ClearRangePersistent(writeTop, writeTop+int64(v.cursorY-1))
 		}
 		v.mainScreen.EraseFromStartOfLine(v.cursorX)
 	case 2: // entire screen
@@ -391,14 +392,29 @@ func (v *VTerm) mainScreenEraseScreen(mode int) {
 					// Clear [anchor, HWM] so leftover rows from the previous
 					// repaint's overflow don't linger in scrollback once the
 					// user scrolls up through the just-rewound area.
-					v.mainScreen.ClearRange(anchor, v.mainScreen.WriteBottomHWM())
+					v.mainScreen.ClearRangePersistent(anchor, v.mainScreen.WriteBottomHWM())
 				}
+			}
+			// ED 2 from a non-alt-screen TUI is the canonical "homing"
+			// signal: the caller is about to redraw a full frame from
+			// scratch. Blank any overflow rows past the current viewport
+			// up to HWM — they hold cells drawn by an earlier TUI or
+			// command in this session, and if they survive they'll bleed
+			// through once the new frame scrolls or the user scrolls down.
+			// EraseDisplay below only covers [writeTop, writeTop+height-1];
+			// this line extends the clean-slate guarantee past the viewport
+			// so whatever the new TUI doesn't repaint ends up as empty
+			// scrollback rather than a stale frame.
+			wt := v.mainScreen.WriteTop()
+			vpBot := wt + int64(v.height) - 1
+			if hwm := v.mainScreen.WriteBottomHWM(); hwm > vpBot {
+				v.mainScreen.ClearRangePersistent(vpBot+1, hwm)
 			}
 		}
 		v.mainScreen.EraseDisplay()
 	case 3: // clear scrollback
 		if writeTop > 0 {
-			v.mainScreen.ClearRange(0, writeTop-1)
+			v.mainScreen.ClearRangePersistent(0, writeTop-1)
 		}
 	}
 }
@@ -489,7 +505,7 @@ func (v *VTerm) mainScreenEraseHistoryLine(globalIdx int) {
 	if v.mainScreen == nil {
 		return
 	}
-	v.mainScreen.ClearRange(int64(globalIdx), int64(globalIdx))
+	v.mainScreen.ClearRangePersistent(int64(globalIdx), int64(globalIdx))
 }
 
 // mainScreenGetTopHistoryLine returns the globalIdx at the top of the write window.
