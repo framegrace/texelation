@@ -1099,19 +1099,46 @@ func (w *WriteAheadLog) checkpointLocked() error {
 		return fmt.Errorf("failed to read WAL entries: %w", err)
 	}
 
-	// Replay entries to PageStore in WAL order using the unified write
-	// path. AppendLineWithGlobalIdx now supports out-of-order inserts and
-	// updates, so the previous "Pass 1: appends, Pass 2: modifies" split
-	// is unnecessary. Replaying in WAL order means the LATEST entry for
-	// each globalIdx wins, which is the correct semantic.
-	for _, entry := range entries {
-		if entry.Line == nil {
+	// Build a map: globalIdx → WAL position of the most recent delete that
+	// covers it. A delete entry at position P marks all globalIdxs in [lo, hi]
+	// as deleted-at-P. A write entry at position Q > P for the same globalIdx
+	// "un-deletes" it (the write wins and will be replayed). Writes at Q ≤ P
+	// are shadowed by the tombstone and must be skipped.
+	//
+	// deleteRangeNoWAL only removes from the in-memory pageIndex. It does NOT
+	// remove data from currentPage, so when all replay-writes land in a single
+	// in-flight currentPage (common for small sessions), partial-overlap deletes
+	// leave the deleted data in currentPage, and Flush() bakes it onto disk.
+	// rebuildIndex() then resurrects those lines on the next reopen.
+	// Filtering writes at the source is simpler and more robust.
+	deleteEpoch := make(map[int64]int) // globalIdx → entry-slice index of last delete that covers it
+	for i, entry := range entries {
+		if entry.Type != EntryTypeLineDelete {
 			continue
 		}
+		lo := int64(entry.GlobalLineIdx)
+		hi := entry.DeleteHi
+		for gi := lo; gi <= hi; gi++ {
+			deleteEpoch[gi] = i
+		}
+	}
+
+	// Replay entries to PageStore in WAL order. For each write, check whether a
+	// later delete tombstone covers the same globalIdx — if so, skip it. If the
+	// write was emitted AFTER the last delete that covers its idx (entry index >
+	// deleteEpoch[idx]), the write is alive and must be replayed.
+	for i, entry := range entries {
 		if entry.Type != EntryTypeLineWrite && entry.Type != EntryTypeLineModify {
 			continue
 		}
+		if entry.Line == nil {
+			continue
+		}
 		lineIdx := int64(entry.GlobalLineIdx)
+		// Skip if a later (or same-position) delete tombstone covers this idx.
+		if epoch, deleted := deleteEpoch[lineIdx]; deleted && i <= epoch {
+			continue
+		}
 		if err := w.pageStore.AppendLineWithGlobalIdx(lineIdx, entry.Line, entry.Timestamp); err != nil {
 			return fmt.Errorf("failed to write line %d to PageStore: %w", entry.GlobalLineIdx, err)
 		}
