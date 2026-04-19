@@ -112,8 +112,15 @@ func TestWAL_CorruptDeleteEntryTruncates(t *testing.T) {
 }
 
 func TestWAL_RecoverAppliesDelete(t *testing.T) {
-	wal, walPath, baseDir := newDeleteTestWAL(t)
-	// Seed 5 lines and append a tombstone for [1, 3] BEFORE any checkpoint.
+	_, _, baseDir := newDeleteTestWAL(t)
+	// Open a fresh WAL, seed 5 lines, and append a tombstone for [1, 3]
+	// BEFORE any checkpoint.
+	cfg := DefaultWALConfig(baseDir, "test-term")
+	cfg.CheckpointInterval = 0
+	wal, err := OpenWriteAheadLog(cfg)
+	if err != nil {
+		t.Fatalf("OpenWriteAheadLog: %v", err)
+	}
 	ll := func(text string) *LogicalLine {
 		cells := make([]Cell, len(text))
 		for i, r := range text {
@@ -129,18 +136,18 @@ func TestWAL_RecoverAppliesDelete(t *testing.T) {
 	if err := wal.AppendDelete(1, 3, time.Now()); err != nil {
 		t.Fatalf("AppendDelete: %v", err)
 	}
-	// Flush bytes to disk but DO NOT Close (Close checkpoints which rewrites WAL).
+	// SyncWAL flushes all entries to disk. Skipping Close() simulates a crash:
+	// the WAL entries survive on disk but no checkpoint/truncation happens.
 	if err := wal.SyncWAL(); err != nil {
 		t.Fatalf("SyncWAL: %v", err)
 	}
-	// Abandon the WAL without closing — simulate crash.
-	wal.walFile.Close()
-	_ = walPath
+	// Do not call wal.Close() — opening a second WAL on the same path exercises
+	// the recover() path, which must replay both line writes and the tombstone.
 
-	// Reopen; recover should replay writes + delete.
-	cfg := DefaultWALConfig(baseDir, "test-term")
-	cfg.CheckpointInterval = 0
-	wal2, err := OpenWriteAheadLog(cfg)
+	// Reopen on the same path; recover should replay writes + delete.
+	cfg2 := DefaultWALConfig(baseDir, "test-term")
+	cfg2.CheckpointInterval = 0
+	wal2, err := OpenWriteAheadLog(cfg2)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
