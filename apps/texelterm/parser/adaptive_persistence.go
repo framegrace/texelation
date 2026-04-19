@@ -501,6 +501,60 @@ func (ap *AdaptivePersistence) handleWriteLockedWithMeta(lineIdx int64, ts time.
 	}
 }
 
+// NotifyClearRange records a tombstone for the closed range [lo, hi]. Any
+// queued writes for line indices in that range are marked dropped and removed
+// from pendingSet so they are not flushed to disk. An opDelete op is then
+// appended to the FIFO ops queue.
+//
+// Flush semantics match the current mode:
+//   - WriteThrough: flush immediately (same as NotifyWrite in WriteThrough).
+//   - Debounced:    arm the debounce timer; ordering preserved by FIFO queue.
+//   - BestEffort:   queue only; flush on idle or explicit Flush / Close.
+//
+// A lo > hi or negative value is a no-op.
+func (ap *AdaptivePersistence) NotifyClearRange(lo, hi int64) {
+	if lo < 0 || hi < lo {
+		return
+	}
+
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+
+	if ap.stopped {
+		return
+	}
+
+	// Sweep pendingSet: drop any queued write op whose lineIdx falls in [lo, hi].
+	for gi, opIdx := range ap.pendingSet {
+		if gi >= lo && gi <= hi {
+			ap.pendingOps[opIdx].dropped = true
+			delete(ap.pendingSet, gi)
+		}
+	}
+
+	// Append the delete op in FIFO order.
+	ap.pendingOps = append(ap.pendingOps, pendingOp{
+		kind: opDelete,
+		lo:   lo,
+		hi:   hi,
+		ts:   ap.nowFunc(),
+	})
+
+	// Flush or schedule based on current mode.
+	switch ap.currentMode {
+	case PersistWriteThrough:
+		ap.flushPendingLocked()
+
+	case PersistDebounced:
+		// Use minimum delay for a single delete — responsiveness matters more
+		// than batching here since deletes are rare ops.
+		ap.scheduleFlushLocked(ap.config.DebounceMinDelay)
+
+	case PersistBestEffort:
+		// Leave in pending; idle monitor or explicit Flush will drain it.
+	}
+}
+
 // Flush forces immediate flush of all pending writes.
 func (ap *AdaptivePersistence) Flush() error {
 	ap.mu.Lock()
@@ -634,34 +688,45 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 
 	// --- Collect phase (locked): clone lines and snapshot state ---
 	// Walk the FIFO ops list in enqueue order, skipping dropped entries.
-	type flushEntry struct {
-		lineIdx int64
+	// Both write and delete ops are collected in order to preserve FIFO
+	// semantics between writes and deletes.
+	type ioOp struct {
+		kind    opKind
+		lineIdx int64 // for writes
 		line    *LogicalLine
 		ts      time.Time
 		isCmd   bool
+		lo, hi  int64 // for deletes
 	}
-	entries := make([]flushEntry, 0, len(ap.pendingOps))
+	ioOps := make([]ioOp, 0, len(ap.pendingOps))
 
 	for _, op := range ap.pendingOps {
 		if op.dropped {
 			continue
 		}
-		if op.kind != opWrite {
-			// opDelete handled by Task 6; skip for now.
-			continue
-		}
-		line := ap.memBuf.GetLine(op.lo)
-		if line == nil {
+		switch op.kind {
+		case opWrite:
+			line := ap.memBuf.GetLine(op.lo)
+			if line == nil {
+				ap.memBuf.ClearDirty(op.lo)
+				continue
+			}
+			ioOps = append(ioOps, ioOp{
+				kind:    opWrite,
+				lineIdx: op.lo,
+				line:    line.Clone(),
+				ts:      op.ts,
+				isCmd:   op.isCmd,
+			})
 			ap.memBuf.ClearDirty(op.lo)
-			continue
+		case opDelete:
+			ioOps = append(ioOps, ioOp{
+				kind: opDelete,
+				lo:   op.lo,
+				hi:   op.hi,
+				ts:   op.ts,
+			})
 		}
-		entries = append(entries, flushEntry{
-			lineIdx: op.lo,
-			line:    line.Clone(),
-			ts:      op.ts,
-			isCmd:   op.isCmd,
-		})
-		ap.memBuf.ClearDirty(op.lo)
 	}
 
 	pendingMeta := ap.pendingMetadata
@@ -681,23 +746,38 @@ func (ap *AdaptivePersistence) flushPendingLocked() error {
 	}()
 
 	var firstErr error
-	for _, e := range entries {
-		var err error
-		if ap.wal != nil {
-			err = ap.wal.Append(e.lineIdx, e.line, ap.nowFunc())
-		} else {
-			err = ap.diskWriteOrUpdate(e.lineIdx, e.line, ap.nowFunc())
-		}
-		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("failed to write line %d: %w", e.lineIdx, err)
+	for _, op := range ioOps {
+		switch op.kind {
+		case opWrite:
+			var err error
+			if ap.wal != nil {
+				err = ap.wal.Append(op.lineIdx, op.line, ap.nowFunc())
+			} else {
+				err = ap.diskWriteOrUpdate(op.lineIdx, op.line, ap.nowFunc())
 			}
-			ap.metrics.FailedWrites++
-			continue
-		}
-		ap.metrics.LinesWritten++
-		if ap.OnLineIndexed != nil {
-			ap.OnLineIndexed(e.lineIdx, e.line, e.ts, e.isCmd)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("failed to write line %d: %w", op.lineIdx, err)
+				}
+				ap.metrics.FailedWrites++
+				continue
+			}
+			ap.metrics.LinesWritten++
+			if ap.OnLineIndexed != nil {
+				ap.OnLineIndexed(op.lineIdx, op.line, op.ts, op.isCmd)
+			}
+		case opDelete:
+			if ap.wal != nil {
+				if err := ap.wal.DeleteRange(op.lo, op.hi); err != nil {
+					if firstErr == nil {
+						firstErr = fmt.Errorf("failed to delete range [%d, %d]: %w", op.lo, op.hi, err)
+					}
+				}
+			}
+			// No disk-only path for deletes: the WAL is always required for
+			// range tombstones. If ap.wal == nil (legacy no-WAL mode), the
+			// delete is silently ignored — the no-WAL path does not support
+			// crash-safe tombstones.
 		}
 	}
 
