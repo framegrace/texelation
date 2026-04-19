@@ -641,10 +641,14 @@ func (ps *PageStore) recordIndexEntry(globalIdx int64) {
 // (after emitting) and by WAL recover() replay (on-disk tombstone already
 // exists). Page-file bytes are not reclaimed; correctness depends on pageIndex
 // absence.
+//
+// Partial-overlap invariant: currentPage entries are in-flight (not yet flushed
+// to disk) and are therefore NEVER present in pageIndex. The two structures are
+// disjoint: pageIndex holds only committed (flushed) lines; currentPage holds
+// only uncommitted lines buffered for the next flush. Deleting a range that
+// straddles the flush boundary requires removing from pageIndex AND discarding
+// currentPage when its full range falls inside [lo, hi].
 func (ps *PageStore) deleteRangeNoWAL(lo, hi int64) error {
-	if lo < 0 || hi < lo {
-		return fmt.Errorf("invalid delete range [%d, %d]", lo, hi)
-	}
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
@@ -656,10 +660,11 @@ func (ps *PageStore) deleteRangeNoWAL(lo, hi int64) error {
 		end++
 	}
 	if end > start {
+		removed := int64(end - start)
 		ps.pageIndex = append(ps.pageIndex[:start], ps.pageIndex[end:]...)
-		ps.totalLineCount -= int64(end - start)
+		ps.totalLineCount -= removed
 		if ps.totalLineCount < 0 {
-			ps.totalLineCount = 0
+			panic("page_store: totalLineCount underflow")
 		}
 	}
 	// Drop the current unflushed page if its range falls entirely in [lo, hi].
