@@ -2277,13 +2277,19 @@ func (a *TexelTerm) populateFromHistoryLocked(savedState terminalState) {
 
 	// With MemoryBuffer, history is automatically loaded from disk if available.
 	// The scroll offset is restored in applyRestoredStateLocked.
-	if a.renderDebugLog != nil {
-		if savedState.LastPromptLine >= 0 {
-			a.renderDebugLog("[RECOVERY] Saved prompt line=%d, height=%d",
+	if savedState.LastPromptLine >= 0 {
+		// Rewind the write window to the stored prompt so the freshly-spawned
+		// shell's first PS1 prompt lands at col 0 of the same global line and
+		// overwrites the previous prompt instead of rendering below it. Works
+		// for both single- and multi-line prompts: bash will redraw every row
+		// of its prompt starting at PromptStart.
+		a.vterm.RepositionForPromptOverwrite(savedState.LastPromptLine)
+		if a.renderDebugLog != nil {
+			a.renderDebugLog("[RECOVERY] Repositioned to prompt line=%d, height=%d",
 				savedState.LastPromptLine, savedState.LastPromptHeight)
-		} else {
-			a.renderDebugLog("[RECOVERY] No saved prompt line")
 		}
+	} else if a.renderDebugLog != nil {
+		a.renderDebugLog("[RECOVERY] No saved prompt line")
 	}
 }
 

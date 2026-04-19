@@ -1060,14 +1060,50 @@ func (v *VTerm) GlobalEnd() int64 {
 	return v.mainScreen.ContentEnd()
 }
 
-// LastPromptLine returns the line index of the last shell prompt.
+// LastPromptLine returns the global line index of the last shell prompt,
+// tracked via OSC 133;A. Returns -1 if unknown.
 func (v *VTerm) LastPromptLine() int64 {
-	return -1
+	return v.PromptStartGlobalLine
 }
 
-// LastPromptHeight returns the height of the last prompt in lines.
+// LastPromptHeight returns the number of rows spanned by the last prompt,
+// derived from OSC 133 anchors: InputStart - PromptStart + 1. Defaults to 1
+// when anchors are unknown or inconsistent.
 func (v *VTerm) LastPromptHeight() int {
+	if v.PromptStartGlobalLine >= 0 && v.InputStartGlobalLine >= v.PromptStartGlobalLine {
+		return int(v.InputStartGlobalLine-v.PromptStartGlobalLine) + 1
+	}
 	return 1
+}
+
+// RepositionForPromptOverwrite positions the cursor at `promptLine` column 0
+// so a freshly-spawned shell's first prompt overwrites the stored prompt 1:1
+// instead of rendering on the row where the previous session left off. When
+// `promptLine` is at or past the current writeTop and within the viewport,
+// the cursor is moved in place. When it's above writeTop (viewport-capped
+// history), writeTop is rewound so the prompt line lands at row 0. No-op
+// if the main screen is absent, `promptLine` is unknown (<0), or the target
+// lies below the bottom of the current viewport.
+func (v *VTerm) RepositionForPromptOverwrite(promptLine int64) {
+	if v.mainScreen == nil || promptLine < 0 {
+		return
+	}
+	curTop := v.mainScreen.WriteTop()
+	var targetRow int
+	switch {
+	case promptLine < curTop:
+		v.mainScreen.RewindWriteTop(promptLine)
+		targetRow = 0
+	case promptLine >= curTop+int64(v.height):
+		// Prompt sits past the viewport bottom — nothing sensible to do.
+		return
+	default:
+		targetRow = int(promptLine - curTop)
+	}
+	v.cursorX = 0
+	v.cursorY = targetRow
+	v.wrapNext = false
+	v.MarkAllDirty()
 }
 
 // sparseLineStoreAdapter implements LineStore using MainScreen.
