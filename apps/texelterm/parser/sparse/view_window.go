@@ -238,7 +238,29 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 			if gi <= writeTop {
 				break
 			}
-			gi--
+			// Walk to the start of the previous chain (mirrors the non-empty
+			// branch below). Without this, gi-- could land in the middle of a
+			// wrapped chain and walkChain would count only its tail row,
+			// leading the next iteration to count the same chain again.
+			prevGI := gi - 1
+			prevCells := s.GetLine(prevGI)
+			if len(prevCells) == 0 {
+				gi = prevGI
+				continue
+			}
+			prevChainStart := prevGI
+			for steps := 0; steps < maxSteps && prevChainStart > writeTop; steps++ {
+				pp := prevChainStart - 1
+				ppCells := s.GetLine(pp)
+				if len(ppCells) == 0 {
+					break
+				}
+				if !ppCells[len(ppCells)-1].Wrapped {
+					break
+				}
+				prevChainStart = pp
+			}
+			gi = prevChainStart
 			continue
 		}
 		end, nowrap := walkChain(s, gi, maxSteps)
@@ -284,11 +306,75 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 		gi = prevChainStart
 	}
 
-	// Ran out of content (or hit writeTop): anchor at writeTop so Render
-	// starts from the live window's top. For a fresh session (writeTop=0)
+	// First-stage walk hit writeTop without filling the viewport. If the
+	// cursor sits at or below the natural bottom of a height-sized window
+	// rooted at writeTop, pull scrollback (rows < writeTop) to refill the
+	// top so the cursor stays pinned at the viewport bottom (issue #197).
+	//
+	// Guard: if the cursor is well above that bottom, the live region is
+	// not full — we're in a fresh-resize state where the application (a
+	// TUI repainting via SIGWINCH, or a script that reset the cursor) will
+	// fill the live region itself. Pulling scrollback here would duplicate
+	// content the application is about to overwrite (#48).
+	if cursorGI < writeTop+int64(height)-1 {
+		v.mu.Lock()
+		v.viewAnchor = writeTop
+		v.viewAnchorOffset = 0
+		v.mu.Unlock()
+		return
+	}
+
+	// Skip any chain whose tail crosses writeTop — its live-side portion
+	// was already counted in the first stage, and re-counting the
+	// scrollback portion would duplicate cells.
+	gi = writeTop - 1
+	for accumulated < height && gi >= 0 {
+		cells := s.GetLine(gi)
+		if len(cells) == 0 && !s.RowNoWrap(gi) {
+			accumulated++
+			if accumulated >= height {
+				offset := accumulated - height
+				v.mu.Lock()
+				v.viewAnchor = gi
+				v.viewAnchorOffset = offset
+				v.mu.Unlock()
+				return
+			}
+			gi--
+			continue
+		}
+		chainStart := findChainStart(s, gi, maxSteps)
+		end, nowrap := walkChain(s, chainStart, maxSteps)
+		if end >= writeTop {
+			gi = chainStart - 1
+			continue
+		}
+		if reflowOff {
+			nowrap = true
+		}
+		chainRows := chainReflowedRowCount(s, chainStart, end, width, nowrap)
+		accumulated += chainRows
+		if accumulated >= height {
+			offset := accumulated - height
+			v.mu.Lock()
+			v.viewAnchor = chainStart
+			v.viewAnchorOffset = offset
+			v.mu.Unlock()
+			return
+		}
+		gi = chainStart - 1
+	}
+
+	// Ran out of content entirely: anchor at the earliest available row
+	// (0 if we exhausted scrollback, writeTop otherwise) so Render starts
+	// from the top of what's available. For a fresh session (writeTop=0)
 	// this degenerates to the old "anchor at top" behavior.
 	v.mu.Lock()
-	v.viewAnchor = writeTop
+	if gi < 0 {
+		v.viewAnchor = 0
+	} else {
+		v.viewAnchor = writeTop
+	}
 	v.viewAnchorOffset = 0
 	v.mu.Unlock()
 }

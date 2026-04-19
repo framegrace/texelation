@@ -41,22 +41,21 @@ func walkChain(s *Store, startGI int64, maxSteps int) (end int64, nowrap bool) {
 // any content has been written) are emitted as explicit blank rows so the
 // chain's reflowed row count matches its physical-row footprint.
 //
-// Single-row "chains" whose last cell is NOT Wrapped (i.e., the row never
-// auto-wrapped) render as exactly one row. This handles content placed past
-// the previous cursor via CUF/CUP — e.g., a powerline prompt's right-aligned
-// segment via `ESC[500C ESC[17D` writes cells past the visible viewport
-// when the terminal later shrinks. Without this guard, the row's stored
-// cell count would be sliced into multiple physical rows on shrink, scrolling
-// older content up by an extra row each event (issue #193).
+// A single-row chain whose stored cells contain a positional gap (some cell
+// before the last-written col is unwritten — e.g., a powerline prompt that
+// jumped via `ESC[500C ESC[17D` and wrote at col 89 with cols 0..88 still
+// unwritten) renders as exactly one row at the cells' original positions.
+// Off-viewport cells clip naturally via clipRow. Without this, the stored
+// cell count would be sliced into multiple physical rows on shrink, surfacing
+// the right-side content on a NEW row (issue #193). Lines without gaps
+// (everything autowrap or shell-typed contiguously from col 0) reflow
+// normally — `ls -l` output etc. continues to wrap on shrink (issue #197).
 func reflowChain(s *Store, startGI, endGI int64, viewWidth int) [][]parser.Cell {
 	if viewWidth <= 0 {
 		return nil
 	}
-	if startGI == endGI {
-		cells := s.GetLine(startGI)
-		if len(cells) == 0 || !cells[len(cells)-1].Wrapped {
-			return [][]parser.Cell{cells}
-		}
+	if startGI == endGI && rowHasPositionalGap(s, startGI) {
+		return [][]parser.Cell{s.GetLine(startGI)}
 	}
 	var logical []parser.Cell
 	for gi := startGI; gi <= endGI; gi++ {
@@ -100,15 +99,14 @@ func trailingEmptyRows(s *Store, start, end int64) int {
 // chainReflowedRowCount returns the number of physical rows the chain
 // [start..end] occupies when reflowed at width. Matches reflowChain's output
 // row count, including trailing empty continuation rows.
+//
+// See reflowChain for the positional-gap rationale (issue #193 / #197).
 func chainReflowedRowCount(s *Store, start, end int64, width int, nowrap bool) int {
 	if nowrap {
 		return int(end - start + 1)
 	}
-	if start == end {
-		cells := s.GetLine(start)
-		if len(cells) == 0 || !cells[len(cells)-1].Wrapped {
-			return 1
-		}
+	if start == end && rowHasPositionalGap(s, start) {
+		return 1
 	}
 	total := 0
 	for r := start; r <= end; r++ {
@@ -145,6 +143,24 @@ func findChainStart(s *Store, gi int64, maxSteps int) int64 {
 		start = prev
 	}
 	return start
+}
+
+// rowHasPositionalGap reports whether the row at gi was placed via cursor
+// positioning (CUF/CUP) past existing content rather than written contiguously
+// from col 0. Concretely: the count of cells actually written via WriteCell
+// is less than (lastWrittenCol + 1), i.e. there's at least one unwritten cell
+// before the last-written cell. Such rows must NOT be sliced into multiple
+// physical rows on shrink — the unwritten cells aren't real content and
+// shouldn't drag content past the viewport edge onto a new physical row.
+//
+// An empty row (no cells) and a row with no written cells are not "positional"
+// — they're just blank.
+func rowHasPositionalGap(s *Store, gi int64) bool {
+	written, lastCol := s.WrittenExtent(gi)
+	if written == 0 {
+		return false
+	}
+	return written < lastCol+1
 }
 
 // clipRow returns cells truncated or padded to viewWidth. Used for NoWrap
