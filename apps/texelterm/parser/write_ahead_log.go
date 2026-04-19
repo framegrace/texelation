@@ -459,6 +459,14 @@ func (w *WriteAheadLog) AppendDelete(lo, hi int64, timestamp time.Time) error {
 
 // DeleteRange emits a range-delete tombstone to the WAL and applies the delete
 // to the owned PageStore. One WAL entry per range, not one per line.
+//
+// Locking note: AppendDelete acquires and releases w.mu; deleteRangeNoWAL
+// acquires and releases ps.mu separately. The two locks are never held
+// simultaneously. This matches the established pattern used by Append
+// (w.mu) + AppendLineWithGlobalIdx (ps.mu): the WAL journal and the
+// PageStore state advance sequentially, not atomically. A crash between the
+// two steps is safe because recover() replays the WAL tombstone and
+// re-applies it to PageStore on the next open.
 func (w *WriteAheadLog) DeleteRange(lo, hi int64) error {
 	if err := w.AppendDelete(lo, hi, w.nowFunc()); err != nil {
 		return err
