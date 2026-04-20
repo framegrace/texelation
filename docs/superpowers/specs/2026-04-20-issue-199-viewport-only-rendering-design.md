@@ -246,7 +246,6 @@ MsgCaptureResult { ... }
 type BufferDelta struct {
     PaneID    [16]byte
     Revision  uint32        // existing (per-pane)
-    Sequence  uint64        // NEW (session-global monotonic)
     Flags     BufferDeltaFlags // NEW bit: AltScreen
     RowBase   int64         // NEW: main-screen globalIdx of row offset 0;
                             // zero and ignored when Flags.AltScreen=1
@@ -255,6 +254,8 @@ type BufferDelta struct {
                             // or a screen-row index (alt)
 }
 ```
+
+**Note on monotonic sequencing.** The protocol frame header already carries a session-global monotonic `Sequence uint64` (`protocol.Header.Sequence`, filled by `Session.EnqueueDiff`). That field already satisfies the audit's "all BufferDelta carry monotonic seq" requirement — we do not add a second sequence to the payload. Per-pane `Revision` lives on the payload and drives FetchRange coherence separately (see below).
 
 ```go
 type ResumeRequest struct {
@@ -270,8 +271,8 @@ type ResumeRequest struct {
 
 Two separate counters, each doing one job:
 
-- `Sequence uint64` (session-global, on every `BufferDelta`): drives wire ordering and resume's `LastSequence`. Monotonically increasing across the session. Existing internal counter promoted to the wire.
-- `Revision uint32` (per-pane, existing on `BufferDelta`): drives `FetchRange` coherence — see below.
+- `Header.Sequence uint64` (session-global, on every frame — already shipped): drives wire ordering and resume's `LastSequence`. Monotonically increasing across the session via `Session.nextSequence`.
+- `BufferDelta.Revision uint32` (per-pane, already on the delta payload): drives `FetchRange` coherence — see below.
 
 **FetchRange coherence rule.**
 
@@ -421,7 +422,7 @@ These are design-settled but need a concrete call during the plan:
 
 Implementation order (refined by `writing-plans`):
 
-1. Extend `BufferDelta` wire format (`Sequence`, `RowBase`, `Flags.AltScreen`); no behavior change yet — `RowBase = 0`, `Sequence` now on wire.
+1. Extend `BufferDelta` wire format (`RowBase`, `Flags.AltScreen`); no behavior change yet — `RowBase = 0`, alt-screen flag unset. Frame-header `Sequence` is already monotonic and needs no change.
 2. Add `MsgViewportUpdate`; server tracks per-client viewport but does not yet clip.
 3. Add `MsgFetchRange` / `MsgFetchRangeResponse`; server can serve ranges.
 4. Flip publisher to clip-on-emit; client sparse per-pane cache lands; eviction behavior tested.
