@@ -30,7 +30,7 @@ type DesktopPublisher struct {
 	revisions   map[[16]byte]uint32
 	prevBuffers map[[16]byte][][]texel.Cell
 	observer    PublishObserver
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	notify      func()
 }
 
@@ -78,8 +78,8 @@ func (p *DesktopPublisher) SetNotifier(fn func()) {
 // RevisionFor returns the latest revision stamped for paneID by Publish.
 // Returns 0 if the pane has not been published yet.
 func (p *DesktopPublisher) RevisionFor(paneID [16]byte) uint32 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.revisions[paneID]
 }
 
