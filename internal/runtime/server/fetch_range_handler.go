@@ -33,7 +33,7 @@ func ServeFetchRange(st *sparse.Store, req protocol.FetchRange, revision uint32)
 		return resp, nil
 	}
 	oldest := st.OldestRetained()
-	if oldest == -1 || req.LoIdx < oldest {
+	if oldest != -1 && req.LoIdx < oldest {
 		resp.Flags |= protocol.FetchRangeBelowRetention
 	}
 	table := newStyleTable()
