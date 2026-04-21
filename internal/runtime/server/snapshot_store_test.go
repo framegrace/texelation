@@ -102,6 +102,14 @@ func TestStoredPaneConversionsPreserveContent(t *testing.T) {
 	if pane.AppType != "app" {
 		t.Fatalf("app type not preserved")
 	}
+	if len(pane.RowGlobalIdx) != len(pane.Buffer) {
+		t.Fatalf("RowGlobalIdx must parallel Buffer: len(RowGlobalIdx)=%d len(Buffer)=%d", len(pane.RowGlobalIdx), len(pane.Buffer))
+	}
+	for i, idx := range pane.RowGlobalIdx {
+		if idx != -1 {
+			t.Fatalf("expected reconstructed RowGlobalIdx[%d] == -1, got %d", i, idx)
+		}
+	}
 	pane.AppConfig["flag"] = false
 	if stored.AppConfig["flag"] != true {
 		t.Fatalf("app config should be cloned")
