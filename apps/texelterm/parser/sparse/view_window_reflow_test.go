@@ -13,7 +13,7 @@ func TestViewWindow_Render_ReflowsOnNarrow(t *testing.T) {
 
 	vw := NewViewWindow(40, 5)
 	vw.SetViewAnchor(0, 0)
-	out := vw.Render(s)
+	out, _ := vw.Render(s)
 
 	if len(out) != 5 {
 		t.Fatalf("Render should return viewHeight=5 rows, got %d", len(out))
@@ -35,7 +35,7 @@ func TestViewWindow_Render_NoWrapChainStays1to1(t *testing.T) {
 
 	vw := NewViewWindow(40, 5)
 	vw.SetViewAnchor(0, 0)
-	out := vw.Render(s)
+	out, _ := vw.Render(s)
 
 	if !strings.HasPrefix(cellsToStringSparse(out[0]), "01234567890123456789") {
 		t.Errorf("NoWrap row 0 should be clipped 1:1, got %q", cellsToStringSparse(out[0]))

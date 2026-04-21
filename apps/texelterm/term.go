@@ -157,6 +157,14 @@ type TexelTerm struct {
 
 	// Visual bell flash state
 	bellFlashUntil time.Time
+
+	// lastRowGlobalIdx caches the per-row globalIdx slice produced by the
+	// most recent Render() call. Populated in the main-screen branch from
+	// VTerm.GridWithRowIdx; left nil on the alt-screen path (RowGlobalIdx
+	// synthesises an all-(-1) slice in that case). a.mu serialises reads
+	// and writes, so callers reading via RowGlobalIdx under the same lock
+	// always observe a self-consistent slice paired with the rendered buf.
+	lastRowGlobalIdx []int64
 }
 
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
@@ -645,9 +653,10 @@ func (a *TexelTerm) logRenderDebug(grid [][]parser.Cell, cursorX, cursorY int, d
 // length == len(a.buf) where entry [y] is the sparse-store globalIdx of row
 // y of the last-rendered buffer, or -1 if that row has no main-screen
 // globalIdx (borders, statusbar, alt-screen content, or the buffer has not
-// been built yet). Must be called AFTER Render(); the underlying per-row
-// globalIdx slice is populated as a side-effect of the ViewWindow walk that
-// Render drives.
+// been built yet). Must be called AFTER Render(); the per-row globalIdx
+// slice is captured during Render from VTerm.GridWithRowIdx and cached on
+// the TexelTerm under a.mu, so callers observe a slice that is lockstep-
+// consistent with a.buf.
 func (a *TexelTerm) RowGlobalIdx() []int64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -666,28 +675,15 @@ func (a *TexelTerm) RowGlobalIdx() []int64 {
 	if a.vterm.InAltScreen() {
 		return out
 	}
-	// Main-screen path: walk the sparse.Terminal's ViewWindow for per-row
-	// globalIdxs. Rows 0..termRows-1 are content; the final row is the
-	// statusbar (always -1) and is left at the default.
-	ms := a.vterm.MainScreenImpl()
-	if ms == nil {
-		return out
-	}
-	st, ok := ms.(*sparse.Terminal)
-	if !ok {
-		return out
-	}
-	vw := st.ViewWindow()
-	if vw == nil {
-		return out
-	}
-	// The rendered buffer has termRows content rows plus a 1-row statusbar.
+	// Main-screen path: copy from the cached slice populated by Render.
+	// The rendered buffer has termRows content rows plus a 1-row statusbar;
+	// the statusbar row stays at the default -1.
 	termRows := total - 1
 	if termRows < 0 {
 		termRows = 0
 	}
-	for y := 0; y < termRows; y++ {
-		out[y] = vw.RowGlobalIdx(y)
+	for y := 0; y < termRows && y < len(a.lastRowGlobalIdx); y++ {
+		out[y] = a.lastRowGlobalIdx[y]
 	}
 	return out
 }
@@ -700,11 +696,16 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		return nil
 	}
 
-	vtermGrid := a.vterm.Grid()
+	vtermGrid, vtermRowIdx := a.vterm.GridWithRowIdx()
 	termRows := len(vtermGrid)
 	if termRows == 0 {
+		a.lastRowGlobalIdx = nil
 		return nil
 	}
+	// Stash the per-row globalIdx slice for later RowGlobalIdx() queries.
+	// vtermRowIdx is nil on the alt-screen path; RowGlobalIdx handles that
+	// by synthesising an all-(-1) slice when needed.
+	a.lastRowGlobalIdx = vtermRowIdx
 	vtermCols := len(vtermGrid[0])
 
 	totalCols := vtermCols

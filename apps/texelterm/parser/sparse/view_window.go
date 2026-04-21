@@ -28,13 +28,6 @@ type ViewWindow struct {
 	viewAnchorOffset int
 	globalReflowOff  bool
 	autoJumpOnInput  bool
-
-	// rowGlobalIdx is a cache populated by Render(): rowGlobalIdx[y] is the
-	// store globalIdx that output row y corresponds to, or -1 if the row was
-	// a blank-pad row with no underlying store position. Length tracks the
-	// last-rendered height. Used by RowGlobalIdx(y) so callers see exactly
-	// what Render produced rather than a re-walked (possibly drifted) value.
-	rowGlobalIdx []int64
 }
 
 // NewViewWindow creates a ViewWindow in autoFollow mode. viewBottom starts
@@ -100,8 +93,16 @@ func (v *ViewWindow) SetAutoJumpOnInput(enabled bool) {
 // Render projects the viewport by walking chains from viewAnchor. Each
 // chain is reflowed to viewWidth (unless NoWrap or globalReflowOff is set,
 // in which case rows render 1:1 via clipRow). Returns exactly viewHeight
-// rows, padded with empty cells if content is exhausted.
-func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
+// rows, padded with empty cells if content is exhausted, paired with a
+// parallel per-row globalIdx slice: rowGI[y] is the store globalIdx that
+// row y corresponds to (chain-head gi for reflowed sub-rows), or -1 if
+// the row is a blank-pad row with no underlying store position.
+//
+// Returning the rowGI slice alongside the rendered rows keeps the two in
+// lockstep even under concurrent Render calls — callers receive a
+// self-consistent pair, and no per-instance state has to straddle the
+// walk/publish boundary.
+func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 	v.mu.Lock()
 	width := v.width
 	height := v.height
@@ -191,24 +192,7 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 		rowGI = rowGI[:height]
 	}
 
-	v.mu.Lock()
-	v.rowGlobalIdx = rowGI
-	v.mu.Unlock()
-
-	return out
-}
-
-// RowGlobalIdx returns the store globalIdx that the last Render(s) call
-// placed at viewport row y, or -1 if y is out of [0, height) or the row was
-// a blank/pad row with no underlying store position. Reads the cache
-// populated by Render; returns -1 if Render has never been called.
-func (v *ViewWindow) RowGlobalIdx(y int) int64 {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if y < 0 || y >= len(v.rowGlobalIdx) {
-		return -1
-	}
-	return v.rowGlobalIdx[y]
+	return out, rowGI
 }
 
 // RecomputeLiveAnchor repositions viewAnchor/viewAnchorOffset so that the

@@ -51,7 +51,7 @@ func TestLiveAnchor_ClampsAtWriteTop(t *testing.T) {
 
 	// Render must not paint any scrollback cells. The scrollback chain is
 	// all a/b/c/d runs; a correctly-clamped render shows only blanks.
-	out := vw.Render(s)
+	out, _ := vw.Render(s)
 	for row, cells := range out {
 		text := cellsToStringSparse(cells)
 		for _, bad := range []string{"aaaa", "bbbb", "cccc", "dddd"} {
