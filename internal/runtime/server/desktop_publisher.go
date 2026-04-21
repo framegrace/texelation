@@ -75,6 +75,14 @@ func (p *DesktopPublisher) SetNotifier(fn func()) {
 	p.notify = fn
 }
 
+// RevisionFor returns the latest revision stamped for paneID by Publish.
+// Returns 0 if the pane has not been published yet.
+func (p *DesktopPublisher) RevisionFor(paneID [16]byte) uint32 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.revisions[paneID]
+}
+
 func (p *DesktopPublisher) Publish() error {
 	if p.desktop == nil || p.session == nil {
 		return nil
@@ -270,7 +278,7 @@ func convertColor(color tcell.Color) (protocol.ColorModel, uint32) {
 		case tcell.ColorWhite:
 			paletteName = "text"
 		}
-		
+
 		if paletteName != "" {
 			themeColor := theme.ResolveColorName(paletteName)
 			if themeColor != tcell.ColorDefault {

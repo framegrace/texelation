@@ -12,7 +12,11 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"fmt"
+	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/debuglog"
+	"github.com/framegrace/texelation/internal/keybind"
+	"github.com/framegrace/texelation/registry"
+	"github.com/framegrace/texelui/theme"
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/term"
 	"log"
@@ -23,10 +27,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"github.com/framegrace/texelation/config"
-	"github.com/framegrace/texelation/internal/keybind"
-	"github.com/framegrace/texelation/registry"
-	"github.com/framegrace/texelui/theme"
 	"time"
 )
 
@@ -124,15 +124,15 @@ type DesktopEngine struct {
 	clipboard          map[string][]byte
 	clipboardMime      string
 	clipboardPending   bool // True when clipboard has changed and needs to be sent to client
-	focusMu              sync.RWMutex
-	focusListeners       []DesktopFocusListener
-	paneStateMu          sync.RWMutex
-	paneStateListeners   []PaneStateListener
-	snapshotFactories    map[string]SnapshotFactory
-	viewportMu           sync.RWMutex
-	viewportWidth        int
-	viewportHeight       int
-	hasViewport          bool
+	focusMu            sync.RWMutex
+	focusListeners     []DesktopFocusListener
+	paneStateMu        sync.RWMutex
+	paneStateListeners []PaneStateListener
+	snapshotFactories  map[string]SnapshotFactory
+	viewportMu         sync.RWMutex
+	viewportWidth      int
+	viewportHeight     int
+	hasViewport        bool
 
 	// pendingAppStarts tracks panes from snapshot restore that need to be started
 	// once we receive actual viewport dimensions from the client.
@@ -184,10 +184,10 @@ func (d *DesktopEngine) SetKeybindings(r *keybind.Registry) {
 
 // PaneStateSnapshot captures dynamic pane flags for external consumers.
 type PaneStateSnapshot struct {
-	ID               [16]byte
-	Active           bool
-	Resizing         bool
-	ZOrder           int
+	ID           [16]byte
+	Active       bool
+	Resizing     bool
+	ZOrder       int
 	HandlesMouse bool
 }
 
@@ -835,24 +835,40 @@ func (d *DesktopEngine) forEachPane(fn func(*pane)) {
 	}
 }
 
+// AppByID returns the App attached to the pane with the given ID, or nil if
+// no such pane exists. Used by the client/server runtime to route per-pane
+// messages (e.g. FetchRange) to their target app.
+func (d *DesktopEngine) AppByID(id [16]byte) App {
+	var result App
+	d.forEachPane(func(p *pane) {
+		if result != nil {
+			return
+		}
+		if p.ID() == id {
+			result = p.app
+		}
+	})
+	return result
+}
+
 // PaneStates returns the current pane flags across all workspaces.
 func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 	states := make([]PaneStateSnapshot, 0)
 	d.forEachPane(func(p *pane) {
 		states = append(states, PaneStateSnapshot{
-			ID:               p.ID(),
-			Active:           p.IsActive,
-			Resizing:         p.IsResizing,
-			ZOrder:           p.ZOrder,
+			ID:           p.ID(),
+			Active:       p.IsActive,
+			Resizing:     p.IsResizing,
+			ZOrder:       p.ZOrder,
 			HandlesMouse: p.handlesMouseEvents(),
 		})
 	})
 	for _, fp := range d.floatingPanels {
 		states = append(states, PaneStateSnapshot{
-			ID:               fp.id,
-			Active:           true,
-			Resizing:         false,
-			ZOrder:           ZOrderFloating,
+			ID:           fp.id,
+			Active:       true,
+			Resizing:     false,
+			ZOrder:       ZOrderFloating,
 			HandlesMouse: false,
 		})
 	}

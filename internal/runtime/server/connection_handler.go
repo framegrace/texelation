@@ -168,6 +168,10 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			return fmt.Errorf("decode viewport update: %w", err)
 		}
 		c.session.ApplyViewportUpdate(u)
+	case protocol.MsgFetchRange:
+		if err := c.handleFetchRange(payload); err != nil {
+			return fmt.Errorf("fetch range: %w", err)
+		}
 	default:
 		debugLog.Printf("%s ignoring message type %d", prefix, header.Type)
 	}
@@ -314,4 +318,83 @@ func (c *connection) requestClipboardData(mime string) []byte {
 		}
 	}
 	return nil
+}
+
+func (c *connection) handleFetchRange(payload []byte) error {
+	req, err := protocol.DecodeFetchRange(payload)
+	if err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+
+	// sendStub sends a minimal response with the given flags and no rows.
+	sendStub := func(flags protocol.FetchRangeFlags) error {
+		stub := protocol.FetchRangeResponse{
+			RequestID: req.RequestID,
+			PaneID:    req.PaneID,
+			Flags:     flags,
+		}
+		enc, encErr := protocol.EncodeFetchRangeResponse(stub)
+		if encErr != nil {
+			return fmt.Errorf("encode stub: %w", encErr)
+		}
+		hdr := protocol.Header{
+			Version:   protocol.Version,
+			Type:      protocol.MsgFetchRangeResponse,
+			Flags:     protocol.FlagChecksum,
+			SessionID: c.session.ID(),
+		}
+		return c.writeMessage(hdr, enc)
+	}
+
+	sink, ok := c.sink.(*DesktopSink)
+	if !ok {
+		return sendStub(protocol.FetchRangeEmpty)
+	}
+	desktop := sink.Desktop()
+	if desktop == nil {
+		return sendStub(protocol.FetchRangeEmpty)
+	}
+
+	app := desktop.AppByID(req.PaneID)
+	if app == nil {
+		return sendStub(protocol.FetchRangeEmpty)
+	}
+
+	provider, ok := app.(fetchRangeProvider)
+	if !ok {
+		return sendStub(protocol.FetchRangeEmpty)
+	}
+
+	if provider.InAltScreen() {
+		return sendStub(protocol.FetchRangeAltScreenActive)
+	}
+
+	st := provider.SparseStore()
+	if st == nil {
+		return sendStub(protocol.FetchRangeEmpty)
+	}
+
+	pub := sink.Publisher()
+	var revision uint32
+	if pub != nil {
+		revision = pub.RevisionFor(req.PaneID)
+	}
+
+	resp, err := ServeFetchRange(st, req, revision)
+	if err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+
+	enc, err := protocol.EncodeFetchRangeResponse(resp)
+	if err != nil {
+		return fmt.Errorf("encode response: %w", err)
+	}
+
+	hdr := protocol.Header{
+		Version:   protocol.Version,
+		Type:      protocol.MsgFetchRangeResponse,
+		Flags:     protocol.FlagChecksum,
+		SessionID: c.session.ID(),
+	}
+	return c.writeMessage(hdr, enc)
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/framegrace/texelui/widgets"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/parser/sparse"
 	"github.com/framegrace/texelation/apps/texelterm/shell"
 	"github.com/framegrace/texelation/apps/texelterm/transformer"
 	"github.com/framegrace/texelation/config"
@@ -39,9 +40,6 @@ import (
 	// Import transformers for init() side-effect registration.
 	_ "github.com/framegrace/texelation/apps/texelterm/tablefmt"
 	_ "github.com/framegrace/texelation/apps/texelterm/txfmt"
-
-	// Import sparse for init() side-effect: registers MainScreenFactory.
-	_ "github.com/framegrace/texelation/apps/texelterm/parser/sparse"
 	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelation/texel"
 	"github.com/framegrace/texelui/theme"
@@ -142,12 +140,12 @@ type TexelTerm struct {
 	scrollbar *ScrollBar
 
 	// Status bar with toggle button mode indicators
-	statusBar       *widgets.StatusBar
-	tfmToggle       *widgets.ToggleButton
-	tfmUserPref     bool // user's preferred transformer state (restored when TUI/alt clears)
-	tfmPillVisible  bool // whether the transformer pill button is shown on the decorator
-	searchToggle    *widgets.ToggleButton
-	cfgToggle       *widgets.ToggleButton
+	statusBar      *widgets.StatusBar
+	tfmToggle      *widgets.ToggleButton
+	tfmUserPref    bool // user's preferred transformer state (restored when TUI/alt clears)
+	tfmPillVisible bool // whether the transformer pill button is shown on the decorator
+	searchToggle   *widgets.ToggleButton
+	cfgToggle      *widgets.ToggleButton
 	// Config panel overlay
 	configPanel *ConfigPanel
 
@@ -189,21 +187,21 @@ func New(title, command string) texelcore.App {
 	cfg.SetHelpText("Configuration (F4)")
 
 	term := &TexelTerm{
-		title:        title,
-		command:      command,
-		width:        80,
-		height:       24,
-		stop:         make(chan struct{}),
-		colorPalette: newDefaultPalette(),
-		closeCh:      make(chan struct{}),
-		restartCh:    make(chan struct{}, 1),
-		controlBus:   texelcore.NewControlBus(),
-		statusBar:    sb,
-		tfmToggle:    tfm,
-		tfmUserPref:  initCfg.GetBool("transformers", "enabled", false),
+		title:          title,
+		command:        command,
+		width:          80,
+		height:         24,
+		stop:           make(chan struct{}),
+		colorPalette:   newDefaultPalette(),
+		closeCh:        make(chan struct{}),
+		restartCh:      make(chan struct{}, 1),
+		controlBus:     texelcore.NewControlBus(),
+		statusBar:      sb,
+		tfmToggle:      tfm,
+		tfmUserPref:    initCfg.GetBool("transformers", "enabled", false),
 		tfmPillVisible: initCfg.GetBool("transformers", "show_pill_button", true),
-		searchToggle: srch,
-		cfgToggle:    cfg,
+		searchToggle:   srch,
+		cfgToggle:      cfg,
 	}
 
 	// Wire config toggle to open/close config panel
@@ -320,6 +318,31 @@ func (a *TexelTerm) drawConfirmation(buf [][]texelcore.Cell) {
 
 func (a *TexelTerm) Vterm() *parser.VTerm {
 	return a.vterm
+}
+
+// InAltScreen reports whether the alt-screen buffer is currently active.
+func (a *TexelTerm) InAltScreen() bool {
+	if a.vterm == nil {
+		return false
+	}
+	return a.vterm.InAltScreen()
+}
+
+// SparseStore returns the underlying sparse.Store for the main screen, or nil
+// if no sparse-backed main screen is configured or the type assertion fails.
+func (a *TexelTerm) SparseStore() *sparse.Store {
+	if a.vterm == nil {
+		return nil
+	}
+	ms := a.vterm.MainScreenImpl()
+	if ms == nil {
+		return nil
+	}
+	term, ok := ms.(*sparse.Terminal)
+	if !ok {
+		return nil
+	}
+	return term.Store()
 }
 
 func (a *TexelTerm) mapParserColorToTCell(c parser.Color) tcell.Color {

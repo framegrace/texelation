@@ -308,3 +308,7 @@ func (t *Terminal) Grid() [][]parser.Cell {
 	}
 	return grid
 }
+
+// Store returns the underlying sparse store. Intended for read-only
+// scrollback fetch paths; callers must not mutate cells through it.
+func (t *Terminal) Store() *Store { return t.store }
