@@ -6,6 +6,15 @@ package protocol
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+)
+
+var (
+	// ErrViewportInverted is returned when ViewTopIdx > ViewBottomIdx in a
+	// non-alt-screen ViewportUpdate.
+	ErrViewportInverted = errors.New("protocol: viewport top > bottom")
+	// ErrViewportZeroDim is returned when Rows or Cols is zero.
+	ErrViewportZeroDim = errors.New("protocol: viewport has zero dimension")
 )
 
 // ViewportUpdate is sent by the client whenever its per-pane viewport changes
@@ -66,5 +75,11 @@ func DecodeViewportUpdate(b []byte) (ViewportUpdate, error) {
 	v.WrapSegmentIdx = binary.LittleEndian.Uint16(b[33:35])
 	v.Rows = binary.LittleEndian.Uint16(b[35:37])
 	v.Cols = binary.LittleEndian.Uint16(b[37:39])
+	if !v.AltScreen && v.ViewTopIdx > v.ViewBottomIdx {
+		return ViewportUpdate{}, ErrViewportInverted
+	}
+	if v.Rows == 0 || v.Cols == 0 {
+		return ViewportUpdate{}, ErrViewportZeroDim
+	}
 	return v, nil
 }

@@ -6,6 +6,15 @@ package protocol
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+)
+
+var (
+	// ErrFetchRangeInverted is returned when LoIdx > HiIdx.
+	// Note: LoIdx == HiIdx is a valid empty range and is allowed.
+	ErrFetchRangeInverted = errors.New("protocol: fetch range lo > hi")
+	// ErrFetchRangeNegative is returned when LoIdx < 0.
+	ErrFetchRangeNegative = errors.New("protocol: fetch range lo index is negative")
 )
 
 // FetchRangeFlags is a bitmask set on FetchRangeResponse.
@@ -77,6 +86,12 @@ func DecodeFetchRange(b []byte) (FetchRange, error) {
 	f.LoIdx = int64(binary.LittleEndian.Uint64(b[20:28]))
 	f.HiIdx = int64(binary.LittleEndian.Uint64(b[28:36]))
 	f.AsOfRevision = binary.LittleEndian.Uint32(b[36:40])
+	if f.LoIdx < 0 {
+		return FetchRange{}, ErrFetchRangeNegative
+	}
+	if f.LoIdx > f.HiIdx {
+		return FetchRange{}, ErrFetchRangeInverted
+	}
 	return f, nil
 }
 
