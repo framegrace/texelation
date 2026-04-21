@@ -65,6 +65,7 @@ const (
 	MsgImagePlace
 	MsgImageDelete
 	MsgImageReset
+	MsgViewportUpdate
 )
 
 // Header describes the fixed portion of every frame exchanged over the wire.
