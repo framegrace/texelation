@@ -25,8 +25,33 @@ import (
 	"github.com/framegrace/texelation/protocol"
 )
 
+// paneCacheFor returns the PaneCache for id, creating it on first access.
+func (s *clientState) paneCacheFor(id [16]byte) *client.PaneCache {
+	s.paneCachesMu.Lock()
+	defer s.paneCachesMu.Unlock()
+	if s.paneCaches == nil {
+		s.paneCaches = make(map[[16]byte]*client.PaneCache)
+	}
+	pc, ok := s.paneCaches[id]
+	if !ok {
+		pc = client.NewPaneCache()
+		s.paneCaches[id] = pc
+	}
+	return pc
+}
+
+// dropPaneCache removes the PaneCache for id, if present.
+func (s *clientState) dropPaneCache(id [16]byte) {
+	s.paneCachesMu.Lock()
+	defer s.paneCachesMu.Unlock()
+	delete(s.paneCaches, id)
+}
+
 type clientState struct {
-	cache                *client.BufferCache
+	cache        *client.BufferCache
+	paneCaches   map[[16]byte]*client.PaneCache
+	paneCachesMu sync.RWMutex
+
 	clipboardMu          sync.Mutex
 	clipboard            protocol.ClipboardData
 	hasClipboard         bool
@@ -100,7 +125,6 @@ func (s *clientState) triggerRender() {
 		}
 	}
 }
-
 
 func (s *clientState) setThemeValue(section, key string, value interface{}) {
 	if s.themeValues == nil {

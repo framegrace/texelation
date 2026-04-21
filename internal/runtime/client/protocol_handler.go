@@ -53,6 +53,18 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		if state.effects != nil {
 			state.effects.ResetPaneStates(cache.SortedPanes())
 		}
+		// Prune pane caches that are no longer in the snapshot.
+		livePanes := make(map[[16]byte]struct{}, len(snap.Panes))
+		for _, p := range snap.Panes {
+			livePanes[p.PaneID] = struct{}{}
+		}
+		state.paneCachesMu.Lock()
+		for id := range state.paneCaches {
+			if _, live := livePanes[id]; !live {
+				delete(state.paneCaches, id)
+			}
+		}
+		state.paneCachesMu.Unlock()
 		return true
 	case protocol.MsgBufferDelta:
 		delta, err := protocol.DecodeBufferDelta(payload)
@@ -61,10 +73,21 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			return false
 		}
 		cache.ApplyDelta(delta)
+		state.paneCacheFor(delta.PaneID).ApplyDelta(delta)
 		scheduleAck(pendingAck, ackSignal, hdr.Sequence)
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
 		}
+		return true
+	case protocol.MsgFetchRangeResponse:
+		resp, err := protocol.DecodeFetchRangeResponse(payload)
+		if err != nil {
+			log.Printf("decode fetch range response failed: %v", err)
+			return false
+		}
+		// FetchRangeResponse is a targeted reply, not a broadcast delta.
+		// It does not participate in the seq/ack stream.
+		state.paneCacheFor(resp.PaneID).ApplyFetchRange(resp)
 		return true
 	case protocol.MsgPing:
 		pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})
