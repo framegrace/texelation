@@ -348,20 +348,24 @@ func (c *connection) handleFetchRange(payload []byte) error {
 
 	sink, ok := c.sink.(*DesktopSink)
 	if !ok {
+		debugLog.Printf("handleFetchRange pane %x: sink is not *DesktopSink (%T)", req.PaneID[:4], c.sink)
 		return sendStub(protocol.FetchRangeEmpty)
 	}
 	desktop := sink.Desktop()
 	if desktop == nil {
+		debugLog.Printf("handleFetchRange pane %x: desktop is nil", req.PaneID[:4])
 		return sendStub(protocol.FetchRangeEmpty)
 	}
 
 	app := desktop.AppByID(req.PaneID)
 	if app == nil {
+		debugLog.Printf("handleFetchRange pane %x: no app found for pane", req.PaneID[:4])
 		return sendStub(protocol.FetchRangeEmpty)
 	}
 
 	provider, ok := app.(fetchRangeProvider)
 	if !ok {
+		debugLog.Printf("handleFetchRange pane %x: app %T does not implement fetchRangeProvider", req.PaneID[:4], app)
 		return sendStub(protocol.FetchRangeEmpty)
 	}
 
