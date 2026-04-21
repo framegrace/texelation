@@ -55,13 +55,19 @@ type Session struct {
 	maxDiffs       int
 	droppedDiffs   uint64
 	lastDroppedSeq uint64
+	viewports      *ClientViewports
 }
 
 func NewSession(id [16]byte, maxDiffs int) *Session {
 	if maxDiffs < 0 {
 		maxDiffs = 0
 	}
-	return &Session{id: id, diffs: make([]DiffPacket, 0, 128), maxDiffs: maxDiffs}
+	return &Session{id: id, diffs: make([]DiffPacket, 0, 128), maxDiffs: maxDiffs, viewports: NewClientViewports()}
+}
+
+// ApplyViewportUpdate records the client's current viewport for a pane.
+func (s *Session) ApplyViewportUpdate(u protocol.ViewportUpdate) {
+	s.viewports.Apply(u)
 }
 
 func (s *Session) setMaxDiffs(limit int) {

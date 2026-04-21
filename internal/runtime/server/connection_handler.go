@@ -9,6 +9,7 @@
 package server
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/framegrace/texelation/protocol"
@@ -161,6 +162,12 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			return err
 		}
 		c.handleClientReady(ready)
+	case protocol.MsgViewportUpdate:
+		u, err := protocol.DecodeViewportUpdate(payload)
+		if err != nil {
+			return fmt.Errorf("decode viewport update: %w", err)
+		}
+		c.session.ApplyViewportUpdate(u)
 	default:
 		debugLog.Printf("%s ignoring message type %d", prefix, header.Type)
 	}
