@@ -97,6 +97,7 @@ func (c *PaneCache) ApplyFetchRange(r protocol.FetchRangeResponse) {
 }
 
 // RowAt returns the main-screen row for globalIdx.
+// The caller must not modify or retain the returned slice beyond the current frame.
 func (c *PaneCache) RowAt(globalIdx int64) ([]Cell, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -105,6 +106,7 @@ func (c *PaneCache) RowAt(globalIdx int64) ([]Cell, bool) {
 }
 
 // AltRowAt returns the alt-screen row for screenRow.
+// The caller must not modify or retain the returned slice beyond the current frame.
 func (c *PaneCache) AltRowAt(screenRow int) ([]Cell, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -118,7 +120,10 @@ func (c *PaneCache) AltRowAt(screenRow int) ([]Cell, bool) {
 // Called after each viewport change. Small hysteresis prevents thrash on
 // micro-scrolls.
 func (c *PaneCache) Evict(lo, hi, overscan int64) {
-	band := int64(float64(overscan) * 1.5)
+	if overscan < 0 {
+		overscan = 0
+	}
+	band := overscan + overscan/2
 	lowerBound := lo - band
 	upperBound := hi + band
 	c.mu.Lock()

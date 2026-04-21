@@ -56,7 +56,7 @@ func TestPaneCache_EvictsOutsideWindow(t *testing.T) {
 		},
 		Styles: []protocol.StyleEntry{{AttrFlags: 0}},
 	})
-	// Viewport is [1,2] + 1× overscan of 2 rows → [−1, 4]; hysteresis 1.5×.
+	// Viewport is [1,2] + band of 3 (overscan=2 → 2+2/2=3) → [−2, 5]; hysteresis 1.5×.
 	pc.Evict(1, 2, 2)
 	if _, ok := pc.RowAt(0); !ok {
 		t.Fatalf("row 0 inside hysteresis band, should be retained")
