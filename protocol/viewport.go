@@ -33,7 +33,9 @@ type ViewportUpdate struct {
 
 func EncodeViewportUpdate(v ViewportUpdate) ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 45))
-	buf.Write(v.PaneID[:])
+	if _, err := buf.Write(v.PaneID[:]); err != nil {
+		return nil, err
+	}
 	var bools uint8
 	if v.AltScreen {
 		bools |= 1 << 0
@@ -41,7 +43,9 @@ func EncodeViewportUpdate(v ViewportUpdate) ([]byte, error) {
 	if v.AutoFollow {
 		bools |= 1 << 1
 	}
-	buf.WriteByte(bools)
+	if err := buf.WriteByte(bools); err != nil {
+		return nil, err
+	}
 	if err := binary.Write(buf, binary.LittleEndian, v.ViewTopIdx); err != nil {
 		return nil, err
 	}

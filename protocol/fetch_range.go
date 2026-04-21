@@ -62,7 +62,9 @@ func EncodeFetchRange(f FetchRange) ([]byte, error) {
 	if err := binary.Write(buf, binary.LittleEndian, f.RequestID); err != nil {
 		return nil, err
 	}
-	buf.Write(f.PaneID[:])
+	if _, err := buf.Write(f.PaneID[:]); err != nil {
+		return nil, err
+	}
 	if err := binary.Write(buf, binary.LittleEndian, f.LoIdx); err != nil {
 		return nil, err
 	}
@@ -100,11 +102,15 @@ func EncodeFetchRangeResponse(r FetchRangeResponse) ([]byte, error) {
 	if err := binary.Write(buf, binary.LittleEndian, r.RequestID); err != nil {
 		return nil, err
 	}
-	buf.Write(r.PaneID[:])
+	if _, err := buf.Write(r.PaneID[:]); err != nil {
+		return nil, err
+	}
 	if err := binary.Write(buf, binary.LittleEndian, r.Revision); err != nil {
 		return nil, err
 	}
-	buf.WriteByte(byte(r.Flags))
+	if err := buf.WriteByte(byte(r.Flags)); err != nil {
+		return nil, err
+	}
 
 	if len(r.Styles) > 0xFFFF || len(r.Rows) > 0xFFFF {
 		return nil, ErrBufferTooLarge
