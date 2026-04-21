@@ -17,3 +17,12 @@ package texel
 type RowGlobalIdxProvider interface {
 	RowGlobalIdx() []int64
 }
+
+// AltScreenProvider is optionally implemented by apps whose underlying
+// terminal may switch into an alt-screen buffer (e.g. vim, less). Returns
+// true when the app's rendered content does not correspond to main-screen
+// scrollback. Publisher uses this to stamp BufferDelta.Flags with
+// BufferDeltaAltScreen and to skip viewport clipping for such panes.
+type AltScreenProvider interface {
+	InAltScreen() bool
+}

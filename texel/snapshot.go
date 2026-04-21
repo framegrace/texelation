@@ -10,8 +10,8 @@ package texel
 import (
 	"log"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/framegrace/texelui/theme"
+	"github.com/gdamore/tcell/v2"
 )
 
 // PaneSnapshot captures the render buffer for a pane along with a stable ID.
@@ -26,9 +26,15 @@ type PaneSnapshot struct {
 	Title        string
 	Buffer       [][]Cell
 	RowGlobalIdx []int64
-	Rect         Rectangle
-	AppType      string
-	AppConfig    map[string]interface{}
+	// AltScreen is true when the pane's rendered buffer should not be
+	// viewport-clipped against main-screen globalIdx space. Set when the
+	// pane's app is in alt-screen mode, or when the app is not a
+	// RowGlobalIdxProvider at all (non-terminal apps, statusbar, floating
+	// overlays). Clients keyed on flat row indices see RowBase=0.
+	AltScreen bool
+	Rect      Rectangle
+	AppType   string
+	AppConfig map[string]interface{}
 }
 
 // Rectangle stores pane position and size in screen coordinates.
@@ -48,11 +54,11 @@ type WorkspaceMetadata struct {
 
 // TreeCapture represents a snapshot of the desktop layout tree.
 type TreeCapture struct {
-	Panes              []PaneSnapshot
-	Root               *TreeNodeCapture         // Deprecated: use WorkspaceRoots
-	WorkspaceRoots     map[int]*TreeNodeCapture // Map of workspace ID to its tree root
-	ActiveWorkspaceID  int
-	WorkspaceMetadata  []WorkspaceMetadata
+	Panes             []PaneSnapshot
+	Root              *TreeNodeCapture         // Deprecated: use WorkspaceRoots
+	WorkspaceRoots    map[int]*TreeNodeCapture // Map of workspace ID to its tree root
+	ActiveWorkspaceID int
+	WorkspaceMetadata []WorkspaceMetadata
 }
 
 // TreeNodeCapture stores split metadata or references a leaf pane by index.
@@ -66,7 +72,7 @@ type TreeNodeCapture struct {
 // SnapshotBuffers collects the current buffers for all panes in the active workspace.
 func (d *DesktopEngine) SnapshotBuffers() []PaneSnapshot {
 	var panes []PaneSnapshot
-	
+
 	// Only capture active workspace for rendering
 	if d.activeWorkspace != nil && d.activeWorkspace.tree != nil {
 		// d.recalculateLayout() // REMOVED: This causes race condition with SwitchToWorkspace
@@ -104,14 +110,14 @@ func (d *DesktopEngine) SnapshotForClient() TreeCapture {
 	var capture TreeCapture
 	// Default to empty if nothing to capture
 	capture.WorkspaceRoots = make(map[int]*TreeNodeCapture)
-	
+
 	if d.activeWorkspace == nil || d.activeWorkspace.tree == nil {
 		return capture
 	}
-	
+
 	// We do NOT recalculate layout here to avoid the race condition fixed previously
 	// The layout should already be valid from the logic operations (AddApp, etc.)
-	
+
 	paneIndex := make(map[*pane]int)
 	capture.Panes = make([]PaneSnapshot, 0)
 	capture.ActiveWorkspaceID = d.activeWorkspace.id
@@ -135,7 +141,7 @@ func (d *DesktopEngine) SnapshotForClient() TreeCapture {
 			collect(child)
 		}
 	}
-	
+
 	if d.activeWorkspace.tree.Root != nil {
 		collect(d.activeWorkspace.tree.Root)
 		capture.Root = buildTreeCapture(d.activeWorkspace.tree.Root, paneIndex)
@@ -217,15 +223,15 @@ func (d *DesktopEngine) CaptureTree() TreeCapture {
 	var capture TreeCapture
 	// Default to empty if nothing to capture
 	capture.WorkspaceRoots = make(map[int]*TreeNodeCapture)
-	
+
 	if len(d.workspaces) == 0 {
 		return capture
 	}
-	
+
 	d.recalculateLayout()
 	paneIndex := make(map[*pane]int)
 	capture.Panes = make([]PaneSnapshot, 0)
-	
+
 	if d.activeWorkspace != nil {
 		capture.ActiveWorkspaceID = d.activeWorkspace.id
 	}
@@ -235,7 +241,7 @@ func (d *DesktopEngine) CaptureTree() TreeCapture {
 		if ws == nil || ws.tree == nil || ws.tree.Root == nil {
 			return nil
 		}
-		
+
 		var collect func(*Node)
 		collect = func(n *Node) {
 			if n == nil {
@@ -258,7 +264,7 @@ func (d *DesktopEngine) CaptureTree() TreeCapture {
 				collect(child)
 			}
 		}
-		
+
 		collect(ws.tree.Root)
 		return buildTreeCapture(ws.tree.Root, paneIndex)
 	}
@@ -320,8 +326,9 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		// Terminal-like apps expose per-row globalIdxs for their rendered
 		// content. The content buffer sits inside a 1-cell border at (1,1),
 		// so offset entries by +1 and stop short of the bottom-border row.
-		if provider, ok := p.app.(RowGlobalIdxProvider); ok {
-			appIdx := provider.RowGlobalIdx()
+		rowProvider, hasRowProvider := p.app.(RowGlobalIdxProvider)
+		if hasRowProvider {
+			appIdx := rowProvider.RowGlobalIdx()
 			h := len(buf)
 			// Last writable interior row is h-2 (h-1 is the bottom border).
 			maxInteriorRow := h - 2
@@ -333,10 +340,19 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 				snap.RowGlobalIdx[dst] = gi
 			}
 		}
+		// A pane is alt-screen from the publisher's perspective when it
+		// reports alt-screen OR it has no globalIdx mapping at all (non-
+		// terminal apps). In both cases clients key rows by flat index.
+		if !hasRowProvider {
+			snap.AltScreen = true
+		} else if altProvider, ok := p.app.(AltScreenProvider); ok && altProvider.InAltScreen() {
+			snap.AltScreen = true
+		}
 	} else {
 		// Mark as placeholder
 		snap.AppType = "placeholder"
 		snap.Title = "Loading..."
+		snap.AltScreen = true
 	}
 	return snap
 }
@@ -420,6 +436,7 @@ func (d *DesktopEngine) captureStatusPaneSnapshots() []PaneSnapshot {
 			Title:        sp.app.GetTitle(),
 			Buffer:       cloned,
 			RowGlobalIdx: allMinusOne(len(cloned)),
+			AltScreen:    true,
 			Rect:         rect,
 		}
 		if provider, ok := sp.app.(SnapshotProvider); ok {
@@ -464,7 +481,7 @@ func (d *DesktopEngine) captureFloatingPanelSnapshots() []PaneSnapshot {
 		// Calculate dimensions with border (padding 1 on each side)
 		contentW := fp.width
 		contentH := fp.height
-		
+
 		// Sanity check buffer size vs requested size, clip if needed
 		if len(buf) < contentH {
 			contentH = len(buf)
@@ -507,7 +524,7 @@ func (d *DesktopEngine) captureFloatingPanelSnapshots() []PaneSnapshot {
 			for range title {
 				titleRuneCount++
 			}
-			
+
 			maxTitleLen := borderW - 4
 			if titleRuneCount > maxTitleLen {
 				// Truncate
@@ -515,11 +532,13 @@ func (d *DesktopEngine) captureFloatingPanelSnapshots() []PaneSnapshot {
 				title = string(r[:maxTitleLen])
 				titleRuneCount = maxTitleLen
 			}
-			
+
 			// Center title
 			startX := (borderW - (titleRuneCount + 2)) / 2
-			if startX < 1 { startX = 1 }
-			
+			if startX < 1 {
+				startX = 1
+			}
+
 			titleStr := " " + title + " "
 			for i, ch := range titleStr {
 				if startX+i < borderW-1 {
@@ -530,10 +549,14 @@ func (d *DesktopEngine) captureFloatingPanelSnapshots() []PaneSnapshot {
 
 		// Copy content into center
 		for y := 0; y < contentH; y++ {
-			if y >= len(buf) { break }
+			if y >= len(buf) {
+				break
+			}
 			row := buf[y]
 			for x := 0; x < contentW; x++ {
-				if x >= len(row) { break }
+				if x >= len(row) {
+					break
+				}
 				out[y+1][x+1] = row[x]
 			}
 		}
@@ -551,6 +574,7 @@ func (d *DesktopEngine) captureFloatingPanelSnapshots() []PaneSnapshot {
 			Title:        fp.app.GetTitle(),
 			Buffer:       out,
 			RowGlobalIdx: allMinusOne(len(out)),
+			AltScreen:    true,
 			Rect:         rect,
 		}
 		if provider, ok := fp.app.(SnapshotProvider); ok {

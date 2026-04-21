@@ -70,6 +70,12 @@ func (s *Session) ApplyViewportUpdate(u protocol.ViewportUpdate) {
 	s.viewports.Apply(u)
 }
 
+// Viewport returns the client-reported viewport for the given pane, or
+// false if the client has not sent one yet.
+func (s *Session) Viewport(paneID [16]byte) (ClientViewport, bool) {
+	return s.viewports.Get(paneID)
+}
+
 func (s *Session) setMaxDiffs(limit int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
