@@ -18,6 +18,21 @@ var (
 )
 
 // FetchRangeFlags is a bitmask set on FetchRangeResponse.
+//
+// Flag semantics and valid combinations:
+//
+//   - FetchRangeAltScreenActive is mutually exclusive with all other flags.
+//     When the pane is in alt-screen the server short-circuits before checking
+//     retention or row content, so BelowRetention and Empty are never set.
+//
+//   - FetchRangeBelowRetention and FetchRangeEmpty may legitimately co-occur.
+//     This happens when part of the requested range has been evicted from the
+//     retention window and the remaining resident rows happen to lie outside
+//     [LoIdx, HiIdx) — the response has no rows but the client should know
+//     that some content was evicted, not merely absent.
+//
+//   - Clients must ignore unknown bits for forward-compatibility.  Future
+//     versions of the protocol may add new flags without a version bump.
 type FetchRangeFlags uint8
 
 const (
