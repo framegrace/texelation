@@ -19,7 +19,8 @@ import (
 type BufferDeltaFlags uint8
 
 const (
-	BufferDeltaNone BufferDeltaFlags = 0
+	BufferDeltaNone      BufferDeltaFlags = 0
+	BufferDeltaAltScreen BufferDeltaFlags = 1 << 0
 )
 
 // ColorModel represents how colours are encoded for a style.
@@ -92,6 +93,7 @@ type BufferDelta struct {
 	PaneID   [16]byte
 	Revision uint32
 	Flags    BufferDeltaFlags
+	RowBase  int64
 	Styles   []StyleEntry
 	Rows     []RowDelta
 }
@@ -109,6 +111,9 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 		return nil, err
 	}
 	buf.WriteByte(byte(delta.Flags))
+	if err := binary.Write(buf, binary.LittleEndian, delta.RowBase); err != nil {
+		return nil, err
+	}
 
 	if len(delta.Styles) > 0xFFFF || len(delta.Rows) > 0xFFFF {
 		return nil, ErrBufferTooLarge
@@ -201,13 +206,14 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 // DecodeBufferDelta reverses EncodeBufferDelta.
 func DecodeBufferDelta(b []byte) (BufferDelta, error) {
 	var delta BufferDelta
-	if len(b) < 21 { // paneID(16)+revision(4)+flags(1)
+	if len(b) < 29 { // paneID(16)+revision(4)+flags(1)+rowBase(8)
 		return delta, ErrPayloadShort
 	}
 	copy(delta.PaneID[:], b[:16])
 	delta.Revision = binary.LittleEndian.Uint32(b[16:20])
 	delta.Flags = BufferDeltaFlags(b[20])
-	b = b[21:]
+	delta.RowBase = int64(binary.LittleEndian.Uint64(b[21:29]))
+	b = b[29:]
 
 	if len(b) < 2 {
 		return delta, ErrPayloadShort

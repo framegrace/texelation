@@ -188,3 +188,47 @@ func TestBufferDeltaInvalid(t *testing.T) {
 		t.Fatalf("expected error for short payload")
 	}
 }
+
+func TestBufferDelta_AltScreenFlagRoundTrip(t *testing.T) {
+	in := BufferDelta{
+		PaneID: [16]byte{9},
+		Flags:  BufferDeltaAltScreen,
+		Rows:   []RowDelta{{Row: 3, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}}},
+		Styles: []StyleEntry{{AttrFlags: 0}},
+	}
+	raw, err := EncodeBufferDelta(in)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	out, err := DecodeBufferDelta(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Flags&BufferDeltaAltScreen == 0 {
+		t.Fatalf("AltScreen flag lost")
+	}
+}
+
+func TestBufferDelta_RowBaseRoundTrip(t *testing.T) {
+	in := BufferDelta{
+		PaneID:   [16]byte{1, 2, 3},
+		Revision: 42,
+		Flags:    BufferDeltaNone,
+		RowBase:  1_234_567,
+		Rows: []RowDelta{
+			{Row: 0, Spans: []CellSpan{{StartCol: 0, Text: "hello", StyleIndex: 0}}},
+		},
+		Styles: []StyleEntry{{AttrFlags: 0}},
+	}
+	raw, err := EncodeBufferDelta(in)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	out, err := DecodeBufferDelta(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.RowBase != in.RowBase {
+		t.Fatalf("RowBase: got %d want %d", out.RowBase, in.RowBase)
+	}
+}
