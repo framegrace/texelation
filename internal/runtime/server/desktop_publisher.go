@@ -86,6 +86,10 @@ func (p *DesktopPublisher) RevisionFor(paneID [16]byte) uint32 {
 	return p.revisions[paneID]
 }
 
+// Publish reads SnapshotBuffers from the desktop engine, then delegates
+// to publishSnapshotsLocked for the per-pane encode + enqueue loop. The
+// split lets tests drive the encode path with synthetic snapshots without
+// spinning up a live desktop engine.
 func (p *DesktopPublisher) Publish() error {
 	if p.desktop == nil || p.session == nil {
 		return nil
@@ -96,6 +100,23 @@ func (p *DesktopPublisher) Publish() error {
 	buffers := p.desktop.SnapshotBuffers()
 	// if len(buffers) > 0 { log.Printf("DesktopPublisher: Publishing %d buffers", len(buffers)) }
 
+	if err := p.publishSnapshotsLocked(buffers); err != nil {
+		return err
+	}
+	elapsed := time.Since(start)
+	p.desktop.SetLastPublishDuration(elapsed)
+	if p.observer != nil {
+		p.observer.ObservePublish(p.session, len(buffers), elapsed)
+	}
+	if p.notify != nil {
+		p.notify()
+	}
+	return nil
+}
+
+// publishSnapshotsLocked runs the per-pane encode + enqueue loop for the
+// given snapshots. The caller must hold p.mu.
+func (p *DesktopPublisher) publishSnapshotsLocked(buffers []texel.PaneSnapshot) error {
 	for _, snap := range buffers {
 		vp, haveVP := p.session.Viewport(snap.ID)
 		// Main-screen panes require a viewport before we clip rows: the
@@ -105,11 +126,32 @@ func (p *DesktopPublisher) Publish() error {
 		if !snap.AltScreen && !haveVP {
 			continue
 		}
-		// If the viewport shifted since the last publish for this pane,
-		// rows previously out-of-window may now be in-window but unchanged;
-		// they must re-emit because the client has never seen them.
+		// Narrow prev-buffer invalidation: rows that were OUT of window
+		// and are now IN window with unchanged content would be wrongly
+		// skipped by rowsEqual, so we must force a re-emit in cases where
+		// that can happen. The only cases that require invalidation are:
+		//   - first viewport for this pane (no prior state);
+		//   - geometry change (Rows or Cols differ);
+		//   - AutoFollow mode toggled (window shape semantics change);
+		//   - manual scroll (AutoFollow=false and View indices shifted),
+		//     where the new window may expose unchanged content.
+		// In AutoFollow-to-AutoFollow with unchanged Rows/Cols, View
+		// indices advance every frame; we deliberately do NOT invalidate
+		// because new bottom rows differ in content and diff naturally
+		// via rowsEqual, and no previously-hidden row can become visible
+		// without content change.
 		if haveVP {
-			if prevVP, ok := p.lastViewport[snap.ID]; !ok || prevVP != vp {
+			prevVP, hadPrev := p.lastViewport[snap.ID]
+			shouldInvalidate := !hadPrev ||
+				prevVP.AutoFollow != vp.AutoFollow ||
+				prevVP.Rows != vp.Rows ||
+				prevVP.Cols != vp.Cols
+			if !shouldInvalidate && !vp.AutoFollow {
+				if prevVP.ViewTopIdx != vp.ViewTopIdx || prevVP.ViewBottomIdx != vp.ViewBottomIdx {
+					shouldInvalidate = true
+				}
+			}
+			if shouldInvalidate {
 				p.prevBuffers[snap.ID] = nil
 			}
 			p.lastViewport[snap.ID] = vp
@@ -127,14 +169,6 @@ func (p *DesktopPublisher) Publish() error {
 		if err := p.session.EnqueueDiff(delta); err != nil {
 			return err
 		}
-	}
-	elapsed := time.Since(start)
-	p.desktop.SetLastPublishDuration(elapsed)
-	if p.observer != nil {
-		p.observer.ObservePublish(p.session, len(buffers), elapsed)
-	}
-	if p.notify != nil {
-		p.notify()
 	}
 	return nil
 }

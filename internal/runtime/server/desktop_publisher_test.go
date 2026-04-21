@@ -159,23 +159,21 @@ func buildSyntheticAltSnap(paneID [16]byte, rows, cols int) texel.PaneSnapshot {
 }
 
 // publishSnaps drives a single encode+enqueue pass for the given snapshots
-// without needing a live DesktopEngine. Mirrors the relevant body of
-// DesktopPublisher.Publish for unit-testing bufferToDelta end-to-end.
+// without needing a live DesktopEngine. It constructs a real
+// DesktopPublisher and invokes publishSnapshotsLocked so tests exercise
+// the production encode loop and automatically track any future changes.
 func publishSnaps(t *testing.T, session *Session, snaps []texel.PaneSnapshot) {
 	t.Helper()
-	for _, snap := range snaps {
-		vp, haveVP := session.Viewport(snap.ID)
-		if !snap.AltScreen && !haveVP {
-			continue
-		}
-		delta := bufferToDelta(snap, nil, 1, vp)
-		if len(delta.Rows) == 0 && !snap.AltScreen {
-			// Publisher would skip; mirror that.
-			continue
-		}
-		if err := session.EnqueueDiff(delta); err != nil {
-			t.Fatalf("enqueue diff: %v", err)
-		}
+	pub := &DesktopPublisher{
+		session:      session,
+		revisions:    make(map[[16]byte]uint32),
+		prevBuffers:  make(map[[16]byte][][]texel.Cell),
+		lastViewport: make(map[[16]byte]ClientViewport),
+	}
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if err := pub.publishSnapshotsLocked(snaps); err != nil {
+		t.Fatalf("publishSnapshotsLocked: %v", err)
 	}
 }
 
