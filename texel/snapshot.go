@@ -15,13 +15,20 @@ import (
 )
 
 // PaneSnapshot captures the render buffer for a pane along with a stable ID.
+// RowGlobalIdx is a parallel slice to Buffer: RowGlobalIdx[y] is the
+// sparse-store globalIdx that row y of Buffer corresponds to, or -1 if that
+// row does not map onto a main-screen scrollback row (borders, padding,
+// statusbar, scrollbar decorations, alt-screen, status panes, floating
+// panels, non-terminal apps). When Buffer is non-nil, len(RowGlobalIdx)
+// must equal len(Buffer).
 type PaneSnapshot struct {
-	ID        [16]byte
-	Title     string
-	Buffer    [][]Cell
-	Rect      Rectangle
-	AppType   string
-	AppConfig map[string]interface{}
+	ID           [16]byte
+	Title        string
+	Buffer       [][]Cell
+	RowGlobalIdx []int64
+	Rect         Rectangle
+	AppType      string
+	AppConfig    map[string]interface{}
 }
 
 // Rectangle stores pane position and size in screen coordinates.
@@ -292,9 +299,10 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 	buf := p.renderBuffer(false)
 	id := p.ID()
 	snap := PaneSnapshot{
-		ID:     id,
-		Title:  p.getTitle(),
-		Buffer: buf,
+		ID:           id,
+		Title:        p.getTitle(),
+		Buffer:       buf,
+		RowGlobalIdx: allMinusOne(len(buf)),
 		Rect: Rectangle{
 			X:      p.absX0,
 			Y:      p.absY0,
@@ -309,12 +317,42 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 			snap.AppType = appType
 			snap.AppConfig = cloneAppConfig(config)
 		}
+		// Terminal-like apps expose per-row globalIdxs for their rendered
+		// content. The content buffer sits inside a 1-cell border at (1,1),
+		// so offset entries by +1 and stop short of the bottom-border row.
+		if provider, ok := p.app.(RowGlobalIdxProvider); ok {
+			appIdx := provider.RowGlobalIdx()
+			h := len(buf)
+			// Last writable interior row is h-2 (h-1 is the bottom border).
+			maxInteriorRow := h - 2
+			for i, gi := range appIdx {
+				dst := 1 + i
+				if dst > maxInteriorRow {
+					break
+				}
+				snap.RowGlobalIdx[dst] = gi
+			}
+		}
 	} else {
 		// Mark as placeholder
 		snap.AppType = "placeholder"
 		snap.Title = "Loading..."
 	}
 	return snap
+}
+
+// allMinusOne returns a slice of length n filled with -1. Used as the
+// default RowGlobalIdx for rows that do not map onto a sparse-store
+// globalIdx (borders, padding, non-terminal app content, etc.).
+func allMinusOne(n int) []int64 {
+	if n <= 0 {
+		return nil
+	}
+	out := make([]int64, n)
+	for i := range out {
+		out[i] = -1
+	}
+	return out
 }
 
 func (d *DesktopEngine) captureStatusPaneSnapshots() []PaneSnapshot {
@@ -378,10 +416,11 @@ func (d *DesktopEngine) captureStatusPaneSnapshots() []PaneSnapshot {
 
 		cloned := cloneBuffer(buf, rect.Height, rect.Width)
 		snap := PaneSnapshot{
-			ID:     sp.id,
-			Title:  sp.app.GetTitle(),
-			Buffer: cloned,
-			Rect:   rect,
+			ID:           sp.id,
+			Title:        sp.app.GetTitle(),
+			Buffer:       cloned,
+			RowGlobalIdx: allMinusOne(len(cloned)),
+			Rect:         rect,
 		}
 		if provider, ok := sp.app.(SnapshotProvider); ok {
 			appType, cfg := provider.SnapshotMetadata()
@@ -508,10 +547,11 @@ func (d *DesktopEngine) captureFloatingPanelSnapshots() []PaneSnapshot {
 		}
 
 		snap := PaneSnapshot{
-			ID:     fp.id,
-			Title:  fp.app.GetTitle(),
-			Buffer: out,
-			Rect:   rect,
+			ID:           fp.id,
+			Title:        fp.app.GetTitle(),
+			Buffer:       out,
+			RowGlobalIdx: allMinusOne(len(out)),
+			Rect:         rect,
 		}
 		if provider, ok := fp.app.(SnapshotProvider); ok {
 			appType, cfg := provider.SnapshotMetadata()

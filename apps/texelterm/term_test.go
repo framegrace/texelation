@@ -22,6 +22,7 @@ import (
 	texelcore "github.com/framegrace/texelui/core"
 
 	"github.com/framegrace/texelation/apps/texelterm"
+	"github.com/framegrace/texelation/texel"
 )
 
 func TestTexelTermRunRendersOutput(t *testing.T) {
@@ -329,6 +330,120 @@ func TestRenderCursorPositionAfterHorizontalResize(t *testing.T) {
 		t.Errorf("cursor row %d doesn't contain prompt: %q", cursorRowAfter, promptRow)
 		for y := 0; y < 5 && y < len(buf); y++ {
 			t.Logf("  row %d: %q", y, rowToString(buf[y]))
+		}
+	}
+
+	app.Stop()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("texelterm did not exit after stop")
+	}
+}
+
+// TestTexelTerm_RowGlobalIdxProvider_MainScreen verifies that a TexelTerm on
+// the main screen surfaces per-row globalIdx entries aligned with Render().
+// The content rows carry non-negative globalIdxs, and the statusbar row at
+// the bottom of the rendered buffer is -1.
+func TestTexelTerm_RowGlobalIdxProvider_MainScreen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	script := writeScript(t, "#!/bin/sh\nprintf 'hello texelterm\\n'\nsleep 5\n")
+
+	app := texelterm.New("texelterm", script)
+	app.Resize(40, 10)
+	app.SetRefreshNotifier(make(chan bool, 4))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Run()
+	}()
+
+	// Wait for the shell to print and the terminal to render at least one frame.
+	time.Sleep(500 * time.Millisecond)
+
+	buf := app.Render()
+	if len(buf) == 0 {
+		app.Stop()
+		<-errCh
+		t.Fatal("expected render buffer, got none")
+	}
+
+	provider, ok := app.(texel.RowGlobalIdxProvider)
+	if !ok {
+		app.Stop()
+		<-errCh
+		t.Fatal("TexelTerm does not implement texel.RowGlobalIdxProvider")
+	}
+	idx := provider.RowGlobalIdx()
+	if len(idx) != len(buf) {
+		app.Stop()
+		<-errCh
+		t.Fatalf("RowGlobalIdx length %d != Render length %d", len(idx), len(buf))
+	}
+
+	// The first content row must carry a valid main-screen globalIdx (>= 0).
+	if idx[0] < 0 {
+		t.Errorf("row 0 globalIdx = %d, want >= 0 for main-screen content", idx[0])
+	}
+	// The last row (statusbar) must be -1.
+	last := len(idx) - 1
+	if idx[last] != -1 {
+		t.Errorf("row %d (statusbar) globalIdx = %d, want -1", last, idx[last])
+	}
+
+	app.Stop()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("texelterm did not exit after stop")
+	}
+}
+
+// TestTexelTerm_RowGlobalIdxProvider_AltScreen verifies that when the
+// terminal is switched to the alt screen, every row reports -1 — alt-screen
+// content has no main-screen globalIdx mapping.
+func TestTexelTerm_RowGlobalIdxProvider_AltScreen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Enter alt screen via DECSET ?1049h, print something, and sleep so
+	// we can sample the buffer while the app is still in alt-screen mode.
+	script := writeScript(t, "#!/bin/sh\nprintf '\\033[?1049h'\nprintf 'alt-screen content'\nsleep 5\n")
+
+	app := texelterm.New("texelterm", script)
+	app.Resize(40, 10)
+	app.SetRefreshNotifier(make(chan bool, 4))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Run()
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+
+	buf := app.Render()
+	if len(buf) == 0 {
+		app.Stop()
+		<-errCh
+		t.Fatal("expected render buffer, got none")
+	}
+
+	provider, ok := app.(texel.RowGlobalIdxProvider)
+	if !ok {
+		app.Stop()
+		<-errCh
+		t.Fatal("TexelTerm does not implement texel.RowGlobalIdxProvider")
+	}
+	idx := provider.RowGlobalIdx()
+	if len(idx) != len(buf) {
+		app.Stop()
+		<-errCh
+		t.Fatalf("RowGlobalIdx length %d != Render length %d", len(idx), len(buf))
+	}
+
+	for y, gi := range idx {
+		if gi != -1 {
+			t.Errorf("alt-screen row %d globalIdx = %d, want -1", y, gi)
 		}
 	}
 

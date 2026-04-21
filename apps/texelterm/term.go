@@ -641,6 +641,57 @@ func (a *TexelTerm) logRenderDebug(grid [][]parser.Cell, cursorX, cursorY int, d
 	}
 }
 
+// RowGlobalIdx implements texel.RowGlobalIdxProvider. Returns a slice of
+// length == len(a.buf) where entry [y] is the sparse-store globalIdx of row
+// y of the last-rendered buffer, or -1 if that row has no main-screen
+// globalIdx (borders, statusbar, alt-screen content, or the buffer has not
+// been built yet). Must be called AFTER Render(); the underlying per-row
+// globalIdx slice is populated as a side-effect of the ViewWindow walk that
+// Render drives.
+func (a *TexelTerm) RowGlobalIdx() []int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.vterm == nil || a.buf == nil {
+		return nil
+	}
+	total := len(a.buf)
+	if total == 0 {
+		return nil
+	}
+	out := make([]int64, total)
+	for i := range out {
+		out[i] = -1
+	}
+	// Alt-screen rows have no main-screen globalIdx mapping.
+	if a.vterm.InAltScreen() {
+		return out
+	}
+	// Main-screen path: walk the sparse.Terminal's ViewWindow for per-row
+	// globalIdxs. Rows 0..termRows-1 are content; the final row is the
+	// statusbar (always -1) and is left at the default.
+	ms := a.vterm.MainScreenImpl()
+	if ms == nil {
+		return out
+	}
+	st, ok := ms.(*sparse.Terminal)
+	if !ok {
+		return out
+	}
+	vw := st.ViewWindow()
+	if vw == nil {
+		return out
+	}
+	// The rendered buffer has termRows content rows plus a 1-row statusbar.
+	termRows := total - 1
+	if termRows < 0 {
+		termRows = 0
+	}
+	for y := 0; y < termRows; y++ {
+		out[y] = vw.RowGlobalIdx(y)
+	}
+	return out
+}
+
 func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()

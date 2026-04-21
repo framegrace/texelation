@@ -28,6 +28,13 @@ type ViewWindow struct {
 	viewAnchorOffset int
 	globalReflowOff  bool
 	autoJumpOnInput  bool
+
+	// rowGlobalIdx is a cache populated by Render(): rowGlobalIdx[y] is the
+	// store globalIdx that output row y corresponds to, or -1 if the row was
+	// a blank-pad row with no underlying store position. Length tracks the
+	// last-rendered height. Used by RowGlobalIdx(y) so callers see exactly
+	// what Render produced rather than a re-walked (possibly drifted) value.
+	rowGlobalIdx []int64
 }
 
 // NewViewWindow creates a ViewWindow in autoFollow mode. viewBottom starts
@@ -104,6 +111,7 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 	v.mu.Unlock()
 
 	out := make([][]parser.Cell, 0, height)
+	rowGI := make([]int64, 0, height)
 	maxSteps := 4 * height
 	if maxSteps < 4 {
 		maxSteps = 4
@@ -123,20 +131,32 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 				// A skip on an empty first chain is a no-op.
 			}
 			out = append(out, make([]parser.Cell, width))
+			// Blank/pad rows with no real content track as -1 so callers
+			// don't conflate them with a written row at that globalIdx.
+			rowGI = append(rowGI, -1)
 			gi++
 			continue
 		}
 		end, nowrap := walkChain(s, gi, maxSteps)
 
 		var rows [][]parser.Cell
+		var rowsGI []int64
 		if reflowOff || nowrap {
+			// Each physical row is its own globalIdx: gi, gi+1, ..., end.
 			for r := gi; r <= end; r++ {
 				rows = append(rows, clipRow(s.GetLine(r), width))
+				rowsGI = append(rowsGI, r)
 			}
 		} else {
+			// Wrapped chain reflowed to this viewport's width: all reflowed
+			// sub-rows share the chain's head globalIdx. Sub-row resolution
+			// would require tracking cell-range provenance through
+			// reflowChain; the publisher only needs "does this row belong
+			// to a real store position" which the chain head answers.
 			reflowed := reflowChain(s, gi, end, width)
 			for _, row := range reflowed {
 				rows = append(rows, clipRow(row, width))
+				rowsGI = append(rowsGI, gi)
 			}
 		}
 
@@ -144,24 +164,51 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 			first = false
 			if skip < len(rows) {
 				rows = rows[skip:]
+				rowsGI = rowsGI[skip:]
 			} else {
 				rows = nil
+				rowsGI = nil
 			}
 		}
 
-		for _, row := range rows {
+		for i, row := range rows {
 			if len(out) >= height {
 				break
 			}
 			out = append(out, row)
+			rowGI = append(rowGI, rowsGI[i])
 		}
 		gi = end + 1
 	}
 
 	for len(out) < height {
 		out = append(out, make([]parser.Cell, width))
+		rowGI = append(rowGI, -1)
 	}
+
+	// Trim to height in case any loop appended one extra entry.
+	if len(rowGI) > height {
+		rowGI = rowGI[:height]
+	}
+
+	v.mu.Lock()
+	v.rowGlobalIdx = rowGI
+	v.mu.Unlock()
+
 	return out
+}
+
+// RowGlobalIdx returns the store globalIdx that the last Render(s) call
+// placed at viewport row y, or -1 if y is out of [0, height) or the row was
+// a blank/pad row with no underlying store position. Reads the cache
+// populated by Render; returns -1 if Render has never been called.
+func (v *ViewWindow) RowGlobalIdx(y int) int64 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if y < 0 || y >= len(v.rowGlobalIdx) {
+		return -1
+	}
+	return v.rowGlobalIdx[y]
 }
 
 // RecomputeLiveAnchor repositions viewAnchor/viewAnchorOffset so that the

@@ -312,3 +312,9 @@ func (t *Terminal) Grid() [][]parser.Cell {
 // Store returns the underlying sparse store. Intended for read-only
 // scrollback fetch paths; callers must not mutate cells through it.
 func (t *Terminal) Store() *Store { return t.store }
+
+// ViewWindow returns the underlying ViewWindow. Intended for callers that
+// need to query per-row globalIdxs of the last RenderReflow call (see
+// ViewWindow.RowGlobalIdx). Callers must not mutate the ViewWindow's view
+// state through this handle.
+func (t *Terminal) ViewWindow() *ViewWindow { return t.view }
