@@ -66,6 +66,8 @@ const (
 	MsgImageDelete
 	MsgImageReset
 	MsgViewportUpdate
+	MsgFetchRange
+	MsgFetchRangeResponse
 )
 
 // Header describes the fixed portion of every frame exchanged over the wire.
