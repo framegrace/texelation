@@ -20,13 +20,22 @@ func TestStyleTable_Dedup(t *testing.T) {
 	cellADup := parser.Cell{Rune: 'z', Attr: parser.AttrBold, FG: parser.Color{Mode: parser.ColorModeDefault}}
 	cellB := parser.Cell{Rune: 'b', Attr: parser.AttrUnderline, FG: parser.Color{Mode: parser.ColorModeDefault}}
 
-	idx0 := table.indexOf(cellA)
-	idx0Dup := table.indexOf(cellADup)
+	idx0, err := table.indexOf(cellA)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	idx0Dup, err := table.indexOf(cellADup)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if idx0 != idx0Dup {
 		t.Fatalf("same style should yield same index: got %d and %d", idx0, idx0Dup)
 	}
 
-	idx1 := table.indexOf(cellB)
+	idx1, err := table.indexOf(cellB)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if idx1 == idx0 {
 		t.Fatalf("different style should yield different index: both got %d", idx0)
 	}
@@ -46,7 +55,10 @@ func TestEncodeParserCellsToSpans_SpanBreaking(t *testing.T) {
 		{Rune: '!', Attr: parser.AttrUnderline},
 	}
 
-	spans := encodeParserCellsToSpans(cells, table)
+	spans, err := encodeParserCellsToSpans(cells, table)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(spans) != 2 {
 		t.Fatalf("expected 2 spans, got %d", len(spans))
 	}
@@ -128,7 +140,10 @@ func TestStyleTable_AttrMapping(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			table := newStyleTable()
 			cell := parser.Cell{Rune: 'x', Attr: tc.parserAttr}
-			idx := table.indexOf(cell)
+			idx, err := table.indexOf(cell)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			entries := table.entries()
 			if int(idx) >= len(entries) {
 				t.Fatalf("index %d out of range for entries len %d", idx, len(entries))
@@ -153,11 +168,58 @@ func TestStyleTable_AttrMapping(t *testing.T) {
 // and leaves the style table untouched.
 func TestEncodeParserCellsToSpans_Empty(t *testing.T) {
 	table := newStyleTable()
-	spans := encodeParserCellsToSpans(nil, table)
+	spans, err := encodeParserCellsToSpans(nil, table)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(spans) != 0 {
 		t.Fatalf("expected no spans for empty input, got %d", len(spans))
 	}
 	if len(table.entries()) != 0 {
 		t.Fatalf("expected no style entries for empty input, got %d", len(table.entries()))
+	}
+}
+
+// TestStyleTable_Overflow verifies that errStyleTableFull is returned when the
+// style table reaches maxStyleEntries distinct entries.  We pre-populate the
+// table to maxStyleEntries-1 (using synthetic unique FG values), add one more
+// to hit exactly maxStyleEntries, then verify the next call returns the error.
+//
+// Note: actually constructing 65535 distinct styles is expensive in a test.
+// We use a small synthetic approach: pre-populate the internal slice to the
+// cap directly, bypassing the map, then call indexOf with a fresh style.
+func TestStyleTable_Overflow(t *testing.T) {
+	table := newStyleTable()
+	// Pre-fill the entries slice to maxStyleEntries using synthetic unique RGB colors.
+	// We fill both the slice and the index map together via sequential indexOf calls
+	// for the first N distinct styles to ensure the map stays consistent.
+	// Since maxStyleEntries is 65535, iterating over all of them is feasible but
+	// slow (~100ms). We use a direct pre-population instead to keep the test fast.
+	//
+	// Direct pre-population: insert synthetic StyleEntries directly.
+	for i := 0; i < maxStyleEntries; i++ {
+		// Unique key: vary the FG value (uint32 covers >65535 values).
+		key := parserStyleKey{
+			fgModel: protocol.ColorModelRGB,
+			fgValue: uint32(i),
+		}
+		table.index[key] = uint16(i)
+		table.styleEntries = append(table.styleEntries, protocol.StyleEntry{
+			FgModel: protocol.ColorModelRGB,
+			FgValue: uint32(i),
+		})
+	}
+	if len(table.entries()) != maxStyleEntries {
+		t.Fatalf("pre-population: want %d entries, got %d", maxStyleEntries, len(table.entries()))
+	}
+
+	// Now request a brand-new style (fgValue=maxStyleEntries, which is not in the map).
+	newCell := parser.Cell{
+		Rune: 'X',
+		FG:   parser.Color{Mode: parser.ColorModeRGB, R: 0xFF, G: 0xFF, B: 0xFF},
+	}
+	_, err := table.indexOf(newCell)
+	if err == nil {
+		t.Fatal("expected errStyleTableFull, got nil")
 	}
 }

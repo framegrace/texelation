@@ -382,7 +382,8 @@ func (c *connection) handleFetchRange(payload []byte) error {
 
 	resp, err := ServeFetchRange(st, req, revision)
 	if err != nil {
-		return fmt.Errorf("serve: %w", err)
+		log.Printf("server: ServeFetchRange pane %x: %v", req.PaneID[:4], err)
+		return sendStub(protocol.FetchRangeEmpty)
 	}
 
 	enc, err := protocol.EncodeFetchRangeResponse(resp)

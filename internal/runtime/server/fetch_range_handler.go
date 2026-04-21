@@ -4,6 +4,8 @@
 package server
 
 import (
+	"fmt"
+
 	"github.com/framegrace/texelation/apps/texelterm/parser/sparse"
 	"github.com/framegrace/texelation/protocol"
 )
@@ -46,7 +48,11 @@ func ServeFetchRange(st *sparse.Store, req protocol.FetchRange, revision uint32)
 			GlobalIdx: idx,
 			NoWrap:    st.RowNoWrap(idx),
 		}
-		row.Spans = encodeParserCellsToSpans(cells, table)
+		spans, encErr := encodeParserCellsToSpans(cells, table)
+		if encErr != nil {
+			return resp, fmt.Errorf("encode spans: %w", encErr)
+		}
+		row.Spans = spans
 		if n := len(cells); n > 0 && cells[n-1].Wrapped {
 			row.Wrapped = true
 		}
