@@ -24,6 +24,15 @@ import (
 	"github.com/framegrace/texelation/protocol"
 )
 
+// pendingFetchRange is a deferred MsgFetchRange request stashed because
+// another fetch for the same pane was already inflight.  Replaced (not
+// queued) when a newer viewport comes in — the client only ever needs the
+// latest missing-rows window.
+type pendingFetchRange struct {
+	Lo int64
+	Hi int64
+}
+
 // paneViewport is the per-pane viewport state tracked on the client.
 type paneViewport struct {
 	mu sync.Mutex
@@ -38,8 +47,8 @@ type paneViewport struct {
 	// bookkeeping
 	dirty          bool
 	inflightFetch  bool
-	pendingFetch   *[2]int64 // nil when none; non-nil = {lo, hi}
-	knownBottomGid int64     // highest gid ever seen for this pane
+	pendingFetch   *pendingFetchRange // nil when none
+	knownBottomGid int64              // highest gid ever seen for this pane
 }
 
 // viewportTrackers holds all per-pane trackers plus a counter for FetchRange
@@ -240,8 +249,8 @@ func (s *clientState) onFetchRangeResponse(paneID [16]byte) (lo, hi int64, send 
 	defer vp.mu.Unlock()
 	vp.inflightFetch = false
 	if vp.pendingFetch != nil {
-		lo = vp.pendingFetch[0]
-		hi = vp.pendingFetch[1]
+		lo = vp.pendingFetch.Lo
+		hi = vp.pendingFetch.Hi
 		vp.pendingFetch = nil
 		vp.inflightFetch = true
 		return lo, hi, true
@@ -399,7 +408,7 @@ func flushFrame(
 				}
 			} else {
 				// Stash as pending.
-				pf := [2]int64{miss[0], miss[len(miss)-1] + 1}
+				pf := pendingFetchRange{Lo: miss[0], Hi: miss[len(miss)-1] + 1}
 				rawVP.pendingFetch = &pf
 				rawVP.mu.Unlock()
 			}

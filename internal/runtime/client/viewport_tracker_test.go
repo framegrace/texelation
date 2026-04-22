@@ -456,7 +456,7 @@ func TestFlushFrame_EmitsPendingFetchOnResponse(t *testing.T) {
 	// Pre-set pending fetch (inflight is already false).
 	vp := state.viewports.get(paneID(8))
 	vp.mu.Lock()
-	pf := [2]int64{2000, 2024}
+	pf := pendingFetchRange{Lo: 2000, Hi: 2024}
 	vp.pendingFetch = &pf
 	vp.inflightFetch = true // simulate: response arrives now.
 	vp.mu.Unlock()
