@@ -65,6 +65,10 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			}
 		}
 		state.paneCachesMu.Unlock()
+		// Initialise per-pane viewport trackers from snapshot geometry.
+		if state.viewports != nil {
+			state.onTreeSnapshot(snap)
+		}
 		return true
 	case protocol.MsgBufferDelta:
 		delta, err := protocol.DecodeBufferDelta(payload)
@@ -74,6 +78,10 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		}
 		cache.ApplyDelta(delta)
 		state.paneCacheFor(delta.PaneID).ApplyDelta(delta)
+		// Update viewport tracker: alt-screen transitions + AutoFollow advance.
+		if state.viewports != nil {
+			state.onBufferDelta(delta)
+		}
 		scheduleAck(pendingAck, ackSignal, hdr.Sequence)
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
@@ -88,6 +96,12 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		// FetchRangeResponse is a targeted reply, not a broadcast delta.
 		// It does not participate in the seq/ack stream.
 		state.paneCacheFor(resp.PaneID).ApplyFetchRange(resp)
+		// Clear inflight flag and emit pending fetch if one was stashed.
+		if state.viewports != nil {
+			if lo, hi, send := state.onFetchRangeResponse(resp.PaneID); send {
+				sendFetchRange(state, conn, writeMu, sessionID, resp.PaneID, lo, hi)
+			}
+		}
 		return true
 	case protocol.MsgPing:
 		pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})

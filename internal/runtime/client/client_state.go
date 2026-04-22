@@ -51,6 +51,12 @@ type clientState struct {
 	cache        *client.BufferCache
 	paneCaches   map[[16]byte]*client.PaneCache
 	paneCachesMu sync.RWMutex
+	viewports    *viewportTrackers
+
+	// Wire for FlushFrame — set once after connect, never mutated thereafter.
+	conn      net.Conn
+	writeMu   *sync.Mutex
+	sessionID [16]byte
 
 	clipboardMu          sync.Mutex
 	clipboard            protocol.ClipboardData

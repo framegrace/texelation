@@ -154,6 +154,40 @@ func diffAndShow(screen tcell.Screen, current, previous [][]client.Cell, default
 	screen.Show()
 }
 
+// rowSourceForPane resolves the cell source for rowIdx of a pane.
+// Preference order:
+//  1. If a viewport is registered and pane is alt-screen → PaneCache.AltRowAt.
+//  2. If a viewport is registered and pane is main-screen → PaneCache.RowAt(viewTopIdx+rowIdx).
+//  3. Fallback → pane.RowCellsDirect (BufferCache path, used during bootstrap
+//     or when PaneCache has no entry for this globalIdx yet).
+//
+// The returned slice must not be retained across frame boundaries.
+func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []client.Cell {
+	if state.viewports == nil {
+		return pane.RowCellsDirect(rowIdx)
+	}
+	vc, ok := state.paneViewportFor(pane.ID)
+	if !ok {
+		return pane.RowCellsDirect(rowIdx)
+	}
+	pc := state.paneCacheFor(pane.ID)
+	if vc.AltScreen {
+		row, found := pc.AltRowAt(rowIdx)
+		if !found {
+			return pane.RowCellsDirect(rowIdx)
+		}
+		return row
+	}
+	gid := vc.ViewTopIdx + int64(rowIdx)
+	row, found := pc.RowAt(gid)
+	if !found {
+		// Row not yet in cache (fetch is en route). Render blank rather than
+		// showing stale BufferCache content at a mismatched globalIdx.
+		return nil
+	}
+	return row
+}
+
 // incrementalComposite updates only dirty panes/rows into state.prevBuffer.
 // Returns true if any cell has dynamic colors that need continuous rendering.
 func incrementalComposite(state *clientState, screenW, screenH int) bool {
@@ -180,15 +214,15 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 			continue
 		}
 
-		// Build a local pane buffer from RowCells so pane effects are applied
-		// to clean source content. Copying from prevBuffer is intentionally
-		// avoided: prevBuffer already has effects applied from the previous
-		// render, so copying and re-applying would accumulate tint each frame.
+		// Build a local pane buffer from the preferred row source.
+		// PaneCache is preferred when a viewport is registered; falls back to
+		// BufferCache (pane.RowCellsDirect) during bootstrap or for alt-screen
+		// when PaneCache has no entry yet.
 		paneBuffer := ensurePaneBuffer(state, w, h)
 		defaultCell := client.Cell{Ch: ' ', Style: state.defaultStyle}
 		for rowIdx := 0; rowIdx < h; rowIdx++ {
 			row := paneBuffer[rowIdx]
-			source := pane.RowCellsDirect(rowIdx)
+			source := rowSourceForPane(state, pane, rowIdx)
 			for col := 0; col < w; col++ {
 				if col < len(source) {
 					cell := source[col]
@@ -262,6 +296,13 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 
 // render dispatches between incremental and full rendering paths.
 func render(state *clientState, screen tcell.Screen) {
+	// Flush viewport updates and issue fetch requests before drawing.
+	// This puts MsgViewportUpdate on the wire before the frame is rendered,
+	// so the server's next emission window is already correct.
+	if state.viewports != nil {
+		FlushFrame(state, state.conn, state.writeMu, state.sessionID)
+	}
+
 	width, height := screen.Size()
 
 	resized := ensureBuffers(state, width, height)
@@ -428,7 +469,7 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 		defaultCell := client.Cell{Ch: ' ', Style: state.defaultStyle}
 		for rowIdx := 0; rowIdx < h; rowIdx++ {
 			row := paneBuffer[rowIdx]
-			source := pane.RowCellsDirect(rowIdx)
+			source := rowSourceForPane(state, pane, rowIdx)
 			for col := 0; col < w; col++ {
 				if col < len(source) {
 					cell := source[col]
