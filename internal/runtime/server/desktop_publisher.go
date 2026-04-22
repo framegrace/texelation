@@ -124,6 +124,10 @@ func (p *DesktopPublisher) publishSnapshotsLocked(buffers []texel.PaneSnapshot) 
 		// non-terminal / placeholder) panes don't need clipping and are
 		// always emitted.
 		if !snap.AltScreen && !haveVP {
+			// Silent-skip is deliberate: the client will send a ViewportUpdate
+			// right after handshake, and connection_handler nudges Publish
+			// then.  Logging surfaces the transient state for diagnosis.
+			debugLog.Printf("publisher: pane %x waiting for viewport", snap.ID[:4])
 			continue
 		}
 		// Narrow prev-buffer invalidation: rows that were OUT of window

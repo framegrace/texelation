@@ -168,6 +168,13 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			return fmt.Errorf("decode viewport update: %w", err)
 		}
 		c.session.ApplyViewportUpdate(u)
+		// Publish so main-screen panes that were skipped by the no-viewport
+		// gate in publishSnapshotsLocked now render, and so scroll/resize
+		// viewport changes re-clip prev-buffer state without waiting for
+		// unrelated content to change.
+		if sink, ok := c.sink.(*DesktopSink); ok {
+			sink.Publish()
+		}
 	case protocol.MsgFetchRange:
 		if err := c.handleFetchRange(payload); err != nil {
 			return fmt.Errorf("fetch range: %w", err)
@@ -386,8 +393,10 @@ func (c *connection) handleFetchRange(payload []byte) error {
 
 	resp, err := ServeFetchRange(st, req, revision)
 	if err != nil {
-		log.Printf("server: ServeFetchRange pane %x: %v", req.PaneID[:4], err)
-		return sendStub(protocol.FetchRangeEmpty)
+		// Real server-side fault (programmer bug or store corruption).
+		// Don't mask as FetchRangeEmpty — the client would hot-loop
+		// re-requesting. Drop the connection; resume will recover.
+		return fmt.Errorf("ServeFetchRange pane %x: %w", req.PaneID[:4], err)
 	}
 
 	enc, err := protocol.EncodeFetchRangeResponse(resp)
