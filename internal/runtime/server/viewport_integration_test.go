@@ -260,11 +260,12 @@ type memHarness struct {
 
 	readerDone chan struct{}
 
-	mu           sync.Mutex
-	rowsByGID    map[int64]protocol.RowDelta    // main-screen rows keyed by globalIdx
-	altRowsByIdx map[uint16][]protocol.CellSpan // alt-screen rows keyed by flat row index
-	fetchByReqID map[uint32]protocol.FetchRangeResponse
-	writeMu      sync.Mutex // client-side write serialization
+	mu             sync.Mutex
+	rowsByGID      map[int64]protocol.RowDelta    // main-screen rows keyed by globalIdx
+	altRowsByIdx   map[uint16][]protocol.CellSpan // alt-screen rows keyed by flat row index
+	fetchByReqID   map[uint32]protocol.FetchRangeResponse
+	rowBasesByPane map[[16]byte][]int64 // every RowBase observed per pane, in order
+	writeMu        sync.Mutex           // client-side write serialization
 }
 
 type vpScreenDriver struct {
@@ -308,16 +309,17 @@ func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 	srv := &Server{manager: mgr, sink: sink, desktopSink: sink}
 
 	h := &memHarness{
-		t:            t,
-		desktop:      desktop,
-		sink:         sink,
-		mgr:          mgr,
-		srv:          srv,
-		fakeApp:      fakeApp,
-		rowsByGID:    make(map[int64]protocol.RowDelta),
-		altRowsByIdx: make(map[uint16][]protocol.CellSpan),
-		fetchByReqID: make(map[uint32]protocol.FetchRangeResponse),
-		readerDone:   make(chan struct{}),
+		t:              t,
+		desktop:        desktop,
+		sink:           sink,
+		mgr:            mgr,
+		srv:            srv,
+		fakeApp:        fakeApp,
+		rowsByGID:      make(map[int64]protocol.RowDelta),
+		altRowsByIdx:   make(map[uint16][]protocol.CellSpan),
+		fetchByReqID:   make(map[uint32]protocol.FetchRangeResponse),
+		rowBasesByPane: make(map[[16]byte][]int64),
+		readerDone:     make(chan struct{}),
 	}
 
 	// Find the pane ID assigned to the shell app by the desktop.
@@ -465,6 +467,9 @@ func (h *memHarness) clientReadLoop() {
 					h.altRowsByIdx[row.Row] = spans
 				}
 			} else {
+				// Record the RowBase so tests can assert the documented
+				// clip-offset invariant (RowBase == ViewTopIdx - Rows).
+				h.rowBasesByPane[delta.PaneID] = append(h.rowBasesByPane[delta.PaneID], delta.RowBase)
 				for _, row := range delta.Rows {
 					gid := delta.RowBase + int64(row.Row)
 					spansCopy := make([]protocol.CellSpan, len(row.Spans))
@@ -689,6 +694,59 @@ func TestIntegration_ClipsAndFetches(t *testing.T) {
 	}
 	if !containsSubstring(joined, "row-content") {
 		t.Fatalf("row 4923 missing expected content %q; got %q", "row-content", joined)
+	}
+
+	// Negative-assertion phase: prove the publisher actually clips rather
+	// than emitting the full render buffer. The render buffer still spans
+	// interior gids [4923..4944] (22 rows after border trim). Shrink the
+	// viewport so the overscan window is a strict subset of that range:
+	// with top=4930, bottom=4931, Rows=2, the publisher clips to
+	// [lo, hi] = [ViewTopIdx-Rows, ViewBottomIdx+Rows] = [4928, 4933].
+	// Interior gids 4923..4927 and 4934..4944 MUST be suppressed.
+	h.mu.Lock()
+	h.rowsByGID = make(map[int64]protocol.RowDelta)
+	h.rowBasesByPane[paneID] = nil
+	h.mu.Unlock()
+
+	const narrowTop, narrowBottom = int64(4930), int64(4931)
+	h.ApplyViewport(paneID, narrowTop, narrowBottom, false, false)
+	h.Publish()
+
+	// Wait for at least one in-window row to confirm the publisher ran
+	// under the narrow viewport. Row 4930 sits inside [4928, 4933].
+	h.AwaitRow(paneID, 4930, 3*time.Second)
+
+	// The Rows-geometry change from 24 to 2 invalidates prev-buffer dedup
+	// (see publishSnapshotsLocked), so every in-window gid should have
+	// re-emitted. Any out-of-window gid appearing here would prove the
+	// publisher ignored the viewport clip.
+	const narrowRows = int64(narrowBottom - narrowTop + 1)
+	lo := narrowTop - narrowRows
+	hi := narrowBottom + narrowRows
+	interiorLo, interiorHi := int64(4923), int64(4944)
+	h.mu.Lock()
+	for gid := interiorLo; gid <= interiorHi; gid++ {
+		if gid >= lo && gid <= hi {
+			continue
+		}
+		if _, present := h.rowsByGID[gid]; present {
+			h.mu.Unlock()
+			t.Fatalf("gid %d is outside clip window [%d,%d] but was still delivered — publisher did not clip", gid, lo, hi)
+		}
+	}
+	// Belt-and-suspenders: assert the wire-level RowBase invariant. The
+	// most recent delta for this pane must carry RowBase == ViewTopIdx -
+	// Rows (= lo). Paired with the Row = uint16(gid - lo) contract, this
+	// proves the clip math end-to-end.
+	bases := h.rowBasesByPane[paneID]
+	if len(bases) == 0 {
+		h.mu.Unlock()
+		t.Fatalf("no main-screen BufferDelta observed under narrow viewport")
+	}
+	latestBase := bases[len(bases)-1]
+	h.mu.Unlock()
+	if latestBase != lo {
+		t.Fatalf("latest RowBase = %d, want %d (ViewTopIdx - Rows)", latestBase, lo)
 	}
 
 	// Clear out collected rows for the fetch-back assertion so we don't
