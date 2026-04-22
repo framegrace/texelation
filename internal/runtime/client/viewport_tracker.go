@@ -85,10 +85,12 @@ func (t *viewportTrackers) prune(live map[[16]byte]struct{}) {
 	}
 }
 
-// snapshot returns a shallow copy of all currently dirty trackers.
-// It clears dirty on each tracker and returns the copied state.
-// Returned slice contains (id, copied state) pairs.
-func (t *viewportTrackers) snapshot() ([]snapshotEntry, map[[16]byte]*paneViewport) {
+// snapshotDirty returns a shallow copy of all currently dirty trackers WITHOUT
+// clearing their dirty flag. The caller is responsible for calling clearDirty
+// after successful send — this split prevents a transient write failure from
+// silently dropping a viewport update (the pane would otherwise stay dark
+// with no retry until its viewport changed again).
+func (t *viewportTrackers) snapshotDirty() ([]snapshotEntry, map[[16]byte]*paneViewport) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	var entries []snapshotEntry
@@ -108,11 +110,33 @@ func (t *viewportTrackers) snapshot() ([]snapshotEntry, map[[16]byte]*paneViewpo
 					AutoFollow:    vp.AutoFollow,
 				},
 			})
-			vp.dirty = false
 		}
 		vp.mu.Unlock()
 	}
 	return entries, raw
+}
+
+// clearDirty clears the dirty flag for id iff the tracker's current state
+// still matches expected. If the user scrolled between snapshotDirty and the
+// successful send, the tracker will have been re-dirtied with new values —
+// clearing unconditionally would drop that update.
+func (t *viewportTrackers) clearDirty(id [16]byte, expected paneViewportCopy) {
+	t.mu.RLock()
+	vp, ok := t.panes[id]
+	t.mu.RUnlock()
+	if !ok {
+		return
+	}
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	if vp.AltScreen == expected.AltScreen &&
+		vp.ViewTopIdx == expected.ViewTopIdx &&
+		vp.ViewBottomIdx == expected.ViewBottomIdx &&
+		vp.Rows == expected.Rows &&
+		vp.Cols == expected.Cols &&
+		vp.AutoFollow == expected.AutoFollow {
+		vp.dirty = false
+	}
 }
 
 type snapshotEntry struct {
@@ -225,6 +249,20 @@ func (s *clientState) onFetchRangeResponse(paneID [16]byte) (lo, hi int64, send 
 	return 0, 0, false
 }
 
+// releaseInflight clears the inflightFetch reservation for paneID.  Call after
+// a sendFetchRange that returned false so the next frame can retry.
+func (s *clientState) releaseInflight(paneID [16]byte) {
+	s.viewports.mu.RLock()
+	vp, ok := s.viewports.panes[paneID]
+	s.viewports.mu.RUnlock()
+	if !ok {
+		return
+	}
+	vp.mu.Lock()
+	vp.inflightFetch = false
+	vp.mu.Unlock()
+}
+
 // paneViewportFor returns a snapshot of the current viewport for a pane.
 // Used by the renderer to decide whether to use PaneCache.
 func (s *clientState) paneViewportFor(id [16]byte) (paneViewportCopy, bool) {
@@ -267,7 +305,7 @@ func flushFrame(
 	if conn == nil {
 		return
 	}
-	entries, rawPanes := state.viewports.snapshot()
+	entries, rawPanes := state.viewports.snapshotDirty()
 
 	// Pass 1: pre-fetch PaneCaches for every non-alt-screen entry with
 	// non-zero dimensions. This ensures paneCachesMu is fully released before
@@ -317,8 +355,13 @@ func flushFrame(
 		}
 		if err := writeMessage(writeMu, conn, hdr, payload); err != nil {
 			log.Printf("send viewport update: %v", err)
+			// Leave dirty flag set so a retry happens next frame.
 			continue
 		}
+		// Send succeeded — now safe to clear dirty.  If the user scrolled
+		// between snapshotDirty and here, clearDirty sees the mismatch and
+		// leaves the flag set so the newer state still gets sent.
+		state.viewports.clearDirty(id, vc)
 
 		if vc.AltScreen {
 			// No fetch range needed for alt-screen.
@@ -342,10 +385,18 @@ func flushFrame(
 			rawVP := rawPanes[id]
 			rawVP.mu.Lock()
 			if !rawVP.inflightFetch {
-				// Send the fetch now.
+				// Claim the inflight slot before releasing the lock so
+				// concurrent callers see the reservation.
 				rawVP.inflightFetch = true
 				rawVP.mu.Unlock()
-				sendFetchRange(state, conn, writeMu, sessionID, id, miss[0], miss[len(miss)-1]+1)
+				lo, hi := miss[0], miss[len(miss)-1]+1
+				if !sendFetchRange(state, conn, writeMu, sessionID, id, lo, hi) {
+					// Write failed — release the inflight slot so the next
+					// frame can retry instead of staying wedged forever.
+					rawVP.mu.Lock()
+					rawVP.inflightFetch = false
+					rawVP.mu.Unlock()
+				}
 			} else {
 				// Stash as pending.
 				pf := [2]int64{miss[0], miss[len(miss)-1] + 1}
@@ -359,7 +410,9 @@ func flushFrame(
 	}
 }
 
-// sendFetchRange encodes and sends a MsgFetchRange to the server.
+// sendFetchRange encodes and sends a MsgFetchRange to the server. Returns
+// true on success.  On false the caller must roll back any reservation
+// (e.g. inflightFetch) so the request can be retried on the next frame.
 func sendFetchRange(
 	state *clientState,
 	conn net.Conn,
@@ -367,7 +420,7 @@ func sendFetchRange(
 	sessionID [16]byte,
 	paneID [16]byte,
 	lo, hi int64,
-) {
+) bool {
 	req := protocol.FetchRange{
 		RequestID: state.viewports.fetchID.Add(1),
 		PaneID:    paneID,
@@ -377,7 +430,7 @@ func sendFetchRange(
 	payload, err := protocol.EncodeFetchRange(req)
 	if err != nil {
 		log.Printf("encode fetch range: %v", err)
-		return
+		return false
 	}
 	hdr := protocol.Header{
 		Version:   protocol.Version,
@@ -387,5 +440,7 @@ func sendFetchRange(
 	}
 	if err := writeMessage(writeMu, conn, hdr, payload); err != nil {
 		log.Printf("send fetch range: %v", err)
+		return false
 	}
+	return true
 }

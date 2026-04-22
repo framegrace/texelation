@@ -96,10 +96,19 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		// FetchRangeResponse is a targeted reply, not a broadcast delta.
 		// It does not participate in the seq/ack stream.
 		state.paneCacheFor(resp.PaneID).ApplyFetchRange(resp)
+		// Mark the BufferCache pane dirty — incrementalComposite skips panes
+		// with Dirty=false, so without this the newly-fetched rows would sit
+		// in PaneCache unrendered until unrelated content marked the pane
+		// dirty.
+		state.cache.MarkPaneDirty(resp.PaneID)
 		// Clear inflight flag and emit pending fetch if one was stashed.
 		if state.viewports != nil {
 			if lo, hi, send := state.onFetchRangeResponse(resp.PaneID); send {
-				sendFetchRange(state, conn, writeMu, sessionID, resp.PaneID, lo, hi)
+				if !sendFetchRange(state, conn, writeMu, sessionID, resp.PaneID, lo, hi) {
+					// Roll back the reservation onFetchRangeResponse
+					// installed when it drained the pending slot.
+					state.releaseInflight(resp.PaneID)
+				}
 			}
 		}
 		return true
