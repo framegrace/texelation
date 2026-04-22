@@ -72,7 +72,22 @@ type FetchRangeResponse struct {
 	Rows      []LogicalRow
 }
 
+// Validate rejects malformed FetchRange requests.  Applied symmetrically on
+// encode and decode.
+func (f FetchRange) Validate() error {
+	if f.LoIdx < 0 {
+		return ErrFetchRangeNegative
+	}
+	if f.LoIdx > f.HiIdx {
+		return ErrFetchRangeInverted
+	}
+	return nil
+}
+
 func EncodeFetchRange(f FetchRange) ([]byte, error) {
+	if err := f.Validate(); err != nil {
+		return nil, err
+	}
 	buf := bytes.NewBuffer(make([]byte, 0, 40))
 	if err := binary.Write(buf, binary.LittleEndian, f.RequestID); err != nil {
 		return nil, err
@@ -138,7 +153,7 @@ func EncodeFetchRangeResponse(r FetchRangeResponse) ([]byte, error) {
 	for _, s := range r.Styles {
 		// Dynamic colors are not supported in FetchRange rows for v1.
 		if s.AttrFlags&AttrHasDynamic != 0 {
-			return nil, ErrBufferTooLarge
+			return nil, ErrUnsupportedDynamicColor
 		}
 		if err := binary.Write(buf, binary.LittleEndian, s.AttrFlags); err != nil {
 			return nil, err
@@ -231,7 +246,7 @@ func DecodeFetchRangeResponse(b []byte) (FetchRangeResponse, error) {
 		r.Styles[i].BgValue = binary.LittleEndian.Uint32(b[8:12])
 		b = b[12:]
 		if r.Styles[i].AttrFlags&AttrHasDynamic != 0 {
-			return r, ErrPayloadShort // unsupported in v1
+			return r, ErrUnsupportedDynamicColor
 		}
 	}
 
@@ -262,6 +277,9 @@ func DecodeFetchRangeResponse(b []byte) (FetchRangeResponse, error) {
 			b = b[6:]
 			if len(b) < int(textLen) {
 				return r, ErrPayloadShort
+			}
+			if int(styleIndex) >= int(styleCount) {
+				return r, ErrStyleIndexOutOfRange
 			}
 			spans[s] = CellSpan{StartCol: startCol, Text: string(b[:textLen]), StyleIndex: styleIndex}
 			b = b[textLen:]

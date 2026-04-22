@@ -31,7 +31,23 @@ type ViewportUpdate struct {
 	AutoFollow     bool
 }
 
+// Validate rejects malformed ViewportUpdates.  Applied symmetrically on
+// encode and decode so bugs surface at the producer rather than being
+// encoded on the wire and caught only at the receiver.
+func (v ViewportUpdate) Validate() error {
+	if v.Rows == 0 || v.Cols == 0 {
+		return ErrViewportZeroDim
+	}
+	if !v.AltScreen && v.ViewTopIdx > v.ViewBottomIdx {
+		return ErrViewportInverted
+	}
+	return nil
+}
+
 func EncodeViewportUpdate(v ViewportUpdate) ([]byte, error) {
+	if err := v.Validate(); err != nil {
+		return nil, err
+	}
 	buf := bytes.NewBuffer(make([]byte, 0, 45))
 	if _, err := buf.Write(v.PaneID[:]); err != nil {
 		return nil, err

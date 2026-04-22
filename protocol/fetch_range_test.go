@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/binary"
 	"errors"
 	"reflect"
 	"testing"
@@ -27,31 +28,35 @@ func TestFetchRange_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodeFetchRange_Validation(t *testing.T) {
-	good := FetchRange{
-		RequestID: 1,
-		LoIdx:     10,
-		HiIdx:     20,
-	}
+func TestFetchRange_Validation(t *testing.T) {
+	// Encode enforces Validate() symmetrically with Decode so malformed
+	// FetchRange requests never make it onto the wire in the first place.
+	// Decode must still reject them in case a peer violates the contract.
 
-	t.Run("lo > hi rejected", func(t *testing.T) {
-		bad := good
-		bad.LoIdx = 30 // > HiIdx
-		raw, err := EncodeFetchRange(bad)
-		if err != nil {
-			t.Fatalf("encode: %v", err)
+	t.Run("lo > hi rejected on encode", func(t *testing.T) {
+		_, err := EncodeFetchRange(FetchRange{LoIdx: 30, HiIdx: 20})
+		if !errors.Is(err, ErrFetchRangeInverted) {
+			t.Fatalf("expected ErrFetchRangeInverted on encode, got %v", err)
 		}
+	})
+
+	t.Run("lo > hi rejected on decode", func(t *testing.T) {
+		// Encode a valid payload then hand-edit LoIdx in place so the wire
+		// bytes carry an invariant violation the decoder must catch.
+		raw, err := EncodeFetchRange(FetchRange{LoIdx: 10, HiIdx: 20})
+		if err != nil {
+			t.Fatalf("encode good: %v", err)
+		}
+		var lo int64 = 30
+		binary.LittleEndian.PutUint64(raw[20:28], uint64(lo))
 		_, err = DecodeFetchRange(raw)
 		if !errors.Is(err, ErrFetchRangeInverted) {
-			t.Fatalf("expected ErrFetchRangeInverted, got %v", err)
+			t.Fatalf("expected ErrFetchRangeInverted on decode, got %v", err)
 		}
 	})
 
 	t.Run("lo == hi accepted (empty range)", func(t *testing.T) {
-		eq := good
-		eq.LoIdx = 15
-		eq.HiIdx = 15
-		raw, err := EncodeFetchRange(eq)
+		raw, err := EncodeFetchRange(FetchRange{LoIdx: 15, HiIdx: 15})
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
@@ -64,17 +69,23 @@ func TestDecodeFetchRange_Validation(t *testing.T) {
 		}
 	})
 
-	t.Run("negative lo rejected", func(t *testing.T) {
-		bad := good
-		bad.LoIdx = -1
-		bad.HiIdx = 10
-		raw, err := EncodeFetchRange(bad)
-		if err != nil {
-			t.Fatalf("encode: %v", err)
+	t.Run("negative lo rejected on encode", func(t *testing.T) {
+		_, err := EncodeFetchRange(FetchRange{LoIdx: -1, HiIdx: 10})
+		if !errors.Is(err, ErrFetchRangeNegative) {
+			t.Fatalf("expected ErrFetchRangeNegative on encode, got %v", err)
 		}
+	})
+
+	t.Run("negative lo rejected on decode", func(t *testing.T) {
+		raw, err := EncodeFetchRange(FetchRange{LoIdx: 5, HiIdx: 10})
+		if err != nil {
+			t.Fatalf("encode good: %v", err)
+		}
+		var neg int64 = -1
+		binary.LittleEndian.PutUint64(raw[20:28], uint64(neg))
 		_, err = DecodeFetchRange(raw)
 		if !errors.Is(err, ErrFetchRangeNegative) {
-			t.Fatalf("expected ErrFetchRangeNegative, got %v", err)
+			t.Fatalf("expected ErrFetchRangeNegative on decode, got %v", err)
 		}
 	})
 }

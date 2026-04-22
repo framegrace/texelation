@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 )
@@ -93,8 +94,10 @@ func TestViewportUpdate_WrapSegmentIdx(t *testing.T) {
 	}
 }
 
-func TestDecodeViewportUpdate_Validation(t *testing.T) {
-	// Helper: encode a valid ViewportUpdate then corrupt a field.
+func TestViewportUpdate_Validation(t *testing.T) {
+	// Validation is symmetric: Encode refuses malformed messages so peers
+	// cannot inject them, and Decode refuses bad wire bytes from a buggy
+	// peer.  Exercise both halves for each invariant.
 	good := ViewportUpdate{
 		ViewTopIdx:    100,
 		ViewBottomIdx: 200,
@@ -102,56 +105,74 @@ func TestDecodeViewportUpdate_Validation(t *testing.T) {
 		Cols:          80,
 	}
 
-	t.Run("inverted top>bottom rejected when not altscreen", func(t *testing.T) {
+	t.Run("inverted top>bottom rejected on encode", func(t *testing.T) {
 		bad := good
-		bad.ViewTopIdx = 300 // > ViewBottomIdx
-		raw, err := EncodeViewportUpdate(bad)
-		if err != nil {
-			t.Fatalf("encode: %v", err)
+		bad.ViewTopIdx = 300
+		if _, err := EncodeViewportUpdate(bad); !errors.Is(err, ErrViewportInverted) {
+			t.Fatalf("expected ErrViewportInverted on encode, got %v", err)
 		}
-		_, err = DecodeViewportUpdate(raw)
-		if !errors.Is(err, ErrViewportInverted) {
-			t.Fatalf("expected ErrViewportInverted, got %v", err)
+	})
+
+	t.Run("inverted top>bottom rejected on decode", func(t *testing.T) {
+		raw, err := EncodeViewportUpdate(good)
+		if err != nil {
+			t.Fatalf("encode good: %v", err)
+		}
+		var top int64 = 300
+		binary.LittleEndian.PutUint64(raw[17:25], uint64(top))
+		if _, err := DecodeViewportUpdate(raw); !errors.Is(err, ErrViewportInverted) {
+			t.Fatalf("expected ErrViewportInverted on decode, got %v", err)
 		}
 	})
 
 	t.Run("inverted allowed when altscreen", func(t *testing.T) {
-		bad := good
-		bad.AltScreen = true
-		bad.ViewTopIdx = 300 // > ViewBottomIdx — OK in alt-screen
-		raw, err := EncodeViewportUpdate(bad)
+		v := good
+		v.AltScreen = true
+		v.ViewTopIdx = 300 // > ViewBottomIdx — OK in alt-screen
+		raw, err := EncodeViewportUpdate(v)
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
-		_, err = DecodeViewportUpdate(raw)
-		if err != nil {
+		if _, err := DecodeViewportUpdate(raw); err != nil {
 			t.Fatalf("alt-screen inverted should be accepted, got error: %v", err)
 		}
 	})
 
-	t.Run("zero rows rejected", func(t *testing.T) {
+	t.Run("zero rows rejected on encode", func(t *testing.T) {
 		bad := good
 		bad.Rows = 0
-		raw, err := EncodeViewportUpdate(bad)
-		if err != nil {
-			t.Fatalf("encode: %v", err)
-		}
-		_, err = DecodeViewportUpdate(raw)
-		if !errors.Is(err, ErrViewportZeroDim) {
-			t.Fatalf("expected ErrViewportZeroDim, got %v", err)
+		if _, err := EncodeViewportUpdate(bad); !errors.Is(err, ErrViewportZeroDim) {
+			t.Fatalf("expected ErrViewportZeroDim on encode, got %v", err)
 		}
 	})
 
-	t.Run("zero cols rejected", func(t *testing.T) {
+	t.Run("zero rows rejected on decode", func(t *testing.T) {
+		raw, err := EncodeViewportUpdate(good)
+		if err != nil {
+			t.Fatalf("encode good: %v", err)
+		}
+		binary.LittleEndian.PutUint16(raw[35:37], 0)
+		if _, err := DecodeViewportUpdate(raw); !errors.Is(err, ErrViewportZeroDim) {
+			t.Fatalf("expected ErrViewportZeroDim on decode, got %v", err)
+		}
+	})
+
+	t.Run("zero cols rejected on encode", func(t *testing.T) {
 		bad := good
 		bad.Cols = 0
-		raw, err := EncodeViewportUpdate(bad)
-		if err != nil {
-			t.Fatalf("encode: %v", err)
+		if _, err := EncodeViewportUpdate(bad); !errors.Is(err, ErrViewportZeroDim) {
+			t.Fatalf("expected ErrViewportZeroDim on encode, got %v", err)
 		}
-		_, err = DecodeViewportUpdate(raw)
-		if !errors.Is(err, ErrViewportZeroDim) {
-			t.Fatalf("expected ErrViewportZeroDim, got %v", err)
+	})
+
+	t.Run("zero cols rejected on decode", func(t *testing.T) {
+		raw, err := EncodeViewportUpdate(good)
+		if err != nil {
+			t.Fatalf("encode good: %v", err)
+		}
+		binary.LittleEndian.PutUint16(raw[37:39], 0)
+		if _, err := DecodeViewportUpdate(raw); !errors.Is(err, ErrViewportZeroDim) {
+			t.Fatalf("expected ErrViewportZeroDim on decode, got %v", err)
 		}
 	})
 }
