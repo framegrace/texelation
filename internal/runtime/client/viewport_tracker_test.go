@@ -220,6 +220,54 @@ func TestViewportTracker_AdvancesOnAutoFollowDelta(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// Regression: I3 — AutoFollow must advance even for the first delta at gid=0.
+// --------------------------------------------------------------------------
+
+func TestViewportTracker_AutoFollowAdvancesFromGidZero(t *testing.T) {
+	state := makeStateWithViewports()
+	// Initialise a single pane from a tree snapshot (Rows=24).
+	id := paneID(0xA0)
+	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
+
+	// Drain the initial dirty state via flushFrame so subsequent dirty
+	// assertions are clean. Use a testConn so nothing writes to a real socket.
+	conn := &testConn{}
+	var writeMu sync.Mutex
+	flushFrame(state, conn, &writeMu, [16]byte{})
+
+	// First-ever BufferDelta at gid=0 on the main screen.
+	delta := protocol.BufferDelta{
+		PaneID:  id,
+		RowBase: 0,
+		Rows: []protocol.RowDelta{
+			{Row: 0},
+		},
+	}
+	state.onBufferDelta(delta)
+
+	vc, ok := state.paneViewportFor(id)
+	if !ok {
+		t.Fatal("paneViewportFor returned false after delta")
+	}
+	// With maxGid=0 and Rows=24: bottom=0, top=max(0, 0-23)=0.
+	if vc.ViewBottomIdx != 0 {
+		t.Errorf("ViewBottomIdx = %d, want 0", vc.ViewBottomIdx)
+	}
+	if vc.ViewTopIdx != 0 {
+		t.Errorf("ViewTopIdx = %d, want 0", vc.ViewTopIdx)
+	}
+
+	// Tracker must be marked dirty so flushFrame will emit a ViewportUpdate.
+	vp := state.viewports.get(id)
+	vp.mu.Lock()
+	dirty := vp.dirty
+	vp.mu.Unlock()
+	if !dirty {
+		t.Error("dirty should be true after AutoFollow advance from gid=0")
+	}
+}
+
+// --------------------------------------------------------------------------
 // Part 5, item 3: TestViewportTracker_DetectsAltScreenFromDelta
 // --------------------------------------------------------------------------
 
@@ -290,7 +338,7 @@ func TestFlushFrame_SendsViewportUpdate(t *testing.T) {
 
 	conn := &testConn{}
 	var writeMu sync.Mutex
-	FlushFrame(state, conn, &writeMu, [16]byte{})
+	flushFrame(state, conn, &writeMu, [16]byte{})
 
 	n := conn.countType(protocol.MsgViewportUpdate)
 	if n != 1 {
@@ -319,7 +367,7 @@ func TestFlushFrame_CoalescesMultipleChangesInFrame(t *testing.T) {
 
 	conn := &testConn{}
 	var writeMu sync.Mutex
-	FlushFrame(state, conn, &writeMu, [16]byte{})
+	flushFrame(state, conn, &writeMu, [16]byte{})
 
 	// Must only emit one update per pane per frame (dirty was cleared once).
 	n := conn.countType(protocol.MsgViewportUpdate)
@@ -349,7 +397,7 @@ func TestFlushFrame_IssuesFetchForMissingRows(t *testing.T) {
 
 	conn := &testConn{}
 	var writeMu sync.Mutex
-	FlushFrame(state, conn, &writeMu, [16]byte{})
+	flushFrame(state, conn, &writeMu, [16]byte{})
 
 	n := conn.countType(protocol.MsgFetchRange)
 	if n != 1 {
@@ -379,7 +427,7 @@ func TestFlushFrame_AtMostOneInflightFetchPerPane(t *testing.T) {
 
 	conn := &testConn{}
 	var writeMu sync.Mutex
-	FlushFrame(state, conn, &writeMu, [16]byte{})
+	flushFrame(state, conn, &writeMu, [16]byte{})
 
 	// No new MsgFetchRange should be sent.
 	n := conn.countType(protocol.MsgFetchRange)
@@ -522,7 +570,7 @@ func TestFlushFrame_NilConnIsNoop(t *testing.T) {
 
 	var writeMu sync.Mutex
 	// Must not panic.
-	FlushFrame(state, nil, &writeMu, [16]byte{})
+	flushFrame(state, nil, &writeMu, [16]byte{})
 }
 
 // --------------------------------------------------------------------------
@@ -542,7 +590,7 @@ func TestFlushFrame_ZeroDimSkipped(t *testing.T) {
 
 	conn := &testConn{}
 	var writeMu sync.Mutex
-	FlushFrame(state, conn, &writeMu, [16]byte{})
+	flushFrame(state, conn, &writeMu, [16]byte{})
 
 	n := conn.countType(protocol.MsgViewportUpdate)
 	if n != 0 {

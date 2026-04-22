@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: internal/runtime/client/viewport_tracker.go
-// Summary: Per-pane client-side viewport tracker and FlushFrame emission.
+// Summary: Per-pane client-side viewport tracker and flushFrame emission.
 // Usage: Tracks each pane's current viewport (AltScreen, ViewTopIdx,
 //
 //	ViewBottomIdx, Rows, Cols, AutoFollow) and emits MsgViewportUpdate /
@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/framegrace/texelation/client"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -149,6 +150,7 @@ func (s *clientState) onTreeSnapshot(snap protocol.TreeSnapshot) {
 			vp.Rows = rows
 			vp.Cols = cols
 			vp.AutoFollow = true
+			vp.knownBottomGid = -1
 			vp.dirty = true
 		} else if vp.Rows != rows || vp.Cols != cols {
 			// Geometry changed — update dims and mark dirty.
@@ -247,13 +249,16 @@ func (s *clientState) paneViewportFor(id [16]byte) (paneViewportCopy, bool) {
 	}, true
 }
 
-// FlushFrame is called at the top of each render iteration. It:
+// flushFrame is called at the top of each render iteration. It:
 //  1. Snapshots dirty viewport trackers.
-//  2. Sends a MsgViewportUpdate for each dirty pane.
-//  3. Checks for missing rows in the overscan window via PaneCache.MissingRows.
-//  4. Issues MsgFetchRange when missing rows exist and no fetch is inflight.
-//  5. Evicts rows outside the hysteresis band from PaneCache.
-func FlushFrame(
+//  2. Pre-fetches PaneCaches for qualifying entries BEFORE taking any per-pane
+//     viewport lock (honours the documented locking order: paneCachesMu must
+//     never be acquired while holding a per-pane vp.mu).
+//  3. Sends a MsgViewportUpdate for each dirty pane.
+//  4. Checks for missing rows in the overscan window via PaneCache.MissingRows.
+//  5. Issues MsgFetchRange when missing rows exist and no fetch is inflight.
+//  6. Evicts rows outside the hysteresis band from PaneCache.
+func flushFrame(
 	state *clientState,
 	conn net.Conn,
 	writeMu *sync.Mutex,
@@ -263,6 +268,24 @@ func FlushFrame(
 		return
 	}
 	entries, rawPanes := state.viewports.snapshot()
+
+	// Pass 1: pre-fetch PaneCaches for every non-alt-screen entry with
+	// non-zero dimensions. This ensures paneCachesMu is fully released before
+	// we acquire any per-pane vp.mu below, matching the documented locking
+	// order.
+	caches := make(map[[16]byte]*client.PaneCache, len(entries))
+	for _, e := range entries {
+		if e.vp.Rows == 0 || e.vp.Cols == 0 {
+			continue
+		}
+		if e.vp.AltScreen {
+			continue
+		}
+		caches[e.id] = state.paneCacheFor(e.id)
+	}
+
+	// Pass 2: emit viewport updates and handle fetch/evict using the
+	// pre-fetched caches. Per-pane vp.mu is only ever taken here.
 	for _, e := range entries {
 		id := e.id
 		vc := e.vp
@@ -310,8 +333,9 @@ func FlushFrame(
 		}
 		hi := vc.ViewBottomIdx + overscan
 
-		// Get PaneCache for missing-row query (acquire paneCachesMu before viewportMu).
-		pc := state.paneCacheFor(id)
+		// Use the pre-fetched PaneCache; paneCachesMu has already been
+		// released before we touch vp.mu below.
+		pc := caches[id]
 		miss := pc.MissingRows(lo, hi)
 
 		if len(miss) > 0 {

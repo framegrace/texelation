@@ -300,7 +300,7 @@ func render(state *clientState, screen tcell.Screen) {
 	// This puts MsgViewportUpdate on the wire before the frame is rendered,
 	// so the server's next emission window is already correct.
 	if state.viewports != nil {
-		FlushFrame(state, state.conn, state.writeMu, state.sessionID)
+		flushFrame(state, state.conn, state.writeMu, state.sessionID)
 	}
 
 	width, height := screen.Size()
