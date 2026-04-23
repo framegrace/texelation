@@ -617,6 +617,17 @@ func (v *VTerm) AtLiveEdge() bool {
 	return v.mainScreen.IsFollowing()
 }
 
+// RestoreViewport is the VTerm-level entry point for Plan B viewport-aware
+// resume. No-op when mainScreen is nil (parser-only tests) or when currently
+// in alt-screen mode (alt-screen preserves its own state; callers MUST NOT
+// invoke this for alt-screen panes — see PaneViewportState.AltScreen).
+func (v *VTerm) RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow bool) {
+	if v.mainScreen == nil {
+		return
+	}
+	v.mainScreen.RestoreViewport(viewBottom, wrapSeg, autoFollow)
+}
+
 // ScrollOffset returns the number of lines scrolled back from the live edge.
 // 0 means at live edge, positive means scrolled back into history.
 func (v *VTerm) ScrollOffset() int64 {
