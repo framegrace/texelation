@@ -46,9 +46,13 @@ type ConnectAccept struct {
 }
 
 // ResumeRequest asks the server to replay buffered diffs from a sequence point.
+// PaneViewports (Plan B, #199) carries per-pane viewport state so the server
+// can land each pane's ViewWindow at the exact position the client was
+// viewing at disconnect. Empty slice = fresh-connect semantics.
 type ResumeRequest struct {
-	SessionID    [16]byte
-	LastSequence uint64
+	SessionID     [16]byte
+	LastSequence  uint64
+	PaneViewports []PaneViewportState
 }
 
 // ResumeData carries any metadata needed to resume a session.
@@ -338,21 +342,50 @@ func DecodeConnectAccept(b []byte) (ConnectAccept, error) {
 }
 
 func EncodeResumeRequest(r ResumeRequest) ([]byte, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 24))
+	if len(r.PaneViewports) > 0xFFFF {
+		return nil, ErrBufferTooLarge
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, 26+len(r.PaneViewports)*EncodedPaneViewportStateSize))
 	buf.Write(r.SessionID[:])
 	if err := binary.Write(buf, binary.LittleEndian, r.LastSequence); err != nil {
 		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint16(len(r.PaneViewports))); err != nil {
+		return nil, err
+	}
+	for _, pv := range r.PaneViewports {
+		raw, err := EncodePaneViewportState(pv)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(raw)
 	}
 	return buf.Bytes(), nil
 }
 
 func DecodeResumeRequest(b []byte) (ResumeRequest, error) {
 	var r ResumeRequest
-	if len(b) < 24 {
+	if len(b) < 26 {
 		return r, ErrPayloadShort
 	}
 	copy(r.SessionID[:], b[:16])
 	r.LastSequence = binary.LittleEndian.Uint64(b[16:24])
+	count := binary.LittleEndian.Uint16(b[24:26])
+	offset := 26
+	if count > 0 {
+		r.PaneViewports = make([]PaneViewportState, 0, count)
+		for i := uint16(0); i < count; i++ {
+			pv, consumed, err := DecodePaneViewportState(b[offset:])
+			if err != nil {
+				return ResumeRequest{}, err
+			}
+			r.PaneViewports = append(r.PaneViewports, pv)
+			offset += consumed
+		}
+	}
+	if offset != len(b) {
+		return ResumeRequest{}, ErrExtraBytes
+	}
 	return r, nil
 }
 
