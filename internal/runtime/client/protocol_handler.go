@@ -105,9 +105,10 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		if state.viewports != nil {
 			if lo, hi, send := state.onFetchRangeResponse(resp.PaneID); send {
 				if !sendFetchRange(state, conn, writeMu, sessionID, resp.PaneID, lo, hi) {
-					// Roll back the reservation onFetchRangeResponse
-					// installed when it drained the pending slot.
-					state.releaseInflight(resp.PaneID)
+					// Write failed after we drained pendingFetch — restore
+					// the window so flushFrame retries instead of silently
+					// losing the request.
+					state.restorePendingFetch(resp.PaneID, lo, hi)
 				}
 			}
 		}

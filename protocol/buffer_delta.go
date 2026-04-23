@@ -220,6 +220,9 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 			if len(textBytes) > 0xFFFF {
 				return nil, ErrInvalidSpan
 			}
+			if int(span.StyleIndex) >= len(delta.Styles) {
+				return nil, ErrStyleIndexOutOfRange
+			}
 			if err := binary.Write(buf, binary.LittleEndian, span.StartCol); err != nil {
 				return nil, err
 			}

@@ -200,6 +200,9 @@ func EncodeFetchRangeResponse(r FetchRangeResponse) ([]byte, error) {
 			if len(textBytes) > 0xFFFF {
 				return nil, ErrInvalidSpan
 			}
+			if int(span.StyleIndex) >= len(r.Styles) {
+				return nil, ErrStyleIndexOutOfRange
+			}
 			if err := binary.Write(buf, binary.LittleEndian, span.StartCol); err != nil {
 				return nil, err
 			}

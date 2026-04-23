@@ -258,9 +258,13 @@ func (s *clientState) onFetchRangeResponse(paneID [16]byte) (lo, hi int64, send 
 	return 0, 0, false
 }
 
-// releaseInflight clears the inflightFetch reservation for paneID.  Call after
-// a sendFetchRange that returned false so the next frame can retry.
-func (s *clientState) releaseInflight(paneID [16]byte) {
+// restorePendingFetch clears the inflight reservation and re-stashes (lo, hi)
+// into pendingFetch so the next flushFrame retries. Used after the response
+// handler drained pendingFetch to re-issue a follow-up fetch and the write
+// failed. If a newer pendingFetch has already been stashed (concurrent
+// flushFrame observed missing rows), we leave it alone — the newer window
+// supersedes ours.
+func (s *clientState) restorePendingFetch(paneID [16]byte, lo, hi int64) {
 	s.viewports.mu.RLock()
 	vp, ok := s.viewports.panes[paneID]
 	s.viewports.mu.RUnlock()
@@ -268,8 +272,11 @@ func (s *clientState) releaseInflight(paneID [16]byte) {
 		return
 	}
 	vp.mu.Lock()
+	defer vp.mu.Unlock()
 	vp.inflightFetch = false
-	vp.mu.Unlock()
+	if vp.pendingFetch == nil {
+		vp.pendingFetch = &pendingFetchRange{Lo: lo, Hi: hi}
+	}
 }
 
 // paneViewportFor returns a snapshot of the current viewport for a pane.

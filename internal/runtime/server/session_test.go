@@ -59,7 +59,8 @@ func TestSessionRetentionLimit(t *testing.T) {
 		return protocol.BufferDelta{
 			PaneID:   id,
 			Revision: seq,
-			Rows:     []protocol.RowDelta{{Row: 0, Spans: []protocol.CellSpan{{Text: text}}}},
+			Styles:   []protocol.StyleEntry{{}},
+			Rows:     []protocol.RowDelta{{Row: 0, Spans: []protocol.CellSpan{{Text: text, StyleIndex: 0}}}},
 		}
 	}
 
