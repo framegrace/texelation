@@ -102,3 +102,30 @@ func TestWalkUpwardFromBottom_WrappedChain_TailSubRow(t *testing.T) {
 		t.Fatalf("offset: got %d want 1", offset)
 	}
 }
+
+func TestViewWindow_SetAutoFollow(t *testing.T) {
+	v := NewViewWindow(80, 24)
+	if !v.IsFollowing() {
+		t.Fatalf("IsFollowing default: got false want true")
+	}
+	v.SetAutoFollow(false)
+	if v.IsFollowing() {
+		t.Fatalf("after SetAutoFollow(false): got true want false")
+	}
+	v.SetAutoFollow(true)
+	if !v.IsFollowing() {
+		t.Fatalf("after SetAutoFollow(true): got false want true")
+	}
+}
+
+func TestViewWindow_SetViewBottom(t *testing.T) {
+	v := NewViewWindow(80, 24)
+	v.SetViewBottom(100)
+	top, bottom := v.VisibleRange()
+	if bottom != 100 {
+		t.Fatalf("VisibleRange bottom: got %d want 100", bottom)
+	}
+	if top != 100-24+1 {
+		t.Fatalf("VisibleRange top: got %d want %d", top, 100-24+1)
+	}
+}

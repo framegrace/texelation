@@ -944,3 +944,23 @@ func WalkUpwardFromBottom(s *Store, viewBottom int64, wrapSeg uint16, rows, widt
 	return anchor, 0, WalkPolicyAnchorInStore
 }
 
+// SetAutoFollow explicitly sets the autoFollow flag. Used on resume to
+// honor the client's saved autoFollow state.
+func (v *ViewWindow) SetAutoFollow(enabled bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.autoFollow = enabled
+}
+
+// SetViewBottom explicitly positions viewBottom (the globalIdx of the
+// bottom display row — for a wrapped chain, the chain-head gid the bottom
+// row belongs to). Used by the resume path alongside SetViewAnchor /
+// SetAutoFollow to bring all three internal pieces of state into a
+// consistent post-restore configuration. Clamped to height-1 to avoid
+// negative scroll semantics (via clampViewBottom, already in the file).
+func (v *ViewWindow) SetViewBottom(viewBottom int64) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.viewBottom = viewBottom
+	v.clampViewBottom()
+}
