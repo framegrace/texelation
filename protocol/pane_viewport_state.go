@@ -18,6 +18,10 @@ import (
 // ErrPaneViewportZeroDim is returned when ViewportRows or ViewportCols is zero.
 var ErrPaneViewportZeroDim = errors.New("protocol: pane viewport has zero dimension")
 
+// ErrTooManyPaneViewports is returned when a ResumeRequest carries more
+// PaneViewports than the uint16 count prefix can represent (> 0xFFFF).
+var ErrTooManyPaneViewports = errors.New("protocol: too many pane viewports")
+
 // PaneViewportState is the per-pane resume payload in MsgResumeRequest. It
 // describes where each pane was scrolled to at disconnect so the server can
 // land the pane's ViewWindow exactly there on reconnect.

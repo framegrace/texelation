@@ -343,7 +343,7 @@ func DecodeConnectAccept(b []byte) (ConnectAccept, error) {
 
 func EncodeResumeRequest(r ResumeRequest) ([]byte, error) {
 	if len(r.PaneViewports) > 0xFFFF {
-		return nil, ErrBufferTooLarge
+		return nil, ErrTooManyPaneViewports
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 26+len(r.PaneViewports)*EncodedPaneViewportStateSize))
 	buf.Write(r.SessionID[:])

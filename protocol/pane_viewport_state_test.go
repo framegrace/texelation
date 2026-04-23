@@ -4,6 +4,7 @@
 package protocol
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 )
@@ -72,5 +73,39 @@ func TestPaneViewportState_ShortPayload(t *testing.T) {
 	short := make([]byte, 10)
 	if _, _, err := DecodePaneViewportState(short); !errors.Is(err, ErrPayloadShort) {
 		t.Fatalf("want ErrPayloadShort, got %v", err)
+	}
+}
+
+func TestPaneViewportState_DecoderRejectsZeroRows(t *testing.T) {
+	good := PaneViewportState{
+		PaneID:       [16]byte{1},
+		ViewportRows: 24,
+		ViewportCols: 80,
+	}
+	raw, err := EncodePaneViewportState(good)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	// Rows field sits at bytes [27:29] per the wire layout.
+	binary.LittleEndian.PutUint16(raw[27:29], 0)
+	if _, _, err := DecodePaneViewportState(raw); !errors.Is(err, ErrPaneViewportZeroDim) {
+		t.Fatalf("want ErrPaneViewportZeroDim, got %v", err)
+	}
+}
+
+func TestPaneViewportState_DecoderRejectsZeroCols(t *testing.T) {
+	good := PaneViewportState{
+		PaneID:       [16]byte{1},
+		ViewportRows: 24,
+		ViewportCols: 80,
+	}
+	raw, err := EncodePaneViewportState(good)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	// Cols field sits at bytes [29:31].
+	binary.LittleEndian.PutUint16(raw[29:31], 0)
+	if _, _, err := DecodePaneViewportState(raw); !errors.Is(err, ErrPaneViewportZeroDim) {
+		t.Fatalf("want ErrPaneViewportZeroDim, got %v", err)
 	}
 }
