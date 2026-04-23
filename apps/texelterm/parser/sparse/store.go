@@ -80,6 +80,19 @@ func (s *Store) OldestRetained() int64 {
 	return oldest
 }
 
+// EvictBelow discards all rows with globalIdx < gid so that OldestRetained()
+// subsequently returns >= gid. Intended for test simulation of page-store
+// eviction; production eviction flows through AdaptivePersistence.
+func (s *Store) EvictBelow(gid int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for g := range s.lines {
+		if g < gid {
+			delete(s.lines, g)
+		}
+	}
+}
+
 // Get returns the Cell at (globalIdx, col). Returns a zero-value Cell if the
 // globalIdx has never been written to or if col is outside the line's current
 // length.

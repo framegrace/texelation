@@ -866,3 +866,81 @@ func (v *ViewWindow) Resize(newWidth, newHeight int, newWriteBottom int64) {
 		v.viewBottom = minBottom
 	}
 }
+
+// WalkPolicy describes the outcome of WalkUpwardFromBottom.
+type WalkPolicy uint8
+
+const (
+	// WalkPolicyAnchorInStore means viewBottom was resolvable in the store;
+	// (anchor, offset) position the view as requested.
+	WalkPolicyAnchorInStore WalkPolicy = iota
+	// WalkPolicyMissingAnchor means viewBottom < Store.OldestRetained();
+	// anchor is set to OldestRetained and the caller MUST force
+	// autoFollow=false to honor the user's scroll-back intent (Policy A).
+	WalkPolicyMissingAnchor
+)
+
+// WalkUpwardFromBottom walks chains upward starting from the wrapSeg-th sub-row
+// of the chain containing viewBottom. It accumulates `rows` reflowed sub-rows
+// at display width `width`, respecting NoWrap and the global-reflow-off
+// override. Returns the (chain-head anchor, sub-row offset) pair to pass to
+// ViewWindow.SetViewAnchor.
+//
+// Missing anchor: if viewBottom < Store.OldestRetained(), returns
+// (OldestRetained(), 0, WalkPolicyMissingAnchor). Caller must force
+// autoFollow=false before applying.
+func WalkUpwardFromBottom(s *Store, viewBottom int64, wrapSeg uint16, rows, width int, reflowOff bool) (int64, int, WalkPolicy) {
+	if viewBottom < s.OldestRetained() {
+		return s.OldestRetained(), 0, WalkPolicyMissingAnchor
+	}
+	if rows <= 0 {
+		return viewBottom, int(wrapSeg), WalkPolicyAnchorInStore
+	}
+	maxSteps := 4 * rows
+	if maxSteps < 4 {
+		maxSteps = 4
+	}
+	chainStart := findChainStart(s, viewBottom, maxSteps)
+	end, nowrap := walkChain(s, chainStart, maxSteps)
+	if reflowOff {
+		nowrap = true
+	}
+	bottomSubRows := chainReflowedRowCount(s, chainStart, end, width, nowrap)
+	ws := int(wrapSeg)
+	if ws >= bottomSubRows {
+		ws = bottomSubRows - 1
+	}
+	if ws < 0 {
+		ws = 0
+	}
+	remaining := rows - (ws + 1)
+	anchor := chainStart
+	if remaining <= 0 {
+		offset := ws - (rows - 1)
+		if offset < 0 {
+			offset = 0
+		}
+		return anchor, offset, WalkPolicyAnchorInStore
+	}
+	for remaining > 0 && anchor > 0 {
+		prevGI := anchor - 1
+		prevStart := findChainStart(s, prevGI, maxSteps)
+		prevEnd, prevNoWrap := walkChain(s, prevStart, maxSteps)
+		if reflowOff {
+			prevNoWrap = true
+		}
+		prevRows := chainReflowedRowCount(s, prevStart, prevEnd, width, prevNoWrap)
+		if prevRows >= remaining {
+			anchor = prevStart
+			offset := prevRows - remaining
+			return anchor, offset, WalkPolicyAnchorInStore
+		}
+		remaining -= prevRows
+		anchor = prevStart
+	}
+	if anchor < s.OldestRetained() {
+		anchor = s.OldestRetained()
+	}
+	return anchor, 0, WalkPolicyAnchorInStore
+}
+
