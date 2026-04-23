@@ -38,13 +38,31 @@ func (offlineScreenDriver) GetContent(int, int) (rune, []rune, tcell.Style, int)
 	return ' ', nil, tcell.StyleDefault, 1
 }
 
-type offlineApp struct{ title string }
+type offlineApp struct {
+	title string
+	// tick advances on every Render so consecutive publishes produce distinct
+	// BufferDeltas. The publisher diffs on content equality and skips empty
+	// deltas, so a static buffer would never enqueue anything past the first
+	// publish.
+	tick rune
+}
 
 func (o *offlineApp) Run() error            { return nil }
 func (o *offlineApp) Stop()                 {}
 func (o *offlineApp) Resize(cols, rows int) {}
+// nonDefaultStyle is any non-zero tcell.Style — BufferWidget.Draw skips cells
+// where style == (tcell.Style{}) (which is tcell.StyleDefault), so a literal
+// StyleDefault would render as a blank and nothing would change between
+// publishes. Foreground-white is enough to get the cell painted.
+var nonDefaultStyle = tcell.StyleDefault.Foreground(tcell.ColorWhite)
+
 func (o *offlineApp) Render() [][]texelcore.Cell {
-	return [][]texelcore.Cell{{{Ch: 'z', Style: tcell.StyleDefault}}}
+	if o.tick == 0 {
+		o.tick = 'a'
+	} else {
+		o.tick++
+	}
+	return [][]texelcore.Cell{{{Ch: o.tick, Style: nonDefaultStyle}}}
 }
 func (o *offlineApp) GetTitle() string               { return o.title }
 func (o *offlineApp) HandleKey(ev *tcell.EventKey)   {}
@@ -64,6 +82,15 @@ func TestOfflineRetentionAndResumeWithMemConn(t *testing.T) {
 	}
 	defer desktop.Close()
 
+	// Bootstrap an active workspace with a pane so the server has something to
+	// snapshot; NewDesktopEngineWithDriver leaves the desktop empty because
+	// InitAppName is "" and no workspace has been activated yet. Without this
+	// sendSnapshot sees Panes=0 and returns silently, hanging the client.
+	desktop.SwitchToWorkspace(1)
+	if ws := desktop.ActiveWorkspace(); ws != nil {
+		ws.AddApp(app)
+	}
+
 	sink := NewDesktopSink(desktop)
 	srv := &Server{manager: mgr, sink: sink, desktopSink: sink}
 
@@ -80,7 +107,15 @@ func TestOfflineRetentionAndResumeWithMemConn(t *testing.T) {
 		t.Fatalf("publisher not set after initial handshake")
 	}
 
+	// Invalidate each pane's render cache between publishes so the offlineApp
+	// observes distinct Render() ticks. Without this the render cache returns
+	// the same buffer across Publish() calls and the publisher skips empty
+	// deltas, leaving nothing for the retention limit to clamp.
+	ws := desktop.ActiveWorkspace()
 	for i := 0; i < 4; i++ {
+		if ws != nil {
+			ws.InvalidateRenderCaches()
+		}
 		if err := pub.Publish(); err != nil {
 			t.Fatalf("offline publish failed: %v", err)
 		}
@@ -88,6 +123,15 @@ func TestOfflineRetentionAndResumeWithMemConn(t *testing.T) {
 
 	if pending := session.Pending(0); len(pending) != 2 {
 		t.Fatalf("expected retention limit of 2 diffs, got %d", len(pending))
+	}
+
+	// Pre-resume: we pushed 4 publishes into a retention limit of 2, so the
+	// session must have dropped at least 2 diffs. Asserting this before
+	// resume catches a regression where retention silently stopped dropping
+	// (the post-resume check alone would still pass with DroppedDiffs == 1).
+	preResumeStats := session.Stats()
+	if preResumeStats.DroppedDiffs < 2 {
+		t.Fatalf("expected >= 2 DroppedDiffs before resume, got %d", preResumeStats.DroppedDiffs)
 	}
 
 	resumeClientFlow(t, srv, sink, desktop, session, lastSeq)

@@ -275,6 +275,17 @@ func (t *Terminal) CursorToView() (viewRow, viewCol int, ok bool) {
 // autoFollow keeps the cursor on the bottom row of the viewport. This is the
 // bridge method; callers switch over from Grid() in a later step.
 func (t *Terminal) RenderReflow() [][]parser.Cell {
+	cells, _ := t.RenderReflowWithRowIdx()
+	return cells
+}
+
+// RenderReflowWithRowIdx is the RenderReflow variant that also returns the
+// per-row globalIdx slice produced by the view walk. The two slices are
+// always lockstep-consistent: rowGI[y] describes the row at out[y] for the
+// exact same walk. Callers that need to map viewport rows back to store
+// positions (e.g., the publisher's per-row clipping, the texelterm app's
+// RowGlobalIdxProvider) should use this variant to avoid re-walking.
+func (t *Terminal) RenderReflowWithRowIdx() ([][]parser.Cell, []int64) {
 	cursorGI, cursorCol := t.write.Cursor()
 	t.view.RecomputeLiveAnchor(t.store, cursorGI, cursorCol, t.write.WriteTop())
 	return t.view.Render(t.store)
@@ -308,3 +319,14 @@ func (t *Terminal) Grid() [][]parser.Cell {
 	}
 	return grid
 }
+
+// Store returns the underlying sparse store. Intended for read-only
+// scrollback fetch paths; callers must not mutate cells through it.
+func (t *Terminal) Store() *Store { return t.store }
+
+// ViewWindow returns the underlying ViewWindow. Intended for callers that
+// need to drive a reflow walk directly (e.g. the cursor-to-view mapping
+// path). Callers must not mutate the ViewWindow's view state through this
+// handle. Per-row globalIdxs of the current render are available via
+// Terminal.RenderReflowWithRowIdx rather than a stateful query.
+func (t *Terminal) ViewWindow() *ViewWindow { return t.view }

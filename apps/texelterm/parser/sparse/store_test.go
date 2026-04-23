@@ -148,6 +148,23 @@ func TestStore_ClearRangeKeepsContentEnd(t *testing.T) {
 	}
 }
 
+func TestStore_OldestRetained(t *testing.T) {
+	s := NewStore(80)
+	if got := s.OldestRetained(); got != -1 {
+		t.Fatalf("empty: got %d want -1", got)
+	}
+	s.Set(5, 0, parser.Cell{})
+	s.Set(10, 0, parser.Cell{})
+	s.Set(3, 0, parser.Cell{})
+	if got := s.OldestRetained(); got != 3 {
+		t.Fatalf("got %d want 3", got)
+	}
+	s.ClearRange(3, 3)
+	if got := s.OldestRetained(); got != 5 {
+		t.Fatalf("after clear: got %d want 5", got)
+	}
+}
+
 func TestStore_ConcurrentReadersWriter(t *testing.T) {
 	s := NewStore(80)
 	const N = 200

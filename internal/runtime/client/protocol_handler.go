@@ -53,6 +53,22 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		if state.effects != nil {
 			state.effects.ResetPaneStates(cache.SortedPanes())
 		}
+		// Prune pane caches that are no longer in the snapshot.
+		livePanes := make(map[[16]byte]struct{}, len(snap.Panes))
+		for _, p := range snap.Panes {
+			livePanes[p.PaneID] = struct{}{}
+		}
+		state.paneCachesMu.Lock()
+		for id := range state.paneCaches {
+			if _, live := livePanes[id]; !live {
+				delete(state.paneCaches, id)
+			}
+		}
+		state.paneCachesMu.Unlock()
+		// Initialise per-pane viewport trackers from snapshot geometry.
+		if state.viewports != nil {
+			state.onTreeSnapshot(snap)
+		}
 		return true
 	case protocol.MsgBufferDelta:
 		delta, err := protocol.DecodeBufferDelta(payload)
@@ -61,9 +77,40 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			return false
 		}
 		cache.ApplyDelta(delta)
+		state.paneCacheFor(delta.PaneID).ApplyDelta(delta)
+		// Update viewport tracker: alt-screen transitions + AutoFollow advance.
+		if state.viewports != nil {
+			state.onBufferDelta(delta)
+		}
 		scheduleAck(pendingAck, ackSignal, hdr.Sequence)
 		if lastSequence != nil && hdr.Sequence > *lastSequence {
 			*lastSequence = hdr.Sequence
+		}
+		return true
+	case protocol.MsgFetchRangeResponse:
+		resp, err := protocol.DecodeFetchRangeResponse(payload)
+		if err != nil {
+			log.Printf("decode fetch range response failed: %v", err)
+			return false
+		}
+		// FetchRangeResponse is a targeted reply, not a broadcast delta.
+		// It does not participate in the seq/ack stream.
+		state.paneCacheFor(resp.PaneID).ApplyFetchRange(resp)
+		// Mark the BufferCache pane dirty — incrementalComposite skips panes
+		// with Dirty=false, so without this the newly-fetched rows would sit
+		// in PaneCache unrendered until unrelated content marked the pane
+		// dirty.
+		state.cache.MarkPaneDirty(resp.PaneID)
+		// Clear inflight flag and emit pending fetch if one was stashed.
+		if state.viewports != nil {
+			if lo, hi, send := state.onFetchRangeResponse(resp.PaneID); send {
+				if !sendFetchRange(state, conn, writeMu, sessionID, resp.PaneID, lo, hi) {
+					// Write failed after we drained pendingFetch — restore
+					// the window so flushFrame retries instead of silently
+					// losing the request.
+					state.restorePendingFetch(resp.PaneID, lo, hi)
+				}
+			}
 		}
 		return true
 	case protocol.MsgPing:

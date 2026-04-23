@@ -19,7 +19,8 @@ import (
 type BufferDeltaFlags uint8
 
 const (
-	BufferDeltaNone BufferDeltaFlags = 0
+	BufferDeltaNone      BufferDeltaFlags = 0
+	BufferDeltaAltScreen BufferDeltaFlags = 1 << 0
 )
 
 // ColorModel represents how colours are encoded for a style.
@@ -92,13 +93,16 @@ type BufferDelta struct {
 	PaneID   [16]byte
 	Revision uint32
 	Flags    BufferDeltaFlags
+	RowBase  int64
 	Styles   []StyleEntry
 	Rows     []RowDelta
 }
 
 var (
-	ErrBufferTooLarge = errors.New("protocol: buffer delta exceeds limits")
-	ErrInvalidSpan    = errors.New("protocol: invalid span")
+	ErrBufferTooLarge          = errors.New("protocol: buffer delta exceeds limits")
+	ErrInvalidSpan             = errors.New("protocol: invalid span")
+	ErrStyleIndexOutOfRange    = errors.New("protocol: span style index out of range")
+	ErrUnsupportedDynamicColor = errors.New("protocol: dynamic colors unsupported in this message type")
 )
 
 // EncodeBufferDelta serialises the delta into a compact binary representation.
@@ -109,6 +113,9 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 		return nil, err
 	}
 	buf.WriteByte(byte(delta.Flags))
+	if err := binary.Write(buf, binary.LittleEndian, delta.RowBase); err != nil {
+		return nil, err
+	}
 
 	if len(delta.Styles) > 0xFFFF || len(delta.Rows) > 0xFFFF {
 		return nil, ErrBufferTooLarge
@@ -135,25 +142,60 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 		}
 		if style.AttrFlags&AttrHasDynamic != 0 {
 			for _, d := range [2]DynColorDesc{style.DynFG, style.DynBG} {
-				buf.WriteByte(d.Type)
-				binary.Write(buf, binary.LittleEndian, d.Base)
-				binary.Write(buf, binary.LittleEndian, d.Target)
-				buf.WriteByte(d.Easing)
-				binary.Write(buf, binary.LittleEndian, d.Speed)
-				binary.Write(buf, binary.LittleEndian, d.Min)
-				binary.Write(buf, binary.LittleEndian, d.Max)
+				if err := buf.WriteByte(d.Type); err != nil {
+					return nil, err
+				}
+				if err := binary.Write(buf, binary.LittleEndian, d.Base); err != nil {
+					return nil, err
+				}
+				if err := binary.Write(buf, binary.LittleEndian, d.Target); err != nil {
+					return nil, err
+				}
+				if err := buf.WriteByte(d.Easing); err != nil {
+					return nil, err
+				}
+				if err := binary.Write(buf, binary.LittleEndian, d.Speed); err != nil {
+					return nil, err
+				}
+				if err := binary.Write(buf, binary.LittleEndian, d.Min); err != nil {
+					return nil, err
+				}
+				if err := binary.Write(buf, binary.LittleEndian, d.Max); err != nil {
+					return nil, err
+				}
 				// Gradient stops (variable length, only for Type >= 4)
 				if d.Type >= 4 {
-					buf.WriteByte(uint8(len(d.Stops)))
+					if len(d.Stops) > 0xFF {
+						return nil, ErrBufferTooLarge
+					}
+					if err := buf.WriteByte(uint8(len(d.Stops))); err != nil {
+						return nil, err
+					}
 					for _, s := range d.Stops {
-						binary.Write(buf, binary.LittleEndian, s.Position)
-						buf.WriteByte(s.Color.Type)
-						binary.Write(buf, binary.LittleEndian, s.Color.Base)
-						binary.Write(buf, binary.LittleEndian, s.Color.Target)
-						buf.WriteByte(s.Color.Easing)
-						binary.Write(buf, binary.LittleEndian, s.Color.Speed)
-						binary.Write(buf, binary.LittleEndian, s.Color.Min)
-						binary.Write(buf, binary.LittleEndian, s.Color.Max)
+						if err := binary.Write(buf, binary.LittleEndian, s.Position); err != nil {
+							return nil, err
+						}
+						if err := buf.WriteByte(s.Color.Type); err != nil {
+							return nil, err
+						}
+						if err := binary.Write(buf, binary.LittleEndian, s.Color.Base); err != nil {
+							return nil, err
+						}
+						if err := binary.Write(buf, binary.LittleEndian, s.Color.Target); err != nil {
+							return nil, err
+						}
+						if err := buf.WriteByte(s.Color.Easing); err != nil {
+							return nil, err
+						}
+						if err := binary.Write(buf, binary.LittleEndian, s.Color.Speed); err != nil {
+							return nil, err
+						}
+						if err := binary.Write(buf, binary.LittleEndian, s.Color.Min); err != nil {
+							return nil, err
+						}
+						if err := binary.Write(buf, binary.LittleEndian, s.Color.Max); err != nil {
+							return nil, err
+						}
 					}
 				}
 			}
@@ -178,6 +220,9 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 			if len(textBytes) > 0xFFFF {
 				return nil, ErrInvalidSpan
 			}
+			if int(span.StyleIndex) >= len(delta.Styles) {
+				return nil, ErrStyleIndexOutOfRange
+			}
 			if err := binary.Write(buf, binary.LittleEndian, span.StartCol); err != nil {
 				return nil, err
 			}
@@ -201,13 +246,14 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 // DecodeBufferDelta reverses EncodeBufferDelta.
 func DecodeBufferDelta(b []byte) (BufferDelta, error) {
 	var delta BufferDelta
-	if len(b) < 21 { // paneID(16)+revision(4)+flags(1)
+	if len(b) < 29 { // paneID(16)+revision(4)+flags(1)+rowBase(8)
 		return delta, ErrPayloadShort
 	}
 	copy(delta.PaneID[:], b[:16])
 	delta.Revision = binary.LittleEndian.Uint32(b[16:20])
 	delta.Flags = BufferDeltaFlags(b[20])
-	b = b[21:]
+	delta.RowBase = int64(binary.LittleEndian.Uint64(b[21:29]))
+	b = b[29:]
 
 	if len(b) < 2 {
 		return delta, ErrPayloadShort
@@ -293,6 +339,9 @@ func DecodeBufferDelta(b []byte) (BufferDelta, error) {
 			}
 			text := string(b[:textLen])
 			b = b[textLen:]
+			if int(styleIndex) >= int(styleCount) {
+				return delta, ErrStyleIndexOutOfRange
+			}
 			spans[s] = CellSpan{StartCol: startCol, Text: text, StyleIndex: styleIndex}
 		}
 		delta.Rows[i] = RowDelta{Row: row, Spans: spans}

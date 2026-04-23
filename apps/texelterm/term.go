@@ -31,6 +31,7 @@ import (
 	"github.com/framegrace/texelui/widgets"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/apps/texelterm/parser/sparse"
 	"github.com/framegrace/texelation/apps/texelterm/shell"
 	"github.com/framegrace/texelation/apps/texelterm/transformer"
 	"github.com/framegrace/texelation/config"
@@ -39,9 +40,6 @@ import (
 	// Import transformers for init() side-effect registration.
 	_ "github.com/framegrace/texelation/apps/texelterm/tablefmt"
 	_ "github.com/framegrace/texelation/apps/texelterm/txfmt"
-
-	// Import sparse for init() side-effect: registers MainScreenFactory.
-	_ "github.com/framegrace/texelation/apps/texelterm/parser/sparse"
 	"github.com/framegrace/texelation/internal/theming"
 	"github.com/framegrace/texelation/texel"
 	"github.com/framegrace/texelui/theme"
@@ -142,12 +140,12 @@ type TexelTerm struct {
 	scrollbar *ScrollBar
 
 	// Status bar with toggle button mode indicators
-	statusBar       *widgets.StatusBar
-	tfmToggle       *widgets.ToggleButton
-	tfmUserPref     bool // user's preferred transformer state (restored when TUI/alt clears)
-	tfmPillVisible  bool // whether the transformer pill button is shown on the decorator
-	searchToggle    *widgets.ToggleButton
-	cfgToggle       *widgets.ToggleButton
+	statusBar      *widgets.StatusBar
+	tfmToggle      *widgets.ToggleButton
+	tfmUserPref    bool // user's preferred transformer state (restored when TUI/alt clears)
+	tfmPillVisible bool // whether the transformer pill button is shown on the decorator
+	searchToggle   *widgets.ToggleButton
+	cfgToggle      *widgets.ToggleButton
 	// Config panel overlay
 	configPanel *ConfigPanel
 
@@ -159,6 +157,14 @@ type TexelTerm struct {
 
 	// Visual bell flash state
 	bellFlashUntil time.Time
+
+	// lastRowGlobalIdx caches the per-row globalIdx slice produced by the
+	// most recent Render() call. Populated in the main-screen branch from
+	// VTerm.GridWithRowIdx; left nil on the alt-screen path (RowGlobalIdx
+	// synthesises an all-(-1) slice in that case). a.mu serialises reads
+	// and writes, so callers reading via RowGlobalIdx under the same lock
+	// always observe a self-consistent slice paired with the rendered buf.
+	lastRowGlobalIdx []int64
 }
 
 var _ texelcore.CloseRequester = (*TexelTerm)(nil)
@@ -189,21 +195,21 @@ func New(title, command string) texelcore.App {
 	cfg.SetHelpText("Configuration (F4)")
 
 	term := &TexelTerm{
-		title:        title,
-		command:      command,
-		width:        80,
-		height:       24,
-		stop:         make(chan struct{}),
-		colorPalette: newDefaultPalette(),
-		closeCh:      make(chan struct{}),
-		restartCh:    make(chan struct{}, 1),
-		controlBus:   texelcore.NewControlBus(),
-		statusBar:    sb,
-		tfmToggle:    tfm,
-		tfmUserPref:  initCfg.GetBool("transformers", "enabled", false),
+		title:          title,
+		command:        command,
+		width:          80,
+		height:         24,
+		stop:           make(chan struct{}),
+		colorPalette:   newDefaultPalette(),
+		closeCh:        make(chan struct{}),
+		restartCh:      make(chan struct{}, 1),
+		controlBus:     texelcore.NewControlBus(),
+		statusBar:      sb,
+		tfmToggle:      tfm,
+		tfmUserPref:    initCfg.GetBool("transformers", "enabled", false),
 		tfmPillVisible: initCfg.GetBool("transformers", "show_pill_button", true),
-		searchToggle: srch,
-		cfgToggle:    cfg,
+		searchToggle:   srch,
+		cfgToggle:      cfg,
 	}
 
 	// Wire config toggle to open/close config panel
@@ -320,6 +326,31 @@ func (a *TexelTerm) drawConfirmation(buf [][]texelcore.Cell) {
 
 func (a *TexelTerm) Vterm() *parser.VTerm {
 	return a.vterm
+}
+
+// InAltScreen reports whether the alt-screen buffer is currently active.
+func (a *TexelTerm) InAltScreen() bool {
+	if a.vterm == nil {
+		return false
+	}
+	return a.vterm.InAltScreen()
+}
+
+// SparseStore returns the underlying sparse.Store for the main screen, or nil
+// if no sparse-backed main screen is configured or the type assertion fails.
+func (a *TexelTerm) SparseStore() *sparse.Store {
+	if a.vterm == nil {
+		return nil
+	}
+	ms := a.vterm.MainScreenImpl()
+	if ms == nil {
+		return nil
+	}
+	term, ok := ms.(*sparse.Terminal)
+	if !ok {
+		return nil
+	}
+	return term.Store()
 }
 
 func (a *TexelTerm) mapParserColorToTCell(c parser.Color) tcell.Color {
@@ -618,6 +649,45 @@ func (a *TexelTerm) logRenderDebug(grid [][]parser.Cell, cursorX, cursorY int, d
 	}
 }
 
+// RowGlobalIdx implements texel.RowGlobalIdxProvider. Returns a slice of
+// length == len(a.buf) where entry [y] is the sparse-store globalIdx of row
+// y of the last-rendered buffer, or -1 if that row has no main-screen
+// globalIdx (borders, statusbar, alt-screen content, or the buffer has not
+// been built yet). Must be called AFTER Render(); the per-row globalIdx
+// slice is captured during Render from VTerm.GridWithRowIdx and cached on
+// the TexelTerm under a.mu, so callers observe a slice that is lockstep-
+// consistent with a.buf.
+func (a *TexelTerm) RowGlobalIdx() []int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.vterm == nil || a.buf == nil {
+		return nil
+	}
+	total := len(a.buf)
+	if total == 0 {
+		return nil
+	}
+	out := make([]int64, total)
+	for i := range out {
+		out[i] = -1
+	}
+	// Alt-screen rows have no main-screen globalIdx mapping.
+	if a.vterm.InAltScreen() {
+		return out
+	}
+	// Main-screen path: copy from the cached slice populated by Render.
+	// The rendered buffer has termRows content rows plus a 1-row statusbar;
+	// the statusbar row stays at the default -1.
+	termRows := total - 1
+	if termRows < 0 {
+		termRows = 0
+	}
+	for y := 0; y < termRows && y < len(a.lastRowGlobalIdx); y++ {
+		out[y] = a.lastRowGlobalIdx[y]
+	}
+	return out
+}
+
 func (a *TexelTerm) Render() [][]texelcore.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -626,11 +696,16 @@ func (a *TexelTerm) Render() [][]texelcore.Cell {
 		return nil
 	}
 
-	vtermGrid := a.vterm.Grid()
+	vtermGrid, vtermRowIdx := a.vterm.GridWithRowIdx()
 	termRows := len(vtermGrid)
 	if termRows == 0 {
+		a.lastRowGlobalIdx = nil
 		return nil
 	}
+	// Stash the per-row globalIdx slice for later RowGlobalIdx() queries.
+	// vtermRowIdx is nil on the alt-screen path; RowGlobalIdx handles that
+	// by synthesising an all-(-1) slice when needed.
+	a.lastRowGlobalIdx = vtermRowIdx
 	vtermCols := len(vtermGrid[0])
 
 	totalCols := vtermCols

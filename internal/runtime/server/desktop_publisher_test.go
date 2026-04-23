@@ -9,9 +9,9 @@
 package server
 
 import (
-	texelcore "github.com/framegrace/texelui/core"
 	"testing"
 
+	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/protocol"
@@ -46,6 +46,31 @@ func (s *simpleApp) GetTitle() string               { return s.title }
 func (s *simpleApp) HandleKey(ev *tcell.EventKey)   {}
 func (s *simpleApp) SetRefreshNotifier(chan<- bool) {}
 
+// LastDelta decodes and returns the most recent BufferDelta enqueued on
+// the session for the given pane. Fails the test if none found.
+func sessionLastDelta(t *testing.T, s *Session, paneID [16]byte) protocol.BufferDelta {
+	t.Helper()
+	diffs := s.Pending(0)
+	var found *protocol.BufferDelta
+	for i := range diffs {
+		if diffs[i].Message.Type != protocol.MsgBufferDelta {
+			continue
+		}
+		decoded, err := protocol.DecodeBufferDelta(diffs[i].Payload)
+		if err != nil {
+			t.Fatalf("decode delta: %v", err)
+		}
+		if decoded.PaneID == paneID {
+			d := decoded
+			found = &d
+		}
+	}
+	if found == nil {
+		t.Fatalf("no BufferDelta for pane %x", paneID[:4])
+	}
+	return *found
+}
+
 func TestDesktopPublisherProducesDiffs(t *testing.T) {
 	driver := publisherScreenDriver{}
 	lifecycle := texel.NoopAppLifecycle{}
@@ -65,11 +90,14 @@ func TestDesktopPublisherProducesDiffs(t *testing.T) {
 		t.Fatalf("publish failed: %v", err)
 	}
 
+	// simpleApp is not a RowGlobalIdxProvider, so its snapshot is marked
+	// AltScreen=true and published without needing a viewport. Expect at
+	// least one delta with the AltScreen flag set.
 	diffs := session.Pending(0)
 	if len(diffs) == 0 {
 		t.Fatalf("expected at least one diff")
 	}
-
+	sawAltScreen := false
 	for _, diff := range diffs {
 		if diff.Message.Type != protocol.MsgBufferDelta {
 			t.Fatalf("unexpected message type %v", diff.Message.Type)
@@ -81,5 +109,128 @@ func TestDesktopPublisherProducesDiffs(t *testing.T) {
 		if len(delta.Rows) == 0 {
 			t.Fatalf("expected rows in delta")
 		}
+		if delta.Flags&protocol.BufferDeltaAltScreen != 0 {
+			sawAltScreen = true
+		}
+	}
+	if !sawAltScreen {
+		t.Fatalf("expected at least one delta with BufferDeltaAltScreen flag (non-terminal app)")
+	}
+}
+
+// buildSyntheticSnap builds a PaneSnapshot with `rows` rows, each carrying
+// globalIdx = startGid + rowIndex. The snapshot is NOT alt-screen.
+func buildSyntheticSnap(paneID [16]byte, rows int, startGid int64) texel.PaneSnapshot {
+	buf := make([][]texel.Cell, rows)
+	gid := make([]int64, rows)
+	for y := 0; y < rows; y++ {
+		buf[y] = []texel.Cell{{Ch: rune('A' + (y % 26)), Style: tcell.StyleDefault}}
+		gid[y] = startGid + int64(y)
+	}
+	return texel.PaneSnapshot{
+		ID:           paneID,
+		Title:        "synthetic",
+		Buffer:       buf,
+		RowGlobalIdx: gid,
+		AltScreen:    false,
+	}
+}
+
+// buildSyntheticAltSnap builds a PaneSnapshot with `rows` x `cols` cells
+// and AltScreen=true (all globalIdxs -1).
+func buildSyntheticAltSnap(paneID [16]byte, rows, cols int) texel.PaneSnapshot {
+	buf := make([][]texel.Cell, rows)
+	gid := make([]int64, rows)
+	for y := 0; y < rows; y++ {
+		row := make([]texel.Cell, cols)
+		for x := 0; x < cols; x++ {
+			row[x] = texel.Cell{Ch: 'x', Style: tcell.StyleDefault}
+		}
+		buf[y] = row
+		gid[y] = -1
+	}
+	return texel.PaneSnapshot{
+		ID:           paneID,
+		Title:        "alt",
+		Buffer:       buf,
+		RowGlobalIdx: gid,
+		AltScreen:    true,
+	}
+}
+
+// publishSnaps drives a single encode+enqueue pass for the given snapshots
+// without needing a live DesktopEngine. It constructs a real
+// DesktopPublisher and invokes publishSnapshotsLocked so tests exercise
+// the production encode loop and automatically track any future changes.
+func publishSnaps(t *testing.T, session *Session, snaps []texel.PaneSnapshot) {
+	t.Helper()
+	pub := &DesktopPublisher{
+		session:      session,
+		revisions:    make(map[[16]byte]uint32),
+		prevBuffers:  make(map[[16]byte][][]texel.Cell),
+		lastViewport: make(map[[16]byte]ClientViewport),
+	}
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if err := pub.publishSnapshotsLocked(snaps); err != nil {
+		t.Fatalf("publishSnapshotsLocked: %v", err)
+	}
+}
+
+func TestPublisher_ClipsToViewport(t *testing.T) {
+	paneID := [16]byte{0xAA}
+	session := NewSession([16]byte{1}, 512)
+
+	session.ApplyViewportUpdate(protocol.ViewportUpdate{
+		PaneID:        paneID,
+		ViewTopIdx:    100,
+		ViewBottomIdx: 123,
+		Rows:          24,
+		Cols:          80,
+		AutoFollow:    false,
+	})
+
+	// Pane has 200 rows of content; globalIdxs run 0..199.
+	snap := buildSyntheticSnap(paneID, 200, 0)
+	publishSnaps(t, session, []texel.PaneSnapshot{snap})
+
+	delta := sessionLastDelta(t, session, paneID)
+	if delta.Flags&protocol.BufferDeltaAltScreen != 0 {
+		t.Fatalf("main-screen pane should not set AltScreen flag")
+	}
+	// Expect RowBase = ViewTopIdx - Rows = 100 - 24 = 76.
+	if delta.RowBase != 76 {
+		t.Fatalf("RowBase: got %d want 76", delta.RowBase)
+	}
+	if len(delta.Rows) == 0 {
+		t.Fatalf("expected rows in clipped delta")
+	}
+	for _, row := range delta.Rows {
+		globalIdx := delta.RowBase + int64(row.Row)
+		if globalIdx < 76 || globalIdx > 147 {
+			t.Fatalf("row %d (idx %d) outside resident window [76,147]", row.Row, globalIdx)
+		}
+	}
+	// Window is inclusive [76, 147] = 72 rows. Pane has content for each.
+	if len(delta.Rows) != 72 {
+		t.Fatalf("expected 72 rows in window, got %d", len(delta.Rows))
+	}
+}
+
+func TestPublisher_AltScreenSetsFlag(t *testing.T) {
+	paneID := [16]byte{0xBB}
+	session := NewSession([16]byte{2}, 512)
+	snap := buildSyntheticAltSnap(paneID, 24, 80)
+	publishSnaps(t, session, []texel.PaneSnapshot{snap})
+
+	delta := sessionLastDelta(t, session, paneID)
+	if delta.Flags&protocol.BufferDeltaAltScreen == 0 {
+		t.Fatalf("alt-screen pane should set AltScreen flag")
+	}
+	if delta.RowBase != 0 {
+		t.Fatalf("alt-screen pane should have RowBase=0, got %d", delta.RowBase)
+	}
+	if len(delta.Rows) != 24 {
+		t.Fatalf("alt-screen delta: want 24 rows, got %d", len(delta.Rows))
 	}
 }

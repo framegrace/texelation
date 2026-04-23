@@ -65,6 +65,14 @@ type MainScreen interface {
 	// Uses chain-walking + NoWrap flags to preserve structured content.
 	RenderReflow() [][]Cell
 
+	// RenderReflowWithRowIdx is the RenderReflow variant that also returns
+	// the per-row globalIdx slice produced by the same walk. rowGI[y] is the
+	// store globalIdx that row y corresponds to (chain-head gi for reflowed
+	// sub-rows), or -1 for blank/pad rows with no underlying store position.
+	// The two slices are lockstep-consistent — callers that need both should
+	// use this method rather than calling RenderReflow and querying separately.
+	RenderReflowWithRowIdx() ([][]Cell, []int64)
+
 	// CursorToView maps the current cursor to its viewport-relative (row, col)
 	// in the reflowed view. Returns ok=false if the cursor's globalIdx is not
 	// inside the currently-rendered chain walk, in which case callers should

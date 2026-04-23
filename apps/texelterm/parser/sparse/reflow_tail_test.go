@@ -119,7 +119,7 @@ func TestRender_EmptyContinuationEmitsRow(t *testing.T) {
 
 	vw := NewViewWindow(80, 5)
 	vw.SetViewAnchor(0, 0)
-	out := vw.Render(s)
+	out, _ := vw.Render(s)
 
 	if len(out) < 3 {
 		t.Fatalf("Render too short: %d rows", len(out))
@@ -161,7 +161,8 @@ func TestScrollUp_ReflowedChainNoFragment(t *testing.T) {
 	vw := NewViewWindow(40, 3)
 	// Start by anchoring at the tail (line 4) so we're "past" the chain.
 	vw.SetViewAnchor(4, 0)
-	baseline := cellsToStringSparse(vw.Render(s)[0])
+	baselineRows, _ := vw.Render(s)
+	baseline := cellsToStringSparse(baselineRows[0])
 	if !strings.HasPrefix(baseline, "tail") {
 		t.Fatalf("baseline row 0 = %q; expected tail", baseline)
 	}
@@ -179,7 +180,7 @@ func TestScrollUp_ReflowedChainNoFragment(t *testing.T) {
 
 	// Top of viewport should show a non-fragmented reflowed row from the
 	// chain. Row 6 of the reflow = cells [240..280] = all 'd' (40 cells).
-	out := vw.Render(s)
+	out, _ := vw.Render(s)
 	row0 := cellsToStringSparse(out[0])
 	if !strings.HasPrefix(row0, strings.Repeat("d", 40)) {
 		t.Errorf("ScrollUp(1) top row = %q; want 40 d's (last reflowed row)", row0)

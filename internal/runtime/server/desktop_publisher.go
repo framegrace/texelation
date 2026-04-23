@@ -25,13 +25,14 @@ import (
 // DesktopPublisher captures desktop pane buffers and enqueues them as buffer
 // deltas on the associated session.
 type DesktopPublisher struct {
-	desktop     *texel.DesktopEngine
-	session     *Session
-	revisions   map[[16]byte]uint32
-	prevBuffers map[[16]byte][][]texel.Cell
-	observer    PublishObserver
-	mu          sync.Mutex
-	notify      func()
+	desktop      *texel.DesktopEngine
+	session      *Session
+	revisions    map[[16]byte]uint32
+	prevBuffers  map[[16]byte][][]texel.Cell
+	lastViewport map[[16]byte]ClientViewport
+	observer     PublishObserver
+	mu           sync.RWMutex
+	notify       func()
 }
 
 // PublishObserver records desktop publish metrics for instrumentation.
@@ -41,10 +42,11 @@ type PublishObserver interface {
 
 func NewDesktopPublisher(desktop *texel.DesktopEngine, session *Session) *DesktopPublisher {
 	pub := &DesktopPublisher{
-		desktop:     desktop,
-		session:     session,
-		revisions:   make(map[[16]byte]uint32),
-		prevBuffers: make(map[[16]byte][][]texel.Cell),
+		desktop:      desktop,
+		session:      session,
+		revisions:    make(map[[16]byte]uint32),
+		prevBuffers:  make(map[[16]byte][][]texel.Cell),
+		lastViewport: make(map[[16]byte]ClientViewport),
 	}
 
 	// Set up graphics provider factory so panes can send image messages
@@ -67,6 +69,7 @@ func (p *DesktopPublisher) SetObserver(observer PublishObserver) {
 func (p *DesktopPublisher) ResetDiffState() {
 	p.mu.Lock()
 	p.prevBuffers = make(map[[16]byte][][]texel.Cell)
+	p.lastViewport = make(map[[16]byte]ClientViewport)
 	p.mu.Unlock()
 }
 
@@ -75,6 +78,18 @@ func (p *DesktopPublisher) SetNotifier(fn func()) {
 	p.notify = fn
 }
 
+// RevisionFor returns the latest revision stamped for paneID by Publish.
+// Returns 0 if the pane has not been published yet.
+func (p *DesktopPublisher) RevisionFor(paneID [16]byte) uint32 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.revisions[paneID]
+}
+
+// Publish reads SnapshotBuffers from the desktop engine, then delegates
+// to publishSnapshotsLocked for the per-pane encode + enqueue loop. The
+// split lets tests drive the encode path with synthetic snapshots without
+// spinning up a live desktop engine.
 func (p *DesktopPublisher) Publish() error {
 	if p.desktop == nil || p.session == nil {
 		return nil
@@ -85,11 +100,70 @@ func (p *DesktopPublisher) Publish() error {
 	buffers := p.desktop.SnapshotBuffers()
 	// if len(buffers) > 0 { log.Printf("DesktopPublisher: Publishing %d buffers", len(buffers)) }
 
+	if err := p.publishSnapshotsLocked(buffers); err != nil {
+		return err
+	}
+	elapsed := time.Since(start)
+	p.desktop.SetLastPublishDuration(elapsed)
+	if p.observer != nil {
+		p.observer.ObservePublish(p.session, len(buffers), elapsed)
+	}
+	if p.notify != nil {
+		p.notify()
+	}
+	return nil
+}
+
+// publishSnapshotsLocked runs the per-pane encode + enqueue loop for the
+// given snapshots. The caller must hold p.mu.
+func (p *DesktopPublisher) publishSnapshotsLocked(buffers []texel.PaneSnapshot) error {
 	for _, snap := range buffers {
+		vp, haveVP := p.session.Viewport(snap.ID)
+		// Main-screen panes require a viewport before we clip rows: the
+		// client will send one right after handshake. Alt-screen (or
+		// non-terminal / placeholder) panes don't need clipping and are
+		// always emitted.
+		if !snap.AltScreen && !haveVP {
+			// Silent-skip is deliberate: the client will send a ViewportUpdate
+			// right after handshake, and connection_handler nudges Publish
+			// then.  Logging surfaces the transient state for diagnosis.
+			debugLog.Printf("publisher: pane %x waiting for viewport", snap.ID[:4])
+			continue
+		}
+		// Narrow prev-buffer invalidation: rows that were OUT of window
+		// and are now IN window with unchanged content would be wrongly
+		// skipped by rowsEqual, so we must force a re-emit in cases where
+		// that can happen. The only cases that require invalidation are:
+		//   - first viewport for this pane (no prior state);
+		//   - geometry change (Rows or Cols differ);
+		//   - AutoFollow mode toggled (window shape semantics change);
+		//   - manual scroll (AutoFollow=false and View indices shifted),
+		//     where the new window may expose unchanged content.
+		// In AutoFollow-to-AutoFollow with unchanged Rows/Cols, View
+		// indices advance every frame; we deliberately do NOT invalidate
+		// because new bottom rows differ in content and diff naturally
+		// via rowsEqual, and no previously-hidden row can become visible
+		// without content change.
+		if haveVP {
+			prevVP, hadPrev := p.lastViewport[snap.ID]
+			shouldInvalidate := !hadPrev ||
+				prevVP.AutoFollow != vp.AutoFollow ||
+				prevVP.Rows != vp.Rows ||
+				prevVP.Cols != vp.Cols
+			if !shouldInvalidate && !vp.AutoFollow {
+				if prevVP.ViewTopIdx != vp.ViewTopIdx || prevVP.ViewBottomIdx != vp.ViewBottomIdx {
+					shouldInvalidate = true
+				}
+			}
+			if shouldInvalidate {
+				p.prevBuffers[snap.ID] = nil
+			}
+			p.lastViewport[snap.ID] = vp
+		}
 		rev := p.revisions[snap.ID] + 1
 		p.revisions[snap.ID] = rev
 		prev := p.prevBuffers[snap.ID]
-		delta := bufferToDelta(snap, prev, rev)
+		delta := bufferToDelta(snap, prev, rev, vp)
 		if len(delta.Rows) == 0 {
 			continue
 		}
@@ -99,14 +173,6 @@ func (p *DesktopPublisher) Publish() error {
 		if err := p.session.EnqueueDiff(delta); err != nil {
 			return err
 		}
-	}
-	elapsed := time.Since(start)
-	p.desktop.SetLastPublishDuration(elapsed)
-	if p.observer != nil {
-		p.observer.ObservePublish(p.session, len(buffers), elapsed)
-	}
-	if p.notify != nil {
-		p.notify()
 	}
 	return nil
 }
@@ -120,21 +186,24 @@ func cloneBuffer(buf [][]texel.Cell) [][]texel.Cell {
 	return clone
 }
 
-func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32) protocol.BufferDelta {
+// bufferToDelta encodes a pane snapshot into a BufferDelta, emitting only
+// rows that (a) changed since prev and (b) fall inside the client's
+// resident window. Alt-screen (or non-terminal) panes bypass clipping:
+// Flags sets BufferDeltaAltScreen, RowBase stays 0, and Row is the flat
+// buffer index.
+//
+// Main-screen panes use RowGlobalIdx to key rows by globalIdx and clip to
+// [lo, hi] = [ViewTopIdx - overscan, ViewBottomIdx + overscan] where
+// overscan = vp.Rows (1× viewport). In AutoFollow we still use
+// ViewTopIdx/ViewBottomIdx since the client keeps them in sync with the
+// live bottom — no extra bookkeeping needed here.
+func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32, vp ClientViewport) protocol.BufferDelta {
 	styleMap := make(map[styleKey]uint16)
 	styles := make([]protocol.StyleEntry, 0)
 
-	rows := make([]protocol.RowDelta, 0, len(snap.Buffer))
-	for y, row := range snap.Buffer {
-		if len(row) == 0 {
-			continue
-		}
-		if y < len(prev) && rowsEqual(row, prev[y]) {
-			continue
-		}
+	encodeRow := func(row []texel.Cell) []protocol.CellSpan {
 		spans := make([]protocol.CellSpan, 0)
 		builders := make([]*strings.Builder, 0)
-
 		for x, cell := range row {
 			key, entry := convertCell(cell)
 			index, ok := styleMap[key]
@@ -143,28 +212,68 @@ func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32
 				index = uint16(len(styles) - 1)
 				styleMap[key] = index
 			}
-
 			if len(spans) == 0 || spans[len(spans)-1].StyleIndex != index {
 				spans = append(spans, protocol.CellSpan{StartCol: uint16(x), StyleIndex: index})
 				builders = append(builders, &strings.Builder{})
 			}
 			builders[len(builders)-1].WriteRune(cell.Ch)
 		}
-
 		for i := range spans {
 			spans[i].Text = builders[i].String()
 		}
-
-		rows = append(rows, protocol.RowDelta{Row: uint16(y), Spans: spans})
+		return spans
 	}
 
-	return protocol.BufferDelta{
+	rows := make([]protocol.RowDelta, 0, len(snap.Buffer))
+	delta := protocol.BufferDelta{
 		PaneID:   snap.ID,
 		Revision: revision,
 		Flags:    protocol.BufferDeltaNone,
-		Styles:   styles,
-		Rows:     rows,
 	}
+
+	if snap.AltScreen {
+		delta.Flags |= protocol.BufferDeltaAltScreen
+		for y, row := range snap.Buffer {
+			if len(row) == 0 {
+				continue
+			}
+			if y < len(prev) && rowsEqual(row, prev[y]) {
+				continue
+			}
+			rows = append(rows, protocol.RowDelta{Row: uint16(y), Spans: encodeRow(row)})
+		}
+		delta.Styles = styles
+		delta.Rows = rows
+		return delta
+	}
+
+	overscan := int64(vp.Rows)
+	lo := vp.ViewTopIdx - overscan
+	hi := vp.ViewBottomIdx + overscan
+	delta.RowBase = lo
+
+	for y, row := range snap.Buffer {
+		if len(row) == 0 {
+			continue
+		}
+		if y >= len(snap.RowGlobalIdx) {
+			continue
+		}
+		gid := snap.RowGlobalIdx[y]
+		if gid < 0 {
+			continue
+		}
+		if gid < lo || gid > hi {
+			continue
+		}
+		if y < len(prev) && rowsEqual(row, prev[y]) {
+			continue
+		}
+		rows = append(rows, protocol.RowDelta{Row: uint16(gid - lo), Spans: encodeRow(row)})
+	}
+	delta.Styles = styles
+	delta.Rows = rows
+	return delta
 }
 
 type styleKey struct {
@@ -270,7 +379,7 @@ func convertColor(color tcell.Color) (protocol.ColorModel, uint32) {
 		case tcell.ColorWhite:
 			paletteName = "text"
 		}
-		
+
 		if paletteName != "" {
 			themeColor := theme.ResolveColorName(paletteName)
 			if themeColor != tcell.ColorDefault {

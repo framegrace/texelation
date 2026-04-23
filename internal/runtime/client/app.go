@@ -66,6 +66,7 @@ func Run(opts Options) error {
 
 	state := &clientState{
 		cache:                   client.NewBufferCache(),
+		viewports:               newViewportTrackers(),
 		themeValues:             make(map[string]map[string]interface{}),
 		defaultStyle:            tcell.StyleDefault,
 		defaultFg:               tcell.ColorDefault,
@@ -75,6 +76,11 @@ func Run(opts Options) error {
 		selectionBg:             tcell.NewRGBColor(232, 217, 255),
 		showRestartNotification: opts.ShowRestartNotification,
 	}
+
+	// Wire connection context for FlushFrame (set once, never mutated).
+	state.conn = conn
+	state.writeMu = &writeMu
+	state.sessionID = accept.SessionID
 
 	// Load keybindings from config file or use platform defaults.
 	state.keybindings = loadKeybindings()

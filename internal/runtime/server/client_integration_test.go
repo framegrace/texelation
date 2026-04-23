@@ -38,6 +38,14 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 	}
 	defer desktop.Close()
 
+	// Bootstrap an active workspace with a pane so the server has something to
+	// snapshot; NewDesktopEngineWithDriver leaves the desktop empty because
+	// InitAppName is "" and no workspace has been activated yet.
+	desktop.SwitchToWorkspace(1)
+	if ws := desktop.ActiveWorkspace(); ws != nil {
+		ws.AddApp(app)
+	}
+
 	sink := NewDesktopSink(desktop)
 
 	firstClient, firstServer := net.Pipe()

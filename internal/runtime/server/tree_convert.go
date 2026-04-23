@@ -48,12 +48,13 @@ func protocolToTreeCapture(snapshot protocol.TreeSnapshot) texel.TreeCapture {
 			}
 		}
 		capture.Panes[i] = texel.PaneSnapshot{
-			ID:        pane.PaneID,
-			Title:     pane.Title,
-			Buffer:    buffer,
-			Rect:      texel.Rectangle{X: int(pane.X), Y: int(pane.Y), Width: int(pane.Width), Height: int(pane.Height)},
-			AppType:   pane.AppType,
-			AppConfig: decodeAppConfig(pane.AppConfig),
+			ID:           pane.PaneID,
+			Title:        pane.Title,
+			Buffer:       buffer,
+			RowGlobalIdx: rowGlobalIdxAllMinusOne(len(buffer)),
+			Rect:         texel.Rectangle{X: int(pane.X), Y: int(pane.Y), Width: int(pane.Width), Height: int(pane.Height)},
+			AppType:      pane.AppType,
+			AppConfig:    decodeAppConfig(pane.AppConfig),
 		}
 	}
 	capture.Root = protocolNodeToCapture(snapshot.Root)

@@ -436,10 +436,19 @@ func (v *VTerm) mainScreenEraseLine(mode int) {
 
 // mainScreenGrid returns the current sparse grid.
 func (v *VTerm) mainScreenGrid() [][]Cell {
+	grid, _ := v.mainScreenGridWithRowIdx()
+	return grid
+}
+
+// mainScreenGridWithRowIdx returns both the current sparse grid and the
+// parallel per-row globalIdx slice from the same view walk. Space-padding
+// and search highlighting are applied on the rendered grid just as in
+// mainScreenGrid; the rowIdx slice is passed through unchanged.
+func (v *VTerm) mainScreenGridWithRowIdx() ([][]Cell, []int64) {
 	if v.mainScreen == nil {
-		return nil
+		return nil, nil
 	}
-	grid := v.mainScreen.RenderReflow()
+	grid, rowIdx := v.mainScreen.RenderReflowWithRowIdx()
 	// Sparse Grid() returns Cell{} (Rune=0) for unwritten/erased cells.
 	// Convert to space so callers see consistent blank cells.
 	for _, row := range grid {
@@ -453,7 +462,7 @@ func (v *VTerm) mainScreenGrid() [][]Cell {
 	if v.searchHighlight != "" && len(grid) > 0 {
 		v.applySearchHighlight(grid)
 	}
-	return grid
+	return grid, rowIdx
 }
 
 // mainScreenScroll scrolls the user's view.

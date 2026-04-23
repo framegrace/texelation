@@ -107,22 +107,22 @@ type VTerm struct {
 // NewVTerm creates and initializes a new virtual terminal.
 func NewVTerm(width, height int, opts ...Option) *VTerm {
 	v := &VTerm{
-		width:                 width,
-		height:                height,
-		currentFG:             DefaultFG,
-		currentBG:             DefaultBG,
-		tabStops:              make(map[int]bool),
-		cursorVisible:         true,
-		autoWrapMode:          true,
-		marginTop:             0,
-		marginBottom:          height - 1,
-		marginLeft:            0,
-		marginRight:           width - 1,
-		leftRightMarginMode:   false,
-		defaultFG:             DefaultFG,
-		defaultBG:             DefaultBG,
-		dirtyLines:            make(map[int]bool),
-		allDirty:              true,
+		width:                  width,
+		height:                 height,
+		currentFG:              DefaultFG,
+		currentBG:              DefaultBG,
+		tabStops:               make(map[int]bool),
+		cursorVisible:          true,
+		autoWrapMode:           true,
+		marginTop:              0,
+		marginBottom:           height - 1,
+		marginLeft:             0,
+		marginRight:            width - 1,
+		leftRightMarginMode:    false,
+		defaultFG:              DefaultFG,
+		defaultBG:              DefaultBG,
+		dirtyLines:             make(map[int]bool),
+		allDirty:               true,
 		PromptStartGlobalLine:  -1,
 		InputStartGlobalLine:   -1,
 		CommandStartGlobalLine: -1,
@@ -206,6 +206,22 @@ func (v *VTerm) Grid() [][]Cell {
 		return v.altBuffer
 	}
 	return v.mainScreenGrid()
+}
+
+// GridWithRowIdx returns both the currently visible grid and a parallel
+// per-row globalIdx slice. On the main-screen path, rowIdx[y] is the sparse
+// store globalIdx that produced row y of the rendered grid (chain-head gi
+// for reflowed sub-rows, -1 for blank/pad rows). On the alt-screen path,
+// rowIdx is nil — alt-screen rows have no main-screen globalIdx mapping.
+// The grid and rowIdx slices come from a single view walk, so they are
+// lockstep-consistent.
+func (v *VTerm) GridWithRowIdx() ([][]Cell, []int64) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	if v.inAltScreen {
+		return v.altBuffer, nil
+	}
+	return v.mainScreenGridWithRowIdx()
 }
 
 // MainScreenGrid returns the sparse MainScreen's grid, or nil if no MainScreen
@@ -1339,7 +1355,6 @@ func (v *VTerm) NotifyLinePersist(lineIdx int64) {
 	}
 }
 
-
 // Resize handles changes to the terminal's dimensions.
 func (v *VTerm) Resize(width, height int) {
 	v.mu.Lock()
@@ -1475,9 +1490,9 @@ func (v *VTerm) PhysicalCursor() (physX, physY int) {
 	physX = v.cursorX % v.width
 	return physX, physY
 }
-func (v *VTerm) DefaultFG() Color    { return v.defaultFG }
-func (v *VTerm) DefaultBG() Color    { return v.defaultBG }
-func (v *VTerm) OriginMode() bool    { return v.originMode }
+func (v *VTerm) DefaultFG() Color { return v.defaultFG }
+func (v *VTerm) DefaultBG() Color { return v.defaultBG }
+func (v *VTerm) OriginMode() bool { return v.originMode }
 
 // InAltScreen returns true if the terminal is currently showing the alternate screen buffer.
 func (v *VTerm) InAltScreen() bool { return v.inAltScreen }
@@ -1512,3 +1527,7 @@ func (v *VTerm) GetAltBufferLine(y int) []Cell {
 func (v *VTerm) ScrollMargins() (int, int) {
 	return v.marginTop, v.marginLeft
 }
+
+// MainScreenImpl returns the underlying MainScreen implementation, or nil
+// if no MainScreen is configured.
+func (v *VTerm) MainScreenImpl() MainScreen { return v.mainScreen }

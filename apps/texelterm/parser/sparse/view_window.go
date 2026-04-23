@@ -93,8 +93,16 @@ func (v *ViewWindow) SetAutoJumpOnInput(enabled bool) {
 // Render projects the viewport by walking chains from viewAnchor. Each
 // chain is reflowed to viewWidth (unless NoWrap or globalReflowOff is set,
 // in which case rows render 1:1 via clipRow). Returns exactly viewHeight
-// rows, padded with empty cells if content is exhausted.
-func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
+// rows, padded with empty cells if content is exhausted, paired with a
+// parallel per-row globalIdx slice: rowGI[y] is the store globalIdx that
+// row y corresponds to (chain-head gi for reflowed sub-rows), or -1 if
+// the row is a blank-pad row with no underlying store position.
+//
+// Returning the rowGI slice alongside the rendered rows keeps the two in
+// lockstep even under concurrent Render calls — callers receive a
+// self-consistent pair, and no per-instance state has to straddle the
+// walk/publish boundary.
+func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 	v.mu.Lock()
 	width := v.width
 	height := v.height
@@ -104,6 +112,7 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 	v.mu.Unlock()
 
 	out := make([][]parser.Cell, 0, height)
+	rowGI := make([]int64, 0, height)
 	maxSteps := 4 * height
 	if maxSteps < 4 {
 		maxSteps = 4
@@ -123,20 +132,32 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 				// A skip on an empty first chain is a no-op.
 			}
 			out = append(out, make([]parser.Cell, width))
+			// Blank/pad rows with no real content track as -1 so callers
+			// don't conflate them with a written row at that globalIdx.
+			rowGI = append(rowGI, -1)
 			gi++
 			continue
 		}
 		end, nowrap := walkChain(s, gi, maxSteps)
 
 		var rows [][]parser.Cell
+		var rowsGI []int64
 		if reflowOff || nowrap {
+			// Each physical row is its own globalIdx: gi, gi+1, ..., end.
 			for r := gi; r <= end; r++ {
 				rows = append(rows, clipRow(s.GetLine(r), width))
+				rowsGI = append(rowsGI, r)
 			}
 		} else {
+			// Wrapped chain reflowed to this viewport's width: all reflowed
+			// sub-rows share the chain's head globalIdx. Sub-row resolution
+			// would require tracking cell-range provenance through
+			// reflowChain; the publisher only needs "does this row belong
+			// to a real store position" which the chain head answers.
 			reflowed := reflowChain(s, gi, end, width)
 			for _, row := range reflowed {
 				rows = append(rows, clipRow(row, width))
+				rowsGI = append(rowsGI, gi)
 			}
 		}
 
@@ -144,24 +165,34 @@ func (v *ViewWindow) Render(s *Store) [][]parser.Cell {
 			first = false
 			if skip < len(rows) {
 				rows = rows[skip:]
+				rowsGI = rowsGI[skip:]
 			} else {
 				rows = nil
+				rowsGI = nil
 			}
 		}
 
-		for _, row := range rows {
+		for i, row := range rows {
 			if len(out) >= height {
 				break
 			}
 			out = append(out, row)
+			rowGI = append(rowGI, rowsGI[i])
 		}
 		gi = end + 1
 	}
 
 	for len(out) < height {
 		out = append(out, make([]parser.Cell, width))
+		rowGI = append(rowGI, -1)
 	}
-	return out
+
+	// Trim to height in case any loop appended one extra entry.
+	if len(rowGI) > height {
+		rowGI = rowGI[:height]
+	}
+
+	return out, rowGI
 }
 
 // RecomputeLiveAnchor repositions viewAnchor/viewAnchorOffset so that the

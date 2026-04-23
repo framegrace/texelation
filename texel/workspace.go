@@ -155,6 +155,20 @@ func (w *Workspace) Refresh() {
 	}
 }
 
+// InvalidateRenderCaches synchronously marks every leaf pane in the workspace
+// dirty, forcing the next renderBuffer() call to bypass its cached prevBuf.
+// The asynchronous refresh-forwarder only invalidates in response to events;
+// callers that drive publish cycles directly (without the forwarder) need
+// this to observe per-cycle changes in app buffers.
+func (w *Workspace) InvalidateRenderCaches() {
+	if w.tree == nil {
+		return
+	}
+	forEachLeafPane(w.tree.Root, func(p *pane) {
+		p.markDirty()
+	})
+}
+
 func (w *Workspace) Broadcast(event Event) {
 	w.dispatcher.Broadcast(event)
 }

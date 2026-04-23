@@ -188,3 +188,85 @@ func TestBufferDeltaInvalid(t *testing.T) {
 		t.Fatalf("expected error for short payload")
 	}
 }
+
+func TestBufferDelta_AltScreenFlagRoundTrip(t *testing.T) {
+	in := BufferDelta{
+		PaneID: [16]byte{9},
+		Flags:  BufferDeltaAltScreen,
+		Rows:   []RowDelta{{Row: 3, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}}},
+		Styles: []StyleEntry{{AttrFlags: 0}},
+	}
+	raw, err := EncodeBufferDelta(in)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	out, err := DecodeBufferDelta(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Flags&BufferDeltaAltScreen == 0 {
+		t.Fatalf("AltScreen flag lost")
+	}
+}
+
+func TestBufferDelta_RowBaseRoundTrip(t *testing.T) {
+	in := BufferDelta{
+		PaneID:   [16]byte{1, 2, 3},
+		Revision: 42,
+		Flags:    BufferDeltaNone,
+		RowBase:  1_234_567,
+		Rows: []RowDelta{
+			{Row: 0, Spans: []CellSpan{{StartCol: 0, Text: "hello", StyleIndex: 0}}},
+		},
+		Styles: []StyleEntry{{AttrFlags: 0}},
+	}
+	raw, err := EncodeBufferDelta(in)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	out, err := DecodeBufferDelta(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.RowBase != in.RowBase {
+		t.Fatalf("RowBase: got %d want %d", out.RowBase, in.RowBase)
+	}
+}
+
+// Regression: encoders must reject a StyleIndex that points past the Styles
+// table. Symmetric with the decode-side check — catches producer bugs at the
+// serialization boundary rather than shipping invalid bytes.
+func TestEncodeBufferDeltaRejectsStyleIndexOutOfRange(t *testing.T) {
+	cases := []struct {
+		name  string
+		delta BufferDelta
+	}{
+		{
+			name: "no styles, any index",
+			delta: BufferDelta{
+				Rows: []RowDelta{{Row: 0, Spans: []CellSpan{{Text: "x", StyleIndex: 0}}}},
+			},
+		},
+		{
+			name: "index equals length",
+			delta: BufferDelta{
+				Styles: []StyleEntry{{}},
+				Rows:   []RowDelta{{Row: 0, Spans: []CellSpan{{Text: "x", StyleIndex: 1}}}},
+			},
+		},
+		{
+			name: "index past end",
+			delta: BufferDelta{
+				Styles: []StyleEntry{{}, {}},
+				Rows:   []RowDelta{{Row: 0, Spans: []CellSpan{{Text: "x", StyleIndex: 99}}}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := EncodeBufferDelta(tc.delta); err != ErrStyleIndexOutOfRange {
+				t.Errorf("EncodeBufferDelta err = %v, want ErrStyleIndexOutOfRange", err)
+			}
+		})
+	}
+}

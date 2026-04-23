@@ -111,8 +111,11 @@ func (d *DesktopSink) Publish() {
 	d.mu.Lock()
 	publisher := d.publisher
 	d.mu.Unlock()
-	if publisher != nil {
-		_ = publisher.Publish()
+	if publisher == nil {
+		return
+	}
+	if err := publisher.Publish(); err != nil {
+		log.Printf("desktop sink: publish failed: %v", err)
 	}
 }
 
@@ -123,7 +126,9 @@ func (d *DesktopSink) publish() {
 	if publisher == nil {
 		return
 	}
-	_ = publisher.Publish()
+	if err := publisher.Publish(); err != nil {
+		log.Printf("desktop sink: publish failed: %v", err)
+	}
 }
 
 func (d *DesktopSink) Snapshot() (protocol.TreeSnapshot, error) {

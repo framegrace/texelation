@@ -65,6 +65,21 @@ func (s *Store) Max() int64 {
 	return s.contentEnd
 }
 
+// OldestRetained returns the lowest globalIdx currently resident in the Store.
+// Returns -1 when the Store is empty. O(n) in the number of resident rows; the
+// Store is typically small (resident window is bounded) so this is acceptable.
+func (s *Store) OldestRetained() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	oldest := int64(-1)
+	for k := range s.lines {
+		if oldest == -1 || k < oldest {
+			oldest = k
+		}
+	}
+	return oldest
+}
+
 // Get returns the Cell at (globalIdx, col). Returns a zero-value Cell if the
 // globalIdx has never been written to or if col is outside the line's current
 // length.

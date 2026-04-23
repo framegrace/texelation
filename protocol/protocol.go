@@ -26,7 +26,7 @@ const (
 )
 
 // Version is the negotiated protocol version implemented by this package.
-const Version uint8 = 0
+const Version uint8 = 1
 
 // MessageType enumerates the canonical message categories exchanged between
 // client and server.
@@ -65,6 +65,9 @@ const (
 	MsgImagePlace
 	MsgImageDelete
 	MsgImageReset
+	MsgViewportUpdate
+	MsgFetchRange
+	MsgFetchRangeResponse
 )
 
 // Header describes the fixed portion of every frame exchanged over the wire.

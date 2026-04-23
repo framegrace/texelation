@@ -275,13 +275,31 @@ func (sp StoredPane) ToPaneSnapshot() texel.PaneSnapshot {
 	}
 
 	return texel.PaneSnapshot{
-		ID:        id,
-		Title:     sp.Title,
-		Buffer:    buffer,
-		Rect:      texel.Rectangle{X: sp.X, Y: sp.Y, Width: sp.Width, Height: sp.Height},
-		AppType:   sp.AppType,
-		AppConfig: cloneAppConfig(sp.AppConfig),
+		ID:           id,
+		Title:        sp.Title,
+		Buffer:       buffer,
+		RowGlobalIdx: rowGlobalIdxAllMinusOne(len(buffer)),
+		Rect:         texel.Rectangle{X: sp.X, Y: sp.Y, Width: sp.Width, Height: sp.Height},
+		AppType:      sp.AppType,
+		AppConfig:    cloneAppConfig(sp.AppConfig),
 	}
+}
+
+// rowGlobalIdxAllMinusOne returns a slice of length n with every entry set
+// to -1. Shared by PaneSnapshot reconstructors in this package (persisted
+// store and wire-protocol paths), which carry no main-screen scrollback
+// indices and must mark every row as non-main-screen content. The
+// PaneSnapshot invariant requires RowGlobalIdx parallel Buffer when Buffer
+// is non-nil.
+func rowGlobalIdxAllMinusOne(n int) []int64 {
+	if n <= 0 {
+		return nil
+	}
+	out := make([]int64, n)
+	for i := range out {
+		out[i] = -1
+	}
+	return out
 }
 
 func (sp StoredPane) toProtocolPane() protocol.PaneSnapshot {

@@ -305,6 +305,20 @@ func (c *BufferCache) PaneByID(id [16]byte) *PaneState {
 	return c.panes[id]
 }
 
+// MarkPaneDirty forces a full re-render of the pane on the next frame.
+// Use when pane-adjacent state changed (e.g. PaneCache got new rows from a
+// FetchRange response) but no BufferDelta arrived to set Dirty itself.
+func (c *BufferCache) MarkPaneDirty(id [16]byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pane := c.panes[id]
+	if pane == nil {
+		return
+	}
+	pane.Dirty = true
+	pane.DirtyRows = nil
+}
+
 // PaneAt returns the topmost pane containing the provided workspace coordinates.
 func (c *BufferCache) PaneAt(x, y int) *PaneState {
 	c.mu.RLock()
