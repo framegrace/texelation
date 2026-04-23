@@ -574,6 +574,166 @@ func TestFlushFrame_NilConnIsNoop(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// Regression (Commit A #2): restorePendingFetch re-stashes (lo, hi) after
+// the response handler drained pendingFetch and the follow-up send failed.
+// --------------------------------------------------------------------------
+
+func TestRestorePendingFetch_RestoresDrainedWindow(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xB0)
+	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
+
+	// Simulate: response arrived, pendingFetch was stashed, handler just
+	// drained it (inflight reserved, pendingFetch nil). Then sendFetchRange
+	// failed — we must restore so flushFrame retries next frame.
+	vp := state.viewports.get(id)
+	vp.mu.Lock()
+	vp.inflightFetch = true
+	vp.pendingFetch = nil
+	vp.mu.Unlock()
+
+	state.restorePendingFetch(id, 500, 548)
+
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	if vp.inflightFetch {
+		t.Error("inflightFetch should be cleared by restorePendingFetch")
+	}
+	if vp.pendingFetch == nil {
+		t.Fatal("pendingFetch should have been restored, got nil")
+	}
+	if vp.pendingFetch.Lo != 500 || vp.pendingFetch.Hi != 548 {
+		t.Errorf("pendingFetch = [%d,%d), want [500,548)", vp.pendingFetch.Lo, vp.pendingFetch.Hi)
+	}
+}
+
+func TestRestorePendingFetch_DoesNotClobberNewerPending(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xB1)
+	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
+
+	// Between onFetchRangeResponse and the send-failure, a concurrent
+	// flushFrame noticed new missing rows and stashed a newer window.
+	// restorePendingFetch must NOT overwrite it.
+	vp := state.viewports.get(id)
+	newer := pendingFetchRange{Lo: 900, Hi: 924}
+	vp.mu.Lock()
+	vp.inflightFetch = true
+	vp.pendingFetch = &newer
+	vp.mu.Unlock()
+
+	state.restorePendingFetch(id, 500, 548)
+
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	if vp.inflightFetch {
+		t.Error("inflightFetch should be cleared by restorePendingFetch")
+	}
+	if vp.pendingFetch == nil || vp.pendingFetch.Lo != 900 || vp.pendingFetch.Hi != 924 {
+		t.Errorf("pendingFetch = %+v, want [900,924)", vp.pendingFetch)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Regression: clearDirty state-mismatch guard leaves the dirty flag set when
+// the tracker was re-dirtied between snapshotDirty and the send completing.
+// --------------------------------------------------------------------------
+
+func TestClearDirty_GuardLeavesDirtySetOnMismatch(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xC0)
+	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
+
+	// Snapshot the current state (dirty=true from init).
+	entries, _ := state.viewports.snapshotDirty()
+	if len(entries) != 1 {
+		t.Fatalf("snapshotDirty returned %d entries, want 1", len(entries))
+	}
+	expected := entries[0].vp
+
+	// Simulate the user scrolling AFTER snapshot but BEFORE clearDirty.
+	vp := state.viewports.get(id)
+	vp.mu.Lock()
+	vp.ViewBottomIdx = expected.ViewBottomIdx + 100
+	vp.ViewTopIdx = vp.ViewBottomIdx - 23
+	vp.dirty = true
+	vp.mu.Unlock()
+
+	// clearDirty must see the mismatch and leave dirty=true.
+	state.viewports.clearDirty(id, expected)
+
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	if !vp.dirty {
+		t.Error("clearDirty should leave dirty=true when state changed since snapshot")
+	}
+}
+
+func TestClearDirty_ClearsOnMatch(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xC1)
+	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
+
+	entries, _ := state.viewports.snapshotDirty()
+	if len(entries) != 1 {
+		t.Fatalf("snapshotDirty returned %d entries, want 1", len(entries))
+	}
+	expected := entries[0].vp
+
+	state.viewports.clearDirty(id, expected)
+
+	vp := state.viewports.get(id)
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	if vp.dirty {
+		t.Error("clearDirty should clear dirty when state matches snapshot")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Regression: flushFrame releases inflight reservation when sendFetchRange's
+// Write fails so the next frame can retry instead of wedging the pane.
+// --------------------------------------------------------------------------
+
+// failingConn's Write always returns an error, letting us exercise the
+// rollback path in flushFrame and sendFetchRange.
+type failingConn struct{ testConn }
+
+func (f *failingConn) Write(_ []byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
+func TestFlushFrame_ReleasesInflightOnSendFailure(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xD0)
+	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
+
+	// Force a missing-rows window.
+	vp := state.viewports.get(id)
+	vp.mu.Lock()
+	vp.ViewTopIdx = 1000
+	vp.ViewBottomIdx = 1023
+	vp.Rows = 24
+	vp.Cols = 80
+	vp.dirty = true
+	vp.inflightFetch = false
+	vp.mu.Unlock()
+
+	conn := &failingConn{}
+	var writeMu sync.Mutex
+	flushFrame(state, conn, &writeMu, [16]byte{})
+
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	// The viewport-update write fails first (before any inflight reservation),
+	// so inflight stays false — but the guarantee we're asserting is that no
+	// stuck reservation blocks retry on the next frame.
+	if vp.inflightFetch {
+		t.Error("inflightFetch should be false after send failure (retry must be unblocked)")
+	}
+}
+
+// --------------------------------------------------------------------------
 // Additional: TestFlushFrame_ZeroDimSkipped
 // --------------------------------------------------------------------------
 

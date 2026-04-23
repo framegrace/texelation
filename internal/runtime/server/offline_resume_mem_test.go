@@ -125,6 +125,15 @@ func TestOfflineRetentionAndResumeWithMemConn(t *testing.T) {
 		t.Fatalf("expected retention limit of 2 diffs, got %d", len(pending))
 	}
 
+	// Pre-resume: we pushed 4 publishes into a retention limit of 2, so the
+	// session must have dropped at least 2 diffs. Asserting this before
+	// resume catches a regression where retention silently stopped dropping
+	// (the post-resume check alone would still pass with DroppedDiffs == 1).
+	preResumeStats := session.Stats()
+	if preResumeStats.DroppedDiffs < 2 {
+		t.Fatalf("expected >= 2 DroppedDiffs before resume, got %d", preResumeStats.DroppedDiffs)
+	}
+
 	resumeClientFlow(t, srv, sink, desktop, session, lastSeq)
 
 	stats := session.Stats()

@@ -114,3 +114,33 @@ func TestFetchRangeResponse_RoundTrip(t *testing.T) {
 		t.Fatalf("mismatch:\n got %#v\n want %#v", out, in)
 	}
 }
+
+// Regression: EncodeFetchRangeResponse must reject a StyleIndex that points
+// past the Styles table, symmetric with the decode-side check.
+func TestEncodeFetchRangeResponseRejectsStyleIndexOutOfRange(t *testing.T) {
+	cases := []struct {
+		name string
+		resp FetchRangeResponse
+	}{
+		{
+			name: "no styles, any index",
+			resp: FetchRangeResponse{
+				Rows: []LogicalRow{{Spans: []CellSpan{{Text: "x", StyleIndex: 0}}}},
+			},
+		},
+		{
+			name: "index equals length",
+			resp: FetchRangeResponse{
+				Styles: []StyleEntry{{}},
+				Rows:   []LogicalRow{{Spans: []CellSpan{{Text: "x", StyleIndex: 1}}}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := EncodeFetchRangeResponse(tc.resp); err != ErrStyleIndexOutOfRange {
+				t.Errorf("EncodeFetchRangeResponse err = %v, want ErrStyleIndexOutOfRange", err)
+			}
+		})
+	}
+}

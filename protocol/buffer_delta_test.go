@@ -232,3 +232,41 @@ func TestBufferDelta_RowBaseRoundTrip(t *testing.T) {
 		t.Fatalf("RowBase: got %d want %d", out.RowBase, in.RowBase)
 	}
 }
+
+// Regression: encoders must reject a StyleIndex that points past the Styles
+// table. Symmetric with the decode-side check — catches producer bugs at the
+// serialization boundary rather than shipping invalid bytes.
+func TestEncodeBufferDeltaRejectsStyleIndexOutOfRange(t *testing.T) {
+	cases := []struct {
+		name  string
+		delta BufferDelta
+	}{
+		{
+			name: "no styles, any index",
+			delta: BufferDelta{
+				Rows: []RowDelta{{Row: 0, Spans: []CellSpan{{Text: "x", StyleIndex: 0}}}},
+			},
+		},
+		{
+			name: "index equals length",
+			delta: BufferDelta{
+				Styles: []StyleEntry{{}},
+				Rows:   []RowDelta{{Row: 0, Spans: []CellSpan{{Text: "x", StyleIndex: 1}}}},
+			},
+		},
+		{
+			name: "index past end",
+			delta: BufferDelta{
+				Styles: []StyleEntry{{}, {}},
+				Rows:   []RowDelta{{Row: 0, Spans: []CellSpan{{Text: "x", StyleIndex: 99}}}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := EncodeBufferDelta(tc.delta); err != ErrStyleIndexOutOfRange {
+				t.Errorf("EncodeBufferDelta err = %v, want ErrStyleIndexOutOfRange", err)
+			}
+		})
+	}
+}
