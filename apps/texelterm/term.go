@@ -336,6 +336,20 @@ func (a *TexelTerm) InAltScreen() bool {
 	return a.vterm.InAltScreen()
 }
 
+// RestoreViewport re-seats the terminal's main-screen view window to the
+// globalIdx + wrap-segment pair the client was viewing before disconnect.
+// No-op when the pane is in alt-screen; callers (publisher resume path) are
+// expected to check PaneViewportState.AltScreen and skip alt panes.
+func (a *TexelTerm) RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow bool) {
+	if a.vterm == nil {
+		return
+	}
+	if a.vterm.InAltScreen() {
+		return
+	}
+	a.vterm.RestoreViewport(viewBottom, wrapSeg, autoFollow)
+}
+
 // SparseStore returns the underlying sparse.Store for the main screen, or nil
 // if no sparse-backed main screen is configured or the type assertion fails.
 func (a *TexelTerm) SparseStore() *sparse.Store {
