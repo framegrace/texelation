@@ -316,7 +316,7 @@ func (c *BufferCache) MarkPaneDirty(id [16]byte) {
 		return
 	}
 	pane.Dirty = true
-	pane.DirtyRows = nil // full re-render
+	pane.DirtyRows = nil
 }
 
 // PaneAt returns the topmost pane containing the provided workspace coordinates.

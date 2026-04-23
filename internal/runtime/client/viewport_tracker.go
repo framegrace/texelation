@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -29,8 +30,8 @@ import (
 // queued) when a newer viewport comes in — the client only ever needs the
 // latest missing-rows window.
 type pendingFetchRange struct {
-	Lo int64
-	Hi int64
+	lo int64
+	hi int64
 }
 
 // paneViewport is the per-pane viewport state tracked on the client.
@@ -145,7 +146,9 @@ func (t *viewportTrackers) clearDirty(id [16]byte, expected paneViewportCopy) {
 		vp.Cols == expected.Cols &&
 		vp.AutoFollow == expected.AutoFollow {
 		vp.dirty = false
+		return
 	}
+	debuglog.Printf("viewport clearDirty mismatch pane=%x: kept dirty (state changed since snapshot)", id[:4])
 }
 
 type snapshotEntry struct {
@@ -249,8 +252,8 @@ func (s *clientState) onFetchRangeResponse(paneID [16]byte) (lo, hi int64, send 
 	defer vp.mu.Unlock()
 	vp.inflightFetch = false
 	if vp.pendingFetch != nil {
-		lo = vp.pendingFetch.Lo
-		hi = vp.pendingFetch.Hi
+		lo = vp.pendingFetch.lo
+		hi = vp.pendingFetch.hi
 		vp.pendingFetch = nil
 		vp.inflightFetch = true
 		return lo, hi, true
@@ -275,7 +278,7 @@ func (s *clientState) restorePendingFetch(paneID [16]byte, lo, hi int64) {
 	defer vp.mu.Unlock()
 	vp.inflightFetch = false
 	if vp.pendingFetch == nil {
-		vp.pendingFetch = &pendingFetchRange{Lo: lo, Hi: hi}
+		vp.pendingFetch = &pendingFetchRange{lo: lo, hi: hi}
 	}
 }
 
@@ -371,20 +374,14 @@ func flushFrame(
 		}
 		if err := writeMessage(writeMu, conn, hdr, payload); err != nil {
 			log.Printf("send viewport update: %v", err)
-			// Leave dirty flag set so a retry happens next frame.
 			continue
 		}
-		// Send succeeded — now safe to clear dirty.  If the user scrolled
-		// between snapshotDirty and here, clearDirty sees the mismatch and
-		// leaves the flag set so the newer state still gets sent.
 		state.viewports.clearDirty(id, vc)
 
 		if vc.AltScreen {
-			// No fetch range needed for alt-screen.
 			continue
 		}
 
-		// Compute overscan window: [ViewTopIdx - Rows, ViewBottomIdx + Rows].
 		overscan := int64(vc.Rows)
 		lo := vc.ViewTopIdx - overscan
 		if lo < 0 {
@@ -392,8 +389,6 @@ func flushFrame(
 		}
 		hi := vc.ViewBottomIdx + overscan
 
-		// Use the pre-fetched PaneCache; paneCachesMu has already been
-		// released before we touch vp.mu below.
 		pc := caches[id]
 		miss := pc.MissingRows(lo, hi)
 
@@ -415,7 +410,7 @@ func flushFrame(
 				}
 			} else {
 				// Stash as pending.
-				pf := pendingFetchRange{Lo: miss[0], Hi: miss[len(miss)-1] + 1}
+				pf := pendingFetchRange{lo: miss[0], hi: miss[len(miss)-1] + 1}
 				rawVP.pendingFetch = &pf
 				rawVP.mu.Unlock()
 			}

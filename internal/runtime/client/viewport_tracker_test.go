@@ -456,7 +456,7 @@ func TestFlushFrame_EmitsPendingFetchOnResponse(t *testing.T) {
 	// Pre-set pending fetch (inflight is already false).
 	vp := state.viewports.get(paneID(8))
 	vp.mu.Lock()
-	pf := pendingFetchRange{Lo: 2000, Hi: 2024}
+	pf := pendingFetchRange{lo: 2000, hi: 2024}
 	vp.pendingFetch = &pf
 	vp.inflightFetch = true // simulate: response arrives now.
 	vp.mu.Unlock()
@@ -602,8 +602,8 @@ func TestRestorePendingFetch_RestoresDrainedWindow(t *testing.T) {
 	if vp.pendingFetch == nil {
 		t.Fatal("pendingFetch should have been restored, got nil")
 	}
-	if vp.pendingFetch.Lo != 500 || vp.pendingFetch.Hi != 548 {
-		t.Errorf("pendingFetch = [%d,%d), want [500,548)", vp.pendingFetch.Lo, vp.pendingFetch.Hi)
+	if vp.pendingFetch.lo != 500 || vp.pendingFetch.hi != 548 {
+		t.Errorf("pendingFetch = [%d,%d), want [500,548)", vp.pendingFetch.lo, vp.pendingFetch.hi)
 	}
 }
 
@@ -616,7 +616,7 @@ func TestRestorePendingFetch_DoesNotClobberNewerPending(t *testing.T) {
 	// flushFrame noticed new missing rows and stashed a newer window.
 	// restorePendingFetch must NOT overwrite it.
 	vp := state.viewports.get(id)
-	newer := pendingFetchRange{Lo: 900, Hi: 924}
+	newer := pendingFetchRange{lo: 900, hi: 924}
 	vp.mu.Lock()
 	vp.inflightFetch = true
 	vp.pendingFetch = &newer
@@ -629,7 +629,7 @@ func TestRestorePendingFetch_DoesNotClobberNewerPending(t *testing.T) {
 	if vp.inflightFetch {
 		t.Error("inflightFetch should be cleared by restorePendingFetch")
 	}
-	if vp.pendingFetch == nil || vp.pendingFetch.Lo != 900 || vp.pendingFetch.Hi != 924 {
+	if vp.pendingFetch == nil || vp.pendingFetch.lo != 900 || vp.pendingFetch.hi != 924 {
 		t.Errorf("pendingFetch = %+v, want [900,924)", vp.pendingFetch)
 	}
 }
