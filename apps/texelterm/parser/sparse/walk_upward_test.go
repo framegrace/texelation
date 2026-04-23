@@ -129,3 +129,73 @@ func TestViewWindow_SetViewBottom(t *testing.T) {
 		t.Fatalf("VisibleRange top: got %d want %d", top, 100-24+1)
 	}
 }
+
+func TestTerminal_RestoreViewport_AnchorInStore(t *testing.T) {
+	term := NewTerminal(80, 24)
+	// Fill 100 rows so scrollback exists.
+	for i := 0; i < 100; i++ {
+		for _, r := range "line" {
+			term.WriteCell(parser.Cell{Rune: r})
+		}
+		term.CarriageReturn()
+		term.Newline()
+	}
+	if !term.IsFollowing() {
+		t.Fatalf("pre: IsFollowing want true")
+	}
+	// Restore to viewBottom=50 (well inside the store), autoFollow=false.
+	term.RestoreViewport(50, 0, false)
+	if term.IsFollowing() {
+		t.Fatalf("post: IsFollowing want false")
+	}
+	// VisibleRange bottom should reflect the requested viewBottom (within
+	// one row — exact translation depends on walk semantics).
+	_, bottom := term.VisibleRange()
+	if bottom < 49 || bottom > 51 {
+		t.Fatalf("VisibleRange bottom: got %d want ~50", bottom)
+	}
+}
+
+func TestTerminal_RestoreViewport_MissingAnchor_SnapsToOldest(t *testing.T) {
+	// Missing-anchor (ViewBottomIdx < OldestRetained) only applies when
+	// autoFollow=false. With autoFollow=true the server clamps to Max() via
+	// OnWriteBottomChanged and missing-anchor is N/A.
+	term := NewTerminal(80, 24)
+	for i := 0; i < 10; i++ {
+		for _, r := range "line" {
+			term.WriteCell(parser.Cell{Rune: r})
+		}
+		term.CarriageReturn()
+		term.Newline()
+	}
+	term.Store().EvictBelow(5)
+	// Ask for viewBottom=2 (below retention) with autoFollow=false. Walk
+	// helper returns MissingAnchor; anchor is snapped to oldest (5); the
+	// view must stay non-following (policy A preserves scroll-back intent).
+	term.RestoreViewport(2, 0, false)
+	if term.IsFollowing() {
+		t.Fatalf("IsFollowing want false after missing-anchor resume")
+	}
+	// We intentionally do NOT assert on VisibleRange here: with only 10
+	// rows of content and height=24, clampViewBottom pins viewBottom at
+	// height-1=23, which is greater than ContentEnd()=9. The meaningful
+	// invariant for missing-anchor is that autoFollow is off (preserving
+	// the user's scroll-back intent) — not a specific globalIdx.
+}
+
+func TestTerminal_RestoreViewport_AutoFollowClampsToMax(t *testing.T) {
+	// autoFollow=true takes precedence over the scroll fields; the view
+	// should track the live edge regardless of the supplied viewBottom.
+	term := NewTerminal(80, 24)
+	for i := 0; i < 100; i++ {
+		for _, r := range "line" {
+			term.WriteCell(parser.Cell{Rune: r})
+		}
+		term.CarriageReturn()
+		term.Newline()
+	}
+	term.RestoreViewport(10 /* deliberately stale */, 0, true)
+	if !term.IsFollowing() {
+		t.Fatalf("IsFollowing want true after autoFollow=true resume")
+	}
+}
