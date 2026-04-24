@@ -200,6 +200,41 @@ func TestTerminal_RestoreViewport_AutoFollowClampsToMax(t *testing.T) {
 	}
 }
 
+func TestWalkUpwardFromBottom_WrapSegExceedsChainClamps(t *testing.T) {
+	// Build a 3-sub-row wrapped chain at gid=20..22 (same shape as the
+	// TailSubRow test). Ask for wrapSeg=65535 — an impossible value that
+	// the clamp must reduce to bottomSubRows-1 = 2.
+	s := NewStore(80)
+	for i := 0; i < 20; i++ {
+		s.SetLineWithNoWrap(int64(i), makeRow(80, 'a'), true)
+	}
+	// Build a chain at gid=20 spanning gids 20/21/22 with Wrapped boundaries.
+	row20 := makeRow(80, 'W')
+	row20[79].Wrapped = true
+	s.SetLine(20, row20)
+	row21 := makeRow(80, 'W')
+	row21[79].Wrapped = true
+	s.SetLine(21, row21)
+	// Chain tail at gid=22 (last sub-row; no Wrapped flag).
+	row22 := makeRow(80, 'W')
+	s.SetLine(22, row22)
+	// With viewBottom=22 (chain tail gid) and wrapSeg=65535 (impossible),
+	// the clamp should reduce ws to bottomSubRows-1=2. Viewport height=5,
+	// so after consuming ws+1=3 sub-rows of the chain, remaining=5-3=2,
+	// which is satisfied by walking back into rows 19 (1 sub-row) and 18
+	// (1 sub-row); anchor should land at gid=18, offset=0.
+	anchor, offset, policy := WalkUpwardFromBottom(s, 22, 65535, 5, 80, false)
+	if policy != WalkPolicyAnchorInStore {
+		t.Fatalf("policy: got %v want WalkPolicyAnchorInStore", policy)
+	}
+	if anchor != 18 {
+		t.Fatalf("anchor: got %d want 18", anchor)
+	}
+	if offset != 0 {
+		t.Fatalf("offset: got %d want 0", offset)
+	}
+}
+
 func TestViewWindow_ApplyResumeState_Atomic(t *testing.T) {
 	// Sanity: after ApplyResumeState, all three fields reflect the input.
 	v := NewViewWindow(80, 24)
