@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -230,4 +231,84 @@ func TestIntegration_ResumeMultiplePaneViewports(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("ClientViewports did not populate both entries within 2s")
+}
+
+// TestIntegration_ResumeWrappedChain verifies that a resume request whose
+// clip window includes a wrapped chain delivers the chain's rows in the
+// post-resume delta stream. All existing integration tests use flat rows;
+// this one writes a wrapped chain directly into the sparse store via
+// SparseStore() and resumes pointing into that range.
+func TestIntegration_ResumeWrappedChain(t *testing.T) {
+	h := newMemHarness(t, 80, 24)
+
+	// Fill 20 flat rows at gids [0,19] so there is scrollback.
+	flat := make([]string, 20)
+	for i := range flat {
+		flat[i] = "line"
+	}
+	h.fakeApp.FeedRows(0, flat)
+
+	// Inject a wrapped chain at gids 20/21/22 directly into the sparse store.
+	// gid=20 and gid=21 have their last cell Wrapped=true; gid=22 is the
+	// chain tail (no Wrapped flag).
+	store := h.fakeApp.SparseStore()
+	row20 := make([]parser.Cell, 80)
+	for i := range row20 {
+		row20[i] = parser.Cell{Rune: 'X'}
+	}
+	row20[79].Wrapped = true
+	store.SetLine(20, row20)
+
+	row21 := make([]parser.Cell, 80)
+	for i := range row21 {
+		row21[i] = parser.Cell{Rune: 'Y'}
+	}
+	row21[79].Wrapped = true
+	store.SetLine(21, row21)
+
+	row22 := make([]parser.Cell, 80)
+	for i := range row22 {
+		row22[i] = parser.Cell{Rune: 'Z'}
+	}
+	store.SetLine(22, row22)
+
+	// Continue with more flat rows at gids [23,40].
+	moreFlat := make([]string, 18)
+	for i := range moreFlat {
+		moreFlat[i] = "line"
+	}
+	h.fakeApp.FeedRows(23, moreFlat)
+
+	// Establish live-edge viewport (bootstrap).
+	h.ApplyViewport(h.paneID, 17, 40, true /*autoFollow*/, false)
+	h.Publish()
+
+	// Resume: land the client at ViewBottomIdx=30, autoFollow=false.
+	// WalkUpwardFromBottom from gid=30 with height=24 spans [7,30], so
+	// the wrapped chain tail at gid=22 falls inside the clip window.
+	resume := protocol.ResumeRequest{
+		SessionID:    h.sessionID(),
+		LastSequence: 0,
+		PaneViewports: []protocol.PaneViewportState{
+			{
+				PaneID:         h.paneID,
+				AltScreen:      false,
+				AutoFollow:     false,
+				ViewBottomIdx:  30,
+				WrapSegmentIdx: 0,
+				ViewportRows:   24,
+				ViewportCols:   80,
+			},
+		},
+	}
+	payload, err := protocol.EncodeResumeRequest(resume)
+	if err != nil {
+		t.Fatalf("encode resume: %v", err)
+	}
+	h.writeFrame(protocol.MsgResumeRequest, payload, h.sessionID())
+
+	// The chain tail at gid=22 must be delivered in the post-resume delta
+	// stream. Its presence confirms that wrapped-chain rows survive the
+	// restore + clip path.
+	h.AwaitRow(h.paneID, 22, 2*time.Second)
 }
