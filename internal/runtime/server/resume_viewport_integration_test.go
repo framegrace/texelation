@@ -233,6 +233,63 @@ func TestIntegration_ResumeMultiplePaneViewports(t *testing.T) {
 	t.Fatalf("ClientViewports did not populate both entries within 2s")
 }
 
+// TestIntegration_ResumeMultiPaneMixedAutoFollow exercises the mixed-autoFollow
+// resume path: one pane resumes with AutoFollow=true (live-edge tracking) and
+// one with AutoFollow=false (scrolled-back position). The test asserts that
+// ClientViewports is populated with both entries and that each entry carries
+// the correct AutoFollow value and the correctly seeded ViewBottomIdx.
+func TestIntegration_ResumeMultiPaneMixedAutoFollow(t *testing.T) {
+	h := newMemHarness(t, 80, 24)
+	lines := make([]string, 100)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	h.fakeApp.FeedRows(0, lines)
+
+	syntheticID := [16]byte{0xab, 0xcd, 0xef}
+
+	// Real pane: AutoFollow=true (live-edge tracking).
+	// Synthetic pane: AutoFollow=false (specific ViewBottomIdx, scrolled back).
+	resume := protocol.ResumeRequest{
+		SessionID: h.sessionID(),
+		PaneViewports: []protocol.PaneViewportState{
+			{PaneID: h.paneID, AutoFollow: true, ViewBottomIdx: 500 /* stale */, ViewportRows: 24, ViewportCols: 80},
+			{PaneID: syntheticID, AutoFollow: false, ViewBottomIdx: 50, WrapSegmentIdx: 0, ViewportRows: 12, ViewportCols: 40},
+		},
+	}
+	payload, err := protocol.EncodeResumeRequest(resume)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	h.writeFrame(protocol.MsgResumeRequest, payload, h.sessionID())
+
+	// Poll for both entries in ClientViewports.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		realVP, okReal := h.session.Viewport(h.paneID)
+		synVP, okSyn := h.session.Viewport(syntheticID)
+		if okReal && okSyn {
+			if !realVP.AutoFollow {
+				t.Fatalf("real pane: AutoFollow got false want true")
+			}
+			// AutoFollow=true seeds an unbounded window — ViewBottomIdx should
+			// be the 1<<62 sentinel, NOT the stale 500 from the payload.
+			if realVP.ViewBottomIdx < (1 << 60) {
+				t.Fatalf("real pane AutoFollow seeded raw ViewBottomIdx=%d; expected unbounded (>= 1<<60)", realVP.ViewBottomIdx)
+			}
+			if synVP.AutoFollow {
+				t.Fatalf("synthetic pane: AutoFollow got true want false")
+			}
+			if synVP.ViewBottomIdx != 50 {
+				t.Fatalf("synthetic pane: ViewBottomIdx got %d want 50", synVP.ViewBottomIdx)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("both pane viewports not populated within 2s")
+}
+
 // TestIntegration_ResumeWrappedChain verifies that a resume request whose
 // clip window includes a wrapped chain delivers the chain's rows in the
 // post-resume delta stream. All existing integration tests use flat rows;
