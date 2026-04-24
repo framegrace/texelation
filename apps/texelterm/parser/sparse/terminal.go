@@ -354,10 +354,15 @@ func (t *Terminal) RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow 
 	// and stable across resume). Pass false.
 	anchor, offset, _ := WalkUpwardFromBottom(t.store, viewBottom, wrapSeg, height, width, false)
 	t.view.SetViewAnchor(anchor, offset)
-	// viewBottom setter clamps to height-1, which handles both in-store
-	// (keeps caller's value) and missing-anchor (caller's stale viewBottom
-	// clamps to the same "near the top of available content" position the
-	// snapped anchor renders to). No need to branch on policy.
+	// Set viewBottom to the caller's requested value. SetViewBottom clamps
+	// to height-1 (via clampViewBottom), which matters only in the
+	// missing-anchor edge case: if the caller passes a viewBottom below
+	// OldestRetained, the walk helper already snapped anchor to
+	// OldestRetained; clamp then pins viewBottom at height-1. The two
+	// fields diverge, but Render uses anchor (correct), and VisibleRange
+	// callers during a missing-anchor resume get viewBottom=height-1
+	// which reflects "scrolled to the oldest retained row". Follow-up
+	// scrolls and write-bottom changes re-sync both.
 	t.view.SetViewBottom(viewBottom)
 	t.view.SetAutoFollow(false)
 }

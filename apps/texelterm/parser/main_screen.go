@@ -129,9 +129,15 @@ type MainScreen interface {
 	// RestoreViewport re-seats the main screen's view window to reproduce
 	// the client's saved scrollback anchor. Caller (publisher resume path)
 	// guarantees this is called BEFORE the next Render.
-	// Missing-anchor policy (viewBottom below retention) is applied
-	// internally and forces autoFollow=false regardless of the caller's
-	// request.
+	//
+	// When autoFollow=true the view is set to follow-mode; the scroll
+	// fields are ignored (the view clamps to Store.Max() via
+	// OnWriteBottomChanged on the next write).
+	//
+	// When autoFollow=false, viewBottom and wrapSeg determine the top
+	// anchor. If viewBottom is below retention, missing-anchor policy
+	// snaps the anchor to OldestRetained() and autoFollow remains false
+	// (the user's scrolled-back intent is preserved — Policy A).
 	RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow bool)
 }
 
