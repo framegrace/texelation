@@ -94,9 +94,12 @@ func (c *SimpleClient) Connect(sessionID *[16]byte) (*protocol.ConnectAccept, ne
 	return &accept, conn, nil
 }
 
-// RequestResume sends a RESUME_REQUEST and returns the server response header/payload.
-func (c *SimpleClient) RequestResume(conn net.Conn, sessionID [16]byte, sequence uint64) (protocol.Header, []byte, error) {
-	req := protocol.ResumeRequest{SessionID: sessionID, LastSequence: sequence}
+// RequestResume sends a RESUME_REQUEST and returns the server response
+// header/payload. paneViewports carries per-pane scrollback state so the
+// server can re-seat each pane's ViewWindow at the client's saved position
+// (#199 Plan B). Pass nil or an empty slice for fresh-connect semantics.
+func (c *SimpleClient) RequestResume(conn net.Conn, sessionID [16]byte, sequence uint64, paneViewports []protocol.PaneViewportState) (protocol.Header, []byte, error) {
+	req := protocol.ResumeRequest{SessionID: sessionID, LastSequence: sequence, PaneViewports: paneViewports}
 	payload, err := protocol.EncodeResumeRequest(req)
 	if err != nil {
 		return protocol.Header{}, nil, err

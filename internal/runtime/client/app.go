@@ -104,7 +104,7 @@ func Run(opts Options) error {
 	ackSignal := make(chan struct{}, 1)
 
 	if opts.Reconnect {
-		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence); err != nil {
+		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence, nil); err != nil {
 			return fmt.Errorf("resume request failed: %w", err)
 		} else {
 			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)

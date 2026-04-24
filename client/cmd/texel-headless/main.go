@@ -75,7 +75,7 @@ func main() {
 
 	// Handle resume if requested.
 	if *sessionStr != "" || *lastSeq > 0 {
-		hdr, payload, err := simple.RequestResume(conn, sessionID, *lastSeq)
+		hdr, payload, err := simple.RequestResume(conn, sessionID, *lastSeq, nil)
 		if err != nil {
 			logger.Fatalf("resume request failed: %v", err)
 		}

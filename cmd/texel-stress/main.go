@@ -181,7 +181,7 @@ func runSession(ctx context.Context, metrics *stressMetrics, socket string, mess
 		}
 		_ = accept
 
-		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSeq)
+		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSeq, nil)
 		if err != nil {
 			metrics.recordError(err)
 			_ = conn.Close()
