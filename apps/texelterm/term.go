@@ -64,6 +64,10 @@ func init() {
 	}
 }
 
+// Compile-time assertion that TexelTerm satisfies texel.ViewportRestorer.
+// Keeps the two in lockstep: signature drift surfaces at build time.
+var _ texel.ViewportRestorer = (*TexelTerm)(nil)
+
 type TexelTerm struct {
 	title              string
 	command            string

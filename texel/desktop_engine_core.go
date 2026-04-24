@@ -851,6 +851,32 @@ func (d *DesktopEngine) AppByID(id [16]byte) App {
 	return result
 }
 
+// RestorePaneViewport looks up the pane with id and, if its app implements
+// ViewportRestorer, forwards the restore call. Returns true on success,
+// false if the pane is unknown or its app is not a restorer. Safe to call
+// while holding no desktop locks — iterates via forEachPane.
+func (d *DesktopEngine) RestorePaneViewport(id [16]byte, viewBottom int64, wrapSeg uint16, autoFollow bool) bool {
+	var found bool
+	d.forEachPane(func(p *pane) {
+		if found {
+			return
+		}
+		if p.ID() != id {
+			return
+		}
+		if p.app == nil {
+			return
+		}
+		restorer, ok := p.app.(ViewportRestorer)
+		if !ok {
+			return
+		}
+		restorer.RestoreViewport(viewBottom, wrapSeg, autoFollow)
+		found = true
+	})
+	return found
+}
+
 // PaneStates returns the current pane flags across all workspaces.
 func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 	states := make([]PaneStateSnapshot, 0)
