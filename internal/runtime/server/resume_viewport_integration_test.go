@@ -276,10 +276,11 @@ func TestIntegration_ResumeMultiPaneMixedAutoFollow(t *testing.T) {
 			if !realVP.AutoFollow {
 				t.Fatalf("real pane: AutoFollow got false want true")
 			}
-			// AutoFollow=true seeds an unbounded window — ViewBottomIdx should
-			// be the 1<<62 sentinel, NOT the stale 500 from the payload.
-			if realVP.ViewBottomIdx < (1 << 60) {
-				t.Fatalf("real pane AutoFollow seeded raw ViewBottomIdx=%d; expected unbounded (>= 1<<60)", realVP.ViewBottomIdx)
+			// AutoFollow=true entries are stored verbatim (no sentinel). The
+			// publisher ignores ViewBottomIdx when AutoFollow=true and derives
+			// the clip from snap.RowGlobalIdx instead.
+			if realVP.ViewBottomIdx != 500 {
+				t.Fatalf("real pane AutoFollow ViewBottomIdx: got %d want 500 (stored verbatim)", realVP.ViewBottomIdx)
 			}
 			if synVP.AutoFollow {
 				t.Fatalf("synthetic pane: AutoFollow got true want false")
@@ -513,4 +514,49 @@ func TestIntegration_FullReconnectLifecycle(t *testing.T) {
 
 	vp, ok := resumedSess.Viewport(paneID)
 	t.Fatalf("viewport not seeded after full reconnect within 2s: ok=%v vp=%+v", ok, vp)
+}
+
+// TestIntegration_ResumeAutoFollowHighGlobalIdx_NoTruncation is a regression
+// test for the uint16 truncation bug: when AutoFollow=true panes resume on a
+// terminal whose live-edge gid is >= 65512, the publisher must not let the
+// clip span exceed what RowDelta.Row (uint16) can encode. Pre-fix, the
+// ApplyResume sentinel of 1<<62 caused lo to sit at -overscan while hi was
+// near MaxInt64, so gid - lo wrapped to 0 on the wire and rows got cached at
+// bogus negative gids on the client.
+func TestIntegration_ResumeAutoFollowHighGlobalIdx_NoTruncation(t *testing.T) {
+	h := newMemHarness(t, 80, 24)
+
+	// Feed rows starting at gid=66000 — above the uint16 boundary.
+	const startGid = int64(66000)
+	lines := make([]string, 100)
+	for i := range lines {
+		lines[i] = "row"
+	}
+	h.fakeApp.FeedRows(startGid, lines)
+
+	h.ApplyViewport(h.paneID, startGid+76, startGid+99, true, false)
+	h.Publish()
+
+	resume := protocol.ResumeRequest{
+		SessionID: h.sessionID(),
+		PaneViewports: []protocol.PaneViewportState{
+			{PaneID: h.paneID, AutoFollow: true, ViewBottomIdx: 500 /* stale */, ViewportRows: 24, ViewportCols: 80},
+		},
+	}
+	payload, err := protocol.EncodeResumeRequest(resume)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	h.writeFrame(protocol.MsgResumeRequest, payload, h.sessionID())
+
+	// A near-live-edge row must arrive encoded correctly. The pane has
+	// 1-cell borders top/bottom, so the gid=startGid+99 at the bottom edge
+	// is covered by the border. Use startGid+97 — safely interior.
+	//
+	// Pre-fix bug: lo was -overscan while hi was ~MaxInt64; uint16(gid-lo)
+	// wrapped to a small positive row, causing the client to key this row
+	// under a bogus negative gid. The harness's client reader reconstructs
+	// gid = RowBase + RowDelta.Row, so a correctly encoded row at high gid
+	// must appear in rowsByGID under its real globalIdx.
+	h.AwaitRow(h.paneID, startGid+97, 2*time.Second)
 }

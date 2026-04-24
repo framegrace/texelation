@@ -252,6 +252,36 @@ func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32
 	hi := vp.ViewBottomIdx + overscan
 	delta.RowBase = lo
 
+	if vp.AutoFollow {
+		// AutoFollow=true means the client tracks the live edge. The saved
+		// ViewBottomIdx in ClientViewport can be stale (e.g., from a
+		// pre-resume tracker state). Derive the clip from the pane's actual
+		// rendered globalIdx range instead. This also keeps (hi-lo) bounded
+		// to roughly 2*Rows+overscan, comfortably within the uint16
+		// RowDelta.Row encoding.
+		var maxGid int64 = -1
+		for y := range snap.Buffer {
+			if y >= len(snap.RowGlobalIdx) {
+				break
+			}
+			gid := snap.RowGlobalIdx[y]
+			if gid > maxGid {
+				maxGid = gid
+			}
+		}
+		if maxGid >= 0 {
+			hi = maxGid + overscan
+			lo = maxGid - int64(vp.Rows) - overscan + 1
+			if lo < 0 {
+				lo = 0
+			}
+			delta.RowBase = lo
+		}
+		// If maxGid < 0 (all rows are borders/padding/non-terminal), fall
+		// through with the ViewTopIdx-derived lo/hi — no rows will pass the
+		// `gid >= 0 && gid in [lo,hi]` gate anyway.
+	}
+
 	for y, row := range snap.Buffer {
 		if len(row) == 0 {
 			continue

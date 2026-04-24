@@ -48,24 +48,19 @@ func TestClientViewports_ApplyResume_ClampsNegativeTop(t *testing.T) {
 	}
 }
 
-func TestClientViewports_ApplyResume_AutoFollowSeedsOpenWindow(t *testing.T) {
+func TestClientViewports_ApplyResume_AutoFollowPreservesFlag(t *testing.T) {
 	cv := NewClientViewports()
 	cv.ApplyResume([]protocol.PaneViewportState{
-		{PaneID: [16]byte{1}, AutoFollow: true, ViewBottomIdx: 500 /* stale */, ViewportRows: 24, ViewportCols: 80},
+		{PaneID: [16]byte{1}, AutoFollow: true, ViewBottomIdx: 500, ViewportRows: 24, ViewportCols: 80},
 	})
 	got, _ := cv.Get([16]byte{1})
-	// The clip window must cover any real globalIdx value the pane could render.
-	// Assert ViewBottomIdx is effectively "unbounded positive" so publisher's
-	// hi = ViewBottomIdx + overscan doesn't drop real rows.
-	const wantHi int64 = 1 << 60 // anything well above realistic gids
-	if got.ViewBottomIdx < wantHi {
-		t.Fatalf("AutoFollow seed ViewBottomIdx: got %d, want >= %d (cover-all-gids sentinel)", got.ViewBottomIdx, wantHi)
-	}
-	if got.ViewTopIdx != 0 {
-		t.Fatalf("AutoFollow seed ViewTopIdx: got %d, want 0", got.ViewTopIdx)
-	}
 	if !got.AutoFollow {
-		t.Fatalf("AutoFollow flag preserved")
+		t.Fatalf("AutoFollow flag lost: got %+v", got)
+	}
+	// ViewBottomIdx stored verbatim from payload; publisher ignores it when
+	// AutoFollow=true (derives clip from snap.RowGlobalIdx instead).
+	if got.ViewBottomIdx != 500 {
+		t.Fatalf("ViewBottomIdx: got %d want 500 (stored verbatim)", got.ViewBottomIdx)
 	}
 }
 
