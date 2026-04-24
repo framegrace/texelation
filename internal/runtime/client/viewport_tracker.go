@@ -491,33 +491,3 @@ func (t *viewportTrackers) snapshotAll() []snapshotEntry {
 	}
 	return out
 }
-
-// SetBottomWrapSegment updates the tracker's WrapSegmentIdx — the sub-row
-// index (within the chain at ViewBottomIdx) that occupies the bottommost
-// display row. Intended to be called by the renderer after a pane render
-// when the rowGI sequence reveals chain continuity at the bottom.
-//
-// Today, the client's renderer maps display rows to globalIdxs via a flat
-// ViewTopIdx + rowIdx computation (see renderer.go), so consecutive rows
-// never share a gid and wrap-segment can't be inferred. The setter plumbs
-// the field through to the wire format anyway so (a) the resume payload
-// has a populated slot for forward-compat, (b) future renderer changes
-// that surface per-row chain-head gids can use this hook without wire
-// changes.
-//
-// No-op when the pane has no tracker yet.
-func (t *viewportTrackers) SetBottomWrapSegment(id [16]byte, idx uint16) {
-	t.mu.RLock()
-	vp, ok := t.panes[id]
-	t.mu.RUnlock()
-	if !ok {
-		return
-	}
-	vp.mu.Lock()
-	defer vp.mu.Unlock()
-	if vp.WrapSegmentIdx == idx {
-		return
-	}
-	vp.WrapSegmentIdx = idx
-	vp.dirty = true
-}

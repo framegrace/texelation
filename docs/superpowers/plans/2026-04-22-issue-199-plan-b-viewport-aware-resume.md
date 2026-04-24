@@ -44,13 +44,13 @@
 - **Modify** `internal/runtime/server/client_viewport.go` — add `ApplyResume(ps []protocol.PaneViewportState)` that seeds entries.
 
 ### Client resume send
-- **Modify** `internal/runtime/client/viewport_tracker.go` — add `WrapSegmentIdx uint16` to `paneViewport` + `paneViewportCopy`; have `snapshotDirty` carry it; add `SetBottomWrapSegment(id, idx)` setter (called by renderer when rendering completes); flushFrame encodes it on `MsgViewportUpdate`.
+- **Modify** `internal/runtime/client/viewport_tracker.go` — add `WrapSegmentIdx uint16` to `paneViewport` + `paneViewportCopy`; have `snapshotDirty` carry it; flushFrame encodes it on `MsgViewportUpdate`. (Note: earlier revisions of this plan proposed a `SetBottomWrapSegment` setter + `computeBottomWrapSegment` helper driven by the renderer; both were deleted after review as dead code since the client renderer doesn't yet surface per-row chain-head gids. The field stays 0 on the wire until a future renderer lands.)
 - **Modify** `internal/runtime/client/app.go` — before `simple.RequestResume(...)`, gather `[]protocol.PaneViewportState` from `state.viewports` and pass to a new helper.
 - **Modify** `client/simple_client.go` — `RequestResume` gains an extra parameter `paneViewports []protocol.PaneViewportState`.
 - **Modify** `client/cmd/texel-headless/main.go` — update the one call site with an empty slice.
 
 ### Renderer wiring for wrap-segment
-- **Modify** `internal/runtime/client/render.go` (or equivalent — find the per-frame render path that reads `paneCache` + row globalIdxs) — after each pane render, count the consecutive bottom rows that share the bottom row's globalIdx; if N such rows, call `state.viewports.SetBottomWrapSegment(paneID, uint16(N-1))`.
+- *(removed — see note above)* Originally this section proposed calling a renderer-side `SetBottomWrapSegment` setter. The feature landed without a renderer hook because the client's current render pipeline maps display rows to gids via a flat `ViewTopIdx + rowIdx` calculation (consecutive rows never share a gid), so nothing can compute `WrapSegmentIdx` today. Treat the `WrapSegmentIdx` field on the wire as reserved-but-always-0 until a future renderer change surfaces per-row chain-head gids.
 
 ### Tests
 - **Create** `internal/runtime/server/resume_viewport_integration_test.go` — three integration tests: valid anchor in-store, missing anchor snap-to-oldest, alt-screen skip.
