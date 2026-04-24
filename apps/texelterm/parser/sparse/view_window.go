@@ -209,6 +209,13 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 // walk clamps at writeTop so scrollback never leaks into the live viewport on
 // horizontal widening (where old wrapped chains reflow smaller and the walk
 // would otherwise reach past writeTop to fill height). See #48.
+//
+// Concurrency note: RecomputeLiveAnchor reads autoFollow at entry and at
+// each write point. If autoFollow flipped to false between the entry read
+// and a write (via SetAutoFollow or ApplyResumeState), the write path
+// bails without clobbering the caller-set anchor. This is essential during
+// viewport-aware resume, where ApplyResumeState may race with a concurrent
+// render's RecomputeLiveAnchor invocation.
 func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int, writeTop int64) {
 	v.mu.Lock()
 	height := v.height
@@ -261,6 +268,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 			if accumulated >= height {
 				offset := accumulated - height
 				v.mu.Lock()
+				if !v.autoFollow {
+					v.mu.Unlock()
+					return
+				}
 				v.viewAnchor = gi
 				v.viewAnchorOffset = offset
 				v.mu.Unlock()
@@ -303,6 +314,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 		if accumulated >= height {
 			offset := accumulated - height
 			v.mu.Lock()
+			if !v.autoFollow {
+				v.mu.Unlock()
+				return
+			}
 			v.viewAnchor = gi
 			v.viewAnchorOffset = offset
 			v.mu.Unlock()
@@ -349,6 +364,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 	// content the application is about to overwrite (#48).
 	if cursorGI < writeTop+int64(height)-1 {
 		v.mu.Lock()
+		if !v.autoFollow {
+			v.mu.Unlock()
+			return
+		}
 		v.viewAnchor = writeTop
 		v.viewAnchorOffset = 0
 		v.mu.Unlock()
@@ -366,6 +385,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 			if accumulated >= height {
 				offset := accumulated - height
 				v.mu.Lock()
+				if !v.autoFollow {
+					v.mu.Unlock()
+					return
+				}
 				v.viewAnchor = gi
 				v.viewAnchorOffset = offset
 				v.mu.Unlock()
@@ -388,6 +411,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 		if accumulated >= height {
 			offset := accumulated - height
 			v.mu.Lock()
+			if !v.autoFollow {
+				v.mu.Unlock()
+				return
+			}
 			v.viewAnchor = chainStart
 			v.viewAnchorOffset = offset
 			v.mu.Unlock()
@@ -401,6 +428,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 	// from the top of what's available. For a fresh session (writeTop=0)
 	// this degenerates to the old "anchor at top" behavior.
 	v.mu.Lock()
+	if !v.autoFollow {
+		v.mu.Unlock()
+		return
+	}
 	if gi < 0 {
 		v.viewAnchor = 0
 	} else {
