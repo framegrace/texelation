@@ -295,12 +295,14 @@ func TestIntegration_ResumeMultiPaneMixedAutoFollow(t *testing.T) {
 	t.Fatalf("both pane viewports not populated within 2s")
 }
 
-// TestIntegration_ResumeWrappedChain verifies that a resume request whose
-// clip window includes a wrapped chain delivers the chain's rows in the
-// post-resume delta stream. All existing integration tests use flat rows;
-// this one writes a wrapped chain directly into the sparse store via
-// SparseStore() and resumes pointing into that range.
-func TestIntegration_ResumeWrappedChain(t *testing.T) {
+// TestIntegration_ResumeAtGidInWrappedChainRange verifies that a resume
+// request targeting a globalIdx that HAPPENS to have a `Wrapped` flag set in
+// the store still delivers that row in the post-resume delta. Does not
+// exercise server-side wrap-segment reflow logic — the sparseFakeApp's
+// RestoreViewport path calls `rebuildRenderFromStoreLocked` which is a flat
+// 1:1 copy, not a reflowing walk. See `WalkUpwardFromBottom` unit tests for
+// the actual wrap-segment reflow coverage.
+func TestIntegration_ResumeAtGidInWrappedChainRange(t *testing.T) {
 	h := newMemHarness(t, 80, 24)
 
 	// Fill 20 flat rows at gids [0,19] so there is scrollback.
