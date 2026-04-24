@@ -9,6 +9,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 
@@ -129,6 +130,21 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		if err != nil {
 			return err
 		}
+		if c.resumeProcessed {
+			// Duplicate MsgResumeRequest on this connection. Ignore silently
+			// to prevent ApplyResume clobbering viewport state, RestoreViewport
+			// jitter, and redundant TreeSnapshot spam.
+			debugLog.Printf("connection %x: ignoring duplicate MsgResumeRequest", c.session.ID())
+			break
+		}
+		if c.awaitResume && request.SessionID != c.session.ID() {
+			// SessionID mismatch on a connection that was expecting a specific
+			// resume (i.e., an existing session was reconnecting). Reject to
+			// defend against stale or malicious frames.
+			debugLog.Printf("connection %x: MsgResumeRequest session mismatch (got %x)", c.session.ID(), request.SessionID)
+			return errors.New("server: resume request session mismatch")
+		}
+		c.resumeProcessed = true
 		c.lastAcked = request.LastSequence
 		c.awaitResume = false
 		if c.attachListeners != nil {
@@ -147,13 +163,21 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		// pane's renderer produces rows inside the resumed range on the
 		// first post-resume publish. Alt-screen panes keep their own
 		// buffer; skipping the restore call avoids a no-op through the
-		// alt-screen guard in TexelTerm.RestoreViewport.
+		// alt-screen guard in TexelTerm.RestoreViewport. Wrapped in a
+		// deferred recover so a panicking app cannot crash the connection.
 		if sink, ok := c.sink.(*DesktopSink); ok && sink.Desktop() != nil {
-			for _, ps := range request.PaneViewports {
-				if !ps.AltScreen {
-					sink.Desktop().RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("server: RestorePaneViewport panic: %v", r)
+					}
+				}()
+				for _, ps := range request.PaneViewports {
+					if !ps.AltScreen {
+						sink.Desktop().RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+					}
 				}
-			}
+			}()
 		}
 		if provider, ok := c.sink.(SnapshotProvider); ok {
 			snapshot, err := provider.Snapshot()
@@ -176,6 +200,7 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				sink.Publish()
 			}
 		}
+		c.initialSnapshotSent = true
 		c.nudge()
 	case protocol.MsgClientReady:
 		ready, err := protocol.DecodeClientReady(payload)
