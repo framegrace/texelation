@@ -134,9 +134,20 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		if c.attachListeners != nil {
 			c.attachListeners()
 		}
-		// Apply per-pane viewport state first: re-seat each pane's
-		// ViewWindow + seed ClientViewports so the snapshot + first
-		// publish use the resumed coordinates instead of live edge.
+		// Seed ClientViewports from the resume payload FIRST: this is a
+		// pure data copy and cannot fail, so the publisher has a valid
+		// clip window even if a per-pane RestoreViewport call below
+		// panics or no-ops. Without this ordering, a pane-side failure
+		// would leave ClientViewports empty and the publisher would
+		// silently skip every main-screen pane until the client's next
+		// MsgViewportUpdate.
+		c.session.ApplyResume(request.PaneViewports)
+
+		// Then re-seat each non-alt-screen pane's ViewWindow so the
+		// pane's renderer produces rows inside the resumed range on the
+		// first post-resume publish. Alt-screen panes keep their own
+		// buffer; skipping the restore call avoids a no-op through the
+		// alt-screen guard in TexelTerm.RestoreViewport.
 		if sink, ok := c.sink.(*DesktopSink); ok && sink.Desktop() != nil {
 			for _, ps := range request.PaneViewports {
 				if !ps.AltScreen {
@@ -144,7 +155,6 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				}
 			}
 		}
-		c.session.ApplyResume(request.PaneViewports)
 		if provider, ok := c.sink.(SnapshotProvider); ok {
 			snapshot, err := provider.Snapshot()
 			if err != nil {

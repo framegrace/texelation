@@ -129,6 +129,10 @@ func (a *sparseFakeApp) RestoreViewport(viewBottom int64, wrapSeg uint16, autoFo
 	} else {
 		a.rebuildRenderFromStoreLocked(viewBottom)
 	}
+	// Explicitly unlock before calling markDirty: markDirty's channel
+	// send can block, and we don't want to hold a.mu across that send
+	// (it would stall concurrent Render / RowGlobalIdx readers). Mirrors
+	// the pattern used by ScrollTo / EnterAltScreen.
 	a.mu.Unlock()
 	a.markDirty()
 }

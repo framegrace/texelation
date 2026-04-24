@@ -54,9 +54,33 @@ func (c *ClientViewports) Get(paneID [16]byte) (ClientViewport, bool) {
 
 // ApplyResume seeds the viewport map from a ResumeRequest.PaneViewports list.
 // ViewTopIdx is derived as ViewBottomIdx - Rows + 1, clamped to 0 for panes
-// whose saved bottom is close to the origin. Publisher clipping uses this
-// for first-paint; once rendering settles, the client's normal
-// MsgViewportUpdate (via flushFrame) reconciles exact values.
+// whose saved bottom is close to the origin. Publisher clipping uses these
+// values on the first post-resume publish; once rendering settles, the
+// client's normal MsgViewportUpdate (via flushFrame) reconciles exact
+// values.
+//
+// Known first-paint approximations, both reconciled by the first
+// flushFrame-driven MsgViewportUpdate after resume:
+//
+//  1. Wrapped-chain terminals: a single globalIdx at the bottom can span
+//     multiple display rows, so ViewTopIdx = ViewBottomIdx - Rows + 1 sits
+//     at a higher globalIdx than the true top of the visible region.
+//     Publisher overscan absorbs most of the gap; the MsgViewportUpdate
+//     after resume tightens it.
+//
+//  2. Missing-anchor scrollback: if the payload's ViewBottomIdx is below
+//     the store's OldestRetained, Terminal.RestoreViewport snaps the pane
+//     to OldestRetained (Policy A). This function still writes the raw
+//     protocol ViewBottomIdx into the ClientViewport, so the publisher's
+//     clip window is briefly narrower than the pane's render buffer —
+//     some rows the pane emits above OldestRetained will be dropped by
+//     the publisher until the client's next MsgViewportUpdate. Acceptable
+//     because the client's flushFrame fires on the very next render
+//     frame after the resumed snapshot applies.
+//
+// If either approximation becomes a visible regression in practice,
+// propagate the post-snap effective bottom from RestorePaneViewport back
+// into ApplyResume (return value plumbing) rather than rederiving here.
 func (c *ClientViewports) ApplyResume(states []protocol.PaneViewportState) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
