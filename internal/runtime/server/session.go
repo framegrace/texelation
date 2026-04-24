@@ -70,6 +70,13 @@ func (s *Session) ApplyViewportUpdate(u protocol.ViewportUpdate) {
 	s.viewports.Apply(u)
 }
 
+// ApplyResume seeds per-pane viewports from a ResumeRequest payload. Called
+// by the connection handler before the first post-resume snapshot so the
+// publisher clips correctly on the initial emit.
+func (s *Session) ApplyResume(states []protocol.PaneViewportState) {
+	s.viewports.ApplyResume(states)
+}
+
 // Viewport returns the client-reported viewport for the given pane, or
 // false if the client has not sent one yet.
 func (s *Session) Viewport(paneID [16]byte) (ClientViewport, bool) {

@@ -31,6 +31,9 @@ import (
 	"github.com/framegrace/texelation/texel"
 )
 
+// Compile-time assertion: sparseFakeApp must satisfy texel.ViewportRestorer.
+var _ texel.ViewportRestorer = (*sparseFakeApp)(nil)
+
 // nonZeroStyle is the style we use for all cells in the fake app's buffers.
 // We deliberately avoid tcell.StyleDefault because the pane's BufferWidget
 // skips cells whose Style equals the zero-value tcell.Style{} — and
@@ -100,6 +103,32 @@ func (a *sparseFakeApp) FeedRows(startGID int64, rows []string) {
 func (a *sparseFakeApp) ScrollTo(bottomGID int64) {
 	a.mu.Lock()
 	a.rebuildRenderFromStoreLocked(bottomGID)
+	a.mu.Unlock()
+	a.markDirty()
+}
+
+// RestoreViewport satisfies texel.ViewportRestorer. For the fake app, we
+// translate the request into a direct rebuildRenderFromStoreLocked — enough to
+// exercise the Desktop→App dispatch and the publisher's re-clip. wrapSeg
+// is ignored (fake app doesn't reflow). autoFollow snaps to the live edge.
+// When viewBottom is below retention, WalkUpwardFromBottom returns the oldest
+// retained gid so we render from there rather than from a gap.
+func (a *sparseFakeApp) RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow bool) {
+	a.mu.Lock()
+	if autoFollow {
+		// Snap to live edge.
+		a.rebuildRenderFromStoreLocked(a.store.Max())
+		a.mu.Unlock()
+		a.markDirty()
+		return
+	}
+	// Honor missing-anchor: if viewBottom < OldestRetained, snap up.
+	anchor, _, policy := sparse.WalkUpwardFromBottom(a.store, viewBottom, wrapSeg, a.height, a.width, false)
+	if policy == sparse.WalkPolicyMissingAnchor {
+		a.rebuildRenderFromStoreLocked(anchor)
+	} else {
+		a.rebuildRenderFromStoreLocked(viewBottom)
+	}
 	a.mu.Unlock()
 	a.markDirty()
 }

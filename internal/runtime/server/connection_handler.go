@@ -134,6 +134,17 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		if c.attachListeners != nil {
 			c.attachListeners()
 		}
+		// Apply per-pane viewport state first: re-seat each pane's
+		// ViewWindow + seed ClientViewports so the snapshot + first
+		// publish use the resumed coordinates instead of live edge.
+		if sink, ok := c.sink.(*DesktopSink); ok && sink.Desktop() != nil {
+			for _, ps := range request.PaneViewports {
+				if !ps.AltScreen {
+					sink.Desktop().RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+				}
+			}
+		}
+		c.session.ApplyResume(request.PaneViewports)
 		if provider, ok := c.sink.(SnapshotProvider); ok {
 			snapshot, err := provider.Snapshot()
 			if err != nil {
