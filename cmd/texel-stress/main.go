@@ -9,11 +9,11 @@
 package main
 
 import (
-	texelcore "github.com/framegrace/texelui/core"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	texelcore "github.com/framegrace/texelui/core"
 	"log"
 	"net"
 	"os"
