@@ -38,12 +38,13 @@ type pendingFetchRange struct {
 type paneViewport struct {
 	mu sync.Mutex
 
-	AltScreen     bool
-	ViewTopIdx    int64
-	ViewBottomIdx int64
-	Rows          uint16
-	Cols          uint16
-	AutoFollow    bool
+	AltScreen      bool
+	ViewTopIdx     int64
+	ViewBottomIdx  int64
+	Rows           uint16
+	Cols           uint16
+	AutoFollow     bool
+	WrapSegmentIdx uint16
 
 	// bookkeeping
 	dirty          bool
@@ -112,12 +113,13 @@ func (t *viewportTrackers) snapshotDirty() ([]snapshotEntry, map[[16]byte]*paneV
 			entries = append(entries, snapshotEntry{
 				id: id,
 				vp: paneViewportCopy{
-					AltScreen:     vp.AltScreen,
-					ViewTopIdx:    vp.ViewTopIdx,
-					ViewBottomIdx: vp.ViewBottomIdx,
-					Rows:          vp.Rows,
-					Cols:          vp.Cols,
-					AutoFollow:    vp.AutoFollow,
+					AltScreen:      vp.AltScreen,
+					ViewTopIdx:     vp.ViewTopIdx,
+					ViewBottomIdx:  vp.ViewBottomIdx,
+					Rows:           vp.Rows,
+					Cols:           vp.Cols,
+					AutoFollow:     vp.AutoFollow,
+					WrapSegmentIdx: vp.WrapSegmentIdx,
 				},
 			})
 		}
@@ -144,7 +146,8 @@ func (t *viewportTrackers) clearDirty(id [16]byte, expected paneViewportCopy) {
 		vp.ViewBottomIdx == expected.ViewBottomIdx &&
 		vp.Rows == expected.Rows &&
 		vp.Cols == expected.Cols &&
-		vp.AutoFollow == expected.AutoFollow {
+		vp.AutoFollow == expected.AutoFollow &&
+		vp.WrapSegmentIdx == expected.WrapSegmentIdx {
 		vp.dirty = false
 		return
 	}
@@ -157,12 +160,13 @@ type snapshotEntry struct {
 }
 
 type paneViewportCopy struct {
-	AltScreen     bool
-	ViewTopIdx    int64
-	ViewBottomIdx int64
-	Rows          uint16
-	Cols          uint16
-	AutoFollow    bool
+	AltScreen      bool
+	ViewTopIdx     int64
+	ViewBottomIdx  int64
+	Rows           uint16
+	Cols           uint16
+	AutoFollow     bool
+	WrapSegmentIdx uint16
 }
 
 // onTreeSnapshot initialises per-pane trackers from a MsgTreeSnapshot.
@@ -297,12 +301,13 @@ func (s *clientState) paneViewportFor(id [16]byte) (paneViewportCopy, bool) {
 		return paneViewportCopy{}, false
 	}
 	return paneViewportCopy{
-		AltScreen:     vp.AltScreen,
-		ViewTopIdx:    vp.ViewTopIdx,
-		ViewBottomIdx: vp.ViewBottomIdx,
-		Rows:          vp.Rows,
-		Cols:          vp.Cols,
-		AutoFollow:    vp.AutoFollow,
+		AltScreen:      vp.AltScreen,
+		ViewTopIdx:     vp.ViewTopIdx,
+		ViewBottomIdx:  vp.ViewBottomIdx,
+		Rows:           vp.Rows,
+		Cols:           vp.Cols,
+		AutoFollow:     vp.AutoFollow,
+		WrapSegmentIdx: vp.WrapSegmentIdx,
 	}, true
 }
 
@@ -356,7 +361,7 @@ func flushFrame(
 			AltScreen:      vc.AltScreen,
 			ViewTopIdx:     vc.ViewTopIdx,
 			ViewBottomIdx:  vc.ViewBottomIdx,
-			WrapSegmentIdx: 0,
+			WrapSegmentIdx: vc.WrapSegmentIdx,
 			Rows:           vc.Rows,
 			Cols:           vc.Cols,
 			AutoFollow:     vc.AutoFollow,
@@ -454,4 +459,34 @@ func sendFetchRange(
 		return false
 	}
 	return true
+}
+
+// SetBottomWrapSegment updates the tracker's WrapSegmentIdx — the sub-row
+// index (within the chain at ViewBottomIdx) that occupies the bottommost
+// display row. Intended to be called by the renderer after a pane render
+// when the rowGI sequence reveals chain continuity at the bottom.
+//
+// Today, the client's renderer maps display rows to globalIdxs via a flat
+// ViewTopIdx + rowIdx computation (see renderer.go), so consecutive rows
+// never share a gid and wrap-segment can't be inferred. The setter plumbs
+// the field through to the wire format anyway so (a) the resume payload
+// has a populated slot for forward-compat, (b) future renderer changes
+// that surface per-row chain-head gids can use this hook without wire
+// changes.
+//
+// No-op when the pane has no tracker yet.
+func (t *viewportTrackers) SetBottomWrapSegment(id [16]byte, idx uint16) {
+	t.mu.RLock()
+	vp, ok := t.panes[id]
+	t.mu.RUnlock()
+	if !ok {
+		return
+	}
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	if vp.WrapSegmentIdx == idx {
+		return
+	}
+	vp.WrapSegmentIdx = idx
+	vp.dirty = true
 }
