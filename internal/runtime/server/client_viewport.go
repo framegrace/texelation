@@ -52,6 +52,30 @@ func (c *ClientViewports) Get(paneID [16]byte) (ClientViewport, bool) {
 	return v, ok
 }
 
+// ApplyResume seeds the viewport map from a ResumeRequest.PaneViewports list.
+// ViewTopIdx is derived as ViewBottomIdx - Rows + 1, clamped to 0 for panes
+// whose saved bottom is close to the origin. Publisher clipping uses this
+// for first-paint; once rendering settles, the client's normal
+// MsgViewportUpdate (via flushFrame) reconciles exact values.
+func (c *ClientViewports) ApplyResume(states []protocol.PaneViewportState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, ps := range states {
+		top := ps.ViewBottomIdx - int64(ps.ViewportRows) + 1
+		if top < 0 {
+			top = 0
+		}
+		c.byPaneID[ps.PaneID] = ClientViewport{
+			AltScreen:     ps.AltScreen,
+			ViewTopIdx:    top,
+			ViewBottomIdx: ps.ViewBottomIdx,
+			Rows:          ps.ViewportRows,
+			Cols:          ps.ViewportCols,
+			AutoFollow:    ps.AutoFollow,
+		}
+	}
+}
+
 // Snapshot returns a shallow copy of all viewports. Intended for publisher
 // fan-out; callers must treat the result as read-only.
 func (c *ClientViewports) Snapshot() map[[16]byte]ClientViewport {
