@@ -146,3 +146,88 @@ func TestIntegration_ResumeMissingAnchor_SnapsToOldest(t *testing.T) {
 	// missing-anchor resume (no crash, no deadlock).
 	h.AwaitRow(h.paneID, 33, 2*time.Second)
 }
+
+// TestIntegration_ResumeMultiplePaneViewports verifies that a ResumeRequest
+// carrying multiple PaneViewportState entries populates ClientViewports for
+// all of them, even when some PaneIDs do not correspond to a real pane in
+// the desktop (e.g., a stale client state carrying an ID from a pane that
+// closed server-side). The handler must continue processing remaining entries
+// instead of aborting on the first unknown ID.
+func TestIntegration_ResumeMultiplePaneViewports(t *testing.T) {
+	h := newMemHarness(t, 80, 24)
+
+	// Feed some content so the real pane has scrollback.
+	lines := make([]string, 100)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	h.fakeApp.FeedRows(0, lines)
+
+	// Establish initial viewport for the real pane (bootstrap).
+	h.ApplyViewport(h.paneID, 76, 99, true, false)
+	h.Publish()
+
+	// Synthetic pane ID that does NOT exist in the desktop. RestorePaneViewport
+	// will return false for this one; ApplyResume should still store it.
+	syntheticID := [16]byte{0xaa, 0xbb, 0xcc}
+
+	// Resume request with two entries: one for the real pane (scrolled back),
+	// one for the synthetic pane.
+	resume := protocol.ResumeRequest{
+		SessionID:    h.sessionID(),
+		LastSequence: 0,
+		PaneViewports: []protocol.PaneViewportState{
+			{
+				PaneID:         h.paneID,
+				AltScreen:      false,
+				AutoFollow:     false,
+				ViewBottomIdx:  50,
+				WrapSegmentIdx: 0,
+				ViewportRows:   24,
+				ViewportCols:   80,
+			},
+			{
+				PaneID:         syntheticID,
+				AltScreen:      false,
+				AutoFollow:     true,
+				ViewBottomIdx:  0,
+				WrapSegmentIdx: 0,
+				ViewportRows:   12,
+				ViewportCols:   40,
+			},
+		},
+	}
+	payload, err := protocol.EncodeResumeRequest(resume)
+	if err != nil {
+		t.Fatalf("encode resume: %v", err)
+	}
+	h.writeFrame(protocol.MsgResumeRequest, payload, h.sessionID())
+
+	// After the resume propagates through the handler, ClientViewports must
+	// carry entries for BOTH pane IDs. Poll briefly since the handler runs
+	// on another goroutine.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		vp1, ok1 := h.session.Viewport(h.paneID)
+		vp2, ok2 := h.session.Viewport(syntheticID)
+		if ok1 && ok2 {
+			// Real pane viewport carries the scrolled-back values.
+			if vp1.ViewBottomIdx != 50 {
+				t.Fatalf("real pane ViewBottomIdx: got %d want 50", vp1.ViewBottomIdx)
+			}
+			if vp1.AutoFollow {
+				t.Fatalf("real pane AutoFollow: got true want false")
+			}
+			// Synthetic pane viewport is stored verbatim despite no pane existing.
+			if vp2.Rows != 12 || vp2.Cols != 40 {
+				t.Fatalf("synthetic pane dims: got (%d,%d) want (12,40)", vp2.Rows, vp2.Cols)
+			}
+			if !vp2.AutoFollow {
+				t.Fatalf("synthetic pane AutoFollow: got false want true")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("ClientViewports did not populate both entries within 2s")
+}
