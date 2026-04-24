@@ -26,7 +26,13 @@ const (
 )
 
 // Version is the negotiated protocol version implemented by this package.
-const Version uint8 = 1
+//
+// v2 (issue #199 Plan B): ResumeRequest grew a PaneViewports payload
+// (minimum size 24 -> 26 bytes even for an empty list, plus per-entry
+// PaneViewportState records). Bumping the version lets pre-Plan-B clients
+// receive an explicit handshake rejection instead of a mysterious
+// ErrPayloadShort on the first resume attempt.
+const Version uint8 = 2
 
 // MessageType enumerates the canonical message categories exchanged between
 // client and server.
