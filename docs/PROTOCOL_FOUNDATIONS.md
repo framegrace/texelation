@@ -30,7 +30,7 @@ reuse buffers internally to minimise allocations.
 | Category             | Messages (Go enums)                                        | Notes |
 |----------------------|------------------------------------------------------------|-------|
 | Handshake            | `MsgHello`, `MsgWelcome`, `MsgPing`, `MsgPong`             | Wiring happens in `client/simple_client.go` and `server/connection.go`. |
-| Session lifecycle    | `MsgConnectRequest`, `MsgConnectAccept`, `MsgResumeRequest`, `MsgDisconnectNotice` | Resume includes last acked sequence. |
+| Session lifecycle    | `MsgConnectRequest`, `MsgConnectAccept`, `MsgResumeRequest`, `MsgDisconnectNotice` | Resume includes last acked sequence and per-pane `PaneViewports` (Plan B, #199). |
 | Snapshot & layout    | `MsgTreeSnapshot`, `MsgTreeDelta` (currently unused)       | Snapshot contains full pane tree + buffers. |
 | Buffer streaming     | `MsgBufferDelta`, `MsgBufferAck`                           | Per-pane diff plus ack for pruning history. |
 | State broadcasts     | `MsgStateUpdate`, `MsgPaneState`                           | Control mode, workspace, zoom, active/resizing flags. |
@@ -74,13 +74,42 @@ entries default to true RGB colours when effects blend with theme defaults.
 * Clients send `MsgBufferAck(ackSeq)` after applying a delta; servers drop all
   buffered diffs ≤ `ackSeq`.
 * On reconnect the client sends `MsgResumeRequest` with the last acknowledged
-  sequence. The server responds with:
+  sequence and a `PaneViewports []PaneViewportState` tail (count-prefixed). The
+  server responds with:
   1. `MsgConnectAccept` (same as initial handshake).
   2. `MsgTreeSnapshot` (always sent to re-establish tree state).
   3. All buffered `MsgBufferDelta` frames with `sequence > ackSeq`.
 
 If no diffs remain the client simply receives an empty stream after the
 snapshot.
+
+### `PaneViewportState` wire format (Plan B, #199)
+
+Each `PaneViewportState` entry is `EncodedPaneViewportStateSize = 31` bytes:
+
+| Field            | Size | Notes |
+|------------------|------|-------|
+| `PaneID`         | 16   | UUID matching the pane in the tree snapshot. |
+| `ViewBottomIdx`  | 8    | globalIdx of the bottom-most displayed row. |
+| `WrapSegmentIdx` | 2    | Wrap-chain segment (0 = tail; always 0 in the current flat renderer). |
+| `AutoFollow`     | 1    | True when the view should track new output. |
+| `AltScreen`      | 1    | True when the pane is in alt-screen mode; server skips scroll resolution. |
+| `ViewportRows`   | 2    | Terminal height at capture time. |
+| `ViewportCols`   | 2    | Terminal width at capture time. |
+
+The payload count field is a `uint16` (2 bytes) preceding the entry array,
+growing the minimum `ResumeRequest` wire size from 24 bytes (pre-Plan-B) to 26
+bytes. Pre-Plan-B clients sending the old 24-byte payload fail cleanly at
+`DecodeResumeRequest` with `ErrPayloadShort` — no silent misbehavior.
+
+New error sentinels added in Plan B:
+- `ErrPaneViewportZeroDim` — entry has `ViewportRows` or `ViewportCols` == 0.
+- `ErrTooManyPaneViewports` — count field exceeds the hard cap.
+
+Missing-anchor handling (ViewBottomIdx below `Store.OldestRetained`): the server
+snaps the pane to the oldest retained row and forces `AutoFollow=false`
+(Policy A). Alt-screen entries (AltScreen=true) bypass scroll resolution
+entirely.
 
 ## Implementation Notes & Tests
 

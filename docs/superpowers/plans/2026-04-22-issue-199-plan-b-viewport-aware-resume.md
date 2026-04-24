@@ -2323,3 +2323,39 @@ Update `/home/marc/.claude/projects/-home-marc-projects-texel-texelation/memory/
    - `ViewportRestorer{RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow bool)}` — same signature at every layer (Term, VTerm, MainScreen, Terminal, interface).
 5. **Commits:** one per sub-task; frequent (10+ commits across the plan). Matches Plan A's cadence.
 6. **Scope discipline:** No cross-restart persistence (Plan D), no selection changes (Plan C), no statusbar work (Plan E). Confirmed in PR body.
+
+---
+
+## Known limitations (intentional, post-review)
+
+These items were flagged during API + backward-compat review as intentional
+behavior that reviewers should not mistake for bugs.
+
+- **`WrapSegmentIdx` is always 0 on the wire today.** The client renderer maps
+  display rows to globalIdxs via a flat `ViewTopIdx + rowIdx` formula, so
+  consecutive display rows never share a globalIdx (no per-row chain heads are
+  surfaced). `computeBottomWrapSegment` (helper) and `SetBottomWrapSegment`
+  (tracker setter) are plumbed for a future renderer that surfaces per-row
+  chain-head globalIdxs; they are intentionally unwired in production code.
+  Forward-compat dead code — `WrapSegmentIdx=0` is correctly handled as "tail
+  of chain" at every layer.
+
+- **`ApplyResume` seeds `ClientViewports` with the raw protocol `ViewBottomIdx`.**
+  Two known first-paint approximations, both reconciled on the first
+  flushFrame-driven `MsgViewportUpdate` after resume:
+  - *Wrapped-chain terminals:* derived `ViewTopIdx = ViewBottomIdx - Rows + 1`
+    sits at a higher globalIdx than the true top of the wrapped chain. Publisher
+    overscan absorbs the gap for the single-frame window before the update
+    arrives.
+  - *Missing-anchor:* publisher's first-paint clip window is briefly narrower
+    than the pane's rendered range (some rows above `OldestRetained` are
+    dropped). Closed by the next `MsgViewportUpdate`.
+  Both approximations are documented inline on `ApplyResume`.
+
+- **`protocol.Version` intentionally NOT bumped.** texelation is pre-1.0 and
+  uses lockstep deployment via the `texelation` supervisor. Old clients sending
+  the 24-byte pre-Plan-B `ResumeRequest` fail cleanly at `DecodeResumeRequest`
+  with `ErrPayloadShort` rather than being accepted at handshake and silently
+  misbehaving. If a split-deployment scenario materializes, bumping
+  `protocol.Version` and rejecting mismatched clients at handshake time is the
+  right response.

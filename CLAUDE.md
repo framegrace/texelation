@@ -134,7 +134,7 @@ Effect implementations register themselves at import time via `effects.Register(
 ### Message Flow
 1. Client connects -> `MsgHello` (client version)
 2. Server -> `MsgWelcome` (negotiated version)
-3. Client -> `MsgConnectRequest` or `MsgResumeRequest` (with session ID + last ack'd sequence)
+3. Client -> `MsgConnectRequest` or `MsgResumeRequest` (with session ID + last ack'd sequence + per-pane viewport state (Plan B, #199))
 4. Server -> `MsgConnectAccept` + `MsgTreeSnapshot`
 5. Ongoing: `MsgBufferDelta` (server -> client), `MsgKeyEvent`/`MsgMouseEvent` (client -> server)
 6. Client disconnects -> server queues updates; on reconnect, client receives snapshot + accumulated diffs

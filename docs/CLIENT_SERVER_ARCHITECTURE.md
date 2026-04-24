@@ -149,10 +149,18 @@ Desktop mutation → DesktopPublisher → Session.enqueue(seq, delta)
 
 ### 3.4 Resume
 
-* Client reconnects with `MsgResumeRequest(lastAckedSeq)`.
+* Client reconnects with `MsgResumeRequest(lastAckedSeq, paneViewports)`.
 * Server responds with a snapshot followed by each buffered diff newer than the
   sequence the client already rendered.
 * Normal streaming resumes once the backfill completes.
+
+Since #199 Plan B, the resume payload carries per-pane
+`PaneViewportState{ViewBottomIdx, WrapSegmentIdx, AutoFollow, Rows, Cols}`
+entries. The server re-seats each pane's scrollback `ViewWindow` before the
+first post-resume snapshot, so a scrolled-back client lands at its exact saved
+position. Alt-screen panes opt out via the `AltScreen` flag; viewport anchors
+below the store's `OldestRetained` snap to the oldest retained row with
+`AutoFollow` forced off (Policy A).
 
 ---
 
