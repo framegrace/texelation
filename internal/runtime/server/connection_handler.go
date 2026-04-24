@@ -9,6 +9,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 
@@ -129,10 +130,56 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		if err != nil {
 			return err
 		}
+		if c.resumeProcessed {
+			// Duplicate MsgResumeRequest on this connection. Ignore silently
+			// to prevent ApplyResume clobbering viewport state, RestoreViewport
+			// jitter, and redundant TreeSnapshot spam.
+			debugLog.Printf("connection %x: ignoring duplicate MsgResumeRequest", c.session.ID())
+			break
+		}
+		if request.SessionID != c.session.ID() {
+			// SessionID mismatch: reject unconditionally. A client that
+			// connected freshly (no awaitResume) has no business sending a
+			// resume bound to a different session — any such frame is stale
+			// or malicious, and silently accepting it would let it clobber
+			// this session's viewports.
+			debugLog.Printf("connection %x: MsgResumeRequest session mismatch (got %x)", c.session.ID(), request.SessionID)
+			return errors.New("server: resume request session mismatch")
+		}
+		c.resumeProcessed = true
 		c.lastAcked = request.LastSequence
 		c.awaitResume = false
 		if c.attachListeners != nil {
 			c.attachListeners()
+		}
+		// Seed ClientViewports from the resume payload FIRST: this is a
+		// pure data copy and cannot fail, so the publisher has a valid
+		// clip window even if a per-pane RestoreViewport call below
+		// panics or no-ops. Without this ordering, a pane-side failure
+		// would leave ClientViewports empty and the publisher would
+		// silently skip every main-screen pane until the client's next
+		// MsgViewportUpdate.
+		c.session.ApplyResume(request.PaneViewports)
+
+		// Then re-seat each non-alt-screen pane's ViewWindow so the
+		// pane's renderer produces rows inside the resumed range on the
+		// first post-resume publish. Alt-screen panes keep their own
+		// buffer; skipping the restore call avoids a no-op through the
+		// alt-screen guard in TexelTerm.RestoreViewport. Wrapped in a
+		// deferred recover so a panicking app cannot crash the connection.
+		if sink, ok := c.sink.(*DesktopSink); ok && sink.Desktop() != nil {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("server: RestorePaneViewport panic: %v", r)
+					}
+				}()
+				for _, ps := range request.PaneViewports {
+					if !ps.AltScreen {
+						sink.Desktop().RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+					}
+				}
+			}()
 		}
 		if provider, ok := c.sink.(SnapshotProvider); ok {
 			snapshot, err := provider.Snapshot()
@@ -149,12 +196,21 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				}
 			}
 			if sink, ok := c.sink.(*DesktopSink); ok {
+				// ORDER-SENSITIVE: ResetDiffState MUST come before sink.Publish.
+				// During the handler, the publisher goroutine can fire with the
+				// new ClientViewport (seeded by ApplyResume above) against old
+				// pane content, emitting a stale/empty intermediate delta.
+				// ResetDiffState clears prevBuffers + lastViewport so the
+				// subsequent Publish treats every pane as "first viewport" and
+				// emits a full buffer, repairing any earlier interleave.
+				// Do not reorder.
 				if pub := sink.Publisher(); pub != nil {
 					pub.ResetDiffState()
 				}
 				sink.Publish()
 			}
 		}
+		c.initialSnapshotSent = true
 		c.nudge()
 	case protocol.MsgClientReady:
 		ready, err := protocol.DecodeClientReady(payload)

@@ -851,6 +851,28 @@ func (d *DesktopEngine) AppByID(id [16]byte) App {
 	return result
 }
 
+// RestorePaneViewport looks up the pane with id and, if its app implements
+// ViewportRestorer, forwards the restore call. Returns true on success,
+// false if the pane is unknown or its app does not implement the interface.
+//
+// Iterates panes via AppByID; caller is responsible for concurrency
+// relative to pane-tree mutations (split / close / workspace switch).
+// In practice this is called from the connection goroutine on
+// MsgResumeRequest while the publisher goroutine reads the same panes —
+// matches the existing FetchRange handler pattern (connection_handler.go).
+func (d *DesktopEngine) RestorePaneViewport(id [16]byte, viewBottom int64, wrapSeg uint16, autoFollow bool) bool {
+	app := d.AppByID(id)
+	if app == nil {
+		return false
+	}
+	restorer, ok := app.(ViewportRestorer)
+	if !ok {
+		return false
+	}
+	restorer.RestoreViewport(viewBottom, wrapSeg, autoFollow)
+	return true
+}
+
 // PaneStates returns the current pane flags across all workspaces.
 func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 	states := make([]PaneStateSnapshot, 0)

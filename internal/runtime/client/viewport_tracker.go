@@ -38,12 +38,13 @@ type pendingFetchRange struct {
 type paneViewport struct {
 	mu sync.Mutex
 
-	AltScreen     bool
-	ViewTopIdx    int64
-	ViewBottomIdx int64
-	Rows          uint16
-	Cols          uint16
-	AutoFollow    bool
+	AltScreen      bool
+	ViewTopIdx     int64
+	ViewBottomIdx  int64
+	Rows           uint16
+	Cols           uint16
+	AutoFollow     bool
+	WrapSegmentIdx uint16
 
 	// bookkeeping
 	dirty          bool
@@ -112,12 +113,13 @@ func (t *viewportTrackers) snapshotDirty() ([]snapshotEntry, map[[16]byte]*paneV
 			entries = append(entries, snapshotEntry{
 				id: id,
 				vp: paneViewportCopy{
-					AltScreen:     vp.AltScreen,
-					ViewTopIdx:    vp.ViewTopIdx,
-					ViewBottomIdx: vp.ViewBottomIdx,
-					Rows:          vp.Rows,
-					Cols:          vp.Cols,
-					AutoFollow:    vp.AutoFollow,
+					AltScreen:      vp.AltScreen,
+					ViewTopIdx:     vp.ViewTopIdx,
+					ViewBottomIdx:  vp.ViewBottomIdx,
+					Rows:           vp.Rows,
+					Cols:           vp.Cols,
+					AutoFollow:     vp.AutoFollow,
+					WrapSegmentIdx: vp.WrapSegmentIdx,
 				},
 			})
 		}
@@ -144,7 +146,8 @@ func (t *viewportTrackers) clearDirty(id [16]byte, expected paneViewportCopy) {
 		vp.ViewBottomIdx == expected.ViewBottomIdx &&
 		vp.Rows == expected.Rows &&
 		vp.Cols == expected.Cols &&
-		vp.AutoFollow == expected.AutoFollow {
+		vp.AutoFollow == expected.AutoFollow &&
+		vp.WrapSegmentIdx == expected.WrapSegmentIdx {
 		vp.dirty = false
 		return
 	}
@@ -157,12 +160,13 @@ type snapshotEntry struct {
 }
 
 type paneViewportCopy struct {
-	AltScreen     bool
-	ViewTopIdx    int64
-	ViewBottomIdx int64
-	Rows          uint16
-	Cols          uint16
-	AutoFollow    bool
+	AltScreen      bool
+	ViewTopIdx     int64
+	ViewBottomIdx  int64
+	Rows           uint16
+	Cols           uint16
+	AutoFollow     bool
+	WrapSegmentIdx uint16
 }
 
 // onTreeSnapshot initialises per-pane trackers from a MsgTreeSnapshot.
@@ -297,12 +301,13 @@ func (s *clientState) paneViewportFor(id [16]byte) (paneViewportCopy, bool) {
 		return paneViewportCopy{}, false
 	}
 	return paneViewportCopy{
-		AltScreen:     vp.AltScreen,
-		ViewTopIdx:    vp.ViewTopIdx,
-		ViewBottomIdx: vp.ViewBottomIdx,
-		Rows:          vp.Rows,
-		Cols:          vp.Cols,
-		AutoFollow:    vp.AutoFollow,
+		AltScreen:      vp.AltScreen,
+		ViewTopIdx:     vp.ViewTopIdx,
+		ViewBottomIdx:  vp.ViewBottomIdx,
+		Rows:           vp.Rows,
+		Cols:           vp.Cols,
+		AutoFollow:     vp.AutoFollow,
+		WrapSegmentIdx: vp.WrapSegmentIdx,
 	}, true
 }
 
@@ -356,7 +361,7 @@ func flushFrame(
 			AltScreen:      vc.AltScreen,
 			ViewTopIdx:     vc.ViewTopIdx,
 			ViewBottomIdx:  vc.ViewBottomIdx,
-			WrapSegmentIdx: 0,
+			WrapSegmentIdx: vc.WrapSegmentIdx,
 			Rows:           vc.Rows,
 			Cols:           vc.Cols,
 			AutoFollow:     vc.AutoFollow,
@@ -454,4 +459,35 @@ func sendFetchRange(
 		return false
 	}
 	return true
+}
+
+// snapshotAll returns a shallow copy of every tracked pane's viewport state,
+// regardless of dirty flag. Used on resume-send to seed the outgoing
+// PaneViewports list. Entries with zero dims (pane not yet initialised) are
+// skipped — they carry no useful resume hint.
+func (t *viewportTrackers) snapshotAll() []snapshotEntry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]snapshotEntry, 0, len(t.panes))
+	for id, vp := range t.panes {
+		vp.mu.Lock()
+		if vp.Rows == 0 || vp.Cols == 0 {
+			vp.mu.Unlock()
+			continue
+		}
+		out = append(out, snapshotEntry{
+			id: id,
+			vp: paneViewportCopy{
+				AltScreen:      vp.AltScreen,
+				ViewTopIdx:     vp.ViewTopIdx,
+				ViewBottomIdx:  vp.ViewBottomIdx,
+				Rows:           vp.Rows,
+				Cols:           vp.Cols,
+				AutoFollow:     vp.AutoFollow,
+				WrapSegmentIdx: vp.WrapSegmentIdx,
+			},
+		})
+		vp.mu.Unlock()
+	}
+	return out
 }

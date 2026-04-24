@@ -30,6 +30,7 @@ type connection struct {
 	unregisterState     func()
 	unregisterPaneState func()
 	awaitResume         bool
+	resumeProcessed     bool // set once MsgResumeRequest has been handled; blocks duplicate resumes
 	attachListeners     func()
 	incoming            chan protocolMessage
 	readErr             chan error

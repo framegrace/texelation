@@ -26,3 +26,12 @@ type RowGlobalIdxProvider interface {
 type AltScreenProvider interface {
 	InAltScreen() bool
 }
+
+// ViewportRestorer is implemented by pane apps (notably texelterm) that
+// support viewport-aware resume. Called by DesktopEngine.RestorePaneViewport
+// on MsgResumeRequest to re-seat the app's scrollback view before the first
+// post-resume render. Apps that don't implement this interface (statusbar,
+// launcher, etc.) are skipped — they don't have scrollback.
+type ViewportRestorer interface {
+	RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow bool)
+}

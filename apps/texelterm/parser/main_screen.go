@@ -125,6 +125,20 @@ type MainScreen interface {
 	// against historical writeBottom. Used on ED 2 to anchor TUI
 	// repaints, preventing per-repaint overflow from accumulating.
 	RewindWriteTop(to int64)
+
+	// RestoreViewport re-seats the main screen's view window to reproduce
+	// the client's saved scrollback anchor. Caller (publisher resume path)
+	// guarantees this is called BEFORE the next Render.
+	//
+	// When autoFollow=true the view is set to follow-mode; the scroll
+	// fields are ignored (the view clamps to Store.Max() via
+	// OnWriteBottomChanged on the next write).
+	//
+	// When autoFollow=false, viewBottom and wrapSeg determine the top
+	// anchor. If viewBottom is below retention, missing-anchor policy
+	// snaps the anchor to OldestRetained() and autoFollow remains false
+	// (the user's scrolled-back intent is preserved — Policy A).
+	RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow bool)
 }
 
 // MainScreenFactory creates a MainScreen for the given dimensions. Set by

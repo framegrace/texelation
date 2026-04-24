@@ -209,6 +209,13 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 // walk clamps at writeTop so scrollback never leaks into the live viewport on
 // horizontal widening (where old wrapped chains reflow smaller and the walk
 // would otherwise reach past writeTop to fill height). See #48.
+//
+// Concurrency note: RecomputeLiveAnchor reads autoFollow at entry and at
+// each write point. If autoFollow flipped to false between the entry read
+// and a write (via SetAutoFollow or ApplyResumeState), the write path
+// bails without clobbering the caller-set anchor. This is essential during
+// viewport-aware resume, where ApplyResumeState may race with a concurrent
+// render's RecomputeLiveAnchor invocation.
 func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int, writeTop int64) {
 	v.mu.Lock()
 	height := v.height
@@ -261,6 +268,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 			if accumulated >= height {
 				offset := accumulated - height
 				v.mu.Lock()
+				if !v.autoFollow {
+					v.mu.Unlock()
+					return
+				}
 				v.viewAnchor = gi
 				v.viewAnchorOffset = offset
 				v.mu.Unlock()
@@ -303,6 +314,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 		if accumulated >= height {
 			offset := accumulated - height
 			v.mu.Lock()
+			if !v.autoFollow {
+				v.mu.Unlock()
+				return
+			}
 			v.viewAnchor = gi
 			v.viewAnchorOffset = offset
 			v.mu.Unlock()
@@ -349,6 +364,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 	// content the application is about to overwrite (#48).
 	if cursorGI < writeTop+int64(height)-1 {
 		v.mu.Lock()
+		if !v.autoFollow {
+			v.mu.Unlock()
+			return
+		}
 		v.viewAnchor = writeTop
 		v.viewAnchorOffset = 0
 		v.mu.Unlock()
@@ -366,6 +385,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 			if accumulated >= height {
 				offset := accumulated - height
 				v.mu.Lock()
+				if !v.autoFollow {
+					v.mu.Unlock()
+					return
+				}
 				v.viewAnchor = gi
 				v.viewAnchorOffset = offset
 				v.mu.Unlock()
@@ -388,6 +411,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 		if accumulated >= height {
 			offset := accumulated - height
 			v.mu.Lock()
+			if !v.autoFollow {
+				v.mu.Unlock()
+				return
+			}
 			v.viewAnchor = chainStart
 			v.viewAnchorOffset = offset
 			v.mu.Unlock()
@@ -401,6 +428,10 @@ func (v *ViewWindow) RecomputeLiveAnchor(s *Store, cursorGI int64, cursorCol int
 	// from the top of what's available. For a fresh session (writeTop=0)
 	// this degenerates to the old "anchor at top" behavior.
 	v.mu.Lock()
+	if !v.autoFollow {
+		v.mu.Unlock()
+		return
+	}
 	if gi < 0 {
 		v.viewAnchor = 0
 	} else {
@@ -865,4 +896,120 @@ func (v *ViewWindow) Resize(newWidth, newHeight int, newWriteBottom int64) {
 	if v.viewBottom < minBottom {
 		v.viewBottom = minBottom
 	}
+}
+
+// WalkPolicy describes the outcome of WalkUpwardFromBottom.
+type WalkPolicy uint8
+
+const (
+	// WalkPolicyAnchorInStore means viewBottom was resolvable in the store;
+	// (anchor, offset) position the view as requested.
+	WalkPolicyAnchorInStore WalkPolicy = iota
+	// WalkPolicyMissingAnchor means viewBottom < Store.OldestRetained();
+	// anchor is set to OldestRetained and the caller MUST force
+	// autoFollow=false to honor the user's scroll-back intent (Policy A).
+	WalkPolicyMissingAnchor
+)
+
+// WalkUpwardFromBottom walks chains upward starting from the wrapSeg-th sub-row
+// of the chain containing viewBottom. It accumulates `rows` reflowed sub-rows
+// at display width `width`, respecting NoWrap and the global-reflow-off
+// override. Returns the (chain-head anchor, sub-row offset) pair to pass to
+// ViewWindow.SetViewAnchor.
+//
+// Missing anchor: if viewBottom < Store.OldestRetained(), returns
+// (OldestRetained(), 0, WalkPolicyMissingAnchor). Caller must force
+// autoFollow=false before applying.
+func WalkUpwardFromBottom(s *Store, viewBottom int64, wrapSeg uint16, rows, width int, reflowOff bool) (int64, int, WalkPolicy) {
+	if viewBottom < s.OldestRetained() {
+		return s.OldestRetained(), 0, WalkPolicyMissingAnchor
+	}
+	if rows <= 0 {
+		return viewBottom, int(wrapSeg), WalkPolicyAnchorInStore
+	}
+	maxSteps := 4 * rows
+	if maxSteps < 4 {
+		maxSteps = 4
+	}
+	chainStart := findChainStart(s, viewBottom, maxSteps)
+	end, nowrap := walkChain(s, chainStart, maxSteps)
+	if reflowOff {
+		nowrap = true
+	}
+	bottomSubRows := chainReflowedRowCount(s, chainStart, end, width, nowrap)
+	ws := int(wrapSeg)
+	if ws >= bottomSubRows {
+		ws = bottomSubRows - 1
+	}
+	if ws < 0 {
+		ws = 0
+	}
+	remaining := rows - (ws + 1)
+	anchor := chainStart
+	if remaining <= 0 {
+		offset := ws - (rows - 1)
+		if offset < 0 {
+			offset = 0
+		}
+		return anchor, offset, WalkPolicyAnchorInStore
+	}
+	for remaining > 0 && anchor > 0 {
+		prevGI := anchor - 1
+		prevStart := findChainStart(s, prevGI, maxSteps)
+		prevEnd, prevNoWrap := walkChain(s, prevStart, maxSteps)
+		if reflowOff {
+			prevNoWrap = true
+		}
+		prevRows := chainReflowedRowCount(s, prevStart, prevEnd, width, prevNoWrap)
+		if prevRows >= remaining {
+			anchor = prevStart
+			offset := prevRows - remaining
+			return anchor, offset, WalkPolicyAnchorInStore
+		}
+		remaining -= prevRows
+		anchor = prevStart
+	}
+	if anchor < s.OldestRetained() {
+		anchor = s.OldestRetained()
+	}
+	return anchor, 0, WalkPolicyAnchorInStore
+}
+
+// SetAutoFollow explicitly sets the autoFollow flag. Used on resume to
+// honor the client's saved autoFollow state.
+func (v *ViewWindow) SetAutoFollow(enabled bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.autoFollow = enabled
+}
+
+// ApplyResumeState atomically sets viewAnchor + viewAnchorOffset + viewBottom +
+// autoFollow under a single mutex acquisition. Used by Terminal.RestoreViewport
+// to prevent torn state: if the publisher's render path interleaves between
+// separate SetViewAnchor / SetViewBottom / SetAutoFollow calls, RecomputeLiveAnchor
+// can observe autoFollow=true (not yet updated) and clobber the just-written
+// anchor back to live-edge. This method guarantees that by the time any reader
+// observes a non-default autoFollow flag, the anchor + viewBottom also reflect
+// the resumed state.
+func (v *ViewWindow) ApplyResumeState(anchor int64, offset int, viewBottom int64, autoFollow bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.viewAnchor = anchor
+	v.viewAnchorOffset = offset
+	v.viewBottom = viewBottom
+	v.clampViewBottom()
+	v.autoFollow = autoFollow
+}
+
+// SetViewBottom explicitly positions viewBottom (the globalIdx of the
+// bottom display row — for a wrapped chain, the chain-head gid the bottom
+// row belongs to). Used by the resume path alongside SetViewAnchor /
+// SetAutoFollow to bring all three internal pieces of state into a
+// consistent post-restore configuration. Clamped to height-1 to avoid
+// negative scroll semantics (via clampViewBottom, already in the file).
+func (v *ViewWindow) SetViewBottom(viewBottom int64) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.viewBottom = viewBottom
+	v.clampViewBottom()
 }

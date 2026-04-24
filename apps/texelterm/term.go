@@ -64,6 +64,10 @@ func init() {
 	}
 }
 
+// Compile-time assertion that TexelTerm satisfies texel.ViewportRestorer.
+// Keeps the two in lockstep: signature drift surfaces at build time.
+var _ texel.ViewportRestorer = (*TexelTerm)(nil)
+
 type TexelTerm struct {
 	title              string
 	command            string
@@ -334,6 +338,27 @@ func (a *TexelTerm) InAltScreen() bool {
 		return false
 	}
 	return a.vterm.InAltScreen()
+}
+
+// RestoreViewport re-seats the terminal's main-screen view window to the
+// globalIdx + wrap-segment pair the client was viewing before disconnect.
+// No-op when the pane is in alt-screen; callers (publisher resume path) are
+// expected to check PaneViewportState.AltScreen and skip alt panes.
+func (a *TexelTerm) RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow bool) {
+	if a.vterm == nil {
+		return
+	}
+	// Read InAltScreen under a.mu: the PTY reader writes v.inAltScreen under
+	// a.mu concurrently, so reading without the lock is a data race.
+	// Release the lock BEFORE calling a.vterm.RestoreViewport (which takes
+	// its own internal locks) to avoid lock-ordering issues.
+	a.mu.Lock()
+	inAlt := a.vterm.InAltScreen()
+	a.mu.Unlock()
+	if inAlt {
+		return
+	}
+	a.vterm.RestoreViewport(viewBottom, wrapSeg, autoFollow)
 }
 
 // SparseStore returns the underlying sparse.Store for the main screen, or nil

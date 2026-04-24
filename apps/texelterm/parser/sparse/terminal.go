@@ -320,9 +320,55 @@ func (t *Terminal) Grid() [][]parser.Cell {
 	return grid
 }
 
-// Store returns the underlying sparse store. Intended for read-only
-// scrollback fetch paths; callers must not mutate cells through it.
+// Store returns the underlying sparse store. Exposed for test helpers
+// and the publisher's viewport-aware resume path. Callers must not
+// mutate cells through it unless they also maintain the write-window
+// invariants.
 func (t *Terminal) Store() *Store { return t.store }
+
+// RestoreViewport positions the view window to reproduce the client's
+// last-known scrollback position. viewBottom is a chain-head globalIdx; the
+// chain may reflow to multiple sub-rows and wrapSeg selects which.
+//
+// AutoFollow=true takes precedence over the scroll fields: the ViewWindow
+// is set to autoFollow and will naturally clamp to Store.Max() via
+// OnWriteBottomChanged. This matches the spec's "clamp ViewBottomIdx to
+// Store.Max() at current server-side geometry" rule for AutoFollow resumes.
+//
+// AutoFollow=false honors viewBottom + wrapSeg exactly via
+// WalkUpwardFromBottom, unless the anchor is below retention
+// (missing-anchor policy forces autoFollow=false — already the caller's
+// request, but documented for clarity).
+//
+// Must be called BEFORE the next Render so the subsequent publish emits
+// rows inside the resumed viewport.
+func (t *Terminal) RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow bool) {
+	if autoFollow {
+		t.view.SetAutoFollow(true)
+		return
+	}
+	width := t.view.Width()
+	height := t.view.Height()
+	// ViewWindow does not currently expose a GlobalReflowOff getter; the
+	// resume path does not need to toggle it (reflow state is view-owned
+	// and stable across resume). Pass false.
+	anchor, offset, _ := WalkUpwardFromBottom(t.store, viewBottom, wrapSeg, height, width, false)
+	// ApplyResumeState atomically writes viewAnchor + viewAnchorOffset +
+	// viewBottom + autoFollow under one mutex acquisition. Without this,
+	// a concurrent RenderReflowWithRowIdx -> RecomputeLiveAnchor call can
+	// observe autoFollow=true (not yet updated) and clobber the just-written
+	// anchor back to the live edge, producing one frame of incorrect rendering.
+	//
+	// viewBottom is clamped to height-1 inside ApplyResumeState (via
+	// clampViewBottom), which matters only in the missing-anchor edge case:
+	// if the caller passes a viewBottom below OldestRetained, the walk helper
+	// already snapped anchor to OldestRetained; clamp then pins viewBottom at
+	// height-1. The two fields diverge, but Render uses anchor (correct), and
+	// VisibleRange callers during a missing-anchor resume get viewBottom=height-1
+	// which reflects "scrolled to the oldest retained row". Follow-up scrolls
+	// and write-bottom changes re-sync both.
+	t.view.ApplyResumeState(anchor, offset, viewBottom, false)
+}
 
 // ViewWindow returns the underlying ViewWindow. Intended for callers that
 // need to drive a reflow walk directly (e.g. the cursor-to-view mapping
