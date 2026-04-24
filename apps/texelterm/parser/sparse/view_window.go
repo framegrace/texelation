@@ -952,6 +952,24 @@ func (v *ViewWindow) SetAutoFollow(enabled bool) {
 	v.autoFollow = enabled
 }
 
+// ApplyResumeState atomically sets viewAnchor + viewAnchorOffset + viewBottom +
+// autoFollow under a single mutex acquisition. Used by Terminal.RestoreViewport
+// to prevent torn state: if the publisher's render path interleaves between
+// separate SetViewAnchor / SetViewBottom / SetAutoFollow calls, RecomputeLiveAnchor
+// can observe autoFollow=true (not yet updated) and clobber the just-written
+// anchor back to live-edge. This method guarantees that by the time any reader
+// observes a non-default autoFollow flag, the anchor + viewBottom also reflect
+// the resumed state.
+func (v *ViewWindow) ApplyResumeState(anchor int64, offset int, viewBottom int64, autoFollow bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.viewAnchor = anchor
+	v.viewAnchorOffset = offset
+	v.viewBottom = viewBottom
+	v.clampViewBottom()
+	v.autoFollow = autoFollow
+}
+
 // SetViewBottom explicitly positions viewBottom (the globalIdx of the
 // bottom display row — for a wrapped chain, the chain-head gid the bottom
 // row belongs to). Used by the resume path alongside SetViewAnchor /

@@ -199,3 +199,23 @@ func TestTerminal_RestoreViewport_AutoFollowClampsToMax(t *testing.T) {
 		t.Fatalf("IsFollowing want true after autoFollow=true resume")
 	}
 }
+
+func TestViewWindow_ApplyResumeState_Atomic(t *testing.T) {
+	// Sanity: after ApplyResumeState, all three fields reflect the input.
+	v := NewViewWindow(80, 24)
+	v.ApplyResumeState(50, 2, 100, false)
+	top, bottom := v.VisibleRange()
+	if bottom != 100 {
+		t.Fatalf("viewBottom: got %d want 100", bottom)
+	}
+	if top != 100-24+1 {
+		t.Fatalf("top: got %d want %d", top, 100-24+1)
+	}
+	if v.IsFollowing() {
+		t.Fatalf("autoFollow: got true want false")
+	}
+	anchor, offset := v.Anchor()
+	if anchor != 50 || offset != 2 {
+		t.Fatalf("anchor/offset: got (%d,%d) want (50,2)", anchor, offset)
+	}
+}

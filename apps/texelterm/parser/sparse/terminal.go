@@ -353,18 +353,21 @@ func (t *Terminal) RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow 
 	// resume path does not need to toggle it (reflow state is view-owned
 	// and stable across resume). Pass false.
 	anchor, offset, _ := WalkUpwardFromBottom(t.store, viewBottom, wrapSeg, height, width, false)
-	t.view.SetViewAnchor(anchor, offset)
-	// Set viewBottom to the caller's requested value. SetViewBottom clamps
-	// to height-1 (via clampViewBottom), which matters only in the
-	// missing-anchor edge case: if the caller passes a viewBottom below
-	// OldestRetained, the walk helper already snapped anchor to
-	// OldestRetained; clamp then pins viewBottom at height-1. The two
-	// fields diverge, but Render uses anchor (correct), and VisibleRange
-	// callers during a missing-anchor resume get viewBottom=height-1
-	// which reflects "scrolled to the oldest retained row". Follow-up
-	// scrolls and write-bottom changes re-sync both.
-	t.view.SetViewBottom(viewBottom)
-	t.view.SetAutoFollow(false)
+	// ApplyResumeState atomically writes viewAnchor + viewAnchorOffset +
+	// viewBottom + autoFollow under one mutex acquisition. Without this,
+	// a concurrent RenderReflowWithRowIdx -> RecomputeLiveAnchor call can
+	// observe autoFollow=true (not yet updated) and clobber the just-written
+	// anchor back to the live edge, producing one frame of incorrect rendering.
+	//
+	// viewBottom is clamped to height-1 inside ApplyResumeState (via
+	// clampViewBottom), which matters only in the missing-anchor edge case:
+	// if the caller passes a viewBottom below OldestRetained, the walk helper
+	// already snapped anchor to OldestRetained; clamp then pins viewBottom at
+	// height-1. The two fields diverge, but Render uses anchor (correct), and
+	// VisibleRange callers during a missing-anchor resume get viewBottom=height-1
+	// which reflects "scrolled to the oldest retained row". Follow-up scrolls
+	// and write-bottom changes re-sync both.
+	t.view.ApplyResumeState(anchor, offset, viewBottom, false)
 }
 
 // ViewWindow returns the underlying ViewWindow. Intended for callers that
