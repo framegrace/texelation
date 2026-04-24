@@ -461,6 +461,37 @@ func sendFetchRange(
 	return true
 }
 
+// snapshotAll returns a shallow copy of every tracked pane's viewport state,
+// regardless of dirty flag. Used on resume-send to seed the outgoing
+// PaneViewports list. Entries with zero dims (pane not yet initialised) are
+// skipped — they carry no useful resume hint.
+func (t *viewportTrackers) snapshotAll() []snapshotEntry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]snapshotEntry, 0, len(t.panes))
+	for id, vp := range t.panes {
+		vp.mu.Lock()
+		if vp.Rows == 0 || vp.Cols == 0 {
+			vp.mu.Unlock()
+			continue
+		}
+		out = append(out, snapshotEntry{
+			id: id,
+			vp: paneViewportCopy{
+				AltScreen:      vp.AltScreen,
+				ViewTopIdx:     vp.ViewTopIdx,
+				ViewBottomIdx:  vp.ViewBottomIdx,
+				Rows:           vp.Rows,
+				Cols:           vp.Cols,
+				AutoFollow:     vp.AutoFollow,
+				WrapSegmentIdx: vp.WrapSegmentIdx,
+			},
+		})
+		vp.mu.Unlock()
+	}
+	return out
+}
+
 // SetBottomWrapSegment updates the tracker's WrapSegmentIdx — the sub-row
 // index (within the chain at ViewBottomIdx) that occupies the bottommost
 // display row. Intended to be called by the renderer after a pane render

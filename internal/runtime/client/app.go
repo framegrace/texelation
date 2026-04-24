@@ -23,6 +23,7 @@ import (
 	"github.com/framegrace/texelation/client"
 	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelation/internal/keybind"
+	"github.com/framegrace/texelation/protocol"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/graphics"
 	"github.com/framegrace/texelui/theme"
@@ -104,7 +105,19 @@ func Run(opts Options) error {
 	ackSignal := make(chan struct{}, 1)
 
 	if opts.Reconnect {
-		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence, nil); err != nil {
+		var viewports []protocol.PaneViewportState
+		for _, e := range state.viewports.snapshotAll() {
+			viewports = append(viewports, protocol.PaneViewportState{
+				PaneID:         e.id,
+				AltScreen:      e.vp.AltScreen,
+				AutoFollow:     e.vp.AutoFollow,
+				ViewBottomIdx:  e.vp.ViewBottomIdx,
+				WrapSegmentIdx: e.vp.WrapSegmentIdx,
+				ViewportRows:   e.vp.Rows,
+				ViewportCols:   e.vp.Cols,
+			})
+		}
+		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence, viewports); err != nil {
 			return fmt.Errorf("resume request failed: %w", err)
 		} else {
 			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
