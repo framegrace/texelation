@@ -348,7 +348,14 @@ func (a *TexelTerm) RestoreViewport(viewBottom int64, wrapSeg uint16, autoFollow
 	if a.vterm == nil {
 		return
 	}
-	if a.vterm.InAltScreen() {
+	// Read InAltScreen under a.mu: the PTY reader writes v.inAltScreen under
+	// a.mu concurrently, so reading without the lock is a data race.
+	// Release the lock BEFORE calling a.vterm.RestoreViewport (which takes
+	// its own internal locks) to avoid lock-ordering issues.
+	a.mu.Lock()
+	inAlt := a.vterm.InAltScreen()
+	a.mu.Unlock()
+	if inAlt {
 		return
 	}
 	a.vterm.RestoreViewport(viewBottom, wrapSeg, autoFollow)
