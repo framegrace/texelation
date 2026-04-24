@@ -137,10 +137,12 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			debugLog.Printf("connection %x: ignoring duplicate MsgResumeRequest", c.session.ID())
 			break
 		}
-		if c.awaitResume && request.SessionID != c.session.ID() {
-			// SessionID mismatch on a connection that was expecting a specific
-			// resume (i.e., an existing session was reconnecting). Reject to
-			// defend against stale or malicious frames.
+		if request.SessionID != c.session.ID() {
+			// SessionID mismatch: reject unconditionally. A client that
+			// connected freshly (no awaitResume) has no business sending a
+			// resume bound to a different session — any such frame is stale
+			// or malicious, and silently accepting it would let it clobber
+			// this session's viewports.
 			debugLog.Printf("connection %x: MsgResumeRequest session mismatch (got %x)", c.session.ID(), request.SessionID)
 			return errors.New("server: resume request session mismatch")
 		}
@@ -194,6 +196,14 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				}
 			}
 			if sink, ok := c.sink.(*DesktopSink); ok {
+				// ORDER-SENSITIVE: ResetDiffState MUST come before sink.Publish.
+				// During the handler, the publisher goroutine can fire with the
+				// new ClientViewport (seeded by ApplyResume above) against old
+				// pane content, emitting a stale/empty intermediate delta.
+				// ResetDiffState clears prevBuffers + lastViewport so the
+				// subsequent Publish treats every pane as "first viewport" and
+				// emits a full buffer, repairing any earlier interleave.
+				// Do not reorder.
 				if pub := sink.Publisher(); pub != nil {
 					pub.ResetDiffState()
 				}
