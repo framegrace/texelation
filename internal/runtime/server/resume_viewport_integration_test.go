@@ -7,10 +7,14 @@
 package server
 
 import (
+	"errors"
+	"io"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
+	"github.com/framegrace/texelation/internal/runtime/server/testutil"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -368,4 +372,145 @@ func TestIntegration_ResumeWrappedChain(t *testing.T) {
 	// stream. Its presence confirms that wrapped-chain rows survive the
 	// restore + clip path.
 	h.AwaitRow(h.paneID, 22, 2*time.Second)
+}
+
+// TestIntegration_FullReconnectLifecycle exercises the full disconnect →
+// reconnect flow: a first client connects, gets a snapshot, disconnects, then
+// a second client connects using the same session ID and sends a
+// MsgResumeRequest carrying PaneViewports. After the handler fires,
+// session.Viewport must reflect the requested scroll position.
+//
+// This is the only test that drives the complete lifecycle through two
+// independent protocol connections rather than re-using the memHarness
+// write path.
+func TestIntegration_FullReconnectLifecycle(t *testing.T) {
+	// --- Phase 1: first connection via memHarness ---
+	h := newMemHarness(t, 80, 24)
+	lines := make([]string, 50)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	h.fakeApp.FeedRows(0, lines)
+	h.ApplyViewport(h.paneID, 26, 49, true, false)
+	h.Publish()
+
+	sessionID := h.sessionID()
+	paneID := h.paneID
+
+	// Close the first client connection; the serve goroutine will exit.
+	h.clientConn.Close()
+	// Wait for the reader loop to notice the close so subsequent close
+	// in t.Cleanup doesn't race.
+	select {
+	case <-h.readerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first client reader loop did not exit within 2s")
+	}
+
+	// --- Phase 2: reconnect with a fresh MemPipe ---
+	newServerConn, newClientConn := testutil.NewMemPipe(64)
+	t.Cleanup(func() {
+		_ = newServerConn.Close()
+		_ = newClientConn.Close()
+	})
+
+	// Channel to receive the resumed session from the server goroutine.
+	resumedSessCh := make(chan *Session, 1)
+	serveErrCh2 := make(chan error, 1)
+	go func() {
+		defer newServerConn.Close()
+		sess, resuming, err := handleHandshake(newServerConn, h.mgr)
+		if err != nil {
+			serveErrCh2 <- err
+			return
+		}
+		pub := NewDesktopPublisher(h.desktop, sess)
+		h.sink.SetPublisher(pub)
+		conn := newConnection(newServerConn, sess, h.sink, resuming)
+		pub.SetNotifier(conn.nudge)
+		resumedSessCh <- sess
+		serveErrCh2 <- conn.serve()
+	}()
+
+	writeReconnect := func(msgType protocol.MessageType, payload []byte, sid [16]byte) {
+		hdr := protocol.Header{
+			Version:   protocol.Version,
+			Type:      msgType,
+			Flags:     protocol.FlagChecksum,
+			SessionID: sid,
+		}
+		if err := protocol.WriteMessage(newClientConn, hdr, payload); err != nil {
+			t.Fatalf("writeReconnect type=%v: %v", msgType, err)
+		}
+	}
+
+	// Hello.
+	helloPayload, _ := protocol.EncodeHello(protocol.Hello{ClientName: "reconnect-client"})
+	writeReconnect(protocol.MsgHello, helloPayload, [16]byte{})
+
+	// Read Welcome.
+	if _, _, err := readMessageSkippingFocus(newClientConn); err != nil {
+		t.Fatalf("read welcome on reconnect: %v", err)
+	}
+
+	// ConnectRequest with the original session ID (triggers resume path).
+	connectReqPayload, _ := protocol.EncodeConnectRequest(protocol.ConnectRequest{SessionID: sessionID})
+	writeReconnect(protocol.MsgConnectRequest, connectReqPayload, sessionID)
+
+	// Read ConnectAccept.
+	if _, _, err := readMessageSkippingFocus(newClientConn); err != nil {
+		t.Fatalf("read connect accept on reconnect: %v", err)
+	}
+
+	// Confirm the server goroutine handed us the resumed session.
+	var resumedSess *Session
+	select {
+	case resumedSess = <-resumedSessCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resumed session did not materialize within 2s")
+	}
+
+	// ResumeRequest with PaneViewports pointing at a scrolled-back position.
+	resume := protocol.ResumeRequest{
+		SessionID:    sessionID,
+		LastSequence: 0,
+		PaneViewports: []protocol.PaneViewportState{
+			{
+				PaneID:         paneID,
+				AltScreen:      false,
+				AutoFollow:     false,
+				ViewBottomIdx:  20,
+				WrapSegmentIdx: 0,
+				ViewportRows:   24,
+				ViewportCols:   80,
+			},
+		},
+	}
+	resumePayload, err := protocol.EncodeResumeRequest(resume)
+	if err != nil {
+		t.Fatalf("encode resume: %v", err)
+	}
+	writeReconnect(protocol.MsgResumeRequest, resumePayload, sessionID)
+
+	// Poll session.Viewport until the handler fires and ApplyResume runs.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		vp, ok := resumedSess.Viewport(paneID)
+		if ok && vp.ViewBottomIdx == 20 && !vp.AutoFollow {
+			// Success: the viewport was seeded from the PaneViewports payload.
+			newClientConn.Close()
+			select {
+			case err := <-serveErrCh2:
+				if err != nil && err != io.EOF && !errors.Is(err, net.ErrClosed) {
+					t.Logf("reconnect serve exit: %v", err)
+				}
+			case <-time.After(time.Second):
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	vp, ok := resumedSess.Viewport(paneID)
+	t.Fatalf("viewport not seeded after full reconnect within 2s: ok=%v vp=%+v", ok, vp)
 }
