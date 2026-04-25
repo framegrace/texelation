@@ -20,16 +20,21 @@
 |---|---|---|
 | `protocol/protocol.go` | Modify | Add `MaxPayloadLen = 16 * 1024 * 1024` constant + `ErrPayloadTooLarge`; reject in `ReadMessage` before allocation |
 | `protocol/protocol_test.go` | Modify | Cap regression test |
-| `internal/runtime/server/client_viewport.go` | Modify | `ApplyResume` accepts a `paneExists func([16]byte) bool` predicate; phantom entries dropped before insert |
+| `internal/runtime/server/client_viewport.go` | Modify | `ApplyResume` accepts a `paneExists func([16]byte) bool` predicate; phantom entries dropped before insert + drop-count log |
 | `internal/runtime/server/client_viewport_test.go` | Modify | `TestApplyResume_PrunesPhantomPaneIDs` + `TestApplyResume_EvictedSessionWithPaneViewports` |
-| `internal/runtime/server/connection_handler.go` | Modify | Pass `desktop.AppByID(id) != nil` predicate at the `ApplyResume` call site |
-| `internal/runtime/client/persistence.go` | **Create** | `ClientState` type, `Load`/`Save`/`Wipe`, `ResolvePath`, debounced `Writer` |
-| `internal/runtime/client/persistence_test.go` | **Create** | Round-trip, atomic-replace, mismatch wipe, parse-error wipe, debounce coalescing |
-| `internal/runtime/client/app.go` | Modify | Replace zero-sessionID branch (lines 54-59) with load-from-disk; install `Writer`; flush on exit; handle `ErrSessionNotFound` → wipe + retry |
+| `internal/runtime/server/session.go` | Modify | Wrapper `Session.ApplyResume` signature gains `paneExists` parameter to match underlying type |
+| `internal/runtime/server/connection_handler.go` | Modify | Prune phantom paneIDs ONCE; pass pruned slice to both `ApplyResume` and `RestorePaneViewport` loop |
+| `internal/runtime/client/protocol_handler.go` | Modify | `readLoop` and `handleControlMessage` signatures change `*uint64` → `*atomic.Uint64`; bodies use `Load()`/`Store()` (Task 10 — pre-existing race fix) |
+| `internal/runtime/client/persistence.go` | **Create** | `ClientState` type, `Load`/`Save`/`Wipe`, `ResolvePath`, debounced `Writer` (with `WaitGroup`-based `Close`, throttled save-error logging, injectable `saver` for tests) |
+| `internal/runtime/client/persistence_test.go` | **Create** | Round-trip, atomic-replace, mismatch wipe, parse-error wipe, debounce coalescing, slow-save skip-if-busy, idempotent `Close`, Windows-reserved-name rejection |
+| `internal/runtime/client/app.go` | Modify | Replace zero-sessionID branch (lines 53-66 region) with load-from-disk; convert `lastSequence` to `atomic.Uint64`; install `Writer` + `flushFrame` hook; defer-close-via-closure; handle `ErrSessionNotFound` → wipe + retry. **No eager initial seed** — first viewport tick triggers first save |
 | `internal/runtime/client/app.go` | Modify | `Options` gains `ClientName string` |
-| `cmd/texelation/main.go` | Modify | Register `--client-name` flag; `TEXELATION_CLIENT_NAME` env fallback |
+| `internal/runtime/client/client_state.go` | Modify | `clientState` struct gains `persistSnapshot func()` field |
+| `internal/runtime/client/viewport_tracker.go` | Modify | New `snapshotForPersistence` helper + single `state.persistSnapshot()` call at end of `flushFrame` |
+| `cmd/texelation/main.go` | Modify | Register `--client-name` flag; `TEXELATION_CLIENT_NAME` env fallback. **Both** `clientrt.Options{}` construction sites must include `ClientName` |
 | `client/cmd/texel-client/main.go` | Modify | Register `--client-name` flag; `TEXELATION_CLIENT_NAME` env fallback |
 | `internal/runtime/server/client_integration_test.go` | Modify | `TestIntegration_PersistedClientResumesViewport`, `TestIntegration_StaleSessionFallsBackClean`, `TestIntegration_MultiClientIsolation` |
+| `internal/runtime/server/client_integration_helpers_test.go` | **Create (optional)** | Shared helpers (`connectClient`, `scrollPaneTo`, `persistAndDisconnect`, `pollViewBottomIdx`) if any are >20 lines or used across all three tests; otherwise inline in `client_integration_test.go` |
 
 ---
 
@@ -52,14 +57,16 @@ func TestReadMessage_PayloadTooLarge(t *testing.T) {
 	binary.LittleEndian.PutUint32(hdr[0:4], 0x54584c01) // magic
 	hdr[4] = Version
 	hdr[5] = byte(MsgPing)
-	// Hdr.PayloadLen at offset 32-36
+	hdr[6] = FlagChecksum // MUST be set BEFORE CRC computation; otherwise the CRC
+	// is computed over a zero-flag header but the wire byte at offset 6 carries
+	// the flag bit, and ReadMessage's verification CRC will mismatch — yielding
+	// ErrChecksumMismatch instead of the expected ErrPayloadTooLarge.
 	binary.LittleEndian.PutUint32(hdr[32:36], MaxPayloadLen+1)
 
-	// CRC over bytes [4:36] (zeros for everything except version/type/payloadLen).
+	// CRC over bytes [4:36] (now includes the flag byte at offset 6).
 	crc := crc32.NewIEEE()
 	_, _ = crc.Write(hdr[4:36])
 	binary.LittleEndian.PutUint32(hdr[36:40], crc.Sum32())
-	hdr[6] = FlagChecksum
 
 	r := bytes.NewReader(hdr[:])
 	_, _, err := ReadMessage(r)
@@ -196,26 +203,34 @@ go test ./internal/runtime/server/ -run TestApplyResume_PrunesPhantomPaneIDs -v
 ```
 Expected: FAIL — `ApplyResume` signature mismatch.
 
-- [ ] **Step 2.3: Update `ApplyResume` signature**
+- [ ] **Step 2.3: Update `ClientViewports.ApplyResume` signature**
 
-In `internal/runtime/server/client_viewport.go`, replace the `ApplyResume` function (line 97 onward). The new signature accepts a `paneExists` predicate; entries whose paneID returns `false` are dropped:
+In `internal/runtime/server/client_viewport.go`, replace the `ApplyResume` function body (line 97 onward).
+
+**IMPORTANT:** the existing function has a ~60-line doc-comment above it covering Policy A, the top/bottom overflow guard, and ViewBottomIdx semantics (these are all load-bearing per Plan B's review). **Preserve that doc-comment verbatim.** Only the function signature and body change. Append the new paragraph below to the existing doc-comment as a final paragraph; do not delete or rewrite anything above the function.
+
+Append this paragraph to the END of the existing doc-comment (immediately above `func (c *ClientViewports) ApplyResume`):
 
 ```go
-// ApplyResume seeds per-pane viewports from a resume payload.
-//
 // The paneExists predicate filters out phantom paneIDs — IDs the client
 // supplied that no longer exist server-side (closed pane during offline
 // time, cross-restart drift, or a recovered persistence file pointing
 // at a long-gone pane). Without pruning, the map grows unboundedly with
-// stale entries on every cross-restart resume.
-//
-// (Existing doc-comment about top/bottom derivation, Policy A, etc.,
-// stays attached above this — keep verbatim.)
+// stale entries on every cross-restart resume. Pass nil to disable
+// pruning (tests). Logs once per call when entries are dropped, to
+// surface the drop count for Plan F (session recovery) debugging.
+```
+
+Then replace the function itself with:
+
+```go
 func (c *ClientViewports) ApplyResume(states []protocol.PaneViewportState, paneExists func(id [16]byte) bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	dropped := 0
 	for _, ps := range states {
 		if paneExists != nil && !paneExists(ps.PaneID) {
+			dropped++
 			continue
 		}
 		top := ps.ViewBottomIdx - int64(ps.ViewportRows) + 1
@@ -234,43 +249,98 @@ func (c *ClientViewports) ApplyResume(states []protocol.PaneViewportState, paneE
 			AutoFollow:    ps.AutoFollow,
 		}
 	}
+	if dropped > 0 {
+		log.Printf("ClientViewports.ApplyResume: dropped %d phantom paneID entries (cross-restart or closed-pane race)", dropped)
+	}
 }
 ```
 
-- [ ] **Step 2.4: Update the call site in `connection_handler.go`**
+If `log` is not already imported in this file, add `"log"` to the import block.
 
-Find the `ApplyResume` call:
+- [ ] **Step 2.4: Update `Session.ApplyResume` wrapper signature**
 
-```
-grep -n 'ApplyResume' internal/runtime/server/connection_handler.go
-```
+`Session.ApplyResume` at `internal/runtime/server/session.go:76-78` is a thin wrapper around `ClientViewports.ApplyResume`. The connection handler calls the WRAPPER, not the underlying type. The wrapper's signature must match the new shape, otherwise `connection_handler.go` won't compile.
 
-At that line (it currently passes `request.PaneViewports`), update to:
+Replace:
 
 ```go
-c.session.viewports.ApplyResume(request.PaneViewports, func(id [16]byte) bool {
-	return desktop.AppByID(id) != nil
-})
+func (s *Session) ApplyResume(states []protocol.PaneViewportState) {
+	s.viewports.ApplyResume(states)
+}
 ```
 
-(Keep the same `desktop` reference the surrounding code already uses; if it's not in scope, use `c.sink.(*DesktopSink).engine` — match the pattern of the nearby `RestorePaneViewport` call.)
+with:
 
-- [ ] **Step 2.5: Update any other call sites**
+```go
+func (s *Session) ApplyResume(states []protocol.PaneViewportState, paneExists func(id [16]byte) bool) {
+	s.viewports.ApplyResume(states, paneExists)
+}
+```
+
+- [ ] **Step 2.5: Update the call site in `connection_handler.go` — prune once, share with `RestorePaneViewport`**
+
+Locate the `MsgResumeRequest` handler:
+
+```
+grep -n 'ApplyResume\|RestorePaneViewport' internal/runtime/server/connection_handler.go
+```
+
+The current shape is approximately:
+
+```go
+c.session.ApplyResume(request.PaneViewports)
+for _, ps := range request.PaneViewports {
+    desktop.RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+}
+```
+
+Replace with a single pruning pass that BOTH ApplyResume and the RestorePaneViewport loop consume:
+
+```go
+// Plan D: prune phantom paneIDs from the resume payload once; both
+// ApplyResume and the RestorePaneViewport loop below consume the
+// pruned slice. Without this, RestorePaneViewport gets called with
+// known-dead paneIDs (no-ops, but wasted work + obscures debugging).
+paneExists := func(id [16]byte) bool {
+	return desktop.AppByID(id) != nil
+}
+prunedViewports := request.PaneViewports[:0:0]
+for _, ps := range request.PaneViewports {
+	if paneExists(ps.PaneID) {
+		prunedViewports = append(prunedViewports, ps)
+	}
+}
+if dropped := len(request.PaneViewports) - len(prunedViewports); dropped > 0 {
+	log.Printf("connection_handler: pruned %d phantom paneID entries from resume payload", dropped)
+}
+
+// nil predicate — already pruned; ApplyResume should not double-log.
+c.session.ApplyResume(prunedViewports, nil)
+for _, ps := range prunedViewports {
+	desktop.RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+}
+```
+
+(If `desktop` is not in scope at this point, the surrounding code already obtains it via `c.sink.(*DesktopSink).engine` or similar — match the existing pattern. The `log` import may already exist in this file.)
+
+This makes the dual-log harmless: the connection handler logs the drop count once at prune time, and `ClientViewports.ApplyResume` is called with `nil` predicate so its own `dropped` counter stays at 0 (no second log).
+
+- [ ] **Step 2.6: Update any other non-test call sites**
 
 ```
 grep -rn 'ApplyResume(' internal/runtime/server/ | grep -v _test.go
 ```
 
-For each non-test call site, pass `nil` as the second argument if pruning is not desired, or an appropriate predicate. (Test sites are updated in the next test task.)
+For each remaining non-test call site, add a second argument: `nil` if pruning is not needed at that site (because it's already a known-good slice), or an appropriate predicate otherwise.
 
-- [ ] **Step 2.6: Run test to verify it passes**
+- [ ] **Step 2.7: Run test to verify it passes**
 
 ```
 go test ./internal/runtime/server/ -run TestApplyResume_PrunesPhantomPaneIDs -v
 ```
 Expected: PASS.
 
-- [ ] **Step 2.7: Update existing ApplyResume tests for the new signature**
+- [ ] **Step 2.8: Update existing ApplyResume tests for the new signature**
 
 ```
 grep -n 'ApplyResume(' internal/runtime/server/*_test.go
@@ -284,24 +354,25 @@ cv.ApplyResume(states, nil)
 
 Tests that explicitly want a known-pane predicate use the same shape as Step 2.3.
 
-- [ ] **Step 2.8: Run the server test suite (no regressions)**
+- [ ] **Step 2.9: Run the server test suite (no regressions)**
 
 ```
 go test ./internal/runtime/server/ -v
 ```
 Expected: all PASS.
 
-- [ ] **Step 2.9: Commit**
+- [ ] **Step 2.10: Commit**
 
 ```bash
-git add internal/runtime/server/client_viewport.go internal/runtime/server/client_viewport_test.go internal/runtime/server/connection_handler.go internal/runtime/server/*_test.go
+git add internal/runtime/server/client_viewport.go internal/runtime/server/client_viewport_test.go internal/runtime/server/connection_handler.go internal/runtime/server/session.go internal/runtime/server/*_test.go
 git commit -m "ClientViewports: prune phantom pane IDs at ApplyResume (#199, Plan D)
 
 Plan B left the map growing unboundedly with stale paneIDs from
 clients that resumed against a different pane tree. Plan D adds a
 paneExists predicate; the connection handler passes
-desktop.AppByID(id) != nil so cross-restart and recovery payloads
-self-clean.
+desktop.AppByID(id) != nil and prunes once at handler entry so the
+RestorePaneViewport loop also benefits. Logs the drop count for
+Plan F (session recovery) debugging.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
@@ -510,6 +581,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -714,6 +786,23 @@ func TestResolvePath_SocketHashStable(t *testing.T) {
 		t.Errorf("different sockets produced same hash: %q", a)
 	}
 }
+
+func TestResolvePath_RejectsInvalidNames(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/test-xdg-state")
+	cases := []string{
+		"..", ".", "../escape", "with/slash", "with\\backslash",
+		".hidden",                            // leading dot
+		"con", "CON", "Con.json",             // Windows reserved + case + extension
+		"nul", "aux", "prn",
+		"com1", "COM9", "lpt5",
+		"name with spaces", "with$dollar", "with;semi",
+	}
+	for _, name := range cases {
+		if _, err := ResolvePath("/run/x.sock", name); err == nil {
+			t.Errorf("ResolvePath(%q) should have errored, got nil", name)
+		}
+	}
+}
 ```
 
 - [ ] **Step 5.2: Run test to verify it fails**
@@ -765,10 +854,15 @@ func socketHash(absSocketPath string) string {
 	return hex.EncodeToString(h[:8]) // 16 hex chars
 }
 
-// validClientName rejects path-traversal and shell-meta characters.
-// Restrict to ASCII alphanumerics, dot, dash, and underscore.
+// validClientName rejects path-traversal, shell-meta characters, hidden
+// files (leading-dot), and Windows reserved device names. The Makefile
+// cross-compiles for Windows, so a client-name like "con" or "nul" must
+// not be accepted — opening such a path blocks on win32.
 func validClientName(name string) bool {
 	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if name[0] == '.' { // hidden / dotfiles
 		return false
 	}
 	for _, r := range name {
@@ -780,6 +874,19 @@ func validClientName(name string) bool {
 		default:
 			return false
 		}
+	}
+	// Windows reserved device names (case-insensitive). The reserved list
+	// also blocks names with a reserved stem followed by an extension
+	// (e.g. "con.json"), so check the stem before the first dot.
+	stem := name
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		stem = name[:i]
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return false
 	}
 	return true
 }
@@ -838,10 +945,14 @@ func TestSave_AtomicReplace(t *testing.T) {
 		t.Errorf("round-trip via disk: SessionID mismatch")
 	}
 
-	// No leftover .tmp file.
-	entries, _ := os.ReadDir(filepath.Dir(path))
+	// No leftover .tmp file. Fail loudly if ReadDir itself fails — a
+	// silent zero-iteration loop here would mask a broken fixture.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
+		if strings.Contains(e.Name(), ".state.tmp-") {
 			t.Errorf("leftover temp file: %s", e.Name())
 		}
 	}
@@ -902,9 +1013,15 @@ func Save(filePath string, state *ClientState) error {
 	}
 	tmpPath := tmp.Name()
 
-	// Best-effort cleanup if anything below fails.
+	// Best-effort cleanup if anything below fails. Success path: rename
+	// already consumed tmpPath, so Remove returns ErrNotExist (expected).
+	// Failure path: tmpPath should still exist; log if Remove fails for
+	// any reason other than ErrNotExist (would indicate filesystem trouble
+	// and could otherwise accumulate orphan tmp files silently).
 	defer func() {
-		_ = os.Remove(tmpPath)
+		if err := os.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("persistence: temp file cleanup failed: %v", err)
+		}
 	}()
 
 	enc := json.NewEncoder(tmp)
@@ -1040,6 +1157,12 @@ Append to `persistence.go`:
 //   - (state, nil) on a valid load.
 //   - (nil, err) only on disk-level errors that prevent recovery
 //     (e.g., permission denied on Stat).
+//
+// Wipe failures inside the recovery branches are logged but not
+// propagated — Load's caller has no useful action to take, but a wipe
+// failure indicates filesystem trouble that the user deserves a
+// diagnostic for. (Without the log, Load → wipe-fails → next start
+// hits the same parse error → wipe-fails ad infinitum, silently.)
 func Load(filePath, expectedSocketPath string) (*ClientState, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -1051,14 +1174,26 @@ func Load(filePath, expectedSocketPath string) (*ClientState, error) {
 
 	var s ClientState
 	if err := json.Unmarshal(data, &s); err != nil {
-		// Corrupt; wipe and treat as fresh.
-		_ = Wipe(filePath)
+		// Corrupt; wipe and treat as fresh. Warn-level: suggests the
+		// file was corrupted (process kill mid-write on a non-atomic
+		// filesystem, or hand-edited).
+		if werr := Wipe(filePath); werr != nil {
+			log.Printf("persistence: parse failed (%v); wipe also failed (%v); will retry on next start", err, werr)
+		} else {
+			log.Printf("persistence: parse failed (%v); state file wiped, starting fresh", err)
+		}
 		return nil, nil
 	}
 
 	if s.SocketPath != expectedSocketPath {
 		// Stale from a different daemon; wipe and treat as fresh.
-		_ = Wipe(filePath)
+		// Info-level: this is expected when a user's socket path
+		// changes (e.g., dev rebuild with a different XDG_RUNTIME_DIR).
+		if werr := Wipe(filePath); werr != nil {
+			log.Printf("persistence: socketPath mismatch (file=%q expected=%q); wipe failed (%v)", s.SocketPath, expectedSocketPath, werr)
+		} else {
+			log.Printf("persistence: socketPath mismatch (file=%q expected=%q); state file wiped", s.SocketPath, expectedSocketPath)
+		}
 		return nil, nil
 	}
 	return &s, nil
@@ -1161,6 +1296,76 @@ func TestWriter_CloseFlushes(t *testing.T) {
 		t.Errorf("expected Close to Flush, got %+v", got)
 	}
 }
+
+func TestWriter_CloseIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	w := NewWriter(path, 1*time.Hour)
+	w.Update(ClientState{SocketPath: "/tmp/x.sock", SessionID: [16]byte{9}, LastSequence: 3, WrittenAt: time.Now()})
+	w.Close()
+	w.Close() // must not panic on re-close
+}
+
+func TestWriter_SlowSaveSkipsIfBusy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	// saveCount counts actual on-disk writes; slowSaveStarted/Done track
+	// the in-flight save so the test can synchronize on it.
+	var saveCount atomic.Int32
+	slowSaveStarted := make(chan struct{}, 4)
+	slowSaveCanFinish := make(chan struct{})
+
+	w := NewWriter(path, 5*time.Millisecond)
+	w.saver = func(p string, s *ClientState) error {
+		saveCount.Add(1)
+		slowSaveStarted <- struct{}{}
+		<-slowSaveCanFinish
+		return Save(p, s)
+	}
+
+	// Trigger the first tick.
+	w.Update(ClientState{SocketPath: "/tmp/x.sock", SessionID: [16]byte{1}, LastSequence: 1, WrittenAt: time.Now()})
+
+	// Wait for the first save to actually start.
+	<-slowSaveStarted
+
+	// Bombard with updates while the save is blocked. None of these
+	// should produce additional saves; instead they should coalesce
+	// into a single follow-up save once the in-flight one completes.
+	for i := 2; i <= 50; i++ {
+		w.Update(ClientState{
+			SocketPath:   "/tmp/x.sock",
+			SessionID:    [16]byte{byte(i)},
+			LastSequence: uint64(i),
+			WrittenAt:    time.Now(),
+		})
+	}
+
+	// Release the slow save; expect at most one follow-up.
+	close(slowSaveCanFinish)
+
+	// Allow the follow-up tick to fire and complete.
+	w.Close()
+
+	got := saveCount.Load()
+	if got > 2 {
+		t.Errorf("expected at most 2 saves (initial + coalesced follow-up), got %d", got)
+	}
+	if got < 2 {
+		t.Errorf("expected the follow-up save to run after slow save released, got only %d", got)
+	}
+
+	// And the persisted state should reflect the LATEST update (49).
+	state, err := Load(path, "/tmp/x.sock")
+	if err != nil || state == nil {
+		t.Fatalf("Load: state=%v err=%v", state, err)
+	}
+	if state.LastSequence != 50 {
+		t.Errorf("expected coalesced LastSequence=50, got %d", state.LastSequence)
+	}
+}
 ```
 
 - [ ] **Step 8.2: Run tests to verify they fail**
@@ -1175,32 +1380,52 @@ Expected: FAIL — `Writer`/`NewWriter` undefined.
 Append to `persistence.go`:
 
 ```go
+// SaveFunc is the signature Writer uses to persist state. Defaults to
+// the package-level Save; tests in the same package may inject their
+// own (e.g. a slow / failing saver to exercise skip-if-busy).
+type SaveFunc func(filePath string, state *ClientState) error
+
 // Writer debounces saves of ClientState to a file. Save calls fire at
-// most once per debounce window; rapid updates coalesce. If a Save is
-// in flight when an update arrives, the update is buffered and a
-// follow-up Save is scheduled when the in-flight one completes
-// (skip-if-busy: the live writer is never blocked by disk).
+// most once per debounce window; rapid updates coalesce.
 //
-// Crash-loss is bounded by the debounce window. Plan D's design
-// constraint: ≤250ms of viewport movement on hard kill, perceptually
-// invisible to the user.
+// Concurrency model:
+//   - mu protects state/timer/closed/lastSaveErr (the lifecycle).
+//   - saveMu serializes the actual disk write so tick() and Flush()
+//     can never both call Save concurrently.
+//   - wg tracks in-flight tick/flush goroutines so Close blocks until
+//     they finish — without this, a tick scheduled by AfterFunc could
+//     fire after Run returns and write to a dir that t.TempDir has
+//     already cleaned up.
+//
+// Save errors are logged with simple per-error-string deduplication
+// (one log per distinct error across consecutive failures, plus one
+// recovery line when saves resume). Crash-loss is bounded by the
+// debounce window — Plan D's design constraint: ≤250ms of viewport
+// movement on hard kill, perceptually invisible to the user.
 type Writer struct {
 	filePath string
 	debounce time.Duration
 
-	mu      sync.Mutex
-	state   *ClientState // latest pending state, nil when consumed
-	timer   *time.Timer  // pending debounce timer, nil when none
-	busy    bool         // a Save is currently in flight
-	closed  bool
-	doneCh  chan struct{} // closed when Close completes
+	mu          sync.Mutex
+	state       *ClientState // latest pending state, nil when consumed
+	timer       *time.Timer  // pending debounce timer, nil when none
+	closed      bool
+	lastSaveErr string // for throttled error logging
+
+	saveMu sync.Mutex // serializes actual Save() calls
+	wg     sync.WaitGroup
+
+	// saver is the function actually invoked to persist. Test code in
+	// the same package may overwrite this on a fresh Writer to inject
+	// slow/failing saves.
+	saver SaveFunc
 }
 
 func NewWriter(filePath string, debounce time.Duration) *Writer {
 	return &Writer{
 		filePath: filePath,
 		debounce: debounce,
-		doneCh:   make(chan struct{}),
+		saver:    Save,
 	}
 }
 
@@ -1214,15 +1439,19 @@ func (w *Writer) Update(s ClientState) {
 	}
 	cp := s
 	w.state = &cp
-	if w.timer == nil && !w.busy {
+	if w.timer == nil {
 		w.timer = time.AfterFunc(w.debounce, w.tick)
 	}
-	// else: a tick or in-flight save will pick up the latest state.
+	// If a timer is already pending or a tick is in-flight, the latest
+	// state will be picked up when it next reads w.state under mu.
 }
 
 // Flush saves the latest pending state synchronously, dropping any
-// pending debounce. Safe to call concurrent with Update.
+// pending debounce. Safe to call concurrent with Update. Idempotent.
 func (w *Writer) Flush() {
+	w.wg.Add(1)
+	defer w.wg.Done()
+
 	w.mu.Lock()
 	if w.timer != nil {
 		w.timer.Stop()
@@ -1230,36 +1459,38 @@ func (w *Writer) Flush() {
 	}
 	s := w.state
 	w.state = nil
-	w.busy = true
 	w.mu.Unlock()
 
 	if s != nil {
-		_ = Save(w.filePath, s) // log, don't crash
+		w.doSave(*s)
 	}
-
-	w.mu.Lock()
-	w.busy = false
-	// If Update arrived during the save, schedule a tick so it lands.
-	if w.state != nil && !w.closed && w.timer == nil {
-		w.timer = time.AfterFunc(w.debounce, w.tick)
-	}
-	w.mu.Unlock()
 }
 
-// Close flushes and stops the writer. Subsequent Updates are no-ops.
+// Close flushes synchronously, stops further work, and waits for any
+// in-flight tick/flush goroutines to finish. Safe to call multiple
+// times.
 func (w *Writer) Close() {
-	w.Flush()
 	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
 	w.closed = true
 	if w.timer != nil {
 		w.timer.Stop()
 		w.timer = nil
 	}
 	w.mu.Unlock()
-	close(w.doneCh)
+
+	w.Flush()
+	w.wg.Wait()
 }
 
+// tick runs in time.AfterFunc's goroutine.
 func (w *Writer) tick() {
+	w.wg.Add(1)
+	defer w.wg.Done()
+
 	w.mu.Lock()
 	if w.closed || w.state == nil {
 		w.timer = nil
@@ -1269,17 +1500,42 @@ func (w *Writer) tick() {
 	s := *w.state
 	w.state = nil
 	w.timer = nil
-	w.busy = true
 	w.mu.Unlock()
 
-	_ = Save(w.filePath, &s)
+	w.doSave(s)
 
+	// If Update arrived during the save, schedule a follow-up tick.
 	w.mu.Lock()
-	w.busy = false
-	if w.state != nil && !w.closed {
+	if w.state != nil && !w.closed && w.timer == nil {
 		w.timer = time.AfterFunc(w.debounce, w.tick)
 	}
 	w.mu.Unlock()
+}
+
+// doSave is the only call site for the actual saver. saveMu serializes
+// it so tick and Flush never race each other on disk. Save failures
+// are logged with throttle-by-error-string dedup so a stuck condition
+// doesn't spam the log.
+func (w *Writer) doSave(s ClientState) {
+	w.saveMu.Lock()
+	defer w.saveMu.Unlock()
+
+	err := w.saver(w.filePath, &s)
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err != nil {
+		es := err.Error()
+		if es != w.lastSaveErr {
+			log.Printf("persistence: save failed (%v); will retry on next change", err)
+			w.lastSaveErr = es
+		}
+		return
+	}
+	if w.lastSaveErr != "" {
+		log.Printf("persistence: save recovered after prior failure")
+		w.lastSaveErr = ""
+	}
 }
 ```
 
@@ -1348,14 +1604,127 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-### Task 10: Replace zero-sessionID branch with load-from-disk
+### Task 10: Convert `lastSequence` to `atomic.Uint64` (pre-existing race fix)
 
 **Files:**
-- Modify: `internal/runtime/client/app.go:53-59` (the existing init block)
+- Modify: `internal/runtime/client/app.go:101` (declaration)
+- Modify: `internal/runtime/client/protocol_handler.go:22, 41` (function signatures + body)
+- Modify: `internal/runtime/client/app.go:120, 123, 131` (call sites; `lastSequence` may be passed/dereferenced)
 
-- [ ] **Step 10.1: Wire `ResolvePath` + `Load` at startup**
+**Why this task exists separately:** Plan D's `persistSnapshot` (added in Task 13) reads `lastSequence` from the render thread, while `readLoop`/`handleControlMessage` mutate it from the protocol-handler goroutine. Today the variable is a plain `uint64` mutated through a `*uint64` parameter — a latent data race that exists even before Plan D, but Plan D adds the second reader that makes `-race` find it. `pendingAck` and `lastAck` in the same file are already `atomic.Uint64`, so this conversion is a small, mechanical fix that brings `lastSequence` in line.
 
-In `internal/runtime/client/app.go`, replace this block (currently lines ~53-59):
+- [ ] **Step 10.1: Change the declaration in `app.go`**
+
+In `internal/runtime/client/app.go`, find:
+
+```go
+lastSequence := uint64(0)
+```
+
+(currently around line 101). Replace with:
+
+```go
+var lastSequence atomic.Uint64
+```
+
+If `loadedState` later sets a starting value, use `lastSequence.Store(loadedState.LastSequence)` (this happens in Task 12, but capture the change here so the variable is always atomic).
+
+- [ ] **Step 10.2: Change `readLoop` signature and body in `protocol_handler.go`**
+
+Update the function signature at line 22:
+
+```go
+func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequence *atomic.Uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) {
+```
+
+Inside the function body, replace all uses of `*lastSequence` (read) with `lastSequence.Load()`, and `*lastSequence = X` (write) with `lastSequence.Store(X)`.
+
+- [ ] **Step 10.3: Change `handleControlMessage` signature and body in `protocol_handler.go`**
+
+Update line 41:
+
+```go
+func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *atomic.Uint64, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) bool {
+```
+
+Same body changes: `*lastSequence` → `lastSequence.Load()`; assignments → `lastSequence.Store(...)`.
+
+- [ ] **Step 10.4: Run build to find every remaining call site**
+
+```
+go build ./...
+```
+
+The compiler will flag any remaining `*uint64` mismatch. Fix each by passing `&lastSequence` (which is now `*atomic.Uint64` automatically) and converting `*lastSequence` to `.Load()` / `.Store()` at the call site.
+
+Likely sites:
+- `app.go:120` — the existing `simple.RequestResume(conn, sessionID, lastSequence, viewports)` passes the value, not a pointer. Update to `simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports)`.
+- `app.go:123` — passes `&lastSequence` to `handleControlMessage`. No source change needed; the type matches automatically.
+- `app.go:131` — passes `&lastSequence` to `readLoop`. Same.
+
+- [ ] **Step 10.5: Run client tests**
+
+```
+go test ./internal/runtime/client/ -v
+```
+Expected: all PASS.
+
+- [ ] **Step 10.6: Run race detector across the client package**
+
+```
+go test -race ./internal/runtime/client/...
+```
+Expected: no race reports. (This is the test that would have caught the latent bug; lock it in here.)
+
+- [ ] **Step 10.7: Commit**
+
+```bash
+git add internal/runtime/client/app.go internal/runtime/client/protocol_handler.go
+git commit -m "Convert lastSequence to atomic.Uint64 (#199, Plan D)
+
+Latent data race: lastSequence was a plain uint64 mutated from
+readLoop's goroutine via a *uint64 parameter, but other code paths
+read the same variable. pendingAck/lastAck in the same file already
+use atomic.Uint64 — this brings lastSequence in line.
+
+Plan D adds a second reader (persistSnapshot from flushFrame) that
+would make -race find the existing bug. Fix preemptively so the
+Plan D commits land cleanly.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 11: Replace zero-sessionID branch with load-from-disk
+
+**Files:**
+- Modify: `internal/runtime/client/app.go:53-66` (the existing init block — note: the OLD block spans more than just the dead `if !opts.Reconnect` lines; preserve the surrounding `defer conn.Close()` and `var writeMu sync.Mutex` and `defer logFile.Close()` etc.)
+
+**IMPORTANT — what to preserve:** the existing block from line 53 to ~66 includes:
+
+```go
+simple := client.NewSimpleClient(opts.Socket)
+var sessionID [16]byte
+if !opts.Reconnect {
+    sessionID = [16]byte{}
+}
+
+accept, conn, err := simple.Connect(&sessionID)
+if err != nil {
+    return fmt.Errorf("connect failed: %w", err)
+}
+defer conn.Close()                // ← MUST be preserved (or replaced with closure form per Task 12 B8 fix)
+var writeMu sync.Mutex            // ← MUST be preserved
+
+debuglog.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
+```
+
+Only the first 6 lines (the dead `var sessionID; if !opts.Reconnect` block) get replaced. Everything from `if err != nil` onwards stays. Task 12 will independently replace `defer conn.Close()` with the closure form to fix B8 (defer-of-old-conn after retry).
+
+- [ ] **Step 11.1: Wire `ResolvePath` + `Load` at startup**
+
+In `internal/runtime/client/app.go`, replace ONLY this block (currently lines ~53-57):
 
 ```go
 	simple := client.NewSimpleClient(opts.Socket)
@@ -1363,8 +1732,6 @@ In `internal/runtime/client/app.go`, replace this block (currently lines ~53-59)
 	if !opts.Reconnect {
 		sessionID = [16]byte{}
 	}
-
-	accept, conn, err := simple.Connect(&sessionID)
 ```
 
 with:
@@ -1393,25 +1760,25 @@ with:
 	if loadedState != nil {
 		sessionID = loadedState.SessionID
 	}
-
-	accept, conn, err := simple.Connect(&sessionID)
 ```
 
-- [ ] **Step 10.2: Run build**
+The next line (`accept, conn, err := simple.Connect(&sessionID)`) stays unchanged — `:=` is correct because `accept`, `conn`, `err` are first-declared on that line.
+
+- [ ] **Step 11.2: Run build**
 
 ```
 go build ./...
 ```
 Expected: clean build.
 
-- [ ] **Step 10.3: Run client unit tests (no regressions)**
+- [ ] **Step 11.3: Run client unit tests (no regressions)**
 
 ```
 go test ./internal/runtime/client/ -v
 ```
 Expected: all PASS.
 
-- [ ] **Step 10.4: Commit**
+- [ ] **Step 11.4: Commit**
 
 ```bash
 git add internal/runtime/client/app.go
@@ -1426,12 +1793,12 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-### Task 11: Use loaded state to seed the resume request
+### Task 12: Use loaded state to seed the resume request
 
 **Files:**
 - Modify: `internal/runtime/client/app.go:101-125` (the existing `if opts.Reconnect` block)
 
-- [ ] **Step 11.1: Update the resume-request block**
+- [ ] **Step 12.1: Update the resume-request block + fix `defer conn.Close()` shape**
 
 Replace the current block (currently lines ~101-125):
 
@@ -1463,13 +1830,30 @@ Replace the current block (currently lines ~101-125):
 	}
 ```
 
-with:
+(Note: Task 10 already converted `lastSequence` to `atomic.Uint64`, so `lastSequence := uint64(0)` is gone — it's now `var lastSequence atomic.Uint64` at the top of `Run`. The replacement below uses the atomic shape.)
+
+**Also in this task: change the existing `defer conn.Close()` to a closure form** so that the retry below correctly closes the new connection at function exit rather than the now-dead original one. (Without the closure form, `defer conn.Close()` captures the original interface value at registration time; reassigning `conn` later doesn't update what the deferred call closes.)
+
+Find the existing line near `connect failed`:
 
 ```go
-	lastSequence := uint64(0)
+defer conn.Close()
+```
+
+Replace with:
+
+```go
+defer func() { conn.Close() }() // captures conn variable, picks up retry's reassignment
+```
+
+Then replace the existing reconnect block with the new code:
+
+```go
+	var lastSeqStart uint64
 	if loadedState != nil {
-		lastSequence = loadedState.LastSequence
+		lastSeqStart = loadedState.LastSequence
 	}
+	lastSequence.Store(lastSeqStart) // lastSequence is atomic.Uint64 from Task 10
 
 	var pendingAck atomic.Uint64
 	var lastAck atomic.Uint64
@@ -1499,63 +1883,81 @@ with:
 			}
 		}
 
-		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence, viewports)
-		if err != nil {
-			// Stale sessionID is the dominant failure mode. Wipe and
-			// start fresh; subsequent clean exit will write the new
-			// sessionID. We log at info because this is an expected
-			// part of normal recovery, not a bug.
+		hdr, payload, resumeErr := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports)
+		if resumeErr != nil {
+			// Stale sessionID is the dominant failure mode (server
+			// evicted the session, or daemon restarted in Plan D2's
+			// absence). Wipe and reconnect fresh; subsequent clean
+			// exit will write the new sessionID. Info-level — this is
+			// an expected recovery path, not a bug.
 			if statePath != "" {
-				log.Printf("persistence: resume rejected (%v); wiping state file and reconnecting fresh", err)
-				_ = Wipe(statePath)
+				log.Printf("persistence: resume rejected (%v); wiping state file and reconnecting fresh", resumeErr)
+				if werr := Wipe(statePath); werr != nil {
+					log.Printf("persistence: wipe failed (%v); next start may repeat this rejection", werr)
+				}
 			} else {
-				log.Printf("persistence: resume rejected (%v); reconnecting fresh", err)
+				log.Printf("persistence: resume rejected (%v); reconnecting fresh", resumeErr)
 			}
 			_ = conn.Close()
 
-			// Reconnect with zero sessionID.
+			// Refactored to avoid variable shadowing — use distinct
+			// names for the retry's outputs, then explicitly reassign
+			// outer-scope variables. The previous shape (`accept, conn,
+			// err = simple.Connect(...)`) compiled but mixed inner-vs-
+			// outer-scope bindings in a way that's easy to misread.
 			sessionID = [16]byte{}
 			loadedState = nil
-			lastSequence = 0
-			accept, conn, err = simple.Connect(&sessionID)
-			if err != nil {
-				return fmt.Errorf("reconnect after stale session failed: %w", err)
+			lastSequence.Store(0)
+
+			newAccept, newConn, connErr := simple.Connect(&sessionID)
+			if connErr != nil {
+				return fmt.Errorf("reconnect after stale session failed: %w", connErr)
 			}
+			accept = newAccept
+			conn = newConn
 			state.conn = conn
 			state.sessionID = accept.SessionID
 			sessionID = accept.SessionID
+			// The deferred `conn.Close()` (closure form, set at the
+			// top) now sees this new conn and will close it on exit.
 		} else {
 			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
 		}
 	}
 ```
 
-- [ ] **Step 11.2: Run build**
+- [ ] **Step 12.2: Run build**
 
 ```
 go build ./...
 ```
 Expected: clean build.
 
-- [ ] **Step 11.3: Run client unit tests**
+- [ ] **Step 12.3: Run client unit tests**
 
 ```
 go test ./internal/runtime/client/ -v
 ```
 Expected: all PASS.
 
-- [ ] **Step 11.4: Commit**
+- [ ] **Step 12.4: Commit**
 
 ```bash
 git add internal/runtime/client/app.go
 git commit -m "Seed resume from persisted state; wipe-and-retry on stale (#199, Plan D)
+
+Defer-closure for conn.Close so retry's new connection is also closed
+on function exit. Distinct local names (newAccept/newConn/connErr) on
+the retry path avoid the variable-shadowing trap from the prior shape.
+Wipe failures log a warning so a stuck filesystem state doesn't fail
+silently across launches.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 12: Install the debounced Writer + flushFrame hook + flush on exit
+### Task 13: Install the debounced Writer + flushFrame hook + flush on exit
 
 **Files:**
 - Modify: `internal/runtime/client/viewport_tracker.go` (add a `snapshotForPersistence` helper + hook a single persist call from `flushFrame`)
@@ -1564,7 +1966,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 The hook lives in `flushFrame` — already called once per render iteration with the dirty-tracker entries it just flushed to the wire. One hook there fires at most once per frame, naturally rate-limited by the render loop. No tracker-internal mutation hooks needed.
 
-- [ ] **Step 12.1: Add a "snapshot for persistence" helper**
+- [ ] **Step 13.1: Add a "snapshot for persistence" helper**
 
 Append to `internal/runtime/client/viewport_tracker.go`:
 
@@ -1590,7 +1992,7 @@ func (t *viewportTrackers) snapshotForPersistence() []protocol.PaneViewportState
 }
 ```
 
-- [ ] **Step 12.2: Add `persistSnapshot` field on `clientState`**
+- [ ] **Step 13.2: Add `persistSnapshot` field on `clientState`**
 
 Find the `clientState` struct definition:
 
@@ -1607,7 +2009,7 @@ Append the field to the struct:
 	persistSnapshot func()
 ```
 
-- [ ] **Step 12.3: Hook `flushFrame` to call `persistSnapshot`**
+- [ ] **Step 13.3: Hook `flushFrame` to call `persistSnapshot`**
 
 In `internal/runtime/client/viewport_tracker.go`, at the very end of `flushFrame` (after the existing loops complete, just before the function returns), append:
 
@@ -1621,9 +2023,9 @@ In `internal/runtime/client/viewport_tracker.go`, at the very end of `flushFrame
 	}
 ```
 
-- [ ] **Step 12.4: Wire Writer in app.go**
+- [ ] **Step 13.4: Wire Writer in app.go**
 
-In `internal/runtime/client/app.go`, after the resume block (Task 11) and before screen init, add:
+In `internal/runtime/client/app.go`, after the resume block (Task 12) and before screen init, add:
 
 ```go
 	// Plan D: install debounced persistence Writer. nil-safe — if path
@@ -1631,12 +2033,24 @@ In `internal/runtime/client/app.go`, after the resume block (Task 11) and before
 	var persistWriter *Writer
 	if statePath != "" {
 		persistWriter = NewWriter(statePath, 250*time.Millisecond)
-		defer persistWriter.Close() // flushes synchronously
+		defer persistWriter.Close() // flushes synchronously and waits for in-flight ticks
 	}
 
 	// persistSnapshot builds the current ClientState and hands it to
 	// the debounced Writer. Called from flushFrame (rate-limited to
 	// once per render iteration) and on exit.
+	//
+	// Note: lastSequence is atomic.Uint64 (Task 10), so .Load() is
+	// race-safe even though readLoop mutates it from another goroutine.
+	// sessionID is captured by reference — the retry in Task 12
+	// reassigns it to the freshly-allocated session, and persistSnapshot
+	// reads the current value at every invocation.
+	//
+	// IMPORTANT: there is NO eager initial seed. A persistSnapshot call
+	// here would write LastSequence=0 with empty PaneViewports (because
+	// no panes have rendered yet), which would overwrite the previous
+	// session's state on a fast crash before the first frame. Wait for
+	// the first real flushFrame to trigger the first save instead.
 	persistSnapshot := func() {
 		if persistWriter == nil {
 			return
@@ -1644,7 +2058,7 @@ In `internal/runtime/client/app.go`, after the resume block (Task 11) and before
 		persistWriter.Update(ClientState{
 			SocketPath:    opts.Socket,
 			SessionID:     sessionID,
-			LastSequence:  lastSequence,
+			LastSequence:  lastSequence.Load(),
 			WrittenAt:     time.Now().UTC(),
 			PaneViewports: state.viewports.snapshotForPersistence(),
 		})
@@ -1652,15 +2066,16 @@ In `internal/runtime/client/app.go`, after the resume block (Task 11) and before
 	state.persistSnapshot = persistSnapshot
 ```
 
-- [ ] **Step 12.5: Run build + tests**
+- [ ] **Step 13.5: Run build + tests + race detector**
 
 ```
 go build ./...
 go test ./internal/runtime/client/ -v
+go test -race ./internal/runtime/client/...
 ```
-Expected: clean build, all tests pass.
+Expected: clean build, all tests pass, no race reports.
 
-- [ ] **Step 12.6: Commit**
+- [ ] **Step 13.6: Commit**
 
 ```bash
 git add internal/runtime/client/app.go internal/runtime/client/client_state.go internal/runtime/client/viewport_tracker.go
@@ -1671,40 +2086,10 @@ already collected) drives a debounced persist. Once-per-render-frame
 naturally bounds the write rate; the Writer's 250ms debounce + skip-
 if-busy keeps the hot path from blocking on disk.
 
-Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
-```
-
----
-
-### Task 13: First-paint persist seed
-
-**Files:**
-- Modify: `internal/runtime/client/app.go` (right after `state.persistSnapshot = persistSnapshot`)
-
-- [ ] **Step 13.1: Seed an initial snapshot so the file exists from the first frame**
-
-In `app.go`, immediately after `state.viewports.onChange = persistSnapshot`, add:
-
-```go
-	// Capture the initial sessionID immediately; subsequent viewport
-	// changes will refresh PaneViewports + LastSequence. Without this
-	// seed, a client that exits before the first viewport tick leaves
-	// no state file behind.
-	persistSnapshot()
-```
-
-- [ ] **Step 13.2: Run build**
-
-```
-go build ./...
-```
-Expected: clean build.
-
-- [ ] **Step 13.3: Commit**
-
-```bash
-git add internal/runtime/client/app.go
-git commit -m "Seed initial persistence snapshot at startup (#199, Plan D)
+No eager initial seed: that would overwrite the previous session's
+state with LastSequence=0 / empty PaneViewports if the user crashes
+within the first 250ms. The first real flushFrame triggers the first
+save instead.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
@@ -1716,9 +2101,11 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ### Task 14: `--client-name` in `cmd/texelation/main.go`
 
 **Files:**
-- Modify: `cmd/texelation/main.go` (around line 59 where `reconnect` is registered)
+- Modify: `cmd/texelation/main.go`
 
-- [ ] **Step 14.1: Register the flag and propagate**
+`cmd/texelation/main.go` constructs `clientrt.Options{}` at **two** sites — once for the `--client-only` mode and once for the default unified mode. Both must add the `ClientName` field, otherwise `--client-name` is silently ignored in one of the two modes.
+
+- [ ] **Step 14.1: Register the flag**
 
 Find the `reconnect` flag block:
 
@@ -1732,7 +2119,15 @@ Add the new flag adjacent to it:
 	clientName := fs.String("client-name", "", "Client identity slot for persistence (default: $TEXELATION_CLIENT_NAME or \"default\")")
 ```
 
-Find where `clientrt.Options{...}` is constructed in `cmd/texelation/main.go` and add the field:
+- [ ] **Step 14.2: Locate ALL `clientrt.Options{}` construction sites**
+
+```
+grep -n 'clientrt.Options{' cmd/texelation/main.go
+```
+
+Expected: at least two sites — one for `--client-only` mode (around line 115) and one for the default unified mode (around line 130). Update each to include `ClientName: *clientName` in the struct literal.
+
+For each, the new shape is:
 
 ```go
 	opts := clientrt.Options{
@@ -1743,14 +2138,24 @@ Find where `clientrt.Options{...}` is constructed in `cmd/texelation/main.go` an
 	}
 ```
 
-- [ ] **Step 14.2: Run build**
+(Field names may vary slightly between the two sites — match the existing fields at each site.)
+
+- [ ] **Step 14.3: Run build**
 
 ```
 go build ./cmd/texelation/
 ```
 Expected: clean build.
 
-- [ ] **Step 14.3: Commit**
+- [ ] **Step 14.4: Verify both sites updated**
+
+```
+grep -A4 'clientrt.Options{' cmd/texelation/main.go
+```
+
+Expected: every `clientrt.Options{` literal contains `ClientName:`. If any one is missing, the flag is silently ignored in that mode.
+
+- [ ] **Step 14.5: Commit**
 
 ```bash
 git add cmd/texelation/main.go
@@ -1839,10 +2244,19 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ## Phase 5 — Integration Tests
 
+### Notes for the integration tests below
+
+The three tests in this phase need a few helpers (`connectClient`, `scrollPaneTo`, `persistAndDisconnect`, `pollViewBottomIdx`) plus access to a daemon harness (likely `newIntegrationServer` from existing tests). Before writing the tests:
+
+1. Identify the existing harness in `internal/runtime/server/client_integration_test.go` and other `*_integration_test.go` files. Match its idioms; do not invent a new harness shape.
+2. **Helper placement:** if helpers are >20 lines or shared across all three tests, put them in a NEW file `internal/runtime/server/client_integration_helpers_test.go` (build tag-free; it's a `_test.go` so it's already excluded from production builds). If they're tiny / test-specific, keep them inline at the top of `client_integration_test.go`. Do not create unnamed sub-packages.
+3. Each test's `t.Setenv("XDG_STATE_HOME", t.TempDir())` isolates persistence per-test — no shared global state between integration tests.
+
 ### Task 16: `TestIntegration_PersistedClientResumesViewport`
 
 **Files:**
 - Test: `internal/runtime/server/client_integration_test.go`
+- Test (possibly new, see notes above): `internal/runtime/server/client_integration_helpers_test.go`
 
 - [ ] **Step 16.1: Identify the harness**
 
@@ -2157,9 +2571,11 @@ After successful verification, update `/home/marc/.claude/projects/-home-marc-pr
 
 - [ ] All 20 tasks committed; `git log feature/issue-199-plan-d-persistence ^main --oneline` shows ~20 commits.
 - [ ] No `TODO` / `FIXME` / `XXX` introduced in this branch (`git diff main...HEAD | grep -iE 'TODO|FIXME|XXX'`).
-- [ ] `go test -race ./...` passes (or pre-existing failures only).
-- [ ] No new files outside the planned File Structure table.
-- [ ] Spec sections covered: storage location & schema (Tasks 4–7), write cadence (Task 8), read cadence (Tasks 10–11), multi-client (Tasks 5, 14, 15, 18), error handling (Tasks 7, 11), server carry-forwards (Tasks 1–3), testing (Tasks 16–18). All ✓.
+- [ ] `make clean && make build && make test` passes from a cold cache (defends against stale `.cache/` masking a real breakage).
+- [ ] `go test -race ./internal/runtime/client/... ./internal/runtime/server/... ./protocol/...` passes (or pre-existing failures only — compare against `git stash; go test -race ...` baseline).
+- [ ] No new files outside the planned File Structure table (excluding optional `client_integration_helpers_test.go` documented in Phase 5 notes).
+- [ ] Spec sections covered: storage location & schema (Tasks 4–7), write cadence (Task 8), read cadence (Tasks 11–12), multi-client (Tasks 5, 14, 15, 18), error handling (Tasks 7, 11–12), server carry-forwards (Tasks 1–3), pre-existing race fix (Task 10), testing (Tasks 16–18). All ✓.
+- [ ] Manual e2e (Task 20) verified on at least one of: single-client resume, stale-session fallback. Multi-client and Windows-style filename rejection covered by integration tests.
 
 ---
 
