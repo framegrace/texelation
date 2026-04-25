@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -270,5 +271,127 @@ func TestLoad_HappyPath(t *testing.T) {
 	}
 	if got.SessionID != want.SessionID || got.LastSequence != want.LastSequence {
 		t.Errorf("round-trip mismatch")
+	}
+}
+
+func TestWriter_CoalescesRapidUpdates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	w := NewWriter(path, 20*time.Millisecond)
+	defer w.Close()
+
+	for i := 0; i < 50; i++ {
+		w.Update(ClientState{
+			SocketPath:   "/tmp/x.sock",
+			SessionID:    [16]byte{byte(i)},
+			LastSequence: uint64(i),
+			WrittenAt:    time.Now(),
+		})
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	got, err := Load(path, "/tmp/x.sock")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected file to exist")
+	}
+	if got.LastSequence != 49 {
+		t.Errorf("expected coalesced last write LastSequence=49, got %d", got.LastSequence)
+	}
+}
+
+func TestWriter_FlushSyncsLatest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	w := NewWriter(path, 1*time.Hour)
+	w.Update(ClientState{SocketPath: "/tmp/x.sock", SessionID: [16]byte{42}, LastSequence: 7, WrittenAt: time.Now()})
+	w.Flush()
+
+	got, err := Load(path, "/tmp/x.sock")
+	if err != nil || got == nil {
+		t.Fatalf("expected file from Flush, got err=%v state=%v", err, got)
+	}
+	if got.LastSequence != 7 {
+		t.Errorf("expected LastSequence=7 from Flush, got %d", got.LastSequence)
+	}
+	w.Close()
+}
+
+func TestWriter_CloseFlushes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	w := NewWriter(path, 1*time.Hour)
+	w.Update(ClientState{SocketPath: "/tmp/x.sock", SessionID: [16]byte{9}, LastSequence: 3, WrittenAt: time.Now()})
+	w.Close()
+
+	got, _ := Load(path, "/tmp/x.sock")
+	if got == nil || got.LastSequence != 3 {
+		t.Errorf("expected Close to Flush, got %+v", got)
+	}
+}
+
+func TestWriter_CloseIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	w := NewWriter(path, 1*time.Hour)
+	w.Update(ClientState{SocketPath: "/tmp/x.sock", SessionID: [16]byte{9}, LastSequence: 3, WrittenAt: time.Now()})
+	w.Close()
+	w.Close() // must not panic on re-close
+}
+
+func TestWriter_SlowSaveSkipsIfBusy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	var saveCount atomic.Int32
+	slowSaveStarted := make(chan struct{}, 4)
+	slowSaveCanFinish := make(chan struct{})
+
+	w := NewWriter(path, 5*time.Millisecond)
+	w.saver = func(p string, s *ClientState) error {
+		saveCount.Add(1)
+		slowSaveStarted <- struct{}{}
+		<-slowSaveCanFinish
+		return Save(p, s)
+	}
+
+	w.Update(ClientState{SocketPath: "/tmp/x.sock", SessionID: [16]byte{1}, LastSequence: 1, WrittenAt: time.Now()})
+
+	<-slowSaveStarted
+
+	for i := 2; i <= 50; i++ {
+		w.Update(ClientState{
+			SocketPath:   "/tmp/x.sock",
+			SessionID:    [16]byte{byte(i)},
+			LastSequence: uint64(i),
+			WrittenAt:    time.Now(),
+		})
+	}
+
+	close(slowSaveCanFinish)
+
+	w.Close()
+
+	got := saveCount.Load()
+	if got > 2 {
+		t.Errorf("expected at most 2 saves (initial + coalesced follow-up), got %d", got)
+	}
+	if got < 2 {
+		t.Errorf("expected the follow-up save to run after slow save released, got only %d", got)
+	}
+
+	state, err := Load(path, "/tmp/x.sock")
+	if err != nil || state == nil {
+		t.Fatalf("Load: state=%v err=%v", state, err)
+	}
+	if state.LastSequence != 50 {
+		t.Errorf("expected coalesced LastSequence=50, got %d", state.LastSequence)
 	}
 }

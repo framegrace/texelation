@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/framegrace/texelation/protocol"
@@ -323,4 +324,153 @@ func Wipe(filePath string) error {
 		return fmt.Errorf("persistence: wipe: %w", err)
 	}
 	return nil
+}
+
+// SaveFunc is the signature Writer uses to persist state. Defaults to
+// the package-level Save; tests in the same package may inject their
+// own (e.g. a slow / failing saver to exercise skip-if-busy).
+type SaveFunc func(filePath string, state *ClientState) error
+
+// Writer debounces saves of ClientState to a file. Save calls fire at
+// most once per debounce window; rapid updates coalesce.
+//
+// Concurrency model:
+//   - mu protects state/timer/closed/lastSaveErr (the lifecycle).
+//   - saveMu serializes the actual disk write so tick() and Flush()
+//     can never both call Save concurrently.
+//   - wg tracks in-flight tick/flush goroutines so Close blocks until
+//     they finish — without this, a tick scheduled by AfterFunc could
+//     fire after Run returns and write to a dir that t.TempDir has
+//     already cleaned up.
+//
+// Save errors are logged with simple per-error-string deduplication
+// (one log per distinct error across consecutive failures, plus one
+// recovery line when saves resume). Crash-loss is bounded by the
+// debounce window — Plan D's design constraint: ≤250ms of viewport
+// movement on hard kill, perceptually invisible to the user.
+type Writer struct {
+	filePath string
+	debounce time.Duration
+
+	mu            sync.Mutex
+	state         *ClientState // latest pending state, nil when consumed
+	timer         *time.Timer  // pending debounce timer, nil when none
+	closed        bool
+	lastSaveErr   string    // for throttled error logging — last error string seen
+	lastSaveErrAt time.Time // for throttled error logging — when we last logged it
+
+	saveMu sync.Mutex // serializes actual Save() calls
+	wg     sync.WaitGroup
+
+	// saver is the function actually invoked to persist. Test code in
+	// the same package may overwrite this on a fresh Writer to inject
+	// slow/failing saves.
+	saver SaveFunc
+}
+
+func NewWriter(filePath string, debounce time.Duration) *Writer {
+	return &Writer{
+		filePath: filePath,
+		debounce: debounce,
+		saver:    Save,
+	}
+}
+
+func (w *Writer) Update(s ClientState) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return
+	}
+	cp := s
+	w.state = &cp
+	if w.timer == nil {
+		w.timer = time.AfterFunc(w.debounce, w.tick)
+	}
+}
+
+func (w *Writer) Flush() {
+	w.wg.Add(1)
+	defer w.wg.Done()
+
+	w.mu.Lock()
+	if w.timer != nil {
+		w.timer.Stop()
+		w.timer = nil
+	}
+	s := w.state
+	w.state = nil
+	w.mu.Unlock()
+
+	if s != nil {
+		w.doSave(*s)
+	}
+}
+
+func (w *Writer) Close() {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
+	w.closed = true
+	if w.timer != nil {
+		w.timer.Stop()
+		w.timer = nil
+	}
+	w.mu.Unlock()
+
+	w.Flush()
+	w.wg.Wait()
+}
+
+func (w *Writer) tick() {
+	w.wg.Add(1)
+	defer w.wg.Done()
+
+	w.mu.Lock()
+	if w.closed || w.state == nil {
+		w.timer = nil
+		w.mu.Unlock()
+		return
+	}
+	s := *w.state
+	w.state = nil
+	w.timer = nil
+	w.mu.Unlock()
+
+	w.doSave(s)
+
+	w.mu.Lock()
+	if w.state != nil && !w.closed && w.timer == nil {
+		w.timer = time.AfterFunc(w.debounce, w.tick)
+	}
+	w.mu.Unlock()
+}
+
+const saveErrRelogInterval = 5 * time.Minute
+
+func (w *Writer) doSave(s ClientState) {
+	w.saveMu.Lock()
+	defer w.saveMu.Unlock()
+
+	err := w.saver(w.filePath, &s)
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err != nil {
+		es := err.Error()
+		now := time.Now()
+		if es != w.lastSaveErr || now.Sub(w.lastSaveErrAt) >= saveErrRelogInterval {
+			log.Printf("persistence: save failed (%v); will retry on next change", err)
+			w.lastSaveErr = es
+			w.lastSaveErrAt = now
+		}
+		return
+	}
+	if w.lastSaveErr != "" {
+		log.Printf("persistence: save recovered after prior failure")
+		w.lastSaveErr = ""
+		w.lastSaveErrAt = time.Time{}
+	}
 }
