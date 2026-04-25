@@ -9,9 +9,13 @@
 package clientruntime
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -36,8 +40,8 @@ type ClientState struct {
 	WrittenAt     time.Time                    `json:"writtenAt"`
 	PaneViewports []protocol.PaneViewportState `json:"-"`
 
-	// Hex shadow fields — populated for marshaling, consumed during
-	// unmarshaling. See MarshalJSON / UnmarshalJSON.
+	// Note: custom marshaler converts [16]byte fields to lowercase hex strings via jsonShape;
+	// see MarshalJSON / UnmarshalJSON.
 }
 
 // jsonShape is the literal on-disk schema. ClientState wraps it so
@@ -122,4 +126,96 @@ func decodeHex16(s string, out *[16]byte) error {
 	}
 	copy(out[:], b)
 	return nil
+}
+
+// ResolvePath returns the on-disk state file path for the given socket
+// and client name. Precedence: explicit clientName arg → env
+// $TEXELATION_CLIENT_NAME → DefaultClientName.
+func ResolvePath(socketPath, clientName string) (string, error) {
+	if socketPath == "" {
+		return "", errors.New("persistence: empty socketPath")
+	}
+	abs, err := filepath.Abs(socketPath)
+	if err != nil {
+		return "", fmt.Errorf("persistence: abs socket path: %w", err)
+	}
+	name := strings.TrimSpace(clientName)
+	if name == "" {
+		name = strings.TrimSpace(os.Getenv(ClientNameEnvVar))
+	}
+	if name == "" {
+		name = DefaultClientName
+	}
+	if !validClientName(name) {
+		return "", fmt.Errorf("persistence: invalid clientName %q", name)
+	}
+	stateHome := os.Getenv("XDG_STATE_HOME")
+	if stateHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("persistence: home dir: %w", err)
+		}
+		stateHome = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(stateHome, "texelation", "client", socketHash(abs), name+".json"), nil
+}
+
+func socketHash(absSocketPath string) string {
+	h := sha256.Sum256([]byte(absSocketPath))
+	return hex.EncodeToString(h[:8]) // 16 hex chars
+}
+
+// ErrInvalidClientName is returned by ValidateClientName for any name
+// that fails the client-name rules. Callers can distinguish "user-input
+// is bad" from "environment is bad" (e.g., $HOME unreadable in
+// ResolvePath) and report the right thing.
+var ErrInvalidClientName = errors.New("persistence: invalid client name")
+
+// ValidateClientName runs the name rules in isolation (no path resolution,
+// no $HOME lookup, no socket hashing). Returns ErrInvalidClientName on
+// failure so callers in cmd/texelation and cmd/texel-client can wrap it
+// with a "invalid --client-name %q" message without misattributing
+// HOME-dir or socket errors to the user's flag value.
+func ValidateClientName(name string) error {
+	if !validClientName(name) {
+		return fmt.Errorf("%w: %q", ErrInvalidClientName, name)
+	}
+	return nil
+}
+
+// validClientName rejects path-traversal, shell-meta characters, hidden
+// files (leading-dot), and Windows reserved device names. The Makefile
+// cross-compiles for Windows, so a client-name like "con" or "nul" must
+// not be accepted — opening such a path blocks on win32.
+func validClientName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if name[0] == '.' { // hidden / dotfiles
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.':
+		default:
+			return false
+		}
+	}
+	// Windows reserved device names (case-insensitive). The reserved list
+	// also blocks names with a reserved stem followed by an extension
+	// (e.g. "con.json"), so check the stem before the first dot.
+	stem := name
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		stem = name[:i]
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return false
+	}
+	return true
 }

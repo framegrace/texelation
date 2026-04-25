@@ -60,3 +60,78 @@ func TestClientState_RoundTrip(t *testing.T) {
 		t.Errorf("PaneViewport mismatch")
 	}
 }
+
+func TestResolvePath_DefaultName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/test-xdg-state")
+	t.Setenv(ClientNameEnvVar, "")
+
+	got, err := ResolvePath("/run/texelation.sock", "")
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	wantPrefix := "/tmp/test-xdg-state/texelation/client/"
+	wantSuffix := "/default.json"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Errorf("path %q missing prefix %q", got, wantPrefix)
+	}
+	if !strings.HasSuffix(got, wantSuffix) {
+		t.Errorf("path %q missing suffix %q", got, wantSuffix)
+	}
+}
+
+func TestResolvePath_FlagPrecedence(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/test-xdg-state")
+	t.Setenv(ClientNameEnvVar, "fromenv")
+
+	got, err := ResolvePath("/run/texelation.sock", "fromflag")
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if !strings.HasSuffix(got, "/fromflag.json") {
+		t.Errorf("flag should win over env: got %q", got)
+	}
+}
+
+func TestResolvePath_EnvFallback(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/test-xdg-state")
+	t.Setenv(ClientNameEnvVar, "fromenv")
+
+	got, err := ResolvePath("/run/texelation.sock", "")
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if !strings.HasSuffix(got, "/fromenv.json") {
+		t.Errorf("env should win when flag empty: got %q", got)
+	}
+}
+
+func TestResolvePath_SocketHashStable(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/test-xdg-state")
+	a, _ := ResolvePath("/run/texelation.sock", "x")
+	b, _ := ResolvePath("/run/texelation.sock", "x")
+	if a != b {
+		t.Errorf("hash unstable: %q vs %q", a, b)
+	}
+	c, _ := ResolvePath("/run/different.sock", "x")
+	if a == c {
+		t.Errorf("different sockets produced same hash: %q", a)
+	}
+}
+
+func TestResolvePath_RejectsInvalidNames(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/test-xdg-state")
+	cases := []string{
+		"..", ".", "../escape", "with/slash", "with\\backslash",
+		".hidden",                // leading dot
+		"con", "CON", "Con.json", // Windows reserved + case + extension
+		"nul", "aux", "prn",
+		"com1", "COM9", "lpt5",
+		"name with spaces", "with$dollar", "with;semi",
+		"\x00", "\x00bad", "bad\x00", // NULL byte injection (Go os.Open historically truncates here)
+	}
+	for _, name := range cases {
+		if _, err := ResolvePath("/run/x.sock", name); err == nil {
+			t.Errorf("ResolvePath(%q) should have errored, got nil", name)
+		}
+	}
+}
