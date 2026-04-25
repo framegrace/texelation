@@ -277,7 +277,7 @@ func (s *Session) ApplyResume(states []protocol.PaneViewportState, paneExists fu
 }
 ```
 
-- [ ] **Step 2.5: Update the call site in `connection_handler.go` — prune once, share with `RestorePaneViewport`**
+- [ ] **Step 2.5: Update the call site in `connection_handler.go` — hoist desktop lookup, prune once, share with `RestorePaneViewport`**
 
 Locate the `MsgResumeRequest` handler:
 
@@ -285,45 +285,80 @@ Locate the `MsgResumeRequest` handler:
 grep -n 'ApplyResume\|RestorePaneViewport' internal/runtime/server/connection_handler.go
 ```
 
-The current shape is approximately:
+The current shape (lines ~155-183 of `connection_handler.go`) is approximately:
 
 ```go
+// Seed ClientViewports from the resume payload FIRST: ...
 c.session.ApplyResume(request.PaneViewports)
-for _, ps := range request.PaneViewports {
-    desktop.RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+
+// Then re-seat each non-alt-screen pane's ViewWindow ...
+if sink, ok := c.sink.(*DesktopSink); ok && sink.Desktop() != nil {
+    func() {
+        defer func() { ... recover ... }()
+        for _, ps := range request.PaneViewports {
+            if !ps.AltScreen {
+                sink.Desktop().RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+            }
+        }
+    }()
 }
 ```
 
-Replace with a single pruning pass that BOTH ApplyResume and the RestorePaneViewport loop consume:
+**Important constraint:** the `desktop` (via `sink.Desktop()`) is only available inside the `if sink, ok := c.sink.(*DesktopSink); ok && sink.Desktop() != nil` guard. The phantom-pane predicate needs `AppByID`, which is on `desktop`. So pruning has to happen INSIDE the guard, with a fall-through for when the sink isn't a DesktopSink (in which case we just pass the full list without pruning — there's no harm; the publisher's per-pane lookup will skip phantoms anyway).
+
+Replace with this restructured shape:
 
 ```go
-// Plan D: prune phantom paneIDs from the resume payload once; both
-// ApplyResume and the RestorePaneViewport loop below consume the
-// pruned slice. Without this, RestorePaneViewport gets called with
-// known-dead paneIDs (no-ops, but wasted work + obscures debugging).
-paneExists := func(id [16]byte) bool {
-	return desktop.AppByID(id) != nil
-}
-prunedViewports := request.PaneViewports[:0:0]
-for _, ps := range request.PaneViewports {
-	if paneExists(ps.PaneID) {
-		prunedViewports = append(prunedViewports, ps)
+// Plan D: hoist the desktop lookup so we can build a paneExists
+// predicate once and use it BEFORE ApplyResume runs (otherwise
+// ClientViewports accumulates phantom entries on cross-restart resumes).
+// When the sink isn't a DesktopSink (test harnesses, fake sinks), we
+// fall through with the unpruned slice — ApplyResume will accept it
+// and downstream lookups handle missing panes gracefully.
+viewportsToApply := request.PaneViewports
+sink, sinkOK := c.sink.(*DesktopSink)
+if sinkOK && sink.Desktop() != nil {
+	desktop := sink.Desktop()
+	pruned := make([]protocol.PaneViewportState, 0, len(request.PaneViewports))
+	for _, ps := range request.PaneViewports {
+		if desktop.AppByID(ps.PaneID) != nil {
+			pruned = append(pruned, ps)
+		}
 	}
-}
-if dropped := len(request.PaneViewports) - len(prunedViewports); dropped > 0 {
-	log.Printf("connection_handler: pruned %d phantom paneID entries from resume payload", dropped)
+	if dropped := len(request.PaneViewports) - len(pruned); dropped > 0 {
+		debugLog.Printf("connection %x: pruned %d phantom paneID entries from resume payload", c.session.ID(), dropped)
+	}
+	viewportsToApply = pruned
 }
 
-// nil predicate — already pruned; ApplyResume should not double-log.
-c.session.ApplyResume(prunedViewports, nil)
-for _, ps := range prunedViewports {
-	desktop.RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+// Seed ClientViewports from the (possibly-pruned) resume payload FIRST: ...
+// (Existing comment block about ordering / Policy A stays.)
+// nil predicate — pruning already happened above; ApplyResume's own
+// drop counter stays at zero so we don't double-log.
+c.session.ApplyResume(viewportsToApply, nil)
+
+// Then re-seat each non-alt-screen pane's ViewWindow ... (existing code,
+// updated to iterate viewportsToApply instead of request.PaneViewports).
+if sinkOK && sink.Desktop() != nil {
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("server: RestorePaneViewport panic: %v", r)
+			}
+		}()
+		for _, ps := range viewportsToApply {
+			if !ps.AltScreen {
+				sink.Desktop().RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+			}
+		}
+	}()
 }
 ```
 
-(If `desktop` is not in scope at this point, the surrounding code already obtains it via `c.sink.(*DesktopSink).engine` or similar — match the existing pattern. The `log` import may already exist in this file.)
-
-This makes the dual-log harmless: the connection handler logs the drop count once at prune time, and `ClientViewports.ApplyResume` is called with `nil` predicate so its own `dropped` counter stays at 0 (no second log).
+Key points:
+- `sink, sinkOK := c.sink.(*DesktopSink)` is hoisted ONCE so the same predicate guard covers both the prune block and the subsequent RestorePaneViewport block.
+- Drop-count log uses `debugLog.Printf` (per existing project convention at line 137 of the same file) rather than `log.Printf`, since legitimate cross-restart drops shouldn't appear at info-level on every reconnect.
+- When sink is not a DesktopSink (test fakes), pruning is skipped — `viewportsToApply == request.PaneViewports` — and ApplyResume gets the unpruned set. This matches existing behavior; tests can opt into pruning by passing a real predicate to `ClientViewports.ApplyResume` directly.
 
 - [ ] **Step 2.6: Update any other non-test call sites**
 
@@ -1406,11 +1441,12 @@ type Writer struct {
 	filePath string
 	debounce time.Duration
 
-	mu          sync.Mutex
-	state       *ClientState // latest pending state, nil when consumed
-	timer       *time.Timer  // pending debounce timer, nil when none
-	closed      bool
-	lastSaveErr string // for throttled error logging
+	mu             sync.Mutex
+	state          *ClientState // latest pending state, nil when consumed
+	timer          *time.Timer  // pending debounce timer, nil when none
+	closed         bool
+	lastSaveErr    string    // for throttled error logging — last error string seen
+	lastSaveErrAt  time.Time // for throttled error logging — when we last logged it
 
 	saveMu sync.Mutex // serializes actual Save() calls
 	wg     sync.WaitGroup
@@ -1515,7 +1551,10 @@ func (w *Writer) tick() {
 // doSave is the only call site for the actual saver. saveMu serializes
 // it so tick and Flush never race each other on disk. Save failures
 // are logged with throttle-by-error-string dedup so a stuck condition
-// doesn't spam the log.
+// doesn't spam the log; a permanently failing condition (read-only
+// disk, etc.) re-logs every saveErrRelogInterval to surface it.
+const saveErrRelogInterval = 5 * time.Minute
+
 func (w *Writer) doSave(s ClientState) {
 	w.saveMu.Lock()
 	defer w.saveMu.Unlock()
@@ -1526,15 +1565,21 @@ func (w *Writer) doSave(s ClientState) {
 	defer w.mu.Unlock()
 	if err != nil {
 		es := err.Error()
-		if es != w.lastSaveErr {
+		now := time.Now()
+		// Log on first occurrence, on transition to a different error
+		// string, and periodically (every saveErrRelogInterval) so a
+		// stuck condition doesn't go silent forever.
+		if es != w.lastSaveErr || now.Sub(w.lastSaveErrAt) >= saveErrRelogInterval {
 			log.Printf("persistence: save failed (%v); will retry on next change", err)
 			w.lastSaveErr = es
+			w.lastSaveErrAt = now
 		}
 		return
 	}
 	if w.lastSaveErr != "" {
 		log.Printf("persistence: save recovered after prior failure")
 		w.lastSaveErr = ""
+		w.lastSaveErrAt = time.Time{}
 	}
 }
 ```
@@ -1649,6 +1694,34 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 
 Same body changes: `*lastSequence` → `lastSequence.Load()`; assignments → `lastSequence.Store(...)`.
 
+In particular, **the nil-guarded read-modify-write at lines 86-88** must be rewritten:
+
+```go
+// BEFORE:
+if lastSequence != nil && hdr.Sequence > *lastSequence {
+    *lastSequence = hdr.Sequence
+}
+```
+
+becomes:
+
+```go
+// AFTER (atomic-safe — note this is technically a check-then-set
+// race-prone pattern, but Plan D's only writer is this loop, so
+// any race against persistSnapshot's Load() is a benign read of
+// "either the old or new value", both of which are valid sequences
+// to persist. If a future change adds a SECOND writer, switch to
+// CompareAndSwap):
+if lastSequence != nil {
+    cur := lastSequence.Load()
+    if hdr.Sequence > cur {
+        lastSequence.Store(hdr.Sequence)
+    }
+}
+```
+
+Search the file for any OTHER `*lastSequence` reads or writes and convert each. The only known sites are the body of `readLoop` and `handleControlMessage`.
+
 - [ ] **Step 10.4: Run build to find every remaining call site**
 
 ```
@@ -1696,10 +1769,14 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-### Task 11: Replace zero-sessionID branch with load-from-disk
+### Task 11: Replace zero-sessionID branch with load-from-disk + stale-session retry around `Connect`
 
 **Files:**
-- Modify: `internal/runtime/client/app.go:53-66` (the existing init block — note: the OLD block spans more than just the dead `if !opts.Reconnect` lines; preserve the surrounding `defer conn.Close()` and `var writeMu sync.Mutex` and `defer logFile.Close()` etc.)
+- Modify: `internal/runtime/client/app.go:53-66` (the existing init block — note: the OLD block spans more than just the dead `if !opts.Reconnect` lines; preserve `var writeMu sync.Mutex`, `debuglog.Printf`, etc.)
+
+**IMPORTANT design note — why the retry goes here, not around `RequestResume`:**
+
+The server's handshake at `internal/runtime/server/handshake.go:69-74` calls `mgr.Lookup(connectReq.SessionID)` for non-zero sessionIDs. If the session has been evicted (or the daemon was restarted without Plan D2 persistence), `Lookup` returns `ErrSessionNotFound`, the handshake function returns the error, the connection is closed by the server, and `simple.Connect`'s subsequent `protocol.ReadMessage` fails. **`simple.RequestResume` is never reached** — the failure surfaces at `Connect`. The retry must live here, around `Connect`, not around `RequestResume`.
 
 **IMPORTANT — what to preserve:** the existing block from line 53 to ~66 includes:
 
@@ -1714,17 +1791,17 @@ accept, conn, err := simple.Connect(&sessionID)
 if err != nil {
     return fmt.Errorf("connect failed: %w", err)
 }
-defer conn.Close()                // ← MUST be preserved (or replaced with closure form per Task 12 B8 fix)
+defer conn.Close()                // ← will be replaced with closure form below
 var writeMu sync.Mutex            // ← MUST be preserved
 
 debuglog.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 ```
 
-Only the first 6 lines (the dead `var sessionID; if !opts.Reconnect` block) get replaced. Everything from `if err != nil` onwards stays. Task 12 will independently replace `defer conn.Close()` with the closure form to fix B8 (defer-of-old-conn after retry).
+The dead `var sessionID; if !opts.Reconnect` lines get replaced. `defer conn.Close()` gets converted to closure form (so the retry's reassignment of `conn` is also closed at exit). `var writeMu` and `debuglog.Printf` stay. The `if err != nil { return ... }` block also gets replaced (replaced with the retry logic below).
 
-- [ ] **Step 11.1: Wire `ResolvePath` + `Load` at startup**
+- [ ] **Step 11.1: Wire `ResolvePath` + `Load` + stale-session retry at startup**
 
-In `internal/runtime/client/app.go`, replace ONLY this block (currently lines ~53-57):
+In `internal/runtime/client/app.go`, replace this block (currently lines ~53-66):
 
 ```go
 	simple := client.NewSimpleClient(opts.Socket)
@@ -1732,6 +1809,15 @@ In `internal/runtime/client/app.go`, replace ONLY this block (currently lines ~5
 	if !opts.Reconnect {
 		sessionID = [16]byte{}
 	}
+
+	accept, conn, err := simple.Connect(&sessionID)
+	if err != nil {
+		return fmt.Errorf("connect failed: %w", err)
+	}
+	defer conn.Close()
+	var writeMu sync.Mutex
+
+	debuglog.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 ```
 
 with:
@@ -1760,9 +1846,44 @@ with:
 	if loadedState != nil {
 		sessionID = loadedState.SessionID
 	}
+
+	accept, conn, err := simple.Connect(&sessionID)
+	if err != nil && loadedState != nil {
+		// We sent a non-zero sessionID from disk and Connect failed.
+		// The dominant cause is a stale sessionID: the server has
+		// evicted the session (or the daemon was restarted without
+		// Plan D2 persistence). Wipe the stale state and retry fresh
+		// with a zero sessionID.
+		//
+		// We don't try to disambiguate stale-session from transient
+		// network failure — retrying once with zero ID is cheap and
+		// the second failure (if there is one) surfaces below as the
+		// terminal connect error.
+		log.Printf("persistence: connect with persisted sessionID failed (%v); wiping state file and retrying fresh", err)
+		if statePath != "" {
+			if werr := Wipe(statePath); werr != nil {
+				log.Printf("persistence: wipe failed (%v); next start may repeat this rejection", werr)
+			}
+		}
+		loadedState = nil
+		sessionID = [16]byte{}
+		accept, conn, err = simple.Connect(&sessionID)
+	}
+	if err != nil {
+		return fmt.Errorf("connect failed: %w", err)
+	}
+	// Closure form so the deferred Close picks up any subsequent
+	// reassignment of conn (none today, but defends against future
+	// re-connect logic). Drop-in replacement for the older
+	// `defer conn.Close()` shape.
+	defer func() { conn.Close() }()
+
+	var writeMu sync.Mutex
+
+	debuglog.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 ```
 
-The next line (`accept, conn, err := simple.Connect(&sessionID)`) stays unchanged — `:=` is correct because `accept`, `conn`, `err` are first-declared on that line.
+Note the closure-form defer replaces the bare `defer conn.Close()`. Future reassignment of `conn` (if any code below ever does it) will be visible to the deferred call.
 
 - [ ] **Step 11.2: Run build**
 
@@ -1782,11 +1903,13 @@ Expected: all PASS.
 
 ```bash
 git add internal/runtime/client/app.go
-git commit -m "Load persisted client state on startup (#199, Plan D)
+git commit -m "Load persisted client state + stale-session retry on Connect (#199, Plan D)
 
-Replaces the dead zero-sessionID branch. Plan B's resume scaffolding
-(simple.Connect + simple.RequestResume) is unchanged; this just wires
-the disk layer in front of it.
+The server's handshake fails (closes the connection) when a stale
+sessionID is presented, so the failure surfaces at simple.Connect,
+not simple.RequestResume. Retry-with-fresh-sessionID lives here
+accordingly. The deferred Close uses a closure so any future
+reassignment of conn is also closed at exit.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
@@ -1798,7 +1921,9 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 **Files:**
 - Modify: `internal/runtime/client/app.go:101-125` (the existing `if opts.Reconnect` block)
 
-- [ ] **Step 12.1: Update the resume-request block + fix `defer conn.Close()` shape**
+- [ ] **Step 12.1: Update the resume-request block to consume loaded state**
+
+(The `defer conn.Close()` → closure form was already done in Task 11. Stale-session retry is also in Task 11. This task is now just "send the resume with the right inputs.")
 
 Replace the current block (currently lines ~101-125):
 
@@ -1832,21 +1957,7 @@ Replace the current block (currently lines ~101-125):
 
 (Note: Task 10 already converted `lastSequence` to `atomic.Uint64`, so `lastSequence := uint64(0)` is gone — it's now `var lastSequence atomic.Uint64` at the top of `Run`. The replacement below uses the atomic shape.)
 
-**Also in this task: change the existing `defer conn.Close()` to a closure form** so that the retry below correctly closes the new connection at function exit rather than the now-dead original one. (Without the closure form, `defer conn.Close()` captures the original interface value at registration time; reassigning `conn` later doesn't update what the deferred call closes.)
-
-Find the existing line near `connect failed`:
-
-```go
-defer conn.Close()
-```
-
-Replace with:
-
-```go
-defer func() { conn.Close() }() // captures conn variable, picks up retry's reassignment
-```
-
-Then replace the existing reconnect block with the new code:
+Replace the block with the new code below. Stale-session retry now lives in Task 11 (around `simple.Connect`); `RequestResume` only fires for sessions that successfully completed the handshake, so any error here is a genuine resume failure (e.g., decode error of the response, malformed payload). We surface it via `return` rather than retry.
 
 ```go
 	var lastSeqStart uint64
@@ -1861,6 +1972,12 @@ Then replace the existing reconnect block with the new code:
 
 	// Decide whether to send a resume: explicit --reconnect OR we
 	// loaded a non-zero sessionID from disk.
+	//
+	// Note: state.cache and state.viewports are intentionally empty at
+	// this point in a fresh-process invocation (no MsgTreeSnapshot
+	// received yet, no panes rendered). The persisted PaneViewports
+	// from disk are what feed the resume; live trackers are only used
+	// for the same-process --reconnect case where they may be populated.
 	shouldResume := opts.Reconnect || loadedState != nil
 	if shouldResume {
 		// Prefer persisted PaneViewports (fresh process, trackers map
@@ -1883,46 +2000,15 @@ Then replace the existing reconnect block with the new code:
 			}
 		}
 
-		hdr, payload, resumeErr := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports)
-		if resumeErr != nil {
-			// Stale sessionID is the dominant failure mode (server
-			// evicted the session, or daemon restarted in Plan D2's
-			// absence). Wipe and reconnect fresh; subsequent clean
-			// exit will write the new sessionID. Info-level — this is
-			// an expected recovery path, not a bug.
-			if statePath != "" {
-				log.Printf("persistence: resume rejected (%v); wiping state file and reconnecting fresh", resumeErr)
-				if werr := Wipe(statePath); werr != nil {
-					log.Printf("persistence: wipe failed (%v); next start may repeat this rejection", werr)
-				}
-			} else {
-				log.Printf("persistence: resume rejected (%v); reconnecting fresh", resumeErr)
-			}
-			_ = conn.Close()
-
-			// Refactored to avoid variable shadowing — use distinct
-			// names for the retry's outputs, then explicitly reassign
-			// outer-scope variables. The previous shape (`accept, conn,
-			// err = simple.Connect(...)`) compiled but mixed inner-vs-
-			// outer-scope bindings in a way that's easy to misread.
-			sessionID = [16]byte{}
-			loadedState = nil
-			lastSequence.Store(0)
-
-			newAccept, newConn, connErr := simple.Connect(&sessionID)
-			if connErr != nil {
-				return fmt.Errorf("reconnect after stale session failed: %w", connErr)
-			}
-			accept = newAccept
-			conn = newConn
-			state.conn = conn
-			state.sessionID = accept.SessionID
-			sessionID = accept.SessionID
-			// The deferred `conn.Close()` (closure form, set at the
-			// top) now sees this new conn and will close it on exit.
-		} else {
-			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
+		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports)
+		if err != nil {
+			// Resume against a session that completed handshake should
+			// not normally fail. If it does, surface the error rather
+			// than retrying — the connection is in an indeterminate
+			// state and recovery is the user's job.
+			return fmt.Errorf("resume request failed: %w", err)
 		}
+		handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
 	}
 ```
 
@@ -1944,13 +2030,14 @@ Expected: all PASS.
 
 ```bash
 git add internal/runtime/client/app.go
-git commit -m "Seed resume from persisted state; wipe-and-retry on stale (#199, Plan D)
+git commit -m "Seed resume request from persisted state (#199, Plan D)
 
-Defer-closure for conn.Close so retry's new connection is also closed
-on function exit. Distinct local names (newAccept/newConn/connErr) on
-the retry path avoid the variable-shadowing trap from the prior shape.
-Wipe failures log a warning so a stuck filesystem state doesn't fail
-silently across launches.
+Stale-session recovery is in Task 11 (around simple.Connect, where
+the handshake actually fails); this commit just sends the resume
+with the loaded sessionID/lastSequence/PaneViewports. RequestResume
+errors at this point are genuine resume failures (decode error on
+the response, etc.) and surface as terminal errors rather than
+retries.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
@@ -2119,7 +2206,24 @@ Add the new flag adjacent to it:
 	clientName := fs.String("client-name", "", "Client identity slot for persistence (default: $TEXELATION_CLIENT_NAME or \"default\")")
 ```
 
-- [ ] **Step 14.2: Locate ALL `clientrt.Options{}` construction sites**
+- [ ] **Step 14.2: Validate `--client-name` early; fail loudly on invalid**
+
+Immediately after `fs.Parse(args)` returns and before the resolved-socket logic, validate the supplied client name. The user explicitly opted into a named slot by passing the flag — silently disabling persistence later (when ResolvePath rejects the name) would be a UX trap. Fail at flag-parse time with a clear error.
+
+```go
+	// Plan D: validate --client-name early so an invalid name (e.g.,
+	// Windows-reserved like "con") fails loudly here rather than
+	// silently disabling persistence at runtime.
+	if *clientName != "" {
+		if _, err := clientrt.ResolvePath(resolvedSocket, *clientName); err != nil {
+			return fmt.Errorf("invalid --client-name %q: %w", *clientName, err)
+		}
+	}
+```
+
+(`clientrt.ResolvePath` is exported from `internal/runtime/client/persistence.go`, accessible via the existing `clientrt "github.com/framegrace/texelation/internal/runtime/client"` import.)
+
+- [ ] **Step 14.3: Locate ALL `clientrt.Options{}` construction sites**
 
 ```
 grep -n 'clientrt.Options{' cmd/texelation/main.go
@@ -2140,14 +2244,14 @@ For each, the new shape is:
 
 (Field names may vary slightly between the two sites — match the existing fields at each site.)
 
-- [ ] **Step 14.3: Run build**
+- [ ] **Step 14.4: Run build**
 
 ```
 go build ./cmd/texelation/
 ```
 Expected: clean build.
 
-- [ ] **Step 14.4: Verify both sites updated**
+- [ ] **Step 14.5: Verify both sites updated**
 
 ```
 grep -A4 'clientrt.Options{' cmd/texelation/main.go
@@ -2155,7 +2259,7 @@ grep -A4 'clientrt.Options{' cmd/texelation/main.go
 
 Expected: every `clientrt.Options{` literal contains `ClientName:`. If any one is missing, the flag is silently ignored in that mode.
 
-- [ ] **Step 14.5: Commit**
+- [ ] **Step 14.6: Commit**
 
 ```bash
 git add cmd/texelation/main.go
@@ -2171,7 +2275,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 **Files:**
 - Modify: `client/cmd/texel-client/main.go:32-44`
 
-- [ ] **Step 15.1: Register the flag and propagate**
+- [ ] **Step 15.1: Register the flag, validate early, propagate**
 
 In `client/cmd/texel-client/main.go`, replace the existing flag block (lines ~32-44):
 
@@ -2200,6 +2304,14 @@ with:
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// Plan D: validate --client-name early. The user explicitly opted
+	// into a named slot; silently disabling persistence later would be
+	// a UX trap.
+	if *clientName != "" {
+		if _, err := clientrt.ResolvePath(*socket, *clientName); err != nil {
+			return fmt.Errorf("invalid --client-name %q: %w", *clientName, err)
+		}
+	}
 	opts := clientrt.Options{
 		Socket:     *socket,
 		Reconnect:  *reconnect,
@@ -2208,6 +2320,8 @@ with:
 	}
 	return runClient(opts)
 ```
+
+(If `fmt` isn't already imported in this file, add `"fmt"` to the import block.)
 
 - [ ] **Step 15.2: Run build**
 
@@ -2352,10 +2466,11 @@ Append to `client_integration_test.go`:
 
 ```go
 // TestIntegration_StaleSessionFallsBackClean: a client persists a
-// sessionID, the server forgets it (eviction / restart), the client
-// reconnects with the stale ID, sees ErrSessionNotFound, wipes the
-// file, and reconnects fresh. Subsequent clean exit writes the
-// new sessionID.
+// sessionID, the server has no record of it (eviction / restart), the
+// client's simple.Connect fails on the unknown session, the retry path
+// in app.go wipes the file and connects fresh. Driving a viewport
+// change after the recovery forces persistence to write the file with
+// the freshly-allocated sessionID.
 func TestIntegration_StaleSessionFallsBackClean(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
@@ -2377,19 +2492,35 @@ func TestIntegration_StaleSessionFallsBackClean(t *testing.T) {
 		t.Fatalf("seed Save: %v", err)
 	}
 
-	// Connect a client; it should observe the rejection and wipe.
+	// Connect a client; the retry path in Task 11 wipes the stale file
+	// and reconnects fresh.
 	client := connectClient(t, socketPath, "test-slot")
 	defer client.Close()
-	// Allow connect + resume + retry to complete.
-	time.Sleep(200 * time.Millisecond)
 
-	// File should now hold the freshly-allocated sessionID, not 0xdeadbeef.
-	got, err := clientruntime.Load(statePath, socketPath)
-	if err != nil {
-		t.Fatalf("Load post-recovery: %v", err)
+	// Drive at least one viewport change so the Writer has something
+	// to flush. Without this, no persistSnapshot fires, no write happens,
+	// and the file stays absent (we'd be testing that we *failed* to
+	// rewrite the wiped file).
+	scrollPaneTo(t, client, 0, 1)
+
+	// Wait for the debounced Writer (250ms) plus a margin to flush.
+	// Polling is more robust than a fixed sleep — the file should
+	// appear within ~400ms in normal conditions.
+	deadline := time.Now().Add(2 * time.Second)
+	var got *clientruntime.ClientState
+	for time.Now().Before(deadline) {
+		state, err := clientruntime.Load(statePath, socketPath)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if state != nil {
+			got = state
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	if got == nil {
-		t.Fatalf("expected fresh state file after recovery, got nil")
+		t.Fatalf("expected fresh state file after recovery within 2s, got nil")
 	}
 	if got.SessionID == stale.SessionID {
 		t.Errorf("expected new sessionID after stale rejection, got the stale one")
