@@ -25,16 +25,15 @@
 | `internal/runtime/server/session.go` | Modify | Wrapper `Session.ApplyResume` signature gains `paneExists` parameter to match underlying type |
 | `internal/runtime/server/connection_handler.go` | Modify | Prune phantom paneIDs ONCE; pass pruned slice to both `ApplyResume` and `RestorePaneViewport` loop |
 | `internal/runtime/client/protocol_handler.go` | Modify | `readLoop` and `handleControlMessage` signatures change `*uint64` → `*atomic.Uint64`; bodies use `Load()`/`Store()` (Task 10 — pre-existing race fix) |
-| `internal/runtime/client/persistence.go` | **Create** | `ClientState` type, `Load`/`Save`/`Wipe`, `ResolvePath`, debounced `Writer` (with `WaitGroup`-based `Close`, throttled save-error logging, injectable `saver` for tests) |
-| `internal/runtime/client/persistence_test.go` | **Create** | Round-trip, atomic-replace, mismatch wipe, parse-error wipe, debounce coalescing, slow-save skip-if-busy, idempotent `Close`, Windows-reserved-name rejection |
+| `internal/runtime/client/persistence.go` | **Create** | `ClientState` type, `Load`/`Save`/`Wipe`, `ResolvePath`, `ValidateClientName` + `ErrInvalidClientName` (so flag-validation can blame name without mis-blaming env), debounced `Writer` (with `WaitGroup`-based `Close`, throttled save-error logging, injectable `saver` for tests) |
+| `internal/runtime/client/persistence_test.go` | **Create** | Round-trip, atomic-replace, mismatch wipe, parse-error wipe, debounce coalescing, slow-save skip-if-busy, idempotent `Close`, Windows-reserved-name rejection, multi-client isolation, stale-session wipe-and-replace |
 | `internal/runtime/client/app.go` | Modify | Replace zero-sessionID branch (lines 53-66 region) with load-from-disk; convert `lastSequence` to `atomic.Uint64`; install `Writer` + `flushFrame` hook; defer-close-via-closure; handle `ErrSessionNotFound` → wipe + retry. **No eager initial seed** — first viewport tick triggers first save |
 | `internal/runtime/client/app.go` | Modify | `Options` gains `ClientName string` |
 | `internal/runtime/client/client_state.go` | Modify | `clientState` struct gains `persistSnapshot func()` field |
 | `internal/runtime/client/viewport_tracker.go` | Modify | New `snapshotForPersistence` helper + single `state.persistSnapshot()` call at end of `flushFrame` |
 | `cmd/texelation/main.go` | Modify | Register `--client-name` flag; `TEXELATION_CLIENT_NAME` env fallback. **Both** `clientrt.Options{}` construction sites must include `ClientName` |
 | `client/cmd/texel-client/main.go` | Modify | Register `--client-name` flag; `TEXELATION_CLIENT_NAME` env fallback |
-| `internal/runtime/server/client_integration_test.go` | Modify | `TestIntegration_PersistedClientResumesViewport`, `TestIntegration_StaleSessionFallsBackClean`, `TestIntegration_MultiClientIsolation` |
-| `internal/runtime/server/client_integration_helpers_test.go` | **Create (optional)** | Shared helpers (`connectClient`, `scrollPaneTo`, `persistAndDisconnect`, `pollViewBottomIdx`) if any are >20 lines or used across all three tests; otherwise inline in `client_integration_test.go` |
+| `internal/runtime/server/resume_viewport_integration_test.go` | Modify | `TestIntegration_PersistedStateDrivesResumeRequest` — disk-roundtripped ClientState assembles into a `ResumeRequest` the server applies correctly. Uses existing `newMemHarness` pattern. |
 
 ---
 
@@ -359,6 +358,28 @@ Key points:
 - `sink, sinkOK := c.sink.(*DesktopSink)` is hoisted ONCE so the same predicate guard covers both the prune block and the subsequent RestorePaneViewport block.
 - Drop-count log uses `debugLog.Printf` (per existing project convention at line 137 of the same file) rather than `log.Printf`, since legitimate cross-restart drops shouldn't appear at info-level on every reconnect.
 - When sink is not a DesktopSink (test fakes), pruning is skipped — `viewportsToApply == request.PaneViewports` — and ApplyResume gets the unpruned set. This matches existing behavior; tests can opt into pruning by passing a real predicate to `ClientViewports.ApplyResume` directly.
+
+**Also in this step: collapse the third sink re-assertion at the snapshot-publish block.** The existing `MsgResumeRequest` case has a THIRD `if sink, ok := c.sink.(*DesktopSink); ok { ... }` block at around line 198 (after the `SnapshotProvider` block) that runs `pub.ResetDiffState()` + `sink.Publish()`. After the hoist, that inner re-assertion would shadow the outer `sink`. Replace it with the hoisted variable:
+
+```go
+// BEFORE (line ~198):
+if sink, ok := c.sink.(*DesktopSink); ok {
+    if pub := sink.Publisher(); pub != nil {
+        pub.ResetDiffState()
+    }
+    sink.Publish()
+}
+
+// AFTER:
+if sinkOK {
+    if pub := sink.Publisher(); pub != nil {
+        pub.ResetDiffState()
+    }
+    sink.Publish()
+}
+```
+
+The `Reset+Publish` ordering is documented as load-bearing in the existing comment block (lines 199-206); preserve that comment verbatim.
 
 - [ ] **Step 2.6: Update any other non-test call sites**
 
@@ -887,6 +908,24 @@ func ResolvePath(socketPath, clientName string) (string, error) {
 func socketHash(absSocketPath string) string {
 	h := sha256.Sum256([]byte(absSocketPath))
 	return hex.EncodeToString(h[:8]) // 16 hex chars
+}
+
+// ErrInvalidClientName is returned by ValidateClientName for any name
+// that fails the client-name rules. Callers can distinguish "user-input
+// is bad" from "environment is bad" (e.g., $HOME unreadable in
+// ResolvePath) and report the right thing.
+var ErrInvalidClientName = errors.New("persistence: invalid client name")
+
+// ValidateClientName runs the name rules in isolation (no path resolution,
+// no $HOME lookup, no socket hashing). Returns ErrInvalidClientName on
+// failure so callers in cmd/texelation and cmd/texel-client can wrap it
+// with a "invalid --client-name %q" message without misattributing
+// HOME-dir or socket errors to the user's flag value.
+func ValidateClientName(name string) error {
+	if !validClientName(name) {
+		return fmt.Errorf("%w: %q", ErrInvalidClientName, name)
+	}
+	return nil
 }
 
 // validClientName rejects path-traversal, shell-meta characters, hidden
@@ -2206,22 +2245,32 @@ Add the new flag adjacent to it:
 	clientName := fs.String("client-name", "", "Client identity slot for persistence (default: $TEXELATION_CLIENT_NAME or \"default\")")
 ```
 
-- [ ] **Step 14.2: Validate `--client-name` early; fail loudly on invalid**
+- [ ] **Step 14.2: Validate `--client-name` and `TEXELATION_CLIENT_NAME` early; fail loudly on invalid**
 
-Immediately after `fs.Parse(args)` returns and before the resolved-socket logic, validate the supplied client name. The user explicitly opted into a named slot by passing the flag — silently disabling persistence later (when ResolvePath rejects the name) would be a UX trap. Fail at flag-parse time with a clear error.
+After `fs.Parse(args)` returns, validate either the flag value (if set) or the env-var fallback (if the flag is empty but the env-var is set). The user explicitly opted into a named slot via either input; silently disabling persistence later would be a UX trap. Fail at startup with a clear error.
+
+We use `clientrt.ValidateClientName` (added in Task 5 above) rather than `clientrt.ResolvePath` so a HOME-dir lookup failure on a minimal container / sandboxed unit doesn't get blamed on the user's flag value:
 
 ```go
-	// Plan D: validate --client-name early so an invalid name (e.g.,
-	// Windows-reserved like "con") fails loudly here rather than
-	// silently disabling persistence at runtime.
+	// Plan D: validate --client-name (or $TEXELATION_CLIENT_NAME)
+	// early. Either input expresses the user's intent to use a named
+	// persistence slot; silently disabling persistence later when
+	// ResolvePath rejects the name is a UX trap. ValidateClientName
+	// only checks the name itself — it does not touch $HOME or the
+	// socket — so failures here are unambiguously "the user-supplied
+	// name is invalid", not "your environment is misconfigured."
 	if *clientName != "" {
-		if _, err := clientrt.ResolvePath(resolvedSocket, *clientName); err != nil {
+		if err := clientrt.ValidateClientName(*clientName); err != nil {
 			return fmt.Errorf("invalid --client-name %q: %w", *clientName, err)
+		}
+	} else if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" {
+		if err := clientrt.ValidateClientName(envName); err != nil {
+			return fmt.Errorf("invalid $%s %q: %w", clientrt.ClientNameEnvVar, envName, err)
 		}
 	}
 ```
 
-(`clientrt.ResolvePath` is exported from `internal/runtime/client/persistence.go`, accessible via the existing `clientrt "github.com/framegrace/texelation/internal/runtime/client"` import.)
+(`clientrt.ValidateClientName` and `clientrt.ClientNameEnvVar` are exported from `internal/runtime/client/persistence.go`, accessible via the existing `clientrt "github.com/framegrace/texelation/internal/runtime/client"` import. `os` and `fmt` should already be imported in `cmd/texelation/main.go`.)
 
 - [ ] **Step 14.3: Locate ALL `clientrt.Options{}` construction sites**
 
@@ -2231,18 +2280,18 @@ grep -n 'clientrt.Options{' cmd/texelation/main.go
 
 Expected: at least two sites — one for `--client-only` mode (around line 115) and one for the default unified mode (around line 130). Update each to include `ClientName: *clientName` in the struct literal.
 
-For each, the new shape is:
+For each, the new shape adds `ClientName: *clientName` to the existing struct literal. Match each site's existing field names — the file uses `*socketPath` (not `resolvedSocket`) and `*panicLog` (or `*panicLogPath`), so don't introduce undefined identifiers. Example:
 
 ```go
 	opts := clientrt.Options{
-		Socket:     resolvedSocket,
-		Reconnect:  *reconnect,
-		PanicLog:   *panicLog,
-		ClientName: *clientName,
+		Socket:     *socketPath,           // existing field — match what's already there
+		Reconnect:  *reconnect,            // existing field
+		PanicLog:   *panicLog,             // existing field
+		ClientName: *clientName,           // NEW from Plan D
 	}
 ```
 
-(Field names may vary slightly between the two sites — match the existing fields at each site.)
+(Field shape varies slightly between the two sites — preserve each site's existing fields verbatim and only add `ClientName: *clientName`.)
 
 - [ ] **Step 14.4: Run build**
 
@@ -2304,12 +2353,18 @@ with:
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	// Plan D: validate --client-name early. The user explicitly opted
-	// into a named slot; silently disabling persistence later would be
-	// a UX trap.
+	// Plan D: validate --client-name (or $TEXELATION_CLIENT_NAME)
+	// early. Either input expresses the user's intent to use a named
+	// slot; silently disabling persistence later is a UX trap.
+	// ValidateClientName checks only the name — never touches $HOME
+	// or the socket — so failures unambiguously blame the right input.
 	if *clientName != "" {
-		if _, err := clientrt.ResolvePath(*socket, *clientName); err != nil {
+		if err := clientrt.ValidateClientName(*clientName); err != nil {
 			return fmt.Errorf("invalid --client-name %q: %w", *clientName, err)
+		}
+	} else if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" {
+		if err := clientrt.ValidateClientName(envName); err != nil {
+			return fmt.Errorf("invalid $%s %q: %w", clientrt.ClientNameEnvVar, envName, err)
 		}
 	}
 	opts := clientrt.Options{
@@ -2321,7 +2376,7 @@ with:
 	return runClient(opts)
 ```
 
-(If `fmt` isn't already imported in this file, add `"fmt"` to the import block.)
+(Add `"fmt"` and `"os"` to the import block if not already present.)
 
 - [ ] **Step 15.2: Run build**
 
@@ -2358,172 +2413,211 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ## Phase 5 — Integration Tests
 
-### Notes for the integration tests below
+### Harness reality check
 
-The three tests in this phase need a few helpers (`connectClient`, `scrollPaneTo`, `persistAndDisconnect`, `pollViewBottomIdx`) plus access to a daemon harness (likely `newIntegrationServer` from existing tests). Before writing the tests:
+The existing `*_integration_test.go` files in `internal/runtime/server/` use a memconn-based pattern (`newMemHarness` from `internal/runtime/server/testutil`) that:
 
-1. Identify the existing harness in `internal/runtime/server/client_integration_test.go` and other `*_integration_test.go` files. Match its idioms; do not invent a new harness shape.
-2. **Helper placement:** if helpers are >20 lines or shared across all three tests, put them in a NEW file `internal/runtime/server/client_integration_helpers_test.go` (build tag-free; it's a `_test.go` so it's already excluded from production builds). If they're tiny / test-specific, keep them inline at the top of `client_integration_test.go`. Do not create unnamed sub-packages.
-3. Each test's `t.Setenv("XDG_STATE_HOME", t.TempDir())` isolates persistence per-test — no shared global state between integration tests.
+- Spins up a `Manager` + `Session` over `net.Pipe`.
+- Constructs `protocol.ResumeRequest` payloads manually and pushes them via `h.writeFrame(...)`.
+- Asserts server-side behavior via `h.AwaitRow(...)`, `h.fakeApp.FeedRows(...)`, etc.
 
-### Task 16: `TestIntegration_PersistedClientResumesViewport`
+**There is NO harness that runs `clientruntime.Run` with a real screen, render loop, and `flushFrame` driver.** Building one would be substantial new work — out of scope for Plan D Layer 1. The realistic Phase 5 leans on:
+
+1. **Unit tests of the persistence module** (Tasks 4-8) — cover Save / Load / Wipe / Writer mechanically.
+2. **Server-side integration tests using `newMemHarness`** — verify that disk-roundtripped state assembles into a `ResumeRequest` the server processes correctly, that phantom-pane pruning fires end-to-end, and that an evicted session is rejected cleanly.
+3. **Manual end-to-end verification** (Task 20) — the only place the full client → daemon → resume → screen path is exercised, and it's done by a human.
+
+This phasing matches the spec's pragmatic stance (Layer 1 client persistence) without inventing a new test harness. Tasks 16-18 below reflect that.
+
+Each test's `t.Setenv("XDG_STATE_HOME", t.TempDir())` isolates persistence per-test — no shared global state.
+
+### Task 16: `TestIntegration_PersistedStateDrivesResumeRequest`
+
+This integration test verifies that disk-roundtripped state assembles into a `ResumeRequest` that the server applies correctly. It does NOT exercise `clientruntime.Run` — that's covered by manual e2e in Task 20. The mechanically-checkable boundary is: persistence module → wire payload → server applies viewports.
 
 **Files:**
-- Test: `internal/runtime/server/client_integration_test.go`
-- Test (possibly new, see notes above): `internal/runtime/server/client_integration_helpers_test.go`
+- Test: `internal/runtime/server/resume_viewport_integration_test.go` (extends the existing Plan B test file with the same harness pattern).
 
-- [ ] **Step 16.1: Identify the harness**
+- [ ] **Step 16.1: Write the test using `newMemHarness`**
 
-```
-grep -n 'func TestIntegration_' internal/runtime/server/client_integration_test.go | head -5
-```
-
-The harness from Plan A/B (`newIntegrationServer` or similar) is what we extend. Match its setup pattern.
-
-- [ ] **Step 16.2: Write the failing test**
-
-Append to `client_integration_test.go`:
+Append to `internal/runtime/server/resume_viewport_integration_test.go`:
 
 ```go
-// TestIntegration_PersistedClientResumesViewport verifies the
-// end-to-end Plan D persistence path: client #1 connects, scrolls
-// back, persists state, exits cleanly. Client #2 (a different
-// process simulated by a fresh runtime) loads the persisted state
-// and lands at the same viewport.
-func TestIntegration_PersistedClientResumesViewport(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", dir)
+// TestIntegration_PersistedStateDrivesResumeRequest verifies the
+// disk → wire → server boundary of Plan D persistence. We construct
+// a ClientState in memory, Save+Load it through persistence.go (so
+// JSON encoding/decoding is exercised), build a ResumeRequest from
+// the loaded fields, push it through newMemHarness, and assert the
+// server applied the resumed viewport correctly.
+//
+// This stops short of running a full clientruntime.Run; that path
+// is covered by Task 20's manual end-to-end verification. The test
+// here proves the wire shape is consistent end-to-end.
+func TestIntegration_PersistedStateDrivesResumeRequest(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
-	srv, cleanup := newIntegrationServer(t)
-	defer cleanup()
+	h := newMemHarness(t, 80, 24)
 
-	socketPath := srv.SocketPath()
+	// Feed 200 rows so a scrolled-back gid=50 is in range.
+	lines := make([]string, 200)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	h.fakeApp.FeedRows(0, lines)
 
-	// --- Client #1: connect, scroll, persist, exit ---
-	client1 := connectClient(t, socketPath, "test-slot") // helper that mirrors clientruntime.Run minimally
-	scrollPaneTo(t, client1, /*paneIdx*/ 0, /*viewBottomIdx*/ 50)
-	persistAndDisconnect(t, client1)
-
-	// File should exist with the scrolled-back position.
-	statePath, err := clientruntime.ResolvePath(socketPath, "test-slot")
+	// Build the ClientState a real client would have persisted: it
+	// holds the same sessionID/paneID the harness allocated, plus a
+	// scrolled-back PaneViewport.
+	socketPath := "/tmp/test-d-rrq.sock" // sanity-check value; not actually opened
+	statePath, err := clientruntime.ResolvePath(socketPath, "default")
 	if err != nil {
 		t.Fatalf("ResolvePath: %v", err)
 	}
-	state, err := clientruntime.Load(statePath, socketPath)
-	if err != nil || state == nil {
-		t.Fatalf("expected persisted state, got err=%v state=%v", err, state)
-	}
-	if len(state.PaneViewports) == 0 {
-		t.Fatalf("expected non-empty PaneViewports")
+	want := clientruntime.ClientState{
+		SocketPath:   socketPath,
+		SessionID:    h.sessionID(),
+		LastSequence: 0,
+		WrittenAt:    time.Now().UTC(),
+		PaneViewports: []protocol.PaneViewportState{
+			{
+				PaneID:         h.paneID,
+				AltScreen:      false,
+				AutoFollow:     false,
+				ViewBottomIdx:  50,
+				WrapSegmentIdx: 0,
+				ViewportRows:   24,
+				ViewportCols:   80,
+			},
+		},
 	}
 
-	// --- Client #2: fresh runtime, loads file, resumes ---
-	client2 := connectClient(t, socketPath, "test-slot") // same slot → loads file
-	defer client2.Close()
-	gotBottom := pollViewBottomIdx(t, client2, 0, 2*time.Second)
-	if gotBottom != 50 {
-		t.Errorf("expected viewBottomIdx=50 after resume, got %d", gotBottom)
+	// Save + Load — exercises JSON encode/decode round-trip.
+	if err := clientruntime.Save(statePath, &want); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
+	got, err := clientruntime.Load(statePath, socketPath)
+	if err != nil || got == nil {
+		t.Fatalf("Load: state=%v err=%v", got, err)
+	}
+
+	// Construct the ResumeRequest as app.go would, from the loaded state.
+	resume := protocol.ResumeRequest{
+		SessionID:     got.SessionID,
+		LastSequence:  got.LastSequence,
+		PaneViewports: got.PaneViewports,
+	}
+	payload, err := protocol.EncodeResumeRequest(resume)
+	if err != nil {
+		t.Fatalf("encode resume: %v", err)
+	}
+	h.writeFrame(protocol.MsgResumeRequest, payload, h.sessionID())
+
+	// Server should apply the resumed viewport — render buffer ends at gid 50.
+	// Same assertion as the existing TestIntegration_ResumeHonorsPaneViewport
+	// (which uses an in-memory-built request); this one proves the loaded-
+	// from-disk shape is wire-equivalent.
+	h.AwaitRow(h.paneID, 48, 2*time.Second)
 }
 ```
 
-(Helper function names may differ; adapt to the harness already used in this file. The test pattern is what matters: scroll → persist → load → assert.)
-
-- [ ] **Step 16.3: Run test to verify it fails (or skips)**
+- [ ] **Step 16.2: Run test to verify it passes**
 
 ```
-go test ./internal/runtime/server/ -run TestIntegration_PersistedClientResumesViewport -v
+go test -tags=integration ./internal/runtime/server/ -run TestIntegration_PersistedStateDrivesResumeRequest -v
 ```
-Expected: FAIL (helpers undefined) or compile error. Resolve by either adding the helpers or restructuring against existing helper names.
+Expected: PASS. (If it fails, the failure is in serialization or in the protocol layer, not in the daemon harness — debug accordingly.)
 
-- [ ] **Step 16.4: Implement helpers if needed**
-
-Implement `connectClient`, `scrollPaneTo`, `persistAndDisconnect`, `pollViewBottomIdx` if they don't exist. Reuse existing patterns from neighboring tests; do not invent new harness shapes.
-
-- [ ] **Step 16.5: Run test to verify it passes**
-
-```
-go test ./internal/runtime/server/ -run TestIntegration_PersistedClientResumesViewport -v
-```
-Expected: PASS.
-
-- [ ] **Step 16.6: Commit**
+- [ ] **Step 16.3: Commit**
 
 ```bash
-git add internal/runtime/server/client_integration_test.go
-git commit -m "Integration: persisted client resumes scrolled-back viewport (#199, Plan D)
+git add internal/runtime/server/resume_viewport_integration_test.go
+git commit -m "Integration: disk-roundtripped state drives ResumeRequest (#199, Plan D)
+
+Verifies the persistence-module-to-wire boundary: a Save+Load round
+trip produces a ResumeRequest the server applies correctly. Stops
+short of a full clientruntime.Run; that's manual e2e (Task 20).
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 17: `TestIntegration_StaleSessionFallsBackClean`
+### Task 17: `TestUnit_StaleSessionFallsBackClean`
 
-- [ ] **Step 17.1: Write the failing test**
+The client-side wipe-and-retry path in Task 11 is the load-bearing recovery mechanic. Manual e2e (Task 20) exercises it end-to-end against a real daemon. For automated coverage, we verify the persistence module's contribution: parsing a stale state, recognizing the rejection signal, wiping cleanly, and accepting a fresh write afterward. The actual `simple.Connect` retry call lives in `app.go` and is exercised by Task 20; here we test the disk-side mechanic in isolation.
 
-Append to `client_integration_test.go`:
+**Files:**
+- Test: `internal/runtime/client/persistence_test.go`
+
+- [ ] **Step 17.1: Write the test**
+
+Append to `persistence_test.go`:
 
 ```go
-// TestIntegration_StaleSessionFallsBackClean: a client persists a
-// sessionID, the server has no record of it (eviction / restart), the
-// client's simple.Connect fails on the unknown session, the retry path
-// in app.go wipes the file and connects fresh. Driving a viewport
-// change after the recovery forces persistence to write the file with
-// the freshly-allocated sessionID.
-func TestIntegration_StaleSessionFallsBackClean(t *testing.T) {
+// TestStaleSessionWipeAndReplace verifies the disk-side mechanic of
+// Plan D's stale-session recovery: a stale ClientState file is
+// loadable, can be wiped cleanly, and a fresh state can be written
+// over the wiped path without leftover artifacts.
+//
+// The actual server-side rejection (simple.Connect returning err on
+// an unknown sessionID) is exercised by manual e2e in Task 20;
+// here we just lock the disk-layer contract.
+func TestStaleSessionWipeAndReplace(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", dir)
+	path := filepath.Join(dir, "state.json")
+	socketPath := "/tmp/test-stale.sock"
 
-	srv, cleanup := newIntegrationServer(t)
-	defer cleanup()
-	socketPath := srv.SocketPath()
-	statePath, _ := clientruntime.ResolvePath(socketPath, "test-slot")
-
-	// Seed a state file with a fabricated, never-existed sessionID.
-	stale := clientruntime.ClientState{
+	// Seed a stale state file (pretend a previous run left it behind
+	// pointing at a session the server now rejects).
+	stale := ClientState{
 		SocketPath:    socketPath,
 		SessionID:     [16]byte{0xde, 0xad, 0xbe, 0xef},
 		LastSequence:  99,
 		WrittenAt:     time.Now().UTC(),
 		PaneViewports: nil,
 	}
-	if err := clientruntime.Save(statePath, &stale); err != nil {
+	if err := Save(path, &stale); err != nil {
 		t.Fatalf("seed Save: %v", err)
 	}
 
-	// Connect a client; the retry path in Task 11 wipes the stale file
-	// and reconnects fresh.
-	client := connectClient(t, socketPath, "test-slot")
-	defer client.Close()
-
-	// Drive at least one viewport change so the Writer has something
-	// to flush. Without this, no persistSnapshot fires, no write happens,
-	// and the file stays absent (we'd be testing that we *failed* to
-	// rewrite the wiped file).
-	scrollPaneTo(t, client, 0, 1)
-
-	// Wait for the debounced Writer (250ms) plus a margin to flush.
-	// Polling is more robust than a fixed sleep — the file should
-	// appear within ~400ms in normal conditions.
-	deadline := time.Now().Add(2 * time.Second)
-	var got *clientruntime.ClientState
-	for time.Now().Before(deadline) {
-		state, err := clientruntime.Load(statePath, socketPath)
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if state != nil {
-			got = state
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	// Step 1: Load returns the stale state successfully — the file
+	// is well-formed; the rejection comes from the server side.
+	loaded, err := Load(path, socketPath)
+	if err != nil || loaded == nil {
+		t.Fatalf("expected stale state to load, got err=%v state=%v", err, loaded)
 	}
-	if got == nil {
-		t.Fatalf("expected fresh state file after recovery within 2s, got nil")
+	if loaded.SessionID != stale.SessionID {
+		t.Errorf("loaded SessionID mismatch")
+	}
+
+	// Step 2: Wipe removes the file (the recovery path in app.go
+	// calls this immediately after observing the connect rejection).
+	if err := Wipe(path); err != nil {
+		t.Fatalf("Wipe: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected file removed after Wipe, stat err=%v", err)
+	}
+
+	// Step 3: A fresh state writes cleanly over the wiped path.
+	fresh := ClientState{
+		SocketPath:   socketPath,
+		SessionID:    [16]byte{0xfe, 0xed, 0xfa, 0xce},
+		LastSequence: 0,
+		WrittenAt:    time.Now().UTC(),
+	}
+	if err := Save(path, &fresh); err != nil {
+		t.Fatalf("post-wipe Save: %v", err)
+	}
+	got, err := Load(path, socketPath)
+	if err != nil || got == nil {
+		t.Fatalf("post-wipe Load: state=%v err=%v", got, err)
 	}
 	if got.SessionID == stale.SessionID {
-		t.Errorf("expected new sessionID after stale rejection, got the stale one")
+		t.Errorf("post-wipe state still holds stale sessionID")
+	}
+	if got.SessionID != fresh.SessionID {
+		t.Errorf("post-wipe state SessionID mismatch")
 	}
 }
 ```
@@ -2531,63 +2625,105 @@ func TestIntegration_StaleSessionFallsBackClean(t *testing.T) {
 - [ ] **Step 17.2: Run test**
 
 ```
-go test ./internal/runtime/server/ -run TestIntegration_StaleSessionFallsBackClean -v
+go test ./internal/runtime/client/ -run TestStaleSessionWipeAndReplace -v
 ```
-Expected: PASS (or fail-and-fix until it passes).
+Expected: PASS.
 
 - [ ] **Step 17.3: Commit**
 
 ```bash
-git add internal/runtime/server/client_integration_test.go
-git commit -m "Integration: stale sessionID falls back cleanly (#199, Plan D)
+git add internal/runtime/client/persistence_test.go
+git commit -m "Test: stale sessionID wipe-and-replace mechanic (#199, Plan D)
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 18: `TestIntegration_MultiClientIsolation`
+### Task 18: Multi-client isolation as a persistence-layer test
+
+Multi-client isolation is a property of the persistence module's path resolution, not a server-side runtime invariant. Two clients with different `--client-name` end up at distinct file paths via `ResolvePath`; each `Save`/`Load` operates only on its own path. Pure unit-test territory.
+
+**Files:**
+- Test: `internal/runtime/client/persistence_test.go`
 
 - [ ] **Step 18.1: Write the test**
 
+Append to `persistence_test.go`:
+
 ```go
-// TestIntegration_MultiClientIsolation: two clients with different
-// --client-name against the same socket maintain independent state.
-// Scrolling client A does not affect client B's persisted file.
-func TestIntegration_MultiClientIsolation(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", dir)
+// TestMultiClientIsolation verifies that two distinct --client-name
+// values against the same socket produce isolated state files: writing
+// one does not affect the other, and each loads back independently.
+//
+// This is the disk-layer invariant; full multi-client e2e (two
+// texelations, both running, one daemon) is verified manually in Task 20.
+func TestMultiClientIsolation(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	socketPath := "/tmp/test-multiclient.sock"
 
-	srv, cleanup := newIntegrationServer(t)
-	defer cleanup()
-	socketPath := srv.SocketPath()
-
-	a := connectClient(t, socketPath, "left")
-	b := connectClient(t, socketPath, "right")
-
-	scrollPaneTo(t, a, 0, 100)
-	scrollPaneTo(t, b, 0, 200)
-
-	persistAndDisconnect(t, a)
-	persistAndDisconnect(t, b)
-
-	pathA, _ := clientruntime.ResolvePath(socketPath, "left")
-	pathB, _ := clientruntime.ResolvePath(socketPath, "right")
-
-	stateA, _ := clientruntime.Load(pathA, socketPath)
-	stateB, _ := clientruntime.Load(pathB, socketPath)
-	if stateA == nil || stateB == nil {
-		t.Fatalf("expected both files: A=%v B=%v", stateA, stateB)
+	pathLeft, err := ResolvePath(socketPath, "left")
+	if err != nil {
+		t.Fatalf("ResolvePath left: %v", err)
 	}
-	if stateA.SessionID == stateB.SessionID {
-		t.Errorf("expected distinct sessionIDs, got identical")
+	pathRight, err := ResolvePath(socketPath, "right")
+	if err != nil {
+		t.Fatalf("ResolvePath right: %v", err)
 	}
-	// Each holds its own scrolled-back position.
-	if stateA.PaneViewports[0].ViewBottomIdx != 100 {
-		t.Errorf("client A: viewBottomIdx %d != 100", stateA.PaneViewports[0].ViewBottomIdx)
+	if pathLeft == pathRight {
+		t.Fatalf("expected distinct paths, got %q == %q", pathLeft, pathRight)
 	}
-	if stateB.PaneViewports[0].ViewBottomIdx != 200 {
-		t.Errorf("client B: viewBottomIdx %d != 200", stateB.PaneViewports[0].ViewBottomIdx)
+
+	stateLeft := ClientState{
+		SocketPath:   socketPath,
+		SessionID:    [16]byte{0xa},
+		LastSequence: 100,
+		WrittenAt:    time.Now().UTC(),
+	}
+	stateRight := ClientState{
+		SocketPath:   socketPath,
+		SessionID:    [16]byte{0xb},
+		LastSequence: 200,
+		WrittenAt:    time.Now().UTC(),
+	}
+
+	if err := Save(pathLeft, &stateLeft); err != nil {
+		t.Fatalf("Save left: %v", err)
+	}
+	if err := Save(pathRight, &stateRight); err != nil {
+		t.Fatalf("Save right: %v", err)
+	}
+
+	gotLeft, err := Load(pathLeft, socketPath)
+	if err != nil || gotLeft == nil {
+		t.Fatalf("Load left: state=%v err=%v", gotLeft, err)
+	}
+	gotRight, err := Load(pathRight, socketPath)
+	if err != nil || gotRight == nil {
+		t.Fatalf("Load right: state=%v err=%v", gotRight, err)
+	}
+
+	if gotLeft.SessionID != stateLeft.SessionID {
+		t.Errorf("left SessionID mismatch: got %v want %v", gotLeft.SessionID, stateLeft.SessionID)
+	}
+	if gotRight.SessionID != stateRight.SessionID {
+		t.Errorf("right SessionID mismatch: got %v want %v", gotRight.SessionID, stateRight.SessionID)
+	}
+	if gotLeft.SessionID == gotRight.SessionID {
+		t.Errorf("expected distinct SessionIDs across clients")
+	}
+	if gotLeft.LastSequence != 100 || gotRight.LastSequence != 200 {
+		t.Errorf("LastSequence cross-contamination: left=%d right=%d", gotLeft.LastSequence, gotRight.LastSequence)
+	}
+
+	// Overwriting one slot must not affect the other.
+	stateLeft.LastSequence = 999
+	if err := Save(pathLeft, &stateLeft); err != nil {
+		t.Fatalf("Save left overwrite: %v", err)
+	}
+	gotRightAgain, _ := Load(pathRight, socketPath)
+	if gotRightAgain.LastSequence != 200 {
+		t.Errorf("right state corrupted by left overwrite: LastSequence %d != 200", gotRightAgain.LastSequence)
 	}
 }
 ```
@@ -2595,15 +2731,15 @@ func TestIntegration_MultiClientIsolation(t *testing.T) {
 - [ ] **Step 18.2: Run test**
 
 ```
-go test ./internal/runtime/server/ -run TestIntegration_MultiClientIsolation -v
+go test ./internal/runtime/client/ -run TestMultiClientIsolation -v
 ```
 Expected: PASS.
 
 - [ ] **Step 18.3: Commit**
 
 ```bash
-git add internal/runtime/server/client_integration_test.go
-git commit -m "Integration: --client-name isolates persistence per client (#199, Plan D)
+git add internal/runtime/client/persistence_test.go
+git commit -m "Test: multi-client persistence isolation by --client-name (#199, Plan D)
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
