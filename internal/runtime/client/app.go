@@ -52,16 +52,60 @@ func Run(opts Options) error {
 	}
 
 	simple := client.NewSimpleClient(opts.Socket)
+
+	// Plan D: load persisted client state if any. Failures (missing,
+	// parse error, mismatch) all yield (nil, nil) and we proceed as
+	// fresh.
+	statePath, statePathErr := ResolvePath(opts.Socket, opts.ClientName)
+	if statePathErr != nil {
+		log.Printf("persistence: path resolution failed (%v); running without persistence", statePathErr)
+	}
+	var loadedState *ClientState
+	if statePath != "" {
+		ls, err := Load(statePath, opts.Socket)
+		if err != nil {
+			log.Printf("persistence: load failed (%v); running fresh", err)
+		} else {
+			loadedState = ls
+		}
+	}
+
 	var sessionID [16]byte
-	if !opts.Reconnect {
-		sessionID = [16]byte{}
+	if loadedState != nil {
+		sessionID = loadedState.SessionID
 	}
 
 	accept, conn, err := simple.Connect(&sessionID)
+	if err != nil && loadedState != nil {
+		// We sent a non-zero sessionID from disk and Connect failed.
+		// The dominant cause is a stale sessionID: the server has
+		// evicted the session (or the daemon was restarted without
+		// Plan D2 persistence). Wipe the stale state and retry fresh
+		// with a zero sessionID.
+		//
+		// We don't try to disambiguate stale-session from transient
+		// network failure — retrying once with zero ID is cheap and
+		// the second failure (if there is one) surfaces below as the
+		// terminal connect error.
+		log.Printf("persistence: connect with persisted sessionID failed (%v); wiping state file and retrying fresh", err)
+		if statePath != "" {
+			if werr := Wipe(statePath); werr != nil {
+				log.Printf("persistence: wipe failed (%v); next start may repeat this rejection", werr)
+			}
+		}
+		loadedState = nil
+		sessionID = [16]byte{}
+		accept, conn, err = simple.Connect(&sessionID)
+	}
 	if err != nil {
 		return fmt.Errorf("connect failed: %w", err)
 	}
-	defer conn.Close()
+	// Closure form so the deferred Close picks up any subsequent
+	// reassignment of conn (none today, but defends against future
+	// re-connect logic). Drop-in replacement for the older
+	// `defer conn.Close()` shape.
+	defer func() { conn.Close() }()
+
 	var writeMu sync.Mutex
 
 	debuglog.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
