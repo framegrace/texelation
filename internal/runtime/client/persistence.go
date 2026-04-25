@@ -266,3 +266,61 @@ func Save(filePath string, state *ClientState) error {
 	}
 	return nil
 }
+
+// Load reads ClientState from filePath. Returns:
+//   - (nil, nil) if file is missing — caller treats as fresh client.
+//   - (nil, nil) after wiping the file if parse fails or socketPath
+//     doesn't match — corrupt or stale-from-different-daemon, no
+//     auto-migration (project has no back-compat constraint).
+//   - (state, nil) on a valid load.
+//   - (nil, err) only on disk-level errors that prevent recovery
+//     (e.g., permission denied on Stat).
+//
+// Wipe failures inside the recovery branches are logged but not
+// propagated — Load's caller has no useful action to take, but a wipe
+// failure indicates filesystem trouble that the user deserves a
+// diagnostic for. (Without the log, Load → wipe-fails → next start
+// hits the same parse error → wipe-fails ad infinitum, silently.)
+func Load(filePath, expectedSocketPath string) (*ClientState, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("persistence: read: %w", err)
+	}
+
+	var s ClientState
+	if err := json.Unmarshal(data, &s); err != nil {
+		// Corrupt; wipe and treat as fresh. Warn-level: suggests the
+		// file was corrupted (process kill mid-write on a non-atomic
+		// filesystem, or hand-edited).
+		if werr := Wipe(filePath); werr != nil {
+			log.Printf("persistence: parse failed (%v); wipe also failed (%v); will retry on next start", err, werr)
+		} else {
+			log.Printf("persistence: parse failed (%v); state file wiped, starting fresh", err)
+		}
+		return nil, nil
+	}
+
+	if s.SocketPath != expectedSocketPath {
+		// Stale from a different daemon; wipe and treat as fresh.
+		// Info-level: this is expected when a user's socket path
+		// changes (e.g., dev rebuild with a different XDG_RUNTIME_DIR).
+		if werr := Wipe(filePath); werr != nil {
+			log.Printf("persistence: socketPath mismatch (file=%q expected=%q); wipe failed (%v)", s.SocketPath, expectedSocketPath, werr)
+		} else {
+			log.Printf("persistence: socketPath mismatch (file=%q expected=%q); state file wiped", s.SocketPath, expectedSocketPath)
+		}
+		return nil, nil
+	}
+	return &s, nil
+}
+
+// Wipe removes the state file. Idempotent.
+func Wipe(filePath string) error {
+	if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("persistence: wipe: %w", err)
+	}
+	return nil
+}

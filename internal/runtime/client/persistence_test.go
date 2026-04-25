@@ -3,6 +3,7 @@ package clientruntime
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,5 +199,76 @@ func TestSave_OverwritesExisting(t *testing.T) {
 	_ = json.Unmarshal(data, &got)
 	if got.SessionID != second.SessionID {
 		t.Errorf("expected second state, got first")
+	}
+}
+
+func TestLoad_MissingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nope.json")
+	got, err := Load(path, "/tmp/x.sock")
+	if err != nil {
+		t.Fatalf("Load on missing file should succeed, got %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil state on missing file, got %+v", got)
+	}
+}
+
+func TestLoad_SocketMismatchWipes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	state := ClientState{SocketPath: "/tmp/a.sock", SessionID: [16]byte{1}, LastSequence: 1, WrittenAt: time.Now()}
+	if err := Save(path, &state); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+
+	got, err := Load(path, "/tmp/b.sock") // different socket
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got != nil {
+		t.Errorf("mismatch should yield nil state")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("file should be wiped on mismatch, stat err=%v", err)
+	}
+}
+
+func TestLoad_ParseErrorWipes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := Load(path, "/tmp/x.sock")
+	if err != nil {
+		t.Fatalf("Load should swallow parse errors, got %v", err)
+	}
+	if got != nil {
+		t.Errorf("parse error should yield nil state")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("file should be wiped on parse error")
+	}
+}
+
+func TestLoad_HappyPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	want := ClientState{SocketPath: "/tmp/x.sock", SessionID: [16]byte{0xaa}, LastSequence: 7, WrittenAt: time.Now()}
+	if err := Save(path, &want); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := Load(path, "/tmp/x.sock")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected non-nil state")
+	}
+	if got.SessionID != want.SessionID || got.LastSequence != want.LastSequence {
+		t.Errorf("round-trip mismatch")
 	}
 }
