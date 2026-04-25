@@ -12,6 +12,15 @@
 **Branch:** `feature/issue-199-plan-d-persistence` (off main, clean)
 **Plan order:** Server-side carry-forwards (Phase 1) → persistence module (Phase 2) → app.go integration (Phase 3) → flag wiring (Phase 4) → integration tests (Phase 5) → verification (Phase 6).
 
+**Task ordering hint:** Tasks 10, 11, 12, 13 must apply in numeric order. Task 10 converts `lastSequence` to `atomic.Uint64`; Tasks 12 and 13 use the atomic methods. Out-of-order application breaks compilation.
+
+## Known limitations (out of Plan D scope; documented for handoff to D2/F)
+
+- **Server-side session leak on stale-Connect retry.** When a client wipes a stale sessionID and retries with a fresh one, the server has no signal to remove the original session record from `Manager.sessions`. The orphan accumulates until daemon restart. `manager.go` has no auto-eviction on idle today (verified by review); fixing this is properly the responsibility of Plan D2 (server-side persistence + lifecycle) or a separate cleanup PR. Plan D acknowledges the leak rather than ignoring it.
+- **Client-side `simple.Connect` retry path is exercised only by manual e2e (Task 20).** Adding automated coverage requires either a `connector` injection seam in `clientruntime.Run` or a fake-server harness — both substantial. The retry path is ~10 straight-line lines of code with an obvious manual-failure mode (client never reconnects after daemon eviction); accepted gap.
+- **Wipe-failure logging during Load is not regression-tested.** The "log when both parse fails AND wipe also fails" branch in `Load` (Task 7) is exercised only by manual operator finding (read-only filesystem, etc.). No automated test asserts the log line fires; future refactors could silently drop it. Worth knowing if you debug "user reports broken-state-file but daemon logs say nothing."
+- **User-facing documentation update.** `--client-name`, `$TEXELATION_CLIENT_NAME`, and the `~/.local/state/texelation/client/` file location are user-visible surfaces but `docs/CLIENT_SERVER_ARCHITECTURE.md` and similar are NOT updated by this plan. Deferred to a follow-up commit or Plan F's UX work; flag-help text covers the immediate "what does this do" question.
+
 ---
 
 ## File Structure
@@ -852,6 +861,7 @@ func TestResolvePath_RejectsInvalidNames(t *testing.T) {
 		"nul", "aux", "prn",
 		"com1", "COM9", "lpt5",
 		"name with spaces", "with$dollar", "with;semi",
+		"\x00", "\x00bad", "bad\x00",         // NULL byte injection (Go os.Open historically truncates here)
 	}
 	for _, name := range cases {
 		if _, err := ResolvePath("/run/x.sock", name); err == nil {
@@ -2263,6 +2273,13 @@ We use `clientrt.ValidateClientName` (added in Task 5 above) rather than `client
 		if err := clientrt.ValidateClientName(*clientName); err != nil {
 			return fmt.Errorf("invalid --client-name %q: %w", *clientName, err)
 		}
+		// Audible warning when the flag silently overrides a non-empty
+		// env var — otherwise a user with $TEXELATION_CLIENT_NAME set
+		// in their shell rc could silently end up using a different
+		// slot than they expect after typing a one-off --client-name.
+		if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" && envName != *clientName {
+			log.Printf("note: --client-name=%q overrides $%s=%q", *clientName, clientrt.ClientNameEnvVar, envName)
+		}
 	} else if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" {
 		if err := clientrt.ValidateClientName(envName); err != nil {
 			return fmt.Errorf("invalid $%s %q: %w", clientrt.ClientNameEnvVar, envName, err)
@@ -2270,7 +2287,7 @@ We use `clientrt.ValidateClientName` (added in Task 5 above) rather than `client
 	}
 ```
 
-(`clientrt.ValidateClientName` and `clientrt.ClientNameEnvVar` are exported from `internal/runtime/client/persistence.go`, accessible via the existing `clientrt "github.com/framegrace/texelation/internal/runtime/client"` import. `os` and `fmt` should already be imported in `cmd/texelation/main.go`.)
+(`clientrt.ValidateClientName` and `clientrt.ClientNameEnvVar` are exported from `internal/runtime/client/persistence.go`, accessible via the existing `clientrt "github.com/framegrace/texelation/internal/runtime/client"` import. `os`, `fmt`, and `log` should already be imported in `cmd/texelation/main.go`.)
 
 - [ ] **Step 14.3: Locate ALL `clientrt.Options{}` construction sites**
 
@@ -2362,6 +2379,10 @@ with:
 		if err := clientrt.ValidateClientName(*clientName); err != nil {
 			return fmt.Errorf("invalid --client-name %q: %w", *clientName, err)
 		}
+		// Warn when the flag silently overrides a non-empty env var.
+		if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" && envName != *clientName {
+			log.Printf("note: --client-name=%q overrides $%s=%q", *clientName, clientrt.ClientNameEnvVar, envName)
+		}
 	} else if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" {
 		if err := clientrt.ValidateClientName(envName); err != nil {
 			return fmt.Errorf("invalid $%s %q: %w", clientrt.ClientNameEnvVar, envName, err)
@@ -2376,7 +2397,7 @@ with:
 	return runClient(opts)
 ```
 
-(Add `"fmt"` and `"os"` to the import block if not already present.)
+(Add `"fmt"`, `"log"`, and `"os"` to the import block if not already present.)
 
 - [ ] **Step 15.2: Run build**
 
@@ -2440,7 +2461,24 @@ This integration test verifies that disk-roundtripped state assembles into a `Re
 
 - [ ] **Step 16.1: Write the test using `newMemHarness`**
 
-Append to `internal/runtime/server/resume_viewport_integration_test.go`:
+First, add the `clientruntime` import to the file's existing import block. The test references `clientruntime.ResolvePath`, `clientruntime.Save`, `clientruntime.Load`, and `clientruntime.ClientState{}` — none currently imported:
+
+```go
+import (
+	"errors"
+	"io"
+	"net"
+	"testing"
+	"time"
+
+	"github.com/framegrace/texelation/apps/texelterm/parser"
+	clientruntime "github.com/framegrace/texelation/internal/runtime/client"  // NEW for Plan D
+	"github.com/framegrace/texelation/internal/runtime/server/testutil"
+	"github.com/framegrace/texelation/protocol"
+)
+```
+
+Then append to `internal/runtime/server/resume_viewport_integration_test.go`:
 
 ```go
 // TestIntegration_PersistedStateDrivesResumeRequest verifies the
@@ -2464,6 +2502,13 @@ func TestIntegration_PersistedStateDrivesResumeRequest(t *testing.T) {
 		lines[i] = "line"
 	}
 	h.fakeApp.FeedRows(0, lines)
+
+	// Bootstrap the publisher's pre-resume viewport state — same shape
+	// as TestIntegration_ResumeHonorsPaneViewport's setup. Without this,
+	// the publisher's per-pane ClientViewport is empty and any post-resume
+	// publish race could be observable as flakes.
+	h.ApplyViewport(h.paneID, 176, 199, true /*autoFollow*/, false /*altScreen*/)
+	h.Publish()
 
 	// Build the ClientState a real client would have persisted: it
 	// holds the same sessionID/paneID the harness allocated, plus a
@@ -2840,9 +2885,10 @@ After successful verification, update `/home/marc/.claude/projects/-home-marc-pr
 - [ ] No `TODO` / `FIXME` / `XXX` introduced in this branch (`git diff main...HEAD | grep -iE 'TODO|FIXME|XXX'`).
 - [ ] `make clean && make build && make test` passes from a cold cache (defends against stale `.cache/` masking a real breakage).
 - [ ] `go test -race ./internal/runtime/client/... ./internal/runtime/server/... ./protocol/...` passes (or pre-existing failures only — compare against `git stash; go test -race ...` baseline).
-- [ ] No new files outside the planned File Structure table (excluding optional `client_integration_helpers_test.go` documented in Phase 5 notes).
+- [ ] **`go test -race -tags=integration ./internal/runtime/server/ -run TestIntegration_PersistedStateDrivesResumeRequest -v` passes.** Task 16 lives behind the `integration` build tag (per existing project convention in `resume_viewport_integration_test.go`), so the default `make test` skips it. Without this explicit run, Task 16 is decorative.
+- [ ] No new files outside the planned File Structure table.
 - [ ] Spec sections covered: storage location & schema (Tasks 4–7), write cadence (Task 8), read cadence (Tasks 11–12), multi-client (Tasks 5, 14, 15, 18), error handling (Tasks 7, 11–12), server carry-forwards (Tasks 1–3), pre-existing race fix (Task 10), testing (Tasks 16–18). All ✓.
-- [ ] Manual e2e (Task 20) verified on at least one of: single-client resume, stale-session fallback. Multi-client and Windows-style filename rejection covered by integration tests.
+- [ ] Manual e2e (Task 20) verified ALL of: single-client resume, multi-client isolation, stale-session fallback. The stale-session fallback path is NOT automated — Task 20.4 is the only gate on the wipe-and-retry mechanic Round 2 added to Task 11. (See Known Limitations at top of plan.)
 
 ---
 
