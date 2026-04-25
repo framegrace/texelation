@@ -152,6 +152,28 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		if c.attachListeners != nil {
 			c.attachListeners()
 		}
+		// Plan D: hoist the desktop lookup so we can build a paneExists
+		// predicate once and use it BEFORE ApplyResume runs (otherwise
+		// ClientViewports accumulates phantom entries on cross-restart resumes).
+		// When the sink isn't a DesktopSink (test harnesses, fake sinks), we
+		// fall through with the unpruned slice — ApplyResume will accept it
+		// and downstream lookups handle missing panes gracefully.
+		viewportsToApply := request.PaneViewports
+		sink, sinkOK := c.sink.(*DesktopSink)
+		if sinkOK && sink.Desktop() != nil {
+			desktop := sink.Desktop()
+			pruned := make([]protocol.PaneViewportState, 0, len(request.PaneViewports))
+			for _, ps := range request.PaneViewports {
+				if desktop.AppByID(ps.PaneID) != nil {
+					pruned = append(pruned, ps)
+				}
+			}
+			if dropped := len(request.PaneViewports) - len(pruned); dropped > 0 {
+				debugLog.Printf("connection %x: pruned %d phantom paneID entries from resume payload", c.session.ID(), dropped)
+			}
+			viewportsToApply = pruned
+		}
+
 		// Seed ClientViewports from the resume payload FIRST: this is a
 		// pure data copy and cannot fail, so the publisher has a valid
 		// clip window even if a per-pane RestoreViewport call below
@@ -159,7 +181,7 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		// would leave ClientViewports empty and the publisher would
 		// silently skip every main-screen pane until the client's next
 		// MsgViewportUpdate.
-		c.session.ApplyResume(request.PaneViewports)
+		c.session.ApplyResume(viewportsToApply, nil)
 
 		// Then re-seat each non-alt-screen pane's ViewWindow so the
 		// pane's renderer produces rows inside the resumed range on the
@@ -167,14 +189,14 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		// buffer; skipping the restore call avoids a no-op through the
 		// alt-screen guard in TexelTerm.RestoreViewport. Wrapped in a
 		// deferred recover so a panicking app cannot crash the connection.
-		if sink, ok := c.sink.(*DesktopSink); ok && sink.Desktop() != nil {
+		if sinkOK && sink.Desktop() != nil {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
 						log.Printf("server: RestorePaneViewport panic: %v", r)
 					}
 				}()
-				for _, ps := range request.PaneViewports {
+				for _, ps := range viewportsToApply {
 					if !ps.AltScreen {
 						sink.Desktop().RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
 					}
@@ -195,7 +217,7 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 					}
 				}
 			}
-			if sink, ok := c.sink.(*DesktopSink); ok {
+			if sinkOK {
 				// ORDER-SENSITIVE: ResetDiffState MUST come before sink.Publish.
 				// During the handler, the publisher goroutine can fire with the
 				// new ClientViewport (seeded by ApplyResume above) against old
