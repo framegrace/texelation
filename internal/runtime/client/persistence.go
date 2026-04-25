@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,4 +219,50 @@ func validClientName(name string) bool {
 		return false
 	}
 	return true
+}
+
+// Save writes state to filePath atomically: write to a sibling .tmp
+// file, then os.Rename. Crash mid-write leaves either the old file
+// or the new file, never partial.
+//
+// MkdirAll on the parent dir is idempotent.
+func Save(filePath string, state *ClientState) error {
+	if state == nil {
+		return errors.New("persistence: nil state")
+	}
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("persistence: mkdir: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".state.tmp-*")
+	if err != nil {
+		return fmt.Errorf("persistence: tempfile: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	// Best-effort cleanup if anything below fails. Success path: rename
+	// already consumed tmpPath, so Remove returns ErrNotExist (expected).
+	// Failure path: tmpPath should still exist; log if Remove fails for
+	// any reason other than ErrNotExist (would indicate filesystem trouble
+	// and could otherwise accumulate orphan tmp files silently).
+	defer func() {
+		if err := os.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("persistence: temp file cleanup failed: %v", err)
+		}
+	}()
+
+	enc := json.NewEncoder(tmp)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(state); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("persistence: encode: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("persistence: close tmp: %w", err)
+	}
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		return fmt.Errorf("persistence: rename: %w", err)
+	}
+	return nil
 }

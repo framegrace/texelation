@@ -3,6 +3,8 @@ package clientruntime
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -133,5 +135,68 @@ func TestResolvePath_RejectsInvalidNames(t *testing.T) {
 		if _, err := ResolvePath("/run/x.sock", name); err == nil {
 			t.Errorf("ResolvePath(%q) should have errored, got nil", name)
 		}
+	}
+}
+
+func TestSave_AtomicReplace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subdir", "state.json")
+
+	state := ClientState{
+		SocketPath:   "/tmp/x.sock",
+		SessionID:    [16]byte{1},
+		LastSequence: 1,
+		WrittenAt:    time.Now(),
+	}
+
+	if err := Save(path, &state); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// File exists with valid JSON.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var got ClientState
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.SessionID != state.SessionID {
+		t.Errorf("round-trip via disk: SessionID mismatch")
+	}
+
+	// No leftover .tmp file. Fail loudly if ReadDir itself fails — a
+	// silent zero-iteration loop here would mask a broken fixture.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".state.tmp-") {
+			t.Errorf("leftover temp file: %s", e.Name())
+		}
+	}
+}
+
+func TestSave_OverwritesExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	first := ClientState{SocketPath: "/tmp/a", SessionID: [16]byte{1}, LastSequence: 1, WrittenAt: time.Now()}
+	if err := Save(path, &first); err != nil {
+		t.Fatalf("Save first: %v", err)
+	}
+
+	second := ClientState{SocketPath: "/tmp/b", SessionID: [16]byte{2}, LastSequence: 99, WrittenAt: time.Now()}
+	if err := Save(path, &second); err != nil {
+		t.Fatalf("Save second: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	var got ClientState
+	_ = json.Unmarshal(data, &got)
+	if got.SessionID != second.SessionID {
+		t.Errorf("expected second state, got first")
 	}
 }
