@@ -1314,6 +1314,8 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 - [ ] **Step 8.1: Write the failing tests**
 
+The slow-save test below uses `atomic.Int32`; if not already in the file's import block, add `"sync/atomic"` to `persistence_test.go`'s imports before appending these tests.
+
 Append to `persistence_test.go`:
 
 ```go
@@ -2178,9 +2180,10 @@ In `internal/runtime/client/app.go`, after the resume block (Task 12) and before
 	//
 	// Note: lastSequence is atomic.Uint64 (Task 10), so .Load() is
 	// race-safe even though readLoop mutates it from another goroutine.
-	// sessionID is captured by reference — the retry in Task 12
-	// reassigns it to the freshly-allocated session, and persistSnapshot
-	// reads the current value at every invocation.
+	// sessionID is captured by reference — Task 11's retry path passes
+	// &sessionID into simple.Connect, which writes the freshly-allocated
+	// session ID back through the pointer (simple_client.go:91), so
+	// persistSnapshot always reads the current value at invocation time.
 	//
 	// IMPORTANT: there is NO eager initial seed. A persistSnapshot call
 	// here would write LastSequence=0 with empty PaneViewports (because
@@ -2287,7 +2290,7 @@ We use `clientrt.ValidateClientName` (added in Task 5 above) rather than `client
 	}
 ```
 
-(`clientrt.ValidateClientName` and `clientrt.ClientNameEnvVar` are exported from `internal/runtime/client/persistence.go`, accessible via the existing `clientrt "github.com/framegrace/texelation/internal/runtime/client"` import. `os`, `fmt`, and `log` should already be imported in `cmd/texelation/main.go`.)
+(`clientrt.ValidateClientName` and `clientrt.ClientNameEnvVar` are exported from `internal/runtime/client/persistence.go`, accessible via the existing `clientrt "github.com/framegrace/texelation/internal/runtime/client"` import. `os` and `fmt` are already imported in `cmd/texelation/main.go`; **`log` is not** — add `"log"` to the import block when applying this step.)
 
 - [ ] **Step 14.3: Locate ALL `clientrt.Options{}` construction sites**
 
