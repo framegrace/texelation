@@ -93,7 +93,15 @@ var (
 	ErrUnsupportedVer   = errors.New("protocol: unsupported version")
 	ErrShortPayload     = errors.New("protocol: payload shorter than declared length")
 	ErrChecksumMismatch = errors.New("protocol: checksum mismatch")
+	ErrPayloadTooLarge  = errors.New("protocol: payload exceeds MaxPayloadLen")
 )
+
+// MaxPayloadLen caps a single message's payload size to defend against
+// malformed or hostile headers that would otherwise allocate up to 4GB
+// (the uint32 limit of Header.PayloadLen). 16MiB comfortably exceeds
+// any legitimate texelation message; revisit only if a real protocol
+// addition needs more.
+const MaxPayloadLen uint32 = 16 * 1024 * 1024
 
 // WriteMessage serialises the header and payload to the provided writer. The
 // payload slice is written as-is; callers retain ownership of the buffer.
@@ -155,6 +163,10 @@ func ReadMessage(r io.Reader) (Header, []byte, error) {
 
 	if hdr.Version != Version {
 		return hdr, nil, ErrUnsupportedVer
+	}
+
+	if hdr.PayloadLen > MaxPayloadLen {
+		return hdr, nil, ErrPayloadTooLarge
 	}
 
 	payload := make([]byte, hdr.PayloadLen)

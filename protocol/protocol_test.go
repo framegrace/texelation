@@ -10,7 +10,9 @@ package protocol
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"testing"
 )
 
@@ -98,5 +100,29 @@ func TestShortPayload(t *testing.T) {
 	truncated := buf.Bytes()[:headerSize+2]
 	if _, _, err := ReadMessage(bytes.NewReader(truncated)); !errors.Is(err, ErrShortPayload) {
 		t.Fatalf("expected short payload error, got %v", err)
+	}
+}
+
+func TestReadMessage_PayloadTooLarge(t *testing.T) {
+	// Construct a header that declares a payload of MaxPayloadLen + 1.
+	var hdr [40]byte
+	binary.LittleEndian.PutUint32(hdr[0:4], 0x54584c01) // magic
+	hdr[4] = Version
+	hdr[5] = byte(MsgPing)
+	hdr[6] = FlagChecksum // MUST be set BEFORE CRC computation; otherwise the CRC
+	// is computed over a zero-flag header but the wire byte at offset 6 carries
+	// the flag bit, and ReadMessage's verification CRC will mismatch — yielding
+	// ErrChecksumMismatch instead of the expected ErrPayloadTooLarge.
+	binary.LittleEndian.PutUint32(hdr[32:36], MaxPayloadLen+1)
+
+	// CRC over bytes [4:36] (now includes the flag byte at offset 6).
+	crc := crc32.NewIEEE()
+	_, _ = crc.Write(hdr[4:36])
+	binary.LittleEndian.PutUint32(hdr[36:40], crc.Sum32())
+
+	r := bytes.NewReader(hdr[:])
+	_, _, err := ReadMessage(r)
+	if !errors.Is(err, ErrPayloadTooLarge) {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
 	}
 }
