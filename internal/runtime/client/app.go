@@ -36,7 +36,8 @@ type Options struct {
 	Socket                  string
 	Reconnect               bool
 	PanicLog                string
-	ShowRestartNotification bool // Show notification that server was restarted
+	ShowRestartNotification bool   // Show notification that server was restarted
+	ClientName              string // --client-name slot for multi-client persistence (issue #199 Plan D)
 }
 
 func Run(opts Options) error {
