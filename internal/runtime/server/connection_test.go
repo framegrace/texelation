@@ -419,6 +419,156 @@ func TestConnectionResumeFlushesPendingDiffs(t *testing.T) {
 	}
 }
 
+// TestApplyResume_EvictedSessionWithPaneViewports verifies that a
+// MsgResumeRequest carrying non-empty PaneViewports against an evicted
+// (unknown) session falls through cleanly — no panic, no half-applied state,
+// connection cleanly closed.
+//
+// Plan B's review surfaced this as a coverage gap: the eviction path and the
+// PaneViewports path were tested separately but never together. This test
+// locks two invariants in a single pass:
+//
+//  1. Handshake-level eviction: a MsgConnectRequest naming an unknown sessionID
+//     returns ErrSessionNotFound immediately, before any connection is created.
+//
+//  2. Connection-level mismatch (the combined path): after a fresh handshake
+//     succeeds, sending a MsgResumeRequest whose SessionID field is a stale
+//     (evicted) ID — while carrying non-empty PaneViewports — must be rejected
+//     by the session-mismatch guard before ApplyResume runs. No viewport state
+//     is written, and the connection exits with an error.
+func TestApplyResume_EvictedSessionWithPaneViewports(t *testing.T) {
+	// --- Part 1: handshake-level eviction ---
+	// A Manager with no sessions has no record of any ID. Sending a
+	// ConnectRequest with a stale ID must cause handleHandshake to return
+	// ErrSessionNotFound, closing the connection before any state is touched.
+	mgr := NewManager()
+	staleID := [16]byte{0xde, 0xad, 0xbe, 0xef}
+
+	srvConn1, cliConn1 := net.Pipe()
+	defer cliConn1.Close()
+	defer srvConn1.Close()
+
+	hsErrCh := make(chan error, 1)
+	go func() {
+		defer srvConn1.Close()
+		_, _, err := handleHandshake(srvConn1, mgr)
+		hsErrCh <- err
+	}()
+
+	// Hello.
+	helloPayload, err := protocol.EncodeHello(protocol.Hello{ClientName: "eviction-test"})
+	if err != nil {
+		t.Fatalf("encode hello: %v", err)
+	}
+	if err := protocol.WriteMessage(cliConn1, protocol.Header{
+		Version: protocol.Version,
+		Type:    protocol.MsgHello,
+		Flags:   protocol.FlagChecksum,
+	}, helloPayload); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+	// Welcome.
+	if _, _, err := protocol.ReadMessage(cliConn1); err != nil {
+		t.Fatalf("read welcome: %v", err)
+	}
+	// ConnectRequest with the evicted (unknown) session ID.
+	connectPayload, err := protocol.EncodeConnectRequest(protocol.ConnectRequest{SessionID: staleID})
+	if err != nil {
+		t.Fatalf("encode connect: %v", err)
+	}
+	if err := protocol.WriteMessage(cliConn1, protocol.Header{
+		Version: protocol.Version,
+		Type:    protocol.MsgConnectRequest,
+		Flags:   protocol.FlagChecksum,
+	}, connectPayload); err != nil {
+		t.Fatalf("write connect: %v", err)
+	}
+	select {
+	case hsErr := <-hsErrCh:
+		if !errors.Is(hsErr, ErrSessionNotFound) {
+			t.Fatalf("part 1: handleHandshake error: got %v, want ErrSessionNotFound", hsErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("part 1: handleHandshake did not return within 2s")
+	}
+
+	// --- Part 2: connection-level mismatch carrying non-empty PaneViewports ---
+	// A fresh session is created (simulating the server's real session); a
+	// stale/evicted session ID is embedded inside the MsgResumeRequest body
+	// together with a non-empty PaneViewports slice. The handler must check
+	// request.SessionID against c.session.ID() BEFORE calling ApplyResume, so
+	// the viewport state from the stale payload is never written.
+	sessionID := [16]byte{0x01, 0x02, 0x03, 0x04}
+	session := NewSession(sessionID, 64)
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	// awaitResume=true means the connection holds back outbound diffs until
+	// a MsgResumeRequest arrives — exactly the reconnect scenario.
+	conn := newConnection(serverConn, session, nopSink{}, true /*awaitResume*/)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- conn.serve()
+	}()
+
+	// Confirm no messages are sent before resume (pre-condition sanity check).
+	_ = clientConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, _, err := protocol.ReadMessage(clientConn); err == nil {
+		t.Fatal("part 2: expected no messages before resume request")
+	}
+	_ = clientConn.SetReadDeadline(time.Time{})
+
+	// Build a ResumeRequest with the STALE (evicted) session ID but the
+	// non-empty PaneViewports slice. This is the combined path under test.
+	req := protocol.ResumeRequest{
+		SessionID:    staleID, // does NOT match session.ID()
+		LastSequence: 42,
+		PaneViewports: []protocol.PaneViewportState{
+			{
+				PaneID:        [16]byte{1},
+				ViewBottomIdx: 10,
+				ViewportRows:  24,
+				ViewportCols:  80,
+				AutoFollow:    false,
+			},
+		},
+	}
+	payload, err := protocol.EncodeResumeRequest(req)
+	if err != nil {
+		t.Fatalf("part 2: encode resume request: %v", err)
+	}
+	if err := protocol.WriteMessage(clientConn, protocol.Header{
+		Version:   protocol.Version,
+		Type:      protocol.MsgResumeRequest,
+		Flags:     protocol.FlagChecksum,
+		SessionID: staleID,
+	}, payload); err != nil {
+		t.Fatalf("part 2: write resume request: %v", err)
+	}
+
+	// The connection must exit with an error (mismatch) rather than accepting
+	// the stale payload. It must NOT block forever (no deadlock/panic).
+	select {
+	case serveErr := <-errCh:
+		if serveErr == nil {
+			t.Fatal("part 2: serve returned nil; expected session-mismatch error")
+		}
+		// The error message is an implementation detail; just confirm it is
+		// non-nil so the contract is clear.
+	case <-time.After(2 * time.Second):
+		t.Fatal("part 2: connection serve did not exit within 2s after mismatch resume")
+	}
+
+	// No viewport state must have been written to the session: ApplyResume
+	// must not have run because the mismatch guard fires first.
+	if _, ok := session.Viewport([16]byte{1}); ok {
+		t.Fatal("part 2: session.Viewport was populated; ApplyResume ran despite session-ID mismatch")
+	}
+}
+
 func TestConnectionAwaitReadErrorNil(t *testing.T) {
 	session := NewSession([16]byte{6}, 0)
 	conn := &connection{
