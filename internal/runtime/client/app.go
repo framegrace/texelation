@@ -144,29 +144,55 @@ func Run(opts Options) error {
 
 	state.applyEffectConfig()
 	var lastSequence atomic.Uint64
+	var lastSeqStart uint64
+	if loadedState != nil {
+		lastSeqStart = loadedState.LastSequence
+	}
+	lastSequence.Store(lastSeqStart) // lastSequence is atomic.Uint64 from Task 10
 
 	var pendingAck atomic.Uint64
 	var lastAck atomic.Uint64
 	ackSignal := make(chan struct{}, 1)
 
-	if opts.Reconnect {
+	// Decide whether to send a resume: explicit --reconnect OR we
+	// loaded a non-zero sessionID from disk.
+	//
+	// Note: state.cache and state.viewports are intentionally empty at
+	// this point in a fresh-process invocation (no MsgTreeSnapshot
+	// received yet, no panes rendered). The persisted PaneViewports
+	// from disk are what feed the resume; live trackers are only used
+	// for the same-process --reconnect case where they may be populated.
+	shouldResume := opts.Reconnect || loadedState != nil
+	if shouldResume {
+		// Prefer persisted PaneViewports (fresh process, trackers map
+		// is empty); fall back to live trackers for the same-process
+		// reconnect case.
 		var viewports []protocol.PaneViewportState
-		for _, e := range state.viewports.snapshotAll() {
-			viewports = append(viewports, protocol.PaneViewportState{
-				PaneID:         e.id,
-				AltScreen:      e.vp.AltScreen,
-				AutoFollow:     e.vp.AutoFollow,
-				ViewBottomIdx:  e.vp.ViewBottomIdx,
-				WrapSegmentIdx: e.vp.WrapSegmentIdx,
-				ViewportRows:   e.vp.Rows,
-				ViewportCols:   e.vp.Cols,
-			})
-		}
-		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports); err != nil {
-			return fmt.Errorf("resume request failed: %w", err)
+		if loadedState != nil && len(loadedState.PaneViewports) > 0 {
+			viewports = loadedState.PaneViewports
 		} else {
-			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
+			for _, e := range state.viewports.snapshotAll() {
+				viewports = append(viewports, protocol.PaneViewportState{
+					PaneID:         e.id,
+					AltScreen:      e.vp.AltScreen,
+					AutoFollow:     e.vp.AutoFollow,
+					ViewBottomIdx:  e.vp.ViewBottomIdx,
+					WrapSegmentIdx: e.vp.WrapSegmentIdx,
+					ViewportRows:   e.vp.Rows,
+					ViewportCols:   e.vp.Cols,
+				})
+			}
 		}
+
+		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports)
+		if err != nil {
+			// Resume against a session that completed handshake should
+			// not normally fail. If it does, surface the error rather
+			// than retrying — the connection is in an indeterminate
+			// state and recovery is the user's job.
+			return fmt.Errorf("resume request failed: %w", err)
+		}
+		handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
 	}
 
 	renderCh := make(chan struct{}, 64) // Larger buffer for smooth animations
