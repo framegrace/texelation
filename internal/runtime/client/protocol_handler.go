@@ -19,7 +19,7 @@ import (
 	"github.com/framegrace/texelation/protocol"
 )
 
-func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequence *uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) {
+func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequence *atomic.Uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) {
 	for {
 		hdr, payload, err := protocol.ReadMessage(conn)
 		if err != nil {
@@ -38,7 +38,7 @@ func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequenc
 	}
 }
 
-func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *uint64, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) bool {
+func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *atomic.Uint64, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) bool {
 	cache := state.cache
 	switch hdr.Type {
 	case protocol.MsgTreeSnapshot:
@@ -83,8 +83,16 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			state.onBufferDelta(delta)
 		}
 		scheduleAck(pendingAck, ackSignal, hdr.Sequence)
-		if lastSequence != nil && hdr.Sequence > *lastSequence {
-			*lastSequence = hdr.Sequence
+		if lastSequence != nil {
+			// Atomic-safe check-then-set. Plan D's only writer is this
+			// loop, so any race against persistSnapshot's Load() is a
+			// benign read of "either the old or new value", both of which
+			// are valid sequences to persist. If a future change adds a
+			// second writer, switch to CompareAndSwap.
+			cur := lastSequence.Load()
+			if hdr.Sequence > cur {
+				lastSequence.Store(hdr.Sequence)
+			}
 		}
 		return true
 	case protocol.MsgFetchRangeResponse:

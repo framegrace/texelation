@@ -99,7 +99,7 @@ func Run(opts Options) error {
 	}
 
 	state.applyEffectConfig()
-	lastSequence := uint64(0)
+	var lastSequence atomic.Uint64
 
 	var pendingAck atomic.Uint64
 	var lastAck atomic.Uint64
@@ -118,7 +118,7 @@ func Run(opts Options) error {
 				ViewportCols:   e.vp.Cols,
 			})
 		}
-		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence, viewports); err != nil {
+		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports); err != nil {
 			return fmt.Errorf("resume request failed: %w", err)
 		} else {
 			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
