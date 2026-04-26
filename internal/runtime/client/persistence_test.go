@@ -395,3 +395,70 @@ func TestWriter_SlowSaveSkipsIfBusy(t *testing.T) {
 		t.Errorf("expected coalesced LastSequence=50, got %d", state.LastSequence)
 	}
 }
+
+// TestStaleSessionWipeAndReplace verifies the disk-side mechanic of
+// Plan D's stale-session recovery: a stale ClientState file is
+// loadable, can be wiped cleanly, and a fresh state can be written
+// over the wiped path without leftover artifacts.
+//
+// The actual server-side rejection (simple.Connect returning err on
+// an unknown sessionID) is exercised by manual e2e in Task 20;
+// here we just lock the disk-layer contract.
+func TestStaleSessionWipeAndReplace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	socketPath := "/tmp/test-stale.sock"
+
+	// Seed a stale state file (pretend a previous run left it behind
+	// pointing at a session the server now rejects).
+	stale := ClientState{
+		SocketPath:    socketPath,
+		SessionID:     [16]byte{0xde, 0xad, 0xbe, 0xef},
+		LastSequence:  99,
+		WrittenAt:     time.Now().UTC(),
+		PaneViewports: nil,
+	}
+	if err := Save(path, &stale); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+
+	// Step 1: Load returns the stale state successfully — the file
+	// is well-formed; the rejection comes from the server side.
+	loaded, err := Load(path, socketPath)
+	if err != nil || loaded == nil {
+		t.Fatalf("expected stale state to load, got err=%v state=%v", err, loaded)
+	}
+	if loaded.SessionID != stale.SessionID {
+		t.Errorf("loaded SessionID mismatch")
+	}
+
+	// Step 2: Wipe removes the file (the recovery path in app.go
+	// calls this immediately after observing the connect rejection).
+	if err := Wipe(path); err != nil {
+		t.Fatalf("Wipe: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected file removed after Wipe, stat err=%v", err)
+	}
+
+	// Step 3: A fresh state writes cleanly over the wiped path.
+	fresh := ClientState{
+		SocketPath:   socketPath,
+		SessionID:    [16]byte{0xfe, 0xed, 0xfa, 0xce},
+		LastSequence: 0,
+		WrittenAt:    time.Now().UTC(),
+	}
+	if err := Save(path, &fresh); err != nil {
+		t.Fatalf("post-wipe Save: %v", err)
+	}
+	got, err := Load(path, socketPath)
+	if err != nil || got == nil {
+		t.Fatalf("post-wipe Load: state=%v err=%v", got, err)
+	}
+	if got.SessionID == stale.SessionID {
+		t.Errorf("post-wipe state still holds stale sessionID")
+	}
+	if got.SessionID != fresh.SessionID {
+		t.Errorf("post-wipe state SessionID mismatch")
+	}
+}
