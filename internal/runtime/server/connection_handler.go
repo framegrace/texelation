@@ -233,34 +233,50 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				}
 			}()
 		}
-		if provider, ok := c.sink.(SnapshotProvider); ok {
-			snapshot, err := provider.Snapshot()
-			if err != nil {
-				log.Printf("server: resume snapshot error: %v", err)
-			} else {
-				if payload, err := protocol.EncodeTreeSnapshot(snapshot); err != nil {
-					log.Printf("server: encode snapshot error: %v", err)
+		// For in-process resume, ship the post-resume snapshot+publish
+		// here so the client gets its previous content back at the
+		// desktop's existing dims. For a rehydrated session, however,
+		// the desktop is still at simScreen's 80×25 default — the new
+		// daemon hasn't received the client's viewport size yet
+		// (MsgClientReady is the next message). Sending a snapshot at
+		// 80×25 dims now would force the client to render the pane
+		// twice (small dims, then the correct 255×59 from
+		// handleClientReady) and the dual update produces a confusing
+		// transient: dark background at correct dims with text content
+		// drawn at small-dim row positions, missing top/bottom
+		// borders. So for rehydrated, skip the early snapshot+publish
+		// entirely — handleClientReady will run a moment later with
+		// the correct dims and ship a single coherent snapshot.
+		if !c.rehydrated {
+			if provider, ok := c.sink.(SnapshotProvider); ok {
+				snapshot, err := provider.Snapshot()
+				if err != nil {
+					log.Printf("server: resume snapshot error: %v", err)
 				} else {
-					header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
-					if err := c.writeMessage(header, payload); err != nil {
-						return err
+					if payload, err := protocol.EncodeTreeSnapshot(snapshot); err != nil {
+						log.Printf("server: encode snapshot error: %v", err)
+					} else {
+						header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
+						if err := c.writeMessage(header, payload); err != nil {
+							return err
+						}
+						c.recordSnapshotActivity(snapshot)
 					}
-					c.recordSnapshotActivity(snapshot)
 				}
-			}
-			if sinkOK {
-				// ORDER-SENSITIVE: ResetDiffState MUST come before sink.Publish.
-				// During the handler, the publisher goroutine can fire with the
-				// new ClientViewport (seeded by ApplyResume above) against old
-				// pane content, emitting a stale/empty intermediate delta.
-				// ResetDiffState clears prevBuffers + lastViewport so the
-				// subsequent Publish treats every pane as "first viewport" and
-				// emits a full buffer, repairing any earlier interleave.
-				// Do not reorder.
-				if pub := sink.Publisher(); pub != nil {
-					pub.ResetDiffState()
+				if sinkOK {
+					// ORDER-SENSITIVE: ResetDiffState MUST come before sink.Publish.
+					// During the handler, the publisher goroutine can fire with the
+					// new ClientViewport (seeded by ApplyResume above) against old
+					// pane content, emitting a stale/empty intermediate delta.
+					// ResetDiffState clears prevBuffers + lastViewport so the
+					// subsequent Publish treats every pane as "first viewport" and
+					// emits a full buffer, repairing any earlier interleave.
+					// Do not reorder.
+					if pub := sink.Publisher(); pub != nil {
+						pub.ResetDiffState()
+					}
+					sink.Publish()
 				}
-				sink.Publish()
 			}
 		}
 		// Plan D2: for a rehydrated session, leave initialSnapshotSent
