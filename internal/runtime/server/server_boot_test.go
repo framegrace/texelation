@@ -9,10 +9,13 @@
 package server
 
 import (
+	"encoding/json"
 	texelcore "github.com/framegrace/texelui/core"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
@@ -74,5 +77,36 @@ func TestServerSendsBootSnapshotFallback(t *testing.T) {
 	}
 	if len(pane.Rows) != 0 {
 		t.Fatalf("expected empty rows, got %d rows", len(pane.Rows))
+	}
+}
+
+func TestLoadPersistedSessionsAtBoot(t *testing.T) {
+	dir := t.TempDir()
+	id := [16]byte{0x99, 0x88}
+	stored := StoredSession{
+		SchemaVersion: StoredSessionSchemaVersion,
+		SessionID:     id,
+		LastActive:    time.Now().UTC(),
+		PaneViewports: []StoredPaneViewport{{PaneID: [16]byte{0x77}, ViewBottomIdx: 9000, Rows: 24, Cols: 80}},
+	}
+	path := SessionFilePath(dir, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(&stored)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewManager()
+	if err := LoadPersistedSessions(mgr, dir); err != nil {
+		t.Fatalf("LoadPersistedSessions: %v", err)
+	}
+	sess, err := mgr.LookupOrRehydrate(id)
+	if err != nil {
+		t.Fatalf("rehydrate after boot scan: %v", err)
+	}
+	if sess.ID() != id {
+		t.Fatalf("rehydrated wrong session: %x", sess.ID())
 	}
 }
