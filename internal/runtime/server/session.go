@@ -56,13 +56,42 @@ type Session struct {
 	droppedDiffs   uint64
 	lastDroppedSeq uint64
 	viewports      *ClientViewports
+	revisionsMu    sync.Mutex
+	revisions      map[[16]byte]uint32
 }
 
 func NewSession(id [16]byte, maxDiffs int) *Session {
 	if maxDiffs < 0 {
 		maxDiffs = 0
 	}
-	return &Session{id: id, diffs: make([]DiffPacket, 0, 128), maxDiffs: maxDiffs, viewports: NewClientViewports()}
+	return &Session{
+		id:        id,
+		diffs:     make([]DiffPacket, 0, 128),
+		maxDiffs:  maxDiffs,
+		viewports: NewClientViewports(),
+		revisions: make(map[[16]byte]uint32),
+	}
+}
+
+// NextRevision returns the next monotonic revision counter for a pane in this
+// session. The counter is shared across publisher lifetimes so that successive
+// publishers (one per client connection on the same session) emit strictly
+// increasing revisions, preventing the client's BufferCache from rejecting
+// a freshly-created publisher's first deltas as stale.
+func (s *Session) NextRevision(paneID [16]byte) uint32 {
+	s.revisionsMu.Lock()
+	defer s.revisionsMu.Unlock()
+	rev := s.revisions[paneID] + 1
+	s.revisions[paneID] = rev
+	return rev
+}
+
+// RevisionFor returns the latest revision stamped for paneID, or 0 if the
+// pane has not been published yet under this session.
+func (s *Session) RevisionFor(paneID [16]byte) uint32 {
+	s.revisionsMu.Lock()
+	defer s.revisionsMu.Unlock()
+	return s.revisions[paneID]
 }
 
 // ApplyViewportUpdate records the client's current viewport for a pane.
@@ -73,8 +102,8 @@ func (s *Session) ApplyViewportUpdate(u protocol.ViewportUpdate) {
 // ApplyResume seeds per-pane viewports from a ResumeRequest payload. Called
 // by the connection handler before the first post-resume snapshot so the
 // publisher clips correctly on the initial emit.
-func (s *Session) ApplyResume(states []protocol.PaneViewportState) {
-	s.viewports.ApplyResume(states)
+func (s *Session) ApplyResume(states []protocol.PaneViewportState, paneExists func(id [16]byte) bool) {
+	s.viewports.ApplyResume(states, paneExists)
 }
 
 // Viewport returns the client-reported viewport for the given pane, or

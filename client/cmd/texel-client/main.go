@@ -10,6 +10,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -31,13 +32,33 @@ func run(args []string) error {
 	socket := fs.String("socket", "/tmp/texelation.sock", "Unix socket path")
 	reconnect := fs.Bool("reconnect", false, "Attempt to resume previous session")
 	panicLogPath := fs.String("panic-log", "", "File to append panic stack traces")
+	clientName := fs.String("client-name", "", "Client identity slot for persistence (default: $TEXELATION_CLIENT_NAME or \"default\")")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// Plan D: validate --client-name (or $TEXELATION_CLIENT_NAME)
+	// early. Either input expresses the user's intent to use a named
+	// slot; silently disabling persistence later is a UX trap.
+	// ValidateClientName checks only the name — never touches $HOME
+	// or the socket — so failures unambiguously blame the right input.
+	if *clientName != "" {
+		if err := clientrt.ValidateClientName(*clientName); err != nil {
+			return fmt.Errorf("invalid --client-name %q: %w", *clientName, err)
+		}
+		// Warn when the flag silently overrides a non-empty env var.
+		if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" && envName != *clientName {
+			log.Printf("note: --client-name=%q overrides $%s=%q", *clientName, clientrt.ClientNameEnvVar, envName)
+		}
+	} else if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" {
+		if err := clientrt.ValidateClientName(envName); err != nil {
+			return fmt.Errorf("invalid $%s %q: %w", clientrt.ClientNameEnvVar, envName, err)
+		}
+	}
 	opts := clientrt.Options{
-		Socket:    *socket,
-		Reconnect: *reconnect,
-		PanicLog:  *panicLogPath,
+		Socket:     *socket,
+		Reconnect:  *reconnect,
+		PanicLog:   *panicLogPath,
+		ClientName: *clientName,
 	}
 	return runClient(opts)
 }

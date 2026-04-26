@@ -24,10 +24,17 @@ import (
 
 // DesktopPublisher captures desktop pane buffers and enqueues them as buffer
 // deltas on the associated session.
+//
+// Per-pane revision counters live on the *Session* (not on the publisher) so
+// they survive across publisher lifetimes. A new client connection on an
+// existing session creates a new publisher, but the session's pending diff
+// queue still carries diffs the previous publisher emitted at high revision
+// numbers; if the new publisher's revisions started over at 1 the client's
+// BufferCache would reject every fresh delta as stale (delta.Revision <
+// pane.Revision) until enough writes pushed past the prior cap.
 type DesktopPublisher struct {
 	desktop      *texel.DesktopEngine
 	session      *Session
-	revisions    map[[16]byte]uint32
 	prevBuffers  map[[16]byte][][]texel.Cell
 	lastViewport map[[16]byte]ClientViewport
 	observer     PublishObserver
@@ -44,7 +51,6 @@ func NewDesktopPublisher(desktop *texel.DesktopEngine, session *Session) *Deskto
 	pub := &DesktopPublisher{
 		desktop:      desktop,
 		session:      session,
-		revisions:    make(map[[16]byte]uint32),
 		prevBuffers:  make(map[[16]byte][][]texel.Cell),
 		lastViewport: make(map[[16]byte]ClientViewport),
 	}
@@ -78,12 +84,13 @@ func (p *DesktopPublisher) SetNotifier(fn func()) {
 	p.notify = fn
 }
 
-// RevisionFor returns the latest revision stamped for paneID by Publish.
-// Returns 0 if the pane has not been published yet.
+// RevisionFor returns the latest revision stamped for paneID. Returns 0 if
+// the pane has not been published yet under this publisher's session.
 func (p *DesktopPublisher) RevisionFor(paneID [16]byte) uint32 {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.revisions[paneID]
+	if p.session == nil {
+		return 0
+	}
+	return p.session.RevisionFor(paneID)
 }
 
 // Publish reads SnapshotBuffers from the desktop engine, then delegates
@@ -160,8 +167,7 @@ func (p *DesktopPublisher) publishSnapshotsLocked(buffers []texel.PaneSnapshot) 
 			}
 			p.lastViewport[snap.ID] = vp
 		}
-		rev := p.revisions[snap.ID] + 1
-		p.revisions[snap.ID] = rev
+		rev := p.session.NextRevision(snap.ID)
 		prev := p.prevBuffers[snap.ID]
 		delta := bufferToDelta(snap, prev, rev, vp)
 		if len(delta.Rows) == 0 {

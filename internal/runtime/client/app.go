@@ -36,7 +36,8 @@ type Options struct {
 	Socket                  string
 	Reconnect               bool
 	PanicLog                string
-	ShowRestartNotification bool // Show notification that server was restarted
+	ShowRestartNotification bool   // Show notification that server was restarted
+	ClientName              string // --client-name slot for multi-client persistence (issue #199 Plan D)
 }
 
 func Run(opts Options) error {
@@ -51,16 +52,60 @@ func Run(opts Options) error {
 	}
 
 	simple := client.NewSimpleClient(opts.Socket)
+
+	// Plan D: load persisted client state if any. Failures (missing,
+	// parse error, mismatch) all yield (nil, nil) and we proceed as
+	// fresh.
+	statePath, statePathErr := ResolvePath(opts.Socket, opts.ClientName)
+	if statePathErr != nil {
+		log.Printf("persistence: path resolution failed (%v); running without persistence", statePathErr)
+	}
+	var loadedState *ClientState
+	if statePath != "" {
+		ls, err := Load(statePath, opts.Socket)
+		if err != nil {
+			log.Printf("persistence: load failed (%v); running fresh", err)
+		} else {
+			loadedState = ls
+		}
+	}
+
 	var sessionID [16]byte
-	if !opts.Reconnect {
-		sessionID = [16]byte{}
+	if loadedState != nil {
+		sessionID = loadedState.SessionID
 	}
 
 	accept, conn, err := simple.Connect(&sessionID)
+	if err != nil && loadedState != nil {
+		// We sent a non-zero sessionID from disk and Connect failed.
+		// The dominant cause is a stale sessionID: the server has
+		// evicted the session (or the daemon was restarted without
+		// Plan D2 persistence). Wipe the stale state and retry fresh
+		// with a zero sessionID.
+		//
+		// We don't try to disambiguate stale-session from transient
+		// network failure — retrying once with zero ID is cheap and
+		// the second failure (if there is one) surfaces below as the
+		// terminal connect error.
+		log.Printf("persistence: connect with persisted sessionID failed (%v); wiping state file and retrying fresh", err)
+		if statePath != "" {
+			if werr := Wipe(statePath); werr != nil {
+				log.Printf("persistence: wipe failed (%v); next start may repeat this rejection", werr)
+			}
+		}
+		loadedState = nil
+		sessionID = [16]byte{}
+		accept, conn, err = simple.Connect(&sessionID)
+	}
 	if err != nil {
 		return fmt.Errorf("connect failed: %w", err)
 	}
-	defer conn.Close()
+	// Closure form so the deferred Close picks up any subsequent
+	// reassignment of conn (none today, but defends against future
+	// re-connect logic). Drop-in replacement for the older
+	// `defer conn.Close()` shape.
+	defer func() { conn.Close() }()
+
 	var writeMu sync.Mutex
 
 	debuglog.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
@@ -98,31 +143,95 @@ func Run(opts Options) error {
 	}
 
 	state.applyEffectConfig()
-	lastSequence := uint64(0)
+	var lastSequence atomic.Uint64
+	var lastSeqStart uint64
+	if loadedState != nil {
+		lastSeqStart = loadedState.LastSequence
+	}
+	lastSequence.Store(lastSeqStart) // lastSequence is atomic.Uint64 from Task 10
 
 	var pendingAck atomic.Uint64
 	var lastAck atomic.Uint64
 	ackSignal := make(chan struct{}, 1)
 
-	if opts.Reconnect {
+	// Decide whether to send a resume: explicit --reconnect OR we
+	// loaded a non-zero sessionID from disk.
+	//
+	// Note: state.cache and state.viewports are intentionally empty at
+	// this point in a fresh-process invocation (no MsgTreeSnapshot
+	// received yet, no panes rendered). The persisted PaneViewports
+	// from disk are what feed the resume; live trackers are only used
+	// for the same-process --reconnect case where they may be populated.
+	shouldResume := opts.Reconnect || loadedState != nil
+	if shouldResume {
+		// Prefer persisted PaneViewports (fresh process, trackers map
+		// is empty); fall back to live trackers for the same-process
+		// reconnect case.
 		var viewports []protocol.PaneViewportState
-		for _, e := range state.viewports.snapshotAll() {
-			viewports = append(viewports, protocol.PaneViewportState{
-				PaneID:         e.id,
-				AltScreen:      e.vp.AltScreen,
-				AutoFollow:     e.vp.AutoFollow,
-				ViewBottomIdx:  e.vp.ViewBottomIdx,
-				WrapSegmentIdx: e.vp.WrapSegmentIdx,
-				ViewportRows:   e.vp.Rows,
-				ViewportCols:   e.vp.Cols,
-			})
-		}
-		if hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence, viewports); err != nil {
-			return fmt.Errorf("resume request failed: %w", err)
+		if loadedState != nil && len(loadedState.PaneViewports) > 0 {
+			viewports = loadedState.PaneViewports
 		} else {
-			handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
+			for _, e := range state.viewports.snapshotAll() {
+				viewports = append(viewports, protocol.PaneViewportState{
+					PaneID:         e.id,
+					AltScreen:      e.vp.AltScreen,
+					AutoFollow:     e.vp.AutoFollow,
+					ViewBottomIdx:  e.vp.ViewBottomIdx,
+					WrapSegmentIdx: e.vp.WrapSegmentIdx,
+					ViewportRows:   e.vp.Rows,
+					ViewportCols:   e.vp.Cols,
+				})
+			}
 		}
+
+		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports)
+		if err != nil {
+			// Resume against a session that completed handshake should
+			// not normally fail. If it does, surface the error rather
+			// than retrying — the connection is in an indeterminate
+			// state and recovery is the user's job.
+			return fmt.Errorf("resume request failed: %w", err)
+		}
+		handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
 	}
+
+	// Plan D: install debounced persistence Writer. nil-safe — if path
+	// resolution failed, persistence is silently disabled.
+	var persistWriter *Writer
+	if statePath != "" {
+		persistWriter = NewWriter(statePath, 250*time.Millisecond)
+		defer persistWriter.Close() // flushes synchronously and waits for in-flight ticks
+	}
+
+	// persistSnapshot builds the current ClientState and hands it to
+	// the debounced Writer. Called from flushFrame (rate-limited to
+	// once per render iteration) and on exit.
+	//
+	// Note: lastSequence is atomic.Uint64 (Task 10), so .Load() is
+	// race-safe even though readLoop mutates it from another goroutine.
+	// sessionID is captured by reference — Task 11's retry path passes
+	// &sessionID into simple.Connect, which writes the freshly-allocated
+	// session ID back through the pointer (simple_client.go:91), so
+	// persistSnapshot always reads the current value at invocation time.
+	//
+	// IMPORTANT: there is NO eager initial seed. A persistSnapshot call
+	// here would write LastSequence=0 with empty PaneViewports (because
+	// no panes have rendered yet), which would overwrite the previous
+	// session's state on a fast crash before the first frame. Wait for
+	// the first real flushFrame to trigger the first save instead.
+	persistSnapshot := func() {
+		if persistWriter == nil {
+			return
+		}
+		persistWriter.Update(ClientState{
+			SocketPath:    opts.Socket,
+			SessionID:     sessionID,
+			LastSequence:  lastSequence.Load(),
+			WrittenAt:     time.Now().UTC(),
+			PaneViewports: state.viewports.snapshotForPersistence(),
+		})
+	}
+	state.persistSnapshot = persistSnapshot
 
 	renderCh := make(chan struct{}, 64) // Larger buffer for smooth animations
 	state.setRenderChannel(renderCh)

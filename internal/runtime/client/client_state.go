@@ -113,6 +113,11 @@ type clientState struct {
 	ttyWriter io.Writer
 
 	keybindings *keybind.Registry
+
+	// persistSnapshot, if non-nil, is invoked once per flushFrame
+	// iteration to schedule a debounced persist. Set by app.go when
+	// Plan D persistence is active. Plan D / issue #199.
+	persistSnapshot func()
 }
 
 func (s *clientState) setRenderChannel(ch chan<- struct{}) {

@@ -12,6 +12,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -58,12 +59,37 @@ func run() error {
 	// Client flags
 	reconnect := fs.Bool("reconnect", false, "Attempt to resume previous session")
 	panicLog := fs.String("panic-log", "", "File to append panic stack traces")
+	clientName := fs.String("client-name", "", "Client identity slot for persistence (default: $TEXELATION_CLIENT_NAME or \"default\")")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		if err == flag.ErrHelp {
 			return nil
 		}
 		return err
+	}
+
+	// Plan D: validate --client-name (or $TEXELATION_CLIENT_NAME)
+	// early. Either input expresses the user's intent to use a named
+	// persistence slot; silently disabling persistence later when
+	// ResolvePath rejects the name is a UX trap. ValidateClientName
+	// only checks the name itself — it does not touch $HOME or the
+	// socket — so failures here are unambiguously "the user-supplied
+	// name is invalid", not "your environment is misconfigured."
+	if *clientName != "" {
+		if err := clientrt.ValidateClientName(*clientName); err != nil {
+			return fmt.Errorf("invalid --client-name %q: %w", *clientName, err)
+		}
+		// Audible warning when the flag silently overrides a non-empty
+		// env var — otherwise a user with $TEXELATION_CLIENT_NAME set
+		// in their shell rc could silently end up using a different
+		// slot than they expect after typing a one-off --client-name.
+		if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" && envName != *clientName {
+			log.Printf("note: --client-name=%q overrides $%s=%q", *clientName, clientrt.ClientNameEnvVar, envName)
+		}
+	} else if envName := os.Getenv(clientrt.ClientNameEnvVar); envName != "" {
+		if err := clientrt.ValidateClientName(envName); err != nil {
+			return fmt.Errorf("invalid $%s %q: %w", clientrt.ClientNameEnvVar, envName, err)
+		}
 	}
 
 	// Resolve config paths
@@ -113,9 +139,10 @@ func run() error {
 
 	case *clientOnly:
 		return handleClientOnly(clientrt.Options{
-			Socket:    *socketPath,
-			Reconnect: *reconnect,
-			PanicLog:  *panicLog,
+			Socket:     *socketPath,
+			Reconnect:  *reconnect,
+			PanicLog:   *panicLog,
+			ClientName: *clientName,
 		})
 
 	default:
@@ -128,9 +155,10 @@ func run() error {
 			LogFilePath:  paths.ServerLogPath,
 			Title:        *title,
 		}, clientrt.Options{
-			Socket:    *socketPath,
-			Reconnect: *reconnect,
-			PanicLog:  *panicLog,
+			Socket:     *socketPath,
+			Reconnect:  *reconnect,
+			PanicLog:   *panicLog,
+			ClientName: *clientName,
 		})
 	}
 }

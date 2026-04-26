@@ -15,11 +15,11 @@ func TestRunParsesFlagsAndInvokesClient(t *testing.T) {
 	}
 	defer func() { runClient = clientrt.Run }()
 
-	args := []string{"-socket", "/tmp/custom.sock", "-reconnect", "-panic-log", "/tmp/panic.log"}
+	args := []string{"-socket", "/tmp/custom.sock", "-reconnect", "-panic-log", "/tmp/panic.log", "-client-name", "alice"}
 	if err := run(args); err != nil {
 		t.Fatalf("run returned error: %v", err)
 	}
-	if captured.Socket != "/tmp/custom.sock" || !captured.Reconnect || captured.PanicLog != "/tmp/panic.log" {
+	if captured.Socket != "/tmp/custom.sock" || !captured.Reconnect || captured.PanicLog != "/tmp/panic.log" || captured.ClientName != "alice" {
 		t.Fatalf("unexpected options passed to client: %+v", captured)
 	}
 }

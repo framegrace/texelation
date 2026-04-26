@@ -16,7 +16,7 @@ func TestClientViewports_ApplyResume(t *testing.T) {
 		{PaneID: [16]byte{1}, ViewBottomIdx: 100, AutoFollow: false, ViewportRows: 24, ViewportCols: 80},
 		{PaneID: [16]byte{2}, AltScreen: true, ViewportRows: 24, ViewportCols: 80},
 	}
-	cv.ApplyResume(states)
+	cv.ApplyResume(states, nil)
 	got1, ok := cv.Get([16]byte{1})
 	if !ok {
 		t.Fatalf("pane 1 not stored")
@@ -41,7 +41,7 @@ func TestClientViewports_ApplyResume_ClampsNegativeTop(t *testing.T) {
 	cv := NewClientViewports()
 	cv.ApplyResume([]protocol.PaneViewportState{
 		{PaneID: [16]byte{3}, ViewBottomIdx: 5 /* less than Rows-1 */, ViewportRows: 24, ViewportCols: 80},
-	})
+	}, nil)
 	got, _ := cv.Get([16]byte{3})
 	if got.ViewTopIdx != 0 {
 		t.Fatalf("ViewTopIdx: got %d want 0 (clamped)", got.ViewTopIdx)
@@ -52,7 +52,7 @@ func TestClientViewports_ApplyResume_AutoFollowPreservesFlag(t *testing.T) {
 	cv := NewClientViewports()
 	cv.ApplyResume([]protocol.PaneViewportState{
 		{PaneID: [16]byte{1}, AutoFollow: true, ViewBottomIdx: 500, ViewportRows: 24, ViewportCols: 80},
-	})
+	}, nil)
 	got, _ := cv.Get([16]byte{1})
 	if !got.AutoFollow {
 		t.Fatalf("AutoFollow flag lost: got %+v", got)
@@ -72,7 +72,7 @@ func TestClientViewports_ApplyResume_NegativeViewBottomOverflowSafe(t *testing.T
 	// degenerate state that drops every real row at publish time.
 	cv.ApplyResume([]protocol.PaneViewportState{
 		{PaneID: [16]byte{2}, AutoFollow: false, ViewBottomIdx: math.MinInt64, ViewportRows: 65535, ViewportCols: 80},
-	})
+	}, nil)
 	got, _ := cv.Get([16]byte{2})
 	if got.ViewTopIdx < 0 || got.ViewTopIdx > got.ViewBottomIdx+1 {
 		// Allow ViewTopIdx=0 (clamped) or anything <= ViewBottomIdx.
