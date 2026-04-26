@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
+	clientruntime "github.com/framegrace/texelation/internal/runtime/client"
 	"github.com/framegrace/texelation/internal/runtime/server/testutil"
 	"github.com/framegrace/texelation/protocol"
 )
@@ -561,4 +562,87 @@ func TestIntegration_ResumeAutoFollowHighGlobalIdx_NoTruncation(t *testing.T) {
 	// gid = RowBase + RowDelta.Row, so a correctly encoded row at high gid
 	// must appear in rowsByGID under its real globalIdx.
 	h.AwaitRow(h.paneID, startGid+97, 2*time.Second)
+}
+
+// TestIntegration_PersistedStateDrivesResumeRequest verifies the
+// disk → wire → server boundary of Plan D persistence. We construct
+// a ClientState in memory, Save+Load it through persistence.go (so
+// JSON encoding/decoding is exercised), build a ResumeRequest from
+// the loaded fields, push it through newMemHarness, and assert the
+// server applied the resumed viewport correctly.
+//
+// This stops short of running a full clientruntime.Run; that path
+// is covered by Task 20's manual end-to-end verification. The test
+// here proves the wire shape is consistent end-to-end.
+func TestIntegration_PersistedStateDrivesResumeRequest(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	h := newMemHarness(t, 80, 24)
+
+	// Feed 200 rows so a scrolled-back gid=50 is in range.
+	lines := make([]string, 200)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	h.fakeApp.FeedRows(0, lines)
+
+	// Bootstrap the publisher's pre-resume viewport state — same shape
+	// as TestIntegration_ResumeHonorsPaneViewport's setup. Without this,
+	// the publisher's per-pane ClientViewport is empty and any post-resume
+	// publish race could be observable as flakes.
+	h.ApplyViewport(h.paneID, 176, 199, true /*autoFollow*/, false /*altScreen*/)
+	h.Publish()
+
+	// Build the ClientState a real client would have persisted: it
+	// holds the same sessionID/paneID the harness allocated, plus a
+	// scrolled-back PaneViewport.
+	socketPath := "/tmp/test-d-rrq.sock" // sanity-check value; not actually opened
+	statePath, err := clientruntime.ResolvePath(socketPath, "default")
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	want := clientruntime.ClientState{
+		SocketPath:   socketPath,
+		SessionID:    h.sessionID(),
+		LastSequence: 0,
+		WrittenAt:    time.Now().UTC(),
+		PaneViewports: []protocol.PaneViewportState{
+			{
+				PaneID:         h.paneID,
+				AltScreen:      false,
+				AutoFollow:     false,
+				ViewBottomIdx:  50,
+				WrapSegmentIdx: 0,
+				ViewportRows:   24,
+				ViewportCols:   80,
+			},
+		},
+	}
+
+	// Save + Load — exercises JSON encode/decode round-trip.
+	if err := clientruntime.Save(statePath, &want); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := clientruntime.Load(statePath, socketPath)
+	if err != nil || got == nil {
+		t.Fatalf("Load: state=%v err=%v", got, err)
+	}
+
+	// Construct the ResumeRequest as app.go would, from the loaded state.
+	resume := protocol.ResumeRequest{
+		SessionID:     got.SessionID,
+		LastSequence:  got.LastSequence,
+		PaneViewports: got.PaneViewports,
+	}
+	payload, err := protocol.EncodeResumeRequest(resume)
+	if err != nil {
+		t.Fatalf("encode resume: %v", err)
+	}
+	h.writeFrame(protocol.MsgResumeRequest, payload, h.sessionID())
+
+	// Server should apply the resumed viewport — render buffer ends at gid 50.
+	// Same assertion as the existing TestIntegration_ResumeHonorsPaneViewport
+	// (which uses an in-memory-built request); this one proves the loaded-
+	// from-disk shape is wire-equivalent.
+	h.AwaitRow(h.paneID, 48, 2*time.Second)
 }
