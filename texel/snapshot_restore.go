@@ -133,13 +133,40 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 	// silently leaks an orphan refresh notifier and confuses the
 	// renderer (the texelterm pane ends up filling the slot the real
 	// statusbar should occupy, with no top/bottom borders).
-	statusPaneIDs := make(map[[16]byte]bool, len(d.statusPanes))
+	//
+	// We can't filter by ID — newStatusPaneID is random at boot, so
+	// the runtime status panes' IDs don't match the snapshot's
+	// captured IDs across restarts. Match by Title instead: the
+	// captured statusbar snapshot has Title=sp.app.GetTitle(), and
+	// the runtime statusbar's app keeps the same title across boots.
+	// AppType is also checked (more robust if titles ever collide
+	// with workspace panes).
+	statusTitles := make(map[string]bool, len(d.statusPanes))
 	for _, sp := range d.statusPanes {
-		statusPaneIDs[sp.id] = true
+		if sp.app != nil {
+			statusTitles[sp.app.GetTitle()] = true
+		}
+	}
+	isStatusOrphan := func(p *pane) bool {
+		if p.app == nil {
+			return false
+		}
+		title := p.app.GetTitle()
+		if statusTitles[title] {
+			return true
+		}
+		// Belt-and-braces: the captured StatusBar app reports
+		// AppType="statusbar" via SnapshotMetadata; check that too.
+		if provider, ok := p.app.(SnapshotProvider); ok {
+			if appType, _ := provider.SnapshotMetadata(); appType == "statusbar" {
+				return true
+			}
+		}
+		return false
 	}
 	startable := panes[:0]
 	for _, p := range panes {
-		if statusPaneIDs[p.id] {
+		if isStatusOrphan(p) {
 			// Stop the orphan's app and detach so it doesn't dangle.
 			// The real status pane (from AddStatusPane) is unaffected.
 			if p.app != nil {
