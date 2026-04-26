@@ -250,18 +250,11 @@ func main() {
 			srv.SetSnapshotStore(store, 5*time.Second)
 			log.Printf("Session persistence enabled: %s", snapPath)
 			// Plan D2: cross-restart session/viewport persistence.
-			// TEMPORARILY DISABLED pending investigation of an
-			// autoFollow + publisher interaction that produces a
-			// multi-second initial publish and a "stuck viewport"
-			// symptom on rehydrate. The D2 infrastructure (atomicjson,
-			// StoredSession schema, Session writer, EnablePersistence,
-			// all unit + integration tests) is in place; only the live
-			// wiring is gated off. Re-enable once the publisher path
-			// is debugged. See task #9 in the e2e log.
-			//
-			//   if err := manager.EnablePersistence(filepath.Dir(snapPath), 250*time.Millisecond); err != nil {
-			//       log.Printf("warning: could not enable persistence: %v", err)
-			//   }
+			// MUST run before srv.Start so the persisted-session index
+			// is populated before any client can send MsgResumeRequest.
+			if err := manager.EnablePersistence(filepath.Dir(snapPath), 250*time.Millisecond); err != nil {
+				log.Printf("warning: could not enable persistence: %v", err)
+			}
 		}
 	} else {
 		log.Println("Starting from scratch (--from-scratch flag set)")
