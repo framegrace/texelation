@@ -220,7 +220,10 @@ Test naming evolved during plan writing — these are the consolidated test name
 - **`TestPaneActivityFromSnapshot_*`** — pure-function tests for the helper used by `connection.recordSnapshotActivity`.
 - **`TestStoredSessionRoundTrip`** + **`TestSessionFilePath`** — schema and path-resolver coverage.
 - **`TestManagerNewSessionWithID_*`** — explicit test for the public test-utility constructor.
-- **`TestSessionWriterPersistsViewportUpdate`** + **`TestSessionWriterCloseFlushes`** + **`TestRecordPaneActivityPersists`** — Session writer unit coverage.
+- **`TestSessionWriterPersistsViewportUpdate`** + **`TestSessionWriterCloseFlushes`** — Session writer unit coverage. (`RecordPaneActivity` is exercised end-to-end in `TestD2_FullCrossRestartCycle` and `TestD2_ConcurrentUpdates`; no dedicated unit test.)
+- **`TestD2_ResumeRehydratesUnknownSession`** — handshake-level test that a `MsgConnectRequest` for a previously-persisted sessionID is rehydrated and resumed without error.
+- **`TestScanSessionsDirMissingIsEmpty`** — `ScanSessionsDir` returns an empty index when the sessions directory does not exist (e.g., first daemon launch).
+- **`TestManagerCloseDropsLockBeforeSessionClose`** — regression guard: `Manager.Close` must not hold `m.mu` while `Session.Close` blocks on the writer's disk flush.
 - **`TestManagerLookupOrRehydrate_*`** — manager rehydration semantics.
 - **`TestManagerNewSessionAttachesWriter`** + **`TestManagerLookupOrRehydrate_AttachesWriter`** — `EnablePersistence` wiring.
 

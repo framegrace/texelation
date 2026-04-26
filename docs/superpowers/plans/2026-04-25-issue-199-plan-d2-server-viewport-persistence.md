@@ -12,7 +12,7 @@
 
 **Branch:** `feature/issue-199-plan-d2-server-viewport-persistence`
 
-> **Plan revision 2026-04-26 (post 4-agent review):** Several issues were caught by parallel review agents before any task was implemented. This version of the plan incorporates all of them. Key changes: (1) Task 7 uses a new `ClientViewports.ApplyPreSeed` method instead of writing into `byPaneID` without taking the lock — Plan B round 2 caught the same kind of bug, don't repeat it. (2) Task 9 drops the `EnqueueDiff`/`EnqueueImage` writer hooks (per-delta `Snapshot()` allocations were a perf risk; spec updated to match). (3) Task 10 combines `LoadPersistedSessions` + `SetPersistencePath` into a single `Manager.EnablePersistence(basedir, debounce)` to remove the ordering window. (4) Task 11 is rewritten as a real TDD pair (no more "expected PASS at red-step"). (5) Task 12 replaces `testutil.NewMemConnPair` (does not exist) with `testutil.NewMemPipe(64)`. (6) Task 13's resume flag is cleared on `RequestResume` error, and the test now drives the production handler via `handleControlMessage` instead of a duplicated helper. (7) New Task 14b adds atomicjson tests the spec required but the prior plan dropped: failing-rename safety + `saveErrRelogInterval` dedup. (8) `prevMgrNewSessionWithID` escape hatch replaced by a public `Manager.NewSessionWithID`. (9) Manual e2e gains marker-based scrollback observation, orphan-tmp-file checks, and a client+daemon both-restart scenario.
+> **Plan revisions (three rounds of parallel-agent review):** The plan was revised three times in response to four-agent review passes before any code was written. Round 1 caught: `ClientViewports.ApplyPreSeed` for proper locking; dropped `EnqueueDiff`/`EnqueueImage` writer hooks (allocation risk); combined `LoadPersistedSessions` + `SetPersistencePath` into a single `Manager.EnablePersistence`; rewrote Task 11 as a real TDD pair; replaced non-existent `testutil.NewMemConnPair` with `testutil.NewMemPipe(64)`; cleared the resume flag on `RequestResume` error; added atomicjson failing-rename + `saveErrRelogInterval` dedup tests; replaced `prevMgrNewSessionWithID` escape hatch with `Manager.NewSessionWithID`; added e2e markers, orphan-tmp checks, and full client+daemon restart scenario. Round 2 caught: forward-ref bug (`preSeedViewports` → `ApplyPreSeed`); Task 10/8 wiring contradiction; `Session.schedulePersist` close-vs-update race (capture under lock); invalid `protocol.BufferDelta` literal fields (replaced with a `seedRevision` helper); rewrote failing-rename test; corrected `EnablePersistence` docstring; `TestD2_PhantomPaneFilterAfterPreSeed`; `time.Sleep` audit step. Round 3 caught: 11 sites used `protocol.ViewportUpdate{ViewportRows, ViewportCols}` but the real fields are `Rows`/`Cols`; the Manager variable is `manager` (not `mgr`) and `--from-scratch` mode skips `snapPath` so persistence must be gated; Task 14b imports duplicated `errors` (must merge into existing block); `TestSaveFailingRenameLeavesPriorFile` bypassed `atomicjson.Save` entirely (now uses package-level `renameFn` hook); phantom-pane unbounded growth across restarts (added `ClientViewports.PrunePhantoms`, called in `connection_handler` MsgResumeRequest path); `Manager.Close` and `SetDiffRetentionLimit` held `m.mu` during the now-blocking writer flush (Task 12b refactor drops the lock first); `bytes.Buffer` data race in dedup test (wrapped in `syncBuf`).
 
 ---
 
@@ -138,6 +138,12 @@ import (
 	"path/filepath"
 )
 
+// renameFn is the rename primitive used by Save. Defaults to os.Rename
+// in production; tests override it to simulate rename-failure paths
+// (e.g. cross-device link, EACCES) without needing a real filesystem
+// trigger. Reset to os.Rename in test cleanup.
+var renameFn = os.Rename
+
 // Save writes v to path atomically: encode to a sibling .tmp file,
 // fsync-by-rename. A crash mid-write leaves either the previous
 // contents or the new file, never partial data.
@@ -169,7 +175,7 @@ func Save[T any](path string, v *T) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("atomicjson: close tmp: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := renameFn(tmpPath, path); err != nil {
 		return fmt.Errorf("atomicjson: rename: %w", err)
 	}
 	return nil
@@ -1421,8 +1427,8 @@ func TestSessionWriterPersistsViewportUpdate(t *testing.T) {
 	sess.ApplyViewportUpdate(protocol.ViewportUpdate{
 		PaneID:        [16]byte{0xaa},
 		ViewBottomIdx: 12345,
-		ViewportRows:  24,
-		ViewportCols:  80,
+		Rows:          24,
+		Cols:          80,
 	})
 	// Force the debounced writer to flush synchronously rather than
 	// racing a sleep against the AfterFunc timer (flake-prone on CI).
@@ -1455,7 +1461,7 @@ func TestSessionWriterCloseFlushes(t *testing.T) {
 	id := [16]byte{0xbe, 0xef}
 	sess := NewSession(id, 100)
 	sess.AttachWriter(SessionFilePath(dir, id), 1*time.Hour) // long debounce
-	sess.ApplyViewportUpdate(protocol.ViewportUpdate{PaneID: [16]byte{0x01}, ViewBottomIdx: 1, ViewportRows: 1, ViewportCols: 1})
+	sess.ApplyViewportUpdate(protocol.ViewportUpdate{PaneID: [16]byte{0x01}, ViewBottomIdx: 1, Rows: 1, Cols: 1})
 	sess.Close() // must flush
 
 	if _, err := os.Stat(SessionFilePath(dir, id)); err != nil {
@@ -1682,7 +1688,7 @@ func TestManagerNewSessionAttachesWriter(t *testing.T) {
 	defer sess.Close()
 
 	sess.ApplyViewportUpdate(protocol.ViewportUpdate{
-		PaneID: [16]byte{0xaa}, ViewBottomIdx: 1, ViewportRows: 1, ViewportCols: 1,
+		PaneID: [16]byte{0xaa}, ViewBottomIdx: 1, Rows: 1, Cols: 1,
 	})
 	sess.FlushPersistForTest() // see helper in session.go (Task 9 patch below)
 
@@ -1711,7 +1717,7 @@ func TestManagerLookupOrRehydrate_AttachesWriter(t *testing.T) {
 	defer sess.Close()
 
 	sess.ApplyViewportUpdate(protocol.ViewportUpdate{
-		PaneID: [16]byte{0xbb}, ViewBottomIdx: 99, ViewportRows: 1, ViewportCols: 1,
+		PaneID: [16]byte{0xbb}, ViewBottomIdx: 99, Rows: 1, Cols: 1,
 	})
 	sess.FlushPersistForTest()
 	if _, err := os.Stat(SessionFilePath(dir, id)); err != nil {
@@ -1810,9 +1816,14 @@ func (m *Manager) NewSession() (*Session, error) {
 }
 ```
 
-In `LookupOrRehydrate`, after the rehydrated session is registered, attach the writer. Pre-seed viewports via the locked `ApplyPreSeed` method (added in Task 7 — never write `byPaneID` directly):
+In `LookupOrRehydrate`, after the rehydrated session is registered, attach the writer. Pre-seed viewports via the locked `ApplyPreSeed` method, then filter phantoms against the live pane tree if a predicate is available. Without the filter, a stored entry whose `PaneID` was destroyed during the prior daemon's lifetime would persist forever, growing `byPaneID` monotonically across restarts (Plan B review-findings #4 — Plan D2 closes that gap):
 
 ```go
+// LookupOrRehydrate returns an existing live Session, or rehydrates one
+// from disk if the persistedSessions index has it. Pre-seeds viewports
+// from disk; the caller is expected to call PrunePhantomPanes(pred)
+// after the live pane tree is known so dead PaneIDs are dropped before
+// any writer flushes them back to disk.
 func (m *Manager) LookupOrRehydrate(id [16]byte) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1834,6 +1845,47 @@ func (m *Manager) LookupOrRehydrate(id [16]byte) (*Session, error) {
 }
 ```
 
+Add a pruning method on `*ClientViewports` (next to `ApplyPreSeed`) so phantoms can be removed under the lock:
+
+```go
+// PrunePhantoms removes pane viewports whose IDs no longer exist
+// according to the predicate. Called after rehydration and after the
+// live pane tree is known. Without this, pre-seeded entries for panes
+// destroyed during the prior daemon's lifetime would persist
+// indefinitely and write back to disk, growing the on-disk file
+// monotonically across restarts.
+func (c *ClientViewports) PrunePhantoms(paneExists func(id [16]byte) bool) int {
+	if paneExists == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	dropped := 0
+	for id := range c.byPaneID {
+		if !paneExists(id) {
+			delete(c.byPaneID, id)
+			dropped++
+		}
+	}
+	return dropped
+}
+```
+
+The connection handler then prunes phantoms exactly once, after `MsgResumeRequest` has identified the live pane tree (the existing `paneExists` predicate built from `desktop.AppByID(...)` at `connection_handler.go:163-175` is already the right shape):
+
+```go
+// In the MsgResumeRequest case in connection_handler.go, immediately
+// after the existing `viewportsToApply` pruning loop and before
+// c.session.ApplyResume:
+if pruned := c.session.viewports.PrunePhantoms(func(p [16]byte) bool {
+    return desktop.AppByID(p) != nil
+}); pruned > 0 {
+    debugLog.Printf("connection %x: pruned %d phantom pre-seed viewport(s)", c.session.ID(), pruned)
+}
+```
+
+(Add this snippet to the existing handler block guarded by `if sinkOK && sink.Desktop() != nil`. The pre-seed entries for panes that no longer exist server-side are dropped before `ApplyResume` runs and before the writer ever flushes them back to disk.)
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/runtime/server/ -run 'TestManager.*Writer' -race -v`
@@ -1843,21 +1895,31 @@ Expected: PASS.
 
 Task 8 deliberately did NOT touch `cmd/texel-server/main.go` — the production wiring lives entirely here.
 
-`cmd/texel-server/main.go` resolves `snapPath` in two branches around lines 194 and 234. After each `snapPath` is finalized and the snapshot store is constructed, locate the `*server.Manager` instance (`mgr`) and add this call **before** the listener starts accepting connections:
+The `*server.Manager` instance is bound to a local variable named `manager` (NOT `mgr`) at `cmd/texel-server/main.go:123`. The snapshot path is resolved inside the `if !*fromScratch` block (around lines 194 and 234, both branches resolve `snapPath` to a non-empty string). The listener entry point is `srv.Start(...)` around line 266.
+
+Confirm the call sites first:
+
+```bash
+grep -n "manager :=\|snapPath :=\|srv.Start\|srv\.Listen" cmd/texel-server/main.go
+```
+
+Then add this call **inside the `if !*fromScratch` block, after `snapPath` is fully resolved and BEFORE `srv.Start(...)` is invoked**:
 
 ```go
-if err := mgr.EnablePersistence(filepath.Dir(snapPath), 250*time.Millisecond); err != nil {
+if err := manager.EnablePersistence(filepath.Dir(snapPath), 250*time.Millisecond); err != nil {
     log.Printf("warning: could not enable persistence: %v", err)
 }
 ```
 
+**Why inside the `if !*fromScratch` block.** When the operator passes `--from-scratch`, `snapPath` is never assigned and `filepath.Dir("")` returns `"."`, which would land session files in the daemon's cwd — wrong. `--from-scratch` deliberately skips the snapshot store, and D2 persistence shares that intent: skip when the snapshot path itself is skipped. Persistence-from-scratch is opt-out aligned with snapshot-from-scratch.
+
 Verify the ordering with:
 
 ```bash
-grep -n "Listen\|Accept\|ListenAndServe\|EnablePersistence" cmd/texel-server/main.go
+grep -n "Listen\|Accept\|ListenAndServe\|EnablePersistence\|srv\.Start\|Server\.Start" cmd/texel-server/main.go
 ```
 
-`EnablePersistence` MUST appear lexically (and run sequentially) before any line that opens the listener / starts the connection acceptor. Per the spec's "Boot-scan-before-listener invariant," a `MsgResumeRequest` arriving during the scan window would falsely return `ErrSessionNotFound`.
+`EnablePersistence` MUST appear lexically (and run sequentially) before any line that opens the listener or starts the connection acceptor. Per the spec's "Boot-scan-before-listener invariant," a `MsgResumeRequest` arriving during the scan window would falsely return `ErrSessionNotFound`.
 
 `LoadPersistedSessions` from Task 8 is unused as a production entry point but remains a useful primitive for tests; keep it. `SetPersistencePath` from earlier drafts is removed entirely — `EnablePersistence` is the only production entry point.
 
@@ -2480,6 +2542,130 @@ git commit -m "Plan D2 task 13: applyPostResumeReset one-shot sync barrier"
 
 ---
 
+### Task 12b: Refactor `Manager.Close` and `SetDiffRetentionLimit` to drop `m.mu` before calling `Session.Close` / `Session.setMaxDiffs`
+
+**Why this task exists.** Before D2, `Session.Close` was instant — it cleared the diff queue under `s.mu` and returned. After Task 9 attaches an atomicjson writer, `Session.Close` synchronously calls `w.Close()` which runs `Flush()` and waits on the writer's `wg`, doing disk I/O. The existing `Manager.Close(id)` (`internal/runtime/server/manager.go:67-74`) and `Manager.SetDiffRetentionLimit` (`:55-65`) both hold `m.mu` while iterating sessions and calling per-session methods that now block on disk. That blocks every other Manager call (`NewSession`, `Lookup`, `LookupOrRehydrate`, `ActiveSessions`, `SessionStats`) for the duration of the flush. Behavioral regression that should ship with D2, not in a separate cleanup PR.
+
+**Files:**
+- Modify: `internal/runtime/server/manager.go`
+- Test: `internal/runtime/server/manager_test.go`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `manager_test.go`:
+
+```go
+func TestManagerCloseDropsLockBeforeSessionClose(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager()
+	if err := mgr.EnablePersistence(dir, 25*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	id := [16]byte{0xfe, 0xed}
+	sess, err := mgr.NewSessionWithID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Apply enough updates to make Close's flush non-trivial.
+	for i := 0; i < 10; i++ {
+		sess.ApplyViewportUpdate(protocol.ViewportUpdate{
+			PaneID: [16]byte{byte(i)}, ViewBottomIdx: int64(i), Rows: 1, Cols: 1,
+		})
+	}
+
+	closeStarted := make(chan struct{})
+	closeDone := make(chan struct{})
+	go func() {
+		close(closeStarted)
+		mgr.Close(id) // synchronous — must not block other Manager methods
+		close(closeDone)
+	}()
+	<-closeStarted
+
+	// While Close is running, ActiveSessions must return promptly. If
+	// Close held m.mu through the disk flush, this call would block.
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("ActiveSessions blocked while Close was running — m.mu held during disk I/O")
+		case <-closeDone:
+			return
+		default:
+			_ = mgr.ActiveSessions() // must not deadlock
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails (or hangs)**
+
+Run: `go test ./internal/runtime/server/ -run TestManagerCloseDropsLockBeforeSessionClose -timeout=10s -v`
+Expected: FAIL or TIMEOUT — the current `Manager.Close` holds `m.mu` through `session.Close()`.
+
+- [ ] **Step 3: Refactor `Manager.Close` and `SetDiffRetentionLimit`**
+
+In `internal/runtime/server/manager.go`:
+
+```go
+// Close removes the session from the live map and tears it down. The
+// teardown call (which now blocks on disk I/O via the atomicjson
+// writer's flush) runs OUTSIDE m.mu so other Manager methods don't
+// stall behind a slow flush.
+func (m *Manager) Close(id [16]byte) {
+	m.mu.Lock()
+	session, ok := m.sessions[id]
+	if ok {
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+	if ok {
+		session.Close() // disk flush — outside m.mu
+	}
+}
+
+// SetDiffRetentionLimit applies the new limit to all live sessions.
+// Capture the slice under m.mu, then walk it without the lock — the
+// per-session call may take a per-session lock and we don't want to
+// block other Manager ops on that.
+func (m *Manager) SetDiffRetentionLimit(limit int) {
+	if limit < 0 {
+		limit = 0
+	}
+	m.mu.Lock()
+	m.maxDiffs = limit
+	live := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		live = append(live, s)
+	}
+	m.mu.Unlock()
+	for _, s := range live {
+		s.setMaxDiffs(limit)
+	}
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `go test ./internal/runtime/server/ -run TestManagerCloseDropsLockBeforeSessionClose -race -v`
+Expected: PASS.
+
+- [ ] **Step 5: Run the full Manager suite**
+
+Run: `go test ./internal/runtime/server/ -run TestManager -race -count=1`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add internal/runtime/server/manager.go internal/runtime/server/manager_test.go
+git commit -m "Plan D2 task 12b: drop m.mu before Session.Close to allow concurrent Manager ops"
+```
+
+---
+
 ### Task 13b: Add `Manager.NewSessionWithID` public test/library entry point
 
 The existing `Manager.NewSession` rolls a random `[16]byte` id. Task 14's integration test (and Plan F's future session-recovery surfaces) needs to construct a session with a specific id without reaching into private fields. Add the public method now so Task 14's helper isn't an escape hatch.
@@ -2626,8 +2812,8 @@ func TestD2_FullCrossRestartCycle(t *testing.T) {
 	prevSess.ApplyViewportUpdate(protocol.ViewportUpdate{
 		PaneID:        [16]byte{0xab, 0xcd},
 		ViewBottomIdx: 7777,
-		ViewportRows:  30,
-		ViewportCols:  100,
+		Rows:          30,
+		Cols:          100,
 		AutoFollow:    false,
 	})
 	prevSess.RecordPaneActivity(2, "bash") // Plan F metadata
@@ -2673,8 +2859,8 @@ func TestD2_FullCrossRestartCycle(t *testing.T) {
 	sess.ApplyViewportUpdate(protocol.ViewportUpdate{
 		PaneID:        [16]byte{0xab, 0xcd},
 		ViewBottomIdx: 8500,
-		ViewportRows:  30,
-		ViewportCols:  100,
+		Rows:          30,
+		Cols:          100,
 	})
 	sess.RecordPaneActivity(3, "vim") // refresh Plan F metadata after pane add
 	sess.FlushPersistForTest()
@@ -2750,7 +2936,7 @@ func TestD2_PinnedRoundTrip(t *testing.T) {
 
 	// Force a fresh write back. Pinned must round-trip.
 	sess.ApplyViewportUpdate(protocol.ViewportUpdate{
-		PaneID: [16]byte{0xff}, ViewBottomIdx: 1, ViewportRows: 1, ViewportCols: 1,
+		PaneID: [16]byte{0xff}, ViewBottomIdx: 1, Rows: 1, Cols: 1,
 	})
 	sess.FlushPersistForTest()
 
@@ -2781,7 +2967,7 @@ func TestD2_FileSurvivesSessionClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess.ApplyViewportUpdate(protocol.ViewportUpdate{
-		PaneID: [16]byte{0x01}, ViewBottomIdx: 1, ViewportRows: 1, ViewportCols: 1,
+		PaneID: [16]byte{0x01}, ViewBottomIdx: 1, Rows: 1, Cols: 1,
 	})
 	sess.Close()
 
@@ -2825,10 +3011,10 @@ func TestD2_ConcurrentUpdates(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < K; i++ {
 				sess.ApplyViewportUpdate(protocol.ViewportUpdate{
-					PaneID:       [16]byte{byte(g)},
+					PaneID:        [16]byte{byte(g)},
 					ViewBottomIdx: int64(i),
-					ViewportRows:  24,
-					ViewportCols:  80,
+					Rows:          24,
+					Cols:          80,
 				})
 				if i%10 == 0 {
 					sess.RecordPaneActivity(g+1, "concurrent")
@@ -2855,16 +3041,15 @@ func TestD2_ConcurrentUpdates(t *testing.T) {
 	}
 }
 
-// TestD2_PhantomPaneFilterAfterPreSeed: pre-seed places a viewport for
-// a pane that no longer exists server-side, then a client's resume
-// payload includes a different phantom pane. ApplyResume's paneExists
-// filter must drop the client-supplied phantom while leaving the
-// pre-seed entry intact (until the next live update overwrites it).
-// Locks in spec failure mode #4 across the rehydration boundary.
+// TestD2_PhantomPaneFilterAfterPreSeed: pre-seed places viewports for
+// real and dead panes; PrunePhantoms drops the dead one against the
+// live pane tree; ApplyResume's paneExists filter drops the
+// client-supplied phantom. Both filters must work — without the first,
+// dead PaneIDs persist back to disk and grow monotonically across
+// daemon restarts (Plan B review-findings #4).
 func TestD2_PhantomPaneFilterAfterPreSeed(t *testing.T) {
 	dir := t.TempDir()
 	id := [16]byte{0xee, 0xee}
-	// Pre-existing pane (real on this server) + phantom from a prior life.
 	realPane := [16]byte{0x01}
 	deadPane := [16]byte{0x99}
 	stored := StoredSession{
@@ -2891,30 +3076,58 @@ func TestD2_PhantomPaneFilterAfterPreSeed(t *testing.T) {
 	}
 	defer sess.Close()
 
-	// Both pre-seeded entries are present (pre-seed does not filter).
+	// Pre-seed accepts everything on disk (pruning is the next step).
 	if _, ok := sess.Viewport(realPane); !ok {
 		t.Fatalf("real pane viewport missing after pre-seed")
 	}
 	if _, ok := sess.Viewport(deadPane); !ok {
-		t.Fatalf("phantom pane should be pre-seeded too — filter happens later")
+		t.Fatalf("phantom pane should be pre-seeded too — pruning runs next")
 	}
 
-	// Client sends a resume payload that includes a NEW phantom (not in
-	// pre-seed). A paneExists predicate accepts only realPane.
+	// Simulate the connection handler's prune-against-live-tree call
+	// (see connection_handler.go MsgResumeRequest case in Task 7's
+	// integration). paneExists returns true only for realPane.
+	paneExists := func(p [16]byte) bool { return p == realPane }
+	if dropped := sess.viewports.PrunePhantoms(paneExists); dropped != 1 {
+		t.Fatalf("PrunePhantoms: got %d, want 1", dropped)
+	}
+
+	// deadPane gone from server-side viewport map. realPane still here.
+	if _, ok := sess.Viewport(realPane); !ok {
+		t.Fatalf("real pane should remain after prune")
+	}
+	if _, ok := sess.Viewport(deadPane); ok {
+		t.Fatalf("dead pane MUST be pruned to prevent disk-side growth")
+	}
+
+	// Client also sends a payload with its own phantom (e.g. raced
+	// against a pane close). ApplyResume's paneExists filter drops it.
 	clientPayload := []protocol.PaneViewportState{
 		{PaneID: realPane, ViewBottomIdx: 150, ViewportRows: 24, ViewportCols: 80},
 		{PaneID: [16]byte{0xde, 0xad}, ViewBottomIdx: 999, ViewportRows: 24, ViewportCols: 80},
 	}
-	paneExists := func(p [16]byte) bool { return p == realPane }
 	sess.ApplyResume(clientPayload, paneExists)
 
-	// realPane updates to client's fresher value.
 	if vp, _ := sess.Viewport(realPane); vp.ViewBottomIdx != 150 {
 		t.Fatalf("realPane: got %d want 150", vp.ViewBottomIdx)
 	}
-	// Client-supplied phantom MUST be filtered out.
 	if _, ok := sess.Viewport([16]byte{0xde, 0xad}); ok {
 		t.Fatalf("client-supplied phantom must be filtered by paneExists")
+	}
+
+	// Force a flush; the writer must NOT persist the pruned phantom or
+	// the client phantom back to disk. This is the key cross-restart
+	// hygiene assertion: persisted file shrinks when phantoms exist.
+	sess.FlushPersistForTest()
+	loaded, _ := os.ReadFile(SessionFilePath(dir, id))
+	var afterFlush StoredSession
+	if err := json.Unmarshal(loaded, &afterFlush); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range afterFlush.PaneViewports {
+		if p.PaneID == deadPane || p.PaneID == [16]byte{0xde, 0xad} {
+			t.Fatalf("phantom pane persisted to disk: %x", p.PaneID)
+		}
 	}
 }
 
@@ -2989,69 +3202,60 @@ The spec promised a "failing rename" test (atomic-write semantics) and Plan D's 
 
 - [ ] **Step 1: Write the tests**
 
-Append to `internal/persistence/atomicjson/store_test.go`:
+Append to `internal/persistence/atomicjson/store_test.go`. The file already has an import block from Tasks 1 and 2 with at least `errors`, `os`, `path/filepath`, `sync`, `sync/atomic`, `testing`, `time`. **Do not append a second `import (...)` block** — Go forbids re-importing an already-imported package, and `errors` would collide. Instead, **merge** these new imports into the existing block:
+
+```
+"bytes"   // new — log buffer in TestSaveErrRelogInterval
+"log"     // new — log.SetOutput
+"strings" // new — strings.Count / strings.HasPrefix
+```
+
+Then append the test functions:
 
 ```go
-import (
-	"bytes"
-	"errors"
-	"log"
-	"strings"
-)
 
-// TestSaveFailingRenameLeavesPriorFile: simulate a save where the tmp
-// file IS written but the rename fails. The on-disk canonical file must
-// be untouched (atomic-rename semantics: either old or new, never
-// partial). This is the spec-promised "atomic-write semantics" test.
+// TestSaveFailingRenameLeavesPriorFile exercises the REAL atomicjson.Save
+// via the package-level renameFn hook. After a successful initial save,
+// renameFn is swapped to one that always returns an error. A subsequent
+// Save must:
 //
-// The test injects a saver that mimics real Save's structure: write a
-// tmp file alongside the target, then return an error in place of the
-// rename. If the canonical file were touched at any point during the
-// failing path, the assertion below would catch it.
+//   1. Return the rename error (so callers know the save didn't land).
+//   2. Leave the canonical file intact (atomic-rename guarantee).
+//   3. Trigger the deferred os.Remove(tmpPath) cleanup so no orphan
+//      tmps accumulate in the directory.
+//
+// This is the spec-promised "atomic-write semantics" property — testing
+// it through Save (rather than a saver-injection bypass) means the
+// production deferred-cleanup path is what's under test.
 func TestSaveFailingRenameLeavesPriorFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.json")
 
-	// First save: succeeds.
+	// First save: succeeds, populates canonical file.
 	good := &fakePayload{Name: "good", Count: 1}
 	if err := Save(path, good); err != nil {
 		t.Fatalf("initial Save: %v", err)
 	}
 
-	st := NewStore[fakePayload](path, 5*time.Millisecond)
-	st.SetSaverForTest(func(p string, v *fakePayload) error {
-		// Mirror Save's structure up to the point of rename: create a
-		// sibling tmp file (proves write succeeded), then fail before
-		// rename. Real Save uses os.Rename which is atomic — if the
-		// rename fails for any reason, the canonical file at p is left
-		// untouched. Simulate that failure mode exactly.
-		dir := filepath.Dir(p)
-		tmp, err := os.CreateTemp(dir, ".atomicjson.tmp-fail-*")
-		if err != nil {
-			return err
-		}
-		// Write valid JSON into the tmp file so the data is real.
-		if _, werr := tmp.Write([]byte(`{"name":"replacement","count":2}`)); werr != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
-			return werr
-		}
-		if cerr := tmp.Close(); cerr != nil {
-			_ = os.Remove(tmp.Name())
-			return cerr
-		}
-		// CRITICAL: do NOT call os.Rename. The whole point of this test
-		// is that the rename step fails, so the canonical file is not
-		// replaced. Clean up the tmp file we wrote.
-		_ = os.Remove(tmp.Name())
+	// Override the rename primitive to always fail. Restore on cleanup.
+	origRename := renameFn
+	renameFn = func(oldpath, newpath string) error {
 		return errors.New("synthetic rename failure")
-	})
+	}
+	t.Cleanup(func() { renameFn = origRename })
 
-	st.Update(fakePayload{Name: "bad", Count: 999})
-	st.Close() // Flush, no panic, swallows the error.
+	// Second save: encodes successfully into a tmp file, but renameFn
+	// returns an error. Save's defer runs os.Remove(tmpPath).
+	bad := &fakePayload{Name: "replacement", Count: 999}
+	err := Save(path, bad)
+	if err == nil {
+		t.Fatalf("Save expected to return rename error, got nil")
+	}
+	if !strings.Contains(err.Error(), "rename") {
+		t.Fatalf("Save error should mention rename, got: %v", err)
+	}
 
-	// Original file must be intact — failed save did NOT touch the
-	// canonical path. This is the property atomic temp+rename gives us.
+	// Canonical file still has the original payload.
 	got, err := Load[fakePayload](path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -3060,7 +3264,9 @@ func TestSaveFailingRenameLeavesPriorFile(t *testing.T) {
 		t.Fatalf("canonical file modified by failing-rename path: got %+v", got)
 	}
 
-	// And no orphan tmp files leak into the directory after Close.
+	// No orphan .atomicjson.tmp-* files leak. Save's deferred cleanup
+	// is what we're verifying — without it, the tmp file from the
+	// failed Save call would be left behind.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
@@ -3068,7 +3274,7 @@ func TestSaveFailingRenameLeavesPriorFile(t *testing.T) {
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".atomicjson.tmp-") {
-			t.Errorf("orphan tmp file leaked: %s", name)
+			t.Errorf("orphan tmp file leaked after failing rename: %s", name)
 		}
 	}
 }
@@ -3077,10 +3283,33 @@ func TestSaveFailingRenameLeavesPriorFile(t *testing.T) {
 // identical errors are logged once, not on every retry. A different
 // error string logs immediately. Recovery (success after failure)
 // emits one "save recovered" line.
+//
+// Concurrency note: the Store's debounced writer fires log.Printf from
+// internal goroutines (timer ticks). Since log.SetOutput is global and
+// bytes.Buffer is NOT concurrency-safe, we wrap the buffer in a mutex
+// via syncBuf. Without the wrapper, -race flags a data race between
+// the tick goroutine writing logs and the test reading buf.String().
+type syncBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
 func TestSaveErrRelogInterval_DeduplicatesIdenticalErrors(t *testing.T) {
-	var buf bytes.Buffer
+	buf := &syncBuf{}
 	prev := log.Writer()
-	log.SetOutput(&buf)
+	log.SetOutput(buf)
 	defer log.SetOutput(prev)
 
 	dir := t.TempDir()
@@ -3100,7 +3329,10 @@ func TestSaveErrRelogInterval_DeduplicatesIdenticalErrors(t *testing.T) {
 		}
 	})
 
-	// 5 saves with the same error — exactly 1 log line.
+	// 5 saves with the same error — exactly 1 log line. Flush after
+	// every Update so the saver runs synchronously on the test
+	// goroutine instead of via the debounce timer; this makes the
+	// "exactly N log lines" count deterministic.
 	for i := 0; i < 5; i++ {
 		st.Update(fakePayload{Count: i})
 		st.Flush()
@@ -3128,7 +3360,7 @@ func TestSaveErrRelogInterval_DeduplicatesIdenticalErrors(t *testing.T) {
 }
 ```
 
-(Add `"sync/atomic"` to the imports if not already present from Task 2.)
+(`sync/atomic` and `sync` are already in the imports from Task 2; the new symbols only require the merged `bytes` / `log` / `strings` from Step 1 above.)
 
 - [ ] **Step 2: Run the tests**
 
@@ -3326,9 +3558,10 @@ Otherwise, no commit.
 
 ## Self-Review Checklist (run before declaring the plan done)
 
-- [ ] **Spec coverage**: every section of `2026-04-26-issue-199-plan-d2-server-viewport-persistence-design.md` has a task that implements it. Storage shape (Tasks 5–8), writer abstraction (Tasks 1–3), no-auto-GC (Task 6 — only corrupt files deleted), schema with reserved Plan F fields (Task 5), client-side reset on snapshot with one-shot CAS + error-path clear (Task 13), pre-seed-then-client-overrides (Tasks 7 + 14), pinned round-trip (Task 14, automated), Plan F metadata round-trip (Task 14), file survives Close (Task 14), concurrent updates under race (Task 14), rehydrate race (Task 14), failing-rename safety + saveErrRelogInterval dedup (Task 14b). ✓
-- [ ] **No placeholders**: every step contains exact code, file paths, and commands. Grep-and-locate steps remain (struct/field names must be confirmed against the codebase) but each provides the exact grep command and the line range to inspect.
-- [ ] **Type consistency**: `StoredSession`, `StoredPaneViewport`, `LookupOrRehydrate`, `AttachWriter`, `RecordPaneActivity`, `FlushPersistForTest`, `SessionFilePath`, `ScanSessionsDir`, `LoadPersistedSessions`, `SetPersistedSessions`, `EnablePersistence`, `NewSessionWithID`, `ErrSessionAlreadyExists`, `ApplyPreSeed`, `applyPostResumeReset`, `resetOnNextSnapshot`, `ResetRevisions`, `PaneRevision`, `paneActivityFromSnapshot`, `recordSnapshotActivity` — all defined in earlier tasks before later tasks reference them.
-- [ ] **Test coverage**: at least one TDD red-green pair per task; integration tests cover the full cross-restart cycle, the one-shot reset under multiple snapshots, the resume-error flag clear, file-survives-close, concurrent updates, rehydrate races, failing-rename safety, and per-error-string log dedup.
-- [ ] **Lock discipline**: `ClientViewports.byPaneID` writes always go through the methods on `ClientViewports` (`Apply`, `ApplyResume`, `ApplyPreSeed`). `Session.schedulePersist` documents its precondition (caller must not hold `s.mu`). `BufferCache.ResetRevisions` uses `Lock` (the lock is `sync.RWMutex`).
-- [ ] **Boot ordering**: `Manager.EnablePersistence` is the only production entry point and runs strictly before the listener accepts connections. `LoadPersistedSessions` and `SetPersistedSessions` remain available for tests but are not wired into `cmd/texel-server/main.go`.
+- [ ] **Spec coverage**: every test in the spec's "Test plan" maps to a task in the plan; every test the plan introduces appears in the spec's list. Lock-bearing tests: `TestD2_FullCrossRestartCycle`, `TestD2_PinnedRoundTrip`, `TestD2_FileSurvivesSessionClose`, `TestD2_ConcurrentUpdates`, `TestD2_RehydrateRaceForSameID`, `TestD2_PhantomPaneFilterAfterPreSeed` (now asserts pruning, not just filter), `TestApplyPostResumeReset_*`, `TestSaveFailingRenameLeavesPriorFile` (via real `Save` + `renameFn` hook), `TestSaveErrRelogInterval_DeduplicatesIdenticalErrors` (with `syncBuf` data-race fix), `TestManagerCloseDropsLockBeforeSessionClose`, `TestManagerNewSessionWithID_*`. ✓
+- [ ] **No placeholders**: every step contains exact code, file paths, and commands. Grep-and-locate steps provide the exact grep command and the line range to inspect.
+- [ ] **Type consistency**: `StoredSession`, `StoredPaneViewport`, `LookupOrRehydrate`, `AttachWriter`, `RecordPaneActivity`, `FlushPersistForTest`, `SessionFilePath`, `ScanSessionsDir`, `LoadPersistedSessions`, `SetPersistedSessions`, `EnablePersistence`, `NewSessionWithID`, `ErrSessionAlreadyExists`, `ApplyPreSeed`, `PrunePhantoms`, `applyPostResumeReset`, `resetOnNextSnapshot`, `ResetRevisions`, `PaneRevision`, `paneActivityFromSnapshot`, `recordSnapshotActivity`, `seedRevision`, `renameFn`, `syncBuf` — all defined in earlier tasks before later tasks reference them.
+- [ ] **Test coverage**: at least one TDD red-green pair per task; integration tests cover the full cross-restart cycle, the one-shot reset under multiple snapshots, the resume-error flag clear, file-survives-close, concurrent updates, rehydrate races, real-`Save` failing-rename safety, per-error-string log dedup, phantom-pane pruning (regression guard for Plan B finding #4), and `Manager.Close` lock-release-before-flush.
+- [ ] **Lock discipline**: `ClientViewports.byPaneID` writes always go through the methods on `ClientViewports` (`Apply`, `ApplyResume`, `ApplyPreSeed`, `PrunePhantoms`). `Session.schedulePersist` reads `s.writer` under `s.mu` (close-vs-update race). `Manager.Close` and `SetDiffRetentionLimit` drop `m.mu` before per-session calls that block on disk. `BufferCache.ResetRevisions` uses `Lock` (the lock is `sync.RWMutex`).
+- [ ] **Boot ordering**: `Manager.EnablePersistence` is the only production entry point and runs strictly before the listener (`srv.Start`) accepts connections. The wiring is gated inside `cmd/texel-server/main.go`'s `if !*fromScratch` block so `snapPath` is non-empty. `LoadPersistedSessions` and `SetPersistedSessions` remain available for tests but are not wired into `cmd/texel-server/main.go`.
+- [ ] **Field-name correctness**: `protocol.ViewportUpdate{}` uses `Rows`/`Cols` (NOT `ViewportRows`/`ViewportCols`); `protocol.PaneViewportState{}` uses `ViewportRows`/`ViewportCols`. The plan deliberately uses each in the right context.
