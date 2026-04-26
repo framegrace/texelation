@@ -9,6 +9,7 @@
 package server
 
 import (
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,7 @@ func (p *DesktopPublisher) ResetDiffState() {
 
 // SetNotifier registers a callback invoked after diffs are enqueued.
 func (p *DesktopPublisher) SetNotifier(fn func()) {
+	log.Printf("[PLAND-DEBUG] publisher.SetNotifier: fn=%v (sess=%x)", fn != nil, p.session.ID())
 	p.notify = fn
 }
 
@@ -109,7 +111,10 @@ func (p *DesktopPublisher) Publish() error {
 		p.observer.ObservePublish(p.session, len(buffers), elapsed)
 	}
 	if p.notify != nil {
+		log.Printf("[PLAND-DEBUG] publisher.Publish: %d buffers, notify FIRING (sess=%x)", len(buffers), p.session.ID())
 		p.notify()
+	} else {
+		log.Printf("[PLAND-DEBUG] publisher.Publish: %d buffers ENQUEUED but notify=NIL (sess=%x)", len(buffers), p.session.ID())
 	}
 	return nil
 }

@@ -209,10 +209,13 @@ func (c *connection) writeMessage(header protocol.Header, payload []byte) error 
 
 func (c *connection) nudge() {
 	if c.pending == nil {
+		log.Printf("[PLAND-DEBUG] nudge: c.pending is NIL, dropping (sess=%x awaitResume=%v)", c.session.ID(), c.awaitResume)
 		return
 	}
 	select {
 	case c.pending <- struct{}{}:
+		log.Printf("[PLAND-DEBUG] nudge: signaled c.pending (sess=%x awaitResume=%v)", c.session.ID(), c.awaitResume)
 	default:
+		log.Printf("[PLAND-DEBUG] nudge: c.pending FULL, dropping (sess=%x awaitResume=%v)", c.session.ID(), c.awaitResume)
 	}
 }

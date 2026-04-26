@@ -17,9 +17,11 @@ import (
 
 func (c *connection) sendPending() error {
 	if c.awaitResume {
+		log.Printf("[PLAND-DEBUG] sendPending: awaitResume=true, skipping (sess=%x)", c.session.ID())
 		return nil
 	}
 	pending := c.session.Pending(c.lastAcked)
+	sent := 0
 	for _, diff := range pending {
 		if diff.Sequence <= c.lastSent {
 			continue
@@ -31,6 +33,10 @@ func (c *connection) sendPending() error {
 			return err
 		}
 		c.lastSent = diff.Sequence
+		sent++
+	}
+	if len(pending) > 0 || sent > 0 {
+		log.Printf("[PLAND-DEBUG] sendPending: pending=%d sent=%d lastAcked=%d lastSent=%d (sess=%x)", len(pending), sent, c.lastAcked, c.lastSent, c.session.ID())
 	}
 	return nil
 }
