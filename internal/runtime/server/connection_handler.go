@@ -203,6 +203,20 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				}
 			}()
 		}
+		// Plan D fix: invalidate every pane's render cache before taking
+		// the snapshot below. Empirically, without this the post-resume
+		// publishes don't reflect new input on the wire until something
+		// forces a layout recalc — Ctrl-A toggle works around the bug
+		// because launchControlHelpOverlay / CloseFloatingPanel each call
+		// DesktopEngine.recalculateLayout, which marks every leaf pane
+		// dirty (renderGen++) and clears prevBuf via tree.Resize. We
+		// mirror that side-effect here so the user-visible behavior is
+		// identical to a fresh handshake.
+		if sinkOK && sink.Desktop() != nil {
+			if ws := sink.Desktop().ActiveWorkspace(); ws != nil {
+				ws.InvalidateRenderCaches()
+			}
+		}
 		if provider, ok := c.sink.(SnapshotProvider); ok {
 			snapshot, err := provider.Snapshot()
 			if err != nil {
