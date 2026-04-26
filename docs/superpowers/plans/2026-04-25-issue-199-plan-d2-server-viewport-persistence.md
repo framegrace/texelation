@@ -3556,6 +3556,109 @@ Otherwise, no commit.
 
 ---
 
+## Task 16 (Follow-up after PR merges): Pane top/bottom border rendering bug
+
+**Status when this task was added (2026-04-26):** Plan D2 Tasks 1–15 are functionally complete; unit + integration tests pass; the daemon-restart rehydrate path works end-to-end. During manual e2e (Step 5 above) the user reported a visual glitch on rehydrate that turned out to be a *pre-existing* rendering bug — Plan D2 just made it visible. **Do not block the Plan D2 PR on this fix.** Land Plan D2, then attack this in a focused follow-up plan.
+
+### Symptom (as reported during Plan D2 e2e on branch `feature/issue-199-plan-d2-server-viewport-persistence`)
+
+After daemon restart + reconnect (screen 255×61, status 255×2 at top, workspace pane Rect 255×59 at y=2):
+
+- Status bar renders correctly at the top.
+- 3 "lighter gray" rows appear at the top of the pane area (rows 2–4 of the screen), with no border characters.
+- Below those, content fills the rest of the pane area down to the last screen row.
+- Top border missing. Bottom border missing. Left/right borders ARE present (because they're embedded in each content row, columns 0 and W-1).
+
+User wording: *"3 Lighter gray rows (And first 3 lines of content). All lines till the bottom of the screen the terminal background color (with the rest of the content). Content goes from the status bar to the last line of the screen and from the 0 column to the last. No borders. all available space."*
+
+### Root cause
+
+The bug is in the pane-row → globalIdx mapping the client uses to render terminal panes. **Top/bottom borders never reach the client** for non-altScreen panes:
+
+1. `texel/snapshot.go capturePaneSnapshot` builds `RowGlobalIdx` for the pane buffer with `RowGlobalIdx[0] = -1` (top border), `RowGlobalIdx[H-1] = -1` (bottom border). Texelterm's internal statusbar at `RowGlobalIdx[H-2]` is also `-1`. Only the inner content rows get valid gids.
+2. `internal/runtime/server/desktop_publisher.go bufferToDelta` (around line 299) filters non-altScreen rows with `if gid < 0 { continue }`. That drops the 3 non-content rows.
+3. So PaneCache on the client only ever has the content gids.
+4. `internal/runtime/client/viewport_tracker.go onBufferDelta` (around line 263) computes `top := maxGid - int64(vp.Rows-1)`, treating ALL `vp.Rows` rows of the pane as content.
+5. `internal/runtime/client/renderer.go rowSourceForPane` (around line 181) does `gid := vc.ViewTopIdx + int64(rowIdx)` and `pc.RowAt(gid)`. With pane.Rows=59 and only 56 content gids in cache, the gid range projected is `[maxGid-58 .. maxGid]`. The 3 lowest gids in that range are NOT in PaneCache → blank cells.
+6. Those 3 blank rows land at rowIdx 0, 1, 2 — i.e., the TOP of the pane area, exactly where the user sees the "3 lighter gray rows."
+
+### Worked example (matches the reported symptom)
+
+Texelterm pane: pane.Rect 255×59 (W=255, H=59), drawableH=57, terminal grid = 56 content rows + 1 internal statusbar.
+
+After rehydrate, sparse store restored at `writeTop=4960`, `cursor=5015`. So texelterm's `lastRowGlobalIdx = [4960, 4961, ..., 5015]` (56 entries). `capturePaneSnapshot` produces `RowGlobalIdx = [-1, 4960, 4961, ..., 5015, -1, -1]` (59 entries; index 0 = top border, 1..56 = content, 57 = internal statusbar, 58 = bottom border).
+
+`bufferToDelta` (autoFollow path) emits rows for gids 4960..5015 with `delta.RowBase = lo = maxGid - Rows - overscan + 1`. PaneCache.main ends up with keys 4960..5015.
+
+Client `onBufferDelta`: `maxGid=5015`, `vp.Rows=59`, so `top = 5015 - 58 = 4957`. `vp.ViewTopIdx = 4957`.
+
+Renderer iterates rowIdx 0..58 (h=59):
+- rowIdx 0 → gid 4957 (NOT in cache) → blank
+- rowIdx 1 → gid 4958 (NOT in cache) → blank
+- rowIdx 2 → gid 4959 (NOT in cache) → blank
+- rowIdx 3 → gid 4960 (IN cache) — first content row
+- ...
+- rowIdx 58 → gid 5015 (IN cache) — last content row
+
+That's exactly **3 blank rows at the top + 56 content rows** = 59 = pane.Height. The user's "3 lighter gray rows + content fills the rest" matches perfectly.
+
+### Why clean start "looks fine"
+
+The bug is not rehydrate-specific; it's always present. On clean start `maxGid` is small (cursor near the top of a fresh terminal), so `top = maxGid - 58` clamps to 0. The renderer queries gids 0..58. PaneCache has gids 0..N (just the prompt rows). Content fills from rowIdx 0 (overwriting where the top border *would* be) and blanks fill below. The user reads "prompt at top of pane, blanks below" as the natural look of an empty terminal — there's no visual cue that the top border was overwritten or that the bottom border is blank. Hence "clean start works fine" reports.
+
+### Confirming via the persisted session file
+
+The session JSON written at disconnect (`~/.texelation/sessions/<id>.json`) records `rows: 59, cols: 255, autoFollow: true, viewBottomIdx: 5016` for the texelterm pane. That confirms the publisher's autoFollow path runs at rehydrate time with vp.Rows=59 — i.e., the math above is what actually happens.
+
+### Out-of-scope quick fixes already considered and rejected
+
+- **`top := minGidInDelta - 1`** — works for the steady-state delta where minGid is the first content gid, but breaks for partial/incremental autoFollow deltas where minGid is from a small range (e.g., only the last few rows changed). Would silently corrupt the view on subsequent updates.
+- **Setting `vp.Rows = numContentRows` from the client side** — can't, the client doesn't know how many non-content rows the pane has. Texelterm has 1 internal statusbar; other apps (clock, launcher) have 0.
+
+### Recommended fix design (do this in a follow-up plan)
+
+Pick one of these. **Option 4 + Option 2 in combination is probably the right shape** (server tells client where content sits inside the pane, client renders borders itself).
+
+**Option 1 — Server emits border rows via a new flag.** Add `BufferDeltaBorderRows` flag and an extra field on `BufferDelta` carrying the top + bottom border row cells (flat-keyed). Client stores them in PaneCache and the renderer picks the right source based on `rowIdx == 0` / `rowIdx == H-1`. *Cost:* protocol change, more bandwidth on every delta.
+
+**Option 2 — Client renders borders itself from `pane.Rect` + metadata.** The client already has `pane.Active`, `pane.Rect`, `pane.Title`, `pane.ZOrder`. It can draw the border using its own theme colors and route titles through `MsgPaneState`. *Cost:* duplicates server's `pane.border.Draw` logic on the client; needs theming parity. *Win:* zero protocol churn, no per-frame border re-shipping, fixes the "borders never arrive" problem at its root rather than papering over it.
+
+**Option 3 — Populate `PaneSnapshot.Rows` in `treeCaptureToProtocol` for the initial frame so borders arrive with the snapshot.** *Cost:* every snapshot ships full buffer once; doesn't update borders if title/active change without a re-snapshot.
+
+**Option 4 — Add `ContentTopRow`, `ContentBottomRow` fields to `protocol.PaneSnapshot`.** Server populates them from the pane's border thickness + texelterm's internal statusbar. Client uses them in `rowSourceForPane`:
+```go
+contentRowIdx := rowIdx - pane.ContentTopRow
+if contentRowIdx < 0 || contentRowIdx > (pane.ContentBottomRow - pane.ContentTopRow) {
+    return nil // border / decoration row
+}
+gid := vc.ViewTopIdx + int64(contentRowIdx)
+row, found := pc.RowAt(gid)
+```
+And `onBufferDelta` becomes `top := maxGid - int64(numContentRows-1)` where `numContentRows = ContentBottomRow - ContentTopRow + 1`. *Cost:* protocol fields, capturePaneSnapshot needs to compute the metadata. *Win:* fixes the rowIdx → gid mapping at the point of truth without changing the publisher filter or shipping border cells.
+
+### Touchpoints when fixing
+
+- `texel/snapshot.go capturePaneSnapshot` (RowGlobalIdx assignment, possibly add ContentTopRow/Bottom)
+- `internal/runtime/server/tree_convert.go treeCaptureToProtocol` (currently sets `Rows: nil`; would change for Option 3 or pass new fields for Option 4)
+- `internal/runtime/server/desktop_publisher.go bufferToDelta` (gid filter; possibly add border-rows path for Option 1)
+- `internal/runtime/client/viewport_tracker.go onBufferDelta` (top calculation)
+- `internal/runtime/client/renderer.go rowSourceForPane` (rowIdx → gid mapping; possibly add border-rendering branch)
+- `protocol/messages.go PaneSnapshot` and `BufferDelta` (new fields/flags depending on option)
+
+### Verification plan
+
+After fix lands:
+
+1. **Unit:** golden-row tests for `bufferToDelta` proving border rows are conveyed (or equivalently, that `rowSourceForPane` falls through to the right source for rowIdx 0 and H-1).
+2. **Integration:** capture pane render output for a 60×20 main-screen pane on (a) clean start, (b) cross-daemon-restart rehydrate at the live edge, (c) cross-daemon-restart rehydrate while scrolled mid-history. All three must show top + bottom + left + right borders. Use `internal/runtime/server/testutil/memconn.go` and snapshot-comparison.
+3. **Manual e2e:** repeat Plan D2's Step 6 ("daemon AND client both restart"). Verify borders are visible and content sits inside them.
+
+### Captured memory pointer
+
+A condensed version of this analysis is also stored at `~/.claude/projects/-home-marc-projects-texel-texelation/memory/project_issue199_pane_border_render_bug.md` with the same root cause, options, and touchpoints — read either source when picking this up.
+
+---
+
 ## Self-Review Checklist (run before declaring the plan done)
 
 - [ ] **Spec coverage**: every test in the spec's "Test plan" maps to a task in the plan; every test the plan introduces appears in the spec's list. Lock-bearing tests: `TestD2_FullCrossRestartCycle`, `TestD2_PinnedRoundTrip`, `TestD2_FileSurvivesSessionClose`, `TestD2_ConcurrentUpdates`, `TestD2_RehydrateRaceForSameID`, `TestD2_PhantomPaneFilterAfterPreSeed` (now asserts pruning, not just filter), `TestApplyPostResumeReset_*`, `TestSaveFailingRenameLeavesPriorFile` (via real `Save` + `renameFn` hook), `TestSaveErrRelogInterval_DeduplicatesIdenticalErrors` (with `syncBuf` data-race fix), `TestManagerCloseDropsLockBeforeSessionClose`, `TestManagerNewSessionWithID_*`. ✓
