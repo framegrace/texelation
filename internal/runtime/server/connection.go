@@ -107,10 +107,7 @@ func (c *connection) serve() (retErr error) {
 		}
 	}()
 	defer c.session.MarkSnapshot(time.Now())
-	iter := uint64(0)
 	for {
-		iter++
-		log.Printf("[PLAND-DEBUG] serve iter=%d entering sendPending (sess=%x)", iter, c.session.ID())
 		if err := c.sendPending(); err != nil {
 			if err == io.EOF {
 				debugLog.Printf("%s sendPending reached EOF", prefix)
@@ -121,10 +118,8 @@ func (c *connection) serve() (retErr error) {
 			return err
 		}
 
-		log.Printf("[PLAND-DEBUG] serve iter=%d entering select (sess=%x)", iter, c.session.ID())
 		select {
 		case <-c.pending:
-			log.Printf("[PLAND-DEBUG] serve iter=%d woke on c.pending (sess=%x)", iter, c.session.ID())
 			continue
 		case err := <-c.readErr:
 			if err == io.EOF {
@@ -207,18 +202,9 @@ func (c *connection) writeControlMessage(msgType protocol.MessageType, payload [
 }
 
 func (c *connection) writeMessage(header protocol.Header, payload []byte) error {
-	lockStart := time.Now()
 	c.writeMu.Lock()
-	lockWait := time.Since(lockStart)
 	defer c.writeMu.Unlock()
-	writeStart := time.Now()
-	err := protocol.WriteMessage(c.conn, header, payload)
-	writeDur := time.Since(writeStart)
-	if lockWait > 50*time.Millisecond || writeDur > 50*time.Millisecond {
-		log.Printf("[PLAND-DEBUG] writeMessage type=%d seq=%d len=%d lockWait=%s writeDur=%s (sess=%x)",
-			header.Type, header.Sequence, len(payload), lockWait, writeDur, c.session.ID())
-	}
-	return err
+	return protocol.WriteMessage(c.conn, header, payload)
 }
 
 func (c *connection) nudge() {
