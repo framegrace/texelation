@@ -179,3 +179,45 @@ func TestManagerLookupOrRehydrate_AttachesWriter(t *testing.T) {
 		t.Fatalf("rehydrated session not persisting: %v", err)
 	}
 }
+
+func TestManagerCloseDropsLockBeforeSessionClose(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager()
+	if err := mgr.EnablePersistence(dir, 25*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := mgr.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	// Apply enough updates to make Close's flush non-trivial.
+	for i := 0; i < 10; i++ {
+		sess.ApplyViewportUpdate(protocol.ViewportUpdate{
+			PaneID: [16]byte{byte(i)}, ViewBottomIdx: int64(i), Rows: 1, Cols: 1,
+		})
+	}
+
+	closeStarted := make(chan struct{})
+	closeDone := make(chan struct{})
+	go func() {
+		close(closeStarted)
+		mgr.Close(id)
+		close(closeDone)
+	}()
+	<-closeStarted
+
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("ActiveSessions blocked while Close was running — m.mu held during disk I/O")
+		case <-closeDone:
+			return
+		default:
+			_ = mgr.ActiveSessions()
+			time.Sleep(time.Millisecond)
+		}
+	}
+}

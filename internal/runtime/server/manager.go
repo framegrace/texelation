@@ -158,24 +158,39 @@ func (m *Manager) EnablePersistence(basedir string, debounce time.Duration) erro
 	return nil
 }
 
+// SetDiffRetentionLimit applies the new limit to all live sessions.
+// Capture the slice under m.mu, then walk it without the lock — the
+// per-session call may take a per-session lock and we don't want to
+// block other Manager ops on that.
 func (m *Manager) SetDiffRetentionLimit(limit int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if limit < 0 {
 		limit = 0
 	}
+	m.mu.Lock()
 	m.maxDiffs = limit
-	for _, session := range m.sessions {
-		session.setMaxDiffs(limit)
+	live := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		live = append(live, s)
+	}
+	m.mu.Unlock()
+	for _, s := range live {
+		s.setMaxDiffs(limit)
 	}
 }
 
+// Close removes the session from the live map and tears it down. The
+// teardown call (which now blocks on disk I/O via the atomicjson
+// writer's flush) runs OUTSIDE m.mu so other Manager methods don't
+// stall behind a slow flush.
 func (m *Manager) Close(id [16]byte) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if session, ok := m.sessions[id]; ok {
-		session.Close()
+	session, ok := m.sessions[id]
+	if ok {
 		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+	if ok {
+		session.Close() // disk flush — outside m.mu
 	}
 }
 
