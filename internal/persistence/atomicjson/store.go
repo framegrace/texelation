@@ -26,6 +26,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 )
 
 // renameFn is the rename primitive used by Save. Defaults to os.Rename
@@ -136,4 +138,170 @@ func Wipe(path string) error {
 		return fmt.Errorf("atomicjson: wipe: %w", err)
 	}
 	return nil
+}
+
+// SaveFunc is the function Store invokes to persist payloads. Defaults
+// to Save[T]; tests in the same package may inject alternatives via
+// SetSaverForTest.
+type SaveFunc[T any] func(path string, v *T) error
+
+// Store is a debounced, latest-wins JSON writer. Concurrent calls to
+// Update coalesce: the most recent payload at flush time wins, and the
+// in-between values are discarded (intentional — this is snapshot state,
+// not an event log).
+//
+// Concurrency model:
+//   - mu protects state/timer/closed/lastSaveErr (lifecycle).
+//   - saveMu serializes the actual disk write so tick and Flush can
+//     never overlap.
+//   - wg tracks tick/flush goroutines so Close blocks until all complete.
+//
+// Save errors are logged with per-error-string deduplication (one log
+// per distinct error every 5 minutes, plus a recovery line on success
+// after failure). Crash-loss is bounded by the debounce window.
+type Store[T any] struct {
+	path     string
+	debounce time.Duration
+
+	mu            sync.Mutex
+	pending       *T
+	timer         *time.Timer
+	closed        bool
+	lastSaveErr   string
+	lastSaveErrAt time.Time
+
+	saveMu sync.Mutex
+	wg     sync.WaitGroup
+	saver  SaveFunc[T]
+}
+
+// NewStore returns a Store that writes JSON-encoded T to path,
+// debouncing successive Update calls by debounce.
+func NewStore[T any](path string, debounce time.Duration) *Store[T] {
+	return &Store[T]{
+		path:     path,
+		debounce: debounce,
+		saver:    Save[T],
+	}
+}
+
+// SetSaverForTest swaps the underlying save implementation. Only for
+// in-package tests; production code uses the default Save[T].
+func (s *Store[T]) SetSaverForTest(fn SaveFunc[T]) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saver = fn
+}
+
+// Update schedules a debounced save with v as the new pending value.
+// Calls after Close are silently dropped.
+func (s *Store[T]) Update(v T) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	cp := v
+	s.pending = &cp
+	if s.timer == nil {
+		s.timer = time.AfterFunc(s.debounce, s.tick)
+	}
+}
+
+// Flush writes any pending value synchronously.
+func (s *Store[T]) Flush() {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	s.mu.Lock()
+	if s.timer != nil {
+		s.timer.Stop()
+		s.timer = nil
+	}
+	v := s.pending
+	s.pending = nil
+	s.mu.Unlock()
+
+	if v != nil {
+		s.doSave(*v)
+	}
+}
+
+// Close flushes any pending state, blocks for in-flight ticks, and
+// rejects subsequent Update calls.
+func (s *Store[T]) Close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	if s.timer != nil {
+		s.timer.Stop()
+		s.timer = nil
+	}
+	s.mu.Unlock()
+
+	s.Flush()
+	s.wg.Wait()
+}
+
+// tick is the AfterFunc callback. The wg counter is incremented inside
+// tick rather than at scheduling time because timer.Stop in Close
+// cannot reliably distinguish "stopped before fire" from "fire pending
+// but not yet running" — tracking the lifecycle in the goroutine
+// itself keeps the wg balance simple at the cost of a small benign
+// race window: Close may return before a freshly-fired tick has called
+// wg.Add. The mu-protected closed check at the top of tick ensures no
+// I/O happens after Close in any case, so the race is observably a
+// no-op even when it occurs.
+func (s *Store[T]) tick() {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	s.mu.Lock()
+	if s.closed || s.pending == nil {
+		s.timer = nil
+		s.mu.Unlock()
+		return
+	}
+	v := *s.pending
+	s.pending = nil
+	s.timer = nil
+	s.mu.Unlock()
+
+	s.doSave(v)
+
+	s.mu.Lock()
+	if s.pending != nil && !s.closed && s.timer == nil {
+		s.timer = time.AfterFunc(s.debounce, s.tick)
+	}
+	s.mu.Unlock()
+}
+
+const saveErrRelogInterval = 5 * time.Minute
+
+func (s *Store[T]) doSave(v T) {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
+	err := s.saver(s.path, &v)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		es := err.Error()
+		now := time.Now()
+		if es != s.lastSaveErr || now.Sub(s.lastSaveErrAt) >= saveErrRelogInterval {
+			log.Printf("atomicjson: save failed (%v); will retry on next change", err)
+			s.lastSaveErr = es
+			s.lastSaveErrAt = now
+		}
+		return
+	}
+	if s.lastSaveErr != "" {
+		log.Printf("atomicjson: save recovered after prior failure")
+		s.lastSaveErr = ""
+		s.lastSaveErrAt = time.Time{}
+	}
 }
