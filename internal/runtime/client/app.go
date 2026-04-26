@@ -195,6 +195,44 @@ func Run(opts Options) error {
 		handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
 	}
 
+	// Plan D: install debounced persistence Writer. nil-safe — if path
+	// resolution failed, persistence is silently disabled.
+	var persistWriter *Writer
+	if statePath != "" {
+		persistWriter = NewWriter(statePath, 250*time.Millisecond)
+		defer persistWriter.Close() // flushes synchronously and waits for in-flight ticks
+	}
+
+	// persistSnapshot builds the current ClientState and hands it to
+	// the debounced Writer. Called from flushFrame (rate-limited to
+	// once per render iteration) and on exit.
+	//
+	// Note: lastSequence is atomic.Uint64 (Task 10), so .Load() is
+	// race-safe even though readLoop mutates it from another goroutine.
+	// sessionID is captured by reference — Task 11's retry path passes
+	// &sessionID into simple.Connect, which writes the freshly-allocated
+	// session ID back through the pointer (simple_client.go:91), so
+	// persistSnapshot always reads the current value at invocation time.
+	//
+	// IMPORTANT: there is NO eager initial seed. A persistSnapshot call
+	// here would write LastSequence=0 with empty PaneViewports (because
+	// no panes have rendered yet), which would overwrite the previous
+	// session's state on a fast crash before the first frame. Wait for
+	// the first real flushFrame to trigger the first save instead.
+	persistSnapshot := func() {
+		if persistWriter == nil {
+			return
+		}
+		persistWriter.Update(ClientState{
+			SocketPath:    opts.Socket,
+			SessionID:     sessionID,
+			LastSequence:  lastSequence.Load(),
+			WrittenAt:     time.Now().UTC(),
+			PaneViewports: state.viewports.snapshotForPersistence(),
+		})
+	}
+	state.persistSnapshot = persistSnapshot
+
 	renderCh := make(chan struct{}, 64) // Larger buffer for smooth animations
 	state.setRenderChannel(renderCh)
 	doneCh := make(chan struct{})

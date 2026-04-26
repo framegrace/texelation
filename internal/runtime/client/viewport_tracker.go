@@ -424,6 +424,14 @@ func flushFrame(
 		// Evict rows outside hysteresis band.
 		pc.Evict(vc.ViewTopIdx, vc.ViewBottomIdx, overscan)
 	}
+
+	// Plan D: persist client state once per frame that had any dirty
+	// trackers. The Writer debounces (250ms) and skips if a save is
+	// already in flight, so this is cheap; high render rates produce
+	// a bounded write rate.
+	if len(entries) > 0 && state.persistSnapshot != nil {
+		state.persistSnapshot()
+	}
 }
 
 // sendFetchRange encodes and sends a MsgFetchRange to the server. Returns
@@ -459,6 +467,26 @@ func sendFetchRange(
 		return false
 	}
 	return true
+}
+
+// snapshotForPersistence returns the same data as snapshotAll but as a
+// []protocol.PaneViewportState ready to embed in a ClientState. Used
+// by the Plan D persistence Writer.
+func (t *viewportTrackers) snapshotForPersistence() []protocol.PaneViewportState {
+	entries := t.snapshotAll()
+	out := make([]protocol.PaneViewportState, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, protocol.PaneViewportState{
+			PaneID:         e.id,
+			AltScreen:      e.vp.AltScreen,
+			AutoFollow:     e.vp.AutoFollow,
+			ViewBottomIdx:  e.vp.ViewBottomIdx,
+			WrapSegmentIdx: e.vp.WrapSegmentIdx,
+			ViewportRows:   e.vp.Rows,
+			ViewportCols:   e.vp.Cols,
+		})
+	}
+	return out
 }
 
 // snapshotAll returns a shallow copy of every tracked pane's viewport state,
