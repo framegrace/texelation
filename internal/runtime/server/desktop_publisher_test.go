@@ -166,7 +166,6 @@ func publishSnaps(t *testing.T, session *Session, snaps []texel.PaneSnapshot) {
 	t.Helper()
 	pub := &DesktopPublisher{
 		session:      session,
-		revisions:    make(map[[16]byte]uint32),
 		prevBuffers:  make(map[[16]byte][][]texel.Cell),
 		lastViewport: make(map[[16]byte]ClientViewport),
 	}
