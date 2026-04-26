@@ -3659,6 +3659,121 @@ A condensed version of this analysis is also stored at `~/.claude/projects/-home
 
 ---
 
+## Task 17 (Follow-up after PR merges): Deferred medium-severity findings from final pre-PR review
+
+**Status when this task was added (2026-04-26):** Plan D2 passed a final 4-agent review (spec/plan alignment, code quality, silent-failure hunt, test coverage). Two BLOCKING findings + a gofmt fix + the missing rehydrated-branch unit tests were addressed in-scope before opening the PR (see commits after this task's checkpoint). The findings below were rated medium-severity by the silent-failure hunter and the test analyzer; they were deferred deliberately to keep the PR focused. Each entry below carries enough context to pick up cold.
+
+### 17.A — `texel/snapshot_restore.go` calls `appLifecycle.StopApp(p.app)` on a never-`Run()` factory-built app
+
+**Finding rating:** HIGH (silent-failure hunter), deferred for follow-up.
+
+**Background:** Plan D2 added factory-based app reconstruction in `appFromSnapshot`. For a captured pane with `AppType="statusbar"`, the factory returns a real `statusbar.New(...)` app — not a placeholder `snapshotApp`. Then the orphan filter in `ApplyTreeCapture` (lines 169-177) calls `d.appLifecycle.StopApp(p.app)` on that factory-built app even though it was only `PrepareAppForRestore`'d, never `Run()`. Whether this is safe is per-app behavior — `Stop()` may close channels its `Run()` was supposed to drain, panic on nil internal state, or block waiting for goroutines that never started.
+
+**Why it matters:** A future status-bar refactor that adds blocking Stop semantics → daemon dies on every boot with a "corrupted snapshot" symptom that's actually just the orphan filter. There's no `defer recover()` in `ApplyTreeCapture`, so a panic in Stop aborts boot snapshot restore entirely.
+
+**Recommended fix:** Wrap the orphan-loop StopApp call in `defer func() { recover() }()` and log the recovery. Or, switch the filter to NOT call StopApp on apps that haven't been Run — just drop the pane reference and let GC reclaim it. Second option is cleaner (avoids invoking lifecycle methods out-of-order) but requires confirming no app currently leaks resources between `New()` and `Run()`.
+
+**Touchpoint:** `texel/snapshot_restore.go:169-177`, the `isStatusOrphan` filter in `ApplyTreeCapture`.
+
+**Test:** Construct a panicking-Stop fake app, restore a snapshot containing it as an orphan, assert `ApplyTreeCapture` returns nil and the daemon continues booting.
+
+### 17.B — `Manager.Close` vs concurrent `LookupOrRehydrate` for the same ID — rename race
+
+**Finding rating:** MEDIUM (silent-failure hunter), deferred.
+
+**Background:** `Manager.Close` (manager.go:230-240) deletes from `m.sessions` then drops `m.mu` before calling `session.Close()` (which begins flushing the `atomicjson.Store` writer). If a fresh resume for the same session ID arrives during that window, `LookupOrRehydrate` finds the persisted index entry (the session was never wiped from disk) and constructs a new Session with a new Store pointing at the same file path. Two stores then race on `rename()` at the filesystem level. The second-to-rename wins, possibly clobbering newer state. atomicjson logs save failures but has no log for "two writers raced".
+
+**Why it matters:** The window is small in practice (a few ms between `m.mu` release and `Session.Close()` returning) but not zero. A user disconnecting and immediately reconnecting with the same session ID could trigger it. `TestD2_RehydrateRaceForSameID` covers concurrent rehydrate but not Close-vs-rehydrate.
+
+**Recommended fix:** Either (a) hold a per-ID lock through both Close and the rehydrate path so they serialize, or (b) document Close-then-immediate-reconnect-with-same-ID as unsupported and add a debug log on rename failures so operators can spot the race if it ever does fire.
+
+**Touchpoint:** `internal/runtime/server/manager.go: Close`, `LookupOrRehydrate`.
+
+**Test:** Goroutine A calls Close while goroutine B calls LookupOrRehydrate on the same ID; assert no JSON corruption and either (a) consistent write ordering or (b) a logged warning.
+
+### 17.C — `crypto/rand.Read` failure in `NewSession` is propagated but not logged
+
+**Finding rating:** MEDIUM (silent-failure hunter), deferred.
+
+**Background:** `Manager.NewSession` (manager.go:46-47) uses `crypto/rand.Read` to generate a session ID. On entropy-starved environments (containers, embedded targets) this can fail. The error propagates up to the handshake and surfaces to the user as a generic "connect failed" with no log line at the point of failure.
+
+**Why it matters:** Operators investigating "users can't connect" have no breadcrumb pointing at the entropy pool. Adding a `log.Printf("session: crypto/rand failed: %v", err)` is one line and makes the diagnostic obvious.
+
+**Recommended fix:** Add the `log.Printf` before the `return nil, err`.
+
+**Touchpoint:** `internal/runtime/server/manager.go: NewSession` (and also `NewSessionWithID` if it has a similar pattern).
+
+### 17.D — `Manager.EnablePersistence` failure logs-and-continues with persistence silently disabled
+
+**Finding rating:** MEDIUM (silent-failure hunter), deferred.
+
+**Background:** If `ScanSessionsDir` returns an error during boot (e.g., `os.ReadDir` EACCES on the sessions dir), `EnablePersistence` returns the error to `cmd/texel-server/main.go:255-257`, which logs a warning and continues. The manager's `persistBasedir` stays empty, so neither rehydration nor write-back works for the entire process lifetime. The single warning line is easy to miss in a busy boot log, and there's no surface in `Stats()` reflecting the disabled state.
+
+**Why it matters:** A permissions issue (e.g., dir owned by root after a sudo-misadventure) silently breaks cross-restart resume. Users see "session not found" on every reconnect with no obvious cause. The current "best-effort" choice is defensible — Plan D2 should not block boot on a session-persistence problem — but the disabled state should be observable.
+
+**Recommended fix:** Either (a) fail-fast (return non-zero from main and let the supervisor surface a clear error), or (b) expose `persistEnabled bool` via `Manager.Stats()` and have `texelation status` report it. Option (b) keeps the boot lenient while making the regression visible.
+
+**Touchpoint:** `cmd/texel-server/main.go:255-257`, `internal/runtime/server/manager.go: Stats`.
+
+### 17.E — `--reset-state` Plan D2 wipe path has no automated test
+
+**Finding rating:** MEDIUM (test analyzer), deferred.
+
+**Background:** Commit `4795fa2` extended `cmd/texelation/main.go: handleResetState` to also wipe `~/.texelation/sessions/` and the Plan D client state directory. Without an automated test, a future refactor that drops the sessions-dir glob silently leaves cross-restart viewport state on disk and the unit suite stays green.
+
+**Why it matters:** `--reset-state` is the user's only documented escape hatch when persistence gets confused. If it silently stops wiping D2 state, users debugging a corrupted session can't recover.
+
+**Recommended fix:** Either (a) refactor `handleResetState` to expose the wipe logic for direct testing, or (b) write an integration-style test that pre-populates the dirs, runs `handleResetState` with simulated stdin "yes", and asserts the dirs are empty.
+
+**Touchpoint:** `cmd/texelation/main.go: handleResetState`. Test would live at `cmd/texelation/main_test.go` (does not currently exist).
+
+**Test scaffold:**
+```go
+func TestHandleResetState_WipesD2Sessions(t *testing.T) {
+    // Pre-populate ~/.texelation/sessions/<hex>.json with a fake stored session.
+    // Pre-populate Plan D client state dir.
+    // Run handleResetState with confirm-via-stdin "yes".
+    // Assert both dirs are empty afterward.
+}
+```
+
+### 17.F — Direct test for `Session.Close` racing with `ApplyViewportUpdate`
+
+**Finding rating:** LOW (test analyzer), deferred — likely covered indirectly.
+
+**Background:** `TestD2_ConcurrentUpdates` covers concurrent updates but does NOT call `Close()` concurrently with the running goroutines. The lock-discipline note in `session.go:114-118` justifies a pattern that protects against this race specifically. The defense-in-depth `TestStoreUpdateAfterCloseIsNoop` in atomicjson covers the layered guarantee, so a regression that broke the session-level pattern would still not corrupt files. Acceptable today, but a direct test would be cheap insurance.
+
+**Recommended fix:** Add a direct close-vs-update test. ~30 lines.
+
+**Touchpoint:** `internal/runtime/server/session_test.go`.
+
+**Test scaffold:**
+```go
+func TestSession_CloseRacesWithApplyViewportUpdate(t *testing.T) {
+    dir := t.TempDir()
+    id := [16]byte{0xab}
+    sess := NewSession(id, 100)
+    sess.AttachWriter(SessionFilePath(dir, id), 1*time.Millisecond)
+    var wg sync.WaitGroup
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        for i := 0; i < 1000; i++ {
+            sess.ApplyViewportUpdate(/* ... */)
+        }
+    }()
+    sess.Close() // races with the goroutine; must not panic, file must be valid
+    wg.Wait()
+    // Load the persisted file and assert no JSON corruption.
+}
+```
+
+### Captured memory pointer
+
+These findings came from the final 4-agent pre-PR review on 2026-04-26. The full agent transcripts aren't preserved, but the synthesis is captured in the conversation around commit `ee09b2b` and in this task. Tasks 17.A and 17.B are the highest-value follow-ups; the others can wait until someone is touching the adjacent code.
+
+---
+
 ## Self-Review Checklist (run before declaring the plan done)
 
 - [ ] **Spec coverage**: every test in the spec's "Test plan" maps to a task in the plan; every test the plan introduces appears in the spec's list. Lock-bearing tests: `TestD2_FullCrossRestartCycle`, `TestD2_PinnedRoundTrip`, `TestD2_FileSurvivesSessionClose`, `TestD2_ConcurrentUpdates`, `TestD2_RehydrateRaceForSameID`, `TestD2_PhantomPaneFilterAfterPreSeed` (now asserts pruning, not just filter), `TestApplyPostResumeReset_*`, `TestSaveFailingRenameLeavesPriorFile` (via real `Save` + `renameFn` hook), `TestSaveErrRelogInterval_DeduplicatesIdenticalErrors` (with `syncBuf` data-race fix), `TestManagerCloseDropsLockBeforeSessionClose`, `TestManagerNewSessionWithID_*`. ✓
