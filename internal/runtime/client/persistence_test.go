@@ -462,3 +462,78 @@ func TestStaleSessionWipeAndReplace(t *testing.T) {
 		t.Errorf("post-wipe state SessionID mismatch")
 	}
 }
+
+// TestMultiClientIsolation verifies that two distinct --client-name
+// values against the same socket produce isolated state files: writing
+// one does not affect the other, and each loads back independently.
+//
+// This is the disk-layer invariant; full multi-client e2e (two
+// texelations, both running, one daemon) is verified manually in Task 20.
+func TestMultiClientIsolation(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	socketPath := "/tmp/test-multiclient.sock"
+
+	pathLeft, err := ResolvePath(socketPath, "left")
+	if err != nil {
+		t.Fatalf("ResolvePath left: %v", err)
+	}
+	pathRight, err := ResolvePath(socketPath, "right")
+	if err != nil {
+		t.Fatalf("ResolvePath right: %v", err)
+	}
+	if pathLeft == pathRight {
+		t.Fatalf("expected distinct paths, got %q == %q", pathLeft, pathRight)
+	}
+
+	stateLeft := ClientState{
+		SocketPath:   socketPath,
+		SessionID:    [16]byte{0xa},
+		LastSequence: 100,
+		WrittenAt:    time.Now().UTC(),
+	}
+	stateRight := ClientState{
+		SocketPath:   socketPath,
+		SessionID:    [16]byte{0xb},
+		LastSequence: 200,
+		WrittenAt:    time.Now().UTC(),
+	}
+
+	if err := Save(pathLeft, &stateLeft); err != nil {
+		t.Fatalf("Save left: %v", err)
+	}
+	if err := Save(pathRight, &stateRight); err != nil {
+		t.Fatalf("Save right: %v", err)
+	}
+
+	gotLeft, err := Load(pathLeft, socketPath)
+	if err != nil || gotLeft == nil {
+		t.Fatalf("Load left: state=%v err=%v", gotLeft, err)
+	}
+	gotRight, err := Load(pathRight, socketPath)
+	if err != nil || gotRight == nil {
+		t.Fatalf("Load right: state=%v err=%v", gotRight, err)
+	}
+
+	if gotLeft.SessionID != stateLeft.SessionID {
+		t.Errorf("left SessionID mismatch: got %v want %v", gotLeft.SessionID, stateLeft.SessionID)
+	}
+	if gotRight.SessionID != stateRight.SessionID {
+		t.Errorf("right SessionID mismatch: got %v want %v", gotRight.SessionID, stateRight.SessionID)
+	}
+	if gotLeft.SessionID == gotRight.SessionID {
+		t.Errorf("expected distinct SessionIDs across clients")
+	}
+	if gotLeft.LastSequence != 100 || gotRight.LastSequence != 200 {
+		t.Errorf("LastSequence cross-contamination: left=%d right=%d", gotLeft.LastSequence, gotRight.LastSequence)
+	}
+
+	// Overwriting one slot must not affect the other.
+	stateLeft.LastSequence = 999
+	if err := Save(pathLeft, &stateLeft); err != nil {
+		t.Fatalf("Save left overwrite: %v", err)
+	}
+	gotRightAgain, _ := Load(pathRight, socketPath)
+	if gotRightAgain.LastSequence != 200 {
+		t.Errorf("right state corrupted by left overwrite: LastSequence %d != 200", gotRightAgain.LastSequence)
+	}
+}
