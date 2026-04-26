@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/framegrace/texelation/internal/persistence/atomicjson"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -44,6 +45,16 @@ type DiffPacket struct {
 	Message  protocol.Header
 }
 
+// storedMeta is the in-memory mirror of the Plan F session-level metadata
+// fields. Held alongside viewports and updated via dedicated hooks so the
+// writer can build a complete StoredSession on each Update.
+type storedMeta struct {
+	pinned         bool
+	label          string
+	paneCount      int
+	firstPaneTitle string
+}
+
 // Session manages pane buffers and queued diffs for a single client connection.
 type Session struct {
 	id             [16]byte
@@ -58,6 +69,11 @@ type Session struct {
 	viewports      *ClientViewports
 	revisionsMu    sync.Mutex
 	revisions      map[[16]byte]uint32
+	// Plan D2: cross-restart persistence. Nil-safe: when nil (no
+	// disk path resolved), all hook calls are no-ops.
+	writer     *atomicjson.Store[StoredSession]
+	storedMu   sync.Mutex
+	storedMeta storedMeta // updated by RecordPaneActivity, written through writer
 }
 
 func NewSession(id [16]byte, maxDiffs int) *Session {
@@ -70,6 +86,93 @@ func NewSession(id [16]byte, maxDiffs int) *Session {
 		maxDiffs:  maxDiffs,
 		viewports: NewClientViewports(),
 		revisions: make(map[[16]byte]uint32),
+	}
+}
+
+// AttachWriter wires up cross-restart persistence for this session. May
+// be called once at session creation (for fresh sessions) or after
+// rehydration (for sessions reconstructed from disk via Manager). Safe
+// to call before any Apply*/Enqueue* hooks.
+func (s *Session) AttachWriter(path string, debounce time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.writer != nil {
+		return
+	}
+	s.writer = atomicjson.NewStore[StoredSession](path, debounce)
+}
+
+// schedulePersist builds a StoredSession snapshot from current state
+// and hands it to the writer.
+//
+// PRECONDITION: caller MUST NOT hold s.mu. This function acquires
+// s.mu briefly to read s.writer, then s.storedMu, then
+// s.viewports.mu (via Snapshot's RLock); holding s.mu at entry would
+// invert lock order against any future code that takes s.mu while
+// inside the publisher or viewport plumbing.
+//
+// Lock-discipline note: s.writer is read UNDER s.mu (snapshot the
+// pointer, then drop the lock). A naive read like `if s.writer == nil`
+// outside the lock would race with Session.Close, which nils s.writer
+// under s.mu — an unprotected read could observe non-nil at the check
+// then deref a niled-out value during Update.
+//
+// Safe to call from any goroutine. Nil-safe (no-op when writer absent).
+func (s *Session) schedulePersist() {
+	s.mu.Lock()
+	w := s.writer
+	s.mu.Unlock()
+	if w == nil {
+		return
+	}
+
+	s.storedMu.Lock()
+	meta := s.storedMeta
+	s.storedMu.Unlock()
+
+	vps := s.viewports.Snapshot()
+	stored := StoredSession{
+		SchemaVersion:  StoredSessionSchemaVersion,
+		SessionID:      s.id,
+		LastActive:     time.Now().UTC(),
+		Pinned:         meta.pinned,
+		Label:          meta.label,
+		PaneCount:      meta.paneCount,
+		FirstPaneTitle: meta.firstPaneTitle,
+		PaneViewports:  make([]StoredPaneViewport, 0, len(vps)),
+	}
+	for paneID, v := range vps {
+		stored.PaneViewports = append(stored.PaneViewports, StoredPaneViewport{
+			PaneID:        paneID,
+			AltScreen:     v.AltScreen,
+			AutoFollow:    v.AutoFollow,
+			ViewBottomIdx: v.ViewBottomIdx,
+			Rows:          v.Rows,
+			Cols:          v.Cols,
+		})
+	}
+	w.Update(stored)
+}
+
+// RecordPaneActivity updates the session-level pane metadata used by
+// Plan F's session-discovery picker. Triggers a debounced write.
+func (s *Session) RecordPaneActivity(paneCount int, firstPaneTitle string) {
+	s.storedMu.Lock()
+	s.storedMeta.paneCount = paneCount
+	s.storedMeta.firstPaneTitle = firstPaneTitle
+	s.storedMu.Unlock()
+	s.schedulePersist()
+}
+
+// FlushPersistForTest forces the writer to flush any pending state
+// synchronously. Tests use this instead of time.Sleep to avoid debounce
+// flakes. Production code does NOT call this — Close already flushes.
+func (s *Session) FlushPersistForTest() {
+	s.mu.Lock()
+	w := s.writer
+	s.mu.Unlock()
+	if w != nil {
+		w.Flush()
 	}
 }
 
@@ -97,6 +200,7 @@ func (s *Session) RevisionFor(paneID [16]byte) uint32 {
 // ApplyViewportUpdate records the client's current viewport for a pane.
 func (s *Session) ApplyViewportUpdate(u protocol.ViewportUpdate) {
 	s.viewports.Apply(u)
+	s.schedulePersist()
 }
 
 // ApplyResume seeds per-pane viewports from a ResumeRequest payload. Called
@@ -104,6 +208,7 @@ func (s *Session) ApplyViewportUpdate(u protocol.ViewportUpdate) {
 // publisher clips correctly on the initial emit.
 func (s *Session) ApplyResume(states []protocol.PaneViewportState, paneExists func(id [16]byte) bool) {
 	s.viewports.ApplyResume(states, paneExists)
+	s.schedulePersist()
 }
 
 // Viewport returns the client-reported viewport for the given pane, or
@@ -241,9 +346,14 @@ func (s *Session) Pending(after uint64) []DiffPacket {
 
 func (s *Session) Close() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.closed = true
 	s.diffs = nil
+	w := s.writer
+	s.writer = nil
+	s.mu.Unlock()
+	if w != nil {
+		w.Close() // flushes pending state synchronously
+	}
 }
 
 func (s *Session) MarkSnapshot(now time.Time) {
