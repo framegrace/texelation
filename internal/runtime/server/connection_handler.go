@@ -227,6 +227,7 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 					if err := c.writeMessage(header, payload); err != nil {
 						return err
 					}
+					c.recordSnapshotActivity(snapshot)
 				}
 			}
 			if sinkOK {
@@ -318,6 +319,7 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 		c.initialSnapshotSent = true
 		return
 	}
+	c.recordSnapshotActivity(snapshot)
 
 	// Reset publisher diff state so the next publish sends full frames.
 	// The TreeSnapshot overwrites client rows with unstyled text, so the
@@ -390,6 +392,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 		sink.Publish()
 		return
 	}
+	c.recordSnapshotActivity(snapshot)
 
 	states := snapshotMergedPaneStates(snapshot, desktop)
 	for _, state := range states {
@@ -406,6 +409,18 @@ func (c *connection) handleResize(size protocol.Resize) {
 	// pane positions, so the new content renders at the right location.
 	sink.Publish()
 	c.sendPending()
+}
+
+// recordSnapshotActivity updates the session's stored pane-activity
+// metadata after a TreeSnapshot is dispatched. Cheap (no I/O on the
+// hot path; the writer debounces). Plan F consumes the resulting
+// PaneCount / FirstPaneTitle fields.
+func (c *connection) recordSnapshotActivity(snap protocol.TreeSnapshot) {
+	if c.session == nil {
+		return
+	}
+	count, title := paneActivityFromSnapshot(snap)
+	c.session.RecordPaneActivity(count, title)
 }
 
 func (c *connection) requestClipboardData(mime string) []byte {
