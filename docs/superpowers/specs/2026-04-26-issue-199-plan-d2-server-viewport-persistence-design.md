@@ -205,22 +205,42 @@ Each call builds a fresh `StoredSession` from the current in-memory state and ha
 
 ## Test plan
 
-Integration tests added to `internal/runtime/server/`:
+Test naming evolved during plan writing — these are the consolidated test names that ship. The spec preserves them as the source of truth.
 
-1. **`TestD2_BasicCrossRestartResume`** — write session state, simulate daemon restart (drop and re-init `Manager`, run boot-scan), client sends `MsgResumeRequest`, verify viewport restored.
-2. **`TestD2_BootScanIgnoresCorruptFile`** — write a malformed file alongside a good one; boot scan loads the good one and deletes the bad one.
-3. **`TestD2_ResumeUnknownSessionStillFails`** — persisted index has session A, client requests session B → `ErrSessionNotFound` (no false-positive recovery).
-4. **`TestD2_ClientFresherViewportWins`** — disk has viewport at gid=100, client's `MsgResumeRequest` carries gid=200 for the same pane → final state is gid=200.
-5. **`TestD2_RehydrateThenRestoreLivePath`** — full lifecycle: persisted file → boot scan → resume → live `MsgViewportUpdate` lands and triggers debounced write back to disk.
-6. **`TestD2_PinnedNotConsumedYet`** — write file with `Pinned=true`; survives boot scan; field round-trips. (Forward-compat assertion.)
-7. **`TestD2_SchemaMismatchDeletes`** — write file with `SchemaVersion=999`; boot scan logs + deletes.
+**Server-side integration tests** (in `internal/runtime/server/`, build-tag `integration` for the cross-restart cycle):
 
-Unit tests for the new `atomicjson` package:
+- **`TestD2_FullCrossRestartCycle`** — combines what earlier drafts called `TestD2_BasicCrossRestartResume` + `TestD2_RehydrateThenRestoreLivePath` + `TestD2_ClientFresherViewportWins` into a single five-phase lifecycle test (write → boot-scan → rehydrate → client-fresh-wins → live-update writes back).
+- **`TestD2_PinnedRoundTrip`** — write file with `Pinned=true`, verify it survives boot scan and round-trips through subsequent writes.
+- **`TestD2_FileSurvivesSessionClose`** — closing a session must not delete the file (templates safety).
+- **`TestD2_ConcurrentUpdates`** — `-race` regression test for `storedMu` / `viewports.mu` ordering under fan-out load.
+- **`TestD2_RehydrateRaceForSameID`** — two goroutines `LookupOrRehydrate` the same persisted ID; exactly one rehydrates, the other gets the live cached pointer.
+- **`TestD2_PhantomPaneFilterAfterPreSeed`** — pre-seed includes a phantom pane; client's resume payload contains another phantom; `paneExists` filter drops the client-supplied phantom.
+- **`TestScanSessionsDir`** — boot scan: ignores corrupt files (deletes them), schema-mismatch files (deletes them), non-JSON files (leaves them), and filename-vs-content mismatch (skips them WITHOUT deletion — templates safety).
+- **`TestLoadPersistedSessionsAtBoot`** — boot scan helper plumbs into the `Manager` rehydration index.
+- **`TestPaneActivityFromSnapshot_*`** — pure-function tests for the helper used by `connection.recordSnapshotActivity`.
+- **`TestStoredSessionRoundTrip`** + **`TestSessionFilePath`** — schema and path-resolver coverage.
+- **`TestManagerNewSessionWithID_*`** — explicit test for the public test-utility constructor.
+- **`TestSessionWriterPersistsViewportUpdate`** + **`TestSessionWriterCloseFlushes`** + **`TestRecordPaneActivityPersists`** — Session writer unit coverage.
+- **`TestManagerLookupOrRehydrate_*`** — manager rehydration semantics.
+- **`TestManagerNewSessionAttachesWriter`** + **`TestManagerLookupOrRehydrate_AttachesWriter`** — `EnablePersistence` wiring.
 
-8. **Round-trip `Save`/`Load` for arbitrary `T`.**
-9. **`Update` debouncing** — N rapid updates → exactly one disk write within N×debounce.
-10. **`Close` flushes pending writes** — pending update at close time hits disk.
-11. **Atomic-write semantics** — Save mid-write crash leaves either old or new file (simulate via failing rename).
+**Client-side tests** (in `internal/runtime/client/`):
+
+- **`TestApplyPostResumeReset_FlagSet_ResetsRevisionAndSequence`**
+- **`TestApplyPostResumeReset_FlagUnset_NoReset`**
+- **`TestApplyPostResumeReset_FiresExactlyOnce`** — one-shot CAS guarantee under multiple snapshots.
+- **`TestApplyPostResumeReset_NilSequenceIsNotADereference`**
+
+**`atomicjson` unit tests** (in `internal/persistence/atomicjson/`):
+
+- **`TestSaveLoadRoundTrip`** — round-trip `Save`/`Load` for arbitrary `T`.
+- **`TestLoadMissingReturnsNilNil`** + **`TestLoadCorruptReturnsNilNilAndDeletes`** + **`TestWipeIdempotent`**.
+- **`TestStoreCoalescesUpdates`** — debouncing.
+- **`TestStoreFlushOnClose`** — `Close` flushes pending writes.
+- **`TestStoreUpdateAfterCloseIsNoop`**.
+- **`TestStoreSerializesSaves`**.
+- **`TestSaveFailingRenameLeavesPriorFile`** — atomic-write semantics: simulate the rename-failure path specifically (write tmp file, fail at rename), assert canonical file is untouched, assert no orphan tmp leak.
+- **`TestSaveErrRelogInterval_DeduplicatesIdenticalErrors`** — per-error-string log dedup.
 
 Plan D regression tests must keep passing after the client-side `Writer` is refactored onto `atomicjson`.
 
