@@ -147,7 +147,25 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			return errors.New("server: resume request session mismatch")
 		}
 		c.resumeProcessed = true
-		c.lastAcked = request.LastSequence
+		// Plan D2: a rehydrated session (one reconstructed from disk
+		// after a daemon restart) has an empty diff queue and
+		// nextSequence == 0, so the client's claimed LastSequence is
+		// from a prior daemon's lifetime and is meaningless here.
+		// Honoring it would make Session.Pending(after:LastSequence)
+		// filter out every fresh delta (all of which start at seq=1)
+		// and the client would appear frozen — no scroll updates, no
+		// keystroke echoes, no control-mode text would ever reach the
+		// client.
+		//
+		// For an in-process resume (live cache hit), the diff queue
+		// retains its accumulated entries; honoring the client's
+		// LastSequence is correct so we don't replay already-acked
+		// diffs.
+		if c.rehydrated {
+			c.lastAcked = 0
+		} else {
+			c.lastAcked = request.LastSequence
+		}
 		c.awaitResume = false
 		if c.attachListeners != nil {
 			c.attachListeners()
@@ -245,7 +263,24 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				sink.Publish()
 			}
 		}
-		c.initialSnapshotSent = true
+		// Plan D2: for a rehydrated session, leave initialSnapshotSent
+		// false so handleClientReady runs when MsgClientReady arrives.
+		// The resume branch above shipped a snapshot but ran with a
+		// 0×0 desktop (the new daemon hasn't received the client's
+		// viewport size yet), so handleClientReady is needed for
+		// SetViewportSize, the geometry-correct re-snapshot, the
+		// per-pane sendPaneState loop (active/zorder/handlesMouse),
+		// and the statusbar layout pass. Skipping these leaves the
+		// client with no pane focus, no borders, no statusbar, and
+		// publishes that emit against 0×0 buffers.
+		//
+		// For a fresh-session or in-process resume, the original
+		// behavior stands: we already sent a usable snapshot from a
+		// well-dimensioned desktop, so handleClientReady's repeat
+		// work is wasteful.
+		if !c.rehydrated {
+			c.initialSnapshotSent = true
+		}
 		c.nudge()
 	case protocol.MsgClientReady:
 		ready, err := protocol.DecodeClientReady(payload)

@@ -72,7 +72,7 @@ func TestClipboardAndThemeRoundTrip(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		defer serverConn.Close()
-		sess, resuming, err := handleHandshake(serverConn, mgr)
+		sess, resuming, _, err := handleHandshake(serverConn, mgr)
 		if err != nil {
 			errCh <- err
 			return
@@ -82,7 +82,7 @@ func TestClipboardAndThemeRoundTrip(t *testing.T) {
 		_ = pub.Publish()
 		srv := &Server{manager: mgr, sink: sink, desktopSink: sink}
 		srv.sendSnapshot(serverConn, sess)
-		errCh <- newConnection(serverConn, sess, sink, resuming).serve()
+		errCh <- newConnection(serverConn, sess, sink, resuming, false /*rehydrated*/).serve()
 	}()
 
 	// initial handshake

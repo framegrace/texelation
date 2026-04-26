@@ -116,18 +116,26 @@ func (m *Manager) SetPersistedSessions(loaded map[[16]byte]*StoredSession) {
 // consumed (removed from the index) on rehydration; subsequent writes
 // flow through the live Session's writer. Returns ErrSessionNotFound
 // when the ID is unknown to both live and persisted maps.
-func (m *Manager) LookupOrRehydrate(id [16]byte) (*Session, error) {
+//
+// The rehydrated bool is true when a fresh Session was constructed
+// from disk (the daemon-restart resume case), false when an existing
+// live Session in the cache is returned (a regular in-process resume).
+// Callers care about this distinction because rehydrated sessions
+// have empty diff queues and revision/sequence counters that start at
+// 0, while live sessions retain their accumulated counters across
+// reconnects.
+func (m *Manager) LookupOrRehydrate(id [16]byte) (sess *Session, rehydrated bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.sessions[id]; ok {
-		return s, nil
+		return s, false, nil
 	}
 	stored, ok := m.persistedSessions[id]
 	if !ok {
-		return nil, ErrSessionNotFound
+		return nil, false, ErrSessionNotFound
 	}
 	delete(m.persistedSessions, id)
-	sess := NewSession(id, m.maxDiffs)
+	sess = NewSession(id, m.maxDiffs)
 	if m.persistBasedir != "" {
 		sess.AttachWriter(SessionFilePath(m.persistBasedir, id), m.persistDebounce)
 	}
@@ -147,7 +155,7 @@ func (m *Manager) LookupOrRehydrate(id [16]byte) (*Session, error) {
 	sess.storedMeta.firstPaneTitle = stored.FirstPaneTitle
 	sess.storedMu.Unlock()
 	m.sessions[id] = sess
-	return sess, nil
+	return sess, true, nil
 }
 
 // EnablePersistence is the single public entry point that wires Plan D2

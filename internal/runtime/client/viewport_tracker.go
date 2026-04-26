@@ -193,9 +193,30 @@ func (s *clientState) onTreeSnapshot(snap protocol.TreeSnapshot) {
 			vp.knownBottomGid = -1
 			vp.dirty = true
 		} else if vp.Rows != rows || vp.Cols != cols {
-			// Geometry changed — update dims and mark dirty.
+			// Geometry changed — update dims and mark dirty. When
+			// AutoFollow is true, ALSO recompute ViewTopIdx /
+			// ViewBottomIdx around the known live edge so the
+			// viewport matches the new height. Without this, a pane
+			// that was first laid out at e.g. rows=23 (giving
+			// ViewBottomIdx=22) and then resized to rows=59 keeps
+			// the stale ViewBottomIdx=22, creating an internally
+			// inconsistent state (autoFollow=true with a
+			// viewBottomIdx far below the live edge) that the
+			// publisher and persistence layers cannot interpret.
 			vp.Rows = rows
 			vp.Cols = cols
+			if vp.AutoFollow {
+				bottom := vp.knownBottomGid
+				if bottom < int64(rows)-1 {
+					bottom = int64(rows) - 1
+				}
+				vp.ViewBottomIdx = bottom
+				top := bottom - int64(rows) + 1
+				if top < 0 {
+					top = 0
+				}
+				vp.ViewTopIdx = top
+			}
 			vp.dirty = true
 		}
 		vp.mu.Unlock()

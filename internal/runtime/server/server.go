@@ -132,11 +132,11 @@ func (s *Server) acceptLoop() {
 		go func(c net.Conn) {
 			defer s.wg.Done()
 			defer c.Close()
-			session, resuming, err := handleHandshake(c, s.manager)
+			session, resuming, rehydrated, err := handleHandshake(c, s.manager)
 			if err != nil {
 				return
 			}
-			conn := newConnection(c, session, s.sink, resuming)
+			conn := newConnection(c, session, s.sink, resuming, rehydrated)
 			publisher := (*DesktopPublisher)(nil)
 			if s.publisherFactory != nil {
 				publisher = s.publisherFactory(session)

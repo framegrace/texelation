@@ -54,7 +54,7 @@ func TestD2_ResumeRehydratesUnknownSession(t *testing.T) {
 		_, _, _ = protocol.ReadMessage(clientToServer)
 	}()
 
-	sess, resuming, err := handleHandshake(serverToClient, mgr)
+	sess, resuming, _, err := handleHandshake(serverToClient, mgr)
 	if err != nil {
 		t.Fatalf("handleHandshake: %v", err)
 	}

@@ -379,14 +379,14 @@ func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 
 	go func() {
 		defer h.serverConn.Close()
-		sess, resuming, err := handleHandshake(h.serverConn, mgr)
+		sess, resuming, _, err := handleHandshake(h.serverConn, mgr)
 		if err != nil {
 			serveErrCh <- err
 			return
 		}
 		pub := NewDesktopPublisher(desktop, sess)
 		sink.SetPublisher(pub)
-		conn := newConnection(h.serverConn, sess, sink, resuming)
+		conn := newConnection(h.serverConn, sess, sink, resuming, false /*rehydrated*/)
 		// Wire nudge so sendPending fires when publisher queues diffs.
 		pub.SetNotifier(conn.nudge)
 		h.mu.Lock()

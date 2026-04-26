@@ -54,7 +54,7 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 	firstErr := make(chan error, 1)
 	go func() {
 		defer firstServer.Close()
-		session, resuming, err := handleHandshake(firstServer, mgr)
+		session, resuming, _, err := handleHandshake(firstServer, mgr)
 		if err != nil {
 			firstErr <- err
 			return
@@ -73,7 +73,7 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 			firstErr <- err
 			return
 		}
-		conn := newConnection(firstServer, session, sink, resuming)
+		conn := newConnection(firstServer, session, sink, resuming, false /*rehydrated*/)
 		firstErr <- conn.serve()
 	}()
 
@@ -149,14 +149,14 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 	resumeErr := make(chan error, 1)
 	go func() {
 		defer resumeServer.Close()
-		session, resuming, err := handleHandshake(resumeServer, mgr)
+		session, resuming, _, err := handleHandshake(resumeServer, mgr)
 		if err != nil {
 			resumeErr <- err
 			return
 		}
 		publisher := NewDesktopPublisher(desktop, session)
 		sink.SetPublisher(publisher)
-		conn := newConnection(resumeServer, session, sink, resuming)
+		conn := newConnection(resumeServer, session, sink, resuming, false /*rehydrated*/)
 		resumeErr <- conn.serve()
 	}()
 

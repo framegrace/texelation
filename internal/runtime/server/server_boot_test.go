@@ -102,7 +102,7 @@ func TestLoadPersistedSessionsAtBoot(t *testing.T) {
 	if err := LoadPersistedSessions(mgr, dir); err != nil {
 		t.Fatalf("LoadPersistedSessions: %v", err)
 	}
-	sess, err := mgr.LookupOrRehydrate(id)
+	sess, _, err := mgr.LookupOrRehydrate(id)
 	if err != nil {
 		t.Fatalf("rehydrate after boot scan: %v", err)
 	}

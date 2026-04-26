@@ -51,7 +51,7 @@ func TestD2_FullCrossRestartCycle(t *testing.T) {
 	}
 
 	// === Phase C: resume request lands and rehydrates ===
-	sess, err := newMgr.LookupOrRehydrate(id)
+	sess, _, err := newMgr.LookupOrRehydrate(id)
 	if err != nil {
 		t.Fatalf("LookupOrRehydrate: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestD2_PinnedRoundTrip(t *testing.T) {
 	if err := mgr.EnablePersistence(dir, 10*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	sess, err := mgr.LookupOrRehydrate(id)
+	sess, _, err := mgr.LookupOrRehydrate(id)
 	if err != nil {
 		t.Fatalf("rehydrate: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestD2_FileSurvivesSessionClose(t *testing.T) {
 	if err := mgr2.EnablePersistence(dir, 10*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr2.LookupOrRehydrate(id); err != nil {
+	if _, _, err := mgr2.LookupOrRehydrate(id); err != nil {
 		t.Fatalf("survived-Close session must rehydrate, got %v", err)
 	}
 }
@@ -280,7 +280,7 @@ func TestD2_PhantomPaneFilterAfterPreSeed(t *testing.T) {
 	if err := mgr.EnablePersistence(dir, 10*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	sess, err := mgr.LookupOrRehydrate(id)
+	sess, _, err := mgr.LookupOrRehydrate(id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestD2_RehydrateRaceForSameID(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			got[idx], errs[idx] = mgr.LookupOrRehydrate(id)
+			got[idx], _, errs[idx] = mgr.LookupOrRehydrate(id)
 		}(i)
 	}
 	wg.Wait()

@@ -78,12 +78,15 @@ func TestManagerLookupOrRehydrate_LiveSessionWins(t *testing.T) {
 	mgr.SetPersistedSessions(map[[16]byte]*StoredSession{
 		live.ID(): {SessionID: live.ID()}, // shadowed; live should win
 	})
-	got, err := mgr.LookupOrRehydrate(live.ID())
+	got, rehydrated, err := mgr.LookupOrRehydrate(live.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != live {
 		t.Fatalf("expected live session, got different instance")
+	}
+	if rehydrated {
+		t.Fatalf("live cache hit must not report rehydrated=true")
 	}
 }
 
@@ -103,9 +106,12 @@ func TestManagerLookupOrRehydrate_RehydratesFromDisk(t *testing.T) {
 	}
 	mgr.SetPersistedSessions(map[[16]byte]*StoredSession{id: stored})
 
-	sess, err := mgr.LookupOrRehydrate(id)
+	sess, rehydrated, err := mgr.LookupOrRehydrate(id)
 	if err != nil {
 		t.Fatalf("LookupOrRehydrate: %v", err)
+	}
+	if !rehydrated {
+		t.Fatalf("first lookup with persisted entry must report rehydrated=true")
 	}
 	if sess.ID() != id {
 		t.Fatalf("rehydrated session ID mismatch: %x", sess.ID())
@@ -118,15 +124,18 @@ func TestManagerLookupOrRehydrate_RehydratesFromDisk(t *testing.T) {
 	if vp.ViewBottomIdx != 555 {
 		t.Fatalf("expected ViewBottomIdx=555, got %d", vp.ViewBottomIdx)
 	}
-	// After rehydration, the disk-side index entry is consumed.
-	if _, err := mgr.LookupOrRehydrate(id); err != nil {
+	// After rehydration, the disk-side index entry is consumed —
+	// subsequent lookups hit the live cache and report rehydrated=false.
+	if _, rehydrated2, err := mgr.LookupOrRehydrate(id); err != nil {
 		t.Fatalf("second lookup after rehydration must hit live cache, got %v", err)
+	} else if rehydrated2 {
+		t.Fatalf("second lookup must report rehydrated=false (live cache hit)")
 	}
 }
 
 func TestManagerLookupOrRehydrate_UnknownReturnsErr(t *testing.T) {
 	mgr := NewManager()
-	if _, err := mgr.LookupOrRehydrate([16]byte{0xff}); err != ErrSessionNotFound {
+	if _, _, err := mgr.LookupOrRehydrate([16]byte{0xff}); err != ErrSessionNotFound {
 		t.Fatalf("expected ErrSessionNotFound, got %v", err)
 	}
 }
@@ -165,7 +174,7 @@ func TestManagerLookupOrRehydrate_AttachesWriter(t *testing.T) {
 	stored := &StoredSession{SchemaVersion: StoredSessionSchemaVersion, SessionID: id, LastActive: time.Now()}
 	mgr.SetPersistedSessions(map[[16]byte]*StoredSession{id: stored})
 
-	sess, err := mgr.LookupOrRehydrate(id)
+	sess, _, err := mgr.LookupOrRehydrate(id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +242,7 @@ func TestManagerNewSessionWithID_BypassesRandomGen(t *testing.T) {
 	if sess.ID() != id {
 		t.Fatalf("ID mismatch: got %x want %x", sess.ID(), id)
 	}
-	got, err := mgr.LookupOrRehydrate(id)
+	got, _, err := mgr.LookupOrRehydrate(id)
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}

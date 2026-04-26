@@ -105,7 +105,7 @@ func setupTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, func
 func handleTestConnection(conn net.Conn, mgr *Manager, desktop *texel.DesktopEngine, sink *DesktopSink) {
 	defer conn.Close()
 
-	session, resuming, err := handleHandshake(conn, mgr)
+	session, resuming, _, err := handleHandshake(conn, mgr)
 	if err != nil {
 		return
 	}
@@ -131,7 +131,7 @@ func handleTestConnection(conn net.Conn, mgr *Manager, desktop *texel.DesktopEng
 	_ = publisher.Publish()
 
 	// Create and serve connection
-	connHandler := newConnection(conn, session, sink, resuming)
+	connHandler := newConnection(conn, session, sink, resuming, false /*rehydrated*/)
 	_ = connHandler.serve()
 }
 

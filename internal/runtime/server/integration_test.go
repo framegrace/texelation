@@ -47,7 +47,7 @@ func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		defer srv.Close()
-		session, resuming, err := handleHandshake(srv, mgr)
+		session, resuming, _, err := handleHandshake(srv, mgr)
 		if err != nil {
 			errCh <- err
 			return
@@ -64,7 +64,7 @@ func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 			return
 		}
 
-		conn := newConnection(srv, session, sink, resuming)
+		conn := newConnection(srv, session, sink, resuming, false /*rehydrated*/)
 		errCh <- conn.serve()
 	}()
 
