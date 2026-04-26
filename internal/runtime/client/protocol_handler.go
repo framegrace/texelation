@@ -47,6 +47,7 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			log.Printf("decode snapshot failed: %v", err)
 			return false
 		}
+		debuglog.Printf("[PLAND-DEBUG] rx MsgTreeSnapshot panes=%d → fullRenderNeeded=true", len(snap.Panes))
 		// Always apply snapshots - empty snapshots clear the cache (e.g., when switching to empty workspace)
 		cache.ApplySnapshot(snap)
 		state.fullRenderNeeded = true
@@ -76,6 +77,8 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			log.Printf("decode delta failed: %v", err)
 			return false
 		}
+		altFlag := delta.Flags&protocol.BufferDeltaAltScreen != 0
+		debuglog.Printf("[PLAND-DEBUG] rx MsgBufferDelta pane=%x rev=%d alt=%v rows=%d rowBase=%d", delta.PaneID[:4], delta.Revision, altFlag, len(delta.Rows), delta.RowBase)
 		cache.ApplyDelta(delta)
 		state.paneCacheFor(delta.PaneID).ApplyDelta(delta)
 		// Update viewport tracker: alt-screen transitions + AutoFollow advance.
