@@ -204,9 +204,9 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			}()
 		}
 		if provider, ok := c.sink.(SnapshotProvider); ok {
-			snapshot, err := provider.Snapshot()
-			if err != nil {
-				log.Printf("server: resume snapshot error: %v", err)
+			snapshot, snapErr := provider.Snapshot()
+			if snapErr != nil {
+				log.Printf("server: resume snapshot error: %v", snapErr)
 			} else {
 				if payload, err := protocol.EncodeTreeSnapshot(snapshot); err != nil {
 					log.Printf("server: encode snapshot error: %v", err)
@@ -230,6 +230,23 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 					pub.ResetDiffState()
 				}
 				sink.Publish()
+			}
+			// Plan D fix (2026-04-26): mirror handleClientReady's per-pane
+			// MsgPaneState dispatch on the resume path. Without this, a
+			// resuming client never receives Active/ZOrder/Resizing/HandlesMouse
+			// flags — the renderer falls back to defaults (no active pane,
+			// no z-order, etc.), so subsequent BufferDeltas update cache
+			// content but the renderer's incremental composite skips panes
+			// it considers inactive. Resize works around the bug because
+			// handleResize sends a fresh TreeSnapshot + MsgPaneState batch.
+			//
+			// Pre-Plan-D this only bit `--reconnect` flows (rare). Plan D
+			// makes resume the default path, so every user hit it.
+			if sinkOK && snapErr == nil && sink.Desktop() != nil {
+				states := snapshotMergedPaneStates(snapshot, sink.Desktop())
+				for _, state := range states {
+					c.sendPaneState(state.ID, state.Active, state.Resizing, state.ZOrder, state.HandlesMouse)
+				}
 			}
 		}
 		c.initialSnapshotSent = true
