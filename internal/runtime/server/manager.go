@@ -11,7 +11,9 @@ package server
 import (
 	"crypto/rand"
 	"errors"
+	"log"
 	"sync"
+	"time"
 )
 
 var (
@@ -24,6 +26,11 @@ type Manager struct {
 	sessions          map[[16]byte]*Session
 	persistedSessions map[[16]byte]*StoredSession // populated at boot scan; consumed on first resume
 	maxDiffs          int
+
+	// Plan D2: when set, every new or rehydrated Session attaches an
+	// atomicjson writer at <persistBasedir>/sessions/<hex-id>.json.
+	persistBasedir  string
+	persistDebounce time.Duration
 }
 
 func NewManager() *Manager {
@@ -39,11 +46,14 @@ func (m *Manager) NewSession() (*Session, error) {
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, err
 	}
-	session := NewSession(id, m.maxDiffs)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	session := NewSession(id, m.maxDiffs)
+	if m.persistBasedir != "" {
+		session.AttachWriter(SessionFilePath(m.persistBasedir, id), m.persistDebounce)
+	}
 	m.sessions[id] = session
+	m.mu.Unlock()
 	return session, nil
 }
 
@@ -91,6 +101,9 @@ func (m *Manager) LookupOrRehydrate(id [16]byte) (*Session, error) {
 	}
 	delete(m.persistedSessions, id)
 	sess := NewSession(id, m.maxDiffs)
+	if m.persistBasedir != "" {
+		sess.AttachWriter(SessionFilePath(m.persistBasedir, id), m.persistDebounce)
+	}
 	// Pre-seed viewports from disk so the publisher has a clip window
 	// even before the client's MsgResumeRequest arrives. The client's
 	// fresher PaneViewports overwrite these via Session.ApplyResume.
@@ -98,6 +111,51 @@ func (m *Manager) LookupOrRehydrate(id [16]byte) (*Session, error) {
 	sess.viewports.ApplyPreSeed(stored.PaneViewports)
 	m.sessions[id] = sess
 	return sess, nil
+}
+
+// EnablePersistence is the single public entry point that wires Plan D2
+// cross-restart persistence. Performs:
+//
+//  1. ScanSessionsDir(<basedir>) — disk I/O, runs OUTSIDE m.mu so a
+//     slow filesystem cannot block other Manager methods. Safe because
+//     this method is called once during boot before the listener
+//     accepts any connection (see "Boot-scan-before-listener
+//     invariant" in the spec). No concurrent caller exists at boot.
+//  2. Under m.mu: install basedir/debounce on Manager and seed
+//     persistedSessions from the scan result. The lock-protected
+//     block is constant-time over the result-size copy.
+//
+// CALLERS MUST INVOKE THIS BEFORE STARTING THE LISTENER. Any
+// MsgResumeRequest arriving during the scan window would otherwise
+// falsely return ErrSessionNotFound and the client would wipe its
+// persisted state — silently losing the very state D2 exists to
+// preserve.
+//
+// debounce: typically 250ms in prod and 25ms in tests.
+//
+// Returns the boot-scan error (if any) so callers can decide whether to
+// continue without persistence or abort startup. SetPersistedSessions
+// is still exposed for tests that need to inject a hand-built index.
+func (m *Manager) EnablePersistence(basedir string, debounce time.Duration) error {
+	if basedir == "" {
+		return nil
+	}
+	loaded, err := ScanSessionsDir(basedir)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.persistBasedir = basedir
+	m.persistDebounce = debounce
+	m.persistedSessions = make(map[[16]byte]*StoredSession, len(loaded))
+	for id, s := range loaded {
+		m.persistedSessions[id] = s
+	}
+	if len(loaded) > 0 {
+		log.Printf("[BOOT] EnablePersistence: loaded %d persisted session(s) from %s", len(loaded), basedir)
+	}
+	return nil
 }
 
 func (m *Manager) SetDiffRetentionLimit(limit int) {

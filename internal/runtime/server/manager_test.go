@@ -9,6 +9,7 @@
 package server
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -127,5 +128,54 @@ func TestManagerLookupOrRehydrate_UnknownReturnsErr(t *testing.T) {
 	mgr := NewManager()
 	if _, err := mgr.LookupOrRehydrate([16]byte{0xff}); err != ErrSessionNotFound {
 		t.Fatalf("expected ErrSessionNotFound, got %v", err)
+	}
+}
+
+func TestManagerNewSessionAttachesWriter(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager()
+	if err := mgr.EnablePersistence(dir, 25*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := mgr.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	sess.ApplyViewportUpdate(protocol.ViewportUpdate{
+		PaneID: [16]byte{0xaa}, ViewBottomIdx: 1, Rows: 1, Cols: 1,
+	})
+	sess.FlushPersistForTest()
+
+	if _, err := os.Stat(SessionFilePath(dir, sess.ID())); err != nil {
+		t.Fatalf("expected session file written, got stat=%v", err)
+	}
+}
+
+func TestManagerLookupOrRehydrate_AttachesWriter(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager()
+	if err := mgr.EnablePersistence(dir, 25*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	id := [16]byte{0xab}
+	stored := &StoredSession{SchemaVersion: StoredSessionSchemaVersion, SessionID: id, LastActive: time.Now()}
+	mgr.SetPersistedSessions(map[[16]byte]*StoredSession{id: stored})
+
+	sess, err := mgr.LookupOrRehydrate(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	sess.ApplyViewportUpdate(protocol.ViewportUpdate{
+		PaneID: [16]byte{0xbb}, ViewBottomIdx: 99, Rows: 1, Cols: 1,
+	})
+	sess.FlushPersistForTest()
+	if _, err := os.Stat(SessionFilePath(dir, id)); err != nil {
+		t.Fatalf("rehydrated session not persisting: %v", err)
 	}
 }

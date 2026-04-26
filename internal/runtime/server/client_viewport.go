@@ -168,6 +168,28 @@ func (c *ClientViewports) ApplyPreSeed(vps []StoredPaneViewport) {
 	}
 }
 
+// PrunePhantoms removes pane viewports whose IDs no longer exist
+// according to the predicate. Called after rehydration and after the
+// live pane tree is known. Without this, pre-seeded entries for panes
+// destroyed during the prior daemon's lifetime would persist
+// indefinitely and write back to disk, growing the on-disk file
+// monotonically across restarts.
+func (c *ClientViewports) PrunePhantoms(paneExists func(id [16]byte) bool) int {
+	if paneExists == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	dropped := 0
+	for id := range c.byPaneID {
+		if !paneExists(id) {
+			delete(c.byPaneID, id)
+			dropped++
+		}
+	}
+	return dropped
+}
+
 // Snapshot returns a shallow copy of all viewports. Intended for publisher
 // fan-out; callers must treat the result as read-only.
 func (c *ClientViewports) Snapshot() map[[16]byte]ClientViewport {

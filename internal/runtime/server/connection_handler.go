@@ -174,6 +174,18 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			viewportsToApply = pruned
 		}
 
+		// Plan D2: prune phantom pre-seed viewports against the live pane
+		// tree so dead PaneIDs from a prior daemon's lifetime don't persist
+		// back to disk (Plan B review-findings #4 close-out).
+		if sinkOK && sink.Desktop() != nil {
+			desktop := sink.Desktop()
+			if pruned := c.session.viewports.PrunePhantoms(func(p [16]byte) bool {
+				return desktop.AppByID(p) != nil
+			}); pruned > 0 {
+				debugLog.Printf("connection %x: pruned %d phantom pre-seed viewport(s)", c.session.ID(), pruned)
+			}
+		}
+
 		// Seed ClientViewports from the resume payload FIRST: this is a
 		// pure data copy and cannot fail, so the publisher has a valid
 		// clip window even if a per-pane RestoreViewport call below
