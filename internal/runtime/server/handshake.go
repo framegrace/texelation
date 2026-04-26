@@ -25,14 +25,14 @@ var (
 // Returns:
 //   - session:    the live or rehydrated Session for this connection.
 //   - resuming:   true when the client supplied a non-zero SessionID
-//                 (regardless of whether it matched a live or persisted
-//                 entry). Used to gate the connection's awaitResume mode.
+//     (regardless of whether it matched a live or persisted
+//     entry). Used to gate the connection's awaitResume mode.
 //   - rehydrated: true when the session was reconstructed from disk (a
-//                 daemon-restart resume). False when a live cache hit
-//                 returned an existing session, or when a fresh session
-//                 was created. Plan D2 callers use this to decide
-//                 whether to clear stale per-connection state (e.g.
-//                 c.lastAcked from the prior daemon's lifetime).
+//     daemon-restart resume). False when a live cache hit
+//     returned an existing session, or when a fresh session
+//     was created. Plan D2 callers use this to decide
+//     whether to clear stale per-connection state (e.g.
+//     c.lastAcked from the prior daemon's lifetime).
 func handleHandshake(rw io.ReadWriter, mgr *Manager) (*Session, bool, bool, error) {
 	hdr, payload, err := protocol.ReadMessage(rw)
 	if err != nil {
