@@ -136,6 +136,38 @@ func (c *ClientViewports) ApplyResume(states []protocol.PaneViewportState, paneE
 	}
 }
 
+// ApplyPreSeed seeds the viewport map from a list of stored disk entries
+// (Plan D2 rehydration). Mirrors ApplyResume's overflow guard and field
+// derivation but reads from StoredPaneViewport instead of
+// protocol.PaneViewportState. Acquires the write lock — callers must
+// not hold any other ClientViewports lock.
+//
+// This is intentionally a method on ClientViewports (not a free function
+// in manager.go) so the internal byPaneID map is never touched without
+// the lock. Plan B's round-2 review caught a similar lock-discipline
+// regression; this is its preventative.
+func (c *ClientViewports) ApplyPreSeed(vps []StoredPaneViewport) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, p := range vps {
+		top := p.ViewBottomIdx - int64(p.Rows) + 1
+		bottom := p.ViewBottomIdx
+		if top > p.ViewBottomIdx {
+			top, bottom = 0, 0
+		} else if top < 0 {
+			top = 0
+		}
+		c.byPaneID[p.PaneID] = ClientViewport{
+			AltScreen:     p.AltScreen,
+			ViewTopIdx:    top,
+			ViewBottomIdx: bottom,
+			Rows:          p.Rows,
+			Cols:          p.Cols,
+			AutoFollow:    p.AutoFollow,
+		}
+	}
+}
+
 // Snapshot returns a shallow copy of all viewports. Intended for publisher
 // fan-out; callers must treat the result as read-only.
 func (c *ClientViewports) Snapshot() map[[16]byte]ClientViewport {

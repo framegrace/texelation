@@ -10,6 +10,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"github.com/framegrace/texelation/protocol"
 )
@@ -64,5 +65,67 @@ func TestManagerDiffRetentionUpdate(t *testing.T) {
 	stats := m.SessionStats()
 	if len(stats) != 1 {
 		t.Fatalf("expected stats for 1 session, got %d", len(stats))
+	}
+}
+
+func TestManagerLookupOrRehydrate_LiveSessionWins(t *testing.T) {
+	mgr := NewManager()
+	live, err := mgr.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr.SetPersistedSessions(map[[16]byte]*StoredSession{
+		live.ID(): {SessionID: live.ID()}, // shadowed; live should win
+	})
+	got, err := mgr.LookupOrRehydrate(live.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != live {
+		t.Fatalf("expected live session, got different instance")
+	}
+}
+
+func TestManagerLookupOrRehydrate_RehydratesFromDisk(t *testing.T) {
+	mgr := NewManager()
+	id := [16]byte{0xab}
+	stored := &StoredSession{
+		SchemaVersion: StoredSessionSchemaVersion,
+		SessionID:     id,
+		LastActive:    time.Now(),
+		PaneViewports: []StoredPaneViewport{{
+			PaneID:        [16]byte{0x11},
+			ViewBottomIdx: 555,
+			Rows:          24,
+			Cols:          80,
+		}},
+	}
+	mgr.SetPersistedSessions(map[[16]byte]*StoredSession{id: stored})
+
+	sess, err := mgr.LookupOrRehydrate(id)
+	if err != nil {
+		t.Fatalf("LookupOrRehydrate: %v", err)
+	}
+	if sess.ID() != id {
+		t.Fatalf("rehydrated session ID mismatch: %x", sess.ID())
+	}
+	// Pre-seeded viewport must be present.
+	vp, ok := sess.Viewport([16]byte{0x11})
+	if !ok {
+		t.Fatalf("expected pre-seeded viewport from disk")
+	}
+	if vp.ViewBottomIdx != 555 {
+		t.Fatalf("expected ViewBottomIdx=555, got %d", vp.ViewBottomIdx)
+	}
+	// After rehydration, the disk-side index entry is consumed.
+	if _, err := mgr.LookupOrRehydrate(id); err != nil {
+		t.Fatalf("second lookup after rehydration must hit live cache, got %v", err)
+	}
+}
+
+func TestManagerLookupOrRehydrate_UnknownReturnsErr(t *testing.T) {
+	mgr := NewManager()
+	if _, err := mgr.LookupOrRehydrate([16]byte{0xff}); err != ErrSessionNotFound {
+		t.Fatalf("expected ErrSessionNotFound, got %v", err)
 	}
 }
