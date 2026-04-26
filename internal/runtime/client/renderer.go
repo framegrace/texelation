@@ -18,7 +18,6 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/client"
-	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -197,17 +196,13 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 	panes := state.cache.SortedPanes()
 	var dcCache dynColorCache
 
-	dirtyCount := 0
-	skipCount := 0
 	for _, pane := range panes {
 		if pane == nil {
 			continue
 		}
 		if !pane.Dirty && !pane.HasAnimated {
-			skipCount++
 			continue
 		}
-		dirtyCount++
 
 		x := pane.Rect.X
 		y := pane.Rect.Y
@@ -296,9 +291,6 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 
 		pane.ClearDirty()
 	}
-	if dirtyCount > 0 || skipCount > 0 {
-		debuglog.Printf("[PLAND-DEBUG] incrementalComposite: %d panes total, %d dirty, %d skipped (clean)", len(panes), dirtyCount, skipCount)
-	}
 	return hasDynamic
 }
 
@@ -321,7 +313,6 @@ func render(state *clientState, screen tcell.Screen) {
 	}
 
 	if needsFull {
-		debuglog.Printf("[PLAND-DEBUG] render: FULL path (fullRenderNeeded=%v resized=%v)", state.fullRenderNeeded, resized)
 		fullRender(state, screen)
 		state.fullRenderNeeded = false
 		// After first full render, switch effects to normal animation timestamps.
