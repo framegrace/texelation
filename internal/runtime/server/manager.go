@@ -239,6 +239,31 @@ func (m *Manager) Close(id [16]byte) {
 	}
 }
 
+// ShutdownSessions closes all live sessions, synchronously flushing
+// each session's debounced atomicjson writer to disk. Called from
+// Server.Stop so viewport updates debounced within the persistDebounce
+// window (typically 250ms) before SIGINT/SIGTERM are preserved across
+// a daemon restart. Without this, those updates would only exist in
+// memory and the next boot would resume to a stale viewport — exactly
+// the failure mode Plan D2 exists to prevent.
+//
+// The walk swaps the live map under m.mu, then drops the lock before
+// per-session Close calls (matching the existing Close lock-discipline
+// pattern). Callers should ensure the listener has stopped accepting
+// new connections before invoking, otherwise a freshly-accepted
+// connection's NewSession call could populate the now-empty map mid-
+// shutdown. In production Server.Stop closes the listener first.
+func (m *Manager) ShutdownSessions() {
+	m.mu.Lock()
+	live := m.sessions
+	m.sessions = make(map[[16]byte]*Session)
+	m.mu.Unlock()
+
+	for _, session := range live {
+		session.Close() // disk flush — outside m.mu
+	}
+}
+
 func (m *Manager) ActiveSessions() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
