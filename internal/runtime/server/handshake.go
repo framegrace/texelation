@@ -67,7 +67,7 @@ func handleHandshake(rw io.ReadWriter, mgr *Manager) (*Session, bool, error) {
 			return nil, false, err
 		}
 	} else {
-		session, err = mgr.Lookup(connectReq.SessionID)
+		session, err = mgr.LookupOrRehydrate(connectReq.SessionID)
 		if err != nil {
 			return nil, false, err
 		}
