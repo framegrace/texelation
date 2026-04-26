@@ -97,11 +97,6 @@ func (d *DesktopSink) SetPublisher(publisher *DesktopPublisher) {
 	d.mu.Lock()
 	d.publisher = publisher
 	d.mu.Unlock()
-	if publisher != nil {
-		log.Printf("[PLAND-DEBUG] sink.SetPublisher: publisher=%p (sess=%x)", publisher, publisher.session.ID())
-	} else {
-		log.Printf("[PLAND-DEBUG] sink.SetPublisher: publisher=nil")
-	}
 	if d.desktop == nil {
 		return
 	}
