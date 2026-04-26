@@ -136,6 +136,16 @@ func (m *Manager) LookupOrRehydrate(id [16]byte) (*Session, error) {
 	// fresher PaneViewports overwrite these via Session.ApplyResume.
 	// Use the locked accessor — never write to byPaneID directly.
 	sess.viewports.ApplyPreSeed(stored.PaneViewports)
+	// Seed Plan F metadata from disk. Without this, the next write
+	// after rehydrate (e.g. via ApplyViewportUpdate → schedulePersist)
+	// would overwrite Pinned/Label/PaneCount/FirstPaneTitle with their
+	// zero values, silently clobbering what was on disk.
+	sess.storedMu.Lock()
+	sess.storedMeta.pinned = stored.Pinned
+	sess.storedMeta.label = stored.Label
+	sess.storedMeta.paneCount = stored.PaneCount
+	sess.storedMeta.firstPaneTitle = stored.FirstPaneTitle
+	sess.storedMu.Unlock()
 	m.sessions[id] = sess
 	return sess, nil
 }
