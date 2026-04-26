@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -118,6 +119,20 @@ type clientState struct {
 	// iteration to schedule a debounced persist. Set by app.go when
 	// Plan D persistence is active. Plan D / issue #199.
 	persistSnapshot func()
+
+	// resetOnNextSnapshot is set by the resume flow before MsgResumeRequest
+	// is sent. The next MsgTreeSnapshot received resets per-pane Revision
+	// and the top-level lastSequence to zero, then clears the flag. Plan D2:
+	// this is the single synchronization barrier that lets a still-alive
+	// client recover from a daemon restart without dedup-dropping the new
+	// daemon's low-numbered messages as stale.
+	//
+	// Steady-state TreeSnapshots (workspace ops, splits) MUST NOT reset.
+	// The flag is cleared atomically with the reset (CAS) so only the FIRST
+	// post-resume snapshot consumes it. The flag MUST also be cleared by
+	// the resume error path — see app.go — so a failed-then-retried resume
+	// against a different sessionID does not consume a stale flag.
+	resetOnNextSnapshot atomic.Bool
 }
 
 func (s *clientState) setRenderChannel(ch chan<- struct{}) {

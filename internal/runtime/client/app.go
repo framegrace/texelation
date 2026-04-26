@@ -184,8 +184,14 @@ func Run(opts Options) error {
 			}
 		}
 
+		state.resetOnNextSnapshot.Store(true)
 		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports)
 		if err != nil {
+			// Plan D2: a failed resume must NOT leave the flag armed — a later
+			// resume against a different sessionID (after Plan D's wipe-and-retry
+			// fallback) would otherwise consume the stale flag and reset against
+			// the wrong synchronization barrier.
+			state.resetOnNextSnapshot.Store(false)
 			// Resume against a session that completed handshake should
 			// not normally fail. If it does, surface the error rather
 			// than retrying — the connection is in an indeterminate
