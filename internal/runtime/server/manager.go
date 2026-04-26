@@ -57,6 +57,33 @@ func (m *Manager) NewSession() (*Session, error) {
 	return session, nil
 }
 
+// ErrSessionAlreadyExists is returned by NewSessionWithID when the
+// requested ID is already in the live session map.
+var ErrSessionAlreadyExists = errors.New("server: session already exists")
+
+// NewSessionWithID creates a session with a caller-supplied ID. Used
+// by:
+//   - tests that need deterministic IDs.
+//   - future Plan F session-recovery code that constructs a Session
+//     from a persisted record.
+//
+// Returns ErrSessionAlreadyExists if a live session with that ID is
+// already in the manager. Does NOT consume from the persistedSessions
+// index — for that path, use LookupOrRehydrate.
+func (m *Manager) NewSessionWithID(id [16]byte) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.sessions[id]; exists {
+		return nil, ErrSessionAlreadyExists
+	}
+	session := NewSession(id, m.maxDiffs)
+	if m.persistBasedir != "" {
+		session.AttachWriter(SessionFilePath(m.persistBasedir, id), m.persistDebounce)
+	}
+	m.sessions[id] = session
+	return session, nil
+}
+
 func (m *Manager) Lookup(id [16]byte) (*Session, error) {
 	m.mu.RLock()
 	session, ok := m.sessions[id]

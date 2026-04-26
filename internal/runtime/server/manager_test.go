@@ -221,3 +221,34 @@ func TestManagerCloseDropsLockBeforeSessionClose(t *testing.T) {
 		}
 	}
 }
+
+func TestManagerNewSessionWithID_BypassesRandomGen(t *testing.T) {
+	mgr := NewManager()
+	id := [16]byte{0xfa, 0xce, 0xfe, 0xed}
+
+	sess, err := mgr.NewSessionWithID(id)
+	if err != nil {
+		t.Fatalf("NewSessionWithID: %v", err)
+	}
+	if sess.ID() != id {
+		t.Fatalf("ID mismatch: got %x want %x", sess.ID(), id)
+	}
+	got, err := mgr.LookupOrRehydrate(id)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if got != sess {
+		t.Fatalf("Lookup must return the same session instance")
+	}
+}
+
+func TestManagerNewSessionWithID_RejectsDuplicates(t *testing.T) {
+	mgr := NewManager()
+	id := [16]byte{0x01}
+	if _, err := mgr.NewSessionWithID(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.NewSessionWithID(id); err == nil {
+		t.Fatalf("expected error on duplicate id")
+	}
+}
