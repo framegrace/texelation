@@ -344,9 +344,13 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 	// Set viewport size with client's actual dimensions
 	desktop.SetViewportSize(int(ready.Cols), int(ready.Rows))
 
-	// Now send the snapshot with correct dimensions
+	// Now send the snapshot with correct dimensions.
+	// Errors are logged so a frozen-looking client (no MsgTreeSnapshot
+	// after MsgClientReady ack) leaves a breadcrumb in the server log.
+	// Without this the symptom looks identical to a hang.
 	snapshot, err := sink.Snapshot()
 	if err != nil {
+		log.Printf("server: handleClientReady snapshot error: %v", err)
 		sink.Publish()
 		c.initialSnapshotSent = true
 		return
@@ -356,6 +360,7 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 
 	payload, err := protocol.EncodeTreeSnapshot(snapshot)
 	if err != nil {
+		log.Printf("server: handleClientReady encode snapshot error: %v", err)
 		c.initialSnapshotSent = true
 		return
 	}
@@ -367,6 +372,7 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 		SessionID: c.session.ID(),
 	}
 	if err := c.writeMessage(header, payload); err != nil {
+		log.Printf("server: handleClientReady write snapshot error: %v", err)
 		c.initialSnapshotSent = true
 		return
 	}
@@ -417,6 +423,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 	// render that sink.Snapshot() would trigger.
 	snapshot, err := sink.GeometrySnapshot()
 	if err != nil {
+		log.Printf("server: handleResize geometry snapshot error: %v", err)
 		sink.Publish()
 		return
 	}
@@ -429,6 +436,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 	// before content arrives.
 	payload, err := protocol.EncodeTreeSnapshot(snapshot)
 	if err != nil {
+		log.Printf("server: handleResize encode geometry error: %v", err)
 		sink.Publish()
 		return
 	}
@@ -440,6 +448,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 		SessionID: c.session.ID(),
 	}
 	if err := c.writeMessage(header, payload); err != nil {
+		log.Printf("server: handleResize write geometry error: %v", err)
 		sink.Publish()
 		return
 	}
