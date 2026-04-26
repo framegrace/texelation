@@ -145,9 +145,12 @@ This makes the post-resume snapshot the single synchronization barrier for both 
    a. ReadFile + Unmarshal.
    b. On error: log("session file %s parse failed (%v); deleting"); os.Remove; continue.
    c. On schema mismatch: log + delete + continue (no auto-migration; project has no back-compat constraint).
-   d. On success: register in in-memory Manager.persistedSessions index keyed by SessionID.
+   d. On filename-vs-content mismatch (filename hex does not match decoded SessionID): log a warning and skip (do NOT delete — users may rename files when treating sessions as templates).
+   e. On success: register in in-memory Manager.persistedSessions index keyed by SessionID.
 4. Index is read-only after boot completes. New writes go through the live writer path.
 ```
+
+**Boot-scan-before-listener invariant.** The boot-scan call MUST complete before the daemon's listener accepts the first connection. If a `MsgResumeRequest` arrived while the scan were in flight, the rehydration path would falsely return `ErrSessionNotFound`, and the client would wipe its persisted state — silently losing the very state D2 exists to preserve. Wire `LoadPersistedSessions` and the listener startup so this ordering is structural (single-threaded boot path), not prose-only.
 
 `Manager.persistedSessions` (or similar — name TBD in plan) is a `map[[16]byte]*StoredSession` consulted only on `MsgResumeRequest` cache miss in `Manager.sessions`.
 
@@ -192,10 +195,11 @@ Update sites (each schedules a debounced write):
 
 - `Session.ApplyViewportUpdate` (every `MsgViewportUpdate`)
 - `Session.ApplyResume` (initial post-resume seed)
-- `Session.EnqueueDiff` / `EnqueueImage` (bumps `LastActive` only — no viewport change, but proves the session is alive)
-- A new `Session.RecordPaneAddRemove(paneCount, firstTitle)` hook called from the desktop publisher when the pane tree changes (updates `PaneCount` and `FirstPaneTitle` for Plan F)
+- A new `Session.RecordPaneActivity(paneCount, firstPaneTitle)` hook called from the desktop publisher when the pane tree changes (updates `PaneCount` and `FirstPaneTitle` for Plan F; also bumps `LastActive`)
 
 Each call builds a fresh `StoredSession` from the current in-memory state and hands it to `Update`. The writer coalesces.
+
+**Why no `EnqueueDiff` / `EnqueueImage` hook:** earlier drafts of this spec proposed firing the writer on every diff to keep `LastActive` ticking. Dropped because (a) viewport scrolls and pane events already drive activity for sessions a user is interacting with, (b) `Snapshot()` of `ClientViewports` allocates a fresh map per call and 100s of diffs/sec creates needless GC churn, and (c) Plan F's session picker can fall back to file `mtime` if `LastActive` proves insufficient for "is this session alive."
 
 `Session.Close` calls `persistWriter.Close()` to flush the final state synchronously. The file is **not** deleted on close — see "Lifecycle" above.
 
@@ -240,12 +244,15 @@ Plan D regression tests must keep passing after the client-side `Writer` is refa
 - `internal/runtime/client/app.go` — point at the new shared writer (no behavior change expected).
 - `internal/runtime/client/cache.go` (or wherever `pane.Revision`/`lastSequence` live) — reset on `MsgTreeSnapshot` after resume.
 
-## Open questions (deferred to plan or implementation)
+## Open questions (resolved during plan writing)
 
-- Exact home for `atomicjson` (`internal/persistence/atomicjson/` proposed; final location at writer's discretion).
-- Whether `StoredSession.PaneCount` and `StoredSession.FirstPaneTitle` write paths run in this plan or are stubbed for Plan F. Recommend: wire them now; cost is trivial and Plan F's schema gets validated implicitly.
-- Boot-scan path resolution — where does `<basedir>` come from at server boot (env var, flag, hardcoded path)? Mirror whatever `SnapshotStore` does today (likely `XDG_STATE_HOME`-based).
-- Race between `Session.Close` flushing and a concurrent `Update` — Plan D's Writer handles this; the shared primitive must inherit the property.
+These were deferred at spec time and locked in by the plan:
+
+- **`atomicjson` location**: `internal/persistence/atomicjson/` (consistent with the existing `internal/runtime/...` layout).
+- **`StoredSession.PaneCount` and `StoredSession.FirstPaneTitle`**: wired now via `Session.RecordPaneActivity`, called from `connection.recordSnapshotActivity` after each `MsgTreeSnapshot` dispatch. Plan F will consume; D2 populates.
+- **Boot-scan path**: `filepath.Dir(snapPath)` — derived from the existing `--snapshot` flag's parent directory. Mirrors `SnapshotStore`'s convention (`~/.texelation/`). No new env var or flag.
+- **Debounce values**: 250ms in production (matches Plan D's client) and 25ms in tests (debounce << test timeout, but non-zero so we can still observe coalescing).
+- **`Session.Close` vs concurrent `Update` race**: inherited from `atomicjson.Store.Close` — sets `closed=true` under `mu`, then synchronously `Flush`es. Subsequent `Update` calls see `closed` and return without scheduling. Property is tested in `internal/persistence/atomicjson/store_test.go` (`TestStoreUpdateAfterCloseIsNoop`).
 
 ## Risks
 
@@ -253,6 +260,8 @@ Plan D regression tests must keep passing after the client-side `Writer` is refa
 2. **Boot-scan latency.** If `<basedir>/sessions/` accumulates many files (no GC), boot reads them all. Bound: <100ms for 1000 sessions on typical SSDs (each file ~2KB, JSON parse cheap). Acceptable. Future tooling can offer manual cleanup.
 3. **Disk-seeded viewport stale on resume.** If a client resumes with stale persisted state (rare — would require client edited its own file), the disk-seed value is overwritten by `MsgResumeRequest.PaneViewports`. Worst case is a single frame rendered at the disk-seed position before the client's viewport overrides — unobservable.
 4. **`TreeSnapshot`-driven reset risks dropping non-resume snapshots.** A `TreeSnapshot` arrives on every connect *and* on workspace operations (split, kill, move). Resetting `pane.Revision`/`lastSequence` on every snapshot would corrupt the steady-state stream. Mitigation: only reset on the specific post-resume snapshot — gated by a "this connect is a resume" flag set in `MsgConnectAccept` handling, cleared after the next snapshot. This needs careful threading; the plan must call it out as a load-bearing invariant.
+
+   **Error-path corollary.** The flag is set immediately before `simple.RequestResume` is sent. If the resume call fails (network error, server rejection), the flag must be cleared in the error path — otherwise a subsequent resume attempt against a *different* sessionID (after Plan D's "wipe state file and retry fresh" fallback) would consume the stale flag and reset against the wrong synchronization barrier.
 
 ## Success criteria
 
