@@ -158,6 +158,48 @@ func (m *Manager) LookupOrRehydrate(id [16]byte) (sess *Session, rehydrated bool
 	return sess, true, nil
 }
 
+// PreferredViewportSize returns the largest viewport (cols × total-pane-rows)
+// observed across the manager's persisted-session index, derived by summing
+// each session's pane Rows for the height and taking the max Cols for the
+// width. Returns (0, 0) when no persisted session is available or none has
+// usable dimensions.
+//
+// Used at boot in cmd/texel-server/main.go to initialize the desktop's
+// viewport BEFORE applyBootCapture starts apps via the pendingAppStarts
+// mechanism — without this, apps were starting at the simScreen default
+// (80×25), the statusbar got 0×0 dimensions, and the client saw a pane
+// missing its top/bottom borders until the next viewport refresh.
+//
+// The size is "preferred", not authoritative: when the actual client
+// connects with a different viewport size, MsgClientReady's
+// SetViewportSize will resize again. When dims happen to match (the
+// common case — the user is back at the same terminal), the second
+// resize is a no-op cascade.
+func (m *Manager) PreferredViewportSize() (cols, rows int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, s := range m.persistedSessions {
+		var sumRows int
+		var maxCols int
+		for _, p := range s.PaneViewports {
+			if int(p.Cols) > maxCols {
+				maxCols = int(p.Cols)
+			}
+			sumRows += int(p.Rows)
+		}
+		// Prefer a session that yields larger dims — multiple sessions
+		// from different clients on the same daemon are unusual but the
+		// largest-fits heuristic minimizes content truncation.
+		if maxCols > cols {
+			cols = maxCols
+		}
+		if sumRows > rows {
+			rows = sumRows
+		}
+	}
+	return cols, rows
+}
+
 // EnablePersistence is the single public entry point that wires Plan D2
 // cross-restart persistence. Performs:
 //

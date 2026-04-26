@@ -269,6 +269,24 @@ func main() {
 		return publisher
 	})
 
+	// Plan D2: if D2 has a remembered viewport size from the last
+	// session, apply it now — BEFORE the listener accepts so that
+	// applyBootCapture's pendingAppStarts fires with proper dimensions.
+	// Without this, apps (notably the statusbar) start at simScreen's
+	// 80×25 default, the statusbar pane gets 0×0 dims, the statusbar
+	// app exits cleanly, and the client sees a texelterm pane that
+	// extends into where the statusbar should be — the "panel is 2
+	// rows too tall, no top/bottom borders" symptom.
+	//
+	// The actual client's MsgClientReady will SetViewportSize again
+	// when it arrives. If the dims match (the common case), the
+	// second cascade is a no-op; if they differ, the second resize
+	// correctly adjusts. Either way we avoid the 0×0 boot state.
+	if cols, rows := manager.PreferredViewportSize(); cols > 0 && rows > 0 {
+		log.Printf("[BOOT] applying remembered viewport size %d×%d from D2 persistence", cols, rows)
+		desktop.SetViewportSize(cols, rows)
+	}
+
 	go func() {
 		if err := srv.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
