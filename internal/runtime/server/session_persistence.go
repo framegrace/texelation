@@ -11,8 +11,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/framegrace/texelation/internal/persistence/atomicjson"
 )
 
 // StoredSessionSchemaVersion is the on-disk format version. Bump on
@@ -140,4 +145,73 @@ func decodeHex16Session(s string, out *[16]byte) error {
 	}
 	copy(out[:], b)
 	return nil
+}
+
+// SessionsDirName is the leaf directory under <basedir> that holds
+// per-session files.
+const SessionsDirName = "sessions"
+
+// SessionFilePath returns the on-disk path for sessionID under basedir.
+func SessionFilePath(basedir string, id [16]byte) string {
+	return filepath.Join(basedir, SessionsDirName, hex.EncodeToString(id[:])+".json")
+}
+
+// ScanSessionsDir reads <basedir>/sessions/, parses each *.json file,
+// and returns a map keyed by SessionID. Files that fail to parse or
+// declare an unknown SchemaVersion are deleted (logged). Files whose
+// filename hex does not match the decoded SessionID are skipped but
+// NOT deleted — users may rename files when treating sessions as
+// templates. Non-JSON files (anything not matching the *.json
+// extension) are left untouched. Missing directory is not an error —
+// returns an empty map.
+func ScanSessionsDir(basedir string) (map[[16]byte]*StoredSession, error) {
+	out := make(map[[16]byte]*StoredSession)
+	dir := filepath.Join(basedir, SessionsDirName)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, fmt.Errorf("server: scan sessions dir: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		s, lerr := atomicjson.Load[StoredSession](path)
+		if lerr != nil {
+			log.Printf("server: session scan: load %s: %v", path, lerr)
+			continue
+		}
+		if s == nil {
+			// atomicjson.Load already deleted a corrupt file; nothing more to do.
+			continue
+		}
+		if s.SchemaVersion != StoredSessionSchemaVersion {
+			log.Printf("server: session scan: %s schema=%d wanted=%d; deleting",
+				path, s.SchemaVersion, StoredSessionSchemaVersion)
+			if werr := atomicjson.Wipe(path); werr != nil {
+				log.Printf("server: session scan: wipe failed: %v", werr)
+			}
+			continue
+		}
+		// Filename-vs-content sanity check. If the filename hex doesn't
+		// match the decoded SessionID, the user likely renamed the file
+		// (e.g. as a template — sessions can be reused per project policy,
+		// see spec). Skip it without loading and WITHOUT deleting — D2
+		// must not silently destroy files that look user-touched.
+		expectedName := hex.EncodeToString(s.SessionID[:]) + ".json"
+		if name != expectedName {
+			log.Printf("server: session scan: %s filename does not match sessionID %s; skipping (file left in place)",
+				name, expectedName)
+			continue
+		}
+		out[s.SessionID] = s
+	}
+	return out, nil
 }
