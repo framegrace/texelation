@@ -35,6 +35,14 @@ type PaneSnapshot struct {
 	Rect      Rectangle
 	AppType   string
 	AppConfig map[string]interface{}
+	// ContentTopRow is the first rowIdx in Buffer with RowGlobalIdx[y] >= 0.
+	// NumContentRows is the count of indices with RowGlobalIdx[y] >= 0.
+	// NumContentRows == 0 means zero content rows (status panes, all-decoration
+	// apps); in that case ContentTopRow is meaningless. For alt-screen panes
+	// the fields are populated but unused — clients render alt-screen
+	// positionally regardless.
+	ContentTopRow  uint16
+	NumContentRows uint16
 }
 
 // Rectangle stores pane position and size in screen coordinates.
@@ -354,7 +362,40 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		snap.Title = "Loading..."
 		snap.AltScreen = true
 	}
+	snap.ContentTopRow, snap.NumContentRows = computeContentBounds(snap.RowGlobalIdx)
 	return snap
+}
+
+// computeContentBounds returns (ContentTopRow, NumContentRows) for the
+// given RowGlobalIdx slice. If no row has gid>=0, returns (0, 0).
+// Requires contiguity: every index in [top, last] must have gid >= 0,
+// and every index outside that range must have gid < 0. Logs a warning
+// and returns (0, 0) on violation rather than producing a bogus range —
+// a non-contiguous layout is a bug somewhere up the stack and the
+// renderer falling back to all-decoration is recoverable.
+func computeContentBounds(rowIdx []int64) (uint16, uint16) {
+	top := -1
+	last := -1
+	for y, gid := range rowIdx {
+		if gid < 0 {
+			continue
+		}
+		if top < 0 {
+			top = y
+		}
+		last = y
+	}
+	if top < 0 {
+		return 0, 0
+	}
+	// Verify contiguity: every index in [top, last] must have gid >= 0.
+	for y := top; y <= last; y++ {
+		if rowIdx[y] < 0 {
+			log.Printf("texel: computeContentBounds: non-contiguous content rows at y=%d (top=%d, last=%d); treating pane as all-decoration", y, top, last)
+			return 0, 0
+		}
+	}
+	return uint16(top), uint16(last - top + 1)
 }
 
 // allMinusOne returns a slice of length n filled with -1. Used as the

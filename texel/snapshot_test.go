@@ -104,3 +104,37 @@ func TestPaneSnapshot_RowGlobalIdxLengthMatchesBuffer(t *testing.T) {
 		}
 	}
 }
+
+func TestCapturePaneSnapshot_ContentBoundsComputed(t *testing.T) {
+	// 6-row pane: [0]=-1 (top border), [1..3]=content, [4]=-1 (app statusbar), [5]=-1 (bottom border)
+	rowIdx := []int64{-1, 100, 101, 102, -1, -1}
+	top, num := computeContentBounds(rowIdx)
+	if top != 1 || num != 3 {
+		t.Fatalf("expected top=1 num=3, got top=%d num=%d", top, num)
+	}
+}
+
+func TestCapturePaneSnapshot_ContentBoundsAllDecoration(t *testing.T) {
+	// All -1 rows: zero content, top=0 num=0.
+	rowIdx := []int64{-1, -1, -1}
+	top, num := computeContentBounds(rowIdx)
+	if top != 0 || num != 0 {
+		t.Fatalf("expected top=0 num=0, got top=%d num=%d", top, num)
+	}
+}
+
+func TestCapturePaneSnapshot_ContentBoundsEmpty(t *testing.T) {
+	top, num := computeContentBounds(nil)
+	if top != 0 || num != 0 {
+		t.Fatalf("expected top=0 num=0, got top=%d num=%d", top, num)
+	}
+}
+
+func TestComputeContentBounds_NonContiguous(t *testing.T) {
+	// Hole in the middle of the content range.
+	rowIdx := []int64{-1, 100, -1, 102, -1}
+	top, num := computeContentBounds(rowIdx)
+	if top != 0 || num != 0 {
+		t.Fatalf("expected (0, 0) on non-contiguous layout, got (%d, %d)", top, num)
+	}
+}
