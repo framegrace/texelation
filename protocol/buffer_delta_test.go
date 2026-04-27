@@ -8,7 +8,11 @@
 
 package protocol
 
-import "testing"
+import (
+	"errors"
+	"reflect"
+	"testing"
+)
 
 func TestBufferDeltaRoundTrip(t *testing.T) {
 	var pane [16]byte
@@ -268,5 +272,119 @@ func TestEncodeBufferDeltaRejectsStyleIndexOutOfRange(t *testing.T) {
 				t.Errorf("EncodeBufferDelta err = %v, want ErrStyleIndexOutOfRange", err)
 			}
 		})
+	}
+}
+
+func TestEncodeDecodeBufferDelta_DecorRoundTrip(t *testing.T) {
+	original := BufferDelta{
+		PaneID:   [16]byte{0xab, 0xcd},
+		Revision: 7,
+		Flags:    BufferDeltaNone,
+		RowBase:  100,
+		Styles: []StyleEntry{
+			{AttrFlags: 0, FgModel: ColorModelDefault, BgModel: ColorModelDefault},
+		},
+		Rows: []RowDelta{
+			{Row: 0, Spans: []CellSpan{{StartCol: 0, Text: "hi", StyleIndex: 0}}},
+		},
+		DecorRows: []DecorRowDelta{
+			{RowIdx: 0, Spans: []CellSpan{{StartCol: 0, Text: "+", StyleIndex: 0}}},
+			{RowIdx: 22, Spans: []CellSpan{{StartCol: 0, Text: "-", StyleIndex: 0}}},
+		},
+	}
+	encoded, err := EncodeBufferDelta(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := DecodeBufferDelta(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !reflect.DeepEqual(original, decoded) {
+		t.Fatalf("round-trip mismatch:\n  want %+v\n  got  %+v", original, decoded)
+	}
+}
+
+func TestEncodeDecodeBufferDelta_EmptyDecorRoundTrip(t *testing.T) {
+	original := BufferDelta{
+		PaneID:   [16]byte{0xff},
+		Revision: 1,
+		Flags:    BufferDeltaAltScreen,
+		RowBase:  0,
+		Styles:   []StyleEntry{{AttrFlags: 0, FgModel: ColorModelDefault, BgModel: ColorModelDefault}},
+		Rows:     []RowDelta{{Row: 0, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}}},
+		// DecorRows intentionally nil
+	}
+	encoded, err := EncodeBufferDelta(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := DecodeBufferDelta(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(decoded.DecorRows) != 0 {
+		t.Fatalf("expected empty DecorRows, got %+v", decoded.DecorRows)
+	}
+}
+
+func TestDecodeBufferDelta_TruncatedDecorTailErrPayloadShort(t *testing.T) {
+	// Build a valid v3 payload then chop the trailing 2-byte decor count.
+	original := BufferDelta{
+		PaneID:   [16]byte{0x01},
+		Revision: 1,
+		Styles:   []StyleEntry{{AttrFlags: 0, FgModel: ColorModelDefault, BgModel: ColorModelDefault}},
+		Rows:     []RowDelta{{Row: 0, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}}},
+	}
+	encoded, err := EncodeBufferDelta(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	truncated := encoded[:len(encoded)-2]
+	if _, err := DecodeBufferDelta(truncated); !errors.Is(err, ErrPayloadShort) {
+		t.Fatalf("expected ErrPayloadShort on truncated v3, got %v", err)
+	}
+}
+
+func TestDecodeBufferDelta_TruncatedMidDecorRow(t *testing.T) {
+	// Build a payload with one DecorRow that has one span, then truncate
+	// inside the per-row body (after the row+spanCount header but before
+	// the span itself).
+	original := BufferDelta{
+		PaneID:   [16]byte{0x02},
+		Revision: 1,
+		Styles:   []StyleEntry{{AttrFlags: 0, FgModel: ColorModelDefault, BgModel: ColorModelDefault}},
+		DecorRows: []DecorRowDelta{
+			{RowIdx: 0, Spans: []CellSpan{{StartCol: 0, Text: "border", StyleIndex: 0}}},
+		},
+	}
+	encoded, err := EncodeBufferDelta(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	// Chop off the last 6 bytes (the per-span StartCol+TextLen+StyleIdx
+	// header), leaving the row+spanCount header dangling without span data.
+	truncated := encoded[:len(encoded)-len("border")-6]
+	if _, err := DecodeBufferDelta(truncated); !errors.Is(err, ErrPayloadShort) {
+		t.Fatalf("expected ErrPayloadShort on mid-row truncation, got %v", err)
+	}
+}
+
+func TestDecodeBufferDelta_RejectsExcessiveRowIdx(t *testing.T) {
+	// Hand-craft a payload with RowIdx > MaxDecorRowIdx (out of sane pane height).
+	original := BufferDelta{
+		PaneID:   [16]byte{0x03},
+		Revision: 1,
+		Styles:   []StyleEntry{{AttrFlags: 0, FgModel: ColorModelDefault, BgModel: ColorModelDefault}},
+		DecorRows: []DecorRowDelta{
+			{RowIdx: MaxDecorRowIdx + 1, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}},
+		},
+	}
+	encoded, err := EncodeBufferDelta(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if _, err := DecodeBufferDelta(encoded); !errors.Is(err, ErrInvalidSpan) {
+		t.Fatalf("expected ErrInvalidSpan for excessive RowIdx, got %v", err)
 	}
 }
