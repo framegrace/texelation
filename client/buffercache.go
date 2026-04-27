@@ -219,18 +219,49 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) {
 		}
 		pane.rows[rowIdx] = row
 	}
-	pane.rowsMu.Unlock()
-
-	// Mark pane and specific rows as dirty for incremental rendering.
-	pane.Dirty = true
-	if pane.DirtyRows == nil && len(delta.Rows) < int(pane.Rect.Height) {
-		pane.DirtyRows = make(map[int]bool, len(delta.Rows))
-	}
-	if pane.DirtyRows != nil {
-		for _, rowDelta := range delta.Rows {
-			pane.DirtyRows[int(rowDelta.Row)] = true
+	if len(delta.DecorRows) > 0 {
+		if pane.decorRows == nil {
+			pane.decorRows = make(map[uint16][]Cell, len(delta.DecorRows))
+		}
+		for _, rowDelta := range delta.DecorRows {
+			row := pane.decorRows[rowDelta.RowIdx]
+			for _, span := range rowDelta.Spans {
+				start := int(span.StartCol)
+				textRunes := []rune(span.Text)
+				needed := start + len(textRunes)
+				row = ensureRowLength(row, needed)
+				style := tcell.StyleDefault
+				var dynFG, dynBG protocol.DynColorDesc
+				if int(span.StyleIndex) < len(styles) {
+					style = styles[span.StyleIndex]
+				}
+				if int(span.StyleIndex) < len(delta.Styles) {
+					entry := delta.Styles[span.StyleIndex]
+					if entry.AttrFlags&protocol.AttrHasDynamic != 0 {
+						dynFG = entry.DynFG
+						dynBG = entry.DynBG
+					}
+				}
+				for i, r := range textRunes {
+					row[start+i] = Cell{Ch: r, Style: style, DynFG: dynFG, DynBG: dynBG}
+				}
+			}
+			pane.decorRows[rowDelta.RowIdx] = row
 		}
 	}
+	pane.rowsMu.Unlock()
+
+	pane.Dirty = true
+	// Force full re-render whenever a delta touches this pane. The pre-
+	// existing per-row dirty map (DirtyRows) was keyed inconsistently:
+	// content rows used (gid - RowBase), decoration rows would be keyed by
+	// absolute rowIdx — mixing the two key spaces silently produced wrong
+	// re-renders. Setting DirtyRows = nil unconditionally tells the
+	// renderer "the whole pane needs paint," which is correct and avoids
+	// the mixed-key bug. The perf cost is small (decoration row writes
+	// are rare; content-row writes already invalidate via the gid-keyed
+	// PaneCache, not DirtyRows).
+	pane.DirtyRows = nil
 
 	// Check if any style in the delta has animated dynamic colors.
 	for _, entry := range delta.Styles {

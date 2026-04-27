@@ -314,14 +314,11 @@ func TestPaneState_DirtyOnDelta(t *testing.T) {
 	if !pane.Dirty {
 		t.Error("expected pane dirty after delta")
 	}
-	if pane.DirtyRows == nil {
-		t.Error("expected specific DirtyRows after delta")
-	}
-	if !pane.DirtyRows[5] || !pane.DirtyRows[10] {
-		t.Error("expected rows 5 and 10 dirty")
-	}
-	if pane.DirtyRows[0] {
-		t.Error("row 0 should not be dirty")
+	// ApplyDelta unconditionally clears DirtyRows to force a full re-render.
+	// The previous per-row dirty map mixed key spaces (gid-relative content
+	// rows vs absolute decoration rowIdx) and is no longer used.
+	if pane.DirtyRows != nil {
+		t.Error("expected DirtyRows nil (full re-render) after delta")
 	}
 }
 
@@ -346,5 +343,37 @@ func TestApplySnapshot_PopulatesContentBounds(t *testing.T) {
 	}
 	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
 		t.Fatalf("content bounds not applied: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+}
+
+func TestApplyDelta_PopulatesDecorRows(t *testing.T) {
+	cache := NewBufferCache()
+	id := [16]byte{0xab}
+	delta := protocol.BufferDelta{
+		PaneID:   id,
+		Revision: 1,
+		Styles: []protocol.StyleEntry{
+			{AttrFlags: 0, FgModel: protocol.ColorModelDefault, BgModel: protocol.ColorModelDefault},
+		},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+--+", StyleIndex: 0}}},
+			{RowIdx: 9, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+--+", StyleIndex: 0}}},
+		},
+	}
+	cache.ApplyDelta(delta)
+	pane := cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane not registered")
+	}
+	row0, ok0 := pane.DecorRowAt(0)
+	row9, ok9 := pane.DecorRowAt(9)
+	if !ok0 || !ok9 {
+		t.Fatalf("expected DecorRowAt(0) and DecorRowAt(9) to be present")
+	}
+	if len(row0) != 4 || row0[0].Ch != '+' {
+		t.Fatalf("rowIdx 0 content wrong: %+v", row0)
+	}
+	if len(row9) != 4 || row9[3].Ch != '+' {
+		t.Fatalf("rowIdx 9 content wrong: %+v", row9)
 	}
 }
