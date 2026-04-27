@@ -371,20 +371,78 @@ func TestDecodeBufferDelta_TruncatedMidDecorRow(t *testing.T) {
 }
 
 func TestDecodeBufferDelta_RejectsExcessiveRowIdx(t *testing.T) {
-	// Hand-craft a payload with RowIdx > MaxDecorRowIdx (out of sane pane height).
+	// Encode a valid delta with an in-range RowIdx, then patch the wire
+	// bytes to push RowIdx past MaxDecorRowIdx. This lets us exercise the
+	// decoder's bound-check independently of the encoder's matching check.
 	original := BufferDelta{
 		PaneID:   [16]byte{0x03},
 		Revision: 1,
 		Styles:   []StyleEntry{{AttrFlags: 0, FgModel: ColorModelDefault, BgModel: ColorModelDefault}},
 		DecorRows: []DecorRowDelta{
-			{RowIdx: MaxDecorRowIdx + 1, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}},
+			{RowIdx: 0, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}},
 		},
 	}
 	encoded, err := EncodeBufferDelta(original)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	if _, err := DecodeBufferDelta(encoded); !errors.Is(err, ErrInvalidSpan) {
+	// Locate the DecorRow's RowIdx bytes: tail consists of decorCount(2)
+	// then RowIdx(2). Patch the trailing RowIdx by scanning from the end.
+	// Layout for the single-decor-row tail:
+	//   ... decorCount=1(2) | rowIdx(2) | spanCount=1(2) | startCol=0(2)
+	//       | textLen=1(2) | styleIdx=0(2) | "x"(1)
+	// rowIdx sits 11 bytes before end.
+	patched := make([]byte, len(encoded))
+	copy(patched, encoded)
+	bad := MaxDecorRowIdx + 1
+	patched[len(patched)-11] = byte(bad)
+	patched[len(patched)-10] = byte(bad >> 8)
+	if _, err := DecodeBufferDelta(patched); !errors.Is(err, ErrInvalidSpan) {
 		t.Fatalf("expected ErrInvalidSpan for excessive RowIdx, got %v", err)
+	}
+}
+
+func TestDecodeBufferDelta_EmptyDecorRoundTripPreservesEmptyVsNil(t *testing.T) {
+	// Producer encodes an explicitly empty (non-nil) DecorRows. Decoder
+	// must produce a non-nil slice of length 0, matching the existing
+	// delta.Rows behaviour. Without unconditional make, this would
+	// round-trip to nil and break reflect.DeepEqual for callers that
+	// pre-allocate empty slices.
+	original := BufferDelta{
+		PaneID:    [16]byte{0xab},
+		Revision:  1,
+		Styles:    []StyleEntry{{AttrFlags: 0, FgModel: ColorModelDefault, BgModel: ColorModelDefault}},
+		Rows:      []RowDelta{{Row: 0, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}}},
+		DecorRows: []DecorRowDelta{},
+	}
+	encoded, err := EncodeBufferDelta(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := DecodeBufferDelta(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.DecorRows == nil {
+		t.Fatal("expected non-nil empty DecorRows after round-trip, got nil")
+	}
+	if len(decoded.DecorRows) != 0 {
+		t.Fatalf("expected len 0, got %d", len(decoded.DecorRows))
+	}
+}
+
+func TestEncodeBufferDelta_RejectsExcessiveRowIdx(t *testing.T) {
+	// Encoder must enforce the same bound the decoder enforces. Avoids
+	// shipping wire bytes that consumers will reject.
+	delta := BufferDelta{
+		PaneID:   [16]byte{0xab},
+		Revision: 1,
+		Styles:   []StyleEntry{{AttrFlags: 0, FgModel: ColorModelDefault, BgModel: ColorModelDefault}},
+		DecorRows: []DecorRowDelta{
+			{RowIdx: MaxDecorRowIdx + 1, Spans: []CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}},
+		},
+	}
+	if _, err := EncodeBufferDelta(delta); !errors.Is(err, ErrInvalidSpan) {
+		t.Fatalf("expected ErrInvalidSpan, got %v", err)
 	}
 }
