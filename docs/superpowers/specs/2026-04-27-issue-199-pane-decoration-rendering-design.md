@@ -32,7 +32,7 @@ Full root-cause analysis lives in Task 16 of the Plan D2 plan and in `~/.claude/
 
 - Per-client themes (no current goal; would require client-side theme state).
 - Animating border color transitions (already handled by the effects pipeline; orthogonal).
-- Selection-aware decoration filtering. Plan C will read the new `ContentTopRow` / `ContentBottomRow` fields when it lands; this spec just provides them.
+- Selection-aware decoration filtering. Plan C will read the new `ContentTopRow` / `NumContentRows` fields when it lands; this spec just provides them.
 - Reworking the alt-screen render path. Alt-screen panes already use a positional encoding and are unaffected.
 - Bundling Task 17's deferred mediums. None of 17.A–F touch the same files.
 
@@ -45,7 +45,7 @@ Server stays the source of truth for every visible cell. The client renders each
 - **Content layer** — gid-keyed `PaneCache` rows (existing, viewport-clipped). Holds rows where `RowGlobalIdx[y] >= 0`.
 - **Decoration layer** — rowIdx-keyed positional cache (new). Holds rows where `RowGlobalIdx[y] < 0`: pane chrome (top/bottom borders) and app decorations (texterm's statusbar).
 
-`PaneSnapshot` gains `ContentTopRow` / `ContentBottomRow` so the client knows which rowIdx range maps to gids and which falls back to the decoration layer.
+`PaneSnapshot` gains `ContentTopRow` / `NumContentRows` so the client knows which rowIdx range maps to gids and which falls back to the decoration layer.
 
 ### Why not client-side chrome rendering (rejected Approach A)
 
@@ -58,7 +58,7 @@ The original Plan D2 Task 16 entry suggested Option 4 + Option 2 (client renders
 
 ### Why not "ship every row including borders, drop ContentTopRow/Bottom" (rejected Approach C)
 
-The viewport math fundamentally needs to know how many of the pane's `H` rows are content. Without that, `top := maxGid - (numContentRows - 1)` cannot be computed and the rowIdx-to-gid mapping stays broken. The client cannot derive `numContentRows` from the delta itself because incremental deltas don't carry every row. So `ContentTopRow` / `ContentBottomRow` are required regardless of how decoration rows are encoded.
+The viewport math fundamentally needs to know how many of the pane's `H` rows are content. Without that, `top := maxGid - (numContentRows - 1)` cannot be computed and the rowIdx-to-gid mapping stays broken. The client cannot derive `numContentRows` from the delta itself because incremental deltas don't carry every row. So `ContentTopRow` / `NumContentRows` are required regardless of how decoration rows are encoded.
 
 ## Protocol changes (v2 → v3)
 
@@ -67,49 +67,56 @@ The viewport math fundamentally needs to know how many of the pane's `H` rows ar
 ```go
 type PaneSnapshot struct {
     // ... existing fields ...
-    ContentTopRow    uint16 // first content rowIdx; 0 if no top decoration
-    ContentBottomRow uint16 // last content rowIdx; H-1 if no bottom decoration
+    ContentTopRow   uint16 // first content rowIdx (0 if no top decoration)
+    NumContentRows  uint16 // number of content rows; 0 means the pane has zero content rows
 }
 ```
 
 Semantics:
 
-- `ContentBottomRow >= ContentTopRow`: pane has at least one content row.
-- `ContentBottomRow < ContentTopRow`: pane has zero content rows (all-decoration apps; e.g., a static dialog). Client renders the entire pane from the decoration layer.
-- `ContentTopRow == 0 && ContentBottomRow == H-1`: pane has no decoration rows (alt-screen panes hit this implicitly; main-screen panes without borders would too, though all current panes have borders).
+- `NumContentRows > 0`: pane has content rows in `[ContentTopRow, ContentTopRow + NumContentRows - 1]`. All rowIdx outside that range are decoration.
+- `NumContentRows == 0`: pane has zero content rows (all-decoration apps; e.g., a static dialog or a status pane). The client renders the entire pane from the decoration layer. `ContentTopRow` is meaningless and should be ignored.
+
+This shape (rather than a `(ContentTopRow, ContentBottomRow)` pair with a `Bottom < Top` sentinel) makes the renderer math read directly off the type — `top := maxGid - int64(NumContentRows) + 1` — and removes the ambiguity between a sentinel and a malformed value.
 
 For alt-screen panes the fields are populated but ignored — the existing alt-screen render path handles everything positionally via `PaneCache.AltRowAt`.
 
-### `protocol.BufferDelta` gains one field
+### `protocol.BufferDelta` gains one field with a distinct row-delta type
 
 ```go
+// DecorRowDelta has the same byte layout as RowDelta on the wire, but its
+// Row field carries the absolute rowIdx in the pane buffer, NOT (gid - RowBase).
+// The distinct type prevents accidentally mixing content and decoration rows.
+type DecorRowDelta struct {
+    RowIdx uint16
+    Spans  []CellSpan
+}
+
 type BufferDelta struct {
     // ... existing fields ...
-    DecorRows []RowDelta // rows keyed by absolute rowIdx (not gid - RowBase)
+    DecorRows []DecorRowDelta // rows keyed by absolute rowIdx
 }
 ```
 
-`RowDelta` shape is unchanged. For `DecorRows`, `RowDelta.Row` is interpreted as the absolute rowIdx in the pane buffer. For the existing `Rows`, it remains `gid - RowBase`.
-
-Separate slice rather than a flag on `RowDelta` keeps the two semantically-distinct row types unambiguous at decode time and means existing code paths don't have to branch on every row.
+`RowDelta` is unchanged: `Rows[*].Row` continues to mean `gid - RowBase`. `DecorRowDelta.RowIdx` is the absolute rowIdx — a distinct named field so misuse fails at compile time, not at render time. Wire format byte layout matches `RowDelta` so the encoder/decoder bodies are nearly identical.
 
 ### Wire-format encoding
 
-Append `ContentTopRow` (2 bytes) and `ContentBottomRow` (2 bytes) at the tail of the existing `PaneSnapshot` encoder. Append `DecorRows` (count-prefixed, same per-row encoding as `Rows`) at the tail of `BufferDelta`. No reordering of existing fields. Increment `protocol.Version` from 2 to 3.
+Append `ContentTopRow` (2 bytes) and `NumContentRows` (2 bytes) at the tail of the existing `PaneSnapshot` encoder. Append `DecorRows` (count-prefixed, same per-row byte layout as `Rows`) at the tail of `BufferDelta`. No reordering of existing fields. Increment `protocol.Version` from 2 to 3.
 
 ### Backward compatibility
 
-None. Per project policy, stale on-disk state should fail-and-overwrite, not auto-migrate. Bumping the protocol version causes pre-v3 clients to fail handshake; users restart their client.
+None. Per project policy, stale on-disk state should fail-and-overwrite, not auto-migrate. Bumping the protocol version causes pre-v3 clients to fail handshake; users restart their client. The decoder rejects truncated payloads with `ErrPayloadShort` rather than silently treating them as v2 — there is no v2 wire to fall back to.
 
 ## Server changes
 
 ### `texel/snapshot.go` — `capturePaneSnapshot`
 
-Already populates `RowGlobalIdx[i] = -1` for non-content rows. Add: after building `RowGlobalIdx`, compute `ContentTopRow` (first index with `gid >= 0`) and `ContentBottomRow` (last index with `gid >= 0`). If no row has `gid >= 0`, set `ContentTopRow = 1` and `ContentBottomRow = 0` (the "zero content rows" sentinel — `Bottom < Top`). Store on `PaneSnapshot`.
+Already populates `RowGlobalIdx[i] = -1` for non-content rows. Add: after building `RowGlobalIdx`, compute `ContentTopRow` (first index with `gid >= 0`) and `NumContentRows` (count of indices with `gid >= 0`). If no row has `gid >= 0`, set `ContentTopRow = 0` and `NumContentRows = 0` — unambiguous "zero content rows" state. Store on `PaneSnapshot`.
 
 ### `internal/runtime/server/tree_convert.go` — `treeCaptureToProtocol`
 
-Currently sets `Rows: nil` on protocol PaneSnapshot. Pass through the new `ContentTopRow` / `ContentBottomRow` fields. `Rows` stays nil — borders and decorations ride deltas, not snapshots.
+Currently sets `Rows: nil` on protocol PaneSnapshot. Pass through the new `ContentTopRow` / `NumContentRows` fields. `Rows` stays nil — borders and decorations ride deltas, not snapshots.
 
 ### `internal/runtime/server/desktop_publisher.go` — `bufferToDelta`
 
@@ -123,14 +130,19 @@ for y, row := range snap.Buffer {
     if y >= len(snap.RowGlobalIdx) {
         continue
     }
+    gid := snap.RowGlobalIdx[y]
+    // Alt-screen panes have RowGlobalIdx all -1; the existing alt-screen
+    // positional path handles them, so skip emitting decoration here.
+    if snap.AltScreen && gid < 0 {
+        continue
+    }
     if y < len(prev) && rowsEqual(row, prev[y]) {
         continue
     }
-    gid := snap.RowGlobalIdx[y]
     if gid < 0 {
-        decorRows = append(decorRows, protocol.RowDelta{
-            Row:   uint16(y),
-            Spans: encodeRow(row),
+        decorRows = append(decorRows, protocol.DecorRowDelta{
+            RowIdx: uint16(y),
+            Spans:  encodeRow(row),
         })
         continue
     }
@@ -145,26 +157,33 @@ for y, row := range snap.Buffer {
 delta.DecorRows = decorRows
 ```
 
+Two ordering notes:
+
+1. The alt-screen+gid<0 short-circuit fires *before* `rowsEqual` — alt-screen panes never pay the diff comparison for decoration emission.
+2. For non-altScreen panes, the `rowsEqual` diff fires for both content and decoration paths (they share positional `prev[y]` storage), so unchanged decoration rows don't re-ship.
+
 The existing positional `prev[y]` diff continues to filter unchanged rows for both layers — only changed decoration rows ship.
 
-For alt-screen panes the path is unchanged; `DecorRows` stays empty.
+For alt-screen panes `DecorRows` stays empty.
 
 ## Client changes
 
 ### `client/buffercache.go` — decoration cache
 
-Add a per-pane decoration cache as a field on `PaneState`:
+Add per-pane decoration cache fields on `PaneState`:
 
 ```go
 type PaneState struct {
     // ... existing fields ...
-    ContentTopRow    uint16
-    ContentBottomRow uint16
-    DecorRows        map[uint16][]Cell // rowIdx -> cells; populated from BufferDelta.DecorRows
+    ContentTopRow  uint16
+    NumContentRows uint16
+    decorRows      map[uint16][]Cell // unexported; rowIdx -> cells; guarded by rowsMu
 }
 ```
 
-Apply `DecorRows` from each incoming `BufferDelta` into this map. Mark the pane dirty whenever a decoration row changes. `BufferCache.ResetRevisions` (used on session-reuse / new publisher) must also clear `DecorRows` per pane so a fresh publisher republishes everything.
+The decoration map is **unexported** and guarded by the existing `rowsMu sync.RWMutex` (same as `pane.rows`). All access — `ApplyDelta` writes, `rowSourceForPane` reads, `ResetRevisions` clears — must take the lock. A `DecorRowAt(rowIdx uint16) ([]Cell, bool)` accessor on `PaneState` reads under `rowsMu.RLock()` and returns a slice that the caller must not retain across frames (same contract as `RowCellsDirect`).
+
+`BufferCache.ResetRevisions` clears `decorRows` per pane (under `rowsMu.Lock()`) so a fresh publisher republishes everything.
 
 ### `internal/runtime/client/viewport_tracker.go` — `onBufferDelta`
 
@@ -177,14 +196,20 @@ top := maxGid - int64(vp.Rows-1)
 with:
 
 ```go
-numContentRows := int(pane.ContentBottomRow) - int(pane.ContentTopRow) + 1
-if numContentRows <= 0 {
-    return // pane has no content rows; nothing to anchor
+pane := s.cache.Pane(delta.PaneID)
+if pane == nil {
+    // Delta arrived before the snapshot populated the cache. This shouldn't
+    // happen in production; if it does, log loudly and skip.
+    log.Printf("client: onBufferDelta received delta for pane %x with no cached PaneState; skipping viewport update", delta.PaneID)
+    return
 }
-top := maxGid - int64(numContentRows-1)
+if pane.NumContentRows == 0 {
+    return // zero-content pane (status panes, all-decoration apps) — no viewport to advance
+}
+top := maxGid - int64(pane.NumContentRows) + 1
 ```
 
-`pane.ContentTopRow` / `ContentBottomRow` are read from the `BufferCache.Pane` populated from the latest `PaneSnapshot`.
+`pane.NumContentRows` is read from the `BufferCache.Pane` populated from the latest `PaneSnapshot`. The `pane == nil` branch is treated as a hard error (logged) rather than a silent fallback to `vp.Rows`, because the silent fallback is what reintroduces the original Issue #199 misalignment.
 
 ### `internal/runtime/client/renderer.go` — `rowSourceForPane`
 
@@ -195,11 +220,14 @@ if vc.AltScreen {
     // unchanged: PaneCache.AltRowAt + RowCellsDirect fallback
 }
 
-// Decoration layer
-if rowIdx < int(pane.ContentTopRow) || rowIdx > int(pane.ContentBottomRow) {
-    if row, ok := pane.DecorRows[uint16(rowIdx)]; ok {
+// Decoration layer (rowIdx outside the content range)
+if pane.NumContentRows == 0 ||
+   rowIdx < int(pane.ContentTopRow) ||
+   rowIdx >= int(pane.ContentTopRow) + int(pane.NumContentRows) {
+    if row, ok := pane.DecorRowAt(uint16(rowIdx)); ok {
         return row
     }
+    state.logDecorationMissOnce(pane.ID, uint16(rowIdx))
     return nil
 }
 
@@ -213,13 +241,13 @@ if !found {
 return row
 ```
 
-A miss on either layer returns nil (renders blank). The decoration layer should hit after the first delta following the snapshot; the content layer can legitimately miss while a `MsgFetchRange` is in flight (existing Plan A behavior — preserved).
+A miss on either layer returns nil (renders blank). The decoration miss is logged **once per (paneID, rowIdx) pair** — the user's symptom of "blank border row" should never be silent. The content layer can legitimately miss while a `MsgFetchRange` is in flight (existing Plan A behavior — not logged, since it's expected).
 
 ## Data flow
 
 ### Initial connect / resume
 
-1. Server captures snapshot → `ContentTopRow` / `ContentBottomRow` computed.
+1. Server captures snapshot → `ContentTopRow` / `NumContentRows` computed.
 2. Server emits `MsgTreeSnapshot` with the new fields.
 3. Server's first `BufferDelta` after the snapshot ships every changed row; on a fresh publisher (`prev` is empty), every row counts as changed, so all decoration rows ride along.
 4. Client populates `BufferCache.Pane.ContentTopRow/Bottom` from the snapshot, then `DecorRows` from the delta.
@@ -233,7 +261,7 @@ A miss on either layer returns nil (renders blank). The decoration layer should 
 
 ### Resize
 
-1. Pane geometry changes → `ContentTopRow` / `ContentBottomRow` recomputed in next snapshot.
+1. Pane geometry changes → `ContentTopRow` / `NumContentRows` recomputed in next snapshot.
 2. Server emits fresh snapshot + delta.
 3. Client updates and re-renders.
 
@@ -244,7 +272,7 @@ Identical to "initial connect / resume" above. The publisher on the rehydrated s
 ## Error handling
 
 - **Decoration cache miss after first delta** — render blank. Mirrors content-row miss behavior. Preserves the "no stale chrome" guarantee.
-- **`ContentTopRow > ContentBottomRow + 1`** with non-zero buffer height — server-side bug. Log via the existing publisher logger; treat pane as zero content rows on the wire (only sentinel `Bottom < Top` should be emitted; any other inversion is a bug).
+- **`ContentTopRow + NumContentRows > buffer height`** — server-side bug (content range exceeds the pane buffer). Log via the existing publisher logger; emit `NumContentRows = 0` on the wire to force the client into all-decoration rendering until the next snapshot rebuilds the bounds correctly.
 - **Client receives `DecorRows` before its first `PaneSnapshot`** — should not happen (snapshot precedes deltas in the protocol). If it does, drop those `DecorRows` and rely on the next delta after `prev` resync. No explicit buffering needed.
 - **Stale decoration cache on session reuse** — `BufferCache.ResetRevisions` (Plan D's revision-monotonicity fix) is the natural pivot point. Extend it to also clear `DecorRows` per pane. The new publisher's empty `prev` then republishes everything.
 
@@ -256,14 +284,14 @@ Identical to "initial connect / resume" above. The publisher on the rehydrated s
 - `TestBufferToDelta_DecorationRowsDiffed` — second publish with unchanged borders ships zero `DecorRows`.
 - `TestBufferToDelta_DecorationRowsDiffPartial` — repaint of just rowIdx 0 (e.g., title change) ships exactly one `DecorRows` entry.
 - `TestBufferToDelta_TexelTermInternalStatusbar` — pane backed by texterm with internal statusbar at H-2 ships that row in `DecorRows`.
-- `TestCapturePaneSnapshot_ContentBoundsComputed` — `RowGlobalIdx = [-1, 0, 1, 2, -1, -1]` produces `ContentTopRow=1, ContentBottomRow=3`.
-- `TestCapturePaneSnapshot_ContentBoundsAllDecoration` — all rows have `gid<0` (no content) produces `ContentTopRow=1, ContentBottomRow=0` sentinel.
+- `TestCapturePaneSnapshot_ContentBoundsComputed` — `RowGlobalIdx = [-1, 0, 1, 2, -1, -1]` produces `ContentTopRow=1, NumContentRows=3`.
+- `TestCapturePaneSnapshot_ContentBoundsAllDecoration` — all rows have `gid<0` (no content) produces `ContentTopRow=0, NumContentRows=0`.
 - `TestBufferToDelta_AltScreenLeavesDecorRowsEmpty` — alt-screen pane never emits `DecorRows`.
 
 ### Unit (client)
 
 - `TestRowSourceForPane_DecorationLayer` — rowIdx 0 reads from `DecorRows`; rowIdx between bounds reads via gid; rowIdx H-1 reads from `DecorRows`.
-- `TestOnBufferDelta_TopUsesContentRowCount` — pane with `ContentTopRow=1, ContentBottomRow=H-3` (texterm shape) computes `top = maxGid - (H-3)` not `maxGid - (H-1)`.
+- `TestOnBufferDelta_TopUsesContentRowCount` — pane with `ContentTopRow=1, NumContentRows=H-3` (texterm shape) computes `top = maxGid - (H-3)` not `maxGid - (H-1)`.
 - `TestRowSourceForPane_DecorationCacheMissReturnsNil` — pane without populated `DecorRows` returns nil for decoration rowIdx, renders blank.
 - `TestBufferCache_ResetRevisionsClearsDecorRows` — `ResetRevisions` empties the per-pane decoration map.
 
@@ -290,7 +318,7 @@ Pass criteria:
 2. Texterm internal statusbar at H-2 shows actual content (not blank).
 3. Content occupies rows 1..H-3 and is not offset.
 4. Focus toggle (Ctrl-A pane switch) repaints borders without flicker.
-5. Window resize triggers correct `ContentTopRow` / `ContentBottomRow` recompute and re-render.
+5. Window resize triggers correct `ContentTopRow` / `NumContentRows` recompute and re-render.
 
 ## Touchpoints summary
 
@@ -302,15 +330,16 @@ Pass criteria:
 | `texel/snapshot.go` | `capturePaneSnapshot` computes Content bounds |
 | `internal/runtime/server/tree_convert.go` | `treeCaptureToProtocol` passes through |
 | `internal/runtime/server/desktop_publisher.go` | `bufferToDelta` emits `DecorRows` |
-| `client/buffercache.go` | `PaneState.{ContentTopRow,ContentBottomRow,DecorRows}` fields; `ResetRevisions` clears `DecorRows` |
+| `client/buffercache.go` | `PaneState.{ContentTopRow,NumContentRows,DecorRows}` fields; `ResetRevisions` clears `DecorRows` |
 | `internal/runtime/client/viewport_tracker.go` | `onBufferDelta` `top` uses content row count |
 | `internal/runtime/client/renderer.go` | `rowSourceForPane` two-layer lookup |
 
 ## Invariants
 
-- **Decoration contiguity** — decoration rows (`RowGlobalIdx[y] < 0`) must be contiguous at the top and/or bottom of the pane buffer. Concretely: `ContentTopRow` is the smallest `y` with `RowGlobalIdx[y] >= 0`, `ContentBottomRow` is the largest, and every `y` outside `[ContentTopRow, ContentBottomRow]` has `RowGlobalIdx[y] < 0` while every `y` inside has `RowGlobalIdx[y] >= 0`. This holds today by construction in `capturePaneSnapshot` (top border at 0, content via `RowGlobalIdxProvider` in [1..H-2], app statusbar / bottom border in the trailing slots). If a future app interleaves decoration mid-pane, this design must be revisited.
-- **Decoration positional vs content gid-keyed** — `BufferDelta.DecorRows[*].Row` is always an absolute rowIdx; `BufferDelta.Rows[*].Row` is always `gid - RowBase`. These two encodings never collide because they live in different slices.
+- **Decoration contiguity** — decoration rows (`RowGlobalIdx[y] < 0`) must be contiguous at the top and/or bottom of the pane buffer. Concretely: `ContentTopRow` is the smallest `y` with `RowGlobalIdx[y] >= 0`, the content range is `[ContentTopRow, ContentTopRow + NumContentRows - 1]`, and every `y` outside that range has `RowGlobalIdx[y] < 0` while every `y` inside has `RowGlobalIdx[y] >= 0`. This holds today by construction in `capturePaneSnapshot` (top border at 0, content via `RowGlobalIdxProvider` in [1..H-2], app statusbar / bottom border in the trailing slots). If a future app interleaves decoration mid-pane, this design must be revisited.
+- **Type-level decoration vs content distinction** — `BufferDelta.DecorRows` is `[]DecorRowDelta` (with a `RowIdx` field carrying absolute rowIdx); `BufferDelta.Rows` is `[]RowDelta` (with a `Row` field carrying `gid - RowBase`). The compiler refuses to mix the two.
 - **First-delta decoration completeness** — when the publisher sees an empty `prev` (fresh session, post-reset, post-resume), every changed row is shipped, including all decoration rows. This is what makes the rehydrate path render correctly from frame 1.
+- **`decorRows` lock discipline** — all access to `PaneState.decorRows` (write in `ApplyDelta`, read via `DecorRowAt`, clear in `ResetRevisions`) goes through `pane.rowsMu`. The map is unexported to prevent direct access bypassing the lock.
 
 ## Open questions
 
@@ -321,4 +350,4 @@ None. The exact wire byte layout for the new fields is mechanical and the plan w
 - Placeholders: none.
 - Internal consistency: the two new `PaneSnapshot` fields and the new `BufferDelta` field are referenced consistently across server, client, and tests.
 - Scope: bounded — single-pass change covering one bug class. No bundled refactors.
-- Ambiguity: `ContentTopRow`/`ContentBottomRow` semantics include the `Bottom < Top` zero-content sentinel. `DecorRows.Row` semantics (absolute rowIdx vs `gid - RowBase`) are explicit.
+- Ambiguity: `NumContentRows == 0` is the unambiguous zero-content state (no overloaded sentinel). `DecorRows` use a distinct `DecorRowDelta` type with a `RowIdx` field, so the absolute-rowIdx semantic is enforced at compile time, not by convention.

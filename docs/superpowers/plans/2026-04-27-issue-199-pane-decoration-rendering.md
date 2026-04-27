@@ -4,7 +4,7 @@
 
 **Goal:** Make pane top/bottom borders and app decoration rows (texterm internal statusbar) actually render on the client, fixing the pre-existing `bufferToDelta gid<0` filter bug surfaced by Plan D2's daemon-restart rehydrate path.
 
-**Architecture:** Server stays authoritative for all visible cells. Wire format gains `protocol.PaneSnapshot.{ContentTopRow, ContentBottomRow}` so the client can map rowIdx ↔ gid for content rows, and `protocol.BufferDelta.DecorRows` so border + app-decoration cells (anything where `RowGlobalIdx[y] < 0`) ride alongside content. Client renders via two-layer composite: gid-keyed `PaneCache` for content rowIdx in `[ContentTopRow, ContentBottomRow]`, positional decoration cache otherwise. Protocol bumps v2 → v3.
+**Architecture:** Server stays authoritative for all visible cells. Wire format gains `protocol.PaneSnapshot.{ContentTopRow, NumContentRows}` (zero-content panes use `NumContentRows == 0` — no overloaded sentinel) and `protocol.BufferDelta.DecorRows` of new distinct type `DecorRowDelta` (with a `RowIdx` field carrying absolute rowIdx, so the compiler refuses to mix it with content `RowDelta`). Client renders via two-layer composite: gid-keyed `PaneCache` for content rowIdx in `[ContentTopRow, ContentTopRow+NumContentRows-1]`, positional decoration cache (under `rowsMu`) otherwise. Protocol bumps v2 → v3, no v2 fallback in the decoder.
 
 **Tech Stack:** Go 1.24, custom binary protocol (`protocol/`), `internal/runtime/server`, `internal/runtime/client`, `client` package, `texel` package. Tests use `go test`; integration tests use `internal/runtime/server/testutil/memconn.go`.
 
@@ -19,26 +19,27 @@
 | File | Responsibility | Lines (current) |
 |------|---------------|-----------------|
 | `protocol/protocol.go` | Protocol version constant | bump 2→3 |
-| `protocol/buffer_delta.go` | `BufferDelta` type + encode/decode + `DecorRows` field | ~352 |
-| `protocol/messages.go` | `PaneSnapshot` type + tree snapshot encode/decode + content bound fields | ~1050 |
-| `texel/snapshot.go` | `texel.PaneSnapshot` type + `capturePaneSnapshot` content bound computation | ~600 |
+| `protocol/buffer_delta.go` | `BufferDelta` type + new `DecorRowDelta` type + encode/decode | ~352 |
+| `protocol/messages.go` | `PaneSnapshot.{ContentTopRow, NumContentRows}` + tree snapshot encode/decode | ~1050 |
+| `texel/snapshot.go` | `texel.PaneSnapshot.{ContentTopRow, NumContentRows}` + `capturePaneSnapshot` populates them | ~600 |
 | `internal/runtime/server/tree_convert.go` | Bridge `texel.PaneSnapshot` ↔ `protocol.PaneSnapshot` | ~150 |
-| `internal/runtime/server/desktop_publisher.go` | `bufferToDelta`: route gid<0 rows into `DecorRows` | ~330 |
-| `client/buffercache.go` | `PaneState.{ContentTopRow, ContentBottomRow, DecorRows}`; `ApplySnapshot` populates content bounds; `ApplyDelta` populates `DecorRows`; `ResetRevisions` clears it | ~600 |
-| `internal/runtime/client/viewport_tracker.go` | `onBufferDelta`: `top` calc uses `numContentRows` from PaneState | ~280 |
-| `internal/runtime/client/renderer.go` | `rowSourceForPane`: two-layer lookup (content gid / decoration positional) | ~550 |
+| `internal/runtime/server/desktop_publisher.go` | `bufferToDelta`: route gid<0 rows into `DecorRows` (typed `DecorRowDelta`) | ~330 |
+| `client/buffercache.go` | `PaneState.{ContentTopRow, NumContentRows, decorRows}` (decorRows unexported, guarded by `rowsMu`); `DecorRowAt` accessor; `ApplyDelta` populates; `ResetRevisions` clears | ~600 |
+| `internal/runtime/client/viewport_tracker.go` | `onBufferDelta`: `top` calc uses `pane.NumContentRows`; logs + skips on `pane==nil` | ~280 |
+| `internal/runtime/client/renderer.go` | `rowSourceForPane`: two-layer lookup; logs once per (paneID, rowIdx) on decoration miss | ~550 |
+| `internal/runtime/server/viewport_integration_test.go` | Extend `memHarness` with multi-pane + cross-restart support (Task 11.5) | ~870 |
 
 ---
 
-## Task 1: Protocol — `BufferDelta.DecorRows` field + encode/decode
+## Task 1: Protocol — `DecorRowDelta` type + `BufferDelta.DecorRows` + encode/decode
 
 **Files:**
 - Modify: `protocol/buffer_delta.go` (struct definition around line 92, encoder around line 109, decoder around line 247)
 - Test: `protocol/buffer_delta_test.go`
 
-**Goal:** Round-trip an empty and non-empty `DecorRows` slice.
+**Goal:** Round-trip an empty and non-empty `DecorRows` slice using the new `DecorRowDelta` type, with `ErrPayloadShort` on truncated payloads.
 
-- [ ] **Step 1: Add the failing test (red).**
+- [ ] **Step 1: Add the failing tests (red).**
 
 Append to `protocol/buffer_delta_test.go`:
 
@@ -55,9 +56,9 @@ func TestEncodeDecodeBufferDelta_DecorRoundTrip(t *testing.T) {
 		Rows: []protocol.RowDelta{
 			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "hi", StyleIndex: 0}}},
 		},
-		DecorRows: []protocol.RowDelta{
-			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+", StyleIndex: 0}}},
-			{Row: 22, Spans: []protocol.CellSpan{{StartCol: 0, Text: "-", StyleIndex: 0}}},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+", StyleIndex: 0}}},
+			{RowIdx: 22, Spans: []protocol.CellSpan{{StartCol: 0, Text: "-", StyleIndex: 0}}},
 		},
 	}
 	encoded, err := protocol.EncodeBufferDelta(original)
@@ -95,9 +96,27 @@ func TestEncodeDecodeBufferDelta_EmptyDecorRoundTrip(t *testing.T) {
 		t.Fatalf("expected empty DecorRows, got %+v", decoded.DecorRows)
 	}
 }
+
+func TestDecodeBufferDelta_TruncatedDecorTailErrPayloadShort(t *testing.T) {
+	// Build a valid v3 payload then chop the trailing 2-byte decor count.
+	original := protocol.BufferDelta{
+		PaneID:   [16]byte{0x01},
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{AttrFlags: 0, FgModel: protocol.ColorModelDefault, BgModel: protocol.ColorModelDefault}},
+		Rows:     []protocol.RowDelta{{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}}},
+	}
+	encoded, err := protocol.EncodeBufferDelta(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	truncated := encoded[:len(encoded)-2]
+	if _, err := protocol.DecodeBufferDelta(truncated); !errors.Is(err, protocol.ErrPayloadShort) {
+		t.Fatalf("expected ErrPayloadShort on truncated v3, got %v", err)
+	}
+}
 ```
 
-If `reflect` and `protocol` aren't imported in this file already, add them.
+If `reflect`, `errors`, and `protocol` aren't imported in this file already, add them.
 
 - [ ] **Step 2: Run the test — verify it fails.**
 
@@ -107,9 +126,22 @@ go test ./protocol/ -run TestEncodeDecodeBufferDelta_DecorRoundTrip -v
 
 Expected: FAIL with `unknown field DecorRows in struct literal`.
 
-- [ ] **Step 3: Add `DecorRows` field to `BufferDelta`.**
+- [ ] **Step 3: Add `DecorRowDelta` type + `BufferDelta.DecorRows` field.**
 
-In `protocol/buffer_delta.go`, modify the `BufferDelta` struct to:
+In `protocol/buffer_delta.go`, just before the existing `BufferDelta` struct, add:
+
+```go
+// DecorRowDelta carries a single positional decoration row (border, app
+// statusbar). RowIdx is the absolute rowIdx in the pane buffer — distinct
+// from RowDelta.Row, which is gid - RowBase. Wire byte layout matches
+// RowDelta exactly; the type is separate to prevent accidental mixing.
+type DecorRowDelta struct {
+	RowIdx uint16
+	Spans  []CellSpan
+}
+```
+
+Modify the `BufferDelta` struct to:
 
 ```go
 type BufferDelta struct {
@@ -119,7 +151,7 @@ type BufferDelta struct {
 	RowBase   int64
 	Styles    []StyleEntry
 	Rows      []RowDelta
-	DecorRows []RowDelta // rows keyed by absolute rowIdx (not gid - RowBase). Borders + app decoration.
+	DecorRows []DecorRowDelta // rows keyed by absolute rowIdx (borders + app decoration)
 }
 ```
 
@@ -138,7 +170,7 @@ In `EncodeBufferDelta` (`protocol/buffer_delta.go` ~line 244, just before `retur
 		if len(row.Spans) > 0xFFFF {
 			return nil, ErrBufferTooLarge
 		}
-		if err := binary.Write(buf, binary.LittleEndian, row.Row); err != nil {
+		if err := binary.Write(buf, binary.LittleEndian, row.RowIdx); err != nil {
 			return nil, err
 		}
 		if err := binary.Write(buf, binary.LittleEndian, uint16(len(row.Spans))); err != nil {
@@ -170,60 +202,60 @@ In `EncodeBufferDelta` (`protocol/buffer_delta.go` ~line 244, just before `retur
 	}
 ```
 
+The encoder always emits the 2-byte `DecorRows` count (zero when empty), so a v3 payload always has a tail. The decoder will reject any payload missing it.
+
 - [ ] **Step 5: Extend the decoder.**
 
-In `DecodeBufferDelta`, just before `return delta, nil` at the end (~line 350), append:
+In `DecodeBufferDelta`, **replace** the existing `return delta, nil` at the end (~line 350) with:
 
 ```go
+	// v3 tail: DecorRows. The 2-byte count is mandatory — no v2 fallback.
 	if len(b) < 2 {
-		// Pre-v3 wire (no DecorRows tail). Treat as empty.
-		return delta, nil
+		return delta, ErrPayloadShort
 	}
 	decorCount := binary.LittleEndian.Uint16(b[:2])
 	b = b[2:]
-	if decorCount == 0 {
-		if len(b) != 0 {
-			return delta, ErrPayloadShort
-		}
-		return delta, nil
-	}
-	delta.DecorRows = make([]RowDelta, decorCount)
-	for i := 0; i < int(decorCount); i++ {
-		if len(b) < 4 {
-			return delta, ErrPayloadShort
-		}
-		row := binary.LittleEndian.Uint16(b[:2])
-		spanCount := binary.LittleEndian.Uint16(b[2:4])
-		b = b[4:]
-		spans := make([]CellSpan, spanCount)
-		for s := 0; s < int(spanCount); s++ {
-			if len(b) < 6 {
+	if decorCount > 0 {
+		delta.DecorRows = make([]DecorRowDelta, decorCount)
+		for i := 0; i < int(decorCount); i++ {
+			if len(b) < 4 {
 				return delta, ErrPayloadShort
 			}
-			startCol := binary.LittleEndian.Uint16(b[:2])
-			textLen := binary.LittleEndian.Uint16(b[2:4])
-			styleIndex := binary.LittleEndian.Uint16(b[4:6])
-			b = b[6:]
-			if len(b) < int(textLen) {
-				return delta, ErrPayloadShort
+			rowIdx := binary.LittleEndian.Uint16(b[:2])
+			spanCount := binary.LittleEndian.Uint16(b[2:4])
+			b = b[4:]
+			spans := make([]CellSpan, spanCount)
+			for s := 0; s < int(spanCount); s++ {
+				if len(b) < 6 {
+					return delta, ErrPayloadShort
+				}
+				startCol := binary.LittleEndian.Uint16(b[:2])
+				textLen := binary.LittleEndian.Uint16(b[2:4])
+				styleIndex := binary.LittleEndian.Uint16(b[4:6])
+				b = b[6:]
+				if len(b) < int(textLen) {
+					return delta, ErrPayloadShort
+				}
+				text := string(b[:textLen])
+				b = b[textLen:]
+				if int(styleIndex) >= int(styleCount) {
+					return delta, ErrStyleIndexOutOfRange
+				}
+				spans[s] = CellSpan{StartCol: startCol, Text: text, StyleIndex: styleIndex}
 			}
-			text := string(b[:textLen])
-			b = b[textLen:]
-			if int(styleIndex) >= int(styleCount) {
-				return delta, ErrStyleIndexOutOfRange
-			}
-			spans[s] = CellSpan{StartCol: startCol, Text: text, StyleIndex: styleIndex}
+			delta.DecorRows[i] = DecorRowDelta{RowIdx: rowIdx, Spans: spans}
 		}
-		delta.DecorRows[i] = RowDelta{Row: row, Spans: spans}
 	}
 	if len(b) != 0 {
 		return delta, ErrPayloadShort
 	}
+	return delta, nil
 ```
 
-Note: the "pre-v3 wire" comment is intentional — the decoder treats a missing `DecorRows` tail as empty. We are NOT supporting v2 clients; the `Version=3` handshake will refuse them. This branch is for hand-crafted test fixtures that don't include the tail.
+Two correctness points:
 
-Also: `delta, nil` at the very end of the function should now happen only after the new tail is fully consumed. Replace the existing `return delta, nil` at end-of-func with the appended block above (which itself returns at the end).
+1. The block ends with an explicit `return delta, nil` for the success path — no falling off the end of the function.
+2. A truncated v3 payload (missing the 2-byte count, or short during per-row decode) returns `ErrPayloadShort`. There is no v2 silent-accept path. Per project policy, no backward compat — bumping `Version` from 2 to 3 already refuses old clients at handshake.
 
 - [ ] **Step 6: Run the test — verify it passes.**
 
@@ -259,7 +291,7 @@ EOF
 
 ---
 
-## Task 2: Protocol — `PaneSnapshot.ContentTopRow` / `ContentBottomRow` + encode/decode
+## Task 2: Protocol — `PaneSnapshot.ContentTopRow` / `NumContentRows` + encode/decode
 
 **Files:**
 - Modify: `protocol/messages.go` (struct ~line 193, `EncodeTreeSnapshot` ~line 961, `DecodeTreeSnapshot` ~line 1013)
@@ -276,15 +308,15 @@ func TestEncodeDecodeTreeSnapshot_ContentBoundsRoundTrip(t *testing.T) {
 	original := protocol.TreeSnapshot{
 		Panes: []protocol.PaneSnapshot{
 			{
-				PaneID:           [16]byte{0xaa},
-				Revision:         3,
-				Title:            "term",
-				Rows:             nil,
-				X:                0, Y: 0, Width: 80, Height: 24,
-				AppType:          "texelterm",
-				AppConfig:        "",
-				ContentTopRow:    1,
-				ContentBottomRow: 21,
+				PaneID:         [16]byte{0xaa},
+				Revision:       3,
+				Title:          "term",
+				Rows:           nil,
+				X:              0, Y: 0, Width: 80, Height: 24,
+				AppType:        "texelterm",
+				AppConfig:      "",
+				ContentTopRow:  1,
+				NumContentRows: 21,
 			},
 		},
 		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
@@ -297,18 +329,18 @@ func TestEncodeDecodeTreeSnapshot_ContentBoundsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if decoded.Panes[0].ContentTopRow != 1 || decoded.Panes[0].ContentBottomRow != 21 {
-		t.Fatalf("content bounds mismatch: got top=%d bottom=%d", decoded.Panes[0].ContentTopRow, decoded.Panes[0].ContentBottomRow)
+	if decoded.Panes[0].ContentTopRow != 1 || decoded.Panes[0].NumContentRows != 21 {
+		t.Fatalf("content bounds mismatch: got top=%d num=%d", decoded.Panes[0].ContentTopRow, decoded.Panes[0].NumContentRows)
 	}
 }
 
-func TestEncodeDecodeTreeSnapshot_ZeroContentSentinel(t *testing.T) {
+func TestEncodeDecodeTreeSnapshot_ZeroContent(t *testing.T) {
 	original := protocol.TreeSnapshot{
 		Panes: []protocol.PaneSnapshot{{
-			PaneID:           [16]byte{0xbb},
-			Title:            "all-decor",
-			ContentTopRow:    1,
-			ContentBottomRow: 0, // sentinel: no content rows
+			PaneID:         [16]byte{0xbb},
+			Title:          "all-decor",
+			ContentTopRow:  0,
+			NumContentRows: 0, // unambiguous: no content rows
 		}},
 		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
 	}
@@ -320,8 +352,8 @@ func TestEncodeDecodeTreeSnapshot_ZeroContentSentinel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if decoded.Panes[0].ContentTopRow != 1 || decoded.Panes[0].ContentBottomRow != 0 {
-		t.Fatalf("sentinel mismatch: got top=%d bottom=%d", decoded.Panes[0].ContentTopRow, decoded.Panes[0].ContentBottomRow)
+	if decoded.Panes[0].ContentTopRow != 0 || decoded.Panes[0].NumContentRows != 0 {
+		t.Fatalf("zero-content mismatch: got top=%d num=%d", decoded.Panes[0].ContentTopRow, decoded.Panes[0].NumContentRows)
 	}
 }
 ```
@@ -340,18 +372,18 @@ In `protocol/messages.go` (~line 193), modify struct to:
 
 ```go
 type PaneSnapshot struct {
-	PaneID           [16]byte
-	Revision         uint32
-	Title            string
-	Rows             []string
-	X                int32
-	Y                int32
-	Width            int32
-	Height           int32
-	AppType          string
-	AppConfig        string
-	ContentTopRow    uint16 // first content rowIdx; for the zero-content sentinel see ContentBottomRow
-	ContentBottomRow uint16 // last content rowIdx; if < ContentTopRow, pane has no content rows
+	PaneID         [16]byte
+	Revision       uint32
+	Title          string
+	Rows           []string
+	X              int32
+	Y              int32
+	Width          int32
+	Height         int32
+	AppType        string
+	AppConfig      string
+	ContentTopRow  uint16 // first content rowIdx (ignored when NumContentRows == 0)
+	NumContentRows uint16 // count of content rows; 0 means the pane is all-decoration
 }
 ```
 
@@ -363,7 +395,7 @@ In `protocol/messages.go` (~line 1003), inside the per-pane loop, after `if err 
 		if err := binary.Write(buf, binary.LittleEndian, pane.ContentTopRow); err != nil {
 			return nil, err
 		}
-		if err := binary.Write(buf, binary.LittleEndian, pane.ContentBottomRow); err != nil {
+		if err := binary.Write(buf, binary.LittleEndian, pane.NumContentRows); err != nil {
 			return nil, err
 		}
 ```
@@ -388,7 +420,7 @@ Add:
 			return snapshot, ErrPayloadShort
 		}
 		pane.ContentTopRow = binary.LittleEndian.Uint16(remaining[0:2])
-		pane.ContentBottomRow = binary.LittleEndian.Uint16(remaining[2:4])
+		pane.NumContentRows = binary.LittleEndian.Uint16(remaining[2:4])
 		remaining = remaining[4:]
 ```
 
@@ -413,10 +445,11 @@ Expected: ALL PASS.
 ```bash
 git add protocol/messages.go protocol/messages_test.go
 git commit -m "$(cat <<'EOF'
-protocol: add PaneSnapshot.ContentTopRow/ContentBottomRow
+protocol: add PaneSnapshot.ContentTopRow/NumContentRows
 
-Tells the client which rowIdx range maps to gids vs decoration. Bottom
-< Top is the zero-content sentinel for all-decoration panes.
+Tells the client which rowIdx range maps to gids vs decoration.
+NumContentRows == 0 is the unambiguous zero-content state for
+all-decoration panes — no overloaded sentinel.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -505,29 +538,27 @@ import (
 )
 
 func TestCapturePaneSnapshot_ContentBoundsComputed(t *testing.T) {
-	// Simulate a snapshot's RowGlobalIdx layout for a 6-row pane:
-	// [0]=-1 (top border), [1..3]=content gids, [4]=-1 (app statusbar), [5]=-1 (bottom border)
+	// 6-row pane: [0]=-1 (top border), [1..3]=content, [4]=-1 (app statusbar), [5]=-1 (bottom border)
 	rowIdx := []int64{-1, 100, 101, 102, -1, -1}
-	top, bottom := computeContentBounds(rowIdx)
-	if top != 1 || bottom != 3 {
-		t.Fatalf("expected top=1 bottom=3, got top=%d bottom=%d", top, bottom)
+	top, num := computeContentBounds(rowIdx)
+	if top != 1 || num != 3 {
+		t.Fatalf("expected top=1 num=3, got top=%d num=%d", top, num)
 	}
 }
 
 func TestCapturePaneSnapshot_ContentBoundsAllDecoration(t *testing.T) {
-	// All -1 rows: zero content, sentinel top=1 bottom=0.
+	// All -1 rows: zero content, top=0 num=0.
 	rowIdx := []int64{-1, -1, -1}
-	top, bottom := computeContentBounds(rowIdx)
-	if top != 1 || bottom != 0 {
-		t.Fatalf("expected sentinel top=1 bottom=0, got top=%d bottom=%d", top, bottom)
+	top, num := computeContentBounds(rowIdx)
+	if top != 0 || num != 0 {
+		t.Fatalf("expected top=0 num=0, got top=%d num=%d", top, num)
 	}
 }
 
 func TestCapturePaneSnapshot_ContentBoundsEmpty(t *testing.T) {
-	// Empty slice: sentinel top=1 bottom=0 (degenerate but well-defined).
-	top, bottom := computeContentBounds(nil)
-	if top != 1 || bottom != 0 {
-		t.Fatalf("expected sentinel top=1 bottom=0, got top=%d bottom=%d", top, bottom)
+	top, num := computeContentBounds(nil)
+	if top != 0 || num != 0 {
+		t.Fatalf("expected top=0 num=0, got top=%d num=%d", top, num)
 	}
 }
 
@@ -558,12 +589,12 @@ type PaneSnapshot struct {
 	AppType      string
 	AppConfig    map[string]interface{}
 	// ContentTopRow is the first rowIdx in Buffer with RowGlobalIdx[y] >= 0.
-	// ContentBottomRow is the last such rowIdx. If ContentBottomRow < ContentTopRow,
-	// the pane has zero content rows (e.g., status panes, all-decoration apps).
-	// For alt-screen panes these fields are populated but unused — clients
-	// render alt-screen positionally regardless.
-	ContentTopRow    uint16
-	ContentBottomRow uint16
+	// NumContentRows is the count of indices with RowGlobalIdx[y] >= 0.
+	// NumContentRows == 0 means zero content rows (status panes, all-decoration apps);
+	// in that case ContentTopRow is meaningless. For alt-screen panes the fields
+	// are populated but unused — clients render alt-screen positionally regardless.
+	ContentTopRow  uint16
+	NumContentRows uint16
 }
 ```
 
@@ -572,12 +603,13 @@ type PaneSnapshot struct {
 In `texel/snapshot.go` near `allMinusOne` (~line 360), add:
 
 ```go
-// computeContentBounds returns (top, bottom) where rowIdx is the
-// inclusive range with RowGlobalIdx[y] >= 0. If no row has gid>=0, returns
-// (1, 0) as the zero-content sentinel.
+// computeContentBounds returns (ContentTopRow, NumContentRows) for the
+// given RowGlobalIdx slice. If no row has gid>=0, returns (0, 0).
+// Assumes contiguity: callers must ensure all gid>=0 rows form a single
+// contiguous block (enforced by capturePaneSnapshot construction).
 func computeContentBounds(rowIdx []int64) (uint16, uint16) {
 	top := -1
-	bottom := -1
+	last := -1
 	for y, gid := range rowIdx {
 		if gid < 0 {
 			continue
@@ -585,12 +617,12 @@ func computeContentBounds(rowIdx []int64) (uint16, uint16) {
 		if top < 0 {
 			top = y
 		}
-		bottom = y
+		last = y
 	}
 	if top < 0 {
-		return 1, 0 // sentinel: zero content rows
+		return 0, 0
 	}
-	return uint16(top), uint16(bottom)
+	return uint16(top), uint16(last - top + 1)
 }
 ```
 
@@ -607,7 +639,7 @@ Expected: PASS.
 In `texel/snapshot.go` `capturePaneSnapshot` (~line 351, just before `return snap` at the end), add:
 
 ```go
-	snap.ContentTopRow, snap.ContentBottomRow = computeContentBounds(snap.RowGlobalIdx)
+	snap.ContentTopRow, snap.NumContentRows = computeContentBounds(snap.RowGlobalIdx)
 ```
 
 - [ ] **Step 7: Add an integration-shape test for capturePaneSnapshot via the existing texterm path.**
@@ -643,9 +675,9 @@ Expected: ALL PASS.
 ```bash
 git add texel/snapshot.go texel/snapshot_test.go
 git commit -m "$(cat <<'EOF'
-texel: capturePaneSnapshot computes Content{Top,Bottom}Row from RowGlobalIdx
+texel: capturePaneSnapshot computes ContentTopRow + NumContentRows
 
-Bottom < Top sentinel signals zero content rows (status panes, all-
+NumContentRows == 0 signals zero content rows (status panes, all-
 decoration apps). Used by tree_convert to populate the protocol
 PaneSnapshot.
 
@@ -678,19 +710,19 @@ import (
 func TestTreeCaptureToProtocol_PassesContentBounds(t *testing.T) {
 	capture := texel.TreeCapture{
 		Panes: []texel.PaneSnapshot{{
-			ID:               [16]byte{0xab},
-			Title:            "t",
-			ContentTopRow:    2,
-			ContentBottomRow: 17,
+			ID:             [16]byte{0xab},
+			Title:          "t",
+			ContentTopRow:  2,
+			NumContentRows: 16,
 		}},
 	}
 	snap := treeCaptureToProtocol(capture)
 	if len(snap.Panes) != 1 {
 		t.Fatalf("expected 1 pane, got %d", len(snap.Panes))
 	}
-	if snap.Panes[0].ContentTopRow != 2 || snap.Panes[0].ContentBottomRow != 17 {
-		t.Fatalf("content bounds not passed through: top=%d bottom=%d",
-			snap.Panes[0].ContentTopRow, snap.Panes[0].ContentBottomRow)
+	if snap.Panes[0].ContentTopRow != 2 || snap.Panes[0].NumContentRows != 16 {
+		t.Fatalf("content bounds not passed through: top=%d num=%d",
+			snap.Panes[0].ContentTopRow, snap.Panes[0].NumContentRows)
 	}
 }
 ```
@@ -712,18 +744,18 @@ In `internal/runtime/server/tree_convert.go` (line 22), modify the per-pane cons
 ```go
 	for i, pane := range capture.Panes {
 		snapshot.Panes[i] = protocol.PaneSnapshot{
-			PaneID:           pane.ID,
-			Revision:         0,
-			Title:            pane.Title,
-			Rows:             nil,
-			X:                int32(pane.Rect.X),
-			Y:                int32(pane.Rect.Y),
-			Width:            int32(pane.Rect.Width),
-			Height:           int32(pane.Rect.Height),
-			AppType:          pane.AppType,
-			AppConfig:        encodeAppConfig(pane.AppConfig),
-			ContentTopRow:    pane.ContentTopRow,
-			ContentBottomRow: pane.ContentBottomRow,
+			PaneID:         pane.ID,
+			Revision:       0,
+			Title:          pane.Title,
+			Rows:           nil,
+			X:              int32(pane.Rect.X),
+			Y:              int32(pane.Rect.Y),
+			Width:          int32(pane.Rect.Width),
+			Height:         int32(pane.Rect.Height),
+			AppType:        pane.AppType,
+			AppConfig:      encodeAppConfig(pane.AppConfig),
+			ContentTopRow:  pane.ContentTopRow,
+			NumContentRows: pane.NumContentRows,
 		}
 	}
 ```
@@ -734,15 +766,15 @@ In `internal/runtime/server/tree_convert.go` (~line 39), modify the per-pane con
 
 ```go
 	capture.Panes[i] = texel.PaneSnapshot{
-		ID:               pane.PaneID,
-		Title:            pane.Title,
-		Buffer:           buffer,
-		RowGlobalIdx:     rowGlobalIdxAllMinusOne(len(buffer)),
-		Rect:             texel.Rectangle{X: int(pane.X), Y: int(pane.Y), Width: int(pane.Width), Height: int(pane.Height)},
-		AppType:          pane.AppType,
-		AppConfig:        decodeAppConfig(pane.AppConfig),
-		ContentTopRow:    pane.ContentTopRow,
-		ContentBottomRow: pane.ContentBottomRow,
+		ID:             pane.PaneID,
+		Title:          pane.Title,
+		Buffer:         buffer,
+		RowGlobalIdx:   rowGlobalIdxAllMinusOne(len(buffer)),
+		Rect:           texel.Rectangle{X: int(pane.X), Y: int(pane.Y), Width: int(pane.Width), Height: int(pane.Height)},
+		AppType:        pane.AppType,
+		AppConfig:      decodeAppConfig(pane.AppConfig),
+		ContentTopRow:  pane.ContentTopRow,
+		NumContentRows: pane.NumContentRows,
 	}
 ```
 
@@ -767,7 +799,7 @@ Expected: ALL PASS (server-side tests are extensive; expect this to take ~30s).
 ```bash
 git add internal/runtime/server/tree_convert.go internal/runtime/server/tree_convert_test.go
 git commit -m "$(cat <<'EOF'
-server: tree_convert passes Content{Top,Bottom}Row through both directions
+server: tree_convert passes ContentTopRow + NumContentRows through both directions
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -806,26 +838,24 @@ func TestBufferToDelta_DecorationRowsIncluded(t *testing.T) {
 		{{Ch: '+'}, {Ch: '-'}, {Ch: '+'}}, // border
 	}
 	snap := texel.PaneSnapshot{
-		ID:               [16]byte{0xab},
-		Buffer:           rows,
-		RowGlobalIdx:     []int64{-1, 100, 101, 102, -1},
-		ContentTopRow:    1,
-		ContentBottomRow: 3,
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, 100, 101, 102, -1},
+		ContentTopRow:  1,
+		NumContentRows: 3,
 	}
 	vp := ClientViewport{Rows: 3, AutoFollow: true}
 	prev := [][]texel.Cell(nil)
 
 	delta := bufferToDelta(snap, vp, prev, 1)
 
-	// Expect 2 decoration rows: rowIdx 0 (top border) and rowIdx 4 (bottom border).
 	if len(delta.DecorRows) != 2 {
 		t.Fatalf("expected 2 DecorRows, got %d: %+v", len(delta.DecorRows), delta.DecorRows)
 	}
-	gotIdx := map[uint16]bool{delta.DecorRows[0].Row: true, delta.DecorRows[1].Row: true}
+	gotIdx := map[uint16]bool{delta.DecorRows[0].RowIdx: true, delta.DecorRows[1].RowIdx: true}
 	if !gotIdx[0] || !gotIdx[4] {
 		t.Fatalf("expected decoration rows at rowIdx 0 and 4, got %v", gotIdx)
 	}
-	// Content rows still present.
 	if len(delta.Rows) != 3 {
 		t.Fatalf("expected 3 content Rows, got %d", len(delta.Rows))
 	}
@@ -838,20 +868,18 @@ func TestBufferToDelta_DecorationRowsDiffed(t *testing.T) {
 		{{Ch: '+'}}, // border
 	}
 	snap := texel.PaneSnapshot{
-		ID:               [16]byte{0xab},
-		Buffer:           rows,
-		RowGlobalIdx:     []int64{-1, 100, -1},
-		ContentTopRow:    1,
-		ContentBottomRow: 1,
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, 100, -1},
+		ContentTopRow:  1,
+		NumContentRows: 1,
 	}
 	vp := ClientViewport{Rows: 1, AutoFollow: true}
-	// prev identical => no rows or DecorRows should ship.
 	prev := [][]texel.Cell{
 		{{Ch: '+'}},
 		{{Ch: 'a'}},
 		{{Ch: '+'}},
 	}
-
 	delta := bufferToDelta(snap, vp, prev, 1)
 	if len(delta.DecorRows) != 0 {
 		t.Fatalf("expected 0 DecorRows when borders unchanged, got %d", len(delta.DecorRows))
@@ -868,48 +896,47 @@ func TestBufferToDelta_DecorationRowsDiffPartial(t *testing.T) {
 		{{Ch: '+'}}, // border (unchanged)
 	}
 	snap := texel.PaneSnapshot{
-		ID:               [16]byte{0xab},
-		Buffer:           rows,
-		RowGlobalIdx:     []int64{-1, 100, -1},
-		ContentTopRow:    1,
-		ContentBottomRow: 1,
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, 100, -1},
+		ContentTopRow:  1,
+		NumContentRows: 1,
 	}
 	vp := ClientViewport{Rows: 1, AutoFollow: true}
 	prev := [][]texel.Cell{
-		{{Ch: '#'}}, // different from current — should ship
-		{{Ch: 'a'}}, // same — skip
-		{{Ch: '+'}}, // same — skip
+		{{Ch: '#'}}, // different
+		{{Ch: 'a'}}, // same
+		{{Ch: '+'}}, // same
 	}
 	delta := bufferToDelta(snap, vp, prev, 1)
-	if len(delta.DecorRows) != 1 || delta.DecorRows[0].Row != 0 {
+	if len(delta.DecorRows) != 1 || delta.DecorRows[0].RowIdx != 0 {
 		t.Fatalf("expected 1 DecorRows entry at rowIdx 0, got %+v", delta.DecorRows)
 	}
 }
 
 func TestBufferToDelta_TexelTermInternalStatusbar(t *testing.T) {
 	// 6-row layout: rowIdx 0 = top border, [1..3] = content, rowIdx 4 = app
-	// internal statusbar (gid=-1), rowIdx 5 = bottom border. Mirrors the real
-	// texelterm pane shape that surfaced the bug.
+	// internal statusbar (gid=-1), rowIdx 5 = bottom border.
 	rows := [][]texel.Cell{
 		{{Ch: '+'}},
 		{{Ch: 'a'}},
 		{{Ch: 'b'}},
 		{{Ch: 'c'}},
-		{{Ch: 'S'}}, // app statusbar
+		{{Ch: 'S'}},
 		{{Ch: '+'}},
 	}
 	snap := texel.PaneSnapshot{
-		ID:               [16]byte{0xab},
-		Buffer:           rows,
-		RowGlobalIdx:     []int64{-1, 100, 101, 102, -1, -1},
-		ContentTopRow:    1,
-		ContentBottomRow: 3,
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, 100, 101, 102, -1, -1},
+		ContentTopRow:  1,
+		NumContentRows: 3,
 	}
 	vp := ClientViewport{Rows: 3, AutoFollow: true}
 	delta := bufferToDelta(snap, vp, nil, 1)
 	got := map[uint16]bool{}
 	for _, r := range delta.DecorRows {
-		got[r.Row] = true
+		got[r.RowIdx] = true
 	}
 	if !got[0] || !got[4] || !got[5] {
 		t.Fatalf("expected DecorRows at rowIdx 0, 4, 5 (top + statusbar + bottom), got %v", got)
@@ -974,7 +1001,7 @@ return delta
 Replace with:
 
 ```go
-var decorRows []protocol.RowDelta
+var decorRows []protocol.DecorRowDelta
 for y, row := range snap.Buffer {
 	if len(row) == 0 {
 		continue
@@ -982,20 +1009,21 @@ for y, row := range snap.Buffer {
 	if y >= len(snap.RowGlobalIdx) {
 		continue
 	}
+	gid := snap.RowGlobalIdx[y]
+	// Alt-screen panes have RowGlobalIdx all -1; skip decoration emission
+	// before the rowsEqual cost. The existing alt-screen positional path
+	// (BufferDeltaAltScreen flag) handles them.
+	if snap.AltScreen && gid < 0 {
+		continue
+	}
 	if y < len(prev) && rowsEqual(row, prev[y]) {
 		continue
 	}
-	gid := snap.RowGlobalIdx[y]
 	if gid < 0 {
-		// Decoration row: borders, app statusbars. Alt-screen panes
-		// emit nothing here because RowGlobalIdx is all -1 AND we
-		// take the existing alt-screen positional path elsewhere.
-		if snap.AltScreen {
-			continue
-		}
-		decorRows = append(decorRows, protocol.RowDelta{
-			Row:   uint16(y),
-			Spans: encodeRow(row),
+		// Decoration row (border or app statusbar) — positional.
+		decorRows = append(decorRows, protocol.DecorRowDelta{
+			RowIdx: uint16(y),
+			Spans:  encodeRow(row),
 		})
 		continue
 	}
@@ -1010,7 +1038,10 @@ delta.DecorRows = decorRows
 return delta
 ```
 
-Note the diff check moves *before* the gid check so it fires for both content and decoration rows. The `snap.AltScreen` guard prevents alt-screen panes (whose RowGlobalIdx is all -1) from spamming decoration rows; the existing alt-screen path handles them positionally via `delta.Flags & BufferDeltaAltScreen`.
+Two ordering points:
+
+1. The `snap.AltScreen && gid < 0` short-circuit fires *before* `rowsEqual` so alt-screen panes never pay the diff comparison for decoration rows. This avoids the per-row regression a reviewer flagged.
+2. For non-altScreen panes, the `rowsEqual` diff fires for both content and decoration paths (they share the positional `prev[y]` storage), so unchanged decoration rows don't re-ship.
 
 - [ ] **Step 5: Run — verify pass.**
 
@@ -1050,7 +1081,7 @@ EOF
 ## Task 7: `client.PaneState` gains content-bound + decoration-cache fields
 
 **Files:**
-- Modify: `client/buffercache.go` (struct ~line 22)
+- Modify: `client/buffercache.go` (struct ~line 22, `ApplySnapshot` ~line 222, add `DecorRowAt` accessor)
 - Test: `client/buffercache_test.go`
 
 - [ ] **Step 1: Add the failing test.**
@@ -1063,11 +1094,11 @@ func TestApplySnapshot_PopulatesContentBounds(t *testing.T) {
 	id := [16]byte{0xab}
 	snapshot := protocol.TreeSnapshot{
 		Panes: []protocol.PaneSnapshot{{
-			PaneID:           id,
-			Title:            "t",
-			Width:            10, Height: 6,
-			ContentTopRow:    1,
-			ContentBottomRow: 4,
+			PaneID:         id,
+			Title:          "t",
+			Width:          10, Height: 6,
+			ContentTopRow:  1,
+			NumContentRows: 4,
 		}},
 		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
 	}
@@ -1076,8 +1107,8 @@ func TestApplySnapshot_PopulatesContentBounds(t *testing.T) {
 	if pane == nil {
 		t.Fatalf("pane not registered")
 	}
-	if pane.ContentTopRow != 1 || pane.ContentBottomRow != 4 {
-		t.Fatalf("content bounds not applied: top=%d bottom=%d", pane.ContentTopRow, pane.ContentBottomRow)
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("content bounds not applied: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
 	}
 }
 ```
@@ -1092,7 +1123,7 @@ go test ./client/ -run TestApplySnapshot_PopulatesContentBounds -v
 
 Expected: FAIL with `pane.ContentTopRow undefined`.
 
-- [ ] **Step 3: Add fields to `PaneState`.**
+- [ ] **Step 3: Add fields + `DecorRowAt` accessor to `PaneState`.**
 
 In `client/buffercache.go` (~line 22), update struct:
 
@@ -1103,6 +1134,7 @@ type PaneState struct {
 	UpdatedAt        time.Time
 	rowsMu           sync.RWMutex
 	rows             map[int][]Cell
+	decorRows        map[uint16][]Cell // unexported; guarded by rowsMu (decoration: borders + app statusbar)
 	Title            string
 	Rect             clientRect
 	Active           bool
@@ -1111,20 +1143,31 @@ type PaneState struct {
 	HandlesSelection bool
 
 	// Content bounds (populated from PaneSnapshot). For non-altScreen panes,
-	// rowIdx in [ContentTopRow, ContentBottomRow] maps to gid via the
-	// viewport tracker; rowIdx outside reads from DecorRows. If
-	// ContentBottomRow < ContentTopRow, the pane has zero content rows.
-	ContentTopRow    uint16
-	ContentBottomRow uint16
-
-	// DecorRows holds positional decoration cells (borders + app statusbars).
-	// Keyed by absolute rowIdx. Populated from BufferDelta.DecorRows.
-	DecorRows map[uint16][]Cell
+	// rowIdx in [ContentTopRow, ContentTopRow + NumContentRows - 1] maps to
+	// gid via the viewport tracker; rowIdx outside that range reads from
+	// decorRows via DecorRowAt. NumContentRows == 0 means the pane has zero
+	// content rows (status panes, all-decoration apps).
+	ContentTopRow  uint16
+	NumContentRows uint16
 
 	// Dirty tracking for incremental rendering.
 	Dirty       bool
 	DirtyRows   map[int]bool
 	HasAnimated bool
+}
+
+// DecorRowAt returns the cells for an absolute decoration rowIdx, or
+// (nil, false) if no decoration has been applied to that row. Read under
+// rowsMu.RLock(). The returned slice is a direct reference to internal
+// state; callers must not retain or modify it across frame boundaries.
+func (p *PaneState) DecorRowAt(rowIdx uint16) ([]Cell, bool) {
+	if p == nil {
+		return nil, false
+	}
+	p.rowsMu.RLock()
+	defer p.rowsMu.RUnlock()
+	cells, ok := p.decorRows[rowIdx]
+	return cells, ok
 }
 ```
 
@@ -1134,7 +1177,7 @@ In `client/buffercache.go` `ApplySnapshot` (~line 235), after `pane.Title = pane
 
 ```go
 		pane.ContentTopRow = paneSnap.ContentTopRow
-		pane.ContentBottomRow = paneSnap.ContentBottomRow
+		pane.NumContentRows = paneSnap.NumContentRows
 ```
 
 - [ ] **Step 5: Run — verify pass.**
@@ -1150,10 +1193,11 @@ Expected: PASS.
 ```bash
 git add client/buffercache.go client/buffercache_test.go
 git commit -m "$(cat <<'EOF'
-client: PaneState carries Content{Top,Bottom}Row + DecorRows fields
+client: PaneState carries ContentTopRow + NumContentRows + decorRows
 
+decorRows is unexported and guarded by rowsMu; access via DecorRowAt.
 ApplySnapshot copies content bounds from the protocol pane snapshot.
-DecorRows is populated by ApplyDelta (next commit).
+ApplyDelta populates decorRows (next commit).
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -1182,9 +1226,9 @@ func TestApplyDelta_PopulatesDecorRows(t *testing.T) {
 		Styles: []protocol.StyleEntry{
 			{AttrFlags: 0, FgModel: protocol.ColorModelDefault, BgModel: protocol.ColorModelDefault},
 		},
-		DecorRows: []protocol.RowDelta{
-			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+--+", StyleIndex: 0}}},
-			{Row: 9, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+--+", StyleIndex: 0}}},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+--+", StyleIndex: 0}}},
+			{RowIdx: 9, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+--+", StyleIndex: 0}}},
 		},
 	}
 	cache.ApplyDelta(delta)
@@ -1192,14 +1236,16 @@ func TestApplyDelta_PopulatesDecorRows(t *testing.T) {
 	if pane == nil {
 		t.Fatalf("pane not registered")
 	}
-	if len(pane.DecorRows) != 2 {
-		t.Fatalf("expected 2 decor rows, got %d: %+v", len(pane.DecorRows), pane.DecorRows)
+	row0, ok0 := pane.DecorRowAt(0)
+	row9, ok9 := pane.DecorRowAt(9)
+	if !ok0 || !ok9 {
+		t.Fatalf("expected DecorRowAt(0) and DecorRowAt(9) to be present")
 	}
-	if len(pane.DecorRows[0]) != 4 || pane.DecorRows[0][0].Ch != '+' {
-		t.Fatalf("rowIdx 0 content wrong: %+v", pane.DecorRows[0])
+	if len(row0) != 4 || row0[0].Ch != '+' {
+		t.Fatalf("rowIdx 0 content wrong: %+v", row0)
 	}
-	if len(pane.DecorRows[9]) != 4 || pane.DecorRows[9][3].Ch != '+' {
-		t.Fatalf("rowIdx 9 content wrong: %+v", pane.DecorRows[9])
+	if len(row9) != 4 || row9[3].Ch != '+' {
+		t.Fatalf("rowIdx 9 content wrong: %+v", row9)
 	}
 }
 ```
@@ -1210,19 +1256,19 @@ func TestApplyDelta_PopulatesDecorRows(t *testing.T) {
 go test ./client/ -run TestApplyDelta_PopulatesDecorRows -v
 ```
 
-Expected: FAIL — `pane.DecorRows` is nil.
+Expected: FAIL — DecorRowAt returns (nil, false).
 
 - [ ] **Step 3: Update `ApplyDelta`.**
 
-In `client/buffercache.go` `ApplyDelta` (~line 149), within the function, just before `pane.Revision = delta.Revision` near the bottom, insert:
+In `client/buffercache.go` `ApplyDelta` (~line 149), the existing code acquires `pane.rowsMu.Lock()` for the content-row write and releases it before the dirty-tracking block. **Extend that critical section** to also cover decoration rows: keep `pane.rowsMu` locked through the new `decorRows` write. Concretely, after the content-row apply loop and *before* `pane.rowsMu.Unlock()`, add:
 
 ```go
 	if len(delta.DecorRows) > 0 {
-		if pane.DecorRows == nil {
-			pane.DecorRows = make(map[uint16][]Cell, len(delta.DecorRows))
+		if pane.decorRows == nil {
+			pane.decorRows = make(map[uint16][]Cell, len(delta.DecorRows))
 		}
 		for _, rowDelta := range delta.DecorRows {
-			row := pane.DecorRows[rowDelta.Row]
+			row := pane.decorRows[rowDelta.RowIdx]
 			for _, span := range rowDelta.Spans {
 				start := int(span.StartCol)
 				textRunes := []rune(span.Text)
@@ -1244,16 +1290,23 @@ In `client/buffercache.go` `ApplyDelta` (~line 149), within the function, just b
 					row[start+i] = Cell{Ch: r, Style: style, DynFG: dynFG, DynBG: dynBG}
 				}
 			}
-			pane.DecorRows[rowDelta.Row] = row
+			pane.decorRows[rowDelta.RowIdx] = row
 		}
+	}
+```
+
+After `pane.rowsMu.Unlock()`, in the dirty-flag block, add:
+
+```go
+	if len(delta.DecorRows) > 0 {
 		pane.Dirty = true
-		// DecorRow changes invalidate row-level dirty tracking; force a
+		// Decoration changes invalidate row-level dirty tracking; force a
 		// full re-render of this pane.
 		pane.DirtyRows = nil
 	}
 ```
 
-This mirrors the content-row apply loop above it but writes into `pane.DecorRows` instead of `pane.rows`.
+**Lock discipline:** all writes to `pane.decorRows` happen under `pane.rowsMu.Lock()`; all reads go through `DecorRowAt` which takes `pane.rowsMu.RLock()`. The renderer (Task 11) must not access `pane.decorRows` directly.
 
 - [ ] **Step 4: Run — verify pass.**
 
@@ -1308,21 +1361,24 @@ func TestResetRevisions_ClearsDecorRows(t *testing.T) {
 		PaneID:   id,
 		Revision: 7,
 		Styles:   []protocol.StyleEntry{{AttrFlags: 0, FgModel: protocol.ColorModelDefault, BgModel: protocol.ColorModelDefault}},
-		DecorRows: []protocol.RowDelta{
-			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+", StyleIndex: 0}}},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+", StyleIndex: 0}}},
 		},
 	}
 	cache.ApplyDelta(delta)
-	if pane := cache.Pane(id); pane == nil || len(pane.DecorRows) != 1 {
-		t.Fatalf("pre-reset: expected 1 DecorRows entry, got %+v", pane)
+	if pane := cache.Pane(id); pane == nil {
+		t.Fatalf("pane not registered")
+	}
+	if _, ok := cache.Pane(id).DecorRowAt(0); !ok {
+		t.Fatalf("pre-reset: expected DecorRowAt(0) populated")
 	}
 	cache.ResetRevisions()
 	pane := cache.Pane(id)
 	if pane == nil {
 		t.Fatalf("pane gone after reset")
 	}
-	if len(pane.DecorRows) != 0 {
-		t.Fatalf("expected DecorRows cleared, got %d entries", len(pane.DecorRows))
+	if _, ok := pane.DecorRowAt(0); ok {
+		t.Fatalf("expected decoration cache cleared after ResetRevisions")
 	}
 	if pane.Revision != 0 {
 		t.Fatalf("expected Revision=0, got %d", pane.Revision)
@@ -1336,7 +1392,7 @@ func TestResetRevisions_ClearsDecorRows(t *testing.T) {
 go test ./client/ -run TestResetRevisions_ClearsDecorRows -v
 ```
 
-Expected: FAIL — DecorRows still has 1 entry after reset.
+Expected: FAIL — decoration row still present after reset.
 
 - [ ] **Step 3: Update `ResetRevisions`.**
 
@@ -1348,10 +1404,14 @@ func (c *BufferCache) ResetRevisions() {
 	defer c.mu.Unlock()
 	for _, pane := range c.panes {
 		pane.Revision = 0
-		pane.DecorRows = nil
+		pane.rowsMu.Lock()
+		pane.decorRows = nil
+		pane.rowsMu.Unlock()
 	}
 }
 ```
+
+The per-pane `rowsMu.Lock()` ensures the renderer doesn't observe a torn map mid-clear. Holding both `c.mu` and `pane.rowsMu` is safe — `c.mu` is always acquired first throughout the package.
 
 - [ ] **Step 4: Run — verify pass.**
 
@@ -1393,7 +1453,7 @@ ls internal/runtime/client/ | grep viewport
 
 Use `viewport_tracker_test.go` if present; otherwise the existing test file pattern in this directory.
 
-- [ ] **Step 2: Add the failing test.**
+- [ ] **Step 2: Add the failing tests.**
 
 Append:
 
@@ -1401,11 +1461,11 @@ Append:
 func TestOnBufferDelta_TopUsesContentRowCount(t *testing.T) {
 	state := newClientStateForTest(t) // helper from existing tests
 	id := [16]byte{0xab}
-	// Pane has H=10 rows; ContentTopRow=1, ContentBottomRow=8 → 8 content rows.
+	// Pane has H=10 rows; ContentTopRow=1, NumContentRows=8 → 8 content rows.
 	state.cache.ApplySnapshot(protocol.TreeSnapshot{
 		Panes: []protocol.PaneSnapshot{{
 			PaneID: id, Width: 5, Height: 10,
-			ContentTopRow: 1, ContentBottomRow: 8,
+			ContentTopRow: 1, NumContentRows: 8,
 		}},
 		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
 	})
@@ -1417,15 +1477,54 @@ func TestOnBufferDelta_TopUsesContentRowCount(t *testing.T) {
 		PaneID:  id,
 		RowBase: 0,
 		Styles:  []protocol.StyleEntry{{}},
-		Rows: []protocol.RowDelta{
-			{Row: 7}, // gid = RowBase + 7 = 7 (maxGid)
-		},
+		Rows:    []protocol.RowDelta{{Row: 100}}, // maxGid = 100; old math: 100-9=91, new math: 100-7=93
 	}
 	state.onBufferDelta(delta, false)
-	vp := state.viewports.get(id)
-	// numContentRows = 8 → top = 7 - (8-1) = 0
-	if vp.ViewTopIdx != 0 {
-		t.Fatalf("expected ViewTopIdx=0 (8 content rows), got %d", vp.ViewTopIdx)
+	if vp := state.viewports.get(id); vp.ViewTopIdx != 93 {
+		t.Fatalf("expected ViewTopIdx=93 (maxGid=100, 8 content rows), got %d", vp.ViewTopIdx)
+	}
+}
+
+func TestOnBufferDelta_PaneNilSkipsAndLogs(t *testing.T) {
+	state := newClientStateForTest(t)
+	id := [16]byte{0xab}
+	// Do NOT call ApplySnapshot; pane is absent from the cache.
+	state.viewports.get(id).Rows = 10
+	state.viewports.get(id).AutoFollow = true
+	delta := protocol.BufferDelta{
+		PaneID:  id,
+		RowBase: 0,
+		Styles:  []protocol.StyleEntry{{}},
+		Rows:    []protocol.RowDelta{{Row: 100}},
+	}
+	state.onBufferDelta(delta, false)
+	// Viewport must NOT advance silently using vp.Rows fallback.
+	if vp := state.viewports.get(id); vp.ViewTopIdx != 0 {
+		t.Fatalf("expected ViewTopIdx unchanged (=0) when pane is absent, got %d", vp.ViewTopIdx)
+	}
+}
+
+func TestOnBufferDelta_ZeroContentRowsReturnsEarly(t *testing.T) {
+	state := newClientStateForTest(t)
+	id := [16]byte{0xab}
+	// Status pane: NumContentRows == 0
+	state.cache.ApplySnapshot(protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, Width: 5, Height: 1,
+			ContentTopRow: 0, NumContentRows: 0,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	})
+	state.viewports.get(id).Rows = 1
+	state.viewports.get(id).AutoFollow = true
+	delta := protocol.BufferDelta{
+		PaneID: id, RowBase: 0,
+		Styles: []protocol.StyleEntry{{}},
+		Rows:   []protocol.RowDelta{{Row: 0}},
+	}
+	state.onBufferDelta(delta, false)
+	if vp := state.viewports.get(id); vp.ViewTopIdx != 0 {
+		t.Fatalf("expected ViewTopIdx unchanged (=0) for zero-content pane, got %d", vp.ViewTopIdx)
 	}
 }
 ```
@@ -1435,24 +1534,10 @@ If `newClientStateForTest` helper doesn't exist, build the minimum state inline.
 - [ ] **Step 3: Run — verify failure.**
 
 ```bash
-go test ./internal/runtime/client/ -run TestOnBufferDelta_TopUsesContentRowCount -v
+go test ./internal/runtime/client/ -run TestOnBufferDelta -v
 ```
 
-Expected: FAIL — `vp.ViewTopIdx` will be `7 - (10-1) = -2` clamped to 0, but the failure is in the math derivation, not the clamp. To make the failure crisp, change the test to use a larger maxGid where the bug shows up: set `Rows: []protocol.RowDelta{{Row: 100}}` and `RowBase: 0`. With old code: top = 100 - 9 = 91. With new code: top = 100 - 7 = 93.
-
-Replace the `Rows: []protocol.RowDelta{{Row: 7}}` line and the assertion to:
-
-```go
-		Rows: []protocol.RowDelta{{Row: 100}},
-```
-
-```go
-	if vp.ViewTopIdx != 93 {
-		t.Fatalf("expected ViewTopIdx=93 (maxGid=100, 8 content rows), got %d", vp.ViewTopIdx)
-	}
-```
-
-Re-run; expected: FAIL with `expected ViewTopIdx=93, got 91`.
+Expected: FAIL with `expected ViewTopIdx=93, got 91` for the first test.
 
 - [ ] **Step 4: Update `onBufferDelta`.**
 
@@ -1466,17 +1551,23 @@ to:
 
 ```go
 	pane := s.cache.Pane(delta.PaneID)
-	numContentRows := int64(vp.Rows)
-	if pane != nil && pane.ContentBottomRow >= pane.ContentTopRow {
-		numContentRows = int64(pane.ContentBottomRow) - int64(pane.ContentTopRow) + 1
-	}
-	if numContentRows <= 0 {
+	if pane == nil {
+		// Delta arrived before the snapshot populated the cache. Silent
+		// fallback to vp.Rows would reintroduce Issue #199 misalignment;
+		// skip and log loudly instead.
+		log.Printf("client: onBufferDelta: pane %x not in cache; skipping viewport advance", delta.PaneID)
 		return
 	}
+	if pane.NumContentRows == 0 {
+		// Zero-content pane (status panes, all-decoration apps) — no
+		// viewport to advance.
+		return
+	}
+	numContentRows := int64(pane.NumContentRows)
 	top := maxGid - (numContentRows - 1)
 ```
 
-(Verify `s.cache` is the access path to `BufferCache` from `clientState`; if it's named differently, adjust. Inspect `internal/runtime/client/state.go` or the surrounding file for the field name.)
+(Verify `s.cache` is the access path to `BufferCache` from `clientState`. Add `import "log"` at the top of the file if not already imported. If `s.cache.Pane` doesn't exist, use whichever inspector the existing tests use.)
 
 - [ ] **Step 5: Run — verify pass.**
 
@@ -1527,7 +1618,7 @@ ls internal/runtime/client/ | grep -E "render(er)?_test"
 
 Use the surfaced file or create `renderer_test.go`.
 
-- [ ] **Step 2: Add the failing test.**
+- [ ] **Step 2: Add the failing tests.**
 
 Append:
 
@@ -1535,28 +1626,32 @@ Append:
 func TestRowSourceForPane_DecorationLayer(t *testing.T) {
 	state := newClientStateForTest(t)
 	id := [16]byte{0xab}
-	// Pane H=5, ContentTopRow=1, ContentBottomRow=3.
+	// Pane H=5, ContentTopRow=1, NumContentRows=3 (rowIdx 1..3 are content).
 	state.cache.ApplySnapshot(protocol.TreeSnapshot{
 		Panes: []protocol.PaneSnapshot{{
 			PaneID: id, Width: 4, Height: 5,
-			ContentTopRow: 1, ContentBottomRow: 3,
+			ContentTopRow: 1, NumContentRows: 3,
 		}},
 		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
 	})
-	// Apply a delta with 1 content row (gid=10) and 2 decoration rows (rowIdx 0 + 4).
+
+	// Seed the viewport tracker via onBufferDelta so the gid math lines up.
+	// onBufferDelta calls cache.ApplyDelta internally — do NOT also call
+	// state.cache.ApplyDelta or the delta is applied twice.
 	delta := protocol.BufferDelta{
 		PaneID:  id,
 		RowBase: 10,
 		Styles:  []protocol.StyleEntry{{}},
 		Rows: []protocol.RowDelta{
+			// Content row: gid 10 (= RowBase + Row). With NumContentRows=3,
+			// onBufferDelta will set ViewTopIdx = 10 - 2 = 8.
 			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "C", StyleIndex: 0}}},
 		},
-		DecorRows: []protocol.RowDelta{
-			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "T", StyleIndex: 0}}},
-			{Row: 4, Spans: []protocol.CellSpan{{StartCol: 0, Text: "B", StyleIndex: 0}}},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "T", StyleIndex: 0}}},
+			{RowIdx: 4, Spans: []protocol.CellSpan{{StartCol: 0, Text: "B", StyleIndex: 0}}},
 		},
 	}
-	state.cache.ApplyDelta(delta)
 	state.onBufferDelta(delta, false)
 
 	pane := state.cache.Pane(id)
@@ -1565,19 +1660,18 @@ func TestRowSourceForPane_DecorationLayer(t *testing.T) {
 	}
 
 	// rowIdx 0 → decoration "T"
-	src := rowSourceForPane(state, pane, 0)
-	if len(src) == 0 || src[0].Ch != 'T' {
+	if src := rowSourceForPane(state, pane, 0); len(src) == 0 || src[0].Ch != 'T' {
 		t.Fatalf("rowIdx 0 expected decoration 'T', got %+v", src)
 	}
-	// rowIdx 1 → content "C" (gid 10)
-	src = rowSourceForPane(state, pane, 1)
-	if len(src) == 0 || src[0].Ch != 'C' {
-		t.Fatalf("rowIdx 1 expected content 'C', got %+v", src)
-	}
 	// rowIdx 4 → decoration "B"
-	src = rowSourceForPane(state, pane, 4)
-	if len(src) == 0 || src[0].Ch != 'B' {
+	if src := rowSourceForPane(state, pane, 4); len(src) == 0 || src[0].Ch != 'B' {
 		t.Fatalf("rowIdx 4 expected decoration 'B', got %+v", src)
+	}
+	// rowIdx 1 → content row (gid = ViewTopIdx + (rowIdx - ContentTopRow) = 8 + 0 = 8)
+	// PaneCache should have gid 10 from the delta; gid 8 is a miss → nil.
+	// To exercise the content-layer path with a hit, also test rowIdx 3 → gid 10:
+	if src := rowSourceForPane(state, pane, 3); len(src) == 0 || src[0].Ch != 'C' {
+		t.Fatalf("rowIdx 3 expected content 'C' (gid 10), got %+v", src)
 	}
 }
 
@@ -1587,7 +1681,7 @@ func TestRowSourceForPane_DecorationCacheMiss(t *testing.T) {
 	state.cache.ApplySnapshot(protocol.TreeSnapshot{
 		Panes: []protocol.PaneSnapshot{{
 			PaneID: id, Width: 4, Height: 5,
-			ContentTopRow: 1, ContentBottomRow: 3,
+			ContentTopRow: 1, NumContentRows: 3,
 		}},
 		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
 	})
@@ -1629,14 +1723,14 @@ func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []
 		return row
 	}
 
-	// Decoration layer: rowIdx outside the content-bound range reads from
-	// PaneState.DecorRows (positional).
-	if rowIdx < int(pane.ContentTopRow) || rowIdx > int(pane.ContentBottomRow) {
-		if pane.DecorRows != nil {
-			if row, ok := pane.DecorRows[uint16(rowIdx)]; ok {
-				return row
-			}
+	// Decoration layer: rowIdx outside the content range reads from the
+	// pane's decoration cache (positional).
+	contentEnd := int(pane.ContentTopRow) + int(pane.NumContentRows) // exclusive
+	if pane.NumContentRows == 0 || rowIdx < int(pane.ContentTopRow) || rowIdx >= contentEnd {
+		if row, ok := pane.DecorRowAt(uint16(rowIdx)); ok {
+			return row
 		}
+		state.logDecorationMissOnce(pane.ID, uint16(rowIdx))
 		return nil
 	}
 
@@ -1647,9 +1741,47 @@ func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []
 	if !found {
 		// Row not yet in cache (fetch is en route). Render blank rather than
 		// showing stale BufferCache content at a mismatched globalIdx.
+		// No log here — content-layer misses are normal during FetchRange.
 		return nil
 	}
 	return row
+}
+```
+
+Add a one-time-per-(paneID, rowIdx) logger to `clientState` (in `internal/runtime/client/state.go` or wherever `clientState` is defined):
+
+```go
+// decorationMissKey is the dedup key for once-per-pane-row decoration miss logging.
+type decorationMissKey struct {
+	paneID [16]byte
+	rowIdx uint16
+}
+
+// logDecorationMissOnce emits a log line the first time the renderer
+// observes a decoration cache miss for a given (paneID, rowIdx). Subsequent
+// misses for the same key are silent.
+func (s *clientState) logDecorationMissOnce(paneID [16]byte, rowIdx uint16) {
+	s.decorMissMu.Lock()
+	defer s.decorMissMu.Unlock()
+	if s.decorMissSeen == nil {
+		s.decorMissSeen = make(map[decorationMissKey]struct{})
+	}
+	key := decorationMissKey{paneID: paneID, rowIdx: rowIdx}
+	if _, seen := s.decorMissSeen[key]; seen {
+		return
+	}
+	s.decorMissSeen[key] = struct{}{}
+	log.Printf("client: decoration cache miss for pane %x rowIdx %d (rendering blank); subsequent misses suppressed", paneID, rowIdx)
+}
+```
+
+Add the corresponding fields to `clientState`:
+
+```go
+type clientState struct {
+	// ... existing fields ...
+	decorMissMu   sync.Mutex
+	decorMissSeen map[decorationMissKey]struct{}
 }
 ```
 
@@ -1676,7 +1808,7 @@ git add internal/runtime/client/renderer.go internal/runtime/client/renderer_tes
 git commit -m "$(cat <<'EOF'
 client: rowSourceForPane two-layer lookup (content gid / decoration positional)
 
-rowIdx in [ContentTopRow, ContentBottomRow] reads from PaneCache via
+rowIdx in [ContentTopRow, ContentTopRow+NumContentRows-1] reads from PaneCache via
 gid; outside the range reads from PaneState.DecorRows positionally.
 A content-layer miss returns nil (preserves Plan A's no-stale-content
 behavior); a decoration-layer miss also returns nil (renders blank;
@@ -1689,71 +1821,211 @@ EOF
 
 ---
 
-## Task 12: Integration — borders render on clean start
+## Task 11.5: Extend `memHarness` with the helpers Tasks 12–15 need
+
+**Why this task exists.** The existing `memHarness` in `internal/runtime/server/viewport_integration_test.go` (around line 280) is single-pane and single-`sparseFakeApp`. The plan's integration tests need: a way to inspect the client's `BufferCache` for content bounds + decoration cache, a way to wait for the next or latest delta for a given pane, a way to switch focus between two panes, and a way to drive a daemon restart for the rehydrate test. Rather than fabricate these helpers ad hoc inside each test, add them once on `memHarness` so the tests stay readable.
+
+Read the existing harness end-to-end before adding fields. Match its naming (`Publish`, `AwaitRow`, `ApplyViewport`) and its locking discipline (`h.mu` guards `rowsByGID` etc.).
 
 **Files:**
-- Modify: `internal/runtime/server/viewport_integration_test.go` (extend with new test cases)
-- Helper: existing memconn harness
+- Modify: `internal/runtime/server/viewport_integration_test.go` (add fields and methods to `memHarness`; add an option struct or constructor variant for two-pane setup)
 
-- [ ] **Step 1: Add the failing test.**
+- [ ] **Step 1: Add a client-side `BufferCache` to the harness.**
 
-Append to `internal/runtime/server/viewport_integration_test.go` (or create a sibling `decoration_integration_test.go`):
+The harness's existing `clientReadLoop` decodes `MsgBufferDelta` and `MsgTreeSnapshot` directly into `rowsByGID` / `altRowsByIdx`. To exercise the client-side `PaneState.{ContentTopRow, NumContentRows, decorRows}` path, also feed each decoded message into a real `client.BufferCache`:
 
 ```go
-func TestIntegration_PaneRendersAllFourBorders_CleanStart(t *testing.T) {
-	// Build a minimal harness with a single texterm-shaped pane.
-	// Use the existing helper that produces a sparseFakeApp + memconn
-	// pair (search the file for sparseFakeApp + buildHarness).
-	h := buildIntegrationHarness(t, harnessOpts{
-		paneRows: 6,
-		paneCols: 10,
-		// fake provides RowGlobalIdx so capturePaneSnapshot computes
-		// ContentTopRow=1, ContentBottomRow=4 (top border + 4 content + bottom border).
-	})
-	defer h.Close()
-	h.WaitForFirstDelta(t)
+type memHarness struct {
+	// ... existing fields ...
+	clientCache *client.BufferCache
+}
+```
 
-	// Inspect what the client sees:
-	delta := h.LastDelta(t)
-	if len(delta.DecorRows) == 0 {
-		t.Fatal("expected DecorRows with at least 2 entries (top + bottom borders)")
-	}
-	rowIdxs := make(map[uint16]bool, len(delta.DecorRows))
-	for _, r := range delta.DecorRows {
-		rowIdxs[r.Row] = true
-	}
-	if !rowIdxs[0] || !rowIdxs[5] {
-		t.Fatalf("expected border decoration rows at rowIdx 0 and 5, got %v", rowIdxs)
-	}
+Initialize in `newMemHarness`:
 
-	// Verify content bounds reached the client cache.
-	pane := h.ClientCache().Pane(h.PaneID())
-	if pane.ContentTopRow != 1 || pane.ContentBottomRow != 4 {
-		t.Fatalf("client content bounds wrong: top=%d bottom=%d", pane.ContentTopRow, pane.ContentBottomRow)
+```go
+h.clientCache = client.NewBufferCache()
+```
+
+In `clientReadLoop`'s `MsgBufferDelta` case, after decoding, call `h.clientCache.ApplyDelta(delta)`. In the `MsgTreeSnapshot` case, after decoding, call `h.clientCache.ApplySnapshot(snap)`.
+
+Add a method:
+
+```go
+func (h *memHarness) ClientPane(id [16]byte) *client.PaneState {
+	return h.clientCache.Pane(id)
+}
+```
+
+- [ ] **Step 2: Add `LatestDeltaForPane` / `WaitForDelta` helpers.**
+
+The existing `AwaitRow` waits for a specific gid. For decoration assertions we need the most-recent full delta (so we can iterate `DecorRows`). Add:
+
+```go
+type lastDeltaTracker struct {
+	mu       sync.Mutex
+	byPane   map[[16]byte]protocol.BufferDelta
+	cond     *sync.Cond
+}
+
+// (initialize in newMemHarness; populate in clientReadLoop's MsgBufferDelta
+// case after the cache.ApplyDelta call.)
+
+func (h *memHarness) WaitForDelta(t *testing.T, paneID [16]byte, timeout time.Duration) protocol.BufferDelta {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	h.lastDelta.mu.Lock()
+	defer h.lastDelta.mu.Unlock()
+	for {
+		if d, ok := h.lastDelta.byPane[paneID]; ok {
+			return d
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatalf("WaitForDelta: timeout waiting for pane %x", paneID)
+		}
+		// Cond.Wait drops the mutex; reacquires before returning.
+		// Use a Cond bound to h.lastDelta.mu.
+		// (If sync.Cond seems heavy here, a simple per-pane channel works too.)
 	}
 }
 ```
 
-If `buildIntegrationHarness`, `WaitForFirstDelta`, `LastDelta`, `ClientCache`, `PaneID` don't exist as helpers, look at how existing tests like `TestIntegration_ClipsAndFetches` set up their fixtures and reuse the same pattern. The test author may need to extract a small helper from an existing test if no shared one exists yet.
+Pick whichever shape (Cond, channel, polling with `time.Sleep`) fits the existing patterns in the file.
+
+- [ ] **Step 3: Add daemon-restart helper.**
+
+Look at `TestD2_FullCrossRestartCycle` in `internal/runtime/server/d2_cross_restart_integration_test.go` for the existing pattern. Extract the common boot sequence into a helper on the harness:
+
+```go
+// Restart shuts the in-process server down, recreates the Manager+Server
+// pointing at the same persistence dir, and reconnects the client.
+func (h *memHarness) Restart(t *testing.T) {
+	t.Helper()
+	// 1. Close existing serverConn / readerDone.
+	// 2. Construct a new Manager with the same persistBasedir.
+	// 3. Wire a new DesktopPublisher + Server.
+	// 4. Open a new memconn pair and rebind h.serverConn / h.clientConn.
+	// 5. Replay handshake (MsgHello / MsgWelcome / MsgResumeRequest with persisted sessionID).
+}
+```
+
+Implementation lives next to `newMemHarness`; reuse the bits from `TestD2_FullCrossRestartCycle`.
+
+- [ ] **Step 4: Add two-pane variant.**
+
+Either a separate `newMemHarnessTwoPanes(t, cols, rows)` that wires two `sparseFakeApp` instances under a horizontal split, or an option struct passed to `newMemHarness`:
+
+```go
+type memHarnessOpts struct {
+	cols, rows int
+	twoPanes   bool
+}
+func newMemHarnessOpts(t *testing.T, opts memHarnessOpts) *memHarness { ... }
+```
+
+For the two-pane case, after `desktop.SwitchToWorkspace(1)`, split the workspace via the desktop's split API (look at `desktop_engine_core.go` for the actual call) and attach a second fake app. Track both pane IDs:
+
+```go
+type memHarness struct {
+	// ... existing fields ...
+	paneIDs []  [16]byte // [0] = original; [1] = right after split (when twoPanes=true)
+}
+```
+
+Add `FocusPane(paneID [16]byte)` that drives the desktop's focus change.
+
+- [ ] **Step 5: Verify the harness compiles + existing tests still pass.**
+
+```bash
+go test ./internal/runtime/server/ -run TestIntegration_ -count=1 -v
+```
+
+Expected: PASS for all existing viewport integration tests. The new helpers haven't been wired into any test yet — this step just confirms no regressions.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add internal/runtime/server/viewport_integration_test.go
+git commit -m "$(cat <<'EOF'
+test(server): extend memHarness for decoration + multi-pane + restart
+
+Adds client.BufferCache, WaitForDelta, Restart, and two-pane support
+to memHarness so subsequent integration tests can exercise the
+decoration rendering paths without bespoke fixtures.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 12: Integration — borders render on clean start
+
+**Files:**
+- Modify: `internal/runtime/server/viewport_integration_test.go`
+
+- [ ] **Step 1: Add the failing test.**
+
+Append to `internal/runtime/server/viewport_integration_test.go`:
+
+```go
+func TestPaneRenders_AllFourBorders_CleanStart(t *testing.T) {
+	h := newMemHarness(t, 10, 6)
+	defer h.serverConn.Close()
+	// First publish primes the buffer + ships the initial deltas.
+	h.Publish()
+
+	delta := h.WaitForDelta(t, h.paneID, 2*time.Second)
+	if len(delta.DecorRows) == 0 {
+		t.Fatal("expected DecorRows for at least the top + bottom borders")
+	}
+	rowIdxs := map[uint16]bool{}
+	for _, r := range delta.DecorRows {
+		rowIdxs[r.RowIdx] = true
+	}
+	if !rowIdxs[0] || !rowIdxs[5] {
+		t.Fatalf("expected decoration rows at rowIdx 0 and 5, got %v", rowIdxs)
+	}
+
+	// Verify content bounds reached the client cache.
+	pane := h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane %x", h.paneID)
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("client content bounds wrong: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+
+	// And the cache has decoration rows for both borders.
+	if _, ok := pane.DecorRowAt(0); !ok {
+		t.Fatalf("client decoration cache missing rowIdx 0")
+	}
+	if _, ok := pane.DecorRowAt(5); !ok {
+		t.Fatalf("client decoration cache missing rowIdx 5")
+	}
+}
+```
+
+If the `sparseFakeApp` doesn't naturally produce `RowGlobalIdx` matching `(top=1, num=4)` for a 6-row pane, adjust its `RowGlobalIdx()` method (search the file for `func (a *sparseFakeApp) RowGlobalIdx`) so the bottom row reports `-1` (statusbar / bottom border slot).
 
 - [ ] **Step 2: Run — verify failure.**
 
 ```bash
-go test -tags=integration ./internal/runtime/server/ -run TestIntegration_PaneRendersAllFourBorders_CleanStart -v
+go test ./internal/runtime/server/ -run TestPaneRenders_AllFourBorders_CleanStart -v
 ```
 
-Expected: FAIL — initially the harness may not exist or the assertions fail.
+Expected: FAIL initially.
 
 - [ ] **Step 3: Make the test green.**
 
-Most of the wiring should already work after Tasks 1-11. If the test fails for harness-shape reasons, build the missing helpers as the smallest possible addition — do NOT introduce a generalised harness; copy the inline shape used by existing tests.
-
-If the assertions fail (e.g., border rowIdx don't match), inspect why — likely the fake app's `RowGlobalIdx` doesn't put -1 at the expected slots. Adjust the fake to mirror what a real texterm produces.
+Tasks 1-11 + 11.5 should make this pass without further publisher changes. If the assertions fail because `sparseFakeApp` doesn't model the bottom statusbar, adjust the fake.
 
 - [ ] **Step 4: Run — verify pass.**
 
 ```bash
-go test -tags=integration ./internal/runtime/server/ -run TestIntegration_PaneRendersAllFourBorders_CleanStart -v
+go test ./internal/runtime/server/ -run TestPaneRenders_AllFourBorders_CleanStart -v
 ```
 
 Expected: PASS.
@@ -1775,56 +2047,64 @@ EOF
 ## Task 13: Integration — borders render after daemon-restart rehydrate
 
 **Files:**
-- Modify: `internal/runtime/server/viewport_integration_test.go` (or the same file used in Task 12)
+- Modify: `internal/runtime/server/viewport_integration_test.go`
 
 - [ ] **Step 1: Add the failing test.**
 
-This test is the Plan D2 cross-restart cycle adapted to assert decoration rows. Find the existing Plan D2 cross-restart integration test (search for `TestD2_FullCrossRestartCycle` or `TestIntegration_D2`) and extend it, OR create a sibling that exercises the same cycle:
-
 ```go
-func TestIntegration_PaneRendersAllFourBorders_AfterRehydrate(t *testing.T) {
-	// 1. Boot fresh daemon, attach client, get initial render.
-	// 2. Simulate daemon restart: tear down + boot a new server backed by
-	//    the same persistence dir (mirrors Plan D2 harness).
-	// 3. Reconnect with the persisted sessionID via MsgResumeRequest.
-	// 4. Assert the post-resume BufferDelta carries border DecorRows AND
-	//    the client renders them at rowIdx 0 and H-1.
-	// (See TestD2_FullCrossRestartCycle for the harness pattern.)
+func TestPaneRenders_AllFourBorders_AfterRehydrate(t *testing.T) {
+	h := newMemHarness(t, 10, 6)
+	defer h.serverConn.Close()
+	h.Publish()
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+	sessionID := h.sessionID()
 
-	h := buildD2Harness(t, harnessOpts{paneRows: 6, paneCols: 10})
-	defer h.Close()
-	h.WaitForFirstDelta(t)
-	sessionID := h.SessionID()
-	h.RestartDaemon(t)
-	h.Reconnect(t, sessionID)
+	// Daemon restart: rebuild the server in place and reconnect.
+	h.Restart(t)
+	// (Restart internally replays MsgHello + MsgResumeRequest using sessionID.)
+	_ = sessionID
 
-	delta := h.WaitForPostResumeDelta(t)
+	h.Publish()
+	delta := h.WaitForDelta(t, h.paneID, 2*time.Second)
+
 	rowIdxs := map[uint16]bool{}
 	for _, r := range delta.DecorRows {
-		rowIdxs[r.Row] = true
+		rowIdxs[r.RowIdx] = true
 	}
 	if !rowIdxs[0] || !rowIdxs[5] {
 		t.Fatalf("post-rehydrate delta missing border DecorRows, got %v", rowIdxs)
 	}
+
+	pane := h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane after rehydrate")
+	}
+	if _, ok := pane.DecorRowAt(0); !ok {
+		t.Fatalf("client decoration cache missing rowIdx 0 after rehydrate")
+	}
+	if _, ok := pane.DecorRowAt(5); !ok {
+		t.Fatalf("client decoration cache missing rowIdx 5 after rehydrate")
+	}
+	// Statusbar at rowIdx 4 (H-2) should also be a decoration row.
+	if _, ok := pane.DecorRowAt(4); !ok {
+		t.Fatalf("client decoration cache missing texterm-style internal statusbar at rowIdx 4")
+	}
 }
 ```
 
-The exact helper names must mirror the existing Plan D2 test harness. If the existing harness uses different names, adapt.
-
-- [ ] **Step 2-4: Verify red, green, run.**
+- [ ] **Step 2-4: Red, green, run.**
 
 ```bash
-go test -tags=integration ./internal/runtime/server/ -run TestIntegration_PaneRendersAllFourBorders_AfterRehydrate -v
+go test ./internal/runtime/server/ -run TestPaneRenders_AllFourBorders_AfterRehydrate -v
 ```
 
-Expect FAIL initially (harness setup or missing assertions); make it green.
+Expected: FAIL initially; PASS after Task 11.5's `Restart` is implemented.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add internal/runtime/server/viewport_integration_test.go
 git commit -m "$(cat <<'EOF'
-test(server): integration — pane renders all four borders after daemon restart
+test(server): integration — pane renders all four borders + statusbar after daemon restart
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -1841,40 +2121,47 @@ EOF
 - [ ] **Step 1: Add the failing test.**
 
 ```go
-func TestIntegration_PaneRendersAllFourBorders_ScrolledMidHistory(t *testing.T) {
-	h := buildIntegrationHarness(t, harnessOpts{paneRows: 6, paneCols: 10})
-	defer h.Close()
-	h.WaitForFirstDelta(t)
+func TestPaneRenders_AllFourBorders_ScrolledMidHistory(t *testing.T) {
+	h := newMemHarness(t, 10, 6)
+	defer h.serverConn.Close()
+	h.Publish()
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
 
-	// Push several pages of content so the client can scroll back.
+	// Append several screens of content via the fake app's writer.
 	for i := 0; i < 50; i++ {
-		h.AppendContentRow(t, fmt.Sprintf("line-%d", i))
+		h.fakeApp.AppendLine(fmt.Sprintf("line-%d", i))
+		h.Publish()
 	}
-	h.WaitForLatestDelta(t)
-	// Scroll the client off the live edge (autoFollow=false, viewBottom mid-history).
-	h.SetClientViewport(t, ClientViewportOpts{
-		AutoFollow:    false,
-		ViewBottomIdx: 10,
-	})
-	h.WaitForFetchRangeRoundTrip(t)
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
 
-	pane := h.ClientCache().Pane(h.PaneID())
-	if pane.ContentTopRow != 1 || pane.ContentBottomRow != 4 {
-		t.Fatalf("scrolled state lost content bounds: top=%d bottom=%d", pane.ContentTopRow, pane.ContentBottomRow)
+	// Scroll off the live edge: autoFollow=false, viewBottom mid-history.
+	h.ApplyViewport(h.paneID, 10, 15, false, false)
+	h.Publish()
+	// Optionally wait for a fetch-range round-trip if the harness has one.
+
+	pane := h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane")
 	}
-	if len(pane.DecorRows) < 2 {
-		t.Fatalf("scrolled state lost decoration rows: %+v", pane.DecorRows)
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("scrolled state lost content bounds: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+	if _, ok := pane.DecorRowAt(0); !ok {
+		t.Fatalf("scrolled state lost top border decoration")
+	}
+	if _, ok := pane.DecorRowAt(5); !ok {
+		t.Fatalf("scrolled state lost bottom border decoration")
 	}
 }
 ```
 
-- [ ] **Step 2-5: Red, green, run, commit.**
+If `sparseFakeApp` lacks `AppendLine`, add it as a thin wrapper over the existing append API. Match the existing fake-app patterns in the file.
 
-Same shape as Tasks 12-13.
+- [ ] **Step 2-5: Red, green, run, commit.**
 
 ```bash
 git commit -m "$(cat <<'EOF'
-test(server): integration — borders survive mid-history scroll
+test(server): integration — borders + bounds survive mid-history scroll
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -1891,21 +2178,22 @@ EOF
 - [ ] **Step 1: Add the failing test.**
 
 ```go
-func TestIntegration_FocusChangeRepaintsBorders(t *testing.T) {
-	h := buildIntegrationHarness(t, harnessOpts{
-		paneRows: 6, paneCols: 10,
-		twoPanes: true, // harness must support a 2-pane setup
-	})
-	defer h.Close()
-	h.WaitForFirstDelta(t)
-	h.DrainDeltas(t) // ignore initial deltas
+func TestPaneRenders_FocusChangeRepaintsBorders(t *testing.T) {
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: 10, rows: 6, twoPanes: true})
+	defer h.serverConn.Close()
+	h.Publish()
+	h.WaitForDelta(t, h.paneIDs[0], 2*time.Second)
+	h.WaitForDelta(t, h.paneIDs[1], 2*time.Second)
 
-	// Toggle focus from pane A to pane B.
-	h.FocusPane(t, h.PaneB())
+	// Snapshot what we've seen so subsequent WaitForDelta returns only NEW deltas.
+	h.ResetDeltaTracker(h.paneIDs[0])
+	h.ResetDeltaTracker(h.paneIDs[1])
 
-	// Both panes should emit DecorRows for their border style change.
-	deltaA := h.NextDeltaFor(t, h.PaneA())
-	deltaB := h.NextDeltaFor(t, h.PaneB())
+	h.FocusPane(h.paneIDs[1])
+	h.Publish()
+
+	deltaA := h.WaitForDelta(t, h.paneIDs[0], 2*time.Second)
+	deltaB := h.WaitForDelta(t, h.paneIDs[1], 2*time.Second)
 	if len(deltaA.DecorRows) == 0 {
 		t.Fatalf("pane A focus loss did not emit DecorRows")
 	}
@@ -1915,11 +2203,13 @@ func TestIntegration_FocusChangeRepaintsBorders(t *testing.T) {
 }
 ```
 
+`ResetDeltaTracker` is a small helper on the harness that clears the entry for a pane in the `lastDelta` map so the next `WaitForDelta` blocks until a fresh delta arrives. Add it as part of the Task 11.5 helpers or here, whichever lands first.
+
 - [ ] **Step 2-5: Red, green, run, commit.**
 
 ```bash
 git commit -m "$(cat <<'EOF'
-test(server): integration — focus change ships border DecorRows
+test(server): integration — focus change ships border DecorRows for both panes
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -1985,7 +2275,7 @@ Split the pane (Ctrl-A then `s` or `v` per the keybinding) → focus the new pan
 
 - [ ] **Step 6: Resize check.**
 
-Resize the terminal window to a dramatically different size. Borders must remain visible and content must reflow correctly inside them. ContentTopRow / ContentBottomRow recompute should keep the rowIdx ↔ gid map consistent.
+Resize the terminal window to a dramatically different size. Borders must remain visible and content must reflow correctly inside them. ContentTopRow / NumContentRows recompute should keep the rowIdx ↔ gid map consistent.
 
 - [ ] **Step 7: Document the verification.**
 
@@ -1997,11 +2287,13 @@ No commit for this task — verification only.
 
 ## Self-Review Checklist (run before declaring the plan done)
 
-- [ ] **Spec coverage:** every test the spec lists maps to a task (Tasks 1, 2, 6, 7, 8, 9, 10, 11, 12-15). Every type/field the spec introduces (`ContentTopRow`, `ContentBottomRow`, `DecorRows`, `numContentRows`, `computeContentBounds`) is defined exactly once and referenced consistently.
+- [ ] **Spec coverage:** every test the spec lists maps to a task (Tasks 1, 2, 6, 7, 8, 9, 10, 11, 12-15). Every type/field the spec introduces (`ContentTopRow`, `NumContentRows`, `DecorRowDelta`, `DecorRows`, `decorRows`, `DecorRowAt`, `computeContentBounds`, `logDecorationMissOnce`) is defined exactly once and referenced consistently.
 - [ ] **Type consistency:** field types (`uint16`), method names (`ApplyDelta`, `ApplySnapshot`, `ResetRevisions`), and protocol names (`RowDelta`, `BufferDelta`, `PaneSnapshot`) match between earlier and later tasks.
 - [ ] **No placeholders:** every code block is complete; no "TBD" or "fill in" steps.
 - [ ] **Decoration contiguity invariant** is documented in spec; tests rely on it.
-- [ ] **`Bottom < Top` zero-content sentinel** is consistently treated: server emits `(1, 0)` for empty; client checks `pane.ContentBottomRow >= pane.ContentTopRow` before doing the math.
+- [ ] **Zero-content state** is consistently treated: server emits `NumContentRows == 0`; client `onBufferDelta` returns early; client `rowSourceForPane` reads decoration for every rowIdx; no overloaded sentinel.
+- [ ] **`decorRows` lock discipline:** all writes under `pane.rowsMu.Lock()`; all reads via `DecorRowAt` (which takes `pane.rowsMu.RLock()`); `ResetRevisions` takes per-pane `rowsMu.Lock()` before nilling; renderer never touches `pane.decorRows` directly.
+- [ ] **Decoder rejects truncated v3:** `len(b) < 2` for the `DecorRows` count returns `ErrPayloadShort`; no v2 silent-accept fallback (project policy: no backward compat).
 - [ ] **Alt-screen path** is unchanged for non-decoration cells; `bufferToDelta` short-circuits decoration emission for `snap.AltScreen=true`.
 - [ ] **Race-detector run** before opening PR: `go test -race -count=1 ./protocol/ ./client/ ./internal/runtime/...`. Address any new races.
 - [ ] **Manual e2e Task 16** completed; observations noted in PR description.
