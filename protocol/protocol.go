@@ -32,7 +32,7 @@ const (
 // PaneViewportState records). Bumping the version lets pre-Plan-B clients
 // receive an explicit handshake rejection instead of a mysterious
 // ErrPayloadShort on the first resume attempt.
-const Version uint8 = 2
+const Version uint8 = 3
 
 // MessageType enumerates the canonical message categories exchanged between
 // client and server.
