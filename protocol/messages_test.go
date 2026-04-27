@@ -397,3 +397,56 @@ func BenchmarkEncodeBufferDelta(b *testing.B) {
 		}
 	}
 }
+
+func TestEncodeDecodeTreeSnapshot_ContentBoundsRoundTrip(t *testing.T) {
+	original := TreeSnapshot{
+		Panes: []PaneSnapshot{
+			{
+				PaneID:   [16]byte{0xaa},
+				Revision: 3,
+				Title:    "term",
+				Rows:     nil,
+				X:        0, Y: 0, Width: 80, Height: 24,
+				AppType:        "texelterm",
+				AppConfig:      "",
+				ContentTopRow:  1,
+				NumContentRows: 21,
+			},
+		},
+		Root: TreeNodeSnapshot{PaneIndex: 0, Split: SplitNone},
+	}
+	encoded, err := EncodeTreeSnapshot(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := DecodeTreeSnapshot(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.Panes[0].ContentTopRow != 1 || decoded.Panes[0].NumContentRows != 21 {
+		t.Fatalf("content bounds mismatch: got top=%d num=%d", decoded.Panes[0].ContentTopRow, decoded.Panes[0].NumContentRows)
+	}
+}
+
+func TestEncodeDecodeTreeSnapshot_ZeroContent(t *testing.T) {
+	original := TreeSnapshot{
+		Panes: []PaneSnapshot{{
+			PaneID:         [16]byte{0xbb},
+			Title:          "all-decor",
+			ContentTopRow:  0,
+			NumContentRows: 0, // unambiguous: no content rows
+		}},
+		Root: TreeNodeSnapshot{PaneIndex: 0, Split: SplitNone},
+	}
+	encoded, err := EncodeTreeSnapshot(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := DecodeTreeSnapshot(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.Panes[0].ContentTopRow != 0 || decoded.Panes[0].NumContentRows != 0 {
+		t.Fatalf("zero-content mismatch: got top=%d num=%d", decoded.Panes[0].ContentTopRow, decoded.Panes[0].NumContentRows)
+	}
+}

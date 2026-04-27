@@ -191,16 +191,18 @@ type ClientReady struct {
 
 // PaneSnapshot describes the full buffer content for a single pane.
 type PaneSnapshot struct {
-	PaneID    [16]byte
-	Revision  uint32
-	Title     string
-	Rows      []string
-	X         int32
-	Y         int32
-	Width     int32
-	Height    int32
-	AppType   string
-	AppConfig string
+	PaneID         [16]byte
+	Revision       uint32
+	Title          string
+	Rows           []string
+	X              int32
+	Y              int32
+	Width          int32
+	Height         int32
+	AppType        string
+	AppConfig      string
+	ContentTopRow  uint16 // first content rowIdx (ignored when NumContentRows == 0)
+	NumContentRows uint16 // count of content rows; 0 means the pane is all-decoration
 }
 
 // SplitKind describes how an internal node divides space among children.
@@ -1002,6 +1004,12 @@ func EncodeTreeSnapshot(snapshot TreeSnapshot) ([]byte, error) {
 		if err := encodeString(buf, pane.AppConfig); err != nil {
 			return nil, err
 		}
+		if err := binary.Write(buf, binary.LittleEndian, pane.ContentTopRow); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(buf, binary.LittleEndian, pane.NumContentRows); err != nil {
+			return nil, err
+		}
 	}
 	if err := encodeTreeNode(buf, snapshot.Root); err != nil {
 		return nil, err
@@ -1059,6 +1067,12 @@ func DecodeTreeSnapshot(b []byte) (TreeSnapshot, error) {
 		}
 		pane.AppType = appType
 		pane.AppConfig = config
+		if len(remaining) < 4 {
+			return snapshot, ErrPayloadShort
+		}
+		pane.ContentTopRow = binary.LittleEndian.Uint16(remaining[0:2])
+		pane.NumContentRows = binary.LittleEndian.Uint16(remaining[2:4])
+		remaining = remaining[4:]
 		snapshot.Panes[i] = pane
 		b = remaining
 	}
