@@ -30,6 +30,16 @@ type connection struct {
 	unregisterState     func()
 	unregisterPaneState func()
 	awaitResume         bool
+	// rehydrated is true when this connection's Session was just
+	// reconstructed from disk (Plan D2 cross-restart resume), as
+	// opposed to a live cache hit (in-process resume) or a fresh
+	// session creation. Used by the MsgResumeRequest handler to
+	// decide whether to clear stale per-connection state — the
+	// client-supplied LastSequence and the initialSnapshotSent flag
+	// are both meaningless for rehydrated sessions because the new
+	// daemon's diff queue is empty and the desktop hasn't yet
+	// received the client's viewport size via MsgClientReady.
+	rehydrated          bool
 	resumeProcessed     bool // set once MsgResumeRequest has been handled; blocks duplicate resumes
 	attachListeners     func()
 	incoming            chan protocolMessage
@@ -44,11 +54,11 @@ type protocolMessage struct {
 	payload []byte
 }
 
-func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume bool) *connection {
+func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume, rehydrated bool) *connection {
 	if sink == nil {
 		sink = nopSink{}
 	}
-	c := &connection{conn: conn, session: session, sink: sink, awaitResume: awaitResume}
+	c := &connection{conn: conn, session: session, sink: sink, awaitResume: awaitResume, rehydrated: rehydrated}
 	c.incoming = make(chan protocolMessage, 32)
 	c.readErr = make(chan error, 1)
 	c.pending = make(chan struct{}, 1)

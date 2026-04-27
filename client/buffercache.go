@@ -577,3 +577,26 @@ func compareBytes(a, b []byte) int {
 	}
 	return 0
 }
+
+// ResetRevisions zeros every cached pane's Revision counter. Used by
+// the client on the post-resume MsgTreeSnapshot to acknowledge that
+// the server has restarted and the in-memory revision stream restarts
+// from scratch. See docs/superpowers/specs/2026-04-26-issue-199-plan-d2-server-viewport-persistence-design.md.
+func (c *BufferCache) ResetRevisions() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, pane := range c.panes {
+		pane.Revision = 0
+	}
+}
+
+// PaneRevision returns the cached revision for paneID, or 0 if absent.
+// Plan D2: test-friendly accessor for the cross-restart reset path.
+func (c *BufferCache) PaneRevision(paneID [16]byte) uint32 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if p, ok := c.panes[paneID]; ok {
+		return p.Revision
+	}
+	return 0
+}

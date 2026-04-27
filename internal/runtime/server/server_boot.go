@@ -127,3 +127,24 @@ func (s *Server) persistSnapshot() {
 	}
 	s.setBootSnapshot(treeCaptureToProtocol(capture))
 }
+
+// LoadPersistedSessions runs ScanSessionsDir against basedir and seeds
+// the manager's rehydration index. Failure to scan (e.g., disk error)
+// is non-fatal — the server boots without rehydration support and
+// future MsgResumeRequest for unknown IDs falls through to
+// ErrSessionNotFound, exactly as before Plan D2.
+func LoadPersistedSessions(mgr *Manager, basedir string) error {
+	if basedir == "" {
+		return nil
+	}
+	loaded, err := ScanSessionsDir(basedir)
+	if err != nil {
+		log.Printf("server: persisted session scan failed: %v", err)
+		return err
+	}
+	mgr.SetPersistedSessions(loaded)
+	if len(loaded) > 0 {
+		log.Printf("[BOOT] loaded %d persisted session(s) from %s", len(loaded), basedir)
+	}
+	return nil
+}

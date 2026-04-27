@@ -75,7 +75,7 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 	sessionCh := make(chan *Session, 1)
 	go func() {
 		defer srvConn.Close()
-		session, resuming, err := handleHandshake(srvConn, mgr)
+		session, resuming, _, err := handleHandshake(srvConn, mgr)
 		if err != nil {
 			errCh <- err
 			return
@@ -93,7 +93,7 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 		}
 		_ = publisher.Publish()
 
-		conn := newConnection(srvConn, session, sink, resuming)
+		conn := newConnection(srvConn, session, sink, resuming, false /*rehydrated*/)
 		errCh <- conn.serve()
 	}()
 

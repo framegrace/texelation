@@ -147,7 +147,25 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			return errors.New("server: resume request session mismatch")
 		}
 		c.resumeProcessed = true
-		c.lastAcked = request.LastSequence
+		// Plan D2: a rehydrated session (one reconstructed from disk
+		// after a daemon restart) has an empty diff queue and
+		// nextSequence == 0, so the client's claimed LastSequence is
+		// from a prior daemon's lifetime and is meaningless here.
+		// Honoring it would make Session.Pending(after:LastSequence)
+		// filter out every fresh delta (all of which start at seq=1)
+		// and the client would appear frozen — no scroll updates, no
+		// keystroke echoes, no control-mode text would ever reach the
+		// client.
+		//
+		// For an in-process resume (live cache hit), the diff queue
+		// retains its accumulated entries; honoring the client's
+		// LastSequence is correct so we don't replay already-acked
+		// diffs.
+		if c.rehydrated {
+			c.lastAcked = 0
+		} else {
+			c.lastAcked = request.LastSequence
+		}
 		c.awaitResume = false
 		if c.attachListeners != nil {
 			c.attachListeners()
@@ -172,6 +190,18 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				debugLog.Printf("connection %x: pruned %d phantom paneID entries from resume payload", c.session.ID(), dropped)
 			}
 			viewportsToApply = pruned
+		}
+
+		// Plan D2: prune phantom pre-seed viewports against the live pane
+		// tree so dead PaneIDs from a prior daemon's lifetime don't persist
+		// back to disk (Plan B review-findings #4 close-out).
+		if sinkOK && sink.Desktop() != nil {
+			desktop := sink.Desktop()
+			if pruned := c.session.viewports.PrunePhantoms(func(p [16]byte) bool {
+				return desktop.AppByID(p) != nil
+			}); pruned > 0 {
+				debugLog.Printf("connection %x: pruned %d phantom pre-seed viewport(s)", c.session.ID(), pruned)
+			}
 		}
 
 		// Seed ClientViewports from the resume payload FIRST: this is a
@@ -203,36 +233,70 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 				}
 			}()
 		}
-		if provider, ok := c.sink.(SnapshotProvider); ok {
-			snapshot, err := provider.Snapshot()
-			if err != nil {
-				log.Printf("server: resume snapshot error: %v", err)
-			} else {
-				if payload, err := protocol.EncodeTreeSnapshot(snapshot); err != nil {
-					log.Printf("server: encode snapshot error: %v", err)
+		// For in-process resume, ship the post-resume snapshot+publish
+		// here so the client gets its previous content back at the
+		// desktop's existing dims. For a rehydrated session, however,
+		// the desktop is still at simScreen's 80×25 default — the new
+		// daemon hasn't received the client's viewport size yet
+		// (MsgClientReady is the next message). Sending a snapshot at
+		// 80×25 dims now would force the client to render the pane
+		// twice (small dims, then the correct 255×59 from
+		// handleClientReady) and the dual update produces a confusing
+		// transient: dark background at correct dims with text content
+		// drawn at small-dim row positions, missing top/bottom
+		// borders. So for rehydrated, skip the early snapshot+publish
+		// entirely — handleClientReady will run a moment later with
+		// the correct dims and ship a single coherent snapshot.
+		if !c.rehydrated {
+			if provider, ok := c.sink.(SnapshotProvider); ok {
+				snapshot, err := provider.Snapshot()
+				if err != nil {
+					log.Printf("server: resume snapshot error: %v", err)
 				} else {
-					header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
-					if err := c.writeMessage(header, payload); err != nil {
-						return err
+					if payload, err := protocol.EncodeTreeSnapshot(snapshot); err != nil {
+						log.Printf("server: encode snapshot error: %v", err)
+					} else {
+						header := protocol.Header{Version: protocol.Version, Type: protocol.MsgTreeSnapshot, Flags: protocol.FlagChecksum, SessionID: c.session.ID()}
+						if err := c.writeMessage(header, payload); err != nil {
+							return err
+						}
+						c.recordSnapshotActivity(snapshot)
 					}
 				}
-			}
-			if sinkOK {
-				// ORDER-SENSITIVE: ResetDiffState MUST come before sink.Publish.
-				// During the handler, the publisher goroutine can fire with the
-				// new ClientViewport (seeded by ApplyResume above) against old
-				// pane content, emitting a stale/empty intermediate delta.
-				// ResetDiffState clears prevBuffers + lastViewport so the
-				// subsequent Publish treats every pane as "first viewport" and
-				// emits a full buffer, repairing any earlier interleave.
-				// Do not reorder.
-				if pub := sink.Publisher(); pub != nil {
-					pub.ResetDiffState()
+				if sinkOK {
+					// ORDER-SENSITIVE: ResetDiffState MUST come before sink.Publish.
+					// During the handler, the publisher goroutine can fire with the
+					// new ClientViewport (seeded by ApplyResume above) against old
+					// pane content, emitting a stale/empty intermediate delta.
+					// ResetDiffState clears prevBuffers + lastViewport so the
+					// subsequent Publish treats every pane as "first viewport" and
+					// emits a full buffer, repairing any earlier interleave.
+					// Do not reorder.
+					if pub := sink.Publisher(); pub != nil {
+						pub.ResetDiffState()
+					}
+					sink.Publish()
 				}
-				sink.Publish()
 			}
 		}
-		c.initialSnapshotSent = true
+		// Plan D2: for a rehydrated session, leave initialSnapshotSent
+		// false so handleClientReady runs when MsgClientReady arrives.
+		// The resume branch above shipped a snapshot but ran with a
+		// 0×0 desktop (the new daemon hasn't received the client's
+		// viewport size yet), so handleClientReady is needed for
+		// SetViewportSize, the geometry-correct re-snapshot, the
+		// per-pane sendPaneState loop (active/zorder/handlesMouse),
+		// and the statusbar layout pass. Skipping these leaves the
+		// client with no pane focus, no borders, no statusbar, and
+		// publishes that emit against 0×0 buffers.
+		//
+		// For a fresh-session or in-process resume, the original
+		// behavior stands: we already sent a usable snapshot from a
+		// well-dimensioned desktop, so handleClientReady's repeat
+		// work is wasteful.
+		if !c.rehydrated {
+			c.initialSnapshotSent = true
+		}
 		c.nudge()
 	case protocol.MsgClientReady:
 		ready, err := protocol.DecodeClientReady(payload)
@@ -280,9 +344,13 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 	// Set viewport size with client's actual dimensions
 	desktop.SetViewportSize(int(ready.Cols), int(ready.Rows))
 
-	// Now send the snapshot with correct dimensions
+	// Now send the snapshot with correct dimensions.
+	// Errors are logged so a frozen-looking client (no MsgTreeSnapshot
+	// after MsgClientReady ack) leaves a breadcrumb in the server log.
+	// Without this the symptom looks identical to a hang.
 	snapshot, err := sink.Snapshot()
 	if err != nil {
+		log.Printf("server: handleClientReady snapshot error: %v", err)
 		sink.Publish()
 		c.initialSnapshotSent = true
 		return
@@ -292,6 +360,7 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 
 	payload, err := protocol.EncodeTreeSnapshot(snapshot)
 	if err != nil {
+		log.Printf("server: handleClientReady encode snapshot error: %v", err)
 		c.initialSnapshotSent = true
 		return
 	}
@@ -303,9 +372,11 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 		SessionID: c.session.ID(),
 	}
 	if err := c.writeMessage(header, payload); err != nil {
+		log.Printf("server: handleClientReady write snapshot error: %v", err)
 		c.initialSnapshotSent = true
 		return
 	}
+	c.recordSnapshotActivity(snapshot)
 
 	// Reset publisher diff state so the next publish sends full frames.
 	// The TreeSnapshot overwrites client rows with unstyled text, so the
@@ -352,6 +423,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 	// render that sink.Snapshot() would trigger.
 	snapshot, err := sink.GeometrySnapshot()
 	if err != nil {
+		log.Printf("server: handleResize geometry snapshot error: %v", err)
 		sink.Publish()
 		return
 	}
@@ -364,6 +436,7 @@ func (c *connection) handleResize(size protocol.Resize) {
 	// before content arrives.
 	payload, err := protocol.EncodeTreeSnapshot(snapshot)
 	if err != nil {
+		log.Printf("server: handleResize encode geometry error: %v", err)
 		sink.Publish()
 		return
 	}
@@ -375,9 +448,11 @@ func (c *connection) handleResize(size protocol.Resize) {
 		SessionID: c.session.ID(),
 	}
 	if err := c.writeMessage(header, payload); err != nil {
+		log.Printf("server: handleResize write geometry error: %v", err)
 		sink.Publish()
 		return
 	}
+	c.recordSnapshotActivity(snapshot)
 
 	states := snapshotMergedPaneStates(snapshot, desktop)
 	for _, state := range states {
@@ -394,6 +469,18 @@ func (c *connection) handleResize(size protocol.Resize) {
 	// pane positions, so the new content renders at the right location.
 	sink.Publish()
 	c.sendPending()
+}
+
+// recordSnapshotActivity updates the session's stored pane-activity
+// metadata after a TreeSnapshot is dispatched. Cheap (no I/O on the
+// hot path; the writer debounces). Plan F consumes the resulting
+// PaneCount / FirstPaneTitle fields.
+func (c *connection) recordSnapshotActivity(snap protocol.TreeSnapshot) {
+	if c.session == nil {
+		return
+	}
+	count, title := paneActivityFromSnapshot(snap)
+	c.session.RecordPaneActivity(count, title)
 }
 
 func (c *connection) requestClipboardData(mime string) []byte {

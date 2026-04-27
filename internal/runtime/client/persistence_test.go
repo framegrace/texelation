@@ -355,12 +355,12 @@ func TestWriter_SlowSaveSkipsIfBusy(t *testing.T) {
 	slowSaveCanFinish := make(chan struct{})
 
 	w := NewWriter(path, 5*time.Millisecond)
-	w.saver = func(p string, s *ClientState) error {
+	w.store.SetSaverForTest(func(p string, s *ClientState) error {
 		saveCount.Add(1)
 		slowSaveStarted <- struct{}{}
 		<-slowSaveCanFinish
 		return Save(p, s)
-	}
+	})
 
 	w.Update(ClientState{SocketPath: "/tmp/x.sock", SessionID: [16]byte{1}, LastSequence: 1, WrittenAt: time.Now()})
 

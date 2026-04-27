@@ -11,7 +11,9 @@ package server
 import (
 	"crypto/rand"
 	"errors"
+	"log"
 	"sync"
+	"time"
 )
 
 var (
@@ -20,13 +22,23 @@ var (
 
 // Manager tracks active sessions and coordinates creation/lookup.
 type Manager struct {
-	mu       sync.RWMutex
-	sessions map[[16]byte]*Session
-	maxDiffs int
+	mu                sync.RWMutex
+	sessions          map[[16]byte]*Session
+	persistedSessions map[[16]byte]*StoredSession // populated at boot scan; consumed on first resume
+	maxDiffs          int
+
+	// Plan D2: when set, every new or rehydrated Session attaches an
+	// atomicjson writer at <persistBasedir>/sessions/<hex-id>.json.
+	persistBasedir  string
+	persistDebounce time.Duration
 }
 
 func NewManager() *Manager {
-	return &Manager{sessions: make(map[[16]byte]*Session), maxDiffs: 512}
+	return &Manager{
+		sessions:          make(map[[16]byte]*Session),
+		persistedSessions: make(map[[16]byte]*StoredSession),
+		maxDiffs:          512,
+	}
 }
 
 func (m *Manager) NewSession() (*Session, error) {
@@ -34,10 +46,40 @@ func (m *Manager) NewSession() (*Session, error) {
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, err
 	}
-	session := NewSession(id, m.maxDiffs)
 
 	m.mu.Lock()
+	session := NewSession(id, m.maxDiffs)
+	if m.persistBasedir != "" {
+		session.AttachWriter(SessionFilePath(m.persistBasedir, id), m.persistDebounce)
+	}
+	m.sessions[id] = session
+	m.mu.Unlock()
+	return session, nil
+}
+
+// ErrSessionAlreadyExists is returned by NewSessionWithID when the
+// requested ID is already in the live session map.
+var ErrSessionAlreadyExists = errors.New("server: session already exists")
+
+// NewSessionWithID creates a session with a caller-supplied ID. Used
+// by:
+//   - tests that need deterministic IDs.
+//   - future Plan F session-recovery code that constructs a Session
+//     from a persisted record.
+//
+// Returns ErrSessionAlreadyExists if a live session with that ID is
+// already in the manager. Does NOT consume from the persistedSessions
+// index — for that path, use LookupOrRehydrate.
+func (m *Manager) NewSessionWithID(id [16]byte) (*Session, error) {
+	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, exists := m.sessions[id]; exists {
+		return nil, ErrSessionAlreadyExists
+	}
+	session := NewSession(id, m.maxDiffs)
+	if m.persistBasedir != "" {
+		session.AttachWriter(SessionFilePath(m.persistBasedir, id), m.persistDebounce)
+	}
 	m.sessions[id] = session
 	return session, nil
 }
@@ -52,24 +94,173 @@ func (m *Manager) Lookup(id [16]byte) (*Session, error) {
 	return session, nil
 }
 
-func (m *Manager) SetDiffRetentionLimit(limit int) {
+// SetPersistedSessions seeds the rehydration index. Typically called
+// once at boot from server_boot.go after ScanSessionsDir runs. Replaces
+// any prior index — callers should pass the full result of the scan.
+//
+// In production code, prefer EnablePersistence (see Task 10), which
+// performs scan + index seed + writer-path config atomically. This
+// method is exposed primarily for tests that want to inject a
+// hand-constructed index.
+func (m *Manager) SetPersistedSessions(loaded map[[16]byte]*StoredSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if limit < 0 {
-		limit = 0
-	}
-	m.maxDiffs = limit
-	for _, session := range m.sessions {
-		session.setMaxDiffs(limit)
+	m.persistedSessions = make(map[[16]byte]*StoredSession, len(loaded))
+	for id, s := range loaded {
+		m.persistedSessions[id] = s
 	}
 }
 
-func (m *Manager) Close(id [16]byte) {
+// LookupOrRehydrate returns an existing live Session, or rehydrates
+// one from the persisted index if present. The persisted entry is
+// consumed (removed from the index) on rehydration; subsequent writes
+// flow through the live Session's writer. Returns ErrSessionNotFound
+// when the ID is unknown to both live and persisted maps.
+//
+// The rehydrated bool is true when a fresh Session was constructed
+// from disk (the daemon-restart resume case), false when an existing
+// live Session in the cache is returned (a regular in-process resume).
+// Callers care about this distinction because rehydrated sessions
+// have empty diff queues and revision/sequence counters that start at
+// 0, while live sessions retain their accumulated counters across
+// reconnects.
+func (m *Manager) LookupOrRehydrate(id [16]byte) (sess *Session, rehydrated bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if session, ok := m.sessions[id]; ok {
-		session.Close()
+	if s, ok := m.sessions[id]; ok {
+		return s, false, nil
+	}
+	stored, ok := m.persistedSessions[id]
+	if !ok {
+		return nil, false, ErrSessionNotFound
+	}
+	delete(m.persistedSessions, id)
+	sess = NewSession(id, m.maxDiffs)
+	if m.persistBasedir != "" {
+		sess.AttachWriter(SessionFilePath(m.persistBasedir, id), m.persistDebounce)
+	}
+	// Pre-seed viewports from disk so the publisher has a clip window
+	// even before the client's MsgResumeRequest arrives. The client's
+	// fresher PaneViewports overwrite these via Session.ApplyResume.
+	// Use the locked accessor — never write to byPaneID directly.
+	sess.viewports.ApplyPreSeed(stored.PaneViewports)
+	// Seed Plan F metadata from disk. Without this, the next write
+	// after rehydrate (e.g. via ApplyViewportUpdate → schedulePersist)
+	// would overwrite Pinned/Label/PaneCount/FirstPaneTitle with their
+	// zero values, silently clobbering what was on disk.
+	sess.storedMu.Lock()
+	sess.storedMeta.pinned = stored.Pinned
+	sess.storedMeta.label = stored.Label
+	sess.storedMeta.paneCount = stored.PaneCount
+	sess.storedMeta.firstPaneTitle = stored.FirstPaneTitle
+	sess.storedMu.Unlock()
+	m.sessions[id] = sess
+	return sess, true, nil
+}
+
+// EnablePersistence is the single public entry point that wires Plan D2
+// cross-restart persistence. Performs:
+//
+//  1. ScanSessionsDir(<basedir>) — disk I/O, runs OUTSIDE m.mu so a
+//     slow filesystem cannot block other Manager methods. Safe because
+//     this method is called once during boot before the listener
+//     accepts any connection (see "Boot-scan-before-listener
+//     invariant" in the spec). No concurrent caller exists at boot.
+//  2. Under m.mu: install basedir/debounce on Manager and seed
+//     persistedSessions from the scan result. The lock-protected
+//     block is constant-time over the result-size copy.
+//
+// CALLERS MUST INVOKE THIS BEFORE STARTING THE LISTENER. Any
+// MsgResumeRequest arriving during the scan window would otherwise
+// falsely return ErrSessionNotFound and the client would wipe its
+// persisted state — silently losing the very state D2 exists to
+// preserve.
+//
+// debounce: typically 250ms in prod and 25ms in tests.
+//
+// Returns the boot-scan error (if any) so callers can decide whether to
+// continue without persistence or abort startup. SetPersistedSessions
+// is still exposed for tests that need to inject a hand-built index.
+func (m *Manager) EnablePersistence(basedir string, debounce time.Duration) error {
+	if basedir == "" {
+		return nil
+	}
+	loaded, err := ScanSessionsDir(basedir)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.persistBasedir = basedir
+	m.persistDebounce = debounce
+	m.persistedSessions = make(map[[16]byte]*StoredSession, len(loaded))
+	for id, s := range loaded {
+		m.persistedSessions[id] = s
+	}
+	if len(loaded) > 0 {
+		log.Printf("[BOOT] EnablePersistence: loaded %d persisted session(s) from %s", len(loaded), basedir)
+	}
+	return nil
+}
+
+// SetDiffRetentionLimit applies the new limit to all live sessions.
+// Capture the slice under m.mu, then walk it without the lock — the
+// per-session call may take a per-session lock and we don't want to
+// block other Manager ops on that.
+func (m *Manager) SetDiffRetentionLimit(limit int) {
+	if limit < 0 {
+		limit = 0
+	}
+	m.mu.Lock()
+	m.maxDiffs = limit
+	live := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		live = append(live, s)
+	}
+	m.mu.Unlock()
+	for _, s := range live {
+		s.setMaxDiffs(limit)
+	}
+}
+
+// Close removes the session from the live map and tears it down. The
+// teardown call (which now blocks on disk I/O via the atomicjson
+// writer's flush) runs OUTSIDE m.mu so other Manager methods don't
+// stall behind a slow flush.
+func (m *Manager) Close(id [16]byte) {
+	m.mu.Lock()
+	session, ok := m.sessions[id]
+	if ok {
 		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+	if ok {
+		session.Close() // disk flush — outside m.mu
+	}
+}
+
+// ShutdownSessions closes all live sessions, synchronously flushing
+// each session's debounced atomicjson writer to disk. Called from
+// Server.Stop so viewport updates debounced within the persistDebounce
+// window (typically 250ms) before SIGINT/SIGTERM are preserved across
+// a daemon restart. Without this, those updates would only exist in
+// memory and the next boot would resume to a stale viewport — exactly
+// the failure mode Plan D2 exists to prevent.
+//
+// The walk swaps the live map under m.mu, then drops the lock before
+// per-session Close calls (matching the existing Close lock-discipline
+// pattern). Callers should ensure the listener has stopped accepting
+// new connections before invoking, otherwise a freshly-accepted
+// connection's NewSession call could populate the now-empty map mid-
+// shutdown. In production Server.Stop closes the listener first.
+func (m *Manager) ShutdownSessions() {
+	m.mu.Lock()
+	live := m.sessions
+	m.sessions = make(map[[16]byte]*Session)
+	m.mu.Unlock()
+
+	for _, session := range live {
+		session.Close() // disk flush — outside m.mu
 	}
 }
 

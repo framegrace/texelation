@@ -116,8 +116,69 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 
 	// 4. Defer app starts until we have actual viewport dimensions
 	// Apps start with wrong size if we start them now (workspace has default 80x24)
+	//
+	// IMPORTANT: skip status-pane orphans. captureStatusPaneSnapshots
+	// includes status panes (e.g. the system status bar added by the
+	// host via desktop.AddStatusPane) in the snapshot for client-side
+	// buffer-replay purposes. At restore time, the host has ALREADY
+	// re-added its status panes before SetEventSink → applyBootCapture
+	// runs, so the snapshot's recorded status pane is redundant. It
+	// got a regular *pane allocated in step 1 above but is not
+	// referenced by any TreeNodeCapture (status panes live in
+	// d.statusPanes, separate from the workspace tree). Adding the
+	// orphan to pendingAppStarts means StartPreparedApp later runs
+	// against a pane whose Rect was never set by the tree's
+	// recalculateLayout — drawableWidth/Height return 0, so the app
+	// gets sized 0×0, exits cleanly, and the snapshot-restore path
+	// silently leaks an orphan refresh notifier and confuses the
+	// renderer (the texelterm pane ends up filling the slot the real
+	// statusbar should occupy, with no top/bottom borders).
+	//
+	// We can't filter by ID — newStatusPaneID is random at boot, so
+	// the runtime status panes' IDs don't match the snapshot's
+	// captured IDs across restarts. Match by Title instead: the
+	// captured statusbar snapshot has Title=sp.app.GetTitle(), and
+	// the runtime statusbar's app keeps the same title across boots.
+	// AppType is also checked (more robust if titles ever collide
+	// with workspace panes).
+	statusTitles := make(map[string]bool, len(d.statusPanes))
+	for _, sp := range d.statusPanes {
+		if sp.app != nil {
+			statusTitles[sp.app.GetTitle()] = true
+		}
+	}
+	isStatusOrphan := func(p *pane) bool {
+		if p.app == nil {
+			return false
+		}
+		title := p.app.GetTitle()
+		if statusTitles[title] {
+			return true
+		}
+		// Belt-and-braces: the captured StatusBar app reports
+		// AppType="statusbar" via SnapshotMetadata; check that too.
+		if provider, ok := p.app.(SnapshotProvider); ok {
+			if appType, _ := provider.SnapshotMetadata(); appType == "statusbar" {
+				return true
+			}
+		}
+		return false
+	}
+	startable := panes[:0]
+	for _, p := range panes {
+		if isStatusOrphan(p) {
+			// Stop the orphan's app and detach so it doesn't dangle.
+			// The real status pane (from AddStatusPane) is unaffected.
+			if p.app != nil {
+				d.appLifecycle.StopApp(p.app)
+				p.app = nil
+			}
+			continue
+		}
+		startable = append(startable, p)
+	}
 	d.pendingAppStartsMu.Lock()
-	d.pendingAppStarts = append(d.pendingAppStarts, panes...)
+	d.pendingAppStarts = append(d.pendingAppStarts, startable...)
 	d.pendingAppStartsMu.Unlock()
 	
 	// 5. Activate correct workspace

@@ -308,7 +308,14 @@ func handleStopServer(ctx context.Context, paths *Paths, socketPath string) erro
 func handleResetState(ctx context.Context, paths *Paths, socketPath string) error {
 	// Enumerate what will be deleted
 	fmt.Println("WARNING: This will delete ALL saved state:")
-	fmt.Printf("  - %s/ (scrollback, search indices, env, history, storage, logs, snapshot)\n", paths.ConfigDir)
+	fmt.Printf("  - %s/ (scrollback, search indices, env, history, storage, logs, snapshot, server-side sessions)\n", paths.ConfigDir)
+
+	// Plan D's client-side persistence lives outside ConfigDir under
+	// $XDG_STATE_HOME (defaults to ~/.local/state/texelation/client/).
+	// Wipe it too so --reset-state truly produces a clean slate —
+	// otherwise the client retains its sessionID + saved viewports
+	// across resets, defeating the intent.
+	clientStateDir := resolveClientStateDir()
 
 	// Find legacy env/history files still in ~/
 	homeDir, _ := os.UserHomeDir()
@@ -320,6 +327,12 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 	}
 	if len(legacyFiles) > 0 {
 		fmt.Printf("  - ~/%s, ~/%s (%d legacy pane files)\n", ".texel-env-*", ".texel-history-*", len(legacyFiles))
+	}
+
+	if clientStateDir != "" {
+		if _, err := os.Stat(clientStateDir); err == nil {
+			fmt.Printf("  - %s/ (Plan D client persistence: sessionID, viewports)\n", clientStateDir)
+		}
 	}
 
 	fmt.Printf("  - %s (socket)\n", socketPath)
@@ -375,6 +388,21 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 		fmt.Printf("  removed %d legacy pane files\n", len(legacyFiles))
 	}
 
+	// Remove Plan D's client persistence directory if it exists.
+	// Without this, the client retains its sessionID and saved
+	// PaneViewports across --reset-state, which has caused confusing
+	// "broken state survives reset" behavior in manual e2e tests.
+	if clientStateDir != "" {
+		if _, err := os.Stat(clientStateDir); err == nil {
+			if err := os.RemoveAll(clientStateDir); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: failed to remove %s: %v\n", clientStateDir, err)
+			} else {
+				fmt.Printf("  removed %s/\n", clientStateDir)
+				removed++
+			}
+		}
+	}
+
 	// Remove socket file
 	if err := os.Remove(socketPath); err == nil {
 		fmt.Printf("  removed %s\n", socketPath)
@@ -383,6 +411,23 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 
 	fmt.Printf("\nState reset complete (%d items removed)\n", removed)
 	return nil
+}
+
+// resolveClientStateDir returns the path that holds Plan D's client
+// persistence files: $XDG_STATE_HOME/texelation/client/, defaulting to
+// ~/.local/state/texelation/client/. Mirrors the logic in
+// internal/runtime/client/persistence.go ResolvePath. Returns empty
+// string if the home directory cannot be determined.
+func resolveClientStateDir() string {
+	stateHome := os.Getenv("XDG_STATE_HOME")
+	if stateHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		stateHome = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(stateHome, "texelation", "client")
 }
 
 func handleStatus(ctx context.Context, paths *Paths, socketPath string) error {

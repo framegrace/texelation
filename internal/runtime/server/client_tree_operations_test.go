@@ -92,7 +92,7 @@ func setupTreeTestServer(t *testing.T) (string, *Manager, *texel.DesktopEngine, 
 func handleTreeTestConnection(conn net.Conn, mgr *Manager, desktop *texel.DesktopEngine, sink *DesktopSink) {
 	defer conn.Close()
 
-	session, resuming, err := handleHandshake(conn, mgr)
+	session, resuming, _, err := handleHandshake(conn, mgr)
 	if err != nil {
 		return
 	}
@@ -115,7 +115,7 @@ func handleTreeTestConnection(conn net.Conn, mgr *Manager, desktop *texel.Deskto
 
 	_ = publisher.Publish()
 
-	connHandler := newConnection(conn, session, sink, resuming)
+	connHandler := newConnection(conn, session, sink, resuming, false /*rehydrated*/)
 	_ = connHandler.serve()
 }
 

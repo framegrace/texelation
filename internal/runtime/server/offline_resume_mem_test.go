@@ -157,7 +157,7 @@ func initialHandshake(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 
 	go func() {
 		defer serverConn.Close()
-		sess, resuming, err := handleHandshake(serverConn, srv.manager)
+		sess, resuming, _, err := handleHandshake(serverConn, srv.manager)
 		if err != nil {
 			errCh <- err
 			return
@@ -170,7 +170,7 @@ func initialHandshake(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 		_ = pub.Publish()
 		srv.sendSnapshot(serverConn, sess)
 		sessCh <- sess
-		conn := newConnection(serverConn, sess, sink, resuming)
+		conn := newConnection(serverConn, sess, sink, resuming, false /*rehydrated*/)
 		errCh <- conn.serve()
 	}()
 
@@ -259,14 +259,14 @@ func resumeClientFlow(t *testing.T, srv *Server, sink *DesktopSink, desktop *tex
 
 	go func() {
 		defer serverConn.Close()
-		sess, resuming, err := handleHandshake(serverConn, srv.manager)
+		sess, resuming, _, err := handleHandshake(serverConn, srv.manager)
 		if err != nil {
 			errCh <- err
 			return
 		}
 		pub := NewDesktopPublisher(desktop, sess)
 		sink.SetPublisher(pub)
-		errCh <- newConnection(serverConn, sess, sink, resuming).serve()
+		errCh <- newConnection(serverConn, sess, sink, resuming, false /*rehydrated*/).serve()
 	}()
 
 	helloPayload, _ := protocol.EncodeHello(protocol.Hello{ClientName: "client"})

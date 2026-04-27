@@ -423,14 +423,14 @@ func TestIntegration_FullReconnectLifecycle(t *testing.T) {
 	serveErrCh2 := make(chan error, 1)
 	go func() {
 		defer newServerConn.Close()
-		sess, resuming, err := handleHandshake(newServerConn, h.mgr)
+		sess, resuming, _, err := handleHandshake(newServerConn, h.mgr)
 		if err != nil {
 			serveErrCh2 <- err
 			return
 		}
 		pub := NewDesktopPublisher(h.desktop, sess)
 		h.sink.SetPublisher(pub)
-		conn := newConnection(newServerConn, sess, h.sink, resuming)
+		conn := newConnection(newServerConn, sess, h.sink, resuming, false /*rehydrated*/)
 		pub.SetNotifier(conn.nudge)
 		resumedSessCh <- sess
 		serveErrCh2 <- conn.serve()

@@ -9,6 +9,8 @@
 package server
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -112,5 +114,55 @@ func TestSessionStatsReporter(t *testing.T) {
 		}
 	default:
 		t.Fatalf("expected reporter to be invoked")
+	}
+}
+
+func TestSessionWriterPersistsViewportUpdate(t *testing.T) {
+	dir := t.TempDir()
+	id := [16]byte{0xde, 0xad}
+	sess := NewSession(id, 100)
+	sess.AttachWriter(SessionFilePath(dir, id), 25*time.Millisecond)
+	defer sess.Close()
+
+	sess.ApplyViewportUpdate(protocol.ViewportUpdate{
+		PaneID:        [16]byte{0xaa},
+		ViewBottomIdx: 12345,
+		Rows:          24,
+		Cols:          80,
+	})
+	sess.FlushPersistForTest()
+
+	data, err := os.ReadFile(SessionFilePath(dir, id))
+	if err != nil {
+		t.Fatalf("read session file: %v", err)
+	}
+	var got StoredSession
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.SessionID != id {
+		t.Fatalf("expected sessionID %x, got %x", id, got.SessionID)
+	}
+	if got.SchemaVersion != StoredSessionSchemaVersion {
+		t.Fatalf("schema version: got %d", got.SchemaVersion)
+	}
+	if len(got.PaneViewports) != 1 || got.PaneViewports[0].ViewBottomIdx != 12345 {
+		t.Fatalf("pane viewports mismatch: %+v", got.PaneViewports)
+	}
+	if got.LastActive.IsZero() {
+		t.Fatalf("LastActive should be set")
+	}
+}
+
+func TestSessionWriterCloseFlushes(t *testing.T) {
+	dir := t.TempDir()
+	id := [16]byte{0xbe, 0xef}
+	sess := NewSession(id, 100)
+	sess.AttachWriter(SessionFilePath(dir, id), 1*time.Hour) // long debounce
+	sess.ApplyViewportUpdate(protocol.ViewportUpdate{PaneID: [16]byte{0x01}, ViewBottomIdx: 1, Rows: 1, Cols: 1})
+	sess.Close() // must flush
+
+	if _, err := os.Stat(SessionFilePath(dir, id)); err != nil {
+		t.Fatalf("Close did not flush: %v", err)
 	}
 }

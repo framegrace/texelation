@@ -132,11 +132,11 @@ func (s *Server) acceptLoop() {
 		go func(c net.Conn) {
 			defer s.wg.Done()
 			defer c.Close()
-			session, resuming, err := handleHandshake(c, s.manager)
+			session, resuming, rehydrated, err := handleHandshake(c, s.manager)
 			if err != nil {
 				return
 			}
-			conn := newConnection(c, session, s.sink, resuming)
+			conn := newConnection(c, session, s.sink, resuming, rehydrated)
 			publisher := (*DesktopPublisher)(nil)
 			if s.publisherFactory != nil {
 				publisher = s.publisherFactory(session)
@@ -177,6 +177,15 @@ func (s *Server) Stop(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
+		// Flush session writers after all connection goroutines have
+		// finished issuing updates. Without this, viewport updates
+		// debounced within the last persistDebounce window (250ms in
+		// prod) before shutdown are silently lost — defeating the
+		// across-restart guarantee Plan D2 exists to provide. Runs in
+		// the graceful path; in the ctx-deadline path the goroutine
+		// continues but the caller has given up waiting (process
+		// exit will drop it).
+		s.manager.ShutdownSessions()
 		close(done)
 	}()
 

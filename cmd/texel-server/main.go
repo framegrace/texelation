@@ -249,6 +249,12 @@ func main() {
 			store := server.NewSnapshotStore(snapPath)
 			srv.SetSnapshotStore(store, 5*time.Second)
 			log.Printf("Session persistence enabled: %s", snapPath)
+			// Plan D2: cross-restart session/viewport persistence.
+			// MUST run before srv.Start so the persisted-session index
+			// is populated before any client can send MsgResumeRequest.
+			if err := manager.EnablePersistence(filepath.Dir(snapPath), 250*time.Millisecond); err != nil {
+				log.Printf("warning: could not enable persistence: %v", err)
+			}
 		}
 	} else {
 		log.Println("Starting from scratch (--from-scratch flag set)")
