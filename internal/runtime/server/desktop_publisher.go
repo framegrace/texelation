@@ -288,6 +288,7 @@ func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32
 		// `gid >= 0 && gid in [lo,hi]` gate anyway.
 	}
 
+	var decorRows []protocol.DecorRowDelta
 	for y, row := range snap.Buffer {
 		if len(row) == 0 {
 			continue
@@ -296,19 +297,31 @@ func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32
 			continue
 		}
 		gid := snap.RowGlobalIdx[y]
-		if gid < 0 {
-			continue
-		}
-		if gid < lo || gid > hi {
+		// Alt-screen panes have RowGlobalIdx all -1; skip decoration emission
+		// before the rowsEqual cost. The existing alt-screen positional path
+		// (BufferDeltaAltScreen flag) handles them.
+		if snap.AltScreen && gid < 0 {
 			continue
 		}
 		if y < len(prev) && rowsEqual(row, prev[y]) {
+			continue
+		}
+		if gid < 0 {
+			// Decoration row (border or app statusbar) — positional.
+			decorRows = append(decorRows, protocol.DecorRowDelta{
+				RowIdx: uint16(y),
+				Spans:  encodeRow(row),
+			})
+			continue
+		}
+		if gid < lo || gid > hi {
 			continue
 		}
 		rows = append(rows, protocol.RowDelta{Row: uint16(gid - lo), Spans: encodeRow(row)})
 	}
 	delta.Styles = styles
 	delta.Rows = rows
+	delta.DecorRows = decorRows
 	return delta
 }
 
