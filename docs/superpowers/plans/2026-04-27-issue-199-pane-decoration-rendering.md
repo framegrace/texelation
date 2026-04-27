@@ -27,6 +27,7 @@
 | `client/buffercache.go` | `PaneState.{ContentTopRow, NumContentRows, decorRows}` (decorRows unexported, guarded by `rowsMu`); `DecorRowAt` accessor; `ApplyDelta` populates; `ResetRevisions` clears | ~600 |
 | `internal/runtime/client/viewport_tracker.go` | `onBufferDelta`: `top` calc uses `pane.NumContentRows`; logs + skips on `pane==nil` | ~280 |
 | `internal/runtime/client/renderer.go` | `rowSourceForPane`: two-layer lookup; logs once per (paneID, rowIdx) on decoration miss | ~550 |
+| `internal/runtime/client/post_resume_reset.go` | Also call `state.resetDecorationMissTracker()` after `cache.ResetRevisions()` | ~30 |
 | `internal/runtime/server/viewport_integration_test.go` | Extend `memHarness` with multi-pane + cross-restart support (Task 11.5) | ~870 |
 
 ---
@@ -112,6 +113,49 @@ func TestDecodeBufferDelta_TruncatedDecorTailErrPayloadShort(t *testing.T) {
 	truncated := encoded[:len(encoded)-2]
 	if _, err := protocol.DecodeBufferDelta(truncated); !errors.Is(err, protocol.ErrPayloadShort) {
 		t.Fatalf("expected ErrPayloadShort on truncated v3, got %v", err)
+	}
+}
+
+func TestDecodeBufferDelta_TruncatedMidDecorRow(t *testing.T) {
+	// Build a payload with one DecorRow that has one span, then truncate
+	// inside the per-row body (after the row+spanCount header but before
+	// the span itself).
+	original := protocol.BufferDelta{
+		PaneID:   [16]byte{0x02},
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{AttrFlags: 0, FgModel: protocol.ColorModelDefault, BgModel: protocol.ColorModelDefault}},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "border", StyleIndex: 0}}},
+		},
+	}
+	encoded, err := protocol.EncodeBufferDelta(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	// Chop off the last 6 bytes (the per-span StartCol+TextLen+StyleIdx
+	// header), leaving the row+spanCount header dangling without span data.
+	truncated := encoded[:len(encoded)-len("border")-6]
+	if _, err := protocol.DecodeBufferDelta(truncated); !errors.Is(err, protocol.ErrPayloadShort) {
+		t.Fatalf("expected ErrPayloadShort on mid-row truncation, got %v", err)
+	}
+}
+
+func TestDecodeBufferDelta_RejectsExcessiveRowIdx(t *testing.T) {
+	// Hand-craft a payload with RowIdx > MaxDecorRowIdx (out of sane pane height).
+	original := protocol.BufferDelta{
+		PaneID:   [16]byte{0x03},
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{AttrFlags: 0, FgModel: protocol.ColorModelDefault, BgModel: protocol.ColorModelDefault}},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: protocol.MaxDecorRowIdx + 1, Spans: []protocol.CellSpan{{StartCol: 0, Text: "x", StyleIndex: 0}}},
+		},
+	}
+	encoded, err := protocol.EncodeBufferDelta(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if _, err := protocol.DecodeBufferDelta(encoded); !errors.Is(err, protocol.ErrInvalidSpan) {
+		t.Fatalf("expected ErrInvalidSpan for excessive RowIdx, got %v", err)
 	}
 }
 ```
@@ -224,6 +268,12 @@ In `DecodeBufferDelta`, **replace** the existing `return delta, nil` at the end 
 			rowIdx := binary.LittleEndian.Uint16(b[:2])
 			spanCount := binary.LittleEndian.Uint16(b[2:4])
 			b = b[4:]
+			// Defensive bound: a sane pane is at most a few thousand rows
+			// tall. A RowIdx beyond MaxDecorRowIdx indicates a corrupt or
+			// hostile payload — reject rather than balloon client memory.
+			if rowIdx > MaxDecorRowIdx {
+				return delta, ErrInvalidSpan
+			}
 			spans := make([]CellSpan, spanCount)
 			for s := 0; s < int(spanCount); s++ {
 				if len(b) < 6 {
@@ -250,6 +300,15 @@ In `DecodeBufferDelta`, **replace** the existing `return delta, nil` at the end 
 		return delta, ErrPayloadShort
 	}
 	return delta, nil
+```
+
+Add the constant near the top of `protocol/buffer_delta.go`, alongside `BufferDeltaFlags`:
+
+```go
+// MaxDecorRowIdx caps a decoration row's absolute rowIdx to a sane pane
+// height. Real panes never exceed a few thousand rows; values above this
+// signal a corrupt or hostile payload.
+const MaxDecorRowIdx uint16 = 4096
 ```
 
 Two correctness points:
@@ -605,8 +664,11 @@ In `texel/snapshot.go` near `allMinusOne` (~line 360), add:
 ```go
 // computeContentBounds returns (ContentTopRow, NumContentRows) for the
 // given RowGlobalIdx slice. If no row has gid>=0, returns (0, 0).
-// Assumes contiguity: callers must ensure all gid>=0 rows form a single
-// contiguous block (enforced by capturePaneSnapshot construction).
+// Requires contiguity: every index in [top, last] must have gid >= 0,
+// and every index outside that range must have gid < 0. Logs a warning
+// and returns (0, 0) on violation rather than producing a bogus range —
+// a non-contiguous layout is a bug somewhere up the stack and the
+// renderer falling back to all-decoration is recoverable.
 func computeContentBounds(rowIdx []int64) (uint16, uint16) {
 	top := -1
 	last := -1
@@ -622,7 +684,27 @@ func computeContentBounds(rowIdx []int64) (uint16, uint16) {
 	if top < 0 {
 		return 0, 0
 	}
+	// Verify contiguity: every index in [top, last] must have gid >= 0.
+	for y := top; y <= last; y++ {
+		if rowIdx[y] < 0 {
+			log.Printf("texel: computeContentBounds: non-contiguous content rows at y=%d (top=%d, last=%d); treating pane as all-decoration", y, top, last)
+			return 0, 0
+		}
+	}
 	return uint16(top), uint16(last - top + 1)
+}
+```
+
+Add a test for the contiguity violation:
+
+```go
+func TestComputeContentBounds_NonContiguous(t *testing.T) {
+	// Hole in the middle of the content range.
+	rowIdx := []int64{-1, 100, -1, 102, -1}
+	top, num := computeContentBounds(rowIdx)
+	if top != 0 || num != 0 {
+		t.Fatalf("expected (0, 0) on non-contiguous layout, got (%d, %d)", top, num)
+	}
 }
 ```
 
@@ -957,6 +1039,31 @@ func TestBufferToDelta_AltScreenLeavesDecorRowsEmpty(t *testing.T) {
 		t.Fatalf("alt-screen must not emit DecorRows, got %d", len(delta.DecorRows))
 	}
 }
+
+func TestBufferToDelta_ZeroContentSnapshot(t *testing.T) {
+	// Status pane shape: every row is decoration (no content gids).
+	// Server must emit all rows in DecorRows and zero content rows.
+	rows := [][]texel.Cell{
+		{{Ch: 'a'}},
+		{{Ch: 'b'}},
+		{{Ch: 'c'}},
+	}
+	snap := texel.PaneSnapshot{
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, -1, -1},
+		ContentTopRow:  0,
+		NumContentRows: 0,
+	}
+	vp := ClientViewport{Rows: 0, AutoFollow: false}
+	delta := bufferToDelta(snap, vp, nil, 1)
+	if len(delta.Rows) != 0 {
+		t.Fatalf("expected 0 content Rows for zero-content pane, got %d", len(delta.Rows))
+	}
+	if len(delta.DecorRows) != 3 {
+		t.Fatalf("expected 3 DecorRows for zero-content pane, got %d", len(delta.DecorRows))
+	}
+}
 ```
 
 (The exact `ClientViewport` field names and `bufferToDelta` signature must match existing code — read the function signature at `internal/runtime/server/desktop_publisher.go:206` (or near there) and adapt the test calls. The test author should preserve the public-API arguments the function actually takes.)
@@ -1156,18 +1263,25 @@ type PaneState struct {
 	HasAnimated bool
 }
 
-// DecorRowAt returns the cells for an absolute decoration rowIdx, or
-// (nil, false) if no decoration has been applied to that row. Read under
-// rowsMu.RLock(). The returned slice is a direct reference to internal
-// state; callers must not retain or modify it across frame boundaries.
+// DecorRowAt returns a *copy* of the cells for an absolute decoration
+// rowIdx, or (nil, false) if no decoration has been applied to that row.
+// Returning a copy (rather than the internal slice) means the renderer can
+// hold the result across the frame without racing concurrent ApplyDelta
+// writes to the same rowIdx. Allocation is bounded — at most ~4 decoration
+// rows × pane width per render frame.
 func (p *PaneState) DecorRowAt(rowIdx uint16) ([]Cell, bool) {
 	if p == nil {
 		return nil, false
 	}
 	p.rowsMu.RLock()
 	defer p.rowsMu.RUnlock()
-	cells, ok := p.decorRows[rowIdx]
-	return cells, ok
+	src, ok := p.decorRows[rowIdx]
+	if !ok {
+		return nil, false
+	}
+	out := make([]Cell, len(src))
+	copy(out, src)
+	return out, true
 }
 ```
 
@@ -1295,18 +1409,36 @@ In `client/buffercache.go` `ApplyDelta` (~line 149), the existing code acquires 
 	}
 ```
 
-After `pane.rowsMu.Unlock()`, in the dirty-flag block, add:
+After `pane.rowsMu.Unlock()`, replace the existing dirty-row tracking block with:
 
 ```go
-	if len(delta.DecorRows) > 0 {
-		pane.Dirty = true
-		// Decoration changes invalidate row-level dirty tracking; force a
-		// full re-render of this pane.
-		pane.DirtyRows = nil
+	pane.Dirty = true
+	// Force full re-render whenever a delta touches this pane. The pre-
+	// existing per-row dirty map (DirtyRows) was keyed inconsistently:
+	// content rows used (gid - RowBase), decoration rows would be keyed by
+	// absolute rowIdx — mixing the two key spaces silently produced wrong
+	// re-renders. Setting DirtyRows = nil unconditionally tells the
+	// renderer "the whole pane needs paint," which is correct and avoids
+	// the mixed-key bug. The perf cost is small (decoration row writes
+	// are rare; content-row writes already invalidate via the gid-keyed
+	// PaneCache, not DirtyRows).
+	pane.DirtyRows = nil
+```
+
+This replaces the existing block:
+
+```go
+	if pane.DirtyRows == nil && len(delta.Rows) < int(pane.Rect.Height) {
+		pane.DirtyRows = make(map[int]bool, len(delta.Rows))
+	}
+	if pane.DirtyRows != nil {
+		for _, rowDelta := range delta.Rows {
+			pane.DirtyRows[int(rowDelta.Row)] = true
+		}
 	}
 ```
 
-**Lock discipline:** all writes to `pane.decorRows` happen under `pane.rowsMu.Lock()`; all reads go through `DecorRowAt` which takes `pane.rowsMu.RLock()`. The renderer (Task 11) must not access `pane.decorRows` directly.
+**Lock discipline:** all writes to `pane.decorRows` happen under `pane.rowsMu.Lock()`; all reads go through `DecorRowAt` which takes `pane.rowsMu.RLock()` and returns a *copy* (so the renderer can safely retain the slice across the frame). The renderer (Task 11) must not access `pane.decorRows` directly.
 
 - [ ] **Step 4: Run — verify pass.**
 
@@ -1354,6 +1486,60 @@ EOF
 Append to `client/buffercache_test.go`:
 
 ```go
+func TestApplyDelta_ConcurrentDecorRowsReadWrite(t *testing.T) {
+	// Race-detector regression test: concurrently apply decoration deltas
+	// while a renderer-shaped goroutine reads via DecorRowAt. Without the
+	// rowsMu coverage on decorRows, this would flag under -race.
+	cache := client.NewBufferCache()
+	id := [16]byte{0xab}
+
+	// Seed the pane so DecorRowAt has a target.
+	cache.ApplyDelta(protocol.BufferDelta{
+		PaneID:   id,
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{}},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+", StyleIndex: 0}}},
+		},
+	})
+	pane := cache.Pane(id)
+	if pane == nil {
+		t.Fatal("pane not registered")
+	}
+
+	const iterations = 500
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Writer goroutine: repeated ApplyDelta with new decoration cells.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			cache.ApplyDelta(protocol.BufferDelta{
+				PaneID:   id,
+				Revision: uint32(i + 2),
+				Styles:   []protocol.StyleEntry{{}},
+				DecorRows: []protocol.DecorRowDelta{
+					{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: fmt.Sprintf("%c", 'a'+i%26), StyleIndex: 0}}},
+				},
+			})
+		}
+	}()
+
+	// Reader goroutine: continuously fetch DecorRowAt(0).
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			row, ok := pane.DecorRowAt(0)
+			if ok && len(row) > 0 {
+				_ = row[0].Ch // touch the cell so the race detector sees the read
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
 func TestResetRevisions_ClearsDecorRows(t *testing.T) {
 	cache := client.NewBufferCache()
 	id := [16]byte{0xab}
@@ -1412,6 +1598,43 @@ func (c *BufferCache) ResetRevisions() {
 ```
 
 The per-pane `rowsMu.Lock()` ensures the renderer doesn't observe a torn map mid-clear. Holding both `c.mu` and `pane.rowsMu` is safe — `c.mu` is always acquired first throughout the package.
+
+- [ ] **Step 4: Clear `clientState.decorMissSeen` in the same path that calls `ResetRevisions`.**
+
+Decoration miss dedup state must also reset on session reuse so a fresh session can re-log misses. In `internal/runtime/client/post_resume_reset.go` (the one place that calls `state.cache.ResetRevisions()`, currently at line 26), add immediately after:
+
+```go
+state.cache.ResetRevisions()
+state.resetDecorationMissTracker()
+```
+
+Add the method to `clientState`:
+
+```go
+func (s *clientState) resetDecorationMissTracker() {
+	s.decorMissMu.Lock()
+	defer s.decorMissMu.Unlock()
+	s.decorMissSeen = nil
+}
+```
+
+Add a unit test:
+
+```go
+func TestPostResumeReset_ClearsDecorationMissTracker(t *testing.T) {
+	state := newClientStateForTest(t)
+	state.logDecorationMissOnce([16]byte{0xab}, 5)
+	if len(state.decorMissSeen) != 1 {
+		t.Fatalf("expected 1 entry pre-reset, got %d", len(state.decorMissSeen))
+	}
+	applyPostResumeReset(state) // or whatever the existing reset entry point is
+	if len(state.decorMissSeen) != 0 {
+		t.Fatalf("expected decorMissSeen cleared, got %d entries", len(state.decorMissSeen))
+	}
+}
+```
+
+If `applyPostResumeReset` has a different name, use it. Inspect `internal/runtime/client/post_resume_reset.go` for the actual function name.
 
 - [ ] **Step 4: Run — verify pass.**
 
@@ -1594,8 +1817,9 @@ client: onBufferDelta computes top from numContentRows, not vp.Rows
 
 vp.Rows includes border/decoration rows; numContentRows excludes them.
 This stops the viewport top from being offset by the count of non-
-content rows. Falls back to vp.Rows if the pane has no ContentBottom/
-Top yet (pre-snapshot delta — should not happen in production).
+content rows. Logs and skips when pane is absent from the cache
+(pre-snapshot delta — should not happen in production); returns
+early when NumContentRows == 0 (legitimate state for status panes).
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -1667,9 +1891,13 @@ func TestRowSourceForPane_DecorationLayer(t *testing.T) {
 	if src := rowSourceForPane(state, pane, 4); len(src) == 0 || src[0].Ch != 'B' {
 		t.Fatalf("rowIdx 4 expected decoration 'B', got %+v", src)
 	}
-	// rowIdx 1 → content row (gid = ViewTopIdx + (rowIdx - ContentTopRow) = 8 + 0 = 8)
-	// PaneCache should have gid 10 from the delta; gid 8 is a miss → nil.
-	// To exercise the content-layer path with a hit, also test rowIdx 3 → gid 10:
+	// rowIdx 1 → content row (gid = ViewTopIdx + (rowIdx - ContentTopRow) = 8 + 0 = 8).
+	// PaneCache only has gid 10 from the delta; gid 8 is a miss → nil
+	// (preserves Plan A's no-stale-content guarantee).
+	if src := rowSourceForPane(state, pane, 1); src != nil {
+		t.Fatalf("rowIdx 1 expected nil (content-layer miss for gid 8), got %+v", src)
+	}
+	// rowIdx 3 → gid 10, present in PaneCache → "C".
 	if src := rowSourceForPane(state, pane, 3); len(src) == 0 || src[0].Ch != 'C' {
 		t.Fatalf("rowIdx 3 expected content 'C' (gid 10), got %+v", src)
 	}
@@ -1857,60 +2085,249 @@ func (h *memHarness) ClientPane(id [16]byte) *client.PaneState {
 }
 ```
 
-- [ ] **Step 2: Add `LatestDeltaForPane` / `WaitForDelta` helpers.**
+- [ ] **Step 2: Add `WaitForDelta` and `ResetDeltaTracker` helpers.**
 
 The existing `AwaitRow` waits for a specific gid. For decoration assertions we need the most-recent full delta (so we can iterate `DecorRows`). Add:
 
 ```go
 type lastDeltaTracker struct {
-	mu       sync.Mutex
-	byPane   map[[16]byte]protocol.BufferDelta
-	cond     *sync.Cond
+	mu     sync.Mutex
+	cond   *sync.Cond
+	byPane map[[16]byte]protocol.BufferDelta
 }
 
-// (initialize in newMemHarness; populate in clientReadLoop's MsgBufferDelta
-// case after the cache.ApplyDelta call.)
+func newLastDeltaTracker() *lastDeltaTracker {
+	t := &lastDeltaTracker{byPane: make(map[[16]byte]protocol.BufferDelta)}
+	t.cond = sync.NewCond(&t.mu)
+	return t
+}
 
-func (h *memHarness) WaitForDelta(t *testing.T, paneID [16]byte, timeout time.Duration) protocol.BufferDelta {
-	t.Helper()
+func (t *lastDeltaTracker) put(paneID [16]byte, d protocol.BufferDelta) {
+	t.mu.Lock()
+	t.byPane[paneID] = d
+	t.cond.Broadcast()
+	t.mu.Unlock()
+}
+
+func (t *lastDeltaTracker) wait(paneID [16]byte, timeout time.Duration) (protocol.BufferDelta, bool) {
 	deadline := time.Now().Add(timeout)
-	h.lastDelta.mu.Lock()
-	defer h.lastDelta.mu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for {
-		if d, ok := h.lastDelta.byPane[paneID]; ok {
-			return d
+		if d, ok := t.byPane[paneID]; ok {
+			return d, true
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			t.Fatalf("WaitForDelta: timeout waiting for pane %x", paneID)
+			return protocol.BufferDelta{}, false
 		}
-		// Cond.Wait drops the mutex; reacquires before returning.
-		// Use a Cond bound to h.lastDelta.mu.
-		// (If sync.Cond seems heavy here, a simple per-pane channel works too.)
+		// Cond.Wait without timeout — broadcast-on-deadline goroutine
+		// keeps us honest. Spin a one-shot timer that broadcasts when the
+		// deadline passes so the cond wakes up.
+		timer := time.AfterFunc(remaining, func() {
+			t.mu.Lock()
+			t.cond.Broadcast()
+			t.mu.Unlock()
+		})
+		t.cond.Wait()
+		timer.Stop()
 	}
+}
+
+func (t *lastDeltaTracker) reset(paneID [16]byte) {
+	t.mu.Lock()
+	delete(t.byPane, paneID)
+	t.mu.Unlock()
 }
 ```
 
-Pick whichever shape (Cond, channel, polling with `time.Sleep`) fits the existing patterns in the file.
+Add `lastDelta *lastDeltaTracker` to the `memHarness` struct, initialise in `newMemHarness` via `newLastDeltaTracker()`, populate in `clientReadLoop`'s `MsgBufferDelta` case via `h.lastDelta.put(delta.PaneID, delta)`.
+
+Methods on the harness for tests to use:
+
+```go
+func (h *memHarness) WaitForDelta(t *testing.T, paneID [16]byte, timeout time.Duration) protocol.BufferDelta {
+	t.Helper()
+	d, ok := h.lastDelta.wait(paneID, timeout)
+	if !ok {
+		t.Fatalf("WaitForDelta: timeout waiting for pane %x", paneID)
+	}
+	return d
+}
+
+// ResetDeltaTracker clears any cached delta for paneID so the next
+// WaitForDelta blocks until a fresh delta arrives. Use before driving an
+// action whose effect must be observed in a NEW delta (focus change,
+// content append, viewport scroll).
+func (h *memHarness) ResetDeltaTracker(paneID [16]byte) {
+	h.lastDelta.reset(paneID)
+}
+```
 
 - [ ] **Step 3: Add daemon-restart helper.**
 
-Look at `TestD2_FullCrossRestartCycle` in `internal/runtime/server/d2_cross_restart_integration_test.go` for the existing pattern. Extract the common boot sequence into a helper on the harness:
+The existing `TestD2_FullCrossRestartCycle` (in `internal/runtime/server/d2_cross_restart_integration_test.go`) exercises rehydrate at the manager level only — it doesn't drive a full memconn handshake. For Tasks 13 and 15 we need both: persistence-backed manager AND fresh memconn-based handshake.
+
+First, modify `newMemHarness` to enable persistence on the Manager from the start. Add an option:
 
 ```go
-// Restart shuts the in-process server down, recreates the Manager+Server
-// pointing at the same persistence dir, and reconnects the client.
-func (h *memHarness) Restart(t *testing.T) {
+type memHarnessOpts struct {
+	cols, rows  int
+	twoPanes    bool
+	persistDir  string // if non-empty, mgr.EnablePersistence is called with this
+}
+
+func newMemHarnessOpts(t *testing.T, opts memHarnessOpts) *memHarness {
 	t.Helper()
-	// 1. Close existing serverConn / readerDone.
-	// 2. Construct a new Manager with the same persistBasedir.
-	// 3. Wire a new DesktopPublisher + Server.
-	// 4. Open a new memconn pair and rebind h.serverConn / h.clientConn.
-	// 5. Replay handshake (MsgHello / MsgWelcome / MsgResumeRequest with persisted sessionID).
+	h := /* ... existing setup, with cols/rows from opts ... */
+	if opts.persistDir != "" {
+		if err := h.mgr.EnablePersistence(opts.persistDir, 10*time.Millisecond); err != nil {
+			t.Fatalf("EnablePersistence: %v", err)
+		}
+		h.persistDir = opts.persistDir
+	}
+	// ... rest of existing handshake wiring ...
+	return h
 }
 ```
 
-Implementation lives next to `newMemHarness`; reuse the bits from `TestD2_FullCrossRestartCycle`.
+Add `persistDir string` to the `memHarness` struct.
+
+The `Restart` helper:
+
+```go
+// Restart shuts the in-process server down, recreates the Manager + Server
+// pointing at the same persistence dir, opens a fresh memconn pair, and
+// replays the handshake using MsgResumeRequest with the persisted sessionID.
+// Caller must have constructed h with a non-empty persistDir.
+func (h *memHarness) Restart(t *testing.T) {
+	t.Helper()
+	if h.persistDir == "" {
+		t.Fatalf("Restart requires the harness to have been built with persistDir set")
+	}
+
+	// Capture state we need to replay before tearing down.
+	sessionID := h.sessionID()
+	cols := h.fakeApp.cols // adjust to whatever the fake exposes
+	rows := h.fakeApp.rows
+	persistDir := h.persistDir
+
+	// Close client side first; the server's serve goroutine will exit on
+	// EOF and close its end. Drain readerDone so we don't leak.
+	if err := h.clientConn.Close(); err != nil {
+		t.Logf("Restart: close clientConn: %v", err)
+	}
+	<-h.readerDone
+
+	// New Manager + Server bound to the same persistence dir.
+	mgr := NewManager()
+	if err := mgr.EnablePersistence(persistDir, 10*time.Millisecond); err != nil {
+		t.Fatalf("Restart: EnablePersistence: %v", err)
+	}
+
+	// Reuse desktop, fakeApp, sink — they survive across server restarts.
+	srv := &Server{manager: mgr, sink: h.sink, desktopSink: h.sink}
+	h.mgr = mgr
+	h.srv = srv
+
+	// Reset accumulated client-side state so post-restart deltas don't mix
+	// with pre-restart entries.
+	h.mu.Lock()
+	h.rowsByGID = make(map[int64]protocol.RowDelta)
+	h.altRowsByIdx = make(map[uint16][]protocol.CellSpan)
+	h.fetchByReqID = make(map[uint32]protocol.FetchRangeResponse)
+	h.rowBasesByPane = make(map[[16]byte][]int64)
+	h.lastDelta.byPane = make(map[[16]byte]protocol.BufferDelta) // see Step 2
+	h.mu.Unlock()
+	// Fresh client BufferCache too — mirrors what a real client process does.
+	h.clientCache = client.NewBufferCache()
+	h.readerDone = make(chan struct{})
+
+	// New memconn pair.
+	h.serverConn, h.clientConn = testutil.NewMemPipe(64)
+	t.Cleanup(func() {
+		_ = h.serverConn.Close()
+		_ = h.clientConn.Close()
+	})
+
+	// Re-spawn the server-side handshake goroutine (mirrors newMemHarness).
+	serveErrCh := make(chan error, 1)
+	sessCh := make(chan *Session, 1)
+	go func() {
+		defer h.serverConn.Close()
+		sess, resuming, _, err := handleHandshake(h.serverConn, mgr)
+		if err != nil {
+			serveErrCh <- err
+			return
+		}
+		pub := NewDesktopPublisher(h.desktop, sess)
+		h.sink.SetPublisher(pub)
+		conn := newConnection(h.serverConn, sess, h.sink, resuming, true /*rehydrated*/)
+		pub.SetNotifier(conn.nudge)
+		h.mu.Lock()
+		h.session = sess
+		h.pub = pub
+		h.mu.Unlock()
+		sessCh <- sess
+		serveErrCh <- conn.serve()
+	}()
+
+	// Client side: Hello → Welcome → ResumeRequest with persisted sessionID.
+	helloPayload, _ := protocol.EncodeHello(protocol.Hello{ClientName: "intg-client"})
+	h.writeFrame(protocol.MsgHello, helloPayload, [16]byte{})
+	if _, _, err := protocol.ReadMessage(h.clientConn); err != nil {
+		t.Fatalf("Restart: read welcome: %v", err)
+	}
+	resumeReq, _ := protocol.EncodeResumeRequest(protocol.ResumeRequest{
+		SessionID:    sessionID,
+		LastSequence: 0,
+	})
+	h.writeFrame(protocol.MsgResumeRequest, resumeReq, sessionID)
+	// Read MsgConnectAccept (skip non-target frames).
+	for {
+		hdr, payload, err := protocol.ReadMessage(h.clientConn)
+		if err != nil {
+			t.Fatalf("Restart: read connect accept: %v", err)
+		}
+		if hdr.Type == protocol.MsgConnectAccept {
+			if _, err := protocol.DecodeConnectAccept(payload); err != nil {
+				t.Fatalf("Restart: decode connect accept: %v", err)
+			}
+			break
+		}
+	}
+	select {
+	case <-sessCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Restart: session did not materialize")
+	}
+
+	// Spin client read loop back up.
+	go h.clientReadLoop()
+
+	// Catch teardown errors at test cleanup.
+	t.Cleanup(func() {
+		_ = h.clientConn.Close()
+		select {
+		case err := <-serveErrCh:
+			if err != nil && err != io.EOF {
+				t.Logf("Restart: server serve exit: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Log("Restart: server serve goroutine did not exit cleanly")
+		}
+		<-h.readerDone
+	})
+
+	// Note: cols/rows captured above are for documentation; the new server
+	// inherits the existing desktop's geometry. If the test changes pane
+	// dimensions across restart, set them on the new desktop here.
+	_ = cols
+	_ = rows
+}
+```
+
+The exact field names (`h.fakeApp.cols`, `EncodeResumeRequest`, etc.) must match what's in the existing code — search for them and adjust if they've drifted.
 
 - [ ] **Step 4: Add two-pane variant.**
 
@@ -2079,6 +2496,10 @@ func TestPaneRenders_AllFourBorders_AfterRehydrate(t *testing.T) {
 	if pane == nil {
 		t.Fatalf("client cache missing pane after rehydrate")
 	}
+	// Content bounds must survive the rehydrate.
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("client content bounds wrong after rehydrate: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
 	if _, ok := pane.DecorRowAt(0); !ok {
 		t.Fatalf("client decoration cache missing rowIdx 0 after rehydrate")
 	}
@@ -2134,10 +2555,19 @@ func TestPaneRenders_AllFourBorders_ScrolledMidHistory(t *testing.T) {
 	}
 	h.WaitForDelta(t, h.paneID, 2*time.Second)
 
+	// Reset the delta tracker so the next WaitForDelta blocks for a NEW delta
+	// triggered by the viewport change. Without this, a stale delta from the
+	// append loop above could be returned and the test would race past the
+	// scroll without observing it.
+	h.ResetDeltaTracker(h.paneID)
+
 	// Scroll off the live edge: autoFollow=false, viewBottom mid-history.
 	h.ApplyViewport(h.paneID, 10, 15, false, false)
 	h.Publish()
-	// Optionally wait for a fetch-range round-trip if the harness has one.
+	// Wait for the post-scroll delta to land — this is when the publisher
+	// re-emits content for the new viewport AND re-emits decoration rows
+	// (since prev[] is reset on viewport change).
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
 
 	pane := h.ClientPane(h.paneID)
 	if pane == nil {
@@ -2182,8 +2612,12 @@ func TestPaneRenders_FocusChangeRepaintsBorders(t *testing.T) {
 	h := newMemHarnessOpts(t, memHarnessOpts{cols: 10, rows: 6, twoPanes: true})
 	defer h.serverConn.Close()
 	h.Publish()
-	h.WaitForDelta(t, h.paneIDs[0], 2*time.Second)
-	h.WaitForDelta(t, h.paneIDs[1], 2*time.Second)
+	deltaA0 := h.WaitForDelta(t, h.paneIDs[0], 2*time.Second)
+	deltaB0 := h.WaitForDelta(t, h.paneIDs[1], 2*time.Second)
+
+	// Capture the initial border style of each pane before focus change.
+	prevBorderA := decorRowsByIdx(deltaA0)
+	prevBorderB := decorRowsByIdx(deltaB0)
 
 	// Snapshot what we've seen so subsequent WaitForDelta returns only NEW deltas.
 	h.ResetDeltaTracker(h.paneIDs[0])
@@ -2200,10 +2634,30 @@ func TestPaneRenders_FocusChangeRepaintsBorders(t *testing.T) {
 	if len(deltaB.DecorRows) == 0 {
 		t.Fatalf("pane B focus gain did not emit DecorRows")
 	}
+
+	// Critical assertion: the new border cells must differ from the old —
+	// otherwise the test passes vacuously when both panes paint identical
+	// chrome regardless of focus state.
+	newBorderA := decorRowsByIdx(deltaA)
+	newBorderB := decorRowsByIdx(deltaB)
+	if reflect.DeepEqual(prevBorderA[0], newBorderA[0]) {
+		t.Fatalf("pane A border at rowIdx 0 did not change on focus loss; theme may be missing an active/inactive distinction")
+	}
+	if reflect.DeepEqual(prevBorderB[0], newBorderB[0]) {
+		t.Fatalf("pane B border at rowIdx 0 did not change on focus gain; theme may be missing an active/inactive distinction")
+	}
+}
+
+// decorRowsByIdx flattens DecorRows into a map keyed by rowIdx for easy
+// per-row comparison. Tiny helper used by focus-change tests.
+func decorRowsByIdx(d protocol.BufferDelta) map[uint16][]protocol.CellSpan {
+	out := make(map[uint16][]protocol.CellSpan, len(d.DecorRows))
+	for _, r := range d.DecorRows {
+		out[r.RowIdx] = r.Spans
+	}
+	return out
 }
 ```
-
-`ResetDeltaTracker` is a small helper on the harness that clears the entry for a pane in the `lastDelta` map so the next `WaitForDelta` blocks until a fresh delta arrives. Add it as part of the Task 11.5 helpers or here, whichever lands first.
 
 - [ ] **Step 2-5: Red, green, run, commit.**
 
@@ -2293,7 +2747,12 @@ No commit for this task — verification only.
 - [ ] **Decoration contiguity invariant** is documented in spec; tests rely on it.
 - [ ] **Zero-content state** is consistently treated: server emits `NumContentRows == 0`; client `onBufferDelta` returns early; client `rowSourceForPane` reads decoration for every rowIdx; no overloaded sentinel.
 - [ ] **`decorRows` lock discipline:** all writes under `pane.rowsMu.Lock()`; all reads via `DecorRowAt` (which takes `pane.rowsMu.RLock()`); `ResetRevisions` takes per-pane `rowsMu.Lock()` before nilling; renderer never touches `pane.decorRows` directly.
-- [ ] **Decoder rejects truncated v3:** `len(b) < 2` for the `DecorRows` count returns `ErrPayloadShort`; no v2 silent-accept fallback (project policy: no backward compat).
+- [ ] **Decoder rejects truncated v3:** `len(b) < 2` for the `DecorRows` count returns `ErrPayloadShort`; mid-row truncation also returns `ErrPayloadShort`; `RowIdx > MaxDecorRowIdx` returns `ErrInvalidSpan`. No v2 silent-accept fallback (project policy: no backward compat).
+- [ ] **`DecorRowAt` returns a copy:** the slice returned to the renderer is independent of the internal cache; concurrent `ApplyDelta` mutations cannot tear it. Test: `TestApplyDelta_ConcurrentDecorRowsReadWrite` exercises read+write under `-race`.
+- [ ] **`DirtyRows` is always nil after `ApplyDelta`:** prevents the pre-existing key-space mix between gid-relative content rows and absolute-rowIdx decoration rows.
+- [ ] **`computeContentBounds` rejects non-contiguous content:** logs and returns `(0, 0)` rather than producing a bogus range.
+- [ ] **`decorMissSeen` is cleared on session reuse:** Plan D2's `applyPostResumeReset` calls `state.resetDecorationMissTracker()`. Test: `TestPostResumeReset_ClearsDecorationMissTracker`.
+- [ ] **Focus-change test asserts active vs inactive cells differ** (Task 15): without this, the test passes vacuously when both panes paint identical chrome.
 - [ ] **Alt-screen path** is unchanged for non-decoration cells; `bufferToDelta` short-circuits decoration emission for `snap.AltScreen=true`.
 - [ ] **Race-detector run** before opening PR: `go test -race -count=1 ./protocol/ ./client/ ./internal/runtime/...`. Address any new races.
 - [ ] **Manual e2e Task 16** completed; observations noted in PR description.
