@@ -25,6 +25,7 @@ type PaneState struct {
 	UpdatedAt        time.Time
 	rowsMu           sync.RWMutex
 	rows             map[int][]Cell
+	decorRows        map[uint16][]Cell // unexported; guarded by rowsMu (decoration: borders + app statusbar)
 	Title            string
 	Rect             clientRect
 	Active           bool
@@ -32,10 +33,39 @@ type PaneState struct {
 	ZOrder           int
 	HandlesSelection bool
 
+	// Content bounds (populated from PaneSnapshot). For non-altScreen panes,
+	// rowIdx in [ContentTopRow, ContentTopRow + NumContentRows - 1] maps to
+	// gid via the viewport tracker; rowIdx outside that range reads from
+	// decorRows via DecorRowAt. NumContentRows == 0 means the pane has zero
+	// content rows (status panes, all-decoration apps).
+	ContentTopRow  uint16
+	NumContentRows uint16
+
 	// Dirty tracking for incremental rendering.
 	Dirty       bool         // true when pane has new content since last render
 	DirtyRows   map[int]bool // nil = all rows dirty; non-nil = only listed rows
 	HasAnimated bool         // true if any cell has animated DynFG/DynBG
+}
+
+// DecorRowAt returns a *copy* of the cells for an absolute decoration
+// rowIdx, or (nil, false) if no decoration has been applied to that row.
+// Returning a copy (rather than the internal slice) means the renderer can
+// hold the result across the frame without racing concurrent ApplyDelta
+// writes to the same rowIdx. Allocation is bounded — at most ~4 decoration
+// rows × pane width per render frame.
+func (p *PaneState) DecorRowAt(rowIdx uint16) ([]Cell, bool) {
+	if p == nil {
+		return nil, false
+	}
+	p.rowsMu.RLock()
+	defer p.rowsMu.RUnlock()
+	src, ok := p.decorRows[rowIdx]
+	if !ok {
+		return nil, false
+	}
+	out := make([]Cell, len(src))
+	copy(out, src)
+	return out, true
 }
 
 // ClearDirty resets the dirty flags after rendering.
@@ -233,6 +263,8 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 			c.panes[paneSnap.PaneID] = pane
 		}
 		pane.Title = paneSnap.Title
+		pane.ContentTopRow = paneSnap.ContentTopRow
+		pane.NumContentRows = paneSnap.NumContentRows
 		pane.UpdatedAt = time.Now().UTC()
 		if paneSnap.Revision != 0 || pane.Revision == 0 {
 			pane.Revision = paneSnap.Revision

@@ -324,3 +324,27 @@ func TestPaneState_DirtyOnDelta(t *testing.T) {
 		t.Error("row 0 should not be dirty")
 	}
 }
+
+func TestApplySnapshot_PopulatesContentBounds(t *testing.T) {
+	cache := NewBufferCache()
+	id := [16]byte{0xab}
+	snapshot := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID:         id,
+			Title:          "t",
+			Width:          10,
+			Height:         6,
+			ContentTopRow:  1,
+			NumContentRows: 4,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	}
+	cache.ApplySnapshot(snapshot)
+	pane := cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane not registered")
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("content bounds not applied: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+}
