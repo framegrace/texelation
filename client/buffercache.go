@@ -650,6 +650,9 @@ func (c *BufferCache) ResetRevisions() {
 	defer c.mu.Unlock()
 	for _, pane := range c.panes {
 		pane.Revision = 0
+		pane.rowsMu.Lock()
+		pane.decorRows = nil
+		pane.rowsMu.Unlock()
 	}
 }
 
