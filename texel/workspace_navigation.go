@@ -84,6 +84,30 @@ func (w *Workspace) setBorderResizing(border *selectedBorder, resizing bool) {
 	})
 }
 
+// FocusByID activates the pane in this workspace whose ID matches the given
+// 16-byte identifier. Returns true if the focus actually moved (i.e. the
+// target was found and was not already active). Used by integration tests
+// and any external caller that needs to drive focus without simulating
+// keyboard navigation.
+func (w *Workspace) FocusByID(id [16]byte) bool {
+	if w == nil || w.tree == nil {
+		return false
+	}
+	var target *Node
+	w.tree.Traverse(func(n *Node) {
+		if target != nil {
+			return
+		}
+		if n.Pane != nil && n.Pane.ID() == id {
+			target = n
+		}
+	})
+	if target == nil {
+		return false
+	}
+	return w.activateLeaf(target)
+}
+
 func (w *Workspace) activateLeaf(node *Node) bool {
 	if w == nil || node == nil || node.Pane == nil || w.tree == nil {
 		return false

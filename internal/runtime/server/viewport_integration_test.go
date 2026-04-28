@@ -18,6 +18,7 @@ package server
 import (
 	"fmt"
 	"io"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -1066,13 +1067,9 @@ func (h *memHarness) ResetDeltaTracker(paneID [16]byte) {
 	h.lastDelta.reset(paneID)
 }
 
-// FocusPane drives a focus change to the given pane ID. The workspace's
-// internal tree state is unexported and there is no public, non-destructive
-// "focus pane by ID" API on Workspace or DesktopEngine today. For now this
-// helper is a no-op when paneID already matches ActivePane().ID(), and
-// otherwise fatals with a TODO. Task 15 is expected to either inline a
-// keyboard-event-based focus drive or add a public Workspace.FocusByID
-// API in the texel package.
+// FocusPane drives a focus change to the given pane ID via the public
+// Workspace.FocusByID API added for Task 15. No-op when the target is
+// already active.
 func (h *memHarness) FocusPane(paneID [16]byte) {
 	h.t.Helper()
 	ws := h.desktop.ActiveWorkspace()
@@ -1082,7 +1079,9 @@ func (h *memHarness) FocusPane(paneID [16]byte) {
 	if cur := ws.ActivePane(); cur != nil && cur.ID() == paneID {
 		return
 	}
-	h.t.Fatalf("FocusPane: target %x is not currently active and no public focus-by-ID API exists; Task 15 must add one (or inline a keyboard event)", paneID)
+	if !ws.FocusByID(paneID) {
+		h.t.Fatalf("FocusPane: FocusByID(%x) returned false (pane not found in active workspace)", paneID)
+	}
 }
 
 // Restart shuts the in-process server down, recreates the Manager + Server
@@ -1438,5 +1437,128 @@ func TestPaneRenders_AllFourBorders_ScrolledMidHistory(t *testing.T) {
 	}
 	if _, ok := pane.DecorRowAt(5); !ok {
 		t.Fatalf("scrolled state lost bottom border decoration")
+	}
+}
+
+// decorRowResolvedAt returns the (text, style-entry) pairs of a decoration
+// row at rowIdx in d, with span StyleIndex resolved against d.Styles. This
+// makes equality comparisons across two deltas meaningful: the per-delta
+// StyleIndex values are not stable, but the underlying StyleEntry values
+// are. Returns nil if the row is not present.
+type resolvedSpan struct {
+	Text  string
+	Style protocol.StyleEntry
+}
+
+func decorRowResolved(d protocol.BufferDelta, rowIdx uint16) []resolvedSpan {
+	for _, r := range d.DecorRows {
+		if r.RowIdx != rowIdx {
+			continue
+		}
+		out := make([]resolvedSpan, len(r.Spans))
+		for i, sp := range r.Spans {
+			var style protocol.StyleEntry
+			if int(sp.StyleIndex) < len(d.Styles) {
+				style = d.Styles[sp.StyleIndex]
+			}
+			out[i] = resolvedSpan{Text: sp.Text, Style: style}
+		}
+		return out
+	}
+	return nil
+}
+
+// TestPaneRenders_FocusChangeRepaintsBorders verifies that a focus change
+// in a two-pane workspace causes BOTH panes to ship fresh decoration rows
+// AND that the new border cells differ from the old (i.e. the active vs
+// inactive theme distinction round-trips through bufferToDelta and the
+// client-side ApplyDelta paths exercised by Tasks 7-14).
+func TestPaneRenders_FocusChangeRepaintsBorders(t *testing.T) {
+	// Workspace.PerformSplit enforces MinPaneWidth=20 / MinPaneHeight=8;
+	// twoPanes splits Vertical so cols must be >= 40.
+	const cols, rows = 40, 8
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: cols, rows: rows, twoPanes: true})
+	defer h.serverConn.Close()
+
+	// Drive the initial snapshot+delta cycle so both panes have shipped at
+	// least one BufferDelta and we have a baseline to compare against.
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: cols, Rows: rows})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+	h.ApplyViewport(h.paneIDs[0], 0, 3, true, false)
+	h.ApplyViewport(h.paneIDs[1], 0, 3, true, false)
+	h.Publish()
+
+	deltaA0 := h.WaitForDelta(t, h.paneIDs[0], 2*time.Second)
+	deltaB0 := h.WaitForDelta(t, h.paneIDs[1], 2*time.Second)
+	if len(deltaA0.DecorRows) == 0 {
+		t.Fatalf("pane A initial delta missing DecorRows")
+	}
+	if len(deltaB0.DecorRows) == 0 {
+		t.Fatalf("pane B initial delta missing DecorRows")
+	}
+
+	// Capture the initial border style of each pane before focus change.
+	// Resolve StyleIndex against the per-delta Styles table so the
+	// post-focus comparison is style-content-aware (per-delta StyleIndex
+	// values themselves are not stable across deltas).
+	prevBorderA := decorRowResolved(deltaA0, 0)
+	prevBorderB := decorRowResolved(deltaB0, 0)
+
+	// Snapshot what we've seen so subsequent WaitForDelta returns only NEW
+	// deltas triggered by the focus change.
+	h.ResetDeltaTracker(h.paneIDs[0])
+	h.ResetDeltaTracker(h.paneIDs[1])
+
+	// Confirm the workspace's notion of "active" matches paneIDs[0] before
+	// we drive the change, so the post-focus deltas really do represent a
+	// transition. (twoPanes=true splits via PerformSplit which leaves the
+	// new leaf active per Tree.SplitActive semantics, so paneIDs[1] is
+	// actually the active one at this point — driving FocusPane back to
+	// paneIDs[1] after toggling away tests the same invariant either way.)
+	ws := h.desktop.ActiveWorkspace()
+	if ws == nil || ws.ActivePane() == nil {
+		t.Fatalf("no active pane in workspace before focus drive")
+	}
+	curID := ws.ActivePane().ID()
+	var targetID [16]byte
+	if curID == h.paneIDs[0] {
+		targetID = h.paneIDs[1]
+	} else {
+		targetID = h.paneIDs[0]
+	}
+
+	h.FocusPane(targetID)
+	h.Publish()
+
+	deltaA := h.WaitForDelta(t, h.paneIDs[0], 2*time.Second)
+	deltaB := h.WaitForDelta(t, h.paneIDs[1], 2*time.Second)
+	if len(deltaA.DecorRows) == 0 {
+		t.Fatalf("pane A focus toggle did not emit DecorRows")
+	}
+	if len(deltaB.DecorRows) == 0 {
+		t.Fatalf("pane B focus toggle did not emit DecorRows")
+	}
+
+	// Critical assertion: the new border cells must differ from the old —
+	// otherwise the test passes vacuously when both panes paint identical
+	// chrome regardless of focus state. Comparing resolved styles (text +
+	// fully-decoded StyleEntry) catches the active/inactive theme color
+	// difference even when per-delta StyleIndex numbering shifts.
+	newBorderA := decorRowResolved(deltaA, 0)
+	newBorderB := decorRowResolved(deltaB, 0)
+	if prevBorderA == nil || newBorderA == nil {
+		t.Fatalf("pane A missing rowIdx 0 decoration row (prev=%v new=%v)", prevBorderA, newBorderA)
+	}
+	if prevBorderB == nil || newBorderB == nil {
+		t.Fatalf("pane B missing rowIdx 0 decoration row (prev=%v new=%v)", prevBorderB, newBorderB)
+	}
+	if reflect.DeepEqual(prevBorderA, newBorderA) {
+		t.Fatalf("pane A border at rowIdx 0 did not change on focus toggle; theme may be missing an active/inactive distinction\nprev=%+v\nnew=%+v", prevBorderA, newBorderA)
+	}
+	if reflect.DeepEqual(prevBorderB, newBorderB) {
+		t.Fatalf("pane B border at rowIdx 0 did not change on focus toggle; theme may be missing an active/inactive distinction\nprev=%+v\nnew=%+v", prevBorderB, newBorderB)
 	}
 }

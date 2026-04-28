@@ -170,7 +170,10 @@ func (p *DesktopPublisher) publishSnapshotsLocked(buffers []texel.PaneSnapshot) 
 		rev := p.session.NextRevision(snap.ID)
 		prev := p.prevBuffers[snap.ID]
 		delta := bufferToDelta(snap, prev, rev, vp)
-		if len(delta.Rows) == 0 {
+		// Allow decoration-only deltas (e.g. focus change repaints just the
+		// borders): a delta is meaningful if either content rows or
+		// decoration rows changed since the previous frame.
+		if len(delta.Rows) == 0 && len(delta.DecorRows) == 0 {
 			continue
 		}
 		// Only clone when there are actual changes — avoids massive GC
