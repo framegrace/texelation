@@ -314,6 +314,13 @@ type memHarnessOpts struct {
 	cols, rows int
 	twoPanes   bool
 	persistDir string // if non-empty, mgr.EnablePersistence is called with this
+	// seedFeed is fed into the primary fake app via FeedRows(0, seedFeed)
+	// BEFORE the handshake completes, so the initial TreeSnapshot the server
+	// ships during connect carries non-default ContentTopRow / NumContentRows.
+	// Tests that need the client cache to observe content bounds on a clean
+	// start must use this rather than calling FeedRows post-handshake (where
+	// the snapshot has already been sent with NumContentRows == 0).
+	seedFeed []string
 }
 
 // lastDeltaTracker remembers the most recent BufferDelta per pane and lets
@@ -410,6 +417,9 @@ func newMemHarnessOpts(t *testing.T, opts memHarnessOpts) *memHarness {
 		return a
 	}
 	primary := makeFake()
+	if len(opts.seedFeed) > 0 {
+		primary.FeedRows(0, opts.seedFeed)
+	}
 	driver := vpScreenDriver{cols: cols, rows: rows}
 	lifecycle := texel.NoopAppLifecycle{}
 	// Shell factory: hand out the first fake on the initial call, then
@@ -1161,4 +1171,70 @@ func (h *memHarness) Restart(t *testing.T) {
 		}
 		<-h.readerDone
 	})
+}
+
+// TestPaneRenders_AllFourBorders_CleanStart verifies that on a clean start
+// with no rehydrate, the publisher emits decoration rows for both the top
+// and bottom pane borders, and that the client cache observes the correct
+// content bounds (ContentTopRow / NumContentRows) plus populated decoration
+// rows for both border rowIdxs.
+func TestPaneRenders_AllFourBorders_CleanStart(t *testing.T) {
+	// Seed the primary fake with 6 main-screen rows BEFORE handshake so the
+	// initial TreeSnapshot the server ships during connect carries
+	// ContentTopRow=1 / NumContentRows=4. With h=6, capturePaneSnapshot
+	// writes RowGlobalIdx[1..4] (rowIdx 0 + 5 stay -1 as borders).
+	feed := make([]string, 6)
+	for i := range feed {
+		feed[i] = "row-content"
+	}
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: 10, rows: 6, seedFeed: feed})
+	defer h.serverConn.Close()
+
+	// Send MsgClientReady so the server runs handleClientReady, which calls
+	// sink.Snapshot() and ships an initial MsgTreeSnapshot. Because the fake
+	// is already seeded, that snapshot carries ContentTopRow=1 /
+	// NumContentRows=4 for the primary pane.
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: 10, Rows: 6})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+
+	// Send a viewport so the publisher emits the main-screen pane. Content
+	// gids land in rowGIDs[0..3] (the first 4 of 6 rebuilt entries) once
+	// capturePaneSnapshot drops the border slots, so the visible window is
+	// gids 0..3.
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+
+	// First publish primes the buffer + ships the initial deltas.
+	h.Publish()
+
+	delta := h.WaitForDelta(t, h.paneID, 2*time.Second)
+	if len(delta.DecorRows) == 0 {
+		t.Fatal("expected DecorRows for at least the top + bottom borders")
+	}
+	rowIdxs := map[uint16]bool{}
+	for _, r := range delta.DecorRows {
+		rowIdxs[r.RowIdx] = true
+	}
+	if !rowIdxs[0] || !rowIdxs[5] {
+		t.Fatalf("expected decoration rows at rowIdx 0 and 5, got %v", rowIdxs)
+	}
+
+	// Verify content bounds reached the client cache.
+	pane := h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane %x", h.paneID)
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("client content bounds wrong: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+
+	// And the cache has decoration rows for both borders.
+	if _, ok := pane.DecorRowAt(0); !ok {
+		t.Fatalf("client decoration cache missing rowIdx 0")
+	}
+	if _, ok := pane.DecorRowAt(5); !ok {
+		t.Fatalf("client decoration cache missing rowIdx 5")
+	}
 }
