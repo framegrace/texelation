@@ -325,6 +325,8 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		},
 	}
 	// p.app might be nil if capturing during split before attach, or if app crashed
+	var appIdx []int64
+	hasRowProvider := false
 	if p.app != nil {
 		if provider, ok := p.app.(SnapshotProvider); ok {
 			appType, config := provider.SnapshotMetadata()
@@ -334,9 +336,10 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		// Terminal-like apps expose per-row globalIdxs for their rendered
 		// content. The content buffer sits inside a 1-cell border at (1,1),
 		// so offset entries by +1 and stop short of the bottom-border row.
-		rowProvider, hasRowProvider := p.app.(RowGlobalIdxProvider)
+		rowProvider, ok := p.app.(RowGlobalIdxProvider)
+		hasRowProvider = ok
 		if hasRowProvider {
-			appIdx := rowProvider.RowGlobalIdx()
+			appIdx = rowProvider.RowGlobalIdx()
 			h := len(buf)
 			// Last writable interior row is h-2 (h-1 is the bottom border).
 			maxInteriorRow := h - 2
@@ -362,7 +365,26 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		snap.Title = "Loading..."
 		snap.AltScreen = true
 	}
-	snap.ContentTopRow, snap.NumContentRows = computeContentBounds(snap.RowGlobalIdx)
+	// ContentTopRow / NumContentRows describe the STRUCTURAL content area
+	// of the pane, independent of which content rows have actually been
+	// written. The client uses NumContentRows to compute the viewport
+	// anchor (top = maxGid - (NumContentRows-1)); deriving it from
+	// populated-gid count makes the viewport collapse to a sliver as
+	// content trickles in, which causes the server-side clip to drop
+	// earlier rows. Compute structurally instead: 1..h-2 is the pane
+	// interior; if the app reports a trailing decoration row (texterm
+	// internal statusbar pattern, where appIdx[last] < 0), shrink by 1.
+	h := len(buf)
+	if hasRowProvider && !snap.AltScreen && h > 2 {
+		n := h - 2
+		if len(appIdx) > 0 && appIdx[len(appIdx)-1] < 0 {
+			n--
+		}
+		if n > 0 {
+			snap.ContentTopRow = 1
+			snap.NumContentRows = uint16(n)
+		}
+	}
 	return snap
 }
 
