@@ -752,6 +752,223 @@ func TestRowSourceForPane_GeometrySnapshotPreservesContentBounds(t *testing.T) {
 	}
 }
 
+// TestIncrementalComposite_ContentRowBordersSurvive exercises the full
+// incremental render path for a content row with `│` borders at col 0
+// and col W-1. Reproduces the 1-column shift bug at the renderer level:
+//
+//   - Snapshot establishes geometry with ContentTopRow / NumContentRows.
+//   - BufferDelta carries a content row with borders + content.
+//   - Pane is marked Dirty by ApplyDelta.
+//   - incrementalComposite reads via rowSourceForPane and writes to prevBuffer.
+//
+// Asserts state.prevBuffer at the pane's content row has `│` at col 0
+// and col W-1. If this fails, the bug is in incrementalComposite or
+// downstream of rowSourceForPane.
+func TestIncrementalComposite_ContentRowBordersSurvive(t *testing.T) {
+	state := makeStateWithViewports()
+	state.defaultStyle = tcell.StyleDefault
+	id := paneID(0xb1)
+
+	const h, w = int32(5), int32(10)
+	const contentTop, numContent uint16 = 1, 3
+
+	snap := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, X: 0, Y: 0, Width: w, Height: h,
+			ContentTopRow: contentTop, NumContentRows: numContent,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	}
+	state.cache.ApplySnapshot(snap)
+	state.onTreeSnapshot(snap)
+
+	// Build the content row: '│' + "hello" + spaces + '│'.
+	full := make([]rune, w)
+	for i := range full {
+		full[i] = ' '
+	}
+	full[0] = '│'
+	full[w-1] = '│'
+	greeting := []rune("hello")
+	for i, r := range greeting {
+		full[1+i] = r
+	}
+
+	const promptGid int64 = 100
+	const rowBase int64 = 80
+	delta := protocol.BufferDelta{
+		PaneID:   id,
+		RowBase:  rowBase,
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{}},
+		Rows: []protocol.RowDelta{{
+			Row: uint16(promptGid - rowBase),
+			Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: string(full), StyleIndex: 0},
+			},
+		}},
+		// Ship the top + bottom borders as decoration so the renderer can
+		// resolve rowIdx 0 and rowIdx h-1 without falling through to nil.
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: "╭────────╮", StyleIndex: 0},
+			}},
+			{RowIdx: uint16(h) - 1, Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: "╰────────╯", StyleIndex: 0},
+			}},
+		},
+	}
+
+	state.cache.ApplyDelta(delta)
+	state.paneCacheFor(id).ApplyDelta(delta)
+	state.onBufferDelta(delta)
+
+	// Allocate prev/render buffers and run incremental composite.
+	ensureBuffers(state, int(w), int(h))
+	hasDyn := incrementalComposite(state, int(w), int(h))
+	_ = hasDyn
+
+	// The content row sits at lastContent = ContentTopRow + NumContentRows - 1.
+	lastContent := int(contentTop) + int(numContent) - 1
+	r := state.prevBuffer[lastContent]
+	if r[0].Ch != '│' {
+		t.Fatalf("incrementalComposite col 0 = %q, want '│' (1-col shift bug — content overran left border)", r[0].Ch)
+	}
+	if r[int(w)-1].Ch != '│' {
+		t.Fatalf("incrementalComposite col W-1 = %q, want '│' (right border missing)", r[int(w)-1].Ch)
+	}
+	for i, want := range greeting {
+		if r[1+i].Ch != want {
+			t.Fatalf("incrementalComposite col %d = %q, want %q", 1+i, r[1+i].Ch, want)
+		}
+	}
+}
+
+// TestRowSourceForPane_ContentRowBordersSurviveDelta is the renderer-side
+// regression for the 1-column horizontal shift bug (issue #199 follow-up).
+//
+// Symptom: After a clean ./bin/texelation start, the user types any
+// command and presses enter. The pane content shifts one column LEFT —
+// content overwrites col 0 (where the left border `│` was) and col W-1
+// goes blank. Pressing Ctrl-A (control-mode toggle, which forces a
+// full-render path via workspace effect activation) snaps everything
+// back. Typing again reproduces the shift.
+//
+// The shift is invisible on rows with no content (e.g., blank scrollback
+// lines): those flow through the DecorRowDelta channel and stay
+// positional, so their borders remain. Only rows whose `gid >= 0` (i.e.,
+// rows the renderer reads via `PaneCache.RowAt(gid)`) lose their border.
+//
+// This test exercises the full content-row path:
+//
+//  1. Server-style snapshot with a content row whose col 0 / col W-1 are
+//     `│` (matching what `pane.renderBuffer` produces — the texterm child
+//     draws inside the border, the border widget paints `│` at the edges).
+//  2. bufferToDelta encodes; protocol round-trips; PaneCache stores.
+//  3. rowSourceForPane resolves the content rowIdx via gid lookup.
+//  4. Asserts the returned row has `│` at col 0 and col W-1.
+//
+// If this fails, the bug is somewhere in the encode → decode → PaneCache
+// → rowSourceForPane content-row path. If it passes, the bug is in the
+// composite/render layer (incrementalComposite vs compositeInto).
+func TestRowSourceForPane_ContentRowBordersSurviveDelta(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xb0)
+
+	const h, w = int32(5), int32(10)
+	const contentTop, numContent uint16 = 1, 3
+
+	// 1. TreeSnapshot establishes geometry + structural bounds.
+	snap := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, X: 0, Y: 0, Width: w, Height: h,
+			ContentTopRow: contentTop, NumContentRows: numContent,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	}
+	state.cache.ApplySnapshot(snap)
+	state.onTreeSnapshot(snap)
+
+	// 2. Build a content row matching what `pane.renderBuffer` produces:
+	//    col 0      = '│' (left border drawn by Border widget)
+	//    col 1..W-2 = "hello   " (texterm content, padded with spaces)
+	//    col W-1    = '│' (right border)
+	const promptGid int64 = 100
+	rowFull := make([]client.Cell, w)
+	for i := range rowFull {
+		rowFull[i] = client.Cell{Ch: ' ', Style: tcell.StyleDefault}
+	}
+	rowFull[0] = client.Cell{Ch: '│', Style: tcell.StyleDefault}
+	rowFull[w-1] = client.Cell{Ch: '│', Style: tcell.StyleDefault}
+	greeting := []rune("hello")
+	for i, r := range greeting {
+		rowFull[1+i] = client.Cell{Ch: r, Style: tcell.StyleDefault}
+	}
+
+	// Encode the row exactly the way bufferToDelta would: one span per
+	// column for distinct chars, grouped by style. Because all cells share
+	// StyleDefault here, encodeRow produces one span starting at col 0
+	// covering the entire row.
+	flatText := make([]rune, w)
+	for i, c := range rowFull {
+		flatText[i] = c.Ch
+	}
+	const rowBase int64 = 80
+	delta := protocol.BufferDelta{
+		PaneID:   id,
+		RowBase:  rowBase,
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{}},
+		Rows: []protocol.RowDelta{{
+			Row: uint16(promptGid - rowBase),
+			Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: string(flatText), StyleIndex: 0},
+			},
+		}},
+	}
+
+	// 3. Wire round-trip + dispatch.
+	encoded, err := protocol.EncodeBufferDelta(delta)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := protocol.DecodeBufferDelta(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	state.cache.ApplyDelta(decoded)
+	state.paneCacheFor(id).ApplyDelta(decoded)
+	state.onBufferDelta(decoded)
+
+	pane := state.cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane missing after delta")
+	}
+
+	// 4. The content row sits at the LAST content rowIdx (autoFollow places
+	//    promptGid at the live edge). Verify rowSourceForPane returns the
+	//    full W-wide row including borders at col 0 and col W-1.
+	lastContent := int(contentTop) + int(numContent) - 1
+	src := rowSourceForPane(state, pane, lastContent)
+	if src == nil {
+		t.Fatalf("rowSourceForPane returned nil for content rowIdx=%d", lastContent)
+	}
+	if len(src) != int(w) {
+		t.Fatalf("rowSourceForPane row length = %d, want %d (full pane width)", len(src), w)
+	}
+	if src[0].Ch != '│' {
+		t.Fatalf("rowSourceForPane col 0 = %q, want '│' (left border lost — 1-col shift bug)", src[0].Ch)
+	}
+	if src[int(w)-1].Ch != '│' {
+		t.Fatalf("rowSourceForPane col W-1 = %q, want '│' (right border lost)", src[int(w)-1].Ch)
+	}
+	for i, want := range greeting {
+		if src[1+i].Ch != want {
+			t.Fatalf("rowSourceForPane col %d = %q, want %q", 1+i, src[1+i].Ch, want)
+		}
+	}
+}
+
 // TestRowSourceForPane_DecorationCacheMiss verifies that an empty
 // decoration cache returns nil for a decoration-row lookup.
 func TestRowSourceForPane_DecorationCacheMiss(t *testing.T) {

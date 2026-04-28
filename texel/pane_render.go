@@ -145,8 +145,27 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 		p.wasActive = p.IsActive
 	}
 
-	// Swap buffer reference into the child widget.
+	// Swap buffer reference into the child widget, then re-clamp the
+	// widget to the border's ClientRect.
+	//
+	// BufferWidget.SetBuffer auto-resizes the widget to the buffer's
+	// dimensions. That's wrong here: when the embedded app's buffer
+	// happens to match the OUTER pane size (e.g. a non-resizing test
+	// fake, or a transient state where the app has not yet honoured the
+	// drawable shrink we requested in setDimensions), the widget's draw
+	// loop overruns the pane's right border at col W-1 and the bottom
+	// border at row H-1. Re-clamping to ClientRect (the inner
+	// W-2 × H-2 region at offset (1,1)) restores the contract: the
+	// child paints inside the border, never on top of it. The widget's
+	// Draw loop is bounded by min(widget.Size, len(buffer)), so a
+	// smaller widget with a larger buffer renders only the top-left
+	// portion that fits — the desired behaviour. This is the source-
+	// of-truth fix for the 1-column / 1-row "decoration overrun" the
+	// publisher then dutifully ships to the client.
 	p.bufferWidget.SetBuffer(appBuffer)
+	cr := p.border.ClientRect()
+	p.bufferWidget.SetPosition(cr.X, cr.Y)
+	p.bufferWidget.Resize(cr.W, cr.H)
 
 	// Draw through the persistent widget tree.
 	painter := texelcore.NewPainter(buffer, texelcore.Rect{X: 0, Y: 0, W: w, H: h})

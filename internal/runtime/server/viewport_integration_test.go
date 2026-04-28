@@ -1639,6 +1639,74 @@ func TestPaneRenders_ResizePreservesContentBounds(t *testing.T) {
 	}
 }
 
+// TestPaneRenders_ContentRowSideBorders verifies that for a content row
+// (gid >= 0) the publisher emits a span set covering the FULL pane width,
+// including `│` at col 0 (left border) and `│` at col W-1 (right border).
+//
+// This is the integration-level regression for the 1-column horizontal
+// shift bug: the bug manifests visually as content overrunning col 0 and
+// col W-1 going blank after a BufferDelta updates a content row. If the
+// publisher is dropping the leading / trailing border cell from content-
+// row spans, this test fails. If the test passes, the publisher is doing
+// its job and the shift is somewhere else (client-side composite, or
+// the texterm's own buffer is missing the borders before pane.Render
+// composes them in).
+func TestPaneRenders_ContentRowSideBorders(t *testing.T) {
+	const cols, rows = 10, 6
+	feed := make([]string, 4)
+	for i := range feed {
+		feed[i] = "abcdefgh" // exactly 8 chars = drawable interior (cols-2)
+	}
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: cols, rows: rows, seedFeed: feed})
+	defer h.serverConn.Close()
+
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: cols, Rows: rows})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+
+	// Viewport for the 4 content rows (gids 0..3 land in the visible window).
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+	h.Publish()
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// Pick the highest content gid that the publisher shipped. The harness
+	// records main-screen rows keyed by globalIdx in h.rowsByGID.
+	h.mu.Lock()
+	gids := make([]int64, 0, len(h.rowsByGID))
+	for gid := range h.rowsByGID {
+		gids = append(gids, gid)
+	}
+	h.mu.Unlock()
+	if len(gids) == 0 {
+		t.Fatalf("publisher shipped zero content rows")
+	}
+	// Pick any content gid; they should all carry the side borders.
+	rd := h.AwaitRow(h.paneID, gids[0], 2*time.Second)
+
+	// Concatenate the spans by column to inspect col 0 and col W-1.
+	flat := make([]rune, cols)
+	for i := range flat {
+		flat[i] = ' '
+	}
+	for _, sp := range rd.Spans {
+		for i, r := range []rune(sp.Text) {
+			if int(sp.StartCol)+i < cols {
+				flat[int(sp.StartCol)+i] = r
+			}
+		}
+	}
+	if flat[0] != '│' {
+		t.Fatalf("content row gid=%d col 0 = %q (publisher dropped left border — 1-col shift bug); flat=%q",
+			gids[0], flat[0], string(flat))
+	}
+	if flat[cols-1] != '│' {
+		t.Fatalf("content row gid=%d col W-1 = %q (publisher dropped right border); flat=%q",
+			gids[0], flat[cols-1], string(flat))
+	}
+}
+
 // paneBoundsLocked reads ContentTopRow / NumContentRows under h.mu so the
 // race detector sees a happens-before edge against the client read loop.
 // The reader goroutine acquires h.mu inside clientReadLoop when it stores
