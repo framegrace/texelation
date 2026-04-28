@@ -80,7 +80,15 @@ func (t *viewportTrackers) get(id [16]byte) *paneViewport {
 	if vp, ok = t.panes[id]; ok {
 		return vp
 	}
-	vp = &paneViewport{}
+	// knownBottomGid is initialised to -1 so the zero value (0) is not
+	// mistaken for "we have seen gid 0". This lets onBufferDelta record a
+	// preliminary maxGid even when the tracker is otherwise uninitialised
+	// (Rows == 0), so that a TreeSnapshot arriving AFTER the first delta
+	// can still seed ViewTopIdx / ViewBottomIdx around the rows that have
+	// already been delivered into the PaneCache. Without this seed the
+	// renderer maps content rowIdxs to gid=0, misses every row in
+	// PaneCache, and paints a blank pane until the next snapshot.
+	vp = &paneViewport{knownBottomGid: -1}
 	t.panes[id] = vp
 	return vp
 }
@@ -185,13 +193,40 @@ func (s *clientState) onTreeSnapshot(snap protocol.TreeSnapshot) {
 		// Only initialise if this pane is brand-new.
 		if vp.Rows == 0 {
 			vp.AltScreen = false
-			vp.ViewTopIdx = 0
-			vp.ViewBottomIdx = int64(rows) - 1
 			vp.Rows = rows
 			vp.Cols = cols
 			vp.AutoFollow = true
-			vp.knownBottomGid = -1
 			vp.dirty = true
+			// If a BufferDelta arrived before this snapshot,
+			// vp.knownBottomGid will already hold the highest gid
+			// delivered (preliminary seed from onBufferDelta).
+			// Honour it so the viewport aligns with the rows
+			// already sitting in the PaneCache; otherwise the
+			// renderer maps content rowIdxs to gid=0, the
+			// PaneCache misses every row, and the pane paints
+			// blank until something else dirties the tree.
+			//
+			// Use the structural NumContentRows from the snapshot
+			// (not the geometry rows) when computing ViewTopIdx,
+			// because the AutoFollow live-edge calculation in
+			// onBufferDelta uses the same denominator.
+			contentRows := int64(p.NumContentRows)
+			if contentRows <= 0 {
+				contentRows = int64(rows)
+			}
+			if vp.knownBottomGid >= 0 {
+				bottom := vp.knownBottomGid
+				vp.ViewBottomIdx = bottom
+				top := bottom - (contentRows - 1)
+				if top < 0 {
+					top = 0
+				}
+				vp.ViewTopIdx = top
+			} else {
+				vp.ViewTopIdx = 0
+				vp.ViewBottomIdx = int64(rows) - 1
+				vp.knownBottomGid = -1
+			}
 		} else if vp.Rows != rows || vp.Cols != cols {
 			// Geometry changed — update dims and mark dirty. When
 			// AutoFollow is true, ALSO recompute ViewTopIdx /
@@ -243,11 +278,11 @@ func (s *clientState) onBufferDelta(delta protocol.BufferDelta) {
 		return
 	}
 
-	if !vp.AutoFollow || vp.Rows == 0 {
-		return
-	}
-
-	// AutoFollow on main-screen: advance view to track the live bottom.
+	// Compute the highest gid in this delta. We need it for two things:
+	//   (a) advancing the viewport when AutoFollow is on (the normal path);
+	//   (b) seeding knownBottomGid when the tracker hasn't been initialised
+	//       yet (Rows == 0), so a TreeSnapshot arriving AFTER this delta can
+	//       still align ViewTopIdx with the rows already in PaneCache.
 	var maxGid int64 = -1
 	for _, row := range delta.Rows {
 		gid := delta.RowBase + int64(row.Row)
@@ -255,6 +290,21 @@ func (s *clientState) onBufferDelta(delta protocol.BufferDelta) {
 			maxGid = gid
 		}
 	}
+
+	if vp.Rows == 0 {
+		// Tracker not yet initialised by a TreeSnapshot. Record the
+		// highest delivered gid so onTreeSnapshot can seed the viewport
+		// around the live edge instead of around gid=0.
+		if maxGid >= 0 && maxGid > vp.knownBottomGid {
+			vp.knownBottomGid = maxGid
+		}
+		return
+	}
+
+	if !vp.AutoFollow {
+		return
+	}
+
 	if maxGid < 0 || maxGid <= vp.knownBottomGid {
 		return
 	}

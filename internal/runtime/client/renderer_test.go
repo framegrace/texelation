@@ -492,6 +492,173 @@ func TestRowSourceForPane_DecorationLayer(t *testing.T) {
 	}
 }
 
+// TestRowSourceForPane_DeltaBeforeSnapshot reproduces the runtime bug
+// reported in issue #199 follow-up:
+//
+//   - User runs `./bin/texelation --reset-state`.
+//   - Server publishes `MsgBufferDelta` with the prompt row before the client
+//     has any viewport tracker initialised. The delta carries
+//     `RowBase = ViewTopIdx - Rows` (server's view of clip-offset; e.g. 100
+//     because the server's saved ViewTopIdx is non-zero and overscan is
+//     subtracted), and the prompt is encoded with `Row` such that
+//     `gid = RowBase + Row` matches the actual write.
+//   - On the client, the dispatch order is:
+//     1. `cache.ApplyDelta(delta)`           — populates BufferCache.
+//     2. `paneCacheFor(id).ApplyDelta(delta)` — populates PaneCache at gid.
+//     3. `state.onBufferDelta(delta)`         — early-exits because
+//     `vp.AutoFollow == false` (still default-zero state — viewport
+//     tracker has not been initialised yet). `vp.knownBottomGid` and
+//     `vp.ViewTopIdx` stay at zero.
+//   - Then `MsgTreeSnapshot` arrives:
+//     4. `cache.ApplySnapshot(snap)`          — sets pane.Rect /
+//     ContentTopRow / NumContentRows.
+//     5. `state.onTreeSnapshot(snap)`         — sees `vp.Rows == 0`,
+//     initialises tracker with `AutoFollow=true`, `ViewTopIdx=0`,
+//     `ViewBottomIdx=Rows-1`, `knownBottomGid=-1`.
+//
+// At this point the renderer asks `rowSourceForPane(state, pane, contentRow)`.
+// The tracker's `ViewTopIdx` is 0, so the renderer looks up `gid = 0` in
+// PaneCache. But PaneCache stored the prompt at `gid = RowBase + 0 = 100`
+// (or whatever the server's pre-existing viewport hint produced). The
+// content lookup misses, the decoration fallback also misses, and
+// `rowSourceForPane` returns nil — the user sees a blank pane.
+//
+// The fix is to re-run the AutoFollow-advance logic of `onBufferDelta`
+// after `onTreeSnapshot` initialises the tracker, so the tracker can
+// catch up to the rows already sitting in the PaneCache.
+func TestRowSourceForPane_DeltaBeforeSnapshot(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xc0)
+	// h=10, w=20. Texterm-style pane: ContentTopRow=1, NumContentRows=7
+	// (one bottom-border row at h-1 plus an internal statusbar row, both
+	// shipped via the decoration channel).
+	const h, w = int32(10), int32(20)
+	const contentTop, numContent uint16 = 1, 7
+
+	// The server's saved ClientViewport happens to be non-zero. Pretend the
+	// server thinks the client is following the live edge at gid=100 with
+	// rows=numContent=7 and overscan=Rows; clip-offset:
+	//   lo = ViewTopIdx - overscan = (100 - 6) - 7 = 87
+	// The publisher sets RowBase=87 and encodes the prompt at gid=100 as
+	// Row = gid - RowBase = 13. This is the exact scenario where, if the
+	// client's tracker is still at default zeros, looking up "gid 0"
+	// misses every cell that was actually delivered.
+	const rowBase int64 = 87
+	const promptGid int64 = 100
+	delta := protocol.BufferDelta{
+		PaneID:   id,
+		RowBase:  rowBase,
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{}},
+		Rows: []protocol.RowDelta{
+			{Row: uint16(promptGid - rowBase), Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: "PROMPT $", StyleIndex: 0},
+			}},
+		},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "T", StyleIndex: 0}}},
+			{RowIdx: 8, Spans: []protocol.CellSpan{{StartCol: 0, Text: "S", StyleIndex: 0}}},
+			{RowIdx: 9, Spans: []protocol.CellSpan{{StartCol: 0, Text: "B", StyleIndex: 0}}},
+		},
+	}
+
+	// Step 1+2+3: BufferDelta arrives FIRST, before any snapshot.
+	state.cache.ApplyDelta(delta)
+	state.paneCacheFor(id).ApplyDelta(delta)
+	state.onBufferDelta(delta)
+
+	// Sanity: PaneCache holds the prompt at the server-encoded gid.
+	if row, ok := state.paneCacheFor(id).RowAt(promptGid); !ok || len(row) == 0 || row[0].Ch != 'P' {
+		t.Fatalf("PaneCache should hold prompt at gid=%d (got ok=%v row=%+v)", promptGid, ok, row)
+	}
+
+	// Step 4+5: TreeSnapshot arrives AFTER the delta.
+	snap := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, X: 0, Y: 0, Width: w, Height: h,
+			ContentTopRow: contentTop, NumContentRows: numContent,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	}
+	state.cache.ApplySnapshot(snap)
+	state.onTreeSnapshot(snap)
+
+	pane := state.cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane missing after snapshot")
+	}
+
+	// AutoFollow places the prompt (gid=100) at the LAST content row.
+	// rowIdx = ContentTopRow + NumContentRows - 1 = 1 + 7 - 1 = 7.
+	// Without the fix, tracker ViewTopIdx=0 → gid=0, PaneCache miss → nil
+	// → blank render at every content row.
+	lastContent := int(contentTop) + int(numContent) - 1
+	src := rowSourceForPane(state, pane, lastContent)
+	if src == nil {
+		t.Fatalf("BUG: content rowIdx=%d returned nil — bare delta-before-snapshot lost the prompt (PaneCache has gid=%d but tracker ViewTopIdx is not aligned)", lastContent, promptGid)
+	}
+	if src[0].Ch != 'P' {
+		t.Fatalf("expected prompt 'P' at content rowIdx=%d, got %+v", lastContent, src)
+	}
+}
+
+// TestRowSourceForPane_SnapshotBeforeDelta is the reverse-order control:
+// when the snapshot arrives first (so the viewport tracker is fully
+// initialised before any delta), the AutoFollow advance in onBufferDelta
+// runs normally and the prompt is visible. This must pass both before and
+// after the fix; it confirms the bug is order-dependent.
+func TestRowSourceForPane_SnapshotBeforeDelta(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xc1)
+	const h, w = int32(10), int32(20)
+	const contentTop, numContent uint16 = 1, 7
+
+	snap := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, X: 0, Y: 0, Width: w, Height: h,
+			ContentTopRow: contentTop, NumContentRows: numContent,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	}
+	state.cache.ApplySnapshot(snap)
+	state.onTreeSnapshot(snap)
+
+	const rowBase int64 = 87
+	const promptGid int64 = 100
+	delta := protocol.BufferDelta{
+		PaneID:   id,
+		RowBase:  rowBase,
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{}},
+		Rows: []protocol.RowDelta{
+			{Row: uint16(promptGid - rowBase), Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: "PROMPT $", StyleIndex: 0},
+			}},
+		},
+	}
+	state.cache.ApplyDelta(delta)
+	state.paneCacheFor(id).ApplyDelta(delta)
+	state.onBufferDelta(delta)
+
+	pane := state.cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane missing after snapshot")
+	}
+
+	// AutoFollow advance should have set ViewTopIdx so that the LAST
+	// content row holds promptGid. So the LAST content rowIdx
+	// (contentTop+numContent-1 = 7) should map to promptGid and resolve
+	// to the 'P' cell.
+	lastContent := int(contentTop) + int(numContent) - 1
+	src := rowSourceForPane(state, pane, lastContent)
+	if src == nil {
+		t.Fatalf("snapshot-before-delta: last content rowIdx=%d returned nil", lastContent)
+	}
+	if src[0].Ch != 'P' {
+		t.Fatalf("snapshot-before-delta: expected 'P' at last content rowIdx=%d, got %+v", lastContent, src)
+	}
+}
+
 // TestRowSourceForPane_DecorationCacheMiss verifies that an empty
 // decoration cache returns nil for a decoration-row lookup.
 func TestRowSourceForPane_DecorationCacheMiss(t *testing.T) {
