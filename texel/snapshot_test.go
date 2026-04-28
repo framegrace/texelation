@@ -140,3 +140,100 @@ func TestComputeContentBounds_MidRangeHolesTolerated(t *testing.T) {
 		t.Fatalf("expected (1, 3) for [first..last] span across mid-hole, got (%d, %d)", top, num)
 	}
 }
+
+// snapshotTestTerminalApp implements RowGlobalIdxProvider so applyStructuralBounds
+// can exercise the texterm-shaped content path.
+type snapshotTestTerminalApp struct {
+	snapshotTestApp
+	rowIdx []int64
+}
+
+func (a *snapshotTestTerminalApp) RowGlobalIdx() []int64 {
+	out := make([]int64, len(a.rowIdx))
+	copy(out, a.rowIdx)
+	return out
+}
+
+func newTerminalSnapshotPane(w, h int, rowIdx []int64) *pane {
+	p := newPane(nil)
+	p.absX0, p.absY0 = 0, 0
+	p.absX1, p.absY1 = w, h
+	app := &snapshotTestTerminalApp{
+		snapshotTestApp: snapshotTestApp{title: "term", cols: w - 2, rows: h - 2},
+		rowIdx:          rowIdx,
+	}
+	p.app = app
+	return p
+}
+
+// TestApplyStructuralBounds_TerminalPane verifies the geometry-only bounds
+// helper used by GeometryForClient. The pane is a 6-tall texterm-style
+// pane with three populated content gids; the helper must report
+// ContentTopRow=1, NumContentRows=h-2 (=4), AltScreen=false. This is the
+// same answer capturePaneSnapshot returns for the same pane — the two
+// must agree so the resize path (GeometryForClient) does not silently
+// blank the client's content bounds.
+func TestApplyStructuralBounds_TerminalPane(t *testing.T) {
+	rowIdx := []int64{100, 101, 102, 103} // h-2 = 4 entries
+	p := newTerminalSnapshotPane(20, 6, rowIdx)
+
+	var snap PaneSnapshot
+	applyStructuralBounds(&snap, p)
+
+	if snap.AltScreen {
+		t.Fatalf("expected AltScreen=false for terminal pane")
+	}
+	if snap.ContentTopRow != 1 {
+		t.Fatalf("expected ContentTopRow=1, got %d", snap.ContentTopRow)
+	}
+	if snap.NumContentRows != 4 {
+		t.Fatalf("expected NumContentRows=4 (h=6 → h-2), got %d", snap.NumContentRows)
+	}
+
+	// And the answer must match capturePaneSnapshot for the same pane —
+	// otherwise the geometry-only path drifts from the full path.
+	full := capturePaneSnapshot(p)
+	if full.ContentTopRow != snap.ContentTopRow || full.NumContentRows != snap.NumContentRows {
+		t.Fatalf("structural bounds drift: full=(top=%d,num=%d) geometry=(top=%d,num=%d)",
+			full.ContentTopRow, full.NumContentRows, snap.ContentTopRow, snap.NumContentRows)
+	}
+}
+
+// TestApplyStructuralBounds_TerminalPaneWithStatusbar tests the texterm
+// internal-statusbar pattern: appIdx[len-1] < 0 reduces NumContentRows by 1.
+func TestApplyStructuralBounds_TerminalPaneWithStatusbar(t *testing.T) {
+	rowIdx := []int64{100, 101, 102, -1} // statusbar at the bottom
+	p := newTerminalSnapshotPane(20, 6, rowIdx)
+
+	var snap PaneSnapshot
+	applyStructuralBounds(&snap, p)
+
+	if snap.NumContentRows != 3 {
+		t.Fatalf("expected NumContentRows=3 (h=6 → h-2-1), got %d", snap.NumContentRows)
+	}
+	if snap.ContentTopRow != 1 {
+		t.Fatalf("expected ContentTopRow=1, got %d", snap.ContentTopRow)
+	}
+
+	// Must agree with the full snapshot path.
+	full := capturePaneSnapshot(p)
+	if full.ContentTopRow != snap.ContentTopRow || full.NumContentRows != snap.NumContentRows {
+		t.Fatalf("structural bounds drift with trailing statusbar: full=(top=%d,num=%d) geometry=(top=%d,num=%d)",
+			full.ContentTopRow, full.NumContentRows, snap.ContentTopRow, snap.NumContentRows)
+	}
+}
+
+// TestApplyStructuralBounds_NonTerminalPane verifies that an app without
+// RowGlobalIdxProvider gets AltScreen=true and zero content bounds —
+// matching what capturePaneSnapshot would set.
+func TestApplyStructuralBounds_NonTerminalPane(t *testing.T) {
+	p := newSnapshotTestPane(20, 6)
+	var snap PaneSnapshot
+	applyStructuralBounds(&snap, p)
+	if !snap.AltScreen {
+		t.Fatalf("expected AltScreen=true for non-RowGlobalIdxProvider app")
+	}
+	if snap.NumContentRows != 0 {
+		t.Fatalf("expected NumContentRows=0 for non-terminal app, got %d", snap.NumContentRows)
+	}
+}

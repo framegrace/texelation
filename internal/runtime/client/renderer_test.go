@@ -659,6 +659,99 @@ func TestRowSourceForPane_SnapshotBeforeDelta(t *testing.T) {
 	}
 }
 
+// TestRowSourceForPane_GeometrySnapshotPreservesContentBounds covers the
+// resize-blanks-content regression (issue #199 follow-up). On resize the
+// server emits a geometry-only TreeSnapshot via GeometryForClient(); if
+// that snapshot reaches the client with ContentTopRow / NumContentRows
+// zeroed, ApplySnapshot overwrites the pane's previously-correct bounds,
+// rowSourceForPane falls into the decoration-only branch for every interior
+// rowIdx, and content rows paint blank even though the prompt is still in
+// the PaneCache at its real gid.
+//
+// The fix lives server-side: GeometryForClient now populates structural
+// content bounds via applyStructuralBounds, mirroring capturePaneSnapshot.
+// This client-side test covers the matching post-fix invariant: when the
+// server emits a geometry snapshot WITH the structural bounds populated,
+// the client renders the prompt at the correct rowIdx after the resize.
+func TestRowSourceForPane_GeometrySnapshotPreservesContentBounds(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xd0)
+	const h, w = int32(10), int32(20)
+	const contentTop, numContent uint16 = 1, 8
+
+	// Step 1: full snapshot with content bounds populated.
+	fullSnap := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, X: 0, Y: 0, Width: w, Height: h,
+			ContentTopRow: contentTop, NumContentRows: numContent,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	}
+	state.cache.ApplySnapshot(fullSnap)
+	state.onTreeSnapshot(fullSnap)
+
+	const rowBase int64 = 87
+	const promptGid int64 = 100
+	delta := protocol.BufferDelta{
+		PaneID:   id,
+		RowBase:  rowBase,
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{}},
+		Rows: []protocol.RowDelta{
+			{Row: uint16(promptGid - rowBase), Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: "PROMPT $", StyleIndex: 0},
+			}},
+		},
+	}
+	state.cache.ApplyDelta(delta)
+	state.paneCacheFor(id).ApplyDelta(delta)
+	state.onBufferDelta(delta)
+
+	pane := state.cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane missing after initial snapshot+delta")
+	}
+	lastContent := int(contentTop) + int(numContent) - 1
+	if src := rowSourceForPane(state, pane, lastContent); src == nil || src[0].Ch != 'P' {
+		t.Fatalf("baseline failed: expected prompt 'P' at rowIdx=%d before resize, got %+v",
+			lastContent, src)
+	}
+
+	// Step 2: simulate the post-fix resize path. The server emits a
+	// geometry-only snapshot — same pane, same dimensions, AND the
+	// structural ContentTopRow / NumContentRows fields are populated
+	// (the fix). With these in place the client must continue to resolve
+	// the prompt row correctly.
+	geomSnap := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, X: 0, Y: 0, Width: w, Height: h,
+			// Bounds preserved by the server-side GeometryForClient fix.
+			ContentTopRow: contentTop, NumContentRows: numContent,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	}
+	state.cache.ApplySnapshot(geomSnap)
+	state.onTreeSnapshot(geomSnap)
+
+	pane = state.cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane missing after geometry snapshot")
+	}
+	if pane.ContentTopRow != contentTop || pane.NumContentRows != numContent {
+		t.Fatalf("client lost content bounds after geometry snapshot: top=%d num=%d (want top=%d num=%d)",
+			pane.ContentTopRow, pane.NumContentRows, contentTop, numContent)
+	}
+
+	src := rowSourceForPane(state, pane, lastContent)
+	if src == nil {
+		t.Fatalf("post-resize content rowIdx=%d returned nil (NumContentRows=%d, ContentTopRow=%d)",
+			lastContent, pane.NumContentRows, pane.ContentTopRow)
+	}
+	if src[0].Ch != 'P' {
+		t.Fatalf("expected prompt 'P' to survive resize at rowIdx=%d, got %+v", lastContent, src)
+	}
+}
+
 // TestRowSourceForPane_DecorationCacheMiss verifies that an empty
 // decoration cache returns nil for a decoration-row lookup.
 func TestRowSourceForPane_DecorationCacheMiss(t *testing.T) {

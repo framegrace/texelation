@@ -1562,3 +1562,91 @@ func TestPaneRenders_FocusChangeRepaintsBorders(t *testing.T) {
 		t.Fatalf("pane B border at rowIdx 0 did not change on focus toggle; theme may be missing an active/inactive distinction\nprev=%+v\nnew=%+v", prevBorderB, newBorderB)
 	}
 }
+
+// TestPaneRenders_ResizePreservesContentBounds verifies that the
+// geometry-only TreeSnapshot the server emits during a resize carries the
+// pane's structural ContentTopRow / NumContentRows. Without this the
+// client's BufferCache.ApplySnapshot overwrites the previously-correct
+// bounds with zeros, the renderer's rowSourceForPane routes every interior
+// rowIdx through the decoration-only branch, and content rows paint blank
+// until the next full snapshot. See issue #199 follow-up: resize-blanks-
+// content. The fix lives in texel/snapshot.go GeometryForClient — it now
+// calls applyStructuralBounds for each leaf pane, mirroring
+// capturePaneSnapshot's structural calculation without rendering the pane
+// buffer.
+func TestPaneRenders_ResizePreservesContentBounds(t *testing.T) {
+	feed := make([]string, 6)
+	for i := range feed {
+		feed[i] = "row-content"
+	}
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: 10, rows: 6, seedFeed: feed})
+	defer h.serverConn.Close()
+
+	// Drive the initial snapshot+delta cycle (mirrors the clean-start test).
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: 10, Rows: 6})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+	h.Publish()
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// Sanity: client sees correct content bounds before resize.
+	pane := h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane before resize")
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("pre-resize bounds wrong: top=%d num=%d (want top=1 num=4)",
+			pane.ContentTopRow, pane.NumContentRows)
+	}
+
+	// Drive a resize to NEW dimensions so the server-side handleResize
+	// path actually rebuilds geometry instead of short-circuiting on
+	// "no change". Pre-fix, the geometry-only TreeSnapshot has
+	// ContentTopRow=0, NumContentRows=0 — overwriting the client's
+	// previously-correct bounds. Post-fix, the snapshot carries the
+	// structural bounds.
+	h.ResetDeltaTracker(h.paneID)
+	resizePayload, err := protocol.EncodeResize(protocol.Resize{Cols: 12, Rows: 7})
+	if err != nil {
+		t.Fatalf("encode resize: %v", err)
+	}
+	h.writeFrame(protocol.MsgResize, resizePayload, h.sessionID())
+
+	// handleResize ships a TreeSnapshot then publishes deltas. Wait for
+	// the post-resize delta — both messages are processed by the same
+	// reader goroutine in serial order, so by the time the delta is
+	// observed the snapshot's ApplySnapshot() write has already returned.
+	// This synchronises the test goroutine's subsequent pane field reads
+	// against the reader's writes via the shared harness lock that
+	// WaitForDelta acquires.
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// After resize the pane is 7 rows tall (was 6), so the structural
+	// bounds are ContentTopRow=1, NumContentRows=h-2=5. (sparseFakeApp
+	// does not emit a trailing statusbar row.) Read fields under the
+	// harness lock for race-detector cleanliness.
+	pane = h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane after resize")
+	}
+	gotTop, gotNum := paneBoundsLocked(h, pane)
+	if gotTop != 1 || gotNum != 5 {
+		t.Fatalf("post-resize content bounds wrong: top=%d num=%d (want top=1 num=5) — geometry snapshot blanked the bounds, the resize-blanks-content regression has returned",
+			gotTop, gotNum)
+	}
+}
+
+// paneBoundsLocked reads ContentTopRow / NumContentRows under h.mu so the
+// race detector sees a happens-before edge against the client read loop.
+// The reader goroutine acquires h.mu inside clientReadLoop when it stores
+// per-row state; serialising bounds reads through the same lock pins the
+// happens-before edge. Sufficient for the bounds-invariant assertions this
+// suite makes.
+func paneBoundsLocked(h *memHarness, pane *client.PaneState) (uint16, uint16) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return pane.ContentTopRow, pane.NumContentRows
+}

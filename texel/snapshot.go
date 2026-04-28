@@ -199,6 +199,16 @@ func (d *DesktopEngine) GeometryForClient() TreeCapture {
 							Height: n.Pane.Height(),
 						},
 					}
+					// Populate structural content bounds + AltScreen flag so
+					// the geometry-only snapshot carries the same content/layout
+					// metadata the full snapshot would. Without these, the client
+					// applies the snapshot during a resize, overwrites the pane's
+					// previously-correct ContentTopRow / NumContentRows with
+					// zeros, and then routes every interior rowIdx through the
+					// decoration-only branch of rowSourceForPane — leaving the
+					// content rows blank until the next full snapshot arrives.
+					// See issue #199 follow-up: "resize blanks content."
+					applyStructuralBounds(&snap, n.Pane)
 					paneIndex[n.Pane] = len(capture.Panes)
 					capture.Panes = append(capture.Panes, snap)
 				}
@@ -224,6 +234,45 @@ func (d *DesktopEngine) GeometryForClient() TreeCapture {
 		capture.Panes = append(capture.Panes, floating...)
 	}
 	return capture
+}
+
+// applyStructuralBounds populates snap.ContentTopRow, snap.NumContentRows,
+// and snap.AltScreen from the pane's app metadata WITHOUT rendering the
+// pane buffer. Mirrors the structural calculation in capturePaneSnapshot
+// (lines around `if hasRowProvider && !snap.AltScreen && h > 2`) so the
+// geometry-only snapshot used during resize carries the same bounds the
+// full snapshot would. The pane's height drives the structural answer; we
+// only need RowGlobalIdx() to detect the texterm "trailing statusbar"
+// pattern (last entry < 0).
+func applyStructuralBounds(snap *PaneSnapshot, p *pane) {
+	if p == nil || p.app == nil {
+		// Placeholder pane: no content bounds, alt-screen-equivalent.
+		snap.AltScreen = true
+		return
+	}
+	h := p.Height()
+	rowProvider, hasRowProvider := p.app.(RowGlobalIdxProvider)
+	if !hasRowProvider {
+		snap.AltScreen = true
+		return
+	}
+	if altProvider, ok := p.app.(AltScreenProvider); ok && altProvider.InAltScreen() {
+		snap.AltScreen = true
+		return
+	}
+	if h <= 2 {
+		return
+	}
+	n := h - 2
+	appIdx := rowProvider.RowGlobalIdx()
+	if len(appIdx) > 0 && appIdx[len(appIdx)-1] < 0 {
+		n--
+	}
+	if n <= 0 {
+		return
+	}
+	snap.ContentTopRow = 1
+	snap.NumContentRows = uint16(n)
 }
 
 // CaptureTree gathers panes and the layout tree for persistence or transport.
