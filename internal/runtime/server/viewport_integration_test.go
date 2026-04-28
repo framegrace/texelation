@@ -16,6 +16,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -97,6 +98,16 @@ func (a *sparseFakeApp) FeedRows(startGID int64, rows []string) {
 	a.rebuildRenderFromStoreLocked(maxGID)
 	a.mu.Unlock()
 	a.markDirty()
+}
+
+// AppendLine appends a single main-screen row at the next free globalIdx
+// (one past the current Max). Thin wrapper over FeedRows kept for tests
+// that want a "stream a line at a time" feel without computing gids.
+func (a *sparseFakeApp) AppendLine(s string) {
+	a.mu.Lock()
+	next := a.store.Max() + 1
+	a.mu.Unlock()
+	a.FeedRows(next, []string{s})
 }
 
 // ScrollTo sets the render buffer to show the <height> rows ending at
@@ -1366,5 +1377,66 @@ func TestPaneRenders_AllFourBorders_AfterRehydrate(t *testing.T) {
 	}
 	if _, ok := pane.DecorRowAt(5); !ok {
 		t.Fatalf("decoration cache missing rowIdx 5 after rehydrate")
+	}
+}
+
+// TestPaneRenders_AllFourBorders_ScrolledMidHistory verifies that when the
+// client scrolls off the live edge (autoFollow=false, viewBottom mid-history)
+// the publisher re-emits decoration rows for both pane borders and the
+// client cache still observes correct content bounds. This protects the
+// invariant that border decorations and ContentTopRow / NumContentRows
+// survive a viewport change that resets prev[] inside the publisher.
+func TestPaneRenders_AllFourBorders_ScrolledMidHistory(t *testing.T) {
+	feed := make([]string, 6)
+	for i := range feed {
+		feed[i] = "row-content"
+	}
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: 10, rows: 6, seedFeed: feed})
+	defer h.serverConn.Close()
+
+	// Drive an initial snapshot+delta cycle so the client cache observes
+	// the pane (mirrors Tasks 12 / 13).
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: 10, Rows: 6})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+	h.Publish()
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// Append several screens of content via the fake app's writer.
+	for i := 0; i < 50; i++ {
+		h.fakeApp.AppendLine(fmt.Sprintf("line-%d", i))
+		h.Publish()
+	}
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// Reset the delta tracker so the next WaitForDelta blocks for a NEW
+	// delta triggered by the viewport change. Without this, a stale delta
+	// from the append loop above could be returned and the test would race
+	// past the scroll without observing it.
+	h.ResetDeltaTracker(h.paneID)
+
+	// Scroll off the live edge: autoFollow=false, viewBottom mid-history.
+	h.ApplyViewport(h.paneID, 10, 15, false, false)
+	h.Publish()
+	// Wait for the post-scroll delta to land — this is when the publisher
+	// re-emits content for the new viewport AND re-emits decoration rows
+	// (since prev[] is reset on viewport change).
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	pane := h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane")
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("scrolled state lost content bounds: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+	if _, ok := pane.DecorRowAt(0); !ok {
+		t.Fatalf("scrolled state lost top border decoration")
+	}
+	if _, ok := pane.DecorRowAt(5); !ok {
+		t.Fatalf("scrolled state lost bottom border decoration")
 	}
 }
