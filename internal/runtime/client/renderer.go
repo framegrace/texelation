@@ -178,11 +178,26 @@ func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []
 		}
 		return row
 	}
-	gid := vc.ViewTopIdx + int64(rowIdx)
+
+	// Decoration layer: rowIdx outside the content range reads from the
+	// pane's decoration cache (positional).
+	contentEnd := int(pane.ContentTopRow) + int(pane.NumContentRows) // exclusive
+	if pane.NumContentRows == 0 || rowIdx < int(pane.ContentTopRow) || rowIdx >= contentEnd {
+		if row, ok := pane.DecorRowAt(uint16(rowIdx)); ok {
+			return row
+		}
+		state.logDecorationMissOnce(pane.ID, uint16(rowIdx))
+		return nil
+	}
+
+	// Content layer: rowIdx mapped via gid lookup.
+	contentRowIdx := rowIdx - int(pane.ContentTopRow)
+	gid := vc.ViewTopIdx + int64(contentRowIdx)
 	row, found := pc.RowAt(gid)
 	if !found {
 		// Row not yet in cache (fetch is en route). Render blank rather than
 		// showing stale BufferCache content at a mismatched globalIdx.
+		// No log here — content-layer misses are normal during FetchRange.
 		return nil
 	}
 	return row

@@ -265,7 +265,7 @@ func TestDynamicColorFullPipeline(t *testing.T) {
 		defaultStyle: tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack),
 		defaultFg:    tcell.ColorWhite,
 		defaultBg:    tcell.ColorBlack,
-		tickAccum: 0.5, // pretend 500ms has passed
+		tickAccum:    0.5, // pretend 500ms has passed
 	}
 
 	workspaceBuf := make([][]client.Cell, 1)
@@ -422,5 +422,96 @@ func TestBlendColorSymmetry(t *testing.T) {
 	if r1 != r2 || g1 != g2 || b1 != b2 {
 		t.Errorf("Blending should be symmetric: (%d,%d,%d) != (%d,%d,%d)",
 			r1, g1, b1, r2, g2, b2)
+	}
+}
+
+// TestRowSourceForPane_DecorationLayer verifies the two-layer lookup:
+// rowIdx outside [ContentTopRow, ContentTopRow+NumContentRows) reads
+// from the decoration cache; rowIdx inside reads via gid from PaneCache.
+// Issue #199 Task 11.
+func TestRowSourceForPane_DecorationLayer(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xab)
+	// Pane H=5, ContentTopRow=1, NumContentRows=3 (rowIdx 1..3 are content).
+	state.cache.ApplySnapshot(protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, Width: 4, Height: 5,
+			ContentTopRow: 1, NumContentRows: 3,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	})
+	// Initialise viewport tracker from the snapshot so paneViewportFor returns ok.
+	state.onTreeSnapshot(protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, Width: 4, Height: 5,
+			ContentTopRow: 1, NumContentRows: 3,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	})
+
+	// Apply a delta with one content row (gid 10) and two decoration rows.
+	// onBufferDelta will set ViewTopIdx = 10 - (NumContentRows-1) = 10 - 2 = 8.
+	delta := protocol.BufferDelta{
+		PaneID:  id,
+		RowBase: 10,
+		Styles:  []protocol.StyleEntry{{}},
+		Rows: []protocol.RowDelta{
+			{Row: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "C", StyleIndex: 0}}},
+		},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "T", StyleIndex: 0}}},
+			{RowIdx: 4, Spans: []protocol.CellSpan{{StartCol: 0, Text: "B", StyleIndex: 0}}},
+		},
+	}
+	state.cache.ApplyDelta(delta)
+	state.onBufferDelta(delta)
+
+	// Also feed the row into the PaneCache so the content lookup at gid 10 hits.
+	state.paneCacheFor(id).ApplyDelta(delta)
+
+	pane := state.cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane missing")
+	}
+
+	// rowIdx 0 → decoration "T"
+	if src := rowSourceForPane(state, pane, 0); len(src) == 0 || src[0].Ch != 'T' {
+		t.Fatalf("rowIdx 0 expected decoration 'T', got %+v", src)
+	}
+	// rowIdx 4 → decoration "B"
+	if src := rowSourceForPane(state, pane, 4); len(src) == 0 || src[0].Ch != 'B' {
+		t.Fatalf("rowIdx 4 expected decoration 'B', got %+v", src)
+	}
+	// rowIdx 1 → gid = 8 + 0 = 8; PaneCache only has gid 10 → miss → nil
+	if src := rowSourceForPane(state, pane, 1); src != nil {
+		t.Fatalf("rowIdx 1 expected nil (content-layer miss for gid 8), got %+v", src)
+	}
+	// rowIdx 3 → gid = 8 + 2 = 10, present in PaneCache → "C"
+	if src := rowSourceForPane(state, pane, 3); len(src) == 0 || src[0].Ch != 'C' {
+		t.Fatalf("rowIdx 3 expected content 'C' (gid 10), got %+v", src)
+	}
+}
+
+// TestRowSourceForPane_DecorationCacheMiss verifies that an empty
+// decoration cache returns nil for a decoration-row lookup.
+func TestRowSourceForPane_DecorationCacheMiss(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xab)
+	snap := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, Width: 4, Height: 5,
+			ContentTopRow: 1, NumContentRows: 3,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	}
+	state.cache.ApplySnapshot(snap)
+	state.onTreeSnapshot(snap)
+	pane := state.cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane missing")
+	}
+	src := rowSourceForPane(state, pane, 0)
+	if src != nil {
+		t.Fatalf("expected nil for decoration miss, got %+v", src)
 	}
 }
