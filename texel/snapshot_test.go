@@ -130,11 +130,13 @@ func TestCapturePaneSnapshot_ContentBoundsEmpty(t *testing.T) {
 	}
 }
 
-func TestComputeContentBounds_NonContiguous(t *testing.T) {
-	// Hole in the middle of the content range.
+func TestComputeContentBounds_MidRangeHolesTolerated(t *testing.T) {
+	// Mid-range gid<0 holes are legitimate — they represent unwritten
+	// content rows in a fresh terminal. The bounds span from the first
+	// to the last gid>=0; the renderer renders the holes as blank cells.
 	rowIdx := []int64{-1, 100, -1, 102, -1}
 	top, num := computeContentBounds(rowIdx)
-	if top != 0 || num != 0 {
-		t.Fatalf("expected (0, 0) on non-contiguous layout, got (%d, %d)", top, num)
+	if top != 1 || num != 3 {
+		t.Fatalf("expected (1, 3) for [first..last] span across mid-hole, got (%d, %d)", top, num)
 	}
 }

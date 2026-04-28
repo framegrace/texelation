@@ -367,12 +367,13 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 }
 
 // computeContentBounds returns (ContentTopRow, NumContentRows) for the
-// given RowGlobalIdx slice. If no row has gid>=0, returns (0, 0).
-// Requires contiguity: every index in [top, last] must have gid >= 0,
-// and every index outside that range must have gid < 0. Logs a warning
-// and returns (0, 0) on violation rather than producing a bogus range —
-// a non-contiguous layout is a bug somewhere up the stack and the
-// renderer falling back to all-decoration is recoverable.
+// given RowGlobalIdx slice. The bounds span from the first index with
+// gid>=0 to the last such index (inclusive). Mid-range rows with gid<0
+// are tolerated — they represent content rows that have not yet been
+// written (e.g., a fresh terminal where only the prompt row has a gid).
+// The renderer's gid-lookup naturally returns nil for those rows,
+// rendering them blank, which is the desired behaviour. If no row has
+// gid>=0, returns (0, 0).
 func computeContentBounds(rowIdx []int64) (uint16, uint16) {
 	top := -1
 	last := -1
@@ -387,13 +388,6 @@ func computeContentBounds(rowIdx []int64) (uint16, uint16) {
 	}
 	if top < 0 {
 		return 0, 0
-	}
-	// Verify contiguity: every index in [top, last] must have gid >= 0.
-	for y := top; y <= last; y++ {
-		if rowIdx[y] < 0 {
-			log.Printf("texel: computeContentBounds: non-contiguous content rows at y=%d (top=%d, last=%d); treating pane as all-decoration", y, top, last)
-			return 0, 0
-		}
 	}
 	return uint16(top), uint16(last - top + 1)
 }
