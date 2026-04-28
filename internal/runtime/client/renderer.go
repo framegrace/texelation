@@ -193,14 +193,24 @@ func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []
 	// Content layer: rowIdx mapped via gid lookup.
 	contentRowIdx := rowIdx - int(pane.ContentTopRow)
 	gid := vc.ViewTopIdx + int64(contentRowIdx)
-	row, found := pc.RowAt(gid)
-	if !found {
-		// Row not yet in cache (fetch is en route). Render blank rather than
-		// showing stale BufferCache content at a mismatched globalIdx.
-		// No log here — content-layer misses are normal during FetchRange.
-		return nil
+	if row, found := pc.RowAt(gid); found {
+		return row
 	}
-	return row
+	// PaneCache miss inside the structural content range. The publisher
+	// emits rows whose RowGlobalIdx[y] < 0 (e.g., unwritten interior rows
+	// of a fresh terminal — only the prompt row has a gid yet) as
+	// positional DecorRowDeltas. Honor that channel before giving up: the
+	// row may already be in the decoration cache. Without this fallback,
+	// the renderer paints blank for every interior row whose gid wasn't
+	// shipped, which hides side borders and any cells the server painted
+	// into "unwritten" rows.
+	if row, ok := pane.DecorRowAt(uint16(rowIdx)); ok {
+		return row
+	}
+	// Row not yet in either cache (fetch is en route, or the row really
+	// is empty). Render blank rather than showing stale BufferCache
+	// content at a mismatched globalIdx.
+	return nil
 }
 
 // incrementalComposite updates only dirty panes/rows into state.prevBuffer.
