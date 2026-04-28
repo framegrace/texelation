@@ -26,6 +26,7 @@ import (
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/apps/texelterm/parser/sparse"
+	"github.com/framegrace/texelation/client"
 	"github.com/framegrace/texelation/internal/runtime/server/testutil"
 	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
@@ -285,8 +286,15 @@ type memHarness struct {
 	srv     *Server
 	session *Session
 	pub     *DesktopPublisher
-	fakeApp *sparseFakeApp
-	paneID  [16]byte
+	fakeApp *sparseFakeApp   // primary fake app (paneIDs[0])
+	fakes   []*sparseFakeApp // all fake apps spawned, parallel to paneIDs
+	paneID  [16]byte         // primary pane ID (paneIDs[0])
+	paneIDs [][16]byte       // [0] = original; [1..] = additional panes when twoPanes=true
+
+	persistDir string // empty unless newMemHarnessOpts was given persistDir
+
+	clientCache *client.BufferCache
+	lastDelta   *lastDeltaTracker
 
 	serverConn *testutil.MemConn
 	clientConn *testutil.MemConn
@@ -299,6 +307,64 @@ type memHarness struct {
 	fetchByReqID   map[uint32]protocol.FetchRangeResponse
 	rowBasesByPane map[[16]byte][]int64 // every RowBase observed per pane, in order
 	writeMu        sync.Mutex           // client-side write serialization
+}
+
+// memHarnessOpts configures newMemHarnessOpts.
+type memHarnessOpts struct {
+	cols, rows int
+	twoPanes   bool
+	persistDir string // if non-empty, mgr.EnablePersistence is called with this
+}
+
+// lastDeltaTracker remembers the most recent BufferDelta per pane and lets
+// callers wait for a fresh one.
+type lastDeltaTracker struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	byPane map[[16]byte]protocol.BufferDelta
+}
+
+func newLastDeltaTracker() *lastDeltaTracker {
+	t := &lastDeltaTracker{byPane: make(map[[16]byte]protocol.BufferDelta)}
+	t.cond = sync.NewCond(&t.mu)
+	return t
+}
+
+func (t *lastDeltaTracker) put(paneID [16]byte, d protocol.BufferDelta) {
+	t.mu.Lock()
+	t.byPane[paneID] = d
+	t.cond.Broadcast()
+	t.mu.Unlock()
+}
+
+func (t *lastDeltaTracker) wait(paneID [16]byte, timeout time.Duration) (protocol.BufferDelta, bool) {
+	deadline := time.Now().Add(timeout)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for {
+		if d, ok := t.byPane[paneID]; ok {
+			return d, true
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return protocol.BufferDelta{}, false
+		}
+		// Cond.Wait has no timeout. Spin a one-shot timer that broadcasts
+		// when the deadline passes so the cond wakes up.
+		timer := time.AfterFunc(remaining, func() {
+			t.mu.Lock()
+			t.cond.Broadcast()
+			t.mu.Unlock()
+		})
+		t.cond.Wait()
+		timer.Stop()
+	}
+}
+
+func (t *lastDeltaTracker) reset(paneID [16]byte) {
+	t.mu.Lock()
+	delete(t.byPane, paneID)
+	t.mu.Unlock()
 }
 
 type vpScreenDriver struct {
@@ -319,12 +385,45 @@ func (d vpScreenDriver) GetContent(int, int) (rune, []rune, tcell.Style, int) {
 
 // newMemHarness wires everything up and performs the initial handshake so
 // the test can immediately push viewports / feed rows / call FetchRange.
+// Existing callers rely on this signature; new callers needing persistence
+// or two-pane setups should use newMemHarnessOpts.
 func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 	t.Helper()
-	fakeApp := newSparseFakeApp(cols, rows)
+	return newMemHarnessOpts(t, memHarnessOpts{cols: cols, rows: rows})
+}
+
+// newMemHarnessOpts is the configurable variant. cols and rows are required;
+// other fields are optional. When twoPanes is true, the active workspace is
+// horizontally split and a second sparseFakeApp is attached so paneIDs has
+// two entries. When persistDir is set, the manager is bound to that
+// directory via EnablePersistence (required for Restart).
+func newMemHarnessOpts(t *testing.T, opts memHarnessOpts) *memHarness {
+	t.Helper()
+	cols, rows := opts.cols, opts.rows
+	// Build a shell factory that hands out fresh sparseFakeApp instances
+	// in order. The first call (during desktop init) yields fakes[0], which
+	// we also expose as h.fakeApp for back-compat with single-pane tests.
+	var fakes []*sparseFakeApp
+	makeFake := func() *sparseFakeApp {
+		a := newSparseFakeApp(cols, rows)
+		fakes = append(fakes, a)
+		return a
+	}
+	primary := makeFake()
 	driver := vpScreenDriver{cols: cols, rows: rows}
 	lifecycle := texel.NoopAppLifecycle{}
-	shellFactory := func() texelcore.App { return fakeApp }
+	// Shell factory: hand out the first fake on the initial call, then
+	// allocate fresh fakes for subsequent splits.
+	first := true
+	shellFactory := func() texelcore.App {
+		if first {
+			first = false
+			return primary
+		}
+		return makeFake()
+	}
+	// Keep the legacy local for the existing body below.
+	fakeApp := primary
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "texelterm", &lifecycle)
 	if err != nil {
 		t.Fatalf("NewDesktopEngineWithDriver: %v", err)
@@ -338,8 +437,23 @@ func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 	desktop.SetViewportSize(cols, rows)
 
 	mgr := NewManager()
+	if opts.persistDir != "" {
+		if err := mgr.EnablePersistence(opts.persistDir, 10*time.Millisecond); err != nil {
+			t.Fatalf("EnablePersistence: %v", err)
+		}
+	}
 	sink := NewDesktopSink(desktop)
 	srv := &Server{manager: mgr, sink: sink, desktopSink: sink}
+
+	// Optional second pane: split the active workspace horizontally so the
+	// shell factory is invoked again, attaching fakes[1] to the new leaf.
+	if opts.twoPanes {
+		ws := desktop.ActiveWorkspace()
+		if ws == nil {
+			t.Fatalf("twoPanes: no active workspace to split")
+		}
+		ws.PerformSplit(texel.Vertical)
+	}
 
 	h := &memHarness{
 		t:              t,
@@ -348,6 +462,10 @@ func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 		mgr:            mgr,
 		srv:            srv,
 		fakeApp:        fakeApp,
+		fakes:          fakes,
+		persistDir:     opts.persistDir,
+		clientCache:    client.NewBufferCache(),
+		lastDelta:      newLastDeltaTracker(),
 		rowsByGID:      make(map[int64]protocol.RowDelta),
 		altRowsByIdx:   make(map[uint16][]protocol.CellSpan),
 		fetchByReqID:   make(map[uint32]protocol.FetchRangeResponse),
@@ -355,18 +473,36 @@ func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 		readerDone:     make(chan struct{}),
 	}
 
-	// Find the pane ID assigned to the shell app by the desktop.
-	var foundID [16]byte
-	for _, snap := range desktop.SnapshotBuffers() {
-		if snap.Title == fakeApp.GetTitle() {
-			foundID = snap.ID
-			break
+	// Resolve pane IDs in the order the fakes were created. SnapshotBuffers
+	// returns one entry per pane; for each fake (in factory-call order) we
+	// pick the matching ID by app pointer identity, falling back to title.
+	snaps := desktop.SnapshotBuffers()
+	for i, fa := range fakes {
+		var id [16]byte
+		// Prefer pointer-equality-by-title-position: if every fake reports
+		// the same title, we have to disambiguate by which buffer index in
+		// the snapshot list this fake corresponds to. Since the factory
+		// hands them out in split order, we map fakes[i] -> the i-th
+		// matching snapshot title.
+		matches := 0
+		for _, snap := range snaps {
+			if snap.Title == fa.GetTitle() {
+				if matches == i {
+					id = snap.ID
+					break
+				}
+				matches++
+			}
 		}
+		if id == ([16]byte{}) {
+			t.Fatalf("could not locate pane %d hosting sparseFakeApp", i)
+		}
+		h.paneIDs = append(h.paneIDs, id)
 	}
-	if foundID == ([16]byte{}) {
-		t.Fatalf("could not locate pane hosting sparseFakeApp")
+	if len(h.paneIDs) == 0 {
+		t.Fatalf("no panes located")
 	}
-	h.paneID = foundID
+	h.paneID = h.paneIDs[0]
 
 	h.serverConn, h.clientConn = testutil.NewMemPipe(64)
 	t.Cleanup(func() {
@@ -489,7 +625,16 @@ func (h *memHarness) clientReadLoop() {
 				h.t.Logf("client decode buffer delta: %v", derr)
 				continue
 			}
+			// Always feed the client-side BufferCache so tests can inspect
+			// PaneState (ContentTopRow / NumContentRows / DecorRows) for any
+			// pane, not just the primary.
+			h.clientCache.ApplyDelta(delta)
+			h.lastDelta.put(delta.PaneID, delta)
 			if delta.PaneID != h.paneID {
+				// Other panes still get cached + tracked above; only the
+				// primary pane's rows are recorded in rowsByGID.
+				ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
+				h.writeFrame(protocol.MsgBufferAck, ackPayload, h.sessionID())
 				continue
 			}
 			h.mu.Lock()
@@ -514,6 +659,13 @@ func (h *memHarness) clientReadLoop() {
 			// Ack the delta so the session queue stays bounded.
 			ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
 			h.writeFrame(protocol.MsgBufferAck, ackPayload, h.sessionID())
+		case protocol.MsgTreeSnapshot:
+			snap, derr := protocol.DecodeTreeSnapshot(payload)
+			if derr != nil {
+				h.t.Logf("client decode tree snapshot: %v", derr)
+				continue
+			}
+			h.clientCache.ApplySnapshot(snap)
 		case protocol.MsgFetchRangeResponse:
 			resp, derr := protocol.DecodeFetchRangeResponse(payload)
 			if derr != nil {
@@ -845,4 +997,168 @@ func gidList(rows []protocol.LogicalRow) []int64 {
 		out[i] = r.GlobalIdx
 	}
 	return out
+}
+
+// ClientPane returns the client-side BufferCache PaneState for paneID, or
+// nil if the cache hasn't seen that pane yet.
+func (h *memHarness) ClientPane(id [16]byte) *client.PaneState {
+	return h.clientCache.PaneByID(id)
+}
+
+// WaitForDelta blocks until a BufferDelta for paneID has been observed by
+// the client read loop. Returns the most-recent delta seen for that pane.
+// Use ResetDeltaTracker before driving a new action so the next call here
+// is guaranteed to wait for a fresh delta rather than returning a stale one.
+func (h *memHarness) WaitForDelta(t *testing.T, paneID [16]byte, timeout time.Duration) protocol.BufferDelta {
+	t.Helper()
+	d, ok := h.lastDelta.wait(paneID, timeout)
+	if !ok {
+		t.Fatalf("WaitForDelta: timeout waiting for pane %x", paneID)
+	}
+	return d
+}
+
+// ResetDeltaTracker clears the cached last-delta for paneID. Call before
+// triggering an action whose effect must be observed in a NEW delta (focus
+// change, content append, viewport scroll).
+func (h *memHarness) ResetDeltaTracker(paneID [16]byte) {
+	h.lastDelta.reset(paneID)
+}
+
+// FocusPane drives a focus change to the given pane ID. The workspace's
+// internal tree state is unexported and there is no public, non-destructive
+// "focus pane by ID" API on Workspace or DesktopEngine today. For now this
+// helper is a no-op when paneID already matches ActivePane().ID(), and
+// otherwise fatals with a TODO. Task 15 is expected to either inline a
+// keyboard-event-based focus drive or add a public Workspace.FocusByID
+// API in the texel package.
+func (h *memHarness) FocusPane(paneID [16]byte) {
+	h.t.Helper()
+	ws := h.desktop.ActiveWorkspace()
+	if ws == nil {
+		h.t.Fatalf("FocusPane: no active workspace")
+	}
+	if cur := ws.ActivePane(); cur != nil && cur.ID() == paneID {
+		return
+	}
+	h.t.Fatalf("FocusPane: target %x is not currently active and no public focus-by-ID API exists; Task 15 must add one (or inline a keyboard event)", paneID)
+}
+
+// Restart shuts the in-process server down, recreates the Manager + Server
+// pointing at the same persistence dir, opens a fresh memconn pair, and
+// replays the handshake using MsgResumeRequest with the persisted sessionID.
+// Caller must have constructed h with a non-empty persistDir (via
+// newMemHarnessOpts).
+func (h *memHarness) Restart(t *testing.T) {
+	t.Helper()
+	if h.persistDir == "" {
+		t.Fatalf("Restart requires the harness to have been built with persistDir set")
+	}
+
+	sessionID := h.sessionID()
+	persistDir := h.persistDir
+
+	// Close client side first; the server's serve goroutine exits on EOF
+	// and closes its end. Drain readerDone so we don't leak.
+	if err := h.clientConn.Close(); err != nil {
+		t.Logf("Restart: close clientConn: %v", err)
+	}
+	<-h.readerDone
+
+	// New Manager bound to the same persistence dir. The desktop, sink,
+	// and fakes survive across the restart — only the manager / connection
+	// is rebuilt.
+	mgr := NewManager()
+	if err := mgr.EnablePersistence(persistDir, 10*time.Millisecond); err != nil {
+		t.Fatalf("Restart: EnablePersistence: %v", err)
+	}
+	srv := &Server{manager: mgr, sink: h.sink, desktopSink: h.sink}
+	h.mgr = mgr
+	h.srv = srv
+
+	// Reset client-side accumulated state so post-restart deltas don't mix
+	// with pre-restart entries.
+	h.mu.Lock()
+	h.rowsByGID = make(map[int64]protocol.RowDelta)
+	h.altRowsByIdx = make(map[uint16][]protocol.CellSpan)
+	h.fetchByReqID = make(map[uint32]protocol.FetchRangeResponse)
+	h.rowBasesByPane = make(map[[16]byte][]int64)
+	h.mu.Unlock()
+	h.lastDelta = newLastDeltaTracker()
+	h.clientCache = client.NewBufferCache()
+	h.readerDone = make(chan struct{})
+
+	// New memconn pair.
+	h.serverConn, h.clientConn = testutil.NewMemPipe(64)
+	t.Cleanup(func() {
+		_ = h.serverConn.Close()
+		_ = h.clientConn.Close()
+	})
+
+	// Re-spawn the server-side handshake goroutine.
+	serveErrCh := make(chan error, 1)
+	sessCh := make(chan *Session, 1)
+	go func() {
+		defer h.serverConn.Close()
+		sess, resuming, _, err := handleHandshake(h.serverConn, mgr)
+		if err != nil {
+			serveErrCh <- err
+			return
+		}
+		pub := NewDesktopPublisher(h.desktop, sess)
+		h.sink.SetPublisher(pub)
+		conn := newConnection(h.serverConn, sess, h.sink, resuming, true /*rehydrated*/)
+		pub.SetNotifier(conn.nudge)
+		h.mu.Lock()
+		h.session = sess
+		h.pub = pub
+		h.mu.Unlock()
+		sessCh <- sess
+		serveErrCh <- conn.serve()
+	}()
+
+	// Client side: Hello -> Welcome -> ResumeRequest with persisted sessionID.
+	helloPayload, _ := protocol.EncodeHello(protocol.Hello{ClientName: "intg-client"})
+	h.writeFrame(protocol.MsgHello, helloPayload, [16]byte{})
+	if _, _, err := protocol.ReadMessage(h.clientConn); err != nil {
+		t.Fatalf("Restart: read welcome: %v", err)
+	}
+	resumeReq, _ := protocol.EncodeResumeRequest(protocol.ResumeRequest{
+		SessionID:    sessionID,
+		LastSequence: 0,
+	})
+	h.writeFrame(protocol.MsgResumeRequest, resumeReq, sessionID)
+	for {
+		hdr, payload, err := protocol.ReadMessage(h.clientConn)
+		if err != nil {
+			t.Fatalf("Restart: read connect accept: %v", err)
+		}
+		if hdr.Type == protocol.MsgConnectAccept {
+			if _, err := protocol.DecodeConnectAccept(payload); err != nil {
+				t.Fatalf("Restart: decode connect accept: %v", err)
+			}
+			break
+		}
+	}
+	select {
+	case <-sessCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Restart: session did not materialize")
+	}
+
+	// Spin client read loop back up.
+	go h.clientReadLoop()
+
+	t.Cleanup(func() {
+		_ = h.clientConn.Close()
+		select {
+		case err := <-serveErrCh:
+			if err != nil && err != io.EOF {
+				t.Logf("Restart: server serve exit: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Log("Restart: server serve goroutine did not exit cleanly")
+		}
+		<-h.readerDone
+	})
 }
