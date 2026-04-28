@@ -258,9 +258,18 @@ func (s *clientState) onBufferDelta(delta protocol.BufferDelta) {
 	if maxGid < 0 || maxGid <= vp.knownBottomGid {
 		return
 	}
+	pane := s.cache.PaneByID(delta.PaneID)
+	if pane == nil {
+		log.Printf("client: onBufferDelta: pane %x not in cache; skipping viewport advance", delta.PaneID)
+		return
+	}
+	if pane.NumContentRows == 0 {
+		return
+	}
+	numContentRows := int64(pane.NumContentRows)
 	vp.knownBottomGid = maxGid
 	vp.ViewBottomIdx = maxGid
-	top := maxGid - int64(vp.Rows-1)
+	top := maxGid - (numContentRows - 1)
 	if top < 0 {
 		top = 0
 	}
