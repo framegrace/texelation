@@ -47,3 +47,13 @@ type AppLifecycleManager interface {
 	StartApp(app App, onExit func(error))
 	StopApp(app App)
 }
+
+// AppExitWaiter is an optional capability some lifecycle managers provide.
+// When AttachApp swaps an old app for a new one it calls StopApp followed by
+// WaitForExit on the old app, which lets the lifecycle drain the outgoing
+// app's onExit callback before pane state is rewritten. Implementations that
+// don't need this synchronization (notably NoopAppLifecycle in tests where
+// no goroutine is spawned) can skip the interface entirely.
+type AppExitWaiter interface {
+	WaitForExit(app App)
+}

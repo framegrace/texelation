@@ -76,7 +76,10 @@ func (s *Server) applyBootSnapshot() {
 	}
 }
 
-func (s *Server) startSnapshotLoop() {
+// startSnapshotLoopLocked initializes the periodic snapshot loop.
+// MUST be called with s.lifecycleMu held. The caller is responsible for
+// initializing s.snapshotQuit (this method does it) and adding to s.wg.
+func (s *Server) startSnapshotLoopLocked() {
 	if s.snapshotStore == nil || s.desktopSink == nil {
 		return
 	}
@@ -84,7 +87,8 @@ func (s *Server) startSnapshotLoop() {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	s.snapshotQuit = make(chan struct{})
+	quitCh := make(chan struct{})
+	s.snapshotQuit = quitCh
 	ticker := time.NewTicker(interval)
 	s.wg.Add(1)
 	go func() {
@@ -97,7 +101,7 @@ func (s *Server) startSnapshotLoop() {
 			select {
 			case <-ticker.C:
 				s.persistSnapshot()
-			case <-s.snapshotQuit:
+			case <-quitCh:
 				return
 			case <-s.quit:
 				return

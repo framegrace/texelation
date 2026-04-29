@@ -179,7 +179,17 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	debuglog.Printf("AttachApp: Starting attachment of app '%s'", app.GetTitle())
 	if p.app != nil {
 		debuglog.Printf("AttachApp: Stopping existing app '%s'", p.app.GetTitle())
-		p.screen.appLifecycle.StopApp(p.app)
+		oldApp := p.app
+		p.screen.appLifecycle.StopApp(oldApp)
+		// Wait for the outgoing app's Run goroutine and onExit handler
+		// to finish before rewriting p.app — otherwise the handler's
+		// staleness check (handleAppExit reads p.app) races with the
+		// write below. Implementations that don't spawn goroutines
+		// (e.g. NoopAppLifecycle in tests) skip the AppExitWaiter
+		// interface and the wait is a no-op.
+		if waiter, ok := p.screen.appLifecycle.(AppExitWaiter); ok {
+			waiter.WaitForExit(oldApp)
+		}
 	}
 	p.app = app
 	p.name = app.GetTitle()

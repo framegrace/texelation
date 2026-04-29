@@ -24,7 +24,10 @@ import (
 type Server struct {
 	addr             string
 	manager          *Manager
+	lifecycleMu      sync.Mutex // protects listener, snapshotQuit, started/stopped state
 	listener         net.Listener
+	started          bool
+	stopped          bool
 	quit             chan struct{}
 	wg               sync.WaitGroup
 	sink             EventSink
@@ -100,6 +103,17 @@ func (s *Server) SetSnapshotStore(store *SnapshotStore, interval time.Duration) 
 }
 
 func (s *Server) Start() error {
+	s.lifecycleMu.Lock()
+	if s.stopped {
+		s.lifecycleMu.Unlock()
+		return nil
+	}
+	if s.started {
+		s.lifecycleMu.Unlock()
+		return nil
+	}
+	s.lifecycleMu.Unlock()
+
 	if err := os.RemoveAll(s.addr); err != nil {
 		return err
 	}
@@ -107,18 +121,31 @@ func (s *Server) Start() error {
 	if err != nil {
 		return err
 	}
+
+	s.lifecycleMu.Lock()
+	if s.stopped {
+		s.lifecycleMu.Unlock()
+		_ = l.Close()
+		return nil
+	}
 	s.listener = l
-	// Note: loadBootSnapshot is called from SetSnapshotStore, not here
+	// Note: loadBootSnapshot is called from SetSnapshotStore, not here.
+	// Add to the WaitGroup and initialize the snapshot loop's quit channel
+	// under the mutex so Stop sees a consistent set of fields even when
+	// called concurrently with Start (common in tests via `go srv.Start()`).
 	s.wg.Add(1)
-	go s.acceptLoop()
-	s.startSnapshotLoop()
+	s.startSnapshotLoopLocked()
+	s.started = true
+	s.lifecycleMu.Unlock()
+
+	go s.acceptLoop(l)
 	return nil
 }
 
-func (s *Server) acceptLoop() {
+func (s *Server) acceptLoop(l net.Listener) {
 	defer s.wg.Done()
 	for {
-		conn, err := s.listener.Accept()
+		conn, err := l.Accept()
 		if err != nil {
 			select {
 			case <-s.quit:
@@ -160,19 +187,29 @@ func (s *Server) acceptLoop() {
 }
 
 func (s *Server) Stop(ctx context.Context) error {
+	s.lifecycleMu.Lock()
+	if s.stopped {
+		s.lifecycleMu.Unlock()
+		return nil
+	}
+	s.stopped = true
+	listener := s.listener
+	s.listener = nil
+	snapshotQuit := s.snapshotQuit
+	s.snapshotQuit = nil
+	s.lifecycleMu.Unlock()
+
 	select {
 	case <-s.quit:
-		// Already stopped
-		return nil
 	default:
 		close(s.quit)
 	}
 
-	if s.snapshotQuit != nil {
-		close(s.snapshotQuit)
+	if snapshotQuit != nil {
+		close(snapshotQuit)
 	}
-	if s.listener != nil {
-		_ = s.listener.Close()
+	if listener != nil {
+		_ = listener.Close()
 	}
 	done := make(chan struct{})
 	go func() {

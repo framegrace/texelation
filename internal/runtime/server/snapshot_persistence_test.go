@@ -152,12 +152,12 @@ func TestSnapshotSavedOnLayoutChange(t *testing.T) {
 	// Force a sleep to ensure fs timestamp resolution is met
 	time.Sleep(1 * time.Second)
 
-	go func() {
-		srv.Stop(context.Background())
-	}()
-
-	// Wait for server to stop (SnapshotLoop exits)
-	srv.wg.Wait()
+	// srv.Stop blocks until Start's goroutines (including the snapshot
+	// loop's deferred final persist) have all returned, so we can rely on
+	// it to quiesce the server before reading the snapshot file below.
+	if err := srv.Stop(context.Background()); err != nil {
+		t.Fatalf("server stop failed: %v", err)
+	}
 
 	finalInfo, err := os.Stat(path)
 	if err != nil {
