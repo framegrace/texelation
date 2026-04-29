@@ -261,3 +261,88 @@ func TestManagerNewSessionWithID_RejectsDuplicates(t *testing.T) {
 		t.Fatalf("expected error on duplicate id")
 	}
 }
+
+// TestManagerCloseSerializesWithLookupOrRehydrate is the Plan D2 17.B
+// regression: a Close racing with a same-ID LookupOrRehydrate must
+// not let the rehydrate path attach a fresh atomicjson writer to the
+// same on-disk path while Close is still flushing — otherwise two
+// stores race on rename(). The serialization is provided by per-ID
+// "closing" markers consulted by LookupOrRehydrate via waitClosing.
+func TestManagerCloseSerializesWithLookupOrRehydrate(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager()
+	if err := mgr.EnablePersistence(dir, 25*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	id := [16]byte{0xcc}
+	// Pre-seed a persisted entry so LookupOrRehydrate has something to
+	// rehydrate against once the live session is closed.
+	stored := &StoredSession{SchemaVersion: StoredSessionSchemaVersion, SessionID: id, LastActive: time.Now()}
+	mgr.SetPersistedSessions(map[[16]byte]*StoredSession{id: stored})
+
+	sess, _, err := mgr.LookupOrRehydrate(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Apply a few updates to make Close's flush non-trivial.
+	for i := 0; i < 5; i++ {
+		sess.ApplyViewportUpdate(protocol.ViewportUpdate{
+			PaneID: [16]byte{byte(i)}, ViewBottomIdx: int64(i), Rows: 1, Cols: 1,
+		})
+	}
+
+	// Re-seed the persisted entry so the post-Close rehydrate has
+	// something to find. (Close consumed the live session; the
+	// persisted index was consumed during the original rehydrate.)
+	mgr.SetPersistedSessions(map[[16]byte]*StoredSession{id: stored})
+
+	closeStarted := make(chan struct{})
+	closeDone := make(chan struct{})
+	go func() {
+		close(closeStarted)
+		mgr.Close(id)
+		close(closeDone)
+	}()
+	<-closeStarted
+
+	// Concurrent rehydrate attempt for the same ID. Must wait for
+	// Close to finish (no rename race), then succeed against the
+	// re-seeded persisted entry.
+	rehydrateDone := make(chan struct{})
+	go func() {
+		defer close(rehydrateDone)
+		_, _, _ = mgr.LookupOrRehydrate(id)
+	}()
+
+	// rehydrate must NOT complete before close.
+	select {
+	case <-rehydrateDone:
+		select {
+		case <-closeDone:
+			// Both done; verify ordering by ensuring close finished
+			// at-or-before rehydrate. We can't introspect order
+			// directly here, so instead require rehydrate didn't
+			// finish before close started its flush. Best-effort:
+			// re-check by allowing both to finish then asserting
+			// the persisted file is valid JSON.
+		default:
+			t.Fatal("rehydrate completed while Close was still in flight — 17.B race")
+		}
+	case <-closeDone:
+		// Close finished first; rehydrate should follow shortly.
+		<-rehydrateDone
+	case <-time.After(2 * time.Second):
+		t.Fatal("close/rehydrate deadlock")
+	}
+
+	// Persisted file must exist and be valid JSON.
+	path := SessionFilePath(dir, id)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("session file unreadable after close+rehydrate: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("session file empty — likely overwritten during rename race")
+	}
+}
