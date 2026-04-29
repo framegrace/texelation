@@ -39,13 +39,38 @@ type recordingApp struct {
 	title string
 	mu    sync.Mutex
 	keys  []*tcell.EventKey
+	// stopOnce guards stopCh so that Stop is idempotent. stopCh is lazily
+	// created on first Run/Stop so existing tests that construct the app
+	// inline (`&recordingApp{title: ...}`) continue to work without an
+	// explicit init step.
+	stopOnce sync.Once
+	stopCh   chan struct{}
 }
 
-func (r *recordingApp) Run() error                        { return nil }
-func (r *recordingApp) Stop()                             {}
-func (r *recordingApp) Resize(cols, rows int)             {}
-func (r *recordingApp) Render() [][]texelcore.Cell        { return [][]texelcore.Cell{{}} }
-func (r *recordingApp) GetTitle() string                  { return r.title }
+func (r *recordingApp) ensureStopCh() chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopCh == nil {
+		r.stopCh = make(chan struct{})
+	}
+	return r.stopCh
+}
+
+// Run blocks until Stop is called, mirroring real apps that hold a goroutine
+// for their lifetime. Returning immediately would let LocalAppLifecycle
+// invoke handleAppExit — which mutates the pane tree from a non-event-loop
+// goroutine — and race with concurrent tree readers (e.g. CaptureTree).
+func (r *recordingApp) Run() error {
+	<-r.ensureStopCh()
+	return nil
+}
+func (r *recordingApp) Stop() {
+	ch := r.ensureStopCh()
+	r.stopOnce.Do(func() { close(ch) })
+}
+func (r *recordingApp) Resize(cols, rows int)      {}
+func (r *recordingApp) Render() [][]texelcore.Cell { return [][]texelcore.Cell{{}} }
+func (r *recordingApp) GetTitle() string           { return r.title }
 func (r *recordingApp) HandleKey(ev *tcell.EventKey) {
 	r.mu.Lock()
 	r.keys = append(r.keys, ev)
