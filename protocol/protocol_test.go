@@ -126,3 +126,9 @@ func TestReadMessage_PayloadTooLarge(t *testing.T) {
 		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
 	}
 }
+
+func TestProtocolVersionIs3(t *testing.T) {
+	if Version != 3 {
+		t.Fatalf("expected Version=3, got %d", Version)
+	}
+}

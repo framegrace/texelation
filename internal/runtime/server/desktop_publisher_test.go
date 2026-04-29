@@ -14,6 +14,7 @@ import (
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/framegrace/texelation/client"
 	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
 )
@@ -231,5 +232,280 @@ func TestPublisher_AltScreenSetsFlag(t *testing.T) {
 	}
 	if len(delta.Rows) != 24 {
 		t.Fatalf("alt-screen delta: want 24 rows, got %d", len(delta.Rows))
+	}
+}
+
+func TestBufferToDelta_DecorationRowsIncluded(t *testing.T) {
+	// 5-row buffer: rowIdx 0 = top border (-1), rowIdx 1..3 = content gids,
+	// rowIdx 4 = bottom border (-1).
+	rows := [][]texel.Cell{
+		{{Ch: '+'}, {Ch: '-'}, {Ch: '+'}}, // border
+		{{Ch: 'a'}, {Ch: 'b'}, {Ch: 'c'}}, // content
+		{{Ch: 'd'}, {Ch: 'e'}, {Ch: 'f'}}, // content
+		{{Ch: 'g'}, {Ch: 'h'}, {Ch: 'i'}}, // content
+		{{Ch: '+'}, {Ch: '-'}, {Ch: '+'}}, // border
+	}
+	snap := texel.PaneSnapshot{
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, 100, 101, 102, -1},
+		ContentTopRow:  1,
+		NumContentRows: 3,
+	}
+	vp := ClientViewport{Rows: 3, AutoFollow: true}
+	prev := [][]texel.Cell(nil)
+
+	delta := bufferToDelta(snap, prev, 1, vp)
+
+	// After the wrapped-chain rendering fix: content rows are emitted
+	// positionally (DecorRowDelta) IN ADDITION to gid-keyed RowDelta. So
+	// DecorRows includes both borders (rowIdx 0, 4) AND each content row
+	// (rowIdx 1, 2, 3) — total 5. The gid-keyed Rows still has the 3
+	// content entries for scrollback.
+	if len(delta.DecorRows) != 5 {
+		t.Fatalf("expected 5 DecorRows (2 borders + 3 content positional), got %d: %+v", len(delta.DecorRows), delta.DecorRows)
+	}
+	gotIdx := make(map[uint16]bool, 5)
+	for _, dr := range delta.DecorRows {
+		gotIdx[dr.RowIdx] = true
+	}
+	for _, want := range []uint16{0, 1, 2, 3, 4} {
+		if !gotIdx[want] {
+			t.Fatalf("expected decor rowIdx=%d in DecorRows, got %v", want, gotIdx)
+		}
+	}
+	if len(delta.Rows) != 3 {
+		t.Fatalf("expected 3 content Rows, got %d", len(delta.Rows))
+	}
+}
+
+func TestBufferToDelta_DecorationRowsDiffed(t *testing.T) {
+	rows := [][]texel.Cell{
+		{{Ch: '+'}}, // border
+		{{Ch: 'a'}}, // content
+		{{Ch: '+'}}, // border
+	}
+	snap := texel.PaneSnapshot{
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, 100, -1},
+		ContentTopRow:  1,
+		NumContentRows: 1,
+	}
+	vp := ClientViewport{Rows: 1, AutoFollow: true}
+	prev := [][]texel.Cell{
+		{{Ch: '+'}},
+		{{Ch: 'a'}},
+		{{Ch: '+'}},
+	}
+	delta := bufferToDelta(snap, prev, 1, vp)
+	if len(delta.DecorRows) != 0 {
+		t.Fatalf("expected 0 DecorRows when borders unchanged, got %d", len(delta.DecorRows))
+	}
+	if len(delta.Rows) != 0 {
+		t.Fatalf("expected 0 content Rows when content unchanged, got %d", len(delta.Rows))
+	}
+}
+
+func TestBufferToDelta_DecorationRowsDiffPartial(t *testing.T) {
+	rows := [][]texel.Cell{
+		{{Ch: '+'}}, // border (will change)
+		{{Ch: 'a'}}, // content
+		{{Ch: '+'}}, // border (unchanged)
+	}
+	snap := texel.PaneSnapshot{
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, 100, -1},
+		ContentTopRow:  1,
+		NumContentRows: 1,
+	}
+	vp := ClientViewport{Rows: 1, AutoFollow: true}
+	prev := [][]texel.Cell{
+		{{Ch: '#'}}, // different
+		{{Ch: 'a'}}, // same
+		{{Ch: '+'}}, // same
+	}
+	delta := bufferToDelta(snap, prev, 1, vp)
+	if len(delta.DecorRows) != 1 || delta.DecorRows[0].RowIdx != 0 {
+		t.Fatalf("expected 1 DecorRows entry at rowIdx 0, got %+v", delta.DecorRows)
+	}
+}
+
+func TestBufferToDelta_TexelTermInternalStatusbar(t *testing.T) {
+	// 6-row layout: rowIdx 0 = top border, [1..3] = content, rowIdx 4 = app
+	// internal statusbar (gid=-1), rowIdx 5 = bottom border.
+	rows := [][]texel.Cell{
+		{{Ch: '+'}},
+		{{Ch: 'a'}},
+		{{Ch: 'b'}},
+		{{Ch: 'c'}},
+		{{Ch: 'S'}},
+		{{Ch: '+'}},
+	}
+	snap := texel.PaneSnapshot{
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, 100, 101, 102, -1, -1},
+		ContentTopRow:  1,
+		NumContentRows: 3,
+	}
+	vp := ClientViewport{Rows: 3, AutoFollow: true}
+	delta := bufferToDelta(snap, nil, 1, vp)
+	got := map[uint16]bool{}
+	for _, r := range delta.DecorRows {
+		got[r.RowIdx] = true
+	}
+	if !got[0] || !got[4] || !got[5] {
+		t.Fatalf("expected DecorRows at rowIdx 0, 4, 5 (top + statusbar + bottom), got %v", got)
+	}
+}
+
+func TestBufferToDelta_AltScreenLeavesDecorRowsEmpty(t *testing.T) {
+	rows := [][]texel.Cell{{{Ch: 'x'}}}
+	snap := texel.PaneSnapshot{
+		ID:           [16]byte{0xab},
+		Buffer:       rows,
+		RowGlobalIdx: []int64{-1},
+		AltScreen:    true,
+	}
+	vp := ClientViewport{Rows: 1, AltScreen: true}
+	delta := bufferToDelta(snap, nil, 1, vp)
+	if len(delta.DecorRows) != 0 {
+		t.Fatalf("alt-screen must not emit DecorRows, got %d", len(delta.DecorRows))
+	}
+}
+
+// TestBufferToDelta_ContentRowRoundTripPreservesBorders reproduces the
+// 1-column horizontal shift bug seen in `./bin/texelation` after typing a
+// command: the content shifts left by one column, the left border (col 0)
+// disappears (overwritten by content) and the right border (col W-1) goes
+// blank. Blank-content rows still display borders correctly because they
+// flow through the decoration channel; only PaneCache content rows are
+// affected.
+//
+// The test runs a content row whose first cell is a `│` border at col 0
+// through the FULL pipeline:
+//
+//  1. bufferToDelta encodes the snapshot row → BufferDelta.
+//  2. EncodeBufferDelta + DecodeBufferDelta survive the wire format.
+//  3. PaneCache.ApplyDelta decodes spans into client cells keyed by gid.
+//  4. PaneCache.RowAt(gid) reads the row back.
+//
+// At each stage, col 0 must remain `│` and col W-1 must remain `│`.
+func TestBufferToDelta_ContentRowRoundTripPreservesBorders(t *testing.T) {
+	const W = 8
+	// One content row mimicking a texterm row inside its border:
+	//   col 0      = '│' (left border)
+	//   col 1..W-2 = "hello "
+	//   col W-1    = '│' (right border)
+	row := make([]texel.Cell, W)
+	row[0] = texel.Cell{Ch: '│', Style: tcell.StyleDefault}
+	row[W-1] = texel.Cell{Ch: '│', Style: tcell.StyleDefault}
+	content := []rune("hello ")
+	for i, r := range content {
+		row[1+i] = texel.Cell{Ch: r, Style: tcell.StyleDefault}
+	}
+
+	const gid int64 = 100
+	snap := texel.PaneSnapshot{
+		ID:             [16]byte{0xab},
+		Buffer:         [][]texel.Cell{row},
+		RowGlobalIdx:   []int64{gid},
+		ContentTopRow:  1,
+		NumContentRows: 1,
+	}
+	vp := ClientViewport{Rows: 1, AutoFollow: true}
+
+	delta := bufferToDelta(snap, nil, 1, vp)
+	if len(delta.Rows) != 1 {
+		t.Fatalf("want 1 content row in delta, got %d (DecorRows=%d)",
+			len(delta.Rows), len(delta.DecorRows))
+	}
+
+	// Check the publisher emitted the border cell at col 0 in the spans.
+	rowDelta := delta.Rows[0]
+	if len(rowDelta.Spans) == 0 {
+		t.Fatalf("publisher emitted zero spans for content row")
+	}
+	if rowDelta.Spans[0].StartCol != 0 {
+		t.Fatalf("first span StartCol = %d, want 0 (left border lost)",
+			rowDelta.Spans[0].StartCol)
+	}
+	// Concatenate span text by column to verify col 0 == '│' and col W-1 == '│'.
+	flat := make([]rune, W)
+	for i := range flat {
+		flat[i] = ' '
+	}
+	for _, s := range rowDelta.Spans {
+		for i, r := range []rune(s.Text) {
+			if int(s.StartCol)+i < W {
+				flat[int(s.StartCol)+i] = r
+			}
+		}
+	}
+	if flat[0] != '│' {
+		t.Fatalf("delta col 0 = %q, want '│' (left border encoded wrong)", flat[0])
+	}
+	if flat[W-1] != '│' {
+		t.Fatalf("delta col W-1 = %q, want '│' (right border encoded wrong)", flat[W-1])
+	}
+
+	// Wire round-trip.
+	encoded, err := protocol.EncodeBufferDelta(delta)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := protocol.DecodeBufferDelta(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Apply to a fresh PaneCache and read back the row at the original gid.
+	pc := client.NewPaneCache()
+	pc.ApplyDelta(decoded)
+	cells, ok := pc.RowAt(gid)
+	if !ok {
+		t.Fatalf("PaneCache.RowAt(%d): not found after round trip", gid)
+	}
+	if len(cells) < W {
+		t.Fatalf("PaneCache row length = %d, want >= %d", len(cells), W)
+	}
+	if cells[0].Ch != '│' {
+		t.Fatalf("PaneCache row col 0 = %q, want '│' (border lost)", cells[0].Ch)
+	}
+	if cells[W-1].Ch != '│' {
+		t.Fatalf("PaneCache row col W-1 = %q, want '│' (right border lost)", cells[W-1].Ch)
+	}
+	for i, want := range content {
+		got := cells[1+i].Ch
+		if got != want {
+			t.Fatalf("PaneCache row col %d = %q, want %q", 1+i, got, want)
+		}
+	}
+}
+
+func TestBufferToDelta_ZeroContentSnapshot(t *testing.T) {
+	// Status pane shape: every row is decoration (no content gids).
+	// Server must emit all rows in DecorRows and zero content rows.
+	rows := [][]texel.Cell{
+		{{Ch: 'a'}},
+		{{Ch: 'b'}},
+		{{Ch: 'c'}},
+	}
+	snap := texel.PaneSnapshot{
+		ID:             [16]byte{0xab},
+		Buffer:         rows,
+		RowGlobalIdx:   []int64{-1, -1, -1},
+		ContentTopRow:  0,
+		NumContentRows: 0,
+	}
+	vp := ClientViewport{Rows: 0, AutoFollow: false}
+	delta := bufferToDelta(snap, nil, 1, vp)
+	if len(delta.Rows) != 0 {
+		t.Fatalf("expected 0 content Rows for zero-content pane, got %d", len(delta.Rows))
+	}
+	if len(delta.DecorRows) != 3 {
+		t.Fatalf("expected 3 DecorRows for zero-content pane, got %d", len(delta.DecorRows))
 	}
 }

@@ -23,6 +23,11 @@ const (
 	BufferDeltaAltScreen BufferDeltaFlags = 1 << 0
 )
 
+// MaxDecorRowIdx caps a decoration row's absolute rowIdx to a sane pane
+// height. Real panes never exceed a few thousand rows; values above this
+// signal a corrupt or hostile payload.
+const MaxDecorRowIdx uint16 = 4096
+
 // ColorModel represents how colours are encoded for a style.
 type ColorModel uint8
 
@@ -88,14 +93,24 @@ type RowDelta struct {
 	Spans []CellSpan
 }
 
+// DecorRowDelta carries a single positional decoration row (border, app
+// statusbar). RowIdx is the absolute rowIdx in the pane buffer — distinct
+// from RowDelta.Row, which is gid - RowBase. Wire byte layout matches
+// RowDelta exactly; the type is separate to prevent accidental mixing.
+type DecorRowDelta struct {
+	RowIdx uint16
+	Spans  []CellSpan
+}
+
 // BufferDelta is the payload sent by the server to update pane contents.
 type BufferDelta struct {
-	PaneID   [16]byte
-	Revision uint32
-	Flags    BufferDeltaFlags
-	RowBase  int64
-	Styles   []StyleEntry
-	Rows     []RowDelta
+	PaneID    [16]byte
+	Revision  uint32
+	Flags     BufferDeltaFlags
+	RowBase   int64
+	Styles    []StyleEntry
+	Rows      []RowDelta
+	DecorRows []DecorRowDelta // rows keyed by absolute rowIdx (borders + app decoration)
 }
 
 var (
@@ -240,6 +255,50 @@ func EncodeBufferDelta(delta BufferDelta) ([]byte, error) {
 		}
 	}
 
+	if len(delta.DecorRows) > 0xFFFF {
+		return nil, ErrBufferTooLarge
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint16(len(delta.DecorRows))); err != nil {
+		return nil, err
+	}
+	for _, row := range delta.DecorRows {
+		if row.RowIdx > MaxDecorRowIdx {
+			return nil, ErrInvalidSpan
+		}
+		if len(row.Spans) > 0xFFFF {
+			return nil, ErrBufferTooLarge
+		}
+		if err := binary.Write(buf, binary.LittleEndian, row.RowIdx); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(buf, binary.LittleEndian, uint16(len(row.Spans))); err != nil {
+			return nil, err
+		}
+		for _, span := range row.Spans {
+			textBytes := []byte(span.Text)
+			if len(textBytes) > 0xFFFF {
+				return nil, ErrInvalidSpan
+			}
+			if int(span.StyleIndex) >= len(delta.Styles) {
+				return nil, ErrStyleIndexOutOfRange
+			}
+			if err := binary.Write(buf, binary.LittleEndian, span.StartCol); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.LittleEndian, uint16(len(textBytes))); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.LittleEndian, span.StyleIndex); err != nil {
+				return nil, err
+			}
+			if len(textBytes) > 0 {
+				if _, err := buf.Write(textBytes); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
 	return buf.Bytes(), nil
 }
 
@@ -347,5 +406,49 @@ func DecodeBufferDelta(b []byte) (BufferDelta, error) {
 		delta.Rows[i] = RowDelta{Row: row, Spans: spans}
 	}
 
+	// v3 tail: DecorRows. The 2-byte count is mandatory — no v2 fallback.
+	if len(b) < 2 {
+		return delta, ErrPayloadShort
+	}
+	decorCount := binary.LittleEndian.Uint16(b[:2])
+	b = b[2:]
+	delta.DecorRows = make([]DecorRowDelta, decorCount)
+	for i := 0; i < int(decorCount); i++ {
+		if len(b) < 4 {
+			return delta, ErrPayloadShort
+		}
+		rowIdx := binary.LittleEndian.Uint16(b[:2])
+		spanCount := binary.LittleEndian.Uint16(b[2:4])
+		b = b[4:]
+		// Defensive bound: a sane pane is at most a few thousand rows
+		// tall. A RowIdx beyond MaxDecorRowIdx indicates a corrupt or
+		// hostile payload — reject rather than balloon client memory.
+		if rowIdx > MaxDecorRowIdx {
+			return delta, ErrInvalidSpan
+		}
+		spans := make([]CellSpan, spanCount)
+		for s := 0; s < int(spanCount); s++ {
+			if len(b) < 6 {
+				return delta, ErrPayloadShort
+			}
+			startCol := binary.LittleEndian.Uint16(b[:2])
+			textLen := binary.LittleEndian.Uint16(b[2:4])
+			styleIndex := binary.LittleEndian.Uint16(b[4:6])
+			b = b[6:]
+			if len(b) < int(textLen) {
+				return delta, ErrPayloadShort
+			}
+			text := string(b[:textLen])
+			b = b[textLen:]
+			if int(styleIndex) >= int(styleCount) {
+				return delta, ErrStyleIndexOutOfRange
+			}
+			spans[s] = CellSpan{StartCol: startCol, Text: text, StyleIndex: styleIndex}
+		}
+		delta.DecorRows[i] = DecorRowDelta{RowIdx: rowIdx, Spans: spans}
+	}
+	if len(b) != 0 {
+		return delta, ErrPayloadShort
+	}
 	return delta, nil
 }

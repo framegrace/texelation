@@ -24,6 +24,7 @@ func applyPostResumeReset(state *clientState, lastSequence *atomic.Uint64) {
 		return
 	}
 	state.cache.ResetRevisions()
+	state.resetDecorationMissTracker()
 	if lastSequence != nil {
 		lastSequence.Store(0)
 	}

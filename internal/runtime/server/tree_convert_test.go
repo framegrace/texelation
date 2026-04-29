@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 func TestProtocolToTreeCapturePopulatesRowGlobalIdx(t *testing.T) {
@@ -60,5 +61,33 @@ func TestProtocolToTreeCaptureEmptyRows(t *testing.T) {
 	pane := capture.Panes[0]
 	if len(pane.RowGlobalIdx) != len(pane.Buffer) {
 		t.Fatalf("invariant violated: len(RowGlobalIdx)=%d len(Buffer)=%d", len(pane.RowGlobalIdx), len(pane.Buffer))
+	}
+}
+
+func TestTreeCaptureToProtocol_PassesContentBounds(t *testing.T) {
+	capture := texel.TreeCapture{
+		Panes: []texel.PaneSnapshot{{
+			ID:             [16]byte{0xab},
+			Title:          "t",
+			ContentTopRow:  2,
+			NumContentRows: 16,
+		}},
+	}
+	snap := treeCaptureToProtocol(capture)
+	if len(snap.Panes) != 1 {
+		t.Fatalf("expected 1 pane, got %d", len(snap.Panes))
+	}
+	if snap.Panes[0].ContentTopRow != 2 || snap.Panes[0].NumContentRows != 16 {
+		t.Fatalf("content bounds not passed through forward: top=%d num=%d",
+			snap.Panes[0].ContentTopRow, snap.Panes[0].NumContentRows)
+	}
+
+	roundTrip := protocolToTreeCapture(snap)
+	if len(roundTrip.Panes) != 1 {
+		t.Fatalf("expected 1 pane after reverse, got %d", len(roundTrip.Panes))
+	}
+	if roundTrip.Panes[0].ContentTopRow != 2 || roundTrip.Panes[0].NumContentRows != 16 {
+		t.Fatalf("content bounds not passed through reverse: top=%d num=%d",
+			roundTrip.Panes[0].ContentTopRow, roundTrip.Panes[0].NumContentRows)
 	}
 }

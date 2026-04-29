@@ -9,27 +9,29 @@
 package server
 
 import (
-	texelcore "github.com/framegrace/texelui/core"
 	"encoding/json"
 
 	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
+	texelcore "github.com/framegrace/texelui/core"
 )
 
 func treeCaptureToProtocol(capture texel.TreeCapture) protocol.TreeSnapshot {
 	snapshot := protocol.TreeSnapshot{Panes: make([]protocol.PaneSnapshot, len(capture.Panes))}
 	for i, pane := range capture.Panes {
 		snapshot.Panes[i] = protocol.PaneSnapshot{
-			PaneID:    pane.ID,
-			Revision:  0,
-			Title:     pane.Title,
-			Rows:      nil,
-			X:         int32(pane.Rect.X),
-			Y:         int32(pane.Rect.Y),
-			Width:     int32(pane.Rect.Width),
-			Height:    int32(pane.Rect.Height),
-			AppType:   pane.AppType,
-			AppConfig: encodeAppConfig(pane.AppConfig),
+			PaneID:         pane.ID,
+			Revision:       0,
+			Title:          pane.Title,
+			Rows:           nil,
+			X:              int32(pane.Rect.X),
+			Y:              int32(pane.Rect.Y),
+			Width:          int32(pane.Rect.Width),
+			Height:         int32(pane.Rect.Height),
+			AppType:        pane.AppType,
+			AppConfig:      encodeAppConfig(pane.AppConfig),
+			ContentTopRow:  pane.ContentTopRow,
+			NumContentRows: pane.NumContentRows,
 		}
 	}
 	snapshot.Root = buildProtocolTreeNode(capture.Root)
@@ -48,13 +50,15 @@ func protocolToTreeCapture(snapshot protocol.TreeSnapshot) texel.TreeCapture {
 			}
 		}
 		capture.Panes[i] = texel.PaneSnapshot{
-			ID:           pane.PaneID,
-			Title:        pane.Title,
-			Buffer:       buffer,
-			RowGlobalIdx: rowGlobalIdxAllMinusOne(len(buffer)),
-			Rect:         texel.Rectangle{X: int(pane.X), Y: int(pane.Y), Width: int(pane.Width), Height: int(pane.Height)},
-			AppType:      pane.AppType,
-			AppConfig:    decodeAppConfig(pane.AppConfig),
+			ID:             pane.PaneID,
+			Title:          pane.Title,
+			Buffer:         buffer,
+			RowGlobalIdx:   rowGlobalIdxAllMinusOne(len(buffer)),
+			Rect:           texel.Rectangle{X: int(pane.X), Y: int(pane.Y), Width: int(pane.Width), Height: int(pane.Height)},
+			AppType:        pane.AppType,
+			AppConfig:      decodeAppConfig(pane.AppConfig),
+			ContentTopRow:  pane.ContentTopRow,
+			NumContentRows: pane.NumContentRows,
 		}
 	}
 	capture.Root = protocolNodeToCapture(snapshot.Root)

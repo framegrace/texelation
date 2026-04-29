@@ -35,6 +35,14 @@ type PaneSnapshot struct {
 	Rect      Rectangle
 	AppType   string
 	AppConfig map[string]interface{}
+	// ContentTopRow is the first rowIdx in Buffer with RowGlobalIdx[y] >= 0.
+	// NumContentRows is the count of indices with RowGlobalIdx[y] >= 0.
+	// NumContentRows == 0 means zero content rows (status panes, all-decoration
+	// apps); in that case ContentTopRow is meaningless. For alt-screen panes
+	// the fields are populated but unused — clients render alt-screen
+	// positionally regardless.
+	ContentTopRow  uint16
+	NumContentRows uint16
 }
 
 // Rectangle stores pane position and size in screen coordinates.
@@ -191,6 +199,16 @@ func (d *DesktopEngine) GeometryForClient() TreeCapture {
 							Height: n.Pane.Height(),
 						},
 					}
+					// Populate structural content bounds + AltScreen flag so
+					// the geometry-only snapshot carries the same content/layout
+					// metadata the full snapshot would. Without these, the client
+					// applies the snapshot during a resize, overwrites the pane's
+					// previously-correct ContentTopRow / NumContentRows with
+					// zeros, and then routes every interior rowIdx through the
+					// decoration-only branch of rowSourceForPane — leaving the
+					// content rows blank until the next full snapshot arrives.
+					// See issue #199 follow-up: "resize blanks content."
+					applyStructuralBounds(&snap, n.Pane)
 					paneIndex[n.Pane] = len(capture.Panes)
 					capture.Panes = append(capture.Panes, snap)
 				}
@@ -216,6 +234,45 @@ func (d *DesktopEngine) GeometryForClient() TreeCapture {
 		capture.Panes = append(capture.Panes, floating...)
 	}
 	return capture
+}
+
+// applyStructuralBounds populates snap.ContentTopRow, snap.NumContentRows,
+// and snap.AltScreen from the pane's app metadata WITHOUT rendering the
+// pane buffer. Mirrors the structural calculation in capturePaneSnapshot
+// (lines around `if hasRowProvider && !snap.AltScreen && h > 2`) so the
+// geometry-only snapshot used during resize carries the same bounds the
+// full snapshot would. The pane's height drives the structural answer; we
+// only need RowGlobalIdx() to detect the texterm "trailing statusbar"
+// pattern (last entry < 0).
+func applyStructuralBounds(snap *PaneSnapshot, p *pane) {
+	if p == nil || p.app == nil {
+		// Placeholder pane: no content bounds, alt-screen-equivalent.
+		snap.AltScreen = true
+		return
+	}
+	h := p.Height()
+	rowProvider, hasRowProvider := p.app.(RowGlobalIdxProvider)
+	if !hasRowProvider {
+		snap.AltScreen = true
+		return
+	}
+	if altProvider, ok := p.app.(AltScreenProvider); ok && altProvider.InAltScreen() {
+		snap.AltScreen = true
+		return
+	}
+	if h <= 2 {
+		return
+	}
+	n := h - 2
+	appIdx := rowProvider.RowGlobalIdx()
+	if len(appIdx) > 0 && appIdx[len(appIdx)-1] < 0 {
+		n--
+	}
+	if n <= 0 {
+		return
+	}
+	snap.ContentTopRow = 1
+	snap.NumContentRows = uint16(n)
 }
 
 // CaptureTree gathers panes and the layout tree for persistence or transport.
@@ -317,6 +374,8 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		},
 	}
 	// p.app might be nil if capturing during split before attach, or if app crashed
+	var appIdx []int64
+	hasRowProvider := false
 	if p.app != nil {
 		if provider, ok := p.app.(SnapshotProvider); ok {
 			appType, config := provider.SnapshotMetadata()
@@ -326,9 +385,10 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		// Terminal-like apps expose per-row globalIdxs for their rendered
 		// content. The content buffer sits inside a 1-cell border at (1,1),
 		// so offset entries by +1 and stop short of the bottom-border row.
-		rowProvider, hasRowProvider := p.app.(RowGlobalIdxProvider)
+		rowProvider, ok := p.app.(RowGlobalIdxProvider)
+		hasRowProvider = ok
 		if hasRowProvider {
-			appIdx := rowProvider.RowGlobalIdx()
+			appIdx = rowProvider.RowGlobalIdx()
 			h := len(buf)
 			// Last writable interior row is h-2 (h-1 is the bottom border).
 			maxInteriorRow := h - 2
@@ -354,7 +414,53 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		snap.Title = "Loading..."
 		snap.AltScreen = true
 	}
+	// ContentTopRow / NumContentRows describe the STRUCTURAL content area
+	// of the pane, independent of which content rows have actually been
+	// written. The client uses NumContentRows to compute the viewport
+	// anchor (top = maxGid - (NumContentRows-1)); deriving it from
+	// populated-gid count makes the viewport collapse to a sliver as
+	// content trickles in, which causes the server-side clip to drop
+	// earlier rows. Compute structurally instead: 1..h-2 is the pane
+	// interior; if the app reports a trailing decoration row (texterm
+	// internal statusbar pattern, where appIdx[last] < 0), shrink by 1.
+	h := len(buf)
+	if hasRowProvider && !snap.AltScreen && h > 2 {
+		n := h - 2
+		if len(appIdx) > 0 && appIdx[len(appIdx)-1] < 0 {
+			n--
+		}
+		if n > 0 {
+			snap.ContentTopRow = 1
+			snap.NumContentRows = uint16(n)
+		}
+	}
 	return snap
+}
+
+// computeContentBounds returns (ContentTopRow, NumContentRows) for the
+// given RowGlobalIdx slice. The bounds span from the first index with
+// gid>=0 to the last such index (inclusive). Mid-range rows with gid<0
+// are tolerated — they represent content rows that have not yet been
+// written (e.g., a fresh terminal where only the prompt row has a gid).
+// The renderer's gid-lookup naturally returns nil for those rows,
+// rendering them blank, which is the desired behaviour. If no row has
+// gid>=0, returns (0, 0).
+func computeContentBounds(rowIdx []int64) (uint16, uint16) {
+	top := -1
+	last := -1
+	for y, gid := range rowIdx {
+		if gid < 0 {
+			continue
+		}
+		if top < 0 {
+			top = y
+		}
+		last = y
+	}
+	if top < 0 {
+		return 0, 0
+	}
+	return uint16(top), uint16(last - top + 1)
 }
 
 // allMinusOne returns a slice of length n filled with -1. Used as the

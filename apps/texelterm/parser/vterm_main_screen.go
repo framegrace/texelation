@@ -1099,11 +1099,12 @@ func (v *VTerm) LastPromptHeight() int {
 // RepositionForPromptOverwrite positions the cursor at `promptLine` column 0
 // so a freshly-spawned shell's first prompt overwrites the stored prompt 1:1
 // instead of rendering on the row where the previous session left off. When
-// `promptLine` is at or past the current writeTop and within the viewport,
-// the cursor is moved in place. When it's above writeTop (viewport-capped
-// history), writeTop is rewound so the prompt line lands at row 0. No-op
-// if the main screen is absent, `promptLine` is unknown (<0), or the target
-// lies below the bottom of the current viewport.
+// `promptLine` is within the current viewport, the cursor is moved in place.
+// When it's outside the viewport (either above due to history-cap, OR below
+// because the vterm hasn't yet been resized to the pane's full height at
+// recovery time), writeTop is repositioned so the prompt line lands at row
+// 0 of the visible area. No-op if the main screen is absent or `promptLine`
+// is unknown (<0).
 func (v *VTerm) RepositionForPromptOverwrite(promptLine int64) {
 	if v.mainScreen == nil || promptLine < 0 {
 		return
@@ -1115,8 +1116,13 @@ func (v *VTerm) RepositionForPromptOverwrite(promptLine int64) {
 		v.mainScreen.RewindWriteTop(promptLine)
 		targetRow = 0
 	case promptLine >= curTop+int64(v.height):
-		// Prompt sits past the viewport bottom — nothing sensible to do.
-		return
+		// Prompt sits past the viewport bottom — common when the vterm
+		// is still at its pre-resize default size at recovery time.
+		// Rewind so the new shell's first prompt lands at row 0 instead
+		// of wherever the cursor happened to be (which would create the
+		// "duplicated prompt" visual on first start).
+		v.mainScreen.RewindWriteTop(promptLine)
+		targetRow = 0
 	default:
 		targetRow = int(promptLine - curTop)
 	}

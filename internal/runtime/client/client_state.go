@@ -133,6 +133,46 @@ type clientState struct {
 	// the resume error path — see app.go — so a failed-then-retried resume
 	// against a different sessionID does not consume a stale flag.
 	resetOnNextSnapshot atomic.Bool
+
+	// decorMissMu / decorMissSeen dedup decoration-cache miss log lines
+	// emitted by rowSourceForPane. We log once per (paneID, rowIdx) pair
+	// to avoid drowning the log when a decoration cache miss persists for
+	// multiple frames. resetDecorationMissTracker clears this on
+	// post-resume reset so a fresh session can re-log misses. Issue #199.
+	decorMissMu   sync.Mutex
+	decorMissSeen map[decorationMissKey]struct{}
+}
+
+// decorationMissKey is the dedup key for once-per-pane-row decoration miss logging.
+type decorationMissKey struct {
+	paneID [16]byte
+	rowIdx uint16
+}
+
+// logDecorationMissOnce emits a log line the first time the renderer
+// observes a decoration cache miss for a given (paneID, rowIdx). Subsequent
+// misses for the same key are silent.
+func (s *clientState) logDecorationMissOnce(paneID [16]byte, rowIdx uint16) {
+	s.decorMissMu.Lock()
+	defer s.decorMissMu.Unlock()
+	if s.decorMissSeen == nil {
+		s.decorMissSeen = make(map[decorationMissKey]struct{})
+	}
+	key := decorationMissKey{paneID: paneID, rowIdx: rowIdx}
+	if _, seen := s.decorMissSeen[key]; seen {
+		return
+	}
+	s.decorMissSeen[key] = struct{}{}
+	log.Printf("client: decoration cache miss for pane %x rowIdx %d (rendering blank); subsequent misses suppressed", paneID, rowIdx)
+}
+
+// resetDecorationMissTracker clears the dedup state used by
+// logDecorationMissOnce. Called from the post-resume reset path so a
+// fresh session can re-log misses.
+func (s *clientState) resetDecorationMissTracker() {
+	s.decorMissMu.Lock()
+	defer s.decorMissMu.Unlock()
+	s.decorMissSeen = nil
 }
 
 func (s *clientState) setRenderChannel(ch chan<- struct{}) {

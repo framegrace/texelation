@@ -109,3 +109,20 @@ func TestApplyPostResumeReset_NilSequenceIsNotADereference(t *testing.T) {
 		t.Fatalf("nil lastSeq should still reset cache: got %d", got)
 	}
 }
+
+// TestPostResumeReset_ClearsDecorationMissTracker verifies the
+// decoration-miss dedup tracker is cleared when the post-resume reset
+// fires. Issue #199 Task 11 / Task 9 Step 4.
+func TestPostResumeReset_ClearsDecorationMissTracker(t *testing.T) {
+	cache := client.NewBufferCache()
+	state := newStateWithCache(cache)
+	state.logDecorationMissOnce([16]byte{0xab}, 5)
+	if len(state.decorMissSeen) != 1 {
+		t.Fatalf("expected 1 entry pre-reset, got %d", len(state.decorMissSeen))
+	}
+	state.resetOnNextSnapshot.Store(true)
+	applyPostResumeReset(state, nil)
+	if len(state.decorMissSeen) != 0 {
+		t.Fatalf("expected decorMissSeen cleared, got %d entries", len(state.decorMissSeen))
+	}
+}

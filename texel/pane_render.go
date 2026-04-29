@@ -7,6 +7,8 @@
 package texel
 
 import (
+	"log"
+	"os"
 	"sync/atomic"
 
 	"github.com/framegrace/texelation/internal/debuglog"
@@ -15,6 +17,13 @@ import (
 	"github.com/framegrace/texelui/theme"
 	"github.com/gdamore/tcell/v2"
 )
+
+// renderDebug is gated by env var TEXELATION_DEBUG=1. When enabled, each
+// renderBuffer logs the pane id, dimensions, and the runes at (0,1), (1,1),
+// (w-1,1) so we can confirm the SERVER-side buffer has correct side borders
+// on the first interior row before publishing. Setting this on every
+// invocation would flood logs; we keep the check cheap and gated.
+var renderDebug = os.Getenv("TEXELATION_DEBUG") == "1"
 
 // markDirty flags this pane for re-render on the next snapshot cycle.
 func (p *pane) markDirty() {
@@ -145,8 +154,27 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 		p.wasActive = p.IsActive
 	}
 
-	// Swap buffer reference into the child widget.
+	// Swap buffer reference into the child widget, then re-clamp the
+	// widget to the border's ClientRect.
+	//
+	// BufferWidget.SetBuffer auto-resizes the widget to the buffer's
+	// dimensions. That's wrong here: when the embedded app's buffer
+	// happens to match the OUTER pane size (e.g. a non-resizing test
+	// fake, or a transient state where the app has not yet honoured the
+	// drawable shrink we requested in setDimensions), the widget's draw
+	// loop overruns the pane's right border at col W-1 and the bottom
+	// border at row H-1. Re-clamping to ClientRect (the inner
+	// W-2 × H-2 region at offset (1,1)) restores the contract: the
+	// child paints inside the border, never on top of it. The widget's
+	// Draw loop is bounded by min(widget.Size, len(buffer)), so a
+	// smaller widget with a larger buffer renders only the top-left
+	// portion that fits — the desired behaviour. This is the source-
+	// of-truth fix for the 1-column / 1-row "decoration overrun" the
+	// publisher then dutifully ships to the client.
 	p.bufferWidget.SetBuffer(appBuffer)
+	cr := p.border.ClientRect()
+	p.bufferWidget.SetPosition(cr.X, cr.Y)
+	p.bufferWidget.Resize(cr.W, cr.H)
 
 	// Draw through the persistent widget tree.
 	painter := texelcore.NewPainter(buffer, texelcore.Rect{X: 0, Y: 0, W: w, H: h})
@@ -167,6 +195,21 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	p.prevBuf = buffer
 	p.prevTitle = currentTitle
 	p.lastRendered = gen
+
+	if renderDebug && h > 2 && w > 2 {
+		paneID := p.ID()
+		row1 := buffer[1]
+		appW, appH := 0, 0
+		if len(appBuffer) > 0 {
+			appH = len(appBuffer)
+			appW = len(appBuffer[0])
+		}
+		bx, by := p.bufferWidget.Position()
+		bw, bh := p.bufferWidget.Size()
+		log.Printf("renderDebug pane=%x w=%d h=%d row1=[%q,%q,%q] appBuf=%dx%d bufWidget=(%d,%d)+%dx%d",
+			paneID[:4], w, h, row1[0].Ch, row1[1].Ch, row1[w-1].Ch,
+			appW, appH, bx, by, bw, bh)
+	}
 
 	return buffer
 }

@@ -16,7 +16,9 @@
 package server
 
 import (
+	"fmt"
 	"io"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +28,7 @@ import (
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/framegrace/texelation/apps/texelterm/parser/sparse"
+	"github.com/framegrace/texelation/client"
 	"github.com/framegrace/texelation/internal/runtime/server/testutil"
 	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
@@ -96,6 +99,16 @@ func (a *sparseFakeApp) FeedRows(startGID int64, rows []string) {
 	a.rebuildRenderFromStoreLocked(maxGID)
 	a.mu.Unlock()
 	a.markDirty()
+}
+
+// AppendLine appends a single main-screen row at the next free globalIdx
+// (one past the current Max). Thin wrapper over FeedRows kept for tests
+// that want a "stream a line at a time" feel without computing gids.
+func (a *sparseFakeApp) AppendLine(s string) {
+	a.mu.Lock()
+	next := a.store.Max() + 1
+	a.mu.Unlock()
+	a.FeedRows(next, []string{s})
 }
 
 // ScrollTo sets the render buffer to show the <height> rows ending at
@@ -285,8 +298,15 @@ type memHarness struct {
 	srv     *Server
 	session *Session
 	pub     *DesktopPublisher
-	fakeApp *sparseFakeApp
-	paneID  [16]byte
+	fakeApp *sparseFakeApp   // primary fake app (paneIDs[0])
+	fakes   []*sparseFakeApp // all fake apps spawned, parallel to paneIDs
+	paneID  [16]byte         // primary pane ID (paneIDs[0])
+	paneIDs [][16]byte       // [0] = original; [1..] = additional panes when twoPanes=true
+
+	persistDir string // empty unless newMemHarnessOpts was given persistDir
+
+	clientCache *client.BufferCache
+	lastDelta   *lastDeltaTracker
 
 	serverConn *testutil.MemConn
 	clientConn *testutil.MemConn
@@ -299,6 +319,71 @@ type memHarness struct {
 	fetchByReqID   map[uint32]protocol.FetchRangeResponse
 	rowBasesByPane map[[16]byte][]int64 // every RowBase observed per pane, in order
 	writeMu        sync.Mutex           // client-side write serialization
+}
+
+// memHarnessOpts configures newMemHarnessOpts.
+type memHarnessOpts struct {
+	cols, rows int
+	twoPanes   bool
+	persistDir string // if non-empty, mgr.EnablePersistence is called with this
+	// seedFeed is fed into the primary fake app via FeedRows(0, seedFeed)
+	// BEFORE the handshake completes, so the initial TreeSnapshot the server
+	// ships during connect carries non-default ContentTopRow / NumContentRows.
+	// Tests that need the client cache to observe content bounds on a clean
+	// start must use this rather than calling FeedRows post-handshake (where
+	// the snapshot has already been sent with NumContentRows == 0).
+	seedFeed []string
+}
+
+// lastDeltaTracker remembers the most recent BufferDelta per pane and lets
+// callers wait for a fresh one.
+type lastDeltaTracker struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	byPane map[[16]byte]protocol.BufferDelta
+}
+
+func newLastDeltaTracker() *lastDeltaTracker {
+	t := &lastDeltaTracker{byPane: make(map[[16]byte]protocol.BufferDelta)}
+	t.cond = sync.NewCond(&t.mu)
+	return t
+}
+
+func (t *lastDeltaTracker) put(paneID [16]byte, d protocol.BufferDelta) {
+	t.mu.Lock()
+	t.byPane[paneID] = d
+	t.cond.Broadcast()
+	t.mu.Unlock()
+}
+
+func (t *lastDeltaTracker) wait(paneID [16]byte, timeout time.Duration) (protocol.BufferDelta, bool) {
+	deadline := time.Now().Add(timeout)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for {
+		if d, ok := t.byPane[paneID]; ok {
+			return d, true
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return protocol.BufferDelta{}, false
+		}
+		// Cond.Wait has no timeout. Spin a one-shot timer that broadcasts
+		// when the deadline passes so the cond wakes up.
+		timer := time.AfterFunc(remaining, func() {
+			t.mu.Lock()
+			t.cond.Broadcast()
+			t.mu.Unlock()
+		})
+		t.cond.Wait()
+		timer.Stop()
+	}
+}
+
+func (t *lastDeltaTracker) reset(paneID [16]byte) {
+	t.mu.Lock()
+	delete(t.byPane, paneID)
+	t.mu.Unlock()
 }
 
 type vpScreenDriver struct {
@@ -319,12 +404,48 @@ func (d vpScreenDriver) GetContent(int, int) (rune, []rune, tcell.Style, int) {
 
 // newMemHarness wires everything up and performs the initial handshake so
 // the test can immediately push viewports / feed rows / call FetchRange.
+// Existing callers rely on this signature; new callers needing persistence
+// or two-pane setups should use newMemHarnessOpts.
 func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 	t.Helper()
-	fakeApp := newSparseFakeApp(cols, rows)
+	return newMemHarnessOpts(t, memHarnessOpts{cols: cols, rows: rows})
+}
+
+// newMemHarnessOpts is the configurable variant. cols and rows are required;
+// other fields are optional. When twoPanes is true, the active workspace is
+// horizontally split and a second sparseFakeApp is attached so paneIDs has
+// two entries. When persistDir is set, the manager is bound to that
+// directory via EnablePersistence (required for Restart).
+func newMemHarnessOpts(t *testing.T, opts memHarnessOpts) *memHarness {
+	t.Helper()
+	cols, rows := opts.cols, opts.rows
+	// Build a shell factory that hands out fresh sparseFakeApp instances
+	// in order. The first call (during desktop init) yields fakes[0], which
+	// we also expose as h.fakeApp for back-compat with single-pane tests.
+	var fakes []*sparseFakeApp
+	makeFake := func() *sparseFakeApp {
+		a := newSparseFakeApp(cols, rows)
+		fakes = append(fakes, a)
+		return a
+	}
+	primary := makeFake()
+	if len(opts.seedFeed) > 0 {
+		primary.FeedRows(0, opts.seedFeed)
+	}
 	driver := vpScreenDriver{cols: cols, rows: rows}
 	lifecycle := texel.NoopAppLifecycle{}
-	shellFactory := func() texelcore.App { return fakeApp }
+	// Shell factory: hand out the first fake on the initial call, then
+	// allocate fresh fakes for subsequent splits.
+	first := true
+	shellFactory := func() texelcore.App {
+		if first {
+			first = false
+			return primary
+		}
+		return makeFake()
+	}
+	// Keep the legacy local for the existing body below.
+	fakeApp := primary
 	desktop, err := texel.NewDesktopEngineWithDriver(driver, shellFactory, "texelterm", &lifecycle)
 	if err != nil {
 		t.Fatalf("NewDesktopEngineWithDriver: %v", err)
@@ -338,8 +459,23 @@ func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 	desktop.SetViewportSize(cols, rows)
 
 	mgr := NewManager()
+	if opts.persistDir != "" {
+		if err := mgr.EnablePersistence(opts.persistDir, 10*time.Millisecond); err != nil {
+			t.Fatalf("EnablePersistence: %v", err)
+		}
+	}
 	sink := NewDesktopSink(desktop)
 	srv := &Server{manager: mgr, sink: sink, desktopSink: sink}
+
+	// Optional second pane: split the active workspace horizontally so the
+	// shell factory is invoked again, attaching fakes[1] to the new leaf.
+	if opts.twoPanes {
+		ws := desktop.ActiveWorkspace()
+		if ws == nil {
+			t.Fatalf("twoPanes: no active workspace to split")
+		}
+		ws.PerformSplit(texel.Vertical)
+	}
 
 	h := &memHarness{
 		t:              t,
@@ -348,6 +484,10 @@ func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 		mgr:            mgr,
 		srv:            srv,
 		fakeApp:        fakeApp,
+		fakes:          fakes,
+		persistDir:     opts.persistDir,
+		clientCache:    client.NewBufferCache(),
+		lastDelta:      newLastDeltaTracker(),
 		rowsByGID:      make(map[int64]protocol.RowDelta),
 		altRowsByIdx:   make(map[uint16][]protocol.CellSpan),
 		fetchByReqID:   make(map[uint32]protocol.FetchRangeResponse),
@@ -355,18 +495,36 @@ func newMemHarness(t *testing.T, cols, rows int) *memHarness {
 		readerDone:     make(chan struct{}),
 	}
 
-	// Find the pane ID assigned to the shell app by the desktop.
-	var foundID [16]byte
-	for _, snap := range desktop.SnapshotBuffers() {
-		if snap.Title == fakeApp.GetTitle() {
-			foundID = snap.ID
-			break
+	// Resolve pane IDs in the order the fakes were created. SnapshotBuffers
+	// returns one entry per pane; for each fake (in factory-call order) we
+	// pick the matching ID by app pointer identity, falling back to title.
+	snaps := desktop.SnapshotBuffers()
+	for i, fa := range fakes {
+		var id [16]byte
+		// Prefer pointer-equality-by-title-position: if every fake reports
+		// the same title, we have to disambiguate by which buffer index in
+		// the snapshot list this fake corresponds to. Since the factory
+		// hands them out in split order, we map fakes[i] -> the i-th
+		// matching snapshot title.
+		matches := 0
+		for _, snap := range snaps {
+			if snap.Title == fa.GetTitle() {
+				if matches == i {
+					id = snap.ID
+					break
+				}
+				matches++
+			}
 		}
+		if id == ([16]byte{}) {
+			t.Fatalf("could not locate pane %d hosting sparseFakeApp", i)
+		}
+		h.paneIDs = append(h.paneIDs, id)
 	}
-	if foundID == ([16]byte{}) {
-		t.Fatalf("could not locate pane hosting sparseFakeApp")
+	if len(h.paneIDs) == 0 {
+		t.Fatalf("no panes located")
 	}
-	h.paneID = foundID
+	h.paneID = h.paneIDs[0]
 
 	h.serverConn, h.clientConn = testutil.NewMemPipe(64)
 	t.Cleanup(func() {
@@ -464,6 +622,22 @@ func (h *memHarness) writeFrame(msgType protocol.MessageType, payload []byte, se
 	}
 }
 
+// tryWriteFrame is the non-fatal variant used by the client read loop. The
+// reader runs as a background goroutine and may race a Restart() that
+// closes clientConn while a delta ack is in flight; treating that EOF as
+// fatal would mark the test failed despite being a benign teardown race.
+func (h *memHarness) tryWriteFrame(msgType protocol.MessageType, payload []byte, sessionID [16]byte) error {
+	h.writeMu.Lock()
+	defer h.writeMu.Unlock()
+	hdr := protocol.Header{
+		Version:   protocol.Version,
+		Type:      msgType,
+		Flags:     protocol.FlagChecksum,
+		SessionID: sessionID,
+	}
+	return protocol.WriteMessage(h.clientConn, hdr, payload)
+}
+
 func (h *memHarness) sessionID() [16]byte {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -489,7 +663,18 @@ func (h *memHarness) clientReadLoop() {
 				h.t.Logf("client decode buffer delta: %v", derr)
 				continue
 			}
+			// Always feed the client-side BufferCache so tests can inspect
+			// PaneState (ContentTopRow / NumContentRows / DecorRows) for any
+			// pane, not just the primary.
+			h.clientCache.ApplyDelta(delta)
+			h.lastDelta.put(delta.PaneID, delta)
 			if delta.PaneID != h.paneID {
+				// Other panes still get cached + tracked above; only the
+				// primary pane's rows are recorded in rowsByGID.
+				ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
+				if err := h.tryWriteFrame(protocol.MsgBufferAck, ackPayload, h.sessionID()); err != nil {
+					return
+				}
 				continue
 			}
 			h.mu.Lock()
@@ -513,7 +698,16 @@ func (h *memHarness) clientReadLoop() {
 			h.mu.Unlock()
 			// Ack the delta so the session queue stays bounded.
 			ackPayload, _ := protocol.EncodeBufferAck(protocol.BufferAck{Sequence: hdr.Sequence})
-			h.writeFrame(protocol.MsgBufferAck, ackPayload, h.sessionID())
+			if err := h.tryWriteFrame(protocol.MsgBufferAck, ackPayload, h.sessionID()); err != nil {
+				return
+			}
+		case protocol.MsgTreeSnapshot:
+			snap, derr := protocol.DecodeTreeSnapshot(payload)
+			if derr != nil {
+				h.t.Logf("client decode tree snapshot: %v", derr)
+				continue
+			}
+			h.clientCache.ApplySnapshot(snap)
 		case protocol.MsgFetchRangeResponse:
 			resp, derr := protocol.DecodeFetchRangeResponse(payload)
 			if derr != nil {
@@ -845,4 +1039,682 @@ func gidList(rows []protocol.LogicalRow) []int64 {
 		out[i] = r.GlobalIdx
 	}
 	return out
+}
+
+// ClientPane returns the client-side BufferCache PaneState for paneID, or
+// nil if the cache hasn't seen that pane yet.
+func (h *memHarness) ClientPane(id [16]byte) *client.PaneState {
+	return h.clientCache.PaneByID(id)
+}
+
+// WaitForDelta blocks until a BufferDelta for paneID has been observed by
+// the client read loop. Returns the most-recent delta seen for that pane.
+// Use ResetDeltaTracker before driving a new action so the next call here
+// is guaranteed to wait for a fresh delta rather than returning a stale one.
+func (h *memHarness) WaitForDelta(t *testing.T, paneID [16]byte, timeout time.Duration) protocol.BufferDelta {
+	t.Helper()
+	d, ok := h.lastDelta.wait(paneID, timeout)
+	if !ok {
+		t.Fatalf("WaitForDelta: timeout waiting for pane %x", paneID)
+	}
+	return d
+}
+
+// ResetDeltaTracker clears the cached last-delta for paneID. Call before
+// triggering an action whose effect must be observed in a NEW delta (focus
+// change, content append, viewport scroll).
+func (h *memHarness) ResetDeltaTracker(paneID [16]byte) {
+	h.lastDelta.reset(paneID)
+}
+
+// FocusPane drives a focus change to the given pane ID via the public
+// Workspace.FocusByID API added for Task 15. No-op when the target is
+// already active.
+func (h *memHarness) FocusPane(paneID [16]byte) {
+	h.t.Helper()
+	ws := h.desktop.ActiveWorkspace()
+	if ws == nil {
+		h.t.Fatalf("FocusPane: no active workspace")
+	}
+	if cur := ws.ActivePane(); cur != nil && cur.ID() == paneID {
+		return
+	}
+	if !ws.FocusByID(paneID) {
+		h.t.Fatalf("FocusPane: FocusByID(%x) returned false (pane not found in active workspace)", paneID)
+	}
+}
+
+// Restart shuts the in-process server down, recreates the Manager + Server
+// pointing at the same persistence dir, opens a fresh memconn pair, and
+// replays the handshake using MsgResumeRequest with the persisted sessionID.
+// Caller must have constructed h with a non-empty persistDir (via
+// newMemHarnessOpts).
+func (h *memHarness) Restart(t *testing.T) {
+	t.Helper()
+	if h.persistDir == "" {
+		t.Fatalf("Restart requires the harness to have been built with persistDir set")
+	}
+
+	sessionID := h.sessionID()
+	persistDir := h.persistDir
+
+	// Flush any pending debounced persistence write so the post-restart
+	// EnablePersistence boot scan sees this session on disk. Without this
+	// the 10ms debounce window can race the close + rebuild and the new
+	// Manager's LookupOrRehydrate would return ErrSessionNotFound.
+	h.mu.Lock()
+	sess := h.session
+	h.mu.Unlock()
+	if sess != nil {
+		sess.FlushPersistForTest()
+	}
+
+	// Close client side first; the server's serve goroutine exits on EOF
+	// and closes its end. Drain readerDone so we don't leak.
+	if err := h.clientConn.Close(); err != nil {
+		t.Logf("Restart: close clientConn: %v", err)
+	}
+	<-h.readerDone
+
+	// New Manager bound to the same persistence dir. The desktop, sink,
+	// and fakes survive across the restart — only the manager / connection
+	// is rebuilt.
+	mgr := NewManager()
+	if err := mgr.EnablePersistence(persistDir, 10*time.Millisecond); err != nil {
+		t.Fatalf("Restart: EnablePersistence: %v", err)
+	}
+	srv := &Server{manager: mgr, sink: h.sink, desktopSink: h.sink}
+	h.mgr = mgr
+	h.srv = srv
+
+	// Reset client-side accumulated state so post-restart deltas don't mix
+	// with pre-restart entries.
+	h.mu.Lock()
+	h.rowsByGID = make(map[int64]protocol.RowDelta)
+	h.altRowsByIdx = make(map[uint16][]protocol.CellSpan)
+	h.fetchByReqID = make(map[uint32]protocol.FetchRangeResponse)
+	h.rowBasesByPane = make(map[[16]byte][]int64)
+	h.mu.Unlock()
+	h.lastDelta = newLastDeltaTracker()
+	h.clientCache = client.NewBufferCache()
+	h.readerDone = make(chan struct{})
+
+	// New memconn pair.
+	h.serverConn, h.clientConn = testutil.NewMemPipe(64)
+	t.Cleanup(func() {
+		_ = h.serverConn.Close()
+		_ = h.clientConn.Close()
+	})
+
+	// Re-spawn the server-side handshake goroutine.
+	serveErrCh := make(chan error, 1)
+	sessCh := make(chan *Session, 1)
+	go func() {
+		defer h.serverConn.Close()
+		sess, resuming, _, err := handleHandshake(h.serverConn, mgr)
+		if err != nil {
+			serveErrCh <- err
+			return
+		}
+		pub := NewDesktopPublisher(h.desktop, sess)
+		h.sink.SetPublisher(pub)
+		conn := newConnection(h.serverConn, sess, h.sink, resuming, true /*rehydrated*/)
+		pub.SetNotifier(conn.nudge)
+		h.mu.Lock()
+		h.session = sess
+		h.pub = pub
+		h.mu.Unlock()
+		sessCh <- sess
+		serveErrCh <- conn.serve()
+	}()
+
+	// Client side: Hello -> Welcome -> ConnectRequest carrying the persisted
+	// sessionID. handleHandshake routes a non-zero SessionID through
+	// mgr.LookupOrRehydrate and replies with ConnectAccept. We then send
+	// MsgResumeRequest (with empty PaneViewports — Plan B's payload is
+	// optional here) to flip the connection out of awaitResume mode so
+	// sendPending will start writing diffs to the wire.
+	helloPayload, _ := protocol.EncodeHello(protocol.Hello{ClientName: "intg-client"})
+	h.writeFrame(protocol.MsgHello, helloPayload, [16]byte{})
+	if _, _, err := protocol.ReadMessage(h.clientConn); err != nil {
+		t.Fatalf("Restart: read welcome: %v", err)
+	}
+	connectReq, _ := protocol.EncodeConnectRequest(protocol.ConnectRequest{SessionID: sessionID})
+	h.writeFrame(protocol.MsgConnectRequest, connectReq, sessionID)
+	for {
+		hdr, payload, err := protocol.ReadMessage(h.clientConn)
+		if err != nil {
+			t.Fatalf("Restart: read connect accept: %v", err)
+		}
+		if hdr.Type == protocol.MsgConnectAccept {
+			if _, err := protocol.DecodeConnectAccept(payload); err != nil {
+				t.Fatalf("Restart: decode connect accept: %v", err)
+			}
+			break
+		}
+	}
+	select {
+	case <-sessCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Restart: session did not materialize")
+	}
+
+	// Send MsgResumeRequest to flip awaitResume off. Without this,
+	// sendPending early-returns and no diffs reach the client.
+	resumeReq, _ := protocol.EncodeResumeRequest(protocol.ResumeRequest{
+		SessionID:    sessionID,
+		LastSequence: 0,
+	})
+	h.writeFrame(protocol.MsgResumeRequest, resumeReq, sessionID)
+
+	// Spin client read loop back up.
+	go h.clientReadLoop()
+
+	t.Cleanup(func() {
+		_ = h.clientConn.Close()
+		select {
+		case err := <-serveErrCh:
+			if err != nil && err != io.EOF {
+				t.Logf("Restart: server serve exit: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Log("Restart: server serve goroutine did not exit cleanly")
+		}
+		<-h.readerDone
+	})
+}
+
+// TestPaneRenders_AllFourBorders_CleanStart verifies that on a clean start
+// with no rehydrate, the publisher emits decoration rows for both the top
+// and bottom pane borders, and that the client cache observes the correct
+// content bounds (ContentTopRow / NumContentRows) plus populated decoration
+// rows for both border rowIdxs.
+func TestPaneRenders_AllFourBorders_CleanStart(t *testing.T) {
+	// Seed the primary fake with 6 main-screen rows BEFORE handshake so the
+	// initial TreeSnapshot the server ships during connect carries
+	// ContentTopRow=1 / NumContentRows=4. With h=6, capturePaneSnapshot
+	// writes RowGlobalIdx[1..4] (rowIdx 0 + 5 stay -1 as borders).
+	feed := make([]string, 6)
+	for i := range feed {
+		feed[i] = "row-content"
+	}
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: 10, rows: 6, seedFeed: feed})
+	defer h.serverConn.Close()
+
+	// Send MsgClientReady so the server runs handleClientReady, which calls
+	// sink.Snapshot() and ships an initial MsgTreeSnapshot. Because the fake
+	// is already seeded, that snapshot carries ContentTopRow=1 /
+	// NumContentRows=4 for the primary pane.
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: 10, Rows: 6})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+
+	// Send a viewport so the publisher emits the main-screen pane. Content
+	// gids land in rowGIDs[0..3] (the first 4 of 6 rebuilt entries) once
+	// capturePaneSnapshot drops the border slots, so the visible window is
+	// gids 0..3.
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+
+	// First publish primes the buffer + ships the initial deltas.
+	h.Publish()
+
+	delta := h.WaitForDelta(t, h.paneID, 2*time.Second)
+	if len(delta.DecorRows) == 0 {
+		t.Fatal("expected DecorRows for at least the top + bottom borders")
+	}
+	rowIdxs := map[uint16]bool{}
+	for _, r := range delta.DecorRows {
+		rowIdxs[r.RowIdx] = true
+	}
+	if !rowIdxs[0] || !rowIdxs[5] {
+		t.Fatalf("expected decoration rows at rowIdx 0 and 5, got %v", rowIdxs)
+	}
+
+	// Verify content bounds reached the client cache.
+	pane := h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane %x", h.paneID)
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("client content bounds wrong: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+
+	// And the cache has decoration rows for both borders.
+	if _, ok := pane.DecorRowAt(0); !ok {
+		t.Fatalf("client decoration cache missing rowIdx 0")
+	}
+	if _, ok := pane.DecorRowAt(5); !ok {
+		t.Fatalf("client decoration cache missing rowIdx 5")
+	}
+}
+
+// TestPaneRenders_AllFourBorders_AfterRehydrate verifies that after a daemon
+// restart (manager + connection rebuilt against the same persistence dir),
+// the publisher still emits border decoration rows and the client cache
+// still observes the correct content bounds + populated border decoration
+// entries. Mirrors TestPaneRenders_AllFourBorders_CleanStart but adds a
+// Restart() in the middle.
+//
+// Note: the plan also asserts a statusbar decoration row at rowIdx 4 (H-2),
+// but sparseFakeApp does not mimic texelterm's internal statusbar — its
+// rowGIDs are 1:1 with content rows. So that assertion is intentionally
+// dropped here; the test still validates the Plan B / Plan D2 invariant
+// that border decorations and content bounds round-trip across rehydrate.
+func TestPaneRenders_AllFourBorders_AfterRehydrate(t *testing.T) {
+	dir := t.TempDir()
+	feed := make([]string, 6)
+	for i := range feed {
+		feed[i] = "row-content"
+	}
+	h := newMemHarnessOpts(t, memHarnessOpts{
+		cols:       10,
+		rows:       6,
+		persistDir: dir,
+		seedFeed:   feed,
+	})
+	defer h.serverConn.Close()
+
+	// Drive the initial snapshot+delta cycle (mirrors Task 12).
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: 10, Rows: 6})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+	h.Publish()
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	sessionID := h.sessionID()
+
+	// Daemon restart: rebuild manager + connection against the same persist
+	// dir, replay Hello + ResumeRequest with sessionID.
+	h.Restart(t)
+	_ = sessionID
+
+	// Re-trigger the initial publishing path post-rehydrate. Like clean
+	// start, the new connection needs MsgClientReady to call
+	// sink.Snapshot(), and a viewport so the publisher emits a delta.
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+	h.Publish()
+
+	delta := h.WaitForDelta(t, h.paneID, 2*time.Second)
+	rowIdxs := map[uint16]bool{}
+	for _, r := range delta.DecorRows {
+		rowIdxs[r.RowIdx] = true
+	}
+	if !rowIdxs[0] || !rowIdxs[5] {
+		t.Fatalf("post-rehydrate delta missing border DecorRows, got %v", rowIdxs)
+	}
+
+	// On a rehydrated session the first post-handshake sink.Publish() (run
+	// inside handleClientReady BEFORE the TreeSnapshot is written) can race
+	// the TreeSnapshot onto the wire because viewport pre-seed from disk
+	// makes the publisher emit immediately. As a result the BufferDelta
+	// that wakes WaitForDelta may be processed by the reader before the
+	// TreeSnapshot. Poll briefly so the test does not depend on which
+	// message the reader handled first.
+	deadline := time.Now().Add(2 * time.Second)
+	var pane *client.PaneState
+	for time.Now().Before(deadline) {
+		pane = h.ClientPane(h.paneID)
+		if pane != nil && pane.ContentTopRow == 1 && pane.NumContentRows == 4 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if pane == nil {
+		t.Fatalf("client cache missing pane after rehydrate")
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("client content bounds wrong after rehydrate: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+	if _, ok := pane.DecorRowAt(0); !ok {
+		t.Fatalf("decoration cache missing rowIdx 0 after rehydrate")
+	}
+	if _, ok := pane.DecorRowAt(5); !ok {
+		t.Fatalf("decoration cache missing rowIdx 5 after rehydrate")
+	}
+}
+
+// TestPaneRenders_AllFourBorders_ScrolledMidHistory verifies that when the
+// client scrolls off the live edge (autoFollow=false, viewBottom mid-history)
+// the publisher re-emits decoration rows for both pane borders and the
+// client cache still observes correct content bounds. This protects the
+// invariant that border decorations and ContentTopRow / NumContentRows
+// survive a viewport change that resets prev[] inside the publisher.
+func TestPaneRenders_AllFourBorders_ScrolledMidHistory(t *testing.T) {
+	feed := make([]string, 6)
+	for i := range feed {
+		feed[i] = "row-content"
+	}
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: 10, rows: 6, seedFeed: feed})
+	defer h.serverConn.Close()
+
+	// Drive an initial snapshot+delta cycle so the client cache observes
+	// the pane (mirrors Tasks 12 / 13).
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: 10, Rows: 6})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+	h.Publish()
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// Append several screens of content via the fake app's writer.
+	for i := 0; i < 50; i++ {
+		h.fakeApp.AppendLine(fmt.Sprintf("line-%d", i))
+		h.Publish()
+	}
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// Reset the delta tracker so the next WaitForDelta blocks for a NEW
+	// delta triggered by the viewport change. Without this, a stale delta
+	// from the append loop above could be returned and the test would race
+	// past the scroll without observing it.
+	h.ResetDeltaTracker(h.paneID)
+
+	// Scroll off the live edge: autoFollow=false, viewBottom mid-history.
+	h.ApplyViewport(h.paneID, 10, 15, false, false)
+	h.Publish()
+	// Wait for the post-scroll delta to land — this is when the publisher
+	// re-emits content for the new viewport AND re-emits decoration rows
+	// (since prev[] is reset on viewport change).
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	pane := h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane")
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("scrolled state lost content bounds: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+	if _, ok := pane.DecorRowAt(0); !ok {
+		t.Fatalf("scrolled state lost top border decoration")
+	}
+	if _, ok := pane.DecorRowAt(5); !ok {
+		t.Fatalf("scrolled state lost bottom border decoration")
+	}
+}
+
+// decorRowResolvedAt returns the (text, style-entry) pairs of a decoration
+// row at rowIdx in d, with span StyleIndex resolved against d.Styles. This
+// makes equality comparisons across two deltas meaningful: the per-delta
+// StyleIndex values are not stable, but the underlying StyleEntry values
+// are. Returns nil if the row is not present.
+type resolvedSpan struct {
+	Text  string
+	Style protocol.StyleEntry
+}
+
+func decorRowResolved(d protocol.BufferDelta, rowIdx uint16) []resolvedSpan {
+	for _, r := range d.DecorRows {
+		if r.RowIdx != rowIdx {
+			continue
+		}
+		out := make([]resolvedSpan, len(r.Spans))
+		for i, sp := range r.Spans {
+			var style protocol.StyleEntry
+			if int(sp.StyleIndex) < len(d.Styles) {
+				style = d.Styles[sp.StyleIndex]
+			}
+			out[i] = resolvedSpan{Text: sp.Text, Style: style}
+		}
+		return out
+	}
+	return nil
+}
+
+// TestPaneRenders_FocusChangeRepaintsBorders verifies that a focus change
+// in a two-pane workspace causes BOTH panes to ship fresh decoration rows
+// AND that the new border cells differ from the old (i.e. the active vs
+// inactive theme distinction round-trips through bufferToDelta and the
+// client-side ApplyDelta paths exercised by Tasks 7-14).
+func TestPaneRenders_FocusChangeRepaintsBorders(t *testing.T) {
+	// Workspace.PerformSplit enforces MinPaneWidth=20 / MinPaneHeight=8;
+	// twoPanes splits Vertical so cols must be >= 40.
+	const cols, rows = 40, 8
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: cols, rows: rows, twoPanes: true})
+	defer h.serverConn.Close()
+
+	// Drive the initial snapshot+delta cycle so both panes have shipped at
+	// least one BufferDelta and we have a baseline to compare against.
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: cols, Rows: rows})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+	h.ApplyViewport(h.paneIDs[0], 0, 3, true, false)
+	h.ApplyViewport(h.paneIDs[1], 0, 3, true, false)
+	h.Publish()
+
+	deltaA0 := h.WaitForDelta(t, h.paneIDs[0], 2*time.Second)
+	deltaB0 := h.WaitForDelta(t, h.paneIDs[1], 2*time.Second)
+	if len(deltaA0.DecorRows) == 0 {
+		t.Fatalf("pane A initial delta missing DecorRows")
+	}
+	if len(deltaB0.DecorRows) == 0 {
+		t.Fatalf("pane B initial delta missing DecorRows")
+	}
+
+	// Capture the initial border style of each pane before focus change.
+	// Resolve StyleIndex against the per-delta Styles table so the
+	// post-focus comparison is style-content-aware (per-delta StyleIndex
+	// values themselves are not stable across deltas).
+	prevBorderA := decorRowResolved(deltaA0, 0)
+	prevBorderB := decorRowResolved(deltaB0, 0)
+
+	// Snapshot what we've seen so subsequent WaitForDelta returns only NEW
+	// deltas triggered by the focus change.
+	h.ResetDeltaTracker(h.paneIDs[0])
+	h.ResetDeltaTracker(h.paneIDs[1])
+
+	// Confirm the workspace's notion of "active" matches paneIDs[0] before
+	// we drive the change, so the post-focus deltas really do represent a
+	// transition. (twoPanes=true splits via PerformSplit which leaves the
+	// new leaf active per Tree.SplitActive semantics, so paneIDs[1] is
+	// actually the active one at this point — driving FocusPane back to
+	// paneIDs[1] after toggling away tests the same invariant either way.)
+	ws := h.desktop.ActiveWorkspace()
+	if ws == nil || ws.ActivePane() == nil {
+		t.Fatalf("no active pane in workspace before focus drive")
+	}
+	curID := ws.ActivePane().ID()
+	var targetID [16]byte
+	if curID == h.paneIDs[0] {
+		targetID = h.paneIDs[1]
+	} else {
+		targetID = h.paneIDs[0]
+	}
+
+	h.FocusPane(targetID)
+	h.Publish()
+
+	deltaA := h.WaitForDelta(t, h.paneIDs[0], 2*time.Second)
+	deltaB := h.WaitForDelta(t, h.paneIDs[1], 2*time.Second)
+	if len(deltaA.DecorRows) == 0 {
+		t.Fatalf("pane A focus toggle did not emit DecorRows")
+	}
+	if len(deltaB.DecorRows) == 0 {
+		t.Fatalf("pane B focus toggle did not emit DecorRows")
+	}
+
+	// Critical assertion: the new border cells must differ from the old —
+	// otherwise the test passes vacuously when both panes paint identical
+	// chrome regardless of focus state. Comparing resolved styles (text +
+	// fully-decoded StyleEntry) catches the active/inactive theme color
+	// difference even when per-delta StyleIndex numbering shifts.
+	newBorderA := decorRowResolved(deltaA, 0)
+	newBorderB := decorRowResolved(deltaB, 0)
+	if prevBorderA == nil || newBorderA == nil {
+		t.Fatalf("pane A missing rowIdx 0 decoration row (prev=%v new=%v)", prevBorderA, newBorderA)
+	}
+	if prevBorderB == nil || newBorderB == nil {
+		t.Fatalf("pane B missing rowIdx 0 decoration row (prev=%v new=%v)", prevBorderB, newBorderB)
+	}
+	if reflect.DeepEqual(prevBorderA, newBorderA) {
+		t.Fatalf("pane A border at rowIdx 0 did not change on focus toggle; theme may be missing an active/inactive distinction\nprev=%+v\nnew=%+v", prevBorderA, newBorderA)
+	}
+	if reflect.DeepEqual(prevBorderB, newBorderB) {
+		t.Fatalf("pane B border at rowIdx 0 did not change on focus toggle; theme may be missing an active/inactive distinction\nprev=%+v\nnew=%+v", prevBorderB, newBorderB)
+	}
+}
+
+// TestPaneRenders_ResizePreservesContentBounds verifies that the
+// geometry-only TreeSnapshot the server emits during a resize carries the
+// pane's structural ContentTopRow / NumContentRows. Without this the
+// client's BufferCache.ApplySnapshot overwrites the previously-correct
+// bounds with zeros, the renderer's rowSourceForPane routes every interior
+// rowIdx through the decoration-only branch, and content rows paint blank
+// until the next full snapshot. See issue #199 follow-up: resize-blanks-
+// content. The fix lives in texel/snapshot.go GeometryForClient — it now
+// calls applyStructuralBounds for each leaf pane, mirroring
+// capturePaneSnapshot's structural calculation without rendering the pane
+// buffer.
+func TestPaneRenders_ResizePreservesContentBounds(t *testing.T) {
+	feed := make([]string, 6)
+	for i := range feed {
+		feed[i] = "row-content"
+	}
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: 10, rows: 6, seedFeed: feed})
+	defer h.serverConn.Close()
+
+	// Drive the initial snapshot+delta cycle (mirrors the clean-start test).
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: 10, Rows: 6})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+	h.Publish()
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// Sanity: client sees correct content bounds before resize.
+	pane := h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane before resize")
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("pre-resize bounds wrong: top=%d num=%d (want top=1 num=4)",
+			pane.ContentTopRow, pane.NumContentRows)
+	}
+
+	// Drive a resize to NEW dimensions so the server-side handleResize
+	// path actually rebuilds geometry instead of short-circuiting on
+	// "no change". Pre-fix, the geometry-only TreeSnapshot has
+	// ContentTopRow=0, NumContentRows=0 — overwriting the client's
+	// previously-correct bounds. Post-fix, the snapshot carries the
+	// structural bounds.
+	h.ResetDeltaTracker(h.paneID)
+	resizePayload, err := protocol.EncodeResize(protocol.Resize{Cols: 12, Rows: 7})
+	if err != nil {
+		t.Fatalf("encode resize: %v", err)
+	}
+	h.writeFrame(protocol.MsgResize, resizePayload, h.sessionID())
+
+	// handleResize ships a TreeSnapshot then publishes deltas. Wait for
+	// the post-resize delta — both messages are processed by the same
+	// reader goroutine in serial order, so by the time the delta is
+	// observed the snapshot's ApplySnapshot() write has already returned.
+	// This synchronises the test goroutine's subsequent pane field reads
+	// against the reader's writes via the shared harness lock that
+	// WaitForDelta acquires.
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// After resize the pane is 7 rows tall (was 6), so the structural
+	// bounds are ContentTopRow=1, NumContentRows=h-2=5. (sparseFakeApp
+	// does not emit a trailing statusbar row.) Read fields under the
+	// harness lock for race-detector cleanliness.
+	pane = h.ClientPane(h.paneID)
+	if pane == nil {
+		t.Fatalf("client cache missing pane after resize")
+	}
+	gotTop, gotNum := paneBoundsLocked(h, pane)
+	if gotTop != 1 || gotNum != 5 {
+		t.Fatalf("post-resize content bounds wrong: top=%d num=%d (want top=1 num=5) — geometry snapshot blanked the bounds, the resize-blanks-content regression has returned",
+			gotTop, gotNum)
+	}
+}
+
+// TestPaneRenders_ContentRowSideBorders verifies that for a content row
+// (gid >= 0) the publisher emits a span set covering the FULL pane width,
+// including `│` at col 0 (left border) and `│` at col W-1 (right border).
+//
+// This is the integration-level regression for the 1-column horizontal
+// shift bug: the bug manifests visually as content overrunning col 0 and
+// col W-1 going blank after a BufferDelta updates a content row. If the
+// publisher is dropping the leading / trailing border cell from content-
+// row spans, this test fails. If the test passes, the publisher is doing
+// its job and the shift is somewhere else (client-side composite, or
+// the texterm's own buffer is missing the borders before pane.Render
+// composes them in).
+func TestPaneRenders_ContentRowSideBorders(t *testing.T) {
+	const cols, rows = 10, 6
+	feed := make([]string, 4)
+	for i := range feed {
+		feed[i] = "abcdefgh" // exactly 8 chars = drawable interior (cols-2)
+	}
+	h := newMemHarnessOpts(t, memHarnessOpts{cols: cols, rows: rows, seedFeed: feed})
+	defer h.serverConn.Close()
+
+	readyPayload, err := protocol.EncodeClientReady(protocol.ClientReady{Cols: cols, Rows: rows})
+	if err != nil {
+		t.Fatalf("encode client ready: %v", err)
+	}
+	h.writeFrame(protocol.MsgClientReady, readyPayload, h.sessionID())
+
+	// Viewport for the 4 content rows (gids 0..3 land in the visible window).
+	h.ApplyViewport(h.paneID, 0, 3, true, false)
+	h.Publish()
+	h.WaitForDelta(t, h.paneID, 2*time.Second)
+
+	// Pick the highest content gid that the publisher shipped. The harness
+	// records main-screen rows keyed by globalIdx in h.rowsByGID.
+	h.mu.Lock()
+	gids := make([]int64, 0, len(h.rowsByGID))
+	for gid := range h.rowsByGID {
+		gids = append(gids, gid)
+	}
+	h.mu.Unlock()
+	if len(gids) == 0 {
+		t.Fatalf("publisher shipped zero content rows")
+	}
+	// Pick any content gid; they should all carry the side borders.
+	rd := h.AwaitRow(h.paneID, gids[0], 2*time.Second)
+
+	// Concatenate the spans by column to inspect col 0 and col W-1.
+	flat := make([]rune, cols)
+	for i := range flat {
+		flat[i] = ' '
+	}
+	for _, sp := range rd.Spans {
+		for i, r := range []rune(sp.Text) {
+			if int(sp.StartCol)+i < cols {
+				flat[int(sp.StartCol)+i] = r
+			}
+		}
+	}
+	if flat[0] != '│' {
+		t.Fatalf("content row gid=%d col 0 = %q (publisher dropped left border — 1-col shift bug); flat=%q",
+			gids[0], flat[0], string(flat))
+	}
+	if flat[cols-1] != '│' {
+		t.Fatalf("content row gid=%d col W-1 = %q (publisher dropped right border); flat=%q",
+			gids[0], flat[cols-1], string(flat))
+	}
+}
+
+// paneBoundsLocked reads ContentTopRow / NumContentRows under h.mu so the
+// race detector sees a happens-before edge against the client read loop.
+// The reader goroutine acquires h.mu inside clientReadLoop when it stores
+// per-row state; serialising bounds reads through the same lock pins the
+// happens-before edge. Sufficient for the bounds-invariant assertions this
+// suite makes.
+func paneBoundsLocked(h *memHarness, pane *client.PaneState) (uint16, uint16) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return pane.ContentTopRow, pane.NumContentRows
 }

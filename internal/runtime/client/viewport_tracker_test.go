@@ -127,6 +127,23 @@ func makeTreeSnapshot(id [16]byte, width, height int32) protocol.TreeSnapshot {
 	}
 }
 
+// makeTreeSnapshotWithContent builds a tree snapshot with content-row metadata
+// populated, matching the production flow where the server publishes
+// ContentTopRow / NumContentRows alongside geometry.
+func makeTreeSnapshotWithContent(id [16]byte, width, height int32, contentTop, numContent uint16) protocol.TreeSnapshot {
+	return protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{
+			{
+				PaneID:         id,
+				Width:          width,
+				Height:         height,
+				ContentTopRow:  contentTop,
+				NumContentRows: numContent,
+			},
+		},
+	}
+}
+
 // --------------------------------------------------------------------------
 // Part 5, item 1: TestViewportTracker_InitializesFromSnapshot
 // --------------------------------------------------------------------------
@@ -179,6 +196,9 @@ func TestViewportTracker_AdvancesOnAutoFollowDelta(t *testing.T) {
 	// Initialise pane with height=24 so rows is set.
 	snap := makeTreeSnapshot(paneID(2), 80, 24)
 	state.onTreeSnapshot(snap)
+	// Seed the cache so onBufferDelta finds NumContentRows. The pre-Task-10
+	// behaviour matched a full-content pane (NumContentRows == Rows).
+	state.cache.ApplySnapshot(makeTreeSnapshotWithContent(paneID(2), 80, 24, 0, 24))
 
 	// Clear dirty so we can detect the advance.
 	vp := state.viewports.get(paneID(2))
@@ -228,6 +248,7 @@ func TestViewportTracker_AutoFollowAdvancesFromGidZero(t *testing.T) {
 	// Initialise a single pane from a tree snapshot (Rows=24).
 	id := paneID(0xA0)
 	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
+	state.cache.ApplySnapshot(makeTreeSnapshotWithContent(id, 80, 24, 0, 24))
 
 	// Drain the initial dirty state via flushFrame so subsequent dirty
 	// assertions are clean. Use a testConn so nothing writes to a real socket.
@@ -755,5 +776,115 @@ func TestFlushFrame_ZeroDimSkipped(t *testing.T) {
 	n := conn.countType(protocol.MsgViewportUpdate)
 	if n != 0 {
 		t.Errorf("expected 0 MsgViewportUpdate for zero-dim pane, got %d", n)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Task 10: onBufferDelta uses NumContentRows (Issue #199 misalignment fix).
+//
+// Pre-Task-10 the math was top = maxGid - (Rows-1). With a 1-row decoration
+// header the live edge advances 1 row "into" the decoration band, leaving
+// blank rows at the top of the pane on rehydrate. The new math
+// top = maxGid - (NumContentRows-1) keeps the live edge anchored to the
+// last content row regardless of decoration borders.
+// --------------------------------------------------------------------------
+
+func TestOnBufferDelta_TopUsesContentRowCount(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xE0)
+	// Pane geometry: 10 rows total, 1-row top decoration, 8 content rows,
+	// 1-row bottom decoration. ContentTopRow=1, NumContentRows=8.
+	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 10))
+	state.cache.ApplySnapshot(makeTreeSnapshotWithContent(id, 80, 10, 1, 8))
+
+	// Drive maxGid to 100 via a delta on row 1 (first content row).
+	delta := protocol.BufferDelta{
+		PaneID:  id,
+		RowBase: 100,
+		Rows: []protocol.RowDelta{
+			{Row: 0},
+		},
+	}
+	state.onBufferDelta(delta)
+
+	vc, ok := state.paneViewportFor(id)
+	if !ok {
+		t.Fatal("paneViewportFor returned false")
+	}
+	if vc.ViewBottomIdx != 100 {
+		t.Errorf("ViewBottomIdx = %d, want 100", vc.ViewBottomIdx)
+	}
+	// New math: top = 100 - (8-1) = 93. Old math would have given 91.
+	if vc.ViewTopIdx != 93 {
+		t.Errorf("ViewTopIdx = %d, want 93 (maxGid - NumContentRows + 1)", vc.ViewTopIdx)
+	}
+}
+
+func TestOnBufferDelta_PaneNilSkipsAndLogs(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xE1)
+	// Initialise the viewport but DO NOT seed the buffer cache, so PaneByID
+	// returns nil. The viewport must NOT advance (silent fallback would
+	// reintroduce the original bug).
+	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
+
+	vp := state.viewports.get(id)
+	vp.mu.Lock()
+	beforeBottom := vp.ViewBottomIdx
+	beforeTop := vp.ViewTopIdx
+	beforeKnown := vp.knownBottomGid
+	vp.mu.Unlock()
+
+	delta := protocol.BufferDelta{
+		PaneID:  id,
+		RowBase: 500,
+		Rows:    []protocol.RowDelta{{Row: 0}},
+	}
+	state.onBufferDelta(delta)
+
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	if vp.ViewBottomIdx != beforeBottom {
+		t.Errorf("ViewBottomIdx advanced to %d (was %d) despite nil cache pane", vp.ViewBottomIdx, beforeBottom)
+	}
+	if vp.ViewTopIdx != beforeTop {
+		t.Errorf("ViewTopIdx advanced to %d (was %d) despite nil cache pane", vp.ViewTopIdx, beforeTop)
+	}
+	if vp.knownBottomGid != beforeKnown {
+		t.Errorf("knownBottomGid advanced to %d (was %d) despite nil cache pane", vp.knownBottomGid, beforeKnown)
+	}
+}
+
+func TestOnBufferDelta_ZeroContentRowsReturnsEarly(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xE2)
+	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
+	// Pane is all-decoration: NumContentRows == 0.
+	state.cache.ApplySnapshot(makeTreeSnapshotWithContent(id, 80, 24, 0, 0))
+
+	vp := state.viewports.get(id)
+	vp.mu.Lock()
+	beforeBottom := vp.ViewBottomIdx
+	beforeTop := vp.ViewTopIdx
+	beforeKnown := vp.knownBottomGid
+	vp.mu.Unlock()
+
+	delta := protocol.BufferDelta{
+		PaneID:  id,
+		RowBase: 700,
+		Rows:    []protocol.RowDelta{{Row: 0}},
+	}
+	state.onBufferDelta(delta)
+
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	if vp.ViewBottomIdx != beforeBottom {
+		t.Errorf("ViewBottomIdx advanced to %d (was %d) with NumContentRows=0", vp.ViewBottomIdx, beforeBottom)
+	}
+	if vp.ViewTopIdx != beforeTop {
+		t.Errorf("ViewTopIdx advanced to %d (was %d) with NumContentRows=0", vp.ViewTopIdx, beforeTop)
+	}
+	if vp.knownBottomGid != beforeKnown {
+		t.Errorf("knownBottomGid advanced to %d (was %d) with NumContentRows=0", vp.knownBottomGid, beforeKnown)
 	}
 }

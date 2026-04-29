@@ -25,6 +25,7 @@ type PaneState struct {
 	UpdatedAt        time.Time
 	rowsMu           sync.RWMutex
 	rows             map[int][]Cell
+	decorRows        map[uint16][]Cell // unexported; guarded by rowsMu (decoration: borders + app statusbar)
 	Title            string
 	Rect             clientRect
 	Active           bool
@@ -32,10 +33,39 @@ type PaneState struct {
 	ZOrder           int
 	HandlesSelection bool
 
+	// Content bounds (populated from PaneSnapshot). For non-altScreen panes,
+	// rowIdx in [ContentTopRow, ContentTopRow + NumContentRows - 1] maps to
+	// gid via the viewport tracker; rowIdx outside that range reads from
+	// decorRows via DecorRowAt. NumContentRows == 0 means the pane has zero
+	// content rows (status panes, all-decoration apps).
+	ContentTopRow  uint16
+	NumContentRows uint16
+
 	// Dirty tracking for incremental rendering.
 	Dirty       bool         // true when pane has new content since last render
 	DirtyRows   map[int]bool // nil = all rows dirty; non-nil = only listed rows
 	HasAnimated bool         // true if any cell has animated DynFG/DynBG
+}
+
+// DecorRowAt returns a *copy* of the cells for an absolute decoration
+// rowIdx, or (nil, false) if no decoration has been applied to that row.
+// Returning a copy (rather than the internal slice) means the renderer can
+// hold the result across the frame without racing concurrent ApplyDelta
+// writes to the same rowIdx. Allocation is bounded — at most ~4 decoration
+// rows × pane width per render frame.
+func (p *PaneState) DecorRowAt(rowIdx uint16) ([]Cell, bool) {
+	if p == nil {
+		return nil, false
+	}
+	p.rowsMu.RLock()
+	defer p.rowsMu.RUnlock()
+	src, ok := p.decorRows[rowIdx]
+	if !ok {
+		return nil, false
+	}
+	out := make([]Cell, len(src))
+	copy(out, src)
+	return out, true
 }
 
 // ClearDirty resets the dirty flags after rendering.
@@ -189,18 +219,49 @@ func (c *BufferCache) ApplyDelta(delta protocol.BufferDelta) {
 		}
 		pane.rows[rowIdx] = row
 	}
-	pane.rowsMu.Unlock()
-
-	// Mark pane and specific rows as dirty for incremental rendering.
-	pane.Dirty = true
-	if pane.DirtyRows == nil && len(delta.Rows) < int(pane.Rect.Height) {
-		pane.DirtyRows = make(map[int]bool, len(delta.Rows))
-	}
-	if pane.DirtyRows != nil {
-		for _, rowDelta := range delta.Rows {
-			pane.DirtyRows[int(rowDelta.Row)] = true
+	if len(delta.DecorRows) > 0 {
+		if pane.decorRows == nil {
+			pane.decorRows = make(map[uint16][]Cell, len(delta.DecorRows))
+		}
+		for _, rowDelta := range delta.DecorRows {
+			row := pane.decorRows[rowDelta.RowIdx]
+			for _, span := range rowDelta.Spans {
+				start := int(span.StartCol)
+				textRunes := []rune(span.Text)
+				needed := start + len(textRunes)
+				row = ensureRowLength(row, needed)
+				style := tcell.StyleDefault
+				var dynFG, dynBG protocol.DynColorDesc
+				if int(span.StyleIndex) < len(styles) {
+					style = styles[span.StyleIndex]
+				}
+				if int(span.StyleIndex) < len(delta.Styles) {
+					entry := delta.Styles[span.StyleIndex]
+					if entry.AttrFlags&protocol.AttrHasDynamic != 0 {
+						dynFG = entry.DynFG
+						dynBG = entry.DynBG
+					}
+				}
+				for i, r := range textRunes {
+					row[start+i] = Cell{Ch: r, Style: style, DynFG: dynFG, DynBG: dynBG}
+				}
+			}
+			pane.decorRows[rowDelta.RowIdx] = row
 		}
 	}
+	pane.rowsMu.Unlock()
+
+	pane.Dirty = true
+	// Force full re-render whenever a delta touches this pane. The pre-
+	// existing per-row dirty map (DirtyRows) was keyed inconsistently:
+	// content rows used (gid - RowBase), decoration rows would be keyed by
+	// absolute rowIdx — mixing the two key spaces silently produced wrong
+	// re-renders. Setting DirtyRows = nil unconditionally tells the
+	// renderer "the whole pane needs paint," which is correct and avoids
+	// the mixed-key bug. The perf cost is small (decoration row writes
+	// are rare; content-row writes already invalidate via the gid-keyed
+	// PaneCache, not DirtyRows).
+	pane.DirtyRows = nil
 
 	// Check if any style in the delta has animated dynamic colors.
 	for _, entry := range delta.Styles {
@@ -233,6 +294,8 @@ func (c *BufferCache) ApplySnapshot(snapshot protocol.TreeSnapshot) {
 			c.panes[paneSnap.PaneID] = pane
 		}
 		pane.Title = paneSnap.Title
+		pane.ContentTopRow = paneSnap.ContentTopRow
+		pane.NumContentRows = paneSnap.NumContentRows
 		pane.UpdatedAt = time.Now().UTC()
 		if paneSnap.Revision != 0 || pane.Revision == 0 {
 			pane.Revision = paneSnap.Revision
@@ -587,6 +650,9 @@ func (c *BufferCache) ResetRevisions() {
 	defer c.mu.Unlock()
 	for _, pane := range c.panes {
 		pane.Revision = 0
+		pane.rowsMu.Lock()
+		pane.decorRows = nil
+		pane.rowsMu.Unlock()
 	}
 }
 

@@ -9,6 +9,8 @@
 package client
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -314,13 +316,151 @@ func TestPaneState_DirtyOnDelta(t *testing.T) {
 	if !pane.Dirty {
 		t.Error("expected pane dirty after delta")
 	}
-	if pane.DirtyRows == nil {
-		t.Error("expected specific DirtyRows after delta")
+	// ApplyDelta unconditionally clears DirtyRows to force a full re-render.
+	// The previous per-row dirty map mixed key spaces (gid-relative content
+	// rows vs absolute decoration rowIdx) and is no longer used.
+	if pane.DirtyRows != nil {
+		t.Error("expected DirtyRows nil (full re-render) after delta")
 	}
-	if !pane.DirtyRows[5] || !pane.DirtyRows[10] {
-		t.Error("expected rows 5 and 10 dirty")
+}
+
+func TestApplySnapshot_PopulatesContentBounds(t *testing.T) {
+	cache := NewBufferCache()
+	id := [16]byte{0xab}
+	snapshot := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID:         id,
+			Title:          "t",
+			Width:          10,
+			Height:         6,
+			ContentTopRow:  1,
+			NumContentRows: 4,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
 	}
-	if pane.DirtyRows[0] {
-		t.Error("row 0 should not be dirty")
+	cache.ApplySnapshot(snapshot)
+	pane := cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane not registered")
+	}
+	if pane.ContentTopRow != 1 || pane.NumContentRows != 4 {
+		t.Fatalf("content bounds not applied: top=%d num=%d", pane.ContentTopRow, pane.NumContentRows)
+	}
+}
+
+func TestApplyDelta_PopulatesDecorRows(t *testing.T) {
+	cache := NewBufferCache()
+	id := [16]byte{0xab}
+	delta := protocol.BufferDelta{
+		PaneID:   id,
+		Revision: 1,
+		Styles: []protocol.StyleEntry{
+			{AttrFlags: 0, FgModel: protocol.ColorModelDefault, BgModel: protocol.ColorModelDefault},
+		},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+--+", StyleIndex: 0}}},
+			{RowIdx: 9, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+--+", StyleIndex: 0}}},
+		},
+	}
+	cache.ApplyDelta(delta)
+	pane := cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane not registered")
+	}
+	row0, ok0 := pane.DecorRowAt(0)
+	row9, ok9 := pane.DecorRowAt(9)
+	if !ok0 || !ok9 {
+		t.Fatalf("expected DecorRowAt(0) and DecorRowAt(9) to be present")
+	}
+	if len(row0) != 4 || row0[0].Ch != '+' {
+		t.Fatalf("rowIdx 0 content wrong: %+v", row0)
+	}
+	if len(row9) != 4 || row9[3].Ch != '+' {
+		t.Fatalf("rowIdx 9 content wrong: %+v", row9)
+	}
+}
+
+func TestApplyDelta_ConcurrentDecorRowsReadWrite(t *testing.T) {
+	// Race-detector regression test: concurrently apply decoration deltas
+	// while a renderer-shaped goroutine reads via DecorRowAt. Without the
+	// rowsMu coverage on decorRows, this would flag under -race.
+	cache := NewBufferCache()
+	id := [16]byte{0xab}
+
+	// Seed the pane so DecorRowAt has a target.
+	cache.ApplyDelta(protocol.BufferDelta{
+		PaneID:   id,
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{}},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+", StyleIndex: 0}}},
+		},
+	})
+	pane := cache.PaneByID(id)
+	if pane == nil {
+		t.Fatal("pane not registered")
+	}
+
+	const iterations = 500
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Writer goroutine: repeated ApplyDelta with new decoration cells.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			cache.ApplyDelta(protocol.BufferDelta{
+				PaneID:   id,
+				Revision: uint32(i + 2),
+				Styles:   []protocol.StyleEntry{{}},
+				DecorRows: []protocol.DecorRowDelta{
+					{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: fmt.Sprintf("%c", 'a'+i%26), StyleIndex: 0}}},
+				},
+			})
+		}
+	}()
+
+	// Reader goroutine: continuously fetch DecorRowAt(0).
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			row, ok := pane.DecorRowAt(0)
+			if ok && len(row) > 0 {
+				_ = row[0].Ch // touch the cell so the race detector sees the read
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestResetRevisions_ClearsDecorRows(t *testing.T) {
+	cache := NewBufferCache()
+	id := [16]byte{0xab}
+	delta := protocol.BufferDelta{
+		PaneID:   id,
+		Revision: 7,
+		Styles:   []protocol.StyleEntry{{AttrFlags: 0, FgModel: protocol.ColorModelDefault, BgModel: protocol.ColorModelDefault}},
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 0, Spans: []protocol.CellSpan{{StartCol: 0, Text: "+", StyleIndex: 0}}},
+		},
+	}
+	cache.ApplyDelta(delta)
+	if pane := cache.PaneByID(id); pane == nil {
+		t.Fatalf("pane not registered")
+	}
+	if _, ok := cache.PaneByID(id).DecorRowAt(0); !ok {
+		t.Fatalf("pre-reset: expected DecorRowAt(0) populated")
+	}
+	cache.ResetRevisions()
+	pane := cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane gone after reset")
+	}
+	if _, ok := pane.DecorRowAt(0); ok {
+		t.Fatalf("expected decoration cache cleared after ResetRevisions")
+	}
+	if pane.Revision != 0 {
+		t.Fatalf("expected Revision=0, got %d", pane.Revision)
 	}
 }
