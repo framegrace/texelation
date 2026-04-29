@@ -31,6 +31,16 @@ type Manager struct {
 	// atomicjson writer at <persistBasedir>/sessions/<hex-id>.json.
 	persistBasedir  string
 	persistDebounce time.Duration
+
+	// Plan D2 17.B: per-ID "closing" markers serialize Close vs
+	// LookupOrRehydrate for the same ID. Without this, Close drops
+	// m.mu before flushing the atomicjson writer, and a concurrent
+	// rehydrate could construct a fresh Session pointing at the
+	// same on-disk path — two stores then race on rename(). Entries
+	// are short-lived: created by Close on entry, deleted on exit.
+	// LookupOrRehydrate waits while a marker exists for its ID.
+	closingMu sync.Mutex
+	closing   map[[16]byte]chan struct{}
 }
 
 func NewManager() *Manager {
@@ -38,12 +48,58 @@ func NewManager() *Manager {
 		sessions:          make(map[[16]byte]*Session),
 		persistedSessions: make(map[[16]byte]*StoredSession),
 		maxDiffs:          512,
+		closing:           make(map[[16]byte]chan struct{}),
+	}
+}
+
+// markClosing records that id is in the middle of Manager.Close. Returns
+// a channel that closes when the close completes. If id is already
+// being closed, returns the existing channel (no-op).
+func (m *Manager) markClosing(id [16]byte) chan struct{} {
+	m.closingMu.Lock()
+	defer m.closingMu.Unlock()
+	if ch, ok := m.closing[id]; ok {
+		return ch
+	}
+	ch := make(chan struct{})
+	m.closing[id] = ch
+	return ch
+}
+
+// unmarkClosing signals completion of Manager.Close for id and removes
+// the marker.
+func (m *Manager) unmarkClosing(id [16]byte) {
+	m.closingMu.Lock()
+	ch, ok := m.closing[id]
+	if ok {
+		delete(m.closing, id)
+	}
+	m.closingMu.Unlock()
+	if ok {
+		close(ch)
+	}
+}
+
+// waitClosing blocks until any in-flight Close for id has completed.
+// Returns immediately if no Close is in flight. Used by
+// LookupOrRehydrate to avoid the 17.B rename race.
+func (m *Manager) waitClosing(id [16]byte) {
+	m.closingMu.Lock()
+	ch, ok := m.closing[id]
+	m.closingMu.Unlock()
+	if ok {
+		<-ch
 	}
 }
 
 func (m *Manager) NewSession() (*Session, error) {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
+		// Plan D2 17.C: log at the point of failure so operators
+		// investigating "users can't connect" have a breadcrumb pointing
+		// at the entropy pool. Without this, the error propagates up to
+		// the handshake and surfaces as a generic "connect failed".
+		log.Printf("session: crypto/rand failed: %v", err)
 		return nil, err
 	}
 
@@ -125,6 +181,14 @@ func (m *Manager) SetPersistedSessions(loaded map[[16]byte]*StoredSession) {
 // 0, while live sessions retain their accumulated counters across
 // reconnects.
 func (m *Manager) LookupOrRehydrate(id [16]byte) (sess *Session, rehydrated bool, err error) {
+	// Plan D2 17.B: wait out any in-flight Close for the same ID
+	// before consulting the persisted index. Otherwise a fresh
+	// rehydrate could construct a new Session pointing at the same
+	// on-disk file the closing session is still flushing, causing
+	// two atomicjson stores to race on rename(). The wait is bounded
+	// by Close's own duration (one synchronous flush).
+	m.waitClosing(id)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.sessions[id]; ok {
@@ -227,16 +291,28 @@ func (m *Manager) SetDiffRetentionLimit(limit int) {
 // teardown call (which now blocks on disk I/O via the atomicjson
 // writer's flush) runs OUTSIDE m.mu so other Manager methods don't
 // stall behind a slow flush.
+//
+// Plan D2 17.B: Close registers a per-ID "closing" marker before
+// dropping m.mu and clears it after session.Close returns.
+// LookupOrRehydrate consults the same marker so a fresh resume for
+// the same ID waits out the disk flush instead of constructing a
+// new Session pointing at the same on-disk path.
 func (m *Manager) Close(id [16]byte) {
 	m.mu.Lock()
 	session, ok := m.sessions[id]
 	if ok {
 		delete(m.sessions, id)
 	}
-	m.mu.Unlock()
-	if ok {
-		session.Close() // disk flush — outside m.mu
+	if !ok {
+		m.mu.Unlock()
+		return
 	}
+	// Mark before dropping m.mu so any LookupOrRehydrate that grabs
+	// m.mu next sees the marker via waitClosing on its way in.
+	m.markClosing(id)
+	m.mu.Unlock()
+	defer m.unmarkClosing(id)
+	session.Close() // disk flush — outside m.mu
 }
 
 // ShutdownSessions closes all live sessions, synchronously flushing
@@ -257,10 +333,17 @@ func (m *Manager) ShutdownSessions() {
 	m.mu.Lock()
 	live := m.sessions
 	m.sessions = make(map[[16]byte]*Session)
+	// Mark every live session as closing under m.mu so any concurrent
+	// LookupOrRehydrate after we release m.mu blocks until the per-
+	// session flush completes (Plan D2 17.B).
+	for id := range live {
+		m.markClosing(id)
+	}
 	m.mu.Unlock()
 
-	for _, session := range live {
+	for id, session := range live {
 		session.Close() // disk flush — outside m.mu
+		m.unmarkClosing(id)
 	}
 }
 
@@ -268,6 +351,30 @@ func (m *Manager) ActiveSessions() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.sessions)
+}
+
+// ManagerStats captures Manager-level observable state. Used by
+// operators to detect silent failures — primarily Plan D2 17.D where
+// EnablePersistence's failure path leaves persistence disabled for
+// the rest of the process lifetime.
+type ManagerStats struct {
+	ActiveSessions    int
+	PersistedSessions int
+	PersistEnabled    bool
+	PersistBasedir    string
+}
+
+// Stats returns a snapshot of manager-level metrics. Does NOT include
+// per-session stats — for those see SessionStats.
+func (m *Manager) Stats() ManagerStats {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return ManagerStats{
+		ActiveSessions:    len(m.sessions),
+		PersistedSessions: len(m.persistedSessions),
+		PersistEnabled:    m.persistBasedir != "",
+		PersistBasedir:    m.persistBasedir,
+	}
 }
 
 func (m *Manager) SessionStats() []SessionStats {

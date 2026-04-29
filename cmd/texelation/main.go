@@ -364,28 +364,48 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 		_ = daemon.Stop(ctx) // Best effort
 	}
 
+	removed := wipeResetStatePaths(os.Stderr, os.Stdout, paths.ConfigDir, clientStateDir, socketPath, legacyFiles)
+
+	fmt.Printf("\nState reset complete (%d items removed)\n", removed)
+	return nil
+}
+
+// wipeResetStatePaths removes all state covered by --reset-state:
+//   - configDir (entire ~/.texelation/ tree, including Plan D2's
+//     sessions/ subdir written by atomicjson)
+//   - legacy per-pane files (~/.texel-env-*, ~/.texel-history-*)
+//   - clientStateDir (Plan D's client-side sessionID + viewports)
+//   - the daemon's Unix socket
+//
+// Returns the count of paths successfully removed. Extracted from
+// handleResetState so the wipe can be exercised by tests without
+// stdin/daemon plumbing (Plan D2 17.E).
+func wipeResetStatePaths(stderr, stdout interface {
+	Write(p []byte) (n int, err error)
+}, configDir, clientStateDir, socketPath string, legacyFiles []string) int {
 	removed := 0
 
 	// Remove the entire state directory (~/.texelation/)
 	// This covers: scrollback/*.hist3, scrollback/*.index.db, storage/,
-	// texelbrowse/, snapshot.json, server.log, texelation.pid
-	if err := os.RemoveAll(paths.ConfigDir); err != nil {
-		fmt.Fprintf(os.Stderr, "  warning: failed to remove %s: %v\n", paths.ConfigDir, err)
+	// texelbrowse/, snapshot.json, server.log, texelation.pid, AND
+	// Plan D2's sessions/ subdir (atomicjson session-state files).
+	if err := os.RemoveAll(configDir); err != nil {
+		fmt.Fprintf(stderr, "  warning: failed to remove %s: %v\n", configDir, err)
 	} else {
-		fmt.Printf("  removed %s/\n", paths.ConfigDir)
+		fmt.Fprintf(stdout, "  removed %s/\n", configDir)
 		removed++
 	}
 
 	// Remove legacy per-pane files (~/.texel-env-*, ~/.texel-history-*)
 	for _, f := range legacyFiles {
 		if err := os.Remove(f); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: failed to remove %s: %v\n", f, err)
+			fmt.Fprintf(stderr, "  warning: failed to remove %s: %v\n", f, err)
 		} else {
 			removed++
 		}
 	}
 	if len(legacyFiles) > 0 {
-		fmt.Printf("  removed %d legacy pane files\n", len(legacyFiles))
+		fmt.Fprintf(stdout, "  removed %d legacy pane files\n", len(legacyFiles))
 	}
 
 	// Remove Plan D's client persistence directory if it exists.
@@ -395,9 +415,9 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 	if clientStateDir != "" {
 		if _, err := os.Stat(clientStateDir); err == nil {
 			if err := os.RemoveAll(clientStateDir); err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: failed to remove %s: %v\n", clientStateDir, err)
+				fmt.Fprintf(stderr, "  warning: failed to remove %s: %v\n", clientStateDir, err)
 			} else {
-				fmt.Printf("  removed %s/\n", clientStateDir)
+				fmt.Fprintf(stdout, "  removed %s/\n", clientStateDir)
 				removed++
 			}
 		}
@@ -405,12 +425,11 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 
 	// Remove socket file
 	if err := os.Remove(socketPath); err == nil {
-		fmt.Printf("  removed %s\n", socketPath)
+		fmt.Fprintf(stdout, "  removed %s\n", socketPath)
 		removed++
 	}
 
-	fmt.Printf("\nState reset complete (%d items removed)\n", removed)
-	return nil
+	return removed
 }
 
 // resolveClientStateDir returns the path that holds Plan D's client
@@ -456,6 +475,31 @@ func handleStatus(ctx context.Context, paths *Paths, socketPath string) error {
 	if info, err := os.Stat(paths.SnapshotPath); err == nil {
 		fmt.Printf("  Snapshot size: %d bytes\n", info.Size())
 		fmt.Printf("  Snapshot modified: %s\n", info.ModTime().Format("2006-01-02 15:04:05"))
+	}
+
+	// Plan D2 17.D: report cross-restart session-persistence state so
+	// a permissions issue (e.g. sessions/ owned by root after a sudo
+	// misadventure) doesn't silently break resume across restarts.
+	// We check by inspecting <ConfigDir>/sessions/ since the running
+	// daemon doesn't expose Manager.Stats over the socket today.
+	sessionsDir := filepath.Join(paths.ConfigDir, "sessions")
+	if info, err := os.Stat(sessionsDir); err == nil && info.IsDir() {
+		entries, readErr := os.ReadDir(sessionsDir)
+		if readErr != nil {
+			fmt.Printf("  Persistence: directory unreadable (%v)\n", readErr)
+		} else {
+			count := 0
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+					count++
+				}
+			}
+			fmt.Printf("  Persistence: enabled (%d persisted session(s) at %s)\n", count, sessionsDir)
+		}
+	} else if os.IsNotExist(err) {
+		fmt.Printf("  Persistence: no sessions directory yet (%s)\n", sessionsDir)
+	} else if err != nil {
+		fmt.Printf("  Persistence: cannot stat %s: %v\n", sessionsDir, err)
 	}
 
 	return nil

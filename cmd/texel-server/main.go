@@ -254,6 +254,14 @@ func main() {
 			// is populated before any client can send MsgResumeRequest.
 			if err := manager.EnablePersistence(filepath.Dir(snapPath), 250*time.Millisecond); err != nil {
 				log.Printf("warning: could not enable persistence: %v", err)
+				// Plan D2 17.D: a single warning above is easy to miss
+				// in a busy boot log. Emit a follow-up "DISABLED" line
+				// and verify via Manager.Stats so operators have an
+				// observable surface for the silent-failure mode.
+				stats := manager.Stats()
+				if !stats.PersistEnabled {
+					log.Printf("[BOOT] PERSISTENCE DISABLED: cross-restart session resume will not work this process lifetime")
+				}
 			}
 		}
 	} else {
