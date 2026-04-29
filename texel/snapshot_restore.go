@@ -8,6 +8,8 @@
 package texel
 
 import (
+	"log"
+
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -169,8 +171,17 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		if isStatusOrphan(p) {
 			// Stop the orphan's app and detach so it doesn't dangle.
 			// The real status pane (from AddStatusPane) is unaffected.
+			//
+			// Lock-discipline / lifecycle note (Plan D2 Task 17.A):
+			// The orphan app was constructed via appFromSnapshot →
+			// factory and PrepareAppForRestore'd, but Run() was never
+			// invoked. Calling Stop() on a never-Run() app is per-app
+			// undefined: it may close channels its Run() was supposed
+			// to drain, panic on nil internal state, or block waiting
+			// for goroutines that never started. Wrap in recover() so
+			// a misbehaving Stop cannot abort boot snapshot restore.
 			if p.app != nil {
-				d.appLifecycle.StopApp(p.app)
+				stopOrphanAppSafely(d.appLifecycle, p.app)
 				p.app = nil
 			}
 			continue
@@ -351,3 +362,15 @@ func (s *snapshotApp) GetTitle() string { return s.title }
 func (s *snapshotApp) HandleKey(*tcell.EventKey) {}
 
 func (s *snapshotApp) SetRefreshNotifier(ch chan<- bool) { s.notify = ch }
+
+// stopOrphanAppSafely calls lifecycle.StopApp(app) with a recover so a
+// panicking Stop on a never-Run() factory-built app cannot abort boot
+// snapshot restore. See ApplyTreeCapture's orphan filter (Plan D2 17.A).
+func stopOrphanAppSafely(lifecycle AppLifecycleManager, app App) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("snapshot_restore: orphan StopApp panicked, recovering: %v", r)
+		}
+	}()
+	lifecycle.StopApp(app)
+}
