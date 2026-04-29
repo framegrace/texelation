@@ -992,3 +992,130 @@ func TestRowSourceForPane_DecorationCacheMiss(t *testing.T) {
 		t.Fatalf("expected nil for decoration miss, got %+v", src)
 	}
 }
+
+// TestRowSourceForPane_WrappedChainGidGap reproduces the issue #199 follow-up
+// bug where a wrapped chain (multiple visible rowIdxs sharing one head gid)
+// breaks the client formula `gid = ViewTopIdx + (rowIdx - ContentTopRow)`.
+//
+// When the server's view.Render emits a wrapped chain, all sub-rows share the
+// chain head gid and `gi` advances by the chain length, so subsequent rowIdxs
+// have non-contiguous gids:
+//
+//	rowIdx=1 → gid=A      (chain head)
+//	rowIdx=2 → gid=A      (wrapped sub-row of same chain)
+//	rowIdx=3 → gid=A+3    (next chain after gi advanced past wrap)
+//
+// The client formula assumes contiguous gids: ViewTopIdx + 0 = A, ViewTopIdx
+// + 1 = A+1, ViewTopIdx + 2 = A+2, etc. With ViewTopIdx = maxGid - 38 the
+// formula MISMATCHES the actual rowIdx → gid map for every row before the
+// wrap. The pre-fix renderer painted those rows blank (no border, no
+// content) because both gid lookup and decor lookup missed.
+//
+// Fix: server emits every changed content row positionally (DecorRowDelta
+// keyed by rowIdx) IN ADDITION to keying by gid. The renderer prefers the
+// positional path for content rows. This test confirms the renderer reads
+// the positional row even when the gid computed by the formula doesn't
+// exist in PaneCache.
+func TestRowSourceForPane_WrappedChainGidGap(t *testing.T) {
+	state := makeStateWithViewports()
+	id := paneID(0xc7)
+	const h, w = int32(5), int32(10)
+	const contentTop, numContent uint16 = 1, 3
+
+	// 1. Snapshot establishes geometry + structural bounds.
+	snap := protocol.TreeSnapshot{
+		Panes: []protocol.PaneSnapshot{{
+			PaneID: id, X: 0, Y: 0, Width: w, Height: h,
+			ContentTopRow: contentTop, NumContentRows: numContent,
+		}},
+		Root: protocol.TreeNodeSnapshot{PaneIndex: 0, Split: protocol.SplitNone},
+	}
+	state.cache.ApplySnapshot(snap)
+	state.onTreeSnapshot(snap)
+
+	// 2. Build a content row with side borders (`│` at col 0 / col W-1).
+	full := make([]rune, w)
+	for i := range full {
+		full[i] = ' '
+	}
+	full[0] = '│'
+	full[w-1] = '│'
+	greeting := []rune("hi")
+	for i, r := range greeting {
+		full[1+i] = r
+	}
+	flatText := string(full)
+
+	// 3. Simulate a wrapped chain: rowIdx=1 and rowIdx=2 share head gid=100,
+	//    rowIdx=3 has gid=103 (gi advanced past wrap). PaneCache will only
+	//    hold gids 100 and 103; the client formula's gid=ViewTopIdx+1 = 101
+	//    misses both PaneCache and the gid space entirely.
+	const headGid, postWrapGid int64 = 100, 103
+	const rowBase int64 = 80
+	delta := protocol.BufferDelta{
+		PaneID:   id,
+		RowBase:  rowBase,
+		Revision: 1,
+		Styles:   []protocol.StyleEntry{{}},
+		Rows: []protocol.RowDelta{
+			// gid=100 emitted twice (once per wrapped sub-row); the second
+			// write into PaneCache.main[100] overwrites the first. This is
+			// the existing behaviour — the test just confirms the renderer
+			// does not depend on gid-keyed lookup for rendering content.
+			{Row: uint16(headGid - rowBase), Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: flatText, StyleIndex: 0},
+			}},
+			{Row: uint16(postWrapGid - rowBase), Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: flatText, StyleIndex: 0},
+			}},
+		},
+		// Server-side fix: each content row is also emitted positionally
+		// so the renderer can resolve rowIdx → cells without going through
+		// gid arithmetic.
+		DecorRows: []protocol.DecorRowDelta{
+			{RowIdx: 1, Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: flatText, StyleIndex: 0},
+			}},
+			{RowIdx: 2, Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: flatText, StyleIndex: 0},
+			}},
+			{RowIdx: 3, Spans: []protocol.CellSpan{
+				{StartCol: 0, Text: flatText, StyleIndex: 0},
+			}},
+		},
+	}
+
+	state.cache.ApplyDelta(delta)
+	state.paneCacheFor(id).ApplyDelta(delta)
+	state.onBufferDelta(delta)
+
+	pane := state.cache.PaneByID(id)
+	if pane == nil {
+		t.Fatalf("pane missing after delta")
+	}
+
+	// 4. Verify each content rowIdx resolves with full borders. Pre-fix,
+	//    rowIdx=2 (the wrapped sub-row) would compute gid=ViewTopIdx+1
+	//    which doesn't exist in PaneCache, the decor cache had no entry,
+	//    and the renderer returned nil — leaving the row blank.
+	for _, rowIdx := range []int{1, 2, 3} {
+		src := rowSourceForPane(state, pane, rowIdx)
+		if src == nil {
+			t.Fatalf("rowSourceForPane(rowIdx=%d) returned nil — wrapped-chain gid gap regression", rowIdx)
+		}
+		if len(src) != int(w) {
+			t.Fatalf("rowSourceForPane(rowIdx=%d) length=%d, want %d", rowIdx, len(src), w)
+		}
+		if src[0].Ch != '│' {
+			t.Fatalf("rowSourceForPane(rowIdx=%d) col 0 = %q, want '│' (left border)", rowIdx, src[0].Ch)
+		}
+		if src[int(w)-1].Ch != '│' {
+			t.Fatalf("rowSourceForPane(rowIdx=%d) col W-1 = %q, want '│' (right border)", rowIdx, src[int(w)-1].Ch)
+		}
+		for i, want := range greeting {
+			if src[1+i].Ch != want {
+				t.Fatalf("rowSourceForPane(rowIdx=%d) col %d = %q, want %q", rowIdx, 1+i, src[1+i].Ch, want)
+			}
+		}
+	}
+}

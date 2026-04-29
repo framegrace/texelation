@@ -257,12 +257,22 @@ func TestBufferToDelta_DecorationRowsIncluded(t *testing.T) {
 
 	delta := bufferToDelta(snap, prev, 1, vp)
 
-	if len(delta.DecorRows) != 2 {
-		t.Fatalf("expected 2 DecorRows, got %d: %+v", len(delta.DecorRows), delta.DecorRows)
+	// After the wrapped-chain rendering fix: content rows are emitted
+	// positionally (DecorRowDelta) IN ADDITION to gid-keyed RowDelta. So
+	// DecorRows includes both borders (rowIdx 0, 4) AND each content row
+	// (rowIdx 1, 2, 3) — total 5. The gid-keyed Rows still has the 3
+	// content entries for scrollback.
+	if len(delta.DecorRows) != 5 {
+		t.Fatalf("expected 5 DecorRows (2 borders + 3 content positional), got %d: %+v", len(delta.DecorRows), delta.DecorRows)
 	}
-	gotIdx := map[uint16]bool{delta.DecorRows[0].RowIdx: true, delta.DecorRows[1].RowIdx: true}
-	if !gotIdx[0] || !gotIdx[4] {
-		t.Fatalf("expected decoration rows at rowIdx 0 and 4, got %v", gotIdx)
+	gotIdx := make(map[uint16]bool, 5)
+	for _, dr := range delta.DecorRows {
+		gotIdx[dr.RowIdx] = true
+	}
+	for _, want := range []uint16{0, 1, 2, 3, 4} {
+		if !gotIdx[want] {
+			t.Fatalf("expected decor rowIdx=%d in DecorRows, got %v", want, gotIdx)
+		}
 	}
 	if len(delta.Rows) != 3 {
 		t.Fatalf("expected 3 content Rows, got %d", len(delta.Rows))

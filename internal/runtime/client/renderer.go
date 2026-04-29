@@ -100,6 +100,52 @@ func debugLogRender(msg string) {
 	}
 }
 
+// rendererDebug is gated by env var TEXELATION_DEBUG=1. When enabled, the
+// renderer logs the source row resolved by rowSourceForPane for the first
+// content rowIdx of each pane. Use to confirm whether the client-side
+// composite is reading the correct cells (col 0 = '│', col W-1 = '│' for
+// terminal panes). Logs to stderr, which texelation redirects to
+// ~/.texelation/server.log only for server output — the client side's
+// stderr typically goes to the controlling terminal. When debugging,
+// redirect stderr or run with `2>/tmp/client.log`.
+var rendererDebug = os.Getenv("TEXELATION_DEBUG") == "1"
+
+// logRowSourceDebug emits one line per (pane, rowIdx) describing the source
+// row resolved by rowSourceForPane. Caller passes rowIdx and the resolved
+// source slice. Cheap when rendererDebug is off (one bool check).
+func logRowSourceDebug(path string, paneID [16]byte, rowIdx int, w int, source []client.Cell, vc paneViewportCopy, pane *client.PaneState) {
+	if !rendererDebug {
+		return
+	}
+	contentEnd := int(pane.ContentTopRow) + int(pane.NumContentRows)
+	zoneTag := "decor"
+	if int(pane.NumContentRows) > 0 && rowIdx >= int(pane.ContentTopRow) && rowIdx < contentEnd {
+		zoneTag = "content"
+	}
+	if source == nil {
+		log.Printf("clientRenderDebug %s pane=%x rowIdx=%d zone=%s w=%d source=nil viewTop=%d ctTop=%d numCt=%d alt=%v",
+			path, paneID[:4], rowIdx, zoneTag, w,
+			vc.ViewTopIdx, pane.ContentTopRow, pane.NumContentRows, vc.AltScreen)
+		return
+	}
+	c0 := ' '
+	c1 := ' '
+	cw := ' '
+	if len(source) > 0 {
+		c0 = source[0].Ch
+	}
+	if len(source) > 1 {
+		c1 = source[1].Ch
+	}
+	if len(source) > 0 {
+		cw = source[len(source)-1].Ch
+	}
+	log.Printf("clientRenderDebug %s pane=%x rowIdx=%d zone=%s w=%d srcLen=%d src[0]=%q src[1]=%q src[len-1]=%q viewTop=%d ctTop=%d numCt=%d alt=%v",
+		path, paneID[:4], rowIdx, zoneTag, w, len(source),
+		c0, c1, cw,
+		vc.ViewTopIdx, pane.ContentTopRow, pane.NumContentRows, vc.AltScreen)
+}
+
 // ensureBuffers allocates or resizes both prevBuffer and renderBuffer.
 // Returns true if the buffers were (re)allocated (size changed).
 func ensureBuffers(state *clientState, width, height int) bool {
@@ -190,21 +236,22 @@ func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []
 		return nil
 	}
 
-	// Content layer: rowIdx mapped via gid lookup.
+	// Content layer: prefer the positional decoration cache. The server
+	// emits every changed content row positionally (via DecorRowDelta)
+	// IN ADDITION to keying it by gid (RowDelta) for scrollback. The
+	// positional path is correct under wrapped chains (multiple rowIdxs
+	// sharing one head gid) and erased-row gaps, where the gid-derived
+	// formula `ViewTopIdx + (rowIdx - ContentTopRow)` mismatches the
+	// actual rowIdx → gid map. Falling back to PaneCache.RowAt only when
+	// the decor cache hasn't seen this rowIdx (early frames, or after a
+	// snapshot reset that cleared decor) preserves the existing fast
+	// path while fixing the wrapped-chain bug.
+	if row, ok := pane.DecorRowAt(uint16(rowIdx)); ok {
+		return row
+	}
 	contentRowIdx := rowIdx - int(pane.ContentTopRow)
 	gid := vc.ViewTopIdx + int64(contentRowIdx)
 	if row, found := pc.RowAt(gid); found {
-		return row
-	}
-	// PaneCache miss inside the structural content range. The publisher
-	// emits rows whose RowGlobalIdx[y] < 0 (e.g., unwritten interior rows
-	// of a fresh terminal — only the prompt row has a gid yet) as
-	// positional DecorRowDeltas. Honor that channel before giving up: the
-	// row may already be in the decoration cache. Without this fallback,
-	// the renderer paints blank for every interior row whose gid wasn't
-	// shipped, which hides side borders and any cells the server painted
-	// into "unwritten" rows.
-	if row, ok := pane.DecorRowAt(uint16(rowIdx)); ok {
 		return row
 	}
 	// Row not yet in either cache (fetch is en route, or the row really
@@ -245,9 +292,18 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 		// when PaneCache has no entry yet.
 		paneBuffer := ensurePaneBuffer(state, w, h)
 		defaultCell := client.Cell{Ch: ' ', Style: state.defaultStyle}
+		var dbgVC paneViewportCopy
+		if rendererDebug {
+			if vc, ok := state.paneViewportFor(pane.ID); ok {
+				dbgVC = vc
+			}
+		}
 		for rowIdx := 0; rowIdx < h; rowIdx++ {
 			row := paneBuffer[rowIdx]
 			source := rowSourceForPane(state, pane, rowIdx)
+			if rendererDebug && rowIdx == int(pane.ContentTopRow) {
+				logRowSourceDebug("incremental", pane.ID, rowIdx, w, source, dbgVC, pane)
+			}
 			for col := 0; col < w; col++ {
 				if col < len(source) {
 					cell := source[col]
@@ -492,9 +548,18 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 
 		paneBuffer := ensurePaneBuffer(state, w, h)
 		defaultCell := client.Cell{Ch: ' ', Style: state.defaultStyle}
+		var dbgVC paneViewportCopy
+		if rendererDebug {
+			if vc, ok := state.paneViewportFor(pane.ID); ok {
+				dbgVC = vc
+			}
+		}
 		for rowIdx := 0; rowIdx < h; rowIdx++ {
 			row := paneBuffer[rowIdx]
 			source := rowSourceForPane(state, pane, rowIdx)
+			if rendererDebug && rowIdx == int(pane.ContentTopRow) {
+				logRowSourceDebug("full", pane.ID, rowIdx, w, source, dbgVC, pane)
+			}
 			for col := 0; col < w; col++ {
 				if col < len(source) {
 					cell := source[col]

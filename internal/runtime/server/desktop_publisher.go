@@ -9,6 +9,8 @@
 package server
 
 import (
+	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +23,13 @@ import (
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/theme"
 )
+
+// publisherDebug is gated by env TEXELATION_DEBUG=1. Logs the pane ID,
+// RowBase, content rows shipped (gid + first/last span StartCol+Text len)
+// and decor rows shipped (rowIdx + first span info). This shows whether
+// the publisher is dropping the leading or trailing border cell of a
+// content row before it leaves the server.
+var publisherDebug = os.Getenv("TEXELATION_DEBUG") == "1"
 
 // DesktopPublisher captures desktop pane buffers and enqueues them as buffer
 // deltas on the associated session.
@@ -317,15 +326,119 @@ func bufferToDelta(snap texel.PaneSnapshot, prev [][]texel.Cell, revision uint32
 			})
 			continue
 		}
+		// Content row (gid >= 0). Encode spans once and emit positionally
+		// (DecorRowDelta keyed by rowIdx) IN ADDITION to keying by gid for
+		// scrollback. The positional duplicate is what the renderer reads
+		// for live composition: it remains correct under wrapped chains
+		// (multiple rowIdxs sharing one head gid) and erased-row gaps,
+		// where the gid space is non-contiguous and the client-side
+		// formula `gid = ViewTopIdx + (rowIdx - ContentTopRow)` mismatches
+		// the actual rowIdx → gid map. Without this, the renderer reads
+		// stale or missing rows on wrap and prints blank lines (no side
+		// border, no content). Bandwidth cost: one DecorRowDelta per
+		// changed content row inside the viewport (the rowsEqual filter
+		// above already skipped unchanged rows). The gid-keyed RowDelta
+		// is still emitted so the PaneCache can serve scrollback walks.
+		spans := encodeRow(row)
+		decorRows = append(decorRows, protocol.DecorRowDelta{
+			RowIdx: uint16(y),
+			Spans:  spans,
+		})
 		if gid < lo || gid > hi {
 			continue
 		}
-		rows = append(rows, protocol.RowDelta{Row: uint16(gid - lo), Spans: encodeRow(row)})
+		rows = append(rows, protocol.RowDelta{Row: uint16(gid - lo), Spans: spans})
 	}
 	delta.Styles = styles
 	delta.Rows = rows
 	delta.DecorRows = decorRows
+	if publisherDebug {
+		// Sample the first and last content rows + first/last decoration rows
+		// so the log line stays bounded while still showing whether borders
+		// went out on the wire.
+		var sampleContent, sampleDecor string
+		if n := len(rows); n > 0 {
+			first := rows[0]
+			sampleContent = formatRowSample("content", int64(first.Row)+delta.RowBase, first.Spans)
+			if n > 1 {
+				last := rows[n-1]
+				sampleContent += "; " + formatRowSample("content", int64(last.Row)+delta.RowBase, last.Spans)
+			}
+		}
+		if n := len(decorRows); n > 0 {
+			first := decorRows[0]
+			sampleDecor = formatDecorSample("decor", int(first.RowIdx), first.Spans)
+			if n > 1 {
+				last := decorRows[n-1]
+				sampleDecor += "; " + formatDecorSample("decor", int(last.RowIdx), last.Spans)
+			}
+		}
+		log.Printf("publishDebug pane=%x rev=%d alt=%v RowBase=%d rows=%d decor=%d styles=%d sample=[%s | %s]",
+			snap.ID[:4], revision, snap.AltScreen, delta.RowBase,
+			len(rows), len(decorRows), len(styles),
+			sampleContent, sampleDecor)
+	}
 	return delta
+}
+
+func formatRowSample(kind string, gid int64, spans []protocol.CellSpan) string {
+	if len(spans) == 0 {
+		return kind + " gid=" + itoa(int(gid)) + " EMPTY"
+	}
+	first := spans[0]
+	last := spans[len(spans)-1]
+	endCol := int(last.StartCol) + len([]rune(last.Text))
+	preview := first.Text
+	if len([]rune(preview)) > 8 {
+		preview = string([]rune(preview)[:8]) + "..."
+	}
+	return kind + " gid=" + itoa(int(gid)) +
+		" spans=" + itoa(len(spans)) +
+		" firstStart=" + itoa(int(first.StartCol)) +
+		" lastEnd=" + itoa(endCol) +
+		" first=\"" + preview + "\""
+}
+
+func formatDecorSample(kind string, rowIdx int, spans []protocol.CellSpan) string {
+	if len(spans) == 0 {
+		return kind + " rowIdx=" + itoa(rowIdx) + " EMPTY"
+	}
+	first := spans[0]
+	last := spans[len(spans)-1]
+	endCol := int(last.StartCol) + len([]rune(last.Text))
+	preview := first.Text
+	if len([]rune(preview)) > 8 {
+		preview = string([]rune(preview)[:8]) + "..."
+	}
+	return kind + " rowIdx=" + itoa(rowIdx) +
+		" spans=" + itoa(len(spans)) +
+		" firstStart=" + itoa(int(first.StartCol)) +
+		" lastEnd=" + itoa(endCol) +
+		" first=\"" + preview + "\""
+}
+
+// itoa is a tiny helper to keep the debug logger free of strconv imports.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := false
+	if n < 0 {
+		neg = true
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }
 
 type styleKey struct {

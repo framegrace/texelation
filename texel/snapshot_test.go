@@ -237,3 +237,159 @@ func TestApplyStructuralBounds_NonTerminalPane(t *testing.T) {
 		t.Fatalf("expected NumContentRows=0 for non-terminal app, got %d", snap.NumContentRows)
 	}
 }
+
+// snapshotTestStyledTerminalApp paints a non-default-styled content row.
+// This exercises the case where the BufferWidget actually paints into the
+// pane buffer (cells with style != tcell.StyleDefault are NOT skipped).
+type snapshotTestStyledTerminalApp struct {
+	snapshotTestTerminalApp
+}
+
+func (a *snapshotTestStyledTerminalApp) Render() [][]Cell {
+	rows := a.rows
+	cols := a.cols
+	if rows <= 0 {
+		rows = 1
+	}
+	if cols <= 0 {
+		cols = 1
+	}
+	// Use a style with explicit foreground so it is non-zero — BufferWidget
+	// will paint these cells into the pane buffer instead of skipping them.
+	contentStyle := tcell.StyleDefault.Foreground(tcell.ColorRed)
+	out := make([][]Cell, rows)
+	for y := range out {
+		out[y] = make([]Cell, cols)
+		for x := range out[y] {
+			out[y][x] = Cell{Ch: 'X', Style: contentStyle}
+		}
+	}
+	return out
+}
+
+// snapshotTestNoResizeApp is a styled terminal app that IGNORES Resize
+// requests and always returns a render buffer at its initial dimensions.
+// This mimics the sparseFakeApp pattern (Resize is a no-op) which makes
+// it possible for appBuffer to be larger than the pane's drawable area.
+type snapshotTestNoResizeApp struct {
+	snapshotTestStyledTerminalApp
+}
+
+func (a *snapshotTestNoResizeApp) Resize(cols, rows int) {
+	// no-op — keep initial dimensions
+}
+
+// TestPaneRenderBuffer_BordersSurviveOversizedAppBuffer reproduces the
+// d3921cb concern: an app whose Render() returns a buffer LARGER than the
+// pane's ClientRect. Without the d3921cb clamp, BufferWidget would paint
+// past col W-1 and row H-1, overwriting the borders. With d3921cb the
+// clamp keeps the child painting inside.
+func TestPaneRenderBuffer_BordersSurviveOversizedAppBuffer(t *testing.T) {
+	const w, h = 20, 6
+	rowIdx := []int64{100, 101, 102, 103}
+	p := newPane(nil)
+	p.absX0, p.absY0 = 0, 0
+	p.absX1, p.absY1 = w, h
+	app := &snapshotTestNoResizeApp{
+		snapshotTestStyledTerminalApp: snapshotTestStyledTerminalApp{
+			snapshotTestTerminalApp: snapshotTestTerminalApp{
+				// Initialize with FULL pane dims, so Render returns a w×h
+				// buffer instead of the expected (w-2)×(h-2).
+				snapshotTestApp: snapshotTestApp{title: "term", cols: w, rows: h},
+				rowIdx:          rowIdx,
+			},
+		},
+	}
+	p.app = app
+
+	buf := p.renderBuffer(false)
+	if len(buf) != h {
+		t.Fatalf("render buffer height = %d, want %d", len(buf), h)
+	}
+	for y, row := range buf {
+		if len(row) != w {
+			t.Fatalf("row %d width = %d, want %d", y, len(row), w)
+		}
+	}
+
+	// Interior rows must keep '│' at col 0 and col W-1 even though the
+	// app's render buffer was oversized.
+	for y := 1; y < h-1; y++ {
+		got0 := buf[y][0].Ch
+		gotR := buf[y][w-1].Ch
+		if got0 != '│' && got0 != '|' {
+			t.Errorf("row %d col 0 = %q, want '│' (left border overwritten by oversized app buffer)", y, got0)
+		}
+		if gotR != '│' && gotR != '|' {
+			t.Errorf("row %d col W-1 = %q, want '│' (right border overwritten by oversized app buffer)", y, gotR)
+		}
+	}
+	// Bottom row keeps its horizontal border characters.
+	if buf[h-1][1].Ch != '─' && buf[h-1][1].Ch != '-' {
+		t.Errorf("bottom border row col 1 = %q, want '─'", buf[h-1][1].Ch)
+	}
+	// Top row corners are still '╭' and '╮' (or '┌' / '┐').
+	if buf[0][0].Ch != '╭' && buf[0][0].Ch != '┌' {
+		t.Errorf("top border row col 0 = %q, want corner glyph", buf[0][0].Ch)
+	}
+	if buf[0][w-1].Ch != '╮' && buf[0][w-1].Ch != '┐' {
+		t.Errorf("top border row col W-1 = %q, want corner glyph", buf[0][w-1].Ch)
+	}
+}
+
+// TestPaneRenderBuffer_BordersSurviveStyledContent reproduces the server-side
+// half of the issue #199 follow-up "patchy border / 1-col left shift" bug.
+//
+// Setup: a terminal-style app whose Render() returns a (w-2, h-2) buffer
+// of cells with a NON-DEFAULT style (so BufferWidget paints them, not
+// skips them). This mirrors texterm after `ls<enter>` — the prompt is
+// painted with explicit fg/bg from the palette, no longer pure
+// StyleDefault. The pane must still produce border chars at col 0 and
+// col W-1 of every interior row.
+//
+// If this fails, the SetBuffer-then-clamp dance in pane_render.go is
+// not actually keeping the BufferWidget inside ClientRect, and the
+// child is overwriting the side borders.
+func TestPaneRenderBuffer_BordersSurviveStyledContent(t *testing.T) {
+	const w, h = 20, 6
+	rowIdx := []int64{100, 101, 102, 103} // h-2 = 4 entries, all content
+	p := newPane(nil)
+	p.absX0, p.absY0 = 0, 0
+	p.absX1, p.absY1 = w, h
+	app := &snapshotTestStyledTerminalApp{
+		snapshotTestTerminalApp: snapshotTestTerminalApp{
+			snapshotTestApp: snapshotTestApp{title: "term", cols: w - 2, rows: h - 2},
+			rowIdx:          rowIdx,
+		},
+	}
+	p.app = app
+
+	buf := p.renderBuffer(false)
+	if len(buf) != h {
+		t.Fatalf("render buffer height = %d, want %d", len(buf), h)
+	}
+	for y, row := range buf {
+		if len(row) != w {
+			t.Fatalf("row %d width = %d, want %d", y, len(row), w)
+		}
+	}
+
+	// Top and bottom rows are the horizontal border rows; corners/horizontals.
+	// Interior rows (y in [1, h-2]) must have a vertical bar at col 0 and col w-1.
+	for y := 1; y < h-1; y++ {
+		got0 := buf[y][0].Ch
+		gotR := buf[y][w-1].Ch
+		if got0 != '│' && got0 != '|' {
+			t.Errorf("row %d col 0 = %q, want '│' (left border overwritten by content)", y, got0)
+		}
+		if gotR != '│' && gotR != '|' {
+			t.Errorf("row %d col W-1 = %q, want '│' (right border overwritten by content)", y, gotR)
+		}
+		// Interior content cells (col 1..w-2) should be the app's 'X'.
+		for x := 1; x < w-1; x++ {
+			if buf[y][x].Ch != 'X' {
+				t.Errorf("row %d col %d = %q, want 'X' (content shifted)", y, x, buf[y][x].Ch)
+			}
+		}
+	}
+}

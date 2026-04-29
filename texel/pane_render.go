@@ -7,6 +7,8 @@
 package texel
 
 import (
+	"log"
+	"os"
 	"sync/atomic"
 
 	"github.com/framegrace/texelation/internal/debuglog"
@@ -15,6 +17,13 @@ import (
 	"github.com/framegrace/texelui/theme"
 	"github.com/gdamore/tcell/v2"
 )
+
+// renderDebug is gated by env var TEXELATION_DEBUG=1. When enabled, each
+// renderBuffer logs the pane id, dimensions, and the runes at (0,1), (1,1),
+// (w-1,1) so we can confirm the SERVER-side buffer has correct side borders
+// on the first interior row before publishing. Setting this on every
+// invocation would flood logs; we keep the check cheap and gated.
+var renderDebug = os.Getenv("TEXELATION_DEBUG") == "1"
 
 // markDirty flags this pane for re-render on the next snapshot cycle.
 func (p *pane) markDirty() {
@@ -186,6 +195,21 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	p.prevBuf = buffer
 	p.prevTitle = currentTitle
 	p.lastRendered = gen
+
+	if renderDebug && h > 2 && w > 2 {
+		paneID := p.ID()
+		row1 := buffer[1]
+		appW, appH := 0, 0
+		if len(appBuffer) > 0 {
+			appH = len(appBuffer)
+			appW = len(appBuffer[0])
+		}
+		bx, by := p.bufferWidget.Position()
+		bw, bh := p.bufferWidget.Size()
+		log.Printf("renderDebug pane=%x w=%d h=%d row1=[%q,%q,%q] appBuf=%dx%d bufWidget=(%d,%d)+%dx%d",
+			paneID[:4], w, h, row1[0].Ch, row1[1].Ch, row1[w-1].Ch,
+			appW, appH, bx, by, bw, bh)
+	}
 
 	return buffer
 }
