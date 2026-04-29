@@ -380,7 +380,9 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 // Returns the count of paths successfully removed. Extracted from
 // handleResetState so the wipe can be exercised by tests without
 // stdin/daemon plumbing (Plan D2 17.E).
-func wipeResetStatePaths(stderr, stdout interface{ Write(p []byte) (n int, err error) }, configDir, clientStateDir, socketPath string, legacyFiles []string) int {
+func wipeResetStatePaths(stderr, stdout interface {
+	Write(p []byte) (n int, err error)
+}, configDir, clientStateDir, socketPath string, legacyFiles []string) int {
 	removed := 0
 
 	// Remove the entire state directory (~/.texelation/)
