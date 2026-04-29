@@ -11,6 +11,7 @@ package server
 import (
 	"encoding/json"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,5 +165,76 @@ func TestSessionWriterCloseFlushes(t *testing.T) {
 
 	if _, err := os.Stat(SessionFilePath(dir, id)); err != nil {
 		t.Fatalf("Close did not flush: %v", err)
+	}
+}
+
+// TestSession_CloseRacesWithApplyViewportUpdate is the Plan D2 17.F
+// regression: Session.Close races directly with ApplyViewportUpdate
+// from a concurrent goroutine. Must not panic, the persisted file
+// (if any) must be valid JSON, and the schedulePersist lock-discipline
+// note in session.go must continue to hold up under -race. This is
+// defense-in-depth on top of TestStoreUpdateAfterCloseIsNoop in the
+// atomicjson package.
+func TestSession_CloseRacesWithApplyViewportUpdate(t *testing.T) {
+	dir := t.TempDir()
+	id := [16]byte{0xab}
+	sess := NewSession(id, 100)
+	sess.AttachWriter(SessionFilePath(dir, id), 1*time.Millisecond)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	stop := make(chan struct{})
+	go func() {
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			sess.ApplyViewportUpdate(protocol.ViewportUpdate{
+				PaneID:        [16]byte{byte(i % 256)},
+				ViewBottomIdx: int64(i),
+				Rows:          1,
+				Cols:          1,
+			})
+			i++
+			if i > 5000 {
+				return
+			}
+		}
+	}()
+
+	// Let the goroutine run briefly so Close has live writes to race
+	// against. 5ms is enough for the debounce-driven writer ticker
+	// to fire at least once.
+	time.Sleep(5 * time.Millisecond)
+
+	// Close races with the goroutine. Must not panic.
+	sess.Close()
+	close(stop)
+	wg.Wait()
+
+	// Post-condition: the persisted file (if any) must parse as
+	// valid JSON. atomicjson's atomic temp+rename guarantees a torn
+	// write cannot land on disk; this assertion verifies that
+	// guarantee end-to-end through the Session.schedulePersist path.
+	path := SessionFilePath(dir, id)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		// No file is acceptable: writer may not have flushed at all
+		// before Close, depending on goroutine scheduling.
+		return
+	}
+	if err != nil {
+		t.Fatalf("read persisted file: %v", err)
+	}
+	var got StoredSession
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("persisted file is not valid JSON: %v\n%s", err, string(data))
+	}
+	if got.SessionID != id {
+		t.Fatalf("sessionID mismatch: got %x want %x", got.SessionID, id)
 	}
 }
