@@ -364,28 +364,46 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 		_ = daemon.Stop(ctx) // Best effort
 	}
 
+	removed := wipeResetStatePaths(os.Stderr, os.Stdout, paths.ConfigDir, clientStateDir, socketPath, legacyFiles)
+
+	fmt.Printf("\nState reset complete (%d items removed)\n", removed)
+	return nil
+}
+
+// wipeResetStatePaths removes all state covered by --reset-state:
+//   - configDir (entire ~/.texelation/ tree, including Plan D2's
+//     sessions/ subdir written by atomicjson)
+//   - legacy per-pane files (~/.texel-env-*, ~/.texel-history-*)
+//   - clientStateDir (Plan D's client-side sessionID + viewports)
+//   - the daemon's Unix socket
+//
+// Returns the count of paths successfully removed. Extracted from
+// handleResetState so the wipe can be exercised by tests without
+// stdin/daemon plumbing (Plan D2 17.E).
+func wipeResetStatePaths(stderr, stdout interface{ Write(p []byte) (n int, err error) }, configDir, clientStateDir, socketPath string, legacyFiles []string) int {
 	removed := 0
 
 	// Remove the entire state directory (~/.texelation/)
 	// This covers: scrollback/*.hist3, scrollback/*.index.db, storage/,
-	// texelbrowse/, snapshot.json, server.log, texelation.pid
-	if err := os.RemoveAll(paths.ConfigDir); err != nil {
-		fmt.Fprintf(os.Stderr, "  warning: failed to remove %s: %v\n", paths.ConfigDir, err)
+	// texelbrowse/, snapshot.json, server.log, texelation.pid, AND
+	// Plan D2's sessions/ subdir (atomicjson session-state files).
+	if err := os.RemoveAll(configDir); err != nil {
+		fmt.Fprintf(stderr, "  warning: failed to remove %s: %v\n", configDir, err)
 	} else {
-		fmt.Printf("  removed %s/\n", paths.ConfigDir)
+		fmt.Fprintf(stdout, "  removed %s/\n", configDir)
 		removed++
 	}
 
 	// Remove legacy per-pane files (~/.texel-env-*, ~/.texel-history-*)
 	for _, f := range legacyFiles {
 		if err := os.Remove(f); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: failed to remove %s: %v\n", f, err)
+			fmt.Fprintf(stderr, "  warning: failed to remove %s: %v\n", f, err)
 		} else {
 			removed++
 		}
 	}
 	if len(legacyFiles) > 0 {
-		fmt.Printf("  removed %d legacy pane files\n", len(legacyFiles))
+		fmt.Fprintf(stdout, "  removed %d legacy pane files\n", len(legacyFiles))
 	}
 
 	// Remove Plan D's client persistence directory if it exists.
@@ -395,9 +413,9 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 	if clientStateDir != "" {
 		if _, err := os.Stat(clientStateDir); err == nil {
 			if err := os.RemoveAll(clientStateDir); err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: failed to remove %s: %v\n", clientStateDir, err)
+				fmt.Fprintf(stderr, "  warning: failed to remove %s: %v\n", clientStateDir, err)
 			} else {
-				fmt.Printf("  removed %s/\n", clientStateDir)
+				fmt.Fprintf(stdout, "  removed %s/\n", clientStateDir)
 				removed++
 			}
 		}
@@ -405,12 +423,11 @@ func handleResetState(ctx context.Context, paths *Paths, socketPath string) erro
 
 	// Remove socket file
 	if err := os.Remove(socketPath); err == nil {
-		fmt.Printf("  removed %s\n", socketPath)
+		fmt.Fprintf(stdout, "  removed %s\n", socketPath)
 		removed++
 	}
 
-	fmt.Printf("\nState reset complete (%d items removed)\n", removed)
-	return nil
+	return removed
 }
 
 // resolveClientStateDir returns the path that holds Plan D's client
