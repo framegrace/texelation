@@ -44,6 +44,11 @@ func NewManager() *Manager {
 func (m *Manager) NewSession() (*Session, error) {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
+		// Plan D2 17.C: log at the point of failure so operators
+		// investigating "users can't connect" have a breadcrumb pointing
+		// at the entropy pool. Without this, the error propagates up to
+		// the handshake and surfaces as a generic "connect failed".
+		log.Printf("session: crypto/rand failed: %v", err)
 		return nil, err
 	}
 
