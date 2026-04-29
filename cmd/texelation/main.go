@@ -458,5 +458,30 @@ func handleStatus(ctx context.Context, paths *Paths, socketPath string) error {
 		fmt.Printf("  Snapshot modified: %s\n", info.ModTime().Format("2006-01-02 15:04:05"))
 	}
 
+	// Plan D2 17.D: report cross-restart session-persistence state so
+	// a permissions issue (e.g. sessions/ owned by root after a sudo
+	// misadventure) doesn't silently break resume across restarts.
+	// We check by inspecting <ConfigDir>/sessions/ since the running
+	// daemon doesn't expose Manager.Stats over the socket today.
+	sessionsDir := filepath.Join(paths.ConfigDir, "sessions")
+	if info, err := os.Stat(sessionsDir); err == nil && info.IsDir() {
+		entries, readErr := os.ReadDir(sessionsDir)
+		if readErr != nil {
+			fmt.Printf("  Persistence: directory unreadable (%v)\n", readErr)
+		} else {
+			count := 0
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+					count++
+				}
+			}
+			fmt.Printf("  Persistence: enabled (%d persisted session(s) at %s)\n", count, sessionsDir)
+		}
+	} else if os.IsNotExist(err) {
+		fmt.Printf("  Persistence: no sessions directory yet (%s)\n", sessionsDir)
+	} else if err != nil {
+		fmt.Printf("  Persistence: cannot stat %s: %v\n", sessionsDir, err)
+	}
+
 	return nil
 }

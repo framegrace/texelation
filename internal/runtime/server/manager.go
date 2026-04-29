@@ -353,6 +353,30 @@ func (m *Manager) ActiveSessions() int {
 	return len(m.sessions)
 }
 
+// ManagerStats captures Manager-level observable state. Used by
+// operators to detect silent failures — primarily Plan D2 17.D where
+// EnablePersistence's failure path leaves persistence disabled for
+// the rest of the process lifetime.
+type ManagerStats struct {
+	ActiveSessions    int
+	PersistedSessions int
+	PersistEnabled    bool
+	PersistBasedir    string
+}
+
+// Stats returns a snapshot of manager-level metrics. Does NOT include
+// per-session stats — for those see SessionStats.
+func (m *Manager) Stats() ManagerStats {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return ManagerStats{
+		ActiveSessions:    len(m.sessions),
+		PersistedSessions: len(m.persistedSessions),
+		PersistEnabled:    m.persistBasedir != "",
+		PersistBasedir:    m.persistBasedir,
+	}
+}
+
 func (m *Manager) SessionStats() []SessionStats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

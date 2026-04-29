@@ -262,6 +262,39 @@ func TestManagerNewSessionWithID_RejectsDuplicates(t *testing.T) {
 	}
 }
 
+// TestManagerStats_PersistDisabledWhenNoBasedir verifies the Plan D2
+// 17.D observability surface: with EnablePersistence skipped (or
+// failing), Manager.Stats reports PersistEnabled=false so callers
+// can detect the silent-failure mode.
+func TestManagerStats_PersistDisabledWhenNoBasedir(t *testing.T) {
+	mgr := NewManager()
+	stats := mgr.Stats()
+	if stats.PersistEnabled {
+		t.Fatalf("PersistEnabled must be false before EnablePersistence")
+	}
+	if stats.PersistBasedir != "" {
+		t.Fatalf("PersistBasedir must be empty before EnablePersistence, got %q", stats.PersistBasedir)
+	}
+}
+
+// TestManagerStats_PersistEnabledAfterEnable verifies the happy path:
+// after EnablePersistence succeeds, Stats reports the enabled state
+// and the basedir.
+func TestManagerStats_PersistEnabledAfterEnable(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager()
+	if err := mgr.EnablePersistence(dir, 25*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	stats := mgr.Stats()
+	if !stats.PersistEnabled {
+		t.Fatalf("PersistEnabled must be true after EnablePersistence")
+	}
+	if stats.PersistBasedir != dir {
+		t.Fatalf("PersistBasedir = %q, want %q", stats.PersistBasedir, dir)
+	}
+}
+
 // TestManagerCloseSerializesWithLookupOrRehydrate is the Plan D2 17.B
 // regression: a Close racing with a same-ID LookupOrRehydrate must
 // not let the rehydrate path attach a fresh atomicjson writer to the
