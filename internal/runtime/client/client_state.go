@@ -141,6 +141,56 @@ type clientState struct {
 	// post-resume reset so a fresh session can re-log misses. Issue #199.
 	decorMissMu   sync.Mutex
 	decorMissSeen map[decorationMissKey]struct{}
+
+	// holdRenderMu guards holdRenderUntil. The protocol-handler goroutine
+	// writes it after a TreeSnapshot that changes pane geometry; the main
+	// event-loop goroutine reads (and clears) it before each render.
+	holdRenderMu    sync.Mutex
+	holdRenderUntil time.Time
+}
+
+// renderCoalesceWindow is how long the client defers rendering after a
+// TreeSnapshot whose pane geometry changed, so the buffer delta(s) that
+// follow the snapshot on the wire have time to land in the same render
+// frame. This eliminates the one-frame "jump" when a pane is resized from
+// its top edge (snapshot updates the pane Rect but PaneCache still holds
+// the old viewport rows). Server emits both messages back-to-back; on a
+// unix socket the inter-message latency is sub-millisecond, so 20ms is
+// generous without being noticeable.
+const renderCoalesceWindow = 20 * time.Millisecond
+
+// setHoldRenderUntil records that the render loop should defer rendering
+// until at least the given instant. Repeated calls take the latest
+// (furthest-future) hold so back-to-back geometry-changing snapshots all
+// extend the window.
+func (s *clientState) setHoldRenderUntil(t time.Time) {
+	s.holdRenderMu.Lock()
+	defer s.holdRenderMu.Unlock()
+	if t.After(s.holdRenderUntil) {
+		s.holdRenderUntil = t
+	}
+}
+
+// holdRenderRemaining returns how much longer the render loop must wait
+// before rendering, or 0 if the hold has elapsed (or was never set).
+func (s *clientState) holdRenderRemaining(now time.Time) time.Duration {
+	s.holdRenderMu.Lock()
+	defer s.holdRenderMu.Unlock()
+	if s.holdRenderUntil.IsZero() {
+		return 0
+	}
+	if !now.Before(s.holdRenderUntil) {
+		return 0
+	}
+	return s.holdRenderUntil.Sub(now)
+}
+
+// clearHoldRender resets the hold marker. Called after a render so a
+// subsequent geometry-changing snapshot can establish a fresh window.
+func (s *clientState) clearHoldRender() {
+	s.holdRenderMu.Lock()
+	defer s.holdRenderMu.Unlock()
+	s.holdRenderUntil = time.Time{}
 }
 
 // decorationMissKey is the dedup key for once-per-pane-row decoration miss logging.

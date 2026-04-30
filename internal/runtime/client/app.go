@@ -361,7 +361,13 @@ func Run(opts Options) error {
 					continue
 				}
 			}
+			if remaining := state.holdRenderRemaining(time.Now()); remaining > 0 {
+				scheduleRenderWakeup(renderCh, remaining)
+				state.frameDT = 0
+				continue
+			}
 			render(state, screen)
+			state.clearHoldRender()
 			state.frameDT = 0
 
 		case <-renderCh:
@@ -370,7 +376,12 @@ func Run(opts Options) error {
 			if state.effects != nil {
 				state.effects.Update(0)
 			}
+			if remaining := state.holdRenderRemaining(time.Now()); remaining > 0 {
+				scheduleRenderWakeup(renderCh, remaining)
+				continue
+			}
 			render(state, screen)
+			state.clearHoldRender()
 
 		case ev, ok := <-events:
 			if !ok {
@@ -390,6 +401,23 @@ func Run(opts Options) error {
 			screen.SetClipboard(clip.Data)
 		}
 	}
+}
+
+// scheduleRenderWakeup ensures the render loop wakes up again after the
+// given duration so a deferred render can fire. Used when the render loop
+// observes an active hold (set after a geometry-changing TreeSnapshot)
+// and needs to bound the wait in case no BufferDelta arrives.
+//
+// The wakeup is non-blocking: if renderCh's buffer is already saturated,
+// the upcoming consumer will already trigger a render, so dropping the
+// extra signal is safe.
+func scheduleRenderWakeup(renderCh chan<- struct{}, after time.Duration) {
+	time.AfterFunc(after, func() {
+		select {
+		case renderCh <- struct{}{}:
+		default:
+		}
+	})
 }
 
 func loadKeybindings() *keybind.Registry {

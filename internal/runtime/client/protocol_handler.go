@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/framegrace/texelation/client"
 	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelation/internal/effects"
 	"github.com/framegrace/texelation/protocol"
@@ -47,8 +48,19 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 			log.Printf("decode snapshot failed: %v", err)
 			return false
 		}
+		// Snapshot pre-snap pane geometry so we can detect rect changes
+		// AFTER ApplySnapshot. ApplySnapshot overwrites pane.Rect, so the
+		// diff must be captured first. If any pane's rect changed, defer
+		// the next render briefly to give the BufferDelta(s) that follow
+		// this snapshot on the wire time to land in the same frame —
+		// otherwise the user sees one frame with new pane Rect but stale
+		// PaneCache content (the resize-from-top-edge "jump"). Issue #199.
+		geomChanged := snapshotChangesPaneGeometry(cache, snap)
 		// Always apply snapshots - empty snapshots clear the cache (e.g., when switching to empty workspace)
 		cache.ApplySnapshot(snap)
+		if geomChanged {
+			state.setHoldRenderUntil(time.Now().Add(renderCoalesceWindow))
+		}
 		applyPostResumeReset(state, lastSequence) // Plan D2: one-shot reset on post-resume snapshot
 		state.fullRenderNeeded = true
 		if state.effects != nil {
@@ -245,6 +257,32 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		}
 		cache.ImageCache().ResetPlacements(reset.PaneID)
 		return true
+	}
+	return false
+}
+
+// snapshotChangesPaneGeometry reports whether any pane in snap has a
+// different rect (X/Y/Width/Height) than the corresponding pane currently
+// in cache. Newly-introduced panes (no prior cache entry) count as
+// geometry changes — they enter the layout with a brand-new rect, and the
+// buffer delta(s) that follow likely carry their initial content. Removed
+// panes do not by themselves require coalescing.
+//
+// Must be called BEFORE cache.ApplySnapshot(snap), since ApplySnapshot
+// overwrites pane.Rect with the snapshot's values.
+func snapshotChangesPaneGeometry(cache *client.BufferCache, snap protocol.TreeSnapshot) bool {
+	if cache == nil {
+		return false
+	}
+	for _, p := range snap.Panes {
+		prev := cache.PaneByID(p.PaneID)
+		if prev == nil {
+			return true
+		}
+		r := prev.Rect
+		if r.X != int(p.X) || r.Y != int(p.Y) || r.Width != int(p.Width) || r.Height != int(p.Height) {
+			return true
+		}
 	}
 	return false
 }
