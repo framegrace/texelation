@@ -302,10 +302,14 @@ func (d *DesktopEngine) activeAppTarget() string {
 		return ""
 	}
 	pane := d.activeWorkspace.ActivePane()
-	if pane == nil || pane.app == nil {
+	if pane == nil {
 		return ""
 	}
-	if provider, ok := pane.app.(SnapshotProvider); ok {
+	app := pane.currentApp()
+	if app == nil {
+		return ""
+	}
+	if provider, ok := app.(SnapshotProvider); ok {
 		appType, _ := provider.SnapshotMetadata()
 		return appType
 	}
@@ -395,10 +399,11 @@ func (d *DesktopEngine) reloadKeybindings() {
 			continue
 		}
 		forEachLeafPane(ws.tree.Root, func(p *pane) {
-			if p.app == nil {
+			app := p.currentApp()
+			if app == nil {
 				return
 			}
-			if setter, ok := p.app.(KeybindingSetter); ok {
+			if setter, ok := app.(KeybindingSetter); ok {
 				setter.SetKeybindings(newReg)
 			}
 		})
@@ -446,13 +451,13 @@ func (d *DesktopEngine) notifyAppConfigChanged() {
 			continue
 		}
 		forEachLeafPane(ws.tree.Root, func(p *pane) {
-			if p.app == nil {
+			app := p.currentApp()
+			if app == nil {
 				return
 			}
-			if reloader, ok := p.app.(ConfigReloader); ok {
+			if reloader, ok := app.(ConfigReloader); ok {
 				reloader.ReloadConfig()
 			}
 		})
 	}
 }
-

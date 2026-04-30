@@ -242,7 +242,7 @@ func TestWorkspaceRemovesPaneWhenAppExits(t *testing.T) {
 	if ws.tree.ActiveLeaf == nil || ws.tree.ActiveLeaf.Pane == nil {
 		t.Fatalf("expected active pane after removing shell")
 	}
-	if ws.tree.ActiveLeaf.Pane.app != welcomeApp {
+	if ws.tree.ActiveLeaf.Pane.currentApp() != welcomeApp {
 		t.Fatalf("expected welcome app to remain active after shell exit")
 	}
 
@@ -256,7 +256,7 @@ func TestWorkspaceRemovesPaneWhenAppExits(t *testing.T) {
 		t.Fatalf("expected active pane after welcome restart")
 	}
 	newWelcome := lifecycle.started[2]
-	if ws.tree.ActiveLeaf.Pane.app != newWelcome {
+	if ws.tree.ActiveLeaf.Pane.currentApp() != newWelcome {
 		t.Fatalf("expected new welcome app to be active after restart")
 	}
 }
@@ -300,7 +300,7 @@ func TestCloseActivePaneRespawnsWelcome(t *testing.T) {
 		t.Fatalf("expected a new pane to exist after closing the last one")
 	}
 
-	if ws.tree.ActiveLeaf.Pane.app != newWelcome {
+	if ws.tree.ActiveLeaf.Pane.currentApp() != newWelcome {
 		t.Fatalf("expected the new welcome app to be active after respawn")
 	}
 }

@@ -14,8 +14,8 @@ import (
 
 	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelation/internal/keybind"
-	"github.com/gdamore/tcell/v2"
 	"github.com/framegrace/texelui/theme"
+	"github.com/gdamore/tcell/v2"
 )
 
 type Direction int
@@ -40,7 +40,6 @@ type DebuggableApp interface {
 }
 
 type AppFactory func() App
-
 
 const (
 	ResizeStep float64 = 0.05 // Resize by 5%
@@ -253,8 +252,8 @@ func (w *Workspace) handleEvent(ev *tcell.EventKey) {
 		pane := w.tree.ActiveLeaf.Pane
 		if pane.pipeline != nil {
 			pane.pipeline.HandleKey(ev)
-		} else if pane.app != nil {
-			pane.app.HandleKey(ev)
+		} else if app := pane.currentApp(); app != nil {
+			app.HandleKey(ev)
 		}
 		// Mark pane dirty synchronously so the immediate Publish() call
 		// in DesktopSink.HandleKeyEvent sees updated state.
@@ -280,7 +279,8 @@ func (w *Workspace) handleAppExit(p *pane, exitedApp App, runErr error) {
 	}
 
 	// Ignore stale callbacks if the pane has already attached a new app.
-	if exitedApp != nil && p.app != nil && p.app != exitedApp {
+	current := p.currentApp()
+	if exitedApp != nil && current != nil && current != exitedApp {
 		debuglog.Printf("handleAppExit: ignoring exit for stale app '%s'", exitedApp.GetTitle())
 		return
 	}
@@ -288,8 +288,8 @@ func (w *Workspace) handleAppExit(p *pane, exitedApp App, runErr error) {
 	title := "unknown"
 	if exitedApp != nil {
 		title = exitedApp.GetTitle()
-	} else if p.app != nil {
-		title = p.app.GetTitle()
+	} else if current != nil {
+		title = current.GetTitle()
 	}
 
 	if runErr != nil {
@@ -365,4 +365,3 @@ func (w *Workspace) Close() {
 		}
 	})
 }
-

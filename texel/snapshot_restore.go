@@ -26,7 +26,7 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 	// 1. Prepare all panes (they are flat list)
 	// We need a map to look them up by index
 	panes := make([]*pane, len(capture.Panes))
-	
+
 	// We need a dummy screen for creating panes initially, but we'll re-assign them to correct workspaces
 	// Ensure at least one workspace exists
 	if len(d.workspaces) == 0 {
@@ -44,7 +44,7 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 	}
 
 	// 2. Restore Workspaces
-	
+
 	// If legacy capture (Root only), treat as single workspace
 	if len(capture.WorkspaceRoots) == 0 && capture.Root != nil {
 		capture.WorkspaceRoots = map[int]*TreeNodeCapture{1: capture.Root}
@@ -55,7 +55,7 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 
 	for id, rootCapture := range capture.WorkspaceRoots {
 		restoredIDs[id] = true
-		
+
 		// Ensure workspace exists
 		if _, exists := d.workspaces[id]; !exists {
 			// Manually create workspace to avoid triggering side-effects of SwitchToWorkspace
@@ -65,9 +65,9 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 			}
 			d.workspaces[id] = ws
 		}
-		
+
 		screen := d.workspaces[id]
-		
+
 		// Stop existing apps in this workspace
 		if screen.tree != nil {
 			stopApps(screen.tree.Root, screen.appLifecycle)
@@ -82,10 +82,10 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		if screen.tree == nil {
 			screen.tree = NewTree()
 		}
-		
+
 		// Re-assign panes to this workspace
 		assignPanesToWorkspace(root, screen)
-		
+
 		if active == nil {
 			active = findFirstLeaf(root)
 		}
@@ -98,7 +98,7 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		// Calculate layout for this workspace
 		screen.recalculateLayout()
 	}
-	
+
 	// 3. Apply workspace metadata (name and color) from the snapshot.
 	// Skip empty values to preserve defaults from newWorkspace (old snapshots
 	// lack metadata entirely).
@@ -150,16 +150,17 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 		}
 	}
 	isStatusOrphan := func(p *pane) bool {
-		if p.app == nil {
+		app := p.currentApp()
+		if app == nil {
 			return false
 		}
-		title := p.app.GetTitle()
+		title := app.GetTitle()
 		if statusTitles[title] {
 			return true
 		}
 		// Belt-and-braces: the captured StatusBar app reports
 		// AppType="statusbar" via SnapshotMetadata; check that too.
-		if provider, ok := p.app.(SnapshotProvider); ok {
+		if provider, ok := app.(SnapshotProvider); ok {
 			if appType, _ := provider.SnapshotMetadata(); appType == "statusbar" {
 				return true
 			}
@@ -180,9 +181,9 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 			// to drain, panic on nil internal state, or block waiting
 			// for goroutines that never started. Wrap in recover() so
 			// a misbehaving Stop cannot abort boot snapshot restore.
-			if p.app != nil {
-				stopOrphanAppSafely(d.appLifecycle, p.app)
-				p.app = nil
+			if app := p.currentApp(); app != nil {
+				stopOrphanAppSafely(d.appLifecycle, app)
+				p.setApp(nil)
 			}
 			continue
 		}
@@ -191,7 +192,7 @@ func (d *DesktopEngine) ApplyTreeCapture(capture TreeCapture) error {
 	d.pendingAppStartsMu.Lock()
 	d.pendingAppStarts = append(d.pendingAppStarts, startable...)
 	d.pendingAppStartsMu.Unlock()
-	
+
 	// 5. Activate correct workspace
 	if capture.ActiveWorkspaceID > 0 {
 		if _, exists := d.workspaces[capture.ActiveWorkspaceID]; exists {
@@ -235,8 +236,8 @@ func assignPanesToWorkspace(node *Node, ws *Workspace) {
 		node.Pane.markDirty()
 		if node.Pane.pipeline != nil {
 			node.Pane.pipeline.SetRefreshNotifier(paneRefresh)
-		} else if node.Pane.app != nil {
-			node.Pane.app.SetRefreshNotifier(paneRefresh)
+		} else if app := node.Pane.currentApp(); app != nil {
+			app.SetRefreshNotifier(paneRefresh)
 		}
 	}
 	for _, child := range node.Children {
@@ -248,8 +249,10 @@ func stopApps(node *Node, lifecycle AppLifecycleManager) {
 	if node == nil {
 		return
 	}
-	if node.Pane != nil && node.Pane.app != nil {
-		lifecycle.StopApp(node.Pane.app)
+	if node.Pane != nil {
+		if app := node.Pane.currentApp(); app != nil {
+			lifecycle.StopApp(app)
+		}
 	}
 	for _, child := range node.Children {
 		stopApps(child, lifecycle)

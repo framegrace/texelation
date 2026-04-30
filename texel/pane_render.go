@@ -115,8 +115,9 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	// Reset graphics placements before rendering so only visible widgets
 	// re-place their images. This mirrors the standalone runtime's
 	// graphicsProvider.Reset() → app.Render() → Flush() cycle.
-	if p.app != nil {
-		if ua, ok := p.app.(interface{ UI() *texelcore.UIManager }); ok {
+	app := p.currentApp()
+	if app != nil {
+		if ua, ok := app.(interface{ UI() *texelcore.UIManager }); ok {
 			if mgr := ua.UI(); mgr != nil {
 				if gp := mgr.GraphicsProvider(); gp != nil {
 					gp.Reset()
@@ -129,8 +130,8 @@ func (p *pane) renderBuffer(applyEffects bool) [][]Cell {
 	var appBuffer [][]Cell
 	if p.pipeline != nil {
 		appBuffer = p.pipeline.Render()
-	} else if p.app != nil {
-		appBuffer = p.app.Render()
+	} else if app != nil {
+		appBuffer = app.Render()
 	}
 
 	// Update persistent border widget state.
@@ -262,8 +263,8 @@ func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 	// Resize pipeline (or app as fallback)
 	if p.pipeline != nil {
 		p.pipeline.Resize(drawableW, drawableH)
-	} else if p.app != nil {
-		p.app.Resize(drawableW, drawableH)
+	} else if app := p.currentApp(); app != nil {
+		app.Resize(drawableW, drawableH)
 	} else {
 		debuglog.Printf("setDimensions: Pane '%s' has no app yet!", p.getTitle())
 	}

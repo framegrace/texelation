@@ -27,8 +27,8 @@ func (p *pane) handlePaste(data []byte) {
 		}
 	}
 	// Fallback to app
-	if p.app != nil {
-		if handler, ok := p.app.(PasteHandler); ok {
+	if app := p.currentApp(); app != nil {
+		if handler, ok := app.(PasteHandler); ok {
 			handler.HandlePaste(data)
 			p.markDirty()
 			return
@@ -57,8 +57,8 @@ func (p *pane) handlePaste(data []byte) {
 		}
 		if p.pipeline != nil {
 			p.pipeline.HandleKey(ev)
-		} else if p.app != nil {
-			p.app.HandleKey(ev)
+		} else if app := p.currentApp(); app != nil {
+			app.HandleKey(ev)
 		}
 	}
 	p.markDirty()

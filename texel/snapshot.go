@@ -245,18 +245,23 @@ func (d *DesktopEngine) GeometryForClient() TreeCapture {
 // only need RowGlobalIdx() to detect the texterm "trailing statusbar"
 // pattern (last entry < 0).
 func applyStructuralBounds(snap *PaneSnapshot, p *pane) {
-	if p == nil || p.app == nil {
+	if p == nil {
+		snap.AltScreen = true
+		return
+	}
+	app := p.currentApp()
+	if app == nil {
 		// Placeholder pane: no content bounds, alt-screen-equivalent.
 		snap.AltScreen = true
 		return
 	}
 	h := p.Height()
-	rowProvider, hasRowProvider := p.app.(RowGlobalIdxProvider)
+	rowProvider, hasRowProvider := app.(RowGlobalIdxProvider)
 	if !hasRowProvider {
 		snap.AltScreen = true
 		return
 	}
-	if altProvider, ok := p.app.(AltScreenProvider); ok && altProvider.InAltScreen() {
+	if altProvider, ok := app.(AltScreenProvider); ok && altProvider.InAltScreen() {
 		snap.AltScreen = true
 		return
 	}
@@ -376,8 +381,8 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 	// p.app might be nil if capturing during split before attach, or if app crashed
 	var appIdx []int64
 	hasRowProvider := false
-	if p.app != nil {
-		if provider, ok := p.app.(SnapshotProvider); ok {
+	if app := p.currentApp(); app != nil {
+		if provider, ok := app.(SnapshotProvider); ok {
 			appType, config := provider.SnapshotMetadata()
 			snap.AppType = appType
 			snap.AppConfig = cloneAppConfig(config)
@@ -385,7 +390,7 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		// Terminal-like apps expose per-row globalIdxs for their rendered
 		// content. The content buffer sits inside a 1-cell border at (1,1),
 		// so offset entries by +1 and stop short of the bottom-border row.
-		rowProvider, ok := p.app.(RowGlobalIdxProvider)
+		rowProvider, ok := app.(RowGlobalIdxProvider)
 		hasRowProvider = ok
 		if hasRowProvider {
 			appIdx = rowProvider.RowGlobalIdx()
@@ -405,7 +410,7 @@ func capturePaneSnapshot(p *pane) PaneSnapshot {
 		// terminal apps). In both cases clients key rows by flat index.
 		if !hasRowProvider {
 			snap.AltScreen = true
-		} else if altProvider, ok := p.app.(AltScreenProvider); ok && altProvider.InAltScreen() {
+		} else if altProvider, ok := app.(AltScreenProvider); ok && altProvider.InAltScreen() {
 			snap.AltScreen = true
 		}
 	} else {
