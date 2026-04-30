@@ -56,7 +56,7 @@ func (d *DesktopEngine) firstPaneIDAndApp() ([16]byte, App) {
 			return
 		}
 		id = p.ID()
-		app = p.app
+		app = p.currentApp()
 	})
 	return id, app
 }
@@ -66,7 +66,7 @@ func (d *DesktopEngine) firstPaneIDAndApp() ([16]byte, App) {
 func (d *DesktopEngine) swapPaneApp(id [16]byte, newApp App) {
 	d.forEachPane(func(p *pane) {
 		if p.ID() == id {
-			p.app = newApp
+			p.setApp(newApp)
 		}
 	})
 }

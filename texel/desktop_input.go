@@ -130,8 +130,8 @@ func (d *DesktopEngine) handleEvent(ev tcell.Event) {
 			// Route to pipeline (or app as fallback)
 			if d.zoomedPane.Pane.pipeline != nil {
 				d.zoomedPane.Pane.pipeline.HandleKey(key)
-			} else if d.zoomedPane.Pane.app != nil {
-				d.zoomedPane.Pane.app.HandleKey(key)
+			} else if app := d.zoomedPane.Pane.currentApp(); app != nil {
+				app.HandleKey(key)
 			}
 			d.zoomedPane.Pane.markDirty()
 		}

@@ -53,7 +53,7 @@ func newSnapshotTestPane(w, h int) *pane {
 	p.absX1, p.absY1 = w, h
 	// Inner app content sits at (1,1) inside a (w,h) border.
 	app := &snapshotTestApp{title: "mock", cols: w - 2, rows: h - 2}
-	p.app = app
+	p.setApp(app)
 	return p
 }
 
@@ -162,7 +162,7 @@ func newTerminalSnapshotPane(w, h int, rowIdx []int64) *pane {
 		snapshotTestApp: snapshotTestApp{title: "term", cols: w - 2, rows: h - 2},
 		rowIdx:          rowIdx,
 	}
-	p.app = app
+	p.setApp(app)
 	return p
 }
 
@@ -300,7 +300,7 @@ func TestPaneRenderBuffer_BordersSurviveOversizedAppBuffer(t *testing.T) {
 			},
 		},
 	}
-	p.app = app
+	p.setApp(app)
 
 	buf := p.renderBuffer(false)
 	if len(buf) != h {
@@ -362,7 +362,7 @@ func TestPaneRenderBuffer_BordersSurviveStyledContent(t *testing.T) {
 			rowIdx:          rowIdx,
 		},
 	}
-	p.app = app
+	p.setApp(app)
 
 	buf := p.renderBuffer(false)
 	if len(buf) != h {

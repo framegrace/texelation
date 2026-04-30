@@ -774,8 +774,10 @@ func (d *DesktopEngine) CloseWorkspace(id int) {
 			if n == nil {
 				return
 			}
-			if n.Pane != nil && n.Pane.app != nil {
-				d.appLifecycle.StopApp(n.Pane.app)
+			if n.Pane != nil {
+				if app := n.Pane.currentApp(); app != nil {
+					d.appLifecycle.StopApp(app)
+				}
 			}
 			for _, child := range n.Children {
 				stopAll(child)
@@ -845,7 +847,7 @@ func (d *DesktopEngine) AppByID(id [16]byte) App {
 			return
 		}
 		if p.ID() == id {
-			result = p.app
+			result = p.currentApp()
 		}
 	})
 	return result

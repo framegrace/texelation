@@ -13,6 +13,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"log"
+	"sync/atomic"
 
 	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/debuglog"
@@ -36,14 +37,22 @@ const (
 // Pane represents a rectangular area on the screen that hosts an App.
 type pane struct {
 	absX0, absY0, absX1, absY1 int
-	app                        App            // The real app - for interfaces only
-	pipeline                   RenderPipeline // For events and rendering (from PipelineProvider)
-	name                       string
-	prevBuf                    [][]Cell
-	screen                     *Workspace
-	id                         [16]byte
-	mouseHandler               MouseHandler
-	handlesMouse               bool
+	// app holds the currently attached application as an atomic interface
+	// pointer. AttachApp may run on a different goroutine than the
+	// lifecycle's onExit callback (which calls handleAppExit and reads the
+	// current app for a staleness check), so the swap and the staleness
+	// read must be race-free without locking — locks would deadlock when a
+	// running app like the launcher triggers ReplaceWithApp from inside its
+	// own onExit / handler goroutine. Use currentApp() / setApp() to
+	// access. The underlying value is nil when no app is attached.
+	app          atomic.Pointer[App]
+	pipeline     RenderPipeline // For events and rendering (from PipelineProvider)
+	name         string
+	prevBuf      [][]Cell
+	screen       *Workspace
+	id           [16]byte
+	mouseHandler MouseHandler
+	handlesMouse bool
 
 	// Persistent border and buffer widgets (created once, updated each frame).
 	border       *widgets.Border
@@ -55,16 +64,35 @@ type pane struct {
 	// Uses a generation counter instead of a boolean flag to avoid TOCTOU
 	// races: markDirty increments the counter, renderBuffer records the
 	// value before rendering and only caches when the counter hasn't moved.
-	renderGen     int32          // atomic: monotonically increasing dirty generation
-	lastRendered  int32          // generation when prevBuf was last produced
-	refreshStop   chan struct{}  // stop signal for refresh forwarder goroutine
-	prevTitle     string         // title when prevBuf was last rendered
+	renderGen    int32         // atomic: monotonically increasing dirty generation
+	lastRendered int32         // generation when prevBuf was last produced
+	refreshStop  chan struct{} // stop signal for refresh forwarder goroutine
+	prevTitle    string        // title when prevBuf was last rendered
 
 	// Public state fields
 	IsActive       bool
 	IsResizing     bool
 	RoundedCorners bool
 	ZOrder         int // Higher values render on top, default is 0
+}
+
+// currentApp returns the currently attached App, or nil if no app is
+// attached. Safe to call from any goroutine.
+func (p *pane) currentApp() App {
+	if a := p.app.Load(); a != nil {
+		return *a
+	}
+	return nil
+}
+
+// setApp installs (or clears, when app is nil) the pane's app pointer
+// atomically. Safe to call from any goroutine.
+func (p *pane) setApp(app App) {
+	if app == nil {
+		p.app.Store(nil)
+		return
+	}
+	p.app.Store(&app)
 }
 
 // newPane creates a new, empty Pane. The App is attached later.
@@ -177,21 +205,17 @@ func (p *pane) refreshBorderStyles() {
 // and starts its main run loop.
 func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	debuglog.Printf("AttachApp: Starting attachment of app '%s'", app.GetTitle())
-	if p.app != nil {
-		debuglog.Printf("AttachApp: Stopping existing app '%s'", p.app.GetTitle())
-		oldApp := p.app
-		p.screen.appLifecycle.StopApp(oldApp)
-		// Wait for the outgoing app's Run goroutine and onExit handler
-		// to finish before rewriting p.app — otherwise the handler's
-		// staleness check (handleAppExit reads p.app) races with the
-		// write below. Implementations that don't spawn goroutines
-		// (e.g. NoopAppLifecycle in tests) skip the AppExitWaiter
-		// interface and the wait is a no-op.
-		if waiter, ok := p.screen.appLifecycle.(AppExitWaiter); ok {
-			waiter.WaitForExit(oldApp)
-		}
+	if existing := p.currentApp(); existing != nil {
+		debuglog.Printf("AttachApp: Stopping existing app '%s'", existing.GetTitle())
+		p.screen.appLifecycle.StopApp(existing)
+		// Don't wait for the outgoing app's onExit to fire — when the
+		// caller is the outgoing app itself (e.g. the launcher pushing
+		// a control bus event from its own goroutine, which is also
+		// the lifecycle goroutine that runs onExit), waiting would
+		// self-deadlock. The atomic swap below makes
+		// handleAppExit's staleness check race-free without blocking.
 	}
-	p.app = app
+	p.setApp(app)
 	p.name = app.GetTitle()
 
 	// Get pipeline directly from app if it provides one
@@ -211,7 +235,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	if p.pipeline != nil {
 		p.pipeline.SetRefreshNotifier(paneRefresh)
 	} else {
-		p.app.SetRefreshNotifier(paneRefresh)
+		app.SetRefreshNotifier(paneRefresh)
 	}
 	debuglog.Printf("AttachApp: Refresh notifier set")
 
@@ -270,7 +294,7 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 	if p.pipeline != nil {
 		p.pipeline.Resize(p.drawableWidth(), p.drawableHeight())
 	} else {
-		p.app.Resize(p.drawableWidth(), p.drawableHeight())
+		app.Resize(p.drawableWidth(), p.drawableHeight())
 	}
 
 	// Register control bus handlers BEFORE StartApp to avoid race conditions.
@@ -322,9 +346,9 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 
 	// Start the app lifecycle AFTER all ControlBus handlers are registered.
 	debuglog.Printf("AttachApp: Starting app lifecycle for '%s'", p.getTitle())
-	currentApp := p.app
-	p.screen.appLifecycle.StartApp(p.app, func(err error) {
-		p.screen.handleAppExit(p, currentApp, err)
+	startedApp := app
+	p.screen.appLifecycle.StartApp(startedApp, func(err error) {
+		p.screen.handleAppExit(p, startedApp, err)
 	})
 
 	debuglog.Printf("AttachApp: Notifying pane state for '%s'", p.getTitle())
@@ -341,11 +365,11 @@ func (p *pane) AttachApp(app App, refreshChan chan<- bool) {
 // before starting apps. Call StartPreparedApp after layout is calculated.
 func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 	debuglog.Printf("PrepareAppForRestore: Preparing app '%s'", app.GetTitle())
-	if p.app != nil {
-		debuglog.Printf("PrepareAppForRestore: Stopping existing app '%s'", p.app.GetTitle())
-		p.screen.appLifecycle.StopApp(p.app)
+	if existing := p.currentApp(); existing != nil {
+		debuglog.Printf("PrepareAppForRestore: Stopping existing app '%s'", existing.GetTitle())
+		p.screen.appLifecycle.StopApp(existing)
 	}
-	p.app = app
+	p.setApp(app)
 	p.name = app.GetTitle()
 
 	// Get pipeline directly from app if it provides one
@@ -365,7 +389,7 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 	if p.pipeline != nil {
 		p.pipeline.SetRefreshNotifier(paneRefresh)
 	} else {
-		p.app.SetRefreshNotifier(paneRefresh)
+		app.SetRefreshNotifier(paneRefresh)
 	}
 
 	// Pass pane ID to apps that need it (e.g., for per-pane history)
@@ -426,7 +450,8 @@ func (p *pane) PrepareAppForRestore(app App, refreshChan chan<- bool) {
 // StartPreparedApp resizes and starts an app that was prepared via PrepareAppForRestore.
 // Should be called after layout is calculated so pane has proper dimensions.
 func (p *pane) StartPreparedApp() {
-	if p.app == nil {
+	app := p.currentApp()
+	if app == nil {
 		return
 	}
 	debuglog.Printf("StartPreparedApp: Starting app '%s' with size %dx%d", p.getTitle(), p.drawableWidth(), p.drawableHeight())
@@ -435,18 +460,18 @@ func (p *pane) StartPreparedApp() {
 	if p.pipeline != nil {
 		p.pipeline.Resize(p.drawableWidth(), p.drawableHeight())
 	} else {
-		p.app.Resize(p.drawableWidth(), p.drawableHeight())
+		app.Resize(p.drawableWidth(), p.drawableHeight())
 	}
 
 	// Start the app lifecycle
-	currentApp := p.app
-	p.screen.appLifecycle.StartApp(p.app, func(err error) {
-		p.screen.handleAppExit(p, currentApp, err)
+	startedApp := app
+	p.screen.appLifecycle.StartApp(startedApp, func(err error) {
+		p.screen.handleAppExit(p, startedApp, err)
 	})
 
 	// Register control bus handlers if this is a launcher app in a pane
-	if p.app.GetTitle() == "Launcher" {
-		if provider, ok := p.app.(ControlBusProvider); ok {
+	if app.GetTitle() == "Launcher" {
+		if provider, ok := app.(ControlBusProvider); ok {
 			provider.RegisterControl("launcher.select-app", "Launch selected app in this pane", func(payload interface{}) error {
 				appName, ok := payload.(string)
 				if !ok {
@@ -466,7 +491,7 @@ func (p *pane) StartPreparedApp() {
 	}
 
 	// Register decorator control bus handlers for all apps with a ControlBus.
-	if provider, ok := p.app.(ControlBusProvider); ok {
+	if provider, ok := app.(ControlBusProvider); ok {
 		provider.RegisterControl("decorator.add", "Add decorator action", func(payload interface{}) error {
 			if a, ok := payload.(DecoratorAction); ok {
 				p.decorator.AddAppAction(a)
@@ -506,8 +531,8 @@ func (p *pane) ReplaceWithApp(name string, config map[string]interface{}) {
 	}
 
 	// Check if current app wants to show a confirmation dialog before being replaced
-	if p.app != nil {
-		if requester, ok := p.app.(CloseCallbackRequester); ok {
+	if existing := p.currentApp(); existing != nil {
+		if requester, ok := existing.(CloseCallbackRequester); ok {
 			// Pass a callback that performs the actual replacement
 			if !requester.RequestCloseWithCallback(func() {
 				p.doReplaceWithApp(name, config)
@@ -583,8 +608,8 @@ func (p *pane) setTitle(t string) {
 }
 
 func (p *pane) getTitle() string {
-	if p.app != nil {
-		return p.app.GetTitle()
+	if app := p.currentApp(); app != nil {
+		return app.GetTitle()
 	}
 	return p.name
 }
@@ -594,10 +619,11 @@ func (p *pane) getTitle() string {
 // SetGraphicsProviderFactory when the factory becomes available after apps
 // are already running.
 func (p *pane) injectGraphicsProvider(factory func(paneID [16]byte) GraphicsProvider) {
-	if factory == nil || p.app == nil {
+	app := p.currentApp()
+	if factory == nil || app == nil {
 		return
 	}
-	if ua, ok := p.app.(interface{ UI() *texelcore.UIManager }); ok {
+	if ua, ok := app.(interface{ UI() *texelcore.UIManager }); ok {
 		if mgr := ua.UI(); mgr != nil {
 			gp := factory(p.id)
 			if gp != nil {
@@ -615,10 +641,11 @@ func (p *pane) Close() {
 		p.refreshStop = nil
 	}
 	// Clean up app
-	if listener, ok := p.app.(Listener); ok {
+	app := p.currentApp()
+	if listener, ok := app.(Listener); ok {
 		p.screen.Unsubscribe(listener)
 	}
-	if p.app != nil {
-		p.screen.appLifecycle.StopApp(p.app)
+	if app != nil {
+		p.screen.appLifecycle.StopApp(app)
 	}
 }
