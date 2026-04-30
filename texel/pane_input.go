@@ -140,12 +140,34 @@ func (p *pane) SetActive(active bool) {
 	}
 }
 
-// SetResizing changes the resizing state of the pane
+// SetResizing changes the resizing state of the pane.
+//
+// While IsResizing is true, setDimensions skips the embedded app/pipeline
+// Resize call (the visible frame still tracks the drag, but the terminal
+// grid does not reflow on every motion event). On the true → false
+// transition we fire the deferred resize exactly once with the current
+// drawable dimensions so the embedded app catches up to the committed
+// frame in a single reflow. The branching mirrors setDimensions.
 func (p *pane) SetResizing(resizing bool) {
 	if p.IsResizing == resizing {
 		return
 	}
+	wasResizing := p.IsResizing
 	p.IsResizing = resizing
+
+	if wasResizing && !resizing {
+		drawableW := p.drawableWidth()
+		drawableH := p.drawableHeight()
+		if p.pipeline != nil {
+			p.pipeline.Resize(drawableW, drawableH)
+		} else if app := p.currentApp(); app != nil {
+			app.Resize(drawableW, drawableH)
+		}
+		// Force a re-render with the committed grid.
+		p.prevBuf = nil
+		p.markDirty()
+	}
+
 	p.notifyStateChange()
 	if p.screen != nil {
 		p.screen.Refresh()

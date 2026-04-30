@@ -257,6 +257,15 @@ func (p *pane) setDimensions(x0, y0, x1, y1 int) {
 	p.prevBuf = nil
 	p.markDirty()
 
+	// Defer the underlying app/pipeline Resize while the pane is in an
+	// active mouse-driven resize. The visible frame slides smoothly with
+	// every motion event, but reflowing the embedded terminal grid on
+	// every pixel produces a perceived flicker at the moving edge. The
+	// deferred resize fires once on drag release (see SetResizing).
+	if p.IsResizing {
+		return
+	}
+
 	drawableW := p.drawableWidth()
 	drawableH := p.drawableHeight()
 
