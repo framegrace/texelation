@@ -38,6 +38,13 @@ func TestResize_Expand_DoesNotRetreatBelowPreResizeWriteTop(t *testing.T) {
 	v.MarkInputStart()
 	parseString(p, "claude\r\n")
 	v.MarkCommandStart()
+	// Direct MarkCommandStart() only sets CommandStartGlobalLine; the
+	// real OSC 133;C path also flips CommandActive=true. The resize
+	// anchor snap is gated on CommandActive in production (so shell-
+	// idle resizes don't shove the prompt to the top of the screen),
+	// so set it here to mirror the running-TUI scenario this test
+	// covers.
+	v.CommandActive = true
 
 	// A few rows of TUI output, but stay within the small window so HWM
 	// stays small. The HWM-anchor formula on a later expand will land
@@ -103,6 +110,54 @@ func TestResize_Shrink_PreservesScrollback(t *testing.T) {
 			t.Errorf("scrollback row %d col %d: was %q, now %q (resize destroyed scrollback)",
 				canary, i, canaryRow[i].Rune, got[i].Rune)
 		}
+	}
+}
+
+// TestResize_ShellIdle_DoesNotSnapToAnchor — when no foreground command
+// is active (CommandActive=false, e.g. an idle shell prompt), the
+// resize anchor snap must NOT fire. Otherwise WriteWindow.Resize's
+// natural HWM-anchor restoration is undone and the prompt jumps to row
+// 0 of the viewport on every resize. Regression: PR #213's snap was
+// firing for shell idle and produced exactly that visual.
+func TestResize_ShellIdle_DoesNotSnapToAnchor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	v := NewVTerm(40, 24)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+
+	// Some prior shell activity, then a fresh idle prompt.
+	for i := 0; i < 3; i++ {
+		parseString(p, "old line\r\n")
+	}
+	v.MarkPromptStart()
+	parseString(p, "$ ")
+	v.MarkInputStart()
+	// CommandActive is false — no command running. The OSC 133;C escape
+	// would set it; an idle prompt is the absence of that.
+
+	preResizeTop := v.mainScreen.WriteTop()
+
+	// Resize larger.
+	v.Resize(40, 30)
+	postExpandTop := v.mainScreen.WriteTop()
+
+	// HWM-anchor formula in WriteWindow.Resize would put writeTop at
+	// HWM - 30 + 1, which (given HWM is the cursor row) lets the prompt
+	// stay at the bottom of the new viewport rather than jumping to
+	// the top. The snap must not have fired here.
+	//
+	// We assert that writeTop did NOT snap forward to the anchor
+	// (PromptStart+1 or InputStart+1). If it did, postExpandTop would
+	// equal anchor — typically > preResizeTop in this scenario.
+	anchor := v.PromptStartGlobalLine
+	if v.InputStartGlobalLine >= 0 {
+		anchor = v.InputStartGlobalLine + 1
+	} else if v.PromptStartGlobalLine >= 0 {
+		anchor = v.PromptStartGlobalLine + 1
+	}
+	if postExpandTop == anchor && anchor > preResizeTop {
+		t.Errorf("shell-idle expand snapped writeTop forward to anchor=%d (pre-resize=%d, post-expand=%d) — prompt would jump to row 0",
+			anchor, preResizeTop, postExpandTop)
 	}
 }
 
