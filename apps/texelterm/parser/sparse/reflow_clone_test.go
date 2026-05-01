@@ -180,6 +180,86 @@ func checkNoClonesInRender(t *testing.T, label string, out [][]parser.Cell) {
 	}
 }
 
+// TestChainReflowedRowCount_MatchesReflowChain_AllPaddingWithTrailing —
+// regression for the off-by-one that caused a single duplicate row at
+// the smallest viewport size. When a chain's content is all padding
+// (trims to empty) AND has trailing empty continuation rows, the row
+// count must equal trailing — not trailing+1. Otherwise
+// RecomputeLiveAnchor's offset is one too high, Render skips one too
+// few rows from the anchor chain, and one extra visual row gets
+// appended to the viewport (manifesting as a clone).
+func TestChainReflowedRowCount_MatchesReflowChain_AllPaddingWithTrailing(t *testing.T) {
+	s := NewStore(80)
+	// All-padding row 0 with Wrapped=true so the chain extends to row 1,
+	// and row 1 is a true empty continuation.
+	cells := make([]parser.Cell, 80)
+	for i := range cells {
+		cells[i] = parser.Cell{Rune: ' '}
+	}
+	cells[len(cells)-1].Wrapped = true
+	s.SetLine(0, cells)
+	s.SetLine(1, []parser.Cell{}) // explicit empty row
+
+	for _, width := range []int{1, 5, 10, 40, 80} {
+		count := chainReflowedRowCount(s, 0, 1, width, false)
+		rendered := reflowChain(s, 0, 1, width)
+		if count != len(rendered) {
+			t.Errorf("width=%d: chainReflowedRowCount=%d but reflowChain produced %d rows",
+				width, count, len(rendered))
+		}
+	}
+}
+
+// TestChainReflowedRowCount_MatchesReflowChain_FuzzVariety — generic
+// consistency check across many chain shapes that exercise the trim
+// + trailing-empty-row interaction.
+func TestChainReflowedRowCount_MatchesReflowChain_FuzzVariety(t *testing.T) {
+	cases := []struct {
+		name string
+		rows []string
+	}{
+		{"single content row", []string{"hello"}},
+		{"single padded row", []string{"hi" + strings.Repeat(" ", 78)}},
+		{"all empty chain", []string{""}},
+		{"content + empty continuation", []string{"hi", ""}},
+		{"padded + empty continuation", []string{"hi" + strings.Repeat(" ", 78), ""}},
+		{"all padding + empty continuation", []string{strings.Repeat(" ", 80), ""}},
+		{"all padding + 2 empty continuations", []string{strings.Repeat(" ", 80), "", ""}},
+		{"content wrap + content tail", []string{"hello world hello world hello world hello world hello world", "more"}},
+		{"content wrap + padded tail", []string{strings.Repeat("x", 80), "tail" + strings.Repeat(" ", 76)}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewStore(80)
+			for i, line := range tc.rows {
+				wrapped := i < len(tc.rows)-1
+				if line == "" {
+					s.SetLine(int64(i), []parser.Cell{})
+				} else {
+					cells := make([]parser.Cell, len(line))
+					for j, r := range line {
+						cells[j] = parser.Cell{Rune: r}
+					}
+					if wrapped && len(cells) > 0 {
+						cells[len(cells)-1].Wrapped = true
+					}
+					s.SetLine(int64(i), cells)
+				}
+			}
+			start, end := int64(0), int64(len(tc.rows)-1)
+			for _, width := range []int{1, 5, 20, 40, 80} {
+				count := chainReflowedRowCount(s, start, end, width, false)
+				rendered := reflowChain(s, start, end, width)
+				if count != len(rendered) {
+					t.Errorf("width=%d: chainReflowedRowCount=%d but reflowChain produced %d rows",
+						width, count, len(rendered))
+				}
+			}
+		})
+	}
+}
+
 func padNum(n, width int) string {
 	s := ""
 	for n > 0 {
