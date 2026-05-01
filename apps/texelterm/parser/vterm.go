@@ -102,17 +102,6 @@ type VTerm struct {
 	// When true, writes mark the target row as NoWrap in the sparse store,
 	// protecting structured TUI content from reflow on resize.
 	decstbmActive bool
-	// frameHomeGlobalLine: writeTop captured at the most recent BSU
-	// (CSI ?2026h, Begin Synchronized Update). On the NEXT BSU we
-	// rewind writeTop to this value if writeTop has advanced — that
-	// collapses scrollback overflow accumulated by the previous frame's
-	// paint, which is how non-alt-screen TUIs that paint full frames
-	// without ED 2 (e.g. Claude Code) leak duplicates into scrollback
-	// at narrow widths. Reset to -1 on OSC 133;C (new command), OSC
-	// 133;D (command end), and alt-screen toggle. -1 means "no active
-	// frame anchor; first BSU since the last reset just records the
-	// position without rewinding".
-	frameHomeGlobalLine int64
 }
 
 // NewVTerm creates and initializes a new virtual terminal.
@@ -137,7 +126,6 @@ func NewVTerm(width, height int, opts ...Option) *VTerm {
 		PromptStartGlobalLine:  -1,
 		InputStartGlobalLine:   -1,
 		CommandStartGlobalLine: -1,
-		frameHomeGlobalLine:    -1,
 	}
 
 	// Apply options first (may configure main screen with disk path)

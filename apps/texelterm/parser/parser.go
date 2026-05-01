@@ -412,10 +412,6 @@ func (p *Parser) handleOSC133(payload string) {
 			cmd = parts[1]
 		}
 		p.vterm.MarkCommandStart()
-		// New command starts: discard any prior frame anchor so its
-		// paint can't be "collapsed" against a stale anchor from a
-		// previous command's TUI.
-		p.vterm.resetFrameAnchor()
 		if p.vterm.OnCommandStart != nil {
 			p.vterm.OnCommandStart(cmd)
 		}
@@ -432,10 +428,6 @@ func (p *Parser) handleOSC133(payload string) {
 		p.vterm.InputActive = false
 		p.vterm.CommandActive = false
 		p.vterm.CommandStartGlobalLine = -1
-		// Command ended: discard the frame anchor so subsequent
-		// shell-prompt activity doesn't collapse against the now-gone
-		// TUI's last frame.
-		p.vterm.resetFrameAnchor()
 		if p.vterm.OnCommandEnd != nil {
 			p.vterm.OnCommandEnd(exitCode)
 		}
