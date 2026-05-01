@@ -61,6 +61,7 @@ func reflowChain(s *Store, startGI, endGI int64, viewWidth int) [][]parser.Cell 
 	for gi := startGI; gi <= endGI; gi++ {
 		logical = append(logical, s.GetLine(gi)...)
 	}
+	logical = trimTrailingPadding(logical)
 	trailing := trailingEmptyRows(s, startGI, endGI)
 	if len(logical) == 0 && trailing == 0 {
 		return [][]parser.Cell{nil}
@@ -79,6 +80,77 @@ func reflowChain(s *Store, startGI, endGI int64, viewWidth int) [][]parser.Cell 
 		rows = append(rows, nil)
 	}
 	return rows
+}
+
+// trimTrailingPadding drops trailing PADDING cells (space rune, default
+// bg, no attributes) from the end of the logical chain. Padding cells
+// are visually indistinguishable from "no cell at all", so dropping them
+// is safe.
+//
+// Motivation: TUIs (Claude Code, anything that right-pads a frame to
+// viewport width) end lines with runs of spaces. On horizontal-resize
+// narrower, naïve reflow puts those spaces on a SECOND visual row below
+// the content — phantom blank line. Clipping at the chain's last non-
+// padding cell makes the visual line end where the visible content ends.
+//
+// Coloured / attributed trailing spaces (BG != default, or Attr != 0)
+// are NOT padding — they carry visual meaning (a TUI's coloured bar
+// drawn with spaces, a reverse-video selection / cursor cell). Real
+// terminals like tmux preserve them, so divergence here would surface
+// as parser-bug-flavoured diffs in reference comparisons.
+//
+// Embedded whitespace (spaces between content) is untouched — only the
+// strictly-trailing run is trimmed.
+func trimTrailingPadding(cells []parser.Cell) []parser.Cell {
+	n := len(cells)
+	for n > 0 && isPaddingCell(cells[n-1]) {
+		n--
+	}
+	return cells[:n]
+}
+
+// chainTrailingPaddingCount returns how many padding cells are at the
+// tail of the chain [start..end]. Walks across stored row boundaries,
+// so a chain whose last stored row is all padding AND whose previous
+// row also ends in padding collapses both into the count. Matches what
+// reflowChain trims via trimTrailingPadding so chainReflowedRowCount
+// can predict the reflowed row count without rebuilding the slice.
+func chainTrailingPaddingCount(s *Store, start, end int64) int {
+	n := 0
+	for r := end; r >= start; r-- {
+		cells := s.GetLine(r)
+		if len(cells) == 0 {
+			continue
+		}
+		i := len(cells) - 1
+		for i >= 0 && isPaddingCell(cells[i]) {
+			i--
+		}
+		n += len(cells) - 1 - i
+		if i >= 0 {
+			return n
+		}
+	}
+	return n
+}
+
+// isPaddingCell reports whether the cell is a space with default fg,
+// default bg, and no attributes — strictly indistinguishable from a
+// zero-valued empty cell.
+//
+// FG matters even though spaces render no glyph: tmux and other
+// reference terminals retain colour state on trailing spaces because it
+// persists into subsequent writes (the next character at this column
+// inherits the colour) and into selection / reverse-video rendering.
+// Trimming a coloured-fg space would surface as fg-divergence vs the
+// reference terminal output. Keeping the predicate strict — only
+// zero-equivalent cells trim — gives the wrap-of-padding fix without
+// parser divergence.
+func isPaddingCell(c parser.Cell) bool {
+	return c.Rune == ' ' &&
+		c.FG.Mode == parser.ColorModeDefault &&
+		c.BG.Mode == parser.ColorModeDefault &&
+		c.Attr == 0
 }
 
 // trailingEmptyRows counts empty rows at the tail of the chain [start..end].
@@ -111,6 +183,12 @@ func chainReflowedRowCount(s *Store, start, end int64, width int, nowrap bool) i
 	total := 0
 	for r := start; r <= end; r++ {
 		total += len(s.GetLine(r))
+	}
+	// Subtract trailing padding cells so the row count matches what
+	// reflowChain produces after trimTrailingPadding.
+	total -= chainTrailingPaddingCount(s, start, end)
+	if total < 0 {
+		total = 0
 	}
 	var rows int
 	if total == 0 {
