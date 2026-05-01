@@ -9,16 +9,13 @@ package clientruntime
 
 import (
 	"log"
-	"net"
-	"sync"
 
-	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/protocol"
 )
 
-func sendClientReady(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
+func sendClientReady(writer *messageWriter, sessionID [16]byte, screen tcell.Screen) {
 	cols, rows := screen.Size()
 	if cols == 0 || rows == 0 {
 		return
@@ -29,17 +26,17 @@ func sendClientReady(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, scr
 		return
 	}
 	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgClientReady, Flags: protocol.FlagChecksum, SessionID: sessionID}
-	if err := writeMessage(writeMu, conn, header, payload); err != nil {
+	if err := writer.Send(header, payload); err != nil {
 		log.Printf("send client ready failed: %v", err)
 	}
 }
 
-func sendResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, screen tcell.Screen) {
+func sendResize(writer *messageWriter, sessionID [16]byte, screen tcell.Screen) {
 	cols, rows := screen.Size()
-	sendResizeMessage(writeMu, conn, sessionID, protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
+	sendResizeMessage(writer, sessionID, protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
 }
 
-func sendResizeMessage(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, resize protocol.Resize) {
+func sendResizeMessage(writer *messageWriter, sessionID [16]byte, resize protocol.Resize) {
 	if resize.Cols == 0 || resize.Rows == 0 {
 		return
 	}
@@ -49,32 +46,31 @@ func sendResizeMessage(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, r
 		return
 	}
 	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgResize, Flags: protocol.FlagChecksum, SessionID: sessionID}
-	if err := writeMessage(writeMu, conn, header, payload); err != nil {
+	if err := writer.Send(header, payload); err != nil {
 		log.Printf("send resize failed: %v", err)
 	}
 }
 
-func sendKeyEvent(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, key tcell.Key, r rune, mods tcell.ModMask) error {
+func sendKeyEvent(writer *messageWriter, sessionID [16]byte, key tcell.Key, r rune, mods tcell.ModMask) error {
 	event := protocol.KeyEvent{KeyCode: uint32(key), RuneValue: r, Modifiers: uint16(mods)}
-	// log.Printf("send key: key=%v rune=%q mods=%v", key, r, mods)
 	payload, err := protocol.EncodeKeyEvent(event)
 	if err != nil {
 		return err
 	}
 	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgKeyEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}
-	return writeMessage(writeMu, conn, header, payload)
+	return writer.Send(header, payload)
 }
 
-func sendPaste(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, data []byte) error {
+func sendPaste(writer *messageWriter, sessionID [16]byte, data []byte) error {
 	payload, err := protocol.EncodePaste(protocol.Paste{Data: data})
 	if err != nil {
 		return err
 	}
 	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgPaste, Flags: protocol.FlagChecksum, SessionID: sessionID}
-	return writeMessage(writeMu, conn, header, payload)
+	return writer.Send(header, payload)
 }
 
-func sendClipboardSet(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, mime string, data []byte) {
+func sendClipboardSet(writer *messageWriter, sessionID [16]byte, mime string, data []byte) {
 	msg := protocol.ClipboardSet{MimeType: mime, Data: data}
 	payload, err := protocol.EncodeClipboardSet(msg)
 	if err != nil {
@@ -82,14 +78,7 @@ func sendClipboardSet(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, mi
 		return
 	}
 	header := protocol.Header{Version: protocol.Version, Type: protocol.MsgClipboardSet, Flags: protocol.FlagChecksum, SessionID: sessionID}
-	if err := writeMessage(writeMu, conn, header, payload); err != nil {
+	if err := writer.Send(header, payload); err != nil {
 		log.Printf("send clipboard set failed: %v", err)
 	}
-}
-
-func writeMessage(mu *sync.Mutex, conn net.Conn, header protocol.Header, payload []byte) error {
-	mu.Lock()
-	defer mu.Unlock()
-	debuglog.Printf("client tx type=%d seq=%d len=%d", header.Type, header.Sequence, len(payload))
-	return protocol.WriteMessage(conn, header, payload)
 }

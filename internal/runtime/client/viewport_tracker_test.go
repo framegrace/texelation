@@ -253,8 +253,9 @@ func TestViewportTracker_AutoFollowAdvancesFromGidZero(t *testing.T) {
 	// Drain the initial dirty state via flushFrame so subsequent dirty
 	// assertions are clean. Use a testConn so nothing writes to a real socket.
 	conn := &testConn{}
-	var writeMu sync.Mutex
-	flushFrame(state, conn, &writeMu, [16]byte{})
+	writer := newTestWriter(t, conn)
+	flushFrame(state, writer, [16]byte{})
+	writer.flushPending()
 
 	// First-ever BufferDelta at gid=0 on the main screen.
 	delta := protocol.BufferDelta{
@@ -358,8 +359,9 @@ func TestFlushFrame_SendsViewportUpdate(t *testing.T) {
 	state.onTreeSnapshot(snap)
 
 	conn := &testConn{}
-	var writeMu sync.Mutex
-	flushFrame(state, conn, &writeMu, [16]byte{})
+	writer := newTestWriter(t, conn)
+	flushFrame(state, writer, [16]byte{})
+	writer.flushPending()
 
 	n := conn.countType(protocol.MsgViewportUpdate)
 	if n != 1 {
@@ -387,8 +389,9 @@ func TestFlushFrame_CoalescesMultipleChangesInFrame(t *testing.T) {
 	}
 
 	conn := &testConn{}
-	var writeMu sync.Mutex
-	flushFrame(state, conn, &writeMu, [16]byte{})
+	writer := newTestWriter(t, conn)
+	flushFrame(state, writer, [16]byte{})
+	writer.flushPending()
 
 	// Must only emit one update per pane per frame (dirty was cleared once).
 	n := conn.countType(protocol.MsgViewportUpdate)
@@ -417,8 +420,9 @@ func TestFlushFrame_IssuesFetchForMissingRows(t *testing.T) {
 	vp.mu.Unlock()
 
 	conn := &testConn{}
-	var writeMu sync.Mutex
-	flushFrame(state, conn, &writeMu, [16]byte{})
+	writer := newTestWriter(t, conn)
+	flushFrame(state, writer, [16]byte{})
+	writer.flushPending()
 
 	n := conn.countType(protocol.MsgFetchRange)
 	if n != 1 {
@@ -447,8 +451,9 @@ func TestFlushFrame_AtMostOneInflightFetchPerPane(t *testing.T) {
 	vp.mu.Unlock()
 
 	conn := &testConn{}
-	var writeMu sync.Mutex
-	flushFrame(state, conn, &writeMu, [16]byte{})
+	writer := newTestWriter(t, conn)
+	flushFrame(state, writer, [16]byte{})
+	writer.flushPending()
 
 	// No new MsgFetchRange should be sent.
 	n := conn.countType(protocol.MsgFetchRange)
@@ -483,7 +488,7 @@ func TestFlushFrame_EmitsPendingFetchOnResponse(t *testing.T) {
 	vp.mu.Unlock()
 
 	conn := &testConn{}
-	var writeMu sync.Mutex
+	writer := newTestWriter(t, conn)
 
 	// Simulate the onFetchRangeResponse path.
 	lo, hi, send := state.onFetchRangeResponse(paneID(8))
@@ -507,7 +512,8 @@ func TestFlushFrame_EmitsPendingFetchOnResponse(t *testing.T) {
 	}
 
 	// Verify we can send the fetch range.
-	sendFetchRange(state, conn, &writeMu, [16]byte{}, paneID(8), lo, hi)
+	sendFetchRange(state, writer, [16]byte{}, paneID(8), lo, hi)
+	writer.flushPending()
 	n := conn.countType(protocol.MsgFetchRange)
 	if n != 1 {
 		t.Errorf("expected 1 MsgFetchRange after consuming pending, got %d", n)
@@ -584,14 +590,13 @@ func TestViewportTracker_PruneRemovesStalePane(t *testing.T) {
 // Additional: TestFlushFrame_NilConnIsNoop
 // --------------------------------------------------------------------------
 
-func TestFlushFrame_NilConnIsNoop(t *testing.T) {
+func TestFlushFrame_NilWriterIsNoop(t *testing.T) {
 	state := makeStateWithViewports()
 	snap := makeTreeSnapshot(paneID(12), 80, 24)
 	state.onTreeSnapshot(snap)
 
-	var writeMu sync.Mutex
 	// Must not panic.
-	flushFrame(state, nil, &writeMu, [16]byte{})
+	flushFrame(state, nil, [16]byte{})
 }
 
 // --------------------------------------------------------------------------
@@ -724,12 +729,13 @@ func (f *failingConn) Write(_ []byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
-func TestFlushFrame_ReleasesInflightOnSendFailure(t *testing.T) {
+func TestFlushFrame_WriterReportsBrokenAfterSendFailure(t *testing.T) {
 	state := makeStateWithViewports()
 	id := paneID(0xD0)
 	state.onTreeSnapshot(makeTreeSnapshot(id, 80, 24))
 
-	// Force a missing-rows window.
+	// Force a missing-rows window so flushFrame attempts both a viewport
+	// update and a fetch-range write.
 	vp := state.viewports.get(id)
 	vp.mu.Lock()
 	vp.ViewTopIdx = 1000
@@ -741,16 +747,21 @@ func TestFlushFrame_ReleasesInflightOnSendFailure(t *testing.T) {
 	vp.mu.Unlock()
 
 	conn := &failingConn{}
-	var writeMu sync.Mutex
-	flushFrame(state, conn, &writeMu, [16]byte{})
+	writer := newTestWriter(t, conn)
+	flushFrame(state, writer, [16]byte{})
+	writer.flushPending()
 
-	vp.mu.Lock()
-	defer vp.mu.Unlock()
-	// The viewport-update write fails first (before any inflight reservation),
-	// so inflight stays false — but the guarantee we're asserting is that no
-	// stuck reservation blocks retry on the next frame.
-	if vp.inflightFetch {
-		t.Error("inflightFetch should be false after send failure (retry must be unblocked)")
+	// After the failing write, the writer goroutine has exited and stored
+	// the error. Subsequent Send/TrySend must surface the broken state so
+	// the next frame doesn't silently buffer messages into a dead queue.
+	// This is the recovery guarantee that the previous synchronous-write
+	// version expressed via a "rolled-back inflight reservation" — with
+	// async writes the equivalent invariant is observable here.
+	if err := writer.Send(protocol.Header{Type: protocol.MsgPing}, nil); err == nil {
+		t.Error("Send should return error after writer goroutine exits on write failure")
+	}
+	if writer.TrySend(protocol.Header{Type: protocol.MsgPing}, nil) {
+		t.Error("TrySend should return false after writer goroutine exits on write failure")
 	}
 }
 
@@ -770,8 +781,9 @@ func TestFlushFrame_ZeroDimSkipped(t *testing.T) {
 	vp.mu.Unlock()
 
 	conn := &testConn{}
-	var writeMu sync.Mutex
-	flushFrame(state, conn, &writeMu, [16]byte{})
+	writer := newTestWriter(t, conn)
+	flushFrame(state, writer, [16]byte{})
+	writer.flushPending()
 
 	n := conn.countType(protocol.MsgViewportUpdate)
 	if n != 0 {

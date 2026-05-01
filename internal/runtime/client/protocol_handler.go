@@ -10,7 +10,6 @@ package clientruntime
 import (
 	"log"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,7 +18,7 @@ import (
 	"github.com/framegrace/texelation/protocol"
 )
 
-func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequence *atomic.Uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) {
+func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequence *atomic.Uint64, renderCh chan<- struct{}, doneCh chan<- struct{}, writer *messageWriter, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) {
 	for {
 		hdr, payload, err := protocol.ReadMessage(conn)
 		if err != nil {
@@ -29,7 +28,7 @@ func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequenc
 			close(doneCh)
 			return
 		}
-		if handleControlMessage(state, conn, hdr, payload, sessionID, lastSequence, writeMu, pendingAck, ackSignal) {
+		if handleControlMessage(state, hdr, payload, sessionID, lastSequence, writer, pendingAck, ackSignal) {
 			select {
 			case renderCh <- struct{}{}:
 			default:
@@ -38,7 +37,7 @@ func readLoop(conn net.Conn, state *clientState, sessionID [16]byte, lastSequenc
 	}
 }
 
-func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *atomic.Uint64, writeMu *sync.Mutex, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) bool {
+func handleControlMessage(state *clientState, hdr protocol.Header, payload []byte, sessionID [16]byte, lastSequence *atomic.Uint64, writer *messageWriter, pendingAck *atomic.Uint64, ackSignal chan<- struct{}) bool {
 	cache := state.cache
 	switch hdr.Type {
 	case protocol.MsgTreeSnapshot:
@@ -113,7 +112,7 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		// Clear inflight flag and emit pending fetch if one was stashed.
 		if state.viewports != nil {
 			if lo, hi, send := state.onFetchRangeResponse(resp.PaneID); send {
-				if !sendFetchRange(state, conn, writeMu, sessionID, resp.PaneID, lo, hi) {
+				if !sendFetchRange(state, writer, sessionID, resp.PaneID, lo, hi) {
 					// Write failed after we drained pendingFetch — restore
 					// the window so flushFrame retries instead of silently
 					// losing the request.
@@ -124,13 +123,17 @@ func handleControlMessage(state *clientState, conn net.Conn, hdr protocol.Header
 		return true
 	case protocol.MsgPing:
 		pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})
-		if err := writeMessage(writeMu, conn, protocol.Header{
+		// Pong is on the read path: blocking on a full writer queue would
+		// stop us from draining the socket and could deadlock the protocol
+		// (see message_writer.go). Drop the pong if the queue is saturated;
+		// the server's keep-alive timeout will surface a real disconnect.
+		if !writer.TrySend(protocol.Header{
 			Version:   protocol.Version,
 			Type:      protocol.MsgPong,
 			Flags:     protocol.FlagChecksum,
 			SessionID: sessionID,
-		}, pong); err != nil {
-			log.Printf("send pong failed: %v", err)
+		}, pong) {
+			log.Printf("dropped pong: writer queue full")
 		}
 		return false
 	case protocol.MsgClipboardSet:

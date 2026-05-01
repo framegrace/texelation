@@ -16,7 +16,6 @@ package clientruntime
 
 import (
 	"log"
-	"net"
 	"sync"
 	"sync/atomic"
 
@@ -402,11 +401,10 @@ func (s *clientState) paneViewportFor(id [16]byte) (paneViewportCopy, bool) {
 //  6. Evicts rows outside the hysteresis band from PaneCache.
 func flushFrame(
 	state *clientState,
-	conn net.Conn,
-	writeMu *sync.Mutex,
+	writer *messageWriter,
 	sessionID [16]byte,
 ) {
-	if conn == nil {
+	if writer == nil {
 		return
 	}
 	entries, rawPanes := state.viewports.snapshotDirty()
@@ -457,7 +455,7 @@ func flushFrame(
 			Flags:     protocol.FlagChecksum,
 			SessionID: sessionID,
 		}
-		if err := writeMessage(writeMu, conn, hdr, payload); err != nil {
+		if err := writer.Send(hdr, payload); err != nil {
 			log.Printf("send viewport update: %v", err)
 			continue
 		}
@@ -486,7 +484,7 @@ func flushFrame(
 				rawVP.inflightFetch = true
 				rawVP.mu.Unlock()
 				lo, hi := miss[0], miss[len(miss)-1]+1
-				if !sendFetchRange(state, conn, writeMu, sessionID, id, lo, hi) {
+				if !sendFetchRange(state, writer, sessionID, id, lo, hi) {
 					// Write failed — release the inflight slot so the next
 					// frame can retry instead of staying wedged forever.
 					rawVP.mu.Lock()
@@ -517,10 +515,17 @@ func flushFrame(
 // sendFetchRange encodes and sends a MsgFetchRange to the server. Returns
 // true on success.  On false the caller must roll back any reservation
 // (e.g. inflightFetch) so the request can be retried on the next frame.
+//
+// Uses TrySend (non-blocking): this call site is reached from the read
+// loop's MsgFetchRangeResponse handler, where blocking on a full writer
+// queue would prevent the read loop from draining the socket and could
+// deadlock the protocol if both client and server have congested write
+// buffers. flushFrame's caller (also using this path) is the main render
+// goroutine; dropping a fetch there is fine because the next render frame
+// will re-detect the missing-rows window and retry.
 func sendFetchRange(
 	state *clientState,
-	conn net.Conn,
-	writeMu *sync.Mutex,
+	writer *messageWriter,
 	sessionID [16]byte,
 	paneID [16]byte,
 	lo, hi int64,
@@ -542,8 +547,8 @@ func sendFetchRange(
 		Flags:     protocol.FlagChecksum,
 		SessionID: sessionID,
 	}
-	if err := writeMessage(writeMu, conn, hdr, payload); err != nil {
-		log.Printf("send fetch range: %v", err)
+	if !writer.TrySend(hdr, payload) {
+		log.Printf("dropped fetch range: writer queue full (will retry next frame)")
 		return false
 	}
 	return true
