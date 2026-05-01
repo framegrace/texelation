@@ -360,7 +360,15 @@ func (v *VTerm) mainScreenResize(width, height int) {
 	}
 	v.mainScreen.Resize(width, height)
 
-	if !v.inAltScreen {
+	// The snap is only meaningful when a foreground command is actively
+	// painting (CommandActive). In that case a TUI repaint is incoming
+	// and pulling writeTop into pre-command scrollback would let the
+	// repaint overwrite committed history. In shell-idle mode there's
+	// no repaint coming — the HWM-anchor formula in WriteWindow.Resize
+	// already keeps the prompt visible at a sensible row, and forcing
+	// writeTop forward to the prompt anchor here just jumps the prompt
+	// to the top of the viewport on every resize.
+	if !v.inAltScreen && v.CommandActive {
 		anchor := int64(-1)
 		switch {
 		case v.CommandStartGlobalLine >= 0:
