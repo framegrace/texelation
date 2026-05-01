@@ -137,6 +137,100 @@ func TestChainReflowedRowCount_WrapGrowsWithWidth(t *testing.T) {
 	}
 }
 
+// TestReflowChain_TrimsTrailingPadding — TUI lines often end with runs
+// of spaces (right-padding to viewport width). On horizontal-resize
+// narrower, naïve reflow puts those spaces on a phantom blank line
+// below the content. Trimming default-bg/no-attr trailing space cells
+// before slicing makes the reflow end at the last non-padding cell.
+func TestReflowChain_TrimsTrailingPadding(t *testing.T) {
+	s := NewStore(10)
+	fillRow(s, 0, "Hello"+strings.Repeat(" ", 75), false) // width-80 padded line
+
+	rows := reflowChain(s, 0, 0, 40)
+	if len(rows) != 1 {
+		t.Errorf("padded line at half width: got %d rows, want 1 (trailing padding should not wrap)", len(rows))
+	}
+	if cellsToStringSparse(rows[0]) != "Hello" {
+		t.Errorf("row 0 = %q want %q", cellsToStringSparse(rows[0]), "Hello")
+	}
+}
+
+// TestReflowChain_TrimsTrailingPaddingAcrossChain — trailing padding
+// run can span multiple stored rows in a wrap chain.
+func TestReflowChain_TrimsTrailingPaddingAcrossChain(t *testing.T) {
+	s := NewStore(10)
+	fillRow(s, 0, "hello   ", true)
+	fillRow(s, 1, "        ", false)
+	rows := reflowChain(s, 0, 1, 20)
+	if len(rows) != 1 {
+		t.Errorf("chain ending in padding across rows: got %d rows, want 1", len(rows))
+	}
+	if cellsToStringSparse(rows[0]) != "hello" {
+		t.Errorf("row 0 = %q want %q", cellsToStringSparse(rows[0]), "hello")
+	}
+}
+
+// TestReflowChain_PreservesEmbeddedSpaces — only the strictly-trailing
+// run is trimmed; spaces between content remain.
+func TestReflowChain_PreservesEmbeddedSpaces(t *testing.T) {
+	s := NewStore(10)
+	fillRow(s, 0, "a    b", false)
+	rows := reflowChain(s, 0, 0, 20)
+	if len(rows) != 1 || cellsToStringSparse(rows[0]) != "a    b" {
+		t.Errorf("embedded spaces: got %q, want %q", cellsToStringSparse(rows[0]), "a    b")
+	}
+}
+
+// TestReflowChain_PreservesColoredTrailingSpaces — coloured trailing
+// spaces are visually meaningful (a TUI's coloured bar). They must NOT
+// be trimmed; only true padding (default bg, no attrs) is.
+func TestReflowChain_PreservesColoredTrailingSpaces(t *testing.T) {
+	s := NewStore(10)
+	cells := []parser.Cell{{Rune: 'X'}}
+	for i := 0; i < 30; i++ {
+		cells = append(cells, parser.Cell{
+			Rune: ' ',
+			BG:   parser.Color{Mode: parser.ColorMode256, Value: 196},
+		})
+	}
+	s.SetLine(0, cells)
+
+	rows := reflowChain(s, 0, 0, 10)
+	// 31 cells reflowed at width 10 → 4 rows (3 full + 1 with the
+	// final coloured space). Coloured bar must wrap, not clip.
+	if len(rows) != 4 {
+		t.Errorf("coloured trailing spaces: got %d rows, want 4", len(rows))
+	}
+}
+
+// TestReflowChain_PreservesReverseAttributeTrailingSpace — reverse-
+// video trailing spaces (cursor highlight, selection cell) are visually
+// meaningful and must not be trimmed.
+func TestReflowChain_PreservesReverseAttributeTrailingSpace(t *testing.T) {
+	s := NewStore(10)
+	cells := []parser.Cell{{Rune: 'X'}, {Rune: ' ', Attr: parser.AttrReverse}}
+	s.SetLine(0, cells)
+
+	rows := reflowChain(s, 0, 0, 20)
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	if len(rows[0]) != 2 {
+		t.Errorf("row 0 length = %d, want 2 (reverse-attr space must survive)", len(rows[0]))
+	}
+}
+
+// TestChainReflowedRowCount_AccountsForPaddingTrim — the row count must
+// match what reflowChain produces post-trim.
+func TestChainReflowedRowCount_AccountsForPaddingTrim(t *testing.T) {
+	s := NewStore(10)
+	fillRow(s, 0, "Hello"+strings.Repeat(" ", 75), false)
+	got := chainReflowedRowCount(s, 0, 0, 40, false)
+	if got != 1 {
+		t.Errorf("row count = %d, want 1 (trailing padding must not contribute)", got)
+	}
+}
+
 // Test helper
 func cellsToStringSparse(cells []parser.Cell) string {
 	b := strings.Builder{}
