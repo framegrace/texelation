@@ -327,29 +327,33 @@ func (v *VTerm) mainScreenLineFeedInternal() {
 }
 
 // mainScreenResize handles resize for the sparse terminal.
+//
 // Rules 5+6 are fully implemented in WriteWindow.Resize and ViewWindow.Resize.
+// On top of those we clamp ONE specific case in non-alt-screen mode:
+// WriteWindow.Resize on expand uses writeTop = HWM - newHeight + 1, which
+// retreats writeTop into pre-window scrollback when the window was
+// previously smaller than the new size and HWM doesn't reflect the new
+// height's rows. The post-resize redraw (especially a Claude-Code-style
+// ED 2 + repaint) would then paint over scrollback the user wants to
+// keep — visible as "lost history" or "Claude prints from the last
+// resize onwards".
 //
-// After WriteWindow.Resize we snap writeTop to the latest shell-prompt
-// anchor (in non-alt-screen mode). Two distinct breakages motivate this:
+// Anchor-aware clamp: we only push writeTop forward when it has been
+// pulled BELOW the latest shell-prompt anchor (CommandStart / InputStart
+// / PromptStart). Above the anchor is scrollback the user hasn't asked
+// to discard, so the upcoming redraw must not paint there.
 //
-//  1. Shrink advances writeTop to keep the cursor visible at the new
-//     bottom row. A TUI that does NOT emit ED 2 on SIGWINCH (e.g., redraws
-//     with cursor positioning + overwrites) then paints below the prompt,
-//     leaving the previous frame's content in scrollback above writeTop —
-//     visible to the user as "duplicates" once the user scrolls up or the
-//     new frame doesn't fully overwrite the old.
+// The clamp deliberately does NOT activate when newTop sits between the
+// anchor and oldTop. That case is the legitimate "shrink-then-expand
+// restoration" — the user shrank, then grew back, and the HWM-anchor
+// formula correctly restores the pre-shrink writeTop. Clamping to oldTop
+// would break that restoration (writeTop would stay at the post-shrink
+// value, leaving the new viewport's bottom past the cursor).
 //
-//  2. Expand uses writeTop = HWM - newHeight + 1, which retreats writeTop
-//     into pre-window scrollback when the window was previously smaller
-//     than the new size (HWM doesn't reflect the new height's rows). The
-//     TUI's post-resize redraw (whether or not it emits ED 2) then paints
-//     starting at the retreated writeTop, OVERWRITING committed scrollback
-//     above the prompt — visible to the user as "lost history".
-//
-// Mirroring the ED 2 anchor logic here guarantees the TUI's redraw lands
-// at the prompt row regardless of resize direction or which sequences the
-// TUI uses to redraw. We also clear [anchor, HWM] so leftover rows from
-// the pre-resize frame don't bleed through past the new viewport.
+// We also do NOT snap writeTop in either direction beyond this clamp.
+// In a long-running TUI session writeTop has legitimately advanced via
+// per-newline scroll-up; touching it would orphan rows Claude scrolled
+// through (the conversation history).
 func (v *VTerm) mainScreenResize(width, height int) {
 	if v.mainScreen == nil {
 		return
@@ -367,27 +371,9 @@ func (v *VTerm) mainScreenResize(width, height int) {
 			anchor = v.PromptStartGlobalLine + 1
 		}
 		if anchor >= 0 {
-			curTop := v.mainScreen.WriteTop()
-			switch {
-			case curTop > anchor:
-				// Shrink moved writeTop past the anchor (or a prior expand
-				// has us above it from a different code path). Pull back.
-				v.mainScreen.RewindWriteTop(anchor)
-			case curTop < anchor:
-				// Expand pulled writeTop into pre-anchor scrollback. Push
-				// forward so the redraw doesn't overwrite history above
-				// the current command's start.
+			if v.mainScreen.WriteTop() < anchor {
 				v.mainScreen.AdvanceWriteTopTo(anchor)
 			}
-			// NOTE: do NOT clear [anchor, HWM] here. Resize is decoupled
-			// from the TUI's redraw — SIGWINCH propagates to the child
-			// process, which redraws asynchronously. Clearing speculatively
-			// blanks the display until the redraw arrives, and any input
-			// lag (Claude in flight, slow PTY drain) is visible to the
-			// user as a blank pane. The TUI's own ED 2 path (or its
-			// equivalent in the ED 2 handler above) is responsible for
-			// evicting stale cells when the redraw actually starts; until
-			// then the previous frame stays on screen as a stable image.
 		}
 	}
 
