@@ -50,6 +50,14 @@ type StatusBarApp struct {
 	smoothTheoFPS  float64
 	lastFPSInt     int
 	lastTheoFPSInt int
+
+	// Slow-fetch indicator state (Issue #199 Plan E). Per-pane counts
+	// from FetchPending events; aggregate sum is what the BlendInfoLine
+	// renders. Stored separately from the bar so a future +1 / -1 race
+	// can't drive a single bare counter negative — the per-pane map
+	// lets us clamp at 0 per pane before summing.
+	fetchPendingMu sync.Mutex
+	fetchPendingBy map[[16]byte]int
 }
 
 // New creates a new StatusBarApp.
@@ -227,7 +235,37 @@ func (sb *StatusBarApp) OnEvent(event texel.Event) {
 		if p, ok := event.Payload.(texel.ToastPayload); ok {
 			sb.blendLine.ShowToast(p.Message, p.Severity, p.Duration)
 		}
+	case texel.EventFetchPending:
+		if p, ok := event.Payload.(texel.FetchPendingPayload); ok {
+			sb.handleFetchPending(p)
+		}
 	}
+}
+
+// handleFetchPending applies a +1 / -1 delta to the per-pane slow-fetch
+// counter and pushes the aggregate sum to the BlendInfoLine. Per-pane
+// values are clamped at 0 so an out-of-order or duplicate dispatcher
+// delta can't drive the visible count negative.
+func (sb *StatusBarApp) handleFetchPending(p texel.FetchPendingPayload) {
+	sb.fetchPendingMu.Lock()
+	if sb.fetchPendingBy == nil {
+		sb.fetchPendingBy = make(map[[16]byte]int)
+	}
+	v := sb.fetchPendingBy[p.PaneID] + p.Delta
+	if v < 0 {
+		v = 0
+	}
+	if v == 0 {
+		delete(sb.fetchPendingBy, p.PaneID)
+	} else {
+		sb.fetchPendingBy[p.PaneID] = v
+	}
+	total := 0
+	for _, n := range sb.fetchPendingBy {
+		total += n
+	}
+	sb.fetchPendingMu.Unlock()
+	sb.blendLine.SetFetchPending(total)
 }
 
 // handleWorkspacesChanged rebuilds the tab bar preserving user-defined tab order.
