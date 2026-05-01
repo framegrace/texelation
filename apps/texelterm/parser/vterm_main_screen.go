@@ -212,16 +212,10 @@ func (v *VTerm) MainScreenRowNoWrap(globalIdx int64) bool {
 //
 // The anchor logic: at each BSU, if writeTop has advanced since the
 // PREVIOUS BSU (i.e. the previous frame's paint did overflow), rewind
-// writeTop to the previous frame's position. We deliberately do NOT
-// clear the viewport rows [frameHome..frameHome+height-1] — Claude (and
-// other sync-update-using TUIs) emit *partial / incremental* paints
-// inside BSU/ESU; only changed cells are repainted and unchanged cells
-// must persist from the previous frame. Clearing the viewport would
-// wipe everything the new frame doesn't repaint, leaving the user with
-// a near-black screen. Clearing only the OVERFLOW band (cells past
-// the rewound viewport bottom up to HWM) evicts the duplicated
-// scrollback rows accumulated by the previous frame's overflow without
-// touching the in-viewport image.
+// writeTop to the previous frame's position and clear [frameHome, HWM]
+// so the new frame paints over the (cleared) overflow rather than
+// appending after it. After the rewind, frameHomeGlobalLine is updated
+// to the new writeTop so the next BSU can repeat the collapse.
 //
 // Gates:
 //   - Only fires in non-alt-screen mode (alt-screen TUIs have their own
@@ -235,14 +229,7 @@ func (v *VTerm) beginFrameAnchor() {
 	curTop := v.mainScreen.WriteTop()
 	if v.frameHomeGlobalLine >= 0 && curTop > v.frameHomeGlobalLine {
 		v.mainScreen.RewindWriteTop(v.frameHomeGlobalLine)
-		// Clear only the overflow band — cells past the (now-rewound)
-		// viewport bottom up to HWM. In-viewport cells stay so a
-		// partial/incremental paint by the new frame doesn't have
-		// to repaint every cell.
-		viewportBottom := v.frameHomeGlobalLine + int64(v.height) - 1
-		if hwm := v.mainScreen.WriteBottomHWM(); hwm > viewportBottom {
-			v.mainScreen.ClearRangePersistent(viewportBottom+1, hwm)
-		}
+		v.mainScreen.ClearRangePersistent(v.frameHomeGlobalLine, v.mainScreen.WriteBottomHWM())
 		curTop = v.mainScreen.WriteTop()
 	}
 	v.frameHomeGlobalLine = curTop
