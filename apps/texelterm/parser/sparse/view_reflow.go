@@ -134,10 +134,23 @@ func chainTrailingPaddingCount(s *Store, start, end int64) int {
 	return n
 }
 
-// isPaddingCell reports whether the cell is a space with default bg and
-// no attributes — visually indistinguishable from an empty cell.
+// isPaddingCell reports whether the cell is a space with default fg,
+// default bg, and no attributes — strictly indistinguishable from a
+// zero-valued empty cell.
+//
+// FG matters even though spaces render no glyph: tmux and other
+// reference terminals retain colour state on trailing spaces because it
+// persists into subsequent writes (the next character at this column
+// inherits the colour) and into selection / reverse-video rendering.
+// Trimming a coloured-fg space would surface as fg-divergence vs the
+// reference terminal output. Keeping the predicate strict — only
+// zero-equivalent cells trim — gives the wrap-of-padding fix without
+// parser divergence.
 func isPaddingCell(c parser.Cell) bool {
-	return c.Rune == ' ' && c.BG.Mode == parser.ColorModeDefault && c.Attr == 0
+	return c.Rune == ' ' &&
+		c.FG.Mode == parser.ColorModeDefault &&
+		c.BG.Mode == parser.ColorModeDefault &&
+		c.Attr == 0
 }
 
 // trailingEmptyRows counts empty rows at the tail of the chain [start..end].
