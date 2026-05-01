@@ -371,6 +371,18 @@ func (d *DesktopEngine) Unsubscribe(listener Listener) {
 	d.dispatcher.Unsubscribe(listener)
 }
 
+// BroadcastFetchPending dispatches a FetchPending event with the given
+// delta. Used by the connection handler when a slow MsgFetchRange
+// crosses the 50ms threshold (delta=+1) or finally resolves (delta=-1).
+// Plumbed here rather than exposing dispatcher.Broadcast so the broadcast
+// surface stays curated.
+func (d *DesktopEngine) BroadcastFetchPending(paneID [16]byte, delta int) {
+	d.dispatcher.Broadcast(Event{
+		Type:    EventFetchPending,
+		Payload: FetchPendingPayload{PaneID: paneID, Delta: delta},
+	})
+}
+
 // Registry returns the app registry for this desktop.
 func (d *DesktopEngine) Registry() *AppRegistry {
 	return d.registry

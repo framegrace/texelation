@@ -45,6 +45,12 @@ type BlendInfoLine struct {
 	toastSeverity texel.ToastSeverity
 	toastExpiry   time.Time
 	toastActive   bool
+
+	// Fetch-pending indicator (Issue #199 Plan E). Aggregated across panes
+	// from FetchPending events on the desktop dispatcher; renders a spinner
+	// + count between the title zone and the date/clock zone whenever the
+	// count is > 0. Hidden at 0.
+	fetchPending int
 }
 
 // NewBlendInfoLine creates a BlendInfoLine with sensible defaults from the theme.
@@ -105,6 +111,24 @@ func (bil *BlendInfoLine) SetTitle(title string) {
 	bil.title = title
 	bil.mu.Unlock()
 	bil.invalidate()
+}
+
+// SetFetchPending sets the slow-fetch indicator count. Aggregated across
+// all panes; the BlendInfoLine renders the indicator only when count is
+// strictly positive. Negative inputs are clamped to 0 so out-of-order
+// dispatcher deltas (rare, see fetch_pending_timer.go) can't render a
+// nonsense "-N" in the bar.
+func (bil *BlendInfoLine) SetFetchPending(count int) {
+	if count < 0 {
+		count = 0
+	}
+	bil.mu.Lock()
+	changed := bil.fetchPending != count
+	bil.fetchPending = count
+	bil.mu.Unlock()
+	if changed {
+		bil.invalidate()
+	}
 }
 
 // SetClock sets the date and clock strings for the right-side display.
@@ -171,6 +195,7 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 	clock := bil.clock
 	toastMsg := bil.toastMessage
 	toastSev := bil.toastSeverity
+	fetchPending := bil.fetchPending
 	bil.mu.Unlock()
 
 	if w <= 0 {
@@ -243,6 +268,22 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 	}
 	leftStr := " " + modeIcon + title + " "
 
+	// --- Fetch-pending indicator (rendered between title and right zone) ---
+	// Spinner advances with painter time so the animation registers as
+	// MarkAnimated(); the count is the live aggregate from FetchPending
+	// events. Hidden entirely when count is 0 (the common case).
+	fetchStr := ""
+	if fetchPending > 0 {
+		spinner := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+		idx := int(painter.Time()*10) % len(spinner)
+		if idx < 0 {
+			idx = -idx % len(spinner)
+		}
+		fetchStr = fmt.Sprintf(" %c %d ", spinner[idx], fetchPending)
+		painter.MarkAnimated()
+	}
+	fetchWidth := utf8.RuneCountInString(fetchStr)
+
 	// --- Right side (date + clock with icons) ---
 	calendarIcon := " \U000F00ED " // nf-md-calendar
 	clockIcon := " \U000F0954 "    // nf-md-clock-outline
@@ -291,6 +332,20 @@ func (bil *BlendInfoLine) Draw(painter *core.Painter) {
 		col = x + w - rightWidth
 		for _, r := range rightStr {
 			if col >= x+w {
+				break
+			}
+			painter.SetDynamicCellKeepBG(col, y, r, accentDS)
+			col++
+		}
+	}
+
+	// Draw the fetch-pending indicator just left of the right-side zone.
+	// Skipped silently when there isn't room (the right zone takes priority
+	// because it's always visible) or when no fetches are pending.
+	if fetchWidth > 0 && fetchWidth+rightWidth <= w {
+		col = x + w - rightWidth - fetchWidth
+		for _, r := range fetchStr {
+			if col >= x+w-rightWidth {
 				break
 			}
 			painter.SetDynamicCellKeepBG(col, y, r, accentDS)

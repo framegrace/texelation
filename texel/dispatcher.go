@@ -39,7 +39,23 @@ const (
 	EventActivePaneChanged
 	EventPerformanceUpdate
 	EventToast
+	// EventFetchPending fires from the server's connection handler when a
+	// MsgFetchRange takes longer than 50ms to satisfy. Payload is
+	// FetchPendingPayload — Delta is +1 when the request crosses the
+	// 50ms threshold without resolving, -1 when the response is finally
+	// sent. Listeners (currently the statusbar) aggregate to derive an
+	// "in-flight slow fetches" count and surface it as an indicator.
+	EventFetchPending
 )
+
+// FetchPendingPayload carries an incremental delta for the server's
+// pending-slow-fetch counter. Listeners maintain their own per-pane or
+// aggregated count by summing deltas; payloads always come in matched
+// +1 / -1 pairs (one per slow fetch).
+type FetchPendingPayload struct {
+	PaneID [16]byte
+	Delta  int // +1 (became pending) or -1 (resolved)
+}
 
 // Event represents a message passed through the system.
 // It has a type and can carry an arbitrary data payload.

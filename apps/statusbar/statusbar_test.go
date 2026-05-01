@@ -70,6 +70,56 @@ func TestStatusBar_ReceivesToast(t *testing.T) {
 	}
 }
 
+// TestStatusBar_FetchPendingAggregates — feeds two panes' +1/-1
+// deltas through OnEvent and asserts the per-pane map sums correctly,
+// clamps at zero on stray -1, and clears entirely when both panes
+// resolve.
+func TestStatusBar_FetchPendingAggregates(t *testing.T) {
+	sb := New()
+	sb.Resize(80, 2)
+
+	paneA := [16]byte{0xa}
+	paneB := [16]byte{0xb}
+
+	send := func(paneID [16]byte, delta int) {
+		sb.OnEvent(texel.Event{
+			Type:    texel.EventFetchPending,
+			Payload: texel.FetchPendingPayload{PaneID: paneID, Delta: delta},
+		})
+	}
+
+	send(paneA, +1)
+	send(paneB, +1)
+	send(paneB, +1)
+	if got := sb.fetchPendingTotal(); got != 3 {
+		t.Errorf("after +1/+1/+1 across two panes, total = %d, want 3", got)
+	}
+
+	send(paneA, -1)
+	if got := sb.fetchPendingTotal(); got != 2 {
+		t.Errorf("after paneA resolved, total = %d, want 2", got)
+	}
+
+	// Stray -1 below zero on paneB should clamp; total decreases by 1.
+	send(paneB, -1)
+	send(paneB, -1)
+	send(paneB, -1) // would drive paneB negative; clamp at 0.
+	if got := sb.fetchPendingTotal(); got != 0 {
+		t.Errorf("after over-decrementing, total = %d, want 0 (clamped)", got)
+	}
+}
+
+// fetchPendingTotal exposes the aggregated count for tests.
+func (sb *StatusBarApp) fetchPendingTotal() int {
+	sb.fetchPendingMu.Lock()
+	defer sb.fetchPendingMu.Unlock()
+	total := 0
+	for _, n := range sb.fetchPendingBy {
+		total += n
+	}
+	return total
+}
+
 func TestStatusBar_Lifecycle(t *testing.T) {
 	sb := New()
 	sb.Resize(80, 2)

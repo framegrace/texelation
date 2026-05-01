@@ -14,6 +14,7 @@ import (
 	"log"
 
 	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 func (c *connection) handleMessage(prefix string, header protocol.Header, payload []byte) error {
@@ -497,6 +498,26 @@ func (c *connection) handleFetchRange(payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("decode: %w", err)
 	}
+
+	// Pending-fetch indicator: schedule a 50ms timer that broadcasts
+	// FetchPending(+1) if it fires before we send the response. On
+	// response (success or error path), we always cancel the timer and
+	// — if the timer had already fired — broadcast FetchPending(-1) so
+	// listeners' counts stay paired.
+	//
+	// We capture sink/desktop here once; if either is unavailable we
+	// silently skip the indicator (the response path still runs).
+	pendingSink, _ := c.sink.(*DesktopSink)
+	var pendingDesktop *texel.DesktopEngine
+	if pendingSink != nil {
+		pendingDesktop = pendingSink.Desktop()
+	}
+	var broadcast fetchPendingBroadcaster
+	if pendingDesktop != nil {
+		broadcast = pendingDesktop.BroadcastFetchPending
+	}
+	pendingTimer, pendingCancel := startFetchPendingTimer(broadcast, req.PaneID)
+	defer pendingCancel(pendingTimer)
 
 	// sendStub sends a minimal response with the given flags and no rows.
 	sendStub := func(flags protocol.FetchRangeFlags) error {
