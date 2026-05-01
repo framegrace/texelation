@@ -56,7 +56,7 @@ type clientState struct {
 
 	// Wire for FlushFrame — set once after connect, never mutated thereafter.
 	conn      net.Conn
-	writeMu   *sync.Mutex
+	writer    *messageWriter
 	sessionID [16]byte
 
 	clipboardMu          sync.Mutex
@@ -204,7 +204,7 @@ func (s *clientState) setThemeValue(section, key string, value interface{}) {
 	sec[key] = value
 }
 
-func (s *clientState) scheduleResize(writeMu *sync.Mutex, conn net.Conn, sessionID [16]byte, resize protocol.Resize) {
+func (s *clientState) scheduleResize(writer *messageWriter, sessionID [16]byte, resize protocol.Resize) {
 	if s == nil {
 		return
 	}
@@ -223,7 +223,7 @@ func (s *clientState) scheduleResize(writeMu *sync.Mutex, conn net.Conn, session
 		}
 		res := s.pendingResize
 		s.resizeMu.Unlock()
-		sendResizeMessage(writeMu, conn, sessionID, res)
+		sendResizeMessage(writer, sessionID, res)
 	}()
 }
 

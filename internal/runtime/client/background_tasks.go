@@ -9,15 +9,13 @@ package clientruntime
 
 import (
 	"log"
-	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/framegrace/texelation/protocol"
 )
 
-func pingLoop(conn net.Conn, sessionID [16]byte, done <-chan struct{}, stop <-chan struct{}, writeMu *sync.Mutex) {
+func pingLoop(sessionID [16]byte, done <-chan struct{}, stop <-chan struct{}, writer *messageWriter) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -34,7 +32,7 @@ func pingLoop(conn net.Conn, sessionID [16]byte, done <-chan struct{}, stop <-ch
 				continue
 			}
 			header := protocol.Header{Version: protocol.Version, Type: protocol.MsgPing, Flags: protocol.FlagChecksum, SessionID: sessionID}
-			if err := writeMessage(writeMu, conn, header, payload); err != nil {
+			if err := writer.Send(header, payload); err != nil {
 				log.Printf("send ping failed: %v", err)
 				return
 			}
@@ -58,7 +56,7 @@ func scheduleAck(pending *atomic.Uint64, signal chan<- struct{}, seq uint64) {
 	}
 }
 
-func ackLoop(conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex, done <-chan struct{}, pending *atomic.Uint64, lastAck *atomic.Uint64, signal <-chan struct{}) {
+func ackLoop(sessionID [16]byte, writer *messageWriter, done <-chan struct{}, pending *atomic.Uint64, lastAck *atomic.Uint64, signal <-chan struct{}) {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -83,7 +81,7 @@ func ackLoop(conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex, done <-chan
 			Flags:     protocol.FlagChecksum,
 			SessionID: sessionID,
 		}
-		if err := writeMessage(writeMu, conn, header, payload); err != nil {
+		if err := writer.Send(header, payload); err != nil {
 			log.Printf("ack send failed: %v", err)
 			return
 		}

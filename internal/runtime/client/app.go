@@ -14,7 +14,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -106,7 +105,8 @@ func Run(opts Options) error {
 	// `defer conn.Close()` shape.
 	defer func() { conn.Close() }()
 
-	var writeMu sync.Mutex
+	writer := newMessageWriter(conn, 256)
+	defer writer.Close()
 
 	debuglog.Printf("Connected to session %s", client.FormatUUID(accept.SessionID))
 
@@ -125,7 +125,7 @@ func Run(opts Options) error {
 
 	// Wire connection context for FlushFrame (set once, never mutated).
 	state.conn = conn
-	state.writeMu = &writeMu
+	state.writer = writer
 	state.sessionID = accept.SessionID
 
 	// Load keybindings from config file or use platform defaults.
@@ -198,7 +198,7 @@ func Run(opts Options) error {
 			// state and recovery is the user's job.
 			return fmt.Errorf("resume request failed: %w", err)
 		}
-		handleControlMessage(state, conn, hdr, payload, sessionID, &lastSequence, &writeMu, &pendingAck, ackSignal)
+		handleControlMessage(state, hdr, payload, sessionID, &lastSequence, writer, &pendingAck, ackSignal)
 	}
 
 	// Plan D: install debounced persistence Writer. nil-safe — if path
@@ -243,14 +243,14 @@ func Run(opts Options) error {
 	state.setRenderChannel(renderCh)
 	doneCh := make(chan struct{})
 	panicLogger.Go("readLoop", func() {
-		readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh, &writeMu, &pendingAck, ackSignal)
+		readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh, writer, &pendingAck, ackSignal)
 	})
 	pingStop := make(chan struct{})
 	panicLogger.Go("pingLoop", func() {
-		pingLoop(conn, sessionID, doneCh, pingStop, &writeMu)
+		pingLoop(sessionID, doneCh, pingStop, writer)
 	})
 	panicLogger.Go("ackLoop", func() {
-		ackLoop(conn, sessionID, &writeMu, doneCh, &pendingAck, &lastAck, ackSignal)
+		ackLoop(sessionID, writer, doneCh, &pendingAck, &lastAck, ackSignal)
 	})
 
 	screen, err := tcell.NewScreen()
@@ -282,7 +282,7 @@ func Run(opts Options) error {
 	}
 
 	// Send ClientReady with our dimensions so server can send properly-sized snapshot
-	sendClientReady(&writeMu, conn, sessionID, screen)
+	sendClientReady(writer, sessionID, screen)
 
 	render(state, screen)
 
@@ -376,7 +376,7 @@ func Run(opts Options) error {
 			if !ok {
 				return nil
 			}
-			if !handleScreenEvent(ev, state, screen, conn, sessionID, &writeMu) {
+			if !handleScreenEvent(ev, state, screen, sessionID, writer) {
 				return nil
 			}
 
