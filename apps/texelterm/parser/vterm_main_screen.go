@@ -207,40 +207,43 @@ func (v *VTerm) MainScreenRowNoWrap(globalIdx int64) bool {
 // viewport: the cursor advances past the bottom row, autoscroll commits
 // the now-overwritten top rows into scrollback, and the next frame
 // repeats — depositing the same N rows of overflow per repaint. At
-// narrow widths the per-frame overflow is large; the user sees the
-// same lines cloned 6+ times in scrollback.
+// narrow widths the per-frame overflow is large; the user sees lines
+// 21-23 cloned 6+ times in scrollback.
 //
 // The anchor logic: at each BSU, if writeTop has advanced since the
-// PREVIOUS BSU (i.e. the previous frame's paint did overflow), CLEAR
-// the cells in [previous frameHome .. current writeTop - 1] — i.e. the
-// overflow rows that became scrollback during the previous frame's
-// paint. These rows are duplicates of content the new frame will
-// repaint anyway, so eviction prevents N-frame accumulation in
-// scrollback.
-//
-// We deliberately do NOT rewind writeTop. Claude (and other sync-
-// update-using TUIs) emit *partial / incremental* paints inside
-// BSU/ESU; their cursor positions are relative to the post-overflow
-// viewport position they expect. Rewinding writeTop here would desync
-// our viewport from Claude's mental model — Claude's incremental
-// updates would land at the wrong gids and the user would see a
-// hodgepodge of last-frame content at the wrong rows. Leaving
-// writeTop alone keeps the viewport in sync; the cleared overflow
-// region simply becomes empty cells in scrollback, which is exactly
-// what we want.
+// PREVIOUS BSU (i.e. the previous frame's paint did overflow), rewind
+// writeTop to the previous frame's position. We deliberately do NOT
+// clear the viewport rows [frameHome..frameHome+height-1] — Claude (and
+// other sync-update-using TUIs) emit *partial / incremental* paints
+// inside BSU/ESU; only changed cells are repainted and unchanged cells
+// must persist from the previous frame. Clearing the viewport would
+// wipe everything the new frame doesn't repaint, leaving the user with
+// a near-black screen. Clearing only the OVERFLOW band (cells past
+// the rewound viewport bottom up to HWM) evicts the duplicated
+// scrollback rows accumulated by the previous frame's overflow without
+// touching the in-viewport image.
 //
 // Gates:
 //   - Only fires in non-alt-screen mode (alt-screen TUIs have their own
 //     buffer and don't accumulate main-screen scrollback).
 //   - First BSU after a reset (frameHome == -1) just records the
-//     position without clearing — there's nothing to collapse yet.
+//     position without rewinding — there's nothing to collapse yet.
 func (v *VTerm) beginFrameAnchor() {
 	if v.mainScreen == nil || v.inAltScreen {
 		return
 	}
 	curTop := v.mainScreen.WriteTop()
 	if v.frameHomeGlobalLine >= 0 && curTop > v.frameHomeGlobalLine {
-		v.mainScreen.ClearRangePersistent(v.frameHomeGlobalLine, curTop-1)
+		v.mainScreen.RewindWriteTop(v.frameHomeGlobalLine)
+		// Clear only the overflow band — cells past the (now-rewound)
+		// viewport bottom up to HWM. In-viewport cells stay so a
+		// partial/incremental paint by the new frame doesn't have
+		// to repaint every cell.
+		viewportBottom := v.frameHomeGlobalLine + int64(v.height) - 1
+		if hwm := v.mainScreen.WriteBottomHWM(); hwm > viewportBottom {
+			v.mainScreen.ClearRangePersistent(viewportBottom+1, hwm)
+		}
+		curTop = v.mainScreen.WriteTop()
 	}
 	v.frameHomeGlobalLine = curTop
 }
