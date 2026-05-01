@@ -328,11 +328,62 @@ func (v *VTerm) mainScreenLineFeedInternal() {
 
 // mainScreenResize handles resize for the sparse terminal.
 // Rules 5+6 are fully implemented in WriteWindow.Resize and ViewWindow.Resize.
+//
+// After WriteWindow.Resize we snap writeTop to the latest shell-prompt
+// anchor (in non-alt-screen mode). Two distinct breakages motivate this:
+//
+//  1. Shrink advances writeTop to keep the cursor visible at the new
+//     bottom row. A TUI that does NOT emit ED 2 on SIGWINCH (e.g., redraws
+//     with cursor positioning + overwrites) then paints below the prompt,
+//     leaving the previous frame's content in scrollback above writeTop —
+//     visible to the user as "duplicates" once the user scrolls up or the
+//     new frame doesn't fully overwrite the old.
+//
+//  2. Expand uses writeTop = HWM - newHeight + 1, which retreats writeTop
+//     into pre-window scrollback when the window was previously smaller
+//     than the new size (HWM doesn't reflect the new height's rows). The
+//     TUI's post-resize redraw (whether or not it emits ED 2) then paints
+//     starting at the retreated writeTop, OVERWRITING committed scrollback
+//     above the prompt — visible to the user as "lost history".
+//
+// Mirroring the ED 2 anchor logic here guarantees the TUI's redraw lands
+// at the prompt row regardless of resize direction or which sequences the
+// TUI uses to redraw. We also clear [anchor, HWM] so leftover rows from
+// the pre-resize frame don't bleed through past the new viewport.
 func (v *VTerm) mainScreenResize(width, height int) {
 	if v.mainScreen == nil {
 		return
 	}
 	v.mainScreen.Resize(width, height)
+
+	if !v.inAltScreen {
+		anchor := int64(-1)
+		switch {
+		case v.CommandStartGlobalLine >= 0:
+			anchor = v.CommandStartGlobalLine
+		case v.InputStartGlobalLine >= 0:
+			anchor = v.InputStartGlobalLine + 1
+		case v.PromptStartGlobalLine >= 0:
+			anchor = v.PromptStartGlobalLine + 1
+		}
+		if anchor >= 0 {
+			curTop := v.mainScreen.WriteTop()
+			switch {
+			case curTop > anchor:
+				// Shrink moved writeTop past the anchor (or a prior expand
+				// has us above it from a different code path). Pull back.
+				v.mainScreen.RewindWriteTop(anchor)
+				v.mainScreen.ClearRangePersistent(anchor, v.mainScreen.WriteBottomHWM())
+			case curTop < anchor:
+				// Expand pulled writeTop into pre-anchor scrollback. Push
+				// forward so the redraw doesn't overwrite history above
+				// the current command's start.
+				v.mainScreen.AdvanceWriteTopTo(anchor)
+				v.mainScreen.ClearRangePersistent(anchor, v.mainScreen.WriteBottomHWM())
+			}
+		}
+	}
+
 	if v.mainScreenPersistence != nil {
 		state := v.snapshotMainScreenState()
 		v.mainScreenPersistence.NotifyMetadataChange(&state)

@@ -139,6 +139,13 @@ func (t *Terminal) RewindWriteTop(to int64) {
 	t.view.ScrollToBottom(t.write.WriteBottom())
 }
 
+// AdvanceWriteTopTo forwards to the WriteWindow and resyncs the ViewWindow.
+// See WriteWindow.AdvanceWriteTopTo.
+func (t *Terminal) AdvanceWriteTopTo(to int64) {
+	t.write.AdvanceWriteTopTo(to)
+	t.view.ScrollToBottom(t.write.WriteBottom())
+}
+
 // EraseLine clears the cells of the line at the cursor's current globalIdx.
 // This is the sparse equivalent of ESC[2K.
 func (t *Terminal) EraseLine() {
