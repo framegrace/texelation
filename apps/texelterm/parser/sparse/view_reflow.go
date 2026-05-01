@@ -169,15 +169,8 @@ func trailingEmptyRows(s *Store, start, end int64) int {
 }
 
 // chainReflowedRowCount returns the number of physical rows the chain
-// [start..end] occupies when reflowed at width. Matches reflowChain's
-// output row count exactly, including trailing empty continuation rows.
-//
-// The off-by-one trap: reflowChain returns 1 nil row only when both
-// logical AND trailing are empty (the early return). When logical is
-// empty but trailing > 0, it returns trailing rows, not trailing+1. We
-// must mirror that — adding "+1 for empty content" plus trailing would
-// over-count by 1 row, which breaks RecomputeLiveAnchor's offset math
-// and surfaces as a visible duplicate row at the resize boundary.
+// [start..end] occupies when reflowed at width. Matches reflowChain's output
+// row count, including trailing empty continuation rows.
 //
 // See reflowChain for the positional-gap rationale (issue #193 / #197).
 func chainReflowedRowCount(s *Store, start, end int64, width int, nowrap bool) int {
@@ -197,22 +190,13 @@ func chainReflowedRowCount(s *Store, start, end int64, width int, nowrap bool) i
 	if total < 0 {
 		total = 0
 	}
-	trailing := trailingEmptyRows(s, start, end)
 	var rows int
-	switch {
-	case total > 0:
-		rows = (total + width - 1) / width
-	case trailing == 0:
-		// Empty chain with no trailing continuations — reflowChain emits
-		// one nil row.
+	if total == 0 {
 		rows = 1
-	default:
-		// Empty chain with trailing continuations — reflowChain emits
-		// only the `trailing` rows; no extra "1 row for the empty
-		// chain head".
-		rows = 0
+	} else {
+		rows = (total + width - 1) / width
 	}
-	return rows + trailing
+	return rows + trailingEmptyRows(s, start, end)
 }
 
 // findChainStart walks backward from gi to the head of its wrap chain. A
