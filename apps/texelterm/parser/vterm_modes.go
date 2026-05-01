@@ -65,6 +65,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			}
 			v.logDebug("[ALT] Entering alt screen (DECSET 1049), saving cursor (%d,%d)", v.cursorX, v.cursorY)
 			v.inAltScreen = true
+			v.resetFrameAnchor()
 			if v.OnAltScreenChange != nil {
 				v.OnAltScreenChange(true)
 			}
@@ -80,6 +81,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			v.ClearScreen()
 		case 2026: // START Synchronized Update
 			v.InSynchronizedUpdate = true
+			v.beginFrameAnchor()
 		}
 	case 'l': // RESET
 		switch mode {
@@ -115,6 +117,7 @@ func (v *VTerm) processPrivateCSI(command rune, params []int) {
 			}
 			v.logDebug("[ALT] Exiting alt screen (DECRST 1049), restoring cursor (%d,%d)", v.savedMainCursorX, v.savedMainCursorY)
 			v.inAltScreen = false
+			v.resetFrameAnchor()
 			if v.OnAltScreenChange != nil {
 				v.OnAltScreenChange(false)
 			}

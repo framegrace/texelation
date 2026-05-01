@@ -200,6 +200,48 @@ func (v *VTerm) MainScreenRowNoWrap(globalIdx int64) bool {
 	return v.mainScreen.RowNoWrap(globalIdx)
 }
 
+// beginFrameAnchor is invoked at every BSU (CSI ?2026h, Begin
+// Synchronized Update). Non-alt-screen TUIs that paint full frames via
+// sync-update brackets (Claude Code is the canonical case) accumulate
+// duplicate scrollback when the frame's painted height exceeds the
+// viewport: the cursor advances past the bottom row, autoscroll commits
+// the now-overwritten top rows into scrollback, and the next frame
+// repeats — depositing the same N rows of overflow per repaint. At
+// narrow widths the per-frame overflow is large; the user sees lines
+// 21-23 cloned 6+ times in scrollback.
+//
+// The anchor logic: at each BSU, if writeTop has advanced since the
+// PREVIOUS BSU (i.e. the previous frame's paint did overflow), rewind
+// writeTop to the previous frame's position and clear [frameHome, HWM]
+// so the new frame paints over the (cleared) overflow rather than
+// appending after it. After the rewind, frameHomeGlobalLine is updated
+// to the new writeTop so the next BSU can repeat the collapse.
+//
+// Gates:
+//   - Only fires in non-alt-screen mode (alt-screen TUIs have their own
+//     buffer and don't accumulate main-screen scrollback).
+//   - First BSU after a reset (frameHome == -1) just records the
+//     position without rewinding — there's nothing to collapse yet.
+func (v *VTerm) beginFrameAnchor() {
+	if v.mainScreen == nil || v.inAltScreen {
+		return
+	}
+	curTop := v.mainScreen.WriteTop()
+	if v.frameHomeGlobalLine >= 0 && curTop > v.frameHomeGlobalLine {
+		v.mainScreen.RewindWriteTop(v.frameHomeGlobalLine)
+		v.mainScreen.ClearRangePersistent(v.frameHomeGlobalLine, v.mainScreen.WriteBottomHWM())
+		curTop = v.mainScreen.WriteTop()
+	}
+	v.frameHomeGlobalLine = curTop
+}
+
+// resetFrameAnchor clears the BSU frame anchor. Called on command
+// boundaries (OSC 133;C, ;D) and alt-screen toggles, so a TUI's frame
+// anchor doesn't bleed into a different command's context.
+func (v *VTerm) resetFrameAnchor() {
+	v.frameHomeGlobalLine = -1
+}
+
 // mainScreenPlaceChar writes a rune to the sparse terminal at the current cursor.
 func (v *VTerm) mainScreenPlaceChar(r rune, isWide bool) {
 	if v.mainScreen == nil {
