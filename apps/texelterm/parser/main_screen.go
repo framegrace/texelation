@@ -126,6 +126,13 @@ type MainScreen interface {
 	// repaints, preventing per-repaint overflow from accumulating.
 	RewindWriteTop(to int64)
 
+	// AdvanceWriteTopTo moves writeTop forward to `to`. No-op if writeTop
+	// is already at or beyond `to`. HWM is extended if the new writeBottom
+	// exceeds it. Companion to RewindWriteTop — used on resize to clamp
+	// writeTop to the latest prompt anchor when WriteWindow.Resize's
+	// HWM-anchor formula pulled it into pre-window scrollback.
+	AdvanceWriteTopTo(to int64)
+
 	// RestoreViewport re-seats the main screen's view window to reproduce
 	// the client's saved scrollback anchor. Caller (publisher resume path)
 	// guarantees this is called BEFORE the next Render.

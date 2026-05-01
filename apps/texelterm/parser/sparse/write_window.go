@@ -262,6 +262,33 @@ func (w *WriteWindow) RewindWriteTop(to int64) {
 	}
 }
 
+// AdvanceWriteTopTo moves writeTop FORWARDS to `to`. No-op if writeTop is
+// already at or beyond `to`. Cursor is clamped into the new window. HWM is
+// extended if the new writeBottom exceeds it.
+//
+// Companion to RewindWriteTop. Used on resize to clamp writeTop to the
+// latest shell-prompt anchor when WriteWindow.Resize's HWM-anchor formula
+// pulls writeTop into pre-window scrollback (causes the TUI's post-SIGWINCH
+// redraw to overwrite committed history with viewport content). With this
+// method the resize path can ensure writeTop never sits above the prompt
+// row regardless of which direction the user resized.
+func (w *WriteWindow) AdvanceWriteTopTo(to int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if to <= w.writeTop {
+		return
+	}
+	w.writeTop = to
+	w.extendHWMLocked(w.writeTop + int64(w.height) - 1)
+	if w.cursorGlobalIdx < w.writeTop {
+		w.cursorGlobalIdx = w.writeTop
+	}
+	bottom := w.writeTop + int64(w.height) - 1
+	if w.cursorGlobalIdx > bottom {
+		w.cursorGlobalIdx = bottom
+	}
+}
+
 // EraseDisplay clears every cell in the current write window [writeTop,
 // writeBottom]. Cells outside the window are not touched.
 func (w *WriteWindow) EraseDisplay() {

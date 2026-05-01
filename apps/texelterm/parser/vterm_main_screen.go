@@ -327,12 +327,56 @@ func (v *VTerm) mainScreenLineFeedInternal() {
 }
 
 // mainScreenResize handles resize for the sparse terminal.
+//
 // Rules 5+6 are fully implemented in WriteWindow.Resize and ViewWindow.Resize.
+// On top of those we clamp ONE specific case in non-alt-screen mode:
+// WriteWindow.Resize on expand uses writeTop = HWM - newHeight + 1, which
+// retreats writeTop into pre-window scrollback when the window was
+// previously smaller than the new size and HWM doesn't reflect the new
+// height's rows. The post-resize redraw (especially a Claude-Code-style
+// ED 2 + repaint) would then paint over scrollback the user wants to
+// keep — visible as "lost history" or "Claude prints from the last
+// resize onwards".
+//
+// Anchor-aware clamp: we only push writeTop forward when it has been
+// pulled BELOW the latest shell-prompt anchor (CommandStart / InputStart
+// / PromptStart). Above the anchor is scrollback the user hasn't asked
+// to discard, so the upcoming redraw must not paint there.
+//
+// The clamp deliberately does NOT activate when newTop sits between the
+// anchor and oldTop. That case is the legitimate "shrink-then-expand
+// restoration" — the user shrank, then grew back, and the HWM-anchor
+// formula correctly restores the pre-shrink writeTop. Clamping to oldTop
+// would break that restoration (writeTop would stay at the post-shrink
+// value, leaving the new viewport's bottom past the cursor).
+//
+// We also do NOT snap writeTop in either direction beyond this clamp.
+// In a long-running TUI session writeTop has legitimately advanced via
+// per-newline scroll-up; touching it would orphan rows Claude scrolled
+// through (the conversation history).
 func (v *VTerm) mainScreenResize(width, height int) {
 	if v.mainScreen == nil {
 		return
 	}
 	v.mainScreen.Resize(width, height)
+
+	if !v.inAltScreen {
+		anchor := int64(-1)
+		switch {
+		case v.CommandStartGlobalLine >= 0:
+			anchor = v.CommandStartGlobalLine
+		case v.InputStartGlobalLine >= 0:
+			anchor = v.InputStartGlobalLine + 1
+		case v.PromptStartGlobalLine >= 0:
+			anchor = v.PromptStartGlobalLine + 1
+		}
+		if anchor >= 0 {
+			if v.mainScreen.WriteTop() < anchor {
+				v.mainScreen.AdvanceWriteTopTo(anchor)
+			}
+		}
+	}
+
 	if v.mainScreenPersistence != nil {
 		state := v.snapshotMainScreenState()
 		v.mainScreenPersistence.NotifyMetadataChange(&state)
