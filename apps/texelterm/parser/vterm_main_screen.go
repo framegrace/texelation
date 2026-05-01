@@ -373,14 +373,21 @@ func (v *VTerm) mainScreenResize(width, height int) {
 				// Shrink moved writeTop past the anchor (or a prior expand
 				// has us above it from a different code path). Pull back.
 				v.mainScreen.RewindWriteTop(anchor)
-				v.mainScreen.ClearRangePersistent(anchor, v.mainScreen.WriteBottomHWM())
 			case curTop < anchor:
 				// Expand pulled writeTop into pre-anchor scrollback. Push
 				// forward so the redraw doesn't overwrite history above
 				// the current command's start.
 				v.mainScreen.AdvanceWriteTopTo(anchor)
-				v.mainScreen.ClearRangePersistent(anchor, v.mainScreen.WriteBottomHWM())
 			}
+			// NOTE: do NOT clear [anchor, HWM] here. Resize is decoupled
+			// from the TUI's redraw — SIGWINCH propagates to the child
+			// process, which redraws asynchronously. Clearing speculatively
+			// blanks the display until the redraw arrives, and any input
+			// lag (Claude in flight, slow PTY drain) is visible to the
+			// user as a blank pane. The TUI's own ED 2 path (or its
+			// equivalent in the ED 2 handler above) is responsible for
+			// evicting stale cells when the redraw actually starts; until
+			// then the previous frame stays on screen as a stable image.
 		}
 	}
 
