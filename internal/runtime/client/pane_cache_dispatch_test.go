@@ -88,7 +88,7 @@ func TestClientState_BufferDeltaAppliesToPaneCache(t *testing.T) {
 	var pendingAck atomic.Uint64
 	ackCh := make(chan struct{}, 1)
 
-	handleControlMessage(state, nil, hdr, payload, [16]byte{}, nil, nil, &pendingAck, ackCh)
+	handleControlMessage(state, hdr, payload, [16]byte{}, nil, nil, &pendingAck, ackCh)
 
 	pc := state.paneCacheFor(paneID)
 	row, ok := pc.RowAt(500)
@@ -139,7 +139,7 @@ func TestClientState_FetchRangeResponseAppliesToPaneCache(t *testing.T) {
 	var pendingAck atomic.Uint64
 	ackCh := make(chan struct{}, 1)
 
-	handleControlMessage(state, nil, hdr, payload, [16]byte{}, nil, nil, &pendingAck, ackCh)
+	handleControlMessage(state, hdr, payload, [16]byte{}, nil, nil, &pendingAck, ackCh)
 
 	pc := state.paneCacheFor(paneID)
 	row, ok := pc.RowAt(1000)
@@ -183,7 +183,7 @@ func TestClientState_SnapshotPrunesPaneCache(t *testing.T) {
 	var pendingAck atomic.Uint64
 	ackCh := make(chan struct{}, 1)
 
-	handleControlMessage(state, nil, hdr, payload, [16]byte{}, nil, nil, &pendingAck, ackCh)
+	handleControlMessage(state, hdr, payload, [16]byte{}, nil, nil, &pendingAck, ackCh)
 
 	state.paneCachesMu.RLock()
 	_, has1 := state.paneCaches[id1]

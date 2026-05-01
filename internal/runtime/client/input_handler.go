@@ -11,7 +11,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/framegrace/texelation/internal/debuglog"
@@ -22,7 +21,7 @@ import (
 	"github.com/framegrace/texelation/protocol"
 )
 
-func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, conn net.Conn, sessionID [16]byte, writeMu *sync.Mutex) bool {
+func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, sessionID [16]byte, writer *messageWriter) bool {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
 		// Dismiss restart notification on any key press
@@ -55,7 +54,7 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 		if state.controlMode && ev.Modifiers() == 0 {
 			r := ev.Rune()
 			if r == 'q' || r == 'Q' {
-				if err := sendKeyEvent(writeMu, conn, sessionID, tcell.KeyEsc, 0, 0); err != nil {
+				if err := sendKeyEvent(writer, sessionID, tcell.KeyEsc, 0, 0); err != nil {
 					log.Printf("control reset failed: %v", err)
 				}
 				state.controlMode = false
@@ -92,7 +91,7 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 			}
 			render(state, screen)
 		}
-		if err := sendKeyEvent(writeMu, conn, sessionID, ev.Key(), ev.Rune(), ev.Modifiers()); err != nil {
+		if err := sendKeyEvent(writer, sessionID, ev.Key(), ev.Rune(), ev.Modifiers()); err != nil {
 			log.Printf("send key failed: %v", err)
 		} else if state.effects != nil {
 			r := ev.Rune()
@@ -126,7 +125,7 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 		x, y := ev.Position()
 		mouse := protocol.MouseEvent{X: int16(x), Y: int16(y), ButtonMask: uint32(ev.Buttons()), Modifiers: uint16(ev.Modifiers())}
 		payload, _ := protocol.EncodeMouseEvent(mouse)
-		if err := writeMessage(writeMu, conn, protocol.Header{Version: protocol.Version, Type: protocol.MsgMouseEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
+		if err := writer.Send(protocol.Header{Version: protocol.Version, Type: protocol.MsgMouseEvent, Flags: protocol.FlagChecksum, SessionID: sessionID}, payload); err != nil {
 			log.Printf("send mouse failed: %v", err)
 		}
 		if selectionChanged {
@@ -135,7 +134,7 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 		if state.selection.consumePendingCopy() {
 			if data, mime, ok := state.selectionClipboardData(); ok {
 				screen.SetClipboard(data)
-				sendClipboardSet(writeMu, conn, sessionID, mime, data)
+				sendClipboardSet(writer, sessionID, mime, data)
 			}
 		}
 		if state.idleWatcher != nil {
@@ -143,7 +142,7 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 		}
 	case *tcell.EventResize:
 		cols, rows := screen.Size()
-		state.scheduleResize(writeMu, conn, sessionID, protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
+		state.scheduleResize(writer, sessionID, protocol.Resize{Cols: uint16(cols), Rows: uint16(rows)})
 		state.fullRenderNeeded = true
 		state.triggerRender()
 	case *tcell.EventInterrupt:
@@ -156,7 +155,7 @@ func handleScreenEvent(ev tcell.Event, state *clientState, screen tcell.Screen, 
 			state.pasting = false
 			if len(state.pasteBuf) > 0 {
 				data := append([]byte(nil), state.pasteBuf...)
-				if err := sendPaste(writeMu, conn, sessionID, data); err != nil {
+				if err := sendPaste(writer, sessionID, data); err != nil {
 					log.Printf("send paste failed: %v", err)
 				}
 				state.pasteBuf = state.pasteBuf[:0]
