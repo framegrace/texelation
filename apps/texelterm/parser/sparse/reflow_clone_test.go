@@ -191,3 +191,98 @@ func padNum(n, width int) string {
 	}
 	return s
 }
+
+// TestRender_AutoFollowResize_WrappedContent_NoClones — simulates the
+// user's reported scenario: many chains with content that genuinely
+// wraps when the viewport narrows (autowrap chain across 2 stored
+// rows + trailing padding). Resize from wide to narrow with auto-
+// follow, and check that the rendered viewport has no duplicate rows.
+// This is the path most likely to hit a count mismatch between
+// chainReflowedRowCount and reflowChain in the wrap+padding
+// interaction.
+func TestRender_AutoFollowResize_WrappedContent_NoClones(t *testing.T) {
+	const storageWidth = 80
+	const lineCount = 50
+	s := NewStore(storageWidth)
+
+	// Build 25 chains, each spanning 2 stored rows (autowrap-style).
+	// Row 2k:   80 cells of distinguishable content "[k]...", last cell Wrapped=true.
+	// Row 2k+1: 20 cells of content "/[k]" + 60 padding, last cell NOT Wrapped.
+	// Content is distinguishable per chain AND per cell so spurious
+	// "same row content" matches don't trigger the clone detector on
+	// natural reflow of repeating chars.
+	for k := int64(0); k < lineCount/2; k++ {
+		gi := 2 * k
+		row0 := make([]parser.Cell, 80)
+		for i := 0; i < 80; i++ {
+			row0[i] = parser.Cell{Rune: rune('A' + k%26 + (int64(i)/10)%2*32)} // alternating per 10
+		}
+		// Distinguishing prefix
+		for i, r := range []rune{'k', '0' + rune(k/10), '0' + rune(k%10), ':'} {
+			if i < len(row0) {
+				row0[i] = parser.Cell{Rune: r}
+			}
+		}
+		row0[len(row0)-1].Wrapped = true
+		s.SetLine(gi, row0)
+
+		row1 := make([]parser.Cell, 80)
+		for i, r := range []rune{'/', '0' + rune(k/10), '0' + rune(k%10), '/'} {
+			if i < 20 {
+				row1[i] = parser.Cell{Rune: r}
+			}
+		}
+		for i := 4; i < 20; i++ {
+			row1[i] = parser.Cell{Rune: rune('a' + k%26)}
+		}
+		for i := 20; i < 80; i++ {
+			row1[i] = parser.Cell{Rune: ' '}
+		}
+		s.SetLine(gi+1, row1)
+	}
+
+	const viewHeight = 24
+	vw := NewViewWindow(storageWidth, viewHeight)
+	cursorGI := int64(lineCount - 1)
+
+	// Render at storage width (no narrowing). Validate via gi monotonicity:
+	// real clones manifest as the same chain head gi appearing at non-
+	// adjacent positions in the rendered output. Same-character chunks
+	// from narrow-width reflow look identical but have monotone gi (all
+	// from the same chain), so this is the correct invariant to check.
+	vw.RecomputeLiveAnchor(s, cursorGI, 19, 0)
+	_, gi80 := vw.Render(s)
+	checkGIMonotone(t, "wrap+padding width 80", gi80)
+
+	// Narrow to 40 — content width 100 chars per chain reflows to 3 rows.
+	vw.Resize(40, viewHeight, cursorGI)
+	vw.RecomputeLiveAnchor(s, cursorGI, 19, 0)
+	_, gi40 := vw.Render(s)
+	checkGIMonotone(t, "wrap+padding width 40", gi40)
+
+	// Narrow to 5 — extreme case (very narrow).
+	vw.Resize(5, viewHeight, cursorGI)
+	vw.RecomputeLiveAnchor(s, cursorGI, 4, 0)
+	_, gi5 := vw.Render(s)
+	checkGIMonotone(t, "wrap+padding width 5", gi5)
+}
+
+// checkGIMonotone verifies the rendered gi sequence is non-decreasing
+// (ignoring -1 padding rows). Real clones (the same chain rendered at
+// two different viewport positions with content in between) would surface
+// as a gi value reappearing after a higher one.
+func checkGIMonotone(t *testing.T, label string, gis []int64) {
+	t.Helper()
+	prev := int64(-1)
+	for y, g := range gis {
+		if g < 0 {
+			continue
+		}
+		if g < prev {
+			t.Errorf("%s: gi sequence non-monotone at row %d: gi=%d but previous non-pad gi=%d (clone candidate)",
+				label, y, g, prev)
+		}
+		prev = g
+	}
+}
+
