@@ -259,3 +259,27 @@ func TestReflowChain_OriginNonWrapped(t *testing.T) {
 		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
 	}
 }
+
+func TestReflowChain_OriginWrappedSingleGid(t *testing.T) {
+	s := NewStore(80)
+	// 100-char line in one gid, last cell Wrapped (chain head before tail).
+	long := strings.Repeat("x", 80)
+	fillRow(s, 5, long, true)
+	// Continuation gid with the remaining 20 chars, last cell not wrapped.
+	fillRow(s, 6, strings.Repeat("y", 20), false)
+
+	// At width 80: row 0 is gid 5's 80 chars; row 1 is gid 6's 20 chars.
+	rows, origin := reflowChain(s, 5, 6, 80)
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d, want 2", len(rows))
+	}
+	if len(origin) != 2 {
+		t.Fatalf("origin len=%d, want 2", len(origin))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+	if origin[1] != (RowOrigin{Gid: 6, Col: 0}) {
+		t.Errorf("origin[1]=%+v, want {Gid:6, Col:0}", origin[1])
+	}
+}
