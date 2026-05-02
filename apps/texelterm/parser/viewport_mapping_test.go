@@ -344,3 +344,55 @@ func TestRenderedGridAgreesWithMapperInterior(t *testing.T) {
 		}
 	}
 }
+
+func TestViewportToContent_FallsBackToNaiveOnSentinel(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+
+	p := NewParser(v)
+	for _, r := range "only-line" {
+		p.Parse(r)
+	}
+	p.Parse('\r')
+	p.Parse('\n')
+	_, _ = v.GridWithRowIdx()
+
+	var sentY = -1
+	for y, o := range v.mainScreenRowOrigin {
+		if o.Gid == -1 {
+			sentY = y
+			break
+		}
+	}
+	if sentY < 0 {
+		t.Skip("no sentinel row to exercise")
+	}
+
+	gid, col, _, ok := v.ViewportToContent(sentY, 5)
+	if !ok {
+		t.Fatalf("ViewportToContent on sentinel row returned ok=false")
+	}
+	visibleTop, _ := v.mainScreen.VisibleRange()
+	wantGid := visibleTop + int64(sentY)
+	if gid != wantGid || col != 5 {
+		t.Errorf("sentinel fallback = (%d,%d), want (%d,5)", gid, col, wantGid)
+	}
+}
+
+func TestContentToViewport_OffViewportReturnsFalse(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+
+	p := NewParser(v)
+	for _, r := range "anchor-line" {
+		p.Parse(r)
+	}
+	p.Parse('\r')
+	p.Parse('\n')
+	_, _ = v.GridWithRowIdx()
+
+	_, _, vis := v.ContentToViewport(9999, 0)
+	if vis {
+		t.Errorf("ContentToViewport(9999, 0) returned visible=true; expected false")
+	}
+}
