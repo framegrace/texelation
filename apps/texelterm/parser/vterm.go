@@ -670,6 +670,16 @@ func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, 
 	origins := v.mainScreenRowOrigin
 	v.mainScreenRowOriginMu.RUnlock()
 
+	// Track an "exclusive-end-of-row" candidate. When a row's content
+	// ends at exactly `target` (steps == rowExtent), the position is
+	// shared between this row's exclusive end and the next row's
+	// inclusive start. If a later row strict-claims the target via its
+	// own origin, we return that. If no row strict-claims it, we fall
+	// back to the candidate — that's the "selection's exclusive end at
+	// this row's last col" semantics needed by selectLine and by drag
+	// selections that end past the line's content.
+	candidateY, candidateX, candidateValid := 0, 0, false
+
 	for ry, o := range origins {
 		if o.Gid == -1 {
 			continue
@@ -692,10 +702,20 @@ func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, 
 		if next, found := nextSetOrigin(origins, ry); found {
 			rowExtent, rok := v.cellsBetween(o.Gid, o.Col, next.Gid, next.Col, v.width)
 			if rok && steps >= rowExtent {
+				if steps == rowExtent && !candidateValid {
+					// Boundary case: exclusive-end-of-row. Save as
+					// fallback; a later strict match still wins.
+					candidateY = ry
+					candidateX = steps
+					candidateValid = true
+				}
 				continue
 			}
 		}
 		return ry, steps, true
+	}
+	if candidateValid {
+		return candidateY, candidateX, true
 	}
 	return 0, 0, false
 }
@@ -714,19 +734,27 @@ func nextSetOrigin(origins []RowOrigin, ry int) (RowOrigin, bool) {
 }
 
 // advanceCells walks `n` cells forward from (originGid, originCol) through
-// the store, crossing gid boundaries when a row's cells are exhausted.
+// the store, crossing gid boundaries when a row's cells are exhausted
+// AND the chain continues (current gid's last cell has Wrapped=true).
 // Returns the resulting (gid, col). Used by ViewportToContent to resolve
 // a viewport (y, x) given the row's origin.
 //
-// Bounded against runaway: when ReadLine returns nil (gid past the
-// store), break — the position is "past content" and further advancing
-// just walks empty space. Without this break, a click on a trailing-
-// empty wrap-continuation row could loop forever (each iteration:
-// available=0, gid++, no progress on `remaining`).
+// Two termination guards:
 //
-// The result for past-content positions is a (gid, col) just past the
-// store's max gid; selection callers handle that as a zero-width
-// selection (selectAtom finds no word; capture reads no cells).
+//  1. Past-content (`cells == nil`): the gid was never written. Stop.
+//     Without this, a click on a trailing-empty wrap-continuation row
+//     could loop forever (available=0, gid++, no progress).
+//
+//  2. Chain end (current row's last cell has Wrapped=false): the
+//     logical line ends here. Don't advance into the next gid — that
+//     would be a different logical line, and the user dragging past
+//     a non-wrapped line's visible content shouldn't suddenly select
+//     content from the next line. Clamp at the row's end col.
+//
+// The chain-end guard is the fix for issue #224's drag-past-line bug:
+// dragging the mouse past the last cell of a non-wrapped line used to
+// resolve to a position deep in some later gid, causing the highlight
+// to cover blank padding cells of every intermediate row.
 func (v *VTerm) advanceCells(originGid int64, originCol int, n int) (int64, int) {
 	if v.mainScreen == nil {
 		return originGid, originCol
@@ -743,6 +771,11 @@ func (v *VTerm) advanceCells(originGid int64, originCol int, n int) (int64, int)
 		available := rowLen - col
 		if remaining < available {
 			return gid, col + remaining
+		}
+		// Chain-end guard: stop at this row's exclusive-end col when
+		// the chain doesn't continue into the next gid.
+		if rowLen > 0 && !cells[rowLen-1].Wrapped {
+			return gid, rowLen
 		}
 		if available < 0 {
 			available = 0

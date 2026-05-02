@@ -66,6 +66,116 @@ func TestAdvanceCells_PastContentTerminates(t *testing.T) {
 	}
 }
 
+func TestAdvanceCells_StopsAtChainEnd(t *testing.T) {
+	// Non-wrapped row: last cell is NOT Wrapped. Walking past the row's
+	// content should clamp at row end (gid_N, len) — not advance into
+	// the next gid (which would be a different logical line).
+	//
+	// Bug class: dragging a selection past the end of a non-wrapped
+	// line incorrectly extends into the next gid's content; the
+	// resulting selection covers blank cells of every intermediate
+	// row, then partial content of a far row.
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+	left := make([]Cell, 5)
+	for i := range left {
+		left[i] = Cell{Rune: 'a'}
+	}
+	// last cell .Wrapped is the zero value (false) — chain ends here.
+	v.mainScreen.SetLine(5, left)
+	right := make([]Cell, 80)
+	for i := range right {
+		right[i] = Cell{Rune: 'b'}
+	}
+	v.mainScreen.SetLine(6, right)
+
+	gid, col := v.advanceCells(5, 0, 50)
+	if gid != 5 || col != 5 {
+		t.Errorf("advanceCells(5,0,50) = (%d,%d), want (5,5) — should clamp at chain end",
+			gid, col)
+	}
+}
+
+func TestContentToViewport_ExclusiveEndOfRow(t *testing.T) {
+	// Bug class: selectLine sets head = (gid, len(cells)) — "one past
+	// the last cell of the line." ContentToViewport must map that to
+	// the row containing the line, at col=len, so the highlight code
+	// can paint cells [0, len). Without this fix the mapper rejected
+	// such positions and the highlight extended to the viewport bottom.
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+	for i := 0; i < 5; i++ {
+		for _, r := range "hello" {
+			p.Parse(r)
+		}
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+	_, _ = v.GridWithRowIdx()
+
+	// "hello" at gid 2 has 5 cells. The exclusive end is at col 5.
+	y, x, vis := v.ContentToViewport(2, 5)
+	if !vis {
+		t.Fatalf("ContentToViewport(2, 5) returned visible=false; expected (row, 5, true)")
+	}
+	// gid 2 renders on viewport row 2 (lines are non-wrapped, no scroll).
+	if y != 2 || x != 5 {
+		t.Errorf("ContentToViewport(2, 5) = (%d, %d), want (2, 5)", y, x)
+	}
+}
+
+func TestContentToViewport_NextRowOriginStillStrictMatch(t *testing.T) {
+	// Sanity: when target IS the cell-bearing position of a later row's
+	// origin (e.g. (gid=3, col=0) for a row that displays gid 3), the
+	// mapper must return THAT row, not the previous row whose extent
+	// boundary happens to coincide with the target.
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+	for i := 0; i < 5; i++ {
+		for _, r := range "hello" {
+			p.Parse(r)
+		}
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+	_, _ = v.GridWithRowIdx()
+
+	y, x, vis := v.ContentToViewport(3, 0)
+	if !vis {
+		t.Fatalf("ContentToViewport(3, 0) returned visible=false")
+	}
+	if y != 3 || x != 0 {
+		t.Errorf("ContentToViewport(3, 0) = (%d, %d), want (3, 0)", y, x)
+	}
+}
+
+func TestAdvanceCells_ContinuesAcrossWrappedChain(t *testing.T) {
+	// Sanity check that the chain-end guard doesn't break wrapped
+	// chains: when the current row's last cell IS Wrapped, advancing
+	// continues into the next gid.
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+	left := make([]Cell, 80)
+	for i := range left {
+		left[i] = Cell{Rune: 'a'}
+	}
+	left[79].Wrapped = true // chain continues
+	v.mainScreen.SetLine(5, left)
+	right := make([]Cell, 60)
+	for i := range right {
+		right[i] = Cell{Rune: 'b'}
+	}
+	v.mainScreen.SetLine(6, right)
+
+	// From (5, 0) advance 100 cells: 80 of gid 5 (chain continues), 20 of gid 6.
+	gid, col := v.advanceCells(5, 0, 100)
+	if gid != 6 || col != 20 {
+		t.Errorf("advanceCells(5,0,100) = (%d,%d), want (6,20)", gid, col)
+	}
+}
+
 func TestCellsBetween_StaysInGid(t *testing.T) {
 	v := NewVTerm(80, 24)
 	v.EnableMemoryBuffer()
