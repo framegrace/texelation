@@ -5,18 +5,11 @@ package sparse
 
 import "github.com/framegrace/texelation/apps/texelterm/parser"
 
-// RowOrigin is the (gid, col) of the FIRST cell of a reflowed visual row.
-// Used by the selection mapping to project content positions to viewport
-// coordinates without re-deriving the renderer's chain walk.
-//
-// Sentinel: Gid == -1 means the row has no real content (blank row inside
-// a chain-walk gap, or bottom padding when the viewport is taller than
-// the rendered content). Selection callers fall back to naive math on
-// such rows.
-type RowOrigin struct {
-	Gid int64
-	Col int
-}
+// RowOrigin is a type alias for parser.RowOrigin. The canonical definition
+// lives in the parser package so MainScreen interface callers don't need to
+// import parser/sparse internals; this alias keeps existing intra-package
+// references (reflowChain, ViewWindow.Render) terse.
+type RowOrigin = parser.RowOrigin
 
 // walkChain returns the end globalIdx of the Wrapped chain starting at
 // startGI, plus whether any row in the chain is marked NoWrap (chain
