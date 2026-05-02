@@ -126,6 +126,9 @@ func (m *mockVTermProviderForCoord) GetContentText(startLine int64, startOffset 
 	return m.contentText
 }
 
+func (m *mockVTermProviderForCoord) PromptStartLine() int64 { return -1 }
+func (m *mockVTermProviderForCoord) ContentEndLine() int64  { return 0 }
+
 func (m *mockVTermProviderForCoord) ViewportRow(row int) []parser.Cell {
 	if m.grid != nil && row >= 0 && row < len(m.grid) {
 		return m.grid[row]

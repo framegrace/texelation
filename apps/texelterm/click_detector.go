@@ -12,9 +12,22 @@ import "time"
 type ClickType int
 
 const (
-	SingleClick ClickType = 1
-	DoubleClick ClickType = 2
-	TripleClick ClickType = 3
+	SingleClick    ClickType = 1
+	DoubleClick    ClickType = 2
+	TripleClick    ClickType = 3
+	QuadrupleClick ClickType = 4
+
+	// QuintupleClick is reserved for the "select the enclosing
+	// command" gesture (issue #223). Currently NOT produced by the
+	// detector — see MaxClickType. Will be re-enabled once per-prompt
+	// history (issue #222) makes the gesture resolvable for clicks
+	// outside the current command.
+	QuintupleClick ClickType = 5
+
+	// MaxClickType is the highest count the detector will produce.
+	// Capped at QuadrupleClick today; raise to QuintupleClick when
+	// issue #223 is ready to ship.
+	MaxClickType = QuadrupleClick
 )
 
 // DefaultMultiClickTimeout is the maximum time between clicks for multi-click detection.
@@ -22,6 +35,12 @@ const DefaultMultiClickTimeout = 500 * time.Millisecond
 
 // ClickDetector tracks click timing and position to detect multi-clicks.
 // It is reusable across any application that needs multi-click detection.
+//
+// The count saturates at MaxClickType — additional clicks within the
+// window stay at MaxClickType rather than cycling back to SingleClick.
+// This keeps "select-the-largest-thing" gestures (quintuple-click for
+// the whole command) stable under sloppy fast clicking; the user can
+// always pause to drop back to a single click.
 type ClickDetector struct {
 	timeout       time.Duration
 	lastClickTime time.Time
@@ -39,8 +58,8 @@ func NewClickDetector(timeout time.Duration) *ClickDetector {
 }
 
 // DetectClick analyzes a click at the given position and returns the click type.
-// Consecutive clicks at the same position within the timeout are counted as multi-clicks.
-// The click count cycles: 1 → 2 → 3 → 1 (resets after triple-click).
+// Consecutive clicks at the same position within the timeout are counted as
+// multi-clicks; the count saturates at MaxClickType.
 func (c *ClickDetector) DetectClick(line, col int) ClickType {
 	now := time.Now()
 	samePosition := line == c.lastClickLine && col == c.lastClickCol
@@ -48,9 +67,8 @@ func (c *ClickDetector) DetectClick(line, col int) ClickType {
 
 	if samePosition && withinTimeout {
 		c.clickCount++
-		// Reset to 1 after triple-click for continuous clicking
-		if c.clickCount > 3 {
-			c.clickCount = 1
+		if c.clickCount > int(MaxClickType) {
+			c.clickCount = int(MaxClickType)
 		}
 	} else {
 		c.clickCount = 1
@@ -60,14 +78,7 @@ func (c *ClickDetector) DetectClick(line, col int) ClickType {
 	c.lastClickLine = line
 	c.lastClickCol = col
 
-	switch c.clickCount {
-	case 1:
-		return SingleClick
-	case 2:
-		return DoubleClick
-	default:
-		return TripleClick
-	}
+	return ClickType(c.clickCount)
 }
 
 // Reset clears the click history, causing the next click to be treated as single-click.
@@ -88,10 +99,7 @@ func (c *ClickDetector) LastClickTime() time.Time {
 	return c.lastClickTime
 }
 
-// ClickCount returns the current click count (1, 2, or 3).
+// ClickCount returns the current click count (0 before any click, 1..MaxClickType).
 func (c *ClickDetector) ClickCount() int {
-	if c.clickCount == 0 {
-		return 0
-	}
 	return c.clickCount
 }

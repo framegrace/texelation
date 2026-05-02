@@ -79,6 +79,21 @@ type MainScreen interface {
 	// fall back to writeTop-relative projection.
 	CursorToView() (viewRow, viewCol int, ok bool)
 
+	// PointToView is the reflow-aware version of "where on screen does
+	// this (gid, col) appear?" — needed because a wrapped logical line
+	// occupies multiple visual rows and the naive gid-as-row math gets
+	// the highlight position wrong post-resize. Returns ok=false when
+	// the point isn't inside the currently-rendered window.
+	PointToView(globalIdx int64, col int) (viewRow, viewCol int, ok bool)
+
+	// PointFromView is the inverse: given a viewport (row, col), find
+	// the (globalIdx, col) the visual cell represents. Used by mouse
+	// input so a click in the second wrapped row of a logical line
+	// resolves to the correct (gid, col) in the chain — not the next
+	// gid down. Returns ok=false when the viewport position isn't in
+	// the rendered window.
+	PointFromView(viewRow, viewCol int) (globalIdx int64, col int, ok bool)
+
 	// Scroll methods keep the sparse ViewWindow in sync with user
 	// navigation. Without these, Grid() would always show the live edge.
 	ScrollUp(n int)

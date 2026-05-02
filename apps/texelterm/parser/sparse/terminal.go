@@ -277,6 +277,25 @@ func (t *Terminal) CursorToView() (viewRow, viewCol int, ok bool) {
 	return t.view.CursorToView(t.store, gi, col)
 }
 
+// PointToView maps an arbitrary content position (globalIdx, col) to its
+// reflow-aware viewport (row, col). Used by selection rendering so the
+// highlight tracks where a cell is *actually drawn* after wrapping —
+// the naive (gid - visibleTop) mapping is wrong whenever a logical line
+// spans multiple visual rows. Returns ok=false when the point is
+// outside the currently-rendered window.
+func (t *Terminal) PointToView(globalIdx int64, col int) (viewRow, viewCol int, ok bool) {
+	return t.view.CursorToView(t.store, globalIdx, col)
+}
+
+// PointFromView is the inverse of PointToView: given a viewport
+// (row, col), return the content (globalIdx, col) it represents.
+// Used by selection input so a click/drag at a visual row maps to the
+// correct logical line and column even when the row is part of a
+// reflowed wrap chain.
+func (t *Terminal) PointFromView(viewRow, viewCol int) (globalIdx int64, col int, ok bool) {
+	return t.view.ViewToCursor(t.store, viewRow, viewCol)
+}
+
 // RenderReflow produces the viewport via the reflow-aware ViewWindow.Render
 // path. Recomputes the live anchor from the cursor's chain first so that
 // autoFollow keeps the cursor on the bottom row of the viewport. This is the

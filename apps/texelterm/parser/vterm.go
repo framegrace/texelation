@@ -588,10 +588,18 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 	if v.mainScreen == nil {
 		return 0, 0, false, false
 	}
+	// Naive 1-gid-per-row mapping. KNOWN LIMITATION: when a logical
+	// line wraps across multiple visual rows the click→content gid is
+	// off by the wrap continuation count — fixing that requires a
+	// reflow-aware walk that's coupled to how the renderer actually
+	// laid out the chains, and an earlier attempt at it (b1cc1ee, now
+	// reverted) drifted away from the renderer's chain-head row tagging
+	// in production. Leaving the simpler-and-stable behaviour here
+	// until the rendering side exposes a definitive (gid, col) → row
+	// table the selection layer can consult instead of computing.
 	visibleTop, _ := v.mainScreen.VisibleRange()
 	logicalLine = visibleTop + int64(y)
 	charOffset = x
-	// Check if this is the current cursor line.
 	cursorLine, _ := v.mainScreen.Cursor()
 	isCurrentLine = logicalLine == cursorLine
 	ok = true
@@ -600,9 +608,12 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 
 // ContentToViewport converts content coordinates to viewport coordinates.
 // Returns (y, x, visible) where visible is true if content is on screen.
+//
+// Same naive-math caveat as ViewportToContent — the highlight tracks
+// the wrong visual row for cells inside a wrap continuation. Don't
+// consult the reflow walk until it's clearly inverse-of-renderer.
 func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, visible bool) {
 	if v.inAltScreen {
-		// Alt screen: direct mapping
 		if v.width <= 0 {
 			return 0, 0, false
 		}
@@ -635,10 +646,26 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 		return ""
 	}
 
-	// Extract text from sparse store line range.
+	// Extract text from sparse store line range. Rows that have been
+	// evicted from the in-memory store fault back in from the
+	// PageStore (when one is attached); without this a selection that
+	// reaches into far scrollback would silently drop the off-store
+	// rows.
+	//
+	// Wrapped chains (gid_n's last cell has Wrapped=true → gid_n+1
+	// continues the same logical line) join WITHOUT a separator. A
+	// chain break inserts \n. Without this rule, copying a long
+	// wrapped command line picks up spurious \n between the gids that
+	// the chain comprises — visually one line on screen, multiple
+	// lines in the clipboard.
 	var result []rune
 	for lineIdx := startLine; lineIdx <= endLine; lineIdx++ {
 		cells := v.mainScreen.ReadLine(lineIdx)
+		if cells == nil && v.mainScreenPageStore != nil {
+			if line, err := v.mainScreenPageStore.ReadLine(lineIdx); err == nil && line != nil {
+				cells = line.Cells
+			}
+		}
 		if cells == nil {
 			continue
 		}
@@ -651,7 +678,15 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 			end = endOffset
 		}
 
-		// Extract and trim trailing spaces from each line
+		isChainHead := false
+		if n := len(cells); n > 0 && cells[n-1].Wrapped && lineIdx < endLine {
+			// This row continues into the next gid as part of the same
+			// wrapped logical line. Keep its content flush — no
+			// trailing-space trim (the trailing cell is content of the
+			// next visual row, not padding).
+			isChainHead = true
+		}
+
 		var lineRunes []rune
 		for i := start; i < end && i < len(cells); i++ {
 			r := cells[i].Rune
@@ -661,13 +696,17 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 			lineRunes = append(lineRunes, r)
 		}
 
-		// Trim trailing spaces
-		trimmed := strings.TrimRight(string(lineRunes), " ")
-		result = append(result, []rune(trimmed)...)
+		if isChainHead {
+			result = append(result, lineRunes...)
+		} else {
+			trimmed := strings.TrimRight(string(lineRunes), " ")
+			result = append(result, []rune(trimmed)...)
+		}
 
-		// Add newline between lines (but not at the end)
 		if lineIdx < endLine {
-			result = append(result, '\n')
+			if !isChainHead {
+				result = append(result, '\n')
+			}
 		}
 	}
 
