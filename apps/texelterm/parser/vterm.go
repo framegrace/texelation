@@ -588,18 +588,19 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 	if v.mainScreen == nil {
 		return 0, 0, false, false
 	}
-	cursorLine, _ := v.mainScreen.Cursor()
-	// Reflow-aware path first: resolves which (gid, col) the visual
-	// (y, x) represents even when a logical line wraps across multiple
-	// rows. Falls back to naive math when the view-walk can't place the
-	// point (rows outside the rendered window) so existing callers
-	// keep working for unrendered positions.
-	if gi, col, mok := v.mainScreen.PointFromView(y, x); mok {
-		return gi, col, gi == cursorLine, true
-	}
+	// Naive 1-gid-per-row mapping. KNOWN LIMITATION: when a logical
+	// line wraps across multiple visual rows the click→content gid is
+	// off by the wrap continuation count — fixing that requires a
+	// reflow-aware walk that's coupled to how the renderer actually
+	// laid out the chains, and an earlier attempt at it (b1cc1ee, now
+	// reverted) drifted away from the renderer's chain-head row tagging
+	// in production. Leaving the simpler-and-stable behaviour here
+	// until the rendering side exposes a definitive (gid, col) → row
+	// table the selection layer can consult instead of computing.
 	visibleTop, _ := v.mainScreen.VisibleRange()
 	logicalLine = visibleTop + int64(y)
 	charOffset = x
+	cursorLine, _ := v.mainScreen.Cursor()
 	isCurrentLine = logicalLine == cursorLine
 	ok = true
 	return
@@ -607,9 +608,12 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 
 // ContentToViewport converts content coordinates to viewport coordinates.
 // Returns (y, x, visible) where visible is true if content is on screen.
+//
+// Same naive-math caveat as ViewportToContent — the highlight tracks
+// the wrong visual row for cells inside a wrap continuation. Don't
+// consult the reflow walk until it's clearly inverse-of-renderer.
 func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, visible bool) {
 	if v.inAltScreen {
-		// Alt screen: direct mapping
 		if v.width <= 0 {
 			return 0, 0, false
 		}
@@ -621,19 +625,10 @@ func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, 
 	if v.mainScreen == nil {
 		return 0, 0, false
 	}
-	// The visibility test stays based on the (gid in visible range)
-	// check — that semantics is what selection-rendering's
-	// "neither-visible / start-not-visible / end-not-visible" branches
-	// were tuned against. The reflow-aware mapping is consulted only
-	// to refine the (y, x) values; on miss we fall back to naive
-	// math so single-line selections never silently disappear.
 	visibleTop, visibleBottom := v.mainScreen.VisibleRange()
 	rowOffset := logicalLine - visibleTop
 	if rowOffset < 0 || rowOffset > visibleBottom-visibleTop {
 		return 0, 0, false
-	}
-	if vy, vx, mok := v.mainScreen.PointToView(logicalLine, charOffset); mok && vy >= 0 && vy < v.height {
-		return vy, vx, true
 	}
 	y = int(rowOffset)
 	x = charOffset
