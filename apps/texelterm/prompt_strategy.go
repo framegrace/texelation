@@ -43,6 +43,14 @@ type VTermProvider interface {
 	Grid() [][]parser.Cell
 	// GetContentText extracts text from the given content coordinate range.
 	GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string
+	// PromptStartLine returns the global line of the most recent OSC 133;A
+	// shell-prompt start, or -1 when no prompt anchor has been seen.
+	// Used by SelectionMode.Command to bracket the current command range.
+	PromptStartLine() int64
+	// ContentEndLine returns the highest global line that has ever been
+	// written. Used by SelectionMode.Command as the "next prompt or end of
+	// buffer" upper bound when no later prompt anchor exists.
+	ContentEndLine() int64
 }
 
 // ShellAwarePromptStrategy uses OSC 133 shell integration and pattern matching
@@ -217,4 +225,15 @@ func (a *vtermAdapter) Grid() [][]parser.Cell {
 
 func (a *vtermAdapter) GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string {
 	return a.vterm.GetContentText(startLine, startOffset, endLine, endOffset)
+}
+
+func (a *vtermAdapter) PromptStartLine() int64 {
+	return a.vterm.PromptStartGlobalLine
+}
+
+func (a *vtermAdapter) ContentEndLine() int64 {
+	if a.vterm == nil {
+		return 0
+	}
+	return a.vterm.ContentEnd()
 }

@@ -43,6 +43,9 @@ func (m *mockVTermProviderForPrompt) GetContentText(startLine int64, startOffset
 	return m.contentText
 }
 
+func (m *mockVTermProviderForPrompt) PromptStartLine() int64 { return -1 }
+func (m *mockVTermProviderForPrompt) ContentEndLine() int64  { return 0 }
+
 func (m *mockVTermProviderForPrompt) ViewportRow(row int) []parser.Cell {
 	if cells, ok := m.viewportRows[row]; ok {
 		return cells

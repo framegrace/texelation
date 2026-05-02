@@ -14,9 +14,97 @@ import (
 )
 
 // isWordChar determines if a rune is part of a word (alphanumeric, underscore, or dash).
+// Used by SelectionModeWord — punctuation breaks the word.
 func isWordChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
 		(r >= '0' && r <= '9') || r == '_' || r == '-'
+}
+
+// isSpaceWordChar treats only whitespace as a separator. Used by
+// SelectionModeSpaceWord so that "path/to/file.txt" or "user@host" or
+// "https://example.com/x?y=1" are selected as single units.
+func isSpaceWordChar(r rune) bool {
+	if r == 0 {
+		return false
+	}
+	return r != ' ' && r != '\t' && r != '\n' && r != '\r'
+}
+
+// SelectionMode names the discrete selection modes the state machine
+// supports. Both the click handler and a future floating menu (or
+// keyboard binding) can request a mode by name; click count is purely
+// the input-event side of the wiring.
+type SelectionMode int
+
+const (
+	// SelectionModeChar — character-by-character drag (single click).
+	SelectionModeChar SelectionMode = iota
+	// SelectionModeSpaceWord — whitespace-bounded "atom" (double click):
+	// selects "path/to/file.txt" as a single token. Useful for paths,
+	// URLs, identifiers with punctuation.
+	SelectionModeSpaceWord
+	// SelectionModeWord — non-word-character bounded word (triple click):
+	// the historical word selection. Letters / digits / "_" / "-" only;
+	// punctuation breaks the word.
+	SelectionModeWord
+	// SelectionModeLine — entire visible line at the click position
+	// (quadruple click).
+	SelectionModeLine
+	// SelectionModeCommand — the shell command the click fell within
+	// (quintuple click): from the most recent OSC 133;A prompt anchor at
+	// or before the click, to the next prompt or the end of the buffer.
+	// Falls back to SelectionModeLine when no usable anchor is known.
+	SelectionModeCommand
+)
+
+// String returns a human-readable label for the mode. Used by future
+// floating-menu UI and for diagnostic logging.
+func (m SelectionMode) String() string {
+	switch m {
+	case SelectionModeChar:
+		return "char"
+	case SelectionModeSpaceWord:
+		return "space-word"
+	case SelectionModeWord:
+		return "word"
+	case SelectionModeLine:
+		return "line"
+	case SelectionModeCommand:
+		return "command"
+	}
+	return "unknown"
+}
+
+// AllSelectionModes returns the discrete selection modes that a future
+// floating menu (or keyboard binding) should expose. SelectionModeChar
+// is omitted: it's the default "drag to select" interaction and isn't
+// a menu item users would pick. The returned slice is in the order the
+// menu should display.
+func AllSelectionModes() []SelectionMode {
+	return []SelectionMode{
+		SelectionModeSpaceWord,
+		SelectionModeWord,
+		SelectionModeLine,
+		SelectionModeCommand,
+	}
+}
+
+// SelectionModeForClickCount maps a 1..MaxClickType count to its
+// selection mode. Centralised so the click handler, future menu
+// shortcuts, and tests stay in agreement.
+func SelectionModeForClickCount(n int) SelectionMode {
+	switch n {
+	case 2:
+		return SelectionModeSpaceWord
+	case 3:
+		return SelectionModeWord
+	case 4:
+		return SelectionModeLine
+	case 5:
+		return SelectionModeCommand
+	default:
+		return SelectionModeChar
+	}
 }
 
 // SelectionState represents the current state of the selection process.
@@ -84,28 +172,40 @@ func (s *SelectionStateMachine) SetSize(width, height int) {
 // logicalLine is -1 for the current uncommitted line.
 // viewportRow is used for coordinate conversion.
 func (s *SelectionStateMachine) Start(logicalLine int64, charOffset int, viewportRow int, clickType ClickType, modifiers tcell.ModMask) {
-	s.selection = Selection{
-		Rendered: true,
-	}
+	s.StartMode(SelectionModeForClickCount(int(clickType)), logicalLine, charOffset, viewportRow, modifiers)
+}
 
-	switch clickType {
-	case SingleClick:
-		// Character-by-character selection
+// StartMode applies a selection mode at the given content position.
+// This is the public entry point for both click-driven selection (via
+// Start) and any future input source — keyboard shortcuts, a floating
+// "selection mode" menu, or programmatic API calls. Each mode resolves
+// its own anchor / head against the VTermProvider; SelectionModeChar
+// stays in StateDragging so the caller can extend by mouse drag.
+func (s *SelectionStateMachine) StartMode(mode SelectionMode, logicalLine int64, charOffset int, viewportRow int, modifiers tcell.ModMask) {
+	s.selection = Selection{Rendered: true}
+
+	switch mode {
+	case SelectionModeChar:
 		s.selection.AnchorLine = logicalLine
 		s.selection.AnchorOffset = charOffset
 		s.selection.CurrentLine = logicalLine
 		s.selection.CurrentOffset = charOffset
 		s.state = StateDragging
-
-	case DoubleClick:
-		// Word selection
-		s.selectWord(logicalLine, charOffset, viewportRow)
+	case SelectionModeSpaceWord:
+		s.selectAtom(logicalLine, charOffset, viewportRow, isSpaceWordChar)
 		s.state = StateMultiClickHeld
-
-	case TripleClick:
-		// Line selection
+	case SelectionModeWord:
+		s.selectAtom(logicalLine, charOffset, viewportRow, isWordChar)
+		s.state = StateMultiClickHeld
+	case SelectionModeLine:
 		s.selectLine(logicalLine, charOffset, viewportRow)
 		s.state = StateMultiClickHeld
+	case SelectionModeCommand:
+		s.selectCommand(logicalLine, charOffset, viewportRow)
+		s.state = StateMultiClickHeld
+	default:
+		s.state = StateIdle
+		s.selection = Selection{}
 	}
 }
 
@@ -202,29 +302,16 @@ func (s *SelectionStateMachine) SelectionRange() (startLine int64, startOffset i
 	return startLine, startOffset, endLine, endOffset, true
 }
 
-// selectWord selects the word at the given content position.
-func (s *SelectionStateMachine) selectWord(logicalLine int64, charOffset int, viewportRow int) {
+// selectAtom selects the maximal run of "atom" characters surrounding the
+// click, using isAtom to define what counts as an atom character.
+// SelectionModeSpaceWord uses isSpaceWordChar (whitespace-bounded);
+// SelectionModeWord uses isWordChar (alphanumeric + _ -).
+func (s *SelectionStateMachine) selectAtom(logicalLine int64, charOffset int, viewportRow int, isAtom func(r rune) bool) {
 	if s.vtermProvider == nil {
 		return
 	}
 
-	// Get cells for the full logical line (not just viewport row)
-	var cells []parser.Cell
-	if logicalLine < 0 {
-		// Current line - get full line from display buffer
-		cells = s.vtermProvider.CurrentLineCells()
-		if cells == nil {
-			// Fallback to grid if display buffer not available
-			grid := s.vtermProvider.Grid()
-			if grid != nil && viewportRow >= 0 && viewportRow < len(grid) {
-				cells = grid[viewportRow]
-			}
-		}
-	} else {
-		// Historical line
-		cells = s.vtermProvider.HistoryLineCopy(int(logicalLine))
-	}
-
+	cells := s.lineCellsAt(logicalLine, viewportRow)
 	if len(cells) == 0 {
 		s.selection.AnchorLine = logicalLine
 		s.selection.AnchorOffset = charOffset
@@ -233,7 +320,6 @@ func (s *SelectionStateMachine) selectWord(logicalLine int64, charOffset int, vi
 		return
 	}
 
-	// Clamp charOffset to valid range
 	if charOffset >= len(cells) {
 		charOffset = len(cells) - 1
 	}
@@ -241,8 +327,8 @@ func (s *SelectionStateMachine) selectWord(logicalLine int64, charOffset int, vi
 		charOffset = 0
 	}
 
-	// If clicking on whitespace, select nothing meaningful
-	if !isWordChar(cells[charOffset].Rune) {
+	if !isAtom(cells[charOffset].Rune) {
+		// Click landed on a separator — degenerate zero-width selection.
 		s.selection.AnchorLine = logicalLine
 		s.selection.AnchorOffset = charOffset
 		s.selection.CurrentLine = logicalLine
@@ -250,22 +336,101 @@ func (s *SelectionStateMachine) selectWord(logicalLine int64, charOffset int, vi
 		return
 	}
 
-	// Find start of word
 	start := charOffset
-	for start > 0 && isWordChar(cells[start-1].Rune) {
+	for start > 0 && isAtom(cells[start-1].Rune) {
 		start--
 	}
-
-	// Find end of word
 	end := charOffset
-	for end < len(cells)-1 && isWordChar(cells[end+1].Rune) {
+	for end < len(cells)-1 && isAtom(cells[end+1].Rune) {
 		end++
 	}
 
 	s.selection.AnchorLine = logicalLine
 	s.selection.AnchorOffset = start
 	s.selection.CurrentLine = logicalLine
-	s.selection.CurrentOffset = end + 1 // +1 to make offset exclusive (like slice end)
+	s.selection.CurrentOffset = end + 1 // exclusive
+}
+
+// lineCellsAt returns the cells for the given logical line, falling back
+// to the current grid row when the line is the uncommitted current line
+// (logicalLine == -1).
+func (s *SelectionStateMachine) lineCellsAt(logicalLine int64, viewportRow int) []parser.Cell {
+	if logicalLine < 0 {
+		cells := s.vtermProvider.CurrentLineCells()
+		if cells != nil {
+			return cells
+		}
+		grid := s.vtermProvider.Grid()
+		if grid != nil && viewportRow >= 0 && viewportRow < len(grid) {
+			return grid[viewportRow]
+		}
+		return nil
+	}
+	return s.vtermProvider.HistoryLineCopy(int(logicalLine))
+}
+
+// selectCommand selects the shell command the click fell within: from
+// the most recent OSC 133;A prompt anchor at-or-before the click line,
+// to the next prompt anchor (or end-of-buffer if there isn't one yet).
+//
+// Plan-C-style "prompt history" isn't tracked yet — VTerm exposes only
+// the latest prompt anchor. So:
+//
+//   - If a prompt anchor is known and the click is at-or-after it, the
+//     selection runs from that anchor to ContentEndLine — i.e. "the
+//     command currently on screen."
+//   - If the click is before the known prompt anchor, the selection
+//     runs from the start of the buffer up to the prompt-1 — "everything
+//     before the current prompt."
+//   - If no anchor is known at all, fall back to selectLine.
+//
+// When per-prompt history lands, this resolver becomes "find the prompt
+// at-or-before line, and the next prompt after line" without changing
+// the public surface.
+func (s *SelectionStateMachine) selectCommand(logicalLine int64, charOffset int, viewportRow int) {
+	if s.vtermProvider == nil {
+		s.selectLine(logicalLine, charOffset, viewportRow)
+		return
+	}
+	promptStart := s.vtermProvider.PromptStartLine()
+	if promptStart < 0 {
+		s.selectLine(logicalLine, charOffset, viewportRow)
+		return
+	}
+	contentEnd := s.vtermProvider.ContentEndLine()
+
+	// Resolve effective click line: clicks on the current uncommitted
+	// line behave as if they landed at ContentEnd.
+	effectiveLine := logicalLine
+	if effectiveLine < 0 {
+		effectiveLine = contentEnd
+	}
+
+	var startLine, endLine int64
+	if effectiveLine >= promptStart {
+		// Click is in (or at the start of) the current command. Range
+		// spans the full command output area.
+		startLine = promptStart
+		endLine = contentEnd
+	} else {
+		// Click is in older scrollback. Without per-prompt history we
+		// don't know where its enclosing prompt began, so anchor to
+		// buffer start; the upper bound is the known prompt's line.
+		startLine = 0
+		endLine = promptStart - 1
+		if endLine < startLine {
+			s.selectLine(logicalLine, charOffset, viewportRow)
+			return
+		}
+	}
+
+	// Anchor at column 0 of the start line; head one-past-the-last-cell
+	// of the end line so trailing content is included.
+	endCells := s.lineCellsAt(endLine, viewportRow)
+	s.selection.AnchorLine = startLine
+	s.selection.AnchorOffset = 0
+	s.selection.CurrentLine = endLine
+	s.selection.CurrentOffset = len(endCells)
 }
 
 // selectLine selects the entire logical line at the given position.

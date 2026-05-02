@@ -22,6 +22,8 @@ type mockVTermProvider struct {
 	currentLine    []parser.Cell
 	grid           [][]parser.Cell
 	contentText    string
+	promptStart    int64
+	contentEnd     int64
 }
 
 func newMockVTermProvider() *mockVTermProvider {
@@ -55,6 +57,9 @@ func (m *mockVTermProvider) ViewportRow(row int) []parser.Cell {
 func (m *mockVTermProvider) GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string {
 	return m.contentText
 }
+
+func (m *mockVTermProvider) PromptStartLine() int64 { return m.promptStart }
+func (m *mockVTermProvider) ContentEndLine() int64  { return m.contentEnd }
 
 // Helper to create cells from string
 func cellsFromString(s string) []parser.Cell {
@@ -109,58 +114,179 @@ func TestSelectionStateMachine_SingleClickStartsDragging(t *testing.T) {
 	}
 }
 
-func TestSelectionStateMachine_DoubleClickSelectsWord(t *testing.T) {
+func TestSelectionStateMachine_DoubleClickSelectsSpaceWord(t *testing.T) {
 	mock := newMockVTermProvider()
-	mock.historyLines[5] = cellsFromString("hello world test")
+	// "path/to/file.txt" is one whitespace-bounded atom — double-click
+	// must capture the whole token, not break at "/" or ".".
+	mock.historyLines[5] = cellsFromString("hello path/to/file.txt end")
 	sm := newTestStateMachine(mock)
 	sm.SetSize(80, 24)
 
-	// Double-click on "world" (positions 6-10)
-	sm.Start(5, 8, 0, DoubleClick, 0)
+	sm.Start(5, 10, 0, DoubleClick, 0)
 
 	if sm.State() != StateMultiClickHeld {
-		t.Errorf("expected StateMultiClickHeld after double click, got %v", sm.State())
+		t.Errorf("state=%v, want StateMultiClickHeld", sm.State())
 	}
-
 	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
-		t.Fatal("expected valid selection range")
+		t.Fatal("no selection range")
 	}
 	if startLine != 5 || endLine != 5 {
-		t.Errorf("expected line 5, got start=%d end=%d", startLine, endLine)
+		t.Errorf("line=(%d..%d), want both 5", startLine, endLine)
 	}
+	// "hello " ends at col 6; "path/to/file.txt" runs cols 6..21
+	// (exclusive 22).
 	if startOffset != 6 {
-		t.Errorf("expected startOffset 6 (start of 'world'), got %d", startOffset)
+		t.Errorf("startOffset=%d, want 6 (start of 'path/to/file.txt')", startOffset)
 	}
-	if endOffset != 11 { // "world" is 5 chars, offset is exclusive
-		t.Errorf("expected endOffset 11 (end of 'world'), got %d", endOffset)
+	if endOffset != 22 {
+		t.Errorf("endOffset=%d, want 22 (exclusive end of 'path/to/file.txt')", endOffset)
 	}
 }
 
-func TestSelectionStateMachine_TripleClickSelectsLine(t *testing.T) {
+func TestSelectionStateMachine_TripleClickSelectsWord(t *testing.T) {
+	mock := newMockVTermProvider()
+	mock.historyLines[5] = cellsFromString("hello path/to/file.txt end")
+	sm := newTestStateMachine(mock)
+	sm.SetSize(80, 24)
+
+	// Triple-click on the 'i' of "file" (col 14). Word selection treats
+	// '/' and '.' as separators, so we get just "file".
+	sm.Start(5, 14, 0, TripleClick, 0)
+
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
+	if !ok {
+		t.Fatal("no selection range")
+	}
+	if startLine != 5 || endLine != 5 {
+		t.Errorf("line=(%d..%d), want both 5", startLine, endLine)
+	}
+	// "file" runs cols 14..17 (exclusive 18).
+	if startOffset != 14 || endOffset != 18 {
+		t.Errorf("range=[%d,%d), want [14,18) for 'file'", startOffset, endOffset)
+	}
+}
+
+func TestSelectionStateMachine_QuadrupleClickSelectsLine(t *testing.T) {
 	mock := newMockVTermProvider()
 	mock.historyLines[5] = cellsFromString("hello world test")
 	sm := newTestStateMachine(mock)
 	sm.SetSize(80, 24)
 
-	sm.Start(5, 8, 0, TripleClick, 0)
-
-	if sm.State() != StateMultiClickHeld {
-		t.Errorf("expected StateMultiClickHeld after triple click, got %v", sm.State())
-	}
+	sm.Start(5, 8, 0, QuadrupleClick, 0)
 
 	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
-		t.Fatal("expected valid selection range")
+		t.Fatal("no selection range")
 	}
 	if startLine != 5 || endLine != 5 {
-		t.Errorf("expected line 5, got start=%d end=%d", startLine, endLine)
+		t.Errorf("line=(%d..%d), want both 5", startLine, endLine)
+	}
+	if startOffset != 0 || endOffset != 16 {
+		t.Errorf("range=[%d,%d), want [0,16)", startOffset, endOffset)
+	}
+}
+
+func TestSelectionStateMachine_QuintupleClickSelectsCommand(t *testing.T) {
+	mock := newMockVTermProvider()
+	// Three lines forming a "command" with the prompt anchor at line 5.
+	mock.historyLines[5] = cellsFromString("$ echo hi")
+	mock.historyLines[6] = cellsFromString("hi")
+	mock.historyLines[7] = cellsFromString("$")
+	mock.promptStart = 5
+	mock.contentEnd = 7
+	sm := newTestStateMachine(mock)
+	sm.SetSize(80, 24)
+
+	// Click anywhere inside the command (e.g. on the output).
+	sm.Start(6, 0, 0, QuintupleClick, 0)
+
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
+	if !ok {
+		t.Fatal("no selection range")
+	}
+	if startLine != 5 {
+		t.Errorf("startLine=%d, want 5 (prompt anchor)", startLine)
+	}
+	if endLine != 7 {
+		t.Errorf("endLine=%d, want 7 (content end)", endLine)
 	}
 	if startOffset != 0 {
-		t.Errorf("expected startOffset 0 (start of line), got %d", startOffset)
+		t.Errorf("startOffset=%d, want 0", startOffset)
 	}
-	if endOffset != 16 { // "hello world test" is 16 chars
-		t.Errorf("expected endOffset 16 (end of line), got %d", endOffset)
+	// endOffset = len of last line (1 char "$").
+	if endOffset != 1 {
+		t.Errorf("endOffset=%d, want 1", endOffset)
+	}
+}
+
+func TestSelectionStateMachine_QuintupleClick_NoAnchorFallsBackToLine(t *testing.T) {
+	mock := newMockVTermProvider()
+	mock.historyLines[5] = cellsFromString("only this line")
+	mock.promptStart = -1 // no shell integration
+	mock.contentEnd = 0
+	sm := newTestStateMachine(mock)
+	sm.SetSize(80, 24)
+
+	sm.Start(5, 4, 0, QuintupleClick, 0)
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
+	if !ok {
+		t.Fatal("no selection range")
+	}
+	if startLine != 5 || endLine != 5 || startOffset != 0 || endOffset != 14 {
+		t.Errorf("fallback range=[%d/%d,%d/%d), want [5/0,5/14)",
+			startLine, startOffset, endLine, endOffset)
+	}
+}
+
+func TestSelectionModeForClickCount(t *testing.T) {
+	cases := []struct {
+		count int
+		want  SelectionMode
+	}{
+		{1, SelectionModeChar},
+		{2, SelectionModeSpaceWord},
+		{3, SelectionModeWord},
+		{4, SelectionModeLine},
+		{5, SelectionModeCommand},
+		{0, SelectionModeChar},   // out-of-range falls back to Char
+		{99, SelectionModeChar},  // ditto
+	}
+	for _, c := range cases {
+		if got := SelectionModeForClickCount(c.count); got != c.want {
+			t.Errorf("SelectionModeForClickCount(%d)=%v, want %v", c.count, got, c.want)
+		}
+	}
+}
+
+// TestSelectionStateMachine_StartMode_DirectInvocation guards the
+// public StartMode entry point so a future floating menu (or keyboard
+// shortcut) can request a mode without going through ClickType.
+func TestSelectionStateMachine_StartMode_DirectInvocation(t *testing.T) {
+	mock := newMockVTermProvider()
+	mock.historyLines[5] = cellsFromString("alpha beta gamma")
+	sm := newTestStateMachine(mock)
+	sm.SetSize(80, 24)
+
+	// Word mode at col 7 ("beta"): expect [6,10).
+	sm.StartMode(SelectionModeWord, 5, 7, 0, 0)
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
+	if !ok {
+		t.Fatal("StartMode(Word) produced no range")
+	}
+	if startLine != 5 || endLine != 5 || startOffset != 6 || endOffset != 10 {
+		t.Errorf("Word range=[%d/%d,%d/%d), want [5/6,5/10)",
+			startLine, startOffset, endLine, endOffset)
+	}
+
+	// Switch to Line mode at the same position; expect full line.
+	sm.StartMode(SelectionModeLine, 5, 7, 0, 0)
+	_, startOffset, _, endOffset, ok = sm.SelectionRange()
+	if !ok {
+		t.Fatal("StartMode(Line) produced no range")
+	}
+	if startOffset != 0 || endOffset != 16 {
+		t.Errorf("Line range=[%d,%d), want [0,16)", startOffset, endOffset)
 	}
 }
 
