@@ -211,6 +211,24 @@ func (c *connection) writeControlMessage(msgType protocol.MessageType, payload [
 	return c.writeMessage(header, payload)
 }
 
+// sendBootProgress emits a best-effort progress message to the client
+// during expensive resume operations. Write errors are deliberately
+// swallowed: progress is purely cosmetic and a write failure mid-
+// resume would mean the connection is doomed anyway, in which case
+// the actual resume response will surface the real error. Encode
+// errors are programmer-class signals (unbounded message string,
+// encoding regression) that won't surface anywhere else, so we log
+// them — without that breadcrumb a future regression silently drops
+// every progress message.
+func (c *connection) sendBootProgress(message string) {
+	payload, err := protocol.EncodeBootProgress(protocol.BootProgress{Message: message})
+	if err != nil {
+		log.Printf("server: sendBootProgress encode failed: %v", err)
+		return
+	}
+	_ = c.writeControlMessage(protocol.MsgBootProgress, payload)
+}
+
 func (c *connection) writeMessage(header protocol.Header, payload []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()

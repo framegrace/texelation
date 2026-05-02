@@ -28,12 +28,21 @@ type Supervisor struct {
 	pidFile       PIDFile
 	startupWait   time.Duration
 	healthTimeout time.Duration
+	reporter      func(message string)
 }
 
 // SupervisorConfig configures the supervisor
 type SupervisorConfig struct {
 	StartupWait   time.Duration // How long to wait for server to become healthy after start
 	HealthTimeout time.Duration // Timeout for health checks
+
+	// Reporter, when set, replaces the supervisor's default
+	// fmt.Println for human-readable progress messages ("Starting
+	// texelation server...", "Cleaning up stale PID file..."). The
+	// boot splash uses this to surface those messages inside the
+	// splash dialog instead of corrupting the tcell-owned screen.
+	// nil-safe: default behavior is fmt.Println on stdout.
+	Reporter func(message string)
 }
 
 // DefaultSupervisorConfig returns sensible defaults
@@ -52,12 +61,17 @@ func NewSupervisor(daemon DaemonManager, health HealthChecker, pidFile PIDFile, 
 	if config.HealthTimeout == 0 {
 		config.HealthTimeout = 2 * time.Second
 	}
+	reporter := config.Reporter
+	if reporter == nil {
+		reporter = func(msg string) { fmt.Println(msg) }
+	}
 	return &Supervisor{
 		daemon:        daemon,
 		health:        health,
 		pidFile:       pidFile,
 		startupWait:   config.StartupWait,
 		healthTimeout: config.HealthTimeout,
+		reporter:      reporter,
 	}
 }
 
@@ -82,7 +96,7 @@ func (s *Supervisor) EnsureRunning(ctx context.Context, opts ServerOptions) (*St
 
 	case StateUnresponsive:
 		// Server is hung - force restart
-		fmt.Printf("Server is unresponsive (PID %d), restarting...\n", s.daemon.GetPID())
+		s.reporter(fmt.Sprintf("Server is unresponsive (PID %d), restarting...", s.daemon.GetPID()))
 		if err := s.daemon.Restart(ctx, opts); err != nil {
 			return nil, fmt.Errorf("restart unresponsive server: %w", err)
 		}
@@ -91,13 +105,13 @@ func (s *Supervisor) EnsureRunning(ctx context.Context, opts ServerOptions) (*St
 
 	case StateStale:
 		// PID file exists but process is gone - clean up and start
-		fmt.Println("Cleaning up stale PID file...")
+		s.reporter("Cleaning up stale PID file...")
 		s.pidFile.Remove()
 		fallthrough
 
 	case StateStopped, StateUnknown:
 		// Server not running - start it
-		fmt.Println("Starting texelation server...")
+		s.reporter("Starting texelation server...")
 		if err := s.daemon.Start(ctx, opts); err != nil {
 			return nil, fmt.Errorf("start server: %w", err)
 		}

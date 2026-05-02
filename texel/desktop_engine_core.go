@@ -139,6 +139,14 @@ type DesktopEngine struct {
 	pendingAppStartsMu sync.Mutex
 	pendingAppStarts   []*pane
 
+	// progressReporter, when set, receives short human-readable
+	// messages during slow boot phases (snapshot-restore app starts).
+	// The boot splash uses it to surface per-pane progress so a
+	// long SetViewportSize / StartPreparedApp loop doesn't sit on a
+	// single static message. Optional; nil-safe at call sites.
+	progressReporterMu sync.Mutex
+	progressReporter   func(string)
+
 	stateMu      sync.Mutex
 	hasLastState bool
 	lastState    StatePayload
@@ -911,6 +919,15 @@ func (d *DesktopEngine) PaneStates() []PaneStateSnapshot {
 	return states
 }
 
+// SetProgressReporter wires a callback that receives short
+// human-readable messages during slow boot phases. Pass nil to
+// detach. Safe to call from any goroutine.
+func (d *DesktopEngine) SetProgressReporter(fn func(string)) {
+	d.progressReporterMu.Lock()
+	d.progressReporter = fn
+	d.progressReporterMu.Unlock()
+}
+
 // SetViewportSize overrides the desktop viewport dimensions, typically used by
 // remote clients to dictate layout size.
 func (d *DesktopEngine) SetViewportSize(cols, rows int) {
@@ -946,8 +963,20 @@ func (d *DesktopEngine) startPendingApps() {
 		return
 	}
 
+	d.progressReporterMu.Lock()
+	report := d.progressReporter
+	d.progressReporterMu.Unlock()
+
 	debuglog.Printf("[RESTORE] Starting %d apps that were waiting for viewport dimensions", len(pending))
-	for _, p := range pending {
+	total := len(pending)
+	for i, p := range pending {
+		if report != nil {
+			title := p.getTitle()
+			if title == "" {
+				title = "untitled"
+			}
+			report(fmt.Sprintf("Restoring pane %d of %d (%s)…", i+1, total, title))
+		}
 		p.StartPreparedApp()
 	}
 

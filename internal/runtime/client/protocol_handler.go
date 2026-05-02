@@ -50,6 +50,7 @@ func handleControlMessage(state *clientState, hdr protocol.Header, payload []byt
 		cache.ApplySnapshot(snap)
 		applyPostResumeReset(state, lastSequence) // Plan D2: one-shot reset on post-resume snapshot
 		state.fullRenderNeeded = true
+		state.treeSnapshotApplied.Store(true)
 		if state.effects != nil {
 			state.effects.ResetPaneStates(cache.SortedPanes())
 		}
@@ -78,6 +79,17 @@ func handleControlMessage(state *clientState, hdr protocol.Header, payload []byt
 		}
 		cache.ApplyDelta(delta)
 		state.paneCacheFor(delta.PaneID).ApplyDelta(delta)
+		// Boot splash handoff signal. The server publishes a flush
+		// of decor-only BufferDeltas (Rows empty, DecorRows populated
+		// with pane borders) right after the resume snapshot — those
+		// don't carry any content yet, so they must not trigger a
+		// handoff. Only Rows count: DecorRows are pane borders the
+		// publisher emits on every flush even before pane buffers
+		// have hydrated, so a decor-only delta is a false positive
+		// for "the panes have content."
+		if len(delta.Rows) > 0 && !state.firstContentDelta.Load() {
+			state.firstContentDelta.Store(true)
+		}
 		// Update viewport tracker: alt-screen transitions + AutoFollow advance.
 		if state.viewports != nil {
 			state.onBufferDelta(delta)
@@ -121,6 +133,21 @@ func handleControlMessage(state *clientState, hdr protocol.Header, payload []byt
 			}
 		}
 		return true
+	case protocol.MsgBootProgress:
+		bp, err := protocol.DecodeBootProgress(payload)
+		if err != nil {
+			log.Printf("decode boot progress failed: %v", err)
+			return false
+		}
+		// Forward to the splash via the pre-registered callback.
+		// RequestResume only loops until the first non-progress reply;
+		// any subsequent server-side progress (e.g. handleClientReady
+		// emissions during the slow SetViewportSize phase on rehydrated
+		// cold starts) lands here. Returning false suppresses the
+		// renderCh signal — progress messages are pure splash UI and
+		// shouldn't drive the production renderer.
+		state.emitBootProgress(bp.Message)
+		return false
 	case protocol.MsgPing:
 		pong, _ := protocol.EncodePong(protocol.Pong{Timestamp: time.Now().UnixNano()})
 		// Pong is on the read path: blocking on a full writer queue would

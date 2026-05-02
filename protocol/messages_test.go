@@ -450,3 +450,47 @@ func TestEncodeDecodeTreeSnapshot_ZeroContent(t *testing.T) {
 		t.Fatalf("zero-content mismatch: got top=%d num=%d", decoded.Panes[0].ContentTopRow, decoded.Panes[0].NumContentRows)
 	}
 }
+
+func TestBootProgressRoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+	}{
+		{"typical", "Restoring pane 1 of 3 (Terminal)…"},
+		{"empty", ""},
+		{"unicode", "Loading session — élève à 100%"},
+		{"long", strings.Repeat("x", 200)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := EncodeBootProgress(BootProgress{Message: tc.msg})
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			decoded, err := DecodeBootProgress(payload)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if decoded.Message != tc.msg {
+				t.Fatalf("message mismatch: got %q want %q", decoded.Message, tc.msg)
+			}
+		})
+	}
+}
+
+func TestBootProgressDecode_TruncatedPayloadFails(t *testing.T) {
+	// Encode then truncate the body so the length prefix promises
+	// more bytes than the payload contains. Decode must error
+	// rather than panic — corrupted boot progress shouldn't tank
+	// the resume read loop.
+	payload, err := EncodeBootProgress(BootProgress{Message: "Restoring pane 1 of 3…"})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if len(payload) < 4 {
+		t.Fatalf("payload unexpectedly small: %d", len(payload))
+	}
+	if _, err := DecodeBootProgress(payload[:len(payload)-2]); err == nil {
+		t.Fatal("expected error on truncated payload, got nil")
+	}
+}

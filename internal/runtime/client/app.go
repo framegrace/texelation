@@ -30,6 +30,28 @@ import (
 
 const resizeDebounce = 10 * time.Millisecond
 
+// Stage names a milestone in client startup that an external splash
+// (texelation's boot package) renders to the user. Stage strings are
+// stable identifiers — the splash maps them to its own visual state.
+type Stage string
+
+const (
+	// StageConnecting fires before the protocol handshake.
+	StageConnecting Stage = "connecting"
+	// StageResuming fires before the resume request is sent. Skipped
+	// when no resume is needed (fresh start).
+	StageResuming Stage = "resuming"
+	// StageReady fires once the renderer is about to enter its main
+	// event loop. The splash should stop after seeing this.
+	StageReady Stage = "ready"
+)
+
+// StatusFn receives stage transitions during startup. The detail
+// string is optional context (e.g. "retrying after stale session").
+// The callback is invoked synchronously from Run's goroutine; keep
+// it cheap — defer expensive work to the splash's own paint loop.
+type StatusFn func(stage Stage, detail string)
+
 // Options configures the remote client runtime.
 type Options struct {
 	Socket                  string
@@ -37,6 +59,18 @@ type Options struct {
 	PanicLog                string
 	ShowRestartNotification bool   // Show notification that server was restarted
 	ClientName              string // --client-name slot for multi-client persistence (issue #199 Plan D)
+
+	// Screen, when set, is used in place of a freshly-created tcell
+	// screen. The caller owns its lifecycle: Init must already have
+	// been called and Fini is the caller's responsibility. This is
+	// how texelation hands off a screen that already showed a boot
+	// splash without forcing a Fini/Init flicker. When nil, Run
+	// creates and tears down a screen itself (the standalone path).
+	Screen tcell.Screen
+
+	// OnStatus, when set, is called at startup milestones (see Stage
+	// constants) so an external splash can update its display. nil-safe.
+	OnStatus StatusFn
 }
 
 func Run(opts Options) error {
@@ -74,6 +108,13 @@ func Run(opts Options) error {
 		sessionID = loadedState.SessionID
 	}
 
+	emitStatus := func(stage Stage, detail string) {
+		if opts.OnStatus != nil {
+			opts.OnStatus(stage, detail)
+		}
+	}
+
+	emitStatus(StageConnecting, "")
 	accept, conn, err := simple.Connect(&sessionID)
 	if err != nil && loadedState != nil {
 		// We sent a non-zero sessionID from disk and Connect failed.
@@ -94,6 +135,7 @@ func Run(opts Options) error {
 		}
 		loadedState = nil
 		sessionID = [16]byte{}
+		emitStatus(StageConnecting, "retrying with fresh session")
 		accept, conn, err = simple.Connect(&sessionID)
 	}
 	if err != nil {
@@ -185,7 +227,10 @@ func Run(opts Options) error {
 		}
 
 		state.resetOnNextSnapshot.Store(true)
-		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports)
+		emitStatus(StageResuming, "")
+		hdr, payload, err := simple.RequestResume(conn, sessionID, lastSequence.Load(), viewports, func(msg string) {
+			emitStatus(StageResuming, msg)
+		})
 		if err != nil {
 			// Plan D2: a failed resume must NOT leave the flag armed — a later
 			// resume against a different sessionID (after Plan D's wipe-and-retry
@@ -241,6 +286,14 @@ func Run(opts Options) error {
 
 	renderCh := make(chan struct{}, 64) // Larger buffer for smooth animations
 	state.setRenderChannel(renderCh)
+	// Wire MsgBootProgress messages received via readLoop into the
+	// splash. RequestResume drains progress messages until its first
+	// non-progress response, so anything emitted by the server later
+	// (handleClientReady's per-pane progress on rehydrated cold
+	// starts) only arrives via the read pump.
+	state.setBootProgressFn(func(msg string) {
+		emitStatus(StageResuming, msg)
+	})
 	doneCh := make(chan struct{})
 	panicLogger.Go("readLoop", func() {
 		readLoop(conn, state, sessionID, &lastSequence, renderCh, doneCh, writer, &pendingAck, ackSignal)
@@ -253,18 +306,32 @@ func Run(opts Options) error {
 		ackLoop(sessionID, writer, doneCh, &pendingAck, &lastAck, ackSignal)
 	})
 
-	screen, err := tcell.NewScreen()
-	if err != nil {
-		return fmt.Errorf("create screen failed: %w", err)
-	}
-	if err := screen.Init(); err != nil {
-		return fmt.Errorf("init screen failed: %w", err)
+	// Screen ownership: if the caller passed in a pre-initialized
+	// screen via opts.Screen, use it as-is and let the caller Fini.
+	// This is the texelation boot-splash handoff path — the screen
+	// already has the splash painted on it, and we want the first
+	// production frame to land on the same surface without a
+	// Fini → Init flicker. Standalone callers (no opts.Screen) get
+	// the legacy behaviour where Run owns the lifecycle.
+	screen := opts.Screen
+	ownsScreen := screen == nil
+	if ownsScreen {
+		var err error
+		screen, err = tcell.NewScreen()
+		if err != nil {
+			return fmt.Errorf("create screen failed: %w", err)
+		}
+		if err := screen.Init(); err != nil {
+			return fmt.Errorf("init screen failed: %w", err)
+		}
 	}
 	screen.EnablePaste()
 	screen.EnableMouse()
 	defer screen.DisableMouse()
 	screen.HideCursor()
-	defer screen.Fini()
+	if ownsScreen {
+		defer screen.Fini()
+	}
 	defer close(pingStop)
 
 	// Initialize Kitty graphics output if the terminal supports it.
@@ -284,7 +351,16 @@ func Run(opts Options) error {
 	// Send ClientReady with our dimensions so server can send properly-sized snapshot
 	sendClientReady(writer, sessionID, screen)
 
-	render(state, screen)
+	// First render before any server content has arrived produces a
+	// blank frame — clearing it now would expose that blankness if a
+	// boot splash is still on the screen. Skip the empty render and
+	// let the first event-loop render (driven by the server's first
+	// snapshot/delta on renderCh) be what the splash hands off to.
+	// firstContentRendered tracks that handoff: it stays false until
+	// the first data-driven render lands actual cells, at which point
+	// we emit StageReady so the splash runner can stop without
+	// leaving blank cells between itself and live content.
+	firstContentRendered := false
 
 	events := make(chan tcell.Event, 32)
 	stopEvents := make(chan struct{})
@@ -371,6 +447,30 @@ func Run(opts Options) error {
 				state.effects.Update(0)
 			}
 			render(state, screen)
+			// Splash handoff: stop only once a real TreeSnapshot has
+			// been applied AND a content-bearing delta has landed.
+			//
+			// On rehydrated cold starts the server defers
+			// TreeSnapshot to handleClientReady (so it lands at the
+			// client's real dimensions), and that handler runs the
+			// slow SetViewportSize → Snapshot chain. Before that,
+			// the publisher emits decor-only BufferDeltas that fire
+			// renderCh while the panes are still hydrating.
+			//
+			// Without the treeSnapshotApplied gate the splash hands
+			// off to a workspace that has no real content yet. The
+			// race: on the first renderCh tick, ensureBuffers
+			// returns resized=true (so fullRender runs and
+			// fullRenderHappened flips) and a decor-only BufferDelta
+			// already in flight can flip firstContentDelta during
+			// render(). Both flags would pass, the splash would
+			// stop, and the user would see only borders while
+			// handleClientReady's slow SetViewportSize → Snapshot
+			// chain finished.
+			if !firstContentRendered && state.bootHandoffReady() {
+				firstContentRendered = true
+				emitStatus(StageReady, "")
+			}
 
 		case ev, ok := <-events:
 			if !ok {

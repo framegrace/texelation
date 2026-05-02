@@ -148,6 +148,7 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 			return errors.New("server: resume request session mismatch")
 		}
 		c.resumeProcessed = true
+		c.sendBootProgress("Validating session…")
 		// Plan D2: a rehydrated session (one reconstructed from disk
 		// after a daemon restart) has an empty diff queue and
 		// nextSequence == 0, so the client's claimed LastSequence is
@@ -221,16 +222,35 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		// alt-screen guard in TexelTerm.RestoreViewport. Wrapped in a
 		// deferred recover so a panicking app cannot crash the connection.
 		if sinkOK && sink.Desktop() != nil {
+			// Count restorable panes for the progress dialog. Per-pane
+			// hydration is the dominant cost in this loop (sparse store
+			// loads scrollback rows from the on-disk page store), so
+			// "Restoring pane N/M" is the most useful breakdown the
+			// splash can show.
+			toRestore := 0
+			for _, ps := range viewportsToApply {
+				if !ps.AltScreen {
+					toRestore++
+				}
+			}
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
 						log.Printf("server: RestorePaneViewport panic: %v", r)
 					}
 				}()
+				done := 0
 				for _, ps := range viewportsToApply {
-					if !ps.AltScreen {
-						sink.Desktop().RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
+					if ps.AltScreen {
+						continue
 					}
+					done++
+					if toRestore > 1 {
+						c.sendBootProgress(fmt.Sprintf("Restoring pane %d of %d…", done, toRestore))
+					} else {
+						c.sendBootProgress("Restoring pane viewport…")
+					}
+					sink.Desktop().RestorePaneViewport(ps.PaneID, ps.ViewBottomIdx, ps.WrapSegmentIdx, ps.AutoFollow)
 				}
 			}()
 		}
@@ -250,6 +270,7 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		// the correct dims and ship a single coherent snapshot.
 		if !c.rehydrated {
 			if provider, ok := c.sink.(SnapshotProvider); ok {
+				c.sendBootProgress("Capturing snapshot…")
 				snapshot, err := provider.Snapshot()
 				if err != nil {
 					log.Printf("server: resume snapshot error: %v", err)
@@ -342,13 +363,29 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 		return
 	}
 
-	// Set viewport size with client's actual dimensions
+	// For rehydrated sessions handleClientReady is the heavy phase:
+	// SetViewportSize fires per-pane "Restoring pane…" via
+	// startPendingApps (which re-reflows each VTerm against its
+	// persisted scrollback) and sink.Snapshot() fires per-pane
+	// "Rendering pane…" via SnapshotForClient (which hits the WAL
+	// page store). Both routes hit disk-bound work, so per-pane
+	// progress is the honest granularity for the splash. Wire the
+	// reporter for the full duration here and clear it via defer
+	// so later runtime resizes don't ping a splash that no longer
+	// exists.
+	desktop.SetProgressReporter(func(msg string) {
+		c.sendBootProgress(msg)
+	})
+	defer desktop.SetProgressReporter(nil)
+
+	c.sendBootProgress(fmt.Sprintf("Resizing panes to %d×%d…", ready.Cols, ready.Rows))
 	desktop.SetViewportSize(int(ready.Cols), int(ready.Rows))
 
 	// Now send the snapshot with correct dimensions.
 	// Errors are logged so a frozen-looking client (no MsgTreeSnapshot
 	// after MsgClientReady ack) leaves a breadcrumb in the server log.
 	// Without this the symptom looks identical to a hang.
+	c.sendBootProgress("Capturing snapshot…")
 	snapshot, err := sink.Snapshot()
 	if err != nil {
 		log.Printf("server: handleClientReady snapshot error: %v", err)
@@ -357,6 +394,7 @@ func (c *connection) handleClientReady(ready protocol.ClientReady) {
 		return
 	}
 
+	c.sendBootProgress("Publishing initial frame…")
 	sink.Publish()
 
 	payload, err := protocol.EncodeTreeSnapshot(snapshot)

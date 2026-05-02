@@ -189,6 +189,15 @@ type ClientReady struct {
 	Rows uint16
 }
 
+// BootProgress is an unsolicited human-readable status string emitted
+// by the server during expensive resume operations so the client's
+// boot splash can render fine-grained progress instead of a static
+// "Loading session" stage. Payload is just the message — keep it
+// short (≤80 chars) so it fits the splash dialog without truncation.
+type BootProgress struct {
+	Message string
+}
+
 // PaneSnapshot describes the full buffer content for a single pane.
 type PaneSnapshot struct {
 	PaneID         [16]byte
@@ -957,6 +966,26 @@ func DecodeClientReady(b []byte) (ClientReady, error) {
 	r.Cols = binary.LittleEndian.Uint16(b[:2])
 	r.Rows = binary.LittleEndian.Uint16(b[2:4])
 	return r, nil
+}
+
+// EncodeBootProgress serialises a server-side boot progress message.
+// The payload is a single length-prefixed UTF-8 string; clients that
+// don't recognise the message type ignore it harmlessly.
+func EncodeBootProgress(p BootProgress) ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 4+len(p.Message)))
+	if err := encodeString(buf, p.Message); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// DecodeBootProgress parses a boot progress payload.
+func DecodeBootProgress(b []byte) (BootProgress, error) {
+	msg, _, err := decodeString(b)
+	if err != nil {
+		return BootProgress{}, err
+	}
+	return BootProgress{Message: msg}, nil
 }
 
 // EncodeTreeSnapshot serialises the tree snapshot for transport.
