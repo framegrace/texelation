@@ -1704,19 +1704,14 @@ func (a *TexelTerm) SetClipboard(mime string, data []byte) {
 	a.mu.Unlock()
 
 	if clipboard != nil {
-		// WORKAROUND for Wayland/tcell clipboard issue (tcell v2.13.8 on Wayland):
-		// The clipboard system loses lone LF characters but preserves CRLF.
-		// Convert LF to CRLF before storing to ensure newlines survive clipboard round-trip.
-		converted := make([]byte, 0, len(data)*2)
-		for _, b := range data {
-			if b == '\n' {
-				converted = append(converted, '\r', '\n')
-			} else {
-				converted = append(converted, b)
-			}
-		}
-
-		clipboard.SetClipboard(mime, converted)
+		// Pass the bytes through verbatim. An older revision converted
+		// LF → CRLF here as a Wayland/tcell workaround (clipboard
+		// stripped lone LFs). That conversion broke pasting into other
+		// applications, which see CRLF and treat it as two line breaks
+		// (double-spaced output). Modern tcell + terminals preserve LF;
+		// if a Wayland regression resurfaces, fix it at the layer that
+		// owns the clipboard transport.
+		clipboard.SetClipboard(mime, data)
 	} else {
 		log.Printf("CLIPBOARD DEBUG: %s SetClipboard called but clipboard service is nil! mime=%s, len=%d", title, mime, len(data))
 	}
