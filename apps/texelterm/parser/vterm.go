@@ -594,6 +594,14 @@ func (v *VTerm) HistoryLineCopy(index int) []Cell {
 // ViewportToContent converts viewport coordinates to content coordinates.
 // Returns (logicalLine, charOffset, isCurrentLine, ok).
 // logicalLine is -1 for the current uncommitted line.
+//
+// Consults the per-render mainScreenRowOrigin cache to project (y, x)
+// onto the cell-bearing (gid, col), so wrap-continuation rows resolve
+// to the correct logical position even when a single logical line
+// spans multiple visual rows. Falls back to naive (visibleTop+y, x)
+// math for sentinel rows (Gid == -1) and rows outside the cached
+// window — preserving prior behaviour for blank gaps and bottom
+// padding. Issue #224.
 func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, isCurrentLine bool, ok bool) {
 	if v.inAltScreen {
 		// Alt screen: treat as current line equivalent
@@ -603,19 +611,29 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 	if v.mainScreen == nil {
 		return 0, 0, false, false
 	}
-	// Naive 1-gid-per-row mapping. KNOWN LIMITATION: when a logical
-	// line wraps across multiple visual rows the click→content gid is
-	// off by the wrap continuation count — fixing that requires a
-	// reflow-aware walk that's coupled to how the renderer actually
-	// laid out the chains, and an earlier attempt at it (b1cc1ee, now
-	// reverted) drifted away from the renderer's chain-head row tagging
-	// in production. Leaving the simpler-and-stable behaviour here
-	// until the rendering side exposes a definitive (gid, col) → row
-	// table the selection layer can consult instead of computing.
+	cursorLine, _ := v.mainScreen.Cursor()
+
+	// Snapshot the cached origin for row y. Don't hold rowOriginMu
+	// across advanceCells — it acquires other locks via ReadLine.
+	v.mainScreenRowOriginMu.RLock()
+	var origin RowOrigin
+	inWindow := y >= 0 && y < len(v.mainScreenRowOrigin)
+	if inWindow {
+		origin = v.mainScreenRowOrigin[y]
+	}
+	v.mainScreenRowOriginMu.RUnlock()
+
+	if inWindow && origin.Gid != -1 {
+		gid, col := v.advanceCells(origin.Gid, origin.Col, x)
+		return gid, col, gid == cursorLine, true
+	}
+
+	// Fallback for rows outside the cached window or sentinel rows:
+	// use the naive (visibleTop + y, x) math, preserving pre-reflow
+	// behaviour for blank gaps and bottom padding.
 	visibleTop, _ := v.mainScreen.VisibleRange()
 	logicalLine = visibleTop + int64(y)
 	charOffset = x
-	cursorLine, _ := v.mainScreen.Cursor()
 	isCurrentLine = logicalLine == cursorLine
 	ok = true
 	return

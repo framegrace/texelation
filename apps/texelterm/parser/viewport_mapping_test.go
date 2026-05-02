@@ -126,3 +126,57 @@ func TestCellsBetween_TargetBeforeOrigin(t *testing.T) {
 		t.Errorf("cellsBetween(5,20 -> 5,5) returned ok=true; expected false")
 	}
 }
+
+func TestViewportToContent_WrappedContinuationRow(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+
+	// 100-char line wraps once at width 80, then resize to 40 forces
+	// a mid-gid wrap continuation: row 0 starts at (gid=0, col=0),
+	// row 1 starts at (gid=0, col=40) — same gid. This is precisely
+	// the case naive math gets wrong.
+	p := NewParser(v)
+	const long = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab" // 100 chars
+	for _, r := range long {
+		p.Parse(r)
+	}
+	p.Parse('\r')
+	p.Parse('\n')
+	v.Resize(40, 24)
+	// Render so mainScreenRowOrigin is populated.
+	_, _ = v.GridWithRowIdx()
+
+	// Sanity-check the test is exercising the intended layout:
+	// row 1 must be a mid-gid wrap continuation (Col != 0), otherwise
+	// the test reduces to naive math and tells us nothing.
+	if v.mainScreenRowOrigin[1].Col == 0 {
+		t.Fatalf("test setup didn't produce a mid-gid wrap continuation at row 1; got %+v",
+			v.mainScreenRowOrigin[1])
+	}
+
+	// Click at row 1, col 5. The naive implementation returns
+	// (visibleTop+1, 5). The origin-based implementation must return
+	// the cell-bearing (gid, col) — origin[1].Gid + col-walk-from-origin.
+	gid, col, _, ok := v.ViewportToContent(1, 5)
+	if !ok {
+		t.Fatalf("ViewportToContent(1, 5) ok=false")
+	}
+
+	// Independently re-derive what the answer should be from the cached
+	// origin slice — this gives a check that doesn't pre-suppose the
+	// implementation, but does require the origin slice to be built
+	// correctly (which Phase 1 covers).
+	o := v.mainScreenRowOrigin[1]
+	wantGid, wantCol := o.Gid, o.Col+5
+	// If +5 crosses a gid boundary in the chain, expand:
+	storeCells := v.mainScreen.ReadLine(o.Gid)
+	if wantCol >= len(storeCells) {
+		wantCol -= len(storeCells)
+		wantGid++
+	}
+	if gid != wantGid || col != wantCol {
+		t.Errorf("ViewportToContent(1,5)=(gid=%d,col=%d), want (%d,%d)",
+			gid, col, wantGid, wantCol)
+	}
+}
