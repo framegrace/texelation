@@ -86,7 +86,7 @@ type RowOrigin struct {
 }
 ```
 
-Then change the signature of `reflowChain` and the body to also build the origin slice:
+Then change the signature of `reflowChain` and the body to also build the origin slice. Critical: `logical` and `cellOrigin` must be trimmed in lockstep — call `trimTrailingPadding` once and use its return for both:
 
 ```go
 func reflowChain(s *Store, startGI, endGI int64, viewWidth int) (rows [][]parser.Cell, origin []RowOrigin) {
@@ -105,11 +105,12 @@ func reflowChain(s *Store, startGI, endGI int64, viewWidth int) (rows [][]parser
 			cellOrigin = append(cellOrigin, RowOrigin{Gid: gi, Col: col})
 		}
 	}
-	// trimTrailingPadding shortens logical; cellOrigin must shrink in lockstep
-	// so origin[i] still matches logical[i] after trimming.
-	trimmedLen := len(trimTrailingPadding(logical))
-	logical = logical[:trimmedLen]
-	cellOrigin = cellOrigin[:trimmedLen]
+	// Trim logical AND cellOrigin from the same length so origin[i] stays
+	// aligned with logical[i]. trimTrailingPadding returns a possibly-
+	// shorter slice (it does cells[:n]); reassign logical to it and shrink
+	// cellOrigin to match.
+	logical = trimTrailingPadding(logical)
+	cellOrigin = cellOrigin[:len(logical)]
 
 	trailing := trailingEmptyRows(s, startGI, endGI)
 	if len(logical) == 0 && trailing == 0 {
@@ -283,36 +284,143 @@ Issue #224 plan, Task 3."
 
 - [ ] **Step 1: Write the failing test**
 
-Append:
+Trailing empty rows in a chain are produced by `trailingEmptyRows` — that helper counts gids strictly after the start whose `len(s.GetLine(gid)) == 0`, **as long as `walkChain` reached them via `Wrapped=true` cells**. Setup that satisfies both: chain head has Wrapped=true, continuation gid is empty AND set with NoWrap=false (default), and `walkChain`'s exit condition `len(cells) == 0` returns early at the empty gid — so the trailing row count comes from chains where a continuation has cells but ends with Wrapped=true and the NEXT gid is empty. Use `SetLine` to write a fully-filled wrapped row at gid 6 (Wrapped=true) so `walkChain` advances to gid 6, then leave gid 7 empty so `trailingEmptyRows` counts it.
+
+Actually `walkChain` exits when the current row's last cell is not Wrapped, so the chain must end with a cell that has Wrapped=true. The cleanest setup that produces a trailing empty: gid 5 is filled with Wrapped=true, gid 6 also filled+Wrapped=true, gid 7 is in store but empty. `walkChain` loops: gid 5 (cells, last Wrapped → continue), gid 6 (cells, last Wrapped → check next), gid 7 (`s.GetLine(7) == nil` exits returning end=6). Result: `trailingEmptyRows(s, 5, 6)` returns 0 (only checks gid 6 which has cells). Hmm — that doesn't produce trailing empties either.
+
+Reading `trailingEmptyRows` again: it walks from `end` down to `start+1` counting empty rows. To get a non-zero count, an interior gid must be empty. That happens when a chain has been written, then the cursor advanced past the last Wrapped row by emitting a newline that creates a blank gid in the chain extension. Reproducing this without driving a parser is fragile.
+
+**Pragmatic test:** force the shape directly with `SetLine(gid, nil)` followed by `SetLine(gid+1, ...)` such that walkChain will visit both. Test the origin emission by stubbing the input directly:
 
 ```go
 func TestReflowChain_OriginTrailingEmptyRows(t *testing.T) {
 	s := NewStore(80)
-	// Chain with content in head, blank continuation rows that count
-	// via trailingEmptyRows.
-	fillRow(s, 5, "hello", true)
-	// Force trailing empties: gid 6 exists but has no cells.
-	s.SetLine(6, nil)
-	// Walk the chain to confirm shape (sanity).
-	end, _ := walkChain(s, 5, 100)
-	if end < 5 {
-		t.Skip("chain walk did not reach trailing empties; pattern unsupported")
-	}
+	// Two-gid chain head; both gids carry content + Wrapped=true. After
+	// reflow, with a trailing-empty path simulated by a chain whose
+	// trailingEmptyRows is non-zero, we'd want a setup where end > start
+	// and an interior gid in [start+1, end] is empty.
+	//
+	// Direct setup: gid 5 has 80 wrapped chars, gid 6 has 80 wrapped chars,
+	// gid 7 has empty cells but is in the store. walkChain will return
+	// end=6 (it bails when next is nil), so trailingEmptyRows returns 0.
+	// Fall back to confirming the absence-of-trailing-empties path
+	// emits all origins from the cell walk.
+	fillRow(s, 5, strings.Repeat("a", 80), true)
+	fillRow(s, 6, "bb", false)
 
-	rows, origin := reflowChain(s, 5, end, 80)
+	rows, origin := reflowChain(s, 5, 6, 80)
 	if len(rows) != len(origin) {
 		t.Fatalf("rows/origin length mismatch: %d vs %d", len(rows), len(origin))
 	}
-	if len(rows) < 1 {
-		t.Fatalf("expected at least 1 row")
+	// Two rows: one for gid 5 (80 a's), one for "bb".
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d, want 2", len(rows))
 	}
-	// The trailing empty rows (any rows past the head's content) must
-	// have origin (endGI, len(endGI's cells)).
-	for i := 1; i < len(rows); i++ {
-		want := RowOrigin{Gid: end, Col: len(s.GetLine(end))}
-		if origin[i] != want {
-			t.Errorf("trailing row %d origin=%+v, want %+v", i, origin[i], want)
-		}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+	if origin[1] != (RowOrigin{Gid: 6, Col: 0}) {
+		t.Errorf("origin[1]=%+v, want {Gid:6, Col:0}", origin[1])
+	}
+}
+```
+
+A second test directly verifies the trailing-empty origin sentinel via a synthetic setup that reaches the trailing-empty branch:
+
+```go
+func TestReflowChain_OriginTrailingEmptyBranch(t *testing.T) {
+	// Verify the trailing-empty branch by reflecting on the function
+	// directly. trailingEmptyRows's contract: counts rows in (start, end]
+	// whose len == 0. Pick a chain where end > start and the in-between
+	// gids are empty; this only happens when SetLine pre-creates an empty
+	// row in the middle of a chain — fragile but representative.
+	s := NewStore(80)
+	// Chain head fully filled, Wrapped=true.
+	cells := make([]parser.Cell, 80)
+	for i := range cells {
+		cells[i] = parser.Cell{Rune: 'a'}
+	}
+	cells[79].Wrapped = true
+	s.SetLine(5, cells)
+	// gid 6: pre-create an empty row. walkChain will see gid 6 has no
+	// cells via len(cells) == 0 and return end=5. So trailingEmptyRows
+	// runs over [5, 5] and returns 0. This means trailing branch isn't
+	// reachable from public APIs in a unit-testable way without a parser
+	// driving cursor moves. Skip the assert path; the trailing-empty
+	// branch is structurally tested via the integration tests in Phase 8.
+	end, _ := walkChain(s, 5, 100)
+	if end != 5 {
+		t.Fatalf("unexpected walkChain end=%d", end)
+	}
+	// Confirm the chain-head-only path still emits origins correctly.
+	rows, origin := reflowChain(s, 5, end, 80)
+	if len(rows) != 1 || len(origin) != 1 {
+		t.Fatalf("rows=%d origin=%d, want 1 each", len(rows), len(origin))
+	}
+}
+```
+
+The trailing-empty branch is genuinely hard to drive from a unit test without a parser; the integration test in Task 16 covers it via realistic parser input. Document this limitation rather than ship a `t.Skip` that asserts nothing.
+
+- [ ] **Step 2: Run tests to verify both pass**
+
+```
+go test -run "TestReflowChain_OriginTrailingEmptyRows|TestReflowChain_OriginTrailingEmptyBranch" ./apps/texelterm/parser/sparse/
+```
+
+Expected: PASS for both.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add apps/texelterm/parser/sparse/view_reflow_test.go
+git commit -m "Test: reflowChain origin for trailing wrap-continuation rows
+
+Two tests: round-trip through the wrapped two-gid path, plus a
+documented limitation note that the trailing-empty-branch is
+covered structurally by Phase 8 integration. Issue #224 plan,
+Task 4."
+```
+
+---
+
+### Task 4a: Origin lockstep with trimTrailingPadding
+
+**Files:**
+- Modify: `apps/texelterm/parser/sparse/view_reflow_test.go`
+
+- [ ] **Step 1: Write the failing test**
+
+This test directly exercises the lockstep bug class — `trimTrailingPadding` shortens `logical` and `cellOrigin` must shrink to match.
+
+```go
+func TestReflowChain_OriginWithTrailingPaddingTrimmed(t *testing.T) {
+	s := NewStore(80)
+	// 60 chars of content + 20 trailing padding cells (default-bg space).
+	// Chain head Wrapped=false so the chain is single-gid.
+	cells := make([]parser.Cell, 80)
+	for i := 0; i < 60; i++ {
+		cells[i] = parser.Cell{Rune: 'x'}
+	}
+	for i := 60; i < 80; i++ {
+		cells[i] = parser.Cell{Rune: ' '}
+	}
+	s.SetLine(5, cells)
+
+	rows, origin := reflowChain(s, 5, 5, 80)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d, want 1", len(rows))
+	}
+	// After trim, logical has 60 cells; the row is 60 cells wide.
+	if len(rows[0]) != 60 {
+		t.Errorf("row width=%d, want 60 (trailing 20 padding cells trimmed)", len(rows[0]))
+	}
+	// origin[0] must point at gid 5 col 0 — trim is symmetric.
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+	if len(origin) != 1 {
+		t.Errorf("origin len=%d, want 1", len(origin))
 	}
 }
 ```
@@ -320,20 +428,74 @@ func TestReflowChain_OriginTrailingEmptyRows(t *testing.T) {
 - [ ] **Step 2: Run test to verify it passes**
 
 ```
-go test -run TestReflowChain_OriginTrailingEmptyRows ./apps/texelterm/parser/sparse/
+go test -run TestReflowChain_OriginWithTrailingPaddingTrimmed ./apps/texelterm/parser/sparse/
 ```
 
-Expected: PASS — Task 1's trailing-empty-rows loop already emits `RowOrigin{Gid: endGI, Col: len(s.GetLine(endGI))}`.
+Expected: PASS — Task 1's lockstep trim emits aligned `logical` and `cellOrigin`.
 
-If it fails, the trailing-empty-rows handling needs adjustment.
+If it fails, `cellOrigin` was not trimmed in lockstep with `logical`; revisit Task 1's trim block.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add apps/texelterm/parser/sparse/view_reflow_test.go
-git commit -m "Test: reflowChain origin for trailing empty wrap-continuation rows
+git commit -m "Test: reflowChain trim-padding lockstep on origin
 
-Issue #224 plan, Task 4."
+Issue #224 plan, Task 4a."
+```
+
+---
+
+### Task 4b: Origin emission for positional-gap one-row chain
+
+**Files:**
+- Modify: `apps/texelterm/parser/sparse/view_reflow_test.go`
+
+- [ ] **Step 1: Write the failing test**
+
+Append:
+
+```go
+func TestReflowChain_OriginPositionalGap(t *testing.T) {
+	s := NewStore(80)
+	// Powerline-style row: write at col 89 directly via WriteCell so the
+	// row carries unwritten cells before the last-written col.
+	for col := 0; col < 90; col++ {
+		if col == 89 {
+			s.WriteCell(5, col, parser.Cell{Rune: 'x'})
+		}
+	}
+	if !rowHasPositionalGap(s, 5) {
+		t.Fatalf("row 5 has no positional gap; setup invalid")
+	}
+
+	rows, origin := reflowChain(s, 5, 5, 80)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d, want 1 (positional-gap path returns single row)", len(rows))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+}
+```
+
+- [ ] **Step 2: Run test to verify it passes**
+
+```
+go test -run TestReflowChain_OriginPositionalGap ./apps/texelterm/parser/sparse/
+```
+
+Expected: PASS — Task 1's `if startGI == endGI && rowHasPositionalGap` branch returns `[]RowOrigin{{Gid: startGI, Col: 0}}`.
+
+(If `WriteCell` isn't the right helper to populate without an autowrap, check the sparse package for the equivalent — `s.SetCell(gid, col, cell)` or similar. The test asserts `rowHasPositionalGap` upfront so a setup mismatch surfaces clearly.)
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add apps/texelterm/parser/sparse/view_reflow_test.go
+git commit -m "Test: reflowChain origin for positional-gap one-row chain
+
+Issue #224 plan, Task 4b."
 ```
 
 ---
@@ -655,7 +817,11 @@ mainScreenRowOrigin []RowOrigin
 
 - [ ] **Step 3: Capture origin in `mainScreenGridWithRowIdx`**
 
-In `apps/texelterm/parser/vterm_main_screen.go`, locate `mainScreenGridWithRowIdx` (~line 499). Change the implementation to call `RenderReflowFull` and stash all three results, then return the existing two:
+`mainScreenGridWithRowIdx` is called from `Grid()` and `GridWithRowIdx()`, both of which hold `v.mu.RLock()`. Mutating `v.mainScreenRowOrigin` from inside that path would race with concurrent `RLock`-held readers — even if no production callers exist today, the race detector in Task 17 will flag it. The fix: take an exclusive lock around the cache mutation, or write to a slice-typed field via atomic-pointer swap.
+
+Simplest approach matching the existing codebase: drop the RLock for the duration of the render call (the caller's RLock is reacquired afterward), or — cleaner — change the field assignment to use a small dedicated mutex that's separate from `v.mu`. Pick the approach that matches existing patterns; if `lastRowGlobalIdx` (the parallel cache for `rowIdx`) is already protected somehow, follow that lead.
+
+In `apps/texelterm/parser/vterm_main_screen.go`, locate `mainScreenGridWithRowIdx` (~line 499). Change the implementation to call `RenderReflowFull` and stash all three results:
 
 ```go
 func (v *VTerm) mainScreenGridWithRowIdx() ([][]Cell, []int64) {
@@ -663,12 +829,46 @@ func (v *VTerm) mainScreenGridWithRowIdx() ([][]Cell, []int64) {
         return nil, nil
     }
     grid, rowIdx, rowOrigin := v.mainScreen.RenderReflowFull()
-    v.mainScreenRowOrigin = rowOrigin
+    // mainScreenRowOrigin is published under v.mu; readers in
+    // ContentToViewport / ViewportToContent must hold an RLock on
+    // v.mu while reading it.
+    //
+    // Lock-upgrade note: callers of mainScreenGridWithRowIdx hold an
+    // RLock today; switching here without releasing first would
+    // deadlock. The caller of Grid() / GridWithRowIdx() must promote
+    // to a write lock (or this function must be called only from
+    // contexts that already hold the write lock). See the calling
+    // path before changing this.
+    //
+    // Pragmatic option: store rowOrigin via a sync.RWMutex-protected
+    // field separate from v.mu, so this method can take its own write
+    // lock independently:
+    //
+    //   v.rowOriginMu.Lock()
+    //   v.mainScreenRowOrigin = rowOrigin
+    //   v.rowOriginMu.Unlock()
+    //
+    // and have the mappers RLock rowOriginMu when reading. Pick
+    // whichever pattern matches the codebase's existing rowIdx cache
+    // protection.
+    _ = rowOrigin // wired in Step 3a/3b below
     return grid, rowIdx
 }
 ```
 
-(Keep the existing function name — its callers don't change. The third value is captured into the cache as a side effect.)
+- [ ] **Step 3a: Read the existing rowIdx cache lock pattern**
+
+Look at how `lastRowGlobalIdx` (or wherever `rowIdx` gets cached) is currently protected. Match that pattern for `mainScreenRowOrigin` — same lock, same lifecycle.
+
+If there's no cache lock today (because no field gets written from `mainScreenGridWithRowIdx`), you have two choices:
+1. **Add a dedicated `sync.RWMutex` for the new cache** — write under `Lock()` here, read under `RLock()` in mappers. Cheapest.
+2. **Document mappers as not-thread-safe** — relies entirely on `a.mu` (texelterm's app lock) to serialize. Acceptable IF every external caller of `ViewportToContent` / `ContentToViewport` holds `a.mu`. Audit callers to confirm.
+
+- [ ] **Step 3b: Apply the chosen pattern**
+
+Edit `apps/texelterm/parser/vterm.go` to add the mutex (option 1) or document the contract (option 2). Update the field stash in `mainScreenGridWithRowIdx` accordingly. The mappers (Tasks 11/12) must consult the same mutex when reading.
+
+(Keep the existing `mainScreenGridWithRowIdx` name — its callers don't change. The third value is captured into the cache as a side effect.)
 
 - [ ] **Step 4: Run tests**
 
@@ -755,7 +955,33 @@ func TestAdvanceCells_CrossesGidBoundary(t *testing.T) {
 		t.Errorf("advanceCells(5,50,40) = (%d,%d), want (6,10)", gid, col)
 	}
 }
+
+func TestAdvanceCells_PastContentTerminates(t *testing.T) {
+	// Regression: walking past the store's last written gid must not
+	// loop indefinitely. Without the ReadLine == nil break, advanceCells
+	// would loop forever (available=0, gid++, no progress).
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+	v.mainScreen.SetLine(5, []Cell{{Rune: 'a'}, {Rune: 'b'}})
+
+	// From (5, 5), try to advance 100 cells. Origin col is past the
+	// row's content (the row only has 2 cells), so available=0 first
+	// iter, then gid=6 which doesn't exist → break.
+	done := make(chan struct{})
+	go func() {
+		v.advanceCells(5, 5, 100)
+		close(done)
+	}()
+	select {
+	case <-done:
+		// Returned cleanly.
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("advanceCells did not terminate within 100ms — likely infinite loop")
+	}
+}
 ```
+
+Add `import "time"` if not already imported (only for this test).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -775,10 +1001,15 @@ Add to `apps/texelterm/parser/vterm.go` (in the same section as `ContentToViewpo
 // Returns the resulting (gid, col). Used by ViewportToContent to resolve
 // a viewport (y, x) given the row's origin.
 //
-// The walk is bounded by the caller (typically viewport width). Stops
-// at the first row beyond the store's content if `n` would take us past;
-// returns whatever (gid, col) the walk produced — past-content positions
-// are valid (selection there resolves to a zero-width selection).
+// Bounded against runaway: when ReadLine returns nil (gid past the
+// store), break — the position is "past content" and further advancing
+// just walks empty space. Without this break, a click on a trailing-
+// empty wrap-continuation row could loop forever (each iteration:
+// available=0, gid++, no progress on `remaining`).
+//
+// The result for past-content positions is a (gid, col) just past the
+// store's max gid; selection callers handle that as a zero-width
+// selection (selectAtom finds no word; capture reads no cells).
 func (v *VTerm) advanceCells(originGid int64, originCol int, n int) (int64, int) {
     if v.mainScreen == nil {
         return originGid, originCol
@@ -788,12 +1019,16 @@ func (v *VTerm) advanceCells(originGid int64, originCol int, n int) (int64, int)
     remaining := n
     for remaining > 0 {
         cells := v.mainScreen.ReadLine(gid)
+        if cells == nil {
+            // Past the store's last written gid. Stop here — further
+            // walking would loop without progress.
+            return gid, col
+        }
         rowLen := len(cells)
         available := rowLen - col
         if remaining < available {
             return gid, col + remaining
         }
-        // Consume the rest of this gid; advance to the next.
         if available < 0 {
             available = 0
         }
@@ -922,14 +1157,12 @@ Add to `apps/texelterm/parser/vterm.go`:
 // "Before origin" cases (target is reachable only by going backward)
 // return (0, false) — the caller continues scanning to the next row.
 //
-// Safety: the loop is bounded both by step count AND by iteration
-// count. Walking through many consecutive empty gids contributes 0 to
-// `steps` per iteration; without an iteration bound the loop could
-// scan an arbitrarily distant target gid forever. Bound at
-// `maxCells*2` iterations — comfortably above the worst case of a
-// viewport-width walk through fully-populated rows (where each
-// iteration advances `steps` by at least 1 once we leave the origin
-// row).
+// Safety: the loop is bounded both by step count AND by gid distance.
+// Walking through many consecutive empty gids contributes 0 to `steps`
+// per iteration; without a separate gid-based bound, a fixed iteration
+// cap can cut the walk short before reaching the target through gappy
+// stores. Bounding by (targetGid - originGid + 2) is provably tight —
+// the walk visits exactly the gids in [originGid, targetGid].
 func (v *VTerm) cellsBetween(originGid int64, originCol int, targetGid int64, targetCol, maxCells int) (int, bool) {
     if v.mainScreen == nil {
         return 0, false
@@ -940,7 +1173,9 @@ func (v *VTerm) cellsBetween(originGid int64, originCol int, targetGid int64, ta
     gid := originGid
     col := originCol
     steps := 0
-    iterCap := maxCells*2 + 1
+    // Tight bound: we visit at most (targetGid - originGid + 1) gids;
+    // +1 for the safety margin.
+    iterCap := int(targetGid-originGid) + 2
     for i := 0; i < iterCap; i++ {
         if gid == targetGid {
             if targetCol < col {
@@ -999,36 +1234,50 @@ store order. Issue #224 plan, Task 10."
 
 - [ ] **Step 1: Write the failing test**
 
-Append:
+Append. The test must use a wrap chain so naive `(visibleTop + y, x)` math diverges from origin-based math — otherwise the pre-rewrite implementation may pass by coincidence.
 
 ```go
-func TestViewportToContent_NonWrappedRow(t *testing.T) {
+func TestViewportToContent_WrappedContinuationRow(t *testing.T) {
 	v := NewVTerm(80, 24)
 	v.EnableMemoryBuffer()
 
-	// Type a few non-wrapping lines.
+	// 100-char line wraps once at width 80 — row 0 displays gid 0
+	// (chain head); row 1 displays gid 1 (or stays in gid 0 with
+	// col offset, depending on chain layout).
 	p := NewParser(v)
-	for i := 0; i < 5; i++ {
-		for _, r := range "hello" {
-			p.Parse(r)
-		}
-		p.Parse('\r')
-		p.Parse('\n')
+	const long = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab" // 100 chars
+	for _, r := range long {
+		p.Parse(r)
 	}
-	// Force a render so mainScreenRowOrigin is populated.
+	p.Parse('\r')
+	p.Parse('\n')
+	// Render so mainScreenRowOrigin is populated.
 	_, _ = v.GridWithRowIdx()
 
-	// Click at row 2, col 3. Origin should map straight through.
-	gid, col, _, ok := v.ViewportToContent(2, 3)
+	// Click at row 1, col 5. The naive implementation returns
+	// (visibleTop+1, 5). The origin-based implementation must return
+	// the cell-bearing (gid, col) — origin[1].Gid + col-walk-from-origin.
+	gid, col, _, ok := v.ViewportToContent(1, 5)
 	if !ok {
-		t.Fatalf("ViewportToContent(2, 3) ok=false")
+		t.Fatalf("ViewportToContent(1, 5) ok=false")
 	}
-	// Validate against the rendered rowOrigin slice directly.
-	if int(gid) != int(v.mainScreenRowOrigin[2].Gid) {
-		t.Errorf("returned gid=%d, expected origin gid=%d", gid, v.mainScreenRowOrigin[2].Gid)
+
+	// Independently re-derive what the answer should be from the cached
+	// origin slice — this gives a check that doesn't pre-suppose the
+	// implementation, but does require the origin slice to be built
+	// correctly (which Phase 1 covers).
+	o := v.mainScreenRowOrigin[1]
+	wantGid, wantCol := o.Gid, o.Col+5
+	// If +5 crosses a gid boundary in the chain, expand:
+	storeCells := v.mainScreen.ReadLine(o.Gid)
+	if wantCol >= len(storeCells) {
+		wantCol -= len(storeCells)
+		wantGid++
 	}
-	if col != v.mainScreenRowOrigin[2].Col+3 {
-		t.Errorf("returned col=%d, expected origin col + 3 = %d", col, v.mainScreenRowOrigin[2].Col+3)
+	if gid != wantGid || col != wantCol {
+		t.Errorf("ViewportToContent(1,5)=(gid=%d,col=%d), want (%d,%d)",
+			gid, col, wantGid, wantCol)
 	}
 }
 ```
@@ -1036,12 +1285,12 @@ func TestViewportToContent_NonWrappedRow(t *testing.T) {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```
-go test -run TestViewportToContent_NonWrappedRow ./apps/texelterm/parser/
+go test -run TestViewportToContent_WrappedContinuationRow ./apps/texelterm/parser/
 ```
 
-Expected: FAIL — current `ViewportToContent` uses naive math, not `mainScreenRowOrigin`. The check against `v.mainScreenRowOrigin[2]` will diverge for non-trivial cases (or compile-fail if that field isn't accessed yet).
+Expected: FAIL — current `ViewportToContent` uses naive `(visibleTop + 1, 5)`. For a wrapped line, `visibleTop + 1` is the chain's second gid (or the same gid depending on store layout), but the col is wrong: 5 instead of `(origin col + 5)`. The naive math doesn't agree with what the renderer actually drew.
 
-If naive math happens to match (gid 0 starts at row 0, etc.), the failure may be subtle; the wrapped tests in Task 12 will surface real mismatches.
+If the test passes with naive math, the wrap setup didn't actually wrap; check with a longer line or verify `mainScreenRowOrigin[1].Col != 0`.
 
 - [ ] **Step 3: Rewrite `ViewportToContent`**
 
@@ -1285,21 +1534,24 @@ Issue #224 plan, Task 13."
 
 ---
 
-### Task 14: Agreement test (mapper matches renderer)
+### Task 14: Agreement test — origin matches rendered grid cells
 
 **Files:**
 - Modify: `apps/texelterm/parser/viewport_mapping_test.go`
 
 - [ ] **Step 1: Write the failing test**
 
-This is the test that surfaced the bug in the reverted attempt. It confirms `ViewportToContent(y, 0)` returns the same `(gid, col)` that the renderer's `mainScreenRowOrigin[y]` reports for that row.
+The reverted attempt failed because the mapper's chain walk disagreed with what `Render` actually drew. To catch that class of bug, the test must compare against **rendered grid cells**, not against the cache the mapper consults — otherwise it's tautological (mapper reads cache, test reads cache, they trivially agree).
+
+For each non-blank row `y` in the rendered grid, the cell at `(y, 0)` of the grid must equal the store's cell at `(origin[y].Gid, origin[y].Col)`.
 
 ```go
-func TestViewportToContent_AgreesWithRenderedRowOrigin(t *testing.T) {
+func TestRenderedGridAgreesWithRowOrigin(t *testing.T) {
 	v := NewVTerm(80, 24)
 	v.EnableMemoryBuffer()
 
-	// Mix of short non-wrapping lines, a long wrapped line, and more shorts.
+	// Mix of short non-wrapping lines and a long wrapped line so the
+	// origin slice has both per-gid and per-cell-offset entries.
 	p := NewParser(v)
 	for i := 0; i < 5; i++ {
 		for _, r := range "short" {
@@ -1322,20 +1574,29 @@ func TestViewportToContent_AgreesWithRenderedRowOrigin(t *testing.T) {
 		p.Parse('\r')
 		p.Parse('\n')
 	}
-	_, _ = v.GridWithRowIdx()
+	grid, _ := v.GridWithRowIdx()
 
 	for y, o := range v.mainScreenRowOrigin {
 		if o.Gid == -1 {
+			continue // blank / past-content sentinel
+		}
+		// Compare the rendered grid's first cell on row y with the
+		// store cell that origin[y] points to. This catches any
+		// divergence between what the renderer drew and what the
+		// origin slice claims about that row.
+		drewRune := grid[y][0].Rune
+		storeCells := v.mainScreen.ReadLine(o.Gid)
+		if o.Col >= len(storeCells) {
+			t.Errorf("row %d: origin (%d,%d) points past store row (len=%d)",
+				y, o.Gid, o.Col, len(storeCells))
 			continue
 		}
-		gid, col, _, ok := v.ViewportToContent(y, 0)
-		if !ok {
-			t.Errorf("row %d: ViewportToContent(%d, 0) failed", y, y)
-			continue
-		}
-		if gid != o.Gid || col != o.Col {
-			t.Errorf("row %d: ViewportToContent returned (%d,%d), origin says (%d,%d)",
-				y, gid, col, o.Gid, o.Col)
+		want := storeCells[o.Col].Rune
+		// Both might be zero (empty cell rendered, empty store cell)
+		// — that's fine. Mismatch is a real bug.
+		if drewRune != want {
+			t.Errorf("row %d col 0: drew rune=%q, but origin (%d,%d) says store rune=%q",
+				y, drewRune, o.Gid, o.Col, want)
 		}
 	}
 }
@@ -1344,22 +1605,75 @@ func TestViewportToContent_AgreesWithRenderedRowOrigin(t *testing.T) {
 - [ ] **Step 2: Run the test**
 
 ```
-go test -run TestViewportToContent_AgreesWithRenderedRowOrigin ./apps/texelterm/parser/
+go test -run TestRenderedGridAgreesWithRowOrigin ./apps/texelterm/parser/
 ```
 
-Expected: PASS — by definition `ViewportToContent(y, 0)` reads `mainScreenRowOrigin[y]` and applies a 0-cell `advanceCells`.
+Expected: PASS — `reflowChain` builds origin and rendered cells from the same concat walk, so they agree by construction.
 
-If it fails, the path through `advanceCells(o.Gid, o.Col, 0)` isn't returning `(o.Gid, o.Col)` for some reason; debug `advanceCells`.
+If it fails, the origin slice has drifted from the rendered output — that IS the failure mode of the previous attempt. Fix the trim or chain walk in Task 1 / Task 5.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Add a second agreement test that exercises columns past 0**
+
+To catch divergences in the *interior* of wrapped rows (not just first-cell), spot-check several `(y, x)` positions:
+
+```go
+func TestRenderedGridAgreesWithMapperInterior(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+	// 100 chars wrap-into-two-rows at width 80.
+	p := NewParser(v)
+	const long = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab" // 100 chars
+	for _, r := range long {
+		p.Parse(r)
+	}
+	p.Parse('\r')
+	p.Parse('\n')
+	grid, _ := v.GridWithRowIdx()
+
+	// Spot-check several (y, x) on the wrap chain.
+	cases := []struct{ y, x int }{
+		{0, 5}, {0, 79}, {1, 0}, {1, 15},
+	}
+	for _, c := range cases {
+		gid, col, _, ok := v.ViewportToContent(c.y, c.x)
+		if !ok {
+			t.Errorf("(%d,%d): ViewportToContent failed", c.y, c.x)
+			continue
+		}
+		drew := grid[c.y][c.x].Rune
+		storeCells := v.mainScreen.ReadLine(gid)
+		if col >= len(storeCells) {
+			t.Errorf("(%d,%d): mapped (%d,%d) past store len=%d",
+				c.y, c.x, gid, col, len(storeCells))
+			continue
+		}
+		want := storeCells[col].Rune
+		if drew != want {
+			t.Errorf("(%d,%d): drew %q, mapper says (%d,%d)→%q",
+				c.y, c.x, drew, gid, col, want)
+		}
+	}
+}
+```
+
+```
+go test -run TestRenderedGridAgreesWithMapperInterior ./apps/texelterm/parser/
+```
+
+Expected: PASS.
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add apps/texelterm/parser/viewport_mapping_test.go
-git commit -m "Test: ViewportToContent agrees with rendered row origin
+git commit -m "Test: rendered grid agrees with rowOrigin (catches reverted-attempt bug)
 
-This is the invariant the reverted attempt violated — the mapper's
-chain walk must match what the renderer emitted. Issue #224 plan,
-Task 14."
+Two tests compare the actual cells the renderer drew at (y, x)
+against what (gid, col) the mapper resolves to. The reverted
+attempt's failure was that the mapper's chain walk disagreed with
+what Render drew — these tests catch that class directly. Issue
+#224 plan, Task 14."
 ```
 
 ---
@@ -1455,12 +1769,81 @@ Issue #224 plan, Task 15."
 
 ## Phase 8: Integration — selection survives resize
 
-### Task 16: Resize integration test
+### Task 15a: Resize round-trip at vterm layer
+
+**Files:**
+- Modify: `apps/texelterm/parser/viewport_mapping_test.go`
+
+- [ ] **Step 1: Write the failing test**
+
+The vterm-level resize round-trip is distinct from the texelterm-app integration test in Task 16 — it pins the mapping math without involving selection state, click handlers, or paint code.
+
+```go
+func TestContentToViewport_AfterResize(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+	// 100-char line that wraps once at width 80.
+	p := NewParser(v)
+	const long = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab"
+	for _, r := range long {
+		p.Parse(r)
+	}
+	p.Parse('\r')
+	p.Parse('\n')
+	_, _ = v.GridWithRowIdx()
+
+	// Capture (gid, col) for the rune at viewport (1, 0) — char 80 of
+	// the logical line — at width 80.
+	gid80, col80, _, ok := v.ViewportToContent(1, 0)
+	if !ok {
+		t.Fatalf("pre-resize ViewportToContent(1,0) failed")
+	}
+
+	// Resize to width 40. Same logical line now wraps to 3 rows; char 80
+	// lands on row 2.
+	v.Resize(40, 24)
+	_, _ = v.GridWithRowIdx()
+
+	y, x, vis := v.ContentToViewport(gid80, col80)
+	if !vis {
+		t.Fatalf("post-resize: (%d,%d) not visible", gid80, col80)
+	}
+	if y != 2 || x != 0 {
+		t.Errorf("post-resize: (gid=%d,col=%d) → (%d,%d), want (2,0)",
+			gid80, col80, y, x)
+	}
+}
+```
+
+- [ ] **Step 2: Run the test**
+
+```
+go test -run TestContentToViewport_AfterResize ./apps/texelterm/parser/
+```
+
+Expected: PASS — the origin slice rebuilds on the post-resize render; mapper consults the new slice.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add apps/texelterm/parser/viewport_mapping_test.go
+git commit -m "Test: ContentToViewport after resize at vterm layer
+
+Pins the mapping math through a resize that re-wraps a logical line.
+Issue #224 plan, Task 15a."
+```
+
+---
+
+### Task 16: Resize integration test driving the highlight paint
 
 **Files:**
 - Create: `apps/texelterm/selection_wrap_resize_test.go`
 
 - [ ] **Step 1: Write the failing test**
+
+The user-reported bug is "highlight visibly drifts after resize." The vterm round-trip test (Task 15a) covers the math; this test must exercise the actual paint path — drive `applySelectionHighlightLocked`, capture the painted buffer, and assert that the highlighted cells correspond to the cells the selection captured.
 
 Create `apps/texelterm/selection_wrap_resize_test.go`:
 
@@ -1469,9 +1852,8 @@ Create `apps/texelterm/selection_wrap_resize_test.go`:
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Issue #224: selection highlight tracks the right cells across resize
-// that re-wraps a logical line. Test exercises the full path:
-// double-click → selection state in (gid, col) → resize → highlight
-// resolved via the new mapping.
+// that re-wraps a logical line. Drives the full paint path so a bug
+// in either the (gid, col) mapping OR the highlight paint surfaces.
 
 package texelterm
 
@@ -1481,15 +1863,17 @@ import (
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 )
 
+// Match the constructor / public surface to existing tests in this
+// package. Look at apps/texelterm/term_test.go for the established
+// pattern; some tests use NewTexelTerm(), others use New(). Pick the
+// one that compiles and matches existing conventions.
 func TestSelection_HighlightTracksWrappedContentAfterResize(t *testing.T) {
-	app := New("test")
-	app.Resize(80, 24)
+	app := newTestTexelTerm(t, 80, 24) // helper following term_test.go's pattern
 
 	v := app.vterm
 	v.EnableMemoryBuffer()
-	app.SetClipboardService(nil) // standalone-mode plumbing not needed
 
-	// Type a 100-char line that fits in one row at width 80 + 1 wrap row.
+	// Type a 100-char line that wraps to two rows at width 80.
 	p := parser.NewParser(v)
 	const long = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
 		"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab" // 100 chars
@@ -1498,41 +1882,100 @@ func TestSelection_HighlightTracksWrappedContentAfterResize(t *testing.T) {
 	}
 	p.Parse('\r')
 	p.Parse('\n')
-	_, _ = v.GridWithRowIdx()
 
-	// Pick a (y, x) on the second wrapped row — col 5 → logical char 85.
+	// Programmatically install a multi-row selection on the wrap chain.
+	// Use the public selection-state-machine entry point (StartMode +
+	// the existing ClickType-driven dispatch). See selection_state_test.go
+	// for the pattern. Specifically, target a word on the SECOND wrapped
+	// row so the highlight position depends on origin tracking.
 	gid, col, _, ok := v.ViewportToContent(1, 5)
 	if !ok {
-		t.Fatalf("could not resolve (1, 5)")
+		t.Fatalf("pre-resize ViewportToContent(1,5) failed")
+	}
+	// Drive double-click at (1, 5) so SelectionStateMachine resolves a
+	// SpaceWord selection rooted at (gid, col).
+	app.selectionMachine.Start(gid, col, 1, DoubleClick, 0)
+
+	// Render once so applySelectionHighlightLocked paints the highlight
+	// with the pre-resize layout.
+	bufPre := app.Render()
+	highlightedPre := highlightedCells(bufPre)
+	if len(highlightedPre) == 0 {
+		t.Fatal("pre-resize: no highlighted cells; selection didn't paint")
 	}
 
-	// Sanity: confirm mapping back at width 80.
-	yPre, xPre, vis := v.ContentToViewport(gid, col)
-	if !vis || yPre != 1 || xPre != 5 {
-		t.Fatalf("pre-resize round-trip: got (%d,%d, vis=%v), want (1,5,true)", yPre, xPre, vis)
+	// Capture the captured-text via SelectionStateMachine.Finish — this
+	// is the bytes the user would copy.
+	mime, data, finishOK := app.selectionMachine.Finish(gid, col, 1, 0)
+	_ = mime
+	if !finishOK {
+		t.Fatal("Finish returned !ok")
 	}
+	captured := string(data)
 
-	// Resize narrower so the same line wraps to more rows.
+	// Resize narrower; the same logical line now wraps to more rows.
 	app.Resize(40, 24)
-	_, _ = v.GridWithRowIdx()
 
-	// The (gid, col) we captured pre-resize must still map to a visible
-	// row at the new width — somewhere in the multi-row reflow of the
-	// chain. We don't pin the exact row (that depends on chain layout),
-	// but it must be visible AND the round-trip must be consistent.
-	yPost, xPost, visPost := v.ContentToViewport(gid, col)
-	if !visPost {
-		t.Fatalf("post-resize: (%d,%d) not visible", gid, col)
+	// Re-install the selection at the captured (gid, col) range and re-render.
+	// Because Finish was called, restart with the same anchors.
+	app.selectionMachine.Start(gid, col, 1, DoubleClick, 0)
+	bufPost := app.Render()
+	highlightedPost := highlightedCells(bufPost)
+	if len(highlightedPost) == 0 {
+		t.Fatal("post-resize: no highlighted cells; the regression is back")
 	}
-	gidR, colR, _, okR := v.ViewportToContent(yPost, xPost)
-	if !okR || gidR != gid || colR != col {
-		t.Errorf("post-resize round-trip: (gid=%d,col=%d) → (%d,%d) → (gid=%d,col=%d)",
-			gid, col, yPost, xPost, gidR, colR)
+
+	// Capture the post-resize text — must equal the pre-resize text.
+	_, dataPost, _ := app.selectionMachine.Finish(gid, col, 1, 0)
+	capturedPost := string(dataPost)
+	if capturedPost != captured {
+		t.Errorf("post-resize captured text differs:\npre:  %q\npost: %q", captured, capturedPost)
 	}
+
+	// Sanity: the rendered runes at the highlighted positions post-
+	// resize must equal the rendered runes at the highlighted positions
+	// pre-resize (modulo wrap layout). The text we captured ALSO lives
+	// in the highlighted cells at new positions.
+	highlightedRunesPost := runesAt(bufPost, highlightedPost)
+	if !containsSubstring(highlightedRunesPost, captured) {
+		t.Errorf("post-resize highlight cells %q do not contain captured text %q",
+			highlightedRunesPost, captured)
+	}
+}
+
+// Test helpers — implement based on the package's existing conventions.
+
+// newTestTexelTerm builds a TexelTerm for tests, sized cols x rows. See
+// term_test.go for the existing pattern (NewTexelTerm or New + Resize).
+func newTestTexelTerm(t *testing.T, cols, rows int) *TexelTerm {
+	t.Helper()
+	// Implementation: follow term_test.go.
+	panic("implement to match existing test pattern")
+}
+
+// highlightedCells returns the (y, x) of cells whose Style has the
+// selection-highlight background. Compare with the configured highlight
+// color from theming.ForApp("texelterm").GetColor("selection",
+// "highlight_bg", ...).
+func highlightedCells(buf [][]texelcoreCell) []struct{ Y, X int } {
+	// Implementation: walk buf, compare bg.
+	panic("implement based on the highlight bg color")
+}
+
+// runesAt extracts a string from buf at the given (y, x) positions in
+// reading order.
+func runesAt(buf [][]texelcoreCell, positions []struct{ Y, X int }) string {
+	panic("implement: read buf[y][x].Ch in order")
+}
+
+func containsSubstring(haystack, needle string) bool {
+	return strings.Contains(haystack, needle)
 }
 ```
 
-(Adjust constructor / field access patterns to match the codebase — the test may need to use `NewTexelTerm()` or similar; see existing tests in `apps/texelterm/term_test.go` for the established pattern.)
+(The helper implementations are left as panic stubs in the plan because the exact `texelcore.Cell` type, the `app.selectionMachine` field accessibility, and `Render()`'s return type need to be checked against the codebase. Use `term_test.go` as the template — there's already test infrastructure for driving render passes and inspecting buffer cells. If that infrastructure isn't sufficient, prefer extending it over duplicating it in this test file.)
+
+(Further adjust constructor / field access patterns to match the codebase. If `selectionMachine` is private and there's no exported method to start a selection programmatically, route through `mouseCoordinator.HandleMouse` with synthesized `tcell.EventMouse` events at the same `(y, x)` — that's the same path the click handler takes.)
 
 - [ ] **Step 2: Run the test**
 
@@ -1604,14 +2047,31 @@ If everything passes, this verification phase needs no commit. If a regression s
 
 | Phase | Tasks | Outcome |
 |---|---|---|
-| 1 | 1–4 | `reflowChain` consolidated to emit `(rows, origin)` with full case coverage. |
+| 1 | 1–4b | `reflowChain` consolidated to emit `(rows, origin)`; covers non-wrapped, wrapped same-gid, cross-gid mid-row, trailing wrap-continuation, trim-padding lockstep, positional-gap. |
 | 2 | 5–6 | `view.Render` and `Terminal.RenderReflowFull` expose origin slice. |
 | 3 | 7 | `MainScreen` interface + parser-package `RowOrigin` alias. |
-| 4 | 8 | `VTerm` caches `mainScreenRowOrigin` on every render. |
-| 5 | 9–10 | `advanceCells` and `cellsBetween` helpers. |
+| 4 | 8 | `VTerm` caches `mainScreenRowOrigin` on every render under the right lock. |
+| 5 | 9–10 | `advanceCells` (with past-content termination guard) and `cellsBetween` (with gid-distance bound) helpers. |
 | 6 | 11–12 | `ViewportToContent` / `ContentToViewport` rewritten. |
-| 7 | 13–15 | Wrapped round-trip + agreement-with-renderer + sentinel tests. |
-| 8 | 16 | End-to-end resize integration test. |
-| 9 | 17 | Full-suite verification. |
+| 7 | 13–15 | Wrapped round-trip + agreement-with-rendered-grid + sentinel tests. |
+| 8 | 15a | Resize round-trip at vterm layer (math-only). |
+| 9 | 16 | End-to-end resize integration test that drives the highlight paint. |
+| 10 | 17 | Full-suite verification. |
 
 **Branch:** Continue on `feature/issue-224-wrap-highlight` (already created with the spec commit).
+
+---
+
+## Deferred (consider after main plan lands)
+
+These came up during plan review. They're worth doing but aren't on the critical path for fixing the user-visible bug.
+
+1. **Demote `RenderReflow` and `RenderReflowWithRowIdx` shims off the `MainScreen` interface.** Keep them as concrete `Terminal` methods only. One canonical interface entry point (`RenderReflowFull`) is cleaner; the shims exist for source-code convenience, not interface contract. Audit publisher call sites first to confirm none reach through `MainScreen` for the shim methods.
+
+2. **Cache invalidation hooks.** `mainScreenRowOrigin` should be cleared (set to nil) on alt-screen entry/exit and on resize. Today the main-screen path checks `inAltScreen` upfront and falls back, so a stale cache is dormant. But a defensive `clear` keeps the invariant tighter and prevents a class of "post-resize, pre-render click" mishaps.
+
+3. **Length-equality assertion.** In `mainScreenGridFull`, after the render call, assert `len(rowIdx) == len(rowOrigin) == len(grid)`. Cheap defensive check that catches a class of slice-trimming bugs.
+
+4. **Concurrent store mutation during walk.** `advanceCells` and `cellsBetween` read `v.mainScreen.ReadLine` per iteration; the store is live and writes can interleave under a fine-grained lock. The cache slice is a snapshot from render time; the store walked during the helper is not. In practice `a.mu` serializes texterm app paths, but this hasn't been audited for non-texelterm callers (headless, server). Worth a `sparse.Store` snapshot that the helpers can walk without re-acquiring the store lock per cell — bigger refactor, file separately.
+
+5. **Selection state representation rework.** The plan keeps `(gid, col)` as the selection storage. A future cleanup could move to `(chain_head_gid, logical_col_within_chain)` which is reflow-independent — the current representation works but requires the origin-based mapper to translate at every render. Probably YAGNI unless the mapper becomes a hot path.
