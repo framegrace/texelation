@@ -369,6 +369,20 @@ func (s *SelectionStateMachine) lineCellsAt(logicalLine int64, viewportRow int) 
 	return s.vtermProvider.HistoryLineCopy(int(logicalLine))
 }
 
+// maxCommandLines bounds how many lines SelectionModeCommand will
+// resolve to. Without per-prompt history (issue #222) we can't bracket
+// older scrollback by its enclosing prompt; the only known anchor may
+// be far in the past and turn the "current command" into "everything
+// since this shell started." Letting the resolver expand without bound
+// has crashed the host terminal in practice — a 14 MB capture turns
+// into a ~19 MB OSC52 sequence which most terminals reject by closing
+// the pipe.
+//
+// 1000 lines × ~80 cols ≈ 80 KB of plain text — comfortably below any
+// terminal's OSC52 ceiling and a sensible "you can fit one command's
+// output" budget.
+const maxCommandLines int64 = 1000
+
 // selectCommand selects the shell command the click fell within: from
 // the most recent OSC 133;A prompt anchor at-or-before the click line,
 // to the next prompt anchor (or end-of-buffer if there isn't one yet).
@@ -383,10 +397,14 @@ func (s *SelectionStateMachine) lineCellsAt(logicalLine int64, viewportRow int) 
 //     runs from the start of the buffer up to the prompt-1 — "everything
 //     before the current prompt."
 //   - If no anchor is known at all, fall back to selectLine.
+//   - If the resolved range exceeds maxCommandLines, fall back to
+//     selectLine. Crash safety until prompt-history (issue #222) lets
+//     us properly bracket older commands.
 //
 // When per-prompt history lands, this resolver becomes "find the prompt
 // at-or-before line, and the next prompt after line" without changing
-// the public surface.
+// the public surface, and the size cap can drop to a much higher (or
+// removed) value because both bounds will be tight by construction.
 func (s *SelectionStateMachine) selectCommand(logicalLine int64, charOffset int, viewportRow int) {
 	if s.vtermProvider == nil {
 		s.selectLine(logicalLine, charOffset, viewportRow)
@@ -408,20 +426,23 @@ func (s *SelectionStateMachine) selectCommand(logicalLine int64, charOffset int,
 
 	var startLine, endLine int64
 	if effectiveLine >= promptStart {
-		// Click is in (or at the start of) the current command. Range
-		// spans the full command output area.
 		startLine = promptStart
 		endLine = contentEnd
 	} else {
-		// Click is in older scrollback. Without per-prompt history we
-		// don't know where its enclosing prompt began, so anchor to
-		// buffer start; the upper bound is the known prompt's line.
 		startLine = 0
 		endLine = promptStart - 1
 		if endLine < startLine {
 			s.selectLine(logicalLine, charOffset, viewportRow)
 			return
 		}
+	}
+
+	if endLine-startLine+1 > maxCommandLines {
+		// Range is too large — pre-history-tracking we can't be sure we
+		// found the right enclosing command. Drop to selectLine rather
+		// than ship an oversize capture that may crash the host terminal.
+		s.selectLine(logicalLine, charOffset, viewportRow)
+		return
 	}
 
 	// Anchor at column 0 of the start line; head one-past-the-last-cell

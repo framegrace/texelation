@@ -1692,10 +1692,17 @@ func (a *TexelTerm) HandleMouse(ev *tcell.EventMouse) {
 	a.requestRefresh()
 }
 
+// maxClipboardBytes caps a single SetClipboard payload. The clipboard
+// reaches the host terminal as a base64-encoded OSC52 sequence
+// (≈ 4/3 the source size); most terminals close the pipe — and take
+// the texelation client down with it — when the sequence runs into the
+// hundreds of KB. 1 MiB of source ≈ 1.4 MiB of OSC52, well within the
+// behaviour-tolerance band we've observed across xterm / kitty /
+// ghostty / iTerm.
+const maxClipboardBytes = 1 << 20 // 1 MiB
+
 // SetClipboard implements ClipboardSetter for internal use by MouseCoordinator.
-// Currently disabled pending investigation of clipboard crash issues.
 func (a *TexelTerm) SetClipboard(mime string, data []byte) {
-	// Use clipboard service if available
 	a.clipboardMu.Lock()
 	clipboard := a.clipboard
 	a.clipboardMu.Unlock()
@@ -1703,18 +1710,28 @@ func (a *TexelTerm) SetClipboard(mime string, data []byte) {
 	title := a.title
 	a.mu.Unlock()
 
-	if clipboard != nil {
-		// Pass the bytes through verbatim. An older revision converted
-		// LF → CRLF here as a Wayland/tcell workaround (clipboard
-		// stripped lone LFs). That conversion broke pasting into other
-		// applications, which see CRLF and treat it as two line breaks
-		// (double-spaced output). Modern tcell + terminals preserve LF;
-		// if a Wayland regression resurfaces, fix it at the layer that
-		// owns the clipboard transport.
-		clipboard.SetClipboard(mime, data)
-	} else {
+	if clipboard == nil {
 		log.Printf("CLIPBOARD DEBUG: %s SetClipboard called but clipboard service is nil! mime=%s, len=%d", title, mime, len(data))
+		return
 	}
+
+	// Defensive cap: drop oversized clipboard writes rather than ship
+	// them onto OSC52 and crash the host terminal. Keeps the client
+	// alive even if a future selection resolver picks an unreasonable
+	// range. Logged so we notice when this fires.
+	if len(data) > maxClipboardBytes {
+		log.Printf("CLIPBOARD DEBUG: %s dropping oversized clipboard write: mime=%s, len=%d (cap=%d)", title, mime, len(data), maxClipboardBytes)
+		return
+	}
+
+	// Pass the bytes through verbatim. An older revision converted
+	// LF → CRLF here as a Wayland/tcell workaround (clipboard stripped
+	// lone LFs). That conversion broke pasting into other applications,
+	// which see CRLF and treat it as two line breaks (double-spaced
+	// output). Modern tcell + terminals preserve LF; if a Wayland
+	// regression resurfaces, fix it at the layer that owns the
+	// clipboard transport.
+	clipboard.SetClipboard(mime, data)
 }
 
 // SetClipboardService implements texelcore.ClipboardAware.

@@ -220,6 +220,34 @@ func TestSelectionStateMachine_QuintupleClickSelectsCommand(t *testing.T) {
 	}
 }
 
+// TestSelectionStateMachine_QuintupleClick_OversizedRangeFallsBackToLine
+// guards against the crash mode where an old-but-only prompt anchor
+// turns the "current command" into the entire session's output. With
+// a 14 MB capture the host terminal closed the pipe and the texelation
+// client died. Until issue #222 lands per-prompt history, the
+// resolver caps at maxCommandLines and falls back to selectLine.
+func TestSelectionStateMachine_QuintupleClick_OversizedRangeFallsBackToLine(t *testing.T) {
+	mock := newMockVTermProvider()
+	mock.historyLines[10000] = cellsFromString("recent line")
+	mock.promptStart = 10  // very old prompt anchor
+	mock.contentEnd = 10000 // 9991 lines beyond the prompt — way past cap
+	sm := newTestStateMachine(mock)
+	sm.SetSize(80, 24)
+
+	sm.Start(10000, 4, 0, QuintupleClick, 0)
+	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
+	if !ok {
+		t.Fatal("no selection range")
+	}
+	// Should have fallen back to selecting just the click line.
+	if startLine != 10000 || endLine != 10000 {
+		t.Errorf("expected fallback to line 10000, got [%d,%d]", startLine, endLine)
+	}
+	if startOffset != 0 || endOffset != len("recent line") {
+		t.Errorf("range=[%d,%d), want [0,%d) (full line)", startOffset, endOffset, len("recent line"))
+	}
+}
+
 func TestSelectionStateMachine_QuintupleClick_NoAnchorFallsBackToLine(t *testing.T) {
 	mock := newMockVTermProvider()
 	mock.historyLines[5] = cellsFromString("only this line")
