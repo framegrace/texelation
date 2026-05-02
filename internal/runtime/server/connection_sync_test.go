@@ -167,6 +167,18 @@ func TestSendPending_DrainsAcrossCalls(t *testing.T) {
 		}
 	}
 
+	// Drain any nudges queued by intermediate chunk-yields, then
+	// verify sendPending did NOT nudge once the queue was empty.
+	// A spurious nudge here would spin the serve loop on idle.
+	for pendingChannelTicked(conn) {
+	}
+	if err := conn.sendPending(); err != nil {
+		t.Fatalf("sendPending (post-drain): %v", err)
+	}
+	if pendingChannelTicked(conn) {
+		t.Error("sendPending nudged c.pending after the queue was drained (would spin serve loop)")
+	}
+
 	res := <-resCh
 	if res.err != nil {
 		t.Fatalf("reader: %v (got %d/%d messages)", res.err, len(res.seqs), queued)
