@@ -396,3 +396,34 @@ func TestContentToViewport_OffViewportReturnsFalse(t *testing.T) {
 		t.Errorf("ContentToViewport(9999, 0) returned visible=true; expected false")
 	}
 }
+
+func TestContentToViewport_AfterResize(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+	const long = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab"
+	for _, r := range long {
+		p.Parse(r)
+	}
+	p.Parse('\r')
+	p.Parse('\n')
+	_, _ = v.GridWithRowIdx()
+
+	gid80, col80, _, ok := v.ViewportToContent(1, 0)
+	if !ok {
+		t.Fatalf("pre-resize ViewportToContent(1,0) failed")
+	}
+
+	v.Resize(40, 24)
+	_, _ = v.GridWithRowIdx()
+
+	y, x, vis := v.ContentToViewport(gid80, col80)
+	if !vis {
+		t.Fatalf("post-resize: (%d,%d) not visible", gid80, col80)
+	}
+	if y != 2 || x != 0 {
+		t.Errorf("post-resize: (gid=%d,col=%d) → (%d,%d), want (2,0)",
+			gid80, col80, y, x)
+	}
+}
