@@ -283,3 +283,25 @@ func TestReflowChain_OriginWrappedSingleGid(t *testing.T) {
 		t.Errorf("origin[1]=%+v, want {Gid:6, Col:0}", origin[1])
 	}
 }
+
+func TestReflowChain_OriginWrappedCrossingGidMidRow(t *testing.T) {
+	s := NewStore(80)
+	// Same setup as the previous test: 80 chars in gid 5 (Wrapped) +
+	// 20 chars in gid 6. But reflow at narrower width 50 — the wrap
+	// boundary now falls mid-gid.
+	fillRow(s, 5, strings.Repeat("x", 80), true)
+	fillRow(s, 6, strings.Repeat("y", 20), false)
+
+	// At width 50: row 0 = gid 5 cols 0..49 (50 cells), row 1 = gid 5
+	// cols 50..79 + gid 6 cols 0..19 (30+20=50 cells).
+	rows, origin := reflowChain(s, 5, 6, 50)
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d, want 2", len(rows))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+	if origin[1] != (RowOrigin{Gid: 5, Col: 50}) {
+		t.Errorf("origin[1]=%+v, want {Gid:5, Col:50}", origin[1])
+	}
+}
