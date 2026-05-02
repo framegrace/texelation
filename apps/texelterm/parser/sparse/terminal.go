@@ -314,7 +314,8 @@ func (t *Terminal) RenderReflow() [][]parser.Cell {
 func (t *Terminal) RenderReflowWithRowIdx() ([][]parser.Cell, []int64) {
 	cursorGI, cursorCol := t.write.Cursor()
 	t.view.RecomputeLiveAnchor(t.store, cursorGI, cursorCol, t.write.WriteTop())
-	return t.view.Render(t.store)
+	rows, gids, _ := t.view.Render(t.store)
+	return rows, gids
 }
 
 // Grid builds a dense height x width grid from the current view range by

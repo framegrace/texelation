@@ -102,7 +102,7 @@ func (v *ViewWindow) SetAutoJumpOnInput(enabled bool) {
 // lockstep even under concurrent Render calls — callers receive a
 // self-consistent pair, and no per-instance state has to straddle the
 // walk/publish boundary.
-func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
+func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64, []RowOrigin) {
 	v.mu.Lock()
 	width := v.width
 	height := v.height
@@ -113,6 +113,7 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 
 	out := make([][]parser.Cell, 0, height)
 	rowGI := make([]int64, 0, height)
+	rowOrigin := make([]RowOrigin, 0, height)
 	maxSteps := 4 * height
 	if maxSteps < 4 {
 		maxSteps = 4
@@ -135,6 +136,7 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 			// Blank/pad rows with no real content track as -1 so callers
 			// don't conflate them with a written row at that globalIdx.
 			rowGI = append(rowGI, -1)
+			rowOrigin = append(rowOrigin, RowOrigin{Gid: -1})
 			gi++
 			continue
 		}
@@ -142,11 +144,13 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 
 		var rows [][]parser.Cell
 		var rowsGI []int64
+		var rowsOrigin []RowOrigin
 		if reflowOff || nowrap {
 			// Each physical row is its own globalIdx: gi, gi+1, ..., end.
 			for r := gi; r <= end; r++ {
 				rows = append(rows, clipRow(s.GetLine(r), width))
 				rowsGI = append(rowsGI, r)
+				rowsOrigin = append(rowsOrigin, RowOrigin{Gid: r, Col: 0})
 			}
 		} else {
 			// Wrapped chain reflowed to this viewport's width: all reflowed
@@ -154,10 +158,11 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 			// would require tracking cell-range provenance through
 			// reflowChain; the publisher only needs "does this row belong
 			// to a real store position" which the chain head answers.
-			reflowed, _ := reflowChain(s, gi, end, width)
-			for _, row := range reflowed {
+			reflowed, originSlice := reflowChain(s, gi, end, width)
+			for i, row := range reflowed {
 				rows = append(rows, clipRow(row, width))
 				rowsGI = append(rowsGI, gi)
+				rowsOrigin = append(rowsOrigin, originSlice[i])
 			}
 		}
 
@@ -166,9 +171,11 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 			if skip < len(rows) {
 				rows = rows[skip:]
 				rowsGI = rowsGI[skip:]
+				rowsOrigin = rowsOrigin[skip:]
 			} else {
 				rows = nil
 				rowsGI = nil
+				rowsOrigin = nil
 			}
 		}
 
@@ -178,6 +185,7 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 			}
 			out = append(out, row)
 			rowGI = append(rowGI, rowsGI[i])
+			rowOrigin = append(rowOrigin, rowsOrigin[i])
 		}
 		gi = end + 1
 	}
@@ -185,14 +193,18 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 	for len(out) < height {
 		out = append(out, make([]parser.Cell, width))
 		rowGI = append(rowGI, -1)
+		rowOrigin = append(rowOrigin, RowOrigin{Gid: -1})
 	}
 
 	// Trim to height in case any loop appended one extra entry.
 	if len(rowGI) > height {
 		rowGI = rowGI[:height]
 	}
+	if len(rowOrigin) > height {
+		rowOrigin = rowOrigin[:height]
+	}
 
-	return out, rowGI
+	return out, rowGI, rowOrigin
 }
 
 // RecomputeLiveAnchor repositions viewAnchor/viewAnchorOffset so that the

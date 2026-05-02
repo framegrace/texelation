@@ -46,7 +46,7 @@ func TestRender_PaddedLines_NoCloneAtWiderViewport(t *testing.T) {
 
 	vw := NewViewWindow(storageWidth, lineCount)
 	vw.SetViewAnchor(0, 0)
-	out, _ := vw.Render(s)
+	out, _, _ := vw.Render(s)
 
 	if len(out) != lineCount {
 		t.Fatalf("got %d rows, want %d", len(out), lineCount)
@@ -79,7 +79,7 @@ func TestRender_PaddedLines_NoCloneAtNarrowerViewport(t *testing.T) {
 
 	vw := NewViewWindow(renderWidth, lineCount)
 	vw.SetViewAnchor(0, 0)
-	out, gi := vw.Render(s)
+	out, gi, _ := vw.Render(s)
 
 	if len(out) != lineCount {
 		t.Fatalf("got %d rows, want %d", len(out), lineCount)
@@ -113,20 +113,20 @@ func TestRender_PaddedLines_ResizeTransition(t *testing.T) {
 	// Initial render at 80.
 	vw := NewViewWindow(storageWidth, lineCount)
 	vw.SetViewAnchor(0, 0)
-	out80, _ := vw.Render(s)
+	out80, _, _ := vw.Render(s)
 	checkNoClonesInRender(t, "width 80", out80)
 
 	// Resize narrower, re-render.
 	vw.Resize(40, lineCount, int64(lineCount-1))
 	vw.SetViewAnchor(0, 0)
-	out40, _ := vw.Render(s)
+	out40, _, _ := vw.Render(s)
 	checkNoClonesInRender(t, "width 40", out40)
 
 	// Resize back to 80, re-render. Make sure post-resize render is also
 	// clone-free (catches state leaking between renders).
 	vw.Resize(80, lineCount, int64(lineCount-1))
 	vw.SetViewAnchor(0, 0)
-	out80b, _ := vw.Render(s)
+	out80b, _, _ := vw.Render(s)
 	checkNoClonesInRender(t, "width 80 again", out80b)
 }
 
@@ -149,19 +149,19 @@ func TestRender_AutoFollowResize_NoClones(t *testing.T) {
 	cursorGI := int64(lineCount - 1)
 	vw.RecomputeLiveAnchor(s, cursorGI, 6, 0) // writeTop=0, cursor at last row col 6
 
-	out80, _ := vw.Render(s)
+	out80, _, _ := vw.Render(s)
 	checkNoClonesInRender(t, "auto-follow width 80", out80)
 
 	// Narrow the viewport.
 	vw.Resize(40, viewHeight, cursorGI)
 	vw.RecomputeLiveAnchor(s, cursorGI, 6, 0)
-	out40, _ := vw.Render(s)
+	out40, _, _ := vw.Render(s)
 	checkNoClonesInRender(t, "auto-follow width 40", out40)
 
 	// Widen back.
 	vw.Resize(80, viewHeight, cursorGI)
 	vw.RecomputeLiveAnchor(s, cursorGI, 6, 0)
-	out80b, _ := vw.Render(s)
+	out80b, _, _ := vw.Render(s)
 	checkNoClonesInRender(t, "auto-follow width 80 again", out80b)
 }
 
@@ -251,19 +251,19 @@ func TestRender_AutoFollowResize_WrappedContent_NoClones(t *testing.T) {
 	// from narrow-width reflow look identical but have monotone gi (all
 	// from the same chain), so this is the correct invariant to check.
 	vw.RecomputeLiveAnchor(s, cursorGI, 19, 0)
-	_, gi80 := vw.Render(s)
+	_, gi80, _ := vw.Render(s)
 	checkGIMonotone(t, "wrap+padding width 80", gi80)
 
 	// Narrow to 40 — content width 100 chars per chain reflows to 3 rows.
 	vw.Resize(40, viewHeight, cursorGI)
 	vw.RecomputeLiveAnchor(s, cursorGI, 19, 0)
-	_, gi40 := vw.Render(s)
+	_, gi40, _ := vw.Render(s)
 	checkGIMonotone(t, "wrap+padding width 40", gi40)
 
 	// Narrow to 5 — extreme case (very narrow).
 	vw.Resize(5, viewHeight, cursorGI)
 	vw.RecomputeLiveAnchor(s, cursorGI, 4, 0)
-	_, gi5 := vw.Render(s)
+	_, gi5, _ := vw.Render(s)
 	checkGIMonotone(t, "wrap+padding width 5", gi5)
 }
 
