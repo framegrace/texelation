@@ -220,31 +220,60 @@ func TestSelectionStateMachine_QuintupleClickSelectsCommand(t *testing.T) {
 	}
 }
 
-// TestSelectionStateMachine_QuintupleClick_OversizedRangeFallsBackToLine
-// guards against the crash mode where an old-but-only prompt anchor
-// turns the "current command" into the entire session's output. With
-// a 14 MB capture the host terminal closed the pipe and the texelation
-// client died. Until issue #222 lands per-prompt history, the
-// resolver caps at maxCommandLines and falls back to selectLine.
-func TestSelectionStateMachine_QuintupleClick_OversizedRangeFallsBackToLine(t *testing.T) {
+// TestSelectionStateMachine_QuintupleClick_ClickBeforeLatestPromptFallsBack
+// covers the live crash that motivated maxCommandLines. The user
+// clicked into older scrollback where the previous prompt was just a
+// few lines away — but VTerm only tracks the LATEST prompt anchor, so
+// the resolver couldn't bracket the older command. The previous
+// implementation chose [0, latestPrompt-1] as the range, which on a
+// long-running session was 200k+ lines (~14 MB) and crashed the host
+// terminal. The current implementation falls back to selectLine until
+// per-prompt history (issue #222) makes the older-scrollback case
+// resolvable.
+func TestSelectionStateMachine_QuintupleClick_ClickBeforeLatestPromptFallsBack(t *testing.T) {
 	mock := newMockVTermProvider()
-	mock.historyLines[10000] = cellsFromString("recent line")
-	mock.promptStart = 10  // very old prompt anchor
-	mock.contentEnd = 10000 // 9991 lines beyond the prompt — way past cap
+	mock.historyLines[100] = cellsFromString("line under click")
+	// Latest prompt is far ahead of the click — same shape as the
+	// real bug: user clicks at gid 100, but PromptStart sits at gid
+	// 206655 (the latest prompt the shell emitted, not the prompt
+	// just above the click).
+	mock.promptStart = 206655
+	mock.contentEnd = 206700
 	sm := newTestStateMachine(mock)
 	sm.SetSize(80, 24)
 
-	sm.Start(10000, 4, 0, QuintupleClick, 0)
+	sm.Start(100, 4, 0, QuintupleClick, 0)
 	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("no selection range")
 	}
-	// Should have fallen back to selecting just the click line.
-	if startLine != 10000 || endLine != 10000 {
-		t.Errorf("expected fallback to line 10000, got [%d,%d]", startLine, endLine)
+	if startLine != 100 || endLine != 100 {
+		t.Errorf("expected fallback to line 100, got [%d,%d]", startLine, endLine)
 	}
-	if startOffset != 0 || endOffset != len("recent line") {
-		t.Errorf("range=[%d,%d), want [0,%d) (full line)", startOffset, endOffset, len("recent line"))
+	if startOffset != 0 || endOffset != len("line under click") {
+		t.Errorf("range=[%d,%d), want [0,%d) (full line)", startOffset, endOffset, len("line under click"))
+	}
+}
+
+// TestSelectionStateMachine_QuintupleClick_OversizedCurrentCommandFallsBack
+// guards the secondary cap: even when the click IS inside the current
+// command, an enormous output (long-running build log) shouldn't ship
+// a multi-MB clipboard write. Cap at maxCommandLines.
+func TestSelectionStateMachine_QuintupleClick_OversizedCurrentCommandFallsBack(t *testing.T) {
+	mock := newMockVTermProvider()
+	mock.historyLines[10000] = cellsFromString("end of command")
+	mock.promptStart = 0
+	mock.contentEnd = 10000 // 10001 lines — past cap
+	sm := newTestStateMachine(mock)
+	sm.SetSize(80, 24)
+
+	sm.Start(10000, 0, 0, QuintupleClick, 0)
+	startLine, _, endLine, _, ok := sm.SelectionRange()
+	if !ok {
+		t.Fatal("no selection range")
+	}
+	if startLine != 10000 || endLine != 10000 {
+		t.Errorf("expected fallback to single line, got [%d,%d]", startLine, endLine)
 	}
 }
 

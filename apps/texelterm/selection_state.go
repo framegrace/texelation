@@ -369,42 +369,37 @@ func (s *SelectionStateMachine) lineCellsAt(logicalLine int64, viewportRow int) 
 	return s.vtermProvider.HistoryLineCopy(int(logicalLine))
 }
 
-// maxCommandLines bounds how many lines SelectionModeCommand will
-// resolve to. Without per-prompt history (issue #222) we can't bracket
-// older scrollback by its enclosing prompt; the only known anchor may
-// be far in the past and turn the "current command" into "everything
-// since this shell started." Letting the resolver expand without bound
-// has crashed the host terminal in practice — a 14 MB capture turns
-// into a ~19 MB OSC52 sequence which most terminals reject by closing
-// the pipe.
+// maxCommandLines is a defensive ceiling on SelectionModeCommand's
+// resolved range. Even the "current command" branch can grow large
+// (e.g. a long-running tail / build log); this cap keeps the OSC52
+// clipboard write inside the band the host terminal tolerates.
 //
 // 1000 lines × ~80 cols ≈ 80 KB of plain text — comfortably below any
-// terminal's OSC52 ceiling and a sensible "you can fit one command's
-// output" budget.
+// terminal's OSC52 ceiling and a sensible "fits one command's output"
+// budget. Larger ranges fall back to selectLine.
 const maxCommandLines int64 = 1000
 
-// selectCommand selects the shell command the click fell within: from
-// the most recent OSC 133;A prompt anchor at-or-before the click line,
-// to the next prompt anchor (or end-of-buffer if there isn't one yet).
+// selectCommand selects the shell command the click fell within.
 //
-// Plan-C-style "prompt history" isn't tracked yet — VTerm exposes only
-// the latest prompt anchor. So:
+// Properly bracketing a command requires the OSC 133;A anchor for the
+// prompt at-or-before the click AND the anchor for the next prompt
+// after it. VTerm currently tracks only the most recent anchor (issue
+// #222 adds a per-prompt history). With one anchor we can only
+// confidently resolve clicks in the *current* command:
 //
-//   - If a prompt anchor is known and the click is at-or-after it, the
-//     selection runs from that anchor to ContentEndLine — i.e. "the
-//     command currently on screen."
-//   - If the click is before the known prompt anchor, the selection
-//     runs from the start of the buffer up to the prompt-1 — "everything
-//     before the current prompt."
-//   - If no anchor is known at all, fall back to selectLine.
-//   - If the resolved range exceeds maxCommandLines, fall back to
-//     selectLine. Crash safety until prompt-history (issue #222) lets
-//     us properly bracket older commands.
+//   - effective click line >= latest prompt: range is
+//     [latestPrompt, contentEnd] — "current command output."
+//   - effective click line  < latest prompt: we cannot bracket the
+//     older command without history. Fall back to selectLine; we'd
+//     rather select one line correctly than ship a huge capture
+//     between two prompts that may not be the user's command.
+//   - no anchor at all: selectLine.
 //
-// When per-prompt history lands, this resolver becomes "find the prompt
-// at-or-before line, and the next prompt after line" without changing
-// the public surface, and the size cap can drop to a much higher (or
-// removed) value because both bounds will be tight by construction.
+// Once issue #222 lands the second case becomes correct ("find the
+// enclosing prompt" / "find the next prompt") and the fallback can
+// drop. The maxCommandLines safety cap stays — even tightly-bracketed
+// commands could be enormous (build logs, dumps) and the host terminal
+// still has its OSC52 limits.
 func (s *SelectionStateMachine) selectCommand(logicalLine int64, charOffset int, viewportRow int) {
 	if s.vtermProvider == nil {
 		s.selectLine(logicalLine, charOffset, viewportRow)
@@ -424,29 +419,23 @@ func (s *SelectionStateMachine) selectCommand(logicalLine int64, charOffset int,
 		effectiveLine = contentEnd
 	}
 
-	var startLine, endLine int64
-	if effectiveLine >= promptStart {
-		startLine = promptStart
-		endLine = contentEnd
-	} else {
-		startLine = 0
-		endLine = promptStart - 1
-		if endLine < startLine {
-			s.selectLine(logicalLine, charOffset, viewportRow)
-			return
-		}
-	}
-
-	if endLine-startLine+1 > maxCommandLines {
-		// Range is too large — pre-history-tracking we can't be sure we
-		// found the right enclosing command. Drop to selectLine rather
-		// than ship an oversize capture that may crash the host terminal.
+	if effectiveLine < promptStart {
+		// Older scrollback. Need prompt history (issue #222) to do
+		// this right; until then fall back rather than guess at bounds.
 		s.selectLine(logicalLine, charOffset, viewportRow)
 		return
 	}
 
-	// Anchor at column 0 of the start line; head one-past-the-last-cell
-	// of the end line so trailing content is included.
+	startLine := promptStart
+	endLine := contentEnd
+	if endLine-startLine+1 > maxCommandLines {
+		// Even the current command can be huge (long-running tail,
+		// build logs). Fall back to selectLine for the host terminal's
+		// sanity; user can drag-select a larger range explicitly.
+		s.selectLine(logicalLine, charOffset, viewportRow)
+		return
+	}
+
 	endCells := s.lineCellsAt(endLine, viewportRow)
 	s.selection.AnchorLine = startLine
 	s.selection.AnchorOffset = 0
