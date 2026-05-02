@@ -258,3 +258,89 @@ func TestContentToViewport_RoundTripWrappedChain(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderedGridAgreesWithRowOrigin(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+
+	// Mix of short non-wrapping lines and a long wrapped line so the
+	// origin slice has both per-gid and per-cell-offset entries.
+	p := NewParser(v)
+	for i := 0; i < 5; i++ {
+		for _, r := range "short" {
+			p.Parse(r)
+		}
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+	const long = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab" // 100 chars
+	for _, r := range long {
+		p.Parse(r)
+	}
+	p.Parse('\r')
+	p.Parse('\n')
+	for i := 0; i < 5; i++ {
+		for _, r := range "after" {
+			p.Parse(r)
+		}
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+	grid, _ := v.GridWithRowIdx()
+
+	for y, o := range v.mainScreenRowOrigin {
+		if o.Gid == -1 {
+			continue
+		}
+		drewRune := grid[y][0].Rune
+		storeCells := v.mainScreen.ReadLine(o.Gid)
+		if o.Col >= len(storeCells) {
+			t.Errorf("row %d: origin (%d,%d) points past store row (len=%d)",
+				y, o.Gid, o.Col, len(storeCells))
+			continue
+		}
+		want := storeCells[o.Col].Rune
+		if drewRune != want {
+			t.Errorf("row %d col 0: drew rune=%q, but origin (%d,%d) says store rune=%q",
+				y, drewRune, o.Gid, o.Col, want)
+		}
+	}
+}
+
+func TestRenderedGridAgreesWithMapperInterior(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+	p := NewParser(v)
+	const long = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZab" // 100 chars
+	for _, r := range long {
+		p.Parse(r)
+	}
+	p.Parse('\r')
+	p.Parse('\n')
+	grid, _ := v.GridWithRowIdx()
+
+	cases := []struct{ y, x int }{
+		{0, 5}, {0, 79}, {1, 0}, {1, 15},
+	}
+	for _, c := range cases {
+		gid, col, _, ok := v.ViewportToContent(c.y, c.x)
+		if !ok {
+			t.Errorf("(%d,%d): ViewportToContent failed", c.y, c.x)
+			continue
+		}
+		drew := grid[c.y][c.x].Rune
+		storeCells := v.mainScreen.ReadLine(gid)
+		if col >= len(storeCells) {
+			t.Errorf("(%d,%d): mapped (%d,%d) past store len=%d",
+				c.y, c.x, gid, col, len(storeCells))
+			continue
+		}
+		want := storeCells[col].Rune
+		if drew != want {
+			t.Errorf("(%d,%d): drew %q, mapper says (%d,%d)→%q",
+				c.y, c.x, drew, gid, col, want)
+		}
+	}
+}
