@@ -23,7 +23,11 @@ import (
 func newPipedSendingConnection(t *testing.T, queueSize int) (*connection, net.Conn) {
 	t.Helper()
 	sessionID := [16]byte{0xaa}
-	session := NewSession(sessionID, 64)
+	maxDiffs := 64
+	if queueSize > maxDiffs {
+		maxDiffs = queueSize
+	}
+	session := NewSession(sessionID, maxDiffs)
 
 	// Seed the session with queueSize trivial BufferDeltas so
 	// sendPending has a backlog to drain. PaneID + Rows are
@@ -117,5 +121,82 @@ func TestSendPending_ChunksAtBoundary(t *testing.T) {
 
 	if !pendingChannelTicked(conn) {
 		t.Error("sendPending did not re-nudge c.pending after chunk boundary")
+	}
+}
+
+// TestSendPending_DrainsAcrossCalls verifies that calling
+// sendPending repeatedly until the backlog is empty delivers every
+// diff in monotonic sequence. The chunk-resume guard
+// (`if diff.Sequence <= c.lastSent`) is the load-bearing piece —
+// off-by-one would either skip diffs or replay them.
+func TestSendPending_DrainsAcrossCalls(t *testing.T) {
+	const queued = 100
+
+	conn, clientConn := newPipedSendingConnection(t, queued)
+
+	// Reader goroutine: collects every framed BufferDelta into
+	// seqs so the test can assert monotonic sequence at the end.
+	type readResult struct {
+		seqs []uint64
+		err  error
+	}
+	resCh := make(chan readResult, 1)
+	go func() {
+		var seqs []uint64
+		_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			hdr, _, err := protocol.ReadMessage(clientConn)
+			if err != nil {
+				resCh <- readResult{seqs: seqs, err: err}
+				return
+			}
+			seqs = append(seqs, hdr.Sequence)
+			if len(seqs) == queued {
+				resCh <- readResult{seqs: seqs}
+				return
+			}
+		}
+	}()
+
+	// Drive sendPending repeatedly until everything is sent. The
+	// number of calls needed is ceil(queued / sendChunkSize).
+	for i := 0; i < (queued+sendChunkSize-1)/sendChunkSize; i++ {
+		if err := conn.sendPending(); err != nil {
+			t.Fatalf("sendPending[%d]: %v", i, err)
+		}
+	}
+
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("reader: %v (got %d/%d messages)", res.err, len(res.seqs), queued)
+	}
+	if len(res.seqs) != queued {
+		t.Fatalf("got %d messages, want %d", len(res.seqs), queued)
+	}
+	for i, seq := range res.seqs {
+		want := uint64(i + 1) // EnqueueDiff assigns seq=1..queued
+		if seq != want {
+			t.Errorf("message %d: seq=%d, want %d", i, seq, want)
+		}
+	}
+}
+
+// TestSendPending_EmptyQueueIsSilentNoOp verifies that sendPending
+// with no pending diffs is a no-op AND does not produce a spurious
+// self-nudge (which would burn CPU spinning the serve loop).
+func TestSendPending_EmptyQueueIsSilentNoOp(t *testing.T) {
+	conn, _ := newPipedSendingConnection(t, 0)
+
+	// Drain the constructor's nudge so the test sees a clean
+	// channel before sendPending runs.
+	for pendingChannelTicked(conn) {
+	}
+
+	if err := conn.sendPending(); err != nil {
+		t.Fatalf("sendPending: %v", err)
+	}
+
+	if pendingChannelTicked(conn) {
+		t.Error("sendPending nudged c.pending on empty queue (would spin the serve loop)")
 	}
 }
