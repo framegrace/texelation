@@ -101,3 +101,138 @@ func TestDrainScreenEvents_ReturnsCountAndDispatches(t *testing.T) {
 		}
 	}
 }
+
+// TestDrainScreenEvents_EmptyChannelReturnsZero verifies the helper
+// is a fast no-op when nothing is queued. A blocking implementation
+// would freeze the main loop's per-iteration priority drain.
+func TestDrainScreenEvents_EmptyChannelReturnsZero(t *testing.T) {
+	ch := make(chan tcell.Event, 4)
+	handle := func(ev tcell.Event) bool {
+		t.Errorf("handle should not be called on empty channel; got %v", ev)
+		return true
+	}
+
+	done := make(chan struct {
+		drained int
+		ok      bool
+	}, 1)
+	go func() {
+		drained, ok := drainScreenEvents(ch, handle)
+		done <- struct {
+			drained int
+			ok      bool
+		}{drained, ok}
+	}()
+
+	select {
+	case res := <-done:
+		if res.drained != 0 {
+			t.Errorf("drained = %d, want 0", res.drained)
+		}
+		if !res.ok {
+			t.Errorf("ok = false, want true on empty drain")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("drainScreenEvents blocked on empty channel")
+	}
+}
+
+// TestDrainScreenEvents_ChannelClosedReturnsNotOK verifies the
+// helper returns ok=false when the channel is closed, so the main
+// loop's caller can return nil and exit cleanly.
+func TestDrainScreenEvents_ChannelClosedReturnsNotOK(t *testing.T) {
+	ch := make(chan tcell.Event, 1)
+	close(ch)
+	handle := func(ev tcell.Event) bool {
+		t.Errorf("handle should not be called when channel closed; got %v", ev)
+		return true
+	}
+
+	drained, ok := drainScreenEvents(ch, handle)
+
+	if ok {
+		t.Error("ok = true, want false for closed channel")
+	}
+	if drained != 0 {
+		t.Errorf("drained = %d, want 0 (channel closed before any event)", drained)
+	}
+}
+
+// TestDrainScreenEvents_DrainsThenChannelCloses covers the realistic
+// shutdown shape: events are queued, then the producer closes the
+// channel. The helper must drain the buffered events first and only
+// then observe the close. Without this case, a future regression
+// where the close-detection logic short-circuits before draining
+// the buffer would silently lose user input.
+func TestDrainScreenEvents_DrainsThenChannelCloses(t *testing.T) {
+	ch := make(chan tcell.Event, 4)
+	want := []int{1, 2}
+	for _, id := range want {
+		ch <- tcell.NewEventInterrupt(id)
+	}
+	close(ch)
+
+	var dispatched []int
+	handle := func(ev tcell.Event) bool {
+		dispatched = append(dispatched, ev.(*tcell.EventInterrupt).Data().(int))
+		return true
+	}
+
+	drained, ok := drainScreenEvents(ch, handle)
+
+	if ok {
+		t.Error("ok = true, want false (channel closed after drain)")
+	}
+	if drained != len(want) {
+		t.Errorf("drained = %d, want %d", drained, len(want))
+	}
+	if len(dispatched) != len(want) {
+		t.Fatalf("dispatched %d events, want %d", len(dispatched), len(want))
+	}
+	for i, id := range want {
+		if dispatched[i] != id {
+			t.Errorf("dispatch[%d]: got %d, want %d", i, dispatched[i], id)
+		}
+	}
+}
+
+// TestDrainScreenEvents_HandleReturnsFalseStopsDrain covers the
+// production exit signal: handleScreenEvent returns false to mean
+// "the run loop should exit" (e.g. ctrl-Q, session disconnect).
+// The helper must propagate that immediately — drained must reflect
+// only events whose handler ran successfully (excluding the one
+// that returned false), and any remaining queued events stay in
+// the channel. Without this case, an off-by-one regression in the
+// helper (count++ before vs. after the handle check, or draining
+// one extra event after the false return) would silently leak
+// events past the exit signal.
+func TestDrainScreenEvents_HandleReturnsFalseStopsDrain(t *testing.T) {
+	ch := make(chan tcell.Event, 4)
+	for _, id := range []int{1, 2, 3} {
+		ch <- tcell.NewEventInterrupt(id)
+	}
+
+	var dispatched []int
+	handle := func(ev tcell.Event) bool {
+		id := ev.(*tcell.EventInterrupt).Data().(int)
+		dispatched = append(dispatched, id)
+		return id != 2 // signal exit on the second event
+	}
+
+	drained, ok := drainScreenEvents(ch, handle)
+
+	if ok {
+		t.Error("ok = true, want false when handle returned false")
+	}
+	if drained != 1 {
+		t.Errorf("drained = %d, want 1 (only the first successful event counts)", drained)
+	}
+	if len(dispatched) != 2 {
+		t.Errorf("dispatched %d events, want 2 (the handler ran for events 1 and 2)", len(dispatched))
+	}
+	// The third event must remain in the channel — exit-on-false
+	// means the helper stops AT the false event, not after it.
+	if got := len(ch); got != 1 {
+		t.Errorf("ch len after exit = %d, want 1 (third event should not have been drained)", got)
+	}
+}

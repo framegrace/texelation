@@ -553,6 +553,34 @@ func coalesceRenderCh(ch <-chan struct{}) {
 	}
 }
 
+// drainScreenEvents pulls every queued tcell event from events and
+// dispatches each via handle. Returns the count drained and ok=false
+// if either the channel closed (run-loop exit signal) or the handle
+// returned false (also a run-loop exit signal). Non-blocking: empty
+// channel returns (0, true) immediately and the caller's select can
+// block on the next signal.
+//
+// The handle callback is the call site's closure over
+// handleScreenEvent + state/screen/sessionID/writer; passing it as
+// a parameter keeps this helper pure and unit-testable without a
+// full clientState fixture.
+func drainScreenEvents(events <-chan tcell.Event, handle func(tcell.Event) bool) (drained int, ok bool) {
+	for {
+		select {
+		case ev, chOK := <-events:
+			if !chOK {
+				return drained, false
+			}
+			if !handle(ev) {
+				return drained, false
+			}
+			drained++
+		default:
+			return drained, true
+		}
+	}
+}
+
 func setupLogging() (*os.File, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
