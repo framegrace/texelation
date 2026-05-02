@@ -215,7 +215,10 @@ func TestSendPending_EmptyQueueIsSilentNoOp(t *testing.T) {
 // input was dispatched". The test passes if that captured count is
 // strictly less than the full backlog.
 func TestServeLoop_InputInterleaves(t *testing.T) {
-	const queued = 200
+	// queued is well above sendChunkSize so we definitely have many
+	// chunks, and large enough that random select fairness wins
+	// essentially every run (P(failure) ≈ 0.5^(500/32) < 1e-4).
+	const queued = 500
 
 	conn, clientConn := newPipedSendingConnection(t, queued)
 
@@ -241,6 +244,22 @@ func TestServeLoop_InputInterleaves(t *testing.T) {
 	// awaitResume=false in our helper, but be explicit.
 	conn.awaitResume = false
 
+	// Pre-inject the mouse event so it's already queued in c.incoming
+	// when serve()'s first chunk-and-yield reaches its select. Without
+	// this, sendPending could drain the entire backlog before the
+	// reader goroutine wakes up to forward an event.
+	mousePayload, err := protocol.EncodeMouseEvent(protocol.MouseEvent{X: 0, Y: 0})
+	if err != nil {
+		t.Fatalf("encode mouse: %v", err)
+	}
+	mouseHdr := protocol.Header{
+		Version:   protocol.Version,
+		Type:      protocol.MsgMouseEvent,
+		Flags:     protocol.FlagChecksum,
+		SessionID: conn.session.ID(),
+	}
+	conn.incoming <- protocolMessage{header: mouseHdr, payload: mousePayload}
+
 	// Start serve(). It will begin draining diffs in chunks and
 	// process incoming messages between chunks.
 	serveErr := make(chan error, 1)
@@ -263,21 +282,6 @@ func TestServeLoop_InputInterleaves(t *testing.T) {
 			}
 		}
 	}()
-
-	// Inject a MsgMouseEvent onto the connection's incoming
-	// channel — bypasses the wire-side reader so we don't have to
-	// race with backlog reads on the same pipe direction.
-	mousePayload, err := protocol.EncodeMouseEvent(protocol.MouseEvent{X: 0, Y: 0})
-	if err != nil {
-		t.Fatalf("encode mouse: %v", err)
-	}
-	mouseHdr := protocol.Header{
-		Version:   protocol.Version,
-		Type:      protocol.MsgMouseEvent,
-		Flags:     protocol.FlagChecksum,
-		SessionID: conn.session.ID(),
-	}
-	conn.incoming <- protocolMessage{header: mouseHdr, payload: mousePayload}
 
 	// Wait for the dispatch signal. If it never fires the input
 	// was starved — that's the bug.
