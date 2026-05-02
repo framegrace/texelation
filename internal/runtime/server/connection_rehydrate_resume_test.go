@@ -21,6 +21,23 @@ import (
 	"github.com/framegrace/texelation/protocol"
 )
 
+// drainAllMessages reads every framed message available on conn until
+// it hits a read error (EOF / closed pipe / deadline), discarding the
+// payloads. Used by tests that talk to the server over a synchronous
+// net.Pipe — the resume handler now emits multiple unsolicited
+// MsgBootProgress frames ahead of any "real" response, and a writer
+// stuck on an undrained pipe would block before the handler finishes
+// setting state we want to assert on.
+func drainAllMessages(conn net.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+	for {
+		if _, _, err := protocol.ReadMessage(conn); err != nil {
+			return
+		}
+	}
+}
+
 // driveResumeRequest writes a MsgResumeRequest with the given fields
 // onto clientConn, then closes clientConn so the connection's serve
 // loop sees EOF and returns. Returns the channel that will receive
@@ -104,11 +121,11 @@ func TestConnection_NonRehydratedResume_HonorsLastAcked(t *testing.T) {
 		LastSequence: 42,
 	})
 
-	// Drain whatever the resume branch writes (a TreeSnapshot for the
-	// non-rehydrated path) so the pipe doesn't block, then close.
-	_ = clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	_, _, _ = protocol.ReadMessage(clientConn)
-	_ = clientConn.SetReadDeadline(time.Time{})
+	// Drain whatever the resume branch writes — multiple
+	// MsgBootProgress messages plus a TreeSnapshot for the
+	// non-rehydrated path — so the synchronous net.Pipe doesn't
+	// block the handler before it finishes setting state.
+	drainAllMessages(clientConn)
 	_ = clientConn.Close()
 
 	select {
@@ -144,6 +161,9 @@ func TestConnection_RehydratedResume_LeavesInitialSnapshotSentFalse(t *testing.T
 		SessionID: sessionID,
 	})
 
+	// Drain any progress messages so the handler can finish setting
+	// state on the synchronous pipe before we close.
+	drainAllMessages(clientConn)
 	_ = clientConn.Close()
 
 	select {
@@ -176,10 +196,9 @@ func TestConnection_NonRehydratedResume_FlipsInitialSnapshotSent(t *testing.T) {
 		SessionID: sessionID,
 	})
 
-	// Drain the TreeSnapshot the non-rehydrated branch writes.
-	_ = clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	_, _, _ = protocol.ReadMessage(clientConn)
-	_ = clientConn.SetReadDeadline(time.Time{})
+	// Drain progress messages plus the TreeSnapshot the non-
+	// rehydrated branch writes.
+	drainAllMessages(clientConn)
 	_ = clientConn.Close()
 
 	select {
@@ -219,14 +238,22 @@ func TestConnection_RehydratedResume_SkipsEarlySnapshot(t *testing.T) {
 		SessionID: sessionID,
 	})
 
-	// Read with a short deadline. The rehydrated branch must NOT have
-	// written a TreeSnapshot in response to MsgResumeRequest, so we
-	// expect this read to time out / return io.EOF rather than yield
-	// a message.
+	// The rehydrated branch must NOT have written a TreeSnapshot in
+	// response to MsgResumeRequest. It MAY have written
+	// MsgBootProgress messages; those are cosmetic and we skip them.
+	// The first non-progress read should fail (io.EOF / timeout) —
+	// receiving a real payload here means the rehydrated path
+	// regressed and shipped an early snapshot.
 	_ = clientConn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
-	hdr, _, err := protocol.ReadMessage(clientConn)
-	if err == nil {
-		t.Fatalf("rehydrated resume wrote unexpected message type=%d; want no message before MsgClientReady", hdr.Type)
+	for {
+		hdr, _, err := protocol.ReadMessage(clientConn)
+		if err != nil {
+			break
+		}
+		if hdr.Type == protocol.MsgBootProgress {
+			continue
+		}
+		t.Fatalf("rehydrated resume wrote unexpected message type=%d; want no non-progress message before MsgClientReady", hdr.Type)
 	}
 }
 
@@ -250,13 +277,20 @@ func TestConnection_NonRehydratedResume_SendsEarlySnapshot(t *testing.T) {
 
 	// In-process resume: expect a MsgTreeSnapshot on the wire within
 	// the deadline. (nopSink.Snapshot returns an empty TreeSnapshot,
-	// so the message is short but present.)
+	// so the message is short but present.) Skip any cosmetic
+	// MsgBootProgress messages emitted ahead of it.
 	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	hdr, _, err := protocol.ReadMessage(clientConn)
-	if err != nil {
-		t.Fatalf("non-rehydrated resume: expected MsgTreeSnapshot, got read error: %v", err)
-	}
-	if hdr.Type != protocol.MsgTreeSnapshot {
-		t.Fatalf("non-rehydrated resume: wrote message type=%d, want MsgTreeSnapshot (%d)", hdr.Type, protocol.MsgTreeSnapshot)
+	for {
+		hdr, _, err := protocol.ReadMessage(clientConn)
+		if err != nil {
+			t.Fatalf("non-rehydrated resume: expected MsgTreeSnapshot, got read error: %v", err)
+		}
+		if hdr.Type == protocol.MsgBootProgress {
+			continue
+		}
+		if hdr.Type != protocol.MsgTreeSnapshot {
+			t.Fatalf("non-rehydrated resume: wrote message type=%d, want MsgTreeSnapshot (%d)", hdr.Type, protocol.MsgTreeSnapshot)
+		}
+		break
 	}
 }

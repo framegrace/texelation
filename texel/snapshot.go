@@ -8,6 +8,7 @@
 package texel
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/framegrace/texelui/theme"
@@ -130,28 +131,53 @@ func (d *DesktopEngine) SnapshotForClient() TreeCapture {
 	capture.Panes = make([]PaneSnapshot, 0)
 	capture.ActiveWorkspaceID = d.activeWorkspace.id
 
-	var collect func(*Node)
-	collect = func(n *Node) {
-		if n == nil {
-			return
-		}
-		if len(n.Children) == 0 {
-			if n.Pane != nil {
-				// Check if already captured
-				if _, exists := paneIndex[n.Pane]; !exists {
-					paneSnap := capturePaneSnapshot(n.Pane)
-					paneIndex[n.Pane] = len(capture.Panes)
-					capture.Panes = append(capture.Panes, paneSnap)
+	// Two-pass capture so per-pane progress reporting can give an
+	// "N of M" denominator. Each capturePaneSnapshot reads the pane's
+	// rendered buffer, which on rehydrated cold starts pulls WAL
+	// pages from disk — slow enough that without progress signals
+	// the boot splash sits on a single message for the duration.
+	d.progressReporterMu.Lock()
+	report := d.progressReporter
+	d.progressReporterMu.Unlock()
+
+	// seen dedups panes during the walk (a pane could appear in
+	// multiple subtrees in pathological cases). paneIndex itself is
+	// populated once per pane in the second pass so its value
+	// matches len(capture.Panes) — what buildTreeCapture reads.
+	seen := make(map[*pane]struct{})
+	var orderedPanes []*pane
+	if d.activeWorkspace.tree.Root != nil {
+		var walk func(*Node)
+		walk = func(n *Node) {
+			if n == nil {
+				return
+			}
+			if len(n.Children) == 0 && n.Pane != nil {
+				if _, exists := seen[n.Pane]; !exists {
+					seen[n.Pane] = struct{}{}
+					orderedPanes = append(orderedPanes, n.Pane)
 				}
 			}
+			for _, child := range n.Children {
+				walk(child)
+			}
 		}
-		for _, child := range n.Children {
-			collect(child)
-		}
-	}
+		walk(d.activeWorkspace.tree.Root)
 
-	if d.activeWorkspace.tree.Root != nil {
-		collect(d.activeWorkspace.tree.Root)
+		total := len(orderedPanes)
+		for i, p := range orderedPanes {
+			if report != nil {
+				title := p.getTitle()
+				if title == "" {
+					title = "untitled"
+				}
+				report(fmt.Sprintf("Rendering pane %d of %d (%s)…", i+1, total, title))
+			}
+			paneSnap := capturePaneSnapshot(p)
+			paneIndex[p] = len(capture.Panes)
+			capture.Panes = append(capture.Panes, paneSnap)
+		}
+
 		capture.Root = buildTreeCapture(d.activeWorkspace.tree.Root, paneIndex)
 		// For consistency, also set it in map
 		capture.WorkspaceRoots[d.activeWorkspace.id] = capture.Root
