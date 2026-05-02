@@ -419,6 +419,29 @@ func Run(opts Options) error {
 			tickCh = ticker.C
 		}
 
+		// PRIORITY DRAIN: process every queued tcell event before
+		// blocking on the main select. Without this, Go's uniform-
+		// random select pick lets renderCh win most rounds when
+		// it's saturated by heavy server traffic — input lags
+		// behind every queued render. drainScreenEvents is
+		// non-blocking when the events channel is empty, so the
+		// hot path is one default-case channel receive.
+		drained, ok := drainScreenEvents(events, func(ev tcell.Event) bool {
+			return handleScreenEvent(ev, state, screen, sessionID, writer)
+		})
+		if !ok {
+			return nil
+		}
+		if drained > 0 {
+			// Events advanced state; loop back so the next
+			// iteration re-evaluates the animation ticker
+			// condition before committing to a select. Removing
+			// this `continue` would let the loop block on a
+			// renderCh / tickCh tick that an event might have
+			// invalidated (e.g. a key toggling animations off).
+			continue
+		}
+
 		select {
 		case <-tickCh:
 			// Fixed-timestep tick: advance time, update effects, render.
@@ -442,6 +465,12 @@ func Run(opts Options) error {
 
 		case <-renderCh:
 			// Data-driven render: delta/snapshot arrived. Render immediately, no time advance.
+			// Coalesce any further renderCh ticks that readLoop has
+			// queued during the previous select round so a burst of
+			// N BufferDelta signals collapses into one render of
+			// the final state. Without this, render frequency
+			// tracks incoming delta rate.
+			coalesceRenderCh(renderCh)
 			state.frameDT = 0
 			if state.effects != nil {
 				state.effects.Update(0)
