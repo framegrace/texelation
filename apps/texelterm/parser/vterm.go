@@ -642,9 +642,11 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 // ContentToViewport converts content coordinates to viewport coordinates.
 // Returns (y, x, visible) where visible is true if content is on screen.
 //
-// Same naive-math caveat as ViewportToContent — the highlight tracks
-// the wrong visual row for cells inside a wrap continuation. Don't
-// consult the reflow walk until it's clearly inverse-of-renderer.
+// Linear-scans the cached mainScreenRowOrigin slice; for each row whose
+// origin is set (Gid != -1), uses cellsBetween bounded by the viewport
+// width to test whether (logicalLine, charOffset) lies within that
+// row's cell-walked extent. Round-trips correctly with
+// ViewportToContent regardless of wrap reflow. Issue #224.
 func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, visible bool) {
 	if v.inAltScreen {
 		if v.width <= 0 {
@@ -658,15 +660,57 @@ func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, 
 	if v.mainScreen == nil {
 		return 0, 0, false
 	}
-	visibleTop, visibleBottom := v.mainScreen.VisibleRange()
-	rowOffset := logicalLine - visibleTop
-	if rowOffset < 0 || rowOffset > visibleBottom-visibleTop {
-		return 0, 0, false
+
+	// Snapshot the slice header. The underlying array is replaced on
+	// each render (mainScreenGridWithRowIdx assigns a fresh slice),
+	// so a header copy is safe to iterate without holding the lock —
+	// and we must release it before calling cellsBetween, which
+	// touches the store via ReadLine.
+	v.mainScreenRowOriginMu.RLock()
+	origins := v.mainScreenRowOrigin
+	v.mainScreenRowOriginMu.RUnlock()
+
+	for ry, o := range origins {
+		if o.Gid == -1 {
+			continue
+		}
+		steps, ok := v.cellsBetween(o.Gid, o.Col, logicalLine, charOffset, v.width)
+		if !ok {
+			continue
+		}
+		if steps >= v.width {
+			// Target lies past this row's full viewport-width extent;
+			// let a later row whose origin starts there claim it.
+			continue
+		}
+		// For non-wrapped chains cellsBetween happily walks past a
+		// row's visible end into the next gid (the helper has no
+		// notion of where a visual row ends). Bound by the next set
+		// row's origin: if the next origin lies at or before our
+		// target on the chain walk, the target belongs to that
+		// later row, not this one.
+		if next, found := nextSetOrigin(origins, ry); found {
+			rowExtent, rok := v.cellsBetween(o.Gid, o.Col, next.Gid, next.Col, v.width)
+			if rok && steps >= rowExtent {
+				continue
+			}
+		}
+		return ry, steps, true
 	}
-	y = int(rowOffset)
-	x = charOffset
-	visible = y >= 0 && y < v.height
-	return
+	return 0, 0, false
+}
+
+// nextSetOrigin returns the next origin after index ry whose Gid is not
+// the -1 sentinel, or (zero, false) if none exists. Used by
+// ContentToViewport to bound a row's visible extent by the start of the
+// next populated row.
+func nextSetOrigin(origins []RowOrigin, ry int) (RowOrigin, bool) {
+	for i := ry + 1; i < len(origins); i++ {
+		if origins[i].Gid != -1 {
+			return origins[i], true
+		}
+	}
+	return RowOrigin{}, false
 }
 
 // advanceCells walks `n` cells forward from (originGid, originCol) through

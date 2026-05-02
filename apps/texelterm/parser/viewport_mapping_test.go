@@ -180,3 +180,36 @@ func TestViewportToContent_WrappedContinuationRow(t *testing.T) {
 			gid, col, wantGid, wantCol)
 	}
 }
+
+func TestContentToViewport_RoundTripNonWrapped(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+
+	p := NewParser(v)
+	for i := 0; i < 5; i++ {
+		for _, r := range "hello" {
+			p.Parse(r)
+		}
+		p.Parse('\r')
+		p.Parse('\n')
+	}
+	_, _ = v.GridWithRowIdx()
+
+	for y := 0; y < 5; y++ {
+		for x := 0; x < 5; x++ {
+			gid, col, _, ok := v.ViewportToContent(y, x)
+			if !ok {
+				t.Fatalf("ViewportToContent(%d,%d) ok=false", y, x)
+			}
+			ry, rx, vis := v.ContentToViewport(gid, col)
+			if !vis {
+				t.Errorf("(%d,%d) → (%d,%d) → not visible", y, x, gid, col)
+				continue
+			}
+			if ry != y || rx != x {
+				t.Errorf("round-trip (%d,%d) → (gid=%d,col=%d) → (%d,%d)",
+					y, x, gid, col, ry, rx)
+			}
+		}
+	}
+}
