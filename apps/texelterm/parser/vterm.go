@@ -33,6 +33,21 @@ type VTerm struct {
 	mainScreenPersistence *AdaptivePersistence
 	// mainScreenPageStore is the page-based disk storage (optional).
 	mainScreenPageStore *PageStore
+	// mainScreenRowOrigin caches the per-row cell-bearing (gid, col) emitted
+	// by the sparse view's last render. Length matches the rendered grid;
+	// Gid == -1 sentinel for blank rows / unwritten gaps. Read by
+	// ContentToViewport / ViewportToContent (Tasks 11/12) to project
+	// (gid, col) selection points onto reflowed rows without re-walking
+	// the chain.
+	//
+	// Lock model: Option B — a dedicated rowOriginMu protects this field.
+	// We can't reuse v.mu because mainScreenGridWithRowIdx (where this is
+	// written) is called under v.mu.RLock() in Grid() / GridWithRowIdx();
+	// a write under an RLock is a race. There is no existing cache field
+	// on VTerm whose pattern we can match. Tasks 11/12 RLock rowOriginMu
+	// when reading. Issue #224.
+	mainScreenRowOrigin   []RowOrigin
+	mainScreenRowOriginMu sync.RWMutex
 	// Terminal state
 	currentFG, currentBG               Color
 	currentAttr                        Attribute
