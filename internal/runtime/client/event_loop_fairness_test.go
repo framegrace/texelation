@@ -10,6 +10,7 @@ package clientruntime
 
 import (
 	"testing"
+	"time"
 )
 
 // TestCoalesceRenderCh_DrainsAllQueuedTicks verifies the helper
@@ -29,5 +30,23 @@ func TestCoalesceRenderCh_DrainsAllQueuedTicks(t *testing.T) {
 
 	if got := len(ch); got != 0 {
 		t.Errorf("after coalesce: ch len = %d, want 0", got)
+	}
+}
+
+// TestCoalesceRenderCh_NonBlockingOnEmpty verifies the helper
+// returns promptly when the channel is empty. A blocking call
+// here would freeze the main loop's renderCh case.
+func TestCoalesceRenderCh_NonBlockingOnEmpty(t *testing.T) {
+	ch := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		coalesceRenderCh(ch)
+		close(done)
+	}()
+	select {
+	case <-done:
+		// returned promptly — good
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("coalesceRenderCh blocked on empty channel")
 	}
 }

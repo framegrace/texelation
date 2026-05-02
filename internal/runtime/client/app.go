@@ -523,6 +523,36 @@ func formatPaneID(id [16]byte) string {
 	return fmt.Sprintf("%x", id[:4])
 }
 
+// coalesceRenderCh non-blocks-drains every queued tick on ch. The
+// client's main event loop calls this after consuming a single
+// renderCh tick from its select so a burst of N signals (heavy
+// server traffic flooding readLoop's signalRender path) collapses
+// into one render call. With render frequency tracking incoming
+// delta rate, the loop spent most of its time re-rendering against
+// transient intermediate state; coalescing makes render frequency
+// bounded by render duration itself.
+//
+// The function logs (at debuglog level) when it coalesces 2+ ticks
+// in one call. Pre-coalesce, the renderCh channel filling its 64
+// buffer was the de-facto canary that render() was lagging behind
+// readLoop. Coalescing collapses bursts before the buffer can fill,
+// so this log line preserves the same diagnostic signal — a tail
+// of the debug log shows post-hoc whether bursts were arriving.
+func coalesceRenderCh(ch <-chan struct{}) {
+	count := 0
+	for {
+		select {
+		case <-ch:
+			count++
+		default:
+			if count > 1 {
+				debuglog.Printf("event loop: coalesced %d renderCh ticks", count)
+			}
+			return
+		}
+	}
+}
+
 func setupLogging() (*os.File, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
