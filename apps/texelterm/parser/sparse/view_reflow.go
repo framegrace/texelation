@@ -5,6 +5,19 @@ package sparse
 
 import "github.com/framegrace/texelation/apps/texelterm/parser"
 
+// RowOrigin is the (gid, col) of the FIRST cell of a reflowed visual row.
+// Used by the selection mapping to project content positions to viewport
+// coordinates without re-deriving the renderer's chain walk.
+//
+// Sentinel: Gid == -1 means the row has no real content (blank row inside
+// a chain-walk gap, or bottom padding when the viewport is taller than
+// the rendered content). Selection callers fall back to naive math on
+// such rows.
+type RowOrigin struct {
+	Gid int64
+	Col int
+}
+
 // walkChain returns the end globalIdx of the Wrapped chain starting at
 // startGI, plus whether any row in the chain is marked NoWrap (chain
 // propagation). Walks at most maxSteps rows to bound pathological inputs.
@@ -50,23 +63,33 @@ func walkChain(s *Store, startGI int64, maxSteps int) (end int64, nowrap bool) {
 // the right-side content on a NEW row (issue #193). Lines without gaps
 // (everything autowrap or shell-typed contiguously from col 0) reflow
 // normally — `ls -l` output etc. continues to wrap on shrink (issue #197).
-func reflowChain(s *Store, startGI, endGI int64, viewWidth int) [][]parser.Cell {
+func reflowChain(s *Store, startGI, endGI int64, viewWidth int) (rows [][]parser.Cell, origin []RowOrigin) {
 	if viewWidth <= 0 {
-		return nil
+		return nil, nil
 	}
 	if startGI == endGI && rowHasPositionalGap(s, startGI) {
-		return [][]parser.Cell{s.GetLine(startGI)}
+		return [][]parser.Cell{s.GetLine(startGI)}, []RowOrigin{{Gid: startGI, Col: 0}}
 	}
 	var logical []parser.Cell
+	var cellOrigin []RowOrigin
 	for gi := startGI; gi <= endGI; gi++ {
-		logical = append(logical, s.GetLine(gi)...)
+		line := s.GetLine(gi)
+		for col := range line {
+			logical = append(logical, line[col])
+			cellOrigin = append(cellOrigin, RowOrigin{Gid: gi, Col: col})
+		}
 	}
+	// Trim logical AND cellOrigin from the same length so origin[i] stays
+	// aligned with logical[i]. trimTrailingPadding returns a possibly-
+	// shorter slice (it does cells[:n]); reassign logical to it and shrink
+	// cellOrigin to match.
 	logical = trimTrailingPadding(logical)
+	cellOrigin = cellOrigin[:len(logical)]
+
 	trailing := trailingEmptyRows(s, startGI, endGI)
 	if len(logical) == 0 && trailing == 0 {
-		return [][]parser.Cell{nil}
+		return [][]parser.Cell{nil}, []RowOrigin{{Gid: -1}}
 	}
-	var rows [][]parser.Cell
 	for off := 0; off < len(logical); off += viewWidth {
 		end := off + viewWidth
 		if end > len(logical) {
@@ -75,11 +98,13 @@ func reflowChain(s *Store, startGI, endGI int64, viewWidth int) [][]parser.Cell 
 		row := make([]parser.Cell, end-off)
 		copy(row, logical[off:end])
 		rows = append(rows, row)
+		origin = append(origin, cellOrigin[off])
 	}
 	for i := 0; i < trailing; i++ {
 		rows = append(rows, nil)
+		origin = append(origin, RowOrigin{Gid: endGI, Col: len(s.GetLine(endGI))})
 	}
-	return rows
+	return rows, origin
 }
 
 // trimTrailingPadding drops trailing PADDING cells (space rune, default

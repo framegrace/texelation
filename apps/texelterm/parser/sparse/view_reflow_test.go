@@ -76,7 +76,7 @@ func TestReflowChain_SingleLogical(t *testing.T) {
 	fillRow(s, 0, "0123456789", true)
 	fillRow(s, 1, "abcde", false)
 	// chain at width 5 → 3 rows: "01234", "56789", "abcde"
-	rows := reflowChain(s, 0, 1, 5)
+	rows, _ := reflowChain(s, 0, 1, 5)
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows))
 	}
@@ -146,7 +146,7 @@ func TestReflowChain_TrimsTrailingPadding(t *testing.T) {
 	s := NewStore(10)
 	fillRow(s, 0, "Hello"+strings.Repeat(" ", 75), false) // width-80 padded line
 
-	rows := reflowChain(s, 0, 0, 40)
+	rows, _ := reflowChain(s, 0, 0, 40)
 	if len(rows) != 1 {
 		t.Errorf("padded line at half width: got %d rows, want 1 (trailing padding should not wrap)", len(rows))
 	}
@@ -161,7 +161,7 @@ func TestReflowChain_TrimsTrailingPaddingAcrossChain(t *testing.T) {
 	s := NewStore(10)
 	fillRow(s, 0, "hello   ", true)
 	fillRow(s, 1, "        ", false)
-	rows := reflowChain(s, 0, 1, 20)
+	rows, _ := reflowChain(s, 0, 1, 20)
 	if len(rows) != 1 {
 		t.Errorf("chain ending in padding across rows: got %d rows, want 1", len(rows))
 	}
@@ -175,7 +175,7 @@ func TestReflowChain_TrimsTrailingPaddingAcrossChain(t *testing.T) {
 func TestReflowChain_PreservesEmbeddedSpaces(t *testing.T) {
 	s := NewStore(10)
 	fillRow(s, 0, "a    b", false)
-	rows := reflowChain(s, 0, 0, 20)
+	rows, _ := reflowChain(s, 0, 0, 20)
 	if len(rows) != 1 || cellsToStringSparse(rows[0]) != "a    b" {
 		t.Errorf("embedded spaces: got %q, want %q", cellsToStringSparse(rows[0]), "a    b")
 	}
@@ -195,7 +195,7 @@ func TestReflowChain_PreservesColoredTrailingSpaces(t *testing.T) {
 	}
 	s.SetLine(0, cells)
 
-	rows := reflowChain(s, 0, 0, 10)
+	rows, _ := reflowChain(s, 0, 0, 10)
 	// 31 cells reflowed at width 10 → 4 rows (3 full + 1 with the
 	// final coloured space). Coloured bar must wrap, not clip.
 	if len(rows) != 4 {
@@ -211,7 +211,7 @@ func TestReflowChain_PreservesReverseAttributeTrailingSpace(t *testing.T) {
 	cells := []parser.Cell{{Rune: 'X'}, {Rune: ' ', Attr: parser.AttrReverse}}
 	s.SetLine(0, cells)
 
-	rows := reflowChain(s, 0, 0, 20)
+	rows, _ := reflowChain(s, 0, 0, 20)
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1", len(rows))
 	}
@@ -242,4 +242,20 @@ func cellsToStringSparse(cells []parser.Cell) string {
 		}
 	}
 	return b.String()
+}
+
+func TestReflowChain_OriginNonWrapped(t *testing.T) {
+	s := NewStore(80)
+	fillRow(s, 5, "hello world", false) // single non-wrapped gid
+
+	rows, origin := reflowChain(s, 5, 5, 80)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d, want 1", len(rows))
+	}
+	if len(origin) != 1 {
+		t.Fatalf("origin len=%d, want 1", len(origin))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
 }

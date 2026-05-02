@@ -154,7 +154,7 @@ func (v *ViewWindow) Render(s *Store) ([][]parser.Cell, []int64) {
 			// would require tracking cell-range provenance through
 			// reflowChain; the publisher only needs "does this row belong
 			// to a real store position" which the chain head answers.
-			reflowed := reflowChain(s, gi, end, width)
+			reflowed, _ := reflowChain(s, gi, end, width)
 			for _, row := range reflowed {
 				rows = append(rows, clipRow(row, width))
 				rowsGI = append(rowsGI, gi)
