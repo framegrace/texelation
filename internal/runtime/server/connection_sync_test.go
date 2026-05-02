@@ -9,6 +9,7 @@ package server
 
 import (
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -199,4 +200,117 @@ func TestSendPending_EmptyQueueIsSilentNoOp(t *testing.T) {
 	if pendingChannelTicked(conn) {
 		t.Error("sendPending nudged c.pending on empty queue (would spin the serve loop)")
 	}
+}
+
+// TestServeLoop_InputInterleaves drives a serve() goroutine with a
+// heavy diff backlog AND a queued input message, asserting that
+// the input gets dispatched before the entire backlog flushes.
+// Without the chunk-and-yield in sendPending, the input would wait
+// behind every queued diff — the user-visible bug this spec fixes.
+//
+// Approach: the reader increments an atomic counter as each message
+// arrives on the wire; the sink callback captures the atomic value at
+// the instant of dispatch (same goroutine as serve). That avoids any
+// cross-goroutine timing race in "how many diffs had arrived when the
+// input was dispatched". The test passes if that captured count is
+// strictly less than the full backlog.
+func TestServeLoop_InputInterleaves(t *testing.T) {
+	const queued = 200
+
+	conn, clientConn := newPipedSendingConnection(t, queued)
+
+	// readerCount is incremented atomically by the reader goroutine
+	// each time it successfully receives a framed message from the pipe.
+	var readerCount atomic.Int64
+
+	// dispatched is closed (exactly once) by the sink when the mouse
+	// event is handled; atDispatchCount holds the readerCount snapshot
+	// captured inside the sink callback.
+	dispatched := make(chan struct{})
+	var atDispatchCount atomic.Int64
+	var dispatchOnce atomic.Bool
+
+	conn.sink = &mouseDispatchSink{onMouse: func() {
+		if dispatchOnce.CompareAndSwap(false, true) {
+			atDispatchCount.Store(readerCount.Load())
+			close(dispatched)
+		}
+	}}
+
+	// Make resume not block input handling — connection ctor sets
+	// awaitResume=false in our helper, but be explicit.
+	conn.awaitResume = false
+
+	// Start serve(). It will begin draining diffs in chunks and
+	// process incoming messages between chunks.
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- conn.serve() }()
+
+	// Reader goroutine: drains the pipe, incrementing readerCount
+	// after each message. Exits once all queued messages are read
+	// or an error occurs (e.g. pipe closed).
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		_ = clientConn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		for {
+			if _, _, err := protocol.ReadMessage(clientConn); err != nil {
+				return
+			}
+			readerCount.Add(1)
+			if readerCount.Load() >= queued {
+				return
+			}
+		}
+	}()
+
+	// Inject a MsgMouseEvent onto the connection's incoming
+	// channel — bypasses the wire-side reader so we don't have to
+	// race with backlog reads on the same pipe direction.
+	mousePayload, err := protocol.EncodeMouseEvent(protocol.MouseEvent{X: 0, Y: 0})
+	if err != nil {
+		t.Fatalf("encode mouse: %v", err)
+	}
+	mouseHdr := protocol.Header{
+		Version:   protocol.Version,
+		Type:      protocol.MsgMouseEvent,
+		Flags:     protocol.FlagChecksum,
+		SessionID: conn.session.ID(),
+	}
+	conn.incoming <- protocolMessage{header: mouseHdr, payload: mousePayload}
+
+	// Wait for the dispatch signal. If it never fires the input
+	// was starved — that's the bug.
+	select {
+	case <-dispatched:
+		// dispatch observed; atDispatchCount already set inside sink
+	case <-time.After(5 * time.Second):
+		t.Fatal("input was never dispatched — sendPending starved handleMessage")
+	}
+
+	// Close the client side to unblock serve()'s pipe writes if
+	// any are still in flight, then drain the reader and serve.
+	_ = clientConn.Close()
+	<-readerDone
+	<-serveErr // discard serve() return value
+
+	atDispatch := int(atDispatchCount.Load())
+	if atDispatch >= queued {
+		t.Errorf("input dispatched after %d diffs (≥ %d backlog) — chunking did not yield",
+			atDispatch, queued)
+	}
+	t.Logf("input dispatched after %d diffs (backlog %d)", atDispatch, queued)
+}
+
+// mouseDispatchSink fires onMouse for every HandleMouseEvent dispatched
+// to it; everything else delegates to embedded nopSink. Used to
+// observe input dispatch from a serve() goroutine without spinning
+// up a DesktopSink.
+type mouseDispatchSink struct {
+	nopSink
+	onMouse func()
+}
+
+func (s *mouseDispatchSink) HandleMouseEvent(sess *Session, ev protocol.MouseEvent) {
+	s.onMouse()
 }
