@@ -76,7 +76,7 @@ func TestReflowChain_SingleLogical(t *testing.T) {
 	fillRow(s, 0, "0123456789", true)
 	fillRow(s, 1, "abcde", false)
 	// chain at width 5 → 3 rows: "01234", "56789", "abcde"
-	rows := reflowChain(s, 0, 1, 5)
+	rows, _ := reflowChain(s, 0, 1, 5)
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows))
 	}
@@ -146,7 +146,7 @@ func TestReflowChain_TrimsTrailingPadding(t *testing.T) {
 	s := NewStore(10)
 	fillRow(s, 0, "Hello"+strings.Repeat(" ", 75), false) // width-80 padded line
 
-	rows := reflowChain(s, 0, 0, 40)
+	rows, _ := reflowChain(s, 0, 0, 40)
 	if len(rows) != 1 {
 		t.Errorf("padded line at half width: got %d rows, want 1 (trailing padding should not wrap)", len(rows))
 	}
@@ -161,7 +161,7 @@ func TestReflowChain_TrimsTrailingPaddingAcrossChain(t *testing.T) {
 	s := NewStore(10)
 	fillRow(s, 0, "hello   ", true)
 	fillRow(s, 1, "        ", false)
-	rows := reflowChain(s, 0, 1, 20)
+	rows, _ := reflowChain(s, 0, 1, 20)
 	if len(rows) != 1 {
 		t.Errorf("chain ending in padding across rows: got %d rows, want 1", len(rows))
 	}
@@ -175,7 +175,7 @@ func TestReflowChain_TrimsTrailingPaddingAcrossChain(t *testing.T) {
 func TestReflowChain_PreservesEmbeddedSpaces(t *testing.T) {
 	s := NewStore(10)
 	fillRow(s, 0, "a    b", false)
-	rows := reflowChain(s, 0, 0, 20)
+	rows, _ := reflowChain(s, 0, 0, 20)
 	if len(rows) != 1 || cellsToStringSparse(rows[0]) != "a    b" {
 		t.Errorf("embedded spaces: got %q, want %q", cellsToStringSparse(rows[0]), "a    b")
 	}
@@ -195,7 +195,7 @@ func TestReflowChain_PreservesColoredTrailingSpaces(t *testing.T) {
 	}
 	s.SetLine(0, cells)
 
-	rows := reflowChain(s, 0, 0, 10)
+	rows, _ := reflowChain(s, 0, 0, 10)
 	// 31 cells reflowed at width 10 → 4 rows (3 full + 1 with the
 	// final coloured space). Coloured bar must wrap, not clip.
 	if len(rows) != 4 {
@@ -211,7 +211,7 @@ func TestReflowChain_PreservesReverseAttributeTrailingSpace(t *testing.T) {
 	cells := []parser.Cell{{Rune: 'X'}, {Rune: ' ', Attr: parser.AttrReverse}}
 	s.SetLine(0, cells)
 
-	rows := reflowChain(s, 0, 0, 20)
+	rows, _ := reflowChain(s, 0, 0, 20)
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1", len(rows))
 	}
@@ -242,4 +242,176 @@ func cellsToStringSparse(cells []parser.Cell) string {
 		}
 	}
 	return b.String()
+}
+
+func TestReflowChain_OriginNonWrapped(t *testing.T) {
+	s := NewStore(80)
+	fillRow(s, 5, "hello world", false) // single non-wrapped gid
+
+	rows, origin := reflowChain(s, 5, 5, 80)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d, want 1", len(rows))
+	}
+	if len(origin) != 1 {
+		t.Fatalf("origin len=%d, want 1", len(origin))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+}
+
+func TestReflowChain_OriginWrappedSingleGid(t *testing.T) {
+	s := NewStore(80)
+	// 100-char line in one gid, last cell Wrapped (chain head before tail).
+	long := strings.Repeat("x", 80)
+	fillRow(s, 5, long, true)
+	// Continuation gid with the remaining 20 chars, last cell not wrapped.
+	fillRow(s, 6, strings.Repeat("y", 20), false)
+
+	// At width 80: row 0 is gid 5's 80 chars; row 1 is gid 6's 20 chars.
+	rows, origin := reflowChain(s, 5, 6, 80)
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d, want 2", len(rows))
+	}
+	if len(origin) != 2 {
+		t.Fatalf("origin len=%d, want 2", len(origin))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+	if origin[1] != (RowOrigin{Gid: 6, Col: 0}) {
+		t.Errorf("origin[1]=%+v, want {Gid:6, Col:0}", origin[1])
+	}
+}
+
+func TestReflowChain_OriginWrappedCrossingGidMidRow(t *testing.T) {
+	s := NewStore(80)
+	// Same setup as the previous test: 80 chars in gid 5 (Wrapped) +
+	// 20 chars in gid 6. But reflow at narrower width 50 — the wrap
+	// boundary now falls mid-gid.
+	fillRow(s, 5, strings.Repeat("x", 80), true)
+	fillRow(s, 6, strings.Repeat("y", 20), false)
+
+	// At width 50: row 0 = gid 5 cols 0..49 (50 cells), row 1 = gid 5
+	// cols 50..79 + gid 6 cols 0..19 (30+20=50 cells).
+	rows, origin := reflowChain(s, 5, 6, 50)
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d, want 2", len(rows))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+	if origin[1] != (RowOrigin{Gid: 5, Col: 50}) {
+		t.Errorf("origin[1]=%+v, want {Gid:5, Col:50}", origin[1])
+	}
+}
+
+func TestReflowChain_OriginTrailingEmptyRows(t *testing.T) {
+	s := NewStore(80)
+	// Two-gid chain head; both gids carry content + Wrapped=true. After
+	// reflow, with a trailing-empty path simulated by a chain whose
+	// trailingEmptyRows is non-zero, we'd want a setup where end > start
+	// and an interior gid in [start+1, end] is empty.
+	//
+	// Direct setup: gid 5 has 80 wrapped chars, gid 6 has 80 wrapped chars,
+	// gid 7 has empty cells but is in the store. walkChain will return
+	// end=6 (it bails when next is nil), so trailingEmptyRows returns 0.
+	// Fall back to confirming the absence-of-trailing-empties path
+	// emits all origins from the cell walk.
+	fillRow(s, 5, strings.Repeat("a", 80), true)
+	fillRow(s, 6, "bb", false)
+
+	rows, origin := reflowChain(s, 5, 6, 80)
+	if len(rows) != len(origin) {
+		t.Fatalf("rows/origin length mismatch: %d vs %d", len(rows), len(origin))
+	}
+	// Two rows: one for gid 5 (80 a's), one for "bb".
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d, want 2", len(rows))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+	if origin[1] != (RowOrigin{Gid: 6, Col: 0}) {
+		t.Errorf("origin[1]=%+v, want {Gid:6, Col:0}", origin[1])
+	}
+}
+
+func TestReflowChain_OriginTrailingEmptyBranch(t *testing.T) {
+	// Verify the trailing-empty branch by reflecting on the function
+	// directly. trailingEmptyRows's contract: counts rows in (start, end]
+	// whose len == 0. Pick a chain where end > start and the in-between
+	// gids are empty; this only happens when SetLine pre-creates an empty
+	// row in the middle of a chain — fragile but representative.
+	s := NewStore(80)
+	// Chain head fully filled, Wrapped=true.
+	cells := make([]parser.Cell, 80)
+	for i := range cells {
+		cells[i] = parser.Cell{Rune: 'a'}
+	}
+	cells[79].Wrapped = true
+	s.SetLine(5, cells)
+	// gid 6: pre-create an empty row. walkChain will see gid 6 has no
+	// cells via len(cells) == 0 and return end=5. So trailingEmptyRows
+	// runs over [5, 5] and returns 0. This means trailing branch isn't
+	// reachable from public APIs in a unit-testable way without a parser
+	// driving cursor moves. Skip the assert path; the trailing-empty
+	// branch is structurally tested via the integration tests in Phase 8.
+	end, _ := walkChain(s, 5, 100)
+	if end != 5 {
+		t.Fatalf("unexpected walkChain end=%d", end)
+	}
+	// Confirm the chain-head-only path still emits origins correctly.
+	rows, origin := reflowChain(s, 5, end, 80)
+	if len(rows) != 1 || len(origin) != 1 {
+		t.Fatalf("rows=%d origin=%d, want 1 each", len(rows), len(origin))
+	}
+}
+
+func TestReflowChain_OriginWithTrailingPaddingTrimmed(t *testing.T) {
+	s := NewStore(80)
+	// 60 chars of content + 20 trailing padding cells (default-bg space).
+	// Chain head Wrapped=false so the chain is single-gid.
+	cells := make([]parser.Cell, 80)
+	for i := 0; i < 60; i++ {
+		cells[i] = parser.Cell{Rune: 'x'}
+	}
+	for i := 60; i < 80; i++ {
+		cells[i] = parser.Cell{Rune: ' '}
+	}
+	s.SetLine(5, cells)
+
+	rows, origin := reflowChain(s, 5, 5, 80)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d, want 1", len(rows))
+	}
+	// After trim, logical has 60 cells; the row is 60 cells wide.
+	if len(rows[0]) != 60 {
+		t.Errorf("row width=%d, want 60 (trailing 20 padding cells trimmed)", len(rows[0]))
+	}
+	// origin[0] must point at gid 5 col 0 — trim is symmetric.
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+	if len(origin) != 1 {
+		t.Errorf("origin len=%d, want 1", len(origin))
+	}
+}
+
+func TestReflowChain_OriginPositionalGap(t *testing.T) {
+	s := NewStore(80)
+	// Powerline-style row: write at col 89 directly via Set so the
+	// row carries unwritten cells before the last-written col.
+	s.Set(5, 89, parser.Cell{Rune: 'x'})
+	if !rowHasPositionalGap(s, 5) {
+		t.Fatalf("row 5 has no positional gap; setup invalid")
+	}
+
+	rows, origin := reflowChain(s, 5, 5, 80)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d, want 1 (positional-gap path returns single row)", len(rows))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
 }

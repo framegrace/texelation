@@ -9,6 +9,7 @@ package texelterm
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/gdamore/tcell/v2"
@@ -163,7 +164,14 @@ func (m *mockWheelHandler) getEvents() []wheelEvent {
 
 // mockClipboardSetter tracks clipboard operations.
 type mockClipboardSetter struct {
-	mu   sync.Mutex
+	mu    sync.Mutex
+	mime  string
+	data  []byte
+	calls int
+	all   []clipboardCall
+}
+
+type clipboardCall struct {
 	mime string
 	data []byte
 }
@@ -173,6 +181,23 @@ func (m *mockClipboardSetter) SetClipboard(mime string, data []byte) {
 	defer m.mu.Unlock()
 	m.mime = mime
 	m.data = data
+	m.calls++
+	m.all = append(m.all, clipboardCall{mime: mime, data: append([]byte(nil), data...)})
+}
+
+func (m *mockClipboardSetter) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+func (m *mockClipboardSetter) lastData() []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.data == nil {
+		return nil
+	}
+	return append([]byte(nil), m.data...)
 }
 
 // TestMouseCoordinator_New tests coordinator creation.
@@ -471,5 +496,193 @@ func TestVTermGridAdapter_NilVTerm(t *testing.T) {
 	adapter := NewVTermGridAdapter(nil)
 	if adapter != nil {
 		t.Error("expected nil adapter for nil vterm")
+	}
+}
+
+// pressRelease drives a complete press+release cycle through the
+// coordinator at the given viewport position. Each call advances the
+// click count if it falls within DefaultMultiClickTimeout of the
+// previous one (the click detector is position+timeout sensitive).
+func pressRelease(coord *MouseCoordinator, x, y int) {
+	coord.HandleMouse(tcell.NewEventMouse(x, y, tcell.Button1, 0))
+	coord.HandleMouse(tcell.NewEventMouse(x, y, tcell.ButtonNone, 0))
+}
+
+// hasPendingClipboard reports whether a deferred multi-click clipboard
+// write is currently armed. Drops out from under the coordinator's
+// mutex so it can race-safely observe internal state.
+func hasPendingClipboard(coord *MouseCoordinator) bool {
+	coord.mu.Lock()
+	defer coord.mu.Unlock()
+	return coord.pendingClipTimer != nil
+}
+
+// TestMouseCoordinator_MultiClickChainSingleClipboard verifies that
+// double→triple→quadruple click on the same position fires
+// SetClipboard exactly once after the multi-click timeout, instead of
+// once per release. This is the regression guard for the "ghostty
+// shows continuous Content copied toasts on multi-click" bug — every
+// extra OSC52 hop translates to a host-terminal toast.
+func TestMouseCoordinator_MultiClickChainSingleClipboard(t *testing.T) {
+	vtermProv := newMockVTermProviderForCoord()
+	vtermProv.contentText = "selected"
+	// Provide a non-empty current line so SelectionModeLine /
+	// SelectionModeWord / SelectionModeSpaceWord all produce a
+	// non-empty selection that triggers the clipboard write.
+	vtermProv.currentLine = []parser.Cell{
+		{Rune: 'h'}, {Rune: 'e'}, {Rune: 'l'}, {Rune: 'l'}, {Rune: 'o'},
+	}
+	gridProv := newMockGridProvider(80, 24)
+	config := AutoScrollConfig{EdgeZone: 2, MaxScrollSpeed: 15}
+
+	coord := NewMouseCoordinator(vtermProv, gridProv, nil, config)
+	coord.SetSize(80, 24)
+	coord.SetCallbacks(func() {}, func() {})
+
+	clipboard := &mockClipboardSetter{}
+	coord.SetClipboardSetter(clipboard)
+
+	// Click 1 (single — empty drag, no clipboard write expected).
+	pressRelease(coord, 2, 0)
+	// Clicks 2/3/4 within the multi-click window at the same position
+	// escalate the selection. Each release defers the clipboard write,
+	// and the next press cancels the previously deferred one.
+	pressRelease(coord, 2, 0)
+	pressRelease(coord, 2, 0)
+	pressRelease(coord, 2, 0)
+
+	// While the window is still open, no SetClipboard call should
+	// have reached the host terminal yet.
+	if got := clipboard.callCount(); got != 0 {
+		t.Fatalf("expected 0 clipboard writes during click chain, got %d", got)
+	}
+	if !hasPendingClipboard(coord) {
+		t.Fatal("expected a pending deferred clipboard write after multi-click chain")
+	}
+
+	// Wait past the multi-click timeout for the deferred write to fire.
+	deadline := time.Now().Add(DefaultMultiClickTimeout * 4)
+	for time.Now().Before(deadline) {
+		if clipboard.callCount() >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := clipboard.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 clipboard write after timeout, got %d", got)
+	}
+}
+
+// TestMouseCoordinator_NewPressCancelsPendingClipboard verifies that
+// starting a fresh selection inside the multi-click window cancels the
+// previously-armed deferred clipboard write — the user's intent has
+// shifted to a new selection and the superseded payload must not
+// surface to the host terminal.
+func TestMouseCoordinator_NewPressCancelsPendingClipboard(t *testing.T) {
+	vtermProv := newMockVTermProviderForCoord()
+	vtermProv.contentText = "word"
+	vtermProv.currentLine = []parser.Cell{{Rune: 'a'}, {Rune: 'b'}, {Rune: 'c'}}
+	gridProv := newMockGridProvider(80, 24)
+	config := AutoScrollConfig{EdgeZone: 2, MaxScrollSpeed: 15}
+
+	coord := NewMouseCoordinator(vtermProv, gridProv, nil, config)
+	coord.SetSize(80, 24)
+	coord.SetCallbacks(func() {}, func() {})
+
+	clipboard := &mockClipboardSetter{}
+	coord.SetClipboardSetter(clipboard)
+
+	// Two clicks at the same position → double-click selection,
+	// release defers the clipboard write.
+	pressRelease(coord, 1, 0)
+	pressRelease(coord, 1, 0)
+	if !hasPendingClipboard(coord) {
+		t.Fatal("expected pending clipboard write after double-click")
+	}
+
+	// A third press at a different position cancels the pending
+	// write before it can fire.
+	coord.HandleMouse(tcell.NewEventMouse(40, 10, tcell.Button1, 0))
+	if hasPendingClipboard(coord) {
+		t.Fatal("expected pending clipboard write to be cancelled by new press")
+	}
+
+	// Release without drag — empty selection, no clipboard write.
+	coord.HandleMouse(tcell.NewEventMouse(40, 10, tcell.ButtonNone, 0))
+
+	// Wait long enough that any leaked deferred write would have fired.
+	time.Sleep(DefaultMultiClickTimeout * 2)
+	if got := clipboard.callCount(); got != 0 {
+		t.Fatalf("expected 0 clipboard writes after cancellation, got %d", got)
+	}
+}
+
+// TestMouseCoordinator_SingleDragImmediateClipboard verifies that
+// single-click drag selections continue to copy synchronously on
+// release — there is no escalation gesture to wait for, and deferring
+// would add user-visible latency.
+func TestMouseCoordinator_SingleDragImmediateClipboard(t *testing.T) {
+	vtermProv := newMockVTermProviderForCoord()
+	vtermProv.contentText = "drag-selected"
+	gridProv := newMockGridProvider(80, 24)
+	config := AutoScrollConfig{EdgeZone: 2, MaxScrollSpeed: 15}
+
+	coord := NewMouseCoordinator(vtermProv, gridProv, nil, config)
+	coord.SetSize(80, 24)
+	coord.SetCallbacks(func() {}, func() {})
+
+	clipboard := &mockClipboardSetter{}
+	coord.SetClipboardSetter(clipboard)
+
+	// Press, drag to a different column, release.
+	coord.HandleMouse(tcell.NewEventMouse(5, 0, tcell.Button1, 0))
+	coord.HandleMouse(tcell.NewEventMouse(15, 0, tcell.Button1, 0))
+	coord.HandleMouse(tcell.NewEventMouse(15, 0, tcell.ButtonNone, 0))
+
+	if got := clipboard.callCount(); got != 1 {
+		t.Fatalf("expected 1 immediate clipboard write for single drag, got %d", got)
+	}
+	if hasPendingClipboard(coord) {
+		t.Fatal("expected no deferred write after single-drag release")
+	}
+}
+
+// TestMouseCoordinator_RightClickCancelsPendingClipboard verifies that
+// right-click cancellation drops a deferred multi-click clipboard
+// write, mirroring the way it drops the visible selection.
+func TestMouseCoordinator_RightClickCancelsPendingClipboard(t *testing.T) {
+	vtermProv := newMockVTermProviderForCoord()
+	vtermProv.contentText = "word"
+	vtermProv.currentLine = []parser.Cell{{Rune: 'a'}, {Rune: 'b'}, {Rune: 'c'}}
+	gridProv := newMockGridProvider(80, 24)
+	config := AutoScrollConfig{EdgeZone: 2, MaxScrollSpeed: 15}
+
+	coord := NewMouseCoordinator(vtermProv, gridProv, nil, config)
+	coord.SetSize(80, 24)
+	coord.SetCallbacks(func() {}, func() {})
+
+	clipboard := &mockClipboardSetter{}
+	coord.SetClipboardSetter(clipboard)
+
+	// Double-click → deferred write.
+	pressRelease(coord, 1, 0)
+	pressRelease(coord, 1, 0)
+	if !hasPendingClipboard(coord) {
+		t.Fatal("expected pending clipboard write after double-click")
+	}
+
+	// Right-click cancels the rendered selection AND the pending
+	// clipboard write.
+	coord.HandleMouse(tcell.NewEventMouse(1, 0, tcell.Button3, 0))
+	coord.HandleMouse(tcell.NewEventMouse(1, 0, tcell.ButtonNone, 0))
+
+	if hasPendingClipboard(coord) {
+		t.Fatal("expected right-click to cancel the pending clipboard write")
+	}
+
+	time.Sleep(DefaultMultiClickTimeout * 2)
+	if got := clipboard.callCount(); got != 0 {
+		t.Fatalf("expected 0 clipboard writes after right-click cancel, got %d", got)
 	}
 }

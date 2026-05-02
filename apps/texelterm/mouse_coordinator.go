@@ -8,6 +8,7 @@ package texelterm
 
 import (
 	"sync"
+	"time"
 
 	"github.com/framegrace/texelation/apps/texelterm/parser"
 	"github.com/gdamore/tcell/v2"
@@ -57,6 +58,18 @@ type MouseCoordinator struct {
 	lastMouseButtons tcell.ButtonMask
 	lastMouseX       int
 	lastMouseY       int
+
+	// Deferred multi-click clipboard write. A double/triple/quadruple
+	// click chain produces an escalating-but-superseded selection on
+	// each release; firing SetClipboard on every release yields one
+	// OSC52 event per click level (and one host-terminal "Content
+	// copied" toast each). Multi-click releases stash the payload here
+	// and arm pendingClipTimer to fire after DefaultMultiClickTimeout.
+	// A subsequent press inside that window cancels the pending write
+	// before it reaches the host terminal.
+	pendingClipMime  string
+	pendingClipData  []byte
+	pendingClipTimer *time.Timer
 
 	// Callbacks
 	onDirty   func() // Called when display needs refresh
@@ -164,6 +177,11 @@ func (m *MouseCoordinator) HandleMouse(ev *tcell.EventMouse) bool {
 	dragging := buttons&tcell.Button1 != 0 && prevButtons&tcell.Button1 != 0
 
 	if start {
+		// A new press starts a fresh selection action; any deferred
+		// multi-click clipboard write from the previous click in this
+		// chain is now superseded and must not reach the host terminal.
+		m.cancelPendingClipboardLocked()
+
 		// Cancel any existing selection
 		if m.selectionMachine.IsActive() {
 			m.selectionMachine.Cancel()
@@ -201,13 +219,26 @@ func (m *MouseCoordinator) HandleMouse(ev *tcell.EventMouse) bool {
 	if release && m.selectionMachine.IsActive() {
 		m.autoScroll.Stop()
 
+		// Snapshot the state before Finish so we know whether this
+		// release came out of a multi-click chain (StateMultiClickHeld)
+		// or a single drag (StateDragging). Finish itself transitions
+		// the state, so the read must happen before the call.
+		wasMultiClick := m.selectionMachine.State() == StateMultiClickHeld
+
 		logicalLine, charOffset, viewportRow := m.resolvePositionLocked(x, y)
 		mime, data, ok := m.selectionMachine.Finish(logicalLine, charOffset, viewportRow, modifiers)
 		m.markDirty()
 
-		// Copy to clipboard
+		// Copy to clipboard. Multi-click releases defer; a follow-up
+		// click within the multi-click window will cancel the deferred
+		// write before it surfaces. Single-drag releases copy
+		// immediately — there is no escalation gesture to wait for.
 		if ok && len(data) > 0 && m.clipboardSetter != nil {
-			m.clipboardSetter.SetClipboard(mime, data)
+			if wasMultiClick {
+				m.schedulePendingClipboardLocked(mime, data)
+			} else {
+				m.clipboardSetter.SetClipboard(mime, data)
+			}
 		}
 		return true
 	}
@@ -215,6 +246,7 @@ func (m *MouseCoordinator) HandleMouse(ev *tcell.EventMouse) bool {
 	// Right-click: cancel selection
 	if buttons&tcell.Button3 != 0 && prevButtons&tcell.Button3 == 0 {
 		if m.selectionMachine.IsActive() || m.selectionMachine.IsRendered() {
+			m.cancelPendingClipboardLocked()
 			m.selectionMachine.Cancel()
 			m.autoScroll.Stop()
 			m.markDirty()
@@ -289,6 +321,56 @@ func (m *MouseCoordinator) resolvePositionLocked(x, y int) (logicalLine int64, c
 	}
 
 	return logicalLine, charOffset, viewportRow
+}
+
+// schedulePendingClipboardLocked queues a multi-click clipboard write
+// to fire after DefaultMultiClickTimeout, replacing any earlier
+// pending write. This collapses a triple/quadruple-click chain — where
+// each release produces an escalating-but-superseded selection — into
+// a single OSC52 event the host terminal toasts once.
+//
+// The timer fires from a separate goroutine; it re-acquires m.mu and
+// no-ops if the pending write was cancelled or replaced before firing
+// (verified by comparing m.pendingClipTimer to the timer captured in
+// the closure).
+func (m *MouseCoordinator) schedulePendingClipboardLocked(mime string, data []byte) {
+	m.cancelPendingClipboardLocked()
+	setter := m.clipboardSetter
+	if setter == nil {
+		return
+	}
+	m.pendingClipMime = mime
+	m.pendingClipData = append([]byte(nil), data...)
+	var timer *time.Timer
+	timer = time.AfterFunc(DefaultMultiClickTimeout, func() {
+		m.mu.Lock()
+		if m.pendingClipTimer != timer {
+			m.mu.Unlock()
+			return
+		}
+		mime := m.pendingClipMime
+		data := m.pendingClipData
+		m.pendingClipMime = ""
+		m.pendingClipData = nil
+		m.pendingClipTimer = nil
+		m.mu.Unlock()
+		setter.SetClipboard(mime, data)
+	})
+	m.pendingClipTimer = timer
+}
+
+// cancelPendingClipboardLocked drops any deferred clipboard write so a
+// subsequent press starting a fresh selection (or right-click cancel)
+// supersedes the earlier multi-click result without firing it. Stop()
+// races with the timer goroutine; the goroutine guards itself by
+// checking m.pendingClipTimer against its captured timer reference.
+func (m *MouseCoordinator) cancelPendingClipboardLocked() {
+	if m.pendingClipTimer != nil {
+		m.pendingClipTimer.Stop()
+		m.pendingClipTimer = nil
+	}
+	m.pendingClipMime = ""
+	m.pendingClipData = nil
 }
 
 // markDirty marks the terminal display as needing a refresh.

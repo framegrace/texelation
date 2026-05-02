@@ -3,6 +3,25 @@
 
 package parser
 
+// RowOrigin is the (gid, col) of the FIRST cell of a reflowed visual row.
+// Used by the selection mapping (ContentToViewport / ViewportToContent) to
+// project content positions to viewport coordinates without re-deriving the
+// renderer's chain walk.
+//
+// Sentinel: Gid == -1 means the row has no real content (blank row inside
+// a chain-walk gap, or bottom padding when the viewport is taller than the
+// rendered content). Selection callers fall back to naive math on such
+// rows.
+//
+// Defined in the parser package (rather than parser/sparse) so callers of
+// the MainScreen interface don't have to import parser/sparse internals
+// directly. sparse.RowOrigin is a type alias for this type — the values
+// are produced at render time by the sparse view's chain walk.
+type RowOrigin struct {
+	Gid int64
+	Col int
+}
+
 // ClearNotifier is the minimal interface the persistence layer must implement
 // so that the MainScreen can propagate range clears (tombstones) to disk.
 // AdaptivePersistence satisfies this interface via its NotifyClearRange method.
@@ -72,6 +91,13 @@ type MainScreen interface {
 	// The two slices are lockstep-consistent — callers that need both should
 	// use this method rather than calling RenderReflow and querying separately.
 	RenderReflowWithRowIdx() ([][]Cell, []int64)
+
+	// RenderReflowFull returns the rendered grid plus parallel slices for
+	// per-row chain-head gid (publisher clipping) and per-row cell-bearing
+	// origin (selection mapping). RenderReflow / RenderReflowWithRowIdx
+	// stay on the interface as discard-shims for callers that only need
+	// some of the output.
+	RenderReflowFull() ([][]Cell, []int64, []RowOrigin)
 
 	// CursorToView maps the current cursor to its viewport-relative (row, col)
 	// in the reflowed view. Returns ok=false if the cursor's globalIdx is not

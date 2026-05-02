@@ -296,13 +296,24 @@ func (t *Terminal) PointFromView(viewRow, viewCol int) (globalIdx int64, col int
 	return t.view.ViewToCursor(t.store, viewRow, viewCol)
 }
 
+// RenderReflowFull is the full render output: rows, per-row chain-head
+// gid (for publisher clipping), and per-row cell-bearing origin (for
+// selection mapping). Internal callers that only need rows or rows+gids
+// use the existing shims; selection consults the origin slice via
+// VTerm's cache.
+func (t *Terminal) RenderReflowFull() ([][]parser.Cell, []int64, []RowOrigin) {
+	cursorGI, cursorCol := t.write.Cursor()
+	t.view.RecomputeLiveAnchor(t.store, cursorGI, cursorCol, t.write.WriteTop())
+	return t.view.Render(t.store)
+}
+
 // RenderReflow produces the viewport via the reflow-aware ViewWindow.Render
 // path. Recomputes the live anchor from the cursor's chain first so that
 // autoFollow keeps the cursor on the bottom row of the viewport. This is the
 // bridge method; callers switch over from Grid() in a later step.
 func (t *Terminal) RenderReflow() [][]parser.Cell {
-	cells, _ := t.RenderReflowWithRowIdx()
-	return cells
+	rows, _, _ := t.RenderReflowFull()
+	return rows
 }
 
 // RenderReflowWithRowIdx is the RenderReflow variant that also returns the
@@ -312,9 +323,8 @@ func (t *Terminal) RenderReflow() [][]parser.Cell {
 // positions (e.g., the publisher's per-row clipping, the texelterm app's
 // RowGlobalIdxProvider) should use this variant to avoid re-walking.
 func (t *Terminal) RenderReflowWithRowIdx() ([][]parser.Cell, []int64) {
-	cursorGI, cursorCol := t.write.Cursor()
-	t.view.RecomputeLiveAnchor(t.store, cursorGI, cursorCol, t.write.WriteTop())
-	return t.view.Render(t.store)
+	rows, gids, _ := t.RenderReflowFull()
+	return rows, gids
 }
 
 // Grid builds a dense height x width grid from the current view range by

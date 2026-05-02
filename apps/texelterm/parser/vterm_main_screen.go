@@ -496,11 +496,20 @@ func (v *VTerm) mainScreenGrid() [][]Cell {
 // parallel per-row globalIdx slice from the same view walk. Space-padding
 // and search highlighting are applied on the rendered grid just as in
 // mainScreenGrid; the rowIdx slice is passed through unchanged.
+//
+// Side effect: stashes the per-row RowOrigin slice on
+// v.mainScreenRowOrigin so ContentToViewport / ViewportToContent can map
+// selection points onto reflowed rows without re-walking the chain. The
+// stash is guarded by v.mainScreenRowOriginMu — see the field comment in
+// vterm.go for the lock-model rationale (Option B / Issue #224).
 func (v *VTerm) mainScreenGridWithRowIdx() ([][]Cell, []int64) {
 	if v.mainScreen == nil {
 		return nil, nil
 	}
-	grid, rowIdx := v.mainScreen.RenderReflowWithRowIdx()
+	grid, rowIdx, rowOrigin := v.mainScreen.RenderReflowFull()
+	v.mainScreenRowOriginMu.Lock()
+	v.mainScreenRowOrigin = rowOrigin
+	v.mainScreenRowOriginMu.Unlock()
 	// Sparse Grid() returns Cell{} (Rune=0) for unwritten/erased cells.
 	// Convert to space so callers see consistent blank cells.
 	for _, row := range grid {

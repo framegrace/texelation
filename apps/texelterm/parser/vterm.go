@@ -33,6 +33,21 @@ type VTerm struct {
 	mainScreenPersistence *AdaptivePersistence
 	// mainScreenPageStore is the page-based disk storage (optional).
 	mainScreenPageStore *PageStore
+	// mainScreenRowOrigin caches the per-row cell-bearing (gid, col) emitted
+	// by the sparse view's last render. Length matches the rendered grid;
+	// Gid == -1 sentinel for blank rows / unwritten gaps. Read by
+	// ContentToViewport / ViewportToContent (Tasks 11/12) to project
+	// (gid, col) selection points onto reflowed rows without re-walking
+	// the chain.
+	//
+	// Lock model: Option B — a dedicated rowOriginMu protects this field.
+	// We can't reuse v.mu because mainScreenGridWithRowIdx (where this is
+	// written) is called under v.mu.RLock() in Grid() / GridWithRowIdx();
+	// a write under an RLock is a race. There is no existing cache field
+	// on VTerm whose pattern we can match. Tasks 11/12 RLock rowOriginMu
+	// when reading. Issue #224.
+	mainScreenRowOrigin   []RowOrigin
+	mainScreenRowOriginMu sync.RWMutex
 	// Terminal state
 	currentFG, currentBG               Color
 	currentAttr                        Attribute
@@ -579,6 +594,14 @@ func (v *VTerm) HistoryLineCopy(index int) []Cell {
 // ViewportToContent converts viewport coordinates to content coordinates.
 // Returns (logicalLine, charOffset, isCurrentLine, ok).
 // logicalLine is -1 for the current uncommitted line.
+//
+// Consults the per-render mainScreenRowOrigin cache to project (y, x)
+// onto the cell-bearing (gid, col), so wrap-continuation rows resolve
+// to the correct logical position even when a single logical line
+// spans multiple visual rows. Falls back to naive (visibleTop+y, x)
+// math for sentinel rows (Gid == -1) and rows outside the cached
+// window — preserving prior behaviour for blank gaps and bottom
+// padding. Issue #224.
 func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, isCurrentLine bool, ok bool) {
 	if v.inAltScreen {
 		// Alt screen: treat as current line equivalent
@@ -588,19 +611,29 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 	if v.mainScreen == nil {
 		return 0, 0, false, false
 	}
-	// Naive 1-gid-per-row mapping. KNOWN LIMITATION: when a logical
-	// line wraps across multiple visual rows the click→content gid is
-	// off by the wrap continuation count — fixing that requires a
-	// reflow-aware walk that's coupled to how the renderer actually
-	// laid out the chains, and an earlier attempt at it (b1cc1ee, now
-	// reverted) drifted away from the renderer's chain-head row tagging
-	// in production. Leaving the simpler-and-stable behaviour here
-	// until the rendering side exposes a definitive (gid, col) → row
-	// table the selection layer can consult instead of computing.
+	cursorLine, _ := v.mainScreen.Cursor()
+
+	// Snapshot the cached origin for row y. Don't hold rowOriginMu
+	// across advanceCells — it acquires other locks via ReadLine.
+	v.mainScreenRowOriginMu.RLock()
+	var origin RowOrigin
+	inWindow := y >= 0 && y < len(v.mainScreenRowOrigin)
+	if inWindow {
+		origin = v.mainScreenRowOrigin[y]
+	}
+	v.mainScreenRowOriginMu.RUnlock()
+
+	if inWindow && origin.Gid != -1 {
+		gid, col := v.advanceCells(origin.Gid, origin.Col, x)
+		return gid, col, gid == cursorLine, true
+	}
+
+	// Fallback for rows outside the cached window or sentinel rows:
+	// use the naive (visibleTop + y, x) math, preserving pre-reflow
+	// behaviour for blank gaps and bottom padding.
 	visibleTop, _ := v.mainScreen.VisibleRange()
 	logicalLine = visibleTop + int64(y)
 	charOffset = x
-	cursorLine, _ := v.mainScreen.Cursor()
 	isCurrentLine = logicalLine == cursorLine
 	ok = true
 	return
@@ -609,9 +642,11 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 // ContentToViewport converts content coordinates to viewport coordinates.
 // Returns (y, x, visible) where visible is true if content is on screen.
 //
-// Same naive-math caveat as ViewportToContent — the highlight tracks
-// the wrong visual row for cells inside a wrap continuation. Don't
-// consult the reflow walk until it's clearly inverse-of-renderer.
+// Linear-scans the cached mainScreenRowOrigin slice; for each row whose
+// origin is set (Gid != -1), uses cellsBetween bounded by the viewport
+// width to test whether (logicalLine, charOffset) lies within that
+// row's cell-walked extent. Round-trips correctly with
+// ViewportToContent regardless of wrap reflow. Issue #224.
 func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, visible bool) {
 	if v.inAltScreen {
 		if v.width <= 0 {
@@ -625,15 +660,187 @@ func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, 
 	if v.mainScreen == nil {
 		return 0, 0, false
 	}
-	visibleTop, visibleBottom := v.mainScreen.VisibleRange()
-	rowOffset := logicalLine - visibleTop
-	if rowOffset < 0 || rowOffset > visibleBottom-visibleTop {
-		return 0, 0, false
+
+	// Snapshot the slice header. The underlying array is replaced on
+	// each render (mainScreenGridWithRowIdx assigns a fresh slice),
+	// so a header copy is safe to iterate without holding the lock —
+	// and we must release it before calling cellsBetween, which
+	// touches the store via ReadLine.
+	v.mainScreenRowOriginMu.RLock()
+	origins := v.mainScreenRowOrigin
+	v.mainScreenRowOriginMu.RUnlock()
+
+	// Track an "exclusive-end-of-row" candidate. When a row's content
+	// ends at exactly `target` (steps == rowExtent), the position is
+	// shared between this row's exclusive end and the next row's
+	// inclusive start. If a later row strict-claims the target via its
+	// own origin, we return that. If no row strict-claims it, we fall
+	// back to the candidate — that's the "selection's exclusive end at
+	// this row's last col" semantics needed by selectLine and by drag
+	// selections that end past the line's content.
+	candidateY, candidateX, candidateValid := 0, 0, false
+
+	for ry, o := range origins {
+		if o.Gid == -1 {
+			continue
+		}
+		steps, ok := v.cellsBetween(o.Gid, o.Col, logicalLine, charOffset, v.width)
+		if !ok {
+			continue
+		}
+		if steps >= v.width {
+			// Target lies past this row's full viewport-width extent;
+			// let a later row whose origin starts there claim it.
+			continue
+		}
+		// For non-wrapped chains cellsBetween happily walks past a
+		// row's visible end into the next gid (the helper has no
+		// notion of where a visual row ends). Bound by the next set
+		// row's origin: if the next origin lies at or before our
+		// target on the chain walk, the target belongs to that
+		// later row, not this one.
+		if next, found := nextSetOrigin(origins, ry); found {
+			rowExtent, rok := v.cellsBetween(o.Gid, o.Col, next.Gid, next.Col, v.width)
+			if rok && steps >= rowExtent {
+				if steps == rowExtent && !candidateValid {
+					// Boundary case: exclusive-end-of-row. Save as
+					// fallback; a later strict match still wins.
+					candidateY = ry
+					candidateX = steps
+					candidateValid = true
+				}
+				continue
+			}
+		}
+		return ry, steps, true
 	}
-	y = int(rowOffset)
-	x = charOffset
-	visible = y >= 0 && y < v.height
-	return
+	if candidateValid {
+		return candidateY, candidateX, true
+	}
+	return 0, 0, false
+}
+
+// nextSetOrigin returns the next origin after index ry whose Gid is not
+// the -1 sentinel, or (zero, false) if none exists. Used by
+// ContentToViewport to bound a row's visible extent by the start of the
+// next populated row.
+func nextSetOrigin(origins []RowOrigin, ry int) (RowOrigin, bool) {
+	for i := ry + 1; i < len(origins); i++ {
+		if origins[i].Gid != -1 {
+			return origins[i], true
+		}
+	}
+	return RowOrigin{}, false
+}
+
+// advanceCells walks `n` cells forward from (originGid, originCol) through
+// the store, crossing gid boundaries when a row's cells are exhausted
+// AND the chain continues (current gid's last cell has Wrapped=true).
+// Returns the resulting (gid, col). Used by ViewportToContent to resolve
+// a viewport (y, x) given the row's origin.
+//
+// Two termination guards:
+//
+//  1. Past-content (`cells == nil`): the gid was never written. Stop.
+//     Without this, a click on a trailing-empty wrap-continuation row
+//     could loop forever (available=0, gid++, no progress).
+//
+//  2. Chain end (current row's last cell has Wrapped=false): the
+//     logical line ends here. Don't advance into the next gid — that
+//     would be a different logical line, and the user dragging past
+//     a non-wrapped line's visible content shouldn't suddenly select
+//     content from the next line. Clamp at the row's end col.
+//
+// The chain-end guard is the fix for issue #224's drag-past-line bug:
+// dragging the mouse past the last cell of a non-wrapped line used to
+// resolve to a position deep in some later gid, causing the highlight
+// to cover blank padding cells of every intermediate row.
+func (v *VTerm) advanceCells(originGid int64, originCol int, n int) (int64, int) {
+	if v.mainScreen == nil {
+		return originGid, originCol
+	}
+	gid := originGid
+	col := originCol
+	remaining := n
+	for remaining > 0 {
+		cells := v.mainScreen.ReadLine(gid)
+		if cells == nil {
+			return gid, col
+		}
+		rowLen := len(cells)
+		available := rowLen - col
+		if remaining < available {
+			return gid, col + remaining
+		}
+		// Chain-end guard: stop at this row's exclusive-end col when
+		// the chain doesn't continue into the next gid.
+		if rowLen > 0 && !cells[rowLen-1].Wrapped {
+			return gid, rowLen
+		}
+		if available < 0 {
+			available = 0
+		}
+		remaining -= available
+		gid++
+		col = 0
+	}
+	return gid, col
+}
+
+// cellsBetween counts cells from (originGid, originCol) forward to
+// (targetGid, targetCol), crossing gid boundaries. Returns
+// (stepsTaken, true) if the target is reached within maxCells steps,
+// or (0, false) if the walk runs past maxCells without finding the
+// target. Used by ContentToViewport to compute the visual x within a
+// row whose origin is known.
+//
+// "Before origin" cases (target is reachable only by going backward)
+// return (0, false) — the caller continues scanning to the next row.
+//
+// Safety: the loop is bounded both by step count AND by gid distance.
+// Walking through many consecutive empty gids contributes 0 to `steps`
+// per iteration; without a separate gid-based bound, a fixed iteration
+// cap can cut the walk short before reaching the target through gappy
+// stores. Bounding by (targetGid - originGid + 2) is provably tight —
+// the walk visits exactly the gids in [originGid, targetGid].
+func (v *VTerm) cellsBetween(originGid int64, originCol int, targetGid int64, targetCol, maxCells int) (int, bool) {
+	if v.mainScreen == nil {
+		return 0, false
+	}
+	if targetGid < originGid || (targetGid == originGid && targetCol < originCol) {
+		return 0, false
+	}
+	gid := originGid
+	col := originCol
+	steps := 0
+	iterCap := int(targetGid-originGid) + 2
+	for i := 0; i < iterCap; i++ {
+		if gid == targetGid {
+			if targetCol < col {
+				return 0, false
+			}
+			delta := targetCol - col
+			if steps+delta > maxCells {
+				return 0, false
+			}
+			return steps + delta, true
+		}
+		cells := v.mainScreen.ReadLine(gid)
+		if cells == nil {
+			return 0, false
+		}
+		available := len(cells) - col
+		if available < 0 {
+			available = 0
+		}
+		steps += available
+		if steps > maxCells {
+			return 0, false
+		}
+		gid++
+		col = 0
+	}
+	return 0, false
 }
 
 // GetContentText extracts text from a content coordinate range.

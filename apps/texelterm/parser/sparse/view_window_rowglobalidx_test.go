@@ -16,7 +16,7 @@ func TestViewWindow_RowGlobalIdx_MatchesRender(t *testing.T) {
 
 	vw := NewViewWindow(40, 10)
 	vw.SetViewAnchor(5, 0)
-	out, gi := vw.Render(s)
+	out, gi, _ := vw.Render(s)
 	if len(out) != 10 {
 		t.Fatalf("Render returned %d rows, want 10", len(out))
 	}
@@ -46,7 +46,7 @@ func TestViewWindow_RowGlobalIdx_ReflowedChain(t *testing.T) {
 
 	vw := NewViewWindow(40, 5)
 	vw.SetViewAnchor(0, 0)
-	out, gi := vw.Render(s)
+	out, gi, _ := vw.Render(s)
 	if len(out) != 5 {
 		t.Fatalf("Render returned %d rows, want 5", len(out))
 	}
@@ -76,7 +76,7 @@ func TestViewWindow_RowGlobalIdx_BlankPadded(t *testing.T) {
 
 	vw := NewViewWindow(40, 5)
 	vw.SetViewAnchor(0, 0)
-	_, gi := vw.Render(s)
+	_, gi, _ := vw.Render(s)
 	if len(gi) != 5 {
 		t.Fatalf("Render returned gi len %d, want 5", len(gi))
 	}
