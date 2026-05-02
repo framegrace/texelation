@@ -42,13 +42,15 @@ func TestClickDetector_QuadrupleClick(t *testing.T) {
 	}
 }
 
-func TestClickDetector_QuintupleClick(t *testing.T) {
+func TestClickDetector_QuintupleSaturatesAtQuadruple(t *testing.T) {
 	cd := NewClickDetector(500 * time.Millisecond)
 	for i := 0; i < 4; i++ {
 		cd.DetectClick(5, 10)
 	}
-	if got := cd.DetectClick(5, 10); got != QuintupleClick {
-		t.Errorf("expected QuintupleClick, got %v", got)
+	// MaxClickType is QuadrupleClick today — the 5th click stays
+	// QuadrupleClick rather than producing QuintupleClick.
+	if got := cd.DetectClick(5, 10); got != QuadrupleClick {
+		t.Errorf("5th click: got %v, want QuadrupleClick (saturated)", got)
 	}
 }
 
@@ -57,15 +59,27 @@ func TestClickDetector_SaturatesAtMax(t *testing.T) {
 	for i := 0; i < int(MaxClickType); i++ {
 		cd.DetectClick(5, 10)
 	}
-	// Sixth and seventh clicks must stay at QuintupleClick — no
-	// rollover to SingleClick. This is the user-visible difference
-	// from the old behaviour: holding-and-clicking past the largest
-	// gesture must not silently flip you back to char selection.
-	if got := cd.DetectClick(5, 10); got != QuintupleClick {
-		t.Errorf("6th click: expected QuintupleClick, got %v", got)
+	// Clicks past MaxClickType stay saturated rather than cycling back
+	// to SingleClick. The cap is QuadrupleClick today (issue #223 will
+	// raise it to QuintupleClick once the "select command" gesture is
+	// resolvable for clicks outside the current command).
+	if got := cd.DetectClick(5, 10); got != MaxClickType {
+		t.Errorf("(MaxClickType+1)-th click: got %v, want %v", got, MaxClickType)
 	}
-	if got := cd.DetectClick(5, 10); got != QuintupleClick {
-		t.Errorf("7th click: expected QuintupleClick, got %v", got)
+	if got := cd.DetectClick(5, 10); got != MaxClickType {
+		t.Errorf("(MaxClickType+2)-th click: got %v, want %v", got, MaxClickType)
+	}
+}
+
+func TestClickDetector_QuintupleNotProduced(t *testing.T) {
+	// Five rapid clicks must NOT produce QuintupleClick — that gesture
+	// is reserved for issue #223 and disabled at the detector level.
+	cd := NewClickDetector(500 * time.Millisecond)
+	for i := 0; i < 4; i++ {
+		cd.DetectClick(5, 10)
+	}
+	if got := cd.DetectClick(5, 10); got == QuintupleClick {
+		t.Errorf("5th click produced QuintupleClick; expected saturation at QuadrupleClick")
 	}
 }
 
@@ -166,7 +180,7 @@ func TestClickType_Values(t *testing.T) {
 			t.Errorf("ClickType=%d, want %d", c.ct, c.want)
 		}
 	}
-	if MaxClickType != QuintupleClick {
-		t.Errorf("MaxClickType=%v, want QuintupleClick", MaxClickType)
+	if MaxClickType != QuadrupleClick {
+		t.Errorf("MaxClickType=%v, want QuadrupleClick (until issue #223 raises the cap)", MaxClickType)
 	}
 }

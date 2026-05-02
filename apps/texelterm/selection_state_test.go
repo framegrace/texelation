@@ -187,9 +187,12 @@ func TestSelectionStateMachine_QuadrupleClickSelectsLine(t *testing.T) {
 	}
 }
 
-func TestSelectionStateMachine_QuintupleClickSelectsCommand(t *testing.T) {
+// SelectionModeCommand is reachable only via StartMode (issue #223
+// will reconnect it to a click gesture). The mode itself still has
+// to behave correctly when invoked — the resolver is the same code
+// path the future click handler will use.
+func TestSelectionStateMachine_StartMode_CommandSelectsCurrentCommand(t *testing.T) {
 	mock := newMockVTermProvider()
-	// Three lines forming a "command" with the prompt anchor at line 5.
 	mock.historyLines[5] = cellsFromString("$ echo hi")
 	mock.historyLines[6] = cellsFromString("hi")
 	mock.historyLines[7] = cellsFromString("$")
@@ -198,8 +201,8 @@ func TestSelectionStateMachine_QuintupleClickSelectsCommand(t *testing.T) {
 	sm := newTestStateMachine(mock)
 	sm.SetSize(80, 24)
 
-	// Click anywhere inside the command (e.g. on the output).
-	sm.Start(6, 0, 0, QuintupleClick, 0)
+	// Programmatic invocation as a future floating menu would issue.
+	sm.StartMode(SelectionModeCommand, 6, 0, 0, 0)
 
 	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
@@ -214,35 +217,25 @@ func TestSelectionStateMachine_QuintupleClickSelectsCommand(t *testing.T) {
 	if startOffset != 0 {
 		t.Errorf("startOffset=%d, want 0", startOffset)
 	}
-	// endOffset = len of last line (1 char "$").
 	if endOffset != 1 {
 		t.Errorf("endOffset=%d, want 1", endOffset)
 	}
 }
 
-// TestSelectionStateMachine_QuintupleClick_ClickBeforeLatestPromptFallsBack
-// covers the live crash that motivated maxCommandLines. The user
-// clicked into older scrollback where the previous prompt was just a
-// few lines away — but VTerm only tracks the LATEST prompt anchor, so
-// the resolver couldn't bracket the older command. The previous
-// implementation chose [0, latestPrompt-1] as the range, which on a
-// long-running session was 200k+ lines (~14 MB) and crashed the host
-// terminal. The current implementation falls back to selectLine until
-// per-prompt history (issue #222) makes the older-scrollback case
-// resolvable.
-func TestSelectionStateMachine_QuintupleClick_ClickBeforeLatestPromptFallsBack(t *testing.T) {
+// TestSelectionStateMachine_CommandMode_ClickBeforeLatestPromptFallsBack
+// covers the live crash mode that motivated keeping selectCommand
+// conservative until issue #223 lands. With only the latest prompt
+// anchor known, clicks in older scrollback can't be bracketed — the
+// resolver falls back to selectLine.
+func TestSelectionStateMachine_CommandMode_ClickBeforeLatestPromptFallsBack(t *testing.T) {
 	mock := newMockVTermProvider()
 	mock.historyLines[100] = cellsFromString("line under click")
-	// Latest prompt is far ahead of the click — same shape as the
-	// real bug: user clicks at gid 100, but PromptStart sits at gid
-	// 206655 (the latest prompt the shell emitted, not the prompt
-	// just above the click).
-	mock.promptStart = 206655
+	mock.promptStart = 206655 // latest prompt far ahead of click
 	mock.contentEnd = 206700
 	sm := newTestStateMachine(mock)
 	sm.SetSize(80, 24)
 
-	sm.Start(100, 4, 0, QuintupleClick, 0)
+	sm.StartMode(SelectionModeCommand, 100, 4, 0, 0)
 	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("no selection range")
@@ -251,23 +244,22 @@ func TestSelectionStateMachine_QuintupleClick_ClickBeforeLatestPromptFallsBack(t
 		t.Errorf("expected fallback to line 100, got [%d,%d]", startLine, endLine)
 	}
 	if startOffset != 0 || endOffset != len("line under click") {
-		t.Errorf("range=[%d,%d), want [0,%d) (full line)", startOffset, endOffset, len("line under click"))
+		t.Errorf("range=[%d,%d), want [0,%d)", startOffset, endOffset, len("line under click"))
 	}
 }
 
-// TestSelectionStateMachine_QuintupleClick_OversizedCurrentCommandFallsBack
+// TestSelectionStateMachine_CommandMode_OversizedCurrentCommandFallsBack
 // guards the secondary cap: even when the click IS inside the current
-// command, an enormous output (long-running build log) shouldn't ship
-// a multi-MB clipboard write. Cap at maxCommandLines.
-func TestSelectionStateMachine_QuintupleClick_OversizedCurrentCommandFallsBack(t *testing.T) {
+// command, enormous output shouldn't ship a multi-MB clipboard write.
+func TestSelectionStateMachine_CommandMode_OversizedCurrentCommandFallsBack(t *testing.T) {
 	mock := newMockVTermProvider()
 	mock.historyLines[10000] = cellsFromString("end of command")
 	mock.promptStart = 0
-	mock.contentEnd = 10000 // 10001 lines — past cap
+	mock.contentEnd = 10000
 	sm := newTestStateMachine(mock)
 	sm.SetSize(80, 24)
 
-	sm.Start(10000, 0, 0, QuintupleClick, 0)
+	sm.StartMode(SelectionModeCommand, 10000, 0, 0, 0)
 	startLine, _, endLine, _, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("no selection range")
@@ -277,7 +269,7 @@ func TestSelectionStateMachine_QuintupleClick_OversizedCurrentCommandFallsBack(t
 	}
 }
 
-func TestSelectionStateMachine_QuintupleClick_NoAnchorFallsBackToLine(t *testing.T) {
+func TestSelectionStateMachine_CommandMode_NoAnchorFallsBackToLine(t *testing.T) {
 	mock := newMockVTermProvider()
 	mock.historyLines[5] = cellsFromString("only this line")
 	mock.promptStart = -1 // no shell integration
@@ -285,7 +277,7 @@ func TestSelectionStateMachine_QuintupleClick_NoAnchorFallsBackToLine(t *testing
 	sm := newTestStateMachine(mock)
 	sm.SetSize(80, 24)
 
-	sm.Start(5, 4, 0, QuintupleClick, 0)
+	sm.StartMode(SelectionModeCommand, 5, 4, 0, 0)
 	startLine, startOffset, endLine, endOffset, ok := sm.SelectionRange()
 	if !ok {
 		t.Fatal("no selection range")
@@ -293,6 +285,17 @@ func TestSelectionStateMachine_QuintupleClick_NoAnchorFallsBackToLine(t *testing
 	if startLine != 5 || endLine != 5 || startOffset != 0 || endOffset != 14 {
 		t.Errorf("fallback range=[%d/%d,%d/%d), want [5/0,5/14)",
 			startLine, startOffset, endLine, endOffset)
+	}
+}
+
+// TestSelectionStateMachine_QuintupleClick_DoesNotTriggerCommandMode
+// guards the disable: a click that the detector reports as
+// QuintupleClick (not currently produced, but a defence-in-depth
+// check against future regressions) must NOT route into Command
+// mode while issue #223 is open.
+func TestSelectionStateMachine_QuintupleClick_DoesNotTriggerCommandMode(t *testing.T) {
+	if got := SelectionModeForClickCount(5); got == SelectionModeCommand {
+		t.Errorf("SelectionModeForClickCount(5)=%v, expected != SelectionModeCommand while issue #223 is open", got)
 	}
 }
 
@@ -305,9 +308,9 @@ func TestSelectionModeForClickCount(t *testing.T) {
 		{2, SelectionModeSpaceWord},
 		{3, SelectionModeWord},
 		{4, SelectionModeLine},
-		{5, SelectionModeCommand},
-		{0, SelectionModeChar},   // out-of-range falls back to Char
-		{99, SelectionModeChar},  // ditto
+		{5, SelectionModeChar},  // Command disabled until #223
+		{0, SelectionModeChar},  // out-of-range falls back to Char
+		{99, SelectionModeChar}, // ditto
 	}
 	for _, c := range cases {
 		if got := SelectionModeForClickCount(c.count); got != c.want {

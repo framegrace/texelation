@@ -78,20 +78,24 @@ func (m SelectionMode) String() string {
 // AllSelectionModes returns the discrete selection modes that a future
 // floating menu (or keyboard binding) should expose. SelectionModeChar
 // is omitted: it's the default "drag to select" interaction and isn't
-// a menu item users would pick. The returned slice is in the order the
-// menu should display.
+// a menu item users would pick. SelectionModeCommand is omitted while
+// issue #223 is unimplemented — the resolver works only for clicks
+// inside the current command, so surfacing it as a menu option would
+// confuse users for the more common older-scrollback case. Add it back
+// here once the gesture is reliable end-to-end.
 func AllSelectionModes() []SelectionMode {
 	return []SelectionMode{
 		SelectionModeSpaceWord,
 		SelectionModeWord,
 		SelectionModeLine,
-		SelectionModeCommand,
 	}
 }
 
 // SelectionModeForClickCount maps a 1..MaxClickType count to its
 // selection mode. Centralised so the click handler, future menu
-// shortcuts, and tests stay in agreement.
+// shortcuts, and tests stay in agreement. Quintuple click currently
+// has no mapping — see issue #223 — and a 5+ count falls back to
+// SelectionModeChar (zero-width selection at the click point).
 func SelectionModeForClickCount(n int) SelectionMode {
 	switch n {
 	case 2:
@@ -100,8 +104,6 @@ func SelectionModeForClickCount(n int) SelectionMode {
 		return SelectionModeWord
 	case 4:
 		return SelectionModeLine
-	case 5:
-		return SelectionModeCommand
 	default:
 		return SelectionModeChar
 	}

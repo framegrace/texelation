@@ -16,10 +16,18 @@ const (
 	DoubleClick    ClickType = 2
 	TripleClick    ClickType = 3
 	QuadrupleClick ClickType = 4
+
+	// QuintupleClick is reserved for the "select the enclosing
+	// command" gesture (issue #223). Currently NOT produced by the
+	// detector — see MaxClickType. Will be re-enabled once per-prompt
+	// history (issue #222) makes the gesture resolvable for clicks
+	// outside the current command.
 	QuintupleClick ClickType = 5
 
-	// MaxClickType is the highest detectable multi-click count.
-	MaxClickType = QuintupleClick
+	// MaxClickType is the highest count the detector will produce.
+	// Capped at QuadrupleClick today; raise to QuintupleClick when
+	// issue #223 is ready to ship.
+	MaxClickType = QuadrupleClick
 )
 
 // DefaultMultiClickTimeout is the maximum time between clicks for multi-click detection.
