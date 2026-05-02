@@ -367,3 +367,33 @@ func TestReflowChain_OriginTrailingEmptyBranch(t *testing.T) {
 		t.Fatalf("rows=%d origin=%d, want 1 each", len(rows), len(origin))
 	}
 }
+
+func TestReflowChain_OriginWithTrailingPaddingTrimmed(t *testing.T) {
+	s := NewStore(80)
+	// 60 chars of content + 20 trailing padding cells (default-bg space).
+	// Chain head Wrapped=false so the chain is single-gid.
+	cells := make([]parser.Cell, 80)
+	for i := 0; i < 60; i++ {
+		cells[i] = parser.Cell{Rune: 'x'}
+	}
+	for i := 60; i < 80; i++ {
+		cells[i] = parser.Cell{Rune: ' '}
+	}
+	s.SetLine(5, cells)
+
+	rows, origin := reflowChain(s, 5, 5, 80)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d, want 1", len(rows))
+	}
+	// After trim, logical has 60 cells; the row is 60 cells wide.
+	if len(rows[0]) != 60 {
+		t.Errorf("row width=%d, want 60 (trailing 20 padding cells trimmed)", len(rows[0]))
+	}
+	// origin[0] must point at gid 5 col 0 — trim is symmetric.
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+	if len(origin) != 1 {
+		t.Errorf("origin len=%d, want 1", len(origin))
+	}
+}
