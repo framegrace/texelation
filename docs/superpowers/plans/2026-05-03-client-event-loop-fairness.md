@@ -45,7 +45,6 @@ package clientruntime
 
 import (
 	"testing"
-	"time"
 )
 
 // TestCoalesceRenderCh_DrainsAllQueuedTicks verifies the helper
@@ -107,16 +106,30 @@ Add at the end of the file (after the `Run` function, before any existing helper
 // delta rate, the loop spent most of its time re-rendering against
 // transient intermediate state; coalescing makes render frequency
 // bounded by render duration itself.
+//
+// The function logs (at debuglog level) when it coalesces 2+ ticks
+// in one call. Pre-coalesce, the renderCh channel filling its 64
+// buffer was the de-facto canary that render() was lagging behind
+// readLoop. Coalescing collapses bursts before the buffer can fill,
+// so this log line preserves the same diagnostic signal — a tail
+// of the debug log shows post-hoc whether bursts were arriving.
 func coalesceRenderCh(ch <-chan struct{}) {
+	count := 0
 	for {
 		select {
 		case <-ch:
+			count++
 		default:
+			if count > 1 {
+				debuglog.Printf("event loop: coalesced %d renderCh ticks", count)
+			}
 			return
 		}
 	}
 }
 ```
+
+The `debuglog` import already exists in `app.go` (used by other code in the file); no new import needed.
 
 - [ ] **Step 2: Verify the failing test from Task 1 now passes**
 
@@ -126,7 +139,16 @@ Expected: PASS.
 
 - [ ] **Step 3: Append the second test to `event_loop_fairness_test.go`**
 
-Append at the end of the file (after the closing `}` of `TestCoalesceRenderCh_DrainsAllQueuedTicks`):
+This test uses `time.After`, so first add `"time"` to the import block at the top of the file:
+
+```go
+import (
+	"testing"
+	"time"
+)
+```
+
+Then append at the end of the file (after the closing `}` of `TestCoalesceRenderCh_DrainsAllQueuedTicks`):
 
 ```go
 // TestCoalesceRenderCh_NonBlockingOnEmpty verifies the helper
@@ -186,20 +208,21 @@ Append at the end of the file:
 // helper pulls every queued event and dispatches each via the
 // supplied callback in order, returning the total count and
 // ok=true for the empty-after-drain case.
+//
+// We tag events via NewEventInterrupt(int) and compare the int
+// payload (via .Data()) rather than pointer-equal the events
+// themselves — tcell.Event is an interface and pointer equality
+// would silently break if tcell ever pooled or copied events.
 func TestDrainScreenEvents_ReturnsCountAndDispatches(t *testing.T) {
 	ch := make(chan tcell.Event, 4)
-	events := []tcell.Event{
-		tcell.NewEventInterrupt(1),
-		tcell.NewEventInterrupt(2),
-		tcell.NewEventInterrupt(3),
-	}
-	for _, ev := range events {
-		ch <- ev
+	want := []int{10, 20, 30}
+	for _, id := range want {
+		ch <- tcell.NewEventInterrupt(id)
 	}
 
-	var dispatched []tcell.Event
+	var dispatched []int
 	handle := func(ev tcell.Event) bool {
-		dispatched = append(dispatched, ev)
+		dispatched = append(dispatched, ev.(*tcell.EventInterrupt).Data().(int))
 		return true
 	}
 
@@ -208,15 +231,15 @@ func TestDrainScreenEvents_ReturnsCountAndDispatches(t *testing.T) {
 	if !ok {
 		t.Errorf("ok = false, want true on clean drain")
 	}
-	if drained != len(events) {
-		t.Errorf("drained = %d, want %d", drained, len(events))
+	if drained != len(want) {
+		t.Errorf("drained = %d, want %d", drained, len(want))
 	}
-	if len(dispatched) != len(events) {
-		t.Fatalf("dispatched len = %d, want %d", len(dispatched), len(events))
+	if len(dispatched) != len(want) {
+		t.Fatalf("dispatched len = %d, want %d", len(dispatched), len(want))
 	}
-	for i, ev := range events {
-		if dispatched[i] != ev {
-			t.Errorf("dispatch[%d]: got %v, want %v", i, dispatched[i], ev)
+	for i, id := range want {
+		if dispatched[i] != id {
+			t.Errorf("dispatch[%d]: got %d, want %d", i, dispatched[i], id)
 		}
 	}
 }
@@ -287,7 +310,7 @@ Run: `go test ./internal/runtime/client/ -run TestDrainScreenEvents_ReturnsCount
 
 Expected: PASS.
 
-- [ ] **Step 3: Append two more tests to `event_loop_fairness_test.go`**
+- [ ] **Step 3: Append four more tests to `event_loop_fairness_test.go`**
 
 Append at the end:
 
@@ -347,13 +370,92 @@ func TestDrainScreenEvents_ChannelClosedReturnsNotOK(t *testing.T) {
 		t.Errorf("drained = %d, want 0 (channel closed before any event)", drained)
 	}
 }
+
+// TestDrainScreenEvents_DrainsThenChannelCloses covers the realistic
+// shutdown shape: events are queued, then the producer closes the
+// channel. The helper must drain the buffered events first and only
+// then observe the close. Without this case, a future regression
+// where the close-detection logic short-circuits before draining
+// the buffer would silently lose user input.
+func TestDrainScreenEvents_DrainsThenChannelCloses(t *testing.T) {
+	ch := make(chan tcell.Event, 4)
+	want := []int{1, 2}
+	for _, id := range want {
+		ch <- tcell.NewEventInterrupt(id)
+	}
+	close(ch)
+
+	var dispatched []int
+	handle := func(ev tcell.Event) bool {
+		dispatched = append(dispatched, ev.(*tcell.EventInterrupt).Data().(int))
+		return true
+	}
+
+	drained, ok := drainScreenEvents(ch, handle)
+
+	if ok {
+		t.Error("ok = true, want false (channel closed after drain)")
+	}
+	if drained != len(want) {
+		t.Errorf("drained = %d, want %d", drained, len(want))
+	}
+	if len(dispatched) != len(want) {
+		t.Fatalf("dispatched %d events, want %d", len(dispatched), len(want))
+	}
+	for i, id := range want {
+		if dispatched[i] != id {
+			t.Errorf("dispatch[%d]: got %d, want %d", i, dispatched[i], id)
+		}
+	}
+}
+
+// TestDrainScreenEvents_HandleReturnsFalseStopsDrain covers the
+// production exit signal: handleScreenEvent returns false to mean
+// "the run loop should exit" (e.g. ctrl-Q, session disconnect).
+// The helper must propagate that immediately — drained must reflect
+// only events whose handler ran successfully (excluding the one
+// that returned false), and any remaining queued events stay in
+// the channel. Without this case, an off-by-one regression in the
+// helper (count++ before vs. after the handle check, or draining
+// one extra event after the false return) would silently leak
+// events past the exit signal.
+func TestDrainScreenEvents_HandleReturnsFalseStopsDrain(t *testing.T) {
+	ch := make(chan tcell.Event, 4)
+	for _, id := range []int{1, 2, 3} {
+		ch <- tcell.NewEventInterrupt(id)
+	}
+
+	var dispatched []int
+	handle := func(ev tcell.Event) bool {
+		id := ev.(*tcell.EventInterrupt).Data().(int)
+		dispatched = append(dispatched, id)
+		return id != 2 // signal exit on the second event
+	}
+
+	drained, ok := drainScreenEvents(ch, handle)
+
+	if ok {
+		t.Error("ok = true, want false when handle returned false")
+	}
+	if drained != 1 {
+		t.Errorf("drained = %d, want 1 (only the first successful event counts)", drained)
+	}
+	if len(dispatched) != 2 {
+		t.Errorf("dispatched %d events, want 2 (the handler ran for events 1 and 2)", len(dispatched))
+	}
+	// The third event must remain in the channel — exit-on-false
+	// means the helper stops AT the false event, not after it.
+	if got := len(ch); got != 1 {
+		t.Errorf("ch len after exit = %d, want 1 (third event should not have been drained)", got)
+	}
+}
 ```
 
-- [ ] **Step 4: Run all five tests**
+- [ ] **Step 4: Run all seven tests**
 
 Run: `go test ./internal/runtime/client/ -run "TestCoalesceRenderCh|TestDrainScreenEvents" -count=1 -v`
 
-Expected: 5/5 PASS.
+Expected: 7/7 PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -472,9 +574,11 @@ Expected: clean build.
 
 - [ ] **Step 3: Run the existing client-runtime tests for regression**
 
-Run: `go test ./internal/runtime/client/... -count=1 -race`
+Run: `go test ./internal/runtime/client/... -count=1 -race -v`
 
 Expected: PASS for everything that already passed on `main`. The loop-wiring change should not affect any existing test — the helpers are pure and the loop semantics are equivalent on idle / single-event paths.
+
+If any test fails, especially anything in `viewport_tracker_*_test.go`, `pane_cache_dispatch_test.go`, or `boot_handoff_test.go` (the suites that exercise channels and state mutations the loop interacts with), STOP and report — do not paper over by adjusting expectations. Compare the failing test against `main` to confirm the failure is introduced by the loop changes.
 
 - [ ] **Step 4: Commit**
 
