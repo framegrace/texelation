@@ -32,7 +32,15 @@ const (
 // PaneViewportState records). Bumping the version lets pre-Plan-B clients
 // receive an explicit handshake rejection instead of a mysterious
 // ErrPayloadShort on the first resume attempt.
-const Version uint8 = 3
+//
+// v3 (PR #206): PaneSnapshot grew ContentTopRow / NumContentRows;
+// BufferDelta grew DecorRows.
+//
+// v4: MsgBootProgress added — server emits unsolicited string-payload
+// progress messages during expensive resume processing so the boot
+// splash can render fine-grained text instead of "Loading session…"
+// for the full WAL-replay window.
+const Version uint8 = 4
 
 // MessageType enumerates the canonical message categories exchanged between
 // client and server.
@@ -74,6 +82,12 @@ const (
 	MsgViewportUpdate
 	MsgFetchRange
 	MsgFetchRangeResponse
+	// MsgBootProgress carries a single human-readable progress string
+	// emitted by the server during expensive resume operations
+	// (per-pane WAL hydration etc). Clients display it in the boot
+	// splash; missing this message is harmless — the splash falls back
+	// to the static "Loading session" stage.
+	MsgBootProgress
 )
 
 // Header describes the fixed portion of every frame exchanged over the wire.
