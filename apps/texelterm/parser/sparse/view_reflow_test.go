@@ -397,3 +397,21 @@ func TestReflowChain_OriginWithTrailingPaddingTrimmed(t *testing.T) {
 		t.Errorf("origin len=%d, want 1", len(origin))
 	}
 }
+
+func TestReflowChain_OriginPositionalGap(t *testing.T) {
+	s := NewStore(80)
+	// Powerline-style row: write at col 89 directly via Set so the
+	// row carries unwritten cells before the last-written col.
+	s.Set(5, 89, parser.Cell{Rune: 'x'})
+	if !rowHasPositionalGap(s, 5) {
+		t.Fatalf("row 5 has no positional gap; setup invalid")
+	}
+
+	rows, origin := reflowChain(s, 5, 5, 80)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d, want 1 (positional-gap path returns single row)", len(rows))
+	}
+	if origin[0] != (RowOrigin{Gid: 5, Col: 0}) {
+		t.Errorf("origin[0]=%+v, want {Gid:5, Col:0}", origin[0])
+	}
+}
