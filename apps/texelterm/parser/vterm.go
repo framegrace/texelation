@@ -588,10 +588,19 @@ func (v *VTerm) ViewportToContent(y, x int) (logicalLine int64, charOffset int, 
 	if v.mainScreen == nil {
 		return 0, 0, false, false
 	}
+	// Reflow-aware path: resolves which (gid, col) the visual (y, x)
+	// represents even when a logical line wraps across multiple rows.
+	if gi, col, mok := v.mainScreen.PointFromView(y, x); mok {
+		cursorLine, _ := v.mainScreen.Cursor()
+		return gi, col, gi == cursorLine, true
+	}
+	// Fallback: old naive math, used when the view's reflow walk can't
+	// place the point (e.g. row beyond the rendered window). Keeps the
+	// old behaviour for unrendered rows so callers don't see a regression
+	// versus pre-reflow code.
 	visibleTop, _ := v.mainScreen.VisibleRange()
 	logicalLine = visibleTop + int64(y)
 	charOffset = x
-	// Check if this is the current cursor line.
 	cursorLine, _ := v.mainScreen.Cursor()
 	isCurrentLine = logicalLine == cursorLine
 	ok = true
@@ -614,15 +623,18 @@ func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, 
 	if v.mainScreen == nil {
 		return 0, 0, false
 	}
-	visibleTop, visibleBottom := v.mainScreen.VisibleRange()
-	rowOffset := logicalLine - visibleTop
-	if rowOffset < 0 || rowOffset > visibleBottom-visibleTop {
-		return 0, 0, false
+	// Reflow-aware path: walks the wrapped chain so highlight positions
+	// match where cells are actually drawn — matters every time a long
+	// logical line spans multiple visual rows (resize is the common
+	// trigger).
+	if vy, vx, mok := v.mainScreen.PointToView(logicalLine, charOffset); mok {
+		return vy, vx, vy >= 0 && vy < v.height
 	}
-	y = int(rowOffset)
-	x = charOffset
-	visible = y >= 0 && y < v.height
-	return
+	// Out of the rendered window — report not-visible. Pre-reflow code
+	// would have returned a possibly-misleading visible=true here; the
+	// false answer is the correct one for callers (selection rendering
+	// already has clamping logic for off-screen endpoints).
+	return 0, 0, false
 }
 
 // GetContentText extracts text from a content coordinate range.
