@@ -21,6 +21,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+
+	"github.com/framegrace/texelation/cmd/texelation/boot"
 	"github.com/framegrace/texelation/cmd/texelation/lifecycle"
 	clientrt "github.com/framegrace/texelation/internal/runtime/client"
 )
@@ -113,7 +116,13 @@ func run() error {
 		return fmt.Errorf("create config directory: %w", err)
 	}
 
-	ctx := context.Background()
+	// Wire signal cancellation so Ctrl-C / SIGTERM collapse the
+	// supervisor's healthcheck wait, the splash error-display sleep,
+	// and any other ctx-aware path inside the bootstrap. Before this
+	// the unified-mode flow rooted at context.Background() couldn't
+	// be interrupted until the in-flight syscall returned.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// Command dispatch
 	switch {
@@ -170,21 +179,88 @@ func handleUnifiedMode(ctx context.Context, paths *Paths, srvOpts lifecycle.Serv
 	if srvOpts.PIDFilePath == "" {
 		srvOpts.PIDFilePath = paths.PIDPath
 	}
+
+	// Boot splash takes the screen for the duration of the bootstrap
+	// (server health check + protocol handshake + first snapshot).
+	// Cold starts after a daemon stop currently spend 10+ seconds in
+	// WAL replay before the socket is healthy; without the splash the
+	// terminal looks frozen the whole time. The splash is a lightweight
+	// pre-connect harness that Plan F (#199 session recovery) will
+	// extend with a session picker.
+	screen, splashErr := tcell.NewScreen()
+	if splashErr != nil {
+		// Fall back to the legacy stdout-only path if we can't even
+		// allocate a screen — better the user sees the original
+		// "Starting texelation server..." prints than nothing. Log
+		// and surface to stderr so a misconfigured environment
+		// (missing TTY, unset $TERM, etc.) doesn't get hidden behind
+		// a downstream supervisor error.
+		log.Printf("boot splash unavailable (tcell.NewScreen: %v); falling back to text bootstrap", splashErr)
+		fmt.Fprintf(os.Stderr, "Note: boot splash unavailable (%v); using text mode\n", splashErr)
+		return runUnifiedWithoutSplash(ctx, paths, srvOpts, clientOpts)
+	}
+	if err := screen.Init(); err != nil {
+		log.Printf("boot splash unavailable (screen.Init: %v); falling back to text bootstrap", err)
+		fmt.Fprintf(os.Stderr, "Note: boot splash unavailable (%v); using text mode\n", err)
+		return runUnifiedWithoutSplash(ctx, paths, srvOpts, clientOpts)
+	}
+	defer screen.Fini()
+	// Hide the cursor immediately — without this, a blinking cursor
+	// shows in the top-left corner during the splash. clientrt.Run
+	// will re-assert HideCursor on handoff but doing it here removes
+	// the visible artifact in the bootstrap window.
+	screen.HideCursor()
+
+	splashApp := boot.New("Texelation")
+	splashApp.SetStage(boot.StageStarting)
+	splashRunner := boot.NewRunner(screen, splashApp)
+	splashRunner.Start()
+	splashStopped := false
+	stopSplash := func() {
+		if splashStopped {
+			return
+		}
+		splashStopped = true
+		splashRunner.Stop()
+	}
+	defer stopSplash()
+
+	// Supervisor messages flow into the splash's detail line. They are
+	// transient by design — the next stage transition clears them.
 	health := lifecycle.NewSocketHealthChecker(2 * time.Second)
 	pidFile := lifecycle.NewPIDFile(paths.PIDPath)
 	daemon := lifecycle.NewDaemonManager(pidFile, srvOpts.SocketPath, health)
-	supervisor := lifecycle.NewSupervisor(daemon, health, pidFile, lifecycle.DefaultSupervisorConfig())
+	supCfg := lifecycle.DefaultSupervisorConfig()
+	// Cold-start WAL replay can run 10+ seconds with deep scrollback;
+	// the default 5s ceiling fails the health check before the socket
+	// is reachable. With the splash now visible, an honest long wait
+	// is better UX than a false "failed to start" — bump the budget.
+	supCfg.StartupWait = 60 * time.Second
+	supCfg.Reporter = func(msg string) {
+		splashApp.SetDetail(msg)
+		splashRunner.Wake()
+	}
+	supervisor := lifecycle.NewSupervisor(daemon, health, pidFile, supCfg)
 
-	// Ensure server is running
 	result, err := supervisor.EnsureRunning(ctx, srvOpts)
 	if err != nil {
+		// Log the full error before squeezing it into the splash
+		// detail line — drawCenteredText truncates to the box's
+		// inner width (~32 cols), so wrapped/multi-line error
+		// chains get clipped on screen but stay legible in the log.
+		log.Printf("ensure server running failed: %v", err)
+		splashApp.SetStage(boot.StageError)
+		splashApp.SetDetail(err.Error())
+		splashRunner.Wake()
+		// Hold the error message on screen briefly so the user can
+		// read it before tcell's Fini wipes the dialog. ctx-aware
+		// so a Ctrl-C / context cancellation collapses the wait
+		// instead of forcing the user to sit through it.
+		select {
+		case <-time.After(1500 * time.Millisecond):
+		case <-ctx.Done():
+		}
 		return fmt.Errorf("ensure server running: %w", err)
-	}
-
-	if result.WasStarted {
-		fmt.Printf("Server started (PID %d)\n", result.PID)
-		fmt.Printf("  Socket: %s\n", srvOpts.SocketPath)
-		fmt.Printf("  Logs: %s\n", paths.ServerLogPath)
 	}
 
 	// If server was restarted due to being unresponsive, show notification
@@ -192,7 +268,60 @@ func handleUnifiedMode(ctx context.Context, paths *Paths, srvOpts lifecycle.Serv
 		clientOpts.ShowRestartNotification = true
 	}
 
-	// Run client
+	// Map clientrt's status callbacks onto the splash. Once StageReady
+	// fires the runtime has painted its first frame on the same screen
+	// and we can stop the splash without leaving blank cells.
+	clientOpts.Screen = screen
+	clientOpts.OnStatus = func(stage clientrt.Stage, detail string) {
+		switch stage {
+		case clientrt.StageConnecting:
+			splashApp.SetStage(boot.StageConnecting)
+		case clientrt.StageResuming:
+			splashApp.SetStage(boot.StageResuming)
+		case clientrt.StageReady:
+			stopSplash()
+			return
+		}
+		if detail != "" {
+			splashApp.SetDetail(detail)
+		}
+		splashRunner.Wake()
+	}
+
+	return clientrt.Run(clientOpts)
+}
+
+// runUnifiedWithoutSplash is the pre-splash bootstrap path, retained
+// as a fallback for environments where tcell.NewScreen / Init fails
+// (very rare — typically only when stdin/stdout aren't a tty). It
+// preserves the original behaviour: stdout messages from the
+// supervisor, then handing control to clientrt.Run with no pre-init
+// screen.
+func runUnifiedWithoutSplash(ctx context.Context, paths *Paths, srvOpts lifecycle.ServerOptions, clientOpts clientrt.Options) error {
+	health := lifecycle.NewSocketHealthChecker(2 * time.Second)
+	pidFile := lifecycle.NewPIDFile(paths.PIDPath)
+	daemon := lifecycle.NewDaemonManager(pidFile, srvOpts.SocketPath, health)
+	// Mirror the splash path's 60s startup ceiling. Cold-start WAL
+	// replay can run 10+ seconds with deep scrollback, and the
+	// fallback path shouldn't be a degraded mode where the same
+	// daemon spuriously fails to come up just because the splash
+	// couldn't initialise.
+	supCfg := lifecycle.DefaultSupervisorConfig()
+	supCfg.StartupWait = 60 * time.Second
+	supervisor := lifecycle.NewSupervisor(daemon, health, pidFile, supCfg)
+
+	result, err := supervisor.EnsureRunning(ctx, srvOpts)
+	if err != nil {
+		return fmt.Errorf("ensure server running: %w", err)
+	}
+	if result.WasStarted {
+		fmt.Printf("Server started (PID %d)\n", result.PID)
+		fmt.Printf("  Socket: %s\n", srvOpts.SocketPath)
+		fmt.Printf("  Logs: %s\n", paths.ServerLogPath)
+	}
+	if result.WasRestarted {
+		clientOpts.ShowRestartNotification = true
+	}
 	return clientrt.Run(clientOpts)
 }
 

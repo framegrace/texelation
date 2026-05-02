@@ -396,6 +396,7 @@ func render(state *clientState, screen tcell.Screen) {
 	if needsFull {
 		fullRender(state, screen)
 		state.fullRenderNeeded = false
+		state.fullRenderHappened.Store(true)
 		// After first full render, switch effects to normal animation timestamps.
 		if state.effects != nil {
 			state.effects.FinishInitialization()

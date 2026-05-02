@@ -96,6 +96,45 @@ type clientState struct {
 	renderBuffer     [][]client.Cell
 	fullRenderNeeded bool
 
+	// firstContentDelta becomes true once a MsgBufferDelta carrying
+	// at least one Row (not just DecorRows) has been applied. The
+	// boot splash uses it as one of three handoff gates: the server
+	// flushes a Publish() with decor-only BufferDeltas (Rows empty,
+	// DecorRows populated with pane borders) as soon as the resume
+	// snapshot is sent, so a "first renderCh" trigger fires far too
+	// early on cold starts. Only a delta carrying actual Rows means
+	// at least one pane has hydrated content the renderer can paint
+	// on top of the splash.
+	firstContentDelta atomic.Bool
+
+	// fullRenderHappened becomes true the first time fullRender runs
+	// to completion. The boot splash needs this gate too: an
+	// incremental composite only writes the cells inside dirty pane
+	// regions, leaving the splash content intact in tcell's cell
+	// cache for everything outside those regions. fullRender fills
+	// the workspace buffer with default cells before drawing panes,
+	// so its diffAndShow actually overwrites the splash.
+	fullRenderHappened atomic.Bool
+
+	// treeSnapshotApplied becomes true once a MsgTreeSnapshot has
+	// landed in the cache. Gating splash handoff on this avoids the
+	// "first renderCh" trap on rehydrated cold starts: the publisher
+	// emits decor-only BufferDeltas immediately after the resume
+	// handler returns, which fire renderCh long before
+	// handleClientReady runs the slow SetViewportSize → Snapshot →
+	// Publish chain that produces the real first frame.
+	treeSnapshotApplied atomic.Bool
+
+	// bootProgressFn, when set, receives MsgBootProgress messages
+	// the server emits during slow startup phases (handleClientReady's
+	// SetViewportSize → Snapshot → Publish on rehydrated cold starts).
+	// RequestResume only consumes progress messages until the first
+	// non-progress reply; after that, readLoop is the only path and
+	// without this hook the messages would silently fall through
+	// handleControlMessage's default branch and never reach the splash.
+	bootProgressFnMu sync.Mutex
+	bootProgressFn   func(string)
+
 	// Pooled pane buffer for compositeInto (avoids per-frame allocations)
 	paneBuffer [][]client.Cell
 
@@ -179,6 +218,32 @@ func (s *clientState) setRenderChannel(ch chan<- struct{}) {
 	s.renderCh = ch
 	if s.effects != nil {
 		s.effects.SetWakeChannel(ch)
+	}
+}
+
+// bootHandoffReady reports whether all three splash-deactivation
+// gates are satisfied. Extracted from the renderCh case so the
+// predicate can be unit-tested without driving the full event loop;
+// the comment alongside the call site documents why each gate is
+// load-bearing on rehydrated cold starts.
+func (s *clientState) bootHandoffReady() bool {
+	return s.treeSnapshotApplied.Load() &&
+		s.firstContentDelta.Load() &&
+		s.fullRenderHappened.Load()
+}
+
+func (s *clientState) setBootProgressFn(fn func(string)) {
+	s.bootProgressFnMu.Lock()
+	s.bootProgressFn = fn
+	s.bootProgressFnMu.Unlock()
+}
+
+func (s *clientState) emitBootProgress(msg string) {
+	s.bootProgressFnMu.Lock()
+	fn := s.bootProgressFn
+	s.bootProgressFnMu.Unlock()
+	if fn != nil {
+		fn(msg)
 	}
 }
 
