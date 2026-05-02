@@ -651,6 +651,47 @@ func (v *VTerm) ContentToViewport(logicalLine int64, charOffset int) (y, x int, 
 	return
 }
 
+// advanceCells walks `n` cells forward from (originGid, originCol) through
+// the store, crossing gid boundaries when a row's cells are exhausted.
+// Returns the resulting (gid, col). Used by ViewportToContent to resolve
+// a viewport (y, x) given the row's origin.
+//
+// Bounded against runaway: when ReadLine returns nil (gid past the
+// store), break — the position is "past content" and further advancing
+// just walks empty space. Without this break, a click on a trailing-
+// empty wrap-continuation row could loop forever (each iteration:
+// available=0, gid++, no progress on `remaining`).
+//
+// The result for past-content positions is a (gid, col) just past the
+// store's max gid; selection callers handle that as a zero-width
+// selection (selectAtom finds no word; capture reads no cells).
+func (v *VTerm) advanceCells(originGid int64, originCol int, n int) (int64, int) {
+	if v.mainScreen == nil {
+		return originGid, originCol
+	}
+	gid := originGid
+	col := originCol
+	remaining := n
+	for remaining > 0 {
+		cells := v.mainScreen.ReadLine(gid)
+		if cells == nil {
+			return gid, col
+		}
+		rowLen := len(cells)
+		available := rowLen - col
+		if remaining < available {
+			return gid, col + remaining
+		}
+		if available < 0 {
+			available = 0
+		}
+		remaining -= available
+		gid++
+		col = 0
+	}
+	return gid, col
+}
+
 // GetContentText extracts text from a content coordinate range.
 func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string {
 	if v.inAltScreen {
