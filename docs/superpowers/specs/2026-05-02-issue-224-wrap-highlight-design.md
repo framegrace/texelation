@@ -173,17 +173,40 @@ Unchanged. Continues to use `RowGlobalIdx` (chain head) for delta clipping. Orig
 
 ## Sentinel choices
 
-| Row condition | `rowGI[y]` | `rowOrigin[y]` |
-|---|---|---|
-| Normal unwrapped row | `gi` | `(gi, 0)` |
-| Wrapped chain head row | chain head `gi` | `(gi, 0)` |
-| Wrapped continuation row | chain head `gi` | cell-bearing `(g, c)` |
-| Blank row in chain walk gap | `-1` | `(Gid: -1)` |
-| Bottom padding (viewport > content) | `-1` | `(Gid: -1)` |
-| Trailing empty in chain | chain head `gi` | `(endGI, len(endGI_cells))` |
-| Positional-gap one-row chain | `gi` | `(gi, 0)` |
+The renderer emits two parallel per-row slices, each serving a different consumer:
 
-`rowOrigin` and `rowGI` agree on `-1` for "no real content here" cases, so existing callers that already special-case `-1` keep working.
+- `rowGI[y]` — **chain identity**. The publisher uses it to clip server→client deltas: every reflowed sub-row of one logical line clips together. So all rows that belong to the same wrapped chain share the chain-head gid here, regardless of which gid actually owns the cells they display.
+- `rowOrigin[y]` — **cell location**. Selection uses it to map between viewport coords and store coords. Tracks the cell-bearing `(gid, col)` of the first cell on each row, distinct per visual row even within a wrapped chain.
+
+The two slices are designed to be co-emittable from a single chain walk; nothing has to be re-derived. They agree on a `-1` sentinel for "no real content here" so existing `rowGI == -1` callers don't need new logic.
+
+| # | Row condition | `rowGI[y]` | `rowOrigin[y]` |
+|---|---|---|---|
+| 1 | Normal unwrapped row | `gi` | `(gi, 0)` |
+| 2 | Wrapped chain head row | chain head `gi` | `(gi, 0)` |
+| 3 | Wrapped continuation row | chain head `gi` | cell-bearing `(g, c)` |
+| 4 | Blank row in chain walk gap | `-1` | `(Gid: -1)` |
+| 5 | Bottom padding (viewport > content) | `-1` | `(Gid: -1)` |
+| 6 | Trailing empty in chain | chain head `gi` | `(endGI, len(endGI_cells))` |
+| 7 | Positional-gap one-row chain | `gi` | `(gi, 0)` |
+
+Walking each case:
+
+**1. Normal unwrapped row.** A logical line that fits in viewport width: one gid renders as one visual row. Chain length is 1, so chain head = cell-bearing gid. `rowGI = gi`, `rowOrigin = (gi, 0)` — the row starts at col 0 of the gid.
+
+**2. Wrapped chain head row.** First row of a multi-row wrapped chain. The chain head gid is `gi` and this row displays cells starting at col 0 of `gi`. Both slices reflect that.
+
+**3. Wrapped continuation row.** A subsequent row in the same chain. The publisher still tags it with the chain head `gi` for clipping (the chain is one delta unit). But the cells displayed here actually live somewhere else — either further into `gi` (`(gi, K)` where `K = row × width`), or in `gi+1`, `gi+2`, etc. if the chain spans multiple gids. `rowOrigin` carries that cell-bearing position. **This is the row type the reverted attempt got wrong** — it treated `rowGI`'s chain head as a cell location.
+
+**4. Blank row in chain walk gap.** Inside the live write window, the user can erase a line via EL/ED. The renderer sees an empty gid, emits a blank row, increments. Neither chain identity nor cell location applies here, so both slices use `-1`. `ViewportToContent` falls back to naive math `(visibleTop + y, x)` on `-1` rows, which is what the pre-reflow code already did.
+
+**5. Bottom padding.** Viewport taller than the content currently rendered. Renderer fills the remaining rows with blanks. Same `-1` treatment as case 4.
+
+**6. Trailing empty in chain.** Cursor sits on a blank wrap continuation row — the user just typed past the wrap boundary but hasn't written any cell yet. The row IS part of the chain (chain identity), so `rowGI` is the chain head. But there's no cell at this position to point to, so `rowOrigin` parks at "just past the chain's last cell": `(endGI, len(endGI_cells))`. A click here resolves to `(endGI, len(endGI_cells) + x)`, which is past content; `selectAtom` finds no word and degenerates to a zero-width selection. Same UX as today.
+
+**7. Positional-gap one-row chain.** A row with unwritten cells in the middle, typically a powerline prompt that jumped via `ESC[500C ESC[17D` and wrote at col 89 with cols 0..88 still unwritten. `reflowChain` has a special path that renders this as exactly one row regardless of width (the gap stays). `rowGI = gi`, `rowOrigin = (gi, 0)` — clicks within the row map directly to cells in `gi`; cells in the gap region read as blanks.
+
+The cases that the reverted attempt confused are #2 vs #3: the previous code returned `rowGI` from `ViewportToContent`, which was correct for #2 (head row, where chain head and cell location coincide) but wrong for #3 (continuation rows). With the new `rowOrigin` slice, `ViewportToContent` returns the cell-bearing gid in both cases.
 
 ## Lock model
 
