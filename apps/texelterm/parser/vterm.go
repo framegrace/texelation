@@ -692,6 +692,62 @@ func (v *VTerm) advanceCells(originGid int64, originCol int, n int) (int64, int)
 	return gid, col
 }
 
+// cellsBetween counts cells from (originGid, originCol) forward to
+// (targetGid, targetCol), crossing gid boundaries. Returns
+// (stepsTaken, true) if the target is reached within maxCells steps,
+// or (0, false) if the walk runs past maxCells without finding the
+// target. Used by ContentToViewport to compute the visual x within a
+// row whose origin is known.
+//
+// "Before origin" cases (target is reachable only by going backward)
+// return (0, false) — the caller continues scanning to the next row.
+//
+// Safety: the loop is bounded both by step count AND by gid distance.
+// Walking through many consecutive empty gids contributes 0 to `steps`
+// per iteration; without a separate gid-based bound, a fixed iteration
+// cap can cut the walk short before reaching the target through gappy
+// stores. Bounding by (targetGid - originGid + 2) is provably tight —
+// the walk visits exactly the gids in [originGid, targetGid].
+func (v *VTerm) cellsBetween(originGid int64, originCol int, targetGid int64, targetCol, maxCells int) (int, bool) {
+	if v.mainScreen == nil {
+		return 0, false
+	}
+	if targetGid < originGid || (targetGid == originGid && targetCol < originCol) {
+		return 0, false
+	}
+	gid := originGid
+	col := originCol
+	steps := 0
+	iterCap := int(targetGid-originGid) + 2
+	for i := 0; i < iterCap; i++ {
+		if gid == targetGid {
+			if targetCol < col {
+				return 0, false
+			}
+			delta := targetCol - col
+			if steps+delta > maxCells {
+				return 0, false
+			}
+			return steps + delta, true
+		}
+		cells := v.mainScreen.ReadLine(gid)
+		if cells == nil {
+			return 0, false
+		}
+		available := len(cells) - col
+		if available < 0 {
+			available = 0
+		}
+		steps += available
+		if steps > maxCells {
+			return 0, false
+		}
+		gid++
+		col = 0
+	}
+	return 0, false
+}
+
 // GetContentText extracts text from a content coordinate range.
 func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, endOffset int) string {
 	if v.inAltScreen {
