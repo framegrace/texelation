@@ -635,10 +635,19 @@ func (v *VTerm) GetContentText(startLine int64, startOffset int, endLine int64, 
 		return ""
 	}
 
-	// Extract text from sparse store line range.
+	// Extract text from sparse store line range. Rows that have been
+	// evicted from the in-memory store fault back in from the
+	// PageStore (when one is attached); without this a selection that
+	// reaches into far scrollback would silently drop the off-store
+	// rows.
 	var result []rune
 	for lineIdx := startLine; lineIdx <= endLine; lineIdx++ {
 		cells := v.mainScreen.ReadLine(lineIdx)
+		if cells == nil && v.mainScreenPageStore != nil {
+			if line, err := v.mainScreenPageStore.ReadLine(lineIdx); err == nil && line != nil {
+				cells = line.Cells
+			}
+		}
 		if cells == nil {
 			continue
 		}
