@@ -11,6 +11,8 @@ package clientruntime
 import (
 	"testing"
 	"time"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 // TestCoalesceRenderCh_DrainsAllQueuedTicks verifies the helper
@@ -48,5 +50,54 @@ func TestCoalesceRenderCh_NonBlockingOnEmpty(t *testing.T) {
 		// returned promptly — good
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("coalesceRenderCh blocked on empty channel")
+	}
+}
+
+// drainScreenEvents helper expectations
+//
+// The helper has the signature:
+//
+//	func drainScreenEvents(events <-chan tcell.Event, handle func(tcell.Event) bool) (drained int, ok bool)
+//
+// Pulled events are dispatched via handle. ok=false means either the
+// channel is closed OR handle returned false (signalling exit).
+
+// TestDrainScreenEvents_ReturnsCountAndDispatches verifies the
+// helper pulls every queued event and dispatches each via the
+// supplied callback in order, returning the total count and
+// ok=true for the empty-after-drain case.
+//
+// We tag events via NewEventInterrupt(int) and compare the int
+// payload (via .Data()) rather than pointer-equal the events
+// themselves — tcell.Event is an interface and pointer equality
+// would silently break if tcell ever pooled or copied events.
+func TestDrainScreenEvents_ReturnsCountAndDispatches(t *testing.T) {
+	ch := make(chan tcell.Event, 4)
+	want := []int{10, 20, 30}
+	for _, id := range want {
+		ch <- tcell.NewEventInterrupt(id)
+	}
+
+	var dispatched []int
+	handle := func(ev tcell.Event) bool {
+		dispatched = append(dispatched, ev.(*tcell.EventInterrupt).Data().(int))
+		return true
+	}
+
+	drained, ok := drainScreenEvents(ch, handle)
+
+	if !ok {
+		t.Errorf("ok = false, want true on clean drain")
+	}
+	if drained != len(want) {
+		t.Errorf("drained = %d, want %d", drained, len(want))
+	}
+	if len(dispatched) != len(want) {
+		t.Fatalf("dispatched len = %d, want %d", len(dispatched), len(want))
+	}
+	for i, id := range want {
+		if dispatched[i] != id {
+			t.Errorf("dispatch[%d]: got %d, want %d", i, dispatched[i], id)
+		}
 	}
 }
