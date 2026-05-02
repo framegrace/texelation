@@ -213,3 +213,48 @@ func TestContentToViewport_RoundTripNonWrapped(t *testing.T) {
 		}
 	}
 }
+
+func TestContentToViewport_RoundTripWrappedChain(t *testing.T) {
+	v := NewVTerm(80, 24)
+	v.EnableMemoryBuffer()
+
+	// 160-char single logical line that fully fills both wrap rows at
+	// width 80. (A 100-char line leaves row 1 with only 20 cells, where
+	// x=40,79 are past-content positions that legitimately collapse via
+	// advanceCells's past-content terminator — that's not what this
+	// test is about.)
+	p := NewParser(v)
+	const long = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"0123456789ABCDEFGHIJKLMNOPQRSTUV" // 62+62+32 = 156 chars
+	for _, r := range long {
+		p.Parse(r)
+	}
+	// Pad to exactly 160 chars.
+	for _, r := range "WXYZ" {
+		p.Parse(r)
+	}
+	p.Parse('\r')
+	p.Parse('\n')
+	_, _ = v.GridWithRowIdx()
+
+	// Round-trip every (y, x) on the first two rows (the wrap chain).
+	// All positions are within rendered content.
+	for _, y := range []int{0, 1} {
+		for _, x := range []int{0, 5, 40, 79} {
+			gid, col, _, ok := v.ViewportToContent(y, x)
+			if !ok {
+				t.Fatalf("ViewportToContent(%d,%d) failed", y, x)
+			}
+			ry, rx, vis := v.ContentToViewport(gid, col)
+			if !vis {
+				t.Errorf("(%d,%d) → (%d,%d) → not visible", y, x, gid, col)
+				continue
+			}
+			if ry != y || rx != x {
+				t.Errorf("round-trip (%d,%d) → (gid=%d,col=%d) → (%d,%d)",
+					y, x, gid, col, ry, rx)
+			}
+		}
+	}
+}
