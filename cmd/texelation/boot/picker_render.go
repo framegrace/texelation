@@ -133,10 +133,26 @@ func (p *Picker) drawTabs(painter *core.Painter, w int) {
 }
 
 func (p *Picker) drawCards(painter *core.Painter, w, h int) {
-	if p.activeTab != tabStored {
+	startY := 4
+	if p.activeTab == tabLive {
+		// F.1: render live sessions as lightweight cards. We synthesize
+		// a SessionSummary from each LiveSummary so drawCard can stay
+		// uniform. No layout/thumbnail data — that belongs to Stored.
+		for i, live := range p.response.Live {
+			cardY := startY + i*(cardThumbH+cardGap)
+			if cardY+cardThumbH+cardGap > h-2 {
+				break
+			}
+			summary := protocol.SessionSummary{
+				SessionID:  live.SessionID,
+				Label:      live.Label,
+				LastActive: live.LastInputAt,
+				PaneCount:  live.PaneCount,
+			}
+			p.drawCard(painter, 2, cardY, summary, i == p.selectedIdx)
+		}
 		return
 	}
-	startY := 4
 	for i, summary := range p.response.Stored {
 		cardY := startY + i*(cardThumbH+cardGap)
 		if cardY+cardThumbH+cardGap > h-2 {

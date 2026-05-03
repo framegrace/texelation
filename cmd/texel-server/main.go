@@ -276,6 +276,12 @@ func main() {
 		publisher.SetObserver(publishLogger)
 		return publisher
 	})
+	// Plan F.1: wire the lifecycle thumbnail renderer. *DesktopSink
+	// satisfies the ThumbnailRenderer interface via its
+	// RenderSessionThumbnail method. Manager.Close /
+	// Manager.ShutdownSessions invoke it on the last-disconnect /
+	// graceful-shutdown paths.
+	srv.Manager().SetThumbnailRenderer(sink)
 
 	go func() {
 		if err := srv.Start(); err != nil {

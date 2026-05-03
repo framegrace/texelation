@@ -82,10 +82,47 @@ func (m *Manager) StoredSummaries() []protocol.SessionSummary {
 }
 
 // LiveSummaries returns the live (in-memory, attached or detached)
-// session catalog. F.1 always returns nil — F.2 will populate this
-// from m.sessions and per-session attached-client counts.
+// session catalog. F.1 surfaces sessions currently held in m.sessions
+// so a user running `--recover` while the daemon already has an
+// attached session can still see + pick it. AttachedClients is
+// populated from a stub heuristic for F.1 (1 if anyone is attached,
+// 0 otherwise — the manager doesn't track per-session client counts
+// today); F.2 will replace that with real counts.
+//
+// Empty/ephemeral sessions (PaneCount==0, no viewports) are skipped
+// — same filter as StoredSummaries — so the picker's own dial doesn't
+// show up in its own list.
 func (m *Manager) LiveSummaries() []protocol.LiveSummary {
-	return nil
+	m.mu.RLock()
+	if len(m.sessions) == 0 {
+		m.mu.RUnlock()
+		return nil
+	}
+	type entry struct {
+		id  [16]byte
+		ref *Session
+	}
+	snap := make([]entry, 0, len(m.sessions))
+	for id, s := range m.sessions {
+		snap = append(snap, entry{id: id, ref: s})
+	}
+	m.mu.RUnlock()
+
+	out := make([]protocol.LiveSummary, 0, len(snap))
+	for _, e := range snap {
+		stored := e.ref.CurrentStoredSnapshot()
+		if stored.PaneCount <= 0 && len(stored.PaneViewports) == 0 {
+			continue
+		}
+		out = append(out, protocol.LiveSummary{
+			SessionID:       e.id,
+			Label:           stored.Label,
+			AttachedClients: 1, // F.1 stub; F.2 fills in real counts
+			PaneCount:       int32(stored.PaneCount),
+			LastInputAt:     stored.LastActive.Unix(),
+		})
+	}
+	return out
 }
 
 // sessionPNGPath builds the PNG sidecar path for id. Returns empty

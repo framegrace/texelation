@@ -5,6 +5,31 @@ package boot
 
 import "github.com/gdamore/tcell/v2"
 
+// activeListLen returns the entry count of whichever tab is currently
+// active. Used to clamp navigation indices.
+func (p *Picker) activeListLen() int {
+	if p.activeTab == tabLive {
+		return len(p.response.Live)
+	}
+	return len(p.response.Stored)
+}
+
+// activeSelectedID returns the session ID at p.selectedIdx in the
+// currently-active tab. Returns ([16]byte{}, false) if the active list
+// is empty.
+func (p *Picker) activeSelectedID() ([16]byte, bool) {
+	if p.activeTab == tabLive {
+		if p.selectedIdx >= len(p.response.Live) {
+			return [16]byte{}, false
+		}
+		return p.response.Live[p.selectedIdx].SessionID, true
+	}
+	if p.selectedIdx >= len(p.response.Stored) {
+		return [16]byte{}, false
+	}
+	return p.response.Stored[p.selectedIdx].SessionID, true
+}
+
 // HandleKey routes a tcell key event through the picker's mode-aware
 // state machine. Tests call this directly; the run loop wraps real
 // EventKey events.
@@ -26,16 +51,12 @@ func (p *Picker) HandleKey(key tcell.Key, ch rune, mods tcell.ModMask) {
 			p.selectedIdx--
 		}
 	case tcell.KeyDown:
-		if p.selectedIdx < len(p.response.Stored)-1 {
+		if p.selectedIdx < p.activeListLen()-1 {
 			p.selectedIdx++
 		}
 	case tcell.KeyEnter:
-		if len(p.response.Stored) > 0 {
-			id := p.response.Stored[p.selectedIdx].SessionID
+		if id, ok := p.activeSelectedID(); ok {
 			if err := p.client.RecoverSession(id, ""); err != nil {
-				// Keep the picker open and surface the error so the
-				// user can pick a different session or retry. Don't
-				// signal Done — recovery hasn't actually happened.
 				p.errMsg = "Recover failed: " + err.Error()
 				return
 			}
@@ -49,6 +70,11 @@ func (p *Picker) HandleKey(key tcell.Key, ch rune, mods tcell.ModMask) {
 		} else {
 			p.activeTab = tabStored
 		}
+		// Clamp selection so the new tab's smaller list doesn't
+		// leave selectedIdx pointing past the end.
+		if p.selectedIdx >= p.activeListLen() {
+			p.selectedIdx = 0
+		}
 		return
 	case tcell.KeyEsc:
 		p.done = true
@@ -58,7 +84,7 @@ func (p *Picker) HandleKey(key tcell.Key, ch rune, mods tcell.ModMask) {
 	}
 	switch ch {
 	case 'j':
-		if p.selectedIdx < len(p.response.Stored)-1 {
+		if p.selectedIdx < p.activeListLen()-1 {
 			p.selectedIdx++
 		}
 	case 'k':
@@ -70,12 +96,16 @@ func (p *Picker) HandleKey(key tcell.Key, ch rune, mods tcell.ModMask) {
 		p.done = true
 		p.choice = choiceFresh
 	case 'r':
-		if len(p.response.Stored) > 0 {
+		// Rename only operates on stored sessions. Live sessions
+		// don't have a sensible rename target in F.1.
+		if p.activeTab == tabStored && len(p.response.Stored) > 0 {
 			p.mode = modeRename
 			p.renameBuf = []rune(p.response.Stored[p.selectedIdx].Label)
 		}
 	case 'd':
-		if len(p.response.Stored) > 0 {
+		// Delete only operates on stored sessions; the server refuses
+		// to delete a live session anyway.
+		if p.activeTab == tabStored && len(p.response.Stored) > 0 {
 			p.mode = modeDeleteConfirm
 		}
 	case 'q':
