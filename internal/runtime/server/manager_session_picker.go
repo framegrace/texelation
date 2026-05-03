@@ -8,13 +8,16 @@
 package server
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
+	"image/png"
 	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/framegrace/texelation/internal/persistence/atomicjson"
+	"github.com/framegrace/texelation/internal/thumbnail"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -134,37 +137,33 @@ func (m *Manager) sessionPNGPath(id [16]byte) string {
 	return filepath.Join(m.persistBasedir, SessionsDirName, hex.EncodeToString(id[:])+".png")
 }
 
-// captureLiveThumbnailBytes renders a fresh thumbnail for a live
-// session on demand and writes it to the PNG sidecar (so subsequent
-// fetches hit the fast path). Returns the PNG bytes + ok=true on
-// success. Returns ok=false when the session isn't live, the renderer
-// is unwired, the renderer skips, or write/read fails.
+// RenderLiveThumbnailBytes renders a fresh PNG for a live session
+// every time it's called — live sessions change state continuously
+// (typing, output, focus changes), so any cached PNG would be stale
+// the moment it's written. The result is NOT persisted to disk; the
+// lifecycle hooks (Close, ShutdownSessions) handle disk persistence
+// when the session transitions out of live state.
 //
-// Used by handleFetchThumbnail for live sessions whose PNG hasn't
-// been captured yet (the lifecycle hooks only fire on Close +
-// shutdown — a live session viewed by a second --recover invocation
-// hits this path).
-func (m *Manager) captureLiveThumbnailBytes(id [16]byte) ([]byte, bool) {
+// Returns ok=false when the session isn't live, the renderer is
+// unwired, or render/encode fails.
+func (m *Manager) RenderLiveThumbnailBytes(id [16]byte) ([]byte, bool) {
 	m.mu.RLock()
 	_, live := m.sessions[id]
-	basedir := m.persistBasedir
 	renderer := m.thumbRenderer
 	m.mu.RUnlock()
-	if !live || basedir == "" || renderer == nil {
+	if !live || renderer == nil {
 		return nil, false
 	}
-	if err := captureThumbnail(basedir, id, renderer); err != nil {
-		// captureThumbnail logs internally on the bigger errors; this
-		// log captures the short-circuit failure modes so a chronic
-		// "no thumbnail" symptom has a breadcrumb.
+	img, ok := renderer.RenderSessionThumbnail(id)
+	if !ok || img == nil {
 		return nil, false
 	}
-	pngPath := filepath.Join(basedir, SessionsDirName, hex.EncodeToString(id[:])+".png")
-	data, err := os.ReadFile(pngPath)
-	if err != nil {
+	scaled := thumbnail.DownscaleAspectFit(img, 480, 270)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, scaled); err != nil {
 		return nil, false
 	}
-	return data, true
+	return buf.Bytes(), true
 }
 
 // RenameStored updates the persisted session's Label both in-memory

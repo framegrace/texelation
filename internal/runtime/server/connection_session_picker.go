@@ -107,26 +107,26 @@ func (c *connection) handleFetchThumbnail(payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("decode fetch-thumb: %w", err)
 	}
+	// Plan F.1: live sessions render fresh every time — their state
+	// changes continuously (typing, new output) so any cached PNG
+	// would be stale. The disk PNG is updated only by the lifecycle
+	// hooks (Close, ShutdownSessions) when the session transitions
+	// out of live state.
+	if data, ok := c.manager.RenderLiveThumbnailBytes(req.SessionID); ok {
+		return c.sendThumbnailResponse(true, "", data)
+	}
+	// Stored sessions: serve from disk.
 	pngPath := c.manager.sessionPNGPath(req.SessionID)
 	if pngPath == "" {
 		return c.sendThumbnailResponse(false, "thumbnail unavailable", nil)
 	}
 	info, err := os.Stat(pngPath)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil {
+		if os.IsNotExist(err) {
+			return c.sendThumbnailResponse(false, "thumbnail not found", nil)
+		}
 		log.Printf("server: fetch thumbnail %x stat: %v", req.SessionID[:4], err)
 		return c.sendThumbnailResponse(false, "thumbnail io error", nil)
-	}
-	// Plan F.1: when the PNG is missing but the session is currently
-	// live, render one on demand from the publisher's prevBuffers via
-	// the wired ThumbnailRenderer. The result is also written to disk
-	// so subsequent fetches hit the fast path. For stored sessions
-	// with no cached PNG we still return "not found" — there's no
-	// in-memory state to render from.
-	if os.IsNotExist(err) {
-		if data, ok := c.manager.captureLiveThumbnailBytes(req.SessionID); ok {
-			return c.sendThumbnailResponse(true, "", data)
-		}
-		return c.sendThumbnailResponse(false, "thumbnail not found", nil)
 	}
 	if info.Size() > maxThumbnailBytes {
 		log.Printf("server: fetch thumbnail %x: refusing %d bytes (cap %d)", req.SessionID[:4], info.Size(), maxThumbnailBytes)

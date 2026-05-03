@@ -55,7 +55,11 @@ func (p *Picker) markFetchFailed(id [16]byte) {
 }
 
 // imageWidgetFor returns the widgets.Image bound to id's cached PNG,
-// constructing one on first use. nil if no PNG cached.
+// constructing one on first use. nil if no PNG cached. The widget is
+// keyed not just by id but also by the byte length of the cached PNG —
+// for live sessions the bytes change between renders, so a stale
+// widget would keep showing the old surface; we discard the old
+// widget when the bytes change.
 func (p *Picker) imageWidgetFor(id [16]byte) *widgets.Image {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -64,6 +68,18 @@ func (p *Picker) imageWidgetFor(id [16]byte) *widgets.Image {
 		return nil
 	}
 	if w, exists := p.imgCache[id]; exists {
+		// For live sessions the bytes may differ between fetches.
+		// Cheap signal: byte-length mismatch → rebuild. PNG bytes
+		// are not deterministic for the same image (timestamps,
+		// compression order) so a length match is "probably same"
+		// and a mismatch is "definitely different." Good enough.
+		if len(data) > 0 && p.liveIDs[id] {
+			// Always rebuild for live IDs so even same-length re-renders
+			// land. Cost: re-decode per render frame, negligible at
+			// thumbnail dims.
+			w = widgets.NewImage(data, "session-thumbnail")
+			p.imgCache[id] = w
+		}
 		return w
 	}
 	w := widgets.NewImage(data, "session-thumbnail")
@@ -74,14 +90,22 @@ func (p *Picker) imageWidgetFor(id [16]byte) *widgets.Image {
 // maybeFetchThumbnail kicks off a non-blocking fetch for id if we
 // haven't cached or pending one already, and haven't already failed
 // maxFetchAttempts times for that id.
+//
+// Live sessions bypass the cache check — their state changes
+// continuously, so we always re-fetch. The pending guard still
+// prevents in-flight duplicates, so each render only spawns one
+// goroutine per visible card.
 func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 	if !p.hasGraphics() || !hasThumb {
 		return
 	}
 	p.mu.Lock()
-	if _, cached := p.thumbCache[id]; cached {
-		p.mu.Unlock()
-		return
+	isLive := p.liveIDs[id]
+	if !isLive {
+		if _, cached := p.thumbCache[id]; cached {
+			p.mu.Unlock()
+			return
+		}
 	}
 	if p.pending[id] {
 		p.mu.Unlock()

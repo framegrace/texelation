@@ -108,6 +108,11 @@ type Picker struct {
 	pending       map[[16]byte]bool
 	imgCache      map[[16]byte]*widgets.Image
 	failedFetches map[[16]byte]int
+	// liveIDs marks session IDs surfaced in the Live tab. Refreshed
+	// from RefreshCatalog. Used by the fetch path to bypass the
+	// thumbCache (live sessions change state continuously, so a
+	// cached PNG goes stale).
+	liveIDs map[[16]byte]bool
 
 	done   bool
 	choice pickerChoice
@@ -124,6 +129,7 @@ func NewPicker(screen tcell.Screen, client PickerClient) *Picker {
 		pending:       make(map[[16]byte]bool),
 		imgCache:      make(map[[16]byte]*widgets.Image),
 		failedFetches: make(map[[16]byte]int),
+		liveIDs:       make(map[[16]byte]bool),
 	}
 }
 
@@ -154,6 +160,16 @@ func (p *Picker) RefreshCatalog() {
 	}
 	p.errMsg = ""
 	p.response = resp
+	// Mark which IDs are live so the fetch path can bypass the
+	// thumbCache (their state may have changed since last fetch).
+	p.mu.Lock()
+	for id := range p.liveIDs {
+		delete(p.liveIDs, id)
+	}
+	for _, l := range resp.Live {
+		p.liveIDs[l.SessionID] = true
+	}
+	p.mu.Unlock()
 	// Pre-select the populated tab when only one has entries — the
 	// default `tabStored` would otherwise show empty when only Live
 	// has content (e.g. user runs --recover on a running daemon).
