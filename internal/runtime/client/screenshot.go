@@ -12,11 +12,14 @@ import (
 	"time"
 
 	texelcore "github.com/framegrace/texelui/core"
-	"github.com/framegrace/texelui/graphics/textrender"
+
+	"github.com/framegrace/texelation/internal/thumbnail"
 )
 
 // takeScreenshot renders the current workspace buffer to a PNG file
-// and copies it to the system clipboard.
+// and copies it to the system clipboard. Uses the shared
+// internal/thumbnail rendering primitive — same code path as the
+// server's lifecycle thumbnail capture.
 func takeScreenshot(state *clientState) {
 	buf := state.prevBuffer
 	if len(buf) == 0 {
@@ -34,34 +37,19 @@ func takeScreenshot(state *clientState) {
 		}
 	}
 
-	fontPath, err := textrender.DetectFont()
+	img, err := thumbnail.RenderGrid(coreGrid)
 	if err != nil {
-		log.Printf("[SCREENSHOT] Font detection failed: %v", err)
+		log.Printf("[SCREENSHOT] Render failed: %v", err)
 		return
 	}
-
-	renderer, err := textrender.New(textrender.Config{FontPath: fontPath})
-	if err != nil {
-		log.Printf("[SCREENSHOT] Renderer creation failed: %v", err)
-		return
-	}
-
-	img := renderer.Render(coreGrid)
 
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".texelation", "screenshots")
 	os.MkdirAll(dir, 0o755)
 	filename := filepath.Join(dir, fmt.Sprintf("screenshot-%s.png", time.Now().Format("2006-01-02_15-04-05")))
 
-	f, err := os.Create(filename)
-	if err != nil {
-		log.Printf("[SCREENSHOT] Failed to create file: %v", err)
-		return
-	}
-	defer f.Close()
-
-	if err := png.Encode(f, img); err != nil {
-		log.Printf("[SCREENSHOT] Failed to encode PNG: %v", err)
+	if err := thumbnail.WritePNGAtomic(filename, img); err != nil {
+		log.Printf("[SCREENSHOT] Write failed: %v", err)
 		return
 	}
 
@@ -71,7 +59,6 @@ func takeScreenshot(state *clientState) {
 
 // copyImageToClipboard copies a PNG image to the system clipboard.
 func copyImageToClipboard(img image.Image, filePath string) {
-	// Wayland
 	if path, err := exec.LookPath("wl-copy"); err == nil {
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, img); err == nil {
@@ -82,8 +69,6 @@ func copyImageToClipboard(img image.Image, filePath string) {
 			}
 		}
 	}
-
-	// X11
 	if path, err := exec.LookPath("xclip"); err == nil {
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, img); err == nil {
@@ -94,8 +79,6 @@ func copyImageToClipboard(img image.Image, filePath string) {
 			}
 		}
 	}
-
-	// macOS
 	if path, err := exec.LookPath("osascript"); err == nil {
 		script := fmt.Sprintf(`set the clipboard to (read (POSIX file %q) as «class PNGf»)`, filePath)
 		exec.Command(path, "-e", script).Run()
