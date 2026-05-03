@@ -36,7 +36,6 @@ type pickerMode int
 const (
 	modeBrowse pickerMode = iota
 	modeRename
-	modeDeleteConfirm
 )
 
 type pickerTab int

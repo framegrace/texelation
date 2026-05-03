@@ -98,9 +98,6 @@ func (p *Picker) Render() {
 	p.drawActionBar(painter, styles, w, h)
 	// Rename mode renders inline on the selected card via drawCard; no
 	// separate overlay needed.
-	if p.mode == modeDeleteConfirm {
-		p.drawDeleteConfirmOverlay(painter, styles, w, h)
-	}
 
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
@@ -250,7 +247,7 @@ func (p *Picker) drawASCIILayoutAt(painter *core.Painter, rect core.Rect, layout
 }
 
 func (p *Picker) drawActionBar(painter *core.Painter, styles pickerStyles, w, h int) {
-	bar := "[Enter] recover   [r] rename   [d] delete   [q] quit"
+	bar := "[Enter] recover   [r] rename   [q] quit"
 	startX := (w - len(bar)) / 2
 	if startX < 0 {
 		startX = 0
@@ -258,22 +255,6 @@ func (p *Picker) drawActionBar(painter *core.Painter, styles pickerStyles, w, h 
 	painter.DrawText(startX, h-2, bar, styles.secondary)
 }
 
-func (p *Picker) drawDeleteConfirmOverlay(painter *core.Painter, styles pickerStyles, w, h int) {
-	if len(p.response.Stored) == 0 {
-		return
-	}
-	// F.1 limitation: deleting only removes per-session metadata
-	// (the JSON sidecar + thumbnail). The daemon's snapshot.json holds
-	// the workspace tree separately, so the recovered desktop content
-	// can re-appear on the next start. Use `texelation --reset-state`
-	// for a full wipe. The hint here keeps the user from being
-	// surprised; we don't auto-wipe snapshot.json from the picker
-	// because it's shared across all sessions in a single-desktop
-	// architecture.
-	label := labelOrUntitled(p.response.Stored[p.selectedIdx].Label)
-	prompt := fmt.Sprintf("Delete '%s'? [y/N]   (metadata only — workspace persists; --reset-state for full wipe)", label)
-	painter.DrawText(2, h-4, prompt, styles.danger)
-}
 
 func labelOrUntitled(s string) string {
 	if s == "" {

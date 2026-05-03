@@ -38,10 +38,6 @@ func (p *Picker) HandleKey(key tcell.Key, ch rune, mods tcell.ModMask) {
 		p.handleRenameKey(key, ch)
 		return
 	}
-	if p.mode == modeDeleteConfirm {
-		p.handleDeleteConfirmKey(key, ch)
-		return
-	}
 	// Any key dismisses a sticky error banner, even if it doesn't
 	// otherwise navigate.
 	p.errMsg = ""
@@ -98,12 +94,6 @@ func (p *Picker) HandleKey(key tcell.Key, ch rune, mods tcell.ModMask) {
 			p.mode = modeRename
 			p.renameBuf = []rune(p.response.Stored[p.selectedIdx].Label)
 		}
-	case 'd':
-		// Delete only operates on stored sessions; the server refuses
-		// to delete a live session anyway.
-		if p.activeTab == tabStored && len(p.response.Stored) > 0 {
-			p.mode = modeDeleteConfirm
-		}
 	case 'q':
 		p.done = true
 		p.choice = choiceQuit
@@ -142,27 +132,3 @@ func (p *Picker) handleRenameKey(key tcell.Key, ch rune) {
 	}
 }
 
-func (p *Picker) handleDeleteConfirmKey(key tcell.Key, ch rune) {
-	switch ch {
-	case 'y', 'Y':
-		if len(p.response.Stored) > 0 {
-			id := p.response.Stored[p.selectedIdx].SessionID
-			if err := p.client.DeleteSession(id); err != nil {
-				p.errMsg = "Delete failed: " + err.Error()
-			} else {
-				// Drop the entry locally so the cursor position
-				// stays meaningful even if we don't refresh.
-				p.response.Stored = append(p.response.Stored[:p.selectedIdx], p.response.Stored[p.selectedIdx+1:]...)
-				if p.selectedIdx >= len(p.response.Stored) && p.selectedIdx > 0 {
-					p.selectedIdx--
-				}
-			}
-		}
-		p.mode = modeBrowse
-	case 'n', 'N':
-		p.mode = modeBrowse
-	}
-	if key == tcell.KeyEsc {
-		p.mode = modeBrowse
-	}
-}
