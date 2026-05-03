@@ -41,6 +41,20 @@ type Manager struct {
 	// LookupOrRehydrate waits while a marker exists for its ID.
 	closingMu sync.Mutex
 	closing   map[[16]byte]chan struct{}
+
+	// Plan F.1: lifecycle thumbnail capture. nil = capture disabled
+	// (tests + early boot before SetThumbnailRenderer is called).
+	thumbRenderer ThumbnailRenderer
+}
+
+// SetThumbnailRenderer wires the production renderer (typically the
+// *DesktopSink that owns the publisher state) so Close(id) and
+// ShutdownSessions can capture lifecycle thumbnails. nil renderers
+// skip capture silently — no error, no log spam.
+func (m *Manager) SetThumbnailRenderer(r ThumbnailRenderer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.thumbRenderer = r
 }
 
 func NewManager() *Manager {
@@ -297,22 +311,59 @@ func (m *Manager) SetDiffRetentionLimit(limit int) {
 // LookupOrRehydrate consults the same marker so a fresh resume for
 // the same ID waits out the disk flush instead of constructing a
 // new Session pointing at the same on-disk path.
+//
+// Plan F.1: also captures a thumbnail just before teardown so the
+// next picker invocation has something to show. The capture happens
+// OUTSIDE m.mu (PNG encoding holds memory and may sync to disk —
+// holding the lock would block every other Manager op for the
+// duration). Renderer + basedir are snapshotted under the lock so a
+// concurrent SetThumbnailRenderer doesn't race with the read.
 func (m *Manager) Close(id [16]byte) {
 	m.mu.Lock()
 	session, ok := m.sessions[id]
-	if ok {
-		delete(m.sessions, id)
-	}
 	if !ok {
 		m.mu.Unlock()
 		return
 	}
+	delete(m.sessions, id)
+	basedir := m.persistBasedir
+	renderer := m.thumbRenderer
 	// Mark before dropping m.mu so any LookupOrRehydrate that grabs
 	// m.mu next sees the marker via waitClosing on its way in.
 	m.markClosing(id)
 	m.mu.Unlock()
 	defer m.unmarkClosing(id)
+
+	if basedir != "" && renderer != nil {
+		if err := captureThumbnail(basedir, id, renderer); err != nil {
+			log.Printf("server: close thumbnail %x: %v", id[:4], err)
+		}
+	}
+	// Snapshot the session's persisted state BEFORE Close() nils the
+	// writer — schedulePersist runs against the writer pointer.
+	var snapshot *StoredSession
+	if basedir != "" {
+		s := session.CurrentStoredSnapshot()
+		// Skip ephemeral sessions (picker handshake connections,
+		// fresh-but-never-used sessions). Without this filter, every
+		// `texelation --recover` invocation would leave a phantom
+		// "Untitled, 0 panes" entry behind for next time.
+		if s.PaneCount > 0 || len(s.PaneViewports) > 0 {
+			snapshot = &s
+		}
+	}
 	session.Close() // disk flush — outside m.mu
+
+	// Plan F.1: re-add the session to persistedSessions so the picker
+	// sees it on a subsequent --recover invocation. Without this, the
+	// session's JSON exists on disk but the in-memory persistedSessions
+	// map (populated only at boot scan + consumed on rehydrate) is
+	// empty, and StoredSummaries returns nothing.
+	if snapshot != nil {
+		m.mu.Lock()
+		m.persistedSessions[id] = snapshot
+		m.mu.Unlock()
+	}
 }
 
 // ShutdownSessions closes all live sessions, synchronously flushing
@@ -333,6 +384,8 @@ func (m *Manager) ShutdownSessions() {
 	m.mu.Lock()
 	live := m.sessions
 	m.sessions = make(map[[16]byte]*Session)
+	basedir := m.persistBasedir
+	renderer := m.thumbRenderer
 	// Mark every live session as closing under m.mu so any concurrent
 	// LookupOrRehydrate after we release m.mu blocks until the per-
 	// session flush completes (Plan D2 17.B).
@@ -342,6 +395,11 @@ func (m *Manager) ShutdownSessions() {
 	m.mu.Unlock()
 
 	for id, session := range live {
+		if basedir != "" && renderer != nil {
+			if err := captureThumbnail(basedir, id, renderer); err != nil {
+				log.Printf("server: shutdown thumbnail %x: %v", id[:4], err)
+			}
+		}
 		session.Close() // disk flush — outside m.mu
 		m.unmarkClosing(id)
 	}

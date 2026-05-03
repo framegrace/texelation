@@ -430,7 +430,7 @@ func TestIntegration_FullReconnectLifecycle(t *testing.T) {
 		}
 		pub := NewDesktopPublisher(h.desktop, sess)
 		h.sink.SetPublisher(pub)
-		conn := newConnection(newServerConn, sess, h.sink, resuming, false /*rehydrated*/)
+		conn := newConnection(newServerConn, sess, h.sink, nil, resuming, false /*rehydrated*/)
 		pub.SetNotifier(conn.nudge)
 		resumedSessCh <- sess
 		serveErrCh2 <- conn.serve()

@@ -544,7 +544,7 @@ func newMemHarnessOpts(t *testing.T, opts memHarnessOpts) *memHarness {
 		}
 		pub := NewDesktopPublisher(desktop, sess)
 		sink.SetPublisher(pub)
-		conn := newConnection(h.serverConn, sess, sink, resuming, false /*rehydrated*/)
+		conn := newConnection(h.serverConn, sess, sink, nil, resuming, false /*rehydrated*/)
 		// Wire nudge so sendPending fires when publisher queues diffs.
 		pub.SetNotifier(conn.nudge)
 		h.mu.Lock()
@@ -1158,7 +1158,7 @@ func (h *memHarness) Restart(t *testing.T) {
 		}
 		pub := NewDesktopPublisher(h.desktop, sess)
 		h.sink.SetPublisher(pub)
-		conn := newConnection(h.serverConn, sess, h.sink, resuming, true /*rehydrated*/)
+		conn := newConnection(h.serverConn, sess, h.sink, nil, resuming, true /*rehydrated*/)
 		pub.SetNotifier(conn.nudge)
 		h.mu.Lock()
 		h.session = sess

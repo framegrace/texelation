@@ -127,8 +127,34 @@ func TestReadMessage_PayloadTooLarge(t *testing.T) {
 	}
 }
 
-func TestProtocolVersionIs4(t *testing.T) {
-	if Version != 4 {
-		t.Fatalf("expected Version=4, got %d", Version)
+func TestProtocolVersionIs5(t *testing.T) {
+	if Version != 5 {
+		t.Fatalf("expected Version=5, got %d", Version)
+	}
+}
+
+func TestSessionPickerMessageTypes(t *testing.T) {
+	// Pin iota positions so an accidental reorder of preceding entries
+	// doesn't silently shift these to a MsgType already on the wire.
+	cases := []struct {
+		name string
+		got  MessageType
+		want MessageType
+	}{
+		{"MsgListSessions", MsgListSessions, 36},
+		{"MsgListSessionsResponse", MsgListSessionsResponse, 37},
+		{"MsgRecoverSession", MsgRecoverSession, 38},
+		{"MsgRenameSession", MsgRenameSession, 39},
+		{"MsgDeleteSession", MsgDeleteSession, 40},
+		{"MsgFetchThumbnail", MsgFetchThumbnail, 41},
+		{"MsgFetchThumbnailResponse", MsgFetchThumbnailResponse, 42},
+		{"MsgSessionOpResponse", MsgSessionOpResponse, 43},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.got != c.want {
+				t.Fatalf("%s = %d, want %d", c.name, c.got, c.want)
+			}
+		})
 	}
 }

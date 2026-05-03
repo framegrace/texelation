@@ -115,7 +115,7 @@ func handleTreeTestConnection(conn net.Conn, mgr *Manager, desktop *texel.Deskto
 
 	_ = publisher.Publish()
 
-	connHandler := newConnection(conn, session, sink, resuming, false /*rehydrated*/)
+	connHandler := newConnection(conn, session, sink, nil, resuming, false /*rehydrated*/)
 	_ = connHandler.serve()
 }
 

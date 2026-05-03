@@ -54,7 +54,7 @@ func newPipedSendingConnection(t *testing.T, queueSize int) (*connection, net.Co
 	t.Cleanup(func() { _ = clientConn.Close() })
 	t.Cleanup(func() { _ = serverConn.Close() })
 
-	conn := newConnection(serverConn, session, nopSink{}, false /*awaitResume*/, false /*rehydrated*/)
+	conn := newConnection(serverConn, session, nopSink{}, nil, false /*awaitResume*/, false /*rehydrated*/)
 	return conn, clientConn
 }
 

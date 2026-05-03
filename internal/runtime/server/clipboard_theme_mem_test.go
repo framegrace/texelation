@@ -82,7 +82,7 @@ func TestClipboardAndThemeRoundTrip(t *testing.T) {
 		_ = pub.Publish()
 		srv := &Server{manager: mgr, sink: sink, desktopSink: sink}
 		srv.sendSnapshot(serverConn, sess)
-		errCh <- newConnection(serverConn, sess, sink, resuming, false /*rehydrated*/).serve()
+		errCh <- newConnection(serverConn, sess, sink, nil, resuming, false /*rehydrated*/).serve()
 	}()
 
 	// initial handshake

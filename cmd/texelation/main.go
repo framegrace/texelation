@@ -12,6 +12,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -26,6 +27,8 @@ import (
 	"github.com/framegrace/texelation/cmd/texelation/boot"
 	"github.com/framegrace/texelation/cmd/texelation/lifecycle"
 	clientrt "github.com/framegrace/texelation/internal/runtime/client"
+	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/graphics"
 )
 
 func main() {
@@ -63,6 +66,7 @@ func run() error {
 	reconnect := fs.Bool("reconnect", false, "Attempt to resume previous session")
 	panicLog := fs.String("panic-log", "", "File to append panic stack traces")
 	clientName := fs.String("client-name", "", "Client identity slot for persistence (default: $TEXELATION_CLIENT_NAME or \"default\")")
+	recoverFlag := fs.Bool("recover", false, "Show the session-recovery picker even if client state is intact (issue #199 Plan F.1)")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		if err == flag.ErrHelp {
@@ -164,10 +168,11 @@ func run() error {
 			LogFilePath:  paths.ServerLogPath,
 			Title:        *title,
 		}, clientrt.Options{
-			Socket:     *socketPath,
-			Reconnect:  *reconnect,
-			PanicLog:   *panicLog,
-			ClientName: *clientName,
+			Socket:            *socketPath,
+			Reconnect:         *reconnect,
+			PanicLog:          *panicLog,
+			ClientName:        *clientName,
+			ShowRecoverPicker: *recoverFlag,
 		})
 	}
 }
@@ -268,6 +273,72 @@ func handleUnifiedMode(ctx context.Context, paths *Paths, srvOpts lifecycle.Serv
 		clientOpts.ShowRestartNotification = true
 	}
 
+	// Plan F.1: show the recovery picker when (a) the user passed
+	// --recover, OR (b) we have no persisted client state AND the
+	// server has stored sessions to offer.
+	shouldShowPicker := clientOpts.ShowRecoverPicker
+	if !shouldShowPicker && !clientStateExists(clientOpts) {
+		probe, perr := boot.ProbeStoredSessions(clientOpts.Socket)
+		if perr == nil && probe > 0 {
+			shouldShowPicker = true
+		}
+	}
+	if shouldShowPicker {
+		splashApp.SetDetail("Loading session list…")
+		splashRunner.Wake()
+		pickerClient, perr := boot.NewSocketPickerClient(clientOpts.Socket)
+		if perr != nil {
+			log.Printf("picker: socket client setup failed: %v; skipping picker", perr)
+			if clientOpts.ShowRecoverPicker {
+				splashApp.SetDetail("Could not connect to daemon: " + perr.Error())
+				splashRunner.Wake()
+			}
+		} else {
+			stopSplash()
+			var gp texelcore.GraphicsProvider
+			switch graphics.DetectCapability() {
+			case texelcore.GraphicsKitty:
+				gp = graphics.NewKittyProvider()
+			case texelcore.GraphicsHalfBlock:
+				gp = graphics.NewHalfBlockProvider()
+			}
+			outcome, runErr := boot.RunPicker(screen, pickerClient, gp, os.Stdout)
+			if cerr := pickerClient.Close(); cerr != nil {
+				log.Printf("picker: close socket: %v", cerr)
+			}
+			if gp != nil {
+				gp.Reset()
+				if flusher, ok := gp.(interface{ Flush(io.Writer) error }); ok {
+					if err := flusher.Flush(os.Stdout); err != nil {
+						log.Printf("picker: clear graphics before splash handoff: %v", err)
+					}
+				}
+			}
+			if runErr != nil {
+				log.Printf("picker: %v; falling back to fresh session", runErr)
+			} else {
+				switch outcome.Choice {
+				case boot.PickerChoiceRecover:
+					clientOpts.RecoverSessionID = outcome.SessionID
+				case boot.PickerChoiceFresh:
+					// fall through to ordinary connect path
+				case boot.PickerChoiceQuit:
+					return nil
+				}
+			}
+			// Restart the splash so clientrt's status callbacks have
+			// somewhere to render after the picker handoff.
+			splashApp = boot.New("Texelation")
+			splashRunner = boot.NewRunner(screen, splashApp)
+			splashRunner.Start()
+			splashStopped = false
+			if runErr != nil {
+				splashApp.SetDetail("Recovery failed; starting fresh session")
+				splashRunner.Wake()
+			}
+		}
+	}
+
 	// Map clientrt's status callbacks onto the splash. Once StageReady
 	// fires the runtime has painted its first frame on the same screen
 	// and we can stop the splash without leaving blank cells.
@@ -289,6 +360,28 @@ func handleUnifiedMode(ctx context.Context, paths *Paths, srvOpts lifecycle.Serv
 	}
 
 	return clientrt.Run(clientOpts)
+}
+
+// clientStateExists is a thin wrapper: if Plan D's persistence path
+// resolves AND the file is present and non-empty, return true.
+func clientStateExists(opts clientrt.Options) bool {
+	path, err := clientrt.ResolvePath(opts.Socket, opts.ClientName)
+	if err != nil || path == "" {
+		return false
+	}
+	info, statErr := os.Stat(path)
+	// Only treat ENOENT as "no state"; permission errors etc. are
+	// surfaced upstream — for the picker trigger we conservatively
+	// say "state exists" to avoid showing the picker over an unrelated
+	// filesystem problem.
+	if os.IsNotExist(statErr) {
+		return false
+	}
+	if statErr != nil {
+		log.Printf("picker: clientStateExists stat %s: %v", path, statErr)
+		return true
+	}
+	return info.Size() > 0
 }
 
 // runUnifiedWithoutSplash is the pre-splash bootstrap path, retained

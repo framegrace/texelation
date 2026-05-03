@@ -343,6 +343,26 @@ func (c *connection) handleMessage(prefix string, header protocol.Header, payloa
 		if err := c.handleFetchRange(payload); err != nil {
 			return fmt.Errorf("fetch range: %w", err)
 		}
+	case protocol.MsgListSessions:
+		if err := c.handleListSessions(payload); err != nil {
+			return fmt.Errorf("list sessions: %w", err)
+		}
+	case protocol.MsgRecoverSession:
+		if err := c.handleRecoverSession(payload); err != nil {
+			return fmt.Errorf("recover session: %w", err)
+		}
+	case protocol.MsgRenameSession:
+		if err := c.handleRenameSession(payload); err != nil {
+			return fmt.Errorf("rename session: %w", err)
+		}
+	case protocol.MsgDeleteSession:
+		if err := c.handleDeleteSession(payload); err != nil {
+			return fmt.Errorf("delete session: %w", err)
+		}
+	case protocol.MsgFetchThumbnail:
+		if err := c.handleFetchThumbnail(payload); err != nil {
+			return fmt.Errorf("fetch thumbnail: %w", err)
+		}
 	default:
 		debugLog.Printf("%s ignoring message type %d", prefix, header.Type)
 	}

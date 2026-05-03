@@ -93,7 +93,7 @@ func TestServerDesktopIntegrationProducesDiffsAndHandlesKeys(t *testing.T) {
 		}
 		_ = publisher.Publish()
 
-		conn := newConnection(srvConn, session, sink, resuming, false /*rehydrated*/)
+		conn := newConnection(srvConn, session, sink, nil, resuming, false /*rehydrated*/)
 		errCh <- conn.serve()
 	}()
 

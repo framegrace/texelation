@@ -71,6 +71,16 @@ type Options struct {
 	// OnStatus, when set, is called at startup milestones (see Stage
 	// constants) so an external splash can update its display. nil-safe.
 	OnStatus StatusFn
+
+	// RecoverSessionID, when non-zero AND no persisted client state
+	// exists, pre-seeds the sessionID for the connect attempt so
+	// LookupOrRehydrate picks up the matching stored session. Set by
+	// the picker handoff in cmd/texelation/main.go (issue #199 F.1).
+	RecoverSessionID [16]byte
+
+	// ShowRecoverPicker forces the recovery picker to open even when
+	// the client has intact state. Driven by the --recover flag.
+	ShowRecoverPicker bool
 }
 
 func Run(opts Options) error {
@@ -106,6 +116,12 @@ func Run(opts Options) error {
 	var sessionID [16]byte
 	if loadedState != nil {
 		sessionID = loadedState.SessionID
+	} else if opts.RecoverSessionID != ([16]byte{}) {
+		// Plan F.1: picker handed us a session ID to recover. The
+		// server's existing connect path looks this up via
+		// LookupOrRehydrate, which is exactly what we want — no new
+		// code path needed downstream.
+		sessionID = opts.RecoverSessionID
 	}
 
 	emitStatus := func(stage Stage, detail string) {
@@ -204,7 +220,14 @@ func Run(opts Options) error {
 	// received yet, no panes rendered). The persisted PaneViewports
 	// from disk are what feed the resume; live trackers are only used
 	// for the same-process --reconnect case where they may be populated.
-	shouldResume := opts.Reconnect || loadedState != nil
+	// Plan F.1: when the picker handed us a RecoverSessionID, we need
+	// to send MsgResumeRequest to drive the server's awaitResume
+	// connection out of its block — without it the server sits
+	// waiting and the splash hangs on "Capturing snapshot". The
+	// PaneViewports slice will be empty (no client-side state to
+	// supply), which is correct: the server treats empty as
+	// "fresh-connect semantics" while still rehydrating the session.
+	shouldResume := opts.Reconnect || loadedState != nil || opts.RecoverSessionID != ([16]byte{})
 	if shouldResume {
 		// Prefer persisted PaneViewports (fresh process, trackers map
 		// is empty); fall back to live trackers for the same-process

@@ -22,6 +22,7 @@ import (
 type connection struct {
 	conn                net.Conn
 	session             *Session
+	manager             *Manager // Plan F.1: picker handlers reach into manager for list/rename/delete/rehydrate
 	lastSent            uint64
 	lastAcked           uint64
 	sink                EventSink
@@ -54,11 +55,11 @@ type protocolMessage struct {
 	payload []byte
 }
 
-func newConnection(conn net.Conn, session *Session, sink EventSink, awaitResume, rehydrated bool) *connection {
+func newConnection(conn net.Conn, session *Session, sink EventSink, mgr *Manager, awaitResume, rehydrated bool) *connection {
 	if sink == nil {
 		sink = nopSink{}
 	}
-	c := &connection{conn: conn, session: session, sink: sink, awaitResume: awaitResume, rehydrated: rehydrated}
+	c := &connection{conn: conn, session: session, manager: mgr, sink: sink, awaitResume: awaitResume, rehydrated: rehydrated}
 	c.incoming = make(chan protocolMessage, 32)
 	c.readErr = make(chan error, 1)
 	c.pending = make(chan struct{}, 1)
