@@ -40,7 +40,16 @@ const (
 // progress messages during expensive resume processing so the boot
 // splash can render fine-grained text instead of "Loading session…"
 // for the full WAL-replay window.
-const Version uint8 = 4
+//
+// v5 (issue #199 Plan F.1): adds MsgListSessions, MsgListSessionsResponse,
+// MsgRecoverSession, MsgRenameSession, MsgDeleteSession, MsgFetchThumbnail,
+// MsgFetchThumbnailResponse, MsgSessionOpResponse plus SessionSummary /
+// LiveSummary wire types. Strict version equality means old (v4) clients
+// fail at the header check — there is no in-band fallback path; users on
+// the old client see a generic connect error and must upgrade. Single-binary
+// deployment makes this acceptable; revisit if a multi-version client
+// population emerges.
+const Version uint8 = 5
 
 // MessageType enumerates the canonical message categories exchanged between
 // client and server.
@@ -88,6 +97,29 @@ const (
 	// splash; missing this message is harmless — the splash falls back
 	// to the static "Loading session" stage.
 	MsgBootProgress
+	// MsgListSessions / MsgListSessionsResponse drive the F.1 stored-
+	// session recovery picker. Request has no payload; response carries
+	// Live and Stored slices.
+	MsgListSessions
+	MsgListSessionsResponse
+	// MsgRecoverSession: client picks a stored session to hydrate.
+	// Server replies with the ordinary MsgConnectAccept + MsgTreeSnapshot
+	// flow; picker hands off to the existing connect path.
+	MsgRecoverSession
+	// MsgRenameSession: edit a stored session's label without recovering.
+	MsgRenameSession
+	// MsgDeleteSession: remove a stored session's JSON + PNG sidecar.
+	// Refused with error if the session is currently live.
+	MsgDeleteSession
+	// MsgFetchThumbnail / MsgFetchThumbnailResponse: lazy pull of a
+	// stored session's PNG thumbnail. Only fires for graphics-capable
+	// terminals; non-graphics clients render an ASCII fallback instead.
+	MsgFetchThumbnail
+	MsgFetchThumbnailResponse
+	// MsgSessionOpResponse: dedicated ack for rename/delete (and any
+	// future session-mutating op). Carries OK + Error + OpType so the
+	// picker can correlate without conflating with MsgListSessionsResponse.
+	MsgSessionOpResponse
 )
 
 // Header describes the fixed portion of every frame exchanged over the wire.
