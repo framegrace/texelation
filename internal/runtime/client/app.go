@@ -419,6 +419,29 @@ func Run(opts Options) error {
 			tickCh = ticker.C
 		}
 
+		// PRIORITY DRAIN: process every queued tcell event before
+		// blocking on the main select. Without this, Go's uniform-
+		// random select pick lets renderCh win most rounds when
+		// it's saturated by heavy server traffic — input lags
+		// behind every queued render. drainScreenEvents is
+		// non-blocking when the events channel is empty, so the
+		// hot path is one default-case channel receive.
+		drained, ok := drainScreenEvents(events, func(ev tcell.Event) bool {
+			return handleScreenEvent(ev, state, screen, sessionID, writer)
+		})
+		if !ok {
+			return nil
+		}
+		if drained > 0 {
+			// Events advanced state; loop back so the next
+			// iteration re-evaluates the animation ticker
+			// condition before committing to a select. Removing
+			// this `continue` would let the loop block on a
+			// renderCh / tickCh tick that an event might have
+			// invalidated (e.g. a key toggling animations off).
+			continue
+		}
+
 		select {
 		case <-tickCh:
 			// Fixed-timestep tick: advance time, update effects, render.
@@ -442,6 +465,12 @@ func Run(opts Options) error {
 
 		case <-renderCh:
 			// Data-driven render: delta/snapshot arrived. Render immediately, no time advance.
+			// Coalesce any further renderCh ticks that readLoop has
+			// queued during the previous select round so a burst of
+			// N BufferDelta signals collapses into one render of
+			// the final state. Without this, render frequency
+			// tracks incoming delta rate.
+			coalesceRenderCh(renderCh)
 			state.frameDT = 0
 			if state.effects != nil {
 				state.effects.Update(0)
@@ -521,6 +550,64 @@ func loadKeybindings() *keybind.Registry {
 
 func formatPaneID(id [16]byte) string {
 	return fmt.Sprintf("%x", id[:4])
+}
+
+// coalesceRenderCh non-blocks-drains every queued tick on ch. The
+// client's main event loop calls this after consuming a single
+// renderCh tick from its select so a burst of N signals (heavy
+// server traffic flooding readLoop's signalRender path) collapses
+// into one render call. With render frequency tracking incoming
+// delta rate, the loop spent most of its time re-rendering against
+// transient intermediate state; coalescing makes render frequency
+// bounded by render duration itself.
+//
+// The function logs (at debuglog level) when it coalesces 2+ ticks
+// in one call. Pre-coalesce, the renderCh channel filling its 64
+// buffer was the de-facto canary that render() was lagging behind
+// readLoop. Coalescing collapses bursts before the buffer can fill,
+// so this log line preserves the same diagnostic signal — a tail
+// of the debug log shows post-hoc whether bursts were arriving.
+func coalesceRenderCh(ch <-chan struct{}) {
+	count := 0
+	for {
+		select {
+		case <-ch:
+			count++
+		default:
+			if count > 1 {
+				debuglog.Printf("event loop: coalesced %d renderCh ticks", count)
+			}
+			return
+		}
+	}
+}
+
+// drainScreenEvents pulls every queued tcell event from events and
+// dispatches each via handle. Returns the count drained and ok=false
+// if either the channel closed (run-loop exit signal) or the handle
+// returned false (also a run-loop exit signal). Non-blocking: empty
+// channel returns (0, true) immediately and the caller's select can
+// block on the next signal.
+//
+// The handle callback is the call site's closure over
+// handleScreenEvent + state/screen/sessionID/writer; passing it as
+// a parameter keeps this helper pure and unit-testable without a
+// full clientState fixture.
+func drainScreenEvents(events <-chan tcell.Event, handle func(tcell.Event) bool) (drained int, ok bool) {
+	for {
+		select {
+		case ev, chOK := <-events:
+			if !chOK {
+				return drained, false
+			}
+			if !handle(ev) {
+				return drained, false
+			}
+			drained++
+		default:
+			return drained, true
+		}
+	}
 }
 
 func setupLogging() (*os.File, error) {
