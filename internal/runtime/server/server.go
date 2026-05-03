@@ -163,7 +163,7 @@ func (s *Server) acceptLoop(l net.Listener) {
 			if err != nil {
 				return
 			}
-			conn := newConnection(c, session, s.sink, resuming, rehydrated)
+			conn := newConnection(c, session, s.sink, s.manager, resuming, rehydrated)
 			publisher := (*DesktopPublisher)(nil)
 			if s.publisherFactory != nil {
 				publisher = s.publisherFactory(session)

@@ -31,7 +31,7 @@ func TestConnectionFlushesPendingDiffsOnNudge(t *testing.T) {
 	sessionID := [16]byte{1}
 	session := NewSession(sessionID, 16)
 
-	conn := newConnection(serverConn, session, nopSink{}, false, false)
+	conn := newConnection(serverConn, session, nopSink{}, nil, false, false)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -181,7 +181,7 @@ func TestConnectionHandlesResizeBroadcastsSnapshot(t *testing.T) {
 		drainInitialMessages(clientConn, stopInitial)
 	}()
 
-	conn := newConnection(serverConn, session, sink, false, false)
+	conn := newConnection(serverConn, session, sink, nil, false, false)
 
 	close(stopInitial)
 	initialWG.Wait()
@@ -281,7 +281,7 @@ func TestConnectionClipboardRoundTrip(t *testing.T) {
 		drainInitialMessages(clientConn, stopInitial)
 	}()
 
-	conn := newConnection(serverConn, session, sink, false, false)
+	conn := newConnection(serverConn, session, sink, nil, false, false)
 
 	close(stopInitial)
 	initialWG.Wait()
@@ -355,7 +355,7 @@ func TestConnectionResumeFlushesPendingDiffs(t *testing.T) {
 	sink, _, cleanup := newDesktopSink(t)
 	defer cleanup()
 
-	conn := newConnection(serverConn, session, sink, true, false)
+	conn := newConnection(serverConn, session, sink, nil, true, false)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -507,7 +507,7 @@ func TestApplyResume_EvictedSessionWithPaneViewports(t *testing.T) {
 
 	// awaitResume=true means the connection holds back outbound diffs until
 	// a MsgResumeRequest arrives — exactly the reconnect scenario.
-	conn := newConnection(serverConn, session, nopSink{}, true /*awaitResume*/, false /*rehydrated*/)
+	conn := newConnection(serverConn, session, nopSink{}, nil, true /*awaitResume*/, false /*rehydrated*/)
 
 	errCh := make(chan error, 1)
 	go func() {

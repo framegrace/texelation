@@ -131,7 +131,7 @@ func handleTestConnection(conn net.Conn, mgr *Manager, desktop *texel.DesktopEng
 	_ = publisher.Publish()
 
 	// Create and serve connection
-	connHandler := newConnection(conn, session, sink, resuming, false /*rehydrated*/)
+	connHandler := newConnection(conn, session, sink, nil, resuming, false /*rehydrated*/)
 	_ = connHandler.serve()
 }
 

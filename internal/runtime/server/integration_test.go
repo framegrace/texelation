@@ -64,7 +64,7 @@ func TestConnectionSendsDiffProcessesAckAndKeyEvents(t *testing.T) {
 			return
 		}
 
-		conn := newConnection(srv, session, sink, resuming, false /*rehydrated*/)
+		conn := newConnection(srv, session, sink, nil, resuming, false /*rehydrated*/)
 		errCh <- conn.serve()
 	}()
 

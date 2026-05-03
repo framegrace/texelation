@@ -79,7 +79,7 @@ func TestConnection_RehydratedResume_ZerosLastAcked(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	conn := newConnection(serverConn, session, nopSink{}, true /*awaitResume*/, true /*rehydrated*/)
+	conn := newConnection(serverConn, session, nopSink{}, nil, true /*awaitResume*/, true /*rehydrated*/)
 
 	errCh := driveResumeRequest(t, conn, clientConn, protocol.ResumeRequest{
 		SessionID:    sessionID,
@@ -114,7 +114,7 @@ func TestConnection_NonRehydratedResume_HonorsLastAcked(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	conn := newConnection(serverConn, session, nopSink{}, true /*awaitResume*/, false /*rehydrated*/)
+	conn := newConnection(serverConn, session, nopSink{}, nil, true /*awaitResume*/, false /*rehydrated*/)
 
 	errCh := driveResumeRequest(t, conn, clientConn, protocol.ResumeRequest{
 		SessionID:    sessionID,
@@ -155,7 +155,7 @@ func TestConnection_RehydratedResume_LeavesInitialSnapshotSentFalse(t *testing.T
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	conn := newConnection(serverConn, session, nopSink{}, true /*awaitResume*/, true /*rehydrated*/)
+	conn := newConnection(serverConn, session, nopSink{}, nil, true /*awaitResume*/, true /*rehydrated*/)
 
 	errCh := driveResumeRequest(t, conn, clientConn, protocol.ResumeRequest{
 		SessionID: sessionID,
@@ -190,7 +190,7 @@ func TestConnection_NonRehydratedResume_FlipsInitialSnapshotSent(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	conn := newConnection(serverConn, session, nopSink{}, true /*awaitResume*/, false /*rehydrated*/)
+	conn := newConnection(serverConn, session, nopSink{}, nil, true /*awaitResume*/, false /*rehydrated*/)
 
 	errCh := driveResumeRequest(t, conn, clientConn, protocol.ResumeRequest{
 		SessionID: sessionID,
@@ -232,7 +232,7 @@ func TestConnection_RehydratedResume_SkipsEarlySnapshot(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	conn := newConnection(serverConn, session, nopSink{}, true /*awaitResume*/, true /*rehydrated*/)
+	conn := newConnection(serverConn, session, nopSink{}, nil, true /*awaitResume*/, true /*rehydrated*/)
 
 	_ = driveResumeRequest(t, conn, clientConn, protocol.ResumeRequest{
 		SessionID: sessionID,
@@ -269,7 +269,7 @@ func TestConnection_NonRehydratedResume_SendsEarlySnapshot(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	conn := newConnection(serverConn, session, nopSink{}, true /*awaitResume*/, false /*rehydrated*/)
+	conn := newConnection(serverConn, session, nopSink{}, nil, true /*awaitResume*/, false /*rehydrated*/)
 
 	_ = driveResumeRequest(t, conn, clientConn, protocol.ResumeRequest{
 		SessionID: sessionID,

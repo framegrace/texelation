@@ -73,7 +73,7 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 			firstErr <- err
 			return
 		}
-		conn := newConnection(firstServer, session, sink, resuming, false /*rehydrated*/)
+		conn := newConnection(firstServer, session, sink, nil, resuming, false /*rehydrated*/)
 		firstErr <- conn.serve()
 	}()
 
@@ -156,7 +156,7 @@ func TestClientResumeReceivesSnapshot(t *testing.T) {
 		}
 		publisher := NewDesktopPublisher(desktop, session)
 		sink.SetPublisher(publisher)
-		conn := newConnection(resumeServer, session, sink, resuming, false /*rehydrated*/)
+		conn := newConnection(resumeServer, session, sink, nil, resuming, false /*rehydrated*/)
 		resumeErr <- conn.serve()
 	}()
 
