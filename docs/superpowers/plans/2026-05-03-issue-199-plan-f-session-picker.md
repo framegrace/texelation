@@ -1,10 +1,10 @@
-# Issue #199 Plan F.1 — Stored-Session Recovery Picker — Implementation Plan
+# Issue #199 Plan F.1 — Stored-Session Recovery Picker — Implementation Plan (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a client-side stored-session recovery picker so users with lost client state can discover and rejoin sessions the daemon persisted to disk.
 
-**Architecture:** Bumps protocol v4 → v5 with five new messages (list, recover, rename, delete, fetch-thumbnail) and two wire types (SessionSummary, LiveSummary). Server-side persisted-session map (Plan D2) is exposed via new manager helpers and connection handlers; lifecycle-only thumbnail capture writes PNG sidecars next to each session JSON. Client-side picker UI lives in `cmd/texelation/boot/`, reusing the splash's tcell screen so handoff to the existing connect path is flicker-free.
+**Architecture:** Bumps protocol v4 → v5 with six new messages (list, recover, rename, delete, fetch-thumbnail, op-response) and two wire types (SessionSummary, LiveSummary). Server-side persisted-session map (Plan D2) is exposed via new manager helpers and connection handlers; lifecycle-only thumbnail capture writes PNG sidecars next to each session JSON. The renderer that produces those PNGs is the same `texelui/graphics/textrender` pipeline the client uses for user-initiated screenshots — extracted into a shared `internal/thumbnail/` primitive that both ends import. Server-side composition adapter assembles the workspace-wide cell grid from the publisher's per-pane buffers + tree layout. Client-side picker UI lives in `cmd/texelation/boot/`, reusing the splash's tcell screen so handoff to the existing connect path is flicker-free.
 
 **Tech Stack:** Go 1.24, tcell/v2 for picker UI, `texelui/graphics/textrender` for thumbnail rendering, `texelui/widgets` Image upload for Kitty graphics, existing `internal/persistence/atomicjson` for atomic writes.
 
@@ -15,6 +15,13 @@
 - The wire-level layout type is `protocol.TreeNodeSnapshot` (already exists in `protocol/messages.go`), not `TreeNodeCapture`. Tasks reference `TreeNodeSnapshot`.
 - `StoredSession` JSON shape gains a Layout field as an additive change. No `SchemaVersion` bump (existing files unmarshal cleanly with Layout=nil; old daemons reading new files ignore the unknown JSON field).
 
+**v2 revisions vs v1 (incorporates review findings):**
+- **New `internal/thumbnail/` package** (Task 9) shared by server lifecycle capture and client user-screenshot. Eliminates duplicate textrender wiring; client `screenshot.go` is refactored in Task 19 to use it.
+- **New server-side composition adapter** (Task 10): `DesktopSink.RenderSessionThumbnail` walks the publisher's `prevBuffers` + tree layout to build a workspace cell grid, then calls the shared primitive. Was missing in v1; the original Task 10 left this as "wire up later."
+- **New `MsgSessionOpResponse`** message type (Tasks 1, 4): replaces v1's hack of reusing `MsgListSessionsResponse` as a generic ack. Eliminates the response-type ambiguity flagged in review.
+- **Connection struct gains `manager *Manager`** field — wired in Task 13 (renumbered) which is the first task that needs it. Affects every existing test that constructs a connection (~16 files).
+- **Bug fixes baked in:** `DecodeLiveSummary` consumed-bytes off-by-16 (Task 2); `StoredSummaries` RLock-during-stat (Task 6); `DeleteStored` TOCTOU + bad guard (Task 7); Task 11 `ShutdownSessions` shown as full code, not prose; ASCII renderer's vertical-split test column + n-way split handling (Task 15); Picker `mu sync.Mutex` field declared up-front (Task 16); `maybeFetchThumbnail` reads under lock + defer-clears `pending` on error (Task 17); error surfacing in picker on Recover/Rename/Delete/RefreshCatalog failures (Task 16); thumbnail size cap + dimension cap on the fetch-thumbnail server path (Task 14); real `ProbeStoredSessions` + `SocketPickerClient` implementations (Task 18, no more `/* ... */` stubs).
+
 ---
 
 ## File Structure
@@ -23,52 +30,65 @@
 
 | File | Responsibility |
 |---|---|
-| `protocol/session_picker.go` | Wire types (SessionSummary, LiveSummary) and encoders/decoders for ListSessions, RecoverSession, Rename, Delete, FetchThumbnail messages |
+| `protocol/session_picker.go` | Wire types (SessionSummary, LiveSummary) + encoders/decoders for ListSessions, RecoverSession, Rename, Delete, FetchThumbnail, SessionOpResponse |
 | `protocol/session_picker_test.go` | Round-trip encode/decode tests for all new wire types |
+| `internal/thumbnail/render.go` | **Shared** primitive: `RenderGrid([][]Cell) (image.Image, error)` + `WritePNGAtomic(path, image.Image) error` + `DownscaleAspectFit(img, w, h) *image.RGBA` |
+| `internal/thumbnail/render_test.go` | Primitive tests |
 | `internal/runtime/server/manager_session_picker.go` | `StoredSummaries`, `LiveSummaries`, `RenameStored`, `DeleteStored` methods on Manager |
 | `internal/runtime/server/manager_session_picker_test.go` | Manager helper unit tests |
-| `internal/runtime/server/thumbnail.go` | `captureThumbnail`, `writePNGAtomic`, downscale helper |
-| `internal/runtime/server/thumbnail_test.go` | Thumbnail capture + atomic-write tests |
+| `internal/runtime/server/thumbnail_renderer.go` | Server-side `DesktopSink.RenderSessionThumbnail` (composes pane buffers → grid → shared primitive) |
+| `internal/runtime/server/thumbnail_renderer_test.go` | Composition + adapter tests |
+| `internal/runtime/server/thumbnail.go` | `captureThumbnail` orchestrator (calls renderer, calls primitive's `WritePNGAtomic`) |
+| `internal/runtime/server/thumbnail_test.go` | Capture trigger tests |
 | `internal/runtime/server/connection_session_picker.go` | Connection handlers: `handleListSessions`, `handleRecoverSession`, `handleRenameSession`, `handleDeleteSession`, `handleFetchThumbnail` |
 | `internal/runtime/server/connection_session_picker_test.go` | Handler unit tests via memconn |
 | `cmd/texelation/boot/picker.go` | `Picker` struct, run loop, dispatch |
 | `cmd/texelation/boot/picker_input.go` | Key handling, navigation, mode transitions |
-| `cmd/texelation/boot/picker_render.go` | Card layout, tabs, action bar |
+| `cmd/texelation/boot/picker_render.go` | Card layout, tabs, action bar, error banner |
 | `cmd/texelation/boot/picker_thumbnail.go` | Kitty image rendering, lazy fetch coordinator |
-| `cmd/texelation/boot/picker_ascii.go` | TreeNodeSnapshot → box-drawing chars |
+| `cmd/texelation/boot/picker_ascii.go` | TreeNodeSnapshot → box-drawing chars (n-way splits) |
 | `cmd/texelation/boot/picker_ascii_test.go` | Pure ASCII algorithm tests |
 | `cmd/texelation/boot/picker_test.go` | Picker render + navigation tests |
+| `cmd/texelation/boot/picker_runner.go` | `RunPicker`, `ProbeStoredSessions`, `SocketPickerClient` |
+| `cmd/texelation/boot/picker_client_test.go` | SocketPickerClient round-trip tests |
 
 **Modified files:**
 
 | File | Change |
 |---|---|
-| `protocol/protocol.go` | Bump `Version` to 5; add 7 new `MessageType` constants |
-| `internal/runtime/server/session_persistence.go` | Add `Layout *protocol.TreeNodeSnapshot` field to `StoredSession` and JSON shape |
+| `protocol/protocol.go` | Bump `Version` to 5; add 8 new `MessageType` constants (ListSessions, ListSessionsResponse, Recover, Rename, Delete, FetchThumbnail, FetchThumbnailResponse, SessionOpResponse) |
+| `internal/runtime/server/session_persistence.go` | Add `Layout *protocol.TreeNodeSnapshot` field to `StoredSession` and JSON shape; orphan-PNG cleanup in `ScanSessionsDir` |
+| `internal/runtime/server/connection.go` | Add `manager *Manager` field; thread through `newConnection` (~16 test files updated) |
 | `internal/runtime/server/connection_handler.go` | Dispatch new message types to `connection_session_picker.go` handlers |
-| `internal/runtime/server/manager.go` | Extend boot scan with HasThumbnail flag + orphan PNG cleanup; thumbnail capture in `ShutdownSessions` and `Close(id)` |
+| `internal/runtime/server/manager.go` | Thumbnail capture in `ShutdownSessions` and `Close(id)`; renderer setter |
+| `internal/runtime/server/desktop_sink.go` | Implement `ThumbnailRenderer` interface (delegates to `thumbnail_renderer.go`) |
+| `internal/runtime/client/screenshot.go` | Refactor to use shared `internal/thumbnail.RenderGrid` (dedup) |
 | `cmd/texelation/main.go` | Add `--recover` flag; wire picker activation between supervisor and `clientrt.Run` |
+| `internal/runtime/client/app.go` | Add `RecoverSessionID [16]byte` to `Options`; pre-seed sessionID when set |
 
 ---
 
-## Tasks Overview
+## Tasks Overview (v2)
 
-1. Protocol: bump version + add MessageType constants
-2. Protocol: SessionSummary + LiveSummary wire types
+1. Protocol: bump version + add MessageType constants (incl. SessionOpResponse)
+2. Protocol: SessionSummary + LiveSummary wire types (with off-by-16 fix)
 3. Protocol: ListSessions request/response
-4. Protocol: RecoverSession + Rename + Delete + FetchThumbnail messages
+4. Protocol: Recover + Rename + Delete + FetchThumbnail + SessionOpResponse messages
 5. StoredSession: add Layout field
-6. Manager: StoredSummaries + LiveSummaries
-7. Manager: RenameStored + DeleteStored
-8. Manager: HasThumbnail flag + orphan PNG cleanup at boot scan
-9. Thumbnail: writePNGAtomic + downscale + captureThumbnail core
-10. Thumbnail: capture trigger on last-disconnect + graceful shutdown
-11. Connection handlers: list + recover
-12. Connection handlers: rename + delete + fetch-thumbnail
-13. Picker: ASCII layout algorithm (pure functions)
-14. Picker: state machine, navigation, render
-15. Picker: Kitty thumbnail rendering + lazy fetch
-16. boot.Run integration: trigger logic + handoff
+6. Manager: StoredSummaries + LiveSummaries (RLock snapshot pattern)
+7. Manager: RenameStored + DeleteStored (TOCTOU-safe)
+8. Manager: orphan PNG cleanup at boot scan
+9. **Shared `internal/thumbnail/` primitive** (RenderGrid + WritePNGAtomic + Downscale)
+10. **Server-side composition adapter** (`DesktopSink.RenderSessionThumbnail`)
+11. Server: `captureThumbnail` orchestrator + capture triggers (full ShutdownSessions code)
+12. Connection: add `manager *Manager` field + ripple
+13. Connection handlers: list + recover
+14. Connection handlers: rename + delete + fetch-thumbnail (size + dim caps; uses SessionOpResponse)
+15. Picker: ASCII layout algorithm (n-way splits, divider-column-correct)
+16. Picker: state machine, navigation, render (mu, error banner, RefreshCatalog error visible)
+17. Picker: Kitty thumbnail rendering + lazy fetch (locked, defer-clear pending)
+18. boot.Run integration: real ProbeStoredSessions + SocketPickerClient + handoff
+19. Client screenshot: refactor to use shared `internal/thumbnail` primitive
 
 ---
 
@@ -110,6 +130,7 @@ func TestSessionPickerMessageTypes(t *testing.T) {
 		{"MsgDeleteSession", protocol.MsgDeleteSession, 39},
 		{"MsgFetchThumbnail", protocol.MsgFetchThumbnail, 40},
 		{"MsgFetchThumbnailResponse", protocol.MsgFetchThumbnailResponse, 41},
+		{"MsgSessionOpResponse", protocol.MsgSessionOpResponse, 42},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -165,6 +186,10 @@ Append at the end of the iota block in `protocol/protocol.go` (after `MsgBootPro
 	// terminals; non-graphics clients render an ASCII fallback instead.
 	MsgFetchThumbnail
 	MsgFetchThumbnailResponse
+	// MsgSessionOpResponse: dedicated ack for rename/delete (and any
+	// future session-mutating op). Carries OK + Error + OpType so the
+	// picker can correlate without conflating with MsgListSessionsResponse.
+	MsgSessionOpResponse
 ```
 
 - [ ] **Step 6: Run test to verify pass**
@@ -481,7 +506,8 @@ func DecodeLiveSummary(b []byte) (LiveSummary, int, error) {
 	s.AttachedClients = int32(binary.LittleEndian.Uint32(b[:4]))
 	s.PaneCount = int32(binary.LittleEndian.Uint32(b[4:8]))
 	s.LastInputAt = int64(binary.LittleEndian.Uint64(b[8:16]))
-	return s, start - (len(b) - 16), nil
+	b = b[16:]
+	return s, start - len(b), nil
 }
 ```
 
@@ -730,8 +756,10 @@ func TestRenameSessionRequest_RoundTrip(t *testing.T) {
 
 func TestSessionOpResponse_RoundTrip(t *testing.T) {
 	cases := []SessionOpResponse{
-		{OK: true},
-		{OK: false, Error: "session is live"},
+		{OpType: OpRename, OK: true},
+		{OpType: OpRename, OK: false, Error: "session not found"},
+		{OpType: OpDelete, OK: true},
+		{OpType: OpDelete, OK: false, Error: "session is live"},
 	}
 	for i, in := range cases {
 		encoded, err := EncodeSessionOpResponse(in)
@@ -903,16 +931,29 @@ func DecodeDeleteSessionRequest(b []byte) (DeleteSessionRequest, error) {
 	return r, nil
 }
 
-// SessionOpResponse is the shared shape for rename + delete responses.
-// OK=false implies a non-empty Error explaining the refusal (live
-// session, not found, IO failure).
+// SessionOpKind identifies which op a SessionOpResponse acks. The
+// picker uses this to correlate without needing in-flight request IDs.
+type SessionOpKind uint8
+
+const (
+	OpRename SessionOpKind = iota
+	OpDelete
+)
+
+// SessionOpResponse is the dedicated ack envelope for rename + delete
+// (and any future session-mutating op). OK=false implies a non-empty
+// Error explaining the refusal (live session, not found, IO failure).
+// OpType distinguishes which op this acks so the picker doesn't
+// conflate it with a coincident MsgListSessionsResponse.
 type SessionOpResponse struct {
-	OK    bool
-	Error string
+	OpType SessionOpKind
+	OK     bool
+	Error  string
 }
 
 func EncodeSessionOpResponse(r SessionOpResponse) ([]byte, error) {
 	buf := bytes.NewBuffer(nil)
+	buf.WriteByte(byte(r.OpType))
 	if r.OK {
 		buf.WriteByte(1)
 	} else {
@@ -926,11 +967,12 @@ func EncodeSessionOpResponse(r SessionOpResponse) ([]byte, error) {
 
 func DecodeSessionOpResponse(b []byte) (SessionOpResponse, error) {
 	var r SessionOpResponse
-	if len(b) < 1 {
+	if len(b) < 2 {
 		return r, ErrPayloadShort
 	}
-	r.OK = b[0] != 0
-	msg, _, err := decodeString(b[1:])
+	r.OpType = SessionOpKind(b[0])
+	r.OK = b[1] != 0
+	msg, _, err := decodeString(b[2:])
 	if err != nil {
 		return r, err
 	}
@@ -1380,27 +1422,42 @@ import (
 // when persistence is enabled; without persistence the flag is always
 // false.
 //
-// Reads the in-memory persistedSessions map; no JSON parsing or disk
-// IO except the per-record PNG stat. Safe to call from request paths.
+// Snapshot pattern: copies persistedSessions + persistBasedir under
+// the RLock (O(N) memory, O(N) wall-clock), then runs the per-record
+// PNG stat OUTSIDE the lock. Holding the RLock during disk stat would
+// block every Manager write op (DeleteStored, RenameStored,
+// LookupOrRehydrate, Close) for the duration of N stat calls — a real
+// stall on a slow filesystem with a populous sessions dir.
 func (m *Manager) StoredSummaries() []protocol.SessionSummary {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	if len(m.persistedSessions) == 0 {
+		m.mu.RUnlock()
 		return nil
 	}
-	summaries := make([]protocol.SessionSummary, 0, len(m.persistedSessions))
+	persistDir := m.persistBasedir
+	type entry struct {
+		id  [16]byte
+		ref *StoredSession
+	}
+	snap := make([]entry, 0, len(m.persistedSessions))
 	for id, s := range m.persistedSessions {
+		snap = append(snap, entry{id: id, ref: s})
+	}
+	m.mu.RUnlock()
+
+	summaries := make([]protocol.SessionSummary, 0, len(snap))
+	for _, e := range snap {
 		summary := protocol.SessionSummary{
-			SessionID:      id,
-			Label:          s.Label,
-			LastActive:     s.LastActive.Unix(),
-			PaneCount:      int32(s.PaneCount),
-			FirstPaneTitle: s.FirstPaneTitle,
-			Pinned:         s.Pinned,
-			Layout:         s.Layout,
+			SessionID:      e.id,
+			Label:          e.ref.Label,
+			LastActive:     e.ref.LastActive.Unix(),
+			PaneCount:      int32(e.ref.PaneCount),
+			FirstPaneTitle: e.ref.FirstPaneTitle,
+			Pinned:         e.ref.Pinned,
+			Layout:         e.ref.Layout,
 		}
-		if m.persistBasedir != "" {
-			pngPath := filepath.Join(m.persistBasedir, SessionsDirName, hex.EncodeToString(id[:])+".png")
+		if persistDir != "" {
+			pngPath := filepath.Join(persistDir, SessionsDirName, hex.EncodeToString(e.id[:])+".png")
 			if info, err := os.Stat(pngPath); err == nil && !info.IsDir() {
 				summary.HasThumbnail = true
 			}
@@ -1641,38 +1698,53 @@ func (m *Manager) RenameStored(id [16]byte, newLabel string) error {
 // when the session is currently live — the user must detach all
 // clients first.
 //
+// TOCTOU avoidance: the in-memory delete + the live-session refusal
+// happen under m.mu held *contiguously* with the disk removes. A
+// concurrent LookupOrRehydrate that observes the entry still in
+// persistedSessions before this method's lock acquisition will block
+// on m.mu and find it gone; one that already grabbed the entry before
+// the lock would have called delete(persistedSessions, id) itself,
+// so the !ok branch below catches that race cleanly.
+//
 // PNG removal is best-effort (a missing PNG is not an error); JSON
 // removal is authoritative — if the JSON unlink fails we leave the
 // in-memory entry alone and surface the error so the caller can
 // retry. The PNG-then-JSON order avoids leaving a JSON with stale
 // HasThumbnail expectations across a partial delete.
+//
+// We also markClosing(id) before any disk I/O so a concurrent
+// rehydrate path waits behind the unlink rather than constructing a
+// fresh Session pointing at the on-disk file we're about to remove.
 func (m *Manager) DeleteStored(id [16]byte) error {
 	m.mu.Lock()
 	if _, live := m.sessions[id]; live {
 		m.mu.Unlock()
 		return fmt.Errorf("manager: session %x is live; detach all clients first", id[:4])
 	}
-	if _, ok := m.persistedSessions[id]; !ok && m.persistBasedir == "" {
+	if _, ok := m.persistedSessions[id]; !ok {
 		m.mu.Unlock()
 		return ErrSessionNotFound
 	}
-	persistDir := m.persistBasedir
-	m.mu.Unlock()
-
-	if persistDir != "" {
-		pngPath := filepath.Join(persistDir, SessionsDirName, hex.EncodeToString(id[:])+".png")
-		if err := os.Remove(pngPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("manager: remove %s: %w", pngPath, err)
-		}
-		jsonPath := SessionFilePath(persistDir, id)
-		if err := os.Remove(jsonPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("manager: remove %s: %w", jsonPath, err)
-		}
-	}
-
-	m.mu.Lock()
 	delete(m.persistedSessions, id)
+	persistDir := m.persistBasedir
+	m.markClosing(id)
 	m.mu.Unlock()
+	defer m.unmarkClosing(id)
+
+	if persistDir == "" {
+		return nil
+	}
+	pngPath := filepath.Join(persistDir, SessionsDirName, hex.EncodeToString(id[:])+".png")
+	if err := os.Remove(pngPath); err != nil && !os.IsNotExist(err) {
+		// In-memory entry is already gone; surfacing the error
+		// to the caller is enough. A retry of DeleteStored will
+		// no-op on the in-memory side and re-attempt the unlink.
+		return fmt.Errorf("manager: remove %s: %w", pngPath, err)
+	}
+	jsonPath := SessionFilePath(persistDir, id)
+	if err := os.Remove(jsonPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("manager: remove %s: %w", jsonPath, err)
+	}
 	return nil
 }
 ```
@@ -1794,21 +1866,24 @@ git commit -m "Boot scan: remove orphaned PNG thumbnails"
 
 ---
 
-### Task 9: Thumbnail core — writePNGAtomic + downscale + capture skeleton
+### Task 9: Shared `internal/thumbnail/` primitive package
 
 **Files:**
-- Create: `internal/runtime/server/thumbnail.go`
-- Test: `internal/runtime/server/thumbnail_test.go`
+- Create: `internal/thumbnail/render.go`
+- Create: `internal/thumbnail/render_test.go`
+- (Task 19 refactors `internal/runtime/client/screenshot.go` to consume this; Task 11 consumes it server-side.)
+
+**Goal:** One package owning the textrender pipeline + atomic PNG write + aspect-fit downscale, used by both the server lifecycle thumbnail capture and the client's user-initiated screenshot. Avoids duplicating the font detection + renderer setup. The package is pure render — it does not know about sessions, panes, or the desktop tree (those compose at the call site).
 
 - [ ] **Step 1: Write failing tests**
 
-Create `internal/runtime/server/thumbnail_test.go`:
+Create `internal/thumbnail/render_test.go`:
 
 ```go
 // Copyright © 2026 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package server
+package thumbnail
 
 import (
 	"image"
@@ -1817,6 +1892,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	texelcore "github.com/framegrace/texelui/core"
 )
 
 func makeTestImage(w, h int) image.Image {
@@ -1829,20 +1906,45 @@ func makeTestImage(w, h int) image.Image {
 	return img
 }
 
+func TestRenderGrid_Smoke(t *testing.T) {
+	// 4x2 grid of plain ASCII; we just want a valid image back.
+	grid := [][]texelcore.Cell{
+		{{Ch: 'h'}, {Ch: 'e'}, {Ch: 'l'}, {Ch: 'l'}},
+		{{Ch: 'o'}, {Ch: ' '}, {Ch: 't'}, {Ch: 'x'}},
+	}
+	img, err := RenderGrid(grid)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if img == nil {
+		t.Fatalf("nil image")
+	}
+	if img.Bounds().Dx() <= 0 || img.Bounds().Dy() <= 0 {
+		t.Fatalf("zero-sized image: %v", img.Bounds())
+	}
+}
+
+func TestRenderGrid_EmptyGrid(t *testing.T) {
+	if _, err := RenderGrid(nil); err == nil {
+		t.Fatalf("expected error on nil grid")
+	}
+	if _, err := RenderGrid([][]texelcore.Cell{}); err == nil {
+		t.Fatalf("expected error on empty grid")
+	}
+}
+
 func TestWritePNGAtomic_HappyPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "thumb.png")
-	if err := writePNGAtomic(path, makeTestImage(40, 30)); err != nil {
+	if err := WritePNGAtomic(path, makeTestImage(40, 30)); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	// Tmp file should be gone.
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Errorf("tmp file not cleaned: stat err=%v", err)
 	}
-	// Decoded image should be the same dimensions.
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -1860,10 +1962,10 @@ func TestWritePNGAtomic_HappyPath(t *testing.T) {
 func TestWritePNGAtomic_OverwritesExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "thumb.png")
-	if err := writePNGAtomic(path, makeTestImage(20, 20)); err != nil {
+	if err := WritePNGAtomic(path, makeTestImage(20, 20)); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
-	if err := writePNGAtomic(path, makeTestImage(40, 40)); err != nil {
+	if err := WritePNGAtomic(path, makeTestImage(40, 40)); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
 	f, _ := os.Open(path)
@@ -1876,23 +1978,15 @@ func TestWritePNGAtomic_OverwritesExisting(t *testing.T) {
 
 func TestDownscaleAspectFit_Wider(t *testing.T) {
 	src := makeTestImage(800, 200) // 4:1 — wider than 16:9 (480x270)
-	out := downscaleAspectFit(src, 480, 270)
+	out := DownscaleAspectFit(src, 480, 270)
 	if out.Bounds().Dx() != 480 || out.Bounds().Dy() != 270 {
 		t.Fatalf("expected 480x270 canvas, got %dx%d", out.Bounds().Dx(), out.Bounds().Dy())
 	}
 }
 
 func TestDownscaleAspectFit_Taller(t *testing.T) {
-	src := makeTestImage(200, 800) // narrow + tall
-	out := downscaleAspectFit(src, 480, 270)
-	if out.Bounds().Dx() != 480 || out.Bounds().Dy() != 270 {
-		t.Fatalf("expected 480x270 canvas, got %dx%d", out.Bounds().Dx(), out.Bounds().Dy())
-	}
-}
-
-func TestDownscaleAspectFit_AlreadySmall(t *testing.T) {
-	src := makeTestImage(100, 80)
-	out := downscaleAspectFit(src, 480, 270)
+	src := makeTestImage(200, 800)
+	out := DownscaleAspectFit(src, 480, 270)
 	if out.Bounds().Dx() != 480 || out.Bounds().Dy() != 270 {
 		t.Fatalf("expected 480x270 canvas, got %dx%d", out.Bounds().Dx(), out.Bounds().Dy())
 	}
@@ -1901,40 +1995,69 @@ func TestDownscaleAspectFit_AlreadySmall(t *testing.T) {
 
 - [ ] **Step 2: Run tests, verify failure**
 
-Run: `go test ./internal/runtime/server/ -run "TestWritePNGAtomic|TestDownscaleAspectFit" -count=1`
-Expected: FAIL — undefined `writePNGAtomic`, `downscaleAspectFit`.
+Run: `go test ./internal/thumbnail/ -count=1`
+Expected: FAIL — package doesn't exist yet.
 
-- [ ] **Step 3: Implement helpers**
+- [ ] **Step 3: Implement the primitive**
 
-Create `internal/runtime/server/thumbnail.go`:
+Create `internal/thumbnail/render.go`:
 
 ```go
 // Copyright © 2026 Texelation contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// File: internal/runtime/server/thumbnail.go
-// Summary: Lifecycle thumbnail capture for the F.1 session picker.
-// Usage: Called from Manager.ShutdownSessions and Manager.Close on
-//   the last-disconnect transition. Writes <basedir>/sessions/<id>.png.
+// File: internal/thumbnail/render.go
+// Summary: Shared image-rendering primitive used by server lifecycle
+// thumbnail capture (Plan F.1) and client user-initiated screenshots.
+// Knows about cells; does not know about sessions, panes, or sockets.
 
-package server
+package thumbnail
 
 import (
+	"errors"
 	"fmt"
 	"image"
-	"image/draw"
+	stddraw "image/draw"
 	"image/png"
 	"os"
 
-	"golang.org/x/image/draw" // golang.org/x/image is already a transitive dep via texelui
+	xdraw "golang.org/x/image/draw"
+
+	texelcore "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/graphics/textrender"
 )
 
-// writePNGAtomic encodes img to path via a temp-file-then-rename so a
-// crash mid-write doesn't leave a half-PNG (which the client would
-// then fail to decode and silently fall back to ASCII forever).
-func writePNGAtomic(path string, img image.Image) error {
+// ErrEmptyGrid is returned by RenderGrid for nil or zero-row inputs.
+var ErrEmptyGrid = errors.New("thumbnail: empty cell grid")
+
+// RenderGrid renders a cell grid to an image using the system text
+// renderer (font auto-detected). Callers are responsible for supplying
+// a non-empty grid; this function does not synthesize background fill
+// for the empty case.
+func RenderGrid(grid [][]texelcore.Cell) (image.Image, error) {
+	if len(grid) == 0 {
+		return nil, ErrEmptyGrid
+	}
+	if len(grid[0]) == 0 {
+		return nil, ErrEmptyGrid
+	}
+	fontPath, err := textrender.DetectFont()
+	if err != nil {
+		return nil, fmt.Errorf("thumbnail: font detect: %w", err)
+	}
+	renderer, err := textrender.New(textrender.Config{FontPath: fontPath})
+	if err != nil {
+		return nil, fmt.Errorf("thumbnail: renderer: %w", err)
+	}
+	return renderer.Render(grid), nil
+}
+
+// WritePNGAtomic encodes img to path via tmp+rename so a crash mid-
+// write doesn't leave a half-PNG. Used both by server lifecycle
+// capture and (eventually) by the client screenshot path.
+func WritePNGAtomic(path string, img image.Image) error {
 	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("thumbnail: create %s: %w", tmp, err)
 	}
@@ -1943,13 +2066,14 @@ func writePNGAtomic(path string, img image.Image) error {
 	closeErr := f.Close()
 	if encErr != nil || syncErr != nil || closeErr != nil {
 		_ = os.Remove(tmp)
-		if encErr != nil {
+		switch {
+		case encErr != nil:
 			return fmt.Errorf("thumbnail: encode: %w", encErr)
-		}
-		if syncErr != nil {
+		case syncErr != nil:
 			return fmt.Errorf("thumbnail: sync: %w", syncErr)
+		default:
+			return fmt.Errorf("thumbnail: close: %w", closeErr)
 		}
-		return fmt.Errorf("thumbnail: close: %w", closeErr)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
@@ -1958,12 +2082,11 @@ func writePNGAtomic(path string, img image.Image) error {
 	return nil
 }
 
-// downscaleAspectFit returns a (targetW × targetH) RGBA image with src
+// DownscaleAspectFit returns a (targetW × targetH) RGBA image with src
 // drawn into the centred subrect that preserves src's aspect ratio.
-// The remainder is filled with theme-neutral black (zero pixels). Used
-// to standardise picker thumbnail dimensions regardless of the source
-// workspace size.
-func downscaleAspectFit(src image.Image, targetW, targetH int) *image.RGBA {
+// Background outside the scaled rect is left transparent (zero pixels);
+// callers wanting an opaque background should fill before passing.
+func DownscaleAspectFit(src image.Image, targetW, targetH int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, targetW, targetH))
 	srcW := src.Bounds().Dx()
 	srcH := src.Bounds().Dy()
@@ -1989,64 +2112,292 @@ func downscaleAspectFit(src image.Image, targetW, targetH int) *image.RGBA {
 	offsetX := (targetW - scaledW) / 2
 	offsetY := (targetH - scaledH) / 2
 	dstRect := image.Rect(offsetX, offsetY, offsetX+scaledW, offsetY+scaledH)
-	xdraw.ApproxBiLinear.Scale(dst, dstRect, src, src.Bounds(), draw.Over, nil)
+	xdraw.ApproxBiLinear.Scale(dst, dstRect, src, src.Bounds(), stddraw.Over, nil)
 	return dst
 }
 ```
 
-Note: the scaling import is named `xdraw "golang.org/x/image/draw"` (rename to avoid collision with stdlib `image/draw`). Adjust the import block accordingly:
-
-```go
-import (
-	"fmt"
-	"image"
-	stddraw "image/draw"
-	"image/png"
-	"os"
-
-	xdraw "golang.org/x/image/draw"
-)
-```
-
-…and replace `draw.Over` in the call site with `stddraw.Over`.
-
-If `golang.org/x/image` is not yet a direct dependency, add it via `go get golang.org/x/image/draw` before running the tests; it's already pulled in transitively by texelui's text rendering, so `go mod tidy` will resolve it without surprises.
+If `golang.org/x/image` is not yet a direct dependency (currently indirect via texelui), `go mod tidy` after adding the import will promote it. Verify with `grep "golang.org/x/image" go.mod`.
 
 - [ ] **Step 4: Run tests, verify pass**
 
-Run: `go test ./internal/runtime/server/ -run "TestWritePNGAtomic|TestDownscaleAspectFit" -count=1`
+Run: `go test ./internal/thumbnail/ -count=1`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/runtime/server/thumbnail.go internal/runtime/server/thumbnail_test.go go.mod go.sum
-git commit -m "Server: writePNGAtomic + downscaleAspectFit helpers for picker thumbnails"
+git add internal/thumbnail/render.go internal/thumbnail/render_test.go go.mod go.sum
+git commit -m "Add internal/thumbnail/ shared rendering primitive"
 ```
 
 ---
 
-### Task 10: Capture trigger — wire shutdown + last-disconnect
+### Task 10: Server-side thumbnail composition adapter
 
 **Files:**
-- Modify: `internal/runtime/server/thumbnail.go` (add captureThumbnail + ThumbnailRenderer interface)
-- Modify: `internal/runtime/server/manager.go` (call from `Close` and `ShutdownSessions`)
-- Modify: `internal/runtime/server/thumbnail_test.go` (test the trigger paths)
+- Create: `internal/runtime/server/thumbnail_renderer.go`
+- Create: `internal/runtime/server/thumbnail_renderer_test.go`
+- Modify: `internal/runtime/server/desktop_sink.go` (implement `ThumbnailRenderer` interface, see Task 11)
+
+**Goal:** Bridge between the server's authoritative pane state and the shared rendering primitive. Walks the publisher's `prevBuffers` (per-pane cell snapshots maintained for diff generation) plus the desktop tree to compose a single workspace-wide cell grid, then calls `thumbnail.RenderGrid`. The composer is the only piece of new server-only code that *has* to live in the server package because no client has cross-pane visibility into authoritative state.
+
+The `ThumbnailRenderer` interface is declared in Task 11 (the orchestrator that calls it from Manager hooks). This task implements the production renderer that satisfies that interface; the test stub in Task 11 stands in for unit tests that don't want to wire a full DesktopSink.
 
 - [ ] **Step 1: Write failing tests**
 
-Append to `internal/runtime/server/thumbnail_test.go`:
+Create `internal/runtime/server/thumbnail_renderer_test.go`:
 
 ```go
-// fakeRenderer is a stub ThumbnailRenderer used by trigger tests so we
-// don't drag textrender + a real font into the unit harness.
+// Copyright © 2026 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package server
+
+import (
+	"testing"
+
+	texelcore "github.com/framegrace/texelui/core"
+)
+
+// composePaneGrid is the pure helper. The full DesktopSink path is
+// covered by integration tests that already wire publisher state.
+func TestComposePaneGrid_SinglePane(t *testing.T) {
+	pane := paneRender{
+		x: 0, y: 0, w: 4, h: 2,
+		rows: [][]texelcore.Cell{
+			{{Ch: 'a'}, {Ch: 'b'}, {Ch: 'c'}, {Ch: 'd'}},
+			{{Ch: 'e'}, {Ch: 'f'}, {Ch: 'g'}, {Ch: 'h'}},
+		},
+	}
+	grid := composePaneGrid(4, 2, []paneRender{pane})
+	if len(grid) != 2 || len(grid[0]) != 4 {
+		t.Fatalf("dims = %dx%d, want 4x2", len(grid[0]), len(grid))
+	}
+	if grid[0][0].Ch != 'a' || grid[1][3].Ch != 'h' {
+		t.Errorf("content mismatch: grid=%v", grid)
+	}
+}
+
+func TestComposePaneGrid_TwoPanesSideBySide(t *testing.T) {
+	left := paneRender{
+		x: 0, y: 0, w: 2, h: 1,
+		rows: [][]texelcore.Cell{{{Ch: 'L'}, {Ch: '1'}}},
+	}
+	right := paneRender{
+		x: 2, y: 0, w: 2, h: 1,
+		rows: [][]texelcore.Cell{{{Ch: 'R'}, {Ch: '1'}}},
+	}
+	grid := composePaneGrid(4, 1, []paneRender{left, right})
+	if grid[0][0].Ch != 'L' || grid[0][1].Ch != '1' {
+		t.Errorf("left mis-painted: %v", grid[0])
+	}
+	if grid[0][2].Ch != 'R' || grid[0][3].Ch != '1' {
+		t.Errorf("right mis-painted: %v", grid[0])
+	}
+}
+
+func TestComposePaneGrid_OverflowClipped(t *testing.T) {
+	// Pane reports w=10 but only 4 cells of buffer; composer should
+	// not panic and should leave the rest blank.
+	pane := paneRender{
+		x: 0, y: 0, w: 10, h: 1,
+		rows: [][]texelcore.Cell{{{Ch: 'x'}, {Ch: 'y'}, {Ch: 'z'}}},
+	}
+	grid := composePaneGrid(10, 1, []paneRender{pane})
+	if grid[0][0].Ch != 'x' || grid[0][1].Ch != 'y' || grid[0][2].Ch != 'z' {
+		t.Errorf("front-pad mismatch: %v", grid[0])
+	}
+	for i := 3; i < 10; i++ {
+		if grid[0][i].Ch != ' ' && grid[0][i].Ch != 0 {
+			t.Errorf("expected blank at col %d, got %q", i, grid[0][i].Ch)
+		}
+	}
+}
+
+func TestComposePaneGrid_OutOfBoundsPaneIgnored(t *testing.T) {
+	// Pane positioned outside the workspace: composer drops cells
+	// rather than panicking with an index-out-of-range.
+	pane := paneRender{
+		x: 100, y: 100, w: 4, h: 1,
+		rows: [][]texelcore.Cell{{{Ch: 'a'}, {Ch: 'b'}, {Ch: 'c'}, {Ch: 'd'}}},
+	}
+	_ = composePaneGrid(4, 1, []paneRender{pane}) // should not panic
+}
+```
+
+- [ ] **Step 2: Run tests, verify failure**
+
+Run: `go test ./internal/runtime/server/ -run "TestComposePaneGrid" -count=1`
+Expected: FAIL — `paneRender`, `composePaneGrid` undefined.
+
+- [ ] **Step 3: Implement the composer + DesktopSink adapter**
+
+Create `internal/runtime/server/thumbnail_renderer.go`:
+
+```go
+// Copyright © 2026 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/runtime/server/thumbnail_renderer.go
+// Summary: Composes per-pane buffer snapshots into a single workspace
+// cell grid for thumbnail rendering. The composer is the server-only
+// glue between the publisher's authoritative state and the shared
+// internal/thumbnail render primitive.
+
+package server
+
+import (
+	"image"
+
+	texelcore "github.com/framegrace/texelui/core"
+
+	"github.com/framegrace/texelation/internal/thumbnail"
+)
+
+// paneRender is the per-pane input to composePaneGrid. Coordinates are
+// workspace-relative; rows[y][x] is a cell.
+type paneRender struct {
+	x, y int
+	w, h int
+	rows [][]texelcore.Cell
+}
+
+// composePaneGrid paints pane buffers onto a (workspaceW × workspaceH)
+// cell grid. Out-of-bounds cells are dropped silently. The grid is
+// initialised with zero-value Cells (Ch=0, default style) which the
+// renderer treats as blanks.
+func composePaneGrid(workspaceW, workspaceH int, panes []paneRender) [][]texelcore.Cell {
+	grid := make([][]texelcore.Cell, workspaceH)
+	for y := 0; y < workspaceH; y++ {
+		grid[y] = make([]texelcore.Cell, workspaceW)
+	}
+	for _, p := range panes {
+		for ry, row := range p.rows {
+			absY := p.y + ry
+			if absY < 0 || absY >= workspaceH {
+				continue
+			}
+			for rx, cell := range row {
+				absX := p.x + rx
+				if absX < 0 || absX >= workspaceW {
+					continue
+				}
+				grid[absY][absX] = cell
+			}
+		}
+	}
+	return grid
+}
+
+// renderSessionThumbnail extracts pane buffers from the publisher
+// (which already maintains them for diff generation) and renders the
+// composed grid to an image via the shared primitive. Returns
+// (nil, false) when the session has no renderable content (no panes,
+// empty publisher state).
+//
+// Wired into DesktopSink.RenderSessionThumbnail; the indirection lets
+// us unit-test composePaneGrid without a full DesktopSink.
+func (s *DesktopSink) RenderSessionThumbnail(id [16]byte) (image.Image, bool) {
+	if s == nil {
+		return nil, false
+	}
+	pub := s.Publisher()
+	desktop := s.Desktop()
+	if pub == nil || desktop == nil {
+		return nil, false
+	}
+	w, h := desktop.ViewportSize()
+	if w <= 0 || h <= 0 {
+		return nil, false
+	}
+	panes := make([]paneRender, 0, 8)
+	pub.WalkPanes(func(paneID [16]byte, x, y, paneW, paneH int, rows [][]texelcore.Cell) {
+		if len(rows) == 0 {
+			return
+		}
+		panes = append(panes, paneRender{
+			x: x, y: y, w: paneW, h: paneH, rows: rows,
+		})
+	})
+	if len(panes) == 0 {
+		return nil, false
+	}
+	grid := composePaneGrid(w, h, panes)
+	img, err := thumbnail.RenderGrid(grid)
+	if err != nil {
+		return nil, false
+	}
+	return img, true
+}
+```
+
+Modify `internal/runtime/server/desktop_publisher.go` to expose a `WalkPanes` method that yields `(paneID, x, y, w, h, rows)` from the publisher's existing per-pane state. The exact source of `rows` depends on what `prevBuffers` already holds — read `desktop_publisher.go`'s field declarations and choose the per-pane buffer that already exists for diff generation; do not introduce a new copy. Document in the doc comment that `WalkPanes` is the picker thumbnail's input source so the next reader knows the contract.
+
+If `DesktopEngine` does not currently expose `ViewportSize() (int, int)`, add a thin getter. The publisher already knows the workspace size for diff bounds, so the field exists somewhere in the desktop layer; surface it minimally.
+
+- [ ] **Step 4: Run tests, verify pass**
+
+Run: `go test ./internal/runtime/server/ -run "TestComposePaneGrid" -count=1`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/runtime/server/thumbnail_renderer.go internal/runtime/server/thumbnail_renderer_test.go internal/runtime/server/desktop_publisher.go internal/runtime/server/desktop_sink.go
+git commit -m "Server: pane-grid composer + DesktopSink thumbnail adapter"
+```
+
+---
+
+### Task 11: `captureThumbnail` orchestrator + ThumbnailRenderer interface
+
+**Files:**
+- Create: `internal/runtime/server/thumbnail.go`
+- Create: `internal/runtime/server/thumbnail_test.go`
+
+The shared primitive (Task 9) handles the rendering and atomic write. Task 11 is the *orchestrator* — defines the `ThumbnailRenderer` interface (production satisfier is `*DesktopSink` from Task 10), the `captureThumbnail` function that calls renderer → downscale → write, and the test harness for the trigger paths in Task 12.
+
+- [ ] **Step 1: Write failing tests**
+
+Create `internal/runtime/server/thumbnail_test.go`:
+
+```go
+// Copyright © 2026 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package server
+
+import (
+	"encoding/hex"
+	"image"
+	"image/color"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// fakeRenderer is a stub ThumbnailRenderer used by trigger tests so
+// we don't drag textrender + a real font into the unit harness.
 type fakeRenderer struct {
 	calls int
 }
 
 func (f *fakeRenderer) RenderSessionThumbnail(id [16]byte) (image.Image, bool) {
 	f.calls++
-	return makeTestImage(80, 24), true
+	img := image.NewRGBA(image.Rect(0, 0, 80, 24))
+	for y := 0; y < 24; y++ {
+		for x := 0; x < 80; x++ {
+			img.Set(x, y, color.RGBA{R: 0x40, G: 0x40, B: 0x40, A: 0xFF})
+		}
+	}
+	return img, true
+}
+
+type skipRenderer struct{}
+
+func (skipRenderer) RenderSessionThumbnail(id [16]byte) (image.Image, bool) {
+	return nil, false
 }
 
 func TestCaptureThumbnail_WritesPNG(t *testing.T) {
@@ -2071,8 +2422,7 @@ func TestCaptureThumbnail_RendererSkip(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	id := [16]byte{0x88}
-	r := skipRenderer{}
-	if err := captureThumbnail(dir, id, r); err != nil {
+	if err := captureThumbnail(dir, id, skipRenderer{}); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 	pngPath := filepath.Join(dir, SessionsDirName, hex.EncodeToString(id[:])+".png")
@@ -2081,11 +2431,128 @@ func TestCaptureThumbnail_RendererSkip(t *testing.T) {
 	}
 }
 
-type skipRenderer struct{}
-
-func (skipRenderer) RenderSessionThumbnail(id [16]byte) (image.Image, bool) {
-	return nil, false
+func TestCaptureThumbnail_NilRendererSilent(t *testing.T) {
+	if err := captureThumbnail(t.TempDir(), [16]byte{}, nil); err != nil {
+		t.Errorf("expected nil error for nil renderer, got %v", err)
+	}
 }
+
+func TestCaptureThumbnail_RendererPanicSurvives(t *testing.T) {
+	// A panicking renderer must not bring down the daemon; the
+	// orchestrator wraps the call in defer/recover.
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, SessionsDirName), 0o755)
+	if err := captureThumbnail(dir, [16]byte{0x99}, panicRenderer{}); err == nil {
+		t.Errorf("expected error from panicking renderer")
+	}
+}
+
+type panicRenderer struct{}
+
+func (panicRenderer) RenderSessionThumbnail(id [16]byte) (image.Image, bool) {
+	panic("intentional test panic")
+}
+```
+
+- [ ] **Step 2: Run tests, verify failure**
+
+Run: `go test ./internal/runtime/server/ -run "TestCaptureThumbnail" -count=1`
+Expected: FAIL — `captureThumbnail`, `ThumbnailRenderer` undefined.
+
+- [ ] **Step 3: Implement orchestrator + interface**
+
+Create `internal/runtime/server/thumbnail.go`:
+
+```go
+// Copyright © 2026 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: internal/runtime/server/thumbnail.go
+// Summary: Lifecycle thumbnail capture orchestrator (Plan F.1).
+// Usage: Called from Manager.ShutdownSessions and Manager.Close on
+//   the last-disconnect transition. Renders via a ThumbnailRenderer
+//   (production: *DesktopSink, see Task 10), downscales via the
+//   shared internal/thumbnail primitive, and atomically writes to
+//   <basedir>/sessions/<id>.png.
+
+package server
+
+import (
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"image"
+	"path/filepath"
+
+	"github.com/framegrace/texelation/internal/thumbnail"
+)
+
+// ThumbnailRenderer produces a PNG-suitable image for a given session.
+// Implemented by *DesktopSink in production (see Task 10's
+// thumbnail_renderer.go); tests inject a stub.
+//
+// Returns ok=false when the session has nothing meaningful to capture
+// (empty workspace, no live buffer) so the caller can skip the disk
+// write rather than store an all-black PNG.
+type ThumbnailRenderer interface {
+	RenderSessionThumbnail(id [16]byte) (image.Image, bool)
+}
+
+// captureThumbnail renders id via the renderer (if non-nil), downscales
+// to 480×270 via the shared primitive, and writes the result to
+// <basedir>/sessions/<id>.png. A panicking renderer is recovered to an
+// error so a buggy implementation cannot prevent shutdown. nil renderer
+// or empty basedir is a silent no-op.
+func captureThumbnail(basedir string, id [16]byte, r ThumbnailRenderer) (retErr error) {
+	if r == nil || basedir == "" {
+		return nil
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			retErr = fmt.Errorf("thumbnail: renderer panic: %v", rec)
+		}
+	}()
+	img, ok := r.RenderSessionThumbnail(id)
+	if !ok {
+		return nil
+	}
+	if img == nil {
+		return errors.New("thumbnail: renderer returned ok=true with nil image")
+	}
+	scaled := thumbnail.DownscaleAspectFit(img, 480, 270)
+	pngPath := filepath.Join(basedir, SessionsDirName, hex.EncodeToString(id[:])+".png")
+	return thumbnail.WritePNGAtomic(pngPath, scaled)
+}
+```
+
+- [ ] **Step 4: Run tests, verify pass**
+
+Run: `go test ./internal/runtime/server/ -run "TestCaptureThumbnail" -count=1`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/runtime/server/thumbnail.go internal/runtime/server/thumbnail_test.go
+git commit -m "Server: captureThumbnail orchestrator + ThumbnailRenderer interface"
+```
+
+---
+
+### Task 12: Capture trigger — wire `Close(id)` + `ShutdownSessions`
+
+**Files:**
+- Modify: `internal/runtime/server/manager.go` (`thumbRenderer` field, `SetThumbnailRenderer`, modified `Close` + `ShutdownSessions`)
+- Modify: `internal/runtime/server/thumbnail_test.go` (append manager-level trigger tests)
+
+The orchestrator + interface ship in Task 11. This task is the manager-side wiring: a renderer field, a setter, and the modified lifecycle methods. **Both `Close` and `ShutdownSessions` are shown in full** so a subagent doesn't have to reconstruct them from prose.
+
+- [ ] **Step 1: Append failing trigger tests**
+
+Append to `internal/runtime/server/thumbnail_test.go`:
+
+```go
+import "time"
 
 func TestManager_CaptureOnShutdown(t *testing.T) {
 	dir := t.TempDir()
@@ -2096,11 +2563,9 @@ func TestManager_CaptureOnShutdown(t *testing.T) {
 	}
 	r := &fakeRenderer{}
 	m.SetThumbnailRenderer(r)
-	sess, err := m.NewSessionWithID(id)
-	if err != nil {
+	if _, err := m.NewSessionWithID(id); err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	_ = sess
 	m.ShutdownSessions()
 	if r.calls < 1 {
 		t.Errorf("expected at least 1 thumbnail render, got %d", r.calls)
@@ -2132,56 +2597,51 @@ func TestManager_CaptureOnLastDisconnect(t *testing.T) {
 		t.Errorf("expected PNG after Close, stat err=%v", err)
 	}
 }
+
+func TestManager_NoCaptureWhenRendererUnset(t *testing.T) {
+	dir := t.TempDir()
+	id := [16]byte{0xAA}
+	m := NewManager()
+	if err := m.EnablePersistence(dir, 25*time.Millisecond); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if _, err := m.NewSessionWithID(id); err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	m.Close(id)
+	pngPath := filepath.Join(dir, SessionsDirName, hex.EncodeToString(id[:])+".png")
+	if _, err := os.Stat(pngPath); !os.IsNotExist(err) {
+		t.Errorf("expected no PNG when renderer unset, stat err=%v", err)
+	}
+}
 ```
 
 - [ ] **Step 2: Run tests, verify failure**
 
-Run: `go test ./internal/runtime/server/ -run "TestCaptureThumbnail|TestManager_Capture" -count=1`
-Expected: FAIL — `captureThumbnail`, `SetThumbnailRenderer` undefined.
+Run: `go test ./internal/runtime/server/ -run "TestManager_CaptureOn|TestManager_NoCaptureWhenRendererUnset" -count=1`
+Expected: FAIL — `SetThumbnailRenderer` undefined; `Close` and `ShutdownSessions` don't fire capture.
 
-- [ ] **Step 3: Implement renderer interface + captureThumbnail**
+- [ ] **Step 3: Add renderer field, setter, and revised lifecycle methods**
 
-Append to `internal/runtime/server/thumbnail.go`:
+In `internal/runtime/server/manager.go`, extend the `Manager` struct:
 
 ```go
-// ThumbnailRenderer produces a PNG-suitable image for a given session.
-// Implemented by the desktop publisher in production; tests inject a
-// stub. Returns ok=false when the session has nothing meaningful to
-// capture (empty workspace, no live buffer) so the caller can skip the
-// disk write rather than store an all-black PNG.
-type ThumbnailRenderer interface {
-	RenderSessionThumbnail(id [16]byte) (image.Image, bool)
-}
+type Manager struct {
+	// ... existing fields ...
 
-// captureThumbnail renders id via the renderer (if present), downscales
-// to 480x270, and writes the result to <basedir>/sessions/<id>.png.
-// All errors are returned; callers are expected to log + continue —
-// thumbnail capture is a hint, not authoritative state.
-func captureThumbnail(basedir string, id [16]byte, r ThumbnailRenderer) error {
-	if r == nil || basedir == "" {
-		return nil
-	}
-	img, ok := r.RenderSessionThumbnail(id)
-	if !ok {
-		return nil
-	}
-	scaled := downscaleAspectFit(img, 480, 270)
-	pngPath := filepath.Join(basedir, SessionsDirName, hex.EncodeToString(id[:])+".png")
-	return writePNGAtomic(pngPath, scaled)
+	// Plan F.1: lifecycle thumbnail capture. nil = capture disabled
+	// (tests + early boot before SetThumbnailRenderer is called).
+	thumbRenderer ThumbnailRenderer
 }
 ```
 
-Add `"path/filepath"` and `"encoding/hex"` to the imports.
-
-In `internal/runtime/server/manager.go`, add a renderer field and setter:
+Add the setter:
 
 ```go
-// On the Manager struct, add:
-//   thumbRenderer ThumbnailRenderer
-
-// SetThumbnailRenderer wires the production renderer (DesktopSink in
-// the texel-server harness, nil/stub in tests). nil renderers skip
-// capture silently — no error, no log spam.
+// SetThumbnailRenderer wires the production renderer (typically the
+// *DesktopSink that owns the publisher state — see Task 10) so
+// Close(id) and ShutdownSessions can capture lifecycle thumbnails.
+// nil renderers skip capture silently — no error, no log spam.
 func (m *Manager) SetThumbnailRenderer(r ThumbnailRenderer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2189,50 +2649,30 @@ func (m *Manager) SetThumbnailRenderer(r ThumbnailRenderer) {
 }
 ```
 
-Then extend `ShutdownSessions` and `Close` to fire capture *before* the per-session Close:
+Replace the existing `Close(id)` body with the captured-renderer version:
 
 ```go
-// ShutdownSessions: inside the per-session loop, before session.Close():
-if m.persistBasedir != "" && m.thumbRenderer != nil {
-	if err := captureThumbnail(m.persistBasedir, id, m.thumbRenderer); err != nil {
-		log.Printf("server: shutdown thumbnail %x: %v", id[:4], err)
-	}
-}
-// (Note: m.thumbRenderer is read after m.mu was released in the
-// existing flow; capture the renderer pointer before the unlock to
-// avoid a race with SetThumbnailRenderer. Add to the locked section.)
-```
-
-For `Close(id)`:
-
-```go
-// Close(id): immediately after `delete(m.sessions, id)` and before
-// the markClosing/unlock block, capture the renderer pointer:
-basedir := m.persistBasedir
-renderer := m.thumbRenderer
-m.mu.Unlock()
-
-if basedir != "" && renderer != nil {
-	if err := captureThumbnail(basedir, id, renderer); err != nil {
-		log.Printf("server: close thumbnail %x: %v", id[:4], err)
-	}
-}
-// Then continue with markClosing + session.Close() as before.
-```
-
-Take care to preserve the existing `markClosing` / `unmarkClosing` ordering. The full revised `Close`:
-
-```go
+// Close removes the session from the live map and tears it down.
+// Plan F.1: also captures a thumbnail just before teardown so the
+// next picker invocation has something to show. The capture happens
+// OUTSIDE m.mu (PNG encoding holds memory and may sync to disk —
+// holding the lock would block every other Manager op for the
+// duration). Renderer + basedir are snapshotted under the lock so a
+// concurrent SetThumbnailRenderer doesn't race with the read.
+//
+// Plan D2 17.B: Close registers a per-ID "closing" marker before
+// dropping m.mu and clears it after session.Close returns.
+// LookupOrRehydrate consults the same marker so a fresh resume for
+// the same ID waits out the disk flush instead of constructing a
+// new Session pointing at the same on-disk path.
 func (m *Manager) Close(id [16]byte) {
 	m.mu.Lock()
 	session, ok := m.sessions[id]
-	if ok {
-		delete(m.sessions, id)
-	}
 	if !ok {
 		m.mu.Unlock()
 		return
 	}
+	delete(m.sessions, id)
 	basedir := m.persistBasedir
 	renderer := m.thumbRenderer
 	m.markClosing(id)
@@ -2244,37 +2684,126 @@ func (m *Manager) Close(id [16]byte) {
 			log.Printf("server: close thumbnail %x: %v", id[:4], err)
 		}
 	}
-	session.Close()
+	session.Close() // disk flush — outside m.mu
 }
 ```
 
-Apply the analogous adjustment to `ShutdownSessions`: capture `basedir` and `renderer` once under m.mu, then loop with both available.
+Replace the existing `ShutdownSessions` body:
+
+```go
+// ShutdownSessions closes all live sessions and (Plan F.1) captures
+// a thumbnail per session before the per-session Close. Capture runs
+// OUTSIDE m.mu — see Close for the lock-discipline rationale. Both
+// basedir and renderer are snapshotted once under the lock; a
+// concurrent SetThumbnailRenderer call after the snapshot is benign
+// (we'll just use the older renderer one final time).
+func (m *Manager) ShutdownSessions() {
+	m.mu.Lock()
+	live := m.sessions
+	m.sessions = make(map[[16]byte]*Session)
+	basedir := m.persistBasedir
+	renderer := m.thumbRenderer
+	for id := range live {
+		m.markClosing(id)
+	}
+	m.mu.Unlock()
+
+	for id, session := range live {
+		if basedir != "" && renderer != nil {
+			if err := captureThumbnail(basedir, id, renderer); err != nil {
+				log.Printf("server: shutdown thumbnail %x: %v", id[:4], err)
+			}
+		}
+		session.Close() // disk flush — outside m.mu
+		m.unmarkClosing(id)
+	}
+}
+```
+
+The `Close` change deletes from `m.sessions` *before* the early-return guard, which fixes a pre-existing minor inefficiency where `delete` ran on the not-found branch (the original code's order was `if ok { delete }; if !ok { return }`). Behavior is preserved — Go's `delete` on a missing key is a no-op.
 
 - [ ] **Step 4: Run tests, verify pass**
 
-Run: `go test ./internal/runtime/server/ -run "TestCaptureThumbnail|TestManager_Capture" -count=1`
+Run: `go test ./internal/runtime/server/ -run "TestCaptureThumbnail|TestManager_CaptureOn|TestManager_NoCaptureWhenRendererUnset" -count=1`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full server suite**
+- [ ] **Step 5: Run the full server suite under -race**
 
 Run: `go test -race ./internal/runtime/server/ -count=1`
-Expected: PASS — no races introduced by the new field access.
+Expected: PASS. The renderer snapshot pattern matches the existing basedir-snapshot pattern in `EnablePersistence` and avoids introducing races.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal/runtime/server/thumbnail.go internal/runtime/server/thumbnail_test.go internal/runtime/server/manager.go
-git commit -m "Server: capture thumbnails on shutdown + last-disconnect"
+git add internal/runtime/server/manager.go internal/runtime/server/thumbnail_test.go
+git commit -m "Server: capture thumbnails on Close + ShutdownSessions"
 ```
 
 ---
 
-### Task 11: Connection handlers — list + recover
+### Task 13: Connection handlers — list + recover (with `connection.manager` wiring)
 
 **Files:**
+- Modify: `internal/runtime/server/connection.go` (add `manager *Manager` field; thread through `newConnection`)
+- Modify: `internal/runtime/server/server.go` (pass manager to `newConnection`)
+- Modify: every existing test that calls `newConnection` (~16 files; mechanical signature update)
 - Create: `internal/runtime/server/connection_session_picker.go`
 - Modify: `internal/runtime/server/connection_handler.go` (dispatch new types)
 - Test: `internal/runtime/server/connection_session_picker_test.go`
+
+The handlers in this task and Task 14 call `c.manager.X()`, but the existing `connection` struct has no `manager` field. Step 0 is the structural wiring; Step 1 onwards is the handler work.
+
+- [ ] **Step 0: Wire `connection.manager` field**
+
+In `internal/runtime/server/connection.go`, add a field to the `connection` struct:
+
+```go
+type connection struct {
+	// ... existing fields ...
+
+	// Plan F.1: picker handlers reach into the manager for session
+	// listing, rename, delete, and rehydrate. Wired at construction
+	// time by newConnection; never reassigned. nil only in tests
+	// that use a hand-constructed connection without a manager —
+	// those tests must not exercise picker handlers.
+	manager *Manager
+}
+```
+
+Update `newConnection` (read its current signature in `connection.go` first; whatever it is, append a `*Manager` parameter):
+
+```go
+func newConnection(/* existing args */, mgr *Manager) *connection {
+	return &connection{
+		// ... existing fields ...
+		manager: mgr,
+	}
+}
+```
+
+Update `internal/runtime/server/server.go` (the only production call site of `newConnection`) to pass `s.manager`. Then run:
+
+```bash
+grep -rln "newConnection(" internal/runtime/server/ | grep _test.go
+```
+
+Each test file needs the new argument added. Most tests construct a `*Manager` already (often via `NewManager()`); pass it through. Tests that don't construct a manager should pass `nil` — they're not exercising picker handlers, and the handler code is gated by Task 14's tests, not these.
+
+Run:
+
+```bash
+go build ./internal/runtime/server/...
+go test -run NoneShouldMatchJustCheckCompile ./internal/runtime/server/ -count=1
+```
+
+Expected: build clean (some tests may still fail; the goal is just compile).
+
+Commit this structural change separately so the diff against the picker handlers stays readable:
+
+```bash
+git add internal/runtime/server/connection.go internal/runtime/server/server.go internal/runtime/server/*_test.go
+git commit -m "Connection: add manager *Manager field for picker handlers"
+```
 
 - [ ] **Step 1: Write failing tests**
 
@@ -2441,33 +2970,96 @@ func mustEncodeListSessionsRequest(t *testing.T) []byte {
 }
 ```
 
-`newPickerTestConn` is a helper to model after the existing memconn patterns. Inspect `internal/runtime/server/connection_rehydrate_resume_test.go` and `internal/runtime/server/testutil/memconn.go` and adapt the harness to drive the connection handler with arbitrary message types. If a similar helper already exists in the test corpus, reuse it. Otherwise, write a minimal helper here:
+`newPickerTestConn` is a helper modelled on `internal/runtime/server/connection_rehydrate_resume_test.go` (which already constructs `*connection` against a `net.Pipe` pair + `nopSink`). The picker variant is simpler because it doesn't need the resume-handshake choreography.
 
 ```go
-// pickerTestConn wires a connection's writer half to a buffer the test
-// reads from. The connection runs handleMessage synchronously per
-// send.
+// internal/runtime/server/connection_session_picker_test.go
+// (helper, declared once near the top of the file)
+
+import (
+	"net"
+	"sync"
+	// ... other imports ...
+
+	"github.com/framegrace/texelation/protocol"
+)
 
 type pickerTestConn struct {
-	conn      *connection
-	clientEnd interface{ /* memconn-style read interface */ }
-	cleanupFn func()
+	t          *testing.T
+	conn       *connection
+	clientEnd  net.Conn
+	serverEnd  net.Conn
+	closeOnce  sync.Once
 }
 
+// newPickerTestConn wires a *connection to a net.Pipe so the test
+// can drive handleMessage synchronously and read responses off the
+// client side. Reuses the in-package nopSink (defined in
+// test_helpers_test.go); creates a fresh session via m.NewSession.
+//
+// The returned *connection has no goroutine of its own — tests call
+// p.send to invoke handleMessage directly. This deliberately differs
+// from the production read loop to keep tests deterministic.
 func newPickerTestConn(t *testing.T, m *Manager) (*pickerTestConn, *nopSink) {
 	t.Helper()
-	// ... wire memconn pair, construct a connection bound to m,
-	// run a session via NewSession or attach one for testing
-	// ... return wrapper
-	return nil, nil
+	clientEnd, serverEnd := net.Pipe()
+	sess, err := m.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	sink := &nopSink{}
+	c := newConnection(serverEnd, sess, sink, m) // signature from Step 0
+	p := &pickerTestConn{
+		t:         t,
+		conn:      c,
+		clientEnd: clientEnd,
+		serverEnd: serverEnd,
+	}
+	return p, sink
 }
 
-func (p *pickerTestConn) send(typ protocol.MessageType, payload []byte)        { /* ... */ }
-func (p *pickerTestConn) expectResponse(t *testing.T, want protocol.MessageType) []byte { /* ... */; return nil }
-func (p *pickerTestConn) cleanup()                                                  {}
+// send invokes handleMessage with the supplied message type + payload,
+// running it on the test's goroutine so any error surfaces immediately.
+func (p *pickerTestConn) send(typ protocol.MessageType, payload []byte) {
+	p.t.Helper()
+	hdr := protocol.Header{
+		Version:   protocol.Version,
+		Type:      typ,
+		Flags:     protocol.FlagChecksum,
+		SessionID: p.conn.session.ID(),
+	}
+	if err := p.conn.handleMessage("test", hdr, payload); err != nil {
+		p.t.Fatalf("handleMessage(%d): %v", typ, err)
+	}
+}
+
+// expectResponse reads the next protocol message off the client end
+// of the pipe and asserts its type matches `want`. Returns the payload.
+func (p *pickerTestConn) expectResponse(t *testing.T, want protocol.MessageType) []byte {
+	t.Helper()
+	hdr, payload, err := protocol.ReadMessage(p.clientEnd)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if hdr.Type != want {
+		t.Fatalf("response type = %d, want %d", hdr.Type, want)
+	}
+	return payload
+}
+
+func (p *pickerTestConn) cleanup() {
+	p.closeOnce.Do(func() {
+		_ = p.clientEnd.Close()
+		_ = p.serverEnd.Close()
+	})
+}
 ```
 
-When implementing this helper, refer to `connection_rehydrate_resume_test.go` lines that construct a connection with a memconn pair. Reuse the existing `nopSink` type already in the test files.
+Two concrete things to verify when implementing:
+1. `newConnection`'s real signature — adapt the call site if production wires extra arguments (fetch-pending broadcaster etc.).
+2. `nopSink` type lives in the test corpus already — confirm via `grep "nopSink" internal/runtime/server/*_test.go` before declaring a new one.
+
+`net.Pipe` is synchronous — `c.writeMessage` from a handler returns only after `clientEnd` has accepted the write, so `expectResponse` won't deadlock. If the handler writes multiple frames, call `expectResponse` once per frame in order.
 
 - [ ] **Step 2: Run tests, verify failure**
 
@@ -2597,12 +3189,14 @@ git commit -m "Connection: list-sessions + recover-session handlers"
 
 ---
 
-### Task 12: Connection handlers — rename + delete + fetch-thumbnail
+### Task 14: Connection handlers — rename + delete + fetch-thumbnail (with size cap + SessionOpResponse)
 
 **Files:**
 - Modify: `internal/runtime/server/connection_session_picker.go` (append handlers)
 - Modify: `internal/runtime/server/connection_handler.go` (dispatch)
 - Modify: `internal/runtime/server/connection_session_picker_test.go` (append tests)
+
+This task uses the dedicated `MsgSessionOpResponse` (declared in Task 1, encoded in Task 4) as the rename/delete ack. The fetch-thumbnail handler caps file size at 1 MiB to prevent local DoS via a hand-written oversized PNG.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -2631,28 +3225,41 @@ func TestHandleRenameSession_HappyPath(t *testing.T) {
 	defer conn.cleanup()
 	body, _ := protocol.EncodeRenameSessionRequest(protocol.RenameSessionRequest{SessionID: id, NewLabel: "after"})
 	conn.send(protocol.MsgRenameSession, body)
-	// Server replies with SessionOpResponse.
-	// We piggy-back on MsgError-or-similar pattern; here we expect a
-	// dedicated MsgListSessionsResponse-shaped response. Adjust based
-	// on the implementation choice — the simplest is to reuse the
-	// MsgError envelope for ok=false and an empty MsgListSessions
-	// response for ok=true. To keep things explicit, the implementer
-	// should add a SessionOpResponse-typed reply: if a separate
-	// MessageType is desired, declare MsgSessionOpResponse in
-	// protocol/protocol.go now and update Task 1.
-	//
-	// Simpler in-scope choice: the handler responds via MsgError
-	// (for OK=false) or MsgListSessionsResponse with empty payload
-	// (for OK=true). We document this contract in the handler's
-	// docstring rather than adding another MessageType.
-	//
-	// Test asserts the in-memory rename took effect via a follow-up
-	// MsgListSessions request:
+	resp := conn.expectResponse(t, protocol.MsgSessionOpResponse)
+	got, err := protocol.DecodeSessionOpResponse(resp)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.OpType != protocol.OpRename || !got.OK {
+		t.Fatalf("expected OpRename OK=true, got %#v", got)
+	}
+	// Confirm via list.
 	conn.send(protocol.MsgListSessions, mustEncodeListSessionsRequest(t))
-	resp := conn.expectResponse(t, protocol.MsgListSessionsResponse)
-	got, _ := protocol.DecodeListSessionsResponse(resp)
-	if len(got.Stored) != 1 || got.Stored[0].Label != "after" {
-		t.Fatalf("expected rename applied; got %#v", got.Stored)
+	listResp := conn.expectResponse(t, protocol.MsgListSessionsResponse)
+	listGot, _ := protocol.DecodeListSessionsResponse(listResp)
+	if len(listGot.Stored) != 1 || listGot.Stored[0].Label != "after" {
+		t.Fatalf("expected rename applied; got %#v", listGot.Stored)
+	}
+}
+
+func TestHandleRenameSession_UnknownID(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, SessionsDirName), 0o755)
+	m := NewManager()
+	if err := m.EnablePersistence(dir, 25*time.Millisecond); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	conn, _ := newPickerTestConn(t, m)
+	defer conn.cleanup()
+	body, _ := protocol.EncodeRenameSessionRequest(protocol.RenameSessionRequest{SessionID: [16]byte{0xFF}, NewLabel: "x"})
+	conn.send(protocol.MsgRenameSession, body)
+	resp := conn.expectResponse(t, protocol.MsgSessionOpResponse)
+	got, _ := protocol.DecodeSessionOpResponse(resp)
+	if got.OK || got.Error == "" {
+		t.Errorf("expected OK=false with error, got %#v", got)
+	}
+	if got.OpType != protocol.OpRename {
+		t.Errorf("OpType = %d, want OpRename", got.OpType)
 	}
 }
 
@@ -2677,11 +3284,16 @@ func TestHandleDeleteSession_HappyPath(t *testing.T) {
 	defer conn.cleanup()
 	body, _ := protocol.EncodeDeleteSessionRequest(protocol.DeleteSessionRequest{SessionID: id})
 	conn.send(protocol.MsgDeleteSession, body)
+	resp := conn.expectResponse(t, protocol.MsgSessionOpResponse)
+	got, _ := protocol.DecodeSessionOpResponse(resp)
+	if got.OpType != protocol.OpDelete || !got.OK {
+		t.Fatalf("expected OpDelete OK=true, got %#v", got)
+	}
 	conn.send(protocol.MsgListSessions, mustEncodeListSessionsRequest(t))
-	resp := conn.expectResponse(t, protocol.MsgListSessionsResponse)
-	got, _ := protocol.DecodeListSessionsResponse(resp)
-	if len(got.Stored) != 0 {
-		t.Fatalf("expected empty after delete; got %d", len(got.Stored))
+	listResp := conn.expectResponse(t, protocol.MsgListSessionsResponse)
+	listGot, _ := protocol.DecodeListSessionsResponse(listResp)
+	if len(listGot.Stored) != 0 {
+		t.Fatalf("expected empty after delete; got %d", len(listGot.Stored))
 	}
 }
 
@@ -2725,9 +3337,7 @@ func TestHandleFetchThumbnail_HappyPath(t *testing.T) {
 
 func TestHandleFetchThumbnail_Missing(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, SessionsDirName), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	os.MkdirAll(filepath.Join(dir, SessionsDirName), 0o755)
 	m := NewManager()
 	if err := m.EnablePersistence(dir, 25*time.Millisecond); err != nil {
 		t.Fatalf("enable: %v", err)
@@ -2742,6 +3352,33 @@ func TestHandleFetchThumbnail_Missing(t *testing.T) {
 		t.Errorf("expected OK=false for missing PNG")
 	}
 }
+
+func TestHandleFetchThumbnail_RefusesOversize(t *testing.T) {
+	// A 2 MiB file at the predictable path must be refused with
+	// OK=false (DoS prevention). 480x270 PNGs are well under 100 KiB
+	// in practice; 1 MiB cap is generous.
+	dir := t.TempDir()
+	sessions := filepath.Join(dir, SessionsDirName)
+	os.MkdirAll(sessions, 0o755)
+	id := [16]byte{0x40}
+	pngPath := filepath.Join(sessions, hex.EncodeToString(id[:])+".png")
+	if err := os.WriteFile(pngPath, make([]byte, 2*1024*1024), 0o644); err != nil {
+		t.Fatalf("write big png: %v", err)
+	}
+	m := NewManager()
+	if err := m.EnablePersistence(dir, 25*time.Millisecond); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	conn, _ := newPickerTestConn(t, m)
+	defer conn.cleanup()
+	body, _ := protocol.EncodeFetchThumbnailRequest(protocol.FetchThumbnailRequest{SessionID: id})
+	conn.send(protocol.MsgFetchThumbnail, body)
+	resp := conn.expectResponse(t, protocol.MsgFetchThumbnailResponse)
+	got, _ := protocol.DecodeFetchThumbnailResponse(resp)
+	if got.OK {
+		t.Errorf("expected OK=false for oversized PNG, got OK=true with %d bytes", len(got.PNG))
+	}
+}
 ```
 
 - [ ] **Step 2: Run tests, verify failure**
@@ -2754,20 +3391,26 @@ Expected: FAIL — handlers undefined / not dispatched.
 Append to `internal/runtime/server/connection_session_picker.go`:
 
 ```go
-// handleRenameSession applies an inline label edit. Replies with
-// MsgError on failure (OK=false implied) and an empty
-// MsgListSessionsResponse on success — this dual-purpose ack avoids
-// a dedicated MsgSessionOpResponse type while still letting the
-// client treat any non-error response as success.
+// maxThumbnailBytes caps PNG sidecar reads to defend against a local
+// attacker writing a giant file at the predictable on-disk path. A
+// 480×270 PNG at high quality is well under 100 KiB; 1 MiB leaves
+// generous headroom while keeping the worst-case server allocation
+// bounded.
+const maxThumbnailBytes int64 = 1 << 20
+
+// handleRenameSession applies an inline label edit. Replies with a
+// MsgSessionOpResponse{OpType: OpRename, OK: ...} so the picker can
+// correlate against the op it issued (no conflation with other
+// responses on the connection).
 func (c *connection) handleRenameSession(payload []byte) error {
 	req, err := protocol.DecodeRenameSessionRequest(payload)
 	if err != nil {
 		return fmt.Errorf("decode rename: %w", err)
 	}
 	if err := c.manager.RenameStored(req.SessionID, req.NewLabel); err != nil {
-		return c.sendErrorFrame(err)
+		return c.sendOpResponse(protocol.OpRename, false, err.Error())
 	}
-	return c.ackPickerOp()
+	return c.sendOpResponse(protocol.OpRename, true, "")
 }
 
 func (c *connection) handleDeleteSession(payload []byte) error {
@@ -2776,9 +3419,9 @@ func (c *connection) handleDeleteSession(payload []byte) error {
 		return fmt.Errorf("decode delete: %w", err)
 	}
 	if err := c.manager.DeleteStored(req.SessionID); err != nil {
-		return c.sendErrorFrame(err)
+		return c.sendOpResponse(protocol.OpDelete, false, err.Error())
 	}
-	return c.ackPickerOp()
+	return c.sendOpResponse(protocol.OpDelete, true, "")
 }
 
 func (c *connection) handleFetchThumbnail(payload []byte) error {
@@ -2788,11 +3431,25 @@ func (c *connection) handleFetchThumbnail(payload []byte) error {
 	}
 	pngPath := c.manager.sessionPNGPath(req.SessionID)
 	if pngPath == "" {
-		return c.sendThumbnailResponse(false, "persistence disabled", nil)
+		return c.sendThumbnailResponse(false, "thumbnail unavailable", nil)
+	}
+	info, err := os.Stat(pngPath)
+	if err != nil {
+		// Don't leak the path; client doesn't need it.
+		if os.IsNotExist(err) {
+			return c.sendThumbnailResponse(false, "thumbnail not found", nil)
+		}
+		log.Printf("server: fetch thumbnail %x stat: %v", req.SessionID[:4], err)
+		return c.sendThumbnailResponse(false, "thumbnail io error", nil)
+	}
+	if info.Size() > maxThumbnailBytes {
+		log.Printf("server: fetch thumbnail %x: refusing %d bytes (cap %d)", req.SessionID[:4], info.Size(), maxThumbnailBytes)
+		return c.sendThumbnailResponse(false, "thumbnail too large", nil)
 	}
 	data, err := os.ReadFile(pngPath)
 	if err != nil {
-		return c.sendThumbnailResponse(false, err.Error(), nil)
+		log.Printf("server: fetch thumbnail %x read: %v", req.SessionID[:4], err)
+		return c.sendThumbnailResponse(false, "thumbnail io error", nil)
 	}
 	return c.sendThumbnailResponse(true, "", data)
 }
@@ -2815,14 +3472,21 @@ func (c *connection) sendThumbnailResponse(ok bool, errMsg string, png []byte) e
 	return c.writeMessage(hdr, body)
 }
 
-// ackPickerOp confirms a successful rename/delete by sending an empty
-// MsgListSessionsResponse. The picker treats any non-error response
-// as success and re-fires MsgListSessions to refresh its catalog.
-func (c *connection) ackPickerOp() error {
-	body, _ := protocol.EncodeListSessionsResponse(protocol.ListSessionsResponse{})
+// sendOpResponse confirms a rename/delete with the typed
+// SessionOpResponse envelope. The picker correlates by OpType so it
+// can ignore unrelated frames that arrive on the connection.
+func (c *connection) sendOpResponse(op protocol.SessionOpKind, ok bool, errMsg string) error {
+	body, err := protocol.EncodeSessionOpResponse(protocol.SessionOpResponse{
+		OpType: op,
+		OK:     ok,
+		Error:  errMsg,
+	})
+	if err != nil {
+		return fmt.Errorf("encode op response: %w", err)
+	}
 	hdr := protocol.Header{
 		Version:   protocol.Version,
-		Type:      protocol.MsgListSessionsResponse,
+		Type:      protocol.MsgSessionOpResponse,
 		Flags:     protocol.FlagChecksum,
 		SessionID: c.session.ID(),
 	}
@@ -2830,7 +3494,7 @@ func (c *connection) ackPickerOp() error {
 }
 ```
 
-Add `"os"` to the imports.
+Add `"log"` and `"os"` to the imports.
 
 In `connection_handler.go`, add the dispatch cases:
 
@@ -2863,7 +3527,7 @@ git commit -m "Connection: rename/delete/fetch-thumbnail picker handlers"
 
 ---
 
-### Task 13: Picker — ASCII layout algorithm (pure functions)
+### Task 15: Picker — ASCII layout algorithm (pure functions)
 
 **Files:**
 - Create: `cmd/texelation/boot/picker_ascii.go`
@@ -2944,16 +3608,46 @@ func TestRenderASCIILayout_VerticalSplit(t *testing.T) {
 		},
 	}
 	grid := renderASCIILayoutGrid(20, 8, root)
-	// Vertical split should put a vertical line near the middle column.
-	verticalAtMid := 0
+	// Vertical split: with leftW = int(20 * 0.5) = 10, the right
+	// child draws starting at x=9 (border-sharing), so the divider
+	// column is 9, not 10. The algorithm comments document this; the
+	// test pins it explicitly.
+	dividerCol := 9
+	verticalAt := 0
 	for y := 1; y < 7; y++ {
-		mid := 10
-		if grid[y][mid] == '│' {
-			verticalAtMid++
+		if grid[y][dividerCol] == '│' {
+			verticalAt++
 		}
 	}
-	if verticalAtMid == 0 {
-		t.Errorf("expected vertical divider near col 10 in:\n%s", debugGrid(grid))
+	if verticalAt == 0 {
+		t.Errorf("expected vertical divider at col %d in:\n%s", dividerCol, debugGrid(grid))
+	}
+}
+
+func TestRenderASCIILayout_NWaySplit(t *testing.T) {
+	// 3-way horizontal split (real TreeNodeSnapshot supports n>=2
+	// children — texel/tree.go produces these).
+	root := &protocol.TreeNodeSnapshot{
+		PaneIndex:   -1,
+		Split:       protocol.SplitHorizontal,
+		SplitRatios: []float32{0.34, 0.33, 0.33},
+		Children: []protocol.TreeNodeSnapshot{
+			{PaneIndex: 0, Split: protocol.SplitNone},
+			{PaneIndex: 1, Split: protocol.SplitNone},
+			{PaneIndex: 2, Split: protocol.SplitNone},
+		},
+	}
+	grid := renderASCIILayoutGrid(20, 12, root)
+	// Should not panic and should produce more than one horizontal
+	// divider row (one per inter-child boundary, so 2 dividers).
+	dividerRows := 0
+	for y := 1; y < 11; y++ {
+		if strings.Count(string(grid[y]), "─") > 5 {
+			dividerRows++
+		}
+	}
+	if dividerRows < 2 {
+		t.Errorf("expected ≥ 2 divider rows for 3-way split, got %d:\n%s", dividerRows, debugGrid(grid))
 	}
 }
 
@@ -3051,38 +3745,77 @@ func drawNode(grid [][]rune, x, y, w, h int, n *protocol.TreeNodeSnapshot) {
 		drawSingleBox(grid, x, y, w, h)
 		return
 	}
+	ratios := normaliseRatios(n.SplitRatios, len(n.Children))
 	if n.Split == protocol.SplitHorizontal {
-		// Top child gets ratio[0]; bottom gets ratio[1].
-		r := splitRatio(n.SplitRatios)
-		topH := int(float32(h) * r)
-		if topH < asciiMinH {
-			topH = asciiMinH
+		// Walk children in order, allocating rows per ratio. Each
+		// child shares its bottom border with the next child's top
+		// border (the -1 / +1 dance), so the visual divider sits on
+		// a single row and shows '─' from each side's drawSingleBox.
+		cursorY := y
+		remaining := h
+		for i, child := range n.Children {
+			var sliceH int
+			if i == len(n.Children)-1 {
+				sliceH = remaining
+			} else {
+				sliceH = int(float32(h) * ratios[i])
+				if sliceH < asciiMinH {
+					sliceH = asciiMinH
+				}
+				if sliceH > remaining-asciiMinH*(len(n.Children)-i-1) {
+					sliceH = remaining - asciiMinH*(len(n.Children)-i-1)
+				}
+			}
+			drawNode(grid, x, cursorY, w, sliceH, &child)
+			cursorY += sliceH - 1
+			remaining -= sliceH - 1
 		}
-		if topH > h-asciiMinH {
-			topH = h - asciiMinH
-		}
-		drawNode(grid, x, y, w, topH, &n.Children[0])
-		drawNode(grid, x, y+topH-1, w, h-topH+1, &n.Children[1])
 		return
 	}
-	// Vertical split: left ratio[0], right ratio[1].
-	r := splitRatio(n.SplitRatios)
-	leftW := int(float32(w) * r)
-	if leftW < asciiMinW {
-		leftW = asciiMinW
+	// Vertical split: walk children left-to-right.
+	cursorX := x
+	remaining := w
+	for i, child := range n.Children {
+		var sliceW int
+		if i == len(n.Children)-1 {
+			sliceW = remaining
+		} else {
+			sliceW = int(float32(w) * ratios[i])
+			if sliceW < asciiMinW {
+				sliceW = asciiMinW
+			}
+			if sliceW > remaining-asciiMinW*(len(n.Children)-i-1) {
+				sliceW = remaining - asciiMinW*(len(n.Children)-i-1)
+			}
+		}
+		drawNode(grid, cursorX, y, sliceW, h, &child)
+		cursorX += sliceW - 1
+		remaining -= sliceW - 1
 	}
-	if leftW > w-asciiMinW {
-		leftW = w - asciiMinW
-	}
-	drawNode(grid, x, y, leftW, h, &n.Children[0])
-	drawNode(grid, x+leftW-1, y, w-leftW+1, h, &n.Children[1])
 }
 
-func splitRatio(ratios []float32) float32 {
-	if len(ratios) < 1 {
-		return 0.5
+// normaliseRatios returns a slice of len(childCount) ratios summing to
+// ~1.0. If the input is missing/short or doesn't sum, it falls back to
+// equal allocation so n-way splits never produce zero-width children.
+func normaliseRatios(ratios []float32, count int) []float32 {
+	out := make([]float32, count)
+	if len(ratios) >= count {
+		var sum float32
+		for i := 0; i < count; i++ {
+			out[i] = ratios[i]
+			sum += ratios[i]
+		}
+		if sum > 0 {
+			for i := range out {
+				out[i] /= sum
+			}
+			return out
+		}
 	}
-	return ratios[0]
+	for i := range out {
+		out[i] = 1.0 / float32(count)
+	}
+	return out
 }
 
 func drawSingleBox(grid [][]rune, x, y, w, h int) {
@@ -3133,13 +3866,15 @@ git commit -m "Picker: ASCII tree-layout fallback render"
 
 ---
 
-### Task 14: Picker — state machine, navigation, render
+### Task 16: Picker — state machine, navigation, render (with error surfacing)
 
 **Files:**
 - Create: `cmd/texelation/boot/picker.go`
 - Create: `cmd/texelation/boot/picker_input.go`
 - Create: `cmd/texelation/boot/picker_render.go`
 - Test: `cmd/texelation/boot/picker_test.go`
+
+This task wires the Picker with `mu sync.Mutex` declared up-front (used in Task 17 for thumbnail fetches), an `errMsg` field for surfacing operation failures, and modal behavior that does NOT close the picker when Recover/Rename/Delete errors. The user sees a banner and can retry.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -3152,6 +3887,7 @@ Create `cmd/texelation/boot/picker_test.go`:
 package boot
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -3250,24 +3986,101 @@ func TestPicker_NewKeyDispatchesNew(t *testing.T) {
 	}
 }
 
+func TestPicker_RecoverError_StaysOpen(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.Init()
+	defer screen.Fini()
+	screen.SetSize(80, 24)
+	fc := &fakeClient{
+		response: protocol.ListSessionsResponse{
+			Stored: []protocol.SessionSummary{{SessionID: [16]byte{0xCC}, Label: "broken"}},
+		},
+		recoverErr: errors.New("session evicted"),
+	}
+	p := NewPicker(screen, fc)
+	p.RefreshCatalog()
+	p.HandleKey(tcell.KeyEnter, 0, 0)
+	if p.Done() {
+		t.Errorf("picker exited despite Recover error")
+	}
+	if p.errMsg == "" {
+		t.Errorf("expected errMsg set after Recover failure")
+	}
+}
+
+func TestPicker_RefreshCatalogError_PreservesPriorList(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.Init()
+	defer screen.Fini()
+	screen.SetSize(80, 24)
+	fc := &fakeClient{
+		response: protocol.ListSessionsResponse{
+			Stored: []protocol.SessionSummary{{SessionID: [16]byte{0x01}, Label: "alpha"}},
+		},
+	}
+	p := NewPicker(screen, fc)
+	p.RefreshCatalog()
+	if len(p.response.Stored) != 1 {
+		t.Fatalf("setup: expected 1 stored, got %d", len(p.response.Stored))
+	}
+	// Now force RefreshCatalog to fail.
+	fc.listErr = errors.New("socket dropped")
+	p.RefreshCatalog()
+	if len(p.response.Stored) != 1 {
+		t.Errorf("expected prior list preserved on error, got %d", len(p.response.Stored))
+	}
+	if p.errMsg == "" {
+		t.Errorf("expected errMsg set on RefreshCatalog error")
+	}
+}
+
+func TestPicker_NavigationDismissesError(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.Init()
+	defer screen.Fini()
+	screen.SetSize(80, 24)
+	fc := &fakeClient{
+		response: protocol.ListSessionsResponse{
+			Stored: []protocol.SessionSummary{
+				{SessionID: [16]byte{0x01}, Label: "first"},
+				{SessionID: [16]byte{0x02}, Label: "second"},
+			},
+		},
+	}
+	p := NewPicker(screen, fc)
+	p.RefreshCatalog()
+	p.errMsg = "stale error"
+	p.HandleKey(tcell.KeyDown, 0, 0)
+	if p.errMsg != "" {
+		t.Errorf("expected errMsg cleared after navigation, got %q", p.errMsg)
+	}
+}
+
 // fakeClient stubs the picker's network transport for tests.
 type fakeClient struct {
-	response       protocol.ListSessionsResponse
-	recoverCalled  bool
-	recoverID      [16]byte
-	newCalled      bool
+	response      protocol.ListSessionsResponse
+	listErr       error
+	recoverCalled bool
+	recoverID     [16]byte
+	recoverErr    error
+	newCalled     bool
+	renameErr     error
+	deleteErr     error
 }
 
 func (f *fakeClient) ListSessions() (protocol.ListSessionsResponse, error) {
+	if f.listErr != nil {
+		return protocol.ListSessionsResponse{}, f.listErr
+	}
 	return f.response, nil
 }
 func (f *fakeClient) RecoverSession(id [16]byte, newLabel string) error {
 	f.recoverCalled = true
 	f.recoverID = id
-	return nil
+	return f.recoverErr
 }
-func (f *fakeClient) RenameSession(id [16]byte, newLabel string) error { return nil }
-func (f *fakeClient) DeleteSession(id [16]byte) error                  { return nil }
+func (f *fakeClient) RenameSession(id [16]byte, newLabel string) error { return f.renameErr }
+func (f *fakeClient) DeleteSession(id [16]byte) error                  { return f.deleteErr }
 func (f *fakeClient) FetchThumbnail(id [16]byte) ([]byte, error)       { return nil, nil }
 func (f *fakeClient) StartFreshSession() {
 	f.newCalled = true
@@ -3330,6 +4143,8 @@ Create `cmd/texelation/boot/picker.go`:
 package boot
 
 import (
+	"sync"
+
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/protocol"
@@ -3363,6 +4178,10 @@ const (
 )
 
 // Picker holds the picker's runtime state.
+//
+// mu guards thumbCache + pending against concurrent access from
+// the lazy fetch goroutines spawned in Task 17. Render reads
+// thumbCache under mu; the input handler does not touch it.
 type Picker struct {
 	screen tcell.Screen
 	client PickerClient
@@ -3374,8 +4193,16 @@ type Picker struct {
 
 	renameBuf []rune
 
-	thumbCache map[[16]byte][]byte
-	pending    map[[16]byte]bool
+	// errMsg, when non-empty, is rendered as a red banner above the
+	// action bar. RefreshCatalog / Recover / Rename / Delete set it
+	// when their underlying op fails; user dismisses by pressing any
+	// navigation key.
+	errMsg string
+
+	mu          sync.Mutex
+	thumbCache  map[[16]byte][]byte
+	pending     map[[16]byte]bool
+	hasGraphics bool
 
 	done   bool
 	choice pickerChoice
@@ -3403,13 +4230,17 @@ func NewPicker(screen tcell.Screen, client PickerClient) *Picker {
 	}
 }
 
-// RefreshCatalog fetches the catalog from the server.
+// RefreshCatalog fetches the catalog from the server. On error the
+// previous response is preserved (so a transient socket blip doesn't
+// wipe a freshly-shown list) and errMsg is set so the user sees a
+// banner rather than silently emptying.
 func (p *Picker) RefreshCatalog() {
 	resp, err := p.client.ListSessions()
 	if err != nil {
-		p.response = protocol.ListSessionsResponse{}
+		p.errMsg = "Could not load sessions: " + err.Error()
 		return
 	}
+	p.errMsg = ""
 	p.response = resp
 	if p.selectedIdx >= len(p.response.Stored) {
 		p.selectedIdx = 0
@@ -3450,6 +4281,9 @@ func (p *Picker) HandleKey(key tcell.Key, ch rune, mods tcell.ModMask) {
 		p.handleDeleteConfirmKey(key, ch)
 		return
 	}
+	// Any key dismisses a sticky error banner, even if it doesn't
+	// otherwise navigate. The user has acknowledged the failure.
+	p.errMsg = ""
 	switch key {
 	case tcell.KeyUp:
 		if p.selectedIdx > 0 {
@@ -3462,7 +4296,13 @@ func (p *Picker) HandleKey(key tcell.Key, ch rune, mods tcell.ModMask) {
 	case tcell.KeyEnter:
 		if len(p.response.Stored) > 0 {
 			id := p.response.Stored[p.selectedIdx].SessionID
-			_ = p.client.RecoverSession(id, "")
+			if err := p.client.RecoverSession(id, ""); err != nil {
+				// Keep the picker open and surface the error so the
+				// user can pick a different session or retry. Don't
+				// signal Done — recovery hasn't actually happened.
+				p.errMsg = "Recover failed: " + err.Error()
+				return
+			}
 			p.done = true
 			p.choice = choiceRecover
 		}
@@ -3518,9 +4358,13 @@ func (p *Picker) handleRenameKey(key tcell.Key, ch rune) {
 		if len(p.response.Stored) > 0 {
 			id := p.response.Stored[p.selectedIdx].SessionID
 			newLabel := string(p.renameBuf)
-			if err := p.client.RenameSession(id, newLabel); err == nil {
-				p.response.Stored[p.selectedIdx].Label = newLabel
+			if err := p.client.RenameSession(id, newLabel); err != nil {
+				p.errMsg = "Rename failed: " + err.Error()
+				p.mode = modeBrowse
+				p.renameBuf = nil
+				return
 			}
+			p.response.Stored[p.selectedIdx].Label = newLabel
 		}
 		p.mode = modeBrowse
 		p.renameBuf = nil
@@ -3541,7 +4385,9 @@ func (p *Picker) handleDeleteConfirmKey(key tcell.Key, ch rune) {
 	case 'y', 'Y':
 		if len(p.response.Stored) > 0 {
 			id := p.response.Stored[p.selectedIdx].SessionID
-			if err := p.client.DeleteSession(id); err == nil {
+			if err := p.client.DeleteSession(id); err != nil {
+				p.errMsg = "Delete failed: " + err.Error()
+			} else {
 				// Drop the entry locally so the cursor position
 				// stays meaningful even if we don't refresh.
 				p.response.Stored = append(p.response.Stored[:p.selectedIdx], p.response.Stored[p.selectedIdx+1:]...)
@@ -3591,6 +4437,7 @@ func (p *Picker) Render() {
 	p.drawHeader(w)
 	p.drawTabs(w)
 	p.drawCards(w, h)
+	p.drawErrorBanner(w, h)
 	p.drawActionBar(w, h)
 	if p.mode == modeRename {
 		p.drawRenameOverlay(w, h)
@@ -3599,6 +4446,20 @@ func (p *Picker) Render() {
 		p.drawDeleteConfirmOverlay(w, h)
 	}
 	p.screen.Show()
+}
+
+func (p *Picker) drawErrorBanner(w, h int) {
+	if p.errMsg == "" {
+		return
+	}
+	style := tcell.StyleDefault.Foreground(tcell.ColorRed).Bold(true)
+	msg := p.errMsg
+	if len(msg) > w-4 {
+		msg = msg[:w-5] + "…"
+	}
+	for i, r := range msg {
+		p.screen.SetContent(2+i, h-3, r, nil, style)
+	}
 }
 
 func (p *Picker) clear(w, h int) {
@@ -3662,7 +4523,7 @@ func (p *Picker) drawCard(x, y int, s protocol.SessionSummary, selected bool) {
 	if selected {
 		bgStyle = bgStyle.Background(tcell.ColorDarkBlue)
 	}
-	// Thumbnail box (ASCII fallback for now; Kitty render added in Task 15)
+	// Thumbnail box (ASCII fallback for now; Kitty render added in Task 17)
 	grid := renderASCIILayoutGrid(cardThumbW, cardThumbH, s.Layout)
 	for cy := 0; cy < cardThumbH; cy++ {
 		for cx := 0; cx < cardThumbW; cx++ {
@@ -3763,13 +4624,18 @@ git commit -m "Picker: state machine, navigation, render"
 
 ---
 
-### Task 15: Picker — Kitty thumbnail rendering + lazy fetch
+### Task 17: Picker — Kitty thumbnail rendering + lazy fetch (locked, defer-clear pending, dimension cap)
 
 **Files:**
 - Create: `cmd/texelation/boot/picker_thumbnail.go`
-- Modify: `cmd/texelation/boot/picker.go` (wire kitty + hasGraphics flag)
 - Modify: `cmd/texelation/boot/picker_render.go` (route through `renderThumbnail`)
-- Modify: `cmd/texelation/boot/picker_test.go` (test the upgrade path)
+- Modify: `cmd/texelation/boot/picker_test.go` (test the upgrade path + locked accessor)
+
+The Picker struct already has `mu` and `hasGraphics` fields from Task 16. This task adds the fetch coordinator and the render hook. **Critical correctness fixes vs v1:**
+- Reads of `thumbCache` and `pending` happen under `mu` (was: unlocked, raced with the goroutine's writes).
+- The fetch goroutine clears `pending[id]` in a `defer`, so a failed fetch doesn't strand the entry forever (was: only cleared on success → ASCII-forever bug).
+- Test uses a `ThumbCached` accessor that takes the lock instead of poking the map directly under `-race`.
+- Decoded PNG dimensions are capped via `png.DecodeConfig` before `png.Decode` to defend against pathological inputs (corrupt sidecar, hostile file at the predictable on-disk path).
 
 - [ ] **Step 1: Write failing test**
 
@@ -3794,19 +4660,16 @@ func TestPicker_FetchThumbnailUpgradesCard(t *testing.T) {
 	p := NewPicker(screen, fc)
 	p.SetGraphicsCapable(true)
 	p.RefreshCatalog()
-	// Initial render should ASCII-fallback while fetching.
-	p.Render()
-	// Allow the fetch goroutine to deliver.
-	for i := 0; i < 100; i++ {
-		if cached, _ := p.thumbCache[id]; cached != nil {
+	p.Render() // triggers the lazy fetch
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if p.ThumbCached(id) {
 			break
 		}
-		// short busy-wait — production code would drive p.Render() on
-		// each tick; tests just nudge.
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got, ok := p.thumbCache[id]; !ok || string(got) != string(pngBytes) {
-		t.Errorf("expected thumbCache populated; got=%q ok=%v", got, ok)
+	if !p.ThumbCached(id) {
+		t.Fatalf("expected thumbnail cached within 500ms")
 	}
 	if !fc.fetchCalled {
 		t.Errorf("expected FetchThumbnail dispatch")
@@ -3833,32 +4696,78 @@ func TestPicker_NoFetchWhenGraphicsAbsent(t *testing.T) {
 		t.Errorf("did not expect FetchThumbnail dispatch on text-only terminal")
 	}
 }
+
+func TestPicker_FetchThumbnailErrorClearsPending(t *testing.T) {
+	// Critical regression test for the v1 bug where a failed fetch
+	// left pending[id]=true forever, preventing retry. After the
+	// goroutine returns, pending must be cleared regardless of
+	// outcome so a future Render can re-attempt (e.g., user toggles
+	// tabs and back).
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.Init()
+	defer screen.Fini()
+	screen.SetSize(80, 24)
+	id := [16]byte{0xAB}
+	fc := &fakeClient{
+		response: protocol.ListSessionsResponse{
+			Stored: []protocol.SessionSummary{{SessionID: id, HasThumbnail: true}},
+		},
+		thumbErr: errors.New("transient"),
+	}
+	p := NewPicker(screen, fc)
+	p.SetGraphicsCapable(true)
+	p.RefreshCatalog()
+	p.Render()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !p.IsPending(id) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if p.IsPending(id) {
+		t.Fatalf("expected pending cleared after fetch error within 500ms")
+	}
+	if p.ThumbCached(id) {
+		t.Errorf("expected thumbCache empty on fetch error")
+	}
+}
 ```
 
-Update the `fakeClient` definition at the bottom of the test file (in the same Task 14 block) to support thumbnail fetches:
+Update the `fakeClient` definition to support fetch error injection:
 
 ```go
 type fakeClient struct {
 	response      protocol.ListSessionsResponse
+	listErr       error
 	recoverCalled bool
 	recoverID     [16]byte
+	recoverErr    error
 	newCalled     bool
+	renameErr     error
+	deleteErr     error
 	fetchCalled   bool
 	thumbBytes    []byte
+	thumbErr      error
 }
+
+// ... existing methods ...
 
 func (f *fakeClient) FetchThumbnail(id [16]byte) ([]byte, error) {
 	f.fetchCalled = true
+	if f.thumbErr != nil {
+		return nil, f.thumbErr
+	}
 	return f.thumbBytes, nil
 }
 ```
 
-Add `"time"` to imports if not present.
+(Merge into the existing `fakeClient` from Task 16 — don't duplicate.)
 
 - [ ] **Step 2: Run tests, verify failure**
 
-Run: `go test ./cmd/texelation/boot/ -run "TestPicker_FetchThumbnailUpgradesCard|TestPicker_NoFetchWhenGraphicsAbsent" -count=1`
-Expected: FAIL — `SetGraphicsCapable` and `thumbCache` not exposed.
+Run: `go test ./cmd/texelation/boot/ -run "TestPicker_FetchThumbnailUpgradesCard|TestPicker_NoFetchWhenGraphicsAbsent|TestPicker_FetchThumbnailErrorClearsPending" -count=1`
+Expected: FAIL — `SetGraphicsCapable`, `ThumbCached`, `IsPending` not exposed.
 
 - [ ] **Step 3: Implement the thumbnail dispatcher**
 
@@ -3875,6 +4784,20 @@ Create `cmd/texelation/boot/picker_thumbnail.go`:
 
 package boot
 
+import (
+	"bytes"
+	"image"
+	"image/png"
+	"log"
+)
+
+// maxThumbnailDim caps PNG dimensions on the decode path. A 480×270
+// PNG is well within this; anything larger is either corrupt or
+// hostile (the 16 MiB protocol cap leaves room for adversarial
+// dimension declarations within a small payload). Decoding without
+// this check can OOM the picker on corrupted inputs.
+const maxThumbnailDim = 4096
+
 // SetGraphicsCapable tells the picker whether to dispatch
 // FetchThumbnail requests + render Kitty images. False keeps the
 // ASCII fallback exclusively (no network traffic for thumbnails).
@@ -3882,80 +4805,166 @@ func (p *Picker) SetGraphicsCapable(b bool) {
 	p.hasGraphics = b
 }
 
+// ThumbCached returns true iff a PNG for id is in the local cache.
+// Locked accessor for tests; production read sites in drawCard also
+// take p.mu.
+func (p *Picker) ThumbCached(id [16]byte) bool {
+	p.mu.Lock()
+	_, ok := p.thumbCache[id]
+	p.mu.Unlock()
+	return ok
+}
+
+// IsPending reports whether a fetch is in flight for id. Locked
+// accessor for tests.
+func (p *Picker) IsPending(id [16]byte) bool {
+	p.mu.Lock()
+	v := p.pending[id]
+	p.mu.Unlock()
+	return v
+}
+
+// thumbnailFor returns the cached PNG bytes for id, or nil if not
+// cached. Caller does not need to hold p.mu — this method takes it.
+func (p *Picker) thumbnailFor(id [16]byte) []byte {
+	p.mu.Lock()
+	data := p.thumbCache[id]
+	p.mu.Unlock()
+	return data
+}
+
 // maybeFetchThumbnail kicks off a non-blocking fetch for id if we
 // haven't cached or pending one already. Called from the render
-// loop's per-card pass.
+// loop's per-card pass. All map access is under p.mu; the goroutine
+// always clears pending[id] in defer so a failed fetch doesn't
+// strand the entry permanently (previously a "card stays ASCII
+// forever" bug — see Task 17 in the plan).
 func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 	if !p.hasGraphics || !hasThumb {
 		return
 	}
+	p.mu.Lock()
 	if _, cached := p.thumbCache[id]; cached {
+		p.mu.Unlock()
 		return
 	}
 	if p.pending[id] {
+		p.mu.Unlock()
 		return
 	}
 	p.pending[id] = true
+	p.mu.Unlock()
+
 	go func(targetID [16]byte) {
+		defer func() {
+			// Clear pending unconditionally so subsequent renders
+			// can retry. Without this defer, an error path leaves
+			// pending[id]=true forever — a real bug we exorcised
+			// in v2. Recover from any panic in the client (the
+			// transport could trip a runtime fault on a dropped
+			// socket) so we don't crash the picker.
+			if rec := recover(); rec != nil {
+				log.Printf("picker: thumbnail fetch panic: %v", rec)
+			}
+			p.mu.Lock()
+			delete(p.pending, targetID)
+			p.mu.Unlock()
+		}()
 		data, err := p.client.FetchThumbnail(targetID)
-		if err != nil || len(data) == 0 {
+		if err != nil {
+			log.Printf("picker: thumbnail fetch %x: %v", targetID[:4], err)
+			return
+		}
+		if len(data) == 0 {
+			return
+		}
+		// Validate dimensions before storing. A png.DecodeConfig
+		// failure means corrupt/non-PNG bytes; refuse to cache.
+		cfg, err := png.DecodeConfig(bytes.NewReader(data))
+		if err != nil {
+			log.Printf("picker: thumbnail decode-config %x: %v", targetID[:4], err)
+			return
+		}
+		if cfg.Width > maxThumbnailDim || cfg.Height > maxThumbnailDim {
+			log.Printf("picker: thumbnail %x: refusing %dx%d (cap %d)", targetID[:4], cfg.Width, cfg.Height, maxThumbnailDim)
 			return
 		}
 		p.mu.Lock()
 		p.thumbCache[targetID] = data
-		delete(p.pending, targetID)
 		p.mu.Unlock()
 	}(id)
 }
+
+// decodeCachedThumb decodes the PNG bytes for id into an image.Image,
+// or returns nil if the bytes can't be decoded. The dimension check
+// happens at fetch time (above), so this is purely the costlier
+// full decode for paint use. Currently only used by the (future)
+// Kitty emission path; the SimulationScreen unit tests don't exercise
+// it.
+func decodeCachedThumb(data []byte) image.Image {
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	return img
+}
 ```
 
-Add a `mu sync.Mutex` and `hasGraphics bool` to the `Picker` struct in `picker.go`. Update render code in `picker_render.go` so the per-card draw calls `p.maybeFetchThumbnail(s.SessionID, s.HasThumbnail)` before rendering, and reads from `p.thumbCache` under the mutex when graphics-capable. The actual Kitty image emission stays minimal in F.1: when a cached PNG is present, draw a placeholder block character into the thumbnail rect (so the test can detect "upgraded" via a non-ASCII pattern); the full Kitty escape-sequence path is out of scope for the unit test, since SimulationScreen doesn't model the Kitty protocol.
-
-Add to the top of `drawCard`:
+In `picker_render.go`, replace the thumbnail-drawing block at the top of `drawCard` with the locked-read version:
 
 ```go
-p.mu.Lock()
-cached := p.thumbCache[s.SessionID]
-p.mu.Unlock()
-if cached != nil && p.hasGraphics {
-	// Draw a "graphics here" placeholder so tests can distinguish
-	// an upgraded card from the ASCII fallback. Real Kitty emission
-	// is wired in via state.kitty when the picker hands off — for
-	// the unit-test scope, this marker is sufficient.
-	for cy := 0; cy < cardThumbH; cy++ {
-		for cx := 0; cx < cardThumbW; cx++ {
-			p.screen.SetContent(x+cx, y+cy, '▓', nil, bgStyle)
+func (p *Picker) drawCard(x, y int, s protocol.SessionSummary, selected bool) {
+	bgStyle := tcell.StyleDefault
+	if selected {
+		bgStyle = bgStyle.Background(tcell.ColorDarkBlue)
+	}
+	cached := p.thumbnailFor(s.SessionID)
+	if cached != nil && p.hasGraphics {
+		// Cached thumbnail available. The full Kitty escape-sequence
+		// emission is out of scope for SimulationScreen; tests detect
+		// the upgrade by checking the placeholder block char.
+		for cy := 0; cy < cardThumbH; cy++ {
+			for cx := 0; cx < cardThumbW; cx++ {
+				p.screen.SetContent(x+cx, y+cy, '▓', nil, bgStyle)
+			}
+		}
+	} else {
+		grid := renderASCIILayoutGrid(cardThumbW, cardThumbH, s.Layout)
+		for cy := 0; cy < cardThumbH; cy++ {
+			for cx := 0; cx < cardThumbW; cx++ {
+				p.screen.SetContent(x+cx, y+cy, grid[cy][cx], nil, bgStyle)
+			}
 		}
 	}
-	// Metadata still rendered below.
-} else {
-	grid := renderASCIILayoutGrid(cardThumbW, cardThumbH, s.Layout)
-	for cy := 0; cy < cardThumbH; cy++ {
-		for cx := 0; cx < cardThumbW; cx++ {
-			p.screen.SetContent(x+cx, y+cy, grid[cy][cx], nil, bgStyle)
-		}
+	p.maybeFetchThumbnail(s.SessionID, s.HasThumbnail)
+
+	// Metadata column (unchanged).
+	metaX := x + cardThumbW + 2
+	p.drawText(metaX, y, fmt.Sprintf("Label:   %s", labelOrUntitled(s.Label)), bgStyle.Bold(true))
+	p.drawText(metaX, y+1, fmt.Sprintf("Active:  %s", relativeTime(s.LastActive)), bgStyle)
+	p.drawText(metaX, y+2, fmt.Sprintf("Panes:   %d", s.PaneCount), bgStyle)
+	p.drawText(metaX, y+3, fmt.Sprintf("Title:   %s", truncate(s.FirstPaneTitle, 40)), bgStyle)
+	if s.Pinned {
+		p.drawText(metaX, y+4, "Pinned:  ★", bgStyle)
 	}
 }
-p.maybeFetchThumbnail(s.SessionID, s.HasThumbnail)
 ```
-
-(Replace the existing thumbnail block in `drawCard` with the conditional above.)
 
 - [ ] **Step 4: Run tests, verify pass**
 
-Run: `go test ./cmd/texelation/boot/ -run "TestPicker_" -count=1`
-Expected: PASS.
+Run: `go test ./cmd/texelation/boot/ -run "TestPicker_" -count=1 -race`
+Expected: PASS — including under `-race`. The locked accessors are critical here.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add cmd/texelation/boot/picker_thumbnail.go cmd/texelation/boot/picker.go cmd/texelation/boot/picker_render.go cmd/texelation/boot/picker_test.go
-git commit -m "Picker: lazy thumbnail fetch + Kitty placeholder render"
+git add cmd/texelation/boot/picker_thumbnail.go cmd/texelation/boot/picker_render.go cmd/texelation/boot/picker_test.go
+git commit -m "Picker: lazy thumbnail fetch with locked cache + deferred pending clear"
 ```
 
 ---
 
-### Task 16: boot.Run integration — trigger logic + handoff
+### Task 18: boot.Run integration — trigger logic + handoff
 
 **Files:**
 - Modify: `cmd/texelation/main.go` (add `--recover` flag, picker activation)
@@ -3999,8 +5008,6 @@ package boot
 
 import (
 	"github.com/gdamore/tcell/v2"
-
-	"github.com/framegrace/texelation/protocol"
 )
 
 // PickerOutcome captures what the user picked.
@@ -4035,7 +5042,6 @@ func RunPicker(screen tcell.Screen, client PickerClient, hasGraphics bool) (Pick
 	if p.choice == choiceRecover && len(p.response.Stored) > 0 {
 		out.SessionID = p.response.Stored[p.selectedIdx].SessionID
 	}
-	_ = protocol.Version // keep protocol import live in case future fields need it
 	return out, nil
 }
 ```
@@ -4131,61 +5137,348 @@ const (
 )
 ```
 
-- [ ] **Step 4: Implement the socket picker client + probe**
+- [ ] **Step 4: Implement the socket picker client + probe (real code, no stubs)**
 
-Create the `boot.SocketPickerClient` and `boot.ProbeStoredSessions` helpers. They wrap a thin protocol-level handshake:
+Create `cmd/texelation/boot/picker_client.go`:
 
 ```go
-// Append to cmd/texelation/boot/picker_runner.go (or split into
-// cmd/texelation/boot/picker_client.go if the file grows).
+// Copyright © 2026 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// File: cmd/texelation/boot/picker_client.go
+// Summary: Socket-backed PickerClient + ProbeStoredSessions. Performs
+// the protocol Hello/Welcome handshake and round-trips picker
+// messages over a unix socket. Modelled on client/simple_client.go's
+// dial-and-handshake helper.
 
-// ProbeStoredSessions performs a minimal handshake over the socket and
-// asks for the stored-session count. Returns the number of stored
-// sessions or an error. Used by the trigger logic to decide whether
-// to show the picker.
+package boot
+
+import (
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/framegrace/texelation/protocol"
+)
+
+// dialAndHandshake opens a unix socket connection to the texelation
+// daemon and runs the Hello/Welcome handshake. Returns the conn +
+// the assigned sessionID. The caller closes the conn.
+func dialAndHandshake(socket string) (net.Conn, [16]byte, error) {
+	var sid [16]byte
+	conn, err := net.DialTimeout("unix", socket, 5*time.Second)
+	if err != nil {
+		return nil, sid, fmt.Errorf("dial %s: %w", socket, err)
+	}
+	var clientID [16]byte
+	if _, err := rand.Read(clientID[:]); err != nil {
+		conn.Close()
+		return nil, sid, fmt.Errorf("rand client id: %w", err)
+	}
+	helloBody, err := protocol.EncodeHello(protocol.Hello{ClientID: clientID, ClientName: "texelation-picker"})
+	if err != nil {
+		conn.Close()
+		return nil, sid, fmt.Errorf("encode hello: %w", err)
+	}
+	helloHdr := protocol.Header{
+		Version: protocol.Version,
+		Type:    protocol.MsgHello,
+		Flags:   protocol.FlagChecksum,
+	}
+	if err := protocol.WriteMessage(conn, helloHdr, helloBody); err != nil {
+		conn.Close()
+		return nil, sid, fmt.Errorf("write hello: %w", err)
+	}
+	hdr, payload, err := protocol.ReadMessage(conn)
+	if err != nil {
+		conn.Close()
+		return nil, sid, fmt.Errorf("read welcome: %w", err)
+	}
+	if hdr.Type != protocol.MsgWelcome {
+		conn.Close()
+		return nil, sid, fmt.Errorf("expected welcome, got message type %d", hdr.Type)
+	}
+	welcome, err := protocol.DecodeWelcome(payload)
+	if err != nil {
+		conn.Close()
+		return nil, sid, fmt.Errorf("decode welcome: %w", err)
+	}
+	return conn, welcome.SessionID, nil
+}
+
+// ProbeStoredSessions performs Hello/Welcome + MsgListSessions and
+// returns the count of stored sessions. The ephemeral session created
+// by the handshake is left dangling on the server's side and gets
+// reaped via the daemon's normal idle-session cleanup; the cost is
+// tiny (one new session record, no panes ever attached).
 func ProbeStoredSessions(socket string) (int, error) {
-	// Implementation hint: this can either reuse the existing
-	// `client.SimpleClient` to perform Hello/Welcome, or open a raw
-	// connection and send Hello + a zero-payload MsgListSessions.
-	// The texelation client in client/simple_client.go already has
-	// a connect helper; piggy-back on it.
-	//
-	// Pseudocode:
-	//   conn := dial(socket)
-	//   write Hello with random ClientID
-	//   read Welcome
-	//   write MsgListSessions
-	//   read MsgListSessionsResponse
-	//   decode and return len(resp.Stored)
-	//
-	// Implementor: write the actual code following the existing
-	// patterns in client/simple_client.go.
-	return 0, nil
+	conn, _, err := dialAndHandshake(socket)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	body, _ := protocol.EncodeListSessionsRequest(protocol.ListSessionsRequest{})
+	hdr := protocol.Header{
+		Version: protocol.Version,
+		Type:    protocol.MsgListSessions,
+		Flags:   protocol.FlagChecksum,
+	}
+	if err := protocol.WriteMessage(conn, hdr, body); err != nil {
+		return 0, fmt.Errorf("write list-sessions: %w", err)
+	}
+	respHdr, respPayload, err := protocol.ReadMessage(conn)
+	if err != nil {
+		return 0, fmt.Errorf("read list-sessions: %w", err)
+	}
+	if respHdr.Type != protocol.MsgListSessionsResponse {
+		return 0, fmt.Errorf("expected list-sessions response, got %d", respHdr.Type)
+	}
+	resp, err := protocol.DecodeListSessionsResponse(respPayload)
+	if err != nil {
+		return 0, fmt.Errorf("decode list-sessions: %w", err)
+	}
+	return len(resp.Stored), nil
 }
 
-// NewSocketPickerClient returns a PickerClient that wraps a real
-// protocol connection to the texelation socket.
-func NewSocketPickerClient(socket string) (*SocketPickerClient, error) {
-	// Implementor: dial the socket, run Hello/Welcome handshake,
-	// store the conn + writer for use in the PickerClient methods.
-	return &SocketPickerClient{}, nil
-}
-
-// SocketPickerClient implements PickerClient against a live socket.
+// SocketPickerClient implements PickerClient against a live socket
+// for the duration of the picker's UI session. One connection per
+// picker invocation; closed when the picker exits.
 type SocketPickerClient struct {
-	// fields: conn, writer, sessionID, etc.
+	conn      net.Conn
+	sessionID [16]byte
+
+	// mu serializes request/response round-trips so concurrent
+	// picker callers (e.g., a goroutine fetching thumbnails while
+	// the foreground render fires ListSessions) don't interleave
+	// frames on the wire. Real picker traffic is rare enough that
+	// the lock contention is irrelevant.
+	mu sync.Mutex
+
+	closeOnce sync.Once
 }
 
-func (s *SocketPickerClient) ListSessions() (protocol.ListSessionsResponse, error)        { /* ... */ return protocol.ListSessionsResponse{}, nil }
-func (s *SocketPickerClient) RecoverSession(id [16]byte, newLabel string) error           { /* ... */ return nil }
-func (s *SocketPickerClient) RenameSession(id [16]byte, newLabel string) error            { /* ... */ return nil }
-func (s *SocketPickerClient) DeleteSession(id [16]byte) error                              { /* ... */ return nil }
-func (s *SocketPickerClient) FetchThumbnail(id [16]byte) ([]byte, error)                   { /* ... */ return nil, nil }
-func (s *SocketPickerClient) StartFreshSession()                                           { /* no-op */ }
-func (s *SocketPickerClient) Close() error                                                 { /* ... */ return nil }
+// NewSocketPickerClient dials the socket and runs the handshake.
+// Returns a client ready for use; caller must Close() when done.
+func NewSocketPickerClient(socket string) (*SocketPickerClient, error) {
+	conn, sid, err := dialAndHandshake(socket)
+	if err != nil {
+		return nil, err
+	}
+	return &SocketPickerClient{conn: conn, sessionID: sid}, nil
+}
+
+// roundTrip serialises a request frame, writes it, reads one response
+// frame, and returns the response header + payload. The caller
+// validates the response type. mu is held for the duration so
+// interleaved sends from concurrent picker code can't garble each
+// other.
+func (s *SocketPickerClient) roundTrip(reqType protocol.MessageType, body []byte) (protocol.Header, []byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hdr := protocol.Header{
+		Version:   protocol.Version,
+		Type:      reqType,
+		Flags:     protocol.FlagChecksum,
+		SessionID: s.sessionID,
+	}
+	if err := protocol.WriteMessage(s.conn, hdr, body); err != nil {
+		return protocol.Header{}, nil, fmt.Errorf("write %d: %w", reqType, err)
+	}
+	respHdr, respPayload, err := protocol.ReadMessage(s.conn)
+	if err != nil {
+		return protocol.Header{}, nil, fmt.Errorf("read response: %w", err)
+	}
+	return respHdr, respPayload, nil
+}
+
+func (s *SocketPickerClient) ListSessions() (protocol.ListSessionsResponse, error) {
+	body, _ := protocol.EncodeListSessionsRequest(protocol.ListSessionsRequest{})
+	hdr, payload, err := s.roundTrip(protocol.MsgListSessions, body)
+	if err != nil {
+		return protocol.ListSessionsResponse{}, err
+	}
+	if hdr.Type != protocol.MsgListSessionsResponse {
+		return protocol.ListSessionsResponse{}, fmt.Errorf("unexpected response type %d", hdr.Type)
+	}
+	return protocol.DecodeListSessionsResponse(payload)
+}
+
+func (s *SocketPickerClient) RecoverSession(id [16]byte, newLabel string) error {
+	body, err := protocol.EncodeRecoverSessionRequest(protocol.RecoverSessionRequest{SessionID: id, NewLabel: newLabel})
+	if err != nil {
+		return err
+	}
+	hdr, payload, err := s.roundTrip(protocol.MsgRecoverSession, body)
+	if err != nil {
+		return err
+	}
+	switch hdr.Type {
+	case protocol.MsgConnectAccept:
+		// Recovery succeeded server-side; the picker hands off to
+		// the connect path which will re-attach with this session ID.
+		return nil
+	case protocol.MsgError:
+		ef, _ := protocol.DecodeErrorFrame(payload)
+		return errors.New(ef.Message)
+	default:
+		return fmt.Errorf("unexpected response %d", hdr.Type)
+	}
+}
+
+func (s *SocketPickerClient) RenameSession(id [16]byte, newLabel string) error {
+	body, err := protocol.EncodeRenameSessionRequest(protocol.RenameSessionRequest{SessionID: id, NewLabel: newLabel})
+	if err != nil {
+		return err
+	}
+	return s.opRoundTrip(protocol.MsgRenameSession, body, protocol.OpRename)
+}
+
+func (s *SocketPickerClient) DeleteSession(id [16]byte) error {
+	body, err := protocol.EncodeDeleteSessionRequest(protocol.DeleteSessionRequest{SessionID: id})
+	if err != nil {
+		return err
+	}
+	return s.opRoundTrip(protocol.MsgDeleteSession, body, protocol.OpDelete)
+}
+
+func (s *SocketPickerClient) opRoundTrip(reqType protocol.MessageType, body []byte, expectOp protocol.SessionOpKind) error {
+	hdr, payload, err := s.roundTrip(reqType, body)
+	if err != nil {
+		return err
+	}
+	if hdr.Type != protocol.MsgSessionOpResponse {
+		return fmt.Errorf("unexpected response %d", hdr.Type)
+	}
+	resp, err := protocol.DecodeSessionOpResponse(payload)
+	if err != nil {
+		return err
+	}
+	if resp.OpType != expectOp {
+		return fmt.Errorf("op mismatch: got %d, want %d", resp.OpType, expectOp)
+	}
+	if !resp.OK {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+func (s *SocketPickerClient) FetchThumbnail(id [16]byte) ([]byte, error) {
+	body, err := protocol.EncodeFetchThumbnailRequest(protocol.FetchThumbnailRequest{SessionID: id})
+	if err != nil {
+		return nil, err
+	}
+	hdr, payload, err := s.roundTrip(protocol.MsgFetchThumbnail, body)
+	if err != nil {
+		return nil, err
+	}
+	if hdr.Type != protocol.MsgFetchThumbnailResponse {
+		return nil, fmt.Errorf("unexpected response %d", hdr.Type)
+	}
+	resp, err := protocol.DecodeFetchThumbnailResponse(payload)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, errors.New(resp.Error)
+	}
+	return resp.PNG, nil
+}
+
+// StartFreshSession is a no-op for the socket client — the picker
+// simply exits with choiceFresh and main.go takes the ordinary
+// connect path (zero sessionID).
+func (s *SocketPickerClient) StartFreshSession() {}
+
+// Close shuts down the underlying socket. Safe to call multiple times.
+func (s *SocketPickerClient) Close() error {
+	var err error
+	s.closeOnce.Do(func() {
+		err = s.conn.Close()
+	})
+	return err
+}
 ```
 
-The actual transport implementation should follow the patterns in `client/simple_client.go` (Hello / Welcome handshake, `protocol.WriteMessage` for sends, `protocol.ReadMessage` for reads). Do not invent a new framing; reuse the existing helpers.
+The `_ = protocol.Version` placeholder previously in `picker_runner.go` is removed — the protocol package is now genuinely used.
+
+Add a basic round-trip test in `cmd/texelation/boot/picker_client_test.go`:
+
+```go
+// Copyright © 2026 Texelation contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package boot
+
+import (
+	"net"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/framegrace/texelation/protocol"
+)
+
+// TestSocketPickerClient_ListSessions wires a fake server-side
+// listener that speaks just enough protocol to validate the picker
+// client's round-trip. We don't bring up a real texel-server; just
+// verify the framing.
+func TestSocketPickerClient_ListSessions(t *testing.T) {
+	dir := t.TempDir()
+	socket := filepath.Join(dir, "sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// Read Hello, write Welcome.
+		hdr, _, err := protocol.ReadMessage(conn)
+		if err != nil || hdr.Type != protocol.MsgHello {
+			return
+		}
+		welBody, _ := protocol.EncodeWelcome(protocol.Welcome{SessionID: [16]byte{0xAA}, ServerName: "test"})
+		welHdr := protocol.Header{Version: protocol.Version, Type: protocol.MsgWelcome, Flags: protocol.FlagChecksum, SessionID: [16]byte{0xAA}}
+		_ = protocol.WriteMessage(conn, welHdr, welBody)
+
+		// Read MsgListSessions, write a 1-entry response.
+		_, _, _ = protocol.ReadMessage(conn)
+		respBody, _ := protocol.EncodeListSessionsResponse(protocol.ListSessionsResponse{
+			Stored: []protocol.SessionSummary{{SessionID: [16]byte{0xBB}, Label: "test", LastActive: 1, PaneCount: 1}},
+		})
+		respHdr := protocol.Header{Version: protocol.Version, Type: protocol.MsgListSessionsResponse, Flags: protocol.FlagChecksum, SessionID: [16]byte{0xAA}}
+		_ = protocol.WriteMessage(conn, respHdr, respBody)
+	}()
+
+	// Give the listener a moment to be ready for accept.
+	time.Sleep(20 * time.Millisecond)
+
+	c, err := NewSocketPickerClient(socket)
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	defer c.Close()
+
+	resp, err := c.ListSessions()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(resp.Stored) != 1 || resp.Stored[0].Label != "test" {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+}
+```
+
+Run: `go test ./cmd/texelation/boot/ -run "TestSocketPickerClient_" -count=1`
+Expected: PASS.
 
 - [ ] **Step 5: Wire `clientrt.Options.RecoverSessionID` into the connect path**
 
@@ -4229,15 +5522,147 @@ Expected: PASS. The protocol bump (v4 → v5) cascaded through many tests; any f
 - [ ] **Step 8: Commit**
 
 ```bash
-git add cmd/texelation/main.go cmd/texelation/boot/picker_runner.go internal/runtime/client/app.go
+git add cmd/texelation/main.go cmd/texelation/boot/picker_runner.go cmd/texelation/boot/picker_client.go cmd/texelation/boot/picker_client_test.go internal/runtime/client/app.go
 git commit -m "boot.Run: wire picker activation + recover handoff"
+```
+
+---
+
+### Task 19: Client screenshot — refactor to use shared `internal/thumbnail` primitive
+
+**Files:**
+- Modify: `internal/runtime/client/screenshot.go`
+
+The existing `takeScreenshot` does the same `textrender.DetectFont` + `textrender.New` + render pipeline that the shared primitive (Task 9) now exposes. Refactoring removes the duplicate setup and ensures any future improvements to the rendering path benefit both code paths.
+
+- [ ] **Step 1: Read the current screenshot path**
+
+Run: `cat internal/runtime/client/screenshot.go`
+Expected: see the existing `takeScreenshot` function with `textrender.DetectFont`, `textrender.New`, `renderer.Render(grid)`.
+
+- [ ] **Step 2: Replace the rendering call with the shared primitive**
+
+Modify `internal/runtime/client/screenshot.go`:
+
+```go
+package clientruntime
+
+import (
+	"bytes"
+	"fmt"
+	"image"
+	"image/png"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
+	texelcore "github.com/framegrace/texelui/core"
+
+	"github.com/framegrace/texelation/internal/thumbnail"
+)
+
+// takeScreenshot renders the current workspace buffer to a PNG file
+// and copies it to the system clipboard. Uses the shared
+// internal/thumbnail rendering primitive — same code path as the
+// server's lifecycle thumbnail capture.
+func takeScreenshot(state *clientState) {
+	buf := state.prevBuffer
+	if len(buf) == 0 {
+		return
+	}
+
+	coreGrid := make([][]texelcore.Cell, len(buf))
+	for y, row := range buf {
+		coreGrid[y] = make([]texelcore.Cell, len(row))
+		for x := range row {
+			coreGrid[y][x] = texelcore.Cell{
+				Ch:    row[x].Ch,
+				Style: row[x].Style,
+			}
+		}
+	}
+
+	img, err := thumbnail.RenderGrid(coreGrid)
+	if err != nil {
+		log.Printf("[SCREENSHOT] Render failed: %v", err)
+		return
+	}
+
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".texelation", "screenshots")
+	os.MkdirAll(dir, 0o755)
+	filename := filepath.Join(dir, fmt.Sprintf("screenshot-%s.png", time.Now().Format("2006-01-02_15-04-05")))
+
+	if err := thumbnail.WritePNGAtomic(filename, img); err != nil {
+		log.Printf("[SCREENSHOT] Write failed: %v", err)
+		return
+	}
+
+	log.Printf("[SCREENSHOT] Saved to %s", filename)
+	copyImageToClipboard(img, filename)
+}
+
+// copyImageToClipboard copies a PNG image to the system clipboard.
+// Unchanged from the previous implementation.
+func copyImageToClipboard(img image.Image, filePath string) {
+	if path, err := exec.LookPath("wl-copy"); err == nil {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err == nil {
+			cmd := exec.Command(path, "-t", "image/png")
+			cmd.Stdin = &buf
+			if err := cmd.Run(); err == nil {
+				return
+			}
+		}
+	}
+	if path, err := exec.LookPath("xclip"); err == nil {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err == nil {
+			cmd := exec.Command(path, "-selection", "clipboard", "-t", "image/png")
+			cmd.Stdin = &buf
+			if err := cmd.Run(); err == nil {
+				return
+			}
+		}
+	}
+	if path, err := exec.LookPath("osascript"); err == nil {
+		script := fmt.Sprintf(`set the clipboard to (read (POSIX file %q) as «class PNGf»)`, filePath)
+		exec.Command(path, "-e", script).Run()
+	}
+}
+```
+
+The `textrender` import is dropped from this file (the primitive owns it now). The `image/png` import stays for the clipboard helpers' re-encode step.
+
+- [ ] **Step 3: Build and run existing client tests to confirm no regressions**
+
+Run: `go build ./internal/runtime/client/... && go test ./internal/runtime/client/ -count=1`
+Expected: PASS. If `screenshot.go` had no dedicated tests, the build passing is the gate.
+
+- [ ] **Step 4: Manual verification**
+
+```bash
+make build
+./bin/texelation
+# Trigger the screenshot keybinding (default is the existing binding)
+# Confirm: file lands in ~/.texelation/screenshots/, clipboard contains
+# the PNG. Behavior should be identical to before the refactor.
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/runtime/client/screenshot.go
+git commit -m "Client screenshot: use shared internal/thumbnail primitive"
 ```
 
 ---
 
 ## Final Steps
 
-After all 16 tasks land cleanly:
+After all 19 tasks land cleanly:
 
 - [ ] **Run race-detector across the whole repo**
 
@@ -4250,9 +5675,12 @@ Expected: PASS, no races, no failures.
 git push -u origin feature/issue-199-plan-f-session-picker
 gh pr create --title "Issue #199 Plan F.1: stored-session recovery picker" --body "$(cat <<'BODY'
 ## Summary
-- Adds protocol v5 with five new picker messages (list, recover, rename, delete, fetch-thumbnail) and SessionSummary/LiveSummary wire types.
-- Server-side: manager helpers (StoredSummaries, LiveSummaries, RenameStored, DeleteStored), connection handlers, lifecycle thumbnail capture (graceful shutdown + last-disconnect).
-- Client-side: picker UI in `cmd/texelation/boot/` reusing the splash screen; ASCII fallback + Kitty placeholder; trigger logic in `boot.Run` activates picker when client state is missing AND server has stored sessions, or when `--recover` is passed.
+- Adds protocol v5 with six new picker messages (list, recover, rename, delete, fetch-thumbnail, op-response) and SessionSummary/LiveSummary wire types.
+- New shared `internal/thumbnail/` rendering primitive used by both server-side lifecycle capture and client-side user screenshots.
+- Server-side: manager helpers (StoredSummaries, LiveSummaries, RenameStored, DeleteStored), connection handlers (with thumbnail size cap), lifecycle thumbnail capture (graceful shutdown + last-disconnect), pane-buffer composition adapter on DesktopSink.
+- Client-side: picker UI in `cmd/texelation/boot/` reusing the splash screen; ASCII fallback (n-way splits) + lazy Kitty thumbnail fetch with locked map access and deferred pending clear; in-picker error banners on Recover/Rename/Delete/RefreshCatalog failures.
+- Trigger logic in `boot.Run` activates picker when client state is missing AND server has stored sessions, or when `--recover` is passed.
+- Client `takeScreenshot` refactored to use the shared primitive (dedup).
 - Spec: `docs/superpowers/specs/2026-05-03-issue-199-plan-f-session-picker-design.md`
 
 ## Test plan
@@ -4263,6 +5691,8 @@ gh pr create --title "Issue #199 Plan F.1: stored-session recovery picker" --bod
 - [ ] Manual: rename inline → label persists across daemon restart
 - [ ] Manual: delete a stored session → JSON + PNG both removed
 - [ ] Manual: Kitty terminal → thumbnails render; non-Kitty terminal → ASCII fallback
+- [ ] Manual: client screenshot keybinding still works (uses shared primitive)
+- [ ] Manual: simulate stored-session network failure → error banner displayed, picker stays open
 
 ## Follow-ups
 - F.2 issue (multi-live-sessions) to be filed after this lands; the wire format and Live tab are already in place.
