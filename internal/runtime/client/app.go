@@ -220,7 +220,14 @@ func Run(opts Options) error {
 	// received yet, no panes rendered). The persisted PaneViewports
 	// from disk are what feed the resume; live trackers are only used
 	// for the same-process --reconnect case where they may be populated.
-	shouldResume := opts.Reconnect || loadedState != nil
+	// Plan F.1: when the picker handed us a RecoverSessionID, we need
+	// to send MsgResumeRequest to drive the server's awaitResume
+	// connection out of its block — without it the server sits
+	// waiting and the splash hangs on "Capturing snapshot". The
+	// PaneViewports slice will be empty (no client-side state to
+	// supply), which is correct: the server treats empty as
+	// "fresh-connect semantics" while still rehydrating the session.
+	shouldResume := opts.Reconnect || loadedState != nil || opts.RecoverSessionID != ([16]byte{})
 	if shouldResume {
 		// Prefer persisted PaneViewports (fresh process, trackers map
 		// is empty); fall back to live trackers for the same-process
