@@ -116,18 +116,25 @@ func ProbeStoredSessions(socket string) (int, error) {
 	if err := protocol.WriteMessage(conn, hdr, body); err != nil {
 		return 0, fmt.Errorf("write list-sessions: %w", err)
 	}
-	respHdr, respPayload, err := protocol.ReadMessage(conn)
-	if err != nil {
-		return 0, fmt.Errorf("read list-sessions: %w", err)
+	// Skip unsolicited state-push frames the same way SocketPickerClient
+	// does; the connection has the desktop listeners attached.
+	for {
+		respHdr, respPayload, err := protocol.ReadMessage(conn)
+		if err != nil {
+			return 0, fmt.Errorf("read list-sessions: %w", err)
+		}
+		if !isPickerResponseType(respHdr.Type) {
+			continue
+		}
+		if respHdr.Type != protocol.MsgListSessionsResponse {
+			return 0, fmt.Errorf("expected list-sessions response, got %d", respHdr.Type)
+		}
+		resp, err := protocol.DecodeListSessionsResponse(respPayload)
+		if err != nil {
+			return 0, fmt.Errorf("decode list-sessions: %w", err)
+		}
+		return len(resp.Stored), nil
 	}
-	if respHdr.Type != protocol.MsgListSessionsResponse {
-		return 0, fmt.Errorf("expected list-sessions response, got %d", respHdr.Type)
-	}
-	resp, err := protocol.DecodeListSessionsResponse(respPayload)
-	if err != nil {
-		return 0, fmt.Errorf("decode list-sessions: %w", err)
-	}
-	return len(resp.Stored), nil
 }
 
 // SocketPickerClient implements PickerClient against a live socket
@@ -151,6 +158,25 @@ func NewSocketPickerClient(socket string) (*SocketPickerClient, error) {
 	return &SocketPickerClient{conn: conn, sessionID: sid}, nil
 }
 
+// pickerResponseTypes is the set of message types we consider valid
+// responses to a picker request. The server's connection.serve()
+// pushes unsolicited state updates (MsgPaneFocus, MsgStateUpdate,
+// MsgPaneState, MsgBufferDelta, MsgClipboardData, etc.) over the
+// same wire — the picker is uninterested in any of those, so
+// roundTrip discards anything that isn't in this set.
+func isPickerResponseType(t protocol.MessageType) bool {
+	switch t {
+	case protocol.MsgListSessionsResponse,
+		protocol.MsgSessionOpResponse,
+		protocol.MsgFetchThumbnailResponse,
+		protocol.MsgConnectAccept, // recover-session uses the connect-accept envelope
+		protocol.MsgError:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *SocketPickerClient) roundTrip(reqType protocol.MessageType, body []byte) (protocol.Header, []byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -163,11 +189,22 @@ func (s *SocketPickerClient) roundTrip(reqType protocol.MessageType, body []byte
 	if err := protocol.WriteMessage(s.conn, hdr, body); err != nil {
 		return protocol.Header{}, nil, fmt.Errorf("write %d: %w", reqType, err)
 	}
-	respHdr, respPayload, err := protocol.ReadMessage(s.conn)
-	if err != nil {
-		return protocol.Header{}, nil, fmt.Errorf("read response: %w", err)
+	// Skip unsolicited state pushes from the server (MsgPaneFocus,
+	// MsgStateUpdate, etc.) until we see a picker-relevant response.
+	// The connection still has the desktop's focus/state/pane listeners
+	// attached because handleHandshake → newConnection wires them
+	// unconditionally; we live with the noise on this side rather than
+	// adding a new "headless connection" mode server-side.
+	for {
+		respHdr, respPayload, err := protocol.ReadMessage(s.conn)
+		if err != nil {
+			return protocol.Header{}, nil, fmt.Errorf("read response: %w", err)
+		}
+		if isPickerResponseType(respHdr.Type) {
+			return respHdr, respPayload, nil
+		}
+		// Drop the frame and keep reading.
 	}
-	return respHdr, respPayload, nil
 }
 
 func (s *SocketPickerClient) ListSessions() (protocol.ListSessionsResponse, error) {
