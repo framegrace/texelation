@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/framegrace/texelation/internal/persistence/atomicjson"
+	"github.com/framegrace/texelation/protocol"
 )
 
 // StoredSessionSchemaVersion is the on-disk format version. Bump on
@@ -41,6 +42,10 @@ type StoredSession struct {
 	Label          string
 	PaneCount      int
 	FirstPaneTitle string
+	// Plan F.1: pane-tree layout for the recovery picker's ASCII
+	// fallback render. Nil for sessions written before F.1 — the
+	// picker handles that as a single-box placeholder.
+	Layout *protocol.TreeNodeSnapshot
 }
 
 // StoredPaneViewport is the per-pane element. JSON encoding for this
@@ -57,14 +62,15 @@ type StoredPaneViewport struct {
 }
 
 type sessionJSONShape struct {
-	SchemaVersion  int                     `json:"schemaVersion"`
-	SessionID      string                  `json:"sessionID"`
-	LastActive     time.Time               `json:"lastActive"`
-	Pinned         bool                    `json:"pinned"`
-	PaneViewports  []paneViewportJSONShape `json:"paneViewports"`
-	Label          string                  `json:"label"`
-	PaneCount      int                     `json:"paneCount"`
-	FirstPaneTitle string                  `json:"firstPaneTitle"`
+	SchemaVersion  int                        `json:"schemaVersion"`
+	SessionID      string                     `json:"sessionID"`
+	LastActive     time.Time                  `json:"lastActive"`
+	Pinned         bool                       `json:"pinned"`
+	PaneViewports  []paneViewportJSONShape    `json:"paneViewports"`
+	Label          string                     `json:"label"`
+	PaneCount      int                        `json:"paneCount"`
+	FirstPaneTitle string                     `json:"firstPaneTitle"`
+	Layout         *protocol.TreeNodeSnapshot `json:"layout,omitempty"`
 }
 
 type paneViewportJSONShape struct {
@@ -86,6 +92,7 @@ func (s StoredSession) MarshalJSON() ([]byte, error) {
 		Label:          s.Label,
 		PaneCount:      s.PaneCount,
 		FirstPaneTitle: s.FirstPaneTitle,
+		Layout:         s.Layout,
 	}
 	out.PaneViewports = make([]paneViewportJSONShape, len(s.PaneViewports))
 	for i, p := range s.PaneViewports {
@@ -116,6 +123,7 @@ func (s *StoredSession) UnmarshalJSON(data []byte) error {
 	s.Label = in.Label
 	s.PaneCount = in.PaneCount
 	s.FirstPaneTitle = in.FirstPaneTitle
+	s.Layout = in.Layout
 	s.PaneViewports = make([]StoredPaneViewport, len(in.PaneViewports))
 	for i, p := range in.PaneViewports {
 		var pid [16]byte
@@ -212,6 +220,38 @@ func ScanSessionsDir(basedir string) (map[[16]byte]*StoredSession, error) {
 			continue
 		}
 		out[s.SessionID] = s
+	}
+
+	// Plan F.1: clean up orphaned PNG sidecars (a PNG whose matching
+	// JSON was deleted, or whose JSON failed to load above) and any
+	// `.png.tmp` files left behind by a crashed atomic write. Keeping
+	// them would silently inflate the picker's HasThumbnail flag for
+	// nonexistent entries (orphans) and leak disk space (tmp files).
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		switch {
+		case strings.HasSuffix(name, ".png.tmp"):
+			tmpPath := filepath.Join(dir, name)
+			if err := os.Remove(tmpPath); err != nil {
+				log.Printf("server: orphan tmp cleanup: %s: %v", tmpPath, err)
+			}
+		case strings.HasSuffix(name, ".png"):
+			hexPart := strings.TrimSuffix(name, ".png")
+			var id [16]byte
+			if err := decodeHex16Session(hexPart, &id); err != nil {
+				continue
+			}
+			if _, ok := out[id]; ok {
+				continue
+			}
+			pngPath := filepath.Join(dir, name)
+			if err := os.Remove(pngPath); err != nil {
+				log.Printf("server: orphan PNG cleanup: %s: %v", pngPath, err)
+			}
+		}
 	}
 	return out, nil
 }

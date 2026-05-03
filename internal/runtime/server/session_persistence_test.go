@@ -5,10 +5,126 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/framegrace/texelation/protocol"
 )
+
+func TestStoredSession_LayoutRoundTrip(t *testing.T) {
+	in := StoredSession{
+		SchemaVersion: StoredSessionSchemaVersion,
+		SessionID:     [16]byte{0xAA, 0xBB, 0xCC},
+		LastActive:    time.Unix(1714752000, 0).UTC(),
+		Pinned:        true,
+		Label:         "with-layout",
+		PaneCount:     2,
+		Layout: &protocol.TreeNodeSnapshot{
+			PaneIndex:   -1,
+			Split:       protocol.SplitHorizontal,
+			SplitRatios: []float32{0.5, 0.5},
+			Children: []protocol.TreeNodeSnapshot{
+				{PaneIndex: 0, Split: protocol.SplitNone},
+				{PaneIndex: 1, Split: protocol.SplitNone},
+			},
+		},
+	}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out StoredSession
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Layout == nil {
+		t.Fatalf("expected Layout populated, got nil")
+	}
+	if !reflect.DeepEqual(in.Layout, out.Layout) {
+		t.Fatalf("layout round-trip mismatch:\n in=%#v\nout=%#v", in.Layout, out.Layout)
+	}
+}
+
+func TestScanSessionsDir_RemovesOrphanPNGs(t *testing.T) {
+	dir := t.TempDir()
+	sessions := filepath.Join(dir, SessionsDirName)
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	keepID := [16]byte{0x01}
+	stored := &StoredSession{
+		SchemaVersion: StoredSessionSchemaVersion,
+		SessionID:     keepID,
+		LastActive:    time.Unix(100, 0),
+		PaneCount:     1,
+	}
+	data, _ := json.Marshal(stored)
+	keepHex := pickerHex16(keepID)
+	if err := os.WriteFile(filepath.Join(sessions, keepHex+".json"), data, 0o644); err != nil {
+		t.Fatalf("write json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessions, keepHex+".png"), []byte("matched"), 0o644); err != nil {
+		t.Fatalf("write keep png: %v", err)
+	}
+	orphanID := [16]byte{0xDE}
+	orphanPath := filepath.Join(sessions, pickerHex16(orphanID)+".png")
+	if err := os.WriteFile(orphanPath, []byte("orphan"), 0o644); err != nil {
+		t.Fatalf("write orphan png: %v", err)
+	}
+	tmpPath := filepath.Join(sessions, "00112233445566778899aabbccddeeff.png.tmp")
+	if err := os.WriteFile(tmpPath, []byte("crashed"), 0o644); err != nil {
+		t.Fatalf("write tmp: %v", err)
+	}
+	if _, err := ScanSessionsDir(dir); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
+		t.Errorf("expected orphan PNG removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("expected orphan tmp removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sessions, keepHex+".png")); err != nil {
+		t.Errorf("expected matched PNG retained, stat err=%v", err)
+	}
+}
+
+// pickerHex16 mirrors hex.EncodeToString without pulling encoding/hex
+// into this test file's imports.
+func pickerHex16(id [16]byte) string {
+	const digits = "0123456789abcdef"
+	out := make([]byte, 32)
+	for i, b := range id {
+		out[2*i] = digits[b>>4]
+		out[2*i+1] = digits[b&0x0F]
+	}
+	return string(out)
+}
+
+func TestStoredSession_LayoutAbsentInOlderJSON(t *testing.T) {
+	older := []byte(`{
+		"schemaVersion": 1,
+		"sessionID": "aabbccddeeff00112233445566778899",
+		"lastActive": "2026-04-26T00:00:00Z",
+		"pinned": false,
+		"paneViewports": [],
+		"label": "legacy",
+		"paneCount": 1,
+		"firstPaneTitle": ""
+	}`)
+	var out StoredSession
+	if err := json.Unmarshal(older, &out); err != nil {
+		t.Fatalf("unmarshal pre-F.1 JSON: %v", err)
+	}
+	if out.Layout != nil {
+		t.Fatalf("expected Layout=nil for legacy JSON, got %#v", out.Layout)
+	}
+	if out.Label != "legacy" {
+		t.Fatalf("expected Label preserved, got %q", out.Label)
+	}
+}
 
 func TestStoredSessionRoundTrip(t *testing.T) {
 	in := StoredSession{
