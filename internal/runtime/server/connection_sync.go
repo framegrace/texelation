@@ -15,14 +15,34 @@ import (
 	"github.com/framegrace/texelation/texel"
 )
 
+// sendChunkSize bounds how many diffs sendPending writes in a single
+// invocation before yielding back to the connection's select loop. A
+// heavy publish run can queue thousands of diffs in c.session; without
+// this bound, sendPending would drain the entire backlog before the
+// next handleMessage() call, blocking input dispatch (a keystroke for
+// pane B sits in c.incoming until pane A's output finishes flushing).
+//
+// 32 is small enough that even a slow socket clears a chunk in well
+// under a frame, large enough to amortise the loop / select roundtrip
+// when the backlog is enormous.
+const sendChunkSize = 32
+
 func (c *connection) sendPending() error {
 	if c.awaitResume {
 		return nil
 	}
 	pending := c.session.Pending(c.lastAcked)
+	sent := 0
 	for _, diff := range pending {
 		if diff.Sequence <= c.lastSent {
 			continue
+		}
+		if sent >= sendChunkSize {
+			// Backlog remains. Nudge ourselves so the next select
+			// iteration re-enters sendPending; in the meantime the
+			// select can pick up an incoming input message instead.
+			c.nudge()
+			return nil
 		}
 		header := diff.Message
 		header.Sequence = diff.Sequence
@@ -31,6 +51,7 @@ func (c *connection) sendPending() error {
 			return err
 		}
 		c.lastSent = diff.Sequence
+		sent++
 	}
 	return nil
 }
