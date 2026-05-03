@@ -4,7 +4,7 @@
 // File: internal/runtime/server/thumbnail_renderer.go
 // Summary: Composes per-pane buffer snapshots into a single workspace
 // cell grid for thumbnail rendering. The composer is the server-only
-// glue between the publisher's authoritative state and the shared
+// glue between the desktop's authoritative pane state and the shared
 // internal/thumbnail render primitive.
 
 package server
@@ -15,7 +15,6 @@ import (
 	texelcore "github.com/framegrace/texelui/core"
 
 	"github.com/framegrace/texelation/internal/thumbnail"
-	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
 )
 
@@ -54,73 +53,62 @@ func composePaneGrid(workspaceW, workspaceH int, panes []paneRender) [][]texelco
 	return grid
 }
 
-// workspaceBounds derives (w, h) from the union of pane rects in a
-// geometry snapshot. We bound-box rather than expose a separate
-// ViewportSize getter on the engine — the geometry snapshot already
-// has the data, and a separate getter would be a wider engine change
-// than F.1 needs.
-func workspaceBounds(snap protocol.TreeSnapshot) (int, int) {
-	maxX, maxY := 0, 0
-	for _, p := range snap.Panes {
-		if right := int(p.X) + int(p.Width); right > maxX {
-			maxX = right
-		}
-		if bottom := int(p.Y) + int(p.Height); bottom > maxY {
-			maxY = bottom
-		}
-	}
-	return maxX, maxY
-}
-
-// RenderSessionThumbnail extracts pane buffers from the publisher
-// (which already maintains them for diff generation) and renders the
-// composed grid to an image via the shared primitive. Returns
-// (nil, false) when the session has no renderable content (no panes,
-// empty publisher state, geometry-snapshot failure).
+// RenderSessionThumbnail renders the desktop's current pane buffers to
+// an image via the shared primitive. Returns (nil, false) when the
+// desktop has no renderable content.
+//
+// We pull from desktop.SnapshotBuffers (the authoritative pane state)
+// rather than publisher.prevBuffers because the latter is per-publisher
+// — the picker's own connection installs its own empty publisher into
+// the sink, which would replace the live session's populated one and
+// produce blank thumbnails. SnapshotBuffers has no such ambiguity:
+// the desktop is single-instance.
+//
+// The id parameter is informational (used by callers to key the
+// on-disk PNG file). Once F.2 lands and per-session pane state becomes
+// a thing, this method may need to switch on id; for F.1 the active
+// desktop is the only thing we render.
 //
 // Implements the ThumbnailRenderer interface declared in thumbnail.go.
 func (s *DesktopSink) RenderSessionThumbnail(id [16]byte) (image.Image, bool) {
 	if s == nil {
 		return nil, false
 	}
-	pub := s.Publisher()
 	desktop := s.Desktop()
-	if pub == nil || desktop == nil {
+	if desktop == nil {
 		return nil, false
 	}
-	geom, err := s.GeometrySnapshot()
-	if err != nil {
+	snaps := desktop.SnapshotBuffers()
+	if len(snaps) == 0 {
 		return nil, false
 	}
-	workspaceW, workspaceH := workspaceBounds(geom)
-	if workspaceW <= 0 || workspaceH <= 0 {
-		return nil, false
-	}
-	panes := make([]paneRender, 0, len(geom.Panes))
-	for _, p := range geom.Panes {
-		buf := pub.PrevBufferFor(p.PaneID)
-		if len(buf) == 0 {
+	maxX, maxY := 0, 0
+	panes := make([]paneRender, 0, len(snaps))
+	for _, ps := range snaps {
+		if len(ps.Buffer) == 0 {
 			continue
 		}
 		// texel.Cell == texelcore.Cell via the alias in
 		// texel/core_aliases.go, so the slice types are identical.
-		coreRows := make([][]texelcore.Cell, len(buf))
-		for y, row := range buf {
+		coreRows := make([][]texelcore.Cell, len(ps.Buffer))
+		for y, row := range ps.Buffer {
 			coreRows[y] = ([]texelcore.Cell)(row)
-			_ = texel.Cell{} // keep texel import live; alias is referenced
 		}
-		panes = append(panes, paneRender{
-			x:    int(p.X),
-			y:    int(p.Y),
-			w:    int(p.Width),
-			h:    int(p.Height),
-			rows: coreRows,
-		})
+		_ = texel.Cell{} // keep texel import live; alias is referenced
+		px, py := ps.Rect.X, ps.Rect.Y
+		pw, ph := ps.Rect.Width, ps.Rect.Height
+		panes = append(panes, paneRender{x: px, y: py, w: pw, h: ph, rows: coreRows})
+		if right := px + pw; right > maxX {
+			maxX = right
+		}
+		if bottom := py + ph; bottom > maxY {
+			maxY = bottom
+		}
 	}
-	if len(panes) == 0 {
+	if len(panes) == 0 || maxX <= 0 || maxY <= 0 {
 		return nil, false
 	}
-	grid := composePaneGrid(workspaceW, workspaceH, panes)
+	grid := composePaneGrid(maxX, maxY, panes)
 	img, err := thumbnail.RenderGrid(grid)
 	if err != nil {
 		return nil, false

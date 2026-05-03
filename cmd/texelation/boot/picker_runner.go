@@ -43,7 +43,10 @@ func RunPicker(screen tcell.Screen, client PickerClient, gp core.GraphicsProvide
 		case *tcell.EventResize:
 			screen.Sync()
 		case *tcell.EventInterrupt:
-			return PickerOutcome{Choice: choiceQuit}, nil
+			// Interrupt is the picker's wake-up signal — fired by the
+			// thumbnail-fetch goroutine when the cache populates. Just
+			// fall through; the next Render at the top of the loop
+			// will pick up the new thumbnail.
 		}
 	}
 

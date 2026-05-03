@@ -152,6 +152,13 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		p.mu.Lock()
 		p.thumbCache[targetID] = data
 		p.mu.Unlock()
+		// Wake the picker's run loop so the new thumbnail renders
+		// without waiting for the user to press a key. PostEvent is
+		// non-blocking; on a contested screen it returns an error
+		// we can safely ignore.
+		if p.screen != nil {
+			_ = p.screen.PostEvent(tcell.NewEventInterrupt(nil))
+		}
 	}(id)
 }
 
