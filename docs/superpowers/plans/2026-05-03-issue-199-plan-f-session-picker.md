@@ -1,4 +1,4 @@
-# Issue #199 Plan F.1 — Stored-Session Recovery Picker — Implementation Plan (v3.1)
+# Issue #199 Plan F.1 — Stored-Session Recovery Picker — Implementation Plan (v3.2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -14,6 +14,14 @@
 - Protocol uses strict version equality (`protocol/protocol.go:178`). v4 ↔ v5 cross-talk is impossible by design — `ErrUnsupportedVer` rejects mismatched headers. Plan ships v5 as a hard cutover; the spec's "v4 fallback UX" risk does not materialize because old clients see a connect error and cannot reach the picker code path. Documented but not implemented as graceful fallback.
 - The wire-level layout type is `protocol.TreeNodeSnapshot` (already exists in `protocol/messages.go`), not `TreeNodeCapture`. Tasks reference `TreeNodeSnapshot`.
 - `StoredSession` JSON shape gains a Layout field as an additive change. No `SchemaVersion` bump (existing files unmarshal cleanly with Layout=nil; old daemons reading new files ignore the unknown JSON field).
+
+**v3.2 revisions vs v3.1 (round-4 review fixes):**
+- **`SocketPickerClient.FetchThumbnail` errors now count toward `failedFetches`** (Task 17). All four server-side OK=false cases (path empty, file missing, oversize, IO error) are permanent for the session's lifetime; without counting, the goroutine re-spawns every render. Same fix for the empty-PNG contract violation.
+- **`flushErrMsg` separated from `errMsg`** (Task 16). User-action errors (Recover/Rename/Delete) stay sticky-until-dismissed; transient per-frame Flush errors auto-clear on the next successful Flush so a single hiccup doesn't pin a stale "Thumbnails unavailable" banner forever.
+- **`log` import added to picker_render.go** (Task 16) — required by the Flush-error log call introduced in v3.1.
+- **`markFetchFailed(id)` helper** consolidates the locked failure-counter increment used by the fetch goroutine's panic recover, DecodeConfig error, dimension-cap rejection, and full-decode error branches (Task 17). Permanent failure modes now exhaust attempts after `maxFetchAttempts`.
+- **`PrevBufferFor` switched to `RLock`/`RUnlock`** (Task 10) — read-only accessor against the publisher's `sync.RWMutex`.
+- **Boot scan removes orphan `*.png.tmp`** files (Task 8) — picker thumbnail capture writes via tmp+rename, so a crashed mid-write leaves a `.tmp` behind that lingers indefinitely without this sweep.
 
 **v3.1 revisions vs v3 (review-feedback fixes):**
 - **`widgets.Image` API call corrected** in Task 17 — `w.SetRect(rect)` replaced with `w.SetPosition(rect.X, rect.Y) + w.Resize(rect.W, rect.H)` (the embedded `BaseWidget` has no `SetRect` method).
@@ -1837,28 +1845,35 @@ In `internal/runtime/server/session_persistence.go`, after the existing `for _, 
 // ... existing loop populating `out` ...
 
 // Plan F.1: clean up orphaned PNG sidecars (a PNG whose matching
-// JSON was deleted, or whose JSON failed to load above). Keeping
+// JSON was deleted, or whose JSON failed to load above) and any
+// `.png.tmp` files left behind by a crashed atomic write. Keeping
 // them would silently inflate the picker's HasThumbnail flag for
-// nonexistent entries and leak disk space across restarts.
+// nonexistent entries (orphans) and leak disk space (tmp files).
 for _, e := range entries {
 	if e.IsDir() {
 		continue
 	}
 	name := e.Name()
-	if !strings.HasSuffix(name, ".png") {
-		continue
-	}
-	hexPart := strings.TrimSuffix(name, ".png")
-	var id [16]byte
-	if err := decodeHex16Session(hexPart, &id); err != nil {
-		continue // unrecognised filename; leave alone
-	}
-	if _, ok := out[id]; ok {
-		continue // matched a loaded JSON; keep
-	}
-	pngPath := filepath.Join(dir, name)
-	if err := os.Remove(pngPath); err != nil {
-		log.Printf("server: orphan PNG cleanup: %s: %v", pngPath, err)
+	switch {
+	case strings.HasSuffix(name, ".png.tmp"):
+		// Crashed mid-rename; safe to remove unconditionally.
+		tmpPath := filepath.Join(dir, name)
+		if err := os.Remove(tmpPath); err != nil {
+			log.Printf("server: orphan tmp cleanup: %s: %v", tmpPath, err)
+		}
+	case strings.HasSuffix(name, ".png"):
+		hexPart := strings.TrimSuffix(name, ".png")
+		var id [16]byte
+		if err := decodeHex16Session(hexPart, &id); err != nil {
+			continue // unrecognised filename; leave alone
+		}
+		if _, ok := out[id]; ok {
+			continue // matched a loaded JSON; keep
+		}
+		pngPath := filepath.Join(dir, name)
+		if err := os.Remove(pngPath); err != nil {
+			log.Printf("server: orphan PNG cleanup: %s: %v", pngPath, err)
+		}
 	}
 }
 
@@ -2401,8 +2416,9 @@ the team's terminology if needed:
 // the publisher's existing mutex; copy if you need to retain past
 // the call.
 func (p *DesktopPublisher) PrevBufferFor(paneID [16]byte) [][]texel.Cell {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// Read-only access — RLock since the publisher's mu is sync.RWMutex.
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	buf, ok := p.prevBuffers[paneID]
 	if !ok {
 		return nil
@@ -4299,8 +4315,17 @@ type Picker struct {
 	// errMsg, when non-empty, is rendered as a red banner above the
 	// action bar. RefreshCatalog / Recover / Rename / Delete set it
 	// when their underlying op fails; user dismisses by pressing any
-	// navigation key.
+	// navigation key. Sticky-until-dismissed because it's tied to a
+	// discrete user action (the user clicked, the action failed,
+	// they need to know).
 	errMsg string
+
+	// flushErrMsg is the per-frame variant of errMsg, set when the
+	// graphics provider's Flush fails during Render. Cleared on the
+	// next successful Flush so a single hiccup doesn't pin a stale
+	// banner forever — a Flush error is a transient frame condition,
+	// not a user action.
+	flushErrMsg string
 
 	// gp drives image rendering through the texelui widgets.Image
 	// pipeline. nil = ASCII-only fallback (tests). Production wires
@@ -4566,6 +4591,7 @@ package boot
 import (
 	"fmt"
 	"io"
+	"log"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -4649,7 +4675,12 @@ func (p *Picker) Render() {
 		if flusher, ok := p.gp.(interface{ Flush(io.Writer) error }); ok {
 			if err := flusher.Flush(p.gpFlush); err != nil {
 				log.Printf("picker: graphics flush failed: %v", err)
-				p.errMsg = "Thumbnails unavailable: " + err.Error()
+				p.flushErrMsg = "Thumbnails unavailable: " + err.Error()
+			} else {
+				// Clear the per-frame error so a transient hiccup
+				// doesn't pin a stale "unavailable" banner once
+				// rendering recovers.
+				p.flushErrMsg = ""
 			}
 		}
 	}
@@ -4657,11 +4688,16 @@ func (p *Picker) Render() {
 }
 
 func (p *Picker) drawErrorBanner(painter *core.Painter, w, h int) {
-	if p.errMsg == "" {
+	// User-action errors (errMsg) take priority; transient flush
+	// errors fall through if no user-action error is active.
+	msg := p.errMsg
+	if msg == "" {
+		msg = p.flushErrMsg
+	}
+	if msg == "" {
 		return
 	}
 	style := tcell.StyleDefault.Foreground(tcell.ColorRed).Bold(true)
-	msg := p.errMsg
 	if len(msg) > w-4 {
 		msg = msg[:w-5] + "…"
 	}
@@ -5022,6 +5058,17 @@ func (p *Picker) IsPending(id [16]byte) bool {
 	return v
 }
 
+// markFetchFailed bumps the failure counter for id. Called when a
+// permanent failure (bad bytes, dimension cap, decode failure) is
+// observed — distinct from a transient FetchThumbnail network error,
+// which retries indefinitely. Used by both the goroutine error
+// branches and the panic recover.
+func (p *Picker) markFetchFailed(id [16]byte) {
+	p.mu.Lock()
+	p.failedFetches[id]++
+	p.mu.Unlock()
+}
+
 // imageWidgetFor returns the widgets.Image bound to id's cached PNG,
 // constructing one on first use. nil if no PNG cached. Held under
 // p.mu since imgCache and thumbCache must be observed atomically.
@@ -5070,11 +5117,7 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("picker: thumbnail fetch panic: %v", rec)
-				p.mu.Lock()
-				p.failedFetches[targetID]++
-				delete(p.pending, targetID)
-				p.mu.Unlock()
-				return
+				p.markFetchFailed(targetID)
 			}
 			p.mu.Lock()
 			delete(p.pending, targetID)
@@ -5082,22 +5125,43 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		}()
 		data, err := p.client.FetchThumbnail(targetID)
 		if err != nil {
+			// All four server-side OK=false branches (path empty,
+			// file missing, oversize, IO error) collapse into err
+			// here. Any of those is permanent — the file will not
+			// magically appear next render — so we count toward the
+			// limiter. A purely transient socket blip would also
+			// count, but maxFetchAttempts=3 means three blips in a
+			// row to give up, which is acceptable and prevents a
+			// render-storm against a hopeless ID.
 			log.Printf("picker: thumbnail fetch %x: %v", targetID[:4], err)
+			p.markFetchFailed(targetID)
 			return
 		}
 		if len(data) == 0 {
+			// Server returned OK=true with empty PNG — contract
+			// violation, but harmless if we count it. Without the
+			// increment a misbehaving server pins the picker into
+			// a render-storm.
+			log.Printf("picker: thumbnail fetch %x: empty response", targetID[:4])
+			p.markFetchFailed(targetID)
 			return
 		}
 		// First-pass: header check + dimension cap. Cheap and
 		// catches non-PNG / huge-canvas attacks before full decode.
+		// Decode-stage errors are bytes-permanent (the same bytes
+		// will fail the same way next time), so they count toward
+		// failedFetches — otherwise a corrupt sidecar re-dispatches
+		// a goroutine every render until the daemon is restarted.
 		cfg, err := png.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
 			log.Printf("picker: thumbnail decode-config %x: %v", targetID[:4], err)
+			p.markFetchFailed(targetID)
 			return
 		}
 		if cfg.Width > maxThumbnailDim || cfg.Height > maxThumbnailDim {
 			log.Printf("picker: thumbnail %x: refusing %dx%d (cap %d)",
 				targetID[:4], cfg.Width, cfg.Height, maxThumbnailDim)
+			p.markFetchFailed(targetID)
 			return
 		}
 		// Second-pass: full decode. Catches truncated IDAT, bad
@@ -5106,9 +5170,11 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		// failure, and the picker has no retry signal — so a half-
 		// broken cache entry would leave the user staring at
 		// `[img: session-thumbnail]` forever. If full decode fails,
-		// don't cache; next render falls through to ASCII layout.
+		// don't cache and count toward the limiter; next render
+		// falls through to ASCII layout.
 		if _, err := png.Decode(bytes.NewReader(data)); err != nil {
 			log.Printf("picker: thumbnail decode %x: %v", targetID[:4], err)
+			p.markFetchFailed(targetID)
 			return
 		}
 		p.mu.Lock()
