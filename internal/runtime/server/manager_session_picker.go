@@ -49,6 +49,12 @@ func (m *Manager) StoredSummaries() []protocol.SessionSummary {
 
 	summaries := make([]protocol.SessionSummary, 0, len(snap))
 	for _, e := range snap {
+		// Defensively skip empty/ephemeral sessions that may have
+		// landed on disk via past versions or odd flush timing —
+		// the picker shouldn't show them.
+		if e.ref.PaneCount <= 0 && len(e.ref.PaneViewports) == 0 {
+			continue
+		}
 		summary := protocol.SessionSummary{
 			SessionID:      e.id,
 			Label:          e.ref.Label,

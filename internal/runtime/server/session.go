@@ -356,6 +356,45 @@ func (s *Session) Close() {
 	}
 }
 
+// CurrentStoredSnapshot builds a StoredSession from the session's
+// current in-memory state, mirroring what schedulePersist would write
+// to disk. Used by Manager.Close (Plan F.1) to repopulate
+// persistedSessions after a session detaches, so the picker's
+// StoredSummaries call sees the session without waiting for the next
+// daemon boot to re-scan the disk.
+//
+// Returns a value, not a pointer, so the caller can store a pointer
+// into the persistedSessions map without retaining a reference to
+// the live Session's internals.
+func (s *Session) CurrentStoredSnapshot() StoredSession {
+	s.storedMu.Lock()
+	meta := s.storedMeta
+	s.storedMu.Unlock()
+
+	vps := s.viewports.Snapshot()
+	stored := StoredSession{
+		SchemaVersion:  StoredSessionSchemaVersion,
+		SessionID:      s.id,
+		LastActive:     time.Now().UTC(),
+		Pinned:         meta.pinned,
+		Label:          meta.label,
+		PaneCount:      meta.paneCount,
+		FirstPaneTitle: meta.firstPaneTitle,
+		PaneViewports:  make([]StoredPaneViewport, 0, len(vps)),
+	}
+	for paneID, v := range vps {
+		stored.PaneViewports = append(stored.PaneViewports, StoredPaneViewport{
+			PaneID:        paneID,
+			AltScreen:     v.AltScreen,
+			AutoFollow:    v.AutoFollow,
+			ViewBottomIdx: v.ViewBottomIdx,
+			Rows:          v.Rows,
+			Cols:          v.Cols,
+		})
+	}
+	return stored
+}
+
 func (s *Session) MarkSnapshot(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

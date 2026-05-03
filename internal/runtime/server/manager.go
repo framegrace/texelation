@@ -339,7 +339,31 @@ func (m *Manager) Close(id [16]byte) {
 			log.Printf("server: close thumbnail %x: %v", id[:4], err)
 		}
 	}
+	// Snapshot the session's persisted state BEFORE Close() nils the
+	// writer — schedulePersist runs against the writer pointer.
+	var snapshot *StoredSession
+	if basedir != "" {
+		s := session.CurrentStoredSnapshot()
+		// Skip ephemeral sessions (picker handshake connections,
+		// fresh-but-never-used sessions). Without this filter, every
+		// `texelation --recover` invocation would leave a phantom
+		// "Untitled, 0 panes" entry behind for next time.
+		if s.PaneCount > 0 || len(s.PaneViewports) > 0 {
+			snapshot = &s
+		}
+	}
 	session.Close() // disk flush — outside m.mu
+
+	// Plan F.1: re-add the session to persistedSessions so the picker
+	// sees it on a subsequent --recover invocation. Without this, the
+	// session's JSON exists on disk but the in-memory persistedSessions
+	// map (populated only at boot scan + consumed on rehydrate) is
+	// empty, and StoredSummaries returns nothing.
+	if snapshot != nil {
+		m.mu.Lock()
+		m.persistedSessions[id] = snapshot
+		m.mu.Unlock()
+	}
 }
 
 // ShutdownSessions closes all live sessions, synchronously flushing
