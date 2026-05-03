@@ -55,11 +55,9 @@ func (p *Picker) markFetchFailed(id [16]byte) {
 }
 
 // imageWidgetFor returns the widgets.Image bound to id's cached PNG,
-// constructing one on first use. nil if no PNG cached. The widget is
-// keyed not just by id but also by the byte length of the cached PNG —
-// for live sessions the bytes change between renders, so a stale
-// widget would keep showing the old surface; we discard the old
-// widget when the bytes change.
+// constructing one on first use. nil if no PNG cached. Within a
+// single picker session the widget is constructed once and reused
+// — re-decoding/re-uploading every render flashes the Kitty surface.
 func (p *Picker) imageWidgetFor(id [16]byte) *widgets.Image {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -68,18 +66,6 @@ func (p *Picker) imageWidgetFor(id [16]byte) *widgets.Image {
 		return nil
 	}
 	if w, exists := p.imgCache[id]; exists {
-		// For live sessions the bytes may differ between fetches.
-		// Cheap signal: byte-length mismatch → rebuild. PNG bytes
-		// are not deterministic for the same image (timestamps,
-		// compression order) so a length match is "probably same"
-		// and a mismatch is "definitely different." Good enough.
-		if len(data) > 0 && p.liveIDs[id] {
-			// Always rebuild for live IDs so even same-length re-renders
-			// land. Cost: re-decode per render frame, negligible at
-			// thumbnail dims.
-			w = widgets.NewImage(data, "session-thumbnail")
-			p.imgCache[id] = w
-		}
 		return w
 	}
 	w := widgets.NewImage(data, "session-thumbnail")
@@ -91,21 +77,21 @@ func (p *Picker) imageWidgetFor(id [16]byte) *widgets.Image {
 // haven't cached or pending one already, and haven't already failed
 // maxFetchAttempts times for that id.
 //
-// Live sessions bypass the cache check — their state changes
-// continuously, so we always re-fetch. The pending guard still
-// prevents in-flight duplicates, so each render only spawns one
-// goroutine per visible card.
+// Note on live sessions: the server's RenderLiveThumbnailBytes
+// returns fresh state on every fetch, so each --recover invocation
+// gets an up-to-date thumbnail. Within a single picker session we
+// keep the cached PNG — re-fetching every render flashes the Kitty
+// surface (Reset → re-Place gap) and provides no value the user can
+// notice during a brief picker visit. If continuous refresh is ever
+// needed, gate it on a TTL or an explicit "r"-to-refresh keybinding.
 func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 	if !p.hasGraphics() || !hasThumb {
 		return
 	}
 	p.mu.Lock()
-	isLive := p.liveIDs[id]
-	if !isLive {
-		if _, cached := p.thumbCache[id]; cached {
-			p.mu.Unlock()
-			return
-		}
+	if _, cached := p.thumbCache[id]; cached {
+		p.mu.Unlock()
+		return
 	}
 	if p.pending[id] {
 		p.mu.Unlock()
