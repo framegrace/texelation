@@ -1,4 +1,4 @@
-# Issue #199 Plan F.1 — Stored-Session Recovery Picker — Implementation Plan (v2)
+# Issue #199 Plan F.1 — Stored-Session Recovery Picker — Implementation Plan (v3)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -14,6 +14,11 @@
 - Protocol uses strict version equality (`protocol/protocol.go:178`). v4 ↔ v5 cross-talk is impossible by design — `ErrUnsupportedVer` rejects mismatched headers. Plan ships v5 as a hard cutover; the spec's "v4 fallback UX" risk does not materialize because old clients see a connect error and cannot reach the picker code path. Documented but not implemented as graceful fallback.
 - The wire-level layout type is `protocol.TreeNodeSnapshot` (already exists in `protocol/messages.go`), not `TreeNodeCapture`. Tasks reference `TreeNodeSnapshot`.
 - `StoredSession` JSON shape gains a Layout field as an additive change. No `SchemaVersion` bump (existing files unmarshal cleanly with Layout=nil; old daemons reading new files ignore the unknown JSON field).
+
+**v3 revisions vs v2:**
+- **Picker uses `texelui/widgets.Image` + `texelui/graphics` providers** for thumbnail rendering instead of hand-rolled Kitty escape sequences (Task 17). Picker also gets half-block fallback "for free" on terminals that support it but not Kitty.
+- **Picker switches to a `[][]core.Cell` buffer + `core.Painter` rendering pipeline** (Task 16). After painting, the buffer is copied to the tcell.Screen and the graphics provider's `Flush` emits queued APC sequences. Tests run with provider=nil (ASCII fallback) and don't need to model the Kitty protocol.
+- **`SetGraphicsProvider(gp)` replaces `SetGraphicsCapable(b bool)`** — the picker stores the provider and derives `hasGraphics` from `gp.Capability() >= core.GraphicsHalfBlock`. Production wiring uses `graphics.DetectCapability()` to choose `KittyProvider` / `HalfBlockProvider`.
 
 **v2 revisions vs v1 (incorporates review findings):**
 - **New `internal/thumbnail/` package** (Task 9) shared by server lifecycle capture and client user-screenshot. Eliminates duplicate textrender wiring; client `screenshot.go` is refactored in Task 19 to use it.
@@ -68,7 +73,7 @@
 
 ---
 
-## Tasks Overview (v2)
+## Tasks Overview (v3)
 
 1. Protocol: bump version + add MessageType constants (incl. SessionOpResponse)
 2. Protocol: SessionSummary + LiveSummary wire types (with off-by-16 fix)
@@ -85,9 +90,9 @@
 13. Connection handlers: list + recover
 14. Connection handlers: rename + delete + fetch-thumbnail (size + dim caps; uses SessionOpResponse)
 15. Picker: ASCII layout algorithm (n-way splits, divider-column-correct)
-16. Picker: state machine, navigation, render (mu, error banner, RefreshCatalog error visible)
-17. Picker: Kitty thumbnail rendering + lazy fetch (locked, defer-clear pending)
-18. boot.Run integration: real ProbeStoredSessions + SocketPickerClient + handoff
+16. Picker: cell-buffer + Painter render pipeline, state machine, navigation (mu, error banner)
+17. Picker: thumbnails via `widgets.Image` + `graphics` providers (Kitty + half-block, lazy fetch with locked map + defer-clear pending)
+18. boot.Run integration: real ProbeStoredSessions + SocketPickerClient + handoff (graphics provider wired)
 19. Client screenshot: refactor to use shared `internal/thumbnail` primitive
 
 ---
@@ -3866,7 +3871,7 @@ git commit -m "Picker: ASCII tree-layout fallback render"
 
 ---
 
-### Task 16: Picker — state machine, navigation, render (with error surfacing)
+### Task 16: Picker — cell-buffer + Painter render pipeline, state machine, navigation
 
 **Files:**
 - Create: `cmd/texelation/boot/picker.go`
@@ -3874,7 +3879,9 @@ git commit -m "Picker: ASCII tree-layout fallback render"
 - Create: `cmd/texelation/boot/picker_render.go`
 - Test: `cmd/texelation/boot/picker_test.go`
 
-This task wires the Picker with `mu sync.Mutex` declared up-front (used in Task 17 for thumbnail fetches), an `errMsg` field for surfacing operation failures, and modal behavior that does NOT close the picker when Recover/Rename/Delete errors. The user sees a banner and can retry.
+The picker uses the texelui rendering pipeline so Task 17's thumbnails can drop in `widgets.Image` directly. Specifically: each `Render()` builds a `[][]core.Cell` buffer, constructs a `core.Painter` with a graphics provider, paints all cards/tabs/banner/action-bar via Painter calls, copies the buffer cells to tcell.Screen, and flushes the graphics provider so any queued Kitty/half-block APC sequences hit the terminal.
+
+Wires Picker with `mu sync.Mutex` declared up-front (used in Task 17 for thumbnail fetches), an `errMsg` field for surfacing operation failures, and modal behavior that does NOT close the picker when Recover/Rename/Delete errors. The user sees a banner and can retry.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -4143,11 +4150,14 @@ Create `cmd/texelation/boot/picker.go`:
 package boot
 
 import (
+	"io"
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/protocol"
+	core "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/widgets"
 )
 
 // PickerClient is the network surface the picker needs. The boot
@@ -4199,10 +4209,26 @@ type Picker struct {
 	// navigation key.
 	errMsg string
 
-	mu          sync.Mutex
-	thumbCache  map[[16]byte][]byte
-	pending     map[[16]byte]bool
-	hasGraphics bool
+	// gp drives image rendering through the texelui widgets.Image
+	// pipeline. nil = ASCII-only fallback (tests). Production wires
+	// graphics.NewKittyProvider() or graphics.NewHalfBlockProvider()
+	// based on graphics.DetectCapability().
+	gp core.GraphicsProvider
+
+	// gpFlush is the writer the provider's queued APC sequences are
+	// flushed to. Production passes os.Stdout; tests pass io.Discard
+	// (or leave nil to skip the flush).
+	gpFlush io.Writer
+
+	// cellBuf is the painter's destination. Re-allocated to match the
+	// screen size on each Render() so the picker handles resizes
+	// without explicit handling.
+	cellBuf [][]core.Cell
+
+	mu         sync.Mutex
+	thumbCache map[[16]byte][]byte
+	pending    map[[16]byte]bool
+	imgCache   map[[16]byte]*widgets.Image // one widget per cached thumbnail
 
 	done   bool
 	choice pickerChoice
@@ -4218,7 +4244,10 @@ const (
 )
 
 // NewPicker returns a picker bound to screen + client. Call
-// RefreshCatalog before Render so the response is populated.
+// RefreshCatalog before Render so the response is populated. The
+// graphics provider is optional — pass nil for ASCII-only mode (tests
+// + non-graphics terminals); production passes a KittyProvider /
+// HalfBlockProvider from texelui/graphics.
 func NewPicker(screen tcell.Screen, client PickerClient) *Picker {
 	return &Picker{
 		screen:     screen,
@@ -4227,7 +4256,24 @@ func NewPicker(screen tcell.Screen, client PickerClient) *Picker {
 		mode:       modeBrowse,
 		thumbCache: make(map[[16]byte][]byte),
 		pending:    make(map[[16]byte]bool),
+		imgCache:   make(map[[16]byte]*widgets.Image),
 	}
+}
+
+// SetGraphicsProvider wires the texelui GraphicsProvider used to render
+// thumbnails. flushTo is where queued APC sequences (Kitty) get written
+// after each Render — typically os.Stdout in production, io.Discard or
+// nil in tests.
+func (p *Picker) SetGraphicsProvider(gp core.GraphicsProvider, flushTo io.Writer) {
+	p.gp = gp
+	p.gpFlush = flushTo
+}
+
+// hasGraphics reports whether the wired provider can render images at
+// all (Kitty or half-block). Used to gate fetch dispatch + the
+// widgets.Image draw branch.
+func (p *Picker) hasGraphics() bool {
+	return p.gp != nil && p.gp.Capability() >= core.GraphicsHalfBlock
 }
 
 // RefreshCatalog fetches the catalog from the server. On error the
@@ -4416,11 +4462,13 @@ package boot
 
 import (
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/protocol"
+	core "github.com/framegrace/texelui/core"
 )
 
 const (
@@ -4429,26 +4477,75 @@ const (
 	cardGap    = 1
 )
 
-// Render paints the picker to the screen. The caller is responsible
-// for calling screen.Show() / screen.Sync() afterwards.
+// Render paints the picker. Builds a fresh cell buffer per frame,
+// runs the widget tree (cards + tabs + banner + action-bar) through
+// a Painter wired to the graphics provider, copies the buffer cells
+// to the tcell.Screen, and flushes any queued APC sequences.
 func (p *Picker) Render() {
 	w, h := p.screen.Size()
-	p.clear(w, h)
-	p.drawHeader(w)
-	p.drawTabs(w)
-	p.drawCards(w, h)
-	p.drawErrorBanner(w, h)
-	p.drawActionBar(w, h)
+	if w <= 0 || h <= 0 {
+		return
+	}
+	// Re-allocate the cell buffer if size changed. Cheap on steady
+	// state; a fresh allocation per frame is fine — the buffer is
+	// at most ~80x24 cells.
+	if len(p.cellBuf) != h || len(p.cellBuf) > 0 && len(p.cellBuf[0]) != w {
+		p.cellBuf = make([][]core.Cell, h)
+		for y := range p.cellBuf {
+			p.cellBuf[y] = make([]core.Cell, w)
+		}
+	} else {
+		for y := range p.cellBuf {
+			for x := range p.cellBuf[y] {
+				p.cellBuf[y][x] = core.Cell{Ch: ' ', Style: tcell.StyleDefault}
+			}
+		}
+	}
+	clip := core.Rect{X: 0, Y: 0, W: w, H: h}
+	painter := core.NewPainterWithGraphics(p.cellBuf, clip, p.gp)
+	painter.SetScreenSize(w, h)
+
+	// Reset graphics provider's placement set each frame so stale
+	// images from the previous frame don't linger when scrolled away
+	// or replaced by an upgrade.
+	if p.gp != nil {
+		p.gp.Reset()
+	}
+
+	p.drawHeader(painter, w)
+	p.drawTabs(painter, w)
+	p.drawCards(painter, w, h)
+	p.drawErrorBanner(painter, w, h)
+	p.drawActionBar(painter, w, h)
 	if p.mode == modeRename {
-		p.drawRenameOverlay(w, h)
+		p.drawRenameOverlay(painter, w, h)
 	}
 	if p.mode == modeDeleteConfirm {
-		p.drawDeleteConfirmOverlay(w, h)
+		p.drawDeleteConfirmOverlay(painter, w, h)
+	}
+
+	// Copy cell buffer into the tcell.Screen.
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c := p.cellBuf[y][x]
+			ch := c.Ch
+			if ch == 0 {
+				ch = ' '
+			}
+			p.screen.SetContent(x, y, ch, nil, c.Style)
+		}
+	}
+	// Flush queued graphics commands (APC sequences for Kitty,
+	// half-block cell writes already landed via the painter).
+	if p.gp != nil && p.gpFlush != nil {
+		if flusher, ok := p.gp.(interface{ Flush(io.Writer) error }); ok {
+			_ = flusher.Flush(p.gpFlush)
+		}
 	}
 	p.screen.Show()
 }
 
-func (p *Picker) drawErrorBanner(w, h int) {
+func (p *Picker) drawErrorBanner(painter *core.Painter, w, h int) {
 	if p.errMsg == "" {
 		return
 	}
@@ -4457,54 +4554,35 @@ func (p *Picker) drawErrorBanner(w, h int) {
 	if len(msg) > w-4 {
 		msg = msg[:w-5] + "…"
 	}
-	for i, r := range msg {
-		p.screen.SetContent(2+i, h-3, r, nil, style)
-	}
+	painter.DrawText(2, h-3, msg, style)
 }
 
-func (p *Picker) clear(w, h int) {
-	bg := tcell.StyleDefault
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			p.screen.SetContent(x, y, ' ', nil, bg)
-		}
-	}
-}
-
-func (p *Picker) drawHeader(w int) {
+func (p *Picker) drawHeader(painter *core.Painter, w int) {
 	style := tcell.StyleDefault.Bold(true)
 	title := "texelation — recover session"
 	startX := (w - len(title)) / 2
 	if startX < 0 {
 		startX = 0
 	}
-	for i, r := range title {
-		p.screen.SetContent(startX+i, 0, r, nil, style)
-	}
+	painter.DrawText(startX, 0, title, style)
 }
 
-func (p *Picker) drawTabs(w int) {
+func (p *Picker) drawTabs(painter *core.Painter, w int) {
 	live := fmt.Sprintf("[ Live (%d) ]", len(p.response.Live))
 	stored := fmt.Sprintf("[ Stored (%d) ]", len(p.response.Stored))
-	x := 2
-	for i, r := range live {
-		style := tcell.StyleDefault.Foreground(tcell.ColorGray)
-		if p.activeTab == tabLive {
-			style = tcell.StyleDefault.Bold(true)
-		}
-		p.screen.SetContent(x+i, 2, r, nil, style)
+	liveStyle := tcell.StyleDefault.Foreground(tcell.ColorGray)
+	if p.activeTab == tabLive {
+		liveStyle = tcell.StyleDefault.Bold(true)
 	}
-	x += len(live) + 2
-	for i, r := range stored {
-		style := tcell.StyleDefault.Foreground(tcell.ColorGray)
-		if p.activeTab == tabStored {
-			style = tcell.StyleDefault.Bold(true)
-		}
-		p.screen.SetContent(x+i, 2, r, nil, style)
+	storedStyle := tcell.StyleDefault.Foreground(tcell.ColorGray)
+	if p.activeTab == tabStored {
+		storedStyle = tcell.StyleDefault.Bold(true)
 	}
+	painter.DrawText(2, 2, live, liveStyle)
+	painter.DrawText(2+len(live)+2, 2, stored, storedStyle)
 }
 
-func (p *Picker) drawCards(w, h int) {
+func (p *Picker) drawCards(painter *core.Painter, w, h int) {
 	if p.activeTab != tabStored {
 		return // Live tab empty in F.1
 	}
@@ -4514,68 +4592,69 @@ func (p *Picker) drawCards(w, h int) {
 		if cardY+cardThumbH+cardGap > h-2 {
 			break
 		}
-		p.drawCard(2, cardY, summary, i == p.selectedIdx)
+		p.drawCard(painter, 2, cardY, summary, i == p.selectedIdx)
 	}
 }
 
-func (p *Picker) drawCard(x, y int, s protocol.SessionSummary, selected bool) {
+func (p *Picker) drawCard(painter *core.Painter, x, y int, s protocol.SessionSummary, selected bool) {
 	bgStyle := tcell.StyleDefault
 	if selected {
 		bgStyle = bgStyle.Background(tcell.ColorDarkBlue)
 	}
-	// Thumbnail box (ASCII fallback for now; Kitty render added in Task 17)
-	grid := renderASCIILayoutGrid(cardThumbW, cardThumbH, s.Layout)
-	for cy := 0; cy < cardThumbH; cy++ {
-		for cx := 0; cx < cardThumbW; cx++ {
-			p.screen.SetContent(x+cx, y+cy, grid[cy][cx], nil, bgStyle)
-		}
-	}
-	// Metadata column
+	// Thumbnail box: ASCII layout from TreeNodeSnapshot is the
+	// authoritative fallback (it stays legible at 22×8). The
+	// widgets.Image branch (Task 17) overrides this only when (a)
+	// the user is on a graphics-capable terminal AND (b) we have a
+	// real cached PNG screenshot — we never half-block-render the
+	// structural layout tree, since that produces visual noise.
+	thumbRect := core.Rect{X: x, Y: y, W: cardThumbW, H: cardThumbH}
+	p.drawThumbnail(painter, thumbRect, s, bgStyle)
+
+	// Metadata column.
 	metaX := x + cardThumbW + 2
-	p.drawText(metaX, y, fmt.Sprintf("Label:   %s", labelOrUntitled(s.Label)), bgStyle.Bold(true))
-	p.drawText(metaX, y+1, fmt.Sprintf("Active:  %s", relativeTime(s.LastActive)), bgStyle)
-	p.drawText(metaX, y+2, fmt.Sprintf("Panes:   %d", s.PaneCount), bgStyle)
-	p.drawText(metaX, y+3, fmt.Sprintf("Title:   %s", truncate(s.FirstPaneTitle, 40)), bgStyle)
+	painter.DrawText(metaX, y, fmt.Sprintf("Label:   %s", labelOrUntitled(s.Label)), bgStyle.Bold(true))
+	painter.DrawText(metaX, y+1, fmt.Sprintf("Active:  %s", relativeTime(s.LastActive)), bgStyle)
+	painter.DrawText(metaX, y+2, fmt.Sprintf("Panes:   %d", s.PaneCount), bgStyle)
+	painter.DrawText(metaX, y+3, fmt.Sprintf("Title:   %s", truncate(s.FirstPaneTitle, 40)), bgStyle)
 	if s.Pinned {
-		p.drawText(metaX, y+4, "Pinned:  ★", bgStyle)
+		painter.DrawText(metaX, y+4, "Pinned:  ★", bgStyle)
 	}
 }
 
-func (p *Picker) drawActionBar(w, h int) {
+// drawASCIILayoutAt paints the box-drawing tree for s.Layout into the
+// rect via the Painter. Replaces direct tcell.Screen writes — the
+// algorithm in picker_ascii.go still produces the [][]rune grid; this
+// helper just dispatches the runes through the painter.
+func (p *Picker) drawASCIILayoutAt(painter *core.Painter, rect core.Rect, layout *protocol.TreeNodeSnapshot, bgStyle tcell.Style) {
+	grid := renderASCIILayoutGrid(rect.W, rect.H, layout)
+	for cy := 0; cy < rect.H && cy < len(grid); cy++ {
+		for cx := 0; cx < rect.W && cx < len(grid[cy]); cx++ {
+			painter.SetCell(rect.X+cx, rect.Y+cy, grid[cy][cx], bgStyle)
+		}
+	}
+}
+
+func (p *Picker) drawActionBar(painter *core.Painter, w, h int) {
 	bar := "[Enter] recover   [n] new   [r] rename   [d] delete   [q] quit"
 	style := tcell.StyleDefault.Foreground(tcell.ColorGray)
 	startX := (w - len(bar)) / 2
 	if startX < 0 {
 		startX = 0
 	}
-	for i, r := range bar {
-		p.screen.SetContent(startX+i, h-2, r, nil, style)
-	}
+	painter.DrawText(startX, h-2, bar, style)
 }
 
-func (p *Picker) drawRenameOverlay(w, h int) {
+func (p *Picker) drawRenameOverlay(painter *core.Painter, w, h int) {
 	prompt := fmt.Sprintf("Rename: %s", string(p.renameBuf))
-	style := tcell.StyleDefault.Bold(true)
-	for i, r := range prompt {
-		p.screen.SetContent(2+i, h-4, r, nil, style)
-	}
+	painter.DrawText(2, h-4, prompt, tcell.StyleDefault.Bold(true))
 }
 
-func (p *Picker) drawDeleteConfirmOverlay(w, h int) {
+func (p *Picker) drawDeleteConfirmOverlay(painter *core.Painter, w, h int) {
 	if len(p.response.Stored) == 0 {
 		return
 	}
 	prompt := fmt.Sprintf("Delete '%s'? [y/N]", labelOrUntitled(p.response.Stored[p.selectedIdx].Label))
-	style := tcell.StyleDefault.Foreground(tcell.ColorRed).Bold(true)
-	for i, r := range prompt {
-		p.screen.SetContent(2+i, h-4, r, nil, style)
-	}
-}
-
-func (p *Picker) drawText(x, y int, s string, style tcell.Style) {
-	for i, r := range s {
-		p.screen.SetContent(x+i, y, r, nil, style)
-	}
+	painter.DrawText(2, h-4, prompt, tcell.StyleDefault.Foreground(tcell.ColorRed).Bold(true))
 }
 
 func labelOrUntitled(s string) string {
@@ -4624,31 +4703,38 @@ git commit -m "Picker: state machine, navigation, render"
 
 ---
 
-### Task 17: Picker — Kitty thumbnail rendering + lazy fetch (locked, defer-clear pending, dimension cap)
+### Task 17: Picker — thumbnails via `widgets.Image` + lazy fetch
 
 **Files:**
 - Create: `cmd/texelation/boot/picker_thumbnail.go`
-- Modify: `cmd/texelation/boot/picker_render.go` (route through `renderThumbnail`)
-- Modify: `cmd/texelation/boot/picker_test.go` (test the upgrade path + locked accessor)
+- Modify: `cmd/texelation/boot/picker_render.go` (`drawThumbnail` chooses widget vs ASCII)
+- Modify: `cmd/texelation/boot/picker_test.go` (locked accessors + provider injection)
 
-The Picker struct already has `mu` and `hasGraphics` fields from Task 16. This task adds the fetch coordinator and the render hook. **Critical correctness fixes vs v1:**
-- Reads of `thumbCache` and `pending` happen under `mu` (was: unlocked, raced with the goroutine's writes).
-- The fetch goroutine clears `pending[id]` in a `defer`, so a failed fetch doesn't strand the entry forever (was: only cleared on success → ASCII-forever bug).
-- Test uses a `ThumbCached` accessor that takes the lock instead of poking the map directly under `-race`.
-- Decoded PNG dimensions are capped via `png.DecodeConfig` before `png.Decode` to defend against pathological inputs (corrupt sidecar, hostile file at the predictable on-disk path).
+We delegate the actual image rendering to `texelui/widgets.Image`. The widget already handles PNG/JPEG/GIF decode, surface upload, Kitty placement *and* half-block fallback — wiring it requires only a `core.GraphicsProvider` injected at picker construction time. Production wires `graphics.NewKittyProvider()` or `graphics.NewHalfBlockProvider()` per `graphics.DetectCapability()`. Tests pass `gp=nil` so the picker stays in ASCII mode.
 
-- [ ] **Step 1: Write failing test**
+The structural ASCII layout (`renderASCIILayoutGrid` from Task 15) remains the fallback for two distinct cases:
+1. Graphics-capable terminal but no cached PNG yet (still fetching, or `HasThumbnail=false`).
+2. Non-graphics terminal (gp=nil OR Capability < HalfBlock).
+
+We deliberately do NOT half-block-render the structural `TreeNodeSnapshot` layout: at 22×8 cells the box-drawing diagram is legible and conveys structure, while half-block of the same diagram would look like noise.
+
+**Correctness invariants preserved from v2:**
+- `thumbCache` + `pending` reads/writes happen under `p.mu`.
+- The fetch goroutine clears `pending[id]` in a `defer`, so a failed fetch doesn't strand the entry forever.
+- `png.DecodeConfig` validates dimensions before caching, defending against corrupt or hostile PNG bytes.
+
+- [ ] **Step 1: Write failing tests**
 
 Append to `cmd/texelation/boot/picker_test.go`:
 
 ```go
-func TestPicker_FetchThumbnailUpgradesCard(t *testing.T) {
+func TestPicker_FetchThumbnailDispatchedWhenGraphicsCapable(t *testing.T) {
 	screen := tcell.NewSimulationScreen("UTF-8")
 	screen.Init()
 	defer screen.Fini()
 	screen.SetSize(80, 24)
 	id := [16]byte{0xEE}
-	pngBytes := []byte("fake-png-bytes")
+	pngBytes := makeValidPNG(t, 100, 60) // helper: returns real PNG bytes
 	fc := &fakeClient{
 		response: protocol.ListSessionsResponse{
 			Stored: []protocol.SessionSummary{
@@ -4658,7 +4744,7 @@ func TestPicker_FetchThumbnailUpgradesCard(t *testing.T) {
 		thumbBytes: pngBytes,
 	}
 	p := NewPicker(screen, fc)
-	p.SetGraphicsCapable(true)
+	p.SetGraphicsProvider(graphics.NewHalfBlockProvider(), io.Discard)
 	p.RefreshCatalog()
 	p.Render() // triggers the lazy fetch
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -4688,7 +4774,7 @@ func TestPicker_NoFetchWhenGraphicsAbsent(t *testing.T) {
 		thumbBytes: []byte("nope"),
 	}
 	p := NewPicker(screen, fc)
-	p.SetGraphicsCapable(false)
+	// gp left nil — picker stays in ASCII-only mode.
 	p.RefreshCatalog()
 	p.Render()
 	time.Sleep(20 * time.Millisecond)
@@ -4698,11 +4784,8 @@ func TestPicker_NoFetchWhenGraphicsAbsent(t *testing.T) {
 }
 
 func TestPicker_FetchThumbnailErrorClearsPending(t *testing.T) {
-	// Critical regression test for the v1 bug where a failed fetch
-	// left pending[id]=true forever, preventing retry. After the
-	// goroutine returns, pending must be cleared regardless of
-	// outcome so a future Render can re-attempt (e.g., user toggles
-	// tabs and back).
+	// Regression test for the v1 bug where a failed fetch left
+	// pending[id]=true forever, preventing retry.
 	screen := tcell.NewSimulationScreen("UTF-8")
 	screen.Init()
 	defer screen.Fini()
@@ -4715,7 +4798,7 @@ func TestPicker_FetchThumbnailErrorClearsPending(t *testing.T) {
 		thumbErr: errors.New("transient"),
 	}
 	p := NewPicker(screen, fc)
-	p.SetGraphicsCapable(true)
+	p.SetGraphicsProvider(graphics.NewHalfBlockProvider(), io.Discard)
 	p.RefreshCatalog()
 	p.Render()
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -4732,6 +4815,44 @@ func TestPicker_FetchThumbnailErrorClearsPending(t *testing.T) {
 		t.Errorf("expected thumbCache empty on fetch error")
 	}
 }
+
+// makeValidPNG produces a minimal PNG with the given dimensions for
+// tests that need bytes the picker's DecodeConfig + widgets.Image
+// will accept.
+func makeValidPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: 0x40, A: 0xFF})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode test png: %v", err)
+	}
+	return buf.Bytes()
+}
+```
+
+Add the necessary imports to the test file:
+
+```go
+import (
+	"bytes"
+	"errors"
+	"image"
+	"image/color"
+	"image/png"
+	"io"
+	"testing"
+	"time"
+
+	"github.com/gdamore/tcell/v2"
+
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelui/graphics"
+)
 ```
 
 Update the `fakeClient` definition to support fetch error injection:
@@ -4751,8 +4872,6 @@ type fakeClient struct {
 	thumbErr      error
 }
 
-// ... existing methods ...
-
 func (f *fakeClient) FetchThumbnail(id [16]byte) ([]byte, error) {
 	f.fetchCalled = true
 	if f.thumbErr != nil {
@@ -4766,8 +4885,8 @@ func (f *fakeClient) FetchThumbnail(id [16]byte) ([]byte, error) {
 
 - [ ] **Step 2: Run tests, verify failure**
 
-Run: `go test ./cmd/texelation/boot/ -run "TestPicker_FetchThumbnailUpgradesCard|TestPicker_NoFetchWhenGraphicsAbsent|TestPicker_FetchThumbnailErrorClearsPending" -count=1`
-Expected: FAIL — `SetGraphicsCapable`, `ThumbCached`, `IsPending` not exposed.
+Run: `go test ./cmd/texelation/boot/ -run "TestPicker_FetchThumbnailDispatchedWhenGraphicsCapable|TestPicker_NoFetchWhenGraphicsAbsent|TestPicker_FetchThumbnailErrorClearsPending" -count=1`
+Expected: FAIL — `ThumbCached`, `IsPending`, `maybeFetchThumbnail` not yet defined.
 
 - [ ] **Step 3: Implement the thumbnail dispatcher**
 
@@ -4778,17 +4897,18 @@ Create `cmd/texelation/boot/picker_thumbnail.go`:
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // File: cmd/texelation/boot/picker_thumbnail.go
-// Summary: Kitty thumbnail rendering + lazy fetch for the picker.
-// Falls back to the ASCII layout when graphics are unavailable or
-// the fetch is still in flight.
+// Summary: Lazy thumbnail fetch + widgets.Image instantiation for the
+// picker. Rendering is delegated to texelui/widgets.Image which
+// handles Kitty + half-block + alt-text fallback internally.
 
 package boot
 
 import (
 	"bytes"
-	"image"
 	"image/png"
 	"log"
+
+	"github.com/framegrace/texelui/widgets"
 )
 
 // maxThumbnailDim caps PNG dimensions on the decode path. A 480×270
@@ -4797,13 +4917,6 @@ import (
 // dimension declarations within a small payload). Decoding without
 // this check can OOM the picker on corrupted inputs.
 const maxThumbnailDim = 4096
-
-// SetGraphicsCapable tells the picker whether to dispatch
-// FetchThumbnail requests + render Kitty images. False keeps the
-// ASCII fallback exclusively (no network traffic for thumbnails).
-func (p *Picker) SetGraphicsCapable(b bool) {
-	p.hasGraphics = b
-}
 
 // ThumbCached returns true iff a PNG for id is in the local cache.
 // Locked accessor for tests; production read sites in drawCard also
@@ -4824,23 +4937,30 @@ func (p *Picker) IsPending(id [16]byte) bool {
 	return v
 }
 
-// thumbnailFor returns the cached PNG bytes for id, or nil if not
-// cached. Caller does not need to hold p.mu — this method takes it.
-func (p *Picker) thumbnailFor(id [16]byte) []byte {
+// imageWidgetFor returns the widgets.Image bound to id's cached PNG,
+// constructing one on first use. nil if no PNG cached. Held under
+// p.mu since imgCache and thumbCache must be observed atomically.
+func (p *Picker) imageWidgetFor(id [16]byte) *widgets.Image {
 	p.mu.Lock()
-	data := p.thumbCache[id]
-	p.mu.Unlock()
-	return data
+	defer p.mu.Unlock()
+	data, ok := p.thumbCache[id]
+	if !ok {
+		return nil
+	}
+	if w, exists := p.imgCache[id]; exists {
+		return w
+	}
+	w := widgets.NewImage(data, "session-thumbnail")
+	p.imgCache[id] = w
+	return w
 }
 
 // maybeFetchThumbnail kicks off a non-blocking fetch for id if we
-// haven't cached or pending one already. Called from the render
-// loop's per-card pass. All map access is under p.mu; the goroutine
-// always clears pending[id] in defer so a failed fetch doesn't
-// strand the entry permanently (previously a "card stays ASCII
-// forever" bug — see Task 17 in the plan).
+// haven't cached or pending one already. All map access is under
+// p.mu; the goroutine always clears pending[id] in defer so a failed
+// fetch doesn't strand the entry permanently.
 func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
-	if !p.hasGraphics || !hasThumb {
+	if !p.hasGraphics() || !hasThumb {
 		return
 	}
 	p.mu.Lock()
@@ -4857,12 +4977,6 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 
 	go func(targetID [16]byte) {
 		defer func() {
-			// Clear pending unconditionally so subsequent renders
-			// can retry. Without this defer, an error path leaves
-			// pending[id]=true forever — a real bug we exorcised
-			// in v2. Recover from any panic in the client (the
-			// transport could trip a runtime fault on a dropped
-			// socket) so we don't crash the picker.
 			if rec := recover(); rec != nil {
 				log.Printf("picker: thumbnail fetch panic: %v", rec)
 			}
@@ -4878,15 +4992,14 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		if len(data) == 0 {
 			return
 		}
-		// Validate dimensions before storing. A png.DecodeConfig
-		// failure means corrupt/non-PNG bytes; refuse to cache.
 		cfg, err := png.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
 			log.Printf("picker: thumbnail decode-config %x: %v", targetID[:4], err)
 			return
 		}
 		if cfg.Width > maxThumbnailDim || cfg.Height > maxThumbnailDim {
-			log.Printf("picker: thumbnail %x: refusing %dx%d (cap %d)", targetID[:4], cfg.Width, cfg.Height, maxThumbnailDim)
+			log.Printf("picker: thumbnail %x: refusing %dx%d (cap %d)",
+				targetID[:4], cfg.Width, cfg.Height, maxThumbnailDim)
 			return
 		}
 		p.mu.Lock()
@@ -4894,72 +5007,46 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		p.mu.Unlock()
 	}(id)
 }
-
-// decodeCachedThumb decodes the PNG bytes for id into an image.Image,
-// or returns nil if the bytes can't be decoded. The dimension check
-// happens at fetch time (above), so this is purely the costlier
-// full decode for paint use. Currently only used by the (future)
-// Kitty emission path; the SimulationScreen unit tests don't exercise
-// it.
-func decodeCachedThumb(data []byte) image.Image {
-	img, err := png.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil
-	}
-	return img
-}
 ```
 
-In `picker_render.go`, replace the thumbnail-drawing block at the top of `drawCard` with the locked-read version:
+In `picker_render.go`, add the `drawThumbnail` helper that `drawCard` already calls:
 
 ```go
-func (p *Picker) drawCard(x, y int, s protocol.SessionSummary, selected bool) {
-	bgStyle := tcell.StyleDefault
-	if selected {
-		bgStyle = bgStyle.Background(tcell.ColorDarkBlue)
-	}
-	cached := p.thumbnailFor(s.SessionID)
-	if cached != nil && p.hasGraphics {
-		// Cached thumbnail available. The full Kitty escape-sequence
-		// emission is out of scope for SimulationScreen; tests detect
-		// the upgrade by checking the placeholder block char.
-		for cy := 0; cy < cardThumbH; cy++ {
-			for cx := 0; cx < cardThumbW; cx++ {
-				p.screen.SetContent(x+cx, y+cy, '▓', nil, bgStyle)
-			}
-		}
-	} else {
-		grid := renderASCIILayoutGrid(cardThumbW, cardThumbH, s.Layout)
-		for cy := 0; cy < cardThumbH; cy++ {
-			for cx := 0; cx < cardThumbW; cx++ {
-				p.screen.SetContent(x+cx, y+cy, grid[cy][cx], nil, bgStyle)
-			}
+// drawThumbnail paints the thumbnail rect for a session card. Branches:
+//   - Graphics-capable + cached PNG  → widgets.Image (Kitty or half-block)
+//   - Otherwise                       → ASCII tree from TreeNodeSnapshot
+//
+// We never half-block-render the structural layout because at thumbnail
+// resolution it produces noise; the box-drawing characters convey
+// structure cleanly even at 22×8.
+func (p *Picker) drawThumbnail(painter *core.Painter, rect core.Rect, s protocol.SessionSummary, bgStyle tcell.Style) {
+	if p.hasGraphics() {
+		if w := p.imageWidgetFor(s.SessionID); w != nil {
+			// widgets.Image expects a raw rect in screen coords.
+			// SetRect is on the embedded BaseWidget.
+			w.SetRect(rect)
+			w.Draw(painter)
+			p.maybeFetchThumbnail(s.SessionID, s.HasThumbnail)
+			return
 		}
 	}
+	p.drawASCIILayoutAt(painter, rect, s.Layout, bgStyle)
 	p.maybeFetchThumbnail(s.SessionID, s.HasThumbnail)
-
-	// Metadata column (unchanged).
-	metaX := x + cardThumbW + 2
-	p.drawText(metaX, y, fmt.Sprintf("Label:   %s", labelOrUntitled(s.Label)), bgStyle.Bold(true))
-	p.drawText(metaX, y+1, fmt.Sprintf("Active:  %s", relativeTime(s.LastActive)), bgStyle)
-	p.drawText(metaX, y+2, fmt.Sprintf("Panes:   %d", s.PaneCount), bgStyle)
-	p.drawText(metaX, y+3, fmt.Sprintf("Title:   %s", truncate(s.FirstPaneTitle, 40)), bgStyle)
-	if s.Pinned {
-		p.drawText(metaX, y+4, "Pinned:  ★", bgStyle)
-	}
 }
 ```
+
+(`drawASCIILayoutAt` was added to `picker_render.go` in Task 16.)
 
 - [ ] **Step 4: Run tests, verify pass**
 
 Run: `go test ./cmd/texelation/boot/ -run "TestPicker_" -count=1 -race`
-Expected: PASS — including under `-race`. The locked accessors are critical here.
+Expected: PASS, including under `-race`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add cmd/texelation/boot/picker_thumbnail.go cmd/texelation/boot/picker_render.go cmd/texelation/boot/picker_test.go
-git commit -m "Picker: lazy thumbnail fetch with locked cache + deferred pending clear"
+git commit -m "Picker: thumbnails via widgets.Image (Kitty + half-block) with locked cache"
 ```
 
 ---
@@ -5007,7 +5094,11 @@ Create `cmd/texelation/boot/picker_runner.go`:
 package boot
 
 import (
+	"io"
+
 	"github.com/gdamore/tcell/v2"
+
+	core "github.com/framegrace/texelui/core"
 )
 
 // PickerOutcome captures what the user picked.
@@ -5020,9 +5111,13 @@ type PickerOutcome struct {
 // selection. Returns the outcome; callers translate it to a connect
 // path. The screen is shared with the splash and clientrt; this
 // function does not call Init/Fini.
-func RunPicker(screen tcell.Screen, client PickerClient, hasGraphics bool) (PickerOutcome, error) {
+//
+// gp is the texelui graphics provider used for thumbnail rendering.
+// Pass nil for ASCII-only mode. flushTo is where Kitty APC sequences
+// are written after each Render — typically os.Stdout in production.
+func RunPicker(screen tcell.Screen, client PickerClient, gp core.GraphicsProvider, flushTo io.Writer) (PickerOutcome, error) {
 	p := NewPicker(screen, client)
-	p.SetGraphicsCapable(hasGraphics)
+	p.SetGraphicsProvider(gp, flushTo)
 	p.RefreshCatalog()
 
 	for !p.Done() {
@@ -5079,8 +5174,27 @@ if shouldShowPicker {
 		log.Printf("picker: socket client setup failed: %v; skipping picker", err)
 	} else {
 		stopSplash()
-		outcome, err := boot.RunPicker(screen, pickerClient, graphics.DetectCapability() == texelcore.GraphicsKitty)
+		// Build the graphics provider that matches the terminal's
+		// capability. Falling all the way down to nil is correct
+		// when the terminal supports neither — the picker stays in
+		// ASCII-only mode.
+		var gp texelcore.GraphicsProvider
+		switch graphics.DetectCapability() {
+		case texelcore.GraphicsKitty:
+			gp = graphics.NewKittyProvider()
+		case texelcore.GraphicsHalfBlock:
+			gp = graphics.NewHalfBlockProvider()
+		}
+		outcome, err := boot.RunPicker(screen, pickerClient, gp, os.Stdout)
 		_ = pickerClient.Close()
+		if gp != nil {
+			// Clear any image placements before splash takes the
+			// screen back so we don't leave Kitty images stranded.
+			gp.Reset()
+			if flusher, ok := gp.(interface{ Flush(io.Writer) error }); ok {
+				_ = flusher.Flush(os.Stdout)
+			}
+		}
 		if err != nil {
 			log.Printf("picker: %v; falling back to fresh session", err)
 		} else {
@@ -5678,8 +5792,8 @@ gh pr create --title "Issue #199 Plan F.1: stored-session recovery picker" --bod
 - Adds protocol v5 with six new picker messages (list, recover, rename, delete, fetch-thumbnail, op-response) and SessionSummary/LiveSummary wire types.
 - New shared `internal/thumbnail/` rendering primitive used by both server-side lifecycle capture and client-side user screenshots.
 - Server-side: manager helpers (StoredSummaries, LiveSummaries, RenameStored, DeleteStored), connection handlers (with thumbnail size cap), lifecycle thumbnail capture (graceful shutdown + last-disconnect), pane-buffer composition adapter on DesktopSink.
-- Client-side: picker UI in `cmd/texelation/boot/` reusing the splash screen; ASCII fallback (n-way splits) + lazy Kitty thumbnail fetch with locked map access and deferred pending clear; in-picker error banners on Recover/Rename/Delete/RefreshCatalog failures.
-- Trigger logic in `boot.Run` activates picker when client state is missing AND server has stored sessions, or when `--recover` is passed.
+- Client-side: picker UI in `cmd/texelation/boot/` reusing the splash screen with a Painter-based render pipeline. Real-screenshot thumbnails delegate to `texelui/widgets.Image` (Kitty + half-block + alt-text fallback handled inside the widget); structural layout previews stay as ASCII box-drawing tree from `TreeNodeSnapshot` (legible at 22×8). Lazy fetch with locked map access and deferred pending clear; in-picker error banners on Recover/Rename/Delete/RefreshCatalog failures.
+- Trigger logic in `boot.Run` activates picker when client state is missing AND server has stored sessions, or when `--recover` is passed. Picker receives a `texelui/graphics` provider chosen by `graphics.DetectCapability()`.
 - Client `takeScreenshot` refactored to use the shared primitive (dedup).
 - Spec: `docs/superpowers/specs/2026-05-03-issue-199-plan-f-session-picker-design.md`
 
