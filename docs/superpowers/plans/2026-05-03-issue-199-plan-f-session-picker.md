@@ -1,4 +1,4 @@
-# Issue #199 Plan F.1 — Stored-Session Recovery Picker — Implementation Plan (v3)
+# Issue #199 Plan F.1 — Stored-Session Recovery Picker — Implementation Plan (v3.1)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -15,6 +15,14 @@
 - The wire-level layout type is `protocol.TreeNodeSnapshot` (already exists in `protocol/messages.go`), not `TreeNodeCapture`. Tasks reference `TreeNodeSnapshot`.
 - `StoredSession` JSON shape gains a Layout field as an additive change. No `SchemaVersion` bump (existing files unmarshal cleanly with Layout=nil; old daemons reading new files ignore the unknown JSON field).
 
+**v3.1 revisions vs v3 (review-feedback fixes):**
+- **`widgets.Image` API call corrected** in Task 17 — `w.SetRect(rect)` replaced with `w.SetPosition(rect.X, rect.Y) + w.Resize(rect.W, rect.H)` (the embedded `BaseWidget` has no `SetRect` method).
+- **Task 10 `RenderSessionThumbnail` now uses real APIs:** `WalkPanes`/`ViewportSize()` were invented in v3; replaced with `GeometrySnapshot()` (existing on DesktopSink) plus a new `PrevBufferFor(paneID) [][]texel.Cell` accessor on `DesktopPublisher` that copies the per-pane buffer under the existing publisher mutex. Bounds derived from the geometry snapshot.
+- **Picker fetch goroutine now full-`png.Decode`s before caching** (Task 17), not just `DecodeConfig`. Catches truncated IDAT / bad CRC that DecodeConfig accepts; without this, `widgets.NewImage` would silently fall back to alt text and the picker would have no retry signal.
+- **Panic-loop limiter** (`failedFetches map[[16]byte]int`, `maxFetchAttempts=3`) — a deterministic panic in the fetch path no longer re-spawns the goroutine on every render.
+- **Flush + Close errors no longer discarded:** Task 16 Render's `Flush` failure logs + sets the picker's error banner; Task 18's pre-splash `Flush` cleanup logs; `pickerClient.Close()` error logs (was the carryover v2 I4 issue).
+- **`--recover` dial failure surfaces in splash detail** (Task 18) — was silently swallowed.
+
 **v3 revisions vs v2:**
 - **Picker uses `texelui/widgets.Image` + `texelui/graphics` providers** for thumbnail rendering instead of hand-rolled Kitty escape sequences (Task 17). Picker also gets half-block fallback "for free" on terminals that support it but not Kitty.
 - **Picker switches to a `[][]core.Cell` buffer + `core.Painter` rendering pipeline** (Task 16). After painting, the buffer is copied to the tcell.Screen and the graphics provider's `Flush` emits queued APC sequences. Tests run with provider=nil (ASCII fallback) and don't need to model the Kitty protocol.
@@ -25,7 +33,7 @@
 - **New server-side composition adapter** (Task 10): `DesktopSink.RenderSessionThumbnail` walks the publisher's `prevBuffers` + tree layout to build a workspace cell grid, then calls the shared primitive. Was missing in v1; the original Task 10 left this as "wire up later."
 - **New `MsgSessionOpResponse`** message type (Tasks 1, 4): replaces v1's hack of reusing `MsgListSessionsResponse` as a generic ack. Eliminates the response-type ambiguity flagged in review.
 - **Connection struct gains `manager *Manager`** field — wired in Task 13 (renumbered) which is the first task that needs it. Affects every existing test that constructs a connection (~16 files).
-- **Bug fixes baked in:** `DecodeLiveSummary` consumed-bytes off-by-16 (Task 2); `StoredSummaries` RLock-during-stat (Task 6); `DeleteStored` TOCTOU + bad guard (Task 7); Task 11 `ShutdownSessions` shown as full code, not prose; ASCII renderer's vertical-split test column + n-way split handling (Task 15); Picker `mu sync.Mutex` field declared up-front (Task 16); `maybeFetchThumbnail` reads under lock + defer-clears `pending` on error (Task 17); error surfacing in picker on Recover/Rename/Delete/RefreshCatalog failures (Task 16); thumbnail size cap + dimension cap on the fetch-thumbnail server path (Task 14); real `ProbeStoredSessions` + `SocketPickerClient` implementations (Task 18, no more `/* ... */` stubs).
+- **Bug fixes baked in:** `DecodeLiveSummary` consumed-bytes off-by-16 (Task 2); `StoredSummaries` RLock-during-stat (Task 6); `DeleteStored` TOCTOU + bad guard (Task 7); Task 12 `ShutdownSessions` shown as full code, not prose (was Task 11 in v2 before renumbering); ASCII renderer's vertical-split test column + n-way split handling (Task 15); Picker `mu sync.Mutex` field declared up-front (Task 16); `maybeFetchThumbnail` reads under lock + defer-clears `pending` on error (Task 17); error surfacing in picker on Recover/Rename/Delete/RefreshCatalog failures (Task 16); thumbnail size cap + dimension cap on the fetch-thumbnail server path (Task 14); real `ProbeStoredSessions` + `SocketPickerClient` implementations (Task 18, no more `/* ... */` stubs).
 
 ---
 
@@ -2258,6 +2266,8 @@ import (
 	texelcore "github.com/framegrace/texelui/core"
 
 	"github.com/framegrace/texelation/internal/thumbnail"
+	"github.com/framegrace/texelation/protocol"
+	"github.com/framegrace/texelation/texel"
 )
 
 // paneRender is the per-pane input to composePaneGrid. Coordinates are
@@ -2295,14 +2305,14 @@ func composePaneGrid(workspaceW, workspaceH int, panes []paneRender) [][]texelco
 	return grid
 }
 
-// renderSessionThumbnail extracts pane buffers from the publisher
+// RenderSessionThumbnail extracts pane buffers from the publisher
 // (which already maintains them for diff generation) and renders the
 // composed grid to an image via the shared primitive. Returns
 // (nil, false) when the session has no renderable content (no panes,
 // empty publisher state).
 //
-// Wired into DesktopSink.RenderSessionThumbnail; the indirection lets
-// us unit-test composePaneGrid without a full DesktopSink.
+// The composer is the indirection that lets us unit-test
+// composePaneGrid without standing up a full DesktopSink.
 func (s *DesktopSink) RenderSessionThumbnail(id [16]byte) (image.Image, bool) {
 	if s == nil {
 		return nil, false
@@ -2312,34 +2322,106 @@ func (s *DesktopSink) RenderSessionThumbnail(id [16]byte) (image.Image, bool) {
 	if pub == nil || desktop == nil {
 		return nil, false
 	}
-	w, h := desktop.ViewportSize()
-	if w <= 0 || h <= 0 {
+	// Workspace dimensions: derive from a geometry-only snapshot so
+	// we don't trigger a full render. GeometrySnapshot already exists
+	// on DesktopSink (see desktop_sink.go) — used by handleResize.
+	geom, err := s.GeometrySnapshot()
+	if err != nil {
 		return nil, false
 	}
-	panes := make([]paneRender, 0, 8)
-	pub.WalkPanes(func(paneID [16]byte, x, y, paneW, paneH int, rows [][]texelcore.Cell) {
-		if len(rows) == 0 {
-			return
+	workspaceW, workspaceH := workspaceBounds(geom)
+	if workspaceW <= 0 || workspaceH <= 0 {
+		return nil, false
+	}
+	// Per-pane buffers + per-pane rects come from two parallel
+	// sources: the publisher holds the cell buffers in its
+	// prevBuffers map (already maintained for diff emission), the
+	// geometry snapshot holds rectangle position/size. Walk the
+	// snapshot's pane list (authoritative pane ID + rect) and look
+	// up each buffer in the publisher.
+	panes := make([]paneRender, 0, len(geom.Panes))
+	for _, p := range geom.Panes {
+		buf := pub.PrevBufferFor(p.PaneID) // see helper below
+		if len(buf) == 0 {
+			continue
 		}
 		panes = append(panes, paneRender{
-			x: x, y: y, w: paneW, h: paneH, rows: rows,
+			x:    int(p.X),
+			y:    int(p.Y),
+			w:    int(p.Width),
+			h:    int(p.Height),
+			rows: buf,
 		})
-	})
+	}
 	if len(panes) == 0 {
 		return nil, false
 	}
-	grid := composePaneGrid(w, h, panes)
+	grid := composePaneGrid(workspaceW, workspaceH, panes)
 	img, err := thumbnail.RenderGrid(grid)
 	if err != nil {
 		return nil, false
 	}
 	return img, true
 }
+
+// workspaceBounds derives (w, h) from the union of pane rects in a
+// geometry snapshot. Used because DesktopEngine does not currently
+// expose a single ViewportSize getter — adding one would touch the
+// engine in a way that's beyond Plan F.1's scope; bounding-box from
+// the existing snapshot is exact enough for thumbnail sizing.
+func workspaceBounds(snap protocol.TreeSnapshot) (int, int) {
+	maxX, maxY := 0, 0
+	for _, p := range snap.Panes {
+		if right := int(p.X) + int(p.Width); right > maxX {
+			maxX = right
+		}
+		if bottom := int(p.Y) + int(p.Height); bottom > maxY {
+			maxY = bottom
+		}
+	}
+	return maxX, maxY
+}
 ```
 
-Modify `internal/runtime/server/desktop_publisher.go` to expose a `WalkPanes` method that yields `(paneID, x, y, w, h, rows)` from the publisher's existing per-pane state. The exact source of `rows` depends on what `prevBuffers` already holds — read `desktop_publisher.go`'s field declarations and choose the per-pane buffer that already exists for diff generation; do not introduce a new copy. Document in the doc comment that `WalkPanes` is the picker thumbnail's input source so the next reader knows the contract.
+`PrevBufferFor` is a new accessor on `*DesktopPublisher` that returns
+the cached `[][]texel.Cell` for a pane ID (or nil if absent). Implement
+it in `internal/runtime/server/desktop_publisher.go` next to the
+existing `prevBuffers` field — read the field's actual name first
+(may be e.g. `prevBuf`, `lastBuffer`); rename the accessor to match
+the team's terminology if needed:
 
-If `DesktopEngine` does not currently expose `ViewportSize() (int, int)`, add a thin getter. The publisher already knows the workspace size for diff bounds, so the field exists somewhere in the desktop layer; surface it minimally.
+```go
+// PrevBufferFor returns the most recently observed cell buffer for
+// paneID, or nil if no diff has been emitted yet. Used by Plan F.1
+// thumbnail capture — the buffer already exists for diff generation
+// so we expose it rather than maintain a parallel snapshot.
+//
+// Caller must NOT mutate the returned slice; the publisher continues
+// to use it for the next diff comparison. The slice is held under
+// the publisher's existing mutex; copy if you need to retain past
+// the call.
+func (p *DesktopPublisher) PrevBufferFor(paneID [16]byte) [][]texel.Cell {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	buf, ok := p.prevBuffers[paneID]
+	if !ok {
+		return nil
+	}
+	// Copy under the lock so the caller can use the buffer outside.
+	out := make([][]texel.Cell, len(buf))
+	for y, row := range buf {
+		out[y] = make([]texel.Cell, len(row))
+		copy(out[y], row)
+	}
+	return out
+}
+```
+
+The exact name of the publisher's mutex + map may differ — check
+`desktop_publisher.go` for the real field names. The pattern is the
+load-bearing part: copy under the lock, return a buffer the caller
+owns. The thumbnail render is a one-shot consumer; the small allocation
+is acceptable.
 
 - [ ] **Step 4: Run tests, verify pass**
 
@@ -4064,6 +4146,8 @@ func TestPicker_NavigationDismissesError(t *testing.T) {
 }
 
 // fakeClient stubs the picker's network transport for tests.
+// Fields cover both Task 16 (basic ops) and Task 17 (thumbnail
+// fetch) so the type lives in one place and tasks just reference it.
 type fakeClient struct {
 	response      protocol.ListSessionsResponse
 	listErr       error
@@ -4073,6 +4157,9 @@ type fakeClient struct {
 	newCalled     bool
 	renameErr     error
 	deleteErr     error
+	fetchCalled   bool
+	thumbBytes    []byte
+	thumbErr      error
 }
 
 func (f *fakeClient) ListSessions() (protocol.ListSessionsResponse, error) {
@@ -4088,7 +4175,13 @@ func (f *fakeClient) RecoverSession(id [16]byte, newLabel string) error {
 }
 func (f *fakeClient) RenameSession(id [16]byte, newLabel string) error { return f.renameErr }
 func (f *fakeClient) DeleteSession(id [16]byte) error                  { return f.deleteErr }
-func (f *fakeClient) FetchThumbnail(id [16]byte) ([]byte, error)       { return nil, nil }
+func (f *fakeClient) FetchThumbnail(id [16]byte) ([]byte, error) {
+	f.fetchCalled = true
+	if f.thumbErr != nil {
+		return nil, f.thumbErr
+	}
+	return f.thumbBytes, nil
+}
 func (f *fakeClient) StartFreshSession() {
 	f.newCalled = true
 }
@@ -4230,9 +4323,18 @@ type Picker struct {
 	pending    map[[16]byte]bool
 	imgCache   map[[16]byte]*widgets.Image // one widget per cached thumbnail
 
+	// failedFetches counts panics-or-permanent-failures per session
+	// ID. When the count hits maxFetchAttempts, the picker stops
+	// dispatching for that ID — otherwise a deterministic panic in
+	// the fetch path would re-spawn the goroutine on every render
+	// (the defer clears `pending`), filling the log forever.
+	failedFetches map[[16]byte]int
+
 	done   bool
 	choice pickerChoice
 }
+
+const maxFetchAttempts = 3
 
 type pickerChoice int
 
@@ -4254,9 +4356,10 @@ func NewPicker(screen tcell.Screen, client PickerClient) *Picker {
 		client:     client,
 		activeTab:  tabStored,
 		mode:       modeBrowse,
-		thumbCache: make(map[[16]byte][]byte),
-		pending:    make(map[[16]byte]bool),
-		imgCache:   make(map[[16]byte]*widgets.Image),
+		thumbCache:    make(map[[16]byte][]byte),
+		pending:       make(map[[16]byte]bool),
+		imgCache:      make(map[[16]byte]*widgets.Image),
+		failedFetches: make(map[[16]byte]int),
 	}
 }
 
@@ -4535,11 +4638,19 @@ func (p *Picker) Render() {
 			p.screen.SetContent(x, y, ch, nil, c.Style)
 		}
 	}
-	// Flush queued graphics commands (APC sequences for Kitty,
-	// half-block cell writes already landed via the painter).
+	// Flush queued graphics commands. KittyProvider has Flush; the
+	// HalfBlockProvider does not (its writes already landed in
+	// cellBuf via Place→SetCell), so the type assertion is
+	// intentionally Kitty-only — when it fails, no flush is needed.
+	// On real Kitty failure (closed stdout, broken pipe), surface
+	// the error via the picker's error banner: a silent failure here
+	// would render thumbnails as blank rects with no feedback.
 	if p.gp != nil && p.gpFlush != nil {
 		if flusher, ok := p.gp.(interface{ Flush(io.Writer) error }); ok {
-			_ = flusher.Flush(p.gpFlush)
+			if err := flusher.Flush(p.gpFlush); err != nil {
+				log.Printf("picker: graphics flush failed: %v", err)
+				p.errMsg = "Thumbnails unavailable: " + err.Error()
+			}
 		}
 	}
 	p.screen.Show()
@@ -4855,33 +4966,7 @@ import (
 )
 ```
 
-Update the `fakeClient` definition to support fetch error injection:
-
-```go
-type fakeClient struct {
-	response      protocol.ListSessionsResponse
-	listErr       error
-	recoverCalled bool
-	recoverID     [16]byte
-	recoverErr    error
-	newCalled     bool
-	renameErr     error
-	deleteErr     error
-	fetchCalled   bool
-	thumbBytes    []byte
-	thumbErr      error
-}
-
-func (f *fakeClient) FetchThumbnail(id [16]byte) ([]byte, error) {
-	f.fetchCalled = true
-	if f.thumbErr != nil {
-		return nil, f.thumbErr
-	}
-	return f.thumbBytes, nil
-}
-```
-
-(Merge into the existing `fakeClient` from Task 16 — don't duplicate.)
+The `fakeClient` type is already declared in Task 16 with `fetchCalled` / `thumbBytes` / `thumbErr` fields and the `FetchThumbnail` method that consults them. No additional declaration needed here — Task 17 tests just set `thumbBytes` / `thumbErr` on the existing struct.
 
 - [ ] **Step 2: Run tests, verify failure**
 
@@ -4956,9 +5041,11 @@ func (p *Picker) imageWidgetFor(id [16]byte) *widgets.Image {
 }
 
 // maybeFetchThumbnail kicks off a non-blocking fetch for id if we
-// haven't cached or pending one already. All map access is under
-// p.mu; the goroutine always clears pending[id] in defer so a failed
-// fetch doesn't strand the entry permanently.
+// haven't cached or pending one already, and haven't already failed
+// maxFetchAttempts times for that id. All map access is under p.mu;
+// the goroutine always clears pending[id] in defer so a failed fetch
+// doesn't strand the entry permanently. Panics increment
+// failedFetches[id] so a deterministic crash bug doesn't loop forever.
 func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 	if !p.hasGraphics() || !hasThumb {
 		return
@@ -4972,6 +5059,10 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		p.mu.Unlock()
 		return
 	}
+	if p.failedFetches[id] >= maxFetchAttempts {
+		p.mu.Unlock()
+		return
+	}
 	p.pending[id] = true
 	p.mu.Unlock()
 
@@ -4979,6 +5070,11 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("picker: thumbnail fetch panic: %v", rec)
+				p.mu.Lock()
+				p.failedFetches[targetID]++
+				delete(p.pending, targetID)
+				p.mu.Unlock()
+				return
 			}
 			p.mu.Lock()
 			delete(p.pending, targetID)
@@ -4992,6 +5088,8 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		if len(data) == 0 {
 			return
 		}
+		// First-pass: header check + dimension cap. Cheap and
+		// catches non-PNG / huge-canvas attacks before full decode.
 		cfg, err := png.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
 			log.Printf("picker: thumbnail decode-config %x: %v", targetID[:4], err)
@@ -5000,6 +5098,17 @@ func (p *Picker) maybeFetchThumbnail(id [16]byte, hasThumb bool) {
 		if cfg.Width > maxThumbnailDim || cfg.Height > maxThumbnailDim {
 			log.Printf("picker: thumbnail %x: refusing %dx%d (cap %d)",
 				targetID[:4], cfg.Width, cfg.Height, maxThumbnailDim)
+			return
+		}
+		// Second-pass: full decode. Catches truncated IDAT, bad
+		// CRCs, etc. that DecodeConfig accepts. Required because
+		// widgets.Image silently falls back to alt text on decode
+		// failure, and the picker has no retry signal — so a half-
+		// broken cache entry would leave the user staring at
+		// `[img: session-thumbnail]` forever. If full decode fails,
+		// don't cache; next render falls through to ASCII layout.
+		if _, err := png.Decode(bytes.NewReader(data)); err != nil {
+			log.Printf("picker: thumbnail decode %x: %v", targetID[:4], err)
 			return
 		}
 		p.mu.Lock()
@@ -5022,9 +5131,12 @@ In `picker_render.go`, add the `drawThumbnail` helper that `drawCard` already ca
 func (p *Picker) drawThumbnail(painter *core.Painter, rect core.Rect, s protocol.SessionSummary, bgStyle tcell.Style) {
 	if p.hasGraphics() {
 		if w := p.imageWidgetFor(s.SessionID); w != nil {
-			// widgets.Image expects a raw rect in screen coords.
-			// SetRect is on the embedded BaseWidget.
-			w.SetRect(rect)
+			// BaseWidget exposes SetPosition + Resize (no SetRect).
+			// We could also assign w.Rect = rect directly since the
+			// field is exported, but the methods are explicit about
+			// which dimension changed.
+			w.SetPosition(rect.X, rect.Y)
+			w.Resize(rect.W, rect.H)
 			w.Draw(painter)
 			p.maybeFetchThumbnail(s.SessionID, s.HasThumbnail)
 			return
@@ -5172,6 +5284,14 @@ if shouldShowPicker {
 	pickerClient, err := boot.NewSocketPickerClient(clientOpts.Socket)
 	if err != nil {
 		log.Printf("picker: socket client setup failed: %v; skipping picker", err)
+		if clientOpts.ShowRecoverPicker {
+			// User explicitly asked for the picker via --recover; a
+			// silent fall-through to a fresh session would defeat the
+			// flag's intent. Surface in the splash detail so the
+			// failure is visible.
+			splashApp.SetDetail("Could not connect to daemon: " + err.Error())
+			splashRunner.Wake()
+		}
 	} else {
 		stopSplash()
 		// Build the graphics provider that matches the terminal's
@@ -5185,18 +5305,27 @@ if shouldShowPicker {
 		case texelcore.GraphicsHalfBlock:
 			gp = graphics.NewHalfBlockProvider()
 		}
-		outcome, err := boot.RunPicker(screen, pickerClient, gp, os.Stdout)
-		_ = pickerClient.Close()
+		outcome, runErr := boot.RunPicker(screen, pickerClient, gp, os.Stdout)
+		if cerr := pickerClient.Close(); cerr != nil {
+			log.Printf("picker: close socket: %v", cerr)
+		}
 		if gp != nil {
 			// Clear any image placements before splash takes the
 			// screen back so we don't leave Kitty images stranded.
+			// Failure here means stale APC placements survive into
+			// the splash — log so the symptom has a breadcrumb.
 			gp.Reset()
 			if flusher, ok := gp.(interface{ Flush(io.Writer) error }); ok {
-				_ = flusher.Flush(os.Stdout)
+				if err := flusher.Flush(os.Stdout); err != nil {
+					log.Printf("picker: clear graphics before splash handoff: %v", err)
+				}
 			}
 		}
-		if err != nil {
-			log.Printf("picker: %v; falling back to fresh session", err)
+		if runErr != nil {
+			// Picker errored mid-session. The user's selection (if
+			// any) is lost — surface that in the splash detail so
+			// they don't silently end up with a fresh session.
+			log.Printf("picker: %v; falling back to fresh session", runErr)
 		} else {
 			switch outcome.Choice {
 			case boot.PickerChoiceRecover:
@@ -5215,6 +5344,10 @@ if shouldShowPicker {
 		splashRunner = boot.NewRunner(screen, splashApp)
 		splashRunner.Start()
 		splashStopped = false
+		if runErr != nil {
+			splashApp.SetDetail("Recovery failed; starting fresh session")
+			splashRunner.Wake()
+		}
 	}
 }
 ```
