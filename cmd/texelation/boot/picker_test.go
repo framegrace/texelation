@@ -167,15 +167,21 @@ func TestPicker_EnterDispatchesRecover(t *testing.T) {
 	}
 }
 
-func TestPicker_NewKeyDispatchesNew(t *testing.T) {
+// 'n' was removed from the picker — pressing it is a no-op now (the
+// shared-desktop architecture made "new session" misleading; users
+// quit with q/Esc and run texelation normally for a fresh slot).
+func TestPicker_NewKeyIsNoop(t *testing.T) {
 	screen := newPickerScreen(t)
 	defer screen.Fini()
 	fc := &fakeClient{response: protocol.ListSessionsResponse{}}
 	p := NewPicker(screen, fc)
 	p.RefreshCatalog()
 	p.HandleKey(0, 'n', 0)
-	if !fc.newCalled {
-		t.Errorf("expected fresh-session dispatch on 'n'")
+	if fc.newCalled {
+		t.Errorf("expected 'n' to be a no-op, but StartFreshSession was called")
+	}
+	if p.Done() {
+		t.Errorf("expected picker to stay open on 'n'")
 	}
 }
 

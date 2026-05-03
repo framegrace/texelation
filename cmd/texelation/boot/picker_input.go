@@ -91,10 +91,6 @@ func (p *Picker) HandleKey(key tcell.Key, ch rune, mods tcell.ModMask) {
 		if p.selectedIdx > 0 {
 			p.selectedIdx--
 		}
-	case 'n':
-		p.client.StartFreshSession()
-		p.done = true
-		p.choice = choiceFresh
 	case 'r':
 		// Rename only operates on stored sessions. Live sessions
 		// don't have a sensible rename target in F.1.

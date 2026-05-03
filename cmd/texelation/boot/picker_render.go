@@ -96,9 +96,8 @@ func (p *Picker) Render() {
 	p.drawCards(painter, styles, w, h)
 	p.drawErrorBanner(painter, styles, w, h)
 	p.drawActionBar(painter, styles, w, h)
-	if p.mode == modeRename {
-		p.drawRenameOverlay(painter, styles, w, h)
-	}
+	// Rename mode renders inline on the selected card via drawCard; no
+	// separate overlay needed.
 	if p.mode == modeDeleteConfirm {
 		p.drawDeleteConfirmOverlay(painter, styles, w, h)
 	}
@@ -221,7 +220,14 @@ func (p *Picker) drawCard(painter *core.Painter, styles pickerStyles, x, y int, 
 			painter.SetCell(col, y+row, ' ', cardStyle)
 		}
 	}
-	painter.DrawText(metaX, y, fmt.Sprintf("Label:   %s", labelOrUntitled(s.Label)), cardStyle.Bold(true))
+	// Selected card + rename mode → show the edit buffer inline on
+	// the Label line instead of the static label. Cursor indicator is
+	// a trailing block char so the user knows it's an active input.
+	labelLine := fmt.Sprintf("Label:   %s", labelOrUntitled(s.Label))
+	if selected && p.mode == modeRename {
+		labelLine = fmt.Sprintf("Rename:  %s▏", string(p.renameBuf))
+	}
+	painter.DrawText(metaX, y, labelLine, cardStyle.Bold(true))
 	painter.DrawText(metaX, y+1, fmt.Sprintf("Active:  %s", relativeTime(s.LastActive)), cardStyle)
 	painter.DrawText(metaX, y+2, fmt.Sprintf("Panes:   %d", s.PaneCount), cardStyle)
 	painter.DrawText(metaX, y+3, fmt.Sprintf("Title:   %s", truncate(s.FirstPaneTitle, 40)), cardStyle)
@@ -244,7 +250,7 @@ func (p *Picker) drawASCIILayoutAt(painter *core.Painter, rect core.Rect, layout
 }
 
 func (p *Picker) drawActionBar(painter *core.Painter, styles pickerStyles, w, h int) {
-	bar := "[Enter] recover   [n] new   [r] rename   [d] delete   [q] quit"
+	bar := "[Enter] recover   [r] rename   [d] delete   [q] quit"
 	startX := (w - len(bar)) / 2
 	if startX < 0 {
 		startX = 0
@@ -252,16 +258,20 @@ func (p *Picker) drawActionBar(painter *core.Painter, styles pickerStyles, w, h 
 	painter.DrawText(startX, h-2, bar, styles.secondary)
 }
 
-func (p *Picker) drawRenameOverlay(painter *core.Painter, styles pickerStyles, w, h int) {
-	prompt := fmt.Sprintf("Rename: %s", string(p.renameBuf))
-	painter.DrawText(2, h-4, prompt, styles.primary)
-}
-
 func (p *Picker) drawDeleteConfirmOverlay(painter *core.Painter, styles pickerStyles, w, h int) {
 	if len(p.response.Stored) == 0 {
 		return
 	}
-	prompt := fmt.Sprintf("Delete '%s'? [y/N]", labelOrUntitled(p.response.Stored[p.selectedIdx].Label))
+	// F.1 limitation: deleting only removes per-session metadata
+	// (the JSON sidecar + thumbnail). The daemon's snapshot.json holds
+	// the workspace tree separately, so the recovered desktop content
+	// can re-appear on the next start. Use `texelation --reset-state`
+	// for a full wipe. The hint here keeps the user from being
+	// surprised; we don't auto-wipe snapshot.json from the picker
+	// because it's shared across all sessions in a single-desktop
+	// architecture.
+	label := labelOrUntitled(p.response.Stored[p.selectedIdx].Label)
+	prompt := fmt.Sprintf("Delete '%s'? [y/N]   (metadata only — workspace persists; --reset-state for full wipe)", label)
 	painter.DrawText(2, h-4, prompt, styles.danger)
 }
 
