@@ -93,6 +93,29 @@ func (p *DesktopPublisher) SetNotifier(fn func()) {
 	p.notify = fn
 }
 
+// PrevBufferFor returns the most recently observed cell buffer for
+// paneID, or nil if no diff has been emitted yet. Used by Plan F.1
+// thumbnail capture — the buffer already exists for diff generation
+// so we expose it rather than maintain a parallel snapshot.
+//
+// Returns a defensive copy under the read lock so the caller can use
+// the buffer outside the publisher's mutex without coordinating with
+// the diff hot path.
+func (p *DesktopPublisher) PrevBufferFor(paneID [16]byte) [][]texel.Cell {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	buf, ok := p.prevBuffers[paneID]
+	if !ok {
+		return nil
+	}
+	out := make([][]texel.Cell, len(buf))
+	for y, row := range buf {
+		out[y] = make([]texel.Cell, len(row))
+		copy(out[y], row)
+	}
+	return out
+}
+
 // RevisionFor returns the latest revision stamped for paneID. Returns 0 if
 // the pane has not been published yet under this publisher's session.
 func (p *DesktopPublisher) RevisionFor(paneID [16]byte) uint32 {
