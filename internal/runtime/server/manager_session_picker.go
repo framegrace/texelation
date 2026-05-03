@@ -134,6 +134,39 @@ func (m *Manager) sessionPNGPath(id [16]byte) string {
 	return filepath.Join(m.persistBasedir, SessionsDirName, hex.EncodeToString(id[:])+".png")
 }
 
+// captureLiveThumbnailBytes renders a fresh thumbnail for a live
+// session on demand and writes it to the PNG sidecar (so subsequent
+// fetches hit the fast path). Returns the PNG bytes + ok=true on
+// success. Returns ok=false when the session isn't live, the renderer
+// is unwired, the renderer skips, or write/read fails.
+//
+// Used by handleFetchThumbnail for live sessions whose PNG hasn't
+// been captured yet (the lifecycle hooks only fire on Close +
+// shutdown — a live session viewed by a second --recover invocation
+// hits this path).
+func (m *Manager) captureLiveThumbnailBytes(id [16]byte) ([]byte, bool) {
+	m.mu.RLock()
+	_, live := m.sessions[id]
+	basedir := m.persistBasedir
+	renderer := m.thumbRenderer
+	m.mu.RUnlock()
+	if !live || basedir == "" || renderer == nil {
+		return nil, false
+	}
+	if err := captureThumbnail(basedir, id, renderer); err != nil {
+		// captureThumbnail logs internally on the bigger errors; this
+		// log captures the short-circuit failure modes so a chronic
+		// "no thumbnail" symptom has a breadcrumb.
+		return nil, false
+	}
+	pngPath := filepath.Join(basedir, SessionsDirName, hex.EncodeToString(id[:])+".png")
+	data, err := os.ReadFile(pngPath)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
 // RenameStored updates the persisted session's Label both in-memory
 // and on disk. Acquires m.mu so concurrent StoredSummaries / Recover
 // calls observe a consistent state. The disk write goes through

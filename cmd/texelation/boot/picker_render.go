@@ -13,6 +13,7 @@ import (
 
 	"github.com/framegrace/texelation/protocol"
 	core "github.com/framegrace/texelui/core"
+	"github.com/framegrace/texelui/theme"
 )
 
 const (
@@ -20,6 +21,41 @@ const (
 	cardThumbH = 8
 	cardGap    = 1
 )
+
+// pickerStyles centralises the theme-resolved styles for the picker
+// so we look them up once per Render rather than per-cell. Build is
+// cheap (theme.Get is map lookups) but caching keeps draw helpers
+// uncluttered.
+type pickerStyles struct {
+	base     tcell.Style // overall background
+	surface  tcell.Style // cards
+	primary  tcell.Style // active/bold text
+	secondary tcell.Style // action bar
+	muted    tcell.Style // inactive tab labels
+	accent   tcell.Style // selected card highlight
+	danger   tcell.Style // error banner
+}
+
+func loadPickerStyles() pickerStyles {
+	tm := theme.Get()
+	bg := tm.GetSemanticColor("bg.base")
+	surfaceBG := tm.GetSemanticColor("bg.surface")
+	primaryFG := tm.GetSemanticColor("text.primary")
+	secondaryFG := tm.GetSemanticColor("text.secondary")
+	mutedFG := tm.GetSemanticColor("text.muted")
+	accentFG := tm.GetSemanticColor("text.inverse")
+	accentBG := tm.GetSemanticColor("action.primary")
+	dangerFG := tm.GetSemanticColor("action.danger")
+	return pickerStyles{
+		base:      tcell.StyleDefault.Background(bg).Foreground(primaryFG),
+		surface:   tcell.StyleDefault.Background(surfaceBG).Foreground(primaryFG),
+		primary:   tcell.StyleDefault.Background(bg).Foreground(primaryFG).Bold(true),
+		secondary: tcell.StyleDefault.Background(bg).Foreground(secondaryFG),
+		muted:     tcell.StyleDefault.Background(bg).Foreground(mutedFG),
+		accent:    tcell.StyleDefault.Background(accentBG).Foreground(accentFG).Bold(true),
+		danger:    tcell.StyleDefault.Background(bg).Foreground(dangerFG).Bold(true),
+	}
+}
 
 // Render paints the picker. Builds a fresh cell buffer per frame,
 // runs the widget tree (cards + tabs + banner + action-bar) through
@@ -30,16 +66,18 @@ func (p *Picker) Render() {
 	if w <= 0 || h <= 0 {
 		return
 	}
+	styles := loadPickerStyles()
 	if len(p.cellBuf) != h || (len(p.cellBuf) > 0 && len(p.cellBuf[0]) != w) {
 		p.cellBuf = make([][]core.Cell, h)
 		for y := range p.cellBuf {
 			p.cellBuf[y] = make([]core.Cell, w)
 		}
-	} else {
-		for y := range p.cellBuf {
-			for x := range p.cellBuf[y] {
-				p.cellBuf[y][x] = core.Cell{Ch: ' ', Style: tcell.StyleDefault}
-			}
+	}
+	// Fill with theme background each frame regardless of size match
+	// so a previous-frame styled cell doesn't bleed through.
+	for y := range p.cellBuf {
+		for x := range p.cellBuf[y] {
+			p.cellBuf[y][x] = core.Cell{Ch: ' ', Style: styles.base}
 		}
 	}
 	clip := core.Rect{X: 0, Y: 0, W: w, H: h}
@@ -53,16 +91,16 @@ func (p *Picker) Render() {
 		p.gp.Reset()
 	}
 
-	p.drawHeader(painter, w)
-	p.drawTabs(painter, w)
-	p.drawCards(painter, w, h)
-	p.drawErrorBanner(painter, w, h)
-	p.drawActionBar(painter, w, h)
+	p.drawHeader(painter, styles, w)
+	p.drawTabs(painter, styles, w)
+	p.drawCards(painter, styles, w, h)
+	p.drawErrorBanner(painter, styles, w, h)
+	p.drawActionBar(painter, styles, w, h)
 	if p.mode == modeRename {
-		p.drawRenameOverlay(painter, w, h)
+		p.drawRenameOverlay(painter, styles, w, h)
 	}
 	if p.mode == modeDeleteConfirm {
-		p.drawDeleteConfirmOverlay(painter, w, h)
+		p.drawDeleteConfirmOverlay(painter, styles, w, h)
 	}
 
 	for y := 0; y < h; y++ {
@@ -92,7 +130,7 @@ func (p *Picker) Render() {
 	p.screen.Show()
 }
 
-func (p *Picker) drawErrorBanner(painter *core.Painter, w, h int) {
+func (p *Picker) drawErrorBanner(painter *core.Painter, styles pickerStyles, w, h int) {
 	msg := p.errMsg
 	if msg == "" {
 		msg = p.flushErrMsg
@@ -100,39 +138,37 @@ func (p *Picker) drawErrorBanner(painter *core.Painter, w, h int) {
 	if msg == "" {
 		return
 	}
-	style := tcell.StyleDefault.Foreground(tcell.ColorRed).Bold(true)
 	if len(msg) > w-4 {
 		msg = msg[:w-5] + "…"
 	}
-	painter.DrawText(2, h-3, msg, style)
+	painter.DrawText(2, h-3, msg, styles.danger)
 }
 
-func (p *Picker) drawHeader(painter *core.Painter, w int) {
-	style := tcell.StyleDefault.Bold(true)
+func (p *Picker) drawHeader(painter *core.Painter, styles pickerStyles, w int) {
 	title := "texelation — recover session"
 	startX := (w - len(title)) / 2
 	if startX < 0 {
 		startX = 0
 	}
-	painter.DrawText(startX, 0, title, style)
+	painter.DrawText(startX, 0, title, styles.primary)
 }
 
-func (p *Picker) drawTabs(painter *core.Painter, w int) {
+func (p *Picker) drawTabs(painter *core.Painter, styles pickerStyles, w int) {
 	live := fmt.Sprintf("[ Live (%d) ]", len(p.response.Live))
 	stored := fmt.Sprintf("[ Stored (%d) ]", len(p.response.Stored))
-	liveStyle := tcell.StyleDefault.Foreground(tcell.ColorGray)
+	liveStyle := styles.muted
 	if p.activeTab == tabLive {
-		liveStyle = tcell.StyleDefault.Bold(true)
+		liveStyle = styles.primary
 	}
-	storedStyle := tcell.StyleDefault.Foreground(tcell.ColorGray)
+	storedStyle := styles.muted
 	if p.activeTab == tabStored {
-		storedStyle = tcell.StyleDefault.Bold(true)
+		storedStyle = styles.primary
 	}
 	painter.DrawText(2, 2, live, liveStyle)
 	painter.DrawText(2+len(live)+2, 2, stored, storedStyle)
 }
 
-func (p *Picker) drawCards(painter *core.Painter, w, h int) {
+func (p *Picker) drawCards(painter *core.Painter, styles pickerStyles, w, h int) {
 	startY := 4
 	if p.activeTab == tabLive {
 		// F.1: render live sessions as lightweight cards. We synthesize
@@ -148,8 +184,13 @@ func (p *Picker) drawCards(painter *core.Painter, w, h int) {
 				Label:      live.Label,
 				LastActive: live.LastInputAt,
 				PaneCount:  live.PaneCount,
+				// HasThumbnail=true so the picker fetches a thumbnail
+				// for live sessions (the server renders it on demand
+				// from the publisher's prevBuffers when the file
+				// doesn't exist yet).
+				HasThumbnail: true,
 			}
-			p.drawCard(painter, 2, cardY, summary, i == p.selectedIdx)
+			p.drawCard(painter, styles, 2, cardY, summary, i == p.selectedIdx)
 		}
 		return
 	}
@@ -158,25 +199,34 @@ func (p *Picker) drawCards(painter *core.Painter, w, h int) {
 		if cardY+cardThumbH+cardGap > h-2 {
 			break
 		}
-		p.drawCard(painter, 2, cardY, summary, i == p.selectedIdx)
+		p.drawCard(painter, styles, 2, cardY, summary, i == p.selectedIdx)
 	}
 }
 
-func (p *Picker) drawCard(painter *core.Painter, x, y int, s protocol.SessionSummary, selected bool) {
-	bgStyle := tcell.StyleDefault
+func (p *Picker) drawCard(painter *core.Painter, styles pickerStyles, x, y int, s protocol.SessionSummary, selected bool) {
+	cardStyle := styles.surface
 	if selected {
-		bgStyle = bgStyle.Background(tcell.ColorDarkBlue)
+		cardStyle = styles.accent
 	}
 	thumbRect := core.Rect{X: x, Y: y, W: cardThumbW, H: cardThumbH}
-	p.drawThumbnail(painter, thumbRect, s, bgStyle)
+	p.drawThumbnail(painter, thumbRect, s, cardStyle)
 
+	// Paint the metadata column background up-front so trailing
+	// whitespace (after labels shorter than the column) still picks
+	// up the card style.
 	metaX := x + cardThumbW + 2
-	painter.DrawText(metaX, y, fmt.Sprintf("Label:   %s", labelOrUntitled(s.Label)), bgStyle.Bold(true))
-	painter.DrawText(metaX, y+1, fmt.Sprintf("Active:  %s", relativeTime(s.LastActive)), bgStyle)
-	painter.DrawText(metaX, y+2, fmt.Sprintf("Panes:   %d", s.PaneCount), bgStyle)
-	painter.DrawText(metaX, y+3, fmt.Sprintf("Title:   %s", truncate(s.FirstPaneTitle, 40)), bgStyle)
+	pw, _ := painter.Size()
+	for row := 0; row < cardThumbH; row++ {
+		for col := metaX; col < metaX+50 && col < pw; col++ {
+			painter.SetCell(col, y+row, ' ', cardStyle)
+		}
+	}
+	painter.DrawText(metaX, y, fmt.Sprintf("Label:   %s", labelOrUntitled(s.Label)), cardStyle.Bold(true))
+	painter.DrawText(metaX, y+1, fmt.Sprintf("Active:  %s", relativeTime(s.LastActive)), cardStyle)
+	painter.DrawText(metaX, y+2, fmt.Sprintf("Panes:   %d", s.PaneCount), cardStyle)
+	painter.DrawText(metaX, y+3, fmt.Sprintf("Title:   %s", truncate(s.FirstPaneTitle, 40)), cardStyle)
 	if s.Pinned {
-		painter.DrawText(metaX, y+4, "Pinned:  ★", bgStyle)
+		painter.DrawText(metaX, y+4, "Pinned:  ★", cardStyle)
 	}
 }
 
@@ -193,27 +243,26 @@ func (p *Picker) drawASCIILayoutAt(painter *core.Painter, rect core.Rect, layout
 	}
 }
 
-func (p *Picker) drawActionBar(painter *core.Painter, w, h int) {
+func (p *Picker) drawActionBar(painter *core.Painter, styles pickerStyles, w, h int) {
 	bar := "[Enter] recover   [n] new   [r] rename   [d] delete   [q] quit"
-	style := tcell.StyleDefault.Foreground(tcell.ColorGray)
 	startX := (w - len(bar)) / 2
 	if startX < 0 {
 		startX = 0
 	}
-	painter.DrawText(startX, h-2, bar, style)
+	painter.DrawText(startX, h-2, bar, styles.secondary)
 }
 
-func (p *Picker) drawRenameOverlay(painter *core.Painter, w, h int) {
+func (p *Picker) drawRenameOverlay(painter *core.Painter, styles pickerStyles, w, h int) {
 	prompt := fmt.Sprintf("Rename: %s", string(p.renameBuf))
-	painter.DrawText(2, h-4, prompt, tcell.StyleDefault.Bold(true))
+	painter.DrawText(2, h-4, prompt, styles.primary)
 }
 
-func (p *Picker) drawDeleteConfirmOverlay(painter *core.Painter, w, h int) {
+func (p *Picker) drawDeleteConfirmOverlay(painter *core.Painter, styles pickerStyles, w, h int) {
 	if len(p.response.Stored) == 0 {
 		return
 	}
 	prompt := fmt.Sprintf("Delete '%s'? [y/N]", labelOrUntitled(p.response.Stored[p.selectedIdx].Label))
-	painter.DrawText(2, h-4, prompt, tcell.StyleDefault.Foreground(tcell.ColorRed).Bold(true))
+	painter.DrawText(2, h-4, prompt, styles.danger)
 }
 
 func labelOrUntitled(s string) string {

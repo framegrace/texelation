@@ -154,7 +154,18 @@ func (p *Picker) RefreshCatalog() {
 	}
 	p.errMsg = ""
 	p.response = resp
-	if p.selectedIdx >= len(p.response.Stored) {
+	// Pre-select the populated tab when only one has entries — the
+	// default `tabStored` would otherwise show empty when only Live
+	// has content (e.g. user runs --recover on a running daemon).
+	if len(p.response.Live) > 0 && len(p.response.Stored) == 0 {
+		p.activeTab = tabLive
+	} else if len(p.response.Stored) > 0 && len(p.response.Live) == 0 {
+		p.activeTab = tabStored
+	}
+	if p.selectedIdx >= len(p.response.Stored) && p.activeTab == tabStored {
+		p.selectedIdx = 0
+	}
+	if p.selectedIdx >= len(p.response.Live) && p.activeTab == tabLive {
 		p.selectedIdx = 0
 	}
 }
