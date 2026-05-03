@@ -54,13 +54,26 @@ func (c *connection) handleRecoverSession(payload []byte) error {
 			return c.sendErrorFrame(rerr)
 		}
 	}
-	sess, _, err := c.manager.LookupOrRehydrate(req.SessionID)
-	if err != nil {
-		return c.sendErrorFrame(err)
+	// Just validate that the session exists — do NOT consume it from
+	// persistedSessions or claim it for this connection. Earlier
+	// versions called LookupOrRehydrate here, which left the session
+	// live in m.sessions and caused the subsequent client reconnect
+	// to take the in-process resume path (rehydrated=false). That
+	// branch sets initialSnapshotSent=true, which then short-circuits
+	// handleClientReady — meaning the desktop never gets
+	// SetViewportSize'd to the new client's dimensions. Symptom: the
+	// recovered workspace renders at the daemon's default tiny size.
+	//
+	// The picker's role is purely UI: validate + return. The actual
+	// recovery happens when main.go calls clientrt.Run with
+	// RecoverSessionID, which goes through the normal Hello/Welcome/
+	// ConnectRequest path → LookupOrRehydrate → rehydrated=true →
+	// handleClientReady runs the full SetViewportSize + snapshot flow.
+	if !c.manager.HasSession(req.SessionID) {
+		return c.sendErrorFrame(ErrSessionNotFound)
 	}
-	c.session = sess
 	accept := protocol.ConnectAccept{
-		SessionID:       sess.ID(),
+		SessionID:       req.SessionID,
 		ResumeSupported: true,
 	}
 	body, err := protocol.EncodeConnectAccept(accept)
@@ -71,7 +84,7 @@ func (c *connection) handleRecoverSession(payload []byte) error {
 		Version:   protocol.Version,
 		Type:      protocol.MsgConnectAccept,
 		Flags:     protocol.FlagChecksum,
-		SessionID: sess.ID(),
+		SessionID: c.session.ID(),
 	}
 	return c.writeMessage(hdr, body)
 }

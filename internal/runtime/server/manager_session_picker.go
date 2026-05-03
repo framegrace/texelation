@@ -84,6 +84,21 @@ func (m *Manager) StoredSummaries() []protocol.SessionSummary {
 	return summaries
 }
 
+// HasSession reports whether id is known to the manager — either as
+// a live session or a persisted one. Used by handleRecoverSession to
+// validate the user's pick without claiming the session, so the
+// subsequent client reconnect can take the normal LookupOrRehydrate
+// path (which is what makes resume + handleClientReady fire properly).
+func (m *Manager) HasSession(id [16]byte) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, live := m.sessions[id]; live {
+		return true
+	}
+	_, stored := m.persistedSessions[id]
+	return stored
+}
+
 // LiveSummaries returns the live (in-memory, attached or detached)
 // session catalog. F.1 surfaces sessions currently held in m.sessions
 // so a user running `--recover` while the daemon already has an
