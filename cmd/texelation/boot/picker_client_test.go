@@ -30,6 +30,7 @@ func TestSocketPickerClient_ListSessions(t *testing.T) {
 			return
 		}
 		defer conn.Close()
+		// Hello → Welcome
 		hdr, _, err := protocol.ReadMessage(conn)
 		if err != nil || hdr.Type != protocol.MsgHello {
 			return
@@ -37,7 +38,15 @@ func TestSocketPickerClient_ListSessions(t *testing.T) {
 		welBody, _ := protocol.EncodeWelcome(protocol.Welcome{SessionID: [16]byte{0xAA}, ServerName: "test"})
 		welHdr := protocol.Header{Version: protocol.Version, Type: protocol.MsgWelcome, Flags: protocol.FlagChecksum, SessionID: [16]byte{0xAA}}
 		_ = protocol.WriteMessage(conn, welHdr, welBody)
-
+		// ConnectRequest → ConnectAccept
+		hdr, _, err = protocol.ReadMessage(conn)
+		if err != nil || hdr.Type != protocol.MsgConnectRequest {
+			return
+		}
+		acceptBody, _ := protocol.EncodeConnectAccept(protocol.ConnectAccept{SessionID: [16]byte{0xAA}, ResumeSupported: true})
+		acceptHdr := protocol.Header{Version: protocol.Version, Type: protocol.MsgConnectAccept, Flags: protocol.FlagChecksum, SessionID: [16]byte{0xAA}}
+		_ = protocol.WriteMessage(conn, acceptHdr, acceptBody)
+		// MsgListSessions → MsgListSessionsResponse
 		_, _, _ = protocol.ReadMessage(conn)
 		respBody, _ := protocol.EncodeListSessionsResponse(protocol.ListSessionsResponse{
 			Stored: []protocol.SessionSummary{{SessionID: [16]byte{0xBB}, Label: "test", LastActive: 1, PaneCount: 1}},

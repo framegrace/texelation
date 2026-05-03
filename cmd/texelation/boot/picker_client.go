@@ -21,8 +21,13 @@ import (
 )
 
 // dialAndHandshake opens a unix socket connection to the texelation
-// daemon and runs the Hello/Welcome handshake. Returns the conn +
-// the assigned sessionID. The caller closes the conn.
+// daemon and runs the full Hello/Welcome/ConnectRequest/ConnectAccept
+// handshake. Returns the conn + the assigned sessionID. The caller
+// closes the conn.
+//
+// We complete the full handshake (not just Hello/Welcome) because the
+// server's handleHandshake expects MsgConnectRequest after Welcome —
+// anything else closes the connection with errUnexpectedMessage.
 func dialAndHandshake(socket string) (net.Conn, [16]byte, error) {
 	var sid [16]byte
 	conn, err := net.DialTimeout("unix", socket, 5*time.Second)
@@ -48,7 +53,7 @@ func dialAndHandshake(socket string) (net.Conn, [16]byte, error) {
 		conn.Close()
 		return nil, sid, fmt.Errorf("write hello: %w", err)
 	}
-	hdr, payload, err := protocol.ReadMessage(conn)
+	hdr, _, err := protocol.ReadMessage(conn)
 	if err != nil {
 		conn.Close()
 		return nil, sid, fmt.Errorf("read welcome: %w", err)
@@ -57,12 +62,39 @@ func dialAndHandshake(socket string) (net.Conn, [16]byte, error) {
 		conn.Close()
 		return nil, sid, fmt.Errorf("expected welcome, got message type %d", hdr.Type)
 	}
-	welcome, err := protocol.DecodeWelcome(payload)
+
+	// Send ConnectRequest with zero SessionID — the server creates a
+	// fresh ephemeral session for this picker connection. We never
+	// resume; the picker's role is to LIST sessions, not attach to one.
+	connectBody, err := protocol.EncodeConnectRequest(protocol.ConnectRequest{})
 	if err != nil {
 		conn.Close()
-		return nil, sid, fmt.Errorf("decode welcome: %w", err)
+		return nil, sid, fmt.Errorf("encode connect: %w", err)
 	}
-	return conn, welcome.SessionID, nil
+	connectHdr := protocol.Header{
+		Version: protocol.Version,
+		Type:    protocol.MsgConnectRequest,
+		Flags:   protocol.FlagChecksum,
+	}
+	if err := protocol.WriteMessage(conn, connectHdr, connectBody); err != nil {
+		conn.Close()
+		return nil, sid, fmt.Errorf("write connect: %w", err)
+	}
+	hdr, payload, err := protocol.ReadMessage(conn)
+	if err != nil {
+		conn.Close()
+		return nil, sid, fmt.Errorf("read connect-accept: %w", err)
+	}
+	if hdr.Type != protocol.MsgConnectAccept {
+		conn.Close()
+		return nil, sid, fmt.Errorf("expected connect-accept, got message type %d", hdr.Type)
+	}
+	accept, err := protocol.DecodeConnectAccept(payload)
+	if err != nil {
+		conn.Close()
+		return nil, sid, fmt.Errorf("decode connect-accept: %w", err)
+	}
+	return conn, accept.SessionID, nil
 }
 
 // ProbeStoredSessions performs Hello/Welcome + MsgListSessions and
