@@ -16,11 +16,13 @@ import (
 	"os"
 
 	clientrt "github.com/framegrace/texelation/internal/runtime/client"
+	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 )
 
 var runClient = clientrt.Run
 
 func main() {
+	zoomdebug.Init("client")
 	if err := run(os.Args[1:]); err != nil {
 		log.Fatal(err)
 	}
