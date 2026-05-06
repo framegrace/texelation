@@ -735,6 +735,7 @@ func (d *DesktopEngine) SwitchToWorkspace(id int) {
 	d.broadcastActivePaneChanged()
 	d.notifyFocusActive()
 	d.broadcastTreeChanged()
+	d.broadcastStateUpdate()
 }
 
 // switchWorkspaceRelative switches to the workspace at the given offset from

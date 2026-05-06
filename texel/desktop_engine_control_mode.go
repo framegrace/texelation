@@ -69,6 +69,7 @@ func (d *DesktopEngine) toggleZoom() {
 	d.recalculateLayout()
 	d.broadcastActivePaneChanged()
 	d.broadcastTreeChanged()
+	d.broadcastStateUpdate()
 }
 
 // startRenameTab opens the tab editor on the current workspace for renaming.
@@ -240,6 +241,7 @@ func (d *DesktopEngine) handleControlMode(ev *tcell.EventKey) {
 		if d.zoomedPane != nil {
 			d.activeWorkspace.CloseActivePane()
 			d.zoomedPane = nil
+			d.broadcastStateUpdate()
 		} else {
 			d.activeWorkspace.CloseActivePane()
 		}
