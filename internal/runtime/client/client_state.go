@@ -23,6 +23,7 @@ import (
 	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/effects"
 	"github.com/framegrace/texelation/internal/keybind"
+	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -470,11 +471,17 @@ func (s *clientState) applyStateUpdate(update protocol.StateUpdate) {
 		s.desktopBg = bg
 		s.defaultBg = bg
 	}
+	prevZoomed := s.zoomed
+	prevPane := s.zoomedPane
 	s.zoomed = update.Zoomed
 	if update.Zoomed {
 		s.zoomedPane = update.ZoomedPaneID
 	} else {
 		s.zoomedPane = [16]byte{}
+	}
+	if prevZoomed != s.zoomed || prevPane != s.zoomedPane {
+		zoomdebug.Logf("MsgStateUpdate: zoomed %v->%v pane %x->%x",
+			prevZoomed, s.zoomed, prevPane[:4], s.zoomedPane[:4])
 	}
 	s.recomputeDefaultStyle()
 	if s.effects != nil && prevControl != s.controlMode {
