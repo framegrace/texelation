@@ -220,6 +220,14 @@ func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []
 	pc := state.paneCacheFor(pane.ID)
 	if vc.AltScreen {
 		row, found := pc.AltRowAt(rowIdx)
+		if state.zoomed && pane.ID == state.zoomedPane && rowIdx == 0 {
+			rowLen := 0
+			if found && row != nil {
+				rowLen = len(row)
+			}
+			zoomdebug.Logf("rowSourceForPane alt: pane=%x rect=%dx%d rowIdx=%d found=%v rowLen=%d",
+				pane.ID[:4], pane.Rect.Width, pane.Rect.Height, rowIdx, found, rowLen)
+		}
 		if !found {
 			return pane.RowCellsDirect(rowIdx)
 		}

@@ -16,6 +16,7 @@ package client
 import (
 	"sync"
 
+	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	"github.com/framegrace/texelation/protocol"
 	"github.com/gdamore/tcell/v2"
 )
@@ -63,14 +64,27 @@ func (c *PaneCache) ApplyDelta(d protocol.BufferDelta) {
 	// NOTE: Styles are per-delta. We decode spans into concrete cells
 	// eagerly so later reads don't need the style table.
 	styles := d.Styles
+	maxCol := 0
 	for _, row := range d.Rows {
 		cells := decodeSpans(row.Spans, styles)
+		if len(cells) > maxCol {
+			maxCol = len(cells)
+		}
 		if alt {
 			c.putAlt(int(row.Row), cells)
 		} else {
 			gid := d.RowBase + int64(row.Row)
 			c.main[gid] = cells
 		}
+	}
+	if alt && zoomdebug.Enabled() && len(d.Rows) > 0 {
+		altLen := len(c.alt)
+		firstLen := 0
+		if altLen > 0 && c.alt[0] != nil {
+			firstLen = len(c.alt[0])
+		}
+		zoomdebug.Logf("ApplyDelta alt: pane=%x rows_in=%d max_col=%d alt_len=%d first_row_len=%d",
+			d.PaneID[:4], len(d.Rows), maxCol, altLen, firstLen)
 	}
 }
 
