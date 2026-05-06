@@ -18,6 +18,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/client"
+	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -268,13 +269,24 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 	panes := state.cache.SortedPanes()
 	var dcCache dynColorCache
 
+	zoomdebug.Logf("incrementalComposite: zoomed=%v zoomPane=%x screen=%dx%d panes=%d",
+		state.zoomed, state.zoomedPane[:4], screenW, screenH, len(panes))
+
 	for _, pane := range panes {
 		if pane == nil {
 			continue
 		}
-		if !pane.Dirty && !pane.HasAnimated {
+		if state.zoomed && pane.ID != state.zoomedPane {
+			zoomdebug.Logf("  pane=%x decision=skip reason=non-zoomed dirty=%v animated=%v",
+				pane.ID[:4], pane.Dirty, pane.HasAnimated)
 			continue
 		}
+		if !pane.Dirty && !pane.HasAnimated {
+			zoomdebug.Logf("  pane=%x decision=skip reason=clean", pane.ID[:4])
+			continue
+		}
+		zoomdebug.Logf("  pane=%x decision=paint dirty=%v animated=%v zorder=%d",
+			pane.ID[:4], pane.Dirty, pane.HasAnimated, pane.ZOrder)
 
 		x := pane.Rect.X
 		y := pane.Rect.Y
