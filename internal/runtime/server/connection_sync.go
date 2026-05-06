@@ -57,12 +57,16 @@ func (c *connection) sendPending() error {
 	return nil
 }
 
-func (c *connection) sendStateUpdate(state texel.StatePayload) {
+// statePayloadToProtocol converts a desktop StatePayload into the
+// wire-format protocol.StateUpdate. Extracted from sendStateUpdate so
+// the field-by-field mapping (especially the Zoomed/ZoomedPaneID copy
+// that this function existed without and was the issue #235 root
+// cause) can be unit-tested without spinning up a connection.
+func statePayloadToProtocol(state texel.StatePayload) protocol.StateUpdate {
 	const (
 		minInt32 = -1 << 31
 		maxInt32 = 1<<31 - 1
 	)
-
 	all := make([]int32, 0, len(state.AllWorkspaces))
 	for _, id := range state.AllWorkspaces {
 		if id < minInt32 || id > maxInt32 {
@@ -71,23 +75,27 @@ func (c *connection) sendStateUpdate(state texel.StatePayload) {
 		}
 		all = append(all, int32(id))
 	}
-
 	workspaceID := int32(0)
 	if state.WorkspaceID < minInt32 || state.WorkspaceID > maxInt32 {
 		log.Printf("connection: active workspace id %d out of int32 range; defaulting to 0", state.WorkspaceID)
 	} else {
 		workspaceID = int32(state.WorkspaceID)
 	}
-
 	r, g, b := state.DesktopBgColor.RGB()
-	update := protocol.StateUpdate{
+	return protocol.StateUpdate{
 		WorkspaceID:   workspaceID,
 		AllWorkspaces: all,
 		InControlMode: state.InControlMode,
 		SubMode:       state.SubMode,
 		ActiveTitle:   state.ActiveTitle,
 		DesktopBgRGB:  colorToRGB(r, g, b),
+		Zoomed:        state.Zoomed,
+		ZoomedPaneID:  state.ZoomedPaneID,
 	}
+}
+
+func (c *connection) sendStateUpdate(state texel.StatePayload) {
+	update := statePayloadToProtocol(state)
 	sink, ok := c.sink.(*DesktopSink)
 	if ok && sink.Desktop() != nil {
 		wsInfos := sink.Desktop().WorkspacesInfo()
