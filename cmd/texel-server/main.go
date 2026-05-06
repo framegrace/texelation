@@ -38,6 +38,7 @@ import (
 	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/keybind"
 	"github.com/framegrace/texelation/internal/runtime/server"
+	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	runtimeadapter "github.com/framegrace/texelation/internal/runtimeadapter"
 	"github.com/framegrace/texelation/registry"
 	"github.com/framegrace/texelation/texel"
@@ -45,6 +46,7 @@ import (
 )
 
 func main() {
+	zoomdebug.Init("server")
 	tcell.SetEncodingFallback(tcell.EncodingFallbackASCII)
 
 	socketPath := flag.String("socket", "/tmp/texelation.sock", "Unix socket path")
