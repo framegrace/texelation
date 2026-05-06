@@ -427,6 +427,32 @@ func render(state *clientState, screen tcell.Screen) {
 	state.dynAnimating = hasDynamic
 }
 
+// partitionPanes splits panes into the normal partition (drawn first,
+// with workspace effects applied) and the floating partition (modals,
+// drawn on top). The zoomed pane, if any, is forced into the normal
+// partition regardless of its ZOrder so floating modals (Ctrl+a help,
+// launchers, etc.) can paint above it. Without this carve-out the
+// zoomed pane's ZOrder=ZOrderAnimation=1000 would put it in floating
+// alongside modals, where ascending-ZOrder paint order makes the zoom
+// pane stomp the modal — the issue #235 symptom #4 root cause.
+func partitionPanes(panes []*client.PaneState, zoomed bool, zoomedPane [16]byte) (normal, floating []*client.PaneState) {
+	const floatingZOrder = 100
+	for _, pane := range panes {
+		if pane == nil {
+			continue
+		}
+		switch {
+		case zoomed && pane.ID == zoomedPane:
+			normal = append(normal, pane)
+		case pane.ZOrder >= floatingZOrder:
+			floating = append(floating, pane)
+		default:
+			normal = append(normal, pane)
+		}
+	}
+	return normal, floating
+}
+
 // fullRender performs a complete render of all panes (original render path).
 // Uses diffAndShow to only send changed cells to the terminal instead of
 // clearing and rewriting everything — this lets tcell skip unchanged cells,
@@ -450,20 +476,12 @@ func fullRender(state *clientState, screen tcell.Screen) {
 
 	// Split panes into normal and floating (overlays).
 	// Workspace effects apply only to normal panes; floating panels draw on top.
-	const floatingZOrder = 100
-	var normalPanes, floatingPanes []*client.PaneState
-	for _, pane := range panes {
-		if pane == nil {
-			continue
-		}
-		partition := "normal"
-		if pane.ZOrder >= floatingZOrder {
-			floatingPanes = append(floatingPanes, pane)
-			partition = "floating"
-		} else {
-			normalPanes = append(normalPanes, pane)
-		}
-		zoomdebug.Logf("  pane=%x partition=%s zorder=%d", pane.ID[:4], partition, pane.ZOrder)
+	normalPanes, floatingPanes := partitionPanes(panes, state.zoomed, state.zoomedPane)
+	for _, pane := range normalPanes {
+		zoomdebug.Logf("  pane=%x partition=normal zorder=%d", pane.ID[:4], pane.ZOrder)
+	}
+	for _, pane := range floatingPanes {
+		zoomdebug.Logf("  pane=%x partition=floating zorder=%d", pane.ID[:4], pane.ZOrder)
 	}
 
 	// Pass 1: composite normal panes
