@@ -220,7 +220,7 @@ func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []
 	pc := state.paneCacheFor(pane.ID)
 	if vc.AltScreen {
 		row, found := pc.AltRowAt(rowIdx)
-		if state.zoomed && pane.ID == state.zoomedPane && rowIdx == 0 {
+		if state.zoomed && pane.ID == state.zoomedPane && (rowIdx == 0 || rowIdx == int(pane.Rect.Height)/2 || rowIdx == int(pane.Rect.Height)-1) {
 			rowLen := 0
 			if found && row != nil {
 				rowLen = len(row)
@@ -586,6 +586,11 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 		y := pane.Rect.Y
 		w := pane.Rect.Width
 		h := pane.Rect.Height
+
+		if state.zoomed {
+			zoomdebug.Logf("compositeInto: pane=%x rect=(%d,%d,%dx%d) is_zoom=%v",
+				pane.ID[:4], x, y, w, h, pane.ID == state.zoomedPane)
+		}
 
 		if w <= 0 || h <= 0 {
 			continue
