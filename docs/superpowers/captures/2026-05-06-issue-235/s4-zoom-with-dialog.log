@@ -1,0 +1,151 @@
+2026/05/06 08:26:37 [zoom-debug]   pane=b6fc60fe emit rows=29 decor=32 revision=1195
+2026/05/06 08:26:37 [zoom-debug] publish: pane=cbacd5e4 rect=255x2 snap=2x255 prev=0x0 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=cbacd5e4 haveVP=true vpRows=2 vpCols=255 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=cbacd5e4 emit rows=2 decor=0 revision=1195
+2026/05/06 08:26:37 [zoom-debug] publish: pane=50a6c5ee rect=46x19 snap=19x46 prev=0x0 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=50a6c5ee haveVP=true vpRows=19 vpCols=46 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=50a6c5ee emit rows=19 decor=0 revision=2
+2026/05/06 08:26:37 [zoom-debug] publish: pane=ec6ea992 rect=125x30 snap=30x125 prev=30x125 alt=false
+2026/05/06 08:26:37 [zoom-debug]   pane=ec6ea992 haveVP=true vpRows=30 vpCols=125 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=ec6ea992 emit rows=0 decor=0 revision=1196
+2026/05/06 08:26:37 [zoom-debug] publish: pane=b0c7224b rect=130x30 snap=30x130 prev=30x130 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=b0c7224b haveVP=true vpRows=30 vpCols=130 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=b0c7224b emit rows=6 decor=0 revision=1196
+2026/05/06 08:26:37 [zoom-debug] publish: pane=e45f8511 rect=102x32 snap=32x102 prev=32x102 alt=false
+2026/05/06 08:26:37 [zoom-debug]   pane=e45f8511 haveVP=true vpRows=32 vpCols=102 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=e45f8511 emit rows=0 decor=0 revision=1196
+2026/05/06 08:26:37 [zoom-debug] publish: pane=b6fc60fe rect=153x32 snap=32x153 prev=32x153 alt=false
+2026/05/06 08:26:37 [zoom-debug]   pane=b6fc60fe haveVP=true vpRows=32 vpCols=153 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=b6fc60fe emit rows=0 decor=0 revision=1196
+2026/05/06 08:26:37 [zoom-debug] publish: pane=cbacd5e4 rect=255x2 snap=2x255 prev=2x255 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=cbacd5e4 haveVP=true vpRows=2 vpCols=255 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=cbacd5e4 emit rows=0 decor=0 revision=1196
+2026/05/06 08:26:37 [zoom-debug] publish: pane=50a6c5ee rect=46x19 snap=19x46 prev=19x46 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=50a6c5ee haveVP=true vpRows=19 vpCols=46 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=50a6c5ee emit rows=0 decor=0 revision=3
+2026/05/06 08:26:37 [zoom-debug] publish: pane=ec6ea992 rect=125x30 snap=30x125 prev=30x125 alt=false
+2026/05/06 08:26:37 [zoom-debug]   pane=ec6ea992 haveVP=true vpRows=30 vpCols=125 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=ec6ea992 emit rows=0 decor=0 revision=1197
+2026/05/06 08:26:37 [zoom-debug] publish: pane=b0c7224b rect=130x30 snap=30x130 prev=30x130 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=b0c7224b haveVP=true vpRows=30 vpCols=130 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=b0c7224b emit rows=0 decor=0 revision=1197
+2026/05/06 08:26:37 [zoom-debug] publish: pane=e45f8511 rect=102x32 snap=32x102 prev=32x102 alt=false
+2026/05/06 08:26:37 [zoom-debug]   pane=e45f8511 haveVP=true vpRows=32 vpCols=102 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=e45f8511 emit rows=0 decor=0 revision=1197
+2026/05/06 08:26:37 [zoom-debug] publish: pane=b6fc60fe rect=153x32 snap=32x153 prev=32x153 alt=false
+2026/05/06 08:26:37 [zoom-debug]   pane=b6fc60fe haveVP=true vpRows=32 vpCols=153 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=b6fc60fe emit rows=0 decor=0 revision=1197
+2026/05/06 08:26:37 [zoom-debug] publish: pane=cbacd5e4 rect=255x2 snap=2x255 prev=2x255 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=cbacd5e4 haveVP=true vpRows=2 vpCols=255 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=cbacd5e4 emit rows=0 decor=0 revision=1197
+2026/05/06 08:26:37 [zoom-debug] publish: pane=50a6c5ee rect=46x19 snap=19x46 prev=19x46 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=50a6c5ee haveVP=true vpRows=19 vpCols=46 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=50a6c5ee emit rows=0 decor=0 revision=4
+2026/05/06 08:26:37 [zoom-debug] publish: pane=ec6ea992 rect=125x30 snap=30x125 prev=30x125 alt=false
+2026/05/06 08:26:37 [zoom-debug]   pane=ec6ea992 haveVP=true vpRows=30 vpCols=125 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=ec6ea992 emit rows=0 decor=0 revision=1198
+2026/05/06 08:26:37 [zoom-debug] publish: pane=b0c7224b rect=130x30 snap=30x130 prev=30x130 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=b0c7224b haveVP=true vpRows=30 vpCols=130 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=b0c7224b emit rows=0 decor=0 revision=1198
+2026/05/06 08:26:37 [zoom-debug] publish: pane=e45f8511 rect=102x32 snap=32x102 prev=32x102 alt=false
+2026/05/06 08:26:37 [zoom-debug]   pane=e45f8511 haveVP=true vpRows=32 vpCols=102 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=e45f8511 emit rows=0 decor=0 revision=1198
+2026/05/06 08:26:37 [zoom-debug] publish: pane=b6fc60fe rect=153x32 snap=32x153 prev=32x153 alt=false
+2026/05/06 08:26:37 [zoom-debug]   pane=b6fc60fe haveVP=true vpRows=32 vpCols=153 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=b6fc60fe emit rows=0 decor=0 revision=1198
+2026/05/06 08:26:37 [zoom-debug] publish: pane=cbacd5e4 rect=255x2 snap=2x255 prev=2x255 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=cbacd5e4 haveVP=true vpRows=2 vpCols=255 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=cbacd5e4 emit rows=0 decor=0 revision=1198
+2026/05/06 08:26:37 [zoom-debug] publish: pane=50a6c5ee rect=46x19 snap=19x46 prev=19x46 alt=true
+2026/05/06 08:26:37 [zoom-debug]   pane=50a6c5ee haveVP=true vpRows=19 vpCols=46 autoFollow=true
+2026/05/06 08:26:37 [zoom-debug]   pane=50a6c5ee emit rows=0 decor=0 revision=5
+2026/05/06 08:26:38 [zoom-debug] recalculateLayout: zoom paneID=ec6ea992 rect=(0,2,255,64)
+2026/05/06 08:26:38 [zoom-debug] recalculateLayout: zoom paneID=ec6ea992 rect=(0,2,255,64)
+2026/05/06 08:26:38 DesktopSink.Snapshot: ActiveWS=1, Panes=6
+2026/05/06 08:26:38 [zoom-debug] publish: pane=ec6ea992 rect=255x62 snap=62x255 prev=30x125 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 haveVP=true vpRows=30 vpCols=125 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 emit rows=59 decor=62 revision=1199
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b0c7224b rect=130x30 snap=30x130 prev=30x130 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b haveVP=true vpRows=30 vpCols=130 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b emit rows=0 decor=0 revision=1199
+2026/05/06 08:26:38 [zoom-debug] publish: pane=e45f8511 rect=102x32 snap=32x102 prev=32x102 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 haveVP=true vpRows=32 vpCols=102 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 emit rows=0 decor=1 revision=1199
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b6fc60fe rect=153x32 snap=32x153 prev=32x153 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe haveVP=true vpRows=32 vpCols=153 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe emit rows=0 decor=0 revision=1199
+2026/05/06 08:26:38 [zoom-debug] publish: pane=cbacd5e4 rect=255x2 snap=2x255 prev=2x255 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 haveVP=true vpRows=2 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 emit rows=0 decor=0 revision=1199
+2026/05/06 08:26:38 [zoom-debug] publish: pane=50a6c5ee rect=46x19 snap=19x46 prev=19x46 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=50a6c5ee haveVP=true vpRows=19 vpCols=46 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=50a6c5ee emit rows=0 decor=0 revision=6
+2026/05/06 08:26:38 [zoom-debug] recalculateLayout: zoom paneID=ec6ea992 rect=(0,2,255,64)
+2026/05/06 08:26:38 [zoom-debug] recalculateLayout: zoom paneID=ec6ea992 rect=(0,2,255,64)
+2026/05/06 08:26:38 [zoom-debug] publish: pane=ec6ea992 rect=255x62 snap=62x255 prev=0x0 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 haveVP=true vpRows=62 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 emit rows=59 decor=62 revision=1200
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b0c7224b rect=130x30 snap=30x130 prev=0x0 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b haveVP=true vpRows=30 vpCols=130 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b emit rows=30 decor=0 revision=1200
+2026/05/06 08:26:38 [zoom-debug] publish: pane=e45f8511 rect=102x32 snap=32x102 prev=0x0 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 haveVP=true vpRows=32 vpCols=102 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 emit rows=29 decor=32 revision=1200
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b6fc60fe rect=153x32 snap=32x153 prev=0x0 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe haveVP=true vpRows=32 vpCols=153 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe emit rows=29 decor=32 revision=1200
+2026/05/06 08:26:38 [zoom-debug] publish: pane=cbacd5e4 rect=255x2 snap=2x255 prev=0x0 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 haveVP=true vpRows=2 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 DesktopSink.Snapshot: ActiveWS=1, Panes=5
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 emit rows=2 decor=0 revision=1200
+2026/05/06 08:26:38 [zoom-debug] publish: pane=ec6ea992 rect=255x62 snap=62x255 prev=62x255 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 haveVP=true vpRows=62 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 emit rows=0 decor=0 revision=1201
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b0c7224b rect=130x30 snap=30x130 prev=30x130 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b haveVP=true vpRows=30 vpCols=130 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b emit rows=0 decor=0 revision=1201
+2026/05/06 08:26:38 [zoom-debug] publish: pane=e45f8511 rect=102x32 snap=32x102 prev=32x102 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 haveVP=true vpRows=32 vpCols=102 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 emit rows=0 decor=0 revision=1201
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b6fc60fe rect=153x32 snap=32x153 prev=32x153 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe haveVP=true vpRows=32 vpCols=153 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe emit rows=0 decor=0 revision=1201
+2026/05/06 08:26:38 [zoom-debug] publish: pane=cbacd5e4 rect=255x2 snap=2x255 prev=2x255 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 haveVP=true vpRows=2 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 emit rows=0 decor=0 revision=1201
+2026/05/06 08:26:38 [zoom-debug] publish: pane=ec6ea992 rect=255x62 snap=62x255 prev=0x0 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 haveVP=true vpRows=62 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 emit rows=59 decor=62 revision=1202
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b0c7224b rect=130x30 snap=30x130 prev=0x0 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b haveVP=true vpRows=30 vpCols=130 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b emit rows=30 decor=0 revision=1202
+2026/05/06 08:26:38 [zoom-debug] publish: pane=e45f8511 rect=102x32 snap=32x102 prev=0x0 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 haveVP=true vpRows=32 vpCols=102 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 emit rows=29 decor=32 revision=1202
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b6fc60fe rect=153x32 snap=32x153 prev=0x0 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe haveVP=true vpRows=32 vpCols=153 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe emit rows=29 decor=32 revision=1202
+2026/05/06 08:26:38 [zoom-debug] publish: pane=cbacd5e4 rect=255x2 snap=2x255 prev=0x0 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 haveVP=true vpRows=2 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 emit rows=2 decor=0 revision=1202
+2026/05/06 08:26:38 [zoom-debug] publish: pane=ec6ea992 rect=255x62 snap=62x255 prev=62x255 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 haveVP=true vpRows=62 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 emit rows=0 decor=0 revision=1203
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b0c7224b rect=130x30 snap=30x130 prev=30x130 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b haveVP=true vpRows=30 vpCols=130 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b emit rows=0 decor=0 revision=1203
+2026/05/06 08:26:38 [zoom-debug] publish: pane=e45f8511 rect=102x32 snap=32x102 prev=32x102 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 haveVP=true vpRows=32 vpCols=102 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=e45f8511 emit rows=0 decor=0 revision=1203
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b6fc60fe rect=153x32 snap=32x153 prev=32x153 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe haveVP=true vpRows=32 vpCols=153 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b6fc60fe emit rows=0 decor=0 revision=1203
+2026/05/06 08:26:38 [zoom-debug] publish: pane=cbacd5e4 rect=255x2 snap=2x255 prev=2x255 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 haveVP=true vpRows=2 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=cbacd5e4 emit rows=1 decor=0 revision=1203
+2026/05/06 08:26:38 [zoom-debug] publish: pane=ec6ea992 rect=255x62 snap=62x255 prev=62x255 alt=false
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 haveVP=true vpRows=62 vpCols=255 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=ec6ea992 emit rows=1 decor=1 revision=1204
+2026/05/06 08:26:38 [zoom-debug] publish: pane=b0c7224b rect=130x30 snap=30x130 prev=30x130 alt=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b haveVP=true vpRows=30 vpCols=130 autoFollow=true
+2026/05/06 08:26:38 [zoom-debug]   pane=b0c7224b emit rows=0 decor=0 revision=1204
