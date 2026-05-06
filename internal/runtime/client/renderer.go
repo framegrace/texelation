@@ -445,6 +445,9 @@ func fullRender(state *clientState, screen tcell.Screen) {
 
 	panes := state.cache.SortedPanes()
 
+	zoomdebug.Logf("fullRender: zoomed=%v zoomPane=%x panes=%d",
+		state.zoomed, state.zoomedPane[:4], len(panes))
+
 	// Split panes into normal and floating (overlays).
 	// Workspace effects apply only to normal panes; floating panels draw on top.
 	const floatingZOrder = 100
@@ -453,11 +456,14 @@ func fullRender(state *clientState, screen tcell.Screen) {
 		if pane == nil {
 			continue
 		}
+		partition := "normal"
 		if pane.ZOrder >= floatingZOrder {
 			floatingPanes = append(floatingPanes, pane)
+			partition = "floating"
 		} else {
 			normalPanes = append(normalPanes, pane)
 		}
+		zoomdebug.Logf("  pane=%x partition=%s zorder=%d", pane.ID[:4], partition, pane.ZOrder)
 	}
 
 	// Pass 1: composite normal panes
