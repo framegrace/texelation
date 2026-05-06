@@ -15,6 +15,7 @@ import (
 
 	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelation/internal/effects"
+	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -235,6 +236,7 @@ func handleControlMessage(state *clientState, hdr protocol.Header, payload []byt
 			log.Printf("decode state update failed: %v", err)
 			return false
 		}
+		zoomdebug.Logf("MsgStateUpdate received: zoomed=%v zoomPane=%x", update.Zoomed, update.ZoomedPaneID[:4])
 		debuglog.Printf("state update: control=%v sub=%q zoom=%v", update.InControlMode, update.SubMode, update.Zoomed)
 		state.applyStateUpdate(update)
 		return true

@@ -15,6 +15,7 @@ import (
 	"github.com/framegrace/texelation/config"
 	"github.com/framegrace/texelation/internal/debuglog"
 	"github.com/framegrace/texelation/internal/keybind"
+	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	"github.com/framegrace/texelation/registry"
 	"github.com/framegrace/texelui/theme"
 	"github.com/gdamore/tcell/v2"
@@ -466,7 +467,10 @@ func (d *DesktopEngine) LastMouseModifiers() tcell.ModMask {
 
 // broadcastStateUpdate now broadcasts on the Desktop's dispatcher
 func (d *DesktopEngine) broadcastStateUpdate() {
+	zoomdebug.Logf("broadcastStateUpdate called: zoomedPane=%v",
+		d.zoomedPane != nil)
 	if d.activeWorkspace == nil {
+		zoomdebug.Logf("broadcastStateUpdate: no active workspace, skipping")
 		return
 	}
 	var title string
@@ -487,9 +491,11 @@ func (d *DesktopEngine) broadcastStateUpdate() {
 	payload := d.currentStatePayload(allWsIDs, title)
 
 	if !d.shouldBroadcastState(payload) {
+		zoomdebug.Logf("broadcastStateUpdate: deduplicated zoomed=%v", payload.Zoomed)
 		return
 	}
-
+	zoomdebug.Logf("broadcastStateUpdate: dispatching zoomed=%v zoomPane=%x",
+		payload.Zoomed, payload.ZoomedPaneID[:4])
 	d.dispatcher.Broadcast(Event{
 		Type:    EventStateUpdate,
 		Payload: payload,

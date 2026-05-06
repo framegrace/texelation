@@ -11,6 +11,7 @@ package server
 import (
 	"log"
 
+	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
 )
@@ -186,6 +187,8 @@ func (c *connection) OnEvent(event texel.Event) {
 		if !ok {
 			return
 		}
+		zoomdebug.Logf("connection.OnEvent EventStateUpdate: zoomed=%v zoomPane=%x",
+			payload.Zoomed, payload.ZoomedPaneID[:4])
 		c.sendStateUpdate(payload)
 	case texel.EventTreeChanged:
 		c.sendTreeSnapshot()
