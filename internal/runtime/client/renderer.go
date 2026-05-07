@@ -396,6 +396,23 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 			}
 		}
 
+		if state.zoomed && pane.ID == state.zoomedPane {
+			midY := y + h/2
+			if midY >= 0 && midY < screenH && midY < len(state.prevBuffer) {
+				rowLen := len(state.prevBuffer[midY])
+				sampleCols := []int{0, 50, 127, 200, 250}
+				var samples [5]rune
+				for i, c := range sampleCols {
+					if c < rowLen {
+						samples[i] = state.prevBuffer[midY][c].Ch
+					}
+				}
+				zoomdebug.Logf("incrementalComposite zoom-paint: pane=%x midY=%d rowLen=%d samples@(0,50,127,200,250)=%q,%q,%q,%q,%q",
+					pane.ID[:4], midY, rowLen,
+					samples[0], samples[1], samples[2], samples[3], samples[4])
+			}
+		}
+
 		pane.ClearDirty()
 	}
 	return hasDynamic
