@@ -220,13 +220,19 @@ func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []
 	pc := state.paneCacheFor(pane.ID)
 	if vc.AltScreen {
 		row, found := pc.AltRowAt(rowIdx)
-		if state.zoomed && pane.ID == state.zoomedPane && (rowIdx == 0 || rowIdx == int(pane.Rect.Height)/2 || rowIdx == int(pane.Rect.Height)-1) {
+		if state.zoomed && pane.ID == state.zoomedPane {
 			rowLen := 0
 			if found && row != nil {
 				rowLen = len(row)
 			}
-			zoomdebug.Logf("rowSourceForPane alt: pane=%x rect=%dx%d rowIdx=%d found=%v rowLen=%d",
-				pane.ID[:4], pane.Rect.Width, pane.Rect.Height, rowIdx, found, rowLen)
+			// Always log: missing rows or short rows (less than pane width).
+			if !found || row == nil || rowLen < pane.Rect.Width {
+				zoomdebug.Logf("rowSourceForPane alt SHORT: pane=%x rect=%dx%d rowIdx=%d found=%v rowLen=%d",
+					pane.ID[:4], pane.Rect.Width, pane.Rect.Height, rowIdx, found, rowLen)
+			} else if rowIdx == 0 || rowIdx == int(pane.Rect.Height)/2 || rowIdx == int(pane.Rect.Height)-1 {
+				zoomdebug.Logf("rowSourceForPane alt OK: pane=%x rect=%dx%d rowIdx=%d rowLen=%d",
+					pane.ID[:4], pane.Rect.Width, pane.Rect.Height, rowIdx, rowLen)
+			}
 		}
 		if !found {
 			return pane.RowCellsDirect(rowIdx)
