@@ -272,6 +272,21 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 		if pane == nil {
 			continue
 		}
+		// When a pane is zoomed, only the zoomed pane is visible.
+		// Non-zoomed panes' dirty content updates flow into the
+		// PaneCache (separate path), but they must not paint into
+		// the screen buffer — the incremental composite would
+		// otherwise stomp on the zoomed pane's cells whenever the
+		// non-zoomed pane has a cursor blink, output, or animated
+		// effect, producing the "panes appear/disappear over the
+		// zoomed view" flicker (issue #235.1).
+		//
+		// We intentionally do NOT ClearDirty here: when the user
+		// unzooms, the pending dirty flags drive the catch-up
+		// render so previously-skipped updates land in one frame.
+		if state.zoomed && pane.ID != state.zoomedPane {
+			continue
+		}
 		if !pane.Dirty && !pane.HasAnimated {
 			continue
 		}
@@ -415,6 +430,32 @@ func render(state *clientState, screen tcell.Screen) {
 	state.dynAnimating = hasDynamic
 }
 
+// partitionPanes splits panes into the normal partition (drawn first,
+// with workspace effects applied) and the floating partition (modals,
+// drawn on top). The zoomed pane, if any, is forced into the normal
+// partition regardless of its ZOrder so floating modals (Ctrl+a help,
+// launchers, etc.) can paint above it. Without this carve-out the
+// zoomed pane's ZOrder=ZOrderAnimation=1000 would put it in floating
+// alongside modals, where ascending-ZOrder paint order makes the zoom
+// pane stomp the modal — the issue #235 symptom #4 root cause.
+func partitionPanes(panes []*client.PaneState, zoomed bool, zoomedPane [16]byte) (normal, floating []*client.PaneState) {
+	const floatingZOrder = 100
+	for _, pane := range panes {
+		if pane == nil {
+			continue
+		}
+		switch {
+		case zoomed && pane.ID == zoomedPane:
+			normal = append(normal, pane)
+		case pane.ZOrder >= floatingZOrder:
+			floating = append(floating, pane)
+		default:
+			normal = append(normal, pane)
+		}
+	}
+	return normal, floating
+}
+
 // fullRender performs a complete render of all panes (original render path).
 // Uses diffAndShow to only send changed cells to the terminal instead of
 // clearing and rewriting everything — this lets tcell skip unchanged cells,
@@ -435,18 +476,7 @@ func fullRender(state *clientState, screen tcell.Screen) {
 
 	// Split panes into normal and floating (overlays).
 	// Workspace effects apply only to normal panes; floating panels draw on top.
-	const floatingZOrder = 100
-	var normalPanes, floatingPanes []*client.PaneState
-	for _, pane := range panes {
-		if pane == nil {
-			continue
-		}
-		if pane.ZOrder >= floatingZOrder {
-			floatingPanes = append(floatingPanes, pane)
-		} else {
-			normalPanes = append(normalPanes, pane)
-		}
-	}
+	normalPanes, floatingPanes := partitionPanes(panes, state.zoomed, state.zoomedPane)
 
 	// Pass 1: composite normal panes
 	hasDynamic := compositeInto(workspaceBuffer, normalPanes, state, width, height)

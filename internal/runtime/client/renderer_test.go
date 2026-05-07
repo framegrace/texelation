@@ -1119,3 +1119,86 @@ func TestRowSourceForPane_WrappedChainGidGap(t *testing.T) {
 		}
 	}
 }
+
+// TestPartitionPanes_ZoomedPaneStaysInNormal guards issue #235 symptom #4:
+// when a pane is zoomed, its ZOrder=ZOrderAnimation=1000 would normally
+// place it in the floating partition, where it would paint over modal
+// dialogs (e.g. the Ctrl+a help dialog). The fix forces the zoomed pane
+// into the normal partition so floating modals stay above it.
+func TestPartitionPanes_ZoomedPaneStaysInNormal(t *testing.T) {
+	zoomedID := [16]byte{0xAA}
+	helpID := [16]byte{0xBB}
+	splitID := [16]byte{0xCC}
+
+	panes := []*client.PaneState{
+		{ID: splitID, ZOrder: 0},
+		{ID: helpID, ZOrder: 100},
+		{ID: zoomedID, ZOrder: 1000},
+	}
+
+	normal, floating := partitionPanes(panes, true, zoomedID)
+
+	hasZoomInNormal := false
+	for _, p := range normal {
+		if p.ID == zoomedID {
+			hasZoomInNormal = true
+		}
+	}
+	if !hasZoomInNormal {
+		t.Fatalf("zoomed pane should be in normal partition; got normal=%v", normal)
+	}
+
+	hasHelpInFloating := false
+	for _, p := range floating {
+		if p.ID == helpID {
+			hasHelpInFloating = true
+		}
+	}
+	if !hasHelpInFloating {
+		t.Fatalf("help dialog should be in floating partition; got floating=%v", floating)
+	}
+
+	for _, p := range floating {
+		if p.ID == zoomedID {
+			t.Fatalf("zoomed pane must NOT be in floating partition")
+		}
+	}
+}
+
+// TestPartitionPanes_NotZoomedPreservesOriginalLogic ensures the
+// zoom carve-out only fires when state.zoomed is true.
+func TestPartitionPanes_NotZoomedPreservesOriginalLogic(t *testing.T) {
+	helpID := [16]byte{0xBB}
+	splitID := [16]byte{0xCC}
+
+	panes := []*client.PaneState{
+		{ID: splitID, ZOrder: 0},
+		{ID: helpID, ZOrder: 100},
+	}
+
+	normal, floating := partitionPanes(panes, false, [16]byte{})
+
+	if len(normal) != 1 || normal[0].ID != splitID {
+		t.Fatalf("split pane should be in normal; got %v", normal)
+	}
+	if len(floating) != 1 || floating[0].ID != helpID {
+		t.Fatalf("help dialog should be in floating; got %v", floating)
+	}
+}
+
+// TestPartitionPanes_NilEntriesSkipped guards against panic on nil
+// entries in the SortedPanes slice (transient cache states).
+func TestPartitionPanes_NilEntriesSkipped(t *testing.T) {
+	panes := []*client.PaneState{
+		nil,
+		{ID: [16]byte{0x01}, ZOrder: 0},
+		nil,
+	}
+	normal, floating := partitionPanes(panes, false, [16]byte{})
+	if len(normal) != 1 {
+		t.Fatalf("expected 1 normal pane, got %d", len(normal))
+	}
+	if len(floating) != 0 {
+		t.Fatalf("expected 0 floating panes, got %d", len(floating))
+	}
+}

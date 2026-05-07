@@ -369,3 +369,115 @@ func TestMouseBorderResizeAdjustsRatios(t *testing.T) {
 		t.Fatalf("expected left ratio to grow after drag (before=%.3f, after=%.3f)", initialLeftRatio, root.SplitRatios[0])
 	}
 }
+
+// stateUpdateRecorder is a Listener that records every EventStateUpdate
+// it receives. Used by zoom-broadcast regression tests to assert the
+// desktop emits MsgStateUpdate-equivalent events at the right times.
+type stateUpdateRecorder struct {
+	events []StatePayload
+}
+
+func (r *stateUpdateRecorder) OnEvent(e Event) {
+	if e.Type != EventStateUpdate {
+		return
+	}
+	if p, ok := e.Payload.(StatePayload); ok {
+		r.events = append(r.events, p)
+	}
+}
+
+// TestToggleZoom_BroadcastsStateUpdate guards issue #235's root cause:
+// toggleZoom must emit EventStateUpdate so the client can flip
+// state.zoomed and state.zoomedPane on its side. Pre-fix, the desktop
+// silently mutated d.zoomedPane and the client never saw it — see
+// docs/superpowers/captures/2026-05-06-issue-235/FINDINGS-v2.md.
+func TestToggleZoom_BroadcastsStateUpdate(t *testing.T) {
+	driver := &stubScreenDriver{}
+	lifecycle := &trackingLifecycle{}
+	shellFactory := func() App { return newFakeApp("shell") }
+
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init: %v", err)
+	}
+	defer desktop.Close()
+
+	desktop.SwitchToWorkspace(1)
+	desktop.activeWorkspace.AddApp(newFakeApp("initial"))
+
+	rec := &stateUpdateRecorder{}
+	desktop.Subscribe(rec)
+
+	pane := desktop.activeWorkspace.tree.ActiveLeaf.Pane
+	if pane == nil {
+		t.Fatalf("active workspace should have a pane after AddApp")
+	}
+	wantID := pane.ID()
+
+	// Zoom in.
+	before := len(rec.events)
+	desktop.toggleZoom()
+	if len(rec.events) <= before {
+		t.Fatalf("toggleZoom (zoom-in) did not emit EventStateUpdate")
+	}
+	last := rec.events[len(rec.events)-1]
+	if !last.Zoomed {
+		t.Fatalf("expected Zoomed=true after zoom-in, got %+v", last)
+	}
+	if last.ZoomedPaneID != wantID {
+		t.Fatalf("expected ZoomedPaneID=%x, got %x", wantID, last.ZoomedPaneID)
+	}
+
+	// Zoom out.
+	before = len(rec.events)
+	desktop.toggleZoom()
+	if len(rec.events) <= before {
+		t.Fatalf("toggleZoom (zoom-out) did not emit EventStateUpdate")
+	}
+	last = rec.events[len(rec.events)-1]
+	if last.Zoomed {
+		t.Fatalf("expected Zoomed=false after zoom-out, got %+v", last)
+	}
+}
+
+// TestSwitchToWorkspace_ClearsZoomViaStateUpdate guards the second
+// zoom-mutation site identified in the issue #235 audit: clearing
+// d.zoomedPane during workspace switch must also trip a state
+// broadcast so the client doesn't keep state.zoomed=true after the
+// switch.
+func TestSwitchToWorkspace_ClearsZoomViaStateUpdate(t *testing.T) {
+	driver := &stubScreenDriver{}
+	lifecycle := &trackingLifecycle{}
+	shellFactory := func() App { return newFakeApp("shell") }
+
+	desktop, err := NewDesktopEngineWithDriver(driver, shellFactory, "", lifecycle)
+	if err != nil {
+		t.Fatalf("desktop init: %v", err)
+	}
+	defer desktop.Close()
+
+	desktop.SwitchToWorkspace(1)
+	desktop.activeWorkspace.AddApp(newFakeApp("ws1-app"))
+
+	// Zoom in workspace 1 first.
+	desktop.toggleZoom()
+	if desktop.zoomedPane == nil {
+		t.Fatalf("expected zoom to engage in workspace 1")
+	}
+
+	rec := &stateUpdateRecorder{}
+	desktop.Subscribe(rec)
+
+	desktop.SwitchToWorkspace(2)
+
+	if desktop.zoomedPane != nil {
+		t.Fatalf("workspace switch should clear zoomedPane")
+	}
+	if len(rec.events) == 0 {
+		t.Fatalf("workspace switch with active zoom did not emit EventStateUpdate")
+	}
+	last := rec.events[len(rec.events)-1]
+	if last.Zoomed {
+		t.Fatalf("expected Zoomed=false after switching workspaces, got %+v", last)
+	}
+}
