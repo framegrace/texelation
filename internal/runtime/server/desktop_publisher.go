@@ -17,7 +17,6 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	"github.com/framegrace/texelation/protocol"
 	"github.com/framegrace/texelation/texel"
 	"github.com/framegrace/texelui/color"
@@ -158,24 +157,6 @@ func (p *DesktopPublisher) Publish() error {
 // given snapshots. The caller must hold p.mu.
 func (p *DesktopPublisher) publishSnapshotsLocked(buffers []texel.PaneSnapshot) error {
 	for _, snap := range buffers {
-		if zoomdebug.Enabled() {
-			prevShapeRows := 0
-			prevShapeCols := 0
-			if prev := p.prevBuffers[snap.ID]; prev != nil {
-				prevShapeRows = len(prev)
-				if len(prev) > 0 {
-					prevShapeCols = len(prev[0])
-				}
-			}
-			snapRows := len(snap.Buffer)
-			snapCols := 0
-			if snapRows > 0 {
-				snapCols = len(snap.Buffer[0])
-			}
-			zoomdebug.Logf("publish: pane=%x rect=%dx%d snap=%dx%d prev=%dx%d alt=%v",
-				snap.ID[:4], snap.Rect.Width, snap.Rect.Height,
-				snapRows, snapCols, prevShapeRows, prevShapeCols, snap.AltScreen)
-		}
 		vp, haveVP := p.session.Viewport(snap.ID)
 		// Main-screen panes require a viewport before we clip rows: the
 		// client will send one right after handshake. Alt-screen (or
@@ -218,13 +199,9 @@ func (p *DesktopPublisher) publishSnapshotsLocked(buffers []texel.PaneSnapshot) 
 			}
 			p.lastViewport[snap.ID] = vp
 		}
-		zoomdebug.Logf("  pane=%x haveVP=%v vpRows=%d vpCols=%d autoFollow=%v",
-			snap.ID[:4], haveVP, vp.Rows, vp.Cols, vp.AutoFollow)
 		rev := p.session.NextRevision(snap.ID)
 		prev := p.prevBuffers[snap.ID]
 		delta := bufferToDelta(snap, prev, rev, vp)
-		zoomdebug.Logf("  pane=%x emit rows=%d decor=%d revision=%d",
-			snap.ID[:4], len(delta.Rows), len(delta.DecorRows), rev)
 		// Allow decoration-only deltas (e.g. focus change repaints just the
 		// borders): a delta is meaningful if either content rows or
 		// decoration rows changed since the previous frame.

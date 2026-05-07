@@ -6,11 +6,7 @@
 
 package texel
 
-import (
-	"github.com/gdamore/tcell/v2"
-
-	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
-)
+import "github.com/gdamore/tcell/v2"
 
 // StatusBarActions is the interface that the status bar uses to request
 // workspace operations from the desktop engine. It lives here (not in the
@@ -143,11 +139,6 @@ func (d *DesktopEngine) recalculateLayout() {
 
 	// Override zoomed pane to fill the full main area.
 	if d.zoomedPane != nil && d.zoomedPane.Pane != nil {
-		paneID := d.zoomedPane.Pane.ID()
-		zoomdebug.Logf("recalculateLayout: zoom paneID=%x rect=(%d,%d,%d,%d)",
-			paneID[:4], mainX, mainY, mainX+mainW, mainY+mainH)
 		d.zoomedPane.Pane.setDimensions(mainX, mainY, mainX+mainW, mainY+mainH)
-	} else {
-		zoomdebug.Logf("recalculateLayout: no zoom pane")
 	}
 }

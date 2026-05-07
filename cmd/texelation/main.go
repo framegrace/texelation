@@ -27,13 +27,11 @@ import (
 	"github.com/framegrace/texelation/cmd/texelation/boot"
 	"github.com/framegrace/texelation/cmd/texelation/lifecycle"
 	clientrt "github.com/framegrace/texelation/internal/runtime/client"
-	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	texelcore "github.com/framegrace/texelui/core"
 	"github.com/framegrace/texelui/graphics"
 )
 
 func main() {
-	zoomdebug.Init("client")
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

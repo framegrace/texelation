@@ -18,7 +18,6 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/framegrace/texelation/client"
-	"github.com/framegrace/texelation/internal/runtime/zoomdebug"
 	"github.com/framegrace/texelation/protocol"
 )
 
@@ -220,20 +219,6 @@ func rowSourceForPane(state *clientState, pane *client.PaneState, rowIdx int) []
 	pc := state.paneCacheFor(pane.ID)
 	if vc.AltScreen {
 		row, found := pc.AltRowAt(rowIdx)
-		if state.zoomed && pane.ID == state.zoomedPane {
-			rowLen := 0
-			if found && row != nil {
-				rowLen = len(row)
-			}
-			// Always log: missing rows or short rows (less than pane width).
-			if !found || row == nil || rowLen < pane.Rect.Width {
-				zoomdebug.Logf("rowSourceForPane alt SHORT: pane=%x rect=%dx%d rowIdx=%d found=%v rowLen=%d",
-					pane.ID[:4], pane.Rect.Width, pane.Rect.Height, rowIdx, found, rowLen)
-			} else if rowIdx == 0 || rowIdx == int(pane.Rect.Height)/2 || rowIdx == int(pane.Rect.Height)-1 {
-				zoomdebug.Logf("rowSourceForPane alt OK: pane=%x rect=%dx%d rowIdx=%d rowLen=%d",
-					pane.ID[:4], pane.Rect.Width, pane.Rect.Height, rowIdx, rowLen)
-			}
-		}
 		if !found {
 			return pane.RowCellsDirect(rowIdx)
 		}
@@ -283,24 +268,28 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 	panes := state.cache.SortedPanes()
 	var dcCache dynColorCache
 
-	zoomdebug.Logf("incrementalComposite: zoomed=%v zoomPane=%x screen=%dx%d panes=%d",
-		state.zoomed, state.zoomedPane[:4], screenW, screenH, len(panes))
-
 	for _, pane := range panes {
 		if pane == nil {
 			continue
 		}
+		// When a pane is zoomed, only the zoomed pane is visible.
+		// Non-zoomed panes' dirty content updates flow into the
+		// PaneCache (separate path), but they must not paint into
+		// the screen buffer — the incremental composite would
+		// otherwise stomp on the zoomed pane's cells whenever the
+		// non-zoomed pane has a cursor blink, output, or animated
+		// effect, producing the "panes appear/disappear over the
+		// zoomed view" flicker (issue #235.1).
+		//
+		// We intentionally do NOT ClearDirty here: when the user
+		// unzooms, the pending dirty flags drive the catch-up
+		// render so previously-skipped updates land in one frame.
 		if state.zoomed && pane.ID != state.zoomedPane {
-			zoomdebug.Logf("  pane=%x decision=skip reason=non-zoomed dirty=%v animated=%v",
-				pane.ID[:4], pane.Dirty, pane.HasAnimated)
 			continue
 		}
 		if !pane.Dirty && !pane.HasAnimated {
-			zoomdebug.Logf("  pane=%x decision=skip reason=clean", pane.ID[:4])
 			continue
 		}
-		zoomdebug.Logf("  pane=%x decision=paint dirty=%v animated=%v zorder=%d",
-			pane.ID[:4], pane.Dirty, pane.HasAnimated, pane.ZOrder)
 
 		x := pane.Rect.X
 		y := pane.Rect.Y
@@ -396,23 +385,6 @@ func incrementalComposite(state *clientState, screenW, screenH int) bool {
 			}
 		}
 
-		if state.zoomed && pane.ID == state.zoomedPane {
-			midY := y + h/2
-			if midY >= 0 && midY < screenH && midY < len(state.prevBuffer) {
-				rowLen := len(state.prevBuffer[midY])
-				sampleCols := []int{0, 50, 127, 200, 250}
-				var samples [5]rune
-				for i, c := range sampleCols {
-					if c < rowLen {
-						samples[i] = state.prevBuffer[midY][c].Ch
-					}
-				}
-				zoomdebug.Logf("incrementalComposite zoom-paint: pane=%x midY=%d rowLen=%d samples@(0,50,127,200,250)=%q,%q,%q,%q,%q",
-					pane.ID[:4], midY, rowLen,
-					samples[0], samples[1], samples[2], samples[3], samples[4])
-			}
-		}
-
 		pane.ClearDirty()
 	}
 	return hasDynamic
@@ -502,18 +474,9 @@ func fullRender(state *clientState, screen tcell.Screen) {
 
 	panes := state.cache.SortedPanes()
 
-	zoomdebug.Logf("fullRender: zoomed=%v zoomPane=%x panes=%d",
-		state.zoomed, state.zoomedPane[:4], len(panes))
-
 	// Split panes into normal and floating (overlays).
 	// Workspace effects apply only to normal panes; floating panels draw on top.
 	normalPanes, floatingPanes := partitionPanes(panes, state.zoomed, state.zoomedPane)
-	for _, pane := range normalPanes {
-		zoomdebug.Logf("  pane=%x partition=normal zorder=%d", pane.ID[:4], pane.ZOrder)
-	}
-	for _, pane := range floatingPanes {
-		zoomdebug.Logf("  pane=%x partition=floating zorder=%d", pane.ID[:4], pane.ZOrder)
-	}
 
 	// Pass 1: composite normal panes
 	hasDynamic := compositeInto(workspaceBuffer, normalPanes, state, width, height)
@@ -609,11 +572,6 @@ func compositeInto(workspaceBuffer [][]client.Cell, panes []*client.PaneState, s
 		y := pane.Rect.Y
 		w := pane.Rect.Width
 		h := pane.Rect.Height
-
-		if state.zoomed {
-			zoomdebug.Logf("compositeInto: pane=%x rect=(%d,%d,%dx%d) is_zoom=%v",
-				pane.ID[:4], x, y, w, h, pane.ID == state.zoomedPane)
-		}
 
 		if w <= 0 || h <= 0 {
 			continue
